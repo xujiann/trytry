@@ -17,15 +17,21 @@ from fastapi.staticfiles import StaticFiles
 from .database import Base, SessionLocal, engine
 from .models import User
 from .routers import (
+    appointments,
     auth,
     chronic,
+    consultations,
+    contracts,
+    cssd,
     dictionaries,
     encounters,
     exams,
     infectious,
+    medwaste,
     metrics,
     organizations,
     patients,
+    performance,
     pharmacy,
     portal,
     prescriptions,
@@ -72,6 +78,12 @@ app.include_router(prescriptions.router)
 app.include_router(pharmacy.router)
 app.include_router(chronic.router)
 app.include_router(infectious.router)
+app.include_router(consultations.router)
+app.include_router(contracts.router)
+app.include_router(appointments.router)
+app.include_router(cssd.router)
+app.include_router(medwaste.router)
+app.include_router(performance.router)
 app.include_router(metrics.router)
 app.include_router(portal.router)
 

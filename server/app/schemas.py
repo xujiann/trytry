@@ -234,3 +234,121 @@ class InfectiousCaseOut(InfectiousCaseCreate):
     id: int
 
     model_config = {"from_attributes": True}
+
+
+class ConsultationCreate(BaseModel):
+    patient_id: int
+    from_org_id: int
+    to_org_id: int
+    question: str = Field(min_length=1, max_length=1024)
+
+
+class ConsultationOut(ConsultationCreate):
+    id: int
+    status: str
+    expert_name: str
+    opinion: str
+    rating: int
+
+    model_config = {"from_attributes": True}
+
+
+class ConsultationAccept(BaseModel):
+    expert_name: str = Field(min_length=1)
+
+
+class ConsultationComplete(BaseModel):
+    opinion: str = Field(min_length=1, max_length=2048)
+
+
+class ConsultationRate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+
+
+class ContractCreate(BaseModel):
+    patient_id: int
+    org_id: int
+    doctor_name: str = Field(min_length=1)
+    package: str = Field(default="basic", pattern="^(basic|standard|premium)$")
+    signed_date: str = ""
+
+
+class ContractOut(ContractCreate):
+    id: int
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+class ContractServiceCreate(BaseModel):
+    service_type: str = Field(pattern="^(visit|consult|followup|referral)$")
+    note: str = ""
+
+
+class ContractServiceOut(ContractServiceCreate):
+    id: int
+    contract_id: int
+
+    model_config = {"from_attributes": True}
+
+
+class SlotCreate(BaseModel):
+    org_id: int
+    resource_type: str = Field(pattern="^(outpatient|exam|lab)$")
+    resource_name: str = Field(min_length=1)
+    slot_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    slot_time: str = ""
+    capacity: int = Field(default=1, ge=1)
+
+
+class SlotOut(SlotCreate):
+    id: int
+    booked: int
+
+    model_config = {"from_attributes": True}
+
+
+class AppointmentCreate(BaseModel):
+    slot_id: int
+    patient_id: int
+
+
+class AppointmentOut(AppointmentCreate):
+    id: int
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+class BatchCreate(BaseModel):
+    batch_no: str = Field(min_length=1, max_length=32)
+    center_org_id: int
+    item_name: str = Field(min_length=1)
+    quantity: int = Field(gt=0)
+
+
+class BatchOut(BatchCreate):
+    id: int
+    status: str
+    dispatched_to_org_id: int | None
+
+    model_config = {"from_attributes": True}
+
+
+class WasteCreate(BaseModel):
+    org_id: int
+    waste_type: str = Field(pattern="^(infectious|sharp|pathological|pharmaceutical|chemical)$")
+    weight_kg: float = Field(gt=0)
+    collected_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class WasteOut(WasteCreate):
+    id: int
+    status: str
+    handler_name: str
+
+    model_config = {"from_attributes": True}
+
+
+class WasteHandover(BaseModel):
+    handler_name: str = Field(min_length=1)

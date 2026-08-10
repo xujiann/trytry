@@ -50,14 +50,21 @@ const PAGES = [
   { id: "dicts", title: "编码字典", render: renderDicts },
   { group: "业务协同" },
   { id: "exams", title: "共享诊断中心", render: renderExams },
+  { id: "consultations", title: "远程会诊", render: renderConsultations },
   { id: "referrals", title: "双向转诊", render: renderReferrals },
   { id: "rx", title: "集中审方", render: renderRx },
   { id: "pharmacy", title: "中心药房", render: renderPharmacy },
   { group: "医防融合" },
   { id: "chronic", title: "慢病管理", render: renderChronic },
+  { id: "contracts", title: "家医签约", render: renderContracts },
   { id: "infectious", title: "传染病预警", render: renderInfectious },
   { group: "便民惠民" },
+  { id: "appointments", title: "预约诊疗", render: renderAppointments },
   { id: "archive", title: "患者360视图", render: renderArchive },
+  { group: "综合管理" },
+  { id: "performance", title: "绩效考核", render: renderPerformance },
+  { id: "cssd", title: "消毒供应", render: renderCssd },
+  { id: "medwaste", title: "医废追溯", render: renderMedwaste },
 ];
 
 const CENTER_NAMES = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
@@ -83,6 +90,20 @@ async function route() {
   catch (e) { $("#page-body").innerHTML = `<p class="msg err">${esc(e.message)}</p>`; }
 }
 
+/* 横向条形图（纯SVG，无外部依赖） */
+function barChart(items, { color = "#0b6e6e", unit = "" } = {}) {
+  const max = Math.max(...items.map(([, v]) => v), 1);
+  const rowH = 30, labelW = 150, chartW = 480;
+  const rows = items.map(([label, value], i) => {
+    const w = Math.round((value / max) * (chartW - 70));
+    const y = i * rowH;
+    return `<text x="${labelW - 8}" y="${y + 19}" text-anchor="end" font-size="12.5" fill="#5b6773">${esc(label)}</text>
+      <rect x="${labelW}" y="${y + 6}" width="${Math.max(w, 2)}" height="16" rx="3" fill="${color}"></rect>
+      <text x="${labelW + Math.max(w, 2) + 6}" y="${y + 19}" font-size="12.5" fill="#24292f">${esc(value)}${esc(unit)}</text>`;
+  }).join("");
+  return `<svg width="${labelW + chartW}" height="${items.length * rowH}" role="img">${rows}</svg>`;
+}
+
 /* ---------------- 各页面 ---------------- */
 
 async function renderDashboard() {
@@ -101,10 +122,293 @@ async function renderDashboard() {
     ["慢病在管人数", m.chronic_management.total],
     ["缺药预警", m.pharmacy.stock_alerts, m.pharmacy.stock_alerts > 0],
   ];
+  const chronicItems = Object.entries(m.chronic_management.by_level).map(([lvl, n]) => [`${lvl} 级`, n]);
+  let perfHtml = "";
+  try {
+    const perf = await api("/api/performance/orgs");
+    const top = perf.scorecards.slice(0, 8).map((c) => [c.org_name, c.score]);
+    if (top.length) perfHtml = `<div class="panel"><h3>机构绩效评分（前8）</h3>${barChart(top, { unit: " 分" })}</div>`;
+  } catch (e) { /* 绩效不可用不阻塞驾驶舱 */ }
   $("#page-body").innerHTML =
     `<div class="cards">${cards.map(([label, value, warn]) =>
       `<div class="card"><div class="label">${esc(label)}</div><div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}</div>
-     <div class="panel"><h3>慢病分级分组</h3><pre class="json">${esc(JSON.stringify(m.chronic_management.by_level, null, 2))}</pre></div>`;
+     ${chronicItems.length ? `<div class="panel"><h3>慢病分级分组</h3>${barChart(chronicItems, { color: "#b26a00", unit: " 人" })}</div>` : ""}
+     ${perfHtml}`;
+}
+
+async function renderConsultations() {
+  $("#page-desc").textContent = "申请 → 受理 → 出具意见 → 评价";
+  const consultations = await api("/api/consultations");
+  const CS = { applied: ["已申请", "orange"], accepted: ["已受理", ""], completed: ["已完成", "green"], declined: ["已拒绝", "red"] };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>会诊申请</h3>
+      <form class="inline" id="cons-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="from_org_id" type="number" placeholder="申请机构ID" required>
+        <input name="to_org_id" type="number" placeholder="受邀机构ID" required>
+        <input name="question" placeholder="会诊问题" required style="min-width:240px">
+        <button>提交</button>
+      </form><p class="msg" id="cons-msg"></p></div>
+    <div class="panel">${table(["ID", "患者", "申请→受邀", "问题", "专家", "意见", "评价", "状态", "操作"], consultations, (c) => {
+      const [text, color] = CS[c.status] || [c.status, ""];
+      const actions = c.status === "applied"
+        ? `<button class="btn secondary" data-act="accept" data-id="${c.id}">受理</button>
+           <button class="btn danger" data-act="decline" data-id="${c.id}">拒绝</button>`
+        : c.status === "accepted"
+        ? `<button class="btn secondary" data-act="complete" data-id="${c.id}">出意见</button>`
+        : c.status === "completed" && !c.rating
+        ? `<button class="btn secondary" data-act="rate" data-id="${c.id}">评价</button>` : "—";
+      return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.from_org_id} → ${c.to_org_id}</td>
+        <td>${esc(c.question)}</td><td>${esc(c.expert_name) || "—"}</td><td>${esc(c.opinion) || "—"}</td>
+        <td>${c.rating ? "★".repeat(c.rating) : "—"}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+    })}</div>`;
+  $("#cons-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/consultations", { method: "POST", body: JSON.stringify({
+        patient_id: Number(f.get("patient_id")), from_org_id: Number(f.get("from_org_id")),
+        to_org_id: Number(f.get("to_org_id")), question: f.get("question") }) });
+      route();
+    } catch (err) { setMsg("#cons-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { act, id } = e.target.dataset;
+    if (!act || !id) return;
+    try {
+      if (act === "accept") {
+        const expert = prompt("受理专家姓名"); if (!expert) return;
+        await api(`/api/consultations/${id}/accept`, { method: "POST", body: JSON.stringify({ expert_name: expert }) });
+      } else if (act === "decline") {
+        await api(`/api/consultations/${id}/decline`, { method: "POST" });
+      } else if (act === "complete") {
+        const opinion = prompt("会诊意见"); if (!opinion) return;
+        await api(`/api/consultations/${id}/complete`, { method: "POST", body: JSON.stringify({ opinion }) });
+      } else if (act === "rate") {
+        const rating = Number(prompt("评价（1-5星）")); if (!rating) return;
+        await api(`/api/consultations/${id}/rate`, { method: "POST", body: JSON.stringify({ rating }) });
+      }
+      route();
+    } catch (err) { setMsg("#cons-msg", err.message, false); }
+  };
+}
+
+async function renderContracts() {
+  $("#page-desc").textContent = "线上签约、服务包管理、履约记录";
+  const contracts = await api("/api/contracts");
+  const PKG = { basic: "基础包", standard: "标准包", premium: "个性包" };
+  const SVC = { visit: "上门服务", consult: "健康咨询", followup: "随访", referral: "转诊协助" };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>签约</h3>
+      <form class="inline" id="ct-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="doctor_name" placeholder="家庭医生" required>
+        <select name="package">${Object.entries(PKG).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="signed_date" placeholder="签约日期 YYYY-MM-DD">
+        <button>签约</button>
+      </form><p class="msg" id="ct-msg"></p></div>
+    <div class="panel">${table(["ID", "患者", "机构", "医生", "服务包", "状态", "操作"], contracts, (c) =>
+      `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.org_id}</td><td>${esc(c.doctor_name)}</td>
+       <td><span class="tag">${PKG[c.package]}</span></td>
+       <td><span class="tag ${c.status === "active" ? "green" : "red"}">${c.status === "active" ? "履约中" : "已解约"}</span></td>
+       <td>${c.status === "active"
+         ? `<button class="btn secondary" data-svc="${c.id}">记录履约</button>
+            <button class="btn danger" data-term="${c.id}">解约</button>` : "—"}</td></tr>`)}</div>`;
+  $("#ct-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/contracts", { method: "POST", body: JSON.stringify({
+        patient_id: Number(f.get("patient_id")), org_id: Number(f.get("org_id")),
+        doctor_name: f.get("doctor_name"), package: f.get("package"), signed_date: f.get("signed_date") }) });
+      route();
+    } catch (err) { setMsg("#ct-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { svc, term } = e.target.dataset;
+    try {
+      if (svc) {
+        const type = prompt("履约类型：visit/consult/followup/referral", "followup"); if (!type) return;
+        const note = prompt("备注") || "";
+        await api(`/api/contracts/${svc}/services`, { method: "POST", body: JSON.stringify({ service_type: type, note }) });
+        alert("履约已记录");
+      }
+      if (term) { await api(`/api/contracts/${term}/terminate`, { method: "POST" }); route(); }
+    } catch (err) { setMsg("#ct-msg", err.message, false); }
+  };
+}
+
+async function renderAppointments() {
+  $("#page-desc").textContent = "机构发布分时段号源，一站式预约挂号/检查/检验";
+  const [slots, appointments] = await Promise.all([api("/api/appointments/slots"), api("/api/appointments")]);
+  const RT = { outpatient: "门诊", exam: "检查", lab: "检验" };
+  const AS = { booked: ["已预约", "green"], cancelled: ["已取消", "red"], fulfilled: ["已就诊", ""] };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>发布号源</h3>
+      <form class="inline" id="slot-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="resource_type">${Object.entries(RT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="resource_name" placeholder="资源名称（如CT室上午）" required>
+        <input name="slot_date" placeholder="日期 YYYY-MM-DD" required>
+        <input name="slot_time" placeholder="时段（如09:00-10:00）">
+        <input name="capacity" type="number" value="5" min="1" style="min-width:70px">
+        <button>发布</button>
+      </form>
+      <h3 style="margin-top:14px">预约</h3>
+      <form class="inline" id="book-form">
+        <input name="slot_id" type="number" placeholder="号源ID" required>
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <button>预约</button>
+      </form><p class="msg" id="apt-msg"></p></div>
+    <div class="panel"><h3>号源</h3>${table(["ID", "机构", "类型", "资源", "日期/时段", "已约/容量"], slots, (s) =>
+      `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${RT[s.resource_type]}</td><td>${esc(s.resource_name)}</td>
+       <td>${esc(s.slot_date)} ${esc(s.slot_time)}</td>
+       <td><span class="tag ${s.booked >= s.capacity ? "red" : "green"}">${s.booked}/${s.capacity}</span></td></tr>`)}</div>
+    <div class="panel"><h3>预约记录</h3>${table(["ID", "号源", "患者", "状态", "操作"], appointments, (a) => {
+      const [text, color] = AS[a.status] || [a.status, ""];
+      return `<tr><td>${a.id}</td><td>${a.slot_id}</td><td>${a.patient_id}</td>
+        <td><span class="tag ${color}">${text}</span></td>
+        <td>${a.status === "booked"
+          ? `<button class="btn secondary" data-fulfill="${a.id}">核销</button>
+             <button class="btn danger" data-cancel="${a.id}">取消</button>` : "—"}</td></tr>`;
+    })}</div>`;
+  $("#slot-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/appointments/slots", { method: "POST", body: JSON.stringify({
+        org_id: Number(f.get("org_id")), resource_type: f.get("resource_type"),
+        resource_name: f.get("resource_name"), slot_date: f.get("slot_date"),
+        slot_time: f.get("slot_time"), capacity: Number(f.get("capacity")) }) });
+      route();
+    } catch (err) { setMsg("#apt-msg", err.message, false); }
+  };
+  $("#book-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/appointments", { method: "POST", body: JSON.stringify({
+        slot_id: Number(f.get("slot_id")), patient_id: Number(f.get("patient_id")) }) });
+      route();
+    } catch (err) { setMsg("#apt-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { cancel, fulfill } = e.target.dataset;
+    try {
+      if (cancel) { await api(`/api/appointments/${cancel}/cancel`, { method: "POST" }); route(); }
+      if (fulfill) { await api(`/api/appointments/${fulfill}/fulfill`, { method: "POST" }); route(); }
+    } catch (err) { setMsg("#apt-msg", err.message, false); }
+  };
+}
+
+async function renderPerformance() {
+  $("#page-desc").textContent = "按机构自动汇算：转诊结案、远程诊断、慢病随访、处方合格、家医履约";
+  const data = await api("/api/performance/orgs");
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>机构评分排名</h3>
+      ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}</div>
+    <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "远程诊断", "慢病随访", "处方合格", "家医履约"],
+      data.scorecards, (c, i) => {
+        const d = c.detail;
+        return `<tr><td>${data.scorecards.indexOf(c) + 1}</td><td>${esc(c.org_name)}</td><td>${LEVELS[c.level] || c.level}</td>
+          <td><b>${c.score}</b></td>
+          <td>${d.referral_completion.completed}/${d.referral_completion.total}</td>
+          <td>${d.remote_exams}</td>
+          <td>${d.chronic_followup.followed}/${d.chronic_followup.total}</td>
+          <td>${d.rx_pass.passed}/${d.rx_pass.total}</td>
+          <td>${d.contract_services}</td></tr>`;
+      })}</div>`;
+}
+
+async function renderCssd() {
+  $("#page-desc").textContent = "器械批次：灭菌中 → 已灭菌 → 已发放 → 已回收，全程追溯";
+  const batches = await api("/api/cssd/batches");
+  const BS = { sterilizing: ["灭菌中", "orange"], sterile: ["已灭菌", ""], dispatched: ["已发放", "green"], recycled: ["已回收", "green"] };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>新建批次</h3>
+      <form class="inline" id="batch-form">
+        <input name="batch_no" placeholder="批次号" required>
+        <input name="center_org_id" type="number" placeholder="消毒中心机构ID" required>
+        <input name="item_name" placeholder="器械名称" required>
+        <input name="quantity" type="number" placeholder="数量" required min="1">
+        <button>创建</button>
+      </form><p class="msg" id="cssd-msg"></p></div>
+    <div class="panel">${table(["ID", "批次号", "器械", "数量", "接收机构", "状态", "操作"], batches, (b) => {
+      const [text, color] = BS[b.status] || [b.status, ""];
+      const next = { sterilizing: "标记已灭菌", sterile: "发放", dispatched: "回收" }[b.status];
+      return `<tr><td>${b.id}</td><td><span class="tag">${esc(b.batch_no)}</span></td><td>${esc(b.item_name)}</td>
+        <td>${b.quantity}</td><td>${b.dispatched_to_org_id ?? "—"}</td>
+        <td><span class="tag ${color}">${text}</span></td>
+        <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${b.status}">${next}</button>` : "—"}</td></tr>`;
+    })}</div>`;
+  $("#batch-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/cssd/batches", { method: "POST", body: JSON.stringify({
+        batch_no: f.get("batch_no"), center_org_id: Number(f.get("center_org_id")),
+        item_name: f.get("item_name"), quantity: Number(f.get("quantity")) }) });
+      route();
+    } catch (err) { setMsg("#cssd-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { adv, next } = e.target.dataset;
+    if (!adv) return;
+    try {
+      let qs = "";
+      if (next === "sterile") {
+        const org = prompt("接收机构ID"); if (!org) return;
+        qs = `?dispatched_to_org_id=${Number(org)}`;
+      }
+      await api(`/api/cssd/batches/${adv}/advance${qs}`, { method: "POST" });
+      route();
+    } catch (err) { setMsg("#cssd-msg", err.message, false); }
+  };
+}
+
+async function renderMedwaste() {
+  $("#page-desc").textContent = "收集→暂存→交接全过程监管，超2天未交接自动预警";
+  const [wastes, alerts] = await Promise.all([api("/api/medwaste"), api("/api/medwaste/alerts")]);
+  const alertIds = new Set(alerts.map((w) => w.id));
+  const WT = { infectious: "感染性", sharp: "损伤性", pathological: "病理性", pharmaceutical: "药物性", chemical: "化学性" };
+  const WS = { collected: ["已收集", "orange"], stored: ["已暂存", "orange"], handed_over: ["已交接", "green"] };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>收集登记</h3>
+      <form class="inline" id="waste-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="waste_type">${Object.entries(WT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="weight_kg" type="number" step="any" placeholder="重量(kg)" required>
+        <input name="collected_date" placeholder="收集日期 YYYY-MM-DD" required>
+        <button>登记</button>
+      </form><p class="msg" id="waste-msg"></p></div>
+    ${alerts.length ? `<div class="panel"><h3>⚠ 滞留预警（${alerts.length}）</h3><p class="desc">收集超过2天仍未交接</p></div>` : ""}
+    <div class="panel">${table(["ID", "机构", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
+      const [text, color] = WS[w.status] || [w.status, ""];
+      return `<tr><td>${w.id}</td><td>${w.org_id}</td><td>${WT[w.waste_type]}</td><td>${w.weight_kg}kg</td>
+        <td>${esc(w.collected_date)}${alertIds.has(w.id) ? ' <span class="tag red">滞留</span>' : ""}</td>
+        <td>${esc(w.handler_name) || "—"}</td><td><span class="tag ${color}">${text}</span></td>
+        <td>${w.status !== "handed_over" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : "—"}</td></tr>`;
+    })}</div>`;
+  $("#waste-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/medwaste", { method: "POST", body: JSON.stringify({
+        org_id: Number(f.get("org_id")), waste_type: f.get("waste_type"),
+        weight_kg: Number(f.get("weight_kg")), collected_date: f.get("collected_date") }) });
+      route();
+    } catch (err) { setMsg("#waste-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const id = e.target.dataset.hand;
+    if (!id) return;
+    const handler = prompt("转运人员姓名"); if (!handler) return;
+    try {
+      await api(`/api/medwaste/${id}/handover`, { method: "POST", body: JSON.stringify({ handler_name: handler }) });
+      route();
+    } catch (err) { setMsg("#waste-msg", err.message, false); }
+  };
 }
 
 async function renderOrgs() {

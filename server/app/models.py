@@ -262,6 +262,126 @@ class InfectiousCase(Base):
     reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class Consultation(Base):
+    """远程会诊：基层申请、上级接受、出具意见、申请方评价。"""
+
+    __tablename__ = "consultations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    from_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    to_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    question: Mapped[str] = mapped_column(String(1024))
+    # applied=已申请, accepted=已受理, completed=已完成, declined=已拒绝
+    status: Mapped[str] = mapped_column(String(16), default="applied", index=True)
+    expert_name: Mapped[str] = mapped_column(String(64), default="")
+    opinion: Mapped[str] = mapped_column(String(2048), default="")
+    # 1-5 星评价，0=未评价
+    rating: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class FamilyDoctorContract(Base):
+    """家庭医生签约：协议、服务包、履约记录。"""
+
+    __tablename__ = "fd_contracts"
+    __table_args__ = (UniqueConstraint("patient_id", "org_id", name="uq_contract_patient_org"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    doctor_name: Mapped[str] = mapped_column(String(64))
+    # basic=基础包, standard=标准包, premium=个性包
+    package: Mapped[str] = mapped_column(String(16), default="basic")
+    signed_date: Mapped[str] = mapped_column(String(10), default="")
+    # active=履约中, terminated=已解约
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    services: Mapped[list["ContractService"]] = relationship(back_populates="contract")
+
+
+class ContractService(Base):
+    __tablename__ = "fd_contract_services"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contract_id: Mapped[int] = mapped_column(ForeignKey("fd_contracts.id"), index=True)
+    # visit=上门服务, consult=健康咨询, followup=随访, referral=转诊协助
+    service_type: Mapped[str] = mapped_column(String(16))
+    note: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    contract: Mapped[FamilyDoctorContract] = relationship(back_populates="services")
+
+
+class AppointmentSlot(Base):
+    """预约资源：机构发布分时段号源（门诊/检查/检验）。"""
+
+    __tablename__ = "appointment_slots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # outpatient=门诊, exam=检查, lab=检验
+    resource_type: Mapped[str] = mapped_column(String(16))
+    resource_name: Mapped[str] = mapped_column(String(128))
+    slot_date: Mapped[str] = mapped_column(String(10), index=True)
+    slot_time: Mapped[str] = mapped_column(String(16), default="")
+    capacity: Mapped[int] = mapped_column(Integer, default=1)
+    booked: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Appointment(Base):
+    __tablename__ = "appointments"
+    __table_args__ = (
+        UniqueConstraint("slot_id", "patient_id", name="uq_appointment_slot_patient"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slot_id: Mapped[int] = mapped_column(ForeignKey("appointment_slots.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # booked=已预约, cancelled=已取消, fulfilled=已就诊
+    status: Mapped[str] = mapped_column(String(16), default="booked")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SterilizationBatch(Base):
+    """消毒供应中心：复用器械批次的清洗消毒灭菌、发放、回收全流程追溯。"""
+
+    __tablename__ = "sterilization_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_no: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    center_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    item_name: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[int] = mapped_column(Integer)
+    # sterilizing=灭菌中, sterile=已灭菌, dispatched=已发放, recycled=已回收
+    status: Mapped[str] = mapped_column(String(16), default="sterilizing", index=True)
+    dispatched_to_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class MedicalWaste(Base):
+    """医疗废弃物：收集、暂存、交接全过程实时监管与追溯。"""
+
+    __tablename__ = "medical_wastes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # infectious=感染性, sharp=损伤性, pathological=病理性, pharmaceutical=药物性, chemical=化学性
+    waste_type: Mapped[str] = mapped_column(String(16))
+    weight_kg: Mapped[float] = mapped_column(Float)
+    # collected=已收集, stored=已暂存, handed_over=已交接
+    status: Mapped[str] = mapped_column(String(16), default="collected", index=True)
+    handler_name: Mapped[str] = mapped_column(String(64), default="")
+    collected_date: Mapped[str] = mapped_column(String(10), index=True)
+    handed_over_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Referral(Base):
     __tablename__ = "referrals"
 
