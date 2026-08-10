@@ -44,6 +44,7 @@ from .routers import (
     prescriptions,
     publichealth,
     referrals,
+    service_extras,
     tcm,
     telemedicine,
     users,
@@ -115,6 +116,7 @@ app.include_router(maternal.router)
 app.include_router(vaccination.router)
 app.include_router(publichealth.router)
 app.include_router(admin_mgmt.router)
+app.include_router(service_extras.router)
 
 _AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 # 登录请求不落审计（避免与口令尝试混淆，登录安全事件由专用日志承担）

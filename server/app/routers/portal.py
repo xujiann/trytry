@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import ChronicPatient, Encounter, ExamReport, ExamRequest, Patient
+from ..models import ChronicPatient, Encounter, ExamReport, ExamRequest, HealthArticle, Patient
 from .chronic import GUIDANCE_POINTS
 
 router = APIRouter(prefix="/api/portal", tags=["居民端"])
@@ -55,3 +55,15 @@ def my_archive(ehc_no: str, id_card: str, db: Session = Depends(get_db)):
             for c in chronic
         ],
     }
+
+
+@router.get("/health-articles")
+def published_articles(category: str | None = None, db: Session = Depends(get_db)):
+    """健康宣教：居民端展示已发布文章（无需登录）。"""
+    q = db.query(HealthArticle).filter(HealthArticle.status == "published")
+    if category:
+        q = q.filter(HealthArticle.category == category)
+    return [
+        {"id": a.id, "title": a.title, "category": a.category, "content": a.content}
+        for a in q.order_by(HealthArticle.id.desc()).limit(50).all()
+    ]

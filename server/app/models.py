@@ -823,6 +823,84 @@ class QcRecord(Base):
     record_date: Mapped[str] = mapped_column(String(10), default="")
 
 
+class ReportTemplate(Base):
+    """①-④共享中心报告模板管理。"""
+
+    __tablename__ = "report_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    center_type: Mapped[str] = mapped_column(String(16), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    content: Mapped[str] = mapped_column(String(2048), default="")
+
+
+class CssdRequest(Base):
+    """⑥消毒供应物品申领：基层申领→中心关联批次发放。"""
+
+    __tablename__ = "cssd_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    item_name: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    # requested=已申领, fulfilled=已发放
+    status: Mapped[str] = mapped_column(String(16), default="requested", index=True)
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey("sterilization_batches.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ConsultExpert(Base):
+    """⑤远程会诊专家管理。"""
+
+    __tablename__ = "consult_experts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    specialty: Mapped[str] = mapped_column(String(64), default="")
+    available: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AppointmentBlacklist(Base):
+    """⑫预约黑名单管理（多次爽约限制预约）。"""
+
+    __tablename__ = "appointment_blacklist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), unique=True)
+    reason: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class HealthArticle(Base):
+    """⑨⑩健康宣教内容管理。"""
+
+    __tablename__ = "health_articles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(256))
+    category: Mapped[str] = mapped_column(String(32), default="general")
+    content: Mapped[str] = mapped_column(String(4096), default="")
+    # draft=草稿, published=已发布（居民端可见）
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SatisfactionSurvey(Base):
+    """⑪㉟满意度调查（签约服务/就诊等通用评价）。"""
+
+    __tablename__ = "satisfaction_surveys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # contract=家医签约, encounter=就诊, consultation=会诊
+    target_type: Mapped[str] = mapped_column(String(16), index=True)
+    target_id: Mapped[int] = mapped_column(Integer)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"))
+    score: Mapped[int] = mapped_column(Integer)
+    comment: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Referral(Base):
     __tablename__ = "referrals"
 

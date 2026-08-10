@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_admin
-from ..models import Appointment, AppointmentSlot, Organization, Patient
+from ..models import Appointment, AppointmentBlacklist, AppointmentSlot, Organization, Patient
 from ..schemas import AppointmentCreate, AppointmentOut, SlotCreate, SlotOut
 
 router = APIRouter(prefix="/api/appointments", tags=["预约诊疗"], dependencies=[Depends(get_current_user)])
@@ -38,6 +38,13 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="号源不存在")
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    banned = (
+        db.query(AppointmentBlacklist)
+        .filter(AppointmentBlacklist.patient_id == body.patient_id)
+        .first()
+    )
+    if banned:
+        raise HTTPException(status_code=403, detail=f"该患者在预约黑名单中：{banned.reason}")
     if slot.booked >= slot.capacity:
         raise HTTPException(status_code=409, detail="号源已约满")
     existing = (
