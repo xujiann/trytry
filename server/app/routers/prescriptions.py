@@ -1,10 +1,20 @@
 """集中审方中心："系统+药师"双重审方，每方必审。"""
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
-from ..models import DrugRule, Organization, Patient, Prescription, PrescriptionItem, User
+from ..models import (
+    DrugRule,
+    MaternalRecord,
+    Organization,
+    Patient,
+    Prescription,
+    PrescriptionItem,
+    User,
+)
 from ..schemas import (
     DrugRuleCreate,
     DrugRuleOut,
@@ -14,6 +24,42 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/api/prescriptions", tags=["集中审方"])
+
+# 特殊人群年龄界限：儿童 <14 岁，老年 ≥65 岁
+CHILD_AGE_LIMIT = 14
+ELDERLY_AGE_LIMIT = 65
+
+GROUP_NAMES = {"pregnant": "孕产妇", "child": "儿童", "elderly": "老年人"}
+
+
+def _age_of(birth_date: str, today: date | None = None) -> int | None:
+    """按出生日期（YYYY-MM-DD）计算周岁；无法解析返回 None。"""
+    try:
+        born = date.fromisoformat(birth_date)
+    except (TypeError, ValueError):
+        return None
+    ref = today or date.today()
+    return ref.year - born.year - ((ref.month, ref.day) < (born.month, born.day))
+
+
+def _patient_groups(db: Session, patient: Patient) -> set[str]:
+    """推断患者所属特殊人群：儿童/老年按 birth_date，孕产妇按在册孕产记录+性别。"""
+    groups: set[str] = set()
+    age = _age_of(patient.birth_date)
+    if age is not None:
+        if age < CHILD_AGE_LIMIT:
+            groups.add("child")
+        if age >= ELDERLY_AGE_LIMIT:
+            groups.add("elderly")
+    if patient.gender == "女":
+        maternal = (
+            db.query(MaternalRecord)
+            .filter(MaternalRecord.patient_id == patient.id, MaternalRecord.status == "registered")
+            .first()
+        )
+        if maternal is not None:
+            groups.add("pregnant")
+    return groups
 
 
 @router.post("/rules", response_model=DrugRuleOut, status_code=201, dependencies=[Depends(require_admin)])
@@ -25,6 +71,23 @@ def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(rule)
     return rule
+
+
+@router.post("/rules/import", dependencies=[Depends(require_admin)])
+def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db)):
+    """审方规则批量导入：drug_code 已存在则整条更新，不存在则新建。"""
+    imported, updated = 0, 0
+    for entry in body:
+        rule = db.query(DrugRule).filter(DrugRule.drug_code == entry.drug_code).first()
+        if rule is None:
+            db.add(DrugRule(**entry.model_dump()))
+            imported += 1
+        else:
+            for field, value in entry.model_dump().items():
+                setattr(rule, field, value)
+            updated += 1
+    db.commit()
+    return {"imported": imported, "updated": updated}
 
 
 @router.get("/rules", response_model=list[DrugRuleOut], dependencies=[Depends(get_current_user)])
@@ -43,12 +106,22 @@ def create_prescription(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if db.get(Patient, body.patient_id) is None:
+    patient = db.get(Patient, body.patient_id)
+    if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
 
     violations: list[str] = []
+
+    # 同方重复药品编码 → 转药师审
+    codes = [item.drug_code for item in body.items]
+    duplicated = sorted({c for c in codes if codes.count(c) > 1})
+    for code in duplicated:
+        names = {item.drug_name for item in body.items if item.drug_code == code}
+        violations.append(f"同方重复药品：{'/'.join(sorted(names))}（{code}）出现多次，需药师人工审核")
+
+    patient_groups = _patient_groups(db, patient)
     names_by_code = {item.drug_code: item.drug_name for item in body.items}
     seen_pairs: set[frozenset[str]] = set()
     for item in body.items:
@@ -69,6 +142,19 @@ def create_prescription(
             seen_pairs.add(pair)
             violations.append(
                 f"药物相互作用：{item.drug_name} 与 {names_by_code[other_code]} 存在相互作用，需药师人工审核"
+            )
+        # 禁忌诊断审查：诊断名命中禁忌关键词 → 转药师审并注明
+        for keyword in (k.strip() for k in rule.contraindicated_diagnoses.split(",")):
+            if keyword and keyword in body.diagnosis_name:
+                violations.append(
+                    f"禁忌诊断：{item.drug_name} 禁用于「{keyword}」相关诊断"
+                    f"（本方诊断：{body.diagnosis_name}），需药师人工审核"
+                )
+        # 特殊人群审查：患者命中规则特殊人群 → 转药师审并注明
+        rule_groups = {g.strip() for g in rule.special_groups.split(",") if g.strip()}
+        for group in sorted(rule_groups & patient_groups):
+            violations.append(
+                f"特殊人群用药：{item.drug_name} 对{GROUP_NAMES.get(group, group)}需慎用，需药师人工审核"
             )
 
     prescription = Prescription(

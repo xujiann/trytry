@@ -154,10 +154,41 @@ class ExamReport(Base):
     finding: Mapped[str] = mapped_column(String(2048), default="")
     conclusion: Mapped[str] = mapped_column(String(1024))
     critical: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 危急值闭环状态：""=非危急值, notified=已通知, acknowledged=医师已确认, resolved=已处置
+    critical_status: Mapped[str] = mapped_column(String(16), default="", index=True)
     reported_by: Mapped[str] = mapped_column(String(64), default="")
     reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     request: Mapped[ExamRequest] = relationship(back_populates="report")
+
+
+class CriticalAction(Base):
+    """危急值处置留痕：通知→确认→处置反馈全程记录（闭环管理）。"""
+
+    __tablename__ = "critical_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report_id: Mapped[int] = mapped_column(ForeignKey("exam_reports.id"), index=True)
+    # notified=系统通知, acknowledged=接收确认, resolved=处置反馈
+    action: Mapped[str] = mapped_column(String(512))
+    actor: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RecognitionItem(Base):
+    """检查检验结果互认项目目录：仅目录内 active 项目参与互认。"""
+
+    __tablename__ = "recognition_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    item_name: Mapped[str] = mapped_column(String(128))
+    # imaging=影像, ecg=心电, lab=检验, pathology=病理
+    center_type: Mapped[str] = mapped_column(String(16), index=True)
+    # county=县域内互认, city=市级互认
+    mutual_scope: Mapped[str] = mapped_column(String(16), default="county")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class DrugRule(Base):
@@ -172,6 +203,10 @@ class DrugRule(Base):
     note: Mapped[str] = mapped_column(String(256), default="")
     # 相互作用：与该药冲突的药品编码（逗号分隔），同方出现冲突药对转药师审
     interactions: Mapped[str] = mapped_column(String(512), default="")
+    # 禁忌诊断关键词（逗号分隔）：诊断名命中即转药师审
+    contraindicated_diagnoses: Mapped[str] = mapped_column(String(512), default="")
+    # 特殊人群（逗号分隔：pregnant,child,elderly）：患者命中即转药师审
+    special_groups: Mapped[str] = mapped_column(String(64), default="")
 
 
 class Prescription(Base):

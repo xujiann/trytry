@@ -2,18 +2,94 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
-from ..models import ExamReport, ExamRequest, Organization, Patient, User
-from ..schemas import ExamReportCreate, ExamReportOut, ExamRequestCreate, ExamRequestOut
+from ..deps import get_current_user, require_admin, require_roles
+from ..models import CriticalAction, ExamReport, ExamRequest, Organization, Patient, RecognitionItem, User
+from ..schemas import (
+    CriticalActionOut,
+    CriticalResolveBody,
+    ExamReportCreate,
+    ExamReportOut,
+    ExamRequestCreate,
+    ExamRequestOut,
+    RecognitionItemCreate,
+    RecognitionItemOut,
+    RecognitionItemUpdate,
+)
 from ..ws import manager
 
 router = APIRouter(prefix="/api/exams", tags=["共享诊断中心"], dependencies=[Depends(get_current_user)])
 
 # 同一患者同一项目在此天数内已有报告的，提示可互认
 RECOGNITION_WINDOW_DAYS = 30
+
+
+def _directory_blocked_reason(db: Session, item_code: str) -> str | None:
+    """互认目录管控：目录已配置时，仅目录内 active 项目可互认。
+
+    返回 None=允许互认；返回字符串=阻断原因。目录为空视为未启用目录管控（兼容）。
+    """
+    if db.query(RecognitionItem.id).first() is None:
+        return None
+    item = db.query(RecognitionItem).filter(RecognitionItem.item_code == item_code).first()
+    if item is None:
+        return "该项目不在互认目录内"
+    if not item.active:
+        return "该项目已在互认目录中停用"
+    return None
+
+
+# ---------- 互认项目目录维护（管理员） ----------
+
+
+@router.post(
+    "/recognition-items",
+    response_model=RecognitionItemOut,
+    status_code=201,
+    dependencies=[Depends(require_admin)],
+)
+def create_recognition_item(body: RecognitionItemCreate, db: Session = Depends(get_db)):
+    if db.query(RecognitionItem).filter(RecognitionItem.item_code == body.item_code).first():
+        raise HTTPException(status_code=409, detail="该项目已在互认目录中")
+    item = RecognitionItem(**body.model_dump())
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.get("/recognition-items", response_model=list[RecognitionItemOut])
+def list_recognition_items(
+    center_type: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
+):
+    query = db.query(RecognitionItem)
+    if center_type:
+        query = query.filter(RecognitionItem.center_type == center_type)
+    if active is not None:
+        query = query.filter(RecognitionItem.active.is_(active))
+    return query.order_by(RecognitionItem.item_code).limit(500).all()
+
+
+@router.patch(
+    "/recognition-items/{item_id}",
+    response_model=RecognitionItemOut,
+    dependencies=[Depends(require_admin)],
+)
+def update_recognition_item(
+    item_id: int, body: RecognitionItemUpdate, db: Session = Depends(get_db)
+):
+    item = db.get(RecognitionItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="目录项目不存在")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        if value is not None:
+            setattr(item, field, value)
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 def _find_recognizable(db: Session, patient_id: int, item_code: str) -> ExamRequest | None:
@@ -34,7 +110,10 @@ def _find_recognizable(db: Session, patient_id: int, item_code: str) -> ExamRequ
 
 @router.get("/recognition-check")
 def recognition_check(patient_id: int, item_code: str, db: Session = Depends(get_db)):
-    """开单前互认检查：近期已有同项目报告则返回可互认的申请单。"""
+    """开单前互认检查：项目须在互认目录内（目录已配置时），且近期已有同项目报告。"""
+    blocked = _directory_blocked_reason(db, item_code)
+    if blocked is not None:
+        return {"recognizable": False, "reason": blocked}
     existing = _find_recognizable(db, patient_id, item_code)
     if existing is None:
         return {"recognizable": False}
@@ -66,6 +145,9 @@ def create_request(
     request = ExamRequest(**data, created_by=user.id)
 
     if body.accept_recognition_of is not None:
+        blocked = _directory_blocked_reason(db, body.item_code)
+        if blocked is not None:
+            raise HTTPException(status_code=422, detail=f"不可互认：{blocked}")
         source = db.get(ExamRequest, body.accept_recognition_of)
         if source is None or source.status != "reported":
             raise HTTPException(status_code=422, detail="被互认的申请单不存在或尚无报告")
@@ -129,7 +211,19 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
         raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可出报告")
     report = ExamReport(request_id=request_id, **body.model_dump())
     request.status = "reported"
+    if report.critical:
+        # 危急值闭环起点：自动置为"已通知"并留痕
+        report.critical_status = "notified"
     db.add(report)
+    db.flush()
+    if report.critical:
+        db.add(
+            CriticalAction(
+                report_id=report.id,
+                action=f"危急值报告发布，已通知申请机构：{report.conclusion}",
+                actor=report.reported_by or "system",
+            )
+        )
     db.commit()
     db.refresh(report)
     if report.critical:
@@ -182,3 +276,154 @@ def list_critical_reports(db: Session = Depends(get_db)):
         .limit(100)
         .all()
     )
+
+
+# ---------- 危急值闭环：通知 → 确认接收 → 处置反馈 ----------
+
+
+@router.post(
+    "/reports/{report_id}/acknowledge",
+    response_model=ExamReportOut,
+    dependencies=[Depends(require_roles("doctor"))],
+)
+def acknowledge_critical(
+    report_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """医师确认接收危急值通知（notified → acknowledged）。"""
+    report = db.get(ExamReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    if not report.critical:
+        raise HTTPException(status_code=422, detail="非危急值报告，无需确认")
+    if report.critical_status != "notified":
+        raise HTTPException(status_code=409, detail=f"当前状态 {report.critical_status} 不可确认接收")
+    report.critical_status = "acknowledged"
+    db.add(
+        CriticalAction(
+            report_id=report.id,
+            action="医师确认接收危急值通知",
+            actor=user.full_name or user.username,
+        )
+    )
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+@router.post(
+    "/reports/{report_id}/resolve",
+    response_model=ExamReportOut,
+    dependencies=[Depends(require_roles("doctor"))],
+)
+def resolve_critical(
+    report_id: int,
+    body: CriticalResolveBody,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """处置反馈（acknowledged → resolved）：须先确认接收后方可反馈处置结果。"""
+    report = db.get(ExamReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    if not report.critical:
+        raise HTTPException(status_code=422, detail="非危急值报告，无需处置反馈")
+    if report.critical_status != "acknowledged":
+        raise HTTPException(status_code=409, detail="须先确认接收后方可处置反馈")
+    report.critical_status = "resolved"
+    db.add(
+        CriticalAction(
+            report_id=report.id,
+            action=f"处置反馈：{body.note}" if body.note else "处置反馈完成",
+            actor=user.full_name or user.username,
+        )
+    )
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+@router.get("/reports/{report_id}/critical-actions", response_model=list[CriticalActionOut])
+def list_critical_actions(report_id: int, db: Session = Depends(get_db)):
+    """危急值处置留痕轨迹。"""
+    if db.get(ExamReport, report_id) is None:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    return (
+        db.query(CriticalAction)
+        .filter(CriticalAction.report_id == report_id)
+        .order_by(CriticalAction.id)
+        .all()
+    )
+
+
+@router.get("/critical/unacknowledged")
+def list_unacknowledged_critical(
+    today: str | None = None, timeout_minutes: int = 30, db: Session = Depends(get_db)
+):
+    """超时未确认危急值清单：报告发布后医师超时未确认接收的（催办用）。
+
+    - today 提供时（YYYY-MM-DD）：报告日期早于 today 的未确认危急值均计入（粗略按天）；
+    - today 缺省时：按 timeout_minutes 与当前时间比对。
+    """
+    query = db.query(ExamReport).filter(
+        ExamReport.critical.is_(True), ExamReport.critical_status == "notified"
+    )
+    if today is not None:
+        deadline = datetime.strptime(today, "%Y-%m-%d")
+        rows = [r for r in query.all() if r.reported_at < deadline]
+    else:
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=timeout_minutes)
+        rows = [r for r in query.all() if r.reported_at < cutoff]
+    return [
+        {
+            "report_id": r.id,
+            "request_id": r.request_id,
+            "conclusion": r.conclusion,
+            "reported_by": r.reported_by,
+            "reported_at": r.reported_at.isoformat(),
+            "critical_status": r.critical_status,
+        }
+        for r in sorted(rows, key=lambda r: r.reported_at)
+    ]
+
+
+# ---------- 互认统计 ----------
+
+
+@router.get("/recognition-stats")
+def recognition_stats(db: Session = Depends(get_db)):
+    """互认统计：互认率、按项目统计、节约检查次数。"""
+    reported = (
+        db.query(func.count(ExamRequest.id)).filter(ExamRequest.status == "reported").scalar() or 0
+    )
+    recognized = (
+        db.query(func.count(ExamRequest.id)).filter(ExamRequest.status == "recognized").scalar()
+        or 0
+    )
+    total = reported + recognized
+    by_item = (
+        db.query(
+            ExamRequest.item_code,
+            ExamRequest.item_name,
+            func.count(ExamRequest.id).label("recognized_count"),
+        )
+        .filter(ExamRequest.status == "recognized")
+        .group_by(ExamRequest.item_code, ExamRequest.item_name)
+        .order_by(func.count(ExamRequest.id).desc())
+        .all()
+    )
+    return {
+        "recognized_total": recognized,
+        "reported_total": reported,
+        # 互认率 = 互认单数 / (已报告 + 互认)
+        "recognition_ratio_pct": round(recognized / total * 100, 1) if total else 0.0,
+        # 每一次互认即节约一次重复检查
+        "saved_exams": recognized,
+        "by_item": [
+            {
+                "item_code": r.item_code,
+                "item_name": r.item_name,
+                "recognized_count": r.recognized_count,
+            }
+            for r in by_item
+        ],
+    }

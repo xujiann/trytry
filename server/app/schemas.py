@@ -126,8 +126,43 @@ class ExamReportCreate(BaseModel):
 class ExamReportOut(ExamReportCreate):
     id: int
     request_id: int
+    critical_status: str = ""
 
     model_config = {"from_attributes": True}
+
+
+class RecognitionItemCreate(BaseModel):
+    item_code: str = Field(min_length=1, max_length=64)
+    item_name: str = Field(min_length=1, max_length=128)
+    center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
+    mutual_scope: str = Field(default="county", pattern="^(county|city)$")
+    active: bool = True
+
+
+class RecognitionItemUpdate(BaseModel):
+    item_name: str | None = None
+    center_type: str | None = Field(default=None, pattern="^(imaging|ecg|lab|pathology)$")
+    mutual_scope: str | None = Field(default=None, pattern="^(county|city)$")
+    active: bool | None = None
+
+
+class RecognitionItemOut(RecognitionItemCreate):
+    id: int
+
+    model_config = {"from_attributes": True}
+
+
+class CriticalActionOut(BaseModel):
+    id: int
+    report_id: int
+    action: str
+    actor: str
+
+    model_config = {"from_attributes": True}
+
+
+class CriticalResolveBody(BaseModel):
+    note: str = Field(default="", max_length=512)
 
 
 class DrugRuleCreate(BaseModel):
@@ -137,6 +172,10 @@ class DrugRuleCreate(BaseModel):
     note: str = ""
     # 相互作用冲突药品编码，逗号分隔（如 "D002,D003"）
     interactions: str = ""
+    # 禁忌诊断关键词，逗号分隔（如 "消化性溃疡,出血"）
+    contraindicated_diagnoses: str = ""
+    # 特殊人群，逗号分隔，取值 pregnant/child/elderly
+    special_groups: str = ""
 
 
 class DrugRuleOut(DrugRuleCreate):
