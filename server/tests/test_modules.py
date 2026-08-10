@@ -293,3 +293,17 @@ def test_metrics_overview(client, headers):
     assert data["remote_diagnosis"]["critical_values"] == 1
     assert data["prescription_review"]["total"] == 2
     assert data["pharmacy"]["stock_alerts"] == 1
+
+
+def test_metrics_trends_and_alerts(client, headers):
+    trends = client.get("/api/metrics/trends?months=3", headers=headers).json()
+    assert len(trends["months"]) == 3
+    assert set(trends["series"]) == {"encounters", "exam_reports", "referrals", "prescriptions"}
+    # 本模块数据均为当月产生，应计入最后一个月
+    assert trends["series"]["encounters"][-1] >= 1
+
+    alerts = client.get("/api/metrics/alerts", headers=headers).json()
+    labels = {i["type"]: i["count"] for i in alerts["items"]}
+    assert labels.get("critical_values") == 1
+    assert labels.get("stock_alerts") == 1
+    assert alerts["total"] >= 2

@@ -55,14 +55,18 @@ from .security import decode_token, hash_password
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    import os
+
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         if db.query(User).filter(User.username == "admin").first() is None:
+            # 公网部署时通过 MEDPLAT_ADMIN_PASSWORD 指定初始密码，避免默认口令暴露
+            initial_password = os.environ.get("MEDPLAT_ADMIN_PASSWORD", "admin123")
             db.add(
                 User(
                     username="admin",
-                    password_hash=hash_password("admin123"),
+                    password_hash=hash_password(initial_password),
                     full_name="平台管理员",
                     role="admin",
                 )

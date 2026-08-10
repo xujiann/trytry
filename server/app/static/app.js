@@ -133,6 +133,23 @@ function barChart(items, { color = "#0b6e6e", unit = "" } = {}) {
 
 /* ---------------- 各页面 ---------------- */
 
+function lineChart(months, series, colors) {
+  const w = 640, h = 200, padL = 36, padB = 24, padT = 10;
+  const all = Object.values(series).flat();
+  const max = Math.max(...all, 1);
+  const x = (i) => padL + (i * (w - padL - 10)) / Math.max(months.length - 1, 1);
+  const y = (v) => padT + (h - padT - padB) * (1 - v / max);
+  let svg = "";
+  Object.entries(series).forEach(([name, values], si) => {
+    const points = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+    svg += `<polyline points="${points}" fill="none" stroke="${colors[si % colors.length]}" stroke-width="2"/>`;
+    values.forEach((v, i) => { svg += `<circle cx="${x(i)}" cy="${y(v)}" r="2.5" fill="${colors[si % colors.length]}"/>`; });
+  });
+  months.forEach((mo, i) => { svg += `<text x="${x(i)}" y="${h - 6}" font-size="10.5" fill="#5b6773" text-anchor="middle">${mo.slice(2)}</text>`; });
+  svg += `<text x="4" y="${y(max) + 4}" font-size="10.5" fill="#5b6773">${max}</text><text x="4" y="${y(0) + 4}" font-size="10.5" fill="#5b6773">0</text>`;
+  return `<svg width="${w}" height="${h}" role="img">${svg}</svg>`;
+}
+
 async function renderDashboard() {
   $("#page-desc").textContent = "指标口径对齐《紧密型县域医共体监测指标体系（2024版）》";
   const m = await api("/api/metrics/overview");
@@ -156,9 +173,20 @@ async function renderDashboard() {
     const top = perf.scorecards.slice(0, 8).map((c) => [c.org_name, c.score]);
     if (top.length) perfHtml = `<div class="panel"><h3>机构绩效评分（前8）</h3>${barChart(top, { unit: " 分" })}</div>`;
   } catch (e) { /* 绩效不可用不阻塞驾驶舱 */ }
+  const [alerts, trends] = await Promise.all([api("/api/metrics/alerts"), api("/api/metrics/trends?months=6")]);
+  const alertBanner = alerts.total
+    ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 风险预警（${alerts.total}）</h3>
+       <p style="font-size:13.5px">${alerts.items.map((a) => `<span class="tag red" style="margin-right:8px">${esc(a.label)} ${a.count}</span>`).join("")}</p></div>`
+    : "";
+  const trendColors = ["#0b6e6e", "#0a4d78", "#b26a00", "#8d4bab"];
+  const trendNames = { encounters: "就诊", exam_reports: "远程诊断", referrals: "转诊", prescriptions: "处方" };
+  const legend = Object.keys(trends.series).map((k, i) =>
+    `<span style="font-size:12.5px;margin-right:14px"><span style="display:inline-block;width:10px;height:10px;background:${trendColors[i]};border-radius:2px;margin-right:4px"></span>${trendNames[k] || k}</span>`).join("");
   $("#page-body").innerHTML =
-    `<div class="cards">${cards.map(([label, value, warn]) =>
+    `${alertBanner}
+     <div class="cards">${cards.map(([label, value, warn]) =>
       `<div class="card"><div class="label">${esc(label)}</div><div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}</div>
+     <div class="panel"><h3>近6月业务量趋势</h3><div style="margin-bottom:6px">${legend}</div>${lineChart(trends.months, trends.series, trendColors)}</div>
      ${chronicItems.length ? `<div class="panel"><h3>慢病分级分组</h3>${barChart(chronicItems, { color: "#b26a00", unit: " 人" })}</div>` : ""}
      ${perfHtml}`;
 }

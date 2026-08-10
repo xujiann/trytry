@@ -20,6 +20,76 @@ from ..models import (
 router = APIRouter(prefix="/api/metrics", tags=["决策驾驶舱"], dependencies=[Depends(get_current_user)])
 
 
+@router.get("/trends")
+def monthly_trends(months: int = 6, db: Session = Depends(get_db)):
+    """近N月业务量趋势：就诊、远程诊断、转诊、处方（Python侧聚合，兼容SQLite/PostgreSQL）。"""
+    from collections import Counter
+    from datetime import date
+
+    def month_key(dt) -> str:
+        return f"{dt.year:04d}-{dt.month:02d}"
+
+    def last_months(n: int) -> list[str]:
+        today = date.today()
+        keys = []
+        year, month = today.year, today.month
+        for _ in range(n):
+            keys.append(f"{year:04d}-{month:02d}")
+            month -= 1
+            if month == 0:
+                year, month = year - 1, 12
+        return list(reversed(keys))
+
+    keys = last_months(max(1, min(months, 24)))
+    series = {}
+    for name, column in (
+        ("encounters", Encounter.created_at),
+        ("exam_reports", ExamReport.reported_at),
+        ("referrals", Referral.created_at),
+        ("prescriptions", Prescription.created_at),
+    ):
+        counter = Counter(month_key(row[0]) for row in db.query(column).all() if row[0])
+        series[name] = [counter.get(k, 0) for k in keys]
+    return {"months": keys, "series": series}
+
+
+@router.get("/alerts")
+def alert_summary(db: Session = Depends(get_db)):
+    """全局风险预警汇总：五类风险一屏聚合，供驾驶舱预警横幅使用。"""
+    from datetime import date, timedelta
+
+    from ..models import ChronicPatient, DrugStock, InfectiousCase, MedicalWaste
+
+    critical = db.query(func.count(ExamReport.id)).filter(ExamReport.critical.is_(True)).scalar() or 0
+    stock = db.query(func.count(DrugStock.id)).filter(DrugStock.quantity < DrugStock.threshold).scalar() or 0
+    today = date.today().isoformat()
+    chronic_overdue = (
+        db.query(func.count(ChronicPatient.id))
+        .filter(ChronicPatient.next_due != "", ChronicPatient.next_due < today)
+        .scalar()
+        or 0
+    )
+    waste_cutoff = (date.today() - timedelta(days=2)).isoformat()
+    waste_overdue = (
+        db.query(func.count(MedicalWaste.id))
+        .filter(MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= waste_cutoff)
+        .scalar()
+        or 0
+    )
+    window_start = (date.today() - timedelta(days=7)).isoformat()
+    infectious_recent = (
+        db.query(func.count(InfectiousCase.id)).filter(InfectiousCase.onset_date >= window_start).scalar() or 0
+    )
+    items = [
+        {"type": "critical_values", "label": "危急值", "count": critical},
+        {"type": "stock_alerts", "label": "缺药预警", "count": stock},
+        {"type": "chronic_overdue", "label": "慢病随访超期", "count": chronic_overdue},
+        {"type": "medwaste_overdue", "label": "医废滞留", "count": waste_overdue},
+        {"type": "infectious_recent", "label": "近7日传染病报告", "count": infectious_recent},
+    ]
+    return {"total": sum(i["count"] for i in items), "items": [i for i in items if i["count"] > 0]}
+
+
 @router.get("/overview")
 def overview(db: Session = Depends(get_db)):
     org_total = db.query(func.count(Organization.id)).scalar() or 0
