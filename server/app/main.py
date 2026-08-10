@@ -38,6 +38,7 @@ from .routers import (
     exams,
     infectious,
     insurance,
+    integration,
     maternal,
     medication,
     medwaste,
@@ -114,6 +115,7 @@ app.include_router(telemedicine.router)
 app.include_router(tcm.router)
 app.include_router(medication.router)
 app.include_router(insurance.router)
+app.include_router(integration.router)
 app.include_router(education.router)
 app.include_router(eldercare.router)
 app.include_router(maternal.router)
