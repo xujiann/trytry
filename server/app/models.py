@@ -170,6 +170,8 @@ class DrugRule(Base):
     max_daily_dose: Mapped[float] = mapped_column(Float)
     dose_unit: Mapped[str] = mapped_column(String(16), default="mg")
     note: Mapped[str] = mapped_column(String(256), default="")
+    # 相互作用：与该药冲突的药品编码（逗号分隔），同方出现冲突药对转药师审
+    interactions: Mapped[str] = mapped_column(String(512), default="")
 
 
 class Prescription(Base):

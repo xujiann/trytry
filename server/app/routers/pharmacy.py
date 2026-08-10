@@ -1,10 +1,13 @@
-"""中心药房：库存管理、县乡村余缺调拨、缺药预警。"""
+"""中心药房：库存管理、县乡村余缺调拨、缺药预警、采购建议。"""
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_admin
-from ..models import DrugStock, Organization, StockTransfer, User
+from ..models import DrugStock, Organization, Prescription, PrescriptionItem, StockTransfer, User
 from ..schemas import StockOut, StockUpsert, TransferCreate
 from ..ws import manager
 
@@ -92,6 +95,53 @@ def transfer_stock(
             }
         )
     return dest
+
+
+@router.get("/purchase-suggestions", dependencies=[Depends(get_current_user)])
+def purchase_suggestions(db: Session = Depends(get_db)):
+    """采购建议：近30天处方用药量与全网当前库存差值为正的品种清单。
+
+    用药量按处方明细 日剂量×天数 汇总（退回处方不计入）。
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    usage_rows = (
+        db.query(
+            PrescriptionItem.drug_code,
+            func.max(PrescriptionItem.drug_name).label("drug_name"),
+            func.sum(PrescriptionItem.daily_dose * PrescriptionItem.days).label("usage"),
+        )
+        .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
+        .filter(
+            Prescription.created_at >= since.replace(tzinfo=None),
+            Prescription.status != "rejected",
+        )
+        .group_by(PrescriptionItem.drug_code)
+        .all()
+    )
+    stock_rows = (
+        db.query(DrugStock.drug_code, func.sum(DrugStock.quantity).label("quantity"))
+        .group_by(DrugStock.drug_code)
+        .all()
+    )
+    stock_by_code = {r.drug_code: int(r.quantity or 0) for r in stock_rows}
+
+    suggestions = []
+    for row in usage_rows:
+        usage = float(row.usage or 0)
+        current = stock_by_code.get(row.drug_code, 0)
+        gap = usage - current
+        if gap > 0:
+            suggestions.append(
+                {
+                    "drug_code": row.drug_code,
+                    "drug_name": row.drug_name,
+                    "usage_30d": usage,
+                    "current_stock": current,
+                    "suggested_quantity": int(gap + 0.999),  # 缺口向上取整
+                }
+            )
+    suggestions.sort(key=lambda s: s["suggested_quantity"], reverse=True)
+    return suggestions
 
 
 @router.get("/alerts", response_model=list[StockOut], dependencies=[Depends(get_current_user)])

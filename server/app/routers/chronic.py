@@ -106,6 +106,64 @@ def add_followup(chronic_id: int, body: FollowUpCreate, db: Session = Depends(ge
     }
 
 
+# 风险评分：病种对应的关键随访指标
+_RISK_METRICS = {"hypertension": "sbp", "diabetes": "glucose"}
+# 当前分级基础分
+_LEVEL_BASE = {1: 20, 2: 50, 3: 80}
+
+
+@router.get("/{chronic_id}/risk")
+def risk_score(chronic_id: int, db: Session = Depends(get_db)):
+    """简单风险评分：最近3次随访关键指标趋势 + 当前分级加权。
+
+    score = 分级基础分（1级20 / 2级50 / 3级80）
+            + 趋势修正（上升 +15，下降 -10，平稳 0）
+    风险档位：≥70 高危，≥40 中危，其余低危。
+    """
+    chronic = db.get(ChronicPatient, chronic_id)
+    if chronic is None:
+        raise HTTPException(status_code=404, detail="慢病档案不存在")
+
+    metric = _RISK_METRICS.get(chronic.disease)
+    recent = (
+        db.query(FollowUp)
+        .filter(FollowUp.chronic_id == chronic_id)
+        .order_by(FollowUp.id.desc())
+        .limit(3)
+        .all()
+    )
+    values: list[float] = []
+    if metric:
+        # 按时间正序排列的最近3次有效数值
+        values = [
+            v for v in (getattr(f, metric) for f in reversed(recent)) if v is not None
+        ]
+
+    trend = "insufficient_data"
+    adjust = 0
+    if len(values) >= 2:
+        if values[-1] > values[0]:
+            trend, adjust = "rising", 15
+        elif values[-1] < values[0]:
+            trend, adjust = "falling", -10
+        else:
+            trend, adjust = "stable", 0
+
+    score = max(0, min(100, _LEVEL_BASE.get(chronic.level, 20) + adjust))
+    risk_level = "high" if score >= 70 else "medium" if score >= 40 else "low"
+    return {
+        "chronic_id": chronic_id,
+        "disease": chronic.disease,
+        "level": chronic.level,
+        "metric": metric or "",
+        "recent_values": values,
+        "trend": trend,
+        "score": score,
+        "risk_level": risk_level,
+        "refer_up_suggested": risk_level == "high",
+    }
+
+
 @router.get("/{chronic_id}/followups", response_model=list[FollowUpOut])
 def list_followups(chronic_id: int, db: Session = Depends(get_db)):
     if db.get(ChronicPatient, chronic_id) is None:

@@ -135,6 +135,8 @@ class DrugRuleCreate(BaseModel):
     max_daily_dose: float = Field(gt=0)
     dose_unit: str = "mg"
     note: str = ""
+    # 相互作用冲突药品编码，逗号分隔（如 "D002,D003"）
+    interactions: str = ""
 
 
 class DrugRuleOut(DrugRuleCreate):

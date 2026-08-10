@@ -44,12 +44,26 @@ def create_prescription(
         raise HTTPException(status_code=404, detail="机构不存在")
 
     violations: list[str] = []
+    names_by_code = {item.drug_code: item.drug_name for item in body.items}
+    seen_pairs: set[frozenset[str]] = set()
     for item in body.items:
         rule = db.query(DrugRule).filter(DrugRule.drug_code == item.drug_code).first()
-        if rule and item.daily_dose > rule.max_daily_dose:
+        if rule is None:
+            continue
+        if item.daily_dose > rule.max_daily_dose:
             violations.append(
                 f"{item.drug_name} 日剂量 {item.daily_dose}{rule.dose_unit} 超过上限 "
                 f"{rule.max_daily_dose}{rule.dose_unit}"
+            )
+        # 相互作用审查：同一处方内出现冲突药对 → 转药师审并注明
+        conflict_codes = {c.strip() for c in rule.interactions.split(",") if c.strip()}
+        for other_code in conflict_codes & set(names_by_code) - {item.drug_code}:
+            pair = frozenset((item.drug_code, other_code))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            violations.append(
+                f"药物相互作用：{item.drug_name} 与 {names_by_code[other_code]} 存在相互作用，需药师人工审核"
             )
 
     prescription = Prescription(
