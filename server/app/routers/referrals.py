@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import Organization, Patient, Referral, User
 from ..schemas import ReferralCreate, ReferralOut, ReferralStatusUpdate
 
@@ -17,7 +17,12 @@ _ALLOWED_TRANSITIONS = {
 }
 
 
-@router.post("", response_model=ReferralOut, status_code=201)
+@router.post(
+    "",
+    response_model=ReferralOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 转诊申请=医疗岗
+)
 def create_referral(
     body: ReferralCreate,
     db: Session = Depends(get_db),
@@ -45,7 +50,11 @@ def list_referrals(status: str | None = None, db: Session = Depends(get_db)):
     return query.order_by(Referral.id.desc()).limit(200).all()
 
 
-@router.patch("/{referral_id}/status", response_model=ReferralOut)
+@router.patch(
+    "/{referral_id}/status",
+    response_model=ReferralOut,
+    dependencies=[Depends(require_roles("doctor"))],  # H2: 接诊/结案/退回属诊疗行为，限医师
+)
 def update_status(referral_id: int, body: ReferralStatusUpdate, db: Session = Depends(get_db)):
     referral = db.get(Referral, referral_id)
     if referral is None:

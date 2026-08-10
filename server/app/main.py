@@ -80,6 +80,15 @@ async def lifespan(_: FastAPI):
                 )
             )
             db.commit()
+        # M5 整改：字典基础数据（CodeSystem）启动时种子化，读路径不再产生写副作用
+        from .models import CodeSystem
+        from .routers.dictionaries import SYSTEM_CODES
+
+        existing_codes = {code for (code,) in db.query(CodeSystem.code).all()}
+        for code, name in SYSTEM_CODES.items():
+            if code not in existing_codes:
+                db.add(CodeSystem(code=code, name=name))
+        db.commit()
     finally:
         db.close()
     yield
@@ -177,38 +186,51 @@ _AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 _AUDIT_EXEMPT = {"/api/auth/login"}
 
 
+def _write_audit(request, status_code: int) -> None:
+    """审计落库：记录的是「写操作请求尝试」（含失败/异常），与业务事务解耦。"""
+    username, user_id = "", None
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        claims = decode_token(auth[7:])
+        if claims:
+            username = claims.get("sub", "")
+    db = SessionLocal()
+    try:
+        if username:
+            user = db.query(User).filter(User.username == username).first()
+            user_id = user.id if user else None
+        db.add(
+            AuditLog(
+                user_id=user_id,
+                username=username or "anonymous",
+                method=request.method,
+                path=request.url.path,
+                status_code=status_code,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 @app.middleware("http")
 async def audit_middleware(request, call_next):
-    response = await call_next(request)
+    """M2 整改：try/except 包住 call_next——业务路由抛未捕获异常（500）时
+    同样落审计（status_code=500）后重新抛出，保证写操作全量留痕。"""
     path = request.url.path
-    if (
+    audited = (
         request.method in _AUDITED_METHODS
         and path.startswith("/api/")
         and path not in _AUDIT_EXEMPT
-    ):
-        username, user_id = "", None
-        auth = request.headers.get("authorization", "")
-        if auth.lower().startswith("bearer "):
-            claims = decode_token(auth[7:])
-            if claims:
-                username = claims.get("sub", "")
-        db = SessionLocal()
-        try:
-            if username:
-                user = db.query(User).filter(User.username == username).first()
-                user_id = user.id if user else None
-            db.add(
-                AuditLog(
-                    user_id=user_id,
-                    username=username or "anonymous",
-                    method=request.method,
-                    path=path,
-                    status_code=response.status_code,
-                )
-            )
-            db.commit()
-        finally:
-            db.close()
+    )
+    try:
+        response = await call_next(request)
+    except Exception:
+        if audited:
+            _write_audit(request, 500)
+        raise
+    if audited:
+        _write_audit(request, response.status_code)
     return response
 
 

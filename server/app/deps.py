@@ -32,6 +32,45 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+# ============================================================================
+# 业务写接口「接口 → 最小角色」矩阵（H2 整改，admin 全通；详见 docs/接口对接规范.md 附录）
+# 原则：operator（经办人员）不得执行诊疗性质操作（接诊、出报告、开处方、随访）。
+#
+# | 业务 | 接口 | 允许角色 |
+# |---|---|---|
+# | 转诊申请 POST /api/referrals                       | doctor, operator |
+# | 转诊接诊/结案/退回 PATCH /api/referrals/{id}/status | doctor |
+# | 就诊记录 POST /api/encounters                      | doctor, operator |
+# | 检查申请 POST /api/exams、样本物流 sample/advance   | doctor, operator |
+# | 诊断领取/出报告/报告修改 claim、report、PATCH reports | doctor |
+# | 处方开具 POST /api/prescriptions                   | doctor |
+# | 处方审核 POST /api/prescriptions/{id}/review        | pharmacist |
+# | 慢病建档/随访 POST /api/chronic(/followups)         | doctor, public_health |
+# | 传染病报告 POST /api/infectious/cases              | doctor, public_health |
+# | 急救调度/进程/体征 POST /api/emergency/*            | operator, doctor |
+# | 医保结算/转诊证明 POST /api/insurance/settlements 等 | operator |
+# | 特病申报 POST /api/insurance/special-diseases       | operator, doctor |
+# | 特病审核 .../review                                 | director, operator |
+# | 远程会诊申请/评价                                   | doctor, operator |
+# | 远程会诊受理/拒绝/出具意见                          | doctor |
+# | 互联网+诊疗咨询建立/结束                            | operator, doctor |
+# | 互联网+诊疗医师回复 reply                           | doctor |
+# | 家医签约/解约/履约 POST /api/contracts*             | doctor, public_health |
+# | 老年评估/妇幼建档随访/疫苗接种与禁忌                | doctor, public_health |
+# | 公卫事件/处置/监测指标 POST /api/publichealth/*     | public_health, doctor |
+# | 号源预约/取消/核销 POST /api/appointments*          | operator, doctor |
+# | 库存调拨 POST /api/pharmacy/transfers               | operator, pharmacist |
+# | 短缺登记/流转 POST /api/medication/shortages*       | operator, pharmacist |
+# | 中药代煎建单 POST /api/tcm/dispense-orders          | doctor |
+# | 中药代煎流转 .../advance                            | operator, pharmacist |
+# | 消毒批次/申领 POST /api/cssd/*                      | operator |
+# | 医废收集/交接 POST /api/medwaste*                   | operator |
+# | 健康宣教发布 POST /api/education/articles*          | public_health, operator |
+# | 满意度代录 POST /api/surveys                        | operator |
+# | 人事/资产 POST /api/mgmt/employees|secondments|assets | director, operator |
+# | 财务/公文 POST /api/mgmt/finance|docs               | director, operator（发文 director） |
+# | 号源发布/字典/规则/用户/机构等平台配置              | admin |
+# ============================================================================
 ROLE_NAMES = {
     "admin": "平台管理员",
     "director": "管理层",

@@ -36,7 +36,12 @@ class EmployeeOut(EmployeeCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/employees", response_model=EmployeeOut, status_code=201)
+@router.post(
+    "/employees",
+    response_model=EmployeeOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "operator"))],  # H2: 人事管理
+)
 def create_employee(body: EmployeeCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -61,7 +66,11 @@ class SecondmentCreate(BaseModel):
     start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
-@router.post("/secondments", status_code=201)
+@router.post(
+    "/secondments",
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "operator"))],  # H2: 人员下派
+)
 def second_employee(body: SecondmentCreate, db: Session = Depends(get_db)):
     """人员派驻下沉：状态改为派驻中，支撑监测指标4（医师派驻人数）。"""
     employee = db.get(Employee, body.employee_id)
@@ -83,7 +92,10 @@ def second_employee(body: SecondmentCreate, db: Session = Depends(get_db)):
     return {"id": record.id, "employee_id": body.employee_id, "status": "seconded"}
 
 
-@router.post("/secondments/{secondment_id}/end")
+@router.post(
+    "/secondments/{secondment_id}/end",
+    dependencies=[Depends(require_roles("director", "operator"))],  # H2
+)
 def end_secondment(secondment_id: int, end_date: str, db: Session = Depends(get_db)):
     record = db.get(Secondment, secondment_id)
     if record is None:
@@ -178,7 +190,12 @@ class AssetOut(AssetCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/assets", response_model=AssetOut, status_code=201)
+@router.post(
+    "/assets",
+    response_model=AssetOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "operator"))],  # H2: 资产管理
+)
 def create_asset(body: AssetCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -199,7 +216,11 @@ def list_assets(org_id: int | None = None, db: Session = Depends(get_db)):
     return query.order_by(Asset.id).limit(500).all()
 
 
-@router.post("/assets/{asset_id}/transfer", response_model=AssetOut)
+@router.post(
+    "/assets/{asset_id}/transfer",
+    response_model=AssetOut,
+    dependencies=[Depends(require_roles("director", "operator"))],  # H2
+)
 def transfer_asset(asset_id: int, to_org_id: int, db: Session = Depends(get_db)):
     """物资调拨划拨。"""
     asset = db.get(Asset, asset_id)
@@ -215,7 +236,11 @@ def transfer_asset(asset_id: int, to_org_id: int, db: Session = Depends(get_db))
     return asset
 
 
-@router.post("/assets/{asset_id}/scrap", response_model=AssetOut)
+@router.post(
+    "/assets/{asset_id}/scrap",
+    response_model=AssetOut,
+    dependencies=[Depends(require_roles("director", "operator"))],  # H2
+)
 def scrap_asset(asset_id: int, db: Session = Depends(get_db)):
     asset = db.get(Asset, asset_id)
     if asset is None:
@@ -326,7 +351,12 @@ class QcOut(QcCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/qc", response_model=QcOut, status_code=201)
+@router.post(
+    "/qc",
+    response_model=QcOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "doctor"))],  # H2: 质控记录
+)
 def add_qc(body: QcCreate, db: Session = Depends(get_db)):
     if body.center_type not in _CENTERS:
         raise HTTPException(status_code=422, detail="未知中心类型")

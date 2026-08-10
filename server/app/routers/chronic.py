@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import ChronicPatient, FollowUp, Organization, Patient
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
 
@@ -42,7 +42,12 @@ def _evaluate_level(disease: str, body: FollowUpCreate) -> int | None:
     return None
 
 
-@router.post("", response_model=ChronicOut, status_code=201)
+@router.post(
+    "",
+    response_model=ChronicOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 慢病建档
+)
 def register_chronic(body: ChronicCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
@@ -84,7 +89,11 @@ def list_overdue(today: str | None = None, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/{chronic_id}/followups", status_code=201)
+@router.post(
+    "/{chronic_id}/followups",
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 随访属诊疗/公卫岗
+)
 def add_followup(chronic_id: int, body: FollowUpCreate, db: Session = Depends(get_db)):
     chronic = db.get(ChronicPatient, chronic_id)
     if chronic is None:

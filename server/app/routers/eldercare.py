@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import ElderlyAssessment, Patient
 
 router = APIRouter(prefix="/api/eldercare", tags=["老年健康"], dependencies=[Depends(get_current_user)])
@@ -36,7 +36,12 @@ class AssessmentOut(AssessmentCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/assessments", response_model=AssessmentOut, status_code=201)
+@router.post(
+    "/assessments",
+    response_model=AssessmentOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 老年健康评估
+)
 def create_assessment(body: AssessmentCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import Organization, SterilizationBatch
 from ..schemas import BatchCreate, BatchOut
 
@@ -12,7 +12,12 @@ router = APIRouter(prefix="/api/cssd", tags=["消毒供应"], dependencies=[Depe
 _FLOW = {"sterilizing": "sterile", "sterile": "dispatched", "dispatched": "recycled"}
 
 
-@router.post("/batches", response_model=BatchOut, status_code=201)
+@router.post(
+    "/batches",
+    response_model=BatchOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 消毒批次=经办
+)
 def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.center_org_id) is None:
         raise HTTPException(status_code=404, detail="消毒供应中心机构不存在")
@@ -35,7 +40,11 @@ def list_batches(status: str | None = None, batch_no: str | None = None, db: Ses
     return query.order_by(SterilizationBatch.id.desc()).limit(200).all()
 
 
-@router.post("/batches/{batch_id}/advance", response_model=BatchOut)
+@router.post(
+    "/batches/{batch_id}/advance",
+    response_model=BatchOut,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 批次流转=经办
+)
 def advance(batch_id: int, dispatched_to_org_id: int | None = None, db: Session = Depends(get_db)):
     """流转到下一状态：灭菌中→已灭菌→已发放（需指定接收机构）→已回收。"""
     batch = db.get(SterilizationBatch, batch_id)

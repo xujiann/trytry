@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import EmergencyCase, EmergencyVital, Organization
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
 
@@ -44,7 +44,12 @@ class VitalOut(VitalCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/cases", response_model=CaseOut, status_code=201)
+@router.post(
+    "/cases",
+    response_model=CaseOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 急救调度
+)
 def dispatch(body: CaseCreate, db: Session = Depends(get_db)):
     if body.dest_org_id is not None and db.get(Organization, body.dest_org_id) is None:
         raise HTTPException(status_code=404, detail="目标医院不存在")
@@ -63,7 +68,11 @@ def list_cases(status: str | None = None, db: Session = Depends(get_db)):
     return query.order_by(EmergencyCase.id.desc()).limit(200).all()
 
 
-@router.post("/cases/{case_id}/advance", response_model=CaseOut)
+@router.post(
+    "/cases/{case_id}/advance",
+    response_model=CaseOut,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 急救流程推进
+)
 def advance(case_id: int, db: Session = Depends(get_db)):
     case = db.get(EmergencyCase, case_id)
     if case is None:
@@ -77,7 +86,12 @@ def advance(case_id: int, db: Session = Depends(get_db)):
     return case
 
 
-@router.post("/cases/{case_id}/vitals", response_model=VitalOut, status_code=201)
+@router.post(
+    "/cases/{case_id}/vitals",
+    response_model=VitalOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 体征回传
+)
 def report_vitals(case_id: int, body: VitalCreate, db: Session = Depends(get_db)):
     """车载终端回传生命体征——院内可实时调阅，实现院前院内无缝对接。"""
     case = db.get(EmergencyCase, case_id)

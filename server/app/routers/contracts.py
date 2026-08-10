@@ -3,14 +3,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import ContractService, FamilyDoctorContract, Organization, Patient
 from ..schemas import ContractCreate, ContractOut, ContractServiceCreate, ContractServiceOut
 
 router = APIRouter(prefix="/api/contracts", tags=["家庭医生签约"], dependencies=[Depends(get_current_user)])
 
 
-@router.post("", response_model=ContractOut, status_code=201)
+@router.post(
+    "",
+    response_model=ContractOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 家医签约
+)
 def sign(body: ContractCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
@@ -52,7 +57,11 @@ def list_contracts(org_id: int | None = None, patient_id: int | None = None, db:
     return query.order_by(FamilyDoctorContract.id.desc()).limit(500).all()
 
 
-@router.post("/{contract_id}/terminate", response_model=ContractOut)
+@router.post(
+    "/{contract_id}/terminate",
+    response_model=ContractOut,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2
+)
 def terminate(contract_id: int, db: Session = Depends(get_db)):
     contract = db.get(FamilyDoctorContract, contract_id)
     if contract is None:
@@ -65,7 +74,12 @@ def terminate(contract_id: int, db: Session = Depends(get_db)):
     return contract
 
 
-@router.post("/{contract_id}/services", response_model=ContractServiceOut, status_code=201)
+@router.post(
+    "/{contract_id}/services",
+    response_model=ContractServiceOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 履约记录
+)
 def record_service(contract_id: int, body: ContractServiceCreate, db: Session = Depends(get_db)):
     contract = db.get(FamilyDoctorContract, contract_id)
     if contract is None:

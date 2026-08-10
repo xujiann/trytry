@@ -57,10 +57,11 @@ def test_hl7v2_adt_creates_patient(client, operator_headers):
     assert data["created"] is True
     patient = data["patient"]
     assert patient["name"] == "王建国"
-    assert patient["id_card"] == "320981199001011111"
+    # H1 整改：对接层回显对非 admin 角色统一脱敏
+    assert patient["id_card"] == "3209**********1111"
     assert patient["gender"] == "男"
     assert patient["birth_date"] == "1990-01-01"
-    assert patient["phone"] == "13899998888"
+    assert patient["phone"] == "138******88"
     assert patient["ehc_no"].startswith("EHC")
 
     # EMPI 幂等：重复推送同一身份证号不重复建档
@@ -107,7 +108,8 @@ def test_fhir_patient_inbound(client, operator_headers):
     assert patient["name"] == "刘芳"
     assert patient["gender"] == "女"
     assert patient["birth_date"] == "1985-07-07"
-    assert patient["phone"] == "13711112222"
+    # H1 整改：非 admin 角色电话脱敏
+    assert patient["phone"] == "137******22"
 
     bad = client.post(
         "/api/integration/fhir/Patient",
@@ -181,7 +183,17 @@ def test_fhir_patient_export(client, operator_headers, admin_headers):
     assert resource["id"] == ehc_no
     assert resource["gender"] == "male"
     assert resource["birthDate"] == "1990-01-01"
-    assert {"system": "urn:oid:2.16.156.10011.1.3", "value": "320981199001011111"} in resource[
+    # H1 整改：operator 导出身份证号必须脱敏（与 /api/patients 同口径）
+    assert {"system": "urn:oid:2.16.156.10011.1.3", "value": "3209**********1111"} in resource[
         "identifier"
     ]
+    assert not any("320981199001011111" in str(i.get("value", "")) for i in resource["identifier"])
     assert resource["name"][0]["text"] == "王建国"
+
+    # admin 导出保留明文（数据导出场景，审计留痕）
+    admin_resource = client.get(
+        f"/api/integration/fhir/Patient/{ehc_no}", headers=admin_headers
+    ).json()
+    assert {"system": "urn:oid:2.16.156.10011.1.3", "value": "320981199001011111"} in admin_resource[
+        "identifier"
+    ]

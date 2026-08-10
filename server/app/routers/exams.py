@@ -46,7 +46,12 @@ def recognition_check(patient_id: int, item_code: str, db: Session = Depends(get
     }
 
 
-@router.post("", response_model=ExamRequestOut, status_code=201)
+@router.post(
+    "",
+    response_model=ExamRequestOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 检查申请=医疗岗
+)
 def create_request(
     body: ExamRequestCreate,
     db: Session = Depends(get_db),
@@ -66,6 +71,13 @@ def create_request(
             raise HTTPException(status_code=422, detail="被互认的申请单不存在或尚无报告")
         if source.patient_id != body.patient_id or source.item_code != body.item_code:
             raise HTTPException(status_code=422, detail="互认必须是同一患者的同一检查项目")
+        # L1 整改：建单侧同样复核 30 天互认窗口，与 recognition-check 预检口径一致
+        window_start = datetime.now(timezone.utc) - timedelta(days=RECOGNITION_WINDOW_DAYS)
+        if source.report is None or source.report.reported_at < window_start.replace(tzinfo=None):
+            raise HTTPException(
+                status_code=422,
+                detail=f"被互认报告已超出 {RECOGNITION_WINDOW_DAYS} 天互认窗口，不可互认",
+            )
         request.status = "recognized"
         request.recognized_from_id = source.id
     db.add(request)
@@ -137,7 +149,11 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
 _SAMPLE_FLOW = {"": "collected", "collected": "in_transit", "in_transit": "received"}
 
 
-@router.post("/{request_id}/sample/advance", response_model=ExamRequestOut)
+@router.post(
+    "/{request_id}/sample/advance",
+    response_model=ExamRequestOut,
+    dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 样本物流
+)
 def advance_sample(request_id: int, db: Session = Depends(get_db)):
     """检验样本物流：采样→冷链转运→中心核收（仅检验类申请）。"""
     request = db.get(ExamRequest, request_id)

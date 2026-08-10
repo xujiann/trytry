@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import (
     ChronicPatient,
     HealthMonitorRecord,
@@ -35,7 +35,12 @@ class EventOut(EventCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/events", response_model=EventOut, status_code=201)
+@router.post(
+    "/events",
+    response_model=EventOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("public_health", "doctor"))],  # H2/L5: 公卫事件
+)
 def create_event(body: EventCreate, db: Session = Depends(get_db)):
     event = PublicHealthEvent(**body.model_dump())
     db.add(event)
@@ -57,7 +62,11 @@ class ActionCreate(BaseModel):
     actor: str = ""
 
 
-@router.post("/events/{event_id}/actions", status_code=201)
+@router.post(
+    "/events/{event_id}/actions",
+    status_code=201,
+    dependencies=[Depends(require_roles("public_health", "doctor"))],  # H2/L5: 事件处置
+)
 def add_action(event_id: int, body: ActionCreate, db: Session = Depends(get_db)):
     """处置动作留痕：应急值守、流调、资源调度等指挥记录。"""
     event = db.get(PublicHealthEvent, event_id)
@@ -81,7 +90,11 @@ def list_actions(event_id: int, db: Session = Depends(get_db)):
     ]
 
 
-@router.post("/events/{event_id}/close", response_model=EventOut)
+@router.post(
+    "/events/{event_id}/close",
+    response_model=EventOut,
+    dependencies=[Depends(require_roles("public_health", "doctor"))],  # H2/L5
+)
 def close_event(event_id: int, db: Session = Depends(get_db)):
     event = db.get(PublicHealthEvent, event_id)
     if event is None:
@@ -142,7 +155,12 @@ class MonitorOut(MonitorCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/monitors", response_model=MonitorOut, status_code=201)
+@router.post(
+    "/monitors",
+    response_model=MonitorOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("public_health", "doctor"))],  # H2/L5: 监测指标上报
+)
 def add_monitor(body: MonitorCreate, db: Session = Depends(get_db)):
     if body.domain not in _DOMAINS:
         raise HTTPException(status_code=422, detail=f"未知监测领域: {body.domain}")

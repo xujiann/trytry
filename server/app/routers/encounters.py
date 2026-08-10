@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import (
     ChronicPatient,
     Encounter,
@@ -18,7 +18,12 @@ from ..schemas import EncounterCreate, EncounterOut
 router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[Depends(get_current_user)])
 
 
-@router.post("/encounters", response_model=EncounterOut, status_code=201)
+@router.post(
+    "/encounters",
+    response_model=EncounterOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 就诊记录=医疗岗
+)
 def create_encounter(body: EncounterCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")

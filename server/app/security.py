@@ -7,13 +7,15 @@ import os
 import time
 
 from .config import settings
+from .state_store import TokenBlacklist
 
 SECRET_KEY = settings.secret
 TOKEN_TTL_SECONDS = settings.token_ttl_seconds
 _PBKDF2_ITERATIONS = 120_000
 
-# 登出黑名单：已主动作废的令牌（内存实现，进程重启即清空；多实例部署需换 Redis）
-revoked_tokens: set[str] = set()
+# 登出黑名单（M4 整改）：默认进程内存实现（带 TTL 清理），
+# 配置 MEDPLAT_REDIS_URL 后自动切换 Redis 共享存储（多实例部署必须）。
+revoked_tokens = TokenBlacklist(default_ttl_seconds=TOKEN_TTL_SECONDS)
 
 
 def validate_password_strength(password: str) -> str | None:

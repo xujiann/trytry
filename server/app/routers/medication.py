@@ -5,7 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import DrugShortage, Organization, Patient, Prescription, PrescriptionItem
 
 router = APIRouter(prefix="/api/medication", tags=["药事监测"], dependencies=[Depends(get_current_user)])
@@ -30,7 +30,12 @@ class ShortageOut(ShortageCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/shortages", response_model=ShortageOut, status_code=201)
+@router.post(
+    "/shortages",
+    response_model=ShortageOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "pharmacist"))],  # H2: 短缺登记
+)
 def register_shortage(body: ShortageCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="登记机构不存在")
@@ -49,7 +54,11 @@ def list_shortages(status: str | None = None, db: Session = Depends(get_db)):
     return query.order_by(DrugShortage.id.desc()).limit(200).all()
 
 
-@router.post("/shortages/{shortage_id}/advance", response_model=ShortageOut)
+@router.post(
+    "/shortages/{shortage_id}/advance",
+    response_model=ShortageOut,
+    dependencies=[Depends(require_roles("operator", "pharmacist"))],  # H2: 短缺流转
+)
 def advance_shortage(shortage_id: int, db: Session = Depends(get_db)):
     shortage = db.get(DrugShortage, shortage_id)
     if shortage is None:

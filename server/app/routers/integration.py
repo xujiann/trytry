@@ -10,11 +10,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import require_roles
-from ..models import ChronicPatient, FollowUp, Patient
-from ..schemas import FollowUpCreate, PatientOut
+from ..deps import get_current_user, require_roles
+from ..models import ChronicPatient, FollowUp, Patient, User
+from ..privacy import desensitize, mask_id_card, mask_phone
+from ..schemas import FollowUpCreate
 from .chronic import _evaluate_level
-from .patients import _generate_ehc_no
+from .patients import create_patient_idempotent
 
 router = APIRouter(
     prefix="/api/integration",
@@ -35,23 +36,19 @@ class Hl7Message(BaseModel):
 
 
 def _upsert_patient(db: Session, data: dict) -> tuple[Patient, bool]:
-    """按身份证号幂等建档：已存在返回既有档案。"""
-    existing = db.query(Patient).filter(Patient.id_card == data["id_card"]).first()
-    if existing:
-        return existing, False
-    patient = Patient(ehc_no=_generate_ehc_no(db), **data)
-    db.add(patient)
-    db.commit()
-    db.refresh(patient)
-    return patient, True
+    """按身份证号幂等建档：已存在返回既有档案（并发冲突由唯一约束兜底，M6）。"""
+    return create_patient_idempotent(db, data)
 
 
 @router.post("/hl7v2/patient", status_code=201)
-def hl7v2_patient(body: Hl7Message, db: Session = Depends(get_db)):
+def hl7v2_patient(
+    body: Hl7Message, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """解析简化 HL7 v2 ADT 消息：取 PID 段建档。
 
     字段约定（PID 段管道分隔）：PID-3 身份证号、PID-5 姓名（FN^GN 或纯文本）、
     PID-7 出生日期（YYYYMMDD）、PID-8 性别（M/F）、PID-13 联系电话。
+    响应中的患者敏感字段按调用者角色统一脱敏（H1）。
     """
     lines = [ln.strip() for ln in body.message.replace("\r", "\n").split("\n") if ln.strip()]
     if not any(ln.startswith("MSH|") for ln in lines):
@@ -90,12 +87,17 @@ def hl7v2_patient(body: Hl7Message, db: Session = Depends(get_db)):
             "phone": phone,
         },
     )
-    return {"created": created, "patient": PatientOut.model_validate(patient).model_dump()}
+    return {"created": created, "patient": desensitize(patient, user).model_dump()}
 
 
 @router.post("/fhir/Patient", status_code=201)
-def fhir_patient(resource: dict, db: Session = Depends(get_db)):
-    """FHIR R4 Patient 资源入站：identifier（身份证）+ name + gender + birthDate + telecom。"""
+def fhir_patient(
+    resource: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """FHIR R4 Patient 资源入站：identifier（身份证）+ name + gender + birthDate + telecom。
+
+    响应中的患者敏感字段按调用者角色统一脱敏（H1）。
+    """
     if resource.get("resourceType") != "Patient":
         raise HTTPException(status_code=422, detail="resourceType 必须为 Patient")
 
@@ -133,7 +135,7 @@ def fhir_patient(resource: dict, db: Session = Depends(get_db)):
             "phone": phone,
         },
     )
-    return {"created": created, "patient": PatientOut.model_validate(patient).model_dump()}
+    return {"created": created, "patient": desensitize(patient, user).model_dump()}
 
 
 # LOINC 编码 → 随访指标字段
@@ -206,22 +208,28 @@ def fhir_observation(resource: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/fhir/Patient/{ehc_no}")
-def export_fhir_patient(ehc_no: str, db: Session = Depends(get_db)):
-    """患者档案出站：导出 FHIR R4 Patient 资源。"""
+def export_fhir_patient(
+    ehc_no: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """患者档案出站：导出 FHIR R4 Patient 资源。
+
+    H1 整改：出站导出统一走脱敏——非 admin 角色身份证号/电话一律掩码，
+    与 /api/patients 同角色返回口径一致；明文导出仅限 admin（审计留痕）。
+    """
     patient = db.query(Patient).filter(Patient.ehc_no == ehc_no).first()
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    id_card = patient.id_card if user.role == "admin" else mask_id_card(patient.id_card)
+    phone = patient.phone if user.role == "admin" else mask_phone(patient.phone)
     return {
         "resourceType": "Patient",
         "id": patient.ehc_no,
         "identifier": [
             {"system": EHC_SYSTEM, "value": patient.ehc_no},
-            {"system": ID_CARD_SYSTEM, "value": patient.id_card},
+            {"system": ID_CARD_SYSTEM, "value": id_card},
         ],
         "name": [{"text": patient.name}],
         "gender": _GENDER_TO_FHIR.get(patient.gender, "unknown"),
         "birthDate": patient.birth_date,
-        "telecom": (
-            [{"system": "phone", "value": patient.phone}] if patient.phone else []
-        ),
+        "telecom": ([{"system": "phone", "value": phone}] if phone else []),
     }

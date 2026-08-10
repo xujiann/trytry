@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import Organization, Patient, VaccinationRecord, VaccineContraindication
 
 router = APIRouter(prefix="/api/vaccination", tags=["疫苗接种"], dependencies=[Depends(get_current_user)])
@@ -25,7 +25,12 @@ class RecordOut(RecordCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/records", response_model=RecordOut, status_code=201)
+@router.post(
+    "/records",
+    response_model=RecordOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 疫苗接种登记
+)
 def vaccinate(body: RecordCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="受种者不存在")
@@ -66,7 +71,11 @@ class ContraCreate(BaseModel):
     reason: str = Field(min_length=1)
 
 
-@router.post("/contraindications", status_code=201)
+@router.post(
+    "/contraindications",
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 禁忌登记
+)
 def add_contraindication(body: ContraCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")

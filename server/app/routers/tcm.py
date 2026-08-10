@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, require_roles
 from ..models import Organization, Patient, TcmDispenseOrder, TcmTechnique
 
 router = APIRouter(prefix="/api/tcm", tags=["中医药服务"], dependencies=[Depends(get_current_user)])
@@ -89,7 +89,12 @@ class DispenseOut(DispenseCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/dispense-orders", response_model=DispenseOut, status_code=201)
+@router.post(
+    "/dispense-orders",
+    response_model=DispenseOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor"))],  # H2: 代煎建单属处方性质，限医师
+)
 def create_order(body: DispenseCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
@@ -110,7 +115,11 @@ def list_orders(status: str | None = None, db: Session = Depends(get_db)):
     return query.order_by(TcmDispenseOrder.id.desc()).limit(200).all()
 
 
-@router.post("/dispense-orders/{order_id}/advance", response_model=DispenseOut)
+@router.post(
+    "/dispense-orders/{order_id}/advance",
+    response_model=DispenseOut,
+    dependencies=[Depends(require_roles("operator", "pharmacist"))],  # H2: 煎药/配送流转
+)
 def advance_order(order_id: int, db: Session = Depends(get_db)):
     order = db.get(TcmDispenseOrder, order_id)
     if order is None:

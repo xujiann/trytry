@@ -76,3 +76,15 @@ docker compose up -d                          # 一键起 app + PostgreSQL 16（
 cd server && alembic upgrade head             # 结构迁移（与应用共用 MEDPLAT_DATABASE_URL）
 sh scripts/backup.sh /data/backups            # pg_dump 备份（建议 crontab 定时）
 ```
+
+### 生产环境安全硬化（必读）
+
+- 设置 `MEDPLAT_ENVIRONMENT=prod`（或 `MEDPLAT_ENV=prod`）标识生产环境；
+- **生产环境启动强校验**：`environment=prod` 时，若 `MEDPLAT_SECRET` 或
+  `MEDPLAT_ADMIN_PASSWORD` 仍为默认值，应用启动直接抛异常拒绝启动，
+  必须先设置强随机密钥（建议 `openssl rand -hex 32`）与强管理员口令；
+- 多实例/多 worker 部署必须设置 `MEDPLAT_REDIS_URL`，使登出令牌黑名单与
+  登录防爆破锁定跨实例共享（未配置时为进程内存实现，仅单实例有效）；
+  WebSocket 预警广播在多实例下需接入 Redis Pub/Sub 等集中消息总线；
+- WebSocket 客户端建议使用首帧鉴权（连接后第一条文本帧发送 JWT），
+  避免令牌经 URL query 进入访问日志。

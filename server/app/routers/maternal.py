@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import ChildRecord, ChildVisit, MaternalRecord, MaternalVisit, Patient
 
 router = APIRouter(prefix="/api/maternal", tags=["妇幼保健"], dependencies=[Depends(get_current_user)])
@@ -27,7 +27,12 @@ class MaternalOut(MaternalCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/records", response_model=MaternalOut, status_code=201)
+@router.post(
+    "/records",
+    response_model=MaternalOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 妇幼建档
+)
 def register(body: MaternalCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
@@ -57,7 +62,11 @@ class VisitCreate(BaseModel):
     visit_date: str = ""
 
 
-@router.post("/records/{record_id}/visits", status_code=201)
+@router.post(
+    "/records/{record_id}/visits",
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 产检随访
+)
 def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
     record = db.get(MaternalRecord, record_id)
     if record is None:
@@ -79,7 +88,10 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
     return {"id": visit.id, "record_id": record_id, "high_risk": record.high_risk, "status": record.status}
 
 
-@router.post("/records/{record_id}/close")
+@router.post(
+    "/records/{record_id}/close",
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5
+)
 def close_record(record_id: int, db: Session = Depends(get_db)):
     record = db.get(MaternalRecord, record_id)
     if record is None:
@@ -104,7 +116,12 @@ class ChildOut(ChildCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/children", response_model=ChildOut, status_code=201)
+@router.post(
+    "/children",
+    response_model=ChildOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 儿童建档
+)
 def register_child(body: ChildCreate, db: Session = Depends(get_db)):
     child = ChildRecord(**body.model_dump())
     db.add(child)
@@ -126,7 +143,11 @@ class ChildVisitCreate(BaseModel):
     visit_date: str = ""
 
 
-@router.post("/children/{child_id}/visits", status_code=201)
+@router.post(
+    "/children/{child_id}/visits",
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 儿童随访
+)
 def add_child_visit(child_id: int, body: ChildVisitCreate, db: Session = Depends(get_db)):
     if db.get(ChildRecord, child_id) is None:
         raise HTTPException(status_code=404, detail="儿童档案不存在")

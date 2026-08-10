@@ -32,7 +32,12 @@ def list_rules(db: Session = Depends(get_db)):
     return db.query(DrugRule).order_by(DrugRule.drug_code).all()
 
 
-@router.post("", response_model=PrescriptionOut, status_code=201)
+@router.post(
+    "",
+    response_model=PrescriptionOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor"))],  # H2: 处方开具限医师
+)
 def create_prescription(
     body: PrescriptionCreate,
     db: Session = Depends(get_db),

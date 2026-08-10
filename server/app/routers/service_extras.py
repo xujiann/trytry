@@ -78,7 +78,11 @@ class CssdReqCreate(BaseModel):
     quantity: int = Field(default=1, ge=1)
 
 
-@router.post("/cssd/requests", status_code=201)
+@router.post(
+    "/cssd/requests",
+    status_code=201,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 物品申领=经办
+)
 def create_cssd_request(body: CssdReqCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="申领机构不存在")
@@ -99,7 +103,10 @@ def list_cssd_requests(status: str | None = None, db: Session = Depends(get_db))
     ]
 
 
-@router.post("/cssd/requests/{request_id}/fulfill")
+@router.post(
+    "/cssd/requests/{request_id}/fulfill",
+    dependencies=[Depends(require_roles("operator"))],  # H2: 申领响应=经办
+)
 def fulfill_cssd_request(request_id: int, batch_id: int, db: Session = Depends(get_db)):
     """中心以已灭菌批次响应申领。"""
     r = db.get(CssdRequest, request_id)
@@ -183,7 +190,11 @@ class ArticleCreate(BaseModel):
     content: str = ""
 
 
-@router.post("/education/articles", status_code=201)
+@router.post(
+    "/education/articles",
+    status_code=201,
+    dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教编制
+)
 def create_article(body: ArticleCreate, db: Session = Depends(get_db)):
     a = HealthArticle(**body.model_dump())
     db.add(a)
@@ -191,7 +202,10 @@ def create_article(body: ArticleCreate, db: Session = Depends(get_db)):
     return {"id": a.id, "status": a.status}
 
 
-@router.post("/education/articles/{article_id}/publish")
+@router.post(
+    "/education/articles/{article_id}/publish",
+    dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教发布
+)
 def publish_article(article_id: int, db: Session = Depends(get_db)):
     a = db.get(HealthArticle, article_id)
     if a is None:
@@ -214,7 +228,11 @@ class SurveyCreate(BaseModel):
     comment: str = ""
 
 
-@router.post("/surveys", status_code=201)
+@router.post(
+    "/surveys",
+    status_code=201,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 满意度代录=经办（居民本人走 portal）
+)
 def submit_survey(body: SurveyCreate, db: Session = Depends(get_db)):
     if body.target_type not in _SURVEY_TARGETS:
         raise HTTPException(status_code=422, detail="未知评价对象类型")

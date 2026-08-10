@@ -35,7 +35,12 @@ class ReplyBody(BaseModel):
     prescription_id: int | None = None
 
 
-@router.post("/consults", response_model=ConsultOut, status_code=201)
+@router.post(
+    "/consults",
+    response_model=ConsultOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2/L5: 咨询建立
+)
 def create_consult(body: ConsultCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
@@ -80,7 +85,11 @@ def reply(consult_id: int, body: ReplyBody, db: Session = Depends(get_db)):
     return consult
 
 
-@router.post("/consults/{consult_id}/close", response_model=ConsultOut)
+@router.post(
+    "/consults/{consult_id}/close",
+    response_model=ConsultOut,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 咨询结束
+)
 def close(consult_id: int, db: Session = Depends(get_db)):
     consult = db.get(OnlineConsult, consult_id)
     if consult is None:

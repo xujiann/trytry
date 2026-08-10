@@ -1,5 +1,6 @@
 """统一编码字典：诊断、药品、耗材、收费"四统一"，结果互认与业务联动的数据基础。"""
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -13,15 +14,34 @@ SYSTEM_CODES = {"diagnosis": "诊断(ICD-10)", "drug": "药品", "consumable": "
 
 
 def _get_system(db: Session, system_code: str) -> CodeSystem:
+    """M5 整改：字典类型于应用启动时种子化（main.lifespan），读路径不再写库。
+
+    兜底：若历史库缺少种子（如未经启动初始化的存量库），仅在写路径按需补建，
+    并捕获并发唯一约束冲突后重查，保证幂等。
+    """
     if system_code not in SYSTEM_CODES:
         raise HTTPException(status_code=404, detail=f"未知字典类型: {system_code}")
     system = db.query(CodeSystem).filter(CodeSystem.code == system_code).first()
     if system is None:
         system = CodeSystem(code=system_code, name=SYSTEM_CODES[system_code])
         db.add(system)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            system = db.query(CodeSystem).filter(CodeSystem.code == system_code).first()
+            if system is None:  # pragma: no cover
+                raise
+            return system
         db.refresh(system)
     return system
+
+
+def _get_system_readonly(db: Session, system_code: str) -> CodeSystem | None:
+    """GET 只读路径：不产生写副作用（M5）。种子由启动初始化保证。"""
+    if system_code not in SYSTEM_CODES:
+        raise HTTPException(status_code=404, detail=f"未知字典类型: {system_code}")
+    return db.query(CodeSystem).filter(CodeSystem.code == system_code).first()
 
 
 @router.post(
@@ -72,7 +92,10 @@ def bulk_import(system_code: str, entries: list[CodeEntryCreate], db: Session = 
     dependencies=[Depends(get_current_user)],
 )
 def list_entries(system_code: str, keyword: str = "", db: Session = Depends(get_db)):
-    system = _get_system(db, system_code)
+    system = _get_system_readonly(db, system_code)
+    if system is None:
+        # 种子缺失（存量库未经启动初始化）：读路径保持只读，返回空清单
+        return []
     query = db.query(CodeEntry).filter(CodeEntry.system_id == system.id)
     if keyword:
         like = f"%{keyword}%"

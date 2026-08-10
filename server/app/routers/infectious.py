@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import InfectiousCase, Organization
 from ..schemas import InfectiousCaseCreate, InfectiousCaseOut
 
@@ -16,7 +16,12 @@ DEFAULT_WINDOW_DAYS = 7
 DEFAULT_THRESHOLD = 5
 
 
-@router.post("/cases", response_model=InfectiousCaseOut, status_code=201)
+@router.post(
+    "/cases",
+    response_model=InfectiousCaseOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 传染病报告
+)
 def report_case(body: InfectiousCaseCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="报告机构不存在")

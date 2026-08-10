@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, require_roles
 from ..models import DrugStock, Organization, Prescription, PrescriptionItem, StockTransfer, User
 from ..schemas import StockOut, StockUpsert, TransferCreate
 from ..ws import manager
@@ -44,13 +44,22 @@ def list_stocks(org_id: int | None = None, db: Session = Depends(get_db)):
     return query.order_by(DrugStock.org_id, DrugStock.drug_code).all()
 
 
-@router.post("/transfers", response_model=StockOut, status_code=201)
+@router.post(
+    "/transfers",
+    response_model=StockOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "pharmacist"))],  # H2: 调拨经办
+)
 def transfer_stock(
     body: TransferCreate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """余缺调拨：从调出机构扣减、调入机构增加，全程留痕。"""
+    """余缺调拨：从调出机构扣减、调入机构增加，全程留痕。
+
+    H3 整改：调出扣减用条件 UPDATE（WHERE quantity >= 需求量）原子执行并校验
+    影响行数，并发下不会把库存扣成负数。
+    """
     if body.from_org_id == body.to_org_id:
         raise HTTPException(status_code=422, detail="调出与调入机构不能相同")
     source = (
@@ -58,10 +67,24 @@ def transfer_stock(
         .filter(DrugStock.org_id == body.from_org_id, DrugStock.drug_code == body.drug_code)
         .first()
     )
-    if source is None or source.quantity < body.quantity:
+    if source is None:
         raise HTTPException(status_code=409, detail="调出机构库存不足")
     if db.get(Organization, body.to_org_id) is None:
         raise HTTPException(status_code=404, detail="调入机构不存在")
+
+    # 原子扣减：条件不满足（库存不足）时影响行数为 0
+    deducted = (
+        db.query(DrugStock)
+        .filter(
+            DrugStock.org_id == body.from_org_id,
+            DrugStock.drug_code == body.drug_code,
+            DrugStock.quantity >= body.quantity,
+        )
+        .update({DrugStock.quantity: DrugStock.quantity - body.quantity}, synchronize_session=False)
+    )
+    if not deducted:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="调出机构库存不足")
 
     dest = (
         db.query(DrugStock)
@@ -73,14 +96,18 @@ def transfer_stock(
             org_id=body.to_org_id,
             drug_code=body.drug_code,
             drug_name=source.drug_name,
-            quantity=0,
+            quantity=body.quantity,
             threshold=0,
         )
         db.add(dest)
-    source.quantity -= body.quantity
-    dest.quantity += body.quantity
+    else:
+        # 调入侧同样用原子自增，避免读改写竞态
+        db.query(DrugStock).filter(DrugStock.id == dest.id).update(
+            {DrugStock.quantity: DrugStock.quantity + body.quantity}, synchronize_session=False
+        )
     db.add(StockTransfer(**body.model_dump(), created_by=user.id))
     db.commit()
+    db.refresh(source)
     db.refresh(dest)
     if source.quantity < source.threshold:
         # 调拨后调出机构跌破阈值：实时广播缺药预警

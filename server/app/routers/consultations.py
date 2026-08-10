@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import Consultation, Organization, Patient, User
 from ..schemas import (
     ConsultationAccept,
@@ -16,7 +16,12 @@ from ..schemas import (
 router = APIRouter(prefix="/api/consultations", tags=["远程会诊"], dependencies=[Depends(get_current_user)])
 
 
-@router.post("", response_model=ConsultationOut, status_code=201)
+@router.post(
+    "",
+    response_model=ConsultationOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 会诊申请
+)
 def apply(body: ConsultationCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
@@ -47,7 +52,11 @@ def _get(db: Session, consultation_id: int) -> Consultation:
     return consultation
 
 
-@router.post("/{consultation_id}/accept", response_model=ConsultationOut)
+@router.post(
+    "/{consultation_id}/accept",
+    response_model=ConsultationOut,
+    dependencies=[Depends(require_roles("doctor"))],  # H2: 受理属诊疗行为
+)
 def accept(consultation_id: int, body: ConsultationAccept, db: Session = Depends(get_db)):
     consultation = _get(db, consultation_id)
     if consultation.status != "applied":
@@ -59,7 +68,11 @@ def accept(consultation_id: int, body: ConsultationAccept, db: Session = Depends
     return consultation
 
 
-@router.post("/{consultation_id}/decline", response_model=ConsultationOut)
+@router.post(
+    "/{consultation_id}/decline",
+    response_model=ConsultationOut,
+    dependencies=[Depends(require_roles("doctor"))],  # H2
+)
 def decline(consultation_id: int, db: Session = Depends(get_db)):
     consultation = _get(db, consultation_id)
     if consultation.status != "applied":
@@ -70,7 +83,11 @@ def decline(consultation_id: int, db: Session = Depends(get_db)):
     return consultation
 
 
-@router.post("/{consultation_id}/complete", response_model=ConsultationOut)
+@router.post(
+    "/{consultation_id}/complete",
+    response_model=ConsultationOut,
+    dependencies=[Depends(require_roles("doctor"))],  # H2: 出具会诊意见限医师
+)
 def complete(consultation_id: int, body: ConsultationComplete, db: Session = Depends(get_db)):
     consultation = _get(db, consultation_id)
     if consultation.status != "accepted":
@@ -82,7 +99,11 @@ def complete(consultation_id: int, body: ConsultationComplete, db: Session = Dep
     return consultation
 
 
-@router.post("/{consultation_id}/rate", response_model=ConsultationOut)
+@router.post(
+    "/{consultation_id}/rate",
+    response_model=ConsultationOut,
+    dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 评价代录
+)
 def rate(consultation_id: int, body: ConsultationRate, db: Session = Depends(get_db)):
     consultation = _get(db, consultation_id)
     if consultation.status != "completed":

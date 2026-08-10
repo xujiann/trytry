@@ -35,7 +35,12 @@ class SettlementOut(SettlementCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/settlements", response_model=SettlementOut, status_code=201)
+@router.post(
+    "/settlements",
+    response_model=SettlementOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 医保结算=经办
+)
 def create_settlement(body: SettlementCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
@@ -58,7 +63,10 @@ def list_settlements(patient_id: int | None = None, db: Session = Depends(get_db
     return query.order_by(InsuranceSettlement.id.desc()).limit(200).all()
 
 
-@router.post("/referral-certs/{referral_id}")
+@router.post(
+    "/referral-certs/{referral_id}",
+    dependencies=[Depends(require_roles("operator"))],  # H2: 转诊证明签发=经办
+)
 def issue_referral_cert(referral_id: int, db: Session = Depends(get_db)):
     """转诊证明：仅对已接诊/已结案的转诊签发，幂等返回既有证明。"""
     referral = db.get(Referral, referral_id)
@@ -88,7 +96,12 @@ class SpecialDiseaseOut(SpecialDiseaseCreate):
     model_config = {"from_attributes": True}
 
 
-@router.post("/special-diseases", response_model=SpecialDiseaseOut, status_code=201)
+@router.post(
+    "/special-diseases",
+    response_model=SpecialDiseaseOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 特病申报
+)
 def apply_special_disease(body: SpecialDiseaseCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")

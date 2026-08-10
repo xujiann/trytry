@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import MedicalWaste, Organization
 from ..schemas import WasteCreate, WasteHandover, WasteOut
 
@@ -15,7 +15,12 @@ router = APIRouter(prefix="/api/medwaste", tags=["医废追溯"], dependencies=[
 STORAGE_LIMIT_DAYS = 2
 
 
-@router.post("", response_model=WasteOut, status_code=201)
+@router.post(
+    "",
+    response_model=WasteOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 医废收集=经办
+)
 def collect(body: WasteCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -36,7 +41,11 @@ def list_wastes(org_id: int | None = None, status: str | None = None, db: Sessio
     return query.order_by(MedicalWaste.id.desc()).limit(500).all()
 
 
-@router.post("/{waste_id}/handover", response_model=WasteOut)
+@router.post(
+    "/{waste_id}/handover",
+    response_model=WasteOut,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 医废交接=经办
+)
 def handover(waste_id: int, body: WasteHandover, db: Session = Depends(get_db)):
     waste = db.get(MedicalWaste, waste_id)
     if waste is None:
