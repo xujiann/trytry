@@ -6,8 +6,10 @@ import json
 import os
 import time
 
-SECRET_KEY = os.environ.get("MEDPLAT_SECRET", "dev-secret-change-in-production")
-TOKEN_TTL_SECONDS = 8 * 3600
+from .config import settings
+
+SECRET_KEY = settings.secret
+TOKEN_TTL_SECONDS = settings.token_ttl_seconds
 _PBKDF2_ITERATIONS = 120_000
 
 

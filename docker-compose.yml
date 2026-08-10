@@ -1,0 +1,35 @@
+# 一键启动：应用 + PostgreSQL 16（命名卷持久化）
+# 用法：docker compose up -d
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      MEDPLAT_DATABASE_URL: postgresql+psycopg2://medplat:medplat@db:5432/medplat
+      MEDPLAT_SECRET: ${MEDPLAT_SECRET:-change-me-in-production}
+      MEDPLAT_ADMIN_PASSWORD: ${MEDPLAT_ADMIN_PASSWORD:-admin123}
+      MEDPLAT_ENV: prod
+      MEDPLAT_SEED_DEMO: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: medplat
+      POSTGRES_PASSWORD: medplat
+      POSTGRES_DB: medplat
+    volumes:
+      - medplat-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medplat -d medplat"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  medplat-pgdata:
