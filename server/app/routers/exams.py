@@ -122,6 +122,28 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
     return report
 
 
+_SAMPLE_FLOW = {"": "collected", "collected": "in_transit", "in_transit": "received"}
+
+
+@router.post("/{request_id}/sample/advance", response_model=ExamRequestOut)
+def advance_sample(request_id: int, db: Session = Depends(get_db)):
+    """检验样本物流：采样→冷链转运→中心核收（仅检验类申请）。"""
+    request = db.get(ExamRequest, request_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="申请单不存在")
+    if request.center_type != "lab":
+        raise HTTPException(status_code=422, detail="仅检验申请有样本物流环节")
+    if request.status not in ("pending", "diagnosing"):
+        raise HTTPException(status_code=409, detail="申请单已出报告或已互认")
+    next_status = _SAMPLE_FLOW.get(request.sample_status)
+    if next_status is None:
+        raise HTTPException(status_code=409, detail="样本已核收")
+    request.sample_status = next_status
+    db.commit()
+    db.refresh(request)
+    return request
+
+
 @router.get("/critical", response_model=list[ExamReportOut])
 def list_critical_reports(db: Session = Depends(get_db)):
     """危急值清单：需立即通知申请机构处置。"""

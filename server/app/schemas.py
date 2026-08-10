@@ -111,6 +111,7 @@ class ExamRequestOut(BaseModel):
     status: str
     recognized_from_id: int | None
     recognition_declined_reason: str
+    sample_status: str = ""
 
     model_config = {"from_attributes": True}
 

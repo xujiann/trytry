@@ -136,6 +136,8 @@ class ExamRequest(Base):
         ForeignKey("exam_requests.id"), nullable=True
     )
     recognition_declined_reason: Mapped[str] = mapped_column(String(256), default="")
+    # 检验样本物流（仅 lab）："" / collected=已采样 / in_transit=转运中 / received=中心核收
+    sample_status: Mapped[str] = mapped_column(String(16), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -395,6 +397,430 @@ class MedicalWaste(Base):
     collected_date: Mapped[str] = mapped_column(String(10), index=True)
     handed_over_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------- 功能指引补齐：7/9/13-16/19-21/23-28/30-32/34 ----------
+
+
+class EmergencyCase(Base):
+    """⑦智慧急救：呼救→出车→到达→入院，院前院内信息互通。"""
+
+    __tablename__ = "emergency_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True)
+    caller_phone: Mapped[str] = mapped_column(String(20), default="")
+    location: Mapped[str] = mapped_column(String(256))
+    symptom: Mapped[str] = mapped_column(String(512), default="")
+    ambulance_no: Mapped[str] = mapped_column(String(32), default="")
+    dest_org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    # dispatched=已调度, en_route=转运中, arrived=已到院, admitted=已收治
+    status: Mapped[str] = mapped_column(String(16), default="dispatched", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    vitals: Mapped[list["EmergencyVital"]] = relationship(back_populates="case")
+
+
+class EmergencyVital(Base):
+    __tablename__ = "emergency_vitals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("emergency_cases.id"), index=True)
+    heart_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sbp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dbp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spo2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    case: Mapped[EmergencyCase] = relationship(back_populates="vitals")
+
+
+class OnlineConsult(Base):
+    """⑨互联网+诊疗：在线咨询/复诊续方。"""
+
+    __tablename__ = "online_consults"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    # consult=在线咨询, repeat_rx=复诊续方
+    consult_type: Mapped[str] = mapped_column(String(16), default="consult")
+    question: Mapped[str] = mapped_column(String(1024))
+    reply: Mapped[str] = mapped_column(String(2048), default="")
+    doctor_name: Mapped[str] = mapped_column(String(64), default="")
+    # open=待回复, replied=已回复, closed=已结束
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    prescription_id: Mapped[int | None] = mapped_column(ForeignKey("prescriptions.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TcmDispenseOrder(Base):
+    """⑭中药智能药学（共享中药房）：调配→煎煮→配送全程追溯。"""
+
+    __tablename__ = "tcm_dispense_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    from_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    herbs: Mapped[str] = mapped_column(String(1024))
+    doses: Mapped[int] = mapped_column(Integer, default=1)
+    decoct: Mapped[bool] = mapped_column(Boolean, default=True)
+    # ordered=已下单, dispensed=已调配, decocted=已煎煮, delivering=配送中, delivered=已送达
+    status: Mapped[str] = mapped_column(String(16), default="ordered", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class TcmTechnique(Base):
+    """㉑中医药适宜技术库。"""
+
+    __tablename__ = "tcm_techniques"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    category: Mapped[str] = mapped_column(String(64), default="")
+    indication: Mapped[str] = mapped_column(String(512), default="")
+    description: Mapped[str] = mapped_column(String(1024), default="")
+
+
+class DrugShortage(Base):
+    """⑮基层缺药登记：登记→采购→配送到基层。"""
+
+    __tablename__ = "drug_shortages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    drug_code: Mapped[str] = mapped_column(String(64))
+    drug_name: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    # registered=已登记, purchasing=采购中, delivered=已配送
+    status: Mapped[str] = mapped_column(String(16), default="registered", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class InsuranceSettlement(Base):
+    """⑲医保业务协同：结算记录（本地/异地）。"""
+
+    __tablename__ = "insurance_settlements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # local=本地结算, remote=异地结算
+    settle_type: Mapped[str] = mapped_column(String(16), default="local")
+    total_amount: Mapped[float] = mapped_column(Float)
+    insurance_pay: Mapped[float] = mapped_column(Float)
+    self_pay: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SpecialDiseaseApp(Base):
+    """⑲特殊病种门诊治疗待遇申报。"""
+
+    __tablename__ = "special_disease_apps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    disease_name: Mapped[str] = mapped_column(String(128))
+    # applied=已申报, approved=已批准, rejected=已驳回
+    status: Mapped[str] = mapped_column(String(16), default="applied")
+    reason: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ReferralCert(Base):
+    """⑲转诊证明：基于已接诊/结案的转诊记录签发。"""
+
+    __tablename__ = "referral_certs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    referral_id: Mapped[int] = mapped_column(ForeignKey("referrals.id"), unique=True)
+    cert_no: Mapped[str] = mapped_column(String(32), unique=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Course(Base):
+    """⑳远程医学教育课程（含㉑适宜技术培训）。"""
+
+    __tablename__ = "courses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(256))
+    # live=直播, vod=点播
+    course_type: Mapped[str] = mapped_column(String(8), default="vod")
+    # clinical=临床医学, tcm=中医药适宜技术, public_health=公共卫生
+    category: Mapped[str] = mapped_column(String(16), default="clinical")
+    speaker: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TrainingRecord(Base):
+    __tablename__ = "training_records"
+    __table_args__ = (UniqueConstraint("course_id", "user_id", name="uq_training_course_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ElderlyAssessment(Base):
+    """㉓老年健康：自理能力评估、认知筛查、中医体质辨识。"""
+
+    __tablename__ = "elderly_assessments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    adl_score: Mapped[int] = mapped_column(Integer)
+    cognitive_score: Mapped[int] = mapped_column(Integer, default=0)
+    tcm_constitution: Mapped[str] = mapped_column(String(32), default="")
+    # 依 ADL 自动分级：能力完好/轻度失能/中度失能/重度失能
+    care_level: Mapped[str] = mapped_column(String(16), default="")
+    assessed_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MaternalRecord(Base):
+    """㉔妇幼保健：孕产妇建册与高危管理。"""
+
+    __tablename__ = "maternal_records"
+    __table_args__ = (UniqueConstraint("patient_id", name="uq_maternal_patient"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    lmp: Mapped[str] = mapped_column(String(10), default="")
+    edc: Mapped[str] = mapped_column(String(10), default="")
+    gravidity: Mapped[int] = mapped_column(Integer, default=1)
+    parity: Mapped[int] = mapped_column(Integer, default=0)
+    high_risk: Mapped[bool] = mapped_column(Boolean, default=False)
+    risk_factors: Mapped[str] = mapped_column(String(512), default="")
+    # registered=已建册, delivered=已分娩, closed=产后访视结案
+    status: Mapped[str] = mapped_column(String(16), default="registered", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    visits: Mapped[list["MaternalVisit"]] = relationship(back_populates="record")
+
+
+class MaternalVisit(Base):
+    __tablename__ = "maternal_visits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("maternal_records.id"), index=True)
+    # prenatal=产前检查, postpartum=产后访视
+    visit_type: Mapped[str] = mapped_column(String(16))
+    gest_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bp: Mapped[str] = mapped_column(String(16), default="")
+    note: Mapped[str] = mapped_column(String(512), default="")
+    visit_date: Mapped[str] = mapped_column(String(10), default="")
+
+    record: Mapped[MaternalRecord] = relationship(back_populates="visits")
+
+
+class ChildRecord(Base):
+    """㉔儿童保健档案。"""
+
+    __tablename__ = "child_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    gender: Mapped[str] = mapped_column(String(8), default="未知")
+    birth_date: Mapped[str] = mapped_column(String(10))
+    guardian_patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    visits: Mapped[list["ChildVisit"]] = relationship(back_populates="child")
+
+
+class ChildVisit(Base):
+    __tablename__ = "child_visits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    child_id: Mapped[int] = mapped_column(ForeignKey("child_records.id"), index=True)
+    # newborn=新生儿访视, checkup=健康体检
+    visit_type: Mapped[str] = mapped_column(String(16))
+    height_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str] = mapped_column(String(512), default="")
+    visit_date: Mapped[str] = mapped_column(String(10), default="")
+
+    child: Mapped[ChildRecord] = relationship(back_populates="visits")
+
+
+class VaccinationRecord(Base):
+    """㉕疫苗接种记录。"""
+
+    __tablename__ = "vaccination_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    vaccine_code: Mapped[str] = mapped_column(String(64))
+    vaccine_name: Mapped[str] = mapped_column(String(128))
+    dose_no: Mapped[int] = mapped_column(Integer, default=1)
+    vaccinated_date: Mapped[str] = mapped_column(String(10), default="")
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+
+
+class VaccineContraindication(Base):
+    __tablename__ = "vaccine_contraindications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    vaccine_code: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PublicHealthEvent(Base):
+    """㉖突发公共卫生事件应急处置指挥。"""
+
+    __tablename__ = "ph_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(256))
+    # I/II/III/IV 级响应
+    level: Mapped[str] = mapped_column(String(4), default="IV")
+    disease_name: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str] = mapped_column(String(1024), default="")
+    # active=处置中, closed=已结案
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    actions: Mapped[list["PhEventAction"]] = relationship(back_populates="event")
+
+
+class PhEventAction(Base):
+    __tablename__ = "ph_event_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("ph_events.id"), index=True)
+    action: Mapped[str] = mapped_column(String(512))
+    actor: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    event: Mapped[PublicHealthEvent] = relationship(back_populates="actions")
+
+
+class HealthMonitorRecord(Base):
+    """㉘其他卫生业务协同：营养/环境/职业/放射/学校卫生监测。"""
+
+    __tablename__ = "health_monitor_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # nutrition/environment/occupational/radiation/school
+    domain: Mapped[str] = mapped_column(String(16), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    indicator: Mapped[str] = mapped_column(String(128))
+    value: Mapped[float] = mapped_column(Float)
+    threshold: Mapped[float] = mapped_column(Float)
+    exceeded: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    record_date: Mapped[str] = mapped_column(String(10), default="")
+
+
+class Employee(Base):
+    """㉚人力资源统一协同管理。"""
+
+    __tablename__ = "employees"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    # 职称：初级/中级/副高/正高
+    title: Mapped[str] = mapped_column(String(32), default="")
+    position: Mapped[str] = mapped_column(String(64), default="")
+    # active=在岗, seconded=派驻中, left=离职
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Secondment(Base):
+    """㉚人员派驻/下沉记录（支撑监测指标4）。"""
+
+    __tablename__ = "secondments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    from_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    to_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    start_date: Mapped[str] = mapped_column(String(10))
+    end_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class FinanceEntry(Base):
+    """㉛财务统一协同管理：独立建账、集中核算。"""
+
+    __tablename__ = "finance_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    period: Mapped[str] = mapped_column(String(7), index=True)
+    # income=收入, expense=支出
+    category: Mapped[str] = mapped_column(String(8))
+    item: Mapped[str] = mapped_column(String(128), default="")
+    amount: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Asset(Base):
+    """㉜物资统一协同管理（非医疗设备、办公用品）。"""
+
+    __tablename__ = "assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # equipment=非医疗设备, office=办公用品
+    category: Mapped[str] = mapped_column(String(16), default="office")
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    # in_use=在用, idle=闲置, scrapped=报废
+    status: Mapped[str] = mapped_column(String(16), default="in_use")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OfficialDoc(Base):
+    """㉞行政统一协同管理：公文/通知发布。"""
+
+    __tablename__ = "official_docs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(256))
+    # notice=通知, policy=政策文件, minutes=会议纪要
+    doc_type: Mapped[str] = mapped_column(String(16), default="notice")
+    body: Mapped[str] = mapped_column(String(4096), default="")
+    issuer: Mapped[str] = mapped_column(String(64), default="")
+    # draft=草稿, published=已发布
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class DutyRoster(Base):
+    """①-④共享中心排班管理。"""
+
+    __tablename__ = "duty_rosters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    center_type: Mapped[str] = mapped_column(String(16), index=True)
+    duty_date: Mapped[str] = mapped_column(String(10), index=True)
+    shift: Mapped[str] = mapped_column(String(16), default="全天")
+    doctor_name: Mapped[str] = mapped_column(String(64))
+
+
+class QcRecord(Base):
+    """①-④共享中心质控记录。"""
+
+    __tablename__ = "qc_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    center_type: Mapped[str] = mapped_column(String(16), index=True)
+    item: Mapped[str] = mapped_column(String(128))
+    # pass=合格, fail=不合格
+    result: Mapped[str] = mapped_column(String(8))
+    note: Mapped[str] = mapped_column(String(512), default="")
+    record_date: Mapped[str] = mapped_column(String(10), default="")
 
 
 class Referral(Base):

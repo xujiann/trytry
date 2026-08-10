@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from .database import Base, SessionLocal, engine
 from .models import User
 from .routers import (
+    admin_mgmt,
     appointments,
     auth,
     chronic,
@@ -24,9 +25,15 @@ from .routers import (
     contracts,
     cssd,
     dictionaries,
+    education,
+    eldercare,
+    emergency,
     encounters,
     exams,
     infectious,
+    insurance,
+    maternal,
+    medication,
     medwaste,
     metrics,
     organizations,
@@ -35,8 +42,12 @@ from .routers import (
     pharmacy,
     portal,
     prescriptions,
+    publichealth,
     referrals,
+    tcm,
+    telemedicine,
     users,
+    vaccination,
 )
 from .models import AuditLog
 from .security import decode_token, hash_password
@@ -89,6 +100,17 @@ app.include_router(performance.router)
 app.include_router(metrics.router)
 app.include_router(portal.router)
 app.include_router(users.router)
+app.include_router(emergency.router)
+app.include_router(telemedicine.router)
+app.include_router(tcm.router)
+app.include_router(medication.router)
+app.include_router(insurance.router)
+app.include_router(education.router)
+app.include_router(eldercare.router)
+app.include_router(maternal.router)
+app.include_router(vaccination.router)
+app.include_router(publichealth.router)
+app.include_router(admin_mgmt.router)
 
 _AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 # 登录请求不落审计（避免与口令尝试混淆，登录安全事件由专用日志承担）

@@ -53,17 +53,29 @@ const PAGES = [
   { id: "exams", title: "共享诊断中心", render: renderExams },
   { id: "consultations", title: "远程会诊", render: renderConsultations },
   { id: "referrals", title: "双向转诊", render: renderReferrals },
+  { id: "emergency", title: "智慧急救", render: renderEmergency },
   { id: "rx", title: "集中审方", render: renderRx },
   { id: "pharmacy", title: "中心药房", render: renderPharmacy },
+  { id: "medication", title: "药事监测", render: renderMedication },
+  { id: "insurance", title: "医保协同", render: renderInsurance },
   { group: "医防融合" },
   { id: "chronic", title: "慢病管理", render: renderChronic },
   { id: "contracts", title: "家医签约", render: renderContracts },
   { id: "infectious", title: "传染病预警", render: renderInfectious },
+  { id: "publichealth", title: "公卫协同", render: renderPublicHealth },
+  { id: "eldercare", title: "老年健康", render: renderEldercare },
+  { id: "maternal", title: "妇幼保健", render: renderMaternal },
+  { id: "vaccination", title: "疫苗接种", render: renderVaccination },
   { group: "便民惠民" },
   { id: "appointments", title: "预约诊疗", render: renderAppointments },
+  { id: "telemedicine", title: "互联网+诊疗", render: renderTelemedicine },
+  { id: "tcm", title: "中医药服务", render: renderTcm },
   { id: "archive", title: "患者360视图", render: renderArchive },
   { group: "综合管理" },
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
+  { id: "education", title: "远程医学教育", render: renderEducation },
+  { id: "hrfinance", title: "人财物管理", render: renderHrFinance },
+  { id: "oaqc", title: "行政与质控", render: renderOaQc },
   { id: "cssd", title: "消毒供应", render: renderCssd },
   { id: "medwaste", title: "医废追溯", render: renderMedwaste },
   { group: "系统管理", roles: ["admin"] },
@@ -898,6 +910,414 @@ async function renderAudit() {
       <div id="audit-table"></div></div>`;
   await draw();
   $("#audit-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("username")); };
+}
+
+/* ---------- 通用小工具：表单序列化 + 动作分派 ---------- */
+function formJson(form, numFields = []) {
+  const f = new FormData(form), out = {};
+  for (const [k, v] of f.entries()) {
+    if (v === "") continue;
+    out[k] = numFields.includes(k) ? Number(v) : v;
+  }
+  return out;
+}
+
+async function postAction(path, body, msgSel) {
+  try { await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }); route(); }
+  catch (err) { setMsg(msgSel, err.message, false); }
+}
+
+async function renderEmergency() {
+  $("#page-desc").textContent = "呼救调度→转运（生命体征回传）→到院→收治，上车即入院";
+  const cases = await api("/api/emergency/cases");
+  const ES = { dispatched: ["已调度", "orange"], en_route: ["转运中", "orange"], arrived: ["已到院", ""], admitted: ["已收治", "green"] };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>呼救登记</h3>
+      <form class="inline" id="em-form">
+        <input name="location" placeholder="事发地点" required><input name="symptom" placeholder="主诉">
+        <input name="ambulance_no" placeholder="车牌"><input name="dest_org_id" type="number" placeholder="目标医院ID">
+        <input name="patient_id" type="number" placeholder="患者ID(可空)"><button>调度</button>
+      </form><p class="msg" id="em-msg"></p></div>
+    <div class="panel">${table(["ID", "地点", "主诉", "车辆", "状态", "操作"], cases, (c) => {
+      const [t, col] = ES[c.status] || [c.status, ""];
+      return `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td><td>${esc(c.ambulance_no)}</td>
+        <td><span class="tag ${col}">${t}</span></td>
+        <td>${c.status !== "admitted" ? `<button class="btn secondary" data-adv="${c.id}">流转</button>
+          <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "—"}</td></tr>`;
+    })}</div>`;
+  $("#em-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/emergency/cases", formJson(e.target, ["dest_org_id", "patient_id"]), "#em-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const { adv, vital } = e.target.dataset;
+    if (adv) return postAction(`/api/emergency/cases/${adv}/advance`, null, "#em-msg");
+    if (vital) {
+      const hr = prompt("心率"); if (hr === null) return;
+      return postAction(`/api/emergency/cases/${vital}/vitals`, { heart_rate: Number(hr) || null, note: prompt("备注") || "" }, "#em-msg");
+    }
+  };
+}
+
+async function renderTelemedicine() {
+  $("#page-desc").textContent = "在线咨询、复诊续方（续方须关联已过审处方）";
+  const consults = await api("/api/telemedicine/consults");
+  const TS = { open: ["待回复", "orange"], replied: ["已回复", "green"], closed: ["已结束", ""] };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>发起咨询</h3>
+      <form class="inline" id="tm-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required><input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="consult_type"><option value="consult">在线咨询</option><option value="repeat_rx">复诊续方</option></select>
+        <input name="question" placeholder="咨询内容" required style="min-width:220px"><button>提交</button>
+      </form><p class="msg" id="tm-msg"></p></div>
+    <div class="panel">${table(["ID", "患者", "类型", "内容", "回复", "关联处方", "状态", "操作"], consults, (c) => {
+      const [t, col] = TS[c.status] || [c.status, ""];
+      return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.consult_type === "repeat_rx" ? "续方" : "咨询"}</td>
+        <td>${esc(c.question)}</td><td>${esc(c.reply) || "—"}</td><td>${c.prescription_id ?? "—"}</td>
+        <td><span class="tag ${col}">${t}</span></td>
+        <td>${c.status === "open" ? `<button class="btn secondary" data-reply="${c.id}">回复</button>`
+          : c.status === "replied" ? `<button class="btn secondary" data-close="${c.id}">结束</button>` : "—"}</td></tr>`;
+    })}</div>`;
+  $("#tm-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/telemedicine/consults", formJson(e.target, ["patient_id", "org_id"]), "#tm-msg"); };
+  $("#page-body").onclick = (e) => {
+    const { reply, close } = e.target.dataset;
+    if (reply) {
+      const text = prompt("回复内容"); if (!text) return;
+      const rxid = prompt("关联处方ID（续方时填写，可空）");
+      return postAction(`/api/telemedicine/consults/${reply}/reply`, { reply: text, doctor_name: prompt("医师姓名") || "医师", prescription_id: rxid ? Number(rxid) : null }, "#tm-msg");
+    }
+    if (close) return postAction(`/api/telemedicine/consults/${close}/close`, null, "#tm-msg");
+  };
+}
+
+async function renderTcm() {
+  $("#page-desc").textContent = "智能辅诊（辨证推荐）、共享中药房追溯、适宜技术库";
+  const [orders, techniques] = await Promise.all([api("/api/tcm/dispense-orders"), api("/api/tcm/techniques")]);
+  const DS = { ordered: "已下单", dispensed: "已调配", decocted: "已煎煮", delivering: "配送中", delivered: "已送达" };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>智能辨证</h3>
+      <form class="inline" id="tcm-diag"><input name="symptoms" placeholder="症状（逗号分隔，如：乏力,气短）" required style="min-width:280px"><button>辨证</button></form>
+      <div id="tcm-diag-result"></div></div>
+    <div class="panel"><h3>共享中药房下单</h3>
+      <form class="inline" id="tcm-order">
+        <input name="patient_id" type="number" placeholder="患者ID" required><input name="from_org_id" type="number" placeholder="机构ID" required>
+        <input name="herbs" placeholder="处方饮片" required style="min-width:220px"><input name="doses" type="number" value="7" min="1" style="min-width:60px">
+        <select name="decoct"><option value="true">代煎</option><option value="false">免煎</option></select><button>下单</button>
+      </form><p class="msg" id="tcm-msg"></p>
+      ${table(["ID", "患者", "饮片", "剂数", "状态", "操作"], orders, (o) =>
+        `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${esc(o.herbs)}</td><td>${o.doses}</td>
+         <td><span class="tag ${o.status === "delivered" ? "green" : "orange"}">${DS[o.status]}</span></td>
+         <td>${o.status !== "delivered" ? `<button class="btn secondary" data-adv="${o.id}">流转</button>` : "—"}</td></tr>`)}</div>
+    <div class="panel"><h3>适宜技术库</h3>
+      ${table(["名称", "分类", "适应症"], techniques, (t) =>
+        `<tr><td>${esc(t.name)}</td><td>${esc(t.category)}</td><td>${esc(t.indication)}</td></tr>`)}</div>`;
+  $("#tcm-diag").onsubmit = async (e) => {
+    e.preventDefault();
+    const symptoms = new FormData(e.target).get("symptoms").split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    const result = await api("/api/tcm/assist-diagnosis", { method: "POST", body: JSON.stringify({ symptoms }) });
+    $("#tcm-diag-result").innerHTML = `<pre class="json">${esc(JSON.stringify(result.recommendations, null, 2))}</pre>`;
+  };
+  $("#tcm-order").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["patient_id", "from_org_id", "doses"]);
+    body.decoct = body.decoct === "true";
+    postAction("/api/tcm/dispense-orders", body, "#tcm-msg");
+  };
+  $("#page-body").onclick = (e) => { if (e.target.dataset.adv) postAction(`/api/tcm/dispense-orders/${e.target.dataset.adv}/advance`, null, "#tcm-msg"); };
+}
+
+async function renderMedication() {
+  $("#page-desc").textContent = "缺药登记流转、全县用药地图、居民用药画像";
+  const [shortages, stats] = await Promise.all([api("/api/medication/shortages"), api("/api/medication/usage-stats")]);
+  const SS = { registered: ["已登记", "orange"], purchasing: ["采购中", "orange"], delivered: ["已配送", "green"] };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>缺药登记</h3>
+      <form class="inline" id="short-form">
+        <input name="org_id" type="number" placeholder="机构ID" required><input name="drug_code" placeholder="药品编码" required>
+        <input name="drug_name" placeholder="药品名称" required><input name="quantity" type="number" value="1" min="1" style="min-width:70px"><button>登记</button>
+      </form><p class="msg" id="short-msg"></p>
+      ${table(["ID", "机构", "药品", "数量", "状态", "操作"], shortages, (s) => {
+        const [t, col] = SS[s.status];
+        return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
+          <td><span class="tag ${col}">${t}</span></td>
+          <td>${s.status !== "delivered" ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
+      })}</div>
+    <div class="panel"><h3>用药画像查询</h3>
+      <form class="inline" id="prof-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
+      <div id="prof-result"></div></div>
+    <div class="panel"><h3>全县用药地图（品种排名）</h3>
+      ${stats.length ? barChart(stats.slice(0, 8).map((s) => [s.drug_name, s.rx_count]), { unit: " 方" }) : "暂无数据"}</div>`;
+  $("#short-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/medication/shortages", formJson(e.target, ["org_id", "quantity"]), "#short-msg"); };
+  $("#prof-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const profile = await api(`/api/medication/profile/${new FormData(e.target).get("patient_id")}`);
+    $("#prof-result").innerHTML = `${profile.polypharmacy_warning ? '<p class="msg err">⚠ 多重用药风险</p>' : ""}<pre class="json">${esc(JSON.stringify(profile, null, 2))}</pre>`;
+  };
+  $("#page-body").onclick = (e) => { if (e.target.dataset.adv) postAction(`/api/medication/shortages/${e.target.dataset.adv}/advance`, null, "#short-msg"); };
+}
+
+async function renderInsurance() {
+  $("#page-desc").textContent = "结算记录、转诊证明、特殊病种申报、基金监测";
+  const [fund, settlements, apps] = await Promise.all([
+    api("/api/insurance/fund-stats"), api("/api/insurance/settlements"), api("/api/insurance/special-diseases")]);
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="label">医保基金支出总额</div><div class="value">${fund.insurance_pay_total}</div></div>
+      <div class="card"><div class="label">县域内结算占比</div><div class="value">${fund.local_ratio_pct}%</div></div>
+      <div class="card"><div class="label">基层支出占比</div><div class="value">${fund.grassroots_ratio_pct}%</div></div></div>
+    <div class="panel"><h3>结算登记</h3>
+      <form class="inline" id="ins-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required><input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="settle_type"><option value="local">本地</option><option value="remote">异地</option></select>
+        <input name="total_amount" type="number" step="any" placeholder="总额" required><input name="insurance_pay" type="number" step="any" placeholder="医保支付" required>
+        <input name="self_pay" type="number" step="any" placeholder="自付" required><button>登记</button>
+      </form>
+      <h3 style="margin-top:12px">转诊证明 / 特病申报</h3>
+      <form class="inline" id="cert-form"><input name="referral_id" type="number" placeholder="转诊记录ID" required><button>签发证明</button></form>
+      <form class="inline" id="spec-form"><input name="patient_id" type="number" placeholder="患者ID" required><input name="disease_name" placeholder="病种" required><button>特病申报</button></form>
+      <p class="msg" id="ins-msg"></p></div>
+    <div class="panel"><h3>特病申报队列</h3>${table(["ID", "患者", "病种", "状态", "操作"], apps, (a) =>
+      `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.disease_name)}</td>
+       <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${a.status}</span></td>
+       <td>${a.status === "applied" ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`)}</div>
+    <div class="panel"><h3>结算记录</h3>${table(["ID", "患者", "机构", "类型", "总额", "医保付", "自付"], settlements, (s) =>
+      `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${s.org_id}</td><td>${s.settle_type === "local" ? "本地" : "异地"}</td>
+       <td>${s.total_amount}</td><td>${s.insurance_pay}</td><td>${s.self_pay}</td></tr>`)}</div>`;
+  $("#ins-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/settlements", formJson(e.target, ["patient_id", "org_id", "total_amount", "insurance_pay", "self_pay"]), "#ins-msg"); };
+  $("#cert-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { const c = await api(`/api/insurance/referral-certs/${new FormData(e.target).get("referral_id")}`, { method: "POST" }); setMsg("#ins-msg", `证明号：${c.cert_no}`); }
+    catch (err) { setMsg("#ins-msg", err.message, false); }
+  };
+  $("#spec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/special-diseases", formJson(e.target, ["patient_id"]), "#ins-msg"); };
+  $("#page-body").onclick = (e) => {
+    const { ok, no } = e.target.dataset;
+    if (ok) postAction(`/api/insurance/special-diseases/${ok}/review?approve=true`, null, "#ins-msg");
+    if (no) postAction(`/api/insurance/special-diseases/${no}/review?approve=false`, null, "#ins-msg");
+  };
+}
+
+async function renderEducation() {
+  $("#page-desc").textContent = "课程管理、培训考核（60分合格）、个人学分";
+  const [courses, mine] = await Promise.all([api("/api/education/courses"), api("/api/education/my-records")]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>新建课程（管理员）</h3>
+      <form class="inline" id="course-form">
+        <input name="title" placeholder="课程名" required style="min-width:220px">
+        <select name="course_type"><option value="vod">点播</option><option value="live">直播</option></select>
+        <select name="category"><option value="clinical">临床医学</option><option value="tcm">中医适宜技术</option><option value="public_health">公共卫生</option></select>
+        <input name="speaker" placeholder="讲者"><button>创建</button>
+      </form><p class="msg" id="edu-msg"></p></div>
+    <div class="panel"><h3>课程列表</h3>${table(["ID", "课程", "形式", "类别", "讲者", "操作"], courses, (c) =>
+      `<tr><td>${c.id}</td><td>${esc(c.title)}</td><td>${c.course_type === "live" ? "直播" : "点播"}</td><td>${esc(c.category)}</td><td>${esc(c.speaker)}</td>
+       <td><button class="btn secondary" data-exam="${c.id}">提交考核</button></td></tr>`)}</div>
+    <div class="panel"><h3>我的学习记录</h3>${table(["课程", "成绩", "结果"], mine, (r) =>
+      `<tr><td>${esc(r.title)}</td><td>${r.score}</td><td><span class="tag ${r.passed ? "green" : "red"}">${r.passed ? "合格" : "未合格"}</span></td></tr>`)}</div>`;
+  $("#course-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/courses", formJson(e.target), "#edu-msg"); };
+  $("#page-body").onclick = (e) => {
+    const id = e.target.dataset.exam;
+    if (!id) return;
+    const score = prompt("考核得分（0-100）"); if (score === null) return;
+    postAction(`/api/education/courses/${id}/exam`, { score: Number(score) }, "#edu-msg");
+  };
+}
+
+async function renderEldercare() {
+  $("#page-desc").textContent = "自理能力评估（Barthel自动分级）、失能老人清单";
+  const [assessments, disabled] = await Promise.all([api("/api/eldercare/assessments"), api("/api/eldercare/disabled")]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>新评估</h3>
+      <form class="inline" id="eld-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required><input name="adl_score" type="number" min="0" max="100" placeholder="ADL(0-100)" required>
+        <input name="cognitive_score" type="number" min="0" max="30" placeholder="认知(0-30)"><input name="tcm_constitution" placeholder="体质">
+        <input name="assessed_date" placeholder="评估日期 YYYY-MM-DD"><button>评估</button>
+      </form><p class="msg" id="eld-msg"></p></div>
+    ${disabled.length ? `<div class="panel"><h3>⚠ 失能老人清单（${disabled.length}）</h3>${table(["患者", "分级", "ADL"], disabled, (d) =>
+      `<tr><td>${d.patient_id}</td><td><span class="tag red">${esc(d.care_level)}</span></td><td>${d.adl_score}</td></tr>`)}</div>` : ""}
+    <div class="panel">${table(["ID", "患者", "ADL", "认知", "分级", "日期"], assessments, (a) =>
+      `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${a.adl_score}</td><td>${a.cognitive_score}</td>
+       <td><span class="tag ${a.care_level === "能力完好" ? "green" : "red"}">${esc(a.care_level)}</span></td><td>${esc(a.assessed_date)}</td></tr>`)}</div>`;
+  $("#eld-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/eldercare/assessments", formJson(e.target, ["patient_id", "adl_score", "cognitive_score"]), "#eld-msg"); };
+}
+
+async function renderMaternal() {
+  $("#page-desc").textContent = "孕产妇建册、产检（异常血压自动高危）、产后访视结案；儿童保健";
+  const [records, children] = await Promise.all([api("/api/maternal/records"), api("/api/maternal/children")]);
+  const MS = { registered: "孕期管理", delivered: "已分娩", closed: "已结案" };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>孕产妇建册 / 儿童建档</h3>
+      <form class="inline" id="mat-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required><input name="lmp" placeholder="末次月经 YYYY-MM-DD">
+        <input name="edc" placeholder="预产期 YYYY-MM-DD"><button>建册</button></form>
+      <form class="inline" id="child-form">
+        <input name="name" placeholder="儿童姓名" required><select name="gender"><option>未知</option><option>男</option><option>女</option></select>
+        <input name="birth_date" placeholder="出生日期 YYYY-MM-DD" required><input name="guardian_patient_id" type="number" placeholder="监护人患者ID"><button>建档</button></form>
+      <p class="msg" id="mat-msg"></p></div>
+    <div class="panel"><h3>孕产妇档案</h3>${table(["ID", "患者", "预产期", "孕/产次", "高危", "状态", "操作"], records, (r) =>
+      `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${esc(r.edc)}</td><td>G${r.gravidity}P${r.parity}</td>
+       <td>${r.high_risk ? `<span class="tag red">高危</span> ${esc(r.risk_factors)}` : '<span class="tag green">正常</span>'}</td>
+       <td><span class="tag">${MS[r.status]}</span></td>
+       <td>${r.status !== "closed" ? `<button class="btn secondary" data-visit="${r.id}">记录访视</button>
+         ${r.status === "delivered" ? `<button class="btn secondary" data-close="${r.id}">结案</button>` : ""}` : "—"}</td></tr>`)}</div>
+    <div class="panel"><h3>儿童档案</h3>${table(["ID", "姓名", "性别", "出生日期", "操作"], children, (c) =>
+      `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.gender)}</td><td>${esc(c.birth_date)}</td>
+       <td><button class="btn secondary" data-cvisit="${c.id}">记录访视</button></td></tr>`)}</div>`;
+  $("#mat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/records", formJson(e.target, ["patient_id"]), "#mat-msg"); };
+  $("#child-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/children", formJson(e.target, ["guardian_patient_id"]), "#mat-msg"); };
+  $("#page-body").onclick = (e) => {
+    const { visit, close, cvisit } = e.target.dataset;
+    if (visit) {
+      const type = prompt("访视类型：prenatal(产检)/postpartum(产后)", "prenatal"); if (!type) return;
+      return postAction(`/api/maternal/records/${visit}/visits`, { visit_type: type, bp: prompt("血压(如120/80，可空)") || "", visit_date: prompt("日期 YYYY-MM-DD") || "" }, "#mat-msg");
+    }
+    if (close) return postAction(`/api/maternal/records/${close}/close`, null, "#mat-msg");
+    if (cvisit) return postAction(`/api/maternal/children/${cvisit}/visits`, { visit_type: "checkup", visit_date: prompt("日期 YYYY-MM-DD") || "" }, "#mat-msg");
+  };
+}
+
+async function renderVaccination() {
+  $("#page-desc").textContent = "接种前综合评估（禁忌硬拦截）、接种登记、禁忌管理";
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>接种前评估</h3>
+      <form class="inline" id="vac-check"><input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="vaccine_code" placeholder="疫苗编码" required><button>评估</button></form>
+      <div id="vac-check-result"></div></div>
+    <div class="panel"><h3>接种登记 / 禁忌登记</h3>
+      <form class="inline" id="vac-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required><input name="vaccine_code" placeholder="疫苗编码" required>
+        <input name="vaccine_name" placeholder="疫苗名称" required><input name="dose_no" type="number" value="1" min="1" style="min-width:60px">
+        <input name="vaccinated_date" placeholder="接种日期"><input name="org_id" type="number" placeholder="接种机构ID" required><button>登记接种</button></form>
+      <form class="inline" id="contra-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required><input name="vaccine_code" placeholder="疫苗编码" required>
+        <input name="reason" placeholder="禁忌原因" required><button class="btn danger">登记禁忌</button></form>
+      <p class="msg" id="vac-msg"></p></div>
+    <div class="panel"><h3>接种史查询</h3>
+      <form class="inline" id="vac-hist"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
+      <div id="vac-hist-result"></div></div>`;
+  $("#vac-check").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const r = await api(`/api/vaccination/pre-check?patient_id=${f.get("patient_id")}&vaccine_code=${encodeURIComponent(f.get("vaccine_code"))}`);
+    $("#vac-check-result").innerHTML = r.allowed
+      ? `<p class="msg ok">可以接种，本次为第 ${r.next_dose_no} 剂</p>`
+      : `<p class="msg err">禁止接种：${esc(r.contraindications.join("；"))}</p>`;
+  };
+  $("#vac-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/records", formJson(e.target, ["patient_id", "dose_no", "org_id"]), "#vac-msg"); };
+  $("#contra-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/contraindications", formJson(e.target, ["patient_id"]), "#vac-msg"); };
+  $("#vac-hist").onsubmit = async (e) => {
+    e.preventDefault();
+    const records = await api(`/api/vaccination/records?patient_id=${new FormData(e.target).get("patient_id")}`);
+    $("#vac-hist-result").innerHTML = table(["疫苗", "剂次", "日期", "机构"], records, (r) =>
+      `<tr><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td><td>${r.org_id}</td></tr>`);
+  };
+}
+
+async function renderPublicHealth() {
+  $("#page-desc").textContent = "应急事件指挥（I-IV级）、诊间医防提醒、五域卫生监测";
+  const [events, monitors] = await Promise.all([api("/api/publichealth/events"), api("/api/publichealth/monitors")]);
+  const DM = { nutrition: "营养", environment: "环境", occupational: "职业", radiation: "放射", school: "学校" };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>事件立案</h3>
+      <form class="inline" id="ev-form">
+        <input name="title" placeholder="事件名称" required style="min-width:220px">
+        <select name="level"><option>IV</option><option>III</option><option>II</option><option>I</option></select>
+        <input name="disease_name" placeholder="相关病种"><button>立案</button></form>
+      <h3 style="margin-top:12px">诊间医防提醒</h3>
+      <form class="inline" id="rem-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询提醒</button></form>
+      <div id="rem-result"></div><p class="msg" id="ph-msg"></p></div>
+    <div class="panel"><h3>事件列表</h3>${table(["ID", "事件", "级别", "病种", "状态", "操作"], events, (ev) =>
+      `<tr><td>${ev.id}</td><td>${esc(ev.title)}</td><td><span class="tag ${ev.level === "I" || ev.level === "II" ? "red" : "orange"}">${ev.level}级</span></td>
+       <td>${esc(ev.disease_name)}</td><td><span class="tag ${ev.status === "active" ? "red" : "green"}">${ev.status === "active" ? "处置中" : "已结案"}</span></td>
+       <td>${ev.status === "active" ? `<button class="btn secondary" data-act="${ev.id}">处置记录</button><button class="btn secondary" data-close="${ev.id}">结案</button>` : "—"}</td></tr>`)}</div>
+    <div class="panel"><h3>卫生监测（营养/环境/职业/放射/学校）</h3>
+      <form class="inline" id="mon-form">
+        <select name="domain">${Object.entries(DM).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="org_id" type="number" placeholder="机构ID" required><input name="indicator" placeholder="监测指标" required>
+        <input name="value" type="number" step="any" placeholder="监测值" required><input name="threshold" type="number" step="any" placeholder="阈值" required>
+        <input name="record_date" placeholder="日期"><button>登记</button></form>
+      ${table(["领域", "指标", "值/阈值", "状态"], monitors, (m) =>
+        `<tr><td>${DM[m.domain]}</td><td>${esc(m.indicator)}</td><td>${m.value} / ${m.threshold}</td>
+         <td>${m.exceeded ? '<span class="tag red">超标</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
+  $("#ev-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/events", formJson(e.target), "#ph-msg"); };
+  $("#mon-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/monitors", formJson(e.target, ["org_id", "value", "threshold"]), "#ph-msg"); };
+  $("#rem-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await api(`/api/publichealth/reminders/${new FormData(e.target).get("patient_id")}`);
+    $("#rem-result").innerHTML = r.reminders.length
+      ? `<ul style="margin:8px 0 0 18px;font-size:13px">${r.reminders.map((x) => `<li>${esc(x.detail)}</li>`).join("")}</ul>`
+      : '<p class="msg ok">无待办提醒</p>';
+  };
+  $("#page-body").onclick = (e) => {
+    const { act, close } = e.target.dataset;
+    if (act) {
+      const action = prompt("处置动作"); if (!action) return;
+      return postAction(`/api/publichealth/events/${act}/actions`, { action, actor: prompt("执行人") || "" }, "#ph-msg");
+    }
+    if (close) return postAction(`/api/publichealth/events/${close}/close`, null, "#ph-msg");
+  };
+}
+
+async function renderHrFinance() {
+  $("#page-desc").textContent = "人力资源与派驻下沉、财务集中核算、物资管理";
+  const [employees, secStats, finance, assets] = await Promise.all([
+    api("/api/mgmt/employees"), api("/api/mgmt/secondments/stats"), api("/api/mgmt/finance/summary"), api("/api/mgmt/assets")]);
+  const EST = { active: ["在岗", "green"], seconded: ["派驻中", "orange"], left: ["离职", ""] };
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="label">在派人数</div><div class="value">${secStats.active_secondments}</div></div>
+      <div class="card"><div class="label">医共体收入合计</div><div class="value">${finance.consolidated.income}</div></div>
+      <div class="card"><div class="label">医共体结余</div><div class="value">${finance.consolidated.balance}</div></div></div>
+    <div class="panel"><h3>员工 / 派驻 / 财务 / 物资录入</h3>
+      <form class="inline" id="emp-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="name" placeholder="姓名" required>
+        <input name="title" placeholder="职称"><input name="position" placeholder="岗位"><button>登记员工</button></form>
+      <form class="inline" id="sec-form"><input name="employee_id" type="number" placeholder="员工ID" required>
+        <input name="to_org_id" type="number" placeholder="派驻机构ID" required><input name="start_date" placeholder="开始日期 YYYY-MM-DD" required><button>派驻下沉</button></form>
+      <form class="inline" id="fin-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="period" placeholder="期间 YYYY-MM" required>
+        <select name="category"><option value="income">收入</option><option value="expense">支出</option></select>
+        <input name="item" placeholder="科目"><input name="amount" type="number" step="any" placeholder="金额" required><button>记账</button></form>
+      <form class="inline" id="asset-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="code" placeholder="物资编码" required>
+        <input name="name" placeholder="名称" required><select name="category"><option value="office">办公用品</option><option value="equipment">非医疗设备</option></select>
+        <input name="quantity" type="number" value="1" min="1" style="min-width:60px"><button>物资建档</button></form>
+      <p class="msg" id="hrf-msg"></p></div>
+    <div class="panel"><h3>员工</h3>${table(["ID", "机构", "姓名", "职称", "状态"], employees, (em) => {
+      const [t, col] = EST[em.status] || [em.status, ""];
+      return `<tr><td>${em.id}</td><td>${em.org_id}</td><td>${esc(em.name)}</td><td>${esc(em.title)}</td><td><span class="tag ${col}">${t}</span></td></tr>`;
+    })}</div>
+    <div class="panel"><h3>各单位收支（全部期间）</h3>${table(["机构", "收入", "支出", "结余"], finance.orgs, (o) =>
+      `<tr><td>${o.org_id}</td><td>${o.income}</td><td>${o.expense}</td><td>${o.balance}</td></tr>`)}</div>
+    <div class="panel"><h3>物资</h3>${table(["编码", "名称", "机构", "数量", "状态"], assets, (a) =>
+      `<tr><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${a.org_id}</td><td>${a.quantity}</td><td><span class="tag">${a.status}</span></td></tr>`)}</div>`;
+  $("#emp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/employees", formJson(e.target, ["org_id"]), "#hrf-msg"); };
+  $("#sec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/secondments", formJson(e.target, ["employee_id", "to_org_id"]), "#hrf-msg"); };
+  $("#fin-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/finance", formJson(e.target, ["org_id", "amount"]), "#hrf-msg"); };
+  $("#asset-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/assets", formJson(e.target, ["org_id", "quantity"]), "#hrf-msg"); };
+}
+
+async function renderOaQc() {
+  $("#page-desc").textContent = "行政公文（起草→发布）、共享中心排班与质控";
+  const [docs, rosters, qc] = await Promise.all([api("/api/mgmt/docs"), api("/api/mgmt/rosters"), api("/api/mgmt/qc")]);
+  const CN = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>公文起草 / 排班 / 质控登记</h3>
+      <form class="inline" id="doc-form"><input name="title" placeholder="公文标题" required style="min-width:240px">
+        <select name="doc_type"><option value="notice">通知</option><option value="policy">政策文件</option><option value="minutes">会议纪要</option></select>
+        <input name="issuer" placeholder="发文单位"><button>起草</button></form>
+      <form class="inline" id="roster-form"><select name="center_type">${Object.entries(CN).map(([v, t]) => `<option value="${v}">${t}中心</option>`).join("")}</select>
+        <input name="duty_date" placeholder="值班日期 YYYY-MM-DD" required><input name="shift" placeholder="班次" value="全天"><input name="doctor_name" placeholder="医师" required><button>排班</button></form>
+      <form class="inline" id="qc-form"><select name="center_type">${Object.entries(CN).map(([v, t]) => `<option value="${v}">${t}中心</option>`).join("")}</select>
+        <input name="item" placeholder="质控项目" required><select name="result"><option value="pass">合格</option><option value="fail">不合格</option></select>
+        <input name="note" placeholder="备注"><input name="record_date" placeholder="日期"><button>登记质控</button></form>
+      <p class="msg" id="oa-msg"></p></div>
+    <div class="panel"><h3>公文</h3>${table(["ID", "标题", "类型", "发文单位", "状态", "操作"], docs, (d) =>
+      `<tr><td>${d.id}</td><td>${esc(d.title)}</td><td>${esc(d.doc_type)}</td><td>${esc(d.issuer)}</td>
+       <td><span class="tag ${d.status === "published" ? "green" : "orange"}">${d.status === "published" ? "已发布" : "草稿"}</span></td>
+       <td>${d.status === "draft" ? `<button class="btn secondary" data-pub="${d.id}">发布</button>` : "—"}</td></tr>`)}</div>
+    <div class="panel"><h3>排班</h3>${table(["中心", "日期", "班次", "医师"], rosters, (r) =>
+      `<tr><td>${CN[r.center_type]}</td><td>${esc(r.duty_date)}</td><td>${esc(r.shift)}</td><td>${esc(r.doctor_name)}</td></tr>`)}</div>
+    <div class="panel"><h3>质控记录</h3>${table(["中心", "项目", "结果", "备注"], qc, (q) =>
+      `<tr><td>${CN[q.center_type]}</td><td>${esc(q.item)}</td>
+       <td><span class="tag ${q.result === "pass" ? "green" : "red"}">${q.result === "pass" ? "合格" : "不合格"}</span></td><td>${esc(q.note)}</td></tr>`)}</div>`;
+  $("#doc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/docs", formJson(e.target), "#oa-msg"); };
+  $("#roster-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/rosters", formJson(e.target), "#oa-msg"); };
+  $("#qc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/qc", formJson(e.target), "#oa-msg"); };
+  $("#page-body").onclick = (e) => { if (e.target.dataset.pub) postAction(`/api/mgmt/docs/${e.target.dataset.pub}/publish`, null, "#oa-msg"); };
 }
 
 /* ---------------- 启动 ---------------- */
