@@ -42,8 +42,13 @@
 | 疫苗接种 | 接种登记、禁忌拦截、接种前评估 | `/api/vaccination` |
 | 公卫协同 | 应急事件指挥、诊间医防提醒、五域卫生监测 | `/api/publichealth` |
 | 综合管理 | 人力/派驻、财务集中核算、物资、公文、排班质控 | `/api/mgmt` |
+| 对接适配层 | HL7 v2 ADT / FHIR R4 Patient·Observation 入站转换、FHIR 导出 | `/api/integration` |
+| 实时消息 | WebSocket 危急值/缺药预警秒级广播、角色化任务待办中心 | `/ws/notifications`、`/api/todos` |
+| 居民端移动版 | H5 移动优先：健康宣教、双因子查档案、满意度评价 | `/m` |
+| 智能化 | 相互作用审方、慢病风险评分、药品采购建议 | `/api/prescriptions`、`/api/chronic/{id}/risk`、`/api/pharmacy/purchase-suggestions` |
 
 **《信息化功能指引》36项功能已全部实现**，逐项对照见 [docs/功能指引对照表.md](docs/功能指引对照表.md)。
+第二阶段生产化演进（配置中心/迁移/安全合规/对接/实时消息/移动端/智能化）已完成首轮实现，详见 [docs/下一步开发计划.md](docs/下一步开发计划.md) 与 [docs/开发时间计划.md](docs/开发时间计划.md) 完成项勾选。
 
 角色权限：诊断报告限医师、处方审核限药师、绩效考核限管理层、用户与审计限管理员（admin 全通）。
 
@@ -62,3 +67,12 @@ python -m pytest tests/ -q          # 运行测试
 初始管理员账号：`admin` / `admin123`（生产部署前必须修改，并通过 `MEDPLAT_SECRET` 环境变量设置令牌密钥）。
 
 数据库默认使用 SQLite（开发环境），通过 `MEDPLAT_DATABASE_URL` 环境变量可切换 PostgreSQL。
+配置统一由 pydantic-settings 读取 `MEDPLAT_*` 环境变量（见 `server/app/config.py`）。
+
+## 生产部署
+
+```bash
+docker compose up -d                          # 一键起 app + PostgreSQL 16（命名卷持久化）
+cd server && alembic upgrade head             # 结构迁移（与应用共用 MEDPLAT_DATABASE_URL）
+sh scripts/backup.sh /data/backups            # pg_dump 备份（建议 crontab 定时）
+```
