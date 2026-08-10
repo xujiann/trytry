@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: medplat-demo
+    runtime: docker
+    plan: free
+    branch: claude/county-medical-platform-plan-2p7456
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    envVars:
+      - key: MEDPLAT_SEED_DEMO
+        value: "1"
