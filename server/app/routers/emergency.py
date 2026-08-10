@@ -5,12 +5,23 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import EmergencyCase, EmergencyVital, Organization
+from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
 
 router = APIRouter(prefix="/api/emergency", tags=["智慧急救"], dependencies=[Depends(get_current_user)])
 
 _FLOW = {"dispatched": "en_route", "en_route": "arrived", "arrived": "admitted"}
+
+# 绿道时间节点固定序列（时效分析口径）
+MILESTONE_SEQUENCE = ["onset", "call", "depart", "arrive_scene", "arrive_hospital", "treatment"]
+MILESTONE_NAMES = {
+    "onset": "发病",
+    "call": "呼救",
+    "depart": "出车",
+    "arrive_scene": "到达现场",
+    "arrive_hospital": "到达医院",
+    "treatment": "开始救治",
+}
 
 
 class CaseCreate(BaseModel):
@@ -20,11 +31,25 @@ class CaseCreate(BaseModel):
     ambulance_no: str = ""
     dest_org_id: int | None = None
     patient_id: int | None = None
+    # 急救绿色通道：""=普通, chest_pain=胸痛, stroke=卒中, trauma=创伤
+    channel_type: str = Field(default="", pattern="^(|chest_pain|stroke|trauma)$")
 
 
 class CaseOut(CaseCreate):
     id: int
     status: str
+
+    model_config = {"from_attributes": True}
+
+
+class MilestoneCreate(BaseModel):
+    milestone: str = Field(pattern="^(onset|call|depart|arrive_scene|arrive_hospital|treatment)$")
+    occurred_at: str = Field(min_length=1, max_length=32)
+
+
+class MilestoneOut(MilestoneCreate):
+    id: int
+    case_id: int
 
     model_config = {"from_attributes": True}
 
@@ -111,3 +136,65 @@ def list_vitals(case_id: int, db: Session = Depends(get_db)):
     if db.get(EmergencyCase, case_id) is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
     return db.query(EmergencyVital).filter(EmergencyVital.case_id == case_id).order_by(EmergencyVital.id).all()
+
+
+# ---------- 急救绿道时间节点 ----------
+
+
+@router.post(
+    "/cases/{case_id}/milestones",
+    response_model=MilestoneOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 急救绿道记录
+)
+def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(get_db)):
+    """记录绿道时间节点（每个节点每例仅记录一次）。"""
+    case = db.get(EmergencyCase, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="急救事件不存在")
+    existing = (
+        db.query(EmergencyMilestone)
+        .filter(
+            EmergencyMilestone.case_id == case_id,
+            EmergencyMilestone.milestone == body.milestone,
+        )
+        .first()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"节点「{MILESTONE_NAMES[body.milestone]}」已记录（{existing.occurred_at}）",
+        )
+    milestone = EmergencyMilestone(case_id=case_id, **body.model_dump())
+    db.add(milestone)
+    db.commit()
+    db.refresh(milestone)
+    return milestone
+
+
+@router.get("/cases/{case_id}/timeline")
+def case_timeline(case_id: int, db: Session = Depends(get_db)):
+    """绿道时间轴：按固定节点序列返回已记录/缺失情况。"""
+    case = db.get(EmergencyCase, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="急救事件不存在")
+    recorded = {
+        m.milestone: m
+        for m in db.query(EmergencyMilestone).filter(EmergencyMilestone.case_id == case_id).all()
+    }
+    timeline = [
+        {
+            "milestone": key,
+            "name": MILESTONE_NAMES[key],
+            "occurred_at": recorded[key].occurred_at if key in recorded else None,
+            "recorded": key in recorded,
+        }
+        for key in MILESTONE_SEQUENCE
+    ]
+    return {
+        "case_id": case_id,
+        "channel_type": case.channel_type,
+        "status": case.status,
+        "timeline": timeline,
+        "recorded_count": len(recorded),
+    }

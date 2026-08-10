@@ -479,11 +479,34 @@ class EmergencyCase(Base):
     symptom: Mapped[str] = mapped_column(String(512), default="")
     ambulance_no: Mapped[str] = mapped_column(String(32), default="")
     dest_org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    # 急救绿色通道类型：""=普通, chest_pain=胸痛, stroke=卒中, trauma=创伤
+    channel_type: Mapped[str] = mapped_column(String(16), default="", index=True)
     # dispatched=已调度, en_route=转运中, arrived=已到院, admitted=已收治
     status: Mapped[str] = mapped_column(String(16), default="dispatched", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     vitals: Mapped[list["EmergencyVital"]] = relationship(back_populates="case")
+    milestones: Mapped[list["EmergencyMilestone"]] = relationship(back_populates="case")
+
+
+class EmergencyMilestone(Base):
+    """急救绿道时间节点：发病→呼救→出车→到达现场→到院→开始救治，绿道时效分析依据。"""
+
+    __tablename__ = "emergency_milestones"
+    __table_args__ = (
+        UniqueConstraint("case_id", "milestone", name="uq_emergency_milestone_case"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("emergency_cases.id"), index=True)
+    # onset=发病, call=呼救, depart=出车, arrive_scene=到达现场,
+    # arrive_hospital=到达医院, treatment=开始救治
+    milestone: Mapped[str] = mapped_column(String(16))
+    # 发生时刻（字符串，如 "2026-08-10 14:32"）
+    occurred_at: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    case: Mapped["EmergencyCase"] = relationship(back_populates="milestones")
 
 
 class EmergencyVital(Base):
