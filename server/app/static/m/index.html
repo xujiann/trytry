@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>县域医共体 · 居民服务</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%95%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/m/m.css">
+</head>
+<body>
+<header class="m-header">
+  <h1>县域医共体 · 居民服务</h1>
+</header>
+
+<main id="m-main">
+  <!-- 健康宣教（无需登录） -->
+  <section id="tab-edu" class="tab-page">
+    <div id="edu-list" class="list">加载中…</div>
+  </section>
+
+  <!-- 我的档案（电子健康卡号 + 身份证号 双因子核验） -->
+  <section id="tab-archive" class="tab-page hidden">
+    <form id="archive-form" class="m-card">
+      <p class="hint">输入电子健康卡号与身份证号，核验后查看本人健康档案</p>
+      <input id="in-ehc" placeholder="电子健康卡号（EHC…）" required>
+      <input id="in-idcard" placeholder="身份证号" required>
+      <button type="submit">查询我的档案</button>
+      <p id="archive-error" class="err"></p>
+    </form>
+    <div id="archive-result"></div>
+  </section>
+
+  <!-- 满意度评价（同样双因子核验） -->
+  <section id="tab-survey" class="tab-page hidden">
+    <form id="survey-form" class="m-card">
+      <p class="hint">对签约服务 / 就诊 / 会诊进行满意度评价</p>
+      <input id="sv-ehc" placeholder="电子健康卡号（EHC…）" required>
+      <input id="sv-idcard" placeholder="身份证号" required>
+      <select id="sv-type">
+        <option value="contract">家医签约服务</option>
+        <option value="encounter">就诊体验</option>
+        <option value="consultation">远程会诊</option>
+      </select>
+      <div id="sv-stars" class="stars" data-score="5">
+        <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span><span data-v="4">★</span><span data-v="5">★</span>
+      </div>
+      <textarea id="sv-comment" placeholder="意见与建议（选填）" rows="3"></textarea>
+      <button type="submit">提交评价</button>
+      <p id="survey-msg" class="msg"></p>
+    </form>
+  </section>
+</main>
+
+<nav class="m-tabbar">
+  <a href="#edu" class="tab-btn active" data-tab="edu"><span class="ico">📖</span>健康宣教</a>
+  <a href="#archive" class="tab-btn" data-tab="archive"><span class="ico">📋</span>我的档案</a>
+  <a href="#survey" class="tab-btn" data-tab="survey"><span class="ico">⭐</span>满意度</a>
+</nav>
+
+<script src="/static/m/m.js"></script>
+</body>
+</html>

@@ -237,3 +237,9 @@ app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(_STATIC_DIR / "index.html")
+
+
+@app.get("/m", include_in_schema=False)
+def mobile_index():
+    """居民端移动版 H5 入口。"""
+    return FileResponse(_STATIC_DIR / "m" / "index.html")

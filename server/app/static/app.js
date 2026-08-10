@@ -18,8 +18,41 @@ function logout() {
   token = "";
   localStorage.removeItem("medplat_token");
   localStorage.removeItem("medplat_role");
+  stopTodoPolling();
   $("#app-view").classList.add("hidden");
   $("#login-view").classList.remove("hidden");
+}
+
+/* ---------------- 待办铃铛（轮询 /api/todos） ---------------- */
+
+let todoTimer = null;
+
+async function pollTodos() {
+  try {
+    const data = await api("/api/todos");
+    const count = $("#todo-count");
+    count.textContent = data.total > 99 ? "99+" : data.total;
+    count.classList.toggle("hidden", data.total === 0);
+    const panel = $("#todo-panel");
+    panel.innerHTML = data.items.length
+      ? data.items.map((it) => `<h4>${esc(it.title)}（${it.count}）</h4>${
+          it.list.slice(0, 5).map((row) =>
+            `<div class="todo-item">${esc(row.item_name || row.diagnosis_name || row.drug_name || row.conclusion || `#${row.id}`)}</div>`).join("")
+        }`).join("")
+      : '<div class="todo-empty">暂无待办事项</div>';
+  } catch (e) { /* 登录过期等由 api() 统一处理 */ }
+}
+
+function startTodoPolling() {
+  $("#todo-bell").classList.remove("hidden");
+  pollTodos();
+  if (!todoTimer) todoTimer = setInterval(pollTodos, 30000);
+}
+
+function stopTodoPolling() {
+  if (todoTimer) { clearInterval(todoTimer); todoTimer = null; }
+  const bell = $("#todo-bell");
+  if (bell) { bell.classList.add("hidden"); $("#todo-panel").classList.add("hidden"); }
 }
 
 function esc(value) {
@@ -1361,8 +1394,14 @@ function enterApp() {
   $("#login-view").classList.add("hidden");
   $("#app-view").classList.remove("hidden");
   buildNav();
+  startTodoPolling();
   route();
 }
+
+$("#todo-bell").onclick = (e) => {
+  if (e.target.closest("#todo-panel")) return;
+  $("#todo-panel").classList.toggle("hidden");
+};
 
 $("#login-form").onsubmit = async (e) => {
   e.preventDefault();
