@@ -6,6 +6,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import DrugStock, Organization, StockTransfer, User
 from ..schemas import StockOut, StockUpsert, TransferCreate
+from ..ws import manager
 
 router = APIRouter(prefix="/api/pharmacy", tags=["中心药房"])
 
@@ -78,6 +79,18 @@ def transfer_stock(
     db.add(StockTransfer(**body.model_dump(), created_by=user.id))
     db.commit()
     db.refresh(dest)
+    if source.quantity < source.threshold:
+        # 调拨后调出机构跌破阈值：实时广播缺药预警
+        manager.broadcast(
+            {
+                "type": "stock_shortage",
+                "org_id": source.org_id,
+                "drug_code": source.drug_code,
+                "drug_name": source.drug_name,
+                "quantity": source.quantity,
+                "threshold": source.threshold,
+            }
+        )
     return dest
 
 

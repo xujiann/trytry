@@ -8,6 +8,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ExamReport, ExamRequest, Organization, Patient, User
 from ..schemas import ExamReportCreate, ExamReportOut, ExamRequestCreate, ExamRequestOut
+from ..ws import manager
 
 router = APIRouter(prefix="/api/exams", tags=["共享诊断中心"], dependencies=[Depends(get_current_user)])
 
@@ -119,6 +120,17 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
     db.add(report)
     db.commit()
     db.refresh(report)
+    if report.critical:
+        # 危急值实时广播：秒级触达全部在线用户
+        manager.broadcast(
+            {
+                "type": "critical_report",
+                "request_id": request_id,
+                "patient_id": request.patient_id,
+                "item_name": request.item_name,
+                "conclusion": report.conclusion,
+            }
+        )
     return report
 
 

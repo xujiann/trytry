@@ -54,9 +54,11 @@ from .routers import (
     service_extras,
     tcm,
     telemedicine,
+    todos,
     users,
     vaccination,
 )
+from . import ws
 from .models import AuditLog
 from .security import decode_token, hash_password
 
@@ -123,6 +125,8 @@ app.include_router(vaccination.router)
 app.include_router(publichealth.router)
 app.include_router(admin_mgmt.router)
 app.include_router(service_extras.router)
+app.include_router(todos.router)
+app.include_router(ws.router)
 
 _access_logger = logging.getLogger("medplat.access")
 if not _access_logger.handlers:
