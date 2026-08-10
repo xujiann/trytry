@@ -1,23 +1,16 @@
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ["MEDPLAT_DATABASE_URL"] = "sqlite:///./test_medplat.db"
-
 import pytest
 from fastapi.testclient import TestClient
+
+from conftest import reset_database
 
 from app.main import app
 
 
 @pytest.fixture(scope="module")
 def client():
-    if os.path.exists("test_medplat.db"):
-        os.remove("test_medplat.db")
+    reset_database()
     with TestClient(app) as c:
         yield c
-    if os.path.exists("test_medplat.db"):
-        os.remove("test_medplat.db")
 
 
 @pytest.fixture(scope="module")
@@ -32,6 +25,13 @@ def test_health(client):
     resp = client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+def test_frontend_served(client):
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "县域医共体信息化平台" in page.text
+    assert client.get("/static/app.js").status_code == 200
 
 
 def test_login_rejects_bad_password(client):

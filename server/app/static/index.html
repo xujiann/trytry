@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>县域医共体信息化平台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="login-view" class="login-wrap hidden">
+  <form id="login-form" class="login-card">
+    <h1>县域医共体信息化平台</h1>
+    <p class="sub">紧密型县域医共体 · 管理端</p>
+    <input id="login-username" placeholder="用户名" autocomplete="username" required>
+    <input id="login-password" type="password" placeholder="密码" autocomplete="current-password" required>
+    <button type="submit">登 录</button>
+    <p id="login-error" class="error"></p>
+  </form>
+</div>
+
+<div id="app-view" class="app hidden">
+  <aside class="sidebar">
+    <div class="brand">医共体平台</div>
+    <nav id="nav"></nav>
+    <button id="logout" class="logout">退出登录</button>
+  </aside>
+  <main id="main" class="main"></main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

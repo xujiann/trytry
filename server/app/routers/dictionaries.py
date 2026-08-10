@@ -45,6 +45,27 @@ def create_entry(system_code: str, body: CodeEntryCreate, db: Session = Depends(
     return entry
 
 
+@router.post(
+    "/{system_code}/import",
+    dependencies=[Depends(require_admin)],
+)
+def bulk_import(system_code: str, entries: list[CodeEntryCreate], db: Session = Depends(get_db)):
+    """标准字典全量/增量导入：已存在的编码跳过，返回导入统计。"""
+    system = _get_system(db, system_code)
+    existing = {
+        code for (code,) in db.query(CodeEntry.code).filter(CodeEntry.system_id == system.id).all()
+    }
+    imported = 0
+    for entry in entries:
+        if entry.code in existing:
+            continue
+        db.add(CodeEntry(system_id=system.id, **entry.model_dump()))
+        existing.add(entry.code)
+        imported += 1
+    db.commit()
+    return {"imported": imported, "skipped": len(entries) - imported}
+
+
 @router.get(
     "/{system_code}/entries",
     response_model=list[CodeEntryOut],

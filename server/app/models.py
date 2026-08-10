@@ -8,7 +8,7 @@
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -83,6 +83,183 @@ class CodeEntry(Base):
     name: Mapped[str] = mapped_column(String(256), index=True)
 
     system: Mapped[CodeSystem] = relationship(back_populates="entries")
+
+
+class Encounter(Base):
+    """就诊记录（电子病历摘要），健康档案与患者360视图的数据来源。"""
+
+    __tablename__ = "encounters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    doctor_name: Mapped[str] = mapped_column(String(64), default="")
+    # outpatient=门诊, inpatient=住院
+    encounter_type: Mapped[str] = mapped_column(String(16), default="outpatient")
+    diagnosis_code: Mapped[str] = mapped_column(String(64), default="")
+    diagnosis_name: Mapped[str] = mapped_column(String(256), default="")
+    summary: Mapped[str] = mapped_column(String(1024), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ExamRequest(Base):
+    """共享诊断中心申请（影像/心电/检验/病理共用）："基层检查、上级诊断、结果互认"。"""
+
+    __tablename__ = "exam_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    from_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    # imaging=影像, ecg=心电, lab=检验, pathology=病理
+    center_type: Mapped[str] = mapped_column(String(16), index=True)
+    item_code: Mapped[str] = mapped_column(String(64), index=True)
+    item_name: Mapped[str] = mapped_column(String(128))
+    clinical_info: Mapped[str] = mapped_column(String(512), default="")
+    # pending=待诊断, diagnosing=诊断中, reported=已报告, recognized=互认既往结果
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    recognized_from_id: Mapped[int | None] = mapped_column(
+        ForeignKey("exam_requests.id"), nullable=True
+    )
+    recognition_declined_reason: Mapped[str] = mapped_column(String(256), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    report: Mapped["ExamReport | None"] = relationship(back_populates="request")
+
+
+class ExamReport(Base):
+    __tablename__ = "exam_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(
+        ForeignKey("exam_requests.id"), unique=True, index=True
+    )
+    finding: Mapped[str] = mapped_column(String(2048), default="")
+    conclusion: Mapped[str] = mapped_column(String(1024))
+    critical: Mapped[bool] = mapped_column(Boolean, default=False)
+    reported_by: Mapped[str] = mapped_column(String(64), default="")
+    reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    request: Mapped[ExamRequest] = relationship(back_populates="report")
+
+
+class DrugRule(Base):
+    """合理用药规则库：集中审方的"系统审"依据。"""
+
+    __tablename__ = "drug_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    drug_code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    max_daily_dose: Mapped[float] = mapped_column(Float)
+    dose_unit: Mapped[str] = mapped_column(String(16), default="mg")
+    note: Mapped[str] = mapped_column(String(256), default="")
+
+
+class Prescription(Base):
+    """处方：全量进入集中审方中心，系统审+药师审双重审核。"""
+
+    __tablename__ = "prescriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    diagnosis_name: Mapped[str] = mapped_column(String(256), default="")
+    # auto_passed=系统审通过, pending_review=待药师审, approved=药师审通过, rejected=退回
+    status: Mapped[str] = mapped_column(String(16), default="auto_passed", index=True)
+    review_comment: Mapped[str] = mapped_column(String(1024), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    items: Mapped[list["PrescriptionItem"]] = relationship(back_populates="prescription")
+
+
+class PrescriptionItem(Base):
+    __tablename__ = "prescription_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id"), index=True)
+    drug_code: Mapped[str] = mapped_column(String(64))
+    drug_name: Mapped[str] = mapped_column(String(128))
+    daily_dose: Mapped[float] = mapped_column(Float)
+    days: Mapped[int] = mapped_column(Integer, default=1)
+
+    prescription: Mapped[Prescription] = relationship(back_populates="items")
+
+
+class DrugStock(Base):
+    """中心药房库存：县乡村药品余缺调度的基础。"""
+
+    __tablename__ = "drug_stocks"
+    __table_args__ = (UniqueConstraint("org_id", "drug_code", name="uq_stock_org_drug"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    drug_code: Mapped[str] = mapped_column(String(64), index=True)
+    drug_name: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    # 低于该阈值触发缺药预警
+    threshold: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class StockTransfer(Base):
+    __tablename__ = "stock_transfers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    drug_code: Mapped[str] = mapped_column(String(64))
+    from_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    to_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    quantity: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ChronicPatient(Base):
+    """慢病建档：高血压/2型糖尿病/慢阻肺，智能分级分组。"""
+
+    __tablename__ = "chronic_patients"
+    __table_args__ = (
+        UniqueConstraint("patient_id", "disease", name="uq_chronic_patient_disease"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # hypertension=高血压, diabetes=2型糖尿病, copd=慢阻肺
+    disease: Mapped[str] = mapped_column(String(32), index=True)
+    # 1=控制良好, 2=需干预, 3=高危
+    level: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    managed_by_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    next_due: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    followups: Mapped[list["FollowUp"]] = relationship(back_populates="chronic")
+
+
+class FollowUp(Base):
+    __tablename__ = "followups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chronic_id: Mapped[int] = mapped_column(ForeignKey("chronic_patients.id"), index=True)
+    sbp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dbp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    glucose: Mapped[float | None] = mapped_column(Float, nullable=True)
+    guidance: Mapped[str] = mapped_column(String(1024), default="")
+    next_due: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    chronic: Mapped[ChronicPatient] = relationship(back_populates="followups")
+
+
+class InfectiousCase(Base):
+    """传染病病例报告：多点触发监测预警的数据来源。"""
+
+    __tablename__ = "infectious_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    disease_code: Mapped[str] = mapped_column(String(64), index=True)
+    disease_name: Mapped[str] = mapped_column(String(128))
+    onset_date: Mapped[str] = mapped_column(String(10), index=True)
+    reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Referral(Base):
