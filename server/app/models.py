@@ -25,10 +25,25 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(200))
     full_name: Mapped[str] = mapped_column(String(64), default="")
-    # admin=平台管理员, doctor=医师, operator=经办人员
+    # admin=平台管理员, director=院长/管理层, doctor=医师, pharmacist=药师,
+    # public_health=公卫人员, operator=经办人员
     role: Mapped[str] = mapped_column(String(32), default="operator")
     org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AuditLog(Base):
+    """审计日志：记录全部写操作（等保三级安全审计要求）。"""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    username: Mapped[str] = mapped_column(String(64), default="", index=True)
+    method: Mapped[str] = mapped_column(String(8))
+    path: Mapped[str] = mapped_column(String(256), index=True)
+    status_code: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Organization(Base):

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import ExamReport, ExamRequest, Organization, Patient, User
 from ..schemas import ExamReportCreate, ExamReportOut, ExamRequestCreate, ExamRequestOut
 
@@ -85,7 +85,11 @@ def list_requests(
     return query.order_by(ExamRequest.id.desc()).limit(200).all()
 
 
-@router.post("/{request_id}/claim", response_model=ExamRequestOut)
+@router.post(
+    "/{request_id}/claim",
+    response_model=ExamRequestOut,
+    dependencies=[Depends(require_roles("doctor"))],
+)
 def claim_request(request_id: int, db: Session = Depends(get_db)):
     request = db.get(ExamRequest, request_id)
     if request is None:
@@ -98,7 +102,12 @@ def claim_request(request_id: int, db: Session = Depends(get_db)):
     return request
 
 
-@router.post("/{request_id}/report", response_model=ExamReportOut, status_code=201)
+@router.post(
+    "/{request_id}/report",
+    response_model=ExamReportOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor"))],
+)
 def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends(get_db)):
     request = db.get(ExamRequest, request_id)
     if request is None:

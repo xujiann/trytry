@@ -36,8 +36,10 @@ from .routers import (
     portal,
     prescriptions,
     referrals,
+    users,
 )
-from .security import hash_password
+from .models import AuditLog
+from .security import decode_token, hash_password
 
 
 @asynccontextmanager
@@ -86,6 +88,46 @@ app.include_router(medwaste.router)
 app.include_router(performance.router)
 app.include_router(metrics.router)
 app.include_router(portal.router)
+app.include_router(users.router)
+
+_AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
+# 登录请求不落审计（避免与口令尝试混淆，登录安全事件由专用日志承担）
+_AUDIT_EXEMPT = {"/api/auth/login"}
+
+
+@app.middleware("http")
+async def audit_middleware(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if (
+        request.method in _AUDITED_METHODS
+        and path.startswith("/api/")
+        and path not in _AUDIT_EXEMPT
+    ):
+        username, user_id = "", None
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            claims = decode_token(auth[7:])
+            if claims:
+                username = claims.get("sub", "")
+        db = SessionLocal()
+        try:
+            if username:
+                user = db.query(User).filter(User.username == username).first()
+                user_id = user.id if user else None
+            db.add(
+                AuditLog(
+                    user_id=user_id,
+                    username=username or "anonymous",
+                    method=request.method,
+                    path=path,
+                    status_code=response.status_code,
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+    return response
 
 
 @app.get("/api/health", tags=["平台"])

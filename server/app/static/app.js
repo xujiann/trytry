@@ -17,6 +17,7 @@ async function api(path, options = {}) {
 function logout() {
   token = "";
   localStorage.removeItem("medplat_token");
+  localStorage.removeItem("medplat_role");
   $("#app-view").classList.add("hidden");
   $("#login-view").classList.remove("hidden");
 }
@@ -62,10 +63,23 @@ const PAGES = [
   { id: "appointments", title: "预约诊疗", render: renderAppointments },
   { id: "archive", title: "患者360视图", render: renderArchive },
   { group: "综合管理" },
-  { id: "performance", title: "绩效考核", render: renderPerformance },
+  { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
   { id: "cssd", title: "消毒供应", render: renderCssd },
   { id: "medwaste", title: "医废追溯", render: renderMedwaste },
+  { group: "系统管理", roles: ["admin"] },
+  { id: "users", title: "用户管理", render: renderUsers, roles: ["admin"] },
+  { id: "audit", title: "审计日志", render: renderAudit, roles: ["admin"] },
 ];
+
+const ROLE_NAMES = { admin: "平台管理员", director: "管理层", doctor: "医师", pharmacist: "药师", public_health: "公卫人员", operator: "经办人员" };
+
+function currentRole() { return localStorage.getItem("medplat_role") || ""; }
+
+function pageAllowed(p) {
+  if (!p.roles) return true;
+  const role = currentRole();
+  return role === "admin" || p.roles.includes(role);
+}
 
 const CENTER_NAMES = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
 const ORG_TYPES = { lead_hospital: "牵头医院", township: "乡镇卫生院", village: "村卫生室", public_health: "公卫机构" };
@@ -82,7 +96,8 @@ function nav(pageId) {
 async function route() {
   if (!token) return;
   const id = location.hash.replace("#", "") || "dashboard";
-  const page = PAGES.find((p) => p.id === id) || PAGES[1];
+  let page = PAGES.find((p) => p.id === id) || PAGES[1];
+  if (!pageAllowed(page)) page = PAGES[1];
   document.querySelectorAll("#nav a").forEach((a) =>
     a.classList.toggle("active", a.dataset.page === page.id));
   $("#main").innerHTML = `<h2>${esc(page.title)}</h2><div class="desc" id="page-desc"></div><div id="page-body">加载中…</div>`;
@@ -822,10 +837,73 @@ async function renderArchive() {
   };
 }
 
+async function renderUsers() {
+  $("#page-desc").textContent = "账号开通与角色分配（仅管理员）";
+  const [usersList, orgs] = await Promise.all([api("/api/users"), api("/api/organizations")]);
+  const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>开通账号</h3>
+      <form class="inline" id="user-form">
+        <input name="username" placeholder="用户名（≥3位）" required minlength="3">
+        <input name="password" type="password" placeholder="初始密码（≥6位）" required minlength="6">
+        <input name="full_name" placeholder="姓名">
+        <select name="role">${Object.entries(ROLE_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="org_id"><option value="">不挂机构</option>${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
+        <button>开通</button>
+      </form><p class="msg" id="user-msg"></p></div>
+    <div class="panel"><h3>修改本人密码</h3>
+      <form class="inline" id="pwd-form">
+        <input name="current_password" type="password" placeholder="当前密码" required>
+        <input name="new_password" type="password" placeholder="新密码（≥6位）" required minlength="6">
+        <button>修改</button>
+      </form><p class="msg" id="pwd-msg"></p></div>
+    <div class="panel">${table(["ID", "用户名", "姓名", "角色", "所属机构"], usersList, (u) =>
+      `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td>${esc(u.full_name) || "—"}</td>
+       <td><span class="tag">${ROLE_NAMES[u.role] || esc(u.role)}</span></td>
+       <td>${u.org_id ? esc(orgNames[u.org_id] || u.org_id) : "—"}</td></tr>`)}</div>`;
+  $("#user-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/users", { method: "POST", body: JSON.stringify({
+        username: f.get("username"), password: f.get("password"), full_name: f.get("full_name"),
+        role: f.get("role"), org_id: f.get("org_id") ? Number(f.get("org_id")) : null }) });
+      route();
+    } catch (err) { setMsg("#user-msg", err.message, false); }
+  };
+  $("#pwd-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/auth/change-password", { method: "POST", body: JSON.stringify({
+        current_password: f.get("current_password"), new_password: f.get("new_password") }) });
+      setMsg("#pwd-msg", "密码已修改");
+      e.target.reset();
+    } catch (err) { setMsg("#pwd-msg", err.message, false); }
+  };
+}
+
+async function renderAudit() {
+  $("#page-desc").textContent = "全部写操作留痕（等保三级安全审计），仅管理员可查";
+  const draw = async (username = "") => {
+    const logs = await api(`/api/audit?limit=200${username ? `&username=${encodeURIComponent(username)}` : ""}`);
+    $("#audit-table").innerHTML = table(["时间", "用户", "操作", "接口", "结果"], logs, (l) =>
+      `<tr><td>${esc(l.at.replace("T", " ").slice(0, 19))}</td><td>${esc(l.username)}</td>
+       <td><span class="tag">${esc(l.method)}</span></td><td>${esc(l.path)}</td>
+       <td><span class="tag ${l.status_code < 400 ? "green" : "red"}">${l.status_code}</span></td></tr>`);
+  };
+  $("#page-body").innerHTML = `
+    <div class="panel">
+      <form class="inline" id="audit-search"><input name="username" placeholder="按用户名过滤"><button>查询</button></form>
+      <div id="audit-table"></div></div>`;
+  await draw();
+  $("#audit-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("username")); };
+}
+
 /* ---------------- 启动 ---------------- */
 
 function buildNav() {
-  $("#nav").innerHTML = PAGES.map((p) =>
+  $("#nav").innerHTML = PAGES.filter(pageAllowed).map((p) =>
     p.group
       ? `<div class="nav-group">${p.group}</div>`
       : `<a href="#${p.id}" data-page="${p.id}">${p.title}</a>`).join("");
@@ -845,6 +923,7 @@ $("#login-form").onsubmit = async (e) => {
       username: $("#login-username").value, password: $("#login-password").value }) });
     token = data.access_token;
     localStorage.setItem("medplat_token", token);
+    localStorage.setItem("medplat_role", data.role);
     enterApp();
   } catch (err) { $("#login-error").textContent = err.message; }
 };

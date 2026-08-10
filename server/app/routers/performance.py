@@ -12,7 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import require_roles
 from ..models import (
     ChronicPatient,
     ContractService,
@@ -24,7 +24,9 @@ from ..models import (
     Referral,
 )
 
-router = APIRouter(prefix="/api/performance", tags=["绩效考核"], dependencies=[Depends(get_current_user)])
+router = APIRouter(
+    prefix="/api/performance", tags=["绩效考核"], dependencies=[Depends(require_roles("director"))]
+)
 
 # 各维度满分权重，总分100
 WEIGHTS = {"referral": 20, "remote_exam": 20, "chronic": 25, "rx": 20, "contract": 15}

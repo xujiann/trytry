@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, require_roles
 from ..models import DrugRule, Organization, Patient, Prescription, PrescriptionItem, User
 from ..schemas import (
     DrugRuleCreate,
@@ -77,7 +77,11 @@ def list_prescriptions(status: str | None = None, db: Session = Depends(get_db))
     return query.order_by(Prescription.id.desc()).limit(200).all()
 
 
-@router.post("/{prescription_id}/review", response_model=PrescriptionOut, dependencies=[Depends(get_current_user)])
+@router.post(
+    "/{prescription_id}/review",
+    response_model=PrescriptionOut,
+    dependencies=[Depends(require_roles("pharmacist"))],
+)
 def review_prescription(prescription_id: int, body: PrescriptionReview, db: Session = Depends(get_db)):
     prescription = db.get(Prescription, prescription_id)
     if prescription is None:
