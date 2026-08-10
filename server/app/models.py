@@ -303,6 +303,20 @@ class FollowUp(Base):
     chronic: Mapped[ChronicPatient] = relationship(back_populates="followups")
 
 
+class InfectiousDisease(Base):
+    """法定传染病目录：甲/乙/丙类与报告时限（甲类2小时、乙丙类24小时）。"""
+
+    __tablename__ = "infectious_diseases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # A=甲类, B=乙类, C=丙类
+    category: Mapped[str] = mapped_column(String(4), index=True)
+    # 报告时限（小时）：甲类2，乙/丙类24
+    report_hours: Mapped[int] = mapped_column(Integer, default=24)
+
+
 class InfectiousCase(Base):
     """传染病病例报告：多点触发监测预警的数据来源。"""
 
@@ -312,8 +326,22 @@ class InfectiousCase(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     disease_code: Mapped[str] = mapped_column(String(64), index=True)
     disease_name: Mapped[str] = mapped_column(String(128))
+    # 报告时自动按传染病目录回填：A/B/C，目录外为空串
+    category: Mapped[str] = mapped_column(String(4), default="")
     onset_date: Mapped[str] = mapped_column(String(10), index=True)
     reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PerformanceIndicator(Base):
+    """绩效考核指标目录：维度权重可由管理层调节（按比例归一化到100）。"""
+
+    __tablename__ = "performance_indicators"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    weight: Mapped[float] = mapped_column(Float, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class Consultation(Base):

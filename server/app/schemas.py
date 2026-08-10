@@ -274,6 +274,17 @@ class InfectiousCaseCreate(BaseModel):
 
 class InfectiousCaseOut(InfectiousCaseCreate):
     id: int
+    category: str = ""
+
+    model_config = {"from_attributes": True}
+
+
+class InfectiousDiseaseOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    report_hours: int
 
     model_config = {"from_attributes": True}
 

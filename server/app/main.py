@@ -89,6 +89,28 @@ async def lifespan(_: FastAPI):
             if code not in existing_codes:
                 db.add(CodeSystem(code=code, name=name))
         db.commit()
+        # 深化轮：绩效指标目录种子化（现有5维权重入表，管理层可调）
+        from .models import PerformanceIndicator
+        from .routers.performance import DEFAULT_INDICATORS
+
+        existing_keys = {key for (key,) in db.query(PerformanceIndicator.key).all()}
+        for key, meta in DEFAULT_INDICATORS.items():
+            if key not in existing_keys:
+                db.add(
+                    PerformanceIndicator(
+                        key=key, name=meta["name"], weight=meta["weight"], active=True
+                    )
+                )
+        db.commit()
+        # 深化轮：法定传染病目录种子化（甲类2小时/乙丙类24小时报告时限）
+        from .models import InfectiousDisease
+        from .routers.infectious import SEED_DISEASES
+
+        existing_diseases = {code for (code,) in db.query(InfectiousDisease.code).all()}
+        for seed in SEED_DISEASES:
+            if seed["code"] not in existing_diseases:
+                db.add(InfectiousDisease(**seed))
+        db.commit()
     finally:
         db.close()
     yield
