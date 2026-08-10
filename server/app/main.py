@@ -132,6 +132,16 @@ if not _access_logger.handlers:
 
 
 @app.middleware("http")
+async def security_headers_middleware(request, call_next):
+    """安全响应头：等保整改基线（防 MIME 嗅探/点击劫持/来源泄露）。"""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
+
+@app.middleware("http")
 async def request_log_middleware(request, call_next):
     """结构化 JSON 请求日志：method/path/status/耗时/追踪ID（X-Request-ID 透传或生成）。"""
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex

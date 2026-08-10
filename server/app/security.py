@@ -12,6 +12,20 @@ SECRET_KEY = settings.secret
 TOKEN_TTL_SECONDS = settings.token_ttl_seconds
 _PBKDF2_ITERATIONS = 120_000
 
+# 登出黑名单：已主动作废的令牌（内存实现，进程重启即清空；多实例部署需换 Redis）
+revoked_tokens: set[str] = set()
+
+
+def validate_password_strength(password: str) -> str | None:
+    """密码复杂度校验：≥8位且同时含字母与数字。不合规时返回原因说明。"""
+    if len(password) < 8:
+        return "密码长度不得少于8位"
+    if not any(c.isalpha() for c in password):
+        return "密码必须包含字母"
+    if not any(c.isdigit() for c in password):
+        return "密码必须包含数字"
+    return None
+
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
     salt = salt or os.urandom(16)
@@ -39,7 +53,15 @@ def _b64url_decode(data: str) -> bytes:
 def create_token(username: str, role: str) -> str:
     header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     payload = _b64url(
-        json.dumps({"sub": username, "role": role, "exp": int(time.time()) + TOKEN_TTL_SECONDS}).encode()
+        json.dumps(
+            {
+                "sub": username,
+                "role": role,
+                "exp": int(time.time()) + TOKEN_TTL_SECONDS,
+                # 唯一标识：保证同秒签发的令牌互不相同，登出黑名单可精确作废单个令牌
+                "jti": os.urandom(8).hex(),
+            }
+        ).encode()
     )
     signature = _b64url(hmac.new(SECRET_KEY.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest())
     return f"{header}.{payload}.{signature}"

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from .database import get_db
 from .models import User
-from .security import decode_token
+from .security import decode_token, revoked_tokens
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -15,6 +15,8 @@ def get_current_user(
 ) -> User:
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未提供令牌")
+    if credentials.credentials in revoked_tokens:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌已登出失效")
     claims = decode_token(credentials.credentials)
     if claims is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌无效或已过期")
