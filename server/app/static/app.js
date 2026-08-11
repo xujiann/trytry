@@ -84,9 +84,14 @@ const PAGES = [
   { id: "dicts", title: "编码字典", render: renderDicts },
   { group: "业务协同" },
   { id: "exams", title: "共享诊断中心", render: renderExams },
+  { id: "critical", title: "危急值操作台", render: renderCritical },
+  { id: "recognition", title: "互认目录与统计", render: renderRecognition },
   { id: "consultations", title: "远程会诊", render: renderConsultations },
   { id: "referrals", title: "双向转诊", render: renderReferrals },
   { id: "emergency", title: "智慧急救", render: renderEmergency },
+  { id: "emtimeline", title: "急救绿道时间轴", render: renderEmTimeline },
+  { id: "inpatient", title: "住院管理", render: renderInpatient },
+  { id: "billing", title: "费用结算", render: renderBilling },
   { id: "rx", title: "集中审方", render: renderRx },
   { id: "pharmacy", title: "中心药房", render: renderPharmacy },
   { id: "medication", title: "药事监测", render: renderMedication },
@@ -95,6 +100,7 @@ const PAGES = [
   { id: "chronic", title: "慢病管理", render: renderChronic },
   { id: "contracts", title: "家医签约", render: renderContracts },
   { id: "infectious", title: "传染病预警", render: renderInfectious },
+  { id: "infdir", title: "传染病目录与迟报", render: renderInfectiousDir },
   { id: "publichealth", title: "公卫协同", render: renderPublicHealth },
   { id: "eldercare", title: "老年健康", render: renderEldercare },
   { id: "maternal", title: "妇幼保健", render: renderMaternal },
@@ -106,6 +112,9 @@ const PAGES = [
   { id: "archive", title: "患者360视图", render: renderArchive },
   { group: "综合管理" },
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
+  { id: "perfind", title: "绩效指标调权", render: renderPerfIndicators, roles: ["director"] },
+  { id: "quality", title: "质量安全", render: renderQuality },
+  { id: "drgs", title: "DRGs分析", render: renderDrgs },
   { id: "education", title: "远程医学教育", render: renderEducation },
   { id: "hrfinance", title: "人财物管理", render: renderHrFinance },
   { id: "oaqc", title: "行政与质控", render: renderOaQc },
@@ -1379,6 +1388,419 @@ async function renderOaQc() {
   $("#roster-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/rosters", formJson(e.target), "#oa-msg"); };
   $("#qc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/qc", formJson(e.target), "#oa-msg"); };
   $("#page-body").onclick = (e) => { if (e.target.dataset.pub) postAction(`/api/mgmt/docs/${e.target.dataset.pub}/publish`, null, "#oa-msg"); };
+}
+
+/* ---------------- 第四阶段新增页面 ---------------- */
+
+const CRIT_STATUS = { notified: ["已通知", "orange"], acknowledged: ["已确认", ""], resolved: ["已处置", "green"], "": ["待回填", "orange"] };
+
+async function renderCritical() {
+  $("#page-desc").textContent = "危急值闭环：通知 → 医师确认接收 → 处置反馈；超时未确认催办";
+  const [critical, unacked] = await Promise.all([
+    api("/api/exams/critical"), api("/api/exams/critical/unacknowledged")]);
+  $("#page-body").innerHTML = `
+    ${unacked.length ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 超时未确认催办（${unacked.length}）</h3>${
+      table(["报告ID", "申请单", "结论", "报告人", "报告时间"], unacked, (r) =>
+        `<tr><td>${r.report_id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
+         <td>${esc(r.reported_by)}</td><td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>` : ""}
+    <div class="panel"><h3>危急值清单</h3><p class="msg" id="crit-msg"></p>${
+      table(["报告ID", "申请单", "结论", "闭环状态", "操作"], critical, (r) => {
+        const [text, color] = CRIT_STATUS[r.critical_status] || [r.critical_status, ""];
+        const actions = (r.critical_status === "notified" || r.critical_status === "")
+          ? `<button class="btn secondary" data-ack="${r.id}">确认接收</button>`
+          : r.critical_status === "acknowledged"
+          ? `<button class="btn secondary" data-resolve="${r.id}">处置反馈</button>` : "—";
+        return `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
+          <td><span class="tag ${color}">${text}</span></td>
+          <td>${actions} <button class="btn" data-trail="${r.id}">留痕</button></td></tr>`;
+      })}</div>
+    <div class="panel hidden" id="crit-trail-panel"><h3>处置留痕轨迹</h3><div id="crit-trail"></div></div>`;
+  $("#page-body").onclick = async (e) => {
+    const { ack, resolve, trail } = e.target.dataset;
+    try {
+      if (ack) { await api(`/api/exams/reports/${ack}/acknowledge`, { method: "POST" }); route(); }
+      if (resolve) {
+        const note = prompt("处置反馈说明（如：已复查、已调整治疗）") || "";
+        await api(`/api/exams/reports/${resolve}/resolve`, { method: "POST", body: JSON.stringify({ note }) });
+        route();
+      }
+      if (trail) {
+        const actions = await api(`/api/exams/reports/${trail}/critical-actions`);
+        $("#crit-trail-panel").classList.remove("hidden");
+        $("#crit-trail").innerHTML = table(["动作", "操作人"], actions, (a) =>
+          `<tr><td>${esc(a.action)}</td><td>${esc(a.actor)}</td></tr>`);
+      }
+    } catch (err) { setMsg("#crit-msg", err.message, false); }
+  };
+}
+
+async function renderRecognition() {
+  $("#page-desc").textContent = "互认项目目录（目录内 active 项目方可互认）与互认率统计";
+  const [items, stats] = await Promise.all([
+    api("/api/exams/recognition-items"), api("/api/exams/recognition-stats")]);
+  const cards = [
+    ["互认总次数", stats.recognized_total], ["已报告总数", stats.reported_total],
+    ["互认率", stats.recognition_ratio_pct + "%"], ["节约检查次数", stats.saved_exams]];
+  $("#page-body").innerHTML = `
+    <div class="cards">${cards.map(([l, v]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div></div>`).join("")}</div>
+    ${stats.by_item.length ? `<div class="panel"><h3>按项目互认次数</h3>${
+      barChart(stats.by_item.slice(0, 10).map((i) => [i.item_name, i.recognized_count]), { unit: " 次" })}</div>` : ""}
+    <div class="panel"><h3>目录维护（admin）</h3>
+      <form class="inline" id="rec-form">
+        <input name="item_code" placeholder="项目编码" required>
+        <input name="item_name" placeholder="项目名称" required>
+        <select name="center_type">${Object.entries(CENTER_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="mutual_scope"><option value="county">县域互认</option><option value="city">市级互认</option></select>
+        <button>加入目录</button>
+      </form><p class="msg" id="rec-msg"></p>
+      ${table(["编码", "名称", "中心", "范围", "状态", "操作"], items, (i) =>
+        `<tr><td>${esc(i.item_code)}</td><td>${esc(i.item_name)}</td><td>${CENTER_NAMES[i.center_type]}</td>
+         <td>${i.mutual_scope === "city" ? "市级" : "县域"}</td>
+         <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
+         <td><button class="btn secondary" data-toggle="${i.id}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}</div>`;
+  $("#rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/exams/recognition-items", formJson(e.target), "#rec-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const id = e.target.dataset.toggle;
+    if (!id) return;
+    try {
+      await api(`/api/exams/recognition-items/${id}`, { method: "PATCH",
+        body: JSON.stringify({ active: e.target.dataset.active !== "true" }) });
+      route();
+    } catch (err) { setMsg("#rec-msg", err.message, false); }
+  };
+}
+
+async function renderInpatient() {
+  $("#page-desc").textContent = "入院登记（床位原子占用）→ 转科/转床 → 医嘱 → 病案首页 → 出院（费用结清校验）";
+  const [wards, beds, admissions, stats] = await Promise.all([
+    api("/api/inpatient/wards"), api("/api/inpatient/beds"),
+    api("/api/inpatient/admissions"), api("/api/inpatient/stats")]);
+  const AS = { admitted: ["在院", "orange"], discharged: ["已出院", "green"] };
+  const wardName = Object.fromEntries(wards.map((w) => [w.id, w.name]));
+  $("#page-body").innerHTML = `
+    ${stats.length ? `<div class="panel"><h3>床位效率</h3>${table(["机构", "床位", "占用", "使用率", "在院", "累计出院"], stats, (s) =>
+      `<tr><td>${esc(s.org_name)}</td><td>${s.beds_total}</td><td>${s.beds_occupied}</td>
+       <td>${s.occupancy_pct}%</td><td>${s.in_hospital}</td><td>${s.discharged_total}</td></tr>`)}</div>` : ""}
+    <div class="panel"><h3>病区/床位建档（admin）与入院登记</h3>
+      <form class="inline" id="ward-form"><input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="name" placeholder="病区名称" required><button>建病区</button></form>
+      <form class="inline" id="bed-form"><input name="ward_id" type="number" placeholder="病区ID" required>
+        <input name="bed_no" placeholder="床号" required><button>建床位</button></form>
+      <form class="inline" id="adm-form"><input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="ward_id" type="number" placeholder="病区ID" required><input name="bed_id" type="number" placeholder="床位ID" required>
+        <input name="doctor_name" placeholder="主管医师"><input name="diagnosis_name" placeholder="入院诊断"><button>入院登记</button></form>
+      <p class="msg" id="inp-msg"></p></div>
+    <div class="panel"><h3>床位（${beds.filter((b) => b.status === "free").length} 空闲 / ${beds.length}）</h3>${
+      table(["ID", "病区", "床号", "状态"], beds, (b) =>
+        `<tr><td>${b.id}</td><td>${esc(wardName[b.ward_id] || b.ward_id)}</td><td>${esc(b.bed_no)}</td>
+         <td><span class="tag ${b.status === "free" ? "green" : "orange"}">${b.status === "free" ? "空闲" : "占用"}</span></td></tr>`)}</div>
+    <div class="panel"><h3>住院记录</h3>${
+      table(["ID", "患者", "病区/床位", "诊断", "状态", "操作"], admissions, (a) => {
+        const [text, color] = AS[a.status] || [a.status, ""];
+        const actions = a.status === "admitted"
+          ? `<button class="btn secondary" data-transfer="${a.id}">转床</button>
+             <button class="btn secondary" data-order="${a.id}">开医嘱</button>
+             <button class="btn secondary" data-summary="${a.id}">病案首页</button>
+             <button class="btn danger" data-discharge="${a.id}">出院</button>`
+          : "—";
+        return `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(wardName[a.ward_id] || a.ward_id)} / ${a.bed_id}</td>
+          <td>${esc(a.diagnosis_name)}</td><td><span class="tag ${color}">${text}</span></td>
+          <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button></td></tr>`;
+      })}</div>
+    <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div></div>`;
+  $("#ward-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/wards", formJson(e.target, ["org_id"]), "#inp-msg"); };
+  $("#bed-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/beds", formJson(e.target, ["ward_id"]), "#inp-msg"); };
+  $("#adm-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/admissions", formJson(e.target, ["patient_id", "ward_id", "bed_id"]), "#inp-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.transfer) {
+        const wardId = prompt("目标病区ID"), bedId = prompt("目标床位ID");
+        if (!wardId || !bedId) return;
+        await api(`/api/inpatient/admissions/${d.transfer}/transfer`, { method: "POST",
+          body: JSON.stringify({ ward_id: Number(wardId), bed_id: Number(bedId) }) });
+        route();
+      }
+      if (d.order) {
+        const content = prompt("医嘱内容");
+        if (!content) return;
+        const isLong = confirm("长期医嘱？（确定=长期，取消=临时）");
+        await api("/api/inpatient/orders", { method: "POST",
+          body: JSON.stringify({ admission_id: Number(d.order), order_type: isLong ? "long" : "temp", content }) });
+        route();
+      }
+      if (d.summary) {
+        const diagnosis = prompt("出院诊断");
+        if (!diagnosis) return;
+        await api(`/api/inpatient/admissions/${d.summary}/case-summary`, { method: "POST",
+          body: JSON.stringify({
+            discharge_diagnosis: diagnosis, operation: prompt("手术名称（无则留空）") || "",
+            total_cost: Number(prompt("总费用（元）") || 0), drug_cost: Number(prompt("其中药费（元）") || 0) }) });
+        route();
+      }
+      if (d.discharge) { await api(`/api/inpatient/admissions/${d.discharge}/discharge`, { method: "POST" }); route(); }
+      if (d.stopOrder) { await api(`/api/inpatient/orders/${d.stopOrder}/stop`, { method: "POST" }); route(); }
+      if (d.orders) {
+        const orders = await api(`/api/inpatient/orders?admission_id=${d.orders}`);
+        $("#inp-orders-panel").classList.remove("hidden");
+        $("#inp-orders").innerHTML = table(["ID", "类型", "内容", "状态", "开立", "操作"], orders, (o) =>
+          `<tr><td>${o.id}</td><td>${o.order_type === "long" ? "长期" : "临时"}</td><td>${esc(o.content)}</td>
+           <td><span class="tag ${o.status === "active" ? "orange" : "green"}">${o.status === "active" ? "执行中" : "已停止"}</span></td>
+           <td>${esc(o.created_by_name)}</td>
+           <td>${o.status === "active" ? `<button class="btn danger" data-stop-order="${o.id}">停止</button>` : "—"}</td></tr>`);
+      }
+    } catch (err) { setMsg("#inp-msg", err.message, false); }
+  };
+}
+
+async function renderBilling() {
+  $("#page-desc").textContent = "收费目录（价格公示）→ 计费明细（门诊按就诊/住院按住院单）→ 结算（医保分担）";
+  const [items, settlements, stats] = await Promise.all([
+    api("/api/billing/charge-items"), api("/api/billing/settlements"), api("/api/billing/stats")]);
+  const BT = { outpatient: "门诊", inpatient: "住院" };
+  $("#page-body").innerHTML = `
+    ${stats.length ? `<div class="cards">${stats.map((s) =>
+      `<div class="card"><div class="label">${BT[s.bill_type]}结算 ${s.count} 笔</div>
+       <div class="value">${s.total_amount} 元</div>
+       <div class="label">均次 ${s.avg_amount} 元 · 医保 ${s.insurance_ratio_pct}%</div></div>`).join("")}</div>` : ""}
+    <div class="panel"><h3>收费项目目录（admin 维护）</h3>
+      <form class="inline" id="ci-form"><input name="code" placeholder="编码" required>
+        <input name="name" placeholder="名称" required>
+        <select name="category"><option value="treatment">治疗处置</option><option value="drug">药品</option>
+          <option value="exam">检查检验</option><option value="bed">床位</option><option value="other">其他</option></select>
+        <input name="price" type="number" step="any" placeholder="单价(元)" required><button>加入目录</button></form>
+      <p class="msg" id="bill-msg"></p>
+      ${table(["编码", "名称", "类别", "单价", "状态", "操作"], items, (i) =>
+        `<tr><td>${esc(i.code)}</td><td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.price}</td>
+         <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
+         <td><button class="btn secondary" data-reprice="${i.id}">调价</button></td></tr>`)}</div>
+    <div class="panel"><h3>计费与结算</h3>
+      <form class="inline" id="bd-form"><input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="admission_id" type="number" placeholder="住院单ID(住院)"><input name="encounter_id" type="number" placeholder="就诊ID(门诊)">
+        <input name="item_code" placeholder="收费编码" required><input name="quantity" type="number" value="1" min="1" style="min-width:70px"><button>计费</button></form>
+      <form class="inline" id="settle-form">
+        <select name="bill_type"><option value="inpatient">住院结算</option><option value="outpatient">门诊结算</option></select>
+        <input name="admission_id" type="number" placeholder="住院单ID"><input name="encounter_id" type="number" placeholder="就诊ID">
+        <input name="insurance_pay" type="number" step="any" placeholder="医保支付(元)" value="0"><button>结算</button></form>
+      <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p></div>
+    <div class="panel"><h3>结算单</h3>${table(["ID", "患者", "类型", "总额", "医保", "自付", "时间"], settlements, (s) =>
+      `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${BT[s.bill_type]}</td><td>${s.total_amount}</td>
+       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>`;
+  $("#ci-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/charge-items", formJson(e.target, ["price"]), "#bill-msg"); };
+  $("#bd-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/details", formJson(e.target, ["patient_id", "admission_id", "encounter_id", "quantity"]), "#bill-msg"); };
+  $("#settle-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/settlements", formJson(e.target, ["admission_id", "encounter_id", "insurance_pay"]), "#bill-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const id = e.target.dataset.reprice;
+    if (!id) return;
+    const price = prompt("新单价（元）");
+    if (!price) return;
+    try { await api(`/api/billing/charge-items/${id}`, { method: "PATCH", body: JSON.stringify({ price: Number(price) }) }); route(); }
+    catch (err) { setMsg("#bill-msg", err.message, false); }
+  };
+}
+
+async function renderQuality() {
+  $("#page-desc").textContent = "不良事件上报（可匿名）→ 审核 → 整改；病历质控评分；院感上报核实";
+  const [events, estats, qstats, infections] = await Promise.all([
+    api("/api/quality/adverse-events"), api("/api/quality/adverse-events-stats"),
+    api("/api/quality/record-qc-stats"), api("/api/quality/infection-reports")]);
+  const AES = { reported: ["已上报", "orange"], reviewed: ["已审核", ""], rectified: ["已整改", "green"] };
+  const AET = { medication: "用药", device: "器械", fall: "跌倒", pressure_sore: "压疮", transfusion: "输血", identification: "查对", other: "其他" };
+  const SITE = { respiratory: "呼吸道", surgical_site: "手术部位", urinary: "泌尿道", bloodstream: "血流", gastrointestinal: "消化道", other: "其他" };
+  const IST = { reported: ["待核实", "orange"], confirmed: ["已确认", "red"], excluded: ["已排除", "green"] };
+  const cards = [
+    ["不良事件", estats.total], ["整改闭环率", estats.closed_loop_pct + "%"],
+    ["病历抽检", qstats.total], ["病历均分", qstats.avg_score], ["病历甲级率", qstats.grade_a_pct + "%"]];
+  $("#page-body").innerHTML = `
+    <div class="cards">${cards.map(([l, v]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div></div>`).join("")}</div>
+    <div class="panel"><h3>不良事件上报</h3>
+      <form class="inline" id="ae-form"><input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="event_type">${Object.entries(AET).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="level"><option value="IV">IV级(隐患)</option><option value="III">III级(无后果)</option>
+          <option value="II">II级(不良后果)</option><option value="I">I级(警告)</option></select>
+        <input name="description" placeholder="事件经过" required style="min-width:220px">
+        <label style="font-size:13px"><input type="checkbox" name="anonymous" value="true"> 匿名</label><button>上报</button></form>
+      <p class="msg" id="qa-msg"></p>
+      ${table(["ID", "类型", "等级", "经过", "报告人", "状态", "操作"], events, (ev) => {
+        const [text, color] = AES[ev.status] || [ev.status, ""];
+        const actions = ev.status === "reported"
+          ? `<button class="btn secondary" data-review="${ev.id}">审核</button>`
+          : ev.status === "reviewed"
+          ? `<button class="btn secondary" data-rectify="${ev.id}">登记整改</button>` : "—";
+        return `<tr><td>${ev.id}</td><td>${AET[ev.event_type] || ev.event_type}</td><td>${ev.level}</td>
+          <td>${esc(ev.description)}</td><td>${esc(ev.reporter_name) || "（匿名）"}</td>
+          <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+      })}</div>
+    <div class="panel"><h3>病历质控抽检</h3>
+      <form class="inline" id="qc-rec-form">
+        <select name="target_type"><option value="encounter">门急诊病历</option><option value="case_summary">病案首页</option></select>
+        <input name="target_id" type="number" placeholder="对象ID" required>
+        <input name="score" type="number" min="0" max="100" placeholder="评分0-100" required>
+        <input name="defects" placeholder="缺陷项（分号分隔）" style="min-width:200px"><button>评分</button></form></div>
+    <div class="panel"><h3>院感上报</h3>
+      <form class="inline" id="inf-form"><input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="infection_site">${Object.entries(SITE).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="pathogen" placeholder="病原体"><input name="report_date" placeholder="日期 YYYY-MM-DD"><button>上报</button></form>
+      ${table(["ID", "机构", "患者", "部位", "病原体", "状态", "操作"], infections, (r) => {
+        const [text, color] = IST[r.status] || [r.status, ""];
+        const actions = r.status === "reported"
+          ? `<button class="btn secondary" data-verify="${r.id}" data-ok="true">确认</button>
+             <button class="btn" data-verify="${r.id}" data-ok="false">排除</button>` : "—";
+        return `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${r.patient_id}</td><td>${SITE[r.infection_site]}</td>
+          <td>${esc(r.pathogen)}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+      })}</div>`;
+  $("#ae-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["org_id"]);
+    body.anonymous = e.target.anonymous.checked;
+    postAction("/api/quality/adverse-events", body, "#qa-msg");
+  };
+  $("#qc-rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/record-qc", formJson(e.target, ["target_id", "score"]), "#qa-msg"); };
+  $("#inf-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/infection-reports", formJson(e.target, ["org_id", "patient_id"]), "#qa-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.review) {
+        const note = prompt("审核意见");
+        if (!note) return;
+        await api(`/api/quality/adverse-events/${d.review}/review`, { method: "POST", body: JSON.stringify({ note }) });
+        route();
+      }
+      if (d.rectify) {
+        const note = prompt("整改措施");
+        if (!note) return;
+        await api(`/api/quality/adverse-events/${d.rectify}/rectify`, { method: "POST", body: JSON.stringify({ note }) });
+        route();
+      }
+      if (d.verify) {
+        await api(`/api/quality/infection-reports/${d.verify}/verify?confirmed=${d.ok}`, { method: "POST" });
+        route();
+      }
+    } catch (err) { setMsg("#qa-msg", err.message, false); }
+  };
+}
+
+async function renderPerfIndicators() {
+  $("#page-desc").textContent = "绩效指标目录：权重调节与启停（调整后按比例归一化计分）";
+  const indicators = await api("/api/performance/indicators");
+  $("#page-body").innerHTML = `
+    <div class="panel"><p class="msg" id="pi-msg"></p>${
+      table(["指标", "键", "权重", "状态", "操作"], indicators, (i) =>
+        `<tr><td>${esc(i.name)}</td><td>${esc(i.key)}</td><td>${i.weight}</td>
+         <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
+         <td><button class="btn secondary" data-weight="${esc(i.key)}">调权重</button>
+             <button class="btn" data-toggle-ind="${esc(i.key)}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}</div>`;
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.weight) {
+        const w = prompt("新权重（≥0，自动按比例归一化）");
+        if (w === null || w === "") return;
+        await api(`/api/performance/indicators/${d.weight}`, { method: "PATCH", body: JSON.stringify({ weight: Number(w) }) });
+        route();
+      }
+      if (d.toggleInd) {
+        await api(`/api/performance/indicators/${d.toggleInd}`, { method: "PATCH",
+          body: JSON.stringify({ active: d.active !== "true" }) });
+        route();
+      }
+    } catch (err) { setMsg("#pi-msg", err.message, false); }
+  };
+}
+
+async function renderInfectiousDir() {
+  $("#page-desc").textContent = "法定传染病目录（甲类2小时/乙丙类24小时报告时限）与迟报清单";
+  const [diseases, late] = await Promise.all([
+    api("/api/infectious/diseases"), api("/api/infectious/late-reports")]);
+  const CAT = { A: ["甲类", "red"], B: ["乙类", "orange"], C: ["丙类", ""] };
+  $("#page-body").innerHTML = `
+    ${late.length ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 迟报清单（${late.length}）</h3>${
+      table(["病例ID", "病种", "类别", "发病日期", "报告时间", "迟报"], late, (l) => {
+        const [t, c] = CAT[l.category] || [l.category, ""];
+        return `<tr><td>${l.case_id}</td><td>${esc(l.disease_name)}</td><td><span class="tag ${c}">${t}</span></td>
+          <td>${esc(l.onset_date)}</td><td>${esc((l.reported_at || "").slice(0, 16).replace("T", " "))}</td>
+          <td><span class="tag red">迟报 ${l.days_late} 天</span></td></tr>`;
+      })}</div>` : '<div class="panel"><h3>迟报清单</h3><p style="color:#8a939e">无迟报病例</p></div>'}
+    <div class="panel"><h3>法定传染病目录（${diseases.length}）</h3>${
+      table(["编码", "名称", "类别", "报告时限"], diseases, (d) => {
+        const [t, c] = CAT[d.category] || [d.category, ""];
+        return `<tr><td>${esc(d.code)}</td><td>${esc(d.name)}</td>
+          <td><span class="tag ${c}">${t}</span></td><td>${d.report_hours} 小时</td></tr>`;
+      })}</div>`;
+}
+
+const MILESTONES = { onset: "发病", call: "呼救", depart: "出车", arrive_scene: "到达现场", arrive_hospital: "到达医院", treatment: "开始救治" };
+const CHANNELS = { "": "普通", chest_pain: "胸痛", stroke: "卒中", trauma: "创伤" };
+
+async function renderEmTimeline() {
+  $("#page-desc").textContent = "急救绿道：通道建单 → 节点录入 → 时间轴时效展示";
+  const cases = await api("/api/emergency/cases");
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>绿道建单</h3>
+      <form class="inline" id="gc-form"><input name="location" placeholder="事发地点" required>
+        <input name="symptom" placeholder="主诉">
+        <select name="channel_type">${Object.entries(CHANNELS).map(([v, t]) => `<option value="${v}">${t}通道</option>`).join("")}</select>
+        <input name="dest_org_id" type="number" placeholder="目标医院ID"><button>建单</button></form>
+      <p class="msg" id="gc-msg"></p></div>
+    <div class="panel"><h3>急救事件</h3>${table(["ID", "地点", "主诉", "通道", "状态", "操作"], cases, (c) =>
+      `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td>
+       <td><span class="tag ${c.channel_type ? "red" : ""}">${CHANNELS[c.channel_type] || c.channel_type}</span></td>
+       <td>${esc(c.status)}</td>
+       <td><button class="btn secondary" data-mile="${c.id}">录节点</button>
+           <button class="btn" data-timeline="${c.id}">时间轴</button></td></tr>`)}</div>
+    <div class="panel hidden" id="gc-tl-panel"><h3>绿道时间轴</h3><div id="gc-tl"></div></div>`;
+  $("#gc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/emergency/cases", formJson(e.target, ["dest_org_id"]), "#gc-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.mile) {
+        const keys = Object.keys(MILESTONES);
+        const pick = prompt(`节点（${keys.map((k, i) => `${i + 1}=${MILESTONES[k]}`).join("，")}）输入序号`);
+        const key = keys[Number(pick) - 1];
+        if (!key) return;
+        const at = prompt("发生时刻（如 2026-08-11 14:30）");
+        if (!at) return;
+        await api(`/api/emergency/cases/${d.mile}/milestones`, { method: "POST",
+          body: JSON.stringify({ milestone: key, occurred_at: at }) });
+        route();
+      }
+      if (d.timeline) {
+        const tl = await api(`/api/emergency/cases/${d.timeline}/timeline`);
+        $("#gc-tl-panel").classList.remove("hidden");
+        $("#gc-tl").innerHTML = `<p style="font-size:13px">通道：<span class="tag red">${CHANNELS[tl.channel_type] || "普通"}</span>
+          已记录 ${tl.recorded_count}/6</p>` +
+          table(["节点", "时刻", "状态"], tl.timeline, (m) =>
+            `<tr><td>${esc(m.name)}</td><td>${esc(m.occurred_at || "—")}</td>
+             <td><span class="tag ${m.recorded ? "green" : "orange"}">${m.recorded ? "已记录" : "缺失"}</span></td></tr>`);
+      }
+    } catch (err) { setMsg("#gc-msg", err.message, false); }
+  };
+}
+
+async function renderDrgs() {
+  $("#page-desc").textContent = "DRGs 简化分析：分组目录（关键词入组）、机构 CMI 与组均费用对比";
+  const [groups, stats] = await Promise.all([api("/api/drgs/groups"), api("/api/drgs/stats")]);
+  $("#page-body").innerHTML = `
+    ${stats.orgs.length ? `<div class="panel"><h3>机构 CMI 对比（病例组合指数 = Σ权重 / 入组例数）</h3>${
+      table(["机构", "出院病例", "入组", "入组率", "CMI", "均次费用"], stats.orgs, (o) =>
+        `<tr><td>${esc(o.org_name)}</td><td>${o.cases}</td><td>${o.grouped}</td>
+         <td>${o.grouped_pct}%</td><td><b>${o.cmi}</b></td><td>${o.avg_cost} 元</td></tr>`)}</div>` : ""}
+    ${stats.groups.length ? `<div class="panel"><h3>组均费用</h3>${
+      barChart(stats.groups.map((g) => [`${g.drg_code} ${g.drg_name}`, g.avg_cost]), { unit: " 元" })}</div>` : ""}
+    <div class="panel"><h3>分组目录（admin 可调权）</h3><p class="msg" id="drg-msg"></p>${
+      table(["编码", "名称", "基准权重", "关键词", "状态", "操作"], groups, (g) =>
+        `<tr><td>${esc(g.code)}</td><td>${esc(g.name)}</td><td>${g.base_weight}</td><td>${esc(g.keywords)}</td>
+         <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td>
+         <td><button class="btn secondary" data-drg-weight="${g.id}">调权</button></td></tr>`)}</div>`;
+  $("#page-body").onclick = async (e) => {
+    const id = e.target.dataset.drgWeight;
+    if (!id) return;
+    const w = prompt("新基准权重（>0）");
+    if (!w) return;
+    try { await api(`/api/drgs/groups/${id}`, { method: "PATCH", body: JSON.stringify({ base_weight: Number(w) }) }); route(); }
+    catch (err) { setMsg("#drg-msg", err.message, false); }
+  };
 }
 
 /* ---------------- 启动 ---------------- */
