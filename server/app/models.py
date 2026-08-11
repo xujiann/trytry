@@ -2670,3 +2670,65 @@ class HighValueConsumable(Base):
     )
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 阶段四 T4.1：县外就诊登记（县域就诊率 / 外转率的数据源）
+# ============================================================================
+
+
+class OutboundVisit(Base):
+    """县外就诊登记：本县居民在县域外机构的门诊/住院记录。
+
+    没有这张表，"县域就诊率"和"外转率"这两项紧密型医共体的头号监测指标就
+    只有分子没有分母——平台只看得见县内发生的诊疗。数据来源既可人工登记，
+    也可从医保结算数据批量导入（source 字段区分）。
+    """
+
+    __tablename__ = "outbound_visits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    visit_date: Mapped[str] = mapped_column(String(10), index=True)
+    external_org_name: Mapped[str] = mapped_column(String(128))
+    # city=市级, province=省级, other=其他（含省外）
+    external_org_level: Mapped[str] = mapped_column(String(16), default="city", index=True)
+    # outpatient=门急诊, inpatient=住院
+    visit_type: Mapped[str] = mapped_column(String(16), default="outpatient", index=True)
+    diagnosis_name: Mapped[str] = mapped_column(String(256), default="")
+    total_amount: Mapped[float] = mapped_column(Float, default=0)
+    insurance_pay: Mapped[float] = mapped_column(Float, default=0)
+    # 关联转诊单：有值表示经县域内机构规范转出，无值即自行外出就医
+    referral_id: Mapped[int | None] = mapped_column(ForeignKey("referrals.id"), nullable=True)
+    # manual=人工登记, insurance_import=医保数据导入
+    source: Mapped[str] = mapped_column(String(20), default="manual", index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 阶段四 T4.3：绩效自定义公式
+# ============================================================================
+
+
+class PerformanceFormula(Base):
+    """自定义绩效公式：表达式引用平台指标变量，由受限求值器计算。
+
+    表达式只允许数字、变量名、四则运算、括号与少量白名单函数，
+    求值走 AST 白名单而不是 eval——绩效公式由管理员录入，等同于让用户
+    往服务端塞代码，用 eval 就是远程执行漏洞。
+    """
+
+    __tablename__ = "performance_formulas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    expression: Mapped[str] = mapped_column(String(512))
+    unit: Mapped[str] = mapped_column(String(16), default="")
+    # 该指标是否越大越好（用于综合报告排序与达标判断）
+    higher_is_better: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 计入综合绩效的权重；0 表示只观测不计分
+    weight: Mapped[float] = mapped_column(Float, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

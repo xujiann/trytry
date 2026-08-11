@@ -45,6 +45,7 @@ from .routers import (
     emergency,
     encounters,
     accounting,
+    analytics,
     clinical_docs,
     cost,
     esb,
@@ -286,6 +287,7 @@ app.include_router(followups.router)
 app.include_router(accounting.router)
 app.include_router(cost.router)
 app.include_router(materials.router)
+app.include_router(analytics.router)
 # 块4：细目补齐（中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务）
 app.include_router(gapfill.tcm_router)
 app.include_router(gapfill.cssd_router)
