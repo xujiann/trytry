@@ -52,6 +52,7 @@ from .routers import (
     portal,
     prescriptions,
     publichealth,
+    quality,
     referrals,
     service_extras,
     tcm,
@@ -158,6 +159,7 @@ app.include_router(eldercare.router)
 app.include_router(maternal.router)
 app.include_router(vaccination.router)
 app.include_router(publichealth.router)
+app.include_router(quality.router)
 app.include_router(admin_mgmt.router)
 app.include_router(service_extras.router)
 app.include_router(todos.router)

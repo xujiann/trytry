@@ -1175,6 +1175,73 @@ class Settlement(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+# ---------- 浙江省指南 M9：质量安全（病人安全/病历质控/院感） ----------
+
+
+class AdverseEvent(Base):
+    """不良事件上报：上报（可匿名）→ 审核 → 整改，全程留痕。"""
+
+    __tablename__ = "adverse_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # medication=用药, device=器械, fall=跌倒, pressure_sore=压疮,
+    # transfusion=输血, identification=查对, other=其他
+    event_type: Mapped[str] = mapped_column(String(16), index=True)
+    # I=警告(死亡/严重伤害), II=不良后果, III=未造成后果, IV=隐患事件
+    level: Mapped[str] = mapped_column(String(4))
+    anonymous: Mapped[bool] = mapped_column(Boolean, default=False)
+    reporter_name: Mapped[str] = mapped_column(String(64), default="")
+    description: Mapped[str] = mapped_column(String(2048))
+    # reported=已上报, reviewed=已审核, rectified=已整改
+    status: Mapped[str] = mapped_column(String(16), default="reported", index=True)
+    review_note: Mapped[str] = mapped_column(String(1024), default="")
+    reviewed_by: Mapped[str] = mapped_column(String(64), default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rectify_note: Mapped[str] = mapped_column(String(1024), default="")
+    rectified_by: Mapped[str] = mapped_column(String(64), default="")
+    rectified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RecordQc(Base):
+    """病历质控：对就诊记录/病案首页抽检评分，缺陷项记录，自动定级。"""
+
+    __tablename__ = "record_qcs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # encounter=门急诊病历, case_summary=病案首页
+    target_type: Mapped[str] = mapped_column(String(16), index=True)
+    target_id: Mapped[int] = mapped_column(Integer, index=True)
+    score: Mapped[int] = mapped_column(Integer)
+    # 甲/乙/丙（≥90 甲、≥80 乙、其余丙）
+    grade: Mapped[str] = mapped_column(String(4), default="")
+    # 缺陷项描述（分号分隔）
+    defects: Mapped[str] = mapped_column(String(1024), default="")
+    qc_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class InfectionReport(Base):
+    """院感上报：医院感染病例登记与核实（#70 院感提醒数据源）。"""
+
+    __tablename__ = "infection_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # respiratory=呼吸道, surgical_site=手术部位, urinary=泌尿道,
+    # bloodstream=血流, gastrointestinal=消化道, other=其他
+    infection_site: Mapped[str] = mapped_column(String(16), index=True)
+    pathogen: Mapped[str] = mapped_column(String(128), default="")
+    note: Mapped[str] = mapped_column(String(1024), default="")
+    # reported=已上报, confirmed=已确认院感, excluded=已排除
+    status: Mapped[str] = mapped_column(String(16), default="reported", index=True)
+    reported_by: Mapped[str] = mapped_column(String(64), default="")
+    report_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Referral(Base):
     __tablename__ = "referrals"
 
