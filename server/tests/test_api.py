@@ -91,22 +91,27 @@ def test_empi_registration_is_idempotent(client, auth_headers):
 def test_dictionary_four_unifications(client, auth_headers):
     entry = client.post(
         "/api/dictionaries/diagnosis/entries",
-        json={"code": "I10", "name": "特发性(原发性)高血压"},
+        json={"code": "TST.01", "name": "测试专用示例诊断"},
         headers=auth_headers,
     )
     assert entry.status_code == 201
 
     dup = client.post(
         "/api/dictionaries/diagnosis/entries",
-        json={"code": "I10", "name": "重复"},
+        json={"code": "TST.01", "name": "重复"},
         headers=auth_headers,
     )
     assert dup.status_code == 409
 
     found = client.get(
-        "/api/dictionaries/diagnosis/entries?keyword=高血压", headers=auth_headers
+        "/api/dictionaries/diagnosis/entries?keyword=测试专用示例", headers=auth_headers
     )
     assert len(found.json()) == 1
+    # 块3：启动种子——常用 ICD-10 已入库（I10 等），关键词可检索
+    seeded = client.get(
+        "/api/dictionaries/diagnosis/entries?keyword=高血压", headers=auth_headers
+    )
+    assert any(e["code"] == "I10" for e in seeded.json())
 
     unknown = client.get("/api/dictionaries/unknown/entries", headers=auth_headers)
     assert unknown.status_code == 404

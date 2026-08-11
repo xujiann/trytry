@@ -42,9 +42,9 @@ def base_data(client, headers):
 
 def test_dictionary_bulk_import(client, headers):
     payload = [
-        {"code": "E11", "name": "2型糖尿病"},
-        {"code": "I10", "name": "特发性(原发性)高血压"},
-        {"code": "E11", "name": "重复条目"},
+        {"code": "TST-BULK1", "name": "批量导入测试条目一"},
+        {"code": "TST-BULK2", "name": "批量导入测试条目二"},
+        {"code": "TST-BULK1", "name": "重复条目"},
     ]
     resp = client.post("/api/dictionaries/diagnosis/import", json=payload, headers=headers)
     assert resp.status_code == 200

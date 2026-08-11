@@ -98,6 +98,25 @@ async def lifespan(_: FastAPI):
             if code not in existing_codes:
                 db.add(CodeSystem(code=code, name=name))
         db.commit()
+        # 块3：标准字典种子扩充——常用 ICD-10 诊断 100 条 + 常用药品 50 条（幂等）
+        from .dict_seed import SEED_COMMON_DRUGS, SEED_ICD10_DIAGNOSES
+        from .models import CodeEntry
+
+        for system_code, seed_entries in (
+            ("diagnosis", SEED_ICD10_DIAGNOSES),
+            ("drug", SEED_COMMON_DRUGS),
+        ):
+            system = db.query(CodeSystem).filter(CodeSystem.code == system_code).first()
+            existing_entries = {
+                code
+                for (code,) in db.query(CodeEntry.code)
+                .filter(CodeEntry.system_id == system.id)
+                .all()
+            }
+            for code, name in seed_entries:
+                if code not in existing_entries:
+                    db.add(CodeEntry(system_id=system.id, code=code, name=name))
+        db.commit()
         # 深化轮：绩效指标目录种子化（现有5维权重入表，管理层可调）
         from .models import PerformanceIndicator
         from .routers.performance import DEFAULT_INDICATORS
