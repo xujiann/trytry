@@ -1,0 +1,4 @@
+name,org_type,level,parent_name,address
+示例县人民医院,lead_hospital,county,,示例县城关镇解放路1号
+示例镇中心卫生院,township,township,示例县人民医院,示例镇镇前街12号
+示例村卫生室,village,village,示例镇中心卫生院,示例村村委会旁
