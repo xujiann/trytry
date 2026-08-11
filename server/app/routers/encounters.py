@@ -11,6 +11,7 @@ from ..models import (
     ExamRequest,
     Organization,
     Patient,
+    PhysicalExam,
     Prescription,
 )
 from ..schemas import EncounterCreate, EncounterOut
@@ -71,6 +72,9 @@ def patient_360_view(ehc_no: str, db: Session = Depends(get_db)):
     prescriptions = (
         db.query(Prescription).filter(Prescription.patient_id == patient.id).order_by(Prescription.id.desc()).all()
     )
+    checkups = (
+        db.query(PhysicalExam).filter(PhysicalExam.patient_id == patient.id).order_by(PhysicalExam.id.desc()).all()
+    )
     return {
         "patient": {
             "ehc_no": patient.ehc_no,
@@ -102,5 +106,15 @@ def patient_360_view(ehc_no: str, db: Session = Depends(get_db)):
         ],
         "prescriptions": [
             {"id": p.id, "diagnosis_name": p.diagnosis_name, "status": p.status} for p in prescriptions
+        ],
+        "physical_exams": [
+            {
+                "id": e.id,
+                "exam_date": e.exam_date,
+                "package_name": e.package_name,
+                "has_abnormal": e.has_abnormal,
+                "abnormal_items": e.abnormal_items,
+            }
+            for e in checkups
         ],
     }

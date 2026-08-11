@@ -737,6 +737,9 @@ class ChildRecord(Base):
     birth_date: Mapped[str] = mapped_column(String(10))
     guardian_patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # 终审轮：高危儿管理（新筛异常自动标记，可人工标记/解除）
+    high_risk: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    risk_note: Mapped[str] = mapped_column(String(256), default="")
 
     visits: Mapped[list["ChildVisit"]] = relationship(back_populates="child")
 
@@ -1297,3 +1300,93 @@ class Referral(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# ============================================================================
+# 终审轮（对照两份指南逐子功能核对）补全模型
+# ============================================================================
+
+
+class DeliveryRecord(Base):
+    """㉔分娩服务：住院分娩记录（联动孕产妇档案状态流转）。"""
+
+    __tablename__ = "delivery_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("maternal_records.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    delivery_date: Mapped[str] = mapped_column(String(10))
+    # natural=自然分娩, cesarean=剖宫产
+    delivery_mode: Mapped[str] = mapped_column(String(16), default="natural")
+    newborn_count: Mapped[int] = mapped_column(Integer, default=1)
+    outcome: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class NewbornScreening(Base):
+    """㉔新生儿疾病筛查：遗传代谢病/听力/先心病，异常自动纳入高危儿管理。"""
+
+    __tablename__ = "newborn_screenings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    child_id: Mapped[int] = mapped_column(ForeignKey("child_records.id"), index=True)
+    # metabolic=遗传代谢病, hearing=听力, chd=先天性心脏病
+    item: Mapped[str] = mapped_column(String(16))
+    # normal=未见异常, abnormal=阳性/可疑
+    result: Mapped[str] = mapped_column(String(16), default="normal")
+    screen_date: Mapped[str] = mapped_column(String(10), default="")
+    note: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WomenHealthRecord(Base):
+    """㉔婚前保健/孕前保健/妇女保健/避孕节育服务记录。"""
+
+    __tablename__ = "women_health_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # premarital=婚前保健, preconception=孕前保健, gynecology=妇女保健, contraception=避孕节育
+    record_type: Mapped[str] = mapped_column(String(16), index=True)
+    exam_date: Mapped[str] = mapped_column(String(10), default="")
+    result: Mapped[str] = mapped_column(String(512), default="")
+    advice: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MedicalCert(Base):
+    """法定医学证明（浙#7、㉔）：出生医学证明签发、死亡医学证明、出生缺陷儿登记。"""
+
+    __tablename__ = "medical_certs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # birth=出生医学证明, death=死亡医学证明, defect=出生缺陷儿登记
+    cert_type: Mapped[str] = mapped_column(String(8), index=True)
+    cert_no: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    gender: Mapped[str] = mapped_column(String(8), default="未知")
+    event_date: Mapped[str] = mapped_column(String(10))
+    # 死因诊断 / 缺陷诊断 / 出生备注
+    detail: Mapped[str] = mapped_column(String(512), default="")
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True)
+    child_id: Mapped[int | None] = mapped_column(ForeignKey("child_records.id"), nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PhysicalExam(Base):
+    """成人一般常规健康体检记录（浙#5）：体检套餐、结论与异常项标记。"""
+
+    __tablename__ = "physical_exams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    package_name: Mapped[str] = mapped_column(String(128), default="常规体检")
+    exam_date: Mapped[str] = mapped_column(String(10), default="")
+    summary: Mapped[str] = mapped_column(String(1024), default="")
+    # 分号分隔的异常项列表，非空自动置 has_abnormal
+    abnormal_items: Mapped[str] = mapped_column(String(512), default="")
+    has_abnormal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
