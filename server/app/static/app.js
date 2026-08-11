@@ -125,6 +125,7 @@ const PAGES = [
   { id: "cssd", title: "消毒供应", render: renderCssd },
   { id: "medwaste", title: "医废追溯", render: renderMedwaste },
   { group: "系统管理", roles: ["admin"] },
+  { id: "esb", title: "集成平台", render: renderEsb, roles: ["admin"] },
   { id: "dataquality", title: "数据质控", render: renderDataQuality, roles: ["admin"] },
   { id: "printtpl", title: "打印模板", render: renderPrintTemplates, roles: ["admin"] },
   { id: "users", title: "用户管理", render: renderUsers, roles: ["admin"] },
@@ -2569,6 +2570,139 @@ async function renderCerts() {
 }
 
 /* 块3：数据质控（管理员）——规则驱动扫描存量数据，看违规明细与汇总 */
+/* 块1：集成平台 ESB——端点注册、消息队列（筛选/重试/错误）、流程编排、统计看板 */
+
+const ESB_SYSTEMS = { his: "医院信息系统", lis: "检验系统", pacs: "影像系统", insurance: "医保系统", provincial: "省级平台" };
+const ESB_MSG_STATUS = { queued: ["待处理", "orange"], processing: ["处理中", ""], succeeded: ["成功", "green"], failed: ["失败待重试", "orange"], dead: ["死信", "red"] };
+const ESB_FLOW_SAMPLE = JSON.stringify([
+  { type: "transform", config: { format: "fhir_patient", source_field: "resource" } },
+  { type: "validate", config: { required: ["name", "id_card"] } },
+  { type: "persist", config: { entity: "patient" } },
+], null, 1);
+
+async function renderEsb() {
+  $("#page-desc").textContent = "轻量服务总线：接入方注册与限流、消息队列重试与死信、编排流程逐步执行、成功率与积压监控";
+  const [stats, endpoints, flows] = await Promise.all([
+    api("/api/esb/stats"), api("/api/esb/endpoints"), api("/api/esb/flows")]);
+  const drawMessages = async () => {
+    const f = new FormData($("#esb-msg-filter"));
+    const params = new URLSearchParams({ limit: "50" });
+    if (f.get("status")) params.set("status", f.get("status"));
+    if (f.get("endpoint_id")) params.set("endpoint_id", f.get("endpoint_id"));
+    const messages = await api(`/api/esb/messages?${params}`);
+    $("#esb-messages").innerHTML = table(["ID", "接入方", "消息类型", "状态", "重试", "最后错误", "操作"], messages, (m) => {
+      const [text, color] = ESB_MSG_STATUS[m.status] || [m.status, ""];
+      const retryable = m.status === "queued" || m.status === "failed";
+      return `<tr><td>${m.id}</td><td><span class="tag">${esc(m.endpoint_code)}</span></td><td>${esc(m.msg_type)}</td>
+        <td><span class="tag ${color}">${text}</span></td><td>${m.retry_count}/${m.max_retries}</td>
+        <td style="max-width:280px;font-size:12px;color:#b23c3c">${esc(m.last_error)}</td>
+        <td>${retryable ? `<button class="btn secondary" data-esbproc="${m.id}">消费/重试</button>` : "—"}
+          <button class="btn secondary" data-esbpayload="${m.id}">查看载荷</button></td></tr>`;
+    });
+  };
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="label">接入方</div><div class="value">${stats.totals.endpoints}</div></div>
+      <div class="card"><div class="label">消息总量</div><div class="value">${stats.totals.total || 0}</div></div>
+      <div class="card"><div class="label">成功率</div><div class="value">${stats.totals.success_rate_pct || 0}%</div></div>
+      <div class="card"><div class="label">积压</div><div class="value${stats.totals.backlog ? " warn" : ""}">${stats.totals.backlog || 0}</div></div>
+      <div class="card"><div class="label">死信</div><div class="value${stats.totals.dead ? " warn" : ""}">${stats.totals.dead || 0}</div></div></div>
+    <div class="panel"><h3>接入方注册</h3>
+      <form class="inline" id="esb-ep-form">
+        <input name="code" placeholder="接入方编码" required>
+        <input name="name" placeholder="名称" required style="min-width:180px">
+        <select name="system_type">${Object.entries(ESB_SYSTEMS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="direction"><option value="inbound">入站</option><option value="outbound">出站</option></select>
+        <input name="rate_limit_per_min" type="number" min="1" value="60" style="width:110px" title="每分钟限流">
+        <button>注册并生成令牌</button></form>
+      <p class="msg" id="esb-ep-msg"></p>
+      ${table(["编码", "名称", "系统类型", "方向", "限流/分钟", "状态", "操作"], endpoints, (e) =>
+        `<tr><td><span class="tag">${esc(e.code)}</span></td><td>${esc(e.name)}</td><td>${esc(e.system_type_name)}</td>
+         <td>${esc(e.direction_name)}</td><td>${e.rate_limit_per_min}</td>
+         <td>${e.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-esbtoggle="${e.id}" data-active="${e.active ? 1 : 0}">${e.active ? "停用" : "启用"}</button>
+           <button class="btn secondary" data-esbrotate="${e.id}">轮换令牌</button></td></tr>`)}</div>
+    <div class="panel"><h3>消息队列</h3>
+      <form class="inline" id="esb-msg-filter">
+        <select name="status"><option value="">全部状态</option>${Object.entries(ESB_MSG_STATUS).map(([v, t]) => `<option value="${v}">${t[0]}</option>`).join("")}</select>
+        <select name="endpoint_id"><option value="">全部接入方</option>${endpoints.map((e) => `<option value="${e.id}">${esc(e.code)}</option>`).join("")}</select>
+        <button>查询</button></form>
+      <p class="msg" id="esb-msg"></p><div id="esb-messages"></div></div>
+    <div class="panel"><h3>流程编排（步骤 JSON：transform / validate / route / persist）</h3>
+      <form id="esb-flow-form">
+        <div class="inline"><input name="code" placeholder="流程编码" required>
+          <input name="name" placeholder="流程名称" required style="min-width:180px"></div>
+        <textarea name="steps" rows="7" style="width:100%;font-family:monospace;font-size:12px;margin-top:8px">${esc(ESB_FLOW_SAMPLE)}</textarea>
+        <div class="inline" style="margin-top:8px"><button>保存流程</button></div></form>
+      <p class="msg" id="esb-flow-msg"></p>
+      ${table(["编码", "名称", "步骤数", "步骤", "状态", "操作"], flows, (f) =>
+        `<tr><td><span class="tag">${esc(f.code)}</span></td><td>${esc(f.name)}</td><td>${f.step_count}</td>
+         <td style="max-width:320px;font-size:12px">${esc((f.steps || []).map((s) => s.type).join(" → "))}</td>
+         <td>${f.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-esbrun="${esc(f.code)}">对消息执行</button></td></tr>`)}</div>
+    <div class="panel"><h3>接入方统计</h3>
+      ${table(["接入方", "总量", "成功", "死信", "积压", "成功率", "失败率"], stats.by_endpoint, (r) =>
+        `<tr><td><span class="tag">${esc(r.endpoint_code)}</span> ${esc(r.endpoint_name)}</td><td>${r.total}</td>
+         <td><span class="tag green">${r.succeeded}</span></td>
+         <td>${r.dead ? `<span class="tag red">${r.dead}</span>` : 0}</td>
+         <td>${r.backlog ? `<span class="tag orange">${r.backlog}</span>` : 0}</td>
+         <td>${r.success_rate_pct}%</td><td>${r.failure_rate_pct}%</td></tr>`)}</div>`;
+  $("#esb-msg-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawMessages(); } catch (err) { setMsg("#esb-msg", err.message, false); }
+  };
+  $("#esb-ep-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const created = await api("/api/esb/endpoints", { method: "POST", body: JSON.stringify({
+        code: f.get("code"), name: f.get("name"), system_type: f.get("system_type"),
+        direction: f.get("direction"), rate_limit_per_min: Number(f.get("rate_limit_per_min")) || 60 }) });
+      alert(`接入令牌（仅此一次可见，请妥善保存）：\n${created.auth_token}`);
+      route();
+    } catch (err) { setMsg("#esb-ep-msg", err.message, false); }
+  };
+  $("#esb-flow-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    let steps;
+    try { steps = JSON.parse(f.get("steps")); }
+    catch { return setMsg("#esb-flow-msg", "步骤 JSON 格式错误", false); }
+    try {
+      await api("/api/esb/flows", { method: "POST", body: JSON.stringify({
+        code: f.get("code"), name: f.get("name"), steps }) });
+      route();
+    } catch (err) { setMsg("#esb-flow-msg", err.message, false); }
+  };
+  await drawMessages();
+  $("#page-body").onclick = async (e) => {
+    const { esbproc, esbpayload, esbtoggle, active, esbrotate, esbrun } = e.target.dataset;
+    try {
+      if (esbproc) {
+        const res = await api(`/api/esb/messages/${esbproc}/process`, { method: "POST" });
+        setMsg("#esb-msg", `消息 ${esbproc} → ${ESB_MSG_STATUS[res.status][0]}：${res.detail || res.last_error}`, res.status === "succeeded");
+        await drawMessages();
+      } else if (esbpayload) {
+        const rows = await api(`/api/esb/messages?limit=50`);
+        const msg = rows.find((m) => String(m.id) === esbpayload);
+        alert(msg ? JSON.stringify(msg.payload, null, 2) : "载荷不在当前页，请先按条件筛选");
+      } else if (esbtoggle) {
+        await api(`/api/esb/endpoints/${esbtoggle}`, { method: "PATCH", body: JSON.stringify({ active: active !== "1" }) });
+        route();
+      } else if (esbrotate) {
+        const res = await api(`/api/esb/endpoints/${esbrotate}/rotate-token`, { method: "POST" });
+        alert(`新令牌（旧令牌已失效）：\n${res.auth_token}`);
+      } else if (esbrun) {
+        const messageId = prompt("对哪条消息执行该编排？填写消息ID");
+        if (!messageId) return;
+        const res = await api(`/api/esb/flows/${encodeURIComponent(esbrun)}/run?message_id=${encodeURIComponent(messageId)}`, { method: "POST" });
+        setMsg("#esb-flow-msg", `编排 ${esbrun} → ${res.status === "succeeded" ? "全部步骤成功" : `第 ${res.step_results.length} 步失败：${res.error}`}`, res.status === "succeeded");
+        await drawMessages();
+      }
+    } catch (err) { setMsg("#esb-msg", err.message, false); }
+  };
+}
+
 const QC_SEVERITY = { error: ["错误", "red"], warn: ["警告", "orange"] };
 
 async function renderDataQuality() {

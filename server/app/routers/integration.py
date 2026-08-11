@@ -97,8 +97,13 @@ def hl7v2_patient(
     return _run_inbound("hl7v2_patient", x_source_system, lambda: _do_hl7v2_patient(body, db, user))
 
 
-def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
-    lines = [ln.strip() for ln in body.message.replace("\r", "\n").split("\n") if ln.strip()]
+def parse_hl7v2_patient(message: str) -> tuple[dict, str]:
+    """HL7 v2 ADT 消息 → (患者字段字典, 消息控制ID)。
+
+    纯转换逻辑，不触库：入站接口与 ESB 编排 transform 步骤共用同一实现
+    （块1：集成平台总线复用本函数，避免解析口径分叉）。
+    """
+    lines = [ln.strip() for ln in message.replace("\r", "\n").split("\n") if ln.strip()]
     msh_line = next((ln for ln in lines if ln.startswith("MSH|")), None)
     if msh_line is None:
         raise HTTPException(status_code=422, detail="缺少 MSH 消息头段")
@@ -128,8 +133,7 @@ def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
     if len(birth_raw) >= 8 and birth_raw[:8].isdigit():
         birth_date = f"{birth_raw[:4]}-{birth_raw[4:6]}-{birth_raw[6:8]}"
 
-    patient, created = _upsert_patient(
-        db,
+    return (
         {
             "name": name,
             "id_card": id_card,
@@ -137,7 +141,13 @@ def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
             "birth_date": birth_date,
             "phone": phone,
         },
+        control_id,
     )
+
+
+def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
+    data, control_id = parse_hl7v2_patient(body.message)
+    patient, created = _upsert_patient(db, data)
     # 终审轮（浙#21 消息确认机制）：返回 HL7 ACK 应答（MSA|AA|原消息控制ID）
     ack = _build_ack(control_id)
     return {"created": created, "ack": ack, "patient": desensitize(patient, user).model_dump()}
@@ -165,7 +175,8 @@ def fhir_patient(
     return _run_inbound("fhir_patient", x_source_system, lambda: _do_fhir_patient(resource, db, user))
 
 
-def _do_fhir_patient(resource: dict, db: Session, user: User):
+def parse_fhir_patient(resource: dict) -> dict:
+    """FHIR R4 Patient 资源 → 患者字段字典（纯转换，入站接口与 ESB 编排共用）。"""
     if resource.get("resourceType") != "Patient":
         raise HTTPException(status_code=422, detail="resourceType 必须为 Patient")
 
@@ -193,16 +204,17 @@ def _do_fhir_patient(resource: dict, db: Session, user: User):
             phone = telecom["value"]
             break
 
-    patient, created = _upsert_patient(
-        db,
-        {
-            "name": name,
-            "id_card": id_card,
-            "gender": _GENDER_FHIR.get(resource.get("gender", ""), "未知"),
-            "birth_date": resource.get("birthDate", ""),
-            "phone": phone,
-        },
-    )
+    return {
+        "name": name,
+        "id_card": id_card,
+        "gender": _GENDER_FHIR.get(resource.get("gender", ""), "未知"),
+        "birth_date": resource.get("birthDate", ""),
+        "phone": phone,
+    }
+
+
+def _do_fhir_patient(resource: dict, db: Session, user: User):
+    patient, created = _upsert_patient(db, parse_fhir_patient(resource))
     return {"created": created, "patient": desensitize(patient, user).model_dump()}
 
 

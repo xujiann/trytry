@@ -42,6 +42,7 @@ from .routers import (
     eldercare,
     emergency,
     encounters,
+    esb,
     exams,
     gapfill,
     infectious,
@@ -235,6 +236,8 @@ app.include_router(attachments.router)
 app.include_router(reports.router)
 app.include_router(printing.router)
 app.include_router(dataquality.router)
+# 块1：集成平台底座 ESB（接入方注册/消息队列/流程编排/统计）
+app.include_router(esb.router)
 # 块4：细目补齐（中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务）
 app.include_router(gapfill.tcm_router)
 app.include_router(gapfill.cssd_router)

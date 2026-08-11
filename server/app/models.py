@@ -1991,3 +1991,74 @@ class HomeVisitOrder(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# 块1：集成平台底座 ESB（浙江指南 M11）——接入方注册 / 消息队列 / 流程编排
+# ---------------------------------------------------------------------------
+
+
+class EsbEndpoint(Base):
+    """ESB 接入方（端点）注册：外部系统凭 code + 令牌入队消息，按分钟限流。"""
+
+    __tablename__ = "esb_endpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # his=医院信息系统, lis=检验, pacs=影像, insurance=医保, provincial=省级平台
+    system_type: Mapped[str] = mapped_column(String(16), index=True)
+    # inbound=入站（外部→平台）, outbound=出站（平台→外部）
+    direction: Mapped[str] = mapped_column(String(8), default="inbound", index=True)
+    # 接入令牌只存散列（与用户口令同一 PBKDF2 实现），明文仅注册时返回一次
+    auth_token_hash: Mapped[str] = mapped_column(String(200), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    rate_limit_per_min: Mapped[int] = mapped_column(Integer, default=60)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class EsbMessage(Base):
+    """ESB 消息队列：入队 → 消费/编排 → 成功或重试，重试耗尽转死信。"""
+
+    __tablename__ = "esb_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    endpoint_id: Mapped[int] = mapped_column(ForeignKey("esb_endpoints.id"), index=True)
+    msg_type: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    # queued=待处理, processing=处理中, succeeded=成功, failed=失败待重试, dead=死信
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    last_error: Mapped[str] = mapped_column(String(1024), default="")
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class EsbFlow(Base):
+    """ESB 编排流程：steps 为有序步骤数组 [{type, config}]，type ∈ transform|route|validate|persist。"""
+
+    __tablename__ = "esb_flows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    steps: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class EsbFlowRun(Base):
+    """ESB 编排执行记录：逐步结果落 step_results，便于回溯定位失败步骤。"""
+
+    __tablename__ = "esb_flow_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    flow_id: Mapped[int] = mapped_column(ForeignKey("esb_flows.id"), index=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("esb_messages.id"), index=True)
+    # succeeded=全部步骤成功, failed=某步骤失败（后续步骤不再执行）
+    status: Mapped[str] = mapped_column(String(16), default="succeeded", index=True)
+    step_results: Mapped[list] = mapped_column(JSON, default=list)
+    error: Mapped[str] = mapped_column(String(1024), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
