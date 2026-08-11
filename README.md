@@ -69,6 +69,23 @@ python -m pytest tests/ -q          # 运行测试
 数据库默认使用 SQLite（开发环境），通过 `MEDPLAT_DATABASE_URL` 环境变量可切换 PostgreSQL。
 配置统一由 pydantic-settings 读取 `MEDPLAT_*` 环境变量（见 `server/app/config.py`）。
 
+## 压测基线
+
+不依赖 locust，`server/scripts/loadtest.py` 用 httpx + asyncio 并发压测三个核心接口
+（登录 / 患者检索 / 检查开单），输出每场景 P50 / P95 / 平均耗时 / QPS：
+
+```bash
+cd server
+uvicorn app.main:app --port 8000 &                                 # 先起服务（勿对生产库压测）
+python scripts/loadtest.py http://127.0.0.1:8000 --concurrency 10 --requests 100
+```
+
+- 脚本自动用 admin 账号幂等准备一个机构与一名患者，开单场景会产生真实数据；
+- 建议基线（本地 SQLite 单实例）：login P95 < 300ms、patients P95 < 100ms、
+  exam_order P95 < 150ms；PostgreSQL + 多实例部署后重新采样并记录容量规划；
+- 存量数据迁移见 `server/scripts/import_legacy.py`（CSV 批量导入，支持 `--dry-run`
+  校验模式与错误行明细，样例见 `server/scripts/samples/`）。
+
 ## 生产部署
 
 ```bash
