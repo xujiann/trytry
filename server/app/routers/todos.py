@@ -1,8 +1,11 @@
 """任务待办中心：按当前用户角色聚合待处理事项，统一收件箱。
 
 - 药师      → 待药师审处方（数量 + 列表）
-- 医师      → 待诊断的共享中心申请
-- 管理员    → 全部预警（待审处方、待诊断申请、缺药预警、危急值）
+- 医师      → 待诊断的共享中心申请 + 待确认危急值
+- 管理员    → 全部预警（待审处方、待诊断申请、缺药预警、未闭环危急值）
+
+M-5 整改：危急值口径随闭环状态更新——仅 notified/acknowledged（含存量空串）
+计入待办与预警，已处置(resolved)不再累积；医师待办补"待确认危急值"。
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -72,16 +75,47 @@ def _stock_alerts(db: Session) -> dict:
 
 
 def _critical_reports(db: Session) -> dict:
+    # 未闭环危急值：notified/acknowledged（含存量迁移前空串），resolved 不再计入
     rows = (
         db.query(ExamReport)
-        .filter(ExamReport.critical.is_(True))
+        .filter(
+            ExamReport.critical.is_(True),
+            ExamReport.critical_status.in_(["notified", "acknowledged", ""]),
+        )
         .order_by(ExamReport.id.desc())
         .limit(100)
         .all()
     )
     return {
         "type": "critical_report",
-        "title": "危急值报告",
+        "title": "未闭环危急值",
+        "count": len(rows),
+        "list": [
+            {
+                "id": r.id,
+                "request_id": r.request_id,
+                "conclusion": r.conclusion,
+                "critical_status": r.critical_status,
+            }
+            for r in rows
+        ],
+    }
+
+
+def _unacknowledged_critical(db: Session) -> dict:
+    """医师待办：待确认接收的危急值（notified，含存量空串）。"""
+    rows = (
+        db.query(ExamReport)
+        .filter(
+            ExamReport.critical.is_(True), ExamReport.critical_status.in_(["notified", ""])
+        )
+        .order_by(ExamReport.id.desc())
+        .limit(100)
+        .all()
+    )
+    return {
+        "type": "critical_ack",
+        "title": "待确认危急值",
         "count": len(rows),
         "list": [{"id": r.id, "request_id": r.request_id, "conclusion": r.conclusion} for r in rows],
     }
@@ -92,7 +126,7 @@ def my_todos(db: Session = Depends(get_db), user: User = Depends(get_current_use
     if user.role == "pharmacist":
         items = [_pending_prescriptions(db)]
     elif user.role == "doctor":
-        items = [_pending_exams(db)]
+        items = [_pending_exams(db), _unacknowledged_critical(db)]
     elif user.role in ("admin", "director"):
         items = [
             _pending_prescriptions(db),

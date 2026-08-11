@@ -59,6 +59,8 @@ def create_token(username: str, role: str) -> str:
             {
                 "sub": username,
                 "role": role,
+                # 签发时刻（浮点秒）：与用户改密基线比较，改密即吊销此前全部令牌（M-4）
+                "iat": time.time(),
                 "exp": int(time.time()) + TOKEN_TTL_SECONDS,
                 # 唯一标识：保证同秒签发的令牌互不相同，登出黑名单可精确作废单个令牌
                 "jti": os.urandom(8).hex(),

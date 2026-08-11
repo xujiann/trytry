@@ -166,9 +166,9 @@ def test_todos_by_role(client, admin_headers, setup):
     assert any("测试" in (p["review_comment"] or "") or p["diagnosis_name"] == "高血压"
                for p in pharm["items"][0]["list"])
 
-    # 医师：只看待诊断申请
+    # 医师：待诊断申请 + 待确认危急值（M-5 整改）
     doc = client.get("/api/todos", headers=setup["doctor"]).json()
-    assert [i["type"] for i in doc["items"]] == ["exam_diagnosis"]
+    assert [i["type"] for i in doc["items"]] == ["exam_diagnosis", "critical_ack"]
     assert doc["items"][0]["count"] >= 1
 
     # 管理员：全部预警聚合

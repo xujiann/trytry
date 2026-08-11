@@ -1,3 +1,5 @@
+from datetime import timezone
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
@@ -7,6 +9,17 @@ from .models import User
 from .security import decode_token, revoked_tokens
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def token_issued_before_baseline(claims: dict, user: User) -> bool:
+    """M-4 整改：令牌签发时刻(iat)早于用户改密基线即视为已吊销。
+
+    无 iat 声明的旧令牌在基线设定后同样拒绝（保守处理）。
+    """
+    if user.token_valid_from is None:
+        return False
+    baseline = user.token_valid_from.replace(tzinfo=timezone.utc).timestamp()
+    return float(claims.get("iat", 0)) < baseline
 
 
 def get_current_user(
@@ -23,6 +36,10 @@ def get_current_user(
     user = db.query(User).filter(User.username == claims["sub"]).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
+    if token_issued_before_baseline(claims, user):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="密码已修改，令牌失效，请重新登录"
+        )
     return user
 
 

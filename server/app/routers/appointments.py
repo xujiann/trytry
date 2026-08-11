@@ -1,5 +1,6 @@
 """预约诊疗：机构发布分时段号源，居民一站式预约（挂号/检查/检验）。"""
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -85,7 +86,12 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
         return existing
     appointment = Appointment(**body.model_dump())
     db.add(appointment)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # L-7 整改：并发同患者同号源双 book 触发唯一约束 → 409（而非500）
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该患者已预约此号源")
     db.refresh(appointment)
     return appointment
 

@@ -29,6 +29,8 @@ class User(Base):
     # public_health=公卫人员, operator=经办人员
     role: Mapped[str] = mapped_column(String(32), default="operator")
     org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    # M-4 整改：改密时刻基线——签发时刻(iat)早于该时刻的令牌一律拒绝（改密吊销既有令牌）
+    token_valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -138,6 +140,8 @@ class ExamRequest(Base):
     recognition_declined_reason: Mapped[str] = mapped_column(String(256), default="")
     # 检验样本物流（仅 lab）："" / collected=已采样 / in_transit=转运中 / received=中心核收
     sample_status: Mapped[str] = mapped_column(String(16), default="")
+    # L-6 整改：诊断领取人（原子领取时记录，避免并发双领与责任不清）
+    claimed_by: Mapped[str] = mapped_column(String(64), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -172,6 +176,21 @@ class CriticalAction(Base):
     # notified=系统通知, acknowledged=接收确认, resolved=处置反馈
     action: Mapped[str] = mapped_column(String(512))
     actor: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ReportRevision(Base):
+    """报告修订历史（M-6 整改）：每次修订记录修订前值，医疗文书修订可追溯。"""
+
+    __tablename__ = "report_revisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report_id: Mapped[int] = mapped_column(ForeignKey("exam_reports.id"), index=True)
+    prev_conclusion: Mapped[str] = mapped_column(String(1024), default="")
+    prev_finding: Mapped[str] = mapped_column(String(2048), default="")
+    prev_critical: Mapped[bool] = mapped_column(Boolean, default=False)
+    revised_by: Mapped[str] = mapped_column(String(64), default="")
+    reason: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

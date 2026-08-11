@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import ROLE_NAMES, get_current_user, require_admin
-from ..models import AuditLog, Organization, User
+from ..models import AuditLog, Organization, User, utcnow
 from ..security import hash_password, validate_password_strength, verify_password
 
 router = APIRouter(prefix="/api", tags=["用户与审计"])
@@ -84,8 +84,10 @@ def change_password(
     if not verify_password(body.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="当前密码不正确")
     user.password_hash = hash_password(body.new_password)
+    # M-4 整改：改密即吊销该用户既有全部令牌（iat 早于基线的令牌一律拒绝）
+    user.token_valid_from = utcnow()
     db.commit()
-    return {"changed": True}
+    return {"changed": True, "tokens_revoked": True}
 
 
 @router.get("/audit/export", dependencies=[Depends(require_admin)])

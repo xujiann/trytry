@@ -9,14 +9,17 @@ from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
     AppointmentBlacklist,
     ConsultExpert,
+    CriticalAction,
     CssdRequest,
     ExamReport,
     HealthArticle,
     Organization,
     Patient,
+    ReportRevision,
     ReportTemplate,
     SatisfactionSurvey,
     SterilizationBatch,
+    User,
 )
 
 router = APIRouter(prefix="/api", tags=["指引补遗"], dependencies=[Depends(get_current_user)])
@@ -54,19 +57,95 @@ def list_templates(center_type: str | None = None, db: Session = Depends(get_db)
 class ReportAmend(BaseModel):
     conclusion: str = Field(min_length=1)
     finding: str | None = None
+    # 允许修订危急值标记：置 True/False 均联动闭环状态
+    critical: bool | None = None
+    reason: str = Field(default="", max_length=512)
 
 
-@router.patch("/exams/reports/{report_id}", dependencies=[Depends(require_roles("doctor"))])
-def amend_report(report_id: int, body: ReportAmend, db: Session = Depends(get_db)):
-    """诊断报告修改（限医师，修改留审计痕迹）。"""
+@router.patch("/exams/reports/{report_id}")
+def amend_report(
+    report_id: int,
+    body: ReportAmend,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("doctor")),
+):
+    """诊断报告修改（限医师）。
+
+    M-6 整改：
+    - 修订前值写入 ReportRevision 历史表（前结论/前所见/前危急标记/修订人），可追溯；
+    - 危急值联动：修订后仍为危急值 → 闭环状态复位为"已通知"须重新确认；
+      解除危急标记 → 闭环状态清空；两种变化均写入 CriticalAction 留痕。
+    """
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    actor = user.full_name or user.username
+    was_critical = report.critical
+    db.add(
+        ReportRevision(
+            report_id=report.id,
+            prev_conclusion=report.conclusion,
+            prev_finding=report.finding,
+            prev_critical=report.critical,
+            revised_by=actor,
+            reason=body.reason,
+        )
+    )
     report.conclusion = body.conclusion
     if body.finding is not None:
         report.finding = body.finding
+    if body.critical is not None:
+        report.critical = body.critical
+    if report.critical:
+        # 修订后（仍/新）为危急值：闭环状态复位，须重新确认接收
+        report.critical_status = "notified"
+        db.add(
+            CriticalAction(
+                report_id=report.id,
+                action=f"报告修订，危急值闭环状态复位为已通知：{report.conclusion}",
+                actor=actor,
+            )
+        )
+    elif was_critical:
+        # 修订解除危急标记：闭环状态清空并留痕
+        report.critical_status = ""
+        db.add(
+            CriticalAction(
+                report_id=report.id, action="报告修订解除危急值标记", actor=actor
+            )
+        )
     db.commit()
-    return {"id": report.id, "conclusion": report.conclusion}
+    return {
+        "id": report.id,
+        "conclusion": report.conclusion,
+        "critical": report.critical,
+        "critical_status": report.critical_status,
+    }
+
+
+@router.get("/exams/reports/{report_id}/revisions")
+def list_report_revisions(report_id: int, db: Session = Depends(get_db)):
+    """报告修订历史（前值留痕轨迹）。"""
+    if db.get(ExamReport, report_id) is None:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    rows = (
+        db.query(ReportRevision)
+        .filter(ReportRevision.report_id == report_id)
+        .order_by(ReportRevision.id)
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "prev_conclusion": r.prev_conclusion,
+            "prev_finding": r.prev_finding,
+            "prev_critical": r.prev_critical,
+            "revised_by": r.revised_by,
+            "reason": r.reason,
+            "at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
 
 
 # ---- ⑥ 消毒供应物品申领 ----

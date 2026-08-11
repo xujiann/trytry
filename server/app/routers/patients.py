@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_roles
 from ..models import Patient, User
 from ..privacy import desensitize, mask_id_card, mask_phone  # noqa: F401  公共脱敏模块（H1）
 from ..schemas import PatientCreate, PatientOut
@@ -51,7 +51,13 @@ def _generate_ehc_no(db: Session) -> str:
             return candidate
 
 
-@router.post("", response_model=PatientOut, status_code=201)
+@router.post(
+    "",
+    response_model=PatientOut,
+    status_code=201,
+    # L-10 整改：建档纳入角色矩阵（经办/医师/公卫），药师/管理层不建档
+    dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
+)
 def register_patient(body: PatientCreate, db: Session = Depends(get_db)):
     # 主索引幂等：同一身份证号返回既有档案，不重复建档（并发竞态由唯一约束+重查兜底）
     patient, _created = create_patient_idempotent(db, body.model_dump())

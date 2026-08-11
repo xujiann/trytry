@@ -185,13 +185,27 @@ def list_requests(
     response_model=ExamRequestOut,
     dependencies=[Depends(require_roles("doctor"))],
 )
-def claim_request(request_id: int, db: Session = Depends(get_db)):
+def claim_request(
+    request_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     request = db.get(ExamRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="申请单不存在")
-    if request.status != "pending":
+    # L-6 整改：条件 UPDATE 原子领取（并发双领仅一人成功）并记录领取人
+    claimed = (
+        db.query(ExamRequest)
+        .filter(ExamRequest.id == request_id, ExamRequest.status == "pending")
+        .update(
+            {
+                ExamRequest.status: "diagnosing",
+                ExamRequest.claimed_by: user.full_name or user.username,
+            },
+            synchronize_session=False,
+        )
+    )
+    if not claimed:
+        db.rollback()
         raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可领取")
-    request.status = "diagnosing"
     db.commit()
     db.refresh(request)
     return request
@@ -220,22 +234,27 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
         db.add(
             CriticalAction(
                 report_id=report.id,
-                action=f"危急值报告发布，已通知申请机构：{report.conclusion}",
+                action=(
+                    f"危急值报告发布，已通知申请机构(org={request.from_org_id})"
+                    f"在线用户与监管角色（定向推送）：{report.conclusion}"
+                ),
                 actor=report.reported_by or "system",
             )
         )
     db.commit()
     db.refresh(report)
     if report.critical:
-        # 危急值实时广播：秒级触达全部在线用户
+        # M-2 整改：危急值定向广播——仅申请机构在线用户与 admin/director 收到
         manager.broadcast(
             {
                 "type": "critical_report",
+                "org_id": request.from_org_id,
                 "request_id": request_id,
                 "patient_id": request.patient_id,
                 "item_name": request.item_name,
                 "conclusion": report.conclusion,
-            }
+            },
+            target_org_id=request.from_org_id,
         )
     return report
 
@@ -295,7 +314,8 @@ def acknowledge_critical(
         raise HTTPException(status_code=404, detail="报告不存在")
     if not report.critical:
         raise HTTPException(status_code=422, detail="非危急值报告，无需确认")
-    if report.critical_status != "notified":
+    # M-1 整改：存量危急报告（迁移前 critical_status=''）等同"已通知"，可正常进入闭环
+    if report.critical_status not in ("notified", ""):
         raise HTTPException(status_code=409, detail=f"当前状态 {report.critical_status} 不可确认接收")
     report.critical_status = "acknowledged"
     db.add(
@@ -364,8 +384,9 @@ def list_unacknowledged_critical(
     - today 提供时（YYYY-MM-DD）：报告日期早于 today 的未确认危急值均计入（粗略按天）；
     - today 缺省时：按 timeout_minutes 与当前时间比对。
     """
+    # M-1 整改：存量危急报告（critical_status=''）同样计入催办清单
     query = db.query(ExamReport).filter(
-        ExamReport.critical.is_(True), ExamReport.critical_status == "notified"
+        ExamReport.critical.is_(True), ExamReport.critical_status.in_(["notified", ""])
     )
     if today is not None:
         deadline = datetime.strptime(today, "%Y-%m-%d")

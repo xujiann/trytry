@@ -60,7 +60,16 @@ def alert_summary(db: Session = Depends(get_db)):
 
     from ..models import ChronicPatient, DrugStock, InfectiousCase, MedicalWaste
 
-    critical = db.query(func.count(ExamReport.id)).filter(ExamReport.critical.is_(True)).scalar() or 0
+    # M-5 整改：预警口径为未闭环危急值（notified/acknowledged，含存量空串），resolved 不计入
+    critical = (
+        db.query(func.count(ExamReport.id))
+        .filter(
+            ExamReport.critical.is_(True),
+            ExamReport.critical_status.in_(["notified", "acknowledged", ""]),
+        )
+        .scalar()
+        or 0
+    )
     stock = db.query(func.count(DrugStock.id)).filter(DrugStock.quantity < DrugStock.threshold).scalar() or 0
     today = date.today().isoformat()
     chronic_overdue = (
@@ -110,7 +119,16 @@ def overview(db: Session = Depends(get_db)):
     recognized = (
         db.query(func.count(ExamRequest.id)).filter(ExamRequest.status == "recognized").scalar() or 0
     )
-    critical = db.query(func.count(ExamReport.id)).filter(ExamReport.critical.is_(True)).scalar() or 0
+    # M-5 整改：驾驶舱"危急值"卡片为未闭环口径（与预警横幅一致）
+    critical = (
+        db.query(func.count(ExamReport.id))
+        .filter(
+            ExamReport.critical.is_(True),
+            ExamReport.critical_status.in_(["notified", "acknowledged", ""]),
+        )
+        .scalar()
+        or 0
+    )
 
     # 双向转诊
     ref_up = db.query(func.count(Referral.id)).filter(Referral.direction == "up").scalar() or 0

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -106,11 +107,16 @@ def transfer_stock(
             {DrugStock.quantity: DrugStock.quantity + body.quantity}, synchronize_session=False
         )
     db.add(StockTransfer(**body.model_dump(), created_by=user.id))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # L-7 整改：并发向同一新机构首次调拨触发 uq_stock_org_drug → 409（而非500）
+        db.rollback()
+        raise HTTPException(status_code=409, detail="并发调拨冲突，请重试")
     db.refresh(source)
     db.refresh(dest)
     if source.quantity < source.threshold:
-        # 调拨后调出机构跌破阈值：实时广播缺药预警
+        # M-2 整改：缺药预警定向广播——仅缺药机构在线用户与 admin/director 收到
         manager.broadcast(
             {
                 "type": "stock_shortage",
@@ -119,7 +125,8 @@ def transfer_stock(
                 "drug_name": source.drug_name,
                 "quantity": source.quantity,
                 "threshold": source.threshold,
-            }
+            },
+            target_org_id=source.org_id,
         )
     return dest
 
