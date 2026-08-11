@@ -1,7 +1,7 @@
 """统一认证：登录（防爆破锁定）、登出（令牌黑名单）。"""
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -10,7 +10,7 @@ from ..deps import get_current_user
 from ..models import User
 from ..schemas import LoginRequest, TokenResponse
 from ..security import create_token, decode_token, revoked_tokens, verify_password
-from ..state_store import LoginFailureTracker
+from ..state_store import LoginFailureTracker, SlidingWindowRateLimiter
 
 router = APIRouter(prefix="/api/auth", tags=["统一认证"])
 
@@ -20,22 +20,34 @@ FAIL_LIMIT = 5
 LOCK_SECONDS = 600
 _login_failures = LoginFailureTracker(fail_limit=FAIL_LIMIT, lock_seconds=LOCK_SECONDS)
 
+# 终审轮（浙#80 资源控制）：登录失败按来源 IP 限速——60 秒内同 IP 失败超过 50 次
+# 直接 429（防分布式撞库跨账号绕过按用户名的锁定）。成功登录不计数。
+IP_FAIL_LIMIT = 50
+IP_FAIL_WINDOW_SECONDS = 60
+_ip_fail_limiter = SlidingWindowRateLimiter(
+    max_events=IP_FAIL_LIMIT, window_seconds=IP_FAIL_WINDOW_SECONDS
+)
+
 _bearer = HTTPBearer(auto_error=False)
 
 
 def _reset_login_failures() -> None:
-    """测试辅助：清空锁定状态。"""
+    """测试辅助：清空锁定与限速状态。"""
     _login_failures.clear_all()
+    _ip_fail_limiter.clear_all()
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     remain = _login_failures.locked_remaining(body.username)
     if remain > 0:
         raise HTTPException(status_code=423, detail=f"账号已锁定，请 {remain // 60 + 1} 分钟后重试")
 
     user = db.query(User).filter(User.username == body.username).first()
     if user is None or not verify_password(body.password, user.password_hash):
+        client_ip = request.client.host if request.client else "unknown"
+        if not _ip_fail_limiter.allow(client_ip):
+            raise HTTPException(status_code=429, detail="该来源登录失败过于频繁，请稍后重试")
         if _login_failures.record_failure(body.username):
             raise HTTPException(status_code=423, detail="连续失败次数过多，账号锁定10分钟")
         raise HTTPException(status_code=401, detail="用户名或密码错误")

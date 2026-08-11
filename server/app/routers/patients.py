@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
-from ..models import Patient, User
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date
+from pydantic import BaseModel, Field
+
+from ..models import ArchiveAuthorization, Organization, Patient, User
 from ..privacy import desensitize, mask_id_card, mask_phone  # noqa: F401  公共脱敏模块（H1）
 from ..schemas import PatientCreate, PatientOut
 
@@ -90,3 +92,89 @@ def get_patient(ehc_no: str, db: Session = Depends(get_db), user: User = Depends
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     return desensitize(patient, user)
+
+
+# ---------- 终审轮：档案调阅授权（浙#59 患者授权模型） ----------
+
+
+class AuthorizationCreate(BaseModel):
+    grantee_org_id: int
+    scope: str = Field(default="all", pattern="^(all|encounter|exam)$")
+    expire_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+@router.post(
+    "/{patient_id}/authorizations",
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "operator"))],  # 授权代录（患者知情）
+)
+def grant_authorization(
+    patient_id: int,
+    body: AuthorizationCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if db.get(Patient, patient_id) is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
+    if db.get(Organization, body.grantee_org_id) is None:
+        raise HTTPException(status_code=404, detail="被授权机构不存在")
+    auth = ArchiveAuthorization(patient_id=patient_id, created_by=user.id, **body.model_dump())
+    db.add(auth)
+    db.commit()
+    return {"id": auth.id, "patient_id": patient_id, "scope": auth.scope, "status": auth.status}
+
+
+@router.post(
+    "/{patient_id}/authorizations/{auth_id}/revoke",
+    dependencies=[Depends(require_roles("doctor", "operator"))],
+)
+def revoke_authorization(patient_id: int, auth_id: int, db: Session = Depends(get_db)):
+    auth = db.get(ArchiveAuthorization, auth_id)
+    if auth is None or auth.patient_id != patient_id:
+        raise HTTPException(status_code=404, detail="授权记录不存在")
+    auth.status = "revoked"
+    db.commit()
+    return {"id": auth.id, "status": "revoked"}
+
+
+@router.get("/{patient_id}/authorizations")
+def list_authorizations(patient_id: int, db: Session = Depends(get_db)):
+    if db.get(Patient, patient_id) is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
+    return [
+        {
+            "id": a.id,
+            "grantee_org_id": a.grantee_org_id,
+            "scope": a.scope,
+            "expire_date": a.expire_date,
+            "status": a.status,
+        }
+        for a in db.query(ArchiveAuthorization)
+        .filter(ArchiveAuthorization.patient_id == patient_id)
+        .order_by(ArchiveAuthorization.id.desc())
+        .all()
+    ]
+
+
+@router.get("/{patient_id}/authorizations/check")
+def check_authorization(
+    patient_id: int,
+    org_id: int,
+    scope: str = "all",
+    today: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """调阅授权校验：该机构是否持有患者未过期的有效授权（跨域调阅对接的校验入口）。"""
+    current = resolve_business_date(today).isoformat()
+    grants = (
+        db.query(ArchiveAuthorization)
+        .filter(
+            ArchiveAuthorization.patient_id == patient_id,
+            ArchiveAuthorization.grantee_org_id == org_id,
+            ArchiveAuthorization.status == "active",
+            ArchiveAuthorization.expire_date >= current,
+        )
+        .all()
+    )
+    allowed = any(g.scope == "all" or g.scope == scope for g in grants)
+    return {"patient_id": patient_id, "org_id": org_id, "scope": scope, "allowed": allowed}

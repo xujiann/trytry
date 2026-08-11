@@ -125,3 +125,33 @@ class LoginFailureTracker:
             return
         with self._lock:
             self._memory.clear()
+
+
+class SlidingWindowRateLimiter:
+    """通用滑动窗口限速器（浙#80 资源控制）：按主体（IP 等）限制单位时间内的请求数。
+
+    进程内存实现；多实例部署时锁定/限速状态按实例独立（部署层可叠加网关限速）。
+    """
+
+    def __init__(self, max_events: int = 50, window_seconds: int = 60) -> None:
+        self.max_events = max_events
+        self.window_seconds = window_seconds
+        self._lock = threading.Lock()
+        self._events: dict[str, list] = {}
+
+    def allow(self, key: str) -> bool:
+        """记录一次事件并判断是否仍在配额内；超限返回 False。"""
+        now = time.time()
+        with self._lock:
+            window = [t for t in self._events.get(key, []) if now - t < self.window_seconds]
+            if len(window) >= self.max_events:
+                self._events[key] = window
+                return False
+            window.append(now)
+            self._events[key] = window
+            return True
+
+    def clear_all(self) -> None:
+        """测试辅助。"""
+        with self._lock:
+            self._events.clear()

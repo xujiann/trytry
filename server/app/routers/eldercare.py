@@ -73,3 +73,38 @@ def disabled_elderly(db: Session = Depends(get_db)):
         for a in latest.values()
         if a.care_level != "能力完好"
     ]
+
+
+@router.get("/alerts")
+def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
+    """㉓老年健康预警/智能提醒：重度失能专案提示 + 年度评估到期复评提醒。"""
+    from datetime import timedelta
+
+    from ..deps import resolve_business_date
+
+    current = resolve_business_date(today)
+    reassess_before = (current - timedelta(days=365)).isoformat()
+    latest: dict[int, ElderlyAssessment] = {}
+    for a in db.query(ElderlyAssessment).order_by(ElderlyAssessment.id).all():
+        latest[a.patient_id] = a
+    alerts = []
+    for a in latest.values():
+        if a.care_level == "重度失能":
+            alerts.append(
+                {
+                    "patient_id": a.patient_id,
+                    "alert_type": "severe_disability",
+                    "message": "重度失能，建议纳入家庭病床/上门服务专案",
+                    "assessed_date": a.assessed_date,
+                }
+            )
+        if a.assessed_date and a.assessed_date <= reassess_before:
+            alerts.append(
+                {
+                    "patient_id": a.patient_id,
+                    "alert_type": "reassess_due",
+                    "message": "距上次健康评估已超一年，应安排复评",
+                    "assessed_date": a.assessed_date,
+                }
+            )
+    return {"total": len(alerts), "alerts": alerts}

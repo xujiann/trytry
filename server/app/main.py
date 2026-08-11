@@ -27,6 +27,7 @@ from .routers import (
     appointments,
     auth,
     billing,
+    blood,
     certs,
     checkups,
     chronic,
@@ -165,6 +166,7 @@ app.include_router(tcm.router)
 app.include_router(medication.router)
 app.include_router(inpatient.router)
 app.include_router(billing.router)
+app.include_router(blood.router)
 app.include_router(certs.router)
 app.include_router(checkups.router)
 app.include_router(insurance.router)

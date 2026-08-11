@@ -1628,3 +1628,70 @@ class RoleChangeLog(Base):
     new_role: Mapped[str] = mapped_column(String(16))
     changed_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BloodStock(Base):
+    """浙#71 血液管理：血型×成分库存台账。"""
+
+    __tablename__ = "blood_stocks"
+    __table_args__ = (UniqueConstraint("blood_type", "component", name="uq_blood_type_component"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # A/B/AB/O
+    blood_type: Mapped[str] = mapped_column(String(4), index=True)
+    # rbc=红细胞, plasma=血浆, platelet=血小板
+    component: Mapped[str] = mapped_column(String(16))
+    quantity_ml: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class TransfusionRequest(Base):
+    """浙#71 临床用血申请：申请→审批→发血（血站对接为对接项）。"""
+
+    __tablename__ = "transfusion_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    blood_type: Mapped[str] = mapped_column(String(4))
+    component: Mapped[str] = mapped_column(String(16))
+    quantity_ml: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(String(512), default="")
+    # pending=待审批, approved=已审批, issued=已发血, rejected=已驳回
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ArchiveAuthorization(Base):
+    """浙#59 患者档案调阅授权：授权机构/范围/有效期，可撤销（跨域调阅对接的数据准备）。"""
+
+    __tablename__ = "archive_authorizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    grantee_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # all=全部档案, encounter=就诊记录, exam=检查检验报告
+    scope: Mapped[str] = mapped_column(String(16), default="all")
+    expire_date: Mapped[str] = mapped_column(String(10), default="")
+    # active=有效, revoked=已撤销
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class LiveSession(Base):
+    """⑳直播申请/审核/反馈流程（音视频通道为对接项）。"""
+
+    __tablename__ = "live_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(256))
+    speaker: Mapped[str] = mapped_column(String(64), default="")
+    planned_at: Mapped[str] = mapped_column(String(16), default="")
+    # pending=待审核, approved=已排期, rejected=已驳回, finished=已结束
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    review_comment: Mapped[str] = mapped_column(String(256), default="")
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

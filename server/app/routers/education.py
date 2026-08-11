@@ -5,8 +5,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin
-from ..models import Course, TrainingRecord, User
+from ..deps import get_current_user, require_admin, require_roles
+from ..models import Course, LiveSession, TrainingRecord, User
 
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
 
@@ -97,4 +97,79 @@ def my_records(db: Session = Depends(get_db), user: User = Depends(get_current_u
     return [
         {"course_id": r.TrainingRecord.course_id, "title": r.title, "score": r.TrainingRecord.score, "passed": r.TrainingRecord.passed}
         for r in rows
+    ]
+
+
+# ---------- 终审轮：直播申请/审核/结束（⑳，音视频通道为对接项） ----------
+
+
+class LiveCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=256)
+    speaker: str = ""
+    planned_at: str = ""
+    course_id: int | None = None
+
+
+@router.post(
+    "/live-sessions",
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "operator", "public_health"))],  # 直播申请
+)
+def request_live(
+    body: LiveCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    if body.course_id is not None and db.get(Course, body.course_id) is None:
+        raise HTTPException(status_code=404, detail="关联课程不存在")
+    session = LiveSession(requested_by=user.id, **body.model_dump())
+    db.add(session)
+    db.commit()
+    return {"id": session.id, "title": session.title, "status": session.status}
+
+
+@router.post(
+    "/live-sessions/{session_id}/review",
+    dependencies=[Depends(require_roles("director"))],  # 直播审核=管理层
+)
+def review_live(session_id: int, approve: bool, comment: str = "", db: Session = Depends(get_db)):
+    session = db.get(LiveSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="直播申请不存在")
+    if session.status != "pending":
+        raise HTTPException(status_code=409, detail="该申请已审核")
+    session.status = "approved" if approve else "rejected"
+    session.review_comment = comment
+    db.commit()
+    return {"id": session.id, "status": session.status}
+
+
+@router.post(
+    "/live-sessions/{session_id}/finish",
+    dependencies=[Depends(require_roles("director", "operator"))],
+)
+def finish_live(session_id: int, db: Session = Depends(get_db)):
+    session = db.get(LiveSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="直播申请不存在")
+    if session.status != "approved":
+        raise HTTPException(status_code=409, detail="仅已排期直播可结束")
+    session.status = "finished"
+    db.commit()
+    return {"id": session.id, "status": "finished"}
+
+
+@router.get("/live-sessions")
+def list_live_sessions(status: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(LiveSession)
+    if status:
+        q = q.filter(LiveSession.status == status)
+    return [
+        {
+            "id": s.id,
+            "title": s.title,
+            "speaker": s.speaker,
+            "planned_at": s.planned_at,
+            "status": s.status,
+            "review_comment": s.review_comment,
+        }
+        for s in q.order_by(LiveSession.id.desc()).limit(200).all()
     ]

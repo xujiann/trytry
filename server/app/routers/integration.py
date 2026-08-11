@@ -99,8 +99,11 @@ def hl7v2_patient(
 
 def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
     lines = [ln.strip() for ln in body.message.replace("\r", "\n").split("\n") if ln.strip()]
-    if not any(ln.startswith("MSH|") for ln in lines):
+    msh_line = next((ln for ln in lines if ln.startswith("MSH|")), None)
+    if msh_line is None:
         raise HTTPException(status_code=422, detail="缺少 MSH 消息头段")
+    msh_fields = msh_line.split("|")
+    control_id = msh_fields[9] if len(msh_fields) > 9 else ""
     pid_line = next((ln for ln in lines if ln.startswith("PID|")), None)
     if pid_line is None:
         raise HTTPException(status_code=422, detail="缺少 PID 患者标识段")
@@ -135,7 +138,17 @@ def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
             "phone": phone,
         },
     )
-    return {"created": created, "patient": desensitize(patient, user).model_dump()}
+    # 终审轮（浙#21 消息确认机制）：返回 HL7 ACK 应答（MSA|AA|原消息控制ID）
+    ack = _build_ack(control_id)
+    return {"created": created, "ack": ack, "patient": desensitize(patient, user).model_dump()}
+
+
+def _build_ack(control_id: str, code: str = "AA") -> str:
+    """构造 HL7 v2 ACK 应答消息：AA=接收成功（浙#21 消息传输确认回执）。"""
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"MSH|^~\\&|MEDPLAT|COUNTY|||{ts}||ACK|{control_id}|P|2.4\rMSA|{code}|{control_id}"
 
 
 @router.post("/fhir/Patient", status_code=201)
