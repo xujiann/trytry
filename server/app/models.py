@@ -1242,6 +1242,26 @@ class InfectionReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+# ---------- 浙江省指南 M11：集成平台底座（交换监控） ----------
+
+
+class ExchangeLog(Base):
+    """交换日志：每次入站转换落一条日志（含失败详情），交换监控与失败率统计数据源。"""
+
+    __tablename__ = "exchange_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # 来源系统标识（调用方经 X-Source-System 头声明，缺省空串）
+    source_system: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # hl7v2_patient / fhir_patient / fhir_observation ...
+    message_type: Mapped[str] = mapped_column(String(32), index=True)
+    # inbound=入站, outbound=出站
+    direction: Mapped[str] = mapped_column(String(8), default="inbound")
+    success: Mapped[bool] = mapped_column(Boolean, index=True)
+    error_detail: Mapped[str] = mapped_column(String(1024), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class Referral(Base):
     __tablename__ = "referrals"
 

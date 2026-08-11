@@ -4,14 +4,21 @@
 - POST /api/integration/fhir/Patient       FHIR R4 Patient 资源 → 患者建档
 - POST /api/integration/fhir/Observation   FHIR R4 Observation（血压/血糖）→ 慢病随访
 - GET  /api/integration/fhir/Patient/{ehc_no}  患者档案导出为 FHIR R4 Patient
+
+M11 交换监控（#26）：
+- 每次入站转换落 ExchangeLog（来源系统/消息类型/成功失败/错误详情），
+  独立会话写入，业务失败不丢日志；
+- 未预期的解析异常统一捕获：落日志后返回 422（不再 500 裸抛）；
+- GET /api/integration/exchange-logs 提供日志查询与失败率统计。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import SessionLocal, get_db
 from ..deps import get_current_user, require_roles
-from ..models import ChronicPatient, FollowUp, Patient, User
+from ..models import ChronicPatient, ExchangeLog, FollowUp, Patient, User
 from ..privacy import desensitize, mask_id_card, mask_phone
 from ..schemas import FollowUpCreate
 from .chronic import _evaluate_level
@@ -35,6 +42,40 @@ class Hl7Message(BaseModel):
     message: str = Field(min_length=1, description="HL7 v2 ADT 消息原文（管道分隔）")
 
 
+def _log_exchange(
+    message_type: str, success: bool, error_detail: str = "", source_system: str = ""
+) -> None:
+    """交换日志落库：独立会话写入并提交，与业务事务解耦（失败也留痕）。"""
+    db = SessionLocal()
+    try:
+        db.add(
+            ExchangeLog(
+                source_system=source_system[:64],
+                message_type=message_type,
+                direction="inbound",
+                success=success,
+                error_detail=error_detail[:1024],
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _run_inbound(message_type: str, source_system: str, fn):
+    """入站转换统一包装：成功/失败均落交换日志；未预期解析异常转 422。"""
+    try:
+        result = fn()
+    except HTTPException as exc:
+        _log_exchange(message_type, False, f"{exc.status_code}: {exc.detail}", source_system)
+        raise
+    except Exception as exc:  # noqa: BLE001 - 解析异常统一捕获落日志
+        _log_exchange(message_type, False, f"解析异常: {exc!r}", source_system)
+        raise HTTPException(status_code=422, detail="消息解析失败，已记录交换日志") from exc
+    _log_exchange(message_type, True, "", source_system)
+    return result
+
+
 def _upsert_patient(db: Session, data: dict) -> tuple[Patient, bool]:
     """按身份证号幂等建档：已存在返回既有档案（并发冲突由唯一约束兜底，M6）。"""
     return create_patient_idempotent(db, data)
@@ -42,7 +83,10 @@ def _upsert_patient(db: Session, data: dict) -> tuple[Patient, bool]:
 
 @router.post("/hl7v2/patient", status_code=201)
 def hl7v2_patient(
-    body: Hl7Message, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    body: Hl7Message,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    x_source_system: str = Header(default=""),
 ):
     """解析简化 HL7 v2 ADT 消息：取 PID 段建档。
 
@@ -50,6 +94,10 @@ def hl7v2_patient(
     PID-7 出生日期（YYYYMMDD）、PID-8 性别（M/F）、PID-13 联系电话。
     响应中的患者敏感字段按调用者角色统一脱敏（H1）。
     """
+    return _run_inbound("hl7v2_patient", x_source_system, lambda: _do_hl7v2_patient(body, db, user))
+
+
+def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
     lines = [ln.strip() for ln in body.message.replace("\r", "\n").split("\n") if ln.strip()]
     if not any(ln.startswith("MSH|") for ln in lines):
         raise HTTPException(status_code=422, detail="缺少 MSH 消息头段")
@@ -92,12 +140,19 @@ def hl7v2_patient(
 
 @router.post("/fhir/Patient", status_code=201)
 def fhir_patient(
-    resource: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    resource: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    x_source_system: str = Header(default=""),
 ):
     """FHIR R4 Patient 资源入站：identifier（身份证）+ name + gender + birthDate + telecom。
 
     响应中的患者敏感字段按调用者角色统一脱敏（H1）。
     """
+    return _run_inbound("fhir_patient", x_source_system, lambda: _do_fhir_patient(resource, db, user))
+
+
+def _do_fhir_patient(resource: dict, db: Session, user: User):
     if resource.get("resourceType") != "Patient":
         raise HTTPException(status_code=422, detail="resourceType 必须为 Patient")
 
@@ -145,11 +200,19 @@ _FIELD_DISEASE = {"sbp": "hypertension", "dbp": "hypertension", "glucose": "diab
 
 
 @router.post("/fhir/Observation", status_code=201)
-def fhir_observation(resource: dict, db: Session = Depends(get_db)):
+def fhir_observation(
+    resource: dict, db: Session = Depends(get_db), x_source_system: str = Header(default="")
+):
     """FHIR R4 Observation 入站：血压（LOINC 8480-6/8462-4）或血糖（2339-0）→ 慢病随访。
 
     subject.reference 形如 Patient/{ehc_no}；component 或 valueQuantity 提供数值。
     """
+    return _run_inbound(
+        "fhir_observation", x_source_system, lambda: _do_fhir_observation(resource, db)
+    )
+
+
+def _do_fhir_observation(resource: dict, db: Session):
     if resource.get("resourceType") != "Observation":
         raise HTTPException(status_code=422, detail="resourceType 必须为 Observation")
 
@@ -232,4 +295,66 @@ def export_fhir_patient(
         "gender": _GENDER_TO_FHIR.get(patient.gender, "unknown"),
         "birthDate": patient.birth_date,
         "telecom": ([{"system": "phone", "value": phone}] if phone else []),
+    }
+
+
+# ---------- M11 交换监控 ----------
+
+
+@router.get("/exchange-logs")
+def exchange_logs(
+    message_type: str | None = None,
+    success: bool | None = None,
+    source_system: str | None = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    """交换日志监控：明细查询 + 总量/失败率/按消息类型统计。"""
+    q = db.query(ExchangeLog)
+    if message_type:
+        q = q.filter(ExchangeLog.message_type == message_type)
+    if success is not None:
+        q = q.filter(ExchangeLog.success.is_(success))
+    if source_system:
+        q = q.filter(ExchangeLog.source_system == source_system)
+    logs = q.order_by(ExchangeLog.id.desc()).limit(min(max(limit, 1), 500)).all()
+
+    total = db.query(func.count(ExchangeLog.id)).scalar() or 0
+    failed = (
+        db.query(func.count(ExchangeLog.id)).filter(ExchangeLog.success.is_(False)).scalar() or 0
+    )
+    by_type_rows = (
+        db.query(
+            ExchangeLog.message_type,
+            func.count(ExchangeLog.id).label("n"),
+            func.sum(case((ExchangeLog.success.is_(False), 1), else_=0)).label("failed"),
+        )
+        .group_by(ExchangeLog.message_type)
+        .all()
+    )
+    return {
+        "total": total,
+        "failed": failed,
+        "failure_rate_pct": round(failed * 100.0 / total, 2) if total else 0.0,
+        "by_type": [
+            {
+                "message_type": r.message_type,
+                "count": r.n,
+                "failed": int(r.failed or 0),
+                "failure_rate_pct": round((r.failed or 0) * 100.0 / r.n, 2) if r.n else 0.0,
+            }
+            for r in by_type_rows
+        ],
+        "logs": [
+            {
+                "id": log.id,
+                "source_system": log.source_system,
+                "message_type": log.message_type,
+                "direction": log.direction,
+                "success": log.success,
+                "error_detail": log.error_detail,
+                "at": log.created_at.isoformat(),
+            }
+            for log in logs
+        ],
     }
