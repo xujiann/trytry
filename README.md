@@ -49,6 +49,7 @@
 | 公卫协同 | 应急事件指挥、诊间医防提醒、五域卫生监测 | `/api/publichealth` |
 | 综合管理 | 人力/派驻、财务集中核算、物资、公文、排班质控 | `/api/mgmt` |
 | 病历环节质控 | 结构化病历（主诉/现病史/既往史/查体/诊断依据/治疗方案）提交即评分，12 条规则实时缺陷清单与甲乙丙定级 | `/api/quality/records` |
+| 统一支付与对账 | 多渠道支付单（现金/银行卡/医保/线上，PaymentGateway 协议）、退款校验、日终对账三类差异检出 | `/api/billing/payments`、`/api/billing/reconciliation` |
 | 对接适配层 | HL7 v2 ADT / FHIR R4 Patient·Observation 入站转换、FHIR 导出 | `/api/integration` |
 | 集成平台 ESB | 接入方注册（令牌+限流）、消息队列重试与死信、流程编排（转换/校验/路由/落库）、成功率与积压统计 | `/api/esb` |
 | 实时消息 | WebSocket 危急值/缺药预警秒级广播、角色化任务待办中心 | `/ws/notifications`、`/api/todos` |

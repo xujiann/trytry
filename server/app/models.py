@@ -2117,3 +2117,67 @@ class RecordQcRule(Base):
     deduct_points: Mapped[int] = mapped_column(Integer, default=5)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# 块3：统一支付与日终对账（浙江指南 M8 深化）
+# ---------------------------------------------------------------------------
+
+
+class PaymentOrder(Base):
+    """支付单：一次结算可分多笔渠道支付（现金/银行卡/医保/线上）。
+
+    trade_no 为支付通道返回的外部流水号，是日终对账的比对主键。
+    """
+
+    __tablename__ = "payment_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    settlement_id: Mapped[int] = mapped_column(ForeignKey("settlements.id"), index=True)
+    # cash=现金, card=银行卡, insurance=医保基金, online=线上支付
+    channel: Mapped[str] = mapped_column(String(16), index=True)
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    # pending=待支付, paid=已支付, refunded=已全额退款, failed=支付失败
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    trade_no: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # 已退金额（部分退款累计；等于 amount 时状态转 refunded）
+    refunded_amount: Mapped[float] = mapped_column(Float, default=0)
+    fail_reason: Mapped[str] = mapped_column(String(256), default="")
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ReconciliationBatch(Base):
+    """日终对账单：某自然日本地支付单与通道流水的比对结果汇总。"""
+
+    __tablename__ = "reconciliation_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date: Mapped[str] = mapped_column(String(10), index=True)
+    total_orders: Mapped[int] = mapped_column(Integer, default=0)
+    total_amount: Mapped[float] = mapped_column(Float, default=0)
+    matched: Mapped[int] = mapped_column(Integer, default=0)
+    unmatched: Mapped[int] = mapped_column(Integer, default=0)
+    diff_amount: Mapped[float] = mapped_column(Float, default=0)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ReconciliationDiff(Base):
+    """对账差异明细：本地有通道无 / 通道有本地无 / 金额不一致。"""
+
+    __tablename__ = "reconciliation_diffs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("reconciliation_batches.id"), index=True)
+    # 通道单边流水（missing_local）无本地支付单，order_id 为空
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("payment_orders.id"), nullable=True)
+    trade_no: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # missing_local=通道有本地无, missing_remote=本地有通道无, amount_mismatch=金额不一致
+    diff_type: Mapped[str] = mapped_column(String(20), index=True)
+    local_amount: Mapped[float] = mapped_column(Float, default=0)
+    remote_amount: Mapped[float] = mapped_column(Float, default=0)
+    detail: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

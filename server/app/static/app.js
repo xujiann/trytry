@@ -2117,10 +2117,17 @@ async function renderInpatient() {
   };
 }
 
+/* 块3：支付渠道/状态/对账差异类型 */
+const PAY_CHANNELS = { cash: "现金", card: "银行卡", insurance: "医保基金", online: "线上支付" };
+const PAY_STATUS = { pending: ["待支付", "orange"], paid: ["已支付", "green"], refunded: ["已退款", ""], failed: ["支付失败", "red"] };
+const RECON_DIFF = { missing_local: "通道有本地无", missing_remote: "本地有通道无", amount_mismatch: "金额不一致" };
+
 async function renderBilling() {
-  $("#page-desc").textContent = "收费目录（价格公示）→ 计费明细（门诊按就诊/住院按住院单）→ 结算（医保分担）";
-  const [items, settlements, stats] = await Promise.all([
-    api("/api/billing/charge-items"), api("/api/billing/settlements"), api("/api/billing/stats")]);
+  $("#page-desc").textContent = "收费目录 → 计费明细 → 结算（医保分担）→ 统一支付（多渠道/退款）→ 日终对账差异核查";
+  const today = new Date().toISOString().slice(0, 10);
+  const [items, settlements, stats, payments, batches] = await Promise.all([
+    api("/api/billing/charge-items"), api("/api/billing/settlements"), api("/api/billing/stats"),
+    api("/api/billing/payments"), api("/api/billing/reconciliation")]);
   const BT = { outpatient: "门诊", inpatient: "住院" };
   $("#page-body").innerHTML = `
     ${stats.length ? `<div class="cards">${stats.map((s) =>
@@ -2149,17 +2156,77 @@ async function renderBilling() {
       <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p></div>
     <div class="panel"><h3>结算单</h3>${table(["ID", "患者", "类型", "总额", "医保", "自付", "时间"], settlements, (s) =>
       `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${BT[s.bill_type]}</td><td>${s.total_amount}</td>
-       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>`;
+       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>
+    <div class="panel"><h3>统一支付（经办）</h3>
+      <form class="inline" id="pay-form">
+        <input name="settlement_id" type="number" placeholder="结算单ID" required>
+        <select name="channel">${Object.entries(PAY_CHANNELS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="amount" type="number" step="any" placeholder="金额(元，空=自付额)">
+        <button>发起支付</button></form>
+      <p class="msg" id="pay-msg"></p>
+      <p style="font-size:12.5px;color:#8a939e">渠道对接经 PaymentGateway 协议实现，演示环境使用内置 Mock 通道；仅已支付单可退款且不超可退余额</p>
+      ${table(["ID", "结算单", "渠道", "金额", "已退", "状态", "外部流水号", "操作"], payments.slice(0, 30), (p) => {
+        const [text, color] = PAY_STATUS[p.status] || [p.status, ""];
+        return `<tr><td>${p.id}</td><td>${p.settlement_id}</td><td>${esc(p.channel_name)}</td><td>${p.amount}</td>
+          <td>${p.refunded_amount || 0}</td><td><span class="tag ${color}">${text}</span>${p.fail_reason ? `<div style="font-size:12px;color:#b23c3c">${esc(p.fail_reason)}</div>` : ""}</td>
+          <td style="font-size:12px">${esc(p.trade_no) || "—"}</td>
+          <td>${p.status === "paid" ? `<button class="btn secondary" data-refund="${p.id}">退款</button>` : "—"}</td></tr>`;
+      })}</div>
+    <div class="panel"><h3>日终对账</h3>
+      <form class="inline" id="recon-form">
+        <input name="date" placeholder="对账日期 YYYY-MM-DD" value="${today}" required>
+        <button>生成对账单</button></form>
+      <p class="msg" id="recon-msg"></p>
+      ${batches.map((b) => `<div style="margin-top:10px">
+        <p style="font-size:13px"><b>${esc(b.date)}</b>：支付单 ${b.total_orders} 笔 / 合计 ${b.total_amount} 元，
+          匹配 ${b.matched} 笔，差异 <span class="tag ${b.unmatched ? "red" : "green"}">${b.unmatched}</span> 笔，
+          差异金额 ${b.diff_amount} 元</p>
+        ${b.diffs.length ? table(["类型", "支付单", "流水号", "本地金额", "通道金额", "说明"], b.diffs, (d) =>
+          `<tr><td><span class="tag red">${esc(RECON_DIFF[d.diff_type] || d.diff_type)}</span></td>
+           <td>${d.order_id ?? "—"}</td><td style="font-size:12px">${esc(d.trade_no)}</td>
+           <td>${d.local_amount}</td><td>${d.remote_amount}</td><td style="font-size:12px">${esc(d.detail)}</td></tr>`) : ""}
+        </div>`).join("") || '<p class="desc">暂无对账单</p>'}</div>`;
   $("#ci-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/charge-items", formJson(e.target, ["price"]), "#bill-msg"); };
   $("#bd-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/details", formJson(e.target, ["patient_id", "admission_id", "encounter_id", "quantity"]), "#bill-msg"); };
   $("#settle-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/settlements", formJson(e.target, ["admission_id", "encounter_id", "insurance_pay"]), "#bill-msg"); };
+  $("#pay-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const body = { settlement_id: Number(f.get("settlement_id")), channel: f.get("channel") };
+    if (f.get("amount")) body.amount = Number(f.get("amount"));
+    try {
+      const order = await api("/api/billing/payments", { method: "POST", body: JSON.stringify(body) });
+      setMsg("#pay-msg", order.status === "paid"
+        ? `支付成功，流水号 ${order.trade_no}` : `支付失败：${order.fail_reason}`, order.status === "paid");
+      route();
+    } catch (err) { setMsg("#pay-msg", err.message, false); }
+  };
+  $("#recon-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const date = new FormData(e.target).get("date");
+    try {
+      const batch = await api(`/api/billing/reconciliation/run?date=${encodeURIComponent(date)}`, { method: "POST" });
+      setMsg("#recon-msg", `对账完成：${batch.total_orders} 笔，差异 ${batch.unmatched} 笔（${batch.diff_amount} 元）`, batch.unmatched === 0);
+      route();
+    } catch (err) { setMsg("#recon-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
-    const id = e.target.dataset.reprice;
-    if (!id) return;
-    const price = prompt("新单价（元）");
-    if (!price) return;
-    try { await api(`/api/billing/charge-items/${id}`, { method: "PATCH", body: JSON.stringify({ price: Number(price) }) }); route(); }
-    catch (err) { setMsg("#bill-msg", err.message, false); }
+    const { reprice, refund } = e.target.dataset;
+    try {
+      if (reprice) {
+        const price = prompt("新单价（元）");
+        if (!price) return;
+        await api(`/api/billing/charge-items/${reprice}`, { method: "PATCH", body: JSON.stringify({ price: Number(price) }) });
+        route();
+      } else if (refund) {
+        const amount = prompt("退款金额（元，留空为全额退款）");
+        if (amount === null) return;
+        const body = amount ? { amount: Number(amount) } : {};
+        const res = await api(`/api/billing/payments/${refund}/refund`, { method: "POST", body: JSON.stringify(body) });
+        setMsg("#pay-msg", `退款成功 ${res.refund_amount} 元，退款单号 ${res.refund_no}`);
+        route();
+      }
+    } catch (err) { setMsg("#bill-msg", err.message, false); }
   };
 }
 
