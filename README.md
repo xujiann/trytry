@@ -18,8 +18,8 @@
 | 双向转诊 | 上转/下转申请与状态流转 | `/api/referrals` |
 | 就诊与健康档案 | 就诊记录、患者360视图 | `/api/encounters`、`/api/archive` |
 | 共享诊断中心 | 影像/心电/检验/病理：基层检查、上级诊断、结果互认、危急值 | `/api/exams` |
-| 集中审方 | "系统+药师"双重审方、用药规则库 | `/api/prescriptions` |
-| 中心药房 | 库存、余缺调拨、缺药预警 | `/api/pharmacy` |
+| 集中审方 | "系统+药师"双重审方、用药规则库、事后处方点评 | `/api/prescriptions` |
+| 中心药房 | 库存、余缺调拨、缺药预警、供应商/采购验收/盘点 | `/api/pharmacy` |
 | 慢病管理 | 建档、随访智能分级、超期预警、指导要点嵌入 | `/api/chronic` |
 | 传染病监测 | 病例报告、多点触发预警 | `/api/infectious` |
 | 决策驾驶舱 | 指标对齐《监测指标体系（2024版）》，含图表 | `/api/metrics` |
@@ -35,10 +35,13 @@
 | 互联网+诊疗 | 在线咨询、复诊续方（联动审方） | `/api/telemedicine` |
 | 中医药服务 | 智能辅诊/体质辨识、共享中药房追溯、适宜技术库 | `/api/tcm` |
 | 药事监测 | 缺药登记、用药画像、多重用药预警、用药地图 | `/api/medication` |
-| 医保协同 | 结算、转诊证明、特病申报、基金监测 | `/api/insurance` |
-| 远程医学教育 | 课程、培训考核、通过率统计 | `/api/education` |
-| 老年健康 | ADL自动分级、失能清单 | `/api/eldercare` |
-| 妇幼保健 | 孕产妇建册/高危/访视、儿童保健 | `/api/maternal` |
+| 医保协同 | 结算、转诊证明、特病申报、双通道药品申报、基金监测 | `/api/insurance` |
+| 远程医学教育 | 课程、培训考核、直播申请审核、通过率统计 | `/api/education` |
+| 老年健康 | ADL自动分级、失能清单、健康预警（重度失能/复评到期） | `/api/eldercare` |
+| 妇幼保健 | 孕产妇建册/高危/访视、分娩记录、新筛与高危儿、妇女保健 | `/api/maternal` |
+| 血液管理 | 血库台账、用血申请→审批→发血（库存拦截） | `/api/blood` |
+| 法定证明与体检 | 出生/死亡医学证明、出生缺陷登记、成人体检异常清单 | `/api/certs`、`/api/checkups` |
+| 统一知识库 | 药物政策/临床指南/转诊/质管制度/养生五分类，有效期管理 | `/api/knowledge` |
 | 疫苗接种 | 接种登记、禁忌拦截、接种前评估 | `/api/vaccination` |
 | 公卫协同 | 应急事件指挥、诊间医防提醒、五域卫生监测 | `/api/publichealth` |
 | 综合管理 | 人力/派驻、财务集中核算、物资、公文、排班质控 | `/api/mgmt` |
@@ -46,6 +49,8 @@
 | 实时消息 | WebSocket 危急值/缺药预警秒级广播、角色化任务待办中心 | `/ws/notifications`、`/api/todos` |
 | 居民端移动版 | H5 移动优先：健康宣教、双因子查档案、满意度评价 | `/m` |
 | 智能化 | 相互作用审方、慢病风险评分、药品采购建议 | `/api/prescriptions`、`/api/chronic/{id}/risk`、`/api/pharmacy/purchase-suggestions` |
+| 附件服务 | 检查报告/不良事件附件：10MB限制、图片/PDF白名单、鉴权下载 | `/api/attachments` |
+| 上报报表 | 监测指标14项当期值与CSV导出、运营月报CSV（限管理层） | `/api/reports` |
 
 **《信息化功能指引》36项功能已全部实现**，逐项对照见 [docs/功能指引对照表.md](docs/功能指引对照表.md)。
 第二阶段生产化演进（配置中心/迁移/安全合规/对接/实时消息/移动端/智能化）已完成首轮实现，详见 [docs/下一步开发计划.md](docs/下一步开发计划.md) 与 [docs/开发时间计划.md](docs/开发时间计划.md) 完成项勾选。
@@ -84,12 +89,15 @@ python scripts/loadtest.py http://127.0.0.1:8000 --concurrency 10 --requests 100
 - 建议基线（本地 SQLite 单实例）：login P95 < 300ms、patients P95 < 100ms、
   exam_order P95 < 150ms；PostgreSQL + 多实例部署后重新采样并记录容量规划；
 - 存量数据迁移见 `server/scripts/import_legacy.py`（CSV 批量导入，支持 `--dry-run`
-  校验模式与错误行明细，样例见 `server/scripts/samples/`）。
+  校验模式与错误行明细，样例见 `server/scripts/samples/`）；
+- 标准字典导入见 `server/scripts/import_dictionary.py`（ICD-10 全量诊断/药品目录
+  CSV 导入统一字典，`--dry-run` 与进度输出；启动种子已内置常用 ICD-10 诊断 100 条
+  与常用药品 50 条，幂等入库）。
 
 ## 生产部署
 
 ```bash
-docker compose up -d                          # 一键起 app + PostgreSQL 16（命名卷持久化）
+docker compose up -d                          # 一键起 app + PostgreSQL 16 + Redis 7（命名卷持久化）
 cd server && alembic upgrade head             # 结构迁移（与应用共用 MEDPLAT_DATABASE_URL）
 sh scripts/backup.sh /data/backups            # pg_dump 备份（建议 crontab 定时）
 ```
