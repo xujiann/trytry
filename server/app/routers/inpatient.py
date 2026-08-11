@@ -244,6 +244,20 @@ def _case_summary_out(s: CaseSummary) -> dict:
     }
 
 
+def _operations_of_admission(db: Session, admission_id: int) -> str:
+    """本次住院已完成手术的实际术式，多台以逗号连接。"""
+    from ..models import SurgeryRecord, SurgeryRequest
+
+    rows = (
+        db.query(SurgeryRecord.actual_surgery_name)
+        .join(SurgeryRequest, SurgeryRecord.request_id == SurgeryRequest.id)
+        .filter(SurgeryRequest.admission_id == admission_id)
+        .order_by(SurgeryRecord.id)
+        .all()
+    )
+    return ",".join(name for (name,) in rows)[:256]
+
+
 @router.post(
     "/admissions/{admission_id}/case-summary",
     status_code=201,
@@ -262,9 +276,14 @@ def create_case_summary(
         raise HTTPException(status_code=409, detail="病案首页已填写")
     if body.drug_cost > body.total_cost:
         raise HTTPException(status_code=422, detail="药费不得超过总费用")
+    payload = body.model_dump()
+    # T2.3：首页手术栏未填时，从本次住院已完成的术中记录带出实际术式。
+    # DRG 外科组按主手术关键词入组，靠医生手敲这一栏最容易漏，带出来准确得多。
+    if not payload.get("operation"):
+        payload["operation"] = _operations_of_admission(db, admission_id)
     summary = CaseSummary(
         admission_id=admission_id,
-        **body.model_dump(),
+        **payload,
         created_by_name=user.full_name or user.username,
     )
     db.add(summary)
@@ -318,6 +337,18 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db)):
     _release_bed(db, admission.bed_id)
     admission.status = "discharged"
     admission.discharged_at = utcnow()
+    # T2.4：出院即派生出院随访任务，交给统一随访中心跟踪
+    from .followups import DISCHARGE_FOLLOWUP_DAYS, create_task
+
+    create_task(
+        db,
+        patient_id=admission.patient_id,
+        org_id=admission.org_id,
+        category="discharge",
+        source_id=admission.id,
+        title=f"出院随访：{admission.diagnosis_name or '住院治疗'}",
+        due_days=DISCHARGE_FOLLOWUP_DAYS,
+    )
     db.commit()
     db.refresh(admission)
     return _admission_out(admission)

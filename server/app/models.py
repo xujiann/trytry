@@ -2294,3 +2294,213 @@ class JobRun(Base):
     affected: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ============================================================================
+# 阶段二 T2.1/T2.2：住院临床文书（病程记录、护理记录、体温单、交接班）
+# ============================================================================
+
+
+class ProgressNote(Base):
+    """住院病程记录。
+
+    与门诊 MedicalRecord 的区别：门诊病历是"一次就诊一份"，住院病程是同一次
+    住院内的连续文书流，因此挂在 admission 上而不是 encounter 上，且可有多条。
+    """
+
+    __tablename__ = "progress_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)
+    # first=首次病程, daily=日常病程, ward_round=上级医师查房,
+    # rescue=抢救记录, consultation=会诊记录, discharge=出院记录
+    note_type: Mapped[str] = mapped_column(String(16), index=True)
+    content: Mapped[str] = mapped_column(String(4096))
+    doctor_name: Mapped[str] = mapped_column(String(64), default="")
+    # 记录时刻（YYYY-MM-DD HH:MM），与创建时刻分开：补记时二者不同
+    recorded_at: Mapped[str] = mapped_column(String(16), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class NursingRecord(Base):
+    """护理记录：护理级别执行与病情观察。"""
+
+    __tablename__ = "nursing_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)
+    # special=特级护理, level1=一级, level2=二级, level3=三级
+    nursing_level: Mapped[str] = mapped_column(String(16), default="level2", index=True)
+    content: Mapped[str] = mapped_column(String(2048), default="")
+    nurse_name: Mapped[str] = mapped_column(String(64), default="")
+    recorded_at: Mapped[str] = mapped_column(String(16), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class VitalSignRecord(Base):
+    """体温单：住院期间体征时序（体温/脉搏/呼吸/血压/出入量/体重）。
+
+    各项均可空——一次测量未必测全，用 0 冒充"未测"会污染趋势曲线。
+    """
+
+    __tablename__ = "vital_sign_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)
+    measured_at: Mapped[str] = mapped_column(String(16), index=True)
+    temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pulse: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    respiration: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sbp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dbp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    intake_ml: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_ml: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recorder: Mapped[str] = mapped_column(String(64), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ShiftHandover(Base):
+    """病区交接班记录。"""
+
+    __tablename__ = "shift_handovers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ward_id: Mapped[int] = mapped_column(ForeignKey("wards.id"), index=True)
+    # day=白班, evening=小夜, night=大夜
+    shift: Mapped[str] = mapped_column(String(16), index=True)
+    handover_date: Mapped[str] = mapped_column(String(10), index=True)
+    from_staff: Mapped[str] = mapped_column(String(64), default="")
+    to_staff: Mapped[str] = mapped_column(String(64), default="")
+    # 交班时在院人数与危重人数：交接班的核心数字，从住院数据快照落库
+    patient_count: Mapped[int] = mapped_column(Integer, default=0)
+    critical_count: Mapped[int] = mapped_column(Integer, default=0)
+    content: Mapped[str] = mapped_column(String(2048), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 阶段二 T2.3：手术麻醉管理
+# ============================================================================
+
+
+class OperatingRoom(Base):
+    """手术间资源。"""
+
+    __tablename__ = "operating_rooms"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_or_org_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SurgeryRequest(Base):
+    """手术申请：申请→审批→排班→完成。"""
+
+    __tablename__ = "surgery_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    surgery_name: Mapped[str] = mapped_column(String(256))
+    surgery_code: Mapped[str] = mapped_column(String(32), default="")
+    # I=I类切口 … IV；与院感监测的手术部位感染统计对齐
+    incision_level: Mapped[str] = mapped_column(String(4), default="II")
+    # general=全麻, spinal=椎管内, local=局麻, nerve_block=神经阻滞
+    anesthesia_type: Mapped[str] = mapped_column(String(16), default="general")
+    surgeon_name: Mapped[str] = mapped_column(String(64), default="")
+    # elective=择期, urgent=限期, emergency=急诊
+    urgency: Mapped[str] = mapped_column(String(16), default="elective", index=True)
+    planned_date: Mapped[str] = mapped_column(String(10), default="")
+    # requested=待审批, approved=已审批, scheduled=已排班, completed=已完成, cancelled=已取消
+    status: Mapped[str] = mapped_column(String(16), default="requested", index=True)
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class SurgerySchedule(Base):
+    """手术排班：手术间 + 日期 + 时段。
+
+    (room_id, scheduled_date, start_time) 唯一只挡得住起点完全相同的重排，
+    真正的区间重叠由应用层比较 start/end 判定（见 routers/surgery.py）。
+    """
+
+    __tablename__ = "surgery_schedules"
+    __table_args__ = (
+        UniqueConstraint("room_id", "scheduled_date", "start_time", name="uq_schedule_room_slot"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("surgery_requests.id"), unique=True, index=True)
+    room_id: Mapped[int] = mapped_column(ForeignKey("operating_rooms.id"), index=True)
+    scheduled_date: Mapped[str] = mapped_column(String(10), index=True)
+    start_time: Mapped[str] = mapped_column(String(5))
+    end_time: Mapped[str] = mapped_column(String(5))
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SurgeryRecord(Base):
+    """术中记录：一台手术一份，完成时填写。"""
+
+    __tablename__ = "surgery_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("surgery_requests.id"), unique=True, index=True)
+    actual_surgery_name: Mapped[str] = mapped_column(String(256))
+    surgeon_name: Mapped[str] = mapped_column(String(64), default="")
+    assistants: Mapped[str] = mapped_column(String(256), default="")
+    anesthetist_name: Mapped[str] = mapped_column(String(64), default="")
+    anesthesia_type: Mapped[str] = mapped_column(String(16), default="general")
+    incision_level: Mapped[str] = mapped_column(String(4), default="II")
+    start_at: Mapped[str] = mapped_column(String(16), default="")
+    end_at: Mapped[str] = mapped_column(String(16), default="")
+    blood_loss_ml: Mapped[int] = mapped_column(Integer, default=0)
+    findings: Mapped[str] = mapped_column(String(2048), default="")
+    procedure: Mapped[str] = mapped_column(String(4096), default="")
+    complications: Mapped[str] = mapped_column(String(1024), default="")
+    # 治愈/好转/未愈/死亡
+    outcome: Mapped[str] = mapped_column(String(16), default="好转")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ============================================================================
+# 阶段二 T2.4：统一随访中心
+# ============================================================================
+
+
+class FollowupTask(Base):
+    """统一随访任务：慢病、出院、术后、妇幼四类随访收敛到同一任务模型。
+
+    此前只有慢病随访有载体，出院随访与术后随访无处安放。source_id 指向来源
+    业务单据（慢病档案/住院记录/手术申请），不做外键——四类来源表不同，
+    用外键就得开四个可空列，反而更难查。
+    """
+
+    __tablename__ = "followup_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # chronic=慢病随访, discharge=出院随访, surgery=术后随访, maternal=妇幼访视
+    category: Mapped[str] = mapped_column(String(16), index=True)
+    source_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    title: Mapped[str] = mapped_column(String(128), default="")
+    due_date: Mapped[str] = mapped_column(String(10), index=True)
+    assigned_to: Mapped[str] = mapped_column(String(64), default="")
+    # pending=待随访, done=已完成, cancelled=已取消
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    result: Mapped[str] = mapped_column(String(1024), default="")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

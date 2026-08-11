@@ -48,6 +48,9 @@
 | 疫苗接种 | 接种登记、禁忌拦截、接种前评估 | `/api/vaccination` |
 | 公卫协同 | 应急事件指挥、诊间医防提醒、五域卫生监测 | `/api/publichealth` |
 | 综合管理 | 人力/派驻、财务集中核算、物资、公文、排班质控 | `/api/mgmt` |
+| 住院临床文书 | 病程记录（首次/日常/查房/抢救）、护理记录、体温单（体征时序）、交接班；出院前文书完整性自查 | `/api/inpatient/admissions/{id}/progress-notes` 等 |
+| 手术麻醉 | 申请→审批（申请人不得自批）→手术间排班（区间重叠拦截）→术中记录；病案首页手术栏自动取术式 | `/api/surgery` |
+| 随访中心 | 慢病/出院/术后/妇幼四类随访统一任务模型，出院与手术结案自动派生 | `/api/followups` |
 | 病历环节质控 | 结构化病历（主诉/现病史/既往史/查体/诊断依据/治疗方案）提交即评分，12 条规则实时缺陷清单与甲乙丙定级 | `/api/quality/records` |
 | 统一支付与对账 | 多渠道支付单（现金/银行卡/医保/线上，PaymentGateway 协议）、退款校验、日终对账三类差异检出 | `/api/billing/payments`、`/api/billing/reconciliation` |
 | 对接适配层 | HL7 v2 ADT / FHIR R4 Patient·Observation 入站转换、FHIR 导出 | `/api/integration` |

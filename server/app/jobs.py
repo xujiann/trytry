@@ -12,7 +12,14 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from .models import ChronicPatient, MedicalWaste, SmsCode, StaffContract, TcmPreparationBatch
+from .models import (
+    ChronicPatient,
+    FollowupTask,
+    MedicalWaste,
+    SmsCode,
+    StaffContract,
+    TcmPreparationBatch,
+)
 from .scheduler import _naive_utcnow, register
 from .ws import manager
 
@@ -84,6 +91,19 @@ def preparation_expiry_scan(db: Session) -> tuple[int, str]:
     )
     _alert("preparation_expiring", "中药制剂临期", count)
     return count, f"{PREPARATION_NOTICE_DAYS} 天内到期制剂 {count} 批"
+
+
+@register("followup_overdue_scan", "随访任务超期扫描", 3600)
+def followup_overdue_scan(db: Session) -> tuple[int, str]:
+    """口径与 GET /api/followups/overdue 一致，覆盖慢病/出院/术后/妇幼四类。"""
+    cutoff = date.today().isoformat()
+    count = (
+        db.query(FollowupTask)
+        .filter(FollowupTask.status == "pending", FollowupTask.due_date < cutoff)
+        .count()
+    )
+    _alert("followup_overdue", "随访任务超期", count)
+    return count, f"超期未随访 {count} 项"
 
 
 @register("sms_code_cleanup", "过期验证码清理", 3600)

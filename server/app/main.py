@@ -44,7 +44,9 @@ from .routers import (
     eldercare,
     emergency,
     encounters,
+    clinical_docs,
     esb,
+    followups,
     jobs as jobs_router,
     exams,
     gapfill,
@@ -67,6 +69,7 @@ from .routers import (
     publichealth,
     quality,
     referrals,
+    surgery,
     reports,
     service_extras,
     tcm,
@@ -265,6 +268,9 @@ app.include_router(dataquality.router)
 # 块1：集成平台底座 ESB（接入方注册/消息队列/流程编排/统计）
 app.include_router(esb.router)
 app.include_router(jobs_router.router)
+app.include_router(clinical_docs.router)
+app.include_router(surgery.router)
+app.include_router(followups.router)
 # 块4：细目补齐（中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务）
 app.include_router(gapfill.tcm_router)
 app.include_router(gapfill.cssd_router)
