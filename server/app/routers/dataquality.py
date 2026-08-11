@@ -1,0 +1,455 @@
+"""数据质控规则引擎（块3）：规则驱动扫描存量数据，输出违规明细与汇总。
+
+- 规则表 QcRule：code 唯一、target_table 指向被检表、rule_type 决定执行器、
+  config 携带参数、severity 区分 error/warn、active 控制是否参与扫描
+- 5 类执行器：required / range / enum / cross_ref / logic（命名逻辑校验）
+- 启动时按 app/data/qc_rules_seed.py 幂等种子化 15 条规则（已存在编码不覆盖本地调整）
+"""
+from datetime import date, datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..deps import get_current_user, require_admin
+from ..models import (
+    Admission,
+    ChronicDiseaseType,
+    ChronicPatient,
+    CodeEntry,
+    CodeSystem,
+    Encounter,
+    ExamReport,
+    ExamRequest,
+    FollowUp,
+    InfectiousCase,
+    MedicalCert,
+    Patient,
+    Prescription,
+    PrescriptionItem,
+    QcRule,
+)
+
+router = APIRouter(
+    prefix="/api/dataquality", tags=["数据质控"], dependencies=[Depends(get_current_user)]
+)
+
+RULE_TYPES = {
+    "required": "必填项",
+    "range": "数值区间",
+    "enum": "取值枚举",
+    "cross_ref": "引用校验",
+    "logic": "逻辑校验",
+}
+SEVERITIES = {"error": "错误", "warn": "警告"}
+
+# 可被质控规则引用的表（target_table → 模型）；新增被检表在此登记即可
+_TABLE_MODELS = {
+    m.__tablename__: m
+    for m in (
+        Patient,
+        Encounter,
+        ExamRequest,
+        ExamReport,
+        Prescription,
+        PrescriptionItem,
+        ChronicPatient,
+        FollowUp,
+        InfectiousCase,
+        Admission,
+        MedicalCert,
+        ChronicDiseaseType,
+    )
+}
+# 单条规则单次扫描的行数上限（防全表拉爆内存；超出部分下次整改后再扫）
+SCAN_LIMIT = 5000
+
+
+def _is_blank(value) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+# ---------------------------------------------------------------------------
+# 命名逻辑校验（rule_type=logic）
+# ---------------------------------------------------------------------------
+
+_ID_CARD_WEIGHTS = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+_ID_CARD_CHECK_CODES = "10X98765432"
+
+
+def id_card_invalid_reason(value: str) -> str:
+    """身份证号 GB 11643 校验：18 位、前17位数字、末位校验码正确。"""
+    if _is_blank(value):
+        return "身份证号为空"
+    value = value.strip().upper()
+    if len(value) != 18:
+        return f"身份证号长度应为18位，实际 {len(value)} 位"
+    if not value[:17].isdigit():
+        return "身份证号前17位应全为数字"
+    total = sum(int(value[i]) * _ID_CARD_WEIGHTS[i] for i in range(17))
+    expected = _ID_CARD_CHECK_CODES[total % 11]
+    if value[17] != expected:
+        return f"身份证号校验位应为 {expected}，实际 {value[17]}"
+    return ""
+
+
+def _check_id_card(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    field = rule.config.get("field", "id_card")
+    hits = []
+    for row in db.query(model).limit(SCAN_LIMIT).all():
+        reason = id_card_invalid_reason(getattr(row, field, ""))
+        if reason:
+            hits.append((row.id, reason))
+    return hits
+
+
+def _check_critical_closed_loop(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    """危急值报告未走到处置反馈（critical_status != resolved）。"""
+    rows = (
+        db.query(ExamReport)
+        .filter(ExamReport.critical.is_(True), ExamReport.critical_status != "resolved")
+        .limit(SCAN_LIMIT)
+        .all()
+    )
+    return [
+        (r.id, f"危急值闭环状态为 {r.critical_status or '未回填'}，未达处置反馈（resolved）")
+        for r in rows
+    ]
+
+
+def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    """结束时间早于开始时间（结束为空视为进行中，不判违规）。"""
+    start_field = rule.config.get("start_field", "")
+    end_field = rule.config.get("end_field", "")
+    hits = []
+    for row in db.query(model).limit(SCAN_LIMIT).all():
+        start, end = getattr(row, start_field, None), getattr(row, end_field, None)
+        if start is None or end is None:
+            continue
+        if isinstance(start, str) or isinstance(end, str):
+            if str(end) < str(start):
+                hits.append((row.id, f"{end_field}（{end}）早于 {start_field}（{start}）"))
+            continue
+        if end < start:
+            hits.append(
+                (
+                    row.id,
+                    f"{end_field}（{end:%Y-%m-%d %H:%M}）早于 {start_field}（{start:%Y-%m-%d %H:%M}）",
+                )
+            )
+    return hits
+
+
+def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    field = rule.config.get("field", "")
+    today = date.today().isoformat()
+    hits = []
+    for row in db.query(model).limit(SCAN_LIMIT).all():
+        value = getattr(row, field, None)
+        if isinstance(value, datetime):
+            value = value.date().isoformat()
+        elif isinstance(value, date):
+            value = value.isoformat()
+        if _is_blank(value):
+            continue
+        if str(value) > today:
+            hits.append((row.id, f"{field}（{value}）晚于当前日期（{today}）"))
+    return hits
+
+
+def _check_chronic_followup_indicator(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    """慢病随访须记录对应病种指标（按病种要求的指标字段判定）。"""
+    mapping: dict[str, list[str]] = rule.config.get("disease_indicators", {})
+    diseases = dict(db.query(ChronicPatient.id, ChronicPatient.disease).all())
+    hits = []
+    for row in db.query(FollowUp).limit(SCAN_LIMIT).all():
+        disease = diseases.get(row.chronic_id, "")
+        required = mapping.get(disease)
+        if required:
+            missing = [f for f in required if getattr(row, f, None) is None]
+            if missing:
+                hits.append((row.id, f"{disease} 随访缺少指标：{'、'.join(missing)}"))
+            continue
+        # 目录未列明指标要求的病种：至少记录一项指标（含通用 metrics）
+        if row.sbp is None and row.dbp is None and row.glucose is None and not (row.metrics or {}):
+            hits.append((row.id, f"{disease or '未知病种'} 随访未记录任何指标"))
+    return hits
+
+
+_LOGIC_CHECKS = {
+    "id_card_checksum": _check_id_card,
+    "critical_closed_loop": _check_critical_closed_loop,
+    "datetime_order": _check_datetime_order,
+    "date_not_future": _check_date_not_future,
+    "chronic_followup_indicator": _check_chronic_followup_indicator,
+}
+
+
+# ---------------------------------------------------------------------------
+# 通用执行器
+# ---------------------------------------------------------------------------
+
+
+def _filtered(db: Session, model, rule: QcRule):
+    query = db.query(model)
+    for key, value in (rule.config.get("filter") or {}).items():
+        column = getattr(model, key, None)
+        if column is not None:
+            query = query.filter(column == value)
+    return query.limit(SCAN_LIMIT)
+
+
+def _run_required(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    field = rule.config.get("field", "")
+    return [
+        (row.id, f"{field} 为空")
+        for row in _filtered(db, model, rule).all()
+        if _is_blank(getattr(row, field, None))
+    ]
+
+
+def _run_range(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    field = rule.config.get("field", "")
+    low, high = rule.config.get("min"), rule.config.get("max")
+    ex_low, ex_high = rule.config.get("exclusive_min", False), rule.config.get("exclusive_max", False)
+    hits = []
+    for row in _filtered(db, model, rule).all():
+        value = getattr(row, field, None)
+        if value is None:
+            hits.append((row.id, f"{field} 缺失，无法判定区间"))
+            continue
+        if low is not None and (value <= low if ex_low else value < low):
+            hits.append((row.id, f"{field}={value} 低于下限 {low}{'（不含）' if ex_low else ''}"))
+            continue
+        if high is not None and (value >= high if ex_high else value > high):
+            hits.append((row.id, f"{field}={value} 超出上限 {high}{'（不含）' if ex_high else ''}"))
+    return hits
+
+
+def _run_enum(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    field = rule.config.get("field", "")
+    allowed = set(rule.config.get("values", []))
+    return [
+        (row.id, f"{field}={getattr(row, field, None)} 不在允许取值 {sorted(allowed)} 内")
+        for row in _filtered(db, model, rule).all()
+        if getattr(row, field, None) not in allowed
+    ]
+
+
+def _run_cross_ref(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    field = rule.config.get("field", "")
+    skip_empty = rule.config.get("skip_empty", False)
+    if rule.config.get("ref_code_system"):
+        system_code = rule.config["ref_code_system"]
+        system = db.query(CodeSystem).filter(CodeSystem.code == system_code).first()
+        valid = (
+            {c for (c,) in db.query(CodeEntry.code).filter(CodeEntry.system_id == system.id).all()}
+            if system
+            else set()
+        )
+        ref_desc = f"{system_code} 字典"
+    else:
+        ref_model = _TABLE_MODELS.get(rule.config.get("ref_table", ""))
+        if ref_model is None:
+            raise HTTPException(status_code=422, detail=f"规则 {rule.code} 的引用表未登记")
+        ref_field = getattr(ref_model, rule.config.get("ref_field", "code"))
+        valid = {v for (v,) in db.query(ref_field).all()}
+        ref_desc = f"{rule.config['ref_table']} 目录"
+    hits = []
+    for row in _filtered(db, model, rule).all():
+        value = getattr(row, field, None)
+        if skip_empty and _is_blank(value):
+            continue
+        if value not in valid:
+            hits.append((row.id, f"{field}={value or '空'} 不存在于 {ref_desc}"))
+    return hits
+
+
+def _run_logic(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+    check = _LOGIC_CHECKS.get(rule.config.get("check", ""))
+    if check is None:
+        raise HTTPException(
+            status_code=422, detail=f"规则 {rule.code} 的逻辑校验 {rule.config.get('check')} 未实现"
+        )
+    return check(db, rule, model)
+
+
+_EXECUTORS = {
+    "required": _run_required,
+    "range": _run_range,
+    "enum": _run_enum,
+    "cross_ref": _run_cross_ref,
+    "logic": _run_logic,
+}
+
+
+def run_rule(db: Session, rule: QcRule) -> list[dict]:
+    """执行单条规则，返回违规明细（规则/表/记录id/问题描述/严重度）。"""
+    model = _TABLE_MODELS.get(rule.target_table)
+    if model is None:
+        raise HTTPException(
+            status_code=422, detail=f"规则 {rule.code} 的被检表 {rule.target_table} 未登记"
+        )
+    executor = _EXECUTORS.get(rule.rule_type)
+    if executor is None:
+        raise HTTPException(status_code=422, detail=f"规则 {rule.code} 的类型 {rule.rule_type} 不支持")
+    return [
+        {
+            "rule_code": rule.code,
+            "rule_name": rule.name,
+            "rule_type": rule.rule_type,
+            "severity": rule.severity,
+            "table": rule.target_table,
+            "record_id": record_id,
+            "message": message,
+        }
+        for record_id, message in executor(db, rule, model)
+    ]
+
+
+def _active_rules(db: Session, rule_code: str | None = None, target_table: str | None = None):
+    query = db.query(QcRule).filter(QcRule.active.is_(True))
+    if rule_code:
+        query = query.filter(QcRule.code == rule_code)
+    if target_table:
+        query = query.filter(QcRule.target_table == target_table)
+    return query.order_by(QcRule.code).all()
+
+
+@router.get("/run")
+def run_checks(
+    response: Response,
+    rule_code: str | None = None,
+    target_table: str | None = None,
+    severity: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    """按启用规则扫描现有数据，返回违规明细（停用规则不参与扫描）。"""
+    violations: list[dict] = []
+    for rule in _active_rules(db, rule_code, target_table):
+        if severity and rule.severity != severity:
+            continue
+        violations.extend(run_rule(db, rule))
+    total = len(violations)
+    limit = min(max(limit, 1), 1000)
+    response.headers["X-Total-Count"] = str(total)
+    return {
+        "total": total,
+        "error_total": sum(1 for v in violations if v["severity"] == "error"),
+        "warn_total": sum(1 for v in violations if v["severity"] == "warn"),
+        "offset": max(offset, 0),
+        "limit": limit,
+        "items": violations[max(offset, 0) : max(offset, 0) + limit],
+    }
+
+
+@router.get("/summary")
+def summary(db: Session = Depends(get_db)):
+    """违规汇总：按规则、按严重度、按被检表三个维度。"""
+    by_rule, by_severity, by_table = [], {"error": 0, "warn": 0}, {}
+    for rule in _active_rules(db):
+        hits = run_rule(db, rule)
+        by_rule.append(
+            {
+                "rule_code": rule.code,
+                "rule_name": rule.name,
+                "rule_type": rule.rule_type,
+                "rule_type_name": RULE_TYPES.get(rule.rule_type, rule.rule_type),
+                "table": rule.target_table,
+                "severity": rule.severity,
+                "violations": len(hits),
+            }
+        )
+        by_severity[rule.severity] = by_severity.get(rule.severity, 0) + len(hits)
+        by_table[rule.target_table] = by_table.get(rule.target_table, 0) + len(hits)
+    return {
+        "rules_checked": len(by_rule),
+        "total": sum(r["violations"] for r in by_rule),
+        "by_severity": by_severity,
+        "by_table": by_table,
+        "by_rule": by_rule,
+    }
+
+
+# ---------- 规则维护（限管理员） ----------
+
+
+class RuleCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1)
+    target_table: str = Field(min_length=1)
+    rule_type: str = Field(pattern="^(required|range|enum|cross_ref|logic)$")
+    config: dict = Field(default_factory=dict)
+    severity: str = Field(default="error", pattern="^(error|warn)$")
+    active: bool = True
+
+
+class RuleUpdate(BaseModel):
+    name: str | None = None
+    config: dict | None = None
+    severity: str | None = Field(default=None, pattern="^(error|warn)$")
+    active: bool | None = None
+
+
+def _rule_out(r: QcRule) -> dict:
+    return {
+        "id": r.id,
+        "code": r.code,
+        "name": r.name,
+        "target_table": r.target_table,
+        "rule_type": r.rule_type,
+        "rule_type_name": RULE_TYPES.get(r.rule_type, r.rule_type),
+        "config": r.config,
+        "severity": r.severity,
+        "severity_name": SEVERITIES.get(r.severity, r.severity),
+        "active": r.active,
+    }
+
+
+@router.get("/rules")
+def list_rules(active: bool | None = None, db: Session = Depends(get_db)):
+    query = db.query(QcRule)
+    if active is not None:
+        query = query.filter(QcRule.active.is_(active))
+    return [_rule_out(r) for r in query.order_by(QcRule.code).all()]
+
+
+@router.post("/rules", status_code=201, dependencies=[Depends(require_admin)])
+def create_rule(body: RuleCreate, db: Session = Depends(get_db)):
+    if db.query(QcRule).filter(QcRule.code == body.code).first():
+        raise HTTPException(status_code=409, detail="规则编码已存在")
+    if body.target_table not in _TABLE_MODELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"被检表未登记（可选：{'、'.join(sorted(_TABLE_MODELS))}）",
+        )
+    rule = QcRule(**body.model_dump())
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return _rule_out(rule)
+
+
+@router.patch("/rules/{rule_id}", dependencies=[Depends(require_admin)])
+def update_rule(rule_id: int, body: RuleUpdate, db: Session = Depends(get_db)):
+    rule = db.get(QcRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    for key, value in body.model_dump(exclude_none=True).items():
+        setattr(rule, key, value)
+    db.commit()
+    db.refresh(rule)
+    return _rule_out(rule)
+
+
+@router.delete("/rules/{rule_id}", dependencies=[Depends(require_admin)])
+def delete_rule(rule_id: int, db: Session = Depends(get_db)):
+    rule = db.get(QcRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    db.delete(rule)
+    db.commit()
+    return {"deleted": rule_id}

@@ -1769,3 +1769,27 @@ class PrintTemplate(Base):
     footer_note: Mapped[str] = mapped_column(String(256), default="")
     show_qr: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class QcRule(Base):
+    """数据质控规则（块3）：规则引擎按 rule_type + config 扫描存量数据并给出违规明细。
+
+    - rule_type：required=必填项 / range=数值区间 / enum=取值枚举 /
+      cross_ref=引用字典或目录 / logic=命名逻辑校验（身份证校验位、日期先后等）
+    - target_table：被检表名（与模型 __tablename__ 对应，见 dataquality._TABLE_MODELS）
+    - config：规则参数 JSON，结构见 app/data/qc_rules_seed.py 注释
+    - severity：error=必须整改 / warn=提示
+    """
+
+    __tablename__ = "qc_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    target_table: Mapped[str] = mapped_column(String(64), index=True)
+    rule_type: Mapped[str] = mapped_column(String(16), index=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    # error=错误（必须整改）, warn=警告（提示）
+    severity: Mapped[str] = mapped_column(String(8), default="error", index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

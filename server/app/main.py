@@ -34,6 +34,7 @@ from .routers import (
     chronic,
     consultations,
     contracts,
+    dataquality,
     cssd,
     dictionaries,
     drgs,
@@ -168,6 +169,15 @@ async def lifespan(_: FastAPI):
             if seed["code"] not in existing_drgs:
                 db.add(DrgGroup(**seed))
         db.commit()
+        # 块3：数据质控规则种子化（15 条，幂等；已存在编码不覆盖本地调整）
+        from .data.qc_rules_seed import SEED_QC_RULES
+        from .models import QcRule
+
+        existing_qc = {code for (code,) in db.query(QcRule.code).all()}
+        for seed in SEED_QC_RULES:
+            if seed["code"] not in existing_qc:
+                db.add(QcRule(**seed))
+        db.commit()
     finally:
         db.close()
     yield
@@ -223,6 +233,7 @@ app.include_router(admin_mgmt.router)
 app.include_router(attachments.router)
 app.include_router(reports.router)
 app.include_router(printing.router)
+app.include_router(dataquality.router)
 app.include_router(service_extras.router)
 app.include_router(todos.router)
 app.include_router(ws.router)

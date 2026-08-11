@@ -125,6 +125,7 @@ const PAGES = [
   { id: "cssd", title: "消毒供应", render: renderCssd },
   { id: "medwaste", title: "医废追溯", render: renderMedwaste },
   { group: "系统管理", roles: ["admin"] },
+  { id: "dataquality", title: "数据质控", render: renderDataQuality, roles: ["admin"] },
   { id: "printtpl", title: "打印模板", render: renderPrintTemplates, roles: ["admin"] },
   { id: "users", title: "用户管理", render: renderUsers, roles: ["admin"] },
   { id: "audit", title: "审计日志", render: renderAudit, roles: ["admin"] },
@@ -2558,6 +2559,75 @@ async function renderCerts() {
     if (!printcert) return;
     try { await openPrintPage(`/api/print/certs/${printcert}`); }
     catch (err) { setMsg("#cert-msg", err.message, false); }
+  };
+}
+
+/* 块3：数据质控（管理员）——规则驱动扫描存量数据，看违规明细与汇总 */
+const QC_SEVERITY = { error: ["错误", "red"], warn: ["警告", "orange"] };
+
+async function renderDataQuality() {
+  $("#page-desc").textContent = "规则引擎按启用规则扫描存量数据：必填/区间/枚举/引用/逻辑五类校验，停用规则不参与扫描";
+  const [summary, rules] = await Promise.all([
+    api("/api/dataquality/summary"), api("/api/dataquality/rules")]);
+  const drawViolations = async (params = "?limit=200") => {
+    const data = await api(`/api/dataquality/run${params}`);
+    $("#qc-violations").innerHTML = `<p class="desc" style="font-size:12.5px">共 ${data.total} 条违规（错误 ${data.error_total} / 警告 ${data.warn_total}），本页展示 ${data.items.length} 条</p>` +
+      table(["规则", "规则名称", "表", "记录ID", "问题描述", "严重度"], data.items, (v) => {
+        const [text, color] = QC_SEVERITY[v.severity] || [v.severity, ""];
+        return `<tr><td><span class="tag">${esc(v.rule_code)}</span></td><td>${esc(v.rule_name)}</td>
+          <td>${esc(v.table)}</td><td>${v.record_id}</td><td>${esc(v.message)}</td>
+          <td><span class="tag ${color}">${text}</span></td></tr>`;
+      });
+  };
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="label">参与扫描规则</div><div class="value">${summary.rules_checked}</div></div>
+      <div class="card"><div class="label">违规总数</div><div class="value${summary.total ? " warn" : ""}">${summary.total}</div></div>
+      <div class="card"><div class="label">错误级</div><div class="value${summary.by_severity.error ? " warn" : ""}">${summary.by_severity.error || 0}</div></div>
+      <div class="card"><div class="label">警告级</div><div class="value">${summary.by_severity.warn || 0}</div></div></div>
+    <div class="panel"><h3>违规明细</h3>
+      <form class="inline" id="qc-run-form">
+        <select name="rule_code"><option value="">全部规则</option>${rules.map((r) =>
+          `<option value="${esc(r.code)}">${esc(r.code)} ${esc(r.name)}</option>`).join("")}</select>
+        <select name="severity"><option value="">全部严重度</option><option value="error">错误</option><option value="warn">警告</option></select>
+        <button>运行检查</button></form>
+      <p class="msg" id="qc-msg"></p><div id="qc-violations">点击「运行检查」开始扫描</div></div>
+    <div class="panel"><h3>规则汇总</h3>${table(["规则", "名称", "类型", "表", "严重度", "违规数"], summary.by_rule, (r) => {
+      const [text, color] = QC_SEVERITY[r.severity] || [r.severity, ""];
+      return `<tr><td><span class="tag">${esc(r.rule_code)}</span></td><td>${esc(r.rule_name)}</td>
+        <td>${esc(r.rule_type_name)}</td><td>${esc(r.table)}</td><td><span class="tag ${color}">${text}</span></td>
+        <td>${r.violations ? `<span class="tag ${color}">${r.violations}</span>` : 0}</td></tr>`;
+    })}</div>
+    <div class="panel"><h3>规则库（管理员可停用/启用与调整严重度）</h3>
+      ${table(["编码", "名称", "类型", "被检表", "严重度", "状态", "操作"], rules, (r) => {
+        const [text, color] = QC_SEVERITY[r.severity] || [r.severity, ""];
+        return `<tr><td><span class="tag">${esc(r.code)}</span></td><td>${esc(r.name)}</td><td>${esc(r.rule_type_name)}</td>
+          <td>${esc(r.target_table)}</td><td><span class="tag ${color}">${text}</span></td>
+          <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+          <td><button class="btn secondary" data-qctoggle="${r.id}" data-active="${r.active ? 1 : 0}">${r.active ? "停用" : "启用"}</button>
+            <button class="btn secondary" data-qcsev="${r.id}" data-sev="${esc(r.severity)}">切换严重度</button></td></tr>`;
+      })}</div>`;
+  $("#qc-run-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const params = new URLSearchParams({ limit: "200" });
+    if (f.get("rule_code")) params.set("rule_code", f.get("rule_code"));
+    if (f.get("severity")) params.set("severity", f.get("severity"));
+    try { await drawViolations(`?${params}`); }
+    catch (err) { setMsg("#qc-msg", err.message, false); }
+  };
+  await drawViolations();
+  $("#page-body").onclick = async (e) => {
+    const { qctoggle, active, qcsev, sev } = e.target.dataset;
+    try {
+      if (qctoggle) {
+        await api(`/api/dataquality/rules/${qctoggle}`, { method: "PATCH", body: JSON.stringify({ active: active !== "1" }) });
+        route();
+      } else if (qcsev) {
+        await api(`/api/dataquality/rules/${qcsev}`, { method: "PATCH", body: JSON.stringify({ severity: sev === "error" ? "warn" : "error" }) });
+        route();
+      }
+    } catch (err) { setMsg("#qc-msg", err.message, false); }
   };
 }
 
