@@ -1,6 +1,6 @@
 # 县域医共体信息化平台（medplat）
 
-![tests](https://img.shields.io/badge/tests-342%20passed%20%2B%204%20e2e-brightgreen)
+![tests](https://img.shields.io/badge/tests-363%20passed%20%2B%204%20e2e-brightgreen)
 ![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)
 
 紧密型县域医共体信息化平台，依据国家卫生健康委《紧密型县域医共体信息化功能指引》（国卫办规划函〔2025〕63号）等文件建设。
@@ -26,7 +26,7 @@
 | 慢病管理 | 8 病种目录（分级规则/指导要点/随访周期）、建档、目录驱动智能分级、超期预警 | `/api/chronic`、`/api/chronic/disease-types` |
 | 传染病监测 | 病例报告、多点触发预警 | `/api/infectious` |
 | 决策驾驶舱 | 指标对齐《监测指标体系（2024版）》，含图表 | `/api/metrics` |
-| 居民端 | 手机号验证码/微信登录 + 实名绑定，健康档案向本人开放 | `/api/portal` |
+| 居民端 | 手机号验证码/微信登录 + 实名绑定、家庭成员代管、自助预约、我的签约/账单/转诊 | `/api/portal` |
 | 远程会诊 | 申请→受理→出具意见→评价 | `/api/consultations` |
 | 家医签约 | 协议、服务包、履约记录 | `/api/contracts` |
 | 预约诊疗 | 分时段号源发布与预约/取消/核销 | `/api/appointments` |
@@ -53,7 +53,7 @@
 | 对接适配层 | HL7 v2 ADT / FHIR R4 Patient·Observation 入站转换、FHIR 导出 | `/api/integration` |
 | 集成平台 ESB | 接入方注册（令牌+限流）、消息队列重试与死信、流程编排（转换/校验/路由/落库）、成功率与积压统计 | `/api/esb` |
 | 实时消息 | WebSocket 危急值/缺药预警秒级广播、角色化任务待办中心 | `/ws/notifications`、`/api/todos` |
-| 居民端移动版 | H5 移动优先：微信/手机号验证码登录、实名绑定、健康宣教、我的档案、满意度评价 | `/m` |
+| 居民端移动版 | H5 移动优先：微信/手机号验证码登录、实名绑定、家庭成员代管与档案切换、自助预约、签约/账单/转诊查询、健康宣教、满意度评价 | `/m` |
 | 医生移动工作台 | H5 移动优先：待办收件箱、危急值确认与处置、待审检查申请领取出报告、慢病随访录入、患者档案速查 | `/m/doctor` |
 | 智能化 | 50 条规则库审方（剂量/相互作用/禁忌诊断/特殊人群/肝肾提示）、处方点评要点、慢病风险评分、药品采购建议 | `/api/prescriptions`、`/api/chronic/{id}/risk`、`/api/pharmacy/purchase-suggestions` |
 | 附件服务 | 检查报告/不良事件附件：10MB限制、图片/PDF白名单、鉴权下载 | `/api/attachments` |
@@ -100,7 +100,7 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 ```bash
 cd server
-python -m pytest tests/ -q                                        # 全量单元/接口测试（342 项通过，4 项 e2e 默认跳过）
+python -m pytest tests/ -q                                        # 全量单元/接口测试（363 项通过，4 项 e2e 默认跳过）
 python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖率报告
 ```
 

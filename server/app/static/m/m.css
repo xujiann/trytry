@@ -70,6 +70,42 @@ body {
 .account-bar .who { font-size: 17px; font-weight: 600; display: block; }
 .account-bar .sub { color: #6b7480; font-size: 12.5px; }
 
+/* 家庭成员切换胶囊 */
+.chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 10px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  background: #fff; border: 1px solid #dfe5ea; border-radius: 999px;
+  padding: 7px 13px; font-size: 13.5px; white-space: nowrap;
+}
+.chip.on { background: #0b6e6e; border-color: #0b6e6e; color: #fff; }
+.chip em { font-style: normal; font-size: 11.5px; opacity: .65; }
+.chip .x { font-style: normal; opacity: .5; padding-left: 2px; font-size: 15px; }
+
+/* 添加成员折叠卡 */
+.m-card.fold { padding: 0; }
+.m-card.fold > summary {
+  padding: 14px 16px; font-size: 14px; color: #0b6e6e; list-style: none; cursor: pointer;
+}
+.m-card.fold > summary::-webkit-details-marker { display: none; }
+.m-card.fold > summary::after { content: " ＋"; }
+.m-card.fold[open] > summary::after { content: " －"; }
+.m-card.fold form { padding: 0 16px 16px; }
+
+/* 在线服务分段控件 */
+.seg {
+  display: flex; background: #e8edf1; border-radius: 9px; padding: 3px; margin-bottom: 12px;
+}
+.seg-btn {
+  flex: 1; border: 0; background: transparent; padding: 9px 0;
+  font-size: 14px; color: #4d5761; border-radius: 7px;
+}
+.seg-btn.active { background: #fff; color: #0b6e6e; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+#service-result .m-card button {
+  margin-top: 10px; padding: 10px; font-size: 14px;
+}
+#service-result .m-card button:disabled { background: #98a2ae; }
+#service-result .m-card .cancel-appt { background: #fff; color: #c0392b; border: 1px solid #e4b7b2; }
+
 /* 宣教文章列表 */
 .list .article {
   background: #fff; border-radius: 12px; padding: 14px 16px;

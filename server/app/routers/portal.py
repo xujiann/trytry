@@ -33,20 +33,30 @@ from ..config import settings
 from ..database import get_db
 from ..privacy import mask_phone
 from ..models import (
+    Appointment,
+    AppointmentSlot,
     ChronicPatient,
+    ContractService,
     Encounter,
     ExamReport,
     ExamRequest,
+    FamilyDoctorContract,
     HealthArticle,
+    Organization,
     Patient,
+    PaymentOrder,
+    Referral,
     ResidentAccount,
+    ResidentFamilyMember,
     SatisfactionSurvey,
+    Settlement,
     SmsCode,
 )
 from ..security import create_token, decode_token, hash_password, revoked_tokens, verify_password
 from ..sms import get_sms_provider
 from ..state_store import LoginFailureTracker, SlidingWindowRateLimiter
 from ..wechat import MockWeChatProvider, get_wechat_provider
+from .appointments import book_slot, release_appointment
 from .chronic import guidance_for
 
 router = APIRouter(prefix="/api/portal", tags=["居民端"])
@@ -515,12 +525,397 @@ def _build_archive(db: Session, patient: Patient) -> dict:
     }
 
 
+def accessible_patient(
+    db: Session, account: ResidentAccount, patient_id: int | None
+) -> Patient:
+    """解析本次请求要访问哪一份档案，并校验访问权。
+
+    可访问集合 = 本人档案 ∪ 已代管的家庭成员档案。不传 patient_id 时默认本人。
+    越权一律 403，且不区分"不存在"与"无权"，避免被用来探测他人档案是否存在。
+    """
+    if patient_id is None or patient_id == account.patient_id:
+        patient = db.get(Patient, account.patient_id) if account.patient_id else None
+        if patient is None:
+            raise HTTPException(status_code=403, detail="请先完成实名绑定")
+        return patient
+    managed = (
+        db.query(ResidentFamilyMember)
+        .filter(
+            ResidentFamilyMember.account_id == account.id,
+            ResidentFamilyMember.patient_id == patient_id,
+        )
+        .first()
+    )
+    patient = db.get(Patient, patient_id) if managed else None
+    if patient is None:
+        raise HTTPException(status_code=403, detail="无权访问该档案")
+    return patient
+
+
 @router.get("/me/archive")
 def my_archive_token(
-    patient: Patient = Depends(current_resident_patient), db: Session = Depends(get_db)
+    patient_id: int | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
 ):
-    """登录态查本人档案：客户端不再传任何身份标识。"""
+    """登录态查档案：默认本人，传 patient_id 可切换到已代管的家庭成员。"""
+    patient = accessible_patient(db, account, patient_id)
     return _build_archive(db, patient)
+
+
+# ============================================================================
+# 家庭成员代管
+# ============================================================================
+
+MAX_FAMILY_MEMBERS = 5
+
+
+class FamilyMemberIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    id_card: str = Field(min_length=6, max_length=18)
+    relation: str = Field(default="other", pattern="^(spouse|child|parent|other)$")
+    # 被代管人档案上登记了不同手机号时，需填该号码收到的验证码（purpose=bind）
+    code: str = ""
+
+
+@router.get("/me/family")
+def list_family(
+    account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)
+):
+    """我的家庭成员：含本人，供客户端做档案切换。"""
+    rows = (
+        db.query(ResidentFamilyMember, Patient)
+        .join(Patient, ResidentFamilyMember.patient_id == Patient.id)
+        .filter(ResidentFamilyMember.account_id == account.id)
+        .order_by(ResidentFamilyMember.id)
+        .all()
+    )
+    members = []
+    if account.patient_id:
+        me = db.get(Patient, account.patient_id)
+        if me is not None:
+            members.append(
+                {"patient_id": me.id, "name": me.name, "ehc_no": me.ehc_no, "relation": "self", "is_self": True}
+            )
+    members += [
+        {
+            "patient_id": p.id,
+            "name": p.name,
+            "ehc_no": p.ehc_no,
+            "relation": m.relation,
+            "is_self": False,
+            "member_id": m.id,
+        }
+        for m, p in rows
+    ]
+    return members
+
+
+@router.post("/me/family", status_code=201)
+def add_family_member(
+    body: FamilyMemberIn,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """添加代管家庭成员。
+
+    核验分两档，取决于被代管人自己有没有留手机号：
+
+    - 档案上登记的手机号与本账户不同 → 说明本人自己能收短信，必须提供**该号码**
+      的验证码，光知道姓名和身份证号不足以代管（否则等于开了个证件号查档口子）；
+    - 档案未登记手机号或就是本账户手机号（老人、儿童常见）→ 姓名+身份证号核验即可。
+
+    失败同样计入账户绑定锁定计数，防止拿账户逐个撞身份证号。
+    """
+    if not account.patient_id:
+        raise HTTPException(status_code=403, detail="请先完成本人实名绑定")
+    count = (
+        db.query(ResidentFamilyMember)
+        .filter(ResidentFamilyMember.account_id == account.id)
+        .count()
+    )
+    if count >= MAX_FAMILY_MEMBERS:
+        raise HTTPException(status_code=409, detail=f"最多代管{MAX_FAMILY_MEMBERS}位家庭成员")
+
+    key = f"portal:bind:{account.id}"
+    if _bind_failures.locked_remaining(key) > 0:
+        raise HTTPException(status_code=429, detail="绑定尝试过于频繁，请10分钟后再试")
+    patient = (
+        db.query(Patient)
+        .filter(Patient.name == body.name.strip(), Patient.id_card == body.id_card.strip())
+        .first()
+    )
+    if patient is None:
+        _bind_failures.record_failure(key)
+        raise HTTPException(status_code=404, detail="未找到该身份的健康档案，请先到就近机构建档")
+    if patient.id == account.patient_id:
+        raise HTTPException(status_code=409, detail="本人档案无需添加为家庭成员")
+
+    if patient.phone and patient.phone != account.phone:
+        if not body.code:
+            raise HTTPException(
+                status_code=428,
+                detail=f"该成员已登记手机号 {mask_phone(patient.phone)}，请获取该号码的验证码后再代管",
+            )
+        _consume_code(db, patient.phone, body.code, "bind")
+
+    member = ResidentFamilyMember(
+        account_id=account.id, patient_id=patient.id, relation=body.relation
+    )
+    db.add(member)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该成员已在您的家庭成员中") from None
+    _bind_failures.reset(key)
+    return {"member_id": member.id, "patient_id": patient.id, "name": patient.name}
+
+
+@router.delete("/me/family/{member_id}")
+def remove_family_member(
+    member_id: int,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """解除代管关系（只删关系，不动档案本身）。"""
+    member = (
+        db.query(ResidentFamilyMember)
+        .filter(
+            ResidentFamilyMember.id == member_id,
+            ResidentFamilyMember.account_id == account.id,
+        )
+        .first()
+    )
+    if member is None:
+        raise HTTPException(status_code=404, detail="家庭成员不存在")
+    db.delete(member)
+    db.commit()
+    return {"removed": True}
+
+
+# ============================================================================
+# 在线服务：预约、签约、账单、转诊
+# ============================================================================
+
+
+@router.get("/me/slots")
+def portal_slots(
+    org_id: int | None = None,
+    slot_date: str | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """可约号源：只列还有余号的，避免居民点进去才发现约满。"""
+    query = db.query(AppointmentSlot).filter(AppointmentSlot.booked < AppointmentSlot.capacity)
+    if org_id is not None:
+        query = query.filter(AppointmentSlot.org_id == org_id)
+    if slot_date:
+        query = query.filter(AppointmentSlot.slot_date == slot_date)
+    rows = query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(200).all()
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    return [
+        {
+            "id": s.id,
+            "org_id": s.org_id,
+            "org_name": org_names.get(s.org_id, ""),
+            "resource_type": s.resource_type,
+            "resource_name": s.resource_name,
+            "slot_date": s.slot_date,
+            "slot_time": s.slot_time,
+            "remaining": s.capacity - s.booked,
+        }
+        for s in rows
+    ]
+
+
+class PortalBookIn(BaseModel):
+    slot_id: int
+    # 不传即为本人预约；传则须是已代管的家庭成员
+    patient_id: int | None = None
+
+
+@router.post("/me/appointments", status_code=201)
+def portal_book(
+    body: PortalBookIn,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """居民自助预约：复用管理端的号源占位逻辑（黑名单/原子占号/重复判定一致）。"""
+    patient = accessible_patient(db, account, body.patient_id)
+    appointment = book_slot(db, body.slot_id, patient.id)
+    return {"id": appointment.id, "slot_id": appointment.slot_id, "status": appointment.status}
+
+
+def _my_patient_ids(db: Session, account: ResidentAccount) -> list[int]:
+    """本人 + 代管成员的患者 id 集合，用于"我的"各类列表查询。"""
+    ids = [account.patient_id] if account.patient_id else []
+    ids += [
+        m.patient_id
+        for m in db.query(ResidentFamilyMember)
+        .filter(ResidentFamilyMember.account_id == account.id)
+        .all()
+    ]
+    return ids
+
+
+@router.get("/me/appointments")
+def portal_my_appointments(
+    account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)
+):
+    """我的预约：含代管家庭成员的预约。"""
+    ids = _my_patient_ids(db, account)
+    if not ids:
+        return []
+    rows = (
+        db.query(Appointment, AppointmentSlot, Patient)
+        .join(AppointmentSlot, Appointment.slot_id == AppointmentSlot.id)
+        .join(Patient, Appointment.patient_id == Patient.id)
+        .filter(Appointment.patient_id.in_(ids))
+        .order_by(Appointment.id.desc())
+        .limit(100)
+        .all()
+    )
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    return [
+        {
+            "id": a.id,
+            "patient_id": p.id,
+            "patient_name": p.name,
+            "org_name": org_names.get(s.org_id, ""),
+            "resource_name": s.resource_name,
+            "slot_date": s.slot_date,
+            "slot_time": s.slot_time,
+            "status": a.status,
+        }
+        for a, s, p in rows
+    ]
+
+
+@router.post("/me/appointments/{appointment_id}/cancel")
+def portal_cancel(
+    appointment_id: int,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """取消我的预约：只能取消本人与代管成员的，且复用管理端的号源释放逻辑。"""
+    appointment = db.get(Appointment, appointment_id)
+    if appointment is None or appointment.patient_id not in _my_patient_ids(db, account):
+        raise HTTPException(status_code=404, detail="预约不存在")
+    release_appointment(db, appointment)
+    return {"id": appointment.id, "status": appointment.status}
+
+
+@router.get("/me/contract")
+def portal_my_contract(
+    patient_id: int | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的家医签约：协议、服务包与履约记录。"""
+    patient = accessible_patient(db, account, patient_id)
+    contracts = (
+        db.query(FamilyDoctorContract)
+        .filter(FamilyDoctorContract.patient_id == patient.id)
+        .order_by(FamilyDoctorContract.id.desc())
+        .all()
+    )
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    result = []
+    for c in contracts:
+        services = (
+            db.query(ContractService)
+            .filter(ContractService.contract_id == c.id)
+            .order_by(ContractService.id.desc())
+            .limit(20)
+            .all()
+        )
+        result.append(
+            {
+                "id": c.id,
+                "org_name": org_names.get(c.org_id, ""),
+                "doctor_name": c.doctor_name,
+                "package": c.package,
+                "signed_date": c.signed_date,
+                "status": c.status,
+                "services": [
+                    {"service_type": s.service_type, "note": s.note,
+                     "date": s.created_at.date().isoformat()}
+                    for s in services
+                ],
+            }
+        )
+    return result
+
+
+@router.get("/me/bills")
+def portal_my_bills(
+    patient_id: int | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的账单：结算单与对应支付单状态。"""
+    patient = accessible_patient(db, account, patient_id)
+    settlements = (
+        db.query(Settlement)
+        .filter(Settlement.patient_id == patient.id)
+        .order_by(Settlement.id.desc())
+        .limit(50)
+        .all()
+    )
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    paid_ids = {
+        o.settlement_id
+        for o in db.query(PaymentOrder)
+        .filter(
+            PaymentOrder.settlement_id.in_([s.id for s in settlements] or [0]),
+            PaymentOrder.status == "paid",
+        )
+        .all()
+    }
+    return [
+        {
+            "id": s.id,
+            "org_name": org_names.get(s.org_id, ""),
+            "bill_type": s.bill_type,
+            "total_amount": s.total_amount,
+            "insurance_pay": s.insurance_pay,
+            "self_pay": s.self_pay,
+            "paid": s.id in paid_ids,
+            "date": s.created_at.date().isoformat(),
+        }
+        for s in settlements
+    ]
+
+
+@router.get("/me/referrals")
+def portal_my_referrals(
+    patient_id: int | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的转诊进度。"""
+    patient = accessible_patient(db, account, patient_id)
+    rows = (
+        db.query(Referral)
+        .filter(Referral.patient_id == patient.id)
+        .order_by(Referral.id.desc())
+        .limit(50)
+        .all()
+    )
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    return [
+        {
+            "id": r.id,
+            "direction": r.direction,
+            "from_org": org_names.get(r.from_org_id, ""),
+            "to_org": org_names.get(r.to_org_id, ""),
+            "reason": r.reason,
+            "status": r.status,
+            "date": r.created_at.date().isoformat(),
+        }
+        for r in rows
+    ]
 
 
 class MySurveyIn(BaseModel):

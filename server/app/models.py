@@ -2229,3 +2229,23 @@ class SmsCode(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ResidentFamilyMember(Base):
+    """家庭成员代管：一个账户代管家人的档案（老人、儿童往往不自己用手机）。
+
+    与 ResidentAccount.patient_id（本人档案）分开存：本人档案唯一且由实名绑定
+    产生，代管关系可以有多条，且同一份档案可被多个子女同时代管。
+    """
+
+    __tablename__ = "resident_family_members"
+    __table_args__ = (
+        UniqueConstraint("account_id", "patient_id", name="uq_family_account_patient"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("resident_accounts.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # spouse=配偶, child=子女, parent=父母, other=其他
+    relation: Mapped[str] = mapped_column(String(16), default="other")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

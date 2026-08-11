@@ -32,28 +32,26 @@ def list_slots(org_id: int | None = None, slot_date: str | None = None, db: Sess
     return query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(500).all()
 
 
-@router.post(
-    "",
-    response_model=AppointmentOut,
-    status_code=201,
-    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 预约经办
-)
-def book(body: AppointmentCreate, db: Session = Depends(get_db)):
-    slot = db.get(AppointmentSlot, body.slot_id)
+def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
+    """号源预约核心逻辑：管理端代约与居民端自助预约共用。
+
+    黑名单拦截、原子占号、重复预约判定都在这里，两条入口不会走出不同的行为。
+    """
+    slot = db.get(AppointmentSlot, slot_id)
     if slot is None:
         raise HTTPException(status_code=404, detail="号源不存在")
-    if db.get(Patient, body.patient_id) is None:
+    if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     banned = (
         db.query(AppointmentBlacklist)
-        .filter(AppointmentBlacklist.patient_id == body.patient_id)
+        .filter(AppointmentBlacklist.patient_id == patient_id)
         .first()
     )
     if banned:
         raise HTTPException(status_code=403, detail=f"该患者在预约黑名单中：{banned.reason}")
     existing = (
         db.query(Appointment)
-        .filter(Appointment.slot_id == body.slot_id, Appointment.patient_id == body.patient_id)
+        .filter(Appointment.slot_id == slot_id, Appointment.patient_id == patient_id)
         .first()
     )
     if existing and existing.status == "booked":
@@ -66,7 +64,7 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
     claimed = (
         db.query(AppointmentSlot)
         .filter(
-            AppointmentSlot.id == body.slot_id,
+            AppointmentSlot.id == slot_id,
             AppointmentSlot.booked < AppointmentSlot.capacity,
         )
         .update(
@@ -84,7 +82,7 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(existing)
         return existing
-    appointment = Appointment(**body.model_dump())
+    appointment = Appointment(slot_id=slot_id, patient_id=patient_id)
     db.add(appointment)
     try:
         db.commit()
@@ -94,6 +92,31 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="该患者已预约此号源")
     db.refresh(appointment)
     return appointment
+
+
+def release_appointment(db: Session, appointment: Appointment) -> Appointment:
+    """取消预约并释放号源：管理端与居民端共用。"""
+    if appointment.status != "booked":
+        # 状态机：仅 booked 可取消；fulfilled/cancelled 均拒绝（M1）
+        raise HTTPException(status_code=409, detail=f"当前状态 {appointment.status} 不可取消")
+    appointment.status = "cancelled"
+    # H3 整改：条件 UPDATE 释放号源（WHERE booked > 0），防止并发释放扣成负数
+    db.query(AppointmentSlot).filter(
+        AppointmentSlot.id == appointment.slot_id, AppointmentSlot.booked > 0
+    ).update({AppointmentSlot.booked: AppointmentSlot.booked - 1}, synchronize_session=False)
+    db.commit()
+    db.refresh(appointment)
+    return appointment
+
+
+@router.post(
+    "",
+    response_model=AppointmentOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 预约经办
+)
+def book(body: AppointmentCreate, db: Session = Depends(get_db)):
+    return book_slot(db, body.slot_id, body.patient_id)
 
 
 @router.get("", response_model=list[AppointmentOut])
@@ -113,17 +136,7 @@ def cancel(appointment_id: int, db: Session = Depends(get_db)):
     appointment = db.get(Appointment, appointment_id)
     if appointment is None:
         raise HTTPException(status_code=404, detail="预约不存在")
-    if appointment.status != "booked":
-        # 状态机：仅 booked 可取消；fulfilled/cancelled 均拒绝（M1）
-        raise HTTPException(status_code=409, detail=f"当前状态 {appointment.status} 不可取消")
-    appointment.status = "cancelled"
-    # H3 整改：条件 UPDATE 释放号源（WHERE booked > 0），防止并发释放扣成负数
-    db.query(AppointmentSlot).filter(
-        AppointmentSlot.id == appointment.slot_id, AppointmentSlot.booked > 0
-    ).update({AppointmentSlot.booked: AppointmentSlot.booked - 1}, synchronize_session=False)
-    db.commit()
-    db.refresh(appointment)
-    return appointment
+    return release_appointment(db, appointment)
 
 
 @router.post(

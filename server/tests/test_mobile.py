@@ -46,6 +46,14 @@ def test_mobile_login_ui_present(client):
     assert "电子健康卡号" not in page
 
 
+def test_mobile_service_tab_present(client):
+    """在线服务页：家庭成员代管入口与预约/签约/账单/转诊四个分段。"""
+    page = client.get("/m").text
+    assert 'id="family-switch"' in page and 'id="family-form"' in page
+    for svc in ("appointment", "contract", "bill", "referral"):
+        assert f'data-svc="{svc}"' in page
+
+
 def test_mobile_health_articles_public(client, admin_headers):
     """健康宣教：发布后无需登录即可在居民端读取。"""
     art = client.post(

@@ -51,6 +51,7 @@ function switchTab(tab) {
     b.classList.toggle("active", b.dataset.tab === tab));
   window.scrollTo(0, 0);
   if (tab === "archive") renderArchiveTab();
+  if (tab === "service") renderServiceTab();
   if (tab === "survey") renderSurveyTab();
 }
 
@@ -221,7 +222,9 @@ $("#btn-logout").addEventListener("click", async () => {
     // 令牌本就失效时忽略，本地照样退出
   }
   token.clear();
+  viewingPatientId = null;
   renderArchiveTab();
+  renderServiceTab();
   renderSurveyTab();
 });
 
@@ -262,14 +265,100 @@ async function renderArchiveTab() {
   $("#account-bar").innerHTML = `
     <span class="who">${esc(me.name)}</span>
     <span class="sub">健康卡号 ${esc(me.ehc_no)}${me.phone ? " · " + esc(me.phone) : ""}</span>`;
+  await renderFamily();
   await loadArchive();
 }
+
+/* ---------------- 家庭成员代管 ---------------- */
+
+// 当前正在查看谁的档案：null=本人，否则为代管成员的 patient_id
+let viewingPatientId = null;
+
+const RELATION_NAMES = { self: "本人", child: "子女", parent: "父母", spouse: "配偶", other: "家人" };
+
+async function renderFamily() {
+  const box = $("#family-switch");
+  let members = [];
+  try {
+    members = await authApi("/api/portal/me/family");
+  } catch (err) {
+    box.innerHTML = "";
+    return;
+  }
+  // 代管成员被解除后，当前查看对象可能已失效，回落到本人
+  if (viewingPatientId !== null && !members.some((m) => m.patient_id === viewingPatientId)) {
+    viewingPatientId = null;
+  }
+  box.innerHTML = members.map((m) => {
+    const active = (viewingPatientId === null && m.is_self) || viewingPatientId === m.patient_id;
+    const del = m.is_self ? "" : `<i class="x" data-member="${m.member_id}">×</i>`;
+    return `<span class="chip${active ? " on" : ""}" data-pid="${m.patient_id}" data-self="${m.is_self}">
+      ${esc(m.name)}<em>${esc(RELATION_NAMES[m.relation] || m.relation)}</em>${del}</span>`;
+  }).join("");
+  box.querySelectorAll(".chip").forEach((chip) => {
+    chip.addEventListener("click", async (e) => {
+      if (e.target.classList.contains("x")) {
+        if (!confirm("解除该成员的代管关系？")) return;
+        await authApi(`/api/portal/me/family/${e.target.dataset.member}`, { method: "DELETE" });
+        await renderFamily();
+        await loadArchive();
+        return;
+      }
+      viewingPatientId = chip.dataset.self === "true" ? null : Number(chip.dataset.pid);
+      await renderFamily();
+      await loadArchive();
+    });
+  });
+}
+
+/** 代管成员自己留了手机号时后端返 428，此时展开验证码输入行。 */
+$("#fm-send-code").addEventListener("click", async () => {
+  const phone = prompt("请输入该成员在档案中登记的手机号");
+  if (!phone) return;
+  try {
+    const data = await api("/api/portal/auth/sms/code", {
+      method: "POST",
+      body: JSON.stringify({ phone: phone.trim(), purpose: "bind" }),
+    });
+    if (data.debug_code) $("#fm-code").value = data.debug_code;
+    setMsg("#family-msg", data.debug_code ? `演示环境验证码：${data.debug_code}` : "验证码已发送", true);
+  } catch (err) {
+    setMsg("#family-msg", err.message, false);
+  }
+});
+
+$("#family-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await authApi("/api/portal/me/family", {
+      method: "POST",
+      body: JSON.stringify({
+        name: $("#fm-name").value.trim(),
+        id_card: $("#fm-idcard").value.trim(),
+        relation: $("#fm-relation").value,
+        code: $("#fm-code").value.trim(),
+      }),
+    });
+    $("#fm-name").value = "";
+    $("#fm-idcard").value = "";
+    $("#fm-code").value = "";
+    $("#fm-code-row").classList.add("hidden");
+    $("#family-add").open = false;
+    setMsg("#family-msg", "", true);
+    await renderFamily();
+  } catch (err) {
+    // 428：该成员自己留了手机号，需要那个号码的验证码
+    if (/登记手机号/.test(err.message)) $("#fm-code-row").classList.remove("hidden");
+    setMsg("#family-msg", err.message, false);
+  }
+});
 
 async function loadArchive() {
   const box = $("#archive-result");
   box.innerHTML = '<p class="empty">加载中…</p>';
+  const query = viewingPatientId === null ? "" : `?patient_id=${viewingPatientId}`;
   try {
-    const data = await authApi("/api/portal/me/archive");
+    const data = await authApi(`/api/portal/me/archive${query}`);
     const chronic = data.chronic_care.map((c) => {
       const [label, color] = LEVEL_TAGS[c.level] || ["未分级", ""];
       return `<div class="m-card">
@@ -298,6 +387,152 @@ async function loadArchive() {
   } catch (err) {
     box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
   }
+}
+
+/* ---------------- 在线服务：预约 / 签约 / 账单 / 转诊 ---------------- */
+
+let activeService = "appointment";
+
+const REFERRAL_STATUS = { pending: "待接收", accepted: "已接收", completed: "已完成", rejected: "已退回" };
+const APPT_STATUS = { booked: "待就诊", fulfilled: "已就诊", cancelled: "已取消" };
+const PACKAGES = { basic: "基础包", standard: "标准包", premium: "个性包" };
+const SERVICE_TYPES = { visit: "上门服务", consult: "健康咨询", followup: "随访", referral: "转诊协助" };
+
+document.querySelectorAll(".seg-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    activeService = btn.dataset.svc;
+    document.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    loadService();
+  });
+});
+
+$("#btn-service-login").addEventListener("click", () => {
+  switchTab("archive");
+  history.replaceState(null, "", "#archive");
+});
+
+async function renderServiceTab() {
+  let bound = false;
+  if (token.get()) {
+    try {
+      bound = (await authApi("/api/portal/me")).bound;
+    } catch (err) {
+      bound = false;
+    }
+  }
+  $("#service-guard").classList.toggle("hidden", bound);
+  $("#service-body").classList.toggle("hidden", !bound);
+  if (bound) await loadService();
+}
+
+/** 查询串：非本人视角时带上 patient_id，与「我的档案」的成员切换保持一致。 */
+function svcQuery() {
+  return viewingPatientId === null ? "" : `?patient_id=${viewingPatientId}`;
+}
+
+async function loadService() {
+  const box = $("#service-result");
+  box.innerHTML = '<p class="empty">加载中…</p>';
+  try {
+    if (activeService === "appointment") return await renderAppointments(box);
+    if (activeService === "contract") return await renderContracts(box);
+    if (activeService === "bill") return await renderBills(box);
+    return await renderReferrals(box);
+  } catch (err) {
+    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+  }
+}
+
+async function renderAppointments(box) {
+  const [mine, slots] = await Promise.all([
+    authApi("/api/portal/me/appointments"),
+    authApi("/api/portal/me/slots"),
+  ]);
+  const list = mine.map((a) => `<div class="m-card">
+    ${kv("就诊人", esc(a.patient_name))}
+    ${kv("机构", esc(a.org_name))}
+    ${kv("资源", esc(a.resource_name))}
+    ${kv("时间", `${esc(a.slot_date)} ${esc(a.slot_time)}`)}
+    ${kv("状态", `<span class="tag ${a.status === "booked" ? "green" : ""}">${esc(APPT_STATUS[a.status] || a.status)}</span>`)}
+    ${a.status === "booked" ? `<button class="cancel-appt" data-id="${a.id}">取消预约</button>` : ""}
+  </div>`).join("");
+  const available = slots.map((s) => `<div class="m-card">
+    ${kv("机构", esc(s.org_name))}
+    ${kv("资源", esc(s.resource_name))}
+    ${kv("时间", `${esc(s.slot_date)} ${esc(s.slot_time)}`)}
+    ${kv("余号", String(s.remaining))}
+    <button class="book-slot" data-id="${s.id}">为${viewingPatientId === null ? "本人" : "该成员"}预约</button>
+  </div>`).join("");
+  box.innerHTML = `
+    <div class="sec-title">我的预约（${mine.length}）</div>
+    ${list || '<p class="empty">暂无预约</p>'}
+    <div class="sec-title">可约号源（${slots.length}）</div>
+    ${available || '<p class="empty">暂无可约号源</p>'}`;
+  box.querySelectorAll(".book-slot").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await authApi("/api/portal/me/appointments", {
+          method: "POST",
+          body: JSON.stringify({ slot_id: Number(btn.dataset.id), patient_id: viewingPatientId }),
+        });
+        await loadService();
+      } catch (err) {
+        btn.disabled = false;
+        alert(err.message);
+      }
+    });
+  });
+  box.querySelectorAll(".cancel-appt").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("确认取消该预约？")) return;
+      try {
+        await authApi(`/api/portal/me/appointments/${btn.dataset.id}/cancel`, { method: "POST" });
+        await loadService();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
+}
+
+async function renderContracts(box) {
+  const rows = await authApi(`/api/portal/me/contract${svcQuery()}`);
+  box.innerHTML = rows.length ? rows.map((c) => `<div class="m-card">
+    ${kv("签约机构", esc(c.org_name))}
+    ${kv("家庭医生", esc(c.doctor_name))}
+    ${kv("服务包", esc(PACKAGES[c.package] || c.package))}
+    ${kv("签约日期", esc(c.signed_date || "—"))}
+    ${kv("状态", `<span class="tag ${c.status === "active" ? "green" : ""}">${c.status === "active" ? "履约中" : "已解约"}</span>`)}
+    ${c.services.length ? `<div class="sec-title">履约记录（${c.services.length}）</div>` +
+      c.services.map((s) => kv(esc(SERVICE_TYPES[s.service_type] || s.service_type),
+        `${esc(s.note || "—")}<br><small>${esc(s.date)}</small>`)).join("") : ""}
+  </div>`).join("") : '<p class="empty">暂无签约记录</p>';
+}
+
+async function renderBills(box) {
+  const rows = await authApi(`/api/portal/me/bills${svcQuery()}`);
+  box.innerHTML = rows.length ? rows.map((b) => `<div class="m-card">
+    ${kv("机构", esc(b.org_name))}
+    ${kv("类型", b.bill_type === "inpatient" ? "住院结算" : "门诊结算")}
+    ${kv("总金额", `¥${b.total_amount.toFixed(2)}`)}
+    ${kv("医保支付", `¥${b.insurance_pay.toFixed(2)}`)}
+    ${kv("个人自付", `<b>¥${b.self_pay.toFixed(2)}</b>`)}
+    ${kv("支付状态", `<span class="tag ${b.paid ? "green" : "orange"}">${b.paid ? "已支付" : "待支付"}</span>`)}
+    ${kv("日期", esc(b.date))}
+  </div>`).join("") : '<p class="empty">暂无账单</p>';
+}
+
+async function renderReferrals(box) {
+  const rows = await authApi(`/api/portal/me/referrals${svcQuery()}`);
+  box.innerHTML = rows.length ? rows.map((r) => `<div class="m-card">
+    ${kv("方向", r.direction === "up" ? "上转" : "下转")}
+    ${kv("转出", esc(r.from_org))}
+    ${kv("转入", esc(r.to_org))}
+    ${kv("事由", esc(r.reason || "—"))}
+    ${kv("状态", `<span class="tag ${r.status === "completed" ? "green" : "orange"}">${esc(REFERRAL_STATUS[r.status] || r.status)}</span>`)}
+    ${kv("日期", esc(r.date))}
+  </div>`).join("") : '<p class="empty">暂无转诊记录</p>';
 }
 
 /* ---------------- 满意度评价 ---------------- */
@@ -355,5 +590,5 @@ $("#survey-form").addEventListener("submit", async (e) => {
   loadArticles();
   const fromWeChat = await consumeWeChatRedirect();
   const initTab = (location.hash || "#edu").replace("#", "");
-  switchTab(fromWeChat ? "archive" : (["edu", "archive", "survey"].includes(initTab) ? initTab : "edu"));
+  switchTab(fromWeChat ? "archive" : (["edu", "archive", "service", "survey"].includes(initTab) ? initTab : "edu"));
 })();
