@@ -1,10 +1,10 @@
 """用户管理与审计日志（管理员），修改密码（本人）。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import ROLE_NAMES, get_current_user, require_admin
+from ..deps import ROLE_NAMES, get_current_user, paginate, require_admin
 from ..models import AuditLog, Organization, User, utcnow
 from ..security import hash_password, validate_password_strength, verify_password
 
@@ -112,11 +112,18 @@ def export_audit_logs(db: Session = Depends(get_db)):
 
 
 @router.get("/audit", dependencies=[Depends(require_admin)])
-def list_audit_logs(limit: int = 100, username: str | None = None, db: Session = Depends(get_db)):
+def list_audit_logs(
+    response: Response,
+    limit: int = 100,
+    offset: int = 0,
+    username: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """审计日志（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
     query = db.query(AuditLog)
     if username:
         query = query.filter(AuditLog.username == username)
-    logs = query.order_by(AuditLog.id.desc()).limit(min(limit, 500)).all()
+    logs = paginate(query.order_by(AuditLog.id.desc()), response, offset, limit)
     return [
         {
             "id": log.id,

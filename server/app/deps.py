@@ -1,6 +1,6 @@
-from datetime import timezone
+from datetime import date, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,30 @@ from .models import User
 from .security import decode_token, revoked_tokens
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def paginate(query, response: Response, offset: int = 0, limit: int = 100, max_limit: int = 500):
+    """L-3（上轮 L4）分页整改：统一 offset/limit 分页，总数经 X-Total-Count 响应头返回。
+
+    - 缺省行为与既有接口兼容（offset=0 时等价于原先的 .limit(N)）；
+    - limit 超过 max_limit 时按 max_limit 截断，防一次拉全表。
+    """
+    response.headers["X-Total-Count"] = str(query.count())
+    return query.offset(max(offset, 0)).limit(min(max(limit, 1), max_limit)).all()
+
+
+def resolve_business_date(today: str | None) -> date:
+    """L-2（上轮 L3）整改：预警/超期类接口统一由服务端注入当前日期为默认。
+
+    `today` 覆盖参数仅供**测试与管理排查**使用（见 docs/接口对接规范.md），
+    生产对接方不应传入；格式非法返回 422，不再直接信任客户端字符串比较。
+    """
+    if today is None:
+        return date.today()
+    try:
+        return date.fromisoformat(today)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="today 参数须为 YYYY-MM-DD 格式") from None
 
 
 def token_issued_before_baseline(claims: dict, user: User) -> bool:
@@ -28,11 +52,12 @@ def get_current_user(
 ) -> User:
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未提供令牌")
-    if credentials.credentials in revoked_tokens:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌已登出失效")
     claims = decode_token(credentials.credentials)
     if claims is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌无效或已过期")
+    # L-9 整改：黑名单按 jti 判定（存储中不再落完整令牌明文）；无 jti 的旧令牌按原文兜底
+    if (claims.get("jti") or credentials.credentials) in revoked_tokens:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌已登出失效")
     user = db.query(User).filter(User.username == claims["sub"]).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
@@ -67,7 +92,7 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
 # | 急救调度/进程/体征 POST /api/emergency/*            | operator, doctor |
 # | 医保结算/转诊证明 POST /api/insurance/settlements 等 | operator |
 # | 特病申报 POST /api/insurance/special-diseases       | operator, doctor |
-# | 特病审核 .../review                                 | director, operator |
+# | 特病审核 .../review                                 | director（L-11：申报/审核职责分离） |
 # | 远程会诊申请/评价                                   | doctor, operator |
 # | 远程会诊受理/拒绝/出具意见                          | doctor |
 # | 互联网+诊疗咨询建立/结束                            | operator, doctor |

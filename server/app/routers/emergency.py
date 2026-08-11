@@ -1,6 +1,8 @@
 """⑦县域智慧医疗急救：呼救调度→转运（生命体征实时回传）→到院→收治，"上车即入院"。"""
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -45,6 +47,16 @@ class CaseOut(CaseCreate):
 class MilestoneCreate(BaseModel):
     milestone: str = Field(pattern="^(onset|call|depart|arrive_scene|arrive_hospital|treatment)$")
     occurred_at: str = Field(min_length=1, max_length=32)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _check_time_format(cls, value: str) -> str:
+        """L-12 整改：绿道节点时间须为 ISO 格式（如 2026-08-10 14:02），保证时效可计算。"""
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            raise ValueError("occurred_at 须为 ISO 格式时间，如 2026-08-10 14:02") from None
+        return value
 
 
 class MilestoneOut(MilestoneCreate):
@@ -165,6 +177,27 @@ def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(
             status_code=409,
             detail=f"节点「{MILESTONE_NAMES[body.milestone]}」已记录（{existing.occurred_at}）",
         )
+    # L-12 整改：节点时间须与固定序列单调一致（不得"先救治后发病"），时效计算方可靠
+    new_index = MILESTONE_SEQUENCE.index(body.milestone)
+    new_time = datetime.fromisoformat(body.occurred_at)
+    for other in (
+        db.query(EmergencyMilestone).filter(EmergencyMilestone.case_id == case_id).all()
+    ):
+        try:
+            other_time = datetime.fromisoformat(other.occurred_at)
+        except ValueError:  # pragma: no cover - 兼容历史脏数据
+            continue
+        other_index = MILESTONE_SEQUENCE.index(other.milestone)
+        if (other_index < new_index and other_time > new_time) or (
+            other_index > new_index and other_time < new_time
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"节点「{MILESTONE_NAMES[body.milestone]}」时间与已记录节点"
+                    f"「{MILESTONE_NAMES[other.milestone]}」（{other.occurred_at}）时序矛盾"
+                ),
+            )
     milestone = EmergencyMilestone(case_id=case_id, **body.model_dump())
     db.add(milestone)
     db.commit()

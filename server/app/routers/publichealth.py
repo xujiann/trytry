@@ -112,12 +112,15 @@ def close_event(event_id: int, db: Session = Depends(get_db)):
 
 @router.get("/reminders/{patient_id}")
 def clinic_reminders(patient_id: int, today: str | None = None, db: Session = Depends(get_db)):
-    """诊间医防协同提醒：接诊时汇聚该患者的公卫待办与风险提示。"""
-    from datetime import date
+    """诊间医防协同提醒：接诊时汇聚该患者的公卫待办与风险提示。
+
+    L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
+    """
+    from ..deps import resolve_business_date
 
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    cutoff = today or date.today().isoformat()
+    cutoff = resolve_business_date(today).isoformat()
     reminders: list[dict] = []
     for c in db.query(ChronicPatient).filter(ChronicPatient.patient_id == patient_id).all():
         if c.next_due and c.next_due < cutoff:

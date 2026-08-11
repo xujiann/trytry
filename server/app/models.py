@@ -55,7 +55,7 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     # lead_hospital=牵头医院, township=乡镇卫生院/社区卫生服务中心, village=村卫生室, public_health=公卫机构
     org_type: Mapped[str] = mapped_column(String(32))
-    # 层级：county=县级, township=乡级, village=村级
+    # 层级：city=市级（协作医院）, county=县级, township=乡级, village=村级
     level: Mapped[str] = mapped_column(String(16))
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
     address: Mapped[str] = mapped_column(String(256), default="")

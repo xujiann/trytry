@@ -72,7 +72,13 @@ manager = ConnectionManager()
 
 
 def _token_valid(token: str) -> bool:
-    return bool(token) and token not in revoked_tokens and decode_token(token) is not None
+    if not token:
+        return False
+    claims = decode_token(token)
+    if claims is None:
+        return False
+    # L-9 整改：黑名单按 jti 判定，与 HTTP 侧口径一致
+    return (claims.get("jti") or token) not in revoked_tokens
 
 
 def _lookup_user_meta(token: str) -> tuple[int | None, str]:

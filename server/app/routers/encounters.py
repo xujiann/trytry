@@ -1,9 +1,9 @@
 """就诊记录与患者360视图（健康档案汇聚）。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     ChronicPatient,
     Encounter,
@@ -37,11 +37,18 @@ def create_encounter(body: EncounterCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/encounters", response_model=list[EncounterOut])
-def list_encounters(patient_id: int | None = None, db: Session = Depends(get_db)):
+def list_encounters(
+    response: Response,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    """就诊记录列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
     query = db.query(Encounter)
     if patient_id is not None:
         query = query.filter(Encounter.patient_id == patient_id)
-    return query.order_by(Encounter.id.desc()).limit(200).all()
+    return paginate(query.order_by(Encounter.id.desc()), response, offset, limit)
 
 
 @router.get("/archive/{ehc_no}")

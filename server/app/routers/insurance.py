@@ -1,13 +1,13 @@
 """⑲医保业务协同：转诊证明、本地/异地结算记录、特殊病种申报、基金监测。"""
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     InsuranceSettlement,
     Organization,
@@ -56,11 +56,18 @@ def create_settlement(body: SettlementCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/settlements", response_model=list[SettlementOut])
-def list_settlements(patient_id: int | None = None, db: Session = Depends(get_db)):
+def list_settlements(
+    response: Response,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    """结算记录列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
     query = db.query(InsuranceSettlement)
     if patient_id is not None:
         query = query.filter(InsuranceSettlement.patient_id == patient_id)
-    return query.order_by(InsuranceSettlement.id.desc()).limit(200).all()
+    return paginate(query.order_by(InsuranceSettlement.id.desc()), response, offset, limit)
 
 
 @router.post(
@@ -123,7 +130,8 @@ def list_special_diseases(status: str | None = None, db: Session = Depends(get_d
 @router.post(
     "/special-diseases/{app_id}/review",
     response_model=SpecialDiseaseOut,
-    dependencies=[Depends(require_roles("director", "operator"))],
+    # L-11 整改：申报（operator/doctor）与审核（director）职责分离，杜绝自报自批
+    dependencies=[Depends(require_roles("director"))],
 )
 def review_special_disease(app_id: int, approve: bool, db: Session = Depends(get_db)):
     app_ = db.get(SpecialDiseaseApp, app_id)

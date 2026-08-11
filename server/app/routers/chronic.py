@@ -3,13 +3,11 @@
 膳食运动指导要点依据国卫办基层函〔2025〕121号要求嵌入系统，
 在接诊和随访时同步返回。
 """
-from datetime import date
-
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import ChronicPatient, FollowUp, Organization, Patient
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
 
@@ -68,19 +66,30 @@ def register_chronic(body: ChronicCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[ChronicOut])
-def list_chronic(disease: str | None = None, level: int | None = None, db: Session = Depends(get_db)):
+def list_chronic(
+    response: Response,
+    disease: str | None = None,
+    level: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
+    """慢病档案列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
     query = db.query(ChronicPatient)
     if disease:
         query = query.filter(ChronicPatient.disease == disease)
     if level is not None:
         query = query.filter(ChronicPatient.level == level)
-    return query.order_by(ChronicPatient.level.desc(), ChronicPatient.id).limit(500).all()
+    return paginate(query.order_by(ChronicPatient.level.desc(), ChronicPatient.id), response, offset, limit)
 
 
 @router.get("/overdue", response_model=list[ChronicOut])
 def list_overdue(today: str | None = None, db: Session = Depends(get_db)):
-    """随访超期名单：next_due 早于今天的建档患者，推送全科医生任务。"""
-    cutoff = today or date.today().isoformat()
+    """随访超期名单：next_due 早于今天的建档患者，推送全科医生任务。
+
+    L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
+    """
+    cutoff = resolve_business_date(today).isoformat()
     return (
         db.query(ChronicPatient)
         .filter(ChronicPatient.next_due != "", ChronicPatient.next_due < cutoff)

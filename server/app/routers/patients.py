@@ -1,13 +1,13 @@
 """患者主索引（EMPI）：以身份证号去重，生成全县唯一电子健康卡号。"""
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import Patient, User
 from ..privacy import desensitize, mask_id_card, mask_phone  # noqa: F401  公共脱敏模块（H1）
 from ..schemas import PatientCreate, PatientOut
@@ -66,17 +66,22 @@ def register_patient(body: PatientCreate, db: Session = Depends(get_db)):
 
 @router.get("", response_model=list[PatientOut])
 def search_patients(
+    response: Response,
     keyword: str = "",
+    offset: int = 0,
+    limit: int = 100,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """患者检索（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
     query = db.query(Patient)
     if keyword:
         like = f"%{keyword}%"
         query = query.filter(
             (Patient.name.like(like)) | (Patient.id_card.like(like)) | (Patient.ehc_no.like(like))
         )
-    return [desensitize(p, user) for p in query.order_by(Patient.id).limit(100).all()]
+    rows = paginate(query.order_by(Patient.id), response, offset, limit)
+    return [desensitize(p, user) for p in rows]
 
 
 @router.get("/{ehc_no}", response_model=PatientOut)

@@ -15,7 +15,8 @@ class TokenResponse(BaseModel):
 class OrganizationCreate(BaseModel):
     name: str = Field(min_length=2, max_length=128)
     org_type: str = Field(pattern="^(lead_hospital|township|village|public_health)$")
-    level: str = Field(pattern="^(county|township|village)$")
+    # L-4：city=市级协作医院（市级互认项目适用），county/township/village=县域层级
+    level: str = Field(pattern="^(city|county|township|village)$")
     parent_id: int | None = None
     address: str = ""
 

@@ -1,11 +1,11 @@
 """集中审方中心："系统+药师"双重审方，每方必审。"""
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
     DrugRule,
     MaternalRecord,
@@ -175,11 +175,18 @@ def create_prescription(
 
 
 @router.get("", response_model=list[PrescriptionOut], dependencies=[Depends(get_current_user)])
-def list_prescriptions(status: str | None = None, db: Session = Depends(get_db)):
+def list_prescriptions(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    """处方列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
     query = db.query(Prescription)
     if status:
         query = query.filter(Prescription.status == status)
-    return query.order_by(Prescription.id.desc()).limit(200).all()
+    return paginate(query.order_by(Prescription.id.desc()), response, offset, limit)
 
 
 @router.post(

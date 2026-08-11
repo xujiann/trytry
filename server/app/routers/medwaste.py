@@ -1,11 +1,11 @@
 """医疗废弃物：收集、暂存、交接全过程监管，滞留预警。"""
-from datetime import date, timedelta, datetime, timezone
+from datetime import timedelta, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import MedicalWaste, Organization
 from ..schemas import WasteCreate, WasteHandover, WasteOut
 
@@ -62,8 +62,11 @@ def handover(waste_id: int, body: WasteHandover, db: Session = Depends(get_db)):
 
 @router.get("/alerts", response_model=list[WasteOut])
 def overdue_alerts(today: str | None = None, db: Session = Depends(get_db)):
-    """滞留预警：收集超过 2 天仍未交接的医废。"""
-    end = date.fromisoformat(today) if today else date.today()
+    """滞留预警：收集超过 2 天仍未交接的医废。
+
+    L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
+    """
+    end = resolve_business_date(today)
     cutoff = (end - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
     return (
         db.query(MedicalWaste)

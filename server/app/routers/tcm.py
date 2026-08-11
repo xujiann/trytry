@@ -91,6 +91,9 @@ def identify_constitution(body: ConstitutionBody):
     if body.answers:
         scores = _transformed_scores(body.answers)
     elif body.scores:
+        # L-12 整改：转化分直报须在 0-100 界内
+        if any(not 0 <= v <= 100 for v in body.scores.values()):
+            raise HTTPException(status_code=422, detail="转化分须为 0-100 的整数")
         scores = dict(body.scores)
     else:
         raise HTTPException(status_code=422, detail="须提供 scores（转化分）或 answers（简表条目得分）")

@@ -102,8 +102,22 @@ def update_indicator(key: str, body: IndicatorPatch, db: Session = Depends(get_d
 
 
 @router.get("/orgs")
-def org_scorecards(db: Session = Depends(get_db)):
+def org_scorecards(
+    volume_cap: int = 5,
+    include_auto_passed: bool = True,
+    db: Session = Depends(get_db),
+):
+    """机构绩效计分。
+
+    L-1 口径参数化（向卫健考核口径过渡）：
+    - volume_cap：量类维度（远程诊断/家医履约）封顶次数，达到即满分（默认 5，可按机构规模调大）；
+    - include_auto_passed：处方合格率是否将系统自动通过（auto_passed）计为合格（默认 True，
+      收紧口径时传 False 仅计药师人工审核通过）。
+    """
+    if volume_cap < 1:
+        raise HTTPException(status_code=422, detail="volume_cap 须≥1")
     weights = _normalized_weights(db)
+    rx_ok_statuses = ["auto_passed", "approved"] if include_auto_passed else ["approved"]
     orgs = db.query(Organization).order_by(Organization.id).all()
     results = []
     for org in orgs:
@@ -136,7 +150,7 @@ def org_scorecards(db: Session = Depends(get_db)):
         rx_total = db.query(func.count(Prescription.id)).filter(Prescription.org_id == org.id).scalar() or 0
         rx_ok = (
             db.query(func.count(Prescription.id))
-            .filter(Prescription.org_id == org.id, Prescription.status.in_(["auto_passed", "approved"]))
+            .filter(Prescription.org_id == org.id, Prescription.status.in_(rx_ok_statuses))
             .scalar()
             or 0
         )
@@ -151,8 +165,8 @@ def org_scorecards(db: Session = Depends(get_db)):
         def ratio(part: int, total: int) -> float:
             return part / total if total else 0.0
 
-        # 量类维度按封顶计分：达到5次即满分
-        def volume_score(count: int, cap: int = 5) -> float:
+        # 量类维度按封顶计分：达到 volume_cap 次即满分（L-1 参数化）
+        def volume_score(count: int, cap: int = volume_cap) -> float:
             return min(count, cap) / cap
 
         # 各维度得分率（0-1）；仅对启用的指标计分

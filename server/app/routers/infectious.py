@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import InfectiousCase, InfectiousDisease, Organization
 from ..schemas import InfectiousCaseCreate, InfectiousCaseOut, InfectiousDiseaseOut
 
@@ -78,8 +78,11 @@ def multi_point_alerts(
     today: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """多点触发预警：滑动窗口内同病种病例数≥阈值，且涉及机构数≥2 时升级预警。"""
-    end = date.fromisoformat(today) if today else date.today()
+    """多点触发预警：滑动窗口内同病种病例数≥阈值，且涉及机构数≥2 时升级预警。
+
+    L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
+    """
+    end = resolve_business_date(today)
     start = (end - timedelta(days=window_days)).isoformat()
     rows = (
         db.query(

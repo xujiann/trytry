@@ -1,12 +1,12 @@
 """共享诊断中心（影像/心电/检验/病理）：基层检查、上级诊断、结果互认、危急值管理。"""
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import CriticalAction, ExamReport, ExamRequest, Organization, Patient, RecognitionItem, User
 from ..schemas import (
     CriticalActionOut,
@@ -27,10 +27,23 @@ router = APIRouter(prefix="/api/exams", tags=["共享诊断中心"], dependencie
 RECOGNITION_WINDOW_DAYS = 30
 
 
-def _directory_blocked_reason(db: Session, item_code: str) -> str | None:
+# 县域层级集合：mutual_scope=county 的项目仅在这些层级的机构间互认
+_COUNTY_LEVELS = {"county", "township", "village"}
+
+
+def _directory_blocked_reason(
+    db: Session,
+    item_code: str,
+    center_type: str | None = None,
+    orgs: tuple[Organization | None, ...] = (),
+) -> str | None:
     """互认目录管控：目录已配置时，仅目录内 active 项目可互认。
 
     返回 None=允许互认；返回字符串=阻断原因。目录为空视为未启用目录管控（兼容）。
+
+    - L-5 整改：目录项 center_type 参与判定，申请中心类型须与目录一致；
+    - L-4 整改：mutual_scope 参与判定——county（县域互认）要求相关机构
+      均为县域层级（county/township/village）；city（市级互认）放开至市级机构。
     """
     if db.query(RecognitionItem.id).first() is None:
         return None
@@ -39,6 +52,12 @@ def _directory_blocked_reason(db: Session, item_code: str) -> str | None:
         return "该项目不在互认目录内"
     if not item.active:
         return "该项目已在互认目录中停用"
+    if center_type and item.center_type and item.center_type != center_type:
+        return f"项目所属中心类型不符（目录为 {item.center_type}）"
+    if item.mutual_scope == "county":
+        for org in orgs:
+            if org is not None and org.level not in _COUNTY_LEVELS:
+                return f"该项目互认范围为县域，机构「{org.name}」不在县域层级内"
     return None
 
 
@@ -109,9 +128,19 @@ def _find_recognizable(db: Session, patient_id: int, item_code: str) -> ExamRequ
 
 
 @router.get("/recognition-check")
-def recognition_check(patient_id: int, item_code: str, db: Session = Depends(get_db)):
-    """开单前互认检查：项目须在互认目录内（目录已配置时），且近期已有同项目报告。"""
-    blocked = _directory_blocked_reason(db, item_code)
+def recognition_check(
+    patient_id: int,
+    item_code: str,
+    center_type: str | None = None,
+    from_org_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """开单前互认检查：项目须在互认目录内（目录已配置时），且近期已有同项目报告。
+
+    可选传 center_type / from_org_id，与建单侧判定口径一致（L-4/L-5）。
+    """
+    org = db.get(Organization, from_org_id) if from_org_id is not None else None
+    blocked = _directory_blocked_reason(db, item_code, center_type, (org,))
     if blocked is not None:
         return {"recognizable": False, "reason": blocked}
     existing = _find_recognizable(db, patient_id, item_code)
@@ -138,21 +167,29 @@ def create_request(
 ):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    if db.get(Organization, body.from_org_id) is None:
+    from_org = db.get(Organization, body.from_org_id)
+    if from_org is None:
         raise HTTPException(status_code=404, detail="申请机构不存在")
 
     data = body.model_dump(exclude={"accept_recognition_of"})
     request = ExamRequest(**data, created_by=user.id)
 
     if body.accept_recognition_of is not None:
-        blocked = _directory_blocked_reason(db, body.item_code)
-        if blocked is not None:
-            raise HTTPException(status_code=422, detail=f"不可互认：{blocked}")
         source = db.get(ExamRequest, body.accept_recognition_of)
         if source is None or source.status != "reported":
             raise HTTPException(status_code=422, detail="被互认的申请单不存在或尚无报告")
         if source.patient_id != body.patient_id or source.item_code != body.item_code:
             raise HTTPException(status_code=422, detail="互认必须是同一患者的同一检查项目")
+        # L-5 整改：建单侧校验中心类型一致（源申请与新申请须同为影像/心电/检验/病理）
+        if source.center_type != body.center_type:
+            raise HTTPException(status_code=422, detail="互认必须是同一中心类型的检查项目")
+        source_org = db.get(Organization, source.from_org_id)
+        # L-4/L-5 整改：目录判定纳入 center_type 与 mutual_scope（源/新申请机构层级）
+        blocked = _directory_blocked_reason(
+            db, body.item_code, body.center_type, (from_org, source_org)
+        )
+        if blocked is not None:
+            raise HTTPException(status_code=422, detail=f"不可互认：{blocked}")
         # L1 整改：建单侧同样复核 30 天互认窗口，与 recognition-check 预检口径一致
         window_start = datetime.now(timezone.utc) - timedelta(days=RECOGNITION_WINDOW_DAYS)
         if source.report is None or source.report.reported_at < window_start.replace(tzinfo=None):
@@ -170,14 +207,20 @@ def create_request(
 
 @router.get("", response_model=list[ExamRequestOut])
 def list_requests(
-    center_type: str | None = None, status: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    center_type: str | None = None,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
+    """检查申请列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
     query = db.query(ExamRequest)
     if center_type:
         query = query.filter(ExamRequest.center_type == center_type)
     if status:
         query = query.filter(ExamRequest.status == status)
-    return query.order_by(ExamRequest.id.desc()).limit(200).all()
+    return paginate(query.order_by(ExamRequest.id.desc()), response, offset, limit)
 
 
 @router.post(
@@ -381,15 +424,16 @@ def list_unacknowledged_critical(
 ):
     """超时未确认危急值清单：报告发布后医师超时未确认接收的（催办用）。
 
-    - today 提供时（YYYY-MM-DD）：报告日期早于 today 的未确认危急值均计入（粗略按天）；
-    - today 缺省时：按 timeout_minutes 与当前时间比对。
+    - 缺省按服务端当前时间与 timeout_minutes 比对（L-2：服务端注入当前日期）；
+    - today 覆盖参数（YYYY-MM-DD）仅限测试/管理排查用途：报告日期早于 today
+      的未确认危急值均计入（粗略按天），格式非法返回 422。
     """
     # M-1 整改：存量危急报告（critical_status=''）同样计入催办清单
     query = db.query(ExamReport).filter(
         ExamReport.critical.is_(True), ExamReport.critical_status.in_(["notified", ""])
     )
     if today is not None:
-        deadline = datetime.strptime(today, "%Y-%m-%d")
+        deadline = datetime.combine(resolve_business_date(today), datetime.min.time())
         rows = [r for r in query.all() if r.reported_at < deadline]
     else:
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=timeout_minutes)

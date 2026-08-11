@@ -1,4 +1,6 @@
 """统一认证：登录（防爆破锁定）、登出（令牌黑名单）。"""
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
@@ -7,7 +9,7 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import User
 from ..schemas import LoginRequest, TokenResponse
-from ..security import create_token, revoked_tokens, verify_password
+from ..security import create_token, decode_token, revoked_tokens, verify_password
 from ..state_store import LoginFailureTracker
 
 router = APIRouter(prefix="/api/auth", tags=["统一认证"])
@@ -44,7 +46,16 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/logout", dependencies=[Depends(get_current_user)])
 def logout(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)):
-    """登出：当前令牌加入黑名单立即失效。"""
+    """登出：当前令牌加入黑名单立即失效。
+
+    L-9 整改：按令牌 jti 拉黑（Redis/内存中不再存完整令牌明文），
+    TTL 取令牌剩余寿命；无 jti 的历史令牌退回按原文拉黑。
+    """
     if credentials is not None:
-        revoked_tokens.add(credentials.credentials)
+        claims = decode_token(credentials.credentials)
+        if claims and claims.get("jti"):
+            ttl = max(int(claims.get("exp", 0) - time.time()), 60)
+            revoked_tokens.add(claims["jti"], ttl_seconds=ttl)
+        else:  # pragma: no cover - 兼容无 jti 的历史令牌
+            revoked_tokens.add(credentials.credentials)
     return {"logged_out": True}

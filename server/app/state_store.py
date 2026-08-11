@@ -93,10 +93,18 @@ class LoginFailureTracker:
                 return True
             return False
         with self._lock:
-            record = self._memory.setdefault(username, {"count": 0, "locked_until": 0})
+            now = time.time()
+            record = self._memory.setdefault(
+                username, {"count": 0, "locked_until": 0, "window_expires": 0.0}
+            )
+            # L-8 整改：与 Redis 路径口径一致的滑动窗口——
+            # 距上次失败超过 lock_seconds 则计数清零，零散失败不再累计成锁定
+            if now > record.get("window_expires", 0.0):
+                record["count"] = 0
             record["count"] += 1
+            record["window_expires"] = now + self.lock_seconds
             if record["count"] >= self.fail_limit:
-                record["locked_until"] = time.time() + self.lock_seconds
+                record["locked_until"] = now + self.lock_seconds
                 record["count"] = 0
                 return True
             return False
