@@ -2062,3 +2062,58 @@ class EsbFlowRun(Base):
     step_results: Mapped[list] = mapped_column(JSON, default=list)
     error: Mapped[str] = mapped_column(String(1024), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ---------------------------------------------------------------------------
+# 块2：电子病历结构化与环节质控（浙江指南 M9 深化）
+# ---------------------------------------------------------------------------
+
+
+class MedicalRecord(Base):
+    """结构化电子病历：一次就诊一份（encounter_id 唯一），医师书写。
+
+    提交/更新即触发环节质控（实时评分），评分与等级回写本表，
+    作为 qc-summary 统计口径的唯一数据源。
+    """
+
+    __tablename__ = "medical_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("encounters.id"), unique=True, index=True)
+    # 冗余机构/医师：统计维度固定为病历书写时的归属，后续人员变动不影响历史口径
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    doctor_name: Mapped[str] = mapped_column(String(64), default="", index=True)
+    chief_complaint: Mapped[str] = mapped_column(String(256), default="")  # 主诉
+    present_illness: Mapped[str] = mapped_column(String(2048), default="")  # 现病史
+    past_history: Mapped[str] = mapped_column(String(1024), default="")  # 既往史
+    physical_exam: Mapped[str] = mapped_column(String(1024), default="")  # 体格检查
+    diagnosis_basis: Mapped[str] = mapped_column(String(1024), default="")  # 诊断依据
+    treatment_plan: Mapped[str] = mapped_column(String(1024), default="")  # 治疗方案
+    # 环节质控结果快照（每次提交/复评刷新）
+    qc_score: Mapped[int] = mapped_column(Integer, default=100, index=True)
+    qc_grade: Mapped[str] = mapped_column(String(4), default="甲", index=True)
+    qc_defects: Mapped[list] = mapped_column(JSON, default=list)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RecordQcRule(Base):
+    """环节质控规则：check_field 指向病历字段（含派生字段），rule 决定执行器。
+
+    rule ∈ required（必填）| min_length（下限字数）| max_length（上限字数）|
+    keyword_present（须含关键词之一）；config 携带阈值与触发条件；
+    命中即按 deduct_points 扣分（100 分制）。
+    """
+
+    __tablename__ = "record_qc_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    check_field: Mapped[str] = mapped_column(String(32), index=True)
+    rule: Mapped[str] = mapped_column(String(24), index=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    deduct_points: Mapped[int] = mapped_column(Integer, default=5)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

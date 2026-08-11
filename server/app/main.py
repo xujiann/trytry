@@ -180,6 +180,15 @@ async def lifespan(_: FastAPI):
             if seed["code"] not in existing_qc:
                 db.add(QcRule(**seed))
         db.commit()
+        # 块2：病历环节质控规则种子化（12 条，幂等；已存在编码不覆盖本地调整）
+        from .data.record_qc_rules_seed import SEED_RECORD_QC_RULES
+        from .models import RecordQcRule
+
+        existing_mrqc = {code for (code,) in db.query(RecordQcRule.code).all()}
+        for seed in SEED_RECORD_QC_RULES:
+            if seed["code"] not in existing_mrqc:
+                db.add(RecordQcRule(**seed))
+        db.commit()
     finally:
         db.close()
     yield

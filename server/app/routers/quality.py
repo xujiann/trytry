@@ -3,22 +3,32 @@
 - AdverseEvent：全员可上报（可选匿名），管理层审核 → 整改留痕闭环；
 - RecordQc：对就诊记录/病案首页抽检评分（0-100 自动定级甲/乙/丙），缺陷项记录；
 - InfectionReport：院感病例上报与核实（确认/排除），确认例入区域安全提醒口径。
+
+块2 深化：结构化电子病历 MedicalRecord + 环节质控规则 RecordQcRule
+（提交即评分，缺陷清单实时返回；qc-summary 按机构/医师统计甲乙丙分布）。
 """
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
+    Admission,
     AdverseEvent,
     CaseSummary,
     Encounter,
+    ExamReport,
+    ExamRequest,
     InfectionReport,
+    MedicalRecord,
     Organization,
     Patient,
     RecordQc,
+    RecordQcRule,
     User,
     utcnow,
 )
@@ -347,3 +357,338 @@ def infection_stats(db: Session = Depends(get_db)):
         or 0
     )
     return {"confirmed": confirmed, "pending_verify": pending, "by_site": by_site}
+
+
+# ---------------------------------------------------------------------------
+# 块2：结构化电子病历与环节质控
+#
+# 与上方「病历质控」（RecordQc）的区别：上者为事后**抽检**打分（人工给分），
+# 本节为病历书写**环节**的实时规则质控（提交即评分，缺陷清单同步返回）。
+# 分级口径按环节质控要求：≥90 甲、≥75 乙、其余丙。
+# ---------------------------------------------------------------------------
+
+# 结构化病历字段 → 中文名（缺陷清单展示用）
+RECORD_FIELDS = {
+    "chief_complaint": "主诉",
+    "present_illness": "现病史",
+    "past_history": "既往史",
+    "physical_exam": "体格检查",
+    "diagnosis_basis": "诊断依据",
+    "treatment_plan": "治疗方案",
+}
+# 引擎派生字段（非病历表列，由就诊上下文计算）
+DERIVED_FIELDS = {"critical_disposal": "危急值处置记录", "case_summary": "病案首页"}
+RECORD_RULE_TYPES = {
+    "required": "必填",
+    "min_length": "字数下限",
+    "max_length": "字数上限",
+    "keyword_present": "要点关键词",
+}
+
+
+def record_grade(score: int) -> str:
+    """环节质控分级：≥90 甲级、≥75 乙级、其余丙级。"""
+    return "甲" if score >= 90 else ("乙" if score >= 75 else "丙")
+
+
+def _record_context(db: Session, record: MedicalRecord) -> tuple[dict, dict]:
+    """汇集被检字段（病历字段 + 派生字段）与规则触发条件。"""
+    fields = {name: (getattr(record, name) or "") for name in RECORD_FIELDS}
+    # 危急值处置可写于治疗方案或现病史，合并后统一检索关键词
+    fields["critical_disposal"] = f"{record.treatment_plan or ''} {record.present_illness or ''}"
+
+    encounter = db.get(Encounter, record.encounter_id)
+    patient_id = encounter.patient_id if encounter else None
+    has_critical = (
+        db.query(ExamReport.id)
+        .join(ExamRequest, ExamReport.request_id == ExamRequest.id)
+        .filter(ExamRequest.patient_id == patient_id, ExamReport.critical.is_(True))
+        .first()
+        is not None
+    )
+    admission = (
+        db.query(Admission)
+        .filter(Admission.patient_id == patient_id, Admission.status == "discharged")
+        .order_by(Admission.id.desc())
+        .first()
+    )
+    summary = (
+        db.query(CaseSummary).filter(CaseSummary.admission_id == admission.id).first()
+        if admission
+        else None
+    )
+    fields["case_summary"] = summary.discharge_diagnosis if summary else ""
+    conditions = {
+        "has_critical_report": has_critical,
+        "inpatient_discharged": admission is not None,
+    }
+    return fields, conditions
+
+
+def _check_record_rule(rule: RecordQcRule, value: str) -> str:
+    """单条规则判定：返回缺陷说明，合规返回空串。"""
+    text = (value or "").strip()
+    if rule.rule == "required":
+        return "未填写" if not text else ""
+    if rule.rule == "min_length":
+        minimum = int(rule.config.get("min", 0))
+        return f"仅 {len(text)} 字，少于要求的 {minimum} 字" if len(text) < minimum else ""
+    if rule.rule == "max_length":
+        maximum = int(rule.config.get("max", 0))
+        return f"共 {len(text)} 字，超出上限 {maximum} 字" if len(text) > maximum else ""
+    if rule.rule == "keyword_present":
+        keywords = rule.config.get("keywords", [])
+        if any(k in text for k in keywords):
+            return ""
+        return f"未体现要点（应含以下之一：{'、'.join(keywords)}）"
+    return ""  # 未知规则类型不判缺陷（规则库演进期兼容）
+
+
+def evaluate_record(db: Session, record: MedicalRecord) -> dict:
+    """环节质控评分：逐条启用规则判定，命中即扣分，返回缺陷清单与等级。"""
+    fields, conditions = _record_context(db, record)
+    rules = (
+        db.query(RecordQcRule)
+        .filter(RecordQcRule.active.is_(True))
+        .order_by(RecordQcRule.code)
+        .all()
+    )
+    defects, deducted = [], 0
+    for rule in rules:
+        condition = (rule.config or {}).get("condition")
+        if condition and not conditions.get(condition, False):
+            continue  # 条件未触发：本次不参与评分（不计分母也不扣分）
+        message = _check_record_rule(rule, fields.get(rule.check_field, ""))
+        if message:
+            deducted += rule.deduct_points
+            defects.append(
+                {
+                    "rule_code": rule.code,
+                    "rule_name": rule.name,
+                    "field": rule.check_field,
+                    "field_name": RECORD_FIELDS.get(rule.check_field)
+                    or DERIVED_FIELDS.get(rule.check_field, rule.check_field),
+                    "rule_type": rule.rule,
+                    "rule_type_name": RECORD_RULE_TYPES.get(rule.rule, rule.rule),
+                    "message": message,
+                    "deduct_points": rule.deduct_points,
+                }
+            )
+    score = max(0, 100 - deducted)
+    return {
+        "score": score,
+        "grade": record_grade(score),
+        "deducted": deducted,
+        "rules_checked": len(rules),
+        "defects": defects,
+    }
+
+
+def _apply_qc(db: Session, record: MedicalRecord) -> dict:
+    """评分并把结果快照回写病历（统计口径唯一来源，调用方负责 commit）。"""
+    result = evaluate_record(db, record)
+    record.qc_score = result["score"]
+    record.qc_grade = result["grade"]
+    record.qc_defects = result["defects"]
+    return result
+
+
+class MedicalRecordIn(BaseModel):
+    encounter_id: int
+    chief_complaint: str = Field(default="", max_length=256)
+    present_illness: str = Field(default="", max_length=2048)
+    past_history: str = Field(default="", max_length=1024)
+    physical_exam: str = Field(default="", max_length=1024)
+    diagnosis_basis: str = Field(default="", max_length=1024)
+    treatment_plan: str = Field(default="", max_length=1024)
+
+
+def _record_out(r: MedicalRecord) -> dict:
+    return {
+        "id": r.id,
+        "encounter_id": r.encounter_id,
+        "org_id": r.org_id,
+        "doctor_name": r.doctor_name,
+        **{name: getattr(r, name) for name in RECORD_FIELDS},
+        "qc_score": r.qc_score,
+        "qc_grade": r.qc_grade,
+        "created_at": r.created_at.isoformat(),
+        "updated_at": r.updated_at.isoformat(),
+    }
+
+
+@router.post(
+    "/records",
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor"))],  # 病历书写=医师
+)
+def upsert_medical_record(
+    body: MedicalRecordIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """提交/更新结构化病历：同一就诊一份，**同步返回缺陷清单与扣分**。"""
+    encounter = db.get(Encounter, body.encounter_id)
+    if encounter is None:
+        raise HTTPException(status_code=404, detail="就诊记录不存在")
+    record = (
+        db.query(MedicalRecord).filter(MedicalRecord.encounter_id == body.encounter_id).first()
+    )
+    created = record is None
+    if created:
+        record = MedicalRecord(
+            encounter_id=body.encounter_id,
+            org_id=encounter.org_id,
+            doctor_name=user.full_name or user.username,
+            created_by=user.id,
+        )
+        db.add(record)
+    for name in RECORD_FIELDS:
+        setattr(record, name, getattr(body, name))
+    record.updated_at = utcnow()
+    db.flush()
+    result = _apply_qc(db, record)
+    db.commit()
+    db.refresh(record)
+    return {"created": created, "record": _record_out(record), "qc": result}
+
+
+@router.get("/records")
+def list_medical_records(
+    encounter_id: int | None = None,
+    org_id: int | None = None,
+    grade: str | None = None,
+    doctor_name: str | None = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(MedicalRecord)
+    if encounter_id is not None:
+        q = q.filter(MedicalRecord.encounter_id == encounter_id)
+    if org_id is not None:
+        q = q.filter(MedicalRecord.org_id == org_id)
+    if grade:
+        q = q.filter(MedicalRecord.qc_grade == grade)
+    if doctor_name:
+        q = q.filter(MedicalRecord.doctor_name == doctor_name)
+    return [_record_out(r) for r in q.order_by(MedicalRecord.id.desc()).limit(200).all()]
+
+
+def _grade_bucket() -> dict:
+    return {"甲": 0, "乙": 0, "丙": 0}
+
+
+@router.get("/records/qc-summary")
+def record_qc_summary(
+    period: str | None = None, org_id: int | None = None, db: Session = Depends(get_db)
+):
+    """全量环节质控统计：按机构/医师的甲乙丙分布与平均分（period=YYYY-MM 过滤）。"""
+    if period is not None and not re.fullmatch(r"\d{4}-\d{2}", period):
+        raise HTTPException(status_code=422, detail="period 格式须为 YYYY-MM")
+    q = db.query(MedicalRecord)
+    if org_id is not None:
+        q = q.filter(MedicalRecord.org_id == org_id)
+    records = [
+        r
+        for r in q.order_by(MedicalRecord.id.desc()).limit(5000).all()
+        # 月份口径与运营月报一致：按病历创建月份归属
+        if period is None or (r.created_at and r.created_at.strftime("%Y-%m") == period)
+    ]
+    org_names = dict(db.query(Organization.id, Organization.name).all())
+
+    def group(key_fn, label_fn) -> list[dict]:
+        buckets: dict = {}
+        for r in records:
+            bucket = buckets.setdefault(
+                key_fn(r), {"grades": _grade_bucket(), "total": 0, "score_sum": 0}
+            )
+            bucket["grades"][r.qc_grade] = bucket["grades"].get(r.qc_grade, 0) + 1
+            bucket["total"] += 1
+            bucket["score_sum"] += r.qc_score
+        return [
+            {
+                "key": key,
+                "name": label_fn(key),
+                "total": b["total"],
+                "avg_score": round(b["score_sum"] / b["total"], 1) if b["total"] else 0.0,
+                "grade_a": b["grades"]["甲"],
+                "grade_b": b["grades"]["乙"],
+                "grade_c": b["grades"]["丙"],
+                "grade_a_pct": round(b["grades"]["甲"] * 100.0 / b["total"], 2) if b["total"] else 0.0,
+            }
+            for key, b in sorted(buckets.items(), key=lambda kv: -kv[1]["total"])
+        ]
+
+    grades = _grade_bucket()
+    for r in records:
+        grades[r.qc_grade] = grades.get(r.qc_grade, 0) + 1
+    total = len(records)
+    return {
+        "period": period or "累计",
+        "total": total,
+        "avg_score": round(sum(r.qc_score for r in records) / total, 1) if total else 0.0,
+        "grade_distribution": grades,
+        "grade_a_pct": round(grades["甲"] * 100.0 / total, 2) if total else 0.0,
+        "by_org": group(lambda r: r.org_id, lambda k: org_names.get(k, "")),
+        "by_doctor": group(lambda r: r.doctor_name, lambda k: k),
+    }
+
+
+@router.get("/records/{record_id}")
+def get_medical_record(record_id: int, db: Session = Depends(get_db)):
+    record = db.get(MedicalRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="病历不存在")
+    return {"record": _record_out(record), "defects": record.qc_defects or []}
+
+
+@router.get("/records/{record_id}/qc")
+def rescore_medical_record(record_id: int, db: Session = Depends(get_db)):
+    """按当前规则库重新评分（规则调整或病历修正后复评），结果回写快照。"""
+    record = db.get(MedicalRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="病历不存在")
+    result = _apply_qc(db, record)
+    db.commit()
+    return {"record_id": record.id, **result}
+
+
+# ---------- 环节质控规则库 ----------
+
+
+class RecordQcRuleUpdate(BaseModel):
+    active: bool | None = None
+    deduct_points: int | None = Field(default=None, ge=0, le=100)
+
+
+def _record_rule_out(r: RecordQcRule) -> dict:
+    return {
+        "id": r.id,
+        "code": r.code,
+        "name": r.name,
+        "check_field": r.check_field,
+        "field_name": RECORD_FIELDS.get(r.check_field)
+        or DERIVED_FIELDS.get(r.check_field, r.check_field),
+        "rule": r.rule,
+        "rule_name": RECORD_RULE_TYPES.get(r.rule, r.rule),
+        "config": r.config,
+        "deduct_points": r.deduct_points,
+        "active": r.active,
+    }
+
+
+@router.get("/record-qc-rules")
+def list_record_qc_rules(active: bool | None = None, db: Session = Depends(get_db)):
+    q = db.query(RecordQcRule)
+    if active is not None:
+        q = q.filter(RecordQcRule.active.is_(active))
+    return [_record_rule_out(r) for r in q.order_by(RecordQcRule.code).all()]
+
+
+@router.patch("/record-qc-rules/{rule_id}", dependencies=[Depends(require_admin)])
+def update_record_qc_rule(rule_id: int, body: RecordQcRuleUpdate, db: Session = Depends(get_db)):
+    rule = db.get(RecordQcRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="质控规则不存在")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        if value is not None:
+            setattr(rule, field, value)
+    db.commit()
+    return _record_rule_out(rule)

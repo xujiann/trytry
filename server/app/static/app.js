@@ -2163,11 +2163,23 @@ async function renderBilling() {
   };
 }
 
+/* 块2：环节质控字段与等级配色（甲绿/乙橙/丙红） */
+const MR_FIELDS = [
+  ["chief_complaint", "主诉", "如：咳嗽发热3天（≤20字）", 1],
+  ["present_illness", "现病史", "起病时间、诱因、演变、伴随症状（≥50字）", 3],
+  ["past_history", "既往史", "既往疾病、手术、过敏史", 2],
+  ["physical_exam", "体格检查", "须含体温/血压/脉搏等生命体征", 2],
+  ["diagnosis_basis", "诊断依据", "症状+体征+辅助检查支持依据（≥30字）", 3],
+  ["treatment_plan", "治疗方案", "用药、处置、随访安排；危急值须写明处置", 3],
+];
+const MR_GRADE_COLOR = { 甲: "green", 乙: "orange", 丙: "red" };
+
 async function renderQuality() {
-  $("#page-desc").textContent = "不良事件上报（可匿名）→ 审核 → 整改；病历质控评分；院感上报核实";
-  const [events, estats, qstats, infections] = await Promise.all([
+  $("#page-desc").textContent = "不良事件上报（可匿名）→ 审核 → 整改；结构化病历实时环节质控；病历抽检评分；院感上报核实";
+  const [events, estats, qstats, infections, mrSummary, mrRecords] = await Promise.all([
     api("/api/quality/adverse-events"), api("/api/quality/adverse-events-stats"),
-    api("/api/quality/record-qc-stats"), api("/api/quality/infection-reports")]);
+    api("/api/quality/record-qc-stats"), api("/api/quality/infection-reports"),
+    api("/api/quality/records/qc-summary"), api("/api/quality/records")]);
   const AES = { reported: ["已上报", "orange"], reviewed: ["已审核", ""], rectified: ["已整改", "green"] };
   const AET = { medication: "用药", device: "器械", fall: "跌倒", pressure_sore: "压疮", transfusion: "输血", identification: "查对", other: "其他" };
   const SITE = { respiratory: "呼吸道", surgical_site: "手术部位", urinary: "泌尿道", bloodstream: "血流", gastrointestinal: "消化道", other: "其他" };
@@ -2204,7 +2216,31 @@ async function renderQuality() {
         <input name="event_id" type="number" placeholder="事件ID" required>
         <button>查附件</button></form>
       <p class="msg" id="ae-att-msg"></p><div id="ae-att-list"></div></div>
-    <div class="panel"><h3>病历质控抽检</h3>
+    <div class="panel"><h3>结构化病历录入（医师）——提交即出环节质控评分</h3>
+      <form id="mr-form">
+        <div class="inline"><input name="encounter_id" type="number" placeholder="就诊ID" required>
+          <span class="desc" style="font-size:12px">同一就诊仅一份病历，再次提交为修正并复评</span></div>
+        ${MR_FIELDS.map(([key, label, hint, rows]) =>
+          `<div style="margin-top:8px"><label style="font-size:13px">${label}<span class="desc" style="font-size:12px">（${hint}）</span></label>
+           <textarea name="${key}" rows="${rows}" style="width:100%"></textarea></div>`).join("")}
+        <div class="inline" style="margin-top:8px"><button>提交并质控评分</button></div></form>
+      <p class="msg" id="mr-msg"></p><div id="mr-result"></div></div>
+    <div class="panel"><h3>环节质控概览（甲 ${mrSummary.grade_distribution["甲"]} / 乙 ${mrSummary.grade_distribution["乙"]} / 丙 ${mrSummary.grade_distribution["丙"]}，均分 ${mrSummary.avg_score}）</h3>
+      ${table(["机构", "病历数", "均分", "甲", "乙", "丙", "甲级率"], mrSummary.by_org, (o) =>
+        `<tr><td>${esc(o.name)}</td><td>${o.total}</td><td>${o.avg_score}</td>
+         <td><span class="tag green">${o.grade_a}</span></td><td><span class="tag orange">${o.grade_b}</span></td>
+         <td>${o.grade_c ? `<span class="tag red">${o.grade_c}</span>` : 0}</td><td>${o.grade_a_pct}%</td></tr>`)}
+      <h3 style="margin-top:12px">按医师</h3>
+      ${table(["医师", "病历数", "均分", "甲", "乙", "丙"], mrSummary.by_doctor, (d) =>
+        `<tr><td>${esc(d.name) || "（未署名）"}</td><td>${d.total}</td><td>${d.avg_score}</td>
+         <td>${d.grade_a}</td><td>${d.grade_b}</td><td>${d.grade_c}</td></tr>`)}
+      <h3 style="margin-top:12px">最近病历</h3>
+      ${table(["ID", "就诊", "医师", "主诉", "得分", "等级", "操作"], mrRecords.slice(0, 20), (r) =>
+        `<tr><td>${r.id}</td><td>${r.encounter_id}</td><td>${esc(r.doctor_name)}</td>
+         <td>${esc(r.chief_complaint) || "（未填）"}</td><td>${r.qc_score}</td>
+         <td><span class="tag ${MR_GRADE_COLOR[r.qc_grade] || ""}">${r.qc_grade}级</span></td>
+         <td><button class="btn secondary" data-mrqc="${r.id}">复评并看缺陷</button></td></tr>`)}</div>
+    <div class="panel"><h3>病历质控抽检（人工评分）</h3>
       <form class="inline" id="qc-rec-form">
         <select name="target_type"><option value="encounter">门急诊病历</option><option value="case_summary">病案首页</option></select>
         <input name="target_id" type="number" placeholder="对象ID" required>
@@ -2243,6 +2279,28 @@ async function renderQuality() {
     try { await drawAttachments("adverse_event", new FormData(e.target).get("event_id"), "#ae-att-list", "#ae-att-msg"); }
     catch (err) { setMsg("#ae-att-msg", err.message, false); }
   };
+  const drawQcResult = (qc, title) => {
+    $("#mr-result").innerHTML = `
+      <p style="font-size:13px">${esc(title)}：得分 <b>${qc.score}</b> 分，
+        <span class="tag ${MR_GRADE_COLOR[qc.grade] || ""}">${qc.grade}级</span>
+        （参与规则 ${qc.rules_checked} 条，扣 ${qc.deducted} 分）</p>
+      ${qc.defects.length
+        ? table(["规则", "环节", "缺陷描述", "扣分"], qc.defects, (d) =>
+            `<tr style="color:#b23c3c"><td>${esc(d.rule_code)} ${esc(d.rule_name)}</td><td>${esc(d.field_name)}</td>
+             <td>${esc(d.message)}</td><td>-${d.deduct_points}</td></tr>`)
+        : '<p class="msg ok">无缺陷项，病历书写合规</p>'}`;
+  };
+  $("#mr-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const body = { encounter_id: Number(f.get("encounter_id")) };
+    MR_FIELDS.forEach(([key]) => { body[key] = f.get(key) || ""; });
+    try {
+      const res = await api("/api/quality/records", { method: "POST", body: JSON.stringify(body) });
+      setMsg("#mr-msg", `${res.created ? "病历已提交" : "病历已修正"}（记录 #${res.record.id}）`);
+      drawQcResult(res.qc, `就诊 ${body.encounter_id} 环节质控`);
+    } catch (err) { setMsg("#mr-msg", err.message, false); }
+  };
   $("#qc-rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/record-qc", formJson(e.target, ["target_id", "score"]), "#qa-msg"); };
   $("#inf-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/infection-reports", formJson(e.target, ["org_id", "patient_id"]), "#qa-msg"); };
   $("#page-body").onclick = async (e) => {
@@ -2263,6 +2321,11 @@ async function renderQuality() {
       if (d.verify) {
         await api(`/api/quality/infection-reports/${d.verify}/verify?confirmed=${d.ok}`, { method: "POST" });
         route();
+      }
+      if (d.mrqc) {
+        const qc = await api(`/api/quality/records/${d.mrqc}/qc`);
+        drawQcResult(qc, `病历 #${d.mrqc} 复评`);
+        $("#mr-result").scrollIntoView({ behavior: "smooth", block: "center" });
       }
     } catch (err) { setMsg("#qa-msg", err.message, false); }
   };
