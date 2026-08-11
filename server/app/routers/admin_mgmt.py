@@ -40,6 +40,7 @@ class EmployeeCreate(BaseModel):
 class EmployeeOut(EmployeeCreate):
     id: int
     status: str
+    dept_id: int | None = None
 
     model_config = {"from_attributes": True}
 

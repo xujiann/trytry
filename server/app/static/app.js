@@ -94,8 +94,10 @@ const PAGES = [
   { id: "billing", title: "费用结算", render: renderBilling },
   { id: "rx", title: "集中审方", render: renderRx },
   { id: "pharmacy", title: "中心药房", render: renderPharmacy },
+  { id: "procure", title: "采购与盘点", render: renderProcure },
   { id: "medication", title: "药事监测", render: renderMedication },
   { id: "insurance", title: "医保协同", render: renderInsurance },
+  { id: "blood", title: "血液管理", render: renderBlood },
   { group: "医防融合" },
   { id: "chronic", title: "慢病管理", render: renderChronic },
   { id: "contracts", title: "家医签约", render: renderContracts },
@@ -104,6 +106,7 @@ const PAGES = [
   { id: "publichealth", title: "公卫协同", render: renderPublicHealth },
   { id: "eldercare", title: "老年健康", render: renderEldercare },
   { id: "maternal", title: "妇幼保健", render: renderMaternal },
+  { id: "certs", title: "证明与体检", render: renderCerts },
   { id: "vaccination", title: "疫苗接种", render: renderVaccination },
   { group: "便民惠民" },
   { id: "appointments", title: "预约诊疗", render: renderAppointments },
@@ -116,6 +119,7 @@ const PAGES = [
   { id: "quality", title: "质量安全", render: renderQuality },
   { id: "drgs", title: "DRGs分析", render: renderDrgs },
   { id: "education", title: "远程医学教育", render: renderEducation },
+  { id: "knowledge", title: "知识库", render: renderKnowledge },
   { id: "hrfinance", title: "人财物管理", render: renderHrFinance },
   { id: "oaqc", title: "行政与质控", render: renderOaQc },
   { id: "cssd", title: "消毒供应", render: renderCssd },
@@ -555,8 +559,63 @@ async function renderPatients() {
       </form><p class="msg" id="patient-msg"></p></div>
     <div class="panel">
       <form class="inline" id="patient-search"><input name="keyword" placeholder="姓名/身份证/健康卡号"><button>搜索</button></form>
-      <div id="patient-table"></div></div>`;
+      <div id="patient-table"></div></div>
+    <div class="panel"><h3>档案调阅授权（医师/经办代录，患者知情）</h3>
+      <form class="inline" id="auth-grant-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="grantee_org_id" type="number" placeholder="被授权机构ID" required>
+        <select name="scope"><option value="all">全部档案</option><option value="encounter">就诊记录</option><option value="exam">检查报告</option></select>
+        <input name="expire_date" placeholder="有效期至 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <button>授权</button></form>
+      <form class="inline" id="auth-list-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required><button>查授权记录</button></form>
+      <form class="inline" id="auth-check-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="org_id" type="number" placeholder="调阅机构ID" required>
+        <select name="scope"><option value="all">全部档案</option><option value="encounter">就诊记录</option><option value="exam">检查报告</option></select>
+        <button>校验调阅权限</button></form>
+      <p class="msg" id="auth-msg"></p><div id="auth-table"></div></div>`;
   await draw();
+  const SCOPES = { all: "全部档案", encounter: "就诊记录", exam: "检查报告" };
+  const drawAuths = async (pid) => {
+    const auths = await api(`/api/patients/${pid}/authorizations`);
+    $("#auth-table").innerHTML = table(["ID", "被授权机构", "范围", "有效期至", "状态", "操作"], auths, (a) =>
+      `<tr><td>${a.id}</td><td>${a.grantee_org_id}</td><td>${SCOPES[a.scope] || esc(a.scope)}</td><td>${esc(a.expire_date)}</td>
+       <td><span class="tag ${a.status === "active" ? "green" : "red"}">${a.status === "active" ? "有效" : "已撤销"}</span></td>
+       <td>${a.status === "active" ? `<button class="btn danger" data-revoke="${a.id}" data-pid="${pid}">撤销</button>` : "—"}</td></tr>`);
+  };
+  $("#auth-grant-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["patient_id", "grantee_org_id"]);
+    const pid = body.patient_id;
+    delete body.patient_id;
+    try {
+      await api(`/api/patients/${pid}/authorizations`, { method: "POST", body: JSON.stringify(body) });
+      setMsg("#auth-msg", "授权已登记");
+      await drawAuths(pid);
+    } catch (err) { setMsg("#auth-msg", err.message, false); }
+  };
+  $("#auth-list-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawAuths(new FormData(e.target).get("patient_id")); }
+    catch (err) { setMsg("#auth-msg", err.message, false); }
+  };
+  $("#auth-check-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api(`/api/patients/${f.get("patient_id")}/authorizations/check?org_id=${f.get("org_id")}&scope=${f.get("scope")}`);
+      setMsg("#auth-msg", r.allowed ? "校验通过：该机构持有有效授权" : "校验不通过：无有效授权", r.allowed);
+    } catch (err) { setMsg("#auth-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { revoke, pid } = e.target.dataset;
+    if (!revoke) return;
+    try {
+      await api(`/api/patients/${pid}/authorizations/${revoke}/revoke`, { method: "POST" });
+      await drawAuths(pid);
+    } catch (err) { setMsg("#auth-msg", err.message, false); }
+  };
   $("#patient-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -707,8 +766,12 @@ async function renderReferrals() {
 }
 
 async function renderRx() {
-  $("#page-desc").textContent = "“系统+药师”双重审方，每方必审";
-  const [prescriptions, rules] = await Promise.all([api("/api/prescriptions"), api("/api/prescriptions/rules")]);
+  $("#page-desc").textContent = "“系统+药师”双重审方，每方必审；事后处方点评（药师）与合理率监管";
+  const [prescriptions, rules, cstats, creviews] = await Promise.all([
+    api("/api/prescriptions"), api("/api/prescriptions/rules"),
+    api("/api/prescriptions/comment-stats"), api("/api/prescriptions/comment-reviews")]);
+  const canComment = ["pharmacist", "admin"].includes(currentRole());
+  const commented = new Set(creviews.map((c) => c.prescription_id));
   $("#page-body").innerHTML = `
     <div class="panel"><h3>开方（单药演示）</h3>
       <form class="inline" id="rx-form">
@@ -732,12 +795,22 @@ async function renderRx() {
         `<tr><td>${esc(r.drug_code)}</td><td>${r.max_daily_dose}${esc(r.dose_unit)}</td></tr>`)}</div>
     <div class="panel"><h3>处方队列</h3>${table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
       const [text, color] = RX_STATUS[p.status] || [p.status, ""];
-      const actions = p.status === "pending_review"
+      let actions = p.status === "pending_review"
         ? `<button class="btn secondary" data-approve="1" data-id="${p.id}">通过</button>
-           <button class="btn danger" data-approve="0" data-id="${p.id}">退回</button>` : "—";
+           <button class="btn danger" data-approve="0" data-id="${p.id}">退回</button>` : "";
+      if (canComment && !commented.has(p.id)) actions += ` <button class="btn" data-rxcomment="${p.id}">点评</button>`;
       return `<tr><td>${p.id}</td><td>${p.patient_id}</td><td>${esc(p.diagnosis_name)}</td>
-        <td><span class="tag ${color}">${text}</span></td><td>${esc(p.review_comment) || "—"}</td><td>${actions}</td></tr>`;
-    })}</div>`;
+        <td><span class="tag ${color}">${text}</span></td><td>${esc(p.review_comment) || "—"}</td><td>${actions || "—"}</td></tr>`;
+    })}</div>
+    <div class="panel"><h3>处方点评（事后监管）</h3>
+      <div class="cards">
+        <div class="card"><div class="label">已点评处方</div><div class="value">${cstats.commented}</div></div>
+        <div class="card"><div class="label">不合理处方</div><div class="value${cstats.unreasonable ? " warn" : ""}">${cstats.unreasonable}</div></div>
+        <div class="card"><div class="label">点评合理率</div><div class="value">${cstats.reasonable_rate_pct}%</div></div></div>
+      ${table(["处方ID", "结论", "问题类型", "点评意见", "时间"], creviews, (c) =>
+        `<tr><td>${c.prescription_id}</td>
+         <td><span class="tag ${c.grade === "reasonable" ? "green" : "red"}">${c.grade === "reasonable" ? "合理" : "不合理"}</span></td>
+         <td>${esc(c.issues) || "—"}</td><td>${esc(c.comment) || "—"}</td><td>${esc(c.at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>`;
   $("#rx-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -761,7 +834,16 @@ async function renderRx() {
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { approve, id } = e.target.dataset;
+    const { approve, id, rxcomment } = e.target.dataset;
+    if (rxcomment) {
+      const reasonable = confirm("点评结论：该处方是否合理？（确定=合理，取消=不合理）");
+      const body = { grade: reasonable ? "reasonable" : "unreasonable" };
+      if (!reasonable) {
+        body.issues = prompt("问题类型（如：用法用量不适宜）") || "";
+        body.comment = prompt("点评意见") || "";
+      }
+      return postAction(`/api/prescriptions/${rxcomment}/comment-review`, body, "#rx-msg");
+    }
     if (approve === undefined || !id) return;
     const comment = prompt("药师意见") || "";
     try {
@@ -920,8 +1002,9 @@ async function renderArchive() {
 }
 
 async function renderUsers() {
-  $("#page-desc").textContent = "账号开通与角色分配（仅管理员）";
-  const [usersList, orgs] = await Promise.all([api("/api/users"), api("/api/organizations")]);
+  $("#page-desc").textContent = "账号开通、角色分配与变更留痕、系统参数配置（仅管理员）";
+  const [usersList, orgs, roleChanges, params] = await Promise.all([
+    api("/api/users"), api("/api/organizations"), api("/api/users/role-changes"), api("/api/mgmt/params")]);
   const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   $("#page-body").innerHTML = `
     <div class="panel"><h3>开通账号</h3>
@@ -939,10 +1022,26 @@ async function renderUsers() {
         <input name="new_password" type="password" placeholder="新密码（≥6位）" required minlength="6">
         <button>修改</button>
       </form><p class="msg" id="pwd-msg"></p></div>
-    <div class="panel">${table(["ID", "用户名", "姓名", "角色", "所属机构"], usersList, (u) =>
+    <div class="panel">${table(["ID", "用户名", "姓名", "角色", "所属机构", "操作"], usersList, (u) =>
       `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td>${esc(u.full_name) || "—"}</td>
        <td><span class="tag">${ROLE_NAMES[u.role] || esc(u.role)}</span></td>
-       <td>${u.org_id ? esc(orgNames[u.org_id] || u.org_id) : "—"}</td></tr>`)}</div>`;
+       <td>${u.org_id ? esc(orgNames[u.org_id] || u.org_id) : "—"}</td>
+       <td><button class="btn secondary" data-chrole="${u.id}">调角色</button></td></tr>`)}</div>
+    <div class="panel"><h3>角色变更记录（留痕，变更即吊销旧令牌）</h3>${
+      table(["用户ID", "原角色", "新角色", "操作人", "时间"], roleChanges, (r) =>
+        `<tr><td>${r.user_id}</td><td><span class="tag">${ROLE_NAMES[r.old_role] || esc(r.old_role)}</span></td>
+         <td><span class="tag green">${ROLE_NAMES[r.new_role] || esc(r.new_role)}</span></td>
+         <td>${r.changed_by}</td><td>${esc(r.at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>
+    <div class="panel"><h3>系统参数配置（键值集中管理）</h3>
+      <form class="inline" id="param-form">
+        <input name="key" placeholder="参数键（如 portal.verify_lock_seconds）" required style="min-width:240px">
+        <input name="value" placeholder="参数值" required>
+        <input name="description" placeholder="说明" style="min-width:180px">
+        <button>保存</button></form>
+      <p class="msg" id="param-msg"></p>
+      ${table(["键", "值", "说明", "更新时间"], params, (p) =>
+        `<tr><td><span class="tag">${esc(p.key)}</span></td><td>${esc(p.value)}</td><td>${esc(p.description) || "—"}</td>
+         <td>${esc(p.updated_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>`;
   $("#user-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -962,6 +1061,18 @@ async function renderUsers() {
       setMsg("#pwd-msg", "密码已修改");
       e.target.reset();
     } catch (err) { setMsg("#pwd-msg", err.message, false); }
+  };
+  $("#param-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/params", formJson(e.target), "#param-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const id = e.target.dataset.chrole;
+    if (!id) return;
+    const keys = Object.keys(ROLE_NAMES);
+    const pick = prompt(`新角色（${keys.map((k, i) => `${i + 1}=${ROLE_NAMES[k]}`).join("，")}）输入序号`);
+    const role = keys[Number(pick) - 1]; if (!role) return;
+    try {
+      await api(`/api/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) });
+      route();
+    } catch (err) { setMsg("#user-msg", err.message, false); }
   };
 }
 
@@ -1094,10 +1205,16 @@ async function renderTcm() {
 }
 
 async function renderMedication() {
-  $("#page-desc").textContent = "缺药登记流转、全县用药地图、居民用药画像";
-  const [shortages, stats] = await Promise.all([api("/api/medication/shortages"), api("/api/medication/usage-stats")]);
+  $("#page-desc").textContent = "缺药登记流转、供应风险研判、全县用药地图、居民用药画像";
+  const [shortages, stats, risk] = await Promise.all([
+    api("/api/medication/shortages"), api("/api/medication/usage-stats"), api("/api/medication/supply-risk")]);
   const SS = { registered: ["已登记", "orange"], purchasing: ["采购中", "orange"], delivered: ["已配送", "green"] };
   $("#page-body").innerHTML = `
+    ${risk.total ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 药品供应风险评估（${risk.total}）</h3>${
+      table(["药品编码", "药品", "库存告警机构数", "未结案缺药登记", "风险等级"], risk.risks, (r) =>
+        `<tr><td>${esc(r.drug_code)}</td><td>${esc(r.drug_name) || "—"}</td><td>${r.low_stock_orgs}</td><td>${r.open_shortages}</td>
+         <td><span class="tag ${r.risk_level === "high" ? "red" : "orange"}">${r.risk_level === "high" ? "高" : "中"}</span></td></tr>`)}</div>` : ""}`;
+  $("#page-body").innerHTML += `
     <div class="panel"><h3>缺药登记</h3>
       <form class="inline" id="short-form">
         <input name="org_id" type="number" placeholder="机构ID" required><input name="drug_code" placeholder="药品编码" required>
@@ -1124,9 +1241,11 @@ async function renderMedication() {
 }
 
 async function renderInsurance() {
-  $("#page-desc").textContent = "结算记录、转诊证明、特殊病种申报、基金监测";
-  const [fund, settlements, apps] = await Promise.all([
-    api("/api/insurance/fund-stats"), api("/api/insurance/settlements"), api("/api/insurance/special-diseases")]);
+  $("#page-desc").textContent = "结算记录、转诊证明、特殊病种申报、双通道药品申报、基金监测";
+  const [fund, settlements, apps, dualApps] = await Promise.all([
+    api("/api/insurance/fund-stats"), api("/api/insurance/settlements"),
+    api("/api/insurance/special-diseases"), api("/api/insurance/dual-channel")]);
+  const canReviewDual = ["director", "admin"].includes(currentRole());
   $("#page-body").innerHTML = `
     <div class="cards">
       <div class="card"><div class="label">医保基金支出总额</div><div class="value">${fund.insurance_pay_total}</div></div>
@@ -1147,6 +1266,18 @@ async function renderInsurance() {
       `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.disease_name)}</td>
        <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${a.status}</span></td>
        <td>${a.status === "applied" ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`)}</div>
+    <div class="panel"><h3>双通道药品申报（医师/经办申报 → 管理层审核）</h3>
+      <form class="inline" id="dual-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="drug_name" placeholder="药品名称" required>
+        <input name="reason" placeholder="申报理由" style="min-width:180px">
+        <button>申报</button></form>
+      ${table(["ID", "患者", "药品", "理由", "状态", "审核意见", "操作"], dualApps, (a) =>
+        `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.drug_name)}</td><td>${esc(a.reason) || "—"}</td>
+         <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${a.status === "approved" ? "已批准" : a.status === "rejected" ? "已驳回" : "待审核"}</span></td>
+         <td>${esc(a.review_comment) || "—"}</td>
+         <td>${a.status === "pending" && canReviewDual
+           ? `<button class="btn secondary" data-dualok="${a.id}">批准</button><button class="btn danger" data-dualno="${a.id}">驳回</button>` : "—"}</td></tr>`)}</div>
     <div class="panel"><h3>结算记录</h3>${table(["ID", "患者", "机构", "类型", "总额", "医保付", "自付"], settlements, (s) =>
       `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${s.org_id}</td><td>${s.settle_type === "local" ? "本地" : "异地"}</td>
        <td>${s.total_amount}</td><td>${s.insurance_pay}</td><td>${s.self_pay}</td></tr>`)}</div>`;
@@ -1157,16 +1288,22 @@ async function renderInsurance() {
     catch (err) { setMsg("#ins-msg", err.message, false); }
   };
   $("#spec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/special-diseases", formJson(e.target, ["patient_id"]), "#ins-msg"); };
+  $("#dual-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/dual-channel", formJson(e.target, ["patient_id"]), "#ins-msg"); };
   $("#page-body").onclick = (e) => {
-    const { ok, no } = e.target.dataset;
+    const { ok, no, dualok, dualno } = e.target.dataset;
     if (ok) postAction(`/api/insurance/special-diseases/${ok}/review?approve=true`, null, "#ins-msg");
     if (no) postAction(`/api/insurance/special-diseases/${no}/review?approve=false`, null, "#ins-msg");
+    if (dualok) postAction(`/api/insurance/dual-channel/${dualok}/review?approve=true&comment=${encodeURIComponent(prompt("审核意见") || "")}`, null, "#ins-msg");
+    if (dualno) postAction(`/api/insurance/dual-channel/${dualno}/review?approve=false&comment=${encodeURIComponent(prompt("驳回理由") || "")}`, null, "#ins-msg");
   };
 }
 
 async function renderEducation() {
-  $("#page-desc").textContent = "课程管理、培训考核（60分合格）、个人学分";
-  const [courses, mine] = await Promise.all([api("/api/education/courses"), api("/api/education/my-records")]);
+  $("#page-desc").textContent = "课程管理、培训考核（60分合格）、个人学分；直播申请与排期审核";
+  const [courses, mine, lives] = await Promise.all([
+    api("/api/education/courses"), api("/api/education/my-records"), api("/api/education/live-sessions")]);
+  const role = currentRole();
+  const LS = { pending: ["待审核", "orange"], approved: ["已排期", ""], rejected: ["已驳回", "red"], finished: ["已结束", "green"] };
   $("#page-body").innerHTML = `
     <div class="panel"><h3>新建课程（管理员）</h3>
       <form class="inline" id="course-form">
@@ -1179,10 +1316,31 @@ async function renderEducation() {
       `<tr><td>${c.id}</td><td>${esc(c.title)}</td><td>${c.course_type === "live" ? "直播" : "点播"}</td><td>${esc(c.category)}</td><td>${esc(c.speaker)}</td>
        <td><button class="btn secondary" data-exam="${c.id}">提交考核</button></td></tr>`)}</div>
     <div class="panel"><h3>我的学习记录</h3>${table(["课程", "成绩", "结果"], mine, (r) =>
-      `<tr><td>${esc(r.title)}</td><td>${r.score}</td><td><span class="tag ${r.passed ? "green" : "red"}">${r.passed ? "合格" : "未合格"}</span></td></tr>`)}</div>`;
+      `<tr><td>${esc(r.title)}</td><td>${r.score}</td><td><span class="tag ${r.passed ? "green" : "red"}">${r.passed ? "合格" : "未合格"}</span></td></tr>`)}</div>
+    <div class="panel"><h3>直播管理（申请 → 管理层排期审核 → 结束；音视频通道为对接项）</h3>
+      <form class="inline" id="live-form">
+        <input name="title" placeholder="直播主题" required style="min-width:220px">
+        <input name="speaker" placeholder="主讲人">
+        <input name="planned_at" placeholder="计划时间（如 2026-09-01 19:00）">
+        <button>申请直播</button></form>
+      ${table(["ID", "主题", "主讲", "计划时间", "状态", "审核意见", "操作"], lives, (s) => {
+        const [text, color] = LS[s.status] || [s.status, ""];
+        const actions = s.status === "pending" && ["director", "admin"].includes(role)
+          ? `<button class="btn secondary" data-liveok="${s.id}">排期</button>
+             <button class="btn danger" data-liveno="${s.id}">驳回</button>`
+          : s.status === "approved" && ["director", "operator", "admin"].includes(role)
+          ? `<button class="btn secondary" data-livefin="${s.id}">结束</button>` : "—";
+        return `<tr><td>${s.id}</td><td>${esc(s.title)}</td><td>${esc(s.speaker) || "—"}</td><td>${esc(s.planned_at) || "—"}</td>
+          <td><span class="tag ${color}">${text}</span></td><td>${esc(s.review_comment) || "—"}</td><td>${actions}</td></tr>`;
+      })}</div>`;
   $("#course-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/courses", formJson(e.target), "#edu-msg"); };
+  $("#live-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/live-sessions", formJson(e.target), "#edu-msg"); };
   $("#page-body").onclick = (e) => {
-    const id = e.target.dataset.exam;
+    const d = e.target.dataset;
+    if (d.liveok) return postAction(`/api/education/live-sessions/${d.liveok}/review?approve=true&comment=${encodeURIComponent(prompt("审核意见") || "同意排期")}`, null, "#edu-msg");
+    if (d.liveno) return postAction(`/api/education/live-sessions/${d.liveno}/review?approve=false&comment=${encodeURIComponent(prompt("驳回理由") || "")}`, null, "#edu-msg");
+    if (d.livefin) return postAction(`/api/education/live-sessions/${d.livefin}/finish`, null, "#edu-msg");
+    const id = d.exam;
     if (!id) return;
     const score = prompt("考核得分（0-100）"); if (score === null) return;
     postAction(`/api/education/courses/${id}/exam`, { score: Number(score) }, "#edu-msg");
@@ -1190,9 +1348,16 @@ async function renderEducation() {
 }
 
 async function renderEldercare() {
-  $("#page-desc").textContent = "自理能力评估（Barthel自动分级）、失能老人清单";
-  const [assessments, disabled] = await Promise.all([api("/api/eldercare/assessments"), api("/api/eldercare/disabled")]);
+  $("#page-desc").textContent = "自理能力评估（Barthel自动分级）、失能老人清单、健康预警（重度失能专案+年度复评到期）";
+  const [assessments, disabled, alerts] = await Promise.all([
+    api("/api/eldercare/assessments"), api("/api/eldercare/disabled"), api("/api/eldercare/alerts")]);
   $("#page-body").innerHTML = `
+    ${alerts.total ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 老年健康预警（${alerts.total}）</h3>${
+      table(["患者", "预警类型", "提示", "末次评估"], alerts.alerts, (a) =>
+        `<tr><td>${a.patient_id}</td>
+         <td><span class="tag ${a.alert_type === "severe_disability" ? "red" : "orange"}">${a.alert_type === "severe_disability" ? "重度失能专案" : "复评到期"}</span></td>
+         <td>${esc(a.message)}</td><td>${esc(a.assessed_date) || "—"}</td></tr>`)}</div>` : ""}`;
+  $("#page-body").innerHTML += `
     <div class="panel"><h3>新评估</h3>
       <form class="inline" id="eld-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="adl_score" type="number" min="0" max="100" placeholder="ADL(0-100)" required>
@@ -1208,9 +1373,14 @@ async function renderEldercare() {
 }
 
 async function renderMaternal() {
-  $("#page-desc").textContent = "孕产妇建册、产检（异常血压自动高危）、产后访视结案；儿童保健";
-  const [records, children] = await Promise.all([api("/api/maternal/records"), api("/api/maternal/children")]);
+  $("#page-desc").textContent = "孕产妇建册、产检、分娩登记、产后结案；儿童保健、新筛与高危儿；妇女保健四类记录";
+  const [records, children, highRisk, womenHealth] = await Promise.all([
+    api("/api/maternal/records"), api("/api/maternal/children"),
+    api("/api/maternal/children/high-risk"), api("/api/maternal/women-health")]);
   const MS = { registered: "孕期管理", delivered: "已分娩", closed: "已结案" };
+  const WH_TYPES = { premarital: "婚前保健", preconception: "孕前保健", gynecology: "妇女病检查", contraception: "避孕节育" };
+  const SCREEN_ITEMS = { metabolic: "遗传代谢病", hearing: "听力", chd: "先心病" };
+  const hrIds = new Set(highRisk.map((c) => c.id));
   $("#page-body").innerHTML = `
     <div class="panel"><h3>孕产妇建册 / 儿童建档</h3>
       <form class="inline" id="mat-form">
@@ -1225,20 +1395,72 @@ async function renderMaternal() {
        <td>${r.high_risk ? `<span class="tag red">高危</span> ${esc(r.risk_factors)}` : '<span class="tag green">正常</span>'}</td>
        <td><span class="tag">${MS[r.status]}</span></td>
        <td>${r.status !== "closed" ? `<button class="btn secondary" data-visit="${r.id}">记录访视</button>
+         ${r.status === "registered" ? `<button class="btn secondary" data-delivery="${r.id}">分娩登记</button>` : ""}
          ${r.status === "delivered" ? `<button class="btn secondary" data-close="${r.id}">结案</button>` : ""}` : "—"}</td></tr>`)}</div>
-    <div class="panel"><h3>儿童档案</h3>${table(["ID", "姓名", "性别", "出生日期", "操作"], children, (c) =>
+    ${highRisk.length ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 高危儿专案清单（${highRisk.length}）</h3>${
+      table(["ID", "姓名", "出生日期", "高危原因"], highRisk, (c) =>
+        `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.birth_date)}</td><td><span class="tag red">${esc(c.risk_note)}</span></td></tr>`)}</div>` : ""}
+    <div class="panel"><h3>儿童档案（新筛异常自动纳入高危儿）</h3>${table(["ID", "姓名", "性别", "出生日期", "高危", "操作"], children, (c) =>
       `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.gender)}</td><td>${esc(c.birth_date)}</td>
-       <td><button class="btn secondary" data-cvisit="${c.id}">记录访视</button></td></tr>`)}</div>`;
+       <td>${hrIds.has(c.id) ? '<span class="tag red">高危</span>' : '<span class="tag green">—</span>'}</td>
+       <td><button class="btn secondary" data-cvisit="${c.id}">记录访视</button>
+           <button class="btn secondary" data-screen="${c.id}">新筛登记</button>
+           <button class="btn" data-shist="${c.id}">筛查史</button>
+           <button class="btn ${hrIds.has(c.id) ? "" : "danger"}" data-hrtoggle="${c.id}" data-cur="${hrIds.has(c.id)}">${hrIds.has(c.id) ? "解除高危" : "标记高危"}</button></td></tr>`)}</div>
+    <div class="panel hidden" id="screen-panel"><h3>新生儿筛查史</h3><div id="screen-list"></div></div>
+    <div class="panel"><h3>妇女保健记录（婚前/孕前/妇女病/避孕节育）</h3>
+      <form class="inline" id="wh-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="record_type">${Object.entries(WH_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="exam_date" placeholder="检查日期 YYYY-MM-DD">
+        <input name="result" placeholder="检查结果">
+        <input name="advice" placeholder="指导意见">
+        <button>登记</button></form>
+      ${table(["ID", "患者", "类型", "日期", "结果", "指导"], womenHealth, (w) =>
+        `<tr><td>${w.id}</td><td>${w.patient_id}</td><td><span class="tag">${WH_TYPES[w.record_type] || esc(w.record_type)}</span></td>
+         <td>${esc(w.exam_date) || "—"}</td><td>${esc(w.result) || "—"}</td><td>${esc(w.advice) || "—"}</td></tr>`)}</div>`;
   $("#mat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/records", formJson(e.target, ["patient_id"]), "#mat-msg"); };
   $("#child-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/children", formJson(e.target, ["guardian_patient_id"]), "#mat-msg"); };
-  $("#page-body").onclick = (e) => {
-    const { visit, close, cvisit } = e.target.dataset;
-    if (visit) {
+  $("#wh-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/women-health", formJson(e.target, ["patient_id"]), "#mat-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    if (d.visit) {
       const type = prompt("访视类型：prenatal(产检)/postpartum(产后)", "prenatal"); if (!type) return;
-      return postAction(`/api/maternal/records/${visit}/visits`, { visit_type: type, bp: prompt("血压(如120/80，可空)") || "", visit_date: prompt("日期 YYYY-MM-DD") || "" }, "#mat-msg");
+      return postAction(`/api/maternal/records/${d.visit}/visits`, { visit_type: type, bp: prompt("血压(如120/80，可空)") || "", visit_date: prompt("日期 YYYY-MM-DD") || "" }, "#mat-msg");
     }
-    if (close) return postAction(`/api/maternal/records/${close}/close`, null, "#mat-msg");
-    if (cvisit) return postAction(`/api/maternal/children/${cvisit}/visits`, { visit_type: "checkup", visit_date: prompt("日期 YYYY-MM-DD") || "" }, "#mat-msg");
+    if (d.delivery) {
+      const orgId = prompt("分娩机构ID"); if (!orgId) return;
+      const deliveryDate = prompt("分娩日期 YYYY-MM-DD"); if (!deliveryDate) return;
+      const mode = prompt("分娩方式：natural(顺产)/cesarean(剖宫产)", "natural") || "natural";
+      return postAction(`/api/maternal/records/${d.delivery}/delivery`,
+        { org_id: Number(orgId), delivery_date: deliveryDate, delivery_mode: mode, outcome: prompt("分娩结局") || "" }, "#mat-msg");
+    }
+    if (d.close) return postAction(`/api/maternal/records/${d.close}/close`, null, "#mat-msg");
+    if (d.cvisit) return postAction(`/api/maternal/children/${d.cvisit}/visits`, { visit_type: "checkup", visit_date: prompt("日期 YYYY-MM-DD") || "" }, "#mat-msg");
+    if (d.screen) {
+      const keys = Object.keys(SCREEN_ITEMS);
+      const pick = prompt(`筛查项目（${keys.map((k, i) => `${i + 1}=${SCREEN_ITEMS[k]}`).join("，")}）输入序号`);
+      const item = keys[Number(pick) - 1]; if (!item) return;
+      const abnormal = confirm("结果是否异常？（确定=异常，将自动纳入高危儿）");
+      return postAction(`/api/maternal/children/${d.screen}/screenings`,
+        { item, result: abnormal ? "abnormal" : "normal", screen_date: prompt("筛查日期 YYYY-MM-DD") || "" }, "#mat-msg");
+    }
+    if (d.shist) {
+      try {
+        const list = await api(`/api/maternal/children/${d.shist}/screenings`);
+        $("#screen-panel").classList.remove("hidden");
+        $("#screen-list").innerHTML = table(["ID", "项目", "结果", "日期", "备注"], list, (s) =>
+          `<tr><td>${s.id}</td><td>${SCREEN_ITEMS[s.item] || esc(s.item)}</td>
+           <td><span class="tag ${s.result === "abnormal" ? "red" : "green"}">${s.result === "abnormal" ? "异常" : "正常"}</span></td>
+           <td>${esc(s.screen_date) || "—"}</td><td>${esc(s.note) || "—"}</td></tr>`);
+      } catch (err) { setMsg("#mat-msg", err.message, false); }
+      return;
+    }
+    if (d.hrtoggle) {
+      const toHigh = d.cur !== "true";
+      const note = toHigh ? (prompt("高危原因") || "人工标记") : "";
+      return postAction(`/api/maternal/children/${d.hrtoggle}/high-risk`, { high_risk: toHigh, risk_note: note }, "#mat-msg");
+    }
   };
 }
 
@@ -1325,15 +1547,23 @@ async function renderPublicHealth() {
 }
 
 async function renderHrFinance() {
-  $("#page-desc").textContent = "人力资源与派驻下沉、财务集中核算、物资管理";
-  const [employees, secStats, finance, assets] = await Promise.all([
-    api("/api/mgmt/employees"), api("/api/mgmt/secondments/stats"), api("/api/mgmt/finance/summary"), api("/api/mgmt/assets")]);
+  $("#page-desc").textContent = "人力资源（科室库/变动/合同/薪酬）、派驻下沉、财务集中核算与预算执行、物资出入库";
+  const role = currentRole();
+  const isDirector = ["director", "admin"].includes(role);
+  const [employees, secStats, finance, assets, departments, expiringContracts] = await Promise.all([
+    api("/api/mgmt/employees"), api("/api/mgmt/secondments/stats"), api("/api/mgmt/finance/summary"),
+    api("/api/mgmt/assets"), api("/api/mgmt/departments"), api("/api/mgmt/staff-contracts/expiring?days=60")]);
+  const payroll = isDirector ? await api("/api/mgmt/payroll").catch(() => null) : null;
   const EST = { active: ["在岗", "green"], seconded: ["派驻中", "orange"], left: ["离职", ""] };
+  const CHG_TYPES = { hire: "入职", regularize: "转正", transfer: "调动", leave: "离职" };
+  const MV_TYPES = { inbound: "入库", issue: "领用", return: "归还", scrap: "报废" };
+  const deptNames = Object.fromEntries(departments.map((d) => [d.id, d.name]));
   $("#page-body").innerHTML = `
     <div class="cards">
       <div class="card"><div class="label">在派人数</div><div class="value">${secStats.active_secondments}</div></div>
       <div class="card"><div class="label">医共体收入合计</div><div class="value">${finance.consolidated.income}</div></div>
-      <div class="card"><div class="label">医共体结余</div><div class="value">${finance.consolidated.balance}</div></div></div>
+      <div class="card"><div class="label">医共体结余</div><div class="value">${finance.consolidated.balance}</div></div>
+      ${expiringContracts.length ? `<div class="card"><div class="label">60天内到期合同</div><div class="value warn">${expiringContracts.length}</div></div>` : ""}</div>
     <div class="panel"><h3>员工 / 派驻 / 财务 / 物资录入</h3>
       <form class="inline" id="emp-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="name" placeholder="姓名" required>
         <input name="title" placeholder="职称"><input name="position" placeholder="岗位"><button>登记员工</button></form>
@@ -1346,18 +1576,129 @@ async function renderHrFinance() {
         <input name="name" placeholder="名称" required><select name="category"><option value="office">办公用品</option><option value="equipment">非医疗设备</option></select>
         <input name="quantity" type="number" value="1" min="1" style="min-width:60px"><button>物资建档</button></form>
       <p class="msg" id="hrf-msg"></p></div>
-    <div class="panel"><h3>员工</h3>${table(["ID", "机构", "姓名", "职称", "状态"], employees, (em) => {
+    <div class="panel"><h3>科室信息基础库（机构内编码唯一，员工跨机构挂接拦截）</h3>
+      <form class="inline" id="dept-form"><input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="code" placeholder="科室编码" required><input name="name" placeholder="科室名称" required>
+        <select name="category"><option value="clinical">临床</option><option value="medtech">医技</option><option value="admin">行政</option></select>
+        <button>科室建档</button></form>
+      ${table(["ID", "机构", "编码", "名称", "类别"], departments, (d) =>
+        `<tr><td>${d.id}</td><td>${d.org_id}</td><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td><td>${esc(d.category)}</td></tr>`)}</div>
+    <div class="panel"><h3>员工（变动留痕联动机构与状态）</h3>${table(["ID", "机构", "姓名", "职称", "科室", "状态", "操作"], employees, (em) => {
       const [t, col] = EST[em.status] || [em.status, ""];
-      return `<tr><td>${em.id}</td><td>${em.org_id}</td><td>${esc(em.name)}</td><td>${esc(em.title)}</td><td><span class="tag ${col}">${t}</span></td></tr>`;
+      return `<tr><td>${em.id}</td><td>${em.org_id}</td><td>${esc(em.name)}</td><td>${esc(em.title)}</td>
+        <td>${em.dept_id ? esc(deptNames[em.dept_id] || em.dept_id) : "—"}</td><td><span class="tag ${col}">${t}</span></td>
+        <td><button class="btn secondary" data-empdept="${em.id}">挂科室</button>
+            <button class="btn secondary" data-empchg="${em.id}">登记变动</button>
+            <button class="btn" data-emphist="${em.id}">变动史</button>
+            <button class="btn secondary" data-empct="${em.id}">签合同</button></td></tr>`;
     })}</div>
+    <div class="panel hidden" id="empchg-panel"><h3>人员变动记录</h3><div id="empchg-list"></div></div>
+    ${expiringContracts.length ? `<div class="panel" style="border-left:4px solid #b26a00"><h3>⚠ 合同到期提醒（60天内 ${expiringContracts.length} 份，续签管理）</h3>${
+      table(["合同号", "员工", "止期"], expiringContracts, (c) =>
+        `<tr><td><span class="tag">${esc(c.contract_no)}</span></td><td>${c.employee_id}</td><td><span class="tag orange">${esc(c.end_date)}</span></td></tr>`)}</div>` : ""}
+    ${isDirector ? `<div class="panel"><h3>月度薪酬（管理层：基础 + 绩效×系数）</h3>
+      <form class="inline" id="pay-form">
+        <input name="employee_id" type="number" placeholder="员工ID" required>
+        <input name="period" placeholder="期间 YYYY-MM" required pattern="\\d{4}-\\d{2}">
+        <input name="base_salary" type="number" step="any" placeholder="基础工资" required>
+        <input name="perf_bonus" type="number" step="any" placeholder="绩效奖金" value="0">
+        <input name="perf_coefficient" type="number" step="any" placeholder="绩效系数" value="1.0">
+        <button>录入</button></form>
+      ${payroll ? `<p style="font-size:13px">合计发放：<b>${payroll.total_amount}</b> 元</p>${
+        table(["ID", "员工", "期间", "基础", "绩效", "系数", "实发"], payroll.records, (r) =>
+          `<tr><td>${r.id}</td><td>${r.employee_id}</td><td>${esc(r.period)}</td><td>${r.base_salary}</td>
+           <td>${r.perf_bonus}</td><td>${r.perf_coefficient}</td><td><b>${r.total}</b></td></tr>`)}` : ""}</div>
+    <div class="panel"><h3>预算编制与执行（管理层）</h3>
+      <form class="inline" id="bud-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="year" placeholder="年度 YYYY" required pattern="\\d{4}">
+        <select name="category"><option value="income">收入预算</option><option value="expense">支出预算</option></select>
+        <input name="amount" type="number" step="any" placeholder="预算额" required>
+        <button>编制/调整</button></form>
+      <form class="inline" id="bud-exec-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="year" placeholder="年度 YYYY" required pattern="\\d{4}">
+        <button>查执行率</button></form>
+      <div id="bud-exec"></div></div>` : ""}
     <div class="panel"><h3>各单位收支（全部期间）</h3>${table(["机构", "收入", "支出", "结余"], finance.orgs, (o) =>
       `<tr><td>${o.org_id}</td><td>${o.income}</td><td>${o.expense}</td><td>${o.balance}</td></tr>`)}</div>
-    <div class="panel"><h3>物资</h3>${table(["编码", "名称", "机构", "数量", "状态"], assets, (a) =>
-      `<tr><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${a.org_id}</td><td>${a.quantity}</td><td><span class="tag">${a.status}</span></td></tr>`)}</div>`;
+    <div class="panel"><h3>物资（出入库全程留痕）</h3>${table(["ID", "编码", "名称", "机构", "数量", "状态", "操作"], assets, (a) =>
+      `<tr><td>${a.id}</td><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${a.org_id}</td><td>${a.quantity}</td>
+       <td><span class="tag ${a.status === "scrapped" ? "red" : ""}">${a.status === "scrapped" ? "已报废" : a.status}</span></td>
+       <td>${a.status !== "scrapped" ? `<button class="btn secondary" data-assetmv="${a.id}">出入库</button>` : ""}
+           <button class="btn" data-assethist="${a.id}">记录</button></td></tr>`)}</div>
+    <div class="panel hidden" id="assetmv-panel"><h3>物资出入库记录</h3><div id="assetmv-list"></div></div>`;
   $("#emp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/employees", formJson(e.target, ["org_id"]), "#hrf-msg"); };
   $("#sec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/secondments", formJson(e.target, ["employee_id", "to_org_id"]), "#hrf-msg"); };
   $("#fin-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/finance", formJson(e.target, ["org_id", "amount"]), "#hrf-msg"); };
   $("#asset-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/assets", formJson(e.target, ["org_id", "quantity"]), "#hrf-msg"); };
+  $("#dept-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/departments", formJson(e.target, ["org_id"]), "#hrf-msg"); };
+  const payForm = $("#pay-form");
+  if (payForm) payForm.onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/payroll", formJson(e.target, ["employee_id", "base_salary", "perf_bonus", "perf_coefficient"]), "#hrf-msg"); };
+  const budForm = $("#bud-form");
+  if (budForm) budForm.onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/budgets", formJson(e.target, ["org_id", "amount"]), "#hrf-msg"); };
+  const budExec = $("#bud-exec-form");
+  if (budExec) budExec.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api(`/api/mgmt/budgets/execution?org_id=${f.get("org_id")}&year=${f.get("year")}`);
+      $("#bud-exec").innerHTML = table(["类别", "预算", "实际", "执行率"], [
+        ["收入", r.income], ["支出", r.expense]], ([label, d]) =>
+        `<tr><td>${label}</td><td>${d.budget}</td><td>${d.actual}</td>
+         <td>${d.execution_pct === null ? "—" : `<span class="tag ${d.execution_pct > 100 ? "red" : "green"}">${d.execution_pct}%</span>`}</td></tr>`);
+    } catch (err) { setMsg("#hrf-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.empdept) {
+        const deptId = prompt("科室ID（须与员工同机构）"); if (!deptId) return;
+        await api(`/api/mgmt/employees/${d.empdept}/department?dept_id=${Number(deptId)}`, { method: "POST" });
+        route();
+      }
+      if (d.empchg) {
+        const keys = Object.keys(CHG_TYPES);
+        const pick = prompt(`变动类型（${keys.map((k, i) => `${i + 1}=${CHG_TYPES[k]}`).join("，")}）输入序号`);
+        const type = keys[Number(pick) - 1]; if (!type) return;
+        const body = { change_type: type, detail: prompt("变动说明") || "", effective_date: prompt("生效日期 YYYY-MM-DD") || "" };
+        if (type === "transfer") {
+          const toOrg = prompt("调入机构ID"); if (!toOrg) return;
+          body.to_org_id = Number(toOrg);
+        }
+        return postAction(`/api/mgmt/employees/${d.empchg}/changes`, body, "#hrf-msg");
+      }
+      if (d.emphist) {
+        const changes = await api(`/api/mgmt/employees/${d.emphist}/changes`);
+        $("#empchg-panel").classList.remove("hidden");
+        $("#empchg-list").innerHTML = table(["ID", "类型", "调入机构", "说明", "生效日期"], changes, (c) =>
+          `<tr><td>${c.id}</td><td><span class="tag">${CHG_TYPES[c.change_type] || esc(c.change_type)}</span></td>
+           <td>${c.to_org_id ?? "—"}</td><td>${esc(c.detail) || "—"}</td><td>${esc(c.effective_date) || "—"}</td></tr>`);
+      }
+      if (d.empct) {
+        const no = prompt("合同编号"); if (!no) return;
+        const start = prompt("起期 YYYY-MM-DD"); if (!start) return;
+        const end = prompt("止期 YYYY-MM-DD"); if (!end) return;
+        return postAction("/api/mgmt/staff-contracts",
+          { employee_id: Number(d.empct), contract_no: no, start_date: start, end_date: end }, "#hrf-msg");
+      }
+      if (d.assetmv) {
+        const keys = Object.keys(MV_TYPES);
+        const pick = prompt(`动作（${keys.map((k, i) => `${i + 1}=${MV_TYPES[k]}`).join("，")}）输入序号`);
+        const type = keys[Number(pick) - 1]; if (!type) return;
+        const qty = prompt("数量"); if (!qty) return;
+        return postAction(`/api/mgmt/assets/${d.assetmv}/movements`,
+          { movement_type: type, quantity: Number(qty), note: prompt("备注") || "" }, "#hrf-msg");
+      }
+      if (d.assethist) {
+        const moves = await api(`/api/mgmt/assets/${d.assethist}/movements`);
+        $("#assetmv-panel").classList.remove("hidden");
+        $("#assetmv-list").innerHTML = table(["ID", "动作", "数量", "备注", "时间"], moves, (m) =>
+          `<tr><td>${m.id}</td><td><span class="tag">${MV_TYPES[m.movement_type] || esc(m.movement_type)}</span></td>
+           <td>${m.quantity}</td><td>${esc(m.note) || "—"}</td><td>${esc(m.at.slice(0, 16).replace("T", " "))}</td></tr>`);
+      }
+    } catch (err) { setMsg("#hrf-msg", err.message, false); }
+  };
 }
 
 async function renderOaQc() {
@@ -1435,9 +1776,9 @@ async function renderCritical() {
 }
 
 async function renderRecognition() {
-  $("#page-desc").textContent = "互认项目目录（目录内 active 项目方可互认）与互认率统计";
-  const [items, stats] = await Promise.all([
-    api("/api/exams/recognition-items"), api("/api/exams/recognition-stats")]);
+  $("#page-desc").textContent = "互认项目目录（目录内 active 项目方可互认）、互认率统计与检查资源要素档案";
+  const [items, stats, resources] = await Promise.all([
+    api("/api/exams/recognition-items"), api("/api/exams/recognition-stats"), api("/api/exams/resources")]);
   const cards = [
     ["互认总次数", stats.recognized_total], ["已报告总数", stats.reported_total],
     ["互认率", stats.recognition_ratio_pct + "%"], ["节约检查次数", stats.saved_exams]];
@@ -1457,8 +1798,22 @@ async function renderRecognition() {
         `<tr><td>${esc(i.item_code)}</td><td>${esc(i.item_name)}</td><td>${CENTER_NAMES[i.center_type]}</td>
          <td>${i.mutual_scope === "city" ? "市级" : "县域"}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
-         <td><button class="btn secondary" data-toggle="${i.id}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}</div>`;
+         <td><button class="btn secondary" data-toggle="${i.id}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}</div>
+    <div class="panel"><h3>检查资源要素档案（设备/价格/时长/注意事项，admin 建档）</h3>
+      <form class="inline" id="res-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="center_type">${Object.entries(CENTER_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="item_name" placeholder="项目名称" required>
+        <input name="device" placeholder="设备">
+        <input name="price" type="number" step="any" placeholder="价格(元)">
+        <input name="duration_min" type="number" min="1" placeholder="时长(分)">
+        <input name="notes" placeholder="注意事项" style="min-width:160px">
+        <button>建档</button></form>
+      ${table(["ID", "机构", "中心", "项目", "设备", "价格", "时长", "注意事项"], resources, (r) =>
+        `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${CENTER_NAMES[r.center_type]}</td><td>${esc(r.item_name)}</td>
+         <td>${esc(r.device) || "—"}</td><td>${r.price} 元</td><td>${r.duration_min} 分</td><td>${esc(r.notes) || "—"}</td></tr>`)}</div>`;
   $("#rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/exams/recognition-items", formJson(e.target), "#rec-msg"); };
+  $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/exams/resources", formJson(e.target, ["org_id", "price", "duration_min"]), "#rec-msg"); };
   $("#page-body").onclick = async (e) => {
     const id = e.target.dataset.toggle;
     if (!id) return;
@@ -1800,6 +2155,234 @@ async function renderDrgs() {
     if (!w) return;
     try { await api(`/api/drgs/groups/${id}`, { method: "PATCH", body: JSON.stringify({ base_weight: Number(w) }) }); route(); }
     catch (err) { setMsg("#drg-msg", err.message, false); }
+  };
+}
+
+/* ---------------- 终审轮新增页面 ---------------- */
+
+const BLOOD_COMPONENTS = { rbc: "红细胞", plasma: "血浆", platelet: "血小板" };
+const BLOOD_REQ_STATUS = { pending: ["待审批", "orange"], approved: ["已审批", ""], rejected: ["已驳回", "red"], issued: ["已发血", "green"] };
+
+async function renderBlood() {
+  $("#page-desc").textContent = "血库台账（经办登记）→ 用血申请（医师）→ 审批（管理层）→ 发血（经办，库存不足拦截）";
+  const [stocks, requests] = await Promise.all([api("/api/blood/stocks"), api("/api/blood/requests")]);
+  const role = currentRole();
+  const typeOpts = ["A", "B", "AB", "O"].map((t) => `<option>${t}</option>`).join("");
+  const compOpts = Object.entries(BLOOD_COMPONENTS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  $("#page-body").innerHTML = `
+    ${["operator", "admin"].includes(role) ? `<div class="panel"><h3>血库入库登记（经办）</h3>
+      <form class="inline" id="bs-form">
+        <select name="blood_type">${typeOpts}</select>
+        <select name="component">${compOpts}</select>
+        <input name="quantity_ml" type="number" min="1" placeholder="数量(ml)" required>
+        <button>入库</button></form></div>` : ""}
+    ${["doctor", "admin"].includes(role) ? `<div class="panel"><h3>临床用血申请（医师）</h3>
+      <form class="inline" id="br-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="org_id" type="number" placeholder="用血机构ID" required>
+        <select name="blood_type">${typeOpts}</select>
+        <select name="component">${compOpts}</select>
+        <input name="quantity_ml" type="number" min="1" placeholder="数量(ml)" required>
+        <input name="reason" placeholder="用血原因">
+        <button>申请</button></form></div>` : ""}
+    <p class="msg" id="blood-msg"></p>
+    <div class="panel"><h3>血液库存台账</h3>${table(["血型", "成分", "库存(ml)"], stocks, (s) =>
+      `<tr><td><span class="tag">${esc(s.blood_type)}</span></td><td>${BLOOD_COMPONENTS[s.component] || esc(s.component)}</td><td>${s.quantity_ml}</td></tr>`)}</div>
+    <div class="panel"><h3>用血申请队列</h3>${table(["ID", "患者", "机构", "血型/成分", "数量", "状态", "操作"], requests, (r) => {
+      const [text, color] = BLOOD_REQ_STATUS[r.status] || [r.status, ""];
+      const actions = r.status === "pending" && ["director", "admin"].includes(role)
+        ? `<button class="btn secondary" data-brev="${r.id}" data-ok="true">批准</button>
+           <button class="btn danger" data-brev="${r.id}" data-ok="false">驳回</button>`
+        : r.status === "approved" && ["operator", "admin"].includes(role)
+        ? `<button class="btn secondary" data-bissue="${r.id}">发血</button>` : "—";
+      return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${r.org_id}</td>
+        <td>${esc(r.blood_type)} / ${BLOOD_COMPONENTS[r.component] || esc(r.component)}</td><td>${r.quantity_ml}ml</td>
+        <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+    })}</div>`;
+  const bs = $("#bs-form");
+  if (bs) bs.onsubmit = (e) => { e.preventDefault(); postAction("/api/blood/stocks", formJson(e.target, ["quantity_ml"]), "#blood-msg"); };
+  const br = $("#br-form");
+  if (br) br.onsubmit = (e) => { e.preventDefault(); postAction("/api/blood/requests", formJson(e.target, ["patient_id", "org_id", "quantity_ml"]), "#blood-msg"); };
+  $("#page-body").onclick = (e) => {
+    const d = e.target.dataset;
+    if (d.brev) return postAction(`/api/blood/requests/${d.brev}/review?approve=${d.ok}`, null, "#blood-msg");
+    if (d.bissue) return postAction(`/api/blood/requests/${d.bissue}/issue`, null, "#blood-msg");
+  };
+}
+
+const PO_STATUS = { pending: ["待审批", "orange"], approved: ["已审批", ""], rejected: ["已驳回", "red"], received: ["已验收", "green"] };
+
+async function renderProcure() {
+  $("#page-desc").textContent = "供应商建档 → 采购申请（经办/药师）→ 审批（管理层）→ 验收入库；存货盘点账实调整";
+  const [suppliers, orders, takes] = await Promise.all([
+    api("/api/pharmacy/suppliers"), api("/api/pharmacy/purchase-orders"), api("/api/pharmacy/stock-takes")]);
+  const role = currentRole();
+  const supNames = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>供应商建档（管理层/经办）</h3>
+      <form class="inline" id="sup-form">
+        <input name="name" placeholder="供应商名称" required>
+        <input name="contact" placeholder="联系方式">
+        <input name="license_no" placeholder="许可证号">
+        <button>建档</button></form>
+      ${table(["ID", "名称", "联系方式", "许可证", "状态"], suppliers, (s) =>
+        `<tr><td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.contact)}</td><td>${esc(s.license_no)}</td>
+         <td><span class="tag ${s.active ? "green" : "red"}">${s.active ? "在用" : "停用"}</span></td></tr>`)}</div>
+    <div class="panel"><h3>采购申请（经办/药师）</h3>
+      <form class="inline" id="po-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="supplier_id" type="number" placeholder="供应商ID" required>
+        <select name="item_type"><option value="drug">药品</option><option value="material">物资耗材</option></select>
+        <input name="item_code" placeholder="编码" required>
+        <input name="item_name" placeholder="名称" required>
+        <input name="quantity" type="number" min="1" placeholder="数量" required>
+        <button>提交申请</button></form>
+      <p class="msg" id="po-msg"></p>
+      ${table(["ID", "机构", "供应商", "类型", "品目", "数量", "状态", "操作"], orders, (o) => {
+        const [text, color] = PO_STATUS[o.status] || [o.status, ""];
+        const actions = o.status === "pending" && ["director", "admin"].includes(role)
+          ? `<button class="btn secondary" data-poap="${o.id}">批准</button>
+             <button class="btn danger" data-poap="${o.id}" data-reject="1">驳回</button>`
+          : o.status === "approved" && ["operator", "pharmacist", "admin"].includes(role)
+          ? `<button class="btn secondary" data-porec="${o.id}">验收入库</button>` : "—";
+        return `<tr><td>${o.id}</td><td>${o.org_id}</td><td>${esc(supNames[o.supplier_id] || o.supplier_id)}</td>
+          <td>${o.item_type === "drug" ? "药品" : "物资"}</td><td>${esc(o.item_name)}（${esc(o.item_code)}）</td>
+          <td>${o.quantity}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+      })}</div>
+    <div class="panel"><h3>存货盘点（经办/药师，盘后账实相符）</h3>
+      <form class="inline" id="st-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="drug_code" placeholder="药品编码" required>
+        <input name="actual_qty" type="number" min="0" placeholder="实盘数量" required>
+        <input name="note" placeholder="差异说明">
+        <button>盘点</button></form>
+      ${table(["ID", "机构", "药品编码", "账面", "实盘", "差异"], takes, (t) =>
+        `<tr><td>${t.id}</td><td>${t.org_id}</td><td>${esc(t.drug_code)}</td><td>${t.book_qty}</td><td>${t.actual_qty}</td>
+         <td><span class="tag ${t.diff === 0 ? "green" : "red"}">${t.diff > 0 ? "+" : ""}${t.diff}</span></td></tr>`)}</div>`;
+  $("#sup-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/suppliers", formJson(e.target), "#po-msg"); };
+  $("#po-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/purchase-orders", formJson(e.target, ["org_id", "supplier_id", "quantity"]), "#po-msg"); };
+  $("#st-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/stock-takes", formJson(e.target, ["org_id", "actual_qty"]), "#po-msg"); };
+  $("#page-body").onclick = (e) => {
+    const d = e.target.dataset;
+    if (d.poap) return postAction(`/api/pharmacy/purchase-orders/${d.poap}/approve${d.reject ? "?reject=true" : ""}`, null, "#po-msg");
+    if (d.porec) return postAction(`/api/pharmacy/purchase-orders/${d.porec}/receive`, null, "#po-msg");
+  };
+}
+
+const CERT_TYPES = { birth: "出生医学证明", death: "死亡医学证明", defect: "出生缺陷儿登记" };
+
+async function renderCerts() {
+  $("#page-desc").textContent = "出生/死亡医学证明签发与出生缺陷登记（限医师/公卫）；成人健康体检记录与异常清单";
+  const [stats, checkups, abnormal] = await Promise.all([
+    api("/api/certs/stats"), api("/api/checkups"), api("/api/checkups/abnormal")]);
+  const draw = async (certType = "") => {
+    const certs = await api(`/api/certs${certType ? `?cert_type=${certType}` : ""}`);
+    $("#cert-table").innerHTML = table(["编号", "类型", "姓名", "性别", "日期", "诊断/说明", "机构"], certs, (c) =>
+      `<tr><td><span class="tag">${esc(c.cert_no)}</span></td><td>${CERT_TYPES[c.cert_type] || esc(c.cert_type)}</td>
+       <td>${esc(c.name)}</td><td>${esc(c.gender)}</td><td>${esc(c.event_date)}</td><td>${esc(c.detail) || "—"}</td><td>${c.org_id}</td></tr>`);
+  };
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="label">出生证明</div><div class="value">${stats.birth || 0}</div></div>
+      <div class="card"><div class="label">死亡证明</div><div class="value">${stats.death || 0}</div></div>
+      <div class="card"><div class="label">缺陷登记</div><div class="value">${stats.defect || 0}</div></div></div>
+    <div class="panel"><h3>证明签发（医师/公卫；死亡须关联患者并填死因，缺陷须填诊断）</h3>
+      <form class="inline" id="cert-form">
+        <select name="cert_type">${Object.entries(CERT_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="name" placeholder="姓名" required>
+        <select name="gender"><option>未知</option><option>男</option><option>女</option></select>
+        <input name="event_date" placeholder="事件日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <input name="detail" placeholder="死因/缺陷诊断" style="min-width:180px">
+        <input name="org_id" type="number" placeholder="签发机构ID" required>
+        <input name="patient_id" type="number" placeholder="患者ID(死亡必填)">
+        <button>签发</button></form>
+      <p class="msg" id="cert-msg"></p>
+      <form class="inline" id="cert-filter">
+        <select name="cert_type"><option value="">全部类型</option>${Object.entries(CERT_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <button>筛选</button></form>
+      <div id="cert-table"></div></div>
+    <div class="panel"><h3>成人健康体检登记（医师/公卫，异常项自动标记并入360档案）</h3>
+      <form class="inline" id="chk-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="org_id" type="number" placeholder="体检机构ID" required>
+        <input name="package_name" placeholder="套餐（默认常规体检）">
+        <input name="exam_date" placeholder="体检日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <input name="summary" placeholder="体检结论" style="min-width:160px">
+        <input name="abnormal_items" placeholder="异常项（有则填）" style="min-width:160px">
+        <button>登记</button></form></div>
+    ${abnormal.length ? `<div class="panel"><h3>⚠ 体检异常清单（${abnormal.length}，供慢病筛查建档衔接）</h3>${
+      table(["体检ID", "患者", "日期", "异常项"], abnormal, (a) =>
+        `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_items)}</span></td></tr>`)}</div>` : ""}
+    <div class="panel"><h3>体检记录</h3>${table(["ID", "患者", "套餐", "日期", "结论", "异常"], checkups, (c) =>
+      `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
+       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
+  await draw();
+  $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
+  $("#cert-filter").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("cert_type")); };
+  $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };
+}
+
+const KB_CATEGORIES = { drug_policy: "药物政策", clinical_guideline: "临床指南", referral: "转诊知识", regulation: "质量制度规范", tcm_health: "中医养生" };
+
+async function renderKnowledge() {
+  $("#page-desc").textContent = "五分类统一知识库：发布（管理层/公卫）、检索、有效期管理与临期提醒";
+  const expiring = await api("/api/knowledge/expiring?days=30");
+  const canEdit = ["director", "public_health", "admin"].includes(currentRole());
+  const catOpts = Object.entries(KB_CATEGORIES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  const draw = async (params = "") => {
+    const entries = await api(`/api/knowledge${params}`);
+    $("#kb-table").innerHTML = table(["ID", "分类", "标题", "有效期至", "状态", "操作"], entries, (k) =>
+      `<tr><td>${k.id}</td><td><span class="tag">${esc(k.category_name)}</span></td><td>${esc(k.title)}</td>
+       <td>${esc(k.expire_date) || "长期"}</td>
+       <td>${k.expired ? '<span class="tag red">已过期</span>' : '<span class="tag green">有效</span>'}</td>
+       <td>${canEdit ? `<button class="btn secondary" data-renew="${k.id}">续期</button>
+            <button class="btn danger" data-deact="${k.id}">停用</button>` : "—"}</td></tr>`);
+  };
+  $("#page-body").innerHTML = `
+    ${canEdit ? `<div class="panel"><h3>发布知识条目（管理层/公卫）</h3>
+      <form class="inline" id="kb-form">
+        <select name="category">${catOpts}</select>
+        <input name="title" placeholder="标题" required style="min-width:240px">
+        <input name="body" placeholder="正文/摘要" style="min-width:220px">
+        <input name="expire_date" placeholder="有效期至 YYYY-MM-DD（可空）">
+        <button>发布</button></form><p class="msg" id="kb-msg"></p></div>` : '<p class="msg" id="kb-msg"></p>'}
+    ${expiring.length ? `<div class="panel" style="border-left:4px solid #b26a00"><h3>⚠ 30天内到期资料（${expiring.length}）</h3>${
+      table(["ID", "分类", "标题", "到期日"], expiring, (k) =>
+        `<tr><td>${k.id}</td><td>${KB_CATEGORIES[k.category] || esc(k.category)}</td><td>${esc(k.title)}</td>
+         <td><span class="tag orange">${esc(k.expire_date)}</span></td></tr>`)}</div>` : ""}
+    <div class="panel"><h3>知识检索</h3>
+      <form class="inline" id="kb-search">
+        <select name="category"><option value="">全部分类</option>${catOpts}</select>
+        <input name="q" placeholder="标题关键字">
+        <label style="font-size:13px"><input type="checkbox" name="include_expired"> 含过期</label>
+        <button>检索</button></form>
+      <div id="kb-table"></div></div>`;
+  await draw();
+  const kb = $("#kb-form");
+  if (kb) kb.onsubmit = (e) => { e.preventDefault(); postAction("/api/knowledge", formJson(e.target), "#kb-msg"); };
+  $("#kb-search").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const params = new URLSearchParams();
+    if (f.get("category")) params.set("category", f.get("category"));
+    if (f.get("q")) params.set("q", f.get("q"));
+    if (f.get("include_expired")) params.set("include_expired", "true");
+    const qs = params.toString();
+    await draw(qs ? `?${qs}` : "");
+  };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.renew) {
+        const dateStr = prompt("新有效期 YYYY-MM-DD"); if (!dateStr) return;
+        await api(`/api/knowledge/${d.renew}`, { method: "PATCH", body: JSON.stringify({ expire_date: dateStr }) });
+        route();
+      }
+      if (d.deact) {
+        await api(`/api/knowledge/${d.deact}`, { method: "PATCH", body: JSON.stringify({ active: false }) });
+        route();
+      }
+    } catch (err) { setMsg("#kb-msg", err.message, false); }
   };
 }
 
