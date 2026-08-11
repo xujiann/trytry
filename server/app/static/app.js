@@ -198,21 +198,46 @@ function lineChart(months, series, colors) {
   return `<svg width="${w}" height="${h}" role="img">${svg}</svg>`;
 }
 
+/* 块2：指标下钻——指标卡/预警横幅点击后拉取明细，行可跳转对应业务页 */
+async function openDrilldown(metric, offset = 0) {
+  const panel = $("#drill-panel");
+  if (!panel) return;
+  panel.classList.remove("hidden");
+  panel.innerHTML = "<div class='panel'>明细加载中…</div>";
+  const limit = 20;
+  const d = await api(`/api/metrics/drilldown?metric=${encodeURIComponent(metric)}&offset=${offset}&limit=${limit}`);
+  const pager = [];
+  if (offset > 0) pager.push(`<button class="btn secondary" data-drillpage="${Math.max(offset - limit, 0)}">上一页</button>`);
+  if (offset + limit < d.total) pager.push(`<button class="btn secondary" data-drillpage="${offset + limit}">下一页</button>`);
+  panel.innerHTML = `<div class="panel" style="border-left:4px solid #0b6e6e">
+    <h3>${esc(d.label)} 明细（${d.total}）　<button class="btn secondary" data-drillclose="1">关闭</button></h3>
+    <p class="desc" style="font-size:12.5px">点击明细行跳转「${esc(d.page)}」业务页；口径与驾驶舱指标、预警横幅一致</p>
+    ${table(d.columns, d.items, (row) =>
+      `<tr data-drillgo="${esc(d.page)}" style="cursor:pointer">${
+        d.fields.map((f) => `<td>${esc(row[f] ?? "—")}</td>`).join("")}</tr>`)}
+    <div style="margin-top:8px">${pager.join(" ")}　<span style="font-size:12.5px;color:#5b6773">第 ${Math.floor(offset / limit) + 1} 页 / 共 ${Math.max(Math.ceil(d.total / limit), 1)} 页</span></div></div>`;
+  panel.dataset.metric = metric;
+  panel.dataset.offset = String(offset);
+}
+
 async function renderDashboard() {
-  $("#page-desc").textContent = "指标口径对齐《紧密型县域医共体监测指标体系（2024版）》";
+  $("#page-desc").textContent = "指标口径对齐《紧密型县域医共体监测指标体系（2024版）》；指标卡与预警可点击下钻明细";
   const m = await api("/api/metrics/overview");
+  // 第4项为下钻指标 key（与 /api/metrics/drilldown 的 metric 同名，口径服务端统一）
   const cards = [
     ["成员单位数", m.resources.organizations],
     ["建档患者数", m.resources.patients],
-    ["基层诊疗人次占比", m.service_division.grassroots_encounter_ratio_pct + "%"],
-    ["远程诊断量", m.remote_diagnosis.reported_total],
-    ["结果互认率", m.remote_diagnosis.recognition_ratio_pct + "%"],
-    ["危急值", m.remote_diagnosis.critical_values, m.remote_diagnosis.critical_values > 0],
-    ["上转/下转", `${m.referrals.up} / ${m.referrals.down}`],
+    ["基层诊疗人次占比", m.service_division.grassroots_encounter_ratio_pct + "%", false, "grassroots_encounters"],
+    ["远程诊断量", m.remote_diagnosis.reported_total, false, "reported_exams"],
+    ["结果互认量", m.remote_diagnosis.recognized_total, false, "recognized_exams"],
+    ["危急值", m.remote_diagnosis.critical_values, m.remote_diagnosis.critical_values > 0, "critical_values"],
+    ["上转", m.referrals.up, false, "referrals_up"],
+    ["下转", m.referrals.down, false, "referrals_down"],
     ["审方总量", m.prescription_review.total],
-    ["系统审通过率", m.prescription_review.auto_pass_ratio_pct + "%"],
+    ["待药师审", m.prescription_review.pending_review, m.prescription_review.pending_review > 0, "pending_reviews"],
+    ["退回处方", m.prescription_review.rejected, m.prescription_review.rejected > 0, "rejected_prescriptions"],
     ["慢病在管人数", m.chronic_management.total],
-    ["缺药预警", m.pharmacy.stock_alerts, m.pharmacy.stock_alerts > 0],
+    ["缺药预警", m.pharmacy.stock_alerts, m.pharmacy.stock_alerts > 0, "stock_alerts"],
   ];
   const chronicItems = Object.entries(m.chronic_management.by_level).map(([lvl, n]) => [`${lvl} 级`, n]);
   let perfHtml = "";
@@ -224,7 +249,8 @@ async function renderDashboard() {
   const [alerts, trends] = await Promise.all([api("/api/metrics/alerts"), api("/api/metrics/trends?months=6")]);
   const alertBanner = alerts.total
     ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 风险预警（${alerts.total}）</h3>
-       <p style="font-size:13.5px">${alerts.items.map((a) => `<span class="tag red" style="margin-right:8px">${esc(a.label)} ${a.count}</span>`).join("")}</p></div>`
+       <p style="font-size:13.5px">${alerts.items.map((a) =>
+        `<span class="tag red" style="margin-right:8px;cursor:pointer" data-drill="${esc(a.type)}">${esc(a.label)} ${a.count}</span>`).join("")}</p></div>`
     : "";
   const trendColors = ["#0b6e6e", "#0a4d78", "#b26a00", "#8d4bab"];
   const trendNames = { encounters: "就诊", exam_reports: "远程诊断", referrals: "转诊", prescriptions: "处方" };
@@ -232,11 +258,24 @@ async function renderDashboard() {
     `<span style="font-size:12.5px;margin-right:14px"><span style="display:inline-block;width:10px;height:10px;background:${trendColors[i]};border-radius:2px;margin-right:4px"></span>${trendNames[k] || k}</span>`).join("");
   $("#page-body").innerHTML =
     `${alertBanner}
-     <div class="cards">${cards.map(([label, value, warn]) =>
-      `<div class="card"><div class="label">${esc(label)}</div><div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}</div>
+     <div class="cards">${cards.map(([label, value, warn, metric]) =>
+      `<div class="card"${metric ? ` data-drill="${esc(metric)}" style="cursor:pointer" title="点击查看明细"` : ""}>
+        <div class="label">${esc(label)}${metric ? " ▸" : ""}</div><div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}</div>
+     <div id="drill-panel" class="hidden"></div>
      <div class="panel"><h3>近6月业务量趋势</h3><div style="margin-bottom:6px">${legend}</div>${lineChart(trends.months, trends.series, trendColors)}</div>
      ${chronicItems.length ? `<div class="panel"><h3>慢病分级分组</h3>${barChart(chronicItems, { color: "#b26a00", unit: " 人" })}</div>` : ""}
      ${perfHtml}`;
+  $("#page-body").onclick = async (e) => {
+    const hit = e.target.closest("[data-drill],[data-drillgo],[data-drillpage],[data-drillclose]");
+    if (!hit) return;
+    const panel = $("#drill-panel");
+    try {
+      if (hit.dataset.drillclose) return panel.classList.add("hidden");
+      if (hit.dataset.drillgo) return nav(hit.dataset.drillgo);
+      if (hit.dataset.drillpage) return await openDrilldown(panel.dataset.metric, Number(hit.dataset.drillpage));
+      await openDrilldown(hit.dataset.drill, 0);
+    } catch (err) { panel.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
 }
 
 async function renderConsultations() {
