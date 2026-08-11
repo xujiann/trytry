@@ -8,7 +8,7 @@
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -286,8 +286,27 @@ class StockTransfer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ChronicDiseaseType(Base):
+    """慢病病种目录（块1）：病种编码/名称/分级规则/指导要点/随访周期。
+
+    - level_rules：JSON 分级规则（指标名 + 阈值区间），结构见 app/chronic_seed.py
+    - followup_interval_days：随访周期（天），用于随访后自动建议下次到期日
+    启动时按 SEED_CHRONIC_DISEASE_TYPES 幂等种子化 8 个县域重点病种。
+    """
+
+    __tablename__ = "chronic_disease_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    level_rules: Mapped[dict] = mapped_column(JSON, default=dict)
+    guidance: Mapped[str] = mapped_column(String(512), default="")
+    followup_interval_days: Mapped[int] = mapped_column(Integer, default=90)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class ChronicPatient(Base):
-    """慢病建档：高血压/2型糖尿病/慢阻肺，智能分级分组。"""
+    """慢病建档：病种取自 ChronicDiseaseType 目录，智能分级分组。"""
 
     __tablename__ = "chronic_patients"
     __table_args__ = (
@@ -296,7 +315,7 @@ class ChronicPatient(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
-    # hypertension=高血压, diabetes=2型糖尿病, copd=慢阻肺
+    # 病种编码，取值见 chronic_disease_types.code（hypertension/diabetes/copd/chd/...）
     disease: Mapped[str] = mapped_column(String(32), index=True)
     # 1=控制良好, 2=需干预, 3=高危
     level: Mapped[int] = mapped_column(Integer, default=1, index=True)
@@ -315,6 +334,8 @@ class FollowUp(Base):
     sbp: Mapped[float | None] = mapped_column(Float, nullable=True)
     dbp: Mapped[float | None] = mapped_column(Float, nullable=True)
     glucose: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 块1：通用指标 JSON（非血压血糖类，如 adherence_score 用药依从性、cat_score、mrs_score）
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     guidance: Mapped[str] = mapped_column(String(1024), default="")
     next_due: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

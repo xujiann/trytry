@@ -23,7 +23,7 @@ from ..models import (
     SatisfactionSurvey,
 )
 from ..state_store import LoginFailureTracker
-from .chronic import GUIDANCE_POINTS
+from .chronic import guidance_for
 
 router = APIRouter(prefix="/api/portal", tags=["居民端"])
 
@@ -87,7 +87,7 @@ def _build_archive(db: Session, patient: Patient) -> dict:
                 "disease": c.disease,
                 "level": c.level,
                 "next_followup_due": c.next_due,
-                "guidance_points": GUIDANCE_POINTS.get(c.disease, ""),
+                "guidance_points": guidance_for(db, c.disease),
             }
             for c in chronic
         ],

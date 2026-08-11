@@ -14,7 +14,7 @@ from ..models import (
     PublicHealthEvent,
     VaccineContraindication,
 )
-from .chronic import GUIDANCE_POINTS
+from .chronic import guidance_for
 
 router = APIRouter(prefix="/api/publichealth", tags=["公卫协同"], dependencies=[Depends(get_current_user)])
 
@@ -127,8 +127,9 @@ def clinic_reminders(patient_id: int, today: str | None = None, db: Session = De
             reminders.append({"type": "chronic_followup_overdue", "detail": f"{c.disease} 随访已超期（应访日期 {c.next_due}）"})
         if c.level == 3:
             reminders.append({"type": "chronic_high_risk", "detail": f"{c.disease} 分级3级，建议上转评估"})
-        if c.disease in GUIDANCE_POINTS:
-            reminders.append({"type": "lifestyle_guidance", "detail": GUIDANCE_POINTS[c.disease]})
+        guidance = guidance_for(db, c.disease)
+        if guidance:
+            reminders.append({"type": "lifestyle_guidance", "detail": guidance})
     for v in db.query(VaccineContraindication).filter(VaccineContraindication.patient_id == patient_id).all():
         reminders.append({"type": "vaccine_contraindication", "detail": f"疫苗 {v.vaccine_code} 禁忌：{v.reason}"})
     active_events = db.query(PublicHealthEvent).filter(PublicHealthEvent.status == "active").count()

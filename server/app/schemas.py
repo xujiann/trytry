@@ -240,7 +240,8 @@ class TransferCreate(BaseModel):
 
 class ChronicCreate(BaseModel):
     patient_id: int
-    disease: str = Field(pattern="^(hypertension|diabetes|copd)$")
+    # 块1：病种取值改由 ChronicDiseaseType 目录校验（不再硬编码枚举）
+    disease: str = Field(min_length=1, max_length=32)
     managed_by_org_id: int
     next_due: str = ""
 
@@ -256,6 +257,8 @@ class FollowUpCreate(BaseModel):
     sbp: float | None = None
     dbp: float | None = None
     glucose: float | None = None
+    # 块1：通用指标（非血压血糖类），如 {"adherence_score": 4, "cat_score": 22}
+    metrics: dict[str, float] = Field(default_factory=dict)
     guidance: str = ""
     next_due: str = ""
 

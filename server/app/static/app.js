@@ -142,7 +142,8 @@ function pageAllowed(p) {
 const CENTER_NAMES = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
 const ORG_TYPES = { lead_hospital: "牵头医院", township: "乡镇卫生院", village: "村卫生室", public_health: "公卫机构" };
 const LEVELS = { county: "县级", township: "乡级", village: "村级" };
-const DISEASES = { hypertension: "高血压", diabetes: "2型糖尿病", copd: "慢阻肺" };
+// 慢病病种：启动为兜底值，进入慢病页时从 /api/chronic/disease-types 目录刷新（块1）
+let DISEASES = { hypertension: "高血压", diabetes: "2型糖尿病", copd: "慢阻肺" };
 const RX_STATUS = { auto_passed: ["系统审通过", "green"], pending_review: ["待药师审", "orange"], approved: ["药师审通过", "green"], rejected: ["已退回", "red"] };
 const EXAM_STATUS = { pending: ["待诊断", "orange"], diagnosing: ["诊断中", ""], reported: ["已报告", "green"], recognized: ["已互认", "green"] };
 const REF_STATUS = { pending: ["待接诊", "orange"], accepted: ["已接诊", ""], completed: ["已结案", "green"], rejected: ["已退回", "red"] };
@@ -956,9 +957,17 @@ async function renderPharmacy() {
 }
 
 async function renderChronic() {
-  $("#page-desc").textContent = "建档、随访即时智能分级，3级建议上转；膳食运动指导要点自动嵌入";
-  const [chronicList, overdue] = await Promise.all([api("/api/chronic"), api("/api/chronic/overdue")]);
+  $("#page-desc").textContent = "病种目录驱动分级规则与随访周期，3级建议上转；膳食运动指导要点自动嵌入";
+  const [chronicList, overdue, types] = await Promise.all([
+    api("/api/chronic"), api("/api/chronic/overdue"), api("/api/chronic/disease-types?active=true"),
+  ]);
+  DISEASES = Object.fromEntries(types.map((t) => [t.code, t.name]));
   const overdueIds = new Set(overdue.map((c) => c.id));
+  // 各病种分级指标：随访录入时提示该病种应采集的指标与周期
+  const metricHint = types.map((t) => {
+    const keys = ((t.level_rules || {}).metrics || []).map((m) => `${m.name}(${m.key})`).join("、");
+    return `<tr><td>${esc(t.name)}</td><td>${esc(t.code)}</td><td>${esc(keys) || "—"}</td><td>${t.followup_interval_days} 天</td></tr>`;
+  }).join("");
   $("#page-body").innerHTML = `
     <div class="panel"><h3>慢病建档</h3>
       <form class="inline" id="chronic-form">
@@ -973,12 +982,15 @@ async function renderChronic() {
         <input name="sbp" type="number" placeholder="收缩压">
         <input name="dbp" type="number" placeholder="舒张压">
         <input name="glucose" type="number" step="any" placeholder="空腹血糖">
-        <input name="next_due" placeholder="下次随访 YYYY-MM-DD">
+        <input name="metrics" placeholder="其他指标 如 cat_score=22">
+        <input name="next_due" placeholder="下次随访(留空按周期自动建议)">
         <button>提交随访</button>
-      </form><p class="msg" id="chronic-msg"></p></div>
+      </form><p class="msg" id="chronic-msg"></p>
+      <h3 style="margin-top:14px">病种目录</h3>
+      <table><thead><tr><th>病种</th><th>编码</th><th>分级指标</th><th>随访周期</th></tr></thead><tbody>${metricHint}</tbody></table></div>
     <div class="panel"><h3>在管名单${overdue.length ? `（<span style="color:#c62828">${overdue.length} 人随访超期</span>）` : ""}</h3>
       ${table(["档案ID", "患者", "病种", "分级", "下次随访", "随访状态"], chronicList, (c) =>
-        `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${DISEASES[c.disease]}</td>
+        `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(DISEASES[c.disease] || c.disease)}</td>
          <td><span class="tag ${c.level === 3 ? "red" : c.level === 2 ? "orange" : "green"}">${c.level} 级</span></td>
          <td>${esc(c.next_due) || "—"}</td>
          <td>${overdueIds.has(c.id) ? '<span class="tag red">超期</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
@@ -996,10 +1008,16 @@ async function renderChronic() {
     e.preventDefault();
     const f = new FormData(e.target);
     const num = (k) => (f.get(k) ? Number(f.get(k)) : null);
+    // "cat_score=22, mrs_score=3" → {cat_score: 22, mrs_score: 3}
+    const metrics = {};
+    (f.get("metrics") || "").split(",").forEach((pair) => {
+      const [k, v] = pair.split("=").map((s) => (s || "").trim());
+      if (k && v !== undefined && v !== "" && !Number.isNaN(Number(v))) metrics[k] = Number(v);
+    });
     try {
       const result = await api(`/api/chronic/${f.get("chronic_id")}/followups`, { method: "POST",
-        body: JSON.stringify({ sbp: num("sbp"), dbp: num("dbp"), glucose: num("glucose"), next_due: f.get("next_due") }) });
-      alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n指导要点：${result.guidance_points}`);
+        body: JSON.stringify({ sbp: num("sbp"), dbp: num("dbp"), glucose: num("glucose"), metrics, next_due: f.get("next_due") }) });
+      alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n下次随访：${result.next_due}${result.next_due_suggested ? "（按病种周期自动建议）" : ""}\n指导要点：${result.guidance_points}`);
       route();
     } catch (err) { setMsg("#chronic-msg", err.message, false); }
   };

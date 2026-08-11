@@ -268,7 +268,7 @@ def _do_fhir_observation(resource: dict, db: Session):
 
     followup_in = FollowUpCreate(**values, guidance="HL7/FHIR 对接自动归档")
     followup = FollowUp(chronic_id=chronic.id, **followup_in.model_dump())
-    new_level = _evaluate_level(chronic.disease, followup_in)
+    new_level = _evaluate_level(db, chronic.disease, followup_in)
     if new_level is not None:
         chronic.level = new_level
     db.add(followup)
