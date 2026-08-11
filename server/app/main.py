@@ -26,6 +26,7 @@ from .routers import (
     admin_mgmt,
     appointments,
     auth,
+    billing,
     chronic,
     consultations,
     contracts,
@@ -149,6 +150,7 @@ app.include_router(telemedicine.router)
 app.include_router(tcm.router)
 app.include_router(medication.router)
 app.include_router(inpatient.router)
+app.include_router(billing.router)
 app.include_router(insurance.router)
 app.include_router(integration.router)
 app.include_router(education.router)

@@ -1103,6 +1103,78 @@ class CaseSummary(Base):
     admission: Mapped[Admission] = relationship(back_populates="case_summary")
 
 
+# ---------- 浙江省指南 M8：费用结算（计费引擎最小集） ----------
+
+
+class ChargeItem(Base):
+    """收费项目目录：价格管理与公示，编码关联四统一 charge 字典。"""
+
+    __tablename__ = "charge_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # drug=药品, exam=检查检验, treatment=治疗处置, bed=床位, other=其他
+    category: Mapped[str] = mapped_column(String(16), default="other")
+    price: Mapped[float] = mapped_column(Float)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BillDetail(Base):
+    """费用明细：门诊按就诊（encounter）、住院按住院登记（admission）累计。"""
+
+    __tablename__ = "bill_details"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    admission_id: Mapped[int | None] = mapped_column(
+        ForeignKey("admissions.id"), nullable=True, index=True
+    )
+    encounter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("encounters.id"), nullable=True, index=True
+    )
+    item_code: Mapped[str] = mapped_column(String(64), index=True)
+    item_name: Mapped[str] = mapped_column(String(128))
+    # 计费时价格快照（此后目录调价不影响已计费明细）
+    unit_price: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    amount: Mapped[float] = mapped_column(Float)
+    # 结算后回填：未结清明细 settlement_id 为空
+    settlement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("settlements.id"), nullable=True, index=True
+    )
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Settlement(Base):
+    """结算单：汇总未结清明细→医保分担（联动 InsuranceSettlement）→结清。"""
+
+    __tablename__ = "settlements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # outpatient=门诊结算, inpatient=住院（出院）结算
+    bill_type: Mapped[str] = mapped_column(String(16))
+    admission_id: Mapped[int | None] = mapped_column(
+        ForeignKey("admissions.id"), nullable=True, index=True
+    )
+    encounter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("encounters.id"), nullable=True
+    )
+    total_amount: Mapped[float] = mapped_column(Float)
+    insurance_pay: Mapped[float] = mapped_column(Float, default=0)
+    self_pay: Mapped[float] = mapped_column(Float, default=0)
+    # 关联医保结算记录（复用 insurance 域，insurance_pay>0 时生成）
+    insurance_settlement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("insurance_settlements.id"), nullable=True
+    )
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Referral(Base):
     __tablename__ = "referrals"
 
