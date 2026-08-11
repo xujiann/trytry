@@ -5,16 +5,24 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
     Asset,
+    AssetMovement,
+    Budget,
+    Department,
     DutyRoster,
     Employee,
+    EmployeeChange,
     FinanceEntry,
     OfficialDoc,
     Organization,
+    PayrollRecord,
     QcRecord,
     Secondment,
+    StaffContract,
+    SystemParam,
+    User,
 )
 
 router = APIRouter(prefix="/api/mgmt", tags=["综合管理"], dependencies=[Depends(get_current_user)])
@@ -375,3 +383,414 @@ def list_qc(center_type: str | None = None, result: str | None = None, db: Sessi
     if result:
         query = query.filter(QcRecord.result == result)
     return query.order_by(QcRecord.id.desc()).limit(200).all()
+
+
+# ---------- 终审轮：科室信息基础库（浙#9） ----------
+
+
+class DeptCreate(BaseModel):
+    org_id: int
+    code: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    category: str = Field(default="clinical", pattern="^(clinical|medtech|admin)$")
+
+
+@router.post(
+    "/departments",
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "operator"))],  # 科室建档
+)
+def create_department(body: DeptCreate, db: Session = Depends(get_db)):
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
+    if (
+        db.query(Department)
+        .filter(Department.org_id == body.org_id, Department.code == body.code)
+        .first()
+    ):
+        raise HTTPException(status_code=409, detail="该机构下科室编码已存在")
+    dept = Department(**body.model_dump())
+    db.add(dept)
+    db.commit()
+    return {"id": dept.id, "org_id": dept.org_id, "code": dept.code, "name": dept.name}
+
+
+@router.get("/departments")
+def list_departments(org_id: int | None = None, db: Session = Depends(get_db)):
+    q = db.query(Department).filter(Department.active.is_(True))
+    if org_id is not None:
+        q = q.filter(Department.org_id == org_id)
+    return [
+        {"id": d.id, "org_id": d.org_id, "code": d.code, "name": d.name, "category": d.category}
+        for d in q.order_by(Department.org_id, Department.code).all()
+    ]
+
+
+@router.post(
+    "/employees/{employee_id}/department",
+    dependencies=[Depends(require_roles("director", "operator"))],  # 员工科室挂接
+)
+def assign_department(employee_id: int, dept_id: int, db: Session = Depends(get_db)):
+    employee = db.get(Employee, employee_id)
+    if employee is None:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    dept = db.get(Department, dept_id)
+    if dept is None or not dept.active:
+        raise HTTPException(status_code=404, detail="科室不存在或已停用")
+    if dept.org_id != employee.org_id:
+        raise HTTPException(status_code=422, detail="科室与员工不属于同一机构")
+    employee.dept_id = dept_id
+    db.commit()
+    return {"employee_id": employee_id, "dept_id": dept_id}
+
+
+# ---------- 终审轮：人员变动管理（㉚） ----------
+
+
+class ChangeCreate(BaseModel):
+    change_type: str = Field(pattern="^(hire|regularize|transfer|leave)$")
+    to_org_id: int | None = None
+    detail: str = ""
+    effective_date: str = ""
+
+
+@router.post(
+    "/employees/{employee_id}/changes",
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "operator"))],  # 人员变动
+)
+def create_employee_change(
+    employee_id: int,
+    body: ChangeCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    employee = db.get(Employee, employee_id)
+    if employee is None:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    if body.change_type == "transfer":
+        if body.to_org_id is None:
+            raise HTTPException(status_code=422, detail="调动须指定调入机构")
+        if db.get(Organization, body.to_org_id) is None:
+            raise HTTPException(status_code=404, detail="调入机构不存在")
+        employee.org_id = body.to_org_id
+        employee.dept_id = None  # 跨机构调动后科室待重新挂接
+    elif body.change_type == "leave":
+        employee.status = "left"
+    elif body.change_type == "hire":
+        employee.status = "active"
+    change = EmployeeChange(employee_id=employee_id, created_by=user.id, **body.model_dump())
+    db.add(change)
+    db.commit()
+    return {
+        "id": change.id,
+        "employee_id": employee_id,
+        "change_type": change.change_type,
+        "employee_status": employee.status,
+        "employee_org_id": employee.org_id,
+    }
+
+
+@router.get("/employees/{employee_id}/changes")
+def list_employee_changes(employee_id: int, db: Session = Depends(get_db)):
+    if db.get(Employee, employee_id) is None:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    return [
+        {
+            "id": c.id,
+            "change_type": c.change_type,
+            "to_org_id": c.to_org_id,
+            "detail": c.detail,
+            "effective_date": c.effective_date,
+        }
+        for c in db.query(EmployeeChange)
+        .filter(EmployeeChange.employee_id == employee_id)
+        .order_by(EmployeeChange.id)
+        .all()
+    ]
+
+
+# ---------- 终审轮：合同管理（㉚） ----------
+
+
+class ContractCreate(BaseModel):
+    employee_id: int
+    contract_no: str = Field(min_length=1)
+    start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    end_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+@router.post(
+    "/staff-contracts",
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "operator"))],  # 合同管理
+)
+def create_staff_contract(body: ContractCreate, db: Session = Depends(get_db)):
+    if db.get(Employee, body.employee_id) is None:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    if body.end_date <= body.start_date:
+        raise HTTPException(status_code=422, detail="合同止期须晚于起期")
+    if db.query(StaffContract).filter(StaffContract.contract_no == body.contract_no).first():
+        raise HTTPException(status_code=409, detail="合同编号已存在")
+    contract = StaffContract(**body.model_dump())
+    db.add(contract)
+    db.commit()
+    return {"id": contract.id, "contract_no": contract.contract_no, "status": contract.status}
+
+
+@router.get("/staff-contracts/expiring")
+def expiring_contracts(days: int = 60, today: str | None = None, db: Session = Depends(get_db)):
+    """合同到期提醒：end_date 距今 ≤days 的履行中合同（续签管理）。"""
+    from datetime import timedelta
+
+    current = resolve_business_date(today)
+    deadline = (current + timedelta(days=days)).isoformat()
+    return [
+        {
+            "id": c.id,
+            "employee_id": c.employee_id,
+            "contract_no": c.contract_no,
+            "end_date": c.end_date,
+        }
+        for c in db.query(StaffContract)
+        .filter(StaffContract.status == "active", StaffContract.end_date <= deadline)
+        .order_by(StaffContract.end_date)
+        .all()
+    ]
+
+
+@router.get("/staff-contracts")
+def list_staff_contracts(employee_id: int | None = None, db: Session = Depends(get_db)):
+    q = db.query(StaffContract)
+    if employee_id is not None:
+        q = q.filter(StaffContract.employee_id == employee_id)
+    return [
+        {
+            "id": c.id,
+            "employee_id": c.employee_id,
+            "contract_no": c.contract_no,
+            "start_date": c.start_date,
+            "end_date": c.end_date,
+            "status": c.status,
+        }
+        for c in q.order_by(StaffContract.id.desc()).limit(200).all()
+    ]
+
+
+# ---------- 终审轮：薪酬福利管理（㉚）/ 绩效薪酬分配（㉟） ----------
+
+
+class PayrollCreate(BaseModel):
+    employee_id: int
+    period: str = Field(pattern=r"^\d{4}-\d{2}$")
+    base_salary: float = Field(ge=0)
+    perf_bonus: float = Field(default=0, ge=0)
+    perf_coefficient: float = Field(default=1.0, ge=0, le=2)
+
+
+@router.post(
+    "/payroll",
+    status_code=201,
+    dependencies=[Depends(require_roles("director"))],  # 薪酬发放=管理层
+)
+def create_payroll(body: PayrollCreate, db: Session = Depends(get_db)):
+    if db.get(Employee, body.employee_id) is None:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    if (
+        db.query(PayrollRecord)
+        .filter(
+            PayrollRecord.employee_id == body.employee_id, PayrollRecord.period == body.period
+        )
+        .first()
+    ):
+        raise HTTPException(status_code=409, detail="该员工本期薪酬已录入")
+    total = round(body.base_salary + body.perf_bonus * body.perf_coefficient, 2)
+    record = PayrollRecord(**body.model_dump(), total=total)
+    db.add(record)
+    db.commit()
+    return {"id": record.id, "period": record.period, "total": record.total}
+
+
+@router.get("/payroll", dependencies=[Depends(require_roles("director"))])
+def list_payroll(period: str | None = None, employee_id: int | None = None, db: Session = Depends(get_db)):
+    q = db.query(PayrollRecord)
+    if period:
+        q = q.filter(PayrollRecord.period == period)
+    if employee_id is not None:
+        q = q.filter(PayrollRecord.employee_id == employee_id)
+    records = q.order_by(PayrollRecord.id.desc()).limit(500).all()
+    return {
+        "total_amount": round(sum(r.total for r in records), 2),
+        "records": [
+            {
+                "id": r.id,
+                "employee_id": r.employee_id,
+                "period": r.period,
+                "base_salary": r.base_salary,
+                "perf_bonus": r.perf_bonus,
+                "perf_coefficient": r.perf_coefficient,
+                "total": r.total,
+            }
+            for r in records
+        ],
+    }
+
+
+# ---------- 终审轮：预算管理（㉛） ----------
+
+
+class BudgetCreate(BaseModel):
+    org_id: int
+    year: str = Field(pattern=r"^\d{4}$")
+    category: str = Field(pattern="^(income|expense)$")
+    amount: float = Field(gt=0)
+
+
+@router.post(
+    "/budgets",
+    status_code=201,
+    dependencies=[Depends(require_roles("director"))],  # 预算编制=管理层
+)
+def create_budget(body: BudgetCreate, db: Session = Depends(get_db)):
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
+    existing = (
+        db.query(Budget)
+        .filter(Budget.org_id == body.org_id, Budget.year == body.year, Budget.category == body.category)
+        .first()
+    )
+    if existing:  # 预算调整：覆盖并留原记录时间
+        existing.amount = body.amount
+        db.commit()
+        return {"id": existing.id, "amount": existing.amount, "adjusted": True}
+    budget = Budget(**body.model_dump())
+    db.add(budget)
+    db.commit()
+    return {"id": budget.id, "amount": budget.amount, "adjusted": False}
+
+
+@router.get("/budgets/execution")
+def budget_execution(org_id: int, year: str, db: Session = Depends(get_db)):
+    """预算执行对比：预算数 vs 财务收支实际数（执行率）。"""
+    budgets = {
+        b.category: b.amount
+        for b in db.query(Budget).filter(Budget.org_id == org_id, Budget.year == year).all()
+    }
+    result = {}
+    for category in ("income", "expense"):
+        actual = (
+            db.query(func.coalesce(func.sum(FinanceEntry.amount), 0.0))
+            .filter(
+                FinanceEntry.org_id == org_id,
+                FinanceEntry.category == category,
+                FinanceEntry.period.like(f"{year}-%"),
+            )
+            .scalar()
+        )
+        budget_amount = budgets.get(category, 0.0)
+        result[category] = {
+            "budget": budget_amount,
+            "actual": round(actual, 2),
+            "execution_pct": round(actual * 100.0 / budget_amount, 2) if budget_amount else None,
+        }
+    return {"org_id": org_id, "year": year, **result}
+
+
+# ---------- 终审轮：物资出入库管理（㉜） ----------
+
+
+class MovementCreate(BaseModel):
+    movement_type: str = Field(pattern="^(inbound|issue|return|scrap)$")
+    quantity: int = Field(gt=0)
+    note: str = ""
+
+
+@router.post(
+    "/assets/{asset_id}/movements",
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "operator"))],  # 物资出入库
+)
+def create_asset_movement(
+    asset_id: int,
+    body: MovementCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    asset = db.get(Asset, asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="物资不存在")
+    if asset.status == "scrapped":
+        raise HTTPException(status_code=409, detail="已报废物资不可再出入库")
+    if body.movement_type in ("issue", "scrap") and body.quantity > asset.quantity:
+        raise HTTPException(status_code=409, detail="出库数量超过现存量")
+    if body.movement_type in ("inbound", "return"):
+        asset.quantity += body.quantity
+    else:
+        asset.quantity -= body.quantity
+        if body.movement_type == "scrap" and asset.quantity == 0:
+            asset.status = "scrapped"
+    movement = AssetMovement(asset_id=asset_id, created_by=user.id, **body.model_dump())
+    db.add(movement)
+    db.commit()
+    return {
+        "id": movement.id,
+        "asset_id": asset_id,
+        "movement_type": movement.movement_type,
+        "asset_quantity": asset.quantity,
+        "asset_status": asset.status,
+    }
+
+
+@router.get("/assets/{asset_id}/movements")
+def list_asset_movements(asset_id: int, db: Session = Depends(get_db)):
+    if db.get(Asset, asset_id) is None:
+        raise HTTPException(status_code=404, detail="物资不存在")
+    return [
+        {
+            "id": m.id,
+            "movement_type": m.movement_type,
+            "quantity": m.quantity,
+            "note": m.note,
+            "at": m.created_at.isoformat(),
+        }
+        for m in db.query(AssetMovement)
+        .filter(AssetMovement.asset_id == asset_id)
+        .order_by(AssetMovement.id)
+        .all()
+    ]
+
+
+# ---------- 终审轮：系统参数配置（浙#45） ----------
+
+
+class ParamUpsert(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    value: str = Field(max_length=256)
+    description: str = ""
+
+
+@router.post("/params", dependencies=[Depends(require_admin)])
+def upsert_param(body: ParamUpsert, db: Session = Depends(get_db)):
+    param = db.query(SystemParam).filter(SystemParam.key == body.key).first()
+    if param is None:
+        param = SystemParam(**body.model_dump())
+        db.add(param)
+    else:
+        param.value = body.value
+        if body.description:
+            param.description = body.description
+    db.commit()
+    return {"key": param.key, "value": param.value}
+
+
+@router.get("/params", dependencies=[Depends(require_admin)])
+def list_params(db: Session = Depends(get_db)):
+    return [
+        {
+            "key": p.key,
+            "value": p.value,
+            "description": p.description,
+            "updated_at": p.updated_at.isoformat(),
+        }
+        for p in db.query(SystemParam).order_by(SystemParam.key).all()
+    ]

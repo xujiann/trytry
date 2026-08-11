@@ -842,6 +842,8 @@ class Employee(Base):
     position: Mapped[str] = mapped_column(String(64), default="")
     # active=在岗, seconded=派驻中, left=离职
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    # 终审轮：科室挂接（浙#9）
+    dept_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -1507,4 +1509,122 @@ class DualChannelApp(Base):
     review_comment: Mapped[str] = mapped_column(String(512), default="")
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Department(Base):
+    """浙#9 科室信息基础库：机构-科室唯一标识，人员可挂接。"""
+
+    __tablename__ = "departments"
+    __table_args__ = (UniqueConstraint("org_id", "code", name="uq_dept_org_code"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    code: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(64))
+    # clinical=临床, medtech=医技, admin=行政后勤
+    category: Mapped[str] = mapped_column(String(16), default="clinical")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class EmployeeChange(Base):
+    """㉚人员变动管理：入职/转正/调动/离职留痕并联动员工状态。"""
+
+    __tablename__ = "employee_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    # hire=入职, regularize=转正, transfer=调动, leave=离职
+    change_type: Mapped[str] = mapped_column(String(16), index=True)
+    to_org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    detail: Mapped[str] = mapped_column(String(256), default="")
+    effective_date: Mapped[str] = mapped_column(String(10), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class StaffContract(Base):
+    """㉚合同管理：劳动/聘用合同起止与到期提醒。"""
+
+    __tablename__ = "staff_contracts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    contract_no: Mapped[str] = mapped_column(String(64), unique=True)
+    start_date: Mapped[str] = mapped_column(String(10))
+    end_date: Mapped[str] = mapped_column(String(10))
+    # active=履行中, expired=已到期, terminated=已解除
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PayrollRecord(Base):
+    """㉚薪酬福利管理 / ㉟绩效薪酬分配：月度薪酬 = 基础 + 绩效×系数。"""
+
+    __tablename__ = "payroll_records"
+    __table_args__ = (UniqueConstraint("employee_id", "period", name="uq_payroll_emp_period"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    period: Mapped[str] = mapped_column(String(7), index=True)
+    base_salary: Mapped[float] = mapped_column(Float)
+    perf_bonus: Mapped[float] = mapped_column(Float, default=0)
+    # 绩效系数（考核结果联动薪酬分配）
+    perf_coefficient: Mapped[float] = mapped_column(Float, default=1.0)
+    total: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Budget(Base):
+    """㉛预算管理：年度收支预算编制与执行对比。"""
+
+    __tablename__ = "budgets"
+    __table_args__ = (UniqueConstraint("org_id", "year", "category", name="uq_budget_org_year_cat"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    year: Mapped[str] = mapped_column(String(4), index=True)
+    # income=收入预算, expense=支出预算
+    category: Mapped[str] = mapped_column(String(8))
+    amount: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AssetMovement(Base):
+    """㉜物资出入库管理：入库/领用/归还/报废联动数量与状态。"""
+
+    __tablename__ = "asset_movements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    # inbound=入库, issue=领用出库, return=归还, scrap=报废出库
+    movement_type: Mapped[str] = mapped_column(String(16))
+    quantity: Mapped[int] = mapped_column(Integer)
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SystemParam(Base):
+    """浙#45 系统参数配置：平台运行参数集中管理（管理员维护）。"""
+
+    __tablename__ = "system_params"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    value: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str] = mapped_column(String(256), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class RoleChangeLog(Base):
+    """浙#43 用户角色变更记录：变更前后角色与操作人留痕。"""
+
+    __tablename__ = "role_change_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    old_role: Mapped[str] = mapped_column(String(16))
+    new_role: Mapped[str] = mapped_column(String(16))
+    changed_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

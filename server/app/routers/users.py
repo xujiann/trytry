@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import ROLE_NAMES, get_current_user, paginate, require_admin
-from ..models import AuditLog, Organization, User, utcnow
+from ..models import AuditLog, Organization, RoleChangeLog, User, utcnow
 from ..security import hash_password, validate_password_strength, verify_password
 
 router = APIRouter(prefix="/api", tags=["用户与审计"])
@@ -134,4 +134,57 @@ def list_audit_logs(
             "at": log.created_at.isoformat(),
         }
         for log in logs
+    ]
+
+
+# ---------- 终审轮：用户角色变更与变更记录（浙#43） ----------
+
+
+class RoleUpdate(BaseModel):
+    role: str = Field(pattern="^(admin|director|doctor|pharmacist|public_health|operator)$")
+
+
+@router.patch("/users/{user_id}/role", response_model=UserOut)
+def change_user_role(
+    user_id: int,
+    body: RoleUpdate,
+    db: Session = Depends(get_db),
+    operator: User = Depends(require_admin),
+):
+    """角色调整（限管理员）：变更前后角色落 RoleChangeLog 留痕，且不可自降 admin。"""
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if target.id == operator.id and body.role != "admin":
+        raise HTTPException(status_code=422, detail="不可撤销自身管理员角色")
+    if target.role == body.role:
+        return target
+    db.add(
+        RoleChangeLog(
+            user_id=target.id, old_role=target.role, new_role=body.role, changed_by=operator.id
+        )
+    )
+    target.role = body.role
+    # 角色变更即吊销既有令牌，避免旧角色令牌继续放行
+    target.token_valid_from = utcnow()
+    db.commit()
+    db.refresh(target)
+    return target
+
+
+@router.get("/users/role-changes", dependencies=[Depends(require_admin)])
+def list_role_changes(user_id: int | None = None, db: Session = Depends(get_db)):
+    q = db.query(RoleChangeLog)
+    if user_id is not None:
+        q = q.filter(RoleChangeLog.user_id == user_id)
+    return [
+        {
+            "id": r.id,
+            "user_id": r.user_id,
+            "old_role": r.old_role,
+            "new_role": r.new_role,
+            "changed_by": r.changed_by,
+            "at": r.created_at.isoformat(),
+        }
+        for r in q.order_by(RoleChangeLog.id.desc()).limit(200).all()
     ]
