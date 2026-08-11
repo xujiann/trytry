@@ -44,10 +44,13 @@ from .routers import (
     eldercare,
     emergency,
     encounters,
+    accounting,
     clinical_docs,
+    cost,
     esb,
     followups,
     jobs as jobs_router,
+    materials,
     exams,
     gapfill,
     infectious,
@@ -195,6 +198,15 @@ async def lifespan(_: FastAPI):
             if seed["code"] not in existing_mrqc:
                 db.add(RecordQcRule(**seed))
         db.commit()
+        # T3.1：会计科目种子（医院会计制度常用一级科目，幂等；不覆盖本地调整）
+        from .data.account_subjects_seed import SEED_ACCOUNT_SUBJECTS
+        from .models import AccountSubject
+
+        existing_subjects = {code for (code,) in db.query(AccountSubject.code).all()}
+        for seed in SEED_ACCOUNT_SUBJECTS:
+            if seed["code"] not in existing_subjects:
+                db.add(AccountSubject(**seed))
+        db.commit()
         # T1.1：把代码中注册的定时任务同步进库（幂等，不覆盖运维调过的参数）
         from . import jobs as _jobs  # noqa: F401 - 导入即完成任务注册
         from .scheduler import scheduler_loop, sync_registry
@@ -271,6 +283,9 @@ app.include_router(jobs_router.router)
 app.include_router(clinical_docs.router)
 app.include_router(surgery.router)
 app.include_router(followups.router)
+app.include_router(accounting.router)
+app.include_router(cost.router)
+app.include_router(materials.router)
 # 块4：细目补齐（中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务）
 app.include_router(gapfill.tcm_router)
 app.include_router(gapfill.cssd_router)

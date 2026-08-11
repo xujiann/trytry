@@ -2504,3 +2504,169 @@ class FollowupTask(Base):
     result: Mapped[str] = mapped_column(String(1024), default="")
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ============================================================================
+# 阶段三 T3.1：会计科目与记账凭证（复式记账）
+# ============================================================================
+
+
+class AccountSubject(Base):
+    """会计科目。
+
+    此前 FinanceEntry 只是"期间 + 收/支 + 金额"的流水台账，出不了资产负债表，
+    也无法核对借贷是否平衡。这里补上科目体系与凭证，FinanceEntry 保留为
+    业务口径的收支汇总，二者并存不互相取代。
+    """
+
+    __tablename__ = "account_subjects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    # asset=资产, liability=负债, net_asset=净资产, income=收入, expense=费用
+    category: Mapped[str] = mapped_column(String(16), index=True)
+    # 余额方向：debit=借方增加（资产/费用），credit=贷方增加（负债/净资产/收入）
+    direction: Mapped[str] = mapped_column(String(8), default="debit")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class Voucher(Base):
+    """记账凭证：草稿可改，过账后锁定，冲销走作废而不是删除。"""
+
+    __tablename__ = "vouchers"
+    __table_args__ = (UniqueConstraint("org_id", "voucher_no", name="uq_voucher_org_no"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    period: Mapped[str] = mapped_column(String(7), index=True)
+    voucher_no: Mapped[str] = mapped_column(String(32))
+    voucher_date: Mapped[str] = mapped_column(String(10), index=True)
+    summary: Mapped[str] = mapped_column(String(256), default="")
+    total_debit: Mapped[float] = mapped_column(Float, default=0)
+    total_credit: Mapped[float] = mapped_column(Float, default=0)
+    # draft=草稿, posted=已过账, void=已作废
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    posted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+    entries: Mapped[list["VoucherEntry"]] = relationship(back_populates="voucher")
+
+
+class VoucherEntry(Base):
+    """凭证分录：一条分录只能是借方或贷方，不能两边都填。"""
+
+    __tablename__ = "voucher_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    voucher_id: Mapped[int] = mapped_column(ForeignKey("vouchers.id"), index=True)
+    subject_code: Mapped[str] = mapped_column(String(16), index=True)
+    summary: Mapped[str] = mapped_column(String(256), default="")
+    debit: Mapped[float] = mapped_column(Float, default=0)
+    credit: Mapped[float] = mapped_column(Float, default=0)
+
+    voucher: Mapped[Voucher] = relationship(back_populates="entries")
+
+
+# ============================================================================
+# 阶段三 T3.2：成本核算（科室 / 诊次 / 床日）
+# ============================================================================
+
+
+class DepartmentCost(Base):
+    """科室成本归集：期间 × 科室 × 成本项的直接成本。"""
+
+    __tablename__ = "department_costs"
+    __table_args__ = (
+        UniqueConstraint("dept_id", "period", "cost_type", name="uq_dept_cost_period_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    dept_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), index=True)
+    period: Mapped[str] = mapped_column(String(7), index=True)
+    # labor=人员经费, drug=药品, consumable=卫生材料, depreciation=折旧, overhead=其他运行
+    cost_type: Mapped[str] = mapped_column(String(16), index=True)
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CostAllocationRule(Base):
+    """成本分摊规则：行政后勤/医技科室的成本按比例分摊到临床科室。
+
+    比例用百分数存，同一来源科室的比例之和应为 100；不强制校验为 100，
+    因为分期建规则时中间态必然不足 100，改由分摊接口在计算时提示。
+    """
+
+    __tablename__ = "cost_allocation_rules"
+    __table_args__ = (
+        UniqueConstraint("from_dept_id", "to_dept_id", name="uq_alloc_from_to"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    from_dept_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), index=True)
+    to_dept_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), index=True)
+    ratio_pct: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 阶段三 T3.3 / T3.4：物资采购全流程与高值耗材追溯
+# ============================================================================
+
+
+class MaterialPurchase(Base):
+    """物资采购：申请→审批→合同→到货验收。
+
+    药品采购走 PurchaseOrder（/api/pharmacy），此处是**非药品物资**，
+    两者审批链与入库对象不同，不合并。
+    """
+
+    __tablename__ = "material_purchases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    dept_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
+    item_name: Mapped[str] = mapped_column(String(128))
+    spec: Mapped[str] = mapped_column(String(64), default="")
+    unit: Mapped[str] = mapped_column(String(16), default="件")
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    estimated_price: Mapped[float] = mapped_column(Float, default=0)
+    reason: Mapped[str] = mapped_column(String(512), default="")
+    # requested=待审批, approved=已审批, contracted=已签合同, received=已验收, cancelled=已取消
+    status: Mapped[str] = mapped_column(String(16), default="requested", index=True)
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
+    contract_no: Mapped[str] = mapped_column(String(64), default="")
+    contract_amount: Mapped[float] = mapped_column(Float, default=0)
+    received_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    received_note: Mapped[str] = mapped_column(String(512), default="")
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class HighValueConsumable(Base):
+    """高值耗材：一物一码，使用时绑定患者与手术，构成可追溯链。"""
+
+    __tablename__ = "high_value_consumables"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    barcode: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    spec: Mapped[str] = mapped_column(String(64), default="")
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
+    batch_no: Mapped[str] = mapped_column(String(64), default="")
+    expire_date: Mapped[str] = mapped_column(String(10), default="", index=True)
+    unit_price: Mapped[float] = mapped_column(Float, default=0)
+    # in_stock=在库, used=已使用, returned=已退回, scrapped=已报废
+    status: Mapped[str] = mapped_column(String(16), default="in_stock", index=True)
+    used_patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
+    used_surgery_id: Mapped[int | None] = mapped_column(
+        ForeignKey("surgery_requests.id"), nullable=True, index=True
+    )
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
