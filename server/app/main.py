@@ -7,6 +7,8 @@
 - 统一编码字典（诊断、药品、耗材、收费"四统一"）
 - 双向转诊状态流转
 """
+import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -43,6 +45,7 @@ from .routers import (
     emergency,
     encounters,
     esb,
+    jobs as jobs_router,
     exams,
     gapfill,
     infectious,
@@ -189,9 +192,23 @@ async def lifespan(_: FastAPI):
             if seed["code"] not in existing_mrqc:
                 db.add(RecordQcRule(**seed))
         db.commit()
+        # T1.1：把代码中注册的定时任务同步进库（幂等，不覆盖运维调过的参数）
+        from . import jobs as _jobs  # noqa: F401 - 导入即完成任务注册
+        from .scheduler import scheduler_loop, sync_registry
+
+        sync_registry(db)
     finally:
         db.close()
-    yield
+
+    # 后台调度循环随应用启停；测试用 TestClient 也会走到这里，
+    # 但首个 tick 在 30 秒后，单测早已结束，不会产生干扰。
+    scheduler_task = asyncio.create_task(scheduler_loop())
+    try:
+        yield
+    finally:
+        scheduler_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await scheduler_task
 
 
 app = FastAPI(
@@ -247,6 +264,7 @@ app.include_router(printing.router)
 app.include_router(dataquality.router)
 # 块1：集成平台底座 ESB（接入方注册/消息队列/流程编排/统计）
 app.include_router(esb.router)
+app.include_router(jobs_router.router)
 # 块4：细目补齐（中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务）
 app.include_router(gapfill.tcm_router)
 app.include_router(gapfill.cssd_router)

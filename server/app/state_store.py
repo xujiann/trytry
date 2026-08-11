@@ -127,21 +127,58 @@ class LoginFailureTracker:
             self._memory.clear()
 
 
-class SlidingWindowRateLimiter:
-    """通用滑动窗口限速器（浙#80 资源控制）：按主体（IP 等）限制单位时间内的请求数。
+# 滑动窗口限速的 Redis 实现（T1.2）：必须原子，否则多实例并发下
+# "先数后加"会各自读到未超限的旧计数，配额被击穿。用 Lua 在服务端一次做完
+# 剔除过期成员 → 计数 → 未超限则写入，避免任何中间态被其他实例看到。
+_SLIDING_WINDOW_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local member = ARGV[4]
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+local count = redis.call('ZCARD', key)
+if count >= limit then
+  return 0
+end
+redis.call('ZADD', key, now, member)
+redis.call('EXPIRE', key, window)
+return 1
+"""
 
-    进程内存实现；多实例部署时锁定/限速状态按实例独立（部署层可叠加网关限速）。
+
+class SlidingWindowRateLimiter:
+    """通用滑动窗口限速器（浙#80 资源控制）：按主体（IP/手机号等）限制单位时间内的请求数。
+
+    T1.2 整改：补齐 Redis 后端。此前只有进程内存实现——多实例部署下 N 个实例
+    各自计数，验证码下发这类配额实际被放大 N 倍，防轰炸形同虚设。现与
+    TokenBlacklist / LoginFailureTracker 采用同一套 `_redis_client()` 约定：
+    配置 MEDPLAT_REDIS_URL 即自动切换共享计数，未配置时保持原内存行为。
     """
 
     def __init__(self, max_events: int = 50, window_seconds: int = 60) -> None:
         self.max_events = max_events
         self.window_seconds = window_seconds
+        self._redis = _redis_client()
+        self._script = None
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            self._script = self._redis.register_script(_SLIDING_WINDOW_LUA)
         self._lock = threading.Lock()
         self._events: dict[str, list] = {}
+        self._seq = 0
 
     def allow(self, key: str) -> bool:
         """记录一次事件并判断是否仍在配额内；超限返回 False。"""
         now = time.time()
+        if self._script is not None:  # pragma: no cover - 需真实 Redis
+            with self._lock:
+                self._seq += 1
+                member = f"{now}:{self._seq}"  # 同毫秒多次请求需互不覆盖
+            allowed = self._script(
+                keys=[f"medplat:rate:{key}"],
+                args=[now, self.window_seconds, self.max_events, member],
+            )
+            return bool(allowed)
         with self._lock:
             window = [t for t in self._events.get(key, []) if now - t < self.window_seconds]
             if len(window) >= self.max_events:
@@ -153,5 +190,9 @@ class SlidingWindowRateLimiter:
 
     def clear_all(self) -> None:
         """测试辅助。"""
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            for key in self._redis.scan_iter("medplat:rate:*"):
+                self._redis.delete(key)
+            return
         with self._lock:
             self._events.clear()

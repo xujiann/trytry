@@ -2249,3 +2249,48 @@ class ResidentFamilyMember(Base):
     # spouse=配偶, child=子女, parent=父母, other=其他
     relation: Mapped[str] = mapped_column(String(16), default="other")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# T1.1 定时任务基座：任务注册与执行留痕
+# ============================================================================
+
+
+class ScheduledJob(Base):
+    """定时任务注册表：代码里定义任务实现，库里存调度参数与运行状态。
+
+    间隔而非 cron 表达式：平台的定时需求都是"每 N 分钟/小时扫一遍"，
+    不需要"每月最后一个工作日"这种日历语义，多引入一个 cron 解析器不划算。
+    """
+
+    __tablename__ = "scheduled_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(128), default="")
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=3600)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 下次到期时刻：调度器据此判断是否该跑，重启后不会因内存计时器丢失而漏跑
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_status: Mapped[str] = mapped_column(String(16), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class JobRun(Base):
+    """任务执行留痕：每次执行一条，含结果摘要与耗时。"""
+
+    __tablename__ = "job_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_name: Mapped[str] = mapped_column(String(64), index=True)
+    # scheduled=按计划触发, manual=人工触发
+    trigger: Mapped[str] = mapped_column(String(16), default="scheduled")
+    # succeeded=成功, failed=异常
+    status: Mapped[str] = mapped_column(String(16), default="succeeded", index=True)
+    # 结果摘要（"扫描到3条超期随访"）或异常信息
+    message: Mapped[str] = mapped_column(String(1024), default="")
+    # 本次处理的对象数，便于统计与画趋势
+    affected: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

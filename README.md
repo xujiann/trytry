@@ -52,6 +52,7 @@
 | 统一支付与对账 | 多渠道支付单（现金/银行卡/医保/线上，PaymentGateway 协议）、退款校验、日终对账三类差异检出 | `/api/billing/payments`、`/api/billing/reconciliation` |
 | 对接适配层 | HL7 v2 ADT / FHIR R4 Patient·Observation 入站转换、FHIR 导出 | `/api/integration` |
 | 集成平台 ESB | 接入方注册（令牌+限流）、消息队列重试与死信、流程编排（转换/校验/路由/落库）、成功率与积压统计 | `/api/esb` |
+| 定时任务 | 任务注册表、间隔调度、多实例抢锁、手动触发与执行留痕；内置慢病超期/医废滞留/合同到期/制剂临期/验证码清理 | `/api/jobs` |
 | 实时消息 | WebSocket 危急值/缺药预警秒级广播、角色化任务待办中心 | `/ws/notifications`、`/api/todos` |
 | 居民端移动版 | H5 移动优先：微信/手机号验证码登录、实名绑定、家庭成员代管与档案切换、自助预约、签约/账单/转诊查询、健康宣教、满意度评价 | `/m` |
 | 医生移动工作台 | H5 移动优先：待办收件箱、危急值确认与处置、待审检查申请领取出报告、慢病随访录入、患者档案速查 | `/m/doctor` |
@@ -162,8 +163,10 @@ sh scripts/backup.sh /data/backups            # pg_dump 备份（建议 crontab 
 - **生产环境启动强校验**：`environment=prod` 时，若 `MEDPLAT_SECRET` 或
   `MEDPLAT_ADMIN_PASSWORD` 仍为默认值，应用启动直接抛异常拒绝启动，
   必须先设置强随机密钥（建议 `openssl rand -hex 32`）与强管理员口令；
-- 多实例/多 worker 部署必须设置 `MEDPLAT_REDIS_URL`，使登出令牌黑名单与
-  登录防爆破锁定跨实例共享（未配置时为进程内存实现，仅单实例有效）；
+- 多实例/多 worker 部署必须设置 `MEDPLAT_REDIS_URL`，使登出令牌黑名单、
+  登录防爆破锁定、**滑动窗口限流**（验证码下发配额）与**定时任务执行锁**跨实例
+  共享（未配置时为进程内存实现，仅单实例有效——多实例下验证码配额会被放大 N 倍，
+  定时任务会在每个实例各跑一遍）；
   WebSocket 预警广播在多实例下需接入 Redis Pub/Sub 等集中消息总线；
 - WebSocket 客户端建议使用首帧鉴权（连接后第一条文本帧发送 JWT），
   避免令牌经 URL query 进入访问日志；
