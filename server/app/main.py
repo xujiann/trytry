@@ -52,6 +52,7 @@ from .routers import (
     followups,
     jobs as jobs_router,
     materials,
+    workflows,
     exams,
     gapfill,
     infectious,
@@ -73,6 +74,7 @@ from .routers import (
     publichealth,
     quality,
     referrals,
+    rules,
     surgery,
     reports,
     service_extras,
@@ -288,6 +290,9 @@ app.include_router(accounting.router)
 app.include_router(cost.router)
 app.include_router(materials.router)
 app.include_router(analytics.router)
+app.include_router(rules.router)
+app.include_router(workflows.router)
+app.include_router(workflows.service_router)
 # 块4：细目补齐（中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务）
 app.include_router(gapfill.tcm_router)
 app.include_router(gapfill.cssd_router)

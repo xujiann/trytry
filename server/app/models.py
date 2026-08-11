@@ -2732,3 +2732,91 @@ class PerformanceFormula(Base):
     weight: Mapped[float] = mapped_column(Float, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 阶段五 T5.1：统一规则引擎
+# ============================================================================
+
+
+class RuleDefinition(Base):
+    """统一规则：条件表达式 + 命中后的处置（消息/严重度/扣分）。
+
+    平台已有四套各自实现的规则（审方/数据质控/病历质控/绩效），它们的判定写死
+    在各自路由里。这里不做大爆炸式重写——既有规则继续按原路运行，统一引擎
+    负责**新增规则**与**统一目录视图**，旧规则以只读方式并入目录。
+    """
+
+    __tablename__ = "rule_definitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(48), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # 规则域：决定可用变量集合，见 routers/rules.py 的 DOMAIN_VARIABLES
+    domain: Mapped[str] = mapped_column(String(24), index=True)
+    condition: Mapped[str] = mapped_column(String(512))
+    message: Mapped[str] = mapped_column(String(256), default="")
+    # info=提示, warning=警告, error=拦截
+    severity: Mapped[str] = mapped_column(String(16), default="warning", index=True)
+    deduct_points: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 阶段五 T5.2：业务流程引擎
+# ============================================================================
+
+
+class WorkflowDefinition(Base):
+    """流程定义：节点串成有向链，每个节点声明谁能推进。
+
+    nodes 形如 [{"key":"apply","name":"申请","role":"doctor","next":"review"}, ...]，
+    next 为空表示终态。只支持线性流转——县域业务里会签、并行网关极少，
+    为它们引入 BPMN 级复杂度不划算。
+    """
+
+    __tablename__ = "workflow_definitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(48), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    nodes: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WorkflowInstance(Base):
+    """流程实例：一张单据在流程里的当前位置。"""
+
+    __tablename__ = "workflow_instances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    definition_key: Mapped[str] = mapped_column(String(48), index=True)
+    # 关联业务单据（类型 + id），不做外键：流程可挂到任何业务对象上
+    business_type: Mapped[str] = mapped_column(String(32), index=True)
+    business_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    title: Mapped[str] = mapped_column(String(256), default="")
+    org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True, index=True)
+    current_node: Mapped[str] = mapped_column(String(48), index=True)
+    # running=流转中, completed=已完成, cancelled=已终止
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class WorkflowTransition(Base):
+    """流转留痕：谁在什么时候把单据从哪个节点推到哪个节点。"""
+
+    __tablename__ = "workflow_transitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("workflow_instances.id"), index=True)
+    from_node: Mapped[str] = mapped_column(String(48), default="")
+    to_node: Mapped[str] = mapped_column(String(48), default="")
+    # advance=推进, cancel=终止
+    action: Mapped[str] = mapped_column(String(16), default="advance")
+    comment: Mapped[str] = mapped_column(String(512), default="")
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

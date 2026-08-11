@@ -1,6 +1,6 @@
 # 县域医共体信息化平台（medplat）
 
-![tests](https://img.shields.io/badge/tests-363%20passed%20%2B%204%20e2e-brightgreen)
+![tests](https://img.shields.io/badge/tests-481%20passed%20%2B%204%20e2e-brightgreen)
 ![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)
 
 紧密型县域医共体信息化平台，依据国家卫生健康委《紧密型县域医共体信息化功能指引》（国卫办规划函〔2025〕63号）等文件建设。
@@ -58,6 +58,9 @@
 | 病历环节质控 | 结构化病历（主诉/现病史/既往史/查体/诊断依据/治疗方案）提交即评分，12 条规则实时缺陷清单与甲乙丙定级 | `/api/quality/records` |
 | 统一支付与对账 | 多渠道支付单（现金/银行卡/医保/线上，PaymentGateway 协议）、退款校验、日终对账三类差异检出 | `/api/billing/payments`、`/api/billing/reconciliation` |
 | 对接适配层 | HL7 v2 ADT / FHIR R4 Patient·Observation 入站转换、FHIR 导出 | `/api/integration` |
+| 统一规则引擎 | 条件 DSL（AST白名单）新增规则免改代码；全平台规则总目录并入四套既有规则 | `/api/rules` |
+| 业务流程引擎 | 流程定义JSON化、节点角色守卫、流转留痕、按角色待办 | `/api/workflows` |
+| 统一申请单中心 | 预约/检查/会诊/用血/手术五类单据聚合视图与统一状态口径 | `/api/service-requests` |
 | 集成平台 ESB | 接入方注册（令牌+限流）、消息队列重试与死信、流程编排（转换/校验/路由/落库）、成功率与积压统计 | `/api/esb` |
 | 定时任务 | 任务注册表、间隔调度、多实例抢锁、手动触发与执行留痕；内置慢病超期/医废滞留/合同到期/制剂临期/验证码清理 | `/api/jobs` |
 | 实时消息 | WebSocket 危急值/缺药预警秒级广播、角色化任务待办中心 | `/ws/notifications`、`/api/todos` |
@@ -109,7 +112,7 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 ```bash
 cd server
-python -m pytest tests/ -q                                        # 全量单元/接口测试（363 项通过，4 项 e2e 默认跳过）
+python -m pytest tests/ -q                                        # 全量单元/接口测试（481 项通过，4 项 e2e 默认跳过）
 python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖率报告
 ```
 
