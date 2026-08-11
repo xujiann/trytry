@@ -3,6 +3,7 @@
 - MEDPLAT_DATABASE_URL   数据库连接串（默认本地 SQLite，生产用 PostgreSQL）
 - MEDPLAT_SECRET         JWT 签名密钥
 - MEDPLAT_ADMIN_PASSWORD 初始管理员密码
+- MEDPLAT_UPLOAD_DIR     附件本地存储目录（默认 uploads/，即 server/uploads/）
 - MEDPLAT_ENV            环境标识 dev/test/prod（兼容保留）
 - MEDPLAT_ENVIRONMENT    环境标识 dev/test/prod（与 MEDPLAT_ENV 任一为 prod 即按生产处理）
 - MEDPLAT_LOG_JSON       是否输出结构化 JSON 请求日志
@@ -25,6 +26,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MEDPLAT_", env_file=".env", extra="ignore")
 
     database_url: str = "sqlite:///./medplat.db"
+    # 附件本地磁盘存储目录（相对服务运行目录 server/；生产可挂载持久卷）
+    upload_dir: str = "uploads"
     secret: str = DEFAULT_SECRET
     admin_password: str = DEFAULT_ADMIN_PASSWORD
     env: str = "dev"

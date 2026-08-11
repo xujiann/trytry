@@ -1695,3 +1695,24 @@ class LiveSession(Base):
     review_comment: Mapped[str] = mapped_column(String(256), default="")
     requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Attachment(Base):
+    """通用附件：检查报告影像截图/PDF、不良事件佐证材料等。
+
+    文件内容按 sha256 去重落本地磁盘（MEDPLAT_UPLOAD_DIR，默认 server/uploads/），
+    数据库仅存元数据；owner_type+owner_id 挂接业务对象。
+    """
+
+    __tablename__ = "attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    filename: Mapped[str] = mapped_column(String(256))
+    content_type: Mapped[str] = mapped_column(String(64))
+    size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    # 业务域：exam_report=检查报告附件, adverse_event=不良事件附件
+    owner_type: Mapped[str] = mapped_column(String(32), index=True)
+    owner_id: Mapped[int] = mapped_column(Integer, index=True)
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

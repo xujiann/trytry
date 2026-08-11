@@ -5,3 +5,5 @@ __pycache__/
 .venv/
 node_modules/
 dist/
+server/uploads/
+server/test_uploads/

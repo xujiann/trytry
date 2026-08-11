@@ -686,7 +686,30 @@ async function renderExams() {
         ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "—";
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${CENTER_NAMES[r.center_type]}</td>
         <td>${esc(r.item_name)}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
-    })}</div>`;
+    })}</div>
+    <div class="panel"><h3>报告附件（影像截图/PDF，≤10MB，医师/经办上传）</h3>
+      <form class="inline" id="exam-att-form">
+        <input name="report_id" type="number" placeholder="报告ID" required>
+        <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" required>
+        <button>上传</button></form>
+      <form class="inline" id="exam-att-query">
+        <input name="report_id" type="number" placeholder="报告ID" required>
+        <button>查附件</button></form>
+      <p class="msg" id="exam-att-msg"></p><div id="exam-att-list"></div></div>`;
+  $("#exam-att-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const reportId = new FormData(e.target).get("report_id");
+    try {
+      await uploadAttachment("exam_report", reportId, e.target.querySelector("input[type=file]"));
+      setMsg("#exam-att-msg", "附件已上传");
+      await drawAttachments("exam_report", reportId, "#exam-att-list", "#exam-att-msg");
+    } catch (err) { setMsg("#exam-att-msg", err.message, false); }
+  };
+  $("#exam-att-query").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawAttachments("exam_report", new FormData(e.target).get("report_id"), "#exam-att-list", "#exam-att-msg"); }
+    catch (err) { setMsg("#exam-att-msg", err.message, false); }
+  };
   $("#exam-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1106,6 +1129,48 @@ function formJson(form, numFields = []) {
 async function postAction(path, body, msgSel) {
   try { await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }); route(); }
   catch (err) { setMsg(msgSel, err.message, false); }
+}
+
+/* ---------- 附件通用控件：multipart 上传 / 鉴权下载 / 按 owner 列表 ---------- */
+
+async function uploadAttachment(ownerType, ownerId, fileInput) {
+  const file = fileInput.files[0];
+  if (!file) throw new Error("请选择文件（图片或PDF，≤10MB）");
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("owner_type", ownerType);
+  fd.append("owner_id", ownerId);
+  const resp = await fetch("/api/attachments", {
+    method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.detail || `上传失败(${resp.status})`);
+  return data;
+}
+
+async function downloadAttachment(id, filename) {
+  const resp = await fetch(`/api/attachments/${id}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!resp.ok) throw new Error(`下载失败(${resp.status})`);
+  const url = URL.createObjectURL(await resp.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || `attachment-${id}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function drawAttachments(ownerType, ownerId, containerSel, msgSel) {
+  const list = await api(`/api/attachments?owner_type=${ownerType}&owner_id=${ownerId}`);
+  const el = $(containerSel);
+  el.innerHTML = table(["ID", "文件名", "类型", "大小", "上传时间", "操作"], list, (a) =>
+    `<tr><td>${a.id}</td><td>${esc(a.filename)}</td><td><span class="tag">${esc(a.content_type)}</span></td>
+     <td>${(a.size / 1024).toFixed(1)} KB</td><td>${esc(a.created_at.slice(0, 16).replace("T", " "))}</td>
+     <td><button class="btn secondary" data-attdl="${a.id}" data-fn="${esc(a.filename)}">下载</button></td></tr>`);
+  el.onclick = async (e) => {
+    const { attdl, fn } = e.target.dataset;
+    if (!attdl) return;
+    try { await downloadAttachment(attdl, fn); }
+    catch (err) { setMsg(msgSel, err.message, false); }
+  };
 }
 
 async function renderEmergency() {
@@ -1986,6 +2051,15 @@ async function renderQuality() {
           <td>${esc(ev.description)}</td><td>${esc(ev.reporter_name) || "（匿名）"}</td>
           <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
       })}</div>
+    <div class="panel"><h3>不良事件附件（现场照片/佐证PDF，≤10MB）</h3>
+      <form class="inline" id="ae-att-form">
+        <input name="event_id" type="number" placeholder="事件ID" required>
+        <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" required>
+        <button>上传</button></form>
+      <form class="inline" id="ae-att-query">
+        <input name="event_id" type="number" placeholder="事件ID" required>
+        <button>查附件</button></form>
+      <p class="msg" id="ae-att-msg"></p><div id="ae-att-list"></div></div>
     <div class="panel"><h3>病历质控抽检</h3>
       <form class="inline" id="qc-rec-form">
         <select name="target_type"><option value="encounter">门急诊病历</option><option value="case_summary">病案首页</option></select>
@@ -2010,6 +2084,20 @@ async function renderQuality() {
     const body = formJson(e.target, ["org_id"]);
     body.anonymous = e.target.anonymous.checked;
     postAction("/api/quality/adverse-events", body, "#qa-msg");
+  };
+  $("#ae-att-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const eventId = new FormData(e.target).get("event_id");
+    try {
+      await uploadAttachment("adverse_event", eventId, e.target.querySelector("input[type=file]"));
+      setMsg("#ae-att-msg", "附件已上传");
+      await drawAttachments("adverse_event", eventId, "#ae-att-list", "#ae-att-msg");
+    } catch (err) { setMsg("#ae-att-msg", err.message, false); }
+  };
+  $("#ae-att-query").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawAttachments("adverse_event", new FormData(e.target).get("event_id"), "#ae-att-list", "#ae-att-msg"); }
+    catch (err) { setMsg("#ae-att-msg", err.message, false); }
   };
   $("#qc-rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/record-qc", formJson(e.target, ["target_id", "score"]), "#qa-msg"); };
   $("#inf-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/infection-reports", formJson(e.target, ["org_id", "patient_id"]), "#qa-msg"); };

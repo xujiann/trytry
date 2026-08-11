@@ -1,0 +1,127 @@
+"""通用附件服务：本地磁盘存储（MEDPLAT_UPLOAD_DIR 可配，默认 server/uploads/）。
+
+- 上传：multipart，≤10MB，类型白名单（图片/PDF），按业务域角色守卫（越权 403）
+- 下载：登录鉴权后按附件元数据回源磁盘文件
+- 查询：按 owner_type + owner_id 列出业务对象的全部附件
+- 接入场景：检查报告附件（影像截图/PDF）、不良事件佐证材料
+"""
+import hashlib
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+
+from ..config import settings
+from ..database import get_db
+from ..deps import get_current_user
+from ..models import AdverseEvent, Attachment, ExamReport, User
+
+router = APIRouter(prefix="/api/attachments", tags=["附件"], dependencies=[Depends(get_current_user)])
+
+MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
+ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"}
+# 业务域注册表：owner 模型 + 允许上传的角色（admin 始终放行；下载仅需登录）
+_OWNERS: dict[str, tuple[type, tuple[str, ...]]] = {
+    "exam_report": (ExamReport, ("doctor", "operator")),
+    "adverse_event": (
+        AdverseEvent,
+        ("doctor", "pharmacist", "public_health", "operator", "director"),
+    ),
+}
+
+
+def _upload_root() -> Path:
+    root = Path(settings.upload_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _stored_path(sha256: str) -> Path:
+    """按 sha256 前2位分桶存储，同内容文件去重。"""
+    bucket = _upload_root() / sha256[:2]
+    bucket.mkdir(parents=True, exist_ok=True)
+    return bucket / sha256
+
+
+def _out(a: Attachment) -> dict:
+    return {
+        "id": a.id,
+        "filename": a.filename,
+        "content_type": a.content_type,
+        "size": a.size,
+        "sha256": a.sha256,
+        "owner_type": a.owner_type,
+        "owner_id": a.owner_id,
+        "uploaded_by": a.uploaded_by,
+        "created_at": a.created_at.isoformat(),
+    }
+
+
+@router.post("", status_code=201)
+async def upload_attachment(
+    file: UploadFile = File(...),
+    owner_type: str = Form(...),
+    owner_id: int = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if owner_type not in _OWNERS:
+        raise HTTPException(status_code=422, detail=f"未知附件业务域：{owner_type}")
+    owner_model, allowed_roles = _OWNERS[owner_type]
+    if user.role != "admin" and user.role not in allowed_roles:
+        raise HTTPException(status_code=403, detail="当前角色不可为该业务对象上传附件")
+    if db.get(owner_model, owner_id) is None:
+        raise HTTPException(status_code=404, detail="挂接的业务对象不存在")
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    if content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=415, detail="附件类型不在白名单（仅支持图片 png/jpeg/gif/webp 与 PDF）"
+        )
+    data = await file.read(MAX_SIZE_BYTES + 1)
+    if len(data) > MAX_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="附件超过 10MB 大小限制")
+    if not data:
+        raise HTTPException(status_code=422, detail="附件内容为空")
+    sha256 = hashlib.sha256(data).hexdigest()
+    path = _stored_path(sha256)
+    if not path.exists():
+        path.write_bytes(data)
+    attachment = Attachment(
+        filename=file.filename or "unnamed",
+        content_type=content_type,
+        size=len(data),
+        sha256=sha256,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        uploaded_by=user.id,
+    )
+    db.add(attachment)
+    db.commit()
+    return _out(attachment)
+
+
+@router.get("")
+def list_attachments(owner_type: str, owner_id: int, db: Session = Depends(get_db)):
+    if owner_type not in _OWNERS:
+        raise HTTPException(status_code=422, detail=f"未知附件业务域：{owner_type}")
+    return [
+        _out(a)
+        for a in db.query(Attachment)
+        .filter(Attachment.owner_type == owner_type, Attachment.owner_id == owner_id)
+        .order_by(Attachment.id)
+        .all()
+    ]
+
+
+@router.get("/{attachment_id}")
+def download_attachment(attachment_id: int, db: Session = Depends(get_db)):
+    attachment = db.get(Attachment, attachment_id)
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="附件不存在")
+    path = _stored_path(attachment.sha256)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="附件文件缺失（存储目录可能被清理）")
+    return FileResponse(
+        path, media_type=attachment.content_type, filename=attachment.filename
+    )
