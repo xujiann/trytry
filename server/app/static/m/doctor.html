@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>县域医共体 · 医生移动工作台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%95%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/m/m.css">
+<link rel="stylesheet" href="/static/m/doctor.css">
+</head>
+<body>
+<header class="m-header">
+  <h1>县域医共体 · 医生工作台</h1>
+  <button id="btn-logout" class="link-btn hidden">退出</button>
+</header>
+
+<main id="m-main">
+  <!-- 登录（未登录时占满全屏，登录后隐藏并显示工作台） -->
+  <section id="login-page">
+    <form id="login-form" class="m-card">
+      <p class="hint">请使用医共体统一认证账号登录（医师/管理员）</p>
+      <input id="lg-user" placeholder="用户名" autocomplete="username" required>
+      <input id="lg-pass" type="password" placeholder="密码" autocomplete="current-password" required>
+      <button type="submit">登录</button>
+      <p id="login-error" class="err"></p>
+    </form>
+  </section>
+
+  <div id="workbench" class="hidden">
+    <div id="who" class="who"></div>
+
+    <!-- 待办：复用 /api/todos 角色收件箱 -->
+    <section id="tab-todo" class="tab-page">
+      <div id="todo-list">加载中…</div>
+    </section>
+
+    <!-- 危急值确认与处置 -->
+    <section id="tab-critical" class="tab-page hidden">
+      <p id="critical-msg" class="msg"></p>
+      <div id="critical-list">加载中…</div>
+    </section>
+
+    <!-- 待审检查申请：领取与出报告 -->
+    <section id="tab-exam" class="tab-page hidden">
+      <p id="exam-msg" class="msg"></p>
+      <div id="exam-list">加载中…</div>
+    </section>
+
+    <!-- 慢病随访录入 -->
+    <section id="tab-chronic" class="tab-page hidden">
+      <form id="fu-form" class="m-card">
+        <p class="hint">选择在管档案录入随访，系统按病种目录规则即时分级</p>
+        <select id="fu-chronic"></select>
+        <div id="fu-metrics"></div>
+        <input id="fu-next" placeholder="下次随访日期（留空按病种周期自动建议）">
+        <button type="submit">提交随访</button>
+        <p id="fu-msg" class="msg"></p>
+      </form>
+      <div id="chronic-list"></div>
+    </section>
+
+    <!-- 患者档案速查 -->
+    <section id="tab-patient" class="tab-page hidden">
+      <form id="pt-form" class="m-card">
+        <p class="hint">按电子健康卡号调阅患者档案（就诊、检查报告、慢病）</p>
+        <input id="pt-ehc" placeholder="电子健康卡号（EHC…）" required>
+        <button type="submit">调阅档案</button>
+        <p id="pt-msg" class="msg"></p>
+      </form>
+      <div id="pt-result"></div>
+    </section>
+  </div>
+</main>
+
+<nav id="tabbar" class="m-tabbar hidden">
+  <a href="#todo" class="tab-btn active" data-tab="todo"><span class="ico">📥</span>待办</a>
+  <a href="#critical" class="tab-btn" data-tab="critical"><span class="ico">🚨</span>危急值</a>
+  <a href="#exam" class="tab-btn" data-tab="exam"><span class="ico">🩻</span>检查申请</a>
+  <a href="#chronic" class="tab-btn" data-tab="chronic"><span class="ico">💊</span>慢病随访</a>
+  <a href="#patient" class="tab-btn" data-tab="patient"><span class="ico">🔍</span>患者速查</a>
+</nav>
+
+<script src="/static/m/doctor.js"></script>
+</body>
+</html>

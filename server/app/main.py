@@ -353,3 +353,9 @@ def index():
 def mobile_index():
     """居民端移动版 H5 入口。"""
     return FileResponse(_STATIC_DIR / "m" / "index.html")
+
+
+@app.get("/m/doctor", include_in_schema=False)
+def mobile_doctor():
+    """块4：医生移动工作台入口（页内登录后可用，接口鉴权仍由 JWT 承担）。"""
+    return FileResponse(_STATIC_DIR / "m" / "doctor.html")
