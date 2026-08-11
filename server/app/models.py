@@ -1279,7 +1279,7 @@ class InfectionReport(Base):
 
 
 class DrgGroup(Base):
-    """DRG 分组目录：编码/名称/基准权重/主诊断关键词（简化入组规则）。"""
+    """DRG 分组目录：编码/名称/MDC/基准权重/主诊断关键词/主手术关键词。"""
 
     __tablename__ = "drg_groups"
 
@@ -1289,6 +1289,15 @@ class DrgGroup(Base):
     base_weight: Mapped[float] = mapped_column(Float)
     # 主诊断匹配关键词（逗号分隔），出院病例按关键词命中入组
     keywords: Mapped[str] = mapped_column(String(256), default="")
+    # 块3：主要诊断大类（MDCB/MDCE/... ），供 DRG 统计按 MDC 汇总
+    mdc: Mapped[str] = mapped_column(String(8), default="", index=True)
+    mdc_name: Mapped[str] = mapped_column(String(64), default="")
+    # 块3：主手术关键词（逗号分隔），与病案首页 operation 匹配
+    procedure_keywords: Mapped[str] = mapped_column(String(256), default="")
+    # 块3：True=外科操作组，未命中主手术不得入组
+    require_procedure: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 块3：QY 兜底组标志，统计中单列且不计入 CMI
+    is_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

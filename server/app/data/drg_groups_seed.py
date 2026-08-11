@@ -1,0 +1,186 @@
+"""DRG 分组目录种子：60 个县域常见分组 + QY 兜底组（块3）。
+
+分组编码沿用 CHS-DRG 风格（首字母对应 MDC 主要诊断大类），覆盖县域住院主要 MDC：
+神经(B)、眼(C)、头颈耳鼻喉(D)、呼吸(E)、循环(F)、消化(G)、肝胆胰(H)、
+肌肉骨骼(I)、皮肤(J)、内分泌代谢(K)、肾泌尿(L)、男性生殖(M)、女性生殖(N)、
+妊娠分娩(O)、新生儿儿科(P)、感染(S)、精神(T)。
+
+入组规则（块3 起由单关键词升级为多关键词 + 主手术标志）：
+- keywords            主诊断关键词（逗号分隔），命中越多、命中词越长得分越高
+- procedure_keywords  主手术关键词（逗号分隔），与病案首页 operation 字段匹配
+- require_procedure   True=外科操作组，未命中主手术不得入该组（避免内科病例误入手术组）
+- 全部未命中 → 落入 QY 兜底组（歧义/未入组病例），CMI 统计中剔除并单列
+
+权重为县域测算参考值，实际应由医保部门年度测算后经 /api/drgs/groups 调整。
+"""
+
+# 兜底组：未匹配任何分组的病例落入此组，统计中单列且不计入 CMI
+FALLBACK_DRG_GROUP: dict = {
+    "code": "QY",
+    "name": "未入组（歧义组，需病案首页复核）",
+    "mdc": "QY",
+    "mdc_name": "未入组/歧义",
+    "base_weight": 0.50,
+    "keywords": "",
+    "procedure_keywords": "",
+    "require_procedure": False,
+    "is_fallback": True,
+}
+
+SEED_DRG_GROUPS: list[dict] = [
+    # ---------- MDCB 神经系统 ----------
+    {"code": "BR23", "name": "脑血管疾病", "mdc": "MDCB", "mdc_name": "神经系统疾病及功能障碍",
+     "base_weight": 1.35, "keywords": "脑梗,卒中,脑出血,脑梗死,短暂性脑缺血,脑血管"},
+    {"code": "BB29", "name": "颅脑手术", "mdc": "MDCB", "mdc_name": "神经系统疾病及功能障碍",
+     "base_weight": 3.20, "keywords": "颅内血肿,硬膜下,脑疝,颅脑损伤",
+     "procedure_keywords": "开颅,血肿清除,颅骨钻孔,去骨瓣", "require_procedure": True},
+    {"code": "BU21", "name": "癫痫及惊厥", "mdc": "MDCB", "mdc_name": "神经系统疾病及功能障碍",
+     "base_weight": 0.88, "keywords": "癫痫,惊厥,抽搐"},
+    {"code": "BR25", "name": "颅内感染", "mdc": "MDCB", "mdc_name": "神经系统疾病及功能障碍",
+     "base_weight": 1.55, "keywords": "脑膜炎,脑炎"},
+    {"code": "BZ11", "name": "神经系统其他疾患", "mdc": "MDCB", "mdc_name": "神经系统疾病及功能障碍",
+     "base_weight": 0.80, "keywords": "帕金森,面神经炎,周围神经,眩晕,偏头痛,神经痛"},
+    # ---------- MDCC 眼 ----------
+    {"code": "CB39", "name": "晶体手术（白内障）", "mdc": "MDCC", "mdc_name": "眼疾病及功能障碍",
+     "base_weight": 0.95, "keywords": "白内障",
+     "procedure_keywords": "白内障超声乳化,晶体植入,人工晶体,晶状体摘除", "require_procedure": True},
+    {"code": "CZ15", "name": "其他眼部疾患", "mdc": "MDCC", "mdc_name": "眼疾病及功能障碍",
+     "base_weight": 0.55, "keywords": "青光眼,结膜炎,角膜炎,视网膜,眼底"},
+    # ---------- MDCD 头颈耳鼻咽喉口腔 ----------
+    {"code": "DK19", "name": "甲状腺手术", "mdc": "MDCD", "mdc_name": "头颈耳鼻咽喉口腔疾病",
+     "base_weight": 1.25, "keywords": "甲状腺结节,甲状腺肿,甲状腺癌",
+     "procedure_keywords": "甲状腺切除,甲状腺次全,腺叶切除", "require_procedure": True},
+    {"code": "DE19", "name": "扁桃体及腺样体手术", "mdc": "MDCD", "mdc_name": "头颈耳鼻咽喉口腔疾病",
+     "base_weight": 0.70, "keywords": "扁桃体,腺样体",
+     "procedure_keywords": "扁桃体切除,腺样体切除", "require_procedure": True},
+    {"code": "DZ15", "name": "头颈耳鼻喉其他疾患", "mdc": "MDCD", "mdc_name": "头颈耳鼻咽喉口腔疾病",
+     "base_weight": 0.52, "keywords": "中耳炎,鼻窦炎,咽炎,鼻炎,喉炎,鼻出血"},
+    # ---------- MDCE 呼吸 ----------
+    {"code": "ES31", "name": "呼吸系统感染（肺炎）", "mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍",
+     "base_weight": 0.95, "keywords": "肺炎,支气管炎,肺部感染"},
+    {"code": "ES15", "name": "慢性阻塞性肺疾病", "mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍",
+     "base_weight": 0.92, "keywords": "慢性阻塞性肺,慢阻肺,肺气肿,慢性支气管炎急性加重"},
+    {"code": "ES13", "name": "支气管哮喘", "mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍",
+     "base_weight": 0.75, "keywords": "哮喘"},
+    {"code": "ES17", "name": "肺结核", "mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍",
+     "base_weight": 1.20, "keywords": "肺结核,结核"},
+    {"code": "ES35", "name": "胸腔积液及气胸", "mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍",
+     "base_weight": 0.85, "keywords": "胸腔积液,气胸,脓胸"},
+    {"code": "EJ15", "name": "呼吸衰竭", "mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍",
+     "base_weight": 1.90, "keywords": "呼吸衰竭"},
+    {"code": "ER15", "name": "呼吸系统恶性肿瘤", "mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍",
+     "base_weight": 1.60, "keywords": "肺癌,肺恶性肿瘤,支气管恶性肿瘤"},
+    {"code": "EB19", "name": "胸部手术", "mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍",
+     "base_weight": 2.40, "keywords": "肺占位,肺结节,肺大疱",
+     "procedure_keywords": "肺叶切除,胸腔镜,开胸,楔形切除", "require_procedure": True},
+    # ---------- MDCF 循环 ----------
+    {"code": "FM19", "name": "缺血性心脏病", "mdc": "MDCF", "mdc_name": "循环系统疾病及功能障碍",
+     "base_weight": 1.42, "keywords": "冠心病,心肌梗死,心绞痛,缺血性心脏病"},
+    {"code": "FV29", "name": "高血压", "mdc": "MDCF", "mdc_name": "循环系统疾病及功能障碍",
+     "base_weight": 0.62, "keywords": "高血压"},
+    {"code": "FR23", "name": "心力衰竭及休克", "mdc": "MDCF", "mdc_name": "循环系统疾病及功能障碍",
+     "base_weight": 1.28, "keywords": "心力衰竭,心衰,心源性休克,心功能不全"},
+    {"code": "FU21", "name": "心律失常及传导障碍", "mdc": "MDCF", "mdc_name": "循环系统疾病及功能障碍",
+     "base_weight": 0.95, "keywords": "心房颤动,房颤,心律失常,传导阻滞,早搏,心动过速"},
+    {"code": "FM29", "name": "经皮冠状动脉介入治疗", "mdc": "MDCF", "mdc_name": "循环系统疾病及功能障碍",
+     "base_weight": 3.60, "keywords": "冠心病,心肌梗死,冠状动脉",
+     "procedure_keywords": "冠状动脉支架,经皮冠状动脉,PCI,球囊扩张", "require_procedure": True},
+    {"code": "FN29", "name": "外周血管疾患", "mdc": "MDCF", "mdc_name": "循环系统疾病及功能障碍",
+     "base_weight": 1.05, "keywords": "静脉曲张,静脉血栓,动脉硬化闭塞,血栓性静脉炎,脉管炎"},
+    # ---------- MDCG 消化 ----------
+    {"code": "GB29", "name": "消化道溃疡与胃肠炎", "mdc": "MDCG", "mdc_name": "消化系统疾病及功能障碍",
+     "base_weight": 0.70, "keywords": "胃溃疡,十二指肠,胃肠炎,消化性溃疡"},
+    {"code": "GD29", "name": "阑尾疾患及手术", "mdc": "MDCG", "mdc_name": "消化系统疾病及功能障碍",
+     "base_weight": 0.85, "keywords": "阑尾"},
+    {"code": "GK39", "name": "消化道内镜诊疗", "mdc": "MDCG", "mdc_name": "消化系统疾病及功能障碍",
+     "base_weight": 0.90, "keywords": "消化道出血,息肉",
+     "procedure_keywords": "胃镜,肠镜,内镜下,息肉切除", "require_procedure": True},
+    {"code": "GC19", "name": "腹外疝手术", "mdc": "MDCG", "mdc_name": "消化系统疾病及功能障碍",
+     "base_weight": 1.05, "keywords": "腹股沟疝,疝",
+     "procedure_keywords": "疝修补,疝囊高位结扎,无张力修补", "require_procedure": True},
+    {"code": "GS15", "name": "肠梗阻", "mdc": "MDCG", "mdc_name": "消化系统疾病及功能障碍",
+     "base_weight": 1.15, "keywords": "肠梗阻"},
+    {"code": "GR13", "name": "消化系统恶性肿瘤", "mdc": "MDCG", "mdc_name": "消化系统疾病及功能障碍",
+     "base_weight": 1.75, "keywords": "胃癌,结肠癌,直肠癌,食管癌,胃恶性肿瘤,结肠恶性肿瘤"},
+    {"code": "GZ15", "name": "消化系统其他疾患", "mdc": "MDCG", "mdc_name": "消化系统疾病及功能障碍",
+     "base_weight": 0.65, "keywords": "胃炎,便秘,肠易激,反流性食管炎,功能性消化不良"},
+    # ---------- MDCH 肝胆胰 ----------
+    {"code": "HZ23", "name": "胆囊疾患", "mdc": "MDCH", "mdc_name": "肝胆胰疾病及功能障碍",
+     "base_weight": 1.10, "keywords": "胆囊炎,胆囊结石,胆石"},
+    {"code": "HC19", "name": "胆囊切除术", "mdc": "MDCH", "mdc_name": "肝胆胰疾病及功能障碍",
+     "base_weight": 1.55, "keywords": "胆囊炎,胆囊结石,胆囊息肉",
+     "procedure_keywords": "胆囊切除,腹腔镜胆囊", "require_procedure": True},
+    {"code": "HS13", "name": "病毒性肝炎", "mdc": "MDCH", "mdc_name": "肝胆胰疾病及功能障碍",
+     "base_weight": 0.88, "keywords": "肝炎"},
+    {"code": "HS15", "name": "肝硬化及并发症", "mdc": "MDCH", "mdc_name": "肝胆胰疾病及功能障碍",
+     "base_weight": 1.45, "keywords": "肝硬化,腹水,肝性脑病,门静脉高压"},
+    {"code": "HT29", "name": "胰腺炎", "mdc": "MDCH", "mdc_name": "肝胆胰疾病及功能障碍",
+     "base_weight": 1.35, "keywords": "胰腺炎"},
+    {"code": "HR11", "name": "肝胆胰恶性肿瘤", "mdc": "MDCH", "mdc_name": "肝胆胰疾病及功能障碍",
+     "base_weight": 1.95, "keywords": "肝癌,胰腺癌,胆管癌,肝恶性肿瘤"},
+    # ---------- MDCI 肌肉骨骼 ----------
+    {"code": "IC29", "name": "髋关节置换术", "mdc": "MDCI", "mdc_name": "肌肉骨骼系统及结缔组织疾病",
+     "base_weight": 4.50, "keywords": "股骨颈骨折,股骨头坏死,髋关节",
+     "procedure_keywords": "髋关节置换,全髋,人工股骨头置换", "require_procedure": True},
+    {"code": "IC39", "name": "膝关节置换术", "mdc": "MDCI", "mdc_name": "肌肉骨骼系统及结缔组织疾病",
+     "base_weight": 4.20, "keywords": "膝关节骨关节炎,膝关节",
+     "procedure_keywords": "膝关节置换,全膝", "require_procedure": True},
+    {"code": "IB39", "name": "脊柱手术", "mdc": "MDCI", "mdc_name": "肌肉骨骼系统及结缔组织疾病",
+     "base_weight": 3.80, "keywords": "腰椎间盘突出,椎管狭窄,脊柱骨折",
+     "procedure_keywords": "椎间盘切除,脊柱融合,椎板,椎弓根钉", "require_procedure": True},
+    {"code": "IF29", "name": "四肢骨折手术", "mdc": "MDCI", "mdc_name": "肌肉骨骼系统及结缔组织疾病",
+     "base_weight": 2.10, "keywords": "骨折",
+     "procedure_keywords": "内固定,切开复位,骨折固定,克氏针", "require_procedure": True},
+    {"code": "IU13", "name": "骨折与脱位（非手术治疗）", "mdc": "MDCI", "mdc_name": "肌肉骨骼系统及结缔组织疾病",
+     "base_weight": 0.95, "keywords": "骨折,脱位"},
+    {"code": "IZ15", "name": "骨关节退行性疾患", "mdc": "MDCI", "mdc_name": "肌肉骨骼系统及结缔组织疾病",
+     "base_weight": 0.70, "keywords": "骨关节炎,腰椎间盘突出,颈椎病,肩周炎,腰痛"},
+    # ---------- MDCJ 皮肤 ----------
+    {"code": "JS19", "name": "皮肤及皮下组织感染", "mdc": "MDCJ", "mdc_name": "皮肤皮下组织及乳腺疾病",
+     "base_weight": 0.72, "keywords": "蜂窝织炎,丹毒,脓肿,疖,痈"},
+    {"code": "JV15", "name": "皮肤其他疾患", "mdc": "MDCJ", "mdc_name": "皮肤皮下组织及乳腺疾病",
+     "base_weight": 0.48, "keywords": "湿疹,皮炎,荨麻疹,带状疱疹,银屑病"},
+    {"code": "JB19", "name": "乳腺手术", "mdc": "MDCJ", "mdc_name": "皮肤皮下组织及乳腺疾病",
+     "base_weight": 1.85, "keywords": "乳腺癌,乳腺肿物,乳腺恶性肿瘤,乳腺纤维瘤",
+     "procedure_keywords": "乳腺切除,乳腺癌根治,肿物切除", "require_procedure": True},
+    # ---------- MDCK 内分泌营养代谢 ----------
+    {"code": "KS11", "name": "糖尿病及并发症", "mdc": "MDCK", "mdc_name": "内分泌营养代谢疾病",
+     "base_weight": 0.78, "keywords": "糖尿病"},
+    {"code": "KS13", "name": "甲状腺功能异常", "mdc": "MDCK", "mdc_name": "内分泌营养代谢疾病",
+     "base_weight": 0.66, "keywords": "甲状腺功能亢进,甲状腺功能减退,甲亢,甲减"},
+    {"code": "KZ15", "name": "水电解质与营养代谢紊乱", "mdc": "MDCK", "mdc_name": "内分泌营养代谢疾病",
+     "base_weight": 0.80, "keywords": "电解质紊乱,低钾血症,低钠血症,营养不良,痛风,高尿酸"},
+    # ---------- MDCL 肾及泌尿 ----------
+    {"code": "LU14", "name": "泌尿系结石与感染", "mdc": "MDCL", "mdc_name": "肾及泌尿系统疾病",
+     "base_weight": 0.72, "keywords": "尿路,肾结石,输尿管结石,泌尿,膀胱炎,肾盂肾炎"},
+    {"code": "LB19", "name": "泌尿系结石腔镜手术", "mdc": "MDCL", "mdc_name": "肾及泌尿系统疾病",
+     "base_weight": 1.70, "keywords": "肾结石,输尿管结石,膀胱结石",
+     "procedure_keywords": "碎石,输尿管镜,经皮肾镜,取石", "require_procedure": True},
+    {"code": "LS15", "name": "肾功能衰竭", "mdc": "MDCL", "mdc_name": "肾及泌尿系统疾病",
+     "base_weight": 1.85, "keywords": "肾功能衰竭,肾衰,尿毒症,慢性肾脏病,肾病综合征"},
+    {"code": "LE19", "name": "前列腺增生手术", "mdc": "MDCM", "mdc_name": "男性生殖系统疾病",
+     "base_weight": 1.60, "keywords": "前列腺增生",
+     "procedure_keywords": "前列腺电切,经尿道前列腺,前列腺切除", "require_procedure": True},
+    # ---------- MDCN/O 妇产 ----------
+    {"code": "NC19", "name": "子宫及附件手术", "mdc": "MDCN", "mdc_name": "女性生殖系统疾病",
+     "base_weight": 1.65, "keywords": "子宫肌瘤,卵巢囊肿,子宫内膜",
+     "procedure_keywords": "子宫切除,附件切除,肌瘤剔除,囊肿剥除", "require_procedure": True},
+    {"code": "NZ15", "name": "女性生殖系统其他疾患", "mdc": "MDCN", "mdc_name": "女性生殖系统疾病",
+     "base_weight": 0.58, "keywords": "盆腔炎,阴道炎,宫颈炎,月经失调,功能性子宫出血"},
+    {"code": "OB25", "name": "阴道分娩及剖宫产", "mdc": "MDCO", "mdc_name": "妊娠分娩及产褥期",
+     "base_weight": 0.68, "keywords": "分娩,剖宫产"},
+    {"code": "OZ13", "name": "异位妊娠与流产", "mdc": "MDCO", "mdc_name": "妊娠分娩及产褥期",
+     "base_weight": 0.95, "keywords": "异位妊娠,宫外孕,流产,稽留流产"},
+    # ---------- MDCP 新生儿及儿科 ----------
+    {"code": "PS31", "name": "新生儿其他疾患", "mdc": "MDCP", "mdc_name": "新生儿及围产期新生儿疾病",
+     "base_weight": 1.05, "keywords": "新生儿黄疸,新生儿肺炎,新生儿"},
+    {"code": "PK19", "name": "早产儿", "mdc": "MDCP", "mdc_name": "新生儿及围产期新生儿疾病",
+     "base_weight": 2.30, "keywords": "早产"},
+    {"code": "PZ15", "name": "儿童常见感染性疾病", "mdc": "MDCP", "mdc_name": "新生儿及围产期新生儿疾病",
+     "base_weight": 0.60, "keywords": "手足口病,水痘,疱疹性咽峡炎,小儿腹泻,轮状病毒"},
+    # ---------- MDCS 感染 / MDCT 精神 ----------
+    {"code": "SB19", "name": "全身性感染", "mdc": "MDCS", "mdc_name": "感染及寄生虫病",
+     "base_weight": 1.55, "keywords": "败血症,脓毒症,感染性休克,菌血症"},
+    {"code": "TR19", "name": "精神障碍", "mdc": "MDCT", "mdc_name": "精神疾病及功能障碍",
+     "base_weight": 1.15, "keywords": "精神分裂,抑郁,焦虑,双相,精神障碍"},
+]

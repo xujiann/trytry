@@ -100,10 +100,10 @@ def test_case_summary_auto_grouping(client, admin, setup):
     assert s1["drg_weight"] == 0.95
     assert s1["drg"]["drg_name"] == "呼吸系统感染（肺炎）"
 
-    # 最长关键词优先：诊断同时命中"糖尿病"（3字）时不受影响；未命中不入组
+    # 块3：任何分组均未命中 → 落入 QY 兜底组（不再是"不入组"）
     s2 = _discharge_case(client, setup, "a", 1, setup["patients"][1], "罕见代谢病", 3000)
-    assert s2["drg_code"] == ""
-    assert s2["drg"] is None
+    assert s2["drg_code"] == "QY"
+    assert s2["drg"]["fallback"] is True
 
     # GET 病案首页回读含 DRG 字段
     admissions = client.get(

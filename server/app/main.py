@@ -158,12 +158,12 @@ async def lifespan(_: FastAPI):
             if seed["code"] not in existing_chronic_types:
                 db.add(ChronicDiseaseType(**seed))
         db.commit()
-        # M12：DRG 分组目录种子化（10 个常见组，admin 可调权）
+        # M12/块3：DRG 分组目录种子化（62 个县域常见组 + QY 兜底组，admin 可调权）
+        from .data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
         from .models import DrgGroup
-        from .routers.drgs import SEED_DRG_GROUPS
 
         existing_drgs = {code for (code,) in db.query(DrgGroup.code).all()}
-        for seed in SEED_DRG_GROUPS:
+        for seed in [*SEED_DRG_GROUPS, FALLBACK_DRG_GROUP]:
             if seed["code"] not in existing_drgs:
                 db.add(DrgGroup(**seed))
         db.commit()
