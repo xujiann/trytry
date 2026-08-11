@@ -1,4 +1,4 @@
-# 一键启动：应用 + PostgreSQL 16（命名卷持久化）
+# 一键启动：应用 + PostgreSQL 16 + Redis 7（命名卷持久化）
 # 用法：docker compose up -d
 services:
   app:
@@ -7,12 +7,18 @@ services:
       - "8000:8000"
     environment:
       MEDPLAT_DATABASE_URL: postgresql+psycopg2://medplat:medplat@db:5432/medplat
+      MEDPLAT_REDIS_URL: redis://redis:6379/0
       MEDPLAT_SECRET: ${MEDPLAT_SECRET:-change-me-in-production}
       MEDPLAT_ADMIN_PASSWORD: ${MEDPLAT_ADMIN_PASSWORD:-admin123}
+      MEDPLAT_UPLOAD_DIR: /data/uploads
       MEDPLAT_ENV: prod
       MEDPLAT_SEED_DEMO: "0"
+    volumes:
+      - medplat-uploads:/data/uploads
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -31,5 +37,20 @@ services:
       retries: 12
     restart: unless-stopped
 
+  redis:
+    image: redis:7
+    # AOF 持久化：黑名单/锁定状态重启不丢；生产建议再加 --requirepass 并同步改 MEDPLAT_REDIS_URL
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - medplat-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
 volumes:
   medplat-pgdata:
+  medplat-redisdata:
+  medplat-uploads:
