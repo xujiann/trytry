@@ -403,10 +403,33 @@ async function renderAppointments() {
   };
 }
 
+async function downloadCsv(path, filename, msgSel) {
+  try {
+    const resp = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+    if (!resp.ok) throw new Error(`导出失败(${resp.status})`);
+    const url = URL.createObjectURL(await resp.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) { setMsg(msgSel, err.message, false); }
+}
+
 async function renderPerformance() {
-  $("#page-desc").textContent = "按机构自动汇算：转诊结案、远程诊断、慢病随访、处方合格、家医履约";
-  const data = await api("/api/performance/orgs");
+  $("#page-desc").textContent = "按机构自动汇算：转诊结案、远程诊断、慢病随访、处方合格、家医履约；监测指标上报导出";
+  const [data, monitoring] = await Promise.all([
+    api("/api/performance/orgs"), api("/api/reports/monitoring").catch(() => null)]);
   $("#page-body").innerHTML = `
+    <div class="panel"><h3>上报报表导出（管理层）</h3>
+      <p style="margin-bottom:8px">
+        <button class="btn secondary" id="exp-monitor">监测指标CSV（14项）</button>
+        <button class="btn secondary" id="exp-ops">运营月报CSV（累计）</button>
+        <button class="btn" id="exp-ops-period">按月导出运营月报</button></p>
+      <p class="msg" id="rpt-msg"></p>
+      ${monitoring ? table(["#", "指标名", "口径", "当期值", "数据来源"], monitoring.indicators, (i) =>
+        `<tr><td>${i.no}</td><td>${esc(i.name)}</td><td style="font-size:12.5px;color:#5b6773">${esc(i.caliber)}</td>
+         <td><b>${esc(i.value)}</b> ${esc(i.unit)}</td><td><span class="tag">${esc(i.source)}</span></td></tr>`) : ""}</div>
     <div class="panel"><h3>机构评分排名</h3>
       ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}</div>
     <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "远程诊断", "慢病随访", "处方合格", "家医履约"],
@@ -420,6 +443,13 @@ async function renderPerformance() {
           <td>${d.rx_pass.passed}/${d.rx_pass.total}</td>
           <td>${d.contract_services}</td></tr>`;
       })}</div>`;
+  $("#exp-monitor").onclick = () => downloadCsv("/api/reports/monitoring/export", "monitoring_indicators.csv", "#rpt-msg");
+  $("#exp-ops").onclick = () => downloadCsv("/api/reports/operations/export", "operations_report_all.csv", "#rpt-msg");
+  $("#exp-ops-period").onclick = () => {
+    const period = prompt("导出月份 YYYY-MM（如 2026-07）");
+    if (!period) return;
+    downloadCsv(`/api/reports/operations/export?period=${encodeURIComponent(period)}`, `operations_report_${period}.csv`, "#rpt-msg");
+  };
 }
 
 async function renderCssd() {

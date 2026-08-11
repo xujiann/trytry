@@ -60,6 +60,7 @@ from .routers import (
     publichealth,
     quality,
     referrals,
+    reports,
     service_extras,
     tcm,
     telemedicine,
@@ -201,6 +202,7 @@ app.include_router(quality.router)
 app.include_router(drgs.router)
 app.include_router(admin_mgmt.router)
 app.include_router(attachments.router)
+app.include_router(reports.router)
 app.include_router(service_extras.router)
 app.include_router(todos.router)
 app.include_router(ws.router)
