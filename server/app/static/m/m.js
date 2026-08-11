@@ -81,8 +81,11 @@ $("#archive-form").addEventListener("submit", async (e) => {
   const ehc = $("#in-ehc").value.trim();
   const idCard = $("#in-idcard").value.trim();
   try {
-    const data = await api(
-      `/api/portal/my-archive?ehc_no=${encodeURIComponent(ehc)}&id_card=${encodeURIComponent(idCard)}`);
+    // 走 POST：身份证号放 body，避免经 URL 进入代理日志与浏览器历史
+    const data = await api("/api/portal/my-archive", {
+      method: "POST",
+      body: JSON.stringify({ ehc_no: ehc, id_card: idCard }),
+    });
     const chronic = data.chronic_care.map((c) => {
       const [label, color] = LEVEL_TAGS[c.level] || ["未分级", ""];
       return `<div class="m-card">
