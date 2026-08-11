@@ -238,6 +238,8 @@ def _case_summary_out(s: CaseSummary) -> dict:
         "drug_cost": s.drug_cost,
         "outcome": s.outcome,
         "note": s.note,
+        "drg_code": s.drg_code,
+        "drg_weight": s.drg_weight,
         "created_by_name": s.created_by_name,
     }
 
@@ -274,6 +276,8 @@ def create_case_summary(
         from .drgs import assign_drg_group
 
         out["drg"] = assign_drg_group(db, summary)
+        out["drg_code"] = summary.drg_code
+        out["drg_weight"] = summary.drg_weight
     except ImportError:  # pragma: no cover - M12 上线前
         pass
     return out

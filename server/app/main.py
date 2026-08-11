@@ -32,6 +32,7 @@ from .routers import (
     contracts,
     cssd,
     dictionaries,
+    drgs,
     education,
     eldercare,
     emergency,
@@ -114,6 +115,15 @@ async def lifespan(_: FastAPI):
             if seed["code"] not in existing_diseases:
                 db.add(InfectiousDisease(**seed))
         db.commit()
+        # M12：DRG 分组目录种子化（10 个常见组，admin 可调权）
+        from .models import DrgGroup
+        from .routers.drgs import SEED_DRG_GROUPS
+
+        existing_drgs = {code for (code,) in db.query(DrgGroup.code).all()}
+        for seed in SEED_DRG_GROUPS:
+            if seed["code"] not in existing_drgs:
+                db.add(DrgGroup(**seed))
+        db.commit()
     finally:
         db.close()
     yield
@@ -160,6 +170,7 @@ app.include_router(maternal.router)
 app.include_router(vaccination.router)
 app.include_router(publichealth.router)
 app.include_router(quality.router)
+app.include_router(drgs.router)
 app.include_router(admin_mgmt.router)
 app.include_router(service_extras.router)
 app.include_router(todos.router)

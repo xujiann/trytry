@@ -1097,6 +1097,9 @@ class CaseSummary(Base):
     # 治愈/好转/未愈/死亡/其他
     outcome: Mapped[str] = mapped_column(String(16), default="好转")
     note: Mapped[str] = mapped_column(String(1024), default="")
+    # M12 DRGs：结案时按主诊断关键词自动入组（未入组为空串/0）
+    drg_code: Mapped[str] = mapped_column(String(16), default="", index=True)
+    drg_weight: Mapped[float] = mapped_column(Float, default=0)
     created_by_name: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -1240,6 +1243,23 @@ class InfectionReport(Base):
     reported_by: Mapped[str] = mapped_column(String(64), default="")
     report_date: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------- 浙江省指南 M12：DRGs 简化版 ----------
+
+
+class DrgGroup(Base):
+    """DRG 分组目录：编码/名称/基准权重/主诊断关键词（简化入组规则）。"""
+
+    __tablename__ = "drg_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    base_weight: Mapped[float] = mapped_column(Float)
+    # 主诊断匹配关键词（逗号分隔），出院病例按关键词命中入组
+    keywords: Mapped[str] = mapped_column(String(256), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 # ---------- 浙江省指南 M11：集成平台底座（交换监控） ----------
