@@ -1750,3 +1750,22 @@ class Attachment(Base):
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
     uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PrintTemplate(Base):
+    """打印模板（块1 报告打印）：按单据类型配置抬头、页脚与二维码开关。
+
+    doc_type 取值：exam_report=检查报告, prescription=处方笺,
+    exam_request=检验/检查申请单, cert=法定医学证明。
+    未配置时打印页回落到业务机构名称与默认页脚。
+    """
+
+    __tablename__ = "print_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doc_type: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    # 抬头机构名（留空则用单据所属机构名）
+    header_org_name: Mapped[str] = mapped_column(String(128), default="")
+    footer_note: Mapped[str] = mapped_column(String(256), default="")
+    show_qr: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

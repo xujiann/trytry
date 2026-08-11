@@ -57,6 +57,7 @@ from .routers import (
     pharmacy,
     portal,
     prescriptions,
+    printing,
     publichealth,
     quality,
     referrals,
@@ -221,6 +222,7 @@ app.include_router(drgs.router)
 app.include_router(admin_mgmt.router)
 app.include_router(attachments.router)
 app.include_router(reports.router)
+app.include_router(printing.router)
 app.include_router(service_extras.router)
 app.include_router(todos.router)
 app.include_router(ws.router)

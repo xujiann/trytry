@@ -125,6 +125,7 @@ const PAGES = [
   { id: "cssd", title: "消毒供应", render: renderCssd },
   { id: "medwaste", title: "医废追溯", render: renderMedwaste },
   { group: "系统管理", roles: ["admin"] },
+  { id: "printtpl", title: "打印模板", render: renderPrintTemplates, roles: ["admin"] },
   { id: "users", title: "用户管理", render: renderUsers, roles: ["admin"] },
   { id: "audit", title: "审计日志", render: renderAudit, roles: ["admin"] },
 ];
@@ -707,17 +708,24 @@ async function renderExams() {
         <button>提交申请</button>
       </form><p class="msg" id="exam-msg"></p></div>
     ${critical.length ? `<div class="panel"><h3>⚠ 危急值（${critical.length}）</h3>${
-      table(["报告ID", "申请单", "结论"], critical, (r) =>
-        `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td></tr>`)}</div>` : ""}
+      table(["报告ID", "申请单", "结论", "操作"], critical, (r) =>
+        `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
+         <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button></td></tr>`)}</div>` : ""}
     <div class="panel"><h3>申请单</h3>${table(["ID", "患者", "中心", "项目", "状态", "操作"], requests, (r) => {
       const [text, color] = EXAM_STATUS[r.status] || [r.status, ""];
-      const actions = r.status === "pending"
+      let actions = r.status === "pending"
         ? `<button class="btn secondary" data-claim="${r.id}">领取</button>`
         : r.status === "diagnosing"
-        ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "—";
+        ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "";
+      actions += ` <button class="btn secondary" data-printreq="${r.id}">打印申请单</button>`;
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${CENTER_NAMES[r.center_type]}</td>
         <td>${esc(r.item_name)}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
     })}</div>
+    <div class="panel"><h3>报告打印</h3>
+      <form class="inline" id="exam-print-form">
+        <input name="report_id" type="number" placeholder="报告ID" required>
+        <button>打印报告单</button></form>
+      <p class="msg" id="exam-print-msg"></p></div>
     <div class="panel"><h3>报告附件（影像截图/PDF，≤10MB，医师/经办上传）</h3>
       <form class="inline" id="exam-att-form">
         <input name="report_id" type="number" placeholder="报告ID" required>
@@ -761,9 +769,17 @@ async function renderExams() {
       route();
     } catch (err) { setMsg("#exam-msg", err.message, false); }
   };
+  $("#exam-print-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await openPrintPage(`/api/print/exam-reports/${new FormData(e.target).get("report_id")}`); }
+    catch (err) { setMsg("#exam-print-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const claim = e.target.dataset.claim, report = e.target.dataset.report;
+    const { printreq, printreport } = e.target.dataset;
     try {
+      if (printreq) return await openPrintPage(`/api/print/exam-requests/${printreq}`);
+      if (printreport) return await openPrintPage(`/api/print/exam-reports/${printreport}`);
       if (claim) { await api(`/api/exams/${claim}/claim`, { method: "POST" }); route(); }
       if (report) {
         const conclusion = prompt("诊断结论");
@@ -855,6 +871,7 @@ async function renderRx() {
         ? `<button class="btn secondary" data-approve="1" data-id="${p.id}">通过</button>
            <button class="btn danger" data-approve="0" data-id="${p.id}">退回</button>` : "";
       if (canComment && !commented.has(p.id)) actions += ` <button class="btn" data-rxcomment="${p.id}">点评</button>`;
+      actions += ` <button class="btn secondary" data-printrx="${p.id}">打印</button>`;
       return `<tr><td>${p.id}</td><td>${p.patient_id}</td><td>${esc(p.diagnosis_name)}</td>
         <td><span class="tag ${color}">${text}</span></td><td>${esc(p.review_comment) || "—"}</td><td>${actions || "—"}</td></tr>`;
     })}</div>
@@ -893,7 +910,11 @@ async function renderRx() {
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { approve, id, rxcomment } = e.target.dataset;
+    const { approve, id, rxcomment, printrx } = e.target.dataset;
+    if (printrx) {
+      try { return await openPrintPage(`/api/print/prescriptions/${printrx}`); }
+      catch (err) { return setMsg("#rx-msg", err.message, false); }
+    }
     if (rxcomment) {
       // 块2：点评规则化——先调阅该方药品的点评要点与肝肾提示，再作结论
       try {
@@ -1204,6 +1225,23 @@ async function uploadAttachment(ownerType, ownerId, fileInput) {
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.detail || `上传失败(${resp.status})`);
   return data;
+}
+
+/* 块1：报告打印——服务端渲染的打印页需带令牌拉取，取回后写入新窗口并唤起打印 */
+async function openPrintPage(path) {
+  const resp = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.detail || `打印页加载失败(${resp.status})`);
+  }
+  const html = await resp.text();
+  const win = window.open("", "_blank");
+  if (!win) throw new Error("浏览器拦截了新窗口，请允许弹出后重试");
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 300);
 }
 
 async function downloadAttachment(id, filename) {
@@ -2432,9 +2470,10 @@ async function renderCerts() {
     api("/api/certs/stats"), api("/api/checkups"), api("/api/checkups/abnormal")]);
   const draw = async (certType = "") => {
     const certs = await api(`/api/certs${certType ? `?cert_type=${certType}` : ""}`);
-    $("#cert-table").innerHTML = table(["编号", "类型", "姓名", "性别", "日期", "诊断/说明", "机构"], certs, (c) =>
+    $("#cert-table").innerHTML = table(["编号", "类型", "姓名", "性别", "日期", "诊断/说明", "机构", "操作"], certs, (c) =>
       `<tr><td><span class="tag">${esc(c.cert_no)}</span></td><td>${CERT_TYPES[c.cert_type] || esc(c.cert_type)}</td>
-       <td>${esc(c.name)}</td><td>${esc(c.gender)}</td><td>${esc(c.event_date)}</td><td>${esc(c.detail) || "—"}</td><td>${c.org_id}</td></tr>`);
+       <td>${esc(c.name)}</td><td>${esc(c.gender)}</td><td>${esc(c.event_date)}</td><td>${esc(c.detail) || "—"}</td><td>${c.org_id}</td>
+       <td><button class="btn secondary" data-printcert="${c.id}">打印</button></td></tr>`);
   };
   $("#page-body").innerHTML = `
     <div class="cards">
@@ -2475,6 +2514,41 @@ async function renderCerts() {
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
   $("#cert-filter").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("cert_type")); };
   $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const { printcert } = e.target.dataset;
+    if (!printcert) return;
+    try { await openPrintPage(`/api/print/certs/${printcert}`); }
+    catch (err) { setMsg("#cert-msg", err.message, false); }
+  };
+}
+
+/* 块1：打印模板维护（管理员）——抬头机构名、页脚说明与二维码开关按单据类型配置 */
+async function renderPrintTemplates() {
+  $("#page-desc").textContent = "按单据类型配置打印抬头、页脚与二维码占位；抬头留空时回落到单据所属机构名";
+  const templates = await api("/api/print/templates");
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>打印模板</h3>
+      ${table(["单据类型", "抬头机构名", "页脚说明", "二维码"], templates, (t) =>
+        `<tr><td>${esc(t.doc_type_name)}</td><td>${esc(t.header_org_name) || "（用机构名）"}</td>
+         <td>${esc(t.footer_note) || "（默认页脚）"}</td>
+         <td>${t.show_qr ? '<span class="tag green">显示</span>' : '<span class="tag">隐藏</span>'}</td></tr>`)}
+      <form class="inline" id="tpl-form">
+        <select name="doc_type">${templates.map((t) => `<option value="${t.doc_type}">${esc(t.doc_type_name)}</option>`).join("")}</select>
+        <input name="header_org_name" placeholder="抬头机构名（可空）" style="min-width:200px">
+        <input name="footer_note" placeholder="页脚说明（可空）" style="min-width:220px">
+        <label style="font-size:13px"><input type="checkbox" name="show_qr" checked> 显示二维码</label>
+        <button>保存模板</button></form>
+      <p class="msg" id="tpl-msg"></p></div>`;
+  $("#tpl-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/print/templates", { method: "PUT", body: JSON.stringify({
+        doc_type: f.get("doc_type"), header_org_name: f.get("header_org_name") || "",
+        footer_note: f.get("footer_note") || "", show_qr: f.get("show_qr") === "on" }) });
+      route();
+    } catch (err) { setMsg("#tpl-msg", err.message, false); }
+  };
 }
 
 const KB_CATEGORIES = { drug_policy: "药物政策", clinical_guideline: "临床指南", referral: "转诊知识", regulation: "质量制度规范", tcm_health: "中医养生" };
