@@ -9,12 +9,14 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
+    DualChannelApp,
     InsuranceSettlement,
     Organization,
     Patient,
     Referral,
     ReferralCert,
     SpecialDiseaseApp,
+    User,
 )
 
 router = APIRouter(prefix="/api/insurance", tags=["医保协同"], dependencies=[Depends(get_current_user)])
@@ -169,3 +171,69 @@ def fund_stats(db: Session = Depends(get_db)):
         "local_ratio_pct": pct(local, total),
         "grassroots_ratio_pct": pct(grassroots, total),
     }
+
+
+# ---------- 终审轮：双通道药品申报（⑲） ----------
+
+
+class DualChannelCreate(BaseModel):
+    patient_id: int
+    drug_name: str = Field(min_length=1)
+    reason: str = ""
+
+
+@router.post(
+    "/dual-channel",
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "doctor"))],  # 双通道申报
+)
+def apply_dual_channel(
+    body: DualChannelCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    if db.get(Patient, body.patient_id) is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
+    app_ = DualChannelApp(created_by=user.id, **body.model_dump())
+    db.add(app_)
+    db.commit()
+    return {"id": app_.id, "status": app_.status, "drug_name": app_.drug_name}
+
+
+@router.post(
+    "/dual-channel/{app_id}/review",
+    dependencies=[Depends(require_roles("director"))],  # 申报/审核职责分离
+)
+def review_dual_channel(
+    app_id: int,
+    approve: bool,
+    comment: str = "",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    app_ = db.get(DualChannelApp, app_id)
+    if app_ is None:
+        raise HTTPException(status_code=404, detail="申报不存在")
+    if app_.status != "pending":
+        raise HTTPException(status_code=409, detail="该申报已处理")
+    app_.status = "approved" if approve else "rejected"
+    app_.review_comment = comment
+    app_.reviewed_by = user.id
+    db.commit()
+    return {"id": app_.id, "status": app_.status}
+
+
+@router.get("/dual-channel")
+def list_dual_channel(status: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(DualChannelApp)
+    if status:
+        q = q.filter(DualChannelApp.status == status)
+    return [
+        {
+            "id": a.id,
+            "patient_id": a.patient_id,
+            "drug_name": a.drug_name,
+            "reason": a.reason,
+            "status": a.status,
+            "review_comment": a.review_comment,
+        }
+        for a in q.order_by(DualChannelApp.id.desc()).limit(200).all()
+    ]

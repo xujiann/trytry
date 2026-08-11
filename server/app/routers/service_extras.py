@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
+    ExamResource,
     AppointmentBlacklist,
     ConsultExpert,
     CriticalAction,
@@ -365,3 +366,50 @@ def triage_suggest(symptoms: list[str], db: Session = Depends(get_db)):
         "recommendations": ranked[:3] or [{"department": "全科门诊", "matched": [], "urgent": False}],
         "emergency_hint": any(r["urgent"] for r in ranked[:1]),
     }
+
+
+# ---------- 终审轮：检查资源要素档案（浙#18 设备/项目/价格/时长/注意事项） ----------
+
+
+class ExamResourceCreate(BaseModel):
+    org_id: int
+    center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
+    item_name: str = Field(min_length=1)
+    device: str = ""
+    price: float = Field(default=0, ge=0)
+    duration_min: int = Field(default=15, gt=0)
+    notes: str = ""
+
+
+@router.post("/exams/resources", status_code=201, dependencies=[Depends(require_admin)])
+def create_exam_resource(body: ExamResourceCreate, db: Session = Depends(get_db)):
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
+    resource = ExamResource(**body.model_dump())
+    db.add(resource)
+    db.commit()
+    return {"id": resource.id, "center_type": resource.center_type, "item_name": resource.item_name}
+
+
+@router.get("/exams/resources")
+def list_exam_resources(
+    center_type: str | None = None, org_id: int | None = None, db: Session = Depends(get_db)
+):
+    q = db.query(ExamResource).filter(ExamResource.active.is_(True))
+    if center_type:
+        q = q.filter(ExamResource.center_type == center_type)
+    if org_id is not None:
+        q = q.filter(ExamResource.org_id == org_id)
+    return [
+        {
+            "id": r.id,
+            "org_id": r.org_id,
+            "center_type": r.center_type,
+            "item_name": r.item_name,
+            "device": r.device,
+            "price": r.price,
+            "duration_min": r.duration_min,
+            "notes": r.notes,
+        }
+        for r in q.order_by(ExamResource.id).all()
+    ]

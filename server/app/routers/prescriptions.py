@@ -1,6 +1,9 @@
 """集中审方中心："系统+药师"双重审方，每方必审。"""
 from datetime import date
 
+from pydantic import BaseModel, Field
+from sqlalchemy import func
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
@@ -12,6 +15,7 @@ from ..models import (
     Organization,
     Patient,
     Prescription,
+    PrescriptionComment,
     PrescriptionItem,
     User,
 )
@@ -210,3 +214,75 @@ def review_prescription(prescription_id: int, body: PrescriptionReview, db: Sess
     db.commit()
     db.refresh(prescription)
     return prescription
+
+
+# ---------- 终审轮：处方点评（⑱事后点评与监管） ----------
+
+
+class RxCommentCreate(BaseModel):
+    grade: str = Field(pattern="^(reasonable|unreasonable)$")
+    issues: str = ""
+    comment: str = ""
+
+
+@router.post(
+    "/{prescription_id}/comment-review",
+    status_code=201,
+    dependencies=[Depends(require_roles("pharmacist"))],  # 处方点评=药师
+)
+def comment_prescription(
+    prescription_id: int,
+    body: RxCommentCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    rx = db.get(Prescription, prescription_id)
+    if rx is None:
+        raise HTTPException(status_code=404, detail="处方不存在")
+    if db.query(PrescriptionComment).filter(
+        PrescriptionComment.prescription_id == prescription_id
+    ).first():
+        raise HTTPException(status_code=409, detail="该处方已点评")
+    if body.grade == "unreasonable" and not (body.issues or body.comment):
+        raise HTTPException(status_code=422, detail="不合理处方须注明问题类型或点评意见")
+    record = PrescriptionComment(
+        prescription_id=prescription_id, reviewer_id=user.id, **body.model_dump()
+    )
+    db.add(record)
+    db.commit()
+    return {"id": record.id, "prescription_id": prescription_id, "grade": record.grade}
+
+
+@router.get("/comment-reviews", dependencies=[Depends(get_current_user)])
+def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(PrescriptionComment)
+    if grade:
+        q = q.filter(PrescriptionComment.grade == grade)
+    return [
+        {
+            "id": c.id,
+            "prescription_id": c.prescription_id,
+            "grade": c.grade,
+            "issues": c.issues,
+            "comment": c.comment,
+            "at": c.created_at.isoformat(),
+        }
+        for c in q.order_by(PrescriptionComment.id.desc()).limit(200).all()
+    ]
+
+
+@router.get("/comment-stats", dependencies=[Depends(get_current_user)])
+def comment_stats(db: Session = Depends(get_db)):
+    """点评统计：点评覆盖数、合理率（事后监管口径）。"""
+    total = db.query(func.count(PrescriptionComment.id)).scalar() or 0
+    unreasonable = (
+        db.query(func.count(PrescriptionComment.id))
+        .filter(PrescriptionComment.grade == "unreasonable")
+        .scalar()
+        or 0
+    )
+    return {
+        "commented": total,
+        "unreasonable": unreasonable,
+        "reasonable_rate_pct": round((total - unreasonable) * 100.0 / total, 2) if total else 0.0,
+    }

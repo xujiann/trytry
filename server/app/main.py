@@ -44,6 +44,7 @@ from .routers import (
     inpatient,
     insurance,
     integration,
+    knowledge,
     maternal,
     medication,
     medwaste,
@@ -168,6 +169,7 @@ app.include_router(certs.router)
 app.include_router(checkups.router)
 app.include_router(insurance.router)
 app.include_router(integration.router)
+app.include_router(knowledge.router)
 app.include_router(education.router)
 app.include_router(eldercare.router)
 app.include_router(maternal.router)

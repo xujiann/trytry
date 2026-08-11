@@ -1390,3 +1390,121 @@ class PhysicalExam(Base):
     abnormal_items: Mapped[str] = mapped_column(String(512), default="")
     has_abnormal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PrescriptionComment(Base):
+    """⑱处方点评：药师对已审处方的事后点评（合理/不合理）与问题留痕。"""
+
+    __tablename__ = "prescription_comments"
+    __table_args__ = (UniqueConstraint("prescription_id", name="uq_rx_comment_prescription"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id"), index=True)
+    # reasonable=合理, unreasonable=不合理
+    grade: Mapped[str] = mapped_column(String(16), index=True)
+    # 问题类型：适应证不适宜/用法用量不适宜/重复用药/相互作用等（分号分隔）
+    issues: Mapped[str] = mapped_column(String(256), default="")
+    comment: Mapped[str] = mapped_column(String(1024), default="")
+    reviewer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Supplier(Base):
+    """㉜㉝供应商管理（药品耗材/非医疗物资共用）。"""
+
+    __tablename__ = "suppliers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    contact: Mapped[str] = mapped_column(String(64), default="")
+    license_no: Mapped[str] = mapped_column(String(64), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PurchaseOrder(Base):
+    """㉝采购管理：采购申请→审批→到货验收（药品验收自动入库）。"""
+
+    __tablename__ = "purchase_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"))
+    # drug=药品, material=耗材/物资
+    item_type: Mapped[str] = mapped_column(String(16), default="drug")
+    item_code: Mapped[str] = mapped_column(String(64))
+    item_name: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[int] = mapped_column(Integer)
+    # pending=待审批, approved=已审批, received=已验收入库, rejected=已驳回
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    note: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class StockTake(Base):
+    """㉝存货盘点：账面数/实盘数差异留痕并调整库存。"""
+
+    __tablename__ = "stock_takes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    drug_code: Mapped[str] = mapped_column(String(64))
+    book_qty: Mapped[int] = mapped_column(Integer)
+    actual_qty: Mapped[int] = mapped_column(Integer)
+    diff: Mapped[int] = mapped_column(Integer)
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class KnowledgeEntry(Base):
+    """统一知识库：药物政策/临床指南/转诊知识/质管制度规范/中医养生（含有效期管理）。"""
+
+    __tablename__ = "knowledge_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # drug_policy=药物政策, clinical_guideline=临床指南, referral=转诊知识,
+    # regulation=质量制度规范, tcm_health=中医养生
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(String(256), index=True)
+    body: Mapped[str] = mapped_column(String(4096), default="")
+    # 有效期（质管资料）：过期条目查询默认过滤并标记
+    expire_date: Mapped[str] = mapped_column(String(10), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ExamResource(Base):
+    """浙#18 检查资源要素：设备/项目/价格/时长/注意事项档案。"""
+
+    __tablename__ = "exam_resources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    center_type: Mapped[str] = mapped_column(String(16), index=True)
+    item_name: Mapped[str] = mapped_column(String(128))
+    device: Mapped[str] = mapped_column(String(128), default="")
+    price: Mapped[float] = mapped_column(Float, default=0)
+    duration_min: Mapped[int] = mapped_column(Integer, default=15)
+    notes: Mapped[str] = mapped_column(String(512), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class DualChannelApp(Base):
+    """⑲双通道药品申报：申报→管理层审核。"""
+
+    __tablename__ = "dual_channel_apps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    drug_name: Mapped[str] = mapped_column(String(128))
+    reason: Mapped[str] = mapped_column(String(512), default="")
+    # pending=待审核, approved=通过, rejected=驳回
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    review_comment: Mapped[str] = mapped_column(String(512), default="")
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

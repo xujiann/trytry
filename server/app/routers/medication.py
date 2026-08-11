@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import DrugShortage, Organization, Patient, Prescription, PrescriptionItem
+from ..models import DrugShortage, DrugStock, Organization, Patient, Prescription, PrescriptionItem
 
 router = APIRouter(prefix="/api/medication", tags=["药事监测"], dependencies=[Depends(get_current_user)])
 
@@ -123,3 +123,41 @@ def usage_stats(db: Session = Depends(get_db)):
         {"drug_code": r.drug_code, "drug_name": r.drug_name, "rx_count": r.rx_count, "patient_count": r.patient_count}
         for r in rows
     ]
+
+
+@router.get("/supply-risk")
+def supply_risk(db: Session = Depends(get_db)):
+    """⑯药品供应风险评估：库存低于阈值 + 未结案缺药登记数 → 分级风险。"""
+    low_stocks = (
+        db.query(DrugStock)
+        .filter(DrugStock.threshold > 0, DrugStock.quantity < DrugStock.threshold)
+        .all()
+    )
+    open_shortage_rows = (
+        db.query(DrugShortage.drug_code, func.count(DrugShortage.id))
+        .filter(DrugShortage.status != "delivered")
+        .group_by(DrugShortage.drug_code)
+        .all()
+    )
+    shortage_by_code = {code: n for code, n in open_shortage_rows}
+    risks = {}
+    for s in low_stocks:
+        entry = risks.setdefault(
+            s.drug_code,
+            {"drug_code": s.drug_code, "drug_name": s.drug_name, "low_stock_orgs": 0, "open_shortages": 0},
+        )
+        entry["low_stock_orgs"] += 1
+    for code, n in shortage_by_code.items():
+        entry = risks.setdefault(
+            code, {"drug_code": code, "drug_name": "", "low_stock_orgs": 0, "open_shortages": 0}
+        )
+        entry["open_shortages"] = n
+    results = []
+    for entry in risks.values():
+        # 既有缺药登记又库存告警=高风险；仅其一=中风险
+        entry["risk_level"] = (
+            "high" if entry["low_stock_orgs"] and entry["open_shortages"] else "medium"
+        )
+        results.append(entry)
+    results.sort(key=lambda e: (e["risk_level"] != "high", e["drug_code"]))
+    return {"total": len(results), "risks": results}
