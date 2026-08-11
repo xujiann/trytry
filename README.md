@@ -1,5 +1,8 @@
 # 县域医共体信息化平台（medplat）
 
+![tests](https://img.shields.io/badge/tests-245%20passed%20%2B%204%20e2e-brightgreen)
+![coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)
+
 紧密型县域医共体信息化平台，依据国家卫生健康委《紧密型县域医共体信息化功能指引》（国卫办规划函〔2025〕63号）等文件建设。
 
 - 建设规划：[县域医共体信息化平台建设规划.md](县域医共体信息化平台建设规划.md)
@@ -67,13 +70,44 @@
 cd server
 pip install -r requirements.txt
 uvicorn app.main:app --reload      # 启动开发服务器，接口文档见 http://127.0.0.1:8000/docs
-python -m pytest tests/ -q          # 运行测试
+python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过）
 ```
 
 初始管理员账号：`admin` / `admin123`（生产部署前必须修改，并通过 `MEDPLAT_SECRET` 环境变量设置令牌密钥）。
 
 数据库默认使用 SQLite（开发环境），通过 `MEDPLAT_DATABASE_URL` 环境变量可切换 PostgreSQL。
 配置统一由 pydantic-settings 读取 `MEDPLAT_*` 环境变量（见 `server/app/config.py`）。
+
+## 测试与覆盖率
+
+```bash
+cd server
+python -m pytest tests/ -q                                        # 全量单元/接口测试（245 项通过，4 项 e2e 默认跳过）
+python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖率报告
+```
+
+- 当前行覆盖率 **92%**（阈值 70%），徽章值见文首；
+- CI（`.github/workflows/ci.yml`）每次推送执行全量测试并产出 `coverage.xml`
+  工件；覆盖率门禁当前为 **warning 模式**：低于 `COVERAGE_MIN`（70%）只告警不
+  阻断构建，去掉门禁步骤的 `|| true` 即切换为强制门禁。
+
+### 端到端测试（Playwright）
+
+`server/tests/e2e/test_flows.py` 用真实浏览器驱动管理端 SPA，覆盖
+**登录 → 决策驾驶舱 → 共享诊断中心开单 → 领取并出报告（危急值）→ 危急值确认接收
+→ 处置反馈闭环**，以及医生移动工作台 `/m/doctor` 登录。用例标记 `@pytest.mark.e2e`，
+默认跳过（无浏览器内核的环境不会失败），需显式开启：
+
+```bash
+cd server
+pip install playwright                 # E2E 可选依赖，不在 requirements.txt 中
+python -m playwright install chromium  # 首次需下载浏览器内核（约 150MB）
+python -m pytest tests/e2e -q --e2e    # 仅跑端到端；--e2e 也可加在全量命令上
+```
+
+- 用例自动拉起独立 uvicorn 子进程与独立 SQLite 库（`e2e_run.db`），跑完即清理，
+  不影响开发库与单元测试库；端口由内核动态分配，可与本地服务并存；
+- 未传 `--e2e` 时由 `tests/conftest.py` 统一跳过，因此 CI 默认不需要浏览器内核。
 
 ## 压测基线
 

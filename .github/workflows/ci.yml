@@ -5,6 +5,11 @@ on:
     branches: ["**"]
   pull_request:
 
+env:
+  # 块5：覆盖率门禁阈值。当前为 warning 模式——低于阈值只告警，不阻断构建。
+  # 稳定运行一段时间后，把下面「覆盖率门禁」步骤的 `|| true` 去掉即可切换为强制门禁。
+  COVERAGE_MIN: "70"
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -15,6 +20,29 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r server/requirements.txt
-      - name: Run tests
+      - name: Run tests with coverage
         working-directory: server
-        run: python -m pytest tests/ -q
+        # 端到端测试（tests/e2e，标记 e2e）默认跳过，需 --e2e 且已安装浏览器内核
+        run: |
+          python -m pytest tests/ -q \
+            --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
+      - name: Coverage gate (warning mode)
+        working-directory: server
+        run: |
+          python - <<'PY' || true
+          import sys, xml.etree.ElementTree as ET
+          threshold = float("${{ env.COVERAGE_MIN }}")
+          pct = float(ET.parse("coverage.xml").getroot().get("line-rate")) * 100
+          print(f"::notice title=Coverage::行覆盖率 {pct:.2f}%（阈值 {threshold:.0f}%）")
+          if pct < threshold:
+              print(f"::warning title=Coverage below threshold::行覆盖率 {pct:.2f}% 低于阈值 {threshold:.0f}%，"
+                    "当前为 warning 模式不阻断构建")
+              sys.exit(1)
+          PY
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: server/coverage.xml
+          if-no-files-found: ignore

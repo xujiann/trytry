@@ -7,3 +7,7 @@ node_modules/
 dist/
 server/uploads/
 server/test_uploads/
+.coverage
+coverage.xml
+htmlcov/
+server/e2e_uploads/
