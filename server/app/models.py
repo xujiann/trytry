@@ -1008,6 +1008,101 @@ class SatisfactionSurvey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+# ---------- 浙江省指南 M7：住院与床位（ADT/住院医嘱/病案首页） ----------
+
+
+class Ward(Base):
+    """病区：床位资源库的组织单元（挂接机构）。"""
+
+    __tablename__ = "wards"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_ward_org_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    beds: Mapped[list["Bed"]] = relationship(back_populates="ward")
+
+
+class Bed(Base):
+    """床位资源：占用状态由入出转流程原子维护。"""
+
+    __tablename__ = "beds"
+    __table_args__ = (UniqueConstraint("ward_id", "bed_no", name="uq_bed_ward_no"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ward_id: Mapped[int] = mapped_column(ForeignKey("wards.id"), index=True)
+    bed_no: Mapped[str] = mapped_column(String(16))
+    # free=空闲, occupied=占用
+    status: Mapped[str] = mapped_column(String(16), default="free", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    ward: Mapped[Ward] = relationship(back_populates="beds")
+
+
+class Admission(Base):
+    """住院登记（ADT）：入院→转科/转床→出院，床位占用原子分配。"""
+
+    __tablename__ = "admissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    ward_id: Mapped[int] = mapped_column(ForeignKey("wards.id"))
+    bed_id: Mapped[int] = mapped_column(ForeignKey("beds.id"))
+    doctor_name: Mapped[str] = mapped_column(String(64), default="")
+    diagnosis_name: Mapped[str] = mapped_column(String(256), default="")
+    # admitted=在院, discharged=已出院
+    status: Mapped[str] = mapped_column(String(16), default="admitted", index=True)
+    admitted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    discharged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    orders: Mapped[list["InpatientOrder"]] = relationship(back_populates="admission")
+    case_summary: Mapped["CaseSummary | None"] = relationship(back_populates="admission")
+
+
+class InpatientOrder(Base):
+    """住院医嘱：长期/临时，开立/停止（限医师）。"""
+
+    __tablename__ = "inpatient_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)
+    # long=长期医嘱, temp=临时医嘱
+    order_type: Mapped[str] = mapped_column(String(8))
+    content: Mapped[str] = mapped_column(String(512))
+    # active=执行中, stopped=已停止
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_by_name: Mapped[str] = mapped_column(String(64), default="")
+    stopped_by_name: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    admission: Mapped[Admission] = relationship(back_populates="orders")
+
+
+class CaseSummary(Base):
+    """病案首页（最小数据集）：出院诊断、手术、费用汇总、转归，出院时填写。"""
+
+    __tablename__ = "case_summaries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), unique=True, index=True)
+    discharge_diagnosis: Mapped[str] = mapped_column(String(256))
+    operation: Mapped[str] = mapped_column(String(256), default="")
+    total_cost: Mapped[float] = mapped_column(Float, default=0)
+    drug_cost: Mapped[float] = mapped_column(Float, default=0)
+    # 治愈/好转/未愈/死亡/其他
+    outcome: Mapped[str] = mapped_column(String(16), default="好转")
+    note: Mapped[str] = mapped_column(String(1024), default="")
+    created_by_name: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    admission: Mapped[Admission] = relationship(back_populates="case_summary")
+
+
 class Referral(Base):
     __tablename__ = "referrals"
 
