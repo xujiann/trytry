@@ -10,6 +10,7 @@
 <body>
 <header class="m-header">
   <h1>县域医共体 · 居民服务</h1>
+  <button id="btn-logout" class="link-btn hidden">退出</button>
 </header>
 
 <main id="m-main">
@@ -18,24 +19,53 @@
     <div id="edu-list" class="list">加载中…</div>
   </section>
 
-  <!-- 我的档案（电子健康卡号 + 身份证号 双因子核验） -->
+  <!-- 我的档案：未登录→登录，已登录未实名→实名绑定，已实名→档案 -->
   <section id="tab-archive" class="tab-page hidden">
-    <form id="archive-form" class="m-card">
-      <p class="hint">输入电子健康卡号与身份证号，核验后查看本人健康档案</p>
-      <input id="in-ehc" placeholder="电子健康卡号（EHC…）" required>
-      <input id="in-idcard" placeholder="身份证号" required>
-      <button type="submit">查询我的档案</button>
-      <p id="archive-error" class="err"></p>
-    </form>
-    <div id="archive-result"></div>
+
+    <!-- 1. 登录 -->
+    <div id="pane-login" class="hidden">
+      <div class="m-card">
+        <button id="btn-wechat" class="wechat-btn"><span class="wx">✆</span>微信一键登录</button>
+        <div class="divider"><span>或使用手机号登录</span></div>
+        <form id="sms-form">
+          <input id="in-phone" type="tel" inputmode="numeric" maxlength="11" placeholder="手机号" required>
+          <div class="code-row">
+            <input id="in-code" type="text" inputmode="numeric" maxlength="6" placeholder="6位验证码" required>
+            <button type="button" id="btn-send-code" class="ghost-btn">获取验证码</button>
+          </div>
+          <button type="submit">登录</button>
+        </form>
+        <p id="login-msg" class="msg"></p>
+        <p class="hint tips">登录仅验证手机号归属，需完成实名绑定后才能查看健康档案。</p>
+      </div>
+    </div>
+
+    <!-- 2. 实名绑定 -->
+    <div id="pane-bind" class="hidden">
+      <form id="bind-form" class="m-card">
+        <p class="hint">首次使用需实名绑定，核对姓名与身份证号后关联您的健康档案</p>
+        <input id="in-name" placeholder="姓名" required>
+        <input id="in-idcard" placeholder="身份证号" required>
+        <button type="submit">绑定我的档案</button>
+        <p id="bind-msg" class="msg"></p>
+      </form>
+    </div>
+
+    <!-- 3. 档案 -->
+    <div id="pane-archive" class="hidden">
+      <div id="account-bar" class="account-bar"></div>
+      <div id="archive-result"></div>
+    </div>
   </section>
 
-  <!-- 满意度评价（同样双因子核验） -->
+  <!-- 满意度评价（登录态） -->
   <section id="tab-survey" class="tab-page hidden">
-    <form id="survey-form" class="m-card">
+    <div id="survey-guard" class="m-card hidden">
+      <p class="hint">请先在「我的档案」登录并完成实名绑定后再提交评价。</p>
+      <button type="button" id="btn-goto-login">去登录</button>
+    </div>
+    <form id="survey-form" class="m-card hidden">
       <p class="hint">对签约服务 / 就诊 / 会诊进行满意度评价</p>
-      <input id="sv-ehc" placeholder="电子健康卡号（EHC…）" required>
-      <input id="sv-idcard" placeholder="身份证号" required>
       <select id="sv-type">
         <option value="contract">家医签约服务</option>
         <option value="encounter">就诊体验</option>

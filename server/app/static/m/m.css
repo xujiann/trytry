@@ -13,7 +13,12 @@ body {
   padding-top: calc(16px + env(safe-area-inset-top));
   position: sticky; top: 0; z-index: 10;
 }
+.m-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .m-header h1 { font-size: 17px; font-weight: 600; }
+.link-btn {
+  background: rgba(255,255,255,.16); color: #fff; border: 0;
+  border-radius: 6px; padding: 6px 12px; font-size: 13px; flex-shrink: 0;
+}
 
 #m-main { padding: 14px 12px; max-width: 640px; margin: 0 auto; }
 .hidden { display: none !important; }
@@ -36,6 +41,34 @@ body {
 .msg { font-size: 13px; margin-top: 8px; }
 .msg.ok { color: #1e7e34; }
 .msg.err { color: #c0392b; }
+
+/* 登录：微信按钮、分割线、验证码行、账户条 */
+.wechat-btn {
+  background: #07c160 !important;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.wechat-btn .wx { font-size: 19px; }
+.divider {
+  display: flex; align-items: center; gap: 10px;
+  color: #98a2ae; font-size: 12.5px; margin: 16px 0 12px;
+}
+.divider::before, .divider::after {
+  content: ""; flex: 1; height: 1px; background: #e6eaee;
+}
+.code-row { display: flex; gap: 8px; align-items: flex-start; }
+.code-row input { flex: 1; }
+.m-card .code-row .ghost-btn {
+  width: auto; flex-shrink: 0; padding: 12px 14px; font-size: 14px;
+  background: #fff; color: #0b6e6e; border: 1px solid #0b6e6e;
+}
+.m-card .code-row .ghost-btn:disabled { color: #98a2ae; border-color: #d4dbe2; }
+.hint.tips { margin: 12px 0 0; font-size: 12.5px; line-height: 1.6; }
+.account-bar {
+  background: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+.account-bar .who { font-size: 17px; font-weight: 600; display: block; }
+.account-bar .sub { color: #6b7480; font-size: 12.5px; }
 
 /* 宣教文章列表 */
 .list .article {

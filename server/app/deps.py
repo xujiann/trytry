@@ -58,6 +58,10 @@ def get_current_user(
     # L-9 整改：黑名单按 jti 判定（存储中不再落完整令牌明文）；无 jti 的旧令牌按原文兜底
     if (claims.get("jti") or credentials.credentials) in revoked_tokens:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌已登出失效")
+    # 居民端令牌（scope=portal）不得进入业务接口：居民账户不在 users 表内，
+    # 这里显式拒绝，避免有人建一个叫 "resident:1" 的业务账号来撞 sub。
+    if claims.get("scope") == "portal":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="居民端令牌不可用于业务接口")
     user = db.query(User).filter(User.username == claims["sub"]).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")

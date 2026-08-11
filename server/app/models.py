@@ -2181,3 +2181,51 @@ class ReconciliationDiff(Base):
     remote_amount: Mapped[float] = mapped_column(Float, default=0)
     detail: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 居民端账号体系：手机号验证码 / 微信网页授权登录（取代电子健康卡号+身份证核验）
+# ============================================================================
+
+
+class ResidentAccount(Base):
+    """居民账户：登录凭据（手机号/微信 openid）与患者主索引的绑定关系。
+
+    账户与档案是两件事——先登录拿到账户身份，再实名绑定到 Patient 才看得到档案。
+    未绑定的账户只能看健康宣教，这样验证码泄露也不会直接泄露他人档案。
+
+    phone / wechat_openid 用可空唯一列而非空串：SQLite 与 PostgreSQL 的唯一索引
+    都允许多个 NULL，既能让"只有微信没有手机号"的账户共存，又能靠数据库约束
+    挡住并发首登产生的重复账户（撞约束后回查既有账户即可）。
+    """
+
+    __tablename__ = "resident_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    phone: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
+    wechat_openid: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    wechat_unionid: Mapped[str] = mapped_column(String(64), default="")
+    nickname: Mapped[str] = mapped_column(String(64), default="")
+    # 实名绑定后的患者主索引；未绑定为 None
+    patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
+    # active=正常, disabled=停用（停用后令牌校验即失败）
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SmsCode(Base):
+    """短信验证码：只落散列不落明文，与口令同等对待（6位码空间小，用 PBKDF2）。"""
+
+    __tablename__ = "sms_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
+    # login=登录, bind=已登录账户绑定手机号
+    purpose: Mapped[str] = mapped_column(String(16), default="login")
+    code_hash: Mapped[str] = mapped_column(String(160))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    # 单条验证码的试错次数，超限即作废，防止对同一条码穷举
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

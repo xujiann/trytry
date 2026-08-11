@@ -7,6 +7,8 @@
 - MEDPLAT_ENV            环境标识 dev/test/prod（兼容保留）
 - MEDPLAT_ENVIRONMENT    环境标识 dev/test/prod（与 MEDPLAT_ENV 任一为 prod 即按生产处理）
 - MEDPLAT_LOG_JSON       是否输出结构化 JSON 请求日志
+- MEDPLAT_SMS_PROVIDER   居民端短信通道 console/http（console 仅打日志，非生产回显验证码）
+- MEDPLAT_WECHAT_PROVIDER 居民端微信通道 mock/official
 
 安全硬化（H4）：environment/env 为 prod 时，若 secret 或 admin_password
 仍为默认值，进程启动直接抛异常拒绝启动，防止令牌被离线伪造。
@@ -36,6 +38,26 @@ class Settings(BaseSettings):
     log_json: bool = True
     # JWT 有效期（秒）
     token_ttl_seconds: int = 8 * 3600
+
+    # ---------------- 居民端登录（手机号验证码 / 微信） ----------------
+    # 居民端令牌有效期：移动端会话比业务端长，默认 7 天
+    portal_token_ttl_seconds: int = 7 * 24 * 3600
+    # 验证码位数与有效期
+    sms_code_ttl_seconds: int = 300
+    # 兼容开关：电子健康卡号+身份证号的旧核验接口（已被账号体系取代）。
+    # 生产环境建议置 false 关闭，避免留一个免登录的证件号查询面。
+    portal_legacy_verify: bool = True
+    # 短信通道：console=不外发仅打日志（开发/演示），http=转发到短信网关
+    sms_provider: str = "console"
+    sms_gateway_url: str = ""
+    sms_api_key: str = ""
+    sms_sign_name: str = "县域医共体"
+    # 微信通道：mock=本地联调桩，official=微信公众平台网页授权
+    wechat_provider: str = "mock"
+    wechat_appid: str = ""
+    wechat_secret: str = ""
+    # 网页授权回调地址（须与公众号后台配置的域名一致）
+    wechat_redirect_uri: str = ""
 
     @property
     def is_production(self) -> bool:

@@ -1,7 +1,7 @@
 # 县域医共体信息化平台（medplat）
 
-![tests](https://img.shields.io/badge/tests-245%20passed%20%2B%204%20e2e-brightgreen)
-![coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)
+![tests](https://img.shields.io/badge/tests-342%20passed%20%2B%204%20e2e-brightgreen)
+![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)
 
 紧密型县域医共体信息化平台，依据国家卫生健康委《紧密型县域医共体信息化功能指引》（国卫办规划函〔2025〕63号）等文件建设。
 
@@ -26,7 +26,7 @@
 | 慢病管理 | 8 病种目录（分级规则/指导要点/随访周期）、建档、目录驱动智能分级、超期预警 | `/api/chronic`、`/api/chronic/disease-types` |
 | 传染病监测 | 病例报告、多点触发预警 | `/api/infectious` |
 | 决策驾驶舱 | 指标对齐《监测指标体系（2024版）》，含图表 | `/api/metrics` |
-| 居民端 | 健康档案向本人开放（双因子核验） | `/api/portal` |
+| 居民端 | 手机号验证码/微信登录 + 实名绑定，健康档案向本人开放 | `/api/portal` |
 | 远程会诊 | 申请→受理→出具意见→评价 | `/api/consultations` |
 | 家医签约 | 协议、服务包、履约记录 | `/api/contracts` |
 | 预约诊疗 | 分时段号源发布与预约/取消/核销 | `/api/appointments` |
@@ -53,7 +53,7 @@
 | 对接适配层 | HL7 v2 ADT / FHIR R4 Patient·Observation 入站转换、FHIR 导出 | `/api/integration` |
 | 集成平台 ESB | 接入方注册（令牌+限流）、消息队列重试与死信、流程编排（转换/校验/路由/落库）、成功率与积压统计 | `/api/esb` |
 | 实时消息 | WebSocket 危急值/缺药预警秒级广播、角色化任务待办中心 | `/ws/notifications`、`/api/todos` |
-| 居民端移动版 | H5 移动优先：健康宣教、双因子查档案、满意度评价 | `/m` |
+| 居民端移动版 | H5 移动优先：微信/手机号验证码登录、实名绑定、健康宣教、我的档案、满意度评价 | `/m` |
 | 医生移动工作台 | H5 移动优先：待办收件箱、危急值确认与处置、待审检查申请领取出报告、慢病随访录入、患者档案速查 | `/m/doctor` |
 | 智能化 | 50 条规则库审方（剂量/相互作用/禁忌诊断/特殊人群/肝肾提示）、处方点评要点、慢病风险评分、药品采购建议 | `/api/prescriptions`、`/api/chronic/{id}/risk`、`/api/pharmacy/purchase-suggestions` |
 | 附件服务 | 检查报告/不良事件附件：10MB限制、图片/PDF白名单、鉴权下载 | `/api/attachments` |
@@ -78,6 +78,21 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 初始管理员账号：`admin` / `admin123`（生产部署前必须修改，并通过 `MEDPLAT_SECRET` 环境变量设置令牌密钥）。
 
+### 居民端（`/m`）怎么登录
+
+居民端**没有密码**，走手机号验证码或微信授权：
+
+1. 打开 `/m` → 「我的档案」；
+2. 点「微信一键登录」（默认 mock 通道，无需公众号即可走通），或填手机号点「获取验证码」——
+   开发/演示环境（`MEDPLAT_SMS_PROVIDER=console` 且非 prod）验证码会直接回显并自动填入；
+3. 首次登录需实名绑定：填姓名 + 身份证号匹配已建档的患者。若登录手机号已登记在
+   某份档案上且**全库唯一**，则登录即自动完成绑定，跳过这步。
+
+接入真实通道只需配环境变量，业务代码不动：`MEDPLAT_SMS_PROVIDER=http` +
+`MEDPLAT_SMS_GATEWAY_URL`，`MEDPLAT_WECHAT_PROVIDER=official` + `MEDPLAT_WECHAT_APPID`/
+`MEDPLAT_WECHAT_SECRET`/`MEDPLAT_WECHAT_REDIRECT_URI`。详见
+[docs/接口对接规范.md](docs/接口对接规范.md) 附录C。
+
 数据库默认使用 SQLite（开发环境），通过 `MEDPLAT_DATABASE_URL` 环境变量可切换 PostgreSQL。
 配置统一由 pydantic-settings 读取 `MEDPLAT_*` 环境变量（见 `server/app/config.py`）。
 
@@ -85,11 +100,11 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 ```bash
 cd server
-python -m pytest tests/ -q                                        # 全量单元/接口测试（245 项通过，4 项 e2e 默认跳过）
+python -m pytest tests/ -q                                        # 全量单元/接口测试（342 项通过，4 项 e2e 默认跳过）
 python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖率报告
 ```
 
-- 当前行覆盖率 **92%**（阈值 70%），徽章值见文首；
+- 当前行覆盖率 **93%**（阈值 70%），徽章值见文首；
 - CI（`.github/workflows/ci.yml`）每次推送执行全量测试并产出 `coverage.xml`
   工件；覆盖率门禁当前为 **warning 模式**：低于 `COVERAGE_MIN`（70%）只告警不
   阻断构建，去掉门禁步骤的 `|| true` 即切换为强制门禁。
@@ -150,4 +165,7 @@ sh scripts/backup.sh /data/backups            # pg_dump 备份（建议 crontab 
   登录防爆破锁定跨实例共享（未配置时为进程内存实现，仅单实例有效）；
   WebSocket 预警广播在多实例下需接入 Redis Pub/Sub 等集中消息总线；
 - WebSocket 客户端建议使用首帧鉴权（连接后第一条文本帧发送 JWT），
-  避免令牌经 URL query 进入访问日志。
+  避免令牌经 URL query 进入访问日志；
+- 居民端必须配置真实短信/微信通道（`MEDPLAT_SMS_PROVIDER=http`、
+  `MEDPLAT_WECHAT_PROVIDER=official`），并设 `MEDPLAT_PORTAL_LEGACY_VERIFY=false`
+  关闭旧的"健康卡号+身份证号"免登录查询接口。

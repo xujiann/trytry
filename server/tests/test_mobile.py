@@ -37,6 +37,15 @@ def test_mobile_page_served(client):
     assert client.get("/static/m/m.css").status_code == 200
 
 
+def test_mobile_login_ui_present(client):
+    """居民端登录改版：页面应提供微信登录与手机号验证码两条入口，且不再索取健康卡号。"""
+    page = client.get("/m").text
+    assert "微信一键登录" in page
+    assert 'id="btn-send-code"' in page and 'id="in-phone"' in page
+    assert 'id="bind-form"' in page  # 实名绑定
+    assert "电子健康卡号" not in page
+
+
 def test_mobile_health_articles_public(client, admin_headers):
     """健康宣教：发布后无需登录即可在居民端读取。"""
     art = client.post(

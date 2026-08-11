@@ -52,21 +52,30 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
 
 
-def create_token(username: str, role: str) -> str:
+def create_token(
+    username: str,
+    role: str,
+    extra: dict | None = None,
+    ttl_seconds: int | None = None,
+) -> str:
+    """签发 HS256 令牌。
+
+    `extra` 用于附加声明（居民端令牌用它携带 scope=portal 与 account_id，
+    业务端 get_current_user 见到 scope=portal 直接拒绝，两套身份互不越界）；
+    `ttl_seconds` 覆盖默认有效期（居民端移动会话更长）。
+    """
     header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    payload = _b64url(
-        json.dumps(
-            {
-                "sub": username,
-                "role": role,
-                # 签发时刻（浮点秒）：与用户改密基线比较，改密即吊销此前全部令牌（M-4）
-                "iat": time.time(),
-                "exp": int(time.time()) + TOKEN_TTL_SECONDS,
-                # 唯一标识：保证同秒签发的令牌互不相同，登出黑名单可精确作废单个令牌
-                "jti": os.urandom(8).hex(),
-            }
-        ).encode()
-    )
+    claims = {
+        "sub": username,
+        "role": role,
+        # 签发时刻（浮点秒）：与用户改密基线比较，改密即吊销此前全部令牌（M-4）
+        "iat": time.time(),
+        "exp": int(time.time()) + (ttl_seconds or TOKEN_TTL_SECONDS),
+        # 唯一标识：保证同秒签发的令牌互不相同，登出黑名单可精确作废单个令牌
+        "jti": os.urandom(8).hex(),
+    }
+    claims.update(extra or {})
+    payload = _b64url(json.dumps(claims).encode())
     signature = _b64url(hmac.new(SECRET_KEY.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest())
     return f"{header}.{payload}.{signature}"
 
