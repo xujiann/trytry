@@ -140,6 +140,15 @@ async def lifespan(_: FastAPI):
             if seed["code"] not in existing_diseases:
                 db.add(InfectiousDisease(**seed))
         db.commit()
+        # 块2：审方规则库种子化（50 条常用药品规则，幂等；已存在编码不覆盖本地调整）
+        from .data.drug_rules_seed import SEED_DRUG_RULES
+        from .models import DrugRule
+
+        existing_rules = {code for (code,) in db.query(DrugRule.drug_code).all()}
+        for seed in SEED_DRUG_RULES:
+            if seed["drug_code"] not in existing_rules:
+                db.add(DrugRule(**seed))
+        db.commit()
         # 块1：慢病病种目录种子化（8 个县域重点病种，含分级规则/指导要点/随访周期）
         from .chronic_seed import SEED_CHRONIC_DISEASE_TYPES
         from .models import ChronicDiseaseType

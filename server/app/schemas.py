@@ -178,6 +178,10 @@ class DrugRuleCreate(BaseModel):
     contraindicated_diagnoses: str = ""
     # 特殊人群，逗号分隔，取值 pregnant/child/elderly
     special_groups: str = ""
+    # 肝肾功能提示（不拦截，随处方返回供剂量调整参考）
+    renal_hepatic_note: str = ""
+    # 处方点评要点（事后点评规则化依据）
+    review_points: str = ""
 
 
 class DrugRuleOut(DrugRuleCreate):
@@ -208,6 +212,8 @@ class PrescriptionOut(BaseModel):
     status: str
     review_comment: str
     items: list[PrescriptionItemIn]
+    # 块2：非拦截性提示（肝肾功能剂量调整等），不影响审方状态
+    advisories: list[str] = []
 
     model_config = {"from_attributes": True}
 

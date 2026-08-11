@@ -845,8 +845,10 @@ async function renderRx() {
         <input name="dose_unit" placeholder="单位" value="mg" style="min-width:70px">
         <button>新增规则</button>
       </form>
-      ${table(["药品编码", "日剂量上限"], rules, (r) =>
-        `<tr><td>${esc(r.drug_code)}</td><td>${r.max_daily_dose}${esc(r.dose_unit)}</td></tr>`)}</div>
+      ${table(["药品编码", "日剂量上限", "相互作用", "禁忌诊断", "特殊人群", "肝肾功能提示"], rules, (r) =>
+        `<tr><td>${esc(r.drug_code)}</td><td>${r.max_daily_dose}${esc(r.dose_unit)}</td>
+         <td>${esc(r.interactions) || "—"}</td><td>${esc(r.contraindicated_diagnoses) || "—"}</td>
+         <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td></tr>`)}</div>
     <div class="panel"><h3>处方队列</h3>${table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
       const [text, color] = RX_STATUS[p.status] || [p.status, ""];
       let actions = p.status === "pending_review"
@@ -874,7 +876,10 @@ async function renderRx() {
         diagnosis_name: f.get("diagnosis_name"),
         items: [{ drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
           daily_dose: Number(f.get("daily_dose")), days: Number(f.get("days")) }] }) });
-      setMsg("#rx-msg", p.status === "auto_passed" ? "系统审通过" : `转入药师审核：${p.review_comment}`, p.status === "auto_passed");
+      const base = p.status === "auto_passed" ? "系统审通过" : `转入药师审核：${p.review_comment}`;
+      // 块2：肝肾功能提示为非拦截提醒，附在审方结论之后
+      const tips = (p.advisories || []).length ? `｜${p.advisories.join("；")}` : "";
+      setMsg("#rx-msg", base + tips, p.status === "auto_passed");
       route();
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
@@ -890,6 +895,12 @@ async function renderRx() {
   $("#page-body").onclick = async (e) => {
     const { approve, id, rxcomment } = e.target.dataset;
     if (rxcomment) {
+      // 块2：点评规则化——先调阅该方药品的点评要点与肝肾提示，再作结论
+      try {
+        const rp = await api(`/api/prescriptions/${rxcomment}/review-points`);
+        const lines = rp.items.map((i) => `${i.drug_name}（${i.drug_code}）${i.dose_exceeded ? "【日剂量超限】" : ""}\n  要点：${i.review_points || "规则库未维护"}\n  肝肾：${i.renal_hepatic_note || "—"}`);
+        alert(`处方 ${rp.prescription_id} 点评要点（规则覆盖 ${rp.rule_coverage_pct}%）：\n\n${lines.join("\n")}`);
+      } catch (err) { setMsg("#rx-msg", err.message, false); }
       const reasonable = confirm("点评结论：该处方是否合理？（确定=合理，取消=不合理）");
       const body = { grade: reasonable ? "reasonable" : "unreasonable" };
       if (!reasonable) {

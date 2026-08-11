@@ -125,6 +125,7 @@ def create_prescription(
         names = {item.drug_name for item in body.items if item.drug_code == code}
         violations.append(f"同方重复药品：{'/'.join(sorted(names))}（{code}）出现多次，需药师人工审核")
 
+    advisories: list[str] = []
     patient_groups = _patient_groups(db, patient)
     names_by_code = {item.drug_code: item.drug_name for item in body.items}
     seen_pairs: set[frozenset[str]] = set()
@@ -160,6 +161,11 @@ def create_prescription(
             violations.append(
                 f"特殊人群用药：{item.drug_name} 对{GROUP_NAMES.get(group, group)}需慎用，需药师人工审核"
             )
+        # 块2：肝肾功能提示为非拦截性提醒，随处方返回供医师调整剂量，不改变审方状态
+        if rule.renal_hepatic_note:
+            note = f"{item.drug_name} 肝肾功能提示：{rule.renal_hepatic_note}"
+            if note not in advisories:
+                advisories.append(note)
 
     prescription = Prescription(
         patient_id=body.patient_id,
@@ -175,6 +181,7 @@ def create_prescription(
         db.add(PrescriptionItem(prescription_id=prescription.id, **item.model_dump()))
     db.commit()
     db.refresh(prescription)
+    prescription.advisories = advisories
     return prescription
 
 
@@ -223,6 +230,48 @@ class RxCommentCreate(BaseModel):
     grade: str = Field(pattern="^(reasonable|unreasonable)$")
     issues: str = ""
     comment: str = ""
+
+
+@router.get("/{prescription_id}/review-points", dependencies=[Depends(get_current_user)])
+def prescription_review_points(prescription_id: int, db: Session = Depends(get_db)):
+    """块2：处方点评规则化——按处方内药品汇总规则库点评要点与肝肾功能提示。
+
+    药师点评前调阅本接口，把「凭经验点评」变为「按规则点评」：
+    - review_points：该药的点评要点（剂量/疗程/联用/特殊人群等核对项）
+    - renal_hepatic_note：肝肾功能剂量调整提示
+    - dose_exceeded：本方日剂量是否已超规则上限（系统审拦截项复核）
+    - no_rule：规则库中无该药规则，提示补充维护
+    """
+    rx = db.get(Prescription, prescription_id)
+    if rx is None:
+        raise HTTPException(status_code=404, detail="处方不存在")
+    items = db.query(PrescriptionItem).filter(PrescriptionItem.prescription_id == rx.id).all()
+    points, uncovered = [], 0
+    for item in items:
+        rule = db.query(DrugRule).filter(DrugRule.drug_code == item.drug_code).first()
+        if rule is None:
+            uncovered += 1
+        points.append(
+            {
+                "drug_code": item.drug_code,
+                "drug_name": item.drug_name,
+                "daily_dose": item.daily_dose,
+                "max_daily_dose": rule.max_daily_dose if rule else None,
+                "dose_unit": rule.dose_unit if rule else "",
+                "dose_exceeded": bool(rule and item.daily_dose > rule.max_daily_dose),
+                "review_points": rule.review_points if rule else "",
+                "renal_hepatic_note": rule.renal_hepatic_note if rule else "",
+                "no_rule": rule is None,
+            }
+        )
+    return {
+        "prescription_id": rx.id,
+        "diagnosis_name": rx.diagnosis_name,
+        "status": rx.status,
+        "system_review_comment": rx.review_comment,
+        "items": points,
+        "rule_coverage_pct": round((len(items) - uncovered) * 100.0 / len(items), 2) if items else 0.0,
+    }
 
 
 @router.post(

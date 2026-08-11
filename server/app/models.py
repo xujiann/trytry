@@ -226,6 +226,10 @@ class DrugRule(Base):
     contraindicated_diagnoses: Mapped[str] = mapped_column(String(512), default="")
     # 特殊人群（逗号分隔：pregnant,child,elderly）：患者命中即转药师审
     special_groups: Mapped[str] = mapped_column(String(64), default="")
+    # 块2：肝肾功能提示（不拦截，开方与点评时随处方返回，供剂量调整参考）
+    renal_hepatic_note: Mapped[str] = mapped_column(String(512), default="")
+    # 块2：处方点评要点（事后点评规则化依据）
+    review_points: Mapped[str] = mapped_column(String(512), default="")
 
 
 class Prescription(Base):
