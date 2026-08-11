@@ -380,6 +380,7 @@ async function renderContracts() {
       if (term) { await api(`/api/contracts/${term}/terminate`, { method: "POST" }); route(); }
     } catch (err) { setMsg("#ct-msg", err.message, false); }
   };
+  await drawHomeVisits();  // 块4⑨ 上门服务调度
 }
 
 async function renderAppointments() {
@@ -492,6 +493,7 @@ async function renderPerformance() {
     if (!period) return;
     downloadCsv(`/api/reports/operations/export?period=${encodeURIComponent(period)}`, `operations_report_${period}.csv`, "#rpt-msg");
   };
+  await drawImprovementTasks();  // 块4㉟ 绩效自评改进
 }
 
 async function renderCssd() {
@@ -538,6 +540,7 @@ async function renderCssd() {
       route();
     } catch (err) { setMsg("#cssd-msg", err.message, false); }
   };
+  await drawCssdCosts();  // 块4⑥ 消毒供应成本核算
 }
 
 async function renderMedwaste() {
@@ -1404,6 +1407,7 @@ async function renderTcm() {
     postAction("/api/tcm/dispense-orders", body, "#tcm-msg");
   };
   $("#page-body").onclick = (e) => { if (e.target.dataset.adv) postAction(`/api/tcm/dispense-orders/${e.target.dataset.adv}/advance`, null, "#tcm-msg"); };
+  await drawTcmPreparations();  // 块4⑭ 中药制剂管理
 }
 
 async function renderMedication() {
@@ -1547,6 +1551,7 @@ async function renderEducation() {
     const score = prompt("考核得分（0-100）"); if (score === null) return;
     postAction(`/api/education/courses/${id}/exam`, { score: Number(score) }, "#edu-msg");
   };
+  await drawEduGaps();  // 块4⑳㉑ 课件资源与适宜技术实训
 }
 
 async function renderEldercare() {
@@ -1664,6 +1669,7 @@ async function renderMaternal() {
       return postAction(`/api/maternal/children/${d.hrtoggle}/high-risk`, { high_risk: toHigh, risk_note: note }, "#mat-msg");
     }
   };
+  await drawPrenatalScreenings();  // 块4㉔ 产前筛查与诊断
 }
 
 async function renderVaccination() {
@@ -2721,6 +2727,336 @@ async function renderKnowledge() {
         route();
       }
     } catch (err) { setMsg("#kb-msg", err.message, false); }
+  };
+}
+
+/* ================= 块4：细目补齐（合并进既有页面的追加面板） ================= */
+
+/* 在当前页面尾部追加一个面板容器，返回该容器（事件在容器内自绑，不干扰原页面） */
+function appendSection(html) {
+  const holder = document.createElement("div");
+  holder.innerHTML = html;
+  $("#page-body").appendChild(holder);
+  return holder;
+}
+
+/* ⑭ 中药制剂管理：配方 / 批次 / 效期预警（挂中医药服务页） */
+const DOSAGE_FORMS = { pill: "丸剂", powder: "散剂", paste: "膏剂", granule: "颗粒剂", decoction: "合剂/汤剂" };
+
+async function drawTcmPreparations() {
+  const [formulas, batches, expiring] = await Promise.all([
+    api("/api/tcm/formulas"), api("/api/tcm/preparation-batches"),
+    api("/api/tcm/preparation-batches/expiring?days=60")]);
+  const holder = appendSection(`
+    <div class="panel"><h3>⑭ 中药制剂配方（药师/中医师维护）</h3>
+      <form class="inline" id="tf-form">
+        <input name="code" placeholder="制剂编码" required>
+        <input name="name" placeholder="制剂名称" required>
+        <select name="dosage_form">${Object.entries(DOSAGE_FORMS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="composition" placeholder="处方组成" style="min-width:200px">
+        <input name="indication" placeholder="适应症">
+        <input name="shelf_life_months" type="number" value="12" min="1" style="min-width:90px" title="有效期（月）">
+        <button>新增配方</button></form>
+      ${table(["ID", "编码", "名称", "剂型", "组成", "适应症", "有效期(月)"], formulas, (f) =>
+        `<tr><td>${f.id}</td><td><span class="tag">${esc(f.code)}</span></td><td>${esc(f.name)}</td>
+         <td>${esc(f.dosage_form_name)}</td><td>${esc(f.composition) || "—"}</td><td>${esc(f.indication) || "—"}</td>
+         <td>${f.shelf_life_months}</td></tr>`)}</div>
+    ${expiring.length ? `<div class="panel" style="border-left:4px solid #b26a00"><h3>⚠ 制剂效期预警（60天内到期/已过期 ${expiring.length}）</h3>${
+      table(["批号", "制剂", "效期", "状态"], expiring, (b) =>
+        `<tr><td>${esc(b.batch_no)}</td><td>${b.formula_id}</td>
+         <td><span class="tag ${b.expired ? "red" : "orange"}">${esc(b.expire_date)}</span></td><td>${esc(b.status)}</td></tr>`)}</div>` : ""}
+    <div class="panel"><h3>制剂批次（效期缺省按配方有效期推算；过期批次禁止发放）</h3>
+      <form class="inline" id="tb-form">
+        <input name="formula_id" type="number" placeholder="配方ID" required>
+        <input name="batch_no" placeholder="批号" required>
+        <input name="org_id" type="number" placeholder="生产机构ID" required>
+        <input name="quantity" type="number" placeholder="产量" required min="1">
+        <input name="produced_date" placeholder="生产日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <input name="expire_date" placeholder="效期（可空）">
+        <button>投产建批</button></form>
+      <p class="msg" id="tp-msg"></p>
+      ${table(["ID", "批号", "配方", "数量", "生产日期", "效期", "状态", "操作"], batches, (b) =>
+        `<tr><td>${b.id}</td><td>${esc(b.batch_no)}</td><td>${b.formula_id}</td><td>${b.quantity}${esc(b.unit)}</td>
+         <td>${esc(b.produced_date)}</td><td><span class="tag ${b.expired ? "red" : ""}">${esc(b.expire_date)}</span></td>
+         <td>${esc(b.status)}</td>
+         <td>${b.status === "produced" ? `<button class="btn secondary" data-release="${b.id}">发放</button>` : "—"}</td></tr>`)}</div>`);
+  holder.querySelector("#tf-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/tcm/formulas", formJson(e.target, ["shelf_life_months"]), "#tp-msg");
+  };
+  holder.querySelector("#tb-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/tcm/preparation-batches", formJson(e.target, ["formula_id", "org_id", "quantity"]), "#tp-msg");
+  };
+  holder.onclick = async (e) => {
+    const { release } = e.target.dataset;
+    if (!release) return;
+    try { await api(`/api/tcm/preparation-batches/${release}/release`, { method: "POST" }); route(); }
+    catch (err) { setMsg("#tp-msg", err.message, false); }
+  };
+}
+
+/* ⑥ 消毒供应成本核算（挂消毒供应页） */
+const CSSD_COST_TYPES = { labor: "人工", material: "耗材", energy: "能耗", equipment: "设备折旧", other: "其他" };
+
+async function drawCssdCosts() {
+  const stats = await api("/api/cssd/cost-stats");
+  const holder = appendSection(`
+    <div class="panel"><h3>⑥ 消毒供应成本核算</h3>
+      <div class="cards">
+        <div class="card"><div class="label">成本合计</div><div class="value">${stats.total_cost}</div></div>
+        <div class="card"><div class="label">灭菌件数</div><div class="value">${stats.total_quantity}</div></div>
+        <div class="card"><div class="label">整体单件成本</div><div class="value">${stats.overall_unit_cost}</div></div></div>
+      <form class="inline" id="cost-form">
+        <input name="batch_id" type="number" placeholder="批次ID" required>
+        <select name="cost_type">${Object.entries(CSSD_COST_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="amount" type="number" step="any" placeholder="金额" required>
+        <input name="note" placeholder="备注">
+        <button>登记成本项</button></form>
+      <p class="msg" id="cost-msg"></p>
+      <p style="font-size:13px">成本构成：${Object.entries(stats.by_cost_type).map(([k, v]) =>
+        `<span class="tag" style="margin-right:6px">${esc(v.name)} ${v.amount}</span>`).join("") || "暂无"}</p>
+      ${table(["批次", "批号", "物品", "件数", "总成本", "单件成本"], stats.batches, (b) =>
+        `<tr><td>${b.batch_id}</td><td>${esc(b.batch_no)}</td><td>${esc(b.item_name)}</td><td>${b.quantity}</td>
+         <td>${b.total_cost}</td><td><span class="tag">${b.unit_cost}</span></td></tr>`)}</div>`);
+  holder.querySelector("#cost-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/cssd/cost-items", formJson(e.target, ["batch_id", "amount"]), "#cost-msg");
+  };
+}
+
+/* ⑳ 课件资源 + ㉑ 适宜技术实训（挂远程医学教育页） */
+const MATERIAL_TYPES = { slide: "课件", video: "视频", doc: "文档", link: "外链" };
+
+async function drawEduGaps() {
+  const [mstats, plans] = await Promise.all([
+    api("/api/education/material-stats"), api("/api/education/training-plans")]);
+  const holder = appendSection(`
+    <div class="panel"><h3>⑳ 课件资源管理（点播总量 ${mstats.total_plays}，课件 ${mstats.total_materials} 个）</h3>
+      <form class="inline" id="cm-form">
+        <input name="course_id" type="number" placeholder="课程ID" required>
+        <input name="title" placeholder="课件标题" required style="min-width:200px">
+        <select name="material_type">${Object.entries(MATERIAL_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="url" placeholder="外链地址（可空）">
+        <button>新增课件</button></form>
+      <form class="inline" id="cm-query"><input name="course_id" type="number" placeholder="课程ID" required><button>查课件</button></form>
+      <form class="inline" id="cm-att"><input name="material_id" type="number" placeholder="课件ID" required>
+        <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" required>
+        <button>上传附件</button></form>
+      <p class="msg" id="cm-msg"></p><div id="cm-list"></div>
+      <h4 style="margin-top:10px">点播排行</h4>
+      ${table(["课件ID", "标题", "类型", "点播量"], mstats.top, (m) =>
+        `<tr><td>${m.id}</td><td>${esc(m.title)}</td><td>${esc(m.material_type_name)}</td>
+         <td><span class="tag">${m.play_count}</span></td></tr>`)}</div>
+    <div class="panel"><h3>㉑ 适宜技术实训（计划 → 报名 → 考核）</h3>
+      <form class="inline" id="tp-plan-form">
+        <input name="title" placeholder="实训主题" required style="min-width:180px">
+        <input name="org_id" type="number" placeholder="承办机构ID" required>
+        <input name="technique_id" type="number" placeholder="适宜技术ID（可空）">
+        <input name="plan_date" placeholder="实训日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <input name="capacity" type="number" value="30" min="1" style="min-width:80px">
+        <input name="trainer" placeholder="带教老师">
+        <button>发布计划</button></form>
+      <p class="msg" id="tplan-msg"></p>
+      ${table(["ID", "主题", "日期", "带教", "名额", "已报", "余额", "状态", "操作"], plans, (p) =>
+        `<tr><td>${p.id}</td><td>${esc(p.title)}</td><td>${esc(p.plan_date)}</td><td>${esc(p.trainer) || "—"}</td>
+         <td>${p.capacity}</td><td>${p.enrolled}</td><td>${p.remaining}</td><td>${esc(p.status)}</td>
+         <td><button class="btn secondary" data-enroll="${p.id}">报名</button>
+             <button class="btn secondary" data-unenroll="${p.id}">退报</button>
+             <button class="btn secondary" data-assess="${p.id}">录考核</button>
+             <button class="btn secondary" data-roster="${p.id}">名单成绩</button></td></tr>`)}
+      <div id="tp-roster"></div></div>`);
+  const drawMaterials = async (courseId) => {
+    const list = await api(`/api/education/courses/${courseId}/materials`);
+    holder.querySelector("#cm-list").innerHTML = table(["ID", "标题", "类型", "附件", "点播", "操作"], list, (m) =>
+      `<tr><td>${m.id}</td><td>${esc(m.title)}</td><td>${esc(m.material_type_name)}</td><td>${m.attachments}</td>
+       <td>${m.play_count}</td><td><button class="btn secondary" data-play="${m.id}">点播</button></td></tr>`);
+  };
+  holder.querySelector("#cm-form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    postAction(`/api/education/courses/${f.get("course_id")}/materials`, {
+      title: f.get("title"), material_type: f.get("material_type"), url: f.get("url") || "" }, "#cm-msg");
+  };
+  holder.querySelector("#cm-query").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawMaterials(new FormData(e.target).get("course_id")); }
+    catch (err) { setMsg("#cm-msg", err.message, false); }
+  };
+  holder.querySelector("#cm-att").onsubmit = async (e) => {
+    e.preventDefault();
+    const materialId = new FormData(e.target).get("material_id");
+    try {
+      await uploadAttachment("course_material", materialId, e.target.querySelector("input[type=file]"));
+      setMsg("#cm-msg", "课件附件已上传");
+    } catch (err) { setMsg("#cm-msg", err.message, false); }
+  };
+  holder.querySelector("#tp-plan-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/education/training-plans", formJson(e.target, ["org_id", "technique_id", "capacity"]), "#tplan-msg");
+  };
+  holder.onclick = async (e) => {
+    const { play, enroll, unenroll, assess, roster } = e.target.dataset;
+    try {
+      if (play) { await api(`/api/education/materials/${play}/play`, { method: "POST" }); return route(); }
+      if (enroll) { await api(`/api/education/training-plans/${enroll}/enroll`, { method: "POST" }); return route(); }
+      if (unenroll) { await api(`/api/education/training-plans/${unenroll}/cancel-enroll`, { method: "POST" }); return route(); }
+      if (assess) {
+        const userId = prompt("学员用户ID"); if (!userId) return;
+        const score = prompt("考核得分（0-100）"); if (score === null) return;
+        return postAction(`/api/education/training-plans/${assess}/assessments`, {
+          user_id: Number(userId), score: Number(score), comment: prompt("评语") || "" }, "#tplan-msg");
+      }
+      if (roster) {
+        const [list, scores] = await Promise.all([
+          api(`/api/education/training-plans/${roster}/enrollments`),
+          api(`/api/education/training-plans/${roster}/assessments`)]);
+        holder.querySelector("#tp-roster").innerHTML =
+          `<h4>计划 ${esc(roster)} 报名名单（合格率 ${scores.pass_rate_pct}%）</h4>` +
+          table(["用户ID", "账号", "姓名", "报名状态", "成绩", "是否合格"], list, (r) => {
+            const s = scores.items.find((i) => i.user_id === r.user_id);
+            return `<tr><td>${r.user_id}</td><td>${esc(r.username)}</td><td>${esc(r.full_name) || "—"}</td>
+              <td>${esc(r.status)}</td><td>${s ? s.score : "—"}</td>
+              <td>${s ? (s.passed ? '<span class="tag green">合格</span>' : '<span class="tag red">不合格</span>') : "—"}</td></tr>`;
+          });
+      }
+    } catch (err) { setMsg("#tplan-msg", err.message, false); }
+  };
+}
+
+/* ㉔ 产前筛查与诊断（挂妇幼保健页） */
+const SCREEN_TYPES = { down: "唐氏血清学筛查", nipt: "无创产前基因检测", ultrasound: "超声结构筛查", diagnosis: "产前诊断" };
+const SCREEN_RESULTS = { low_risk: ["低风险", "green"], high_risk: ["高风险", "red"], critical: ["临界风险", "orange"] };
+
+async function drawPrenatalScreenings() {
+  const [screenings, stats] = await Promise.all([
+    api("/api/maternal/screenings"), api("/api/maternal/screening-stats")]);
+  const holder = appendSection(`
+    <div class="panel"><h3>㉔ 产前筛查与诊断（高风险/临界风险自动标记孕产妇高危）</h3>
+      <div class="cards">
+        <div class="card"><div class="label">筛查总数</div><div class="value">${stats.total}</div></div>
+        <div class="card"><div class="label">高危检出率</div><div class="value${stats.high_risk_detect_rate_pct > 0 ? " warn" : ""}">${stats.high_risk_detect_rate_pct}%</div></div></div>
+      <form class="inline" id="ps-form">
+        <input name="record_id" type="number" placeholder="孕产妇档案ID" required>
+        <select name="screen_type">${Object.entries(SCREEN_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="screen_date" placeholder="筛查日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <input name="gest_week" type="number" placeholder="孕周" style="min-width:80px">
+        <select name="result">${Object.entries(SCREEN_RESULTS).map(([v, [t]]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="indicator" placeholder="指标值">
+        <input name="conclusion" placeholder="结论建议" style="min-width:160px">
+        <button>登记筛查</button></form>
+      <p class="msg" id="ps-msg"></p>
+      ${table(["ID", "档案", "项目", "日期", "孕周", "结论", "指标", "高危标记"], screenings, (s) => {
+        const [text, color] = SCREEN_RESULTS[s.result] || [s.result, ""];
+        return `<tr><td>${s.id}</td><td>${s.record_id}</td><td>${esc(s.screen_type_name)}</td><td>${esc(s.screen_date)}</td>
+          <td>${s.gest_week ?? "—"}</td><td><span class="tag ${color}">${text}</span></td><td>${esc(s.indicator) || "—"}</td>
+          <td>${s.flagged_high_risk ? '<span class="tag red">已标记高危</span>' : "—"}</td></tr>`;
+      })}</div>`);
+  holder.querySelector("#ps-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/maternal/screenings", formJson(e.target, ["record_id", "gest_week"]), "#ps-msg");
+  };
+}
+
+/* ㉟ 绩效自评改进（挂绩效考核页） */
+const TASK_STATUS = { open: ["待整改", "orange"], in_progress: ["整改中", ""], completed: ["已完成待确认", "orange"], verified: ["已确认关闭", "green"] };
+
+async function drawImprovementTasks() {
+  const [tasks, stats] = await Promise.all([
+    api("/api/performance/improvements"), api("/api/performance/improvement-stats")]);
+  const holder = appendSection(`
+    <div class="panel"><h3>㉟ 绩效自评改进（问题 → 责任人 → 期限 → 完成确认）</h3>
+      <div class="cards">
+        <div class="card"><div class="label">整改任务</div><div class="value">${stats.total}</div></div>
+        <div class="card"><div class="label">超期未办</div><div class="value${stats.overdue ? " warn" : ""}">${stats.overdue}</div></div>
+        <div class="card"><div class="label">闭环率</div><div class="value">${stats.closed_rate_pct}%</div></div></div>
+      <form class="inline" id="imp-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="indicator_key" placeholder="关联指标key（可空）">
+        <input name="problem" placeholder="发现问题" required style="min-width:200px">
+        <input name="owner_name" placeholder="责任人" required>
+        <input name="due_date" placeholder="整改期限 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <button>下达整改</button></form>
+      <p class="msg" id="imp-msg"></p>
+      ${table(["ID", "机构", "问题", "责任人", "期限", "状态", "措施/结果", "操作"], tasks, (t) => {
+        const [text, color] = TASK_STATUS[t.status] || [t.status, ""];
+        const actions = t.status === "completed"
+          ? `<button class="btn secondary" data-impok="${t.id}">确认关闭</button>
+             <button class="btn danger" data-impno="${t.id}">退回</button>`
+          : t.status === "verified" ? "—"
+          : `<button class="btn secondary" data-impprog="${t.id}">登记进展</button>
+             <button class="btn secondary" data-impdone="${t.id}">提交完成</button>`;
+        return `<tr><td>${t.id}</td><td>${t.org_id}</td><td>${esc(t.problem)}</td><td>${esc(t.owner_name)}</td>
+          <td>${t.overdue ? `<span class="tag red">${esc(t.due_date)} 超期</span>` : esc(t.due_date)}</td>
+          <td><span class="tag ${color}">${text}</span></td>
+          <td>${esc(t.completion_note || t.measures) || "—"}</td><td>${actions}</td></tr>`;
+      })}</div>`);
+  holder.querySelector("#imp-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/performance/improvements", formJson(e.target, ["org_id"]), "#imp-msg");
+  };
+  holder.onclick = async (e) => {
+    const { impprog, impdone, impok, impno } = e.target.dataset;
+    try {
+      if (impprog) return postAction(`/api/performance/improvements/${impprog}/progress`, { measures: prompt("整改措施") || "" }, "#imp-msg");
+      if (impdone) {
+        const note = prompt("整改结果说明（必填）"); if (!note) return;
+        return postAction(`/api/performance/improvements/${impdone}/progress`, { complete: true, completion_note: note }, "#imp-msg");
+      }
+      if (impok) return postAction(`/api/performance/improvements/${impok}/verify`, { approve: true, comment: prompt("确认意见") || "" }, "#imp-msg");
+      if (impno) return postAction(`/api/performance/improvements/${impno}/verify`, { approve: false, comment: prompt("退回理由") || "" }, "#imp-msg");
+    } catch (err) { setMsg("#imp-msg", err.message, false); }
+  };
+}
+
+/* ⑨ 上门服务调度（挂家医签约页） */
+const VISIT_SERVICES = { nursing: "上门护理", doctor: "上门诊疗", rehab: "康复指导", sampling: "上门采样" };
+const VISIT_STATUS = { applied: ["待派单", "orange"], dispatched: ["已派单", ""], completed: ["已完成", "green"], cancelled: ["已取消", "red"] };
+
+async function drawHomeVisits() {
+  const [orders, stats] = await Promise.all([api("/api/homevisits"), api("/api/homevisits/stats")]);
+  const holder = appendSection(`
+    <div class="panel"><h3>⑨ 送医送护上门（申请 → 派单 → 完成；自动关联履约中家医签约）</h3>
+      <div class="cards">
+        <div class="card"><div class="label">上门工单</div><div class="value">${stats.total}</div></div>
+        <div class="card"><div class="label">签约关联率</div><div class="value">${stats.contract_linked_ratio_pct}%</div></div></div>
+      <form class="inline" id="hv-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="org_id" type="number" placeholder="服务机构ID" required>
+        <select name="service_type">${Object.entries(VISIT_SERVICES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="demand" placeholder="服务需求" style="min-width:180px">
+        <input name="address" placeholder="上门地址" style="min-width:160px">
+        <input name="expect_date" placeholder="期望日期 YYYY-MM-DD">
+        <button>提交申请</button></form>
+      <p class="msg" id="hv-msg"></p>
+      ${table(["ID", "患者", "签约", "服务", "需求", "状态", "上门人员", "操作"], orders, (o) => {
+        const [text, color] = VISIT_STATUS[o.status] || [o.status, ""];
+        const actions = o.status === "applied"
+          ? `<button class="btn secondary" data-hvdis="${o.id}">派单</button>
+             <button class="btn danger" data-hvcancel="${o.id}">取消</button>`
+          : o.status === "dispatched"
+          ? `<button class="btn secondary" data-hvdone="${o.id}">完成</button>` : "—";
+        return `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${o.contract_id ?? "—"}</td>
+          <td>${esc(o.service_type_name)}</td><td>${esc(o.demand) || "—"}</td>
+          <td><span class="tag ${color}">${text}</span></td><td>${esc(o.assignee_name) || "—"}</td><td>${actions}</td></tr>`;
+      })}</div>`);
+  holder.querySelector("#hv-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/homevisits", formJson(e.target, ["patient_id", "org_id"]), "#hv-msg");
+  };
+  holder.onclick = async (e) => {
+    const { hvdis, hvdone, hvcancel } = e.target.dataset;
+    try {
+      if (hvdis) {
+        const name = prompt("上门人员姓名"); if (!name) return;
+        return postAction(`/api/homevisits/${hvdis}/dispatch`, { assignee_name: name }, "#hv-msg");
+      }
+      if (hvdone) {
+        const note = prompt("服务记录（必填）"); if (!note) return;
+        return postAction(`/api/homevisits/${hvdone}/complete`, { service_note: note }, "#hv-msg");
+      }
+      if (hvcancel) return postAction(`/api/homevisits/${hvcancel}/cancel`, null, "#hv-msg");
+    } catch (err) { setMsg("#hv-msg", err.message, false); }
   };
 }
 

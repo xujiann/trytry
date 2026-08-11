@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import AdverseEvent, Attachment, ExamReport, User
+from ..models import AdverseEvent, Attachment, CourseMaterial, ExamReport, User
 
 router = APIRouter(prefix="/api/attachments", tags=["附件"], dependencies=[Depends(get_current_user)])
 
@@ -28,6 +28,8 @@ _OWNERS: dict[str, tuple[type, tuple[str, ...]]] = {
         AdverseEvent,
         ("doctor", "pharmacist", "public_health", "operator", "director"),
     ),
+    # 块4⑳：课件资源附件（课件/视频/文档）
+    "course_material": (CourseMaterial, ("director", "public_health", "operator", "doctor")),
 }
 
 

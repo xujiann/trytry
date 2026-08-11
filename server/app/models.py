@@ -1793,3 +1793,201 @@ class QcRule(Base):
     severity: Mapped[str] = mapped_column(String(8), default="error", index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 块4：指引细目补齐（⑭中药制剂 / ⑥消毒成本 / ⑳课件资源 / ㉑实训 /
+#       ㉔产前筛查 / ㉟绩效整改 / ⑨上门服务）
+# ============================================================================
+
+
+class TcmFormula(Base):
+    """⑭中药制剂配方：院内制剂的处方组成、工艺与适应症（编码唯一）。"""
+
+    __tablename__ = "tcm_formulas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # 剂型：pill=丸剂, powder=散剂, paste=膏剂, granule=颗粒剂, decoction=合剂/汤剂
+    dosage_form: Mapped[str] = mapped_column(String(16), default="decoction", index=True)
+    composition: Mapped[str] = mapped_column(String(1024), default="")
+    process: Mapped[str] = mapped_column(String(1024), default="")
+    indication: Mapped[str] = mapped_column(String(512), default="")
+    # 有效期（月），批次生产时据此推算效期
+    shelf_life_months: Mapped[int] = mapped_column(Integer, default=12)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    batches: Mapped[list["TcmPreparationBatch"]] = relationship(back_populates="formula")
+
+
+class TcmPreparationBatch(Base):
+    """⑭中药制剂批次：批号、产量、生产与效期，过期批次禁止发放。"""
+
+    __tablename__ = "tcm_preparation_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    formula_id: Mapped[int] = mapped_column(ForeignKey("tcm_formulas.id"), index=True)
+    batch_no: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    unit: Mapped[str] = mapped_column(String(16), default="剂")
+    produced_date: Mapped[str] = mapped_column(String(10), default="")
+    expire_date: Mapped[str] = mapped_column(String(10), default="", index=True)
+    # produced=已生产, released=已发放, recalled=已召回
+    status: Mapped[str] = mapped_column(String(16), default="produced", index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    formula: Mapped[TcmFormula] = relationship(back_populates="batches")
+
+
+class CssdCostItem(Base):
+    """⑥消毒供应成本核算：灭菌批次的成本项，单件成本 = 批次成本合计 / 件数。"""
+
+    __tablename__ = "cssd_cost_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("sterilization_batches.id"), index=True)
+    # labor=人工, material=耗材, energy=能耗, equipment=设备折旧, other=其他
+    cost_type: Mapped[str] = mapped_column(String(16), index=True)
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CourseMaterial(Base):
+    """⑳课件资源：课程下的课件条目，可挂附件（owner_type=course_material）并计点播量。"""
+
+    __tablename__ = "course_materials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    title: Mapped[str] = mapped_column(String(256))
+    # slide=课件, video=视频, doc=文档, link=外链
+    material_type: Mapped[str] = mapped_column(String(16), default="slide", index=True)
+    url: Mapped[str] = mapped_column(String(512), default="")
+    play_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TrainingPlan(Base):
+    """㉑适宜技术实训计划：名额有限、可报名、可考核。"""
+
+    __tablename__ = "training_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(256))
+    technique_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tcm_techniques.id"), nullable=True
+    )
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    plan_date: Mapped[str] = mapped_column(String(10), default="")
+    capacity: Mapped[int] = mapped_column(Integer, default=30)
+    trainer: Mapped[str] = mapped_column(String(64), default="")
+    # open=报名中, closed=已截止, finished=已结训
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TrainingEnrollment(Base):
+    """㉑实训报名：同一计划同一学员唯一。"""
+
+    __tablename__ = "training_enrollments"
+    __table_args__ = (UniqueConstraint("plan_id", "user_id", name="uq_enroll_plan_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("training_plans.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # enrolled=已报名, cancelled=已取消
+    status: Mapped[str] = mapped_column(String(16), default="enrolled", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TrainingAssessment(Base):
+    """㉑实训考核记录：须先报名方可录入成绩，60 分及格。"""
+
+    __tablename__ = "training_assessments"
+    __table_args__ = (UniqueConstraint("plan_id", "user_id", name="uq_assess_plan_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("training_plans.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    comment: Mapped[str] = mapped_column(String(512), default="")
+    assessor: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PrenatalScreening(Base):
+    """㉔产前筛查与诊断：唐筛/无创/超声筛查记录，高危结果自动标记孕产妇档案。"""
+
+    __tablename__ = "prenatal_screenings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("maternal_records.id"), index=True)
+    # down=唐氏血清学筛查, nipt=无创产前基因检测, ultrasound=超声结构筛查, diagnosis=产前诊断
+    screen_type: Mapped[str] = mapped_column(String(16), index=True)
+    screen_date: Mapped[str] = mapped_column(String(10), default="")
+    gest_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # low_risk=低风险, high_risk=高风险, critical=临界风险
+    result: Mapped[str] = mapped_column(String(16), default="low_risk", index=True)
+    indicator: Mapped[str] = mapped_column(String(256), default="")
+    conclusion: Mapped[str] = mapped_column(String(512), default="")
+    # 是否已触发孕产妇档案高危标记
+    flagged_high_risk: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ImprovementTask(Base):
+    """㉟绩效自评改进：问题 → 责任人 → 期限 → 整改 → 完成确认（验证闭环）。"""
+
+    __tablename__ = "improvement_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # 关联绩效指标 key（可空，来自绩效自评发现的问题）
+    indicator_key: Mapped[str] = mapped_column(String(32), default="", index=True)
+    problem: Mapped[str] = mapped_column(String(512))
+    measures: Mapped[str] = mapped_column(String(1024), default="")
+    owner_name: Mapped[str] = mapped_column(String(64))
+    due_date: Mapped[str] = mapped_column(String(10), index=True)
+    # open=待整改, in_progress=整改中, completed=已完成待确认, verified=已确认关闭
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    completion_note: Mapped[str] = mapped_column(String(512), default="")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    verify_comment: Mapped[str] = mapped_column(String(512), default="")
+    verified_by: Mapped[str] = mapped_column(String(64), default="")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class HomeVisitOrder(Base):
+    """⑨上门服务调度（送医送护上门）：申请 → 派单 → 完成，关联家医签约。"""
+
+    __tablename__ = "home_visit_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    contract_id: Mapped[int | None] = mapped_column(ForeignKey("fd_contracts.id"), nullable=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # nursing=上门护理, doctor=上门诊疗, rehab=康复指导, sampling=上门采样
+    service_type: Mapped[str] = mapped_column(String(16), index=True)
+    demand: Mapped[str] = mapped_column(String(512), default="")
+    address: Mapped[str] = mapped_column(String(256), default="")
+    expect_date: Mapped[str] = mapped_column(String(10), default="")
+    # applied=待派单, dispatched=已派单, completed=已完成, cancelled=已取消
+    status: Mapped[str] = mapped_column(String(16), default="applied", index=True)
+    assignee_name: Mapped[str] = mapped_column(String(64), default="")
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    service_note: Mapped[str] = mapped_column(String(512), default="")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
