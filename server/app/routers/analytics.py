@@ -21,6 +21,9 @@ from ..formula import FormulaError, evaluate, validate
 from ..models import (
     Admission,
     Bed,
+    BillDetail,
+    CaseSummary,
+    ChargeItem,
     ChronicPatient,
     Employee,
     Encounter,
@@ -28,8 +31,10 @@ from ..models import (
     OutboundVisit,
     Organization,
     Patient,
+    DrugRule,
     PerformanceFormula,
     Prescription,
+    PrescriptionItem,
     Referral,
     User,
     Ward,
@@ -39,6 +44,15 @@ router = APIRouter(prefix="/api/analytics", tags=["决策指标扩展"], depende
 
 # 医师职务关键词：Employee.position 含这些词即计入医师数（担负指标的分母）
 DOCTOR_POSITION_KEYWORDS = ("医师", "医生")
+
+# 抗菌药物使用强度的合理性上限（DDDs/百人天）。国家控制目标为 ≤40，
+# 三甲实际值多在 30-60；在样本足够的前提下破这个阈值，几乎只有一种原因：
+# DDD 与日剂量单位不一致。
+INTENSITY_IMPLAUSIBLE = 200
+# 强度的最小可解释样本量（收治人天）。一个月只出院两人时，一个疗程的抗菌药
+# 就能把强度顶到几百——那不是用药过度，是分母太小。样本不足时既不告警也
+# 不该拿这个数去比，标注出来即可。
+MIN_BED_DAYS_FOR_INTENSITY = 100
 
 
 def _period_bounds(period: str) -> tuple[date, date]:
@@ -483,4 +497,152 @@ def performance_report(period: str, db: Session = Depends(get_db)):
         "period": period,
         "formula_count": len(formulas),
         "orgs": sorted(rows, key=lambda x: -x["weighted_score"]),
+    }
+
+
+# ============================================================================
+# 用药结构分析（指南 #48 抗菌药物使用强度 / #49 药占比）
+# ============================================================================
+
+
+@router.get("/drug-use")
+def drug_use(period: str, org_id: int | None = None, db: Session = Depends(get_db)):
+    """药占比与抗菌药物使用强度。
+
+    两个指标都会被写进考核，所以口径写死在这里并随结果一起返回：
+
+    - 住院药占比 = Σ病案首页药品费 ÷ Σ病案首页总费用
+    - 门诊药占比 = Σ(收费目录 category=drug 的明细金额) ÷ Σ门诊明细金额
+    - 抗菌药物使用强度 = Σ(日剂量×天数 ÷ DDD) × 100 ÷ 同期收治人天
+
+    强度分母用"收治人天"（出院者占用总床日），与国家监测口径一致。
+    未维护 DDD 的抗菌药按**未覆盖**单独计数返回，不按 0 算也不悄悄丢掉——
+    一个漏算了一半抗菌药的强度值，比明说"目录没维护全"更容易误导人。
+    """
+    start, end = _period_bounds(period)
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end, datetime.min.time())
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    org_ids = [org_id] if org_id is not None else sorted(org_names)
+
+    # ---- 住院药占比（病案首页）----
+    inpatient = dict.fromkeys(org_ids, (0.0, 0.0))
+    summary_rows = (
+        db.query(
+            Admission.org_id,
+            func.sum(CaseSummary.total_cost),
+            func.sum(CaseSummary.drug_cost),
+        )
+        .join(Admission, CaseSummary.admission_id == Admission.id)
+        .filter(CaseSummary.created_at >= start_dt, CaseSummary.created_at < end_dt)
+        .group_by(Admission.org_id)
+        .all()
+    )
+    for oid, total, drug in summary_rows:
+        if oid in inpatient:
+            inpatient[oid] = (float(total or 0), float(drug or 0))
+
+    # ---- 门诊药占比（费用明细 × 收费目录分类）----
+    drug_codes = {
+        i.code for i in db.query(ChargeItem).filter(ChargeItem.category == "drug").all()
+    }
+    outpatient_total: dict[int, float] = dict.fromkeys(org_ids, 0.0)
+    outpatient_drug: dict[int, float] = dict.fromkeys(org_ids, 0.0)
+    detail_rows = (
+        db.query(BillDetail.item_code, BillDetail.amount, Encounter.org_id)
+        .join(Encounter, BillDetail.encounter_id == Encounter.id)
+        .filter(BillDetail.created_at >= start_dt, BillDetail.created_at < end_dt)
+        .all()
+    )
+    for code, amount, oid in detail_rows:
+        if oid not in outpatient_total:
+            continue
+        outpatient_total[oid] += float(amount or 0)
+        if code in drug_codes:
+            outpatient_drug[oid] += float(amount or 0)
+
+    # ---- 抗菌药物使用强度 ----
+    antibiotics = {
+        r.drug_code: r.ddd
+        for r in db.query(DrugRule).filter(DrugRule.antibiotic.is_(True)).all()
+    }
+    ddd_sum: dict[int, float] = dict.fromkeys(org_ids, 0.0)
+    uncovered: dict[int, int] = dict.fromkeys(org_ids, 0)
+    item_rows = (
+        db.query(PrescriptionItem, Prescription.org_id)
+        .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
+        .filter(Prescription.created_at >= start_dt, Prescription.created_at < end_dt)
+        .all()
+    )
+    for item, oid in item_rows:
+        if oid not in ddd_sum or item.drug_code not in antibiotics:
+            continue
+        ddd = antibiotics[item.drug_code]
+        if ddd <= 0:
+            uncovered[oid] += 1  # 目录未维护 DDD，计为未覆盖
+            continue
+        ddd_sum[oid] += (item.daily_dose or 0) * (item.days or 0) / ddd
+
+    # 分母：收治人天 = 期内出院者占用总床日
+    bed_days: dict[int, int] = dict.fromkeys(org_ids, 0)
+    for adm in (
+        db.query(Admission)
+        .filter(
+            Admission.discharged_at.isnot(None),
+            Admission.discharged_at >= start_dt,
+            Admission.discharged_at < end_dt,
+        )
+        .all()
+    ):
+        if adm.org_id in bed_days:
+            bed_days[adm.org_id] += max((adm.discharged_at - adm.admitted_at).days, 1)
+
+    rows = []
+    warnings: list[str] = []
+    for oid in org_ids:
+        in_total, in_drug = inpatient.get(oid, (0.0, 0.0))
+        out_total, out_drug = outpatient_total.get(oid, 0.0), outpatient_drug.get(oid, 0.0)
+        days = bed_days.get(oid, 0)
+        rows.append(
+            {
+                "org_id": oid,
+                "org_name": org_names.get(oid, str(oid)),
+                "inpatient_total": round(in_total, 2),
+                "inpatient_drug": round(in_drug, 2),
+                "inpatient_drug_ratio_pct": round(in_drug / in_total * 100, 2) if in_total else 0.0,
+                "outpatient_total": round(out_total, 2),
+                "outpatient_drug": round(out_drug, 2),
+                "outpatient_drug_ratio_pct": (
+                    round(out_drug / out_total * 100, 2) if out_total else 0.0
+                ),
+                "antibiotic_ddds": round(ddd_sum.get(oid, 0.0), 2),
+                "bed_days": days,
+                "antibiotic_intensity": (
+                    round(ddd_sum.get(oid, 0.0) * 100 / days, 2) if days else 0.0
+                ),
+                "ddd_uncovered_items": uncovered.get(oid, 0),
+                # 样本不足时强度不可比，客户端据此淡化展示而不是照着排名
+                "intensity_unstable": 0 < days < MIN_BED_DAYS_FOR_INTENSITY,
+            }
+        )
+        # 量纲告警：DDD 必须与 daily_dose 同单位。把 3g 的 DDD 填成 "3"（而处方
+        # 按 mg 记）会让强度差三个数量级。程序无从校验单位，但结果的数量级是
+        # 有常识的——国家控制目标是 40 DDDs/百人天，破 200 基本可以断定填错了。
+        # 与其让一个天文数字被抄进上报表，不如在同一份响应里说清楚它可疑。
+        if (
+            rows[-1]["antibiotic_intensity"] > INTENSITY_IMPLAUSIBLE
+            and not rows[-1]["intensity_unstable"]
+        ):
+            warnings.append(
+                f"{rows[-1]['org_name']}：抗菌药物使用强度 {rows[-1]['antibiotic_intensity']} "
+                f"远超常规量级，请核对药品目录中 DDD 的单位是否与处方日剂量一致"
+            )
+    return {
+        "period": period,
+        "caliber": {
+            "drug_ratio": "住院取病案首页药品费/总费用；门诊按收费目录 category=drug 归集明细",
+            "antibiotic_intensity": "Σ(日剂量×天数÷DDD)×100 ÷ 收治人天（出院者占用总床日）",
+        },
+        "warnings": warnings,
+        "orgs": rows,
     }

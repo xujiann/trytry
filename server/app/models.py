@@ -230,6 +230,12 @@ class DrugRule(Base):
     renal_hepatic_note: Mapped[str] = mapped_column(String(512), default="")
     # 块2：处方点评要点（事后点评规则化依据）
     review_points: Mapped[str] = mapped_column(String(512), default="")
+    # 抗菌药物标记与 DDD（限定日剂量，单位同 dose_unit）。
+    # 使用强度 = Σ(日剂量×天数 ÷ DDD) × 100 ÷ 同期收治人天，是国家监测指标。
+    # ddd 为 0 表示未维护，统计时**跳过并计入未覆盖数**——按缺省值硬算会把强度
+    # 算成无穷大或悄悄漏掉，两种都比"明说没维护"更糟。
+    antibiotic: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    ddd: Mapped[float] = mapped_column(Float, default=0)
 
 
 class Prescription(Base):
@@ -527,6 +533,9 @@ class EmergencyCase(Base):
     channel_type: Mapped[str] = mapped_column(String(16), default="", index=True)
     # dispatched=已调度, en_route=转运中, arrived=已到院, admitted=已收治
     status: Mapped[str] = mapped_column(String(16), default="dispatched", index=True)
+    # 抢救转归：""=未判定（非抢救病例或尚未结论）, success=抢救成功, failed=抢救无效。
+    # 空串与 failed 必须分开——把"没填"当成"没救过来"，抢救成功率会被算低。
+    rescue_outcome: Mapped[str] = mapped_column(String(16), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     vitals: Mapped[list["EmergencyVital"]] = relationship(back_populates="case")
@@ -2471,6 +2480,11 @@ class SurgeryRecord(Base):
     complications: Mapped[str] = mapped_column(String(1024), default="")
     # 治愈/好转/未愈/死亡
     outcome: Mapped[str] = mapped_column(String(16), default="好转")
+    # 术前/术后诊断：术前术后诊断符合率的唯一数据来源。
+    # 不复用 surgery_requests.surgery_name——术式名不是诊断，拿术式比对算出来的
+    # "符合率"只是在比两段一模一样的文本，好看但没有意义。
+    preop_diagnosis: Mapped[str] = mapped_column(String(256), default="")
+    postop_diagnosis: Mapped[str] = mapped_column(String(256), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 

@@ -97,6 +97,18 @@ c.post("/api/exams", json={"patient_id": patients[0]["id"], "from_org_id": count
 
 # 审方与药房
 c.post("/api/prescriptions/rules", json={"drug_code": "METFORMIN", "max_daily_dose": 2000, "dose_unit": "mg"})
+# 抗菌药物使用强度：CEFUROXIME 维护了 DDD，AZITHROMYCIN 故意留空，
+# 好让演示站上"未维护 DDD"的计数不是 0——这个数为 0 时没人知道它存在。
+# ddd 与 daily_dose 同单位（mg）：头孢呋辛 DDD 为 3g，写 3 而不是 3000
+# 会让使用强度差 1000 倍——接口对此有量纲合理性告警，但源头还是要填对。
+c.post("/api/prescriptions/rules", json={"drug_code": "CEFUROXIME", "max_daily_dose": 4000,
+                                         "dose_unit": "mg", "antibiotic": True, "ddd": 3000})
+c.post("/api/prescriptions/rules", json={"drug_code": "AZITHROMYCIN", "max_daily_dose": 500,
+                                         "dose_unit": "mg", "antibiotic": True, "ddd": 0})
+for _code, _name, _dose in [("CEFUROXIME", "头孢呋辛", 3000), ("AZITHROMYCIN", "阿奇霉素", 500)]:
+    c.post("/api/prescriptions", json={
+        "patient_id": patients[2]["id"], "org_id": county["id"], "diagnosis_name": "社区获得性肺炎",
+        "items": [{"drug_code": _code, "drug_name": _name, "daily_dose": _dose, "days": 7}]})
 c.post("/api/prescriptions", json={"patient_id": patients[1]["id"], "org_id": zhen1["id"], "diagnosis_name": "2型糖尿病",
                                    "items": [{"drug_code": "METFORMIN", "drug_name": "二甲双胍", "daily_dose": 1500, "days": 30}]})
 c.post("/api/prescriptions", json={"patient_id": patients[1]["id"], "org_id": village["id"], "diagnosis_name": "2型糖尿病",
@@ -187,6 +199,15 @@ for payload in [
     if not _exists(_charges, lambda r, p=payload: r["code"] == p["code"]):
         c.post("/api/billing/charge-items", json=payload)
 
+# 门诊药费明细：门诊药占比的数据源，不开明细这个指标恒为 0。
+# 必须放在收费项目目录建好之后——计费明细要按 item_code 反查目录取价。
+_enc = c.get(f"/api/encounters?patient_id={patients[2]['id']}").json()
+if _enc and not c.get(f"/api/billing/details?encounter_id={_enc[0]['id']}").json():
+    for _code, _qty in [("DRUG-ABX", 6), ("BED-DAY", 1)]:
+        c.post("/api/billing/details", json={"patient_id": patients[2]["id"],
+                                             "encounter_id": _enc[0]["id"],
+                                             "item_code": _code, "quantity": _qty})
+
 
 def full_inpatient_journey(patient, bed, diagnosis, discharge_diagnosis, total_cost, drug_cost):
     """一次完整住院旅程：入院→医嘱→计费→病案首页(自动DRG入组)→结算→出院。幂等：该患者有住院史即跳过。"""
@@ -212,7 +233,9 @@ def full_inpatient_journey(patient, bed, diagnosis, discharge_diagnosis, total_c
 
 
 # DRG 入组示例：肺炎（ES31，权重0.95）与心肌梗死（FM19，权重1.42），CMI 可对比
-full_inpatient_journey(patients[2], beds["01"], "社区获得性肺炎", "肺炎", 3160, 1160)
+# 一例入出院诊断一致、一例不一致——演示站的"入出院诊断符合率"应当是 50%，
+# 两例都改写诊断会让这个指标显示 0%，看起来像坏了。
+full_inpatient_journey(patients[2], beds["01"], "社区获得性肺炎", "社区获得性肺炎", 3160, 1160)
 full_inpatient_journey(patients[1], beds["02"], "急性心肌梗死", "心肌梗死（PCI术后）", 31600, 5200)
 
 # ---------- 不良事件闭环：上报→管理层审核→整改 ----------
@@ -252,6 +275,14 @@ if not _exists(_em_cases, lambda e: e["channel_type"] == "chest_pain" and e["loc
     for _ in range(3):  # 出车→到场→到院
         c.post(f"/api/emergency/cases/{em['id']}/advance")
     c.post(f"/api/emergency/cases/{em['id']}/vitals", json={"heart_rate": 110, "sbp": 90, "dbp": 60, "spo2": 93, "note": "车载心电已回传"})
+    # 抢救转归：抢救成功率的唯一数据源。限医师判定，admin 会被 403 挡下，
+    # 所以这里换 doc_county 的会话——这正是"职责分离"该有的样子。
+    c_doc_county = httpx.Client(base_url=BASE, timeout=30)
+    c_doc_county.headers["Authorization"] = "Bearer " + c.post(
+        "/api/auth/login", json={"username": "doc_county", "password": "doctor123"}
+    ).json()["access_token"]
+    c_doc_county.post(f"/api/emergency/cases/{em['id']}/rescue-outcome",
+                      json={"rescue_outcome": "success"})
 
 # ================= 阶段一~五：新模块演示数据（T6.5，幂等：存在即跳过） =================
 period = date.today().strftime("%Y-%m")
@@ -315,7 +346,9 @@ if not c.get(f"/api/surgery/requests?admission_id={adm_id}").json():
     c.post(f"/api/surgery/requests/{_req['id']}/record", json={
         "actual_surgery_name": "腹腔镜阑尾切除术", "anesthetist_name": "麻醉科周医生",
         "start_at": f"{date.today().isoformat()} 09:10", "end_at": f"{date.today().isoformat()} 10:05",
-        "blood_loss_ml": 20, "findings": "阑尾化脓、周围少量脓苔", "outcome": "治愈"})
+        "blood_loss_ml": 20, "findings": "阑尾化脓、周围少量脓苔", "outcome": "治愈",
+        # 术前术后诊断符合率的数据源；括号内是分型补充，归一化后仍判为符合
+        "preop_diagnosis": "急性阑尾炎", "postop_diagnosis": "急性阑尾炎（化脓性）"})
     # 高值耗材绑定到这台手术，构成可追溯链
     c.post("/api/materials/consumables", json={
         "barcode": "HV-DEMO-0001", "name": "一次性腹腔镜穿刺器", "spec": "10mm",
@@ -476,6 +509,12 @@ _checks = [
     ("住院已有出院病例", lambda: any(
         a["status"] == "discharged" for a in c.get("/api/inpatient/admissions").json())),
     ("危急值已落工作人员消息", lambda: _has_rows(c_doc.get("/api/notifications?limit=1"))),
+    ("质量指标有分母", lambda: any(
+        i["denominator"] > 0
+        for i in c.get("/api/quality/clinical-indicators").json()["indicators"])),
+    ("抗菌药物强度已可算", lambda: any(
+        o["antibiotic_ddds"] > 0
+        for o in c.get(f"/api/analytics/drug-use?period={period}").json()["orgs"])),
 ]
 if _resident_ready:
     # 居民会话取决于短信验证码，60 秒冷却内重跑会拿不到；拿不到就别断言，

@@ -129,6 +129,7 @@ const PAGES = [
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
   { id: "perfind", title: "绩效指标调权", render: renderPerfIndicators, roles: ["director"] },
   { id: "quality", title: "质量安全", render: renderQuality },
+  { id: "clinind", title: "医疗质量指标", render: renderClinicalIndicators },
   { id: "drgs", title: "DRGs分析", render: renderDrgs },
   { id: "education", title: "远程医学教育", render: renderEducation },
   { id: "knowledge", title: "知识库", render: renderKnowledge },
@@ -4260,4 +4261,44 @@ async function renderNotifications() {
     await postAction(`/api/notifications/${ntread}/read`, null, "#nt-msg");
     pollTodos();
   };
+}
+
+/* ---------------- 医疗质量指标与用药结构（指南 #14/#48/#49/#52） ---------------- */
+
+async function renderClinicalIndicators() {
+  $("#page-desc").textContent =
+    "分子分母与口径随指标一起给出——只看一个百分比既没法核对，也看不出样本量小到不该看";
+  const period = new Date().toISOString().slice(0, 7);
+  const [quality, drug] = await Promise.all([
+    api("/api/quality/clinical-indicators"),
+    api(`/api/analytics/drug-use?period=${period}`),
+  ]);
+  const byDimension = {};
+  quality.indicators.forEach((i) => (byDimension[i.dimension] ||= []).push(i));
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>医疗质量指标（${esc(quality.period)}）</h3>
+      ${Object.entries(byDimension).map(([dim, items]) => `<h4>${esc(dim)}</h4>${
+        table(["指标", "分子", "分母", "比率", "口径"], items, (i) =>
+          `<tr><td><b>${esc(i.name)}</b></td><td>${i.numerator}</td>
+           <td>${i.denominator || "—"}${i.uncollected
+             ? `<span class="tag orange">未采集 ${i.uncollected}</span>` : ""}</td>
+           <td>${i.denominator ? `${i.rate_pct}%` : "样本为空"}</td>
+           <td class="muted">${esc(i.caliber)}</td></tr>`)}`).join("")}
+    </div>
+    <div class="panel"><h3>用药结构（${esc(drug.period)}）</h3>
+      <p class="desc">${esc(drug.caliber.drug_ratio)}；${esc(drug.caliber.antibiotic_intensity)}</p>
+      ${(drug.warnings || []).map((w) => `<p class="msg err">${esc(w)}</p>`).join("")}
+      ${table(["机构", "住院药占比", "门诊药占比", "抗菌药 DDDs", "收治人天", "使用强度", "未维护DDD"],
+        drug.orgs, (o) =>
+          `<tr><td>${esc(o.org_name)}</td>
+           <td>${o.inpatient_drug_ratio_pct}%</td><td>${o.outpatient_drug_ratio_pct}%</td>
+           <td>${o.antibiotic_ddds}</td><td>${o.bed_days}</td>
+           <td>${o.intensity_unstable
+             ? `<span class="muted">${o.antibiotic_intensity}</span><span class="tag orange">样本不足</span>`
+             : `<b>${o.antibiotic_intensity}</b>`}</td>
+           <td>${o.ddd_uncovered_items
+             ? `<span class="tag red">${o.ddd_uncovered_items}</span>` : "—"}</td></tr>`)}
+    </div>
+    ${barChart(drug.orgs.filter((o) => o.antibiotic_intensity > 0 && !o.intensity_unstable)
+      .map((o) => [o.org_name, o.antibiotic_intensity]), { unit: " DDDs/百人天" })}`;
 }

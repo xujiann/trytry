@@ -308,6 +308,9 @@ class SurgeryRecordIn(BaseModel):
     procedure: str = ""
     complications: str = ""
     outcome: str = Field(default="好转", pattern="^(治愈|好转|未愈|死亡)$")
+    # 术前/术后诊断：留空即"未采集"，不进诊断符合率的分母（见 quality 模块口径）
+    preop_diagnosis: str = Field(default="", max_length=256)
+    postop_diagnosis: str = Field(default="", max_length=256)
 
 
 @router.post(
@@ -381,6 +384,8 @@ def get_record(request_id: int, db: Session = Depends(get_db)):
         "procedure": record.procedure,
         "complications": record.complications,
         "outcome": record.outcome,
+        "preop_diagnosis": record.preop_diagnosis,
+        "postop_diagnosis": record.postop_diagnosis,
     }
 
 

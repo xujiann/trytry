@@ -13,6 +13,7 @@ from ..models import (
     Patient,
     PhysicalExam,
     Prescription,
+    Settlement,
 )
 from ..schemas import EncounterCreate, EncounterOut
 
@@ -89,6 +90,14 @@ def patient_360_view(ehc_no: str, db: Session = Depends(get_db)):
     checkups, checkups_more = _section(
         db.query(PhysicalExam).filter(PhysicalExam.patient_id == patient.id).order_by(PhysicalExam.id.desc())
     )
+    # 医疗费用记录（指南 #2 病历概要要求的第三类内容）。
+    # 取结算单而非费用明细：明细是一次就诊几十上百条，塞进 360 视图会把真正
+    # 该被看见的临床信息挤下去；要看明细走 /api/billing/details。
+    settlements, settlements_more = _section(
+        db.query(Settlement)
+        .filter(Settlement.patient_id == patient.id)
+        .order_by(Settlement.id.desc())
+    )
     return {
         "section_limit": ARCHIVE_SECTION_LIMIT,
         "has_more": {
@@ -96,6 +105,7 @@ def patient_360_view(ehc_no: str, db: Session = Depends(get_db)):
             "exam_reports": reports_more,
             "prescriptions": prescriptions_more,
             "checkups": checkups_more,
+            "settlements": settlements_more,
         },
         "patient": {
             "ehc_no": patient.ehc_no,
@@ -127,6 +137,17 @@ def patient_360_view(ehc_no: str, db: Session = Depends(get_db)):
         ],
         "prescriptions": [
             {"id": p.id, "diagnosis_name": p.diagnosis_name, "status": p.status} for p in prescriptions
+        ],
+        "settlements": [
+            {
+                "id": s.id,
+                "bill_type": s.bill_type,
+                "total_amount": s.total_amount,
+                "insurance_pay": s.insurance_pay,
+                "self_pay": s.self_pay,
+                "created_at": s.created_at.isoformat(),
+            }
+            for s in settlements
         ],
         "physical_exams": [
             {

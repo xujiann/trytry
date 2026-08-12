@@ -8,6 +8,7 @@
 （提交即评分，缺陷清单实时返回；qc-summary 按机构/医师统计甲乙丙分布）。
 """
 import re
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -20,6 +21,7 @@ from ..models import (
     Admission,
     AdverseEvent,
     CaseSummary,
+    EmergencyCase,
     Encounter,
     ExamReport,
     ExamRequest,
@@ -29,6 +31,8 @@ from ..models import (
     Patient,
     RecordQc,
     RecordQcRule,
+    SurgeryRecord,
+    SurgeryRequest,
     User,
     utcnow,
 )
@@ -692,3 +696,155 @@ def update_record_qc_rule(rule_id: int, body: RecordQcRuleUpdate, db: Session = 
             setattr(rule, field, value)
     db.commit()
     return _record_rule_out(rule)
+
+
+# ============================================================================
+# 医疗质量三维指标（指南 #14 / #52）
+#
+# 指南把质量评价拆成"诊断准确 / 治疗有效 / 痛苦最小"三维。本模块只做**能从
+# 已有业务数据算出来的那部分**，算不了的宁可不出数：一个靠猜的治愈率比没有
+# 治愈率更危险，它会被写进考核。
+# ============================================================================
+
+# 转归取值来自 CaseSummary.outcome / SurgeryRecord.outcome，四档固定
+CURED_OUTCOMES = ("治愈", "好转")
+DEATH_OUTCOMES = ("死亡",)
+
+
+def _normalize_diagnosis(text: str) -> str:
+    """诊断名归一化：去空白、去括号补充说明、统一大小写。
+
+    "急性心肌梗死（PCI术后）" 与 "急性心肌梗死" 应判为符合——括号里通常是
+    治疗方式或分期补充，不是另一个诊断。这是**粗口径**，够用于院内监测，
+    不能拿去做病案首页上报；真要精确必须走 ICD 编码比对，而门诊侧目前
+    只有诊断名没有编码。
+    """
+    cleaned = re.sub(r"[（(].*?[)）]", "", text or "")
+    return re.sub(r"\s+", "", cleaned).strip().lower()
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator * 100, 2) if denominator else 0.0
+
+
+@router.get("/clinical-indicators")
+def clinical_indicators(
+    period: str | None = None, org_id: int | None = None, db: Session = Depends(get_db)
+):
+    """医疗质量指标：诊断符合率、治愈好转率、死亡率、抢救成功率。
+
+    `period` 为 YYYY-MM，省略即全期。每项都同时返回分子分母，
+    只给一个百分比没法核对，也没法判断样本量小到不该看。
+    """
+    start_dt = end_dt = None
+    if period:
+        try:
+            start = datetime.strptime(period + "-01", "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=422, detail="period 须为 YYYY-MM 格式") from None
+        start_dt = start
+        end_dt = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+    # ---- 入出院诊断符合率 + 治愈好转率 + 死亡率（数据源：病案首页）----
+    summaries = db.query(CaseSummary, Admission).join(
+        Admission, CaseSummary.admission_id == Admission.id
+    )
+    if org_id is not None:
+        summaries = summaries.filter(Admission.org_id == org_id)
+    if start_dt is not None:
+        summaries = summaries.filter(
+            CaseSummary.created_at >= start_dt, CaseSummary.created_at < end_dt
+        )
+    rows = summaries.all()
+    admit_match = sum(
+        1
+        for cs, adm in rows
+        if _normalize_diagnosis(adm.diagnosis_name) == _normalize_diagnosis(cs.discharge_diagnosis)
+    )
+    cured = sum(1 for cs, _ in rows if cs.outcome in CURED_OUTCOMES)
+    died = sum(1 for cs, _ in rows if cs.outcome in DEATH_OUTCOMES)
+
+    # ---- 术前术后诊断符合率（数据源：手术记录）----
+    surgeries = db.query(SurgeryRecord).join(
+        SurgeryRequest, SurgeryRecord.request_id == SurgeryRequest.id
+    )
+    if org_id is not None:
+        surgeries = surgeries.filter(SurgeryRequest.org_id == org_id)
+    if start_dt is not None:
+        surgeries = surgeries.filter(
+            SurgeryRecord.created_at >= start_dt, SurgeryRecord.created_at < end_dt
+        )
+    # 两项诊断都填了才纳入分母——没填的是"未采集"，不是"不符合"
+    surgery_rows = [
+        r for r in surgeries.all() if r.preop_diagnosis.strip() and r.postop_diagnosis.strip()
+    ]
+    surgery_match = sum(
+        1
+        for r in surgery_rows
+        if _normalize_diagnosis(r.preop_diagnosis) == _normalize_diagnosis(r.postop_diagnosis)
+    )
+    surgery_total = surgeries.count()
+
+    # ---- 抢救成功率（数据源：急救病例转归）----
+    rescues = db.query(EmergencyCase).filter(EmergencyCase.rescue_outcome != "")
+    if org_id is not None:
+        rescues = rescues.filter(EmergencyCase.dest_org_id == org_id)
+    if start_dt is not None:
+        rescues = rescues.filter(
+            EmergencyCase.created_at >= start_dt, EmergencyCase.created_at < end_dt
+        )
+    rescue_rows = rescues.all()
+    rescue_success = sum(1 for r in rescue_rows if r.rescue_outcome == "success")
+
+    return {
+        "period": period or "全期",
+        "org_id": org_id,
+        "indicators": [
+            {
+                "key": "admit_discharge_match",
+                "name": "入出院诊断符合率",
+                "dimension": "诊断准确",
+                "numerator": admit_match,
+                "denominator": len(rows),
+                "rate_pct": _rate(admit_match, len(rows)),
+                "caliber": "出院诊断与入院诊断一致的出院人次 ÷ 出院人次（诊断名归一化比对）",
+            },
+            {
+                "key": "preop_postop_match",
+                "name": "术前术后诊断符合率",
+                "dimension": "诊断准确",
+                "numerator": surgery_match,
+                "denominator": len(surgery_rows),
+                "rate_pct": _rate(surgery_match, len(surgery_rows)),
+                "uncollected": surgery_total - len(surgery_rows),
+                "caliber": "术后诊断与术前诊断一致的手术台次 ÷ 已填两项诊断的手术台次",
+            },
+            {
+                "key": "cure_improve",
+                "name": "治愈好转率",
+                "dimension": "治疗有效",
+                "numerator": cured,
+                "denominator": len(rows),
+                "rate_pct": _rate(cured, len(rows)),
+                "caliber": "转归为治愈或好转的出院人次 ÷ 出院人次",
+            },
+            {
+                "key": "mortality",
+                "name": "住院死亡率",
+                "dimension": "治疗有效",
+                "numerator": died,
+                "denominator": len(rows),
+                "rate_pct": _rate(died, len(rows)),
+                "caliber": "转归为死亡的出院人次 ÷ 出院人次",
+            },
+            {
+                "key": "rescue_success",
+                "name": "抢救成功率",
+                "dimension": "治疗有效",
+                "numerator": rescue_success,
+                "denominator": len(rescue_rows),
+                "rate_pct": _rate(rescue_success, len(rescue_rows)),
+                "caliber": "抢救成功例数 ÷ 已判定转归的抢救例数（未判定的不计入分母）",
+            },
+        ],
+    }

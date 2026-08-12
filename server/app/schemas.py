@@ -182,6 +182,10 @@ class DrugRuleCreate(BaseModel):
     renal_hepatic_note: str = ""
     # 处方点评要点（事后点评规则化依据）
     review_points: str = ""
+    # 抗菌药物标记与 DDD（限定日剂量，单位同 dose_unit）。
+    # ddd 留 0 表示未维护，使用强度统计会把它计入"未覆盖"而不是按 0 参与计算。
+    antibiotic: bool = False
+    ddd: float = Field(default=0, ge=0)
 
 
 class DrugRuleOut(DrugRuleCreate):

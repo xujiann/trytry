@@ -76,3 +76,6 @@ pre.json { background: #f6f8fa; border-radius: 8px; padding: 14px; font-size: 12
 .todo-panel .todo-item { padding: 5px 0; border-bottom: 1px solid #f0f2f4; color: #4d5761; }
 .todo-panel .todo-item:last-child { border-bottom: 0; }
 .todo-panel .todo-empty { color: #8a939e; padding: 10px 0; text-align: center; }
+/* 口径说明列：字号小一档、灰一档，让指标数字先被看见 */
+td.muted { color: #6b7480; font-size: 12.5px; line-height: 1.5; }
+.muted { color: #8a939e; }

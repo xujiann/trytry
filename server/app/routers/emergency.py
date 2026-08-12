@@ -40,8 +40,15 @@ class CaseCreate(BaseModel):
 class CaseOut(CaseCreate):
     id: int
     status: str
+    rescue_outcome: str = ""
 
     model_config = {"from_attributes": True}
+
+
+class RescueOutcomeIn(BaseModel):
+    # 只有 success / failed 两种结论；"没救过来"和"还没下结论"必须分开，
+    # 后者留空即可，写进来会把抢救成功率算低。
+    rescue_outcome: str = Field(pattern="^(success|failed)$")
 
 
 class MilestoneCreate(BaseModel):
@@ -103,6 +110,28 @@ def list_cases(status: str | None = None, db: Session = Depends(get_db)):
     if status:
         query = query.filter(EmergencyCase.status == status)
     return query.order_by(EmergencyCase.id.desc()).limit(200).all()
+
+
+@router.post(
+    "/cases/{case_id}/rescue-outcome",
+    response_model=CaseOut,
+    dependencies=[Depends(require_roles("doctor"))],
+)
+def set_rescue_outcome(case_id: int, body: RescueOutcomeIn, db: Session = Depends(get_db)):
+    """判定抢救转归（限医师）：抢救成功率的唯一数据来源。
+
+    只允许对已到院的病例判定——车还在路上就写"抢救成功"，这个指标就没有
+    可信度了。判定后可更正（抢救结论本来就可能随病情变化）。
+    """
+    case = db.get(EmergencyCase, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="急救事件不存在")
+    if case.status not in ("arrived", "admitted"):
+        raise HTTPException(status_code=409, detail="患者尚未到院，不可判定抢救转归")
+    case.rescue_outcome = body.rescue_outcome
+    db.commit()
+    db.refresh(case)
+    return case
 
 
 @router.post(
