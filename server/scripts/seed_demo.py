@@ -217,6 +217,28 @@ for payload in [
     if not _exists(_charges, lambda r, p=payload: r["code"] == p["code"]):
         c.post("/api/billing/charge-items", json=payload)
 
+# ---------- 医保基金总额付费：全域池走完 预付→预结→清算→分配 ----------
+# 基金由管理层管（admin 会被 403 挡下），换 dir_demo 的会话。
+if not c_dir.get("/api/fund/pools").json():
+    _pool = c_dir.post("/api/fund/pools", json={
+        "year": date.today().year, "insurance_type": "resident",
+        "total_amount": 12000000, "prepay_ratio_pct": 70,
+        "note": "全域城乡居民基金池（演示）"}).json()
+    c_dir.post(f"/api/fund/pools/{_pool['id']}/prepayments", json={
+        "batch_no": "YF-01", "amount": 8400000, "paid_date": date.today().isoformat(),
+        "note": "年初预付 70%"})
+    # 两期预结：一期人工核定、一期由结算单自动归集，让"来源"列有两种取值
+    c_dir.post(f"/api/fund/pools/{_pool['id']}/periods", json={
+        "period": f"{date.today().year}-01", "actual_amount": 5200000, "note": "一季度核定"})
+    # 本月一期交给系统按结算单自动归集（period 变量在本行之后才定义，这里直接算）
+    c_dir.post(f"/api/fund/pools/{_pool['id']}/periods",
+               json={"period": date.today().strftime("%Y-%m")})
+    # 清算按人工核定的全年发生额，好让演示站上有一笔确定的结余可分
+    c_dir.post(f"/api/fund/pools/{_pool['id']}/settle", json={
+        "total_expense": 11200000, "overrun_action": "none"})
+    # 结余 80 万按绩效得分分配；得分快照在此刻冻结，之后调权不影响本次结果
+    c_dir.post(f"/api/fund/pools/{_pool['id']}/distribute", json={"formula_expr": "score"})
+
 # ---------- 门急诊文书：告知书模板 + 已签/拒签各一份 + 处置与护理记录 ----------
 if not c.get("/api/outpatient/consent-templates").json():
     _tpl = c.post("/api/outpatient/consent-templates", json={
@@ -592,6 +614,8 @@ _checks = [
     # 分组统计的不变量：全部机构都入了片区，各片区之和才等于全域总数
     ("片区已覆盖全部机构", lambda: not c.get(
         "/api/org-groups/coverage?group_type=zone").json()["ungrouped"]),
+    ("基金结余已完成分配", lambda: _has_rows(
+        c_dir.get(f"/api/fund/pools/{c_dir.get('/api/fund/pools').json()[0]['id']}/distributions"))),
     ("知情告知书含拒签实例", lambda: any(
         x["status"] == "refused" for x in c.get("/api/outpatient/consents?limit=50").json())),
     ("手术质量指标已可算", lambda: any(

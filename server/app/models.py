@@ -3062,3 +3062,117 @@ class OrgGroupMember(Base):
     group_id: Mapped[int] = mapped_column(ForeignKey("org_groups.id"), index=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class FundPool(Base):
+    """医保基金池：总额付费的账本主体（可不启用）。
+
+    不建池子的县完全感觉不到这个模块存在——它不参与任何既有统计，
+    也不改变结算流程。总额付费本身是地方选择，平台只提供账。
+
+    `org_group_id` 可空：有的县按全域建一个池，有的按片区分池。绑到分组而不是
+    机构，因为池子天然是"一群机构共用一笔钱"。
+    """
+
+    __tablename__ = "fund_pools"
+    __table_args__ = (
+        UniqueConstraint("year", "insurance_type", "org_group_id", name="uq_fund_pool_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    # resident=城乡居民, employee=城镇职工
+    insurance_type: Mapped[str] = mapped_column(String(16), default="resident", index=True)
+    org_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("org_groups.id"), nullable=True, index=True
+    )
+    # 筹资总额（元）：年初核定的总盘子
+    total_amount: Mapped[float] = mapped_column(Float, default=0)
+    prepay_ratio_pct: Mapped[float] = mapped_column(Float, default=0)
+    # active=执行中, settled=已清算, closed=已归档
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class FundPrepayment(Base):
+    """预付批次：年初/分批预拨给医共体的资金，**产生真实资金流**。"""
+
+    __tablename__ = "fund_prepayments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(ForeignKey("fund_pools.id"), index=True)
+    batch_no: Mapped[str] = mapped_column(String(32), default="")
+    amount: Mapped[float] = mapped_column(Float)
+    paid_date: Mapped[str] = mapped_column(String(10), default="")
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class FundPeriod(Base):
+    """周期预结：按月归集实际发生额，与预付对冲看账面进度。
+
+    **预结不产生资金流**，只是账面对冲。真正的钱在预付与年终清算两处流动。
+    与预付、清算分表而不是混在一张"资金流水"里——年终对不上账时，
+    必须能一眼分清"这笔是账面数还是真给了钱"。
+    """
+
+    __tablename__ = "fund_periods"
+    __table_args__ = (UniqueConstraint("pool_id", "period", name="uq_fund_period"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(ForeignKey("fund_pools.id"), index=True)
+    period: Mapped[str] = mapped_column(String(7), index=True)  # YYYY-MM
+    # 当期实际发生的医保支付额（由结算单归集，也允许人工调整后覆盖）
+    actual_amount: Mapped[float] = mapped_column(Float, default=0)
+    source: Mapped[str] = mapped_column(String(16), default="auto")  # auto=系统归集, manual=人工
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class FundSettlement(Base):
+    """年终清算单：一个池子一次，结出结余或超支。
+
+    `balance` 为负即超支。**平台不自动扣减**——超支怎么办是政策决定
+    （分摊/挂账/不处理），这里只记录选择，不代替任何人做决定。
+    """
+
+    __tablename__ = "fund_settlements"
+    __table_args__ = (UniqueConstraint("pool_id", name="uq_fund_settlement_pool"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(ForeignKey("fund_pools.id"), unique=True, index=True)
+    total_income: Mapped[float] = mapped_column(Float, default=0)   # 筹资总额快照
+    total_expense: Mapped[float] = mapped_column(Float, default=0)  # 全年实际发生额
+    balance: Mapped[float] = mapped_column(Float, default=0)        # 正=结余，负=超支
+    # none=不处理（默认）, share=按分配公式分摊, carry=挂账结转
+    overrun_action: Mapped[str] = mapped_column(String(16), default="none")
+    # 分配公式（AST 白名单求值），返回**份额权重**，由平台归一化后乘结余额。
+    # 各县办法不同且逐年调整，绝不写死进代码。
+    formula_expr: Mapped[str] = mapped_column(String(256), default="score")
+    # 绩效得分快照取自哪一次考核（记录参数，便于复现）
+    score_basis: Mapped[str] = mapped_column(String(128), default="")
+    settled_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
+class FundDistribution(Base):
+    """结余分配明细：清算后按机构分钱。
+
+    `score` 与 `score_detail` 是**冻结的快照**。绩效指标权重随时可调，
+    若分钱时"当下重算"，等于分完钱还能改分——与知情告知书冻结正文同理。
+    """
+
+    __tablename__ = "fund_distributions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    settlement_id: Mapped[int] = mapped_column(ForeignKey("fund_settlements.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    score_detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    weight: Mapped[float] = mapped_column(Float, default=0)      # 公式求出的份额权重
+    share_pct: Mapped[float] = mapped_column(Float, default=0)   # 归一化后占比
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

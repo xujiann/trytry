@@ -55,6 +55,7 @@ from .routers import (
     materials,
     credentials,
     monitor,
+    fund,
     notifications,
     org_groups,
     outpatient_docs,
@@ -301,6 +302,7 @@ app.include_router(monitor.router)
 app.include_router(credentials.router)
 app.include_router(outpatient_docs.router)
 app.include_router(org_groups.router)
+app.include_router(fund.router)
 app.include_router(rules.router)
 app.include_router(workflows.router)
 app.include_router(workflows.service_router)

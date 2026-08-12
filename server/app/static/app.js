@@ -138,6 +138,7 @@ const PAGES = [
   { id: "knowledge", title: "知识库", render: renderKnowledge },
   { id: "surveys", title: "满意度分析", render: renderSurveys },
   { id: "hrfinance", title: "人财物管理", render: renderHrFinance },
+  { id: "fund", title: "医保基金总额付费", render: renderFund, roles: ["director"] },
   { id: "accounting", title: "会计核算", render: renderAccounting, roles: ["director"] },
   { id: "cost", title: "成本核算", render: renderCost, roles: ["director"] },
   { id: "materials", title: "物资采购与耗材", render: renderMaterials },
@@ -4698,4 +4699,149 @@ async function renderOrgGroups() {
       } catch (err) { setMsg("#og-msg", err.message, false); }
     }
   };
+}
+
+/* ---------------- 医保基金总额付费（阶段七） ---------------- */
+
+const INSURANCE_TYPES = { resident: "城乡居民", employee: "城镇职工" };
+
+async function renderFund() {
+  $("#page-desc").textContent =
+    "预付与清算产生真实资金流，月度预结只是账面对冲；分配依据是冻结的绩效得分快照，事后调权不影响已分结果";
+  const picked = Number(localStorage.getItem("medplat_fund_pool") || 0);
+  const [pools, groups, vars] = await Promise.all([
+    api("/api/fund/pools"), api("/api/org-groups"), api("/api/fund/formula-variables"),
+  ]);
+  const groupName = Object.fromEntries(groups.map((g) => [g.id, g.name]));
+  let detail = null;
+  if (picked) {
+    const [prepay, periods] = await Promise.all([
+      api(`/api/fund/pools/${picked}/prepayments`), api(`/api/fund/pools/${picked}/periods`),
+    ]);
+    let settlement = null;
+    try { settlement = await api(`/api/fund/pools/${picked}/settlement`); } catch (e) { /* 未清算 */ }
+    detail = { prepay, periods, settlement };
+  }
+  const thisYear = new Date().getFullYear();
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>基金池</h3>
+      <form class="inline" id="fd-pool">
+        <input name="year" type="number" value="${thisYear}" required style="min-width:90px">
+        <select name="insurance_type">${Object.entries(INSURANCE_TYPES).map(([v, t]) =>
+          `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="org_group_id"><option value="">全域（不分片区）</option>
+          ${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select>
+        <input name="total_amount" type="number" step="any" placeholder="筹资总额(元)" required>
+        <input name="prepay_ratio_pct" type="number" step="any" placeholder="预付比例%" value="70">
+        <button>建池</button>
+      </form>
+      <p class="msg" id="fd-msg"></p>
+      ${table(["年度", "险种", "范围", "筹资", "已预付", "已归集", "账面结余", "状态", "操作"], pools, (p) =>
+        `<tr><td>${p.year}</td><td>${esc(INSURANCE_TYPES[p.insurance_type] || p.insurance_type)}</td>
+         <td>${esc(p.org_group_id ? groupName[p.org_group_id] || `#${p.org_group_id}` : "全域")}</td>
+         <td>${p.total_amount}</td><td>${p.prepaid_amount}</td><td>${p.accrued_expense}</td>
+         <td>${p.book_balance < 0
+           ? `<span class="tag red">${p.book_balance}</span>` : p.book_balance}</td>
+         <td><span class="tag ${p.status === "settled" ? "green" : ""}">${esc(p.status)}</span></td>
+         <td><button data-fdpick="${p.id}">打开</button></td></tr>`)}
+    </div>
+
+    ${picked ? `
+    <div class="panel"><h3>预付批次（真实资金流）</h3>
+      <form class="inline" id="fd-prepay">
+        <input name="batch_no" placeholder="批次号">
+        <input name="amount" type="number" step="any" placeholder="金额(元)" required>
+        <input name="paid_date" type="date"><button>登记预付</button>
+      </form>
+      ${table(["批次", "金额", "拨付日期", "备注"], detail.prepay, (r) =>
+        `<tr><td>${esc(r.batch_no || "—")}</td><td>${r.amount}</td>
+         <td>${esc(r.paid_date || "—")}</td><td>${esc(r.note || "—")}</td></tr>`)}
+    </div>
+
+    <div class="panel"><h3>月度预结（账面对冲，不产生资金流）</h3>
+      <form class="inline" id="fd-period">
+        <input name="period" placeholder="YYYY-MM" required style="min-width:100px">
+        <input name="actual_amount" type="number" step="any" placeholder="发生额(留空=按结算单归集)">
+        <button>预结</button>
+      </form>
+      ${table(["期间", "发生额", "来源", "备注"], detail.periods, (r) =>
+        `<tr><td>${esc(r.period)}</td><td>${r.actual_amount}</td>
+         <td>${r.source === "auto" ? "系统归集" : "人工核定"}</td>
+         <td>${esc(r.note || "—")}</td></tr>`)}
+    </div>
+
+    <div class="panel"><h3>年终清算与结余分配</h3>
+      ${detail.settlement ? renderSettlement(detail.settlement, vars) : `
+        <form class="inline" id="fd-settle">
+          <input name="total_expense" type="number" step="any" placeholder="全年发生额(留空=各期之和)">
+          <select name="overrun_action"><option value="none">超支不处理（仅记录）</option>
+            <option value="share">超支按公式分摊</option>
+            <option value="carry">超支挂账结转</option></select>
+          <button>清算</button>
+        </form>
+        <p class="desc">清算每个池只能做一次；超支不会自动扣减任何机构。</p>`}
+    </div>` : ""}`;
+
+  $("#fd-pool").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["year", "total_amount", "prepay_ratio_pct"]);
+    if (!body.org_group_id) delete body.org_group_id;
+    else body.org_group_id = Number(body.org_group_id);
+    postAction("/api/fund/pools", body, "#fd-msg");
+  };
+  if (picked) {
+    $("#fd-prepay").onsubmit = (e) => { e.preventDefault();
+      postAction(`/api/fund/pools/${picked}/prepayments`, formJson(e.target, ["amount"]), "#fd-msg"); };
+    $("#fd-period").onsubmit = (e) => {
+      e.preventDefault();
+      const body = formJson(e.target, ["actual_amount"]);
+      // 留空即交给系统按结算单归集，不能传空串
+      if (body.actual_amount === null || body.actual_amount === undefined || Number.isNaN(body.actual_amount)) {
+        delete body.actual_amount;
+      }
+      postAction(`/api/fund/pools/${picked}/periods`, body, "#fd-msg");
+    };
+    const settleForm = $("#fd-settle");
+    if (settleForm) settleForm.onsubmit = (e) => {
+      e.preventDefault();
+      const body = formJson(e.target, ["total_expense"]);
+      if (Number.isNaN(body.total_expense) || body.total_expense === null) delete body.total_expense;
+      postAction(`/api/fund/pools/${picked}/settle`, body, "#fd-msg");
+    };
+  }
+  $("#page-body").onclick = (e) => {
+    if (e.target.dataset.fdpick) {
+      localStorage.setItem("medplat_fund_pool", e.target.dataset.fdpick);
+      return route();
+    }
+    if (e.target.id === "fd-distribute") {
+      const formula_expr = $("#fd-formula").value.trim() || "score";
+      return postAction(`/api/fund/pools/${picked}/distribute`, { formula_expr }, "#fd-msg");
+    }
+  };
+}
+
+function renderSettlement(s, vars) {
+  return `
+    <div class="cards">
+      <div class="card"><span class="k">筹资</span><b>${s.total_income}</b></div>
+      <div class="card"><span class="k">发生额</span><b>${s.total_expense}</b></div>
+      <div class="card"><span class="k">${s.is_overrun ? "超支" : "结余"}</span><b>${
+        s.is_overrun ? `<span class="tag red">${s.balance}</span>` : s.balance}</b></div>
+      <div class="card"><span class="k">已分配</span><b>${s.distributed_amount}</b></div>
+    </div>
+    <p class="desc">${esc(s.caliber.balance)}；${esc(s.caliber.overrun)}</p>
+    ${s.is_overrun
+      ? `<p class="msg err">本池超支，无结余可分配。当前超支处置方式：${
+          esc(s.overrun_action_name)}——平台只记录，不自动扣减任何机构。</p>`
+      : `<form class="inline">
+          <input id="fd-formula" value="${esc(s.formula_expr || "score")}" style="min-width:200px">
+          <button type="button" id="fd-distribute">按公式分配</button></form>
+        <p class="desc">${esc(vars.note)}；可用变量：${
+          vars.variables.map((v) => `<code>${esc(v.name)}</code>（${esc(v.desc)}）`).join("、")}</p>
+        <p class="desc">${esc(s.caliber.score)}${
+          s.score_basis ? `；本次快照参数：${esc(s.score_basis)}` : ""}</p>
+        ${table(["机构", "绩效得分", "权重", "占比", "金额"], s.distributions, (d) =>
+          `<tr><td>${esc(d.org_name)}</td><td>${d.score}</td><td>${d.weight}</td>
+           <td>${d.share_pct}%</td><td><b>${d.amount}</b></td></tr>`)}`}`;
 }
