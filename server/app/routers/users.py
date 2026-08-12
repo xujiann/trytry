@@ -1,10 +1,20 @@
 """用户管理与审计日志（管理员），修改密码（本人）。"""
+import json
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import ROLE_NAMES, get_current_user, paginate, require_admin
+from ..deps import (
+    ROLE_NAMES,
+    get_current_user,
+    paginate,
+    require_admin,
+    resolve_business_date,
+)
 from ..models import AuditLog, Organization, RoleChangeLog, User, utcnow
 from ..security import hash_password, validate_password_strength, verify_password
 
@@ -90,25 +100,68 @@ def change_password(
     return {"changed": True, "tokens_revoked": True}
 
 
+# 归档导出的批读大小：既不让单批占太多内存，也不至于把查询打得太碎
+AUDIT_EXPORT_BATCH = 1000
+
+
 @router.get("/audit/export", dependencies=[Depends(require_admin)])
-def export_audit_logs(db: Session = Depends(get_db)):
-    """审计日志归档导出：全量 JSON（供按月归档与防篡改校验使用）。"""
-    logs = db.query(AuditLog).order_by(AuditLog.id).all()
-    return {
-        "total": len(logs),
-        "logs": [
-            {
-                "id": log.id,
-                "user_id": log.user_id,
-                "username": log.username,
-                "method": log.method,
-                "path": log.path,
-                "status_code": log.status_code,
-                "at": log.created_at.isoformat(),
-            }
-            for log in logs
-        ],
-    }
+def export_audit_logs(
+    since_id: int = 0,
+    until: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """审计日志归档导出：按 id 游标流式输出 NDJSON（每行一条记录）。
+
+    T6.2 整改：此前是 `db.query(AuditLog).all()` 一次读进内存再序列化成单个
+    JSON 响应。审计中间件对每一次写操作留痕，一个县域平台跑一年就是百万级行，
+    开发库上看不出问题，生产上是一次 OOM。
+
+    现按主键游标分批读取并逐行 yield：
+    - `since_id` 增量归档（上次导到哪，下次从哪继续）；
+    - `until` 可选按日期上界（YYYY-MM-DD，导出该日之前的记录）用于按月归档；
+    - 首行是 meta 行（含本次导出的起止 id），便于归档端校验连续性。
+    """
+    if until:
+        resolve_business_date(until)  # 复用统一的日期格式校验（非法 422）
+
+    def rows():
+        cursor = since_id
+        last_id = since_id
+        total = 0
+        while True:
+            query = db.query(AuditLog).filter(AuditLog.id > cursor)
+            if until:
+                query = query.filter(AuditLog.created_at < datetime.fromisoformat(f"{until}T00:00:00"))
+            batch = query.order_by(AuditLog.id).limit(AUDIT_EXPORT_BATCH).all()
+            if not batch:
+                break
+            for log in batch:
+                yield json.dumps(
+                    {
+                        "id": log.id,
+                        "user_id": log.user_id,
+                        "username": log.username,
+                        "method": log.method,
+                        "path": log.path,
+                        "status_code": log.status_code,
+                        "at": log.created_at.isoformat(),
+                    },
+                    ensure_ascii=False,
+                ) + "\n"
+                total += 1
+            cursor = last_id = batch[-1].id
+            # 已读完的批次立即从会话中逐出，否则身份映射照样把全表留在内存里
+            db.expunge_all()
+        yield json.dumps(
+            {"_meta": True, "total": total, "since_id": since_id, "last_id": last_id},
+            ensure_ascii=False,
+        ) + "\n"
+
+    return StreamingResponse(
+        rows(),
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": 'attachment; filename="audit_logs.ndjson"'},
+    )
 
 
 @router.get("/audit", dependencies=[Depends(require_admin)])

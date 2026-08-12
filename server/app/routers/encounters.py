@@ -52,30 +52,51 @@ def list_encounters(
     return paginate(query.order_by(Encounter.id.desc()), response, offset, limit)
 
 
+# 360 视图每类记录的返回上限：与居民端 portal._build_archive 保持一致。
+# 一位管了十年的慢病患者能攒出数百条就诊与上千条处方，全量返回体积不可控（T6.4）。
+ARCHIVE_SECTION_LIMIT = 50
+
+
+def _section(query, limit: int = ARCHIVE_SECTION_LIMIT) -> tuple[list, bool]:
+    """取最近 limit 条，并判断是否还有更多（多取一条来判定，不额外做 count）。"""
+    rows = query.limit(limit + 1).all()
+    return rows[:limit], len(rows) > limit
+
+
 @router.get("/archive/{ehc_no}")
 def patient_360_view(ehc_no: str, db: Session = Depends(get_db)):
-    """患者全景360视图：档案、就诊、检查检验报告、慢病、处方一屏汇聚。"""
+    """患者全景360视图：档案、就诊、检查检验报告、慢病、处方一屏汇聚。
+
+    各段取最近 ARCHIVE_SECTION_LIMIT 条，`has_more` 标明是否被截断；
+    需要完整清单时走各自的分页列表接口。
+    """
     patient = db.query(Patient).filter(Patient.ehc_no == ehc_no).first()
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    encounters = (
-        db.query(Encounter).filter(Encounter.patient_id == patient.id).order_by(Encounter.id.desc()).all()
+    encounters, encounters_more = _section(
+        db.query(Encounter).filter(Encounter.patient_id == patient.id).order_by(Encounter.id.desc())
     )
-    reports = (
+    reports, reports_more = _section(
         db.query(ExamReport)
         .join(ExamRequest, ExamReport.request_id == ExamRequest.id)
         .filter(ExamRequest.patient_id == patient.id)
         .order_by(ExamReport.id.desc())
-        .all()
     )
     chronic = db.query(ChronicPatient).filter(ChronicPatient.patient_id == patient.id).all()
-    prescriptions = (
-        db.query(Prescription).filter(Prescription.patient_id == patient.id).order_by(Prescription.id.desc()).all()
+    prescriptions, prescriptions_more = _section(
+        db.query(Prescription).filter(Prescription.patient_id == patient.id).order_by(Prescription.id.desc())
     )
-    checkups = (
-        db.query(PhysicalExam).filter(PhysicalExam.patient_id == patient.id).order_by(PhysicalExam.id.desc()).all()
+    checkups, checkups_more = _section(
+        db.query(PhysicalExam).filter(PhysicalExam.patient_id == patient.id).order_by(PhysicalExam.id.desc())
     )
     return {
+        "section_limit": ARCHIVE_SECTION_LIMIT,
+        "has_more": {
+            "encounters": encounters_more,
+            "exam_reports": reports_more,
+            "prescriptions": prescriptions_more,
+            "checkups": checkups_more,
+        },
         "patient": {
             "ehc_no": patient.ehc_no,
             "name": patient.name,

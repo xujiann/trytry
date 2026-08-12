@@ -393,3 +393,56 @@ def test_report_requires_director(client, admin):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 403
+
+
+# ============================================================================
+# T6.3 回归：综合绩效报告不得为每家机构重复做全表扫描
+# ============================================================================
+
+
+def test_performance_report_computes_efficiency_once(client, admin, monkeypatch):
+    """N+1 回归：无论多少家机构，efficiency() 只应被调用一次。"""
+    from app.routers import analytics as analytics_module
+
+    calls = []
+    original = analytics_module.efficiency
+
+    def counting_efficiency(period, db):
+        calls.append(period)
+        return original(period, db)
+
+    monkeypatch.setattr(analytics_module, "efficiency", counting_efficiency)
+    period = date.today().strftime("%Y-%m")
+    resp = client.get(f"/api/analytics/performance-report?period={period}", headers=admin)
+    assert resp.status_code == 200
+    assert len(resp.json()["orgs"]) >= 2  # 确实有多家机构，否则这条断言没意义
+    assert len(calls) == 1
+
+
+def test_performance_report_query_count_does_not_scale_with_orgs(client, admin):
+    """SQL 条数必须与机构数无关：新增 10 家机构后查询条数不得增长。"""
+    from sqlalchemy import event
+
+    from app.database import engine
+
+    period = date.today().strftime("%Y-%m")
+
+    def count_queries():
+        counter = {"n": 0}
+        listener = lambda *a, **k: counter.__setitem__("n", counter["n"] + 1)  # noqa: E731
+        event.listen(engine, "before_cursor_execute", listener)
+        try:
+            client.get(f"/api/analytics/performance-report?period={period}", headers=admin)
+        finally:
+            event.remove(engine, "before_cursor_execute", listener)
+        return counter["n"]
+
+    before = count_queries()
+    for i in range(10):
+        client.post(
+            "/api/organizations",
+            json={"name": f"扩容机构{i}", "org_type": "township", "level": "township"},
+            headers=admin,
+        )
+    after = count_queries()
+    assert after == before, f"查询数随机构数增长：{before} -> {after}"

@@ -274,70 +274,78 @@ def efficiency(period: str, db: Session = Depends(get_db)):
 # ============================================================================
 
 
-def formula_variables(db: Session, org_id: int, period: str) -> dict[str, float]:
-    """公式可引用的变量表。
+def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]]:
+    """一次性算出**全部机构**的公式变量（T6.3）。
 
-    新增变量时同步更新 `/api/analytics/formula-variables` 的说明，
-    否则管理员写公式时只能靠猜。
+    此前是逐机构 7 个 count + 1 次 efficiency()，25 家机构就是 175 条计数查询
+    加 25 次全表扫描。这里改成按 org_id 分组聚合：无论多少家机构，
+    固定 7 条分组查询 + 1 次 efficiency()。
     """
     start, end = _period_bounds(period)
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.min.time())
 
-    encounters = (
-        db.query(Encounter)
-        .filter(Encounter.org_id == org_id, Encounter.created_at >= start_dt,
-                Encounter.created_at < end_dt)
-        .count()
+    def grouped(model, org_column, *conditions) -> dict[int, int]:
+        query = db.query(org_column, func.count(model.id)).filter(*conditions)
+        return dict(query.group_by(org_column).all())
+
+    in_period = lambda model: (  # noqa: E731 - 三处复用的时间窗谓词
+        model.created_at >= start_dt,
+        model.created_at < end_dt,
     )
-    referrals_up = (
-        db.query(Referral)
-        .filter(Referral.from_org_id == org_id, Referral.direction == "up",
-                Referral.created_at >= start_dt, Referral.created_at < end_dt)
-        .count()
+    encounters = grouped(Encounter, Encounter.org_id, *in_period(Encounter))
+    referrals_up = grouped(
+        Referral, Referral.from_org_id, Referral.direction == "up", *in_period(Referral)
     )
-    referrals_down = (
-        db.query(Referral)
-        .filter(Referral.to_org_id == org_id, Referral.direction == "down",
-                Referral.created_at >= start_dt, Referral.created_at < end_dt)
-        .count()
+    referrals_down = grouped(
+        Referral, Referral.to_org_id, Referral.direction == "down", *in_period(Referral)
     )
-    exams = (
-        db.query(ExamRequest)
-        .filter(ExamRequest.from_org_id == org_id, ExamRequest.created_at >= start_dt,
-                ExamRequest.created_at < end_dt)
-        .count()
+    exams = grouped(ExamRequest, ExamRequest.from_org_id, *in_period(ExamRequest))
+    prescriptions = grouped(Prescription, Prescription.org_id, *in_period(Prescription))
+    rejected = grouped(
+        Prescription, Prescription.org_id, Prescription.status == "rejected", *in_period(Prescription)
     )
-    prescriptions = (
-        db.query(Prescription)
-        .filter(Prescription.org_id == org_id, Prescription.created_at >= start_dt,
-                Prescription.created_at < end_dt)
-        .count()
+    chronic = dict(
+        db.query(ChronicPatient.managed_by_org_id, func.count(ChronicPatient.id))
+        .group_by(ChronicPatient.managed_by_org_id)
+        .all()
     )
-    rejected = (
-        db.query(Prescription)
-        .filter(Prescription.org_id == org_id, Prescription.status == "rejected",
-                Prescription.created_at >= start_dt, Prescription.created_at < end_dt)
-        .count()
+    efficiency_index = {row["org_id"]: row for row in efficiency(period, db)}
+
+    org_ids = (
+        set(encounters) | set(referrals_up) | set(referrals_down) | set(exams)
+        | set(prescriptions) | set(chronic) | set(efficiency_index)
+        | {o for (o,) in db.query(Organization.id).all()}
     )
-    chronic = db.query(ChronicPatient).filter(ChronicPatient.managed_by_org_id == org_id).count()
-    eff = {row["org_id"]: row for row in efficiency(period, db)}.get(org_id, {})
-    return {
-        "encounters": float(encounters),
-        "referrals_up": float(referrals_up),
-        "referrals_down": float(referrals_down),
-        "exams": float(exams),
-        "prescriptions": float(prescriptions),
-        "rejected_prescriptions": float(rejected),
-        "chronic_patients": float(chronic),
-        "beds": float(eff.get("beds", 0)),
-        "discharges": float(eff.get("discharges", 0)),
-        "occupied_bed_days": float(eff.get("occupied_bed_days", 0)),
-        "avg_length_of_stay": float(eff.get("avg_length_of_stay", 0)),
-        "bed_turnover": float(eff.get("bed_turnover", 0)),
-        "bed_occupancy_rate_pct": float(eff.get("bed_occupancy_rate_pct", 0)),
-        "doctors": float(eff.get("doctors", 0)),
-    }
+    index = {}
+    for org_id in org_ids:
+        eff = efficiency_index.get(org_id, {})
+        index[org_id] = {
+            "encounters": float(encounters.get(org_id, 0)),
+            "referrals_up": float(referrals_up.get(org_id, 0)),
+            "referrals_down": float(referrals_down.get(org_id, 0)),
+            "exams": float(exams.get(org_id, 0)),
+            "prescriptions": float(prescriptions.get(org_id, 0)),
+            "rejected_prescriptions": float(rejected.get(org_id, 0)),
+            "chronic_patients": float(chronic.get(org_id, 0)),
+            "beds": float(eff.get("beds", 0)),
+            "discharges": float(eff.get("discharges", 0)),
+            "occupied_bed_days": float(eff.get("occupied_bed_days", 0)),
+            "avg_length_of_stay": float(eff.get("avg_length_of_stay", 0)),
+            "bed_turnover": float(eff.get("bed_turnover", 0)),
+            "bed_occupancy_rate_pct": float(eff.get("bed_occupancy_rate_pct", 0)),
+            "doctors": float(eff.get("doctors", 0)),
+        }
+    return index
+
+
+def formula_variables(db: Session, org_id: int, period: str) -> dict[str, float]:
+    """单机构变量表（供单点查询使用）。
+
+    批量场景一律走 `build_variable_index()`——逐机构调用本函数就是 N+1。
+    新增变量时同步更新 VARIABLE_DESCRIPTIONS，否则管理员写公式时只能靠猜。
+    """
+    return build_variable_index(db, period).get(org_id, {name: 0.0 for name in VARIABLE_DESCRIPTIONS})
 
 
 VARIABLE_DESCRIPTIONS = {
@@ -437,9 +445,12 @@ def performance_report(period: str, db: Session = Depends(get_db)):
         ).all()
     )
     orgs = db.query(Organization).order_by(Organization.id).all()
+    # 全部机构的变量一次性算出：固定 8 条聚合查询，不随机构数增长（T6.3）
+    variable_index = build_variable_index(db, period)
+    empty = {name: 0.0 for name in VARIABLE_DESCRIPTIONS}
     rows = []
     for org in orgs:
-        variables = formula_variables(db, org.id, period)
+        variables = variable_index.get(org.id, empty)
         items = []
         weighted, weight_sum = 0.0, 0.0
         for formula in formulas:

@@ -439,3 +439,56 @@ def test_engines_require_login(client):
     assert client.get("/api/rules/catalog").status_code == 401
     assert client.get("/api/workflows/my-tasks").status_code == 401
     assert client.get("/api/service-requests").status_code == 401
+
+
+# ============================================================================
+# T6.1 回归：客户端传入的变量类型不匹配时不得逃逸成 500
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "condition,variables,expect",
+    [
+        ("len(chief_complaint) < 5", {"chief_complaint": 123}, "只能作用于文本"),
+        ("daily_dose > 100", {"daily_dose": None}, "不受支持"),
+        ("daily_dose > 100", {"daily_dose": {"a": 1}}, "不受支持"),
+        ("daily_dose > 100", {"daily_dose": [1, 2]}, "不受支持"),
+        ("daily_dose * 2 > 100", {"daily_dose": None}, "不是数值"),
+    ],
+)
+def test_condition_type_mismatch_is_rule_error(condition, variables, expect):
+    """类型不匹配属于调用方输入问题，应与"未知变量"同级处理，而不是崩掉。"""
+    with pytest.raises(RuleError, match=expect):
+        evaluate_condition(condition, variables)
+
+
+def test_evaluate_endpoint_never_500_on_bad_variable_types(client, admin):
+    """/api/rules/evaluate 的 variables 由客户端自由传入，任何类型都不该打出 500。"""
+    client.post(
+        "/api/rules",
+        json={"key": "t61_len", "name": "主诉过短", "domain": "medical_record",
+              "condition": "len(chief_complaint) < 5"},
+        headers=admin,
+    )
+    client.post(
+        "/api/rules",
+        json={"key": "t61_num", "name": "剂量上限", "domain": "prescription",
+              "condition": "daily_dose > 100"},
+        headers=admin,
+    )
+    cases = [
+        ("medical_record", {"chief_complaint": 123}),
+        ("prescription", {"daily_dose": None}),
+        ("prescription", {"daily_dose": {"a": 1}}),
+        ("prescription", {"daily_dose": [1, 2]}),
+        ("prescription", {"daily_dose": "abc"}),
+    ]
+    for domain, variables in cases:
+        resp = client.post(
+            "/api/rules/evaluate", json={"domain": domain, "variables": variables}, headers=admin
+        )
+        assert resp.status_code == 200, f"{domain} {variables} -> {resp.status_code}"
+        body = resp.json()
+        # 出错的规则进 errors，其余规则照常求值
+        assert isinstance(body["errors"], list)
+        assert body["evaluated"] >= 1

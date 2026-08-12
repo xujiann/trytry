@@ -36,23 +36,41 @@ class RuleError(FormulaError):
     """条件表达式非法。"""
 
 
+def _coerce(name: str, value):
+    """把变量值收敛成求值器认识的三种类型之一，否则抛 RuleError。
+
+    T6.1 整改：`/api/rules/evaluate` 的 variables 是**客户端自由传入的 dict**，
+    里面可能出现 null、嵌套对象、数组。此前这些值会一路走到 `float()`，
+    抛出的 TypeError 不属于 RuleError，穿透调用方的兜底逻辑变成 500。
+    类型不对是调用方的输入问题，应当和"引用未知变量"一样按规则级错误处理。
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value)
+    raise RuleError(f"变量 {name} 的值类型不受支持：{type(value).__name__}")
+
+
 def _eval_operand(node: ast.AST, variables: dict):
     """求一个操作数：字符串/元组按原样返回，其余交给数值求值器。"""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, (ast.Tuple, ast.List)):
         return tuple(_eval_operand(e, variables) for e in node.elts)
-    if isinstance(node, ast.Name) and node.id in variables:
-        value = variables[node.id]
-        # 字符串变量直接返回，不强转成 float
-        if isinstance(value, str):
-            return value
-        if isinstance(value, bool):
-            return value
+    if isinstance(node, ast.Name):
+        if node.id not in variables:
+            raise RuleError(f"未知变量：{node.id}")
+        return _coerce(node.id, variables[node.id])
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len":
         if len(node.args) != 1:
             raise RuleError("len() 只接受一个参数")
-        return float(len(_eval_operand(node.args[0], variables) or ""))
+        target = _eval_operand(node.args[0], variables)
+        if not isinstance(target, str):
+            # len(数值) 在 Python 里是 TypeError，这里转成规则级错误
+            raise RuleError("len() 只能作用于文本变量")
+        return float(len(target))
     return _eval_node(node, variables)
 
 
@@ -95,6 +113,10 @@ def evaluate_condition(expression: str, variables: dict) -> bool:
         return _eval_condition(tree.body, variables)
     except FormulaError as exc:
         raise RuleError(str(exc)) from None
+    except (TypeError, ValueError) as exc:
+        # 兜底：变量来自不可信输入，此函数对外只承诺抛 RuleError。
+        # 上面已逐类收敛，这一层保证契约不被将来新增的分支破坏。
+        raise RuleError(f"条件求值失败：{exc}") from None
 
 
 def validate_condition(expression: str, known_variables: dict) -> None:

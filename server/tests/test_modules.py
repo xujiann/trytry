@@ -307,3 +307,24 @@ def test_metrics_trends_and_alerts(client, headers):
     assert labels.get("critical_values") == 1
     assert labels.get("stock_alerts") == 1
     assert alerts["total"] >= 2
+
+
+def test_patient_360_view_is_bounded(client, headers, base_data):
+    """T6.4：360 视图各段有上限并标出 has_more，与居民端 limit(50) 口径一致。"""
+    from app.routers.encounters import ARCHIVE_SECTION_LIMIT
+
+    patient = base_data["patient"]
+    org = base_data["county"]
+    for i in range(ARCHIVE_SECTION_LIMIT + 3):
+        client.post(
+            "/api/encounters",
+            json={"patient_id": patient["id"], "org_id": org["id"], "doctor_name": "医生",
+                  "diagnosis_name": f"复诊{i}"},
+            headers=headers,
+        )
+    view = client.get(f"/api/archive/{patient['ehc_no']}", headers=headers).json()
+    assert view["section_limit"] == ARCHIVE_SECTION_LIMIT
+    assert len(view["encounters"]) == ARCHIVE_SECTION_LIMIT
+    assert view["has_more"]["encounters"] is True
+    # 未超限的段不应误报 has_more
+    assert view["has_more"]["checkups"] is False

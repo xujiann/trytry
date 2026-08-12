@@ -45,7 +45,15 @@ def _eval_node(node: ast.AST, variables: dict[str, float]) -> float:
     if isinstance(node, ast.Name):
         if node.id not in variables:
             raise FormulaError(f"未知变量：{node.id}")
-        return float(variables[node.id])
+        value = variables[node.id]
+        # T6.1 整改：变量值可能来自客户端（规则求值接口），null/对象/数组
+        # 走到 float() 会抛 TypeError，穿透调用方的兜底变成 500
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise FormulaError(f"变量 {node.id} 的值不是数值：{type(value).__name__}")
+        try:
+            return float(value)
+        except ValueError:
+            raise FormulaError(f"变量 {node.id} 的值不是数值：{value!r}") from None
 
     if isinstance(node, ast.BinOp):
         op_type = type(node.op)
