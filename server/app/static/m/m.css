@@ -90,6 +90,18 @@ body {
 .m-card.fold > summary::after { content: " ＋"; }
 .m-card.fold[open] > summary::after { content: " －"; }
 .m-card.fold form { padding: 0 16px 16px; }
+.m-card.fold .fold-body { padding: 0 16px 16px; }
+
+/* 价格公示：一行一项，价格右对齐好比价 */
+.price-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 9px 0; border-bottom: 1px solid #eef1f5; gap: 10px;
+}
+.price-row:last-child { border-bottom: none; }
+.price-row .n { color: #24292f; }
+.price-row .c { color: #98a2ae; font-size: 12px; margin-left: 6px; }
+.price-row .p { color: #0b6e6e; font-weight: 600; white-space: nowrap; }
+.price-row .d { display: block; color: #98a2ae; font-size: 11.5px; }
 
 /* 在线服务分段控件 */
 .seg {

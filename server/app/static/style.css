@@ -79,3 +79,6 @@ pre.json { background: #f6f8fa; border-radius: 8px; padding: 14px; font-size: 12
 /* 口径说明列：字号小一档、灰一档，让指标数字先被看见 */
 td.muted { color: #6b7480; font-size: 12.5px; line-height: 1.5; }
 .muted { color: #8a939e; }
+/* 并排两栏：高频操作 / 失败最多的操作对照看才有意义 */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }

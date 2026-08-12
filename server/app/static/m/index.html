@@ -16,6 +16,15 @@
 <main id="m-main">
   <!-- 健康宣教（无需登录） -->
   <section id="tab-edu" class="tab-page">
+    <!-- 价格公示放在免登录页：公示本来就是给不特定公众看的，
+         塞进登录后的"在线服务"等于没公示 -->
+    <details class="m-card fold" id="price-fold">
+      <summary>医疗服务价格公示</summary>
+      <div class="fold-body">
+        <input id="price-search" placeholder="搜索项目名称，如 CT">
+        <div id="price-list">展开后加载…</div>
+      </div>
+    </details>
     <div id="edu-list" class="list">加载中…</div>
   </section>
 

@@ -89,6 +89,7 @@ const PAGES = [
   { group: "基础平台" },
   { id: "orgs", title: "机构管理", render: renderOrgs },
   { id: "patients", title: "患者主索引", render: renderPatients },
+  { id: "credentials", title: "就诊凭据", render: renderCredentials },
   { id: "dicts", title: "编码字典", render: renderDicts },
   { group: "业务协同" },
   { id: "exams", title: "共享诊断中心", render: renderExams },
@@ -147,6 +148,7 @@ const PAGES = [
   { id: "rules", title: "统一规则引擎", render: renderRules, roles: ["admin"] },
   { id: "workflows", title: "流程引擎", render: renderWorkflows },
   { id: "jobs", title: "定时任务", render: renderJobs, roles: ["director"] },
+  { id: "monitor", title: "运行监控", render: renderMonitor, roles: ["admin"] },
   { id: "dataquality", title: "数据质控", render: renderDataQuality, roles: ["admin"] },
   { id: "printtpl", title: "打印模板", render: renderPrintTemplates, roles: ["admin"] },
   { id: "users", title: "用户管理", render: renderUsers, roles: ["admin"] },
@@ -2184,7 +2186,8 @@ async function renderBilling() {
       ${table(["编码", "名称", "类别", "单价", "状态", "操作"], items, (i) =>
         `<tr><td>${esc(i.code)}</td><td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.price}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
-         <td><button class="btn secondary" data-reprice="${i.id}">调价</button></td></tr>`)}</div>
+         <td><button class="btn secondary" data-reprice="${i.id}">调价</button>
+             <button class="btn secondary" data-history="${i.id}">调价历史</button></td></tr>`)}</div>
     <div class="panel"><h3>计费与结算</h3>
       <form class="inline" id="bd-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="admission_id" type="number" placeholder="住院单ID(住院)"><input name="encounter_id" type="number" placeholder="就诊ID(门诊)">
@@ -2251,13 +2254,24 @@ async function renderBilling() {
     } catch (err) { setMsg("#recon-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { reprice, refund } = e.target.dataset;
+    const { reprice, history, refund } = e.target.dataset;
     try {
       if (reprice) {
         const price = prompt("新单价（元）");
         if (!price) return;
-        await api(`/api/billing/charge-items/${reprice}`, { method: "PATCH", body: JSON.stringify({ price: Number(price) }) });
+        // 走 reprice 而不是 PATCH：价格要对外公示，调价依据与生效日期必须留下来
+        const reason = prompt("调价依据（如：省医保局2026年第3号文，可留空）") || "";
+        const effective_date = prompt("生效日期 YYYY-MM-DD（可留空）") || "";
+        await api(`/api/billing/charge-items/${reprice}/reprice`, {
+          method: "POST",
+          body: JSON.stringify({ new_price: Number(price), reason, effective_date }) });
         route();
+      } else if (history) {
+        const rows = await api(`/api/billing/charge-items/${history}/price-history`);
+        setMsg("#bill-msg", rows.length
+          ? rows.map((r) => `${r.changed_at.slice(0, 10)} ${r.old_price}→${r.new_price}元${
+              r.effective_date ? `（${r.effective_date}起）` : ""}${r.reason ? ` ${r.reason}` : ""}`).join("；")
+          : "该项目尚无调价记录", true);
       } else if (refund) {
         const amount = prompt("退款金额（元，留空为全额退款）");
         if (amount === null) return;
@@ -4301,4 +4315,151 @@ async function renderClinicalIndicators() {
     </div>
     ${barChart(drug.orgs.filter((o) => o.antibiotic_intensity > 0 && !o.intensity_unstable)
       .map((o) => [o.org_name, o.antibiotic_intensity]), { unit: " DDDs/百人天" })}`;
+}
+
+/* ---------------- 运行监控（浙#47 / #46） ---------------- */
+
+async function renderMonitor() {
+  $("#page-desc").textContent =
+    "调用统计是本实例进程内的数据，进程重启即清零；审计统计才是跨实例可追溯的";
+  const [ov, stats, nodes, audit] = await Promise.all([
+    api("/api/monitor/overview"), api("/api/monitor/api-stats"),
+    api("/api/monitor/nodes"), api("/api/audit/stats?days=30"),
+  ]);
+  const dot = (ok) => `<span class="tag ${ok ? "green" : "red"}">${ok ? "正常" : "异常"}</span>`;
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>运行环境</h3>
+      <div class="cards">
+        <div class="card"><span class="k">实例</span><b>${esc(ov.instance_id)}</b></div>
+        <div class="card"><span class="k">运行时长</span><b>${
+          Math.floor(ov.uptime_seconds / 3600)}小时${Math.floor(ov.uptime_seconds % 3600 / 60)}分</b></div>
+        <div class="card"><span class="k">环境</span><b>${esc(ov.environment)}</b></div>
+        <div class="card"><span class="k">数据库</span><b>${dot(ov.database.connected)} ${
+          esc(ov.database.dialect)} ${ov.database.latency_ms ?? "—"}ms</b></div>
+        <div class="card"><span class="k">Redis</span><b>${
+          ov.redis.configured ? dot(ov.redis.connected) : '<span class="tag orange">未配置</span>'}</b></div>
+      </div>
+      ${ov.redis.note ? `<p class="msg err">${esc(ov.redis.note)}</p>` : ""}
+    </div>
+
+    <div class="panel"><h3>集群节点</h3>
+      ${nodes.instances
+        ? table(["实例", "本机", "运行时长(秒)"], nodes.instances, (n) =>
+            `<tr><td>${esc(n.instance_id)}</td><td>${n.self ? "是" : ""}</td>
+             <td>${n.uptime_seconds ?? "—"}</td></tr>`)
+        : `<p class="msg err">${esc(nodes.note)}</p>`}
+    </div>
+
+    <div class="panel"><h3>接口调用（${esc(stats.scope)}）</h3>
+      <div class="cards">
+        <div class="card"><span class="k">请求总数</span><b>${stats.total_requests}</b></div>
+        <div class="card"><span class="k">平均耗时</span><b>${stats.avg_duration_ms}ms</b></div>
+        ${Object.entries(stats.by_status_class).map(([k, v]) =>
+          `<div class="card"><span class="k">${esc(k)}</span><b>${v}</b></div>`).join("")}
+      </div>
+      ${table(["模块", "调用数", "平均耗时"], stats.top_modules, (m) =>
+        `<tr><td>${esc(m.module)}</td><td>${m.count}</td>
+         <td>${m.avg_duration_ms > stats.slow_threshold_ms
+           ? `<span class="tag red">${m.avg_duration_ms}ms</span>` : `${m.avg_duration_ms}ms`}</td></tr>`)}
+      <h4>慢请求样本（≥${stats.slow_threshold_ms}ms，最近 ${stats.slow_samples.length} 条）</h4>
+      ${table(["时间", "方法", "路径", "耗时"], stats.slow_samples, (r) =>
+        `<tr><td>${esc(r.at)}</td><td>${esc(r.method)}</td><td>${esc(r.path)}</td>
+         <td>${r.duration_ms}ms</td></tr>`)}
+      <h4>错误样本（最近 ${stats.error_samples.length} 条）</h4>
+      ${table(["时间", "方法", "路径", "状态"], stats.error_samples, (r) =>
+        `<tr><td>${esc(r.at)}</td><td>${esc(r.method)}</td><td>${esc(r.path)}</td>
+         <td><span class="tag ${r.status >= 500 ? "red" : "orange"}">${r.status}</span></td></tr>`)}
+    </div>
+
+    <div class="panel"><h3>审计统计（近 ${audit.days} 天 · ${esc(audit.scope)}）</h3>
+      <div class="cards">
+        <div class="card"><span class="k">写操作</span><b>${audit.total}</b></div>
+        <div class="card"><span class="k">失败</span><b>${audit.failed}</b></div>
+        <div class="card"><span class="k">失败率</span><b>${audit.failed_ratio_pct}%</b></div>
+      </div>
+      ${audit.daily.length
+        ? lineChart(audit.daily.map((d) => d.date.slice(5)),
+            [audit.daily.map((d) => d.ok), audit.daily.map((d) => d.failed)],
+            ["#0b6e6e", "#c0392b"])
+        : '<p class="desc">暂无审计数据</p>'}
+      <div class="two-col">
+        <div><h4>高频操作</h4>${table(["路径", "次数"], audit.top_paths, (r) =>
+          `<tr><td>${esc(r.key)}</td><td>${r.count}</td></tr>`)}</div>
+        <div><h4>失败最多的操作</h4>${table(["路径", "次数"], audit.top_failed_paths, (r) =>
+          `<tr><td>${esc(r.key)}</td><td>${r.count}</td></tr>`)}</div>
+      </div>
+      <h4>操作最多的用户</h4>
+      ${table(["用户", "次数"], audit.top_users, (r) =>
+        `<tr><td>${esc(r.key)}</td><td>${r.count}</td></tr>`)}
+    </div>`;
+}
+
+/* ---------------- 就诊凭据（浙#27） ---------------- */
+
+async function renderCredentials() {
+  $("#page-desc").textContent =
+    "凭据是介质（卡会丢、码会过期），电子健康卡号才是身份——换卡不换号";
+  const rows = await api("/api/credentials?limit=100");
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>发放凭据</h3>
+      <form id="cred-form" class="inline">
+        <input name="patient_id" placeholder="患者ID" required>
+        <select name="credential_type">
+          <option value="card">实体就诊卡</option>
+          <option value="qrcode">电子二维码</option>
+          <option value="temp">临时凭据</option>
+        </select>
+        <input name="credential_no" placeholder="凭据号（留空自动生成）">
+        <input name="reason" placeholder="换发原因（如原卡遗失）">
+        <button>发放</button>
+      </form>
+      <p class="desc">该患者原有的有效凭据会自动作废——挂失换发后旧卡必须立刻失效。</p>
+      <p class="msg" id="cred-msg"></p>
+    </div>
+    <div class="panel"><h3>凭据核验</h3>
+      <form id="cred-lookup" class="inline">
+        <input name="credential_no" placeholder="扫码或输入凭据号" required>
+        <button>核验</button>
+      </form>
+      <div id="cred-result"></div>
+    </div>
+    <div class="panel"><h3>凭据台账</h3>
+      ${table(["凭据号", "患者ID", "类型", "状态", "发放时间", "结束原因", "操作"], rows, (c) =>
+        `<tr><td>${esc(c.credential_no)}</td><td>${c.patient_id}</td>
+         <td>${esc(c.credential_type_name)}</td>
+         <td><span class="tag ${c.status === "active" ? "green" : c.status === "recycled" ? "" : "red"}">${
+           esc(c.status_name)}</span></td>
+         <td>${esc(c.issued_at.slice(0, 16).replace("T", " "))}</td>
+         <td>${esc(c.close_reason || "—")}</td>
+         <td>${c.status === "active"
+           ? `<button data-crec="${c.id}">回收</button><button data-cvoid="${c.id}">作废</button>` : ""}</td></tr>`)}
+    </div>`;
+  $("#cred-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/credentials", formJson(e.target, ["patient_id"]), "#cred-msg"); };
+  $("#cred-lookup").onsubmit = async (e) => {
+    e.preventDefault();
+    const no = e.target.credential_no.value.trim();
+    try {
+      const c = await api(`/api/credentials/lookup/${encodeURIComponent(no)}`);
+      $("#cred-result").innerHTML = `<div class="cards">
+        <div class="card"><span class="k">持有人</span><b>${esc(c.patient?.name || "—")}</b></div>
+        <div class="card"><span class="k">健康卡号</span><b>${esc(c.patient?.ehc_no || "—")}</b></div>
+        <div class="card"><span class="k">是否可用</span><b><span class="tag ${
+          c.valid ? "green" : "red"}">${c.valid ? "有效" : esc(c.status_name)}</span></b></div>
+        ${c.close_reason ? `<div class="card"><span class="k">失效原因</span><b>${esc(c.close_reason)}</b></div>` : ""}
+      </div>`;
+    } catch (err) {
+      // 查无此卡与卡已作废是两回事，前者才是 404
+      $("#cred-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+    }
+  };
+  $("#page-body").onclick = (e) => {
+    const { crec, cvoid } = e.target.dataset;
+    if (crec) return postAction(`/api/credentials/${crec}/recycle`, {}, "#cred-msg");
+    if (cvoid) {
+      const reason = prompt("作废原因（必填，如挂失/损坏）");
+      if (!reason) return;
+      return postAction(`/api/credentials/${cvoid}/void`, { reason }, "#cred-msg");
+    }
+  };
 }

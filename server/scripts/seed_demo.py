@@ -199,6 +199,24 @@ for payload in [
     if not _exists(_charges, lambda r, p=payload: r["code"] == p["code"]):
         c.post("/api/billing/charge-items", json=payload)
 
+# ---------- 价格公示：一次带依据的调价，公示页才有"何时起执行"可看 ----------
+_ct = _exists(c.get("/api/billing/charge-items").json(), lambda r: r["code"] == "EXAM-CT")
+if _ct is None:
+    _ct = c.post("/api/billing/charge-items", json={
+        "code": "EXAM-CT", "name": "头颅CT平扫", "category": "exam", "price": 260}).json()
+    c.post(f"/api/billing/charge-items/{_ct['id']}/reprice", json={
+        "new_price": 220, "reason": "省医保局2026年第3号文（检查检验价格下调）",
+        "effective_date": date.today().isoformat()})
+
+# ---------- 就诊凭据：一张有效卡 + 一张挂失作废的旧卡 ----------
+if not c.get(f"/api/credentials?patient_id={patients[0]['id']}").json():
+    c.post("/api/credentials", json={"patient_id": patients[0]["id"], "credential_type": "card"})
+    # 再发一张即自动作废上一张——挂失换发的正确语义，台账上两条都看得见
+    c.post("/api/credentials", json={"patient_id": patients[0]["id"],
+                                     "credential_type": "card", "reason": "原卡遗失挂失换发"})
+    c.post("/api/credentials", json={"patient_id": patients[1]["id"],
+                                     "credential_type": "qrcode"})
+
 # 门诊药费明细：门诊药占比的数据源，不开明细这个指标恒为 0。
 # 必须放在收费项目目录建好之后——计费明细要按 item_code 反查目录取价。
 _enc = c.get(f"/api/encounters?patient_id={patients[2]['id']}").json()
@@ -509,6 +527,10 @@ _checks = [
     ("住院已有出院病例", lambda: any(
         a["status"] == "discharged" for a in c.get("/api/inpatient/admissions").json())),
     ("危急值已落工作人员消息", lambda: _has_rows(c_doc.get("/api/notifications?limit=1"))),
+    ("价格公示可免登录访问", lambda: _has_rows(
+        httpx.Client(base_url=BASE, timeout=30).get("/api/portal/price-list"))),
+    ("就诊凭据台账有作废记录", lambda: any(
+        v["status"] == "void" for v in c.get("/api/credentials?limit=50").json())),
     ("质量指标有分母", lambda: any(
         i["denominator"] > 0
         for i in c.get("/api/quality/clinical-indicators").json()["indicators"])),

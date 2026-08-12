@@ -2865,3 +2865,55 @@ class Notification(Base):
     link_id: Mapped[int] = mapped_column(Integer, default=0)
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ChargePriceChange(Base):
+    """收费项目调价历史（浙江省指南 #55 价格管理与公示）。
+
+    价格是要对外公示的，而公示的前提是**改过什么、什么时候改的、谁改的**
+    能说清楚。直接 UPDATE 覆盖 `charge_items.price` 会把这些全抹掉，
+    到时候患者质疑"上个月不是这个价"，机构拿不出任何东西。
+
+    已计费的明细不受调价影响——`bill_details` 存的是计费时的价格快照，
+    所以这张表纯粹是**对外解释用**的账，不参与任何金额计算。
+    """
+
+    __tablename__ = "charge_price_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("charge_items.id"), index=True)
+    old_price: Mapped[float] = mapped_column(Float)
+    new_price: Mapped[float] = mapped_column(Float)
+    # 调价依据（如"省医保局 2026 年第 3 号文"）。留空也允许——真实场景里
+    # 补录历史价格时常常找不到原始文号，强制填写只会逼人编一个。
+    reason: Mapped[str] = mapped_column(String(256), default="")
+    effective_date: Mapped[str] = mapped_column(String(10), default="")
+    changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class VisitCredential(Base):
+    """就诊凭据（浙江省指南 #27）：发放、回收、作废。
+
+    与电子健康卡号（`patients.ehc_no`）并存而不是替代它：健康卡号是**身份**，
+    终身唯一、不回收；就诊凭据是**介质**，卡片会丢、临时条码会过期，
+    丢了要挂失重发，重发后旧的必须立刻失效。把两者混成一个字段，
+    就等于患者一丢卡就得换身份。
+
+    同一患者可以有多张历史凭据，但**同时只允许一张 active**——发新的自动
+    作废旧的，避免挂失后旧卡还能用。
+    """
+
+    __tablename__ = "visit_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    credential_no: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # card=实体就诊卡, qrcode=电子二维码, temp=临时凭据（无证件急诊等）
+    credential_type: Mapped[str] = mapped_column(String(16), default="card", index=True)
+    # active=有效, recycled=已回收（患者主动交回）, void=已作废（挂失/换发）
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    issued_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    close_reason: Mapped[str] = mapped_column(String(128), default="")

@@ -27,6 +27,7 @@ from ..models import (
     Admission,
     BillDetail,
     ChargeItem,
+    ChargePriceChange,
     CodeEntry,
     CodeSystem,
     Encounter,
@@ -120,16 +121,88 @@ def list_charge_items(
     return [_charge_item_out(i) for i in q.order_by(ChargeItem.code).limit(500).all()]
 
 
+class RepriceIn(BaseModel):
+    new_price: float = Field(gt=0)
+    reason: str = Field(default="", max_length=256)
+    effective_date: str = Field(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+
+
 @router.patch("/charge-items/{item_id}", dependencies=[Depends(require_admin)])
-def update_charge_item(item_id: int, body: ChargeItemUpdate, db: Session = Depends(get_db)):
+def update_charge_item(
+    item_id: int,
+    body: ChargeItemUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """维护收费项目。改价走这里也会留调价历史——不能靠调用方自觉走 reprice。"""
     item = db.get(ChargeItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="收费项目不存在")
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    new_price = changes.get("price")
+    if new_price is not None and new_price != item.price:
+        db.add(ChargePriceChange(item_id=item.id, old_price=item.price,
+                                 new_price=new_price, changed_by=user.id))
+    for field, value in changes.items():
         if value is not None:
             setattr(item, field, value)
     db.commit()
     return _charge_item_out(item)
+
+
+@router.post("/charge-items/{item_id}/reprice", dependencies=[Depends(require_admin)])
+def reprice_charge_item(
+    item_id: int,
+    body: RepriceIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """调价（浙#55）：留依据与生效日期，供对外公示与事后解释。
+
+    已计费的明细不受影响——`bill_details` 存的是计费时的价格快照。
+    """
+    item = db.get(ChargeItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="收费项目不存在")
+    if body.new_price == item.price:
+        raise HTTPException(status_code=409, detail="新价格与现价相同，无需调价")
+    db.add(
+        ChargePriceChange(
+            item_id=item.id,
+            old_price=item.price,
+            new_price=body.new_price,
+            reason=body.reason,
+            effective_date=body.effective_date,
+            changed_by=user.id,
+        )
+    )
+    item.price = body.new_price
+    db.commit()
+    return _charge_item_out(item)
+
+
+@router.get("/charge-items/{item_id}/price-history", dependencies=[Depends(require_admin)])
+def charge_price_history(item_id: int, db: Session = Depends(get_db)):
+    if db.get(ChargeItem, item_id) is None:
+        raise HTTPException(status_code=404, detail="收费项目不存在")
+    rows = (
+        db.query(ChargePriceChange)
+        .filter(ChargePriceChange.item_id == item_id)
+        .order_by(ChargePriceChange.id.desc())
+        .limit(200)
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "old_price": r.old_price,
+            "new_price": r.new_price,
+            "reason": r.reason,
+            "effective_date": r.effective_date,
+            "changed_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
 
 
 # ---------- 费用明细 ----------

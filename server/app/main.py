@@ -23,6 +23,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, SessionLocal, engine
+from .monitor import metrics as monitor_metrics
 from .models import User
 from .routers import (
     admin_mgmt,
@@ -52,6 +53,8 @@ from .routers import (
     followups,
     jobs as jobs_router,
     materials,
+    credentials,
+    monitor,
     notifications,
     workflows,
     exams,
@@ -292,6 +295,8 @@ app.include_router(cost.router)
 app.include_router(materials.router)
 app.include_router(analytics.router)
 app.include_router(notifications.router)
+app.include_router(monitor.router)
+app.include_router(credentials.router)
 app.include_router(rules.router)
 app.include_router(workflows.router)
 app.include_router(workflows.service_router)
@@ -333,6 +338,8 @@ async def request_log_middleware(request, call_next):
     response = await call_next(request)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     response.headers["X-Request-ID"] = request_id
+    # 监控计数：进程内，随进程启停清零（见 app/monitor.py 的取舍说明）
+    monitor_metrics.record(request.method, request.url.path, response.status_code, duration_ms)
     if settings.log_json:
         _access_logger.info(
             json.dumps(

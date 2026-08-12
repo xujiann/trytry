@@ -665,6 +665,46 @@ $("#survey-form").addEventListener("submit", async (e) => {
   }
 });
 
+/* ---------------- 价格公示（浙#55，免登录） ---------------- */
+
+/* 展开才拉数据：绝大多数人开 App 是来看宣教的，不该为价格表付一次请求。 */
+let priceLoaded = false;
+
+async function loadPriceList(keyword = "") {
+  const box = $("#price-list");
+  box.innerHTML = '<p class="hint">加载中…</p>';
+  try {
+    const rows = await api(`/api/portal/price-list${
+      keyword ? `?keyword=${encodeURIComponent(keyword)}` : ""}`);
+    if (!rows.length) {
+      box.innerHTML = '<p class="empty">没有匹配的项目</p>';
+      return;
+    }
+    box.innerHTML = rows.slice(0, 200).map((r) => `
+      <div class="price-row">
+        <span class="n">${esc(r.name)}<span class="c">${esc(r.category_name)}</span>
+          ${r.effective_date ? `<span class="d">${esc(r.effective_date)} 起执行</span>` : ""}</span>
+        <span class="p">${r.price} 元</span>
+      </div>`).join("");
+  } catch (err) {
+    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+  }
+}
+
+$("#price-fold").addEventListener("toggle", () => {
+  if ($("#price-fold").open && !priceLoaded) {
+    priceLoaded = true;
+    loadPriceList();
+  }
+});
+
+let priceTimer = null;
+$("#price-search").addEventListener("input", (e) => {
+  // 输入停下来再查：逐字打一次请求，在县域机房的带宽上并不便宜
+  clearTimeout(priceTimer);
+  priceTimer = setTimeout(() => loadPriceList(e.target.value.trim()), 300);
+});
+
 /* ---------------- 站内消息 ---------------- */
 
 const NOTIFY_LABELS = { exam_report: "检查报告", surgery: "手术安排", followup: "随访提醒" };

@@ -1,10 +1,11 @@
 """用户管理与审计日志（管理员），修改密码（本人）。"""
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -188,6 +189,64 @@ def list_audit_logs(
         }
         for log in logs
     ]
+
+
+@router.get("/audit/stats", dependencies=[Depends(require_admin)])
+def audit_stats(days: int = 30, db: Session = Depends(get_db)):
+    """审计统计（浙#46 日志图形化）：按日趋势、失败码分布、高频操作与用户 TOP。
+
+    与 `/api/monitor/api-stats` 的分工：那边是**进程内**的全部请求（含读），
+    随重启清零，用来看性能与错误；这边是**落库**的写操作留痕，跨实例、可追溯，
+    用来看"谁在改什么"。两者不可互相替代，也不该合并——一个是运维视角，
+    一个是审计视角，保留期与权限要求都不同。
+    """
+    days = max(1, min(days, 365))
+    since = utcnow() - timedelta(days=days)
+    base = db.query(AuditLog).filter(AuditLog.created_at >= since)
+
+    # 按日趋势：成功与失败分开，只看总量看不出"改坏了多少次"
+    daily: dict[str, dict[str, int]] = {}
+    for created_at, status_code in base.with_entities(
+        AuditLog.created_at, AuditLog.status_code
+    ).all():
+        day = created_at.strftime("%Y-%m-%d")
+        bucket = daily.setdefault(day, {"date": day, "ok": 0, "failed": 0})
+        bucket["failed" if status_code >= 400 else "ok"] += 1
+
+    def _top(column, limit=10, failed_only=False):
+        query = base
+        if failed_only:
+            query = query.filter(AuditLog.status_code >= 400)
+        rows = (
+            query.with_entities(column, func.count(AuditLog.id))
+            .group_by(column)
+            .order_by(func.count(AuditLog.id).desc())
+            .limit(limit)
+            .all()
+        )
+        return [{"key": k or "(空)", "count": c} for k, c in rows]
+
+    status_rows = (
+        base.filter(AuditLog.status_code >= 400)
+        .with_entities(AuditLog.status_code, func.count(AuditLog.id))
+        .group_by(AuditLog.status_code)
+        .order_by(func.count(AuditLog.id).desc())
+        .all()
+    )
+    total = base.count()
+    failed = sum(c for _, c in status_rows)
+    return {
+        "days": days,
+        "scope": "全部实例（审计落库，非进程内计数）",
+        "total": total,
+        "failed": failed,
+        "failed_ratio_pct": round(failed / total * 100, 2) if total else 0.0,
+        "daily": [daily[d] for d in sorted(daily)],
+        "failed_status_codes": [{"status": s, "count": c} for s, c in status_rows],
+        "top_users": _top(AuditLog.username),
+        "top_paths": _top(AuditLog.path),
+        "top_failed_paths": _top(AuditLog.path, failed_only=True),
+    }
 
 
 # ---------- 终审轮：用户角色变更与变更记录（浙#43） ----------

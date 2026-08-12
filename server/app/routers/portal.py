@@ -39,6 +39,7 @@ from ..models import (
     Bed,
     BillDetail,
     ChargeItem,
+    ChargePriceChange,
     ChronicPatient,
     ContractService,
     Encounter,
@@ -1250,6 +1251,13 @@ def portal_submit_survey(body: PortalSurveyCreate, db: Session = Depends(get_db)
     return {"id": survey.id, "submitted": True}
 
 
+# 收费类别的中文名：公示页给患者看，"drug"/"bed" 这种英文枚举不能直接抛出去
+CHARGE_CATEGORY_NAMES = {
+    "drug": "药品", "exam": "检查检验", "treatment": "治疗处置",
+    "bed": "床位", "other": "其他",
+}
+
+
 @router.get("/health-articles")
 def published_articles(category: str | None = None, db: Session = Depends(get_db)):
     """健康宣教：居民端展示已发布文章（无需登录）。"""
@@ -1259,4 +1267,50 @@ def published_articles(category: str | None = None, db: Session = Depends(get_db
     return [
         {"id": a.id, "title": a.title, "category": a.category, "content": a.content}
         for a in q.order_by(HealthArticle.id.desc()).limit(50).all()
+    ]
+
+
+@router.get("/price-list")
+def public_price_list(
+    category: str | None = None, keyword: str | None = None, db: Session = Depends(get_db)
+):
+    """医疗服务价格公示（浙#55，无需登录）。
+
+    公示本来就是给不特定公众看的，加登录反而背离目的。只出**启用中**的项目：
+    停用项目的价格挂在公示页上，患者按它来问价却收不到这个费，等于自找纠纷。
+
+    每项附最近一次调价的时间与生效日期——价格公示的价值有一半在"什么时候
+    开始是这个价"，只贴一个数字回答不了患者最常问的那句"上个月不是这个价"。
+    """
+    query = db.query(ChargeItem).filter(ChargeItem.active.is_(True))
+    if category:
+        query = query.filter(ChargeItem.category == category)
+    if keyword:
+        query = query.filter(ChargeItem.name.contains(keyword))
+    items = query.order_by(ChargeItem.category, ChargeItem.code).limit(500).all()
+
+    # 最近一次调价：一次查询取回全部相关记录，按项目取最新的那条
+    latest: dict[int, ChargePriceChange] = {}
+    if items:
+        for change in (
+            db.query(ChargePriceChange)
+            .filter(ChargePriceChange.item_id.in_([i.id for i in items]))
+            .order_by(ChargePriceChange.id.desc())
+            .all()
+        ):
+            latest.setdefault(change.item_id, change)
+
+    return [
+        {
+            "code": i.code,
+            "name": i.name,
+            "category": i.category,
+            "category_name": CHARGE_CATEGORY_NAMES.get(i.category, i.category),
+            "price": i.price,
+            "last_adjusted_at": (
+                latest[i.id].created_at.strftime("%Y-%m-%d") if i.id in latest else ""
+            ),
+            "effective_date": latest[i.id].effective_date if i.id in latest else "",
+        }
+        for i in items
     ]
