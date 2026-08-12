@@ -256,12 +256,15 @@ class RoleUpdate(BaseModel):
     role: str = Field(pattern="^(admin|director|doctor|pharmacist|public_health|operator)$")
 
 
-@router.patch("/users/{user_id}/role", response_model=UserOut)
+# 同上：守卫放 dependencies=[]，保证非管理员拿到的是 403 而不是一份字段清单。
+@router.patch(
+    "/users/{user_id}/role", response_model=UserOut, dependencies=[Depends(require_admin)]
+)
 def change_user_role(
     user_id: int,
     body: RoleUpdate,
     db: Session = Depends(get_db),
-    operator: User = Depends(require_admin),
+    operator: User = Depends(get_current_user),
 ):
     """角色调整（限管理员）：变更前后角色落 RoleChangeLog 留痕，且不可自降 admin。"""
     target = db.get(User, user_id)

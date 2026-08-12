@@ -62,12 +62,15 @@ class ReportAmend(BaseModel):
     reason: str = Field(default="", max_length=512)
 
 
-@router.patch("/exams/reports/{report_id}")
+# 守卫写在 dependencies=[] 而不是函数参数里：写成参数时它与请求体一起解析，
+# 校验错误会先于鉴权返回——非授权角色会拿到一份 422，里面列着这个接口要哪些字段。
+# 既是信息泄露，也让"越权一律 403"这条口径不成立。
+@router.patch("/exams/reports/{report_id}", dependencies=[Depends(require_roles("doctor"))])
 def amend_report(
     report_id: int,
     body: ReportAmend,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("doctor")),
+    user: User = Depends(get_current_user),
 ):
     """诊断报告修改（限医师）。
 
