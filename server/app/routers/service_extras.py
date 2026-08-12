@@ -1,13 +1,14 @@
 """功能指引查漏补缺：报告模板/报告修改、消毒申领、会诊专家、预约黑名单、健康宣教、满意度、智能导诊。"""
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
     ExamResource,
-    AppointmentBlacklist,
+    ServiceBlacklist,
     ConsultExpert,
     CriticalAction,
     CssdRequest,
@@ -239,28 +240,66 @@ def list_experts(available: bool | None = None, db: Session = Depends(get_db)):
 class BlacklistCreate(BaseModel):
     patient_id: int
     reason: str = ""
+    domain: str = Field(default="appointment", pattern="^(appointment|shortage)$")
+
+
+BLACKLIST_DOMAINS = {"appointment": "预约爽约", "shortage": "缺药登记后不取药"}
 
 
 @router.post("/appointments/blacklist", status_code=201, dependencies=[Depends(require_admin)])
 def add_blacklist(body: BlacklistCreate, db: Session = Depends(get_db)):
+    """加入服务黑名单。
+
+    路径保留 `/appointments/blacklist` 不改——已有对接方在用，为了内部模型
+    泛化去破坏外部契约不值当。业务域由 `domain` 参数给出，默认预约。
+    """
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    if db.query(AppointmentBlacklist).filter(AppointmentBlacklist.patient_id == body.patient_id).first():
-        raise HTTPException(status_code=409, detail="已在黑名单")
-    b = AppointmentBlacklist(**body.model_dump())
-    db.add(b)
-    db.commit()
-    return {"id": b.id}
+    if (
+        db.query(ServiceBlacklist)
+        .filter(
+            ServiceBlacklist.domain == body.domain,
+            ServiceBlacklist.patient_id == body.patient_id,
+        )
+        .first()
+    ):
+        raise HTTPException(status_code=409, detail=f"已在{BLACKLIST_DOMAINS[body.domain]}黑名单")
+    entry = ServiceBlacklist(**body.model_dump())
+    db.add(entry)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已在黑名单") from None
+    return {"id": entry.id, "domain": entry.domain}
+
+
+@router.get("/appointments/blacklist", dependencies=[Depends(get_current_user)])
+def list_blacklist(domain: str | None = None, db: Session = Depends(get_db)):
+    query = db.query(ServiceBlacklist)
+    if domain:
+        query = query.filter(ServiceBlacklist.domain == domain)
+    return [
+        {"id": b.id, "domain": b.domain, "domain_name": BLACKLIST_DOMAINS.get(b.domain, b.domain),
+         "patient_id": b.patient_id, "reason": b.reason}
+        for b in query.order_by(ServiceBlacklist.id.desc()).limit(500).all()
+    ]
 
 
 @router.delete("/appointments/blacklist/{patient_id}", dependencies=[Depends(require_admin)])
-def remove_blacklist(patient_id: int, db: Session = Depends(get_db)):
-    b = db.query(AppointmentBlacklist).filter(AppointmentBlacklist.patient_id == patient_id).first()
-    if b is None:
+def remove_blacklist(
+    patient_id: int, domain: str = "appointment", db: Session = Depends(get_db)
+):
+    entry = (
+        db.query(ServiceBlacklist)
+        .filter(ServiceBlacklist.domain == domain, ServiceBlacklist.patient_id == patient_id)
+        .first()
+    )
+    if entry is None:
         raise HTTPException(status_code=404, detail="不在黑名单")
-    db.delete(b)
+    db.delete(entry)
     db.commit()
-    return {"removed": True}
+    return {"removed": True, "domain": domain}
 
 
 # ---- ⑨⑩ 健康宣教 ----

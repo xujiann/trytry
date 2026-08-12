@@ -4,9 +4,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..clock import now_naive
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
-from ..models import Course, LiveSession, TrainingRecord, User
+from ..models import Course, LiveFeedback, LiveSession, TrainingRecord, User
 
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
 
@@ -157,6 +158,87 @@ def finish_live(session_id: int, db: Session = Depends(get_db)):
     return {"id": session.id, "status": "finished"}
 
 
+class LiveRecording(BaseModel):
+    recording_url: str = Field(min_length=1, max_length=512)
+
+
+@router.post(
+    "/live-sessions/{session_id}/recording",
+    dependencies=[Depends(require_roles("director", "operator"))],
+)
+def upload_recording(session_id: int, body: LiveRecording, db: Session = Depends(get_db)):
+    """课程录制回放（指引⑳"课程录制"）。
+
+    只有已结束的直播能挂回放——排期中的直播挂上回放，学员点进去是空的，
+    比没有回放更糟。
+    """
+    session = db.get(LiveSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="直播申请不存在")
+    if session.status != "finished":
+        raise HTTPException(status_code=409, detail="仅已结束的直播可上传回放")
+    session.recording_url = body.recording_url
+    session.recorded_at = now_naive()
+    db.commit()
+    return {"id": session.id, "recording_url": session.recording_url}
+
+
+class LiveFeedbackIn(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(default="", max_length=512)
+
+
+@router.post("/live-sessions/{session_id}/feedback", status_code=201)
+def submit_live_feedback(
+    session_id: int,
+    body: LiveFeedbackIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """直播反馈（指引⑳"直播反馈"）。一人一场一条，重复提交按覆盖——
+    改主意是正常的，累计多条会让均分被反复提交的人带偏。"""
+    session = db.get(LiveSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="直播申请不存在")
+    if session.status != "finished":
+        raise HTTPException(status_code=409, detail="直播结束后方可反馈")
+    existing = (
+        db.query(LiveFeedback)
+        .filter(LiveFeedback.session_id == session_id, LiveFeedback.user_id == user.id)
+        .first()
+    )
+    if existing is not None:
+        existing.rating = body.rating
+        existing.comment = body.comment
+        db.commit()
+        return {"id": existing.id, "updated": True}
+    feedback = LiveFeedback(session_id=session_id, user_id=user.id, **body.model_dump())
+    db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+    return {"id": feedback.id, "updated": False}
+
+
+@router.get("/live-sessions/{session_id}/feedback")
+def list_live_feedback(session_id: int, db: Session = Depends(get_db)):
+    rows = (
+        db.query(LiveFeedback)
+        .filter(LiveFeedback.session_id == session_id)
+        .order_by(LiveFeedback.id.desc())
+        .all()
+    )
+    ratings = [r.rating for r in rows]
+    return {
+        "session_id": session_id,
+        "count": len(rows),
+        "avg_rating": round(sum(ratings) / len(ratings), 2) if ratings else None,
+        "feedbacks": [
+            {"id": r.id, "user_id": r.user_id, "rating": r.rating, "comment": r.comment}
+            for r in rows
+        ],
+    }
+
+
 @router.get("/live-sessions")
 def list_live_sessions(status: str | None = None, db: Session = Depends(get_db)):
     q = db.query(LiveSession)
@@ -170,6 +252,7 @@ def list_live_sessions(status: str | None = None, db: Session = Depends(get_db))
             "planned_at": s.planned_at,
             "status": s.status,
             "review_comment": s.review_comment,
+            "recording_url": s.recording_url,
         }
         for s in q.order_by(LiveSession.id.desc()).limit(200).all()
     ]

@@ -437,6 +437,11 @@ class Consultation(Base):
     opinion: Mapped[str] = mapped_column(String(2048), default="")
     # 1-5 星评价，0=未评价
     rating: Mapped[int] = mapped_column(Integer, default=0)
+    # 会诊费用（指引⑤"费用管理"）。0 表示未计费——本院内部会诊常不计费，
+    # 与"计了 0 元"是两回事，故用 fee_settled 区分而不是拿 0 当哨兵。
+    fee: Mapped[float] = mapped_column(Float, default=0)
+    fee_settled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    fee_note: Mapped[str] = mapped_column(String(256), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -670,17 +675,110 @@ class TcmTechnique(Base):
 
 
 class DrugShortage(Base):
-    """⑮基层缺药登记：登记→采购→配送到基层。"""
+    """⑮基层缺药登记：登记→采购→配送→取药。
+
+    `patient_id` 可空：既有按机构报缺（补库存），也有按患者登记（延伸处方、
+    个性化治疗需求），两者共用一张表但含义不同——按患者登记的才谈得上
+    "登记后不来取药"，也才进得了黑名单。
+
+    末态分 collected 与 no_show 两个：都"结束了"，但一个是药送到人拿走了，
+    一个是药白调了。混成一个 closed，缺药登记的履约率就永远算不出来。
+    """
 
     __tablename__ = "drug_shortages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    patient_id: Mapped[int | None] = mapped_column(
+        ForeignKey("patients.id"), nullable=True, index=True
+    )
     drug_code: Mapped[str] = mapped_column(String(64))
     drug_name: Mapped[str] = mapped_column(String(128))
     quantity: Mapped[int] = mapped_column(Integer, default=1)
-    # registered=已登记, purchasing=采购中, delivered=已配送
+    # registered=已登记, purchasing=采购中, delivered=已配送,
+    # collected=已取药, no_show=未取药, cancelled=已取消
     status: Mapped[str] = mapped_column(String(16), default="registered", index=True)
+    close_reason: Mapped[str] = mapped_column(String(256), default="")
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PathologySpecimen(Base):
+    """④病理标本核收与标本管理。
+
+    第七轮子功能级重审发现：`advance_sample` 明确 `center_type != "lab"` 即 422，
+    病理标本整段没有状态机——而指引第 4 条头两项就是"病理标本核收""标本管理"。
+
+    **不与检验样本共用一套流转**：检验是采样→冷链转运→中心核收，病理是
+    核收→固定→取材→制片→阅片，节点数与含义都不同。硬套一套只会得到一个
+    两头不像的状态机（与专病不复用慢病同一条理由）。
+
+    **拒收是核心业务而非异常分支**：标本量不足、未加固定液、标识不清都要
+    当场拒收并说明理由，否则后面做出来的片子是废的。
+    """
+
+    __tablename__ = "pathology_specimens"
+    __table_args__ = (
+        UniqueConstraint("specimen_no", name="uq_pathology_specimen_no"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("exam_requests.id"), index=True)
+    # 标本号由平台生成（同追溯码的理由：唯一性是全部价值所在）
+    specimen_no: Mapped[str] = mapped_column(String(32), index=True)
+    site: Mapped[str] = mapped_column(String(128), default="")
+    # 离体时间与固定时间：冷缺血时间是病理质控的核心指标
+    excised_at: Mapped[str] = mapped_column(String(19), default="")
+    fixed_at: Mapped[str] = mapped_column(String(19), default="")
+    fixative: Mapped[str] = mapped_column(String(64), default="")
+    # pending=待核收, received=已核收, embedded=已取材制片, slided=已制片, read=已阅片,
+    # rejected=已拒收
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    reject_reason: Mapped[str] = mapped_column(String(256), default="")
+    received_by: Mapped[str] = mapped_column(String(64), default="")
+    block_count: Mapped[int] = mapped_column(Integer, default=0)
+    slide_count: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AdminProject(Base):
+    """㉞行政协同：项目管理。
+
+    进度用 0-100 的百分数而不是里程碑推算——里程碑权重各院口径不一，
+    让项目负责人直接报数，比平台按里程碑数算一个没人认的进度诚实。
+    """
+
+    __tablename__ = "admin_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(256))
+    category: Mapped[str] = mapped_column(String(32), default="general", index=True)
+    owner_name: Mapped[str] = mapped_column(String(64), default="")
+    start_date: Mapped[str] = mapped_column(String(10), default="")
+    due_date: Mapped[str] = mapped_column(String(10), default="", index=True)
+    # planning=筹备, ongoing=进行中, done=已完成, suspended=已中止
+    status: Mapped[str] = mapped_column(String(16), default="planning", index=True)
+    progress_pct: Mapped[int] = mapped_column(Integer, default=0)
+    budget_amount: Mapped[float] = mapped_column(Float, default=0)
+    description: Mapped[str] = mapped_column(String(1024), default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ProjectMilestone(Base):
+    """㉞项目里程碑。逾期未完成按日期现算，不设定时任务改状态。"""
+
+    __tablename__ = "project_milestones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("admin_projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String(256))
+    due_date: Mapped[str] = mapped_column(String(10), default="", index=True)
+    done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    done_date: Mapped[str] = mapped_column(String(10), default="")
+    note: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -1099,13 +1197,26 @@ class ConsultExpert(Base):
     available: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class AppointmentBlacklist(Base):
-    """⑫预约黑名单管理（多次爽约限制预约）。"""
+class ServiceBlacklist(Base):
+    """通用服务黑名单（⑫预约、⑮缺药登记）。
 
-    __tablename__ = "appointment_blacklist"
+    指引第 12 与第 15 条各要一个黑名单。原先只有预约那一个，补第二个时
+    有两条路：再建一张几乎一样的表，或者给现有的加一个业务域。选后者——
+    第三个域（比如上门护理反复放空）迟早会来，届时又要第三张表。
+
+    唯一约束是 (domain, patient_id)：同一人可以同时在预约黑名单和缺药
+    黑名单里，两者互不影响。
+    """
+
+    __tablename__ = "service_blacklists"
+    __table_args__ = (
+        UniqueConstraint("domain", "patient_id", name="uq_service_blacklist"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), unique=True)
+    # appointment=预约爽约, shortage=缺药登记后不取药
+    domain: Mapped[str] = mapped_column(String(16), default="appointment", index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     reason: Mapped[str] = mapped_column(String(256), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -1828,7 +1939,30 @@ class LiveSession(Base):
     # pending=待审核, approved=已排期, rejected=已驳回, finished=已结束
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     review_comment: Mapped[str] = mapped_column(String(256), default="")
+    # 课程录制（指引⑳）：直播结束后回放地址。空表示未录制或尚未上传。
+    recording_url: Mapped[str] = mapped_column(String(512), default="")
+    recorded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class LiveFeedback(Base):
+    """⑳直播反馈：评分与意见。
+
+    一人一场只留一条，重复提交按覆盖——改主意是正常的，
+    累计多条会让均分被反复提交的人带偏。
+    """
+
+    __tablename__ = "live_feedbacks"
+    __table_args__ = (
+        UniqueConstraint("session_id", "user_id", name="uq_live_feedback"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("live_sessions.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    rating: Mapped[int] = mapped_column(Integer, default=0)
+    comment: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

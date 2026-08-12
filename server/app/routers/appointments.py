@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
-from ..models import Appointment, AppointmentBlacklist, AppointmentSlot, Organization, Patient
+from ..models import Appointment, AppointmentSlot, Organization, Patient, ServiceBlacklist
 from ..schemas import AppointmentCreate, AppointmentOut, SlotCreate, SlotOut
 
 router = APIRouter(prefix="/api/appointments", tags=["预约诊疗"], dependencies=[Depends(get_current_user)])
@@ -43,8 +43,11 @@ def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     banned = (
-        db.query(AppointmentBlacklist)
-        .filter(AppointmentBlacklist.patient_id == patient_id)
+        db.query(ServiceBlacklist)
+        .filter(
+            ServiceBlacklist.domain == "appointment",
+            ServiceBlacklist.patient_id == patient_id,
+        )
         .first()
     )
     if banned:

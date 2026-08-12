@@ -124,6 +124,8 @@ const PAGES = [
   { id: "certs", title: "证明与体检", render: renderCerts },
   { id: "vaccination", title: "疫苗接种", render: renderVaccination },
   { id: "vaccinesupply", title: "疫苗批次与冷链", render: renderVaccineSupply },
+  { id: "pathology", title: "病理标本", render: renderPathology },
+  { id: "projects", title: "项目管理", render: renderProjects },
   { id: "surveillance", title: "多点触发监测", render: renderSurveillance },
   { group: "便民惠民" },
   { id: "appointments", title: "预约诊疗", render: renderAppointments },
@@ -1299,8 +1301,8 @@ function formJson(form, numFields = []) {
   return out;
 }
 
-async function postAction(path, body, msgSel) {
-  try { await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }); route(); }
+async function postAction(path, body, msgSel, method) {
+  try { await api(path, { method: method || "POST", body: body ? JSON.stringify(body) : undefined }); route(); }
   catch (err) { setMsg(msgSel, err.message, false); }
 }
 
@@ -1923,6 +1925,113 @@ async function renderSurveillance() {
   $("#syn-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/syndromes", formJson(e.target, ["org_id", "case_count", "threshold"]), "#syn-msg"); };
   $("#pat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/pathogens", formJson(e.target, ["org_id", "tested_count", "positive_count"]), "#pat-msg"); };
   $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/resources", formJson(e.target, ["org_id", "quantity", "min_quantity"]), "#res-msg"); };
+}
+
+
+async function renderPathology() {
+  $("#page-desc").textContent = "病理标本核收（含拒收）、取材制片阅片流转、冷缺血时间质控";
+  const [specimens, stats] = await Promise.all([
+    api("/api/pathology/specimens"), api("/api/pathology/specimen-stats"),
+  ]);
+  const ci = stats.cold_ischemia;
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      ${[["标本总数", stats.total, false], ["已拒收", stats.rejected, stats.rejected > 0],
+         ["拒收率", stats.reject_rate_pct === null ? "—" : stats.reject_rate_pct + "%", false],
+         ["冷缺血已测", ci.measured, false], ["未记录时间", ci.unmeasured, ci.unmeasured > 0],
+         ["平均冷缺血", ci.avg_minutes === null ? "—" : ci.avg_minutes + " 分", false],
+         ["超60分钟", ci.over_60min, ci.over_60min > 0]]
+        .map(([label, value, warn]) =>
+          `<div class="card"><div class="label">${esc(label)}</div>` +
+          `<div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}
+    </div>
+    <div class="panel"><h3>标本送检登记</h3>
+      <form class="inline" id="sp-form">
+        <input name="request_id" type="number" placeholder="病理申请单ID" required>
+        <input name="site" placeholder="送检部位">
+        <input name="excised_at" placeholder="离体时间 YYYY-MM-DDTHH:MM:SS">
+        <input name="fixed_at" placeholder="固定时间 YYYY-MM-DDTHH:MM:SS">
+        <input name="fixative" placeholder="固定液"><button>登记</button></form>
+      <p class="msg" id="sp-msg"></p>
+      <p class="hint">${esc(stats.caliber)}</p></div>
+    <div class="panel"><h3>标本流转</h3>
+      ${table(["标本号", "部位", "状态", "冷缺血", "蜡块/切片", "核收人", "操作"], specimens, (s) =>
+        `<tr><td>${esc(s.specimen_no)}</td><td>${esc(s.site || "—")}</td>` +
+        `<td>${s.status === "rejected" ? '<span class="tag danger">' + esc(s.status_name) + "</span>" : esc(s.status_name)}` +
+        `${s.reject_reason ? "<br><small>" + esc(s.reject_reason) + "</small>" : ""}</td>` +
+        `<td>${s.cold_ischemia_minutes === null ? "未记录" : s.cold_ischemia_minutes + " 分"}</td>` +
+        `<td>${s.block_count}/${s.slide_count}</td><td>${esc(s.received_by || "—")}</td>` +
+        `<td>${s.status === "pending"
+          ? `<button class="btn sm" data-receive="${s.id}">核收</button><button class="btn sm danger" data-reject="${s.id}">拒收</button>`
+          : (s.status === "rejected" || s.status === "read" ? "—" : `<button class="btn sm" data-advance="${s.id}">推进</button>`)}</td></tr>`)}
+    </div>`;
+  $("#sp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pathology/specimens", formJson(e.target, ["request_id"]), "#sp-msg"); };
+  $("#page-body").onclick = (e) => {
+    const d = e.target.dataset;
+    if (d.receive) {
+      const who = prompt("核收人姓名"); if (!who) return;
+      return postAction(`/api/pathology/specimens/${d.receive}/receive`, { received_by: who }, "#sp-msg");
+    }
+    if (d.reject) {
+      const reason = prompt("拒收理由（标本量不足/未加固定液/标识不清/标本破损/申请单信息不符）");
+      if (!reason) return;
+      return postAction(`/api/pathology/specimens/${d.reject}/reject`, { reject_reason: reason }, "#sp-msg");
+    }
+    if (d.advance) {
+      const n = prompt("蜡块数或切片数（该环节不适用可留空）") || "0";
+      return postAction(`/api/pathology/specimens/${d.advance}/advance`,
+        { block_count: Number(n), slide_count: Number(n) }, "#sp-msg");
+    }
+  };
+}
+
+async function renderProjects() {
+  $("#page-desc").textContent = "行政协同项目管理：立项、里程碑、进度与逾期";
+  const [projects, stats] = await Promise.all([
+    api("/api/projects"), api("/api/projects/stats/overview"),
+  ]);
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      ${[["项目总数", stats.total, false], ["在办", stats.active, false],
+         ["逾期未结", stats.overdue, stats.overdue > 0],
+         ["在办平均进度", stats.avg_progress_pct_active === null ? "—" : stats.avg_progress_pct_active + "%", false],
+         ["预算合计", stats.total_budget, false]]
+        .map(([label, value, warn]) =>
+          `<div class="card"><div class="label">${esc(label)}</div>` +
+          `<div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}
+    </div>
+    <div class="panel"><h3>立项</h3>
+      <form class="inline" id="pj-form">
+        <input name="org_id" type="number" placeholder="机构ID" required><input name="name" placeholder="项目名称" required>
+        <input name="category" placeholder="类别" value="general"><input name="owner_name" placeholder="负责人">
+        <input name="start_date" placeholder="开始 YYYY-MM-DD"><input name="due_date" placeholder="计划完成 YYYY-MM-DD">
+        <input name="budget_amount" type="number" step="0.01" placeholder="预算"><button>立项</button></form>
+      <p class="msg" id="pj-msg"></p>
+      <p class="hint">${esc(stats.caliber)}</p></div>
+    <div class="panel"><h3>项目清单</h3>
+      ${table(["名称", "负责人", "状态", "进度", "计划完成", "里程碑", "操作"], projects, (p) =>
+        `<tr><td>${esc(p.name)}${p.overdue ? ' <span class="tag danger">逾期</span>' : ""}</td>` +
+        `<td>${esc(p.owner_name || "—")}</td><td>${esc(p.status_name)}</td>` +
+        `<td>${p.progress_pct}%</td><td>${esc(p.due_date || "—")}</td>` +
+        `<td>${p.milestone_done}/${p.milestone_total}` +
+        `${p.milestone_overdue ? ' <span class="tag warn">' + p.milestone_overdue + " 逾期</span>" : ""}</td>` +
+        `<td><button class="btn sm" data-progress="${p.id}">报进度</button>` +
+        `<button class="btn sm" data-ms="${p.id}">加里程碑</button></td></tr>`)}
+    </div>`;
+  $("#pj-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/projects", formJson(e.target, ["org_id", "budget_amount"]), "#pj-msg"); };
+  $("#page-body").onclick = (e) => {
+    const d = e.target.dataset;
+    if (d.progress) {
+      const pct = prompt("当前进度（0-100）"); if (pct === null) return;
+      const status = prompt("状态：planning / ongoing / done / suspended", "ongoing"); if (!status) return;
+      return postAction(`/api/projects/${d.progress}`, { progress_pct: Number(pct), status }, "#pj-msg", "PATCH");
+    }
+    if (d.ms) {
+      const name = prompt("里程碑名称"); if (!name) return;
+      const due = prompt("到期日 YYYY-MM-DD（可留空）") || "";
+      return postAction(`/api/projects/${d.ms}/milestones`, { name, due_date: due }, "#pj-msg");
+    }
+  };
 }
 
 async function renderPublicHealth() {

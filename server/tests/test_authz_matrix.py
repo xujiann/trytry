@@ -61,6 +61,9 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/education/materials/{material_id}/play"),
     ("POST", "/api/education/training-plans/{plan_id}/enroll"),
     ("POST", "/api/education/training-plans/{plan_id}/cancel-enroll"),
+    # 直播反馈：学员给自己听过的课打分，与培训报名同类。
+    # 一人一场一条由 (session_id, user_id) 唯一约束保证，替不了别人打分。
+    ("POST", "/api/education/live-sessions/{session_id}/feedback"),
     ("POST", "/api/attachments"),
     # 只做计算不落业务数据的试算类接口
     ("POST", "/api/tcm/constitution"),

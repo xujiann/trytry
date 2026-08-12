@@ -1,5 +1,6 @@
 """远程会诊中心：申请→受理→出具意见→评价，全过程管理。"""
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -97,6 +98,76 @@ def complete(consultation_id: int, body: ConsultationComplete, db: Session = Dep
     db.commit()
     db.refresh(consultation)
     return consultation
+
+
+class ConsultationFee(BaseModel):
+    fee: float = Field(ge=0)
+    fee_note: str = Field(default="", max_length=256)
+
+
+@router.post(
+    "/{consultation_id}/fee",
+    dependencies=[Depends(require_roles("operator", "director"))],  # H2: 计费=经办/管理层
+)
+def settle_fee(consultation_id: int, body: ConsultationFee, db: Session = Depends(get_db)):
+    """会诊计费（指引⑤"费用管理"）。
+
+    只有已完成的会诊可计费——拒绝与未受理的会诊没有发生服务。
+    `fee=0` 与"未计费"是两回事（本院内部会诊常不计费），故用 `fee_settled`
+    区分而不是拿 0 当哨兵。
+    """
+    consultation = _get(db, consultation_id)
+    if consultation.status != "completed":
+        raise HTTPException(status_code=409, detail="仅已完成的会诊可计费")
+    consultation.fee = body.fee
+    consultation.fee_note = body.fee_note
+    consultation.fee_settled = True
+    db.commit()
+    db.refresh(consultation)
+    return {
+        "id": consultation.id,
+        "fee": consultation.fee,
+        "fee_settled": consultation.fee_settled,
+        "fee_note": consultation.fee_note,
+    }
+
+
+@router.get("/stats")
+def consultation_stats(db: Session = Depends(get_db)):
+    """会诊统计（指引⑤"统计分析"）：量、时效、评价与费用。
+
+    评分均值只算**已评价**的（rating>0）：把未评价当 0 分，会让评价率越低
+    分数越难看，最后逼出来的是"催评分"而不是"改服务"。
+    """
+    rows = db.query(Consultation).all()
+    by_status: dict[str, int] = {}
+    for r in rows:
+        by_status[r.status] = by_status.get(r.status, 0) + 1
+    rated = [r.rating for r in rows if r.rating > 0]
+    settled = [r for r in rows if r.fee_settled]
+    completed = by_status.get("completed", 0)
+    applied_total = len(rows)
+    return {
+        "total": applied_total,
+        "by_status": by_status,
+        "completion_rate_pct": (
+            round(completed * 100 / applied_total, 2) if applied_total else None
+        ),
+        "rating": {
+            "rated_count": len(rated),
+            # 未评价单列，不并进均值也不当 0 分
+            "unrated_count": completed - len(rated),
+            "avg": round(sum(rated) / len(rated), 2) if rated else None,
+        },
+        "fee": {
+            "settled_count": len(settled),
+            # 已完成但未计费的单列——可能是内部会诊不计费，也可能是漏计
+            "unsettled_count": completed - len(settled),
+            "total_amount": round(sum(r.fee for r in settled), 2),
+        },
+        "caliber": "评分均值只算已评价的（rating>0），未评价单列；"
+                   "fee=0 与未计费是两回事，后者看 fee_settled",
+    }
 
 
 @router.post(

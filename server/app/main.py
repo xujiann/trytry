@@ -77,8 +77,10 @@ from .routers import (
     patients,
     performance,
     pharmacy,
+    pathology,
     portal,
     prescriptions,
+    projects,
     printing,
     publichealth,
     quality,
@@ -284,6 +286,8 @@ app.include_router(eldercare.router)
 app.include_router(maternal.router)
 app.include_router(vaccination.router)
 app.include_router(vaccine_supply.router)
+app.include_router(pathology.router)
+app.include_router(projects.router)
 app.include_router(surveillance.router)
 app.include_router(publichealth.router)
 app.include_router(quality.router)
