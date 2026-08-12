@@ -489,6 +489,12 @@ class AppointmentSlot(Base):
     # outpatient=门诊, exam=检查, lab=检验
     resource_type: Mapped[str] = mapped_column(String(16))
     resource_name: Mapped[str] = mapped_column(String(128))
+    # ⑨便捷寻医：号源挂到医师档案上。原先只有 resource_name 自由文本，
+    # "找王主任的号"只能靠字符串匹配——同名、写法不一都会漏。可空是因为
+    # 检查与检验号源本就不对应某一位医师。
+    employee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), nullable=True, index=True
+    )
     slot_date: Mapped[str] = mapped_column(String(10), index=True)
     slot_time: Mapped[str] = mapped_column(String(16), default="")
     capacity: Mapped[int] = mapped_column(Integer, default=1)
@@ -3663,4 +3669,81 @@ class EmergencyResource(Base):
     expire_date: Mapped[str] = mapped_column(String(10), default="", index=True)
     contact: Mapped[str] = mapped_column(String(64), default="")
     location: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+
+# ---------- 阶段九·五 第三批：⑧一码通、⑨便捷寻医、⑬名老中医传承、㉑模拟诊疗 ----------
+
+
+class TcmMasterCase(Base):
+    """⑬名老中医经验数字化传承：医案与按语。
+
+    与知识库分表而不是塞进 `knowledge_entries` 的一个新 category：
+    医案有它自己的结构（四诊、辨证、治法、处方、按语），塞进一个通用 body
+    字段等于把结构化的东西压成一段文本，此后再也检索不出"某某老师治痹证
+    常用哪几味药"。
+
+    **不做疗效自动判定**：医案的价值在于传承思路，平台不替人下"这个方子
+    有效"的结论。
+    """
+
+    __tablename__ = "tcm_master_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    master_name: Mapped[str] = mapped_column(String(64), index=True)
+    successor_name: Mapped[str] = mapped_column(String(64), default="")
+    title: Mapped[str] = mapped_column(String(256))
+    disease: Mapped[str] = mapped_column(String(128), default="", index=True)
+    syndrome: Mapped[str] = mapped_column(String(128), default="", index=True)
+    # 四诊摘要 / 辨证 / 治法 / 处方 / 按语，分列存储便于按维度检索
+    four_exams: Mapped[str] = mapped_column(String(2048), default="")
+    treatment_method: Mapped[str] = mapped_column(String(512), default="")
+    prescription: Mapped[str] = mapped_column(String(1024), default="")
+    commentary: Mapped[str] = mapped_column(String(2048), default="")
+    visit_date: Mapped[str] = mapped_column(String(10), default="")
+    published: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SimulationCase(Base):
+    """㉑模拟诊疗：情境化病例与关键决策点。
+
+    与培训考核（`training_assessments`）的区别：考核是问答题对错，
+    模拟诊疗是**在情境里做一串决策**，每一步的选择会决定下一步看到什么。
+    平台这一版只做"决策点 + 参考答案 + 得分"，不做分支剧情——
+    分支剧情要配编辑器，属阶段十的流程编排范畴。
+    """
+
+    __tablename__ = "simulation_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(256))
+    # tcm=中医药适宜技术, clinical=临床, emergency=急救
+    category: Mapped[str] = mapped_column(String(16), default="clinical", index=True)
+    scenario: Mapped[str] = mapped_column(String(4096), default="")
+    # 决策点：[{"key","question","options":[...],"answer","score","explain"}]
+    decision_points: Mapped[list] = mapped_column(JSON, default=list)
+    pass_score: Mapped[int] = mapped_column(Integer, default=60)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SimulationAttempt(Base):
+    """㉑模拟诊疗作答记录。
+
+    允许重复作答并全部留痕，取最高分参与考核——与培训考核"重考取高分"
+    一致。留痕是因为"第几次才做对"本身就是教学反馈。
+    """
+
+    __tablename__ = "simulation_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("simulation_cases.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    answers: Mapped[dict] = mapped_column(JSON, default=dict)
+    score: Mapped[int] = mapped_column(Integer, default=0)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

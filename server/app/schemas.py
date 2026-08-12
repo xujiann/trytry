@@ -367,6 +367,8 @@ class SlotCreate(BaseModel):
     org_id: int
     resource_type: str = Field(pattern="^(outpatient|exam|lab)$")
     resource_name: str = Field(min_length=1)
+    # ⑨便捷寻医：门诊号源挂医师档案。检查/检验号源不对应某位医师，故可空。
+    employee_id: int | None = None
     slot_date: DateStr
     slot_time: str = ""
     capacity: int = Field(default=1, ge=1)

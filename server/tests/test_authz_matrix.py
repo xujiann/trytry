@@ -64,6 +64,12 @@ UNGUARDED_WHITELIST = {
     # 直播反馈：学员给自己听过的课打分，与培训报名同类。
     # 一人一场一条由 (session_id, user_id) 唯一约束保证，替不了别人打分。
     ("POST", "/api/education/live-sessions/{session_id}/feedback"),
+    # 模拟诊疗作答：学员自己练习，评分只写自己的记录（user_id 从令牌取，
+    # 不从请求体取），替不了别人作答。
+    ("POST", "/api/tcm-heritage/simulations/{case_id}/attempts"),
+    # 一码通核验：窗口、药房、检查科都要扫码，凡是登录用户就该能扫。
+    # 出码（/one-code）另有角色守卫——能核验不等于能替人出码。
+    ("POST", "/api/credentials/one-code/resolve"),
     ("POST", "/api/attachments"),
     # 只做计算不落业务数据的试算类接口
     ("POST", "/api/tcm/constitution"),

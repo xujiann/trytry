@@ -4,17 +4,99 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
-from ..models import Appointment, AppointmentSlot, Organization, Patient, ServiceBlacklist
+from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..models import (
+    Appointment,
+    AppointmentSlot,
+    Employee,
+    Organization,
+    Patient,
+    ServiceBlacklist,
+)
 from ..schemas import AppointmentCreate, AppointmentOut, SlotCreate, SlotOut
 
 router = APIRouter(prefix="/api/appointments", tags=["预约诊疗"], dependencies=[Depends(get_current_user)])
+
+
+@router.get("/doctors")
+def find_doctors(
+    keyword: str | None = None,
+    org_id: int | None = None,
+    from_date: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """便捷寻医（指引⑨"便捷寻医"）：按姓名/科室/职称找医师，带出可约号源。
+
+    只列**还有余号**的医师排在前面，但没号的也一并返回并标注——
+    只给有号的，居民会以为这位医师不存在，转头去问"你们医院不是有王主任吗"。
+
+    号源与医师靠 `employee_id` 关联，不靠姓名字符串匹配：同名与写法不一
+    都会漏，而漏掉的表现是"这位医师查不到号"，几乎无法自查。
+    """
+    today = resolve_business_date(from_date).isoformat()
+    query = db.query(Employee)
+    if org_id is not None:
+        query = query.filter(Employee.org_id == org_id)
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.filter(
+            (Employee.name.like(like)) | (Employee.title.like(like)) | (Employee.position.like(like))
+        )
+    employees = query.order_by(Employee.id).limit(200).all()
+    if not employees:
+        return []
+    slots = (
+        db.query(AppointmentSlot)
+        .filter(
+            AppointmentSlot.employee_id.in_([e.id for e in employees]),
+            AppointmentSlot.slot_date >= today,
+        )
+        .order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time)
+        .all()
+    )
+    by_employee: dict[int, list[AppointmentSlot]] = {}
+    for s in slots:
+        by_employee.setdefault(s.employee_id, []).append(s)
+    org_names = {
+        o.id: o.name
+        for o in db.query(Organization)
+        .filter(Organization.id.in_({e.org_id for e in employees}))
+        .all()
+    }
+    rows = []
+    for e in employees:
+        mine = by_employee.get(e.id, [])
+        available = [s for s in mine if s.booked < s.capacity]
+        rows.append({
+            "employee_id": e.id,
+            "name": e.name,
+            "title": e.title,
+            "title_level": e.title_level,
+            "position": e.position,
+            "org_id": e.org_id,
+            "org_name": org_names.get(e.org_id, ""),
+            "available_slots": len(available),
+            "next_slots": [
+                {"slot_id": s.id, "slot_date": s.slot_date, "slot_time": s.slot_time,
+                 "remaining": s.capacity - s.booked, "resource_name": s.resource_name}
+                for s in available[:5]
+            ],
+            # 没号的也返回并标注，见 docstring
+            "bookable": bool(available),
+        })
+    return sorted(rows, key=lambda r: (-r["available_slots"], r["employee_id"]))
 
 
 @router.post("/slots", response_model=SlotOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_slot(body: SlotCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    if body.employee_id is not None:
+        employee = db.get(Employee, body.employee_id)
+        if employee is None:
+            raise HTTPException(status_code=404, detail="医师不存在")
+        if employee.org_id != body.org_id:
+            raise HTTPException(status_code=422, detail="医师不属于该机构")
     slot = AppointmentSlot(**body.model_dump())
     db.add(slot)
     db.commit()

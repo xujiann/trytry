@@ -125,6 +125,7 @@ const PAGES = [
   { id: "vaccination", title: "疫苗接种", render: renderVaccination },
   { id: "vaccinesupply", title: "疫苗批次与冷链", render: renderVaccineSupply },
   { id: "pathology", title: "病理标本", render: renderPathology },
+  { id: "tcmheritage", title: "名老中医传承与模拟诊疗", render: renderTcmHeritage },
   { id: "projects", title: "项目管理", render: renderProjects },
   { id: "surveillance", title: "多点触发监测", render: renderSurveillance },
   { group: "便民惠民" },
@@ -2032,6 +2033,63 @@ async function renderProjects() {
       return postAction(`/api/projects/${d.ms}/milestones`, { name, due_date: due }, "#pj-msg");
     }
   };
+}
+
+
+async function renderTcmHeritage() {
+  $("#page-desc").textContent = "名老中医医案（四诊/辨证/治法/处方/按语分维度）与模拟诊疗";
+  const [cases, stats, sims] = await Promise.all([
+    api("/api/tcm-heritage/master-cases?include_draft=true"),
+    api("/api/tcm-heritage/master-cases/stats"),
+    api("/api/tcm-heritage/simulations"),
+  ]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>传承概览</h3>
+      ${table(["名老中医", "医案数", "已发布", "涉及病种", "传承人"], stats.masters, (m) =>
+        `<tr><td>${esc(m.master_name)}</td><td>${m.total}</td><td>${m.published}</td>` +
+        `<td>${esc(m.diseases.join("、") || "—")}</td><td>${esc(m.successors.join("、") || "—")}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>医案录入</h3>
+      <form id="mc-form">
+        <div class="inline">
+          <input name="master_name" placeholder="名老中医" required><input name="successor_name" placeholder="传承人">
+          <input name="title" placeholder="医案标题" required><input name="disease" placeholder="病名">
+          <input name="syndrome" placeholder="证型"><input name="visit_date" placeholder="就诊日期 YYYY-MM-DD"></div>
+        <div class="inline">
+          <input name="four_exams" placeholder="四诊摘要" style="min-width:280px">
+          <input name="treatment_method" placeholder="治法"><input name="prescription" placeholder="处方" style="min-width:220px">
+          <input name="commentary" placeholder="按语" style="min-width:280px"><button>保存草稿</button></div></form>
+      <p class="msg" id="mc-msg"></p></div>
+    <div class="panel"><h3>医案库</h3>
+      <form class="inline" id="mc-search"><input name="keyword" placeholder="搜方药/按语/标题"><button>检索</button></form>
+      <div id="mc-list">${renderCaseTable(cases)}</div></div>
+    <div class="panel"><h3>模拟诊疗病例</h3>
+      ${table(["标题", "类别", "决策点", "满分", "及格分"], sims, (s) =>
+        `<tr><td>${esc(s.title)}</td><td>${esc(s.category)}</td><td>${s.decision_points.length}</td>` +
+        `<td>${s.total_score}</td><td>${s.pass_score}</td></tr>`)}
+      <p class="hint">模拟诊疗的作答与评分在医师端 H5 完成；此处仅维护病例。列表刻意不含正确答案。</p></div>`;
+  $("#mc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/tcm-heritage/master-cases", formJson(e.target, []), "#mc-msg"); };
+  $("#mc-search").onsubmit = async (e) => {
+    e.preventDefault();
+    const kw = new FormData(e.target).get("keyword") || "";
+    const rows = await api(`/api/tcm-heritage/master-cases?include_draft=true&keyword=${encodeURIComponent(kw)}`);
+    $("#mc-list").innerHTML = renderCaseTable(rows);
+  };
+  $("#mc-list").onclick = (e) => {
+    const d = e.target.dataset;
+    if (d.publish) return postAction(`/api/tcm-heritage/master-cases/${d.publish}/publish`, {}, "#mc-msg");
+    if (d.unpublish) return postAction(`/api/tcm-heritage/master-cases/${d.unpublish}/unpublish`, {}, "#mc-msg");
+  };
+}
+
+function renderCaseTable(rows) {
+  return table(["名老中医", "标题", "病/证", "治法", "处方", "状态", "操作"], rows, (c) =>
+    `<tr><td>${esc(c.master_name)}</td><td>${esc(c.title)}</td>` +
+    `<td>${esc(c.disease || "—")} / ${esc(c.syndrome || "—")}</td><td>${esc(c.treatment_method || "—")}</td>` +
+    `<td>${esc(c.prescription || "—")}</td>` +
+    `<td>${c.published ? '<span class="tag ok">已发布</span>' : "草稿"}</td>` +
+    `<td>${c.published ? `<button class="btn sm" data-unpublish="${c.id}">撤回</button>`
+                       : `<button class="btn sm" data-publish="${c.id}">发布</button>`}</td></tr>`);
 }
 
 async function renderPublicHealth() {

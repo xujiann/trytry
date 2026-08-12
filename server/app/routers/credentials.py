@@ -11,10 +11,15 @@
 同一患者同时只允许一张有效凭据：挂失换发时旧的必须当场失效，
 否则捡到卡的人还能拿它挂号。
 """
+import hashlib
+import hmac
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..clock import now_naive
+from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import Patient, User, VisitCredential, utcnow
@@ -169,3 +174,117 @@ def _close(db: Session, credential_id: int, status: str, reason: str) -> dict:
     credential.close_reason = reason
     db.commit()
     return _credential_out(credential)
+
+
+# ---------------------------------------------------------------- ⑧ 一码通
+
+
+class OneCodeIssue(BaseModel):
+    patient_id: int
+    # 有效期秒数。默认 60 秒——一码通的动态码就是靠短时效防截屏盗用，
+    # 给得太长等于回到静态码。
+    ttl_seconds: int = Field(default=60, ge=10, le=600)
+
+
+class OneCodeResolve(BaseModel):
+    code: str = Field(min_length=1, max_length=256)
+
+
+def _one_code_payload(patient: Patient, expires_at: int) -> str:
+    return f"{patient.ehc_no}.{expires_at}"
+
+
+def _sign(payload: str) -> str:
+    return hmac.new(
+        settings.secret.encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()[:32]
+
+
+@router.post(
+    "/one-code",
+    dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
+)
+def issue_one_code(body: OneCodeIssue, db: Session = Depends(get_db)):
+    """签发一码通动态码（指引⑧"一码通生成服务"）。
+
+    码本身**不落库**：它是 `健康卡号.过期时刻.签名` 的自包含串，与平台的
+    JWT 同一思路。落库的话每扫一次码就要写一行、还要清理过期行，
+    而它的生命周期只有一分钟。
+
+    签名用平台密钥，故换密钥即全部作废——这正是想要的行为。
+    """
+    patient = db.get(Patient, body.patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
+    expires_at = int(now_naive().timestamp()) + body.ttl_seconds
+    payload = _one_code_payload(patient, expires_at)
+    return {
+        "code": f"{payload}.{_sign(payload)}",
+        "ehc_no": patient.ehc_no,
+        "expires_in": body.ttl_seconds,
+        "note": "动态码，过期即失效；不落库，换平台密钥即全部作废",
+    }
+
+
+@router.post("/one-code/resolve")
+def resolve_one_code(body: OneCodeResolve, db: Session = Depends(get_db)):
+    """核验一码通动态码。过期与签名错误分别报出——前者让人重新出码，
+    后者是伪造，处置完全不同。"""
+    parts = body.code.split(".")
+    if len(parts) != 3:
+        raise HTTPException(status_code=422, detail="码格式不正确")
+    ehc_no, expires_raw, signature = parts
+    payload = f"{ehc_no}.{expires_raw}"
+    if not hmac.compare_digest(_sign(payload), signature):
+        raise HTTPException(status_code=403, detail="码签名校验失败（可能为伪造）")
+    try:
+        expires_at = int(expires_raw)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="码格式不正确") from None
+    if expires_at < int(now_naive().timestamp()):
+        raise HTTPException(status_code=410, detail="该码已过期，请重新出码")
+    patient = db.query(Patient).filter(Patient.ehc_no == ehc_no).first()
+    if patient is None:
+        raise HTTPException(status_code=404, detail="健康卡号对应的患者不存在")
+    return {
+        "patient_id": patient.id,
+        "name": patient.name,
+        "ehc_no": patient.ehc_no,
+        "remaining_seconds": expires_at - int(now_naive().timestamp()),
+    }
+
+
+@router.get("/resolve")
+def resolve_any(identifier: str, db: Session = Depends(get_db)):
+    """多卡（码）协同：一个入口认全部身份标识（指引⑧"多卡(码)协同应用"）。
+
+    窗口人员手上可能是实体卡号、电子二维码、健康卡号或身份证号，
+    原先要记住"这个查这个接口、那个查那个接口"。这里按**从具体到一般**
+    的顺序依次尝试，并在返回里注明命中的是哪一类——不注明的话，
+    同一个人从不同介质进来会看不出差别。
+    """
+    identifier = identifier.strip()
+    credential = (
+        db.query(VisitCredential).filter(VisitCredential.credential_no == identifier).first()
+    )
+    if credential is not None:
+        patient = db.get(Patient, credential.patient_id)
+        return {
+            "matched_by": "credential_no",
+            "credential_status": credential.status,
+            "valid": credential.status == "active",
+            "patient": _patient_brief(patient),
+        }
+    patient = db.query(Patient).filter(Patient.ehc_no == identifier).first()
+    if patient is not None:
+        return {"matched_by": "ehc_no", "valid": True, "patient": _patient_brief(patient)}
+    patient = db.query(Patient).filter(Patient.id_card == identifier).first()
+    if patient is not None:
+        return {"matched_by": "id_card", "valid": True, "patient": _patient_brief(patient)}
+    raise HTTPException(status_code=404, detail="未匹配到任何身份标识（卡号/健康卡号/身份证号）")
+
+
+def _patient_brief(patient: Patient | None) -> dict | None:
+    if patient is None:
+        return None
+    return {"id": patient.id, "name": patient.name, "ehc_no": patient.ehc_no}

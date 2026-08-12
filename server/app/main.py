@@ -91,6 +91,7 @@ from .routers import (
     reports,
     service_extras,
     tcm,
+    tcm_heritage,
     telemedicine,
     todos,
     users,
@@ -287,6 +288,7 @@ app.include_router(maternal.router)
 app.include_router(vaccination.router)
 app.include_router(vaccine_supply.router)
 app.include_router(pathology.router)
+app.include_router(tcm_heritage.router)
 app.include_router(projects.router)
 app.include_router(surveillance.router)
 app.include_router(publichealth.router)
