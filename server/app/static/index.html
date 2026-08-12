@@ -31,6 +31,13 @@
   <main id="main" class="main"></main>
 </div>
 
+<!-- 阶段十二：按顶层块边界拆成 5 个文件，不引入构建工具。
+     加载顺序有含义：公共层最先，页面文件居中，注册表与启动最后
+     （注册表求值时就要拿到每个 renderX 的引用，而函数提升只在文件内生效）。 -->
+<script src="/static/core.js"></script>
+<script src="/static/pages-clinical.js"></script>
+<script src="/static/pages-public.js"></script>
+<script src="/static/pages-mgmt.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

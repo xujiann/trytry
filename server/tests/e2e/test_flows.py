@@ -131,7 +131,13 @@ def seed(base_url):
 @pytest.fixture(scope="session")
 def browser():
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        # 允许用 PLAYWRIGHT_CHROMIUM_PATH 指定已装好的内核：容器镜像里常预装了
+        # chromium 但 playwright 的版本目录对不上，为此再下一份浏览器没有必要。
+        exe = os.environ.get("PLAYWRIGHT_CHROMIUM_PATH")
+        kwargs = {"args": ["--no-sandbox"]}
+        if exe:
+            kwargs["executable_path"] = exe
+        browser = p.chromium.launch(**kwargs)
         yield browser
         browser.close()
 
@@ -306,3 +312,40 @@ def test_doctor_mobile_workbench_loads(page, base_url, seed):
     page.click("#login-form button[type=submit]")
     expect(page.locator("#workbench")).to_be_visible()
     expect(page.locator("#who")).to_contain_text("待办")
+
+
+
+# ---------------------------------------------------------------- 阶段十二
+
+
+@pytest.mark.e2e
+def test_拆分脚本后每一页都还渲染得出来(page, base_url):
+    """app.js 按业务域拆成 5 个文件之后的回归。
+
+    拆文件的风险全在**加载顺序**上：页面注册表求值时就要拿到每个 renderX 的
+    引用，而函数声明的提升只在同一个文件内生效——顺序错了，表现是整个管理端
+    白屏，而任何后端测试都发现不了。
+
+    所以这条用例挨个点开导航里的每一页，断言两件事：**没有 JS 报错**，
+    且**每一页都渲染出了内容**（不是停在"加载中…"）。
+    """
+    errors = []
+    page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
+    page.on(
+        "console",
+        lambda m: errors.append(f"console: {m.text[:160]}") if m.type == "error" else None,
+    )
+    _login(page, base_url)
+    page.wait_for_selector("#nav a")
+    page_ids = page.eval_on_selector_all("#nav a", "els => els.map(e => e.dataset.page)")
+    assert len(page_ids) > 60, f"导航项只有 {len(page_ids)} 个，注册表可能没加载全"
+
+    blank = []
+    for page_id in page_ids:
+        page.click(f'#nav a[data-page="{page_id}"]')
+        page.wait_for_timeout(400)
+        body = page.eval_on_selector("#page-body", "e => e.textContent.trim()")
+        if body in ("", "加载中…"):
+            blank.append(page_id)
+    assert blank == [], f"这些页面没有渲染出内容：{blank}"
+    assert errors == [], "管理端有 JS 报错：\n" + "\n".join(errors[:10])

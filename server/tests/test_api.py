@@ -165,7 +165,13 @@ def test_spa_covers_every_backend_module(client):
 
     from app.main import app
 
-    js = client.get("/static/app.js").text
+    # 阶段十二：app.js 已按业务域拆成多个文件，这里读全部前端脚本。
+    # 文件清单从 index.html 里取，而不是在测试里再写一份——两处清单迟早会不一致，
+    # 而不一致的表现是"页面明明有、守卫却说没有"。
+    index_html = client.get("/static/index.html").text
+    scripts = re.findall(r'<script src="(/static/[^"]+\.js)"', index_html)
+    assert scripts, "index.html 里没有找到任何前端脚本"
+    js = "\n".join(client.get(src).text for src in scripts)
     called = set(re.findall(r"[\"'`]/api/([a-z0-9_-]+)", js))
     served = {
         p.split("/")[2]
@@ -184,7 +190,7 @@ def test_spa_covers_every_backend_module(client):
 
 def test_spa_registers_phase_six_pages(client):
     """阶段一~五的模块都已在页面注册表里，且每个 id 有对应渲染函数。"""
-    js = client.get("/static/app.js").text
+    js = client.get("/static/app.js").text  # 注册表就在 app.js 里
     for page_id in ("clinicaldocs", "surgery", "followups", "accounting", "cost",
                     "materials", "analytics", "rules", "workflows", "jobs",
                     "servicerequests"):
