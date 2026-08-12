@@ -222,6 +222,183 @@ if not _exists(_em_cases, lambda e: e["channel_type"] == "chest_pain" and e["loc
         c.post(f"/api/emergency/cases/{em['id']}/advance")
     c.post(f"/api/emergency/cases/{em['id']}/vitals", json={"heart_rate": 110, "sbp": 90, "dbp": 60, "spo2": 93, "note": "车载心电已回传"})
 
+# ================= 阶段一~五：新模块演示数据（T6.5，幂等：存在即跳过） =================
+period = date.today().strftime("%Y-%m")
+
+# ---------- 住院临床文书：给在院患者补齐病程/护理/体温单 ----------
+_in_hospital = [a for a in c.get("/api/inpatient/admissions").json() if a["status"] == "admitted"]
+if not _in_hospital:
+    # 前面的住院旅程都已出院，这里再收一位在院患者，好让文书与手术页有数据
+    _bed = c.post("/api/inpatient/beds", json={"ward_id": ward["id"], "bed_no": "03"}).json()
+    _adm = c.post(
+        "/api/inpatient/admissions",
+        json={"patient_id": patients[0]["id"], "ward_id": ward["id"], "bed_id": _bed["id"],
+              "doctor_name": "外科李医生", "diagnosis_name": "急性阑尾炎"},
+    ).json()
+    _in_hospital = [_adm]
+adm_id = _in_hospital[0]["id"]
+
+if not c.get(f"/api/inpatient/admissions/{adm_id}/progress-notes").json():
+    today = date.today().isoformat()
+    for note_type, content, at in [
+        ("first", "患者因转移性右下腹痛12小时入院，查体麦氏点压痛反跳痛阳性，拟行阑尾切除术。", f"{today} 08:30"),
+        ("daily", "术后第1天，体温37.4℃，切口无渗出，肠鸣音恢复，继续抗感染。", f"{today} 09:00"),
+        ("ward_round", "主任查房：恢复顺利，明日可进流质，注意切口换药。", f"{today} 10:15"),
+    ]:
+        c.post(f"/api/inpatient/admissions/{adm_id}/progress-notes",
+               json={"note_type": note_type, "content": content,
+                     "doctor_name": "外科李医生", "recorded_at": at})
+    for level, content, at in [
+        ("level1", "一级护理，持续心电监护，观察切口渗血。", f"{today} 08:40"),
+        ("level2", "改二级护理，协助下床活动。", f"{today} 14:00"),
+    ]:
+        c.post(f"/api/inpatient/admissions/{adm_id}/nursing-records",
+               json={"nursing_level": level, "content": content, "nurse_name": "王护士", "recorded_at": at})
+    for at, temp, pulse, resp_rate, sbp, dbp in [
+        (f"{today} 06:00", 38.2, 96, 20, 118, 76),
+        (f"{today} 10:00", 37.6, 88, 19, 120, 78),
+        (f"{today} 14:00", 37.1, 82, 18, 116, 74),
+        (f"{today} 18:00", 36.8, 78, 18, 118, 75),
+    ]:
+        c.post(f"/api/inpatient/admissions/{adm_id}/vitals",
+               json={"measured_at": at, "temperature": temp, "pulse": pulse,
+                     "respiration": resp_rate, "sbp": sbp, "dbp": dbp, "recorder": "王护士"})
+    c.post("/api/inpatient/handovers",
+           json={"ward_id": ward["id"], "shift": "night", "handover_date": today,
+                 "from_staff": "白班王护士", "to_staff": "夜班赵护士", "critical_count": 0,
+                 "content": "3床术后第1天，注意切口渗血与体温变化。"})
+
+# ---------- 手术麻醉：手术间 + 一台走完全流程的手术 ----------
+_rooms = c.get(f"/api/surgery/rooms?org_id={county['id']}").json()
+room = _rooms[0] if _rooms else c.post(
+    "/api/surgery/rooms", json={"org_id": county["id"], "name": "一号手术间"}).json()
+if not c.get(f"/api/surgery/requests?admission_id={adm_id}").json():
+    _req = c.post("/api/surgery/requests", json={
+        "admission_id": adm_id, "surgery_name": "腹腔镜阑尾切除术", "incision_level": "II",
+        "anesthesia_type": "general", "urgency": "urgent", "surgeon_name": "外科李医生",
+        "planned_date": date.today().isoformat()}).json()
+    c.post(f"/api/surgery/requests/{_req['id']}/approve", json={"approved": True})
+    c.post(f"/api/surgery/requests/{_req['id']}/schedule", json={
+        "room_id": room["id"], "scheduled_date": date.today().isoformat(),
+        "start_time": "09:00", "end_time": "10:30"})
+    c.post(f"/api/surgery/requests/{_req['id']}/record", json={
+        "actual_surgery_name": "腹腔镜阑尾切除术", "anesthetist_name": "麻醉科周医生",
+        "start_at": f"{date.today().isoformat()} 09:10", "end_at": f"{date.today().isoformat()} 10:05",
+        "blood_loss_ml": 20, "findings": "阑尾化脓、周围少量脓苔", "outcome": "治愈"})
+    # 高值耗材绑定到这台手术，构成可追溯链
+    c.post("/api/materials/consumables", json={
+        "barcode": "HV-DEMO-0001", "name": "一次性腹腔镜穿刺器", "spec": "10mm",
+        "org_id": county["id"], "batch_no": "B2026DEMO", "expire_date": "2028-06-30",
+        "unit_price": 480})
+    c.post("/api/materials/consumables/HV-DEMO-0001/use", json={
+        "patient_id": patients[0]["id"], "surgery_id": _req["id"]})
+
+# ---------- 随访中心：术后与出院随访已自动派生，这里补一条慢病随访 ----------
+if not c.get("/api/followups?category=chronic").json():
+    c.post("/api/followups", json={
+        "patient_id": patients[1]["id"], "org_id": zhen1["id"], "category": "chronic",
+        "title": "糖尿病季度随访", "due_date": (date.today() - timedelta(days=2)).isoformat(),
+        "assigned_to": "李家医"})
+
+# ---------- 会计核算：两张凭证，一张过账一张留草稿 ----------
+if not c.get(f"/api/accounting/vouchers?period={period}").json():
+    v1 = c.post("/api/accounting/vouchers", json={
+        "org_id": county["id"], "voucher_no": "JZ-2026-001", "voucher_date": f"{period}-05",
+        "summary": "收取门诊医疗款",
+        "entries": [{"subject_code": "1002", "summary": "存入银行", "debit": 128600},
+                    {"subject_code": "4001", "summary": "医疗收入", "credit": 128600}]}).json()
+    c.post(f"/api/accounting/vouchers/{v1['id']}/post")
+    c.post("/api/accounting/vouchers", json={
+        "org_id": county["id"], "voucher_no": "JZ-2026-002", "voucher_date": f"{period}-08",
+        "summary": "计提当月人员经费（待复核）",
+        "entries": [{"subject_code": "5001", "summary": "医疗业务成本", "debit": 86000},
+                    {"subject_code": "2201", "summary": "应付职工薪酬", "credit": 86000}]})
+
+# ---------- 成本核算：科室、直接成本与分摊规则 ----------
+_depts = {d["code"]: d for d in c.get(f"/api/mgmt/departments?org_id={county['id']}").json()}
+for code, name, category in [("NK", "内科", "clinical"), ("WK", "外科", "clinical"),
+                             ("YJ", "医技科", "medtech"), ("XZ", "行政后勤", "admin")]:
+    if code not in _depts:
+        _depts[code] = c.post("/api/mgmt/departments", json={
+            "org_id": county["id"], "code": code, "name": name, "category": category}).json()
+if not c.get(f"/api/cost/departments?period={period}&org_id={county['id']}").json():
+    for code, cost_type, amount in [
+        ("NK", "labor", 320000), ("NK", "drug", 180000), ("NK", "consumable", 46000),
+        ("WK", "labor", 285000), ("WK", "consumable", 132000), ("WK", "depreciation", 38000),
+        ("YJ", "labor", 96000), ("YJ", "depreciation", 54000),
+        ("XZ", "labor", 78000), ("XZ", "overhead", 42000),
+    ]:
+        c.post("/api/cost/departments", json={
+            "dept_id": _depts[code]["id"], "period": period, "cost_type": cost_type, "amount": amount})
+    for source, target, ratio in [("XZ", "NK", 55), ("XZ", "WK", 45), ("YJ", "NK", 60), ("YJ", "WK", 40)]:
+        c.post("/api/cost/allocation-rules", json={
+            "from_dept_id": _depts[source]["id"], "to_dept_id": _depts[target]["id"], "ratio_pct": ratio})
+
+# ---------- 物资采购：一单走到验收 ----------
+if not c.get("/api/materials/purchases").json():
+    _supplier = next((s for s in c.get("/api/pharmacy/suppliers").json() if s["name"] == "康泰医疗器械"),
+                     None) or c.post("/api/pharmacy/suppliers",
+                                     json={"name": "康泰医疗器械", "contact": "刘经理"}).json()
+    _mp = c.post("/api/materials/purchases", json={
+        "org_id": county["id"], "dept_id": _depts["NK"]["id"], "item_name": "移动输液架",
+        "spec": "不锈钢五轮", "unit": "个", "quantity": 30, "estimated_price": 185,
+        "reason": "病区更新"}).json()
+    c.post(f"/api/materials/purchases/{_mp['id']}/approve", json={"approved": True})
+    c.post(f"/api/materials/purchases/{_mp['id']}/contract", json={
+        "supplier_id": _supplier["id"], "contract_no": "HT-2026-018", "contract_amount": 5550})
+    c.post(f"/api/materials/purchases/{_mp['id']}/receive", json={
+        "received_quantity": 30, "note": "外观完好，数量相符"})
+
+# ---------- 决策指标：县外就诊（有序与自行外出各一）+ 两条绩效公式 ----------
+if not c.get("/api/analytics/outbound-visits").json():
+    # 转出与转入必须是不同机构（接口有校验）：乡镇 → 县级，再由县级转出县域
+    _out_ref = c.post("/api/referrals", json={
+        "patient_id": patients[2]["id"], "from_org_id": zhen2["id"], "to_org_id": county["id"],
+        "direction": "up", "reason": "需上级医院进一步诊治"})
+    c.post("/api/analytics/outbound-visits", json={
+        "patient_id": patients[2]["id"], "visit_date": date.today().isoformat(),
+        "external_org_name": "市第一人民医院", "external_org_level": "city",
+        "visit_type": "inpatient", "total_amount": 28600, "insurance_pay": 19800,
+        "referral_id": _out_ref.json()["id"] if _out_ref.status_code == 201 else None})
+    c.post("/api/analytics/outbound-visits", json={
+        "patient_id": patients[1]["id"], "visit_date": date.today().isoformat(),
+        "external_org_name": "省人民医院", "external_org_level": "province",
+        "visit_type": "outpatient", "total_amount": 1260, "insurance_pay": 0})
+if not c.get("/api/analytics/formulas").json():
+    c.post("/api/analytics/formulas", json={
+        "key": "up_referral_rate", "name": "上转占比", "unit": "%",
+        "expression": "round(referrals_up / encounters * 100, 2)", "weight": 40})
+    c.post("/api/analytics/formulas", json={
+        "key": "bed_efficiency", "name": "床位使用率", "unit": "%",
+        "expression": "bed_occupancy_rate_pct", "weight": 60})
+
+# ---------- 规则引擎：两条统一规则 ----------
+if not c.get("/api/rules").json():
+    c.post("/api/rules", json={
+        "key": "rx_over_max_dose", "name": "超最大日剂量", "domain": "prescription",
+        "condition": "daily_dose > max_daily_dose", "message": "日剂量超过说明书上限，转药师审",
+        "severity": "error", "deduct_points": 10})
+    c.post("/api/rules", json={
+        "key": "mr_chief_too_short", "name": "主诉过于简略", "domain": "medical_record",
+        "condition": "len(chief_complaint) < 6", "message": "主诉少于6字，补充症状与时长",
+        "severity": "warning", "deduct_points": 5})
+
+# ---------- 流程引擎：新药引进审批走到药学审核节点 ----------
+if not c.get("/api/workflows/definitions").json():
+    c.post("/api/workflows/definitions", json={
+        "key": "drug_intro", "name": "新药引进审批",
+        "nodes": [{"key": "apply", "name": "科室申请", "role": "doctor", "next": "pharmacy"},
+                  {"key": "pharmacy", "name": "药学审核", "role": "pharmacist", "next": "approve"},
+                  {"key": "approve", "name": "院长审批", "role": "director", "next": ""}]})
+    _inst = c.post("/api/workflows/instances", json={
+        "definition_key": "drug_intro", "business_type": "drug_intro", "business_id": 1,
+        "title": "引进某长效降压药", "org_id": county["id"]}).json()
+    c.post(f"/api/workflows/instances/{_inst['id']}/advance", json={"comment": "内科提出，临床确有需求"})
+
 print("演示数据灌入完成")
 print(c.get("/api/metrics/overview").json())
 print("DRG统计:", c.get("/api/drgs/stats").json())
+print("就医流向:", c.get("/api/analytics/patient-flow").json())
+print("科室成本:", [(x["dept_name"], x["total_cost"]) for x in
+                 c.get(f"/api/cost/departments?period={period}&org_id={county['id']}").json()])
+print("随访统计:", c.get("/api/followups/stats").json())

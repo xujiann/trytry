@@ -448,4 +448,13 @@ def unified_requests(
     for item in items:
         by_status[item["status"]] = by_status.get(item["status"], 0) + 1
         by_type[item["request_type"]] = by_type.get(item["request_type"], 0) + 1
-    return {"total": len(items), "by_status": by_status, "by_type": by_type, "items": items[:limit]}
+    # T6.7：total/统计口径覆盖全部命中项，items 只返回前 limit 条；
+    # truncated 明确告知被截断，避免调用方拿 items 的长度当总数用。
+    return {
+        "total": len(items),
+        "returned": min(len(items), limit),
+        "truncated": len(items) > limit,
+        "by_status": by_status,
+        "by_type": by_type,
+        "items": items[:limit],
+    }

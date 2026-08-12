@@ -136,7 +136,7 @@ const PAGES = [
   { id: "esb", title: "集成平台", render: renderEsb, roles: ["admin"] },
   { id: "rules", title: "统一规则引擎", render: renderRules, roles: ["admin"] },
   { id: "workflows", title: "流程引擎", render: renderWorkflows },
-  { id: "jobs", title: "定时任务", render: renderJobs, roles: ["admin"] },
+  { id: "jobs", title: "定时任务", render: renderJobs, roles: ["director"] },
   { id: "dataquality", title: "数据质控", render: renderDataQuality, roles: ["admin"] },
   { id: "printtpl", title: "打印模板", render: renderPrintTemplates, roles: ["admin"] },
   { id: "users", title: "用户管理", render: renderUsers, roles: ["admin"] },

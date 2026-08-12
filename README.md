@@ -1,6 +1,6 @@
 # 县域医共体信息化平台（medplat）
 
-![tests](https://img.shields.io/badge/tests-481%20passed%20%2B%204%20e2e-brightgreen)
+![tests](https://img.shields.io/badge/tests-510%20passed%20%2B%207%20e2e-brightgreen)
 ![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)
 
 紧密型县域医共体信息化平台，依据国家卫生健康委《紧密型县域医共体信息化功能指引》（国卫办规划函〔2025〕63号）等文件建设。
@@ -77,7 +77,7 @@
 
 角色权限：诊断报告限医师、处方审核限药师、绩效考核限管理层、用户与审计限管理员（admin 全通）。
 
-演示数据：启动服务后执行 `python scripts/seed_demo.py` 一键灌入。
+演示数据：启动服务后执行 `python scripts/seed_demo.py` 一键灌入（覆盖全部模块，含住院文书、手术、成本、会计、随访、规则与流程）。
 对接规范：见 [docs/接口对接规范.md](docs/接口对接规范.md)（含 FHIR R4 资源映射）。
 
 ## 快速开始
@@ -113,7 +113,7 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 ```bash
 cd server
-python -m pytest tests/ -q                                        # 全量单元/接口测试（481 项通过，4 项 e2e 默认跳过）
+python -m pytest tests/ -q                                        # 全量单元/接口测试（510 项通过，7 项 e2e 默认跳过）
 python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖率报告
 ```
 
@@ -126,7 +126,9 @@ python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖
 
 `server/tests/e2e/test_flows.py` 用真实浏览器驱动管理端 SPA，覆盖
 **登录 → 决策驾驶舱 → 共享诊断中心开单 → 领取并出报告（危急值）→ 危急值确认接收
-→ 处置反馈闭环**，以及医生移动工作台 `/m/doctor` 登录。用例标记 `@pytest.mark.e2e`，
+→ 处置反馈闭环**、**住院文书（首次病程→护理→体征→完整性自查）**、
+**手术全流程（申请→审批→排班→术中记录）**、**随访闭环**，以及医生移动工作台
+`/m/doctor` 登录。用例标记 `@pytest.mark.e2e`，
 默认跳过（无浏览器内核的环境不会失败），需显式开启：
 
 ```bash

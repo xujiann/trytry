@@ -246,6 +246,29 @@ def test_jobs_require_login(client):
     assert client.get("/api/jobs").status_code == 401
 
 
+def test_jobs_restricted_to_management(client, admin):
+    """T6.7：任务摘要带着各类超期数量，属运营信息，不对医师药师开放。"""
+    for username, role in [("job_pha", "pharmacist"), ("job_dir2", "director")]:
+        client.post(
+            "/api/users",
+            json={"username": username, "password": "passw0rd1", "full_name": username, "role": role},
+            headers=admin,
+        )
+
+    def headers(username):
+        token = client.post(
+            "/api/auth/login", json={"username": username, "password": "passw0rd1"}
+        ).json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+
+    pharmacist = headers("job_pha")
+    assert client.get("/api/jobs", headers=pharmacist).status_code == 403
+    assert client.get("/api/jobs/runs", headers=pharmacist).status_code == 403
+    # 管理层与 admin 正常
+    assert client.get("/api/jobs", headers=headers("job_dir2")).status_code == 200
+    assert client.get("/api/jobs", headers=admin).status_code == 200
+
+
 # ---------------------------------------------------------------- 限流器
 
 

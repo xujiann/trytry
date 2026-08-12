@@ -20,6 +20,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -113,7 +114,18 @@ def seed(base_url):
         {"name": "E2E患者", "id_card": "320981199001019999", "gender": "男"},
         token,
     )
-    return {"org": org, "patient": patient}
+    # T6.8：住院 + 手术链路的前置数据（病区/床位/入院），UI 只驱动关键步骤
+    ward = post("/api/inpatient/wards", {"org_id": org["id"], "name": "E2E外科病区"}, token)
+    bed = post("/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "E2E-01"}, token)
+    admission = post(
+        "/api/inpatient/admissions",
+        {"patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"],
+         "doctor_name": "E2E外科医生", "diagnosis_name": "急性阑尾炎"},
+        token,
+    )
+    room = post("/api/surgery/rooms", {"org_id": org["id"], "name": "E2E一号手术间"}, token)
+    return {"org": org, "patient": patient, "ward": ward, "bed": bed,
+            "admission": admission, "room": room}
 
 
 @pytest.fixture(scope="session")
@@ -139,6 +151,22 @@ def _login(page, base_url, username="admin", password="admin123"):
     page.fill("#login-password", password)
     page.click("#login-form button[type=submit]")
     expect(page.locator("#app-view")).to_be_visible()
+
+
+@contextmanager
+def _answers(page, values):
+    """按顺序应答连续多个 prompt；退出时摘掉处理器，避免影响后续用例。
+
+    Playwright 的 page.once 只应答一次，而排班/术中记录要连续弹 4 个 prompt，
+    用一个持久处理器按序喂值更直观，也不会因为顺序注册出错而卡死。
+    """
+    pending = iter(values)
+    handler = lambda dialog: dialog.accept(next(pending, ""))  # noqa: E731
+    page.on("dialog", handler)
+    try:
+        yield
+    finally:
+        page.remove_listener("dialog", handler)
 
 
 def _open_page(page, page_id, title):
@@ -206,6 +234,67 @@ def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     page.click("button[data-trail]")
     expect(page.locator("#crit-trail")).to_contain_text("确认接收")
     expect(page.locator("#crit-trail")).to_contain_text("处置反馈")
+
+
+def test_clinical_documents_flow(page, base_url, seed):
+    """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
+    _login(page, base_url)
+    _open_page(page, "clinicaldocs", "住院临床文书")
+    expect(page.locator("#page-body")).to_contain_text("缺首次病程记录")
+
+    page.select_option("#note-form select[name=note_type]", "first")
+    page.fill("#note-form input[name=content]", "患者因转移性右下腹痛入院，拟行阑尾切除术")
+    page.click("#note-form button")
+    expect(page.locator("#page-body")).to_contain_text("首次病程")
+
+    page.select_option("#note-form select[name=note_type]", "daily")
+    page.fill("#note-form input[name=content]", "术后第一天，体温37.4℃，切口无渗出")
+    page.click("#note-form button")
+
+    page.fill("#nursing-form input[name=content]", "一级护理，持续心电监护")
+    page.click("#nursing-form button")
+
+    page.fill("#vital-form input[name=measured_at]", "2026-08-12 08:00")
+    page.fill("#vital-form input[name=temperature]", "37.4")
+    page.fill("#vital-form input[name=pulse]", "86")
+    page.click("#vital-form button")
+
+    expect(page.locator("#page-body")).to_contain_text("文书完整")
+
+
+def test_surgery_full_flow(page, base_url, seed):
+    """手术麻醉（T2.3）：申请 → 审批 → 排班 → 术中记录，状态逐级推进。"""
+    _login(page, base_url)
+    _open_page(page, "surgery", "手术麻醉")
+
+    page.fill("#surg-form input[name=admission_id]", str(seed["admission"]["id"]))
+    page.fill("#surg-form input[name=surgery_name]", "腹腔镜阑尾切除术")
+    page.click("#surg-form button")
+    expect(page.locator("#page-body")).to_contain_text("待审批")
+
+    page.click("button[data-approve]")
+    expect(page.locator("#page-body")).to_contain_text("已审批")
+
+    # 排班与术中记录都用连续多个 prompt 收集参数，用一个按序应答的处理器统一喂值
+    with _answers(page, [str(seed["room"]["id"]), "2026-09-01", "09:00", "11:00"]):
+        page.click("button[data-schedule]")
+        expect(page.locator("#page-body")).to_contain_text("已排班")
+    expect(page.locator("#page-body")).to_contain_text("E2E一号手术间")
+
+    with _answers(page, ["腹腔镜阑尾切除术", "麻醉科周医生", "阑尾化脓", "20"]):
+        page.click("button[data-record]")
+        expect(page.locator("#page-body")).to_contain_text("已完成")
+
+
+def test_followup_center_flow(page, base_url, seed):
+    """随访中心（T2.4）：术后随访任务自动派生，可在页面完成并计入统计。"""
+    _login(page, base_url)
+    _open_page(page, "followups", "随访中心")
+    expect(page.locator("#page-body")).to_contain_text("术后随访")
+
+    page.once("dialog", lambda d: d.accept("切口愈合良好，无发热"))
+    page.click("button[data-done]")
+    expect(page.locator("#page-body")).to_contain_text("已完成")
 
 
 def test_doctor_mobile_workbench_loads(page, base_url, seed):

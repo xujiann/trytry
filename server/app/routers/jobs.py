@@ -2,6 +2,9 @@
 
 任务实现是代码资产，这里只能改调度参数（间隔/启停）与手动触发，
 不能凭空造一个库里有、代码里没有的任务。
+
+T6.7 整改：整个模块收敛到管理层。任务摘要里带着各类超期数量（慢病随访、
+医废滞留、合同临期），这属于运营管理信息，没有理由对医师、药师开放。
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -12,7 +15,9 @@ from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import JobRun, ScheduledJob
 from ..scheduler import REGISTRY, run_job
 
-router = APIRouter(prefix="/api/jobs", tags=["定时任务"], dependencies=[Depends(get_current_user)])
+router = APIRouter(
+    prefix="/api/jobs", tags=["定时任务"], dependencies=[Depends(require_roles("director"))]
+)
 
 
 @router.get("")
@@ -55,7 +60,7 @@ def update_job(name: str, body: JobUpdate, db: Session = Depends(get_db)):
     return {"name": job.name, "interval_seconds": job.interval_seconds, "enabled": job.enabled}
 
 
-@router.post("/{name}/run", status_code=201, dependencies=[Depends(require_roles("director"))])
+@router.post("/{name}/run", status_code=201)
 def trigger_job(name: str, db: Session = Depends(get_db)):
     """手动触发一次（限管理层）：排障与补跑用，执行结果同样落 JobRun。"""
     if name not in REGISTRY:
