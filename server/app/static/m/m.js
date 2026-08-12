@@ -436,6 +436,8 @@ async function loadService() {
   try {
     if (activeService === "appointment") return await renderAppointments(box);
     if (activeService === "contract") return await renderContracts(box);
+    if (activeService === "inpatient") return await renderInpatient(box);
+    if (activeService === "surgery") return await renderSurgeries(box);
     if (activeService === "bill") return await renderBills(box);
     return await renderReferrals(box);
   } catch (err) {
@@ -508,6 +510,80 @@ async function renderContracts(box) {
       c.services.map((s) => kv(esc(SERVICE_TYPES[s.service_type] || s.service_type),
         `${esc(s.note || "—")}<br><small>${esc(s.date)}</small>`)).join("") : ""}
   </div>`).join("") : '<p class="empty">暂无签约记录</p>';
+}
+
+const SURGERY_STATUS_TEXT = {
+  requested: ["待审批", "orange"], approved: ["已审批，待排期", "orange"],
+  scheduled: ["已排期", "green"], completed: ["已完成", ""], cancelled: ["已取消", ""],
+};
+const URGENCY_TEXT = { elective: "择期", urgent: "限期", emergency: "急诊" };
+const CATEGORY_TEXT = { bed: "床位费", drug: "药费", exam: "检查费", treat: "治疗费",
+  material: "材料费", other: "其他" };
+
+async function renderInpatient(box) {
+  const rows = await authApi(`/api/portal/me/admissions${svcQuery()}`);
+  if (!rows.length) { box.innerHTML = '<p class="empty">暂无住院记录</p>'; return; }
+  box.innerHTML = rows.map((a) => `<div class="m-card">
+    ${kv("医院", esc(a.org_name))}
+    ${kv("科室床位", `${esc(a.ward_name)} ${esc(a.bed_no)}`)}
+    ${kv("诊断", esc(a.diagnosis_name || "—"))}
+    ${kv("主管医师", esc(a.doctor_name || "—"))}
+    ${kv("入院日期", esc(a.admitted_date))}
+    ${a.discharged_date ? kv("出院日期", esc(a.discharged_date)) : ""}
+    ${kv("住院天数", `${a.days} 天`)}
+    ${kv("状态", `<span class="tag ${a.status === "admitted" ? "orange" : "green"}">${
+      a.status === "admitted" ? "在院" : "已出院"}</span>`)}
+    ${kv("费用", a.settled
+      ? '<span class="tag green">已结清</span>'
+      : '<span class="tag orange">有未结清费用</span>')}
+    <button class="bill-detail" data-adm="${a.id}">查看费用清单</button>
+  </div>`).join("") + '<div id="adm-bill"></div>';
+  box.querySelectorAll(".bill-detail").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        const bill = await authApi(`/api/portal/me/admissions/${btn.dataset.adm}/bill`);
+        const cats = Object.entries(bill.by_category);
+        $("#adm-bill").innerHTML = `
+          <div class="sec-title">费用清单（住院号 ${bill.admission_id}）</div>
+          <div class="m-card">
+            ${kv("费用合计", `<b>¥${bill.total_amount.toFixed(2)}</b>`)}
+            ${cats.map(([k, v]) => kv(CATEGORY_TEXT[k] || k, `¥${v.toFixed(2)}`)).join("")}
+          </div>
+          ${bill.settlements.length ? `<div class="m-card">
+            ${bill.settlements.map((s) => `${kv("结算日期", esc(s.date))}
+              ${kv("总额", `¥${s.total_amount.toFixed(2)}`)}
+              ${kv("医保支付", `¥${s.insurance_pay.toFixed(2)}`)}
+              ${kv("个人自付", `<b>¥${s.self_pay.toFixed(2)}</b>`)}`).join("<hr>")}
+          </div>` : '<p class="empty">尚未结算</p>'}
+          <div class="sec-title">明细（${bill.items.length}）</div>
+          ${bill.items.map((i) => `<div class="m-card">
+            ${kv(esc(i.item_name), `¥${i.amount.toFixed(2)}`)}
+            ${kv("单价×数量", `¥${i.unit_price.toFixed(2)} × ${i.quantity}`)}
+            ${kv("日期", esc(i.date))}
+          </div>`).join("")}`;
+        $("#adm-bill").scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+async function renderSurgeries(box) {
+  const rows = await authApi(`/api/portal/me/surgeries${svcQuery()}`);
+  box.innerHTML = rows.length ? rows.map((s) => {
+    const [text, color] = SURGERY_STATUS_TEXT[s.status] || [s.status, ""];
+    return `<div class="m-card">
+      ${kv("手术名称", esc(s.surgery_name))}
+      ${kv("医院", esc(s.org_name))}
+      ${kv("术者", esc(s.surgeon_name || "—"))}
+      ${kv("类别", esc(URGENCY_TEXT[s.urgency] || s.urgency))}
+      ${kv("状态", `<span class="tag ${color}">${text}</span>`)}
+      ${s.scheduled_date
+        ? kv("安排时间", `${esc(s.scheduled_date)} ${esc(s.scheduled_time)}`) +
+          kv("手术间", esc(s.room_name))
+        : kv("计划日期", esc(s.planned_date || "待安排"))}
+    </div>`;
+  }).join("") + '<p class="hint tips">手术记录等专业文书请向主管医师当面了解。</p>'
+    : '<p class="empty">暂无手术安排</p>';
 }
 
 async function renderBills(box) {

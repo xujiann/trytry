@@ -176,7 +176,6 @@ def test_spa_covers_every_backend_module(client):
         "health",       # 探活
         "integration",  # HL7/FHIR，对机器不对人
         "portal",       # 居民端有自己的 H5
-        "surveys",      # 满意度由居民端提交，管理端看统计走绩效页
         "triage",       # 智能分诊由业务页内联调用
     }
     missing = sorted(served - called - no_admin_page)

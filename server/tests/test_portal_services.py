@@ -375,3 +375,162 @@ def test_service_endpoints_require_login(client):
     for path in ("/api/portal/me/family", "/api/portal/me/appointments",
                  "/api/portal/me/contract", "/api/portal/me/bills", "/api/portal/me/referrals"):
         assert client.get(path).status_code == 401
+
+
+# ---------------------------------------------------------------- 住院与手术（居民视角）
+
+
+@pytest.fixture(scope="module")
+def inpatient_setup(client, admin, org, me):
+    """一次完整住院：入院 → 计费 → 结算，并排一台手术。"""
+    ward = client.post(
+        "/api/inpatient/wards", json={"org_id": org["id"], "name": "居民端病区"}, headers=admin
+    ).json()
+    bed = client.post(
+        "/api/inpatient/beds", json={"ward_id": ward["id"], "bed_no": "P01"}, headers=admin
+    ).json()
+    adm = client.post(
+        "/api/inpatient/admissions",
+        json={"patient_id": me["patient"]["id"], "ward_id": ward["id"], "bed_id": bed["id"],
+              "doctor_name": "住院王医生", "diagnosis_name": "急性阑尾炎"},
+        headers=admin,
+    ).json()
+    for code, name, category, price in [("PB-BED", "床位费/日", "bed", 45),
+                                        ("PB-DRUG", "注射用抗菌药", "drug", 62)]:
+        client.post(
+            "/api/billing/charge-items",
+            json={"code": code, "name": name, "category": category, "price": price},
+            headers=admin,
+        )
+    client.post(
+        "/api/billing/details",
+        json={"patient_id": me["patient"]["id"], "admission_id": adm["id"],
+              "item_code": "PB-BED", "quantity": 4},
+        headers=admin,
+    )
+    client.post(
+        "/api/billing/details",
+        json={"patient_id": me["patient"]["id"], "admission_id": adm["id"],
+              "item_code": "PB-DRUG", "quantity": 3},
+        headers=admin,
+    )
+    room = client.post(
+        "/api/surgery/rooms", json={"org_id": org["id"], "name": "居民端手术间"}, headers=admin
+    ).json()
+    req = client.post(
+        "/api/surgery/requests",
+        json={"admission_id": adm["id"], "surgery_name": "腹腔镜阑尾切除术", "urgency": "urgent"},
+        headers=admin,
+    ).json()
+    # 申请人不得自批，审批要换一个人（职责分离）
+    client.post(
+        "/api/users",
+        json={"username": "portal_dir", "password": "passw0rd1", "full_name": "居民端主任",
+              "role": "director"},
+        headers=admin,
+    )
+    dir_token = client.post(
+        "/api/auth/login", json={"username": "portal_dir", "password": "passw0rd1"}
+    ).json()["access_token"]
+    director = {"Authorization": f"Bearer {dir_token}"}
+    approved = client.post(
+        f"/api/surgery/requests/{req['id']}/approve", json={"approved": True}, headers=director
+    )
+    assert approved.status_code == 200, approved.text
+    scheduled = client.post(
+        f"/api/surgery/requests/{req['id']}/schedule",
+        json={"room_id": room["id"], "scheduled_date": "2026-09-20",
+              "start_time": "09:00", "end_time": "10:30"},
+        headers=admin,
+    )
+    assert scheduled.status_code == 201, scheduled.text
+    return {"admission": adm, "surgery": req, "ward": ward}
+
+
+def test_portal_my_admissions(client, me, inpatient_setup):
+    rows = client.get("/api/portal/me/admissions", headers=me["headers"]).json()
+    row = next(r for r in rows if r["id"] == inpatient_setup["admission"]["id"])
+    assert row["org_name"] == "服务演示卫生院"
+    assert row["ward_name"] == "居民端病区" and row["bed_no"] == "P01"
+    assert row["status"] == "admitted"
+    assert row["days"] >= 1  # 当日入当日出计 1 天，与成本核算口径一致
+    assert row["settled"] is False  # 有未结清明细
+
+
+def test_portal_admission_bill_groups_by_category(client, me, inpatient_setup):
+    adm_id = inpatient_setup["admission"]["id"]
+    bill = client.get(f"/api/portal/me/admissions/{adm_id}/bill", headers=me["headers"]).json()
+    assert bill["total_amount"] == 45 * 4 + 62 * 3
+    assert bill["by_category"] == {"bed": 180.0, "drug": 186.0}
+    assert len(bill["items"]) == 2
+    assert all(i["settled"] is False for i in bill["items"])
+    assert bill["settlements"] == []
+
+
+def test_portal_bill_reflects_settlement(client, admin, me, inpatient_setup):
+    adm_id = inpatient_setup["admission"]["id"]
+    client.post(
+        "/api/billing/settlements",
+        json={"bill_type": "inpatient", "admission_id": adm_id, "insurance_pay": 200},
+        headers=admin,
+    )
+    bill = client.get(f"/api/portal/me/admissions/{adm_id}/bill", headers=me["headers"]).json()
+    assert len(bill["settlements"]) == 1
+    assert bill["settlements"][0]["insurance_pay"] == 200
+    assert bill["settlements"][0]["self_pay"] == bill["total_amount"] - 200
+    assert all(i["settled"] for i in bill["items"])
+
+    rows = client.get("/api/portal/me/admissions", headers=me["headers"]).json()
+    assert next(r for r in rows if r["id"] == adm_id)["settled"] is True
+
+
+def test_portal_bill_of_others_admission_is_404(client, admin, me, org, inpatient_setup):
+    """他人的住院单在居民端表现为 404，不区分"不存在"与"不是你的"。"""
+    other = client.post(
+        "/api/patients", json={"name": "他人住院", "id_card": "330782199808081234"}, headers=admin
+    ).json()
+    bed = client.post(
+        "/api/inpatient/beds", json={"ward_id": inpatient_setup["ward"]["id"], "bed_no": "P02"},
+        headers=admin,
+    ).json()
+    other_adm = client.post(
+        "/api/inpatient/admissions",
+        json={"patient_id": other["id"], "ward_id": inpatient_setup["ward"]["id"],
+              "bed_id": bed["id"], "doctor_name": "医生", "diagnosis_name": "肺炎"},
+        headers=admin,
+    ).json()
+    resp = client.get(f"/api/portal/me/admissions/{other_adm['id']}/bill", headers=me["headers"])
+    assert resp.status_code == 404
+
+
+def test_portal_my_surgeries_shows_schedule_not_operative_notes(client, me, inpatient_setup):
+    """居民端只回术式与时间地点；术中记录属专业文书，不直接推给患者。"""
+    rows = client.get("/api/portal/me/surgeries", headers=me["headers"]).json()
+    row = next(r for r in rows if r["id"] == inpatient_setup["surgery"]["id"])
+    assert row["surgery_name"] == "腹腔镜阑尾切除术"
+    assert row["status"] == "scheduled"
+    assert row["scheduled_date"] == "2026-09-20"
+    assert row["scheduled_time"] == "09:00-10:30"
+    assert row["room_name"] == "居民端手术间"
+    # 不应出现术中记录的字段
+    for leaked in ("findings", "blood_loss_ml", "complications", "procedure"):
+        assert leaked not in row
+
+
+def test_portal_inpatient_endpoints_respect_family_scope(client, admin, me, child):
+    """代管成员的住院与手术可查，未代管的他人 403。"""
+    assert client.get(
+        f"/api/portal/me/admissions?patient_id={child['id']}", headers=me["headers"]
+    ).status_code == 200
+    stranger = client.post(
+        "/api/patients", json={"name": "住院无关人", "id_card": "330782199909091234"},
+        headers=admin,
+    ).json()
+    assert client.get(
+        f"/api/portal/me/surgeries?patient_id={stranger['id']}", headers=me["headers"]
+    ).status_code == 403
+
+
+def test_portal_inpatient_requires_login(client):
+    assert client.get("/api/portal/me/admissions").status_code == 401
+    assert client.get("/api/portal/me/surgeries").status_code == 401

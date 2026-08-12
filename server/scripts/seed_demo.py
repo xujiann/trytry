@@ -395,6 +395,13 @@ if not c.get("/api/workflows/definitions").json():
         "title": "引进某长效降压药", "org_id": county["id"]}).json()
     c.post(f"/api/workflows/instances/{_inst['id']}/advance", json={"comment": "内科提出，临床确有需求"})
 
+# ---------- 满意度：一条好评一条差评，管理端"差评清单"才有内容 ----------
+if not c.get("/api/surveys?limit=5").json():
+    for score, comment in [(5, "医生耐心，检查结果当天就出了"), (2, "上午挂号排队太久，希望增加号源")]:
+        c.post("/api/surveys", json={"target_type": "encounter", "target_id": 1,
+                                     "patient_id": patients[0]["id"], "score": score,
+                                     "comment": comment})
+
 print("演示数据灌入完成")
 print(c.get("/api/metrics/overview").json())
 print("DRG统计:", c.get("/api/drgs/stats").json())
@@ -402,3 +409,4 @@ print("就医流向:", c.get("/api/analytics/patient-flow").json())
 print("科室成本:", [(x["dept_name"], x["total_cost"]) for x in
                  c.get(f"/api/cost/departments?period={period}&org_id={county['id']}").json()])
 print("随访统计:", c.get("/api/followups/stats").json())
+print("满意度:", c.get("/api/surveys/stats").json())

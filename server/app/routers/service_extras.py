@@ -1,11 +1,11 @@
 """功能指引查漏补缺：报告模板/报告修改、消毒申领、会诊专家、预约黑名单、健康宣教、满意度、智能导诊。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
     ExamResource,
     AppointmentBlacklist,
@@ -324,17 +324,74 @@ def submit_survey(body: SurveyCreate, db: Session = Depends(get_db)):
     return {"id": s.id}
 
 
+# 差评阈值：≤2 分算差评，是管理层真正要盯的部分（均分会把个别差评稀释掉）
+NEGATIVE_SCORE = 2
+
+
 @router.get("/surveys/stats")
 def survey_stats(target_type: str | None = None, db: Session = Depends(get_db)):
-    q = db.query(
-        SatisfactionSurvey.target_type,
-        func.count(SatisfactionSurvey.id).label("n"),
-        func.avg(SatisfactionSurvey.score).label("avg_score"),
-    )
+    """满意度统计：均分 + 分值分布 + 差评数。
+
+    只看均分会把个别差评稀释掉——4.6 分和"20 条里有 3 条 1 分"是两回事，
+    所以这里一并给出分布与差评数。
+    """
+    q = db.query(SatisfactionSurvey)
     if target_type:
         q = q.filter(SatisfactionSurvey.target_type == target_type)
-    rows = q.group_by(SatisfactionSurvey.target_type).all()
-    return [{"target_type": r.target_type, "count": r.n, "avg_score": round(r.avg_score, 2)} for r in rows]
+    rows = q.all()
+    grouped: dict[str, dict] = {}
+    for s in rows:
+        entry = grouped.setdefault(
+            s.target_type,
+            {"target_type": s.target_type, "count": 0, "total": 0,
+             "distribution": {str(i): 0 for i in range(1, 6)}, "negative": 0},
+        )
+        entry["count"] += 1
+        entry["total"] += s.score
+        entry["distribution"][str(s.score)] += 1
+        if s.score <= NEGATIVE_SCORE:
+            entry["negative"] += 1
+    result = []
+    for entry in grouped.values():
+        count = entry.pop("count")
+        total = entry.pop("total")
+        entry["count"] = count
+        entry["avg_score"] = round(total / count, 2) if count else 0.0
+        entry["negative_rate_pct"] = round(entry["negative"] * 100 / count, 2) if count else 0.0
+        result.append(entry)
+    return sorted(result, key=lambda x: x["target_type"])
+
+
+@router.get("/surveys")
+def list_surveys(
+    response: Response,
+    target_type: str | None = None,
+    max_score: int | None = None,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    """满意度明细（分页）。`max_score=2` 即差评清单——带评语的那些才有改进价值。"""
+    query = db.query(SatisfactionSurvey)
+    if target_type:
+        query = query.filter(SatisfactionSurvey.target_type == target_type)
+    if max_score is not None:
+        query = query.filter(SatisfactionSurvey.score <= max_score)
+    rows = paginate(query.order_by(SatisfactionSurvey.id.desc()), response, offset, limit)
+    names = dict(db.query(Patient.id, Patient.name).all())
+    return [
+        {
+            "id": s.id,
+            "target_type": s.target_type,
+            "target_id": s.target_id,
+            "patient_id": s.patient_id,
+            "patient_name": names.get(s.patient_id, ""),
+            "score": s.score,
+            "comment": s.comment,
+            "date": s.created_at.date().isoformat(),
+        }
+        for s in rows
+    ]
 
 
 # ---- ⑨ 智能导诊 ----

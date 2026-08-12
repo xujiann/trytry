@@ -124,6 +124,7 @@ const PAGES = [
   { id: "drgs", title: "DRGs分析", render: renderDrgs },
   { id: "education", title: "远程医学教育", render: renderEducation },
   { id: "knowledge", title: "知识库", render: renderKnowledge },
+  { id: "surveys", title: "满意度分析", render: renderSurveys },
   { id: "hrfinance", title: "人财物管理", render: renderHrFinance },
   { id: "accounting", title: "会计核算", render: renderAccounting, roles: ["director"] },
   { id: "cost", title: "成本核算", render: renderCost, roles: ["director"] },
@@ -4145,4 +4146,54 @@ async function renderJobs() {
       route();
     } catch (err) { setMsg("#job-msg", err.message, false); }
   };
+}
+
+/* ---------------- 满意度分析 ---------------- */
+
+const SURVEY_TARGETS = { contract: "家医签约服务", encounter: "就诊体验", consultation: "远程会诊" };
+
+async function renderSurveys() {
+  $("#page-desc").textContent = "满意度均分、分值分布与差评清单；只看均分会把个别差评稀释掉";
+  const [stats, recent, negative] = await Promise.all([
+    api("/api/surveys/stats"), api("/api/surveys?limit=50"), api("/api/surveys?max_score=2&limit=50")]);
+  const totalCount = stats.reduce((s, x) => s + x.count, 0);
+  const totalNegative = stats.reduce((s, x) => s + x.negative, 0);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>总览</h3>
+      <div class="cards">
+        <div class="card"><span class="k">评价总数</span><b>${totalCount}</b></div>
+        <div class="card"><span class="k">差评（≤2分）</span><b>${totalNegative}</b></div>
+        <div class="card"><span class="k">差评率</span><b>${
+          totalCount ? (totalNegative * 100 / totalCount).toFixed(2) : 0}%</b></div>
+      </div>
+      ${table(["评价对象", "评价数", "均分", "1分", "2分", "3分", "4分", "5分", "差评数", "差评率"], stats, (s) =>
+        `<tr><td>${esc(SURVEY_TARGETS[s.target_type] || s.target_type)}</td><td>${s.count}</td>
+         <td><b>${s.avg_score}</b></td>
+         ${[1, 2, 3, 4, 5].map((n) => `<td>${s.distribution[String(n)]}</td>`).join("")}
+         <td><span class="tag ${s.negative ? "red" : "green"}">${s.negative}</span></td>
+         <td>${s.negative_rate_pct}%</td></tr>`)}
+      ${stats.length ? barChart(stats.map((s) => [SURVEY_TARGETS[s.target_type] || s.target_type, s.avg_score])) : ""}</div>
+    <div class="panel"><h3>差评清单（${negative.length}）</h3>
+      <p class="desc">带评语的差评最有改进价值——这是投诉发生前唯一的信号。</p>
+      ${table(["日期", "对象", "患者", "评分", "评语"], negative, (s) =>
+        `<tr><td>${esc(s.date)}</td><td>${esc(SURVEY_TARGETS[s.target_type] || s.target_type)}</td>
+         <td>${esc(s.patient_name)}</td><td><span class="tag red">${s.score}</span></td>
+         <td>${esc(s.comment || "（未填写）")}</td></tr>`)}</div>
+    <div class="panel"><h3>代录评价（经办）</h3>
+      <form class="inline" id="survey-form"><input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="target_type">${Object.entries(SURVEY_TARGETS).map(([k, v]) =>
+          `<option value="${k}">${v}</option>`).join("")}</select>
+        <input name="target_id" type="number" placeholder="对象ID" required>
+        <input name="score" type="number" min="1" max="5" placeholder="评分1-5" required>
+        <input name="comment" placeholder="评语" style="min-width:240px"><button>提交</button></form>
+      <p class="msg" id="survey-msg"></p>
+      <p class="desc">居民本人评价走居民端 /m，此处仅供窗口代录。</p></div>
+    <div class="panel"><h3>最近评价（${recent.length}）</h3>${
+      table(["日期", "对象", "患者", "评分", "评语"], recent, (s) =>
+        `<tr><td>${esc(s.date)}</td><td>${esc(SURVEY_TARGETS[s.target_type] || s.target_type)}</td>
+         <td>${esc(s.patient_name)}</td>
+         <td><span class="tag ${s.score >= 4 ? "green" : s.score <= 2 ? "red" : "orange"}">${s.score}</span></td>
+         <td>${esc(s.comment || "—")}</td></tr>`)}</div>`;
+  $("#survey-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/surveys", formJson(e.target, ["patient_id", "target_id", "score"]), "#survey-msg"); };
 }

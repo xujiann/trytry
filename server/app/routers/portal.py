@@ -33,8 +33,12 @@ from ..config import settings
 from ..database import get_db
 from ..privacy import mask_phone
 from ..models import (
+    Admission,
     Appointment,
     AppointmentSlot,
+    Bed,
+    BillDetail,
+    ChargeItem,
     ChronicPatient,
     ContractService,
     Encounter,
@@ -45,12 +49,17 @@ from ..models import (
     Organization,
     Patient,
     PaymentOrder,
+    OperatingRoom,
     Referral,
     ResidentAccount,
     ResidentFamilyMember,
     SatisfactionSurvey,
     Settlement,
     SmsCode,
+    SurgeryRequest,
+    SurgerySchedule,
+    Ward,
+    utcnow,
 )
 from ..security import create_token, decode_token, hash_password, revoked_tokens, verify_password
 from ..sms import get_sms_provider
@@ -913,6 +922,175 @@ def portal_my_referrals(
             "reason": r.reason,
             "status": r.status,
             "date": r.created_at.date().isoformat(),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/me/admissions")
+def portal_my_admissions(
+    patient_id: int | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的住院记录：在院/已出院、病区床位、住院天数与费用是否结清。
+
+    住院天数按"当日入当日出计 1 天"，与成本核算、运行效率的口径一致，
+    免得同一次住院在三个地方显示三个天数。
+    """
+    patient = accessible_patient(db, account, patient_id)
+    rows = (
+        db.query(Admission)
+        .filter(Admission.patient_id == patient.id)
+        .order_by(Admission.id.desc())
+        .limit(50)
+        .all()
+    )
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    wards = {w.id: w.name for w in db.query(Ward).all()}
+    beds = {b.id: b.bed_no for b in db.query(Bed).all()}
+    # 未结清明细：settlement_id 为空即尚未纳入任何结算单
+    unsettled = {
+        admission_id
+        for (admission_id,) in db.query(BillDetail.admission_id)
+        .filter(
+            BillDetail.patient_id == patient.id,
+            BillDetail.admission_id.isnot(None),
+            BillDetail.settlement_id.is_(None),
+        )
+        .distinct()
+        .all()
+    }
+    result = []
+    for a in rows:
+        end = (a.discharged_at or utcnow()).date()
+        result.append(
+            {
+                "id": a.id,
+                "org_name": org_names.get(a.org_id, ""),
+                "ward_name": wards.get(a.ward_id, ""),
+                "bed_no": beds.get(a.bed_id, ""),
+                "doctor_name": a.doctor_name,
+                "diagnosis_name": a.diagnosis_name,
+                "status": a.status,
+                "admitted_date": a.admitted_at.date().isoformat(),
+                "discharged_date": a.discharged_at.date().isoformat() if a.discharged_at else "",
+                "days": max((end - a.admitted_at.date()).days, 1),
+                "settled": a.id not in unsettled,
+            }
+        )
+    return result
+
+
+@router.get("/me/admissions/{admission_id}/bill")
+def portal_admission_bill(
+    admission_id: int,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """住院费用清单：按收费类别汇总 + 明细，附结算摘要。
+
+    越权访问按 404 处理（不区分"不存在"与"不是你的"），与其他居民端接口同口径。
+    """
+    admission = db.get(Admission, admission_id)
+    allowed = _my_patient_ids(db, account)
+    if admission is None or admission.patient_id not in allowed:
+        raise HTTPException(status_code=404, detail="住院记录不存在")
+
+    details = (
+        db.query(BillDetail)
+        .filter(BillDetail.admission_id == admission_id)
+        .order_by(BillDetail.id)
+        .limit(500)
+        .all()
+    )
+    categories = {c.code: c.category for c in db.query(ChargeItem).all()}
+    by_category: dict[str, float] = {}
+    for d in details:
+        key = categories.get(d.item_code, "other")
+        by_category[key] = round(by_category.get(key, 0) + d.amount, 2)
+
+    settlements = (
+        db.query(Settlement)
+        .filter(Settlement.admission_id == admission_id)
+        .order_by(Settlement.id.desc())
+        .all()
+    )
+    return {
+        "admission_id": admission_id,
+        "diagnosis_name": admission.diagnosis_name,
+        "status": admission.status,
+        "total_amount": round(sum(d.amount for d in details), 2),
+        "by_category": by_category,
+        "items": [
+            {
+                "item_name": d.item_name,
+                "unit_price": d.unit_price,
+                "quantity": d.quantity,
+                "amount": d.amount,
+                "category": categories.get(d.item_code, "other"),
+                "settled": d.settlement_id is not None,
+                "date": d.created_at.date().isoformat(),
+            }
+            for d in details
+        ],
+        "settlements": [
+            {
+                "id": s.id,
+                "total_amount": s.total_amount,
+                "insurance_pay": s.insurance_pay,
+                "self_pay": s.self_pay,
+                "date": s.created_at.date().isoformat(),
+            }
+            for s in settlements
+        ],
+    }
+
+
+@router.get("/me/surgeries")
+def portal_my_surgeries(
+    patient_id: int | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的手术安排：术式、状态与已排定的时间地点。
+
+    只回患者该知道的：术式名、日期时段、手术间、状态。术中记录（出血量、
+    术中所见、并发症）不在居民端展示——那是给医生看的专业文书，直接推给
+    患者容易造成误读，需要时由医生当面解释。
+    """
+    patient = accessible_patient(db, account, patient_id)
+    rows = (
+        db.query(SurgeryRequest)
+        .filter(SurgeryRequest.patient_id == patient.id)
+        .order_by(SurgeryRequest.id.desc())
+        .limit(50)
+        .all()
+    )
+    schedules = {
+        s.request_id: s
+        for s in db.query(SurgerySchedule)
+        .filter(SurgerySchedule.request_id.in_([r.id for r in rows] or [0]))
+        .all()
+    }
+    rooms = {r.id: r.name for r in db.query(OperatingRoom).all()}
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    return [
+        {
+            "id": r.id,
+            "surgery_name": r.surgery_name,
+            "org_name": org_names.get(r.org_id, ""),
+            "surgeon_name": r.surgeon_name,
+            "urgency": r.urgency,
+            "status": r.status,
+            "planned_date": r.planned_date,
+            "scheduled_date": schedules[r.id].scheduled_date if r.id in schedules else "",
+            "scheduled_time": (
+                f"{schedules[r.id].start_time}-{schedules[r.id].end_time}"
+                if r.id in schedules
+                else ""
+            ),
+            "room_name": rooms.get(schedules[r.id].room_id, "") if r.id in schedules else "",
         }
         for r in rows
     ]
