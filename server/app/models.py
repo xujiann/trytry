@@ -3747,3 +3747,41 @@ class SimulationAttempt(Base):
     score: Mapped[int] = mapped_column(Integer, default=0)
     passed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+
+# ---------- 阶段十 统一资源与排程撮合 ----------
+
+
+class Resource(Base):
+    """通用资源登记（阶段十）。
+
+    **只收没有领域表的资源**——工勤、后勤设施、通用设备、会议室。
+    号源、检查资源、手术间、血制品各有自己的表与状态机，进这张表只会造成
+    两处维护、两处不一致。统一资源视图靠聚合实现，不靠这张表兜住全部。
+
+    发布/撤回状态也只对通用资源生效：号源有余量、手术间有 active、
+    血制品有库存量，各自已经表达了"能不能用"，再压一层发布状态只会打架。
+    """
+
+    __tablename__ = "resources"
+    __table_args__ = (
+        UniqueConstraint("org_id", "code", name="uq_resource_org_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # logistics=工勤服务, facility=后勤设施, equipment=通用设备, meeting_room=会议室
+    resource_type: Mapped[str] = mapped_column(String(16), index=True)
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    capacity: Mapped[int] = mapped_column(Integer, default=1)
+    unit: Mapped[str] = mapped_column(String(16), default="")
+    location: Mapped[str] = mapped_column(String(256), default="")
+    contact: Mapped[str] = mapped_column(String(64), default="")
+    # draft=草稿, published=已发布, withdrawn=已撤回。新登记一律草稿——
+    # 直接发布意味着还没核对完就能被申请到，而填错的代价是有人白跑一趟。
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    withdraw_reason: Mapped[str] = mapped_column(String(256), default="")
+    note: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

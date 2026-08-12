@@ -133,6 +133,7 @@ const PAGES = [
   { id: "telemedicine", title: "互联网+诊疗", render: renderTelemedicine },
   { id: "tcm", title: "中医药服务", render: renderTcm },
   { id: "archive", title: "患者360视图", render: renderArchive },
+  { id: "resources", title: "统一资源与排程", render: renderResources },
   { id: "servicerequests", title: "统一申请单中心", render: renderServiceRequests },
   { group: "综合管理" },
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
@@ -2090,6 +2091,77 @@ function renderCaseTable(rows) {
     `<td>${c.published ? '<span class="tag ok">已发布</span>' : "草稿"}</td>` +
     `<td>${c.published ? `<button class="btn sm" data-unpublish="${c.id}">撤回</button>`
                        : `<button class="btn sm" data-publish="${c.id}">发布</button>`}</td></tr>`);
+}
+
+
+async function renderResources() {
+  $("#page-desc").textContent = "通用资源登记（登记→发布→撤回）、五类资源统一视图、号源与手术间排程撮合";
+  const [resources, catalog, slotMatch] = await Promise.all([
+    api("/api/resources"), api("/api/resources/catalog"), api("/api/resources/match/slots"),
+  ]);
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      ${Object.entries(catalog.by_kind).map(([k, v]) =>
+        `<div class="card"><div class="label">${esc(k)}</div>` +
+        `<div class="value">${v.usable}/${v.total}</div></div>`).join("")}
+    </div>
+    <div class="panel"><h3>通用资源登记</h3>
+      <p class="hint">只收没有领域表的资源（工勤/后勤/通用设备/会议室）；号源、检查资源、手术间、血制品各有自己的模块。</p>
+      <form class="inline" id="rs-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="resource_type"><option value="logistics">工勤服务</option><option value="facility">后勤设施</option>
+          <option value="equipment">通用设备</option><option value="meeting_room">会议室</option></select>
+        <input name="code" placeholder="编码" required><input name="name" placeholder="名称" required>
+        <input name="capacity" type="number" value="1" min="1" style="min-width:70px"><input name="unit" placeholder="单位" style="min-width:70px">
+        <input name="location" placeholder="位置"><button>登记（草稿）</button></form>
+      <p class="msg" id="rs-msg"></p>
+      ${table(["编码", "名称", "类型", "容量", "位置", "状态", "操作"], resources, (r) =>
+        `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.resource_type_name)}</td>` +
+        `<td>${r.capacity}${esc(r.unit)}</td><td>${esc(r.location || "—")}</td>` +
+        `<td>${esc(r.status_name)}${r.withdraw_reason ? "<br><small>" + esc(r.withdraw_reason) + "</small>" : ""}</td>` +
+        `<td>${r.status === "published" ? `<button class="btn sm danger" data-withdraw="${r.id}">撤回</button>`
+                                        : `<button class="btn sm" data-publish="${r.id}">发布</button>`}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>统一资源视图</h3>
+      <p class="hint">${esc(catalog.caliber)}</p>
+      ${table(["类别", "名称", "详情", "可用量", "状态"], catalog.items.slice(0, 100), (i) =>
+        `<tr><td>${esc(i.kind_name)}</td><td>${esc(i.name)}</td><td>${esc(i.detail || "—")}</td>` +
+        `<td>${i.available === null ? "—" : i.available + esc(i.unit)}</td>` +
+        `<td>${i.usable ? '<span class="tag ok">可用</span>' : "不可用"}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>号源撮合（未来 14 天）</h3>
+      <p class="hint">${esc(slotMatch.caliber)}</p>
+      ${table(["机构", "最早可约", "余量合计", "近期号源"], slotMatch.candidates, (c) =>
+        `<tr><td>${esc(c.org_name || c.org_id)}</td><td>${esc(c.earliest)}</td><td>${c.remaining_total}</td>` +
+        `<td>${c.slots.map((s) => esc(`${s.slot_date} ${s.slot_time} ${s.resource_name}(余${s.remaining})`)).join("；")}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>手术间撮合</h3>
+      <form class="inline" id="or-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="scheduled_date" placeholder="日期 YYYY-MM-DD">
+        <input name="start_time" value="08:00" style="min-width:80px"><input name="end_time" value="18:00" style="min-width:80px">
+        <button>查空档</button></form>
+      <div id="or-result"></div></div>`;
+  $("#rs-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/resources", formJson(e.target, ["org_id", "capacity"]), "#rs-msg"); };
+  $("#or-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const qs = new URLSearchParams([...f.entries()].filter(([, v]) => v)).toString();
+    const r = await api(`/api/resources/match/or-rooms?${qs}`);
+    $("#or-result").innerHTML = table(["手术间", "该窗口", "冲突时段", "空档"], r.rooms, (x) =>
+      `<tr><td>${esc(x.room_name)}</td>` +
+      `<td>${x.available ? '<span class="tag ok">可用</span>' : '<span class="tag danger">有冲突</span>'}</td>` +
+      `<td>${x.conflicts.map((c) => esc(`${c.start_time}-${c.end_time}`)).join("、") || "—"}</td>` +
+      `<td>${x.gaps.map((g) => esc(`${g.start_time}-${g.end_time}`)).join("、") || "无"}</td></tr>`);
+  };
+  $("#page-body").onclick = (e) => {
+    const d = e.target.dataset;
+    if (d.publish) return postAction(`/api/resources/${d.publish}/publish`, {}, "#rs-msg");
+    if (d.withdraw) {
+      const reason = prompt("撤回理由"); if (!reason) return;
+      return postAction(`/api/resources/${d.withdraw}/withdraw`, { reason }, "#rs-msg");
+    }
+  };
 }
 
 async function renderPublicHealth() {

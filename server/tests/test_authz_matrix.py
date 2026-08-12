@@ -76,6 +76,8 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/tcm/assist-diagnosis"),
     ("POST", "/api/triage/suggest"),
     ("POST", "/api/rules/evaluate"),
+    # DRG 事前提示：按拟诊断试算候选组，不落任何业务数据。
+    ("POST", "/api/drgs/pre-check"),
     # 流程引擎与总线：实例推进由流程定义自身的角色约束控制
     ("POST", "/api/workflows/instances"),
     ("POST", "/api/workflows/instances/{instance_id}/advance"),

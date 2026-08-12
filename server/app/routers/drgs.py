@@ -8,15 +8,18 @@
 - GET /api/drgs/stats：各机构 CMI（Σ权重/正式入组例数，兜底组不计入）、
   各组例数/均费、按 MDC 汇总。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, resolve_business_date
 from ..models import Admission, CaseSummary, DrgGroup, Organization
+
+# 同组历史病例少于该数不做事中预警——3 个病例算出来的"均值"，预警的是噪声。
+MIN_BASELINE_CASES = 5
 
 router = APIRouter(prefix="/api/drgs", tags=["DRGs分析"], dependencies=[Depends(get_current_user)])
 
@@ -256,4 +259,132 @@ def drg_stats(db: Session = Depends(get_db)):
             }
             for e in sorted(mdc_agg.values(), key=lambda x: x["mdc"])
         ],
+    }
+
+
+# ---------- 阶段十：事前提示与事中预警 ----------
+
+
+class PreCheckIn(BaseModel):
+    diagnosis: str = Field(min_length=1, max_length=256)
+    operation: str = Field(default="", max_length=256)
+
+
+@router.post("/pre-check")
+def drg_pre_check(body: PreCheckIn, db: Session = Depends(get_db)):
+    """事前提示：入院登记时按拟诊断预判入组与权重。
+
+    **给出的是"可能入哪几组"而不是一个结论**：入院时诊断本就未定，
+    报一个确定的组会让人照着组去写诊断——那是把 DRG 用反了。
+    故返回候选组按匹配度排序，并明确标注这只是提示。
+
+    未命中任何组也如实说"未匹配"，不落到兜底组：兜底组是出院入组时
+    保证每个病例都有归属用的，事前拿它当预测结果毫无信息量。
+    """
+    diagnosis, operation = body.diagnosis, body.operation
+    scored = []
+    for group in (
+        db.query(DrgGroup)
+        .filter(DrgGroup.active.is_(True), DrgGroup.is_fallback.is_(False))
+        .all()
+    ):
+        score = _match_group(group, diagnosis, operation)
+        if score is not None:
+            scored.append((score, group))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    candidates = [
+        {**_group_out(g), "match_score": {"diagnosis_hits": s[0], "procedure_hits": s[1]}}
+        for s, g in scored[:5]
+    ]
+    weights = [c["base_weight"] for c in candidates]
+    return {
+        "diagnosis": diagnosis,
+        "operation": operation,
+        "matched": bool(candidates),
+        "candidates": candidates,
+        "weight_range": (
+            {"min": min(weights), "max": max(weights)} if weights else None
+        ),
+        "caliber": "事前提示给候选组而非结论——入院时诊断未定，报一个确定的组"
+                   "会让人照着组去写诊断；未命中不落兜底组，那在事前没有信息量",
+    }
+
+
+@router.get("/in-stay-alerts")
+def in_stay_alerts(
+    org_id: int | None = None,
+    los_multiplier: float = Query(default=1.5, ge=1.0, le=5.0),
+    today: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """事中预警：在院病例住院日已明显超出同组均值。
+
+    **均值取自本院已出院且已入组的历史病例**，不用外部标杆：各县病种结构
+    差异极大，拿别处的均值来卡自己的病人，预警会多到没人看。
+
+    同组历史病例少于 5 例的不预警，但**单列报出**——3 个病例算出来的"均值"，
+    预警的是噪声不是问题；而不提的话，看的人会以为这些病例没问题。
+    """
+    end = resolve_business_date(today)
+
+    # 历史基线：已出院且已入组的病例，住院日由入出院时刻现算
+    # （平台没有存 los_days，存一份就会与两个时刻不一致）
+    history = (
+        db.query(CaseSummary, Admission)
+        .join(Admission, CaseSummary.admission_id == Admission.id)
+        .filter(CaseSummary.drg_code != "", Admission.discharged_at.isnot(None))
+        .all()
+    )
+    baseline: dict[str, list[int]] = {}
+    for summary, adm in history:
+        days = (adm.discharged_at.date() - adm.admitted_at.date()).days
+        if days >= 0:
+            baseline.setdefault(summary.drg_code, []).append(days)
+
+    query = (
+        db.query(Admission, CaseSummary)
+        .outerjoin(CaseSummary, CaseSummary.admission_id == Admission.id)
+        .filter(Admission.status == "admitted")
+    )
+    if org_id is not None:
+        query = query.filter(Admission.org_id == org_id)
+    rows = query.order_by(Admission.id.desc()).limit(500).all()
+
+    alerts, insufficient, ungrouped = [], [], 0
+    for adm, summary in rows:
+        drg_code = summary.drg_code if summary else ""
+        if not drg_code:
+            # 尚未填病案首页的在院病例：事中无从比对，计数报出
+            ungrouped += 1
+            continue
+        stayed = (end - adm.admitted_at.date()).days
+        samples = baseline.get(drg_code, [])
+        if len(samples) < MIN_BASELINE_CASES:
+            insufficient.append({
+                "admission_id": adm.id, "drg_code": drg_code,
+                "history_cases": len(samples), "stayed_days": stayed,
+            })
+            continue
+        avg = sum(samples) / len(samples)
+        if avg > 0 and stayed > avg * los_multiplier:
+            alerts.append({
+                "admission_id": adm.id,
+                "patient_id": adm.patient_id,
+                "org_id": adm.org_id,
+                "drg_code": drg_code,
+                "stayed_days": stayed,
+                "baseline_avg_days": round(avg, 1),
+                "baseline_cases": len(samples),
+                "over_ratio": round(stayed / avg, 2),
+            })
+    return {
+        "today": end.isoformat(),
+        "los_multiplier": los_multiplier,
+        "alerts": sorted(alerts, key=lambda a: -a["over_ratio"]),
+        # 样本不足与尚未入组的都单列，不混进"无预警"
+        "insufficient_baseline": insufficient,
+        "ungrouped_in_stay": ungrouped,
+        "caliber": f"基线取本院已出院且已入组病例的住院日（由入出院时刻现算）；"
+                   f"同组历史少于 {MIN_BASELINE_CASES} 例不预警，单列在 "
+                   f"insufficient_baseline；尚未填病案首页的在院病例计入 ungrouped_in_stay",
     }
