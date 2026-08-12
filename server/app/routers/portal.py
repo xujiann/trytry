@@ -21,7 +21,7 @@ MEDPLAT_PORTAL_LEGACY_VERIFY=false 关闭（生产建议关闭）。
 """
 import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..clock import now_naive
 from ..database import get_db
 from ..privacy import mask_phone
 from ..models import (
@@ -100,11 +101,6 @@ def _reset_portal_failures() -> None:
     _send_by_ip.clear_all()
 
 
-def _naive_utcnow() -> datetime:
-    """与模型中 DateTime 列一致的无时区 UTC 时刻（SQLite 不存时区）。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 # ============================================================================
 # 登录：手机号验证码
 # ============================================================================
@@ -142,7 +138,7 @@ def send_sms_code(body: SendCodeIn, request: Request, db: Session = Depends(get_
         .first()
     )
     if last is not None:
-        elapsed = (_naive_utcnow() - last.created_at).total_seconds()
+        elapsed = (now_naive() - last.created_at).total_seconds()
         if elapsed < SEND_COOLDOWN_SECONDS:
             raise HTTPException(
                 status_code=429, detail=f"请{int(SEND_COOLDOWN_SECONDS - elapsed)}秒后再获取验证码"
@@ -157,7 +153,7 @@ def send_sms_code(body: SendCodeIn, request: Request, db: Session = Depends(get_
             phone=phone,
             purpose=body.purpose,
             code_hash=hash_password(code),
-            expires_at=_naive_utcnow() + timedelta(seconds=ttl),
+            expires_at=now_naive() + timedelta(seconds=ttl),
         )
     )
     db.commit()
@@ -184,7 +180,7 @@ def _consume_code(db: Session, phone: str, code: str, purpose: str) -> None:
             SmsCode.phone == phone,
             SmsCode.purpose == purpose,
             SmsCode.consumed.is_(False),
-            SmsCode.expires_at > _naive_utcnow(),
+            SmsCode.expires_at > now_naive(),
         )
         .order_by(SmsCode.id.desc())
         .first()
@@ -237,7 +233,7 @@ def _autobind_by_phone(db: Session, account: ResidentAccount) -> None:
 
 
 def _login_result(db: Session, account: ResidentAccount) -> dict:
-    account.last_login_at = _naive_utcnow()
+    account.last_login_at = now_naive()
     db.commit()
     patient = db.get(Patient, account.patient_id) if account.patient_id else None
     return {

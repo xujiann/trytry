@@ -9,13 +9,15 @@
 - ㉟ 绩效自评改进：问题→责任人→期限→完成确认        /api/performance/improvements
 - ⑨ 上门服务调度：申请→派单→完成，关联家医签约      /api/homevisits
 """
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..datetypes import DateStr
+from ..clock import now_naive
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import (
@@ -112,7 +114,7 @@ class BatchCreate(BaseModel):
     org_id: int
     quantity: int = Field(ge=1)
     unit: str = "剂"
-    produced_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    produced_date: DateStr
     # 不传则按配方有效期（月）自动推算
     expire_date: str = ""
 
@@ -431,7 +433,7 @@ class PlanCreate(BaseModel):
     title: str = Field(min_length=1)
     org_id: int
     technique_id: int | None = None
-    plan_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    plan_date: DateStr
     capacity: int = Field(default=30, ge=1, le=1000)
     trainer: str = ""
 
@@ -664,7 +666,7 @@ HIGH_RISK_RESULTS = {"high_risk", "critical"}
 class ScreeningCreate(BaseModel):
     record_id: int
     screen_type: str = Field(pattern="^(down|nipt|ultrasound|diagnosis)$")
-    screen_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    screen_date: DateStr
     gest_week: int | None = Field(default=None, ge=1, le=45)
     result: str = Field(default="low_risk", pattern="^(low_risk|high_risk|critical)$")
     indicator: str = ""
@@ -769,7 +771,7 @@ class TaskCreate(BaseModel):
     org_id: int
     problem: str = Field(min_length=1)
     owner_name: str = Field(min_length=1)
-    due_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    due_date: DateStr
     indicator_key: str = ""
     measures: str = ""
 
@@ -858,7 +860,7 @@ def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db
             raise HTTPException(status_code=422, detail="提交完成须填写整改结果说明")
         task.status = "completed"
         task.completion_note = body.completion_note
-        task.completed_at = datetime.utcnow()
+        task.completed_at = now_naive()
     else:
         task.status = "in_progress"
     db.commit()
@@ -890,7 +892,7 @@ def verify_task(
     task.verified_by = user.full_name or user.username
     if body.approve:
         task.status = "verified"
-        task.verified_at = datetime.utcnow()
+        task.verified_at = now_naive()
     else:
         task.status = "in_progress"
         task.completed_at = None
@@ -1048,7 +1050,7 @@ def dispatch_visit(order_id: int, body: VisitDispatch, db: Session = Depends(get
         raise HTTPException(status_code=409, detail=f"工单当前状态 {order.status} 不可派单")
     order.status = "dispatched"
     order.assignee_name = body.assignee_name
-    order.dispatched_at = datetime.utcnow()
+    order.dispatched_at = now_naive()
     db.commit()
     db.refresh(order)
     return _visit_out(order)
@@ -1070,7 +1072,7 @@ def complete_visit(order_id: int, body: VisitComplete, db: Session = Depends(get
         raise HTTPException(status_code=409, detail=f"工单当前状态 {order.status} 不可完成")
     order.status = "completed"
     order.service_note = body.service_note
-    order.completed_at = datetime.utcnow()
+    order.completed_at = now_naive()
     db.commit()
     db.refresh(order)
     return _visit_out(order)

@@ -5,7 +5,6 @@
 - 版式：@page A4 + @media print，打印时隐藏操作按钮，页脚带打印时间
 - 模板可配：PrintTemplate（doc_type 唯一）配置抬头机构名、页脚说明与二维码开关
 """
-from datetime import datetime
 from html import escape
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..clock import now_local
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (
@@ -150,7 +150,7 @@ def _render(
     qr_html = (
         '<div class="qr"><div class="box">二维码<br>（验真占位）</div></div>' if show_qr else ""
     )
-    printed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    printed_at = now_local().strftime("%Y-%m-%d %H:%M:%S")
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <title>{_esc(doc_title)}</title>

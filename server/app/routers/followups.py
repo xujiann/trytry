@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
-from ..models import FollowupTask, Organization, Patient, User, utcnow
+from ..models import FollowupTask, Organization, Patient, utcnow
 
 router = APIRouter(prefix="/api/followups", tags=["随访中心"], dependencies=[Depends(get_current_user)])
 

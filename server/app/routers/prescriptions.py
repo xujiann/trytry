@@ -66,6 +66,15 @@ def _patient_groups(db: Session, patient: Patient) -> set[str]:
     return groups
 
 
+def _active_rule(db: Session, drug_code: str) -> DrugRule | None:
+    """取生效中的规则。停用的规则一律当作"未维护"，与规则不存在同路处理。"""
+    return (
+        db.query(DrugRule)
+        .filter(DrugRule.drug_code == drug_code, DrugRule.active.is_(True))
+        .first()
+    )
+
+
 @router.post("/rules", response_model=DrugRuleOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db)):
     if db.query(DrugRule).filter(DrugRule.drug_code == body.drug_code).first():
@@ -95,8 +104,39 @@ def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db)):
 
 
 @router.get("/rules", response_model=list[DrugRuleOut], dependencies=[Depends(get_current_user)])
-def list_rules(db: Session = Depends(get_db)):
-    return db.query(DrugRule).order_by(DrugRule.drug_code).all()
+def list_rules(include_inactive: bool = False, db: Session = Depends(get_db)):
+    query = db.query(DrugRule)
+    if not include_inactive:
+        query = query.filter(DrugRule.active.is_(True))
+    return query.order_by(DrugRule.drug_code).all()
+
+
+@router.delete("/rules/{drug_code}", dependencies=[Depends(require_admin)])
+def deactivate_rule(drug_code: str, db: Session = Depends(get_db)):
+    """停用规则（不删行）。
+
+    原先这里只有 POST 与 import，录错一条规则只能靠 import 覆盖同 drug_code
+    的行，删不掉也停不掉——而通用规则引擎 `/api/rules/{key}` 一直是有停用的。
+    不删行：规则改过什么、什么时候不再生效，处方点评复核时要回溯得到。
+    """
+    rule = db.query(DrugRule).filter(DrugRule.drug_code == drug_code).first()
+    if rule is None:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    if not rule.active:
+        raise HTTPException(status_code=409, detail="该规则已停用")
+    rule.active = False
+    db.commit()
+    return {"drug_code": drug_code, "active": False}
+
+
+@router.post("/rules/{drug_code}/reactivate", dependencies=[Depends(require_admin)])
+def reactivate_rule(drug_code: str, db: Session = Depends(get_db)):
+    rule = db.query(DrugRule).filter(DrugRule.drug_code == drug_code).first()
+    if rule is None:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    rule.active = True
+    db.commit()
+    return {"drug_code": drug_code, "active": True}
 
 
 @router.post(
@@ -130,7 +170,7 @@ def create_prescription(
     names_by_code = {item.drug_code: item.drug_name for item in body.items}
     seen_pairs: set[frozenset[str]] = set()
     for item in body.items:
-        rule = db.query(DrugRule).filter(DrugRule.drug_code == item.drug_code).first()
+        rule = _active_rule(db, item.drug_code)
         if rule is None:
             continue
         if item.daily_dose > rule.max_daily_dose:
@@ -248,7 +288,7 @@ def prescription_review_points(prescription_id: int, db: Session = Depends(get_d
     items = db.query(PrescriptionItem).filter(PrescriptionItem.prescription_id == rx.id).all()
     points, uncovered = [], 0
     for item in items:
-        rule = db.query(DrugRule).filter(DrugRule.drug_code == item.drug_code).first()
+        rule = _active_rule(db, item.drug_code)
         if rule is None:
             uncovered += 1
         points.append(

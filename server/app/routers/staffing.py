@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..datetypes import DateStr, OptionalDateStr
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_org_scope
 from ..models import Employee, Organization, Secondment
@@ -43,8 +44,8 @@ class SecondmentIn(BaseModel):
     employee_id: int
     from_org_id: int
     to_org_id: int
-    start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
-    end_date: str = Field(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+    start_date: DateStr
+    end_date: OptionalDateStr = ""
     assignment_type: str = Field(default="long_term", pattern="^(long_term|support|rounds|other)$")
     position: str = Field(default="", max_length=64)
     note: str = Field(default="", max_length=256)
@@ -215,27 +216,52 @@ def dispatch_stats(
     year_end = date(target_year, 12, 31)
     today = date.today()
 
-    employees = {e.id: e for e in db.query(Employee).all()}
-    names = {o.id: o.name for o in db.query(Organization).all()}
+    # P1-2：这里原先把 Employee 与 Secondment 整表拉进内存再在 Python 里筛。
+    # 数据量小的时候看不出来，但随年份累积会慢慢变差。改为 SQL 侧先筛：
+    # 用 ISO 日期字符串的字典序与时序一致这一点，把"整段落在统计年度外"的
+    # 派驻直接排除掉；职称等级用外连接一次带出，不再整表建字典。
+    year_start_str, year_end_str = year_start.isoformat(), year_end.isoformat()
+    query = (
+        db.query(Secondment, Employee.title_level)
+        .outerjoin(Employee, Employee.id == Secondment.employee_id)
+        .filter(Secondment.start_date <= year_end_str)
+        .filter((Secondment.end_date == "") | (Secondment.end_date >= year_start_str))
+    )
     scope = resolve_org_scope(db, group_id, None)
-    rows = db.query(Secondment).all()
+    if scope is not None:
+        query = query.filter(Secondment.to_org_id.in_(scope))
+    rows = query.all()
+
+    org_ids = {row.to_org_id for row, _level in rows}
+    names = (
+        {
+            o.id: o.name
+            for o in db.query(Organization).filter(Organization.id.in_(org_ids)).all()
+        }
+        if org_ids
+        else {}
+    )
 
     stats: dict[int, dict] = {}
     unknown_level = 0
-    for row in rows:
-        if scope is not None and row.to_org_id not in scope:
-            continue
+    invalid_date = 0
+    for row, title_level in rows:
         # 截取落在统计年度内的区间
         try:
             start = datetime.strptime(row.start_date, "%Y-%m-%d").date()
         except ValueError:
+            # D-3：新数据已在入口挡下非法日期，存量数据里可能还有。
+            # **单独报出来，不能像原先那样 continue 掉**——一条记录无声无息地
+            # 从指标里消失，比指标少一个人更难查。
+            invalid_date += 1
             continue
         end = today
         if row.end_date:
             try:
                 end = datetime.strptime(row.end_date, "%Y-%m-%d").date()
             except ValueError:
-                end = today
+                invalid_date += 1
+                continue
         span_start, span_end = max(start, year_start), min(end, year_end)
         if span_end < span_start:
             continue  # 该派驻整段不在统计年度内
@@ -257,7 +283,7 @@ def dispatch_stats(
             entry["ongoing"] += 1
         if row.assignment_type == "long_term" and days_in_year >= LONG_TERM_DAYS:
             entry["long_term_6m"] += 1
-            level = employees.get(row.employee_id).title_level if row.employee_id in employees else "none"
+            level = title_level or "none"
             if level in SENIOR_LEVELS:
                 entry["long_term_6m_senior"] += 1
             elif level == "none":
@@ -269,6 +295,8 @@ def dispatch_stats(
         "orgs": sorted(stats.values(), key=lambda x: -x["long_term_6m_senior"]),
         # 未填职称等级的派驻单独报出来：不默认算入"中级及以上"，也不悄悄丢掉
         "unknown_title_level": unknown_level,
+        # 存量数据里日期非法的条数（新数据已在入口拦下）。同样是单列而不丢弃。
+        "invalid_date_records": invalid_date,
         "caliber": {
             "long_term_6m": f"派驻类型为长期派驻且当年在派满 {LONG_TERM_DAYS} 天的人次"
                             "（跨年派驻只计落在本年度内的天数）",

@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..clock import now_naive
 from ..database import get_db
 from ..deps import require_admin
 from ..monitor import INSTANCE_ID, STARTED_AT, metrics
@@ -21,7 +22,6 @@ from ..monitor import known_instances
 from ..models import JobRun, ScheduledJob
 # 调度器把 next_run_at 存为 naive UTC；用 models.utcnow()（aware）去比会直接
 # TypeError。这里复用调度器自己的时钟函数，口径永远跟着它走。
-from ..scheduler import _naive_utcnow
 from ..state_store import _redis_client
 
 router = APIRouter(prefix="/api/monitor", tags=["运行监控"], dependencies=[Depends(require_admin)])
@@ -67,7 +67,7 @@ def _probe_redis() -> dict:
 def overview(db: Session = Depends(get_db)):
     """运行环境概览：版本、实例、启动时长、依赖连通性、调度器状态。"""
     monitor_heartbeat()
-    now = _naive_utcnow()
+    now = now_naive()
     jobs = db.query(ScheduledJob).all()
     overdue = [
         j.name

@@ -1,7 +1,6 @@
 """功能指引查漏补缺：报告模板/报告修改、消毒申领、会诊专家、预约黑名单、健康宣教、满意度、智能导诊。"""
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db

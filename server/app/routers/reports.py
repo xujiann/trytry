@@ -7,13 +7,13 @@
 import csv
 import io
 import re
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..clock import now_aware
 from ..database import get_db
 from ..deps import require_roles
 from ..models import (
@@ -141,7 +141,7 @@ def monitoring_report(db: Session = Depends(get_db)):
     """监测指标体系 14 项指标当期值（JSON，供上报与驾驶舱复核）。"""
     indicators = _monitoring_indicators(db)
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": now_aware().isoformat(),
         "total": len(indicators),
         "indicators": indicators,
     }

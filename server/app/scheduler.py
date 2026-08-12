@@ -21,11 +21,12 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Callable
 
 from sqlalchemy.orm import Session
 
+from .clock import now_naive
 from .database import SessionLocal
 from .models import JobRun, ScheduledJob
 from .state_store import _redis_client
@@ -61,10 +62,6 @@ def register(name: str, title: str, interval_seconds: int):
     return wrapper
 
 
-def _naive_utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 def sync_registry(db: Session) -> None:
     """把代码中注册的任务同步进库（幂等）。
 
@@ -80,7 +77,7 @@ def sync_registry(db: Session) -> None:
                 name=spec.name,
                 title=spec.title,
                 interval_seconds=spec.interval_seconds,
-                next_run_at=_naive_utcnow() + timedelta(seconds=spec.interval_seconds),
+                next_run_at=now_naive() + timedelta(seconds=spec.interval_seconds),
             )
         )
     db.commit()
@@ -122,7 +119,7 @@ def run_job(db: Session, name: str, trigger: str = "scheduled") -> JobRun:
     db.add(run)
     job = db.query(ScheduledJob).filter(ScheduledJob.name == name).first()
     if job is not None:
-        now = _naive_utcnow()
+        now = now_naive()
         job.last_run_at = now
         job.last_status = status
         job.next_run_at = now + timedelta(seconds=job.interval_seconds)
@@ -133,7 +130,7 @@ def run_job(db: Session, name: str, trigger: str = "scheduled") -> JobRun:
 
 def due_jobs(db: Session) -> list[str]:
     """到期且启用的任务名；只认代码里真实注册过的实现。"""
-    now = _naive_utcnow()
+    now = now_naive()
     rows = (
         db.query(ScheduledJob)
         .filter(

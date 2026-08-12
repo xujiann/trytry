@@ -218,7 +218,11 @@ def rule_catalog(db: Session = Depends(get_db)):
             "detail": f"最大日剂量 {r.max_daily_dose}{r.dose_unit}",
             "active": True,
         }
-        for r in db.query(DrugRule).order_by(DrugRule.drug_code).limit(500).all()
+        for r in db.query(DrugRule)
+        .filter(DrugRule.active.is_(True))
+        .order_by(DrugRule.drug_code)
+        .limit(500)
+        .all()
     ]
     entries += [
         {

@@ -597,7 +597,9 @@ def drug_use(
     # ---- 抗菌药物使用强度 ----
     antibiotics = {
         r.drug_code: r.ddd
-        for r in db.query(DrugRule).filter(DrugRule.antibiotic.is_(True)).all()
+        for r in db.query(DrugRule)
+        .filter(DrugRule.antibiotic.is_(True), DrugRule.active.is_(True))
+        .all()
     }
     ddd_sum: dict[int, float] = dict.fromkeys(org_ids, 0.0)
     uncovered: dict[int, int] = dict.fromkeys(org_ids, 0)

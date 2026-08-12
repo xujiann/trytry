@@ -10,12 +10,12 @@
 2. **拒签是一等状态**，不是"没签"。患者有权拒绝，而机构恰恰需要证明
    "告知过、对方拒绝了"——把拒签折叠进 pending，最需要证据的情况反而没了记录。
 """
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..clock import now_local
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -366,7 +366,7 @@ def create_outpatient_nursing(
         nursing_level=body.nursing_level,
         content=body.content,
         nurse_name=body.nurse_name,
-        recorded_at=body.recorded_at or datetime.now().strftime("%Y-%m-%d %H:%M"),
+        recorded_at=body.recorded_at or now_local().strftime("%Y-%m-%d %H:%M"),
         created_by=user.id,
     )
     db.add(record)

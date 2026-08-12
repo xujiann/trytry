@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..datetypes import OptionalDateStr
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
@@ -124,7 +125,7 @@ def list_charge_items(
 class RepriceIn(BaseModel):
     new_price: float = Field(gt=0)
     reason: str = Field(default="", max_length=256)
-    effective_date: str = Field(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+    effective_date: OptionalDateStr = ""
 
 
 @router.patch("/charge-items/{item_id}", dependencies=[Depends(require_admin)])

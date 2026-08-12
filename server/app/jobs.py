@@ -12,6 +12,7 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
+from .clock import now_naive
 from .models import (
     ChronicPatient,
     FollowupTask,
@@ -20,7 +21,7 @@ from .models import (
     StaffContract,
     TcmPreparationBatch,
 )
-from .scheduler import _naive_utcnow, register
+from .scheduler import register
 from .ws import manager
 
 # 与 medwaste 路由同源的滞留天数上限
@@ -113,7 +114,7 @@ def sms_code_cleanup(db: Session) -> tuple[int, str]:
     留着没有任何用处——校验只认未过期未消费的最新一条——却让表无界增长，
     且过期验证码散列长期留存本身就是不必要的敏感数据暴露面。
     """
-    now = _naive_utcnow()
+    now = now_naive()
     deleted = (
         db.query(SmsCode)
         .filter((SmsCode.expires_at <= now) | (SmsCode.consumed.is_(True)))

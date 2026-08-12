@@ -24,6 +24,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..datetypes import OptionalDateStr
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_org_scope
 from ..formula import FormulaError, evaluate, validate
@@ -112,8 +113,9 @@ def create_pool(
 ):
     if body.org_group_id is not None and db.get(OrgGroup, body.org_group_id) is None:
         raise HTTPException(status_code=404, detail="机构分组不存在")
-    # 唯一约束含可空列时在 SQL 里形同虚设（NULL != NULL），全域池（org_group_id 为空）
-    # 会被放行建出重复。数据库约束保留用于兜住分组池，全域池在这里显式查一次。
+    # 应用层查重只为给出可读的提示；**真正兜底的是数据库**——全域池由部分唯一索引
+    # `uq_fund_pool_global`（org_group_id IS NULL）拦住，分组池由 uq_fund_pool_scope
+    # 拦住。check-then-act 中间有竞态窗口，6 线程并发实测建出过 2 个池。
     duplicate = (
         db.query(FundPool)
         .filter(
@@ -167,7 +169,7 @@ def update_pool(pool_id: int, body: PoolUpdate, db: Session = Depends(get_db)):
 class PrepaymentIn(BaseModel):
     batch_no: str = Field(default="", max_length=32)
     amount: float = Field(gt=0)
-    paid_date: str = Field(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+    paid_date: OptionalDateStr = ""
     note: str = Field(default="", max_length=256)
 
 

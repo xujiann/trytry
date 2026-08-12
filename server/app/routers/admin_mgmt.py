@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..datetypes import DateStr
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
@@ -72,7 +73,7 @@ def list_employees(org_id: int | None = None, db: Session = Depends(get_db)):
 class SecondmentCreate(BaseModel):
     employee_id: int
     to_org_id: int
-    start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    start_date: DateStr
 
 
 @router.post(
@@ -314,7 +315,7 @@ _CENTERS = {"imaging", "ecg", "lab", "pathology"}
 
 class RosterCreate(BaseModel):
     center_type: str
-    duty_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    duty_date: DateStr
     shift: str = "全天"
     doctor_name: str = Field(min_length=1)
 
@@ -517,8 +518,8 @@ def list_employee_changes(employee_id: int, db: Session = Depends(get_db)):
 class ContractCreate(BaseModel):
     employee_id: int
     contract_no: str = Field(min_length=1)
-    start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
-    end_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    start_date: DateStr
+    end_date: DateStr
 
 
 @router.post(

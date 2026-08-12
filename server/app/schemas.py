@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from .datetypes import DateStr
 
 
 class LoginRequest(BaseModel):
@@ -190,6 +191,8 @@ class DrugRuleCreate(BaseModel):
 
 class DrugRuleOut(DrugRuleCreate):
     id: int
+    # 停用标记：停用的规则不参与审方与点评，但保留在库里可回溯
+    active: bool = True
 
     model_config = {"from_attributes": True}
 
@@ -284,7 +287,7 @@ class InfectiousCaseCreate(BaseModel):
     org_id: int
     disease_code: str
     disease_name: str
-    onset_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    onset_date: DateStr
 
 
 class InfectiousCaseOut(InfectiousCaseCreate):
@@ -364,7 +367,7 @@ class SlotCreate(BaseModel):
     org_id: int
     resource_type: str = Field(pattern="^(outpatient|exam|lab)$")
     resource_name: str = Field(min_length=1)
-    slot_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    slot_date: DateStr
     slot_time: str = ""
     capacity: int = Field(default=1, ge=1)
 
@@ -407,7 +410,7 @@ class WasteCreate(BaseModel):
     org_id: int
     waste_type: str = Field(pattern="^(infectious|sharp|pathological|pharmaceutical|chemical)$")
     weight_kg: float = Field(gt=0)
-    collected_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    collected_date: DateStr
 
 
 class WasteOut(WasteCreate):

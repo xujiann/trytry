@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from ..models import ArchiveAuthorization, Organization, Patient, User
 from ..privacy import desensitize, mask_id_card, mask_phone  # noqa: F401  公共脱敏模块（H1）
 from ..schemas import PatientCreate, PatientOut
+from ..datetypes import DateStr
 
 router = APIRouter(
     prefix="/api/patients", tags=["患者主索引"], dependencies=[Depends(get_current_user)]
@@ -100,7 +101,7 @@ def get_patient(ehc_no: str, db: Session = Depends(get_db), user: User = Depends
 class AuthorizationCreate(BaseModel):
     grantee_org_id: int
     scope: str = Field(default="all", pattern="^(all|encounter|exam)$")
-    expire_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    expire_date: DateStr
 
 
 @router.post(

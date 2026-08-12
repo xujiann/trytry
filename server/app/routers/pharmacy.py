@@ -1,11 +1,12 @@
 """中心药房：库存管理、县乡村余缺调拨、缺药预警、采购建议。"""
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..clock import now_naive
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from pydantic import BaseModel, Field
@@ -149,7 +150,7 @@ def purchase_suggestions(db: Session = Depends(get_db)):
 
     用药量按处方明细 日剂量×天数 汇总（退回处方不计入）。
     """
-    since = datetime.now(timezone.utc) - timedelta(days=30)
+    since = now_naive() - timedelta(days=30)
     usage_rows = (
         db.query(
             PrescriptionItem.drug_code,

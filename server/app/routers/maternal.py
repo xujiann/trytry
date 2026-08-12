@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..datetypes import DateStr
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -117,7 +118,7 @@ def close_record(record_id: int, db: Session = Depends(get_db)):
 class ChildCreate(BaseModel):
     name: str = Field(min_length=1)
     gender: str = "未知"
-    birth_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    birth_date: DateStr
     guardian_patient_id: int | None = None
 
 
@@ -173,7 +174,7 @@ def add_child_visit(child_id: int, body: ChildVisitCreate, db: Session = Depends
 
 class DeliveryCreate(BaseModel):
     org_id: int
-    delivery_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    delivery_date: DateStr
     delivery_mode: str = Field(default="natural", pattern="^(natural|cesarean)$")
     newborn_count: int = Field(default=1, ge=1, le=5)
     outcome: str = ""

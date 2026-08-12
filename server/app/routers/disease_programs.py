@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..datetypes import OptionalDateStr
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -57,12 +58,12 @@ class ProgramUpdate(BaseModel):
 class EnrollIn(BaseModel):
     patient_id: int
     org_id: int
-    enrolled_at: str = Field(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+    enrolled_at: OptionalDateStr = ""
 
 
 class NodeRecordIn(BaseModel):
     node_key: str = Field(min_length=1, max_length=32)
-    performed_at: str = Field(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+    performed_at: OptionalDateStr = ""
     operator_name: str = Field(default="", max_length=64)
     result: str = Field(default="", max_length=256)
     note: str = Field(default="", max_length=512)
@@ -267,7 +268,7 @@ def program_stats(
     program_id: int, group_id: int | None = None, db: Session = Depends(get_db)
 ):
     """专病统计：在管/出组人数、疗效构成、路径完成度。"""
-    _program(db, program_id)
+    program = _program(db, program_id)
     query = db.query(DiseaseEnrollment).filter(DiseaseEnrollment.program_id == program_id)
     scope = resolve_org_scope(db, group_id, None)
     if scope is not None:
@@ -280,7 +281,23 @@ def program_stats(
         if r.status != "enrolled":
             key = r.outcome or "unrated"
             by_outcome[key] = by_outcome.get(key, 0) + 1
-    completions = [_completion(r, db)["required_done_pct"] for r in rows]
+    # P0-1：这里原先在循环里逐条调 `_completion(r, db)`，每条入组各查一次
+    # 路径记录，实测 50 条入组 → 103 次 SQL（2N+3）。改成一次取回全部路径记录
+    # 在内存里按 enrollment_id 分组——与 analytics.py 已用过的做法一致。
+    required_keys = [
+        n["key"] for n in (program.path_nodes or []) if n.get("required", True)
+    ]
+    done_by_enrollment: dict[int, set[str]] = {}
+    if rows:
+        for eid, node_key in (
+            db.query(DiseasePathRecord.enrollment_id, DiseasePathRecord.node_key)
+            .filter(DiseasePathRecord.enrollment_id.in_([r.id for r in rows]))
+            .all()
+        ):
+            done_by_enrollment.setdefault(eid, set()).add(node_key)
+    completions = [
+        _required_pct(required_keys, done_by_enrollment.get(r.id, set())) for r in rows
+    ]
     return {
         "program_id": program_id,
         "total": len(rows),
@@ -297,6 +314,13 @@ def program_stats(
 
 
 # ============================================================ 内部
+
+
+def _required_pct(required_keys: list[str], done: set[str]) -> float:
+    """必需节点完成率。单独抽出来，好让批量统计与单条详情用同一套算法。"""
+    if not required_keys:
+        return 100.0
+    return round(len([k for k in required_keys if k in done]) * 100 / len(required_keys), 2)
 
 
 def _completion(enrollment: DiseaseEnrollment, db: Session) -> dict:
@@ -317,9 +341,7 @@ def _completion(enrollment: DiseaseEnrollment, db: Session) -> dict:
         ],
         "required_total": len(required),
         "required_done": len(required_done),
-        "required_done_pct": (
-            round(len(required_done) * 100 / len(required), 2) if required else 100.0
-        ),
+        "required_done_pct": _required_pct([n["key"] for n in required], done),
         "pending_required": [n["name"] for n in required if n["key"] not in done],
     }
 

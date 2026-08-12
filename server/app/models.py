@@ -6,16 +6,39 @@
 - CodeSystem/CodeEntry  统一编码字典（诊断、药品、耗材、收费"四统一"）
 - Referral        双向转诊记录（上转/下转，状态流转）
 """
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from .clock import now_naive
 from .database import Base
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    """所有 `created_at` 类列的默认值。
+
+    P0-2：这里原先返回 aware（`datetime.now(timezone.utc)`），而调度器与居民端
+    各自维护的 naive 版本写进的是同一批 `DateTime` 列——同一张表的两列可能一列
+    aware 一列 naive。阶段二 `/api/monitor/overview` 拿 aware 值去比调度器写的
+    naive `next_run_at`，直接 TypeError。现统一委托给 `clock.now_naive()`：
+    **落库一律 naive UTC**。
+
+    名字保留是因为它出现在近两百处列定义的 `default=` 里，改名的收益抵不上
+    改动面；语义已经统一，新代码请直接用 `clock.now_naive()`。
+    """
+    return now_naive()
 
 
 class User(Base):
@@ -236,6 +259,10 @@ class DrugRule(Base):
     # 算成无穷大或悄悄漏掉，两种都比"明说没维护"更糟。
     antibiotic: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     ddd: Mapped[float] = mapped_column(Float, default=0)
+    # D-4 同类：录错一条规则原先只能靠 import 覆盖，删不掉也停不掉，
+    # 而通用规则引擎 `/api/rules/{key}` 是有停用的。停用不删行——规则改过什么、
+    # 什么时候不再生效，是处方点评复核时要回溯的。
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 
 class Prescription(Base):
@@ -808,12 +835,32 @@ class VaccinationRecord(Base):
 
 
 class VaccineContraindication(Base):
+    """接种禁忌。
+
+    D-4：绝大多数接种禁忌是**暂时性**的（发热、急性病期、近期用过免疫球蛋白），
+    原先这张表没有状态也没有有效期，登记后永久硬拦截且无解除接口——退了热也
+    再打不了这支疫苗，只能改数据库。现补 `status` / `valid_until` / 解除留痕。
+
+    **解除留痕不删行**：禁忌记录本身是接种史的一部分，"当时为什么没打"
+    与"后来为什么又打了"都要留得住。
+    """
+
     __tablename__ = "vaccine_contraindications"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     vaccine_code: Mapped[str] = mapped_column(String(64))
     reason: Mapped[str] = mapped_column(String(256))
+    # permanent=长期禁忌（过敏史等）, temporary=暂时禁忌（发热等）
+    contra_type: Mapped[str] = mapped_column(String(16), default="permanent", index=True)
+    # active=生效中, lifted=已解除。过期（valid_until 已过）不改状态，
+    # 由判定函数按日期算——定时任务改状态会让"何时失效"取决于任务跑没跑。
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    # 暂时禁忌的有效期末日（含当日）；空表示无期限，须人工解除
+    valid_until: Mapped[str] = mapped_column(String(10), default="")
+    lifted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    lifted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lift_reason: Mapped[str] = mapped_column(String(256), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -3092,6 +3139,19 @@ class FundPool(Base):
     __tablename__ = "fund_pools"
     __table_args__ = (
         UniqueConstraint("year", "insurance_type", "org_group_id", name="uq_fund_pool_scope"),
+        # D-2：上面那条唯一约束管不住全域池——SQL 里 NULL != NULL，`org_group_id`
+        # 为空的行彼此不冲突，并发下实测建出过两个池，同一笔结余会被分两次。
+        # 应用层查重是 check-then-act，中间有竞态窗口，兜底必须落在数据库上。
+        # 部分唯一索引 SQLite 3.8+ 与 PostgreSQL 都支持；国产库（达梦/人大金仓）
+        # 若不支持，需在阶段十二适配时改为"全域池写入哨兵值 0 而非 NULL"。
+        Index(
+            "uq_fund_pool_global",
+            "year",
+            "insurance_type",
+            unique=True,
+            sqlite_where=text("org_group_id IS NULL"),
+            postgresql_where=text("org_group_id IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

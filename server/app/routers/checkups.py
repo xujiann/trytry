@@ -1,10 +1,11 @@
 """成人健康体检记录（浙#5）：体检登记、异常项标记、异常清单与患者体检史。"""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_roles
+from ..datetypes import DateStr
 from ..models import Organization, Patient, PhysicalExam
 
 router = APIRouter(prefix="/api/checkups", tags=["健康体检"], dependencies=[Depends(get_current_user)])
@@ -14,7 +15,7 @@ class CheckupCreate(BaseModel):
     patient_id: int
     org_id: int
     package_name: str = "常规体检"
-    exam_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    exam_date: DateStr
     summary: str = ""
     abnormal_items: str = ""
 

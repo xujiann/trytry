@@ -1,10 +1,11 @@
 """共享诊断中心（影像/心电/检验/病理）：基层检查、上级诊断、结果互认、危急值管理。"""
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..clock import now_naive
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import CriticalAction, ExamReport, ExamRequest, Organization, Patient, RecognitionItem, User
@@ -113,7 +114,7 @@ def update_recognition_item(
 
 
 def _find_recognizable(db: Session, patient_id: int, item_code: str) -> ExamRequest | None:
-    since = datetime.now(timezone.utc) - timedelta(days=RECOGNITION_WINDOW_DAYS)
+    since = now_naive() - timedelta(days=RECOGNITION_WINDOW_DAYS)
     return (
         db.query(ExamRequest)
         .join(ExamReport, ExamReport.request_id == ExamRequest.id)
@@ -192,7 +193,7 @@ def create_request(
         if blocked is not None:
             raise HTTPException(status_code=422, detail=f"不可互认：{blocked}")
         # L1 整改：建单侧同样复核 30 天互认窗口，与 recognition-check 预检口径一致
-        window_start = datetime.now(timezone.utc) - timedelta(days=RECOGNITION_WINDOW_DAYS)
+        window_start = now_naive() - timedelta(days=RECOGNITION_WINDOW_DAYS)
         if source.report is None or source.report.reported_at < window_start.replace(tzinfo=None):
             raise HTTPException(
                 status_code=422,
@@ -459,7 +460,7 @@ def list_unacknowledged_critical(
         deadline = datetime.combine(resolve_business_date(today), datetime.min.time())
         rows = [r for r in query.all() if r.reported_at < deadline]
     else:
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=timeout_minutes)
+        cutoff = now_naive() - timedelta(minutes=timeout_minutes)
         rows = [r for r in query.all() if r.reported_at < cutoff]
     return [
         {

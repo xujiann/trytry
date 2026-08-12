@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles
+from ..deps import paginate, require_admin, require_roles
 from ..models import JobRun, ScheduledJob
 from ..scheduler import REGISTRY, run_job
 

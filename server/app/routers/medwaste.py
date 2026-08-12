@@ -1,9 +1,10 @@
 """医疗废弃物：收集、暂存、交接全过程监管，滞留预警。"""
-from datetime import timedelta, datetime, timezone
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ..clock import now_naive
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import MedicalWaste, Organization
@@ -54,7 +55,7 @@ def handover(waste_id: int, body: WasteHandover, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="该批医废已交接")
     waste.status = "handed_over"
     waste.handler_name = body.handler_name
-    waste.handed_over_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    waste.handed_over_at = now_naive()
     db.commit()
     db.refresh(waste)
     return waste

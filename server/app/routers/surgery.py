@@ -7,13 +7,14 @@
 角色：申请与术中记录限医师；审批限管理层（职责分离，申请人不能自己批）；
 排班限经办与管理层（手术室排班是护士长/手术室的工作）。
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..clock import today
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..notify import notify_patient
@@ -231,13 +232,12 @@ def schedule_surgery(
             detail=f"手术间在 {conflict.start_time}-{conflict.end_time} 已被占用",
         )
 
+    # D-1：排班记录、申请状态、患者通知必须同进同出。此处原先分两次 commit，
+    # 第二次之前中断就会留下"排班已落库、申请仍是 approved"的死结——重排被唯一
+    # 约束挡回 409，填术中记录又要求 scheduled，只能改数据库才能救。
+    # `notify_*` 本就设计成只 add 不 commit，正是为了让业务事务统一决定提交时机。
     schedule = SurgerySchedule(request_id=request_id, created_by=user.id, **body.model_dump())
     db.add(schedule)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="该手术已排班或时段被并发占用") from None
     request.status = "scheduled"
     notify_patient(
         db,
@@ -249,7 +249,11 @@ def schedule_surgery(
         link_type="surgery_request",
         link_id=request.id,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该手术已排班或时段被并发占用") from None
     db.refresh(schedule)
     return {
         "id": schedule.id,
@@ -345,7 +349,7 @@ def create_record(
             category="surgery",
             source_id=request.id,
             title=f"术后随访：{body.actual_surgery_name}",
-            due_date=(datetime.now().date() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
+            due_date=(today() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
         )
     )
     notify_patient(

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from ..clock import now_aware
 from ..database import SessionLocal, get_db
 from ..deps import get_current_user, require_roles
 from ..models import ChronicPatient, ExchangeLog, FollowUp, Patient, User
@@ -155,9 +156,8 @@ def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
 
 def _build_ack(control_id: str, code: str = "AA") -> str:
     """构造 HL7 v2 ACK 应答消息：AA=接收成功（浙#21 消息传输确认回执）。"""
-    from datetime import datetime, timezone
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    ts = now_aware().strftime("%Y%m%d%H%M%S")
     return f"MSH|^~\\&|MEDPLAT|COUNTY|||{ts}||ACK|{control_id}|P|2.4\rMSA|{code}|{control_id}"
 
 

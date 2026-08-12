@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ChildRecord, MedicalCert, Organization, Patient, User
+from ..datetypes import DateStr
 
 router = APIRouter(prefix="/api/certs", tags=["法定医学证明"], dependencies=[Depends(get_current_user)])
 
@@ -20,7 +21,7 @@ class CertCreate(BaseModel):
     cert_type: str = Field(pattern="^(birth|death|defect)$")
     name: str = Field(min_length=1)
     gender: str = "未知"
-    event_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    event_date: DateStr
     detail: str = ""
     org_id: int
     patient_id: int | None = None

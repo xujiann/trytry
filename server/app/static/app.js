@@ -1734,8 +1734,13 @@ async function renderVaccination() {
         <input name="vaccinated_date" placeholder="接种日期"><input name="org_id" type="number" placeholder="接种机构ID" required><button>登记接种</button></form>
       <form class="inline" id="contra-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="vaccine_code" placeholder="疫苗编码" required>
-        <input name="reason" placeholder="禁忌原因" required><button class="btn danger">登记禁忌</button></form>
+        <input name="reason" placeholder="禁忌原因" required>
+        <select name="contra_type"><option value="permanent">长期禁忌</option><option value="temporary">暂时禁忌</option></select>
+        <input name="valid_until" placeholder="有效期末日（暂时禁忌必填）"><button class="btn danger">登记禁忌</button></form>
       <p class="msg" id="vac-msg"></p></div>
+    <div class="panel"><h3>禁忌清单（可解除）</h3>
+      <form class="inline" id="contra-list"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
+      <div id="contra-result"></div></div>
     <div class="panel"><h3>接种史查询</h3>
       <form class="inline" id="vac-hist"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
       <div id="vac-hist-result"></div></div>`;
@@ -1749,6 +1754,21 @@ async function renderVaccination() {
   };
   $("#vac-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/records", formJson(e.target, ["patient_id", "dose_no", "org_id"]), "#vac-msg"); };
   $("#contra-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/contraindications", formJson(e.target, ["patient_id"]), "#vac-msg"); };
+  const drawContras = async (pid) => {
+    const rows = await api(`/api/vaccination/contraindications?patient_id=${pid}`);
+    $("#contra-result").innerHTML = table(["疫苗", "原因", "类型", "有效期至", "当前", "操作"], rows, (r) =>
+      `<tr><td>${esc(r.vaccine_code)}</td><td>${esc(r.reason)}</td>` +
+      `<td>${r.contra_type === "temporary" ? "暂时" : "长期"}</td><td>${esc(r.valid_until || "—")}</td>` +
+      `<td>${r.blocking ? '<span class="tag danger">拦截中</span>' : (r.status === "lifted" ? "已解除" : "已过期")}</td>` +
+      `<td>${r.blocking ? `<button class="btn sm" data-lift="${r.id}" data-pid="${pid}">解除</button>` : esc(r.lift_reason || "—")}</td></tr>`);
+  };
+  $("#contra-list").onsubmit = (e) => { e.preventDefault(); drawContras(new FormData(e.target).get("patient_id")); };
+  $("#contra-result").onclick = async (e) => {
+    const id = e.target.dataset.lift; if (!id) return;
+    const reason = prompt("解除原因（如：体温已恢复正常）"); if (!reason) return;
+    await postAction(`/api/vaccination/contraindications/${id}/lift`, { lift_reason: reason }, "#vac-msg");
+    drawContras(e.target.dataset.pid);
+  };
   $("#vac-hist").onsubmit = async (e) => {
     e.preventDefault();
     const records = await api(`/api/vaccination/records?patient_id=${new FormData(e.target).get("patient_id")}`);
