@@ -35,6 +35,37 @@ patients = [
     ]
 ]
 
+# ---------- 账号：各机构医师 + 一个居民端账户 ----------
+# 必须放在业务动作之前——站内消息是投递给"已存在的收件人"的，
+# 先出报告再建账号，那条危急值消息就没人收，演示站的消息中心会是空的。
+for _u, _role, _org, _name in [
+    ("doc_zhen1", "doctor", zhen1, "李镇医"),
+    ("doc_village", "doctor", village, "赵村医"),
+    ("doc_county", "doctor", county, "孙主任"),
+    ("dir_demo", "director", county, "钱院长"),
+]:
+    c.post("/api/users", json={"username": _u, "password": "doctor123", "role": _role,
+                               "org_id": _org["id"], "full_name": _name})
+
+# 单独一个管理层会话：手术申请不得自批（职责分离），admin 建的单必须换个人审。
+c_dir = httpx.Client(base_url=BASE, timeout=30)
+c_dir.headers["Authorization"] = "Bearer " + c_dir.post(
+    "/api/auth/login", json={"username": "dir_demo", "password": "doctor123"}
+).json()["access_token"]
+
+# 居民账户：手机号验证码登录 → 实名绑定到张伟，之后他的报告/手术/出院消息才有收件人
+_resident_phone = "13800138001"
+_code = c.post("/api/portal/auth/sms/code",
+               json={"phone": _resident_phone, "purpose": "login"}).json().get("debug_code")
+c_res = httpx.Client(base_url=BASE, timeout=30)
+_resident_ready = bool(_code)
+if _code:
+    c_res.headers["Authorization"] = "Bearer " + c.post(
+        "/api/portal/auth/sms/login",
+        json={"phone": _resident_phone, "code": _code}).json()["access_token"]
+    c_res.post("/api/portal/auth/realname",
+               json={"name": "张伟", "id_card": "320981196503012345"})
+
 c.post("/api/dictionaries/diagnosis/import", json=[
     {"code": "I10", "name": "特发性(原发性)高血压"},
     {"code": "E11", "name": "2型糖尿病"},
@@ -277,7 +308,7 @@ if not c.get(f"/api/surgery/requests?admission_id={adm_id}").json():
         "admission_id": adm_id, "surgery_name": "腹腔镜阑尾切除术", "incision_level": "II",
         "anesthesia_type": "general", "urgency": "urgent", "surgeon_name": "外科李医生",
         "planned_date": date.today().isoformat()}).json()
-    c.post(f"/api/surgery/requests/{_req['id']}/approve", json={"approved": True})
+    c_dir.post(f"/api/surgery/requests/{_req['id']}/approve", json={"approved": True})
     c.post(f"/api/surgery/requests/{_req['id']}/schedule", json={
         "room_id": room["id"], "scheduled_date": date.today().isoformat(),
         "start_time": "09:00", "end_time": "10:30"})
@@ -410,3 +441,50 @@ print("科室成本:", [(x["dept_name"], x["total_cost"]) for x in
                  c.get(f"/api/cost/departments?period={period}&org_id={county['id']}").json()])
 print("随访统计:", c.get("/api/followups/stats").json())
 print("满意度:", c.get("/api/surveys/stats").json())
+# 站内消息不单独灌数据——它必须由上面的报告出具/手术排班/出院动作派生出来。
+# 收件人是"申请机构的医师"和"绑定档案的居民"，不是 admin——换他们的会话来看。
+c_doc = httpx.Client(base_url=BASE, timeout=30)
+c_doc.headers["Authorization"] = "Bearer " + c.post(
+    "/api/auth/login", json={"username": "doc_village", "password": "doctor123"}
+).json()["access_token"]
+print("站内消息（村医未读）:", c_doc.get("/api/notifications/unread-count").json())
+if _resident_ready:
+    print("站内消息（居民未读）:", c_res.get("/api/portal/me/notifications/unread-count").json())
+else:
+    print("站内消息（居民）: 本次未取到验证码（60秒冷却），跳过居民侧核对")
+
+# ---------- 末端自检 ----------
+# 本脚本一路忽略响应码（很多步骤靠"已存在即跳过"保持幂等），代价是某一步
+# 被新增的校验挡下来时会静悄悄地失败——手术自批禁令上线后，演示站的手术
+# 页就空了一段时间，没人发现。以下断言只盯"走完流程"的终态，
+# 让这类沉默失败在灌数据时当场暴露。
+def _has_rows(resp):
+    """真的返回了非空列表才算通过。
+
+    错误响应体 `{"detail": "..."}` 也是真值——直接 `bool(resp.json())` 会让
+    一次 401 冒充成功，自检形同虚设（这条是踩过的坑）。
+    """
+    data = resp.json() if resp.status_code == 200 else None
+    return isinstance(data, list) and bool(data)
+
+
+_checks = [
+    ("手术已排班", lambda: bool(c.get("/api/surgery/schedules").json())),
+    ("手术已出术中记录", lambda: any(
+        r["status"] == "completed" for r in c.get("/api/surgery/requests").json())),
+    ("危急值已产生", lambda: bool(c.get("/api/exams/critical").json())),
+    ("住院已有出院病例", lambda: any(
+        a["status"] == "discharged" for a in c.get("/api/inpatient/admissions").json())),
+    ("危急值已落工作人员消息", lambda: _has_rows(c_doc.get("/api/notifications?limit=1"))),
+]
+if _resident_ready:
+    # 居民会话取决于短信验证码，60 秒冷却内重跑会拿不到；拿不到就别断言，
+    # 否则本该幂等的脚本会因为"跑得太快"而报错。
+    _checks.append(
+        ("报告/手术已落居民消息",
+         lambda: _has_rows(c_res.get("/api/portal/me/notifications?limit=1"))))
+
+_failed = [name for name, check in _checks if not check()]
+if _failed:
+    raise SystemExit(f"演示数据自检未通过：{_failed}（多半是某个业务校验把中间步骤挡了）")
+print("末端自检通过：", [name for name, _ in _checks])

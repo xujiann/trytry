@@ -46,6 +46,7 @@ from ..models import (
     ExamRequest,
     FamilyDoctorContract,
     HealthArticle,
+    Notification,
     Organization,
     Patient,
     PaymentOrder,
@@ -66,6 +67,7 @@ from ..sms import get_sms_provider
 from ..state_store import LoginFailureTracker, SlidingWindowRateLimiter
 from ..wechat import MockWeChatProvider, get_wechat_provider
 from .appointments import book_slot, release_appointment
+from .notifications import notification_out
 from .chronic import guidance_for
 
 router = APIRouter(prefix="/api/portal", tags=["居民端"])
@@ -1094,6 +1096,58 @@ def portal_my_surgeries(
         }
         for r in rows
     ]
+
+
+@router.get("/me/notifications")
+def portal_my_notifications(
+    unread_only: bool = False,
+    limit: int = 50,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的消息：报告出具、手术安排、随访提醒等。
+
+    消息按**账户**而非患者归集——代管家属收到的是"孩子的报告出了"，
+    发到代管人账户上才有意义。
+    """
+    query = db.query(Notification).filter(Notification.resident_account_id == account.id)
+    if unread_only:
+        query = query.filter(Notification.read_at.is_(None))
+    rows = (
+        query.order_by(Notification.read_at.isnot(None), Notification.id.desc())
+        .limit(min(max(limit, 1), 200))
+        .all()
+    )
+    return [notification_out(n) for n in rows]
+
+
+@router.get("/me/notifications/unread-count")
+def portal_unread_count(
+    account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)
+):
+    count = (
+        db.query(Notification)
+        .filter(
+            Notification.resident_account_id == account.id, Notification.read_at.is_(None)
+        )
+        .count()
+    )
+    return {"unread": count}
+
+
+@router.post("/me/notifications/{notification_id}/read")
+def portal_mark_read(
+    notification_id: int,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    notification = db.get(Notification, notification_id)
+    if notification is None or notification.resident_account_id != account.id:
+        raise HTTPException(status_code=404, detail="消息不存在")
+    if notification.read_at is None:
+        notification.read_at = utcnow()
+        db.commit()
+    return {"id": notification.id, "read": True}
 
 
 class MySurveyIn(BaseModel):

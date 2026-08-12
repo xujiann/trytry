@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
+from ..notify import notify_patient
 from ..models import (
     Admission,
     FollowupTask,
@@ -235,6 +236,16 @@ def schedule_surgery(
         db.rollback()
         raise HTTPException(status_code=409, detail="该手术已排班或时段被并发占用") from None
     request.status = "scheduled"
+    notify_patient(
+        db,
+        request.patient_id,
+        category="surgery",
+        title=f"手术已安排：{request.surgery_name}",
+        body=f"{body.scheduled_date} {body.start_time}-{body.end_time}，{room.name}。"
+             "请遵医嘱做好术前准备。",
+        link_type="surgery_request",
+        link_id=request.id,
+    )
     db.commit()
     db.refresh(schedule)
     return {
@@ -330,6 +341,15 @@ def create_record(
             title=f"术后随访：{body.actual_surgery_name}",
             due_date=(datetime.now().date() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
         )
+    )
+    notify_patient(
+        db,
+        request.patient_id,
+        category="followup",
+        title="术后随访已安排",
+        body=f"您的{body.actual_surgery_name}已完成，我们将在 {SURGERY_FOLLOWUP_DAYS} 天内与您联系随访。",
+        link_type="surgery_request",
+        link_id=request.id,
     )
     try:
         db.commit()

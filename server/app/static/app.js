@@ -29,13 +29,20 @@ let todoTimer = null;
 
 async function pollTodos() {
   try {
-    const data = await api("/api/todos");
+    // 待办是"该我处理的活"，站内消息是"该我知道的事"，两者都进同一个铃铛：
+    // 用户不会为了看有没有新消息去点第二个图标。
+    const [data, notify] = await Promise.all([
+      api("/api/todos"), api("/api/notifications/unread-count")]);
+    const total = data.total + notify.unread;
     const count = $("#todo-count");
-    count.textContent = data.total > 99 ? "99+" : data.total;
-    count.classList.toggle("hidden", data.total === 0);
+    count.textContent = total > 99 ? "99+" : total;
+    count.classList.toggle("hidden", total === 0);
     const panel = $("#todo-panel");
-    panel.innerHTML = data.items.length
-      ? data.items.map((it) => `<h4>${esc(it.title)}（${it.count}）</h4>${
+    const notifyBlock = notify.unread
+      ? `<h4>站内消息（${notify.unread}）</h4><div class="todo-item">有未读消息，点击左侧「站内消息」查看</div>`
+      : "";
+    panel.innerHTML = data.items.length || notify.unread
+      ? notifyBlock + data.items.map((it) => `<h4>${esc(it.title)}（${it.count}）</h4>${
           it.list.slice(0, 5).map((row) =>
             `<div class="todo-item">${esc(row.item_name || row.diagnosis_name || row.drug_name || row.conclusion || `#${row.id}`)}</div>`).join("")
         }`).join("")
@@ -78,6 +85,7 @@ function setMsg(id, text, ok = true) {
 const PAGES = [
   { group: "总览" },
   { id: "dashboard", title: "决策驾驶舱", render: renderDashboard },
+  { id: "notifications", title: "站内消息", render: renderNotifications },
   { group: "基础平台" },
   { id: "orgs", title: "机构管理", render: renderOrgs },
   { id: "patients", title: "患者主索引", render: renderPatients },
@@ -4196,4 +4204,60 @@ async function renderSurveys() {
          <td>${esc(s.comment || "—")}</td></tr>`)}</div>`;
   $("#survey-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/surveys", formJson(e.target, ["patient_id", "target_id", "score"]), "#survey-msg"); };
+}
+
+/* ---------------- 站内消息 ---------------- */
+
+const NOTIFY_CATEGORIES = {
+  critical_value: "危急值",
+  exam_report: "检查报告",
+  surgery: "手术安排",
+  followup: "随访提醒",
+};
+
+/* 消息落到对应业务页面即可，不做深链定位——列表页自己带筛选，
+   再造一套 URL 深链只会多一份要同步维护的约定。 */
+const NOTIFY_LINK_PAGE = {
+  exam_report: "exams",
+  surgery: "surgery",
+  admission: "inpatient",
+};
+
+let notifyUnreadOnly = false;
+
+async function renderNotifications() {
+  $("#page-desc").textContent =
+    "站内消息解决「人不在线也不丢」；求快仍看铃铛与实时广播，此处是可追溯的留存";
+  const rows = await api(`/api/notifications?limit=100${notifyUnreadOnly ? "&unread_only=true" : ""}`);
+  const { unread } = await api("/api/notifications/unread-count");
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>我的消息</h3>
+      <div class="cards">
+        <div class="card"><span class="k">未读</span><b>${unread}</b></div>
+        <div class="card"><span class="k">本页条数</span><b>${rows.length}</b></div>
+      </div>
+      <form class="inline"><button type="button" id="nt-readall">全部标记已读</button>
+        <button type="button" id="nt-toggle">${notifyUnreadOnly ? "查看全部" : "只看未读"}</button></form>
+      <p class="msg" id="nt-msg"></p>
+      ${table(["时间", "分类", "标题", "内容", "状态", "操作"], rows, (n) =>
+        `<tr><td>${esc(n.created_at.slice(0, 16).replace("T", " "))}</td>
+         <td>${esc(NOTIFY_CATEGORIES[n.category] || n.category)}</td>
+         <td><b>${esc(n.title)}</b></td><td>${esc(n.body || "—")}</td>
+         <td><span class="tag ${n.read ? "green" : "orange"}">${n.read ? "已读" : "未读"}</span></td>
+         <td>${n.read ? "" : `<button data-ntread="${n.id}">标记已读</button>`}
+             ${NOTIFY_LINK_PAGE[n.link_type]
+               ? `<button data-ntgo="${NOTIFY_LINK_PAGE[n.link_type]}">前往处理</button>` : ""}</td></tr>`)}
+    </div>`;
+  $("#nt-toggle").onclick = () => { notifyUnreadOnly = !notifyUnreadOnly; route(); };
+  $("#nt-readall").onclick = async () => {
+    await postAction("/api/notifications/read-all", null, "#nt-msg");
+    pollTodos();
+  };
+  $("#page-body").onclick = async (e) => {
+    const { ntread, ntgo } = e.target.dataset;
+    if (ntgo) return nav(ntgo);
+    if (!ntread) return;
+    await postAction(`/api/notifications/${ntread}/read`, null, "#nt-msg");
+    pollTodos();
+  };
 }

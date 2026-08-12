@@ -118,12 +118,22 @@
       <p id="survey-msg" class="msg"></p>
     </form>
   </section>
+
+  <!-- 站内消息（登录态） -->
+  <section id="tab-notify" class="tab-page hidden">
+    <div id="notify-guard" class="m-card hidden">
+      <p class="hint">请先在「我的档案」登录并完成实名绑定后再查看消息。</p>
+      <button type="button" id="btn-notify-login">去登录</button>
+    </div>
+    <div id="notify-box"></div>
+  </section>
 </main>
 
 <nav class="m-tabbar">
   <a href="#edu" class="tab-btn active" data-tab="edu"><span class="ico">📖</span>健康宣教</a>
   <a href="#archive" class="tab-btn" data-tab="archive"><span class="ico">📋</span>我的档案</a>
   <a href="#service" class="tab-btn" data-tab="service"><span class="ico">🗓️</span>在线服务</a>
+  <a href="#notify" class="tab-btn" data-tab="notify"><span class="ico">🔔</span>消息<span id="notify-dot" class="dot hidden"></span></a>
   <a href="#survey" class="tab-btn" data-tab="survey"><span class="ico">⭐</span>满意度</a>
 </nav>
 

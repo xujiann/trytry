@@ -7,6 +7,8 @@ node_modules/
 dist/
 server/uploads/
 server/test_uploads/
+# 在仓库根目录跑 pytest 时附件会落到这里，同样不入库
+test_uploads/
 .coverage
 coverage.xml
 htmlcov/

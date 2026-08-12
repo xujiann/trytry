@@ -52,6 +52,7 @@ from .routers import (
     followups,
     jobs as jobs_router,
     materials,
+    notifications,
     workflows,
     exams,
     gapfill,
@@ -290,6 +291,7 @@ app.include_router(accounting.router)
 app.include_router(cost.router)
 app.include_router(materials.router)
 app.include_router(analytics.router)
+app.include_router(notifications.router)
 app.include_router(rules.router)
 app.include_router(workflows.router)
 app.include_router(workflows.service_router)

@@ -2820,3 +2820,34 @@ class WorkflowTransition(Base):
     comment: Mapped[str] = mapped_column(String(512), default="")
     actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class Notification(Base):
+    """站内消息：与 WebSocket 广播互补的**可靠**触达。
+
+    广播是纯内存、瞬时的——人不在线就丢了，多实例下还只送达同实例的连接。
+    危急值、手术排期、报告出具这类必须让人看到的事件，需要一条能留存、
+    能标记已读、能事后追查的记录。
+
+    收件人二选一：`user_id` 是工作人员，`resident_account_id` 是居民账户。
+    不合并成一个"主体表"——两类身份的鉴权路径本来就不同（业务令牌 vs
+    scope=portal 令牌），分开存反而让越权更难写错。
+    """
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    resident_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("resident_accounts.id"), nullable=True, index=True
+    )
+    # critical_value=危急值, exam_report=检查报告, surgery=手术安排,
+    # followup=随访提醒, system=系统通知
+    category: Mapped[str] = mapped_column(String(24), index=True)
+    title: Mapped[str] = mapped_column(String(128))
+    body: Mapped[str] = mapped_column(String(1024), default="")
+    # 关联业务对象，供客户端跳转；不做外键（可指向任意业务表）
+    link_type: Mapped[str] = mapped_column(String(32), default="")
+    link_id: Mapped[int] = mapped_column(Integer, default=0)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

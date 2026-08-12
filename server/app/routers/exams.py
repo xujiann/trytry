@@ -19,6 +19,7 @@ from ..schemas import (
     RecognitionItemOut,
     RecognitionItemUpdate,
 )
+from ..notify import notify_patient, notify_staff
 from ..ws import manager
 
 router = APIRouter(prefix="/api/exams", tags=["共享诊断中心"], dependencies=[Depends(get_current_user)])
@@ -283,6 +284,28 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
                 ),
                 actor=report.reported_by or "system",
             )
+        )
+    # 站内消息：广播只送在线连接，离线即丢；这里补一条可留存可追查的记录
+    if report.critical:
+        notify_staff(
+            db,
+            category="critical_value",
+            title=f"危急值：{request.item_name}",
+            body=report.conclusion,
+            org_id=request.from_org_id,
+            roles=("doctor",),
+            link_type="exam_report",
+            link_id=report.id,
+        )
+    else:
+        notify_patient(
+            db,
+            request.patient_id,
+            category="exam_report",
+            title=f"{request.item_name} 报告已出具",
+            body="请在「我的档案」查看结论，如有疑问请咨询开单医师。",
+            link_type="exam_report",
+            link_id=report.id,
         )
     db.commit()
     db.refresh(report)

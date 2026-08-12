@@ -349,6 +349,18 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db)):
         title=f"出院随访：{admission.diagnosis_name or '住院治疗'}",
         due_days=DISCHARGE_FOLLOWUP_DAYS,
     )
+    from ..notify import notify_patient
+
+    notify_patient(
+        db,
+        admission.patient_id,
+        category="followup",
+        title="出院随访安排",
+        body=f"您已办理出院，我们将在 {DISCHARGE_FOLLOWUP_DAYS} 天内电话随访。"
+             "费用清单可在「在线服务-住院」查看。",
+        link_type="admission",
+        link_id=admission.id,
+    )
     db.commit()
     db.refresh(admission)
     return _admission_out(admission)

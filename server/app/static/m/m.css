@@ -148,6 +148,24 @@ body {
 }
 .tab-btn .ico { font-size: 21px; margin-bottom: 2px; }
 .tab-btn.active { color: #0b6e6e; }
+/* 未读红点：只标"有"不标"几条"——底部标签栏放不下两位数，
+   真要看条数进消息页就有。 */
+.tab-btn .dot {
+  position: absolute; margin: -22px 0 0 16px;
+  width: 8px; height: 8px; border-radius: 50%; background: #d93025;
+}
+.tab-btn { position: relative; }
+
+/* 站内消息列表 */
+.notify-item { border-bottom: 1px solid #eef1f5; padding: 12px 0; }
+.notify-item:last-child { border-bottom: none; }
+.notify-item .t { font-weight: 600; color: #24292f; }
+.notify-item .b { color: #5b6773; font-size: 13px; margin-top: 4px; line-height: 1.6; }
+.notify-item .m { color: #98a2ae; font-size: 12px; margin-top: 6px; }
+.notify-item.unread .t::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: #d93025; margin-right: 6px; vertical-align: middle;
+}
 
 @media (min-width: 640px) {
   .m-header h1 { text-align: center; }

@@ -53,6 +53,7 @@ function switchTab(tab) {
   if (tab === "archive") renderArchiveTab();
   if (tab === "service") renderServiceTab();
   if (tab === "survey") renderSurveyTab();
+  if (tab === "notify") renderNotifyTab();
 }
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -154,6 +155,7 @@ $("#sms-form").addEventListener("submit", async (e) => {
     token.set(data.access_token);
     $("#in-code").value = "";
     renderArchiveTab();
+    refreshNotifyDot();
   } catch (err) {
     setMsg("#login-msg", err.message, false);
   }
@@ -168,6 +170,7 @@ async function wechatLogin(code) {
   });
   token.set(data.access_token);
   renderArchiveTab();
+  refreshNotifyDot();
 }
 
 $("#btn-wechat").addEventListener("click", async () => {
@@ -226,6 +229,8 @@ $("#btn-logout").addEventListener("click", async () => {
   renderArchiveTab();
   renderServiceTab();
   renderSurveyTab();
+  renderNotifyTab();
+  refreshNotifyDot();
 });
 
 /* ---------------- 我的档案 ---------------- */
@@ -660,11 +665,85 @@ $("#survey-form").addEventListener("submit", async (e) => {
   }
 });
 
+/* ---------------- 站内消息 ---------------- */
+
+const NOTIFY_LABELS = { exam_report: "检查报告", surgery: "手术安排", followup: "随访提醒" };
+
+$("#btn-notify-login").addEventListener("click", () => {
+  switchTab("archive");
+  history.replaceState(null, "", "#archive");
+});
+
+/** 未读红点。未登录时静默跳过——登录页不该因为拉不到消息而报错。 */
+async function refreshNotifyDot() {
+  const dot = $("#notify-dot");
+  if (!token.get()) return dot.classList.add("hidden");
+  try {
+    const { unread } = await authApi("/api/portal/me/notifications/unread-count");
+    dot.classList.toggle("hidden", unread === 0);
+  } catch (err) {
+    dot.classList.add("hidden");
+  }
+}
+
+async function renderNotifyTab() {
+  const box = $("#notify-box");
+  const guard = $("#notify-guard");
+  if (!token.get()) {
+    guard.classList.remove("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  guard.classList.add("hidden");
+  box.innerHTML = '<div class="m-card"><p class="hint">加载中…</p></div>';
+  let items;
+  try {
+    items = await authApi("/api/portal/me/notifications?limit=50");
+  } catch (err) {
+    box.innerHTML = `<div class="m-card"><p class="msg err">${esc(err.message)}</p></div>`;
+    return;
+  }
+  if (!items.length) {
+    box.innerHTML = '<div class="m-card"><p class="empty">暂无消息</p></div>';
+    return;
+  }
+  const unread = items.filter((n) => !n.read).length;
+  box.innerHTML = `
+    <div class="m-card">
+      <p class="hint">共 ${items.length} 条，未读 ${unread} 条；点击任意一条即标记为已读。</p>
+      ${items.map((n) => `
+        <div class="notify-item ${n.read ? "" : "unread"}" data-nid="${n.id}">
+          <div class="t">${esc(n.title)}</div>
+          ${n.body ? `<div class="b">${esc(n.body)}</div>` : ""}
+          <div class="m">${esc(NOTIFY_LABELS[n.category] || n.category)} · ${
+            esc(n.created_at.slice(0, 16).replace("T", " "))}</div>
+        </div>`).join("")}
+    </div>`;
+  box.onclick = async (e) => {
+    const row = e.target.closest(".notify-item");
+    if (!row || !row.classList.contains("unread")) return;
+    row.classList.remove("unread");  // 先反馈再落库，网络慢时不至于点了没反应
+    try {
+      await authApi(`/api/portal/me/notifications/${row.dataset.nid}/read`, { method: "POST" });
+    } catch (err) {
+      row.classList.add("unread");
+    }
+    refreshNotifyDot();
+  };
+  refreshNotifyDot();
+}
+
 /* ---------------- 启动 ---------------- */
+
+const TABS = ["edu", "archive", "service", "notify", "survey"];
 
 (async function start() {
   loadArticles();
   const fromWeChat = await consumeWeChatRedirect();
   const initTab = (location.hash || "#edu").replace("#", "");
-  switchTab(fromWeChat ? "archive" : (["edu", "archive", "service", "survey"].includes(initTab) ? initTab : "edu"));
+  switchTab(fromWeChat ? "archive" : (TABS.includes(initTab) ? initTab : "edu"));
+  refreshNotifyDot();
+  // 5 分钟一次即可：居民端不是值班台，红点晚几分钟出现没有代价，
+  // 而后台常驻页签每 30 秒打一次接口纯属浪费。
+  setInterval(refreshNotifyDot, 300000);
 })();

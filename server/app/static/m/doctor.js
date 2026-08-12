@@ -108,14 +108,24 @@ const ROLE_NAMES = { admin: "平台管理员", director: "管理层", doctor: "�
 async function loadTodos() {
   const box = $("#todo-list");
   try {
-    const data = await api("/api/todos");
+    // 站内消息与待办并到同一屏：医生查房时不会为了看消息切第二个页签。
+    const [data, notices] = await Promise.all([
+      api("/api/todos"), api("/api/notifications?unread_only=true&limit=20")]);
     $("#who").innerHTML = `<span>${esc(sessionStorage.getItem(USER_KEY) || "")}</span>
       <span class="role">${esc(ROLE_NAMES[data.role] || data.role)} · 待办 ${data.total}</span>`;
+    const noticeBlock = notices.length ? `<div class="todo-group">
+      <div class="head"><span>未读消息</span><span class="badge warn">${notices.length}</span></div>
+      ${notices.map((n) => `<div class="m-card notice">
+        ${kv("标题", esc(n.title))}${kv("内容", esc(n.body || "—"))}
+        ${kv("时间", esc(n.created_at.slice(0, 16).replace("T", " ")))}
+        <div class="ops"><button class="ghost" data-ntread="${n.id}">标记已读</button></div></div>`).join("")}
+    </div>` : "";
     if (!data.items.length) {
-      box.innerHTML = '<p class="empty">当前角色无待办事项</p>';
+      box.innerHTML = noticeBlock || '<p class="empty">当前角色无待办事项</p>';
+      bindNoticeRead(box);
       return;
     }
-    box.innerHTML = data.items.map((item) => {
+    box.innerHTML = noticeBlock + data.items.map((item) => {
       const rows = item.list.slice(0, 20).map((row) => card(
         Object.entries(row)
           .filter(([k]) => k !== "id")
@@ -128,9 +138,25 @@ async function loadTodos() {
         ${rows || '<p class="empty">无</p>'}
       </div>`;
     }).join("");
+    bindNoticeRead(box);
   } catch (err) {
     box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
   }
+}
+
+/** 标记已读后就地移除卡片，不整屏重刷——医生手上可能正在看别的分组。 */
+function bindNoticeRead(box) {
+  box.querySelectorAll("[data-ntread]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/notifications/${btn.dataset.ntread}/read`, { method: "POST" });
+        btn.closest(".notice").remove();
+      } catch (err) {
+        btn.disabled = false;
+      }
+    });
+  });
 }
 
 const FIELD_NAMES = {
