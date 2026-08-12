@@ -13,7 +13,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import require_roles
+from ..deps import require_roles, resolve_org_scope
 from ..models import (
     ChronicPatient,
     ContractService,
@@ -105,6 +105,8 @@ def update_indicator(key: str, body: IndicatorPatch, db: Session = Depends(get_d
 def org_scorecards(
     volume_cap: int = 5,
     include_auto_passed: bool = True,
+    org_id: int | None = None,
+    group_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     """机构绩效计分。
@@ -113,12 +115,19 @@ def org_scorecards(
     - volume_cap：量类维度（远程诊断/家医履约）封顶次数，达到即满分（默认 5，可按机构规模调大）；
     - include_auto_passed：处方合格率是否将系统自动通过（auto_passed）计为合格（默认 True，
       收紧口径时传 False 仅计药师人工审核通过）。
+
+    `group_id` 按机构协作分组筛选。注意：**排名是在筛选后的集合内产生的**——
+    片区内排名与全县排名本来就是两件事，不要把片区第一当成全县第一。
     """
     if volume_cap < 1:
         raise HTTPException(status_code=422, detail="volume_cap 须≥1")
     weights = _normalized_weights(db)
     rx_ok_statuses = ["auto_passed", "approved"] if include_auto_passed else ["approved"]
-    orgs = db.query(Organization).order_by(Organization.id).all()
+    scope = resolve_org_scope(db, group_id, org_id)
+    orgs_q = db.query(Organization).order_by(Organization.id)
+    if scope is not None:
+        orgs_q = orgs_q.filter(Organization.id.in_(scope))
+    orgs = orgs_q.all()
     results = []
     for org in orgs:
         ref_total = db.query(func.count(Referral.id)).filter(Referral.from_org_id == org.id).scalar() or 0

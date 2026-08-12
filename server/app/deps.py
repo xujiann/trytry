@@ -5,7 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import User
+from .models import OrgGroup, OrgGroupMember, User
 from .security import decode_token, revoked_tokens
 
 _bearer = HTTPBearer(auto_error=False)
@@ -19,6 +19,33 @@ def paginate(query, response: Response, offset: int = 0, limit: int = 100, max_l
     """
     response.headers["X-Total-Count"] = str(query.count())
     return query.offset(max(offset, 0)).limit(min(max(limit, 1), max_limit)).all()
+
+
+def resolve_org_scope(
+    db: Session, group_id: int | None = None, org_id: int | None = None
+) -> list[int] | None:
+    """把"按分组/按机构"统一解析为机构 id 列表；两者都不给则返回 None（全域）。
+
+    返回 None 而不是"全部机构 id"——统计接口拿到 None 就不加过滤，
+    既省一次全表查询，也让"没筛选"和"筛出了 0 家"在代码里不会长得一样。
+    后者返回空列表，统计结果应当是 0 而不是全量。
+
+    分组与机构同时给出时取**交集**：这是唯一不会让人意外的语义
+    （"这个片区里的这家机构"），也让 UI 可以先选片区再选机构而不必清空前者。
+    """
+    if group_id is None and org_id is None:
+        return None
+    if group_id is None:
+        return [org_id]
+    if db.get(OrgGroup, group_id) is None:
+        raise HTTPException(status_code=404, detail="机构分组不存在")
+    ids = [
+        m.org_id
+        for m in db.query(OrgGroupMember).filter(OrgGroupMember.group_id == group_id).all()
+    ]
+    if org_id is not None:
+        return [org_id] if org_id in ids else []
+    return ids
 
 
 def resolve_business_date(today: str | None) -> date:

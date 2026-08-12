@@ -16,7 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
     Admission,
     AdverseEvent,
@@ -729,7 +729,10 @@ def _rate(numerator: int, denominator: int) -> float:
 
 @router.get("/clinical-indicators")
 def clinical_indicators(
-    period: str | None = None, org_id: int | None = None, db: Session = Depends(get_db)
+    period: str | None = None,
+    org_id: int | None = None,
+    group_id: int | None = None,
+    db: Session = Depends(get_db),
 ):
     """医疗质量指标：诊断符合率、治愈好转率、死亡率、抢救成功率。
 
@@ -749,8 +752,9 @@ def clinical_indicators(
     summaries = db.query(CaseSummary, Admission).join(
         Admission, CaseSummary.admission_id == Admission.id
     )
-    if org_id is not None:
-        summaries = summaries.filter(Admission.org_id == org_id)
+    scope = resolve_org_scope(db, group_id, org_id)
+    if scope is not None:
+        summaries = summaries.filter(Admission.org_id.in_(scope))
     if start_dt is not None:
         summaries = summaries.filter(
             CaseSummary.created_at >= start_dt, CaseSummary.created_at < end_dt
@@ -768,8 +772,8 @@ def clinical_indicators(
     surgeries = db.query(SurgeryRecord).join(
         SurgeryRequest, SurgeryRecord.request_id == SurgeryRequest.id
     )
-    if org_id is not None:
-        surgeries = surgeries.filter(SurgeryRequest.org_id == org_id)
+    if scope is not None:
+        surgeries = surgeries.filter(SurgeryRequest.org_id.in_(scope))
     if start_dt is not None:
         surgeries = surgeries.filter(
             SurgeryRecord.created_at >= start_dt, SurgeryRecord.created_at < end_dt
@@ -789,8 +793,8 @@ def clinical_indicators(
 
     # ---- 抢救成功率（数据源：急救病例转归）----
     rescues = db.query(EmergencyCase).filter(EmergencyCase.rescue_outcome != "")
-    if org_id is not None:
-        rescues = rescues.filter(EmergencyCase.dest_org_id == org_id)
+    if scope is not None:
+        rescues = rescues.filter(EmergencyCase.dest_org_id.in_(scope))
     if start_dt is not None:
         rescues = rescues.filter(
             EmergencyCase.created_at >= start_dt, EmergencyCase.created_at < end_dt
@@ -804,8 +808,8 @@ def clinical_indicators(
         db.query(SurgeryRequest)
         .filter(SurgeryRequest.unplanned_return.is_(True), SurgeryRequest.status == "completed")
     )
-    if org_id is not None:
-        unplanned = unplanned.filter(SurgeryRequest.org_id == org_id)
+    if scope is not None:
+        unplanned = unplanned.filter(SurgeryRequest.org_id.in_(scope))
     if start_dt is not None:
         unplanned = unplanned.filter(
             SurgeryRequest.created_at >= start_dt, SurgeryRequest.created_at < end_dt
@@ -815,6 +819,7 @@ def clinical_indicators(
     return {
         "period": period or "全期",
         "org_id": org_id,
+        "group_id": group_id,
         "indicators": [
             {
                 "key": "admit_discharge_match",

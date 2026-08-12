@@ -11,7 +11,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
     Admission,
     Bed,
@@ -459,9 +459,17 @@ def stop_order(
 
 
 @router.get("/stats")
-def inpatient_stats(db: Session = Depends(get_db)):
-    """床位利用与在院情况：按机构统计总床位/占用/使用率、在院与累计出院人次。"""
-    rows = (
+def inpatient_stats(
+    org_id: int | None = None,
+    group_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """床位利用与在院情况：按机构统计总床位/占用/使用率、在院与累计出院人次。
+
+    `group_id` 按机构协作分组筛选（片区/联盟/网格），与 `org_id` 同时给出时取交集。
+    """
+    scope = resolve_org_scope(db, group_id, org_id)
+    rows_q = (
         db.query(
             Ward.org_id,
             Organization.name,
@@ -471,8 +479,10 @@ def inpatient_stats(db: Session = Depends(get_db)):
         .join(Bed, Bed.ward_id == Ward.id)
         .join(Organization, Organization.id == Ward.org_id)
         .group_by(Ward.org_id, Organization.name)
-        .all()
     )
+    if scope is not None:
+        rows_q = rows_q.filter(Ward.org_id.in_(scope))
+    rows = rows_q.all()
     admitted = dict(
         db.query(Admission.org_id, func.count(Admission.id))
         .filter(Admission.status == "admitted")

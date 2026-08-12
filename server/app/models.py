@@ -3020,3 +3020,45 @@ class TreatmentRecord(Base):
     note: Mapped[str] = mapped_column(String(512), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class OrgGroup(Base):
+    """机构协作分组：机构之间的**横向**分组。
+
+    各地叫法不一——片区、健共体、医共体分片、网格、专科联盟——但结构是同一个，
+    所以这里做通用分组而不是叫"片区"。`group_type` 只是标签，不影响任何逻辑，
+    平台不为某一种类型写特殊分支。
+
+    与 `Organization.parent_id` 正交：`parent_id` 表达纵向隶属（谁是谁的上级），
+    分组表达横向协作（谁和谁归一拨管）。**刻意不做成第二棵树**——做成树，
+    跨组调拨、跨组转诊立刻会遇到"到底归谁"的归属冲突，而现实里这两种关系本来
+    就不重合：一家卫生院的行政上级与它所属的专科联盟牵头单位常常不是同一家。
+
+    一家机构可以同时属于多个分组（既在某片区，又在某专科联盟），故用关联表。
+    """
+
+    __tablename__ = "org_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # zone=片区/分片, alliance=专科联盟, grid=网格, other=其他。仅作标签用途。
+    group_type: Mapped[str] = mapped_column(String(16), default="zone", index=True)
+    # 牵头机构可空：网格化管理常常没有"牵头单位"这一说
+    lead_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    note: Mapped[str] = mapped_column(String(256), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OrgGroupMember(Base):
+    """分组成员：分组与机构的多对多关联。"""
+
+    __tablename__ = "org_group_members"
+    __table_args__ = (UniqueConstraint("group_id", "org_id", name="uq_org_group_member"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("org_groups.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

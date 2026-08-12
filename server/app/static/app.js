@@ -88,6 +88,7 @@ const PAGES = [
   { id: "notifications", title: "站内消息", render: renderNotifications },
   { group: "基础平台" },
   { id: "orgs", title: "机构管理", render: renderOrgs },
+  { id: "orggroups", title: "机构协作分组", render: renderOrgGroups },
   { id: "patients", title: "患者主索引", render: renderPatients },
   { id: "credentials", title: "就诊凭据", render: renderCredentials },
   { id: "dicts", title: "编码字典", render: renderDicts },
@@ -4593,6 +4594,108 @@ async function renderOutpatientDocs() {
       if (!refuse_reason) return;
       return postAction(`/api/outpatient/consents/${crefuse}/refuse`,
         { signer_name, signer_relation: "self", refuse_reason }, "#od-cmsg");
+    }
+  };
+}
+
+/* ---------------- 机构协作分组（阶段六） ---------------- */
+
+const GROUP_TYPES = { zone: "片区/分片", alliance: "专科联盟", grid: "网格", other: "其他" };
+
+async function renderOrgGroups() {
+  $("#page-desc").textContent =
+    "机构的横向分组，与上下级隶属正交——一家机构可以既在某片区，又在某专科联盟";
+  const typeFilter = localStorage.getItem("medplat_group_type") || "zone";
+  const [groups, orgs, coverage] = await Promise.all([
+    api("/api/org-groups"), api("/api/organizations"),
+    api(`/api/org-groups/coverage?group_type=${typeFilter}`),
+  ]);
+  const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  const selected = Number(localStorage.getItem("medplat_group_id") || 0);
+  const members = selected ? await api(`/api/org-groups/${selected}/members`) : [];
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>新建分组</h3>
+      <form class="inline" id="og-form">
+        <input name="name" placeholder="分组名称" required>
+        <select name="group_type">${Object.entries(GROUP_TYPES).map(([v, t]) =>
+          `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="lead_org_id"><option value="">牵头机构（可留空）</option>
+          ${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
+        <input name="note" placeholder="备注">
+        <button>创建</button>
+      </form>
+      <p class="msg" id="og-msg"></p>
+      ${table(["名称", "类型", "牵头机构", "成员数", "状态", "操作"], groups, (g) =>
+        `<tr><td><b>${esc(g.name)}</b></td><td>${esc(g.group_type_name)}</td>
+         <td>${esc(orgName[g.lead_org_id] || "—")}</td><td>${g.member_count}</td>
+         <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td>
+         <td><button data-ogpick="${g.id}">管理成员</button>
+             <button data-ogtoggle="${g.id}" data-active="${g.active}">${
+               g.active ? "停用" : "启用"}</button></td></tr>`)}
+    </div>
+
+    ${selected ? `<div class="panel"><h3>成员机构（分组 #${selected}）</h3>
+      <form class="inline" id="og-member">
+        <select name="org_id">${orgs.map((o) =>
+          `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
+        <button>加入分组</button>
+      </form>
+      ${table(["机构", "层级", "加入时间", "操作"], members, (m) =>
+        `<tr><td>${esc(m.org_name)}</td><td>${esc(m.level)}</td>
+         <td>${esc(m.joined_at.slice(0, 10))}</td>
+         <td><button data-ogdrop="${m.org_id}">移出</button></td></tr>`)}
+    </div>` : ""}
+
+    <div class="panel"><h3>覆盖情况（${esc(coverage.group_type_name)}）</h3>
+      <form class="inline"><select id="og-type">${Object.entries(GROUP_TYPES).map(([v, t]) =>
+        `<option value="${v}"${v === typeFilter ? " selected" : ""}>${t}</option>`).join("")}</select></form>
+      <div class="cards">
+        <div class="card"><span class="k">分组数</span><b>${coverage.groups}</b></div>
+        <div class="card"><span class="k">机构总数</span><b>${coverage.orgs_total}</b></div>
+        <div class="card"><span class="k">已入组</span><b>${coverage.orgs_grouped}</b></div>
+        <div class="card"><span class="k">未入组</span><b>${
+          coverage.ungrouped.length
+            ? `<span class="tag orange">${coverage.ungrouped.length}</span>`
+            : 0}</b></div>
+      </div>
+      ${coverage.ungrouped.length
+        ? `<p class="msg err">${esc(coverage.note)}</p>${
+            table(["机构", "层级"], coverage.ungrouped, (o) =>
+              `<tr><td>${esc(o.org_name)}</td><td>${esc(o.level)}</td></tr>`)}`
+        : '<p class="desc">全部机构均已入组，按分组统计之和等于全域总数。</p>'}
+    </div>`;
+
+  $("#og-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target);
+    // 空字符串要去掉，否则后端按"指定了牵头机构 0"处理
+    if (!body.lead_org_id) delete body.lead_org_id;
+    else body.lead_org_id = Number(body.lead_org_id);
+    postAction("/api/org-groups", body, "#og-msg");
+  };
+  $("#og-type").onchange = (e) => {
+    localStorage.setItem("medplat_group_type", e.target.value); route();
+  };
+  if (selected) {
+    $("#og-member").onsubmit = (e) => { e.preventDefault();
+      postAction(`/api/org-groups/${selected}/members`, formJson(e.target, ["org_id"]), "#og-msg"); };
+  }
+  $("#page-body").onclick = async (e) => {
+    const { ogpick, ogtoggle, active, ogdrop } = e.target.dataset;
+    if (ogpick) { localStorage.setItem("medplat_group_id", ogpick); return route(); }
+    if (ogtoggle) {
+      try {
+        await api(`/api/org-groups/${ogtoggle}`, { method: "PATCH",
+          body: JSON.stringify({ active: active !== "true" }) });
+        route();
+      } catch (err) { setMsg("#og-msg", err.message, false); }
+      return;
+    }
+    if (ogdrop) {
+      try {
+        await api(`/api/org-groups/${selected}/members/${ogdrop}`, { method: "DELETE" });
+        route();
+      } catch (err) { setMsg("#og-msg", err.message, false); }
     }
   };
 }

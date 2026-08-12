@@ -47,6 +47,24 @@ for _u, _role, _org, _name in [
     c.post("/api/users", json={"username": _u, "password": "doctor123", "role": _role,
                                "org_id": _org["id"], "full_name": _name})
 
+# ---------- 机构协作分组：两个片区 + 一个跨片区专科联盟 ----------
+# 专科联盟刻意跨片区，好让"一家机构同时属于多个分组"在演示站上是可见的事实，
+# 而不只是文档里的一句话。
+if not c.get("/api/org-groups").json():
+    _z1 = c.post("/api/org-groups", json={
+        "name": "县医院片区", "group_type": "zone", "lead_org_id": county["id"],
+        "note": "县人民医院牵头"}).json()
+    _z2 = c.post("/api/org-groups", json={
+        "name": "西部片区", "group_type": "zone", "lead_org_id": zhen2["id"],
+        "note": "河西镇卫生院牵头"}).json()
+    for _g, _members in [(_z1, [county, zhen1, village]), (_z2, [zhen2])]:
+        for _m in _members:
+            c.post(f"/api/org-groups/{_g['id']}/members", json={"org_id": _m["id"]})
+    _al = c.post("/api/org-groups", json={
+        "name": "胸痛专科联盟", "group_type": "alliance", "lead_org_id": county["id"]}).json()
+    for _m in [county, village, zhen2]:
+        c.post(f"/api/org-groups/{_al['id']}/members", json={"org_id": _m["id"]})
+
 # 单独一个管理层会话：手术申请不得自批（职责分离），admin 建的单必须换个人审。
 c_dir = httpx.Client(base_url=BASE, timeout=30)
 c_dir.headers["Authorization"] = "Bearer " + c_dir.post(
@@ -571,6 +589,9 @@ _checks = [
         httpx.Client(base_url=BASE, timeout=30).get("/api/portal/price-list"))),
     ("就诊凭据台账有作废记录", lambda: any(
         v["status"] == "void" for v in c.get("/api/credentials?limit=50").json())),
+    # 分组统计的不变量：全部机构都入了片区，各片区之和才等于全域总数
+    ("片区已覆盖全部机构", lambda: not c.get(
+        "/api/org-groups/coverage?group_type=zone").json()["ungrouped"]),
     ("知情告知书含拒签实例", lambda: any(
         x["status"] == "refused" for x in c.get("/api/outpatient/consents?limit=50").json())),
     ("手术质量指标已可算", lambda: any(

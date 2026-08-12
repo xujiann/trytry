@@ -407,9 +407,11 @@ def test_performance_report_computes_efficiency_once(client, admin, monkeypatch)
     calls = []
     original = analytics_module.efficiency
 
-    def counting_efficiency(period, db):
+    def counting_efficiency(period, *args, **kwargs):
+        # 用 *args/**kwargs 转发：efficiency 的签名后来加了 org_id/group_id，
+        # 打桩函数写死形参会随签名变动而失效
         calls.append(period)
-        return original(period, db)
+        return original(period, *args, **kwargs)
 
     monkeypatch.setattr(analytics_module, "efficiency", counting_efficiency)
     period = date.today().strftime("%Y-%m")

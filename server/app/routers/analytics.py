@@ -16,7 +16,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_roles,
+    resolve_business_date,
+    resolve_org_scope,
+)
 from ..formula import FormulaError, evaluate, validate
 from ..models import (
     Admission,
@@ -153,6 +160,11 @@ def patient_flow(start: str | None = None, end: str | None = None, db: Session =
     - 县域就诊率 = 县内就诊人次 ÷（县内 + 县外）
     - 外转率 = 100 − 县域就诊率
     - 有序转诊率 = 关联转诊单的县外就诊 ÷ 县外就诊总数（衡量"自行外出"的比例）
+
+    **本接口刻意不支持按机构分组筛选**：县外就诊（`outbound_visits`）记录的是
+    "去了县外哪家医院"，没有县内机构归属——它本来就是县域整体的流出。
+    只筛县内一侧会得到"片区内就诊 ÷（片区内就诊 + 全县县外就诊）"这种
+    分子分母不同域的比率，比不提供筛选更容易误导人。
     """
     inside_q = db.query(Encounter)
     outside_q = db.query(OutboundVisit)
@@ -197,7 +209,12 @@ def patient_flow(start: str | None = None, end: str | None = None, db: Session =
 
 
 @router.get("/efficiency")
-def efficiency(period: str, db: Session = Depends(get_db)):
+def efficiency(
+    period: str,
+    org_id: int | None = None,
+    group_id: int | None = None,
+    db: Session = Depends(get_db),
+):
     """运行效率：按机构给出平均住院日、床位周转次数、床位使用率、医师担负。
 
     口径说明（写死并对外公布，避免各院各算）：
@@ -212,6 +229,9 @@ def efficiency(period: str, db: Session = Depends(get_db)):
     end_dt = datetime.combine(end, datetime.min.time())
 
     org_names = {o.id: o.name for o in db.query(Organization).all()}
+    scope = resolve_org_scope(db, group_id, org_id)
+    if scope is not None:
+        org_names = {oid: name for oid, name in org_names.items() if oid in set(scope)}
     bed_counts = dict(
         db.query(Ward.org_id, func.count(Bed.id))
         .join(Bed, Bed.ward_id == Ward.id)
@@ -244,38 +264,43 @@ def efficiency(period: str, db: Session = Depends(get_db)):
             )
 
     visits: dict[int, int] = {}
-    for org_id, count in (
+    for oid, count in (
         db.query(Encounter.org_id, func.count(Encounter.id))
         .filter(Encounter.created_at >= start_dt, Encounter.created_at < end_dt)
         .group_by(Encounter.org_id)
         .all()
     ):
-        visits[org_id] = count
+        visits[oid] = count
 
     result = []
-    for org_id in set(bed_counts) | set(visits) | set(occupied_days) | set(discharged_count):
-        beds = bed_counts.get(org_id, 0)
-        discharges = discharged_count.get(org_id, 0)
-        doctors = doctor_counts.get(org_id, 0)
+    # 有数据的机构取并集，再按范围过滤。只过滤 org_names 是不够的——
+    # 结果行是从各数据字典的键拼出来的，不经过 org_names。
+    candidates = set(bed_counts) | set(visits) | set(occupied_days) | set(discharged_count)
+    if scope is not None:
+        candidates &= set(scope)
+    for oid in candidates:
+        beds = bed_counts.get(oid, 0)
+        discharges = discharged_count.get(oid, 0)
+        doctors = doctor_counts.get(oid, 0)
         result.append(
             {
-                "org_id": org_id,
-                "org_name": org_names.get(org_id, ""),
+                "org_id": oid,
+                "org_name": org_names.get(oid, ""),
                 "beds": beds,
                 "discharges": discharges,
-                "occupied_bed_days": occupied_days.get(org_id, 0),
-                "avg_length_of_stay": round(discharged_days.get(org_id, 0) / discharges, 2)
+                "occupied_bed_days": occupied_days.get(oid, 0),
+                "avg_length_of_stay": round(discharged_days.get(oid, 0) / discharges, 2)
                 if discharges
                 else 0.0,
                 "bed_turnover": round(discharges / beds, 2) if beds else 0.0,
                 "bed_occupancy_rate_pct": round(
-                    occupied_days.get(org_id, 0) * 100 / (beds * days), 2
+                    occupied_days.get(oid, 0) * 100 / (beds * days), 2
                 )
                 if beds and days
                 else 0.0,
-                "visits": visits.get(org_id, 0),
+                "visits": visits.get(oid, 0),
                 "doctors": doctors,
-                "visits_per_doctor_per_day": round(visits.get(org_id, 0) / doctors / days, 2)
+                "visits_per_doctor_per_day": round(visits.get(oid, 0) / doctors / days, 2)
                 if doctors and days
                 else 0.0,
             }
@@ -324,7 +349,9 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
         .group_by(ChronicPatient.managed_by_org_id)
         .all()
     )
-    efficiency_index = {row["org_id"]: row for row in efficiency(period, db)}
+    # 显式传 db=：efficiency 的签名里 period 之后是 org_id/group_id，
+    # 位置传参会把 db 塞进 org_id。
+    efficiency_index = {row["org_id"]: row for row in efficiency(period, db=db)}
 
     org_ids = (
         set(encounters) | set(referrals_up) | set(referrals_down) | set(exams)
@@ -506,7 +533,12 @@ def performance_report(period: str, db: Session = Depends(get_db)):
 
 
 @router.get("/drug-use")
-def drug_use(period: str, org_id: int | None = None, db: Session = Depends(get_db)):
+def drug_use(
+    period: str,
+    org_id: int | None = None,
+    group_id: int | None = None,
+    db: Session = Depends(get_db),
+):
     """药占比与抗菌药物使用强度。
 
     两个指标都会被写进考核，所以口径写死在这里并随结果一起返回：
@@ -523,7 +555,8 @@ def drug_use(period: str, org_id: int | None = None, db: Session = Depends(get_d
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.min.time())
     org_names = {o.id: o.name for o in db.query(Organization).all()}
-    org_ids = [org_id] if org_id is not None else sorted(org_names)
+    scope = resolve_org_scope(db, group_id, org_id)
+    org_ids = sorted(org_names) if scope is None else sorted(scope)
 
     # ---- 住院药占比（病案首页）----
     inpatient = dict.fromkeys(org_ids, (0.0, 0.0))
