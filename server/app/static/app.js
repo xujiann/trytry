@@ -91,6 +91,8 @@ const PAGES = [
   { id: "emergency", title: "智慧急救", render: renderEmergency },
   { id: "emtimeline", title: "急救绿道时间轴", render: renderEmTimeline },
   { id: "inpatient", title: "住院管理", render: renderInpatient },
+  { id: "clinicaldocs", title: "住院临床文书", render: renderClinicalDocs },
+  { id: "surgery", title: "手术麻醉", render: renderSurgery },
   { id: "billing", title: "费用结算", render: renderBilling },
   { id: "rx", title: "集中审方", render: renderRx },
   { id: "pharmacy", title: "中心药房", render: renderPharmacy },
@@ -101,6 +103,7 @@ const PAGES = [
   { group: "医防融合" },
   { id: "chronic", title: "慢病管理", render: renderChronic },
   { id: "contracts", title: "家医签约", render: renderContracts },
+  { id: "followups", title: "随访中心", render: renderFollowups },
   { id: "infectious", title: "传染病预警", render: renderInfectious },
   { id: "infdir", title: "传染病目录与迟报", render: renderInfectiousDir },
   { id: "publichealth", title: "公卫协同", render: renderPublicHealth },
@@ -113,6 +116,7 @@ const PAGES = [
   { id: "telemedicine", title: "互联网+诊疗", render: renderTelemedicine },
   { id: "tcm", title: "中医药服务", render: renderTcm },
   { id: "archive", title: "患者360视图", render: renderArchive },
+  { id: "servicerequests", title: "统一申请单中心", render: renderServiceRequests },
   { group: "综合管理" },
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
   { id: "perfind", title: "绩效指标调权", render: renderPerfIndicators, roles: ["director"] },
@@ -121,11 +125,18 @@ const PAGES = [
   { id: "education", title: "远程医学教育", render: renderEducation },
   { id: "knowledge", title: "知识库", render: renderKnowledge },
   { id: "hrfinance", title: "人财物管理", render: renderHrFinance },
+  { id: "accounting", title: "会计核算", render: renderAccounting, roles: ["director"] },
+  { id: "cost", title: "成本核算", render: renderCost, roles: ["director"] },
+  { id: "materials", title: "物资采购与耗材", render: renderMaterials },
+  { id: "analytics", title: "决策指标扩展", render: renderAnalytics },
   { id: "oaqc", title: "行政与质控", render: renderOaQc },
   { id: "cssd", title: "消毒供应", render: renderCssd },
   { id: "medwaste", title: "医废追溯", render: renderMedwaste },
   { group: "系统管理", roles: ["admin"] },
   { id: "esb", title: "集成平台", render: renderEsb, roles: ["admin"] },
+  { id: "rules", title: "统一规则引擎", render: renderRules, roles: ["admin"] },
+  { id: "workflows", title: "流程引擎", render: renderWorkflows },
+  { id: "jobs", title: "定时任务", render: renderJobs, roles: ["admin"] },
   { id: "dataquality", title: "数据质控", render: renderDataQuality, roles: ["admin"] },
   { id: "printtpl", title: "打印模板", render: renderPrintTemplates, roles: ["admin"] },
   { id: "users", title: "用户管理", render: renderUsers, roles: ["admin"] },
@@ -1130,20 +1141,39 @@ async function renderInfectious() {
 }
 
 async function renderArchive() {
-  $("#page-desc").textContent = "按电子健康卡号汇聚档案、就诊、报告、慢病、处方";
+  $("#page-desc").textContent = "门诊接诊登记；按电子健康卡号汇聚档案、就诊、报告、慢病、处方";
+  const encounters = await api("/api/encounters?limit=50");
   $("#page-body").innerHTML = `
-    <div class="panel">
+    <div class="panel"><h3>门诊接诊登记</h3>
+      <form class="inline" id="enc-form"><input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="doctor_name" placeholder="接诊医师">
+        <input name="diagnosis_code" placeholder="诊断编码"><input name="diagnosis_name" placeholder="诊断名称">
+        <input name="summary" placeholder="诊疗摘要" style="min-width:220px"><button>登记</button></form>
+      <p class="msg" id="enc-msg"></p>
+      <p class="desc">就诊记录是县域就诊率、诊次成本与绩效变量的共同数据源。</p>
+      ${table(["ID", "患者", "机构", "类型", "诊断", "医师"], encounters, (e) =>
+        `<tr><td>${e.id}</td><td>${e.patient_id}</td><td>${e.org_id}</td>
+         <td>${e.encounter_type === "inpatient" ? "住院" : "门诊"}</td>
+         <td>${esc(e.diagnosis_name || "—")}</td><td>${esc(e.doctor_name || "—")}</td></tr>`)}</div>
+    <div class="panel"><h3>患者 360 视图</h3>
       <form class="inline" id="archive-form">
         <input name="ehc_no" placeholder="电子健康卡号" required>
         <button>查询</button>
       </form>
       <div id="archive-result"></div></div>`;
+  $("#enc-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/encounters", formJson(e.target, ["patient_id", "org_id"]), "#enc-msg"); };
   $("#archive-form").onsubmit = async (e) => {
     e.preventDefault();
     const ehcNo = new FormData(e.target).get("ehc_no");
     try {
       const archive = await api(`/api/archive/${encodeURIComponent(ehcNo)}`);
-      $("#archive-result").innerHTML = `<pre class="json">${esc(JSON.stringify(archive, null, 2))}</pre>`;
+      const more = Object.entries(archive.has_more || {}).filter(([, v]) => v).map(([k]) => k);
+      $("#archive-result").innerHTML = `
+        ${more.length ? `<p class="msg">以下分段超过 ${archive.section_limit} 条已截断：${more.join("、")}，
+          完整清单请到对应业务页查询。</p>` : ""}
+        <pre class="json">${esc(JSON.stringify(archive, null, 2))}</pre>`;
     } catch (err) { $("#archive-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
 }
@@ -3362,3 +3392,757 @@ window.addEventListener("hashchange", route);
 
 if (token) enterApp();
 else $("#login-view").classList.remove("hidden");
+
+/* ============================================================================
+ * 阶段六B：阶段一~五模块的管理端页面
+ * 复用既有 table / formJson / postAction / barChart 四件套，不引入新依赖。
+ * ==========================================================================*/
+
+const NOTE_TYPES = { first: "首次病程", daily: "日常病程", ward_round: "上级查房",
+  rescue: "抢救记录", consultation: "会诊记录", discharge: "出院记录" };
+const NURSING_LEVELS = { special: "特级护理", level1: "一级护理", level2: "二级护理", level3: "三级护理" };
+const SURGERY_STATUS = { requested: ["待审批", "orange"], approved: ["已审批", ""],
+  scheduled: ["已排班", ""], completed: ["已完成", "green"], cancelled: ["已取消", "red"] };
+const ANESTHESIA = { general: "全麻", spinal: "椎管内", local: "局麻", nerve_block: "神经阻滞" };
+const URGENCY = { elective: "择期", urgent: "限期", emergency: "急诊" };
+const FOLLOWUP_STATUS = { pending: ["待随访", "orange"], done: ["已完成", "green"], cancelled: ["已取消", ""] };
+const COST_TYPES = { labor: "人员经费", drug: "药品", consumable: "卫生材料",
+  depreciation: "折旧", overhead: "其他运行" };
+const PURCHASE_STATUS = { requested: ["待审批", "orange"], approved: ["已审批", ""],
+  contracted: ["已签合同", ""], received: ["已验收", "green"], cancelled: ["已取消", "red"] };
+const CONSUMABLE_STATUS = { in_stock: ["在库", "green"], used: ["已使用", ""],
+  returned: ["已退回", "orange"], scrapped: ["已报废", "red"] };
+const SEVERITY = { info: ["提示", ""], warning: ["警告", "orange"], error: ["拦截", "red"] };
+const UNIFIED_STATUS = { pending: ["待处理", "orange"], processing: ["处理中", ""],
+  done: ["已完成", "green"], cancelled: ["已取消", "red"] };
+
+/* ---------------- 住院临床文书 ---------------- */
+
+async function renderClinicalDocs() {
+  $("#page-desc").textContent = "病程记录 / 护理记录 / 体温单 / 交接班；出院前可做文书完整性自查";
+  const admissions = await api("/api/inpatient/admissions");
+  const inHospital = admissions.filter((a) => a.status === "admitted");
+  const current = Number(localStorage.getItem("medplat_doc_adm") || 0)
+    || (inHospital[0] && inHospital[0].id) || 0;
+  const [notes, nursing, vitals, completeness] = current
+    ? await Promise.all([
+        api(`/api/inpatient/admissions/${current}/progress-notes`),
+        api(`/api/inpatient/admissions/${current}/nursing-records`),
+        api(`/api/inpatient/admissions/${current}/vitals`),
+        api(`/api/inpatient/admissions/${current}/document-completeness`),
+      ])
+    : [[], [], [], null];
+
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>选择住院记录</h3>
+      <form class="inline" id="doc-pick"><select name="admission_id">${
+        inHospital.map((a) => `<option value="${a.id}" ${a.id === current ? "selected" : ""}>#${a.id} 患者${a.patient_id} ${esc(a.diagnosis_name || "")}</option>`).join("")
+      }</select><button>切换</button></form>
+      ${completeness ? `<p class="msg ${completeness.complete ? "ok" : "err"}">${
+        completeness.complete ? "文书完整" : "缺项：" + completeness.missing.join("、")}</p>` : '<p class="msg">暂无在院患者</p>'}
+    </div>
+    ${current ? `
+    <div class="panel"><h3>病程记录（${notes.length}）</h3>
+      <form class="inline" id="note-form">
+        <select name="note_type">${Object.entries(NOTE_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <input name="doctor_name" placeholder="记录医师">
+        <input name="content" placeholder="病程内容" required style="min-width:320px">
+        <button>书写</button></form>
+      <p class="msg" id="doc-msg"></p>
+      ${table(["时间", "类型", "医师", "内容"], notes, (n) =>
+        `<tr><td>${esc(n.recorded_at)}</td><td>${esc(NOTE_TYPES[n.note_type] || n.note_type)}</td>
+         <td>${esc(n.doctor_name)}</td><td>${esc(n.content)}</td></tr>`)}</div>
+    <div class="panel"><h3>护理记录（${nursing.length}）</h3>
+      <form class="inline" id="nursing-form">
+        <select name="nursing_level">${Object.entries(NURSING_LEVELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <input name="nurse_name" placeholder="护士">
+        <input name="content" placeholder="护理内容" style="min-width:280px"><button>记录</button></form>
+      ${table(["时间", "级别", "护士", "内容"], nursing, (r) =>
+        `<tr><td>${esc(r.recorded_at)}</td><td>${esc(NURSING_LEVELS[r.nursing_level] || r.nursing_level)}</td>
+         <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}</div>
+    <div class="panel"><h3>体温单（${vitals.length}）</h3>
+      <form class="inline" id="vital-form">
+        <input name="measured_at" placeholder="YYYY-MM-DD HH:MM" required>
+        <input name="temperature" type="number" step="0.1" placeholder="体温℃">
+        <input name="pulse" type="number" placeholder="脉搏"><input name="respiration" type="number" placeholder="呼吸">
+        <input name="sbp" type="number" placeholder="收缩压"><input name="dbp" type="number" placeholder="舒张压">
+        <button>录入</button></form>
+      ${vitals.length ? lineChart(vitals.map((v) => v.measured_at.slice(5, 10)),
+        { "体温": vitals.map((v) => v.temperature || 0), "脉搏": vitals.map((v) => v.pulse || 0) },
+        ["#c0392b", "#0b6e6e"]) : ""}
+      ${table(["测量时刻", "体温", "脉搏", "呼吸", "血压", "记录人"], vitals, (v) =>
+        `<tr><td>${esc(v.measured_at)}</td><td>${v.temperature ?? "—"}</td><td>${v.pulse ?? "—"}</td>
+         <td>${v.respiration ?? "—"}</td><td>${v.sbp ?? "—"}/${v.dbp ?? "—"}</td><td>${esc(v.recorder)}</td></tr>`)}</div>
+    <div class="panel"><h3>交接班</h3>
+      <form class="inline" id="handover-form">
+        <input name="ward_id" type="number" placeholder="病区ID" required>
+        <select name="shift"><option value="day">白班</option><option value="evening">小夜</option><option value="night">大夜</option></select>
+        <input name="handover_date" placeholder="YYYY-MM-DD" required>
+        <input name="from_staff" placeholder="交班"><input name="to_staff" placeholder="接班">
+        <input name="critical_count" type="number" placeholder="危重数">
+        <input name="content" placeholder="交班内容" style="min-width:240px"><button>交班</button></form>
+      <p class="desc">在院人数由系统按当前住院数据快照，不接受人工填写。</p></div>` : ""}`;
+
+  $("#doc-pick").onsubmit = (e) => {
+    e.preventDefault();
+    localStorage.setItem("medplat_doc_adm", new FormData(e.target).get("admission_id"));
+    route();
+  };
+  if (!current) return;
+  $("#note-form").onsubmit = (e) => { e.preventDefault();
+    postAction(`/api/inpatient/admissions/${current}/progress-notes`, formJson(e.target), "#doc-msg"); };
+  $("#nursing-form").onsubmit = (e) => { e.preventDefault();
+    postAction(`/api/inpatient/admissions/${current}/nursing-records`, formJson(e.target), "#doc-msg"); };
+  $("#vital-form").onsubmit = (e) => { e.preventDefault();
+    postAction(`/api/inpatient/admissions/${current}/vitals`,
+      formJson(e.target, ["temperature", "pulse", "respiration", "sbp", "dbp"]), "#doc-msg"); };
+  $("#handover-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/inpatient/handovers", formJson(e.target, ["ward_id", "critical_count"]), "#doc-msg"); };
+}
+
+/* ---------------- 手术麻醉 ---------------- */
+
+async function renderSurgery() {
+  $("#page-desc").textContent = "申请 → 审批（申请人不得自批）→ 手术间排班（区间重叠拦截）→ 术中记录；病案首页手术栏自动取术式";
+  const [requests, rooms, schedules, stats] = await Promise.all([
+    api("/api/surgery/requests"), api("/api/surgery/rooms"),
+    api("/api/surgery/schedules"), api("/api/surgery/stats")]);
+  const roomName = Object.fromEntries(rooms.map((r) => [r.id, r.name]));
+  $("#page-body").innerHTML = `
+    ${stats.length ? `<div class="panel"><h3>手术量统计</h3>${
+      table(["机构", "台次", "切口构成", "麻醉构成", "并发症"], stats, (s) =>
+        `<tr><td>${esc(s.org_name)}</td><td>${s.total}</td>
+         <td>${Object.entries(s.by_incision).map(([k, v]) => `${k}类:${v}`).join(" ")}</td>
+         <td>${Object.entries(s.by_anesthesia).map(([k, v]) => `${ANESTHESIA[k] || k}:${v}`).join(" ")}</td>
+         <td>${s.complications}</td></tr>`)}</div>` : ""}
+    <div class="panel"><h3>手术间（admin 建档）</h3>
+      <form class="inline" id="room-form"><input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="name" placeholder="手术间名称" required><button>新建</button></form>
+      <p class="msg" id="surg-msg"></p>
+      ${table(["ID", "机构", "名称", "状态"], rooms, (r) =>
+        `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${esc(r.name)}</td>
+         <td><span class="tag ${r.active ? "green" : ""}">${r.active ? "启用" : "停用"}</span></td></tr>`)}</div>
+    <div class="panel"><h3>提出手术申请（医师）</h3>
+      <form class="inline" id="surg-form"><input name="admission_id" type="number" placeholder="住院ID" required>
+        <input name="surgery_name" placeholder="拟施手术" required>
+        <select name="incision_level"><option value="I">I类切口</option><option value="II" selected>II类切口</option>
+          <option value="III">III类切口</option><option value="IV">IV类切口</option></select>
+        <select name="anesthesia_type">${Object.entries(ANESTHESIA).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <select name="urgency">${Object.entries(URGENCY).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <input name="planned_date" placeholder="拟手术日 YYYY-MM-DD"><button>提出申请</button></form></div>
+    <div class="panel"><h3>手术申请（${requests.length}）</h3>${
+      table(["ID", "住院", "术式", "切口", "麻醉", "急缓", "状态", "操作"], requests, (r) => {
+        const [text, color] = SURGERY_STATUS[r.status] || [r.status, ""];
+        let ops = "—";
+        if (r.status === "requested") ops = `<button class="btn secondary" data-approve="${r.id}">审批通过</button>
+          <button class="btn danger" data-reject="${r.id}">否决</button>`;
+        else if (r.status === "approved") ops = `<button class="btn secondary" data-schedule="${r.id}">排班</button>`;
+        else if (r.status === "scheduled") ops = `<button class="btn secondary" data-record="${r.id}">术中记录</button>`;
+        else if (r.status === "completed") ops = `<button class="btn" data-view="${r.id}">查看记录</button>`;
+        return `<tr><td>${r.id}</td><td>${r.admission_id}</td><td>${esc(r.surgery_name)}</td>
+          <td>${esc(r.incision_level)}</td><td>${esc(ANESTHESIA[r.anesthesia_type] || "")}</td>
+          <td>${esc(URGENCY[r.urgency] || "")}</td><td><span class="tag ${color}">${text}</span></td><td>${ops}</td></tr>`;
+      })}</div>
+    <div class="panel"><h3>手术排班表</h3>${
+      table(["日期", "手术间", "时段", "术式", "术者", "麻醉", "急缓"], schedules, (s) =>
+        `<tr><td>${esc(s.scheduled_date)}</td><td>${esc(s.room_name)}</td><td>${esc(s.start_time)}-${esc(s.end_time)}</td>
+         <td>${esc(s.surgery_name)}</td><td>${esc(s.surgeon_name)}</td>
+         <td>${esc(ANESTHESIA[s.anesthesia_type] || "")}</td><td>${esc(URGENCY[s.urgency] || "")}</td></tr>`)}</div>
+    <div class="panel hidden" id="surg-detail"><h3>术中记录</h3><div id="surg-detail-body"></div></div>`;
+
+  $("#room-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/surgery/rooms", formJson(e.target, ["org_id"]), "#surg-msg"); };
+  $("#surg-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/surgery/requests", formJson(e.target, ["admission_id"]), "#surg-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.approve) await api(`/api/surgery/requests/${d.approve}/approve`,
+        { method: "POST", body: JSON.stringify({ approved: true }) });
+      else if (d.reject) await api(`/api/surgery/requests/${d.reject}/approve`,
+        { method: "POST", body: JSON.stringify({ approved: false }) });
+      else if (d.schedule) {
+        const room = prompt("手术间ID"); if (!room) return;
+        const date = prompt("手术日期 YYYY-MM-DD"); if (!date) return;
+        const start = prompt("开始时间 HH:MM"); if (!start) return;
+        const end = prompt("结束时间 HH:MM"); if (!end) return;
+        await api(`/api/surgery/requests/${d.schedule}/schedule`, { method: "POST",
+          body: JSON.stringify({ room_id: Number(room), scheduled_date: date, start_time: start, end_time: end }) });
+      } else if (d.record) {
+        const name = prompt("实际术式"); if (!name) return;
+        await api(`/api/surgery/requests/${d.record}/record`, { method: "POST",
+          body: JSON.stringify({ actual_surgery_name: name,
+            anesthetist_name: prompt("麻醉医师") || "", findings: prompt("术中所见") || "",
+            blood_loss_ml: Number(prompt("出血量 ml") || 0), outcome: "好转" }) });
+      } else if (d.view) {
+        const rec = await api(`/api/surgery/requests/${d.view}/record`);
+        $("#surg-detail").classList.remove("hidden");
+        $("#surg-detail-body").innerHTML = table(["项", "值"],
+          [["实际术式", rec.actual_surgery_name], ["术者", rec.surgeon_name], ["麻醉医师", rec.anesthetist_name],
+           ["麻醉方式", ANESTHESIA[rec.anesthesia_type] || rec.anesthesia_type], ["切口等级", rec.incision_level],
+           ["起止", `${rec.start_at} ~ ${rec.end_at}`], ["出血量", `${rec.blood_loss_ml} ml`],
+           ["术中所见", rec.findings], ["并发症", rec.complications || "无"], ["转归", rec.outcome]],
+          ([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`);
+        return;
+      } else return;
+      route();
+    } catch (err) { setMsg("#surg-msg", err.message, false); }
+  };
+}
+
+/* ---------------- 随访中心 ---------------- */
+
+async function renderFollowups() {
+  $("#page-desc").textContent = "慢病 / 出院 / 术后 / 妇幼四类随访统一任务；出院与手术结案自动派生";
+  const [pending, overdue, stats] = await Promise.all([
+    api("/api/followups?status=pending"), api("/api/followups/overdue"), api("/api/followups/stats")]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>随访完成情况</h3>${
+      table(["类别", "待随访", "已完成", "已取消", "超期", "完成率"], stats, (s) =>
+        `<tr><td>${esc(s.category_name)}</td><td>${s.pending}</td><td>${s.done}</td>
+         <td>${s.cancelled}</td><td><span class="tag ${s.overdue ? "red" : "green"}">${s.overdue}</span></td>
+         <td>${s.completion_rate_pct}%</td></tr>`)}
+      <p class="desc">完成率分母排除已取消项——取消的任务不该拉低随访绩效。</p></div>
+    <div class="panel"><h3>超期未随访（${overdue.length}）</h3>${
+      table(["ID", "患者", "类别", "事项", "应随访日", "操作"], overdue, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.patient_name)}</td><td>${esc(t.category_name)}</td>
+         <td>${esc(t.title)}</td><td><span class="tag red">${esc(t.due_date)}</span></td>
+         <td><button class="btn secondary" data-done="${t.id}">完成随访</button></td></tr>`)}</div>
+    <div class="panel"><h3>待随访任务（${pending.length}）</h3>
+      <form class="inline" id="fu-form"><input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="category"><option value="chronic">慢病随访</option><option value="discharge">出院随访</option>
+          <option value="surgery">术后随访</option><option value="maternal">妇幼访视</option></select>
+        <input name="due_date" placeholder="应随访日 YYYY-MM-DD" required>
+        <input name="assigned_to" placeholder="负责人"><button>补建任务</button></form>
+      <p class="msg" id="fu-msg"></p>
+      ${table(["ID", "患者", "机构", "类别", "事项", "应随访日", "操作"], pending, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.patient_name)}</td><td>${esc(t.org_name)}</td>
+         <td>${esc(t.category_name)}</td><td>${esc(t.title)}</td><td>${esc(t.due_date)}</td>
+         <td><button class="btn secondary" data-done="${t.id}">完成</button>
+             <button class="btn danger" data-cancel="${t.id}">取消</button></td></tr>`)}</div>`;
+  $("#fu-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/followups", formJson(e.target, ["patient_id", "org_id"]), "#fu-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.done) {
+        const result = prompt("随访结果"); if (!result) return;
+        await api(`/api/followups/${d.done}/complete`, { method: "POST", body: JSON.stringify({ result }) });
+      } else if (d.cancel) await api(`/api/followups/${d.cancel}/cancel`, { method: "POST" });
+      else return;
+      route();
+    } catch (err) { setMsg("#fu-msg", err.message, false); }
+  };
+}
+
+/* ---------------- 会计核算 ---------------- */
+
+async function renderAccounting() {
+  $("#page-desc").textContent = "会计科目 + 记账凭证（借贷必平强校验）→ 过账锁定 → 试算平衡表；作废而不删除";
+  const period = localStorage.getItem("medplat_acc_period") || new Date().toISOString().slice(0, 7);
+  const [subjects, vouchers, balance] = await Promise.all([
+    api("/api/accounting/subjects"), api(`/api/accounting/vouchers?period=${period}`),
+    api(`/api/accounting/trial-balance?period=${period}`)]);
+  const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
+  const options = subjects.map((s) => `<option value="${s.code}">${s.code} ${s.name}</option>`).join("");
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>会计期间</h3>
+      <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form></div>
+    <div class="panel"><h3>录入凭证</h3>
+      <form id="voucher-form">
+        <div class="inline"><input name="org_id" type="number" placeholder="机构ID" required>
+          <input name="voucher_no" placeholder="凭证号" required>
+          <input name="voucher_date" placeholder="凭证日期 YYYY-MM-DD" required>
+          <input name="summary" placeholder="摘要" style="min-width:220px"></div>
+        <div id="entry-rows"></div>
+        <div class="inline"><button type="button" id="add-entry" class="btn secondary">加一行分录</button>
+          <span id="entry-total" class="desc"></span></div>
+        <button>保存凭证（草稿）</button></form>
+      <p class="msg" id="acc-msg"></p></div>
+    <div class="panel"><h3>${esc(period)} 凭证（${vouchers.length}）</h3>${
+      table(["ID", "凭证号", "日期", "摘要", "借方", "贷方", "状态", "操作"], vouchers, (v) => {
+        const [text, color] = VS[v.status] || [v.status, ""];
+        const ops = v.status === "draft"
+          ? `<button class="btn secondary" data-post="${v.id}">过账</button>`
+          : (v.status === "posted" ? `<button class="btn danger" data-void="${v.id}">作废</button>` : "—");
+        return `<tr><td>${v.id}</td><td>${esc(v.voucher_no)}</td><td>${esc(v.voucher_date)}</td>
+          <td>${esc(v.summary)}</td><td>${v.total_debit.toFixed(2)}</td><td>${v.total_credit.toFixed(2)}</td>
+          <td><span class="tag ${color}">${text}</span></td>
+          <td><button class="btn" data-detail="${v.id}">明细</button> ${ops}</td></tr>`;
+      })}</div>
+    <div class="panel"><h3>试算平衡表（仅统计已过账）</h3>
+      <p class="msg ${balance.balanced ? "ok" : "err"}">借方合计 ${balance.total_debit.toFixed(2)}　贷方合计 ${
+        balance.total_credit.toFixed(2)}　${balance.balanced ? "平衡" : "不平衡"}</p>
+      ${table(["科目", "名称", "类别", "借方", "贷方"], balance.lines, (l) =>
+        `<tr><td>${esc(l.subject_code)}</td><td>${esc(l.subject_name)}</td><td>${esc(l.category)}</td>
+         <td>${l.debit.toFixed(2)}</td><td>${l.credit.toFixed(2)}</td></tr>`)}</div>
+    <div class="panel hidden" id="voucher-detail"><h3>凭证明细</h3><div id="voucher-detail-body"></div></div>`;
+
+  const addEntryRow = () => {
+    const row = document.createElement("div");
+    row.className = "inline entry-row";
+    row.innerHTML = `<select class="e-subject">${options}</select>
+      <input class="e-summary" placeholder="分录摘要">
+      <input class="e-debit" type="number" step="0.01" placeholder="借方">
+      <input class="e-credit" type="number" step="0.01" placeholder="贷方">`;
+    $("#entry-rows").appendChild(row);
+    row.oninput = refreshTotal;
+  };
+  const refreshTotal = () => {
+    let debit = 0, credit = 0;
+    document.querySelectorAll(".entry-row").forEach((r) => {
+      debit += Number(r.querySelector(".e-debit").value || 0);
+      credit += Number(r.querySelector(".e-credit").value || 0);
+    });
+    const el = $("#entry-total");
+    // 借贷是否相等实时提示，避免提交后才被 422 打回
+    el.textContent = `借方合计 ${debit.toFixed(2)}　贷方合计 ${credit.toFixed(2)}　${
+      Math.abs(debit - credit) < 0.005 ? "✓ 平衡" : "✗ 不平"}`;
+    el.style.color = Math.abs(debit - credit) < 0.005 ? "#1e7e34" : "#c0392b";
+  };
+  addEntryRow(); addEntryRow(); refreshTotal();
+  $("#add-entry").onclick = addEntryRow;
+  $("#acc-period").onsubmit = (e) => { e.preventDefault();
+    localStorage.setItem("medplat_acc_period", new FormData(e.target).get("period")); route(); };
+  $("#voucher-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const head = formJson(e.target, ["org_id"]);
+    const entries = [...document.querySelectorAll(".entry-row")].map((r) => ({
+      subject_code: r.querySelector(".e-subject").value,
+      summary: r.querySelector(".e-summary").value,
+      debit: Number(r.querySelector(".e-debit").value || 0),
+      credit: Number(r.querySelector(".e-credit").value || 0),
+    })).filter((x) => x.debit > 0 || x.credit > 0);
+    postAction("/api/accounting/vouchers", { ...head, period, entries }, "#acc-msg");
+  };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.post) await api(`/api/accounting/vouchers/${d.post}/post`, { method: "POST" });
+      else if (d.void) { if (!confirm("作废该凭证？")) return;
+        await api(`/api/accounting/vouchers/${d.void}/void`, { method: "POST" }); }
+      else if (d.detail) {
+        const v = await api(`/api/accounting/vouchers/${d.detail}`);
+        $("#voucher-detail").classList.remove("hidden");
+        $("#voucher-detail-body").innerHTML = table(["科目", "摘要", "借方", "贷方"], v.entries, (x) =>
+          `<tr><td>${esc(x.subject_code)}</td><td>${esc(x.summary)}</td>
+           <td>${x.debit.toFixed(2)}</td><td>${x.credit.toFixed(2)}</td></tr>`);
+        return;
+      } else return;
+      route();
+    } catch (err) { setMsg("#acc-msg", err.message, false); }
+  };
+}
+
+/* ---------------- 成本核算 ---------------- */
+
+async function renderCost() {
+  $("#page-desc").textContent = "科室直接成本归集 → 分摊（行政/医技→临床）→ 诊次成本与床日成本（分母为实际占用床日）";
+  const period = localStorage.getItem("medplat_cost_period") || new Date().toISOString().slice(0, 7);
+  const orgId = Number(localStorage.getItem("medplat_cost_org") || 0);
+  const [depts, costs, rules] = await Promise.all([
+    api("/api/mgmt/departments"), api(`/api/cost/departments?period=${period}`),
+    api("/api/cost/allocation-rules")]);
+  const unit = orgId ? await api(`/api/cost/unit-cost?period=${period}&org_id=${orgId}`).catch(() => null) : null;
+  const deptName = Object.fromEntries(depts.map((d) => [d.id, d.name]));
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>期间与机构</h3>
+      <form class="inline" id="cost-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM">
+        <input name="org_id" type="number" value="${orgId || ""}" placeholder="机构ID（算单位成本）"><button>切换</button></form></div>
+    ${unit ? `<div class="panel"><h3>单位成本</h3>${
+      table(["总成本", "门诊人次", "占用床日", "门诊成本", "住院成本", "诊次成本", "床日成本"], [unit], (u) =>
+        `<tr><td>${u.total_cost.toFixed(2)}</td><td>${u.outpatient_visits}</td><td>${u.occupied_bed_days}</td>
+         <td>${u.outpatient_cost.toFixed(2)}</td><td>${u.inpatient_cost.toFixed(2)}</td>
+         <td><b>${u.cost_per_visit.toFixed(2)}</b></td><td><b>${u.cost_per_bed_day.toFixed(2)}</b></td></tr>`)}
+      <p class="desc">床日成本分母是实际占用床日，不是床位数×天数——后者是可用床日，混用会把成本算低。</p></div>` : ""}
+    <div class="panel"><h3>归集科室直接成本</h3>
+      <form class="inline" id="cost-form"><select name="dept_id">${
+        depts.map((d) => `<option value="${d.id}">${esc(d.name)}（${d.category}）</option>`).join("")}</select>
+        <input name="period" value="${esc(period)}" placeholder="YYYY-MM" required>
+        <select name="cost_type">${Object.entries(COST_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <input name="amount" type="number" step="0.01" placeholder="金额" required><button>归集</button></form>
+      <p class="msg" id="cost-msg"></p>
+      <p class="desc">同科室同期间同成本项重复提交按覆盖处理——月末成本反复调整是常态。</p></div>
+    <div class="panel"><h3>分摊规则</h3>
+      <form class="inline" id="alloc-form">
+        <select name="from_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
+        →<select name="to_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
+        <input name="ratio_pct" type="number" step="0.01" placeholder="比例%" required><button>新增规则</button></form>
+      ${table(["来源科室", "目标科室", "比例"], rules, (r) =>
+        `<tr><td>${esc(deptName[r.from_dept_id] || r.from_dept_id)}</td>
+         <td>${esc(deptName[r.to_dept_id] || r.to_dept_id)}</td><td>${r.ratio_pct}%</td></tr>`)}</div>
+    <div class="panel"><h3>${esc(period)} 科室成本</h3>${
+      table(["科室", "类别", "直接成本", "分摊转入", "分摊转出", "总成本", "未分摊"], costs, (c) =>
+        `<tr><td>${esc(c.dept_name)}</td><td>${esc(c.dept_category)}</td><td>${c.direct_cost.toFixed(2)}</td>
+         <td>${c.allocated_in.toFixed(2)}</td><td>${c.allocated_out.toFixed(2)}</td>
+         <td><b>${c.total_cost.toFixed(2)}</b></td>
+         <td>${c.unallocated_ratio_amount ? `<span class="tag orange">${c.unallocated_ratio_amount.toFixed(2)}</span>` : "—"}</td></tr>`)}
+      ${costs.length ? barChart(costs.map((c) => [c.dept_name, c.total_cost])) : ""}</div>`;
+  $("#cost-period").onsubmit = (e) => { e.preventDefault();
+    const f = new FormData(e.target);
+    localStorage.setItem("medplat_cost_period", f.get("period"));
+    localStorage.setItem("medplat_cost_org", f.get("org_id") || "");
+    route(); };
+  $("#cost-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/cost/departments", formJson(e.target, ["dept_id", "amount"]), "#cost-msg"); };
+  $("#alloc-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/cost/allocation-rules", formJson(e.target, ["from_dept_id", "to_dept_id", "ratio_pct"]), "#cost-msg"); };
+}
+
+/* ---------------- 物资采购与高值耗材 ---------------- */
+
+async function renderMaterials() {
+  $("#page-desc").textContent = "非药品物资：申请 → 审批 → 合同 → 验收（自动入库流水）；高值耗材一物一码正反向追溯";
+  const [purchases, consumables] = await Promise.all([
+    api("/api/materials/purchases"), api("/api/materials/consumables")]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>提出采购申请</h3>
+      <form class="inline" id="mp-form"><input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="dept_id" type="number" placeholder="科室ID">
+        <input name="item_name" placeholder="物资名称" required><input name="spec" placeholder="规格">
+        <input name="unit" placeholder="单位" value="件"><input name="quantity" type="number" placeholder="数量" required>
+        <input name="estimated_price" type="number" step="0.01" placeholder="预估单价">
+        <input name="reason" placeholder="事由"><button>提交申请</button></form>
+      <p class="msg" id="mat-msg"></p></div>
+    <div class="panel"><h3>采购流程（${purchases.length}）</h3>${
+      table(["ID", "物资", "规格", "数量", "状态", "合同", "已验收", "操作"], purchases, (p) => {
+        const [text, color] = PURCHASE_STATUS[p.status] || [p.status, ""];
+        let ops = "—";
+        if (p.status === "requested") ops = `<button class="btn secondary" data-approve="${p.id}">审批</button>`;
+        else if (p.status === "approved") ops = `<button class="btn secondary" data-contract="${p.id}">签合同</button>`;
+        else if (p.status === "contracted") ops = `<button class="btn secondary" data-receive="${p.id}">验收</button>`;
+        return `<tr><td>${p.id}</td><td>${esc(p.item_name)}</td><td>${esc(p.spec)}</td><td>${p.quantity}${esc(p.unit)}</td>
+          <td><span class="tag ${color}">${text}</span></td><td>${esc(p.contract_no || "—")}</td>
+          <td>${p.received_quantity || "—"}</td><td>${ops}</td></tr>`;
+      })}</div>
+    <div class="panel"><h3>高值耗材登记（一物一码）</h3>
+      <form class="inline" id="hv-form"><input name="barcode" placeholder="条码" required>
+        <input name="name" placeholder="耗材名称" required><input name="spec" placeholder="规格">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="supplier_id" type="number" placeholder="供应商ID"><input name="batch_no" placeholder="批号">
+        <input name="expire_date" placeholder="效期 YYYY-MM-DD">
+        <input name="unit_price" type="number" step="0.01" placeholder="单价"><button>入库登记</button></form>
+      <form class="inline" id="trace-form"><input name="barcode" placeholder="按条码追溯" required><button>追溯</button></form>
+      <div id="trace-result"></div></div>
+    <div class="panel"><h3>耗材台账（${consumables.length}）</h3>${
+      table(["条码", "名称", "批号", "效期", "状态", "用于患者", "关联手术", "操作"], consumables, (c) => {
+        const [text, color] = CONSUMABLE_STATUS[c.status] || [c.status, ""];
+        return `<tr><td>${esc(c.barcode)}</td><td>${esc(c.name)}</td><td>${esc(c.batch_no)}</td>
+          <td>${esc(c.expire_date)}</td><td><span class="tag ${color}">${text}</span></td>
+          <td>${esc(c.used_patient_name || "—")}</td><td>${esc(c.used_surgery_name || "—")}</td>
+          <td>${c.status === "in_stock" ? `<button class="btn secondary" data-use="${c.barcode}">使用登记</button>` : "—"}</td></tr>`;
+      })}</div>`;
+  $("#mp-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/materials/purchases", formJson(e.target, ["org_id", "dept_id", "quantity", "estimated_price"]), "#mat-msg"); };
+  $("#hv-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/materials/consumables", formJson(e.target, ["org_id", "supplier_id", "unit_price"]), "#mat-msg"); };
+  $("#trace-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const c = await api(`/api/materials/consumables/trace/${new FormData(e.target).get("barcode")}`);
+      $("#trace-result").innerHTML = table(["项", "值"],
+        [["条码", c.barcode], ["名称", c.name], ["规格", c.spec], ["供应商", c.supplier_name],
+         ["批号", c.batch_no], ["效期", c.expire_date], ["状态", CONSUMABLE_STATUS[c.status][0]],
+         ["用于患者", c.used_patient_name || "—"], ["关联手术", c.used_surgery_name || "—"], ["使用时间", c.used_at || "—"]],
+        ([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`);
+    } catch (err) { setMsg("#mat-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.approve) await api(`/api/materials/purchases/${d.approve}/approve`,
+        { method: "POST", body: JSON.stringify({ approved: true }) });
+      else if (d.contract) {
+        const supplier = prompt("供应商ID"); if (!supplier) return;
+        await api(`/api/materials/purchases/${d.contract}/contract`, { method: "POST",
+          body: JSON.stringify({ supplier_id: Number(supplier), contract_no: prompt("合同号") || "",
+            contract_amount: Number(prompt("合同金额") || 0) }) });
+      } else if (d.receive) {
+        const qty = prompt("验收数量"); if (!qty) return;
+        await api(`/api/materials/purchases/${d.receive}/receive`, { method: "POST",
+          body: JSON.stringify({ received_quantity: Number(qty), note: prompt("验收备注") || "" }) });
+      } else if (d.use) {
+        const pid = prompt("使用患者ID"); if (!pid) return;
+        const sid = prompt("关联手术申请ID（可留空）");
+        await api(`/api/materials/consumables/${d.use}/use`, { method: "POST",
+          body: JSON.stringify({ patient_id: Number(pid), surgery_id: sid ? Number(sid) : null }) });
+      } else return;
+      route();
+    } catch (err) { setMsg("#mat-msg", err.message, false); }
+  };
+}
+
+/* ---------------- 决策指标扩展 ---------------- */
+
+async function renderAnalytics() {
+  $("#page-desc").textContent = "县域就诊率与就医流向 / 运行效率 / 自定义绩效公式与综合报告";
+  const period = localStorage.getItem("medplat_ana_period") || new Date().toISOString().slice(0, 7);
+  const [flow, eff, formulas, vars] = await Promise.all([
+    api("/api/analytics/patient-flow"), api(`/api/analytics/efficiency?period=${period}`),
+    api("/api/analytics/formulas"), api("/api/analytics/formula-variables")]);
+  const report = currentRole() === "admin" || currentRole() === "director"
+    ? await api(`/api/analytics/performance-report?period=${period}`).catch(() => null) : null;
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>期间</h3>
+      <form class="inline" id="ana-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form></div>
+    <div class="panel"><h3>就医流向</h3>
+      <div class="cards">
+        <div class="card"><span class="k">县域就诊率</span><b>${flow.county_visit_rate_pct}%</b></div>
+        <div class="card"><span class="k">外转率</span><b>${flow.outbound_rate_pct}%</b></div>
+        <div class="card"><span class="k">有序转诊率</span><b>${flow.ordered_referral_rate_pct}%</b></div>
+        <div class="card"><span class="k">县外就诊人次</span><b>${flow.outside_visits}</b></div>
+        <div class="card"><span class="k">县外费用</span><b>${flow.outside_amount.toFixed(0)}</b></div>
+      </div>
+      <form class="inline" id="ob-form"><input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="visit_date" placeholder="就诊日 YYYY-MM-DD" required>
+        <input name="external_org_name" placeholder="县外机构名称" required>
+        <select name="external_org_level"><option value="city">市级</option><option value="province">省级</option><option value="other">其他</option></select>
+        <select name="visit_type"><option value="outpatient">门急诊</option><option value="inpatient">住院</option></select>
+        <input name="total_amount" type="number" step="0.01" placeholder="总费用">
+        <input name="insurance_pay" type="number" step="0.01" placeholder="医保支付">
+        <input name="referral_id" type="number" placeholder="转诊单ID（有则为有序转诊）">
+        <button>登记县外就诊</button></form>
+      <p class="msg" id="ana-msg"></p></div>
+    <div class="panel"><h3>运行效率（${esc(period)}）</h3>${
+      table(["机构", "床位", "出院", "占用床日", "平均住院日", "床位周转", "使用率", "诊疗量", "医师", "日均担负"], eff, (r) =>
+        `<tr><td>${esc(r.org_name)}</td><td>${r.beds}</td><td>${r.discharges}</td><td>${r.occupied_bed_days}</td>
+         <td>${r.avg_length_of_stay}</td><td>${r.bed_turnover}</td><td>${r.bed_occupancy_rate_pct}%</td>
+         <td>${r.visits}</td><td>${r.doctors}</td><td>${r.visits_per_doctor_per_day}</td></tr>`)}</div>
+    <div class="panel"><h3>自定义绩效公式</h3>
+      <form class="inline" id="formula-form"><input name="key" placeholder="编码" required>
+        <input name="name" placeholder="名称" required>
+        <input name="expression" placeholder="表达式，如 round(referrals_up / encounters * 100, 2)" required style="min-width:320px">
+        <input name="unit" placeholder="单位"><input name="weight" type="number" step="0.1" placeholder="权重(0=只观测)">
+        <button>新增公式</button></form>
+      <p class="desc">可用变量：${vars.map((v) => `<code>${esc(v.name)}</code>=${esc(v.description)}`).join("　")}</p>
+      ${table(["编码", "名称", "表达式", "单位", "权重", "状态", "操作"], formulas, (f) =>
+        `<tr><td>${esc(f.key)}</td><td>${esc(f.name)}</td><td><code>${esc(f.expression)}</code></td>
+         <td>${esc(f.unit)}</td><td>${f.weight}</td>
+         <td><span class="tag ${f.active ? "green" : ""}">${f.active ? "启用" : "停用"}</span></td>
+         <td>${f.active ? `<button class="btn danger" data-off="${f.key}">停用</button>` : "—"}</td></tr>`)}</div>
+    ${report ? `<div class="panel"><h3>期末综合绩效报告（${esc(period)}）</h3>${
+      table(["排名", "机构", "层级", ...report.orgs[0] ? report.orgs[0].items.map((i) => i.name) : [], "加权得分"],
+        report.orgs, (o, idx) =>
+        `<tr><td>${idx + 1}</td><td>${esc(o.org_name)}</td><td>${esc(o.level)}</td>
+         ${o.items.map((i) => `<td>${i.value === null ? `<span class="tag red" title="${esc(i.error || "")}">错误</span>` : i.value}</td>`).join("")}
+         <td><b>${o.weighted_score}</b></td></tr>`)}</div>` : ""}`;
+  $("#ana-period").onsubmit = (e) => { e.preventDefault();
+    localStorage.setItem("medplat_ana_period", new FormData(e.target).get("period")); route(); };
+  $("#ob-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/analytics/outbound-visits",
+      formJson(e.target, ["patient_id", "total_amount", "insurance_pay", "referral_id"]), "#ana-msg"); };
+  $("#formula-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/analytics/formulas", formJson(e.target, ["weight"]), "#ana-msg"); };
+  $("#page-body").onclick = async (e) => {
+    if (!e.target.dataset.off) return;
+    try { await api(`/api/analytics/formulas/${e.target.dataset.off}`, { method: "DELETE" }); route(); }
+    catch (err) { setMsg("#ana-msg", err.message, false); }
+  };
+}
+
+/* ---------------- 统一规则引擎 ---------------- */
+
+async function renderRules() {
+  $("#page-desc").textContent = "条件 DSL 新增规则免改代码；目录并入四套既有规则（engine 列标明执行路径）";
+  const [catalog, domains, rules] = await Promise.all([
+    api("/api/rules/catalog"), api("/api/rules/domains"), api("/api/rules")]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>全平台规则总目录（${catalog.total}）</h3>
+      <div class="cards">${Object.entries(catalog.by_source).map(([k, v]) =>
+        `<div class="card"><span class="k">${esc(k)}</span><b>${v}</b></div>`).join("")}</div>
+      ${table(["来源", "执行引擎", "域", "编码", "名称", "定义", "状态"], catalog.entries, (e) =>
+        `<tr><td>${esc(e.source)}</td>
+         <td><span class="tag ${e.engine === "unified" ? "green" : ""}">${e.engine === "unified" ? "统一引擎" : "既有实现"}</span></td>
+         <td>${esc(e.domain)}</td><td>${esc(e.key)}</td><td>${esc(e.name)}</td>
+         <td><code>${esc(e.detail)}</code></td>
+         <td>${e.active ? "启用" : "停用"}</td></tr>`)}
+      <p class="desc">目录已统一，执行路径尚未统一——engine 列如实标出，不含糊其辞。</p></div>
+    <div class="panel"><h3>新增统一规则（admin）</h3>
+      <form class="inline" id="rule-form"><input name="key" placeholder="编码" required>
+        <input name="name" placeholder="名称" required>
+        <select name="domain">${domains.map((d) => `<option value="${d.domain}">${esc(d.domain)}</option>`).join("")}</select>
+        <input name="condition" placeholder="条件，如 daily_dose > max_daily_dose and age >= 65" required style="min-width:340px">
+        <input name="message" placeholder="命中提示">
+        <select name="severity"><option value="info">提示</option><option value="warning" selected>警告</option><option value="error">拦截</option></select>
+        <input name="deduct_points" type="number" placeholder="扣分"><button>新增</button></form>
+      <p class="msg" id="rule-msg"></p>
+      ${domains.map((d) => `<p class="desc"><b>${esc(d.domain)}</b>：${
+        d.variables.map((v) => `<code>${esc(v.name)}</code>(${esc(v.type)})`).join("　")}</p>`).join("")}
+      ${table(["编码", "名称", "域", "条件", "严重度", "扣分", "状态", "操作"], rules, (r) => {
+        const [text, color] = SEVERITY[r.severity] || [r.severity, ""];
+        return `<tr><td>${esc(r.key)}</td><td>${esc(r.name)}</td><td>${esc(r.domain)}</td>
+          <td><code>${esc(r.condition)}</code></td><td><span class="tag ${color}">${text}</span></td>
+          <td>${r.deduct_points}</td><td>${r.active ? "启用" : "停用"}</td>
+          <td>${r.active ? `<button class="btn danger" data-off="${r.key}">停用</button>` : "—"}</td></tr>`;
+      })}</div>
+    <div class="panel"><h3>在线试算</h3>
+      <form id="eval-form"><div class="inline">
+        <select name="domain">${domains.map((d) => `<option value="${d.domain}">${esc(d.domain)}</option>`).join("")}</select>
+        <input name="variables" placeholder='变量 JSON，如 {"daily_dose": 3000, "age": 78}' required style="min-width:420px">
+        <button>试算</button></div></form>
+      <div id="eval-result"></div></div>`;
+  $("#rule-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/rules", formJson(e.target, ["deduct_points"]), "#rule-msg"); };
+  $("#eval-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    let variables;
+    try { variables = JSON.parse(f.get("variables")); }
+    catch { setMsg("#rule-msg", "变量必须是合法 JSON", false); return; }
+    try {
+      const r = await api("/api/rules/evaluate", { method: "POST",
+        body: JSON.stringify({ domain: f.get("domain"), variables }) });
+      $("#eval-result").innerHTML = `
+        <p class="msg ${r.blocked ? "err" : "ok"}">求值 ${r.evaluated} 条，命中 ${r.hits.length} 条，
+          合计扣分 ${r.total_deduction}${r.blocked ? "，存在拦截级命中" : ""}</p>
+        ${table(["规则", "严重度", "提示", "扣分"], r.hits, (h) =>
+          `<tr><td>${esc(h.name)}</td><td>${esc((SEVERITY[h.severity] || [h.severity])[0])}</td>
+           <td>${esc(h.message)}</td><td>${h.deduct_points}</td></tr>`)}
+        ${r.errors.length ? `<p class="msg err">求值失败的规则：${
+          r.errors.map((x) => `${esc(x.key)}（${esc(x.error)}）`).join("、")}</p>` : ""}`;
+    } catch (err) { setMsg("#rule-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    if (!e.target.dataset.off) return;
+    try { await api(`/api/rules/${e.target.dataset.off}`, { method: "DELETE" }); route(); }
+    catch (err) { setMsg("#rule-msg", err.message, false); }
+  };
+}
+
+/* ---------------- 流程引擎与统一申请单中心 ---------------- */
+
+async function renderWorkflows() {
+  $("#page-desc").textContent = "流程定义 JSON 化、节点角色守卫、流转留痕；我的待办按角色过滤";
+  const [definitions, instances, tasks] = await Promise.all([
+    api("/api/workflows/definitions"), api("/api/workflows/instances?status=running"),
+    api("/api/workflows/my-tasks")]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>我的待办（${tasks.count}）</h3>${
+      table(["实例", "流程", "事项", "当前节点", "需要角色", "操作"], tasks.tasks, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.definition_key)}</td><td>${esc(t.title)}</td>
+         <td>${esc(t.current_node_name || t.current_node)}</td><td>${esc(t.current_node_role || "任意")}</td>
+         <td><button class="btn secondary" data-advance="${t.id}">推进</button>
+             <button class="btn danger" data-cancel="${t.id}">终止</button></td></tr>`)}
+      <p class="msg" id="wf-msg"></p></div>
+    <div class="panel"><h3>流程定义（admin）</h3>
+      <form class="inline" id="def-form"><input name="key" placeholder="流程编码" required>
+        <input name="name" placeholder="流程名称" required>
+        <input name="nodes" placeholder='节点 JSON，如 [{"key":"apply","name":"申请","role":"doctor","next":"approve"},{"key":"approve","name":"审批","role":"director","next":""}]'
+          required style="min-width:420px"><button>新建定义</button></form>
+      ${table(["编码", "名称", "节点链", "状态"], definitions, (d) =>
+        `<tr><td>${esc(d.key)}</td><td>${esc(d.name)}</td>
+         <td>${d.nodes.map((n) => `${esc(n.name)}${n.role ? `(${esc(n.role)})` : ""}`).join(" → ")}</td>
+         <td>${d.active ? "启用" : "停用"}</td></tr>`)}</div>
+    <div class="panel"><h3>发起流程</h3>
+      <form class="inline" id="inst-form">
+        <select name="definition_key">${definitions.map((d) => `<option value="${d.key}">${esc(d.name)}</option>`).join("")}</select>
+        <input name="business_type" placeholder="业务类型" required><input name="business_id" type="number" placeholder="业务ID">
+        <input name="title" placeholder="事项标题" style="min-width:220px">
+        <input name="org_id" type="number" placeholder="机构ID"><button>发起</button></form></div>
+    <div class="panel"><h3>流转中实例（${instances.length}）</h3>${
+      table(["ID", "流程", "事项", "当前节点", "更新时间", "操作"], instances, (i) =>
+        `<tr><td>${i.id}</td><td>${esc(i.definition_key)}</td><td>${esc(i.title)}</td>
+         <td>${esc(i.current_node_name || i.current_node)}</td><td>${esc(i.updated_at.slice(0, 16).replace("T", " "))}</td>
+         <td><button class="btn" data-history="${i.id}">流转记录</button></td></tr>`)}</div>
+    <div class="panel hidden" id="wf-history"><h3>流转记录</h3><div id="wf-history-body"></div></div>`;
+  $("#def-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    let nodes;
+    try { nodes = JSON.parse(f.get("nodes")); }
+    catch { setMsg("#wf-msg", "节点必须是合法 JSON 数组", false); return; }
+    postAction("/api/workflows/definitions", { key: f.get("key"), name: f.get("name"), nodes }, "#wf-msg");
+  };
+  $("#inst-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/workflows/instances", formJson(e.target, ["business_id", "org_id"]), "#wf-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.advance) await api(`/api/workflows/instances/${d.advance}/advance`, { method: "POST",
+        body: JSON.stringify({ comment: prompt("处理意见") || "" }) });
+      else if (d.cancel) { if (!confirm("终止该流程？")) return;
+        await api(`/api/workflows/instances/${d.cancel}/cancel`, { method: "POST",
+          body: JSON.stringify({ comment: prompt("终止原因") || "" }) }); }
+      else if (d.history) {
+        const rows = await api(`/api/workflows/instances/${d.history}/history`);
+        $("#wf-history").classList.remove("hidden");
+        $("#wf-history-body").innerHTML = table(["从", "到", "动作", "意见", "操作人", "时间"], rows, (h) =>
+          `<tr><td>${esc(h.from_node)}</td><td>${esc(h.to_node || "终态")}</td><td>${esc(h.action)}</td>
+           <td>${esc(h.comment)}</td><td>${esc(h.actor)}</td><td>${esc(h.created_at.slice(0, 16).replace("T", " "))}</td></tr>`);
+        return;
+      } else return;
+      route();
+    } catch (err) { setMsg("#wf-msg", err.message, false); }
+  };
+}
+
+async function renderServiceRequests() {
+  $("#page-desc").textContent = "预约 / 检查 / 会诊 / 用血 / 手术五类单据聚合视图，状态映射到统一口径";
+  const pid = localStorage.getItem("medplat_sr_patient") || "";
+  const data = await api(`/api/service-requests${pid ? `?patient_id=${pid}` : ""}`);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>筛选</h3>
+      <form class="inline" id="sr-form"><input name="patient_id" type="number" value="${esc(pid)}" placeholder="患者ID（留空看全部）">
+        <button>查询</button></form>
+      <div class="cards">
+        ${Object.entries(data.by_status).map(([k, v]) =>
+          `<div class="card"><span class="k">${esc((UNIFIED_STATUS[k] || [k])[0])}</span><b>${v}</b></div>`).join("")}
+        ${Object.entries(data.by_type).map(([k, v]) =>
+          `<div class="card"><span class="k">${esc(k)}</span><b>${v}</b></div>`).join("")}
+      </div>
+      <p class="desc">刻意不建第六张单据表：五类单据各有必要的领域字段与状态机，这里做的是聚合视图。</p></div>
+    <div class="panel"><h3>在办事项（${data.total}）</h3>${
+      table(["类型", "单号", "患者", "机构", "事项", "统一状态", "原生状态", "时间"], data.items, (i) => {
+        const [text, color] = UNIFIED_STATUS[i.status] || [i.status, ""];
+        return `<tr><td>${esc(i.request_type_name)}</td><td>${i.id}</td><td>${esc(i.patient_name)}</td>
+          <td>${esc(i.org_name)}</td><td>${esc(i.title)}</td>
+          <td><span class="tag ${color}">${text}</span></td><td>${esc(i.raw_status)}</td>
+          <td>${esc(i.created_at.slice(0, 16).replace("T", " "))}</td></tr>`;
+      })}</div>`;
+  $("#sr-form").onsubmit = (e) => { e.preventDefault();
+    localStorage.setItem("medplat_sr_patient", new FormData(e.target).get("patient_id") || ""); route(); };
+}
+
+/* ---------------- 定时任务 ---------------- */
+
+async function renderJobs() {
+  $("#page-desc").textContent = "任务注册表与执行留痕；多实例下靠 Redis 抢锁保证只跑一次";
+  const [jobs, runs] = await Promise.all([api("/api/jobs"), api("/api/jobs/runs")]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>任务清单（${jobs.length}）</h3>${
+      table(["任务", "说明", "间隔", "启停", "上次执行", "上次结果", "下次到期", "操作"], jobs, (j) =>
+        `<tr><td><code>${esc(j.name)}</code></td><td>${esc(j.title)}</td>
+         <td>${Math.round(j.interval_seconds / 60)} 分钟</td>
+         <td><span class="tag ${j.enabled ? "green" : "red"}">${j.enabled ? "启用" : "停用"}</span></td>
+         <td>${esc((j.last_run_at || "—").slice(0, 16).replace("T", " "))}</td>
+         <td>${j.last_status ? `<span class="tag ${j.last_status === "succeeded" ? "green" : "red"}">${
+           j.last_status === "succeeded" ? "成功" : "失败"}</span>` : "—"}</td>
+         <td>${esc((j.next_run_at || "—").slice(0, 16).replace("T", " "))}</td>
+         <td><button class="btn secondary" data-run="${j.name}">立即执行</button>
+             <button class="btn" data-toggle="${j.name}" data-enabled="${j.enabled}">${j.enabled ? "停用" : "启用"}</button>
+             <button class="btn" data-interval="${j.name}">改间隔</button>
+             ${j.implemented ? "" : '<span class="tag red">无实现</span>'}</td></tr>`)}
+      <p class="msg" id="job-msg"></p></div>
+    <div class="panel"><h3>执行历史（最近 ${runs.length} 条）</h3>${
+      table(["时间", "任务", "触发", "结果", "处理数", "耗时", "摘要"], runs, (r) =>
+        `<tr><td>${esc(r.created_at.slice(0, 19).replace("T", " "))}</td><td><code>${esc(r.job_name)}</code></td>
+         <td>${r.trigger === "manual" ? "人工" : "计划"}</td>
+         <td><span class="tag ${r.status === "succeeded" ? "green" : "red"}">${
+           r.status === "succeeded" ? "成功" : "失败"}</span></td>
+         <td>${r.affected}</td><td>${r.duration_ms} ms</td><td>${esc(r.message)}</td></tr>`)}</div>`;
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    try {
+      if (d.run) await api(`/api/jobs/${d.run}/run`, { method: "POST" });
+      else if (d.toggle) await api(`/api/jobs/${d.toggle}`, { method: "PATCH",
+        body: JSON.stringify({ enabled: d.enabled !== "true" }) });
+      else if (d.interval) {
+        const minutes = prompt("执行间隔（分钟，最小 1）"); if (!minutes) return;
+        await api(`/api/jobs/${d.interval}`, { method: "PATCH",
+          body: JSON.stringify({ interval_seconds: Number(minutes) * 60 }) });
+      } else return;
+      route();
+    } catch (err) { setMsg("#job-msg", err.message, false); }
+  };
+}

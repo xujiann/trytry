@@ -153,3 +153,40 @@ def test_referral_status_flow(client, auth_headers):
         f"/api/referrals/{rid}/status", json={"status": "completed"}, headers=auth_headers
     )
     assert completed.json()["status"] == "completed"
+
+
+def test_spa_covers_every_backend_module(client):
+    """T6·B：后端每个业务模块都应有管理端入口，不能只存在于 /docs。
+
+    这条断言是防回退的——新增路由模块却忘了加页面，会在这里失败。
+    白名单里的模块是刻意不做管理端页面的（探活、对机器接口、居民端自有 H5）。
+    """
+    import re
+
+    from app.main import app
+
+    js = client.get("/static/app.js").text
+    called = set(re.findall(r"[\"'`]/api/([a-z0-9_-]+)", js))
+    served = {
+        p.split("/")[2]
+        for p in app.openapi()["paths"]
+        if len(p.split("/")) > 2 and p.split("/")[1] == "api"
+    }
+    no_admin_page = {
+        "health",       # 探活
+        "integration",  # HL7/FHIR，对机器不对人
+        "portal",       # 居民端有自己的 H5
+        "surveys",      # 满意度由居民端提交，管理端看统计走绩效页
+        "triage",       # 智能分诊由业务页内联调用
+    }
+    missing = sorted(served - called - no_admin_page)
+    assert not missing, f"以下后端模块没有管理端页面：{missing}"
+
+
+def test_spa_registers_phase_six_pages(client):
+    """阶段一~五的模块都已在页面注册表里，且每个 id 有对应渲染函数。"""
+    js = client.get("/static/app.js").text
+    for page_id in ("clinicaldocs", "surgery", "followups", "accounting", "cost",
+                    "materials", "analytics", "rules", "workflows", "jobs",
+                    "servicerequests"):
+        assert f'id: "{page_id}"' in js, f"缺少页面注册：{page_id}"
