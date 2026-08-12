@@ -66,7 +66,7 @@
 | 定时任务 | 任务注册表、间隔调度、多实例抢锁、手动触发与执行留痕；内置慢病超期/医废滞留/合同到期/制剂临期/验证码清理 | `/api/jobs` |
 | 实时消息 | WebSocket 危急值/缺药预警秒级广播、角色化任务待办中心 | `/ws/notifications`、`/api/todos` |
 | 居民端移动版 | H5 移动优先：微信/手机号验证码登录、实名绑定、家庭成员代管与档案切换、自助预约、签约/账单/转诊查询、健康宣教、满意度评价 | `/m` |
-| 医生移动工作台 | H5 移动优先：待办收件箱、危急值确认与处置、待审检查申请领取出报告、慢病随访录入、患者档案速查 | `/m/doctor` |
+| 医生移动工作台 | H5 移动优先，七页签：待办收件箱、危急值确认与处置、待审检查申请领取出报告、**查房（病程记录/体征录入/文书完整性）**、**手术（排班与术中记录）**、慢病随访录入、患者档案速查 | `/m/doctor` |
 | 智能化 | 50 条规则库审方（剂量/相互作用/禁忌诊断/特殊人群/肝肾提示）、处方点评要点、慢病风险评分、药品采购建议 | `/api/prescriptions`、`/api/chronic/{id}/risk`、`/api/pharmacy/purchase-suggestions` |
 | 附件服务 | 检查报告/不良事件附件：10MB限制、图片/PDF白名单、鉴权下载 | `/api/attachments` |
 | 上报报表 | 监测指标14项当期值与CSV导出、运营月报CSV（限管理层） | `/api/reports` |
@@ -153,9 +153,15 @@ uvicorn app.main:app --port 8000 &                                 # 先起服�
 python scripts/loadtest.py http://127.0.0.1:8000 --concurrency 10 --requests 100
 ```
 
-- 脚本自动用 admin 账号幂等准备一个机构与一名患者，开单场景会产生真实数据；
+- 覆盖 7 个场景：登录 / 患者检索 / 检查开单 / 住院病程记录 / 统一申请单中心 /
+  综合绩效报告 / 就医流向；后四个是阶段一~五新增的重接口，其中综合绩效报告与
+  统一申请单中心随数据量增长最快，是最需要盯的两条；
+- 脚本自动用 admin 账号幂等准备机构、患者与一条在院住院记录，开单与病程场景会
+  产生真实数据；
 - 建议基线（本地 SQLite 单实例）：login P95 < 300ms、patients P95 < 100ms、
-  exam_order P95 < 150ms；PostgreSQL + 多实例部署后重新采样并记录容量规划；
+  exam_order P95 < 150ms、progress_note P95 < 150ms、service_requests P95 < 200ms、
+  patient_flow P95 < 200ms、perf_report P95 < 400ms；PostgreSQL + 多实例部署后
+  重新采样并记录容量规划；
 - 存量数据迁移见 `server/scripts/import_legacy.py`（CSV 批量导入，支持 `--dry-run`
   校验模式与错误行明细，样例见 `server/scripts/samples/`）；
 - 标准字典导入见 `server/scripts/import_dictionary.py`（ICD-10 全量诊断/药品目录

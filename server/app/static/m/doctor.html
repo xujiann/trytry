@@ -59,6 +59,50 @@
       <div id="chronic-list"></div>
     </section>
 
+    <!-- 查房：在院患者的病程记录与体征 -->
+    <section id="tab-round" class="tab-page hidden">
+      <form id="round-pick" class="m-card">
+        <p class="hint">选择在院患者，查房时直接写病程、录体征</p>
+        <select id="round-adm"></select>
+        <button type="submit">切换患者</button>
+      </form>
+      <div id="round-status"></div>
+      <form id="round-note" class="m-card hidden">
+        <p class="hint">书写病程记录</p>
+        <select id="round-note-type">
+          <option value="daily">日常病程</option>
+          <option value="first">首次病程</option>
+          <option value="ward_round">上级医师查房</option>
+          <option value="rescue">抢救记录</option>
+          <option value="consultation">会诊记录</option>
+        </select>
+        <textarea id="round-content" rows="3" placeholder="病程内容" required></textarea>
+        <button type="submit">提交病程</button>
+        <p id="round-msg" class="msg"></p>
+      </form>
+      <form id="round-vital" class="m-card hidden">
+        <p class="hint">录入体征（未测项留空即可，不要填 0）</p>
+        <input id="rv-at" placeholder="测量时刻 YYYY-MM-DD HH:MM" required>
+        <div class="grid2">
+          <input id="rv-temp" type="number" step="0.1" placeholder="体温 ℃">
+          <input id="rv-pulse" type="number" placeholder="脉搏 次/分">
+          <input id="rv-resp" type="number" placeholder="呼吸 次/分">
+          <input id="rv-sbp" type="number" placeholder="收缩压">
+          <input id="rv-dbp" type="number" placeholder="舒张压">
+        </div>
+        <button type="submit">录入体征</button>
+      </form>
+      <div id="round-notes"></div>
+      <div id="round-vitals"></div>
+    </section>
+
+    <!-- 手术：排班与术中记录 -->
+    <section id="tab-surgery" class="tab-page hidden">
+      <div id="surgery-schedule"></div>
+      <div id="surgery-requests"></div>
+      <p id="surgery-msg" class="msg"></p>
+    </section>
+
     <!-- 患者档案速查 -->
     <section id="tab-patient" class="tab-page hidden">
       <form id="pt-form" class="m-card">
@@ -76,8 +120,10 @@
   <a href="#todo" class="tab-btn active" data-tab="todo"><span class="ico">📥</span>待办</a>
   <a href="#critical" class="tab-btn" data-tab="critical"><span class="ico">🚨</span>危急值</a>
   <a href="#exam" class="tab-btn" data-tab="exam"><span class="ico">🩻</span>检查申请</a>
-  <a href="#chronic" class="tab-btn" data-tab="chronic"><span class="ico">💊</span>慢病随访</a>
-  <a href="#patient" class="tab-btn" data-tab="patient"><span class="ico">🔍</span>患者速查</a>
+  <a href="#round" class="tab-btn" data-tab="round"><span class="ico">🏥</span>查房</a>
+  <a href="#surgery" class="tab-btn" data-tab="surgery"><span class="ico">🔪</span>手术</a>
+  <a href="#chronic" class="tab-btn" data-tab="chronic"><span class="ico">💊</span>随访</a>
+  <a href="#patient" class="tab-btn" data-tab="patient"><span class="ico">🔍</span>速查</a>
 </nav>
 
 <script src="/static/m/doctor.js"></script>

@@ -34,7 +34,11 @@ def test_benchmark_smoke(client):
             transport=transport,
         )
     )
-    assert [r["scenario"] for r in results] == ["login", "patients", "exam_order"]
+    assert [r["scenario"] for r in results] == [
+        "login", "patients", "exam_order",
+        # 阶段一~五新增的重接口：查房高频写 + 三个聚合/报表
+        "progress_note", "service_requests", "perf_report", "patient_flow",
+    ]
     for r in results:
         assert r["requests"] == 4
         assert r["errors"] == 0, r

@@ -166,3 +166,79 @@ def test_patient_archive_quick_lookup(client, setup):
 def test_workbench_apis_require_authentication(client):
     for path in ("/api/todos", "/api/exams/critical", "/api/chronic/disease-types"):
         assert client.get(path).status_code == 401, path
+
+
+def test_doctor_mobile_has_round_and_surgery_tabs(client):
+    """查房与手术是移动场景（医生查房不带电脑），页签与表单必须在页面上。"""
+    page = client.get("/m/doctor").text
+    for tab in ("round", "surgery"):
+        assert f'data-tab="{tab}"' in page, f"缺少页签：{tab}"
+        assert f'id="tab-{tab}"' in page
+    # 查房：病程书写 + 体征录入
+    assert 'id="round-note"' in page and 'id="round-vital"' in page
+    assert 'id="rv-temp"' in page and 'id="rv-pulse"' in page
+    # 手术：排班与待填术中记录两个区块
+    assert 'id="surgery-schedule"' in page and 'id="surgery-requests"' in page
+
+
+def test_doctor_mobile_tabs_registered_in_js(client):
+    js = client.get("/static/m/doctor.js").text
+    assert "round: loadRound" in js and "surgery: loadSurgery" in js
+    # 启动调用必须在文件末尾，否则新页签用到的模块级状态还在 TDZ
+    assert js.rstrip().endswith("switchTab(currentTab());")
+
+
+def test_round_tab_backend_flow(client, admin, setup):
+    """查房页用到的三个接口串起来：写病程 → 录体征 → 完整性自查反映变化。"""
+    org = client.post(
+        "/api/organizations",
+        json={"name": "查房演示院", "org_type": "lead_hospital", "level": "county"},
+        headers=admin,
+    ).json()
+    ward = client.post(
+        "/api/inpatient/wards", json={"org_id": org["id"], "name": "查房病区"}, headers=admin
+    ).json()
+    bed = client.post(
+        "/api/inpatient/beds", json={"ward_id": ward["id"], "bed_no": "R01"}, headers=admin
+    ).json()
+    patient = client.post(
+        "/api/patients", json={"name": "查房患者", "id_card": "331682199001011234"},
+        headers=admin,
+    ).json()
+    adm = client.post(
+        "/api/inpatient/admissions",
+        json={"patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"],
+              "doctor_name": "查房医师", "diagnosis_name": "肺炎"},
+        headers=admin,
+    ).json()
+
+    before = client.get(
+        f"/api/inpatient/admissions/{adm['id']}/document-completeness", headers=setup["doctor"]
+    ).json()
+    assert before["complete"] is False
+
+    assert client.post(
+        f"/api/inpatient/admissions/{adm['id']}/progress-notes",
+        json={"note_type": "first", "content": "患者因发热咳嗽入院，胸片示右下肺斑片影"},
+        headers=setup["doctor"],
+    ).status_code == 201
+    client.post(
+        f"/api/inpatient/admissions/{adm['id']}/progress-notes",
+        json={"note_type": "daily", "content": "体温已降至37.2℃，继续抗感染"},
+        headers=setup["doctor"],
+    )
+    # 移动端只填了体温，其余字段不传 —— 应落库为 null 而不是 0
+    client.post(
+        f"/api/inpatient/admissions/{adm['id']}/vitals",
+        json={"measured_at": "2026-08-12 08:00", "temperature": 37.2},
+        headers=setup["doctor"],
+    )
+    vitals = client.get(
+        f"/api/inpatient/admissions/{adm['id']}/vitals", headers=setup["doctor"]
+    ).json()
+    assert vitals[0]["temperature"] == 37.2 and vitals[0]["pulse"] is None
+
+    after = client.get(
+        f"/api/inpatient/admissions/{adm['id']}/document-completeness", headers=setup["doctor"]
+    ).json()
+    assert after["missing"] == ["缺护理记录"]  # 护理由护士记，医生查房不负责

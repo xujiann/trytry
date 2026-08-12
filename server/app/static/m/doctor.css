@@ -44,3 +44,17 @@
 .metric-row input { margin: 0; }
 
 #login-page { padding-top: 40px; }
+
+/* 7 个页签：缩小字号与图标，390px 宽下仍能一行排开 */
+.m-tabbar .tab-btn { font-size: 10.5px; }
+.m-tabbar .tab-btn .ico { font-size: 18px; }
+
+/* 查房：体征多字段两列排布 */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.grid2 input { margin-bottom: 0 !important; }
+
+/* 病程正文：保留换行，长文可读 */
+.note-body {
+  white-space: pre-wrap; color: #37404a; font-size: 13.5px;
+  line-height: 1.65; margin-top: 8px; padding-top: 8px; border-top: 1px solid #f0f2f4;
+}

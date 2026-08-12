@@ -76,7 +76,8 @@ $("#login-form").addEventListener("submit", async (e) => {
 
 /* ---------------- 标签页 ---------------- */
 
-const TABS = { todo: loadTodos, critical: loadCritical, exam: loadExams, chronic: loadChronic, patient: loadPatientTab };
+const TABS = { todo: loadTodos, critical: loadCritical, exam: loadExams, round: loadRound,
+  surgery: loadSurgery, chronic: loadChronic, patient: loadPatientTab };
 
 function currentTab() {
   const tab = (location.hash || "#todo").replace("#", "");
@@ -354,4 +355,175 @@ $("#pt-form").addEventListener("submit", async (e) => {
 /* ---------------- 启动 ---------------- */
 
 showWorkbench(Boolean(token()));
+
+/* ============================================================================
+ * 查房与手术（阶段二能力落到移动端）
+ * 医生查房不会带电脑，住院文书、体征、手术排班这些恰恰都是移动场景。
+ * ==========================================================================*/
+
+const NOTE_TYPE_NAMES = { first: "首次病程", daily: "日常病程", ward_round: "上级查房",
+  rescue: "抢救记录", consultation: "会诊记录", discharge: "出院记录" };
+const SURGERY_STATUS_NAMES = { requested: ["待审批", "orange"], approved: ["已审批", ""],
+  scheduled: ["已排班", "green"], completed: ["已完成", ""], cancelled: ["已取消", "red"] };
+
+// 当前查房对象；切换患者后各区块都跟着刷新
+let roundAdmissionId = 0;
+
+async function loadRound() {
+  const picker = $("#round-adm");
+  let admissions = [];
+  try {
+    admissions = (await api("/api/inpatient/admissions")).filter((a) => a.status === "admitted");
+  } catch (err) {
+    $("#round-status").innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    return;
+  }
+  if (!admissions.length) {
+    picker.innerHTML = "";
+    $("#round-status").innerHTML = '<p class="empty">当前没有在院患者</p>';
+    $("#round-note").classList.add("hidden");
+    $("#round-vital").classList.add("hidden");
+    $("#round-notes").innerHTML = "";
+    $("#round-vitals").innerHTML = "";
+    return;
+  }
+  if (!admissions.some((a) => a.id === roundAdmissionId)) roundAdmissionId = admissions[0].id;
+  picker.innerHTML = admissions.map((a) =>
+    `<option value="${a.id}" ${a.id === roundAdmissionId ? "selected" : ""}>
+       ${esc(a.diagnosis_name || "住院")}（住院号 ${a.id}）</option>`).join("");
+  $("#round-note").classList.remove("hidden");
+  $("#round-vital").classList.remove("hidden");
+  await refreshRoundDetail();
+}
+
+async function refreshRoundDetail() {
+  const [completeness, notes, vitals] = await Promise.all([
+    api(`/api/inpatient/admissions/${roundAdmissionId}/document-completeness`),
+    api(`/api/inpatient/admissions/${roundAdmissionId}/progress-notes`),
+    api(`/api/inpatient/admissions/${roundAdmissionId}/vitals`),
+  ]);
+  $("#round-status").innerHTML = `<div class="m-card">
+    ${kv("文书完整性", completeness.complete
+      ? '<span class="tag green">完整</span>'
+      : `<span class="tag orange">${esc(completeness.missing.join("、"))}</span>`)}
+    ${kv("病程记录", `${notes.length} 条`)}${kv("体征记录", `${vitals.length} 条`)}</div>`;
+
+  $("#round-notes").innerHTML = `<div class="sec-title">病程记录（${notes.length}）</div>` + (
+    notes.length
+      ? notes.slice().reverse().map((n) => card(
+          `${kv("类型", esc(NOTE_TYPE_NAMES[n.note_type] || n.note_type))}
+           ${kv("时间", esc(n.recorded_at))}${kv("医师", esc(n.doctor_name))}
+           <p class="note-body">${esc(n.content)}</p>`)).join("")
+      : '<p class="empty">尚无病程记录</p>');
+
+  // 体温单按时间倒序显示最近 8 次，移动端一屏看得完
+  const recent = vitals.slice(-8).reverse();
+  $("#round-vitals").innerHTML = `<div class="sec-title">体征（最近 ${recent.length} 次）</div>` + (
+    recent.length
+      ? recent.map((v) => card(
+          `${kv("时刻", esc(v.measured_at))}
+           ${kv("体温", v.temperature != null ? `${v.temperature} ℃` : "—")}
+           ${kv("脉搏/呼吸", `${v.pulse ?? "—"} / ${v.respiration ?? "—"}`)}
+           ${kv("血压", v.sbp != null || v.dbp != null ? `${v.sbp ?? "—"}/${v.dbp ?? "—"}` : "—")}`)).join("")
+      : '<p class="empty">尚无体征记录</p>');
+}
+
+$("#round-pick").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  roundAdmissionId = Number($("#round-adm").value);
+  await refreshRoundDetail();
+});
+
+$("#round-note").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api(`/api/inpatient/admissions/${roundAdmissionId}/progress-notes`, {
+      method: "POST",
+      body: JSON.stringify({
+        note_type: $("#round-note-type").value,
+        content: $("#round-content").value.trim(),
+      }),
+    });
+    $("#round-content").value = "";
+    setMsg("#round-msg", "病程已记录", true);
+    await refreshRoundDetail();
+  } catch (err) { setMsg("#round-msg", err.message, false); }
+});
+
+$("#round-vital").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  // 未测项留空 → 不进 body，落库为 null；填 0 会污染趋势曲线
+  const body = { measured_at: $("#rv-at").value.trim() };
+  for (const [field, sel] of [["temperature", "#rv-temp"], ["pulse", "#rv-pulse"],
+                              ["respiration", "#rv-resp"], ["sbp", "#rv-sbp"], ["dbp", "#rv-dbp"]]) {
+    const raw = $(sel).value.trim();
+    if (raw !== "") body[field] = Number(raw);
+  }
+  try {
+    await api(`/api/inpatient/admissions/${roundAdmissionId}/vitals`, {
+      method: "POST", body: JSON.stringify(body) });
+    ["#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp"].forEach((s) => { $(s).value = ""; });
+    setMsg("#round-msg", "体征已录入", true);
+    await refreshRoundDetail();
+  } catch (err) { setMsg("#round-msg", err.message, false); }
+});
+
+/* ---------------- 手术：排班与术中记录 ---------------- */
+
+async function loadSurgery() {
+  let schedules = [], requests = [];
+  try {
+    [schedules, requests] = await Promise.all([
+      api("/api/surgery/schedules"), api("/api/surgery/requests")]);
+  } catch (err) {
+    $("#surgery-schedule").innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    return;
+  }
+  $("#surgery-schedule").innerHTML = `<div class="sec-title">手术排班（${schedules.length}）</div>` + (
+    schedules.length
+      ? schedules.map((s) => card(
+          `${kv("术式", esc(s.surgery_name))}${kv("日期", esc(s.scheduled_date))}
+           ${kv("时段", `${esc(s.start_time)}-${esc(s.end_time)}`)}
+           ${kv("手术间", esc(s.room_name))}${kv("术者", esc(s.surgeon_name))}`)).join("")
+      : '<p class="empty">暂无排班</p>');
+
+  // 只列还没写术中记录的，写完就从这里消失——这是医生真正要处理的部分
+  const pending = requests.filter((r) => r.status === "scheduled");
+  $("#surgery-requests").innerHTML = `<div class="sec-title">待填术中记录（${pending.length}）</div>` + (
+    pending.length
+      ? pending.map((r) => {
+          const [text, color] = SURGERY_STATUS_NAMES[r.status] || [r.status, ""];
+          return card(
+            `${kv("术式", esc(r.surgery_name))}${kv("住院号", String(r.admission_id))}
+             ${kv("状态", `<span class="tag ${color}">${text}</span>`)}`,
+            `<button class="op" data-record="${r.id}">填写术中记录</button>`);
+        }).join("")
+      : '<p class="empty">没有待填写的术中记录</p>');
+}
+
+$("#tab-surgery").addEventListener("click", async (e) => {
+  const id = e.target.dataset.record;
+  if (!id) return;
+  const name = prompt("实际术式");
+  if (!name) return;
+  try {
+    await api(`/api/surgery/requests/${id}/record`, {
+      method: "POST",
+      body: JSON.stringify({
+        actual_surgery_name: name,
+        anesthetist_name: prompt("麻醉医师") || "",
+        findings: prompt("术中所见") || "",
+        blood_loss_ml: Number(prompt("出血量 ml") || 0),
+        outcome: "好转",
+      }),
+    });
+    setMsg("#surgery-msg", "术中记录已提交，术后随访任务已自动派生", true);
+    await loadSurgery();
+  } catch (err) { setMsg("#surgery-msg", err.message, false); }
+});
+
+/* ---------------- 启动 ----------------
+   放在文件最末：新增页签用到模块级状态（roundAdmissionId），启动调用若排在
+   声明之前，就要靠"异步函数在首个 await 前挂起"这种脆弱假设才不触发 TDZ。 */
+
 switchTab(currentTab());
