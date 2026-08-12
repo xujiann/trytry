@@ -70,18 +70,51 @@ def test_手写SQL总量可控():
     assert total <= 15, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
 
 
+# 金额列的命名族。`debit`/`credit`/`bonus` 是补进来的——阶段十二第一遍只按
+# amount/price/cost 这批词批量改类型，把**复式记账的借贷两列**和绩效奖金漏在
+# 外面，而 voucher_entries 的借贷正是整个会计模块求和的对象。
+MONEY_WORDS = ("amount", "price", "cost", "balance", "total", "fee", "budget",
+               "salary", "pay", "debit", "credit", "bonus")
+
+# 名字里带 MONEY_WORDS 但**不是**金额的列。逐个写明理由，不留"反正不是钱"的
+# 模糊豁免——豁免一旦可以不写理由，这份清单很快就会变成绕过检查的后门。
+NOT_MONEY = {
+    "drg_groups.base_weight": "DRG 权重，无量纲",
+    "case_summaries.drg_weight": "同上",
+    "performance_indicators.weight": "绩效指标权重",
+    "performance_formulas.weight": "同上",
+    "fund_distributions.weight": "分配份额权重",
+    "fund_distributions.share_pct": "分配占比（百分数）",
+    "cost_allocation_rules.ratio_pct": "成本分摊比例（百分数）",
+    "payroll_records.perf_coefficient": "绩效系数，乘数不是金额",
+}
+
+
 def test_金额列一律定点数不用浮点():
     """浮点存金额的误差在阶段七露过头，国产库对浮点的处理又与 SQLite 不同。"""
-    money_words = ("amount", "price", "cost", "balance", "total", "fee", "budget",
-                   "salary", "pay")
     offenders = []
     for table in models.Base.metadata.tables.values():
         for column in table.columns:
-            if not any(w in column.name for w in money_words):
+            full = f"{table.name}.{column.name}"
+            if full in NOT_MONEY:
+                continue
+            if not any(w in column.name for w in MONEY_WORDS):
                 continue
             if isinstance(column.type, sa.Float):
-                offenders.append(f"{table.name}.{column.name}")
+                offenders.append(full)
     assert offenders == [], f"这些金额列仍是 Float，应改为 Money（Numeric）：{offenders}"
+
+
+def test_豁免清单里的列确实存在():
+    """防止豁免清单随表结构变化而腐烂——列改名或删掉之后，
+    豁免条目会一直挂着，下次真有同名金额列时就被静默放行了。"""
+    all_columns = {
+        f"{t.name}.{c.name}"
+        for t in models.Base.metadata.tables.values()
+        for c in t.columns
+    }
+    stale = sorted(set(NOT_MONEY) - all_columns)
+    assert stale == [], f"豁免清单里这些列已不存在，应删除：{stale}"
 
 
 def test_金额列精度足够县域量级():

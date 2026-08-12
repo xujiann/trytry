@@ -115,16 +115,44 @@ function nav(pageId) {
   location.hash = pageId;
 }
 
+/* 路由串行化：同一时刻只允许一次页面渲染在跑。
+ *
+ * 每个页面的 render() 都是异步的（先拉接口再写 DOM）。放任并发会出一种没有任何
+ * 报错的错乱：点开一个慢页面、没等它画完又点了另一页，**慢的那次后完成，就把
+ * 已经画好的新页面盖掉**——标题是新页的，内容是旧页的。端到端用例里登录后立刻
+ * 切页能稳定复现：驾驶舱的内容盖在"手术麻醉"的标题下面。
+ *
+ * 修法不是"渲染完发现自己过期就重画"——试过，会死循环：两次并发渲染各自完成时
+ * 都判定自己过期，互相触发新的渲染，页面永远停在"加载中…"。
+ *
+ * 改成串行 + 待办位：有渲染在跑时，新的路由请求只更新序号就返回；正在跑的那次
+ * 收尾时发现序号变了，就再画一轮。**最多同时一次渲染**，最后一次请求必定被画出，
+ * 也不需要给每个 render 加取消逻辑。
+ */
+let routeSeq = 0;
+let routing = false;
+
 async function route() {
   if (!token) return;
-  const id = location.hash.replace("#", "") || "dashboard";
-  let page = PAGES.find((p) => p.id === id) || PAGES[1];
-  if (!pageAllowed(page)) page = PAGES[1];
-  document.querySelectorAll("#nav a").forEach((a) =>
-    a.classList.toggle("active", a.dataset.page === page.id));
-  $("#main").innerHTML = `<h2>${esc(page.title)}</h2><div class="desc" id="page-desc"></div><div id="page-body">加载中…</div>`;
-  try { await page.render(); }
-  catch (e) { $("#page-body").innerHTML = `<p class="msg err">${esc(e.message)}</p>`; }
+  routeSeq += 1;
+  if (routing) return;  // 已有渲染在跑，它收尾时会处理最新这次
+  routing = true;
+  try {
+    for (;;) {
+      const seq = routeSeq;
+      const id = location.hash.replace("#", "") || "dashboard";
+      let page = PAGES.find((p) => p.id === id) || PAGES[1];
+      if (!pageAllowed(page)) page = PAGES[1];
+      document.querySelectorAll("#nav a").forEach((a) =>
+        a.classList.toggle("active", a.dataset.page === page.id));
+      $("#main").innerHTML = `<h2>${esc(page.title)}</h2><div class="desc" id="page-desc"></div><div id="page-body">加载中…</div>`;
+      try { await page.render(); }
+      catch (e) { $("#page-body").innerHTML = `<p class="msg err">${esc(e.message)}</p>`; }
+      if (seq === routeSeq) break;  // 期间没有新的路由请求，收工
+    }
+  } finally {
+    routing = false;
+  }
 }
 
 /* 横向条形图（纯SVG，无外部依赖） */

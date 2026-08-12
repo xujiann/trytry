@@ -124,8 +124,31 @@ def seed(base_url):
         token,
     )
     room = post("/api/surgery/rooms", {"org_id": org["id"], "name": "E2E一号手术间"}, token)
+    # 手术链路需要两个人：申请人与审批人不能是同一个（职责分离，
+    # `approve_request` 里明确拒绝"审批本人提出的手术申请"）。
+    # 用例此前用 admin 一个人从头做到尾，那条规则加进来之后就一直红着。
+    post(
+        "/api/users",
+        {"username": "e2e_doctor", "password": "passw0rd1", "role": "doctor",
+         "full_name": "E2E外科医生", "org_id": org["id"]},
+        token,
+    )
+    doctor_token = post(
+        "/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"}
+    )["access_token"]
+    # 手术申请由**医师**提出：审批环节明确拒绝"审批本人提出的手术申请"（职责分离），
+    # 而 UI 用例是以 admin 登录的。走接口预置申请，UI 只驱动审批→排班→术中记录
+    # 这三步——与本文件既有做法一致（基础数据走接口更稳）。
+    #
+    # 曾试过在 UI 里退出再以管理员登录来切换身份，实测是不稳定的：慢机器上
+    # 退出与页面重画会打架，时好时坏。换人这件事不该由 UI 用例承担。
+    surgery_request = post(
+        "/api/surgery/requests",
+        {"admission_id": admission["id"], "surgery_name": "腹腔镜阑尾切除术"},
+        doctor_token,
+    )
     return {"org": org, "patient": patient, "ward": ward, "bed": bed,
-            "admission": admission, "room": room}
+            "admission": admission, "room": room, "surgery_request": surgery_request}
 
 
 @pytest.fixture(scope="session")
@@ -182,6 +205,35 @@ def _open_page(page, page_id, title):
     expect(page.locator("#page-body")).not_to_contain_text("加载中…")
 
 
+def _submit(page, selector):
+    """提交表单并**等这一页重画完**再返回。
+
+    管理端每次写操作成功后都会 `route()` 重画整页，`#page-body` 的 innerHTML
+    被整个替换。测试如果紧接着 `fill` 下一个表单，填进去的值会被这次重画抹掉，
+    下一次 `click` 提交的就是一张空表——表现是"某几步没生效"，
+    而不是任何一步报错，极难从断言信息看出来。
+
+    这正是本文件此前 4 条用例一直红着的原因：应用没坏（同样的操作手工做、
+    或步与步之间加等待，都能走通），是用例没等重画。所以补这个助手，
+    而不是去改应用。
+
+    等待条件**不用超时也不用 networkidle**，而是给当前 `#page-body` 打一个标记，
+    等到页面上出现一个没有该标记的 `#page-body` 为止——那才是"整页确实重画过了"
+    的确定信号。networkidle 会在 route() 还没开始时就判定静默（POST 的响应一到、
+    后续 GET 还没发出，网络就空了 500ms），于是 fill 填进了马上要被丢弃的那份
+    DOM；这个坑在改用标记之前实测踩到过：填完读回来是空串，而表单类型明明是
+    text、单独填又没问题。
+    """
+    marker = "e2e-stale"
+    page.eval_on_selector("#page-body", f"el => el.dataset.stamp = '{marker}'")
+    page.click(selector)
+    page.wait_for_function(
+        f"() => {{ const el = document.querySelector('#page-body');"
+        f" return el && el.dataset.stamp !== '{marker}'; }}"
+    )
+    expect(page.locator("#page-body")).not_to_contain_text("加载中…")
+
+
 def test_login_then_dashboard(page, base_url, seed):
     """登录 → 决策驾驶舱：登录成功进入应用壳，驾驶舱指标卡渲染。"""
     _login(page, base_url)
@@ -209,7 +261,7 @@ def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     page.select_option("#exam-form select[name=center_type]", "lab")
     page.fill("#exam-form input[name=item_code]", "E2E-LAB-K")
     page.fill("#exam-form input[name=item_name]", "血钾测定")
-    page.click("#exam-form button")
+    _submit(page, "#exam-form button")
     expect(page.locator("#page-body")).to_contain_text("血钾测定")
 
     # 2) 领取申请单
@@ -217,13 +269,15 @@ def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     expect(page.locator("#page-body")).to_contain_text("诊断中")
 
     # 3) 出报告并标记为危急值（prompt 填结论 + confirm 选“是”）
-    def handle_report_dialog(dialog):
-        dialog.accept("血钾 7.2mmol/L，危急") if dialog.type == "prompt" else dialog.accept()
-
-    page.once("dialog", handle_report_dialog)  # prompt：诊断结论
-    page.once("dialog", lambda d: d.accept())  # confirm：是否危急值
-    page.click("button[data-report]")
-    expect(page.locator("#page-body")).to_contain_text("危急值")
+    #
+    # 这里原先注册了两个 `page.once`，以为一个接 prompt、一个接 confirm。
+    # 实际上 Playwright 会把**同一个** dialog 事件派发给当时注册着的全部监听器：
+    # 第一个 prompt 一弹，两个 once 同时被消耗掉，随后的 confirm 无人应答被自动
+    # 取消——于是"是否危急值"选了否，报告不是危急值，断言当然找不到"危急值"。
+    # 本文件开头的 `_answers` 就是为这个坑写的（见其 docstring），这里也用它。
+    with _answers(page, ["血钾 7.2mmol/L，危急", ""]):
+        page.click("button[data-report]")
+        expect(page.locator("#page-body")).to_contain_text("危急值")
 
     # 4) 危急值操作台：确认接收
     _open_page(page, "critical", "危急值操作台")
@@ -250,32 +304,35 @@ def test_clinical_documents_flow(page, base_url, seed):
 
     page.select_option("#note-form select[name=note_type]", "first")
     page.fill("#note-form input[name=content]", "患者因转移性右下腹痛入院，拟行阑尾切除术")
-    page.click("#note-form button")
+    _submit(page, "#note-form button")
     expect(page.locator("#page-body")).to_contain_text("首次病程")
 
     page.select_option("#note-form select[name=note_type]", "daily")
     page.fill("#note-form input[name=content]", "术后第一天，体温37.4℃，切口无渗出")
-    page.click("#note-form button")
+    _submit(page, "#note-form button")
 
     page.fill("#nursing-form input[name=content]", "一级护理，持续心电监护")
-    page.click("#nursing-form button")
+    _submit(page, "#nursing-form button")
 
     page.fill("#vital-form input[name=measured_at]", "2026-08-12 08:00")
     page.fill("#vital-form input[name=temperature]", "37.4")
     page.fill("#vital-form input[name=pulse]", "86")
-    page.click("#vital-form button")
+    _submit(page, "#vital-form button")
 
     expect(page.locator("#page-body")).to_contain_text("文书完整")
 
 
 def test_surgery_full_flow(page, base_url, seed):
-    """手术麻醉（T2.3）：申请 → 审批 → 排班 → 术中记录，状态逐级推进。"""
+    """手术麻醉（T2.3）：申请 → 审批 → 排班 → 术中记录，状态逐级推进。
+
+    **申请与审批必须是两个人**：`approve_request` 明确拒绝"审批本人提出的
+    手术申请"（职责分离）。用例此前用 admin 一个人从头做到尾，那条规则加进来
+    之后就一直红着——这不是应用的问题，是用例没跟上业务规则。
+    申请改由医师经接口提出（见 seed），页面只驱动审批→排班→术中记录。
+    """
     _login(page, base_url)
     _open_page(page, "surgery", "手术麻醉")
-
-    page.fill("#surg-form input[name=admission_id]", str(seed["admission"]["id"]))
-    page.fill("#surg-form input[name=surgery_name]", "腹腔镜阑尾切除术")
-    page.click("#surg-form button")
+    # 申请由医师经接口提出（见 seed），页面上应当能看到这条待审批的申请
     expect(page.locator("#page-body")).to_contain_text("待审批")
 
     page.click("button[data-approve]")

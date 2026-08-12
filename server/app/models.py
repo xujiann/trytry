@@ -1844,7 +1844,9 @@ class PayrollRecord(Base):
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     period: Mapped[str] = mapped_column(String(7), index=True)
     base_salary: Mapped[float] = mapped_column(Money)
-    perf_bonus: Mapped[float] = mapped_column(Float, default=0)
+    # 绩效奖金也是金额，同样漏在阶段十二第一遍之外（同表的 base_salary/total
+    # 都已是 Money，唯独它不是——按命名批量改最典型的漏法）
+    perf_bonus: Mapped[float] = mapped_column(Money, default=0)
     # 绩效系数（考核结果联动薪酬分配）
     perf_coefficient: Mapped[float] = mapped_column(Float, default=1.0)
     total: Mapped[float] = mapped_column(Money)
@@ -2851,8 +2853,12 @@ class VoucherEntry(Base):
     voucher_id: Mapped[int] = mapped_column(ForeignKey("vouchers.id"), index=True)
     subject_code: Mapped[str] = mapped_column(String(16), index=True)
     summary: Mapped[str] = mapped_column(String(256), default="")
-    debit: Mapped[float] = mapped_column(Float, default=0)
-    credit: Mapped[float] = mapped_column(Float, default=0)
+    # 借贷金额：整个复式记账、试算平衡表与合并报表都靠这两列求和。
+    # 它们不含 amount/price/cost 这类词，阶段十二第一遍按命名族批量改类型时
+    # 漏掉了——**平台最核心的两个金额列反而是最后改的**。教训写在这里：
+    # 按命名批量处理必须回头核对剩下的清单，不能只看匹配到的那一批。
+    debit: Mapped[float] = mapped_column(Money, default=0)
+    credit: Mapped[float] = mapped_column(Money, default=0)
 
     voucher: Mapped[Voucher] = relationship(back_populates="entries")
 

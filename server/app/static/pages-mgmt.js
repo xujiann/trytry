@@ -240,9 +240,10 @@ async function renderFollowups() {
 async function renderAccounting() {
   $("#page-desc").textContent = "会计科目 + 记账凭证（借贷必平强校验）→ 过账锁定 → 试算平衡表；作废而不删除";
   const period = localStorage.getItem("medplat_acc_period") || new Date().toISOString().slice(0, 7);
-  const [subjects, vouchers, balance] = await Promise.all([
+  const [subjects, vouchers, balance, consolidated] = await Promise.all([
     api("/api/accounting/subjects"), api(`/api/accounting/vouchers?period=${period}`),
-    api(`/api/accounting/trial-balance?period=${period}`)]);
+    api(`/api/accounting/trial-balance?period=${period}`),
+    api(`/api/accounting/consolidated-statements?period=${period}`)]);
   const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
   const options = subjects.map((s) => `<option value="${s.code}">${s.code} ${s.name}</option>`).join("");
   $("#page-body").innerHTML = `
@@ -268,7 +269,29 @@ async function renderAccounting() {
         return `<tr><td>${v.id}</td><td>${esc(v.voucher_no)}</td><td>${esc(v.voucher_date)}</td>
           <td>${esc(v.summary)}</td><td>${v.total_debit.toFixed(2)}</td><td>${v.total_credit.toFixed(2)}</td>
           <td><span class="tag ${color}">${text}</span></td>
-          <td><button class="btn" data-detail="${v.id}">明细</button> ${ops}</td></tr>`;
+          <td><button class="btn" data-detail="${v.id}">明细</button> ${ops}</td></tr>
+    <div class="panel"><h3>合并报表（${esc(period)}）</h3>
+      <p class="hint">${esc(consolidated.caliber.note)}</p>
+      <div class="cards">
+        ${[["合并收入", consolidated.consolidated.income_statement.income],
+           ["合并费用", consolidated.consolidated.income_statement.expense],
+           ["本期结余", consolidated.consolidated.income_statement.surplus],
+           ["资产", consolidated.consolidated.balance_sheet.assets],
+           ["负债", consolidated.consolidated.balance_sheet.liabilities],
+           ["净资产", consolidated.consolidated.balance_sheet.net_assets]]
+          .map(([label, value]) =>
+            `<div class="card"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`).join("")}
+      </div>
+      ${table(["机构", "收入", "费用", "结余", "资产", "负债", "净资产"], consolidated.orgs, (o) =>
+        `<tr><td>${esc(o.org_name || o.org_id)}</td>
+         <td>${o.income_statement.income}</td><td>${o.income_statement.expense}</td>
+         <td>${o.income_statement.surplus}</td><td>${o.balance_sheet.assets}</td>
+         <td>${o.balance_sheet.liabilities}</td><td>${o.balance_sheet.net_assets}</td></tr>`)}
+      ${consolidated.unknown_subject_codes.length
+        ? `<p class="msg err">科目表里查不到的编码：${esc(consolidated.unknown_subject_codes.join("、"))}</p>` : ""}
+      ${consolidated.voucher_totals.balanced ? "" :
+        `<p class="msg err">本期凭证借贷不平，差额 ${consolidated.voucher_totals.difference} 元——报表照出，差额在此标明</p>`}
+    </div>`;
       })}</div>
     <div class="panel"><h3>试算平衡表（仅统计已过账）</h3>
       <p class="msg ${balance.balanced ? "ok" : "err"}">借方合计 ${balance.total_debit.toFixed(2)}　贷方合计 ${
@@ -624,7 +647,26 @@ async function renderWorkflows() {
          <td><button class="btn secondary" data-advance="${t.id}">推进</button>
              <button class="btn danger" data-cancel="${t.id}">终止</button></td></tr>`)}
       <p class="msg" id="wf-msg"></p></div>
-    <div class="panel"><h3>流程定义（admin）</h3>
+    <div class="panel"><h3>流程图形化编排（admin）</h3>
+      <p class="hint">画布产出的就是下面那份 JSON——<b>后端一行没改</b>，接口仍是
+        <code>POST /api/workflows/definitions</code>。手写 JSON 的入口保留在下方，两条路等价。</p>
+      <form class="inline" id="wfc-meta">
+        <input name="key" placeholder="流程编码" required><input name="name" placeholder="流程名称" required>
+        <select id="wfc-load"><option value="">— 载入现有定义改编 —</option>${
+          definitions.map((d) => `<option value="${esc(d.key)}">${esc(d.name)}</option>`).join("")}</select>
+      </form>
+      <div class="inline" style="margin:8px 0">
+        <button class="btn" id="wfc-add">加节点</button>
+        <button class="btn secondary" id="wfc-link">连线（选中→目标）</button>
+        <button class="btn secondary" id="wfc-end">设为终态</button>
+        <button class="btn danger" id="wfc-del">删节点</button>
+        <button class="btn" id="wfc-save">保存为定义</button>
+      </div>
+      <div id="wfc-canvas" style="overflow-x:auto"></div>
+      <p class="msg" id="wfc-msg"></p>
+      <details><summary>产出的 JSON（提交给后端的就是它）</summary>
+        <pre id="wfc-json" style="white-space:pre-wrap"></pre></details></div>
+    <div class="panel"><h3>流程定义（手写 JSON）</h3>
       <form class="inline" id="def-form"><input name="key" placeholder="流程编码" required>
         <input name="name" placeholder="流程名称" required>
         <input name="nodes" placeholder='节点 JSON，如 [{"key":"apply","name":"申请","role":"doctor","next":"approve"},{"key":"approve","name":"审批","role":"director","next":""}]'
@@ -645,6 +687,7 @@ async function renderWorkflows() {
          <td>${esc(i.current_node_name || i.current_node)}</td><td>${esc(i.updated_at.slice(0, 16).replace("T", " "))}</td>
          <td><button class="btn" data-history="${i.id}">流转记录</button></td></tr>`)}</div>
     <div class="panel hidden" id="wf-history"><h3>流转记录</h3><div id="wf-history-body"></div></div>`;
+  wfCanvasInit(definitions);
   $("#def-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1601,3 +1644,158 @@ async function renderDiseasePrograms() {
   };
 }
 
+
+/* ---------------- 流程图形化编排（阶段十） ----------------
+ *
+ * 画布只做一件事：**产出与手写 JSON 完全相同的那份定义**。后端一行没改，
+ * 提交仍走 `POST /api/workflows/definitions`——图形化是录入方式的差别，
+ * 不是另一套模型。若画布产出的结构与手写的不一样，就等于凭空多出一个
+ * 只有画布能生成、其它入口都不认的流程格式。
+ *
+ * 客户端把服务端的三条校验又实现了一遍（键唯一 / next 指向存在 / 至少一个终态），
+ * 目的是**在提交前就把话说清楚**——这三种错留到运行期，表现是单据卡死在某个
+ * 节点上没人能推，比录入时报错难查得多。但服务端仍然是权威：
+ * 客户端校验只管提示，不管放行。
+ */
+
+let WF_NODES = [];
+let WF_SELECTED = "";
+let WF_LINKING = false;
+
+function wfCanvasInit(definitions) {
+  WF_NODES = [];
+  WF_SELECTED = "";
+  WF_LINKING = false;
+  wfCanvasDraw();
+
+  $("#wfc-load").onchange = (e) => {
+    const def = definitions.find((d) => d.key === e.target.value);
+    if (!def) return;
+    // 载入现有定义改编：深拷贝，避免改画布顺手改了列表里那份
+    WF_NODES = def.nodes.map((n) => ({ key: n.key, name: n.name, role: n.role || "", next: n.next || "" }));
+    $("#wfc-meta").key.value = def.key;
+    $("#wfc-meta").name.value = def.name;
+    WF_SELECTED = WF_NODES.length ? WF_NODES[0].key : "";
+    wfCanvasDraw();
+  };
+
+  $("#wfc-add").onclick = (e) => {
+    e.preventDefault();
+    const key = (prompt("节点编码（英文，如 approve）") || "").trim();
+    if (!key) return;
+    if (WF_NODES.some((n) => n.key === key)) { setMsg("#wfc-msg", `节点 ${key} 已存在`, false); return; }
+    const name = (prompt("节点名称（如 审批）") || key).trim();
+    const role = (prompt("可推进该节点的角色，留空=任何登录用户", "") || "").trim();
+    WF_NODES.push({ key, name, role, next: "" });
+    WF_SELECTED = key;
+    wfCanvasDraw();
+  };
+
+  $("#wfc-link").onclick = (e) => {
+    e.preventDefault();
+    if (!WF_SELECTED) { setMsg("#wfc-msg", "先点一个节点作为起点", false); return; }
+    WF_LINKING = !WF_LINKING;
+    setMsg("#wfc-msg", WF_LINKING ? `连线中：点击目标节点，作为「${WF_SELECTED}」的下一步` : "已退出连线", true);
+    wfCanvasDraw();
+  };
+
+  $("#wfc-end").onclick = (e) => {
+    e.preventDefault();
+    const node = WF_NODES.find((n) => n.key === WF_SELECTED);
+    if (!node) { setMsg("#wfc-msg", "先选中一个节点", false); return; }
+    node.next = "";
+    wfCanvasDraw();
+  };
+
+  $("#wfc-del").onclick = (e) => {
+    e.preventDefault();
+    if (!WF_SELECTED) return;
+    WF_NODES = WF_NODES.filter((n) => n.key !== WF_SELECTED);
+    // 指向被删节点的连线一并断开，否则会产出一份 next 悬空的定义
+    WF_NODES.forEach((n) => { if (n.next === WF_SELECTED) n.next = ""; });
+    WF_SELECTED = "";
+    wfCanvasDraw();
+  };
+
+  $("#wfc-save").onclick = async (e) => {
+    e.preventDefault();
+    const form = $("#wfc-meta");
+    const key = form.key.value.trim(), name = form.name.value.trim();
+    if (!key || !name) { setMsg("#wfc-msg", "请先填流程编码与名称", false); return; }
+    const problems = wfValidate();
+    if (problems.length) { setMsg("#wfc-msg", problems.join("；"), false); return; }
+    postAction("/api/workflows/definitions", { key, name, nodes: WF_NODES }, "#wfc-msg");
+  };
+}
+
+function wfValidate() {
+  /* 与服务端 `_validate_nodes` 同三条规则。服务端仍是权威，这里只为早点说清楚。 */
+  const problems = [];
+  if (!WF_NODES.length) problems.push("至少要有一个节点");
+  const keys = WF_NODES.map((n) => n.key);
+  if (new Set(keys).size !== keys.length) problems.push("节点编码不得重复");
+  WF_NODES.forEach((n) => {
+    if (n.next && !keys.includes(n.next)) problems.push(`节点 ${n.key} 的下一步指向不存在的节点`);
+  });
+  if (WF_NODES.length && WF_NODES.every((n) => n.next)) problems.push("流程必须有终态节点（无下一步）");
+  return problems;
+}
+
+function wfCanvasDraw() {
+  const boxW = 150, boxH = 52, gapX = 60, padY = 30;
+  const perRow = 4;
+  const pos = {};
+  WF_NODES.forEach((n, i) => {
+    pos[n.key] = { x: (i % perRow) * (boxW + gapX) + 10, y: Math.floor(i / perRow) * 110 + padY };
+  });
+  const rows = Math.max(Math.ceil(WF_NODES.length / perRow), 1);
+  const width = perRow * (boxW + gapX) + 20, height = rows * 110 + padY;
+
+  let svg = `<defs><marker id="wf-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3"
+      orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#0b6e6e"></path></marker></defs>`;
+  WF_NODES.forEach((n) => {
+    if (!n.next || !pos[n.next]) return;
+    const a = pos[n.key], b = pos[n.next];
+    const x1 = a.x + boxW, y1 = a.y + boxH / 2, x2 = b.x, y2 = b.y + boxH / 2;
+    // 同行直连，跨行走折线——直连跨行会从别的节点身上穿过去
+    const path = y1 === y2
+      ? `M${x1},${y1} L${x2 - 6},${y2}`
+      : `M${x1},${y1} L${x1 + 20},${y1} L${x1 + 20},${y2 - 34} L${x2 - 20},${y2 - 34} L${x2 - 20},${y2} L${x2 - 6},${y2}`;
+    svg += `<path d="${path}" fill="none" stroke="#0b6e6e" stroke-width="1.6" marker-end="url(#wf-arrow)"></path>`;
+  });
+  WF_NODES.forEach((n) => {
+    const p = pos[n.key];
+    const selected = n.key === WF_SELECTED;
+    const terminal = !n.next;
+    svg += `<g class="wf-node" data-node="${esc(n.key)}" style="cursor:pointer">
+      <rect x="${p.x}" y="${p.y}" width="${boxW}" height="${boxH}" rx="6"
+        fill="${terminal ? "#eef6f6" : "#ffffff"}" stroke="${selected ? "#b45309" : "#0b6e6e"}"
+        stroke-width="${selected ? 2.4 : 1.4}"></rect>
+      <text x="${p.x + 10}" y="${p.y + 21}" font-size="13" fill="#24292f">${esc(n.name)}</text>
+      <text x="${p.x + 10}" y="${p.y + 39}" font-size="11" fill="#5b6773">${esc(n.key)}${
+        n.role ? " · " + esc(n.role) : " · 任意角色"}${terminal ? " · 终态" : ""}</text></g>`;
+  });
+
+  $("#wfc-canvas").innerHTML = WF_NODES.length
+    ? `<svg width="${width}" height="${height}" role="img">${svg}</svg>`
+    : '<p class="empty">点「加节点」开始画，或从上方载入现有定义改编</p>';
+
+  const problems = wfValidate();
+  $("#wfc-json").textContent = JSON.stringify(WF_NODES, null, 2)
+    + (WF_NODES.length && problems.length ? `\n\n// 待修正：${problems.join("；")}` : "");
+
+  $("#wfc-canvas").querySelectorAll(".wf-node").forEach((g) => {
+    g.onclick = () => {
+      const key = g.dataset.node;
+      if (WF_LINKING && WF_SELECTED && key !== WF_SELECTED) {
+        const from = WF_NODES.find((n) => n.key === WF_SELECTED);
+        from.next = key;
+        WF_LINKING = false;
+        setMsg("#wfc-msg", `已连：${from.key} → ${key}`, true);
+      } else {
+        WF_SELECTED = key;
+      }
+      wfCanvasDraw();
+    };
+  });
+}
