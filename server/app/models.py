@@ -873,6 +873,11 @@ class Employee(Base):
     name: Mapped[str] = mapped_column(String(64))
     # 职称：初级/中级/副高/正高
     title: Mapped[str] = mapped_column(String(32), default="")
+    # 职称等级：国家监测指标要求区分"中级及以上"，而 title 是自由文本
+    #（"主治医师"/"主管护师"/"副主任医师"各院写法不一）。**不从文本推断等级**——
+    # 靠关键词猜，一个"助理全科医生"就能把统计带偏。由录入方明确选。
+    # none=未填, junior=初级, intermediate=中级, deputy_senior=副高, senior=正高
+    title_level: Mapped[str] = mapped_column(String(16), default="none", index=True)
     position: Mapped[str] = mapped_column(String(64), default="")
     # active=在岗, seconded=派驻中, left=离职
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
@@ -882,16 +887,26 @@ class Employee(Base):
 
 
 class Secondment(Base):
-    """㉚人员派驻/下沉记录（支撑监测指标4）。"""
+    """人员派驻/下沉台账（支撑国家监测指标"派驻 6 个月以上人数"）。
+
+    原先只有起止日期，答得了"现在有几个人在派"，答不了"派满 6 个月的有几个"，
+    也分不清长期派驻与临时支援——而监测指标问的恰恰是前者。
+    """
 
     __tablename__ = "secondments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     from_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
-    to_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    to_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     start_date: Mapped[str] = mapped_column(String(10))
+    # 空串表示仍在派。不额外加 status 字段——两处表达同一件事，早晚会打架。
     end_date: Mapped[str] = mapped_column(String(10), default="")
+    # long_term=长期派驻, support=短期支援, rounds=巡诊, other=其他。
+    # 监测指标只认长期派驻，混在一起统计会把巡诊也算成下沉。
+    assignment_type: Mapped[str] = mapped_column(String(16), default="long_term", index=True)
+    position: Mapped[str] = mapped_column(String(64), default="")
+    note: Mapped[str] = mapped_column(String(256), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -3175,4 +3190,75 @@ class FundDistribution(Base):
     weight: Mapped[float] = mapped_column(Float, default=0)      # 公式求出的份额权重
     share_pct: Mapped[float] = mapped_column(Float, default=0)   # 归一化后占比
     amount: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class DiseaseProgram(Base):
+    """专病目录：单病种诊疗路径的定义（路径节点可配置）。
+
+    与慢病管理（`ChronicPatient`）**不是一回事**，故另立一套表：慢病是长期
+    随访分级（血压血糖录进来、系统定级、到期提醒），专病是一条有始有终的
+    诊疗路径（入组—按节点推进—疗效评价—出组）。硬套慢病那套表，会得到一个
+    既不像随访也不像路径的模型。
+
+    `path_nodes` 是 JSON 数组，形如
+    `[{"key": "assess", "name": "首次评估", "required": true}, ...]`。
+    **不预置任何具体病种的路径**——各地专病中心管什么病、分几步，差异极大。
+    """
+
+    __tablename__ = "disease_programs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(String(512), default="")
+    # 主办机构（专病中心所在），可空：有的县由医共体统一管而不落到具体机构
+    org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
+    path_nodes: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class DiseaseEnrollment(Base):
+    """专病入组：某患者进入某条专病路径。
+
+    同一患者同一专病同时只允许一条在管记录（`enrolled`），但历史可以有多条——
+    治好出组之后复发再入组是常态，不该被"已入组"挡住。
+    """
+
+    __tablename__ = "disease_enrollments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    program_id: Mapped[int] = mapped_column(ForeignKey("disease_programs.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # enrolled=在管, completed=完成路径出组, exited=中途退出
+    status: Mapped[str] = mapped_column(String(16), default="enrolled", index=True)
+    enrolled_at: Mapped[str] = mapped_column(String(10), default="")
+    exited_at: Mapped[str] = mapped_column(String(10), default="")
+    # 疗效评价：出组时填。留空表示未评价，不等于"无效"。
+    outcome: Mapped[str] = mapped_column(String(16), default="")
+    outcome_note: Mapped[str] = mapped_column(String(512), default="")
+    exit_reason: Mapped[str] = mapped_column(String(256), default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class DiseasePathRecord(Base):
+    """路径节点执行记录：某次入组走到了哪一步、谁做的、结果如何。"""
+
+    __tablename__ = "disease_path_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enrollment_id: Mapped[int] = mapped_column(
+        ForeignKey("disease_enrollments.id"), index=True
+    )
+    node_key: Mapped[str] = mapped_column(String(32), index=True)
+    performed_at: Mapped[str] = mapped_column(String(10), default="")
+    operator_name: Mapped[str] = mapped_column(String(64), default="")
+    result: Mapped[str] = mapped_column(String(256), default="")
+    note: Mapped[str] = mapped_column(String(512), default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

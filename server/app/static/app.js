@@ -113,6 +113,7 @@ const PAGES = [
   { id: "blood", title: "血液管理", render: renderBlood },
   { group: "医防融合" },
   { id: "chronic", title: "慢病管理", render: renderChronic },
+  { id: "diseaseprograms", title: "专病管理", render: renderDiseasePrograms },
   { id: "contracts", title: "家医签约", render: renderContracts },
   { id: "followups", title: "随访中心", render: renderFollowups },
   { id: "infectious", title: "传染病预警", render: renderInfectious },
@@ -137,6 +138,7 @@ const PAGES = [
   { id: "education", title: "远程医学教育", render: renderEducation },
   { id: "knowledge", title: "知识库", render: renderKnowledge },
   { id: "surveys", title: "满意度分析", render: renderSurveys },
+  { id: "staffing", title: "人员下沉调度", render: renderStaffing },
   { id: "hrfinance", title: "人财物管理", render: renderHrFinance },
   { id: "fund", title: "医保基金总额付费", render: renderFund, roles: ["director"] },
   { id: "accounting", title: "会计核算", render: renderAccounting, roles: ["director"] },
@@ -4844,4 +4846,187 @@ function renderSettlement(s, vars) {
         ${table(["机构", "绩效得分", "权重", "占比", "金额"], s.distributions, (d) =>
           `<tr><td>${esc(d.org_name)}</td><td>${d.score}</td><td>${d.weight}</td>
            <td>${d.share_pct}%</td><td><b>${d.amount}</b></td></tr>`)}`}`;
+}
+
+/* ---------------- 人员下沉调度（阶段八） ---------------- */
+
+const ASSIGN_TYPES = { long_term: "长期派驻", support: "短期支援", rounds: "巡诊", other: "其他" };
+const TITLE_LEVELS = {
+  none: "未填", junior: "初级", intermediate: "中级", deputy_senior: "副高", senior: "正高",
+};
+
+async function renderStaffing() {
+  $("#page-desc").textContent =
+    "监测指标只认长期派驻满半年且中级及以上——巡诊不算下沉，职称等级必须显式维护而不从职称文本推断";
+  const [rows, stats, orgs] = await Promise.all([
+    api("/api/staffing/secondments?limit=100"),
+    api("/api/staffing/dispatch-stats"),
+    api("/api/organizations"),
+  ]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>下沉指标（${stats.year} 年度）</h3>
+      ${stats.unknown_title_level
+        ? `<p class="msg err">有 ${stats.unknown_title_level} 人次满足长期派驻满半年，
+            但职称等级未维护，未计入"中级及以上"。请在下方台账补齐等级。</p>` : ""}
+      ${table(["接收机构", "在派", "累计", "长期满半年", "其中中级及以上"], stats.orgs, (o) =>
+        `<tr><td>${esc(o.org_name)}</td><td>${o.ongoing}</td><td>${o.total}</td>
+         <td>${o.long_term_6m}</td><td><b>${o.long_term_6m_senior}</b></td></tr>`)}
+      <p class="desc">${esc(stats.caliber.long_term_6m)}；${esc(stats.caliber.senior)}</p>
+    </div>
+
+    <div class="panel"><h3>新建派驻</h3>
+      <form class="inline" id="st-form">
+        <input name="employee_id" type="number" placeholder="员工ID" required>
+        <select name="from_org_id">${orgs.map((o) =>
+          `<option value="${o.id}">派出：${esc(o.name)}</option>`).join("")}</select>
+        <select name="to_org_id">${orgs.map((o) =>
+          `<option value="${o.id}">接收：${esc(o.name)}</option>`).join("")}</select>
+        <input name="start_date" type="date" required>
+        <select name="assignment_type">${Object.entries(ASSIGN_TYPES).map(([v, t]) =>
+          `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="position" placeholder="派驻岗位">
+        <button>建立</button>
+      </form>
+      <p class="msg" id="st-msg"></p>
+    </div>
+
+    <div class="panel"><h3>派驻台账</h3>
+      ${table(["员工", "职称", "等级", "派出", "接收", "类型", "起止", "天数", "操作"], rows, (r) =>
+        `<tr><td>${esc(r.employee_name)}</td><td>${esc(r.title || "—")}</td>
+         <td>${r.title_level === "none"
+           ? '<span class="tag orange">未填</span>' : esc(r.title_level_name)}
+             <button data-stlevel="${r.employee_id}">维护</button></td>
+         <td>${esc(r.from_org_name)}</td><td>${esc(r.to_org_name)}</td>
+         <td>${esc(r.assignment_type_name)}</td>
+         <td>${esc(r.start_date)} ~ ${r.ongoing ? "在派" : esc(r.end_date)}</td>
+         <td>${r.days}</td>
+         <td>${r.ongoing ? `<button data-stend="${r.id}">结束派驻</button>` : ""}</td></tr>`)}
+    </div>`;
+  $("#st-form").onsubmit = (e) => { e.preventDefault();
+    postAction("/api/staffing/secondments",
+      formJson(e.target, ["employee_id", "from_org_id", "to_org_id"]), "#st-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const { stend, stlevel } = e.target.dataset;
+    if (stend) return postAction(`/api/staffing/secondments/${stend}/end`, null, "#st-msg");
+    if (stlevel) {
+      const level = prompt("职称等级：junior/intermediate/deputy_senior/senior", "intermediate");
+      if (!level) return;
+      try {
+        await api(`/api/staffing/employees/${stlevel}/title-level`,
+          { method: "PATCH", body: JSON.stringify({ title_level: level }) });
+        route();
+      } catch (err) { setMsg("#st-msg", err.message, false); }
+    }
+  };
+}
+
+/* ---------------- 专病管理（阶段八） ---------------- */
+
+const ENROLL_STATUS = { enrolled: "在管", completed: "完成出组", exited: "中途退出" };
+
+async function renderDiseasePrograms() {
+  $("#page-desc").textContent =
+    "专病是有始有终的诊疗路径（入组—节点—疗效评价—出组），与慢病的长期随访分级不是一回事；路径节点自行配置，平台不预置任何病种";
+  const picked = Number(localStorage.getItem("medplat_program") || 0);
+  const [programs, orgs] = await Promise.all([
+    api("/api/disease-programs"), api("/api/organizations"),
+  ]);
+  let enrollments = [], stats = null;
+  if (picked) {
+    [enrollments, stats] = await Promise.all([
+      api(`/api/disease-programs/enrollments?program_id=${picked}&limit=50`),
+      api(`/api/disease-programs/${picked}/stats`),
+    ]);
+  }
+  const current = programs.find((p) => p.id === picked);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>专病目录</h3>
+      <form class="inline" id="dp-form">
+        <input name="code" placeholder="专病编码" required>
+        <input name="name" placeholder="专病名称" required>
+        <select name="org_id"><option value="">不指定主办机构</option>
+          ${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
+        <input name="nodes" placeholder="路径节点：键:名称,键:名称" style="min-width:260px">
+        <button>建目录</button>
+      </form>
+      <p class="msg" id="dp-msg"></p>
+      ${table(["编码", "名称", "路径节点", "状态", "操作"], programs, (p) =>
+        `<tr><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
+         <td>${(p.path_nodes || []).map((n) =>
+           `${esc(n.name)}${n.required === false ? "（选做）" : ""}`).join(" → ") || "—"}</td>
+         <td><span class="tag ${p.active ? "green" : "red"}">${p.active ? "启用" : "停用"}</span></td>
+         <td><button data-dppick="${p.id}">打开</button></td></tr>`)}
+    </div>
+
+    ${picked && current ? `
+    <div class="panel"><h3>${esc(current.name)} · 入组管理</h3>
+      <form class="inline" id="dp-enroll">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="org_id">${orgs.map((o) =>
+          `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
+        <button>入组</button>
+      </form>
+      <div class="cards">
+        <div class="card"><span class="k">累计</span><b>${stats.total}</b></div>
+        ${Object.entries(stats.by_status).map(([k, v]) =>
+          `<div class="card"><span class="k">${esc(v.name)}</span><b>${v.count}</b></div>`).join("")}
+        <div class="card"><span class="k">必需节点完成度</span><b>${
+          stats.avg_required_completion_pct}%</b></div>
+      </div>
+      <p class="desc">${esc(stats.caliber)}</p>
+      ${Object.keys(stats.by_outcome).length
+        ? table(["疗效", "例数"], Object.entries(stats.by_outcome).map(([k, v]) => ({ k, ...v })),
+            (r) => `<tr><td>${esc(r.name)}</td><td>${r.count}</td></tr>`)
+        : ""}
+      ${table(["入组ID", "患者", "状态", "完成度", "待办节点", "疗效", "操作"], enrollments, (e) =>
+        `<tr><td>${e.id}</td><td>${e.patient_id}</td>
+         <td><span class="tag ${e.status === "enrolled" ? "orange"
+           : e.status === "completed" ? "green" : ""}">${esc(e.status_name)}</span></td>
+         <td>${e.completion.required_done}/${e.completion.required_total}
+             （${e.completion.required_done_pct}%）</td>
+         <td>${esc(e.completion.pending_required.join("、") || "—")}</td>
+         <td>${esc(e.outcome_name)}</td>
+         <td>${e.status === "enrolled"
+           ? `<button data-dpnode="${e.id}">记录节点</button><button data-dpexit="${e.id}">出组</button>`
+           : ""}</td></tr>`)}
+    </div>` : ""}`;
+
+  $("#dp-form").onsubmit = (e) => {
+    e.preventDefault();
+    const raw = formJson(e.target);
+    const body = { code: raw.code, name: raw.name, path_nodes: [] };
+    if (raw.org_id) body.org_id = Number(raw.org_id);
+    // "键:名称,键:名称" → 节点数组。缺省全部按必需处理，选做节点在目录里再改。
+    (raw.nodes || "").split(",").map((s) => s.trim()).filter(Boolean).forEach((pair) => {
+      const [key, name] = pair.split(":");
+      if (key && name) body.path_nodes.push({ key: key.trim(), name: name.trim(), required: true });
+    });
+    postAction("/api/disease-programs", body, "#dp-msg");
+  };
+  if (picked) {
+    $("#dp-enroll").onsubmit = (e) => { e.preventDefault();
+      postAction(`/api/disease-programs/${picked}/enrollments`,
+        formJson(e.target, ["patient_id", "org_id"]), "#dp-msg"); };
+  }
+  $("#page-body").onclick = (e) => {
+    const { dppick, dpnode, dpexit } = e.target.dataset;
+    if (dppick) { localStorage.setItem("medplat_program", dppick); return route(); }
+    if (dpnode) {
+      const keys = (current.path_nodes || []).map((n) => `${n.key}(${n.name})`).join(" ");
+      const node_key = prompt(`节点键，可选：${keys}`);
+      if (!node_key) return;
+      const result = prompt("执行结果（可留空）") || "";
+      return postAction(`/api/disease-programs/enrollments/${dpnode}/records`,
+        { node_key, result }, "#dp-msg");
+    }
+    if (dpexit) {
+      const status = prompt("出组方式：completed（完成）/ exited（中途退出）", "completed");
+      if (!status) return;
+      const outcome = prompt("疗效：cured/improved/stable/worsened/died，留空=未评价") || "";
+      const exit_reason = status === "exited" ? (prompt("退出原因（必填）") || "") : "";
+      if (status === "exited" && !exit_reason) return;
+      return postAction(`/api/disease-programs/enrollments/${dpexit}/exit`,
+        { status, outcome, exit_reason }, "#dp-msg");
+    }
+  };
 }

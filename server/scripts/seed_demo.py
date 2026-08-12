@@ -217,6 +217,63 @@ for payload in [
     if not _exists(_charges, lambda r, p=payload: r["code"] == p["code"]):
         c.post("/api/billing/charge-items", json=payload)
 
+# ---------- 人员下沉调度：长期派驻满半年 + 一次巡诊（巡诊不计入下沉指标）----------
+if not c.get("/api/staffing/secondments").json():
+    _emps = c.get(f"/api/mgmt/employees?org_id={county['id']}").json()
+    if not _emps:
+        _emps = [c.post("/api/mgmt/employees", json={
+            "org_id": county["id"], "name": n, "title": t, "position": "医师"}).json()
+            for n, t in [("周主任", "主任医师"), ("吴主治", "主治医师"), ("郑医师", "医师")]]
+    # 职称等级必须显式维护——平台不从"主任医师"这类文本推断等级
+    for _e, _lv in zip(_emps[:3], ["senior", "intermediate", "none"]):
+        if _lv != "none":
+            # 是 PATCH 不是 POST——写错方法会静默 405，等级设不上，
+            # 演示站的"中级及以上"列会永远是 0（这条自检就是为了盯住它）
+            c.patch(f"/api/staffing/employees/{_e['id']}/title-level",
+                    json={"title_level": _lv})
+    _d200 = (date.today() - timedelta(days=200)).isoformat()
+    _d30 = (date.today() - timedelta(days=30)).isoformat()
+    c.post("/api/staffing/secondments", json={
+        "employee_id": _emps[0]["id"], "from_org_id": county["id"], "to_org_id": zhen1["id"],
+        "start_date": _d200, "assignment_type": "long_term", "position": "内科带教"})
+    # 巡诊也满 200 天，但不该进"下沉满半年"的分子——演示站上这条对比很重要
+    c.post("/api/staffing/secondments", json={
+        "employee_id": _emps[1]["id"], "from_org_id": county["id"], "to_org_id": zhen2["id"],
+        "start_date": _d200, "assignment_type": "rounds", "position": "每周巡诊"})
+    if len(_emps) > 2:
+        c.post("/api/staffing/secondments", json={
+            "employee_id": _emps[2]["id"], "from_org_id": county["id"],
+            "to_org_id": village["id"], "start_date": _d30, "assignment_type": "long_term"})
+
+# ---------- 专病管理：一条四节点路径，一例在管一例出组 ----------
+if not c.get("/api/disease-programs").json():
+    _prog = c.post("/api/disease-programs", json={
+        "code": "COPD", "name": "慢阻肺规范化诊疗", "org_id": county["id"],
+        "description": "县域慢阻肺专病中心统一路径",
+        "path_nodes": [
+            {"key": "assess", "name": "首次评估", "required": True},
+            {"key": "plan", "name": "制定治疗方案", "required": True},
+            {"key": "review", "name": "3个月疗效复评", "required": True},
+            {"key": "edu", "name": "戒烟与康复宣教", "required": False},
+        ]}).json()
+    _c_doc = httpx.Client(base_url=BASE, timeout=30)
+    _c_doc.headers["Authorization"] = "Bearer " + c.post(
+        "/api/auth/login", json={"username": "doc_county", "password": "doctor123"}
+    ).json()["access_token"]
+    # 一例走完全程并评价疗效
+    _e1 = _c_doc.post(f"/api/disease-programs/{_prog['id']}/enrollments", json={
+        "patient_id": patients[2]["id"], "org_id": county["id"]}).json()
+    for _k, _r in [("assess", "CAT评分18分"), ("plan", "长效支气管扩张剂"), ("review", "CAT降至12分")]:
+        _c_doc.post(f"/api/disease-programs/enrollments/{_e1['id']}/records",
+                    json={"node_key": _k, "operator_name": "孙主任", "result": _r})
+    _c_doc.post(f"/api/disease-programs/enrollments/{_e1['id']}/exit", json={
+        "status": "completed", "outcome": "improved", "outcome_note": "症状明显缓解"})
+    # 一例在管且必需节点未做完，演示站上"待办节点"才有内容
+    _e2 = _c_doc.post(f"/api/disease-programs/{_prog['id']}/enrollments", json={
+        "patient_id": patients[1]["id"], "org_id": zhen1["id"]}).json()
+    _c_doc.post(f"/api/disease-programs/enrollments/{_e2['id']}/records",
+                json={"node_key": "assess", "operator_name": "李镇医", "result": "CAT评分22分"})
+
 # ---------- 医保基金总额付费：全域池走完 预付→预结→清算→分配 ----------
 # 基金由管理层管（admin 会被 403 挡下），换 dir_demo 的会话。
 if not c_dir.get("/api/fund/pools").json():
@@ -614,6 +671,15 @@ _checks = [
     # 分组统计的不变量：全部机构都入了片区，各片区之和才等于全域总数
     ("片区已覆盖全部机构", lambda: not c.get(
         "/api/org-groups/coverage?group_type=zone").json()["ungrouped"]),
+    ("下沉指标中级及以上非零", lambda: any(
+        o["long_term_6m_senior"] > 0
+        for o in c.get("/api/staffing/dispatch-stats").json()["orgs"])),
+    ("巡诊未被算成下沉", lambda: all(
+        o["long_term_6m"] <= o["total"] for o in
+        c.get("/api/staffing/dispatch-stats").json()["orgs"])),
+    ("专病有在管病例且待办节点非空", lambda: any(
+        e["status"] == "enrolled" and e["completion"]["pending_required"]
+        for e in c.get("/api/disease-programs/enrollments?limit=50").json())),
     ("基金结余已完成分配", lambda: _has_rows(
         c_dir.get(f"/api/fund/pools/{c_dir.get('/api/fund/pools').json()[0]['id']}/distributions"))),
     ("知情告知书含拒签实例", lambda: any(
