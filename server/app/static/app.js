@@ -101,6 +101,7 @@ const PAGES = [
   { id: "emtimeline", title: "急救绿道时间轴", render: renderEmTimeline },
   { id: "inpatient", title: "住院管理", render: renderInpatient },
   { id: "clinicaldocs", title: "住院临床文书", render: renderClinicalDocs },
+  { id: "outpatientdocs", title: "门急诊文书", render: renderOutpatientDocs },
   { id: "surgery", title: "手术麻醉", render: renderSurgery },
   { id: "billing", title: "费用结算", render: renderBilling },
   { id: "rx", title: "集中审方", render: renderRx },
@@ -4460,6 +4461,138 @@ async function renderCredentials() {
       const reason = prompt("作废原因（必填，如挂失/损坏）");
       if (!reason) return;
       return postAction(`/api/credentials/${cvoid}/void`, { reason }, "#cred-msg");
+    }
+  };
+}
+
+/* ---------------- 门急诊文书（浙#3） ---------------- */
+
+const CONSENT_TYPES = {
+  surgery: "手术", anesthesia: "麻醉", transfusion: "输血",
+  exam: "特殊检查", treatment: "特殊治疗", other: "其他",
+};
+
+async function renderOutpatientDocs() {
+  $("#page-desc").textContent =
+    "知情告知书签署时冻结正文——模板日后修订不会改动已签的那一份；拒签是独立状态，不是「没签」";
+  const encounterId = Number(localStorage.getItem("medplat_od_encounter") || 0);
+  const [templates, consents] = await Promise.all([
+    api("/api/outpatient/consent-templates?active=true"),
+    api("/api/outpatient/consents?limit=50"),
+  ]);
+  let scoped = { treatments: [], nursing: [], completeness: null };
+  if (encounterId) {
+    scoped = {
+      treatments: await api(`/api/outpatient/encounters/${encounterId}/treatments`),
+      nursing: await api(`/api/outpatient/encounters/${encounterId}/nursing-records`),
+      completeness: await api(`/api/outpatient/encounters/${encounterId}/completeness`),
+    };
+  }
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>选择就诊</h3>
+      <form class="inline" id="od-pick">
+        <input name="encounter_id" type="number" placeholder="就诊ID" value="${encounterId || ""}" required>
+        <button>载入该次就诊的文书</button>
+      </form>
+      ${scoped.completeness ? `<div class="cards">
+        <div class="card"><span class="k">处置记录</span><b>${scoped.completeness.treatment_records}</b></div>
+        <div class="card"><span class="k">护理记录</span><b>${scoped.completeness.nursing_records}</b></div>
+        <div class="card"><span class="k">告知书</span><b>${scoped.completeness.consents_total}</b></div>
+        <div class="card"><span class="k">待签署</span><b>${
+          scoped.completeness.consents_pending
+            ? `<span class="tag orange">${scoped.completeness.consents_pending}</span>`
+            : 0}</b></div>
+      </div><p class="desc">${esc(scoped.completeness.note)}</p>` : ""}
+    </div>
+
+    ${encounterId ? `
+    <div class="panel"><h3>治疗处置记录</h3>
+      <form class="inline" id="od-treat">
+        <input name="treatment_name" placeholder="处置名称（如雾化吸入）" required>
+        <input name="site" placeholder="部位"><input name="dose" placeholder="剂量/参数">
+        <input name="executor_name" placeholder="执行人">
+        <input name="reaction" placeholder="反应（留空=未记录，不等于无不适）">
+        <button>记录</button>
+      </form>
+      <p class="msg" id="od-msg"></p>
+      ${table(["处置", "部位", "剂量", "执行人", "反应", "时间"], scoped.treatments, (t) =>
+        `<tr><td>${esc(t.treatment_name)}</td><td>${esc(t.site || "—")}</td>
+         <td>${esc(t.dose || "—")}</td><td>${esc(t.executor_name || "—")}</td>
+         <td>${t.reaction ? esc(t.reaction) : '<span class="tag orange">未记录</span>'}</td>
+         <td>${esc(t.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}
+    </div>
+
+    <div class="panel"><h3>门急诊护理记录</h3>
+      <form class="inline" id="od-nurse">
+        <select name="nursing_level"><option value="level3">三级护理</option>
+          <option value="level2">二级护理</option><option value="level1">一级护理</option>
+          <option value="special">特级护理</option></select>
+        <input name="content" placeholder="观察内容（如输液中滴速40滴/分）" required style="min-width:280px">
+        <input name="nurse_name" placeholder="护士">
+        <button>记录</button>
+      </form>
+      ${table(["级别", "内容", "护士", "时间"], scoped.nursing, (n) =>
+        `<tr><td>${esc(NURSING_LEVELS[n.nursing_level] || n.nursing_level)}</td>
+         <td>${esc(n.content)}</td><td>${esc(n.nurse_name || "—")}</td>
+         <td>${esc(n.recorded_at || "—")}</td></tr>`)}
+    </div>` : ""}
+
+    <div class="panel"><h3>开具知情告知书</h3>
+      <form class="inline" id="od-consent">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="consent_type">${Object.entries(CONSENT_TYPES).map(([v, t]) =>
+          `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="template_id"><option value="">不用模板（自带正文）</option>
+          ${templates.map((t) => `<option value="${t.id}">${esc(t.title)} ${esc(t.version)}</option>`).join("")}</select>
+        <input name="title" placeholder="标题（不用模板时必填）">
+        <input name="content" placeholder="正文（不用模板时必填）" style="min-width:260px">
+        <button>生成待签</button>
+      </form>
+      <p class="msg" id="od-cmsg"></p>
+      ${table(["患者", "类型", "标题", "状态", "签署人", "时间", "操作"], consents, (c) =>
+        `<tr><td>${c.patient_id}</td><td>${esc(c.consent_type_name)}</td>
+         <td>${esc(c.title)}${c.template_version ? `<span class="tag">${esc(c.template_version)}</span>` : ""}</td>
+         <td><span class="tag ${c.status === "signed" ? "green" : c.status === "refused" ? "red" : "orange"}">${
+           esc(c.status_name)}</span>${c.refuse_reason ? `<br><small>${esc(c.refuse_reason)}</small>` : ""}</td>
+         <td>${esc(c.signer_name || "—")}${c.signer_name ? `（${esc(c.signer_relation_name)}）` : ""}</td>
+         <td>${esc((c.signed_at || c.created_at).slice(0, 16).replace("T", " "))}</td>
+         <td>${c.status === "pending"
+           ? `<button data-csign="${c.id}">签署</button><button data-crefuse="${c.id}">拒签</button>` : ""}</td></tr>`)}
+    </div>`;
+
+  $("#od-pick").onsubmit = (e) => { e.preventDefault();
+    localStorage.setItem("medplat_od_encounter", e.target.encounter_id.value.trim()); route(); };
+  if (encounterId) {
+    $("#od-treat").onsubmit = (e) => { e.preventDefault();
+      postAction(`/api/outpatient/encounters/${encounterId}/treatments`, formJson(e.target), "#od-msg"); };
+    $("#od-nurse").onsubmit = (e) => { e.preventDefault();
+      postAction(`/api/outpatient/encounters/${encounterId}/nursing-records`, formJson(e.target), "#od-msg"); };
+  }
+  $("#od-consent").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["patient_id", "org_id"]);
+    // 空字符串的 template_id 要去掉，否则后端按"选了模板"处理
+    if (!body.template_id) delete body.template_id;
+    else body.template_id = Number(body.template_id);
+    postAction("/api/outpatient/consents", body, "#od-cmsg");
+  };
+  $("#page-body").onclick = (e) => {
+    const { csign, crefuse } = e.target.dataset;
+    if (csign) {
+      const signer_name = prompt("签署人姓名");
+      if (!signer_name) return;
+      const signer_relation = prompt("与患者关系：self/spouse/parent/child/other", "self") || "self";
+      return postAction(`/api/outpatient/consents/${csign}/sign`,
+        { signer_name, signer_relation }, "#od-cmsg");
+    }
+    if (crefuse) {
+      const signer_name = prompt("拒签人姓名");
+      if (!signer_name) return;
+      const refuse_reason = prompt("拒签原因（必填，这是机构「已告知」的证据）");
+      if (!refuse_reason) return;
+      return postAction(`/api/outpatient/consents/${crefuse}/refuse`,
+        { signer_name, signer_relation: "self", refuse_reason }, "#od-cmsg");
     }
   };
 }

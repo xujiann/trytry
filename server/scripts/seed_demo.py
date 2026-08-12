@@ -199,6 +199,46 @@ for payload in [
     if not _exists(_charges, lambda r, p=payload: r["code"] == p["code"]):
         c.post("/api/billing/charge-items", json=payload)
 
+# ---------- 门急诊文书：告知书模板 + 已签/拒签各一份 + 处置与护理记录 ----------
+if not c.get("/api/outpatient/consent-templates").json():
+    _tpl = c.post("/api/outpatient/consent-templates", json={
+        "consent_type": "treatment", "title": "特殊治疗知情同意书", "version": "v1",
+        "body": "本人已充分了解该项治疗的目的、方法、预期效果、可能的风险与并发症，"
+                "以及可供选择的替代方案，自愿接受该项治疗。"}).json()
+    c.post("/api/outpatient/consent-templates", json={
+        "consent_type": "exam", "title": "增强CT检查知情同意书", "version": "v1",
+        "body": "碘对比剂可能引起过敏反应，严重者可危及生命。本人无相关禁忌并自愿检查。"})
+
+    # 告知书限医师开具——admin 会被 403 挡下，换县院医师的会话
+    c_doc_c = httpx.Client(base_url=BASE, timeout=30)
+    c_doc_c.headers["Authorization"] = "Bearer " + c.post(
+        "/api/auth/login", json={"username": "doc_county", "password": "doctor123"}
+    ).json()["access_token"]
+    _enc_all = c.get(f"/api/encounters?patient_id={patients[0]['id']}").json()
+    _enc_id = _enc_all[0]["id"] if _enc_all else 0
+
+    _signed = c_doc_c.post("/api/outpatient/consents", json={
+        "patient_id": patients[0]["id"], "org_id": county["id"], "consent_type": "treatment",
+        "template_id": _tpl["id"], "related_type": "encounter", "related_id": _enc_id}).json()
+    c_doc_c.post(f"/api/outpatient/consents/{_signed['id']}/sign",
+                 json={"signer_name": "张伟", "signer_relation": "self"})
+    # 拒签一份：拒签是一等状态，演示站上要看得见它长什么样
+    _refused = c_doc_c.post("/api/outpatient/consents", json={
+        "patient_id": patients[2]["id"], "org_id": county["id"], "consent_type": "surgery",
+        "title": "手术知情同意书", "content": "手术可能出现出血、感染、麻醉意外等风险。"}).json()
+    c_doc_c.post(f"/api/outpatient/consents/{_refused['id']}/refuse", json={
+        "signer_name": "刘洋", "signer_relation": "self", "refuse_reason": "拟转上级医院手术"})
+
+    if _enc_id:
+        c_doc_c.post(f"/api/outpatient/encounters/{_enc_id}/treatments", json={
+            "treatment_name": "雾化吸入", "site": "口鼻", "dose": "布地奈德混悬液 1mg",
+            "executor_name": "王护士", "reaction": "无不适"})
+        # 第二条故意不填反应：演示站上"未记录"的橙标要有实例
+        c_doc_c.post(f"/api/outpatient/encounters/{_enc_id}/treatments", json={
+            "treatment_name": "肌肉注射", "site": "臀部", "executor_name": "王护士"})
+        c_doc_c.post(f"/api/outpatient/encounters/{_enc_id}/nursing-records", json={
+            "content": "输液中，滴速40滴/分，患者无主诉不适", "nurse_name": "李护士"})
+
 # ---------- 价格公示：一次带依据的调价，公示页才有"何时起执行"可看 ----------
 _ct = _exists(c.get("/api/billing/charge-items").json(), lambda r: r["code"] == "EXAM-CT")
 if _ct is None:
@@ -531,6 +571,11 @@ _checks = [
         httpx.Client(base_url=BASE, timeout=30).get("/api/portal/price-list"))),
     ("就诊凭据台账有作废记录", lambda: any(
         v["status"] == "void" for v in c.get("/api/credentials?limit=50").json())),
+    ("知情告知书含拒签实例", lambda: any(
+        x["status"] == "refused" for x in c.get("/api/outpatient/consents?limit=50").json())),
+    ("手术质量指标已可算", lambda: any(
+        i["key"] == "surgery_complication" and i["denominator"] > 0
+        for i in c.get("/api/quality/clinical-indicators").json()["indicators"])),
     ("质量指标有分母", lambda: any(
         i["denominator"] > 0
         for i in c.get("/api/quality/clinical-indicators").json()["indicators"])),

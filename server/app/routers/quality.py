@@ -774,16 +774,18 @@ def clinical_indicators(
         surgeries = surgeries.filter(
             SurgeryRecord.created_at >= start_dt, SurgeryRecord.created_at < end_dt
         )
+    # 一次取回，下面的诊断符合率与手术质量两组指标共用，不重复打库
+    all_surgeries = surgeries.all()
+    surgery_total = len(all_surgeries)
     # 两项诊断都填了才纳入分母——没填的是"未采集"，不是"不符合"
     surgery_rows = [
-        r for r in surgeries.all() if r.preop_diagnosis.strip() and r.postop_diagnosis.strip()
+        r for r in all_surgeries if r.preop_diagnosis.strip() and r.postop_diagnosis.strip()
     ]
     surgery_match = sum(
         1
         for r in surgery_rows
         if _normalize_diagnosis(r.preop_diagnosis) == _normalize_diagnosis(r.postop_diagnosis)
     )
-    surgery_total = surgeries.count()
 
     # ---- 抢救成功率（数据源：急救病例转归）----
     rescues = db.query(EmergencyCase).filter(EmergencyCase.rescue_outcome != "")
@@ -795,6 +797,20 @@ def clinical_indicators(
         )
     rescue_rows = rescues.all()
     rescue_success = sum(1 for r in rescue_rows if r.rescue_outcome == "success")
+
+    # ---- 手术质量（数据源：手术申请标记 + 术中记录）----
+    complication_cases = sum(1 for r in all_surgeries if r.complications.strip())
+    unplanned = (
+        db.query(SurgeryRequest)
+        .filter(SurgeryRequest.unplanned_return.is_(True), SurgeryRequest.status == "completed")
+    )
+    if org_id is not None:
+        unplanned = unplanned.filter(SurgeryRequest.org_id == org_id)
+    if start_dt is not None:
+        unplanned = unplanned.filter(
+            SurgeryRequest.created_at >= start_dt, SurgeryRequest.created_at < end_dt
+        )
+    unplanned_count = unplanned.count()
 
     return {
         "period": period or "全期",
@@ -845,6 +861,29 @@ def clinical_indicators(
                 "denominator": len(rescue_rows),
                 "rate_pct": _rate(rescue_success, len(rescue_rows)),
                 "caliber": "抢救成功例数 ÷ 已判定转归的抢救例数（未判定的不计入分母）",
+            },
+            {
+                "key": "surgery_complication",
+                "name": "手术并发症发生率",
+                "dimension": "手术质量",
+                "numerator": complication_cases,
+                "denominator": surgery_total,
+                "rate_pct": _rate(complication_cases, surgery_total),
+                # 这里与诊断符合率的口径**不同**，必须写清楚：并发症栏留空按"无"
+                # 计，因为绝大多数手术确实没有并发症，医师不会专门去填"无"。
+                # 代价是漏填与真无区分不开，所以这个数只能低估、不会高估。
+                "caliber": "术中记录填写了并发症的台次 ÷ 已出术中记录台次"
+                           "（并发症栏留空按无计，故本指标只会低估）",
+            },
+            {
+                "key": "unplanned_return",
+                "name": "非计划重返手术室率",
+                "dimension": "手术质量",
+                "numerator": unplanned_count,
+                "denominator": surgery_total,
+                "rate_pct": _rate(unplanned_count, surgery_total),
+                "caliber": "医师标记为非计划重返的已完成手术 ÷ 已出术中记录台次"
+                           "（不做推断：分期手术与计划内二次探查不算重返）",
             },
         ],
     }

@@ -2333,12 +2333,25 @@ class ProgressNote(Base):
 
 
 class NursingRecord(Base):
-    """护理记录：护理级别执行与病情观察。"""
+    """护理记录：护理级别执行与病情观察。
+
+    挂载点二选一：`admission_id` 是住院护理，`encounter_id` 是门急诊护理
+    （输液观察、留观、清创换药）。原先只支持住院，导致门急诊护理无处可落，
+    指南 #3 要求的门急诊护理记录一直是空的。
+
+    不合并成一个"就诊上下文 id"——两者的查询路径、权限归属和保留期都不同，
+    合并后每次用都要先判断这个 id 到底指向哪张表，反而更容易写错。
+    """
 
     __tablename__ = "nursing_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)
+    admission_id: Mapped[int | None] = mapped_column(
+        ForeignKey("admissions.id"), nullable=True, index=True
+    )
+    encounter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("encounters.id"), nullable=True, index=True
+    )
     # special=特级护理, level1=一级, level2=二级, level3=三级
     nursing_level: Mapped[str] = mapped_column(String(16), default="level2", index=True)
     content: Mapped[str] = mapped_column(String(2048), default="")
@@ -2428,6 +2441,10 @@ class SurgeryRequest(Base):
     surgeon_name: Mapped[str] = mapped_column(String(64), default="")
     # elective=择期, urgent=限期, emergency=急诊
     urgency: Mapped[str] = mapped_column(String(16), default="elective", index=True)
+    # 非计划重返手术室：同一次住院内因并发症/失误等原因再次手术。
+    # 必须由医师显式标记，不能靠"同一住院有第二台手术"推断——分期手术、
+    # 计划内二次探查都是正常的，推断出来的指标只会冤枉人。
+    unplanned_return: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     planned_date: Mapped[str] = mapped_column(String(10), default="")
     # requested=待审批, approved=已审批, scheduled=已排班, completed=已完成, cancelled=已取消
     status: Mapped[str] = mapped_column(String(16), default="requested", index=True)
@@ -2917,3 +2934,89 @@ class VisitCredential(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     close_reason: Mapped[str] = mapped_column(String(128), default="")
+
+
+class ConsentTemplate(Base):
+    """知情告知书模板（浙江省指南 #3）。
+
+    模板与签署实例分开：模板会改（法规更新、律师意见），而**已签署的告知书
+    必须冻结在签署时的措辞上**——患者签的是当时那份文本，不是今天这份。
+    所以签署时把正文整段拷进 `InformedConsent.content`，不留外键引用。
+    存储上确实重复，但这是知情同意这件事的本质要求。
+    """
+
+    __tablename__ = "consent_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # surgery=手术, anesthesia=麻醉, transfusion=输血, exam=特殊检查,
+    # treatment=特殊治疗, other=其他
+    consent_type: Mapped[str] = mapped_column(String(16), index=True)
+    title: Mapped[str] = mapped_column(String(128))
+    body: Mapped[str] = mapped_column(String(8192))
+    version: Mapped[str] = mapped_column(String(16), default="v1")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class InformedConsent(Base):
+    """知情告知书签署记录。
+
+    三个状态而不是两个：`pending` 待签、`signed` 已签、`refused` **拒绝签署**。
+    拒签是真实且必须留痕的临床事件——患者有权拒绝，机构需要证明"告知过、
+    对方拒绝了"。把拒签当成"没签"处理，等于把最需要证据的那种情况抹掉。
+
+    签署人可以不是患者本人（未成年、意识障碍、委托家属），所以记签署人姓名
+    与关系，而不是简单地指向 patient。
+    """
+
+    __tablename__ = "informed_consents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    consent_type: Mapped[str] = mapped_column(String(16), index=True)
+    title: Mapped[str] = mapped_column(String(128))
+    # 签署时的正文快照（见 ConsentTemplate 的说明，刻意不做外键引用）
+    content: Mapped[str] = mapped_column(String(8192), default="")
+    template_version: Mapped[str] = mapped_column(String(16), default="")
+    # 关联业务对象：surgery_request / transfusion_request / exam_request / encounter
+    related_type: Mapped[str] = mapped_column(String(32), default="", index=True)
+    related_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    doctor_name: Mapped[str] = mapped_column(String(64), default="")
+    # pending=待签署, signed=已签署, refused=拒绝签署
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    signer_name: Mapped[str] = mapped_column(String(64), default="")
+    # self=本人, spouse=配偶, parent=父母, child=子女, other=其他委托人
+    signer_relation: Mapped[str] = mapped_column(String(16), default="")
+    signed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refuse_reason: Mapped[str] = mapped_column(String(256), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class TreatmentRecord(Base):
+    """门（急）诊治疗处置记录（浙江省指南 #3）。
+
+    挂在就诊上而不是患者上：处置是某一次就诊里发生的事，脱离就诊看"这个人
+    做过雾化"没有临床意义，也无法核对当次诊断与处置是否匹配。
+
+    `reaction` 记录处置中/后的反应（过敏、晕针、无不适）。留空表示**未记录**，
+    不等于"无不适"——这两者在纠纷里的分量完全不同，所以不设默认值。
+    """
+
+    __tablename__ = "treatment_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    encounter_id: Mapped[int] = mapped_column(ForeignKey("encounters.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    treatment_name: Mapped[str] = mapped_column(String(128))
+    treatment_code: Mapped[str] = mapped_column(String(64), default="")
+    site: Mapped[str] = mapped_column(String(64), default="")          # 部位
+    dose: Mapped[str] = mapped_column(String(64), default="")          # 剂量/参数
+    executor_name: Mapped[str] = mapped_column(String(64), default="")
+    performed_at: Mapped[str] = mapped_column(String(16), default="")
+    reaction: Mapped[str] = mapped_column(String(256), default="")
+    note: Mapped[str] = mapped_column(String(512), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

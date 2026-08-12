@@ -80,6 +80,9 @@ class SurgeryRequestIn(BaseModel):
     anesthesia_type: str = Field(default="general", pattern="^(general|spinal|local|nerve_block)$")
     surgeon_name: str = ""
     urgency: str = Field(default="elective", pattern="^(elective|urgent|emergency)$")
+    # 非计划重返手术室：由医师在提出申请时显式标记。不做推断——分期手术、
+    # 计划内二次探查都是正常的，"同一住院有第二台手术"这种规则只会冤枉人。
+    unplanned_return: bool = False
     planned_date: str = ""
 
 
