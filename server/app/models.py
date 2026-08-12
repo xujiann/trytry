@@ -538,6 +538,23 @@ class MedicalWaste(Base):
     handler_name: Mapped[str] = mapped_column(String(64), default="")
     collected_date: Mapped[str] = mapped_column(String(10), index=True)
     handed_over_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 追溯码：指引明文点名的技术手段。一包医废一码，扫码即知从哪来、
+    # 现在在哪、谁交接的。全局唯一，由平台生成而非录入——让人填码，
+    # 迟早会有两包医废共用一个码。
+    trace_code: Mapped[str] = mapped_column(String(32), default="", unique=True, index=True)
+    # 产生点位与暂存点位。产生点必填，暂存点在入暂存间时补
+    source_location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("waste_locations.id"), nullable=True, index=True
+    )
+    storage_location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("waste_locations.id"), nullable=True, index=True
+    )
+    # 转运人员挂员工档案而不是自由文本：转运人员管理是指引的子功能，
+    # 靠 prompt 让人手打名字，既统计不出人次也追不了责。
+    handler_employee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), nullable=True, index=True
+    )
+    stored_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -821,7 +838,11 @@ class ChildVisit(Base):
 
 
 class VaccinationRecord(Base):
-    """㉕疫苗接种记录。"""
+    """㉕疫苗接种记录。
+
+    批号可空：既有存量记录没有批号，强制必填会让老数据无法迁移。
+    但新接种一律建议带批号——出了问题按批号召回时，没批号的记录查不出来。
+    """
 
     __tablename__ = "vaccination_records"
 
@@ -832,6 +853,15 @@ class VaccinationRecord(Base):
     dose_no: Mapped[int] = mapped_column(Integer, default=1)
     vaccinated_date: Mapped[str] = mapped_column(String(10), default="")
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vaccine_batches.id"), nullable=True, index=True
+    )
+    # 冗余存一份批号：批次记录理论上不删，但接种史是要长期保存的，
+    # 不该因为批次表的任何变动而查不出当年打的是哪一批。
+    batch_no: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # 接种部位与途径（AEFI 归因时要用）
+    site: Mapped[str] = mapped_column(String(32), default="")
+    vaccinator: Mapped[str] = mapped_column(String(64), default="")
 
 
 class VaccineContraindication(Base):
@@ -3321,4 +3351,182 @@ class DiseasePathRecord(Base):
     result: Mapped[str] = mapped_column(String(256), default="")
     note: Mapped[str] = mapped_column(String(512), default="")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------- 阶段九·五 第一批：指引 ㉕㉖㊱ 子功能补齐 ----------
+
+
+class VaccineBatch(Base):
+    """㉕疫苗批次：批号、厂家、效期、在库数。
+
+    第七轮子功能级重审发现，`vaccination_records` 只有 6 列，没有批号也没有
+    厂家效期——指引第 25 条头一项"疫苗信息查询"根本无从查起。更要紧的是
+    **疫苗出问题是按批号召回的**，没有批号就答不出"这批打给了谁"。
+
+    效期按日期现算不设过期状态：与接种禁忌同理，靠定时任务改状态会让
+    "何时过期"取决于任务跑没跑，而这条直接决定能不能给人打针。
+    """
+
+    __tablename__ = "vaccine_batches"
+    __table_args__ = (
+        UniqueConstraint("vaccine_code", "batch_no", name="uq_vaccine_batch"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    vaccine_code: Mapped[str] = mapped_column(String(64), index=True)
+    vaccine_name: Mapped[str] = mapped_column(String(128))
+    batch_no: Mapped[str] = mapped_column(String(64), index=True)
+    manufacturer: Mapped[str] = mapped_column(String(128), default="")
+    expire_date: Mapped[str] = mapped_column(String(10), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    used_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    # normal=正常, frozen=封存（超温/召回），封存后不得再用于接种
+    status: Mapped[str] = mapped_column(String(16), default="normal", index=True)
+    frozen_reason: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ColdChainRecord(Base):
+    """㉕冷链监测记录：设备温度与超温处置。
+
+    超温不自动封存批次——封存是有成本的决定（整批报废），
+    平台的职责是把超温标出来、把该批次点出来，由人决定封不封。
+    与"超支不自动扣减"同一条原则。
+    """
+
+    __tablename__ = "cold_chain_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    device_name: Mapped[str] = mapped_column(String(128))
+    temperature: Mapped[float] = mapped_column(Float)
+    # 该设备的允许区间（不同疫苗要求不同，故记在记录上而不是写死常量）
+    min_allowed: Mapped[float] = mapped_column(Float, default=2.0)
+    max_allowed: Mapped[float] = mapped_column(Float, default=8.0)
+    exceeded: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    recorded_at: Mapped[str] = mapped_column(String(19), index=True)
+    handled: Mapped[bool] = mapped_column(Boolean, default=False)
+    handle_note: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AefiReport(Base):
+    """㉕疑似预防接种异常反应（AEFI）报告。
+
+    指引明文列出的子功能，此前平台一处都没有。AEFI 是免疫规划的刚性上报项：
+    一般反应（发热、局部红肿）与严重反应（过敏性休克、卡介苗淋巴结炎）
+    处置路径完全不同，故分级必填。
+
+    **关联到具体接种记录**而不只是患者：同一人可能打过多种疫苗，
+    不落到剂次上就查不出是哪一针引起的。
+    """
+
+    __tablename__ = "aefi_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vaccination_records.id"), nullable=True, index=True
+    )
+    vaccine_code: Mapped[str] = mapped_column(String(64), index=True)
+    batch_no: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # general=一般反应, severe=严重反应, psychogenic=心因性, coincidental=偶合症
+    reaction_type: Mapped[str] = mapped_column(String(16), default="general", index=True)
+    symptom: Mapped[str] = mapped_column(String(512))
+    onset_date: Mapped[str] = mapped_column(String(10), index=True)
+    # 转归：recovered=痊愈, improving=好转中, sequelae=留有后遗症, death=死亡, unknown=未知
+    outcome: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    reported_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WasteLocation(Base):
+    """㊱医废点位：产生点与暂存间。
+
+    此前 `medical_wastes` 只有 `org_id`，答得出"哪家机构"，答不出"哪个科室
+    产生的、存在哪间暂存间"——而医废管理条例要求的正是点位级的可追溯。
+    """
+
+    __tablename__ = "waste_locations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # source=产生点（科室/病区）, storage=暂存间
+    location_type: Mapped[str] = mapped_column(String(16), default="source", index=True)
+    manager_name: Mapped[str] = mapped_column(String(64), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SyndromeMonitor(Base):
+    """㉖症候群监测：按机构按日的症候群就诊计数与阈值预警。
+
+    "智慧化多点触发传染病监测预警体系"的两条腿之一（另一条是病原监测）。
+    此前平台只有法定传染病病例上报——那是**确诊之后**的事，
+    而症候群监测的意义正是在确诊之前就看出异常聚集。
+
+    阈值随机构规模不同，故存在记录上而不是全局常量：
+    县医院发热门诊日均 50 人不算异常，村卫生室 5 人就该看一眼。
+    """
+
+    __tablename__ = "syndrome_monitors"
+    __table_args__ = (
+        UniqueConstraint("org_id", "syndrome", "record_date", name="uq_syndrome_daily"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # fever=发热, respiratory=呼吸道, diarrhea=腹泻, rash=皮疹, jaundice=黄疸, neuro=脑炎脑膜炎
+    syndrome: Mapped[str] = mapped_column(String(16), index=True)
+    case_count: Mapped[int] = mapped_column(Integer, default=0)
+    threshold: Mapped[int] = mapped_column(Integer, default=0)
+    record_date: Mapped[str] = mapped_column(String(10), index=True)
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PathogenMonitor(Base):
+    """㉖病原监测：标本检出情况。"""
+
+    __tablename__ = "pathogen_monitors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    pathogen_name: Mapped[str] = mapped_column(String(128), index=True)
+    # 标本类型：咽拭子/粪便/血液/脑脊液等，自由文本（各院送检口径不一）
+    specimen_type: Mapped[str] = mapped_column(String(64), default="")
+    tested_count: Mapped[int] = mapped_column(Integer, default=0)
+    positive_count: Mapped[int] = mapped_column(Integer, default=0)
+    record_date: Mapped[str] = mapped_column(String(10), index=True)
+    note: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class EmergencyResource(Base):
+    """㉖卫生应急资源保障：物资与队伍台账。
+
+    物资与队伍合一张表而不是两张：两者在应急调度时是同一件事——
+    "手上有什么、在哪、够不够、谁负责"。分表只会让调度时要查两处。
+    """
+
+    __tablename__ = "emergency_resources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # material=应急物资, team=应急队伍, equipment=应急装备
+    resource_type: Mapped[str] = mapped_column(String(16), default="material", index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # 数量：物资是件数，队伍是人数
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    unit: Mapped[str] = mapped_column(String(16), default="")
+    # 储备下限：低于即在保障情况里标红。0 表示不设下限。
+    min_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    # 物资效期（队伍留空）
+    expire_date: Mapped[str] = mapped_column(String(10), default="", index=True)
+    contact: Mapped[str] = mapped_column(String(64), default="")
+    location: Mapped[str] = mapped_column(String(256), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

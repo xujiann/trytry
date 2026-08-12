@@ -85,6 +85,7 @@ from .routers import (
     referrals,
     rules,
     surgery,
+    surveillance,
     reports,
     service_extras,
     tcm,
@@ -92,6 +93,7 @@ from .routers import (
     todos,
     users,
     vaccination,
+    vaccine_supply,
 )
 from . import ws
 from .models import AuditLog
@@ -281,6 +283,8 @@ app.include_router(education.router)
 app.include_router(eldercare.router)
 app.include_router(maternal.router)
 app.include_router(vaccination.router)
+app.include_router(vaccine_supply.router)
+app.include_router(surveillance.router)
 app.include_router(publichealth.router)
 app.include_router(quality.router)
 app.include_router(drgs.router)

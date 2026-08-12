@@ -6,9 +6,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..datetypes import OptionalDateStr
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
-from ..models import Organization, Patient, User, VaccinationRecord, VaccineContraindication
+from ..models import (
+    Organization,
+    Patient,
+    User,
+    VaccinationRecord,
+    VaccineBatch,
+    VaccineContraindication,
+)
 
 router = APIRouter(prefix="/api/vaccination", tags=["疫苗接种"], dependencies=[Depends(get_current_user)])
 
@@ -38,12 +46,17 @@ class RecordCreate(BaseModel):
     vaccine_code: str = Field(min_length=1)
     vaccine_name: str = Field(min_length=1)
     dose_no: int = Field(default=1, ge=1)
-    vaccinated_date: str = ""
+    vaccinated_date: OptionalDateStr = ""
     org_id: int
+    # 批次可空（存量记录没有批号），给了就三查：过期 / 封存 / 库存
+    batch_id: int | None = None
+    site: str = Field(default="", max_length=32)
+    vaccinator: str = Field(default="", max_length=64)
 
 
 class RecordOut(RecordCreate):
     id: int
+    batch_no: str = ""
 
     model_config = {"from_attributes": True}
 
@@ -65,8 +78,30 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db)):
     )
     if forbidden:
         raise HTTPException(status_code=409, detail=f"存在接种禁忌：{forbidden[0].reason}")
-    record = VaccinationRecord(**body.model_dump())
+    # 批次三查：过期、封存、库存不足各自给出明确原因，不合并成一句
+    # "批次不可用"——接种台前的人要知道是该换批次还是该补货。
+    batch_no = ""
+    batch = None
+    if body.batch_id is not None:
+        batch = db.get(VaccineBatch, body.batch_id)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="疫苗批次不存在")
+        if batch.vaccine_code != body.vaccine_code:
+            raise HTTPException(status_code=422, detail="批次与所填疫苗编码不一致")
+        today = body.vaccinated_date or date.today().isoformat()
+        if batch.expire_date < today:
+            raise HTTPException(status_code=409, detail=f"该批次已于 {batch.expire_date} 过期")
+        if batch.status == "frozen":
+            raise HTTPException(status_code=409, detail=f"该批次已封存：{batch.frozen_reason}")
+        if batch.quantity - batch.used_quantity <= 0:
+            raise HTTPException(status_code=409, detail="该批次库存已用完")
+        batch_no = batch.batch_no
+
+    record = VaccinationRecord(batch_no=batch_no, **body.model_dump())
     db.add(record)
+    if batch is not None:
+        batch.used_quantity += 1
+    # 扣库存与写记录同一个事务提交（D-1 的教训）
     db.commit()
     db.refresh(record)
     return record

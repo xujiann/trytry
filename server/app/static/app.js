@@ -123,6 +123,8 @@ const PAGES = [
   { id: "maternal", title: "妇幼保健", render: renderMaternal },
   { id: "certs", title: "证明与体检", render: renderCerts },
   { id: "vaccination", title: "疫苗接种", render: renderVaccination },
+  { id: "vaccinesupply", title: "疫苗批次与冷链", render: renderVaccineSupply },
+  { id: "surveillance", title: "多点触发监测", render: renderSurveillance },
   { group: "便民惠民" },
   { id: "appointments", title: "预约诊疗", render: renderAppointments },
   { id: "telemedicine", title: "互联网+诊疗", render: renderTelemedicine },
@@ -1775,6 +1777,152 @@ async function renderVaccination() {
     $("#vac-hist-result").innerHTML = table(["疫苗", "剂次", "日期", "机构"], records, (r) =>
       `<tr><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td><td>${r.org_id}</td></tr>`);
   };
+}
+
+
+async function renderVaccineSupply() {
+  $("#page-desc").textContent = "疫苗批次（批号/厂家/效期）、冷链温度监测、AEFI 上报与统计";
+  const [batches, cold, aefi, stats] = await Promise.all([
+    api("/api/vaccine-supply/batches"), api("/api/vaccine-supply/cold-chain"),
+    api("/api/vaccine-supply/aefi"), api("/api/vaccine-supply/stats"),
+  ]);
+  const a = stats.aefi, b = stats.batches;
+  $("#page-body").innerHTML = `
+    <div class="cards">
+      ${[["接种剂次", stats.doses, false], ["AEFI 报告", a.total, false],
+         ["其中严重", a.severe, a.severe > 0],
+         ["十万剂次发生率", a.rate_per_100k_doses === null ? "无接种" : a.rate_per_100k_doses, false],
+         ["过期批次", b.expired, b.expired > 0], ["封存批次", b.frozen, b.frozen > 0],
+         ["30天内到期", b.expiring_soon, b.expiring_soon > 0],
+         ["超温未处置", stats.cold_chain.exceeded_unhandled, stats.cold_chain.exceeded_unhandled > 0]]
+        .map(([label, value, warn]) =>
+          `<div class="card"><div class="label">${esc(label)}</div>` +
+          `<div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}
+    </div>
+    <div class="panel"><h3>登记批次</h3>
+      <form class="inline" id="vb-form">
+        <input name="vaccine_code" placeholder="疫苗编码" required><input name="vaccine_name" placeholder="疫苗名称" required>
+        <input name="batch_no" placeholder="批号" required><input name="manufacturer" placeholder="厂家">
+        <input name="expire_date" placeholder="效期 YYYY-MM-DD" required><input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="quantity" type="number" placeholder="数量" value="0"><button>登记</button></form>
+      <p class="msg" id="vb-msg"></p>
+      <div id="vb-list"></div></div>
+    <div class="panel"><h3>冷链录温</h3>
+      <form class="inline" id="cc-form">
+        <input name="org_id" type="number" placeholder="机构ID" required><input name="device_name" placeholder="设备名称" required>
+        <input name="temperature" type="number" step="0.1" placeholder="温度℃" required>
+        <input name="min_allowed" type="number" step="0.1" value="2" style="min-width:70px"><input name="max_allowed" type="number" step="0.1" value="8" style="min-width:70px">
+        <input name="recorded_at" placeholder="YYYY-MM-DD HH:MM:SS" required><button>录入</button></form>
+      <p class="msg" id="cc-msg"></p>
+      ${table(["机构", "设备", "温度", "区间", "状态", "处置"], cold, (r) =>
+        `<tr><td>${r.org_id}</td><td>${esc(r.device_name)}</td><td>${r.temperature}</td><td>${esc(r.range)}</td>` +
+        `<td>${r.exceeded ? '<span class="tag danger">超温</span>' : "正常"}</td>` +
+        `<td>${r.exceeded ? (r.handled ? esc(r.handle_note) : `<button class="btn sm" data-handle="${r.id}">处置</button>`) : "—"}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>AEFI 报告</h3>
+      <form class="inline" id="aefi-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required><input name="record_id" type="number" placeholder="接种记录ID（可空）">
+        <input name="vaccine_code" placeholder="疫苗编码（未关联记录时必填）">
+        <select name="reaction_type"><option value="general">一般反应</option><option value="severe">严重反应</option>
+          <option value="psychogenic">心因性</option><option value="coincidental">偶合症</option></select>
+        <input name="symptom" placeholder="症状" required><input name="onset_date" placeholder="发生日期" required>
+        <input name="org_id" type="number" placeholder="机构ID" required><button class="btn danger">上报</button></form>
+      <p class="msg" id="aefi-msg"></p>
+      ${table(["患者", "疫苗", "批号", "类型", "症状", "发生日期", "转归"], aefi, (r) =>
+        `<tr><td>${r.patient_id}</td><td>${esc(r.vaccine_code)}</td><td>${esc(r.batch_no || "—")}</td>` +
+        `<td>${r.reaction_type === "severe" ? '<span class="tag danger">' + esc(r.reaction_type_name) + "</span>" : esc(r.reaction_type_name)}</td>` +
+        `<td>${esc(r.symptom)}</td><td>${esc(r.onset_date)}</td><td>${esc(r.outcome_name)}</td></tr>`)}
+    </div>`;
+  $("#vb-list").innerHTML = table(["疫苗", "批号", "厂家", "效期", "在库", "状态", "操作"], batches, (r) =>
+    `<tr><td>${esc(r.vaccine_name)}</td><td>${esc(r.batch_no)}</td><td>${esc(r.manufacturer || "—")}</td>` +
+    `<td>${esc(r.expire_date)}${r.expired ? ' <span class="tag danger">已过期</span>' : ""}</td>` +
+    `<td>${r.remaining}/${r.quantity}</td>` +
+    `<td>${r.usable ? '<span class="tag ok">可用</span>' : esc(r.unusable_reason)}</td>` +
+    `<td><button class="btn sm" data-recipients="${r.id}">受种者</button>` +
+    (r.status === "frozen" ? `<button class="btn sm" data-unfreeze="${r.id}">解除封存</button>`
+                           : `<button class="btn sm danger" data-freeze="${r.id}">封存</button>`) + "</td></tr>");
+  $("#vb-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/batches", formJson(e.target, ["org_id", "quantity"]), "#vb-msg"); };
+  $("#cc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/cold-chain", formJson(e.target, ["org_id", "temperature", "min_allowed", "max_allowed"]), "#cc-msg"); };
+  $("#aefi-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/aefi", formJson(e.target, ["patient_id", "record_id", "org_id"]), "#aefi-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    if (d.freeze) {
+      const reason = prompt("封存原因"); if (!reason) return;
+      return postAction(`/api/vaccine-supply/batches/${d.freeze}/freeze`, { frozen_reason: reason }, "#vb-msg");
+    }
+    if (d.unfreeze) return postAction(`/api/vaccine-supply/batches/${d.unfreeze}/unfreeze`, {}, "#vb-msg");
+    if (d.handle) {
+      const note = prompt("处置说明"); if (!note) return;
+      return postAction(`/api/vaccine-supply/cold-chain/${d.handle}/handle`, { handle_note: note }, "#cc-msg");
+    }
+    if (d.recipients) {
+      const r = await api(`/api/vaccine-supply/batches/${d.recipients}/recipients`);
+      alert(`批号 ${r.batch_no}（${r.vaccine_name}）共 ${r.total} 名受种者\n` +
+            r.recipients.slice(0, 20).map((x) => `${x.patient_name}(#${x.patient_id}) 第${x.dose_no}剂 ${x.vaccinated_date}`).join("\n"));
+    }
+  };
+}
+
+async function renderSurveillance() {
+  $("#page-desc").textContent = "症候群监测、病原监测、多点触发预警与应急资源保障";
+  const [syndromes, pathogens, alerts, ready] = await Promise.all([
+    api("/api/surveillance/syndromes"), api("/api/surveillance/pathogens"),
+    api("/api/surveillance/alerts"), api("/api/surveillance/resources/readiness"),
+  ]);
+  const SYN = { fever: "发热", respiratory: "呼吸道", diarrhea: "腹泻", rash: "皮疹", jaundice: "黄疸", neuro: "脑炎脑膜炎" };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>多点触发预警（近 ${alerts.window.days} 天）</h3>
+      <p class="hint">两路信号分列，不做综合评分：症候群异常查接诊，病原阳性抬头查实验室。</p>
+      <h4>症候群超阈值</h4>
+      ${table(["机构", "症候群", "例数", "阈值", "日期"], alerts.syndrome_alerts, (r) =>
+        `<tr><td>${r.org_id}</td><td>${esc(r.syndrome_name)}</td><td><b>${r.case_count}</b></td><td>${r.threshold}</td><td>${esc(r.record_date)}</td></tr>`)}
+      <h4>病原阳性率抬头</h4>
+      ${table(["机构", "病原", "标本", "阳性/送检", "阳性率"], alerts.pathogen_alerts, (r) =>
+        `<tr><td>${r.org_id}</td><td>${esc(r.pathogen_name)}</td><td>${esc(r.specimen_type || "—")}</td>` +
+        `<td>${r.positive_count}/${r.tested_count}</td><td><b>${r.positive_rate_pct}%</b></td></tr>`)}
+      <p class="hint">口径：${esc(alerts.caliber.pathogen)}</p></div>
+    <div class="panel"><h3>症候群日报</h3>
+      <form class="inline" id="syn-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="syndrome">${Object.entries(SYN).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <input name="case_count" type="number" placeholder="例数" required>
+        <input name="threshold" type="number" placeholder="阈值（0=不预警）" value="0">
+        <input name="record_date" placeholder="日期 YYYY-MM-DD" required><button>上报</button></form>
+      <p class="msg" id="syn-msg"></p>
+      ${table(["机构", "症候群", "例数", "阈值", "日期", "预警"], syndromes.slice(0, 50), (r) =>
+        `<tr><td>${r.org_id}</td><td>${esc(r.syndrome_name)}</td><td>${r.case_count}</td><td>${r.threshold || "不设"}</td>` +
+        `<td>${esc(r.record_date)}</td><td>${r.alert ? '<span class="tag danger">超阈值</span>' : "—"}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>病原监测</h3>
+      <form class="inline" id="pat-form">
+        <input name="org_id" type="number" placeholder="机构ID" required><input name="pathogen_name" placeholder="病原名称" required>
+        <input name="specimen_type" placeholder="标本类型"><input name="tested_count" type="number" placeholder="送检数" required>
+        <input name="positive_count" type="number" placeholder="阳性数" required>
+        <input name="record_date" placeholder="日期 YYYY-MM-DD" required><button>上报</button></form>
+      <p class="msg" id="pat-msg"></p>
+      ${table(["机构", "病原", "标本", "阳性/送检", "阳性率", "日期"], pathogens.slice(0, 50), (r) =>
+        `<tr><td>${r.org_id}</td><td>${esc(r.pathogen_name)}</td><td>${esc(r.specimen_type || "—")}</td>` +
+        `<td>${r.positive_count}/${r.tested_count}</td><td>${r.positive_rate_pct === null ? "未送检" : r.positive_rate_pct + "%"}</td>` +
+        `<td>${esc(r.record_date)}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>应急资源保障</h3>
+      <form class="inline" id="res-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="resource_type"><option value="material">应急物资</option><option value="team">应急队伍</option><option value="equipment">应急装备</option></select>
+        <input name="name" placeholder="名称" required><input name="quantity" type="number" placeholder="数量" required>
+        <input name="unit" placeholder="单位" style="min-width:60px"><input name="min_quantity" type="number" placeholder="储备下限" value="0">
+        <input name="expire_date" placeholder="效期（队伍留空）"><input name="contact" placeholder="联系方式">
+        <button>登记</button></form>
+      <p class="msg" id="res-msg"></p>
+      <p class="hint">${esc(ready.caliber)}</p>
+      ${table(["机构", "资源数", "低于下限", "已过期"], ready.orgs, (o) =>
+        `<tr><td>${esc(o.org_name || o.org_id)}</td><td>${o.total}</td>` +
+        `<td>${o.below_min.length ? '<span class="tag danger">' + o.below_min.map((x) => esc(x.name) + `(${x.quantity}/${x.min_quantity})`).join("、") + "</span>" : "—"}</td>` +
+        `<td>${o.expired.length ? '<span class="tag warn">' + o.expired.map((x) => esc(x.name) + `(${esc(x.expire_date)})`).join("、") + "</span>" : "—"}</td></tr>`)}
+    </div>`;
+  $("#syn-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/syndromes", formJson(e.target, ["org_id", "case_count", "threshold"]), "#syn-msg"); };
+  $("#pat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/pathogens", formJson(e.target, ["org_id", "tested_count", "positive_count"]), "#pat-msg"); };
+  $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/resources", formJson(e.target, ["org_id", "quantity", "min_quantity"]), "#res-msg"); };
 }
 
 async function renderPublicHealth() {
