@@ -10,6 +10,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    Numeric,
     Boolean,
     DateTime,
     Float,
@@ -24,6 +25,23 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .clock import now_naive
 from .database import Base
+
+#: 金额列类型（阶段十二）。
+#:
+#: 原先 43 个金额列用 `Float`：SQLite 存 REAL、PostgreSQL 存 double precision，
+#: 库侧 SUM 会累积浮点误差——阶段七的 `test_fund.py` 里不得不写
+#: `abs(distributed - 200000) < 1.0` 的容差断言才能通过。国产库（达梦/人大金仓）
+#: 对浮点的处理与 SQLite 又不相同，信创适配时这批列是首当其冲的。
+#:
+#: 改为 `Numeric(14, 2)`：DDL 上是定点数，PostgreSQL 与国产库的 SUM/AVG 都是精确的，
+#: 14 位精度对县域金额量级（百亿以下，精确到分）绰绰有余。
+#:
+#: **`asdecimal=False` 是一个明确的取舍**：Python 侧仍收发 float，不返回 Decimal。
+#: 打开它会让全平台上百处 `Decimal * float` 的算式直接 TypeError，
+#: 而那需要连同每一处金额计算一起改。所以这一步拿到的是**存储与库侧聚合的精确性**，
+#: Python 侧的逐笔运算仍是浮点——端到端 Decimal 留作后续，理由与代价记在
+#: `docs/信创适配与部署.md`，不含糊带过。
+Money = Numeric(14, 2, asdecimal=False)
 
 
 def utcnow() -> datetime:
@@ -445,7 +463,7 @@ class Consultation(Base):
     rating: Mapped[int] = mapped_column(Integer, default=0)
     # 会诊费用（指引⑤"费用管理"）。0 表示未计费——本院内部会诊常不计费，
     # 与"计了 0 元"是两回事，故用 fee_settled 区分而不是拿 0 当哨兵。
-    fee: Mapped[float] = mapped_column(Float, default=0)
+    fee: Mapped[float] = mapped_column(Money, default=0)
     fee_settled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     fee_note: Mapped[str] = mapped_column(String(256), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
@@ -773,7 +791,7 @@ class AdminProject(Base):
     # planning=筹备, ongoing=进行中, done=已完成, suspended=已中止
     status: Mapped[str] = mapped_column(String(16), default="planning", index=True)
     progress_pct: Mapped[int] = mapped_column(Integer, default=0)
-    budget_amount: Mapped[float] = mapped_column(Float, default=0)
+    budget_amount: Mapped[float] = mapped_column(Money, default=0)
     description: Mapped[str] = mapped_column(String(1024), default="")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -804,9 +822,9 @@ class InsuranceSettlement(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     # local=本地结算, remote=异地结算
     settle_type: Mapped[str] = mapped_column(String(16), default="local")
-    total_amount: Mapped[float] = mapped_column(Float)
-    insurance_pay: Mapped[float] = mapped_column(Float)
-    self_pay: Mapped[float] = mapped_column(Float)
+    total_amount: Mapped[float] = mapped_column(Money)
+    insurance_pay: Mapped[float] = mapped_column(Money)
+    self_pay: Mapped[float] = mapped_column(Money)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -1108,7 +1126,7 @@ class FinanceEntry(Base):
     # income=收入, expense=支出
     category: Mapped[str] = mapped_column(String(8))
     item: Mapped[str] = mapped_column(String(128), default="")
-    amount: Mapped[float] = mapped_column(Float)
+    amount: Mapped[float] = mapped_column(Money)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -1346,8 +1364,8 @@ class CaseSummary(Base):
     admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), unique=True, index=True)
     discharge_diagnosis: Mapped[str] = mapped_column(String(256))
     operation: Mapped[str] = mapped_column(String(256), default="")
-    total_cost: Mapped[float] = mapped_column(Float, default=0)
-    drug_cost: Mapped[float] = mapped_column(Float, default=0)
+    total_cost: Mapped[float] = mapped_column(Money, default=0)
+    drug_cost: Mapped[float] = mapped_column(Money, default=0)
     # 治愈/好转/未愈/死亡/其他
     outcome: Mapped[str] = mapped_column(String(16), default="好转")
     note: Mapped[str] = mapped_column(String(1024), default="")
@@ -1373,7 +1391,7 @@ class ChargeItem(Base):
     name: Mapped[str] = mapped_column(String(128))
     # drug=药品, exam=检查检验, treatment=治疗处置, bed=床位, other=其他
     category: Mapped[str] = mapped_column(String(16), default="other")
-    price: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Money)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -1394,9 +1412,9 @@ class BillDetail(Base):
     item_code: Mapped[str] = mapped_column(String(64), index=True)
     item_name: Mapped[str] = mapped_column(String(128))
     # 计费时价格快照（此后目录调价不影响已计费明细）
-    unit_price: Mapped[float] = mapped_column(Float)
+    unit_price: Mapped[float] = mapped_column(Money)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
-    amount: Mapped[float] = mapped_column(Float)
+    amount: Mapped[float] = mapped_column(Money)
     # 结算后回填：未结清明细 settlement_id 为空
     settlement_id: Mapped[int | None] = mapped_column(
         ForeignKey("settlements.id"), nullable=True, index=True
@@ -1421,9 +1439,9 @@ class Settlement(Base):
     encounter_id: Mapped[int | None] = mapped_column(
         ForeignKey("encounters.id"), nullable=True
     )
-    total_amount: Mapped[float] = mapped_column(Float)
-    insurance_pay: Mapped[float] = mapped_column(Float, default=0)
-    self_pay: Mapped[float] = mapped_column(Float, default=0)
+    total_amount: Mapped[float] = mapped_column(Money)
+    insurance_pay: Mapped[float] = mapped_column(Money, default=0)
+    self_pay: Mapped[float] = mapped_column(Money, default=0)
     # 关联医保结算记录（复用 insurance 域，insurance_pay>0 时生成）
     insurance_settlement_id: Mapped[int | None] = mapped_column(
         ForeignKey("insurance_settlements.id"), nullable=True
@@ -1747,7 +1765,7 @@ class ExamResource(Base):
     center_type: Mapped[str] = mapped_column(String(16), index=True)
     item_name: Mapped[str] = mapped_column(String(128))
     device: Mapped[str] = mapped_column(String(128), default="")
-    price: Mapped[float] = mapped_column(Float, default=0)
+    price: Mapped[float] = mapped_column(Money, default=0)
     duration_min: Mapped[int] = mapped_column(Integer, default=15)
     notes: Mapped[str] = mapped_column(String(512), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -1825,11 +1843,11 @@ class PayrollRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     period: Mapped[str] = mapped_column(String(7), index=True)
-    base_salary: Mapped[float] = mapped_column(Float)
+    base_salary: Mapped[float] = mapped_column(Money)
     perf_bonus: Mapped[float] = mapped_column(Float, default=0)
     # 绩效系数（考核结果联动薪酬分配）
     perf_coefficient: Mapped[float] = mapped_column(Float, default=1.0)
-    total: Mapped[float] = mapped_column(Float)
+    total: Mapped[float] = mapped_column(Money)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -1844,7 +1862,7 @@ class Budget(Base):
     year: Mapped[str] = mapped_column(String(4), index=True)
     # income=收入预算, expense=支出预算
     category: Mapped[str] = mapped_column(String(8))
-    amount: Mapped[float] = mapped_column(Float)
+    amount: Mapped[float] = mapped_column(Money)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -2099,7 +2117,7 @@ class CssdCostItem(Base):
     batch_id: Mapped[int] = mapped_column(ForeignKey("sterilization_batches.id"), index=True)
     # labor=人工, material=耗材, energy=能耗, equipment=设备折旧, other=其他
     cost_type: Mapped[str] = mapped_column(String(16), index=True)
-    amount: Mapped[float] = mapped_column(Float, default=0)
+    amount: Mapped[float] = mapped_column(Money, default=0)
     note: Mapped[str] = mapped_column(String(256), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -2383,12 +2401,12 @@ class PaymentOrder(Base):
     settlement_id: Mapped[int] = mapped_column(ForeignKey("settlements.id"), index=True)
     # cash=现金, card=银行卡, insurance=医保基金, online=线上支付
     channel: Mapped[str] = mapped_column(String(16), index=True)
-    amount: Mapped[float] = mapped_column(Float, default=0)
+    amount: Mapped[float] = mapped_column(Money, default=0)
     # pending=待支付, paid=已支付, refunded=已全额退款, failed=支付失败
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     trade_no: Mapped[str] = mapped_column(String(64), default="", index=True)
     # 已退金额（部分退款累计；等于 amount 时状态转 refunded）
-    refunded_amount: Mapped[float] = mapped_column(Float, default=0)
+    refunded_amount: Mapped[float] = mapped_column(Money, default=0)
     fail_reason: Mapped[str] = mapped_column(String(256), default="")
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     refunded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -2404,10 +2422,10 @@ class ReconciliationBatch(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     date: Mapped[str] = mapped_column(String(10), index=True)
     total_orders: Mapped[int] = mapped_column(Integer, default=0)
-    total_amount: Mapped[float] = mapped_column(Float, default=0)
+    total_amount: Mapped[float] = mapped_column(Money, default=0)
     matched: Mapped[int] = mapped_column(Integer, default=0)
     unmatched: Mapped[int] = mapped_column(Integer, default=0)
-    diff_amount: Mapped[float] = mapped_column(Float, default=0)
+    diff_amount: Mapped[float] = mapped_column(Money, default=0)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -2424,8 +2442,8 @@ class ReconciliationDiff(Base):
     trade_no: Mapped[str] = mapped_column(String(64), default="", index=True)
     # missing_local=通道有本地无, missing_remote=本地有通道无, amount_mismatch=金额不一致
     diff_type: Mapped[str] = mapped_column(String(20), index=True)
-    local_amount: Mapped[float] = mapped_column(Float, default=0)
-    remote_amount: Mapped[float] = mapped_column(Float, default=0)
+    local_amount: Mapped[float] = mapped_column(Money, default=0)
+    remote_amount: Mapped[float] = mapped_column(Money, default=0)
     detail: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -2812,8 +2830,8 @@ class Voucher(Base):
     voucher_no: Mapped[str] = mapped_column(String(32))
     voucher_date: Mapped[str] = mapped_column(String(10), index=True)
     summary: Mapped[str] = mapped_column(String(256), default="")
-    total_debit: Mapped[float] = mapped_column(Float, default=0)
-    total_credit: Mapped[float] = mapped_column(Float, default=0)
+    total_debit: Mapped[float] = mapped_column(Money, default=0)
+    total_credit: Mapped[float] = mapped_column(Money, default=0)
     # draft=草稿, posted=已过账, void=已作废
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
@@ -2858,7 +2876,7 @@ class DepartmentCost(Base):
     period: Mapped[str] = mapped_column(String(7), index=True)
     # labor=人员经费, drug=药品, consumable=卫生材料, depreciation=折旧, overhead=其他运行
     cost_type: Mapped[str] = mapped_column(String(16), index=True)
-    amount: Mapped[float] = mapped_column(Float, default=0)
+    amount: Mapped[float] = mapped_column(Money, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -2903,13 +2921,13 @@ class MaterialPurchase(Base):
     spec: Mapped[str] = mapped_column(String(64), default="")
     unit: Mapped[str] = mapped_column(String(16), default="件")
     quantity: Mapped[int] = mapped_column(Integer, default=1)
-    estimated_price: Mapped[float] = mapped_column(Float, default=0)
+    estimated_price: Mapped[float] = mapped_column(Money, default=0)
     reason: Mapped[str] = mapped_column(String(512), default="")
     # requested=待审批, approved=已审批, contracted=已签合同, received=已验收, cancelled=已取消
     status: Mapped[str] = mapped_column(String(16), default="requested", index=True)
     supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
     contract_no: Mapped[str] = mapped_column(String(64), default="")
-    contract_amount: Mapped[float] = mapped_column(Float, default=0)
+    contract_amount: Mapped[float] = mapped_column(Money, default=0)
     received_quantity: Mapped[int] = mapped_column(Integer, default=0)
     received_note: Mapped[str] = mapped_column(String(512), default="")
     requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
@@ -2930,7 +2948,7 @@ class HighValueConsumable(Base):
     supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
     batch_no: Mapped[str] = mapped_column(String(64), default="")
     expire_date: Mapped[str] = mapped_column(String(10), default="", index=True)
-    unit_price: Mapped[float] = mapped_column(Float, default=0)
+    unit_price: Mapped[float] = mapped_column(Money, default=0)
     # in_stock=在库, used=已使用, returned=已退回, scrapped=已报废
     status: Mapped[str] = mapped_column(String(16), default="in_stock", index=True)
     used_patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
@@ -2965,8 +2983,8 @@ class OutboundVisit(Base):
     # outpatient=门急诊, inpatient=住院
     visit_type: Mapped[str] = mapped_column(String(16), default="outpatient", index=True)
     diagnosis_name: Mapped[str] = mapped_column(String(256), default="")
-    total_amount: Mapped[float] = mapped_column(Float, default=0)
-    insurance_pay: Mapped[float] = mapped_column(Float, default=0)
+    total_amount: Mapped[float] = mapped_column(Money, default=0)
+    insurance_pay: Mapped[float] = mapped_column(Money, default=0)
     # 关联转诊单：有值表示经县域内机构规范转出，无值即自行外出就医
     referral_id: Mapped[int | None] = mapped_column(ForeignKey("referrals.id"), nullable=True)
     # manual=人工登记, insurance_import=医保数据导入
@@ -3137,8 +3155,8 @@ class ChargePriceChange(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     item_id: Mapped[int] = mapped_column(ForeignKey("charge_items.id"), index=True)
-    old_price: Mapped[float] = mapped_column(Float)
-    new_price: Mapped[float] = mapped_column(Float)
+    old_price: Mapped[float] = mapped_column(Money)
+    new_price: Mapped[float] = mapped_column(Money)
     # 调价依据（如"省医保局 2026 年第 3 号文"）。留空也允许——真实场景里
     # 补录历史价格时常常找不到原始文号，强制填写只会逼人编一个。
     reason: Mapped[str] = mapped_column(String(256), default="")
@@ -3338,8 +3356,8 @@ class FundPool(Base):
         ForeignKey("org_groups.id"), nullable=True, index=True
     )
     # 筹资总额（元）：年初核定的总盘子
-    total_amount: Mapped[float] = mapped_column(Float, default=0)
-    prepay_ratio_pct: Mapped[float] = mapped_column(Float, default=0)
+    total_amount: Mapped[float] = mapped_column(Money, default=0)
+    prepay_ratio_pct: Mapped[float] = mapped_column(Money, default=0)
     # active=执行中, settled=已清算, closed=已归档
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     note: Mapped[str] = mapped_column(String(256), default="")
@@ -3355,7 +3373,7 @@ class FundPrepayment(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     pool_id: Mapped[int] = mapped_column(ForeignKey("fund_pools.id"), index=True)
     batch_no: Mapped[str] = mapped_column(String(32), default="")
-    amount: Mapped[float] = mapped_column(Float)
+    amount: Mapped[float] = mapped_column(Money)
     paid_date: Mapped[str] = mapped_column(String(10), default="")
     note: Mapped[str] = mapped_column(String(256), default="")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
@@ -3377,7 +3395,7 @@ class FundPeriod(Base):
     pool_id: Mapped[int] = mapped_column(ForeignKey("fund_pools.id"), index=True)
     period: Mapped[str] = mapped_column(String(7), index=True)  # YYYY-MM
     # 当期实际发生的医保支付额（由结算单归集，也允许人工调整后覆盖）
-    actual_amount: Mapped[float] = mapped_column(Float, default=0)
+    actual_amount: Mapped[float] = mapped_column(Money, default=0)
     source: Mapped[str] = mapped_column(String(16), default="auto")  # auto=系统归集, manual=人工
     note: Mapped[str] = mapped_column(String(256), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -3395,9 +3413,9 @@ class FundSettlement(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     pool_id: Mapped[int] = mapped_column(ForeignKey("fund_pools.id"), unique=True, index=True)
-    total_income: Mapped[float] = mapped_column(Float, default=0)   # 筹资总额快照
-    total_expense: Mapped[float] = mapped_column(Float, default=0)  # 全年实际发生额
-    balance: Mapped[float] = mapped_column(Float, default=0)        # 正=结余，负=超支
+    total_income: Mapped[float] = mapped_column(Money, default=0)   # 筹资总额快照
+    total_expense: Mapped[float] = mapped_column(Money, default=0)  # 全年实际发生额
+    balance: Mapped[float] = mapped_column(Money, default=0)        # 正=结余，负=超支
     # none=不处理（默认）, share=按分配公式分摊, carry=挂账结转
     overrun_action: Mapped[str] = mapped_column(String(16), default="none")
     # 分配公式（AST 白名单求值），返回**份额权重**，由平台归一化后乘结余额。
@@ -3425,7 +3443,7 @@ class FundDistribution(Base):
     score_detail: Mapped[dict] = mapped_column(JSON, default=dict)
     weight: Mapped[float] = mapped_column(Float, default=0)      # 公式求出的份额权重
     share_pct: Mapped[float] = mapped_column(Float, default=0)   # 归一化后占比
-    amount: Mapped[float] = mapped_column(Float, default=0)
+    amount: Mapped[float] = mapped_column(Money, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

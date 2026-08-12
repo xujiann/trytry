@@ -137,18 +137,20 @@ def test_operations_csv_export(client, setup):
     by_name = {r[1]: r for r in rows[1:]}
     county = by_name["报表总院"]
     assert county[3] == "1"  # 就诊1次
-    assert county[5] == "80000.0" and county[6] == "50000.0" and county[7] == "30000.0"
+    # 阶段十二：金额列改 NUMERIC 后整数金额从库里读回是 int，
+    # 故导出统一格式化到分——同一列时而带小数点时而不带，比少两位小数麻烦得多
+    assert county[5] == "80000.00" and county[6] == "50000.00" and county[7] == "30000.00"
     township = by_name["报表卫生院"]
-    assert township[3] == "1" and township[5] == "0.0"
+    assert township[3] == "1" and township[5] == "0.00"
 
 
 def test_operations_period_filter(client, setup):
     hit = client.get("/api/reports/operations/export?period=2026-07", headers=setup["director"])
     rows = {r[1]: r for r in list(csv.reader(io.StringIO(hit.content.decode("utf-8-sig"))))[1:]}
-    assert rows["报表总院"][5] == "80000.0"
+    assert rows["报表总院"][5] == "80000.00"
     miss = client.get("/api/reports/operations/export?period=2026-06", headers=setup["director"])
     rows = {r[1]: r for r in list(csv.reader(io.StringIO(miss.content.decode("utf-8-sig"))))[1:]}
-    assert rows["报表总院"][5] == "0.0"
+    assert rows["报表总院"][5] == "0.00"
     # 期间格式校验
     assert (
         client.get("/api/reports/operations/export?period=202607", headers=setup["director"]).status_code

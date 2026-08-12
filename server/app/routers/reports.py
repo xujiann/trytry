@@ -123,6 +123,11 @@ def _monitoring_indicators(db: Session) -> list[dict]:
     ]
 
 
+def _money(value: float) -> str:
+    """金额导出统一格式：定点两位小数。"""
+    return f"{float(value):.2f}"
+
+
 def _csv_response(filename: str, header: list[str], rows: list[list]) -> StreamingResponse:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -199,8 +204,8 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
             for org_id, at in admissions
             if org_id == org.id and (period is None or month_of(at) == period)
         )
-        income = finance.get(org.id, {}).get("income", 0.0)
-        expense = finance.get(org.id, {}).get("expense", 0.0)
+        income = float(finance.get(org.id, {}).get("income", 0.0) or 0)
+        expense = float(finance.get(org.id, {}).get("expense", 0.0) or 0)
         rows.append(
             [
                 org.id,
@@ -208,9 +213,13 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
                 level_names.get(org.level, org.level),
                 enc_count,
                 adm_count,
-                income,
-                expense,
-                round(income - expense, 2),
+                # 金额一律格式化到分再导出。阶段十二把金额列改成 NUMERIC 之后，
+                # 整数金额从库里读回来是 int（80000 而不是 80000.0），
+                # 直接 str() 会让同一列时而带小数点时而不带——导出的表格给人看，
+                # 也常被 Excel 再加工，列格式不稳定比少两位小数麻烦得多。
+                _money(income),
+                _money(expense),
+                _money(income - expense),
                 scores.get(org.id, 0.0),
             ]
         )
