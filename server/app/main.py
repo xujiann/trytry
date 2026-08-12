@@ -84,6 +84,7 @@ from .routers import (
     printing,
     publichealth,
     quality,
+    rbac,
     referrals,
     rules,
     surgery,
@@ -100,6 +101,7 @@ from .routers import (
     vaccine_supply,
 )
 from . import ws
+from .audit_chain import audit_entry_hash
 from .models import AuditLog
 from .security import decode_token, hash_password
 
@@ -230,6 +232,12 @@ async def lifespan(_: FastAPI):
         from .scheduler import scheduler_loop, sync_registry
 
         sync_registry(db)
+        # 阶段十一：内置六角色预置 + 权限点从路由表自动登记（幂等）。
+        # 手工维护的权限点清单与真实接口的偏差，是这类系统最难查的问题之一。
+        from .routers.rbac import seed_builtin_roles, sync_permissions
+
+        seed_builtin_roles(db)
+        sync_permissions(app, db)
     finally:
         db.close()
 
@@ -291,6 +299,7 @@ app.include_router(vaccine_supply.router)
 app.include_router(pathology.router)
 app.include_router(tcm_heritage.router)
 app.include_router(resources.router)
+app.include_router(rbac.router)
 app.include_router(projects.router)
 app.include_router(surveillance.router)
 app.include_router(publichealth.router)
@@ -349,6 +358,22 @@ async def security_headers_middleware(request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # CSP（阶段十一）：管理端是 build-free 的内联脚本页面，故必须放行
+    # 'unsafe-inline'——不放行页面直接白屏。真正要挡的是**外部来源**：
+    # default-src 'self' 之后，任何第三方脚本、iframe、远程表单提交都进不来，
+    # 这才是 XSS 被利用时的主要外泄通道。
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none'",
+    )
     return response
 
 
@@ -397,15 +422,27 @@ def _write_audit(request, status_code: int) -> None:
         if username:
             user = db.query(User).filter(User.username == username).first()
             user_id = user.id if user else None
-        db.add(
-            AuditLog(
-                user_id=user_id,
-                username=username or "anonymous",
-                method=request.method,
-                path=request.url.path,
-                status_code=status_code,
-            )
+        # 防篡改哈希链：本条 hash = MAC(密钥, 上一条 hash + 本条内容)。
+        # 串行取上一条：审计写入是低频旁路，为它上并发优化不值当，
+        # 而链的正确性依赖顺序。
+        prev = (
+            db.query(AuditLog.entry_hash)
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+            .scalar()
+        ) or ""
+        entry = AuditLog(
+            user_id=user_id,
+            username=username or "anonymous",
+            method=request.method,
+            path=request.url.path,
+            status_code=status_code,
+            prev_hash=prev,
         )
+        entry.entry_hash = audit_entry_hash(
+            prev, entry.username, entry.method, entry.path, entry.status_code
+        )
+        db.add(entry)
         db.commit()
     finally:
         db.close()

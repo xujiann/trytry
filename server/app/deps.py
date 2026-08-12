@@ -1,6 +1,6 @@
 from datetime import date, timezone
 
-from fastapi import Depends, HTTPException, Response, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -155,14 +155,62 @@ ROLE_NAMES = {
 
 
 def require_roles(*roles: str):
-    """角色守卫：admin 始终放行，其余角色需在允许清单内。"""
+    """角色守卫。
 
-    def checker(user: User = Depends(get_current_user)) -> User:
-        if user.role != "admin" and user.role not in roles:
-            allowed = "、".join(ROLE_NAMES.get(r, r) for r in roles)
+    阶段十一在这里做了一处**不改签名的扩展**：
+
+    - 六个内置角色（含 admin）判定完全照旧，走内存比较，**不查库**——
+      每个请求多查一次库换不来任何东西，而 550 个端点每个都要过这一关；
+    - 自定义角色（不在 `ROLE_NAMES` 里的）改查权限点：该角色被授了本接口
+      对应的权限点才放行。
+
+    这样既拿到了"自定义角色"这个能力，又保证现有部署零感知升级——
+    一次性把 248 处 `require_roles` 改成 `require_permission("...")`，
+    收益是统一，代价是 248 个改动点里只要错一个就是越权。
+    """
+
+    def checker(
+        request: Request,
+        user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> User:
+        if user.role == "admin" or user.role in roles:
+            return user
+        if user.role not in ROLE_NAMES:  # 自定义角色：查权限点
+            if _custom_role_allows(db, user.role, request):
+                return user
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail=f"需要以下角色之一：{allowed}"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"自定义角色「{user.role}」未被授予此操作的权限",
             )
-        return user
+        allowed = "、".join(ROLE_NAMES.get(r, r) for r in roles)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=f"需要以下角色之一：{allowed}"
+        )
 
     return checker
+
+
+def _custom_role_allows(db: Session, role_key: str, request: Request) -> bool:
+    """自定义角色是否被授予当前请求对应的权限点。
+
+    权限点用**路由模板**而非实际路径（`/api/x/{id}` 而不是 `/api/x/7`），
+    否则每个 id 都会变成一个权限点，配到天荒地老。
+    """
+    from .models import Permission, Role, RolePermission
+
+    route = request.scope.get("route")
+    template = getattr(route, "path", None) or request.url.path
+    code = f"{request.method}:{template}"
+    return (
+        db.query(RolePermission.id)
+        .join(Role, Role.id == RolePermission.role_id)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .filter(
+            Role.key == role_key,
+            Role.active.is_(True),
+            Permission.code == code,
+        )
+        .first()
+        is not None
+    )

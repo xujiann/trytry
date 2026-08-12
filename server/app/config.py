@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MEDPLAT_", env_file=".env", extra="ignore")
 
     database_url: str = "sqlite:///./medplat.db"
+    # 密码套件（阶段十一）：general=通用算法（PBKDF2/HMAC-SHA256），
+    # sm=国密（SM3 迭代 / HMAC-SM3）。指引明文要求"密码应用"，但不该假定
+    # 每个县都已上国密，故做成配置项而非代码分支。
+    crypto_suite: str = "general"
     # 附件本地磁盘存储目录（相对服务运行目录 server/；生产可挂载持久卷）
     upload_dir: str = "uploads"
     secret: str = DEFAULT_SECRET

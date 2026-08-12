@@ -68,6 +68,12 @@ class AuditLog(Base):
     method: Mapped[str] = mapped_column(String(8))
     path: Mapped[str] = mapped_column(String(256), index=True)
     status_code: Mapped[int] = mapped_column(Integer)
+    # 防篡改哈希链（阶段十一）：hash = MAC(平台密钥, 本条内容 + 上一条 hash)。
+    # 改任何一条历史记录，其后全部记录的链都对不上——**发现得了篡改，
+    # 但拦不住有库权限的人重算整条链**。真正的不可抵赖要靠外部存证或
+    # 只追加存储，平台侧能做到的是"改过就看得出来"，这一点要说清楚。
+    prev_hash: Mapped[str] = mapped_column(String(64), default="")
+    entry_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
@@ -3784,4 +3790,64 @@ class Resource(Base):
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
     withdraw_reason: Mapped[str] = mapped_column(String(256), default="")
     note: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+
+# ---------- 阶段十一 权限模型：角色 / 权限点 / 关联 ----------
+
+
+class Role(Base):
+    """角色。六个内置角色作为预置数据保留，保证现有部署零感知升级。
+
+    **内置角色不可删不可改 key**：删掉 doctor 这一行，全平台 200 多处
+    `require_roles("doctor")` 会同时失效——那不是"配置"，那是拆平台。
+    自定义角色则可增可删，这正是本阶段要给的能力。
+    """
+
+    __tablename__ = "roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(String(256), default="")
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Permission(Base):
+    """权限点：一个写接口就是一个权限点，`METHOD:path` 为唯一键。
+
+    **由平台启动时从路由表自动登记**，不手工维护——手工维护的权限点清单
+    与真实接口的偏差，是这类系统最常见也最难查的问题：清单里有的接口不存在，
+    存在的接口清单里没有，而两种偏差都表现为"权限配了不生效"。
+    """
+
+    __tablename__ = "permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    method: Mapped[str] = mapped_column(String(8))
+    path: Mapped[str] = mapped_column(String(300), index=True)
+    # 模块（按路径第二段），用于按模块批量授权
+    module: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # 内置角色的默认授权（逗号分隔），来自代码里的 require_roles 声明。
+    # 只作展示与"复制内置角色"的起点，运行期判定不看它。
+    builtin_roles: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RolePermission(Base):
+    """角色—权限点关联。只对自定义角色有意义：内置角色的判定仍走代码里的
+    `require_roles`，不查库——每个请求多查一次库换不来任何东西。"""
+
+    __tablename__ = "role_permissions"
+    __table_args__ = (
+        UniqueConstraint("role_id", "permission_id", name="uq_role_permission"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), index=True)
+    permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

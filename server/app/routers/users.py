@@ -16,6 +16,7 @@ from ..deps import (
     require_admin,
     resolve_business_date,
 )
+from ..audit_chain import verify_chain
 from ..models import AuditLog, Organization, RoleChangeLog, User, utcnow
 from ..security import hash_password, validate_password_strength, verify_password
 
@@ -29,11 +30,28 @@ def _check_password(value: str) -> str:
     return value
 
 
+def _check_role_exists(db: Session, role: str) -> None:
+    """角色须在 `roles` 表里且启用中。
+
+    改为查表而不是写死正则，是为了让自定义角色也能建号；但**不放松校验**——
+    随手打错一个角色名就建出一个谁也匹配不上的账号，比拒绝更麻烦。
+    """
+    from ..models import Role
+
+    row = db.query(Role).filter(Role.key == role).first()
+    if row is None:
+        raise HTTPException(status_code=422, detail=f"角色 {role} 不存在，请先在角色管理中创建")
+    if not row.active:
+        raise HTTPException(status_code=422, detail=f"角色 {role} 已停用")
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str
     full_name: str = ""
-    role: str = Field(default="operator", pattern="^(admin|director|doctor|pharmacist|public_health|operator)$")
+    # 阶段十一：角色不再写死正则——自定义角色也要能建号。
+    # 合法性改为对 `roles` 表现查（见 _check_role_exists），非法角色仍 422。
+    role: str = Field(default="operator", min_length=2, max_length=32)
     org_id: int | None = None
 
     # 密码复杂度：≥8位且含字母数字
@@ -63,6 +81,7 @@ def create_user(body: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="用户名已存在")
     if body.org_id is not None and db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="所属机构不存在")
+    _check_role_exists(db, body.role)
     user = User(
         username=body.username,
         password_hash=hash_password(body.password),
@@ -191,6 +210,44 @@ def list_audit_logs(
     ]
 
 
+@router.get("/audit/verify", dependencies=[Depends(require_admin)])
+def verify_audit_chain(
+    start_id: int = 0, limit: int = 5000, db: Session = Depends(get_db)
+):
+    """校验审计哈希链（阶段十一）。
+
+    **能力边界写在返回里，不藏在文档里**：这条链能发现"某条历史记录被改过"，
+    但拦不住有库权限且知道平台密钥的人重算整条链。真正的不可抵赖要靠外部存证
+    或只追加存储，属部署形态而非应用能力。把它说成"审计不可篡改"是夸大。
+
+    起点若不是链首（start_id > 首条），只能校验这一段内部的自洽——
+    这一点也如实报出，免得有人拿一段抽查结果当全量结论。
+    """
+    rows = (
+        db.query(AuditLog)
+        .filter(AuditLog.id >= start_id)
+        .order_by(AuditLog.id)
+        .limit(limit)
+        .all()
+    )
+    if not rows:
+        return {"checked": 0, "valid": True, "note": "该区间没有审计记录"}
+    # 未启用哈希链之前的历史记录（entry_hash 为空）不参与校验，单列报出
+    legacy = [r for r in rows if not r.entry_hash]
+    chained = [r for r in rows if r.entry_hash]
+    result = verify_chain(chained) if chained else {"valid": True, "broken_at": None, "reason": ""}
+    return {
+        "checked": len(chained),
+        "legacy_unchained": len(legacy),
+        "from_id": chained[0].id if chained else None,
+        "to_id": chained[-1].id if chained else None,
+        "partial_segment": bool(chained) and chained[0].prev_hash != "",
+        **result,
+        "caliber": "哈希链能发现历史记录被改动；但拦不住有库权限且知道平台密钥者"
+                   "重算整条链——不可抵赖需外部存证或只追加存储",
+    }
+
+
 @router.get("/audit/stats", dependencies=[Depends(require_admin)])
 def audit_stats(days: int = 30, db: Session = Depends(get_db)):
     """审计统计（浙#46 日志图形化）：按日趋势、失败码分布、高频操作与用户 TOP。
@@ -253,7 +310,7 @@ def audit_stats(days: int = 30, db: Session = Depends(get_db)):
 
 
 class RoleUpdate(BaseModel):
-    role: str = Field(pattern="^(admin|director|doctor|pharmacist|public_health|operator)$")
+    role: str = Field(min_length=2, max_length=32)
 
 
 # 同上：守卫放 dependencies=[]，保证非管理员拿到的是 403 而不是一份字段清单。
@@ -270,6 +327,7 @@ def change_user_role(
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    _check_role_exists(db, body.role)
     if target.id == operator.id and body.role != "admin":
         raise HTTPException(status_code=422, detail="不可撤销自身管理员角色")
     if target.role == body.role:

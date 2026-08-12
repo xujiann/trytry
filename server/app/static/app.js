@@ -134,6 +134,7 @@ const PAGES = [
   { id: "tcm", title: "中医药服务", render: renderTcm },
   { id: "archive", title: "患者360视图", render: renderArchive },
   { id: "resources", title: "统一资源与排程", render: renderResources },
+  { id: "rbac", title: "角色与权限", render: renderRbac },
   { id: "servicerequests", title: "统一申请单中心", render: renderServiceRequests },
   { group: "综合管理" },
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
@@ -2160,6 +2161,55 @@ async function renderResources() {
     if (d.withdraw) {
       const reason = prompt("撤回理由"); if (!reason) return;
       return postAction(`/api/resources/${d.withdraw}/withdraw`, { reason }, "#rs-msg");
+    }
+  };
+}
+
+
+async function renderRbac() {
+  $("#page-desc").textContent = "内置六角色（代码声明，不可删停）与自定义角色的权限点授权";
+  const [roles, modules] = await Promise.all([api("/api/rbac/roles"), api("/api/rbac/modules")]);
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>角色</h3>
+      <p class="hint">内置角色的权限来自代码内 require_roles 声明，不走授权表；自定义角色按权限点授权。</p>
+      <form class="inline" id="role-form">
+        <input name="key" placeholder="角色 key（小写字母数字下划线）" required>
+        <input name="name" placeholder="角色名称" required><input name="description" placeholder="说明">
+        <button>新建自定义角色</button></form>
+      <p class="msg" id="role-msg"></p>
+      ${table(["key", "名称", "类型", "权限点", "状态", "操作"], roles, (r) =>
+        `<tr><td>${esc(r.key)}</td><td>${esc(r.name)}</td>` +
+        `<td>${r.builtin ? '<span class="tag">内置</span>' : "自定义"}</td>` +
+        `<td>${r.builtin ? esc(r.permission_source) : r.permission_count}</td>` +
+        `<td>${r.active ? "启用" : "停用"}</td>` +
+        `<td>${r.builtin ? "—" : `<button class="btn sm" data-grant="${r.id}">授权</button>` +
+          `<button class="btn sm" data-view="${r.id}">查看</button>` +
+          `<button class="btn sm danger" data-del="${r.id}">删除</button>`}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>权限点模块（共 ${modules.reduce((a, m) => a + m.permission_count, 0)} 个写接口权限点）</h3>
+      <p class="hint">权限点由平台启动时从路由表自动登记，不手工维护——手工清单与真实接口的偏差最难查。</p>
+      ${table(["模块", "权限点数"], modules, (m) =>
+        `<tr><td>${esc(m.module)}</td><td>${m.permission_count}</td></tr>`)}
+    </div>
+    <div class="panel"><h3>角色权限明细</h3><div id="rbac-detail"><p class="empty">点上方「查看」</p></div></div>`;
+  $("#role-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/rbac/roles", formJson(e.target, []), "#role-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const d = e.target.dataset;
+    if (d.grant) {
+      const mods = prompt("按模块授权，逗号分隔（如 medwaste,medication）；留空则取消");
+      if (!mods) return;
+      return postAction(`/api/rbac/roles/${d.grant}/permissions`,
+        { modules: mods.split(",").map((x) => x.trim()).filter(Boolean) }, "#role-msg");
+    }
+    if (d.del) {
+      if (!confirm("确认删除该自定义角色？")) return;
+      return postAction(`/api/rbac/roles/${d.del}`, null, "#role-msg", "DELETE");
+    }
+    if (d.view) {
+      const r = await api(`/api/rbac/roles/${d.view}/permissions`);
+      $("#rbac-detail").innerHTML = `<p>${esc(r.role.name)}（${esc(r.role.key)}）共 ${r.permissions.length} 个权限点</p>` +
+        table(["模块", "方法", "路径"], r.permissions, (p) =>
+          `<tr><td>${esc(p.module)}</td><td>${esc(p.method)}</td><td>${esc(p.path)}</td></tr>`);
     }
   };
 }

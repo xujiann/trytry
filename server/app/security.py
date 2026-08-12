@@ -1,17 +1,16 @@
 """统一认证：口令散列与 HS256 令牌签发/校验（自包含实现，不依赖第三方 JWT 库）。"""
 import base64
-import hashlib
 import hmac
 import json
 import os
 import time
 
+from . import gmcrypto
 from .config import settings
 from .state_store import TokenBlacklist
 
 SECRET_KEY = settings.secret
 TOKEN_TTL_SECONDS = settings.token_ttl_seconds
-_PBKDF2_ITERATIONS = 120_000
 
 # 登出黑名单（M4 整改）：默认进程内存实现（带 TTL 清理），
 # 配置 MEDPLAT_REDIS_URL 后自动切换 Redis 共享存储（多实例部署必须）。
@@ -30,18 +29,15 @@ def validate_password_strength(password: str) -> str | None:
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
-    salt = salt or os.urandom(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERATIONS)
-    return f"{salt.hex()}${digest.hex()}"
+    """口令散列。算法由 `MEDPLAT_CRYPTO_SUITE` 决定（general / sm），
+    具体实现见 `app/gmcrypto.py`。"""
+    return gmcrypto.hash_password(password, salt)
 
 
 def verify_password(password: str, stored: str) -> bool:
-    try:
-        salt_hex, digest_hex = stored.split("$", 1)
-    except ValueError:
-        return False
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt_hex), _PBKDF2_ITERATIONS)
-    return hmac.compare_digest(digest.hex(), digest_hex)
+    """校验口令。按存储值自带的算法标识走，与当前配置无关——
+    切换算法后老口令仍可登录，不必强制全员改密。"""
+    return gmcrypto.verify_password(password, stored)
 
 
 def _b64url(data: bytes) -> str:
@@ -64,7 +60,7 @@ def create_token(
     业务端 get_current_user 见到 scope=portal 直接拒绝，两套身份互不越界）；
     `ttl_seconds` 覆盖默认有效期（居民端移动会话更长）。
     """
-    header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    header = _b64url(json.dumps({"alg": gmcrypto.mac_alg(), "typ": "JWT"}).encode())
     claims = {
         "sub": username,
         "role": role,
@@ -76,7 +72,7 @@ def create_token(
     }
     claims.update(extra or {})
     payload = _b64url(json.dumps(claims).encode())
-    signature = _b64url(hmac.new(SECRET_KEY.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest())
+    signature = _b64url(gmcrypto.mac(SECRET_KEY.encode(), f"{header}.{payload}".encode()))
     return f"{header}.{payload}.{signature}"
 
 
@@ -85,7 +81,7 @@ def decode_token(token: str) -> dict | None:
         header, payload, signature = token.split(".")
     except ValueError:
         return None
-    expected = _b64url(hmac.new(SECRET_KEY.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest())
+    expected = _b64url(gmcrypto.mac(SECRET_KEY.encode(), f"{header}.{payload}".encode()))
     if not hmac.compare_digest(signature, expected):
         return None
     claims = json.loads(_b64url_decode(payload))
