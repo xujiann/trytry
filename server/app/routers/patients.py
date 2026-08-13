@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy.exc import IntegrityError
 
+from ..visibility import log_patient_access
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from pydantic import BaseModel, Field
@@ -139,7 +140,18 @@ def revoke_authorization(patient_id: int, auth_id: int, db: Session = Depends(ge
 
 
 @router.get("/{patient_id}/authorizations")
-def list_authorizations(patient_id: int, db: Session = Depends(get_db)):
+def list_authorizations(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """该患者授权了哪些机构。
+
+    这份清单本身就是隐私（等于"这个人在哪几家机构看过病"），但它是窗口办理
+    知情同意的入口：患者本人就在柜台前，而此刻本机构往往还没有他的任何记录，
+    要求先有业务关系会把这项业务办不成。故取"可问责而非可阻断"——只留痕。
+    """
+    log_patient_access(db, user, patient_id, "authorization", "consent_admin")
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     return [
@@ -164,8 +176,17 @@ def check_authorization(
     scope: str = "all",
     today: str | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """调阅授权校验：该机构是否持有患者未过期的有效授权（跨域调阅对接的校验入口）。"""
+    """调阅授权校验：该机构是否持有患者未过期的有效授权（跨域调阅对接的校验入口）。
+
+    需先对该患者有可见性。原先 org_id 随便填、患者随便挑，等于可以枚举
+    "这个人授权过哪几家机构"——那是在问他在哪看过病。
+
+    与上面同一条口径：只留痕不阻断。签发授权的机构要能回看自己发出去的授权
+    还生不生效，那是正当的，也正是这条接口本来的用途。
+    """
+    log_patient_access(db, user, patient_id, "authorization", "consent_admin")
     current = resolve_business_date(today).isoformat()
     grants = (
         db.query(ArchiveAuthorization)

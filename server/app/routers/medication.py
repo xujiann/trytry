@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..visibility import assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..clock import now_naive
@@ -15,6 +16,7 @@ from ..models import (
     Prescription,
     PrescriptionItem,
     ServiceBlacklist,
+    User,
 )
 
 router = APIRouter(prefix="/api/medication", tags=["药事监测"], dependencies=[Depends(get_current_user)])
@@ -166,8 +168,13 @@ def shortage_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/profile/{patient_id}")
-def medication_profile(patient_id: int, db: Session = Depends(get_db)):
+def medication_profile(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """居民用药画像：在用药品清单（通过审方的处方）+ 多重用药预警。"""
+    assert_patient_visible(db, user, patient_id, resource="medication")
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     rows = (

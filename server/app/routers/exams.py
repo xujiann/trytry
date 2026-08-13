@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import insert_or_conflict
+from ..visibility import log_patient_access
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import CriticalAction, ExamReport, ExamRequest, Organization, Patient, RecognitionItem, User
@@ -135,11 +136,15 @@ def recognition_check(
     center_type: str | None = None,
     from_org_id: int | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """开单前互认检查：项目须在互认目录内（目录已配置时），且近期已有同项目报告。
 
     可选传 center_type / from_org_id，与建单侧判定口径一致（L-4/L-5）。
     """
+    # 互认查询按设计要跨机构工作（见 visibility.log_patient_access）：
+    # 患者初次到院、本机构一条记录都没有，正是最该问"别处做过没有"的时刻。
+    log_patient_access(db, user, patient_id, "exam_recognition", "recognition")
     org = db.get(Organization, from_org_id) if from_org_id is not None else None
     blocked = _directory_blocked_reason(db, item_code, center_type, (org,))
     if blocked is not None:

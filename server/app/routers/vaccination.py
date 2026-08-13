@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..concurrency import claim_quota
 from ..datetypes import OptionalDateStr
+from ..visibility import assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import (
@@ -112,8 +113,13 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/records", response_model=list[RecordOut])
-def vaccination_history(patient_id: int, db: Session = Depends(get_db)):
+def vaccination_history(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """接种史查询：临床诊疗与接种场景共享调阅。"""
+    assert_patient_visible(db, user, patient_id, resource="vaccination")
     return (
         db.query(VaccinationRecord)
         .filter(VaccinationRecord.patient_id == patient_id)
@@ -181,12 +187,14 @@ def list_contraindications(
     include_lifted: bool = True,
     today: str | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """禁忌清单。
 
     默认连已解除的一起返回：接种前要回答的不只是"现在能不能打"，
     还有"以前为什么没打、后来为什么又能打"。
     """
+    assert_patient_visible(db, user, patient_id, resource="vaccination")
     today_str = resolve_business_date(today).isoformat()
     query = db.query(VaccineContraindication).filter(
         VaccineContraindication.patient_id == patient_id
@@ -234,8 +242,10 @@ def pre_vaccination_check(
     vaccine_code: str,
     today: str | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """接种前综合评估：禁忌、既往剂次、近期就诊信息一屏返回。"""
+    assert_patient_visible(db, user, patient_id, resource="vaccination")
     patient = db.get(Patient, patient_id)
     if patient is None:
         raise HTTPException(status_code=404, detail="受种者不存在")

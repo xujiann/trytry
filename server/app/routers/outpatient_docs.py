@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_local
+from ..visibility import assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -327,8 +328,10 @@ def list_treatments_by_patient(
     offset: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """按患者查处置史：换药、雾化这类连续处置需要跨就诊看一条线。"""
+    assert_patient_visible(db, user, patient_id, resource="treatment")
     query = (
         db.query(TreatmentRecord)
         .filter(TreatmentRecord.patient_id == patient_id)

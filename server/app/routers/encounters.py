@@ -14,7 +14,9 @@ from ..models import (
     PhysicalExam,
     Prescription,
     Settlement,
+    User,
 )
+from ..visibility import assert_patient_visible, visible_org_ids
 from ..schemas import EncounterCreate, EncounterOut
 
 router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[Depends(get_current_user)])
@@ -45,11 +47,22 @@ def list_encounters(
     offset: int = 0,
     limit: int = 200,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """就诊记录列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
+    """就诊记录列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。
+
+    第九轮：**不带 patient_id 时只返回本机构的就诊记录**。原先返回全表——
+    任何一个登录账号翻一页就拿到全县的就诊记录，这是最直接的横向越权。
+    带了 patient_id 则走患者可见性判定（并留痕）。
+    """
     query = db.query(Encounter)
     if patient_id is not None:
+        assert_patient_visible(db, user, patient_id, resource="encounter")
         query = query.filter(Encounter.patient_id == patient_id)
+    else:
+        orgs = visible_org_ids(db, user)
+        if orgs is not None:
+            query = query.filter(Encounter.org_id.in_(orgs))
     return paginate(query.order_by(Encounter.id.desc()), response, offset, limit)
 
 
@@ -65,15 +78,22 @@ def _section(query, limit: int = ARCHIVE_SECTION_LIMIT) -> tuple[list, bool]:
 
 
 @router.get("/archive/{ehc_no}")
-def patient_360_view(ehc_no: str, db: Session = Depends(get_db)):
+def patient_360_view(
+    ehc_no: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """患者全景360视图：档案、就诊、检查检验报告、慢病、处方一屏汇聚。
 
     各段取最近 ARCHIVE_SECTION_LIMIT 条，`has_more` 标明是否被截断；
     需要完整清单时走各自的分页列表接口。
+
+    第九轮：这是全平台聚合度最高的一个接口——一次调用拿到一个人的就诊、
+    检查、慢病、处方。**它此前对任何登录账号开放**，实测乙镇卫生院的医生
+    凭 ehc_no 就能看甲县医院患者的全部诊疗信息。现在须有业务关系并留痕。
     """
     patient = db.query(Patient).filter(Patient.ehc_no == ehc_no).first()
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    assert_patient_visible(db, user, patient.id, resource="archive_360")
     encounters, encounters_more = _section(
         db.query(Encounter).filter(Encounter.patient_id == patient.id).order_by(Encounter.id.desc())
     )

@@ -95,6 +95,37 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class AccessLog(Base):
+    """敏感读留痕：谁、什么时候、凭什么依据、看了谁的档案。
+
+    与 `AuditLog` 分表而不是并进去，两条理由：
+
+    1. `AuditLog` 只记写操作，且带防篡改哈希链——链要串行取上一条，
+       为低频写做的设计。诊疗数据的读远比写频繁，塞进同一条链会把它拖垮。
+    2. 两者回答的问题不同。写审计回答"谁改了什么"，读留痕回答
+       "谁看了谁的档案、凭什么"——《个人信息保护法》与《医疗卫生机构网络安全
+       管理办法》要的是后面这一条，而平台此前一条都没记。
+
+    `basis` 是这张表的核心：跨机构调阅在医共体里是正常业务（转诊、签约、
+    结果互认），所以不能只记"访问过"，要记**凭什么访问**。没有这一列，
+    事后审计只能看到一片"某医生查了某患者"，分不出哪次是正当的。
+    """
+
+    __tablename__ = "access_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    username: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # 调阅人所属机构（可空：居民端账号不挂机构）
+    org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # 调阅的是哪一类数据：archive=健康档案, encounter=就诊记录, exam=检查检验…
+    resource: Mapped[str] = mapped_column(String(32), default="", index=True)
+    # 依据：global｜encounter｜contract｜referral｜authorization｜self
+    basis: Mapped[str] = mapped_column(String(16), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class Organization(Base):
     __tablename__ = "organizations"
 

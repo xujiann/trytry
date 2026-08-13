@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..visibility import assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -12,6 +13,7 @@ from ..models import (
     Patient,
     PhEventAction,
     PublicHealthEvent,
+    User,
     VaccineContraindication,
 )
 from .chronic import guidance_for
@@ -111,11 +113,17 @@ def close_event(event_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/reminders/{patient_id}")
-def clinic_reminders(patient_id: int, today: str | None = None, db: Session = Depends(get_db)):
+def clinic_reminders(
+    patient_id: int,
+    today: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """诊间医防协同提醒：接诊时汇聚该患者的公卫待办与风险提示。
 
     L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
     """
+    assert_patient_visible(db, user, patient_id, resource="publichealth")
     from ..deps import resolve_business_date
 
     if db.get(Patient, patient_id) is None:
