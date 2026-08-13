@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..config import settings
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import Patient, User, VisitCredential, utcnow
@@ -92,14 +93,18 @@ def issue_credential(
         old.closed_at = utcnow()
         old.close_reason = body.reason or "换发新凭据"
 
-    credential = VisitCredential(
-        patient_id=patient.id,
-        credential_no=credential_no,
-        credential_type=body.credential_type,
-        issued_by=user.id,
+    # 作废旧凭据与发放新凭据同一次提交：撞了凭据号唯一约束就一起回滚，
+    # 否则会出现"旧的作废了、新的没发出来"，患者手上一张能用的都没有。
+    credential = insert_or_conflict(
+        db,
+        VisitCredential(
+            patient_id=patient.id,
+            credential_no=credential_no,
+            credential_type=body.credential_type,
+            issued_by=user.id,
+        ),
+        "该凭据号已存在",
     )
-    db.add(credential)
-    db.commit()
     result = _credential_out(credential)
     result["superseded"] = [c.credential_no for c in superseded]
     return result

@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import Organization, SterilizationBatch
@@ -23,10 +24,7 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="消毒供应中心机构不存在")
     if db.query(SterilizationBatch).filter(SterilizationBatch.batch_no == body.batch_no).first():
         raise HTTPException(status_code=409, detail="批次号已存在")
-    batch = SterilizationBatch(**body.model_dump())
-    db.add(batch)
-    db.commit()
-    db.refresh(batch)
+    batch = insert_or_conflict(db, SterilizationBatch(**body.model_dump()), "批次号已存在")
     return batch
 
 

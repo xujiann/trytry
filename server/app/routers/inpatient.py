@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -42,9 +43,7 @@ def create_ward(body: WardCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="机构不存在")
     if db.query(Ward).filter(Ward.org_id == body.org_id, Ward.name == body.name).first():
         raise HTTPException(status_code=409, detail="该机构下病区已存在")
-    ward = Ward(**body.model_dump())
-    db.add(ward)
-    db.commit()
+    ward = insert_or_conflict(db, Ward(**body.model_dump()), "该机构下病区已存在")
     return {"id": ward.id, "org_id": ward.org_id, "name": ward.name}
 
 
@@ -67,9 +66,7 @@ def create_bed(body: BedCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="病区不存在")
     if db.query(Bed).filter(Bed.ward_id == body.ward_id, Bed.bed_no == body.bed_no).first():
         raise HTTPException(status_code=409, detail="该病区下床号已存在")
-    bed = Bed(**body.model_dump())
-    db.add(bed)
-    db.commit()
+    bed = insert_or_conflict(db, Bed(**body.model_dump()), "该病区下床号已存在")
     return {"id": bed.id, "ward_id": bed.ward_id, "bed_no": bed.bed_no, "status": bed.status}
 
 
@@ -281,14 +278,11 @@ def create_case_summary(
     # DRG 外科组按主手术关键词入组，靠医生手敲这一栏最容易漏，带出来准确得多。
     if not payload.get("operation"):
         payload["operation"] = _operations_of_admission(db, admission_id)
-    summary = CaseSummary(
-        admission_id=admission_id,
-        **payload,
-        created_by_name=user.full_name or user.username,
-    )
-    db.add(summary)
-    db.commit()
-    db.refresh(summary)
+    summary = insert_or_conflict(db, CaseSummary(
+            admission_id=admission_id,
+            **payload,
+            created_by_name=user.full_name or user.username,
+        ), "病案首页已填写")
     out = _case_summary_out(summary)
     # M12：结案时按主诊断关键词自动 DRG 入组（模块可用时）
     try:

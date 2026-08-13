@@ -22,6 +22,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
@@ -104,9 +105,7 @@ def create_charge_item(body: ChargeItemCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="该收费项目编码已存在")
     if _charge_dict_blocked(db, body.code):
         raise HTTPException(status_code=422, detail="编码不在四统一收费字典内")
-    item = ChargeItem(**body.model_dump())
-    db.add(item)
-    db.commit()
+    item = insert_or_conflict(db, ChargeItem(**body.model_dump()), "该收费项目编码已存在")
     return _charge_item_out(item)
 
 

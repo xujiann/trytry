@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
+from ..concurrency import insert_or_conflict, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_org_scope
 from ..formula import FormulaError, evaluate, validate
@@ -260,18 +261,12 @@ def close_period(pool_id: int, body: PeriodIn, db: Session = Depends(get_db)):
         else _collect_expense(db, pool, body.period)
     )
     source = "manual" if body.actual_amount is not None else "auto"
-    row = (
-        db.query(FundPeriod)
-        .filter(FundPeriod.pool_id == pool_id, FundPeriod.period == body.period)
-        .first()
+    upsert_unique(
+        db,
+        FundPeriod,
+        keys={"pool_id": pool_id, "period": body.period},
+        values={"actual_amount": amount, "source": source, "note": body.note},
     )
-    if row is None:
-        row = FundPeriod(pool_id=pool_id, period=body.period)
-        db.add(row)
-    row.actual_amount = amount
-    row.source = source
-    row.note = body.note
-    db.commit()
     out = _pool_out(pool, db)
     return {
         "period": body.period,
@@ -363,9 +358,10 @@ def settle(
         overrun_action=body.overrun_action,
         created_by=user.id,
     )
-    db.add(settlement)
+    # 先改池状态再插清算单：insert_or_conflict 内部 commit，两者同一次提交，
+    # 撞约束时一起回滚（D-1 的教训）。并发重复清算撞的正是 pool_id 唯一约束。
     pool.status = "settled"
-    db.commit()
+    settlement = insert_or_conflict(db, settlement, "该基金池已清算")
     return _settlement_out(settlement, db)
 
 

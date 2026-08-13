@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_if_absent
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -174,15 +175,17 @@ def receive_purchase(
     code = f"MP{purchase.id:06d}"
     asset = db.query(Asset).filter(Asset.code == code).first()
     if asset is None:
-        asset = Asset(
-            org_id=purchase.org_id,
-            code=code,
-            name=purchase.item_name,
-            category="office",
-            quantity=0,
+        insert_if_absent(
+            db,
+            Asset(
+                org_id=purchase.org_id,
+                code=code,
+                name=purchase.item_name,
+                category="office",
+                quantity=0,
+            ),
         )
-        db.add(asset)
-        db.flush()
+        asset = db.query(Asset).filter(Asset.code == code).first()
     asset.quantity += body.received_quantity
     db.add(
         AssetMovement(

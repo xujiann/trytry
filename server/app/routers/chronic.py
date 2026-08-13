@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import (
     get_current_user,
@@ -156,10 +157,9 @@ def list_disease_types(active: bool | None = None, db: Session = Depends(get_db)
 def create_disease_type(body: DiseaseTypeCreate, db: Session = Depends(get_db)):
     if get_disease_type(db, body.code) is not None:
         raise HTTPException(status_code=409, detail="病种编码已存在")
-    disease_type = ChronicDiseaseType(**body.model_dump())
-    db.add(disease_type)
-    db.commit()
-    db.refresh(disease_type)
+    disease_type = insert_or_conflict(
+        db, ChronicDiseaseType(**body.model_dump()), "病种编码已存在"
+    )
     return _disease_type_out(disease_type)
 
 
@@ -204,8 +204,20 @@ def register_chronic(body: ChronicCreate, db: Session = Depends(get_db)):
     # 建档即安排首次随访：未指定到期日时按病种周期自动建议
     if not payload.get("next_due"):
         payload["next_due"] = _suggest_next_due(db, body.disease)
+    # 建档是幂等的（上面查到既有档案就直接返回）。并发下两个请求都查不到
+    # 就都会走到这里，撞 (patient_id, disease) 唯一约束——那也该返回既有档案，
+    # 不是 500。同一个人同一病种建两份档，随访会各走各的。
     chronic = ChronicPatient(**payload)
-    db.add(chronic)
+    if not insert_if_absent(db, chronic):
+        db.rollback()  # 同 maternal：提前返回前必须结束外层写事务
+        return (
+            db.query(ChronicPatient)
+            .filter(
+                ChronicPatient.patient_id == body.patient_id,
+                ChronicPatient.disease == body.disease,
+            )
+            .first()
+        )
     db.commit()
     db.refresh(chronic)
     return chronic

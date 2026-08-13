@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import Organization
@@ -15,10 +16,7 @@ def create_organization(body: OrganizationCreate, db: Session = Depends(get_db))
         raise HTTPException(status_code=409, detail="机构已存在")
     if body.parent_id is not None and db.get(Organization, body.parent_id) is None:
         raise HTTPException(status_code=404, detail="上级机构不存在")
-    org = Organization(**body.model_dump())
-    db.add(org)
-    db.commit()
-    db.refresh(org)
+    org = insert_or_conflict(db, Organization(**body.model_dump()), "机构已存在")
     return org
 
 

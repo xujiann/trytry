@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -220,9 +221,7 @@ class ExpertCreate(BaseModel):
 def create_expert(body: ExpertCreate, db: Session = Depends(get_db)):
     if db.query(ConsultExpert).filter(ConsultExpert.name == body.name).first():
         raise HTTPException(status_code=409, detail="专家已存在")
-    e = ConsultExpert(**body.model_dump())
-    db.add(e)
-    db.commit()
+    e = insert_or_conflict(db, ConsultExpert(**body.model_dump()), "专家已存在")
     return {"id": e.id}
 
 

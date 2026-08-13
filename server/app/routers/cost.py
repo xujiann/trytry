@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..concurrency import upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -67,24 +68,13 @@ def upsert_department_cost(body: CostIn, db: Session = Depends(get_db)):
     dept = db.get(Department, body.dept_id)
     if dept is None:
         raise HTTPException(status_code=404, detail="科室不存在")
-    existing = (
-        db.query(DepartmentCost)
-        .filter(
-            DepartmentCost.dept_id == body.dept_id,
-            DepartmentCost.period == body.period,
-            DepartmentCost.cost_type == body.cost_type,
-        )
-        .first()
+    record, updated = upsert_unique(
+        db,
+        DepartmentCost,
+        keys={"dept_id": body.dept_id, "period": body.period, "cost_type": body.cost_type},
+        values={"amount": body.amount, "org_id": dept.org_id},
     )
-    if existing is not None:
-        existing.amount = body.amount
-        db.commit()
-        return {"id": existing.id, "updated": True, "amount": existing.amount}
-    record = DepartmentCost(org_id=dept.org_id, **body.model_dump())
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    return {"id": record.id, "updated": False, "amount": record.amount}
+    return {"id": record.id, "updated": updated, "amount": record.amount}
 
 
 class AllocationIn(BaseModel):

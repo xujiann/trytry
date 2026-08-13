@@ -4,6 +4,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -88,7 +89,17 @@ def issue_referral_cert(referral_id: int, db: Session = Depends(get_db)):
         return {"cert_no": existing.cert_no, "referral_id": referral_id}
     cert = ReferralCert(referral_id=referral_id, cert_no="ZZ" + secrets.token_hex(5).upper())
     db.add(cert)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发重复签发：签发是幂等的（上面已按既有证明直接返回），
+        # 撞了约束也该取回已有那张，而不是报错——更不能换一个新号，
+        # 一次转诊两个证明号，核验时对不上。
+        db.rollback()
+        existing = db.query(ReferralCert).filter(ReferralCert.referral_id == referral_id).first()
+        if existing is None:  # pragma: no cover - 撞约束却查不到，说明约束定义有误
+            raise
+        return {"cert_no": existing.cert_no, "referral_id": referral_id}
     return {"cert_no": cert.cert_no, "referral_id": referral_id}
 
 

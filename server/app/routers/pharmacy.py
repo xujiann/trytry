@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from pydantic import BaseModel, Field
@@ -39,12 +40,18 @@ def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
         .first()
     )
     if stock is None:
-        stock = DrugStock(**body.model_dump())
-        db.add(stock)
-    else:
-        stock.quantity += body.quantity
-        stock.threshold = body.threshold
-        stock.drug_name = body.drug_name
+        # 累加语义用不了 upsert_unique（那是覆盖）。先试插一行零库存，
+        # 谁插上都行，撞了说明别人刚建好，取回来照样走累加——
+        # 直接 db.add 则两个入库请求都建行、撞唯一约束，两批药都没入成。
+        insert_if_absent(db, DrugStock(**{**body.model_dump(), "quantity": 0}))
+        stock = (
+            db.query(DrugStock)
+            .filter(DrugStock.org_id == body.org_id, DrugStock.drug_code == body.drug_code)
+            .first()
+        )
+    stock.quantity += body.quantity
+    stock.threshold = body.threshold
+    stock.drug_name = body.drug_name
     db.commit()
     db.refresh(stock)
     return stock
@@ -219,9 +226,7 @@ class SupplierCreate(BaseModel):
 def create_supplier(body: SupplierCreate, db: Session = Depends(get_db)):
     if db.query(Supplier).filter(Supplier.name == body.name).first():
         raise HTTPException(status_code=409, detail="供应商已存在")
-    supplier = Supplier(**body.model_dump())
-    db.add(supplier)
-    db.commit()
+    supplier = insert_or_conflict(db, Supplier(**body.model_dump()), "供应商已存在")
     return {"id": supplier.id, "name": supplier.name, "active": supplier.active}
 
 
@@ -309,16 +314,25 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db)):
             .first()
         )
         if stock is None:
-            stock = DrugStock(
-                org_id=order.org_id,
-                drug_code=order.item_code,
-                drug_name=order.item_name,
-                quantity=order.quantity,
-                threshold=0,
+            # 两张采购单同时验收同一个药品，都查不到库存行就都去建，
+            # 撞 (org_id, drug_code) 唯一约束 → 500，两张单都没入库。
+            # 先试插一行零库存，谁插上都行，随后统一按增量累加。
+            insert_if_absent(
+                db,
+                DrugStock(
+                    org_id=order.org_id,
+                    drug_code=order.item_code,
+                    drug_name=order.item_name,
+                    quantity=0,
+                    threshold=0,
+                ),
             )
-            db.add(stock)
-        else:
-            stock.quantity += order.quantity
+            stock = (
+                db.query(DrugStock)
+                .filter(DrugStock.org_id == order.org_id, DrugStock.drug_code == order.item_code)
+                .first()
+            )
+        stock.quantity += order.quantity
         db.flush()
         stock_qty = stock.quantity
     db.commit()

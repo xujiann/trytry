@@ -5,6 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..concurrency import insert_if_absent, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import Course, LiveFeedback, LiveSession, TrainingRecord, User
@@ -59,8 +60,15 @@ def submit_exam(course_id: int, body: ExamSubmit, db: Session = Depends(get_db),
         .first()
     )
     if record is None:
-        record = TrainingRecord(course_id=course_id, user_id=user.id, score=0, passed=False)
-        db.add(record)
+        # 取最高分是累加型语义，用不了覆盖式的 upsert_unique
+        insert_if_absent(
+            db, TrainingRecord(course_id=course_id, user_id=user.id, score=0, passed=False)
+        )
+        record = (
+            db.query(TrainingRecord)
+            .filter(TrainingRecord.course_id == course_id, TrainingRecord.user_id == user.id)
+            .first()
+        )
     record.score = max(record.score, body.score)
     record.passed = record.score >= PASS_SCORE
     db.commit()
@@ -202,21 +210,13 @@ def submit_live_feedback(
         raise HTTPException(status_code=404, detail="直播申请不存在")
     if session.status != "finished":
         raise HTTPException(status_code=409, detail="直播结束后方可反馈")
-    existing = (
-        db.query(LiveFeedback)
-        .filter(LiveFeedback.session_id == session_id, LiveFeedback.user_id == user.id)
-        .first()
+    feedback, updated = upsert_unique(
+        db,
+        LiveFeedback,
+        keys={"session_id": session_id, "user_id": user.id},
+        values=body.model_dump(),
     )
-    if existing is not None:
-        existing.rating = body.rating
-        existing.comment = body.comment
-        db.commit()
-        return {"id": existing.id, "updated": True}
-    feedback = LiveFeedback(session_id=session_id, user_id=user.id, **body.model_dump())
-    db.add(feedback)
-    db.commit()
-    db.refresh(feedback)
-    return {"id": feedback.id, "updated": False}
+    return {"id": feedback.id, "updated": updated}
 
 
 @router.get("/live-sessions/{session_id}/feedback")

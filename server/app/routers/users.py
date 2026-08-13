@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import (
     ROLE_NAMES,
@@ -82,16 +83,17 @@ def create_user(body: UserCreate, db: Session = Depends(get_db)):
     if body.org_id is not None and db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="所属机构不存在")
     _check_role_exists(db, body.role)
-    user = User(
-        username=body.username,
-        password_hash=hash_password(body.password),
-        full_name=body.full_name,
-        role=body.role,
-        org_id=body.org_id,
+    user = insert_or_conflict(
+        db,
+        User(
+            username=body.username,
+            password_hash=hash_password(body.password),
+            full_name=body.full_name,
+            role=body.role,
+            org_id=body.org_id,
+        ),
+        "用户名已存在",
     )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
     return user
 
 

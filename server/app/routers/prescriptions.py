@@ -7,7 +7,7 @@ from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_if_absent
+from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -80,10 +80,7 @@ def _active_rule(db: Session, drug_code: str) -> DrugRule | None:
 def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db)):
     if db.query(DrugRule).filter(DrugRule.drug_code == body.drug_code).first():
         raise HTTPException(status_code=409, detail="该药品规则已存在")
-    rule = DrugRule(**body.model_dump())
-    db.add(rule)
-    db.commit()
-    db.refresh(rule)
+    rule = insert_or_conflict(db, DrugRule(**body.model_dump()), "该药品规则已存在")
     return rule
 
 
@@ -341,11 +338,9 @@ def comment_prescription(
         raise HTTPException(status_code=409, detail="该处方已点评")
     if body.grade == "unreasonable" and not (body.issues or body.comment):
         raise HTTPException(status_code=422, detail="不合理处方须注明问题类型或点评意见")
-    record = PrescriptionComment(
-        prescription_id=prescription_id, reviewer_id=user.id, **body.model_dump()
-    )
-    db.add(record)
-    db.commit()
+    record = insert_or_conflict(db, PrescriptionComment(
+            prescription_id=prescription_id, reviewer_id=user.id, **body.model_dump()
+        ), "该处方已点评")
     return {"id": record.id, "prescription_id": prescription_id, "grade": record.grade}
 
 

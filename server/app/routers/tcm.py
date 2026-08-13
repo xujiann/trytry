@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import Organization, Patient, TcmDispenseOrder, TcmTechnique
@@ -228,10 +229,7 @@ class TechniqueOut(TechniqueCreate):
 def create_technique(body: TechniqueCreate, db: Session = Depends(get_db)):
     if db.query(TcmTechnique).filter(TcmTechnique.name == body.name).first():
         raise HTTPException(status_code=409, detail="该技术已入库")
-    technique = TcmTechnique(**body.model_dump())
-    db.add(technique)
-    db.commit()
-    db.refresh(technique)
+    technique = insert_or_conflict(db, TcmTechnique(**body.model_dump()), "该技术已入库")
     return technique
 
 

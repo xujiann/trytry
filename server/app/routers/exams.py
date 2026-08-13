@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import CriticalAction, ExamReport, ExamRequest, Organization, Patient, RecognitionItem, User
@@ -75,10 +77,7 @@ def _directory_blocked_reason(
 def create_recognition_item(body: RecognitionItemCreate, db: Session = Depends(get_db)):
     if db.query(RecognitionItem).filter(RecognitionItem.item_code == body.item_code).first():
         raise HTTPException(status_code=409, detail="该项目已在互认目录中")
-    item = RecognitionItem(**body.model_dump())
-    db.add(item)
-    db.commit()
-    db.refresh(item)
+    item = insert_or_conflict(db, RecognitionItem(**body.model_dump()), "该项目已在互认目录中")
     return item
 
 
@@ -308,7 +307,13 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
             link_type="exam_report",
             link_id=report.id,
         )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # request.status 那道判断挡不住并发：两个请求都读到 pending 就都会走到这里。
+        # 一张申请单只能有一份报告，撞了就是"已出具"，不是 500。
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该申请单报告已出具") from None
     db.refresh(report)
     if report.critical:
         # M-2 整改：危急值定向广播——仅申请机构在线用户与 admin/director 收到

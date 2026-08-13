@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_with_retry
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ChildRecord, MedicalCert, Organization, Patient, User
@@ -50,11 +51,19 @@ def issue_cert(
     if body.child_id is not None and db.get(ChildRecord, body.child_id) is None:
         raise HTTPException(status_code=404, detail="儿童档案不存在")
     # 证明编号：类型前缀 + 年份 + 6位顺序号
-    seq = (db.query(func.count(MedicalCert.id)).filter(MedicalCert.cert_type == body.cert_type).scalar() or 0) + 1
-    cert_no = f"{_PREFIX[body.cert_type]}{date.today().year}{seq:06d}"
-    cert = MedicalCert(cert_no=cert_no, created_by=user.id, **body.model_dump())
-    db.add(cert)
-    db.commit()
+    # 与医废追溯码同型：编号是服务端 COUNT+1 算出来的，并发下会算出同一个。
+    # 重试取号是服务端的事，不该让签发证明的人重来一遍。
+    def _build() -> MedicalCert:
+        seq = (
+            db.query(func.count(MedicalCert.id))
+            .filter(MedicalCert.cert_type == body.cert_type)
+            .scalar()
+            or 0
+        ) + 1
+        cert_no = f"{_PREFIX[body.cert_type]}{date.today().year}{seq:06d}"
+        return MedicalCert(cert_no=cert_no, created_by=user.id, **body.model_dump())
+
+    cert = insert_with_retry(db, _build)
     return {
         "id": cert.id,
         "cert_type": cert.cert_type,

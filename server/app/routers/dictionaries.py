@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_if_absent
+from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import CodeEntry, CodeSystem
@@ -59,10 +59,7 @@ def create_entry(system_code: str, body: CodeEntryCreate, db: Session = Depends(
         .first()
     ):
         raise HTTPException(status_code=409, detail="编码已存在")
-    entry = CodeEntry(system_id=system.id, **body.model_dump())
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
+    entry = insert_or_conflict(db, CodeEntry(system_id=system.id, **body.model_dump()), "编码已存在")
     return entry
 
 

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, utcnow
@@ -94,10 +95,7 @@ def create_endpoint(body: EndpointCreate, db: Session = Depends(get_db)):
     if db.query(EsbEndpoint).filter(EsbEndpoint.code == body.code).first():
         raise HTTPException(status_code=409, detail="该接入方编码已存在")
     token = secrets.token_urlsafe(24)
-    endpoint = EsbEndpoint(**body.model_dump(), auth_token_hash=hash_password(token))
-    db.add(endpoint)
-    db.commit()
-    db.refresh(endpoint)
+    endpoint = insert_or_conflict(db, EsbEndpoint(**body.model_dump(), auth_token_hash=hash_password(token)), "该接入方编码已存在")
     return {**_endpoint_out(endpoint), "auth_token": token}
 
 
@@ -466,10 +464,7 @@ def create_flow(body: FlowCreate, db: Session = Depends(get_db)):
     if db.query(EsbFlow).filter(EsbFlow.code == body.code).first():
         raise HTTPException(status_code=409, detail="该流程编码已存在")
     _validate_steps(body.steps)
-    flow = EsbFlow(**body.model_dump())
-    db.add(flow)
-    db.commit()
-    db.refresh(flow)
+    flow = insert_or_conflict(db, EsbFlow(**body.model_dump()), "该流程编码已存在")
     return _flow_out(flow)
 
 

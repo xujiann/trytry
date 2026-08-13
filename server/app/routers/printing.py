@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_local
+from ..concurrency import upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (
@@ -386,13 +387,14 @@ def list_templates(db: Session = Depends(get_db)):
 @router.put("/templates", dependencies=[Depends(require_admin)])
 def upsert_template(body: TemplateUpsert, db: Session = Depends(get_db)):
     """新增或更新打印模板（doc_type 唯一，幂等 upsert）。"""
-    template = _template(db, body.doc_type)
-    if template is None:
-        template = PrintTemplate(doc_type=body.doc_type)
-        db.add(template)
-    template.header_org_name = body.header_org_name
-    template.footer_note = body.footer_note
-    template.show_qr = body.show_qr
-    db.commit()
-    db.refresh(template)
+    template, _ = upsert_unique(
+        db,
+        PrintTemplate,
+        keys={"doc_type": body.doc_type},
+        values={
+            "header_org_name": body.header_org_name,
+            "footer_note": body.footer_note,
+            "show_qr": body.show_qr,
+        },
+    )
     return _template_out(template)

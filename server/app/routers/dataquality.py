@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (
@@ -426,10 +427,7 @@ def create_rule(body: RuleCreate, db: Session = Depends(get_db)):
             status_code=422,
             detail=f"被检表未登记（可选：{'、'.join(sorted(_TABLE_MODELS))}）",
         )
-    rule = QcRule(**body.model_dump())
-    db.add(rule)
-    db.commit()
-    db.refresh(rule)
+    rule = insert_or_conflict(db, QcRule(**body.model_dump()), "规则编码已存在")
     return _rule_out(rule)
 
 

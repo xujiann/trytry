@@ -5,6 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
+from ..concurrency import insert_or_conflict, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
@@ -211,10 +212,7 @@ def create_asset(body: AssetCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="机构不存在")
     if db.query(Asset).filter(Asset.code == body.code).first():
         raise HTTPException(status_code=409, detail="物资编码已存在")
-    asset = Asset(**body.model_dump())
-    db.add(asset)
-    db.commit()
-    db.refresh(asset)
+    asset = insert_or_conflict(db, Asset(**body.model_dump()), "物资编码已存在")
     return asset
 
 
@@ -411,9 +409,7 @@ def create_department(body: DeptCreate, db: Session = Depends(get_db)):
         .first()
     ):
         raise HTTPException(status_code=409, detail="该机构下科室编码已存在")
-    dept = Department(**body.model_dump())
-    db.add(dept)
-    db.commit()
+    dept = insert_or_conflict(db, Department(**body.model_dump()), "该机构下科室编码已存在")
     return {"id": dept.id, "org_id": dept.org_id, "code": dept.code, "name": dept.name}
 
 
@@ -534,9 +530,7 @@ def create_staff_contract(body: ContractCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="合同止期须晚于起期")
     if db.query(StaffContract).filter(StaffContract.contract_no == body.contract_no).first():
         raise HTTPException(status_code=409, detail="合同编号已存在")
-    contract = StaffContract(**body.model_dump())
-    db.add(contract)
-    db.commit()
+    contract = insert_or_conflict(db, StaffContract(**body.model_dump()), "合同编号已存在")
     return {"id": contract.id, "contract_no": contract.contract_no, "status": contract.status}
 
 
@@ -607,9 +601,7 @@ def create_payroll(body: PayrollCreate, db: Session = Depends(get_db)):
     ):
         raise HTTPException(status_code=409, detail="该员工本期薪酬已录入")
     total = round(body.base_salary + body.perf_bonus * body.perf_coefficient, 2)
-    record = PayrollRecord(**body.model_dump(), total=total)
-    db.add(record)
-    db.commit()
+    record = insert_or_conflict(db, PayrollRecord(**body.model_dump(), total=total), "该员工本期薪酬已录入")
     return {"id": record.id, "period": record.period, "total": record.total}
 
 
@@ -656,19 +648,14 @@ class BudgetCreate(BaseModel):
 def create_budget(body: BudgetCreate, db: Session = Depends(get_db)):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    existing = (
-        db.query(Budget)
-        .filter(Budget.org_id == body.org_id, Budget.year == body.year, Budget.category == body.category)
-        .first()
+    # 预算调整：同机构同年同类别覆盖并留原记录时间
+    budget, adjusted = upsert_unique(
+        db,
+        Budget,
+        keys={"org_id": body.org_id, "year": body.year, "category": body.category},
+        values={"amount": body.amount},
     )
-    if existing:  # 预算调整：覆盖并留原记录时间
-        existing.amount = body.amount
-        db.commit()
-        return {"id": existing.id, "amount": existing.amount, "adjusted": True}
-    budget = Budget(**body.model_dump())
-    db.add(budget)
-    db.commit()
-    return {"id": budget.id, "amount": budget.amount, "adjusted": False}
+    return {"id": budget.id, "amount": budget.amount, "adjusted": adjusted}
 
 
 @router.get("/budgets/execution")
@@ -773,15 +760,11 @@ class ParamUpsert(BaseModel):
 
 @router.post("/params", dependencies=[Depends(require_admin)])
 def upsert_param(body: ParamUpsert, db: Session = Depends(get_db)):
-    param = db.query(SystemParam).filter(SystemParam.key == body.key).first()
-    if param is None:
-        param = SystemParam(**body.model_dump())
-        db.add(param)
-    else:
-        param.value = body.value
-        if body.description:
-            param.description = body.description
-    db.commit()
+    values = {"value": body.value}
+    if body.description:
+        # 描述留空表示"不改"，不是"改成空"——参数说明是人写的，别被一次改值抹掉
+        values["description"] = body.description
+    param, _ = upsert_unique(db, SystemParam, {"key": body.key}, values)
     return {"key": param.key, "value": param.value}
 
 

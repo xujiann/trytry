@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
+from ..concurrency import insert_if_absent
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -51,8 +52,19 @@ def register(body: MaternalCreate, db: Session = Depends(get_db)):
     existing = db.query(MaternalRecord).filter(MaternalRecord.patient_id == body.patient_id).first()
     if existing:
         return existing
+    # 建册幂等：并发下两个请求都查不到就都去插，撞 patient_id 唯一约束时
+    # 返回既有那本，不是 500——一个孕产妇两本册子，产检记录会分叉。
     record = MaternalRecord(**body.model_dump())
-    db.add(record)
+    if not insert_if_absent(db, record):
+        # 必须先结束事务再返回：SAVEPOINT 回滚只退掉这一行，外层写事务还开着，
+        # 一路握着 SQLite 的写锁走完请求，审计中间件那一笔就写不进去
+        # （实测 database is locked）。
+        db.rollback()
+        return (
+            db.query(MaternalRecord)
+            .filter(MaternalRecord.patient_id == body.patient_id)
+            .first()
+        )
     db.commit()
     db.refresh(record)
     return record

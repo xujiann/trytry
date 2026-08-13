@@ -228,6 +228,63 @@ def test_批量插入不得堆积未释放的savepoint():
         db.close()
 
 
+# ============================================ 扫描修好的存量站点（抽高风险的验）
+
+
+def test_并发建册不会给同一个孕产妇建出两本(client, admin):
+    """一个孕产妇两本册子，产检记录会分叉——两本各记一半，哪本都不全。
+
+    建册本就是幂等的（查到既有就返回），但那是 check-then-act：
+    并发下两个请求都查不到就都去插。
+    """
+    patient = client.post(
+        "/api/patients", json={"name": "并发孕妇", "id_card": "320000199203034321"}, headers=admin
+    ).json()
+    body = {"patient_id": patient["id"], "lmp_date": "2026-01-01", "expected_date": "2026-10-08"}
+    codes = _race(
+        lambda: client.post("/api/maternal/records", json=body, headers=admin).status_code
+    )
+    assert all(c < 400 for c in codes), f"并发建册出现错误码：{codes}"
+
+    rows = client.get(
+        "/api/maternal/records", params={"patient_id": patient["id"]}, headers=admin
+    ).json()
+    rows = rows if isinstance(rows, list) else rows.get("items", [])
+    assert len(rows) == 1, f"同一孕产妇建出了 {len(rows)} 本册子"
+
+
+def test_并发签发医学证明不会重号也不丢件(client, admin, org):
+    """证明编号同样是 COUNT+1 算出来的（与医废追溯码同型）。
+
+    死亡医学证明、出生缺陷登记都是对外出具的法定文书，
+    重号或丢件都不是"重试一下"能了事的。
+    """
+    body = {"org_id": org["id"], "cert_type": "birth", "name": "并发新生儿",
+            "event_date": "2026-08-12", "detail": "足月顺产"}
+    codes = _race(lambda: client.post("/api/certs", json=body, headers=admin).status_code)
+    assert all(c < 400 for c in codes), f"并发签发出现错误码：{codes}"
+
+    rows = client.get("/api/certs", params={"cert_type": "birth"}, headers=admin).json()
+    rows = rows if isinstance(rows, list) else rows.get("items", [])
+    nos = [r["cert_no"] for r in rows]
+    assert len(nos) == 8, f"8 次签发只落库 {len(nos)} 件"
+    assert len(set(nos)) == len(nos), f"证明编号有重复：{sorted(nos)}"
+
+
+def test_并发入库不会把库存行建成两条也不丢批次(client, admin, org):
+    """药品库存按 (org_id, drug_code) 唯一。两批药同时入库，原先都去建行，
+    撞唯一约束 → 500，**两批都没入成**，而药还在库里。"""
+    body = {"org_id": org["id"], "drug_code": "DRACE", "drug_name": "并发药",
+            "quantity": 10, "threshold": 1}
+    codes = _race(lambda: client.post("/api/pharmacy/stocks", json=body, headers=admin).status_code)
+    assert all(c < 400 for c in codes), f"并发入库出现错误码：{codes}"
+
+    rows = client.get("/api/pharmacy/stocks", params={"org_id": org["id"]}, headers=admin).json()
+    rows = rows if isinstance(rows, list) else rows.get("items", [])
+    mine = [r for r in rows if r["drug_code"] == "DRACE"]
+    assert len(mine) == 1, f"同机构同药品建出了 {len(mine)} 条库存行"
+
+
 # ================================================================ 防复发扫描
 
 
@@ -257,23 +314,61 @@ def _model_to_table() -> dict[str, str]:
 # 明确豁免：往带唯一约束的表里写、但**不会**撞约束的位置，逐个写明理由。
 # 豁免必须写理由——一旦可以不写，这份清单很快会变成绕过检查的后门。
 CONFLICT_SAFE = {
-    "users.py:create_user": "用户名先查重且 409；并发重名撞约束的后果只是 500 一次，"
-                            "不产生错账，暂按已知接受",
     "org_groups.py:add_member": "已捕获 IntegrityError",
 }
+
+
+def _inserted_models(func: ast.FunctionDef, model_names: set[str]) -> set[str]:
+    """函数里被 `db.add(...)` 插入的模型名。
+
+    两种写法都要认：
+        db.add(Model(...))            # 内联
+        obj = Model(...); db.add(obj)  # 先赋值再插——**这才是绝大多数**
+
+    第一版只认内联写法，结果 192 处插入里只看得见 22 处（11%），
+    而变量写法里藏着 48 处真问题。**一条只覆盖 11% 的规则给出的是虚假的安全感**，
+    比没有规则更糟——它会让人以为这一类已经被守住了。
+    """
+    assigned: dict[str, str] = {}
+    for node in ast.walk(func):
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id in model_names
+        ):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assigned[target.id] = node.value.func.id
+
+    inserted = set()
+    for node in ast.walk(func):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "add" or not node.args:
+            continue
+        arg = node.args[0]
+        if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name):
+            if arg.func.id in model_names:
+                inserted.add(arg.func.id)
+        elif isinstance(arg, ast.Name) and arg.id in assigned:
+            inserted.add(assigned[arg.id])
+    return inserted
 
 
 def test_写唯一约束表的接口必须处理约束冲突():
     """防的是这一轮实测到的同一个错误再犯第四次。
 
-    判据：函数体里出现 `db.add(SomeModel(...))`，而 `SomeModel` 的表带唯一约束，
-    则该函数必须出现下列之一——捕获 `IntegrityError`，或调用
-    `app/concurrency.py` 里的三个助手。判据会有漏网（例如通过变量间接构造
-    的对象），但**不会误报**：命中的都确实是"往带唯一约束的表里直接插入"。
+    判据：函数里 `db.add` 了某个模型，而该模型的表带唯一约束，则该函数必须
+    出现下列之一——捕获 `IntegrityError`，或调用 `app/concurrency.py` 的助手。
+
+    仍会有漏网（跨函数传对象、循环里从容器取对象），但**不会误报**：
+    命中的都确实是"往带唯一约束的表里插入"。宁可漏也不误报——一条经常误报的
+    规则会先被加豁免、再被加得没人看，最后被删掉。
     """
     model_table = _model_to_table()
     unique_tables = _tables_with_unique_constraint()
-    helpers = {"insert_or_conflict", "insert_with_retry", "upsert_unique"}
+    helpers = {"insert_or_conflict", "insert_with_retry", "upsert_unique", "insert_if_absent"}
     offenders = []
 
     for name in sorted(os.listdir(ROUTER_DIR)):
@@ -281,6 +376,7 @@ def test_写唯一约束表的接口必须处理约束冲突():
             continue
         path = os.path.join(ROUTER_DIR, name)
         tree = ast.parse(open(path, encoding="utf-8").read())
+        model_names = set(model_table)
         for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             key = f"{name}:{func.name}"
             if key in CONFLICT_SAFE:
@@ -289,17 +385,10 @@ def test_写唯一约束表的接口必须处理约束冲突():
             handled = "IntegrityError" in source or any(h in source for h in helpers)
             if handled:
                 continue
-            for node in ast.walk(func):
-                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-                    continue
-                if node.func.attr != "add" or not node.args:
-                    continue
-                arg = node.args[0]
-                if not (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)):
-                    continue
-                table = model_table.get(arg.func.id)
-                if table and table in unique_tables:
-                    offenders.append(f"{key} → {arg.func.id}({table})")
+            for model in sorted(_inserted_models(func, model_names)):
+                table = model_table[model]
+                if table in unique_tables:
+                    offenders.append(f"{key} → {model}({table})")
                     break
 
     assert offenders == [], (

@@ -14,6 +14,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, resolve_business_date
 from ..models import Admission, CaseSummary, DrgGroup, Organization
@@ -140,9 +141,7 @@ def list_groups(mdc: str | None = None, db: Session = Depends(get_db)):
 def create_group(body: DrgGroupCreate, db: Session = Depends(get_db)):
     if db.query(DrgGroup).filter(DrgGroup.code == body.code).first():
         raise HTTPException(status_code=409, detail="分组编码已存在")
-    group = DrgGroup(**body.model_dump())
-    db.add(group)
-    db.commit()
+    group = insert_or_conflict(db, DrgGroup(**body.model_dump()), "分组编码已存在")
     return _group_out(group)
 
 

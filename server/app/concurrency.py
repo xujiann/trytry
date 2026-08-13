@@ -44,7 +44,7 @@ def insert_or_conflict(db: Session, obj, detail: str, status_code: int = 409):
     return obj
 
 
-def insert_with_retry(db: Session, build, attempts: int = 5):
+def insert_with_retry(db: Session, build, attempts: int = 12):
     """按"重算序号 → 插入"重试，直到成功或用完次数。
 
     用于**服务端生成的顺序编号**（医废追溯码、病理标本号）。这类冲突不该让
@@ -53,6 +53,11 @@ def insert_with_retry(db: Session, build, attempts: int = 5):
 
     `build` 每次被调用都要**重新计算编号并返回一个新对象**——传同一个实例进来
     是没用的，它的编号已经定死了。
+
+    `attempts` 默认 12：N 个请求同时抢号时，最后一个最坏要重试 N 次，
+    原来的 5 次在 8 路并发下实测就顶不住了（一个请求 503）。取号本身很便宜，
+    宁可多试几次。**但它仍是有上界的**——持续高压下会返回 503 而不是
+    悄悄丢件，这是刻意的取舍：编号必须唯一，宁可让调用方重来。
     """
     for attempt in range(attempts):
         obj = build()
@@ -110,6 +115,10 @@ def insert_if_absent(db: Session, obj) -> bool:
 
     这里用 SAVEPOINT 把冲突圈在单行内：撞了就退回这一行，整批继续。
     只 flush 不 commit——什么时候提交整批仍由调用方决定。
+
+    **调用方必须自己结束外层事务**。SAVEPOINT 回滚只退掉这一行，外层写事务
+    还开着；若就此 return，整个请求会一路握着写锁，后面的审计落库直接
+    `database is locked`。返回 False 后要提前返回的，先 `db.rollback()`。
 
     成功也要 `savepoint.commit()` 把 SAVEPOINT 释放掉。漏了这一句，每行都往
     外层事务上再压一层没释放的 SAVEPOINT，最后 `db.commit()` 要递归收束几百层：

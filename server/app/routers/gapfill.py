@@ -14,10 +14,12 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
 from ..clock import now_naive
+from ..concurrency import insert_or_conflict, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import (
@@ -93,10 +95,7 @@ def create_formula(body: FormulaCreate, db: Session = Depends(get_db)):
     """新增中药制剂配方（编码唯一）。"""
     if db.query(TcmFormula).filter(TcmFormula.code == body.code).first():
         raise HTTPException(status_code=409, detail="制剂编码已存在")
-    formula = TcmFormula(**body.model_dump())
-    db.add(formula)
-    db.commit()
-    db.refresh(formula)
+    formula = insert_or_conflict(db, TcmFormula(**body.model_dump()), "制剂编码已存在")
     return _formula_out(formula)
 
 
@@ -156,12 +155,9 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = 
         expire_date = (produced + timedelta(days=30 * formula.shelf_life_months)).isoformat()
     if expire_date <= body.produced_date:
         raise HTTPException(status_code=422, detail="效期须晚于生产日期")
-    batch = TcmPreparationBatch(
-        **body.model_dump(exclude={"expire_date"}), expire_date=expire_date, created_by=user.id
-    )
-    db.add(batch)
-    db.commit()
-    db.refresh(batch)
+    batch = insert_or_conflict(db, TcmPreparationBatch(
+            **body.model_dump(exclude={"expire_date"}), expire_date=expire_date, created_by=user.id
+        ), "批号已存在")
     return _batch_out(batch, date.today().isoformat())
 
 
@@ -514,7 +510,12 @@ def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depend
     else:
         enrollment = TrainingEnrollment(plan_id=plan_id, user_id=user.id)
         db.add(enrollment)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 同一个人重复点报名，两个请求都查不到既有记录就都去插
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已报名该实训计划") from None
     db.refresh(enrollment)
     return {
         "id": enrollment.id,
@@ -592,22 +593,17 @@ def create_assessment(
     )
     if enrolled is None:
         raise HTTPException(status_code=409, detail="该学员未报名本次实训，不可录入考核")
-    record = (
-        db.query(TrainingAssessment)
-        .filter(
-            TrainingAssessment.plan_id == plan_id, TrainingAssessment.user_id == body.user_id
-        )
-        .first()
+    record, _ = upsert_unique(
+        db,
+        TrainingAssessment,
+        keys={"plan_id": plan_id, "user_id": body.user_id},
+        values={
+            "score": body.score,
+            "passed": body.score >= 60,
+            "comment": body.comment,
+            "assessor": user.full_name or user.username,
+        },
     )
-    if record is None:
-        record = TrainingAssessment(plan_id=plan_id, user_id=body.user_id)
-        db.add(record)
-    record.score = body.score
-    record.passed = body.score >= 60
-    record.comment = body.comment
-    record.assessor = user.full_name or user.username
-    db.commit()
-    db.refresh(record)
     return {
         "id": record.id,
         "plan_id": plan_id,

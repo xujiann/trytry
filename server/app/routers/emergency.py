@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization
@@ -227,11 +228,11 @@ def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(
                     f"「{MILESTONE_NAMES[other.milestone]}」（{other.occurred_at}）时序矛盾"
                 ),
             )
-    milestone = EmergencyMilestone(case_id=case_id, **body.model_dump())
-    db.add(milestone)
-    db.commit()
-    db.refresh(milestone)
-    return milestone
+    return insert_or_conflict(
+        db,
+        EmergencyMilestone(case_id=case_id, **body.model_dump()),
+        f"节点「{MILESTONE_NAMES[body.milestone]}」已记录",
+    )
 
 
 @router.get("/cases/{case_id}/timeline")

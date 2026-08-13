@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_if_absent
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -538,13 +539,22 @@ def upsert_medical_record(
     )
     created = record is None
     if created:
-        record = MedicalRecord(
-            encounter_id=body.encounter_id,
-            org_id=encounter.org_id,
-            doctor_name=user.full_name or user.username,
-            created_by=user.id,
+        # 插入后还要跑质控、再与病历同一次提交，故不用会自己 commit 的 upsert_unique。
+        # 两个请求同时提交同一次就诊的病历，都查不到就都去插——撞 encounter_id 唯一约束。
+        created = insert_if_absent(
+            db,
+            MedicalRecord(
+                encounter_id=body.encounter_id,
+                org_id=encounter.org_id,
+                doctor_name=user.full_name or user.username,
+                created_by=user.id,
+            ),
         )
-        db.add(record)
+        record = (
+            db.query(MedicalRecord)
+            .filter(MedicalRecord.encounter_id == body.encounter_id)
+            .first()
+        )
     for name in RECORD_FIELDS:
         setattr(record, name, getattr(body, name))
     record.updated_at = utcnow()

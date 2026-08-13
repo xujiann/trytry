@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_if_absent
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import BloodStock, Organization, Patient, TransfusionRequest, User
@@ -30,10 +31,15 @@ def upsert_blood_stock(body: BloodStockUpsert, db: Session = Depends(get_db)):
         .first()
     )
     if stock is None:
-        stock = BloodStock(**body.model_dump())
-        db.add(stock)
-    else:
-        stock.quantity_ml += body.quantity_ml
+        # 累加语义：先保证行存在（谁插上都行），再统一累加。
+        # 直接 db.add 则两次入库并发时都建行、撞 (blood_type, component) 唯一约束。
+        insert_if_absent(db, BloodStock(**{**body.model_dump(), "quantity_ml": 0}))
+        stock = (
+            db.query(BloodStock)
+            .filter(BloodStock.blood_type == body.blood_type, BloodStock.component == body.component)
+            .first()
+        )
+    stock.quantity_ml += body.quantity_ml
     db.commit()
     return {"blood_type": stock.blood_type, "component": stock.component, "quantity_ml": stock.quantity_ml}
 

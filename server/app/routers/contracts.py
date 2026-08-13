@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ContractService, FamilyDoctorContract, Organization, Patient
@@ -40,11 +41,11 @@ def sign(body: ContractCreate, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(existing)
         return existing
-    contract = FamilyDoctorContract(**body.model_dump())
-    db.add(contract)
-    db.commit()
-    db.refresh(contract)
-    return contract
+    # 并发下两个请求都查不到既有签约就都去插；撞了唯一约束，
+    # 结论与上面那条查重一致——该居民已在本机构签约。
+    return insert_or_conflict(
+        db, FamilyDoctorContract(**body.model_dump()), "该居民已在本机构签约"
+    )
 
 
 @router.get("", response_model=list[ContractOut])
