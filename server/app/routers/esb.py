@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_or_conflict
+from ..concurrency import add_amount, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, utcnow
@@ -260,9 +260,15 @@ def _record_success(message: EsbMessage) -> None:
     message.updated_at = utcnow()
 
 
-def _record_failure(message: EsbMessage, error: str) -> None:
-    """失败记账：重试次数 +1，达到上限转死信（保留最后错误，不再排下次重试）。"""
-    message.retry_count += 1
+def _record_failure(db: Session, message: EsbMessage, error: str) -> None:
+    """失败记账：重试次数 +1，达到上限转死信（保留最后错误，不再排下次重试）。
+
+    重试次数走原子累加：同一条消息被两个 worker 同时重投时，`+=` 会丢更新，
+    次数涨不上去，这条消息就永远进不了死信队列——**一直重投下去**。
+    """
+    add_amount(db, EsbMessage, message.id, "retry_count", 1)
+    db.flush()
+    db.refresh(message)  # 上面走的是 Core UPDATE，要按新次数判死信
     message.last_error = error[:1024]
     message.updated_at = utcnow()
     if message.retry_count >= message.max_retries:
@@ -409,7 +415,7 @@ def process_message(message_id: int, db: Session = Depends(get_db)):
         detail = _process_message(db, message)
     except (ValueError, HTTPException) as exc:
         error = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        _record_failure(message, str(error))
+        _record_failure(db, message, str(error))
         _log_exchange(db, endpoint, message, False, str(error))
         db.commit()
         return {**_message_out(message, endpoint.code if endpoint else ""), "detail": str(error)}
@@ -529,7 +535,7 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
         )
 
     if error:
-        _record_failure(message, f"第 {len(step_results)} 步（{step_results[-1]['type']}）失败：{error}")
+        _record_failure(db, message, f"第 {len(step_results)} 步（{step_results[-1]['type']}）失败：{error}")
     else:
         _record_success(message)
     _log_exchange(db, endpoint, message, not error, error)

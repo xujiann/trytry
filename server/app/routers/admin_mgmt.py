@@ -5,7 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
-from ..concurrency import insert_or_conflict, upsert_unique
+from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
@@ -195,8 +195,20 @@ class AssetCreate(BaseModel):
 
 
 class AssetOut(AssetCreate):
+    """D-10：出参不能直接继承入参的校验。
+
+    `AssetCreate.quantity` 是 `ge=1`——建档时不该建一条 0 件的物资，这没错。
+    但出参继承了这条约束，于是物资一旦全部出库（现存量 0），整张物资清单
+    **连带 500**：一件东西领完了，别的物资也跟着看不见了。
+    出参放宽到 `ge=0`：现存量为 0 是完全正常的业务状态。
+
+    与 D-8（医废清单套着阶段五的旧出参、看不到追溯码）同因——
+    出参与入参形状相近就顺手继承，而两者的约束本来就不是一回事。
+    """
+
     id: int
     status: str
+    quantity: int = Field(ge=0)
 
     model_config = {"from_attributes": True}
 
@@ -710,17 +722,20 @@ def create_asset_movement(
         raise HTTPException(status_code=404, detail="物资不存在")
     if asset.status == "scrapped":
         raise HTTPException(status_code=409, detail="已报废物资不可再出入库")
-    if body.movement_type in ("issue", "scrap") and body.quantity > asset.quantity:
-        raise HTTPException(status_code=409, detail="出库数量超过现存量")
+    # 判定与增减都放进同一条 UPDATE。原先"先判够不够、再 += / -="是读-改-写，
+    # 并发下两个出库都判定够、各自算出同一个新值，最后只剩一笔——账实不符。
     if body.movement_type in ("inbound", "return"):
-        asset.quantity += body.quantity
-    else:
-        asset.quantity -= body.quantity
-        if body.movement_type == "scrap" and asset.quantity == 0:
-            asset.status = "scrapped"
+        add_amount(db, Asset, asset_id, "quantity", body.quantity)
+    elif not take_amount(db, Asset, asset_id, "quantity", body.quantity):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="出库数量超过现存量")
     movement = AssetMovement(asset_id=asset_id, created_by=user.id, **body.model_dump())
     db.add(movement)
     db.commit()
+    db.refresh(asset)  # 上面走的是 Core UPDATE，会话里的 asset 还是旧值
+    if body.movement_type == "scrap" and asset.quantity == 0:
+        asset.status = "scrapped"
+        db.commit()
     return {
         "id": movement.id,
         "asset_id": asset_id,

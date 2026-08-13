@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..clock import now_naive
+from ..concurrency import add_amount
 from ..database import get_db
 from ..privacy import mask_phone
 from ..models import (
@@ -193,7 +194,9 @@ def _consume_code(db: Session, phone: str, code: str, purpose: str) -> None:
         db.commit()
         raise HTTPException(status_code=400, detail="验证码错误次数过多，请重新获取")
     if not verify_password(code, record.code_hash):
-        record.attempts += 1
+        # 这是防爆破的计数器：丢一次更新就等于白送一次尝试机会。
+        # 并行猜码时读-改-写会大量丢更新，MAX_CODE_ATTEMPTS 形同虚设。
+        add_amount(db, SmsCode, record.id, "attempts", 1)
         db.commit()
         _code_failures.record_failure(key)
         raise HTTPException(status_code=400, detail="验证码错误")

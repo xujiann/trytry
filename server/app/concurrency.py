@@ -25,6 +25,8 @@ __all__ = [
     "upsert_unique",
     "claim_quota",
     "insert_if_absent",
+    "add_amount",
+    "take_amount",
 ]
 
 
@@ -134,6 +136,41 @@ def insert_if_absent(db: Session, obj) -> bool:
         return False
     savepoint.commit()  # 释放 SAVEPOINT，不影响外层事务
     return True
+
+
+def add_amount(db: Session, model, obj_id: int, col: str, step) -> None:
+    """原子累加：`UPDATE ... SET col = col + step WHERE id = :id`。
+
+    替代 `obj.col += step`。那句是读-改-写：先把当前值读进 Python，加完再整体写回，
+    并发下两个请求读到同一个旧值，后写的把先写的盖掉——**丢更新**。
+
+    实测（改之前）：药品库存建行 10 支后 8 路并发各入库 10 支，应为 90，
+    实际 30，**凭空少了 60 支**。药品、血液、物资都是要盘点对账的东西，
+    账实不符查起来极费劲，因为每一笔入库的日志看上去都成功了。
+
+    调用方随后仍要 `db.commit()`；要读回新值请在提交后 `db.refresh(obj)`——
+    这条 UPDATE 走的是 Core，不经过 ORM，会话里那个对象仍是旧值。
+    """
+    column = getattr(model, col)
+    db.execute(update(model).where(model.id == obj_id).values(**{col: column + step}))
+
+
+def take_amount(db: Session, model, obj_id: int, col: str, amount) -> bool:
+    """原子扣减：`UPDATE ... SET col = col - amount WHERE col >= amount`。
+
+    用于出库、发血这类"够才能扣"的场景，返回是否扣到。
+    与 `claim_quota` 同理——**判定与扣减必须在同一条 SQL 里**。
+    先 `if 库存 < 数量: 409` 再 `-=` 的写法，并发下两个请求都判定够，
+    最后扣出负库存或少扣一笔。
+    """
+    column = getattr(model, col)
+    return bool(
+        db.execute(
+            update(model)
+            .where(model.id == obj_id, column >= amount)
+            .values(**{col: column - amount})
+        ).rowcount
+    )
 
 
 def claim_quota(db: Session, model, obj_id: int, used_col: str, limit_col: str, step: int = 1) -> bool:

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
 from ..clock import now_naive
-from ..concurrency import insert_or_conflict, upsert_unique
+from ..concurrency import add_amount, insert_or_conflict, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import (
@@ -405,7 +405,7 @@ def play_material(material_id: int, db: Session = Depends(get_db)):
     material = db.get(CourseMaterial, material_id)
     if material is None:
         raise HTTPException(status_code=404, detail="课件不存在")
-    material.play_count += 1
+    add_amount(db, CourseMaterial, material.id, "play_count", 1)
     db.commit()
     db.refresh(material)
     return _material_out(material)

@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..concurrency import insert_if_absent, insert_or_conflict
+from ..concurrency import add_amount, insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from pydantic import BaseModel, Field
@@ -49,7 +49,7 @@ def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
             .filter(DrugStock.org_id == body.org_id, DrugStock.drug_code == body.drug_code)
             .first()
         )
-    stock.quantity += body.quantity
+    add_amount(db, DrugStock, stock.id, "quantity", body.quantity)
     stock.threshold = body.threshold
     stock.drug_name = body.drug_name
     db.commit()
@@ -332,8 +332,9 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db)):
                 .filter(DrugStock.org_id == order.org_id, DrugStock.drug_code == order.item_code)
                 .first()
             )
-        stock.quantity += order.quantity
+        add_amount(db, DrugStock, stock.id, "quantity", order.quantity)
         db.flush()
+        db.refresh(stock)
         stock_qty = stock.quantity
     db.commit()
     return {"id": order.id, "status": order.status, "stock_quantity": stock_qty}

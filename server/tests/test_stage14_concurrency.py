@@ -285,6 +285,127 @@ def test_并发入库不会把库存行建成两条也不丢批次(client, admin
     assert len(mine) == 1, f"同机构同药品建出了 {len(mine)} 条库存行"
 
 
+# ====================================================== D-9 读-改-写丢更新
+
+
+def test_并发入库不丢数量(client, admin, org):
+    """D-9：`stock.quantity += n` 是读-改-写，并发下后写的把先写的盖掉。
+
+    实测（修复前）：建行 10 支后 8 路并发各入库 10 支，应为 90，实际 30，
+    **凭空少了 60 支**。这类账实不符最难查——每一笔入库的日志都显示成功。
+    """
+    body = {"org_id": org["id"], "drug_code": "DSUM", "drug_name": "累加药",
+            "quantity": 10, "threshold": 1}
+    assert client.post("/api/pharmacy/stocks", json=body, headers=admin).status_code < 400
+    codes = _race(lambda: client.post("/api/pharmacy/stocks", json=body, headers=admin).status_code)
+    assert all(c < 400 for c in codes), f"并发入库出现错误码：{codes}"
+
+    rows = client.get("/api/pharmacy/stocks", params={"org_id": org["id"]}, headers=admin).json()
+    rows = rows if isinstance(rows, list) else rows.get("items", [])
+    stock = [r for r in rows if r["drug_code"] == "DSUM"][0]
+    assert stock["quantity"] == 90, f"入库 9 次×10 支，应为 90，实际 {stock['quantity']}"
+
+
+def test_并发出库不会扣成负库存(client, admin, org):
+    """出库要"够才能扣"。原先先判够不够再 `-=`，并发下都判定够。"""
+    asset = client.post(
+        "/api/mgmt/assets",
+        json={"org_id": org["id"], "code": "AST-RACE", "name": "并发物资",
+              "category": "office", "quantity": 5},
+        headers=admin,
+    ).json()
+    codes = _race(
+        lambda: client.post(
+            f"/api/mgmt/assets/{asset['id']}/movements",
+            json={"movement_type": "issue", "quantity": 1},
+            headers=admin,
+        ).status_code,
+        times=8,
+    )
+    ok = len([c for c in codes if c < 400])
+    assert ok == 5, f"库存 5 件却出库成功 {ok} 次：{codes}"
+
+    rows = client.get("/api/mgmt/assets", params={"org_id": org["id"]}, headers=admin).json()
+    after = [r for r in rows if r["code"] == "AST-RACE"][0]
+    assert after["quantity"] == 0, f"现存量应为 0，实际 {after['quantity']}"
+
+
+def test_物资全部出库后清单仍打得开(client, admin, org):
+    """D-10：出参不能直接继承入参的校验。
+
+    `AssetCreate.quantity` 是 `ge=1`（不该建 0 件的物资，这没错），出参继承了它，
+    于是**一件物资领完，整张物资清单连带 500**——别的物资也跟着看不见。
+    这条是写并发用例时撞出来的，与并发无关，串行照样复现。
+    """
+    asset = client.post(
+        "/api/mgmt/assets",
+        json={"org_id": org["id"], "code": "AST-ZERO", "name": "领完的物资",
+              "category": "office", "quantity": 2},
+        headers=admin,
+    ).json()
+    client.post(
+        f"/api/mgmt/assets/{asset['id']}/movements",
+        json={"movement_type": "issue", "quantity": 2},
+        headers=admin,
+    )
+    listing = client.get("/api/mgmt/assets", params={"org_id": org["id"]}, headers=admin)
+    assert listing.status_code == 200, f"现存量 0 的物资把清单打挂了：{listing.text[:120]}"
+    row = [r for r in listing.json() if r["code"] == "AST-ZERO"][0]
+    assert row["quantity"] == 0
+
+    # 放宽的只是出参：建档仍不接受 0 件
+    rejected = client.post(
+        "/api/mgmt/assets",
+        json={"org_id": org["id"], "code": "AST-NEW", "name": "空物资",
+              "category": "office", "quantity": 0},
+        headers=admin,
+    )
+    assert rejected.status_code == 422
+
+
+def test_不得再用读改写累加计数(client):
+    """扫描：`obj.col += x` / `-= x` 形式的累加在路由层一律不允许。
+
+    D-9 这一类的成因与 D-5～D-8 相同——正确做法（原子 UPDATE）平台早就有，
+    只是没抽出来，于是每写一个新模块就再手写一遍读-改-写。
+    抽出来之后要配一条规则盯住，否则下一个模块照旧。
+    """
+    allowed = {
+        # 请求内新建、尚未提交的对象，不存在并发竞争
+        "encounters.py:_accumulate_local",
+    }
+    offenders = []
+    for name in sorted(os.listdir(ROUTER_DIR)):
+        if not name.endswith(".py"):
+            continue
+        path = os.path.join(ROUTER_DIR, name)
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            key = f"{name}:{func.name}"
+            if key in allowed:
+                continue
+            for node in ast.walk(func):
+                if not isinstance(node, ast.AugAssign):
+                    continue
+                if not isinstance(node.target, ast.Attribute):
+                    continue
+                if not isinstance(node.op, (ast.Add, ast.Sub)):
+                    continue
+                # 只管 ORM 列上的累加；本地变量/累加器（sum += x）不在此列
+                if isinstance(node.target.value, ast.Name) and node.target.value.id in (
+                    "self",
+                    "totals",
+                    "acc",
+                ):
+                    continue
+                offenders.append(f"{key} → {ast.unparse(node)}")
+    assert offenders == [], (
+        "以下位置对数据库对象做读-改-写累加（并发下丢更新）：\n  "
+        + "\n  ".join(offenders)
+        + "\n请改用 app/concurrency.py 的 add_amount / take_amount / claim_quota。"
+    )
+
+
 # ================================================================ 防复发扫描
 
 

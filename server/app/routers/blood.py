@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_if_absent
+from ..concurrency import add_amount, insert_if_absent, take_amount
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import BloodStock, Organization, Patient, TransfusionRequest, User
@@ -39,8 +39,9 @@ def upsert_blood_stock(body: BloodStockUpsert, db: Session = Depends(get_db)):
             .filter(BloodStock.blood_type == body.blood_type, BloodStock.component == body.component)
             .first()
         )
-    stock.quantity_ml += body.quantity_ml
+    add_amount(db, BloodStock, stock.id, "quantity_ml", body.quantity_ml)
     db.commit()
+    db.refresh(stock)
     return {"blood_type": stock.blood_type, "component": stock.component, "quantity_ml": stock.quantity_ml}
 
 
@@ -118,11 +119,14 @@ def issue_blood(request_id: int, db: Session = Depends(get_db)):
         )
         .first()
     )
-    if stock is None or stock.quantity_ml < request.quantity_ml:
+    # 判定与扣减同一条 SQL。原先并发两笔发血都判定够，实际库存只扣一笔——
+    # 血是按毫升对账的东西，发出去的比账上扣的多，血库盘点必然对不上。
+    if stock is None or not take_amount(db, BloodStock, stock.id, "quantity_ml", request.quantity_ml):
+        db.rollback()
         raise HTTPException(status_code=409, detail="血液库存不足，请向血站调剂（对接项）")
-    stock.quantity_ml -= request.quantity_ml
     request.status = "issued"
     db.commit()
+    db.refresh(stock)
     return {"id": request.id, "status": "issued", "stock_remaining_ml": stock.quantity_ml}
 
 
