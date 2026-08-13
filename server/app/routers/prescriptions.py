@@ -7,6 +7,7 @@ from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_if_absent
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -92,13 +93,19 @@ def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db)):
     imported, updated = 0, 0
     for entry in body:
         rule = db.query(DrugRule).filter(DrugRule.drug_code == entry.drug_code).first()
-        if rule is None:
-            db.add(DrugRule(**entry.model_dump()))
+        # 先试插；撞了说明有人并发导入了同一个 drug_code，取回来按更新处理。
+        # 反过来"查不到就插"是 check-then-act，而这里一次 commit 提交整批，
+        # 一条撞车整批回滚——导入方看到的是 500 与一条都没进。
+        if rule is None and insert_if_absent(db, DrugRule(**entry.model_dump())):
             imported += 1
-        else:
-            for field, value in entry.model_dump().items():
-                setattr(rule, field, value)
-            updated += 1
+            continue
+        if rule is None:
+            rule = db.query(DrugRule).filter(DrugRule.drug_code == entry.drug_code).first()
+            if rule is None:  # pragma: no cover - 撞了约束却查不到，说明约束定义有误
+                continue
+        for field, value in entry.model_dump().items():
+            setattr(rule, field, value)
+        updated += 1
     db.commit()
     return {"imported": imported, "updated": updated}
 

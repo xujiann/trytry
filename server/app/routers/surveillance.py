@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..concurrency import upsert_unique
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -75,27 +76,24 @@ def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db)):
     """症候群日报。同机构同症候群同日重复上报按**覆盖**处理（见模块口径 2）。"""
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    existing = (
-        db.query(SyndromeMonitor)
-        .filter(
-            SyndromeMonitor.org_id == body.org_id,
-            SyndromeMonitor.syndrome == body.syndrome,
-            SyndromeMonitor.record_date == body.record_date,
-        )
-        .first()
+    # 先查有没有、没有就插，是 check-then-act：并发下两个请求都查不到就都去插，
+    # 唯一约束挡住其中一个，抛出未捕获的 IntegrityError——**实测 8 并发出一个 500**。
+    # 改为先试插、撞了再取回来更新，覆盖语义不变，并发下也不会 500。
+    record, overwritten = upsert_unique(
+        db,
+        SyndromeMonitor,
+        keys={
+            "org_id": body.org_id,
+            "syndrome": body.syndrome,
+            "record_date": body.record_date,
+        },
+        values={
+            "case_count": body.case_count,
+            "threshold": body.threshold,
+            "note": body.note,
+        },
     )
-    if existing is not None:
-        existing.case_count = body.case_count
-        existing.threshold = body.threshold
-        existing.note = body.note
-        db.commit()
-        db.refresh(existing)
-        return {**_syndrome_out(existing), "overwritten": True}
-    record = SyndromeMonitor(**body.model_dump())
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    return {**_syndrome_out(record), "overwritten": False}
+    return {**_syndrome_out(record), "overwritten": overwritten}
 
 
 @router.get("/syndromes")

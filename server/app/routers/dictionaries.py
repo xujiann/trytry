@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_if_absent
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import CodeEntry, CodeSystem
@@ -79,7 +80,12 @@ def bulk_import(system_code: str, entries: list[CodeEntryCreate], db: Session = 
     for entry in entries:
         if entry.code in existing:
             continue
-        db.add(CodeEntry(system_id=system.id, **entry.model_dump()))
+        # 预读的 existing 只是省一次 SAVEPOINT 的快路径，不是判据：
+        # 两个导入并发跑会读到同一份 existing，都判定"不存在"就都去插。
+        # 而这里是一次 commit 提交整批，一条撞车会让**整批回滚**——
+        # 500 加上一条都没导进去。落库成不成以 insert_if_absent 为准。
+        if not insert_if_absent(db, CodeEntry(system_id=system.id, **entry.model_dump())):
+            continue
         existing.add(entry.code)
         imported += 1
     db.commit()

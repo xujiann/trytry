@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..concurrency import claim_quota
 from ..datetypes import OptionalDateStr
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
@@ -93,14 +94,17 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db)):
             raise HTTPException(status_code=409, detail=f"该批次已于 {batch.expire_date} 过期")
         if batch.status == "frozen":
             raise HTTPException(status_code=409, detail=f"该批次已封存：{batch.frozen_reason}")
-        if batch.quantity - batch.used_quantity <= 0:
+        # 库存判定与扣减必须在同一条 SQL 里。原先是"先读再判再 += 1"，
+        # 并发下每个请求都读到同一个 used_quantity、都判定还有货，
+        # 最后只有一次加法生效——**实测库存 1 支打出 4 针，台账与实际对不上**，
+        # 而疫苗是按批号强监管的品类。做法与预约原子占号一致。
+        if not claim_quota(db, VaccineBatch, batch.id, "used_quantity", "quantity"):
+            db.rollback()
             raise HTTPException(status_code=409, detail="该批次库存已用完")
         batch_no = batch.batch_no
 
     record = VaccinationRecord(batch_no=batch_no, **body.model_dump())
     db.add(record)
-    if batch is not None:
-        batch.used_quantity += 1
     # 扣库存与写记录同一个事务提交（D-1 的教训）
     db.commit()
     db.refresh(record)

@@ -14,9 +14,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_with_retry
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ExamRequest, PathologySpecimen
@@ -122,14 +122,12 @@ def submit_specimen(body: SpecimenIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="检查申请不存在")
     if request.center_type != "pathology":
         raise HTTPException(status_code=422, detail="仅病理申请有标本流转环节")
-    specimen = PathologySpecimen(specimen_no=_next_specimen_no(db), **body.model_dump())
-    db.add(specimen)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="标本号冲突，请重试") from None
-    db.refresh(specimen)
+    # 与医废追溯码同理：标本号由服务端顺序生成，冲突该由服务端重试。
+    # 原先返回 409"标本号冲突，请重试"——把服务端的分配问题推给了送检的人。
+    specimen = insert_with_retry(
+        db,
+        lambda: PathologySpecimen(specimen_no=_next_specimen_no(db), **body.model_dump()),
+    )
     return _out(specimen)
 
 

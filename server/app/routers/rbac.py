@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_if_absent
 from ..database import get_db
 from ..deps import ROLE_NAMES, get_current_user, require_admin
 from ..models import Permission, Role, RolePermission, User
@@ -78,17 +79,22 @@ def sync_permissions(app, db: Session) -> dict:
             if code in existing:
                 continue
             parts = route.path.strip("/").split("/")
-            db.add(
+            # 这个函数在启动时跑。多进程部署（gunicorn -w 4）下 4 个 worker
+            # 同时启动、同时读到同一份 existing、同时插同一批权限点，
+            # 后插的抛 IntegrityError——**worker 起不来**。用 SAVEPOINT
+            # 把冲突圈在单行内：别人抢先建了就当已存在，同步照常完成。
+            landed = insert_if_absent(
+                db,
                 Permission(
                     code=code,
                     method=method,
                     path=route.path,
                     module=parts[1] if len(parts) > 1 else "",
                     builtin_roles=",".join(sorted(_declared_roles(route))),
-                )
+                ),
             )
             existing.add(code)
-            added += 1
+            added += 1 if landed else 0
     db.commit()
     return {"added": added, "total": len(existing)}
 
@@ -98,8 +104,9 @@ def seed_builtin_roles(db: Session) -> int:
     created = 0
     for key, name in ROLE_NAMES.items():
         if db.query(Role).filter(Role.key == key).first() is None:
-            db.add(Role(key=key, name=name, builtin=True))
-            created += 1
+            # 同 sync_permissions：多 worker 同时启动会同时预置同一批角色
+            if insert_if_absent(db, Role(key=key, name=name, builtin=True)):
+                created += 1
     db.commit()
     return created
 
@@ -300,8 +307,10 @@ def grant_permissions(role_id: int, body: GrantIn, db: Session = Depends(get_db)
     unknown = targets - valid
     added = 0
     for pid in sorted(valid - existing):
-        db.add(RolePermission(role_id=role_id, permission_id=pid))
-        added += 1
+        # 两个管理员同时给同一个角色授权，existing 都读不到同一条，
+        # 就都去插——一条撞车，整次授权回滚成 500。授没授上以落库为准。
+        if insert_if_absent(db, RolePermission(role_id=role_id, permission_id=pid)):
+            added += 1
     db.commit()
     return {
         "role_id": role_id,

@@ -12,7 +12,7 @@
 3. **点位停用不影响历史记录**。点位会撤并，但"这包医废当年是从哪个科室出来的"
    必须永远查得到，故引用不做级联清理。
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -20,10 +20,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..concurrency import insert_with_retry
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import Employee, MedicalWaste, Organization, WasteLocation
-from ..schemas import WasteCreate, WasteHandover, WasteOut
+from ..schemas import WasteCreate, WasteHandover
 
 router = APIRouter(prefix="/api/medwaste", tags=["医废追溯"], dependencies=[Depends(get_current_user)])
 
@@ -168,23 +169,35 @@ def collect(body: WasteCollect, db: Session = Depends(get_db)):
             raise HTTPException(status_code=422, detail="该点位不是产生点")
         if loc.org_id != body.org_id:
             raise HTTPException(status_code=422, detail="点位不属于该机构")
-    waste = MedicalWaste(
-        trace_code=_next_trace_code(db, body.collected_date), **body.model_dump()
+    # 追溯码是服务端算出来的顺序号，并发下两个请求会算出同一个。
+    # **重试放在服务端**：调用方重试的是整个收集动作，而且压力下它会撞进下一次
+    # 冲突；真正该重试的只是"取下一个号"这一步。
+    # 实测：8 线程并发收集，原先只落库 5 条、3 条抛未捕获 IntegrityError 成 500。
+    waste = insert_with_retry(
+        db,
+        lambda: MedicalWaste(
+            trace_code=_next_trace_code(db, body.collected_date), **body.model_dump()
+        ),
     )
-    db.add(waste)
-    db.commit()
-    db.refresh(waste)
     return _waste_out(waste)
 
 
-@router.get("", response_model=list[WasteOut])
+@router.get("")
 def list_wastes(org_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)):
+    """医废清单。
+
+    D-8：这里原先套 `WasteOut`，而那个 schema 是阶段五写的，字段停在
+    org_id/waste_type/weight_kg/collected_date/status/handler_name——
+    **追溯码不在里面**。于是这个模块最核心的那一列，清单页一列都看不到，
+    只能靠 `/trace/{code}` 反查；可码是从清单上抄的，抄不到就查不了。
+    改回 `_waste_out`（点位、暂存与交接时间也一并带出）。
+    """
     query = db.query(MedicalWaste)
     if org_id is not None:
         query = query.filter(MedicalWaste.org_id == org_id)
     if status:
         query = query.filter(MedicalWaste.status == status)
-    return query.order_by(MedicalWaste.id.desc()).limit(500).all()
+    return [_waste_out(w) for w in query.order_by(MedicalWaste.id.desc()).limit(500).all()]
 
 
 class WasteStore(BaseModel):
@@ -305,17 +318,31 @@ def handler_stats(
     }
 
 
-@router.get("/alerts", response_model=list[WasteOut])
+@router.get("/alerts")
 def overdue_alerts(today: str | None = None, db: Session = Depends(get_db)):
     """滞留预警：收集超过 2 天仍未交接的医废。
 
     L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
+
+    D-8：同样带上追溯码与暂存点位。预警的下一步动作是去把那几包找出来，
+    只报"某机构有 3 包超期"而不报是哪几包、在哪间暂存间，等于没报。
     """
     end = resolve_business_date(today)
     cutoff = (end - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
-    return (
+    rows = (
         db.query(MedicalWaste)
         .filter(MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= cutoff)
         .order_by(MedicalWaste.collected_date)
         .all()
     )
+    overdue_from = (end - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
+    return [
+        {
+            **_waste_out(w),
+            # 超期几天直接算好：预警页要按严重程度排序，别让前端自己减日期
+            "overdue_days": (end - date.fromisoformat(w.collected_date)).days
+            - STORAGE_LIMIT_DAYS,
+            "limit_date": overdue_from,
+        }
+        for w in rows
+    ]
