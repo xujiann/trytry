@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
 from ..concurrency import insert_if_absent
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -17,6 +18,7 @@ from ..models import (
     NewbornScreening,
     Organization,
     Patient,
+    User,
     WomenHealthRecord,
 )
 
@@ -355,10 +357,15 @@ class WomenHealthOut(WomenHealthCreate):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 妇女保健服务
 )
-def add_women_health(body: WomenHealthCreate, db: Session = Depends(get_db)):
+def add_women_health(
+    body: WomenHealthCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    record = WomenHealthRecord(**body.model_dump())
+    # 服务机构取办理人所属机构：这条记录就是"这家机构给这个人做了妇保服务"
+    record = WomenHealthRecord(**body.model_dump(), org_id=user.org_id)
     db.add(record)
     db.commit()
     db.refresh(record)
@@ -367,11 +374,10 @@ def add_women_health(body: WomenHealthCreate, db: Session = Depends(get_db)):
 
 @router.get("/women-health", response_model=list[WomenHealthOut])
 def list_women_health(
-    patient_id: int | None = None, record_type: str | None = None, db: Session = Depends(get_db)
+    patient_id: int | None = None, record_type: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(WomenHealthRecord)
-    if patient_id is not None:
-        query = query.filter(WomenHealthRecord.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, WomenHealthRecord, patient_id, "maternal")
     if record_type:
         query = query.filter(WomenHealthRecord.record_type == record_type)
     return query.order_by(WomenHealthRecord.id.desc()).limit(200).all()

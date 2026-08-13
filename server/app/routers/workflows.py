@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..visibility import assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin
 from ..models import (
@@ -375,12 +376,17 @@ def unified_requests(
     request_type: str | None = None,
     limit: int = 200,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """一个患者/一家机构所有在办事项的统一视图。
 
     刻意不建第六张单据表：五类单据各有必要的领域字段与状态机，再造一个通用表
     只会得到一张没人写入的空表。缺的是"一处看全"，所以这里做聚合而非替代。
     """
+    # 聚合视图更要守：它一次把五类单据端出来，是最省事的一个越权入口
+    if patient_id is not None:
+        assert_patient_visible(db, user, patient_id, resource="unified_requests")
+
     items: list[dict] = []
 
     appt_q = db.query(Appointment, AppointmentSlot).join(

@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -357,11 +358,10 @@ def list_aefi(
     vaccine_code: str | None = None,
     batch_no: str | None = None,
     severe_only: bool = False,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(AefiReport)
-    if patient_id is not None:
-        query = query.filter(AefiReport.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, AefiReport, patient_id, "aefi")
     if vaccine_code:
         query = query.filter(AefiReport.vaccine_code == vaccine_code)
     if batch_no:

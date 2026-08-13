@@ -11,6 +11,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -172,13 +173,12 @@ def create_admission(
 
 @router.get("/admissions")
 def list_admissions(
-    status: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db)
+    status: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     q = db.query(Admission)
     if status:
         q = q.filter(Admission.status == status)
-    if patient_id is not None:
-        q = q.filter(Admission.patient_id == patient_id)
+    q = scope_patient_list(db, user, q, Admission, patient_id, "admission")
     return [_admission_out(a) for a in q.order_by(Admission.id.desc()).limit(200).all()]
 
 

@@ -3,10 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..datetypes import DateStr
-from ..models import Organization, Patient, PhysicalExam
+from ..models import Organization, Patient, PhysicalExam, User
 
 router = APIRouter(prefix="/api/checkups", tags=["健康体检"], dependencies=[Depends(get_current_user)])
 
@@ -47,11 +48,10 @@ def create_checkup(body: CheckupCreate, db: Session = Depends(get_db)):
 
 @router.get("", response_model=list[CheckupOut])
 def list_checkups(
-    patient_id: int | None = None, has_abnormal: bool | None = None, db: Session = Depends(get_db)
+    patient_id: int | None = None, has_abnormal: bool | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(PhysicalExam)
-    if patient_id is not None:
-        query = query.filter(PhysicalExam.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, PhysicalExam, patient_id, "checkup")
     if has_abnormal is not None:
         query = query.filter(PhysicalExam.has_abnormal.is_(has_abnormal))
     return query.order_by(PhysicalExam.id.desc()).limit(200).all()

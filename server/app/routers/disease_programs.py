@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -188,13 +189,12 @@ def list_enrollments(
     group_id: int | None = None,
     offset: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(DiseaseEnrollment)
     if program_id is not None:
         query = query.filter(DiseaseEnrollment.program_id == program_id)
-    if patient_id is not None:
-        query = query.filter(DiseaseEnrollment.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, DiseaseEnrollment, patient_id, "disease_program")
     if status:
         query = query.filter(DiseaseEnrollment.status == status)
     scope = resolve_org_scope(db, group_id, org_id)

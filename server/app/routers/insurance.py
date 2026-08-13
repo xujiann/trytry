@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -64,12 +65,11 @@ def list_settlements(
     patient_id: int | None = None,
     offset: int = 0,
     limit: int = 200,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     """结算记录列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
     query = db.query(InsuranceSettlement)
-    if patient_id is not None:
-        query = query.filter(InsuranceSettlement.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, InsuranceSettlement, patient_id, "insurance")
     return paginate(query.order_by(InsuranceSettlement.id.desc()), response, offset, limit)
 
 

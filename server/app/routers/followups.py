@@ -12,9 +12,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
-from ..models import FollowupTask, Organization, Patient, utcnow
+from ..models import FollowupTask, Organization, Patient, User, utcnow
 
 router = APIRouter(prefix="/api/followups", tags=["随访中心"], dependencies=[Depends(get_current_user)])
 
@@ -132,7 +133,7 @@ def list_followups(
     patient_id: int | None = None,
     offset: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(FollowupTask)
     if category:
@@ -141,8 +142,7 @@ def list_followups(
         query = query.filter(FollowupTask.status == status)
     if org_id is not None:
         query = query.filter(FollowupTask.org_id == org_id)
-    if patient_id is not None:
-        query = query.filter(FollowupTask.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, FollowupTask, patient_id, "followup")
     rows = paginate(query.order_by(FollowupTask.due_date, FollowupTask.id), response, offset, limit)
     names, orgs = _name_maps(db, rows)
     return [_out(t, names, orgs) for t in rows]

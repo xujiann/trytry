@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
@@ -287,11 +288,10 @@ def list_bill_details(
     admission_id: int | None = None,
     encounter_id: int | None = None,
     settled: bool | None = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     q = db.query(BillDetail)
-    if patient_id is not None:
-        q = q.filter(BillDetail.patient_id == patient_id)
+    q = scope_patient_list(db, user, q, BillDetail, patient_id, "billing")
     if admission_id is not None:
         q = q.filter(BillDetail.admission_id == admission_id)
     if encounter_id is not None:
@@ -410,11 +410,10 @@ def create_settlement(
 
 @router.get("/settlements")
 def list_settlements(
-    patient_id: int | None = None, bill_type: str | None = None, db: Session = Depends(get_db)
+    patient_id: int | None = None, bill_type: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     q = db.query(Settlement)
-    if patient_id is not None:
-        q = q.filter(Settlement.patient_id == patient_id)
+    q = scope_patient_list(db, user, q, Settlement, patient_id, "billing")
     if bill_type:
         q = q.filter(Settlement.bill_type == bill_type)
     return [_settlement_out(s) for s in q.order_by(Settlement.id.desc()).limit(200).all()]

@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_with_retry
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ChildRecord, MedicalCert, Organization, Patient, User
@@ -76,13 +77,12 @@ def issue_cert(
 
 @router.get("")
 def list_certs(
-    cert_type: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db)
+    cert_type: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(MedicalCert)
     if cert_type:
         query = query.filter(MedicalCert.cert_type == cert_type)
-    if patient_id is not None:
-        query = query.filter(MedicalCert.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, MedicalCert, patient_id, "cert")
     return [
         {
             "id": c.id,

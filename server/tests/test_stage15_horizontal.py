@@ -250,21 +250,19 @@ def _patient_scoped_endpoints() -> dict[str, list[str]]:
     return found
 
 
-# 尚未纳入可见性判定的患者维度接口。**这不是豁免清单，是欠账清单**——
-# 第九轮只做了第一批（档案、就诊、用药、接种、公卫、处置、检查互认），
-# 其余留到第二批。列在这里是为了让缺口是显式的：
+# 未纳入可见性判定的患者维度接口，逐条写明理由。
+# 第一批做完时这里有 20 条欠账，第二批清完只剩下面这一条。
+# 保留这份清单的意义不在于它现在多短，而在于**缺口必须是显式的**：
 # 第八轮那条只覆盖 11% 的扫描之所以骗过人，正是因为没覆盖到的部分不出现在任何地方。
 UNGUARDED = {
-    "appointments.py:list_appointments", "billing.py:list_bill_details",
-    "billing.py:list_settlements", "certs.py:list_certs", "checkups.py:list_checkups",
-    "contracts.py:list_contracts", "credentials.py:list_credentials",
-    "disease_programs.py:list_enrollments", "eldercare.py:list_assessments",
-    "followups.py:list_followups", "gapfill.py:list_visits",
-    "inpatient.py:list_admissions", "insurance.py:list_settlements",
-    "integration.py:export_fhir_patient", "materials.py:list_consumables",
-    "maternal.py:list_women_health", "outpatient_docs.py:list_consents",
-    "patients.py:get_patient", "vaccine_supply.py:list_aefi",
-    "workflows.py:unified_requests",
+    # 出站对接接口：调用方是区域平台一侧的对接账号，按设计要能导出全县任意患者，
+    # 天然没有"业务关系"。改为只留痕（basis=export）。真正对症的是给对接账号
+    # 单独一类身份并声明导出范围，平台暂无此类账号——登记为遗留项。
+    "integration.py:export_fhir_patient",
+    # 身份检索，非诊疗数据：返回的是脱敏标识（证件号打码），且必须已经持有
+    # 电子健康卡号才查得到，不可遍历。挂号建档要先找得到人，加关系判定会让
+    # 初诊办不了——真正要守的是诊疗明细，那些已经守住了。
+    "patients.py:get_patient",
 }
 # 居民端：另一套鉴权（scope=portal，只能看自己），不适用机构可见性。
 PORTAL = {
@@ -290,7 +288,7 @@ def test_横向越权覆盖率矩阵():
 
     # 欠账只许变少。改小这个数字要连同实现一起改——它是这一轮唯一防止
     # "看起来做完了"的机制。
-    assert len(business & UNGUARDED) <= 20, (
+    assert len(business & UNGUARDED) <= 2, (
         f"未纳入可见性判定的患者维度接口变多了：{sorted(business & UNGUARDED)}"
     )
 
@@ -311,6 +309,25 @@ def test_已纳入的接口确实会拒绝无关机构(client, world, stranger):
         ("medication", f"/api/medication/profile/{pid}"),
         ("publichealth", f"/api/publichealth/reminders/{pid}"),
         ("treatments", f"/api/outpatient/treatments?patient_id={pid}"),
+        # 第二批
+        ("appointments", f"/api/appointments?patient_id={pid}"),
+        ("bill_details", f"/api/billing/details?patient_id={pid}"),
+        ("settlements", f"/api/billing/settlements?patient_id={pid}"),
+        ("certs", f"/api/certs?patient_id={pid}"),
+        ("checkups", f"/api/checkups?patient_id={pid}"),
+        ("contracts", f"/api/contracts?patient_id={pid}"),
+        ("credentials", f"/api/credentials?patient_id={pid}"),
+        ("enrollments", f"/api/disease-programs/enrollments?patient_id={pid}"),
+        ("eldercare", f"/api/eldercare/assessments?patient_id={pid}"),
+        ("followups", f"/api/followups?patient_id={pid}"),
+        ("admissions", f"/api/inpatient/admissions?patient_id={pid}"),
+        ("insurance", f"/api/insurance/settlements?patient_id={pid}"),
+        ("women_health", f"/api/maternal/women-health?patient_id={pid}"),
+        ("consents", f"/api/outpatient/consents?patient_id={pid}"),
+        ("aefi", f"/api/vaccine-supply/aefi?patient_id={pid}"),
+        ("consumables", f"/api/materials/consumables?patient_id={pid}"),
+        ("home_visits", f"/api/homevisits?patient_id={pid}"),
+        ("unified", f"/api/service-requests?patient_id={pid}"),
     ]
     leaked = []
     for label, url in cases:

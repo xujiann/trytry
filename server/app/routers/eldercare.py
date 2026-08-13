@@ -3,9 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import ElderlyAssessment, Patient
+from ..models import ElderlyAssessment, Patient, User
 
 router = APIRouter(prefix="/api/eldercare", tags=["老年健康"], dependencies=[Depends(get_current_user)])
 
@@ -42,10 +43,16 @@ class AssessmentOut(AssessmentCreate):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 老年健康评估
 )
-def create_assessment(body: AssessmentCreate, db: Session = Depends(get_db)):
+def create_assessment(
+    body: AssessmentCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    assessment = ElderlyAssessment(**body.model_dump(), care_level=grade_adl(body.adl_score))
+    assessment = ElderlyAssessment(
+        **body.model_dump(), care_level=grade_adl(body.adl_score), org_id=user.org_id
+    )
     db.add(assessment)
     db.commit()
     db.refresh(assessment)
@@ -53,10 +60,9 @@ def create_assessment(body: AssessmentCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/assessments", response_model=list[AssessmentOut])
-def list_assessments(patient_id: int | None = None, care_level: str | None = None, db: Session = Depends(get_db)):
+def list_assessments(patient_id: int | None = None, care_level: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(ElderlyAssessment)
-    if patient_id is not None:
-        query = query.filter(ElderlyAssessment.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, ElderlyAssessment, patient_id, "eldercare")
     if care_level:
         query = query.filter(ElderlyAssessment.care_level == care_level)
     return query.order_by(ElderlyAssessment.id.desc()).limit(200).all()

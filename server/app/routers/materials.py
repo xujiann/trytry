@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_if_absent
+from ..visibility import assert_patient_visible, visible_org_ids
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -317,6 +318,7 @@ def list_consumables(
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """反向追溯：按批号查"这批货都用到了谁身上"（召回场景），或按患者查用了哪些耗材。"""
     query = db.query(HighValueConsumable)
@@ -327,6 +329,13 @@ def list_consumables(
     if batch_no:
         query = query.filter(HighValueConsumable.batch_no == batch_no)
     if patient_id is not None:
+        # 患者列叫 used_patient_id，不是 patient_id，套不了 scope_patient_list
+        assert_patient_visible(db, user, patient_id, resource="consumable")
         query = query.filter(HighValueConsumable.used_patient_id == patient_id)
+    else:
+        # 召回场景按批号反查"这批货用到了谁身上"，同样只限本机构
+        orgs = visible_org_ids(db, user)
+        if orgs is not None:
+            query = query.filter(HighValueConsumable.org_id.in_(orgs))
     rows = paginate(query.order_by(HighValueConsumable.id.desc()), response, offset, limit)
     return [_consumable_out(db, c) for c in rows]

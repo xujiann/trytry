@@ -17,6 +17,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..clock import now_aware
+from ..visibility import log_patient_access
 from ..database import SessionLocal, get_db
 from ..deps import get_current_user, require_roles
 from ..models import ChronicPatient, ExchangeLog, FollowUp, Patient, User
@@ -307,6 +308,16 @@ def export_fhir_patient(
     patient = db.query(Patient).filter(Patient.ehc_no == ehc_no).first()
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    # 先按"与 360 同级"加了关系判定，两条既有用例当场变红——**判断错了**：
+    # 这条是出站对接接口，调用方是区域平台/接口引擎那一侧的对接账号，
+    # 它按设计就要能导出全县任意患者，天然没有"业务关系"可言。
+    # 用关系判定卡它，等于把对接功能关掉。
+    #
+    # 所以改回"可问责而非可阻断"：不拦，但每一次导出都留痕。
+    # 遗留项（已登记）：真正对症的做法是给对接账号单独一类身份，
+    # 并声明它的导出范围（哪个区域、哪些字段），而不是复用 operator 这个人的角色。
+    # 平台现在没有这类账号，本批不造。
+    log_patient_access(db, user, patient.id, "fhir_export", "export")
     id_card = patient.id_card if user.role == "admin" else mask_id_card(patient.id_card)
     phone = patient.phone if user.role == "admin" else mask_phone(patient.phone)
     return {

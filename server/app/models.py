@@ -918,6 +918,10 @@ class ElderlyAssessment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # 评估机构（第九轮补，理由同 visit_credentials）
+    org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
     adl_score: Mapped[int] = mapped_column(Integer)
     cognitive_score: Mapped[int] = mapped_column(Integer, default=0)
     tcm_constitution: Mapped[str] = mapped_column(String(32), default="")
@@ -1657,6 +1661,10 @@ class WomenHealthRecord(Base):
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     # premarital=婚前保健, preconception=孕前保健, gynecology=妇女保健, contraception=避孕节育
     record_type: Mapped[str] = mapped_column(String(16), index=True)
+    # 服务机构（第九轮补，理由同 visit_credentials）
+    org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
     exam_date: Mapped[str] = mapped_column(String(10), default="")
     result: Mapped[str] = mapped_column(String(512), default="")
     advice: Mapped[str] = mapped_column(String(512), default="")
@@ -3219,6 +3227,12 @@ class VisitCredential(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     credential_no: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # 发放机构。第九轮补：原先这张表只有 patient_id，答不出"这张卡是哪家发的"。
+    # 后果不止是统计缺一维——横向隔离按"本机构服务过的患者"判可见性，
+    # 而发卡这个动作因为没记机构，**发卡机构反而看不到自己发的卡**。
+    org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
     # card=实体就诊卡, qrcode=电子二维码, temp=临时凭据（无证件急诊等）
     credential_type: Mapped[str] = mapped_column(String(16), default="card", index=True)
     # active=有效, recycled=已回收（患者主动交回）, void=已作废（挂失/换发）

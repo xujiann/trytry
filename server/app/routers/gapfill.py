@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ..datetypes import DateStr
 from ..clock import now_naive
 from ..concurrency import add_amount, insert_or_conflict, upsert_unique
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import (
@@ -1016,12 +1017,12 @@ def list_visits(
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(HomeVisitOrder)
     if status:
         query = query.filter(HomeVisitOrder.status == status)
-    if patient_id is not None:
-        query = query.filter(HomeVisitOrder.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, HomeVisitOrder, patient_id, "home_visit")
     if org_id is not None:
         query = query.filter(HomeVisitOrder.org_id == org_id)
     return [

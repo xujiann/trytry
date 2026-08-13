@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..config import settings
 from ..concurrency import insert_or_conflict
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import Patient, User, VisitCredential, utcnow
@@ -102,6 +103,7 @@ def issue_credential(
             credential_no=credential_no,
             credential_type=body.credential_type,
             issued_by=user.id,
+            org_id=user.org_id,
         ),
         "该凭据号已存在",
     )
@@ -117,11 +119,10 @@ def list_credentials(
     status: str | None = None,
     offset: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(VisitCredential)
-    if patient_id is not None:
-        query = query.filter(VisitCredential.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, VisitCredential, patient_id, "credential")
     if status:
         query = query.filter(VisitCredential.status == status)
     rows = paginate(query.order_by(VisitCredential.id.desc()), response, offset, limit)

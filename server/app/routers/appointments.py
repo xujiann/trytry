@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
@@ -12,6 +13,7 @@ from ..models import (
     Organization,
     Patient,
     ServiceBlacklist,
+    User,
 )
 from ..schemas import AppointmentCreate, AppointmentOut, SlotCreate, SlotOut
 
@@ -205,10 +207,9 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[AppointmentOut])
-def list_appointments(patient_id: int | None = None, db: Session = Depends(get_db)):
+def list_appointments(patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(Appointment)
-    if patient_id is not None:
-        query = query.filter(Appointment.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, Appointment, patient_id, "appointment")
     return query.order_by(Appointment.id.desc()).limit(500).all()
 
 

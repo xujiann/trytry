@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_local
-from ..visibility import assert_patient_visible
+from ..visibility import assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -205,11 +205,10 @@ def list_consents(
     related_id: int | None = None,
     offset: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(InformedConsent)
-    if patient_id is not None:
-        query = query.filter(InformedConsent.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, InformedConsent, patient_id, "consent")
     if status:
         query = query.filter(InformedConsent.status == status)
     if related_type:

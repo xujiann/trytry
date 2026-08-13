@@ -3,9 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
+from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import ContractService, FamilyDoctorContract, Organization, Patient
+from ..models import ContractService, FamilyDoctorContract, Organization, Patient, User
 from ..schemas import ContractCreate, ContractOut, ContractServiceCreate, ContractServiceOut
 
 router = APIRouter(prefix="/api/contracts", tags=["家庭医生签约"], dependencies=[Depends(get_current_user)])
@@ -49,12 +50,11 @@ def sign(body: ContractCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[ContractOut])
-def list_contracts(org_id: int | None = None, patient_id: int | None = None, db: Session = Depends(get_db)):
+def list_contracts(org_id: int | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(FamilyDoctorContract)
     if org_id is not None:
         query = query.filter(FamilyDoctorContract.org_id == org_id)
-    if patient_id is not None:
-        query = query.filter(FamilyDoctorContract.patient_id == patient_id)
+    query = scope_patient_list(db, user, query, FamilyDoctorContract, patient_id, "contract")
     return query.order_by(FamilyDoctorContract.id.desc()).limit(500).all()
 
 

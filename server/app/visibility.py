@@ -42,7 +42,9 @@
 """
 from datetime import date
 
+import sqlalchemy as sa
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .clock import now_naive
@@ -69,6 +71,8 @@ __all__ = [
     "patient_basis",
     "assert_patient_visible",
     "log_patient_access",
+    "visible_patient_ids",
+    "scope_patient_list",
 ]
 
 
@@ -273,6 +277,65 @@ def _write_access_log(user: User, patient_id: int, resource: str, basis: str) ->
         db.rollback()
     finally:
         db.close()
+
+
+def visible_patient_ids(db: Session, user: User):
+    """本机构服务过的患者 id 子查询；全域角色返回 None（不加过滤）。
+
+    给那些**自己不带机构列**的表用：老年人能力评估、妇女保健记录、就诊凭据、
+    预约、费用明细——它们只有 `patient_id`，没有"这条记录是哪家机构做的"。
+    没有机构列就没法直接按机构筛，只能反过来问：这个患者是不是本机构服务过的。
+
+    这本身暴露一个**数据模型缺口**（登记在案，见 `docs`）：这几张表连
+    "哪家机构做的"都答不出来，于是机构工作量统计也做不了。补 `org_id` 是根治，
+    但要迁移与回填，不在本批；这里先用可见患者集合把越权堵上。
+
+    实现上用 `UNION ALL` 拼成一个子查询交给数据库，不在 Python 里物化——
+    县医院服务过的患者接近全县人口，取回内存再过滤等于把整张表搬一遍。
+    """
+    if user.role in GLOBAL_ROLES:
+        return None
+    if user.org_id is None:
+        return select(Encounter.patient_id).where(sa.false())
+    parts = []
+    for model, org_cols in _relation_tables():
+        cond = None
+        for col in org_cols:
+            c = getattr(model, col) == user.org_id
+            cond = c if cond is None else (cond | c)
+        parts.append(select(model.patient_id).where(cond))
+    return parts[0].union_all(*parts[1:]) if len(parts) > 1 else parts[0]
+
+
+def scope_patient_list(
+    db: Session,
+    user: User,
+    query,
+    model,
+    patient_id: int | None,
+    resource: str,
+):
+    """患者维度**清单接口**的统一收口。
+
+    抽出来而不是在 20 个接口里各写一遍：第八轮的结论是"没抽出来的正确做法
+    等于没有"——`claim_quota` 早就存在却没抽出来，于是疫苗批次那里又手写了
+    一遍错的。这里同理，20 处手写必然有几处写漏或写歪。
+
+    - 给了 `patient_id`：走可见性判定并留痕，再按患者过滤；
+    - 没给：按可见机构过滤；模型没有机构列的，退回按"本机构服务过的患者"过滤。
+    """
+    if patient_id is not None:
+        assert_patient_visible(db, user, patient_id, resource=resource)
+        return query.filter(model.patient_id == patient_id)
+
+    orgs = visible_org_ids(db, user)
+    if orgs is None:
+        return query
+    for col in ("org_id", "from_org_id", "managed_by_org_id"):
+        if hasattr(model, col):
+            return query.filter(getattr(model, col).in_(orgs))
+    patients = visible_patient_ids(db, user)
+    return query.filter(model.patient_id.in_(patients))
 
 
 def log_patient_access(
