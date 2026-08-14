@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import scope_org_list
+from ..visibility import assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -168,7 +168,8 @@ class CssdReqCreate(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("operator"))],  # H2: 物品申领=经办
 )
-def create_cssd_request(body: CssdReqCreate, db: Session = Depends(get_db)):
+def create_cssd_request(body: CssdReqCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="申领机构不存在")
     r = CssdRequest(**body.model_dump())
@@ -219,7 +220,8 @@ class ExpertCreate(BaseModel):
 
 
 @router.post("/consultations/experts", status_code=201, dependencies=[Depends(require_admin)])
-def create_expert(body: ExpertCreate, db: Session = Depends(get_db)):
+def create_expert(body: ExpertCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.query(ConsultExpert).filter(ConsultExpert.name == body.name).first():
         raise HTTPException(status_code=409, detail="专家已存在")
     e = insert_or_conflict(db, ConsultExpert(**body.model_dump()), "专家已存在")
@@ -480,7 +482,8 @@ class ExamResourceCreate(BaseModel):
 
 
 @router.post("/exams/resources", status_code=201, dependencies=[Depends(require_admin)])
-def create_exam_resource(body: ExamResourceCreate, db: Session = Depends(get_db)):
+def create_exam_resource(body: ExamResourceCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     resource = ExamResource(**body.model_dump())

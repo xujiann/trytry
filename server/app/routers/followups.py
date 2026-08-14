@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..visibility import scope_patient_list
+from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import FollowupTask, Organization, Patient, User, utcnow
@@ -108,7 +108,8 @@ def _name_maps(db: Session, tasks: list[FollowupTask]) -> tuple[dict, dict]:
 
 
 @router.post("", status_code=201, dependencies=[Depends(require_roles("doctor", "public_health"))])
-def create_followup(body: FollowupIn, db: Session = Depends(get_db)):
+def create_followup(body: FollowupIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     """人工补建随访任务（随访计划外的临时安排）。"""
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")

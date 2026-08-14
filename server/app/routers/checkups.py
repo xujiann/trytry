@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..visibility import scope_patient_list
+from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..datetypes import DateStr
@@ -34,7 +34,8 @@ class CheckupOut(CheckupCreate):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 体检报告录入
 )
-def create_checkup(body: CheckupCreate, db: Session = Depends(get_db)):
+def create_checkup(body: CheckupCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:

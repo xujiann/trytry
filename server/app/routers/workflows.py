@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_patient_visible
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin
 from ..models import (
@@ -152,6 +152,7 @@ def _instance_out(i: WorkflowInstance, node: dict | None = None) -> dict:
 def start_instance(
     body: StartIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    assert_org_writable(db, user, body.org_id)
     """发起流程实例，落在首节点。"""
     definition = _definition_or_404(db, body.definition_key)
     if body.org_id is not None and db.get(Organization, body.org_id) is None:

@@ -67,6 +67,7 @@ GLOBAL_ROLES = {"admin", "director"}
 __all__ = [
     "visible_org_ids",
     "assert_org_visible",
+    "assert_org_writable",
     "stats_org_ids",
     "patient_basis",
     "assert_patient_visible",
@@ -137,6 +138,30 @@ def assert_org_visible(db: Session, user: User, org_id: int | None) -> None:
     if allowed is None or org_id in allowed:
         return
     raise HTTPException(status_code=403, detail="无权查看该机构的数据")
+
+
+def assert_org_writable(db: Session, user: User, org_id: int | None) -> None:
+    """校验调用者可以**以这家机构的名义写入**，不行就 403。
+
+    读侧的洞是看见别家，写侧的洞重得多：实测乙卫生院的 director 能给
+    甲县医院记一笔 88888 的支出、建一个假职工——**这是在替别家做账**。
+    集中核算的数字要是能被任何成员机构写进别家账本，汇总就没有意义了。
+
+    规则与读侧明细同一档：非全域角色只能写本机构（org_id 为 None 的记录
+    不在此列，由各接口自己定语义）。刻意不用统计那档——统计是"看得宽"，
+    写永远不能宽。
+
+    与 `assert_org_visible` 分开成两个函数，虽然此刻实现几乎一样：
+    读与写的口径将来多半会分化（例如允许授权代录），合在一起到时就得
+    在每个调用点回忆当初是读是写。
+    """
+    if org_id is None:
+        return
+    if user.role in GLOBAL_ROLES:
+        return
+    if user.org_id == org_id:
+        return
+    raise HTTPException(status_code=403, detail="无权以该机构名义写入数据")
 
 
 def stats_org_ids(db: Session, user: User) -> list[int] | None:

@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
-from ..visibility import scope_patient_list
+from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -149,6 +149,7 @@ def enroll(
 ):
     """入组。同一患者同一专病同时只允许一条在管记录，但**允许复发再入组**——
     治好出组之后又犯是常态，不该被"已入组"永久挡住。"""
+    assert_org_writable(db, user, body.org_id)
     program = _program(db, program_id)
     if not program.active:
         raise HTTPException(status_code=409, detail="该专病目录已停用")

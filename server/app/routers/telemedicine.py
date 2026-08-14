@@ -3,9 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..visibility import assert_org_writable
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import OnlineConsult, Organization, Patient, Prescription
+from ..models import OnlineConsult, Organization, Patient, Prescription, User
 from ..schemas import PrescriptionOut  # noqa: F401
 
 router = APIRouter(prefix="/api/telemedicine", tags=["互联网+诊疗"], dependencies=[Depends(get_current_user)])
@@ -41,7 +42,8 @@ class ReplyBody(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2/L5: 咨询建立
 )
-def create_consult(body: ConsultCreate, db: Session = Depends(get_db)):
+def create_consult(body: ConsultCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:

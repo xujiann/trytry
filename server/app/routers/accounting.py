@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_visible, scope_org_list
+from ..visibility import assert_org_visible, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import AccountSubject, Organization, User, Voucher, VoucherEntry, utcnow
@@ -134,6 +134,7 @@ def _voucher_out(v: Voucher, entries: list[VoucherEntry] | None = None) -> dict:
 def create_voucher(
     body: VoucherIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    assert_org_writable(db, user, body.org_id)
     """录入凭证（草稿）。借贷不平直接 422，不给"先存下来以后再平"的口子。"""
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")

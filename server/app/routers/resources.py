@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -32,6 +33,7 @@ from ..models import (
     Organization,
     Resource,
     SurgerySchedule,
+    User,
 )
 
 router = APIRouter(
@@ -90,9 +92,10 @@ def _resource_out(r: Resource) -> dict:
 
 
 @router.post("", status_code=201, dependencies=[Depends(require_roles("operator", "director"))])
-def register_resource(body: ResourceIn, db: Session = Depends(get_db)):
+def register_resource(body: ResourceIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """登记通用资源。**新登记的一律是草稿**——直接发布意味着还没核对完
     就已经能被申请到，而资源信息填错的代价是有人白跑一趟。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     resource = Resource(**body.model_dump())

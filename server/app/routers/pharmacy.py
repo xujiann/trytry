@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import add_amount, insert_if_absent, insert_or_conflict
-from ..visibility import scope_org_list
+from ..visibility import assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from pydantic import BaseModel, Field
@@ -262,6 +262,7 @@ class PurchaseCreate(BaseModel):
 def create_purchase(
     body: PurchaseCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     supplier = db.get(Supplier, body.supplier_id)
@@ -375,6 +376,7 @@ class StockTakeCreate(BaseModel):
 def create_stock_take(
     body: StockTakeCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    assert_org_writable(db, user, body.org_id)
     stock = (
         db.query(DrugStock)
         .filter(DrugStock.org_id == body.org_id, DrugStock.drug_code == body.drug_code)

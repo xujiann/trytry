@@ -7,7 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_with_retry
-from ..visibility import scope_patient_list
+from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ChildRecord, MedicalCert, Organization, Patient, User
@@ -38,6 +38,7 @@ class CertCreate(BaseModel):
 def issue_cert(
     body: CertCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="签发机构不存在")
     if body.cert_type == "death":

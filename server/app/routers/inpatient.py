@@ -11,7 +11,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import scope_org_list, scope_patient_list
+from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -39,7 +39,8 @@ class WardCreate(BaseModel):
 
 
 @router.post("/wards", status_code=201, dependencies=[Depends(require_admin)])
-def create_ward(body: WardCreate, db: Session = Depends(get_db)):
+def create_ward(body: WardCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if db.query(Ward).filter(Ward.org_id == body.org_id, Ward.name == body.name).first():

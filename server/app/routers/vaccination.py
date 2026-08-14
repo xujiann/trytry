@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..concurrency import claim_quota
 from ..datetypes import OptionalDateStr
-from ..visibility import assert_patient_visible
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import (
@@ -69,7 +69,8 @@ class RecordOut(RecordCreate):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 疫苗接种登记
 )
-def vaccinate(body: RecordCreate, db: Session = Depends(get_db)):
+def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="受种者不存在")
     if db.get(Organization, body.org_id) is None:

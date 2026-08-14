@@ -295,6 +295,67 @@ def test_同医共体成员可见统计汇总(client, world):
     assert world["a"]["id"] in orgs, "同医共体成员在汇总里看不到牵头医院——统计口径被收得过紧"
 
 
+# ================================================================ 写侧
+
+
+@pytest.fixture(scope="module")
+def stranger_op(client, world, stranger):
+    """丙机构的**经办**账号。写侧拒绝断言必须用它而不是医生：
+    建职工、记财务这些接口的角色守卫本来就拒医生，用医生去测，
+    用例会因角色而绿——机构守卫删掉它也不红，等于没测。"""
+    client.post(
+        "/api/users",
+        json={"username": "hz_op_x", "password": "pw123456", "full_name": "丙经办",
+              "role": "operator", "org_id": stranger["org"]["id"]},
+        headers=world["admin"],
+    )
+    return _login(client, "hz_op_x")
+
+
+def test_不得以别家机构名义写入(client, world, stranger, stranger_op):
+    """写侧的洞比读侧重：实测乙院的账号能给甲院记一笔 88888 的支出、
+    建一个假职工——这是在替别家做账。集中核算的数字要是能被任何成员机构
+    写进别家账本，汇总就没有意义了。"""
+    a = world["a"]["id"]
+    sh = stranger_op
+    cases = [
+        ("建职工", "/api/mgmt/employees", {"org_id": a, "name": "假职工", "title": "医师"}),
+        ("记支出", "/api/mgmt/finance",
+         {"org_id": a, "period": "2026-08", "category": "expense", "amount": 88888.0}),
+        ("建医废点位", "/api/medwaste/locations", {"org_id": a, "name": "假点位"}),
+        ("建科室", "/api/mgmt/departments", {"org_id": a, "code": "FKD", "name": "假科室"}),
+    ]
+    leaked = []
+    for label, url, body in cases:
+        r = client.post(url, json=body, headers=sh)
+        if r.status_code == 404:
+            leaked.append(f"{label} 路由 404（用例写错了）：{url}")
+        elif r.status_code != 403 or "机构名义" not in r.json().get("detail", ""):
+            # 只认机构守卫的 403：角色守卫的 403 不算数——那是纵向矩阵的事，
+            # 认了它，机构守卫删掉这条用例也不红
+            leaked.append(f"{label} 未被机构守卫拦住：{r.status_code} {r.text[:60]}")
+    # 症候群上报的角色关是 public_health|doctor，经办过不了，单独用医生号测
+    r = client.post(
+        "/api/surveillance/syndromes",
+        json={"org_id": a, "syndrome": "fever", "case_count": 999, "threshold": 0,
+              "record_date": "2026-08-13"},
+        headers=stranger["headers"],
+    )
+    if r.status_code != 403 or "机构名义" not in r.json().get("detail", ""):
+        leaked.append(f"上报症候群 未被机构守卫拦住：{r.status_code}")
+    assert leaked == [], "以下写接口可替别家机构写入：\n  " + "\n  ".join(leaked)
+
+
+def test_以本机构名义写入照常(client, world, stranger, stranger_op):
+    """守卫不能把正常录入挡掉。丙村卫生室的经办给自己建职工必须成功。"""
+    r = client.post(
+        "/api/mgmt/employees",
+        json={"org_id": stranger["org"]["id"], "name": "丙村医", "title": "乡村医生"},
+        headers=stranger_op,
+    )
+    assert r.status_code == 201, f"本机构写入被误伤：{r.text[:120]}"
+
+
 # ================================================================ 覆盖率矩阵
 
 

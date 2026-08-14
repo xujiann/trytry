@@ -19,7 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
-from ..visibility import scope_org_list
+from ..visibility import assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -73,7 +73,8 @@ def _syndrome_out(r: SyndromeMonitor) -> dict:
 @router.post(
     "/syndromes", status_code=201, dependencies=[Depends(require_roles("public_health", "doctor"))]
 )
-def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db)):
+def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     """症候群日报。同机构同症候群同日重复上报按**覆盖**处理（见模块口径 2）。"""
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -153,7 +154,8 @@ def _pathogen_out(r: PathogenMonitor) -> dict:
 @router.post(
     "/pathogens", status_code=201, dependencies=[Depends(require_roles("public_health", "doctor"))]
 )
-def report_pathogen(body: PathogenIn, db: Session = Depends(get_db)):
+def report_pathogen(body: PathogenIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if body.positive_count > body.tested_count:
@@ -287,7 +289,8 @@ def _resource_out(r: EmergencyResource, today: str) -> dict:
 @router.post(
     "/resources", status_code=201, dependencies=[Depends(require_roles("public_health", "operator"))]
 )
-def create_resource(body: ResourceIn, db: Session = Depends(get_db)):
+def create_resource(body: ResourceIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if body.resource_type == "team" and body.expire_date:

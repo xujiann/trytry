@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -102,6 +103,7 @@ def _project_out(p: AdminProject, today: str, milestones: list[ProjectMilestone]
 def create_project(
     body: ProjectIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if body.start_date and body.due_date and body.due_date < body.start_date:

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
 from ..concurrency import insert_if_absent
-from ..visibility import scope_patient_list
+from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -199,7 +199,8 @@ class DeliveryCreate(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],  # 分娩记录=医师
 )
-def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get_db)):
+def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     record = db.get(MaternalRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")

@@ -26,24 +26,28 @@ def _login(client, username, password="passw0rd1"):
 
 
 @pytest.fixture(scope="module")
-def roles(client, admin):
-    for username, role in [("acc_dir", "director"), ("acc_dir2", "director"),
-                           ("acc_op", "operator"), ("acc_doc", "doctor")]:
-        client.post(
-            "/api/users",
-            json={"username": username, "password": "passw0rd1", "full_name": username, "role": role},
-            headers=admin,
-        )
-    return {k: _login(client, v) for k, v in
-            {"director": "acc_dir", "director2": "acc_dir2", "operator": "acc_op", "doctor": "acc_doc"}.items()}
-
-
-@pytest.fixture(scope="module")
 def org(client, admin):
     return client.post(
         "/api/organizations", json={"name": "核算演示县医院", "org_type": "lead_hospital", "level": "county"},
         headers=admin,
     ).json()
+
+
+@pytest.fixture(scope="module")
+def roles(client, admin, org):
+    """第九轮：业务账号一律挂机构。原先不挂——那时机构归属不影响任何判定；
+    现在写接口按"只能以本机构名义写"校验，无归属的经办账号写任何机构都会 403，
+    这正是守卫该有的行为，所以是修 fixture 而不是放宽守卫。"""
+    for username, role in [("acc_dir", "director"), ("acc_dir2", "director"),
+                           ("acc_op", "operator"), ("acc_doc", "doctor")]:
+        client.post(
+            "/api/users",
+            json={"username": username, "password": "passw0rd1", "full_name": username,
+                  "role": role, "org_id": org["id"]},
+            headers=admin,
+        )
+    return {k: _login(client, v) for k, v in
+            {"director": "acc_dir", "director2": "acc_dir2", "operator": "acc_op", "doctor": "acc_doc"}.items()}
 
 
 # ---------------------------------------------------------------- 会计科目与凭证

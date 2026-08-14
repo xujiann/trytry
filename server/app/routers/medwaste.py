@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import insert_with_retry
-from ..visibility import scope_org_list
+from ..visibility import assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import Employee, MedicalWaste, Organization, User, WasteLocation
@@ -64,7 +64,8 @@ def _location_out(loc: WasteLocation) -> dict:
 
 
 @router.post("/locations", status_code=201, dependencies=[Depends(require_roles("operator", "director"))])
-def create_location(body: LocationIn, db: Session = Depends(get_db)):
+def create_location(body: LocationIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     loc = WasteLocation(**body.model_dump())

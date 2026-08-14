@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
 from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
-from ..visibility import assert_org_visible, scope_org_list, stats_org_ids
+from ..visibility import assert_org_visible, assert_org_writable, scope_org_list, stats_org_ids
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
@@ -54,7 +54,8 @@ class EmployeeOut(EmployeeCreate):
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # H2: 人事管理
 )
-def create_employee(body: EmployeeCreate, db: Session = Depends(get_db)):
+def create_employee(body: EmployeeCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     employee = Employee(**body.model_dump())
@@ -147,7 +148,8 @@ class FinanceOut(FinanceCreate):
 
 
 @router.post("/finance", response_model=FinanceOut, status_code=201, dependencies=[Depends(require_roles("director", "operator"))])
-def add_finance_entry(body: FinanceCreate, db: Session = Depends(get_db)):
+def add_finance_entry(body: FinanceCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     entry = FinanceEntry(**body.model_dump())
@@ -231,7 +233,8 @@ class AssetOut(AssetCreate):
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # H2: 资产管理
 )
-def create_asset(body: AssetCreate, db: Session = Depends(get_db)):
+def create_asset(body: AssetCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if db.query(Asset).filter(Asset.code == body.code).first():
@@ -423,7 +426,8 @@ class DeptCreate(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # 科室建档
 )
-def create_department(body: DeptCreate, db: Session = Depends(get_db)):
+def create_department(body: DeptCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if (
@@ -667,7 +671,8 @@ class BudgetCreate(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("director"))],  # 预算编制=管理层
 )
-def create_budget(body: BudgetCreate, db: Session = Depends(get_db)):
+def create_budget(body: BudgetCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     # 预算调整：同机构同年同类别覆盖并留原记录时间

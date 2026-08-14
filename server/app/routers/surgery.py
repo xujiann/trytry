@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import today
-from ..visibility import scope_org_list
+from ..visibility import assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..notify import notify_patient
@@ -46,7 +46,8 @@ class RoomIn(BaseModel):
 
 
 @router.post("/rooms", status_code=201, dependencies=[Depends(require_admin)])
-def create_room(body: RoomIn, db: Session = Depends(get_db)):
+def create_room(body: RoomIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     room = OperatingRoom(**body.model_dump())

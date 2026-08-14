@@ -16,7 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent
-from ..visibility import scope_org_list
+from ..visibility import assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -82,6 +82,7 @@ def _adverse_out(e: AdverseEvent) -> dict:
 def report_adverse_event(
     body: AdverseEventCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    assert_org_writable(db, user, body.org_id)
     if body.event_type not in _EVENT_TYPES:
         raise HTTPException(status_code=422, detail="未知不良事件类型")
     if db.get(Organization, body.org_id) is None:
@@ -302,6 +303,7 @@ def create_infection_report(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    assert_org_writable(db, user, body.org_id)
     if body.infection_site not in _INFECTION_SITES:
         raise HTTPException(status_code=422, detail="未知感染部位")
     if db.get(Organization, body.org_id) is None:

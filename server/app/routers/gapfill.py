@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..datetypes import DateStr
 from ..clock import now_naive
 from ..concurrency import add_amount, insert_or_conflict, upsert_unique
-from ..visibility import scope_org_list, scope_patient_list
+from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import (
@@ -140,6 +140,7 @@ def _batch_out(b: TcmPreparationBatch, today: str) -> dict:
     dependencies=[Depends(require_roles("pharmacist", "operator"))],
 )
 def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     """制剂投料生产建批次：效期缺省按配方有效期（月）自动推算。"""
     formula = db.get(TcmFormula, body.formula_id)
     if formula is None:
@@ -456,6 +457,7 @@ def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
     dependencies=[Depends(require_roles("director", "doctor", "public_health"))],
 )
 def create_plan(body: PlanCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     """发布适宜技术实训计划。"""
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="承办机构不存在")
@@ -796,6 +798,7 @@ def _task_out(t: ImprovementTask, today: str) -> dict:
     "/improvements", status_code=201, dependencies=[Depends(require_roles("director"))]
 )
 def create_task(body: TaskCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     """下达绩效整改任务（问题 → 责任人 → 期限）。"""
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -974,6 +977,7 @@ def _visit_out(o: HomeVisitOrder) -> dict:
     "", status_code=201, dependencies=[Depends(require_roles("operator", "doctor", "public_health"))]
 )
 def create_visit(body: VisitCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     """上门服务申请：显式指定签约或按患者+机构自动关联履约中的家医签约。"""
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")

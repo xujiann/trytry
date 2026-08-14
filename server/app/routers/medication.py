@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_patient_visible
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..clock import now_naive
@@ -60,7 +60,8 @@ class ShortageClose(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # H2: 短缺登记
 )
-def register_shortage(body: ShortageCreate, db: Session = Depends(get_db)):
+def register_shortage(body: ShortageCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="登记机构不存在")
     if body.patient_id is not None:

@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_if_absent
-from ..visibility import assert_patient_visible, scope_org_list, visible_org_ids
+from ..visibility import assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -68,6 +68,7 @@ def _purchase_out(p: MaterialPurchase) -> dict:
 def create_purchase(
     body: PurchaseIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if body.dept_id is not None and db.get(Department, body.dept_id) is None:
@@ -225,7 +226,8 @@ class ConsumableIn(BaseModel):
 @router.post(
     "/consumables", status_code=201, dependencies=[Depends(require_roles("operator", "director"))]
 )
-def register_consumable(body: ConsumableIn, db: Session = Depends(get_db)):
+def register_consumable(body: ConsumableIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     """高值耗材入库登记（一物一码）。"""
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")

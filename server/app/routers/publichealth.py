@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_patient_visible
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -173,7 +173,8 @@ class MonitorOut(MonitorCreate):
     status_code=201,
     dependencies=[Depends(require_roles("public_health", "doctor"))],  # H2/L5: 监测指标上报
 )
-def add_monitor(body: MonitorCreate, db: Session = Depends(get_db)):
+def add_monitor(body: MonitorCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if body.domain not in _DOMAINS:
         raise HTTPException(status_code=422, detail=f"未知监测领域: {body.domain}")
     if db.get(Organization, body.org_id) is None:

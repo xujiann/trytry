@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..visibility import scope_org_list, scope_patient_list
+from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -102,7 +102,8 @@ def _batch_out(batch: VaccineBatch, today: str) -> dict:
 
 
 @router.post("/batches", status_code=201, dependencies=[Depends(require_roles("public_health", "operator"))])
-def create_batch(body: BatchIn, db: Session = Depends(get_db)):
+def create_batch(body: BatchIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     batch = VaccineBatch(**body.model_dump())
@@ -234,7 +235,8 @@ def _cold_out(r: ColdChainRecord) -> dict:
 @router.post(
     "/cold-chain", status_code=201, dependencies=[Depends(require_roles("public_health", "operator"))]
 )
-def record_temperature(body: ColdChainIn, db: Session = Depends(get_db)):
+def record_temperature(body: ColdChainIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
     """录温。超温由平台判定并标记，**不自动封存批次**（见模块口径 1）。"""
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -330,6 +332,7 @@ def report_aefi(
 ):
     """AEFI 上报。给了接种记录 id 就从记录带出疫苗与批号，不让上报人自报——
     上报现场往往不知道打的是哪一批，让人凭记忆填只会填错。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
