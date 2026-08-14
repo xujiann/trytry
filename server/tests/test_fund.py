@@ -201,8 +201,10 @@ def test_分配按公式归一化且金额加总等于结余(client, director, s
     rows = body["distributions"]
     assert rows, "应当分出明细"
     assert abs(sum(r["share_pct"] for r in rows) - 100) < 0.01
-    # 分完的钱不能多于也不能少于结余（允许分位误差）
-    assert abs(body["distributed_amount"] - 200000) < 1.0
+    # 分出去的总额必须**分毫等于**结余——不是"约等于"。原先这里写 <1.0 元容差，
+    # 那 1 元的松动正好把逐户各自 round 丢分的 bug 盖住了。改成到分精确。
+    assert round(sum(r["amount"] for r in rows), 2) == round(body["distributed_amount"], 2)
+    assert round(body["distributed_amount"], 2) == 200000.00
 
 
 def test_均分公式与按绩效公式给出不同结果(client, director, settled):
@@ -321,3 +323,31 @@ def test_已清算的池不可再改(client, director, settled):
     resp = client.patch(f"/api/fund/pools/{settled['pool']['id']}",
                         json={"total_amount": 999}, headers=director)
     assert resp.status_code == 409
+
+
+def test_结余无法整除时分配额仍分毫等于结余(client, admin, director, orgs):
+    """最大余数法（Hamilton）：逐户各自 round 会丢/多几分，合计对不上结余。
+    实测 100 元 3 户均分分出 99.99——分的是医共体真金白银的结余，
+    账对不上就是事故。这里用故意除不尽的结余把它钉死。"""
+    grp = client.post("/api/org-groups", json={"name": "整除测试片区", "group_type": "alliance"},
+                      headers=admin).json()
+    # 用既有三家机构入组（建组/加成员是 require_admin）
+    for o in orgs:
+        client.post(f"/api/org-groups/{grp['id']}/members", json={"org_id": o["id"]},
+                    headers=admin)
+    for yr, balance in enumerate((100.00, 100.01, 0.05, 1000.00), start=2030):
+        pool = client.post(
+            "/api/fund/pools",
+            json={"year": yr, "insurance_type": "resident",
+                  "org_group_id": grp["id"], "total_amount": balance},
+            headers=director,
+        ).json()
+        pid = pool["id"]
+        client.post(f"/api/fund/pools/{pid}/settle",
+                    json={"total_expense": 0.0, "overrun_action": "none"}, headers=director)
+        d = client.post(f"/api/fund/pools/{pid}/distribute",
+                        json={"formula_expr": "1"}, headers=director)
+        assert d.status_code == 200, d.text
+        rows = client.get(f"/api/fund/pools/{pid}/distributions", headers=director).json()
+        got = round(sum(r["amount"] for r in rows), 2)
+        assert got == round(balance, 2), f"结余 {balance} 分出 {got}，差 {round(balance-got,2)}"
