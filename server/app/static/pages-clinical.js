@@ -160,6 +160,36 @@ async function renderAudit() {
   $("#audit-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("username")); };
 }
 
+async function renderAccessLogs() {
+  // 敏感读留痕查询（第十轮）：写审计回答"谁改了什么"，这里回答"谁凭什么看了谁"。
+  $("#page-desc").textContent = "档案调阅留痕：谁、什么时候、凭什么依据、看了谁（院长/管理员可查）";
+  const draw = async (params = {}) => {
+    const q = Object.entries(params).filter(([, v]) => v).map(([k, v]) =>
+      `${k}=${encodeURIComponent(v)}`).join("&");
+    const rows = await api(`/api/access-logs?limit=200${q ? "&" + q : ""}`);
+    $("#al-table").innerHTML = table(
+      ["时间", "调阅人", "所属机构", "看了谁", "数据", "依据"], rows, (r) =>
+      `<tr><td>${esc((r.at || "").replace("T", " ").slice(0, 19))}</td>
+       <td>${esc(r.viewer)}</td><td>${esc(r.viewer_org_name)}</td>
+       <td>${esc(r.patient_name)}</td><td>${esc(r.resource_name)}</td>
+       <td><span class="tag">${esc(r.basis_name)}</span></td></tr>`);
+  };
+  $("#page-body").innerHTML = `
+    <div class="panel">
+      <form class="inline" id="al-search">
+        <input name="patient_id" placeholder="患者ID">
+        <input name="username" placeholder="调阅人账号">
+        <input name="basis" placeholder="依据(encounter/referral/…)">
+        <input name="start" placeholder="起 YYYY-MM-DD"><input name="end" placeholder="止 YYYY-MM-DD">
+        <button>查询</button></form>
+      <p class="desc">按患者查询会一并留痕——查"谁看过某人"本身也是在看这个人的隐私。</p>
+      <div id="al-table"></div></div>`;
+  await draw();
+  $("#al-search").onsubmit = async (e) => {
+    e.preventDefault(); await draw(formJson(e.target));
+  };
+}
+
 /* ---------- 通用小工具：表单序列化 + 动作分派 ---------- */
 function formJson(form, numFields = []) {
   const f = new FormData(form), out = {};

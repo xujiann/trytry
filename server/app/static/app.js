@@ -88,6 +88,7 @@ const PAGES = [
   { id: "printtpl", title: "打印模板", render: renderPrintTemplates, roles: ["admin"] },
   { id: "users", title: "用户管理", render: renderUsers, roles: ["admin"] },
   { id: "audit", title: "审计日志", render: renderAudit, roles: ["admin"] },
+  { id: "access-logs", title: "调阅留痕", render: renderAccessLogs, roles: ["admin", "director"] },
 ];
 
 

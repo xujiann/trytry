@@ -26,6 +26,7 @@ from .database import Base, SessionLocal, engine
 from .monitor import metrics as monitor_metrics
 from .models import User
 from .routers import (
+    access_logs,
     admin_mgmt,
     appointments,
     attachments,
@@ -278,6 +279,7 @@ app.include_router(medwaste.router)
 app.include_router(performance.router)
 app.include_router(metrics.router)
 app.include_router(portal.router)
+app.include_router(access_logs.router)
 app.include_router(users.router)
 app.include_router(emergency.router)
 app.include_router(telemedicine.router)
