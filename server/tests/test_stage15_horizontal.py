@@ -230,6 +230,71 @@ def test_被拒的调阅不写留痕(client, world, stranger):
     assert rows[0].basis == "consent_admin"
 
 
+# ================================================================ 机构维度
+
+
+def test_机构维度管理数据不可跨机构读取(client, world, stranger):
+    """实测过的洞：乙卫生院的账号带 ?org_id=甲 就能拉到甲院的职工名册、
+    资产清单、药品库存。财务与人事是横向隔离里最敏感的一类。"""
+    a = world["a"]["id"]
+    cases = [
+        ("职工名册", f"/api/mgmt/employees?org_id={a}"),
+        ("资产清单", f"/api/mgmt/assets?org_id={a}"),
+        ("科室设置", f"/api/mgmt/departments?org_id={a}"),
+        ("药品库存", f"/api/pharmacy/stocks?org_id={a}"),
+        ("医废清单", f"/api/medwaste?org_id={a}"),
+        ("会计凭证", f"/api/accounting/vouchers?org_id={a}"),
+        ("预算执行", f"/api/mgmt/budgets/execution?org_id={a}&year=2026"),
+        ("病历质控清单", f"/api/quality/records?org_id={a}"),
+        ("手术申请", f"/api/surgery/requests?org_id={a}"),
+    ]
+    leaked = []
+    for label, url in cases:
+        code = client.get(url, headers=stranger["headers"]).status_code
+        if code == 404:
+            leaked.append(f"{label} 路由 404（用例写错了）：{url}")
+        elif code != 403:
+            leaked.append(f"{label} 未拦住：{code}")
+    assert leaked == [], "以下机构维度接口对外机构仍然开放：\n  " + "\n  ".join(leaked)
+
+
+def test_不带org_id时清单自动缩到本机构(client, world, stranger):
+    """不带参数不能等于"看全县"——原先 /api/mgmt/employees 不带 org_id 返回全表。"""
+    rows = client.get("/api/mgmt/employees", headers=stranger["headers"]).json()
+    assert all(r["org_id"] == stranger["org"]["id"] for r in rows), \
+        f"无关机构不带参数看到了别家职工：{rows[:2]}"
+
+
+def test_财务汇总只含可见机构(client, world, stranger):
+    """集中核算的汇总接口原先返回全县各家收支。现在乙院账号只能看到自己。"""
+    admin = world["admin"]
+    client.post("/api/mgmt/finance", json={"org_id": world["a"]["id"], "period": "2026-08",
+                "category": "income", "amount": 999999.0}, headers=admin)
+    data = client.get("/api/mgmt/finance/summary", headers=stranger["headers"]).json()
+    orgs = {o["org_id"] for o in data["orgs"]}
+    assert world["a"]["id"] not in orgs, f"无关机构在财务汇总里看到了甲院：{data['orgs']}"
+
+
+def test_同医共体成员可见统计汇总(client, world):
+    """A 案的另一半：牵头医院要看得到片区汇总，隔离不能把医共体的管理职能关掉。
+
+    把甲乙两院编进同一个分组后，乙院的财务汇总里应当**看得到甲院的行**——
+    汇总统计取医共体范围（stats_org_ids），比明细宽一档，这是刻意的。
+    """
+    admin = world["admin"]
+    group = client.post(
+        "/api/org-groups",
+        json={"name": "横向片区", "group_type": "zone", "lead_org_id": world["a"]["id"]},
+        headers=admin,
+    ).json()
+    for org in (world["a"], world["b"]):
+        client.post(f"/api/org-groups/{group['id']}/members",
+                    json={"org_id": org["id"]}, headers=admin)
+    data = client.get("/api/mgmt/finance/summary", headers=world["doc_b"]).json()
+    orgs = {o["org_id"] for o in data["orgs"]}
+    assert world["a"]["id"] in orgs, "同医共体成员在汇总里看不到牵头医院——统计口径被收得过紧"
+
+
 # ================================================================ 覆盖率矩阵
 
 

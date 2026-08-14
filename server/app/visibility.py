@@ -73,6 +73,7 @@ __all__ = [
     "log_patient_access",
     "visible_patient_ids",
     "scope_patient_list",
+    "scope_org_list",
 ]
 
 
@@ -336,6 +337,40 @@ def scope_patient_list(
             return query.filter(getattr(model, col).in_(orgs))
     patients = visible_patient_ids(db, user)
     return query.filter(model.patient_id.in_(patients))
+
+
+def scope_org_list(
+    db: Session,
+    user: User,
+    query,
+    model,
+    org_id: int | None,
+    org_col: str = "org_id",
+    stats: bool = False,
+):
+    """机构维度清单接口的统一收口，与 `scope_patient_list` 对称。
+
+    - 给了 `org_id`：校验能不能看这家机构，不能就 403（**不是悄悄返回空**——
+      悄悄返回空会让人以为那家机构没数据，进而去翻别的入口；明说无权更省事）；
+    - 没给：按可见范围过滤。
+
+    `stats=True` 用医共体范围（`stats_org_ids`）而不是本机构：牵头医院要看得到
+    片区的运行汇总，否则医共体的管理职能无从谈起。**统计与明细分两个范围**，
+    正是为了不让人图省事拿统计范围去查明细。
+
+    实测过的洞：乙卫生院的账号带上 `?org_id=甲` 就能拉到甲县医院的职工名册、
+    资产清单、药品库存——`resolve_org_scope` 看着像作用域控制，
+    但它只解析"想看哪个机构"，从不校验"能不能看"。
+    """
+    allowed = stats_org_ids(db, user) if stats else visible_org_ids(db, user)
+    column = getattr(model, org_col)
+    if org_id is not None:
+        if allowed is not None and org_id not in allowed:
+            raise HTTPException(status_code=403, detail="无权查看该机构的数据")
+        return query.filter(column == org_id)
+    if allowed is None:
+        return query
+    return query.filter(column.in_(allowed))
 
 
 def log_patient_access(

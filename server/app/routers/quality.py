@@ -16,6 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent
+from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -315,13 +316,12 @@ def create_infection_report(
 
 @router.get("/infection-reports")
 def list_infection_reports(
-    status: str | None = None, org_id: int | None = None, db: Session = Depends(get_db)
+    status: str | None = None, org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     q = db.query(InfectionReport)
     if status:
         q = q.filter(InfectionReport.status == status)
-    if org_id is not None:
-        q = q.filter(InfectionReport.org_id == org_id)
+    q = scope_org_list(db, user, q, InfectionReport, org_id)
     return [_infection_out(r) for r in q.order_by(InfectionReport.id.desc()).limit(200).all()]
 
 
@@ -571,13 +571,12 @@ def list_medical_records(
     org_id: int | None = None,
     grade: str | None = None,
     doctor_name: str | None = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     q = db.query(MedicalRecord)
     if encounter_id is not None:
         q = q.filter(MedicalRecord.encounter_id == encounter_id)
-    if org_id is not None:
-        q = q.filter(MedicalRecord.org_id == org_id)
+    q = scope_org_list(db, user, q, MedicalRecord, org_id)
     if grade:
         q = q.filter(MedicalRecord.qc_grade == grade)
     if doctor_name:
@@ -591,14 +590,17 @@ def _grade_bucket() -> dict:
 
 @router.get("/records/qc-summary")
 def record_qc_summary(
-    period: str | None = None, org_id: int | None = None, db: Session = Depends(get_db)
+    period: str | None = None,
+    org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """全量环节质控统计：按机构/医师的甲乙丙分布与平均分（period=YYYY-MM 过滤）。"""
     if period is not None and not re.fullmatch(r"\d{4}-\d{2}", period):
         raise HTTPException(status_code=422, detail="period 格式须为 YYYY-MM")
     q = db.query(MedicalRecord)
-    if org_id is not None:
-        q = q.filter(MedicalRecord.org_id == org_id)
+    # 质控统计是管理口径：牵头医院要看得到片区的病历质量分布
+    q = scope_org_list(db, user, q, MedicalRecord, org_id, stats=True)
     records = [
         r
         for r in q.order_by(MedicalRecord.id.desc()).limit(5000).all()

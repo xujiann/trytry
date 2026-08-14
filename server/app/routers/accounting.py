@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..visibility import assert_org_visible, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import AccountSubject, Organization, User, Voucher, VoucherEntry, utcnow
@@ -181,11 +182,10 @@ def list_vouchers(
     status: str | None = None,
     offset: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(Voucher)
-    if org_id is not None:
-        query = query.filter(Voucher.org_id == org_id)
+    query = scope_org_list(db, user, query, Voucher, org_id)
     if period:
         query = query.filter(Voucher.period == period)
     if status:
@@ -233,11 +233,17 @@ def void_voucher(voucher_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/trial-balance")
-def trial_balance(period: str, org_id: int | None = None, db: Session = Depends(get_db)):
+def trial_balance(
+    period: str,
+    org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """试算平衡表：按科目汇总已过账凭证的借贷发生额。
 
     只统计 posted——草稿未生效、作废已撤销，计进去就不是账了。
     """
+    assert_org_visible(db, user, org_id)
     query = (
         db.query(
             VoucherEntry.subject_code,

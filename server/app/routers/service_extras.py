@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
+from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -490,13 +491,12 @@ def create_exam_resource(body: ExamResourceCreate, db: Session = Depends(get_db)
 
 @router.get("/exams/resources")
 def list_exam_resources(
-    center_type: str | None = None, org_id: int | None = None, db: Session = Depends(get_db)
+    center_type: str | None = None, org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     q = db.query(ExamResource).filter(ExamResource.active.is_(True))
     if center_type:
         q = q.filter(ExamResource.center_type == center_type)
-    if org_id is not None:
-        q = q.filter(ExamResource.org_id == org_id)
+    q = scope_org_list(db, user, q, ExamResource, org_id)
     return [
         {
             "id": r.id,

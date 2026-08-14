@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import add_amount, insert_if_absent, insert_or_conflict
+from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from pydantic import BaseModel, Field
@@ -58,10 +59,9 @@ def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
 
 
 @router.get("/stocks", response_model=list[StockOut], dependencies=[Depends(get_current_user)])
-def list_stocks(org_id: int | None = None, db: Session = Depends(get_db)):
+def list_stocks(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(DrugStock)
-    if org_id is not None:
-        query = query.filter(DrugStock.org_id == org_id)
+    query = scope_org_list(db, user, query, DrugStock, org_id)
     return query.order_by(DrugStock.org_id, DrugStock.drug_code).all()
 
 
@@ -403,10 +403,9 @@ def create_stock_take(
 
 
 @router.get("/stock-takes", dependencies=[Depends(get_current_user)])
-def list_stock_takes(org_id: int | None = None, db: Session = Depends(get_db)):
+def list_stock_takes(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     q = db.query(StockTake)
-    if org_id is not None:
-        q = q.filter(StockTake.org_id == org_id)
+    q = scope_org_list(db, user, q, StockTake, org_id)
     return [
         {
             "id": t.id,

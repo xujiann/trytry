@@ -15,9 +15,10 @@ from sqlalchemy.orm import Session
 
 from ..data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
 from ..concurrency import insert_or_conflict
+from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, resolve_business_date
-from ..models import Admission, CaseSummary, DrgGroup, Organization
+from ..models import Admission, CaseSummary, DrgGroup, Organization, User
 
 # 同组历史病例少于该数不做事中预警——3 个病例算出来的"均值"，预警的是噪声。
 MIN_BASELINE_CASES = 5
@@ -315,6 +316,7 @@ def in_stay_alerts(
     los_multiplier: float = Query(default=1.5, ge=1.0, le=5.0),
     today: str | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """事中预警：在院病例住院日已明显超出同组均值。
 
@@ -345,8 +347,7 @@ def in_stay_alerts(
         .outerjoin(CaseSummary, CaseSummary.admission_id == Admission.id)
         .filter(Admission.status == "admitted")
     )
-    if org_id is not None:
-        query = query.filter(Admission.org_id == org_id)
+    query = scope_org_list(db, user, query, Admission, org_id)
     rows = query.order_by(Admission.id.desc()).limit(500).all()
 
     alerts, insufficient, ungrouped = [], [], 0

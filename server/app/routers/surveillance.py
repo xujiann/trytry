@@ -19,10 +19,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
+from ..visibility import scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
-from ..models import EmergencyResource, Organization, PathogenMonitor, SyndromeMonitor
+from ..models import EmergencyResource, Organization, PathogenMonitor, SyndromeMonitor, User
 
 router = APIRouter(
     prefix="/api/surveillance",
@@ -170,11 +171,10 @@ def list_pathogens(
     pathogen_name: str | None = None,
     start_date: OptionalDateStr = Query(default=""),
     end_date: OptionalDateStr = Query(default=""),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(PathogenMonitor)
-    if org_id is not None:
-        query = query.filter(PathogenMonitor.org_id == org_id)
+    query = scope_org_list(db, user, query, PathogenMonitor, org_id)
     if pathogen_name:
         query = query.filter(PathogenMonitor.pathogen_name.like(f"%{pathogen_name}%"))
     if start_date:

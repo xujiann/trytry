@@ -11,7 +11,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import scope_patient_list
+from ..visibility import scope_org_list, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -49,10 +49,9 @@ def create_ward(body: WardCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/wards")
-def list_wards(org_id: int | None = None, db: Session = Depends(get_db)):
+def list_wards(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     q = db.query(Ward)
-    if org_id is not None:
-        q = q.filter(Ward.org_id == org_id)
+    q = scope_org_list(db, user, q, Ward, org_id)
     return [{"id": w.id, "org_id": w.org_id, "name": w.name} for w in q.order_by(Ward.id).limit(200).all()]
 
 

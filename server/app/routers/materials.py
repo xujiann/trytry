@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_if_absent
-from ..visibility import assert_patient_visible, visible_org_ids
+from ..visibility import assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -86,11 +86,10 @@ def list_purchases(
     status: str | None = None,
     offset: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(MaterialPurchase)
-    if org_id is not None:
-        query = query.filter(MaterialPurchase.org_id == org_id)
+    query = scope_org_list(db, user, query, MaterialPurchase, org_id)
     if status:
         query = query.filter(MaterialPurchase.status == status)
     return [

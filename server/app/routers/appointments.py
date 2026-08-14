@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import scope_patient_list
+from ..visibility import scope_org_list, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
@@ -28,6 +28,10 @@ def find_doctors(
     db: Session = Depends(get_db),
 ):
     """便捷寻医（指引⑨"便捷寻医"）：按姓名/科室/职称找医师，带出可约号源。
+
+    第九轮横向隔离**明确不设限**：这是面向居民的寻医目录，跨机构找医师
+    正是它的用途（在卫生院帮患者约县医院的号）。医师姓名与号源本就是
+    公开挂出来的信息，不是管理数据。
 
     只列**还有余号**的医师排在前面，但没号的也一并返回并标注——
     只给有号的，居民会以为这位医师不存在，转头去问"你们医院不是有王主任吗"。
@@ -107,10 +111,9 @@ def create_slot(body: SlotCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/slots", response_model=list[SlotOut])
-def list_slots(org_id: int | None = None, slot_date: str | None = None, db: Session = Depends(get_db)):
+def list_slots(org_id: int | None = None, slot_date: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(AppointmentSlot)
-    if org_id is not None:
-        query = query.filter(AppointmentSlot.org_id == org_id)
+    query = scope_org_list(db, user, query, AppointmentSlot, org_id)
     if slot_date:
         query = query.filter(AppointmentSlot.slot_date == slot_date)
     return query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(500).all()

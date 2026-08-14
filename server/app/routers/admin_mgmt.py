@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
 from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
+from ..visibility import assert_org_visible, scope_org_list, stats_org_ids
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
@@ -64,10 +65,9 @@ def create_employee(body: EmployeeCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/employees", response_model=list[EmployeeOut])
-def list_employees(org_id: int | None = None, db: Session = Depends(get_db)):
+def list_employees(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(Employee)
-    if org_id is not None:
-        query = query.filter(Employee.org_id == org_id)
+    query = scope_org_list(db, user, query, Employee, org_id)
     return query.order_by(Employee.id).limit(500).all()
 
 
@@ -158,13 +158,25 @@ def add_finance_entry(body: FinanceCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/finance/summary")
-def finance_summary(period: str | None = None, db: Session = Depends(get_db)):
-    """集中核算：各成员单位收支结余叠加汇总。"""
+def finance_summary(
+    period: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """集中核算：各成员单位收支结余叠加汇总。
+
+    第九轮：按**统计口径**过滤（本机构 + 同医共体成员）。财务是横向隔离里
+    最敏感的一类——乙院的院长没有理由看到甲院的收支明细；但牵头医院要看得到
+    片区汇总，这正是"集中核算"的业务含义，所以用 stats 范围而不是本机构。
+    """
     query = db.query(
         FinanceEntry.org_id,
         FinanceEntry.category,
         func.sum(FinanceEntry.amount).label("total"),
     )
+    allowed = stats_org_ids(db, user)
+    if allowed is not None:
+        query = query.filter(FinanceEntry.org_id.in_(allowed))
     if period:
         query = query.filter(FinanceEntry.period == period)
     rows = query.group_by(FinanceEntry.org_id, FinanceEntry.category).all()
@@ -229,10 +241,9 @@ def create_asset(body: AssetCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/assets", response_model=list[AssetOut])
-def list_assets(org_id: int | None = None, db: Session = Depends(get_db)):
+def list_assets(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(Asset)
-    if org_id is not None:
-        query = query.filter(Asset.org_id == org_id)
+    query = scope_org_list(db, user, query, Asset, org_id)
     return query.order_by(Asset.id).limit(500).all()
 
 
@@ -426,10 +437,9 @@ def create_department(body: DeptCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/departments")
-def list_departments(org_id: int | None = None, db: Session = Depends(get_db)):
+def list_departments(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     q = db.query(Department).filter(Department.active.is_(True))
-    if org_id is not None:
-        q = q.filter(Department.org_id == org_id)
+    q = scope_org_list(db, user, q, Department, org_id)
     return [
         {"id": d.id, "org_id": d.org_id, "code": d.code, "name": d.name, "category": d.category}
         for d in q.order_by(Department.org_id, Department.code).all()
@@ -671,8 +681,14 @@ def create_budget(body: BudgetCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/budgets/execution")
-def budget_execution(org_id: int, year: str, db: Session = Depends(get_db)):
+def budget_execution(
+    org_id: int,
+    year: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """预算执行对比：预算数 vs 财务收支实际数（执行率）。"""
+    assert_org_visible(db, user, org_id)
     budgets = {
         b.category: b.amount
         for b in db.query(Budget).filter(Budget.org_id == org_id, Budget.year == year).all()

@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..visibility import scope_patient_list
+from ..visibility import scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -122,14 +122,13 @@ def list_batches(
     org_id: int | None = None,
     usable_only: bool = False,
     today: str | None = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     today_str = resolve_business_date(today).isoformat()
     query = db.query(VaccineBatch)
     if vaccine_code:
         query = query.filter(VaccineBatch.vaccine_code == vaccine_code)
-    if org_id is not None:
-        query = query.filter(VaccineBatch.org_id == org_id)
+    query = scope_org_list(db, user, query, VaccineBatch, org_id)
     rows = [_batch_out(b, today_str) for b in query.order_by(VaccineBatch.id.desc()).limit(500).all()]
     return [r for r in rows if r["usable"]] if usable_only else rows
 
@@ -258,10 +257,12 @@ def list_temperatures(
     exceeded_only: bool = False,
     unhandled_only: bool = False,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    """冷链温度记录。按统计口径过滤（医共体内互见）：疫苗冷链是全县强监管
+    事项，牵头单位要看得到成员机构的超温告警——只给本机构，片区监管就瞎了。"""
     query = db.query(ColdChainRecord)
-    if org_id is not None:
-        query = query.filter(ColdChainRecord.org_id == org_id)
+    query = scope_org_list(db, user, query, ColdChainRecord, org_id, stats=True)
     if exceeded_only:
         query = query.filter(ColdChainRecord.exceeded.is_(True))
     if unhandled_only:

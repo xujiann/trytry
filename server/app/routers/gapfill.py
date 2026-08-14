@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..datetypes import DateStr
 from ..clock import now_naive
 from ..concurrency import add_amount, insert_or_conflict, upsert_unique
-from ..visibility import scope_patient_list
+from ..visibility import scope_org_list, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import (
@@ -816,11 +816,11 @@ def list_tasks(
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     business_date = resolve_business_date(today).isoformat()
     query = db.query(ImprovementTask)
-    if org_id is not None:
-        query = query.filter(ImprovementTask.org_id == org_id)
+    query = scope_org_list(db, user, query, ImprovementTask, org_id)
     if status:
         query = query.filter(ImprovementTask.status == status)
     if overdue_only:

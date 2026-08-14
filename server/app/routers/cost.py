@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
+from ..visibility import assert_org_visible, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -27,6 +28,7 @@ from ..models import (
     DepartmentCost,
     Encounter,
     Organization,
+    User,
 )
 
 router = APIRouter(prefix="/api/cost", tags=["成本核算"], dependencies=[Depends(get_current_user)])
@@ -107,10 +109,9 @@ def create_allocation_rule(body: AllocationIn, db: Session = Depends(get_db)):
 
 
 @router.get("/allocation-rules")
-def list_allocation_rules(org_id: int | None = None, db: Session = Depends(get_db)):
+def list_allocation_rules(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(CostAllocationRule)
-    if org_id is not None:
-        query = query.filter(CostAllocationRule.org_id == org_id)
+    query = scope_org_list(db, user, query, CostAllocationRule, org_id)
     return [
         {"id": r.id, "org_id": r.org_id, "from_dept_id": r.from_dept_id,
          "to_dept_id": r.to_dept_id, "ratio_pct": r.ratio_pct}
@@ -122,13 +123,19 @@ def list_allocation_rules(org_id: int | None = None, db: Session = Depends(get_d
 
 
 @router.get("/departments")
-def department_cost_summary(period: str, org_id: int | None = None, db: Session = Depends(get_db)):
+def department_cost_summary(
+    period: str,
+    org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """科室成本 = 直接成本 + 分摊转入 − 分摊转出。
 
     分摊只做**一轮**（行政/医技 → 临床），不做多级迭代分摊：县域机构科室层级浅，
     一轮足够；多级迭代要处理互相分摊的收敛问题，收益不抵复杂度。
     未配满 100% 的来源科室，未分摊部分留在原科室，并在返回里标出来。
     """
+    assert_org_visible(db, user, org_id)
     _period_bounds(period)
     query = db.query(DepartmentCost).filter(DepartmentCost.period == period)
     if org_id is not None:
@@ -216,7 +223,12 @@ def _occupied_bed_days(db: Session, org_id: int, start: date, end: date) -> int:
 
 
 @router.get("/unit-cost")
-def unit_cost(period: str, org_id: int, db: Session = Depends(get_db)):
+def unit_cost(
+    period: str,
+    org_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """诊次成本与床日成本。
 
     分母口径写死在这里并对外说明：诊次成本 = 门诊总成本 ÷ 门诊人次；
@@ -225,6 +237,7 @@ def unit_cost(period: str, org_id: int, db: Session = Depends(get_db)):
     再按人次与床日的相对权重拆——县域机构没有分科成本中心时这是可落地的近似，
     精确拆分需要收费明细带科室，属后续 T4 依赖项。
     """
+    assert_org_visible(db, user, org_id)
     start, end = _period_bounds(period)
     if db.get(Organization, org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")

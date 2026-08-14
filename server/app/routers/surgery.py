@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import today
+from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..notify import notify_patient
@@ -60,10 +61,9 @@ def create_room(body: RoomIn, db: Session = Depends(get_db)):
 
 
 @router.get("/rooms")
-def list_rooms(org_id: int | None = None, db: Session = Depends(get_db)):
+def list_rooms(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(OperatingRoom)
-    if org_id is not None:
-        query = query.filter(OperatingRoom.org_id == org_id)
+    query = scope_org_list(db, user, query, OperatingRoom, org_id)
     return [
         {"id": r.id, "org_id": r.org_id, "name": r.name, "active": r.active}
         for r in query.order_by(OperatingRoom.id).limit(200).all()
@@ -135,13 +135,12 @@ def list_requests(
     admission_id: int | None = None,
     offset: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(SurgeryRequest)
     if status:
         query = query.filter(SurgeryRequest.status == status)
-    if org_id is not None:
-        query = query.filter(SurgeryRequest.org_id == org_id)
+    query = scope_org_list(db, user, query, SurgeryRequest, org_id)
     if admission_id is not None:
         query = query.filter(SurgeryRequest.admission_id == admission_id)
     return [

@@ -21,9 +21,10 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import insert_with_retry
+from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
-from ..models import Employee, MedicalWaste, Organization, WasteLocation
+from ..models import Employee, MedicalWaste, Organization, User, WasteLocation
 from ..schemas import WasteCreate, WasteHandover
 
 router = APIRouter(prefix="/api/medwaste", tags=["医废追溯"], dependencies=[Depends(get_current_user)])
@@ -78,11 +79,10 @@ def list_locations(
     org_id: int | None = None,
     location_type: str | None = None,
     include_inactive: bool = False,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(WasteLocation)
-    if org_id is not None:
-        query = query.filter(WasteLocation.org_id == org_id)
+    query = scope_org_list(db, user, query, WasteLocation, org_id)
     if location_type:
         query = query.filter(WasteLocation.location_type == location_type)
     if not include_inactive:
@@ -183,7 +183,7 @@ def collect(body: WasteCollect, db: Session = Depends(get_db)):
 
 
 @router.get("")
-def list_wastes(org_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)):
+def list_wastes(org_id: int | None = None, status: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     """医废清单。
 
     D-8：这里原先套 `WasteOut`，而那个 schema 是阶段五写的，字段停在
@@ -193,8 +193,7 @@ def list_wastes(org_id: int | None = None, status: str | None = None, db: Sessio
     改回 `_waste_out`（点位、暂存与交接时间也一并带出）。
     """
     query = db.query(MedicalWaste)
-    if org_id is not None:
-        query = query.filter(MedicalWaste.org_id == org_id)
+    query = scope_org_list(db, user, query, MedicalWaste, org_id)
     if status:
         query = query.filter(MedicalWaste.status == status)
     return [_waste_out(w) for w in query.order_by(MedicalWaste.id.desc()).limit(500).all()]

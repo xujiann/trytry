@@ -152,7 +152,10 @@ def remove_member(group_id: int, org_id: int, db: Session = Depends(get_db)):
 
 @router.get("/of-org/{org_id}")
 def groups_of_org(org_id: int, db: Session = Depends(get_db)):
-    """某机构归属的全部分组。一家机构可以既在某片区，又在某专科联盟。"""
+    """某机构归属的全部分组。一家机构可以既在某片区，又在某专科联盟。
+
+    第九轮横向隔离**明确不设限**：分组归属是组织架构拓扑，转诊、调拨、
+    统计口径都要引用，且不含任何经营或诊疗数据。"""
     if db.get(Organization, org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     group_ids = [
