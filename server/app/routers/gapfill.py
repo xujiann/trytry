@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
 from ..clock import now_naive
-from ..concurrency import add_amount, insert_or_conflict, upsert_unique
+from ..concurrency import add_amount, claim_quota, insert_or_conflict, take_amount, upsert_unique
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
@@ -471,24 +471,13 @@ def create_plan(body: PlanCreate, db: Session = Depends(get_db), user: User = De
     return _plan_out(plan)
 
 
-def _enrolled_count(db: Session, plan_id: int) -> int:
-    return (
-        db.query(func.count(TrainingEnrollment.id))
-        .filter(
-            TrainingEnrollment.plan_id == plan_id, TrainingEnrollment.status == "enrolled"
-        )
-        .scalar()
-        or 0
-    )
-
-
 @edu_router.get("/training-plans")
 def list_plans(status: str | None = None, db: Session = Depends(get_db)):
     query = db.query(TrainingPlan)
     if status:
         query = query.filter(TrainingPlan.status == status)
     plans = query.order_by(TrainingPlan.id.desc()).limit(200).all()
-    return [_plan_out(p, _enrolled_count(db, p.id)) for p in plans]
+    return [_plan_out(p, p.enrolled_count) for p in plans]
 
 
 @edu_router.post("/training-plans/{plan_id}/enroll", status_code=201)
@@ -507,7 +496,11 @@ def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depend
     )
     if existing and existing.status == "enrolled":
         raise HTTPException(status_code=409, detail="已报名该实训计划")
-    if _enrolled_count(db, plan_id) >= plan.capacity:
+    # 原子占额：判满与占位同一条 SQL。原先 COUNT>=capacity 再插是 check-then-act，
+    # 并发下多人同数到"还差一个"一起挤进来（实测容量 2 报上 3 人）。
+    # 占额与写报名行同一个事务提交——commit 失败则一起回滚，名额不泄。
+    if not claim_quota(db, TrainingPlan, plan_id, "enrolled_count", "capacity"):
+        db.rollback()
         raise HTTPException(status_code=409, detail="实训名额已满")
     if existing:
         existing.status = "enrolled"
@@ -518,7 +511,8 @@ def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depend
     try:
         db.commit()
     except IntegrityError:
-        # 同一个人重复点报名，两个请求都查不到既有记录就都去插
+        # 同一个人重复点报名，两个请求都查不到既有记录就都去插；后插的撞唯一
+        # 约束回滚——占额也在同一事务里，一并回退，不会白占一个名额。
         db.rollback()
         raise HTTPException(status_code=409, detail="已报名该实训计划") from None
     db.refresh(enrollment)
@@ -540,6 +534,8 @@ def cancel_enroll(plan_id: int, db: Session = Depends(get_db), user: User = Depe
     if enrollment is None or enrollment.status != "enrolled":
         raise HTTPException(status_code=404, detail="未报名该实训计划")
     enrollment.status = "cancelled"
+    # 退报名释放一个名额，与占额对称；take_amount 的 WHERE 挡住减成负数
+    take_amount(db, TrainingPlan, plan_id, "enrolled_count", 1)
     db.commit()
     return {"plan_id": plan_id, "user_id": user.id, "status": "cancelled"}
 

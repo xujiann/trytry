@@ -2193,6 +2193,10 @@ class TrainingPlan(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     plan_date: Mapped[str] = mapped_column(String(10), default="")
     capacity: Mapped[int] = mapped_column(Integer, default=30)
+    # 已占名额（第十轮）：报名/退报名原子增减，占额判定走这个计数列而不是
+    # COUNT(*)——原先 `COUNT >= capacity` 是 check-then-act，并发下多人同时数到
+    # "还差一个"一起挤进来，实测容量 2 报上 3 人。做法与疫苗批次占额一致。
+    enrolled_count: Mapped[int] = mapped_column(Integer, default=0)
     trainer: Mapped[str] = mapped_column(String(64), default="")
     # open=报名中, closed=已截止, finished=已结训
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)

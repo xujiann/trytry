@@ -531,3 +531,93 @@ def test_豁免清单不得腐烂():
             existing.add(f"{name}:{func.name}")
     stale = sorted(set(CONFLICT_SAFE) - existing)
     assert stale == [], f"豁免清单里这些函数已不存在，应删除：{stale}"
+
+
+# ============================================ 第十轮 P1：实训报名超额（延迟登记的欠账）
+
+
+_enroll_seq = [0]
+
+
+def _mk_org_and_students(client, admin, n):
+    """每次调用造一家名字唯一的机构与 n 个学员账号（机构名/用户名带序号，
+    避免多个用例之间撞唯一约束）。"""
+    k = _enroll_seq[0]
+    _enroll_seq[0] += 1
+    org = client.post(
+        "/api/organizations",
+        json={"name": f"实训并发院{k}", "org_type": "lead_hospital", "level": "county"},
+        headers=admin,
+    ).json()
+    toks = []
+    for i in range(n):
+        uname = f"enr{k}_stu{i}"
+        client.post(
+            "/api/users",
+            json={"username": uname, "password": "pw123456", "full_name": f"学员{i}",
+                  "role": "doctor", "org_id": org["id"]},
+            headers=admin,
+        )
+        tk = client.post(
+            "/api/auth/login", json={"username": uname, "password": "pw123456"}
+        ).json()["access_token"]
+        toks.append({"Authorization": f"Bearer {tk}"})
+    return org, toks
+
+
+def test_并发报名不超实训名额(client, admin):
+    """D-11：`COUNT(*) >= capacity` 是 check-then-act，并发下多人同时数到
+    "还差一个"一起挤进来。实测（修复前）容量 2 报上 3 人。改用 claim_quota
+    原子占额：判满与占位同一条 SQL。"""
+    org, toks = _mk_org_and_students(client, admin, 6)
+    plan = client.post(
+        "/api/education/training-plans",
+        json={"title": "并发实训", "capacity": 2, "org_id": org["id"], "plan_date": "2026-09-01"},
+        headers=admin,
+    ).json()
+    pid = plan["id"]
+
+    import threading
+    results = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(len(toks))
+
+    def run(h):
+        barrier.wait(timeout=30)
+        code = client.post(f"/api/education/training-plans/{pid}/enroll", headers=h).status_code
+        with lock:
+            results.append(code)
+
+    threads = [threading.Thread(target=run, args=(h,)) for h in toks]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert results.count(201) == 2, f"容量 2 却报上 {results.count(201)} 人：{sorted(results)}"
+    assert results.count(409) == 4
+
+    enr = client.get(f"/api/education/training-plans/{pid}/enrollments", headers=admin).json()
+    assert len([e for e in enr if e["status"] == "enrolled"]) == 2, "在册报名数与容量对不上"
+    plans = client.get("/api/education/training-plans", headers=admin).json()
+    row = [p for p in plans if p["id"] == pid][0]
+    assert row["enrolled"] == 2 and row["remaining"] == 0
+
+
+def test_退报名释放名额(client, admin):
+    """占额与释放必须对称，否则退了报名名额也放不出来，计划永远显示满。"""
+    org, toks = _mk_org_and_students(client, admin, 2)
+    plan = client.post(
+        "/api/education/training-plans",
+        json={"title": "退报名实训", "capacity": 1, "org_id": org["id"], "plan_date": "2026-09-02"},
+        headers=admin,
+    ).json()
+    pid = plan["id"]
+    assert client.post(f"/api/education/training-plans/{pid}/enroll", headers=toks[0]).status_code == 201
+    # 满了，第二个人报不上
+    assert client.post(f"/api/education/training-plans/{pid}/enroll", headers=toks[1]).status_code == 409
+    # 第一个人退，名额放出来
+    assert client.post(f"/api/education/training-plans/{pid}/cancel-enroll", headers=toks[0]).status_code == 200
+    assert client.post(f"/api/education/training-plans/{pid}/enroll", headers=toks[1]).status_code == 201
+    plans = client.get("/api/education/training-plans", headers=admin).json()
+    assert [p for p in plans if p["id"] == pid][0]["enrolled"] == 1
