@@ -199,14 +199,15 @@ def purchase_suggestions(db: Session = Depends(get_db)):
 
 
 @router.get("/alerts", response_model=list[StockOut], dependencies=[Depends(get_current_user)])
-def stock_alerts(db: Session = Depends(get_db)):
-    """缺药预警：库存低于阈值的品种清单。"""
-    return (
-        db.query(DrugStock)
-        .filter(DrugStock.quantity < DrugStock.threshold)
-        .order_by(DrugStock.org_id)
-        .all()
-    )
+def stock_alerts(
+    org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """缺药预警：库存低于阈值的品种清单（按可见机构过滤）。"""
+    q = db.query(DrugStock).filter(DrugStock.quantity < DrugStock.threshold)
+    q = scope_org_list(db, user, q, DrugStock, org_id)
+    return q.order_by(DrugStock.org_id).all()
 
 
 # ---------- 终审轮：供应商管理 / 采购申请-审批-验收 / 存货盘点（㉜㉝） ----------
@@ -344,8 +345,14 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = 
 
 
 @router.get("/purchase-orders", dependencies=[Depends(get_current_user)])
-def list_purchases(status: str | None = None, db: Session = Depends(get_db)):
+def list_purchases(
+    status: str | None = None,
+    org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     q = db.query(PurchaseOrder)
+    q = scope_org_list(db, user, q, PurchaseOrder, org_id)
     if status:
         q = q.filter(PurchaseOrder.status == status)
     return [

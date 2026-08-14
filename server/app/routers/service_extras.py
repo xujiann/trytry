@@ -9,18 +9,18 @@ from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
-    ExamResource,
-    ServiceBlacklist,
     ConsultExpert,
     CriticalAction,
     CssdRequest,
     ExamReport,
+    ExamResource,
     HealthArticle,
     Organization,
     Patient,
     ReportRevision,
     ReportTemplate,
     SatisfactionSurvey,
+    ServiceBlacklist,
     SterilizationBatch,
     User,
 )
@@ -179,8 +179,14 @@ def create_cssd_request(body: CssdReqCreate, db: Session = Depends(get_db), user
 
 
 @router.get("/cssd/requests")
-def list_cssd_requests(status: str | None = None, db: Session = Depends(get_db)):
+def list_cssd_requests(
+    status: str | None = None,
+    org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     q = db.query(CssdRequest)
+    q = scope_org_list(db, user, q, CssdRequest, org_id)
     if status:
         q = q.filter(CssdRequest.status == status)
     return [

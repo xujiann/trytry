@@ -98,6 +98,19 @@ def stranger(client, world):
     )
     return {"org": org, "headers": _login(client, "hz_doc_x")}
 
+@pytest.fixture(scope="module")
+def stranger_op(client, world, stranger):
+    """丙机构的**经办**账号。写侧拒绝断言必须用它而不是医生：
+    建职工、记财务这些接口的角色守卫本来就拒医生，用医生去测，
+    用例会因角色而绿——机构守卫删掉它也不红，等于没测。"""
+    client.post(
+        "/api/users",
+        json={"username": "hz_op_x", "password": "pw123456", "full_name": "丙经办",
+              "role": "operator", "org_id": stranger["org"]["id"]},
+        headers=world["admin"],
+    )
+    return _login(client, "hz_op_x")
+
 
 # ================================================================ 患者档案
 
@@ -295,21 +308,39 @@ def test_同医共体成员可见统计汇总(client, world):
     assert world["a"]["id"] in orgs, "同医共体成员在汇总里看不到牵头医院——统计口径被收得过紧"
 
 
+def test_运营清单不跨机构泄露(client, world, stranger_op):
+    """聚合/运营清单也会漏：CSSD 请求、采购单、缺药预警、用血申请这些接口
+    原先不收 org_id、不过滤，任意账号一拉就是全县的。实测 CSSD 请求当场漏了
+    甲院一条。这些不是统计聚合数，是**一条条带机构的运营明细**，按可见机构过滤。"""
+    a = world["a"]["id"]
+    adm = world["admin"]
+    client.post("/api/cssd/requests", json={"org_id": a, "item_name": "甲器械包", "quantity": 5},
+                headers=adm)
+    sup = client.post("/api/pharmacy/suppliers", json={"org_id": a, "name": "甲供应商"},
+                      headers=adm).json()
+    client.post("/api/pharmacy/purchase-orders",
+                json={"org_id": a, "supplier_id": sup["id"], "item_type": "drug",
+                      "item_code": "DZ", "item_name": "甲药", "quantity": 100, "unit_price": 1.0},
+                headers=adm)
+
+    leaked = []
+    for label, url in [
+        ("CSSD请求", "/api/cssd/requests"),
+        ("采购单", "/api/pharmacy/purchase-orders"),
+        ("缺药预警", "/api/pharmacy/alerts"),
+        ("用血申请", "/api/blood/requests"),
+    ]:
+        r = client.get(url, headers=stranger_op)
+        rows = r.json() if isinstance(r.json(), list) else []
+        seen = [x for x in rows if x.get("org_id") == a]
+        if seen:
+            leaked.append(f"{label} 漏了甲院 {len(seen)} 条")
+    assert leaked == [], "以下运营清单跨机构泄露：\n  " + "\n  ".join(leaked)
+
+
 # ================================================================ 写侧
 
 
-@pytest.fixture(scope="module")
-def stranger_op(client, world, stranger):
-    """丙机构的**经办**账号。写侧拒绝断言必须用它而不是医生：
-    建职工、记财务这些接口的角色守卫本来就拒医生，用医生去测，
-    用例会因角色而绿——机构守卫删掉它也不红，等于没测。"""
-    client.post(
-        "/api/users",
-        json={"username": "hz_op_x", "password": "pw123456", "full_name": "丙经办",
-              "role": "operator", "org_id": stranger["org"]["id"]},
-        headers=world["admin"],
-    )
-    return _login(client, "hz_op_x")
 
 
 def test_不得以别家机构名义写入(client, world, stranger, stranger_op):

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_if_absent, take_amount
-from ..visibility import assert_obj_org_writable, assert_org_writable
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import BloodStock, Organization, Patient, TransfusionRequest, User
@@ -135,8 +135,14 @@ def issue_blood(request_id: int, db: Session = Depends(get_db), user: User = Dep
 
 
 @router.get("/requests")
-def list_transfusion_requests(status: str | None = None, db: Session = Depends(get_db)):
+def list_transfusion_requests(
+    status: str | None = None,
+    org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     q = db.query(TransfusionRequest)
+    q = scope_org_list(db, user, q, TransfusionRequest, org_id)
     if status:
         q = q.filter(TransfusionRequest.status == status)
     return [
