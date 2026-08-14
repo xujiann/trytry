@@ -1,5 +1,4 @@
 """第四阶段 M1 中危修复回归：M-1~M-6 与顺手清理 L-6/L-7/L-10。"""
-import time
 
 import pytest
 from fastapi.testclient import TestClient

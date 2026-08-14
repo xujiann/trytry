@@ -3,7 +3,6 @@
 这两项写在第七轮计划的阶段十与阶段九·五第三批里，第一轮执行时被跳过了。
 补上并配用例。
 """
-import re
 
 import pytest
 from fastapi.testclient import TestClient

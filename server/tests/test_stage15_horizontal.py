@@ -604,3 +604,29 @@ def test_已纳入的接口确实会拒绝无关机构(client, world, stranger):
         elif code != 403:
             leaked.append(f"{label} 未拦住无关机构，返回 {code}")
     assert leaked == [], "以下患者维度接口对无关机构仍然开放：\n  " + "\n  ".join(leaked)
+
+
+# ================================================================ 管理聚合角色口径（第十轮 P2）
+
+
+def test_管理聚合统计限管理层(client, world, stranger_op):
+    """DRG/基金/手术统计是给管理者的账（各机构结余、例数、均费），第十轮定为
+    限 director/admin。乡镇经办、普通医生看不到全县各机构的财务/绩效汇总。"""
+    for label, url in [
+        ("DRG统计", "/api/drgs/stats"),
+        ("基金统计", "/api/insurance/fund-stats"),
+        ("手术统计", "/api/surgery/stats"),
+    ]:
+        # 经办被拦
+        assert client.get(url, headers=stranger_op).status_code == 403, f"{label} 未对经办收紧"
+        # 管理层照常
+        assert client.get(url, headers=world["admin"]).status_code == 200, f"{label} 误伤管理层"
+
+
+def test_县域监测预警对一线保持开放(client, world, stranger_op):
+    """反向断言：不是所有跨机构聚合都收紧。多点触发预警是给一线的暴发信号，
+    一线经办/医生要看得到辖区有没有暴发——收紧它等于把这个公卫功能关掉。
+    这条盯住"别把监测误当管理聚合一起收紧了"。"""
+    for url in ["/api/infectious/alerts", "/api/surveillance/alerts"]:
+        code = client.get(url, headers=stranger_op).status_code
+        assert code != 403, f"县域监测 {url} 被误当管理聚合收紧了：{code}"

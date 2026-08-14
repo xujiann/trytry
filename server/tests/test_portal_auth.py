@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from conftest import reset_database
 
 from app.main import app
-from app.models import ResidentAccount, SmsCode
+from app.models import SmsCode
 from app.routers.portal import SEND_COOLDOWN_SECONDS, _reset_portal_failures
 from app.sms import ConsoleSmsProvider, set_sms_provider
 

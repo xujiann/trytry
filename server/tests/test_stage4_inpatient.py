@@ -214,7 +214,7 @@ def test_discharge_requires_case_summary(client, admin, setup):
     assert dup.status_code == 409
 
     # 开一条执行中医嘱，验证出院自动停止
-    order = client.post(
+    client.post(
         "/api/inpatient/orders",
         json={"admission_id": aid, "order_type": "temp", "content": "出院带药"},
         headers=setup["doctor"],

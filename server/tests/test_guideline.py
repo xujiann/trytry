@@ -208,7 +208,7 @@ def test_34_official_docs(client, h):
 def test_center_roster_qc_and_sample_flow(client, h, base):
     roster = client.post("/api/mgmt/rosters", json={"center_type": "imaging", "duty_date": "2026-08-11", "doctor_name": "影像科李医生"}, headers=h)
     assert roster.status_code == 201
-    qc = client.post("/api/mgmt/qc", json={"center_type": "lab", "item": "室内质控-血糖", "result": "fail", "note": "失控，重新定标", "record_date": "2026-08-10"}, headers=h).json()
+    client.post("/api/mgmt/qc", json={"center_type": "lab", "item": "室内质控-血糖", "result": "fail", "note": "失控，重新定标", "record_date": "2026-08-10"}, headers=h).json()
     assert len(client.get("/api/mgmt/qc?result=fail", headers=h).json()) == 1
 
     lab = client.post("/api/exams", json={"patient_id": base["patient"]["id"], "from_org_id": base["township"]["id"], "center_type": "lab", "item_code": "GLU", "item_name": "空腹血糖"}, headers=h).json()

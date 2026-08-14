@@ -160,7 +160,7 @@ def test_audit_log_records_mutations(client, admin, setup):
 
     logs = client.get("/api/audit?limit=200", headers=admin).json()
     assert logs, "审计日志不应为空"
-    paths = {(l["username"], l["method"], l["path"]) for l in logs}
+    paths = {(log["username"], log["method"], log["path"]) for log in logs}
     # 医师出报告、药师审方、管理员建用户均有留痕
     assert any(u == "dr_wang" and p.endswith("/report") for u, m, p in paths)
     assert any(u == "ph_li" and p.endswith("/review") for u, m, p in paths)
@@ -169,4 +169,4 @@ def test_audit_log_records_mutations(client, admin, setup):
     assert not any(p == "/api/auth/login" for _, _, p in paths)
     # 按用户过滤
     only_doctor = client.get("/api/audit?username=dr_wang", headers=admin).json()
-    assert only_doctor and all(l["username"] == "dr_wang" for l in only_doctor)
+    assert only_doctor and all(log["username"] == "dr_wang" for log in only_doctor)

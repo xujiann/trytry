@@ -134,7 +134,7 @@ def test_每项指标都带分子分母与口径(client, admin, org, cohort):
 
 def test_未采集的手术诊断不进分母(client, admin, org, cohort, director, doctor):
     """术前术后诊断留空是"未采集"，不是"不符合"——不能拉低符合率。"""
-    ward, beds = cohort["ward"], cohort["beds"]
+    ward = cohort["ward"]
     patient = _patient(client, admin, "手术甲", "331782198001011241")
     bed = client.post(
         "/api/inpatient/beds", json={"ward_id": ward["id"], "bed_no": "QS1"}, headers=admin

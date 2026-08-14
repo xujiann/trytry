@@ -17,7 +17,7 @@ from ..data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
 from ..concurrency import insert_or_conflict
 from ..visibility import scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_admin, resolve_business_date
+from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import Admission, CaseSummary, DrgGroup, Organization, User
 
 # 同组历史病例少于该数不做事中预警——3 个病例算出来的"均值"，预警的是噪声。
@@ -161,8 +161,10 @@ def update_group(group_id: int, body: DrgGroupUpdate, db: Session = Depends(get_
 # ---------- CMI 与组均费用分析 ----------
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_roles("director"))])
 def drg_stats(db: Session = Depends(get_db)):
+    # 第十轮 P2：管理聚合限 director/admin。这是给管理者看的账（各机构 CMI、
+    # 例数、均费），不是给一线的预警——与多点触发监测那类刻意保持宽的区分开。
     """DRGs 分析：机构 CMI 与入组率、各组例数/均费、按 MDC 汇总，QY 兜底组单列。
 
     口径（块3）：grouped 仅统计正式分组，QY 兜底组计入 fallback 并从 CMI 分母剔除，

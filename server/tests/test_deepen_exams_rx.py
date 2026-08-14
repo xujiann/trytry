@@ -108,7 +108,7 @@ def test_recognition_directory_gating(client, admin, setup):
     )
     assert ct.status_code == 201
     assert ct.json()["mutual_scope"] == "city"
-    lab = client.post(
+    client.post(
         "/api/exams/recognition-items",
         json={"item_code": "LAB99", "item_name": "停用检验", "center_type": "lab", "active": False},
         headers=admin,

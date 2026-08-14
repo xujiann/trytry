@@ -399,8 +399,9 @@ def get_record(request_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_roles("director"))])
 def surgery_stats(db: Session = Depends(get_db)):
+    # 第十轮 P2：手术量按机构汇总，属管理聚合，限 director/admin。
     """手术量统计：按机构分总台次、切口等级构成、麻醉方式构成。"""
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     rows = (

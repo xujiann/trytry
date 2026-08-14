@@ -383,7 +383,7 @@ def test_improvement_task_closed_loop(client, admin, env):
     assert task.json()["status"] == "open"
     # 期限已过 → 超期标记
     overdue = client.get(
-        f"/api/performance/improvements?overdue_only=true&today=2026-03-01", headers=admin
+        "/api/performance/improvements?overdue_only=true&today=2026-03-01", headers=admin
     ).json()
     assert task_id in {t["id"] for t in overdue}
     assert overdue[0]["overdue"] is True

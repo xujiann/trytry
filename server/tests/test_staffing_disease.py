@@ -85,7 +85,7 @@ def test_职称等级必须显式选而非从职称文本推断(client, admin, o
     """靠关键词猜等级，一个"助理全科医生"就能把统计带偏。"""
     emp = _employee(client, admin, orgs[0], "王主治", "主治医师")
     # 只填了职称文本时，等级仍是"未填"——系统不替人做判断
-    rows = client.get(f"/api/staffing/secondments", headers=admin).json()
+    rows = client.get("/api/staffing/secondments", headers=admin).json()
     assert isinstance(rows, list)
     body = client.patch(f"/api/staffing/employees/{emp['id']}/title-level",
                         json={"title_level": "intermediate"}, headers=admin).json()

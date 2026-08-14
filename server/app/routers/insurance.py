@@ -159,8 +159,10 @@ def review_special_disease(app_id: int, approve: bool, db: Session = Depends(get
     return app_
 
 
-@router.get("/fund-stats")
+@router.get("/fund-stats", dependencies=[Depends(require_roles("director"))])
 def fund_stats(db: Session = Depends(get_db)):
+    # 第十轮 P2：基金结余是最敏感的县域管理数据，限 director/admin，
+    # 乡镇经办、普通医生看不到全县各机构医保支出构成。
     """基金监测：县域内/基层医保支出占比（监测指标8、9口径）。"""
     total = db.query(func.coalesce(func.sum(InsuranceSettlement.insurance_pay), 0.0)).scalar()
     grassroots = (

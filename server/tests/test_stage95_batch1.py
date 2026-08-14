@@ -150,7 +150,7 @@ def test_批次号在同一疫苗下唯一(client, admin, org):
 def test_超温标记但不自动封存批次(client, admin, org):
     """封存整批是有成本的决定，平台把异常标出来由人决定——
     与"超支不自动扣减"同一条原则。"""
-    batch = client.post(
+    client.post(
         "/api/vaccine-supply/batches",
         json={"vaccine_code": "V5", "vaccine_name": "疫苗五", "batch_no": "B-5",
               "expire_date": "2099-01-01", "org_id": org["id"], "quantity": 10},
