@@ -38,7 +38,7 @@ def setup(client, admin):
     ).json()
     client.post(
         "/api/users",
-        json={"username": "drgx_doc", "password": "pass123456", "role": "doctor"},
+        json={"username": "drgx_doc", "password": "pass123456", "role": "doctor", "org_id": org["id"]},
         headers=admin,
     )
     return {"org": org, "ward": ward, "doctor": login(client, "drgx_doc", "pass123456"), "seq": [0]}

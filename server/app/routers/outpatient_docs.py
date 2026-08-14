@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_local
-from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -297,6 +297,7 @@ def create_treatment(
     encounter = db.get(Encounter, encounter_id)
     if encounter is None:
         raise HTTPException(status_code=404, detail="就诊记录不存在")
+    assert_obj_org_writable(db, user, encounter)
     record = TreatmentRecord(
         encounter_id=encounter_id,
         patient_id=encounter.patient_id,
@@ -362,8 +363,10 @@ def create_outpatient_nursing(
     user: User = Depends(get_current_user),
 ):
     """门急诊护理记录：输液观察、留观、清创换药。"""
-    if db.get(Encounter, encounter_id) is None:
+    encounter = db.get(Encounter, encounter_id)
+    if encounter is None:
         raise HTTPException(status_code=404, detail="就诊记录不存在")
+    assert_obj_org_writable(db, user, encounter)
     record = NursingRecord(
         encounter_id=encounter_id,
         nursing_level=body.nursing_level,

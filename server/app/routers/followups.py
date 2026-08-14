@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import FollowupTask, Organization, Patient, User, utcnow
@@ -171,10 +171,11 @@ class CompleteIn(BaseModel):
 @router.post(
     "/{task_id}/complete", dependencies=[Depends(require_roles("doctor", "public_health"))]
 )
-def complete_followup(task_id: int, body: CompleteIn, db: Session = Depends(get_db)):
+def complete_followup(task_id: int, body: CompleteIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     task = db.get(FollowupTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="随访任务不存在")
+    assert_obj_org_writable(db, user, task)
     if task.status != "pending":
         raise HTTPException(status_code=409, detail=f"当前状态 {task.status} 不可完成")
     task.status = "done"
@@ -187,10 +188,11 @@ def complete_followup(task_id: int, body: CompleteIn, db: Session = Depends(get_
 @router.post(
     "/{task_id}/cancel", dependencies=[Depends(require_roles("doctor", "public_health"))]
 )
-def cancel_followup(task_id: int, db: Session = Depends(get_db)):
+def cancel_followup(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     task = db.get(FollowupTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="随访任务不存在")
+    assert_obj_org_writable(db, user, task)
     if task.status != "pending":
         raise HTTPException(status_code=409, detail=f"当前状态 {task.status} 不可取消")
     task.status = "cancelled"

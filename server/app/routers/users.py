@@ -9,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
+from ..visibility import assert_obj_org_writable
 from ..database import get_db
 from ..deps import (
     ROLE_NAMES,
@@ -322,13 +323,14 @@ class RoleUpdate(BaseModel):
 def change_user_role(
     user_id: int,
     body: RoleUpdate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
     operator: User = Depends(get_current_user),
 ):
     """角色调整（限管理员）：变更前后角色落 RoleChangeLog 留痕，且不可自降 admin。"""
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    assert_obj_org_writable(db, user, target)
     _check_role_exists(db, body.role)
     if target.id == operator.id and body.role != "admin":
         raise HTTPException(status_code=422, detail="不可撤销自身管理员角色")

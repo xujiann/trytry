@@ -48,7 +48,7 @@ def setup(client, admin):
         ]
     client.post(
         "/api/users",
-        json={"username": "drg_doc", "password": "pass123456", "role": "doctor"},
+        json={"username": "drg_doc", "password": "pass123456", "role": "doctor", "org_id": org["id"]},
         headers=admin,
     )
     doctor = login(client, "drg_doc", "pass123456")
@@ -63,8 +63,12 @@ def setup(client, admin):
     return {"orgs": orgs, "wards": wards, "beds": beds, "doctor": doctor, "patients": patients}
 
 
-def _discharge_case(client, setup, org_key, bed_idx, patient, diagnosis, cost):
-    """入院→病案首页（自动入组）→出院，返回病案首页响应。"""
+def _discharge_case(client, setup, admin, org_key, bed_idx, patient, diagnosis, cost):
+    """入院→病案首页（自动入组）→出院，返回病案首页响应。
+
+    第九轮：这些入院跨 a、b 两家机构，用 admin 播种。原先用单机构 doctor 写
+    别家机构的入院，正是机构写守卫该拦的——测试是要跨机构聚合统计，
+    不是要单个医生替别家做病案，故播种走 admin（全域）。"""
     adm = client.post(
         "/api/inpatient/admissions",
         json={
@@ -73,15 +77,15 @@ def _discharge_case(client, setup, org_key, bed_idx, patient, diagnosis, cost):
             "bed_id": setup["beds"][org_key][bed_idx]["id"],
             "diagnosis_name": diagnosis,
         },
-        headers=setup["doctor"],
+        headers=admin,
     ).json()
     summary = client.post(
         f"/api/inpatient/admissions/{adm['id']}/case-summary",
         json={"discharge_diagnosis": diagnosis, "total_cost": cost, "outcome": "好转"},
-        headers=setup["doctor"],
+        headers=admin,
     ).json()
     discharged = client.post(
-        f"/api/inpatient/admissions/{adm['id']}/discharge", headers=setup["doctor"]
+        f"/api/inpatient/admissions/{adm['id']}/discharge", headers=admin
     )
     assert discharged.status_code == 200, discharged.text
     return summary
@@ -95,13 +99,13 @@ def test_drg_groups_seeded(client, admin):
 
 
 def test_case_summary_auto_grouping(client, admin, setup):
-    s1 = _discharge_case(client, setup, "a", 0, setup["patients"][0], "社区获得性肺炎", 6000)
+    s1 = _discharge_case(client, setup, admin, "a", 0, setup["patients"][0], "社区获得性肺炎", 6000)
     assert s1["drg_code"] == "ES31"
     assert s1["drg_weight"] == 0.95
     assert s1["drg"]["drg_name"] == "呼吸系统感染（肺炎）"
 
     # 块3：任何分组均未命中 → 落入 QY 兜底组（不再是"不入组"）
-    s2 = _discharge_case(client, setup, "a", 1, setup["patients"][1], "罕见代谢病", 3000)
+    s2 = _discharge_case(client, setup, admin, "a", 1, setup["patients"][1], "罕见代谢病", 3000)
     assert s2["drg_code"] == "QY"
     assert s2["drg"]["fallback"] is True
 
@@ -117,8 +121,8 @@ def test_case_summary_auto_grouping(client, admin, setup):
 
 def test_drg_stats_cmi_and_group_costs(client, admin, setup):
     # 机构B：脑梗（权重1.35）+ 糖尿病（0.78）
-    _discharge_case(client, setup, "b", 0, setup["patients"][2], "急性脑梗死", 12000)
-    _discharge_case(client, setup, "b", 1, setup["patients"][3], "2型糖尿病", 4000)
+    _discharge_case(client, setup, admin, "b", 0, setup["patients"][2], "急性脑梗死", 12000)
+    _discharge_case(client, setup, admin, "b", 1, setup["patients"][3], "2型糖尿病", 4000)
 
     stats = client.get("/api/drgs/stats", headers=admin).json()
     by_org = {r["org_name"]: r for r in stats["orgs"]}

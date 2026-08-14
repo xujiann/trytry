@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_if_absent, take_amount
-from ..visibility import assert_org_writable
+from ..visibility import assert_obj_org_writable, assert_org_writable
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import BloodStock, Organization, Patient, TransfusionRequest, User
@@ -95,6 +95,7 @@ def review_transfusion(
     request = db.get(TransfusionRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="用血申请不存在")
+    assert_obj_org_writable(db, user, request)
     if request.status != "pending":
         raise HTTPException(status_code=409, detail="该申请已处理")
     request.status = "approved" if approve else "rejected"
@@ -107,10 +108,11 @@ def review_transfusion(
     "/requests/{request_id}/issue",
     dependencies=[Depends(require_roles("operator"))],  # 发血=血库经办
 )
-def issue_blood(request_id: int, db: Session = Depends(get_db)):
+def issue_blood(request_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     request = db.get(TransfusionRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="用血申请不存在")
+    assert_obj_org_writable(db, user, request)
     if request.status != "approved":
         raise HTTPException(status_code=409, detail="仅已审批申请可发血")
     stock = (

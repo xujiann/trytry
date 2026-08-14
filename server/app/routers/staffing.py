@@ -20,9 +20,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr, OptionalDateStr
+from ..visibility import assert_obj_org_writable
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_org_scope
-from ..models import Employee, Organization, Secondment
+from ..models import Employee, Organization, Secondment, User
 
 router = APIRouter(prefix="/api/staffing", tags=["人员调度"],
                    dependencies=[Depends(get_current_user)])
@@ -162,11 +163,15 @@ def list_secondments(
 @router.post("/secondments/{secondment_id}/end",
              dependencies=[Depends(require_roles("director", "operator"))])
 def end_secondment(
-    secondment_id: int, end_date: str | None = None, db: Session = Depends(get_db)
+    secondment_id: int,
+    end_date: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     row = db.get(Secondment, secondment_id)
     if row is None:
         raise HTTPException(status_code=404, detail="派驻记录不存在")
+    assert_obj_org_writable(db, user, row, org_attr="from_org_id")
     if row.end_date:
         raise HTTPException(status_code=409, detail="该派驻已结束")
     finish = end_date or date.today().isoformat()
@@ -183,11 +188,12 @@ def end_secondment(
 
 @router.patch("/employees/{employee_id}/title-level",
               dependencies=[Depends(require_roles("director", "operator"))])
-def set_title_level(employee_id: int, body: TitleLevelIn, db: Session = Depends(get_db)):
+def set_title_level(employee_id: int, body: TitleLevelIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """维护职称等级。**不从职称文本推断**，必须显式选。"""
     employee = db.get(Employee, employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    assert_obj_org_writable(db, user, employee)
     employee.title_level = body.title_level
     db.commit()
     return {

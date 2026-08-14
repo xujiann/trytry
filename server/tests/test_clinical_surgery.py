@@ -28,13 +28,16 @@ def _login(client, username, password):
 
 
 @pytest.fixture(scope="module")
-def roles(client, admin):
-    """一组业务角色账号：手术审批要求申请人与审批人分离。"""
+def roles(client, admin, ward):
+    """一组业务角色账号：手术审批要求申请人与审批人分离。
+    第九轮：挂到手术演示医院——手术排班/审批是院内流程，按 id 操作要过机构校验。"""
+    org_id = ward["org"]["id"]
     for username, role in [("surg_doc", "doctor"), ("surg_doc2", "doctor"),
                            ("surg_dir", "director"), ("surg_op", "operator")]:
         client.post(
             "/api/users",
-            json={"username": username, "password": "passw0rd1", "full_name": username, "role": role},
+            json={"username": username, "password": "passw0rd1", "full_name": username,
+                  "role": role, "org_id": org_id},
             headers=admin,
         )
     return {

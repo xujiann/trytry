@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import scope_patient_list
+from ..visibility import assert_obj_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ContractService, FamilyDoctorContract, Organization, Patient, User
@@ -63,10 +63,11 @@ def list_contracts(org_id: int | None = None, patient_id: int | None = None, db:
     response_model=ContractOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2
 )
-def terminate(contract_id: int, db: Session = Depends(get_db)):
+def terminate(contract_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     contract = db.get(FamilyDoctorContract, contract_id)
     if contract is None:
         raise HTTPException(status_code=404, detail="签约协议不存在")
+    assert_obj_org_writable(db, user, contract)
     if contract.status != "active":
         raise HTTPException(status_code=409, detail="协议已解约")
     contract.status = "terminated"
@@ -81,10 +82,11 @@ def terminate(contract_id: int, db: Session = Depends(get_db)):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 履约记录
 )
-def record_service(contract_id: int, body: ContractServiceCreate, db: Session = Depends(get_db)):
+def record_service(contract_id: int, body: ContractServiceCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     contract = db.get(FamilyDoctorContract, contract_id)
     if contract is None:
         raise HTTPException(status_code=404, detail="签约协议不存在")
+    assert_obj_org_writable(db, user, contract)
     if contract.status != "active":
         raise HTTPException(status_code=409, detail="已解约协议不可记录履约")
     service = ContractService(contract_id=contract_id, **body.model_dump())

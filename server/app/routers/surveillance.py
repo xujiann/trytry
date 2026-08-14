@@ -19,7 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
-from ..visibility import assert_org_writable, scope_org_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -330,10 +330,11 @@ def list_resources(
 @router.patch(
     "/resources/{resource_id}", dependencies=[Depends(require_roles("public_health", "operator"))]
 )
-def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db)):
+def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     resource = db.get(EmergencyResource, resource_id)
     if resource is None:
         raise HTTPException(status_code=404, detail="资源不存在")
+    assert_obj_org_writable(db, user, resource)
     for field, value in body.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(resource, field, value)

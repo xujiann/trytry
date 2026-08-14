@@ -11,7 +11,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -191,10 +191,11 @@ class TransferBody(BaseModel):
     "/admissions/{admission_id}/transfer",
     dependencies=[Depends(require_roles("doctor"))],  # 转科/转床=医师
 )
-def transfer_admission(admission_id: int, body: TransferBody, db: Session = Depends(get_db)):
+def transfer_admission(admission_id: int, body: TransferBody, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     admission = db.get(Admission, admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_obj_org_writable(db, user, admission)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="仅在院患者可转科/转床")
     if body.bed_id == admission.bed_id:
@@ -269,6 +270,7 @@ def create_case_summary(
     admission = db.get(Admission, admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_obj_org_writable(db, user, admission)
     if db.query(CaseSummary).filter(CaseSummary.admission_id == admission_id).first():
         raise HTTPException(status_code=409, detail="病案首页已填写")
     if body.drug_cost > body.total_cost:
@@ -311,10 +313,11 @@ def get_case_summary(admission_id: int, db: Session = Depends(get_db)):
     "/admissions/{admission_id}/discharge",
     dependencies=[Depends(require_roles("doctor"))],  # 出院=医师
 )
-def discharge_admission(admission_id: int, db: Session = Depends(get_db)):
+def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     admission = db.get(Admission, admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_obj_org_writable(db, user, admission)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="该患者已出院")
     summary = db.query(CaseSummary).filter(CaseSummary.admission_id == admission_id).first()

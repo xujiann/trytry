@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -138,11 +138,12 @@ def list_batches(
     "/batches/{batch_id}/freeze",
     dependencies=[Depends(require_roles("public_health", "director"))],
 )
-def freeze_batch(batch_id: int, body: BatchFreeze, db: Session = Depends(get_db)):
+def freeze_batch(batch_id: int, body: BatchFreeze, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """封存批次（超温、召回）。封存不删行——这批打给了谁仍要查得到。"""
     batch = db.get(VaccineBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="批次不存在")
+    assert_obj_org_writable(db, user, batch)
     if batch.status == "frozen":
         raise HTTPException(status_code=409, detail="该批次已封存")
     batch.status = "frozen"
@@ -156,11 +157,12 @@ def freeze_batch(batch_id: int, body: BatchFreeze, db: Session = Depends(get_db)
     "/batches/{batch_id}/unfreeze",
     dependencies=[Depends(require_roles("public_health", "director"))],
 )
-def unfreeze_batch(batch_id: int, db: Session = Depends(get_db)):
+def unfreeze_batch(batch_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """解除封存。凡是拦得住的，都要放得开（D-1/D-2/D-4 教训）。"""
     batch = db.get(VaccineBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="批次不存在")
+    assert_obj_org_writable(db, user, batch)
     if batch.status != "frozen":
         raise HTTPException(status_code=409, detail="该批次未封存")
     batch.status = "normal"
@@ -276,10 +278,11 @@ def list_temperatures(
     "/cold-chain/{record_id}/handle",
     dependencies=[Depends(require_roles("public_health", "operator"))],
 )
-def handle_exceedance(record_id: int, body: ColdChainHandle, db: Session = Depends(get_db)):
+def handle_exceedance(record_id: int, body: ColdChainHandle, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     record = db.get(ColdChainRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
+    assert_obj_org_writable(db, user, record)
     if not record.exceeded:
         raise HTTPException(status_code=422, detail="该记录未超温，无需处置")
     record.handled = True
@@ -379,11 +382,12 @@ def list_aefi(
     "/aefi/{report_id}/outcome",
     dependencies=[Depends(require_roles("doctor", "public_health"))],
 )
-def update_outcome(report_id: int, body: AefiOutcome, db: Session = Depends(get_db)):
+def update_outcome(report_id: int, body: AefiOutcome, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """转归随访：AEFI 上报时多为"未知"，好转与痊愈是后续随访才知道的。"""
     report = db.get(AefiReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    assert_obj_org_writable(db, user, report)
     report.outcome = body.outcome
     db.commit()
     db.refresh(report)

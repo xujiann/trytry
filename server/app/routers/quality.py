@@ -16,7 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent
-from ..visibility import assert_org_writable, scope_org_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -126,6 +126,7 @@ def review_adverse_event(
     event = db.get(AdverseEvent, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="不良事件不存在")
+    assert_obj_org_writable(db, user, event)
     if event.status != "reported":
         raise HTTPException(status_code=409, detail=f"当前状态 {event.status} 不可审核")
     event.status = "reviewed"
@@ -149,6 +150,7 @@ def rectify_adverse_event(
     event = db.get(AdverseEvent, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="不良事件不存在")
+    assert_obj_org_writable(db, user, event)
     if event.status != "reviewed":
         raise HTTPException(status_code=409, detail="须先审核后方可登记整改")
     event.status = "rectified"
@@ -331,10 +333,11 @@ def list_infection_reports(
     "/infection-reports/{report_id}/verify",
     dependencies=[Depends(require_roles("public_health", "director"))],  # 核实=院感/公卫管理
 )
-def verify_infection_report(report_id: int, confirmed: bool, db: Session = Depends(get_db)):
+def verify_infection_report(report_id: int, confirmed: bool, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     report = db.get(InfectionReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="院感报告不存在")
+    assert_obj_org_writable(db, user, report)
     if report.status != "reported":
         raise HTTPException(status_code=409, detail="该报告已核实")
     report.status = "confirmed" if confirmed else "excluded"

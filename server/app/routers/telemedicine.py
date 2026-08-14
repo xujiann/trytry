@@ -64,7 +64,7 @@ def list_consults(status: str | None = None, db: Session = Depends(get_db)):
 
 
 @router.post("/consults/{consult_id}/reply", response_model=ConsultOut, dependencies=[Depends(require_roles("doctor"))])
-def reply(consult_id: int, body: ReplyBody, db: Session = Depends(get_db)):
+def reply(consult_id: int, body: ReplyBody, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     consult = db.get(OnlineConsult, consult_id)
     if consult is None:
         raise HTTPException(status_code=404, detail="咨询不存在")
@@ -92,7 +92,7 @@ def reply(consult_id: int, body: ReplyBody, db: Session = Depends(get_db)):
     response_model=ConsultOut,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 咨询结束
 )
-def close(consult_id: int, db: Session = Depends(get_db)):
+def close(consult_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     consult = db.get(OnlineConsult, consult_id)
     if consult is None:
         raise HTTPException(status_code=404, detail="咨询不存在")

@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_visible, assert_org_writable, scope_org_list
+from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import AccountSubject, Organization, User, Voucher, VoucherEntry, utcnow
@@ -211,6 +211,7 @@ def post_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = De
     voucher = db.get(Voucher, voucher_id)
     if voucher is None:
         raise HTTPException(status_code=404, detail="凭证不存在")
+    assert_obj_org_writable(db, user, voucher)
     if voucher.status != "draft":
         raise HTTPException(status_code=409, detail=f"当前状态 {voucher.status} 不可过账")
     voucher.status = "posted"
@@ -221,11 +222,12 @@ def post_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = De
 
 
 @router.post("/vouchers/{voucher_id}/void", dependencies=[Depends(require_roles("director"))])
-def void_voucher(voucher_id: int, db: Session = Depends(get_db)):
+def void_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """作废：已过账凭证的更正手段。不提供删除——账错了也要看得见。"""
     voucher = db.get(Voucher, voucher_id)
     if voucher is None:
         raise HTTPException(status_code=404, detail="凭证不存在")
+    assert_obj_org_writable(db, user, voucher)
     if voucher.status == "void":
         raise HTTPException(status_code=409, detail="凭证已作废")
     voucher.status = "void"

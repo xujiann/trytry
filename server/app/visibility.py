@@ -68,6 +68,7 @@ __all__ = [
     "visible_org_ids",
     "assert_org_visible",
     "assert_org_writable",
+    "assert_obj_org_writable",
     "stats_org_ids",
     "patient_basis",
     "assert_patient_visible",
@@ -162,6 +163,26 @@ def assert_org_writable(db: Session, user: User, org_id: int | None) -> None:
     if user.org_id == org_id:
         return
     raise HTTPException(status_code=403, detail="无权以该机构名义写入数据")
+
+
+def assert_obj_org_writable(db: Session, user: User, obj, org_attr: str = "org_id") -> None:
+    """对**已取出的对象**校验机构归属，用于 `/{id}` 型写接口。
+
+    与 `assert_org_writable` 的区别只是入参：那个校验请求体里的 org_id
+    （创建类，机构归属由调用方声明），这个校验数据库里已有对象的归属
+    （更新/推进/删除类，归属早已定死，调用方只给了个 id）。
+
+    实测过的洞比创建类更隐蔽：乙卫生院的经办按 id 直接 **领走了甲县医院的
+    5 台 CT、交接了甲院的医废、停用了甲院的暂存间**。清单接口做了机构过滤，
+    但 `/{id}` 型接口从 id 直取对象、跳过清单，过滤形同虚设——**这正是
+    "按 id 绕过清单"**。
+
+    `obj is None` 不在这里报——那是 404，各接口自己先判。这里只管归属。
+    """
+    if obj is None:
+        return
+    org_id = getattr(obj, org_attr, None)
+    assert_org_writable(db, user, org_id)
 
 
 def stats_org_ids(db: Session, user: User) -> list[int] | None:

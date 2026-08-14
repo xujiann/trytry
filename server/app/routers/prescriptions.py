@@ -249,7 +249,7 @@ def list_prescriptions(
     response_model=PrescriptionOut,
     dependencies=[Depends(require_roles("pharmacist"))],
 )
-def review_prescription(prescription_id: int, body: PrescriptionReview, db: Session = Depends(get_db)):
+def review_prescription(prescription_id: int, body: PrescriptionReview, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     prescription = db.get(Prescription, prescription_id)
     if prescription is None:
         raise HTTPException(status_code=404, detail="处方不存在")

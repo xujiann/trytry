@@ -4,10 +4,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..datetypes import DateStr
 from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
-from ..visibility import assert_org_visible, assert_org_writable, scope_org_list, stats_org_ids
 from ..database import get_db
+from ..datetypes import DateStr
+from ..visibility import (
+    assert_obj_org_writable,
+    assert_org_visible,
+    assert_org_writable,
+    scope_org_list,
+    stats_org_ids,
+)
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
     Asset,
@@ -108,10 +114,17 @@ def second_employee(body: SecondmentCreate, db: Session = Depends(get_db)):
     "/secondments/{secondment_id}/end",
     dependencies=[Depends(require_roles("director", "operator"))],  # H2
 )
-def end_secondment(secondment_id: int, end_date: str, db: Session = Depends(get_db)):
+def end_secondment(
+    secondment_id: int,
+    end_date: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     record = db.get(Secondment, secondment_id)
     if record is None:
         raise HTTPException(status_code=404, detail="派驻记录不存在")
+    # 派驻由原单位发起，也由原单位结束（from_org 是派出方）
+    assert_obj_org_writable(db, user, record, org_attr="from_org_id")
     if record.end_date:
         raise HTTPException(status_code=409, detail="派驻已结束")
     record.end_date = end_date
@@ -255,11 +268,18 @@ def list_assets(org_id: int | None = None, db: Session = Depends(get_db), user: 
     response_model=AssetOut,
     dependencies=[Depends(require_roles("director", "operator"))],  # H2
 )
-def transfer_asset(asset_id: int, to_org_id: int, db: Session = Depends(get_db)):
+def transfer_asset(
+    asset_id: int,
+    to_org_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """物资调拨划拨。"""
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="物资不存在")
+    # 调出方必须是本机构：不能把别家的东西划走
+    assert_obj_org_writable(db, user, asset)
     if asset.status == "scrapped":
         raise HTTPException(status_code=409, detail="已报废物资不可调拨")
     if db.get(Organization, to_org_id) is None:
@@ -275,10 +295,13 @@ def transfer_asset(asset_id: int, to_org_id: int, db: Session = Depends(get_db))
     response_model=AssetOut,
     dependencies=[Depends(require_roles("director", "operator"))],  # H2
 )
-def scrap_asset(asset_id: int, db: Session = Depends(get_db)):
+def scrap_asset(
+    asset_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="物资不存在")
+    assert_obj_org_writable(db, user, asset)
     asset.status = "scrapped"
     db.commit()
     db.refresh(asset)
@@ -454,10 +477,11 @@ def list_departments(org_id: int | None = None, db: Session = Depends(get_db), u
     "/employees/{employee_id}/department",
     dependencies=[Depends(require_roles("director", "operator"))],  # 员工科室挂接
 )
-def assign_department(employee_id: int, dept_id: int, db: Session = Depends(get_db)):
+def assign_department(employee_id: int, dept_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     employee = db.get(Employee, employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    assert_obj_org_writable(db, user, employee)
     dept = db.get(Department, dept_id)
     if dept is None or not dept.active:
         raise HTTPException(status_code=404, detail="科室不存在或已停用")
@@ -492,6 +516,7 @@ def create_employee_change(
     employee = db.get(Employee, employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    assert_obj_org_writable(db, user, employee)
     if body.change_type == "transfer":
         if body.to_org_id is None:
             raise HTTPException(status_code=422, detail="调动须指定调入机构")
@@ -741,6 +766,8 @@ def create_asset_movement(
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="物资不存在")
+    # 按 id 直取绕过了清单过滤：实测乙院经办据此领走了甲院 5 台 CT
+    assert_obj_org_writable(db, user, asset)
     if asset.status == "scrapped":
         raise HTTPException(status_code=409, detail="已报废物资不可再出入库")
     # 判定与增减都放进同一条 UPDATE。原先"先判够不够、再 += / -="是读-改-写，

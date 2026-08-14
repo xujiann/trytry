@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable, assert_patient_visible
+from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin
 from ..models import (
@@ -188,6 +188,7 @@ def advance_instance(
     instance = db.get(WorkflowInstance, instance_id)
     if instance is None:
         raise HTTPException(status_code=404, detail="流程实例不存在")
+    assert_obj_org_writable(db, user, instance)
     if instance.status != "running":
         raise HTTPException(status_code=409, detail=f"当前状态 {instance.status} 不可推进")
     definition = _definition_or_404(db, instance.definition_key)
@@ -229,6 +230,7 @@ def cancel_instance(
     instance = db.get(WorkflowInstance, instance_id)
     if instance is None:
         raise HTTPException(status_code=404, detail="流程实例不存在")
+    assert_obj_org_writable(db, user, instance)
     if instance.status != "running":
         raise HTTPException(status_code=409, detail=f"当前状态 {instance.status} 不可终止")
     db.add(

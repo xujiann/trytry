@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import add_amount, insert_if_absent, insert_or_conflict
-from ..visibility import assert_org_writable, scope_org_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from pydantic import BaseModel, Field
@@ -287,6 +287,7 @@ def approve_purchase(
     order = db.get(PurchaseOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="采购单不存在")
+    assert_obj_org_writable(db, user, order)
     if order.status != "pending":
         raise HTTPException(status_code=409, detail="仅待审批采购单可审批")
     order.status = "rejected" if reject else "approved"
@@ -299,10 +300,11 @@ def approve_purchase(
     "/purchase-orders/{order_id}/receive",
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 到货验收
 )
-def receive_purchase(order_id: int, db: Session = Depends(get_db)):
+def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     order = db.get(PurchaseOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="采购单不存在")
+    assert_obj_org_writable(db, user, order)
     if order.status != "approved":
         raise HTTPException(status_code=409, detail="仅已审批采购单可验收入库")
     order.status = "received"

@@ -346,6 +346,58 @@ def test_不得以别家机构名义写入(client, world, stranger, stranger_op)
     assert leaked == [], "以下写接口可替别家机构写入：\n  " + "\n  ".join(leaked)
 
 
+def test_不得按id操作别家机构的记录(client, world, stranger, stranger_op):
+    """写侧最隐蔽的一条：清单接口做了机构过滤，但 `/{id}` 型接口从 id 直取
+    对象、跳过清单，过滤形同虚设。实测乙院经办据此领走了甲院 5 台 CT、
+    交接了甲院医废、停用了甲院暂存间。"""
+    a = world["a"]["id"]
+    adm = world["admin"]
+    asset = client.post(
+        "/api/mgmt/assets",
+        json={"org_id": a, "code": "BYID-CT", "name": "甲院CT", "category": "equipment",
+              "quantity": 5},
+        headers=adm,
+    ).json()
+    client.post("/api/medwaste/locations",
+                json={"org_id": a, "name": "甲暂存", "location_type": "storage"}, headers=adm)
+    waste = client.post(
+        "/api/medwaste",
+        json={"org_id": a, "waste_type": "infectious", "weight_kg": 2.0,
+              "collected_date": "2026-08-13"},
+        headers=adm,
+    ).json()
+    loc_id = client.get("/api/medwaste/locations", params={"org_id": a}, headers=adm).json()[0]["id"]
+
+    cases = [
+        ("领资产", "post", f"/api/mgmt/assets/{asset['id']}/movements",
+         {"movement_type": "issue", "quantity": 5}),
+        ("交接医废", "post", f"/api/medwaste/{waste['id']}/handover", {"handler_name": "冒名"}),
+        ("停用点位", "delete", f"/api/medwaste/locations/{loc_id}", None),
+    ]
+    leaked = []
+    for label, method, url, body in cases:
+        r = getattr(client, method)(url, headers=stranger_op, **({"json": body} if body else {}))
+        if r.status_code == 404:
+            leaked.append(f"{label} 路由 404（用例写错）：{url}")
+        elif r.status_code != 403 or "机构名义" not in r.json().get("detail", ""):
+            leaked.append(f"{label} 未被机构守卫拦住：{r.status_code} {r.text[:50]}")
+    assert leaked == [], "以下按 id 写接口可操作别家机构记录：\n  " + "\n  ".join(leaked)
+
+
+def test_集中审方与远程会诊按设计跨机构不被机构守卫拦(client, world, stranger_op):
+    """反向断言：不是所有跨机构写都该拦。集中审方（lead 药师审 member 处方）、
+    远程会诊（lead 专家答 member 咨询）是医共体的核心协同，加机构写守卫会把
+    功能关掉。这条用例盯住"别把它们误加回去"——真加回去，这里会红。
+
+    这里只验证不因**机构守卫**而 403；具体审方结论另有用例覆盖。"""
+    # stranger_op 是经办，审方要药师角色——这里只要确认不是 403(机构名义) 即可，
+    # 405/403(角色)/404 都说明没被机构守卫拦。用一个不存在的处方号即可探针。
+    r = client.post("/api/prescriptions/999999/review",
+                    json={"approved": True, "comment": "x"}, headers=stranger_op)
+    assert not (r.status_code == 403 and "机构名义" in r.text), \
+        "集中审方被机构守卫拦住了——那会关掉 lead 审 member 处方的功能"
+
+
 def test_以本机构名义写入照常(client, world, stranger, stranger_op):
     """守卫不能把正常录入挡掉。丙村卫生室的经办给自己建职工必须成功。"""
     r = client.post(
@@ -357,6 +409,64 @@ def test_以本机构名义写入照常(client, world, stranger, stranger_op):
 
 
 # ================================================================ 覆盖率矩阵
+
+
+# 按 id 写、却按业务设计就要跨机构的接口——**豁免，写明理由**。
+# 集中审方与远程会诊是医共体最核心的两个协同：lead 药师审 member 处方、
+# lead 专家答 member 咨询。给它们加机构写守卫会把功能关掉。
+BYID_CROSS_ORG_OK = {
+    "prescriptions.py:review_prescription",
+    "prescriptions.py:comment_prescription",
+    "telemedicine.py:reply",
+    "telemedicine.py:close",
+}
+
+
+def _byid_org_write_endpoints():
+    """按 id 直取带 org_id 主对象的写接口。"""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app import models
+    direct = {
+        c.__name__ for c in models.Base.registry._class_registry.values()
+        if hasattr(c, "__tablename__") and "org_id" in c.__table__.columns
+    }
+    guards = {"assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
+              "assert_patient_visible", "scope_org_list", "scope_patient_list",
+              "log_patient_access"}
+    unguarded = set()
+    for name in sorted(os.listdir(ROUTER_DIR)):
+        if not name.endswith(".py") or name == "portal.py":
+            continue
+        tree = ast.parse(open(os.path.join(ROUTER_DIR, name), encoding="utf-8").read())
+        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            decs = [ast.unparse(d) for d in fn.decorator_list]
+            if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
+                continue
+            if not any("{" in d for d in decs):
+                continue
+            u = ast.unparse(fn)
+            if any(g in u for g in guards):
+                continue
+            if any(f"db.get({m}," in u for m in direct):
+                unguarded.add(f"{name}:{fn.name}")
+    return unguarded
+
+
+def test_按id写接口机构归属欠账不许变长():
+    """第八轮那条 11% 的扫描教会的：缺口必须显式、可量化、只减不增。
+
+    实测过的洞：乙院经办按 id 领走甲院 5 台 CT。补上机构写守卫后，
+    只剩 4 个按业务设计跨机构的接口（集中审方 2 + 远程会诊 2），逐条写明理由。
+    """
+    unguarded = _byid_org_write_endpoints()
+    unexpected = unguarded - BYID_CROSS_ORG_OK
+    assert unexpected == set(), (
+        "以下按 id 写接口能操作别家机构记录，且不属于已声明的跨机构协同：\n  "
+        + "\n  ".join(sorted(unexpected))
+    )
+    stale = BYID_CROSS_ORG_OK - unguarded
+    assert stale == set(), f"这些豁免接口已加了守卫或不存在，应从清单删除：{sorted(stale)}"
 
 
 def _patient_scoped_endpoints() -> dict[str, list[str]]:

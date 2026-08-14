@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_if_absent
-from ..visibility import assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
+from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -114,6 +114,7 @@ def approve_purchase(
     purchase = db.get(MaterialPurchase, purchase_id)
     if purchase is None:
         raise HTTPException(status_code=404, detail="采购申请不存在")
+    assert_obj_org_writable(db, user, purchase)
     if purchase.status != "requested":
         raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可审批")
     if purchase.requested_by == user.id:
@@ -133,10 +134,11 @@ class ContractIn(BaseModel):
 @router.post(
     "/purchases/{purchase_id}/contract", dependencies=[Depends(require_roles("operator", "director"))]
 )
-def sign_contract(purchase_id: int, body: ContractIn, db: Session = Depends(get_db)):
+def sign_contract(purchase_id: int, body: ContractIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     purchase = db.get(MaterialPurchase, purchase_id)
     if purchase is None:
         raise HTTPException(status_code=404, detail="采购申请不存在")
+    assert_obj_org_writable(db, user, purchase)
     if purchase.status != "approved":
         raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可签合同")
     supplier = db.get(Supplier, body.supplier_id)
@@ -168,6 +170,7 @@ def receive_purchase(
     purchase = db.get(MaterialPurchase, purchase_id)
     if purchase is None:
         raise HTTPException(status_code=404, detail="采购申请不存在")
+    assert_obj_org_writable(db, user, purchase)
     if purchase.status != "contracted":
         raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可验收")
     if body.received_quantity > purchase.quantity:
@@ -272,11 +275,17 @@ class UseIn(BaseModel):
 
 
 @router.post("/consumables/{barcode}/use", dependencies=[Depends(require_roles("doctor", "operator"))])
-def use_consumable(barcode: str, body: UseIn, db: Session = Depends(get_db)):
+def use_consumable(
+    barcode: str,
+    body: UseIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """使用登记：绑定患者与手术，构成召回时可查的追溯链。"""
     item = db.query(HighValueConsumable).filter(HighValueConsumable.barcode == barcode).first()
     if item is None:
         raise HTTPException(status_code=404, detail="耗材条码不存在")
+    assert_obj_org_writable(db, user, item)
     if item.status != "in_stock":
         raise HTTPException(status_code=409, detail=f"当前状态 {item.status} 不可使用")
     if db.get(Patient, body.patient_id) is None:

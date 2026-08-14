@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import today
-from ..visibility import assert_org_writable, scope_org_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..notify import notify_patient
@@ -166,6 +166,7 @@ def approve_request(
     request = db.get(SurgeryRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="手术申请不存在")
+    assert_obj_org_writable(db, user, request)
     if request.status != "requested":
         raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可审批")
     if request.created_by == user.id:
@@ -208,6 +209,7 @@ def schedule_surgery(
     request = db.get(SurgeryRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="手术申请不存在")
+    assert_obj_org_writable(db, user, request)
     if request.status != "approved":
         raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可排班")
     room = db.get(OperatingRoom, body.room_id)
@@ -333,6 +335,7 @@ def create_record(
     request = db.get(SurgeryRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="手术申请不存在")
+    assert_obj_org_writable(db, user, request)
     if request.status != "scheduled":
         raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可填写术中记录")
     record = SurgeryRecord(

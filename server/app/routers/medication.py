@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable, assert_patient_visible
+from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..clock import now_naive
@@ -101,10 +101,11 @@ def list_shortages(status: str | None = None, db: Session = Depends(get_db)):
     response_model=ShortageOut,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # H2: 短缺流转
 )
-def advance_shortage(shortage_id: int, db: Session = Depends(get_db)):
+def advance_shortage(shortage_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     shortage = db.get(DrugShortage, shortage_id)
     if shortage is None:
         raise HTTPException(status_code=404, detail="缺药登记不存在")
+    assert_obj_org_writable(db, user, shortage)
     next_status = _SHORTAGE_FLOW.get(shortage.status)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {shortage.status} 已是终态")
@@ -119,7 +120,7 @@ def advance_shortage(shortage_id: int, db: Session = Depends(get_db)):
     response_model=ShortageOut,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],
 )
-def close_shortage(shortage_id: int, body: ShortageClose, db: Session = Depends(get_db)):
+def close_shortage(shortage_id: int, body: ShortageClose, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """使用管理（指引⑮"使用管理"）：药到了，取没取。
 
     取消可以在任何阶段发生（患者转院、药源已解决）；取药与未取药只能在
@@ -128,6 +129,7 @@ def close_shortage(shortage_id: int, body: ShortageClose, db: Session = Depends(
     shortage = db.get(DrugShortage, shortage_id)
     if shortage is None:
         raise HTTPException(status_code=404, detail="缺药登记不存在")
+    assert_obj_org_writable(db, user, shortage)
     if shortage.status in _SHORTAGE_CLOSED:
         raise HTTPException(status_code=409, detail=f"该登记已结案（{shortage.status}）")
     if body.result in ("collected", "no_show") and shortage.status != "delivered":

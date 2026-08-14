@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import assert_org_writable, scope_org_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -193,11 +193,12 @@ def list_cssd_requests(status: str | None = None, db: Session = Depends(get_db))
     "/cssd/requests/{request_id}/fulfill",
     dependencies=[Depends(require_roles("operator"))],  # H2: 申领响应=经办
 )
-def fulfill_cssd_request(request_id: int, batch_id: int, db: Session = Depends(get_db)):
+def fulfill_cssd_request(request_id: int, batch_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """中心以已灭菌批次响应申领。"""
     r = db.get(CssdRequest, request_id)
     if r is None:
         raise HTTPException(status_code=404, detail="申领不存在")
+    assert_obj_org_writable(db, user, r)
     if r.status != "requested":
         raise HTTPException(status_code=409, detail="申领已处理")
     batch = db.get(SterilizationBatch, batch_id)

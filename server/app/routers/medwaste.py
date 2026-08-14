@@ -21,8 +21,8 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import insert_with_retry
-from ..visibility import assert_org_writable, scope_org_list
 from ..database import get_db
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import Employee, MedicalWaste, Organization, User, WasteLocation
 from ..schemas import WasteCreate, WasteHandover
@@ -92,21 +92,28 @@ def list_locations(
 
 
 @router.delete("/locations/{location_id}", dependencies=[Depends(require_roles("operator", "director"))])
-def deactivate_location(location_id: int, db: Session = Depends(get_db)):
+def deactivate_location(
+    location_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """停用点位（不删行）。科室撤并很常见，但历史医废的来源必须永远查得到。"""
     loc = db.get(WasteLocation, location_id)
     if loc is None:
         raise HTTPException(status_code=404, detail="点位不存在")
+    # 实测乙院经办据此停用了甲院的暂存间
+    assert_obj_org_writable(db, user, loc)
     loc.active = False
     db.commit()
     return {"id": location_id, "active": False}
 
 
 @router.post("/locations/{location_id}/reactivate", dependencies=[Depends(require_roles("operator", "director"))])
-def reactivate_location(location_id: int, db: Session = Depends(get_db)):
+def reactivate_location(
+    location_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     loc = db.get(WasteLocation, location_id)
     if loc is None:
         raise HTTPException(status_code=404, detail="点位不存在")
+    assert_obj_org_writable(db, user, loc)
     loc.active = True
     db.commit()
     return {"id": location_id, "active": True}
@@ -205,12 +212,18 @@ class WasteStore(BaseModel):
 
 
 @router.post("/{waste_id}/store", dependencies=[Depends(require_roles("operator"))])
-def store(waste_id: int, body: WasteStore, db: Session = Depends(get_db)):
+def store(
+    waste_id: int,
+    body: WasteStore,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """入暂存间。原先 `stored` 这个状态在表里定义了却没有接口能走到它，
     收集之后只能直接交接——暂存环节整段是空的。"""
     waste = db.get(MedicalWaste, waste_id)
     if waste is None:
         raise HTTPException(status_code=404, detail="医废记录不存在")
+    assert_obj_org_writable(db, user, waste)
     if waste.status != "collected":
         raise HTTPException(status_code=409, detail=f"当前状态 {waste.status} 不可入暂存")
     loc = db.get(WasteLocation, body.storage_location_id)
@@ -234,10 +247,17 @@ class WasteHandoverIn(WasteHandover):
     "/{waste_id}/handover",
     dependencies=[Depends(require_roles("operator"))],  # H2: 医废交接=经办
 )
-def handover(waste_id: int, body: WasteHandoverIn, db: Session = Depends(get_db)):
+def handover(
+    waste_id: int,
+    body: WasteHandoverIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     waste = db.get(MedicalWaste, waste_id)
     if waste is None:
         raise HTTPException(status_code=404, detail="医废记录不存在")
+    # 实测乙院经办据此交接了甲院的医废
+    assert_obj_org_writable(db, user, waste)
     if waste.status == "handed_over":
         raise HTTPException(status_code=409, detail="该批医废已交接")
     if body.handler_employee_id is not None:

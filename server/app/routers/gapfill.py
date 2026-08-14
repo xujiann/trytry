@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..datetypes import DateStr
 from ..clock import now_naive
 from ..concurrency import add_amount, insert_or_conflict, upsert_unique
-from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import (
@@ -204,11 +204,12 @@ def expiring_batches(days: int = 30, today: str | None = None, db: Session = Dep
     "/preparation-batches/{batch_id}/release",
     dependencies=[Depends(require_roles("pharmacist", "operator"))],
 )
-def release_batch(batch_id: int, today: str | None = None, db: Session = Depends(get_db)):
+def release_batch(batch_id: int, today: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """批次发放：过期批次禁止发放（效期管控）。"""
     batch = db.get(TcmPreparationBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="批次不存在")
+    assert_obj_org_writable(db, user, batch)
     if batch.status != "produced":
         raise HTTPException(status_code=409, detail=f"批次当前状态 {batch.status} 不可发放")
     business_date = resolve_business_date(today).isoformat()
@@ -496,6 +497,7 @@ def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depend
     plan = db.get(TrainingPlan, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="实训计划不存在")
+    assert_obj_org_writable(db, user, plan)
     if plan.status != "open":
         raise HTTPException(status_code=409, detail=f"计划当前状态 {plan.status} 不接受报名")
     existing = (
@@ -583,8 +585,11 @@ def create_assessment(
     user: User = Depends(get_current_user),
 ):
     """实训考核录入：须已报名，60 分及格，同一计划同一学员唯一（重录更新成绩）。"""
-    if db.get(TrainingPlan, plan_id) is None:
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
         raise HTTPException(status_code=404, detail="实训计划不存在")
+    # 考核由办实训的机构录入（plan.org_id 是主办方）
+    assert_obj_org_writable(db, user, plan)
     enrolled = (
         db.query(TrainingEnrollment)
         .filter(
@@ -846,11 +851,12 @@ class TaskProgress(BaseModel):
     "/improvements/{task_id}/progress",
     dependencies=[Depends(require_roles("director", "operator"))],
 )
-def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db)):
+def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """整改进展：登记措施；complete=true 时提交完成确认。"""
     task = db.get(ImprovementTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="整改任务不存在")
+    assert_obj_org_writable(db, user, task)
     if task.status == "verified":
         raise HTTPException(status_code=409, detail="任务已确认关闭")
     if body.measures:
@@ -886,6 +892,7 @@ def verify_task(
     task = db.get(ImprovementTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="整改任务不存在")
+    assert_obj_org_writable(db, user, task)
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="仅已提交完成的任务可确认")
     task.verify_comment = body.comment
@@ -1042,11 +1049,12 @@ class VisitDispatch(BaseModel):
 @home_router.post(
     "/{order_id}/dispatch", dependencies=[Depends(require_roles("operator", "doctor"))]
 )
-def dispatch_visit(order_id: int, body: VisitDispatch, db: Session = Depends(get_db)):
+def dispatch_visit(order_id: int, body: VisitDispatch, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """派单：指派上门人员（仅待派单工单可派）。"""
     order = db.get(HomeVisitOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="上门工单不存在")
+    assert_obj_org_writable(db, user, order)
     if order.status != "applied":
         raise HTTPException(status_code=409, detail=f"工单当前状态 {order.status} 不可派单")
     order.status = "dispatched"
@@ -1064,11 +1072,12 @@ class VisitComplete(BaseModel):
 @home_router.post(
     "/{order_id}/complete", dependencies=[Depends(require_roles("operator", "doctor", "public_health"))]
 )
-def complete_visit(order_id: int, body: VisitComplete, db: Session = Depends(get_db)):
+def complete_visit(order_id: int, body: VisitComplete, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """完成上门服务：登记服务记录（仅已派单工单可完成）。"""
     order = db.get(HomeVisitOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="上门工单不存在")
+    assert_obj_org_writable(db, user, order)
     if order.status != "dispatched":
         raise HTTPException(status_code=409, detail=f"工单当前状态 {order.status} 不可完成")
     order.status = "completed"
@@ -1082,10 +1091,11 @@ def complete_visit(order_id: int, body: VisitComplete, db: Session = Depends(get
 @home_router.post(
     "/{order_id}/cancel", dependencies=[Depends(require_roles("operator", "doctor"))]
 )
-def cancel_visit(order_id: int, db: Session = Depends(get_db)):
+def cancel_visit(order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     order = db.get(HomeVisitOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="上门工单不存在")
+    assert_obj_org_writable(db, user, order)
     if order.status == "completed":
         raise HTTPException(status_code=409, detail="已完成工单不可取消")
     order.status = "cancelled"
