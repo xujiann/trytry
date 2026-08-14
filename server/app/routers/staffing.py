@@ -97,7 +97,7 @@ def _out(row: Secondment, emp: Employee | None, names: dict, today: date) -> dic
 @router.post("/secondments", status_code=201,
              dependencies=[Depends(require_roles("director", "operator"))])
 def create_secondment(body: SecondmentIn, db: Session = Depends(get_db)):
-    """建立派驻记录。同一员工同一去向不得有两条未结束的记录——人不能同时在两处在派。"""
+    """建立派驻记录。同一员工不得有两条未结束的派驻记录——人不能同时在两处在派。"""
     employee = db.get(Employee, body.employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
