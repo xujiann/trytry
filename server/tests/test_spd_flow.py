@@ -425,6 +425,7 @@ def test_task_completion_advances_path(client, h, base):
 
 
 def test_evidence_required_blocks_completion(client, h, base):
+    """佐证收紧为真实附件：任意字符串糊弄不过去，别的任务的附件也不行。"""
     patient = base["patients"][3]
     task = client.post(
         "/api/spd/tasks",
@@ -436,11 +437,40 @@ def test_evidence_required_blocks_completion(client, h, base):
         f"/api/spd/tasks/{task['id']}/complete", json={"result": {}}, headers=h
     )
     assert resp.status_code == 422
-    ok = client.post(
+
+    fake = client.post(
         f"/api/spd/tasks/{task['id']}/complete",
         json={"result": {}, "evidence": ["/uploads/a.jpg"]}, headers=h,
     )
-    assert ok.status_code == 200
+    assert fake.status_code == 422, "自由字符串不再能过 require_evidence"
+
+    upload = client.post(
+        "/api/attachments",
+        files={"file": ("bp.png", b"\x89PNG-fake-bytes", "image/png")},
+        data={"owner_type": "spd_task", "owner_id": str(task["id"])},
+        headers=h,
+    )
+    assert upload.status_code == 201, upload.text
+    attachment_id = upload.json()["id"]
+
+    other = client.post(
+        "/api/spd/tasks",
+        json={"patient_id": patient["id"], "title": "别的任务",
+              "task_type": "report", "require_evidence": True},
+        headers=h,
+    ).json()
+    stolen = client.post(
+        f"/api/spd/tasks/{other['id']}/complete",
+        json={"result": {}, "evidence": [attachment_id]}, headers=h,
+    )
+    assert stolen.status_code == 422, "别的任务的附件不能拿来当自己的佐证"
+
+    ok = client.post(
+        f"/api/spd/tasks/{task['id']}/complete",
+        json={"result": {}, "evidence": [attachment_id]}, headers=h,
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["evidence_urls"][0]["url"] == f"/api/attachments/{attachment_id}"
 
 
 def test_task_claim_conflict_and_batch(client, h, base):

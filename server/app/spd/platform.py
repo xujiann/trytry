@@ -21,7 +21,9 @@
 | 主数据 | `Patient` / `Organization` / `User` | 患者归属、三级机构树、责任人 |
 | 诊疗数据 | `Encounter` / `Admission` | 纳入规则取诊断、随访方案取出院信息 |
 | 居民端 | `ResidentAccount` / `current_resident` / `accessible_patient` | 患者移动端身份与"能看谁的档案" |
-| 消息 | `Notification` / `broadcast` | 任务催办的定向投递、扫描结果的实时广播 |
+| 消息 | `Notification` / `broadcast` / `notify_resident` / `send_sms` | 定向投递、实时广播、居民触达、短信通道 |
+| 附件 | `Attachment` / `store_attachment` / `register_attachment_owner` | 任务佐证材料走平台附件服务（白名单/限额/去重同一份） |
+| 公卫数据 | `FollowUp`（慢病随访） | publichealth 采集器的数据源 |
 | 列类型 | `Money` / `utcnow` | 与平台其余表同一套金额与时间口径 |
 
 清单之外的平台模块（处方、医保、库存……）**不在依赖范围内**。确有需要时，
@@ -32,7 +34,9 @@ from sqlalchemy.orm import Session
 # ruff: noqa: F401  —— 本模块的职责就是再导出，未被本文件使用是正常的
 from ..models import (
     Admission,
+    Attachment,
     Encounter,
+    FollowUp,
     Money,
     Notification,
     Organization,
@@ -41,7 +45,11 @@ from ..models import (
     User,
     utcnow,
 )
+from ..notify import notify_patient as _notify_patient
+from ..routers.attachments import register_owner as _register_attachment_owner
+from ..routers.attachments import store_upload as _store_upload
 from ..routers.portal import accessible_patient, current_resident
+from ..sms import get_sms_provider as _get_sms_provider
 from ..ws import manager as _ws_manager
 
 #: 子系统对平台的依赖清单，供边界用例与架构文档共同引用（改这里即改约束）。
@@ -116,3 +124,90 @@ def broadcast(kind: str, title: str, count: int) -> None:
     """
     if count:
         _ws_manager.broadcast({"type": kind, "title": title, "count": count})
+
+
+def send_sms(phone: str, content: str) -> bool:
+    """经平台短信通道外发；成功返回 True。通道实现不抛异常，失败一律 False。"""
+    if not phone:
+        return False
+    return _get_sms_provider().send(phone, content)
+
+
+def notify_resident(
+    db: Session, patient_id: int, *, category: str, title: str, body: str,
+    link_type: str = "", link_id: int = 0,
+) -> int:
+    """给患者绑定的居民账户投递站内消息；返回收件人数（0=尚无人绑定该档案）。"""
+    return _notify_patient(
+        db, patient_id, category=category, title=title, body=body,
+        link_type=link_type, link_id=link_id,
+    )
+
+
+def register_attachment_owner(owner_type: str, model: type, roles: tuple[str, ...]) -> None:
+    """把子系统的业务对象登记为附件挂接域（装载时调用一次）。"""
+    _register_attachment_owner(owner_type, model, roles)
+
+
+def store_attachment(
+    db: Session, *, data: bytes, filename: str, content_type: str,
+    owner_type: str, owner_id: int, uploaded_by: int | None,
+) -> Attachment:
+    """存一份附件（校验白名单/限额/去重与平台上传完全同一份代码）。不 commit。"""
+    return _store_upload(
+        db, data=data, filename=filename, content_type=content_type,
+        owner_type=owner_type, owner_id=owner_id, uploaded_by=uploaded_by,
+    )
+
+
+def valid_task_evidence(db: Session, task_id: int, evidence: list) -> list[str]:
+    """校验佐证清单里的每一项都是挂在该任务上的真实附件，返回问题列表（空=通过）。
+
+    佐证从"任意字符串"收紧为附件 id：`require_evidence` 是节点配置里勾选过的
+    硬要求，能用随便一串字符糊弄过去，配置就形同虚设。
+    """
+    problems: list[str] = []
+    for item in evidence or []:
+        try:
+            attachment_id = int(item)
+        except (TypeError, ValueError):
+            problems.append(f"佐证「{item}」不是附件编号")
+            continue
+        attachment = db.get(Attachment, attachment_id)
+        if attachment is None:
+            problems.append(f"附件 #{attachment_id} 不存在")
+        elif attachment.owner_type != "spd_task" or attachment.owner_id != task_id:
+            problems.append(f"附件 #{attachment_id} 不属于该任务")
+    return problems
+
+
+def evidence_urls(evidence: list) -> list[dict]:
+    """佐证附件的下载地址（登录鉴权后可取）。"""
+    out = []
+    for item in evidence or []:
+        try:
+            attachment_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        out.append({"attachment_id": attachment_id,
+                    "url": f"/api/attachments/{attachment_id}"})
+    return out
+
+
+def iter_recent_chronic_followups(db: Session, since, limit: int = 500):
+    """公卫慢病随访记录（含 patient_id），供 publichealth 采集器同步体征。
+
+    联表在这里做——FollowUp 挂在 chronic_patients 下，没有 patient_id 列，
+    这是平台数据的形状，不该让采集器知道。
+    """
+    from ..models import ChronicPatient
+
+    rows = (
+        db.query(FollowUp, ChronicPatient.patient_id)
+        .join(ChronicPatient, ChronicPatient.id == FollowUp.chronic_id)
+        .filter(FollowUp.created_at >= since)
+        .order_by(FollowUp.id)
+        .limit(limit)
+        .all()
+    )
+    return rows

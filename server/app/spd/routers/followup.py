@@ -33,6 +33,7 @@ from ..models import (
     SpdRevisit,
     SpdTask,
 )
+from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
@@ -364,8 +365,16 @@ def list_followup_records(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """随访看板：全院 / 科室 / 个人三个口径由参数组合而成，不做三个接口。"""
+    """随访看板：全院 / 科室 / 个人三个口径由参数组合而成，不做三个接口。
+
+    `overdue=true` 按 status 过滤（进接口先跑一次超期扫描）——与督办、考核同一口径。
+    """
     business_day = resolve_business_date(today)
+    if overdue:
+        from ..service import sweep_overdue
+
+        sweep_overdue(db, business_day)
+        db.commit()
     query = db.query(SpdFollowupRecord)
     if patient_id is not None:
         assert_patient_visible(db, user, patient_id, resource="spd_followup")
@@ -390,10 +399,7 @@ def list_followup_records(
     if date_to:
         query = query.filter(SpdFollowupRecord.planned_at <= date_to)
     if overdue:
-        query = query.filter(
-            SpdFollowupRecord.status == "planned",
-            SpdFollowupRecord.planned_at < business_day.isoformat(),
-        )
+        query = query.filter(SpdFollowupRecord.status == "overdue")
     rows = paginate(query.order_by(SpdFollowupRecord.planned_at), response, offset, limit)
     names = {
         p.id: p.name
@@ -602,9 +608,14 @@ def followup_stats(
     )
     total = sum(by_status.values())
     done = by_status.get("done", 0)
+    # planned 且已过期的算上（扫描间隙里的）+ 已标 overdue 的，两者都是超期
     overdue = query.filter(
-        SpdFollowupRecord.status == "planned",
-        SpdFollowupRecord.planned_at < business_day.isoformat(),
+        (SpdFollowupRecord.status == "overdue")
+        | (
+            (SpdFollowupRecord.status == "planned")
+            & (SpdFollowupRecord.planned_at != "")
+            & (SpdFollowupRecord.planned_at < business_day.isoformat())
+        )
     ).count()
     by_abnormal = dict(
         query.filter(SpdFollowupRecord.status == "done")
@@ -665,8 +676,18 @@ def create_call_task(
         ref_id=body.ref_id, operator_id=user.id, status="pending",
     )
     db.add(task)
+    db.flush()
+    # 经呼叫通道派发（manual=等人工外呼，http=推给呼叫中心）。
+    # 派发失败不报错：任务留在 pending、结果里记原因——通道抖一下
+    # 不该让"发起随访"这个动作失败。
+    from ..callcenter import get_call_provider
+
+    accepted, note = get_call_provider().dispatch(task.id, phone, body.ref_type)
+    if not accepted:
+        task.result = note
     db.commit()
-    return {"id": task.id, "phone": task.phone, "status": task.status}
+    return {"id": task.id, "phone": task.phone, "status": task.status,
+            "dispatch": {"accepted": accepted, "note": note}}
 
 
 class CallResultIn(BaseModel):
@@ -696,7 +717,7 @@ def record_call_result(
         record = db.get(SpdFollowupRecord, task.ref_id)
         if record is not None:
             assert_org_writable(db, user, record.org_id)
-        if record is not None and record.status == "planned":
+        if record is not None and record.status in ("planned", "overdue"):
             record.result = (record.result + " " + body.result).strip()[:500]
             record.evidence = (record.evidence or []) + (
                 [body.record_url] if body.record_url else []
@@ -978,9 +999,9 @@ def generate_report(
 ):
     """按模板生成一份报告实例（智能辅助端 #1/#3）。
 
-    段落内容由 `_compose_section` 从本平台各业务表实时聚合——报告不是另存一份
-    统计结果，而是**同一批数字的另一种排版**。两套口径各算各的，是这类
-    "日报周报"功能最典型的失败方式。
+    段落内容经 `spd/reporting.py` 的注册表从本平台各业务表实时聚合——报告不是
+    另存一份统计结果，而是**同一批数字的另一种排版**；指标段落（key=indicator）
+    直接复用考核指标库的取数与公式，从结构上保证报表与考核同源。
     """
     task = db.get(SpdReportTask, body.task_id) if body.task_id is not None else None
     if body.task_id is not None and task is None:
@@ -994,11 +1015,11 @@ def generate_report(
         raise HTTPException(status_code=404, detail="报告模板不存在")
 
     org_id = body.org_id if body.org_id is not None else user.org_id
-    period_label = body.period_label or _default_period_label(template.period)
+    period_label = body.period_label or default_period_label(template.period)
     content = {
         "period_label": period_label,
         "sections": [
-            _compose_section(db, section, org_id, template.period, user)
+            compose_section(db, section, org_id, template.period)
             for section in template.sections or []
         ],
     }
@@ -1016,111 +1037,6 @@ def generate_report(
         "id": instance.id, "title": instance.title, "period_label": period_label,
         "content": content,
     }
-
-
-def _default_period_label(period: str) -> str:
-    today = date.today()
-    if period == "weekly":
-        return f"{today.isocalendar().year}年第{today.isocalendar().week}周"
-    if period == "monthly":
-        return today.strftime("%Y年%m月")
-    return today.isoformat()
-
-
-def _compose_section(
-    db: Session, section: dict, org_id: int | None, period: str, user: User
-) -> dict:
-    """把一个模板段落渲染成文本/表格/图表数据。
-
-    段落 `key` 决定取什么数——五个内置 key（summary/todo/alert/workload/quality/score/trend）
-    覆盖了预置模板的全部段落；自定义 key 返回空数据并注明未实现，
-    而不是让整份报告生成失败。
-    """
-    key = section.get("key", "")
-    title = section.get("title", key)
-    kind = section.get("type", "text")
-
-    task_query = db.query(SpdTask)
-    if org_id is not None:
-        task_query = task_query.filter(SpdTask.org_id == org_id)
-
-    if key == "summary":
-        enroll_query = db.query(SpdEnrollment).filter(SpdEnrollment.status == "active")
-        if org_id is not None:
-            enroll_query = enroll_query.filter(SpdEnrollment.org_id == org_id)
-        open_tasks = task_query.filter(
-            SpdTask.status.in_(["pending", "claimed", "doing", "submitted", "overdue"])
-        ).count()
-        overdue = task_query.filter(SpdTask.status == "overdue").count()
-        return {
-            "key": key, "title": title, "type": "text",
-            "text": (
-                f"在管患者 {enroll_query.count()} 人，"
-                f"待办任务 {open_tasks} 条，其中超期 {overdue} 条。"
-            ),
-            "metrics": {
-                "enrolled": enroll_query.count(), "open_tasks": open_tasks,
-                "overdue": overdue,
-            },
-        }
-    if key == "todo":
-        rows = (
-            task_query.filter(SpdTask.status.in_(["pending", "claimed", "doing"]))
-            .order_by(SpdTask.due_date).limit(20).all()
-        )
-        return {
-            "key": key, "title": title, "type": "table",
-            "columns": ["任务", "类型", "截止", "优先级"],
-            "rows": [[r.title, r.task_type, r.due_date, r.priority] for r in rows],
-        }
-    if key == "alert":
-        rows = task_query.filter(SpdTask.status == "overdue").limit(20).all()
-        return {
-            "key": key, "title": title, "type": "table",
-            "columns": ["超期任务", "类型", "截止日期"],
-            "rows": [[r.title, r.task_type, r.due_date] for r in rows],
-        }
-    if key == "workload":
-        rows = (
-            task_query.filter(SpdTask.status == "done")
-            .with_entities(SpdTask.task_type, func.count(SpdTask.id))
-            .group_by(SpdTask.task_type).all()
-        )
-        return {
-            "key": key, "title": title, "type": "table",
-            "columns": ["任务类型", "完成数"], "rows": [[t, c] for t, c in rows],
-        }
-    if key in ("quality", "trend"):
-        since = date.today() - timedelta(days=30)
-        rows = (
-            db.query(SpdFollowupRecord)
-            .filter(SpdFollowupRecord.planned_at >= since.isoformat())
-            .all()
-        )
-        buckets: dict[str, dict] = {}
-        for row in rows:
-            entry = buckets.setdefault(row.planned_at[:7], {"total": 0, "done": 0})
-            entry["total"] += 1
-            if row.status == "done":
-                entry["done"] += 1
-        return {
-            "key": key, "title": title, "type": "chart",
-            "series": [
-                {"label": label, "total": v["total"], "done": v["done"],
-                 "rate": round(v["done"] / v["total"] * 100, 1) if v["total"] else 0.0}
-                for label, v in sorted(buckets.items())
-            ],
-        }
-    if key == "score":
-        from ..models import SpdScore
-
-        rows = db.query(SpdScore).order_by(SpdScore.id.desc()).limit(20).all()
-        return {
-            "key": key, "title": title, "type": "table",
-            "columns": ["对象", "周期", "得分", "排名"],
-            "rows": [[r.object_name, r.period, r.total_score, r.rank] for r in rows],
-        }
-    return {"key": key, "title": title, "type": kind, "note": "该段落未配置取数口径"}
 
 
 @router.get("/report-instances")

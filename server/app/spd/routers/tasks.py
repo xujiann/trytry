@@ -20,7 +20,7 @@ from ...concurrency import add_amount
 from ...database import get_db
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, resolve_business_date
-from ..platform import Patient, User, notify_user
+from ..platform import Patient, User, evidence_urls, notify_user, valid_task_evidence
 from ..models import (
     SpdEnrollment,
     SpdPathInstance,
@@ -221,7 +221,10 @@ def adjust_path_instance(
 
 @router.post("/path-instances/{instance_id}/advance",
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def advance_instance(instance_id: int, db: Session = Depends(get_db)):
+def advance_instance(
+    instance_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """手工推进到下一节点。
 
     正常流转由任务完成时自动触发（见 `complete_task`），这个接口是给
@@ -230,6 +233,42 @@ def advance_instance(instance_id: int, db: Session = Depends(get_db)):
     instance = db.get(SpdPathInstance, instance_id)
     if instance is None:
         raise HTTPException(status_code=404, detail="路径实例不存在")
+    # 实例本身不带机构，归属看它服务的纳管档案——别家机构不能替人推进路径
+    owner = db.get(SpdEnrollment, instance.enrollment_id)
+    assert_org_writable(db, user, owner.org_id if owner else None)
+    if instance.status == "paused":
+        # 因进入条件暂停的实例：重判当前节点条件，满足即恢复并派任务
+        node = (
+            db.query(SpdPathNode)
+            .filter(
+                SpdPathNode.template_id == instance.template_id,
+                SpdPathNode.key == instance.current_node_key,
+            )
+            .first()
+        )
+        if node is None:
+            raise HTTPException(status_code=409, detail="暂停节点已不存在，请调整路径实例")
+        allowed, matched = node_enter_allowed(db, instance, node)
+        if not allowed:
+            raise HTTPException(
+                status_code=409,
+                detail=f"进入「{node.name}」的条件仍未满足，无法恢复",
+            )
+        enrollment = owner
+        template = db.get(SpdPathTemplate, instance.template_id)
+        instance.status = "running"
+        if node.stage and enrollment is not None:
+            enrollment.stage = node.stage
+        if enrollment is not None:
+            spawn_task(
+                db, patient_id=enrollment.patient_id,
+                title=f"{template.name if template else '路径'}·{node.name}",
+                task_type="path", enrollment=enrollment, instance=instance,
+                node=node, due_days=node.due_days, source="path",
+            )
+        db.commit()
+        return {"instance": _instance_out(db, instance), "status": "running",
+                "resumed": True, "matched": matched}
     if instance.status != "running":
         raise HTTPException(status_code=409, detail="路径不在执行中")
     open_tasks = (
@@ -290,6 +329,7 @@ def _task_out(t: SpdTask, brief: dict | None = None) -> dict:
         "due_date": t.due_date, "form_code": t.form_code,
         "require_evidence": t.require_evidence, "form": t.form or {},
         "result": t.result or {}, "evidence": t.evidence or [],
+        "evidence_urls": evidence_urls(t.evidence),
         "urged_count": t.urged_count, "escalated": t.escalated,
         "review_note": t.review_note, "source": t.source,
         "created_at": t.created_at.isoformat(),
@@ -537,7 +577,8 @@ def escalate_task(task_id: int, db: Session = Depends(get_db)):
 
 class SubmitIn(BaseModel):
     result: dict = Field(default_factory=dict)
-    evidence: list[str] = Field(default_factory=list)
+    # 附件 id 列表。曾是自由字符串——那能让 require_evidence 被一串乱码糊弄过去
+    evidence: list[int | str] = Field(default_factory=list)
     draft: bool = False
     note: str = Field(default="", max_length=512)
 
@@ -557,6 +598,9 @@ def submit_task(
         raise HTTPException(status_code=409, detail="该任务已结束")
     task.result = body.result
     if body.evidence:
+        problems = valid_task_evidence(db, task.id, body.evidence)
+        if problems:
+            raise HTTPException(status_code=422, detail="；".join(problems))
         task.evidence = body.evidence
     if body.draft:
         task.status = "doing"
@@ -607,6 +651,9 @@ def complete_task(
     if body.result:
         task.result = body.result
     if body.evidence:
+        problems = valid_task_evidence(db, task.id, body.evidence)
+        if problems:
+            raise HTTPException(status_code=422, detail="；".join(problems))
         task.evidence = body.evidence
     if task.require_evidence and not (task.evidence or []):
         raise HTTPException(status_code=422, detail="该任务要求上传佐证材料后才能办结")

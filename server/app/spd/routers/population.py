@@ -786,7 +786,16 @@ def lifecycle_event(
 def confirm_migration(
     event_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """目标机构确认迁入：原档案置为迁出并终止任务，责任关系转到目标机构。"""
+    """目标机构确认迁入：原档案置迁出并终止任务，**并在目标机构重建责任关系**。
+
+    P1-2 之前只完成了"断"（原机构停管），没完成招标个案管理师端 #11 要求的
+    "由目标机构确认后重新建立责任关系"——患者在两家机构之间消失。
+    现在确认即在目标机构建新档案：同病种、继承风险等级与建档信息、
+    `migrated_from_id` 指回原档案。
+
+    **不迁历史任务与随访**：那些是原机构的工作留痕，迁走会让原机构的考核
+    凭空少一截；新机构的服务从确认那天重新开始计。
+    """
     event = db.get(SpdLifecycleEvent, event_id)
     if event is None or event.event != "migrate":
         raise HTTPException(status_code=404, detail="迁出事件不存在")
@@ -800,8 +809,41 @@ def confirm_migration(
     event.confirmed_by = user.id
     enrollment.status = "migrated"
     closed = close_open_work(db, enrollment, "迁出至其他机构")
+
+    # 目标机构重建档案。唯一性是**部分唯一索引**（仅 status='active'）：
+    # 原档案已置 migrated，不占键；若目标机构已有同病种在管档案则撞索引，
+    # 走"不重复建、只接关系"分支。
+    incoming = SpdEnrollment(
+        patient_id=enrollment.patient_id, program_code=enrollment.program_code,
+        org_id=event.target_org_id, risk_level=enrollment.risk_level,
+        stage=enrollment.stage, status="active", source="migrate",
+        migrated_from_id=enrollment.id, sign_date=date.today().isoformat(),
+        consent_signed=enrollment.consent_signed, consent_no=enrollment.consent_no,
+        habits=enrollment.habits, risk_factors=enrollment.risk_factors,
+        complications=enrollment.complications, tags=enrollment.tags,
+        archived=enrollment.archived,
+    )
+    if not insert_if_absent(db, incoming):
+        # 目标机构已有同病种在管档案（比如患者早已在那边建档）：
+        # 不重复建，只把关系接上
+        incoming = (
+            db.query(SpdEnrollment)
+            .filter(
+                SpdEnrollment.patient_id == enrollment.patient_id,
+                SpdEnrollment.program_code == enrollment.program_code,
+                SpdEnrollment.status == "active",
+                SpdEnrollment.id != enrollment.id,
+            )
+            .first()
+        )
+        if incoming is not None and incoming.migrated_from_id is None:
+            incoming.migrated_from_id = enrollment.id
     db.commit()
-    return {"enrollment": _enroll_out(enrollment), "closed": closed}
+    return {
+        "enrollment": _enroll_out(enrollment),
+        "incoming_enrollment": _enroll_out(incoming) if incoming is not None else None,
+        "closed": closed,
+    }
 
 
 @router.get("/lifecycle-events")

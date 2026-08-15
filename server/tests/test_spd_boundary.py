@@ -34,6 +34,8 @@ PLATFORM_ALLOWLIST = {
     "events",        # 领域事件总线（子系统订阅平台事件）
     "scheduler",     # 定时任务注册（任务体在子系统内）
     "ws",            # 仅 platform.py 可用（实时广播）
+    "sms",           # 仅 platform.py 可用（宣教外发走平台短信通道）
+    "notify",        # 仅 platform.py 可用（居民站内触达）
     "models",        # 仅 platform.py 可用，见下面单独一条
     "routers",       # 仅 platform.py 可用（居民端令牌依赖）
     "spd",           # 子系统内部

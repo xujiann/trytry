@@ -46,15 +46,16 @@ SERVICE_ROLES = ("doctor", "public_health", "director")
 
 
 def _enrollment_of(db: Session, patient_id: int, program_code: str) -> SpdEnrollment | None:
+    """取该患者该病种的档案，**在管的优先**（迁移后同病种可能有历史档案）。"""
     if not program_code:
         return None
+    query = db.query(SpdEnrollment).filter(
+        SpdEnrollment.patient_id == patient_id,
+        SpdEnrollment.program_code == program_code,
+    )
     return (
-        db.query(SpdEnrollment)
-        .filter(
-            SpdEnrollment.patient_id == patient_id,
-            SpdEnrollment.program_code == program_code,
-        )
-        .first()
+        query.filter(SpdEnrollment.status == "active").first()
+        or query.order_by(SpdEnrollment.id.desc()).first()
     )
 
 
@@ -607,24 +608,65 @@ class EduPushIn(BaseModel):
 def push_education(
     body: EduPushIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """向纳管患者推送宣教内容，可设置发送时间与频率（成员端 #7）。"""
+    """向纳管患者推送宣教内容，可设置发送时间与频率（成员端 #7）。
+
+    立即推送（`send_at` 留空）当场走通道：sms 经平台短信通道、app 落居民收件箱；
+    定时推送落 pending，由定时任务 `spd_edu_push_dispatch` 到点派发。
+    **发送失败置 failed 并记原因，不静默置 sent**——已读率的分母只该算真发出去的。
+    """
     material = db.get(SpdEduMaterial, body.material_id)
     if material is None or not material.active:
         raise HTTPException(status_code=404, detail="宣教素材不存在或已停用")
-    created = 0
+    created, sent, failed = 0, 0, 0
     for patient_id in dict.fromkeys(body.patient_ids):
-        db.add(
-            SpdEduPush(
-                material_id=body.material_id, patient_id=patient_id, channel=body.channel,
-                send_at=body.send_at or now_naive().strftime("%Y-%m-%d %H:%M:%S"),
-                frequency=body.frequency,
-                status="pending" if body.send_at else "sent",
-                operator_id=user.id,
-            )
+        push = SpdEduPush(
+            material_id=body.material_id, patient_id=patient_id, channel=body.channel,
+            send_at=body.send_at or now_naive().strftime("%Y-%m-%d %H:%M:%S"),
+            frequency=body.frequency, status="pending", operator_id=user.id,
         )
+        db.add(push)
+        db.flush()
         created += 1
+        if not body.send_at:  # 立即推送
+            ok = dispatch_edu_push(db, push, material)
+            sent += 1 if ok else 0
+            failed += 0 if ok else 1
     db.commit()
-    return {"pushed": created, "material": material.title}
+    return {"pushed": created, "sent": sent, "failed": failed, "material": material.title}
+
+
+def dispatch_edu_push(db: Session, push: SpdEduPush, material: SpdEduMaterial) -> bool:
+    """按渠道把一条宣教真的送出去；更新状态并返回是否成功。
+
+    - sms：平台短信通道（无手机号 → failed，记原因）
+    - app：居民端站内消息（尚无人绑定档案 → failed——推给不存在的收件箱不算送达）
+    - wechat：通道未接入，failed 并写明；接入后在这里补实现
+
+    供"立即推送"与定时派发两处调用——同一个动作只有一份实现。
+    """
+    from ..platform import notify_resident, patient_of, send_sms
+
+    if push.channel == "sms":
+        patient = patient_of(db, push.patient_id)
+        phone = patient.phone if patient else ""
+        if not phone:
+            push.status = "failed"
+            push.frequency = push.frequency  # 保持
+            return False
+        content = f"【健康宣教】{material.title}：{(material.content or '')[:60]}"
+        ok = send_sms(phone, content)
+        push.status = "sent" if ok else "failed"
+        return ok
+    if push.channel == "app":
+        delivered = notify_resident(
+            db, push.patient_id, category="spd_edu", title=f"健康宣教：{material.title}",
+            body=(material.content or "")[:200], link_type="spd_edu_push", link_id=push.id,
+        )
+        push.status = "sent" if delivered else "failed"
+        return bool(delivered)
+    # wechat：通道未接入。置 failed 而不是假装 sent——公众号打通后在此补实现
+    push.status = "failed"
+    return False
 
 
 @router.get("/edu-pushes")
@@ -740,10 +782,15 @@ def list_revisits(
 ):
     """复诊日历看板（个案管理师端 #9、医生移动端 #12）。
 
-    `overdue=true` 取"计划日期已过且仍是 planned"的——逾期未复诊人员清单，
-    这批人正是要电话/微信邀约的对象。
+    `overdue=true` 现在按 **status** 过滤（进接口先跑一次超期扫描）：
+    P0-2 之前逾期是查询现算的，督办按现算、考核按 status，两套口径对不上。
     """
     business_day = resolve_business_date(today)
+    if overdue:
+        from ..service import sweep_overdue
+
+        sweep_overdue(db, business_day)
+        db.commit()
     query = db.query(SpdRevisit)
     if patient_id is not None:
         assert_patient_visible(db, user, patient_id, resource="spd_revisit")
@@ -759,10 +806,7 @@ def list_revisits(
     if date_to:
         query = query.filter(SpdRevisit.plan_date <= date_to)
     if overdue:
-        query = query.filter(
-            SpdRevisit.status == "planned",
-            SpdRevisit.plan_date < business_day.isoformat(),
-        )
+        query = query.filter(SpdRevisit.status == "overdue")
     rows = paginate(query.order_by(SpdRevisit.plan_date), response, offset, limit)
     names = {
         p.id: p.name

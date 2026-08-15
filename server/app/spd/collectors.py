@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from .models import SpdDataSource, SpdMeasurement, SpdSyncLog
-from .platform import Encounter
+from .platform import Encounter, iter_recent_chronic_followups
 from .service import judge_measurement
 
 logger = logging.getLogger("medplat.spd.collectors")
@@ -61,9 +61,56 @@ def collect_internal(db: Session, source: SpdDataSource) -> int:
     return query.count()
 
 
+def collect_publichealth(db: Session, source: SpdDataSource) -> int:
+    """公卫慢病随访 → 慢专病监测数据（P1-1 第一个真实采集器）。
+
+    平台的公卫随访（`followups` 表）里有结构化的血压/血糖，慢专病按指标存
+    （`metric` + `value` + 等级）。这是**同库内的口径转换**：
+
+    - 等级按**采集当时**的管理目标固化（`judge_measurement`），不是显示时现算；
+    - `source_ref = chronic_fu:{id}:{metric}` 兼作幂等键——重复同步不产生重复行；
+    - 病种编码按数值指标推断（血压→hypertension、血糖→diabetes）：等级判定
+      需要病种上下文，公卫随访没带病种时按指标语义取最常见的目标口径。
+
+    回溯窗口取 `freq_minutes × 4`：比同步周期宽一倍以上，一次漏跑补得回来，
+    幂等键保证补跑不重复。
+    """
+    since = now_naive() - timedelta(minutes=max(source.freq_minutes, 1) * 4)
+    rows = iter_recent_chronic_followups(db, since)
+    existing = {
+        ref for (ref,) in db.query(SpdMeasurement.source_ref)
+        .filter(SpdMeasurement.source_ref != "").all()
+    }
+    written = 0
+    for followup, patient_id in rows:
+        for metric, value, unit, program in (
+            ("bp_sys", followup.sbp, "mmHg", "hypertension"),
+            ("bp_dia", followup.dbp, "mmHg", "hypertension"),
+            ("glucose_fasting", followup.glucose, "mmol/L", "diabetes"),
+        ):
+            if value is None:
+                continue
+            ref = f"chronic_fu:{followup.id}:{metric}"
+            if ref in existing:
+                continue
+            level = judge_measurement(db, program, "", metric, value)
+            db.add(
+                SpdMeasurement(
+                    patient_id=patient_id, program_code=program, metric=metric,
+                    value=float(value), unit=unit, level=level,
+                    source="publichealth", source_ref=ref,
+                    measured_at=followup.created_at,
+                )
+            )
+            existing.add(ref)
+            written += 1
+    return written
+
+
 COLLECTORS: dict[str, Collector] = {
     "HIS": collect_internal,
     "EMR": collect_internal,
+    "publichealth": collect_publichealth,
 }
 
 

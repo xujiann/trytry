@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     # 出院事件自动生成随访计划。开着是安全的：只有配了诊断关键词的随访方案
     # 才会命中，没配关键词的方案不匹配任何人。
     spd_auto_followup_on_discharge: bool = True
+    # 呼叫通道：manual=人工外呼（默认，建任务后由人打电话再回填结果），
+    # http=对接呼叫中心网关（结果与录音由网关回调 result 接口）
+    spd_call_provider: str = "manual"
+    spd_call_gateway_url: str = ""
 
     @property
     def is_production(self) -> bool:

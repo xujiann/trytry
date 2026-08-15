@@ -200,6 +200,7 @@ def test_task_submit_goes_to_review_not_done(client, ph, h, base):
 
 
 def test_task_requiring_evidence_blocks_submit(client, ph, h, base):
+    """居民经自己的上传通道传凭证；上传与校验走平台附件同一份实现。"""
     task = client.post(
         "/api/spd/tasks",
         json={"patient_id": base["me"]["id"], "title": "上传检查报告",
@@ -210,11 +211,27 @@ def test_task_requiring_evidence_blocks_submit(client, ph, h, base):
         f"/api/portal/spd/tasks/{task['id']}/submit", json={"result": {}}, headers=ph
     )
     assert resp.status_code == 422
+
+    bad_type = client.post(
+        f"/api/portal/spd/tasks/{task['id']}/attachments",
+        files={"file": ("report.exe", b"MZ...", "application/octet-stream")},
+        headers=ph,
+    )
+    assert bad_type.status_code == 415, "白名单与平台上传是同一份"
+
+    upload = client.post(
+        f"/api/portal/spd/tasks/{task['id']}/attachments",
+        files={"file": ("report.jpg", b"\xff\xd8fake-jpeg", "image/jpeg")},
+        headers=ph,
+    )
+    assert upload.status_code == 201, upload.text
+    attachment_id = upload.json()["attachment_id"]
     ok = client.post(
         f"/api/portal/spd/tasks/{task['id']}/submit",
-        json={"result": {}, "evidence": ["/uploads/report.jpg"]}, headers=ph,
+        json={"result": {}, "evidence": [attachment_id]}, headers=ph,
     )
-    assert ok.status_code == 200
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "submitted"
 
 
 def test_journey_and_referral_visible(client, ph, h, base):

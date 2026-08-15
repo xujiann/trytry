@@ -41,7 +41,15 @@ from ..models import (
 )
 from ..rules import score_scale
 from ..service import judge_measurement
-from ..platform import accessible_patient, current_resident
+from fastapi import File, Form, UploadFile
+
+from ..platform import (
+    accessible_patient,
+    current_resident,
+    evidence_urls,
+    store_attachment,
+    valid_task_evidence,
+)
 
 router = APIRouter(prefix="/api/portal/spd", tags=["慢专病·患者移动端"])
 
@@ -490,7 +498,8 @@ def journey(
 class TaskSubmitIn(BaseModel):
     patient_id: int | None = None
     result: dict = Field(default_factory=dict)
-    evidence: list[str] = Field(default_factory=list)
+    # 附件 id 列表（经 POST /api/portal/spd/tasks/{id}/attachments 上传后获得）
+    evidence: list[int | str] = Field(default_factory=list)
 
 
 @router.get("/tasks")
@@ -533,17 +542,52 @@ def submit_task(
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
-    if task.require_evidence and not body.evidence:
+    if body.evidence:
+        problems = valid_task_evidence(db, task.id, body.evidence)
+        if problems:
+            raise HTTPException(status_code=422, detail="；".join(problems))
+        task.evidence = body.evidence
+    if task.require_evidence and not (task.evidence or []):
         raise HTTPException(status_code=422, detail="该任务需要上传照片或报告等凭证")
     task.result = body.result
-    if body.evidence:
-        task.evidence = body.evidence
     task.status = "submitted"
     db.commit()
     return {"id": task.id, "status": task.status}
 
 
 # ============================================================ 随访 / 干预 / 宣教 / 复诊
+
+
+@router.post("/tasks/{task_id}/attachments", status_code=201)
+async def upload_task_evidence(
+    task_id: int,
+    file: UploadFile = File(...),
+    patient_id: int | None = Form(default=None),
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """居民为自己的任务上传佐证材料（患者端 #15 的"上传照片或报告等凭证"）。
+
+    平台附件路由只认业务令牌，居民走不进去，所以这里开一条居民通道——
+    但存储、白名单、限额与去重经 `platform.store_attachment` 复用**同一份**实现，
+    只有鉴权（居民令牌 + 本人任务）是这里自己的。`uploaded_by` 记 NULL：
+    居民不在 users 表内，伪造一个工作人员 id 会在 PG 上撞外键、在审计上撒谎。
+    """
+    patient = _patient(db, account, patient_id)
+    task = db.get(SpdTask, task_id)
+    if task is None or task.patient_id != patient.id:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status in ("done", "cancelled"):
+        raise HTTPException(status_code=409, detail="该任务已结束")
+    data = await file.read(10 * 1024 * 1024 + 1)
+    attachment = store_attachment(
+        db, data=data, filename=file.filename or "unnamed",
+        content_type=file.content_type or "", owner_type="spd_task",
+        owner_id=task.id, uploaded_by=None,
+    )
+    db.commit()
+    return {"attachment_id": attachment.id, "filename": attachment.filename,
+            "size": attachment.size}
 
 
 @router.get("/followups")
@@ -589,7 +633,8 @@ def self_answer_followup(
     record = db.get(SpdFollowupRecord, record_id)
     if record is None or record.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="随访任务不存在")
-    if record.status != "planned":
+    if record.status not in ("planned", "overdue"):
+        # 超期的更该让居民补答，只挡已完成/已移除/失访
         raise HTTPException(status_code=409, detail="该随访已结束")
     record.answers = body.answers
     record.channel = "self"

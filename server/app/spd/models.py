@@ -39,6 +39,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -503,7 +504,15 @@ class SpdEnrollment(Base):
 
     __tablename__ = "spd_enrollments"
     __table_args__ = (
-        UniqueConstraint("patient_id", "program_code", name="uq_spd_enroll_patient_program"),
+        # 部分唯一索引："同病种只有一条**在管**档案"。全量唯一是错的语义——
+        # 迁出/排除后的患者要能重新纳管（P1-2 跨机构迁入、召回后再签约都撞它）。
+        Index(
+            "uq_spd_enroll_active_patient_program",
+            "patient_id", "program_code",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
         Index("ix_spd_enroll_org_status", "org_id", "status"),
     )
 
@@ -522,6 +531,9 @@ class SpdEnrollment(Base):
     # lost=脱管, recalled=召回中, completed=结案
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     source: Mapped[str] = mapped_column(String(16), default="screening")
+    # 跨机构迁入时指向原机构的档案（P1-2）：迁移只建关系不搬历史，
+    # 原机构的任务/随访留痕与考核数字保持原样
+    migrated_from_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sign_date: Mapped[str] = mapped_column(String(10), default="")
     consent_signed: Mapped[bool] = mapped_column(Boolean, default=False)
     consent_no: Mapped[str] = mapped_column(String(64), default="")
@@ -738,8 +750,10 @@ class SpdMeasurement(Base):
     unit: Mapped[str] = mapped_column(String(16), default="")
     # normal=正常, high=偏高, low=偏低
     level: Mapped[str] = mapped_column(String(16), default="normal", index=True)
-    # manual=手工, device=设备, his=院内系统, poct=POCT
+    # manual=手工, device=设备, his=院内系统, poct=POCT, publichealth=公卫随访同步
     source: Mapped[str] = mapped_column(String(16), default="manual")
+    # 采集器同步的溯源键（如 chronic_fu:123），兼作幂等判重——重复同步不产生重复行
+    source_ref: Mapped[str] = mapped_column(String(64), default="", index=True)
     device_sn: Mapped[str] = mapped_column(String(64), default="")
     measured_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)

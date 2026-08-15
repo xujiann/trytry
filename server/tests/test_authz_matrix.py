@@ -60,6 +60,8 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/portal/spd/screenings"),
     ("POST", "/api/portal/spd/service-applies"),
     ("POST", "/api/portal/spd/tasks/{task_id}/submit"),
+    # 佐证照片上传：portal 令牌 + accessible_patient + 任务归属校验（见 portal.py）
+    ("POST", "/api/portal/spd/tasks/{task_id}/attachments"),
     ("POST", "/api/portal/spd/followups/{record_id}/self-answer"),
     ("POST", "/api/portal/spd/interventions/{intervention_id}/feedback"),
     ("POST", "/api/portal/spd/edu/{push_id}/read"),

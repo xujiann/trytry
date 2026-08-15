@@ -41,3 +41,118 @@ def spd_task_overdue_scan(db: Session) -> tuple[int, str]:
     result = sweep_overdue(db)
     broadcast("spd_task_overdue", "慢专病任务超期", result["overdue"])
     return result["overdue"], f"超期 {result['overdue']} 条，其中升级 {result['escalated']} 条"
+
+
+@register("spd_report_push", "慢专病报告推送", 300)
+def spd_report_push(db: Session) -> tuple[int, str]:
+    """按推送任务的频率与时点生成报告并投递订阅人（P0-1）。
+
+    幂等口径：同一任务同一 `period_label`（含机构后缀）只生成一次——
+    调度五分钟醒一次，一天要醒近三百次，靠"这次生成过了没有"判重，
+    不靠"现在是不是正好那一分钟"。
+    """
+    from datetime import date as _date
+
+    from ..clock import now_naive
+    from .models import SpdReportInstance, SpdReportTask, SpdReportTemplate
+    from .platform import notify_user
+    from .reporting import compose_section, default_period_label
+
+    now = now_naive()
+    today = _date.today().isoformat()
+    generated = 0
+    tasks = (
+        db.query(SpdReportTask)
+        .filter(SpdReportTask.status == "active")
+        .order_by(SpdReportTask.priority, SpdReportTask.id)
+        .all()
+    )
+    for task in tasks:
+        if task.valid_from and today < task.valid_from:
+            continue
+        if task.valid_to and today > task.valid_to:
+            continue
+        push_time = task.push_time or "08:00"
+        if now.strftime("%H:%M") < push_time:
+            continue  # 今天还没到推送时点
+        template = db.get(SpdReportTemplate, task.template_id)
+        if template is None or not template.active:
+            continue
+        period_label = default_period_label(template.period)
+        # 每个绑定机构一份；没绑机构就出一份全域的
+        org_ids = task.org_ids or [None]
+        for org_id in org_ids:
+            label = period_label if org_id is None else f"{period_label}·机构{org_id}"
+            exists = (
+                db.query(SpdReportInstance.id)
+                .filter(
+                    SpdReportInstance.task_id == task.id,
+                    SpdReportInstance.period_label == label,
+                )
+                .first()
+            )
+            if exists is not None:
+                continue
+            content = {
+                "period_label": period_label,
+                "sections": [
+                    compose_section(db, section, org_id, template.period)
+                    for section in template.sections or []
+                ],
+            }
+            instance = SpdReportInstance(
+                task_id=task.id, template_code=template.code,
+                title=f"{template.name}（{period_label}）", period_label=label,
+                scope_level=template.scope_level, org_id=org_id, content=content,
+                subscriber_ids=task.subscriber_ids or [],
+            )
+            db.add(instance)
+            db.flush()
+            for user_id in task.subscriber_ids or []:
+                notify_user(
+                    db, user_id, category="spd_report",
+                    title=f"报告已生成：{instance.title}",
+                    body="可在「智能辅助报告端」查看",
+                    link_type="spd_report_instance", link_id=instance.id,
+                )
+            generated += 1
+        task.last_run_at = now
+    return generated, f"生成报告 {generated} 份" if generated else "没有到期的推送任务"
+
+
+@register("spd_edu_push_dispatch", "慢专病宣教定时派发", 300)
+def spd_edu_push_dispatch(db: Session) -> tuple[int, str]:
+    """把到点的 pending 宣教推送真的发出去（P0-4 的定时部分）。
+
+    与立即推送共用 `dispatch_edu_push`——同一个动作只有一份实现，
+    失败置 failed 并可回溯，不静默置 sent。
+    """
+    from ..clock import now_naive
+    from .models import SpdEduMaterial, SpdEduPush
+    from .routers.care import dispatch_edu_push
+
+    cutoff = now_naive().strftime("%Y-%m-%d %H:%M:%S")
+    due = (
+        db.query(SpdEduPush)
+        .filter(SpdEduPush.status == "pending", SpdEduPush.send_at <= cutoff)
+        .limit(500)
+        .all()
+    )
+    sent = failed = 0
+    materials = {
+        m.id: m
+        for m in db.query(SpdEduMaterial)
+        .filter(SpdEduMaterial.id.in_({p.material_id for p in due} or {0}))
+        .all()
+    }
+    for push in due:
+        material = materials.get(push.material_id)
+        if material is None:
+            push.status = "failed"
+            failed += 1
+            continue
+        if dispatch_edu_push(db, push, material):
+            sent += 1
+        else:
+            failed += 1
+    return len(due), f"派发 {sent} 条，失败 {failed} 条" if due else "没有到点的推送"

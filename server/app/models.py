@@ -2054,7 +2054,8 @@ class Attachment(Base):
     # 业务域：exam_report=检查报告附件, adverse_event=不良事件附件
     owner_type: Mapped[str] = mapped_column(String(32), index=True)
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
-    uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # 可空：居民端上传（慢专病任务佐证）没有工作人员账号，记 NULL 而不是伪造一个
+    uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

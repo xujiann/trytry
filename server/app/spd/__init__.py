@@ -50,9 +50,16 @@ def register_spd(app: FastAPI) -> int:
     from . import jobs as _jobs  # noqa: F401 - 导入即完成定时任务注册
     from .subscribers import register_subscribers
 
+    from .models import SpdTask
+    from .platform import register_attachment_owner
+
     modules = (config, population, tasks, care, referral, assess, followup, workbench, portal)
     for module in modules:
         app.include_router(module.router)
+    # 任务佐证材料挂接平台附件服务（注册制：平台不 import 子系统，方向不反转）
+    register_attachment_owner(
+        "spd_task", SpdTask, ("doctor", "public_health", "director", "operator")
+    )
     # 订阅平台领域事件（出院、就诊）与注册定时任务。和路由一起装卸：
     # 子系统关掉就不再听、也不再跑，否则会出现"菜单里没有这个功能，
     # 但出院时它还在写数据"。

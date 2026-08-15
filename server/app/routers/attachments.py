@@ -33,6 +33,59 @@ _OWNERS: dict[str, tuple[type, tuple[str, ...]]] = {
 }
 
 
+def register_owner(owner_type: str, model: type, roles: tuple[str, ...]) -> None:
+    """子系统在装载时登记自己的附件业务域。
+
+    做成注册制而不是在这里 import 子系统模型：附件服务是平台能力，
+    平台反过来 import 子系统会把依赖方向做反（tests/test_spd_boundary.py 会拦）。
+    重复注册以后到者为准——装卸开关反复开关时不该越积越多。
+    """
+    _OWNERS[owner_type] = (model, roles)
+
+
+def store_upload(
+    db: Session,
+    *,
+    data: bytes,
+    filename: str,
+    content_type: str,
+    owner_type: str,
+    owner_id: int,
+    uploaded_by: int | None,
+) -> Attachment:
+    """校验（大小/类型/非空）并持久化一份附件，返回元数据行。**不 commit**。
+
+    `uploaded_by=None` 表示居民端上传（居民不在 users 表内）。
+
+    抽出来给居民端上传通道复用：居民令牌进不了本路由（router 级 get_current_user
+    只认业务令牌），但存储与校验必须是同一份——两套白名单迟早一宽一严。
+    """
+    normalized = (content_type or "").split(";")[0].strip().lower()
+    if normalized not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=415, detail="附件类型不在白名单（仅支持图片 png/jpeg/gif/webp 与 PDF）"
+        )
+    if len(data) > MAX_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="附件超过 10MB 大小限制")
+    if not data:
+        raise HTTPException(status_code=422, detail="附件内容为空")
+    sha256 = hashlib.sha256(data).hexdigest()
+    path = _stored_path(sha256)
+    if not path.exists():
+        path.write_bytes(data)
+    attachment = Attachment(
+        filename=filename or "unnamed",
+        content_type=normalized,
+        size=len(data),
+        sha256=sha256,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        uploaded_by=uploaded_by,
+    )
+    db.add(attachment)
+    return attachment
+
+
 def _upload_root() -> Path:
     root = Path(settings.upload_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -75,30 +128,16 @@ async def upload_attachment(
         raise HTTPException(status_code=403, detail="当前角色不可为该业务对象上传附件")
     if db.get(owner_model, owner_id) is None:
         raise HTTPException(status_code=404, detail="挂接的业务对象不存在")
-    content_type = (file.content_type or "").split(";")[0].strip().lower()
-    if content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=415, detail="附件类型不在白名单（仅支持图片 png/jpeg/gif/webp 与 PDF）"
-        )
     data = await file.read(MAX_SIZE_BYTES + 1)
-    if len(data) > MAX_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail="附件超过 10MB 大小限制")
-    if not data:
-        raise HTTPException(status_code=422, detail="附件内容为空")
-    sha256 = hashlib.sha256(data).hexdigest()
-    path = _stored_path(sha256)
-    if not path.exists():
-        path.write_bytes(data)
-    attachment = Attachment(
+    attachment = store_upload(
+        db,
+        data=data,
         filename=file.filename or "unnamed",
-        content_type=content_type,
-        size=len(data),
-        sha256=sha256,
+        content_type=file.content_type or "",
         owner_type=owner_type,
         owner_id=owner_id,
         uploaded_by=user.id,
     )
-    db.add(attachment)
     db.commit()
     return _out(attachment)
 

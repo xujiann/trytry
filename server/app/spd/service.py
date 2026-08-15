@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import add_amount
-from .platform import diagnosis_codes, diagnosis_names, patient_of
+from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of
 from .models import (
     SpdEnrollment,
     SpdIntervention,
@@ -259,20 +259,40 @@ def advance_path(db: Session, instance: SpdPathInstance) -> dict:
     instance.current_stage = nxt.stage
     enrollment = db.get(SpdEnrollment, instance.enrollment_id)
     template = db.get(SpdPathTemplate, instance.template_id)
-    if enrollment is not None:
-        if nxt.stage:
-            enrollment.stage = nxt.stage
-        spawn_task(
-            db,
-            patient_id=enrollment.patient_id,
-            title=f"{template.name if template else '路径'}·{nxt.name}",
-            task_type="path",
-            enrollment=enrollment,
-            instance=instance,
-            node=nxt,
-            due_days=nxt.due_days,
-            source="path",
-        )
+    if enrollment is None:
+        return {"status": instance.status, "current_node_key": nxt.key, "next_node": nxt.name}
+
+    # P1-4：进入条件在**自动流转**时也生效。此前只有显式端点会校验，
+    # 条件配了却拦不住自动派单，配置形同虚设。
+    # 不满足时**暂停并通知**，不静默跳过——静默跳过的表现是
+    # "路径停在那里且没人知道为什么"。
+    allowed, _matched = node_enter_allowed(db, instance, nxt)
+    if not allowed:
+        instance.status = "paused"
+        if enrollment.doctor_user_id is not None:
+            notify_user(
+                db, enrollment.doctor_user_id, category="spd_path",
+                title="专病路径已暂停",
+                body=f"患者路径进入「{nxt.name}」的条件未满足，已暂停；"
+                     "条件满足后可在路径页手工推进恢复",
+                link_type="spd_path_instance", link_id=instance.id,
+            )
+        return {"status": "paused", "current_node_key": nxt.key,
+                "next_node": nxt.name, "paused_reason": "进入条件未满足"}
+
+    if nxt.stage:
+        enrollment.stage = nxt.stage
+    spawn_task(
+        db,
+        patient_id=enrollment.patient_id,
+        title=f"{template.name if template else '路径'}·{nxt.name}",
+        task_type="path",
+        enrollment=enrollment,
+        instance=instance,
+        node=nxt,
+        due_days=nxt.due_days,
+        source="path",
+    )
     return {"status": instance.status, "current_node_key": nxt.key, "next_node": nxt.name}
 
 
@@ -412,11 +432,18 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
 
 
 def sweep_overdue(db: Session, today: date | None = None) -> dict:
-    """把到期未办的任务置为超期，并按节点的 `timeout_action` 决定是否升级。
+    """三类超期一次扫：任务、复诊、随访。到期未办的置为 overdue。
 
     做成一个函数供定时任务与"进页面时刷新"两处调用：
     只靠定时任务，演示环境没开调度就永远看不到超期；
     只靠进页面刷新，没人进页面的机构就永远不超期。
+
+    P0-2 之前只扫任务——复诊与随访的"逾期"是各查询现场用日期比出来的，
+    督办清单按现算、考核取数按 status，两边数字对不上，而考核数字要进绩效。
+    现在三类都落 status，查询一律按 status 过滤，口径只剩一个。
+
+    随访的 `unreachable`（失访）**不会**被覆盖成 overdue：失访是执行过但没联系上，
+    完成率的分母含它、分子不含；标成超期等于把"打过电话"抹掉了。
     """
     today = today or date.today()
     cutoff = today.isoformat()
@@ -448,4 +475,35 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
             task.escalated = True
             task.priority = max(task.priority, 2)
             escalated += 1
-    return {"overdue": len(pending), "escalated": escalated}
+
+    # 复诊：plan_date 已过且仍是 planned → overdue，并写日志（谁标的、何时标的）
+    from .models import SpdFollowupRecord
+
+    overdue_revisits = (
+        db.query(SpdRevisit)
+        .filter(SpdRevisit.status == "planned", SpdRevisit.plan_date != "",
+                SpdRevisit.plan_date < cutoff)
+        .all()
+    )
+    for revisit in overdue_revisits:
+        revisit.status = "overdue"
+        revisit.log = (revisit.log or []) + [
+            {"at": cutoff, "note": "超期扫描：计划日期已过，置为逾期"}
+        ]
+
+    # 随访：只动 planned；unreachable / removed / done 一律不碰
+    overdue_followups = (
+        db.query(SpdFollowupRecord)
+        .filter(SpdFollowupRecord.status == "planned", SpdFollowupRecord.planned_at != "",
+                SpdFollowupRecord.planned_at < cutoff)
+        .all()
+    )
+    for record in overdue_followups:
+        record.status = "overdue"
+
+    return {
+        "overdue": len(pending),
+        "escalated": escalated,
+        "revisits": len(overdue_revisits),
+        "followups": len(overdue_followups),
+    }
