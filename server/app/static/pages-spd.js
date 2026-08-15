@@ -59,6 +59,104 @@ function spdProgramOptions(catalog, blank) {
 }
 
 /* ============================================================
+ * 共用交互组件（P2-2）：模态表单 + 规则编辑器。
+ * build-free 约束不变——纯 DOM，无任何组件库。
+ * ==========================================================*/
+
+/* prompt() 的替代：Promise 化的浮层表单，一次拿齐多个字段。
+ * fields: [{name, label, type: text|number|textarea|select, options, value, placeholder, required}]
+ * 确定 resolve(值对象)；取消 / Esc / 点遮罩 resolve(null)——调用方判 null 直接返回，
+ * 与 prompt 返回 null 的习惯一致，改造调用点时不用改控制流。 */
+function spdModal(title, fields) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,32,39,.45);"
+      + "display:flex;align-items:center;justify-content:center;z-index:1000";
+    const control = (f) => {
+      const val = f.value != null ? String(f.value) : "";
+      if (f.type === "select") {
+        return `<select name="${esc(f.name)}">${(f.options || []).map((o) =>
+          `<option value="${esc(o.value)}"${String(o.value) === val ? " selected" : ""}>${esc(o.label)}</option>`
+        ).join("")}</select>`;
+      }
+      if (f.type === "textarea") {
+        return `<textarea name="${esc(f.name)}" rows="3" style="width:100%"
+          placeholder="${esc(f.placeholder || "")}">${esc(val)}</textarea>`;
+      }
+      return `<input name="${esc(f.name)}" type="${f.type === "number" ? "number" : "text"}"
+        value="${esc(val)}" placeholder="${esc(f.placeholder || "")}"${f.required ? " required" : ""}>`;
+    };
+    overlay.innerHTML = `<form class="panel" style="min-width:320px;max-width:440px;margin:0">
+      <h3>${esc(title)}</h3>
+      ${fields.map((f) => `<label style="display:block;margin:8px 0;font-size:13px">
+        ${esc(f.label)}<br>${control(f)}</label>`).join("")}
+      <div style="margin-top:12px;text-align:right">
+        <button type="button" class="btn secondary" data-cancel>取消</button>
+        <button type="submit" class="btn">确定</button></div></form>`;
+    const onKey = (e) => { if (e.key === "Escape") done(null); };
+    const done = (value) => {
+      overlay.remove(); document.removeEventListener("keydown", onKey); resolve(value);
+    };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) done(null); });
+    overlay.querySelector("[data-cancel]").onclick = () => done(null);
+    overlay.querySelector("form").onsubmit = (e) => {
+      e.preventDefault();
+      const out = {};
+      fields.forEach((f) => {
+        const raw = (e.target[f.name].value || "").trim();
+        out[f.name] = f.type === "number" ? Number(raw || 0) : raw;
+      });
+      done(out);
+    };
+    document.body.appendChild(overlay);
+    const first = overlay.querySelector("input,select,textarea");
+    if (first) first.focus();
+  });
+}
+
+/* 规则编辑器：字段与比较符来自 GET /api/spd/meta——前端不自维护字段表，
+ * 后端扩了采集项这里自动能选，不会出现"前端能选、后端不认"。
+ * 用在四处：病种纳入/排除规则、转诊触发规则、患者分组 auto_rule、问卷异常规则。 */
+let SPD_META = null;
+async function spdMeta() {
+  if (!SPD_META) SPD_META = await api("/api/spd/meta");
+  return SPD_META;
+}
+
+function spdRuleEditor(el, meta, initial) {
+  const rowHtml = (r = {}) => `<div class="spd-rule-row" style="display:flex;gap:6px;margin:4px 0;flex-wrap:wrap">
+    <select class="rule-field">${meta.fields.map((f) =>
+      `<option value="${esc(f.key)}"${f.key === r.field ? " selected" : ""}>${esc(f.name)}</option>`).join("")}</select>
+    <select class="rule-op">${meta.operators.map((o) =>
+      `<option value="${esc(o.key)}"${o.key === r.op ? " selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
+    <input class="rule-value" style="width:170px" placeholder="值（介于/属于用逗号分隔）"
+      value="${esc(Array.isArray(r.value) ? r.value.join(",") : (r.value ?? ""))}">
+    <button type="button" class="btn secondary rule-del">删</button></div>`;
+  el.innerHTML = `<div class="spd-rule-rows">${(initial || []).map((r) => rowHtml(r)).join("")}</div>
+    <button type="button" class="btn secondary rule-add">+ 添加条件</button>`;
+  el.addEventListener("click", (e) => {
+    if (e.target.classList.contains("rule-add"))
+      el.querySelector(".spd-rule-rows").insertAdjacentHTML("beforeend", rowHtml());
+    if (e.target.classList.contains("rule-del")) e.target.closest(".spd-rule-row").remove();
+  });
+  return {
+    value: () => [...el.querySelectorAll(".spd-rule-row")].map((row) => {
+      const field = row.querySelector(".rule-field").value;
+      const op = row.querySelector(".rule-op").value;
+      const raw = row.querySelector(".rule-value").value.trim();
+      let value;
+      if (op === "between") value = raw.split(/[,，]/).map(Number);
+      else if (op === "in" || op === "not_in")
+        value = raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+      else if (op === "exists") value = raw !== "false" && raw !== "否";
+      else value = raw !== "" && !Number.isNaN(Number(raw)) ? Number(raw) : raw;
+      return { field, op, value };
+    }),
+  };
+}
+
+/* ============================================================
  * 1. 平台管理端（运行中枢）
  * ==========================================================*/
 
@@ -113,7 +211,14 @@ async function renderSpdAdmin() {
         <select name="category"><option value="chronic">慢病</option><option value="specialty">专病</option></select>
         <input name="lead_dept" placeholder="牵头科室">
         <button>新建病种</button>
-      </form><p class="msg" id="spd-program-msg"></p>
+      </form>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+        <div style="flex:1;min-width:280px"><p class="desc">纳入规则（全部满足才入目标池）</p>
+          <div id="spd-include-rules"></div></div>
+        <div style="flex:1;min-width:280px"><p class="desc">排除规则（任一满足即排除，优先于纳入）</p>
+          <div id="spd-exclude-rules"></div></div>
+      </div>
+      <p class="msg" id="spd-program-msg"></p>
       ${table(["编码", "名称", "口径", "版本", "阶段数", "纳入规则", "状态"],
         catalog.programs, (p) =>
         `<tr><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
@@ -135,9 +240,16 @@ async function renderSpdAdmin() {
          <td>${s.status === "running" ? '<span class="tag green">正常</span>'
             : s.status === "delayed" ? '<span class="tag orange">延迟</span>'
             : '<span class="tag red">异常</span>'}</td></tr>`)}</div>`;
+  const meta = await spdMeta();
+  const includeEditor = spdRuleEditor($("#spd-include-rules"), meta, []);
+  const excludeEditor = spdRuleEditor($("#spd-exclude-rules"), meta, []);
   $("#spd-program-form").onsubmit = (e) => {
     e.preventDefault();
-    return postAction("/api/spd/programs", formJson(e.target), "#spd-program-msg");
+    return postAction("/api/spd/programs", {
+      ...formJson(e.target),
+      include_rules: includeEditor.value(),
+      exclude_rules: excludeEditor.value(),
+    }, "#spd-program-msg");
   };
 }
 
@@ -429,7 +541,22 @@ async function renderSpdPatients() {
         <input name="reason" placeholder="原因">
         <button>提交</button>
       </form><p class="msg" id="spd-life-msg"></p>
-      <div id="spd-life-list"></div></div>`;
+      <div id="spd-life-list"></div></div>
+    <div class="panel"><h3>患者分组</h3>
+      <p class="desc">自动规则命中的在管患者会被吸入分组；手工加入的成员不受规则影响</p>
+      <form class="inline" id="spd-group-form">
+        <input name="name" placeholder="分组名称" required>
+        <select name="scope">
+          <option value="personal">个人</option><option value="dept">科室</option>
+          <option value="team">团队</option>
+        </select>
+        <input name="dept" placeholder="科室（scope=dept 时填）">
+        <button>新建分组</button>
+      </form>
+      <p class="desc">自动纳入规则（全部满足才吸入）</p>
+      <div id="spd-group-rules"></div>
+      <p class="msg" id="spd-group-msg"></p>
+      <div id="spd-group-list"></div></div>`;
 
   const drawScreenings = async () => {
     const rows = await api("/api/spd/screenings?limit=30");
@@ -513,6 +640,23 @@ async function renderSpdPatients() {
       return postAction(`/api/spd/lifecycle-events/${confirm.dataset.confirm}/confirm`,
         null, "#spd-life-msg");
     }
+  };
+  const drawGroups = async () => {
+    const groups = await api("/api/spd/groups");
+    $("#spd-group-list").innerHTML = table(
+      ["ID", "名称", "范围", "科室", "自动规则", "成员数"], groups, (g) =>
+      `<tr><td>${g.id}</td><td>${esc(g.name)}</td><td>${esc(g.scope)}</td>
+       <td>${esc(g.dept || "—")}</td><td>${(g.auto_rule || []).length} 条</td>
+       <td>${g.member_count ?? "—"}</td></tr>`);
+  };
+  await drawGroups();
+  const meta = await spdMeta();
+  const groupEditor = spdRuleEditor($("#spd-group-rules"), meta, []);
+  $("#spd-group-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/groups", {
+      ...formJson(e.target), auto_rule: groupEditor.value(),
+    }, "#spd-group-msg");
   };
 }
 
@@ -622,12 +766,16 @@ async function renderSpdPath() {
     const adv = el("data-adv");
     const claim = el("data-task-claim"), urge = el("data-task-urge"), done = el("data-task-done");
     if (node) {
-      const key = prompt("节点 key（英文，如 assess）");
-      if (!key) return;
+      const form = await spdModal("添加路径节点", [
+        { name: "key", label: "节点 key（英文，如 assess）", required: true },
+        { name: "name", label: "节点名称" },
+        { name: "stage", label: "所属阶段（可留空）" },
+        { name: "due_days", label: "时限（天）", type: "number", value: 7 },
+      ]);
+      if (!form || !form.key) return;
       return postAction(`/api/spd/path-templates/${node.dataset.tplNode}/nodes`, {
-        key, name: prompt("节点名称") || key,
-        stage: prompt("所属阶段（可留空）") || "",
-        due_days: Number(prompt("时限（天）", "7") || 7),
+        key: form.key, name: form.name || form.key,
+        stage: form.stage, due_days: form.due_days || 7,
       }, "#spd-tpl-msg");
     }
     if (pub) {
@@ -641,8 +789,12 @@ async function renderSpdPath() {
     if (claim) return postAction(`/api/spd/tasks/${claim.dataset.taskClaim}/claim`, null, "#spd-task-msg");
     if (urge) return postAction(`/api/spd/tasks/${urge.dataset.taskUrge}/urge`, null, "#spd-task-msg");
     if (done) {
+      const form = await spdModal("办结任务", [
+        { name: "note", label: "办理结果", type: "textarea" },
+      ]);
+      if (!form) return;
       return postAction(`/api/spd/tasks/${done.dataset.taskDone}/complete`,
-        { result: { note: prompt("办理结果") || "" } }, "#spd-task-msg");
+        { result: { note: form.note } }, "#spd-task-msg");
     }
   };
 }
@@ -694,6 +846,19 @@ async function renderSpdReferral() {
              <button class="btn secondary" data-ref-recv="${c.id}">随访接收</button></td></tr>`)}</div>
     <div class="panel"><h3>转诊触发规则</h3>
       <p class="desc">命中规则默认只提示不自动开单——批量随访录入时自动开单会瞬间产生几十张单子</p>
+      <form class="inline" id="spd-refrule-form">
+        <input name="code" placeholder="规则编码" required>
+        <input name="name" placeholder="规则名称" required>
+        <input name="program_code" placeholder="病种编码（留空=全部）">
+        <select name="handle_level">
+          <option value="township">卫生院处置</option><option value="village">村医处置</option>
+          <option value="station">服务站处置</option><option value="county">县级处置</option>
+        </select>
+        <button>新建触发规则</button>
+      </form>
+      <p class="desc">触发条件（任一满足即触发）</p>
+      <div id="spd-refrule-rules"></div>
+      <p class="msg" id="spd-refrule-msg"></p>
       ${table(["编码", "名称", "病种", "处理层级", "条件数", "自动建任务", "状态"], rules, (r) =>
         `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.program_code || "全部")}</td>
          <td>${esc(r.handle_level)}</td><td>${(r.conditions || []).length}</td>
@@ -713,20 +878,42 @@ async function renderSpdReferral() {
     const pass = e.target.closest("[data-ref-pass]"), reject = e.target.closest("[data-ref-reject]");
     const arrive = e.target.closest("[data-ref-arrive]"), down = e.target.closest("[data-ref-down]");
     const recv = e.target.closest("[data-ref-recv]");
-    if (pass) return postAction(`/api/spd/referrals/${pass.dataset.refPass}/review`,
-      { action: "pass", opinion: prompt("审核意见") || "" }, "#spd-ref-msg");
-    if (reject) return postAction(`/api/spd/referrals/${reject.dataset.refReject}/review`,
-      { action: "reject", opinion: prompt("退回理由") || "" }, "#spd-ref-msg");
+    if (pass) {
+      const form = await spdModal("审核通过", [{ name: "opinion", label: "审核意见", type: "textarea" }]);
+      if (!form) return;
+      return postAction(`/api/spd/referrals/${pass.dataset.refPass}/review`,
+        { action: "pass", opinion: form.opinion }, "#spd-ref-msg");
+    }
+    if (reject) {
+      const form = await spdModal("退回转诊", [{ name: "opinion", label: "退回理由", type: "textarea" }]);
+      if (!form) return;
+      return postAction(`/api/spd/referrals/${reject.dataset.refReject}/review`,
+        { action: "reject", opinion: form.opinion }, "#spd-ref-msg");
+    }
     if (arrive) return postAction(`/api/spd/referrals/${arrive.dataset.refArrive}/arrive`,
       { effective_visit: true }, "#spd-ref-msg");
     if (down) {
-      const org = Number(prompt("下转目标机构ID") || 0);
-      if (!org) return;
+      const form = await spdModal("下转", [
+        { name: "target_org_id", label: "下转目标机构ID", type: "number", required: true },
+      ]);
+      if (!form || !form.target_org_id) return;
       return postAction(`/api/spd/referrals/${down.dataset.refDown}/down`,
-        { target_org_id: org, stable: true }, "#spd-ref-msg");
+        { target_org_id: form.target_org_id, stable: true }, "#spd-ref-msg");
     }
-    if (recv) return postAction(`/api/spd/referrals/${recv.dataset.refRecv}/receive-followup`,
-      { opinion: prompt("接收意见") || "" }, "#spd-ref-msg");
+    if (recv) {
+      const form = await spdModal("下转随访接收", [{ name: "opinion", label: "接收意见", type: "textarea" }]);
+      if (!form) return;
+      return postAction(`/api/spd/referrals/${recv.dataset.refRecv}/receive-followup`,
+        { opinion: form.opinion }, "#spd-ref-msg");
+    }
+  };
+  const meta = await spdMeta();
+  const condEditor = spdRuleEditor($("#spd-refrule-rules"), meta, []);
+  $("#spd-refrule-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/referral-rules", {
+      ...formJson(e.target), conditions: condEditor.value(),
+    }, "#spd-refrule-msg");
   };
 }
 
@@ -819,11 +1006,13 @@ async function renderSpdAssess() {
   $("#page-body").onclick = async (e) => {
     const run = e.target.closest("[data-run]"), score = e.target.closest("[data-score]");
     if (run) {
-      const period = prompt("考核周期（如 2026-08 / 2026-Q3 / 2026）",
-        new Date().toISOString().slice(0, 7));
-      if (!period) return;
+      const form = await spdModal("跑一次考核计分", [
+        { name: "period", label: "考核周期（如 2026-08 / 2026-Q3 / 2026）",
+          value: new Date().toISOString().slice(0, 7), required: true },
+      ]);
+      if (!form || !form.period) return;
       return postAction("/api/spd/scores/run",
-        { plan_id: Number(run.dataset.run), period }, "#spd-plan-msg");
+        { plan_id: Number(run.dataset.run), period: form.period }, "#spd-plan-msg");
     }
     if (score) {
       const d = await api(`/api/spd/scores/${score.dataset.score}`);
@@ -884,7 +1073,20 @@ async function renderSpdFollowup() {
         questionnaires, (q) =>
         `<tr><td>${esc(q.code)}</td><td>${esc(q.name)}</td><td>${esc(q.scene)}</td>
          <td>${(q.items || []).length}</td><td>${(q.abnormal_rules || []).length}</td>
-         <td>${esc(q.track_dept || "—")}</td><td>${esc(q.handle_role)}</td></tr>`)}</div>
+         <td>${esc(q.track_dept || "—")}</td><td>${esc(q.handle_role)}</td></tr>`)}
+      <form class="inline" id="spd-quest-form" style="margin-top:10px">
+        <input name="code" placeholder="问卷编码" required>
+        <input name="name" placeholder="问卷名称" required>
+        <select name="scene">
+          <option value="inpatient">出院</option><option value="outpatient">门诊</option>
+          <option value="surgery">术后</option><option value="checkup">体检</option>
+        </select>
+        <input name="track_dept" placeholder="跟踪科室">
+        <button>新建问卷</button>
+      </form>
+      <p class="desc">异常判定规则（答案命中任一条即标记异常并派处置任务）</p>
+      <div id="spd-quest-rules"></div>
+      <p class="msg" id="spd-quest-msg"></p></div>
     <div class="panel"><h3>随访看板</h3>
       <form class="inline" id="spd-fu-filter">
         <select name="status"><option value="">全部状态</option>
@@ -967,8 +1169,15 @@ async function renderSpdFollowup() {
   $("#page-body").onclick = async (e) => {
     const exec = e.target.closest("[data-fu-exec]"), call = e.target.closest("[data-fu-call]");
     if (exec) {
+      const form = await spdModal("执行随访", [
+        { name: "channel", label: "随访渠道", type: "select", value: "phone",
+          options: [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
+                    { value: "sms", label: "短信" }, { value: "visit", label: "面访" }] },
+        { name: "result", label: "随访结果", type: "textarea" },
+      ]);
+      if (!form) return;
       return postAction(`/api/spd/followup-records/${exec.dataset.fuExec}/execute`, {
-        channel: "phone", result: prompt("随访结果") || "", answers: {},
+        channel: form.channel || "phone", result: form.result, answers: {},
       }, "#spd-fu-msg");
     }
     if (call) {
@@ -977,6 +1186,14 @@ async function renderSpdFollowup() {
         ref_id: Number(call.dataset.fuCall),
       }, "#spd-fu-msg");
     }
+  };
+  const meta = await spdMeta();
+  const abnormalEditor = spdRuleEditor($("#spd-quest-rules"), meta, []);
+  $("#spd-quest-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/questionnaires", {
+      ...formJson(e.target), abnormal_rules: abnormalEditor.value(),
+    }, "#spd-quest-msg");
   };
 }
 

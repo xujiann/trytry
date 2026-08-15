@@ -778,10 +778,24 @@ async function renderNotifyTab() {
 
 const TABS = ["edu", "archive", "service", "spd", "notify", "survey"];
 
+/* 扫码进入：#scale=<qr_token> 直达慢专病自查并预选该量表（P2-3 二维码入口）。
+ * 令牌在这里只记下来，预选发生在 renderSpdScreen——量表停用/令牌失效时
+ * 页面自然回落到量表列表，码不用重印。 */
+let scaleTokenFromQr = "";
+
 (async function start() {
   loadArticles();
   const fromWeChat = await consumeWeChatRedirect();
-  const initTab = (location.hash || "#edu").replace("#", "");
+  const hash = location.hash || "#edu";
+  if (hash.startsWith("#scale=")) {
+    scaleTokenFromQr = hash.slice("#scale=".length);
+    activeSpd = "screen";
+    switchTab("spd");
+    refreshNotifyDot();
+    setInterval(refreshNotifyDot, 300000);
+    return;
+  }
+  const initTab = hash.replace("#", "");
   switchTab(fromWeChat ? "archive" : (TABS.includes(initTab) ? initTab : "edu"));
   refreshNotifyDot();
   // 5 分钟一次即可：居民端不是值班台，红点晚几分钟出现没有代价，
@@ -1066,6 +1080,14 @@ async function renderSpdScreen(box) {
         <select data-q="${esc(item.key)}">${(item.options || []).map((o) =>
           `<option value="${esc(o.label)}">${esc(o.label)}</option>`).join("")}</select></div>`).join("");
   };
+  if (scaleTokenFromQr) {
+    // 扫码进来的：按令牌预选对应量表；令牌失效就静默回落到列表首项
+    try {
+      const byToken = await api(`/api/portal/spd/scales/by-token/${scaleTokenFromQr}`);
+      if (scales.some((s) => s.code === byToken.code)) $("#spd-scale").value = byToken.code;
+    } catch (err) { /* 码失效不打断自查流程 */ }
+    scaleTokenFromQr = "";
+  }
   drawItems();
   $("#spd-scale").addEventListener("change", drawItems);
   $("#spd-screen-submit").addEventListener("click", async () => {

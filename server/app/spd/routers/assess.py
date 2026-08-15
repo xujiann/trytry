@@ -208,26 +208,21 @@ def _period_range(period: str) -> tuple[str, str]:
     return f"{year}-{month}-01", (nxt - timedelta(days=1)).isoformat()
 
 
-def _object_filter(db: Session, model, object_type: str, object_id: int):
-    """把"考核对象"翻译成模型上的过滤条件。
+def _object_column(model, object_type: str):
+    """"考核对象"在模型上的归属列；模型没有对应列时返回 None（不过滤）。
 
-    village_doctor 的过滤依据是 `village_doctor_id`（在管档案）或
+    village_doctor 的归属依据是 `village_doctor_id`（在管档案）或
     `assignee_id`（任务），不是机构——一个村卫生室可能有两位村医。
     """
-    if object_type == "org":
-        for col in ("org_id", "initiator_org_id"):
-            if hasattr(model, col):
-                return getattr(model, col) == object_id
-    if object_type == "team" and hasattr(model, "team_id"):
-        return model.team_id == object_id
-    if object_type == "doctor":
-        for col in ("assignee_id", "doctor_user_id", "operator_id", "initiator_id"):
-            if hasattr(model, col):
-                return getattr(model, col) == object_id
-    if object_type == "village_doctor":
-        for col in ("village_doctor_id", "assignee_id", "initiator_id", "reporter_id"):
-            if hasattr(model, col):
-                return getattr(model, col) == object_id
+    candidates = {
+        "org": ("org_id", "initiator_org_id"),
+        "team": ("team_id",),
+        "doctor": ("assignee_id", "doctor_user_id", "operator_id", "initiator_id"),
+        "village_doctor": ("village_doctor_id", "assignee_id", "initiator_id", "reporter_id"),
+    }.get(object_type, ())
+    for name in candidates:
+        if hasattr(model, name):
+            return getattr(model, name)
     return None
 
 
@@ -235,117 +230,217 @@ def collect_metrics(
     db: Session, indicator: SpdIndicator, object_type: str, object_id: int,
     period: str, program_code: str = "",
 ) -> dict[str, float]:
-    """按取数口径统计一个考核对象在一个周期内的原始数字。"""
+    """按取数口径统计**一个**考核对象在一个周期内的原始数字。
+
+    单对象就是 N=1 的批量——委托给 `collect_metrics_batch`，让报告段落、
+    下钻等单对象调用与整表计分**结构上共用同一份口径**：两套实现迟早会在
+    某个数字上算出两个结果，而考核数字要进绩效。
+    """
+    return collect_metrics_batch(
+        db, indicator, object_type, [object_id], period, program_code
+    )[object_id]
+
+
+def collect_metrics_batch(
+    db: Session, indicator: SpdIndicator, object_type: str, object_ids: list[int],
+    period: str, program_code: str = "",
+) -> dict[int, dict[str, float]]:
+    """一个指标 × N 个考核对象的批量取数：查询数与对象数无关。
+
+    P2-1 之前整表计分是对象 × 指标逐个查询——一个县 20 家机构 × 10 个指标
+    一次考核要打几百条 SQL。这里的做法：
+
+    - 有对象归属列的表（任务/转诊/上报）：一条 GROUP BY + 条件聚合；
+    - 从"在管档案"出发的口径（纳管/评估/路径/监测）：档案取一次、按对象分桶，
+      再对下游表各打一条 IN 查询，在内存里归到对象上。
+
+    模型上没有对象归属列时退化为全局数字、人人相同——与单对象版
+    "翻译不出过滤条件就不过滤"的行为一致。
+    """
+    from sqlalchemy import case
+
+    ids = list(dict.fromkeys(object_ids))
+    if not ids:
+        return {}
     start, end = _period_range(period)
     source = indicator.data_source
 
-    def scoped(model, query):
-        cond = _object_filter(db, model, object_type, object_id)
-        if cond is not None:
-            query = query.filter(cond)
+    def prog(model, query):
         if program_code and hasattr(model, "program_code"):
             query = query.filter(model.program_code == program_code)
         return query
 
-    if source == "task":
-        base = scoped(SpdTask, db.query(SpdTask).filter(
-            SpdTask.created_at >= f"{start} 00:00:00", SpdTask.created_at <= f"{end} 23:59:59"))
-        total = base.count()
-        return {
-            "total": float(total),
-            "done": float(base.filter(SpdTask.status == "done").count()),
-            "overdue": float(base.filter(SpdTask.status == "overdue").count()),
-        }
-    if source in ("enrollment", "archive", "assessment"):
-        base = scoped(SpdEnrollment, db.query(SpdEnrollment).filter(
-            SpdEnrollment.created_at <= f"{end} 23:59:59"))
-        enrolled = base.filter(SpdEnrollment.status == "active").count()
-        if source == "enrollment":
-            from ..models import SpdCandidate
+    def grouped(model, query, columns: dict) -> dict[int, dict[str, float]]:
+        """按对象归属列 GROUP BY 聚合；没有归属列时退化为一条全局查询。"""
+        col = _object_column(model, object_type)
+        query = prog(model, query)
+        if col is None:
+            row = query.with_entities(*columns.values()).one()
+            values = {k: float(v or 0) for k, v in zip(columns, row)}
+            return {oid: dict(values) for oid in ids}
+        rows = (
+            query.filter(col.in_(ids))
+            .with_entities(col, *columns.values())
+            .group_by(col)
+            .all()
+        )
+        found = {r[0]: {k: float(v or 0) for k, v in zip(columns, r[1:])} for r in rows}
+        return {oid: found.get(oid, {k: 0.0 for k in columns}) for oid in ids}
 
-            target_query = db.query(SpdCandidate).filter(
-                SpdCandidate.status.in_(["target", "enrolled"]))
-            if object_type == "org":
-                target_query = target_query.filter(SpdCandidate.org_id == object_id)
-            if program_code:
-                target_query = target_query.filter(SpdCandidate.program_code == program_code)
-            return {
+    def _count_if(cond):
+        return func.sum(case((cond, 1), else_=0))
+
+    if source == "task":
+        return grouped(
+            SpdTask,
+            db.query(SpdTask).filter(
+                SpdTask.created_at >= f"{start} 00:00:00",
+                SpdTask.created_at <= f"{end} 23:59:59",
+            ),
+            {"total": func.count(SpdTask.id),
+             "done": _count_if(SpdTask.status == "done"),
+             "overdue": _count_if(SpdTask.status == "overdue")},
+        )
+    if source == "referral":
+        return grouped(
+            SpdReferralCase,
+            db.query(SpdReferralCase).filter(
+                SpdReferralCase.created_at >= f"{start} 00:00:00",
+                SpdReferralCase.created_at <= f"{end} 23:59:59",
+            ),
+            {"total": func.count(SpdReferralCase.id),
+             "closed": _count_if(SpdReferralCase.status == "closed"),
+             "effective": _count_if(SpdReferralCase.effective_visit.is_(True))},
+        )
+    if source == "case_report":
+        return grouped(
+            SpdCaseReport,
+            db.query(SpdCaseReport).filter(
+                SpdCaseReport.created_at >= f"{start} 00:00:00",
+                SpdCaseReport.created_at <= f"{end} 23:59:59",
+            ),
+            {"reported": func.count(SpdCaseReport.id),
+             "handled": _count_if(SpdCaseReport.status.in_(["done", "closed"]))},
+        )
+
+    if source not in ("enrollment", "archive", "assessment", "path", "measurement"):
+        return {oid: {"total": 0.0} for oid in ids}
+
+    # ---- 以下口径都从"该对象名下的在管档案"出发：档案取一次、按对象分桶
+    enroll_col = _object_column(SpdEnrollment, object_type)
+    enroll_query = prog(SpdEnrollment, db.query(SpdEnrollment))
+    if source in ("enrollment", "archive", "assessment"):
+        enroll_query = enroll_query.filter(SpdEnrollment.created_at <= f"{end} 23:59:59")
+    if enroll_col is not None:
+        enroll_query = enroll_query.filter(enroll_col.in_(ids))
+    buckets: dict[int, list[SpdEnrollment]] = {oid: [] for oid in ids}
+    for e in enroll_query.all():
+        owners = ids if enroll_col is None else (
+            [getattr(e, enroll_col.key)] if getattr(e, enroll_col.key) in buckets else []
+        )
+        for oid in owners:
+            buckets[oid].append(e)
+
+    if source == "enrollment":
+        from ..models import SpdCandidate
+
+        cand_query = prog(SpdCandidate, db.query(SpdCandidate).filter(
+            SpdCandidate.status.in_(["target", "enrolled"])))
+        if object_type == "org":
+            cand_rows = dict(
+                cand_query.filter(SpdCandidate.org_id.in_(ids))
+                .with_entities(SpdCandidate.org_id, func.count(SpdCandidate.id))
+                .group_by(SpdCandidate.org_id).all()
+            )
+            targets = {oid: cand_rows.get(oid, 0) for oid in ids}
+        else:
+            total = cand_query.count()  # 单对象版对非机构对象也不按对象过滤目标池
+            targets = {oid: total for oid in ids}
+        out = {}
+        for oid in ids:
+            enrolled = sum(1 for e in buckets[oid] if e.status == "active")
+            out[oid] = {
                 "enrolled": float(enrolled),
-                "target": float(target_query.count() or enrolled),
+                "target": float(targets[oid] or enrolled),
                 "high_risk": float(
-                    base.filter(SpdEnrollment.risk_level.in_(["high", "very_high"])).count()
+                    sum(1 for e in buckets[oid] if e.risk_level in ("high", "very_high"))
                 ),
             }
-        if source == "archive":
-            return {
-                "enrolled": float(enrolled),
+        return out
+    if source == "archive":
+        return {
+            oid: {
+                "enrolled": float(sum(1 for e in buckets[oid] if e.status == "active")),
                 "archived": float(
-                    base.filter(
-                        SpdEnrollment.status == "active", SpdEnrollment.archived.is_(True)
-                    ).count()
+                    sum(1 for e in buckets[oid] if e.status == "active" and e.archived)
                 ),
             }
-        patient_ids = [
-            e.patient_id for e in base.filter(SpdEnrollment.status == "active").all()
-        ]
-        assessed = (
-            db.query(SpdAssessment.patient_id)
+            for oid in ids
+        }
+    if source == "assessment":
+        patients = {
+            oid: {e.patient_id for e in buckets[oid] if e.status == "active"}
+            for oid in ids
+        }
+        union = set().union(*patients.values()) if patients else set()
+        assessed = {
+            pid for (pid,) in db.query(SpdAssessment.patient_id)
             .filter(
-                SpdAssessment.patient_id.in_(patient_ids or [0]),
+                SpdAssessment.patient_id.in_(union or [0]),
                 SpdAssessment.created_at >= f"{start} 00:00:00",
                 SpdAssessment.created_at <= f"{end} 23:59:59",
             )
-            .distinct()
-            .count()
-        )
-        return {"enrolled": float(enrolled), "assessed": float(assessed)}
+            .distinct().all()
+        }
+        return {
+            oid: {
+                "enrolled": float(sum(1 for e in buckets[oid] if e.status == "active")),
+                "assessed": float(len(patients[oid] & assessed)),
+            }
+            for oid in ids
+        }
     if source == "path":
-        enroll_ids = [
-            e.id
-            for e in scoped(SpdEnrollment, db.query(SpdEnrollment)).all()
-        ]
-        base = db.query(SpdPathInstance).filter(
-            SpdPathInstance.enrollment_id.in_(enroll_ids or [0]),
-            SpdPathInstance.started_at <= f"{end} 23:59:59",
+        enroll_owner = {}
+        for oid in ids:
+            for e in buckets[oid]:
+                enroll_owner.setdefault(e.id, []).append(oid)
+        rows = (
+            db.query(SpdPathInstance.enrollment_id, SpdPathInstance.status)
+            .filter(
+                SpdPathInstance.enrollment_id.in_(list(enroll_owner) or [0]),
+                SpdPathInstance.started_at <= f"{end} 23:59:59",
+            )
+            .all()
         )
-        return {
-            "total": float(base.count()),
-            "completed": float(base.filter(SpdPathInstance.status == "completed").count()),
-            "running": float(base.filter(SpdPathInstance.status == "running").count()),
-        }
-    if source == "referral":
-        base = scoped(SpdReferralCase, db.query(SpdReferralCase).filter(
-            SpdReferralCase.created_at >= f"{start} 00:00:00",
-            SpdReferralCase.created_at <= f"{end} 23:59:59"))
-        return {
-            "total": float(base.count()),
-            "closed": float(base.filter(SpdReferralCase.status == "closed").count()),
-            "effective": float(base.filter(SpdReferralCase.effective_visit.is_(True)).count()),
-        }
-    if source == "measurement":
-        patient_ids = [
-            e.patient_id
-            for e in scoped(SpdEnrollment, db.query(SpdEnrollment)).filter(
-                SpdEnrollment.status == "active").all()
-        ]
-        base = db.query(SpdMeasurement).filter(
-            SpdMeasurement.patient_id.in_(patient_ids or [0]),
+        out = {oid: {"total": 0.0, "completed": 0.0, "running": 0.0} for oid in ids}
+        for enrollment_id, status in rows:
+            for oid in enroll_owner.get(enrollment_id, []):
+                out[oid]["total"] += 1
+                if status in ("completed", "running"):
+                    out[oid][status] += 1
+        return out
+    # measurement
+    patients = {
+        oid: {e.patient_id for e in buckets[oid] if e.status == "active"}
+        for oid in ids
+    }
+    union = set().union(*patients.values()) if patients else set()
+    rows = (
+        db.query(SpdMeasurement.patient_id, SpdMeasurement.level)
+        .filter(
+            SpdMeasurement.patient_id.in_(union or [0]),
             SpdMeasurement.measured_at >= f"{start} 00:00:00",
             SpdMeasurement.measured_at <= f"{end} 23:59:59",
         )
-        total = base.count()
-        normal = base.filter(SpdMeasurement.level == "normal").count()
-        return {"total": float(total), "normal": float(normal),
-                "abnormal": float(total - normal)}
-    if source == "case_report":
-        base = scoped(SpdCaseReport, db.query(SpdCaseReport).filter(
-            SpdCaseReport.created_at >= f"{start} 00:00:00",
-            SpdCaseReport.created_at <= f"{end} 23:59:59"))
-        return {
-            "reported": float(base.count()),
-            "handled": float(base.filter(SpdCaseReport.status.in_(["done", "closed"])).count()),
-        }
-    return {"total": 0.0}
+        .all()
+    )
+    out = {oid: {"total": 0.0, "normal": 0.0, "abnormal": 0.0} for oid in ids}
+    for patient_id, level in rows:
+        for oid in ids:
+            if patient_id in patients[oid]:
+                out[oid]["total"] += 1
+                out[oid]["normal" if level == "normal" else "abnormal"] += 1
+    return out
 
 
 def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
@@ -504,6 +599,14 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
         .all()
     }
     objects = _objects_of(db, plan, body.object_ids)
+    # 每个指标一次批量取数（P2-1）：查询数只随指标数增长，不随对象数增长
+    all_ids = [object_id for object_id, _ in objects]
+    metrics_by_code = {
+        code: collect_metrics_batch(
+            db, indicator, plan.object_type, all_ids, body.period, body.program_code
+        )
+        for code, indicator in indicators.items()
+    }
     results = []
     for object_id, object_name in objects:
         total_score, detail = 0.0, []
@@ -513,9 +616,7 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
             if indicator is None:
                 detail.append({"indicator_code": code, "error": "指标不存在或已停用"})
                 continue
-            metrics = collect_metrics(
-                db, indicator, plan.object_type, object_id, body.period, body.program_code
-            )
+            metrics = metrics_by_code[code][object_id]
             try:
                 value = (
                     eval_formula(indicator.formula, metrics)

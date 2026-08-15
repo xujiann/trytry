@@ -11,7 +11,7 @@
 from datetime import date, timedelta
 from secrets import token_urlsafe
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -716,6 +716,40 @@ def publish_scale(scale_id: int, db: Session = Depends(get_db)):
     return _scale_out(scale)
 
 
+def _qr_svg(content: str) -> str:
+    """把一段文本编成二维码 SVG。
+
+    `qrcode` 是纯 Python 实现（无 Pillow 也能出 SVG），符合"不引重依赖"的约束；
+    SVG 而不是 PNG：打印培训海报要放大到 A4，位图会糊。
+    """
+    import io
+
+    import qrcode
+    import qrcode.image.svg
+
+    img = qrcode.make(content, image_factory=qrcode.image.svg.SvgPathImage, box_size=16)
+    buf = io.BytesIO()
+    img.save(buf)
+    return buf.getvalue().decode()
+
+
+@router.get("/scales/{scale_id}/qr.svg")
+def scale_qr(scale_id: int, request: Request, db: Session = Depends(get_db)):
+    """量表评估二维码（成员端 #8）：扫码直达居民端自查页并预选该量表。
+
+    编码的是**页面地址**（`/m/#scale=<token>`）而不是 API 地址——扫码的人
+    要看到的是问卷，不是一段 JSON。令牌失效（量表停用）时页面自然回落到
+    量表列表，码不用重印。
+    """
+    scale = db.get(SpdScale, scale_id)
+    if scale is None:
+        raise HTTPException(status_code=404, detail="量表不存在")
+    if scale.status != "published" or not scale.qr_token:
+        raise HTTPException(status_code=409, detail="量表未发布，先发布生成令牌")
+    url = f"{str(request.base_url).rstrip('/')}/m/#scale={scale.qr_token}"
+    return Response(content=_qr_svg(url), media_type="image/svg+xml")
+
+
 @router.post("/scales/{scale_id}/disable", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def disable_scale(scale_id: int, db: Session = Depends(get_db)):
     scale = db.get(SpdScale, scale_id)
@@ -1181,6 +1215,21 @@ def update_village_doctor(
             setattr(record, key, body[key])
     db.commit()
     return _vd_out(record)
+
+
+@router.get("/village-doctors/{vd_id}/qr.svg")
+def village_doctor_qr(vd_id: int, request: Request, db: Session = Depends(get_db)):
+    """村医绑定二维码：扫码进入医生移动端并带上绑定令牌（村医赋能端 #1）。
+
+    停用的村医不出码——码是入口，入口先于账号被回收。
+    """
+    record = db.get(SpdVillageDoctor, vd_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="村医档案不存在")
+    if not record.active or not record.bind_token:
+        raise HTTPException(status_code=409, detail="村医已停用或没有绑定令牌")
+    url = f"{str(request.base_url).rstrip('/')}/m/doctor.html#bind={record.bind_token}"
+    return Response(content=_qr_svg(url), media_type="image/svg+xml")
 
 
 # ============================================================ 设备

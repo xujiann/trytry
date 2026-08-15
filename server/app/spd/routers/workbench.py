@@ -669,13 +669,20 @@ def team_workbench(
     month_start = date.today().replace(day=1).isoformat()
     my_patients = [e.patient_id for e in mine_query.limit(5000).all()]
 
-    pending_assess = [
-        e.patient_id
-        for e in mine_query.limit(5000).all()
-        if db.query(SpdAssessment.id).filter(
-            SpdAssessment.patient_id == e.patient_id
-        ).first() is None
-    ]
+    # 待评估 / 待入径都用一条 IN 查询取"已有的"，再在内存里做差集。
+    # 之前是逐患者 first()——在管 5000 人时进一次工作台要打一万条 SQL
+    assessed = {
+        pid for (pid,) in db.query(SpdAssessment.patient_id)
+        .filter(SpdAssessment.patient_id.in_(my_patients or [0]))
+        .distinct().all()
+    }
+    pending_assess = [pid for pid in my_patients if pid not in assessed]
+    pathed = {
+        pid for (pid,) in db.query(SpdEnrollment.patient_id)
+        .join(SpdPathInstance, SpdPathInstance.enrollment_id == SpdEnrollment.id)
+        .filter(SpdEnrollment.patient_id.in_(my_patients or [0]))
+        .distinct().all()
+    }
 
     out = {
         "role": role,
@@ -703,12 +710,7 @@ def team_workbench(
         "plans": {
             "pending_assess": len(pending_assess),
             "pending_target": mine_query.filter(SpdEnrollment.stage == "").count(),
-            "pending_path": sum(
-                1 for pid in my_patients
-                if db.query(SpdPathInstance.id)
-                .join(SpdEnrollment, SpdEnrollment.id == SpdPathInstance.enrollment_id)
-                .filter(SpdEnrollment.patient_id == pid).first() is None
-            ),
+            "pending_path": sum(1 for pid in my_patients if pid not in pathed),
             "due_followups": db.query(SpdFollowupRecord).filter(
                 SpdFollowupRecord.patient_id.in_(my_patients or [0]),
                 SpdFollowupRecord.status == "planned",
