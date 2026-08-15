@@ -3924,3 +3924,14 @@ class RolePermission(Base):
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), index=True)
     permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 全域慢专病全流程管理系统（`spd_*` 共 50 张表）
+#
+# 独立成 `models_spd.py`，但在这里 import 进来：`Base.metadata` 必须在
+# `create_all` 之前认识这些表，而各处（测试 conftest、alembic env、应用启动）
+# 导入的都是 `app.models`。放在文件末尾而不是开头——`models_spd` 要用本模块的
+# `Money` 与 `utcnow`，此刻它们已经定义完毕。
+# ============================================================================
+from .models_spd import *  # noqa: E402,F401,F403

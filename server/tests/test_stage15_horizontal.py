@@ -450,6 +450,12 @@ BYID_CROSS_ORG_OK = {
     "prescriptions.py:comment_prescription",
     "telemedicine.py:reply",
     "telemedicine.py:close",
+    # 慢专病逐级转诊：村医发起→服务站复核→卫生院审核→县级接收→下转承接，
+    # 每一格都由**下一家机构**推进，加本机构写守卫等于把逐级链路关掉。
+    # 单据可见性仍按"发起方/当前处理方/目标方任一在可见范围内"过滤。
+    "spd_referral.py:review_referral",
+    "spd_referral.py:arrive_referral",
+    "spd_referral.py:down_referral",
 }
 
 
@@ -467,7 +473,9 @@ def _byid_org_write_endpoints():
               "log_patient_access"}
     unguarded = set()
     for name in sorted(os.listdir(ROUTER_DIR)):
-        if not name.endswith(".py") or name == "portal.py":
+        # 居民端两个文件走的是 portal 令牌 + accessible_patient（"这次能看谁的档案"），
+        # 不在员工机构可见性体系内，与 portal.py 同一理由豁免。
+        if not name.endswith(".py") or name in ("portal.py", "spd_portal.py"):
             continue
         tree = ast.parse(open(os.path.join(ROUTER_DIR, name), encoding="utf-8").read())
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:

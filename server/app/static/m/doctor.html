@@ -103,6 +103,19 @@
       <p id="surgery-msg" class="msg"></p>
     </section>
 
+    <!-- 慢专病：本人待办、转诊办理、村医签约居民、积分与考核 -->
+    <section id="tab-spd" class="tab-page hidden">
+      <div id="spd-wb"></div>
+      <div class="seg">
+        <button class="seg-btn active" data-dspd="todo">我的待办</button>
+        <button class="seg-btn" data-dspd="referral">转诊办理</button>
+        <button class="seg-btn" data-dspd="patient">我的患者</button>
+        <button class="seg-btn" data-dspd="perf">积分绩效</button>
+      </div>
+      <div id="spd-list"></div>
+      <p id="spd-msg" class="msg"></p>
+    </section>
+
     <!-- 患者档案速查 -->
     <section id="tab-patient" class="tab-page hidden">
       <form id="pt-form" class="m-card">
@@ -123,6 +136,7 @@
   <a href="#round" class="tab-btn" data-tab="round"><span class="ico">🏥</span>查房</a>
   <a href="#surgery" class="tab-btn" data-tab="surgery"><span class="ico">🔪</span>手术</a>
   <a href="#chronic" class="tab-btn" data-tab="chronic"><span class="ico">💊</span>随访</a>
+  <a href="#spd" class="tab-btn" data-tab="spd"><span class="ico">💗</span>慢专病</a>
   <a href="#patient" class="tab-btn" data-tab="patient"><span class="ico">🔍</span>速查</a>
 </nav>
 
