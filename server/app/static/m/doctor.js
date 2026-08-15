@@ -68,6 +68,11 @@ $("#login-form").addEventListener("submit", async (e) => {
     sessionStorage.setItem(USER_KEY, $("#lg-user").value.trim());
     $("#lg-pass").value = "";
     showWorkbench(true);
+    switchTab(currentTab());
+  } catch (err) {
+    $("#login-error").textContent = err.message;
+  }
+});
 
 
 /* ---------------- 慢专病（基层医护健康管理端） ----------------
@@ -214,12 +219,6 @@ async function spdPost(path, body) {
     $("#spd-msg").textContent = err.message;
   }
 }
-
-    switchTab(currentTab());
-  } catch (err) {
-    $("#login-error").textContent = err.message;
-  }
-});
 
 /* ---------------- 标签页 ---------------- */
 

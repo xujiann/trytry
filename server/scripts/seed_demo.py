@@ -268,11 +268,16 @@ if not c.get("/api/disease-programs").json():
                     json={"node_key": _k, "operator_name": "孙主任", "result": _r})
     _c_doc.post(f"/api/disease-programs/enrollments/{_e1['id']}/exit", json={
         "status": "completed", "outcome": "improved", "outcome_note": "症状明显缓解"})
-    # 一例在管且必需节点未做完，演示站上"待办节点"才有内容
-    _e2 = _c_doc.post(f"/api/disease-programs/{_prog['id']}/enrollments", json={
+    # 一例在管且必需节点未做完，演示站上"待办节点"才有内容。
+    # 以镇卫生院医生的会话建（机构写入守卫：县医院医生不能替卫生院建档）
+    _c_zhen = httpx.Client(base_url=BASE, timeout=30)
+    _c_zhen.headers["Authorization"] = "Bearer " + c.post(
+        "/api/auth/login", json={"username": "doc_zhen1", "password": "doctor123"}
+    ).json()["access_token"]
+    _e2 = _c_zhen.post(f"/api/disease-programs/{_prog['id']}/enrollments", json={
         "patient_id": patients[1]["id"], "org_id": zhen1["id"]}).json()
-    _c_doc.post(f"/api/disease-programs/enrollments/{_e2['id']}/records",
-                json={"node_key": "assess", "operator_name": "李镇医", "result": "CAT评分22分"})
+    _c_zhen.post(f"/api/disease-programs/enrollments/{_e2['id']}/records",
+                 json={"node_key": "assess", "operator_name": "李镇医", "result": "CAT评分22分"})
 
 # ---------- 医保基金总额付费：全域池走完 预付→预结→清算→分配 ----------
 # 基金由管理层管（admin 会被 403 挡下），换 dir_demo 的会话。
@@ -641,6 +646,134 @@ if _resident_ready:
 else:
     print("站内消息（居民）: 本次未取到验证码（60秒冷却），跳过居民侧核对")
 
+# ---------- 全域慢专病：筛查→复核→分配→纳管→路径→监测→评估→转诊闭环→计分→日报 ----------
+# 整块以"是否已有在管档案"做幂等开关：这条链路里几乎每一步都会派生任务与
+# 消息，重复灌一遍会让演示站的待办翻倍，比不灌还难看。
+if not c.get("/api/spd/enrollments?limit=1").json():
+    _spd_team1 = c.post("/api/spd/teams", json={
+        "name": "城东高血压管理团队", "org_id": zhen1["id"], "level": "township",
+        "program_codes": ["hypertension"]}).json()
+    _spd_team2 = c.post("/api/spd/teams", json={
+        "name": "河西糖尿病管理团队", "org_id": zhen2["id"], "level": "township",
+        "program_codes": ["diabetes"]}).json()
+
+    _spd_patients = [
+        c.post("/api/patients", json={
+            "name": f"慢专病演示{i:02d}", "id_card": f"32098119601001{i:04d}",
+            "gender": "女" if i % 2 else "男", "birth_date": "1960-10-01",
+            "phone": f"1377100{i:04d}"}).json()
+        for i in range(20)
+    ]
+
+    # 前 10 人走高血压筛查（量表高危答案），后 10 人走糖尿病筛查
+    _high_hyp = {"family": "是", "salt": "是", "overweight": "是", "symptom": "是"}
+    _high_dm = {"family": "是", "symptom": "是", "age": "是"}
+    for i, p in enumerate(_spd_patients):
+        hyper = i < 10
+        c.post("/api/spd/screenings", json={
+            "patient_id": p["id"], "program_code": "hypertension" if hyper else "diabetes",
+            "source": "active", "org_id": (zhen1 if hyper else zhen2)["id"],
+            "scale_code": "scr_hypertension" if hyper else "scr_diabetes",
+            "answers": _high_hyp if hyper else _high_dm})
+
+    # 高危复核确认 → 目标池 → 分配到团队
+    for s in c.get("/api/spd/screenings?limit=100").json():
+        if not s["reviewed"]:
+            c.post(f"/api/spd/screenings/{s['id']}/review", json={"review_result": "confirmed"})
+    for code, team in (("hypertension", _spd_team1), ("diabetes", _spd_team2)):
+        _cands = [x["id"] for x in c.get(f"/api/spd/candidates?program_code={code}").json()
+                  if x["status"] != "enrolled"]
+        if _cands:
+            c.post("/api/spd/candidates/distribute",
+                   json={"candidate_ids": _cands, "team_id": team["id"]})
+
+    # 签约纳管：风险等级错开，让工作台的分层统计不是一根柱子
+    _risks = ["low", "mid", "high", "very_high"]
+    _spd_enrolls = []
+    for i, p in enumerate(_spd_patients):
+        hyper = i < 10
+        _spd_enrolls.append(c.post("/api/spd/enrollments", json={
+            "patient_id": p["id"], "program_code": "hypertension" if hyper else "diabetes",
+            "org_id": (zhen1 if hyper else zhen2)["id"],
+            "team_id": (_spd_team1 if hyper else _spd_team2)["id"],
+            "risk_level": _risks[i % 4], "consent_signed": True,
+            "source": "screening"}).json())
+
+    # 标准路径：建一版演示模板并发布，前 5 个高血压患者入径、办结首节点
+    _hyp_prog = next(pr for pr in c.get("/api/spd/programs").json()
+                     if pr["code"] == "hypertension")
+    _tpl = c.post("/api/spd/path-templates", json={
+        "program_id": _hyp_prog["id"], "code": "demo_hyp_path",
+        "name": "高血压演示路径", "scene": "followup"}).json()
+    c.post(f"/api/spd/path-templates/{_tpl['id']}/nodes", json={
+        "key": "assess", "name": "首次评估", "seq": 1, "next_key": "edu", "due_days": 7})
+    c.post(f"/api/spd/path-templates/{_tpl['id']}/nodes", json={
+        "key": "edu", "name": "生活方式宣教", "seq": 2, "service_type": "edu", "due_days": 14})
+    c.post(f"/api/spd/path-templates/{_tpl['id']}/status", json={"status": "published"})
+    for e in _spd_enrolls[:5]:
+        c.post("/api/spd/path-instances",
+               json={"enrollment_id": e["id"], "template_id": _tpl["id"]})
+    for e in _spd_enrolls[:2]:  # 办结两份首节点任务，让路径推进与待办并存
+        for t in c.get(f"/api/spd/tasks?patient_id={e['patient_id']}").json():
+            if t["node_key"] == "assess" and t["status"] in ("pending", "claimed"):
+                c.post(f"/api/spd/tasks/{t['id']}/complete",
+                       json={"result": {"note": "演示办结：完成首次评估"}})
+
+    # 监测数据：前几名血压异常，触发工作台异常提醒
+    for i, e in enumerate(_spd_enrolls[:5]):
+        c.post("/api/spd/measurements", json={
+            "patient_id": e["patient_id"], "metric": "bp_sys", "value": 150 + i * 6,
+            "unit": "mmHg", "program_code": "hypertension", "source": "manual"})
+
+    # 综合风险评估：高危答案会自动派生干预与复诊（个案管理师端的联动）。
+    # 干预模板按 auto_risk_level 匹配——不配模板就只会建复诊，演示不出联动
+    c.post("/api/spd/intervention-templates", json={
+        "code": "demo_hyp_itpl", "name": "极高危强化干预包", "program_code": "hypertension",
+        "category": "drug", "content": "药物调整 + 每周家庭血压监测",
+        "measures": "限盐、规律服药、每周2次随访电话", "frequency": "每周",
+        "cycle_days": 30, "auto_risk_level": "very_high"})
+    _high_answers = {"control": "未达标", "adherence": "差",
+                     "complication": "2项及以上", "selfcare": "需协助"}
+    for e in _spd_enrolls[:3]:
+        c.post("/api/spd/assessments", json={
+            "patient_id": e["patient_id"], "scale_code": "assess_risk_common",
+            "program_code": "hypertension", "answers": _high_answers})
+
+    # 逐级转诊闭环：发起→三级审核→到院→下转→随访接收
+    _ref = c.post("/api/spd/referrals", json={
+        "patient_id": _spd_enrolls[0]["patient_id"], "program_code": "hypertension",
+        "direction": "up", "target_org_id": county["id"],
+        "reason": "血压控制不佳，申请上级评估"}).json()
+    for _ in range(3):
+        c.post(f"/api/spd/referrals/{_ref['id']}/review",
+               json={"action": "pass", "opinion": "同意上转"})
+    c.post(f"/api/spd/referrals/{_ref['id']}/arrive",
+           json={"effective_visit": True, "opinion": "已到院并完成专科评估"})
+    c.post(f"/api/spd/referrals/{_ref['id']}/down",
+           json={"target_org_id": zhen1["id"], "stable": True, "opinion": "病情稳定下转"})
+    c.post(f"/api/spd/referrals/{_ref['id']}/receive-followup",
+           json={"opinion": "已承接，纳入随访"})
+
+    # 考核计分与日报：数字从上面这些动作里长出来，不是另灌的
+    _spd_plan = c.post("/api/spd/assess-plans", json={
+        "code": "demo_spd_plan", "name": "乡镇慢专病月度考核", "level": "township",
+        "object_type": "org", "period_type": "month",
+        "items": [{"indicator_code": "followup_rate", "weight": 50},
+                  {"indicator_code": "referral_closure_rate", "weight": 50}]}).json()
+    c.post("/api/spd/scores/run", json={
+        "plan_id": _spd_plan["id"], "period": period,
+        "object_ids": [zhen1["id"], zhen2["id"]]})
+    c.post("/api/spd/report-templates", json={
+        "code": "demo_spd_daily", "name": "慢专病运行日报", "period": "daily",
+        "sections": [{"key": "summary", "title": "运行概况"},
+                     {"key": "screening", "title": "筛查转化"},
+                     {"key": "referral", "title": "转诊闭环"},
+                     {"key": "todo", "title": "今日待办"}]})
+    c.post("/api/spd/report-instances", json={"template_code": "demo_spd_daily"})
+
+print("慢专病在管:", len(c.get("/api/spd/enrollments?limit=100").json()),
+      "转诊闭环:", c.get("/api/spd/referrals-stats/closure").json().get("closed"))
+
 # ---------- 末端自检 ----------
 # 本脚本一路忽略响应码（很多步骤靠"已存在即跳过"保持幂等），代价是某一步
 # 被新增的校验挡下来时会静悄悄地失败——手术自批禁令上线后，演示站的手术
@@ -693,6 +826,15 @@ _checks = [
     ("抗菌药物强度已可算", lambda: any(
         o["antibiotic_ddds"] > 0
         for o in c.get(f"/api/analytics/drug-use?period={period}").json()["orgs"])),
+    # ---- 慢专病链路终态：筛出来的被管起来、转出去的收回来、数字算得出来
+    ("慢专病筛查已转化为在管", lambda: any(
+        e["status"] == "active" for e in c.get("/api/spd/enrollments?limit=100").json())),
+    ("慢专病路径任务在办", lambda: _has_rows(c.get("/api/spd/tasks?open_only=true&limit=5"))),
+    ("慢专病转诊已闭环", lambda: c.get(
+        "/api/spd/referrals-stats/closure").json()["closed"] >= 1),
+    ("高危评估已自动派生干预", lambda: _has_rows(c.get("/api/spd/interventions?limit=5"))),
+    ("慢专病考核已出分", lambda: _has_rows(c.get("/api/spd/scores?limit=5"))),
+    ("慢专病日报可出", lambda: _has_rows(c.get("/api/spd/report-instances?limit=5"))),
 ]
 if _resident_ready:
     # 居民会话取决于短信验证码，60 秒冷却内重跑会拿不到；拿不到就别断言，

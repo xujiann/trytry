@@ -406,3 +406,177 @@ def test_拆分脚本后每一页都还渲染得出来(page, base_url):
             blank.append(page_id)
     assert blank == [], f"这些页面没有渲染出内容：{blank}"
     assert errors == [], "管理端有 JS 报错：\n" + "\n".join(errors[:10])
+
+
+# ============================================================
+# 全域慢专病（P3-2）：三种身份各走一条真实链路。
+# 基础数据（机构/患者/账号/已发布路径模板）走接口预置，UI 只驱动关键动作——
+# 与本文件既有约定一致。
+# ============================================================
+
+
+@pytest.fixture(scope="session")
+def spd_seed(base_url):
+    """慢专病端到端的前置数据：机构、患者、医生账号、已发布路径、待办任务、在途转诊。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None, method=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else b"{}",
+            headers={
+                "Content-Type": "application/json",
+                **({"Authorization": f"Bearer {token}"} if token else {}),
+            },
+            method=method or "POST",
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    org = call("/api/organizations",
+               {"name": "E2E慢专病卫生院", "org_type": "township", "level": "township"}, token)
+    # 居民端登录靠手机号验证码 + 实名绑定，患者必须带手机号且证件号可核验
+    patient = call("/api/patients", {
+        "name": "慢专病E2E患者", "id_card": "320981197206064321", "gender": "女",
+        "birth_date": "1972-06-06", "phone": "13788990011"}, token)
+    call("/api/users", {"username": "e2e_spd_doc", "password": "passw0rd1", "role": "doctor",
+                        "full_name": "E2E慢专病医生", "org_id": org["id"]}, token)
+    doctor_login = call("/api/auth/login", {"username": "e2e_spd_doc", "password": "passw0rd1"})
+    doctor_id = None
+    # 找到医生 id（分配任务用）：用户列表按机构过滤
+    for u in call(f"/api/users?org_id={org['id']}", None, token, method="GET"):
+        if u["username"] == "e2e_spd_doc":
+            doctor_id = u["id"]
+
+    # 已发布的演示路径（UI 只驱动"启动实例→办结任务"）
+    programs = call("/api/spd/programs", None, token, method="GET")
+    hyp = next(p for p in programs if p["code"] == "hypertension")
+    template = call("/api/spd/path-templates", {
+        "program_id": hyp["id"], "code": "e2e_hyp_path", "name": "E2E高血压路径",
+        "scene": "followup"}, token)
+    call(f"/api/spd/path-templates/{template['id']}/nodes",
+         {"key": "assess", "name": "首次评估", "seq": 1, "due_days": 7}, token)
+    call(f"/api/spd/path-templates/{template['id']}/status", {"status": "published"}, token)
+
+    # 医生移动端的待办：建一条任务并直接指派给该医生
+    task = call("/api/spd/tasks", {
+        "patient_id": patient["id"], "title": "E2E随访任务", "task_type": "followup",
+        "org_id": org["id"], "due_days": 7}, token)
+    call(f"/api/spd/tasks/{task['id']}/assign", {"assignee_id": doctor_id}, token)
+    # 在途转诊：submitted 状态，医生端点"通过"走一步复核。
+    # 用医生身份发起——admin 未绑定机构，患者又尚未纳管，发起机构定不出来（422）
+    referral = call("/api/spd/referrals", {
+        "patient_id": patient["id"], "program_code": "hypertension", "direction": "up",
+        "reason": "E2E演示转诊"}, doctor_login["access_token"])
+    return {"org": org, "patient": patient, "template": template,
+            "task": task, "referral": referral, "doctor_id": doctor_id}
+
+
+def test_spd_admin_screen_enroll_path_task(page, base_url, spd_seed):
+    """管理端：筛查登记 → 签约纳管 → 启动路径 → 办结节点任务（spdModal 表单）。"""
+    _login(page, base_url)
+
+    _open_page(page, "spdpatients", "筛查建档与纳管")
+    page.fill('#spd-screen-form input[name="patient_id"]', str(spd_seed["patient"]["id"]))
+    page.select_option('#spd-screen-form select[name="program_code"]', "hypertension")
+    _submit(page, "#spd-screen-form button")
+
+    _open_page(page, "spdpatients", "筛查建档与纳管")
+    page.fill('#spd-enroll-form input[name="patient_id"]', str(spd_seed["patient"]["id"]))
+    page.select_option('#spd-enroll-form select[name="program_code"]', "hypertension")
+    page.fill('#spd-enroll-form input[name="org_id"]', str(spd_seed["org"]["id"]))
+    _submit(page, "#spd-enroll-form button")
+
+    # 拿刚建的纳管档案 id（UI 列表异步画出，直接查接口更稳）
+    import json
+    from urllib.request import Request
+
+    token = page.evaluate("() => localStorage.getItem('medplat_token')")
+    req = Request(
+        f"{base_url}/api/spd/enrollments?program_code=hypertension",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urlopen(req, timeout=10) as resp:
+        enrollments = json.loads(resp.read())
+    enrollment = next(
+        e for e in enrollments if e["patient_id"] == spd_seed["patient"]["id"]
+    )
+
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.fill('#spd-inst-form input[name="enrollment_id"]', str(enrollment["id"]))
+    page.select_option('#spd-inst-form select[name="template_id"]',
+                       str(spd_seed["template"]["id"]))
+    _submit(page, "#spd-inst-form button")
+
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.click("[data-task-done]")  # 打开 spdModal 办结表单
+    modal = page.locator("form.panel").last
+    expect(modal).to_be_visible()
+    modal.locator('textarea[name="note"]').fill("E2E 完成首次评估")
+    modal.locator('button[type="submit"]').click()
+    page.wait_for_timeout(600)
+    body = page.eval_on_selector("#page-body", "e => e.textContent")
+    assert "已完成" in body or "done" in body
+
+
+def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
+    """居民端：验证码登录 → 实名绑定 → 高危自查（顺手申请服务）→ 自报监测数据。"""
+    page.goto(f"{base_url}/m/")
+    page.click('[data-tab="archive"]')
+    page.fill("#in-phone", spd_seed["patient"]["phone"])
+    page.click("#btn-send-code")  # console 短信通道：演示验证码自动回填
+    expect(page.locator("#in-code")).not_to_have_value("")
+    page.click('#sms-form button[type="submit"]')
+    # 实名绑定（姓名 + 身份证与预置患者一致）；手机号与档案匹配时会自动绑定，
+    # 直接进入档案页——两种落点都合法
+    page.wait_for_selector("#pane-bind:not(.hidden), #pane-archive:not(.hidden)")
+    if page.locator("#pane-bind").is_visible():
+        page.fill("#in-name", spd_seed["patient"]["name"])
+        page.fill("#in-idcard", spd_seed["patient"]["id_card"])
+        page.click('#bind-form button[type="submit"]')
+    expect(page.locator("#pane-archive")).to_be_visible()
+
+    # 自查：高危答案 → 结果提示；确认弹窗即"申请专病管理服务"
+    page.on("dialog", lambda d: d.accept())
+    page.click('[data-tab="spd"]')
+    page.click('[data-spd="screen"]')
+    page.wait_for_selector("#spd-scale")
+    for sel in page.locator("[data-q]").all():
+        sel.select_option("是")
+    page.click("#spd-screen-submit")
+    expect(page.locator("#spd-screen-msg")).to_contain_text("风险等级")
+
+    # 自报监测：血压 165 → 落库为待医生处置的异常值。
+    # 保存成功后整个分段会重画（提示语随之被抹掉），所以断言重画后的列表里
+    # 有这条数值，而不是抓那条一闪而过的提示
+    page.click('[data-spd="measure"]')
+    page.wait_for_selector("#spd-measure-form")
+    page.fill("#spd-value", "165")
+    page.click('#spd-measure-form button[type="submit"]')
+    page.wait_for_timeout(900)
+    body = page.eval_on_selector("#spd-result", "e => e.textContent")
+    assert "165" in body, "自报的监测数值应出现在记录列表里"
+
+
+def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
+    """医生移动端：登录 → 慢专病待办接收 → 转诊复核通过（prompt 应答意见）。"""
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "e2e_spd_doc")
+    page.fill("#lg-pass", "passw0rd1")
+    page.click('#login-form button[type="submit"]')
+    expect(page.locator("#workbench")).to_be_visible()
+
+    page.click('[data-tab="spd"]')
+    page.wait_for_selector("[data-spd-claim]")
+    page.click("[data-spd-claim]")
+    page.wait_for_timeout(400)
+
+    with _answers(page, ["同意上转"]):
+        page.click('[data-dspd="referral"]')
+        page.wait_for_selector("[data-spd-pass]")
+        page.click("[data-spd-pass]")
+        page.wait_for_timeout(500)
+    body = page.eval_on_selector("#spd-list", "e => e.textContent")
+    assert "待卫生院审核" in body or "暂无在途转诊" in body

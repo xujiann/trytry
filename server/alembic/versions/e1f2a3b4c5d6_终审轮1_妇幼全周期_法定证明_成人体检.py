@@ -112,10 +112,12 @@ def upgrade() -> None:
     op.create_index(op.f("ix_physical_exams_patient_id"), "physical_exams", ["patient_id"], unique=False)
     op.create_index(op.f("ix_physical_exams_has_abnormal"), "physical_exams", ["has_abnormal"], unique=False)
 
-    # 高危儿管理：存量儿童档案默认非高危
+    # 高危儿管理：存量儿童档案默认非高危。
+    # 默认值用 sa.false() 而不是 text("0")：SQLite 两者都收，
+    # PostgreSQL 会拒绝给 boolean 列配整数默认（DatatypeMismatch）
     op.add_column(
         "child_records",
-        sa.Column("high_risk", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("high_risk", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
     op.add_column(
         "child_records",
