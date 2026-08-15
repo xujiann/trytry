@@ -2054,7 +2054,8 @@ class Attachment(Base):
     # 业务域：exam_report=检查报告附件, adverse_event=不良事件附件
     owner_type: Mapped[str] = mapped_column(String(32), index=True)
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
-    uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # 可空：居民端上传（慢专病任务佐证）没有工作人员账号，记 NULL 而不是伪造一个
+    uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -3924,3 +3925,14 @@ class RolePermission(Base):
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), index=True)
     permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ============================================================================
+# 全域慢专病全流程管理系统（`spd_*` 共 50 张表）
+#
+# 独立成 `app/spd/` 子系统包，但在这里 import 进来：`Base.metadata` 必须在
+# `create_all` 之前认识这些表，而各处（测试 conftest、alembic env、应用启动）
+# 导入的都是 `app.models`。放在文件末尾而不是开头——`app/spd/models.py` 要用本模块的
+# `Money` 与 `utcnow`，此刻它们已经定义完毕。
+# ============================================================================
+from .spd.models import *  # noqa: E402,F401,F403

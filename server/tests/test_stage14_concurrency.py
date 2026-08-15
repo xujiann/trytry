@@ -19,6 +19,22 @@ from app import models
 from app.main import app
 
 ROUTER_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "routers")
+# 慢专病子系统的路由在自己的包里（app/spd/routers/）。**必须一并扫**：
+# 子系统换个目录就绕过防复发扫描，是这类规则最典型的失效方式。
+SPD_ROUTER_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "spd", "routers")
+ROUTER_DIRS = (ROUTER_DIR, SPD_ROUTER_DIR)
+
+
+def _router_files():
+    """全部路由文件的 (显示名, 绝对路径)。显示名带子系统前缀，报错时一眼看出出处。"""
+    files = []
+    for directory in ROUTER_DIRS:
+        label = "spd/" if directory is SPD_ROUTER_DIR else ""
+        for name in sorted(os.listdir(directory)):
+            if name.endswith(".py"):
+                files.append((f"{label}{name}", os.path.join(directory, name)))
+    return files
+
 
 
 @pytest.fixture(scope="module")
@@ -375,10 +391,7 @@ def test_不得再用读改写累加计数(client):
         "encounters.py:_accumulate_local",
     }
     offenders = []
-    for name in sorted(os.listdir(ROUTER_DIR)):
-        if not name.endswith(".py"):
-            continue
-        path = os.path.join(ROUTER_DIR, name)
+    for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
         for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             key = f"{name}:{func.name}"
@@ -492,10 +505,7 @@ def test_写唯一约束表的接口必须处理约束冲突():
     helpers = {"insert_or_conflict", "insert_with_retry", "upsert_unique", "insert_if_absent"}
     offenders = []
 
-    for name in sorted(os.listdir(ROUTER_DIR)):
-        if not name.endswith(".py"):
-            continue
-        path = os.path.join(ROUTER_DIR, name)
+    for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
         model_names = set(model_table)
         for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
@@ -523,10 +533,8 @@ def test_写唯一约束表的接口必须处理约束冲突():
 def test_豁免清单不得腐烂():
     """豁免条目对应的函数必须还存在——函数改名或删掉之后豁免会一直挂着。"""
     existing = set()
-    for name in os.listdir(ROUTER_DIR):
-        if not name.endswith(".py"):
-            continue
-        tree = ast.parse(open(os.path.join(ROUTER_DIR, name), encoding="utf-8").read())
+    for name, path in _router_files():
+        tree = ast.parse(open(path, encoding="utf-8").read())
         for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             existing.add(f"{name}:{func.name}")
     stale = sorted(set(CONFLICT_SAFE) - existing)

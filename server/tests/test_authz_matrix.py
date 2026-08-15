@@ -54,6 +54,18 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/portal/me/surveys"),
     ("POST", "/api/portal/my-archive"),
     ("POST", "/api/portal/surveys"),
+    # 慢专病居民端：同上，走 portal 令牌 + accessible_patient 判定"这次能看谁的档案"，
+    # 不进员工角色体系。每个接口都只写调用者本人或其代管家人的数据。
+    ("POST", "/api/portal/spd/measurements"),
+    ("POST", "/api/portal/spd/screenings"),
+    ("POST", "/api/portal/spd/service-applies"),
+    ("POST", "/api/portal/spd/tasks/{task_id}/submit"),
+    # 佐证照片上传：portal 令牌 + accessible_patient + 任务归属校验（见 portal.py）
+    ("POST", "/api/portal/spd/tasks/{task_id}/attachments"),
+    ("POST", "/api/portal/spd/followups/{record_id}/self-answer"),
+    ("POST", "/api/portal/spd/interventions/{intervention_id}/feedback"),
+    ("POST", "/api/portal/spd/edu/{push_id}/read"),
+    ("POST", "/api/portal/spd/consults"),
     # 任意登录用户的自助操作
     ("POST", "/api/notifications/{notification_id}/read"),
     ("POST", "/api/notifications/read-all"),
@@ -83,6 +95,12 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/workflows/instances/{instance_id}/advance"),
     ("POST", "/api/workflows/instances/{instance_id}/cancel"),
     ("POST", "/api/esb/messages"),
+    # 慢专病村医积分：签到与兑换写的都是**调用者本人**的账户（user_id 从令牌取，
+    # 不从请求体取），按角色卡人反而会挡住真正要用它的村医。
+    # 核销（/api/spd/redeems/verify）另有 director/operator 守卫——
+    # 能兑换不等于能核销。
+    ("POST", "/api/spd/point-accounts/signin"),
+    ("POST", "/api/spd/redeems"),
 }
 
 

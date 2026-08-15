@@ -54,6 +54,7 @@ function switchTab(tab) {
   if (tab === "service") renderServiceTab();
   if (tab === "survey") renderSurveyTab();
   if (tab === "notify") renderNotifyTab();
+  if (tab === "spd") renderSpdTab();
 }
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -775,15 +776,338 @@ async function renderNotifyTab() {
 
 /* ---------------- 启动 ---------------- */
 
-const TABS = ["edu", "archive", "service", "notify", "survey"];
+const TABS = ["edu", "archive", "service", "spd", "notify", "survey"];
+
+/* 扫码进入：#scale=<qr_token> 直达慢专病自查并预选该量表（P2-3 二维码入口）。
+ * 令牌在这里只记下来，预选发生在 renderSpdScreen——量表停用/令牌失效时
+ * 页面自然回落到量表列表，码不用重印。 */
+let scaleTokenFromQr = "";
 
 (async function start() {
   loadArticles();
   const fromWeChat = await consumeWeChatRedirect();
-  const initTab = (location.hash || "#edu").replace("#", "");
+  const hash = location.hash || "#edu";
+  if (hash.startsWith("#scale=")) {
+    scaleTokenFromQr = hash.slice("#scale=".length);
+    activeSpd = "screen";
+    switchTab("spd");
+    refreshNotifyDot();
+    setInterval(refreshNotifyDot, 300000);
+    return;
+  }
+  const initTab = hash.replace("#", "");
   switchTab(fromWeChat ? "archive" : (TABS.includes(initTab) ? initTab : "edu"));
   refreshNotifyDot();
   // 5 分钟一次即可：居民端不是值班台，红点晚几分钟出现没有代价，
   // 而后台常驻页签每 30 秒打一次接口纯属浪费。
   setInterval(refreshNotifyDot, 300000);
 })();
+
+
+/* ---------------- 慢专病（自主服务与健康管理端） ----------------
+ *
+ * 与「在线服务」分开一个页签，而不是塞成它的第八个分段：慢专病是**长期**关系
+ * （签约、路径、随访、指标趋势），在线服务是**一次性**事务（约号、看账单）。
+ * 混在一起，长期管理的入口会被一堆一次性事务淹没。
+ */
+
+let activeSpd = "home";
+
+document.querySelectorAll("[data-spd]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    activeSpd = btn.dataset.spd;
+    document.querySelectorAll("[data-spd]").forEach((b) => b.classList.toggle("active", b === btn));
+    loadSpd();
+  });
+});
+
+const spdLoginBtn = $("#btn-spd-login");
+if (spdLoginBtn) {
+  spdLoginBtn.addEventListener("click", () => {
+    switchTab("archive");
+    history.replaceState(null, "", "#archive");
+  });
+}
+
+async function renderSpdTab() {
+  let bound = false;
+  if (token.get()) {
+    try { bound = (await authApi("/api/portal/me")).bound; } catch (err) { bound = false; }
+  }
+  $("#spd-guard").classList.toggle("hidden", bound);
+  $("#spd-body").classList.toggle("hidden", !bound);
+  if (bound) await loadSpd();
+}
+
+/* 与「我的档案」的成员切换保持一致：为家人查看时带上 patient_id */
+function spdQuery(extra) {
+  const params = new URLSearchParams(extra || {});
+  if (viewingPatientId !== null) params.set("patient_id", viewingPatientId);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+const SPD_RISK_TAGS = {
+  low: ["低危", "green"], mid: ["中危", "orange"],
+  high: ["高危", "red"], very_high: ["极高危", "red"],
+};
+const SPD_LEVEL_TAGS = { normal: ["正常", "green"], high: ["偏高", "red"], low: ["偏低", "orange"] };
+
+function spdTagOf(map, key) {
+  const [text, cls] = map[key] || [key || "—", ""];
+  return `<span class="tag ${cls}">${esc(text)}</span>`;
+}
+
+async function loadSpd() {
+  const box = $("#spd-result");
+  box.innerHTML = '<p class="empty">加载中…</p>';
+  try {
+    if (activeSpd === "home") return await renderSpdHome(box);
+    if (activeSpd === "measure") return await renderSpdMeasure(box);
+    if (activeSpd === "task") return await renderSpdTasks(box);
+    if (activeSpd === "followup") return await renderSpdFollowups(box);
+    if (activeSpd === "plan") return await renderSpdPlans(box);
+    if (activeSpd === "referral") return await renderSpdReferrals(box);
+    return await renderSpdScreen(box);
+  } catch (err) {
+    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+  }
+}
+
+async function renderSpdHome(box) {
+  const home = await authApi(`/api/portal/spd/home${spdQuery()}`);
+  if (!home.enrolled) {
+    box.innerHTML = `<div class="m-card"><p class="hint">您当前没有签约的慢专病管理。
+      可在「自查」中完成高危筛查后申请专病服务。</p></div>`;
+    return;
+  }
+  const metrics = Object.entries(home.latest_metrics || {}).map(([key, m]) => kv(
+    { bp_sys: "收缩压", bp_dia: "舒张压", glucose_fasting: "空腹血糖",
+      bmi: "体质指数", spo2: "血氧饱和度" }[key] || key,
+    `${esc(m.value)}${esc(m.unit)} ${spdTagOf(SPD_LEVEL_TAGS, m.level)}`)).join("");
+  const programs = home.programs.map((p) => `<div class="m-card">
+    ${kv("管理病种", esc(p.program_name || p.program_code))}
+    ${kv("当前阶段", esc(p.stage || "—"))}
+    ${kv("风险等级", spdTagOf(SPD_RISK_TAGS, p.risk_level))}
+    ${kv("签约团队", esc(p.team_name || "—"))}
+    ${kv("下次随访", esc(p.next_followup_at || "—"))}</div>`).join("");
+  const packages = home.packages.map((p) => `<div class="m-card">
+    ${kv("服务包", esc(p.name))}
+    ${kv("完成进度", `${p.used}/${p.total}（${p.progress}%）`)}
+    ${kv("有效期至", esc(p.period_end || "—"))}</div>`).join("");
+  box.innerHTML = `
+    <div class="m-card">
+      ${kv("待办任务", home.todo.tasks)}
+      ${kv("待随访", home.todo.followups)}
+      ${kv("待复诊", home.todo.revisits)}
+      ${kv("干预方案", home.todo.interventions)}
+      ${kv("未读宣教", home.todo.unread_edu)}
+    </div>
+    ${metrics ? `<div class="m-card"><h3>最新指标</h3>${metrics}</div>` : ""}
+    ${programs}
+    ${packages}`;
+}
+
+async function renderSpdMeasure(box) {
+  const rows = await authApi(`/api/portal/spd/measurements${spdQuery({ limit: 30 })}`);
+  const list = rows.map((r) => `<div class="m-card">
+    ${kv("项目", esc(r.metric))}
+    ${kv("数值", `${esc(r.value)}${esc(r.unit)} ${spdTagOf(SPD_LEVEL_TAGS, r.level)}`)}
+    ${kv("来源", r.source === "device" ? "设备采集" : "手工记录")}
+    ${kv("时间", esc(r.measured_at.replace("T", " ").slice(0, 16)))}</div>`).join("")
+    || '<p class="empty">还没有记录，先添加一条吧</p>';
+  box.innerHTML = `
+    <form id="spd-measure-form" class="m-card">
+      <p class="hint">记录血压、血糖、体重等居家监测数据，系统会按管理目标判定是否达标</p>
+      <select id="spd-metric">
+        <option value="bp_sys">收缩压(mmHg)</option>
+        <option value="bp_dia">舒张压(mmHg)</option>
+        <option value="glucose_fasting">空腹血糖(mmol/L)</option>
+        <option value="bmi">体质指数</option>
+        <option value="spo2">血氧饱和度(%)</option>
+      </select>
+      <input id="spd-value" type="number" step="any" placeholder="数值" required>
+      <input id="spd-program" placeholder="病种编码（可留空）">
+      <button type="submit">保存</button>
+      <p id="spd-measure-msg" class="msg"></p>
+    </form>
+    ${list}`;
+  $("#spd-measure-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const body = {
+        metric: $("#spd-metric").value, value: Number($("#spd-value").value),
+        program_code: $("#spd-program").value || "",
+      };
+      if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+      const r = await authApi("/api/portal/spd/measurements", {
+        method: "POST", body: JSON.stringify(body) });
+      $("#spd-measure-msg").textContent =
+        r.level === "normal" ? "已保存，指标正常" : `已保存，指标${r.level === "high" ? "偏高" : "偏低"}，请关注`;
+      await loadSpd();
+    } catch (err) { $("#spd-measure-msg").textContent = err.message; }
+  });
+}
+
+async function renderSpdTasks(box) {
+  const rows = await authApi(`/api/portal/spd/tasks${spdQuery()}`);
+  box.innerHTML = rows.map((t) => `<div class="m-card">
+    ${kv("任务", esc(t.title))}
+    ${kv("截止", esc(t.due_date || "—"))}
+    ${kv("状态", esc({ pending: "待办", claimed: "待办", doing: "办理中",
+      submitted: "已提交待审核", done: "已完成", overdue: "已超期" }[t.status] || t.status))}
+    ${t.review_note ? kv("审核意见", esc(t.review_note)) : ""}
+    ${["pending", "claimed", "doing", "overdue"].includes(t.status)
+      ? `<button type="button" class="ghost-btn" data-spd-task="${t.id}">填报并提交</button>` : ""}
+    </div>`).join("") || '<p class="empty">暂无健康任务</p>';
+  box.querySelectorAll("[data-spd-task]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const note = prompt("填写完成情况（如：已服药、已测量血压）") || "";
+      const body = { result: { note } };
+      if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+      try {
+        await authApi(`/api/portal/spd/tasks/${btn.dataset.spdTask}/submit`, {
+          method: "POST", body: JSON.stringify(body) });
+        await loadSpd();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+async function renderSpdFollowups(box) {
+  const rows = await authApi(`/api/portal/spd/followups${spdQuery()}`);
+  box.innerHTML = rows.map((f) => `<div class="m-card">
+    ${kv("随访类型", esc({ inpatient: "出院随访", outpatient: "门诊随访",
+      surgery: "术后随访", checkup: "体检随访" }[f.scene] || f.scene))}
+    ${kv("计划时间", esc(f.planned_at))}
+    ${kv("状态", esc({ planned: "待随访", done: "已完成",
+      unreachable: "未联系上", removed: "已移除" }[f.status] || f.status))}
+    ${f.result ? kv("医生反馈", esc(f.result)) : ""}
+    ${f.status === "planned"
+      ? `<button type="button" class="ghost-btn" data-spd-self="${f.id}">线上自助随访</button>` : ""}
+    </div>`).join("") || '<p class="empty">暂无随访计划</p>';
+  box.querySelectorAll("[data-spd-self]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const body = { answers: { recovery: prompt("总体恢复情况（良好/一般/较差）") || "良好" } };
+      if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+      try {
+        const r = await authApi(`/api/portal/spd/followups/${btn.dataset.spdSelf}/self-answer`, {
+          method: "POST", body: JSON.stringify(body) });
+        alert(r.abnormal_level && r.abnormal_level !== "none"
+          ? `已提交。系统判定为${r.abnormal_level}异常，${r.action || "医护将尽快联系您"}`
+          : "已提交，感谢配合");
+        await loadSpd();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+async function renderSpdPlans(box) {
+  const rows = await authApi(`/api/portal/spd/interventions${spdQuery()}`);
+  box.innerHTML = rows.map((p) => `<div class="m-card">
+    ${kv("干预目标", esc(p.goal || "—"))}
+    ${kv("方案内容", esc(p.content))}
+    ${p.measures ? kv("具体措施", esc(p.measures)) : ""}
+    ${kv("执行频次", esc(p.frequency || "—"))}
+    ${kv("下次执行", esc(p.next_at || "—"))}
+    ${p.read ? "" : `<button type="button" class="ghost-btn" data-spd-read="${p.id}">标记已读并反馈</button>`}
+    </div>`).join("") || '<p class="empty">暂无干预方案</p>';
+  box.querySelectorAll("[data-spd-read]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const body = { feedback: prompt("执行情况反馈（可留空）") || "" };
+      if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+      try {
+        await authApi(`/api/portal/spd/interventions/${btn.dataset.spdRead}/feedback`, {
+          method: "POST", body: JSON.stringify(body) });
+        await loadSpd();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+const SPD_REF_TEXT = {
+  submitted: "村医已发起，待服务站复核", station_reviewed: "服务站已复核，待卫生院审核",
+  township_reviewed: "卫生院已审核，待县级医院接收", accepted: "县级医院已接收",
+  arrived: "已到院就诊", down_referred: "已下转基层", closed: "已完成闭环",
+  rejected: "已退回", withdrawn: "已撤回",
+};
+
+async function renderSpdReferrals(box) {
+  const rows = await authApi(`/api/portal/spd/referrals${spdQuery()}`);
+  box.innerHTML = rows.map((r) => `<div class="m-card">
+    ${kv("方向", r.direction === "up" ? "上转" : "下转")}
+    ${kv("进度", esc(SPD_REF_TEXT[r.status] || r.status))}
+    ${kv("转诊理由", esc(r.reason || "—"))}
+    ${kv("发起时间", esc(r.created_at.replace("T", " ").slice(0, 16)))}
+    <button type="button" class="ghost-btn" data-spd-ref="${r.id}">查看全过程</button>
+    </div>`).join("") || '<p class="empty">暂无转诊记录</p>';
+  box.querySelectorAll("[data-spd-ref]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const params = viewingPatientId !== null ? `?patient_id=${viewingPatientId}` : "";
+      const d = await authApi(`/api/portal/spd/referrals/${btn.dataset.spdRef}${params}`);
+      alert(d.steps.map((s) =>
+        `${s.created_at.slice(0, 16).replace("T", " ")} ${s.step}${s.opinion ? "：" + s.opinion : ""}`
+      ).join("\n") || "暂无环节记录");
+    });
+  });
+}
+
+async function renderSpdScreen(box) {
+  const scales = await authApi("/api/portal/spd/scales");
+  if (!scales.length) {
+    box.innerHTML = '<p class="empty">暂无可用的自查问卷</p>';
+    return;
+  }
+  const applies = await authApi(`/api/portal/spd/service-applies${spdQuery()}`);
+  box.innerHTML = `
+    <div class="m-card">
+      <p class="hint">完成高危自查后可申请专病管理服务，由基层医生复核后纳入管理</p>
+      <select id="spd-scale">${scales.map((s) =>
+        `<option value="${esc(s.code)}" data-program="${esc(s.program_code)}">${esc(s.name)}</option>`).join("")}</select>
+      <div id="spd-scale-items"></div>
+      <button type="button" id="spd-screen-submit">提交自查</button>
+      <p id="spd-screen-msg" class="msg"></p>
+    </div>
+    ${applies.map((a) => `<div class="m-card">
+      ${kv("申请病种", esc(a.program_code))}
+      ${kv("状态", esc({ pending: "待受理", accepted: "已受理", rejected: "未通过" }[a.status] || a.status))}
+      ${a.handle_note ? kv("处理意见", esc(a.handle_note)) : ""}</div>`).join("")}`;
+
+  const drawItems = () => {
+    const scale = scales.find((s) => s.code === $("#spd-scale").value);
+    $("#spd-scale-items").innerHTML = (scale.items || []).map((item) => `
+      <div class="kv"><span class="k">${esc(item.title)}</span>
+        <select data-q="${esc(item.key)}">${(item.options || []).map((o) =>
+          `<option value="${esc(o.label)}">${esc(o.label)}</option>`).join("")}</select></div>`).join("");
+  };
+  if (scaleTokenFromQr) {
+    // 扫码进来的：按令牌预选对应量表；令牌失效就静默回落到列表首项
+    try {
+      const byToken = await api(`/api/portal/spd/scales/by-token/${scaleTokenFromQr}`);
+      if (scales.some((s) => s.code === byToken.code)) $("#spd-scale").value = byToken.code;
+    } catch (err) { /* 码失效不打断自查流程 */ }
+    scaleTokenFromQr = "";
+  }
+  drawItems();
+  $("#spd-scale").addEventListener("change", drawItems);
+  $("#spd-screen-submit").addEventListener("click", async () => {
+    const scale = scales.find((s) => s.code === $("#spd-scale").value);
+    const answers = {};
+    document.querySelectorAll("[data-q]").forEach((sel) => { answers[sel.dataset.q] = sel.value; });
+    const body = { program_code: scale.program_code, scale_code: scale.code, answers };
+    if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+    try {
+      const r = await authApi("/api/portal/spd/screenings", {
+        method: "POST", body: JSON.stringify(body) });
+      $("#spd-screen-msg").textContent =
+        `风险等级：${{ low: "低危", mid: "中危", high: "高危" }[r.risk_level] || r.risk_level}。${r.advice}`;
+      if (r.can_apply && confirm("检测到中高风险，是否申请专病管理服务？")) {
+        const applyBody = { program_code: scale.program_code, screening_id: r.id };
+        if (viewingPatientId !== null) applyBody.patient_id = viewingPatientId;
+        await authApi("/api/portal/spd/service-applies", {
+          method: "POST", body: JSON.stringify(applyBody) });
+        await loadSpd();
+      }
+    } catch (err) { $("#spd-screen-msg").textContent = err.message; }
+  });
+}
