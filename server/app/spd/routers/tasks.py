@@ -15,21 +15,21 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..concurrency import add_amount
-from ..database import get_db
-from ..datetypes import OptionalDateStr
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date
-from ..models import Patient, User
-from ..models_spd import (
+from ...clock import now_naive
+from ...concurrency import add_amount
+from ...database import get_db
+from ...datetypes import OptionalDateStr
+from ...deps import get_current_user, paginate, require_roles, resolve_business_date
+from ..platform import Patient, User, notify_user
+from ..models import (
     SpdEnrollment,
     SpdPathInstance,
     SpdPathNode,
     SpdPathTemplate,
     SpdTask,
 )
-from ..spd_service import advance_path, award_points, node_enter_allowed, spawn_task, sweep_overdue
-from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from ..service import advance_path, award_points, node_enter_allowed, spawn_task, sweep_overdue
+from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -80,7 +80,7 @@ def start_path_instance(
     同一纳管档案下**同一模板**只允许有一个在跑的实例：重复启动会生成两份
     并行任务，办完一份另一份还挂着，基层只会当成系统出错。
     """
-    from ..spd_service import start_path
+    from ..service import start_path
 
     enrollment = db.get(SpdEnrollment, body.enrollment_id)
     if enrollment is None:
@@ -503,11 +503,9 @@ def assign_task(
 def urge_task(task_id: int, db: Session = Depends(get_db)):
     """催办：计数 +1 并给责任人发站内消息。催办不改状态——催过还是待办。
 
-    直接落 `Notification` 而不走 `notify.notify_staff`：那个函数是按机构+角色
-    群发的，这里要发给**具体某个人**（任务的责任人），用群发接口做不到。
+    走适配层的 `notify_user` 而不是平台的 `notify.notify_staff`：后者按机构+角色
+    群发，发不到**具体某个人**（任务的责任人）。
     """
-    from ..models import Notification
-
     task = _load_task(db, task_id)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需催办")
@@ -516,15 +514,10 @@ def urge_task(task_id: int, db: Session = Depends(get_db)):
     db.flush()
     db.refresh(task)
     if task.assignee_id is not None:
-        db.add(
-            Notification(
-                user_id=task.assignee_id,
-                category="spd_task",
-                title="慢专病任务催办",
-                body=f"任务「{task.title}」已被催办（第{task.urged_count}次），请尽快处理",
-                link_type="spd_task",
-                link_id=task.id,
-            )
+        notify_user(
+            db, task.assignee_id, category="spd_task", title="慢专病任务催办",
+            body=f"任务「{task.title}」已被催办（第{task.urged_count}次），请尽快处理",
+            link_type="spd_task", link_id=task.id,
         )
     db.commit()
     return _task_out(task)
@@ -668,7 +661,7 @@ def _finish_task(db: Session, task: SpdTask, user: User) -> dict:
 
 def _followup_interval(db: Session, enrollment: SpdEnrollment) -> int:
     """随访周期取该病种当前阶段的管理目标配置，没配就按 90 天。"""
-    from ..spd_service import target_for
+    from ..service import target_for
 
     for metric in ("bp_sys", "glucose_fasting", "spo2", "egfr", "ldl", "bmi"):
         target = target_for(db, enrollment.program_code, enrollment.stage, metric)

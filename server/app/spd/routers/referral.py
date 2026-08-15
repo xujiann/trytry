@@ -23,19 +23,19 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
-from ..models import Organization, Patient, User
-from ..models_spd import (
+from ...clock import now_naive
+from ...database import get_db
+from ...deps import get_current_user, paginate, require_roles
+from ..platform import Organization, Patient, User, org_level
+from ..models import (
     SpdEnrollment,
     SpdReferralCase,
     SpdReferralRule,
     SpdReferralStep,
 )
-from ..spd_rules import RuleError, evaluate, validate_conditions
-from ..spd_service import award_points, build_facts, spawn_task
-from ..visibility import assert_patient_visible, visible_org_ids
+from ..rules import RuleError, evaluate, validate_conditions
+from ..service import award_points, build_facts, spawn_task
+from ...visibility import assert_patient_visible, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -213,15 +213,8 @@ class ReferralIn(BaseModel):
     trigger_evidence: dict = Field(default_factory=dict)
 
 
-def _level_of(db: Session, org_id: int | None) -> str:
-    """机构层级 → 转诊链路层级。村卫生室=village，乡镇=township，其余按县级处理。"""
-    if org_id is None:
-        return "village"
-    org = db.get(Organization, org_id)
-    if org is None:
-        return "village"
-    return {"village": "village", "township": "township", "county": "county",
-            "city": "county"}.get(org.level, "township")
+#: 机构层级 → 转诊链路层级的换算在适配层（那是平台机构树的形状，不是转诊的规则）
+_level_of = org_level
 
 
 def _case_out(db: Session, c: SpdReferralCase, steps: list[SpdReferralStep] | None = None) -> dict:

@@ -16,13 +16,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..concurrency import insert_if_absent
-from ..database import get_db
-from ..datetypes import OptionalDateStr
-from ..deps import get_current_user, paginate, require_admin, require_roles
-from ..models import Organization, User
-from ..models_spd import (
+from ...clock import now_naive
+from ...concurrency import insert_if_absent
+from ...database import get_db
+from ...datetypes import OptionalDateStr
+from ...deps import get_current_user, paginate, require_admin, require_roles
+from ..platform import Organization, User
+from ..models import (
     SpdCenter,
     SpdDataSource,
     SpdDevice,
@@ -40,8 +40,8 @@ from ..models_spd import (
     SpdTeamMember,
     SpdVillageDoctor,
 )
-from ..spd_rules import FIELD_SOURCES, OPERATORS, RuleError, validate_conditions
-from ..visibility import assert_org_writable
+from ..rules import FIELD_SOURCES, OPERATORS, RuleError, validate_conditions
+from ...visibility import assert_org_writable
 
 router = APIRouter(
     prefix="/api/spd",
@@ -602,7 +602,7 @@ def set_path_status(
 def delete_path_template(
     template_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    from ..models_spd import SpdPathInstance
+    from ..models import SpdPathInstance
 
     template = db.get(SpdPathTemplate, template_id)
     if template is None:
@@ -1471,7 +1471,7 @@ def org_tree(db: Session = Depends(get_db)):
     团队授权和考核"——所以这棵树不只是机构名称，还要带上这几项的实际数量，
     否则配置的人无法判断改动会影响到谁。
     """
-    from ..models_spd import SpdEnrollment
+    from ..models import SpdEnrollment
 
     orgs = db.query(Organization).order_by(Organization.id).all()
     team_counts: dict[int, int] = {}

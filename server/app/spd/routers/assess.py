@@ -25,13 +25,13 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..concurrency import add_amount, insert_if_absent, take_amount
-from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
-from ..formula import FormulaError, evaluate as eval_formula
-from ..models import Organization, User
-from ..models_spd import (
+from ...clock import now_naive
+from ...concurrency import add_amount, insert_if_absent, take_amount
+from ...database import get_db
+from ...deps import get_current_user, paginate, require_roles
+from ...formula import FormulaError, evaluate as eval_formula
+from ..platform import Organization, User
+from ..models import (
     SpdAssessPlan,
     SpdAssessment,
     SpdCaseReport,
@@ -51,7 +51,7 @@ from ..models_spd import (
     SpdTeam,
     SpdVillageDoctor,
 )
-from ..visibility import visible_org_ids
+from ...visibility import visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -261,7 +261,7 @@ def collect_metrics(
             SpdEnrollment.created_at <= f"{end} 23:59:59"))
         enrolled = base.filter(SpdEnrollment.status == "active").count()
         if source == "enrollment":
-            from ..models_spd import SpdCandidate
+            from ..models import SpdCandidate
 
             target_query = db.query(SpdCandidate).filter(
                 SpdCandidate.status.in_(["target", "enrolled"]))

@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     # 网页授权回调地址（须与公众号后台配置的域名一致）
     wechat_redirect_uri: str = ""
 
+    # ---------------- 全域慢专病子系统（app/spd/） ----------------
+    # 装卸开关：false 时不注册路由、不做种子化。表结构仍由迁移建出，
+    # 只买基础平台的县不会在菜单里看到用不上的功能。
+    spd_enabled: bool = True
+    # 就诊事件触发专病纳入规则自动识别。**默认关闭**：全域自动识别会在
+    # 生产上产生大量"疑似"记录，应由各县在诊断数据质量达标后再开启；
+    # 关闭时仍可在管理端手工触发 `POST /api/spd/screenings/auto-run`。
+    spd_auto_identify_on_encounter: bool = False
+    # 出院事件自动生成随访计划。开着是安全的：只有配了诊断关键词的随访方案
+    # 才会命中，没配关键词的方案不匹配任何人。
+    spd_auto_followup_on_discharge: bool = True
+
     @property
     def is_production(self) -> bool:
         return "prod" in (self.env, self.environment)

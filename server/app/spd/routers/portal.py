@@ -12,11 +12,11 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..database import get_db
-from ..deps import paginate
-from ..models import Encounter, Patient, ResidentAccount
-from ..models_spd import (
+from ...clock import now_naive
+from ...database import get_db
+from ...deps import paginate
+from ..platform import Encounter, Patient, ResidentAccount
+from ..models import (
     SpdAssessment,
     SpdConsult,
     SpdConsultMessage,
@@ -39,9 +39,9 @@ from ..models_spd import (
     SpdTask,
     SpdTeam,
 )
-from ..spd_rules import score_scale
-from ..spd_service import judge_measurement
-from .portal import accessible_patient, current_resident
+from ..rules import score_scale
+from ..service import judge_measurement
+from ..platform import accessible_patient, current_resident
 
 router = APIRouter(prefix="/api/portal/spd", tags=["慢专病·患者移动端"])
 
@@ -582,8 +582,8 @@ def self_answer_followup(
     db: Session = Depends(get_db),
 ):
     """线上自助随访作答。异常分级与派单逻辑与医护执行时完全一致。"""
-    from ..models_spd import SpdQuestionnaire
-    from ..spd_rules import grade_abnormal
+    from ..models import SpdQuestionnaire
+    from ..rules import grade_abnormal
 
     patient = _patient(db, account, body.patient_id)
     record = db.get(SpdFollowupRecord, record_id)

@@ -480,7 +480,7 @@ SEED_REPORT_TEMPLATES = [
 
 def seed_all(db) -> None:
     """幂等写入全部种子数据。在应用启动（lifespan）中调用。"""
-    from .models_spd import (
+    from .models import (
         SpdFollowupRule,
         SpdIndicator,
         SpdPointRule,

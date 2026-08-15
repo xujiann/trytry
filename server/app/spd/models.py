@@ -14,6 +14,13 @@
 
 命名一律 `spd_` 前缀，便于运维按前缀做备份、迁移与权限切分。
 
+**本文件是唯一直接 import 平台 `models` 的子系统模块**，且只取 `Money` / `utcnow`
+两个列类型——业务依赖一律走 `platform.py`。这条例外是为了断开一个真实的导入环：
+`app/models.py` 末尾要 import 本文件（让 `Base.metadata` 认识这批表），若本文件
+再经 `platform.py` 去 import `app.routers.portal`，就会在"平台还没初始化完"时
+反向拉起平台路由，触发 `partially initialized module` 报错。
+`tests/test_spd_boundary.py` 把这条例外的**范围**钉死在这两个名字上。
+
 ## 一处贯穿全表的取舍：状态用字符串而不是枚举
 
 SQLAlchemy 的 `Enum` 在 SQLite 上是 CHECK 约束、在国产库上行为各异，
@@ -35,8 +42,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .database import Base
-from .models import Money, utcnow
+from ..database import Base
+from ..models import Money, utcnow  # 仅列类型；业务依赖一律走 platform.py
 
 # ============================================================================
 # 一、配置域：病种规则 / 管理目标 / 标准路径 / 量表 / 宣教 / 服务包
@@ -52,7 +59,7 @@ class SpdProgram(Base):
         include_rules = [{"field": "diagnosis", "op": "in", "value": ["I10", "I11"]},
                          {"field": "bp_sys",    "op": ">=", "value": 140}]
 
-    字段名取自 `spd_rules.FIELD_SOURCES`，求值在 `app/spd_rules.py`，**不用 eval**。
+    字段名取自 `rules.FIELD_SOURCES`，求值在 `app/spd/rules.py`，**不用 eval**。
     分开存 include/exclude 是因为两者语义不同：命中任一 include 且不命中任何
     exclude 才算目标人群——合并成一张表就要再加一列区分，读起来反而绕。
     """

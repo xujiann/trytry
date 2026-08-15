@@ -18,13 +18,13 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..concurrency import insert_if_absent
-from ..database import get_db
-from ..datetypes import OptionalDateStr
-from ..deps import get_current_user, paginate, require_roles
-from ..models import Organization, Patient, User
-from ..models_spd import (
+from ...clock import now_naive
+from ...concurrency import insert_if_absent
+from ...database import get_db
+from ...datetypes import OptionalDateStr
+from ...deps import get_current_user, paginate, require_roles
+from ..platform import Organization, Patient, User
+from ..models import (
     SpdAssessment,
     SpdCandidate,
     SpdEnrollment,
@@ -45,9 +45,9 @@ from ..models_spd import (
     SpdTask,
     SpdTeam,
 )
-from ..spd_rules import evaluate, score_scale
-from ..spd_service import award_points, build_facts, close_open_work, match_program
-from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from ..rules import evaluate, score_scale
+from ..service import award_points, build_facts, close_open_work, match_program
+from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -298,7 +298,7 @@ def auto_screen(
     org_id = body.org_id if body.org_id is not None else user.org_id
     assert_org_writable(db, user, org_id)
 
-    from ..models import Encounter
+    from ..platform import Encounter
 
     patient_ids = [
         pid

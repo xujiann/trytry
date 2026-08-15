@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
+from .. import events
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -35,6 +36,15 @@ def create_encounter(body: EncounterCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="机构不存在")
     encounter = Encounter(**body.model_dump())
     db.add(encounter)
+    db.flush()
+    events.publish(db, events.ENCOUNTER_CREATED, {
+        "encounter_id": encounter.id,
+        "patient_id": encounter.patient_id,
+        "org_id": encounter.org_id,
+        "encounter_type": encounter.encounter_type,
+        "diagnosis_code": encounter.diagnosis_code or "",
+        "diagnosis_name": encounter.diagnosis_name or "",
+    })
     db.commit()
     db.refresh(encounter)
     return encounter

@@ -89,15 +89,6 @@ from .routers import (
     referrals,
     rules,
     surgery,
-    spd_assess,
-    spd_care,
-    spd_config,
-    spd_followup,
-    spd_population,
-    spd_portal,
-    spd_referral,
-    spd_tasks,
-    spd_workbench,
     surveillance,
     reports,
     resources,
@@ -111,6 +102,7 @@ from .routers import (
     vaccine_supply,
 )
 from . import ws
+from .spd import register_spd, seed_spd
 from .audit_chain import audit_entry_hash
 from .models import AuditLog
 from .security import decode_token, hash_password
@@ -237,10 +229,9 @@ async def lifespan(_: FastAPI):
             if seed["code"] not in existing_subjects:
                 db.add(AccountSubject(**seed))
         db.commit()
-        # 全域慢专病：病种规则、管理目标、筛查量表、考核指标、积分规则、
-        # 随访方案与问卷、报告模板（幂等，按编码不覆盖现场调过的参数）
-        from .spd_seed import seed_all as seed_spd
-
+        # 全域慢专病子系统：病种规则、管理目标、筛查量表、考核指标、积分规则、
+        # 随访方案与问卷、报告模板（幂等，按编码不覆盖现场调过的参数）；
+        # 子系统未启用时这一步什么都不做
         seed_spd(db)
         # T1.1：把代码中注册的定时任务同步进库（幂等，不覆盖运维调过的参数）
         from . import jobs as _jobs  # noqa: F401 - 导入即完成任务注册
@@ -355,17 +346,8 @@ app.include_router(gapfill.maternal_router)
 app.include_router(gapfill.perf_router)
 app.include_router(gapfill.home_router)
 app.include_router(service_extras.router)
-# 全域慢专病全流程管理系统（十一端）：配置 → 人群 → 路径任务 → 服务 →
-# 转诊 → 考核 → 智能随访/辅助 → 各端工作台 → 患者移动端
-app.include_router(spd_config.router)
-app.include_router(spd_population.router)
-app.include_router(spd_tasks.router)
-app.include_router(spd_care.router)
-app.include_router(spd_referral.router)
-app.include_router(spd_assess.router)
-app.include_router(spd_followup.router)
-app.include_router(spd_workbench.router)
-app.include_router(spd_portal.router)
+# 全域慢专病子系统：装卸是一个动作，由 MEDPLAT_SPD_ENABLED 控制（见 app/spd/）
+register_spd(app)
 app.include_router(todos.router)
 app.include_router(ws.router)
 

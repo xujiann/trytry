@@ -15,12 +15,12 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..database import get_db
-from ..datetypes import OptionalDateStr
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date
-from ..models import Admission, Encounter, Patient, User
-from ..models_spd import (
+from ...clock import now_naive
+from ...database import get_db
+from ...datetypes import OptionalDateStr
+from ...deps import get_current_user, paginate, require_roles, resolve_business_date
+from ..platform import Admission, Encounter, Patient, User
+from ..models import (
     SpdCallTask,
     SpdEnrollment,
     SpdFollowupRecord,
@@ -33,8 +33,8 @@ from ..models_spd import (
     SpdRevisit,
     SpdTask,
 )
-from ..spd_rules import RuleError, grade_abnormal, validate_conditions
-from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from ..rules import RuleError, grade_abnormal, validate_conditions
+from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -1112,7 +1112,7 @@ def _compose_section(
             ],
         }
     if key == "score":
-        from ..models_spd import SpdScore
+        from ..models import SpdScore
 
         rows = db.query(SpdScore).order_by(SpdScore.id.desc()).limit(20).all()
         return {

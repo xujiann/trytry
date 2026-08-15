@@ -10,12 +10,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..database import get_db
-from ..datetypes import DateStr, OptionalDateStr
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date
-from ..models import Patient, User
-from ..models_spd import (
+from ...clock import now_naive
+from ...database import get_db
+from ...datetypes import DateStr, OptionalDateStr
+from ...deps import get_current_user, paginate, require_roles, resolve_business_date
+from ..platform import Patient, User
+from ..models import (
     SpdAssessment,
     SpdCaseReport,
     SpdCaseReportTask,
@@ -32,9 +32,9 @@ from ..models_spd import (
     SpdRevisit,
     SpdScale,
 )
-from ..spd_rules import score_scale
-from ..spd_service import award_points, judge_measurement, spawn_task
-from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from ..rules import score_scale
+from ..service import award_points, judge_measurement, spawn_task
+from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",

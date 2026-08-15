@@ -18,7 +18,10 @@ from alembic import op
 
 revision = "d1a2b3c4e5f6"
 down_revision = "c2d3e4f5a6b7"
-branch_labels = None
+# 子系统自成一条迁移分支：慢专病与主平台并行开发时不再抢同一个 head，
+# 各自往自己的链上追加即可。代价是升级命令要用 `alembic upgrade heads`（复数），
+# 已在 docs/运维手册.md 与 start.sh 里统一。
+branch_labels = ("spd",)
 depends_on = None
 
 

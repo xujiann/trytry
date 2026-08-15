@@ -14,10 +14,10 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from .clock import now_naive
-from .concurrency import add_amount
-from .models import Encounter, Patient
-from .models_spd import (
+from ..clock import now_naive
+from ..concurrency import add_amount
+from .platform import diagnosis_codes, diagnosis_names, patient_of
+from .models import (
     SpdEnrollment,
     SpdIntervention,
     SpdMeasurement,
@@ -32,9 +32,9 @@ from .models_spd import (
     SpdTarget,
     SpdTask,
 )
-from .spd_rules import evaluate, judge_level
+from .rules import evaluate, judge_level
 
-#: 监测指标在 facts 里的键就是 `SpdMeasurement.metric`，与 `spd_rules.FIELD_SOURCES` 对齐。
+#: 监测指标在 facts 里的键就是 `SpdMeasurement.metric`，与 `spd/rules.py::FIELD_SOURCES` 对齐。
 MEASURE_FIELDS = (
     "bp_sys", "bp_dia", "glucose_fasting", "glucose_pp2h", "hba1c", "ua", "spo2",
     "bmi", "ldl", "creatinine", "egfr",
@@ -53,25 +53,18 @@ def _age_of(birth_date: str) -> int | None:
 def build_facts(db: Session, patient_id: int, extra: dict | None = None) -> dict:
     """汇集一名患者的事实字典，供纳入/排除/转诊规则求值。
 
-    诊断取**全部历史就诊**的诊断编码而不是最近一次：慢病的纳入依据是
-    "曾被确诊"，按最近一次就诊判定会让一个来看感冒的高血压患者掉出目标池。
+    诊断取自 `platform.diagnosis_codes`（全部历史就诊 + ICD 父目，理由见那里）；
     指标取最近一次值——那才是"现在控制得怎么样"。
     """
     facts: dict = {}
-    patient = db.get(Patient, patient_id)
+    patient = patient_of(db, patient_id)
     if patient is not None:
         facts["age"] = _age_of(patient.birth_date)
         facts["gender"] = patient.gender
-    diagnoses, names = [], []
-    for enc in db.query(Encounter).filter(Encounter.patient_id == patient_id).all():
-        if getattr(enc, "diagnosis_code", ""):
-            diagnoses.append(enc.diagnosis_code)
-            # ICD-10 亚目（I10.x）也要能被父目规则命中，否则规则得逐个亚目列全
-            diagnoses.append(str(enc.diagnosis_code).split(".")[0])
-        if getattr(enc, "diagnosis_name", ""):
-            names.append(enc.diagnosis_name)
-    facts["diagnosis"] = list(dict.fromkeys(diagnoses))
-    facts["diagnosis_name"] = names
+    # 诊断怎么取（全部历史 + ICD 父目）是**平台数据的形状**，实现放适配层，
+    # 这里只管把它填进事实字典
+    facts["diagnosis"] = diagnosis_codes(db, patient_id)
+    facts["diagnosis_name"] = diagnosis_names(db, patient_id)
 
     for metric in MEASURE_FIELDS:
         latest = (
@@ -88,8 +81,8 @@ def build_facts(db: Session, patient_id: int, extra: dict | None = None) -> dict
 
 
 def match_program(db: Session, patient_id: int, program: SpdProgram, extra: dict | None = None):
-    """对单个病种做纳入/排除判定，返回 `spd_rules.screen` 的结果 + 使用的规则版本。"""
-    from .spd_rules import screen
+    """对单个病种做纳入/排除判定，返回 `spd/rules.py::screen` 的结果 + 使用的规则版本。"""
+    from .rules import screen
 
     facts = build_facts(db, patient_id, extra)
     result = screen(program.include_rules or [], program.exclude_rules or [], facts)
@@ -122,7 +115,7 @@ def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTa
 
 
 def judge_measurement(db: Session, program_code: str, stage: str, metric: str, value) -> str:
-    """按管理目标判定单次监测值的等级。没有目标就是 normal，见 `spd_rules.judge_level`。"""
+    """按管理目标判定单次监测值的等级。没有目标就是 normal，见 `spd/rules.py::judge_level`。"""
     target = target_for(db, program_code, stage, metric)
     if target is None:
         return "normal"

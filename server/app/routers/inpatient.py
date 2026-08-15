@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
+from .. import events
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -358,6 +359,15 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: 
         link_type="admission",
         link_id=admission.id,
     )
+    # 领域事件：订阅方（如慢专病子系统）据此派生自己的随访计划。
+    # 同事务、只 add 不 commit，订阅者异常由总线兜住，不影响出院办理本身。
+    events.publish(db, events.ADMISSION_DISCHARGED, {
+        "admission_id": admission.id,
+        "patient_id": admission.patient_id,
+        "org_id": admission.org_id,
+        "diagnosis_name": admission.diagnosis_name or "",
+        "discharged_on": admission.discharged_at.date().isoformat(),
+    })
     db.commit()
     db.refresh(admission)
     return _admission_out(admission)

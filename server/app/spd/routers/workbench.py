@@ -14,11 +14,11 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..clock import now_naive
-from ..database import get_db
-from ..deps import get_current_user, require_roles, resolve_business_date
-from ..models import Organization, Patient, User
-from ..models_spd import (
+from ...clock import now_naive
+from ...database import get_db
+from ...deps import get_current_user, require_roles, resolve_business_date
+from ..platform import Organization, Patient, User
+from ..models import (
     SpdAssessment,
     SpdCandidate,
     SpdCaseReport,
@@ -44,8 +44,8 @@ from ..models_spd import (
     SpdTeamMember,
     SpdVillageDoctor,
 )
-from ..spd_service import sweep_overdue
-from ..visibility import stats_org_ids, visible_org_ids
+from ..service import sweep_overdue
+from ...visibility import stats_org_ids, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -739,7 +739,7 @@ def team_workbench(
     }
 
     if role == "case_manager":
-        from ..models_spd import SpdPackageBinding
+        from ..models import SpdPackageBinding
 
         bindings = (
             db.query(SpdPackageBinding)
@@ -892,7 +892,7 @@ def doctor_mobile_workbench(
         },
     }
 
-    from ..models_spd import SpdPointAccount
+    from ..models import SpdPointAccount
 
     account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user.id).first()
     out["points"] = {

@@ -668,7 +668,7 @@ def test_referral_rule_check(client, h, base):
 
 def test_empty_rule_never_matches(client, h, base):
     """空规则不命中任何人——否则一次自动识别会把全县人口纳进目标池。"""
-    from app.spd_rules import evaluate
+    from app.spd.rules import evaluate
 
     hit, matched = evaluate([], {"age": 70}, mode="all")
     assert hit is False and matched == []
