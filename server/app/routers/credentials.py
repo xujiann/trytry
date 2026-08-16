@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..config import settings
 from ..concurrency import insert_or_conflict
-from ..visibility import scope_patient_list
+from ..visibility import assert_obj_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import Patient, User, VisitCredential, utcnow
@@ -153,24 +153,31 @@ def lookup(credential_no: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{credential_id}/recycle", dependencies=[Depends(require_roles("operator"))])
-def recycle(credential_id: int, body: CredentialClose, db: Session = Depends(get_db)):
+def recycle(
+    credential_id: int, body: CredentialClose, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """回收：患者主动交回实体卡。与作废分开记——回收是正常结束，作废是异常终止，
     统计报损率时必须区分。"""
-    return _close(db, credential_id, "recycled", body.reason or "患者交回")
+    return _close(db, credential_id, "recycled", body.reason or "患者交回", user)
 
 
 @router.post("/{credential_id}/void", dependencies=[Depends(require_roles("operator", "doctor"))])
-def void(credential_id: int, body: CredentialClose, db: Session = Depends(get_db)):
+def void(
+    credential_id: int, body: CredentialClose, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """作废：挂失、损坏、盗用嫌疑。作废后该凭据立即不可用于核验。"""
     if not body.reason:
         raise HTTPException(status_code=422, detail="作废须填写原因")
-    return _close(db, credential_id, "void", body.reason)
+    return _close(db, credential_id, "void", body.reason, user)
 
 
-def _close(db: Session, credential_id: int, status: str, reason: str) -> dict:
+def _close(db: Session, credential_id: int, status: str, reason: str, user: User) -> dict:
     credential = db.get(VisitCredential, credential_id)
     if credential is None:
         raise HTTPException(status_code=404, detail="凭据不存在")
+    assert_obj_org_writable(db, user, credential)  # 只能回收/作废本机构签发的凭据
     if credential.status != "active":
         raise HTTPException(
             status_code=409, detail=f"凭据当前状态为{STATUS_NAMES.get(credential.status)}，不可再操作"

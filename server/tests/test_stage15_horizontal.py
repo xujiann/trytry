@@ -504,35 +504,68 @@ BYID_CROSS_ORG_OK = {
 }
 
 
-def _byid_org_write_endpoints():
-    """按 id 直取带 org_id 主对象的写接口。"""
+GUARDS = {"assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
+          "assert_obj_org_visible", "assert_patient_visible", "scope_org_list",
+          "scope_patient_list", "visible_org_ids", "visible_patient_ids", "log_patient_access"}
+
+
+def _org_models():
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from app import models
-    direct = {
+    return {
         c.__name__ for c in models.Base.registry._class_registry.values()
         if hasattr(c, "__tablename__") and "org_id" in c.__table__.columns
     }
-    guards = {"assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
-              "assert_patient_visible", "scope_org_list", "scope_patient_list",
-              "log_patient_access"}
+
+
+def _called_names(fn: "ast.FunctionDef") -> set[str]:
+    """本函数体内以 `name(...)` 形式调用的所有函数名（用于跟一层 helper 间接）。"""
+    return {
+        n.func.id for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+
+
+def _byid_org_write_endpoints():
+    """按 id 直取带 org_id 主对象、且缺机构守卫的写接口。
+
+    **跟一层 helper 间接**：早期扫描只看函数体里字面的 `db.get(OrgModel,`，凡把取对象
+    包进 `_load_task` / `_admission_or_404` / `_pending` / `_enrollment` 之类 helper 的
+    端点就逃过检查（第十三轮实测到的盲区）。这里预扫每个模块级 helper 是否"取 org 模型"、
+    是否"调了守卫"，端点调到该 helper 时按其效果并入判定。
+    """
+    direct = _org_models()
+
+    def gets_org(src: str) -> bool:
+        return any(f"db.get({m}," in src for m in direct)
+
+    def has_guard(src: str) -> bool:
+        return any(g in src for g in GUARDS)
+
     unguarded = set()
     for name, path in _router_files():
-        # 居民端两个文件走的是 portal 令牌 + accessible_patient（"这次能看谁的档案"），
-        # 不在员工机构可见性体系内，与 portal.py 同一理由豁免。
+        # 居民端两个文件走的是 portal 令牌 + accessible_patient，不在员工机构可见性体系内。
         if name in ("portal.py", "spd/portal.py"):
             continue
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        # 预扫 helper：名字 → (取 org 模型?, 调了守卫?)
+        helper = {
+            hname: (gets_org(ast.unparse(hfn)), has_guard(ast.unparse(hfn)))
+            for hname, hfn in funcs.items()
+        }
+        for fn in funcs.values():
             decs = [ast.unparse(d) for d in fn.decorator_list]
             if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
                 continue
             if not any("{" in d for d in decs):
                 continue
-            u = ast.unparse(fn)
-            if any(g in u for g in guards):
-                continue
-            if any(f"db.get({m}," in u for m in direct):
+            src = ast.unparse(fn)
+            called = _called_names(fn)
+            gets = gets_org(src) or any(helper.get(c, (False, False))[0] for c in called)
+            guarded = has_guard(src) or any(helper.get(c, (False, False))[1] for c in called)
+            if gets and not guarded:
                 unguarded.add(f"{name}:{fn.name}")
     return unguarded
 

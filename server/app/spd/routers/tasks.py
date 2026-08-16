@@ -195,12 +195,16 @@ class InstanceAdjustIn(BaseModel):
 @router.patch("/path-instances/{instance_id}",
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def adjust_path_instance(
-    instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db)
+    instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """个性化调整：改的是**实例**不是模板（服务团队专家端 #2）。"""
     instance = db.get(SpdPathInstance, instance_id)
     if instance is None:
         raise HTTPException(status_code=404, detail="路径实例不存在")
+    # SpdPathInstance 无 org_id，经其纳管档案 enrollment.org_id 校验：只能调本机构路径
+    enrollment = db.get(SpdEnrollment, instance.enrollment_id)
+    assert_org_writable(db, user, enrollment.org_id if enrollment else None)
     if instance.status == "completed":
         raise HTTPException(status_code=409, detail="已完成的路径不可调整")
     data = body.model_dump(exclude_unset=True)

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable
+from ..visibility import assert_obj_org_writable, assert_org_writable
 from ..database import get_db
 from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -129,8 +129,12 @@ def list_resources(
 
 
 @router.patch("/{resource_id}", dependencies=[Depends(require_roles("operator", "director"))])
-def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db)):
+def update_resource(
+    resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     resource = _resource(db, resource_id)
+    assert_obj_org_writable(db, user, resource)  # 只能改本机构资源
     for field, value in body.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(resource, field, value)
@@ -142,8 +146,11 @@ def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depend
 @router.post(
     "/{resource_id}/publish", dependencies=[Depends(require_roles("operator", "director"))]
 )
-def publish_resource(resource_id: int, db: Session = Depends(get_db)):
+def publish_resource(
+    resource_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     resource = _resource(db, resource_id)
+    assert_obj_org_writable(db, user, resource)  # 只能发布本机构资源
     if resource.status == "published":
         raise HTTPException(status_code=409, detail="该资源已发布")
     resource.status = "published"
@@ -160,10 +167,14 @@ class WithdrawIn(BaseModel):
 @router.post(
     "/{resource_id}/withdraw", dependencies=[Depends(require_roles("operator", "director"))]
 )
-def withdraw_resource(resource_id: int, body: WithdrawIn, db: Session = Depends(get_db)):
+def withdraw_resource(
+    resource_id: int, body: WithdrawIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """撤回（不删行）。撤回理由必填——"这台设备为什么不能约了"是使用方
     一定会问的，答不上来就会被反复问。"""
     resource = _resource(db, resource_id)
+    assert_obj_org_writable(db, user, resource)  # 只能撤回本机构资源
     if resource.status == "withdrawn":
         raise HTTPException(status_code=409, detail="该资源已撤回")
     resource.status = "withdrawn"

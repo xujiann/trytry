@@ -122,13 +122,17 @@ def list_programs(active: bool | None = None, db: Session = Depends(get_db)):
 
 
 @router.patch("/{program_id}", dependencies=[Depends(require_admin)])
-def update_program(program_id: int, body: ProgramUpdate, db: Session = Depends(get_db)):
+def update_program(
+    program_id: int, body: ProgramUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """改路径只影响**此后**的执行判定，已记录的节点不会被删。
 
     在管病例中途改路径是现实常态（指南更新），所以不拦；但改完之后
     在管病例的"未完成节点"会随之变化，这一点由完成度接口如实反映。
     """
     program = _program(db, program_id)
+    assert_obj_org_writable(db, user, program)  # admin 全域为 no-op；病种若归机构则据此收口
     changes = body.model_dump(exclude_unset=True)
     if changes.get("path_nodes") is not None:
         keys = [n["key"] for n in changes["path_nodes"]]

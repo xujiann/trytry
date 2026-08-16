@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable
+from ..visibility import assert_obj_org_writable, assert_org_writable
 from ..database import get_db
 from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -158,13 +158,17 @@ def get_project(project_id: int, today: str | None = None, db: Session = Depends
 
 
 @router.patch("/{project_id}", dependencies=[Depends(require_roles("director", "operator"))])
-def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(get_db)):
+def update_project(
+    project_id: int, body: ProjectUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """更新进度与状态。
 
     结项要求进度报到 100：允许"已完成但进度 60%"，那份进度数就再也没人信了。
     确实做不完的项目走 suspended（中止），那是另一回事，不要求进度满格。
     """
     project = _project(db, project_id)
+    assert_obj_org_writable(db, user, project)  # 只能改本机构项目
     data = body.model_dump(exclude_unset=True)
     if data.get("status") == "done":
         target = data.get("progress_pct", project.progress_pct)
@@ -186,8 +190,11 @@ def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(g
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
-def add_milestone(project_id: int, body: MilestoneIn, db: Session = Depends(get_db)):
-    _project(db, project_id)
+def add_milestone(
+    project_id: int, body: MilestoneIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    assert_obj_org_writable(db, user, _project(db, project_id))  # 只能给本机构项目加里程碑
     milestone = ProjectMilestone(project_id=project_id, **body.model_dump())
     db.add(milestone)
     db.commit()
