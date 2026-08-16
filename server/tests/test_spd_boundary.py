@@ -45,9 +45,11 @@ PLATFORM_ALLOWLIST = {
 #: 放宽到别的名字就等于把适配层旁路掉了。
 COLUMN_TYPES = {"Money", "utcnow"}
 
-#: 平台侧允许触碰子系统的两处，都是"装卸"性质，不是业务耦合。
+#: 平台侧允许触碰子系统的两处，都是"装卸"性质，不是业务耦合（按文件名匹配）。
+#: models 由单文件拆成包后，"末尾 import 子系统模型"落在 models/platform.py
+#: （basename=platform.py；APP_DIR 下非子系统区仅此一个 platform.py，不会误配）。
 PLATFORM_TOUCHPOINTS = {
-    "models.py": "末尾 import 子系统模型，让 Base.metadata 认识 spd_* 表",
+    "platform.py": "models 包末尾 import 子系统模型，让 Base.metadata 认识 spd_* 表",
     "main.py": "调 register_spd / seed_spd 装卸子系统",
 }
 
