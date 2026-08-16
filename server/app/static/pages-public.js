@@ -298,7 +298,7 @@ async function renderEsb() {
       const [text, color] = ESB_MSG_STATUS[m.status] || [m.status, ""];
       const retryable = m.status === "queued" || m.status === "failed";
       return `<tr><td>${m.id}</td><td><span class="tag">${esc(m.endpoint_code)}</span></td><td>${esc(m.msg_type)}</td>
-        <td><span class="tag ${color}">${text}</span></td><td>${m.retry_count}/${m.max_retries}</td>
+        <td><span class="tag ${color}">${text}</span></td><td>${m.retry_count}/${esc(m.max_retries)}</td>
         <td style="max-width:280px;font-size:12px;color:#b23c3c">${esc(m.last_error)}</td>
         <td>${retryable ? `<button class="btn secondary" data-esbproc="${m.id}">消费/重试</button>` : "—"}
           <button class="btn secondary" data-esbpayload="${m.id}">查看载荷</button></td></tr>`;
@@ -903,8 +903,8 @@ async function drawHomeVisits() {
 function buildNav() {
   $("#nav").innerHTML = PAGES.filter(pageAllowed).map((p) =>
     p.group
-      ? `<div class="nav-group">${p.group}</div>`
-      : `<a href="#${p.id}" data-page="${p.id}">${p.title}</a>`).join("");
+      ? `<div class="nav-group">${esc(p.group)}</div>`
+      : `<a href="#${p.id}" data-page="${p.id}">${esc(p.title)}</a>`).join("");
 }
 
 function enterApp() {

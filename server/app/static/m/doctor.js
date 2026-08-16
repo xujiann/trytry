@@ -361,7 +361,7 @@ $("#critical-list").addEventListener("click", async (e) => {
     if (trace) {
       const actions = await api(`/api/exams/reports/${trace}/critical-actions`);
       alert(actions.length
-        ? actions.map((a) => `${a.actor}：${a.action}`).join("\n")
+        ? actions.map((a) => `${esc(a.actor)}：${esc(a.action)}`).join("\n")
         : "暂无处置轨迹");
     }
   } catch (err) {

@@ -1046,7 +1046,7 @@ async function renderSpdReferrals(box) {
       const params = viewingPatientId !== null ? `?patient_id=${viewingPatientId}` : "";
       const d = await authApi(`/api/portal/spd/referrals/${btn.dataset.spdRef}${params}`);
       alert(d.steps.map((s) =>
-        `${s.created_at.slice(0, 16).replace("T", " ")} ${s.step}${s.opinion ? "：" + s.opinion : ""}`
+        `${s.created_at.slice(0, 16).replace("T", " ")} ${esc(s.step)}${s.opinion ? "：" + s.opinion : ""}`
       ).join("\n") || "暂无环节记录");
     });
   });
@@ -1100,7 +1100,7 @@ async function renderSpdScreen(box) {
       const r = await authApi("/api/portal/spd/screenings", {
         method: "POST", body: JSON.stringify(body) });
       $("#spd-screen-msg").textContent =
-        `风险等级：${{ low: "低危", mid: "中危", high: "高危" }[r.risk_level] || r.risk_level}。${r.advice}`;
+        `风险等级：${{ low: "低危", mid: "中危", high: "高危" }[r.risk_level] || r.risk_level}。${esc(r.advice)}`;
       if (r.can_apply && confirm("检测到中高风险，是否申请专病管理服务？")) {
         const applyBody = { program_code: scale.program_code, screening_id: r.id };
         if (viewingPatientId !== null) applyBody.patient_id = viewingPatientId;

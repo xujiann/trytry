@@ -441,7 +441,7 @@ async function renderInsurance() {
   $("#ins-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/settlements", formJson(e.target, ["patient_id", "org_id", "total_amount", "insurance_pay", "self_pay"]), "#ins-msg"); };
   $("#cert-form").onsubmit = async (e) => {
     e.preventDefault();
-    try { const c = await api(`/api/insurance/referral-certs/${new FormData(e.target).get("referral_id")}`, { method: "POST" }); setMsg("#ins-msg", `证明号：${c.cert_no}`); }
+    try { const c = await api(`/api/insurance/referral-certs/${new FormData(e.target).get("referral_id")}`, { method: "POST" }); setMsg("#ins-msg", `证明号：${esc(c.cert_no)}`); }
     catch (err) { setMsg("#ins-msg", err.message, false); }
   };
   $("#spec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/special-diseases", formJson(e.target, ["patient_id"]), "#ins-msg"); };
@@ -758,8 +758,8 @@ async function renderVaccineSupply() {
     }
     if (d.recipients) {
       const r = await api(`/api/vaccine-supply/batches/${d.recipients}/recipients`);
-      alert(`批号 ${r.batch_no}（${r.vaccine_name}）共 ${r.total} 名受种者\n` +
-            r.recipients.slice(0, 20).map((x) => `${x.patient_name}(#${x.patient_id}) 第${x.dose_no}剂 ${x.vaccinated_date}`).join("\n"));
+      alert(`批号 ${esc(r.batch_no)}（${esc(r.vaccine_name)}）共 ${r.total} 名受种者\n` +
+            r.recipients.slice(0, 20).map((x) => `${esc(x.patient_name)}(#${x.patient_id}) 第${x.dose_no}剂 ${x.vaccinated_date}`).join("\n"));
     }
   };
 }
@@ -1598,7 +1598,7 @@ async function renderBilling() {
     try {
       const order = await api("/api/billing/payments", { method: "POST", body: JSON.stringify(body) });
       setMsg("#pay-msg", order.status === "paid"
-        ? `支付成功，流水号 ${order.trade_no}` : `支付失败：${order.fail_reason}`, order.status === "paid");
+        ? `支付成功，流水号 ${order.trade_no}` : `支付失败：${esc(order.fail_reason)}`, order.status === "paid");
       route();
     } catch (err) { setMsg("#pay-msg", err.message, false); }
   };

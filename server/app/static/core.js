@@ -686,7 +686,7 @@ async function renderPatients() {
     try {
       const p = await api("/api/patients", { method: "POST", body: JSON.stringify({
         name: f.get("name"), id_card: f.get("id_card"), gender: f.get("gender"), phone: f.get("phone") }) });
-      setMsg("#patient-msg", `建档成功，电子健康卡号：${p.ehc_no}`);
+      setMsg("#patient-msg", `建档成功，电子健康卡号：${esc(p.ehc_no)}`);
       await draw();
     } catch (err) { setMsg("#patient-msg", err.message, false); }
   };
@@ -789,7 +789,7 @@ async function renderExams() {
       const check = await api(`/api/exams/recognition-check?patient_id=${patientId}&item_code=${encodeURIComponent(itemCode)}`);
       let extra = {};
       if (check.recognizable &&
-          confirm(`30天内已有同项目报告（结论：${check.conclusion}）。互认该结果、不再重复检查？`)) {
+          confirm(`30天内已有同项目报告（结论：${esc(check.conclusion)}）。互认该结果、不再重复检查？`)) {
         extra = { accept_recognition_of: check.request_id };
       } else if (check.recognizable) {
         extra = { recognition_declined_reason: prompt("请填写不互认理由（监管留痕）") || "未填写" };
@@ -925,7 +925,7 @@ async function renderRx() {
         diagnosis_name: f.get("diagnosis_name"),
         items: [{ drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
           daily_dose: Number(f.get("daily_dose")), days: Number(f.get("days")) }] }) });
-      const base = p.status === "auto_passed" ? "系统审通过" : `转入药师审核：${p.review_comment}`;
+      const base = p.status === "auto_passed" ? "系统审通过" : `转入药师审核：${esc(p.review_comment)}`;
       // 块2：肝肾功能提示为非拦截提醒，附在审方结论之后
       const tips = (p.advisories || []).length ? `｜${p.advisories.join("；")}` : "";
       setMsg("#rx-msg", base + tips, p.status === "auto_passed");
@@ -951,7 +951,7 @@ async function renderRx() {
       // 块2：点评规则化——先调阅该方药品的点评要点与肝肾提示，再作结论
       try {
         const rp = await api(`/api/prescriptions/${rxcomment}/review-points`);
-        const lines = rp.items.map((i) => `${i.drug_name}（${i.drug_code}）${i.dose_exceeded ? "【日剂量超限】" : ""}\n  要点：${i.review_points || "规则库未维护"}\n  肝肾：${i.renal_hepatic_note || "—"}`);
+        const lines = rp.items.map((i) => `${esc(i.drug_name)}（${i.drug_code}）${i.dose_exceeded ? "【日剂量超限】" : ""}\n  要点：${i.review_points || "规则库未维护"}\n  肝肾：${i.renal_hepatic_note || "—"}`);
         alert(`处方 ${rp.prescription_id} 点评要点（规则覆盖 ${rp.rule_coverage_pct}%）：\n\n${lines.join("\n")}`);
       } catch (err) { setMsg("#rx-msg", err.message, false); }
       const reasonable = confirm("点评结论：该处方是否合理？（确定=合理，取消=不合理）");
@@ -1029,7 +1029,7 @@ async function renderChronic() {
   const overdueIds = new Set(overdue.map((c) => c.id));
   // 各病种分级指标：随访录入时提示该病种应采集的指标与周期
   const metricHint = types.map((t) => {
-    const keys = ((t.level_rules || {}).metrics || []).map((m) => `${m.name}(${m.key})`).join("、");
+    const keys = ((t.level_rules || {}).metrics || []).map((m) => `${esc(m.name)}(${m.key})`).join("、");
     return `<tr><td>${esc(t.name)}</td><td>${esc(t.code)}</td><td>${esc(keys) || "—"}</td><td>${t.followup_interval_days} 天</td></tr>`;
   }).join("");
   $("#page-body").innerHTML = `
@@ -1081,7 +1081,7 @@ async function renderChronic() {
     try {
       const result = await api(`/api/chronic/${f.get("chronic_id")}/followups`, { method: "POST",
         body: JSON.stringify({ sbp: num("sbp"), dbp: num("dbp"), glucose: num("glucose"), metrics, next_due: f.get("next_due") }) });
-      alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n下次随访：${result.next_due}${result.next_due_suggested ? "（按病种周期自动建议）" : ""}\n指导要点：${result.guidance_points}`);
+      alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n下次随访：${result.next_due}${result.next_due_suggested ? "（按病种周期自动建议）" : ""}\n指导要点：${esc(result.guidance_points)}`);
       route();
     } catch (err) { setMsg("#chronic-msg", err.message, false); }
   };
