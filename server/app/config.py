@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # 环境标识（默认 dev）：与 env 二者任一为 prod 即视为生产环境
     environment: str = "dev"
     log_json: bool = True
+    # 监控指标导出：置 true 时开放 GET /metrics（Prometheus 文本格式，无鉴权，
+    # 供内网 Prometheus 抓取）。默认关闭——它会暴露内部模块名与流量，须部署在
+    # 内网/受网络策略保护时再开。多实例下各进程各导出各自计数（进程内口径）。
+    metrics_export: bool = False
     # JWT 有效期（秒）
     token_ttl_seconds: int = 8 * 3600
 

@@ -17,8 +17,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -516,6 +516,21 @@ def health():
         "database": db_status,
     }
     return payload
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_export():
+    """Prometheus 文本格式指标导出（内网抓取）。
+
+    默认关闭：仅当 MEDPLAT_METRICS_EXPORT=true 时返回，否则 404——它会暴露内部
+    模块名与流量，须部署在内网/受网络策略保护时再开。无鉴权（Prometheus 抓取端
+    通常不带 JWT），安全性由网络边界与开关共同保证。
+    """
+    if not settings.metrics_export:
+        raise HTTPException(status_code=404, detail="Not Found")
+    from .monitor import prometheus_text
+
+    return PlainTextResponse(prometheus_text(), media_type="text/plain; version=0.0.4")
 
 
 _STATIC_DIR = Path(__file__).parent / "static"

@@ -108,6 +108,53 @@ def _now() -> str:
 metrics = ApiMetrics()
 
 
+def _prom_labels(**labels: str) -> str:
+    if not labels:
+        return ""
+    inner = ",".join(
+        # 末尾下划线去掉：便于用 class_/type_ 传 Prometheus 保留字标签名
+        f'{k.rstrip("_")}="{str(v).replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))}"'
+        for k, v in labels.items()
+    )
+    return "{" + inner + "}"
+
+
+def prometheus_text() -> str:
+    """Prometheus 文本导出格式（无第三方依赖，手写 exposition）。
+
+    进程内口径：多实例部署下各进程导出各自计数，用 instance 标签区分（由 Prometheus
+    抓取目标天然携带，此处再带一个 medplat_instance 便于聚合前分辨）。
+    """
+    snap = metrics.snapshot()
+    inst = _prom_labels(instance=INSTANCE_ID)
+    lines = [
+        "# HELP medplat_up 实例存活（恒为 1，随进程消失即缺失）",
+        "# TYPE medplat_up gauge",
+        f"medplat_up{inst} 1",
+        "# HELP medplat_uptime_seconds 本实例已运行秒数",
+        "# TYPE medplat_uptime_seconds gauge",
+        f"medplat_uptime_seconds{inst} {int(time.time() - STARTED_AT)}",
+        "# HELP medplat_requests_total 本实例累计 API 请求数",
+        "# TYPE medplat_requests_total counter",
+        f"medplat_requests_total{inst} {snap['total_requests']}",
+        "# HELP medplat_request_duration_ms_avg 平均请求耗时（毫秒）",
+        "# TYPE medplat_request_duration_ms_avg gauge",
+        f"medplat_request_duration_ms_avg{inst} {snap['avg_duration_ms']}",
+        "# HELP medplat_requests_by_status_class 按状态码大类计数",
+        "# TYPE medplat_requests_by_status_class counter",
+    ]
+    for cls, cnt in snap["by_status_class"].items():
+        lines.append(f"medplat_requests_by_status_class{_prom_labels(instance=INSTANCE_ID, class_=cls)} {cnt}")
+    lines += [
+        "# HELP medplat_requests_by_module 按模块计数",
+        "# TYPE medplat_requests_by_module counter",
+    ]
+    for row in snap["top_modules"]:
+        lbl = _prom_labels(instance=INSTANCE_ID, module=row["module"])
+        lines.append(f"medplat_requests_by_module{lbl} {row['count']}")
+    return "\n".join(lines) + "\n"
+
+
 def heartbeat() -> None:
     """向 Redis 注册本实例心跳（未配置 Redis 时静默跳过）。"""
     redis = _redis_client()
