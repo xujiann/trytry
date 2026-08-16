@@ -50,7 +50,7 @@ def test_切换算法后老口令仍可校验(monkeypatch):
 
     monkeypatch.setattr(settings, "crypto_suite", "sm")
     sm_hash = gmcrypto.hash_password("passw0rd1")
-    assert sm_hash.startswith("sm3$")
+    assert sm_hash.startswith("sm3v2$")  # PBKDF2-HMAC-SM3 版本前缀
     # 切到国密之后，用通用算法存的老口令照样能登录
     assert gmcrypto.verify_password("passw0rd1", general_hash) is True
     assert gmcrypto.verify_password("passw0rd1", sm_hash) is True

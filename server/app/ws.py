@@ -21,6 +21,7 @@ import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .database import SessionLocal
+from .deps import token_issued_before_baseline
 from .models import User
 from .security import decode_token, revoked_tokens
 
@@ -77,8 +78,24 @@ def _token_valid(token: str) -> bool:
     claims = decode_token(token)
     if claims is None:
         return False
+    # 居民端令牌（scope=portal）不得连业务通知通道：否则 7 天长效居民令牌可收
+    # 所有非定向广播。与 HTTP get_current_user 同口径。
+    if claims.get("scope") == "portal":
+        return False
     # L-9 整改：黑名单按 jti 判定，与 HTTP 侧口径一致
-    return (claims.get("jti") or token) not in revoked_tokens
+    if (claims.get("jti") or token) in revoked_tokens:
+        return False
+    # 改密/改角色基线：令牌签发早于基线即失效——否则改密后已建 WS 长连接仍放行。
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == claims.get("sub", "")).first()
+        if user is None:
+            return False
+        if token_issued_before_baseline(claims, user):
+            return False
+    finally:
+        db.close()
+    return True
 
 
 def _lookup_user_meta(token: str) -> tuple[int | None, str]:

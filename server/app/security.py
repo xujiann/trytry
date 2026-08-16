@@ -82,7 +82,9 @@ def decode_token(token: str) -> dict | None:
     except ValueError:
         return None
     expected = _b64url(gmcrypto.mac(SECRET_KEY.encode(), f"{header}.{payload}".encode()))
-    if not hmac.compare_digest(signature, expected):
+    # compare_digest 的 str 分支要求两侧均为纯 ASCII：伪造令牌在签名段放非 ASCII
+    # 字符会抛 TypeError，使 get_current_user/审计中间件变 500 而非干净的 401。
+    if not signature.isascii() or not hmac.compare_digest(signature, expected):
         return None
     claims = json.loads(_b64url_decode(payload))
     if claims.get("exp", 0) < time.time():

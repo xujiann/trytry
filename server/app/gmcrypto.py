@@ -142,11 +142,16 @@ def suite_name() -> str:
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
     """口令散列。存储格式带算法前缀，**切换算法后老口令仍可校验**——
-    不带前缀就只能强制全员改密，那是没人能接受的升级方式。"""
+    不带前缀就只能强制全员改密，那是没人能接受的升级方式。
+
+    国密套件用 PBKDF2-HMAC-SM3（前缀 `sm3v2$`）：原先 `H(salt‖pw)` 直迭代
+    抗 GPU 暴破弱于 general 的 PBKDF2，切国密反而降低口令存储强度；改为标准
+    PBKDF2 结构后强度对齐。老的 `sm3$` 散列仍按旧 KDF 校验（见 verify_password）。
+    """
     salt = salt or os.urandom(16)
     if suite_name() == "sm":
-        digest = _sm_kdf(password.encode(), salt)
-        return f"sm3${salt.hex()}${digest.hex()}"
+        digest = _sm_pbkdf2(password.encode(), salt, _SM_ITERATIONS)
+        return f"sm3v2${salt.hex()}${digest.hex()}"
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _ITERATIONS)
     return f"{salt.hex()}${digest.hex()}"
 
@@ -154,7 +159,15 @@ def hash_password(password: str, salt: bytes | None = None) -> str:
 def verify_password(password: str, stored: str) -> bool:
     """校验口令。按存储值自带的算法标识走，与当前配置无关——
     配置是给**新口令**用的，已存的口令该用什么算什么。"""
+    if stored.startswith("sm3v2$"):
+        try:
+            _, salt_hex, digest_hex = stored.split("$", 2)
+        except ValueError:
+            return False
+        digest = _sm_pbkdf2(password.encode(), bytes.fromhex(salt_hex), _SM_ITERATIONS)
+        return hmac.compare_digest(digest.hex(), digest_hex)
     if stored.startswith("sm3$"):
+        # 遗留格式：旧 SM3 迭代 KDF，仍可校验（不强制全员改密）
         try:
             _, salt_hex, digest_hex = stored.split("$", 2)
         except ValueError:
@@ -169,8 +182,23 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(digest.hex(), digest_hex)
 
 
+def _sm_pbkdf2(password: bytes, salt: bytes, iterations: int, dklen: int = 32) -> bytes:
+    """PBKDF2 派生，PRF = HMAC-SM3。hashlib.pbkdf2_hmac 只认注册算法名，故手写。
+
+    dklen ≤ SM3 输出(32B) 时只需一个数据块（block index=1）。相比旧的
+    `H(salt‖pw)` 直迭代，PBKDF2 把口令作为 HMAC 密钥反复混入，抗 GPU 暴破更强。
+    """
+    block = hmac.new(password, salt + b"\x00\x00\x00\x01", _sm3_new).digest()
+    result = bytearray(block)
+    for _ in range(iterations - 1):
+        block = hmac.new(password, block, _sm3_new).digest()
+        for i in range(len(result)):
+            result[i] ^= block[i]
+    return bytes(result[:dklen])
+
+
 def _sm_kdf(password: bytes, salt: bytes) -> bytes:
-    """SM3 迭代派生。不用 hashlib.pbkdf2_hmac 是因为它只认注册过的算法名。"""
+    """遗留 SM3 迭代派生：仅用于校验旧 `sm3$` 散列，新口令一律走 _sm_pbkdf2。"""
     digest = salt + password
     for _ in range(_SM_ITERATIONS):
         digest = sm3_hash(digest)
