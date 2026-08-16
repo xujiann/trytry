@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -418,6 +419,13 @@ _AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 _AUDIT_EXEMPT = {"/api/auth/login"}
 
 
+# 审计链临界区锁：取上一条 hash → 插入 → 计算本条 hash 必须串行，
+# 否则两个并发写请求读到同一个 prev，生成两条 prev_hash 相同的记录，
+# verify_chain 会误报断链。审计是低频旁路，进程内串行的代价可忽略。
+# （多 worker 部署下须由 Redis/DB 层锁兜底，见 audit_chain 模块说明。）
+_audit_lock = threading.Lock()
+
+
 def _write_audit(request, status_code: int) -> None:
     """审计落库：记录的是「写操作请求尝试」（含失败/异常），与业务事务解耦。"""
     username, user_id = "", None
@@ -431,28 +439,34 @@ def _write_audit(request, status_code: int) -> None:
         if username:
             user = db.query(User).filter(User.username == username).first()
             user_id = user.id if user else None
-        # 防篡改哈希链：本条 hash = MAC(密钥, 上一条 hash + 本条内容)。
-        # 串行取上一条：审计写入是低频旁路，为它上并发优化不值当，
-        # 而链的正确性依赖顺序。
-        prev = (
-            db.query(AuditLog.entry_hash)
-            .order_by(AuditLog.id.desc())
-            .limit(1)
-            .scalar()
-        ) or ""
-        entry = AuditLog(
-            user_id=user_id,
-            username=username or "anonymous",
-            method=request.method,
-            path=request.url.path,
-            status_code=status_code,
-            prev_hash=prev,
-        )
-        entry.entry_hash = audit_entry_hash(
-            prev, entry.username, entry.method, entry.path, entry.status_code
-        )
-        db.add(entry)
-        db.commit()
+        with _audit_lock:
+            # 防篡改哈希链：本条 hash = MAC(密钥, 上一条 hash + id + 时间 + 本条内容)。
+            prev = (
+                db.query(AuditLog.entry_hash)
+                .order_by(AuditLog.id.desc())
+                .limit(1)
+                .scalar()
+            ) or ""
+            entry = AuditLog(
+                user_id=user_id,
+                username=username or "anonymous",
+                method=request.method,
+                path=request.url.path,
+                status_code=status_code,
+                prev_hash=prev,
+            )
+            db.add(entry)
+            db.flush()  # 取得自增 id 与 created_at，纳入哈希
+            entry.entry_hash = audit_entry_hash(
+                prev,
+                entry.id,
+                entry.created_at.isoformat() if entry.created_at else "",
+                entry.username,
+                entry.method,
+                entry.path,
+                entry.status_code,
+            )
+            db.commit()
     finally:
         db.close()
 

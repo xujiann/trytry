@@ -14,11 +14,24 @@ from .gmcrypto import mac
 __all__ = ["audit_entry_hash", "verify_chain"]
 
 
+def _audit_key() -> bytes:
+    # 审计 MAC 密钥与 JWT 签名密钥分离；未单独配置时回落 secret（兼容既有链）。
+    return (settings.audit_secret or settings.secret).encode()
+
+
 def audit_entry_hash(
-    prev_hash: str, username: str, method: str, path: str, status_code: int
+    prev_hash: str,
+    entry_id: int,
+    created_at: str,
+    username: str,
+    method: str,
+    path: str,
+    status_code: int,
 ) -> str:
-    payload = f"{prev_hash}|{username}|{method}|{path}|{status_code}"
-    return mac(settings.secret.encode(), payload.encode()).hex()
+    # 纳入 id 与 created_at：原先只覆盖 username|method|path|status，
+    # 记录被换序或改时间戳无从察觉；带上单调 id 与时间后重排即断链。
+    payload = f"{prev_hash}|{entry_id}|{created_at}|{username}|{method}|{path}|{status_code}"
+    return mac(_audit_key(), payload.encode()).hex()
 
 
 def verify_chain(entries) -> dict:
@@ -30,7 +43,13 @@ def verify_chain(entries) -> dict:
     prev = entries[0].prev_hash if entries else ""
     for entry in entries:
         expected = audit_entry_hash(
-            entry.prev_hash, entry.username, entry.method, entry.path, entry.status_code
+            entry.prev_hash,
+            entry.id,
+            entry.created_at.isoformat() if entry.created_at else "",
+            entry.username,
+            entry.method,
+            entry.path,
+            entry.status_code,
         )
         if entry.prev_hash != prev:
             return {"valid": False, "broken_at": entry.id, "reason": "与上一条的哈希不衔接"}

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # 附件本地磁盘存储目录（相对服务运行目录 server/；生产可挂载持久卷）
     upload_dir: str = "uploads"
     secret: str = DEFAULT_SECRET
+    # 审计哈希链 MAC 密钥：默认回落到 secret（兼容既有部署），但建议单独配置——
+    # 与 JWT 签名密钥分离后，任一用途泄露不会同时让令牌可伪造且审计链可重算。
+    audit_secret: str = ""
     admin_password: str = DEFAULT_ADMIN_PASSWORD
     env: str = "dev"
     # 环境标识（默认 dev）：与 env 二者任一为 prod 即视为生产环境
