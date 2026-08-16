@@ -602,14 +602,16 @@ def create_payment(
     amount = round(body.amount if body.amount is not None else default_amount, 2)
     if amount <= 0:
         raise HTTPException(status_code=422, detail="支付金额须大于 0")
-    # 已付额只计 paid：refunded 表示款项已退回，仍占额度会导致退款后无法重新收款（少收）
+    # 已付额按**净额** amount-refunded_amount 计（含 paid 与 refunded 一并算）：
+    # 部分退款的单据 status 仍是 paid 但已退回一部分，若按原始 amount 计，那部分
+    # 已退金额仍占额度→无法重新收款（少收）；全额退款单净额为 0，自然不占额度。
     paid_already = round(
         sum(
-            o.amount
+            round(o.amount - (o.refunded_amount or 0), 2)
             for o in db.query(PaymentOrder)
             .filter(
                 PaymentOrder.settlement_id == settlement.id,
-                PaymentOrder.status == "paid",
+                PaymentOrder.status.in_(["paid", "refunded"]),
             )
             .all()
         ),

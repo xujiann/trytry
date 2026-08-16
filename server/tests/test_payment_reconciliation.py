@@ -177,6 +177,31 @@ def test_payment_amount_guards(client, admin, base):
         headers=base["operator"],
     )
     assert over.status_code == 422 and "已付" in over.json()["detail"]
+
+
+def test_partial_refund_releases_quota_for_recharge(client, admin, base):
+    """部分退款后被退金额应释放额度、可重新收款（回归 F2：已付额按净额计）。"""
+    settlement = new_settlement(client, base, admin)  # 总额 100，自付 100
+    order = client.post(
+        "/api/billing/payments",
+        json={"settlement_id": settlement["id"], "channel": "cash", "amount": 100},
+        headers=base["operator"],
+    ).json()
+    assert order["status"] == "paid"
+    # 部分退款 40：单据仍为 paid（未全额退），refunded_amount=40
+    refunded = client.post(
+        f"/api/billing/payments/{order['id']}/refund",
+        json={"amount": 40}, headers=base["operator"],
+    ).json()
+    assert refunded["refunded_amount"] == 40.0 and refunded["status"] == "paid"
+    # 被退的 40 应重新可收（原先按全额 100 计已付→被拦，属少收）
+    recharge = client.post(
+        "/api/billing/payments",
+        json={"settlement_id": settlement["id"], "channel": "cash", "amount": 40},
+        headers=base["operator"],
+    )
+    assert recharge.status_code == 201, recharge.text
+    assert recharge.json()["status"] == "paid"
     # 医师不可收费
     assert client.post(
         "/api/billing/payments",

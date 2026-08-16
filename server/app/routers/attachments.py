@@ -16,30 +16,42 @@ from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import AdverseEvent, Attachment, CourseMaterial, ExamReport, ExamRequest, User
-from ..visibility import assert_org_visible
+from ..visibility import assert_org_visible, assert_patient_visible
 
 router = APIRouter(prefix="/api/attachments", tags=["附件"], dependencies=[Depends(get_current_user)])
 
 
 def _authorize_owner_access(db: Session, user: User, owner_type: str, owner_id: int) -> None:
-    """按附件所属业务对象校验读权限，用于列表/下载。
+    """按附件所属业务对象校验读权限，用于列表/下载。**fail-closed 通用判定**。
 
-    原先下载/列表仅"登录即可"，与平台患者可见性模型冲突：任何登录用户可枚举 id
-    下载他院患者检查报告 PDF/不良事件佐证。这里把附件的可见性对齐到其宿主对象所属机构：
+    原先下载/列表仅"登录即可"，任何登录用户可枚举 id 下载他院患者检查报告 PDF/佐证。
+    这里把附件可见性对齐到其宿主对象：不再按 owner_type 白名单（漏一个类型即裸奔，
+    如子系统经 register_owner 注册的 `spd_task` 携患者数据却落入 else 放行），改为
+    **从宿主对象自身的列推导**——
 
-    - exam_report → 关联检查申请的 from_org_id（申请机构可见其报告附件）；
-    - adverse_event → 事件所属机构 org_id；
-    - course_material → 培训课件，非患者数据，登录即可。
+    - exam_report 无机构列，经关联检查申请的 from_org_id 判定（特例）；
+    - 宿主对象带 org_id → 机构可见性（adverse_event、spd_task 等）；
+    - 宿主对象带 patient_id 而无 org_id → 患者可见性并留痕；
+    - 两者皆无（如 course_material 培训课件）→ 非患者/机构域，登录即可。
     """
     if owner_type == "exam_report":
         report = db.get(ExamReport, owner_id)
         if report is not None:
             request = db.get(ExamRequest, report.request_id)
             assert_org_visible(db, user, getattr(request, "from_org_id", None))
-    elif owner_type == "adverse_event":
-        event = db.get(AdverseEvent, owner_id)
-        assert_org_visible(db, user, getattr(event, "org_id", None))
-    # course_material 等非患者/非机构域：仅登录，无需机构校验
+        return
+    if owner_type not in _OWNERS:
+        # 未注册业务域（子系统卸载等）：fail-closed，宁可拒也不裸放患者附件
+        raise HTTPException(status_code=403, detail="无权访问该附件")
+    model, _roles = _OWNERS[owner_type]
+    obj = db.get(model, owner_id)
+    if obj is None:
+        return  # 404 由各接口自行先判；这里只管归属
+    if hasattr(obj, "org_id"):
+        assert_org_visible(db, user, getattr(obj, "org_id"))
+    elif hasattr(obj, "patient_id"):
+        assert_patient_visible(db, user, obj.patient_id, resource="attachment")
+    # 其余非患者/非机构域对象（培训课件等）：仅登录
 
 MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"}
