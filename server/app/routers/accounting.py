@@ -23,7 +23,14 @@ from ..visibility import (
     stats_org_ids,
 )
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
+from ..deps import (
+    get_current_user,
+    load_authorized,
+    paginate,
+    require_admin,
+    require_roles,
+    resolve_org_scope,
+)
 from ..models import AccountSubject, Organization, User, Voucher, VoucherEntry, utcnow
 
 router = APIRouter(prefix="/api/accounting", tags=["会计核算"], dependencies=[Depends(get_current_user)])
@@ -205,14 +212,11 @@ def list_vouchers(
 
 @router.get("/vouchers/{voucher_id}")
 def get_voucher(
-    voucher_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    voucher: Voucher = Depends(load_authorized(Voucher, "voucher_id", write=False, not_found="凭证不存在")),
+    db: Session = Depends(get_db),
 ):
-    voucher = db.get(Voucher, voucher_id)
-    if voucher is None:
-        raise HTTPException(status_code=404, detail="凭证不存在")
-    # by-id 详情补机构可见性，与 list_vouchers 的 scope_org_list 同源
-    assert_obj_org_visible(db, user, voucher)
-    entries = db.query(VoucherEntry).filter(VoucherEntry.voucher_id == voucher_id).all()
+    # 取件+404+机构可见性由 load_authorized 依赖统一完成，端点只管取明细组装
+    entries = db.query(VoucherEntry).filter(VoucherEntry.voucher_id == voucher.id).all()
     return _voucher_out(voucher, entries)
 
 

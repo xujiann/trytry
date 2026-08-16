@@ -105,6 +105,49 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def load_authorized(
+    model,
+    id_key: str,
+    *,
+    write: bool = True,
+    org_attr: str = "org_id",
+    not_found: str = "记录不存在",
+):
+    """FastAPI 依赖工厂：按路径参数取带 org_id 的对象 + 机构归属校验，返回已授权对象。
+
+    端点写 `obj: Model = Depends(load_authorized(Model, "obj_id"))` 即可把
+    `db.get → 404 → assert_obj_org_writable/visible` 三行样板收成一处，让"按 id
+    绕过隔离"从"靠人记得在每个端点调 assert"变成"用了依赖就默认已授权"。
+
+    - `write=True` 走 assert_obj_org_writable（更新/推进/删除类）；False 走可见性（读）。
+    - `id_key` 是路由里的路径参数名（如 `/{voucher_id}` → "voucher_id"）；
+      端点函数无需再声明该参数，依赖从 `request.path_params` 取。
+    """
+    # 局部 import 避免与 visibility 的潜在环（visibility 不 import deps）
+    from .visibility import assert_obj_org_visible, assert_obj_org_writable
+
+    def dep(
+        request: Request,
+        db: Session = Depends(get_db),
+        user: User = Depends(get_current_user),
+    ):
+        raw = request.path_params.get(id_key)
+        try:
+            obj_id = int(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"路径参数 {id_key} 非法") from None
+        obj = db.get(model, obj_id)
+        if obj is None:
+            raise HTTPException(status_code=404, detail=not_found)
+        if write:
+            assert_obj_org_writable(db, user, obj, org_attr)
+        else:
+            assert_obj_org_visible(db, user, obj, org_attr)
+        return obj
+
+    return dep
+
+
 # ============================================================================
 # 业务写接口「接口 → 最小角色」矩阵（H2 整改，admin 全通；详见 docs/接口对接规范.md 附录）
 # 原则：operator（经办人员）不得执行诊疗性质操作（接诊、出报告、开处方、随访）。
