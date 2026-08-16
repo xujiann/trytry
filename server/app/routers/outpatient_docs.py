@@ -16,7 +16,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_local
-from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_patient_list
+from ..visibility import (
+    assert_obj_org_visible,
+    assert_obj_org_writable,
+    assert_org_writable,
+    assert_patient_visible,
+    scope_patient_list,
+)
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -221,9 +227,12 @@ def list_consents(
 
 
 @router.post("/consents/{consent_id}/sign", dependencies=[Depends(require_roles("doctor"))])
-def sign_consent(consent_id: int, body: SignIn, db: Session = Depends(get_db)):
+def sign_consent(
+    consent_id: int, body: SignIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """记录患方签署。已有结论的不可改写——告知书是证据，不是可编辑的表单。"""
-    consent = _pending(db, consent_id)
+    consent = _pending(db, consent_id, user)
     consent.status = "signed"
     consent.signer_name = body.signer_name
     consent.signer_relation = body.signer_relation
@@ -233,9 +242,12 @@ def sign_consent(consent_id: int, body: SignIn, db: Session = Depends(get_db)):
 
 
 @router.post("/consents/{consent_id}/refuse", dependencies=[Depends(require_roles("doctor"))])
-def refuse_consent(consent_id: int, body: RefuseIn, db: Session = Depends(get_db)):
+def refuse_consent(
+    consent_id: int, body: RefuseIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """记录拒绝签署。这是一等状态，机构据此证明"告知过、对方拒绝了"。"""
-    consent = _pending(db, consent_id)
+    consent = _pending(db, consent_id, user)
     consent.status = "refused"
     consent.signer_name = body.signer_name
     consent.signer_relation = body.signer_relation
@@ -245,10 +257,11 @@ def refuse_consent(consent_id: int, body: RefuseIn, db: Session = Depends(get_db
     return _consent_out(consent)
 
 
-def _pending(db: Session, consent_id: int) -> InformedConsent:
+def _pending(db: Session, consent_id: int, user: User) -> InformedConsent:
     consent = db.get(InformedConsent, consent_id)
     if consent is None:
         raise HTTPException(status_code=404, detail="告知书不存在")
+    assert_obj_org_writable(db, user, consent)  # 只能处理本机构告知书（InformedConsent 有 org_id）
     if consent.status != "pending":
         raise HTTPException(
             status_code=409,
@@ -311,7 +324,10 @@ def create_treatment(
 
 
 @router.get("/encounters/{encounter_id}/treatments")
-def list_treatments(encounter_id: int, db: Session = Depends(get_db)):
+def list_treatments(
+    encounter_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    assert_obj_org_visible(db, user, db.get(Encounter, encounter_id))  # 按就诊机构收口
     rows = (
         db.query(TreatmentRecord)
         .filter(TreatmentRecord.encounter_id == encounter_id)
@@ -388,7 +404,10 @@ def create_outpatient_nursing(
 
 
 @router.get("/encounters/{encounter_id}/nursing-records")
-def list_outpatient_nursing(encounter_id: int, db: Session = Depends(get_db)):
+def list_outpatient_nursing(
+    encounter_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    assert_obj_org_visible(db, user, db.get(Encounter, encounter_id))  # 按就诊机构收口
     rows = (
         db.query(NursingRecord)
         .filter(NursingRecord.encounter_id == encounter_id)

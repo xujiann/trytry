@@ -488,17 +488,24 @@ def get_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(g
     return _task_out(task, {"name": patient.name, "phone": patient.phone} if patient else None)
 
 
-def _load_task(db: Session, task_id: int) -> SpdTask:
+def _load_task(db: Session, task_id: int, user: User) -> SpdTask:
+    """取任务并校验机构归属（SpdTask 有 org_id）。
+
+    任务处理（claim/submit/review/complete 等）原经此 helper 取对象、无机构守卫——
+    别家服务角色可领取/填报/审核办结他院任务，`review`/`complete` 还联动 award_points
+    与 advance_path 跨机构改积分与路径。收进取件函数：一律须本机构可写。
+    """
     task = db.get(SpdTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
+    assert_org_writable(db, user, task.org_id)
     return task
 
 
 @router.post("/tasks/{task_id}/claim", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def claim_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """接收任务。已被别人接收的返回 409——静默改责任人会让原责任人白干一场。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status not in ("pending", "overdue"):
         raise HTTPException(status_code=409, detail="该任务不处于可接收状态")
     if task.assignee_id not in (None, user.id):
@@ -522,8 +529,7 @@ def assign_task(
     user: User = Depends(get_current_user),
 ):
     """分配/转派任务。转派保留 `transferred_from`，方便追"这活是从谁那儿转来的"。"""
-    task = _load_task(db, task_id)
-    assert_org_writable(db, user, task.org_id)
+    task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="已结束的任务不可再分配")
     if db.get(User, body.assignee_id) is None:
@@ -540,13 +546,13 @@ def assign_task(
 
 
 @router.post("/tasks/{task_id}/urge", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def urge_task(task_id: int, db: Session = Depends(get_db)):
+def urge_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """催办：计数 +1 并给责任人发站内消息。催办不改状态——催过还是待办。
 
     走适配层的 `notify_user` 而不是平台的 `notify.notify_staff`：后者按机构+角色
     群发，发不到**具体某个人**（任务的责任人）。
     """
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需催办")
     # 催办计数走原子 UPDATE：两个人同时点催办，读-改-写只会记成一次
@@ -564,9 +570,9 @@ def urge_task(task_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/tasks/{task_id}/escalate", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def escalate_task(task_id: int, db: Session = Depends(get_db)):
+def escalate_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """超时升级：置紧急并标记升级，由上级机构接手督办。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需升级")
     task.escalated = True
@@ -593,7 +599,7 @@ def submit_task(
     `require_evidence` 的任务没传佐证材料时拒绝提交——这是节点配置里
     勾选过的硬要求，提交时不校验等于配置形同虚设。
     """
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
     task.result = body.result
@@ -627,7 +633,7 @@ def review_task(
     user: User = Depends(get_current_user),
 ):
     """审核任务：通过即完成并推进路径，退回则回到办理中。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status != "submitted":
         raise HTTPException(status_code=409, detail="只有待审核的任务可以审核")
     task.reviewer_id = user.id
@@ -645,7 +651,7 @@ def complete_task(
     user: User = Depends(get_current_user),
 ):
     """直接办结（不走审核的任务类型）。表单与佐证要求同 submit。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
     if body.result:
@@ -733,7 +739,12 @@ def batch_tasks(
     整批要么全成要么全败在这里是错的口径：一次勾 200 条，有 3 条已经被别人接了，
     不该让另外 197 条也办不成。
     """
-    tasks = db.query(SpdTask).filter(SpdTask.id.in_(body.task_ids)).all()
+    # 机构收口：非全域只处理本机构任务，越权 id 直接不纳入本批（不泄露其存在）
+    tasks_q = db.query(SpdTask).filter(SpdTask.id.in_(body.task_ids))
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        tasks_q = tasks_q.filter(SpdTask.org_id.in_(orgs))
+    tasks = tasks_q.all()
     done, skipped = 0, []
     for task in tasks:
         if body.action in ("claim", "urge", "escalate", "cancel") and task.status not in OPEN_STATUSES:

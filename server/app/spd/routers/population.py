@@ -407,7 +407,13 @@ def distribute_candidates(
     """按辖区/病种/风险把目标池患者分发给服务团队（全程管理中心端 #3）。"""
     if body.team_id is not None and db.get(SpdTeam, body.team_id) is None:
         raise HTTPException(status_code=404, detail="团队不存在")
-    rows = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids)).all()
+    # 机构收口：只分发本机构目标池记录（对齐 claim/set_status 的 assert_org_writable）；
+    # 越权 id 不纳入本批，不泄露其存在。
+    query = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids))
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(SpdCandidate.org_id.in_(orgs))
+    rows = query.all()
     for candidate in rows:
         if body.team_id is not None:
             candidate.team_id = body.team_id

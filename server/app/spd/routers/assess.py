@@ -910,11 +910,15 @@ def my_points(db: Session = Depends(get_db), user: User = Depends(get_current_us
 @router.get("/point-accounts")
 def list_point_accounts(
     response: Response, org_id: int | None = None, offset: int = 0, limit: int = 100,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(SpdPointAccount)
     if org_id is not None:
         query = query.filter(SpdPointAccount.org_id == org_id)
+    # 机构收口：非全域只看本机构村医积分账户与余额
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(SpdPointAccount.org_id.in_(orgs))
     rows = paginate(query.order_by(SpdPointAccount.balance.desc()), response, offset, limit)
     names = {
         u.id: u.full_name or u.username
@@ -1065,11 +1069,23 @@ def list_redeems(
     if mine:
         account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user.id).first()
         query = query.filter(SpdRedeem.account_id == (account.id if account else 0))
+    else:
+        # 机构收口：非全域只看本机构账户的兑换记录（经 account.org_id）
+        orgs = visible_org_ids(db, user)
+        if orgs is not None:
+            acct_ids = [
+                a.id for a in db.query(SpdPointAccount.id)
+                .filter(SpdPointAccount.org_id.in_(orgs)).all()
+            ]
+            query = query.filter(SpdRedeem.account_id.in_(acct_ids or [0]))
     rows = paginate(query.order_by(SpdRedeem.id.desc()), response, offset, limit)
     goods = {g.id: g.name for g in db.query(SpdGoods).all()}
+    # 核销码只对本人（mine）返回：管理侧看列表用于统计，凭本人出示的实体码核销，
+    # 列表明文返回待核销码等于任何人可拿码冒领他人兑换。
     return [
         {"id": r.id, "goods_id": r.goods_id, "goods_name": goods.get(r.goods_id, ""),
-         "points": r.points, "verify_code": r.verify_code, "status": r.status,
+         "points": r.points, "status": r.status,
+         **({"verify_code": r.verify_code} if mine else {}),
          "created_at": r.created_at.isoformat(),
          "verified_at": r.verified_at.isoformat() if r.verified_at else ""}
         for r in rows
