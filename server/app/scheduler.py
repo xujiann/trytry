@@ -22,6 +22,8 @@ import asyncio
 import logging
 import time
 from datetime import timedelta
+
+from sqlalchemy import or_, update
 from typing import Callable
 
 from sqlalchemy.orm import Session
@@ -142,12 +144,41 @@ def due_jobs(db: Session) -> list[str]:
     return [j.name for j in rows if j.name in REGISTRY]
 
 
+def _claim_due(db: Session, name: str) -> bool:
+    """原子领取到期任务：把 next_run_at 抢先推到下一周期，返回是否抢到。
+
+    多 worker 无 Redis 时，`_acquire_lock` 恒 True 会让每个进程都跑同一到期任务
+    （清理类 DELETE、广播被重复触发）。这里用一条带 `WHERE next_run_at<=now` 守卫的
+    UPDATE 抢占：只有把 next_run_at 从"已到期"推走的那个进程 rowcount=1，其余为 0。
+    这让"多 worker 无 Redis"真正退化为单次执行，而非依赖恒真的内存锁。
+    """
+    job = db.query(ScheduledJob).filter(ScheduledJob.name == name).first()
+    if job is None or not job.enabled:
+        return False
+    now = now_naive()
+    new_next = now + timedelta(seconds=job.interval_seconds)
+    claimed = db.execute(
+        update(ScheduledJob)
+        .where(
+            ScheduledJob.id == job.id,
+            or_(ScheduledJob.next_run_at.is_(None), ScheduledJob.next_run_at <= now),
+        )
+        .values(next_run_at=new_next)
+    ).rowcount
+    db.commit()
+    return bool(claimed)
+
+
 def tick() -> int:
     """跑一轮：执行所有到期任务，返回执行条数。供调度循环与测试共用。"""
     executed = 0
     with SessionLocal() as db:
         names = due_jobs(db)
     for name in names:
+        # DB 层原子领取（跨实例可靠）+ Redis 锁（有则用，进一步收敛并发窗口）。
+        with SessionLocal() as db:
+            if not _claim_due(db, name):
+                continue
         if not _acquire_lock(name):
             continue  # pragma: no cover - 需多实例
         try:
