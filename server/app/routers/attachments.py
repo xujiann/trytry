@@ -15,9 +15,31 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import AdverseEvent, Attachment, CourseMaterial, ExamReport, User
+from ..models import AdverseEvent, Attachment, CourseMaterial, ExamReport, ExamRequest, User
+from ..visibility import assert_org_visible
 
 router = APIRouter(prefix="/api/attachments", tags=["附件"], dependencies=[Depends(get_current_user)])
+
+
+def _authorize_owner_access(db: Session, user: User, owner_type: str, owner_id: int) -> None:
+    """按附件所属业务对象校验读权限，用于列表/下载。
+
+    原先下载/列表仅"登录即可"，与平台患者可见性模型冲突：任何登录用户可枚举 id
+    下载他院患者检查报告 PDF/不良事件佐证。这里把附件的可见性对齐到其宿主对象所属机构：
+
+    - exam_report → 关联检查申请的 from_org_id（申请机构可见其报告附件）；
+    - adverse_event → 事件所属机构 org_id；
+    - course_material → 培训课件，非患者数据，登录即可。
+    """
+    if owner_type == "exam_report":
+        report = db.get(ExamReport, owner_id)
+        if report is not None:
+            request = db.get(ExamRequest, report.request_id)
+            assert_org_visible(db, user, getattr(request, "from_org_id", None))
+    elif owner_type == "adverse_event":
+        event = db.get(AdverseEvent, owner_id)
+        assert_org_visible(db, user, getattr(event, "org_id", None))
+    # course_material 等非患者/非机构域：仅登录，无需机构校验
 
 MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"}
@@ -143,9 +165,15 @@ async def upload_attachment(
 
 
 @router.get("")
-def list_attachments(owner_type: str, owner_id: int, db: Session = Depends(get_db)):
+def list_attachments(
+    owner_type: str,
+    owner_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if owner_type not in _OWNERS:
         raise HTTPException(status_code=422, detail=f"未知附件业务域：{owner_type}")
+    _authorize_owner_access(db, user, owner_type, owner_id)
     return [
         _out(a)
         for a in db.query(Attachment)
@@ -156,10 +184,13 @@ def list_attachments(owner_type: str, owner_id: int, db: Session = Depends(get_d
 
 
 @router.get("/{attachment_id}")
-def download_attachment(attachment_id: int, db: Session = Depends(get_db)):
+def download_attachment(
+    attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     attachment = db.get(Attachment, attachment_id)
     if attachment is None:
         raise HTTPException(status_code=404, detail="附件不存在")
+    _authorize_owner_access(db, user, attachment.owner_type, attachment.owner_id)
     path = _stored_path(attachment.sha256)
     if not path.exists():
         raise HTTPException(status_code=404, detail="附件文件缺失（存储目录可能被清理）")

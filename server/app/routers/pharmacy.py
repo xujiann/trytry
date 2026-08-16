@@ -83,6 +83,8 @@ def transfer_stock(
     """
     if body.from_org_id == body.to_org_id:
         raise HTTPException(status_code=422, detail="调出与调入机构不能相同")
+    # 归属校验：只能调出本机构库存，否则可将他院库存原子扣减后调入本机构（越权取货）
+    assert_org_writable(db, user, body.from_org_id)
     source = (
         db.query(DrugStock)
         .filter(DrugStock.org_id == body.from_org_id, DrugStock.drug_code == body.drug_code)

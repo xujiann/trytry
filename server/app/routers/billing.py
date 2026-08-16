@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict
-from ..visibility import scope_patient_list
+from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
@@ -255,12 +255,15 @@ def create_bill_detail(
             raise HTTPException(status_code=422, detail="住院记录与患者不匹配")
         if admission.status != "admitted":
             raise HTTPException(status_code=409, detail="患者已出院，不可继续计费")
+        # 归属校验：不校验即可给他院在院患者计费（跨机构做账）
+        assert_org_writable(db, user, admission.org_id)
     else:
         encounter = db.get(Encounter, body.encounter_id)
         if encounter is None:
             raise HTTPException(status_code=404, detail="就诊记录不存在")
         if encounter.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="就诊记录与患者不匹配")
+        assert_org_writable(db, user, encounter.org_id)
     item = db.query(ChargeItem).filter(ChargeItem.code == body.item_code).first()
     if item is None:
         raise HTTPException(status_code=404, detail="收费项目不存在")
@@ -369,6 +372,8 @@ def create_settlement(
         )
     if not details:
         raise HTTPException(status_code=422, detail="无未结清费用明细，无需结算")
+    # 归属校验：结算/派生医保记录进入基金监测口径，须以本机构名义发起
+    assert_org_writable(db, user, org_id)
     total = round(sum(d.amount for d in details), 2)
     if round(body.insurance_pay, 2) > total:
         raise HTTPException(status_code=422, detail="医保支付不得超过费用总额")
@@ -590,19 +595,21 @@ def create_payment(
     settlement = db.get(Settlement, body.settlement_id)
     if settlement is None:
         raise HTTPException(status_code=404, detail="结算单不存在")
+    assert_org_writable(db, user, settlement.org_id)
     default_amount = (
         settlement.insurance_pay if body.channel == "insurance" else settlement.self_pay
     )
     amount = round(body.amount if body.amount is not None else default_amount, 2)
     if amount <= 0:
         raise HTTPException(status_code=422, detail="支付金额须大于 0")
+    # 已付额只计 paid：refunded 表示款项已退回，仍占额度会导致退款后无法重新收款（少收）
     paid_already = round(
         sum(
             o.amount
             for o in db.query(PaymentOrder)
             .filter(
                 PaymentOrder.settlement_id == settlement.id,
-                PaymentOrder.status.in_(["paid", "refunded"]),
+                PaymentOrder.status == "paid",
             )
             .all()
         ),

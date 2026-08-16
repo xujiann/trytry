@@ -21,7 +21,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
+from ..visibility import (
+    assert_obj_org_writable,
+    assert_org_writable,
+    log_patient_access,
+    scope_org_list,
+    scope_patient_list,
+)
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
@@ -172,9 +178,19 @@ def unfreeze_batch(batch_id: int, db: Session = Depends(get_db), user: User = De
     return _batch_out(batch, resolve_business_date(None).isoformat())
 
 
-@router.get("/batches/{batch_id}/recipients")
-def batch_recipients(batch_id: int, db: Session = Depends(get_db)):
-    """按批号反查受种者——召回时唯一有用的那个查询。"""
+@router.get(
+    "/batches/{batch_id}/recipients",
+    dependencies=[Depends(require_roles("public_health", "director", "operator"))],
+)
+def batch_recipients(
+    batch_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """按批号反查受种者——召回时唯一有用的那个查询。
+
+    召回天然跨机构（同一批疫苗可能发往多院），故不按机构过滤，改为
+    **可问责而非可阻断**：限公卫/管理/经办角色，并对每位受种者留痕。
+    原先任意登录用户即可批量拉取受种者姓名+patient_id，属无校验无审计外泄。
+    """
     batch = db.get(VaccineBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="批次不存在")
@@ -186,6 +202,8 @@ def batch_recipients(batch_id: int, db: Session = Depends(get_db)):
         .limit(1000)
         .all()
     )
+    for record, _ in rows:
+        log_patient_access(db, user, record.patient_id, "vaccine_recall", "recall")
     return {
         "batch_no": batch.batch_no,
         "vaccine_name": batch.vaccine_name,

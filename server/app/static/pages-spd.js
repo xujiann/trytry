@@ -679,7 +679,7 @@ async function renderSpdPath() {
       <p class="desc">已发布的模板不能直接改节点——要改就复制新版本，避免在跑的患者任务突然变形</p>
       <form class="inline" id="spd-tpl-form">
         <select name="program_id">
-          ${catalog.programs.map((p, i) => `<option value="${i + 1}">${esc(p.name)}</option>`).join("")}
+          ${catalog.programs.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
         </select>
         <input name="code" placeholder="路径编码" required>
         <input name="name" placeholder="路径名称" required>

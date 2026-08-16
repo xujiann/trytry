@@ -240,15 +240,28 @@ def test_qc_summary_by_org_and_doctor(client, admin, base):
         json={"name": "周乡镇", "id_card": "330281198006069018", "gender": "女", "birth_date": "1980-06-06"},
         headers=admin,
     ).json()
+    # 赵医生须归属 org2 才能在本机构写就诊记录（横向隔离：不得以他院名义建档）
+    client.post(
+        "/api/users",
+        json={
+            "username": "mr_doc2_org2",
+            "password": "pass123456",
+            "full_name": "赵医生",
+            "role": "doctor",
+            "org_id": org2["id"],
+        },
+        headers=admin,
+    )
+    doc2_org2 = login(client, "mr_doc2_org2", "pass123456")
     encounter = client.post(
         "/api/encounters",
         json={"patient_id": patient["id"], "org_id": org2["id"], "diagnosis_name": "上呼吸道感染"},
-        headers=base["doctor2"],
+        headers=doc2_org2,
     ).json()
     client.post(
         "/api/quality/records",
         json={"encounter_id": encounter["id"], "chief_complaint": "咽痛1天"},
-        headers=base["doctor2"],
+        headers=doc2_org2,
     )
     summary = client.get("/api/quality/records/qc-summary", headers=admin).json()
     assert summary["total"] >= 6 and summary["period"] == "累计"

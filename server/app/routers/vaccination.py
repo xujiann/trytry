@@ -164,9 +164,13 @@ def _contra_out(c: VaccineContraindication, today: str) -> dict:
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 禁忌登记
 )
-def add_contraindication(body: ContraCreate, db: Session = Depends(get_db)):
+def add_contraindication(
+    body: ContraCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    # 登记禁忌会硬拦截该患者接种：须与该患者有服务关系，否则可随意阻断他人接种
+    assert_patient_visible(db, user, body.patient_id, resource="vaccination")
     if body.contra_type == "temporary" and body.valid_until is None:
         raise HTTPException(
             status_code=422,
@@ -226,6 +230,8 @@ def lift_contraindication(
     contra = db.get(VaccineContraindication, contra_id)
     if contra is None:
         raise HTTPException(status_code=404, detail="禁忌记录不存在")
+    # 解除禁忌会放开硬拦截：须与该患者有服务关系，否则可跨机构解除他人接种禁忌
+    assert_patient_visible(db, user, contra.patient_id, resource="vaccination")
     if contra.status == "lifted":
         raise HTTPException(status_code=409, detail="该禁忌已解除")
     contra.status = "lifted"

@@ -27,6 +27,7 @@ from ..schemas import (
     PrescriptionOut,
     PrescriptionReview,
 )
+from ..visibility import scope_patient_list
 
 router = APIRouter(prefix="/api/prescriptions", tags=["集中审方"])
 
@@ -229,18 +230,25 @@ def create_prescription(
     return prescription
 
 
-@router.get("", response_model=list[PrescriptionOut], dependencies=[Depends(get_current_user)])
+@router.get("", response_model=list[PrescriptionOut])
 def list_prescriptions(
     response: Response,
     status: str | None = None,
+    patient_id: int | None = None,
     offset: int = 0,
     limit: int = 200,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """处方列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
+    """处方列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。
+
+    横向隔离：原先全表返回，翻一页即拉全县处方（患者/诊断/审方意见）。
+    改走 scope_patient_list——给了 patient_id 走可见性判定并留痕，否则按可见机构过滤。
+    """
     query = db.query(Prescription)
     if status:
         query = query.filter(Prescription.status == status)
+    query = scope_patient_list(db, user, query, Prescription, patient_id, "prescription")
     return paginate(query.order_by(Prescription.id.desc()), response, offset, limit)
 
 
@@ -253,6 +261,8 @@ def review_prescription(prescription_id: int, body: PrescriptionReview, db: Sess
     prescription = db.get(Prescription, prescription_id)
     if prescription is None:
         raise HTTPException(status_code=404, detail="处方不存在")
+    # 注意：集中审方中心的药师**按设计跨机构**审方（县级药师复核乡镇处方），
+    # 归属由 pharmacist 角色把关而非机构，故此处不加 assert_obj_org_writable。
     if prescription.status != "pending_review":
         raise HTTPException(status_code=409, detail=f"当前状态 {prescription.status} 无需药师审核")
     prescription.status = "approved" if body.approve else "rejected"
@@ -276,8 +286,10 @@ class RxCommentCreate(BaseModel):
     comment: str = ""
 
 
-@router.get("/{prescription_id}/review-points", dependencies=[Depends(get_current_user)])
-def prescription_review_points(prescription_id: int, db: Session = Depends(get_db)):
+@router.get("/{prescription_id}/review-points")
+def prescription_review_points(
+    prescription_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """块2：处方点评规则化——按处方内药品汇总规则库点评要点与肝肾功能提示。
 
     药师点评前调阅本接口，把「凭经验点评」变为「按规则点评」：
@@ -289,6 +301,7 @@ def prescription_review_points(prescription_id: int, db: Session = Depends(get_d
     rx = db.get(Prescription, prescription_id)
     if rx is None:
         raise HTTPException(status_code=404, detail="处方不存在")
+    # 集中审方：药师跨机构调阅点评要点属设计内，归属由 pharmacist 角色把关
     items = db.query(PrescriptionItem).filter(PrescriptionItem.prescription_id == rx.id).all()
     points, uncovered = [], 0
     for item in items:

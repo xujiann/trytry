@@ -16,7 +16,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
+from ..visibility import (
+    assert_obj_org_visible,
+    assert_obj_org_writable,
+    assert_org_writable,
+    scope_org_list,
+)
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -653,19 +658,26 @@ def record_qc_summary(
 
 
 @router.get("/records/{record_id}")
-def get_medical_record(record_id: int, db: Session = Depends(get_db)):
+def get_medical_record(
+    record_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     record = db.get(MedicalRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="病历不存在")
+    # 按 id 直取绕过了清单的 scope_org_list：补机构可见性，否则可遍历 id 调阅全县病历 PHI
+    assert_obj_org_visible(db, user, record)
     return {"record": _record_out(record), "defects": record.qc_defects or []}
 
 
 @router.get("/records/{record_id}/qc")
-def rescore_medical_record(record_id: int, db: Session = Depends(get_db)):
+def rescore_medical_record(
+    record_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """按当前规则库重新评分（规则调整或病历修正后复评），结果回写快照。"""
     record = db.get(MedicalRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="病历不存在")
+    assert_obj_org_visible(db, user, record)
     result = _apply_qc(db, record)
     db.commit()
     return {"record_id": record.id, **result}

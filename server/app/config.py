@@ -81,21 +81,35 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        return "prod" in (self.env, self.environment)
+        # 归一化匹配：此前用 `"prod" in (env, environment)` 做元组成员判断，
+        # 只有精确写 "prod" 才命中——运维写 "production"/"prd"/大小写混排时
+        # 生产判定静默失效，防默认密钥的唯一闸门被一个拼写差异关掉。
+        marks = {"prod", "production", "prd"}
+        return any((value or "").strip().lower() in marks for value in (self.env, self.environment))
 
     @model_validator(mode="after")
     def _reject_default_credentials_in_prod(self) -> "Settings":
-        """H4 整改：生产环境沿用默认密钥/默认管理员口令时拒绝启动。"""
+        """H4 整改：生产环境沿用默认密钥/默认口令或留着联调登录面时拒绝启动。"""
         if self.is_production:
             problems = []
             if self.secret == DEFAULT_SECRET:
                 problems.append("MEDPLAT_SECRET 仍为默认值")
             if self.admin_password == DEFAULT_ADMIN_PASSWORD:
                 problems.append("MEDPLAT_ADMIN_PASSWORD 仍为默认值")
+            # 居民端登录面：mock 微信=无凭据开户，console 短信=验证码回显日志，
+            # 证件号旧核验=免登录查询，任一在生产开着都是可利用的登录/查询面。
+            if self.wechat_provider == "mock":
+                problems.append("MEDPLAT_WECHAT_PROVIDER 仍为 mock（生产须用 official）")
+            if self.wechat_provider == "official" and not self.wechat_appid:
+                problems.append("MEDPLAT_WECHAT_PROVIDER=official 但未配置 MEDPLAT_WECHAT_APPID")
+            if self.sms_provider == "console":
+                problems.append("MEDPLAT_SMS_PROVIDER 仍为 console（生产须用 http 网关）")
+            if self.portal_legacy_verify:
+                problems.append("MEDPLAT_PORTAL_LEGACY_VERIFY 未关闭（生产须置 false）")
             if problems:
                 raise RuntimeError(
                     "生产环境配置不安全，拒绝启动：" + "；".join(problems)
-                    + "。请通过环境变量设置强随机密钥与强口令后重启。"
+                    + "。请通过环境变量修正后重启。"
                 )
         return self
 

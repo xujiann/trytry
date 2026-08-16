@@ -927,7 +927,7 @@ def catalog(db: Session = Depends(get_db)):
     """
     return {
         "programs": [
-            {"code": p.code, "name": p.name, "category": p.category,
+            {"id": p.id, "code": p.code, "name": p.name, "category": p.category,
              "stages": p.stages or [], "active": p.active}
             for p in db.query(SpdProgram).order_by(SpdProgram.id).limit(100).all()
         ],

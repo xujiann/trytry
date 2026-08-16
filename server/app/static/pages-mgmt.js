@@ -245,7 +245,7 @@ async function renderAccounting() {
     api(`/api/accounting/trial-balance?period=${period}`),
     api(`/api/accounting/consolidated-statements?period=${period}`)]);
   const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
-  const options = subjects.map((s) => `<option value="${s.code}">${s.code} ${s.name}</option>`).join("");
+  const options = subjects.map((s) => `<option value="${esc(s.code)}">${esc(s.code)} ${esc(s.name)}</option>`).join("");
   $("#page-body").innerHTML = `
     <div class="panel"><h3>会计期间</h3>
       <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form></div>

@@ -14,7 +14,14 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
+from ..visibility import (
+    assert_obj_org_visible,
+    assert_obj_org_writable,
+    assert_org_visible,
+    assert_org_writable,
+    scope_org_list,
+    stats_org_ids,
+)
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import AccountSubject, Organization, User, Voucher, VoucherEntry, utcnow
@@ -197,10 +204,14 @@ def list_vouchers(
 
 
 @router.get("/vouchers/{voucher_id}")
-def get_voucher(voucher_id: int, db: Session = Depends(get_db)):
+def get_voucher(
+    voucher_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     voucher = db.get(Voucher, voucher_id)
     if voucher is None:
         raise HTTPException(status_code=404, detail="凭证不存在")
+    # by-id 详情补机构可见性，与 list_vouchers 的 scope_org_list 同源
+    assert_obj_org_visible(db, user, voucher)
     entries = db.query(VoucherEntry).filter(VoucherEntry.voucher_id == voucher_id).all()
     return _voucher_out(voucher, entries)
 
@@ -321,12 +332,13 @@ def _balances(db: Session, period: str, org_ids: list[int] | None):
     return query.group_by(Voucher.org_id, VoucherEntry.subject_code).all()
 
 
-@router.get("/consolidated-statements")
+@router.get("/consolidated-statements", dependencies=[Depends(require_roles("director"))])
 def consolidated_statements(
     period: str,
     org_id: int | None = None,
     group_id: int | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """合并报表：资产负债表与收入费用表口径的多院合并（指引㉛"财务报表叠加汇总"）。
 
@@ -351,7 +363,18 @@ def consolidated_statements(
     3. **不平的期间照样出表，但标出来**。出不了表的时候恰恰最需要看表——
        把差额报出来比拒绝返回有用。
     """
-    scope = resolve_org_scope(db, group_id, org_id)
+    # 合并报表按机构叠加，属跨院敏感汇总：用 stats_org_ids 兜住可见范围，
+    # 非全域角色只能看本医共体（分组）内成员机构，防 resolve_org_scope 被当授权器越权。
+    requested = resolve_org_scope(db, group_id, org_id)
+    allowed = stats_org_ids(db, user)
+    if allowed is None:
+        scope = requested
+    elif requested is None:
+        scope = allowed
+    else:
+        scope = [o for o in requested if o in allowed]
+        if not scope:
+            raise HTTPException(status_code=403, detail="无权查看该机构的合并报表")
     rows = _balances(db, period, scope)
     subjects = {s.code: s for s in db.query(AccountSubject).all()}
 

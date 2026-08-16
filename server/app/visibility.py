@@ -69,6 +69,7 @@ __all__ = [
     "assert_org_visible",
     "assert_org_writable",
     "assert_obj_org_writable",
+    "assert_obj_org_visible",
     "stats_org_ids",
     "patient_basis",
     "assert_patient_visible",
@@ -183,6 +184,20 @@ def assert_obj_org_writable(db: Session, user: User, obj, org_attr: str = "org_i
         return
     org_id = getattr(obj, org_attr, None)
     assert_org_writable(db, user, org_id)
+
+
+def assert_obj_org_visible(db: Session, user: User, obj, org_attr: str = "org_id") -> None:
+    """对**已取出对象**校验读可见性，用于 `/{id}` 型详情读接口。
+
+    读侧对称于 `assert_obj_org_writable`：清单接口做了 `scope_org_list` 机构过滤，
+    但 `GET /{id}` 从 id 直取对象、跳过清单，任何登录账号即可按 id 遍历他院明细
+    （病历、会计凭证、检查报告…）。这正是 `visibility.py` 反复点名的"按 id 绕过清单"。
+
+    非全域角色只能读本机构对象；`obj is None`（404）由各接口自己先判，这里只管归属。
+    """
+    if obj is None:
+        return
+    assert_org_visible(db, user, getattr(obj, org_attr, None))
 
 
 def stats_org_ids(db: Session, user: User) -> list[int] | None:

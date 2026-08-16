@@ -17,7 +17,7 @@ from ..models import (
     Settlement,
     User,
 )
-from ..visibility import assert_patient_visible, visible_org_ids
+from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 from ..schemas import EncounterCreate, EncounterOut
 
 router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[Depends(get_current_user)])
@@ -29,7 +29,14 @@ router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 就诊记录=医疗岗
 )
-def create_encounter(body: EncounterCreate, db: Session = Depends(get_db)):
+def create_encounter(
+    body: EncounterCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    # 自授权闭链防护：就诊记录是 patient_basis 的最高优先级可见性依据，
+    # 若不校验机构归属，任何人 POST 一条本不属于自己机构的就诊即可解锁该患者全档案。
+    assert_org_writable(db, user, body.org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:

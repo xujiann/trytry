@@ -146,6 +146,9 @@ def create_admission(
     ward = db.get(Ward, body.ward_id)
     if ward is None:
         raise HTTPException(status_code=404, detail="病区不存在")
+    # 自授权闭链防护：入院会以 ward.org_id 名义建 Encounter（可见性依据），
+    # 且占用该病区床位——病区必须归属调用者机构，否则可占他院床位并解锁患者档案。
+    assert_obj_org_writable(db, user, ward)
     in_hospital = (
         db.query(Admission)
         .filter(Admission.patient_id == body.patient_id, Admission.status == "admitted")

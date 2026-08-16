@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy.exc import IntegrityError
 
-from ..visibility import log_patient_access
+from ..visibility import GLOBAL_ROLES, assert_patient_visible, log_patient_access
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from pydantic import BaseModel, Field
@@ -120,6 +120,12 @@ def grant_authorization(
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.grantee_org_id) is None:
         raise HTTPException(status_code=404, detail="被授权机构不存在")
+    # 自授权闭链防护：给"本机构"签发授权等于自助开权限，是越权链的入口
+    # （patient_basis 的 authorization 依据随即放行）。窗口为患者办理知情同意、
+    # 授权**其他**机构（如转诊目标院）不受影响；只有把 grantee 指向自己机构时，
+    # 才要求调用者对该患者已有可见关系——有关系则本就无需授权，此分支专挡凭空自授。
+    if user.role not in GLOBAL_ROLES and body.grantee_org_id == user.org_id:
+        assert_patient_visible(db, user, patient_id, resource="authorization_grant")
     auth = ArchiveAuthorization(patient_id=patient_id, created_by=user.id, **body.model_dump())
     db.add(auth)
     db.commit()
@@ -130,10 +136,28 @@ def grant_authorization(
     "/{patient_id}/authorizations/{auth_id}/revoke",
     dependencies=[Depends(require_roles("doctor", "operator"))],
 )
-def revoke_authorization(patient_id: int, auth_id: int, db: Session = Depends(get_db)):
+def revoke_authorization(
+    patient_id: int,
+    auth_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     auth = db.get(ArchiveAuthorization, auth_id)
     if auth is None or auth.patient_id != patient_id:
         raise HTTPException(status_code=404, detail="授权记录不存在")
+    # 归属校验：只有全域角色、被授权机构、或签发方机构（按签发人所在机构推定）
+    # 方可撤销，否则任意机构可撤销他家持有的授权（与签发端同为自授权链的一环）。
+    creator_org = (
+        db.query(User.org_id).filter(User.id == auth.created_by).scalar()
+        if auth.created_by
+        else None
+    )
+    if not (
+        user.role in GLOBAL_ROLES
+        or user.org_id == auth.grantee_org_id
+        or (creator_org is not None and user.org_id == creator_org)
+    ):
+        raise HTTPException(status_code=403, detail="无权撤销该授权记录")
     auth.status = "revoked"
     db.commit()
     return {"id": auth.id, "status": "revoked"}

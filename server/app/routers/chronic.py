@@ -23,8 +23,9 @@ from ..deps import (
     require_roles,
     resolve_business_date,
 )
-from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient
+from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient, User
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
+from ..visibility import assert_obj_org_visible, assert_obj_org_writable, scope_org_list
 
 router = APIRouter(prefix="/api/chronic", tags=["慢病管理"], dependencies=[Depends(get_current_user)])
 
@@ -228,32 +229,43 @@ def list_chronic(
     response: Response,
     disease: str | None = None,
     level: int | None = None,
+    org_id: int | None = None,
     offset: int = 0,
     limit: int = 500,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """慢病档案列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
+    """慢病档案列表（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。
+
+    横向隔离：慢病档案按 managed_by_org_id 归属管理机构（含精神障碍/肿瘤/结核等
+    高敏病种），原先全表可读。改按管理机构可见范围过滤。
+    """
     query = db.query(ChronicPatient)
     if disease:
         query = query.filter(ChronicPatient.disease == disease)
     if level is not None:
         query = query.filter(ChronicPatient.level == level)
+    query = scope_org_list(db, user, query, ChronicPatient, org_id, org_col="managed_by_org_id")
     return paginate(query.order_by(ChronicPatient.level.desc(), ChronicPatient.id), response, offset, limit)
 
 
 @router.get("/overdue", response_model=list[ChronicOut])
-def list_overdue(today: str | None = None, db: Session = Depends(get_db)):
+def list_overdue(
+    today: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """随访超期名单：next_due 早于今天的建档患者，推送全科医生任务。
 
     L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
+    横向隔离：按管理机构可见范围过滤。
     """
     cutoff = resolve_business_date(today).isoformat()
-    return (
-        db.query(ChronicPatient)
-        .filter(ChronicPatient.next_due != "", ChronicPatient.next_due < cutoff)
-        .order_by(ChronicPatient.next_due)
-        .all()
+    query = db.query(ChronicPatient).filter(
+        ChronicPatient.next_due != "", ChronicPatient.next_due < cutoff
     )
+    query = scope_org_list(db, user, query, ChronicPatient, None, org_col="managed_by_org_id")
+    return query.order_by(ChronicPatient.next_due).all()
 
 
 @router.post(
@@ -261,10 +273,17 @@ def list_overdue(today: str | None = None, db: Session = Depends(get_db)):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 随访属诊疗/公卫岗
 )
-def add_followup(chronic_id: int, body: FollowUpCreate, db: Session = Depends(get_db)):
+def add_followup(
+    chronic_id: int,
+    body: FollowUpCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     chronic = db.get(ChronicPatient, chronic_id)
     if chronic is None:
         raise HTTPException(status_code=404, detail="慢病档案不存在")
+    # 随访归属管理机构：不校验即可跨机构篡改他院管理档案的分级与到期日
+    assert_obj_org_writable(db, user, chronic, org_attr="managed_by_org_id")
     payload = body.model_dump()
     # 未填下次到期日时按病种随访周期自动建议
     suggested = "" if body.next_due else _suggest_next_due(db, chronic.disease)
@@ -303,7 +322,9 @@ def _risk_metric(db: Session, disease: str) -> str:
 
 
 @router.get("/{chronic_id}/risk")
-def risk_score(chronic_id: int, db: Session = Depends(get_db)):
+def risk_score(
+    chronic_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """简单风险评分：最近3次随访关键指标趋势 + 当前分级加权。
 
     score = 分级基础分（1级20 / 2级50 / 3级80）
@@ -313,6 +334,7 @@ def risk_score(chronic_id: int, db: Session = Depends(get_db)):
     chronic = db.get(ChronicPatient, chronic_id)
     if chronic is None:
         raise HTTPException(status_code=404, detail="慢病档案不存在")
+    assert_obj_org_visible(db, user, chronic, org_attr="managed_by_org_id")
 
     metric = _risk_metric(db, chronic.disease)
     recent = (
@@ -357,9 +379,13 @@ def risk_score(chronic_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{chronic_id}/followups", response_model=list[FollowUpOut])
-def list_followups(chronic_id: int, db: Session = Depends(get_db)):
-    if db.get(ChronicPatient, chronic_id) is None:
+def list_followups(
+    chronic_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    chronic = db.get(ChronicPatient, chronic_id)
+    if chronic is None:
         raise HTTPException(status_code=404, detail="慢病档案不存在")
+    assert_obj_org_visible(db, user, chronic, org_attr="managed_by_org_id")
     return (
         db.query(FollowUp).filter(FollowUp.chronic_id == chronic_id).order_by(FollowUp.id.desc()).all()
     )

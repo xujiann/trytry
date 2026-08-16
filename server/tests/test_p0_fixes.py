@@ -88,14 +88,44 @@ def test_prod_rejects_default_admin_password(monkeypatch):
         Settings()
 
 
+def _secure_prod_env(monkeypatch):
+    """生产启动校验现覆盖登录面：给齐安全配置，让"应当启动"的用例通过。"""
+    monkeypatch.setenv("MEDPLAT_SECRET", "a-strong-random-secret-0123456789")
+    monkeypatch.setenv("MEDPLAT_ADMIN_PASSWORD", "Str0ngPassw0rd!")
+    monkeypatch.setenv("MEDPLAT_WECHAT_PROVIDER", "official")
+    monkeypatch.setenv("MEDPLAT_WECHAT_APPID", "wx-appid-demo")
+    monkeypatch.setenv("MEDPLAT_SMS_PROVIDER", "http")
+    monkeypatch.setenv("MEDPLAT_PORTAL_LEGACY_VERIFY", "false")
+
+
 def test_prod_with_proper_credentials_starts(monkeypatch):
     from app.config import Settings
 
     monkeypatch.setenv("MEDPLAT_ENVIRONMENT", "prod")
-    monkeypatch.setenv("MEDPLAT_SECRET", "a-strong-random-secret-0123456789")
-    monkeypatch.setenv("MEDPLAT_ADMIN_PASSWORD", "Str0ngPassw0rd!")
+    _secure_prod_env(monkeypatch)
     settings = Settings()
     assert settings.is_production
+
+
+def test_prod_marker_normalized(monkeypatch):
+    """拼写归一化：production/prd/大小写混排都应判为生产，而非仅精确 "prod"。"""
+    from app.config import Settings
+
+    _secure_prod_env(monkeypatch)
+    for marker in ("production", "PROD", "Prd", " prod "):
+        monkeypatch.setenv("MEDPLAT_ENVIRONMENT", marker)
+        assert Settings().is_production, f"{marker!r} 应判为生产"
+
+
+def test_prod_rejects_mock_login_surface(monkeypatch):
+    """生产仍挂着 mock 微信 / console 短信 / 证件号旧核验时拒绝启动。"""
+    from app.config import Settings
+
+    monkeypatch.setenv("MEDPLAT_ENVIRONMENT", "production")
+    monkeypatch.setenv("MEDPLAT_SECRET", "a-strong-random-secret-0123456789")
+    monkeypatch.setenv("MEDPLAT_ADMIN_PASSWORD", "Str0ngPassw0rd!")
+    with pytest.raises(RuntimeError, match="mock|console|LEGACY"):
+        Settings()
 
 
 def test_dev_allows_defaults(monkeypatch):

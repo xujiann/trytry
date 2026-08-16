@@ -452,6 +452,38 @@ def test_以本机构名义写入照常(client, world, stranger, stranger_op):
     assert r.status_code == 201, f"本机构写入被误伤：{r.text[:120]}"
 
 
+# ============================================== 自授权闭链（P0：写一条记录解锁全档案）
+
+
+def test_自授权链写接口拒绝跨机构(client, world, stranger, stranger_op):
+    """就诊/签约/入院是 patient_basis 的可见性依据。若创建时不校验机构归属，
+    任何人写一条本不属于自己机构的记录，即可把目标患者的全档案解锁给自己。
+    这条盯住：以别家机构名义建立"可见性依据"必须被机构守卫拦下（403）。"""
+    pid = world["patient"]["id"]
+    a_org = world["a"]["id"]
+    # 丙机构医生以甲院名义建就诊 → 拒
+    r_enc = client.post(
+        "/api/encounters",
+        json={"patient_id": pid, "org_id": a_org, "encounter_type": "outpatient"},
+        headers=stranger["headers"],
+    )
+    assert r_enc.status_code == 403, f"跨机构建就诊未被拦：{r_enc.status_code}"
+    # 丙机构医生以甲院名义签约 → 拒
+    r_sign = client.post(
+        "/api/contracts",
+        json={"patient_id": pid, "org_id": a_org, "doctor_name": "冒名", "package": "basic", "signed_date": "2026-01-01"},
+        headers=stranger["headers"],
+    )
+    assert r_sign.status_code == 403, f"跨机构签约未被拦：{r_sign.status_code}"
+    # 给自己机构签发患者授权且与患者无关系 → 拒（自授权入口）
+    r_auth = client.post(
+        f"/api/patients/{pid}/authorizations",
+        json={"grantee_org_id": stranger["org"]["id"], "scope": "all", "expire_date": "2026-12-31"},
+        headers=stranger["headers"],
+    )
+    assert r_auth.status_code == 403, f"向本机构自授权未被拦：{r_auth.status_code}"
+
+
 # ================================================================ 覆盖率矩阵
 
 
@@ -597,6 +629,7 @@ def test_已纳入的接口确实会拒绝无关机构(client, world, stranger):
         ("treatments", f"/api/outpatient/treatments?patient_id={pid}"),
         # 第二批
         ("appointments", f"/api/appointments?patient_id={pid}"),
+        ("prescriptions", f"/api/prescriptions?patient_id={pid}"),
         ("bill_details", f"/api/billing/details?patient_id={pid}"),
         ("settlements", f"/api/billing/settlements?patient_id={pid}"),
         ("certs", f"/api/certs?patient_id={pid}"),

@@ -35,7 +35,12 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
-from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from ...visibility import (
+    assert_org_writable,
+    assert_patient_visible,
+    visible_org_ids,
+    visible_patient_ids,
+)
 
 router = APIRouter(
     prefix="/api/spd",
@@ -737,8 +742,14 @@ def list_call_tasks(
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    # 横向隔离：呼叫任务含患者手机号与通话录音地址，SpdCallTask 无 org_id，
+    # 按"本机构服务过的患者"收口（与 followup-records/stats 的可见域过滤同口径）。
     query = db.query(SpdCallTask)
+    patients = visible_patient_ids(db, user)
+    if patients is not None:
+        query = query.filter(SpdCallTask.patient_id.in_(patients))
     if status:
         query = query.filter(SpdCallTask.status == status)
     if phone:
