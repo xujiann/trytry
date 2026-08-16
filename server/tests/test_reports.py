@@ -54,11 +54,12 @@ def setup(client, admin):
         )
         users[role] = login(client, username, "pass123456")
     # 业务数据：基层1次+县级1次就诊、1次上转、本地医保结算、两笔财务
+    # 用 admin（全域）建档：横向隔离下 county 医生不能以 township 名义建就诊
     for org in (county, township):
         client.post(
             "/api/encounters",
             json={"patient_id": patient["id"], "org_id": org["id"], "diagnosis_name": "上呼吸道感染"},
-            headers=users["doctor"],
+            headers=admin,
         )
     client.post(
         "/api/referrals",

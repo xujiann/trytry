@@ -63,6 +63,7 @@ def seeded(client, admin):
         for i in range(1, 4)
     ]
     # 基层诊疗人次（乡级机构 2 条 + 县级 1 条，只有乡级计入基层口径）
+    # 用 admin（全域）建档：横向隔离下 county 医生不能以 township 名义建就诊
     for org_id, count in [(township["id"], 2), (county["id"], 1)]:
         for _ in range(count):
             client.post(
@@ -73,7 +74,7 @@ def seeded(client, admin):
                     "diagnosis_name": "上呼吸道感染",
                     "diagnosis_code": "J06.900",
                 },
-                headers=doctor,
+                headers=admin,
             )
     # 危急值报告 2 条（其中 1 条处置闭环后不计入未闭环口径）
     report_ids = []
