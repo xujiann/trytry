@@ -17,7 +17,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..datetypes import DateStr
+from ..datetypes import DateStr, OptionalDateStr
 from ..clock import now_naive
 from ..concurrency import add_amount, claim_quota, insert_or_conflict, take_amount, upsert_unique
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
@@ -115,8 +115,9 @@ class BatchCreate(BaseModel):
     quantity: int = Field(ge=1)
     unit: str = "剂"
     produced_date: DateStr
-    # 不传则按配方有效期（月）自动推算
-    expire_date: str = ""
+    # 不传则按配方有效期（月）自动推算；非空须为真实日期——
+    # 效期管控全靠字符串字典序比较，一条脏值（"n/a"）即静默破坏预警。
+    expire_date: OptionalDateStr = ""
 
 
 def _batch_out(b: TcmPreparationBatch, today: str) -> dict:

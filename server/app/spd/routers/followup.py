@@ -7,6 +7,7 @@
 不挂在 `SpdEnrollment` 上——一个刚做完阑尾切除的患者不该为了被随访而先被
 "纳管"成慢病患者。它们只认患者与场景。
 """
+import re
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -128,6 +129,12 @@ def update_followup_rule(rule_id: int, body: dict, db: Session = Depends(get_db)
     rule = db.get(SpdFollowupRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="随访方案不存在")
+    # PATCH 与 POST 同源校验：points 必须可转 int，否则出院订阅器 int(offset) 会炸
+    if "points" in body:
+        try:
+            int(body["points"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="points 须为整数") from None
     for key in ("name", "dept", "program_code", "diagnosis_keywords", "surgery_keywords",
                 "order_keywords", "points", "questionnaire_code", "executor_role",
                 "allow_depts", "allow_roles", "active"):
@@ -191,6 +198,17 @@ def update_questionnaire(q_id: int, body: dict, db: Session = Depends(get_db)):
     questionnaire = db.get(SpdQuestionnaire, q_id)
     if questionnaire is None:
         raise HTTPException(status_code=404, detail="问卷不存在")
+    # PATCH 与 POST 同源校验：abnormal_rules 若存标量或非法条件，居民自助随访提交
+    # grade_abnormal 会抛 TypeError→500，且随访已被置 done 前挂掉。
+    if "abnormal_rules" in body:
+        rules = body["abnormal_rules"]
+        if not isinstance(rules, list):
+            raise HTTPException(status_code=422, detail="abnormal_rules 须为规则数组")
+        for rule in rules:
+            try:
+                validate_conditions([(rule or {}).get("when", {})])
+            except (RuleError, AttributeError) as exc:
+                raise HTTPException(status_code=422, detail=f"异常分级规则非法：{exc}") from None
     for key in ("name", "items", "abnormal_rules", "track_dept", "handle_role", "active"):
         if key in body:
             setattr(questionnaire, key, body[key])
@@ -927,11 +945,16 @@ def update_report_template(template_id: int, body: dict, db: Session = Depends(g
     return _template_out(template)
 
 
+# 推送时点必须是零填充 HH:MM：jobs.spd_report_push 用字符串比较判到期，
+# "8:00"（未补零）会让 "09:00" < "8:00" 恒真而永不推送且不报错。
+_PUSH_TIME_RE = r"^([01]\d|2[0-3]):[0-5]\d$"
+
+
 class ReportTaskIn(BaseModel):
     template_id: int
     name: str = Field(min_length=1, max_length=64)
     frequency: str = Field(default="daily", pattern="^(daily|weekly|monthly|custom)$")
-    push_time: str = Field(default="08:00", max_length=5)
+    push_time: str = Field(default="08:00", pattern=_PUSH_TIME_RE)
     subscriber_ids: list[int] = Field(default_factory=list)
     org_ids: list[int] = Field(default_factory=list)
     valid_from: OptionalDateStr = ""
@@ -977,6 +1000,12 @@ def update_report_task(task_id: int, body: dict, db: Session = Depends(get_db)):
     task = db.get(SpdReportTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="报告推送任务不存在")
+    # PATCH 与 POST 同源校验：dict 直 setattr 会把 "8:00"/非法频率写进库，
+    # 绕过创建端的 pattern，之后 spd_report_push 静默失效。
+    if "push_time" in body and not re.match(_PUSH_TIME_RE, str(body["push_time"])):
+        raise HTTPException(status_code=422, detail="push_time 须为零填充 HH:MM（如 08:00）")
+    if "frequency" in body and body["frequency"] not in ("daily", "weekly", "monthly", "custom"):
+        raise HTTPException(status_code=422, detail="frequency 非法")
     for key in ("name", "frequency", "push_time", "subscriber_ids", "org_ids",
                 "valid_from", "valid_to", "priority", "status"):
         if key in body:
