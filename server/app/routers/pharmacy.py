@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -395,16 +395,28 @@ def create_stock_take(
     )
     if stock is None:
         raise HTTPException(status_code=404, detail="该机构无此药品库存记录")
+    book_qty = stock.quantity
+    # 盘点是"把账面改成实盘值"，本质是绝对赋值，与并发入库/调拨的原子 UPDATE 相争：
+    # 直接 stock.quantity = actual 是读改写，会把盘点期间的入库覆盖掉。
+    # 改为乐观并发——仅当账面仍等于开盘读到的值时才落盘；期间有变动即 rowcount=0，
+    # 让本次盘点作废重盘（盘点基线已变，硬写会造成账实不符）。
+    changed = db.execute(
+        update(DrugStock)
+        .where(DrugStock.id == stock.id, DrugStock.quantity == book_qty)
+        .values(quantity=body.actual_qty)
+    ).rowcount
+    if not changed:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="盘点期间库存发生变动，请重新盘点")
     take = StockTake(
         org_id=body.org_id,
         drug_code=body.drug_code,
-        book_qty=stock.quantity,
+        book_qty=book_qty,
         actual_qty=body.actual_qty,
-        diff=body.actual_qty - stock.quantity,
+        diff=body.actual_qty - book_qty,
         note=body.note,
         created_by=user.id,
     )
-    stock.quantity = body.actual_qty  # 盘点后账实相符
     db.add(take)
     db.commit()
     return {

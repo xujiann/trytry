@@ -2,7 +2,7 @@
 from datetime import date
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, update
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
@@ -265,13 +265,27 @@ def review_prescription(prescription_id: int, body: PrescriptionReview, db: Sess
     # 归属由 pharmacist 角色把关而非机构，故此处不加 assert_obj_org_writable。
     if prescription.status != "pending_review":
         raise HTTPException(status_code=409, detail=f"当前状态 {prescription.status} 无需药师审核")
-    prescription.status = "approved" if body.approve else "rejected"
+    new_status = "approved" if body.approve else "rejected"
+    new_comment = None
     if body.comment:
-        prescription.review_comment = (
+        new_comment = (
             f"{prescription.review_comment}；药师意见：{body.comment}"
             if prescription.review_comment
             else f"药师意见：{body.comment}"
         )
+    # 原子状态流转：带 WHERE status='pending_review'，rowcount=0 说明已被另一药师抢先审。
+    # 原先读改写下两个药师并发审同一处方都会成功，后写覆盖先写。
+    values = {"status": new_status}
+    if new_comment is not None:
+        values["review_comment"] = new_comment
+    changed = db.execute(
+        update(Prescription)
+        .where(Prescription.id == prescription_id, Prescription.status == "pending_review")
+        .values(**values)
+    ).rowcount
+    if not changed:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该处方已被审核，请勿重复提交")
     db.commit()
     db.refresh(prescription)
     return prescription
