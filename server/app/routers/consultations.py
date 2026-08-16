@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import Consultation, Organization, Patient, User
+from ..visibility import visible_org_ids
 from ..schemas import (
     ConsultationAccept,
     ConsultationComplete,
@@ -39,10 +40,20 @@ def apply(body: ConsultationCreate, db: Session = Depends(get_db), user: User = 
 
 
 @router.get("", response_model=list[ConsultationOut])
-def list_consultations(status: str | None = None, db: Session = Depends(get_db)):
+def list_consultations(
+    status: str | None = None, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Consultation)
     if status:
         query = query.filter(Consultation.status == status)
+    # 会诊天然跨机构：按"申请方或受邀方任一为本机构"过滤，既不泄露无关会诊，
+    # 也不挡住协同双方各自看到自己的单。
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(
+            Consultation.from_org_id.in_(orgs) | Consultation.to_org_id.in_(orgs)
+        )
     return query.order_by(Consultation.id.desc()).limit(200).all()
 
 

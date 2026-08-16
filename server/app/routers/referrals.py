@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import Organization, Patient, Referral, User
+from ..visibility import visible_org_ids
 from ..schemas import ReferralCreate, ReferralOut, ReferralStatusUpdate
 
 router = APIRouter(
@@ -43,10 +44,19 @@ def create_referral(
 
 
 @router.get("", response_model=list[ReferralOut])
-def list_referrals(status: str | None = None, db: Session = Depends(get_db)):
+def list_referrals(
+    status: str | None = None, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Referral)
     if status:
         query = query.filter(Referral.status == status)
+    # 转诊天然跨机构：按"转出方或转入方任一为本机构"过滤
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(
+            Referral.from_org_id.in_(orgs) | Referral.to_org_id.in_(orgs)
+        )
     return query.order_by(Referral.id.desc()).limit(200).all()
 
 

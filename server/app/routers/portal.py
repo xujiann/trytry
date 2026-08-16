@@ -44,6 +44,7 @@ from ..models import (
     ChargePriceChange,
     ChronicPatient,
     ContractService,
+    Consultation,
     Encounter,
     ExamReport,
     ExamRequest,
@@ -1164,6 +1165,18 @@ def my_survey(
     db: Session = Depends(get_db),
 ):
     """登录态提交满意度评价。"""
+    # 归属校验：指定了具体对象（target_id>0）时必须属于本人，否则居民可对任意
+    # contract/encounter/consultation 评分刷差评污染满意度统计；target_id=0 为不挂
+    # 具体对象的总体评价，照常放行。
+    if body.target_id:
+        target_models = {
+            "contract": FamilyDoctorContract,
+            "encounter": Encounter,
+            "consultation": Consultation,
+        }
+        target = db.get(target_models[body.target_type], body.target_id)
+        if target is None or getattr(target, "patient_id", None) != patient.id:
+            raise HTTPException(status_code=404, detail="评价对象不存在或不属于本人")
     survey = SatisfactionSurvey(
         target_type=body.target_type,
         target_id=body.target_id,
