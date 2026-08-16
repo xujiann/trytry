@@ -4,9 +4,16 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ["MEDPLAT_DATABASE_URL"] = "sqlite:///./test_run.db"
-# 附件测试落独立目录，避免污染开发环境 uploads/（.gitignore 均已排除）
-os.environ["MEDPLAT_UPLOAD_DIR"] = "./test_uploads"
+# 数据库隔离：
+# - 外部已设 MEDPLAT_DATABASE_URL（如在 PG 上跑业务套）时尊重之，不覆盖；
+# - 否则默认本地 SQLite，并按 pytest-xdist worker 分文件，避免并行 `-n auto` 时
+#   多 worker 共用同一 test_run.db 互相踩（旧实现固定单文件，只能串行）。
+_worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+_suffix = f"_{_worker}" if _worker else ""
+if not os.environ.get("MEDPLAT_DATABASE_URL"):
+    os.environ["MEDPLAT_DATABASE_URL"] = f"sqlite:///./test_run{_suffix}.db"
+# 附件测试落独立目录（同样按 worker 隔离），避免污染开发环境 uploads/（.gitignore 均已排除）
+os.environ.setdefault("MEDPLAT_UPLOAD_DIR", f"./test_uploads{_suffix}")
 
 
 def reset_database():

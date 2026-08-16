@@ -939,6 +939,9 @@ class MaternalRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # 建册管理机构：横向隔离根治（此前妇幼表无 org_id，只能靠患者维度兜底，
+    # 而建册本身不构成服务关系，兜底对纯妇幼档案失效）。可空以容纳历史数据。
+    org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True, nullable=True)
     lmp: Mapped[str] = mapped_column(String(10), default="")
     edc: Mapped[str] = mapped_column(String(10), default="")
     gravidity: Mapped[int] = mapped_column(Integer, default=1)
@@ -977,6 +980,8 @@ class ChildRecord(Base):
     gender: Mapped[str] = mapped_column(String(8), default="未知")
     birth_date: Mapped[str] = mapped_column(String(10))
     guardian_patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True)
+    # 建档管理机构（横向隔离，见 MaternalRecord.org_id 同理）
+    org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # 终审轮：高危儿管理（新筛异常自动标记，可人工标记/解除）
     high_risk: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

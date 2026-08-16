@@ -6,8 +6,8 @@ on:
   pull_request:
 
 env:
-  # 块5：覆盖率门禁阈值。当前为 warning 模式——低于阈值只告警，不阻断构建。
-  # 稳定运行一段时间后，把下面「覆盖率门禁」步骤的 `|| true` 去掉即可切换为强制门禁。
+  # 块5：覆盖率门禁阈值。实测行覆盖率约 83%，已从 warning 切换为**强制门禁**：
+  # 低于阈值即构建失败。阈值留 13 个百分点缓冲，避免正常波动误红。
   COVERAGE_MIN: "70"
 
 jobs:
@@ -26,17 +26,16 @@ jobs:
         run: |
           python -m pytest tests/ -q \
             --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
-      - name: Coverage gate (warning mode)
+      - name: Coverage gate (enforcing)
         working-directory: server
         run: |
-          python - <<'PY' || true
+          python - <<'PY'
           import sys, xml.etree.ElementTree as ET
           threshold = float("${{ env.COVERAGE_MIN }}")
           pct = float(ET.parse("coverage.xml").getroot().get("line-rate")) * 100
           print(f"::notice title=Coverage::行覆盖率 {pct:.2f}%（阈值 {threshold:.0f}%）")
           if pct < threshold:
-              print(f"::warning title=Coverage below threshold::行覆盖率 {pct:.2f}% 低于阈值 {threshold:.0f}%，"
-                    "当前为 warning 模式不阻断构建")
+              print(f"::error title=Coverage below threshold::行覆盖率 {pct:.2f}% 低于阈值 {threshold:.0f}%，构建失败")
               sys.exit(1)
           PY
       - name: Upload coverage report

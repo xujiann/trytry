@@ -6,7 +6,13 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr
 from ..concurrency import insert_if_absent
-from ..visibility import assert_org_writable, scope_patient_list
+from ..visibility import (
+    assert_obj_org_visible,
+    assert_obj_org_writable,
+    assert_org_writable,
+    scope_org_list,
+    scope_patient_list,
+)
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -48,7 +54,10 @@ class MaternalOut(MaternalCreate):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 妇幼建档
 )
-def register(body: MaternalCreate, db: Session = Depends(get_db)):
+def register(
+    body: MaternalCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     existing = db.query(MaternalRecord).filter(MaternalRecord.patient_id == body.patient_id).first()
@@ -56,7 +65,8 @@ def register(body: MaternalCreate, db: Session = Depends(get_db)):
         return existing
     # 建册幂等：并发下两个请求都查不到就都去插，撞 patient_id 唯一约束时
     # 返回既有那本，不是 500——一个孕产妇两本册子，产检记录会分叉。
-    record = MaternalRecord(**body.model_dump())
+    # 管理机构默认建册人所在机构（横向隔离归属）。
+    record = MaternalRecord(**body.model_dump(), org_id=user.org_id)
     if not insert_if_absent(db, record):
         # 必须先结束事务再返回：SAVEPOINT 回滚只退掉这一行，外层写事务还开着，
         # 一路握着 SQLite 的写锁走完请求，审计中间件那一笔就写不进去
@@ -72,11 +82,40 @@ def register(body: MaternalCreate, db: Session = Depends(get_db)):
     return record
 
 
+def _maternal_or_404(db: Session, record_id: int, user: User, *, write: bool) -> MaternalRecord:
+    """取孕产妇档案并按建册机构（org_id）校验归属。"""
+    record = db.get(MaternalRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="孕产妇档案不存在")
+    if write:
+        assert_obj_org_writable(db, user, record)
+    else:
+        assert_obj_org_visible(db, user, record)
+    return record
+
+
+def _child_or_404(db: Session, child_id: int, user: User, *, write: bool) -> ChildRecord:
+    """取儿童档案并按建档机构（org_id）校验归属。"""
+    child = db.get(ChildRecord, child_id)
+    if child is None:
+        raise HTTPException(status_code=404, detail="儿童档案不存在")
+    if write:
+        assert_obj_org_writable(db, user, child)
+    else:
+        assert_obj_org_visible(db, user, child)
+    return child
+
+
 @router.get("/records", response_model=list[MaternalOut])
-def list_records(high_risk: bool | None = None, db: Session = Depends(get_db)):
+def list_records(
+    high_risk: bool | None = None, org_id: int | None = None,
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
     query = db.query(MaternalRecord)
     if high_risk is not None:
         query = query.filter(MaternalRecord.high_risk.is_(high_risk))
+    # 横向隔离：按建册机构过滤（org_id 为空的历史档案仅全域可见）
+    query = scope_org_list(db, user, query, MaternalRecord, org_id)
     return query.order_by(MaternalRecord.high_risk.desc(), MaternalRecord.id.desc()).limit(200).all()
 
 
@@ -93,10 +132,11 @@ class VisitCreate(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 产检随访
 )
-def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
-    record = db.get(MaternalRecord, record_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="孕产妇档案不存在")
+def add_visit(
+    record_id: int, body: VisitCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    record = _maternal_or_404(db, record_id, user, write=True)
     if body.visit_type == "postpartum" and record.status == "registered":
         record.status = "delivered"
     visit = MaternalVisit(record_id=record_id, **body.model_dump())
@@ -118,10 +158,10 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
     "/records/{record_id}/close",
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5
 )
-def close_record(record_id: int, db: Session = Depends(get_db)):
-    record = db.get(MaternalRecord, record_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="孕产妇档案不存在")
+def close_record(
+    record_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    record = _maternal_or_404(db, record_id, user, write=True)
     if record.status != "delivered":
         raise HTTPException(status_code=409, detail="须完成产后访视（分娩后）方可结案")
     record.status = "closed"
@@ -148,8 +188,11 @@ class ChildOut(ChildCreate):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 儿童建档
 )
-def register_child(body: ChildCreate, db: Session = Depends(get_db)):
-    child = ChildRecord(**body.model_dump())
+def register_child(
+    body: ChildCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    child = ChildRecord(**body.model_dump(), org_id=user.org_id)  # 建档管理机构
     db.add(child)
     db.commit()
     db.refresh(child)
@@ -157,8 +200,12 @@ def register_child(body: ChildCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/children", response_model=list[ChildOut])
-def list_children(db: Session = Depends(get_db)):
-    return db.query(ChildRecord).order_by(ChildRecord.id.desc()).limit(200).all()
+def list_children(
+    org_id: int | None = None, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    query = scope_org_list(db, user, db.query(ChildRecord), ChildRecord, org_id)
+    return query.order_by(ChildRecord.id.desc()).limit(200).all()
 
 
 class ChildVisitCreate(BaseModel):
@@ -174,9 +221,11 @@ class ChildVisitCreate(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 儿童随访
 )
-def add_child_visit(child_id: int, body: ChildVisitCreate, db: Session = Depends(get_db)):
-    if db.get(ChildRecord, child_id) is None:
-        raise HTTPException(status_code=404, detail="儿童档案不存在")
+def add_child_visit(
+    child_id: int, body: ChildVisitCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _child_or_404(db, child_id, user, write=True)
     visit = ChildVisit(child_id=child_id, **body.model_dump())
     db.add(visit)
     db.commit()
@@ -223,7 +272,10 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
 
 
 @router.get("/records/{record_id}/delivery")
-def get_delivery(record_id: int, db: Session = Depends(get_db)):
+def get_delivery(
+    record_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    _maternal_or_404(db, record_id, user, write=False)
     delivery = db.query(DeliveryRecord).filter(DeliveryRecord.record_id == record_id).first()
     if delivery is None:
         raise HTTPException(status_code=404, detail="暂无分娩记录")
@@ -256,10 +308,11 @@ _SCREEN_ITEM_NAMES = {"metabolic": "遗传代谢病筛查", "hearing": "听力�
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 新筛
 )
-def add_screening(child_id: int, body: ScreeningCreate, db: Session = Depends(get_db)):
-    child = db.get(ChildRecord, child_id)
-    if child is None:
-        raise HTTPException(status_code=404, detail="儿童档案不存在")
+def add_screening(
+    child_id: int, body: ScreeningCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    child = _child_or_404(db, child_id, user, write=True)
     screening = NewbornScreening(child_id=child_id, **body.model_dump())
     if body.result == "abnormal" and not child.high_risk:
         child.high_risk = True
@@ -277,9 +330,10 @@ def add_screening(child_id: int, body: ScreeningCreate, db: Session = Depends(ge
 
 
 @router.get("/children/{child_id}/screenings")
-def list_screenings(child_id: int, db: Session = Depends(get_db)):
-    if db.get(ChildRecord, child_id) is None:
-        raise HTTPException(status_code=404, detail="儿童档案不存在")
+def list_screenings(
+    child_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    _child_or_404(db, child_id, user, write=False)
     return [
         {
             "id": s.id,
@@ -307,10 +361,11 @@ class HighRiskUpdate(BaseModel):
     "/children/{child_id}/high-risk",
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 高危儿标记/解除
 )
-def set_high_risk(child_id: int, body: HighRiskUpdate, db: Session = Depends(get_db)):
-    child = db.get(ChildRecord, child_id)
-    if child is None:
-        raise HTTPException(status_code=404, detail="儿童档案不存在")
+def set_high_risk(
+    child_id: int, body: HighRiskUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    child = _child_or_404(db, child_id, user, write=True)
     child.high_risk = body.high_risk
     child.risk_note = body.risk_note if body.high_risk else ""
     db.commit()
@@ -318,8 +373,12 @@ def set_high_risk(child_id: int, body: HighRiskUpdate, db: Session = Depends(get
 
 
 @router.get("/children/high-risk")
-def list_high_risk_children(db: Session = Depends(get_db)):
+def list_high_risk_children(
+    db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """高危儿清单：新筛异常自动纳入 + 人工标记，供专案随访。"""
+    query = db.query(ChildRecord).filter(ChildRecord.high_risk.is_(True))
+    query = scope_org_list(db, user, query, ChildRecord, None)
     return [
         {
             "id": c.id,
@@ -327,8 +386,7 @@ def list_high_risk_children(db: Session = Depends(get_db)):
             "birth_date": c.birth_date,
             "risk_note": c.risk_note,
         }
-        for c in db.query(ChildRecord)
-        .filter(ChildRecord.high_risk.is_(True))
+        for c in query
         .order_by(ChildRecord.id.desc())
         .limit(200)
         .all()

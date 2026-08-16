@@ -421,9 +421,13 @@ _AUDIT_EXEMPT = {"/api/auth/login"}
 
 # 审计链临界区锁：取上一条 hash → 插入 → 计算本条 hash 必须串行，
 # 否则两个并发写请求读到同一个 prev，生成两条 prev_hash 相同的记录，
-# verify_chain 会误报断链。审计是低频旁路，进程内串行的代价可忽略。
-# （多 worker 部署下须由 Redis/DB 层锁兜底，见 audit_chain 模块说明。）
+# verify_chain 会误报断链。审计是低频旁路，串行代价可忽略。
+# - 进程内：threading.Lock 保证同进程内单线程写链（SQLite 单文件足够）；
+# - 跨进程（多 worker）：PostgreSQL 上再叠一层事务级 advisory lock，让所有 worker
+#   的审计写彼此串行；SQLite 无此机制但写事务本就串行化，进程内锁已足够。
 _audit_lock = threading.Lock()
+# 固定的 advisory lock 键（任意常量，全局唯一即可）
+_AUDIT_ADVISORY_KEY = 848_3821
 
 
 def _write_audit(request, status_code: int) -> None:
@@ -440,6 +444,10 @@ def _write_audit(request, status_code: int) -> None:
             user = db.query(User).filter(User.username == username).first()
             user_id = user.id if user else None
         with _audit_lock:
+            # 多 worker 跨进程串行：PG 上取事务级 advisory lock（commit 时自动释放），
+            # 保证任一时刻只有一个审计写在读 prev→插入，杜绝跨进程 prev_hash 相同。
+            if db.bind.dialect.name == "postgresql":
+                db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_ADVISORY_KEY})
             # 防篡改哈希链：本条 hash = MAC(密钥, 上一条 hash + id + 时间 + 本条内容)。
             prev = (
                 db.query(AuditLog.entry_hash)
