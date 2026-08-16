@@ -15,7 +15,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import today
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
+from ..visibility import (
+    assert_obj_org_visible,
+    assert_obj_org_writable,
+    assert_org_writable,
+    scope_org_list,
+    visible_org_ids,
+)
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..notify import notify_patient
@@ -269,12 +275,17 @@ def schedule_surgery(
 
 @router.get("/schedules")
 def list_schedules(
-    scheduled_date: str | None = None, room_id: int | None = None, db: Session = Depends(get_db)
+    scheduled_date: str | None = None, room_id: int | None = None, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """手术排班表：按手术间与时段排序，就是手术室墙上那张表。"""
     query = db.query(SurgerySchedule, SurgeryRequest, OperatingRoom).join(
         SurgeryRequest, SurgerySchedule.request_id == SurgeryRequest.id
     ).join(OperatingRoom, SurgerySchedule.room_id == OperatingRoom.id)
+    # 排班表泄露全县术式/术者/时间：按手术申请所属机构收口
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(SurgeryRequest.org_id.in_(orgs))
     if scheduled_date:
         query = query.filter(SurgerySchedule.scheduled_date == scheduled_date)
     if room_id is not None:
@@ -374,10 +385,14 @@ def create_record(
 
 
 @router.get("/requests/{request_id}/record")
-def get_record(request_id: int, db: Session = Depends(get_db)):
+def get_record(
+    request_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     record = db.query(SurgeryRecord).filter(SurgeryRecord.request_id == request_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="术中记录不存在")
+    # by-id 读补机构可见性（术中记录含术中所见/并发症/诊断，SurgeryRequest 带 org_id）
+    assert_obj_org_visible(db, user, db.get(SurgeryRequest, request_id))
     return {
         "id": record.id,
         "request_id": record.request_id,

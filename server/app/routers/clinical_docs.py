@@ -22,16 +22,26 @@ from ..models import (
     VitalSignRecord,
     Ward,
 )
+from ..visibility import assert_obj_org_visible, assert_obj_org_writable, visible_org_ids
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], dependencies=[Depends(get_current_user)])
 
 NOTE_TYPES = ("first", "daily", "ward_round", "rescue", "consultation", "discharge")
 
 
-def _admission_or_404(db: Session, admission_id: int) -> Admission:
+def _admission_or_404(db: Session, admission_id: int, user: User, *, write: bool = False) -> Admission:
+    """取住院记录并校验机构归属（Admission 有 org_id）。
+
+    住院文书原先按 admission_id 直取、无任何机构校验——任一账号可读/写全县住院
+    病程、护理、体温单。这里把归属收进取件函数：读侧机构可见、写侧机构可写。
+    """
     admission = db.get(Admission, admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    if write:
+        assert_obj_org_writable(db, user, admission)
+    else:
+        assert_obj_org_visible(db, user, admission)
     return admission
 
 
@@ -60,7 +70,7 @@ def create_progress_note(
 
     两条规则：出院后不得再补录（病历应在住院期间形成）；首次病程每次住院唯一。
     """
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_or_404(db, admission_id, user, write=True)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写病程记录")
     if body.note_type == "first":
@@ -105,8 +115,9 @@ def list_progress_notes(
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    _admission_or_404(db, admission_id)
+    _admission_or_404(db, admission_id, user)
     query = db.query(ProgressNote).filter(ProgressNote.admission_id == admission_id)
     if note_type:
         query = query.filter(ProgressNote.note_type == note_type)
@@ -114,13 +125,15 @@ def list_progress_notes(
 
 
 @router.get("/admissions/{admission_id}/document-completeness")
-def document_completeness(admission_id: int, db: Session = Depends(get_db)):
+def document_completeness(
+    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """文书完整性检查：住院病历该有而没有的部分。
 
     出院前的自查工具，也是病历质控的抓手——缺首次病程、无护理记录、
     无体征记录都是终末质控里最常见的扣分项。
     """
-    _admission_or_404(db, admission_id)
+    _admission_or_404(db, admission_id, user)
     types = {
         t
         for (t,) in db.query(ProgressNote.note_type)
@@ -170,7 +183,7 @@ def create_nursing_record(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_or_404(db, admission_id, user, write=True)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写护理记录")
     record = NursingRecord(
@@ -197,9 +210,9 @@ def create_nursing_record(
 @router.get("/admissions/{admission_id}/nursing-records")
 def list_nursing_records(
     admission_id: int, response: Response, offset: int = 0, limit: int = 100,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
-    _admission_or_404(db, admission_id)
+    _admission_or_404(db, admission_id, user)
     query = db.query(NursingRecord).filter(NursingRecord.admission_id == admission_id)
     return [
         {
@@ -241,7 +254,7 @@ def create_vital(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_or_404(db, admission_id, user, write=True)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再记录体征")
     record = VitalSignRecord(
@@ -255,9 +268,11 @@ def create_vital(
 
 
 @router.get("/admissions/{admission_id}/vitals")
-def list_vitals(admission_id: int, db: Session = Depends(get_db)):
+def list_vitals(
+    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """体温单数据：按测量时刻升序，供前端画趋势曲线。"""
-    _admission_or_404(db, admission_id)
+    _admission_or_404(db, admission_id, user)
     rows = (
         db.query(VitalSignRecord)
         .filter(VitalSignRecord.admission_id == admission_id)
@@ -303,8 +318,10 @@ def create_handover(
     body: HandoverIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """交接班：在院人数由系统按当前住院数据快照，不让人工填——这个数填错就没意义了。"""
-    if db.get(Ward, body.ward_id) is None:
+    ward = db.get(Ward, body.ward_id)
+    if ward is None:
         raise HTTPException(status_code=404, detail="病区不存在")
+    assert_obj_org_writable(db, user, ward)  # 只能给本机构病区记交接班
     patient_count = (
         db.query(Admission)
         .filter(Admission.ward_id == body.ward_id, Admission.status == "admitted")
@@ -334,8 +351,17 @@ def list_handovers(
     offset: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(ShiftHandover)
+    # ShiftHandover 无 org_id，按病区所属机构收口：非全域只看本机构病区的交接班
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(
+            ShiftHandover.ward_id.in_(
+                db.query(Ward.id).filter(Ward.org_id.in_(orgs))
+            )
+        )
     if ward_id is not None:
         query = query.filter(ShiftHandover.ward_id == ward_id)
     if handover_date:

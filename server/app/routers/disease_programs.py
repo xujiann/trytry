@@ -15,7 +15,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
-from ..visibility import assert_org_writable, scope_patient_list
+from ..visibility import (
+    assert_obj_org_visible,
+    assert_obj_org_writable,
+    assert_org_writable,
+    scope_patient_list,
+)
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -216,6 +221,7 @@ def record_node(
     """记录路径节点执行。节点 key 必须在目录里——写个不存在的节点，
     完成度就永远算不对。"""
     enrollment = _enrollment(db, enrollment_id)
+    assert_obj_org_writable(db, user, enrollment)  # 只能给本机构入组记录写路径节点
     if enrollment.status != "enrolled":
         raise HTTPException(status_code=409, detail="该病例已出组，不可再记录路径节点")
     program = _program(db, enrollment.program_id)
@@ -239,13 +245,17 @@ def record_node(
 
 @router.post("/enrollments/{enrollment_id}/exit",
              dependencies=[Depends(require_roles("doctor", "public_health"))])
-def exit_enrollment(enrollment_id: int, body: ExitIn, db: Session = Depends(get_db)):
+def exit_enrollment(
+    enrollment_id: int, body: ExitIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """出组并做疗效评价。
 
     **必需节点未做完也允许出组**——患者转院、拒绝继续治疗都是现实，硬拦只会
     逼人补假记录。未完成的节点会留在完成度里如实呈现。
     """
     enrollment = _enrollment(db, enrollment_id)
+    assert_obj_org_writable(db, user, enrollment)  # 只能给本机构入组记录出组/写疗效
     if enrollment.status != "enrolled":
         raise HTTPException(status_code=409, detail="该病例已出组")
     if body.status == "exited" and not body.exit_reason:
@@ -260,8 +270,12 @@ def exit_enrollment(enrollment_id: int, body: ExitIn, db: Session = Depends(get_
 
 
 @router.get("/enrollments/{enrollment_id}")
-def get_enrollment(enrollment_id: int, db: Session = Depends(get_db)):
-    return _enrollment_out(_enrollment(db, enrollment_id), db)
+def get_enrollment(
+    enrollment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    enrollment = _enrollment(db, enrollment_id)
+    assert_obj_org_visible(db, user, enrollment)  # by-id 详情补机构可见性
+    return _enrollment_out(enrollment, db)
 
 
 @router.get("/{program_id}/stats")

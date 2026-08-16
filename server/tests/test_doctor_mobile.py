@@ -190,11 +190,8 @@ def test_doctor_mobile_tabs_registered_in_js(client):
 
 def test_round_tab_backend_flow(client, admin, setup):
     """查房页用到的三个接口串起来：写病程 → 录体征 → 完整性自查反映变化。"""
-    org = client.post(
-        "/api/organizations",
-        json={"name": "查房演示院", "org_type": "lead_hospital", "level": "county"},
-        headers=admin,
-    ).json()
+    # 病区须在 setup["doctor"] 所属机构（横向隔离：不能读/写他院住院文书）
+    org = setup["org"]
     ward = client.post(
         "/api/inpatient/wards", json={"org_id": org["id"], "name": "查房病区"}, headers=admin
     ).json()
