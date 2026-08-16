@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_with_retry
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import ExamRequest, PathologySpecimen
+from ..visibility import assert_org_writable
+from ..models import ExamRequest, PathologySpecimen, User
 
 router = APIRouter(
     prefix="/api/pathology", tags=["病理标本"], dependencies=[Depends(get_current_user)]
@@ -146,13 +147,17 @@ def list_specimens(
 @router.post(
     "/specimens/{specimen_id}/receive", dependencies=[Depends(require_roles("doctor", "operator"))]
 )
-def receive_specimen(specimen_id: int, body: SpecimenReceive, db: Session = Depends(get_db)):
+def receive_specimen(
+    specimen_id: int, body: SpecimenReceive, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """核收。核收人必填——标本出了问题，要找得到当时是谁签的收。"""
     specimen = _specimen(db, specimen_id)
     if specimen.status != "pending":
         raise HTTPException(status_code=409, detail=f"当前状态 {specimen.status} 不可核收")
     specimen.status = "received"
     specimen.received_by = body.received_by
+    specimen.lab_org_id = user.org_id  # 承接病理室=核收方机构
     db.commit()
     db.refresh(specimen)
     return _out(specimen)
@@ -178,9 +183,14 @@ def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depend
 @router.post(
     "/specimens/{specimen_id}/advance", dependencies=[Depends(require_roles("doctor", "operator"))]
 )
-def advance_specimen(specimen_id: int, body: SpecimenAdvance, db: Session = Depends(get_db)):
+def advance_specimen(
+    specimen_id: int, body: SpecimenAdvance, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """推进：核收→取材→制片→阅片。蜡块数与切片数在对应环节记录。"""
     specimen = _specimen(db, specimen_id)
+    # 承接归属：只能推进本病理室已核收的标本，堵他院推进/作废别家标本
+    assert_org_writable(db, user, specimen.lab_org_id)
     if specimen.status == "rejected":
         raise HTTPException(status_code=409, detail="已拒收的标本不可推进")
     next_status = SPECIMEN_FLOW.get(specimen.status)

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import insert_or_conflict
-from ..visibility import log_patient_access
+from ..visibility import assert_org_writable, log_patient_access
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import CriticalAction, ExamReport, ExamRequest, Organization, Patient, RecognitionItem, User
@@ -248,6 +248,7 @@ def claim_request(
             {
                 ExamRequest.status: "diagnosing",
                 ExamRequest.claimed_by: user.full_name or user.username,
+                ExamRequest.center_org_id: user.org_id,  # 承接诊断中心=领取人机构
             },
             synchronize_session=False,
         )
@@ -266,12 +267,21 @@ def claim_request(
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],
 )
-def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends(get_db)):
+def submit_report(
+    request_id: int, body: ExamReportCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     request = db.get(ExamRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="申请单不存在")
     if request.status not in ("pending", "diagnosing"):
         raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可出报告")
+    # 承接归属：已被某中心领取的，只能由该中心本机构出报告（堵他院医师出别家已领报告）；
+    # 直接从 pending 出报告的（未经 claim），出报告方即承接中心。
+    if request.center_org_id is not None:
+        assert_org_writable(db, user, request.center_org_id)
+    else:
+        request.center_org_id = user.org_id
     report = ExamReport(request_id=request_id, **body.model_dump())
     request.status = "reported"
     if report.critical:

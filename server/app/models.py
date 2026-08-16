@@ -220,6 +220,12 @@ class ExamRequest(Base):
     sample_status: Mapped[str] = mapped_column(String(16), default="")
     # L-6 整改：诊断领取人（原子领取时记录，避免并发双领与责任不清）
     claimed_by: Mapped[str] = mapped_column(String(64), default="")
+    # 承接诊断的中心机构：领取(claim)/出报告时置为诊断方所在机构。中心队列按
+    # center_type 跨机构发现（不按此列过滤），但出报告须由承接中心本机构完成——
+    # 据此堵住"他院医师出别家已领取报告"，并让报告可归属可审计。
+    center_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), index=True, nullable=True
+    )
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -797,6 +803,11 @@ class PathologySpecimen(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     reject_reason: Mapped[str] = mapped_column(String(256), default="")
     received_by: Mapped[str] = mapped_column(String(64), default="")
+    # 承接病理室机构：核收时置为核收方机构。标本发现队列跨机构（不按此列过滤），
+    # 但核收后的拒收/推进须由承接病理室本机构完成，堵住他院推进/作废别家标本。
+    lab_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), index=True, nullable=True
+    )
     block_count: Mapped[int] = mapped_column(Integer, default=0)
     slide_count: Mapped[int] = mapped_column(Integer, default=0)
     note: Mapped[str] = mapped_column(String(512), default="")

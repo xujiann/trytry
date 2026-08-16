@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable
+from ..visibility import assert_org_writable, visible_org_ids
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import OnlineConsult, Organization, Patient, Prescription, User
@@ -56,10 +56,18 @@ def create_consult(body: ConsultCreate, db: Session = Depends(get_db), user: Use
 
 
 @router.get("/consults", response_model=list[ConsultOut])
-def list_consults(status: str | None = None, db: Session = Depends(get_db)):
+def list_consults(
+    status: str | None = None, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(OnlineConsult)
     if status:
         query = query.filter(OnlineConsult.status == status)
+    # 互联网+诊疗按开设机构收口：OnlineConsult.org_id 即开设在线咨询的机构
+    # （建单时 assert_org_writable 绑定为创建者机构），非全域只看本机构咨询。
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(OnlineConsult.org_id.in_(orgs))
     return query.order_by(OnlineConsult.id.desc()).limit(200).all()
 
 
