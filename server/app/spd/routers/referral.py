@@ -612,11 +612,26 @@ def closure_rate(
 def referral_alerts(
     hours: int = 48, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """转诊审核超时预警（医生移动端 #19）：超过 N 小时未推进的在途单。"""
+    """转诊审核超时预警（医生移动端 #19）：超过 N 小时未推进的在途单。
+
+    "未推进"按**最后一次推进时刻**（最近一条 SpdReferralStep，无步骤则回落建单时刻）
+    判定，而非单据年龄——原先量 created_at，会把 3 天前发起但 1 小时前刚推进的单误报，
+    也会漏掉昨天卡住的新单。
+    """
     cutoff = now_naive() - timedelta(hours=max(min(hours, 720), 1))
-    query = db.query(SpdReferralCase).filter(
-        SpdReferralCase.status.notin_(_TERMINAL),
-        SpdReferralCase.created_at < cutoff,
+    last_step = (
+        db.query(
+            SpdReferralStep.case_id.label("case_id"),
+            func.max(SpdReferralStep.created_at).label("last_at"),
+        )
+        .group_by(SpdReferralStep.case_id)
+        .subquery()
+    )
+    last_activity = func.coalesce(last_step.c.last_at, SpdReferralCase.created_at)
+    query = (
+        db.query(SpdReferralCase)
+        .outerjoin(last_step, last_step.c.case_id == SpdReferralCase.id)
+        .filter(SpdReferralCase.status.notin_(_TERMINAL), last_activity < cutoff)
     )
     orgs = visible_org_ids(db, user)
     if orgs is not None:
@@ -624,7 +639,7 @@ def referral_alerts(
             SpdReferralCase.initiator_org_id.in_(orgs)
             | SpdReferralCase.current_org_id.in_(orgs)
         )
-    rows = query.order_by(SpdReferralCase.created_at).limit(200).all()
+    rows = query.order_by(last_activity).limit(200).all()
     return {
         "threshold_hours": hours,
         "count": len(rows),

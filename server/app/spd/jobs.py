@@ -43,6 +43,20 @@ def spd_task_overdue_scan(db: Session) -> tuple[int, str]:
     return result["overdue"], f"超期 {result['overdue']} 条，其中升级 {result['escalated']} 条"
 
 
+def _frequency_due(frequency: str, now) -> bool:
+    """任务频率是否在今天到期。
+
+    daily/custom：每天到点即推（去重仍由 period_label 兜住）；
+    weekly：只在周一推；monthly：只在每月 1 号推。
+    原先 frequency 完全未被消费，"每周推送"配置形同虚设。
+    """
+    if frequency == "weekly":
+        return now.weekday() == 0
+    if frequency == "monthly":
+        return now.day == 1
+    return True
+
+
 @register("spd_report_push", "慢专病报告推送", 300)
 def spd_report_push(db: Session) -> tuple[int, str]:
     """按推送任务的频率与时点生成报告并投递订阅人（P0-1）。
@@ -75,6 +89,8 @@ def spd_report_push(db: Session) -> tuple[int, str]:
         push_time = task.push_time or "08:00"
         if now.strftime("%H:%M") < push_time:
             continue  # 今天还没到推送时点
+        if not _frequency_due(task.frequency, now):
+            continue  # 频率未到（周报只在周一、月报只在 1 号推），原先 frequency 形同虚设
         template = db.get(SpdReportTemplate, task.template_id)
         if template is None or not template.active:
             continue

@@ -145,7 +145,15 @@ def _followup_trend(db, section, org_id, period):
 
 
 def _score(db, section, org_id, period):
-    rows = db.query(SpdScore).order_by(SpdScore.id.desc()).limit(20).all()
+    # 考核得分段落须与报表口径同源（按机构、按周期各出一份），原先忽略 org_id/period
+    # 直取全域最近 20 条，机构报告里混入全域所有对象的得分与排名。
+    query = db.query(SpdScore)
+    if period:
+        query = query.filter(SpdScore.period == period)
+    if org_id is not None:
+        # object_type='org' 时 object_id 即机构 id：机构报告只出本机构对象的得分
+        query = query.filter(SpdScore.object_type == "org", SpdScore.object_id == org_id)
+    rows = query.order_by(SpdScore.id.desc()).limit(50).all()
     return {**_head(section, "table"), "columns": ["对象", "周期", "得分", "排名"],
             "rows": [[r.object_name, r.period, r.total_score, r.rank] for r in rows]}
 
