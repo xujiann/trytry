@@ -179,7 +179,7 @@ async function renderSurgery() {
         $("#surg-detail-body").innerHTML = table(["项", "值"],
           [["实际术式", rec.actual_surgery_name], ["术者", rec.surgeon_name], ["麻醉医师", rec.anesthetist_name],
            ["麻醉方式", ANESTHESIA[rec.anesthesia_type] || rec.anesthesia_type], ["切口等级", rec.incision_level],
-           ["起止", `${esc(rec.start_at)} ~ ${esc(rec.end_at)}`], ["出血量", `${rec.blood_loss_ml} ml`],
+           ["起止", `${rec.start_at} ~ ${rec.end_at}`], ["出血量", `${rec.blood_loss_ml} ml`],
            ["术中所见", rec.findings], ["并发症", rec.complications || "无"], ["转归", rec.outcome]],
           ([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`);
         return;
@@ -1625,7 +1625,7 @@ async function renderDiseasePrograms() {
     const { dppick, dpnode, dpexit } = e.target.dataset;
     if (dppick) { localStorage.setItem("medplat_program", dppick); return route(); }
     if (dpnode) {
-      const keys = (current.path_nodes || []).map((n) => `${n.key}(${esc(n.name)})`).join(" ");
+      const keys = (current.path_nodes || []).map((n) => `${n.key}(${n.name})`).join(" ");
       const node_key = prompt(`节点键，可选：${keys}`);
       if (!node_key) return;
       const result = prompt("执行结果（可留空）") || "";
@@ -1791,7 +1791,7 @@ function wfCanvasDraw() {
         const from = WF_NODES.find((n) => n.key === WF_SELECTED);
         from.next = key;
         WF_LINKING = false;
-        setMsg("#wfc-msg", `已连：${esc(from.key)} → ${key}`, true);
+        setMsg("#wfc-msg", `已连：${from.key} → ${key}`, true);
       } else {
         WF_SELECTED = key;
       }
