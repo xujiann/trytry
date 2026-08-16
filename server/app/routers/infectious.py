@@ -1,5 +1,5 @@
 """传染病病例报告与多点触发监测预警。"""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -128,8 +128,14 @@ def late_reports(db: Session = Depends(get_db)):
             onset = date.fromisoformat(case.onset_date)
         except ValueError:
             continue
-        days_late = (case.reported_at.date() - onset).days
-        if days_late * 24 > report_hours:
+        # 按小时判迟报：整天差×24 会丢失小时——甲类当日 5h 上报被判不迟、
+        # 乙丙类次日 25–48h 上报也被判不迟，系统性低估迟报率。以发病当日 0 点
+        # 到实际上报时刻的完整小时数计（无发病时刻，保守取 0 点，宁多判不漏判）。
+        onset_start = datetime.combine(onset, datetime.min.time())
+        reported = case.reported_at.replace(tzinfo=None)
+        hours_late = (reported - onset_start).total_seconds() / 3600
+        days_late = (case.reported_at.date() - onset).days  # 仅供展示
+        if hours_late > report_hours:
             rows.append(
                 {
                     "case_id": case.id,
@@ -141,6 +147,7 @@ def late_reports(db: Session = Depends(get_db)):
                     "onset_date": case.onset_date,
                     "reported_at": case.reported_at.isoformat(),
                     "days_late": days_late,
+                    "hours_late": round(hours_late, 1),
                 }
             )
     return rows

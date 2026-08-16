@@ -193,6 +193,9 @@ def drg_stats(db: Session = Depends(get_db)):
         db.query(
             CaseSummary.drg_code,
             func.count(CaseSummary.id).label("cases"),
+            # Σ权重用病例存量快照 drg_weight，与机构级 CMI 同一来源——不能一处用快照、
+            # 一处用目录当前 base_weight，否则改权后机构 CMI 与 MDC CMI 对同批病例打架。
+            func.coalesce(func.sum(CaseSummary.drg_weight), 0.0).label("weight_sum"),
             func.coalesce(func.avg(CaseSummary.total_cost), 0.0).label("avg_cost"),
         )
         .filter(CaseSummary.drg_code != "")
@@ -219,7 +222,7 @@ def drg_stats(db: Session = Depends(get_db)):
         )
         entry["cases"] += r.cases
         entry["groups"] += 1
-        entry["weight_sum"] += (group.base_weight if group else 0.0) * r.cases
+        entry["weight_sum"] += r.weight_sum or 0.0  # 病例快照 Σ权重，与机构级同源
         entry["cost_sum"] += (r.avg_cost or 0.0) * r.cases
 
     return {

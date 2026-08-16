@@ -1,4 +1,5 @@
 """中心药房：库存管理、县乡村余缺调拨、缺药预警、采购建议。"""
+import math
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -193,7 +194,7 @@ def purchase_suggestions(db: Session = Depends(get_db)):
                     "drug_name": row.drug_name,
                     "usage_30d": usage,
                     "current_stock": current,
-                    "suggested_quantity": int(gap + 0.999),  # 缺口向上取整
+                    "suggested_quantity": math.ceil(gap),  # 缺口向上取整（int(gap+0.999) 对尾数∈(0,0.001) 会少取一）
                 }
             )
     suggestions.sort(key=lambda s: s["suggested_quantity"], reverse=True)

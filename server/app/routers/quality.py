@@ -611,12 +611,14 @@ def record_qc_summary(
     q = db.query(MedicalRecord)
     # 质控统计是管理口径：牵头医院要看得到片区的病历质量分布
     q = scope_org_list(db, user, q, MedicalRecord, org_id, stats=True)
-    records = [
-        r
-        for r in q.order_by(MedicalRecord.id.desc()).limit(5000).all()
-        # 月份口径与运营月报一致：按病历创建月份归属
-        if period is None or (r.created_at and r.created_at.strftime("%Y-%m") == period)
-    ]
+    # 月份过滤下推到 SQL：原先先 limit(5000) 再在 Python 按月份筛，病历超 5000 条时
+    # 较早月份会因不在"最近 5000 条"内被静默漏算。改为 created_at 区间先过滤后取数。
+    if period is not None:
+        year, month = int(period[:4]), int(period[5:7])
+        start = datetime(year, month, 1)
+        end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
+        q = q.filter(MedicalRecord.created_at >= start, MedicalRecord.created_at < end)
+    records = q.order_by(MedicalRecord.id.desc()).limit(5000).all()
     org_names = dict(db.query(Organization.id, Organization.name).all())
 
     def group(key_fn, label_fn) -> list[dict]:

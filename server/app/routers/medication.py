@@ -1,4 +1,6 @@
 """⑮基层缺药登记 + ⑯居民用药监测。"""
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -23,6 +25,9 @@ router = APIRouter(prefix="/api/medication", tags=["药事监测"], dependencies
 
 # 同时在用药品达到该数即提示多重用药风险
 POLYPHARMACY_THRESHOLD = 5
+# "在用"时间窗（天）：用药画像/多重用药只看近 N 天的处方，否则两年前开过的药
+# 仍计入 distinct_drugs，polypharmacy_warning（≥5 种）会虚高误报。
+MEDICATION_ACTIVE_DAYS = 90
 
 _SHORTAGE_FLOW = {"registered": "purchasing", "purchasing": "delivered"}
 # 末态：collected 与 no_show 都"结束了"，但一个是药拿走了，一个是药白调了。
@@ -180,12 +185,14 @@ def medication_profile(
     assert_patient_visible(db, user, patient_id, resource="medication")
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    cutoff = now_naive() - timedelta(days=MEDICATION_ACTIVE_DAYS)
     rows = (
         db.query(PrescriptionItem, Prescription.status)
         .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
         .filter(
             Prescription.patient_id == patient_id,
             Prescription.status.in_(["auto_passed", "approved"]),
+            Prescription.created_at >= cutoff,  # 只算近 90 天"在用"，不把历史累计当现状
         )
         .all()
     )
