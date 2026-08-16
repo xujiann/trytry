@@ -50,12 +50,14 @@ def pg_engine():
     engine.dispose()
 
 
-def test_migrations_reach_both_heads(pg_engine):
+def test_migrations_reach_single_head(pg_engine):
     from sqlalchemy import text
 
     with pg_engine.connect() as conn:
         versions = {v for (v,) in conn.execute(text("SELECT version_num FROM alembic_version"))}
-    assert len(versions) == 2, f"应有平台 + spd 两个分支头，实际 {versions}"
+    # 平台与 spd 两分支已由 merge revision 收敛为单 head：upgrade head 不再因
+    # multiple heads 失败。alembic_version 应只余一行。
+    assert len(versions) == 1, f"合并后应只有单一 head，实际 {versions}"
 
 
 def test_spd_tables_created(pg_engine):
