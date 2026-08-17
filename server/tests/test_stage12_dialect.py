@@ -87,6 +87,7 @@ NOT_MONEY = {
     "fund_distributions.share_pct": "分配占比（百分数）",
     "cost_allocation_rules.ratio_pct": "成本分摊比例（百分数）",
     "payroll_records.perf_coefficient": "绩效系数，乘数不是金额",
+    "spd_scores.total_score": "慢专病考核综合得分（0-100），不是金额",
 }
 
 

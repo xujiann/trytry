@@ -25,6 +25,19 @@ from app.main import app
 from app.models import AccessLog
 
 ROUTER_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "routers")
+# 慢专病子系统的路由在 app/spd/routers/，一并扫——换个目录就绕过检查是这类
+# 规则最典型的失效方式。
+SPD_ROUTER_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "spd", "routers")
+
+
+def _router_files():
+    """全部路由文件的 (显示名, 绝对路径)；子系统文件带 spd/ 前缀便于定位。"""
+    files = []
+    for directory, label in ((ROUTER_DIR, ""), (SPD_ROUTER_DIR, "spd/")):
+        for name in sorted(os.listdir(directory)):
+            if name.endswith(".py"):
+                files.append((f"{label}{name}", os.path.join(directory, name)))
+    return files
 
 
 @pytest.fixture(scope="module")
@@ -450,6 +463,12 @@ BYID_CROSS_ORG_OK = {
     "prescriptions.py:comment_prescription",
     "telemedicine.py:reply",
     "telemedicine.py:close",
+    # 慢专病逐级转诊：村医发起→服务站复核→卫生院审核→县级接收→下转承接，
+    # 每一格都由**下一家机构**推进，加本机构写守卫等于把逐级链路关掉。
+    # 单据可见性仍按"发起方/当前处理方/目标方任一在可见范围内"过滤。
+    "spd/referral.py:review_referral",
+    "spd/referral.py:arrive_referral",
+    "spd/referral.py:down_referral",
 }
 
 
@@ -466,10 +485,12 @@ def _byid_org_write_endpoints():
               "assert_patient_visible", "scope_org_list", "scope_patient_list",
               "log_patient_access"}
     unguarded = set()
-    for name in sorted(os.listdir(ROUTER_DIR)):
-        if not name.endswith(".py") or name == "portal.py":
+    for name, path in _router_files():
+        # 居民端两个文件走的是 portal 令牌 + accessible_patient（"这次能看谁的档案"），
+        # 不在员工机构可见性体系内，与 portal.py 同一理由豁免。
+        if name in ("portal.py", "spd/portal.py"):
             continue
-        tree = ast.parse(open(os.path.join(ROUTER_DIR, name), encoding="utf-8").read())
+        tree = ast.parse(open(path, encoding="utf-8").read())
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             decs = [ast.unparse(d) for d in fn.decorator_list]
             if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
@@ -503,10 +524,8 @@ def test_按id写接口机构归属欠账不许变长():
 def _patient_scoped_endpoints() -> dict[str, list[str]]:
     """按 patient_id / ehc_no 取数的 GET 接口。"""
     found: dict[str, list[str]] = {}
-    for name in sorted(os.listdir(ROUTER_DIR)):
-        if not name.endswith(".py"):
-            continue
-        tree = ast.parse(open(os.path.join(ROUTER_DIR, name), encoding="utf-8").read())
+    for name, path in _router_files():
+        tree = ast.parse(open(path, encoding="utf-8").read())
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             if not any(".get(" in ast.unparse(d) for d in fn.decorator_list):
                 continue

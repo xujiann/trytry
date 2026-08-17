@@ -138,10 +138,31 @@
   </section>
 </main>
 
+  <!-- 慢专病：签约病种、居家监测、任务、随访、干预、转诊、风险自查 -->
+  <section id="tab-spd" class="tab-page hidden">
+    <div id="spd-guard" class="m-card hidden">
+      <p class="hint">请先在「我的档案」登录并完成实名绑定后再使用慢专病服务。</p>
+      <button type="button" id="btn-spd-login">去登录</button>
+    </div>
+    <div id="spd-body" class="hidden">
+      <div class="seg">
+        <button class="seg-btn active" data-spd="home">概览</button>
+        <button class="seg-btn" data-spd="measure">监测</button>
+        <button class="seg-btn" data-spd="task">任务</button>
+        <button class="seg-btn" data-spd="followup">随访</button>
+        <button class="seg-btn" data-spd="plan">干预</button>
+        <button class="seg-btn" data-spd="referral">转诊</button>
+        <button class="seg-btn" data-spd="screen">自查</button>
+      </div>
+      <div id="spd-result"></div>
+    </div>
+  </section>
+
 <nav class="m-tabbar">
   <a href="#edu" class="tab-btn active" data-tab="edu"><span class="ico">📖</span>健康宣教</a>
   <a href="#archive" class="tab-btn" data-tab="archive"><span class="ico">📋</span>我的档案</a>
   <a href="#service" class="tab-btn" data-tab="service"><span class="ico">🗓️</span>在线服务</a>
+  <a href="#spd" class="tab-btn" data-tab="spd"><span class="ico">💗</span>慢专病</a>
   <a href="#notify" class="tab-btn" data-tab="notify"><span class="ico">🔔</span>消息<span id="notify-dot" class="dot hidden"></span></a>
   <a href="#survey" class="tab-btn" data-tab="survey"><span class="ico">⭐</span>满意度</a>
 </nav>

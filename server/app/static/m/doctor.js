@@ -74,10 +74,156 @@ $("#login-form").addEventListener("submit", async (e) => {
   }
 });
 
+
+/* ---------------- 慢专病（基层医护健康管理端） ----------------
+ *
+ * 角色（村医 / 卫生院 / 县级 / 管理者）由**团队成员身份**推出来，不是账号角色：
+ * 同一个人在县医院是医师、在专病团队里是专家，两者要同时成立。
+ * 服务端 `/api/spd/workbench/doctor-mobile` 已经把这件事算好，这里只负责画。
+ */
+
+let activeDoctorSpd = "todo";
+
+document.querySelectorAll("[data-dspd]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    activeDoctorSpd = btn.dataset.dspd;
+    document.querySelectorAll("[data-dspd]").forEach((b) => b.classList.toggle("active", b === btn));
+    loadSpdList();
+  });
+});
+
+async function loadSpdTab() {
+  const wb = await api("/api/spd/workbench/doctor-mobile");
+  const roleText = (wb.user.member_roles || []).map((r) => ({
+    doctor: "医生", nurse: "护士", rehab: "康复治疗师", case_manager: "个案管理师",
+    village_doctor: "村医", expert: "专家",
+  }[r] || r)).join("、") || "未加入慢专病团队";
+  $("#spd-wb").innerHTML = `<div class="m-card">
+    ${kv("当前身份", esc(roleText))}
+    ${wb.user.is_village_doctor ? kv("辖区", esc(`${wb.user.township} ${wb.user.village}`)) : ""}
+    ${kv("我的待办", `${wb.todo.open} 条（今日到期 ${wb.calendar.tasks}）`)}
+    ${kv("超期任务", wb.todo.overdue)}
+    ${kv("今日随访", wb.calendar.followups)}
+    ${kv("今日复诊", wb.calendar.revisits)}
+    ${kv("待复核转诊", wb.referrals.pending_review)}
+    ${kv("待接收转诊", wb.referrals.pending_accept)}
+    ${kv("待承接下转", wb.referrals.pending_receive)}
+    ${kv("在管患者", wb.patients.mine)}
+    ${kv("积分余额", wb.points.balance)}
+  </div>`;
+  await loadSpdList();
+}
+
+async function loadSpdList() {
+  const box = $("#spd-list");
+  box.innerHTML = '<p class="empty">加载中…</p>';
+  try {
+    if (activeDoctorSpd === "todo") return await loadSpdTodo(box);
+    if (activeDoctorSpd === "referral") return await loadSpdReferral(box);
+    if (activeDoctorSpd === "patient") return await loadSpdPatients(box);
+    return await loadSpdPerf(box);
+  } catch (err) {
+    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+  }
+}
+
+async function loadSpdTodo(box) {
+  const rows = await api("/api/spd/tasks?mine=true&open_only=true&limit=30");
+  box.innerHTML = rows.map((t) => `<div class="m-card">
+    ${kv("任务", esc(t.title))}
+    ${kv("患者", esc(t.patient_name || t.patient_id))}
+    ${kv("类型", esc({ path: "路径节点", followup: "随访", intervention: "干预",
+      assess: "评估", revisit: "复诊", referral: "转诊", report: "上报",
+      recall: "召回", edu: "宣教", screen: "筛查复核" }[t.task_type] || t.task_type))}
+    ${kv("截止", esc(t.due_date || "—"))}
+    ${kv("状态", esc(t.status === "overdue" ? "已超期" : t.status === "pending" ? "待接收" : t.status))}
+    <button type="button" class="ghost-btn" data-spd-claim="${t.id}">接收</button>
+    <button type="button" class="ghost-btn" data-spd-done="${t.id}">办结</button>
+  </div>`).join("") || '<p class="empty">暂无待办</p>';
+  box.querySelectorAll("[data-spd-claim]").forEach((b) => b.addEventListener("click", async () => {
+    await spdPost(`/api/spd/tasks/${b.dataset.spdClaim}/claim`);
+  }));
+  box.querySelectorAll("[data-spd-done]").forEach((b) => b.addEventListener("click", async () => {
+    await spdPost(`/api/spd/tasks/${b.dataset.spdDone}/complete`,
+      { result: { note: prompt("办理结果") || "" } });
+  }));
+}
+
+async function loadSpdReferral(box) {
+  const rows = await api("/api/spd/referrals?open_only=true&limit=30");
+  box.innerHTML = rows.map((r) => `<div class="m-card">
+    ${kv("患者", esc(r.patient_name))}
+    ${kv("方向", r.direction === "up" ? "上转" : "下转")}
+    ${kv("当前环节", esc({ submitted: "待服务站复核", station_reviewed: "待卫生院审核",
+      township_reviewed: "待县级接收", accepted: "已接收待到院",
+      arrived: "已到院", down_referred: "待承接随访" }[r.status] || r.status))}
+    ${kv("理由", esc(r.reason || "—"))}
+    <button type="button" class="ghost-btn" data-spd-pass="${r.id}">通过</button>
+    <button type="button" class="ghost-btn" data-spd-reject="${r.id}">退回</button>
+    <button type="button" class="ghost-btn" data-spd-arrive="${r.id}">登记到院</button>
+    <button type="button" class="ghost-btn" data-spd-recv="${r.id}">承接随访</button>
+  </div>`).join("") || '<p class="empty">暂无在途转诊</p>';
+  const bind = (attr, path, body) => box.querySelectorAll(`[${attr}]`).forEach((b) =>
+    b.addEventListener("click", () => spdPost(path(b), body ? body() : null)));
+  bind("data-spd-pass", (b) => `/api/spd/referrals/${b.dataset.spdPass}/review`,
+    () => ({ action: "pass", opinion: prompt("审核意见") || "" }));
+  bind("data-spd-reject", (b) => `/api/spd/referrals/${b.dataset.spdReject}/review`,
+    () => ({ action: "reject", opinion: prompt("退回理由") || "" }));
+  bind("data-spd-arrive", (b) => `/api/spd/referrals/${b.dataset.spdArrive}/arrive`,
+    () => ({ effective_visit: true }));
+  bind("data-spd-recv", (b) => `/api/spd/referrals/${b.dataset.spdRecv}/receive-followup`,
+    () => ({ opinion: "已接收随访" }));
+}
+
+async function loadSpdPatients(box) {
+  const rows = await api("/api/spd/enrollments?limit=30");
+  box.innerHTML = rows.map((e) => `<div class="m-card">
+    ${kv("患者", esc(e.patient_name || e.patient_id))}
+    ${kv("病种", esc(e.program_code))}
+    ${kv("风险", esc({ low: "低危", mid: "中危", high: "高危", very_high: "极高危" }[e.risk_level] || e.risk_level))}
+    ${kv("阶段", esc(e.stage || "—"))}
+    ${kv("下次随访", esc(e.next_followup_at || "—"))}
+  </div>`).join("") || '<p class="empty">暂无在管患者</p>';
+}
+
+async function loadSpdPerf(box) {
+  const [points, wb] = await Promise.all([
+    api("/api/spd/point-accounts/me"), api("/api/spd/workbench/doctor-mobile"),
+  ]);
+  const perf = wb.performance;
+  box.innerHTML = `<div class="m-card">
+      ${kv("积分余额", points.balance)}
+      ${kv("累计获得", points.earned)}
+      ${kv("累计兑换", points.used)}
+    </div>
+    ${perf ? `<div class="m-card">
+      ${kv("考核周期", esc(perf.period))}
+      ${kv("综合得分", perf.total_score)}
+      ${kv("排名", perf.rank)}
+      ${(perf.detail || []).map((d) =>
+        kv(esc(d.indicator_name || d.indicator_code),
+           `${d.score ?? "—"} 分${d.deduction ? `（扣 ${d.deduction}）` : ""}`)).join("")}
+    </div>` : '<p class="empty">暂无考核结果</p>'}
+    ${(points.records || []).slice(0, 20).map((r) => `<div class="m-card">
+      ${kv("积分", `${r.direction === "in" ? "+" : "-"}${r.points}（余额 ${r.balance_after}）`)}
+      ${kv("来源", esc(r.note))}
+      ${kv("时间", esc(r.created_at.replace("T", " ").slice(0, 16)))}</div>`).join("")}`;
+}
+
+async function spdPost(path, body) {
+  try {
+    await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+    $("#spd-msg").textContent = "操作成功";
+    await loadSpdTab();
+  } catch (err) {
+    $("#spd-msg").textContent = err.message;
+  }
+}
+
 /* ---------------- 标签页 ---------------- */
 
 const TABS = { todo: loadTodos, critical: loadCritical, exam: loadExams, round: loadRound,
-  surgery: loadSurgery, chronic: loadChronic, patient: loadPatientTab };
+  surgery: loadSurgery, chronic: loadChronic, spd: loadSpdTab, patient: loadPatientTab };
 
 function currentTab() {
   const tab = (location.hash || "#todo").replace("#", "");
