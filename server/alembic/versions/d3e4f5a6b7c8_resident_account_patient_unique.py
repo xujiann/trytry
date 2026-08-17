@@ -10,13 +10,13 @@ NULL（未绑定）放行任意多个，非 NULL 唯一。
 实名绑定时会得到明确的 409 提示去联系服务机构，比静默留两个绑定安全。
 
 Revision ID: d3e4f5a6b7c8
-Revises: c2d3e4f5a6b7
+Revises: e0f1a2b3c4d5
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "d3e4f5a6b7c8"
-down_revision = "c2d3e4f5a6b7"
+down_revision = "e0f1a2b3c4d5"
 branch_labels = None
 depends_on = None
 
