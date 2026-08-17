@@ -843,6 +843,82 @@ if _resident_ready:
         ("报告/手术已落居民消息",
          lambda: _has_rows(c_res.get("/api/portal/me/notifications?limit=1"))))
 
+# ================== 第十五轮 E1–E9 / S1–S18 功能增强演示数据 ==================
+# 给新模块各灌一条主流程，保证演示站/联调可见新能力。脚本可重复跑：
+# 带唯一编码的用 _post_ok 容 409（返回 None 时后续步骤自行跳过）。
+def _post_ok(path, payload):
+    r = c.post(path, json=payload)
+    return r.json() if r.status_code in (200, 201) else None
+
+# E1/S1 家医签约内容化 + 签约费分配 + 预算编制
+_pkg = _post_ok("/api/service-packages", {"code": "DEMO-PKG", "name": "演示慢病包", "annual_fee": 120, "target_population": "chronic"})
+_item = _post_ok(f"/api/service-packages/{_pkg['id']}/items", {"service_type": "followup", "name": "季度随访", "annual_times": 4}) if _pkg else None
+_ct = _post_ok("/api/contracts", {"patient_id": patients[0]["id"], "org_id": zhen1["id"], "doctor_name": "李医生"})
+if _ct and _pkg:
+    c.patch(f"/api/contracts/{_ct['id']}/package", json={"package_id": _pkg["id"], "key_population": "chronic", "expire_date": "2026-12-31"})
+    if _item:
+        for _ in range(2):
+            c.post(f"/api/contracts/{_ct['id']}/fulfill", json={"item_id": _item["id"]})
+_sfp = _post_ok("/api/sign-fee/pools", {"year": "2026", "total_amount": 20000})
+if _sfp:
+    c.post(f"/api/sign-fee/pools/{_sfp['id']}/distribute")
+_post_ok("/api/payment/budget-plans", {"year": "2026", "base_amount": 1000000, "growth_pct": 8, "per_capita": 50, "headcount": 2000})
+
+# E2 DRG/DIP 主数据配置
+_post_ok("/api/drg-rates", {"year": "2026", "region": "", "rate_per_weight": 12000})
+_post_ok("/api/dip-catalog", {"disease_code": "DIP001", "disease_name": "演示病种", "score": 100})
+_post_ok("/api/dip-rates", {"year": "2026", "point_value": 30})
+
+# E5/S2 统一采购 + 中心配送 + 库存勾稽
+_cat = _post_ok("/api/consortium-drugs", {"drug_code": "DEMO-D1", "drug_name": "演示带量药", "unit": "盒"})
+c.post("/api/pharmacy/stocks", json={"org_id": county["id"], "drug_code": "DEMO-D1", "drug_name": "演示带量药", "quantity": 500, "threshold": 50})
+if _cat:
+    _vp = _post_ok("/api/volume-purchases", {"catalog_id": _cat["id"], "year": "2026", "total_volume": 1000})
+    if _vp:
+        c.post(f"/api/volume-purchases/{_vp['id']}/allocations", json={"org_id": zhen1["id"], "allocated_volume": 300})
+_do = _post_ok("/api/distribution-orders", {"from_org_id": county["id"], "to_org_id": zhen1["id"], "drug_code": "DEMO-D1", "qty": 100})
+if _do:
+    for _act in ("pick", "ship", "receive"):
+        c.patch(f"/api/distribution-orders/{_do['id']}/advance", json={"action": _act})
+
+# S3 绩效工资二次分配
+_pp = _post_ok("/api/perf-distribution/pools", {"year": "2026", "source": "fund_surplus", "total_amount": 50000})
+if _pp:
+    c.post(f"/api/perf-distribution/pools/{_pp['id']}/distribute", json={"formula_expr": "score", "targets": [
+        {"target_type": "org", "target_id": county["id"], "target_name": county["name"], "score": 90},
+        {"target_type": "org", "target_id": zhen1["id"], "target_name": zhen1["name"], "score": 70}]})
+
+# S14 EMPI 主索引合并（造一条重复档再并）
+_dup = _post_ok("/api/patients", {"name": "张伟", "id_card": "320981196503019999", "gender": "男"})
+if _dup:
+    _post_ok("/api/empi/merge", {"primary_patient_id": patients[0]["id"], "duplicate_patient_id": _dup["id"], "reason": "重复建档"})
+
+# S15 电子健康卡
+_post_ok("/api/ehealth-cards", {"patient_id": patients[0]["id"]})
+
+# S16 医共体治理架构
+_ch = _post_ok("/api/governance/charters", {"title": "医共体章程", "version": "v1", "content": "总则…", "effective_date": "2026-01-01"})
+if _ch:
+    c.patch(f"/api/governance/charters/{_ch['id']}/activate")
+_gb = _post_ok("/api/governance/bodies", {"name": "理事会", "body_type": "council"})
+if _gb:
+    c.post(f"/api/governance/bodies/{_gb['id']}/members", json={"member_name": "王理事长", "title": "理事长", "org_id": county["id"]})
+c.post("/api/governance/staff-pool", json={"member_name": "下沉医师", "from_org_id": county["id"], "to_org_id": zhen1["id"], "assign_type": "county_manage_town_use", "start_date": "2026-03-01"})
+
+# E9 省平台上报
+_post_ok("/api/integration/provincial/reports", {"report_type": "infectious", "org_id": county["id"], "payload": {"n": 3}})
+
+_checks += [
+    ("家医签约费已分配", lambda: (not _sfp) or _has_rows(c.get(f"/api/sign-fee/pools/{_sfp['id']}/distributions"))),
+    ("绩效二次分配已出账", lambda: (not _pp) or _has_rows(c.get(f"/api/perf-distribution/pools/{_pp['id']}/distributions"))),
+    ("统一配送已入库勾稽", lambda: any(
+        s["drug_code"] == "DEMO-D1" for s in c.get(f"/api/pharmacy/stocks?org_id={zhen1['id']}").json())),
+    ("电子健康卡已发", lambda: c.get(f"/api/ehealth-cards/{patients[0]['id']}").status_code == 200),
+    ("治理章程已生效", lambda: any(x["active"] for x in c.get("/api/governance/charters").json())),
+    ("EMPI 合并可解析", lambda: (not _dup) or c.get(
+        f"/api/empi/resolve/{_dup['id']}").json()["canonical_id"] == patients[0]["id"]),
+]
+
 _failed = [name for name, check in _checks if not check()]
 if _failed:
     raise SystemExit(f"演示数据自检未通过：{_failed}（多半是某个业务校验把中间步骤挡了）")
