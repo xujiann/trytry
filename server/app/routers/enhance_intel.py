@@ -24,16 +24,19 @@ from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin, resolve_org_scope
+from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
 from ..models import (
     Admission,
     CaseSummary,
     ChronicPatient,
     Encounter,
     FollowUp,
+    FundPool,
+    OrgGroupMember,
     Patient,
     Prescription,
     Referral,
+    Settlement,
     User,
     RiskModelWeight,
 )
@@ -49,6 +52,11 @@ FORECAST_METRICS = {
     "encounters": (Encounter, Encounter.created_at, Encounter.org_id),
     "prescriptions": (Prescription, Prescription.created_at, Prescription.org_id),
     "referrals": (Referral, Referral.created_at, Referral.from_org_id),
+}
+
+# S8：金额型指标——按月**求和**（而非计数）。cost=结算总额，作为基金支出的代理。
+SUM_METRICS = {
+    "cost": (Settlement, Settlement.created_at, Settlement.org_id, Settlement.total_amount),
 }
 
 # DRG 离群：同组少于该例数不下结论——参照 drgs.py MIN_BASELINE_CASES 的理由，
@@ -150,25 +158,40 @@ def forecast(
     - 历史 ≥13 个月时叠加季节因子 = 去年同月值 / 该点3期移动平均（分母为 0 时取 1.0）；
     - 有效数据点（非零月）不足 3 个时不外推，返回 history + 空 forecast + "样本不足"。
     """
-    if metric not in FORECAST_METRICS:
+    all_metrics = list(FORECAST_METRICS) + list(SUM_METRICS)
+    if metric not in FORECAST_METRICS and metric not in SUM_METRICS:
         raise HTTPException(
             status_code=422,
-            detail=f"未知指标：{metric}（可选：{'、'.join(FORECAST_METRICS)}）",
+            detail=f"未知指标：{metric}（可选：{'、'.join(all_metrics)}）",
         )
     months = max(1, min(months, 24))
     horizon = max(1, min(horizon, 12))
-    model, date_col, org_col = FORECAST_METRICS[metric]
+    is_sum = metric in SUM_METRICS
+    if is_sum:
+        model, date_col, org_col, amount_col = SUM_METRICS[metric]
+    else:
+        model, date_col, org_col = FORECAST_METRICS[metric]
 
     keys = _last_months(months)
     scope = _effective_scope(db, user, group_id, org_id)
-    query = db.query(date_col)
-    if scope is not None:
-        query = query.filter(org_col.in_(scope))
 
-    from collections import Counter
+    from collections import Counter, defaultdict
 
-    counter = Counter(_month_key(row[0]) for row in query.all() if row[0])
-    vals = [float(counter.get(k, 0)) for k in keys]
+    if is_sum:
+        query = db.query(date_col, amount_col)
+        if scope is not None:
+            query = query.filter(org_col.in_(scope))
+        sums: dict[str, float] = defaultdict(float)
+        for row in query.all():
+            if row[0]:
+                sums[_month_key(row[0])] += float(row[1] or 0)
+        vals = [round(sums.get(k, 0.0), 2) for k in keys]
+    else:
+        query = db.query(date_col)
+        if scope is not None:
+            query = query.filter(org_col.in_(scope))
+        counter = Counter(_month_key(row[0]) for row in query.all() if row[0])
+        vals = [float(counter.get(k, 0)) for k in keys]
     history = [{"month": k, "value": v} for k, v in zip(keys, vals)]
 
     # 3 期移动平均（供输出与季节因子共用）
@@ -500,3 +523,33 @@ def list_risk_weights(db: Session = Depends(get_db)):
     """风险权重清单（含停用项），供 admin 配置界面回显。"""
     rows = db.query(RiskModelWeight).order_by(RiskModelWeight.id).all()
     return [_weight_out(w) for w in rows]
+
+
+@router.get("/fund-overrun-alert", dependencies=[Depends(require_roles("director"))])
+def fund_overrun_alert(pool_id: int, months: int = 6, horizon: int = 6,
+                       db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """S8 基金超支提前预警：按该基金池范围外推月度支出，年化后与包干总额比对。
+
+    projected_annual = 近 horizon 月预测支出均值 × 12；超过池子 total_amount 即预警。
+    只读研判，供管理层月度预结提前看风险（不落库、不改基金池）。
+    """
+    pool = db.get(FundPool, pool_id)
+    if pool is None:
+        raise HTTPException(status_code=404, detail="基金池不存在")
+    fc = forecast(metric="cost", months=months, horizon=horizon,
+                  group_id=pool.org_group_id, org_id=None, db=db, user=user)
+    fpoints = [p["value"] for p in fc.get("forecast", [])]
+    monthly_avg = round(sum(fpoints) / len(fpoints), 2) if fpoints else 0.0
+    projected_annual = round(monthly_avg * 12, 2)
+    budget = round(pool.total_amount, 2)
+    overrun = projected_annual > budget > 0
+    return {
+        "pool_id": pool.id,
+        "year": pool.year,
+        "budget_total": budget,
+        "forecast_monthly_avg": monthly_avg,
+        "projected_annual_expense": projected_annual,
+        "overrun_risk": overrun,
+        "projected_margin": round(budget - projected_annual, 2),
+        "note": fc.get("note", ""),
+    }

@@ -74,14 +74,47 @@ def upload_reading(body: HomeReadingIn, db: Session = Depends(get_db),
                    patient: Patient = Depends(current_resident_patient)):
     if body.reading_type == "bp" and body.value2 is None:
         raise HTTPException(status_code=422, detail="血压需同时上传收缩压与舒张压")
+    abnormal = _is_abnormal(body.reading_type, body.value1, body.value2)
     row = HomeMonitorReading(
         patient_id=patient.id, reading_type=body.reading_type, value1=body.value1,
         value2=body.value2, unit=body.unit, measured_at=body.measured_at, note=body.note,
-        abnormal=_is_abnormal(body.reading_type, body.value1, body.value2))
+        abnormal=abnormal)
     db.add(row)
+    db.flush()
+    # S6：异常值并入慢病随访——派生一条随访任务到本人签约机构，并提醒签约医生。
+    if abnormal:
+        _spawn_followup_from_reading(db, patient, row)
     db.commit()
     db.refresh(row)
     return _reading_out(row)
+
+
+def _spawn_followup_from_reading(db: Session, patient: Patient, row: HomeMonitorReading) -> None:
+    """把异常居家自报并入慢病随访：定位患者当前有效签约机构，派生随访任务并通知医生。
+
+    无有效签约时只留异常读数（不凭空造任务），家医签约后可回看历史异常。
+    """
+    from ..models import FamilyDoctorContract
+    from ..notify import notify_staff
+    from ..routers.followups import create_task
+
+    contract = (
+        db.query(FamilyDoctorContract)
+        .filter(FamilyDoctorContract.patient_id == patient.id,
+                FamilyDoctorContract.status == "active")
+        .order_by(FamilyDoctorContract.id.desc())
+        .first()
+    )
+    if contract is None:
+        return
+    label = {"bp": "血压", "glucose": "血糖", "weight": "体重"}.get(row.reading_type, row.reading_type)
+    val = f"{row.value1}/{row.value2}" if row.value2 is not None else f"{row.value1}"
+    title = f"居家{label}异常（{val}），需随访核实"
+    create_task(db, patient_id=patient.id, org_id=contract.org_id, category="chronic",
+                source_id=row.id, title=title, due_days=3)
+    notify_staff(db, category="home_monitor", title="居民居家监测异常",
+                 body=f"{patient.name}：{title}", org_id=contract.org_id,
+                 roles=("doctor", "public_health"), link_type="patient", link_id=patient.id)
 
 
 @me_router.get("/home-readings")

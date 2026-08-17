@@ -24,3 +24,4 @@ from .enhance_perf import *  # noqa: F401,F403  S3 绩效工资二次分配
 from .enhance_empi import *  # noqa: F401,F403  S14 EMPI 主索引合并
 from .enhance_ehealthcard import *  # noqa: F401,F403  S15 电子健康卡
 from .enhance_governance import *  # noqa: F401,F403  S16 医共体治理架构
+from .enhance_pathway_order import *  # noqa: F401,F403  S12 临床路径医嘱物化

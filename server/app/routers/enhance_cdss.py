@@ -32,6 +32,7 @@ from ..models import (
     PathwayVariance,
     PatientAllergy,
     PatientPathway,
+    PatientPathwayOrder,
     Prescription,
     PrescriptionItem,
     User,
@@ -388,6 +389,19 @@ def _patient_pathway_out(pp: PatientPathway) -> dict:
     }
 
 
+def _pathway_order_out(o: PatientPathwayOrder) -> dict:
+    return {
+        "id": o.id,
+        "patient_pathway_id": o.patient_pathway_id,
+        "node_id": o.node_id,
+        "day_no": o.day_no,
+        "name": o.name,
+        "order_type": o.order_type,
+        "detail": o.detail,
+        "status": o.status,
+    }
+
+
 @router.post(
     "/patient-pathways",
     status_code=201,
@@ -398,7 +412,13 @@ def enroll_pathway(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """患者入径（医师）。以 org_id 机构名义写入，须能看该患者。"""
+    """患者入径（医师），并按路径节点自动开立医嘱。
+
+    以 org_id 机构名义写入，须能看该患者。入径不再只写一条 `PatientPathway`：
+    把该路径的每个 `PathwayNode`（医嘱套餐）逐条物化成本患者名下的
+    `PatientPathwayOrder`（status="ordered"），护士台据此看得到当日该做什么、
+    可逐条 execute/cancel。返回入径记录 + 自动生成的医嘱列表与条数。
+    """
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     pathway = db.get(ClinicalPathway, body.pathway_id)
@@ -416,9 +436,100 @@ def enroll_pathway(
         enrolled_date=enrolled,
     )
     db.add(pp)
+    db.flush()  # 拿到 pp.id，与下面的医嘱在同一事务内落库
+
+    nodes = (
+        db.query(PathwayNode)
+        .filter(PathwayNode.pathway_id == body.pathway_id)
+        .order_by(PathwayNode.day_no, PathwayNode.id)
+        .all()
+    )
+    orders = [
+        PatientPathwayOrder(
+            patient_pathway_id=pp.id,
+            node_id=n.id,
+            day_no=n.day_no,
+            name=n.name,
+            order_type=n.order_type,
+            detail=n.detail,
+            status="ordered",
+        )
+        for n in nodes
+    ]
+    db.add_all(orders)
     db.commit()
     db.refresh(pp)
-    return _patient_pathway_out(pp)
+    for o in orders:
+        db.refresh(o)
+    out = _patient_pathway_out(pp)
+    out["orders"] = [_pathway_order_out(o) for o in orders]
+    out["orders_generated"] = len(orders)
+    return out
+
+
+@router.get("/patient-pathways/{pp_id}/orders")
+def list_pathway_orders(
+    pp_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """某次入径自动开立的路径医嘱清单（可见即可读，留痕）。"""
+    pp = db.get(PatientPathway, pp_id)
+    if pp is None:
+        raise HTTPException(status_code=404, detail="患者入径记录不存在")
+    assert_patient_visible(db, user, pp.patient_id, resource="cdss")
+    rows = (
+        db.query(PatientPathwayOrder)
+        .filter(PatientPathwayOrder.patient_pathway_id == pp_id)
+        .order_by(PatientPathwayOrder.day_no, PatientPathwayOrder.id)
+        .all()
+    )
+    return [_pathway_order_out(o) for o in rows]
+
+
+def _transition_pathway_order(
+    order_id: int, target: str, db: Session, user: User
+) -> dict:
+    """路径医嘱状态推进的公共实现：仅 ordered 可流转，否则 409。"""
+    order = db.get(PatientPathwayOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="路径医嘱不存在")
+    parent = db.get(PatientPathway, order.patient_pathway_id)
+    assert_obj_org_writable(db, user, parent)
+    if order.status != "ordered":
+        raise HTTPException(
+            status_code=409, detail=f"医嘱当前状态为 {order.status}，不可再次流转"
+        )
+    order.status = target
+    db.commit()
+    db.refresh(order)
+    return _pathway_order_out(order)
+
+
+@router.patch(
+    "/patient-pathway-orders/{order_id}/execute",
+    dependencies=[Depends(require_roles("doctor"))],
+)
+def execute_pathway_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """执行路径医嘱（医师，须能以该入径机构名义写）。非 ordered 状态 409。"""
+    return _transition_pathway_order(order_id, "executed", db, user)
+
+
+@router.patch(
+    "/patient-pathway-orders/{order_id}/cancel",
+    dependencies=[Depends(require_roles("doctor"))],
+)
+def cancel_pathway_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """作废路径医嘱（医师，须能以该入径机构名义写）。非 ordered 状态 409。"""
+    return _transition_pathway_order(order_id, "cancelled", db, user)
 
 
 @router.get("/patient-pathways")

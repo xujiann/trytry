@@ -17,6 +17,9 @@ from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     ContractService,
     FamilyDoctorContract,
+    FundDistribution,
+    FundPool,
+    FundSettlement,
     Organization,
     OrgGroup,
     OrgGroupMember,
@@ -141,6 +144,9 @@ def bind_package(contract_id: int, body: PackageBindIn, db: Session = Depends(ge
         if pkg is None or not pkg.active:
             raise HTTPException(status_code=422, detail="服务包不存在或已停用")
         c.package_id = body.package_id
+        # S11 双真相源收敛：挂上内容化服务包后，唯一权威是 package_id；
+        # 旧枚举 package 置 "custom"（"档次见服务包"），不再与 package_id 各说各话。
+        c.package = "custom"
     c.key_population = body.key_population
     c.expire_date = body.expire_date
     db.commit()
@@ -365,3 +371,50 @@ def _pool_out(db: Session, p: SignFeePool) -> dict:
     return {"id": p.id, "year": p.year, "org_group_id": p.org_group_id,
             "per_capita": p.per_capita, "total_amount": p.total_amount, "status": p.status,
             "note": p.note, "distribution_count": dist}
+
+
+# ---------------------------------------------------------------- S9 签约费↔基金结余合并视图
+@router.get("/sign-fee/combined-view", dependencies=[Depends(require_roles("director"))])
+def combined_incentive_view(year: str, db: Session = Depends(get_db)):
+    """把家医签约费分配与医保基金结余留用分配按机构合并，给管理层"每院总激励"一张账。
+
+    两个池子历史上各算各的（仅共用 Hamilton 分配函数），这里在读侧打通：同一年度，
+    SignFeeDistribution（签约费）+ FundDistribution（基金结余）按 org_id 合并汇总。
+    """
+    sign: dict[int, float] = {}
+    for d in (
+        db.query(SignFeeDistribution)
+        .join(SignFeePool, SignFeeDistribution.pool_id == SignFeePool.id)
+        .filter(SignFeePool.year == year)
+        .all()
+    ):
+        sign[d.org_id] = round(sign.get(d.org_id, 0.0) + d.amount, 2)
+
+    fund: dict[int, float] = {}
+    try:
+        y = int(year)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="year 须为四位年份") from None
+    for d in (
+        db.query(FundDistribution)
+        .join(FundSettlement, FundDistribution.settlement_id == FundSettlement.id)
+        .join(FundPool, FundSettlement.pool_id == FundPool.id)
+        .filter(FundPool.year == y)
+        .all()
+    ):
+        fund[d.org_id] = round(fund.get(d.org_id, 0.0) + d.amount, 2)
+
+    org_ids = sorted(set(sign) | set(fund))
+    rows = [{
+        "org_id": oid,
+        "sign_fee": round(sign.get(oid, 0.0), 2),
+        "fund_surplus": round(fund.get(oid, 0.0), 2),
+        "total_incentive": round(sign.get(oid, 0.0) + fund.get(oid, 0.0), 2),
+    } for oid in org_ids]
+    return {
+        "year": year,
+        "rows": rows,
+        "sign_fee_total": round(sum(sign.values()), 2),
+        "fund_surplus_total": round(sum(fund.values()), 2),
+        "grand_total": round(sum(sign.values()) + sum(fund.values()), 2),
+    }

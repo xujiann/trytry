@@ -49,6 +49,10 @@ def setup(client, admin):
         db.add(adm); db.flush(); ids["adm"] = adm.id
         ref = Referral(patient_id=pat["id"], from_org_id=org2["id"], to_org_id=org["id"], direction="up", reason="上级诊治", created_by=1)
         db.add(ref); db.flush(); ids["ref"] = ref.id
+        from app.models import ReferralClinicalRef
+        cref = ReferralClinicalRef(referral_id=ref.id, ref_type="encounter", ref_id=enc.id,
+                                   summary="随转门诊摘要：血压偏高需上级评估", created_by=1)
+        db.add(cref); db.flush(); ids["cref"] = cref.id
         db.commit()
     return {"org": org, "org2": org2, "pat": pat, "ids": ids,
             "op": _login(client, "e9_op", "pw123456"), "op2": _login(client, "e9_op2", "pw123456")}
@@ -78,14 +82,31 @@ def test_fhir_bundle_roundtrip(client, setup):
                       "gender": "male", "birthDate": "1990-03-03"}}]}, headers=op)
     assert inb.status_code == 200, inb.text
     assert inb.json()["succeeded"] == 1
+    # 入站 Bundle：Patient 成功 + Encounter 被接收确认（非 skipped）
+    mixed = client.post("/api/integration/fhir/Bundle", json={"resourceType": "Bundle", "entry": [
+        {"resource": {"resourceType": "Patient", "name": [{"text": "混合居民"}],
+                      "identifier": [{"system": "urn:oid:2.16.156.10011.1.3", "value": "330782199204044567"}],
+                      "gender": "female", "birthDate": "1992-04-04"}},
+        {"resource": {"resourceType": "Encounter", "id": "e-1", "status": "finished"}}]}, headers=op)
+    assert mixed.status_code == 200, mixed.text
+    mj = mixed.json()
+    assert mj["succeeded"] == 1 and mj["accepted"] == 1
+    statuses = {r["resourceType"]: r["status"] for r in mj["results"]}
+    assert statuses["Patient"] == "ok"
+    assert statuses["Encounter"] == "accepted"
 
 
 def test_cda_export(client, setup):
     op = setup["op"]; ids = setup["ids"]
     d = client.get(f"/api/integration/cda/discharge/{ids['adm']}", headers=op)
     assert d.status_code == 200 and "ClinicalDocument" in d.text and "出院小结" in d.text
+    # CDA R2 头部富化：author / custodian / effectiveTime 齐备
+    assert "<author>" in d.text and "<custodian>" in d.text and "effectiveTime" in d.text
     r = client.get(f"/api/integration/cda/referral/{ids['ref']}", headers=op)
     assert r.status_code == 200 and "ClinicalDocument" in r.text
+    assert "<author>" in r.text and "<custodian>" in r.text and "effectiveTime" in r.text
+    # 承接 E3 病历随转：挂接的临床引用摘要随转诊 CDA 下传
+    assert "随转门诊摘要：血压偏高需上级评估" in r.text
 
 
 def test_provincial_report(client, setup):

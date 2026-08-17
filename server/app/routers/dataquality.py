@@ -9,6 +9,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
@@ -20,17 +21,25 @@ from ..models import (
     ChronicPatient,
     CodeEntry,
     CodeSystem,
+    ConsortiumDrugCatalog,
     Encounter,
     ExamReport,
     ExamRequest,
     FollowUp,
     InfectiousCase,
+    InsuranceAuditFlag,
+    InsuranceSettlement,
     MedicalCert,
     Patient,
+    PaymentCase,
     Prescription,
     PrescriptionItem,
     QcRule,
+    RefillRequest,
+    ReferralClinicalRef,
+    User,
 )
+from ..visibility import visible_org_ids
 
 router = APIRouter(
     prefix="/api/dataquality", tags=["数据质控"], dependencies=[Depends(get_current_user)]
@@ -451,3 +460,119 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db)):
     db.delete(rule)
     db.commit()
     return {"deleted": rule_id}
+
+
+# ---------------------------------------------------------------------------
+# S17 数据质量闭环扩展：新表裸外键完整性对账
+# ---------------------------------------------------------------------------
+#
+# E1–E9 / S1–S16 引入了一批"松耦合"整数引用——用普通 Integer/字符串存对端 id，
+# 刻意不建 DB 外键（不绑死表名、便于中央装配），代价是这些引用可能悬空：
+#   · PaymentCase.admission_id / insurance_settlement_id
+#   · InsuranceAuditFlag.settlement_id
+#   · RefillRequest.prescription_id / drug_code
+#   · ReferralClinicalRef.ref_id（按 ref_type 解析到不同目标表）
+# 上面的规则引擎（QcRule）不覆盖这些新表，这里补一次"左连接取空"式对账，
+# 用 ~col.in_(子查询) 一次性扫出指向不存在目标的孤儿引用，不逐行 db.get。
+# 带 org_id 的表按调用者可见机构范围过滤（全域角色 visible_org_ids 返回 None → 看全部）；
+# ReferralClinicalRef 无 org_id 列，全域对账。
+
+# 每个检查项回填的样本 id 上限（只为定位，不回全量）
+INTEGRITY_SAMPLE_LIMIT = 20
+
+
+def _orphan_check(key: str, query) -> dict:
+    """对一条已过滤好的孤儿引用查询，返回 {检查项, 孤儿数, 样本id}。"""
+    orphan_count = query.count()
+    sample_ids = [row.id for row in query.order_by(None).limit(INTEGRITY_SAMPLE_LIMIT).all()]
+    return {"key": key, "orphan_count": orphan_count, "sample_ids": sample_ids}
+
+
+def _scope(query, org_col, org_ids):
+    """带 org_id 的表按可见机构过滤；org_ids 为 None（全域）时不加过滤。"""
+    if org_ids is not None:
+        query = query.filter(org_col.in_(org_ids))
+    return query
+
+
+@router.get("/integrity-scan")
+def integrity_scan(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """新表裸外键完整性对账：扫出指向不存在目标的松耦合引用（孤儿引用）。
+
+    带 org_id 的表按调用者可见机构范围过滤（全域角色看全部）；
+    ReferralClinicalRef 无 org_id，做全域对账。summary 类引用无目标表，跳过。
+    """
+    org_ids = visible_org_ids(db, user)
+    checks: list[dict] = []
+
+    admission_ids = db.query(Admission.id)
+    settlement_ids = db.query(InsuranceSettlement.id)
+    prescription_ids = db.query(Prescription.id)
+    catalog_codes = db.query(ConsortiumDrugCatalog.drug_code)
+
+    # 1. PaymentCase.admission_id → admissions
+    q = _scope(
+        db.query(PaymentCase).filter(~PaymentCase.admission_id.in_(admission_ids)),
+        PaymentCase.org_id,
+        org_ids,
+    )
+    checks.append(_orphan_check("payment_case_admission", q))
+
+    # 2. PaymentCase.insurance_settlement_id（非空）→ insurance_settlements
+    q = _scope(
+        db.query(PaymentCase).filter(
+            PaymentCase.insurance_settlement_id.isnot(None),
+            ~PaymentCase.insurance_settlement_id.in_(settlement_ids),
+        ),
+        PaymentCase.org_id,
+        org_ids,
+    )
+    checks.append(_orphan_check("payment_case_settlement", q))
+
+    # 3. InsuranceAuditFlag.settlement_id → insurance_settlements
+    q = _scope(
+        db.query(InsuranceAuditFlag).filter(~InsuranceAuditFlag.settlement_id.in_(settlement_ids)),
+        InsuranceAuditFlag.org_id,
+        org_ids,
+    )
+    checks.append(_orphan_check("audit_flag_settlement", q))
+
+    # 4. RefillRequest.prescription_id（非空）→ prescriptions
+    q = _scope(
+        db.query(RefillRequest).filter(
+            RefillRequest.prescription_id.isnot(None),
+            ~RefillRequest.prescription_id.in_(prescription_ids),
+        ),
+        RefillRequest.org_id,
+        org_ids,
+    )
+    checks.append(_orphan_check("refill_prescription", q))
+
+    # 5. RefillRequest.drug_code（非空）→ consortium_drug_catalog.drug_code
+    q = _scope(
+        db.query(RefillRequest).filter(
+            RefillRequest.drug_code != "",
+            ~RefillRequest.drug_code.in_(catalog_codes),
+        ),
+        RefillRequest.org_id,
+        org_ids,
+    )
+    checks.append(_orphan_check("refill_drug_code", q))
+
+    # 6. ReferralClinicalRef.ref_id：按 ref_type 解析到不同目标表；summary 无目标，跳过
+    ref_targets = {
+        "exam_report": ExamReport,
+        "encounter": Encounter,
+        "prescription": Prescription,
+    }
+    ref_clauses = [
+        and_(
+            ReferralClinicalRef.ref_type == ref_type,
+            ~ReferralClinicalRef.ref_id.in_(db.query(target.id)),
+        )
+        for ref_type, target in ref_targets.items()
+    ]
+    q = db.query(ReferralClinicalRef).filter(or_(*ref_clauses))
+    checks.append(_orphan_check("referral_clinical_ref", q))
+
+    return {"checks": checks, "total_orphans": sum(c["orphan_count"] for c in checks)}

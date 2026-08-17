@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..clock import now_naive
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -21,6 +22,7 @@ from ..models import (
     Prescription,
     ProvincialReport,
     Referral,
+    ReferralClinicalRef,
     User,
 )
 from ..routers.integration import (
@@ -45,6 +47,31 @@ router = APIRouter(prefix="/api/integration", tags=["互操作标准化"],
 def _esc_xml(s: str) -> str:
     return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _cda_header(db: Session, user: User, org_id: int | None, doc_ext: str) -> str:
+    """CDA R2 头部块：文档 id / effectiveTime / author（导出操作员）/ custodian（保管机构）。
+
+    时间统一走平台唯一时间入口 now_naive（禁裸 datetime.now），格式化为 CDA
+    HL7 TS（YYYYMMDDHHMMSS）。custodian 按文档归属机构 org_id 查 Organization。
+    """
+    ts = now_naive().strftime("%Y%m%d%H%M%S")
+    author_name = _esc_xml((user.full_name or user.username) if user else "")
+    org = db.get(Organization, org_id) if org_id else None
+    org_name = _esc_xml(org.name if org else "")
+    return f"""  <id root="2.16.156.10011.x" extension="{_esc_xml(doc_ext)}"/>
+  <effectiveTime value="{ts}"/>
+  <author>
+    <time value="{ts}"/>
+    <assignedAuthor>
+      <assignedPerson><name>{author_name}</name></assignedPerson>
+    </assignedAuthor>
+  </author>
+  <custodian>
+    <assignedCustodian>
+      <representedCustodianOrganization><name>{org_name}</name></representedCustodianOrganization>
+    </assignedCustodian>
+  </custodian>"""
 
 
 # ================================================================ FHIR 资源扩展（出站）
@@ -188,16 +215,24 @@ def fhir_bundle_inbound(body: BundleIn, db: Session = Depends(get_db),
                 patient, _created = create_patient_idempotent(db, fields)
                 results.append({"index": i, "resourceType": "Patient",
                                 "status": "ok", "ehc_no": patient.ehc_no})
+            elif rtype in ("Encounter", "Condition"):
+                # 无干净的机构映射，不落库，但确认接收（不再当作不支持而丢弃），
+                # 单独计入 accepted，与 Patient 的 ok 区分开。
+                results.append({"index": i, "resourceType": rtype,
+                                "status": "accepted",
+                                "reason": "已接收确认（临床上下文，未落库）"})
             else:
                 results.append({"index": i, "resourceType": rtype or "unknown",
-                                "status": "skipped", "reason": "仅支持 Patient 条目入站"})
+                                "status": "skipped", "reason": "仅支持 Patient/Encounter/Condition 条目入站"})
         except HTTPException as exc:
             results.append({"index": i, "resourceType": rtype, "status": "error",
                             "reason": exc.detail})
     ok = sum(1 for r in results if r["status"] == "ok")
-    _log_exchange("fhir_bundle", ok > 0 or not body.entry,
-                  error_detail="" if ok else "无成功条目", source_system="")
-    return {"total": len(results), "succeeded": ok, "results": results}
+    accepted = sum(1 for r in results if r["status"] == "accepted")
+    _log_exchange("fhir_bundle", ok > 0 or accepted > 0 or not body.entry,
+                  error_detail="" if (ok or accepted) else "无成功条目", source_system="")
+    return {"total": len(results), "succeeded": ok, "accepted": accepted,
+            "results": results}
 
 
 # ================================================================ CDA 文档导出
@@ -210,11 +245,13 @@ def cda_discharge(admission_id: int, db: Session = Depends(get_db),
         raise HTTPException(status_code=404, detail="住院记录不存在")
     log_patient_access(db, user, adm.patient_id, "cda_discharge", "export")
     patient = db.get(Patient, adm.patient_id)
+    header = _cda_header(db, user, adm.org_id, f"discharge-{adm.id}")
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <ClinicalDocument xmlns="urn:hl7-org:v3">
   <typeId root="2.16.840.1.113883.1.3"/>
   <code code="34105-7" displayName="出院小结"/>
   <title>出院小结</title>
+{header}
   <recordTarget><patientRole>
     <id extension="{_esc_xml(patient.ehc_no if patient else '')}"/>
     <patient><name>{_esc_xml(patient.name if patient else '')}</name></patient>
@@ -242,10 +279,22 @@ def cda_referral(referral_id: int, db: Session = Depends(get_db),
         raise HTTPException(status_code=404, detail="转诊记录不存在")
     log_patient_access(db, user, ref.patient_id, "cda_referral", "export")
     patient = db.get(Patient, ref.patient_id)
+    header = _cda_header(db, user, ref.from_org_id, f"referral-{ref.id}")
+    # 承接 E3 病历随转：转诊挂接的临床引用逐条随文档下传，作为独立 section。
+    clinical_refs = db.query(ReferralClinicalRef).filter(
+        ReferralClinicalRef.referral_id == ref.id).order_by(ReferralClinicalRef.id).all()
+    ref_sections = "".join(
+        f"""
+    <component><section>
+      <code code="55112-7" displayName="病历随转-{_esc_xml(cr.ref_type)}"/>
+      <title>病历随转（{_esc_xml(cr.ref_type)}）</title>
+      <text>{_esc_xml(cr.summary)}</text>
+    </section></component>""" for cr in clinical_refs)
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <ClinicalDocument xmlns="urn:hl7-org:v3">
   <code code="57133-1" displayName="转诊单"/>
   <title>双向转诊单（{_esc_xml('上转' if ref.direction == 'up' else '下转')}）</title>
+{header}
   <recordTarget><patientRole>
     <id extension="{_esc_xml(patient.ehc_no if patient else '')}"/>
     <patient><name>{_esc_xml(patient.name if patient else '')}</name></patient>
@@ -254,7 +303,8 @@ def cda_referral(referral_id: int, db: Session = Depends(get_db),
     <code code="42349-1" displayName="转诊原因"/>
     <text>{_esc_xml(ref.reason)}</text>
     <text>转出机构 {ref.from_org_id} → 转入机构 {ref.to_org_id}</text>
-  </section></component></structuredBody></component>
+  </section></component>{ref_sections}
+  </structuredBody></component>
 </ClinicalDocument>"""
     return Response(content=xml, media_type="application/xml")
 

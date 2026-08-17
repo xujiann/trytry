@@ -250,3 +250,107 @@ def test_诊间提醒返回结构(client, doctor_a, patient, seeded_allergy):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert "reminders" in body and isinstance(body["reminders"], list)
+
+
+# ---------------- S12 临床路径自动开立医嘱 ----------------
+
+
+@pytest.fixture(scope="module")
+def pathway_multi(client, admin):
+    """含 2 个节点的路径，用于验证入径时逐节点自动开立医嘱。"""
+    resp = client.post(
+        "/api/cdss/pathways",
+        json={"code": "CP-S12-01", "name": "S12自动开立路径", "disease": "s12"},
+        headers=admin,
+    )
+    assert resp.status_code == 201, resp.text
+    p = resp.json()
+    for node in [
+        {"day_no": 1, "name": "血常规", "order_type": "lab", "detail": "入径首日"},
+        {"day_no": 2, "name": "复查血压", "order_type": "exam", "detail": "次日复查"},
+    ]:
+        r = client.post(
+            f"/api/cdss/pathways/{p['id']}/nodes", json=node, headers=admin
+        )
+        assert r.status_code == 201, r.text
+    return p
+
+
+def test_入径自动生成医嘱(client, doctor_a, orgs, patient, pathway_multi, seeded_allergy):
+    enroll = client.post(
+        "/api/cdss/patient-pathways",
+        json={"patient_id": patient["id"], "org_id": orgs[0]["id"],
+              "pathway_id": pathway_multi["id"], "enrolled_date": "2026-08-17"},
+        headers=doctor_a,
+    )
+    assert enroll.status_code == 201, enroll.text
+    body = enroll.json()
+    # 路径有 2 个节点 → 自动生成 2 条医嘱
+    assert body["orders_generated"] == 2
+    assert len(body["orders"]) == 2
+    assert all(o["status"] == "ordered" for o in body["orders"])
+    assert {o["name"] for o in body["orders"]} == {"血常规", "复查血压"}
+
+    # GET 医嘱清单能读到
+    got = client.get(
+        f"/api/cdss/patient-pathways/{body['id']}/orders", headers=doctor_a
+    )
+    assert got.status_code == 200, got.text
+    rows = got.json()
+    assert len(rows) == 2
+    # 按 day_no, id 排序
+    assert rows[0]["day_no"] == 1 and rows[1]["day_no"] == 2
+
+
+def test_执行与作废路径医嘱(client, doctor_a, orgs, patient, pathway_multi, seeded_allergy):
+    enroll = client.post(
+        "/api/cdss/patient-pathways",
+        json={"patient_id": patient["id"], "org_id": orgs[0]["id"],
+              "pathway_id": pathway_multi["id"], "enrolled_date": "2026-08-17"},
+        headers=doctor_a,
+    ).json()
+    orders = enroll["orders"]
+
+    # 执行第一条
+    ex = client.patch(
+        f"/api/cdss/patient-pathway-orders/{orders[0]['id']}/execute", headers=doctor_a
+    )
+    assert ex.status_code == 200, ex.text
+    assert ex.json()["status"] == "executed"
+
+    # 再次执行 → 409（已非 ordered）
+    ex2 = client.patch(
+        f"/api/cdss/patient-pathway-orders/{orders[0]['id']}/execute", headers=doctor_a
+    )
+    assert ex2.status_code == 409
+
+    # 作废第二条
+    ca = client.patch(
+        f"/api/cdss/patient-pathway-orders/{orders[1]['id']}/cancel", headers=doctor_a
+    )
+    assert ca.status_code == 200, ca.text
+    assert ca.json()["status"] == "cancelled"
+
+
+def test_跨机构医师执行他院路径医嘱被拒(
+    client, doctor_a, doctor_b, orgs, patient, pathway_multi, seeded_allergy
+):
+    """入径归甲院；乙院医师执行其医嘱，assert_obj_org_writable 应 403。"""
+    enroll = client.post(
+        "/api/cdss/patient-pathways",
+        json={"patient_id": patient["id"], "org_id": orgs[0]["id"],
+              "pathway_id": pathway_multi["id"], "enrolled_date": "2026-08-17"},
+        headers=doctor_a,
+    ).json()
+    order_id = enroll["orders"][0]["id"]
+    resp = client.patch(
+        f"/api/cdss/patient-pathway-orders/{order_id}/execute", headers=doctor_b
+    )
+    assert resp.status_code == 403
+
+
+def test_路径医嘱不存在404(client, doctor_a):
+    resp = client.patch(
+        "/api/cdss/patient-pathway-orders/999999/execute", headers=doctor_a
+    )
+    assert resp.status_code == 404
