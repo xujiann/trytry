@@ -98,6 +98,21 @@ def test_bill_self_pay(client, setup):
     assert client.post(f"/api/portal/me/bills/{sid}/pay", json={"channel": "online"}, headers=setup["r2"]).status_code == 403
 
 
+def test_self_pay_capped_at_self_pay_not_total(client, setup):
+    """封顶必须是 self_pay：total>self_pay 时不能重复自付把医保段也付了。"""
+    from app.database import SessionLocal
+    from app.models import Settlement
+    with SessionLocal() as db:
+        s = Settlement(patient_id=setup["p1"]["id"], org_id=setup["org"]["id"], bill_type="outpatient",
+                       total_amount=1000, insurance_pay=800, self_pay=200, created_by=1)
+        db.add(s); db.commit(); sid = s.id
+    # 首次自付 200 成功
+    r1 = client.post(f"/api/portal/me/bills/{sid}/pay", json={"channel": "online"}, headers=setup["r1"])
+    assert r1.status_code == 201 and r1.json()["amount"] == 200
+    # 再付即 409（自付段已付满），旧逻辑会一路放行到 total=1000
+    assert client.post(f"/api/portal/me/bills/{sid}/pay", json={"channel": "online"}, headers=setup["r1"]).status_code == 409
+
+
 def test_refill_flow(client, setup):
     r = client.post("/api/portal/me/refill-requests", json={"org_id": setup["org"]["id"], "drug_summary": "氨氯地平 5mg×30"}, headers=setup["r1"])
     assert r.status_code == 201, r.text

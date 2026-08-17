@@ -67,10 +67,18 @@ def list_referrals(
     response_model=ReferralOut,
     dependencies=[Depends(require_roles("doctor"))],  # H2: 接诊/结案/退回属诊疗行为，限医师
 )
-def update_status(referral_id: int, body: ReferralStatusUpdate, db: Session = Depends(get_db)):
+def update_status(
+    referral_id: int, body: ReferralStatusUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     referral = db.get(Referral, referral_id)
     if referral is None:
         raise HTTPException(status_code=404, detail="转诊记录不存在")
+    # 转诊天然跨机构，但推进状态须是本转诊的相关方（转出或转入机构）：
+    # 否则任一院的医师都能接诊/结案/退回全县任意转诊。全域角色恒通过。
+    orgs = visible_org_ids(db, user)
+    if orgs is not None and referral.from_org_id not in orgs and referral.to_org_id not in orgs:
+        raise HTTPException(status_code=403, detail="非本转诊相关机构，无权推进状态")
     if body.status not in _ALLOWED_TRANSITIONS.get(referral.status, set()):
         raise HTTPException(
             status_code=409, detail=f"状态不可从 {referral.status} 变更为 {body.status}"

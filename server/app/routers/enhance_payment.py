@@ -466,6 +466,12 @@ def run_audit(
         raise HTTPException(status_code=404, detail="医保结算记录不存在")
     assert_org_writable(db, user, settlement.org_id)
     patient = db.get(Patient, settlement.patient_id)
+    # 幂等：重跑先清掉本结算上一批未处置（open）的疑点，避免重复审核翻倍堆积。
+    # 已 confirmed/dismissed 的处置结论保留（人工判定不因重跑丢失）。
+    db.query(InsuranceAuditFlag).filter(
+        InsuranceAuditFlag.settlement_id == settlement.id,
+        InsuranceAuditFlag.status == "open",
+    ).delete(synchronize_session=False)
     rules = db.query(InsuranceAuditRule).filter(InsuranceAuditRule.active.is_(True)).all()
     created = []
     for rule in rules:

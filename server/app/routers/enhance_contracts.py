@@ -261,7 +261,7 @@ def _pool_created(db: Session, pool: SignFeePool) -> dict:
     return _pool_out(db, saved)
 
 
-@router.get("/sign-fee/pools")
+@router.get("/sign-fee/pools", dependencies=[Depends(require_roles("director"))])
 def list_pools(year: str | None = None, db: Session = Depends(get_db)):
     q = db.query(SignFeePool)
     if year:
@@ -311,8 +311,17 @@ def distribute_pool(pool_id: int, db: Session = Depends(get_db)):
         rows.append({"org_id": oid, "head": a["head"], "rate": round(avg_rate, 4),
                      "key_factor": round(key_factor, 4), "weight": weight})
 
+    wsum = sum(r["weight"] for r in rows)
+    if wsum <= 0:
+        # 全域权重为 0（常见于"已挂服务包但尚无履约记录"，avg_rate 全 0）。
+        # 此时 hamilton 会把每户分到 0、总额凭空蒸发——与 fund.py 同口径显式拒绝，
+        # 不静默吞钱。让操作方先录履约，或对这些签约暂不挂包（履约率按 1.0 计入人头）。
+        raise HTTPException(
+            status_code=409,
+            detail="范围内所有机构的分配权重为 0（通常是已挂服务包但尚无履约记录），"
+                   "无法按履约加权分配；请先录入履约，或对这些签约暂不挂服务包（按人头计）",
+        )
     amounts = hamilton_amounts(pool.total_amount, [r["weight"] for r in rows])
-    wsum = sum(r["weight"] for r in rows) or 1.0
 
     # 覆盖式重算：可重分配
     db.query(SignFeeDistribution).filter(

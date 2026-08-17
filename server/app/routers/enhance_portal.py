@@ -155,13 +155,17 @@ def pay_bill(settlement_id: int, body: PayIn, db: Session = Depends(get_db),
     amount = round(settlement.self_pay, 2)
     if amount <= 0:
         raise HTTPException(status_code=422, detail="该结算单无个人自付金额")
-    paid_already = round(
+    # 居民端只承担个人自付段，封顶必须是 self_pay 而非 total_amount——否则
+    # self_pay≤insurance_pay 时可重复自付到 total_amount（把医保段的钱也让居民付了）。
+    # 只统计非医保渠道的已付净额（医保段由结算侧另走 insurance 渠道，不占自付额度）。
+    paid_self = round(
         sum(round(o.amount - (o.refunded_amount or 0), 2)
             for o in db.query(PaymentOrder).filter(
                 PaymentOrder.settlement_id == settlement.id,
+                PaymentOrder.channel != "insurance",
                 PaymentOrder.status.in_(["paid", "refunded"])).all()), 2)
-    if paid_already + amount > round(settlement.total_amount, 2) + 1e-6:
-        raise HTTPException(status_code=409, detail="该结算单已支付，无未付余额")
+    if paid_self + amount > round(settlement.self_pay, 2) + 1e-6:  # 超出个人自付总额
+        raise HTTPException(status_code=409, detail="该结算单个人自付部分已支付，无未付余额")
     order = PaymentOrder(settlement_id=settlement.id, channel=body.channel, amount=amount,
                          created_by=settlement.created_by)
     db.add(order)

@@ -244,7 +244,14 @@ def fulfill_allocation(
     if row is None:
         raise HTTPException(status_code=404, detail="分配记录不存在")
     assert_obj_org_writable(db, user, row)
-    row.fulfilled_volume = row.fulfilled_volume + body.delta
+    # 原子自增，避免"读-改-写"在并发履约录入下丢增量（两次 +10 变成一次 +10）
+    db.query(VolumePurchaseAllocation).filter(
+        VolumePurchaseAllocation.id == allocation_id
+    ).update(
+        {VolumePurchaseAllocation.fulfilled_volume:
+            VolumePurchaseAllocation.fulfilled_volume + body.delta},
+        synchronize_session=False,
+    )
     db.commit()
     db.refresh(row)
     return row
@@ -362,7 +369,14 @@ def advance_distribution(
         assert_obj_org_writable(db, user, order, org_attr="to_org_id")
     else:
         assert_obj_org_writable(db, user, order, org_attr="from_org_id")
-    order.status = nxt
+    # 条件 UPDATE 原子推进：只有把 status 从 expected 翻成 nxt 的那一个请求算赢，
+    # 并发下的第二个 receive 命中 0 行 → 409，不会重复落入库追溯码。
+    changed = db.query(DistributionOrder).filter(
+        DistributionOrder.id == order_id, DistributionOrder.status == expected
+    ).update({DistributionOrder.status: nxt}, synchronize_session=False)
+    if changed == 0:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="配送单状态已变更，请刷新后重试")
     if body.action == "receive":
         db.add(
             DrugTraceCode(

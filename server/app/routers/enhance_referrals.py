@@ -141,9 +141,10 @@ def reserve_slot(referral_id: int, body: ReserveIn, db: Session = Depends(get_db
     """
     ref = _referral_or_404(db, referral_id)
     _assert_party_write(db, user, ref)
+    # referral_id 唯一：只要已存在任一预留行（无论状态）就先拦，避免 book_slot
+    # 占号后再撞唯一约束、把号占了却没留下预留记录（孤儿预约）。
     if db.query(ReferralSlotReservation).filter(
         ReferralSlotReservation.referral_id == referral_id,
-        ReferralSlotReservation.status == "reserved",
     ).first():
         raise HTTPException(status_code=409, detail="本转诊已预留号源")
     slot = db.get(AppointmentSlot, body.slot_id)

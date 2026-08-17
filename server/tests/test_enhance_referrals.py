@@ -78,6 +78,12 @@ def test_slot_reservation(client, setup):
     assert client.post(f"/api/referrals/{rid}/reserve-slot", json={"slot_id": setup["slot"]["id"]}, headers=setup["doc_other"]).status_code == 403
 
 
+def test_status_party_guard(client, setup):
+    """推进转诊状态须是相关方：无关机构医师接诊 → 403。"""
+    rid = setup["ref"]["id"]
+    assert client.patch(f"/api/referrals/{rid}/status", json={"status": "accepted"}, headers=setup["doc_other"]).status_code == 403
+
+
 def test_returned_transition(client, setup):
     rid = setup["ref"]["id"]
     # 接诊

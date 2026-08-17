@@ -95,3 +95,21 @@ def test_sign_fee_distribution(client, admin, setup):
     assert len(dists) >= 2
     # 分毫不差：合计恰等于总额
     assert round(sum(x["amount"] for x in dists), 2) == 10000.0
+    # 签约费清单为管理层视图：非全域 doctor 读池子清单 → 403（防跨机构财务泄露）
+    assert client.get("/api/sign-fee/pools", headers=setup["doc_a"]).status_code == 403
+
+
+def test_zero_weight_distribute_rejected(client, admin):
+    """全域权重为 0（已挂包但零履约）时拒绝分配，绝不静默把总额分成 0 蒸发。"""
+    org = client.post("/api/organizations", json={"name": "零权重卫生院", "org_type": "township", "level": "township"}, headers=admin).json()
+    grp = client.post("/api/org-groups", json={"name": "零权重片区"}, headers=admin).json()
+    client.post(f"/api/org-groups/{grp['id']}/members", json={"org_id": org["id"]}, headers=admin)
+    pat = client.post("/api/patients", json={"name": "零权重居民", "id_card": "320000199203031234"}, headers=admin).json()
+    pkg = client.post("/api/service-packages", json={"code": "PKG-ZERO", "name": "零权重包"}, headers=admin).json()
+    client.post(f"/api/service-packages/{pkg['id']}/items", json={"service_type": "followup", "name": "随访", "annual_times": 4}, headers=admin)
+    c = client.post("/api/contracts", json={"patient_id": pat["id"], "org_id": org["id"], "doctor_name": "医生"}, headers=admin).json()
+    # 挂包但不履约 → 履约率 0 → 权重 0
+    client.patch(f"/api/contracts/{c['id']}/package", json={"package_id": pkg["id"]}, headers=admin)
+    pool = client.post("/api/sign-fee/pools", json={"year": "2027", "org_group_id": grp["id"], "total_amount": 5000}, headers=admin).json()
+    r = client.post(f"/api/sign-fee/pools/{pool['id']}/distribute", headers=admin)
+    assert r.status_code == 409, r.text
