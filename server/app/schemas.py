@@ -348,6 +348,10 @@ class ContractCreate(BaseModel):
 class ContractOut(ContractCreate):
     id: int
     status: str
+    # S11：签约挂内容化服务包后 package 会被置 "custom"（档次以 package_id 为准）。
+    # 输出侧放开父类的 basic/standard/premium 正则约束——否则含 "custom" 的行会让
+    # 整个 GET /api/contracts 响应校验失败(500)。输入侧 ContractCreate 仍保持严格枚举。
+    package: str
 
     model_config = {"from_attributes": True}
 

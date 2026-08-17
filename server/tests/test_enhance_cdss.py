@@ -302,12 +302,15 @@ def test_入径自动生成医嘱(client, doctor_a, orgs, patient, pathway_multi
     assert rows[0]["day_no"] == 1 and rows[1]["day_no"] == 2
 
 
-def test_执行与作废路径医嘱(client, doctor_a, orgs, patient, pathway_multi, seeded_allergy):
+def test_执行与作废路径医嘱(client, admin, doctor_a, orgs, pathway_multi):
+    # 用独立患者避免与其它入径用例撞"同患者同路径重复入径"幂等拦截；
+    # 入径经全域 admin（免建关系），机构归属仍是 orgs[0]，执行由 orgs[0] 的 doctor_a。
+    p = client.post("/api/patients", json={"name": "路径医嘱患者", "id_card": "330100199404040044"}, headers=admin).json()
     enroll = client.post(
         "/api/cdss/patient-pathways",
-        json={"patient_id": patient["id"], "org_id": orgs[0]["id"],
+        json={"patient_id": p["id"], "org_id": orgs[0]["id"],
               "pathway_id": pathway_multi["id"], "enrolled_date": "2026-08-17"},
-        headers=doctor_a,
+        headers=admin,
     ).json()
     orders = enroll["orders"]
 
@@ -333,14 +336,15 @@ def test_执行与作废路径医嘱(client, doctor_a, orgs, patient, pathway_mu
 
 
 def test_跨机构医师执行他院路径医嘱被拒(
-    client, doctor_a, doctor_b, orgs, patient, pathway_multi, seeded_allergy
+    client, admin, doctor_b, orgs, pathway_multi
 ):
     """入径归甲院；乙院医师执行其医嘱，assert_obj_org_writable 应 403。"""
+    p = client.post("/api/patients", json={"name": "跨机构路径患者", "id_card": "330100199405050055"}, headers=admin).json()
     enroll = client.post(
         "/api/cdss/patient-pathways",
-        json={"patient_id": patient["id"], "org_id": orgs[0]["id"],
+        json={"patient_id": p["id"], "org_id": orgs[0]["id"],
               "pathway_id": pathway_multi["id"], "enrolled_date": "2026-08-17"},
-        headers=doctor_a,
+        headers=admin,
     ).json()
     order_id = enroll["orders"][0]["id"]
     resp = client.patch(
@@ -354,3 +358,13 @@ def test_路径医嘱不存在404(client, doctor_a):
         "/api/cdss/patient-pathway-orders/999999/execute", headers=doctor_a
     )
     assert resp.status_code == 404
+
+
+def test_enroll_idempotent(client, admin, orgs, pathway):
+    """LOW-MED-5 回归：同患者同路径重复入径 → 409（避免双份医嘱/双份提醒）。"""
+    p = client.post("/api/patients", json={"name": "入径幂等患者", "id_card": "330100199303030033"}, headers=admin).json()
+    body = {"patient_id": p["id"], "org_id": orgs[0]["id"], "pathway_id": pathway["id"]}
+    first = client.post("/api/cdss/patient-pathways", json=body, headers=admin)
+    assert first.status_code in (200, 201), first.text
+    second = client.post("/api/cdss/patient-pathways", json=body, headers=admin)
+    assert second.status_code == 409, second.text

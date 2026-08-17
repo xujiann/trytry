@@ -82,8 +82,13 @@ def upload_reading(body: HomeReadingIn, db: Session = Depends(get_db),
     db.add(row)
     db.flush()
     # S6：异常值并入慢病随访——派生一条随访任务到本人签约机构，并提醒签约医生。
+    # 用 SAVEPOINT 隔离：派生/通知万一失败也不连累居民自报本身（读数照常落库）。
     if abnormal:
-        _spawn_followup_from_reading(db, patient, row)
+        try:
+            with db.begin_nested():
+                _spawn_followup_from_reading(db, patient, row)
+        except Exception:  # noqa: BLE001 - 随访派生是尽力而为，失败不阻断自报
+            pass
     db.commit()
     db.refresh(row)
     return _reading_out(row)

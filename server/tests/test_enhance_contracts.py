@@ -74,6 +74,23 @@ def test_fulfillment_rate(client, admin, setup):
     assert any(x["id"] == cid for x in exp)
 
 
+def test_contract_list_ok_after_custom_package(client, admin, setup):
+    """HIGH-1 回归：挂内容化服务包后 package=custom，GET /api/contracts 不再 500。"""
+    pkg = client.post("/api/service-packages", json={"code": "PKG-LIST", "name": "列表包"}, headers=admin).json()
+    c = client.post("/api/contracts", json={"patient_id": setup["p1"]["id"], "org_id": setup["a"]["id"], "doctor_name": "甲医生"}, headers=setup["doc_a"])
+    if c.status_code == 201:
+        client.patch(f"/api/contracts/{c.json()['id']}/package", json={"package_id": pkg["id"]}, headers=setup["doc_a"])
+    r = client.get("/api/contracts", headers=admin)
+    assert r.status_code == 200, r.text
+    assert any(x["package"] == "custom" for x in r.json())
+
+
+def test_signfee_distributions_gated(client, admin, setup):
+    """F4 回归：签约费分配清单为管理层视图，非全域 doctor 读 → 403。"""
+    pool = client.post("/api/sign-fee/pools", json={"year": "2029", "total_amount": 1000}, headers=admin).json()
+    assert client.get(f"/api/sign-fee/pools/{pool['id']}/distributions", headers=setup["doc_a"]).status_code == 403
+
+
 def test_cross_org_403(client, setup):
     # 乙医生（非全域）不能给甲院签约
     r = client.post("/api/contracts", json={"patient_id": setup["p2"]["id"], "org_id": setup["a"]["id"], "doctor_name": "乙医生"}, headers=setup["doc_b"])

@@ -429,17 +429,22 @@ def _patient_age(patient: Patient | None) -> int | None:
 
 
 def _count_recent_settlements(db: Session, settlement: InsuranceSettlement, days: int) -> int:
-    """同患者同机构、在 [created_at−days, created_at] 窗口内的医保结算笔数（含本条）。"""
+    """同患者同机构、在 [created_at−days, created_at+days] 窗口内的医保结算笔数（含本条）。
+
+    **对称窗口**：若只往回看，对一对分解住院里**先**发生的那条做审核时，后一条还没
+    产生 → 永远数不到成对，规则形同虚设。往两侧各取 days，无论审核哪一条都能看到成对。
+    """
     from datetime import timedelta
 
     since = settlement.created_at - timedelta(days=days)
+    until = settlement.created_at + timedelta(days=days)
     return (
         db.query(func.count(InsuranceSettlement.id))
         .filter(
             InsuranceSettlement.patient_id == settlement.patient_id,
             InsuranceSettlement.org_id == settlement.org_id,
             InsuranceSettlement.created_at >= since,
-            InsuranceSettlement.created_at <= settlement.created_at,
+            InsuranceSettlement.created_at <= until,
         )
         .scalar()
     ) or 0
@@ -605,16 +610,20 @@ def settlement_comparison(year: str | None = None, db: Session = Depends(get_db)
     if orgs is not None:
         q = q.filter(PaymentCase.org_id.in_(orgs or [-1]))
     cases = q.all()
-    std_total = round(sum(c.standard_payment for c in cases), 2)
-    actual_total = round(sum(c.actual_cost for c in cases), 2)
-    isids = [c.insurance_settlement_id for c in cases]
+    # 一条医保结算可能同时有 drg 与 dip 两条测算病例；实赔额按结算 id 去重求和，
+    # 应支付/成本侧也须按结算去重，否则应支付合计会比实赔多算一份，盈亏口径失真。
+    by_settlement = {c.insurance_settlement_id: c for c in cases}
+    uniq = list(by_settlement.values())
+    std_total = round(sum(c.standard_payment for c in uniq), 2)
+    actual_total = round(sum(c.actual_cost for c in uniq), 2)
+    isids = list(by_settlement)
     insurance_total = 0.0
     if isids:
         insurance_total = round(
             db.query(func.coalesce(func.sum(InsuranceSettlement.insurance_pay), 0.0))
             .filter(InsuranceSettlement.id.in_(isids)).scalar() or 0.0, 2)
     return {
-        "cases": len(cases),
+        "cases": len(uniq),
         "standard_payment_total": std_total,      # 病组应支付合计
         "insurance_pay_total": insurance_total,   # 医保实际赔付合计
         "actual_cost_total": actual_total,        # 实际发生成本合计
@@ -675,6 +684,14 @@ def apply_budget_to_pool(plan_id: int, body: ApplyPoolIn, db: Session = Depends(
     pool = db.get(FundPool, body.pool_id)
     if pool is None:
         raise HTTPException(status_code=404, detail="基金池不存在")
+    # 已清算的池不可再改总额——与 fund.py 的 update 口径一致，否则会让冻结的
+    # 结余快照与 total_amount 对不上账。
+    if pool.status == "settled":
+        raise HTTPException(status_code=409, detail="已清算的基金池不可再下发预算")
+    # 预算与目标池必须口径一致（年度/险种/片区），否则把 2025 居民预算下到 2024 职工池上。
+    if str(pool.year) != plan.year or pool.insurance_type != plan.insurance_type \
+            or pool.org_group_id != plan.org_group_id:
+        raise HTTPException(status_code=422, detail="预算与基金池的年度/险种/片区不一致")
     pool.total_amount = plan.computed_total
     plan.status = "applied"
     plan.applied_pool_id = pool.id

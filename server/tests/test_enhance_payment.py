@@ -259,3 +259,39 @@ def test_跨机构审核被拒(client, setup, ins_settlement):
     denied = client.post("/api/insurance/audit/run",
                          json={"settlement_id": ins_settlement["id"]}, headers=setup["op_b"])
     assert denied.status_code == 403
+
+
+def test_budget_apply_guards(client, admin):
+    """HIGH-2 回归：预算下发拒绝已清算池(409)、口径不一致池(422)，一致池(200)。"""
+    from app.database import SessionLocal
+    from app.models import FundPool
+    with SessionLocal() as db:
+        active = FundPool(year=2026, insurance_type="resident", org_group_id=None, total_amount=0, status="active")
+        wrong = FundPool(year=2024, insurance_type="employee", org_group_id=None, total_amount=0, status="active")
+        settled = FundPool(year=2028, insurance_type="resident", org_group_id=None, total_amount=100, status="settled")
+        db.add_all([active, wrong, settled]); db.commit()
+        aid, wid, sid = active.id, wrong.id, settled.id
+    plan26 = client.post("/api/payment/budget-plans", json={"year": "2026", "insurance_type": "resident", "base_amount": 1000000, "growth_pct": 8, "per_capita": 50, "headcount": 2000}, headers=admin).json()
+    assert client.post(f"/api/payment/budget-plans/{plan26['id']}/apply-to-pool", json={"pool_id": aid}, headers=admin).status_code == 200
+    assert client.post(f"/api/payment/budget-plans/{plan26['id']}/apply-to-pool", json={"pool_id": wid}, headers=admin).status_code == 422
+    plan28 = client.post("/api/payment/budget-plans", json={"year": "2028", "insurance_type": "resident", "base_amount": 100000}, headers=admin).json()
+    assert client.post(f"/api/payment/budget-plans/{plan28['id']}/apply-to-pool", json={"pool_id": sid}, headers=admin).status_code == 409
+
+
+def test_decompose_audit_fires(client, admin, setup):
+    """MED-4 回归：同患者同机构短窗口两笔结算，对称窗口下 decompose_admission 命中。"""
+    from app.database import SessionLocal
+    from app.models import InsuranceSettlement
+    org = setup["orgs"]["a"]["id"]
+    pat = client.post("/api/patients", json={"name": "分解住院患者", "id_card": "330100199202020022"}, headers=admin).json()
+    with SessionLocal() as db:
+        for _ in range(2):
+            db.add(InsuranceSettlement(patient_id=pat["id"], org_id=org, settle_type="local", total_amount=1000, insurance_pay=800, self_pay=200))
+        db.commit()
+        sid = db.query(InsuranceSettlement).filter(
+            InsuranceSettlement.patient_id == pat["id"], InsuranceSettlement.org_id == org
+        ).order_by(InsuranceSettlement.id.desc()).first().id
+    client.post("/api/insurance/audit-rules", json={"code": "DECOMP-MED4", "name": "分解住院", "rule_type": "decompose_admission", "params": {"days": 15, "max_count": 1}}, headers=admin)
+    r = client.post("/api/insurance/audit/run", json={"settlement_id": sid}, headers=admin)
+    assert r.status_code == 201, r.text
+    assert "DECOMP-MED4" in [f["rule_code"] for f in r.json()["flags"]]

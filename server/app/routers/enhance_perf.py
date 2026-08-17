@@ -127,7 +127,7 @@ def create_pool(body: PoolIn, db: Session = Depends(get_db)):
     return _pool_out(db, insert_or_conflict(db, pool, "同年度同范围同来源的二次分配池已存在"))
 
 
-@router.get("/pools")
+@router.get("/pools", dependencies=[Depends(require_roles("director"))])
 def list_pools(year: str | None = None, db: Session = Depends(get_db)):
     query = db.query(PerfDistributionPool)
     if year is not None:
@@ -214,7 +214,7 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     return _pool_out(db, pool)
 
 
-@router.get("/pools/{pool_id}/distributions")
+@router.get("/pools/{pool_id}/distributions", dependencies=[Depends(require_roles("director"))])
 def list_distributions(pool_id: int, db: Session = Depends(get_db)):
     _pool(db, pool_id)
     return _dist_rows(db, pool_id)

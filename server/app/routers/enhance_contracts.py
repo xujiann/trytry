@@ -351,7 +351,7 @@ def distribute_pool(pool_id: int, db: Session = Depends(get_db)):
     return _pool_out(db, pool)
 
 
-@router.get("/sign-fee/pools/{pool_id}/distributions")
+@router.get("/sign-fee/pools/{pool_id}/distributions", dependencies=[Depends(require_roles("director"))])
 def list_distributions(pool_id: int, db: Session = Depends(get_db)):
     if db.get(SignFeePool, pool_id) is None:
         raise HTTPException(status_code=404, detail="签约费池不存在")

@@ -428,6 +428,14 @@ def enroll_pathway(
         raise HTTPException(status_code=422, detail="该临床路径已停用，不可入径")
     assert_patient_visible(db, user, body.patient_id, resource="cdss")
     assert_org_writable(db, user, body.org_id)
+    # 幂等：同一患者同一路径已有在径记录时拒绝重复入径——否则会物化出两套医嘱、
+    # 诊间提醒也逐日翻倍。需重入径先把旧的出径/变异。
+    if db.query(PatientPathway.id).filter(
+        PatientPathway.patient_id == body.patient_id,
+        PatientPathway.pathway_id == body.pathway_id,
+        PatientPathway.status == "in_path",
+    ).first():
+        raise HTTPException(status_code=409, detail="该患者已在此路径在径中，不可重复入径")
     enrolled = body.enrolled_date or resolve_business_date(None).isoformat()
     pp = PatientPathway(
         patient_id=body.patient_id,

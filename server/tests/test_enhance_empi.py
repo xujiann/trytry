@@ -171,3 +171,19 @@ def test_非管理员不能合并(client, admin, operator):
     dup = _new_patient(client, admin)
     resp = _merge(client, operator, primary, dup)
     assert resp.status_code == 403
+
+
+def test_resolve_requires_patient_visibility(client, admin, operator):
+    """F1 回归：resolve 返回姓名/电子健康卡号须过患者可见性，无关系的非全域账号 403。"""
+    p = _new_patient(client, admin)
+    assert client.get(f"/api/empi/resolve/{p['id']}", headers=admin).status_code == 200
+    assert client.get(f"/api/empi/resolve/{p['id']}", headers=operator).status_code == 403
+
+
+def test_merge_chain_rejected(client, admin):
+    """MED-3 回归：已是主档的档不能再作为重复档并入（避免 A→B→C 两跳断链）。"""
+    a = _new_patient(client, admin)
+    b = _new_patient(client, admin)
+    cc = _new_patient(client, admin)
+    assert client.post("/api/empi/merge", json={"primary_patient_id": b["id"], "duplicate_patient_id": a["id"]}, headers=admin).status_code == 201
+    assert client.post("/api/empi/merge", json={"primary_patient_id": cc["id"], "duplicate_patient_id": b["id"]}, headers=admin).status_code == 422

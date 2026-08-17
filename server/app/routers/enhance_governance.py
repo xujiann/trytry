@@ -105,7 +105,7 @@ def create_charter(body: CharterIn, db: Session = Depends(get_db)):
     return _charter_out(charter)
 
 
-@router.get("/charters")
+@router.get("/charters", dependencies=[Depends(require_roles("director"))])
 def list_charters(active: bool | None = None, db: Session = Depends(get_db)):
     query = db.query(ConsortiumCharter)
     if active is not None:
@@ -146,7 +146,7 @@ def create_body(body: BodyIn, db: Session = Depends(get_db)):
     return _body_out(obj)
 
 
-@router.get("/bodies")
+@router.get("/bodies", dependencies=[Depends(require_roles("director"))])
 def list_bodies(db: Session = Depends(get_db)):
     return [
         _body_out(b)
@@ -182,7 +182,7 @@ def add_member(body_id: int, body: MemberIn, db: Session = Depends(get_db)):
     return _member_out(member)
 
 
-@router.get("/bodies/{body_id}/members")
+@router.get("/bodies/{body_id}/members", dependencies=[Depends(require_roles("director"))])
 def list_members(body_id: int, db: Session = Depends(get_db)):
     if db.get(GovernanceBody, body_id) is None:
         raise HTTPException(status_code=404, detail="治理机构不存在")
@@ -235,7 +235,7 @@ def create_staff_assignment(body: StaffPoolIn, db: Session = Depends(get_db)):
     return _pool_out(obj)
 
 
-@router.get("/staff-pool")
+@router.get("/staff-pool", dependencies=[Depends(require_roles("director"))])
 def list_staff_assignments(
     status: str | None = None,
     to_org_id: int | None = None,

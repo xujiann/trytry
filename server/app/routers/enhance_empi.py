@@ -24,6 +24,7 @@ from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import Patient, PatientMergeLink, User
+from ..visibility import assert_patient_visible
 
 router = APIRouter(
     prefix="/api/empi",
@@ -84,6 +85,17 @@ def merge_patients(
     ):
         raise HTTPException(status_code=422, detail="主档本身已被合并")
 
+    # 反向也要挡：拟并入的"重复档"若已是别处合并的**主档**（其下挂着重复档），
+    # 再把它并到 C 会形成 A→B→C 的两跳链，而 resolve 只跟一跳，resolve(A) 会停在 B。
+    # 先撤销其下合并、或直接以 C 为主档重并，才不留断链。
+    if (
+        db.query(PatientMergeLink.id)
+        .filter(PatientMergeLink.primary_patient_id == body.duplicate_patient_id)
+        .first()
+        is not None
+    ):
+        raise HTTPException(status_code=422, detail="该档已是其他合并的主档，需先撤销其下合并")
+
     link = PatientMergeLink(
         primary_patient_id=body.primary_patient_id,
         duplicate_patient_id=body.duplicate_patient_id,
@@ -139,8 +151,14 @@ def list_links(
 def resolve_patient(
     patient_id: int,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """解析到规范主档：若 patient_id 是生效的重复档，返回其主档（跟一跳）；否则返回自身。"""
+    """解析到规范主档：若 patient_id 是生效的重复档，返回其主档（跟一跳）；否则返回自身。
+
+    返回姓名/电子健康卡号属患者标识，须先过患者可见性——否则任一登录账号可用
+    `resolve` 枚举全县主索引。全域角色恒可见；非全域仅限有业务关系的患者。
+    """
+    assert_patient_visible(db, user, patient_id)
     link = (
         db.query(PatientMergeLink)
         .filter(PatientMergeLink.duplicate_patient_id == patient_id)
