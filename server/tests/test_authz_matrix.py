@@ -54,6 +54,12 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/portal/me/surveys"),
     ("POST", "/api/portal/my-archive"),
     ("POST", "/api/portal/surveys"),
+    # E8 居民端可办：portal 令牌 + current_resident_patient 定身份（只写本人数据），
+    # 不进员工角色体系。账单支付另校验 settlement.patient_id==本人（他人 403）。
+    ("POST", "/api/portal/me/home-readings"),
+    ("POST", "/api/portal/me/online-consults"),
+    ("POST", "/api/portal/me/bills/{settlement_id}/pay"),
+    ("POST", "/api/portal/me/refill-requests"),
     # 慢专病居民端：同上，走 portal 令牌 + accessible_patient 判定"这次能看谁的档案"，
     # 不进员工角色体系。每个接口都只写调用者本人或其代管家人的数据。
     ("POST", "/api/portal/spd/measurements"),
@@ -66,6 +72,9 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/portal/spd/interventions/{intervention_id}/feedback"),
     ("POST", "/api/portal/spd/edu/{push_id}/read"),
     ("POST", "/api/portal/spd/consults"),
+    # E7 CDSS 相互作用核查：只读性质的咨询接口（POST 仅因带请求体），
+    # 无角色写权限、不落业务数据，按 assert_patient_visible 校验对该患者的可见性。
+    ("POST", "/api/cdss/interaction-check"),
     # 任意登录用户的自助操作
     ("POST", "/api/notifications/{notification_id}/read"),
     ("POST", "/api/notifications/read-all"),

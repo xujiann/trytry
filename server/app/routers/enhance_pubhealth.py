@@ -419,13 +419,9 @@ class ProjectOut(BaseModel):
 @router.post("/pubhealth-projects", response_model=ProjectOut, status_code=201, dependencies=[Depends(require_roles("admin"))])
 def create_project(body: ProjectCreate, db: Session = Depends(get_db)):
     """公卫 12 类项目全域目录建项（admin）。"""
-    if db.query(PublicHealthProject).filter(PublicHealthProject.code == body.code).first():
-        raise HTTPException(status_code=409, detail="项目编码已存在")
-    obj = PublicHealthProject(**body.model_dump())
-    db.add(obj)
-    db.commit()
-    db.refresh(obj)
-    return obj
+    from ..concurrency import insert_or_conflict
+
+    return insert_or_conflict(db, PublicHealthProject(**body.model_dump()), "项目编码已存在")
 
 
 @router.get("/pubhealth-projects", response_model=list[ProjectOut])
@@ -462,28 +458,19 @@ def upsert_project_stat(
     user: User = Depends(get_current_user),
 ):
     """机构项目完成度登记：按 (project_id, org_id, year) 幂等更新目标/完成数。"""
+    from ..concurrency import upsert_unique
+
     assert_org_writable(db, user, body.org_id)
     if db.get(PublicHealthProject, body.project_id) is None:
         raise HTTPException(status_code=404, detail="项目不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    stat = (
-        db.query(PublicHealthProjectStat)
-        .filter(
-            PublicHealthProjectStat.project_id == body.project_id,
-            PublicHealthProjectStat.org_id == body.org_id,
-            PublicHealthProjectStat.year == body.year,
-        )
-        .first()
+    # 并发下先查再插会双插撞唯一键→500；改用 upsert_unique（撞约束回退为覆盖）
+    stat, _overwrote = upsert_unique(
+        db, PublicHealthProjectStat,
+        keys={"project_id": body.project_id, "org_id": body.org_id, "year": body.year},
+        values={"target_count": body.target_count, "done_count": body.done_count},
     )
-    if stat is None:
-        stat = PublicHealthProjectStat(**body.model_dump())
-        db.add(stat)
-    else:
-        stat.target_count = body.target_count
-        stat.done_count = body.done_count
-    db.commit()
-    db.refresh(stat)
     return stat
 
 

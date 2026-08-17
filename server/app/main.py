@@ -106,6 +106,11 @@ from .routers import (
     enhance_pubhealth,
     enhance_supply,
     enhance_intel,
+    enhance_payment,
+    enhance_cdss,
+    enhance_portal,
+    enhance_refill,
+    enhance_interop,
 )
 from . import ws
 from .spd import register_spd, seed_spd
@@ -361,6 +366,11 @@ app.include_router(enhance_referrals.router)
 app.include_router(enhance_pubhealth.router)
 app.include_router(enhance_supply.router)
 app.include_router(enhance_intel.router)
+app.include_router(enhance_payment.router)
+app.include_router(enhance_cdss.router)
+app.include_router(enhance_portal.me_router)
+app.include_router(enhance_refill.router)
+app.include_router(enhance_interop.router)
 app.include_router(ws.router)
 
 _access_logger = logging.getLogger("medplat.access")

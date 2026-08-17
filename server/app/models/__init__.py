@@ -15,3 +15,7 @@ from .enhance_referral import *  # noqa: F401,F403  E3 转诊闭环
 from .enhance_pubhealth import *  # noqa: F401,F403  E4 公卫短板
 from .enhance_supply import *  # noqa: F401,F403  E5 统一采购配送
 from .enhance_intel import *  # noqa: F401,F403  E6 数据智能层
+from .enhance_payment import *  # noqa: F401,F403  E2 DRG/DIP 结算+智能审核
+from .enhance_cdss import *  # noqa: F401,F403  E7 临床决策支持
+from .enhance_portal import *  # noqa: F401,F403  E8 居民端可办
+from .enhance_interop import *  # noqa: F401,F403  E9 互操作标准化

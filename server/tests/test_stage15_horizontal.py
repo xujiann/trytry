@@ -545,8 +545,11 @@ def _byid_org_write_endpoints():
 
     unguarded = set()
     for name, path in _router_files():
-        # 居民端两个文件走的是 portal 令牌 + accessible_patient，不在员工机构可见性体系内。
-        if name in ("portal.py", "spd/portal.py"):
+        # 居民端文件走的是 portal 令牌 + current_resident_patient（按患者本人归属校验，
+        # 强于机构可见性），不在员工机构可见性体系内。enhance_portal.py 是 E8 居民端可办
+        # （自报体征/自助支付/续方申请），与 portal.py 同源；其医方侧续方审核已分到
+        # enhance_refill.py，照常受本扫描门禁。
+        if name in ("portal.py", "spd/portal.py", "enhance_portal.py"):
             continue
         tree = ast.parse(open(path, encoding="utf-8").read())
         funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}

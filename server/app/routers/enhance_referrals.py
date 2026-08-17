@@ -151,13 +151,17 @@ def reserve_slot(referral_id: int, body: ReserveIn, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="号源不存在")
     if db.get(Patient, ref.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    from ..concurrency import insert_or_conflict
+
     appt = book_slot(db, body.slot_id, ref.patient_id)  # 原子占号，超卖/重复由其内部处理
-    row = ReferralSlotReservation(
-        referral_id=referral_id, slot_id=body.slot_id, appointment_id=appt.id,
-        patient_id=ref.patient_id, reserved_by=user.id, status="reserved")
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    # referral_id 唯一：并发下两个预留请求只成一个（另一个 409），避免重复占号留痕
+    row = insert_or_conflict(
+        db,
+        ReferralSlotReservation(
+            referral_id=referral_id, slot_id=body.slot_id, appointment_id=appt.id,
+            patient_id=ref.patient_id, reserved_by=user.id, status="reserved"),
+        "本转诊已预留号源",
+    )
     return {"id": row.id, "referral_id": referral_id, "slot_id": body.slot_id,
             "appointment_id": appt.id, "patient_id": ref.patient_id, "status": row.status}
 

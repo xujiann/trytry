@@ -183,6 +183,16 @@ def test_spa_covers_every_backend_module(client):
         "integration",  # HL7/FHIR，对机器不对人
         "portal",       # 居民端有自己的 H5
         "triage",       # 智能分诊由业务页内联调用
+        # 第十四轮 E1–E9 功能增强：后端能力已交付并测通，管理端/居民端页面为前端跟进项
+        # （前端 build-free 既定约束，随前端框架化一并推进；见 docs/第十四轮…）。
+        "service-packages", "sign-fee",          # E1 家医签约内容化
+        "drg-rates", "dip-catalog", "dip-rates", "payment",  # E2 DRG/DIP 结算+智能审核
+        "psych", "tb", "health-supervision", "pubhealth-projects",  # E4 公卫短板
+        "consortium-drugs", "volume-purchases", "volume-allocations",
+        "distribution-orders", "drug-traces",    # E5 统一采购配送
+        "intel",                                  # E6 数据智能层（供业务页内联调用）
+        "cdss",                                   # E7 临床决策支持（诊间内联调用）
+        "refill-requests",                        # E8 续方审核（医方侧）
     }
     missing = sorted(served - called - no_admin_page)
     assert not missing, f"以下后端模块没有管理端页面：{missing}"

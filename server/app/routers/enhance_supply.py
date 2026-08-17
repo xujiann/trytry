@@ -73,15 +73,11 @@ class CatalogOut(BaseModel):
 )
 def create_consortium_drug(body: CatalogCreate, db: Session = Depends(get_db)):
     """统一目录建档：drug_code 全域唯一，重复 409。"""
-    if db.query(ConsortiumDrugCatalog).filter(
-        ConsortiumDrugCatalog.drug_code == body.drug_code
-    ).first():
-        raise HTTPException(status_code=409, detail="药品编码已在统一目录中")
-    row = ConsortiumDrugCatalog(**body.model_dump())
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
+    from ..concurrency import insert_or_conflict
+
+    return insert_or_conflict(
+        db, ConsortiumDrugCatalog(**body.model_dump()), "药品编码已在统一目录中"
+    )
 
 
 @router.get(
@@ -202,25 +198,14 @@ def allocate_volume(
         raise HTTPException(status_code=409, detail="采购批次已封批，不可再分配")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    row = (
-        db.query(VolumePurchaseAllocation)
-        .filter(
-            VolumePurchaseAllocation.purchase_id == purchase_id,
-            VolumePurchaseAllocation.org_id == body.org_id,
-        )
-        .first()
+    from ..concurrency import upsert_unique
+
+    # 并发下"先查再插"会双插撞 (purchase_id, org_id) 唯一键→500；改用 upsert_unique
+    row, _overwrote = upsert_unique(
+        db, VolumePurchaseAllocation,
+        keys={"purchase_id": purchase_id, "org_id": body.org_id},
+        values={"allocated_volume": body.allocated_volume},
     )
-    if row is None:
-        row = VolumePurchaseAllocation(
-            purchase_id=purchase_id,
-            org_id=body.org_id,
-            allocated_volume=body.allocated_volume,
-        )
-        db.add(row)
-    else:
-        row.allocated_volume = body.allocated_volume
-    db.commit()
-    db.refresh(row)
     return row
 
 
