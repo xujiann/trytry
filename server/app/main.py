@@ -101,6 +101,11 @@ from .routers import (
     users,
     vaccination,
     vaccine_supply,
+    enhance_contracts,
+    enhance_referrals,
+    enhance_pubhealth,
+    enhance_supply,
+    enhance_intel,
 )
 from . import ws
 from .spd import register_spd, seed_spd
@@ -350,6 +355,12 @@ app.include_router(service_extras.router)
 # 全域慢专病子系统：装卸是一个动作，由 MEDPLAT_SPD_ENABLED 控制（见 app/spd/）
 register_spd(app)
 app.include_router(todos.router)
+# 第十四轮功能增强路由（E1/E3/E4/E5/E6）
+app.include_router(enhance_contracts.router)
+app.include_router(enhance_referrals.router)
+app.include_router(enhance_pubhealth.router)
+app.include_router(enhance_supply.router)
+app.include_router(enhance_intel.router)
 app.include_router(ws.router)
 
 _access_logger = logging.getLogger("medplat.access")

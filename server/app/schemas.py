@@ -71,7 +71,8 @@ class ReferralOut(ReferralCreate):
 
 
 class ReferralStatusUpdate(BaseModel):
-    status: str = Field(pattern="^(accepted|completed|rejected)$")
+    # E3：新增 returned（接诊后退回，材料不全/需补检）
+    status: str = Field(pattern="^(accepted|completed|rejected|returned)$")
 
 
 class EncounterCreate(BaseModel):

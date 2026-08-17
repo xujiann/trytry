@@ -463,9 +463,17 @@ class FamilyDoctorContract(Base):
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     doctor_name: Mapped[str] = mapped_column(String(64))
-    # basic=基础包, standard=标准包, premium=个性包
+    # basic=基础包, standard=标准包, premium=个性包（旧枚举，保留兼容）
     package: Mapped[str] = mapped_column(String(16), default="basic")
+    # E1：签约挂内容化服务包（service_packages.id）；空=仍用旧枚举
+    package_id: Mapped[int | None] = mapped_column(
+        ForeignKey("service_packages.id"), nullable=True, index=True
+    )
+    # E1：重点人群标签（chronic/elderly/maternal/disabled/poverty…），用于按人头分配加权
+    key_population: Mapped[str] = mapped_column(String(32), default="")
     signed_date: Mapped[str] = mapped_column(String(10), default="")
+    # E1：协议到期日（YYYY-MM-DD），空=未设；用于续签/到期提醒
+    expire_date: Mapped[str] = mapped_column(String(10), default="")
     # active=履约中, terminated=已解约
     status: Mapped[str] = mapped_column(String(16), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -480,6 +488,10 @@ class ContractService(Base):
     contract_id: Mapped[int] = mapped_column(ForeignKey("fd_contracts.id"), index=True)
     # visit=上门服务, consult=健康咨询, followup=随访, referral=转诊协助
     service_type: Mapped[str] = mapped_column(String(16))
+    # E1：履约核销到具体服务包条目（service_package_items.id）；空=通用履约不计入应履约核销
+    item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("service_package_items.id"), nullable=True, index=True
+    )
     note: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

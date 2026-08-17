@@ -8,3 +8,10 @@ from .core import *  # noqa: F401,F403
 from .extended import *  # noqa: F401,F403
 from .management import *  # noqa: F401,F403
 from .platform import *  # noqa: F401,F403
+
+# 第十四轮 E1–E9 功能增强新增领域模型（各自独立文件，此处集中重导出）
+from .enhance_contract import *  # noqa: F401,F403  E1 家医签约内容化
+from .enhance_referral import *  # noqa: F401,F403  E3 转诊闭环
+from .enhance_pubhealth import *  # noqa: F401,F403  E4 公卫短板
+from .enhance_supply import *  # noqa: F401,F403  E5 统一采购配送
+from .enhance_intel import *  # noqa: F401,F403  E6 数据智能层

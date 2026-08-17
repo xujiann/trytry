@@ -14,7 +14,9 @@ router = APIRouter(
 
 _ALLOWED_TRANSITIONS = {
     "pending": {"accepted", "rejected"},
-    "accepted": {"completed"},
+    # E3：接诊后允许退回（材料不全/需补检），退回后可再次接诊
+    "accepted": {"completed", "returned"},
+    "returned": {"accepted", "rejected"},
 }
 
 
