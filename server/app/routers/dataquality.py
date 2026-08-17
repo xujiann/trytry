@@ -104,36 +104,39 @@ def id_card_invalid_reason(value: str) -> str:
     return ""
 
 
-def _check_id_card(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _check_id_card(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     field = rule.config.get("field", "id_card")
     hits = []
-    for row in db.query(model).limit(SCAN_LIMIT).all():
+    for row in _scope_model(db.query(model), model, org_ids).limit(SCAN_LIMIT).all():
         reason = id_card_invalid_reason(getattr(row, field, ""))
         if reason:
             hits.append((row.id, reason))
     return hits
 
 
-def _check_critical_closed_loop(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _check_critical_closed_loop(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     """危急值报告未走到处置反馈（critical_status != resolved）。"""
-    rows = (
-        db.query(ExamReport)
-        .filter(ExamReport.critical.is_(True), ExamReport.critical_status != "resolved")
-        .limit(SCAN_LIMIT)
-        .all()
+    q = db.query(ExamReport).filter(
+        ExamReport.critical.is_(True), ExamReport.critical_status != "resolved"
     )
+    # ExamReport 本身无机构列——危急值敏感，按其检查申请单的开单机构 from_org_id 收口。
+    if org_ids is not None:
+        q = q.join(ExamRequest, ExamRequest.id == ExamReport.request_id).filter(
+            ExamRequest.from_org_id.in_(org_ids or [-1])
+        )
+    rows = q.limit(SCAN_LIMIT).all()
     return [
         (r.id, f"危急值闭环状态为 {r.critical_status or '未回填'}，未达处置反馈（resolved）")
         for r in rows
     ]
 
 
-def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _check_datetime_order(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     """结束时间早于开始时间（结束为空视为进行中，不判违规）。"""
     start_field = rule.config.get("start_field", "")
     end_field = rule.config.get("end_field", "")
     hits = []
-    for row in db.query(model).limit(SCAN_LIMIT).all():
+    for row in _scope_model(db.query(model), model, org_ids).limit(SCAN_LIMIT).all():
         start, end = getattr(row, start_field, None), getattr(row, end_field, None)
         if start is None or end is None:
             continue
@@ -151,11 +154,11 @@ def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, s
     return hits
 
 
-def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _check_date_not_future(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     today = date.today().isoformat()
     hits = []
-    for row in db.query(model).limit(SCAN_LIMIT).all():
+    for row in _scope_model(db.query(model), model, org_ids).limit(SCAN_LIMIT).all():
         value = getattr(row, field, None)
         if isinstance(value, datetime):
             value = value.date().isoformat()
@@ -168,7 +171,7 @@ def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, 
     return hits
 
 
-def _check_chronic_followup_indicator(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _check_chronic_followup_indicator(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     """慢病随访须记录对应病种指标（按病种要求的指标字段判定）。"""
     mapping: dict[str, list[str]] = rule.config.get("disease_indicators", {})
     diseases = dict(db.query(ChronicPatient.id, ChronicPatient.disease).all())
@@ -201,30 +204,51 @@ _LOGIC_CHECKS = {
 # ---------------------------------------------------------------------------
 
 
-def _filtered(db: Session, model, rule: QcRule):
+def _org_column(model):
+    """被检表的机构列（org_id 优先，其次 from_org_id）；无则 None（全域/患者主数据）。"""
+    return getattr(model, "org_id", None) or getattr(model, "from_org_id", None)
+
+
+def _scope_model(query, model, org_ids: list[int] | None):
+    """按调用者可见机构范围收口质控扫描。
+
+    横向隔离：非全域账号不得看到他院的质控违规明细（明细里含 record_id 与字段值）。
+    org_ids 为 None（全域角色 visible_org_ids 返回 None）时不加过滤，看全部；
+    模型无机构列（患者主索引、字典等全域数据，或仅患者/父表关联的子表）时不加过滤。
+    """
+    if org_ids is None:
+        return query
+    col = _org_column(model)
+    if col is not None:
+        query = query.filter(col.in_(org_ids or [-1]))
+    return query
+
+
+def _filtered(db: Session, model, rule: QcRule, org_ids: list[int] | None = None):
     query = db.query(model)
     for key, value in (rule.config.get("filter") or {}).items():
         column = getattr(model, key, None)
         if column is not None:
             query = query.filter(column == value)
+    query = _scope_model(query, model, org_ids)
     return query.limit(SCAN_LIMIT)
 
 
-def _run_required(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _run_required(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     return [
         (row.id, f"{field} 为空")
-        for row in _filtered(db, model, rule).all()
+        for row in _filtered(db, model, rule, org_ids).all()
         if _is_blank(getattr(row, field, None))
     ]
 
 
-def _run_range(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _run_range(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     low, high = rule.config.get("min"), rule.config.get("max")
     ex_low, ex_high = rule.config.get("exclusive_min", False), rule.config.get("exclusive_max", False)
     hits = []
-    for row in _filtered(db, model, rule).all():
+    for row in _filtered(db, model, rule, org_ids).all():
         value = getattr(row, field, None)
         if value is None:
             hits.append((row.id, f"{field} 缺失，无法判定区间"))
@@ -237,17 +261,17 @@ def _run_range(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     return hits
 
 
-def _run_enum(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _run_enum(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     allowed = set(rule.config.get("values", []))
     return [
         (row.id, f"{field}={getattr(row, field, None)} 不在允许取值 {sorted(allowed)} 内")
-        for row in _filtered(db, model, rule).all()
+        for row in _filtered(db, model, rule, org_ids).all()
         if getattr(row, field, None) not in allowed
     ]
 
 
-def _run_cross_ref(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _run_cross_ref(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     skip_empty = rule.config.get("skip_empty", False)
     if rule.config.get("ref_code_system"):
@@ -267,7 +291,7 @@ def _run_cross_ref(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
         valid = {v for (v,) in db.query(ref_field).all()}
         ref_desc = f"{rule.config['ref_table']} 目录"
     hits = []
-    for row in _filtered(db, model, rule).all():
+    for row in _filtered(db, model, rule, org_ids).all():
         value = getattr(row, field, None)
         if skip_empty and _is_blank(value):
             continue
@@ -276,13 +300,13 @@ def _run_cross_ref(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     return hits
 
 
-def _run_logic(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
+def _run_logic(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
     check = _LOGIC_CHECKS.get(rule.config.get("check", ""))
     if check is None:
         raise HTTPException(
             status_code=422, detail=f"规则 {rule.code} 的逻辑校验 {rule.config.get('check')} 未实现"
         )
-    return check(db, rule, model)
+    return check(db, rule, model, org_ids)
 
 
 _EXECUTORS = {
@@ -294,7 +318,7 @@ _EXECUTORS = {
 }
 
 
-def run_rule(db: Session, rule: QcRule) -> list[dict]:
+def run_rule(db: Session, rule: QcRule, org_ids: list[int] | None = None) -> list[dict]:
     """执行单条规则，返回违规明细（规则/表/记录id/问题描述/严重度）。"""
     model = _TABLE_MODELS.get(rule.target_table)
     if model is None:
@@ -314,7 +338,7 @@ def run_rule(db: Session, rule: QcRule) -> list[dict]:
             "record_id": record_id,
             "message": message,
         }
-        for record_id, message in executor(db, rule, model)
+        for record_id, message in executor(db, rule, model, org_ids)
     ]
 
 
@@ -336,13 +360,18 @@ def run_checks(
     offset: int = 0,
     limit: int = 200,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """按启用规则扫描现有数据，返回违规明细（停用规则不参与扫描）。"""
+    """按启用规则扫描现有数据，返回违规明细（停用规则不参与扫描）。
+
+    横向隔离：非全域账号只看本人可见机构范围内的质控违规明细。
+    """
+    org_ids = visible_org_ids(db, user)
     violations: list[dict] = []
     for rule in _active_rules(db, rule_code, target_table):
         if severity and rule.severity != severity:
             continue
-        violations.extend(run_rule(db, rule))
+        violations.extend(run_rule(db, rule, org_ids))
     total = len(violations)
     limit = min(max(limit, 1), 1000)
     response.headers["X-Total-Count"] = str(total)
@@ -357,11 +386,12 @@ def run_checks(
 
 
 @router.get("/summary")
-def summary(db: Session = Depends(get_db)):
-    """违规汇总：按规则、按严重度、按被检表三个维度。"""
+def summary(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """违规汇总：按规则、按严重度、按被检表三个维度（按可见机构范围收口）。"""
+    org_ids = visible_org_ids(db, user)
     by_rule, by_severity, by_table = [], {"error": 0, "warn": 0}, {}
     for rule in _active_rules(db):
-        hits = run_rule(db, rule)
+        hits = run_rule(db, rule, org_ids)
         by_rule.append(
             {
                 "rule_code": rule.code,
