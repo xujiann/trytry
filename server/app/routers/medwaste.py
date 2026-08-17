@@ -229,6 +229,9 @@ def store(
     loc = db.get(WasteLocation, body.storage_location_id)
     if loc is None:
         raise HTTPException(status_code=404, detail="暂存点位不存在")
+    if loc.org_id != waste.org_id:
+        # 点位是机构内设施，跨机构暂存等于把医废记到别家的暂存间头上
+        raise HTTPException(status_code=422, detail="暂存点位不属于该医废的所属机构")
     if loc.location_type != "storage":
         raise HTTPException(status_code=422, detail="该点位不是暂存间")
     waste.status = "stored"

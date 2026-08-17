@@ -13,8 +13,8 @@ verify/stats 四个读接口，读留痕一个都没有。
   这是《个人信息保护法》给患者的知情权，不只是给监管看的。
 
 **查这张表的动作本身也留痕**：调阅"谁看过某患者档案"同样是在看这个患者的
-隐私。只在针对**单个患者**查询时记（无法给全表浏览记一个 patient_id，
-那张表的 patient_id 非空）——targeted 查询正是敏感的那种。
+隐私。判准是**是否指向可识别的个人**：清单与统计只要按患者聚焦就记，
+不带患者定位的全表浏览与全局聚合不记（也没有 patient_id 可记）。
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
@@ -188,15 +188,17 @@ def my_access_logs(
 def access_log_stats(
     patient_id: int | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """按依据汇总：一段时间内各类调阅的构成，看跨机构调阅（转诊/授权）占比
-    是否异常。可选按患者聚焦某一个人。"""
+    是否异常。可选按患者聚焦某一个人——聚焦即指向可识别的个人，同样自我留痕。"""
     from sqlalchemy import func
 
     query = db.query(AccessLog.basis, func.count(AccessLog.id))
     if patient_id is not None:
         if db.get(Patient, patient_id) is None:
             raise HTTPException(status_code=404, detail="患者不存在")
+        _log_view(db, user, patient_id)
         query = query.filter(AccessLog.patient_id == patient_id)
     rows = query.group_by(AccessLog.basis).all()
     by_basis = [

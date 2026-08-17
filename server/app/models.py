@@ -2510,6 +2510,18 @@ class ResidentAccount(Base):
     """
 
     __tablename__ = "resident_accounts"
+    __table_args__ = (
+        # "一份档案只绑一个账户"下沉到数据库：应用层查重是 check-then-act，
+        # 并发下两个账户可同时绑上同一份档案（与基金池 D-2 同形）。部分唯一
+        # 索引放行多个 NULL（未绑定账户共存），绑定列上唯一。
+        Index(
+            "uq_resident_account_patient",
+            "patient_id",
+            unique=True,
+            sqlite_where=text("patient_id IS NOT NULL"),
+            postgresql_where=text("patient_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     phone: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)

@@ -236,8 +236,17 @@ def _autobind_by_phone(db: Session, account: ResidentAccount) -> None:
 
 
 def _login_result(db: Session, account: ResidentAccount) -> dict:
+    account_id = account.id
     account.last_login_at = now_naive()
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 自动绑定与别的账户抢同一份档案、撞上 patient_id 唯一索引：
+        # 登录本身照常成功，绑定让位（保持未绑定，走显式实名绑定去申诉）。
+        db.rollback()
+        account = db.get(ResidentAccount, account_id)
+        account.last_login_at = now_naive()
+        db.commit()
     patient = db.get(Patient, account.patient_id) if account.patient_id else None
     return {
         "access_token": _issue_token(account),
@@ -421,7 +430,15 @@ def bind_realname(
     account.patient_id = patient.id
     if account.phone and not patient.phone:
         patient.phone = account.phone
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 上面的 taken 查重是 check-then-act，并发下两个账户会同时通过——
+        # 真正的兜底是 patient_id 上的部分唯一索引，撞了翻译成同一句 409。
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="该健康档案已被其他账号绑定，请联系服务机构核实"
+        ) from None
     _bind_failures.reset(key)
     return {"bound": True, "name": patient.name, "ehc_no": patient.ehc_no}
 

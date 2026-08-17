@@ -168,6 +168,11 @@ def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depend
         raise HTTPException(
             status_code=409, detail=f"当前状态 {specimen.status} 不可拒收（拒收只能发生在核收环节）"
         )
+    if body.reject_reason not in REJECT_REASONS:
+        # 自由文本的拒收原因无法按原因分解统计——拒收率恰恰要按原因看才有管理价值
+        raise HTTPException(
+            status_code=422, detail="拒收原因须为标准项之一：" + "、".join(REJECT_REASONS)
+        )
     specimen.status = "rejected"
     specimen.reject_reason = body.reject_reason
     db.commit()
