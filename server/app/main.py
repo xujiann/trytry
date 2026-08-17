@@ -111,6 +111,11 @@ from .routers import (
     enhance_portal,
     enhance_refill,
     enhance_interop,
+    enhance_perf,
+    enhance_teleconsult,
+    enhance_empi,
+    enhance_ehealthcard,
+    enhance_governance,
 )
 from . import ws
 from .spd import register_spd, seed_spd
@@ -371,6 +376,12 @@ app.include_router(enhance_cdss.router)
 app.include_router(enhance_portal.me_router)
 app.include_router(enhance_refill.router)
 app.include_router(enhance_interop.router)
+# 第十五轮 S 系列路由
+app.include_router(enhance_perf.router)
+app.include_router(enhance_teleconsult.router)
+app.include_router(enhance_empi.router)
+app.include_router(enhance_ehealthcard.router)
+app.include_router(enhance_governance.router)
 app.include_router(ws.router)
 
 _access_logger = logging.getLogger("medplat.access")

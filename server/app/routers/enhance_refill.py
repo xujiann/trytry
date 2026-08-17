@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import RefillRequest, User
+from ..models import DrugStock, RefillRequest, User
 from ..visibility import assert_obj_org_writable, scope_org_list
 
 router = APIRouter(prefix="/api/refill-requests", tags=["续方审核"],
@@ -66,6 +66,16 @@ def dispense_refill(refill_id: int, db: Session = Depends(get_db),
     assert_obj_org_writable(db, user, r)
     if r.status != "approved":
         raise HTTPException(status_code=409, detail="仅已通过的申请可配送")
+    # S2：若续方带结构化药品与数量，发药即原子扣减本机构库存（不足即 409，不发药）。
+    if r.drug_code and r.qty > 0:
+        dec = db.query(DrugStock).filter(
+            DrugStock.org_id == r.org_id,
+            DrugStock.drug_code == r.drug_code,
+            DrugStock.quantity >= r.qty,
+        ).update({DrugStock.quantity: DrugStock.quantity - r.qty}, synchronize_session=False)
+        if dec == 0:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="本机构该药品库存不足，无法发药")
     r.status = "dispensed"
     db.commit()
     return _refill_out(r)

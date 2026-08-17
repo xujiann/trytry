@@ -75,7 +75,40 @@ class PaymentCase(Base):
     standard_payment: Mapped[float] = mapped_column(Money, default=0)
     actual_cost: Mapped[float] = mapped_column(Money, default=0)
     profit: Mapped[float] = mapped_column(Money, default=0)
+    # S1：结算回写——串联到该住院的医保结算记录 id（松耦合整数，可空）。
+    # 让"病组应支付额"与"医保实际赔付额(insurance_pay)"在同一条链上可对账。
+    insurance_settlement_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     year: Mapped[str] = mapped_column(String(4), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class FundBudgetPlan(Base):
+    """S1 医保基金总额预算编制：按上年基数 × 增长系数 + 人头测算年度总额，可下发到 FundPool。
+
+    computed_total = round(base_amount × (1 + growth_pct/100) + per_capita × headcount, 2)
+    编制通过后可 apply 到某个 fund_pools 行（打通 fund.py 的总额包干）。
+    """
+
+    __tablename__ = "fund_budget_plans"
+    __table_args__ = (
+        UniqueConstraint("year", "org_group_id", "insurance_type", name="uq_budget_year_group_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    year: Mapped[str] = mapped_column(String(4), index=True)
+    org_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("org_groups.id"), nullable=True, index=True
+    )
+    insurance_type: Mapped[str] = mapped_column(String(16), default="resident")
+    base_amount: Mapped[float] = mapped_column(Money, default=0)
+    growth_pct: Mapped[float] = mapped_column(Float, default=0)
+    per_capita: Mapped[float] = mapped_column(Money, default=0)
+    headcount: Mapped[int] = mapped_column(Integer, default=0)
+    computed_total: Mapped[float] = mapped_column(Money, default=0)
+    # draft=已编制, applied=已下发到基金池
+    status: Mapped[str] = mapped_column(String(16), default="draft")
+    applied_pool_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(String(256), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

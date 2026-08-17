@@ -188,7 +188,14 @@ def test_履约跨机构越权(client, director, township_op, orgs, catalog):
 
 
 def test_配送全程与追溯码(client, county_op, township_op, orgs):
-    """县医院 → 东镇卫生院：created→picked→shipped→received，签收自动落追溯码。"""
+    """县医院 → 东镇卫生院：created→picked→shipped→received，签收自动落追溯码。
+
+    S2：发货扣发货方库存、签收增收货方库存。发货前先给县医院备货。"""
+    from app.database import SessionLocal
+    from app.models import DrugStock
+    with SessionLocal() as db:
+        db.add(DrugStock(org_id=orgs[0]["id"], drug_code="VP100", drug_name="带量药", quantity=100, threshold=0))
+        db.commit()
     create = client.post(
         "/api/distribution-orders",
         json={"from_org_id": orgs[0]["id"], "to_org_id": orgs[1]["id"],
@@ -218,6 +225,15 @@ def test_配送全程与追溯码(client, county_op, township_op, orgs):
     t = traces[0]
     assert t["direction"] == "in" and t["ref_type"] == "distribution"
     assert t["ref_id"] == oid and t["org_id"] == orgs[1]["id"]
+
+    # S2 勾稽：发货方 100−50=50，收货方 0+50=50
+    from app.database import SessionLocal
+    from app.models import DrugStock
+    with SessionLocal() as db:
+        frm = db.query(DrugStock).filter(DrugStock.org_id == orgs[0]["id"], DrugStock.drug_code == "VP100").first()
+        to = db.query(DrugStock).filter(DrugStock.org_id == orgs[1]["id"], DrugStock.drug_code == "VP100").first()
+        assert frm.quantity == 50
+        assert to is not None and to.quantity == 50
 
 
 def test_配送非法状态流转(client, county_op, orgs):

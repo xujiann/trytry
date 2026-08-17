@@ -75,6 +75,9 @@ UNGUARDED_WHITELIST = {
     # E7 CDSS 相互作用核查：只读性质的咨询接口（POST 仅因带请求体），
     # 无角色写权限、不落业务数据，按 assert_patient_visible 校验对该患者的可见性。
     ("POST", "/api/cdss/interaction-check"),
+    # S15 电子健康卡展码：任一可见该患者的工作人员均可展码核身（POST 仅因动作语义），
+    # 不落业务数据，按 assert_patient_visible 校验可见性；不绑角色。
+    ("POST", "/api/ehealth-cards/{patient_id}/show-qr"),
     # 任意登录用户的自助操作
     ("POST", "/api/notifications/{notification_id}/read"),
     ("POST", "/api/notifications/read-all"),

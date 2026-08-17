@@ -51,6 +51,9 @@ class RefillRequest(Base):
         ForeignKey("prescriptions.id"), nullable=True
     )
     drug_summary: Mapped[str] = mapped_column(String(256), default="")
+    # S2：结构化药品与数量（可选），配送/发药时据此扣减机构库存
+    drug_code: Mapped[str] = mapped_column(String(64), default="")
+    qty: Mapped[int] = mapped_column(Integer, default=0)
     # pending=待审, approved=已通过, rejected=已驳回, dispensed=已配送
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     reviewed_by: Mapped[str] = mapped_column(String(64), default="")

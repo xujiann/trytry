@@ -55,6 +55,8 @@ class RefillIn(BaseModel):
     org_id: int
     prescription_id: int | None = None
     drug_summary: str = Field(min_length=1, max_length=256)
+    drug_code: str = Field(default="", max_length=64)
+    qty: int = Field(default=0, ge=0)
     note: str = ""
 
 
@@ -195,7 +197,7 @@ def request_refill(body: RefillIn, db: Session = Depends(get_db),
             raise HTTPException(status_code=422, detail="原处方不存在或不属于本人")
     row = RefillRequest(patient_id=patient.id, org_id=body.org_id,
                         prescription_id=body.prescription_id, drug_summary=body.drug_summary,
-                        note=body.note, status="pending")
+                        drug_code=body.drug_code, qty=body.qty, note=body.note, status="pending")
     db.add(row)
     db.commit()
     db.refresh(row)

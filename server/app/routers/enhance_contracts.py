@@ -243,6 +243,11 @@ def _group_org_ids(db: Session, group_id: int | None) -> list[int] | None:
 
 @router.post("/sign-fee/pools", status_code=201, dependencies=[Depends(require_roles("director"))])
 def create_pool(body: PoolIn, db: Session = Depends(get_db)):
+    # 全域池（org_group_id 为空）：DB 唯一约束把 NULL 视作互异不去重，补代码级预检拦重复
+    if body.org_group_id is None and db.query(SignFeePool.id).filter(
+        SignFeePool.year == body.year, SignFeePool.org_group_id.is_(None)
+    ).first():
+        raise HTTPException(status_code=409, detail="该年度的全域签约费池已存在")
     total = body.total_amount
     if total <= 0:
         # 按 per_capita × 范围内有效签约人头自动计提

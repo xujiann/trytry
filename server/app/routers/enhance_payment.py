@@ -24,12 +24,16 @@ from ..models import (
     DipCatalog,
     DipRate,
     DrgRate,
+    FundBudgetPlan,
+    FundPool,
     InsuranceAuditFlag,
     InsuranceAuditRule,
     InsuranceSettlement,
     Organization,
-    Patient,
+    OrgGroup,
+    OrgGroupMember,
     PaymentCase,
+    Patient,
     Settlement,
     User,
 )
@@ -174,6 +178,23 @@ def _admission_actual_cost(db: Session, admission_id: int) -> float:
     return 0.0
 
 
+def _admission_insurance_settlement_id(db: Session, admission_id: int) -> int | None:
+    """经账单结算单串到该住院的医保结算记录 id（Settlement.admission_id → insurance_settlement_id）。
+
+    S1 结算回写：把病组应支付额挂到这条医保结算上，使"应支付 vs 实际赔付"可对账。
+    """
+    row = (
+        db.query(Settlement.insurance_settlement_id)
+        .filter(
+            Settlement.admission_id == admission_id,
+            Settlement.insurance_settlement_id.isnot(None),
+        )
+        .order_by(Settlement.id.desc())
+        .first()
+    )
+    return row[0] if row else None
+
+
 class SettleCaseIn(BaseModel):
     admission_id: int
     pay_mode: str = Field(pattern="^(drg|dip)$")
@@ -262,6 +283,7 @@ def settle_case(
 
     actual_cost = _admission_actual_cost(db, body.admission_id)
     profit = round(standard_payment - actual_cost, 2)
+    isid = _admission_insurance_settlement_id(db, body.admission_id)
 
     case, _replaced = upsert_unique(
         db,
@@ -274,6 +296,7 @@ def settle_case(
             "standard_payment": standard_payment,
             "actual_cost": actual_cost,
             "profit": profit,
+            "insurance_settlement_id": isid,
             "year": body.year,
         },
     )
@@ -405,8 +428,31 @@ def _patient_age(patient: Patient | None) -> int | None:
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
 
-def _apply_rule(rule: InsuranceAuditRule, settlement: InsuranceSettlement, patient: Patient | None):
-    """对单条结算应用单条规则，命中返回疑点描述文本，否则 None。异常一律不命中（安全）。"""
+def _count_recent_settlements(db: Session, settlement: InsuranceSettlement, days: int) -> int:
+    """同患者同机构、在 [created_at−days, created_at] 窗口内的医保结算笔数（含本条）。"""
+    from datetime import timedelta
+
+    since = settlement.created_at - timedelta(days=days)
+    return (
+        db.query(func.count(InsuranceSettlement.id))
+        .filter(
+            InsuranceSettlement.patient_id == settlement.patient_id,
+            InsuranceSettlement.org_id == settlement.org_id,
+            InsuranceSettlement.created_at >= since,
+            InsuranceSettlement.created_at <= settlement.created_at,
+        )
+        .scalar()
+    ) or 0
+
+
+def _apply_rule(db: Session, rule: InsuranceAuditRule, settlement: InsuranceSettlement,
+                patient: Patient | None):
+    """对单条结算应用单条规则，命中返回疑点描述文本，否则 None。异常一律不命中（安全）。
+
+    S5：over_frequency（超频次）与 decompose_admission（分解住院）需跨结算聚合，
+    以"同患者同机构短窗口内结算笔数"为代理指标（InsuranceSettlement 无明细/住院外键，
+    此为数据模型下可得的最强近似，留痕说明）。
+    """
     params = rule.params or {}
     try:
         if rule.rule_type == "over_amount":
@@ -430,7 +476,22 @@ def _apply_rule(rule: InsuranceAuditRule, settlement: InsuranceSettlement, patie
             if hi is not None and age > int(hi):
                 return f"患者年龄 {age} 大于上限 {hi}"
             return None
-        # over_frequency / decompose_admission：需跨结算聚合，本期留作安全空操作
+        if rule.rule_type == "over_frequency":
+            # 超频次：同患者同机构近 days 天结算笔数 > max_count
+            days = int(params.get("days", 30))
+            maxc = int(params.get("max_count", 3))
+            cnt = _count_recent_settlements(db, settlement, days)
+            if cnt > maxc:
+                return f"患者近{days}天在本机构医保结算{cnt}次，超过{maxc}次（疑超频次就医）"
+            return None
+        if rule.rule_type == "decompose_admission":
+            # 分解住院：同患者同机构短窗口内多次结算（默认 15 天内 >1 次）
+            days = int(params.get("days", 15))
+            maxc = int(params.get("max_count", 1))
+            cnt = _count_recent_settlements(db, settlement, days)
+            if cnt > maxc:
+                return f"患者近{days}天在本机构{cnt}次医保结算，疑分解住院"
+            return None
         return None
     except Exception:  # pragma: no cover - 规则参数异常不得中断审核批次
         return None
@@ -475,7 +536,7 @@ def run_audit(
     rules = db.query(InsuranceAuditRule).filter(InsuranceAuditRule.active.is_(True)).all()
     created = []
     for rule in rules:
-        detail = _apply_rule(rule, settlement, patient)
+        detail = _apply_rule(db, rule, settlement, patient)
         if detail is None:
             continue
         flag = InsuranceAuditFlag(
@@ -527,3 +588,103 @@ def update_audit_flag(
     flag.status = body.status
     db.commit()
     return _flag_out(flag)
+
+
+# =========================================================================
+# S1 结算回写对账：病组应支付 vs 医保实际赔付
+# =========================================================================
+@router.get("/payment/settlement-comparison", dependencies=[Depends(require_roles("director"))])
+def settlement_comparison(year: str | None = None, db: Session = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """把病组/病种应支付额（PaymentCase）与医保实际赔付额（InsuranceSettlement.insurance_pay）
+    在同一条链上对账，输出总额级差异——驱动"总额包干、结余留用、超支分担"的看账入口。"""
+    q = db.query(PaymentCase).filter(PaymentCase.insurance_settlement_id.isnot(None))
+    if year:
+        q = q.filter(PaymentCase.year == year)
+    orgs = stats_org_ids(db, user)
+    if orgs is not None:
+        q = q.filter(PaymentCase.org_id.in_(orgs or [-1]))
+    cases = q.all()
+    std_total = round(sum(c.standard_payment for c in cases), 2)
+    actual_total = round(sum(c.actual_cost for c in cases), 2)
+    isids = [c.insurance_settlement_id for c in cases]
+    insurance_total = 0.0
+    if isids:
+        insurance_total = round(
+            db.query(func.coalesce(func.sum(InsuranceSettlement.insurance_pay), 0.0))
+            .filter(InsuranceSettlement.id.in_(isids)).scalar() or 0.0, 2)
+    return {
+        "cases": len(cases),
+        "standard_payment_total": std_total,      # 病组应支付合计
+        "insurance_pay_total": insurance_total,   # 医保实际赔付合计
+        "actual_cost_total": actual_total,        # 实际发生成本合计
+        "surplus_vs_insurance": round(std_total - insurance_total, 2),  # 应支付-实赔（正=结余空间）
+        "profit_vs_cost": round(std_total - actual_total, 2),          # 应支付-成本（病组盈亏）
+    }
+
+
+# =========================================================================
+# S1 医保基金总额预算编制（打通 fund.py：可下发到 FundPool）
+# =========================================================================
+class BudgetPlanIn(BaseModel):
+    year: str = Field(pattern=r"^\d{4}$")
+    org_group_id: int | None = None
+    insurance_type: str = Field(default="resident", pattern="^(resident|employee)$")
+    base_amount: float = Field(default=0, ge=0)      # 上年基数
+    growth_pct: float = Field(default=0)             # 增长系数（%）
+    per_capita: float = Field(default=0, ge=0)       # 人均新增
+    headcount: int = Field(default=0, ge=0)          # 参保人头
+
+
+class ApplyPoolIn(BaseModel):
+    pool_id: int
+
+
+def _budget_total(b: BudgetPlanIn) -> float:
+    return round(b.base_amount * (1 + b.growth_pct / 100.0) + b.per_capita * b.headcount, 2)
+
+
+@router.post("/payment/budget-plans", status_code=201,
+             dependencies=[Depends(require_roles("director"))])
+def create_budget_plan(body: BudgetPlanIn, db: Session = Depends(get_db)):
+    if body.org_group_id is not None and db.get(OrgGroup, body.org_group_id) is None:
+        raise HTTPException(status_code=404, detail="机构分组不存在")
+    plan = FundBudgetPlan(
+        year=body.year, org_group_id=body.org_group_id, insurance_type=body.insurance_type,
+        base_amount=body.base_amount, growth_pct=body.growth_pct, per_capita=body.per_capita,
+        headcount=body.headcount, computed_total=_budget_total(body))
+    saved = insert_or_conflict(db, plan, "该年度/分组/险种的预算已编制")
+    return _budget_out(saved)
+
+
+@router.get("/payment/budget-plans", dependencies=[Depends(require_roles("director"))])
+def list_budget_plans(year: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(FundBudgetPlan)
+    if year:
+        q = q.filter(FundBudgetPlan.year == year)
+    return [_budget_out(p) for p in q.order_by(FundBudgetPlan.id.desc()).all()]
+
+
+@router.post("/payment/budget-plans/{plan_id}/apply-to-pool",
+             dependencies=[Depends(require_roles("director"))])
+def apply_budget_to_pool(plan_id: int, body: ApplyPoolIn, db: Session = Depends(get_db)):
+    """把编制的年度总额下发到某基金池（fund.py 的 FundPool.total_amount），完成预算→包干闭环。"""
+    plan = db.get(FundBudgetPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="预算编制不存在")
+    pool = db.get(FundPool, body.pool_id)
+    if pool is None:
+        raise HTTPException(status_code=404, detail="基金池不存在")
+    pool.total_amount = plan.computed_total
+    plan.status = "applied"
+    plan.applied_pool_id = pool.id
+    db.commit()
+    return {"plan_id": plan.id, "pool_id": pool.id, "applied_total": pool.total_amount}
+
+
+def _budget_out(p: FundBudgetPlan) -> dict:
+    return {"id": p.id, "year": p.year, "org_group_id": p.org_group_id,
+            "insurance_type": p.insurance_type, "base_amount": p.base_amount,
+            "growth_pct": p.growth_pct, "per_capita": p.per_capita, "headcount": p.headcount,
+            "computed_total": p.computed_total, "status": p.status,
+            "applied_pool_id": p.applied_pool_id}

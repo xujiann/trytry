@@ -193,6 +193,12 @@ def test_spa_covers_every_backend_module(client):
         "intel",                                  # E6 数据智能层（供业务页内联调用）
         "cdss",                                   # E7 临床决策支持（诊间内联调用）
         "refill-requests",                        # E8 续方审核（医方侧）
+        # 第十五轮 S 系列：后端能力已交付并测通，管理端页面为前端跟进项
+        "perf-distribution",                      # S3 绩效工资二次分配
+        "online-consults",                        # S7 互联网复诊-医方应答
+        "empi",                                   # S14 EMPI 主索引合并
+        "ehealth-cards",                          # S15 电子健康卡
+        "governance",                             # S16 医共体治理架构
     }
     missing = sorted(served - called - no_admin_page)
     assert not missing, f"以下后端模块没有管理端页面：{missing}"

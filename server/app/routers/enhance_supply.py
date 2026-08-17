@@ -19,11 +19,13 @@ from ..models import (
     User,
     Organization,
     ConsortiumDrugCatalog,
+    DrugStock,
     VolumePurchase,
     VolumePurchaseAllocation,
     DistributionOrder,
     DrugTraceCode,
 )
+from ..concurrency import add_amount, insert_if_absent
 from ..visibility import (assert_org_writable, assert_org_visible, scope_org_list,
                           assert_obj_org_writable, assert_obj_org_visible, visible_org_ids)
 
@@ -369,8 +371,18 @@ def advance_distribution(
         assert_obj_org_writable(db, user, order, org_attr="to_org_id")
     else:
         assert_obj_org_writable(db, user, order, org_attr="from_org_id")
+    # S2：ship 前先原子扣减发货方库存（不足即 409，不推进状态、不发货）。
+    if body.action == "ship":
+        dec = db.query(DrugStock).filter(
+            DrugStock.org_id == order.from_org_id,
+            DrugStock.drug_code == order.drug_code,
+            DrugStock.quantity >= order.qty,
+        ).update({DrugStock.quantity: DrugStock.quantity - order.qty}, synchronize_session=False)
+        if dec == 0:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="发货方该药品库存不足，无法发货")
     # 条件 UPDATE 原子推进：只有把 status 从 expected 翻成 nxt 的那一个请求算赢，
-    # 并发下的第二个 receive 命中 0 行 → 409，不会重复落入库追溯码。
+    # 并发下的第二个 receive 命中 0 行 → 409，不会重复落入库追溯码/重复入库。
     changed = db.query(DistributionOrder).filter(
         DistributionOrder.id == order_id, DistributionOrder.status == expected
     ).update({DistributionOrder.status: nxt}, synchronize_session=False)
@@ -378,6 +390,8 @@ def advance_distribution(
         db.rollback()
         raise HTTPException(status_code=409, detail="配送单状态已变更，请刷新后重试")
     if body.action == "receive":
+        # S2：签收即入库到收货方（库存↔配送勾稽），并落一条入库追溯码。
+        _receive_into_stock(db, order)
         db.add(
             DrugTraceCode(
                 trace_code=f"DIST-{order.id}",
@@ -391,6 +405,23 @@ def advance_distribution(
     db.commit()
     db.refresh(order)
     return order
+
+
+def _receive_into_stock(db: Session, order: DistributionOrder) -> None:
+    """把配送数量入到收货方库存：无库存行先建零行（并发安全），再原子累加。"""
+    stock = db.query(DrugStock).filter(
+        DrugStock.org_id == order.to_org_id, DrugStock.drug_code == order.drug_code).first()
+    if stock is None:
+        name = order.drug_code
+        cat = db.query(ConsortiumDrugCatalog).filter(
+            ConsortiumDrugCatalog.drug_code == order.drug_code).first()
+        if cat is not None:
+            name = cat.drug_name
+        insert_if_absent(db, DrugStock(org_id=order.to_org_id, drug_code=order.drug_code,
+                                       drug_name=name, quantity=0, threshold=0))
+        stock = db.query(DrugStock).filter(
+            DrugStock.org_id == order.to_org_id, DrugStock.drug_code == order.drug_code).first()
+    add_amount(db, DrugStock, stock.id, "quantity", order.qty)
 
 
 # ============================================================================
