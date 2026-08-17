@@ -58,3 +58,19 @@ def test_run_checks_scoped_by_visible_org(client, admin):
     # summary 同样按机构收口：乙院经办的 encounters 违规计数为 0
     b_summary = client.get("/api/dataquality/summary", headers=op_b).json()
     assert b_summary["by_table"].get("encounters", 0) == 0
+
+    # 慢病随访(followups)经 ChronicPatient.managed_by_org_id 收口：
+    # 甲院一个高血压档案 + 一条缺 sbp/dbp 的随访 → QC013 违规，乙院看不到。
+    from app.models import ChronicPatient, FollowUp
+    with SessionLocal() as db:
+        cp = ChronicPatient(patient_id=pat["id"], disease="hypertension", level=1, managed_by_org_id=a["id"])
+        db.add(cp); db.flush()
+        db.add(FollowUp(chronic_id=cp.id))  # 无 sbp/dbp → 高血压随访缺指标
+        db.commit()
+
+    def qc013(headers):
+        return client.get("/api/dataquality/run?rule_code=QC013", headers=headers).json()["items"]
+
+    assert any(v["table"] == "followups" for v in qc013(admin))   # 全域看得到
+    assert len(qc013(op_a)) >= 1                                    # 甲院看得到本院
+    assert qc013(op_b) == []                                       # 乙院看不到甲院随访违规

@@ -172,11 +172,20 @@ def _check_date_not_future(db: Session, rule: QcRule, model, org_ids: list[int] 
 
 
 def _check_chronic_followup_indicator(db: Session, rule: QcRule, model, org_ids: list[int] | None = None) -> list[tuple[int, str]]:
-    """慢病随访须记录对应病种指标（按病种要求的指标字段判定）。"""
+    """慢病随访须记录对应病种指标（按病种要求的指标字段判定）。
+
+    FollowUp 无机构列，但其所属慢病档案 ChronicPatient 有 managed_by_org_id——
+    按管理机构收口：非全域账号只查本机构范围内档案下的随访。
+    """
     mapping: dict[str, list[str]] = rule.config.get("disease_indicators", {})
     diseases = dict(db.query(ChronicPatient.id, ChronicPatient.disease).all())
+    fq = db.query(FollowUp)
+    if org_ids is not None:
+        fq = fq.join(ChronicPatient, ChronicPatient.id == FollowUp.chronic_id).filter(
+            ChronicPatient.managed_by_org_id.in_(org_ids or [-1])
+        )
     hits = []
-    for row in db.query(FollowUp).limit(SCAN_LIMIT).all():
+    for row in fq.limit(SCAN_LIMIT).all():
         disease = diseases.get(row.chronic_id, "")
         required = mapping.get(disease)
         if required:
@@ -205,8 +214,16 @@ _LOGIC_CHECKS = {
 
 
 def _org_column(model):
-    """被检表的机构列（org_id 优先，其次 from_org_id）；无则 None（全域/患者主数据）。"""
-    return getattr(model, "org_id", None) or getattr(model, "from_org_id", None)
+    """被检表的机构列：org_id → from_org_id → managed_by_org_id 依次取；无则 None。
+
+    managed_by_org_id 是慢病档案（ChronicPatient）的机构归属列——把它纳入后，
+    chronic_patients 的质控扫描也随可见范围收口，不必给它再造一个 org_id。
+    """
+    return (
+        getattr(model, "org_id", None)
+        or getattr(model, "from_org_id", None)
+        or getattr(model, "managed_by_org_id", None)
+    )
 
 
 def _scope_model(query, model, org_ids: list[int] | None):
