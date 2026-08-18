@@ -19,8 +19,11 @@
 
 ### 一行/小修（童子军级，碰到即修）
 - ✅ `routers/monitor.py:79` `"success"` → `"succeeded"`（带回归测试 `test_monitor_overview.py`）。
-- ☐ `spd/reporting.py:147` `_score` 忽略 `org_id`（各机构收到相同全域数据）。
-- ☐ `scheduler.py:94` `_release_lock` 校验持有者，防误删他实例锁。
+- ⚠️ `spd/reporting.py:147` `_score` 忽略 `org_id`：**需先定口径**——`spd_scores` 无 org_id 列，考核对象按 object_type/object_id 归属机构的语义要读 assess.py 定，属"需业务决策"，不是一行小修。
+- ✅ `scheduler.py` `_release_lock` 校验持有者，防误删他实例锁（token 所有权 + Lua 比对删，回归测试 `test_scheduler_lock.py`）。
+- ☐ 调度锁更深一层：任务跑过 TTL(300s) 仍会双跑（token 修的是"误删"，不是"双跑"）——需锁续期/心跳或任务时限。/review 提出。
+- ☐ 给 CI 加 Redis service，真跑 `_release_lock` 的 Lua 路径（现仅假 redis 验逻辑）。
+- ☐ 加固 `test_monitor_overview.py`：recent_failures 取 limit-5，理论上可能被其它失败记录挤掉 seeded 行（当前因间隔≥300s 安全）。/review 提出。
 
 ### 工具链
 - ☐ `make verify` 的 lint 步会因 8 处**存量** lint 欠账（`tests/test_spd_integration.py` 等未改文件）中止，挡住无关改动的自检。方案二选一：lint 只查改动文件，或先一次性清掉这 8 处存量（不夹带进功能提交）。

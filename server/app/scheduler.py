@@ -20,6 +20,7 @@
 """
 import asyncio
 import logging
+import secrets
 import time
 from datetime import timedelta
 from typing import Callable
@@ -37,6 +38,13 @@ logger = logging.getLogger("medplat.scheduler")
 TICK_SECONDS = 30
 # 执行锁的持有时长：单个任务跑不过这么久，否则锁会被别的实例抢走
 LOCK_TTL_SECONDS = 300
+
+# 释放锁的 Lua：仅当锁的值仍等于本实例的 token 才删，比对与删除在一条命令里原子完成。
+# 防的是：任务跑过了 TTL → 锁过期 → 别的实例抢到并重设 → 本实例收尾时把别人的锁删掉。
+_RELEASE_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) else return 0 end"
+)
 
 JobFunc = Callable[[Session], tuple[int, str]]
 
@@ -83,18 +91,26 @@ def sync_registry(db: Session) -> None:
     db.commit()
 
 
-def _acquire_lock(name: str) -> bool:
-    """多实例互斥：拿到锁的实例才执行。无 Redis 时恒为 True（单实例语义）。"""
+def _acquire_lock(name: str) -> str | None:
+    """多实例互斥：拿到锁返回本次持有的唯一 token，未拿到返回 None。
+
+    无 Redis 时恒返回 token（单实例语义）。token 供释放时校验持有者，避免锁 TTL
+    过期被别的实例抢走后，本实例的释放误删他人的锁。
+    """
+    token = secrets.token_hex(16)
     redis = _redis_client()
     if redis is None:
-        return True
-    return bool(redis.set(f"medplat:joblock:{name}", "1", nx=True, ex=LOCK_TTL_SECONDS))  # pragma: no cover
+        return token
+    ok = redis.set(f"medplat:joblock:{name}", token, nx=True, ex=LOCK_TTL_SECONDS)
+    return token if ok else None
 
 
-def _release_lock(name: str) -> None:
+def _release_lock(name: str, token: str) -> None:
+    """仅当锁仍由本实例持有（值等于 token）时才释放，用 Lua 保证比对与删除原子。"""
     redis = _redis_client()
-    if redis is not None:  # pragma: no cover - 需真实 Redis
-        redis.delete(f"medplat:joblock:{name}")
+    if redis is None:
+        return
+    redis.eval(_RELEASE_LUA, 1, f"medplat:joblock:{name}", token)
 
 
 def run_job(db: Session, name: str, trigger: str = "scheduled") -> JobRun:
@@ -148,14 +164,15 @@ def tick() -> int:
     with SessionLocal() as db:
         names = due_jobs(db)
     for name in names:
-        if not _acquire_lock(name):
-            continue  # pragma: no cover - 需多实例
+        token = _acquire_lock(name)
+        if token is None:
+            continue  # pragma: no cover - 需多实例：别的实例正持有该任务的锁
         try:
             with SessionLocal() as db:
                 run_job(db, name)
             executed += 1
         finally:
-            _release_lock(name)
+            _release_lock(name, token)
     return executed
 
 
