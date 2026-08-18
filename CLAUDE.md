@@ -174,6 +174,7 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 - 核心数据不可变定义（一个概念一个权威表，不得另造）→ `docs/核心数据不可变定义.md`
 - 架构决策记录（ADR，七段式：problem/options/…/recommendation）→ `docs/adr/`（索引见 `docs/adr/README.md`）
 - 特征化测试指引（重构前的安全网）→ `docs/特征化测试指引.md`
+- 日常开发工作流（每日循环：晨间→定向阅读→PLAN→审批→实现→测试→/review→PR→merge）→ `docs/日常开发工作流.md`；今日待办 → `ROADMAP.md`
 
 ---
 
