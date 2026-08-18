@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from loadtest import format_results, run_benchmark  # noqa: E402
 
+pytestmark = pytest.mark.smoke
+
 
 @pytest.fixture(scope="module")
 def client():

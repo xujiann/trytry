@@ -23,9 +23,12 @@ import pytest
 
 PG_URL = os.environ.get("MEDPLAT_PG_TEST_URL", "")
 
-pytestmark = pytest.mark.skipif(
-    not PG_URL, reason="需要 MEDPLAT_PG_TEST_URL 指向可用的 PostgreSQL"
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not PG_URL, reason="需要 MEDPLAT_PG_TEST_URL 指向可用的 PostgreSQL"
+    ),
+]
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
 

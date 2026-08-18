@@ -20,6 +20,19 @@ uvicorn app.main:app --reload      # http://127.0.0.1:8000/  接口文档 /docs
 python -m pytest tests/ -q         # 全量测试（e2e 默认跳过）
 ```
 
+统一命令入口（仓库根 `Makefile`，`make help` 列全部）：
+
+```bash
+make install           # 装依赖（含开发工具 ruff/mypy/playwright）
+make build             # 字节编译 + 校验 alembic 迁移图（双 head）
+make lint              # ruff
+make typecheck         # mypy（渐进式，仅查已注解代码）
+make test-unit         # 进程内 SQLite 快速套件（无外部依赖）
+make test-integration  # 真 PostgreSQL（需 MEDPLAT_PG_TEST_URL）
+make test-smoke        # 应用可启动 + 核心接口有响应
+make verify            # build + lint + typecheck + test-unit（提交前自检）
+```
+
 ---
 
 ## 1. 通用原则（硬性规则）
@@ -115,14 +128,15 @@ server/app/
 声明"完成"前，至少跑：
 
 ```bash
-cd server
-python -m pytest tests/ -q                      # 必跑
-# 若引入了 lint/类型工具，一并跑并接入 CI（当前仓库尚无，别只在本地验证）
+make verify        # = build + lint + typecheck + test-unit（对应第14条）
+make test-smoke    # 若动了启动/核心链路
+make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_URL）
 ```
 
-- 若改了迁移：本地 `alembic upgrade heads` 能从空库跑通。
+- 若改了迁移：`make build` 校验迁移图，且本地 `alembic upgrade heads` 能从空库跑通。
 - 若改了 spd：`pytest tests/test_spd_boundary.py -q` 必须绿（边界未被破坏）。
-- CI 现状：只跑 pytest，覆盖率门禁是 warning 模式（`|| true`），**不要依赖 CI 拦回归**——自己先验证。
+- **lint 与 typecheck 现为渐进式基线**（`ruff` 起步规则集、`mypy` 只查已注解代码）：不要引入**新增**的 lint/type 报错；存量报错单独任务清理，别混进无关改动。
+- CI 现状：`test` job 跑 unit+smoke（阻断）+ integration（真 PG，warning）；`quality` job 跑 build/lint/typecheck（warning）。覆盖率与三项新门均为 warning 模式，**不要依赖 CI 拦回归**——自己先 `make verify`。
 
 ---
 
