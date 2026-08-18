@@ -3,6 +3,7 @@
 给 AI 编码代理（及新加入的人）的项目约定。**先读本文件，再动代码。**
 本文件与 `docs/CURRENT_ARCHITECTURE.md`、`docs/MODULE_MAP.md`、`docs/DATA_MODEL.md`、
 `docs/API_MAP.md`、`docs/DEPENDENCY_MAP.md`、`docs/TECH_DEBT.md` 六张架构地图配套使用。
+体系总纲见 `docs/工程治理体系.md`（规则/地图/分级/棘轮/ADR/工作流一处入口）。
 
 ---
 
