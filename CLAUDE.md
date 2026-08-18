@@ -166,3 +166,14 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 - 依赖与循环 → `docs/DEPENDENCY_MAP.md`
 - 分级技术债 + 不可丢的优点 → `docs/TECH_DEBT.md`
 - 完整 AS-IS 审计 → `docs/架构审计报告_AS-IS.md`
+- 模块分级（KEEP/IMPROVE/REFACTOR/REPLACE）→ `docs/模块分级_KEEP_IMPROVE_REFACTOR_REPLACE.md`
+- 接口标准与治理（混乱代码→标准接口，棘轮只进不退）→ `docs/接口标准与治理.md`
+- 特征化测试指引（重构前的安全网）→ `docs/特征化测试指引.md`
+
+---
+
+## 11. 接口标准（新增/改动端点必读）
+
+- **每个端点声明 `response_model`**；列表走 `deps.paginate`；错误用 `HTTPException(detail=...)`。
+- **治理不得改响应字节**（第7条向后兼容）：`response_model` 字段须与当前输出一一对应，用特征化测试守住。
+- 棘轮 `tests/test_api_contract_governance.py` 会拦住"新端点漏契约"——欠账只许变小。逐块配方见 `docs/接口标准与治理.md`。
