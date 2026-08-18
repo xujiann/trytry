@@ -2915,6 +2915,7 @@ class VoucherEntry(Base):
     # 按命名批量处理必须回头核对剩下的清单，不能只看匹配到的那一批。
     debit: Mapped[float] = mapped_column(Money, default=0)
     credit: Mapped[float] = mapped_column(Money, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     voucher: Mapped[Voucher] = relationship(back_populates="entries")
 

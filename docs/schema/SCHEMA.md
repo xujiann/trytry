@@ -3700,6 +3700,8 @@
 - `summary` · VARCHAR(256) · NOT NULL
 - `debit` · NUMERIC(14, 2) · NOT NULL
 - `credit` · NUMERIC(14, 2) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_voucher_entries_created_at(created_at)
 - _index_ ix_voucher_entries_subject_code(subject_code)
 - _index_ ix_voucher_entries_voucher_id(voucher_id)
 
