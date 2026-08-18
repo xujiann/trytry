@@ -18,9 +18,12 @@
 - ☐ `static/pages-mgmt.js:248` 会计科目 `<option>` XSS 转义。
 
 ### 一行/小修（童子军级，碰到即修）
-- ☐ `routers/monitor.py:79` `"success"` → `"succeeded"`（带回归测试）。
+- ✅ `routers/monitor.py:79` `"success"` → `"succeeded"`（带回归测试 `test_monitor_overview.py`）。
 - ☐ `spd/reporting.py:147` `_score` 忽略 `org_id`（各机构收到相同全域数据）。
 - ☐ `scheduler.py:94` `_release_lock` 校验持有者，防误删他实例锁。
+
+### 工具链
+- ☐ `make verify` 的 lint 步会因 8 处**存量** lint 欠账（`tests/test_spd_integration.py` 等未改文件）中止，挡住无关改动的自检。方案二选一：lint 只查改动文件，或先一次性清掉这 8 处存量（不夹带进功能提交）。
 
 ### 让 CI 变真（关联 ADR-0002）
 - ☐ 覆盖率门禁去 `|| true`，转阻断；集成/迁移门在真 PG 上转阻断。
