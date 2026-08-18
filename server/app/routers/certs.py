@@ -30,9 +30,32 @@ class CertCreate(BaseModel):
     child_id: int | None = None
 
 
+class CertIssueOut(BaseModel):
+    """签发结果的响应契约。字段与原手拼 dict 一一对应，保持响应向后兼容。"""
+    id: int
+    cert_type: str
+    cert_type_name: str
+    cert_no: str
+    name: str
+    event_date: str
+
+
+class CertOut(BaseModel):
+    """证明列表行的响应契约。"""
+    id: int
+    cert_type: str
+    cert_no: str
+    name: str
+    gender: str
+    event_date: str
+    detail: str
+    org_id: int
+
+
 @router.post(
     "",
     status_code=201,
+    response_model=CertIssueOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 证明签发/缺陷登记
 )
 def issue_cert(
@@ -76,7 +99,7 @@ def issue_cert(
     }
 
 
-@router.get("")
+@router.get("", response_model=list[CertOut])
 def list_certs(
     cert_type: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
@@ -99,7 +122,7 @@ def list_certs(
     ]
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=dict[str, int])
 def cert_stats(db: Session = Depends(get_db)):
     """签发统计：按证明类型计数（上报省平台为对接项）。"""
     rows = db.query(MedicalCert.cert_type, func.count(MedicalCert.id)).group_by(MedicalCert.cert_type).all()
