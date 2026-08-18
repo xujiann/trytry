@@ -158,7 +158,7 @@ def test_出院事件按关键词自动生成随访计划(client, h, base):
 def test_出院事件是幂等的(client, h, base):
     """同一患者同一方案只派生一次——重复投递不该变成两份随访计划。"""
     rules = client.get("/api/spd/followup-rules?scene=inpatient", headers=h).json()
-    rule = next(r for r in rules if r["code"] == "fr_discharge")
+    assert any(r["code"] == "fr_discharge" for r in rules)  # 出院随访规则须存在
     before = len(client.get(
         f"/api/spd/followup-records?patient_id={base['patient']['id']}", headers=h
     ).json())
@@ -209,7 +209,7 @@ def test_开启后就诊事件识别疑似人群(client, h, base, monkeypatch):
     assert hit[0]["source"] == "event"
 
     enrollments = client.get(
-        f"/api/spd/enrollments?program_code=hypertension", headers=h
+        "/api/spd/enrollments?program_code=hypertension", headers=h
     ).json()
     assert not [e for e in enrollments if e["patient_id"] == patient["id"]]
 

@@ -7,7 +7,7 @@
 不挂在 `SpdEnrollment` 上——一个刚做完阑尾切除的患者不该为了被随访而先被
 "纳管"成慢病患者。它们只认患者与场景。
 """
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field

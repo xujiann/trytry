@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 from ...clock import now_naive
 from ...concurrency import add_amount
 from ...database import get_db
-from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..platform import Patient, User, evidence_urls, notify_user, valid_task_evidence
 from ..models import (

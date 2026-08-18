@@ -1,0 +1,13 @@
+# 开发/CI 工具依赖——不进生产镜像（生产只装 requirements.txt）。
+# 安装：pip install -r requirements.txt -r requirements-dev.txt
+
+-r requirements.txt
+
+# lint —— 满足 CLAUDE.md 第14条「完成前跑 lint」。ruff 单二进制、零额外依赖、快。
+ruff>=0.6
+
+# typecheck —— 满足 CLAUDE.md 第14条「完成前跑类型检查」。渐进式（见 pyproject.toml）。
+mypy>=1.11
+
+# smoke/e2e —— e2e 用例（tests/e2e）本就 import playwright，此前缺在依赖清单里，补齐。
+playwright>=1.44

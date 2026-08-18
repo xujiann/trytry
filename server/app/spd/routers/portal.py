@@ -46,7 +46,6 @@ from fastapi import File, Form, UploadFile
 from ..platform import (
     accessible_patient,
     current_resident,
-    evidence_urls,
     store_attachment,
     valid_task_evidence,
 )

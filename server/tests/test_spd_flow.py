@@ -214,7 +214,7 @@ def test_auto_screen_matches_by_diagnosis(client, h, base):
     assert body["scanned"] >= 1
     assert body["suspect"] >= 1
     candidates = client.get(
-        f"/api/spd/candidates?program_code=hypertension", headers=h
+        "/api/spd/candidates?program_code=hypertension", headers=h
     ).json()
     assert any(c["patient_id"] == patient["id"] for c in candidates)
 

@@ -28,6 +28,14 @@ class CheckupOut(CheckupCreate):
     model_config = {"from_attributes": True}
 
 
+class AbnormalCheckupOut(BaseModel):
+    """异常清单行的响应契约。字段与原手拼 dict 一一对应，保持响应向后兼容。"""
+    id: int
+    patient_id: int
+    exam_date: str
+    abnormal_items: str
+
+
 @router.post(
     "",
     response_model=CheckupOut,
@@ -58,7 +66,7 @@ def list_checkups(
     return query.order_by(PhysicalExam.id.desc()).limit(200).all()
 
 
-@router.get("/abnormal")
+@router.get("/abnormal", response_model=list[AbnormalCheckupOut])
 def abnormal_checkups(db: Session = Depends(get_db)):
     """异常项清单：供慢病筛查建档与随访干预衔接（医防协同）。"""
     return [
