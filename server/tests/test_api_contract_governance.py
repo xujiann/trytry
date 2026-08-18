@@ -28,8 +28,8 @@ import app.spd.routers as spd_routers
 
 # —— 棘轮基线 ——
 # 当前无 response_model 的 /api 端点数。**只允许调小，不允许调大。**
-# 每治理一个模块就把这个数字改小（配合 FULLY_GOVERNED）。轨迹：881 中 757 → 756（checkups）→ 753（certs）。
-BASELINE_WITHOUT_RESPONSE_MODEL = 753
+# 每治理一个模块就把这个数字改小（配合 FULLY_GOVERNED）。轨迹：881 中 757 → 756（checkups）→ 753（certs）→ 749（knowledge）。
+BASELINE_WITHOUT_RESPONSE_MODEL = 749
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -40,6 +40,7 @@ FULLY_GOVERNED = {
     "telemedicine",
     "checkups",  # 样板迁移，见 test_checkups_characterization.py
     "certs",  # 见 test_certs_characterization.py
+    "knowledge",  # 见 test_knowledge_characterization.py
 }
 
 
