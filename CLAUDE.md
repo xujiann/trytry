@@ -154,7 +154,7 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 ## 9. ADR（架构决策记录）
 
 - **架构级变更需要 ADR**：新增/移除子系统、改依赖方向、换认证或迁移机制、动数据模型顶层决策（金额/日期/枚举策略）、破坏公共接口兼容性等。
-- ADR 放 `docs/adr/`（首次创建该目录即可），一份一文件，写清：背景、决策、被否决的方案、影响。
+- ADR 放 `docs/adr/`（已建立，含索引 `README.md` 与模板 `0000-template.md`），一份一文件。**固定七段**：problem / options / advantages / disadvantages / migration cost / risk / recommendation。
 - 现有的顶层决策已散落在各模块 docstring 与 `docs/` 文档里（`events.py` / `clock.py` / `gmcrypto.py` / `spd/__init__.py` 等的注释质量很高，可作参考与来源）。
 
 ---
@@ -172,6 +172,7 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 - 接口标准与治理（混乱代码→标准接口，棘轮只进不退）→ `docs/接口标准与治理.md`
 - 数据模型治理（输出Schema→冻结核心表→逐步迁移）→ `docs/数据模型治理.md`；权威列表 `docs/schema/SCHEMA.md`（`scripts/dump_schema.py` 生成）
 - 核心数据不可变定义（一个概念一个权威表，不得另造）→ `docs/核心数据不可变定义.md`
+- 架构决策记录（ADR，七段式：problem/options/…/recommendation）→ `docs/adr/`（索引见 `docs/adr/README.md`）
 - 特征化测试指引（重构前的安全网）→ `docs/特征化测试指引.md`
 
 ---
