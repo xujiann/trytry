@@ -321,7 +321,9 @@
 - `weight_kg` · FLOAT
 - `note` · VARCHAR(512) · NOT NULL
 - `visit_date` · VARCHAR(10) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_child_visits_child_id(child_id)
+- _index_ ix_child_visits_created_at(created_at)
 
 ## chronic_disease_types
 
@@ -1329,6 +1331,8 @@
 - `bp` · VARCHAR(16) · NOT NULL
 - `note` · VARCHAR(512) · NOT NULL
 - `visit_date` · VARCHAR(10) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_maternal_visits_created_at(created_at)
 - _index_ ix_maternal_visits_record_id(record_id)
 
 ## medical_certs
@@ -1903,8 +1907,8 @@
 - `referral_id` · INTEGER · NOT NULL · → referrals.id
 - `cert_no` · VARCHAR(32) · NOT NULL
 - `issued_at` · DATETIME · NOT NULL
-- _unique_ (referral_id)
 - _unique_ (cert_no)
+- _unique_ (referral_id)
 
 ## referrals
 

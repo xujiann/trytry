@@ -51,7 +51,11 @@ def main() -> None:
         lines.append("")
         for col in t.columns:
             lines.append(f"- {_col_line(col)}")
-        uniques = [c for c in t.constraints if c.__class__.__name__ == "UniqueConstraint" and c.columns]
+        # constraints 是集合，迭代顺序不确定——按列名+名称确定性排序，避免重生成时无谓 churn。
+        uniques = sorted(
+            (c for c in t.constraints if c.__class__.__name__ == "UniqueConstraint" and c.columns),
+            key=lambda u: (tuple(col.name for col in u.columns), u.name or ""),
+        )
         for u in uniques:
             cols = ", ".join(c.name for c in u.columns)
             lines.append(f"- _unique_ ({cols}){' ' + u.name if u.name else ''}")

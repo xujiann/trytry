@@ -36,7 +36,7 @@
 ## Next（治理逐块推进，只进不退）
 
 - ◐ 接口契约棘轮：按 `docs/接口标准与治理.md` 逐块迁移。已治理 8 模块（+checkups/certs/knowledge），基线 **757→749**；下一批 notifications / todos / eldercare / blood / infectious。
-- ◐ `created_at` 欠账迁移：按背包清单逐张补。已补 `voucher_entries`、`fund_settlements`（会计分录+基金结算，审计点名的一对硬伤），基线 **52→50**；下一批 `blood_stocks` / `visit_credentials` / `qc_records` / `spd_measurements`（`admissions` 属核心表，需先 ADR）。
+- ◐ `created_at` 欠账迁移：按背包清单逐张补。已补 `voucher_entries`、`fund_settlements`、`maternal_visits`、`child_visits`（会计+基金+妇幼随访），基线 **52→48**；下一批 `visit_credentials` / `qc_records` / `spd_measurements`（`blood_stocks` 为小型 upsert 表、`admissions` 属核心表需先 ADR，均降级）。
 - ☐ 测试隔离：`test_stage4_drgs::test_drg_stats_cmi_and_group_costs` 在 `-k` 子集下 KeyError（跨模块共享状态），整模块/全量套件下通过——属既有 flake，非本轮引入，需修隔离。
 - ☐ 三套并行子域：先做 ADR-0003 的**读侧聚合**——消除居民端两套 `referrals` 数据孤岛（先补三套特征化网）。
 
