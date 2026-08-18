@@ -83,8 +83,8 @@ def test_核心表结构已冻结():
 # ===========================================================================
 # 246 张表里缺 created_at 的历史欠账。新增表必须带 created_at，老表逐步补——
 # 本棘轮保证这个数字**只减不增**：新表漏 created_at 会顶破基线。
-# 轨迹：52 → 51（voucher_entries 会计分录补 created_at）。
-BASELINE_MISSING_CREATED_AT = 51
+# 轨迹：52 → 51（voucher_entries）→ 50（fund_settlements）。
+BASELINE_MISSING_CREATED_AT = 50
 
 
 def test_缺created_at的表不许变多():

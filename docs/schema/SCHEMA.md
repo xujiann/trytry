@@ -1037,7 +1037,9 @@
 - `score_basis` · VARCHAR(128) · NOT NULL
 - `settled_at` · DATETIME · NOT NULL
 - `created_by` · INTEGER · → users.id
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (pool_id) uq_fund_settlement_pool
+- _index_ ix_fund_settlements_created_at(created_at)
 - _index_ ix_fund_settlements_pool_id(pool_id) UNIQUE
 
 ## health_articles
@@ -1950,8 +1952,8 @@
 - `status` · VARCHAR(16) · NOT NULL
 - `created_at` · DATETIME · NOT NULL
 - `last_login_at` · DATETIME
-- _unique_ (wechat_openid)
 - _unique_ (phone)
+- _unique_ (wechat_openid)
 - _index_ ix_resident_accounts_patient_id(patient_id)
 - _index_ uq_resident_account_patient(patient_id) UNIQUE
 

@@ -3494,6 +3494,7 @@ class FundSettlement(Base):
     score_basis: Mapped[str] = mapped_column(String(128), default="")
     settled_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class FundDistribution(Base):
