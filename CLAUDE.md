@@ -96,6 +96,7 @@ server/app/
 - **PII**：`id_card`/`phone` 目前明文存储、仅出口脱敏（`privacy.py`）——别在日志/响应里绕过脱敏。
 - 种子数据一律**幂等"只增不改"**（查已有 code 再 `add`），不要写会覆盖现场配置的种子。
 - **核心表已冻结**（`users`/`organizations`/`patients`/`encounters`/`admissions`）：改其列需先写 ADR，再更新 `tests/test_schema_governance.py` 的 `FROZEN_CORE_COLUMNS` 快照。**新表必须带 `created_at`**（棘轮强制）。改了模型重跑 `python scripts/dump_schema.py`。详见 `docs/数据模型治理.md`。
+- **核心数据是不可变定义**：核心概念只有一个权威表（`patients`/`organizations`/`users`/`encounters`/`admissions`/`resident_accounts`），**不得另造平行主数据**；人物身份（`id_card`/`ehc_no`）只存 `patients`，别处一律外键 `patient_id`。金额用 `Money`、日期用 `DateStr`，别自造。由 `tests/test_core_data_invariants.py` 强制，详见 `docs/核心数据不可变定义.md`。
 
 ---
 
@@ -170,6 +171,7 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 - 模块分级（KEEP/IMPROVE/REFACTOR/REPLACE）→ `docs/模块分级_KEEP_IMPROVE_REFACTOR_REPLACE.md`
 - 接口标准与治理（混乱代码→标准接口，棘轮只进不退）→ `docs/接口标准与治理.md`
 - 数据模型治理（输出Schema→冻结核心表→逐步迁移）→ `docs/数据模型治理.md`；权威列表 `docs/schema/SCHEMA.md`（`scripts/dump_schema.py` 生成）
+- 核心数据不可变定义（一个概念一个权威表，不得另造）→ `docs/核心数据不可变定义.md`
 - 特征化测试指引（重构前的安全网）→ `docs/特征化测试指引.md`
 
 ---
