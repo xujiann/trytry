@@ -8,7 +8,7 @@
 变成一件"要提工单"的事，实施期没人受得了。真正的平台级开关（病种启停、
 数据源接入）仍然要 admin。
 """
-from datetime import date, timedelta
+from datetime import timedelta
 from secrets import token_urlsafe
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response

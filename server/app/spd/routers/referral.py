@@ -15,7 +15,7 @@
 状态机写死在 `_NEXT` 表里而不是让调用方传目标状态：让调用方传，等于把
 "谁能把单子推到哪一步"交给前端决定。
 """
-from datetime import date, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field

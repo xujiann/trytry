@@ -26,7 +26,8 @@
 - ☐ 加固 `test_monitor_overview.py`：recent_failures 取 limit-5，理论上可能被其它失败记录挤掉 seeded 行（当前因间隔≥300s 安全）。/review 提出。
 
 ### 工具链
-- ☐ `make verify` 的 lint 步会因 8 处**存量** lint 欠账（`tests/test_spd_integration.py` 等未改文件）中止，挡住无关改动的自检。方案二选一：lint 只查改动文件，或先一次性清掉这 8 处存量（不夹带进功能提交）。
+- ✅ 清掉 8 处存量 lint（5 未用 import + 2 无占位 f-string + 1 未用变量改显式 assert），`make lint` 归零；`make verify` 的 typecheck 步改为渐进式 warning 不阻断——verify 现可用。
+- ☐ mypy 存量 41（20 文件）：warning 基线，逐块补类型注解往下减；补到较低后可把 verify 的 typecheck 转回阻断。
 
 ### 让 CI 变真（关联 ADR-0002）
 - ☐ 覆盖率门禁去 `|| true`，转阻断；集成/迁移门在真 PG 上转阻断。
