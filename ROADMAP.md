@@ -34,7 +34,7 @@
 
 ## Next（治理逐块推进，只进不退）
 
-- ☐ 接口契约棘轮：按 `docs/接口标准与治理.md` 迁移小模块（notifications / todos / certs …），基线 756 往下走。
+- ◐ 接口契约棘轮：按 `docs/接口标准与治理.md` 逐块迁移。已治理 8 模块（+checkups/certs/knowledge），基线 **757→749**；下一批 notifications / todos / eldercare / blood / infectious。
 - ☐ `created_at` 欠账迁移：按 `docs/数据模型治理.md` 背包清单，从台账/流水表（`admissions` 等）起，基线 52 往下走。
 - ☐ 三套并行子域：先做 ADR-0003 的**读侧聚合**——消除居民端两套 `referrals` 数据孤岛（先补三套特征化网）。
 
