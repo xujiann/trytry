@@ -123,6 +123,8 @@
 - `slot_time` · VARCHAR(16) · NOT NULL
 - `capacity` · INTEGER · NOT NULL
 - `booked` · INTEGER · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_appointment_slots_created_at(created_at)
 - _index_ ix_appointment_slots_employee_id(employee_id)
 - _index_ ix_appointment_slots_org_id(org_id)
 - _index_ ix_appointment_slots_slot_date(slot_date)
