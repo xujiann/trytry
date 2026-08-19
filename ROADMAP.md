@@ -36,7 +36,7 @@
 ## Next（治理逐块推进，只进不退）
 
 - ◐ 接口契约棘轮：按 `docs/接口标准与治理.md` 逐块迁移。已治理 11 模块（+checkups/certs/knowledge/notifications/infectious/dictionaries），基线 **757→742**；下一批候选 encounters（仅剩 `/archive/360` 视图，嵌套响应需谨慎建模）/ performance（`/orgs` 评分卡嵌套，float 折算需钉值）。
-- ◐ `created_at` 欠账迁移：按背包清单逐张补。已补 `voucher_entries`、`fund_settlements`、`maternal_visits`、`child_visits`、`visit_credentials`、`qc_records`、`spd_measurements`（spd 链）、`vaccination_records`，基线 **52→44**；下一批 `exam_reports` / `health_monitor_records` / `infectious_cases`（`blood_stocks` 为小型 upsert 表、`admissions` 属核心表需先 ADR，均降级）。
+- ◐ `created_at` 欠账迁移：按背包清单逐张补。已补 `voucher_entries`、`fund_settlements`、`maternal_visits`、`child_visits`、`visit_credentials`、`qc_records`、`spd_measurements`（spd 链）、`vaccination_records`、`exam_reports`，基线 **52→43**；下一批 `health_monitor_records` / `infectious_cases` / `prescription_items`（`blood_stocks` 为小型 upsert 表、`admissions` 属核心表需先 ADR，均降级）。
 - ☐ 测试隔离（既有 flake，非本轮引入）：部分用例在 `pytest -k` 子集下失败（`test_stage4_drgs::test_drg_stats_cmi_and_group_costs` KeyError、`test_modules::test_portal_identity_verification` IndexError），整模块/全量套件下通过——跨模块共享状态/顺序依赖，需修隔离（模块级 fixture 复用了共享库）。
 - ☐ 三套并行子域：先做 ADR-0003 的**读侧聚合**——消除居民端两套 `referrals` 数据孤岛（先补三套特征化网）。
 
