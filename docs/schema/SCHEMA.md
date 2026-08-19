@@ -638,7 +638,9 @@
 - `drug_name` · VARCHAR(128) · NOT NULL
 - `quantity` · INTEGER · NOT NULL
 - `threshold` · INTEGER · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (org_id, drug_code) uq_stock_org_drug
+- _index_ ix_drug_stocks_created_at(created_at)
 - _index_ ix_drug_stocks_drug_code(drug_code)
 - _index_ ix_drug_stocks_org_id(org_id)
 

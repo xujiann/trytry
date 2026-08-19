@@ -366,6 +366,7 @@ class DrugStock(Base):
     quantity: Mapped[int] = mapped_column(Integer, default=0)
     # 低于该阈值触发缺药预警
     threshold: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class StockTransfer(Base):
