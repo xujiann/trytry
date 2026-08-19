@@ -798,6 +798,91 @@ def test_referral_global_review_keeps_org_anchor(client, h, base):
     assert step2.json()["status"] == "township_reviewed"
 
 
+def test_referral_arrive_down_receive_require_current_org(client, h):
+    """回归 ADR-0004 后续③：到院/下转/随访接收只有本单当前持有机构可操作。
+
+    用**四级机构树**（county←township←station←village）让审核链由机构账号逐级推进到
+    accepted——此时 current_org 正确落在受理的 county（受理机构，而非发起村室）。随后：
+    非当前机构 403、当前机构放行；下转把 current_org 切到下转目标，接收随之易主。
+    """
+    def _org(name, level, org_type, parent_id=None):
+        body = {"name": name, "org_type": org_type, "level": level}
+        if parent_id is not None:
+            body["parent_id"] = parent_id
+        return client.post("/api/organizations", json=body, headers=h).json()
+
+    county = _org("持有县医院", "county", "lead_hospital")
+    township = _org("持有卫生院", "township", "township", county["id"])
+    station = _org("持有服务站", "village", "village", township["id"])   # 服务站层（村级）
+    village = _org("持有村卫生室", "village", "village", station["id"])
+
+    def _doctor(username, org_id):
+        client.post(
+            "/api/users",
+            json={"username": username, "password": "pass123456", "role": "doctor",
+                  "org_id": org_id},
+            headers=h,
+        )
+        r = client.post("/api/auth/login", json={"username": username, "password": "pass123456"})
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    vdoc = _doctor("hold_vdoc", village["id"])       # 发起
+    sdoc = _doctor("hold_sdoc", station["id"])       # 服务站复核（village 的直接上级）
+    tdoc = _doctor("hold_tdoc", township["id"])      # 卫生院审核
+    cdoc = _doctor("hold_cdoc", county["id"])        # 县医院接收
+
+    patient = client.post(
+        "/api/patients",
+        json={"name": "持有机构测试", "id_card": "330182198205050097", "phone": "13900009097"},
+        headers=h,
+    ).json()
+    client.post(
+        "/api/spd/enrollments",
+        json={"patient_id": patient["id"], "program_code": "hypertension",
+              "org_id": village["id"], "risk_level": "high"},
+        headers=h,
+    )
+
+    case_id = client.post(
+        "/api/spd/referrals",
+        json={"patient_id": patient["id"], "program_code": "hypertension", "reason": "上转"},
+        headers=vdoc,
+    ).json()["id"]
+    # 机构账号逐级推进到 accepted：service station → township → county
+    for reviewer in (sdoc, tdoc, cdoc):
+        r = client.post(f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=reviewer)
+        assert r.status_code == 200, r.text
+    acc = client.get(f"/api/spd/referrals/{case_id}", headers=h).json()
+    assert acc["status"] == "accepted" and acc["current_org_id"] == county["id"]
+
+    # 到院：非当前机构（village）403，当前受理机构（county）放行
+    assert client.post(
+        f"/api/spd/referrals/{case_id}/arrive", json={"effective_visit": True}, headers=vdoc
+    ).status_code == 403
+    arr = client.post(
+        f"/api/spd/referrals/{case_id}/arrive", json={"effective_visit": True}, headers=cdoc
+    )
+    assert arr.status_code == 200 and arr.json()["status"] == "arrived"
+
+    # 下转：由当前持有机构 county 发起 → current_org 切到下转目标 township
+    assert client.post(
+        f"/api/spd/referrals/{case_id}/down", json={"target_org_id": township["id"]}, headers=vdoc
+    ).status_code == 403
+    down = client.post(
+        f"/api/spd/referrals/{case_id}/down", json={"target_org_id": township["id"]}, headers=cdoc
+    )
+    assert down.status_code == 200 and down.json()["current_org_id"] == township["id"]
+
+    # 随访接收：当前机构已易主到 township → county 403、township 放行闭环
+    assert client.post(
+        f"/api/spd/referrals/{case_id}/receive-followup", json={}, headers=cdoc
+    ).status_code == 403
+    closed = client.post(
+        f"/api/spd/referrals/{case_id}/receive-followup", json={}, headers=tdoc
+    )
+    assert closed.status_code == 200 and closed.json()["status"] == "closed"
+
+
 def test_closure_rate_excludes_rejected(client, h):
     stats = client.get("/api/spd/referrals-stats/closure", headers=h).json()
     assert stats["denominator"] == (
