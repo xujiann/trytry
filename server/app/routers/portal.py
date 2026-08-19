@@ -124,8 +124,9 @@ def send_sms_code(body: SendCodeIn, request: Request, db: Session = Depends(get_
     """下发登录验证码。
 
     三重限流：单号冷却 60 秒、单号 10 分钟 5 条、单 IP 10 分钟 20 条。
-    验证码只落散列；仅当通道为 console 且**非生产环境**时在响应中回显
-    `debug_code`，用于本地联调与演示站——生产环境永远不回显。
+    验证码只落散列；仅当通道为 console、显式开启 `sms_debug_echo` 且**非生产环境**
+    三者同时满足时才在响应中回显 `debug_code`，用于本地联调——默认关闭，
+    生产环境即便误开开关也永远不回显。
     """
     phone = _check_phone(body.phone)
     client_ip = request.client.host if request.client else "unknown"
@@ -165,7 +166,7 @@ def send_sms_code(body: SendCodeIn, request: Request, db: Session = Depends(get_
         raise HTTPException(status_code=502, detail="短信通道暂不可用，请稍后重试")
 
     result = {"sent": True, "expires_in": ttl, "cooldown_seconds": SEND_COOLDOWN_SECONDS}
-    if provider.name == "console" and not settings.is_production:
+    if provider.name == "console" and settings.sms_debug_echo and not settings.is_production:
         result["debug_code"] = code
     return result
 

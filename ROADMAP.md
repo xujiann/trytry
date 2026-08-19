@@ -12,7 +12,7 @@
 
 ### 🔴 安全止血（P0，独立于分级，尽快）
 - ☐ `render.yaml` / `docker-compose.yml` 默认口令与守卫：改熵/长度校验，去掉 `admin123`/`change-me-in-production` 默认值（关联 ADR-0002 部署侧）。
-- ☐ `routers/portal.py:168` `debug_code` 回显收紧为显式开关。
+- ✅ `routers/portal.py:168` `debug_code` 回显收紧为显式开关（新增 `sms_debug_echo` 默认关 + 生产双重门；回归测试 `test_portal_auth.py` 两条）。
 - ☐ 打印 4 端点 + `attachments` 下载补 `assert_patient_visible`/`assert_obj_org_writable` 与 `AccessLog`。**需先定口径**：附件按 owner_type 分类（exam_report 患者 / adverse_event 机构 / course_material 全员）。
 - ⚠️ `spd/routers/referral.py` 转诊审核补机构层级校验：**需先定口径**——`_NEXT` 要 `station` 层级，而 `org_level` 只产 village/township/county（审计 P0-3），服务站机构无从识别；加层级校验会卡死"服务站复核"步。修 P0 越权前须先理顺 station 层级映射（org_type/level 加"服务站"分类？）。
 - ✅ `static/pages-mgmt.js` 会计科目等 `<option>` XSS 转义（含就近同类 4 处：会计科目 code/name、监测域 domain×2、流程定义 key）。
