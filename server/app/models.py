@@ -1851,6 +1851,7 @@ class Department(Base):
     # clinical=临床, medtech=医技, admin=行政后勤
     category: Mapped[str] = mapped_column(String(16), default="clinical")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class EmployeeChange(Base):

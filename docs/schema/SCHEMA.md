@@ -531,7 +531,9 @@
 - `name` · VARCHAR(64) · NOT NULL
 - `category` · VARCHAR(16) · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (org_id, code) uq_dept_org_code
+- _index_ ix_departments_created_at(created_at)
 - _index_ ix_departments_org_id(org_id)
 
 ## disease_enrollments
