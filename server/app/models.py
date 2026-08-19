@@ -1224,6 +1224,7 @@ class QcRecord(Base):
     result: Mapped[str] = mapped_column(String(8))
     note: Mapped[str] = mapped_column(String(512), default="")
     record_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class ReportTemplate(Base):
@@ -3261,6 +3262,7 @@ class VisitCredential(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     close_reason: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class ConsentTemplate(Base):

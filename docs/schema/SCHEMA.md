@@ -1813,7 +1813,9 @@
 - `result` · VARCHAR(8) · NOT NULL
 - `note` · VARCHAR(512) · NOT NULL
 - `record_date` · VARCHAR(10) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_qc_records_center_type(center_type)
+- _index_ ix_qc_records_created_at(created_at)
 
 ## qc_rules
 
@@ -3673,6 +3675,8 @@
 - `issued_at` · DATETIME · NOT NULL
 - `closed_at` · DATETIME
 - `close_reason` · VARCHAR(128) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_visit_credentials_created_at(created_at)
 - _index_ ix_visit_credentials_credential_no(credential_no) UNIQUE
 - _index_ ix_visit_credentials_credential_type(credential_type)
 - _index_ ix_visit_credentials_org_id(org_id)
