@@ -847,6 +847,8 @@
 - `critical_status` · VARCHAR(16) · NOT NULL · index
 - `reported_by` · VARCHAR(64) · NOT NULL
 - `reported_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_exam_reports_created_at(created_at)
 - _index_ ix_exam_reports_critical_status(critical_status)
 - _index_ ix_exam_reports_request_id(request_id) UNIQUE
 

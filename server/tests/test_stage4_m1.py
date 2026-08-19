@@ -138,8 +138,9 @@ def test_migration_backfills_legacy_critical_status(client):
         conn.execute(
             sa.text(
                 "INSERT INTO exam_reports (request_id, finding, conclusion, critical,"
-                " critical_status, reported_by, reported_at)"
-                " VALUES (99901, '', '存量危急', 1, '', '旧系统', '2026-01-01 00:00:00')"
+                " critical_status, reported_by, reported_at, created_at)"
+                " VALUES (99901, '', '存量危急', 1, '', '旧系统', '2026-01-01 00:00:00',"
+                " '2026-01-01 00:00:00')"
             )
         )
         conn.execute(

@@ -240,6 +240,7 @@ class ExamReport(Base):
     critical_status: Mapped[str] = mapped_column(String(16), default="", index=True)
     reported_by: Mapped[str] = mapped_column(String(64), default="")
     reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     request: Mapped[ExamRequest] = relationship(back_populates="report")
 
