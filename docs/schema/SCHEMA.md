@@ -3623,8 +3623,10 @@
 - `batch_no` · VARCHAR(64) · NOT NULL · index
 - `site` · VARCHAR(32) · NOT NULL
 - `vaccinator` · VARCHAR(64) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_vaccination_records_batch_id(batch_id)
 - _index_ ix_vaccination_records_batch_no(batch_no)
+- _index_ ix_vaccination_records_created_at(created_at)
 - _index_ ix_vaccination_records_patient_id(patient_id)
 
 ## vaccine_batches

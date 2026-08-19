@@ -1027,6 +1027,7 @@ class VaccinationRecord(Base):
     # 接种部位与途径（AEFI 归因时要用）
     site: Mapped[str] = mapped_column(String(32), default="")
     vaccinator: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class VaccineContraindication(Base):
