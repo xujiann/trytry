@@ -1,5 +1,6 @@
 """统一编码字典：诊断、药品、耗材、收费"四统一"，结果互认与业务联动的数据基础。"""
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,12 @@ from ..models import CodeEntry, CodeSystem
 from ..schemas import CodeEntryCreate, CodeEntryOut
 
 router = APIRouter(prefix="/api/dictionaries", tags=["统一编码字典"])
+
+
+# 响应契约：字段与原手拼 dict 一一对应，保持向后兼容。
+class BulkImportOut(BaseModel):
+    imported: int
+    skipped: int
 
 SYSTEM_CODES = {"diagnosis": "诊断(ICD-10)", "drug": "药品", "consumable": "耗材", "charge": "收费"}
 
@@ -65,6 +72,7 @@ def create_entry(system_code: str, body: CodeEntryCreate, db: Session = Depends(
 
 @router.post(
     "/{system_code}/import",
+    response_model=BulkImportOut,
     dependencies=[Depends(require_admin)],
 )
 def bulk_import(system_code: str, entries: list[CodeEntryCreate], db: Session = Depends(get_db)):
