@@ -348,6 +348,7 @@ class PrescriptionItem(Base):
     drug_name: Mapped[str] = mapped_column(String(128))
     daily_dose: Mapped[float] = mapped_column(Float)
     days: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     prescription: Mapped[Prescription] = relationship(back_populates="items")
 
