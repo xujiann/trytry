@@ -1066,6 +1066,8 @@
 - `threshold` · FLOAT · NOT NULL
 - `exceeded` · BOOLEAN · NOT NULL · index
 - `record_date` · VARCHAR(10) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_health_monitor_records_created_at(created_at)
 - _index_ ix_health_monitor_records_domain(domain)
 - _index_ ix_health_monitor_records_exceeded(exceeded)
 

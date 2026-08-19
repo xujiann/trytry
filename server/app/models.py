@@ -1105,6 +1105,7 @@ class HealthMonitorRecord(Base):
     threshold: Mapped[float] = mapped_column(Float)
     exceeded: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     record_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Employee(Base):
