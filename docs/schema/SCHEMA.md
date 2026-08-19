@@ -667,7 +667,9 @@
 - `duty_date` · VARCHAR(10) · NOT NULL · index
 - `shift` · VARCHAR(16) · NOT NULL
 - `doctor_name` · VARCHAR(64) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_duty_rosters_center_type(center_type)
+- _index_ ix_duty_rosters_created_at(created_at)
 - _index_ ix_duty_rosters_duty_date(duty_date)
 
 ## elderly_assessments
