@@ -35,7 +35,7 @@ from ..models import (
 )
 from ..rules import RuleError, evaluate, validate_conditions
 from ..service import award_points, build_facts, spawn_task
-from ...visibility import assert_patient_visible, visible_org_ids
+from ...visibility import GLOBAL_ROLES, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -241,6 +241,29 @@ def _case_out(db: Session, c: SpdReferralCase, steps: list[SpdReferralStep] | No
     return out
 
 
+def _assert_review_authority(db: Session, user: User, case: SpdReferralCase) -> None:
+    """分级审核越权校验（口径：按机构树 parent_id）。
+
+    只有本单**当前机构的直接上级机构**（`current_org.parent_id`）能把单子推进一格：
+    submitted 在村卫生室 → 由其上级服务站/卫生院复核，逐级上收。机构层级不靠
+    `org.level` 字符串判定（村/乡/县词表里根本没有"服务站"这一档），而是直接读
+    机构树的父子关系——这也是本仓库既有的机构建模（`organizations.parent_id`）。
+
+    `admin`/`director` 全域角色放行：县域实际存在"中心代录/复杂病例中心统筹"的
+    场景，与 `create_referral` 里允许管理层代基层开单同一口径。机构树未配置
+    （`parent_id` 为空）时，非全域账号无法推进——宁可要求先把机构树建好，也不放行
+    "任意机构推任意单"这个越权面。
+    """
+    if user.role in GLOBAL_ROLES:
+        return
+    current = db.get(Organization, case.current_org_id) if case.current_org_id else None
+    parent_id = current.parent_id if current else None
+    if user.org_id is None or parent_id is None or user.org_id != parent_id:
+        raise HTTPException(
+            status_code=403, detail="仅本单当前机构的上级机构可审核推进该转诊"
+        )
+
+
 def _add_step(
     db: Session, case: SpdReferralCase, step: str, action: str, user: User, opinion: str = ""
 ) -> None:
@@ -404,6 +427,7 @@ def review_referral(
     nxt = _NEXT.get(case.status)
     if nxt is None:
         raise HTTPException(status_code=409, detail="当前状态不需要审核")
+    _assert_review_authority(db, user, case)
     next_status, step_name, level = nxt
     if body.action == "reject":
         case.status = "rejected"
@@ -413,7 +437,11 @@ def review_referral(
         return _case_out(db, case)
     case.status = next_status
     case.current_level = level
-    case.current_org_id = user.org_id
+    # 全域角色（admin/director 常不绑机构）代推进时，不要把机构锚点清成 None——
+    # 否则后续环节的 parent 校验（_assert_review_authority 读 current_org_id）会把
+    # 所有非全域账号锁死（ADR-0004）。无机构的代推进保留上一个真实机构锚点。
+    if user.org_id is not None:
+        case.current_org_id = user.org_id
     if body.target_org_id is not None:
         case.target_org_id = body.target_org_id
     _add_step(db, case, step_name, "pass", user, body.opinion)

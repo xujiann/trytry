@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -11,6 +12,28 @@ from ..models import InfectiousCase, InfectiousDisease, Organization
 from ..schemas import InfectiousCaseCreate, InfectiousCaseOut, InfectiousDiseaseOut
 
 router = APIRouter(prefix="/api/infectious", tags=["传染病监测"], dependencies=[Depends(get_current_user)])
+
+
+# 响应契约：字段与原手拼 dict 一一对应，保持向后兼容。
+class AlertOut(BaseModel):
+    disease_code: str
+    disease_name: str
+    case_count: int
+    org_count: int
+    window_days: int
+    severity: str
+
+
+class LateReportOut(BaseModel):
+    case_id: int
+    org_id: int
+    disease_code: str
+    disease_name: str
+    category: str
+    report_hours: int
+    onset_date: str
+    reported_at: str
+    days_late: int
 
 DEFAULT_WINDOW_DAYS = 7
 DEFAULT_THRESHOLD = 5
@@ -71,7 +94,7 @@ def list_cases(disease_code: str | None = None, db: Session = Depends(get_db)):
     return query.order_by(InfectiousCase.id.desc()).limit(500).all()
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=list[AlertOut])
 def multi_point_alerts(
     window_days: int = DEFAULT_WINDOW_DAYS,
     threshold: int = DEFAULT_THRESHOLD,
@@ -110,7 +133,7 @@ def multi_point_alerts(
     ]
 
 
-@router.get("/late-reports")
+@router.get("/late-reports", response_model=list[LateReportOut])
 def late_reports(db: Session = Depends(get_db)):
     """迟报清单：reported_at 与 onset_date 间隔超过目录报告时限的病例（粗略按天折算）。
 

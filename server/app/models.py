@@ -963,6 +963,7 @@ class MaternalVisit(Base):
     bp: Mapped[str] = mapped_column(String(16), default="")
     note: Mapped[str] = mapped_column(String(512), default="")
     visit_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     record: Mapped[MaternalRecord] = relationship(back_populates="visits")
 
@@ -996,6 +997,7 @@ class ChildVisit(Base):
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str] = mapped_column(String(512), default="")
     visit_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     child: Mapped[ChildRecord] = relationship(back_populates="visits")
 

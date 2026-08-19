@@ -5,6 +5,7 @@
 鉴权路径不同，接口也分开，避免在一个端点里做身份分支。
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -14,6 +15,31 @@ from ..models import Notification, User, utcnow
 router = APIRouter(
     prefix="/api/notifications", tags=["站内消息"], dependencies=[Depends(get_current_user)]
 )
+
+
+# 响应契约：字段与 notification_out / 各端点原手拼 dict 一一对应，保持向后兼容。
+class NotificationOut(BaseModel):
+    id: int
+    category: str
+    title: str
+    body: str
+    link_type: str
+    link_id: int
+    read: bool
+    created_at: str
+
+
+class UnreadCountOut(BaseModel):
+    unread: int
+
+
+class MarkReadOut(BaseModel):
+    id: int
+    read: bool
+
+
+class MarkAllReadOut(BaseModel):
+    marked: int
 
 
 def notification_out(n: Notification) -> dict:
@@ -29,7 +55,7 @@ def notification_out(n: Notification) -> dict:
     }
 
 
-@router.get("")
+@router.get("", response_model=list[NotificationOut])
 def list_notifications(
     response: Response,
     unread_only: bool = False,
@@ -55,7 +81,7 @@ def list_notifications(
     return [notification_out(n) for n in rows]
 
 
-@router.get("/unread-count")
+@router.get("/unread-count", response_model=UnreadCountOut)
 def unread_count(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """未读数：供角标轮询，单独一个轻查询，不必拉整页列表。"""
     count = (
@@ -66,7 +92,7 @@ def unread_count(db: Session = Depends(get_db), user: User = Depends(get_current
     return {"unread": count}
 
 
-@router.post("/{notification_id}/read")
+@router.post("/{notification_id}/read", response_model=MarkReadOut)
 def mark_read(
     notification_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -80,7 +106,7 @@ def mark_read(
     return {"id": notification.id, "read": True}
 
 
-@router.post("/read-all")
+@router.post("/read-all", response_model=MarkAllReadOut)
 def mark_all_read(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """全部标记已读；返回本次标记数（已读的不重复计入）。"""
     updated = (

@@ -7,7 +7,8 @@
 - MEDPLAT_ENV            环境标识 dev/test/prod（兼容保留）
 - MEDPLAT_ENVIRONMENT    环境标识 dev/test/prod（与 MEDPLAT_ENV 任一为 prod 即按生产处理）
 - MEDPLAT_LOG_JSON       是否输出结构化 JSON 请求日志
-- MEDPLAT_SMS_PROVIDER   居民端短信通道 console/http（console 仅打日志，非生产回显验证码）
+- MEDPLAT_SMS_PROVIDER   居民端短信通道 console/http（console 仅打日志）
+- MEDPLAT_SMS_DEBUG_ECHO  是否在响应回显 debug_code（默认关；须 console+非生产才生效）
 - MEDPLAT_WECHAT_PROVIDER 居民端微信通道 mock/official
 
 安全硬化（H4）：environment/env 为 prod 时，若 secret 或 admin_password
@@ -56,6 +57,10 @@ class Settings(BaseSettings):
     sms_gateway_url: str = ""
     sms_api_key: str = ""
     sms_sign_name: str = "县域医共体"
+    # 验证码回显开关：仅当显式置 true 时，console 通道才在响应里回显 debug_code
+    # （供本地联调/演示）。**默认关**——非生产的 staging/演示站也不再默认泄露验证码；
+    # 生产环境即便置 true 也永不回显（见 routers/portal.py 的双重门）。
+    sms_debug_echo: bool = False
     # 微信通道：mock=本地联调桩，official=微信公众平台网页授权
     wechat_provider: str = "mock"
     wechat_appid: str = ""

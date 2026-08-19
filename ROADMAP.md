@@ -12,10 +12,10 @@
 
 ### 🔴 安全止血（P0，独立于分级，尽快）
 - ☐ `render.yaml` / `docker-compose.yml` 默认口令与守卫：改熵/长度校验，去掉 `admin123`/`change-me-in-production` 默认值（关联 ADR-0002 部署侧）。
-- ☐ `routers/portal.py:168` `debug_code` 回显收紧为显式开关。
-- ☐ 打印 4 端点 + `attachments` 下载补 `assert_patient_visible`/`assert_obj_org_writable` 与 `AccessLog`。
-- ☐ `spd/routers/referral.py:393` 转诊审核补机构层级校验。
-- ☐ `static/pages-mgmt.js:248` 会计科目 `<option>` XSS 转义。
+- ✅ `routers/portal.py:168` `debug_code` 回显收紧为显式开关（新增 `sms_debug_echo` 默认关 + 生产双重门；回归测试 `test_portal_auth.py` 两条）。
+- ☐ 打印 4 端点 + `attachments` 下载补 `assert_patient_visible`/`assert_obj_org_writable` 与 `AccessLog`。**需先定口径**：附件按 owner_type 分类（exam_report 患者 / adverse_event 机构 / course_material 全员）。
+- ✅ `spd/routers/referral.py` 转诊审核补机构层级校验（口径 1：按机构树 `parent_id`，见 ADR-0004）：`review` 仅本单当前机构的**直接上级**可推进，全域角色放行；回归 `test_referral_review_requires_parent_org`。**后续（另案）**：① 运行期补齐机构树 `parent_id`（种子/体检接口）；② 决策 `_NEXT` 的 station 一档（补服务站层 or 收敛为村→乡→县三级）；③ 视需要把机构校验推广到 `arrive`/`down`/`receive-followup`。
+- ✅ `static/pages-mgmt.js` 会计科目等 `<option>` XSS 转义（含就近同类 4 处：会计科目 code/name、监测域 domain×2、流程定义 key）。
 
 ### 一行/小修（童子军级，碰到即修）
 - ✅ `routers/monitor.py:79` `"success"` → `"succeeded"`（带回归测试 `test_monitor_overview.py`）。
@@ -35,9 +35,9 @@
 
 ## Next（治理逐块推进，只进不退）
 
-- ◐ 接口契约棘轮：按 `docs/接口标准与治理.md` 逐块迁移。已治理 8 模块（+checkups/certs/knowledge），基线 **757→749**；下一批 notifications / todos / eldercare / blood / infectious。
-- ◐ `created_at` 欠账迁移：按背包清单逐张补。已补 `voucher_entries`、`fund_settlements`（会计分录+基金结算，审计点名的一对硬伤），基线 **52→50**；下一批 `blood_stocks` / `visit_credentials` / `qc_records` / `spd_measurements`（`admissions` 属核心表，需先 ADR）。
-- ☐ 测试隔离：`test_stage4_drgs::test_drg_stats_cmi_and_group_costs` 在 `-k` 子集下 KeyError（跨模块共享状态），整模块/全量套件下通过——属既有 flake，非本轮引入，需修隔离。
+- ◐ 接口契约棘轮：按 `docs/接口标准与治理.md` 逐块迁移。已治理 10 模块（+checkups/certs/knowledge/notifications/infectious），基线 **757→743**；下一批 eldercare / blood（`todos` 响应异构、契约价值低，暂缓）。
+- ◐ `created_at` 欠账迁移：按背包清单逐张补。已补 `voucher_entries`、`fund_settlements`、`maternal_visits`、`child_visits`（会计+基金+妇幼随访），基线 **52→48**；下一批 `visit_credentials` / `qc_records` / `spd_measurements`（`blood_stocks` 为小型 upsert 表、`admissions` 属核心表需先 ADR，均降级）。
+- ☐ 测试隔离（既有 flake，非本轮引入）：部分用例在 `pytest -k` 子集下失败（`test_stage4_drgs::test_drg_stats_cmi_and_group_costs` KeyError、`test_modules::test_portal_identity_verification` IndexError），整模块/全量套件下通过——跨模块共享状态/顺序依赖，需修隔离（模块级 fixture 复用了共享库）。
 - ☐ 三套并行子域：先做 ADR-0003 的**读侧聚合**——消除居民端两套 `referrals` 数据孤岛（先补三套特征化网）。
 
 ## Later（C 类重构，逐块 + 先补网）

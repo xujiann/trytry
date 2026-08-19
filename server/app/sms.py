@@ -2,9 +2,10 @@
 
 驱动由 MEDPLAT_SMS_PROVIDER 选择：
 
-- ``console``（默认）：不外发，验证码只打日志；且**非生产环境**下发接口会在
-  响应里回显 ``debug_code``，便于本地联调与演示站直接登录。生产环境即使配
-  console 也不回显（见 routers/portal.py），只是短信发不出去而已。
+- ``console``（默认）：不外发，验证码只打日志；仅当**显式开启**
+  ``MEDPLAT_SMS_DEBUG_ECHO`` 且**非生产环境**时，下发接口才在响应里回显
+  ``debug_code`` 便于本地联调（默认关闭，见 routers/portal.py）。生产环境
+  即便误开开关也永不回显，只是短信发不出去而已。
 - ``http``：把短信投递给自建/云短信网关（POST JSON 到 MEDPLAT_SMS_GATEWAY_URL）。
   阿里云/腾讯云等各家签名算法不同，此处走"统一网关"这层薄封装，接入方按自家
   网关协议实现一次即可，不把厂商 SDK 拖进本仓库。

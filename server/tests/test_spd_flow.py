@@ -662,6 +662,142 @@ def test_referral_reject_and_terminal_guard(client, h, base):
     assert again.status_code == 409, "终态单据不接受推进"
 
 
+def test_referral_review_requires_parent_org(client, h, base):
+    """越权修复回归：分级审核只能由本单当前机构的直接上级（parent_id）推进。
+
+    树：village.parent=township，township.parent=county。村卫生室发起的单子，
+    步骤一"服务站复核"须由 village 的上级 township 推进；county（非直接上级）
+    与无关机构均应 403。admin/director 全域角色不在此测（其放行由既有
+    test_referral_chain_to_closure 覆盖）。
+    """
+    village_id = base["village"]["id"]
+    township_id = base["township"]["id"]
+    county_id = base["county"]["id"]
+
+    # 独立患者并纳管在 village，给村医visibility；作为 village 发起单据的当前机构
+    patient = client.post(
+        "/api/patients",
+        json={"name": "越权测试患者", "id_card": "330182198203030099", "phone": "13900009099"},
+        headers=h,
+    ).json()
+    client.post(
+        "/api/spd/enrollments",
+        json={"patient_id": patient["id"], "program_code": "hypertension",
+              "org_id": village_id, "risk_level": "high"},
+        headers=h,
+    )
+
+    def _mk_doctor(username, org_id):
+        client.post(
+            "/api/users",
+            json={"username": username, "password": "pass123456", "role": "doctor",
+                  "org_id": org_id},
+            headers=h,
+        )
+        r = client.post("/api/auth/login", json={"username": username, "password": "pass123456"})
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    vdoc = _mk_doctor("ref_vdoc", village_id)      # 村医：发起
+    tdoc = _mk_doctor("ref_tdoc", township_id)     # 卫生院：village 的直接上级 → 有权复核
+    cdoc = _mk_doctor("ref_cdoc", county_id)       # 县医院：越级，非 village 的直接上级
+
+    case = client.post(
+        "/api/spd/referrals",
+        json={"patient_id": patient["id"], "program_code": "hypertension",
+              "direction": "up", "reason": "血压持续不达标"},
+        headers=vdoc,
+    )
+    assert case.status_code == 201, case.text
+    case_id = case.json()["id"]
+    assert case.json()["current_org_id"] == village_id
+    assert case.json()["status"] == "submitted"
+
+    # 越级：county 不是 village 的直接上级 → 403
+    bad = client.post(
+        f"/api/spd/referrals/{case_id}/review",
+        json={"action": "pass", "opinion": "越级审核"}, headers=cdoc,
+    )
+    assert bad.status_code == 403, bad.text
+
+    # 发起人本级（村医自己）也不能自审推进 → 403
+    self_rev = client.post(
+        f"/api/spd/referrals/{case_id}/review",
+        json={"action": "pass"}, headers=vdoc,
+    )
+    assert self_rev.status_code == 403, self_rev.text
+
+    # 直接上级 township 复核 → 放行
+    ok = client.post(
+        f"/api/spd/referrals/{case_id}/review",
+        json={"action": "pass", "opinion": "同意上转"}, headers=tdoc,
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "station_reviewed"
+    assert ok.json()["current_org_id"] == township_id
+
+    # 第二跳：现当前机构=township，其直接上级=county → county 医生可推进；township 自审 403
+    assert client.post(
+        f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=tdoc,
+    ).status_code == 403, "township 已是当前机构，不能自审推进下一格"
+    hop2 = client.post(
+        f"/api/spd/referrals/{case_id}/review",
+        json={"action": "pass", "opinion": "卫生院审核"}, headers=cdoc,
+    )
+    assert hop2.status_code == 200, hop2.text
+    assert hop2.json()["status"] == "township_reviewed"
+    assert hop2.json()["current_org_id"] == county_id
+
+
+def test_referral_global_review_keeps_org_anchor(client, h, base):
+    """回归 ADR-0004：全域角色（admin，无绑定机构）代推进后不得把机构锚点清成 None，
+    否则后续环节的 parent 校验会把所有非全域账号锁死。"""
+    village_id = base["village"]["id"]
+    township_id = base["township"]["id"]
+
+    patient = client.post(
+        "/api/patients",
+        json={"name": "锚点测试患者", "id_card": "330182198204040098", "phone": "13900009098"},
+        headers=h,
+    ).json()
+    client.post(
+        "/api/spd/enrollments",
+        json={"patient_id": patient["id"], "program_code": "hypertension",
+              "org_id": village_id, "risk_level": "high"},
+        headers=h,
+    )
+    client.post(
+        "/api/users",
+        json={"username": "ref_tdoc2", "password": "pass123456", "role": "doctor",
+              "org_id": township_id},
+        headers=h,
+    )
+    tdoc = client.post(
+        "/api/auth/login", json={"username": "ref_tdoc2", "password": "pass123456"}
+    ).json()
+    tdoc = {"Authorization": f"Bearer {tdoc['access_token']}"}
+
+    # village 发起（admin 代发，其 org_id=None，回落到 enrollment 的 village）
+    case_id = client.post(
+        "/api/spd/referrals",
+        json={"patient_id": patient["id"], "program_code": "hypertension", "reason": "上转"},
+        headers=h,
+    ).json()["id"]
+
+    # admin（全域）做步骤一：不应把 current_org_id 清成 None
+    step1 = client.post(
+        f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=h
+    ).json()
+    assert step1["status"] == "station_reviewed"
+    assert step1["current_org_id"] == village_id, "全域代推进须保留机构锚点，不能清 None"
+
+    # 非全域的 township（village 的直接上级）仍可继续推进，未被锁死
+    step2 = client.post(
+        f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=tdoc
+    )
+    assert step2.status_code == 200, step2.text
+    assert step2.json()["status"] == "township_reviewed"
+
+
 def test_closure_rate_excludes_rejected(client, h):
     stats = client.get("/api/spd/referrals-stats/closure", headers=h).json()
     assert stats["denominator"] == (
