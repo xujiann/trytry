@@ -463,6 +463,7 @@ class InfectiousCase(Base):
     category: Mapped[str] = mapped_column(String(4), default="")
     onset_date: Mapped[str] = mapped_column(String(10), index=True)
     reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class PerformanceIndicator(Base):

@@ -1164,6 +1164,8 @@
 - `category` · VARCHAR(4) · NOT NULL
 - `onset_date` · VARCHAR(10) · NOT NULL · index
 - `reported_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_infectious_cases_created_at(created_at)
 - _index_ ix_infectious_cases_disease_code(disease_code)
 - _index_ ix_infectious_cases_onset_date(onset_date)
 - _index_ ix_infectious_cases_org_id(org_id)
