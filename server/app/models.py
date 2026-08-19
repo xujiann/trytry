@@ -1217,6 +1217,7 @@ class DutyRoster(Base):
     duty_date: Mapped[str] = mapped_column(String(10), index=True)
     shift: Mapped[str] = mapped_column(String(16), default="全天")
     doctor_name: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class QcRecord(Base):
