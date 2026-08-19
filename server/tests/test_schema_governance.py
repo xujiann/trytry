@@ -86,8 +86,8 @@ def test_核心表结构已冻结():
 # 轨迹：52 → 51（voucher_entries）→ 50（fund_settlements）→ 48（maternal_visits + child_visits）
 #      → 46（qc_records + visit_credentials）→ 45（spd_measurements，spd 链）
 #      → 44（vaccination_records）→ 43（exam_reports）→ 42（health_monitor_records）
-#      → 41（infectious_cases）。
-BASELINE_MISSING_CREATED_AT = 41
+#      → 41（infectious_cases）→ 40（prescription_items）。
+BASELINE_MISSING_CREATED_AT = 40
 
 
 def test_缺created_at的表不许变多():
