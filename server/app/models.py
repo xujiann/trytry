@@ -558,6 +558,7 @@ class AppointmentSlot(Base):
     slot_time: Mapped[str] = mapped_column(String(16), default="")
     capacity: Mapped[int] = mapped_column(Integer, default=1)
     booked: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Appointment(Base):
