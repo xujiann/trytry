@@ -406,7 +406,9 @@
 - `org_id` · INTEGER · NOT NULL · → organizations.id
 - `specialty` · VARCHAR(64) · NOT NULL
 - `available` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (name)
+- _index_ ix_consult_experts_created_at(created_at)
 
 ## consultations
 
@@ -596,7 +598,9 @@
 - `require_procedure` · BOOLEAN · NOT NULL
 - `is_fallback` · BOOLEAN · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_drg_groups_code(code) UNIQUE
+- _index_ ix_drg_groups_created_at(created_at)
 - _index_ ix_drg_groups_mdc(mdc)
 
 ## drug_rules
@@ -1773,6 +1777,8 @@
 - `footer_note` · VARCHAR(256) · NOT NULL
 - `show_qr` · BOOLEAN · NOT NULL
 - `updated_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_print_templates_created_at(created_at)
 - _index_ ix_print_templates_doc_type(doc_type) UNIQUE
 
 ## progress_notes
@@ -1961,7 +1967,9 @@
 - `center_type` · VARCHAR(16) · NOT NULL · index
 - `name` · VARCHAR(128) · NOT NULL
 - `content` · VARCHAR(2048) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_report_templates_center_type(center_type)
+- _index_ ix_report_templates_created_at(created_at)
 
 ## resident_accounts
 

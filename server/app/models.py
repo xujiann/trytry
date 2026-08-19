@@ -1244,6 +1244,7 @@ class ReportTemplate(Base):
     center_type: Mapped[str] = mapped_column(String(16), index=True)
     name: Mapped[str] = mapped_column(String(128))
     content: Mapped[str] = mapped_column(String(2048), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class CssdRequest(Base):
@@ -1271,6 +1272,7 @@ class ConsultExpert(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     specialty: Mapped[str] = mapped_column(String(64), default="")
     available: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class ServiceBlacklist(Base):
@@ -1587,6 +1589,7 @@ class DrgGroup(Base):
     # 块3：QY 兜底组标志，统计中单列且不计入 CMI
     is_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 # ---------- 浙江省指南 M11：集成平台底座（交换监控） ----------
@@ -2088,6 +2091,7 @@ class PrintTemplate(Base):
     footer_note: Mapped[str] = mapped_column(String(256), default="")
     show_qr: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class QcRule(Base):
