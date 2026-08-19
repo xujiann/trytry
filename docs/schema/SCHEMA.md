@@ -1813,7 +1813,9 @@
 - `result` · VARCHAR(8) · NOT NULL
 - `note` · VARCHAR(512) · NOT NULL
 - `record_date` · VARCHAR(10) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_qc_records_center_type(center_type)
+- _index_ ix_qc_records_created_at(created_at)
 
 ## qc_rules
 
@@ -2643,7 +2645,9 @@
 - `measured_at` · DATETIME · NOT NULL · index
 - `operator_id` · INTEGER · → users.id
 - `note` · VARCHAR(256) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_meas_patient_metric(patient_id, metric, measured_at)
+- _index_ ix_spd_measurements_created_at(created_at)
 - _index_ ix_spd_measurements_level(level)
 - _index_ ix_spd_measurements_measured_at(measured_at)
 - _index_ ix_spd_measurements_metric(metric)
@@ -3619,8 +3623,10 @@
 - `batch_no` · VARCHAR(64) · NOT NULL · index
 - `site` · VARCHAR(32) · NOT NULL
 - `vaccinator` · VARCHAR(64) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_vaccination_records_batch_id(batch_id)
 - _index_ ix_vaccination_records_batch_no(batch_no)
+- _index_ ix_vaccination_records_created_at(created_at)
 - _index_ ix_vaccination_records_patient_id(patient_id)
 
 ## vaccine_batches
@@ -3673,6 +3679,8 @@
 - `issued_at` · DATETIME · NOT NULL
 - `closed_at` · DATETIME
 - `close_reason` · VARCHAR(128) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_visit_credentials_created_at(created_at)
 - _index_ ix_visit_credentials_credential_no(credential_no) UNIQUE
 - _index_ ix_visit_credentials_credential_type(credential_type)
 - _index_ ix_visit_credentials_org_id(org_id)

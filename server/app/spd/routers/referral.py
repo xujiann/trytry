@@ -264,6 +264,23 @@ def _assert_review_authority(db: Session, user: User, case: SpdReferralCase) -> 
         )
 
 
+def _assert_holds_case(user: User, case: SpdReferralCase) -> None:
+    """到院/下转/随访接收：只有本单**当前持有机构**（`current_org_id`）能操作；全域角色放行。
+
+    与 `_assert_review_authority` 同源（ADR-0004），但这几步不是逐级上收，而是"谁现在
+    拿着这张单谁操作"：分级审核逐级把 `current_org` 推到受理机构（`review` 每步将其置为
+    审核者机构），受理后即受理机构、下转后即下转目标机构，故一律以 `current_org_id` 判定。
+
+    注意：`current_org` 的正确性依赖审核链由**机构账号**逐级推进。若审核由全域账号
+    （admin/director，`org_id` 常为空）代驱动，锚点会滞留在发起机构——这类"中心代录"
+    场景本就由全域角色兜底操作（下面直接放行），不受此处机构校验限制。
+    """
+    if user.role in GLOBAL_ROLES:
+        return
+    if user.org_id is None or user.org_id != case.current_org_id:
+        raise HTTPException(status_code=403, detail="仅本单当前处理机构可执行该操作")
+
+
 def _add_step(
     db: Session, case: SpdReferralCase, step: str, action: str, user: User, opinion: str = ""
 ) -> None:
@@ -480,6 +497,7 @@ def arrive_referral(
         raise HTTPException(status_code=404, detail="转诊单不存在")
     if case.status != "accepted":
         raise HTTPException(status_code=409, detail="只有已接收的转诊单可登记到院")
+    _assert_holds_case(user, case)
     case.status = "arrived"
     case.effective_visit = body.effective_visit
     _add_step(db, case, "到院", "arrive", user, body.opinion)
@@ -515,6 +533,7 @@ def down_referral(
         raise HTTPException(status_code=404, detail="转诊单不存在")
     if case.status not in ("accepted", "arrived"):
         raise HTTPException(status_code=409, detail="只有已接收/已到院的患者可下转")
+    _assert_holds_case(user, case)
     if db.get(Organization, body.target_org_id) is None:
         raise HTTPException(status_code=404, detail="下转目标机构不存在")
     case.status = "down_referred"
@@ -550,6 +569,7 @@ def receive_followup(
         raise HTTPException(status_code=404, detail="转诊单不存在")
     if case.status != "down_referred":
         raise HTTPException(status_code=409, detail="只有已下转的转诊单可接收随访")
+    _assert_holds_case(user, case)
     case.status = "closed"
     case.closed_at = now_naive()
     _add_step(db, case, "随访接收", "receive", user, body.opinion)
