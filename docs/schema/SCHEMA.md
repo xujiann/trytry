@@ -2645,7 +2645,9 @@
 - `measured_at` · DATETIME · NOT NULL · index
 - `operator_id` · INTEGER · → users.id
 - `note` · VARCHAR(256) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_meas_patient_metric(patient_id, metric, measured_at)
+- _index_ ix_spd_measurements_created_at(created_at)
 - _index_ ix_spd_measurements_level(level)
 - _index_ ix_spd_measurements_measured_at(measured_at)
 - _index_ ix_spd_measurements_metric(metric)
