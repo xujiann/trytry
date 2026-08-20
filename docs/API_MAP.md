@@ -118,7 +118,7 @@
 
 | 重复项 | 证据 |
 |---|---|
-| 两套转诊接口 | `/api/referrals`(3 端点) vs `/api/spd/referrals*`(14 端点)，居民端两份互不相交列表 |
+| 两套转诊接口 | `/api/referrals`(3 端点) vs `/api/spd/referrals*`(14 端点)。**写侧仍是两套**（ADR-0003 方案 C 待立项）；**读侧已聚合**：`GET /api/portal/me/referrals/all` 并成一份、居民端两个页面均取自它，两份互不相交列表的用户可感知孤岛已消除（ADR-0003 方案 B）|
 | 三套随访接口 | `/api/chronic/{id}/followups` vs `/api/followups`(6) vs `/api/spd/followup-*`(11) |
 | 两套专病目录 | `/api/disease-programs`(9) vs `/api/spd/programs`（创建逻辑逐字相同含报错文案） |
 | SpdScreening 疑似判定 | 医护端 `high` 才算 vs 居民自查 `mid` 就算（阈值不一致） |

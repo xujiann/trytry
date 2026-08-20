@@ -1048,6 +1048,7 @@ register_referral_source("platform", _platform_referral_source)
 @router.get("/me/referrals/all", response_model=list[ReferralFeedItem])
 def portal_my_referrals_all(
     patient_id: int | None = None,
+    source: str | None = None,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -1055,10 +1056,20 @@ def portal_my_referrals_all(
 
     每条都带 `source` 与 `status_label`——两套状态码同名不同义，不标源就读不懂。
     子系统未启用时只返回平台那一份。
+
+    `source` 可把结果**收窄到单个源**（如慢专病页只看 `spd`）。这必须在服务端做：
+    条数上限是**合并之后**才截的，客户端拿到 50 条再自己筛，会在"另一个源的单子
+    足够多且更新"时把本源的单子整段挤掉——居民明明有在办的转诊，页面却显示"暂无"。
     """
+    if source is not None and source not in _REFERRAL_SOURCES:
+        raise HTTPException(status_code=422, detail=f"未知转诊数据源：{source}")
     patient = accessible_patient(db, account, patient_id)
+    loaders = (
+        [_REFERRAL_SOURCES[source]] if source is not None
+        else list(_REFERRAL_SOURCES.values())
+    )
     items: list[dict] = []
-    for loader in _REFERRAL_SOURCES.values():
+    for loader in loaders:
         items.extend(loader(db, patient.id))
     # 按**完整时间戳**倒序——只按日期排会让同一天里的先后按源名交错。
     # 同一时刻再按源名与 id 兜底，保证顺序确定（否则分页与快照测试会飘）。

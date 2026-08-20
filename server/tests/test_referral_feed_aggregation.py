@@ -293,6 +293,55 @@ def test_子系统未装载时聚合降级为平台单源(client, resident, monk
         portal_mod._REFERRAL_SOURCES.update(kept)
 
 
+def test_source参数在服务端收窄_不被另一源挤出窗口(client, resident):
+    """条数上限是**合并之后**才截的，所以收窄必须在服务端做。
+
+    造 `REFERRAL_FEED_LIMIT` 条更新的平台转诊，把唯一一条慢专病单子压在窗口之外：
+    不带 `source` 时它确实看不见（这正是客户端 filter 会踩的坑——慢专病页会显示
+    "暂无转诊记录"而居民其实有在办的单子）；带上 `source=spd` 就必须能看见。
+    """
+    from datetime import datetime
+
+    from app.routers.portal import REFERRAL_FEED_LIMIT
+    from app.spd.models import SpdReferralCase
+
+    with SessionLocal() as db:
+        db.query(Referral).delete()
+        doctor = db.query(User).filter(User.username == "admin").first()
+        # 一条很早的慢专病单
+        db.add(SpdReferralCase(
+            patient_id=resident["patient"]["id"], direction="up",
+            initiator_org_id=resident["org_a"]["id"], current_level="village",
+            status="submitted", reason="被挤出去的那条",
+            created_at=datetime(2020, 1, 1, 0, 0),
+        ))
+        # 满窗口的、更新的平台转诊
+        for i in range(REFERRAL_FEED_LIMIT):
+            db.add(Referral(
+                patient_id=resident["patient"]["id"],
+                from_org_id=resident["org_a"]["id"], to_org_id=resident["org_b"]["id"],
+                direction="up", reason=f"平台{i}", status="pending", created_by=doctor.id,
+                created_at=datetime(2026, 6, 1, 12, 0),
+            ))
+        db.commit()
+
+    merged = client.get("/api/portal/me/referrals/all",
+                        headers=resident["headers"]).json()
+    assert {i["source"] for i in merged} == {"platform"}, \
+        "前提：慢专病那条确实被挤出了合并后的窗口"
+
+    scoped = client.get("/api/portal/me/referrals/all?source=spd",
+                        headers=resident["headers"]).json()
+    assert [i["reason"] for i in scoped] == ["被挤出去的那条"], \
+        "服务端收窄后，慢专病那条必须回来——客户端 filter 做不到这件事"
+
+
+def test_未知source拒绝而不是静默返回空(client, resident):
+    resp = client.get("/api/portal/me/referrals/all?source=nope",
+                      headers=resident["headers"])
+    assert resp.status_code == 422, resp.text
+
+
 def test_聚合源注册是幂等的():
     """装卸开关反复开关时不该越积越多（与附件业务域注册同一约定）。"""
     from app.routers.portal import _REFERRAL_SOURCES, register_referral_source
