@@ -2396,8 +2396,10 @@
 - `last_latency_ms` · INTEGER · NOT NULL
 - `success_rate` · FLOAT · NOT NULL
 - `status` · VARCHAR(16) · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_data_sources_active(active)
 - _index_ ix_spd_data_sources_code(code) UNIQUE
+- _index_ ix_spd_data_sources_created_at(created_at)
 - _index_ ix_spd_data_sources_source_type(source_type)
 - _index_ ix_spd_data_sources_status(status)
 
@@ -2553,8 +2555,10 @@
 - `stock` · INTEGER · NOT NULL
 - `image_url` · VARCHAR(256) · NOT NULL
 - `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_goods_active(active)
 - _index_ ix_spd_goods_code(code) UNIQUE
+- _index_ ix_spd_goods_created_at(created_at)
 
 ## spd_group_members
 
@@ -2562,7 +2566,9 @@
 - `group_id` · INTEGER · NOT NULL · index · → spd_groups.id
 - `patient_id` · INTEGER · NOT NULL · index · → patients.id
 - `added_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (group_id, patient_id) uq_spd_group_member
+- _index_ ix_spd_group_members_created_at(created_at)
 - _index_ ix_spd_group_members_group_id(group_id)
 - _index_ ix_spd_group_members_patient_id(patient_id)
 
@@ -2713,6 +2719,8 @@
 - `bound_at` · DATETIME · NOT NULL
 - `unbound_at` · DATETIME
 - `period_end` · VARCHAR(10) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_spd_package_bindings_created_at(created_at)
 - _index_ ix_spd_package_bindings_enrollment_id(enrollment_id)
 - _index_ ix_spd_package_bindings_package_id(package_id)
 - _index_ ix_spd_package_bindings_status(status)
@@ -2728,7 +2736,9 @@
 - `operator_id` · INTEGER · → users.id
 - `note` · VARCHAR(256) · NOT NULL
 - `used_at` · DATETIME · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_package_usages_binding_id(binding_id)
+- _index_ ix_spd_package_usages_created_at(created_at)
 - _index_ ix_spd_package_usages_used_at(used_at)
 
 ## spd_path_instances
@@ -2745,6 +2755,8 @@
 - `started_at` · DATETIME · NOT NULL
 - `finished_at` · DATETIME
 - `owner_user_id` · INTEGER · → users.id
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_spd_path_instances_created_at(created_at)
 - _index_ ix_spd_path_instances_current_node_key(current_node_key)
 - _index_ ix_spd_path_instances_enrollment_id(enrollment_id)
 - _index_ ix_spd_path_instances_status(status)
@@ -2770,7 +2782,9 @@
 - `require_evidence` · BOOLEAN · NOT NULL
 - `form_code` · VARCHAR(32) · NOT NULL
 - `note` · VARCHAR(256) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (template_id, key) uq_spd_node_key
+- _index_ ix_spd_path_nodes_created_at(created_at)
 - _index_ ix_spd_path_nodes_template_id(template_id)
 
 ## spd_path_templates
@@ -2805,6 +2819,8 @@
 - `earned` · INTEGER · NOT NULL
 - `used` · INTEGER · NOT NULL
 - `updated_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_spd_point_accounts_created_at(created_at)
 - _index_ ix_spd_point_accounts_user_id(user_id) UNIQUE
 
 ## spd_point_records
@@ -3166,7 +3182,9 @@
 - `period_days` · INTEGER · NOT NULL
 - `items` · JSON · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_service_packages_code(code) UNIQUE
+- _index_ ix_spd_service_packages_created_at(created_at)
 - _index_ ix_spd_service_packages_program_code(program_code)
 
 ## spd_signins
@@ -3188,6 +3206,8 @@
 - `latency_ms` · INTEGER · NOT NULL
 - `success` · BOOLEAN · NOT NULL
 - `message` · VARCHAR(256) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_spd_sync_logs_created_at(created_at)
 - _index_ ix_spd_sync_logs_source_id(source_id)
 - _index_ ix_spd_sync_logs_started_at(started_at)
 
@@ -3220,7 +3240,9 @@
 - `form_code` · VARCHAR(32) · NOT NULL
 - `edu_code` · VARCHAR(32) · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (program_id, stage, metric) uq_spd_target_stage_metric
+- _index_ ix_spd_targets_created_at(created_at)
 - _index_ ix_spd_targets_program_id(program_id)
 - _index_ ix_spd_targets_stage(stage)
 
@@ -3282,7 +3304,9 @@
 - `can_audit` · BOOLEAN · NOT NULL
 - `can_assess` · BOOLEAN · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (team_id, user_id) uq_spd_team_member
+- _index_ ix_spd_team_members_created_at(created_at)
 - _index_ ix_spd_team_members_member_role(member_role)
 - _index_ ix_spd_team_members_team_id(team_id)
 - _index_ ix_spd_team_members_user_id(user_id)
