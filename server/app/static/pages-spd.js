@@ -32,7 +32,7 @@ const SPD_TASK_TYPES = {
   edu: "宣教", screen: "筛查复核",
 };
 const SPD_REF_STATUS = {
-  submitted: ["待服务站复核", "orange"], station_reviewed: ["待卫生院审核", "orange"],
+  submitted: ["待卫生院审核", "orange"], station_reviewed: ["待卫生院审核(存量)", "orange"],
   township_reviewed: ["待县级接收", "orange"], accepted: ["已接收", ""],
   arrived: ["已到院", ""], down_referred: ["已下转", ""],
   closed: ["已闭环", "green"], rejected: ["已退回", "red"], withdrawn: ["已撤回", ""],
@@ -805,7 +805,7 @@ async function renderSpdPath() {
 
 async function renderSpdReferral() {
   $("#page-desc").textContent =
-    "村医 → 服务站 → 卫生院 → 县级医院逐级转诊：分级审核、到院有效判定、下转随访接收闭环";
+    "村医 → 乡镇卫生院 → 区市县医院三级转诊：分级审核、到院有效判定、下转随访接收闭环";
   const [closure, cases, alerts, rules] = await Promise.all([
     api("/api/spd/referrals-stats/closure"),
     api("/api/spd/referrals?open_only=false&limit=30"),

@@ -36,3 +36,4 @@ migration cost / risk / recommendation**。
 | [0002](0002-生产迁移统一走alembic停用createall.md) | 生产迁移统一走 alembic，停用 create_all 建表 | Proposed |
 | [0003](0003-三套并行子域的收敛策略.md) | 三套并行子域（慢病/专病/慢专病）的收敛策略 | Proposed |
 | [0004](0004-转诊分级审核按机构树校验推进权限.md) | 转诊分级审核按机构树（parent_id）校验推进权限 | Accepted |
+| [0005](0005-转诊链路收敛为三级.md) | spd 转诊链路收敛为村→乡镇→区市县三级 | Accepted |

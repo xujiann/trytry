@@ -154,7 +154,7 @@ async function loadSpdReferral(box) {
   box.innerHTML = rows.map((r) => `<div class="m-card">
     ${kv("患者", esc(r.patient_name))}
     ${kv("方向", r.direction === "up" ? "上转" : "下转")}
-    ${kv("当前环节", esc({ submitted: "待服务站复核", station_reviewed: "待卫生院审核",
+    ${kv("当前环节", esc({ submitted: "待卫生院审核", station_reviewed: "待卫生院审核(存量)",
       township_reviewed: "待县级接收", accepted: "已接收待到院",
       arrived: "已到院", down_referred: "待承接随访" }[r.status] || r.status))}
     ${kv("理由", esc(r.reason || "—"))}
