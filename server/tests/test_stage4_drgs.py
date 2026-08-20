@@ -120,6 +120,16 @@ def test_case_summary_auto_grouping(client, admin, setup):
 
 
 def test_drg_stats_cmi_and_group_costs(client, admin, setup):
+    # 机构A 的两例原本靠上一条用例（test_case_summary_auto_grouping）顺带造出来——
+    # 整模块跑得过是因为它排在前面；`pytest -k stats` 只选中本条时，
+    # 统计里根本没有"DRG县医院"这一行，`by_org["DRG县医院"]` 直接 KeyError。
+    # 用例之间不该有这种看不见的先后依赖，本条自己把要统计的病例造齐。
+    if not client.get(
+        f"/api/inpatient/admissions?patient_id={setup['patients'][0]['id']}", headers=admin
+    ).json():
+        _discharge_case(client, setup, admin, "a", 0, setup["patients"][0], "社区获得性肺炎", 6000)
+        _discharge_case(client, setup, admin, "a", 1, setup["patients"][1], "罕见代谢病", 3000)
+
     # 机构B：脑梗（权重1.35）+ 糖尿病（0.78）
     _discharge_case(client, setup, admin, "b", 0, setup["patients"][2], "急性脑梗死", 12000)
     _discharge_case(client, setup, admin, "b", 1, setup["patients"][3], "2型糖尿病", 4000)

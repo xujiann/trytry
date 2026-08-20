@@ -117,11 +117,39 @@ def test_dictionary_four_unifications(client, auth_headers):
     assert unknown.status_code == 404
 
 
-def test_referral_status_flow(client, auth_headers):
-    patient = client.get("/api/patients?keyword=张三", headers=auth_headers).json()[0]
-    orgs = client.get("/api/organizations", headers=auth_headers).json()
-    township = next(o for o in orgs if o["level"] == "township")
-    county = next(o for o in orgs if o["level"] == "county")
+@pytest.fixture(scope="module")
+def referral_fixtures(client, auth_headers):
+    """本用例要用的机构与患者，自己建。
+
+    原来是直接 `GET /api/patients?keyword=张三` 取上一条用例建的那个人、
+    再 `GET /api/organizations` 取上一条用例建的机构——**跨用例借数据**。
+    整模块跑得过，是因为前面那两条恰好先执行；`pytest -k referral` 只选中这一条时，
+    列表是空的，`[0]` 直接 IndexError。测试之间不该有这种看不见的先后依赖。
+    """
+    patient = client.post(
+        "/api/patients",
+        json={"name": "转诊流转患者", "id_card": "320981199001011299", "gender": "男"},
+        headers=auth_headers,
+    ).json()
+    orgs = {}
+    for name, level, org_type in (
+        ("转诊流转卫生院", "township", "township"),
+        ("转诊流转县医院", "county", "lead_hospital"),
+    ):
+        resp = client.post(
+            "/api/organizations",
+            json={"name": name, "level": level, "org_type": org_type},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 201, resp.text
+        orgs[level] = resp.json()
+    return {"patient": patient, **orgs}
+
+
+def test_referral_status_flow(client, auth_headers, referral_fixtures):
+    patient = referral_fixtures["patient"]
+    township = referral_fixtures["township"]
+    county = referral_fixtures["county"]
 
     referral = client.post(
         "/api/referrals",

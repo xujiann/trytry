@@ -268,6 +268,24 @@ def test_infectious_multi_point_alert(client, headers, base_data):
 
 def test_portal_identity_verification(client, headers, base_data):
     patient = base_data["patient"]
+    # `chronic_care` 原本靠上一条用例（test_chronic_smart_leveling_and_overdue）
+    # 顺带建出来——整模块跑得过是因为它排在前面；`pytest -k portal_identity`
+    # 只选中本条时 `chronic_care` 是空的，`[0]` 直接 IndexError。
+    # 本条自己保证这份前置数据存在。
+    if not client.get(
+        f"/api/chronic?patient_id={patient['id']}", headers=headers
+    ).json():
+        chronic = client.post(
+            "/api/chronic",
+            json={"patient_id": patient["id"], "disease": "hypertension",
+                  "managed_by_org_id": base_data["township"]["id"]},
+            headers=headers,
+        ).json()
+        client.post(
+            f"/api/chronic/{chronic['id']}/followups",
+            json={"sbp": 165, "dbp": 95, "next_due": "2026-01-01"},
+            headers=headers,
+        )
 
     wrong = client.get(f"/api/portal/my-archive?ehc_no={patient['ehc_no']}&id_card=WRONG")
     assert wrong.status_code == 403

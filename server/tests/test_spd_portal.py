@@ -66,6 +66,29 @@ def ph(client, base):
     return headers
 
 
+@pytest.fixture(scope="module")
+def enrollment(client, h, base):
+    """保证本人已有一份高血压在管档案。
+
+    `journey` / `referrals` 这些居民端视图都以"在管"为前提，原先靠
+    `test_home_measurement_records_and_levels` 排在前面顺带建出来——
+    `pytest -k journey` 只选中那一条时 `journey["programs"]` 是空的。
+    幂等：已有就直接返回（重复建会 409）。
+    """
+    existing = client.get("/api/spd/enrollments", headers=h).json()
+    mine = [e for e in existing if e["patient_id"] == base["me"]["id"]]
+    if mine:
+        return mine[0]
+    resp = client.post(
+        "/api/spd/enrollments",
+        json={"patient_id": base["me"]["id"], "program_code": "hypertension",
+              "org_id": base["org"]["id"], "risk_level": "mid"},
+        headers=h,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
 def test_business_token_rejected_on_portal(client, h):
     resp = client.get("/api/portal/spd/home", headers=h)
     assert resp.status_code == 401, "业务端令牌不得进入居民端接口"
@@ -234,7 +257,7 @@ def test_task_requiring_evidence_blocks_submit(client, ph, h, base):
     assert ok.json()["status"] == "submitted"
 
 
-def test_journey_and_referral_visible(client, ph, h, base):
+def test_journey_and_referral_visible(client, ph, h, base, enrollment):
     client.post(
         "/api/spd/referrals",
         json={"patient_id": base["me"]["id"], "program_code": "hypertension",
