@@ -758,6 +758,7 @@ class SpdMeasurement(Base):
     measured_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     note: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdAssessment(Base):

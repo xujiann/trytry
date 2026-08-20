@@ -76,7 +76,7 @@ def overview(db: Session = Depends(get_db)):
     ]
     recent_failures = (
         db.query(JobRun)
-        .filter(JobRun.status != "success")
+        .filter(JobRun.status != "succeeded")
         .order_by(JobRun.id.desc())
         .limit(5)
         .all()

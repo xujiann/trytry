@@ -240,6 +240,7 @@ class ExamReport(Base):
     critical_status: Mapped[str] = mapped_column(String(16), default="", index=True)
     reported_by: Mapped[str] = mapped_column(String(64), default="")
     reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     request: Mapped[ExamRequest] = relationship(back_populates="report")
 
@@ -347,6 +348,7 @@ class PrescriptionItem(Base):
     drug_name: Mapped[str] = mapped_column(String(128))
     daily_dose: Mapped[float] = mapped_column(Float)
     days: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     prescription: Mapped[Prescription] = relationship(back_populates="items")
 
@@ -364,6 +366,7 @@ class DrugStock(Base):
     quantity: Mapped[int] = mapped_column(Integer, default=0)
     # 低于该阈值触发缺药预警
     threshold: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class StockTransfer(Base):
@@ -462,6 +465,7 @@ class InfectiousCase(Base):
     category: Mapped[str] = mapped_column(String(4), default="")
     onset_date: Mapped[str] = mapped_column(String(10), index=True)
     reported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class PerformanceIndicator(Base):
@@ -554,6 +558,7 @@ class AppointmentSlot(Base):
     slot_time: Mapped[str] = mapped_column(String(16), default="")
     capacity: Mapped[int] = mapped_column(Integer, default=1)
     booked: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Appointment(Base):
@@ -963,6 +968,7 @@ class MaternalVisit(Base):
     bp: Mapped[str] = mapped_column(String(16), default="")
     note: Mapped[str] = mapped_column(String(512), default="")
     visit_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     record: Mapped[MaternalRecord] = relationship(back_populates="visits")
 
@@ -996,6 +1002,7 @@ class ChildVisit(Base):
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str] = mapped_column(String(512), default="")
     visit_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     child: Mapped[ChildRecord] = relationship(back_populates="visits")
 
@@ -1025,6 +1032,7 @@ class VaccinationRecord(Base):
     # 接种部位与途径（AEFI 归因时要用）
     site: Mapped[str] = mapped_column(String(32), default="")
     vaccinator: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class VaccineContraindication(Base):
@@ -1101,6 +1109,7 @@ class HealthMonitorRecord(Base):
     threshold: Mapped[float] = mapped_column(Float)
     exceeded: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     record_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Employee(Base):
@@ -1208,6 +1217,7 @@ class DutyRoster(Base):
     duty_date: Mapped[str] = mapped_column(String(10), index=True)
     shift: Mapped[str] = mapped_column(String(16), default="全天")
     doctor_name: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class QcRecord(Base):
@@ -1222,6 +1232,7 @@ class QcRecord(Base):
     result: Mapped[str] = mapped_column(String(8))
     note: Mapped[str] = mapped_column(String(512), default="")
     record_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class ReportTemplate(Base):
@@ -2915,6 +2926,7 @@ class VoucherEntry(Base):
     # 按命名批量处理必须回头核对剩下的清单，不能只看匹配到的那一批。
     debit: Mapped[float] = mapped_column(Money, default=0)
     credit: Mapped[float] = mapped_column(Money, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     voucher: Mapped[Voucher] = relationship(back_populates="entries")
 
@@ -3258,6 +3270,7 @@ class VisitCredential(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     close_reason: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class ConsentTemplate(Base):
@@ -3493,6 +3506,7 @@ class FundSettlement(Base):
     score_basis: Mapped[str] = mapped_column(String(128), default="")
     settled_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class FundDistribution(Base):

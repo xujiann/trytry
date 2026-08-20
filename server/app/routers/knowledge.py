@@ -29,9 +29,40 @@ class EntryCreate(BaseModel):
     expire_date: str = ""
 
 
+# 响应契约：字段与原手拼 dict 一一对应，保持响应向后兼容。
+class EntryCreateOut(BaseModel):
+    id: int
+    category: str
+    title: str
+
+
+class EntryUpdateOut(BaseModel):
+    id: int
+    active: bool
+    expire_date: str
+
+
+class EntrySearchOut(BaseModel):
+    id: int
+    category: str
+    category_name: str
+    title: str
+    body: str
+    expire_date: str
+    expired: bool
+
+
+class EntryExpiringOut(BaseModel):
+    id: int
+    category: str
+    title: str
+    expire_date: str
+
+
 @router.post(
     "",
     status_code=201,
+    response_model=EntryCreateOut,
     dependencies=[Depends(require_roles("director", "public_health"))],  # 知识条目发布
 )
 def create_entry(
@@ -51,6 +82,7 @@ class EntryUpdate(BaseModel):
 
 @router.patch(
     "/{entry_id}",
+    response_model=EntryUpdateOut,
     dependencies=[Depends(require_roles("director", "public_health"))],  # 修订/停用/续期
 )
 def update_entry(entry_id: int, body: EntryUpdate, db: Session = Depends(get_db)):
@@ -63,7 +95,7 @@ def update_entry(entry_id: int, body: EntryUpdate, db: Session = Depends(get_db)
     return {"id": entry.id, "active": entry.active, "expire_date": entry.expire_date}
 
 
-@router.get("")
+@router.get("", response_model=list[EntrySearchOut])
 def search_entries(
     category: str | None = None,
     q: str | None = None,
@@ -97,7 +129,7 @@ def search_entries(
     return results
 
 
-@router.get("/expiring")
+@router.get("/expiring", response_model=list[EntryExpiringOut])
 def expiring_entries(
     days: int = 30, today: str | None = None, db: Session = Depends(get_db)
 ):

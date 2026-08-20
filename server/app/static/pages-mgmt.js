@@ -245,7 +245,7 @@ async function renderAccounting() {
     api(`/api/accounting/trial-balance?period=${period}`),
     api(`/api/accounting/consolidated-statements?period=${period}`)]);
   const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
-  const options = subjects.map((s) => `<option value="${s.code}">${s.code} ${s.name}</option>`).join("");
+  const options = subjects.map((s) => `<option value="${esc(s.code)}">${esc(s.code)} ${esc(s.name)}</option>`).join("");
   $("#page-body").innerHTML = `
     <div class="panel"><h3>会计期间</h3>
       <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form></div>
@@ -583,7 +583,7 @@ async function renderRules() {
     <div class="panel"><h3>新增统一规则（admin）</h3>
       <form class="inline" id="rule-form"><input name="key" placeholder="编码" required>
         <input name="name" placeholder="名称" required>
-        <select name="domain">${domains.map((d) => `<option value="${d.domain}">${esc(d.domain)}</option>`).join("")}</select>
+        <select name="domain">${domains.map((d) => `<option value="${esc(d.domain)}">${esc(d.domain)}</option>`).join("")}</select>
         <input name="condition" placeholder="条件，如 daily_dose > max_daily_dose and age >= 65" required style="min-width:340px">
         <input name="message" placeholder="命中提示">
         <select name="severity"><option value="info">提示</option><option value="warning" selected>警告</option><option value="error">拦截</option></select>
@@ -600,7 +600,7 @@ async function renderRules() {
       })}</div>
     <div class="panel"><h3>在线试算</h3>
       <form id="eval-form"><div class="inline">
-        <select name="domain">${domains.map((d) => `<option value="${d.domain}">${esc(d.domain)}</option>`).join("")}</select>
+        <select name="domain">${domains.map((d) => `<option value="${esc(d.domain)}">${esc(d.domain)}</option>`).join("")}</select>
         <input name="variables" placeholder='变量 JSON，如 {"daily_dose": 3000, "age": 78}' required style="min-width:420px">
         <button>试算</button></div></form>
       <div id="eval-result"></div></div>`;
@@ -677,7 +677,7 @@ async function renderWorkflows() {
          <td>${d.active ? "启用" : "停用"}</td></tr>`)}</div>
     <div class="panel"><h3>发起流程</h3>
       <form class="inline" id="inst-form">
-        <select name="definition_key">${definitions.map((d) => `<option value="${d.key}">${esc(d.name)}</option>`).join("")}</select>
+        <select name="definition_key">${definitions.map((d) => `<option value="${esc(d.key)}">${esc(d.name)}</option>`).join("")}</select>
         <input name="business_type" placeholder="业务类型" required><input name="business_id" type="number" placeholder="业务ID">
         <input name="title" placeholder="事项标题" style="min-width:220px">
         <input name="org_id" type="number" placeholder="机构ID"><button>发起</button></form></div>

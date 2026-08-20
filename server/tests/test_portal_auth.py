@@ -74,6 +74,27 @@ def test_send_code_returns_debug_code_only_in_console_dev(client):
     assert body["cooldown_seconds"] == SEND_COOLDOWN_SECONDS
 
 
+def test_debug_code_suppressed_when_switch_off(client, monkeypatch):
+    """回显收紧：sms_debug_echo 关闭时（即默认值），console 通道也不再泄露验证码。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "sms_debug_echo", False)
+    body = client.post("/api/portal/auth/sms/code", json={"phone": "13900002200"}).json()
+    assert body["sent"] is True
+    assert "debug_code" not in body
+
+
+def test_debug_code_never_echoed_in_production(client, monkeypatch):
+    """双重门：即便误开开关，生产环境（env=prod）也永不回显。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "sms_debug_echo", True)
+    monkeypatch.setattr(settings, "env", "prod")
+    body = client.post("/api/portal/auth/sms/code", json={"phone": "13900002201"}).json()
+    assert body["sent"] is True
+    assert "debug_code" not in body
+
+
 def test_send_code_cooldown_blocks_second_request(client):
     _clear_cooldown("13900003333")
     assert client.post("/api/portal/auth/sms/code", json={"phone": "13900003333"}).status_code == 200

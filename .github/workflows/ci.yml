@@ -11,8 +11,21 @@ env:
   COVERAGE_MIN: "70"
 
 jobs:
+  # unit + smoke（阻断）+ integration（真 PG，warning 模式）
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: medplat_pg_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,12 +33,21 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r server/requirements.txt
-      - name: Run tests with coverage
+      - name: Run unit + smoke tests with coverage
         working-directory: server
         # 端到端测试（tests/e2e，标记 e2e）默认跳过，需 --e2e 且已安装浏览器内核
+        # 集成测试（标记 integration）此处排除，改由下一步在真 PG 上跑
         run: |
-          python -m pytest tests/ -q \
+          python -m pytest tests/ -q -m "not integration and not e2e" \
             --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
+      - name: Run integration tests on real PostgreSQL (warning mode)
+        working-directory: server
+        # SQLite 测不出的方言/迁移敏感点。稳定后去掉 `|| true` 切换为强制门禁。
+        env:
+          MEDPLAT_PG_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/medplat_pg_test
+        run: |
+          python -m pytest tests/ -q -m integration \
+            || echo "::warning title=Integration::集成测试未通过，当前为 warning 模式不阻断构建"
       - name: Coverage gate (warning mode)
         working-directory: server
         run: |
@@ -46,3 +68,25 @@ jobs:
           name: coverage-xml
           path: server/coverage.xml
           if-no-files-found: ignore
+
+  # build + lint + typecheck（均为 warning 模式，与覆盖率门禁一致；稳定后逐个转强制）
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies (含开发工具)
+        run: pip install -r server/requirements.txt -r server/requirements-dev.txt
+      - name: Build check (字节编译 + 迁移图)
+        working-directory: server
+        run: |
+          python -m compileall -q app
+          alembic heads
+      - name: Lint (ruff, warning mode)
+        working-directory: server
+        run: ruff check . || echo "::warning title=Lint::ruff 有未通过项，当前为 warning 模式不阻断构建"
+      - name: Typecheck (mypy 渐进式, warning mode)
+        working-directory: server
+        run: mypy app || echo "::warning title=Typecheck::mypy 有未通过项，当前为 warning 模式不阻断构建"

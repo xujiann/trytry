@@ -1,0 +1,35 @@
+# 工具配置（lint / typecheck / pytest）。不改变运行时行为，仅供开发与 CI。
+# 运行入口统一在仓库根 Makefile。
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["alembic/versions"]  # 迁移脚本自成风格，暂不纳入
+
+[tool.ruff.lint]
+# 起步用高信号规则：pyflakes(F, 未用 import/变量/未定义名) + 语法错误(E9)。
+# 这套几乎全是真问题，先立住能通过的基线；后续可逐步加 I/UP/B 等收紧。
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811"]  # 测试里 fixture/占位 import 常见，先豁免
+
+[tool.mypy]
+# 渐进式类型检查：本仓库几乎无类型注解，故只检查「已注解」的代码，
+# 随注解补全而自然收紧。不追求一次到位，避免制造上千条噪音。
+python_version = "3.12"
+ignore_missing_imports = true      # 第三方库多无 stub
+check_untyped_defs = false         # 未注解函数体先不查
+warn_unused_ignores = true
+warn_redundant_casts = true
+exclude = ["alembic/versions", "tests/"]
+
+[tool.pytest.ini_options]
+# 注册测试分层 marker（e2e 已在 conftest.py 注册，此处补齐其余三档，消除 unknown-marker 警告）。
+# unit    —— 进程内 SQLite 快速套件（默认、无外部依赖）；未打其它 marker 的用例即属此档。
+# integration —— 需真实 PostgreSQL（MEDPLAT_PG_TEST_URL），见 tests/test_postgres_real.py。
+# smoke   —— 应用能起、核心接口有响应、产出指标；见 tests/test_loadtest_smoke.py。
+markers = [
+    "integration: 需要真实外部依赖（PostgreSQL 等）的集成测试",
+    "smoke: 冒烟测试——应用可启动且核心链路有响应",
+]
