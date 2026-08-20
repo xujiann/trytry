@@ -272,6 +272,7 @@ class SpdTag(Base):
     category: Mapped[str] = mapped_column(String(32), default="patient")
     color: Mapped[str] = mapped_column(String(16), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdCenter(Base):
@@ -799,6 +800,7 @@ class SpdInterventionTemplate(Base):
     # 命中该风险等级即自动触发（成员端 #9 "按病种高危标记自动触发任务"）
     auto_risk_level: Mapped[str] = mapped_column(String(16), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdIntervention(Base):
@@ -992,6 +994,7 @@ class SpdReferralRule(Base):
     target_org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
     auto_task: Mapped[bool] = mapped_column(Boolean, default=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdReferralCase(Base):
@@ -1145,6 +1148,7 @@ class SpdPointRule(Base):
     daily_limit: Mapped[int] = mapped_column(Integer, default=0)
     condition: Mapped[str] = mapped_column(String(256), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdPointAccount(Base):
@@ -1252,6 +1256,7 @@ class SpdFollowupRule(Base):
     allow_roles: Mapped[list] = mapped_column(JSON, default=list)
     preset: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdQuestionnaire(Base):
@@ -1270,6 +1275,7 @@ class SpdQuestionnaire(Base):
     handle_role: Mapped[str] = mapped_column(String(32), default="doctor")
     preset: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdFollowupRecord(Base):
