@@ -116,3 +116,44 @@ def test_boolean_defaults_are_boolean(pg_engine):
             "WHERE table_name = 'child_records' AND column_name = 'high_risk'"
         )).scalar()
     assert default and "false" in default.lower()
+
+
+def test_迁移与模型的列集合零漂移(pg_engine):
+    """**列级** parity：真 PG 上跑完 `upgrade heads`，每张表的列必须与模型一致。
+
+    `test_schema_governance.test_模型表零漂移_每张表都被迁移建过` 守的是**表**级——
+    有表就算过。但 ADR-0002 停用 `create_all` 之后，生产库完全由迁移建出，
+    **漏写一列**同样会上线才炸：模型上有、迁移里没有的列，在开发 SQLite 上被
+    `create_all` 悄悄补齐（开发环境仍开着它），到 PG 上就是 UndefinedColumn。
+
+    这正是 ADR-0002 记的残余缺口，这里补上。
+    """
+    from sqlalchemy import inspect
+
+    from app.database import Base
+    import app.models  # noqa: F401 - 导入即注册平台模型
+    import app.spd.models  # noqa: F401 - 以及子系统模型
+
+    inspector = inspect(pg_engine)
+    actual_tables = set(inspector.get_table_names())
+
+    missing_columns: dict[str, set[str]] = {}
+    extra_columns: dict[str, set[str]] = {}
+    for table_name, table in sorted(Base.metadata.tables.items()):
+        if table_name not in actual_tables:
+            continue  # 表级缺失由 test_模型表零漂移 负责报，这里只管列
+        in_db = {c["name"] for c in inspector.get_columns(table_name)}
+        in_model = {c.name for c in table.columns}
+        if in_model - in_db:
+            missing_columns[table_name] = in_model - in_db
+        if in_db - in_model:
+            extra_columns[table_name] = in_db - in_model
+
+    assert not missing_columns, (
+        "模型上有、迁移没建的列（生产会 UndefinedColumn）：\n"
+        + "\n".join(f"  {t}: {sorted(cols)}" for t, cols in missing_columns.items())
+    )
+    assert not extra_columns, (
+        "迁移建了、模型上没有的列（多半是模型删列忘了写迁移，或迁移写错列名）：\n"
+        + "\n".join(f"  {t}: {sorted(cols)}" for t, cols in extra_columns.items())
+    )

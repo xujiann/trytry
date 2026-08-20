@@ -32,6 +32,15 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 3s --health-retries 12
+      # 执行锁的 Lua（比对后删 / 比对后续期）此前只有假 redis 验逻辑——
+      # 那证明不了脚本本身写对了，也证明不了 SET NX EX 的真实语义。
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,6 +60,8 @@ jobs:
         # SQLite 测不出的方言/迁移敏感点。ADR-0002：强制门禁，失败阻断构建。
         env:
           MEDPLAT_PG_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/medplat_pg_test
+          # 用 1 号库：与应用默认的 0 号隔开，别让用例的清理动作碰到别的东西
+          MEDPLAT_REDIS_TEST_URL: redis://127.0.0.1:6379/1
         run: python -m pytest tests/ -q -m integration
       - name: Coverage gate (blocking)
         working-directory: server
