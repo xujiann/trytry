@@ -199,7 +199,7 @@ python scripts/loadtest.py http://127.0.0.1:8000 --concurrency 10 --requests 100
 
 ```bash
 docker compose up -d                          # 一键起 app + PostgreSQL 16 + Redis 7（命名卷持久化）
-cd server && alembic upgrade head             # 结构迁移（与应用共用 MEDPLAT_DATABASE_URL）
+cd server && alembic upgrade heads            # 结构迁移（复数 heads：平台链+spd 链双 head；容器 start.sh 已内置此步，ADR-0002）
 sh scripts/backup.sh /data/backups            # pg_dump 备份（建议 crontab 定时）
 ```
 

@@ -110,7 +110,12 @@ from .security import decode_token, hash_password
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    # ADR-0002：生产环境停用 create_all，结构变更统一走 alembic（部署产物在启动前
+    # 执行 `alembic upgrade heads`）。create_all 只建"不存在的表"、不改列——漏写迁移
+    # 时开发 SQLite 看起来正常、生产 PG 上线才炸（历史已发生过）。开发/测试仍保留
+    # 零配置起库。
+    if not settings.is_production:
+        Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         if db.query(User).filter(User.username == "admin").first() is None:

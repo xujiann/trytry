@@ -1,15 +1,17 @@
-"""全域慢专病 · 转诊域：转诊规则 + 村医→服务站→卫生院→县级医院逐级链路。
+"""全域慢专病 · 转诊域：转诊规则 + 村医→乡镇卫生院→区市县医院三级链路。
 
 对应招标文件：专家端 #8、全程管理中心端 #14/#15、医生移动端 #16/#18、患者端 #16/#17。
 
-链路状态机（上转）：
+链路状态机（上转，ADR-0005 起收敛为三级）：
 
-    submitted ──复核──▶ station_reviewed ──审核──▶ township_reviewed
-        │                                              │
-        │◀──────────── rejected（任一环节退回）         ▼
-        └──withdrawn（发起人撤回）              accepted ──到院──▶ arrived
-                                                          │
-                              closed ◀──随访接收── down_referred（下转）
+    submitted ──卫生院审核──▶ township_reviewed ──县级接收──▶ accepted ──到院──▶ arrived
+        │                         │                                        │
+        │◀────── rejected（任一环节退回）        closed ◀──随访接收── down_referred（下转）
+        └──withdrawn（发起人撤回）
+
+原四级链的"服务站复核"（station_reviewed）一档已收敛掉：机构树实际为村→乡→县三层，
+第四档在现实数据里落不到任何机构。存量在途单据若停在 station_reviewed，仍按旧链
+继续推进（见 _NEXT 的存量兼容项），新单不再进入该状态。
 
 每一格只能由**当前环节**的机构推进，且每推进一格写一条 `SpdReferralStep`。
 状态机写死在 `_NEXT` 表里而不是让调用方传目标状态：让调用方传，等于把
@@ -45,10 +47,12 @@ router = APIRouter(
 
 SERVICE_ROLES = ("doctor", "public_health", "director")
 
-#: 逐级审核链：当前状态 → (下一状态, 环节名, 需要的处理层级)
+#: 逐级审核链：当前状态 → (下一状态, 环节名, 需要的处理层级)。
+#: ADR-0005：收敛为村→乡→县三级，新单两步审核；station_reviewed 仅作存量在途单
+#: 的兼容入口（老单停在该状态仍可由卫生院继续推进），新单不再产生该状态。
 _NEXT = {
-    "submitted": ("station_reviewed", "服务站复核", "station"),
-    "station_reviewed": ("township_reviewed", "卫生院审核", "township"),
+    "submitted": ("township_reviewed", "卫生院审核", "township"),
+    "station_reviewed": ("township_reviewed", "卫生院审核", "township"),  # 存量兼容
     "township_reviewed": ("accepted", "县级医院接收", "county"),
 }
 
@@ -245,9 +249,9 @@ def _assert_review_authority(db: Session, user: User, case: SpdReferralCase) -> 
     """分级审核越权校验（口径：按机构树 parent_id）。
 
     只有本单**当前机构的直接上级机构**（`current_org.parent_id`）能把单子推进一格：
-    submitted 在村卫生室 → 由其上级服务站/卫生院复核，逐级上收。机构层级不靠
-    `org.level` 字符串判定（村/乡/县词表里根本没有"服务站"这一档），而是直接读
-    机构树的父子关系——这也是本仓库既有的机构建模（`organizations.parent_id`）。
+    submitted 在村卫生室 → 由其上级乡镇卫生院审核，逐级上收（ADR-0005 三级链）。
+    机构层级不靠 `org.level` 字符串判定，而是直接读机构树的父子关系——
+    这也是本仓库既有的机构建模（`organizations.parent_id`）。
 
     `admin`/`director` 全域角色放行：县域实际存在"中心代录/复杂病例中心统筹"的
     场景，与 `create_referral` 里允许管理层代基层开单同一口径。机构树未配置
@@ -435,7 +439,7 @@ def review_referral(
     case_id: int, body: ReviewIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """分级审核：服务站复核 → 卫生院审核 → 县级医院接收，一次推进一格。"""
+    """分级审核：卫生院审核 → 县级医院接收，一次推进一格（ADR-0005 三级链）。"""
     case = db.get(SpdReferralCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="转诊单不存在")
@@ -592,6 +596,8 @@ def withdraw_referral(
         raise HTTPException(status_code=404, detail="转诊单不存在")
     if case.initiator_id != user.id and user.role not in ("admin", "director"):
         raise HTTPException(status_code=403, detail="只有发起人可以撤回转诊单")
+    # station_reviewed 为存量在途单兼容（ADR-0005 前的四级链）：该状态尚未进入
+    # 卫生院审核，与 submitted 同样允许撤回；新单不再产生该状态。
     if case.status not in ("submitted", "station_reviewed"):
         raise HTTPException(status_code=409, detail="已进入上级审核的转诊单不能撤回")
     case.status = "withdrawn"
