@@ -888,9 +888,11 @@
 - `recognition_declined_reason` · VARCHAR(256) · NOT NULL
 - `sample_status` · VARCHAR(16) · NOT NULL
 - `claimed_by` · VARCHAR(64) · NOT NULL
+- `claimed_org_id` · INTEGER · index · → organizations.id
 - `created_by` · INTEGER · NOT NULL · → users.id
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_exam_requests_center_type(center_type)
+- _index_ ix_exam_requests_claimed_org_id(claimed_org_id)
 - _index_ ix_exam_requests_item_code(item_code)
 - _index_ ix_exam_requests_patient_id(patient_id)
 - _index_ ix_exam_requests_status(status)

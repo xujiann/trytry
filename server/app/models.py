@@ -222,6 +222,14 @@ class ExamRequest(Base):
     sample_status: Mapped[str] = mapped_column(String(16), default="")
     # L-6 整改：诊断领取人（原子领取时记录，避免并发双领与责任不清）
     claimed_by: Mapped[str] = mapped_column(String(64), default="")
+    # 领取该申请单的**共享诊断中心机构**。`claimed_by` 存的是展示名（full_name 或
+    # username），既不稳定也推不出机构，于是"中心与这位患者有服务关系"这件事
+    # 在模型里一直没有落点——中心医师写完报告却打不开自己写的那份报告。
+    # 列名以 `org_id` 结尾是刻意的：`visibility._relation_tables()` 按该后缀推导
+    # 患者↔机构关系表，命名对了就自动被算进服务关系，不必再维护一份手工清单。
+    claimed_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

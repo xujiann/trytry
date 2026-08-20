@@ -144,9 +144,15 @@ def notify_resident(
     )
 
 
-def register_attachment_owner(owner_type: str, model: type, roles: tuple[str, ...]) -> None:
-    """把子系统的业务对象登记为附件挂接域（装载时调用一次）。"""
-    _register_attachment_owner(owner_type, model, roles)
+def register_attachment_owner(
+    owner_type: str, model: type, roles: tuple[str, ...], scope: str, **kwargs
+) -> None:
+    """把子系统的业务对象登记为附件挂接域（装载时调用一次）。
+
+    `scope` 必填——附件的可见性口径由**登记方**声明，平台不替子系统猜
+    （见 `routers/attachments.OwnerSpec`）。
+    """
+    _register_attachment_owner(owner_type, model, roles, scope, **kwargs)
 
 
 def store_attachment(
