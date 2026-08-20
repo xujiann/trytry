@@ -6,9 +6,12 @@ on:
   pull_request:
 
 env:
-  # CI 解释器版本。注意：生产镜像是 python:3.12-slim，此处仍是 3.11——
-  # 「测的和发的不是同一个解释器」，已登记在 ROADMAP，单独一个 PR 里带全量 3.12 实测再切。
-  PYTHON_VERSION: "3.11"
+  # CI 解释器版本，**与生产镜像同版**（根与 `server/` 两个 Dockerfile 都是
+  # python:3.12-slim），也与 `pyproject.toml` 里 ruff `target-version` /
+  # mypy `python_version` 一致。此前 CI 装 3.11 而生产跑 3.12——测的和发的不是
+  # 同一个解释器，且 lint/typecheck 按 3.12 语义检查、测试按 3.11 语义执行，
+  # 两个阻断门的口径对不上。改这里之前请先在目标版本上跑通 `make verify`。
+  PYTHON_VERSION: "3.12"
   # 块5：覆盖率门禁阈值（ADR-0002 落地时实测 87%，门槛 70% 留有余量）。
   # 强制门禁：低于阈值阻断构建。
   COVERAGE_MIN: "70"
