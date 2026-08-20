@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_with_retry
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_roles, row_dict
 from ..models import ExamRequest, PathologySpecimen
 
 router = APIRouter(
@@ -207,7 +207,7 @@ def advance_specimen(specimen_id: int, body: SpecimenAdvance, db: Session = Depe
 @router.get("/specimen-stats")
 def specimen_stats(db: Session = Depends(get_db)):
     """标本质控统计：拒收率与冷缺血时间。"""
-    by_status = dict(
+    by_status = row_dict(
         db.query(PathologySpecimen.status, func.count(PathologySpecimen.id))
         .group_by(PathologySpecimen.status)
         .all()

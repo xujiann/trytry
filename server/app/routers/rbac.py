@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent
 from ..database import get_db
-from ..deps import ROLE_NAMES, get_current_user, require_admin
+from ..deps import ROLE_NAMES, get_current_user, require_admin, row_dict
 from ..models import Permission, Role, RolePermission, User
 
 router = APIRouter(
@@ -143,7 +143,7 @@ def _role_out(role: Role, permission_count: int = 0) -> dict:
 @router.get("/roles")
 def list_roles(db: Session = Depends(get_db)):
     roles = db.query(Role).order_by(Role.builtin.desc(), Role.id).all()
-    counts = dict(
+    counts = row_dict(
         db.query(RolePermission.role_id, sa.func.count(RolePermission.id))
         .group_by(RolePermission.role_id)
         .all()

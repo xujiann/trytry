@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from ...clock import now_naive
 from ...concurrency import add_amount
 from ...database import get_db
-from ...deps import get_current_user, paginate, require_roles, resolve_business_date
+from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
 from ..platform import Patient, User, evidence_urls, notify_user, valid_task_evidence
 from ..models import (
     SpdEnrollment,
@@ -454,11 +454,11 @@ def task_summary(
     if mine:
         query = query.filter(SpdTask.assignee_id == user.id)
 
-    by_status = dict(
+    by_status = row_dict(
         query.with_entities(SpdTask.status, func.count(SpdTask.id))
         .group_by(SpdTask.status).all()
     )
-    by_type = dict(
+    by_type = row_dict(
         query.filter(SpdTask.status.in_(OPEN_STATUSES))
         .with_entities(SpdTask.task_type, func.count(SpdTask.id))
         .group_by(SpdTask.task_type).all()

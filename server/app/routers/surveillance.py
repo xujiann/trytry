@@ -22,7 +22,7 @@ from ..concurrency import upsert_unique
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
-from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
+from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope, row_dict
 from ..models import EmergencyResource, Organization, PathogenMonitor, SyndromeMonitor, User
 
 router = APIRouter(
@@ -376,7 +376,7 @@ def readiness(today: str | None = None, group_id: int | None = None, db: Session
             )
         if out["expired"]:
             entry["expired"].append({"name": r.name, "expire_date": r.expire_date})
-    by_type = dict(
+    by_type = row_dict(
         db.query(EmergencyResource.resource_type, func.count(EmergencyResource.id))
         .group_by(EmergencyResource.resource_type)
         .all()

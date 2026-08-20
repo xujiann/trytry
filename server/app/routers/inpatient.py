@@ -14,7 +14,7 @@ from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from .. import events
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
+from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope, row_dict
 from ..models import (
     Admission,
     Bed,
@@ -490,13 +490,13 @@ def inpatient_stats(
     if scope is not None:
         rows_q = rows_q.filter(Ward.org_id.in_(scope))
     rows = rows_q.all()
-    admitted = dict(
+    admitted = row_dict(
         db.query(Admission.org_id, func.count(Admission.id))
         .filter(Admission.status == "admitted")
         .group_by(Admission.org_id)
         .all()
     )
-    discharged = dict(
+    discharged = row_dict(
         db.query(Admission.org_id, func.count(Admission.id))
         .filter(Admission.status == "discharged")
         .group_by(Admission.org_id)

@@ -22,7 +22,7 @@ from ...clock import now_naive
 from ...concurrency import insert_if_absent
 from ...database import get_db
 from ...datetypes import OptionalDateStr
-from ...deps import get_current_user, paginate, require_roles
+from ...deps import get_current_user, paginate, require_roles, row_dict
 from ..platform import Organization, Patient, User
 from ..models import (
     SpdAssessment,
@@ -972,7 +972,7 @@ def list_groups(
             | ((SpdGroup.scope != "personal") & SpdGroup.org_id.in_(orgs))
         )
     rows = query.order_by(SpdGroup.id.desc()).limit(200).all()
-    counts = dict(
+    counts = row_dict(
         db.query(SpdGroupMember.group_id, func.count(SpdGroupMember.id))
         .filter(SpdGroupMember.group_id.in_([g.id for g in rows] or [0]))
         .group_by(SpdGroupMember.group_id)

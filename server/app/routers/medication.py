@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_roles, row_dict
 from ..clock import now_naive
 from ..models import (
     DrugShortage,
@@ -154,7 +154,7 @@ def shortage_stats(db: Session = Depends(get_db)):
     rows = db.query(DrugShortage.status, func.count(DrugShortage.id)).group_by(
         DrugShortage.status
     ).all()
-    by_status = dict(rows)
+    by_status = row_dict(rows)
     collected = by_status.get("collected", 0)
     no_show = by_status.get("no_show", 0)
     settled = collected + no_show
