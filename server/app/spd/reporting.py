@@ -32,7 +32,10 @@ from .models import (
     SpdScore,
     SpdScreening,
     SpdTask,
+    SpdTeam,
+    SpdVillageDoctor,
 )
+from .platform import User
 
 SectionRenderer = Callable[[Session, dict, "int | None", str], dict]
 
@@ -144,8 +147,62 @@ def _followup_trend(db, section, org_id, period):
     }
 
 
+#: 考核对象 → 该对象归属机构的解析方式。`spd_scores` 上没有 org_id 列
+#: （考核对象可以是机构、团队、村医、医师四类），所以按 object_type 分派去查。
+#:
+#: 口径取"**恰好属于该机构**"而不是"该机构及其下级"——与本模块其余段落一致
+#: （`_screening` 等都是 `X.org_id == org_id`）。报表段落之间口径必须一样，
+#: 否则同一份报告里两段数字对不上，比少一段更难查。
+_SCORE_OBJECT_ORG = {
+    # 考核对象就是机构本身：object_id 即 org_id
+    "org": lambda db, org_id: [org_id],
+    "team": lambda db, org_id: [
+        t.id for t in db.query(SpdTeam.id).filter(SpdTeam.org_id == org_id)
+    ],
+    "village_doctor": lambda db, org_id: [
+        v.user_id for v in db.query(SpdVillageDoctor.user_id).filter(
+            SpdVillageDoctor.user_id.in_(
+                db.query(User.id).filter(User.org_id == org_id)
+            )
+        )
+    ],
+    "doctor": lambda db, org_id: [
+        u.id for u in db.query(User.id).filter(User.org_id == org_id)
+    ],
+}
+
+
 def _score(db, section, org_id, period):
-    rows = db.query(SpdScore).order_by(SpdScore.id.desc()).limit(20).all()
+    """考核排名段落。
+
+    修的两处：渲染器签名收了 `org_id` 与 `period`，这里**两个都没用上**——
+    于是任何机构、任何周期的报告，这一段都是同一份"最近 20 条"。
+    机构报告里印着别家机构的排名，季度报告里印着上个月的分数。
+
+    - `period` 过滤没有歧义：报告是按周期出的。
+    - `org_id` 过滤要按 `object_type` 分派（`spd_scores` 上没有 org_id 列，
+      考核对象有机构/团队/村医/医师四类），见 `_SCORE_OBJECT_ORG`。
+    """
+    query = db.query(SpdScore)
+    if period:
+        query = query.filter(SpdScore.period == period)
+    if org_id is not None:
+        clauses = []
+        for object_type, resolve in _SCORE_OBJECT_ORG.items():
+            ids = resolve(db, org_id)
+            if ids:
+                clauses.append(
+                    (SpdScore.object_type == object_type) & SpdScore.object_id.in_(ids)
+                )
+        if not clauses:
+            # 该机构名下没有任何可考核对象——返回空表，而不是退回全域数据
+            return {**_head(section, "table"), "columns": ["对象", "周期", "得分", "排名"],
+                    "rows": []}
+        condition = clauses[0]
+        for extra in clauses[1:]:
+            condition = condition | extra
+        query = query.filter(condition)
+    rows = query.order_by(SpdScore.id.desc()).limit(20).all()
     return {**_head(section, "table"), "columns": ["对象", "周期", "得分", "排名"],
             "rows": [[r.object_name, r.period, r.total_score, r.rank] for r in rows]}
 
