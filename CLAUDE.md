@@ -139,7 +139,7 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 - 若改了迁移：`make build` 校验迁移图，且本地 `alembic upgrade heads` 能从空库跑通。
 - 若改了 spd：`pytest tests/test_spd_boundary.py -q` 必须绿（边界未被破坏）。
 - **lint 与 typecheck 现为渐进式基线**（`ruff` 起步规则集、`mypy` 只查已注解代码）：不要引入**新增**的 lint/type 报错；存量报错单独任务清理，别混进无关改动。
-- CI 现状：`test` job 跑 unit+smoke（阻断）+ integration（真 PG，warning）；`quality` job 跑 build/lint/typecheck（warning）。覆盖率与三项新门均为 warning 模式，**不要依赖 CI 拦回归**——自己先 `make verify`。
+- CI 现状（ADR-0002 起）：`test` job 跑 unit+smoke + integration（真 PG）+ 覆盖率门禁，**均为阻断**；`quality` job 跑 build（阻断）/lint/typecheck（warning）。lint/typecheck 仍是 warning——依旧**先自己 `make verify`**，别把 CI 当第一道防线。
 
 ---
 

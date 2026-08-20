@@ -1,8 +1,7 @@
 # ADR-0002：生产迁移统一走 alembic，停用 create_all 建表
 
-- 状态：Proposed
-- 日期：2026-08-18
-- 决策者：待定（需运维 + 后端负责人批准）
+- 状态：Accepted
+- 日期：2026-08-18（提案）/ 2026-08-20（批准：平台负责人）
 - 相关：`server/app/main.py:113`、`docs/数据模型治理.md`、`docs/运维手册.md`、`tests/test_schema_governance.py`
 
 ## Problem
@@ -50,4 +49,6 @@
 
 ## Recommendation
 
-采纳**方案 B**（生产禁用 create_all + 部署产物补 `alembic upgrade heads` + README 改复数），并把 `test_postgres_real.py` 的迁移验证在 CI 转为阻断门。方案 C 体验代价过高，D 保护力不足。**本 ADR 仅记录决策方向；实施属"改代码/改部署"，另开任务，需运维批准。**
+采纳**方案 B**（生产禁用 create_all + 部署产物补 `alembic upgrade heads` + README 改复数），并把 `test_postgres_real.py` 的迁移验证在 CI 转为阻断门。方案 C 体验代价过高，D 保护力不足。**已批准并实施**：`main.py` 生产跳过 create_all（守卫测试 `test_adr0002_create_all_guard.py`）、
+`start.sh` 启动前 `alembic upgrade heads`、README 修正复数、CI 集成/迁移门与覆盖率门禁转阻断
+（落地时实测覆盖率 87%）。

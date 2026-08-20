@@ -971,7 +971,7 @@ class SpdServiceApply(Base):
 
 
 # ============================================================================
-# 五、转诊域：村医 → 服务站 → 卫生院 → 县级医院 逐级链路
+# 五、转诊域：村医 → 乡镇卫生院 → 区市县医院 三级链路（ADR-0005 收敛）
 # ============================================================================
 
 
@@ -998,8 +998,9 @@ class SpdReferralCase(Base):
     """逐级转诊单：一单贯穿"发起—分级审核—接诊—到院—下转—随访接收"。
 
     不复用既有 `referrals`：那张表是两点之间的一次转诊（A 院 → B 院），
-    而这里要求的是**链路**——村医发起、服务站复核、卫生院审核、县医院接收，
-    四个环节各有责任人与时限，且闭环率要按"下转后随访是否接收"统计。
+    而这里要求的是**链路**——村医发起、卫生院审核、县医院接收（ADR-0005 起
+    三级；原"服务站复核"档已收敛，存量在途单兼容），各环节有责任人与时限，
+    且闭环率要按"下转后随访是否接收"统计。
     强行复用会把 `referrals.status` 撑成十几个状态，影响既有转诊业务。
     """
 
@@ -1021,7 +1022,7 @@ class SpdReferralCase(Base):
     )
     current_level: Mapped[str] = mapped_column(String(16), default="village", index=True)
     target_org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
-    # submitted=待复核, station_reviewed=服务站已复核, township_reviewed=卫生院已审核,
+    # submitted=待审核, station_reviewed=服务站已复核(存量兼容,新单不产生), township_reviewed=卫生院已审核,
     # accepted=县级已接收, arrived=已到院, down_referred=已下转,
     # followup_received=下转随访已接收, closed=已闭环, rejected=已退回, withdrawn=已撤回
     status: Mapped[str] = mapped_column(String(24), default="submitted", index=True)

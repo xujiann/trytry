@@ -463,7 +463,7 @@ BYID_CROSS_ORG_OK = {
     "prescriptions.py:comment_prescription",
     "telemedicine.py:reply",
     "telemedicine.py:close",
-    # 慢专病逐级转诊：村医发起→服务站复核→卫生院审核→县级接收→下转承接，
+    # 慢专病逐级转诊（ADR-0005 三级链）：村医发起→卫生院审核→县级接收→下转承接，
     # 每一格都由**下一家机构**推进，加本机构写守卫等于把逐级链路关掉。
     # 单据可见性仍按"发起方/当前处理方/目标方任一在可见范围内"过滤。
     "spd/referral.py:review_referral",

@@ -358,8 +358,10 @@
 - `system_id` · INTEGER · NOT NULL · index · → code_systems.id
 - `code` · VARCHAR(64) · NOT NULL · index
 - `name` · VARCHAR(256) · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (system_id, code) uq_entry_system_code
 - _index_ ix_code_entries_code(code)
+- _index_ ix_code_entries_created_at(created_at)
 - _index_ ix_code_entries_name(name)
 - _index_ ix_code_entries_system_id(system_id)
 
@@ -368,7 +370,9 @@
 - `id` · INTEGER · PK · NOT NULL
 - `code` · VARCHAR(32) · NOT NULL · index
 - `name` · VARCHAR(64) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_code_systems_code(code) UNIQUE
+- _index_ ix_code_systems_created_at(created_at)
 
 ## cold_chain_records
 
@@ -406,7 +410,9 @@
 - `org_id` · INTEGER · NOT NULL · → organizations.id
 - `specialty` · VARCHAR(64) · NOT NULL
 - `available` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (name)
+- _index_ ix_consult_experts_created_at(created_at)
 
 ## consultations
 
@@ -531,7 +537,9 @@
 - `name` · VARCHAR(64) · NOT NULL
 - `category` · VARCHAR(16) · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (org_id, code) uq_dept_org_code
+- _index_ ix_departments_created_at(created_at)
 - _index_ ix_departments_org_id(org_id)
 
 ## disease_enrollments
@@ -594,7 +602,9 @@
 - `require_procedure` · BOOLEAN · NOT NULL
 - `is_fallback` · BOOLEAN · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_drg_groups_code(code) UNIQUE
+- _index_ ix_drg_groups_created_at(created_at)
 - _index_ ix_drg_groups_mdc(mdc)
 
 ## drug_rules
@@ -1771,6 +1781,8 @@
 - `footer_note` · VARCHAR(256) · NOT NULL
 - `show_qr` · BOOLEAN · NOT NULL
 - `updated_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_print_templates_created_at(created_at)
 - _index_ ix_print_templates_doc_type(doc_type) UNIQUE
 
 ## progress_notes
@@ -1959,7 +1971,9 @@
 - `center_type` · VARCHAR(16) · NOT NULL · index
 - `name` · VARCHAR(128) · NOT NULL
 - `content` · VARCHAR(2048) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_report_templates_center_type(center_type)
+- _index_ ix_report_templates_created_at(created_at)
 
 ## resident_accounts
 
@@ -3439,6 +3453,8 @@
 - `value` · VARCHAR(256) · NOT NULL
 - `description` · VARCHAR(256) · NOT NULL
 - `updated_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_system_params_created_at(created_at)
 - _index_ ix_system_params_key(key) UNIQUE
 
 ## tcm_dispense_orders
@@ -3518,7 +3534,9 @@
 - `category` · VARCHAR(64) · NOT NULL
 - `indication` · VARCHAR(512) · NOT NULL
 - `description` · VARCHAR(1024) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (name)
+- _index_ ix_tcm_techniques_created_at(created_at)
 
 ## training_assessments
 

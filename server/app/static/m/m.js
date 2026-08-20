@@ -1026,7 +1026,7 @@ async function renderSpdPlans(box) {
 }
 
 const SPD_REF_TEXT = {
-  submitted: "村医已发起，待服务站复核", station_reviewed: "服务站已复核，待卫生院审核",
+  submitted: "村医已发起，待卫生院审核", station_reviewed: "服务站已复核，待卫生院审核(存量)",
   township_reviewed: "卫生院已审核，待县级医院接收", accepted: "县级医院已接收",
   arrived: "已到院就诊", down_referred: "已下转基层", closed: "已完成闭环",
   rejected: "已退回", withdrawn: "已撤回",
