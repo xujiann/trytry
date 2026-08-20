@@ -26,7 +26,7 @@
 - ☐ 给 CI 加 Redis service，真跑 `_release_lock` 的 Lua 路径（现仅假 redis 验逻辑）。
 - ☐ 迁移-模型**列级** parity 门：真 PG 上 `upgrade heads` 后对比 inspector 与 Base.metadata 的列集合（建表级已有 `test_模型表零漂移` 兜住；列漂移是 ADR-0002 已知残余缺口）。/review 提出。
 - ✅ 机构树体检增报**层级错位**：`tree-health` 新增 `broken_chains`（转诊阶梯上父子层级不相邻的机构，带期望层级与自根到叶链路）与 `max_depth`（信息项）；`referral_ready` 收紧为"无孤儿且无错位"。判据是层级相邻而非链路长度：市级四层合法不误报、county/city 之上的挂载（县疾控、市协作院）不参与判定，而 county→村室→村室 三层照报。回归 `test_org_tree_health.py` 七条，改函数级 client 消除顺序耦合。
-- ☐ 加固 `test_monitor_overview.py`：recent_failures 取 limit-5，理论上可能被其它失败记录挤掉 seeded 行（当前因间隔≥300s 安全）。/review 提出。
+- ✅ 加固 `test_monitor_overview.py`：每条用例先清空 `job_runs` 再播种，seeded 行不会被别的失败记录挤出 limit-5 窗口（断言改精确相等）；另补一条钉住"只返回最近 5 条、按 id 倒序"的窗口语义。已验证单跑/乱序均绿，且把端点 limit 改小会让新用例转红。
 
 ### 工具链
 - ✅ 清掉 8 处存量 lint（5 未用 import + 2 无占位 f-string + 1 未用变量改显式 assert），`make lint` 归零；`make verify` 的 typecheck 步改为渐进式 warning 不阻断——verify 现可用。
