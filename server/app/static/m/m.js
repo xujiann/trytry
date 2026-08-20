@@ -399,7 +399,11 @@ async function loadArchive() {
 
 let activeService = "appointment";
 
-const REFERRAL_STATUS = { pending: "待接收", accepted: "已接收", completed: "已完成", rejected: "已退回" };
+// 转诊状态文案不再由前端维护：两套子域的状态码同名不同义（平台 accepted="已接收"
+// 是对方接了那一次转诊，慢专病 accepted="县级医院已接收"是链路走到了县级），
+// 前端各存一张表迟早与后端说法对不上。现统一用聚合接口返回的 status_label。
+// 这里只保留"算不算走完了"的判断，用于给状态标上绿/橙。
+const REFERRAL_DONE = new Set(["completed", "closed"]);
 const APPT_STATUS = { booked: "待就诊", fulfilled: "已就诊", cancelled: "已取消" };
 const PACKAGES = { basic: "基础包", standard: "标准包", premium: "个性包" };
 const SERVICE_TYPES = { visit: "上门服务", consult: "健康咨询", followup: "随访", referral: "转诊协助" };
@@ -605,16 +609,53 @@ async function renderBills(box) {
   </div>`).join("") : '<p class="empty">暂无账单</p>';
 }
 
-async function renderReferrals(box) {
-  const rows = await authApi(`/api/portal/me/referrals${svcQuery()}`);
-  box.innerHTML = rows.length ? rows.map((r) => `<div class="m-card">
+const SOURCE_NAMES = { platform: "双向转诊", spd: "慢专病转诊" };
+
+// 两个页面共用一份卡片：此前"我的转诊"与"慢专病转诊"各写各的渲染与各自的文案表，
+// 同一张单子在两处读起来不一样。注意 kv() 只转义键、不转义值，值一律先 esc()。
+function referralCard(r, opts = {}) {
+  const orgs = (r.from_org || r.to_org)
+    ? kv("转出", esc(r.from_org || "—")) + kv("转入", esc(r.to_org || "—"))
+    : "";
+  const detail = r.detail_path
+    ? `<button type="button" class="ghost-btn" data-ref-detail="${esc(r.detail_path)}">查看全过程</button>`
+    : "";
+  return `<div class="m-card">
     ${kv("方向", r.direction === "up" ? "上转" : "下转")}
-    ${kv("转出", esc(r.from_org))}
-    ${kv("转入", esc(r.to_org))}
+    ${orgs}
     ${kv("事由", esc(r.reason || "—"))}
-    ${kv("状态", `<span class="tag ${r.status === "completed" ? "green" : "orange"}">${esc(REFERRAL_STATUS[r.status] || r.status)}</span>`)}
+    ${kv("状态", `<span class="tag ${REFERRAL_DONE.has(r.status) ? "green" : "orange"}">${esc(r.status_label || r.status)}</span>`)}
     ${kv("日期", esc(r.date))}
-  </div>`).join("") : '<p class="empty">暂无转诊记录</p>';
+    ${opts.showSource ? kv("来源", esc(SOURCE_NAMES[r.source] || r.source)) : ""}
+    ${detail}
+  </div>`;
+}
+
+// "查看全过程"：链接由后端给出（已带 patient_id，代管家属才点得开）
+function bindReferralDetails(box) {
+  box.querySelectorAll("[data-ref-detail]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      // 单独 catch：这是列表渲染之后才触发的异步，不在 loadService/loadSpd 的
+      // try 覆盖范围内。不接住的话 404/403/断网只会是一个"点了没反应"的死按钮。
+      try {
+        const d = await authApi(btn.dataset.refDetail);
+        alert((d.steps || []).map((s) =>
+          `${s.created_at.slice(0, 16).replace("T", " ")} ${s.step}${s.opinion ? "：" + s.opinion : ""}`
+        ).join("\n") || "暂无环节记录");
+      } catch (err) {
+        alert(`查看失败：${err.message}`);
+      }
+    });
+  });
+}
+
+async function renderReferrals(box) {
+  // 走聚合接口：平台转诊与慢专病转诊并成一份，居民不必再猜该点哪个入口
+  const rows = await authApi(`/api/portal/me/referrals/all${svcQuery()}`);
+  box.innerHTML = rows.length
+    ? rows.map((r) => referralCard(r, { showSource: true })).join("")
+    : '<p class="empty">暂无转诊记录</p>';
+  bindReferralDetails(box);
 }
 
 /* ---------------- 满意度评价 ---------------- */
@@ -1025,31 +1066,16 @@ async function renderSpdPlans(box) {
   });
 }
 
-const SPD_REF_TEXT = {
-  submitted: "村医已发起，待卫生院审核", station_reviewed: "服务站已复核，待卫生院审核(存量)",
-  township_reviewed: "卫生院已审核，待县级医院接收", accepted: "县级医院已接收",
-  arrived: "已到院就诊", down_referred: "已下转基层", closed: "已完成闭环",
-  rejected: "已退回", withdrawn: "已撤回",
-};
-
+// 慢专病页是主列表的**作用域视图**：同样走聚合接口，用 source 参数收窄到本子域。
+// 这样文案、状态与排序与"我的转诊"天生一致——不是两份数据，是同一份的一段。
+// 收窄交给服务端做：条数上限是合并之后才截的，客户端自己 filter 会在平台转诊
+// 足够多且更新时把慢专病的单子整段挤掉，页面显示"暂无"而其实有在办的。
 async function renderSpdReferrals(box) {
-  const rows = await authApi(`/api/portal/spd/referrals${spdQuery()}`);
-  box.innerHTML = rows.map((r) => `<div class="m-card">
-    ${kv("方向", r.direction === "up" ? "上转" : "下转")}
-    ${kv("进度", esc(SPD_REF_TEXT[r.status] || r.status))}
-    ${kv("转诊理由", esc(r.reason || "—"))}
-    ${kv("发起时间", esc(r.created_at.replace("T", " ").slice(0, 16)))}
-    <button type="button" class="ghost-btn" data-spd-ref="${r.id}">查看全过程</button>
-    </div>`).join("") || '<p class="empty">暂无转诊记录</p>';
-  box.querySelectorAll("[data-spd-ref]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const params = viewingPatientId !== null ? `?patient_id=${viewingPatientId}` : "";
-      const d = await authApi(`/api/portal/spd/referrals/${btn.dataset.spdRef}${params}`);
-      alert(d.steps.map((s) =>
-        `${s.created_at.slice(0, 16).replace("T", " ")} ${s.step}${s.opinion ? "：" + s.opinion : ""}`
-      ).join("\n") || "暂无环节记录");
-    });
-  });
+  const rows = await authApi(`/api/portal/me/referrals/all${spdQuery({ source: "spd" })}`);
+  box.innerHTML = rows.length
+    ? rows.map((r) => referralCard(r)).join("")
+    : '<p class="empty">暂无转诊记录</p>';
+  bindReferralDetails(box);
 }
 
 async function renderSpdScreen(box) {
