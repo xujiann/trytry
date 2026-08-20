@@ -22,7 +22,7 @@ from ..clock import now_naive
 from ..concurrency import add_amount, claim_quota, insert_or_conflict, take_amount, upsert_unique
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
 from ..models import (
     Attachment,
     Course,
@@ -390,7 +390,7 @@ def list_materials(course_id: int, db: Session = Depends(get_db)):
         .order_by(CourseMaterial.id.desc())
         .all()
     )
-    counts = dict(
+    counts = row_dict(
         db.query(Attachment.owner_id, func.count(Attachment.id))
         .filter(
             Attachment.owner_type == "course_material",
@@ -731,12 +731,12 @@ def list_screenings(
 @maternal_router.get("/screening-stats")
 def screening_stats(db: Session = Depends(get_db)):
     """筛查统计：按筛查类型与结论分布，高危检出率。"""
-    by_type = dict(
+    by_type = row_dict(
         db.query(PrenatalScreening.screen_type, func.count(PrenatalScreening.id))
         .group_by(PrenatalScreening.screen_type)
         .all()
     )
-    by_result = dict(
+    by_result = row_dict(
         db.query(PrenatalScreening.result, func.count(PrenatalScreening.id))
         .group_by(PrenatalScreening.result)
         .all()
@@ -907,7 +907,7 @@ def verify_task(
 @perf_router.get("/improvement-stats")
 def improvement_stats(today: str | None = None, db: Session = Depends(get_db)):
     business_date = resolve_business_date(today).isoformat()
-    by_status = dict(
+    by_status = row_dict(
         db.query(ImprovementTask.status, func.count(ImprovementTask.id))
         .group_by(ImprovementTask.status)
         .all()
@@ -1103,7 +1103,7 @@ def cancel_visit(order_id: int, db: Session = Depends(get_db), user: User = Depe
 @home_router.get("/stats")
 def visit_stats(db: Session = Depends(get_db)):
     """上门服务统计：状态分布、签约关联率（体现家医签约履约）。"""
-    by_status = dict(
+    by_status = row_dict(
         db.query(HomeVisitOrder.status, func.count(HomeVisitOrder.id))
         .group_by(HomeVisitOrder.status)
         .all()

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, row_dict
 from ..models import (
     Admission,
     ChronicDiseaseType,
@@ -162,7 +162,7 @@ def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, 
 def _check_chronic_followup_indicator(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     """慢病随访须记录对应病种指标（按病种要求的指标字段判定）。"""
     mapping: dict[str, list[str]] = rule.config.get("disease_indicators", {})
-    diseases = dict(db.query(ChronicPatient.id, ChronicPatient.disease).all())
+    diseases = row_dict(db.query(ChronicPatient.id, ChronicPatient.disease).all())
     hits = []
     for row in db.query(FollowUp).limit(SCAN_LIMIT).all():
         disease = diseases.get(row.chronic_id, "")

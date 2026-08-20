@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from ...clock import now_naive
 from ...database import get_db
-from ...deps import get_current_user, paginate, require_roles
+from ...deps import get_current_user, paginate, require_roles, row_dict
 from ..platform import Organization, Patient, User, org_level
 from ..models import (
     SpdEnrollment,
@@ -640,7 +640,7 @@ def closure_rate(
     if date_to:
         query = query.filter(SpdReferralCase.created_at <= f"{date_to} 23:59:59")
 
-    by_status = dict(
+    by_status = row_dict(
         query.with_entities(SpdReferralCase.status, func.count(SpdReferralCase.id))
         .group_by(SpdReferralCase.status).all()
     )

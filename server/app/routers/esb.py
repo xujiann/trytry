@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_roles, row_dict
 from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, utcnow
 from ..security import hash_password, verify_password
 from ..state_store import SlidingWindowRateLimiter
@@ -249,7 +249,7 @@ def list_messages(
     if msg_type:
         q = q.filter(EsbMessage.msg_type == msg_type)
     rows = paginate(q.order_by(EsbMessage.id.desc()), response, offset, limit)
-    codes = dict(db.query(EsbEndpoint.id, EsbEndpoint.code).all())
+    codes = row_dict(db.query(EsbEndpoint.id, EsbEndpoint.code).all())
     return [_message_out(m, codes.get(m.endpoint_id, "")) for m in rows]
 
 
@@ -579,7 +579,7 @@ def list_flow_runs(
     if status:
         q = q.filter(EsbFlowRun.status == status)
     rows = paginate(q.order_by(EsbFlowRun.id.desc()), response, offset, limit)
-    codes = dict(db.query(EsbFlow.id, EsbFlow.code).all())
+    codes = row_dict(db.query(EsbFlow.id, EsbFlow.code).all())
     return [
         {
             "id": r.id,

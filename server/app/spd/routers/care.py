@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ...clock import now_naive
 from ...database import get_db
 from ...datetypes import DateStr, OptionalDateStr
-from ...deps import get_current_user, paginate, require_roles, resolve_business_date
+from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
 from ..platform import Patient, User
 from ..models import (
     SpdAssessment,
@@ -1088,7 +1088,7 @@ def list_consults(
         p.id: p.name
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))
     }
-    counts = dict(
+    counts = row_dict(
         db.query(SpdConsultMessage.consult_id, func.count(SpdConsultMessage.id))
         .filter(SpdConsultMessage.consult_id.in_([r.id for r in rows] or [0]))
         .group_by(SpdConsultMessage.consult_id)

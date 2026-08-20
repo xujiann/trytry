@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
 from ..models import FollowupTask, Organization, Patient, User, utcnow
 
 router = APIRouter(prefix="/api/followups", tags=["随访中心"], dependencies=[Depends(get_current_user)])
@@ -99,11 +99,11 @@ def _out(t: FollowupTask, patient_names: dict, org_names: dict) -> dict:
 def _name_maps(db: Session, tasks: list[FollowupTask]) -> tuple[dict, dict]:
     patient_ids = {t.patient_id for t in tasks}
     patients = (
-        dict(db.query(Patient.id, Patient.name).filter(Patient.id.in_(patient_ids)).all())
+        row_dict(db.query(Patient.id, Patient.name).filter(Patient.id.in_(patient_ids)).all())
         if patient_ids
         else {}
     )
-    orgs = dict(db.query(Organization.id, Organization.name).all())
+    orgs = row_dict(db.query(Organization.id, Organization.name).all())
     return patients, orgs
 
 

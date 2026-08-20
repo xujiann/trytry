@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from ...clock import now_naive
 from ...database import get_db
 from ...datetypes import OptionalDateStr
-from ...deps import get_current_user, paginate, require_roles, resolve_business_date
+from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
 from ..platform import Admission, Encounter, Patient, User
 from ..models import (
     SpdCallTask,
@@ -602,7 +602,7 @@ def followup_stats(
     if date_to:
         query = query.filter(SpdFollowupRecord.planned_at <= date_to)
 
-    by_status = dict(
+    by_status = row_dict(
         query.with_entities(SpdFollowupRecord.status, func.count(SpdFollowupRecord.id))
         .group_by(SpdFollowupRecord.status).all()
     )
@@ -617,7 +617,7 @@ def followup_stats(
             & (SpdFollowupRecord.planned_at < business_day.isoformat())
         )
     ).count()
-    by_abnormal = dict(
+    by_abnormal = row_dict(
         query.filter(SpdFollowupRecord.status == "done")
         .with_entities(SpdFollowupRecord.abnormal_level, func.count(SpdFollowupRecord.id))
         .group_by(SpdFollowupRecord.abnormal_level).all()

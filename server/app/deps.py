@@ -1,7 +1,9 @@
 from datetime import date, timezone
+from typing import Iterable, TypeVar
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
 from .database import get_db
@@ -9,6 +11,25 @@ from .models import OrgGroup, OrgGroupMember, User
 from .security import decode_token, revoked_tokens
 
 _bearer = HTTPBearer(auto_error=False)
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
+
+def row_dict(rows: Iterable[Row[tuple[_K, _V]]]) -> dict[_K, _V]:
+    """把两列查询结果（键, 值）收成字典。
+
+    仓库里有三十多处 `dict(db.query(X.a, func.count(...)).group_by(...).all())`——
+    统计接口的标准写法。直接喂给 `dict()` 在类型上是不成立的：`.all()` 给的是
+    `list[Row[tuple[K, V]]]`，而 `dict()` 要 `Iterable[tuple[K, V]]`。
+    Row 在运行期确实能解包成元组，所以代码一直是对的，只是类型上说不通，
+    于是每处都留下"需要标注 + 参数类型不符"两条报错。
+
+    收成一个函数而不是在每处加 `# type: ignore`：一来 ignore 是把话咽回去、
+    不是把话说清楚，二来这本就是同一个模式重复三十多遍，早该有个名字。
+    返回类型由 K/V 推导，调用点不必再手写标注。
+    """
+    return {key: value for key, value in rows}
 
 
 def paginate(query, response: Response, offset: int = 0, limit: int = 100, max_limit: int = 500):

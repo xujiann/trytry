@@ -13,7 +13,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, row_dict
 from ..models import (
     ChronicPatient,
     DrugStock,
@@ -478,7 +478,7 @@ def overview(db: Session = Depends(get_db)):
     rx_pending = metric_count(db, "pending_reviews")
 
     # 保健康：慢病管理（监测指标13的过程指标）
-    chronic_by_level = dict(
+    chronic_by_level = row_dict(
         db.query(ChronicPatient.level, func.count(ChronicPatient.id))
         .group_by(ChronicPatient.level)
         .all()

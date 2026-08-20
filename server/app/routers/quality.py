@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_if_absent
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope
+from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope, row_dict
 from ..models import (
     Admission,
     AdverseEvent,
@@ -169,12 +169,12 @@ def adverse_event_stats(db: Session = Depends(get_db)):
         db.query(func.count(AdverseEvent.id)).filter(AdverseEvent.status == "rectified").scalar()
         or 0
     )
-    by_type = dict(
+    by_type = row_dict(
         db.query(AdverseEvent.event_type, func.count(AdverseEvent.id))
         .group_by(AdverseEvent.event_type)
         .all()
     )
-    by_level = dict(
+    by_level = row_dict(
         db.query(AdverseEvent.level, func.count(AdverseEvent.id)).group_by(AdverseEvent.level).all()
     )
     return {
@@ -354,7 +354,7 @@ def infection_stats(db: Session = Depends(get_db)):
         .scalar()
         or 0
     )
-    by_site = dict(
+    by_site = row_dict(
         db.query(InfectionReport.infection_site, func.count(InfectionReport.id))
         .filter(InfectionReport.status == "confirmed")
         .group_by(InfectionReport.infection_site)
@@ -612,7 +612,7 @@ def record_qc_summary(
         # 月份口径与运营月报一致：按病历创建月份归属
         if period is None or (r.created_at and r.created_at.strftime("%Y-%m") == period)
     ]
-    org_names = dict(db.query(Organization.id, Organization.name).all())
+    org_names = row_dict(db.query(Organization.id, Organization.name).all())
 
     def group(key_fn, label_fn) -> list[dict]:
         buckets: dict = {}

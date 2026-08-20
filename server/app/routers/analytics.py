@@ -19,6 +19,7 @@ from ..database import get_db
 from ..deps import (
     get_current_user,
     paginate,
+    row_dict,
     require_admin,
     require_roles,
     resolve_business_date,
@@ -232,7 +233,7 @@ def efficiency(
     scope = resolve_org_scope(db, group_id, org_id)
     if scope is not None:
         org_names = {oid: name for oid, name in org_names.items() if oid in set(scope)}
-    bed_counts = dict(
+    bed_counts = row_dict(
         db.query(Ward.org_id, func.count(Bed.id))
         .join(Bed, Bed.ward_id == Ward.id)
         .group_by(Ward.org_id)
@@ -344,7 +345,7 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
     rejected = grouped(
         Prescription, Prescription.org_id, Prescription.status == "rejected", *in_period(Prescription)
     )
-    chronic = dict(
+    chronic = row_dict(
         db.query(ChronicPatient.managed_by_org_id, func.count(ChronicPatient.id))
         .group_by(ChronicPatient.managed_by_org_id)
         .all()

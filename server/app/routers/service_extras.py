@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_roles, row_dict
 from ..models import (
     ConsultExpert,
     CriticalAction,
@@ -430,7 +430,7 @@ def list_surveys(
     if max_score is not None:
         query = query.filter(SatisfactionSurvey.score <= max_score)
     rows = paginate(query.order_by(SatisfactionSurvey.id.desc()), response, offset, limit)
-    names = dict(db.query(Patient.id, Patient.name).all())
+    names = row_dict(db.query(Patient.id, Patient.name).all())
     return [
         {
             "id": s.id,

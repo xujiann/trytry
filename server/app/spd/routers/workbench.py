@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ...clock import now_naive
 from ...database import get_db
-from ...deps import get_current_user, require_roles, resolve_business_date
+from ...deps import get_current_user, require_roles, resolve_business_date, row_dict
 from ..platform import Organization, Patient, User
 from ..models import (
     SpdAssessment,
@@ -155,7 +155,7 @@ def _referral_stats(db: Session, orgs: list[int] | None) -> dict:
             SpdReferralCase.initiator_org_id.in_(orgs or [0])
             | SpdReferralCase.current_org_id.in_(orgs or [0])
         )
-    by_status = dict(
+    by_status = row_dict(
         query.with_entities(SpdReferralCase.status, func.count(SpdReferralCase.id))
         .group_by(SpdReferralCase.status).all()
     )

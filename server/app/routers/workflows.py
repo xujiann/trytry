@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin
+from ..deps import get_current_user, paginate, require_admin, row_dict
 from ..models import (
     Appointment,
     AppointmentSlot,
@@ -287,7 +287,7 @@ def instance_history(instance_id: int, db: Session = Depends(get_db)):
         .order_by(WorkflowTransition.id)
         .all()
     )
-    actors = dict(db.query(User.id, User.full_name).all())
+    actors = row_dict(db.query(User.id, User.full_name).all())
     return [
         {
             "id": t.id,
@@ -446,8 +446,8 @@ def unified_requests(
         items = [i for i in items if i["status"] == status]
     items.sort(key=lambda x: x["created_at"], reverse=True)
 
-    patient_names = dict(db.query(Patient.id, Patient.name).all())
-    org_names = dict(db.query(Organization.id, Organization.name).all())
+    patient_names = row_dict(db.query(Patient.id, Patient.name).all())
+    org_names = row_dict(db.query(Organization.id, Organization.name).all())
     for item in items:
         item["patient_name"] = patient_names.get(item["patient_id"], "")
         item["org_name"] = org_names.get(item["org_id"], "")
