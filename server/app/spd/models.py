@@ -134,6 +134,7 @@ class SpdTarget(Base):
     form_code: Mapped[str] = mapped_column(String(32), default="")
     edu_code: Mapped[str] = mapped_column(String(32), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdPathTemplate(Base):
@@ -197,6 +198,7 @@ class SpdPathNode(Base):
     require_evidence: Mapped[bool] = mapped_column(Boolean, default=False)
     form_code: Mapped[str] = mapped_column(String(32), default="")
     note: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdScale(Base):
@@ -259,6 +261,7 @@ class SpdServicePackage(Base):
     # [{"code":"bp_check","name":"血压测量","times":12,"price":5}]
     items: Mapped[list] = mapped_column(JSON, default=list)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdTag(Base):
@@ -345,6 +348,7 @@ class SpdTeamMember(Base):
     can_audit: Mapped[bool] = mapped_column(Boolean, default=False)
     can_assess: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdVillageDoctor(Base):
@@ -413,6 +417,7 @@ class SpdDataSource(Base):
     success_rate: Mapped[float] = mapped_column(Float, default=0.0)
     # running=正常, delayed=延迟, failed=异常, stopped=停用
     status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdSyncLog(Base):
@@ -427,6 +432,7 @@ class SpdSyncLog(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     message: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 # ============================================================================
@@ -616,6 +622,7 @@ class SpdGroupMember(Base):
     group_id: Mapped[int] = mapped_column(ForeignKey("spd_groups.id"), index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdPackageBinding(Base):
@@ -632,6 +639,7 @@ class SpdPackageBinding(Base):
     bound_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     unbound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     period_end: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdPackageUsage(Base):
@@ -648,6 +656,7 @@ class SpdPackageUsage(Base):
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     note: Mapped[str] = mapped_column(String(256), default="")
     used_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 # ============================================================================
@@ -674,6 +683,7 @@ class SpdPathInstance(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdTask(Base):
@@ -1163,6 +1173,7 @@ class SpdPointAccount(Base):
     earned: Mapped[int] = mapped_column(Integer, default=0)
     used: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdPointRecord(Base):
@@ -1195,6 +1206,7 @@ class SpdGoods(Base):
     stock: Mapped[int] = mapped_column(Integer, default=0)
     image_url: Mapped[str] = mapped_column(String(256), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class SpdRedeem(Base):
