@@ -2521,8 +2521,10 @@
 - `allow_roles` · JSON · NOT NULL
 - `preset` · BOOLEAN · NOT NULL
 - `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_followup_rules_active(active)
 - _index_ ix_spd_followup_rules_code(code) UNIQUE
+- _index_ ix_spd_followup_rules_created_at(created_at)
 - _index_ ix_spd_followup_rules_program_code(program_code)
 - _index_ ix_spd_followup_rules_scene(scene)
 
@@ -2615,7 +2617,9 @@
 - `cycle_days` · INTEGER · NOT NULL
 - `auto_risk_level` · VARCHAR(16) · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_intervention_templates_code(code) UNIQUE
+- _index_ ix_spd_intervention_templates_created_at(created_at)
 - _index_ ix_spd_intervention_templates_program_code(program_code)
 
 ## spd_interventions
@@ -2813,8 +2817,10 @@
 - `daily_limit` · INTEGER · NOT NULL
 - `condition` · VARCHAR(256) · NOT NULL
 - `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_point_rules_active(active)
 - _index_ ix_spd_point_rules_code(code) UNIQUE
+- _index_ ix_spd_point_rules_created_at(created_at)
 - _index_ ix_spd_point_rules_event(event)
 
 ## spd_program_versions
@@ -2877,8 +2883,10 @@
 - `handle_role` · VARCHAR(32) · NOT NULL
 - `preset` · BOOLEAN · NOT NULL
 - `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_questionnaires_active(active)
 - _index_ ix_spd_questionnaires_code(code) UNIQUE
+- _index_ ix_spd_questionnaires_created_at(created_at)
 
 ## spd_recalls
 
@@ -2957,8 +2965,10 @@
 - `target_org_id` · INTEGER · → organizations.id
 - `auto_task` · BOOLEAN · NOT NULL
 - `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_referral_rules_active(active)
 - _index_ ix_spd_referral_rules_code(code) UNIQUE
+- _index_ ix_spd_referral_rules_created_at(created_at)
 - _index_ ix_spd_referral_rules_program_code(program_code)
 
 ## spd_referral_steps
@@ -3173,7 +3183,9 @@
 - `category` · VARCHAR(32) · NOT NULL
 - `color` · VARCHAR(16) · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_spd_tags_code(code) UNIQUE
+- _index_ ix_spd_tags_created_at(created_at)
 
 ## spd_targets
 

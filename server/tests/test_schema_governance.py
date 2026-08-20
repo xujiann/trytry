@@ -89,8 +89,9 @@ def test_核心表结构已冻结():
 #      → 41（infectious_cases）→ 40（prescription_items）→ 39（drug_stocks）
 #      → 38（appointment_slots）→ 37（duty_rosters）→ 36（departments）
 #      → 32（consult_experts + drg_groups + report_templates + print_templates，配置类四表打包）
-#      → 28（tcm_techniques + system_params + code_systems + code_entries，字典/参数类四表打包）。
-BASELINE_MISSING_CREATED_AT = 28
+#      → 28（tcm_techniques + system_params + code_systems + code_entries，字典/参数类四表打包）
+#      → 22（spd 规则/模板类六表打包，spd 链）。
+BASELINE_MISSING_CREATED_AT = 22
 
 
 def test_缺created_at的表不许变多():
