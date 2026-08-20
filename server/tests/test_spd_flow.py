@@ -884,7 +884,31 @@ def test_referral_arrive_down_receive_require_current_org(client, h):
 
 
 def test_referral_legacy_station_reviewed_still_advances(client, h, base):
-    """ADR-0005 存量兼容：收敛前停在 station_reviewed 的在途单仍可由卫生院继续推进。"""
+    """ADR-0005 存量兼容：收敛前停在 station_reviewed 的在途单仍可由其上级卫生院续走。
+
+    还原真实存量单形态：current_org 锚在服务站机构（其 parent=卫生院），并用
+    **机构账号**（卫生院医生）走 _assert_review_authority 的 parent 校验推进——
+    不走全域角色旁路，钉住兼容项与越权校验的组合行为。
+    """
+    township_id = base["township"]["id"]
+    # 收敛前遗留的服务站机构：村级、挂在卫生院之下
+    station = client.post(
+        "/api/organizations",
+        json={"name": "存量服务站", "org_type": "village", "level": "village",
+              "parent_id": township_id},
+        headers=h,
+    ).json()
+    client.post(
+        "/api/users",
+        json={"username": "legacy_tdoc", "password": "pass123456", "role": "doctor",
+              "org_id": township_id},
+        headers=h,
+    )
+    tdoc = client.post(
+        "/api/auth/login", json={"username": "legacy_tdoc", "password": "pass123456"}
+    ).json()
+    tdoc = {"Authorization": f"Bearer {tdoc['access_token']}"}
+
     patient = client.post(
         "/api/patients",
         json={"name": "存量链测试", "id_card": "330182198206060096", "phone": "13900009096"},
@@ -901,16 +925,17 @@ def test_referral_legacy_station_reviewed_still_advances(client, h, base):
         json={"patient_id": patient["id"], "program_code": "hypertension", "reason": "上转"},
         headers=h,
     ).json()["id"]
-    # 模拟收敛前的存量在途单：状态停在 station_reviewed
+    # 模拟收敛前的存量在途单：状态停在 station_reviewed、锚在服务站机构
     from app.database import SessionLocal
     from app.spd.models import SpdReferralCase
 
     with SessionLocal() as db:
         case = db.get(SpdReferralCase, case_id)
         case.status = "station_reviewed"
+        case.current_org_id = station["id"]
         db.commit()
     resp = client.post(
-        f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=h
+        f"/api/spd/referrals/{case_id}/review", json={"action": "pass"}, headers=tdoc
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "township_reviewed", "存量 station_reviewed 应按旧链续走"

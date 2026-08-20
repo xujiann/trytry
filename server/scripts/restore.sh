@@ -56,6 +56,6 @@ fi
 
 echo "[4/4] 迁移到当前代码版本"
 cd "$(dirname "$0")/.."
-alembic upgrade head
+alembic upgrade heads
 
 echo "完成。请登录后访问 /api/audit/verify 确认审计链完好。"

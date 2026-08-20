@@ -6,12 +6,12 @@ on:
   pull_request:
 
 env:
-  # 块5：覆盖率门禁阈值。当前为 warning 模式——低于阈值只告警，不阻断构建。
-  # 稳定运行一段时间后，把下面「覆盖率门禁」步骤的 `|| true` 去掉即可切换为强制门禁。
+  # 块5：覆盖率门禁阈值（ADR-0002 落地时实测 87%，门槛 70% 留有余量）。
+  # 强制门禁：低于阈值阻断构建。
   COVERAGE_MIN: "70"
 
 jobs:
-  # unit + smoke（阻断）+ integration（真 PG，warning 模式）
+  # unit + smoke（阻断）+ integration（真 PG，阻断——ADR-0002 迁移门）
   test:
     runs-on: ubuntu-latest
     services:
@@ -40,25 +40,22 @@ jobs:
         run: |
           python -m pytest tests/ -q -m "not integration and not e2e" \
             --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
-      - name: Run integration tests on real PostgreSQL (warning mode)
+      - name: Run integration tests on real PostgreSQL (blocking)
         working-directory: server
-        # SQLite 测不出的方言/迁移敏感点。稳定后去掉 `|| true` 切换为强制门禁。
+        # SQLite 测不出的方言/迁移敏感点。ADR-0002：强制门禁，失败阻断构建。
         env:
           MEDPLAT_PG_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/medplat_pg_test
-        run: |
-          python -m pytest tests/ -q -m integration \
-            || echo "::warning title=Integration::集成测试未通过，当前为 warning 模式不阻断构建"
-      - name: Coverage gate (warning mode)
+        run: python -m pytest tests/ -q -m integration
+      - name: Coverage gate (blocking)
         working-directory: server
         run: |
-          python - <<'PY' || true
+          python - <<'PY'
           import sys, xml.etree.ElementTree as ET
           threshold = float("${{ env.COVERAGE_MIN }}")
           pct = float(ET.parse("coverage.xml").getroot().get("line-rate")) * 100
           print(f"::notice title=Coverage::行覆盖率 {pct:.2f}%（阈值 {threshold:.0f}%）")
           if pct < threshold:
-              print(f"::warning title=Coverage below threshold::行覆盖率 {pct:.2f}% 低于阈值 {threshold:.0f}%，"
-                    "当前为 warning 模式不阻断构建")
+              print(f"::error title=Coverage below threshold::行覆盖率 {pct:.2f}% 低于阈值 {threshold:.0f}%（强制门禁，ADR-0002）")
               sys.exit(1)
           PY
       - name: Upload coverage report
@@ -69,7 +66,7 @@ jobs:
           path: server/coverage.xml
           if-no-files-found: ignore
 
-  # build + lint + typecheck（均为 warning 模式，与覆盖率门禁一致；稳定后逐个转强制）
+  # build（阻断）+ lint + typecheck（warning，mypy 存量清零后转强制）
   quality:
     runs-on: ubuntu-latest
     steps:

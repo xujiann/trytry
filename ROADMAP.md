@@ -23,6 +23,8 @@
 - ✅ `scheduler.py` `_release_lock` 校验持有者，防误删他实例锁（token 所有权 + Lua 比对删，回归测试 `test_scheduler_lock.py`）。
 - ☐ 调度锁更深一层：任务跑过 TTL(300s) 仍会双跑（token 修的是"误删"，不是"双跑"）——需锁续期/心跳或任务时限。/review 提出。
 - ☐ 给 CI 加 Redis service，真跑 `_release_lock` 的 Lua 路径（现仅假 redis 验逻辑）。
+- ☐ 迁移-模型**列级** parity 门：真 PG 上 `upgrade heads` 后对比 inspector 与 Base.metadata 的列集合（建表级已有 `test_模型表零漂移` 兜住；列漂移是 ADR-0002 已知残余缺口）。/review 提出。
+- ☐ 机构树深度体检：`tree-health` 增报"深于三层"的链（ADR-0005 假设三级；存量四层树会让转诊环节名错标）。/review 提出。
 - ☐ 加固 `test_monitor_overview.py`：recent_failures 取 limit-5，理论上可能被其它失败记录挤掉 seeded 行（当前因间隔≥300s 安全）。/review 提出。
 
 ### 工具链
@@ -30,8 +32,8 @@
 - ☐ mypy 存量 41（20 文件）：warning 基线，逐块补类型注解往下减；补到较低后可把 verify 的 typecheck 转回阻断。
 
 ### 让 CI 变真（关联 ADR-0002）
-- ☐ 覆盖率门禁去 `|| true`，转阻断；集成/迁移门在真 PG 上转阻断。
-- ☐ 生产禁用 `create_all`、部署产物补 `alembic upgrade heads`（**先把 ADR-0002 从 Proposed 推进到 Accepted**）。
+- ✅ 覆盖率门禁转阻断（落地实测 87%，门槛 70%）；集成/迁移门在真 PG 上转阻断。
+- ✅ 生产禁用 `create_all`（lifespan 环境分支 + 守卫测试 `test_adr0002_create_all_guard.py`）、`start.sh` 启动前 `alembic upgrade heads`、README 修正复数（ADR-0002 已 Accepted）。
 
 ## Next（治理逐块推进，只进不退）
 
@@ -49,7 +51,7 @@
 
 ## 待决策（先 ADR，后动手）
 
-- ☐ ADR-0002 生产迁移停用 create_all（Proposed → 待批）。
+- ✅ ADR-0002 生产迁移停用 create_all（Accepted，已实施）。
 - ☐ ADR-0003 三套并行子域收敛（Proposed → 待批；先做读侧聚合那步）。
 
 ---
