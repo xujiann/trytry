@@ -9,3 +9,10 @@ services:
     envVars:
       - key: MEDPLAT_SEED_DEMO
         value: "1"
+      # 演示站也不该用代码里的默认密钥签 JWT——那串东西在仓库里人人可见，
+      # 谁都能给自己签一个 admin 令牌。`generateValue` 让 Render 每个环境
+      # 生成一个随机值并存在它自己的密钥库里。
+      - key: MEDPLAT_SECRET
+        generateValue: true
+      - key: MEDPLAT_ADMIN_PASSWORD
+        generateValue: true

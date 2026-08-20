@@ -11,8 +11,14 @@
 - MEDPLAT_SMS_DEBUG_ECHO  是否在响应回显 debug_code（默认关；须 console+非生产才生效）
 - MEDPLAT_WECHAT_PROVIDER 居民端微信通道 mock/official
 
-安全硬化（H4）：environment/env 为 prod 时，若 secret 或 admin_password
-仍为默认值，进程启动直接抛异常拒绝启动，防止令牌被离线伪造。
+安全硬化（H4）：environment/env 为 prod 时，secret 与 admin_password 必须**足够强**，
+否则进程启动直接抛异常拒绝启动，防止令牌被离线伪造。
+
+判据不是"等于代码里的默认值"——那种写法只挡得住一个字符串。实测踩过：
+`docker-compose.yml` 注入的是 `change-me-in-production`，而代码默认是
+`dev-secret-change-in-production`，两者不相等，于是 `docker compose up`
+（该文件里 `MEDPLAT_ENV: prod`）会带着一个**仓库里人人可见的签名密钥**正常启动。
+一字符的密钥同样能过。现改为长度 + 字符多样性 + 占位符词表三重校验。
 
 兼容说明：环境变量命名与第一阶段完全一致，不破坏既有部署。
 """
@@ -23,6 +29,65 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_SECRET = "dev-secret-change-in-production"
 DEFAULT_ADMIN_PASSWORD = "admin123"
+
+#: 生产环境的强度下限。密钥用于 HMAC 签名，短密钥可离线暴力破解后伪造任意令牌，
+#: 故要求 32 字符（约当 128 bit 的十六进制/base64 随机串）；管理员口令 12 字符。
+MIN_SECRET_LENGTH = 32
+MIN_ADMIN_PASSWORD_LENGTH = 12
+
+#: 字符多样性下限：挡住 "aaaa…a" 这种长度够、熵为零的值。
+#: 不做真正的熵估算——那需要字典与语言模型，收益不抵复杂度；
+#: "不同字符个数"是廉价且足够的代理指标。
+MIN_SECRET_DISTINCT_CHARS = 8
+MIN_ADMIN_PASSWORD_DISTINCT_CHARS = 6
+
+#: 字符**类别**下限（小写/大写/数字/符号 四类中至少几类）。
+#: 与"不同字符个数"是两回事：`123456789012` 有 9 种不同字符却只有一类，
+#: 纯数字口令用最小的字符集，同样长度下可搜索空间小得多。
+#: 只要 2 类——这是最低及格线，不是口令策略；把它抬高会开始误伤
+#: 密码管理器生成的全小写+数字长串。
+MIN_CHAR_CLASSES = 2
+
+#: 占位符词表（大小写不敏感，子串匹配）。收录的是**真的在部署样例/文档里出现过**
+#: 的措辞，不是通用弱口令字典——后者误伤随机串的概率反而更高。
+PLACEHOLDER_MARKERS = (
+    "change-me", "changeme", "change_me", "changethis", "change-this",
+    "dev-secret", "your-secret", "your_secret", "yoursecret",
+    "placeholder", "example", "todo", "xxxx",
+    "admin123", "password", "passw0rd", "secret-key",
+)
+# 刻意**不**收 "123456" 这类纯数字串：它是经典弱口令，但作为**子串**信号太弱——
+# 十六进制密钥里出现连续数字是正常的（64 位 hex 命中概率约百万分之三），
+# 而误报的代价是运维拿着一个真随机密钥被拒之门外、还看不懂为什么。
+# 词形占位符（change-me / placeholder / admin123 …）没有这个问题。
+
+
+def _char_classes(value: str) -> int:
+    """值里出现了几类字符（小写/大写/数字/符号）。"""
+    return sum((
+        any(c.islower() for c in value),
+        any(c.isupper() for c in value),
+        any(c.isdigit() for c in value),
+        any(not c.isalnum() for c in value),
+    ))
+
+
+def _credential_problem(label: str, value: str, *, min_length: int, min_distinct: int) -> str | None:
+    """返回该凭据不合格的原因；合格返回 None。"""
+    lowered = value.lower()
+    if len(value) < min_length:
+        return f"{label} 长度 {len(value)} < {min_length}"
+    if len(set(value)) < min_distinct:
+        return f"{label} 仅含 {len(set(value))} 种字符（至少 {min_distinct} 种），熵过低"
+    if _char_classes(value) < MIN_CHAR_CLASSES:
+        return (
+            f"{label} 只用了一类字符（纯数字/纯字母），"
+            f"至少要 {MIN_CHAR_CLASSES} 类（小写/大写/数字/符号）"
+        )
+    for marker in PLACEHOLDER_MARKERS:
+        if marker in lowered:
+            return f"{label} 含占位符字样 {marker!r}，显然不是真正的随机值"
+    return None
 
 
 class Settings(BaseSettings):
@@ -89,19 +154,35 @@ class Settings(BaseSettings):
         return "prod" in (self.env, self.environment)
 
     @model_validator(mode="after")
-    def _reject_default_credentials_in_prod(self) -> "Settings":
-        """H4 整改：生产环境沿用默认密钥/默认管理员口令时拒绝启动。"""
-        if self.is_production:
-            problems = []
-            if self.secret == DEFAULT_SECRET:
-                problems.append("MEDPLAT_SECRET 仍为默认值")
-            if self.admin_password == DEFAULT_ADMIN_PASSWORD:
-                problems.append("MEDPLAT_ADMIN_PASSWORD 仍为默认值")
-            if problems:
-                raise RuntimeError(
-                    "生产环境配置不安全，拒绝启动：" + "；".join(problems)
-                    + "。请通过环境变量设置强随机密钥与强口令后重启。"
-                )
+    def _reject_weak_credentials_in_prod(self) -> "Settings":
+        """生产环境凭据强度不足时拒绝启动。
+
+        原实现只比对"是否等于代码里的默认值"，只挡得住一个字符串；
+        换成长度/多样性/占位符三重校验（见 `_credential_problem`）。
+        非生产环境不校验——本地开发就该能直接跑起来。
+        """
+        if not self.is_production:
+            return self
+        problems = [
+            p for p in (
+                _credential_problem(
+                    "MEDPLAT_SECRET", self.secret,
+                    min_length=MIN_SECRET_LENGTH,
+                    min_distinct=MIN_SECRET_DISTINCT_CHARS,
+                ),
+                _credential_problem(
+                    "MEDPLAT_ADMIN_PASSWORD", self.admin_password,
+                    min_length=MIN_ADMIN_PASSWORD_LENGTH,
+                    min_distinct=MIN_ADMIN_PASSWORD_DISTINCT_CHARS,
+                ),
+            ) if p
+        ]
+        if problems:
+            raise RuntimeError(
+                "生产环境配置不安全，拒绝启动：" + "；".join(problems)
+                + "。请生成强随机值后经环境变量注入，例如："
+                + "MEDPLAT_SECRET=$(python -c \'import secrets;print(secrets.token_hex(32))\')"
+            )
         return self
 
 

@@ -1,15 +1,26 @@
 # 一键启动：应用 + PostgreSQL 16 + Redis 7（命名卷持久化）
-# 用法：docker compose up -d
+#
+# 用法（三个密钥**必须**先设好，否则 compose 直接报错退出）：
+#   export MEDPLAT_SECRET=$(python -c 'import secrets;print(secrets.token_hex(32))')
+#   export MEDPLAT_ADMIN_PASSWORD='<强口令，≥12 位>'
+#   export MEDPLAT_DB_PASSWORD=$(python -c 'import secrets;print(secrets.token_hex(16))')
+#   docker compose up -d
+#
+# 为什么不给默认值：本文件里 `MEDPLAT_ENV: prod`。此前写的是
+# `${MEDPLAT_SECRET:-change-me-in-production}`，于是不设任何环境变量也能起来——
+# 起来的是一个**用仓库里人人可见的字符串签 JWT** 的生产实例，谁都能离线伪造令牌。
+# 而应用侧的守卫当时只比对"是否等于代码里的默认值"，这个占位符恰好不等于它，
+# 一路放行。现在改成 `:?` 形态：没设就报错退出，不给"不小心跑起来"的机会。
 services:
   app:
     build: .
     ports:
       - "8000:8000"
     environment:
-      MEDPLAT_DATABASE_URL: postgresql+psycopg2://medplat:medplat@db:5432/medplat
+      MEDPLAT_DATABASE_URL: postgresql+psycopg2://medplat:${MEDPLAT_DB_PASSWORD:?请先设置 MEDPLAT_DB_PASSWORD（数据库口令）}@db:5432/medplat
       MEDPLAT_REDIS_URL: redis://redis:6379/0
-      MEDPLAT_SECRET: ${MEDPLAT_SECRET:-change-me-in-production}
-      MEDPLAT_ADMIN_PASSWORD: ${MEDPLAT_ADMIN_PASSWORD:-admin123}
+      MEDPLAT_SECRET: ${MEDPLAT_SECRET:?请先设置 MEDPLAT_SECRET（≥32 位强随机，用于 JWT 签名）}
+      MEDPLAT_ADMIN_PASSWORD: ${MEDPLAT_ADMIN_PASSWORD:?请先设置 MEDPLAT_ADMIN_PASSWORD（≥12 位强口令）}
       MEDPLAT_UPLOAD_DIR: /data/uploads
       MEDPLAT_ENV: prod
       MEDPLAT_SEED_DEMO: "0"
@@ -26,7 +37,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: medplat
-      POSTGRES_PASSWORD: medplat
+      POSTGRES_PASSWORD: ${MEDPLAT_DB_PASSWORD:?请先设置 MEDPLAT_DB_PASSWORD（数据库口令）}
       POSTGRES_DB: medplat
     volumes:
       - medplat-pgdata:/var/lib/postgresql/data
