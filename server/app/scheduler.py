@@ -19,12 +19,13 @@
 返回 (处理对象数, 结果摘要)。抛异常即记为失败，不影响其他任务与调度循环。
 """
 import asyncio
+import contextlib
 import logging
 import secrets
 import threading
 import time
 from datetime import timedelta
-from typing import Callable
+from typing import Callable, Iterator
 
 from sqlalchemy.orm import Session
 
@@ -202,6 +203,56 @@ class _LockKeeper:
         self._thread.join(timeout=5)
 
 
+#: 进程内互斥。Redis 锁挡的是**跨实例**并发，挡不住同进程内的两条路径——
+#: 调度循环跑在 `asyncio.to_thread` 的线程里，手工触发跑在同步端点的线程池里，
+#: 二者天然可以重叠。而 `MEDPLAT_REDIS_URL` 不配是默认部署形态，那时
+#: `_acquire_lock` 恒返回 token（"单实例语义"），若只靠它，这把锁在默认配置下
+#: 等于不存在。所以两层都要：进程内一把、跨实例一把。
+_LOCAL_LOCKS: dict[str, threading.Lock] = {}
+_LOCAL_LOCKS_GUARD = threading.Lock()
+
+
+def _local_lock(name: str) -> threading.Lock:
+    with _LOCAL_LOCKS_GUARD:
+        return _LOCAL_LOCKS.setdefault(name, threading.Lock())
+
+
+@contextlib.contextmanager
+def job_lock(name: str) -> Iterator[str | None]:
+    """任务执行锁：拿到则 yield token 并在执行期间续期，拿不到 yield None。
+
+    抽出来给**调度循环与手工触发共用**。此前只有调度循环走锁，`/api/jobs/{name}/run`
+    直接调 `run_job`——手工补跑会和正在跑的同一个调度任务并发。多数任务是"扫一遍然后
+    改状态"，并发跑轻则重复发通知、重则把同一批单子处理两次。
+
+    **两层锁**：先抢进程内的 `threading.Lock`（挡同进程内调度线程与请求线程的重叠，
+    这在不配 Redis 的默认部署里是唯一起作用的一层），再抢 Redis 锁（挡跨实例）。
+    两层都非阻塞：抢不到就 yield None，由调用方决定是跳过还是报 409。
+    """
+    local = _local_lock(name)
+    if not local.acquire(blocking=False):
+        yield None
+        return
+    try:
+        token = _acquire_lock(name)
+        if token is None:
+            yield None
+            return
+        keeper = None
+        try:
+            # 无 Redis 即单实例语义，锁不会过期，不必起心跳线程
+            if _redis_client() is not None:
+                keeper = _LockKeeper(name, token)
+                keeper.start()
+            yield token
+        finally:
+            if keeper is not None:
+                keeper.stop()
+            _release_lock(name, token)
+    finally:
+        local.release()
+
+
 def run_job(db: Session, name: str, trigger: str = "scheduled") -> JobRun:
     """执行一个任务并留痕。异常被捕获记为 failed，不向外抛。"""
     spec = REGISTRY[name]
@@ -253,28 +304,18 @@ def tick() -> int:
     with SessionLocal() as db:
         names = due_jobs(db)
     for name in names:
-        token = _acquire_lock(name)
-        if token is None:
-            continue  # pragma: no cover - 需多实例：别的实例正持有该任务的锁
-        keeper = None
-        try:
+        with job_lock(name) as token:
+            if token is None:
+                continue  # pragma: no cover - 需多实例：别的实例正持有该任务的锁
             # 拿到锁后**重新确认到期**：names 是本轮开头的快照，别的实例可能已把
             # 这个任务跑完并把 next_run_at 推到未来（长任务持锁期间尤其容易发生）。
             # 只靠锁只能保证"不重叠"，保证不了"不重复"。
             with SessionLocal() as db:
                 if name not in due_jobs(db):
                     continue
-            # 无 Redis 即单实例语义，锁不会过期，不必起心跳线程
-            if _redis_client() is not None:
-                keeper = _LockKeeper(name, token)
-                keeper.start()
             with SessionLocal() as db:
                 run_job(db, name)
             executed += 1
-        finally:
-            if keeper is not None:
-                keeper.stop()
-            _release_lock(name, token)
     return executed
 
 
