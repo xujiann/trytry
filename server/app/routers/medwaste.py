@@ -284,7 +284,7 @@ def trace(trace_code: str, db: Session = Depends(get_db)):
     waste = db.query(MedicalWaste).filter(MedicalWaste.trace_code == trace_code).first()
     if waste is None:
         raise HTTPException(status_code=404, detail="追溯码不存在")
-    locations = {
+    locations: dict[int | None, dict] = {
         loc.id: _location_out(loc)
         for loc in db.query(WasteLocation)
         .filter(

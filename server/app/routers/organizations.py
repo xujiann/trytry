@@ -104,7 +104,7 @@ def org_tree_health(db: Session = Depends(get_db)):
         # 自底向上走到根，得出本机构的链路（根在前）与层数
         chain: list[str] = []
         seen: set[int] = set()
-        node = o
+        node: Organization | None = o
         while node is not None and node.id not in seen:
             seen.add(node.id)
             chain.append(node.name)

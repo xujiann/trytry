@@ -225,7 +225,9 @@ def create_prescription(
         db.add(PrescriptionItem(prescription_id=prescription.id, **item.model_dump()))
     db.commit()
     db.refresh(prescription)
-    prescription.advisories = advisories
+    # 非持久化字段：审方提示只随本次响应返回、不入库（`PrescriptionOut.advisories`）。
+    # 用 setattr 挂上去——模型上没有这一列，写成属性赋值等于对 ORM 撒谎。
+    setattr(prescription, "advisories", advisories)
     return prescription
 
 

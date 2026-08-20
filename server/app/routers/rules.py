@@ -262,5 +262,6 @@ def rule_catalog(db: Session = Depends(get_db)):
     ]
     by_source: dict[str, int] = {}
     for entry in entries:
-        by_source[entry["source"]] = by_source.get(entry["source"], 0) + 1
+        source = str(entry["source"])
+        by_source[source] = by_source.get(source, 0) + 1
     return {"total": len(entries), "by_source": by_source, "entries": entries}

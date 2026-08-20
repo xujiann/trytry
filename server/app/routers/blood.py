@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..concurrency import add_amount, insert_if_absent, take_amount
+from ..concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
@@ -40,6 +40,7 @@ def upsert_blood_stock(body: BloodStockUpsert, db: Session = Depends(get_db)):
             .filter(BloodStock.blood_type == body.blood_type, BloodStock.component == body.component)
             .first()
         )
+    stock = ensure_present(stock, "血液库存")
     add_amount(db, BloodStock, stock.id, "quantity_ml", body.quantity_ml)
     db.commit()
     db.refresh(stock)

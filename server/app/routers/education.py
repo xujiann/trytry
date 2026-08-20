@@ -5,7 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..concurrency import insert_if_absent, upsert_unique
+from ..concurrency import ensure_present, insert_if_absent, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import Course, LiveFeedback, LiveSession, TrainingRecord, User
@@ -69,6 +69,7 @@ def submit_exam(course_id: int, body: ExamSubmit, db: Session = Depends(get_db),
             .filter(TrainingRecord.course_id == course_id, TrainingRecord.user_id == user.id)
             .first()
         )
+    record = ensure_present(record, "培训记录")
     record.score = max(record.score, body.score)
     record.passed = record.score >= PASS_SCORE
     db.commit()

@@ -72,7 +72,7 @@ jobs:
           path: server/coverage.xml
           if-no-files-found: ignore
 
-  # build + lint 阻断（ruff 存量已清零）；typecheck 仍 warning（存量 139，见 ROADMAP）
+  # build + lint + typecheck，三项均阻断（ruff/mypy 存量均已清零，棘轮只进不退）
   quality:
     runs-on: ubuntu-latest
     steps:
@@ -90,10 +90,10 @@ jobs:
       - name: Lint (ruff, blocking)
         working-directory: server
         run: ruff check .
-      - name: Typecheck (mypy 渐进式, warning mode)
+      - name: Typecheck (mypy, blocking)
         working-directory: server
-        # check_mypy_env 是**阻断**的：它校验 mypy 能解析到第三方库的类型。
+        # check_mypy_env 同样**阻断**：它校验 mypy 能解析到第三方库的类型。
         # 探针失败说明这次 mypy 结果不可信（全被当成 Any），那种「绿」比红更危险。
         run: |
           python scripts/check_mypy_env.py
-          mypy app || echo "::warning title=Typecheck::mypy 有未通过项，当前为 warning 模式不阻断构建"
+          mypy app

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..concurrency import add_amount, insert_if_absent
+from ..concurrency import add_amount, ensure_present, insert_if_absent
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
@@ -190,6 +190,7 @@ def receive_purchase(
             ),
         )
         asset = db.query(Asset).filter(Asset.code == code).first()
+    asset = ensure_present(asset, "资产")
     add_amount(db, Asset, asset.id, "quantity", body.received_quantity)
     db.add(
         AssetMovement(

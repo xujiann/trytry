@@ -34,7 +34,7 @@ def _probe_database(db: Session) -> dict:
         return {
             "connected": True,
             "latency_ms": round((time.perf_counter() - start) * 1000, 2),
-            "dialect": db.bind.dialect.name,
+            "dialect": db.bind.dialect.name if db.bind is not None else "",
         }
     except Exception as exc:  # pragma: no cover - 探活失败路径依赖外部故障
         # 只回错误类型不回原文：连接串常带主机名与账号，不该进监控页

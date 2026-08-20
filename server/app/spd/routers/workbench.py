@@ -529,7 +529,7 @@ def expert_workbench(
         "referrals": _referral_stats(db, orgs),
         "assessments": {
             "total": db.query(SpdAssessment).count(),
-            "by_risk": dict(
+            "by_risk": row_dict(
                 db.query(SpdAssessment.risk_level, func.count(SpdAssessment.id))
                 .group_by(SpdAssessment.risk_level).all()
             ),
@@ -701,7 +701,7 @@ def team_workbench(
             "high_risk": mine_query.filter(
                 SpdEnrollment.risk_level.in_(["high", "very_high"])
             ).count(),
-            "by_risk": dict(
+            "by_risk": row_dict(
                 mine_query.with_entities(
                     SpdEnrollment.risk_level, func.count(SpdEnrollment.id)
                 ).group_by(SpdEnrollment.risk_level).all()
@@ -766,7 +766,7 @@ def team_workbench(
             SpdConsult.doctor_id == user.id, SpdConsult.status == "open"
         ).count()
     if role == "expert":
-        out["team_patients"] = dict(
+        out["team_patients"] = row_dict(
             db.query(SpdEnrollment.team_id, func.count(SpdEnrollment.id))
             .filter(
                 SpdEnrollment.team_id.in_(team_ids or [0]),

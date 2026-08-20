@@ -7,6 +7,8 @@
 - 处方合格率（合理用药）
 - 家医签约履约量（签约服务）
 """
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -31,7 +33,7 @@ router = APIRouter(
 )
 
 # 指标目录种子（启动时写入 performance_indicators 表；权重和不必为100，计分时按比例归一化）
-DEFAULT_INDICATORS = {
+DEFAULT_INDICATORS: dict[str, dict[str, Any]] = {
     "referral": {"name": "转诊结案率", "weight": 20},
     "remote_exam": {"name": "远程诊断服务量", "weight": 20},
     "chronic": {"name": "慢病随访覆盖", "weight": 25},
@@ -47,10 +49,10 @@ def _normalized_weights(db: Session) -> dict[str, float]:
         .filter(PerformanceIndicator.active.is_(True), PerformanceIndicator.weight > 0)
         .all()
     )
-    raw = (
+    raw: dict[str, float] = (
         {r.key: r.weight for r in rows}
         if rows
-        else {k: v["weight"] for k, v in DEFAULT_INDICATORS.items()}
+        else {k: float(v["weight"]) for k, v in DEFAULT_INDICATORS.items()}
     )
     total = sum(raw.values())
     return {k: round(w / total * 100, 2) for k, w in raw.items()}
@@ -128,7 +130,7 @@ def org_scorecards(
     if scope is not None:
         orgs_q = orgs_q.filter(Organization.id.in_(scope))
     orgs = orgs_q.all()
-    results = []
+    results: list[dict[str, Any]] = []
     for org in orgs:
         ref_total = db.query(func.count(Referral.id)).filter(Referral.from_org_id == org.id).scalar() or 0
         ref_completed = (
@@ -204,5 +206,5 @@ def org_scorecards(
                 },
             }
         )
-    results.sort(key=lambda r: r["score"], reverse=True)
+    results.sort(key=lambda r: float(r["score"]), reverse=True)
     return {"weights": weights, "scorecards": results}

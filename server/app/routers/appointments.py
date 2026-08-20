@@ -60,7 +60,8 @@ def find_doctors(
         .order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time)
         .all()
     )
-    by_employee: dict[int, list[AppointmentSlot]] = {}
+    # employee_id 可空（未指派的号源），键类型要承认这一点
+    by_employee: dict[int | None, list[AppointmentSlot]] = {}
     for s in slots:
         by_employee.setdefault(s.employee_id, []).append(s)
     org_names = {

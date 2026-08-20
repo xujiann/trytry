@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_if_absent
+from ..concurrency import ensure_present, insert_if_absent
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope, row_dict
@@ -560,6 +560,7 @@ def upsert_medical_record(
             .filter(MedicalRecord.encounter_id == body.encounter_id)
             .first()
         )
+    record = ensure_present(record, "病历")
     for name in RECORD_FIELDS:
         setattr(record, name, getattr(body, name))
     record.updated_at = utcnow()

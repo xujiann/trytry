@@ -9,6 +9,8 @@
 - ㉟ 绩效自评改进：问题→责任人→期限→完成确认        /api/performance/improvements
 - ⑨ 上门服务调度：申请→派单→完成，关联家医签约      /api/homevisits
 """
+from typing import Any
+
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -305,7 +307,7 @@ def cost_stats(batch_id: int | None = None, db: Session = Depends(get_db)):
         ):
             totals[bid] = round(totals.get(bid, 0) + float(amount), 2)
             by_type[ctype] = round(by_type.get(ctype, 0) + float(amount), 2)
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "batch_id": b.id,
             "batch_no": b.batch_no,

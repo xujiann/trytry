@@ -434,10 +434,10 @@ def unified_requests(
     surg_q = db.query(SurgeryRequest)
     if patient_id is not None:
         surg_q = surg_q.filter(SurgeryRequest.patient_id == patient_id)
-    for req in surg_q.order_by(SurgeryRequest.id.desc()).limit(limit).all():
+    for surgery in surg_q.order_by(SurgeryRequest.id.desc()).limit(limit).all():
         items.append(
-            _unified("surgery", req.id, req.patient_id, req.org_id,
-                     req.surgery_name, req.status, req.created_at)
+            _unified("surgery", surgery.id, surgery.patient_id, surgery.org_id,
+                     surgery.surgery_name, surgery.status, surgery.created_at)
         )
 
     if request_type:
