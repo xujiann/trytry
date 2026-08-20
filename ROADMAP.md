@@ -19,7 +19,7 @@
 
 ### 一行/小修（童子军级，碰到即修）
 - ✅ `routers/monitor.py:79` `"success"` → `"succeeded"`（带回归测试 `test_monitor_overview.py`）。
-- ⚠️ `spd/reporting.py:147` `_score` 忽略 `org_id`：**需先定口径**——`spd_scores` 无 org_id 列，考核对象按 object_type/object_id 归属机构的语义要读 assess.py 定，属"需业务决策"，不是一行小修。
+- ✅ `spd/reporting._score` 补上机构与周期过滤。原先渲染器签名收了 `org_id` 与 `period` 却**两个都没用上**——任何机构、任何周期的报告，这一段都是同一份「最近 20 条」：甲机构的报告里印着乙机构的排名，一季度的报告里印着二季度的分数。此前登记为「需业务决策」是过度谨慎了：`period` 过滤毫无歧义；`org_id` 按 `object_type` 分派（机构/团队/村医/医师四类各自查归属）也是唯一自洽的读法，口径取「恰好属于该机构」——与本模块其余段落一致（`_screening` 等都是 `X.org_id == org_id`），报表段落之间口径不一样比少一段更难查。机构名下没有考核对象时返回空表，**不退回全域数据**（那是别家的数字）。回归四条，变异验证：退回原实现四条全红。
 - ✅ `scheduler.py` `_release_lock` 校验持有者，防误删他实例锁（token 所有权 + Lua 比对删，回归测试 `test_scheduler_lock.py`）。
 - ✅ 调度双跑收窄：① 锁续期心跳（每 TTL/4 秒「仍持有才续期」，`_RENEW_LUA` 原子比对+expire；实例崩溃心跳停、锁 ≤TTL 自愈；易主即停并告警；续期失败 5s 快速重试）——超 TTL 长任务不再丢锁；② `tick()` 拿锁后**重新确认到期**——锁只保证不重叠、保证不了不重复，陈旧到期快照会让已被他实例跑过的任务再跑一遍。回归 `test_scheduler_lock.py` 四条。
 - ✅ 手工触发 `routers/jobs.py` 的 `run_job` 改走执行锁（口径：**加锁校验**）。抽 `scheduler.job_lock` 给调度循环与手工触发共用，占用中返回 409。**两层锁**：Redis 锁只挡跨实例，同进程内调度线程与请求线程照样重叠，且不配 Redis 是默认形态（那时锁等于不存在）——故补进程内 `threading.Lock`。回归四条，两处变异验证。
