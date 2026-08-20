@@ -346,11 +346,10 @@ def visible_patient_ids(db: Session, user: User):
         return select(Encounter.patient_id).where(sa.false())
     parts = []
     for model, org_cols in _relation_tables():
-        cond = None
-        for col in org_cols:
-            c = getattr(model, col) == user.org_id
-            cond = c if cond is None else (cond | c)
-        parts.append(select(model.patient_id).where(cond))
+        # `_relation_tables()` 只返回 org_cols 非空的表，所以 or_ 至少有一个条件；
+        # 用 sa.or_(*conds) 而不是循环里累积 None，省掉一个"必不为 None"的推理。
+        conds = [getattr(model, col) == user.org_id for col in org_cols]
+        parts.append(select(model.patient_id).where(sa.or_(*conds)))
     return parts[0].union_all(*parts[1:]) if len(parts) > 1 else parts[0]
 
 

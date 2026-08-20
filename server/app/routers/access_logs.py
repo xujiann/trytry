@@ -78,11 +78,13 @@ def _decorate(db: Session, rows: list[AccessLog]) -> list[dict]:
     """把机构名、患者名一次查出来贴上，避免每行一次查询（N+1）。"""
     org_ids = {r.org_id for r in rows if r.org_id}
     patient_ids = {r.patient_id for r in rows}
-    orgs = {
+    orgs: dict[int | None, str] = {
         o.id: o.name
         for o in db.query(Organization).filter(Organization.id.in_(org_ids)).all()
     } if org_ids else {}
-    patients = {
+    # 键声明成 `int | None`：`r.org_id` / `r.patient_id` 是可空外键，
+    # 拿 None 去 .get() 运行期本来就是"取不到、走默认值"，类型上也该说得通。
+    patients: dict[int | None, str] = {
         p.id: p.name
         for p in db.query(Patient).filter(Patient.id.in_(patient_ids)).all()
     } if patient_ids else {}

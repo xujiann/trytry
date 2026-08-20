@@ -81,7 +81,7 @@ def home(
         .all()
     )
     names = _program_names(db, [e.program_code for e in enrollments])
-    teams = {
+    teams: dict[int | None, str] = {
         t.id: t.name
         for t in db.query(SpdTeam).filter(
             SpdTeam.id.in_([e.team_id for e in enrollments if e.team_id] or [0])

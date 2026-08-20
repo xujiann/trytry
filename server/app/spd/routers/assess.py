@@ -28,7 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
-from ...concurrency import add_amount, insert_if_absent, take_amount
+from ...concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ...database import get_db
 from ...deps import get_current_user, paginate, require_roles
 from ...formula import FormulaError, evaluate as eval_formula
@@ -560,24 +560,24 @@ def _objects_of(db: Session, plan: SpdAssessPlan, object_ids: list[int]) -> list
             query = query.filter(Organization.level == level_map[plan.level])
         return [(o.id, o.name) for o in query.limit(500).all()]
     if plan.object_type == "team":
-        query = db.query(SpdTeam).filter(SpdTeam.active.is_(True))
+        team_query = db.query(SpdTeam).filter(SpdTeam.active.is_(True))
         if object_ids:
-            query = query.filter(SpdTeam.id.in_(object_ids))
-        return [(t.id, t.name) for t in query.limit(500).all()]
+            team_query = team_query.filter(SpdTeam.id.in_(object_ids))
+        return [(t.id, t.name) for t in team_query.limit(500).all()]
     if plan.object_type == "village_doctor":
-        query = db.query(SpdVillageDoctor).filter(SpdVillageDoctor.active.is_(True))
+        doctor_query = db.query(SpdVillageDoctor).filter(SpdVillageDoctor.active.is_(True))
         if object_ids:
-            query = query.filter(SpdVillageDoctor.user_id.in_(object_ids))
-        rows = query.limit(500).all()
+            doctor_query = doctor_query.filter(SpdVillageDoctor.user_id.in_(object_ids))
+        rows = doctor_query.limit(500).all()
         names = {
             u.id: u.full_name or u.username
             for u in db.query(User).filter(User.id.in_([v.user_id for v in rows] or [0]))
         }
         return [(v.user_id, names.get(v.user_id, "")) for v in rows]
-    query = db.query(User).filter(User.role.in_(["doctor", "public_health"]))
+    user_query = db.query(User).filter(User.role.in_(["doctor", "public_health"]))
     if object_ids:
-        query = query.filter(User.id.in_(object_ids))
-    return [(u.id, u.full_name or u.username) for u in query.limit(500).all()]
+        user_query = user_query.filter(User.id.in_(object_ids))
+    return [(u.id, u.full_name or u.username) for u in user_query.limit(500).all()]
 
 
 @router.post("/scores/run", dependencies=[Depends(require_roles("director"))])
@@ -645,7 +645,7 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
             object_id=object_id,
         )
         if not insert_if_absent(db, record):
-            record = (
+            record = ensure_present((
                 db.query(SpdScore)
                 .filter(
                     SpdScore.plan_id == plan.id, SpdScore.period == body.period,
@@ -653,7 +653,7 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
                     SpdScore.object_id == object_id,
                 )
                 .first()
-            )
+            ), "考核记录")
         record.object_name = object_name
         record.program_code = body.program_code
         record.total_score = round(total_score, 2)

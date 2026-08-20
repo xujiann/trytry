@@ -148,6 +148,8 @@ async def lifespan(_: FastAPI):
             ("drug", SEED_COMMON_DRUGS),
         ):
             system = db.query(CodeSystem).filter(CodeSystem.code == system_code).first()
+            if system is None:  # pragma: no cover - 上一块刚种过，查不到只可能是被并发删了
+                continue
             existing_entries = {
                 code
                 for (code,) in db.query(CodeEntry.code)

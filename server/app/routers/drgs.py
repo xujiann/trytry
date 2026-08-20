@@ -69,22 +69,25 @@ def assign_drg_group(db: Session, summary: CaseSummary) -> dict | None:
         if score is not None and (best is None or score > best[0]):
             best = (score, group)
 
+    # 另起一个名字：`group` 是上面 for 的循环变量，复用它会让"选中的那个组"
+    # 和"正在比对的那个组"混在一起读不清，类型上也说不通。
+    chosen: DrgGroup | None
     if best is not None:
-        group = best[1]
+        chosen = best[1]
     else:
-        group = db.query(DrgGroup).filter(DrgGroup.code == FALLBACK_CODE).first()
-        if group is None:  # pragma: no cover - 兜底组缺失（种子未执行）
+        chosen = db.query(DrgGroup).filter(DrgGroup.code == FALLBACK_CODE).first()
+        if chosen is None:  # pragma: no cover - 兜底组缺失（种子未执行）
             return None
-    summary.drg_code = group.code
-    summary.drg_weight = group.base_weight
+    summary.drg_code = chosen.code
+    summary.drg_weight = chosen.base_weight
     db.commit()
     return {
-        "drg_code": group.code,
-        "drg_name": group.name,
-        "mdc": group.mdc,
-        "mdc_name": group.mdc_name,
-        "weight": group.base_weight,
-        "fallback": bool(group.is_fallback),
+        "drg_code": chosen.code,
+        "drg_name": chosen.name,
+        "mdc": chosen.mdc,
+        "mdc_name": chosen.mdc_name,
+        "weight": chosen.base_weight,
+        "fallback": bool(chosen.is_fallback),
     }
 
 

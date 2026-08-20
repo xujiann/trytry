@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
-from ...concurrency import insert_if_absent
+from ...concurrency import ensure_present, insert_if_absent
 from ...database import get_db
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, row_dict
@@ -189,13 +189,14 @@ def _upsert_candidate(
     # 两次筛查并发落到同一人同一病种时会撞唯一键；SAVEPOINT 把冲突圈在这一行，
     # 冲突了就取回既有那条，整次筛查不因此回滚。
     if not insert_if_absent(db, candidate):
-        return (
+        return ensure_present(
             db.query(SpdCandidate)
             .filter(
                 SpdCandidate.patient_id == screening.patient_id,
                 SpdCandidate.program_code == screening.program_code,
             )
-            .first()
+            .first(),
+            "候选名单",
         )
     return candidate
 
@@ -826,7 +827,7 @@ def confirm_migration(
     if not insert_if_absent(db, incoming):
         # 目标机构已有同病种在管档案（比如患者早已在那边建档）：
         # 不重复建，只把关系接上
-        incoming = (
+        incoming = ensure_present(
             db.query(SpdEnrollment)
             .filter(
                 SpdEnrollment.patient_id == enrollment.patient_id,
@@ -834,7 +835,8 @@ def confirm_migration(
                 SpdEnrollment.status == "active",
                 SpdEnrollment.id != enrollment.id,
             )
-            .first()
+            .first(),
+            "在管档案",
         )
         if incoming is not None and incoming.migrated_from_id is None:
             incoming.migrated_from_id = enrollment.id

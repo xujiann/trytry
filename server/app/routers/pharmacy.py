@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..concurrency import add_amount, insert_if_absent, insert_or_conflict
+from ..concurrency import add_amount, ensure_present, insert_if_absent, insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
@@ -50,6 +50,7 @@ def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
             .filter(DrugStock.org_id == body.org_id, DrugStock.drug_code == body.drug_code)
             .first()
         )
+    stock = ensure_present(stock, "药品库存")
     add_amount(db, DrugStock, stock.id, "quantity", body.quantity)
     stock.threshold = body.threshold
     stock.drug_name = body.drug_name
@@ -336,6 +337,7 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = 
                 .filter(DrugStock.org_id == order.org_id, DrugStock.drug_code == order.item_code)
                 .first()
             )
+        stock = ensure_present(stock, "药品库存")
         add_amount(db, DrugStock, stock.id, "quantity", order.quantity)
         db.flush()
         db.refresh(stock)

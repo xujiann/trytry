@@ -11,6 +11,8 @@ M11 交换监控（#26）：
 - 未预期的解析异常统一捕获：落日志后返回 422（不再 500 裸抛）；
 - GET /api/integration/exchange-logs 提供日志查询与失败率统计。
 """
+from typing import Any, cast
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func
@@ -279,7 +281,9 @@ def _do_fhir_observation(resource: dict, db: Session):
     if chronic is None:
         raise HTTPException(status_code=404, detail=f"该患者无 {disease} 慢病档案，无法归档随访")
 
-    followup_in = FollowUpCreate(**values, guidance="HL7/FHIR 对接自动归档")
+    # `values` 是运行期按 LOINC 映射拼出来的字段字典，键名在类型上不可知；
+    # pydantic 会做校验，缺字段/多字段都会在这里报 422，不会静默走下去。
+    followup_in = FollowUpCreate(**cast(Any, values), guidance="HL7/FHIR 对接自动归档")
     followup = FollowUp(chronic_id=chronic.id, **followup_in.model_dump())
     new_level = _evaluate_level(db, chronic.disease, followup_in)
     if new_level is not None:

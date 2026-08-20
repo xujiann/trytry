@@ -6,6 +6,8 @@
 - **T4.3 自定义绩效公式**：管理员用受限表达式定义指标，走 AST 白名单求值
   （见 app/formula.py），并汇总为期末综合绩效报告。
 """
+from typing import Any
+
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import func
@@ -631,9 +633,12 @@ def drug_use(
         .all()
     ):
         if adm.org_id in bed_days:
-            bed_days[adm.org_id] += max((adm.discharged_at - adm.admitted_at).days, 1)
+            # 查询条件已含 `discharged_at >= start_dt`，这里必非 None；
+            # 判一句让类型也说得通，顺便挡住将来有人放宽那个过滤条件。
+            if adm.discharged_at is not None:
+                bed_days[adm.org_id] += max((adm.discharged_at - adm.admitted_at).days, 1)
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     for oid in org_ids:
         in_total, in_drug = inpatient.get(oid, (0.0, 0.0))
@@ -666,7 +671,7 @@ def drug_use(
         # 有常识的——国家控制目标是 40 DDDs/百人天，破 200 基本可以断定填错了。
         # 与其让一个天文数字被抄进上报表，不如在同一份响应里说清楚它可疑。
         if (
-            rows[-1]["antibiotic_intensity"] > INTENSITY_IMPLAUSIBLE
+            float(rows[-1]["antibiotic_intensity"]) > INTENSITY_IMPLAUSIBLE
             and not rows[-1]["intensity_unstable"]
         ):
             warnings.append(

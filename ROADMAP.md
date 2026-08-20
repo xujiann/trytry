@@ -30,10 +30,10 @@
 
 ### 工具链
 - ✅ 清掉 8 处存量 lint（5 未用 import + 2 无占位 f-string + 1 未用变量改显式 assert），`make lint` 归零；`make verify` 的 typecheck 步改为渐进式 warning 不阻断——verify 现可用。
-- ◐ mypy 存量 **187 → 139**（CI 口径，清掉 48 处 / 9 个文件；纯注解与推断收敛，零行为改动）：循环变量同名不同类型改名（`main.py`/`spd/seed.py` 种子块、`formula.py` 一元分支）、累加毫秒的 `module_duration` 由 `Counter`（值 int）换成 `defaultdict(float)`、混值字典就地标注 `dict[str, Any]`、`loinc_code` 形参补 `| None`、`deps.resolve_org_ids` 合并守卫让 mypy 能收窄。顺带两处就近修：`ApiMetrics.reset` 原本在持锁时调 `__init__` **把锁对象本身换掉**（改为抽 `_reset_counters()` 只清计数器）、`portal_logout` 补 `credentials is None` 显式 401 兜底（原依赖 `current_resident` 先行拦截的隐式不变量）。**139 → 69**：抽 `deps.row_dict()` 收掉最大的一族——`dict(db.query(X.a, func.count(...)).group_by(...).all())` 这个统计接口标准写法在仓库里重复 35 处，而 `.all()` 给的是 `list[Row[tuple[K,V]]]`、`dict()` 要 `Iterable[tuple[K,V]]`，类型上说不通（运行期一直是对的），每处留下「需标注 + 参数类型不符」两条报错。收成一个有名字的函数而不是每处加 `# type: ignore`——ignore 是把话咽回去、不是把话说清楚。剩余 69 处：union-attr 22（`db.get()/first()` 返回 `X | None` 未收窄，多为 insert-if-absent 后重查、并发删除才会踩）、arg-type 18、attr-defined 10、assignment 10、其余 9。
+- ✅ mypy 存量 **187 → 0**（CI 口径，全程零行为改动）。分三步：①抽 `deps.row_dict()` 收掉最大一族（`dict(query.all())` 重复 35 处，Row 与 dict 的类型对不上）；②抽 `concurrency.ensure_present()` 收掉「insert_if_absent 后重查」那族（8 处，正常路径必不为 None，但那是**推理**不是保证——并发删除会变成 500，现在给 409 与人话）；③其余逐个处理：分支复用变量改名（workflows/followup/assess/drgs）、可空外键当字典键改宽键声明、混值字典就地标注、`Result.rowcount` 用 `cast(CursorResult, ...)`。
 - ✅ **lint 转阻断**（CI 实测 ruff 0 项）；`requirements-dev.txt` 给 ruff/mypy 钉上界——本仓库无 lockfile，门一旦阻断就必须可复现（实测 mypy 2.3 报 139 处、1.19 在同一份代码上报 187 处，版本飘一下结论就变）。
 - ✅ **mypy 环境探针 `scripts/check_mypy_env.py`（阻断）**：`ignore_missing_imports=true` 的代价是——mypy 解析不到的库会被**静默当成 Any**，依赖它的代码全部「通过」。本轮真踩到：开发机的 `mypy` 是 `uv tool install` 的隔离环境（没有 SQLAlchemy），同一份代码本地报 **41** 处、CI 报 **187** 处，差的 146 处全是 ORM 相关。探针先 `reveal_type` 探 sqlalchemy/pydantic，是 Any 就直接失败并给修复指引，杜绝再拿假绿下结论。
-- ☐ **typecheck 转阻断**：待存量 139 清零后再切（`make verify` 与 CI 现均为 warning）。
+- ✅ **typecheck 已转阻断**：`make verify` 去掉 `-` 前缀、CI 去掉 `|| echo ::warning`。六项能力（build/lint/typecheck/unit/integration/smoke）自此全部阻断。
 - ✅ **CI 解释器与生产对齐**：两个 job 改用 `PYTHON_VERSION: "3.12"`（与两个 Dockerfile、ruff `target-version`、mypy `python_version` 同版）。切换前在 3.12 上实测过全套：compileall / alembic upgrade heads（247 表）/ ruff 0 项 / mypy 139（与 3.11 逐条相同）/ 单元 1465 passed / smoke 2 passed / app 起得来。新增 `test_python_version_alignment.py` 两条把四处钉在一起（版本一致 + 不许写死版本号，后者扫全部 workflow 且带不带引号都认）——以后升级要么四处一起改、要么用例变红（此前它们没有任何互相约束，正是漂开的原因）。
 
 ### 让 CI 变真（关联 ADR-0002）

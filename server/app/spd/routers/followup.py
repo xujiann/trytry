@@ -296,7 +296,7 @@ def auto_match_plans(
             for a in rows
         ]
     else:
-        rows = (
+        encounters = (
             db.query(Encounter)
             .filter(Encounter.org_id == org_id, Encounter.created_at >= since)
             .order_by(Encounter.id.desc())
@@ -306,7 +306,7 @@ def auto_match_plans(
         candidates = [
             (e.patient_id, e.created_at.date().isoformat(),
              f"{e.diagnosis_name or ''}{e.diagnosis_code or ''}")
-            for e in rows
+            for e in encounters
         ]
 
     matched, created = 0, 0
@@ -638,7 +638,7 @@ def followup_stats(
         "overdue": overdue,
         "by_status": by_status,
         "by_abnormal": by_abnormal,
-        "by_channel": dict(
+        "by_channel": row_dict(
             query.filter(SpdFollowupRecord.status == "done")
             .with_entities(SpdFollowupRecord.channel, func.count(SpdFollowupRecord.id))
             .group_by(SpdFollowupRecord.channel).all()

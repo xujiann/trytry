@@ -14,10 +14,15 @@
 正确写法固定成函数，并配一条扫描用例（`test_stage14_concurrency.py`）盯住
 "往带唯一约束的表里写、却没处理约束冲突"的形状。
 """
+from typing import TypeVar, cast
+
 from fastapi import HTTPException
 from sqlalchemy import update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+_T = TypeVar("_T")
 
 __all__ = [
     "insert_or_conflict",
@@ -106,6 +111,28 @@ def upsert_unique(db: Session, model, keys: dict, values: dict):
     return existing, True
 
 
+def ensure_present(obj: _T | None, what: str) -> _T:
+    """`insert_if_absent(...)` 之后重查，本该必得一行；拿不到就明确报错。
+
+    仓库里有五处这个形状——入库/发血/领料/培训成绩/病历质控都靠它做"没有就建、
+    有就累加"：
+
+        insert_if_absent(db, DrugStock(...))
+        stock = db.query(DrugStock).filter(...).first()
+        add_amount(db, DrugStock, stock.id, ...)      # stock 在类型上是 X | None
+
+    正常路径下 `.first()` 必不为 None（行刚被保证存在）。但"必不为 None"是
+    **推理**不是保证：另一个请求在这两句之间把行删了，`stock.id` 就是
+    `AttributeError` → 500，日志里只有一句 NoneType，看不出发生了什么。
+
+    收成一句 `ensure_present(...)`：把这条推理写出来，并在它不成立时给出
+    409 与人话——这是并发撞车，重试即可，不是服务器坏了。
+    """
+    if obj is None:
+        raise HTTPException(status_code=409, detail=f"{what}刚被其他操作删除，请重试")
+    return obj
+
+
 def insert_if_absent(db: Session, obj) -> bool:
     """批量导入里的单行插入：已存在就跳过，返回是否真的落库。
 
@@ -164,13 +191,14 @@ def take_amount(db: Session, model, obj_id: int, col: str, amount) -> bool:
     最后扣出负库存或少扣一笔。
     """
     column = getattr(model, col)
-    return bool(
-        db.execute(
-            update(model)
-            .where(model.id == obj_id, column >= amount)
-            .values(**{col: column - amount})
-        ).rowcount
-    )
+    # `Session.execute` 的静态返回是 `Result`，只有 `CursorResult` 才声明了
+    # rowcount；DML 语句拿到的实际就是 CursorResult，故在此收窄。
+    result = cast(CursorResult, db.execute(
+        update(model)
+        .where(model.id == obj_id, column >= amount)
+        .values(**{col: column - amount})
+    ))
+    return bool(result.rowcount)
 
 
 def claim_quota(db: Session, model, obj_id: int, used_col: str, limit_col: str, step: int = 1) -> bool:
@@ -185,11 +213,9 @@ def claim_quota(db: Session, model, obj_id: int, used_col: str, limit_col: str, 
     """
     used = getattr(model, used_col)
     limit = getattr(model, limit_col)
-    claimed = (
-        db.execute(
-            update(model)
-            .where(model.id == obj_id, used + step <= limit)
-            .values(**{used_col: used + step})
-        ).rowcount
-    )
-    return bool(claimed)
+    claimed = cast(CursorResult, db.execute(
+        update(model)
+        .where(model.id == obj_id, used + step <= limit)
+        .values(**{used_col: used + step})
+    ))
+    return bool(claimed.rowcount)

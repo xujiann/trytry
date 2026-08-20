@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..clock import now_naive
-from ..concurrency import add_amount
+from ..concurrency import add_amount, ensure_present
 from ..database import get_db
 from ..privacy import mask_phone
 from ..models import (
@@ -248,7 +248,7 @@ def _login_result(db: Session, account: ResidentAccount) -> dict:
         # 自动绑定与别的账户抢同一份档案、撞上 patient_id 唯一索引：
         # 登录本身照常成功，绑定让位（保持未绑定，走显式实名绑定去申诉）。
         db.rollback()
-        account = db.get(ResidentAccount, account_id)
+        account = ensure_present(db.get(ResidentAccount, account_id), "居民账户")
         account.last_login_at = now_naive()
         db.commit()
     patient = db.get(Patient, account.patient_id) if account.patient_id else None

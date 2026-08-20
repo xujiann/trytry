@@ -656,7 +656,7 @@ def closure_rate(
         "effective_visits": effective,
         "effective_rate": round(effective / denominator * 100, 1) if denominator else 0.0,
         "by_status": by_status,
-        "pending_by_level": dict(
+        "pending_by_level": row_dict(
             query.filter(SpdReferralCase.status.notin_(_TERMINAL))
             .with_entities(SpdReferralCase.current_level, func.count(SpdReferralCase.id))
             .group_by(SpdReferralCase.current_level).all()
