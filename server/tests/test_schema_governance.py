@@ -90,8 +90,10 @@ def test_核心表结构已冻结():
 #      → 38（appointment_slots）→ 37（duty_rosters）→ 36（departments）
 #      → 32（consult_experts + drg_groups + report_templates + print_templates，配置类四表打包）
 #      → 28（tcm_techniques + system_params + code_systems + code_entries，字典/参数类四表打包）
-#      → 22（spd 规则/模板类六表打包，spd 链）。
-BASELINE_MISSING_CREATED_AT = 22
+#      → 22（spd 规则/模板类六表打包，spd 链）→ 14（平台零散八表打包）
+#      → 2（spd 其余配置/关联十二表收官批，spd 链）。仅剩 blood_stocks（降级）与
+#      admissions（核心表，改列需先 ADR）——欠账清偿完毕，此后新表一律带 created_at。
+BASELINE_MISSING_CREATED_AT = 2
 
 
 def test_缺created_at的表不许变多():
