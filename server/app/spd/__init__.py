@@ -57,8 +57,10 @@ def register_spd(app: FastAPI) -> int:
     for module in modules:
         app.include_router(module.router)
     # 任务佐证材料挂接平台附件服务（注册制：平台不 import 子系统，方向不反转）
+    # 任务佐证材料是患者数据（SpdTask 直接挂 patient_id），走患者可见性 + 留痕
     register_attachment_owner(
-        "spd_task", SpdTask, ("doctor", "public_health", "director", "operator")
+        "spd_task", SpdTask, ("doctor", "public_health", "director", "operator"),
+        "patient", patient_of=lambda db, task: task.patient_id,
     )
     # 订阅平台领域事件（出院、就诊）与注册定时任务。和路由一起装卸：
     # 子系统关掉就不再听、也不再跑，否则会出现"菜单里没有这个功能，

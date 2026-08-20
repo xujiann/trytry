@@ -248,6 +248,10 @@ def claim_request(
             {
                 ExamRequest.status: "diagnosing",
                 ExamRequest.claimed_by: user.full_name or user.username,
+                # 同一条原子 UPDATE 里记下中心机构：`claimed_by` 是展示名，
+                # 推不出机构，而"中心与该患者的服务关系"正是靠这一列成立的
+                # （见 visibility._relation_tables 的后缀推导）。
+                ExamRequest.claimed_org_id: user.org_id,
             },
             synchronize_session=False,
         )

@@ -4,6 +4,12 @@
 - 患者敏感字段脱敏规则与业务接口完全一致（复用 privacy 模块，非 admin 掩码）
 - 版式：@page A4 + @media print，打印时隐藏操作按钮，页脚带打印时间
 - 模板可配：PrintTemplate（doc_type 唯一）配置抬头机构名、页脚说明与二维码开关
+
+**可见性（P0 整改）**：四个单据打印端点此前只要"登录"就渲染——脱敏做了，
+但脱敏挡不住"这个人根本不该看这张单子"。任何账号按 id 顺序遍历，就能把全县的
+报告单、处方笺、申请单打出来，且不留任何痕迹，正是 CLAUDE.md §8 明令禁止的
+"按 id 直取、不校验归属、无留痕"。现在一律先过 `assert_patient_visible`
+（校验 + 写 AccessLog）；医学证明未关联患者时退到签发机构的可见性。
 """
 from html import escape
 
@@ -28,6 +34,7 @@ from ..models import (
     User,
 )
 from ..privacy import mask_id_card, mask_phone
+from ..visibility import assert_org_visible, assert_patient_visible
 
 router = APIRouter(prefix="/api/print", tags=["报告打印"], dependencies=[Depends(get_current_user)])
 
@@ -183,8 +190,12 @@ def print_exam_report(
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
     request = db.get(ExamRequest, report.request_id)
-    patient = db.get(Patient, request.patient_id) if request else None
-    org_name = _org_name(db, request.from_org_id) if request else ""
+    if request is None:
+        # 报告失去申请单就无从判定归属——宁可拒绝，也不退化成无校验
+        raise HTTPException(status_code=404, detail="报告对应的申请单不存在")
+    assert_patient_visible(db, user, request.patient_id, resource="print:exam_report")
+    patient = db.get(Patient, request.patient_id)
+    org_name = _org_name(db, request.from_org_id)
     center = CENTER_NAMES.get(request.center_type, request.center_type) if request else ""
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">申请机构</td><td>{_esc(org_name)}</td>'
@@ -226,6 +237,7 @@ def print_prescription(
     rx = db.get(Prescription, prescription_id)
     if rx is None:
         raise HTTPException(status_code=404, detail="处方不存在")
+    assert_patient_visible(db, user, rx.patient_id, resource="print:prescription")
     patient = db.get(Patient, rx.patient_id)
     org_name = _org_name(db, rx.org_id)
     items = (
@@ -275,6 +287,7 @@ def print_exam_request(
     request = db.get(ExamRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="申请单不存在")
+    assert_patient_visible(db, user, request.patient_id, resource="print:exam_request")
     patient = db.get(Patient, request.patient_id)
     org_name = _org_name(db, request.from_org_id)
     sample_names = {
@@ -317,6 +330,12 @@ def print_cert(cert_id: int, db: Session = Depends(get_db), user: User = Depends
     cert = db.get(MedicalCert, cert_id)
     if cert is None:
         raise HTTPException(status_code=404, detail="证明不存在")
+    if cert.patient_id:
+        assert_patient_visible(db, user, cert.patient_id, resource="print:cert")
+    else:
+        # 出生/死亡证明可以不挂患者档案（如院外死亡登记）——退到签发机构可见性，
+        # 不能因为"没有 patient_id"就变成谁都能打
+        assert_org_visible(db, user, cert.org_id)
     org_name = _org_name(db, cert.org_id)
     patient = db.get(Patient, cert.patient_id) if cert.patient_id else None
     type_name = CERT_TYPE_NAMES.get(cert.cert_type, cert.cert_type)
