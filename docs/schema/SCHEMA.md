@@ -27,9 +27,11 @@
 - `category` · VARCHAR(16) · NOT NULL · index
 - `direction` · VARCHAR(8) · NOT NULL
 - `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_account_subjects_active(active)
 - _index_ ix_account_subjects_category(category)
 - _index_ ix_account_subjects_code(code) UNIQUE
+- _index_ ix_account_subjects_created_at(created_at)
 
 ## admin_projects
 
@@ -336,7 +338,9 @@
 - `guidance` · VARCHAR(512) · NOT NULL
 - `followup_interval_days` · INTEGER · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_chronic_disease_types_code(code) UNIQUE
+- _index_ ix_chronic_disease_types_created_at(created_at)
 
 ## chronic_patients
 
@@ -622,8 +626,10 @@
 - `antibiotic` · BOOLEAN · NOT NULL · index
 - `ddd` · FLOAT · NOT NULL
 - `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_drug_rules_active(active)
 - _index_ ix_drug_rules_antibiotic(antibiotic)
+- _index_ ix_drug_rules_created_at(created_at)
 - _index_ ix_drug_rules_drug_code(drug_code) UNIQUE
 
 ## drug_shortages
@@ -900,7 +906,9 @@
 - `duration_min` · INTEGER · NOT NULL
 - `notes` · VARCHAR(512) · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_exam_resources_center_type(center_type)
+- _index_ ix_exam_resources_created_at(created_at)
 - _index_ ix_exam_resources_org_id(org_id)
 
 ## exchange_logs
@@ -1193,8 +1201,10 @@
 - `name` · VARCHAR(128) · NOT NULL
 - `category` · VARCHAR(4) · NOT NULL · index
 - `report_hours` · INTEGER · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_infectious_diseases_category(category)
 - _index_ ix_infectious_diseases_code(code) UNIQUE
+- _index_ ix_infectious_diseases_created_at(created_at)
 
 ## informed_consents
 
@@ -1512,7 +1522,9 @@
 - `group_id` · INTEGER · NOT NULL · index · → org_groups.id
 - `org_id` · INTEGER · NOT NULL · index · → organizations.id
 - `joined_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (group_id, org_id) uq_org_group_member
+- _index_ ix_org_group_members_created_at(created_at)
 - _index_ ix_org_group_members_group_id(group_id)
 - _index_ ix_org_group_members_org_id(org_id)
 
@@ -1668,6 +1680,8 @@
 - `name` · VARCHAR(64) · NOT NULL
 - `weight` · FLOAT · NOT NULL
 - `active` · BOOLEAN · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_performance_indicators_created_at(created_at)
 - _index_ ix_performance_indicators_key(key) UNIQUE
 
 ## permissions
@@ -1935,8 +1949,10 @@
 - `referral_id` · INTEGER · NOT NULL · → referrals.id
 - `cert_no` · VARCHAR(32) · NOT NULL
 - `issued_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _unique_ (cert_no)
 - _unique_ (referral_id)
+- _index_ ix_referral_certs_created_at(created_at)
 
 ## referrals
 

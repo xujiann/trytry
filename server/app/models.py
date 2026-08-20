@@ -321,6 +321,7 @@ class DrugRule(Base):
     # 而通用规则引擎 `/api/rules/{key}` 是有停用的。停用不删行——规则改过什么、
     # 什么时候不再生效，是处方点评复核时要回溯的。
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Prescription(Base):
@@ -400,6 +401,7 @@ class ChronicDiseaseType(Base):
     guidance: Mapped[str] = mapped_column(String(512), default="")
     followup_interval_days: Mapped[int] = mapped_column(Integer, default=90)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class ChronicPatient(Base):
@@ -452,6 +454,7 @@ class InfectiousDisease(Base):
     category: Mapped[str] = mapped_column(String(4), index=True)
     # 报告时限（小时）：甲类2，乙/丙类24
     report_hours: Mapped[int] = mapped_column(Integer, default=24)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class InfectiousCase(Base):
@@ -480,6 +483,7 @@ class PerformanceIndicator(Base):
     name: Mapped[str] = mapped_column(String(64))
     weight: Mapped[float] = mapped_column(Float, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Consultation(Base):
@@ -890,6 +894,7 @@ class ReferralCert(Base):
     referral_id: Mapped[int] = mapped_column(ForeignKey("referrals.id"), unique=True)
     cert_no: Mapped[str] = mapped_column(String(32), unique=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Course(Base):
@@ -1825,6 +1830,7 @@ class ExamResource(Base):
     duration_min: Mapped[int] = mapped_column(Integer, default=15)
     notes: Mapped[str] = mapped_column(String(512), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class DualChannelApp(Base):
@@ -2894,6 +2900,7 @@ class AccountSubject(Base):
     # 余额方向：debit=借方增加（资产/费用），credit=贷方增加（负债/净资产/收入）
     direction: Mapped[str] = mapped_column(String(8), default="debit")
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Voucher(Base):
@@ -3408,6 +3415,7 @@ class OrgGroupMember(Base):
     group_id: Mapped[int] = mapped_column(ForeignKey("org_groups.id"), index=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class FundPool(Base):
