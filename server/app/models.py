@@ -164,6 +164,7 @@ class CodeSystem(Base):
     # diagnosis=诊断(ICD-10), drug=药品, consumable=耗材, charge=收费
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     entries: Mapped[list["CodeEntry"]] = relationship(back_populates="system")
 
@@ -176,6 +177,7 @@ class CodeEntry(Base):
     system_id: Mapped[int] = mapped_column(ForeignKey("code_systems.id"), index=True)
     code: Mapped[str] = mapped_column(String(64), index=True)
     name: Mapped[str] = mapped_column(String(256), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     system: Mapped[CodeSystem] = relationship(back_populates="entries")
 
@@ -738,6 +740,7 @@ class TcmTechnique(Base):
     category: Mapped[str] = mapped_column(String(64), default="")
     indication: Mapped[str] = mapped_column(String(512), default="")
     description: Mapped[str] = mapped_column(String(1024), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class DrugShortage(Base):
@@ -1947,6 +1950,7 @@ class SystemParam(Base):
     value: Mapped[str] = mapped_column(String(256))
     description: Mapped[str] = mapped_column(String(256), default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class RoleChangeLog(Base):
