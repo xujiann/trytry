@@ -142,6 +142,7 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 - **typecheck 仍是渐进式 warning**：CI 口径存量 **139** 处（`mypy` 只查已注解代码）。不要引入**新增**报错；存量单独任务清理，别混进无关改动。清零后再谈转阻断。
 - ⚠️ **跑 mypy 前先确认环境**：`pyproject.toml` 开了 `ignore_missing_imports=true`，所以当 mypy 解析不到某个库时它**不报错、而是把整个库当成 `Any`**——依赖它的代码全部「通过」。隔离安装（`uv tool install mypy` / `pipx`）尤其容易踩：那个环境里没有 SQLAlchemy，同一份代码本地报 41 处、CI 报 187 处。`make typecheck` 会先跑 `scripts/check_mypy_env.py` 探针拦住这种假绿；**别拿隔离环境里的数字下结论**。
 - CI 现状：`test` job 跑 unit+smoke + integration（真 PG）+ 覆盖率门禁，**均为阻断**；`quality` job 跑 build + lint（阻断）+ mypy 环境探针（阻断）+ typecheck（warning）。依旧**先自己 `make verify`**，别把 CI 当第一道防线。
+- **Python 版本只有一处真源**：CI 的 `PYTHON_VERSION`、两个 Dockerfile 的 `FROM python:`、`pyproject.toml` 的 ruff `target-version` 与 mypy `python_version` 必须同版（现为 **3.12**），由 `tests/test_python_version_alignment.py` 钉住。升级要四处一起改，且**先在目标版本上跑通 `make verify`** 再改。
 
 ---
 

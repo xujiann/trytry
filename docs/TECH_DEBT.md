@@ -116,7 +116,7 @@
 ### 其它
 | # | 问题 |
 |---|---|
-| P2-24 | CI Python 3.11 vs 运行时 Docker 3.12 版本不一致 |
+| ~~P2-24~~ | ~~CI Python 3.11 vs 运行时 Docker 3.12 版本不一致~~ —— **已修**：CI 两个 job 统一走 `PYTHON_VERSION: "3.12"`，与两个 Dockerfile、ruff `target-version`、mypy `python_version` 同版；`tests/test_python_version_alignment.py` 钉住四处不许再漂 |
 | P2-25 | 影子配置 `MEDPLAT_REDIS_URL` 绕过 Settings；Redis 客户端每次调用新建 |
 | P2-26 | 两份等价 Dockerfile；无 .dockerignore；镜像默认灌演示数据；测试依赖进生产镜像 |
 | P2-27 | README 数字陈旧（徽章 520 passed 实际 920 测试函数；7 e2e 实际 11） |

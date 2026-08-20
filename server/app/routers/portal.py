@@ -22,7 +22,7 @@ MEDPLAT_PORTAL_LEGACY_VERIFY=false 关闭（生产建议关闭）。
 import re
 import secrets
 from datetime import timedelta
-from typing import Callable
+from typing import Callable, Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -1008,8 +1008,12 @@ def referral_feed_item(
     }
 
 
-def _org_names(db: Session, ids: "set[int | None]") -> dict[int, str]:
-    """按 id 批量取机构名。空集合直接返回空字典，不打库。"""
+def _org_names(db: Session, ids: "Iterable[int | None]") -> dict[int, str]:
+    """按 id 批量取机构名。空集合直接返回空字典，不打库。
+
+    形参收 `Iterable` 而不是 `set`：`set` 是**不变**的，标成 `set[int | None]`
+    时连 `set[int]` 都传不进来（调用方拿一堆非空 id 组集合是最常见的用法）。
+    """
     wanted = {i for i in ids if i is not None}
     if not wanted:
         return {}
