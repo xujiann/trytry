@@ -51,7 +51,7 @@ make verify            # build + lint + typecheck + test-unit（提交前自检�
 11. **不得为了让 CI 变绿而删测试。**
 12. **不得无理由引入新依赖。** 运行时依赖只有 13 项（`server/requirements.txt`），全无 lockfile；新增需在 PR 里说明必要性。
 13. **架构级变更需要 ADR**（见 §9）。
-14. **完成前必须跑测试、lint、类型检查**（见 §7）。当前仓库尚无 lint/类型配置——若你的改动引入了工具，请一并接入 CI，别只在本地跑。
+14. **完成前必须跑测试、lint、类型检查**（见 §7）。`make verify` 一把跑全。注意 mypy 必须与项目依赖装在**同一环境**，否则结果是假的——`make typecheck` 会先跑探针拦住这种情况。
 15. **改动范围限定在任务本身**，不顺手重构无关代码。（其正向补充是"童子军法则"，见 §12：在你**已经动到**的代码附近，做小而安全的清理是鼓励的；无关的大重构不是。）
 
 ---
@@ -138,8 +138,10 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 
 - 若改了迁移：`make build` 校验迁移图，且本地 `alembic upgrade heads` 能从空库跑通。
 - 若改了 spd：`pytest tests/test_spd_boundary.py -q` 必须绿（边界未被破坏）。
-- **lint 与 typecheck 现为渐进式基线**（`ruff` 起步规则集、`mypy` 只查已注解代码）：不要引入**新增**的 lint/type 报错；存量报错单独任务清理，别混进无关改动。
-- CI 现状（ADR-0002 起）：`test` job 跑 unit+smoke + integration（真 PG）+ 覆盖率门禁，**均为阻断**；`quality` job 跑 build（阻断）/lint/typecheck（warning）。lint/typecheck 仍是 warning——依旧**先自己 `make verify`**，别把 CI 当第一道防线。
+- **lint 存量已清零并转为阻断**（`ruff` 起步规则集 0 项）：新增 lint 报错会拦下 CI。
+- **typecheck 仍是渐进式 warning**：CI 口径存量 **139** 处（`mypy` 只查已注解代码）。不要引入**新增**报错；存量单独任务清理，别混进无关改动。清零后再谈转阻断。
+- ⚠️ **跑 mypy 前先确认环境**：`pyproject.toml` 开了 `ignore_missing_imports=true`，所以当 mypy 解析不到某个库时它**不报错、而是把整个库当成 `Any`**——依赖它的代码全部「通过」。隔离安装（`uv tool install mypy` / `pipx`）尤其容易踩：那个环境里没有 SQLAlchemy，同一份代码本地报 41 处、CI 报 187 处。`make typecheck` 会先跑 `scripts/check_mypy_env.py` 探针拦住这种假绿；**别拿隔离环境里的数字下结论**。
+- CI 现状：`test` job 跑 unit+smoke + integration（真 PG）+ 覆盖率门禁，**均为阻断**；`quality` job 跑 build + lint（阻断）+ mypy 环境探针（阻断）+ typecheck（warning）。依旧**先自己 `make verify`**，别把 CI 当第一道防线。
 
 ---
 

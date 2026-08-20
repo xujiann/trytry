@@ -212,27 +212,27 @@ async def lifespan(_: FastAPI):
         from .models import QcRule
 
         existing_qc = {code for (code,) in db.query(QcRule.code).all()}
-        for seed in SEED_QC_RULES:
-            if seed["code"] not in existing_qc:
-                db.add(QcRule(**seed))
+        for qc_rule in SEED_QC_RULES:
+            if qc_rule["code"] not in existing_qc:
+                db.add(QcRule(**qc_rule))
         db.commit()
         # 块2：病历环节质控规则种子化（12 条，幂等；已存在编码不覆盖本地调整）
         from .data.record_qc_rules_seed import SEED_RECORD_QC_RULES
         from .models import RecordQcRule
 
         existing_mrqc = {code for (code,) in db.query(RecordQcRule.code).all()}
-        for seed in SEED_RECORD_QC_RULES:
-            if seed["code"] not in existing_mrqc:
-                db.add(RecordQcRule(**seed))
+        for record_qc_rule in SEED_RECORD_QC_RULES:
+            if record_qc_rule["code"] not in existing_mrqc:
+                db.add(RecordQcRule(**record_qc_rule))
         db.commit()
         # T3.1：会计科目种子（医院会计制度常用一级科目，幂等；不覆盖本地调整）
         from .data.account_subjects_seed import SEED_ACCOUNT_SUBJECTS
         from .models import AccountSubject
 
         existing_subjects = {code for (code,) in db.query(AccountSubject.code).all()}
-        for seed in SEED_ACCOUNT_SUBJECTS:
-            if seed["code"] not in existing_subjects:
-                db.add(AccountSubject(**seed))
+        for subject in SEED_ACCOUNT_SUBJECTS:
+            if subject["code"] not in existing_subjects:
+                db.add(AccountSubject(**subject))
         db.commit()
         # 全域慢专病子系统：病种规则、管理目标、筛查量表、考核指标、积分规则、
         # 随访方案与问卷、报告模板（幂等，按编码不覆盖现场调过的参数）；

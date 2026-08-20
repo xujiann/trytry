@@ -8,6 +8,8 @@
 每个工作台一个端点，返回该端首屏要的全部卡片，而不是让前端并发拉十个接口——
 移动端在乡镇的网络下，十个往返和一个往返是完全不同的体验。
 """
+from typing import Any
+
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
@@ -684,7 +686,7 @@ def team_workbench(
         .distinct().all()
     }
 
-    out = {
+    out: dict[str, Any] = {
         "role": role,
         "teams": [
             {"id": t.id, "name": t.name, "level": t.level, "org_id": t.org_id,
@@ -820,7 +822,7 @@ def doctor_mobile_workbench(
             | SpdReferralCase.current_org_id.in_(orgs or [0])
         )
 
-    out = {
+    out: dict[str, Any] = {
         "user": {
             "id": user.id, "name": user.full_name or user.username, "role": user.role,
             "org_id": user.org_id, "member_roles": member_roles,

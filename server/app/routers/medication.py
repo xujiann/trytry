@@ -1,4 +1,6 @@
 """⑮基层缺药登记 + ⑯居民用药监测。"""
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -243,7 +245,7 @@ def supply_risk(db: Session = Depends(get_db)):
         .all()
     )
     shortage_by_code = {code: n for code, n in open_shortage_rows}
-    risks = {}
+    risks: dict[str, dict[str, Any]] = {}
     for s in low_stocks:
         entry = risks.setdefault(
             s.drug_code,

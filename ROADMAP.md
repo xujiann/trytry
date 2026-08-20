@@ -30,7 +30,11 @@
 
 ### 工具链
 - ✅ 清掉 8 处存量 lint（5 未用 import + 2 无占位 f-string + 1 未用变量改显式 assert），`make lint` 归零；`make verify` 的 typecheck 步改为渐进式 warning 不阻断——verify 现可用。
-- ☐ mypy 存量 41（20 文件）：warning 基线，逐块补类型注解往下减；补到较低后可把 verify 的 typecheck 转回阻断。
+- ◐ mypy 存量 **187 → 139**（CI 口径，清掉 48 处 / 9 个文件；纯注解与推断收敛，零行为改动）：循环变量同名不同类型改名（`main.py`/`spd/seed.py` 种子块、`formula.py` 一元分支）、累加毫秒的 `module_duration` 由 `Counter`（值 int）换成 `defaultdict(float)`、混值字典就地标注 `dict[str, Any]`、`loinc_code` 形参补 `| None`、`deps.resolve_org_ids` 合并守卫让 mypy 能收窄。顺带两处就近修：`ApiMetrics.reset` 原本在持锁时调 `__init__` **把锁对象本身换掉**（改为抽 `_reset_counters()` 只清计数器）、`portal_logout` 补 `credentials is None` 显式 401 兜底（原依赖 `current_resident` 先行拦截的隐式不变量）。剩余 139 处以 ORM 相关为主（`dict(list[Row[...]])` 需标注、`db.get()/first()` 返回 `X | None` 未收窄），可继续逐块推进。
+- ✅ **lint 转阻断**（CI 实测 ruff 0 项）；`requirements-dev.txt` 给 ruff/mypy 钉上界——本仓库无 lockfile，门一旦阻断就必须可复现（实测 mypy 2.3 报 139 处、1.19 在同一份代码上报 187 处，版本飘一下结论就变）。
+- ✅ **mypy 环境探针 `scripts/check_mypy_env.py`（阻断）**：`ignore_missing_imports=true` 的代价是——mypy 解析不到的库会被**静默当成 Any**，依赖它的代码全部「通过」。本轮真踩到：开发机的 `mypy` 是 `uv tool install` 的隔离环境（没有 SQLAlchemy），同一份代码本地报 **41** 处、CI 报 **187** 处，差的 146 处全是 ORM 相关。探针先 `reveal_type` 探 sqlalchemy/pydantic，是 Any 就直接失败并给修复指引，杜绝再拿假绿下结论。
+- ☐ **typecheck 转阻断**：待存量 139 清零后再切（`make verify` 与 CI 现均为 warning）。
+- ☐ **CI 解释器与生产对齐**：生产镜像是 `python:3.12-slim`（根与 `server/` 两个 Dockerfile）、`pyproject.toml` 的 ruff `target-version`/mypy `python_version` 也是 3.12，但两个 CI job 都装 **3.11**——测的和发的不是同一个解释器。切换需带全量 3.12 实测，单独一个 PR 做。/review 提出。
 
 ### 让 CI 变真（关联 ADR-0002）
 - ✅ 覆盖率门禁转阻断（落地实测 87%，门槛 70%）；集成/迁移门在真 PG 上转阻断。

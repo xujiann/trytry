@@ -17,6 +17,8 @@
 状态机写死在 `_NEXT` 表里而不是让调用方传目标状态：让调用方传，等于把
 "谁能把单子推到哪一步"交给前端决定。
 """
+from typing import Any
+
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -174,7 +176,7 @@ def check_referral_rules(
         query = query.filter(
             SpdReferralRule.program_code.in_([body.program_code, ""])
         )
-    hits = []
+    hits: list[dict[str, Any]] = []
     for rule in query.all():
         hit, matched = evaluate(rule.conditions or [], facts, mode="any")
         if hit:

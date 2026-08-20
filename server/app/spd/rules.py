@@ -29,6 +29,8 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 #: 规则可引用的字段及其中文名，供管理端下拉与文档生成使用。
 FIELD_SOURCES: dict[str, str] = {
     "age": "年龄",
@@ -115,7 +117,8 @@ def _as_number(value) -> float | None:
 
 
 def _match_one(cond: dict, facts: dict) -> bool:
-    field, op, expected = cond.get("field"), cond.get("op"), cond.get("value")
+    field, op = cond.get("field"), cond.get("op")
+    expected: Any = cond.get("value")  # between 时是二元序列，其余是标量
     if field not in facts:
         # 缺字段判不命中，见模块文档；exists 是例外，它问的就是"有没有"
         return op == "exists" and expected is False

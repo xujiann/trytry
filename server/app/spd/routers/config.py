@@ -8,6 +8,8 @@
 变成一件"要提工单"的事，实施期没人受得了。真正的平台级开关（病种启停、
 数据源接入）仍然要 admin。
 """
+from typing import Any
+
 from datetime import timedelta
 from secrets import token_urlsafe
 
@@ -416,7 +418,7 @@ def list_path_templates(
     if keyword:
         query = query.filter(SpdPathTemplate.name.contains(keyword))
     rows = paginate(query.order_by(SpdPathTemplate.id.desc()), response, offset, limit)
-    counts = {}
+    counts: dict[int, int] = {}
     if rows:
         ids = [t.id for t in rows]
         for node in db.query(SpdPathNode).filter(SpdPathNode.template_id.in_(ids)).all():
@@ -1532,7 +1534,7 @@ def org_tree(db: Session = Depends(get_db)):
     ):
         enroll_counts[org_id] = enroll_counts.get(org_id, 0) + 1
 
-    nodes = {
+    nodes: dict[int, dict[str, Any]] = {
         o.id: {
             "id": o.id, "name": o.name, "org_type": o.org_type, "level": o.level,
             "parent_id": o.parent_id, "team_count": team_counts.get(o.id, 0),
@@ -1540,7 +1542,7 @@ def org_tree(db: Session = Depends(get_db)):
         }
         for o in orgs
     }
-    roots = []
+    roots: list[dict[str, Any]] = []
     for node in nodes.values():
         parent = nodes.get(node["parent_id"])
         (parent["children"] if parent else roots).append(node)

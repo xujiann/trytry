@@ -33,10 +33,8 @@ def resolve_org_scope(
     分组与机构同时给出时取**交集**：这是唯一不会让人意外的语义
     （"这个片区里的这家机构"），也让 UI 可以先选片区再选机构而不必清空前者。
     """
-    if group_id is None and org_id is None:
-        return None
     if group_id is None:
-        return [org_id]
+        return None if org_id is None else [org_id]
     if db.get(OrgGroup, group_id) is None:
         raise HTTPException(status_code=404, detail="机构分组不存在")
     ids = [

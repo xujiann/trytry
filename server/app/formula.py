@@ -15,12 +15,13 @@ lambda、任何未白名单的调用。除零返回 0 而不是抛异常：绩�
 """
 import ast
 import operator
+from typing import Any, Callable
 
 MAX_EXPRESSION_LENGTH = 512
 # 幂运算的指数上限：2**999999 能把进程算到内存耗尽
 MAX_POWER_EXPONENT = 8
 
-_BIN_OPS = {
+_BIN_OPS: dict[type[ast.operator], Callable[[Any, Any], Any]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
@@ -28,8 +29,12 @@ _BIN_OPS = {
     ast.Mod: operator.mod,
     ast.Pow: operator.pow,
 }
-_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
-_FUNCTIONS = {"min": min, "max": max, "round": round, "abs": abs}
+_UNARY_OPS: dict[type[ast.unaryop], Callable[[Any], Any]] = {
+    ast.UAdd: operator.pos, ast.USub: operator.neg,
+}
+_FUNCTIONS: dict[str, Callable[..., Any]] = {
+    "min": min, "max": max, "round": round, "abs": abs,
+}
 
 
 class FormulaError(ValueError):
@@ -69,10 +74,10 @@ def _eval_node(node: ast.AST, variables: dict[str, float]) -> float:
         return float(_BIN_OPS[op_type](left, right))
 
     if isinstance(node, ast.UnaryOp):
-        op_type = type(node.op)
-        if op_type not in _UNARY_OPS:
+        unary_type = type(node.op)
+        if unary_type not in _UNARY_OPS:
             raise FormulaError("不支持的一元运算符")
-        return float(_UNARY_OPS[op_type](_eval_node(node.operand, variables)))
+        return float(_UNARY_OPS[unary_type](_eval_node(node.operand, variables)))
 
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name) or node.func.id not in _FUNCTIONS:

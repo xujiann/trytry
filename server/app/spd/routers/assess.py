@@ -16,6 +16,8 @@
 分三段而不是让人直接写 SQL：SQL 口径一旦开放，各县会写出各自的取数逻辑，
 数字对不上时无从对账；而这三段里唯一可自由填写的公式是受限表达式。
 """
+from typing import Any
+
 from datetime import date, timedelta
 from secrets import randbelow
 
@@ -400,7 +402,7 @@ def collect_metrics_batch(
             for oid in ids
         }
     if source == "path":
-        enroll_owner = {}
+        enroll_owner: dict[int, list[int]] = {}
         for oid in ids:
             for e in buckets[oid]:
                 enroll_owner.setdefault(e.id, []).append(oid)
@@ -494,7 +496,7 @@ def _plan_out(p: SpdAssessPlan) -> dict:
 
 @router.post("/assess-plans", status_code=201, dependencies=[Depends(require_roles("director"))])
 def create_plan(body: PlanIn, db: Session = Depends(get_db)):
-    codes = [i.get("indicator_code") for i in body.items]
+    codes: list[Any] = [i.get("indicator_code") for i in body.items]
     if not codes:
         raise HTTPException(status_code=422, detail="考核方案至少要有一个指标")
     known = {

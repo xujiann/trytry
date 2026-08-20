@@ -4,6 +4,8 @@
 口径唯一来源是本模块的 METRIC_QUERIES 查询构造函数——
 /overview、/alerts、/drilldown 三处一律复用同一个函数，杜绝口径漂移。
 """
+from typing import Any
+
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -388,7 +390,7 @@ def alert_summary(db: Session = Depends(get_db)):
 
     计数全部走 metric_count（与 /overview、/drilldown 同一查询构造函数）。
     """
-    items = [
+    items: list[dict[str, Any]] = [
         {"type": metric, "label": ALERT_LABELS[metric], "count": metric_count(db, metric)}
         for metric in ALERT_METRICS
     ]

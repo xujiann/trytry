@@ -250,7 +250,7 @@ def _do_fhir_observation(resource: dict, db: Session):
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")
 
-    def loinc_code(codeable: dict) -> str:
+    def loinc_code(codeable: dict | None) -> str:
         for coding in (codeable or {}).get("coding", []):
             if coding.get("code"):
                 return coding["code"]
