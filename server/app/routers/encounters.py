@@ -1,5 +1,6 @@
 """就诊记录与患者360视图（健康档案汇聚）。"""
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import events
@@ -87,7 +88,89 @@ def _section(query, limit: int = ARCHIVE_SECTION_LIMIT) -> tuple[list, bool]:
     return rows[:limit], len(rows) > limit
 
 
-@router.get("/archive/{ehc_no}")
+# ---------------------------------------------------------------------------
+# 全景 360 视图的响应契约（CLAUDE.md §11：每个端点声明 response_model）
+# ---------------------------------------------------------------------------
+#
+# 字段与函数末尾那个 dict **一一对应、顺序一致**——治理不得改响应字节，
+# 由 `tests/test_archive_360_contract.py` 的特征化网守住。
+# 各段单独建模而不是 `dict[str, Any]`：写成 Any 等于没声明契约，
+# 而这个接口恰恰是最需要契约的那个——它一次吐出一个人的全部诊疗信息。
+
+
+class ArchiveHasMore(BaseModel):
+    encounters: bool
+    exam_reports: bool
+    prescriptions: bool
+    checkups: bool
+    settlements: bool
+
+
+class ArchivePatient(BaseModel):
+    ehc_no: str
+    name: str
+    gender: str
+    birth_date: str
+
+
+class ArchiveEncounter(BaseModel):
+    id: int
+    org_id: int
+    encounter_type: str
+    diagnosis_name: str
+    summary: str
+
+
+class ArchiveExamReport(BaseModel):
+    id: int
+    request_id: int
+    conclusion: str
+    critical: bool
+
+
+class ArchiveChronic(BaseModel):
+    id: int
+    disease: str
+    level: int
+    next_due: str
+
+
+class ArchivePrescription(BaseModel):
+    id: int
+    diagnosis_name: str
+    status: str
+
+
+class ArchiveSettlement(BaseModel):
+    id: int
+    bill_type: str
+    total_amount: float
+    insurance_pay: float
+    self_pay: float
+    created_at: str
+
+
+class ArchivePhysicalExam(BaseModel):
+    id: int
+    exam_date: str
+    package_name: str
+    has_abnormal: bool
+    abnormal_items: str
+
+
+class Archive360Out(BaseModel):
+    section_limit: int
+    has_more: ArchiveHasMore
+    patient: ArchivePatient
+    encounters: list[ArchiveEncounter]
+    exam_reports: list[ArchiveExamReport]
+    chronic_diseases: list[ArchiveChronic]
+    prescriptions: list[ArchivePrescription]
+    settlements: list[ArchiveSettlement]
+    physical_exams: list[ArchivePhysicalExam]
+
+
+@router.get("/archive/{ehc_no}", response_model=Archive360Out)
 def patient_360_view(
     ehc_no: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
