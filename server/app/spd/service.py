@@ -28,6 +28,7 @@ from .models import (
     SpdPointRecord,
     SpdPointRule,
     SpdProgram,
+    SpdReferralCase,
     SpdRevisit,
     SpdTarget,
     SpdTask,
@@ -507,3 +508,66 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
         "revisits": len(overdue_revisits),
         "followups": len(overdue_followups),
     }
+
+
+# ---------------------------------------------------------------------------
+# 居民端转诊读侧聚合的 spd 源（ADR-0003 方案 B）
+# ---------------------------------------------------------------------------
+
+#: `spd_referral_cases.status` → 中文。措辞与居民端 `static/m/m.js` 的 `SPD_REF_TEXT`
+#: **逐字一致**：口径统一的意义就在于只有一套说法，后端另造一套只会让同一个状态
+#: 在两个页面读起来不一样。
+#:
+#: 与平台 `referrals` 存在**同名不同义**：平台 `accepted` 是"已接收"（两点之间
+#: 那一次转诊被对方接了），这里是"县级医院已接收"（村→乡→县链路走到了县级）。
+#: 所以聚合列表里每条都带 `source`、标签分源映射，不能合并成一张表。
+_STATUS_LABELS = {
+    "submitted": "村医已发起，待卫生院审核",
+    # 存量兼容，新单不再产生（ADR-0005）
+    "station_reviewed": "服务站已复核，待卫生院审核(存量)",
+    "township_reviewed": "卫生院已审核，待县级医院接收",
+    "accepted": "县级医院已接收",
+    "arrived": "已到院就诊",
+    "down_referred": "已下转基层",
+    "followup_received": "下转随访已接收",
+    "closed": "已完成闭环",
+    "rejected": "已退回",
+    "withdrawn": "已撤回",
+}
+
+
+def referral_feed(db: Session, patient_id: int) -> list[dict]:
+    """把本子系统的转诊单产出成聚合列表的统一形状。
+
+    只读、不改任何状态；`/api/portal/spd/referrals` 那个单源接口原样保留
+    （既有契约），这里是并给 `/api/portal/me/referrals/all` 用的另一份视图。
+    """
+    from .platform import REFERRAL_FEED_LIMIT, org_names as _org_names, referral_feed_item
+
+    rows = (
+        db.query(SpdReferralCase)
+        .filter(SpdReferralCase.patient_id == patient_id)
+        .order_by(SpdReferralCase.id.desc())
+        .limit(REFERRAL_FEED_LIMIT)
+        .all()
+    )
+    # 只取这几条单子用到的机构名，不整表拉 organizations
+    names = _org_names(db, {r.initiator_org_id for r in rows} | {r.target_org_id for r in rows})
+    return [
+        referral_feed_item(
+            source="spd",
+            id=r.id,
+            direction=r.direction,
+            status=r.status,
+            status_label=_STATUS_LABELS.get(r.status, r.status),
+            reason=r.reason,
+            from_org=names.get(r.initiator_org_id, ""),
+            # 目标机构可能尚未确定（逐级审核中），此时留空而不是编一个
+            to_org=names.get(r.target_org_id, "") if r.target_org_id else "",
+            created_at=r.created_at.isoformat(),
+            # 必须带上 patient_id：一个居民账号可以代管家属，详情端点按这个参数
+            # 决定看谁的档案，不带就会拿默认患者去查，代管家属的单子直接 404。
+            detail_path=f"/api/portal/spd/referrals/{r.id}?patient_id={patient_id}",
+        )
+        for r in rows
+    ]

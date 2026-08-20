@@ -22,6 +22,7 @@ MEDPLAT_PORTAL_LEGACY_VERIFY=false 关闭（生产建议关闭）。
 import re
 import secrets
 from datetime import timedelta
+from typing import Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -919,6 +920,150 @@ def portal_my_bills(
         }
         for s in settlements
     ]
+
+
+# ---------------------------------------------------------------------------
+# 转诊读侧聚合（ADR-0003 方案 B）
+# ---------------------------------------------------------------------------
+#
+# 居民端此前有两份互不相交的转诊列表：`/me/referrals` 读平台 `referrals`，
+# `/api/portal/spd/referrals` 读 `spd_referral_cases`。同一个居民在 App 里
+# 看到的"我的转诊"取决于他点了哪个入口——这就是 ADR-0003 说的数据孤岛。
+#
+# 方案 B 只做**读侧**聚合：底层两张表原样不动，两个老接口的响应字节也原样不动
+# （既有契约，见 CLAUDE.md §1.7），另加一个把两边并起来的只读接口。
+#
+# 为什么是注册制而不是直接 import：平台不能 import 子系统（依赖方向，
+# `tests/test_spd_boundary.py` 用 AST 扫描强制）。子系统装载时把自己的读取函数
+# 登记进来；子系统关掉，这里就只剩平台一个源，接口照常工作、只是少一段数据。
+#
+# **不做去重**：两套是真正不相交的两批单子——spd 从不写 `referrals`
+# （`SpdReferralCase` 的 docstring 写明"不复用既有 referrals"，那张表是两点之间
+# 的一次转诊，而 spd 要的是村→乡→县的链路）。所以这里是 union 而不是 merge，
+# 硬加一条去重规则只会凭空造出误判。
+
+#: 各源的读取函数：(db, patient_id) -> 统一形状的 list。
+_REFERRAL_SOURCES: dict[str, Callable[[Session, int], list[dict]]] = {}
+
+#: 聚合列表的返回条数上限，与两个单源接口各自的 limit 保持一致。
+REFERRAL_FEED_LIMIT = 50
+
+#: 平台 `referrals` 的状态码 → 中文。两套状态码有**同名不同义**的（平台
+#: `accepted` 是"已接诊"，spd `accepted` 是"县级已接收"），所以标签必须分源映射，
+#: 且响应里始终带 `source`——这正是 ADR-0003 所说的口径分叉，聚合层只能如实呈现，
+#: 不能假装它们是一回事。
+#: 措辞与居民端 `static/m/m.js` 的 `REFERRAL_STATUS` **逐字一致**：本次聚合的目的
+#: 就是口径统一，后端再造一套说法只会让同一个状态在两个页面读起来不一样。
+#: 后端自此是这套措辞的权威来源，前端切过来时直接用 `status_label` 即可。
+_PLATFORM_REFERRAL_STATUS = {
+    "pending": "待接收", "accepted": "已接收",
+    "completed": "已完成", "rejected": "已退回",
+}
+
+
+class ReferralFeedItem(BaseModel):
+    """聚合列表的响应契约（CLAUDE.md §11：每个端点声明 response_model）。
+
+    字段与 `referral_feed_item()` 一一对应。`source` 与 `status_label` 是这层聚合
+    存在的意义所在：两套状态码同名不同义，不标源、不给标签就读不懂。
+    """
+
+    source: str
+    id: int
+    direction: str
+    status: str
+    status_label: str
+    reason: str
+    from_org: str
+    to_org: str
+    created_at: str
+    date: str
+    detail_path: str
+
+
+def register_referral_source(
+    name: str, loader: "Callable[[Session, int], list[dict]]"
+) -> None:
+    """登记一个转诊数据源（子系统装载时调用一次，重复登记以后到者为准）。"""
+    _REFERRAL_SOURCES[name] = loader
+
+
+def referral_feed_item(
+    *, source: str, id: int, direction: str, status: str, status_label: str,
+    reason: str, created_at: str, from_org: str = "", to_org: str = "",
+    detail_path: str = "",
+) -> dict:
+    """聚合列表的统一条目形状。各源都经这里出，省得两边字段名慢慢长歪。
+
+    `created_at` 是**完整时间戳**，排序用；`date` 由它切出来，显示用。
+    只按日期排序会让同一天里的先后完全失序——两个源的条目会按源名而不是时间
+    交错，而"我的转诊"是一条时间线，顺序错了就读不成故事。
+    """
+    return {
+        "source": source, "id": id, "direction": direction,
+        "status": status, "status_label": status_label,
+        "reason": reason, "from_org": from_org, "to_org": to_org,
+        "created_at": created_at, "date": created_at[:10],
+        "detail_path": detail_path,
+    }
+
+
+def _org_names(db: Session, ids: "set[int | None]") -> dict[int, str]:
+    """按 id 批量取机构名。空集合直接返回空字典，不打库。"""
+    wanted = {i for i in ids if i is not None}
+    if not wanted:
+        return {}
+    return {
+        o.id: o.name
+        for o in db.query(Organization).filter(Organization.id.in_(wanted)).all()
+    }
+
+
+def _platform_referral_source(db: Session, patient_id: int) -> list[dict]:
+    rows = (
+        db.query(Referral)
+        .filter(Referral.patient_id == patient_id)
+        .order_by(Referral.id.desc())
+        .limit(REFERRAL_FEED_LIMIT)
+        .all()
+    )
+    # 只取这几条单子用到的机构名。此前整表拉 organizations，且零条转诊时照拉不误。
+    org_names = _org_names(db, {r.from_org_id for r in rows} | {r.to_org_id for r in rows})
+    return [
+        referral_feed_item(
+            source="platform", id=r.id, direction=r.direction, status=r.status,
+            status_label=_PLATFORM_REFERRAL_STATUS.get(r.status, r.status),
+            reason=r.reason,
+            from_org=org_names.get(r.from_org_id, ""),
+            to_org=org_names.get(r.to_org_id, ""),
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]
+
+
+register_referral_source("platform", _platform_referral_source)
+
+
+@router.get("/me/referrals/all", response_model=list[ReferralFeedItem])
+def portal_my_referrals_all(
+    patient_id: int | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的全部转诊：把平台转诊与慢专病转诊并成一份列表（ADR-0003 方案 B）。
+
+    每条都带 `source` 与 `status_label`——两套状态码同名不同义，不标源就读不懂。
+    子系统未启用时只返回平台那一份。
+    """
+    patient = accessible_patient(db, account, patient_id)
+    items: list[dict] = []
+    for loader in _REFERRAL_SOURCES.values():
+        items.extend(loader(db, patient.id))
+    # 按**完整时间戳**倒序——只按日期排会让同一天里的先后按源名交错。
+    # 同一时刻再按源名与 id 兜底，保证顺序确定（否则分页与快照测试会飘）。
+    items.sort(key=lambda i: (i["created_at"], i["source"], i["id"]), reverse=True)
+    return items[:REFERRAL_FEED_LIMIT]
 
 
 @router.get("/me/referrals")

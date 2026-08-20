@@ -49,6 +49,10 @@ from ..notify import notify_patient as _notify_patient
 from ..routers.attachments import register_owner as _register_attachment_owner
 from ..routers.attachments import store_upload as _store_upload
 from ..routers.portal import accessible_patient, current_resident
+from ..routers.portal import REFERRAL_FEED_LIMIT as _REFERRAL_FEED_LIMIT
+from ..routers.portal import _org_names as _platform_org_names
+from ..routers.portal import referral_feed_item as _referral_feed_item
+from ..routers.portal import register_referral_source as _register_referral_source
 from ..sms import get_sms_provider as _get_sms_provider
 from ..ws import manager as _ws_manager
 
@@ -153,6 +157,30 @@ def register_attachment_owner(
     （见 `routers/attachments.OwnerSpec`）。
     """
     _register_attachment_owner(owner_type, model, roles, scope, **kwargs)
+
+
+def register_referral_source(name: str, loader) -> None:
+    """把子系统的转诊单登记进居民端**读侧聚合**（ADR-0003 方案 B）。
+
+    平台不能 import 子系统（依赖方向），所以由子系统在装载时把自己的读取函数
+    递过去；子系统关掉，聚合接口就只剩平台那一个源。
+    """
+    _register_referral_source(name, loader)
+
+
+def referral_feed_item(**kwargs) -> dict:
+    """聚合列表的统一条目形状（由平台定义，子系统照此产出）。"""
+    return _referral_feed_item(**kwargs)
+
+
+#: 聚合列表的条数上限，由平台统一定义——子系统各写各的字面量，
+#: 改一处就会静默少报另一处的数据。
+REFERRAL_FEED_LIMIT = _REFERRAL_FEED_LIMIT
+
+
+def org_names(db, ids) -> dict:
+    """按 id 批量取机构名（与平台源共用同一实现）。"""
+    return _platform_org_names(db, ids)
 
 
 def store_attachment(
