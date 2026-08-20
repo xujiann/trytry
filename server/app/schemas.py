@@ -66,6 +66,10 @@ class ReferralCreate(BaseModel):
 class ReferralOut(ReferralCreate):
     id: int
     status: str
+    #: 状态中文（业务端口径，见 `routers/referrals.STATUS_LABELS`）。
+    #: 加这个字段是为了把文案的权威收到后端一处——前端各存一份映射，
+    #: 改一处漏一处只是时间问题。对既有调用方是**新增**字段，不动任何原有字段。
+    status_label: str = ""
 
     model_config = {"from_attributes": True}
 

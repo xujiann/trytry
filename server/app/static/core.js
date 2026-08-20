@@ -109,7 +109,9 @@ const LEVELS = { county: "县级", township: "乡级", village: "村级" };
 let DISEASES = { hypertension: "高血压", diabetes: "2型糖尿病", copd: "慢阻肺" };
 const RX_STATUS = { auto_passed: ["系统审通过", "green"], pending_review: ["待药师审", "orange"], approved: ["药师审通过", "green"], rejected: ["已退回", "red"] };
 const EXAM_STATUS = { pending: ["待诊断", "orange"], diagnosing: ["诊断中", ""], reported: ["已报告", "green"], recognized: ["已互认", "green"] };
-const REF_STATUS = { pending: ["待接诊", "orange"], accepted: ["已接诊", ""], completed: ["已结案", "green"], rejected: ["已退回", "red"] };
+// 转诊状态**文案取自后端** `status_label`（权威在 routers/referrals.STATUS_LABELS）。
+// 这里只留配色——配色是展示，文案是口径；口径在前后端各存一份，改一处漏一处只是时间问题。
+const REF_STATUS_COLOR = { pending: "orange", accepted: "", completed: "green", rejected: "red" };
 
 function nav(pageId) {
   location.hash = pageId;
@@ -839,7 +841,8 @@ async function renderReferrals() {
         <button>提交</button>
       </form><p class="msg" id="ref-msg"></p></div>
     <div class="panel">${table(["ID", "患者", "方向", "转出→转入", "原因", "状态", "操作"], referrals, (r) => {
-      const [text, color] = REF_STATUS[r.status] || [r.status, ""];
+      const text = r.status_label || r.status;
+      const color = REF_STATUS_COLOR[r.status] || "";
       const actions = r.status === "pending"
         ? `<button class="btn secondary" data-status="accepted" data-id="${r.id}">接诊</button>
            <button class="btn danger" data-status="rejected" data-id="${r.id}">退回</button>`

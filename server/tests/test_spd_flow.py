@@ -256,6 +256,35 @@ def test_enrollment_flow(client, h, base, team):
     assert hit["status"] == "enrolled", "纳管后目标池状态应同步"
 
 
+@pytest.fixture(scope="module")
+def enrollment(client, h, base, team):
+    """保证存在一份高血压在管档案。
+
+    本模块有五处 `GET /api/spd/enrollments?program_code=hypertension` 之后直接取 `[0]`，
+    原先靠 `test_enroll_*` 排在前面顺带造出来。整模块跑得过，`pytest -k` 只选中
+    其中一条时列表是空的、`[0]` 直接 IndexError——用例之间不该有这种看不见的先后依赖。
+
+    幂等：已经有就直接返回，不重复建（重复建会撞唯一约束 409）。
+    """
+    from datetime import date
+
+    existing = client.get(
+        "/api/spd/enrollments?program_code=hypertension", headers=h
+    ).json()
+    if existing:
+        return existing[0]
+    resp = client.post(
+        "/api/spd/enrollments",
+        json={"patient_id": base["patients"][0]["id"], "program_code": "hypertension",
+              "org_id": base["township"]["id"], "team_id": team["id"],
+              "risk_level": "high", "sign_date": date.today().isoformat(),
+              "consent_signed": True, "service_start": date.today().isoformat()},
+        headers=h,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
 def test_duplicate_enrollment_rejected(client, h, base, team):
     resp = client.post(
         "/api/spd/enrollments",
@@ -305,6 +334,14 @@ def path_template(client, h):
                   "due_days": 7, "service_type": "followup"},
             headers=h,
         )
+    # 发布掉：`path-instances` 只收已发布的模板。原先这一步靠
+    # `test_publish_*` 顺带做掉，于是 `-k start_path` 单选时模板还是草稿，
+    # 建实例被 422 拒。"可用的模板"本就该由建它的 fixture 负责交付。
+    published = client.post(
+        f"/api/spd/path-templates/{template['id']}/status",
+        json={"status": "published"}, headers=h,
+    )
+    assert published.status_code == 200, published.text
     return template
 
 
@@ -366,7 +403,7 @@ def test_published_path_nodes_immutable(client, h, path_template):
     assert len(detail["nodes"]) == 3, "复制应连节点一起复制"
 
 
-def test_start_path_generates_first_task(client, h, base, path_template):
+def test_start_path_generates_first_task(client, h, base, path_template, enrollment):
     enrollments = client.get(
         "/api/spd/enrollments?program_code=hypertension", headers=h
     ).json()
@@ -394,7 +431,27 @@ def test_start_path_generates_first_task(client, h, base, path_template):
     assert dup.status_code == 409, "同一模板不得重复启动"
 
 
-def test_task_completion_advances_path(client, h, base):
+@pytest.fixture(scope="module")
+def path_instance(client, h, path_template, enrollment):
+    """保证这份在管档案上已经启动了路径（于是有首节点任务可做）。
+
+    幂等：已启动就直接返回既有实例（重复启动会被 409 拒）。
+    """
+    resp = client.post(
+        "/api/spd/path-instances",
+        json={"enrollment_id": enrollment["id"], "template_id": path_template["id"]},
+        headers=h,
+    )
+    if resp.status_code == 201:
+        return resp.json()
+    instances = client.get(
+        f"/api/spd/path-instances?enrollment_id={enrollment['id']}", headers=h
+    ).json()
+    assert instances, f"路径既未启动成功也查不到既有实例：{resp.status_code} {resp.text}"
+    return instances[0]
+
+
+def test_task_completion_advances_path(client, h, base, enrollment, path_instance):
     enrollment = client.get(
         "/api/spd/enrollments?program_code=hypertension", headers=h
     ).json()[0]
@@ -509,7 +566,7 @@ def test_task_export(client, h):
 # ============================================================ 监测与评估
 
 
-def test_measurement_level_and_abnormal_task(client, h, base):
+def test_measurement_level_and_abnormal_task(client, h, base, enrollment):
     enrollment = client.get(
         "/api/spd/enrollments?program_code=hypertension", headers=h
     ).json()[0]
@@ -591,7 +648,7 @@ def test_unpublished_scale_cannot_be_used(client, h, base):
 # ============================================================ 逐级转诊
 
 
-def test_referral_chain_to_closure(client, h, base):
+def test_referral_chain_to_closure(client, h, base, enrollment):
     enrollment = client.get(
         "/api/spd/enrollments?program_code=hypertension", headers=h
     ).json()[0]
@@ -1045,7 +1102,7 @@ def test_cross_org_migration_needs_confirmation(client, h, base, team):
 # ============================================================ 服务包
 
 
-def test_package_binding_and_usage_limit(client, h, base):
+def test_package_binding_and_usage_limit(client, h, base, enrollment):
     package = client.post(
         "/api/spd/service-packages",
         json={"code": "pkg_hp", "name": "高血压基础包", "program_code": "hypertension",
