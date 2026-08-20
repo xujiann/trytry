@@ -21,6 +21,7 @@
 import asyncio
 import logging
 import secrets
+import threading
 import time
 from datetime import timedelta
 from typing import Callable
@@ -36,14 +37,28 @@ logger = logging.getLogger("medplat.scheduler")
 
 # 调度循环的心跳：每 30 秒查一次有没有到期任务
 TICK_SECONDS = 30
-# 执行锁的持有时长：单个任务跑不过这么久，否则锁会被别的实例抢走
+# 执行锁的 TTL：不是"任务必须跑完"的时限，而是**实例崩溃后锁的自愈时间**——
+# 任务执行期间由续期心跳把 TTL 不断顶回去（见 _LockKeeper），实例挂了续期停止，
+# 锁最多 TTL 秒后过期，别的实例才接手。
 LOCK_TTL_SECONDS = 300
+# 续期间隔取 TTL 的四分之一：连丢两次心跳后第三次仍在过期前，留一次余量
+# （取三分之一时第三次恰好落在过期点上，实际只容一次丢失）。
+RENEW_INTERVAL_SECONDS = LOCK_TTL_SECONDS // 4
+# 续期失败后的快速重试间隔：不等满一个心跳周期，抢在 TTL 耗尽前多试几次
+RENEW_RETRY_SECONDS = 5
 
 # 释放锁的 Lua：仅当锁的值仍等于本实例的 token 才删，比对与删除在一条命令里原子完成。
 # 防的是：任务跑过了 TTL → 锁过期 → 别的实例抢到并重设 → 本实例收尾时把别人的锁删掉。
 _RELEASE_LUA = (
     "if redis.call('get', KEYS[1]) == ARGV[1] then "
     "return redis.call('del', KEYS[1]) else return 0 end"
+)
+
+# 续期的 Lua：仍持有（值等于 token）才把 TTL 顶回去，比对与 expire 原子完成。
+# 防的是：锁已被别的实例接管后，本实例的续期把**别人的锁**续了命。
+_RENEW_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
 )
 
 JobFunc = Callable[[Session], tuple[int, str]]
@@ -113,6 +128,80 @@ def _release_lock(name: str, token: str) -> None:
     redis.eval(_RELEASE_LUA, 1, f"medplat:joblock:{name}", token)
 
 
+def _renew_lock(name: str, token: str) -> bool:
+    """仍持有则把锁 TTL 顶回 LOCK_TTL_SECONDS；返回是否仍持有。无 Redis 恒 True。"""
+    redis = _redis_client()
+    if redis is None:
+        return True
+    return bool(
+        redis.eval(_RENEW_LUA, 1, f"medplat:joblock:{name}", token, LOCK_TTL_SECONDS)
+    )
+
+
+class _LockKeeper:
+    """任务执行期间的锁续期心跳（watchdog）。
+
+    修的洞：任务跑超 LOCK_TTL 时锁过期，别的实例抢到同一任务**并发执行**——
+    token 所有权（上一轮修的）只保证"不误删他人的锁"，保证不了"不双跑"。
+    续期心跳让锁在任务存活期间一直有效；实例崩溃则心跳随之停止，
+    锁最多 TTL 秒后过期，由别的实例自然接管——自愈语义不变。
+
+    若某次续期发现锁已易主（长时间 GC 停顿/网络分区后迟到），无法安全中止
+    正在跑的任务，只能记日志并停止心跳——此时确有并发窗口，但已从
+    "任何超 TTL 的任务必双跑"收窄到"心跳连续丢失 TTL 秒以上"。
+    """
+
+    def __init__(self, name: str, token: str, interval: float = RENEW_INTERVAL_SECONDS) -> None:
+        self._name = name
+        self._token = token
+        self._interval = interval
+        self._stop = threading.Event()
+        # 复用同一个客户端并设超时：每次心跳新建连接既浪费（长任务会攒下几十条
+        # 无人回收的连接），又会在网络黑洞时无限阻塞——心跳就此静默停摆。
+        self._redis = _redis_client()
+        if self._redis is not None:
+            try:
+                self._redis.connection_pool.connection_kwargs.setdefault("socket_timeout", 5)
+            except Exception:  # noqa: BLE001 - 客户端实现不支持就算了，不影响续期
+                pass
+        self._thread = threading.Thread(
+            target=self._run, name=f"joblock-keeper-{name}", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _renew_once(self) -> bool:
+        """仍持有则顶回 TTL。用 keeper 自己的客户端，避免每次心跳新建连接。"""
+        if self._redis is None:
+            return True
+        return bool(
+            self._redis.eval(
+                _RENEW_LUA, 1, f"medplat:joblock:{self._name}", self._token, LOCK_TTL_SECONDS
+            )
+        )
+
+    def _run(self) -> None:
+        wait = self._interval
+        while not self._stop.wait(wait):
+            wait = self._interval
+            try:
+                if not self._renew_once():
+                    logger.warning(
+                        "[SCHEDULER] 任务 %s 的执行锁已易主，停止续期（存在并发窗口）",
+                        self._name,
+                    )
+                    return
+            except Exception:  # noqa: BLE001 - 续期失败不打断任务，快速重试抢在 TTL 前
+                logger.exception("[SCHEDULER] 任务 %s 锁续期异常，%ss 后重试",
+                                 self._name, RENEW_RETRY_SECONDS)
+                wait = min(RENEW_RETRY_SECONDS, self._interval)
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
 def run_job(db: Session, name: str, trigger: str = "scheduled") -> JobRun:
     """执行一个任务并留痕。异常被捕获记为 failed，不向外抛。"""
     spec = REGISTRY[name]
@@ -167,11 +256,24 @@ def tick() -> int:
         token = _acquire_lock(name)
         if token is None:
             continue  # pragma: no cover - 需多实例：别的实例正持有该任务的锁
+        keeper = None
         try:
+            # 拿到锁后**重新确认到期**：names 是本轮开头的快照，别的实例可能已把
+            # 这个任务跑完并把 next_run_at 推到未来（长任务持锁期间尤其容易发生）。
+            # 只靠锁只能保证"不重叠"，保证不了"不重复"。
+            with SessionLocal() as db:
+                if name not in due_jobs(db):
+                    continue
+            # 无 Redis 即单实例语义，锁不会过期，不必起心跳线程
+            if _redis_client() is not None:
+                keeper = _LockKeeper(name, token)
+                keeper.start()
             with SessionLocal() as db:
                 run_job(db, name)
             executed += 1
         finally:
+            if keeper is not None:
+                keeper.stop()
             _release_lock(name, token)
     return executed
 

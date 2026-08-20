@@ -21,7 +21,8 @@
 - ✅ `routers/monitor.py:79` `"success"` → `"succeeded"`（带回归测试 `test_monitor_overview.py`）。
 - ⚠️ `spd/reporting.py:147` `_score` 忽略 `org_id`：**需先定口径**——`spd_scores` 无 org_id 列，考核对象按 object_type/object_id 归属机构的语义要读 assess.py 定，属"需业务决策"，不是一行小修。
 - ✅ `scheduler.py` `_release_lock` 校验持有者，防误删他实例锁（token 所有权 + Lua 比对删，回归测试 `test_scheduler_lock.py`）。
-- ☐ 调度锁更深一层：任务跑过 TTL(300s) 仍会双跑（token 修的是"误删"，不是"双跑"）——需锁续期/心跳或任务时限。/review 提出。
+- ✅ 调度双跑收窄：① 锁续期心跳（每 TTL/4 秒「仍持有才续期」，`_RENEW_LUA` 原子比对+expire；实例崩溃心跳停、锁 ≤TTL 自愈；易主即停并告警；续期失败 5s 快速重试）——超 TTL 长任务不再丢锁；② `tick()` 拿锁后**重新确认到期**——锁只保证不重叠、保证不了不重复，陈旧到期快照会让已被他实例跑过的任务再跑一遍。回归 `test_scheduler_lock.py` 四条。
+- ☐ 手工触发端点 `routers/jobs.py` 的 `run_job` **不走执行锁**：与调度执行可并发同一任务（既有设计，非本轮引入）。定位为运维强制重跑口子，需决策是加锁校验还是文档化告警。/review 提出。
 - ☐ 给 CI 加 Redis service，真跑 `_release_lock` 的 Lua 路径（现仅假 redis 验逻辑）。
 - ☐ 迁移-模型**列级** parity 门：真 PG 上 `upgrade heads` 后对比 inspector 与 Base.metadata 的列集合（建表级已有 `test_模型表零漂移` 兜住；列漂移是 ADR-0002 已知残余缺口）。/review 提出。
 - ☐ 机构树深度体检：`tree-health` 增报"深于三层"的链（ADR-0005 假设三级；存量四层树会让转诊环节名错标）。/review 提出。
