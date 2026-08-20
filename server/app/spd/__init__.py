@@ -62,6 +62,12 @@ def register_spd(app: FastAPI) -> int:
         "spd_task", SpdTask, ("doctor", "public_health", "director", "operator"),
         "patient", patient_of=lambda db, task: task.patient_id,
     )
+    # 居民端转诊读侧聚合（ADR-0003 方案 B）：把子系统的转诊单登记进平台的聚合源。
+    # 与路由一起装卸——子系统关掉，`/api/portal/me/referrals/all` 就只剩平台那一份。
+    from .service import referral_feed
+    from .platform import register_referral_source
+
+    register_referral_source("spd", referral_feed)
     # 订阅平台领域事件（出院、就诊）与注册定时任务。和路由一起装卸：
     # 子系统关掉就不再听、也不再跑，否则会出现"菜单里没有这个功能，
     # 但出院时它还在写数据"。
