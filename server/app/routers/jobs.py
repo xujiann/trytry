@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import paginate, require_admin, require_roles
 from ..models import JobRun, ScheduledJob
-from ..scheduler import REGISTRY, run_job
+from ..scheduler import REGISTRY, job_lock, run_job
 
 router = APIRouter(
     prefix="/api/jobs", tags=["定时任务"], dependencies=[Depends(require_roles("director"))]
@@ -62,10 +62,19 @@ def update_job(name: str, body: JobUpdate, db: Session = Depends(get_db)):
 
 @router.post("/{name}/run", status_code=201)
 def trigger_job(name: str, db: Session = Depends(get_db)):
-    """手动触发一次（限管理层）：排障与补跑用，执行结果同样落 JobRun。"""
+    """手动触发一次（限管理层）：排障与补跑用，执行结果同样落 JobRun。
+
+    **走与调度循环同一把执行锁**：此前这里直接调 `run_job`，手工补跑会和正在跑的
+    同一个调度任务并发——多数任务是"扫一批然后改状态"，并发跑轻则重复发通知、
+    重则把同一批单子处理两次。锁被占用时返回 409 让调用方稍后重试，
+    而不是排队等待：这是个同步 HTTP 接口，长任务会把连接一直挂住。
+    """
     if name not in REGISTRY:
         raise HTTPException(status_code=404, detail="任务不存在或无对应实现")
-    run = run_job(db, name, trigger="manual")
+    with job_lock(name) as token:
+        if token is None:
+            raise HTTPException(status_code=409, detail="该任务正在执行中，请稍后重试")
+        run = run_job(db, name, trigger="manual")
     return {
         "id": run.id,
         "job_name": run.job_name,

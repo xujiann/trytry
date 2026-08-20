@@ -148,3 +148,73 @@ def test_tick_拿锁后重新确认到期_不跑已被他实例跑过的任务(m
     executed = scheduler.tick()
     assert calls == ["slow"], f"fast 已被他实例跑过，不应重复执行；实际 {calls}"
     assert executed == 1
+
+
+# ------------------------------------------------ 手工触发也要走锁（防与调度并发）
+
+
+def test_job_lock_被占用时yield_None(monkeypatch):
+    """`job_lock` 是调度循环与手工触发共用的那把锁——占用中必须让第二个进不来。"""
+    fake = FakeRedis()
+    monkeypatch.setattr(scheduler, "_redis_client", lambda: fake)
+    with scheduler.job_lock("job") as first:
+        assert first, "第一个应拿到锁"
+        with scheduler.job_lock("job") as second:
+            assert second is None, "锁被占用时必须拿不到"
+    # 退出上下文后锁已释放，下一个又能拿到
+    with scheduler.job_lock("job") as third:
+        assert third
+
+
+def test_job_lock_退出时释放且异常也释放(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(scheduler, "_redis_client", lambda: fake)
+    try:
+        with scheduler.job_lock("job"):
+            raise RuntimeError("任务炸了")
+    except RuntimeError:
+        pass
+    assert fake.get(KEY) is None, "任务抛异常也必须把锁还回去，否则任务永久卡死"
+
+
+def test_手工触发在任务执行中返回409(monkeypatch):
+    """`POST /api/jobs/{name}/run` 此前直接调 run_job，会和调度中的同一任务并发。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    fake = FakeRedis()
+    monkeypatch.setattr(scheduler, "_redis_client", lambda: fake)
+    name = next(iter(scheduler.REGISTRY))
+
+    with TestClient(app) as client:
+        token = client.post(
+            "/api/auth/login", json={"username": "admin", "password": "admin123"}
+        ).json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 锁空闲：正常跑
+        ok = client.post(f"/api/jobs/{name}/run", headers=headers)
+        assert ok.status_code == 201, ok.text
+
+        # 模拟调度实例正持有该任务的锁
+        assert scheduler._acquire_lock(name)
+        busy = client.post(f"/api/jobs/{name}/run", headers=headers)
+        assert busy.status_code == 409, busy.text
+        assert "正在执行" in busy.json()["detail"]
+
+
+def test_无redis时job_lock仍然互斥(monkeypatch):
+    """Redis 锁挡跨实例，挡不住同进程内两条路径重叠。
+
+    不配 `MEDPLAT_REDIS_URL` 是默认部署形态，那时 `_acquire_lock` 恒返回 token。
+    若 `job_lock` 只靠它，这把锁在默认配置下等于不存在——调度线程与请求线程
+    照样能同时跑同一个任务。故进程内还要有一层 threading.Lock。
+    """
+    monkeypatch.setattr(scheduler, "_redis_client", lambda: None)
+    with scheduler.job_lock("job") as first:
+        assert first, "无 Redis 时第一个仍应拿到（单实例语义）"
+        with scheduler.job_lock("job") as second:
+            assert second is None, "同进程内第二个必须被挡住，否则默认配置下锁形同虚设"
+    with scheduler.job_lock("job") as third:
+        assert third, "退出后必须能重新获取，否则任务永久卡死"
