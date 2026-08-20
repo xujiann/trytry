@@ -37,3 +37,7 @@ migration cost / risk / recommendation**。
 | [0003](0003-三套并行子域的收敛策略.md) | 三套并行子域（慢病/专病/慢专病）的收敛策略 | Accepted |
 | [0004](0004-转诊分级审核按机构树校验推进权限.md) | 转诊分级审核按机构树（parent_id）校验推进权限 | Accepted |
 | [0005](0005-转诊链路收敛为三级.md) | spd 转诊链路收敛为村→乡镇→区市县三级 | Accepted |
+| [0006](0006-倾倒场路由回归业务前缀.md) | 倾倒场路由（gapfill/service_extras）回归业务前缀 | Proposed |
+| [0007](0007-统计簇口径合并.md) | 统计簇（analytics/metrics/reports/performance）口径合并 | Proposed |
+| [0008](0008-God文件分域拆包.md) | God 文件（models.py / spd config.py）分域拆包 | Proposed |
+| [0009](0009-前端组件抽取与工具函数合并.md) | 前端 render 组件抽取与三套工具函数合并 | Proposed |

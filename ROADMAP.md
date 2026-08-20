@@ -51,17 +51,24 @@
 - ☐ 三套并行子域的其余概念：病种目录 / 患者入组 / 随访的读侧聚合尚未做。
 - ✅ `docs/API_MAP.md` 已更新：写侧仍两套（方案 C 待立项），读侧已聚合。
 
-## Later（C 类重构，逐块 + 先补网）
+## Later（C 类重构：**四项均已出 ADR，待批准后逐块动手**）
 
-- ☐ 拆倾倒场 `gapfill.py` / `service_extras.py` 回业务前缀（消 6 组前缀重叠 + 鉴权分裂）。
-- ☐ 统计簇 `analytics/metrics/reports/performance` 合并口径。
-- ☐ God 文件 `models.py`(3950) / `spd/routers/config.py`(1547) 分域拆包。
-- ☐ 前端 89 个 render 抽 `panel()`/`crudPage()` 组件；合并三套 `$`/`esc`/`api`。
+> 这四项都是对**可运行模块**的结构性改动，按 CLAUDE.md §1.2/§9 必须先有 ADR。
+> ADR 已写齐（0006-0009，七段式，含实测数据与分批建议），等的是批准，不是分析。
+
+- ☐ 拆倾倒场 `gapfill.py`(1125 行/34 端点/6 前缀) / `service_extras.py`(521 行/20 端点) 回业务前缀 → **[ADR-0006](docs/adr/0006-倾倒场路由回归业务前缀.md)（Proposed，待批）**。建议按前缀分批，第一批 `/api/performance`（与 `routers/performance.py` 前缀重叠、只有 2 个端点）；动手前先加「端点 URL 集合零漂移」守卫。
+- ☐ 统计簇 `analytics/metrics/reports/performance` 合并口径 → **[ADR-0007](docs/adr/0007-统计簇口径合并.md)（Proposed，待批）**。⚠️ 落地第一步**不是写代码，是出「同名指标在几处各算什么」的对照表交产品裁定**——统一口径必然让某些数字变，那是业务决策。对照表出来前本项不进入实施。
+- ☐ God 文件 `models.py`(3989 行/187 类) / `spd/routers/config.py`(1549 行) 分域拆包 → **[ADR-0008](docs/adr/0008-God文件分域拆包.md)（Proposed，待批）**。拆成包 + `__init__.py` 重导出，**调用方 import 路径一行不改**；先拆 spd config 演练再动 models；动手前先加「模型名字集合零漂移」守卫。
+- ☐ 前端 89 个 render 抽 `panel()`/`crudPage()` 组件；合并三套 `$`/`esc`/`api` → **[ADR-0009](docs/adr/0009-前端组件抽取与工具函数合并.md)（Proposed，待批）**。分两步：先合并三套工具函数（半天、低风险，消掉「改一处漏两处」），再逐页迁组件（可长期分批，不设期限）。动机不只是整洁——`esc()` 是 §8 红线，89 处手写插值漏一处就是 XSS，本轮之前已漏过一次。
 
 ## 待决策（先 ADR，后动手）
 
 - ✅ ADR-0002 生产迁移停用 create_all（Accepted，已实施）。
-- ✅ ADR-0003 三套并行子域收敛（**Accepted**：先 B 读侧聚合、中期再评估 C、否决 D）。转诊那步已落地，其余概念待续。
+- ✅ ADR-0003 三套并行子域收敛（**Accepted**：先 B 读侧聚合、中期再评估 C、否决 D）。转诊那步已落地（接口+居民端），其余概念待续。
+- ☐ ADR-0006 倾倒场路由回归业务前缀（Proposed → 待批）。
+- ☐ ADR-0007 统计簇口径合并（Proposed → 待批；**需产品逐指标裁定**）。
+- ☐ ADR-0008 God 文件分域拆包（Proposed → 待批）。
+- ☐ ADR-0009 前端组件抽取与工具函数合并（Proposed → 待批）。
 
 ---
 
