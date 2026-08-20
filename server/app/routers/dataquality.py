@@ -350,7 +350,8 @@ def run_checks(
 @router.get("/summary")
 def summary(db: Session = Depends(get_db)):
     """违规汇总：按规则、按严重度、按被检表三个维度。"""
-    by_rule, by_severity, by_table = [], {"error": 0, "warn": 0}, {}
+    by_rule, by_severity = [], {"error": 0, "warn": 0}
+    by_table: dict[str, int] = {}
     for rule in _active_rules(db):
         hits = run_rule(db, rule)
         by_rule.append(

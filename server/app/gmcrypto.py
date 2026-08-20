@@ -19,6 +19,8 @@ SM3 在这里是**纯 Python 实现**（GB/T 32905-2016），不引第三方依�
 经检测认证的密码库。此处只留出接口位置与说明，不做假实现——
 一个"能跑但不安全"的国密实现比没有国密更危险。
 """
+from typing import Any, cast
+
 import hashlib
 import hmac
 import os
@@ -180,7 +182,8 @@ def _sm_kdf(password: bytes, salt: bytes) -> bytes:
 def mac(key: bytes, message: bytes) -> bytes:
     """消息认证码：令牌签名与审计哈希链共用。"""
     if suite_name() == "sm":
-        return hmac.new(key, message, _sm3_new).digest()
+        # hmac 的 digestmod 允许 new(data) 形态的可调用，但 typeshed 只声明了无参形态
+        return hmac.new(key, message, cast(Any, _sm3_new)).digest()
     return hmac.new(key, message, hashlib.sha256).digest()
 
 

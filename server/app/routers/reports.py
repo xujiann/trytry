@@ -186,7 +186,7 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
     )
     if period:
         finance_query = finance_query.filter(FinanceEntry.period == period)
-    finance = {}
+    finance: dict[int, dict[str, float]] = {}
     for org_id, category, amount in finance_query.group_by(
         FinanceEntry.org_id, FinanceEntry.category
     ).all():

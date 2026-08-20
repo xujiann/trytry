@@ -525,37 +525,37 @@ def seed_all(db) -> None:
     db.commit()
 
     existing_scales = {code for (code,) in db.query(SpdScale.code).all()}
-    for seed in SEED_SCALES:
-        if seed["code"] not in existing_scales:
-            db.add(SpdScale(**seed, version="v1", status="published"))
+    for scale in SEED_SCALES:
+        if scale["code"] not in existing_scales:
+            db.add(SpdScale(**scale, version="v1", status="published"))
     db.commit()
 
     existing_indicators = {code for (code,) in db.query(SpdIndicator.code).all()}
-    for seed in SEED_INDICATORS:
-        if seed["code"] not in existing_indicators:
-            db.add(SpdIndicator(**seed, version="v1", active=True))
+    for indicator in SEED_INDICATORS:
+        if indicator["code"] not in existing_indicators:
+            db.add(SpdIndicator(**indicator, version="v1", active=True))
     db.commit()
 
     existing_rules = {code for (code,) in db.query(SpdPointRule.code).all()}
-    for seed in SEED_POINT_RULES:
-        if seed["code"] not in existing_rules:
-            db.add(SpdPointRule(**seed))
+    for point_rule in SEED_POINT_RULES:
+        if point_rule["code"] not in existing_rules:
+            db.add(SpdPointRule(**point_rule))
     db.commit()
 
     existing_q = {code for (code,) in db.query(SpdQuestionnaire.code).all()}
-    for seed in SEED_QUESTIONNAIRES:
-        if seed["code"] not in existing_q:
-            db.add(SpdQuestionnaire(**seed))
+    for questionnaire in SEED_QUESTIONNAIRES:
+        if questionnaire["code"] not in existing_q:
+            db.add(SpdQuestionnaire(**questionnaire))
     db.commit()
 
     existing_fr = {code for (code,) in db.query(SpdFollowupRule.code).all()}
-    for seed in SEED_FOLLOWUP_RULES:
-        if seed["code"] not in existing_fr:
-            db.add(SpdFollowupRule(**seed))
+    for followup_rule in SEED_FOLLOWUP_RULES:
+        if followup_rule["code"] not in existing_fr:
+            db.add(SpdFollowupRule(**followup_rule))
     db.commit()
 
     existing_rpt = {code for (code,) in db.query(SpdReportTemplate.code).all()}
-    for seed in SEED_REPORT_TEMPLATES:
-        if seed["code"] not in existing_rpt:
-            db.add(SpdReportTemplate(**seed))
+    for report_template in SEED_REPORT_TEMPLATES:
+        if report_template["code"] not in existing_rpt:
+            db.add(SpdReportTemplate(**report_template))
     db.commit()

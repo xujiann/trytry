@@ -1,4 +1,6 @@
 """功能指引查漏补缺：报告模板/报告修改、消毒申领、会诊专家、预约黑名单、健康宣教、满意度、智能导诊。"""
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -460,15 +462,12 @@ _TRIAGE_KB = [
 def triage_suggest(symptoms: list[str], db: Session = Depends(get_db)):
     """智能导诊：症状匹配推荐科室，急症症状提示急诊。"""
     given = set(symptoms)
-    ranked = sorted(
-        (
-            {"department": dept, "matched": sorted(kb & given), "urgent": urgent}
-            for kb, dept, urgent in _TRIAGE_KB
-            if kb & given
-        ),
-        key=lambda r: len(r["matched"]),
-        reverse=True,
-    )
+    candidates: list[dict[str, Any]] = [
+        {"department": dept, "matched": sorted(kb & given), "urgent": urgent}
+        for kb, dept, urgent in _TRIAGE_KB
+        if kb & given
+    ]
+    ranked = sorted(candidates, key=lambda r: len(r["matched"]), reverse=True)
     return {
         "recommendations": ranked[:3] or [{"department": "全科门诊", "matched": [], "urgent": False}],
         "emergency_hint": any(r["urgent"] for r in ranked[:1]),

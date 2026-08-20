@@ -34,7 +34,9 @@ lint-fix:  ## 自动修可修的 lint 问题（谨慎，会改代码）
 
 # ---- typecheck ----
 typecheck:  ## 渐进式类型检查（mypy，仅查已注解代码）
-	cd $(SERVER) && mypy app
+	# 先验环境：mypy 与依赖不在同一环境时，ignore_missing_imports 会把
+	# 第三方库静默当成 Any，报出的错误数远小于真实值（详见脚本头部注释）。
+	cd $(SERVER) && $(PY) scripts/check_mypy_env.py && mypy app
 
 # ---- 三档测试 ----
 test-unit:  ## 单元/接口测试：进程内 SQLite 快速套件（无外部依赖）
@@ -52,5 +54,5 @@ test: test-unit test-smoke  ## 无外部依赖的可跑测试（unit + smoke）
 verify:  ## 提交前自检（对应 CLAUDE.md 第14条）
 	$(MAKE) build
 	$(MAKE) lint
-	-$(MAKE) typecheck   # 渐进式基线（mypy 存量 41，见 ROADMAP）：warning 模式，不阻断 verify
+	-$(MAKE) typecheck   # 渐进式基线（CI 口径存量 139，见 ROADMAP）：warning 模式，不阻断 verify
 	$(MAKE) test-unit

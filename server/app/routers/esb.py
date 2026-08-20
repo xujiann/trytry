@@ -624,7 +624,8 @@ def esb_stats(db: Session = Depends(get_db)):
     )
     endpoints = {e.id: e for e in db.query(EsbEndpoint).all()}
     by_endpoint = []
-    totals = {"total": 0, "succeeded": 0, "dead": 0, "backlog": 0}
+    # 后面还要塞 success_rate_pct 等 float，值类型不能被推断成 int
+    totals: dict[str, float] = {"total": 0, "succeeded": 0, "dead": 0, "backlog": 0}
     for r in rows:
         succeeded, dead = int(r.succeeded or 0), int(r.dead or 0)
         finished = succeeded + dead

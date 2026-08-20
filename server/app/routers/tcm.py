@@ -1,4 +1,6 @@
 """中医药服务：⑬智能辅诊（体质辨识+辨证推荐）、⑭共享中药房、㉑适宜技术库。"""
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -25,7 +27,7 @@ CONSTITUTIONS = {
     "balanced": {"name": "平和质", "advice": "起居有常，饮食有节，坚持运动", "formula": ""},
 }
 
-SYNDROME_KB = [
+SYNDROME_KB: list[dict[str, Any]] = [
     {"symptoms": {"乏力", "气短", "自汗"}, "syndrome": "气虚证", "formula": "四君子汤", "techniques": ["艾灸足三里", "穴位贴敷"]},
     {"symptoms": {"畏寒", "肢冷", "腰膝酸软"}, "syndrome": "阳虚证", "formula": "金匮肾气丸", "techniques": ["督脉灸", "隔姜灸"]},
     {"symptoms": {"口干", "盗汗", "五心烦热"}, "syndrome": "阴虚证", "formula": "六味地黄丸", "techniques": ["耳穴压豆"]},
@@ -125,20 +127,17 @@ class DiagnoseBody(BaseModel):
 def assist_diagnosis(body: DiagnoseBody):
     """智能辨证：按症状匹配度推荐证型、方剂与适宜技术。"""
     given = set(body.symptoms)
-    ranked = sorted(
-        (
-            {
-                "syndrome": kb["syndrome"],
-                "matched": sorted(kb["symptoms"] & given),
-                "match_count": len(kb["symptoms"] & given),
-                "formula": kb["formula"],
-                "techniques": kb["techniques"],
-            }
-            for kb in SYNDROME_KB
-        ),
-        key=lambda r: r["match_count"],
-        reverse=True,
-    )
+    candidates: list[dict[str, Any]] = [
+        {
+            "syndrome": kb["syndrome"],
+            "matched": sorted(kb["symptoms"] & given),
+            "match_count": len(kb["symptoms"] & given),
+            "formula": kb["formula"],
+            "techniques": kb["techniques"],
+        }
+        for kb in SYNDROME_KB
+    ]
+    ranked = sorted(candidates, key=lambda r: r["match_count"], reverse=True)
     hits = [r for r in ranked if r["match_count"] > 0]
     return {"recommendations": hits[:3], "note": "辅助建议仅供参考，须由中医师最终辨证"}
 

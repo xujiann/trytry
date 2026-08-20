@@ -13,7 +13,7 @@ import os
 import threading
 import time
 import uuid
-from collections import Counter, deque
+from collections import Counter, defaultdict, deque
 
 from .state_store import _redis_client
 
@@ -35,11 +35,17 @@ class ApiMetrics:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._reset_counters()
+
+    def _reset_counters(self) -> None:
+        """清零所有计数器。不碰 `_lock`——reset() 是持锁调用的，
+        在锁内换掉锁对象会让同时等锁的线程落到两把不同的锁上。"""
         self.total = 0
         self.duration_sum = 0.0
         self.by_status_class: Counter = Counter()   # "2xx"/"4xx"/"5xx"
         self.by_module: Counter = Counter()         # /api/exams/... -> exams
-        self.module_duration: Counter = Counter()
+        # 累加的是毫秒（float），Counter 的值类型是 int，故用 defaultdict
+        self.module_duration: defaultdict[str, float] = defaultdict(float)
         self.by_status_code: Counter = Counter()
         self.slow: deque = deque(maxlen=SAMPLE_SIZE)
         self.errors: deque = deque(maxlen=SAMPLE_SIZE)
@@ -85,7 +91,7 @@ class ApiMetrics:
     def reset(self) -> None:
         """仅供测试与手动清零；生产没有清零入口，避免有人靠清零把错误率洗白。"""
         with self._lock:
-            self.__init__()
+            self._reset_counters()
 
 
 def _module_of(path: str) -> str:

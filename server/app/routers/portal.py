@@ -165,7 +165,9 @@ def send_sms_code(body: SendCodeIn, request: Request, db: Session = Depends(get_
     if not provider.send(phone, content):
         raise HTTPException(status_code=502, detail="短信通道暂不可用，请稍后重试")
 
-    result = {"sent": True, "expires_in": ttl, "cooldown_seconds": SEND_COOLDOWN_SECONDS}
+    result: dict[str, object] = {
+        "sent": True, "expires_in": ttl, "cooldown_seconds": SEND_COOLDOWN_SECONDS,
+    }
     if provider.name == "console" and settings.sms_debug_echo and not settings.is_production:
         result["debug_code"] = code
     return result
@@ -382,6 +384,8 @@ def portal_logout(
     account: ResidentAccount = Depends(current_resident),
 ):
     """退出登录：按 jti 拉黑当前令牌（与业务端登出同一黑名单）。"""
+    if credentials is None:  # pragma: no cover - current_resident 先行 401，走不到这里
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
     claims = decode_token(credentials.credentials) or {}
     revoked_tokens.add(claims.get("jti") or credentials.credentials, ttl_seconds=settings.portal_token_ttl_seconds)
     return {"logged_out": True}

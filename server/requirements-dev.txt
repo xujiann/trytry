@@ -3,11 +3,12 @@
 
 -r requirements.txt
 
-# lint —— 满足 CLAUDE.md 第14条「完成前跑 lint」。ruff 单二进制、零额外依赖、快。
-ruff>=0.6
-
-# typecheck —— 满足 CLAUDE.md 第14条「完成前跑类型检查」。渐进式（见 pyproject.toml）。
-mypy>=1.11
+# lint / typecheck —— CI `quality` job 的**阻断**门（见 CLAUDE.md §7）。
+# 本仓库无 lockfile，若只写下界，CI 每次都装最新版：上游一个收紧推断的小版本，
+# 就能让一批没人碰过的文件突然变红，而本地装着旧版的人完全看不到。故钉上界。
+# 升级流程：单独一个 PR 里放宽上界 + 修掉新报错，让 diff 说清"这批红是升级带来的"。
+ruff>=0.15,<0.17          # 1.0 前小版本即可能改规则行为；0.15/0.16 均实测 0 项
+mypy>=2.3,<2.4            # 大版本间推断差异极大：2.3 报 0 处，1.19 在同一份代码上报 138 处
 
 # smoke/e2e —— e2e 用例（tests/e2e）本就 import playwright，此前缺在依赖清单里，补齐。
 playwright>=1.44
