@@ -93,7 +93,10 @@ def test_prod_with_proper_credentials_starts(monkeypatch):
 
     monkeypatch.setenv("MEDPLAT_ENVIRONMENT", "prod")
     monkeypatch.setenv("MEDPLAT_SECRET", "a-strong-random-secret-0123456789")
-    monkeypatch.setenv("MEDPLAT_ADMIN_PASSWORD", "Str0ngPassw0rd!")
+    # 原来这里写的是 "Str0ngPassw0rd!"。守卫从"是否等于默认值"改成强度校验后，
+    # 含 passw0rd/password 字样一律判弱——那是最典型的示例口令，
+    # 真部署里出现它基本等于没改。换成真随机值。
+    monkeypatch.setenv("MEDPLAT_ADMIN_PASSWORD", "Kx7!mQ2$vLp9Zt")
     settings = Settings()
     assert settings.is_production
 
