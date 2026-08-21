@@ -14,6 +14,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -359,12 +360,38 @@ app.include_router(todos.router)
 app.include_router(ws.router)
 
 _access_logger = logging.getLogger("medplat.access")
-if not _access_logger.handlers:
+
+
+def _configure_access_logger() -> None:
+    """请求日志输出（A10）：stdout 恒开；`MEDPLAT_LOG_FILE` 非空时另附轮转文件。
+
+    容器部署 stdout 由 docker/journald 收集即可；裸机/等保 6 个月留存场景
+    设 `MEDPLAT_LOG_FILE` 落轮转文件（大小与份数由 `MEDPLAT_LOG_ROTATE_MAX_MB`
+    / `MEDPLAT_LOG_ROTATE_BACKUPS` 控制），目录不存在则自动创建。
+    幂等：已有 handler 时不重复附加（reload/多次 import 不会写两遍）。
+    """
+    if _access_logger.handlers:
+        return
+    formatter = logging.Formatter("%(message)s")
     _handler = logging.StreamHandler()
-    _handler.setFormatter(logging.Formatter("%(message)s"))
+    _handler.setFormatter(formatter)
     _access_logger.addHandler(_handler)
+    if settings.log_file:
+        log_path = Path(settings.log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_path,
+            maxBytes=settings.log_rotate_max_mb * 1024 * 1024,
+            backupCount=settings.log_rotate_backups,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        _access_logger.addHandler(file_handler)
     _access_logger.setLevel(logging.INFO)
     _access_logger.propagate = False
+
+
+_configure_access_logger()
 
 
 @app.middleware("http")

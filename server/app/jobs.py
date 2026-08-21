@@ -7,15 +7,26 @@
 - 扫描类任务的产出是**广播 + 留痕**：把结果推给在线的管理端（WebSocket），
   并在 JobRun 里留下数量与摘要，供 `/api/jobs/runs` 回溯。
 - 清理类任务直接删数据，删除量记进 affected。
+- 归档类任务（A9）先导出 NDJSON.gz 并写 manifest，再删已归档行；
+  归档目录固定在 `settings.upload_dir` 下的 archives/ 子目录。
 """
+import gzip
+import hashlib
+import hmac
+import json
 from datetime import date, timedelta
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from .clock import now_naive
+from .config import settings
 from .models import (
+    AccessLog,
+    AuditLog,
     ChronicPatient,
     FollowupTask,
+    JobRun,
     MedicalWaste,
     SmsCode,
     StaffContract,
@@ -122,3 +133,191 @@ def sms_code_cleanup(db: Session) -> tuple[int, str]:
     )
     db.commit()
     return deleted, f"清理过期/已用验证码 {deleted} 条"
+
+
+# ---------------------------------------------------------------------------
+# 运行数据保留期（A9）：JobRun 清理 + AccessLog/AuditLog 归档后截断
+# ---------------------------------------------------------------------------
+
+#: 归档分批大小：一批读多少行、写完就删掉并提交。防的是"一条大事务锁全表 +
+#: 全表读进内存"——留痕表在生产是百万行级的。
+ARCHIVE_BATCH_SIZE = 1000
+
+
+def _archive_dir() -> Path:
+    """归档目录：`settings.upload_dir` 下的 archives/ 子目录（不存在则建）。"""
+    d = Path(settings.upload_dir) / "archives"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _append_manifest(entry: dict) -> None:
+    """manifest.jsonl 追加一行。只追加不改写：manifest 本身就是归档的账本。"""
+    path = _archive_dir() / "manifest.jsonl"
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _archive_and_delete(
+    db: Session,
+    model,
+    table: str,
+    cutoff,
+    row_to_dict,
+    anchors=None,
+) -> tuple[int, str]:
+    """把 `created_at < cutoff` 的行导出为 NDJSON.gz 后分批删除，写 manifest。
+
+    - MAC 对**未压缩的 NDJSON 字节流**计算（HMAC-SHA256，密钥 settings.secret），
+      校验方 `gunzip` 后即可复算，不依赖 gzip 实现的字节稳定性。
+    - 每批"写文件→删行→commit"，进程中途挂掉最多损失一个未记入 manifest 的
+      文件（行已删、文件还在），不会出现"行删了、导出没了"。
+    - `anchors(first_rec, last_rec)` 收归档段首/尾行的**序列化字典**（ORM 实例在
+      分批 commit 后会过期失效，锚点只能取自删除前的快照），供审计链记锚点。
+    """
+    base = (
+        db.query(model)
+        .filter(model.created_at < cutoff)
+        .order_by(model.id)
+    )
+    first_batch = base.limit(ARCHIVE_BATCH_SIZE).all()
+    if not first_batch:
+        return 0, "无超期数据"
+
+    stamp = now_naive().strftime("%Y%m%d%H%M%S")
+    filename = f"{table}_{stamp}_{first_batch[0].id}.ndjson.gz"
+    path = _archive_dir() / filename
+    mac = hmac.new(settings.secret.encode(), digestmod=hashlib.sha256)
+    total = 0
+    first_rec: dict | None = None
+    last_rec: dict | None = None
+    ts_min = ts_max = None
+    with gzip.open(path, "wb") as gz:
+        rows = first_batch
+        while rows:
+            for row in rows:
+                rec = row_to_dict(row)
+                data = (json.dumps(rec, ensure_ascii=False) + "\n").encode()
+                gz.write(data)
+                mac.update(data)
+                if first_rec is None:
+                    first_rec = rec
+                last_rec = rec
+                ts_min = rec["created_at"] if ts_min is None else min(ts_min, rec["created_at"])
+                ts_max = rec["created_at"] if ts_max is None else max(ts_max, rec["created_at"])
+            ids = [row.id for row in rows]
+            db.query(model).filter(model.id.in_(ids)).delete(synchronize_session=False)
+            db.commit()
+            total += len(rows)
+            # 游标推进用 id 而不是"删完了再查"：循环终止不依赖删除成败，
+            # 删除异常时最多多归档、绝不死循环。
+            rows = base.filter(model.id > ids[-1]).limit(ARCHIVE_BATCH_SIZE).all()
+
+    assert first_rec is not None and last_rec is not None  # first_batch 非空必有值
+    entry = {
+        "file": filename,
+        "table": table,
+        "rows": total,
+        "from": ts_min,
+        "to": ts_max,
+        "first_id": first_rec["id"],
+        "last_id": last_rec["id"],
+        "mac": mac.hexdigest(),
+    }
+    if anchors is not None:
+        entry.update(anchors(first_rec, last_rec))
+    _append_manifest(entry)
+    return total, f"归档 {total} 行 → {filename}"
+
+
+@register("jobrun_cleanup", "任务运行记录清理", 86400)
+def jobrun_cleanup(db: Session) -> tuple[int, str]:
+    """删除超过保留期（MEDPLAT_JOBRUN_RETENTION_DAYS，默认 90 天）的 JobRun。
+
+    JobRun 只是运行留痕，不承载合规义务，到期直接删、不归档。
+    保留期配成 0 或负值视为"未启用"，任务跳过并说明——保底防误配。
+    """
+    days = settings.jobrun_retention_days
+    if days <= 0:
+        return 0, f"保留期未启用（jobrun_retention_days={days}），跳过"
+    cutoff = now_naive() - timedelta(days=days)
+    deleted = (
+        db.query(JobRun)
+        .filter(JobRun.created_at < cutoff)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return deleted, f"清理 {days} 天前的任务运行记录 {deleted} 条"
+
+
+@register("access_log_archive", "调阅留痕归档", 86400)
+def access_log_archive(db: Session) -> tuple[int, str]:
+    """把超过 MEDPLAT_ACCESS_LOG_ARCHIVE_DAYS 的 AccessLog 归档导出后删除。
+
+    默认 0=不自动处理（留痕是《个保法》义务，删不删、留多久是运维决策）。
+    导出为 NDJSON.gz + manifest.jsonl（含 HMAC 校验值），分批处理防大事务。
+    """
+    days = settings.access_log_archive_days
+    if days <= 0:
+        return 0, f"归档未启用（access_log_archive_days={days}），跳过"
+    cutoff = now_naive() - timedelta(days=days)
+
+    def row_to_dict(r: AccessLog) -> dict:
+        return {
+            "id": r.id,
+            "user_id": r.user_id,
+            "username": r.username,
+            "org_id": r.org_id,
+            "patient_id": r.patient_id,
+            "resource": r.resource,
+            "basis": r.basis,
+            "created_at": r.created_at.isoformat(),
+        }
+
+    return _archive_and_delete(db, AccessLog, "access_logs", cutoff, row_to_dict)
+
+
+@register("audit_archive", "审计日志归档", 86400)
+def audit_archive(db: Session) -> tuple[int, str]:
+    """把超过 MEDPLAT_AUDIT_LOG_ARCHIVE_DAYS 的 AuditLog 归档导出后删除。
+
+    默认 0=不自动处理，**开启是运维决策**（等保对审计留存有最低时限要求，
+    截断前先确认归档存储已就位）。
+
+    **哈希链截断说明**：audit_logs 带防篡改哈希链（audit_chain.py），删除最旧段
+    后，库内剩余首条的 `prev_hash` 指向已被删除的记录——链首不再是空串，
+    `GET /api/audit/verify` 会在**截断点报一处已知断点**（`partial_segment=true`，
+    只能证明剩余段内部自洽）。这不是篡改，以归档 manifest 的锚点续接校验：
+    manifest 里额外记录了归档段的 `first_prev_hash` / `first_entry_hash` /
+    `last_entry_hash`，库内剩余首条的 `prev_hash` 应等于归档段的
+    `last_entry_hash`，归档文件内部的链则可独立复算。详见运维手册
+    "运行数据保留与归档"节。
+    """
+    days = settings.audit_log_archive_days
+    if days <= 0:
+        return 0, f"归档未启用（audit_log_archive_days={days}），跳过"
+    cutoff = now_naive() - timedelta(days=days)
+
+    def row_to_dict(r: AuditLog) -> dict:
+        return {
+            "id": r.id,
+            "user_id": r.user_id,
+            "username": r.username,
+            "method": r.method,
+            "path": r.path,
+            "status_code": r.status_code,
+            "prev_hash": r.prev_hash,
+            "entry_hash": r.entry_hash,
+            "created_at": r.created_at.isoformat(),
+        }
+
+    def anchors(first: dict, last: dict) -> dict:
+        # 链锚点：归档段首条的 prev/entry 哈希 + 尾条的 entry 哈希。
+        # 库内剩余首条的 prev_hash == last_entry_hash 即证明链在截断点续接无误。
+        return {
+            "first_prev_hash": first["prev_hash"],
+            "first_entry_hash": first["entry_hash"],
+            "last_entry_hash": last["entry_hash"],
+        }
+
+    return _archive_and_delete(db, AuditLog, "audit_logs", cutoff, row_to_dict, anchors)
