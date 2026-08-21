@@ -68,7 +68,11 @@
   - ✅ **剩余五个前缀一次搬完，`gapfill.py` 已删除**——倾倒场从 1125 行归零。`tcm`/`cssd`/`education`/`maternal` 并入同名模块（四者鉴权与目标 router **完全一致**，可直接合成一个 router，不像 performance 那样存在鉴权分裂）；`homevisits` 新建模块。零漂移守卫实测 885 端点不变。
   - 搬家顺带撞出一处**同名遮蔽**：`maternal.py` 里出现两个 `ScreeningCreate`（儿童筛查 vs 产前筛查）与两个 `list_screenings`。当前行为是对的（各自的使用点都在自己的定义之后、重定义之前），但一个写在 417 行之后、想用儿童筛查 schema 的新端点会**静默拿到产前筛查的校验规则**。已把搬来的那套改名 `PrenatalScreeningCreate`/`list_prenatal_screenings`，并实测两套 422 校验各自正确。
   - `cssd` 与 `performance` 暂时移出 `FULLY_GOVERNED`：搬进来的端点本就无契约，总欠账仍 740（只是换了名下），补完即加回。
-- ☐ 统计簇 `analytics/metrics/reports/performance` 合并口径 → **[ADR-0007](docs/adr/0007-统计簇口径合并.md)（Proposed，待批）**。⚠️ 落地第一步**不是写代码，是出「同名指标在几处各算什么」的对照表交产品裁定**——统一口径必然让某些数字变，那是业务决策。对照表出来前本项不进入实施。
+- ◐ 统计簇 `analytics/metrics/reports/performance` 合并口径 → **[ADR-0007](docs/adr/0007-统计簇口径合并.md)（Accepted）**。**第一步已交付**：`docs/统计口径对照表.md` —— 逐条比对四个模块的实际代码，摸出 5 处口径分歧 + 1 处更严重的问题：
+  - 🔴 **有两个平行的机构评分体系**：`performance/orgs`（`performance_indicators` 表 + 硬编码五维度）与 `analytics/performance-report`（`performance_formulas` 表 + 可编辑公式）。两个接口都叫「机构绩效」、两个分数不可比。
+  - ⚠️ **随访覆盖率不带时间窗**：「有过任意一次随访」就永久计入覆盖，数字只涨不跌、随管理年限趋近 100%，基本没有考核价值。更像缺陷而非分歧，但修它会让所有机构该项得分明显下降。
+  - 另 4 处分子/分母口径：转诊结案率的分母（`from_org_id` vs 全部）、互认算不算远程诊断服务量、`auto_passed` 算不算处方合格、诊疗人次是否只算基层。
+  - ☐ **下一步等产品逐条裁定**——统一口径必然让某些机构的数字变化，那是业务决策。裁定前本项不进入编码阶段。
 - ◐ God 文件 `models.py`(3989 行/187 类) / `spd/routers/config.py`(1549 行) 分域拆包 → **[ADR-0008](docs/adr/0008-God文件分域拆包.md)（**Accepted**）**。拆成包 + `__init__.py` 重导出，**调用方 import 路径一行不改**；先拆 spd config 演练再动 models；动手前先加「模型名字集合零漂移」守卫。
   - ✅ 前置守卫已就位：同一份用例快照 246 个 ORM 类名——拆包漏了重导出会让类不再注册进 `Base.metadata`，**建表静默少一张**而不是报错，这条把「静默」变成「报错」。
   - ✅ **演练完成：`spd/routers/config.py` 1549 行 → 包（8 个文件，最大 331 行）**。按业务分节拆成 catalog / paths / scales / teams / devices / centers 六个子模块 + `_base`（路由对象与跨节工具）。**导入路径一行没改**（`from .routers import config` 照旧），零漂移守卫实测 885 端点 + 246 模型纹丝不动。
