@@ -138,6 +138,21 @@ class CodeEntry(Base):
     system_id: Mapped[int] = mapped_column(ForeignKey("code_systems.id"), index=True)
     code: Mapped[str] = mapped_column(String(64), index=True)
     name: Mapped[str] = mapped_column(String(256), index=True)
+    # D1 扩列：药品/耗材/收费目录落地需要的属性列，全部可空——
+    # 诊断（ICD-10）等字典用不上这些列，强填默认值只会制造假数据。
+    # 规格（如 0.5g×24片）
+    spec: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 剂型（片剂/胶囊/注射液…）
+    dosage_form: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    manufacturer: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 计价/包装单位（盒/支/次…）
+    unit: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 医保对码（医保目录编码），对账与结算上报用
+    insurance_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # 本位码/YPID（国家药品编码），跨系统对照用
+    national_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # 备用扩展（JSON 文本）：一次性对接时的零散属性先落这里，成熟了再提列
+    extra: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     system: Mapped[CodeSystem] = relationship(back_populates="entries")

@@ -1,10 +1,14 @@
 """预约诊疗：机构发布分时段号源，居民一站式预约（挂号/检查/检验）。"""
+from datetime import date, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..visibility import scope_org_list, scope_patient_list
 from ..database import get_db
+from ..datetypes import DateStr
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import (
     Appointment,
@@ -109,6 +113,115 @@ def create_slot(body: SlotCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(slot)
     return slot
+
+
+# ---------------------------------------------------------------- 号源批量生成（D1 开办工具）
+
+# 单次批量生成上限：日期数 × 模板数。开办期一个科室一个季度的号源
+# （90 天 × 数个时段模板）在此限内；更大的量分多次调用，防止误填
+# 日期区间一次生成数十万行把库写爆。
+MAX_BATCH_SLOTS = 1000
+
+
+class SlotTemplate(BaseModel):
+    """时段模板：与 SlotCreate 相同的号源属性，唯独日期由区间展开。"""
+
+    resource_type: str = Field(pattern="^(outpatient|exam|lab)$")
+    resource_name: str = Field(min_length=1)
+    employee_id: int | None = None
+    slot_time: str = ""
+    capacity: int = Field(default=1, ge=1)
+
+
+class SlotBatchCreate(BaseModel):
+    org_id: int
+    templates: list[SlotTemplate] = Field(min_length=1)
+    date_from: DateStr
+    date_to: DateStr
+    # 节假日/停诊日跳过（YYYY-MM-DD），可选
+    skip_dates: list[DateStr] = Field(default_factory=list)
+    skip_weekends: bool = False
+
+
+class SlotBatchOut(BaseModel):
+    created: int
+    skipped: int
+
+
+@router.post(
+    "/slots/batch",
+    response_model=SlotBatchOut,
+    status_code=201,
+    dependencies=[Depends(require_admin)],
+)
+def batch_create_slots(body: SlotBatchCreate, db: Session = Depends(get_db)):
+    """模板×日期区间批量生成号源。
+
+    幂等：机构+医师+资源+日期+时段 已有号源的日期跳过（skipped 计数），
+    重复调用不产生重复号源——开办期常常要"补生成"某几天，重跑安全比报错友好。
+    """
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
+    employee_ids = {t.employee_id for t in body.templates if t.employee_id is not None}
+    if employee_ids:
+        employees = {
+            e.id: e for e in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()
+        }
+        for employee_id in employee_ids:
+            employee = employees.get(employee_id)
+            if employee is None:
+                raise HTTPException(status_code=404, detail=f"医师不存在: {employee_id}")
+            if employee.org_id != body.org_id:
+                raise HTTPException(status_code=422, detail=f"医师不属于该机构: {employee_id}")
+    start, end = date.fromisoformat(body.date_from), date.fromisoformat(body.date_to)
+    if start > end:
+        raise HTTPException(status_code=422, detail="date_from 不得晚于 date_to")
+    skip = set(body.skip_dates)
+    days: list[str] = []
+    cursor = start
+    while cursor <= end:
+        day = cursor.isoformat()
+        if day not in skip and not (body.skip_weekends and cursor.weekday() >= 5):
+            days.append(day)
+        cursor += timedelta(days=1)
+    total = len(days) * len(body.templates)
+    if total > MAX_BATCH_SLOTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"单次生成量超上限: {total} > {MAX_BATCH_SLOTS}（请缩小日期区间或分批生成）",
+        )
+    # 幂等键集合预载（区间内一次查询），生成时按键跳过已有号源
+    existing = {
+        (s.employee_id, s.resource_type, s.resource_name, s.slot_date, s.slot_time)
+        for s in db.query(AppointmentSlot)
+        .filter(
+            AppointmentSlot.org_id == body.org_id,
+            AppointmentSlot.slot_date >= body.date_from,
+            AppointmentSlot.slot_date <= body.date_to,
+        )
+        .all()
+    }
+    created = skipped = 0
+    for day in days:
+        for template in body.templates:
+            key = (
+                template.employee_id, template.resource_type,
+                template.resource_name, day, template.slot_time,
+            )
+            if key in existing:
+                skipped += 1
+                continue
+            db.add(AppointmentSlot(org_id=body.org_id, slot_date=day, **template.model_dump()))
+            existing.add(key)
+            created += 1
+    try:
+        db.commit()
+    except IntegrityError:
+        # appointment_slots 当前无唯一约束，此处为防御：若后续加约束，
+        # 并发重复生成应得 409 而非 500
+        db.rollback()
+        raise HTTPException(status_code=409, detail="号源生成冲突，请重试")
+    return {"created": created, "skipped": skipped}
 
 
 @router.get("/slots", response_model=list[SlotOut])

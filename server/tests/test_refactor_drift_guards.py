@@ -540,6 +540,7 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/appointments",
     "POST /api/appointments/blacklist",
     "POST /api/appointments/slots",
+    "POST /api/appointments/slots/batch",
     "POST /api/appointments/{appointment_id}/cancel",
     "POST /api/appointments/{appointment_id}/fulfill",
     "POST /api/attachments",

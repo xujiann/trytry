@@ -1,0 +1,4 @@
+code,name,spec,dosage_form,manufacturer,unit,insurance_code,national_code,extra
+A10BA02,盐酸二甲双胍片,0.5g×24片,片剂,示例药业股份有限公司,盒,XA10BA02A001010100001,86900000000011,"{""otc"": false}"
+A10BK03,恩格列净片,10mg×10片,片剂,示例制药有限公司,盒,XA10BK03A001010100002,86900000000028,
+C08CA06,尼莫地平片,30mg×20片,片剂,示例医药集团,盒,,86900000000035,

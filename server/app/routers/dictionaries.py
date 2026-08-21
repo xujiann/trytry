@@ -1,6 +1,6 @@
 """统一编码字典：诊断、药品、耗材、收费"四统一"，结果互认与业务联动的数据基础。"""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,7 @@ from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import CodeEntry, CodeSystem
-from ..schemas import CodeEntryCreate, CodeEntryOut
+from ..schemas import CodeEntryCreate
 
 router = APIRouter(prefix="/api/dictionaries", tags=["统一编码字典"])
 
@@ -17,6 +17,27 @@ router = APIRouter(prefix="/api/dictionaries", tags=["统一编码字典"])
 class BulkImportOut(BaseModel):
     imported: int
     skipped: int
+
+
+# D1 扩列：入参在 CodeEntryCreate 上**新增可选列**（缺列/为 None 不填不报错），
+# 对既有调用方向后兼容。属性列语义见 models/core.CodeEntry 列注释。
+class CodeEntryUpsert(CodeEntryCreate):
+    spec: str | None = Field(default=None, max_length=64)
+    dosage_form: str | None = Field(default=None, max_length=32)
+    manufacturer: str | None = Field(default=None, max_length=128)
+    unit: str | None = Field(default=None, max_length=16)
+    insurance_code: str | None = Field(default=None, max_length=64)
+    national_code: str | None = Field(default=None, max_length=64)
+    extra: str | None = Field(default=None, max_length=1024)
+
+
+class CodeEntryDetailOut(CodeEntryUpsert):
+    """响应契约：与 ORM 输出一一对应（治理棘轮口径）。对旧调用方为新增字段。"""
+
+    id: int
+    system_id: int
+
+    model_config = {"from_attributes": True}
 
 SYSTEM_CODES = {"diagnosis": "诊断(ICD-10)", "drug": "药品", "consumable": "耗材", "charge": "收费"}
 
@@ -54,11 +75,11 @@ def _get_system_readonly(db: Session, system_code: str) -> CodeSystem | None:
 
 @router.post(
     "/{system_code}/entries",
-    response_model=CodeEntryOut,
+    response_model=CodeEntryDetailOut,
     status_code=201,
     dependencies=[Depends(require_admin)],
 )
-def create_entry(system_code: str, body: CodeEntryCreate, db: Session = Depends(get_db)):
+def create_entry(system_code: str, body: CodeEntryUpsert, db: Session = Depends(get_db)):
     system = _get_system(db, system_code)
     if (
         db.query(CodeEntry)
@@ -75,7 +96,7 @@ def create_entry(system_code: str, body: CodeEntryCreate, db: Session = Depends(
     response_model=BulkImportOut,
     dependencies=[Depends(require_admin)],
 )
-def bulk_import(system_code: str, entries: list[CodeEntryCreate], db: Session = Depends(get_db)):
+def bulk_import(system_code: str, entries: list[CodeEntryUpsert], db: Session = Depends(get_db)):
     """标准字典全量/增量导入：已存在的编码跳过，返回导入统计。"""
     system = _get_system(db, system_code)
     existing = {
@@ -99,7 +120,7 @@ def bulk_import(system_code: str, entries: list[CodeEntryCreate], db: Session = 
 
 @router.get(
     "/{system_code}/entries",
-    response_model=list[CodeEntryOut],
+    response_model=list[CodeEntryDetailOut],
     dependencies=[Depends(get_current_user)],
 )
 def list_entries(system_code: str, keyword: str = "", db: Session = Depends(get_db)):
