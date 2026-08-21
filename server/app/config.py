@@ -176,6 +176,22 @@ class Settings(BaseSettings):
     access_log_archive_days: int = 0
     audit_log_archive_days: int = 0
 
+    # ---------------- 代码侧收口（两波工程包，阶段十四） ----------------
+    # 任务/备份失败等运行告警的 webhook 出口（空=关闭）；同类告警冷却秒数
+    alert_webhook_url: str = ""
+    alert_cooldown_seconds: int = 600
+    # 会话管理：空闲超时（秒，0=不启用滑动超时）；单账号并发会话上限（0=不限）
+    session_idle_timeout_seconds: int = 0
+    session_max_concurrent: int = 0
+    # 双因素认证：要求 TOTP 的角色列表（逗号分隔，如 "admin,director"；空=关闭）
+    totp_required_roles: str = ""
+    # PII 列加密（SM4-CTR + HMAC-SM3 完整性 + HMAC 检索列）总开关。
+    # 开启前须先跑回填迁移；密钥经 security.derive_key(info="medplat:pii") 派生。
+    pii_encryption_enabled: bool = False
+    # 支付网关（通用 HTTP 网关式，协议见 routers/billing.py 的 PaymentGateway）
+    payment_gateway_url: str = ""
+    payment_gateway_key: str = ""
+
     @property
     def is_production(self) -> bool:
         return "prod" in (self.env, self.environment)
