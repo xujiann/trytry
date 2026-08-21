@@ -19,6 +19,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from .alerting import send_alert
 from .clock import now_naive
 from .config import settings
 from .models import (
@@ -44,9 +45,17 @@ PREPARATION_NOTICE_DAYS = 30
 
 
 def _alert(kind: str, title: str, count: int) -> None:
-    """把扫描结果推给在线管理端；无人在线时是空操作。"""
-    if count:
-        manager.broadcast({"type": kind, "title": title, "count": count})
+    """把扫描结果推给在线管理端；确定无人收到时转发 webhook 摘要兜底。
+
+    工程包 P2：预警广播原是"无人在线即空操作"——夜间/节假日无人值守时，
+    超期预警就此静默。broadcast 返回 False（无 Redis 总线且本进程无在线连接）
+    时把摘要转发到运维告警 webhook（未配置 webhook 时仍是空操作，行为不变）。
+    """
+    if not count:
+        return
+    delivered = manager.broadcast({"type": kind, "title": title, "count": count})
+    if not delivered:
+        send_alert(f"unattended:{kind}", f"{title}：{count} 条（无在线管理端，广播未送达）")
 
 
 @register("chronic_overdue_scan", "慢病随访超期扫描", 3600)
@@ -274,7 +283,11 @@ def access_log_archive(db: Session) -> tuple[int, str]:
             "created_at": r.created_at.isoformat(),
         }
 
-    return _archive_and_delete(db, AccessLog, "access_logs", cutoff, row_to_dict)
+    try:
+        return _archive_and_delete(db, AccessLog, "access_logs", cutoff, row_to_dict)
+    except Exception as exc:  # 工程包 P2：归档失败即留痕在丢失边缘，主动外发告警后照常上抛
+        send_alert("archive_failed:access_logs", f"调阅留痕归档失败：{type(exc).__name__}: {exc}")
+        raise
 
 
 @register("audit_archive", "审计日志归档", 86400)
@@ -320,4 +333,8 @@ def audit_archive(db: Session) -> tuple[int, str]:
             "last_entry_hash": last["entry_hash"],
         }
 
-    return _archive_and_delete(db, AuditLog, "audit_logs", cutoff, row_to_dict, anchors)
+    try:
+        return _archive_and_delete(db, AuditLog, "audit_logs", cutoff, row_to_dict, anchors)
+    except Exception as exc:  # 工程包 P2：审计归档失败涉及合规留存，主动外发告警后照常上抛
+        send_alert("archive_failed:audit_logs", f"审计日志归档失败：{type(exc).__name__}: {exc}")
+        raise

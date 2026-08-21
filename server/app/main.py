@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -447,44 +448,87 @@ _AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 # 登录请求不落审计（避免与口令尝试混淆，登录安全事件由专用日志承担）
 _AUDIT_EXEMPT = {"/api/auth/login"}
 
+_audit_logger = logging.getLogger("medplat.audit")
+
+# ---- 审计链尾的串行化（工程包 P2） ----
+# "读链尾 → 算哈希 → 插入"三步不是原子的：并发下两条记录读到同一个链尾，
+# prev_hash 相同、哈希链分叉，`GET /api/audit/verify` 报断链。
+# - PostgreSQL（多 worker/多实例的生产形态）：用**事务级咨询锁**串行化——
+#   `pg_advisory_xact_lock` 在同一事务内持有、commit/rollback 自动释放，
+#   跨进程有效且不会泄漏锁；
+# - SQLite（开发/测试，单文件单写者）：进程内全局 threading.Lock 即可——
+#   SQLite 生产已被 config 拒启，不存在跨进程并发写的合法形态。
+_AUDIT_SQLITE_LOCK = threading.Lock()
+#: 咨询锁键：任意约定常量，只须全平台唯一（0x41554449 = ASCII "AUDI"）
+_AUDIT_PG_LOCK_KEY = 0x41554449
+_AUDIT_PG_LOCK_SQL = text("SELECT pg_advisory_xact_lock(:key)")
+
 
 def _write_audit(request, status_code: int) -> None:
-    """审计落库：记录的是「写操作请求尝试」（含失败/异常），与业务事务解耦。"""
+    """审计落库：记录的是「写操作请求尝试」（含失败/异常），与业务事务解耦。
+
+    故障隔离（工程包 P2）：审计写失败（库抖动/锁超时/磁盘满）时 rollback +
+    logger.error 后**吞掉异常，不拖垮业务响应**——业务写已经成功，为一条
+    旁路留痕把响应打成 500 只会让现场更糟。取舍与读留痕（AccessLog 降级）
+    一致：丢失的审计记入错误日志，由日志告警兜底其完整性。
+    """
     username, user_id = "", None
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         claims = decode_token(auth[7:])
         if claims:
             username = claims.get("sub", "")
-    db = SessionLocal()
+    try:
+        db = SessionLocal()
+    except Exception:  # noqa: BLE001 - 见 docstring：审计失败不拖垮业务
+        _audit_logger.error("审计会话创建失败，本条审计丢失", exc_info=True)
+        return
     try:
         if username:
             user = db.query(User).filter(User.username == username).first()
             user_id = user.id if user else None
-        # 防篡改哈希链：本条 hash = MAC(密钥, 上一条 hash + 本条内容)。
-        # 串行取上一条：审计写入是低频旁路，为它上并发优化不值当，
-        # 而链的正确性依赖顺序。
-        prev = (
-            db.query(AuditLog.entry_hash)
-            .order_by(AuditLog.id.desc())
-            .limit(1)
-            .scalar()
-        ) or ""
-        entry = AuditLog(
-            user_id=user_id,
-            username=username or "anonymous",
-            method=request.method,
-            path=request.url.path,
-            status_code=status_code,
-            prev_hash=prev,
+
+        def _append_to_chain() -> None:
+            # 防篡改哈希链：本条 hash = MAC(密钥, 上一条 hash + 本条内容)。
+            # 串行取上一条：审计写入是低频旁路，为它上并发优化不值当，
+            # 而链的正确性依赖顺序（串行化机制见上方注释）。
+            if db.get_bind().dialect.name == "postgresql":
+                db.execute(_AUDIT_PG_LOCK_SQL, {"key": _AUDIT_PG_LOCK_KEY})
+            prev = (
+                db.query(AuditLog.entry_hash)
+                .order_by(AuditLog.id.desc())
+                .limit(1)
+                .scalar()
+            ) or ""
+            entry = AuditLog(
+                user_id=user_id,
+                username=username or "anonymous",
+                method=request.method,
+                path=request.url.path,
+                status_code=status_code,
+                prev_hash=prev,
+            )
+            entry.entry_hash = audit_entry_hash(
+                prev, entry.username, entry.method, entry.path, entry.status_code
+            )
+            db.add(entry)
+            db.commit()
+
+        if db.get_bind().dialect.name == "postgresql":
+            _append_to_chain()
+        else:
+            with _AUDIT_SQLITE_LOCK:
+                _append_to_chain()
+    except Exception:  # noqa: BLE001 - 见 docstring：审计失败不拖垮业务
+        with contextlib.suppress(Exception):
+            db.rollback()
+        _audit_logger.error(
+            "审计写入失败（业务响应不受影响，本条审计丢失）：%s %s -> %s",
+            request.method, request.url.path, status_code, exc_info=True,
         )
-        entry.entry_hash = audit_entry_hash(
-            prev, entry.username, entry.method, entry.path, entry.status_code
-        )
-        db.add(entry)
-        db.commit()
     finally:
-        db.close()
+        with contextlib.suppress(Exception):  # 连 close 都抛时也不迁怒业务响应
+            db.close()
 
 
 @app.middleware("http")
