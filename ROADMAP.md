@@ -64,7 +64,7 @@
   - ✅ 前置守卫已就位：`test_refactor_drift_guards.py` 快照 885 个端点，搬漏/改名立刻红；另有 `test_遍历本身没瞎` 防守卫自身失效（写这个守卫时先踩过一次：遍历写错、快照只存下 1 个端点、用例照样绿）。
   - ✅ **第一批 `/api/performance` 已搬回**：5 个 `improvements*` 端点从 `gapfill.py` 移进 `routers/performance.py`（gapfill 1125 → 945 行）。零漂移守卫实测 885 个端点纹丝不动。
   - ⚠️ **搬出来一个真问题**：同一个 `/api/performance` 前缀上挂着**两套鉴权**——原 `performance.py` 的 router 是 `require_roles("director")`，gapfill 那个是 `get_current_user`（登录即可）。这正是 ADR-0006 problem 点名的「鉴权分裂」。搬家**刻意没有合并两个路由**：并成一个会把这 5 个端点从「登录可见」收紧到「仅 director」，那是行为变更不是搬家。收益是此前这个分裂散在两个文件里根本看不见，现在并排躺在同一文件里。已逐端点实测鉴权与搬前一致。
-  - ☐ **决策：`/api/performance/improvements*` 该不该收紧到 director**？绩效整改任务含机构问题描述与责任人，现状是全员登录可读。属鉴权口径决策，需你定。
+  - ✅ **鉴权口径已定**：逐端点核过之后**不做统一收紧**——5 个里 4 个本就妥当（POST 三个各有 `require_roles` + `assert_org_writable`；`GET /improvements` 有 `scope_org_list` 只给本机构明细）。真正漏的只有 **`GET /improvement-stats`**：它连 `user` 参数都没有，任何登录账号拿到的都是**全县**汇总。修法是加 `scope_org_list(..., stats=True)`（统计走医共体范围、明细走本机构，这个区分 `visibility` 早就建好了），而不是锁成 director-only——`pages-public.js` 把它和明细列表放在同一个 `Promise.all` 里取，锁角色会让还能看列表的人整页报错。全域角色响应与整改前一致。回归四条，含「汇总与同屏列表口径一致」。
   - ☐ 下一批：`/api/tcm` / `/api/cssd` / `/api/education` / `/api/maternal` / `/api/homevisits` 依次搬回。
 - ☐ 统计簇 `analytics/metrics/reports/performance` 合并口径 → **[ADR-0007](docs/adr/0007-统计簇口径合并.md)（Proposed，待批）**。⚠️ 落地第一步**不是写代码，是出「同名指标在几处各算什么」的对照表交产品裁定**——统一口径必然让某些数字变，那是业务决策。对照表出来前本项不进入实施。
 - ◐ God 文件 `models.py`(3989 行/187 类) / `spd/routers/config.py`(1549 行) 分域拆包 → **[ADR-0008](docs/adr/0008-God文件分域拆包.md)（**Accepted**）**。拆成包 + `__init__.py` 重导出，**调用方 import 路径一行不改**；先拆 spd config 演练再动 models；动手前先加「模型名字集合零漂移」守卫。

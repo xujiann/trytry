@@ -433,15 +433,41 @@ def verify_task(
 
 
 @improvement_router.get("/improvement-stats")
-def improvement_stats(today: str | None = None, db: Session = Depends(get_db)):
+def improvement_stats(
+    today: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """整改任务汇总。
+
+    **按可见范围过滤**（`stats=True` 用医共体范围，牵头医院能看到片区汇总）。
+    此前这个函数连 `user` 参数都没有，任何登录账号拿到的都是**全县**汇总——
+    村医、药师都能看到全县有多少条整改任务、多少条超期、闭环率多少。
+    这与 `routers/jobs.py` T6.7 整改掉的是同一类问题："任务摘要里带着各类超期
+    数量……属于运营管理信息，没有理由对医师、药师开放"。
+
+    更要紧的是它与紧挨着的 `GET /improvements` **对不上**：那个用
+    `scope_org_list` 只给本机构的明细，这个却给全县的汇总。同一个页面上
+    （`pages-public.js` 把两者放在一个 Promise.all 里同时取），
+    列表显示"本机构 2 条"、上面的汇总却写"全县 87 条"——既漏数据又自相矛盾。
+
+    全域角色（admin/director）的可见范围本就是全域，响应与整改前一模一样。
+    """
     business_date = resolve_business_date(today).isoformat()
     by_status = row_dict(
-        db.query(ImprovementTask.status, func.count(ImprovementTask.id))
+        scope_org_list(
+            db, user,
+            db.query(ImprovementTask.status, func.count(ImprovementTask.id)),
+            ImprovementTask, None, stats=True,
+        )
         .group_by(ImprovementTask.status)
         .all()
     )
     overdue = (
-        db.query(func.count(ImprovementTask.id))
+        scope_org_list(
+            db, user, db.query(func.count(ImprovementTask.id)),
+            ImprovementTask, None, stats=True,
+        )
         .filter(
             ImprovementTask.status.in_(["open", "in_progress"]),
             ImprovementTask.due_date < business_date,
