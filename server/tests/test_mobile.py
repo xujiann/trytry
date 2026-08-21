@@ -69,7 +69,16 @@ def test_mobile_health_articles_public(client, admin_headers):
     assert any(a["title"] == "高血压防治要点" for a in articles)
 
 
-def test_portal_survey_two_factor(client, patient):
+@pytest.fixture()
+def legacy_verify_enabled(monkeypatch):
+    """旧双因子接口默认已关（portal_legacy_verify=False，A2/P1-3）；
+    这两条测的是接口本身的行为，显式开启后再测。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "portal_legacy_verify", True)
+
+
+def test_portal_survey_two_factor(client, patient, legacy_verify_enabled):
     # 身份核验失败
     bad = client.post(
         "/api/portal/surveys",
@@ -108,7 +117,7 @@ def test_portal_survey_two_factor(client, patient):
     assert invalid.status_code == 422
 
 
-def test_portal_my_archive_still_works(client, patient):
+def test_portal_my_archive_still_works(client, patient, legacy_verify_enabled):
     resp = client.get(
         f"/api/portal/my-archive?ehc_no={patient['ehc_no']}&id_card={patient['id_card']}"
     )

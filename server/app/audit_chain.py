@@ -7,18 +7,40 @@
 往后的每一条都对不上。但它**拦不住有库权限且知道平台密钥的人重算整条链**。
 真正的不可抵赖需要外部存证或只追加存储（WORM），那属于部署形态而非应用能力。
 把它说成"审计不可篡改"是夸大，平台侧能保证的是"改过就看得出来"。
+
+密钥（A1）：写入用 `signing_key("audit")`——平台密钥按用途派生的子密钥，
+不再与 JWT 共用一把。校验按 `verification_keys("audit")` 多口径回退：
+历史链段是原始 secret 直签的、轮换宽限期内还有 previous 签的段，
+逐条按"该条能通过的口径"判真——否则升级/轮换会把整段存量链误判为篡改。
 """
-from .config import settings
+import hmac
+
 from .gmcrypto import mac
+from .security import signing_key, verification_keys
 
 __all__ = ["audit_entry_hash", "verify_chain"]
+
+
+def _payload(prev_hash: str, username: str, method: str, path: str, status_code: int) -> bytes:
+    return f"{prev_hash}|{username}|{method}|{path}|{status_code}".encode()
 
 
 def audit_entry_hash(
     prev_hash: str, username: str, method: str, path: str, status_code: int
 ) -> str:
-    payload = f"{prev_hash}|{username}|{method}|{path}|{status_code}"
-    return mac(settings.secret.encode(), payload.encode()).hex()
+    """写入口径：一律当前密钥的 audit 派生子密钥。"""
+    return mac(signing_key("audit"), _payload(prev_hash, username, method, path, status_code)).hex()
+
+
+def _entry_hash_valid(entry) -> bool:
+    """本条内容与哈希是否相符：任一候选密钥口径算得出存储值即为真。"""
+    payload = _payload(
+        entry.prev_hash, entry.username, entry.method, entry.path, entry.status_code
+    )
+    return any(
+        hmac.compare_digest(mac(key, payload).hex(), entry.entry_hash)
+        for key in verification_keys("audit")
+    )
 
 
 def verify_chain(entries) -> dict:
@@ -29,12 +51,9 @@ def verify_chain(entries) -> dict:
     """
     prev = entries[0].prev_hash if entries else ""
     for entry in entries:
-        expected = audit_entry_hash(
-            entry.prev_hash, entry.username, entry.method, entry.path, entry.status_code
-        )
         if entry.prev_hash != prev:
             return {"valid": False, "broken_at": entry.id, "reason": "与上一条的哈希不衔接"}
-        if entry.entry_hash != expected:
+        if not _entry_hash_valid(entry):
             return {"valid": False, "broken_at": entry.id, "reason": "本条内容与哈希不符"}
         prev = entry.entry_hash
     return {"valid": True, "broken_at": None, "reason": ""}
