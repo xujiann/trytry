@@ -382,3 +382,121 @@ def list_women_health(
     if record_type:
         query = query.filter(WomenHealthRecord.record_type == record_type)
     return query.order_by(WomenHealthRecord.id.desc()).limit(200).all()
+
+
+
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from ..datetypes import DateStr
+from ..database import get_db
+from ..deps import get_current_user, require_roles, row_dict
+from ..models import (
+    PrenatalScreening,
+    User,
+)
+
+# ===========================================================================
+# ㉔ 产前筛查与诊断（高危自动标记）
+# ===========================================================================
+
+
+SCREEN_TYPES = {
+    "down": "唐氏血清学筛查",
+    "nipt": "无创产前基因检测",
+    "ultrasound": "超声结构筛查",
+    "diagnosis": "产前诊断",
+}
+# 触发孕产妇档案高危标记的筛查结论
+HIGH_RISK_RESULTS = {"high_risk", "critical"}
+
+
+class PrenatalScreeningCreate(BaseModel):
+    record_id: int
+    screen_type: str = Field(pattern="^(down|nipt|ultrasound|diagnosis)$")
+    screen_date: DateStr
+    gest_week: int | None = Field(default=None, ge=1, le=45)
+    result: str = Field(default="low_risk", pattern="^(low_risk|high_risk|critical)$")
+    indicator: str = ""
+    conclusion: str = ""
+
+
+def _screening_out(s: PrenatalScreening) -> dict:
+    return {
+        "id": s.id,
+        "record_id": s.record_id,
+        "screen_type": s.screen_type,
+        "screen_type_name": SCREEN_TYPES.get(s.screen_type, s.screen_type),
+        "screen_date": s.screen_date,
+        "gest_week": s.gest_week,
+        "result": s.result,
+        "indicator": s.indicator,
+        "conclusion": s.conclusion,
+        "flagged_high_risk": s.flagged_high_risk,
+    }
+
+
+@router.post(
+    "/screenings",
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))],
+)
+def create_screening(
+    body: PrenatalScreeningCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """产前筛查/诊断记录：高风险与临界风险结论自动标记孕产妇档案为高危并追加风险因素。"""
+    record = db.get(MaternalRecord, body.record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="孕产妇档案不存在")
+    screening = PrenatalScreening(created_by=user.id, **body.model_dump())
+    screening.flagged_high_risk = body.result in HIGH_RISK_RESULTS
+    if screening.flagged_high_risk:
+        record.high_risk = True
+        factor = f"{SCREEN_TYPES[body.screen_type]}{'高风险' if body.result == 'high_risk' else '临界风险'}"
+        record.risk_factors = (
+            f"{record.risk_factors}；{factor}" if record.risk_factors else factor
+        )
+    db.add(screening)
+    db.commit()
+    db.refresh(screening)
+    return _screening_out(screening)
+
+
+@router.get("/screenings")
+def list_prenatal_screenings(
+    record_id: int | None = None, result: str | None = None, db: Session = Depends(get_db)
+):
+    query = db.query(PrenatalScreening)
+    if record_id is not None:
+        query = query.filter(PrenatalScreening.record_id == record_id)
+    if result:
+        query = query.filter(PrenatalScreening.result == result)
+    return [
+        _screening_out(s) for s in query.order_by(PrenatalScreening.id.desc()).limit(200).all()
+    ]
+
+
+@router.get("/screening-stats")
+def screening_stats(db: Session = Depends(get_db)):
+    """筛查统计：按筛查类型与结论分布，高危检出率。"""
+    by_type = row_dict(
+        db.query(PrenatalScreening.screen_type, func.count(PrenatalScreening.id))
+        .group_by(PrenatalScreening.screen_type)
+        .all()
+    )
+    by_result = row_dict(
+        db.query(PrenatalScreening.result, func.count(PrenatalScreening.id))
+        .group_by(PrenatalScreening.result)
+        .all()
+    )
+    total = sum(by_result.values())
+    high = sum(v for k, v in by_result.items() if k in HIGH_RISK_RESULTS)
+    return {
+        "total": total,
+        "by_type": {k: {"count": v, "name": SCREEN_TYPES.get(k, k)} for k, v in by_type.items()},
+        "by_result": by_result,
+        "high_risk_detect_rate_pct": round(high * 100.0 / total, 2) if total else 0.0,
+    }

@@ -239,3 +239,194 @@ def list_techniques(keyword: str = "", db: Session = Depends(get_db)):
         like = f"%{keyword}%"
         query = query.filter((TcmTechnique.name.like(like)) | (TcmTechnique.indication.like(like)))
     return query.order_by(TcmTechnique.id).limit(200).all()
+
+
+from typing import Any
+
+from datetime import date, timedelta
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from ..datetypes import DateStr
+from ..visibility import assert_obj_org_writable, assert_org_writable
+from ..database import get_db
+from ..deps import get_current_user, require_roles, resolve_business_date
+from ..models import (
+    TcmFormula,
+    TcmPreparationBatch,
+    User,
+)
+
+# ===========================================================================
+# ⑭ 中药制剂管理（配方 / 批次 / 效期）
+# ===========================================================================
+
+
+DOSAGE_FORMS = {
+    "pill": "丸剂",
+    "powder": "散剂",
+    "paste": "膏剂",
+    "granule": "颗粒剂",
+    "decoction": "合剂/汤剂",
+}
+
+
+class FormulaCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1)
+    dosage_form: str = Field(default="decoction", pattern="^(pill|powder|paste|granule|decoction)$")
+    composition: str = ""
+    process: str = ""
+    indication: str = ""
+    shelf_life_months: int = Field(default=12, ge=1, le=120)
+
+
+def _formula_out(f: TcmFormula) -> dict:
+    return {
+        "id": f.id,
+        "code": f.code,
+        "name": f.name,
+        "dosage_form": f.dosage_form,
+        "dosage_form_name": DOSAGE_FORMS.get(f.dosage_form, f.dosage_form),
+        "composition": f.composition,
+        "process": f.process,
+        "indication": f.indication,
+        "shelf_life_months": f.shelf_life_months,
+        "active": f.active,
+    }
+
+
+@router.post(
+    "/formulas",
+    status_code=201,
+    dependencies=[Depends(require_roles("pharmacist", "doctor"))],  # 制剂配方由药师/中医师维护
+)
+def create_formula(body: FormulaCreate, db: Session = Depends(get_db)):
+    """新增中药制剂配方（编码唯一）。"""
+    if db.query(TcmFormula).filter(TcmFormula.code == body.code).first():
+        raise HTTPException(status_code=409, detail="制剂编码已存在")
+    formula = insert_or_conflict(db, TcmFormula(**body.model_dump()), "制剂编码已存在")
+    return _formula_out(formula)
+
+
+@router.get("/formulas")
+def list_formulas(active: bool | None = None, db: Session = Depends(get_db)):
+    query = db.query(TcmFormula)
+    if active is not None:
+        query = query.filter(TcmFormula.active.is_(active))
+    return [_formula_out(f) for f in query.order_by(TcmFormula.id.desc()).limit(200).all()]
+
+
+class BatchCreate(BaseModel):
+    formula_id: int
+    batch_no: str = Field(min_length=1, max_length=32)
+    org_id: int
+    quantity: int = Field(ge=1)
+    unit: str = "剂"
+    produced_date: DateStr
+    # 不传则按配方有效期（月）自动推算
+    expire_date: str = ""
+
+
+def _batch_out(b: TcmPreparationBatch, today: str) -> dict:
+    return {
+        "id": b.id,
+        "formula_id": b.formula_id,
+        "batch_no": b.batch_no,
+        "org_id": b.org_id,
+        "quantity": b.quantity,
+        "unit": b.unit,
+        "produced_date": b.produced_date,
+        "expire_date": b.expire_date,
+        "status": b.status,
+        "expired": bool(b.expire_date and b.expire_date < today),
+    }
+
+
+@router.post(
+    "/preparation-batches",
+    status_code=201,
+    dependencies=[Depends(require_roles("pharmacist", "operator"))],
+)
+def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
+    """制剂投料生产建批次：效期缺省按配方有效期（月）自动推算。"""
+    formula = db.get(TcmFormula, body.formula_id)
+    if formula is None:
+        raise HTTPException(status_code=404, detail="制剂配方不存在")
+    if not formula.active:
+        raise HTTPException(status_code=409, detail="配方已停用，不可投产")
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="生产机构不存在")
+    if db.query(TcmPreparationBatch).filter(TcmPreparationBatch.batch_no == body.batch_no).first():
+        raise HTTPException(status_code=409, detail="批号已存在")
+    expire_date = body.expire_date
+    if not expire_date:
+        produced = date.fromisoformat(body.produced_date)
+        expire_date = (produced + timedelta(days=30 * formula.shelf_life_months)).isoformat()
+    if expire_date <= body.produced_date:
+        raise HTTPException(status_code=422, detail="效期须晚于生产日期")
+    batch = insert_or_conflict(db, TcmPreparationBatch(
+            **body.model_dump(exclude={"expire_date"}), expire_date=expire_date, created_by=user.id
+        ), "批号已存在")
+    return _batch_out(batch, date.today().isoformat())
+
+
+@router.get("/preparation-batches")
+def list_batches(
+    formula_id: int | None = None,
+    status: str | None = None,
+    today: str | None = None,
+    db: Session = Depends(get_db),
+):
+    business_date = resolve_business_date(today).isoformat()
+    query = db.query(TcmPreparationBatch)
+    if formula_id is not None:
+        query = query.filter(TcmPreparationBatch.formula_id == formula_id)
+    if status:
+        query = query.filter(TcmPreparationBatch.status == status)
+    return [
+        _batch_out(b, business_date)
+        for b in query.order_by(TcmPreparationBatch.id.desc()).limit(200).all()
+    ]
+
+
+@router.get("/preparation-batches/expiring")
+def expiring_batches(days: int = 30, today: str | None = None, db: Session = Depends(get_db)):
+    """效期预警：N 天内到期或已过期的未召回批次。"""
+    business_date = resolve_business_date(today)
+    cutoff = (business_date + timedelta(days=max(days, 0))).isoformat()
+    rows = (
+        db.query(TcmPreparationBatch)
+        .filter(
+            TcmPreparationBatch.status != "recalled",
+            TcmPreparationBatch.expire_date != "",
+            TcmPreparationBatch.expire_date <= cutoff,
+        )
+        .order_by(TcmPreparationBatch.expire_date)
+        .all()
+    )
+    return [_batch_out(b, business_date.isoformat()) for b in rows]
+
+
+@router.post(
+    "/preparation-batches/{batch_id}/release",
+    dependencies=[Depends(require_roles("pharmacist", "operator"))],
+)
+def release_batch(batch_id: int, today: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """批次发放：过期批次禁止发放（效期管控）。"""
+    batch = db.get(TcmPreparationBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    assert_obj_org_writable(db, user, batch)
+    if batch.status != "produced":
+        raise HTTPException(status_code=409, detail=f"批次当前状态 {batch.status} 不可发放")
+    business_date = resolve_business_date(today).isoformat()
+    if batch.expire_date and batch.expire_date < business_date:
+        raise HTTPException(status_code=409, detail="批次已过效期，禁止发放")
+    batch.status = "released"
+    db.commit()
+    db.refresh(batch)
+    return _batch_out(batch, business_date)
