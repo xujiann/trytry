@@ -99,8 +99,48 @@ class CostItemCreate(BaseModel):
     note: str = ""
 
 
+
+
+class CostItemOut(BaseModel):
+    id: int
+    batch_id: int
+    cost_type: str
+    cost_type_name: str
+    #: `CssdCostItem.amount` 是 `Money`（`Numeric(14,2, asdecimal=False)`），出参恒为 float
+    amount: float
+    note: str
+
+
+class BatchCost(BaseModel):
+    batch_id: int
+    batch_no: str
+    item_name: str
+    quantity: int
+    #: `round(totals.get(b.id, 0), 2)`——**没有成本项时 `round(0, 2)` 返回 int `0`**，
+    #: 有成本项时才是 float。声明成 float 会把 `0` 变成 `0.0`，那是改响应字节
+    #: （CLAUDE.md §11）。故写成联合类型，让 Pydantic 原样透传。
+    total_cost: int | float
+    #: 除法结果，两条分支都是 float（`round(a/b, 2)` 或字面量 `0.0`）
+    unit_cost: float
+
+
+class CostTypeAmount(BaseModel):
+    amount: float
+    name: str
+
+
+class CostStatsOut(BaseModel):
+    batches: list[BatchCost]
+    total_cost: int | float          # 同 BatchCost.total_cost，空集时是 int 0
+    total_quantity: int
+    overall_unit_cost: float
+    #: 键是成本类型码（labor/material/energy/depreciation），随字典增删而变，故用 dict
+    by_cost_type: dict[str, CostTypeAmount]
+
+
 @router.post(
-    "/cost-items", status_code=201, dependencies=[Depends(require_roles("operator", "director"))]
+    "/cost-items", status_code=201, response_model=CostItemOut,
+    dependencies=[Depends(require_roles("operator", "director"))],
 )
 def create_cost_item(
     body: CostItemCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -122,7 +162,7 @@ def create_cost_item(
     }
 
 
-@router.get("/cost-items")
+@router.get("/cost-items", response_model=list[CostItemOut])
 def list_cost_items(batch_id: int | None = None, db: Session = Depends(get_db)):
     query = db.query(CssdCostItem)
     if batch_id is not None:
@@ -140,7 +180,7 @@ def list_cost_items(batch_id: int | None = None, db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/cost-stats")
+@router.get("/cost-stats", response_model=CostStatsOut)
 def cost_stats(batch_id: int | None = None, db: Session = Depends(get_db)):
     """成本统计：按批次汇总总成本与单件成本，并给出成本构成与整体单件成本。"""
     batch_query = db.query(SterilizationBatch)
