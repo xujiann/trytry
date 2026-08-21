@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+# 本地环境变量文件（照 .env.example 复制而来）——里面是真实密钥，绝不入库
+.env
 *.db
 .pytest_cache/
 .venv/

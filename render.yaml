@@ -7,6 +7,8 @@ services:
     dockerfilePath: ./server/Dockerfile
     dockerContext: ./server
     envVars:
+      # 公网**演示**实例：种子数据全部为虚构演示数据（人名/身份证/病历均为造数），
+      # 不含任何真实患者信息。镜像默认已不带演示种子（A8），这里显式开启。
       - key: MEDPLAT_SEED_DEMO
         value: "1"
       # 演示站也不该用代码里的默认密钥签 JWT——那串东西在仓库里人人可见，
@@ -14,5 +16,8 @@ services:
       # 生成一个随机值并存在它自己的密钥库里。
       - key: MEDPLAT_SECRET
         generateValue: true
+      # 管理员口令必填、不入库不入 git：`sync: false` 要求部署者在 Render
+      # 控制台手工填入（≥12 位强口令，应用侧生产守卫会拒绝弱口令）。
+      # 之前用 generateValue 会生成一个没人知道的口令，演示者反而登不进去。
       - key: MEDPLAT_ADMIN_PASSWORD
-        generateValue: true
+        sync: false
