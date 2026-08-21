@@ -46,8 +46,12 @@ PLATFORM_ALLOWLIST = {
 COLUMN_TYPES = {"Money", "utcnow"}
 
 #: 平台侧允许触碰子系统的两处，都是"装卸"性质，不是业务耦合。
+#:
+#: 键是**相对 app/ 的路径**而不是文件名：`models.py` 拆包后触点落在
+#: `models/__init__.py`（ADR-0008），而按文件名放行 `__init__.py`
+#: 等于给每一个包都开了口子。按路径匹配比原来的按文件名更紧。
 PLATFORM_TOUCHPOINTS = {
-    "models.py": "末尾 import 子系统模型，让 Base.metadata 认识 spd_* 表",
+    "models/__init__.py": "末尾 import 子系统模型，让 Base.metadata 认识 spd_* 表",
     "main.py": "调 register_spd / seed_spd 装卸子系统",
 }
 
@@ -106,11 +110,11 @@ def test_平台不得依赖慢专病子系统():
     for path in _py_files(APP_DIR):
         if os.path.abspath(path).startswith(os.path.abspath(SPD_DIR)):
             continue
-        name = os.path.basename(path)
+        rel = os.path.relpath(path, APP_DIR).replace(os.sep, "/")
         for _level, target in _imports(path):
             if "spd" not in target.split("."):
                 continue
-            if name in PLATFORM_TOUCHPOINTS:
+            if rel in PLATFORM_TOUCHPOINTS:
                 continue
             offenders.append(f"{os.path.relpath(path, APP_DIR)} → {target}")
     assert offenders == [], (

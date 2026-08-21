@@ -72,7 +72,10 @@
   - ✅ **演练完成：`spd/routers/config.py` 1549 行 → 包（8 个文件，最大 331 行）**。按业务分节拆成 catalog / paths / scales / teams / devices / centers 六个子模块 + `_base`（路由对象与跨节工具）。**导入路径一行没改**（`from .routers import config` 照旧），零漂移守卫实测 885 端点 + 246 模型纹丝不动。
   - 拆之前先用 AST 扫了一遍**跨节引用**：`_bump_version`（专病档案↔标准路径）、`_qr_svg`（评估量表↔村医档案）、`_target_out`（管理目标↔专病档案）三个共用件——靠肉眼读 1549 行是找不全的，找漏一个就是 NameError。前两个跨了分组边界，收进 `_base`。
   - 另加两条守卫：**导入路径不变**、**子模块注册顺序与原分节一致**。后者不是洁癖——路由靠 import 时装饰器注册，顺序决定 FastAPI 匹配优先级，乱序**不报错**只会让某些路径悄悄匹配到别的处理函数。变异验证：打乱顺序 → 转红；漏掉一个子模块 → 端点守卫报「消失 4 个」。
-  - ☐ 下一步：按同样范式拆 `models.py`(3989 行/187 类)。
+  - ✅ **`models.py` 3989 行 / 187 类 → 分域包（16 个文件，最大 505 行）**：core / clinical / emergency / pharmacy / inpatient / chronic / publichealth / contracts / finance / assets / hr / quality / platform / portal + `_base`（Money、utcnow）。**导入路径一行没改**（`from ..models import X` 照旧），零漂移守卫实测 885 端点 + 246 模型不变，空库迁移仍建出 247 张表，`SCHEMA.md` 无 diff。
+  - 拆之前先用 AST 查了两件事：① 187 个类是**完整划分**（无遗漏无重复，脚本断言）；② 14 处 `Mapped[SomeClass]` 的**硬顺序依赖**——本仓库没开 `from __future__ import annotations`，这类注解在建类时就要求被引用的类已定义。14 对全部落在同一域内，故各域内保持原文件顺序即可满足。
+  - 顺带收紧了 spd 边界用例：`PLATFORM_TOUCHPOINTS` 从**按文件名**匹配改成**按相对路径**。拆包后触点落在 `models/__init__.py`，按文件名放行 `__init__.py` 等于给每个包都开口子。
+  - 实测确认："漏掉一个域"**不会静默**——187 个类全都被某处按名 import，漏一个立刻 ImportError。快照守卫仍有价值（挡的是将来新增却没人按名引用的类），已用加一个探针类验证它能报出单个类的增减。
 - ◐ 前端组件抽取与工具函数合并（[ADR-0009](docs/adr/0009-前端组件抽取与工具函数合并.md) **Accepted**）。**第一步已完成**：`$` 与 `esc` 三份逐字相同的实现合并进 `static/shared.js`，三个 HTML 入口都把它排在第一个 script；守卫 `test_frontend_shared_utils.py` 十三条（含转义表逐字符、加载顺序、消费方不得再自定义），三处变异各自转红。动机不是整洁而是安全：`esc()` 是 §8 红线，近百处手写插值，一份实现才有一处审查点。**`api()` 刻意未合并**——三套认证语义不同（localStorage / sessionStorage / 不带令牌），连 401 的处理时机与文案都不一样，合并需要把令牌来源与 401 回调参数化，那是行为重构不是去重，留作后续单独一步。
 - ☐ ADR-0009 第二步：抽 `panel()`/`table()` 并**逐页**迁移，每次只迁一页，不设完成期限。
 

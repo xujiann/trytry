@@ -23,6 +23,8 @@ ADR-0006（倾倒场路由回归业务前缀）与 ADR-0008（God 文件分域�
 所以下面额外加了 `test_遍历本身没瞎`：数量低于下限直接失败，
 遍历方式将来被 FastAPI 改坏时会先炸在这里，而不是悄悄放行。
 """
+from pathlib import Path
+
 from fastapi import APIRouter
 from fastapi.routing import APIRoute
 
@@ -1288,4 +1290,47 @@ def test_配置域子模块的注册顺序与原分节一致():
     actual = [m.strip() for m in line.removeprefix("from . import ").split("#")[0].split(",")]
     assert actual == expected, (
         f"子模块导入顺序变了：{actual}，应为 {expected}（= 原文件的分节顺序）"
+    )
+
+
+def test_models拆包后导入路径不变():
+    """全仓库上千处 `from ..models import X` 必须照旧可用。
+
+    ADR-0008 选方案 B（拆包 + `__init__` 重导出）而不是改所有 import，
+    理由就是后者换不来任何功能收益。这条钉住那个承诺。
+    """
+    from app import models
+
+    # 各域各抽一个，外加子系统模型与两个列约定
+    for name in ("User", "Patient", "Encounter", "Prescription", "Admission",
+                 "ChronicPatient", "MaternalRecord", "FamilyDoctorContract",
+                 "Voucher", "Asset", "Employee", "AdverseEvent", "Attachment",
+                 "ResidentAccount", "EmergencyCase", "SpdEnrollment",
+                 "Money", "utcnow"):
+        assert hasattr(models, name), f"app.models.{name} 不见了——调用方会直接 ImportError"
+
+
+def test_models各域模块都被__init__导入():
+    """漏掉一个域 = 那批表不进 `Base.metadata` = 建库静默少表。
+
+    这是拆 models 最危险的失败模式：**不报错**。上面的 SNAPSHOT_MODELS
+    会兜住，这条再把原因说清楚，省得下次有人对着"少了 12 个类"发愣。
+    """
+    import pkgutil
+
+    from app import models
+
+    on_disk = {
+        m.name for m in pkgutil.iter_modules(models.__path__)
+        if not m.name.startswith("_")
+    }
+    source = (Path(models.__file__)).read_text(encoding="utf-8")
+    imported = {
+        line.removeprefix("from .").split(" import")[0]
+        for line in source.splitlines()
+        if line.startswith("from .") and " import *" in line
+    }
+    assert on_disk <= imported, (
+        f"这些域模块躺在包里却没被 __init__ 导入：{sorted(on_disk - imported)}——"
+        "它们的表不会进 Base.metadata，建库时会静默少表"
     )
