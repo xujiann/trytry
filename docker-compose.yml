@@ -23,7 +23,10 @@ services:
       MEDPLAT_ADMIN_PASSWORD: ${MEDPLAT_ADMIN_PASSWORD:?请先设置 MEDPLAT_ADMIN_PASSWORD（≥12 位强口令）}
       MEDPLAT_UPLOAD_DIR: /data/uploads
       MEDPLAT_ENV: prod
-      MEDPLAT_SEED_DEMO: "0"
+      # A8：镜像默认已**不带**演示种子（Dockerfile 不再 ENV MEDPLAT_SEED_DEMO=1）。
+      # 生产档保持 0；要起演示档需**显式**开：export MEDPLAT_SEED_DEMO=1 再 up，
+      # 演示数据均为虚构，不得对公网生产库开启。
+      MEDPLAT_SEED_DEMO: "${MEDPLAT_SEED_DEMO:-0}"
     volumes:
       - medplat-uploads:/data/uploads
     depends_on:
@@ -31,6 +34,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # 健康检查：镜像自带 HEALTHCHECK（python 探测 /api/health）；此处显式声明同一探针，
+    # 让不读 Dockerfile 的人在 compose 里也看得见，且 `docker compose ps` 有健康态。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,httpx;httpx.get('http://127.0.0.1:%s/api/health' % os.environ.get('PORT','8000'),timeout=4).raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    # A8：资源上限——单体 + 多 worker 失控时别把宿主机拖死（compose v2 非 swarm 也生效）
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
     restart: unless-stopped
 
   db:
