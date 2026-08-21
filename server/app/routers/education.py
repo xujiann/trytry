@@ -257,3 +257,339 @@ def list_live_sessions(status: str | None = None, db: Session = Depends(get_db))
         }
         for s in q.order_by(LiveSession.id.desc()).limit(200).all()
     ]
+
+
+
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from ..datetypes import DateStr
+from ..concurrency import add_amount, claim_quota, take_amount
+from ..visibility import assert_obj_org_writable, assert_org_writable
+from ..database import get_db
+from ..deps import get_current_user, require_roles, row_dict
+from ..models import (
+    Attachment,
+    CourseMaterial,
+    Organization,
+    TcmTechnique,
+    TrainingAssessment,
+    TrainingEnrollment,
+    TrainingPlan,
+    User,
+)
+
+# ===========================================================================
+# ⑳ 课件资源管理 + ㉑ 适宜技术实训管理
+# ===========================================================================
+
+
+MATERIAL_TYPES = {"slide": "课件", "video": "视频", "doc": "文档", "link": "外链"}
+
+
+class MaterialCreate(BaseModel):
+    title: str = Field(min_length=1)
+    material_type: str = Field(default="slide", pattern="^(slide|video|doc|link)$")
+    url: str = ""
+
+
+def _material_out(m: CourseMaterial, attachments: int = 0) -> dict:
+    return {
+        "id": m.id,
+        "course_id": m.course_id,
+        "title": m.title,
+        "material_type": m.material_type,
+        "material_type_name": MATERIAL_TYPES.get(m.material_type, m.material_type),
+        "url": m.url,
+        "play_count": m.play_count,
+        "attachments": attachments,
+    }
+
+
+@router.post(
+    "/courses/{course_id}/materials",
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "public_health", "operator", "doctor"))],
+)
+def create_material(
+    course_id: int,
+    body: MaterialCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """课程下挂课件资源（附件另经 /api/attachments 以 owner_type=course_material 上传）。"""
+    if db.get(Course, course_id) is None:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    material = CourseMaterial(course_id=course_id, created_by=user.id, **body.model_dump())
+    db.add(material)
+    db.commit()
+    db.refresh(material)
+    return _material_out(material)
+
+
+@router.get("/courses/{course_id}/materials")
+def list_materials(course_id: int, db: Session = Depends(get_db)):
+    if db.get(Course, course_id) is None:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    materials = (
+        db.query(CourseMaterial)
+        .filter(CourseMaterial.course_id == course_id)
+        .order_by(CourseMaterial.id.desc())
+        .all()
+    )
+    counts = row_dict(
+        db.query(Attachment.owner_id, func.count(Attachment.id))
+        .filter(
+            Attachment.owner_type == "course_material",
+            Attachment.owner_id.in_([m.id for m in materials] or [0]),
+        )
+        .group_by(Attachment.owner_id)
+        .all()
+    )
+    return [_material_out(m, counts.get(m.id, 0)) for m in materials]
+
+
+@router.post("/materials/{material_id}/play")
+def play_material(material_id: int, db: Session = Depends(get_db)):
+    """点播计数：每次调阅 +1（点播量用于课件资源热度统计）。"""
+    material = db.get(CourseMaterial, material_id)
+    if material is None:
+        raise HTTPException(status_code=404, detail="课件不存在")
+    add_amount(db, CourseMaterial, material.id, "play_count", 1)
+    db.commit()
+    db.refresh(material)
+    return _material_out(material)
+
+
+@router.get("/material-stats")
+def material_stats(db: Session = Depends(get_db)):
+    """课件点播排行（前 20）与总点播量。"""
+    materials = (
+        db.query(CourseMaterial).order_by(CourseMaterial.play_count.desc()).limit(20).all()
+    )
+    total_plays = db.query(func.coalesce(func.sum(CourseMaterial.play_count), 0)).scalar() or 0
+    return {
+        "total_materials": db.query(func.count(CourseMaterial.id)).scalar() or 0,
+        "total_plays": int(total_plays),
+        "top": [_material_out(m) for m in materials],
+    }
+
+
+class PlanCreate(BaseModel):
+    title: str = Field(min_length=1)
+    org_id: int
+    technique_id: int | None = None
+    plan_date: DateStr
+    capacity: int = Field(default=30, ge=1, le=1000)
+    trainer: str = ""
+
+
+def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
+    return {
+        "id": p.id,
+        "title": p.title,
+        "technique_id": p.technique_id,
+        "org_id": p.org_id,
+        "plan_date": p.plan_date,
+        "capacity": p.capacity,
+        "trainer": p.trainer,
+        "status": p.status,
+        "enrolled": enrolled,
+        "remaining": max(p.capacity - enrolled, 0),
+    }
+
+
+@router.post(
+    "/training-plans",
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "doctor", "public_health"))],
+)
+def create_plan(body: PlanCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
+    """发布适宜技术实训计划。"""
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="承办机构不存在")
+    if body.technique_id is not None and db.get(TcmTechnique, body.technique_id) is None:
+        raise HTTPException(status_code=404, detail="适宜技术不存在")
+    plan = TrainingPlan(created_by=user.id, **body.model_dump())
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return _plan_out(plan)
+
+
+@router.get("/training-plans")
+def list_plans(status: str | None = None, db: Session = Depends(get_db)):
+    query = db.query(TrainingPlan)
+    if status:
+        query = query.filter(TrainingPlan.status == status)
+    plans = query.order_by(TrainingPlan.id.desc()).limit(200).all()
+    return [_plan_out(p, p.enrolled_count) for p in plans]
+
+
+@router.post("/training-plans/{plan_id}/enroll", status_code=201)
+def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """学员报名（登录用户本人报名，名额满则 409）。"""
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="实训计划不存在")
+    assert_obj_org_writable(db, user, plan)
+    if plan.status != "open":
+        raise HTTPException(status_code=409, detail=f"计划当前状态 {plan.status} 不接受报名")
+    existing = (
+        db.query(TrainingEnrollment)
+        .filter(TrainingEnrollment.plan_id == plan_id, TrainingEnrollment.user_id == user.id)
+        .first()
+    )
+    if existing and existing.status == "enrolled":
+        raise HTTPException(status_code=409, detail="已报名该实训计划")
+    # 原子占额：判满与占位同一条 SQL。原先 COUNT>=capacity 再插是 check-then-act，
+    # 并发下多人同数到"还差一个"一起挤进来（实测容量 2 报上 3 人）。
+    # 占额与写报名行同一个事务提交——commit 失败则一起回滚，名额不泄。
+    if not claim_quota(db, TrainingPlan, plan_id, "enrolled_count", "capacity"):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="实训名额已满")
+    if existing:
+        existing.status = "enrolled"
+        enrollment = existing
+    else:
+        enrollment = TrainingEnrollment(plan_id=plan_id, user_id=user.id)
+        db.add(enrollment)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 同一个人重复点报名，两个请求都查不到既有记录就都去插；后插的撞唯一
+        # 约束回滚——占额也在同一事务里，一并回退，不会白占一个名额。
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已报名该实训计划") from None
+    db.refresh(enrollment)
+    return {
+        "id": enrollment.id,
+        "plan_id": plan_id,
+        "user_id": user.id,
+        "status": enrollment.status,
+    }
+
+
+@router.post("/training-plans/{plan_id}/cancel-enroll")
+def cancel_enroll(plan_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    enrollment = (
+        db.query(TrainingEnrollment)
+        .filter(TrainingEnrollment.plan_id == plan_id, TrainingEnrollment.user_id == user.id)
+        .first()
+    )
+    if enrollment is None or enrollment.status != "enrolled":
+        raise HTTPException(status_code=404, detail="未报名该实训计划")
+    enrollment.status = "cancelled"
+    # 退报名释放一个名额，与占额对称；take_amount 的 WHERE 挡住减成负数
+    take_amount(db, TrainingPlan, plan_id, "enrolled_count", 1)
+    db.commit()
+    return {"plan_id": plan_id, "user_id": user.id, "status": "cancelled"}
+
+
+@router.get("/training-plans/{plan_id}/enrollments")
+def list_enrollments(plan_id: int, db: Session = Depends(get_db)):
+    if db.get(TrainingPlan, plan_id) is None:
+        raise HTTPException(status_code=404, detail="实训计划不存在")
+    rows = (
+        db.query(TrainingEnrollment, User.username, User.full_name)
+        .join(User, TrainingEnrollment.user_id == User.id)
+        .filter(TrainingEnrollment.plan_id == plan_id)
+        .order_by(TrainingEnrollment.id)
+        .all()
+    )
+    return [
+        {
+            "id": e.id,
+            "user_id": e.user_id,
+            "username": username,
+            "full_name": full_name,
+            "status": e.status,
+        }
+        for e, username, full_name in rows
+    ]
+
+
+class AssessmentCreate(BaseModel):
+    user_id: int
+    score: float = Field(ge=0, le=100)
+    comment: str = ""
+
+
+@router.post(
+    "/training-plans/{plan_id}/assessments",
+    status_code=201,
+    dependencies=[Depends(require_roles("director", "doctor"))],
+)
+def create_assessment(
+    plan_id: int,
+    body: AssessmentCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """实训考核录入：须已报名，60 分及格，同一计划同一学员唯一（重录更新成绩）。"""
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="实训计划不存在")
+    # 考核由办实训的机构录入（plan.org_id 是主办方）
+    assert_obj_org_writable(db, user, plan)
+    enrolled = (
+        db.query(TrainingEnrollment)
+        .filter(
+            TrainingEnrollment.plan_id == plan_id,
+            TrainingEnrollment.user_id == body.user_id,
+            TrainingEnrollment.status == "enrolled",
+        )
+        .first()
+    )
+    if enrolled is None:
+        raise HTTPException(status_code=409, detail="该学员未报名本次实训，不可录入考核")
+    record, _ = upsert_unique(
+        db,
+        TrainingAssessment,
+        keys={"plan_id": plan_id, "user_id": body.user_id},
+        values={
+            "score": body.score,
+            "passed": body.score >= 60,
+            "comment": body.comment,
+            "assessor": user.full_name or user.username,
+        },
+    )
+    return {
+        "id": record.id,
+        "plan_id": plan_id,
+        "user_id": record.user_id,
+        "score": record.score,
+        "passed": record.passed,
+        "assessor": record.assessor,
+    }
+
+
+@router.get("/training-plans/{plan_id}/assessments")
+def list_assessments(plan_id: int, db: Session = Depends(get_db)):
+    rows = (
+        db.query(TrainingAssessment)
+        .filter(TrainingAssessment.plan_id == plan_id)
+        .order_by(TrainingAssessment.score.desc())
+        .all()
+    )
+    passed = sum(1 for r in rows if r.passed)
+    return {
+        "total": len(rows),
+        "passed": passed,
+        "pass_rate_pct": round(passed * 100.0 / len(rows), 2) if rows else 0.0,
+        "items": [
+            {
+                "id": r.id,
+                "user_id": r.user_id,
+                "score": r.score,
+                "passed": r.passed,
+                "comment": r.comment,
+                "assessor": r.assessor,
+            }
+            for r in rows
+        ],
+    }

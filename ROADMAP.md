@@ -65,7 +65,9 @@
   - ✅ **第一批 `/api/performance` 已搬回**：5 个 `improvements*` 端点从 `gapfill.py` 移进 `routers/performance.py`（gapfill 1125 → 945 行）。零漂移守卫实测 885 个端点纹丝不动。
   - ⚠️ **搬出来一个真问题**：同一个 `/api/performance` 前缀上挂着**两套鉴权**——原 `performance.py` 的 router 是 `require_roles("director")`，gapfill 那个是 `get_current_user`（登录即可）。这正是 ADR-0006 problem 点名的「鉴权分裂」。搬家**刻意没有合并两个路由**：并成一个会把这 5 个端点从「登录可见」收紧到「仅 director」，那是行为变更不是搬家。收益是此前这个分裂散在两个文件里根本看不见，现在并排躺在同一文件里。已逐端点实测鉴权与搬前一致。
   - ✅ **鉴权口径已定**：逐端点核过之后**不做统一收紧**——5 个里 4 个本就妥当（POST 三个各有 `require_roles` + `assert_org_writable`；`GET /improvements` 有 `scope_org_list` 只给本机构明细）。真正漏的只有 **`GET /improvement-stats`**：它连 `user` 参数都没有，任何登录账号拿到的都是**全县**汇总。修法是加 `scope_org_list(..., stats=True)`（统计走医共体范围、明细走本机构，这个区分 `visibility` 早就建好了），而不是锁成 director-only——`pages-public.js` 把它和明细列表放在同一个 `Promise.all` 里取，锁角色会让还能看列表的人整页报错。全域角色响应与整改前一致。回归四条，含「汇总与同屏列表口径一致」。
-  - ☐ 下一批：`/api/tcm` / `/api/cssd` / `/api/education` / `/api/maternal` / `/api/homevisits` 依次搬回。
+  - ✅ **剩余五个前缀一次搬完，`gapfill.py` 已删除**——倾倒场从 1125 行归零。`tcm`/`cssd`/`education`/`maternal` 并入同名模块（四者鉴权与目标 router **完全一致**，可直接合成一个 router，不像 performance 那样存在鉴权分裂）；`homevisits` 新建模块。零漂移守卫实测 885 端点不变。
+  - 搬家顺带撞出一处**同名遮蔽**：`maternal.py` 里出现两个 `ScreeningCreate`（儿童筛查 vs 产前筛查）与两个 `list_screenings`。当前行为是对的（各自的使用点都在自己的定义之后、重定义之前），但一个写在 417 行之后、想用儿童筛查 schema 的新端点会**静默拿到产前筛查的校验规则**。已把搬来的那套改名 `PrenatalScreeningCreate`/`list_prenatal_screenings`，并实测两套 422 校验各自正确。
+  - `cssd` 与 `performance` 暂时移出 `FULLY_GOVERNED`：搬进来的端点本就无契约，总欠账仍 740（只是换了名下），补完即加回。
 - ☐ 统计簇 `analytics/metrics/reports/performance` 合并口径 → **[ADR-0007](docs/adr/0007-统计簇口径合并.md)（Proposed，待批）**。⚠️ 落地第一步**不是写代码，是出「同名指标在几处各算什么」的对照表交产品裁定**——统一口径必然让某些数字变，那是业务决策。对照表出来前本项不进入实施。
 - ◐ God 文件 `models.py`(3989 行/187 类) / `spd/routers/config.py`(1549 行) 分域拆包 → **[ADR-0008](docs/adr/0008-God文件分域拆包.md)（**Accepted**）**。拆成包 + `__init__.py` 重导出，**调用方 import 路径一行不改**；先拆 spd config 演练再动 models；动手前先加「模型名字集合零漂移」守卫。
   - ✅ 前置守卫已就位：同一份用例快照 246 个 ORM 类名——拆包漏了重导出会让类不再注册进 `Base.metadata`，**建表静默少一张**而不是报错，这条把「静默」变成「报错」。
