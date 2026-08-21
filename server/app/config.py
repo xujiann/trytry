@@ -22,6 +22,8 @@
 
 兼容说明：环境变量命名与第一阶段完全一致，不破坏既有部署。
 """
+import logging
+import os
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -115,8 +117,10 @@ class Settings(BaseSettings):
     # 验证码位数与有效期
     sms_code_ttl_seconds: int = 300
     # 兼容开关：电子健康卡号+身份证号的旧核验接口（已被账号体系取代）。
-    # 生产环境建议置 false 关闭，避免留一个免登录的证件号查询面。
-    portal_legacy_verify: bool = True
+    # **默认关**（TECH_DEBT P1-3）：免登录的证件号查询面不该默认敞开——
+    # 默认开意味着每个没读过这行注释的部署都带着它上线。
+    # 仍在过渡期、居民端账号未铺开的县显式置 true 开启。
+    portal_legacy_verify: bool = False
     # 短信通道：console=不外发仅打日志（开发/演示），http=转发到短信网关
     sms_provider: str = "console"
     sms_gateway_url: str = ""
@@ -205,6 +209,49 @@ class Settings(BaseSettings):
                 "生产环境配置不安全，拒绝启动：" + "；".join(problems)
                 + "。请生成强随机值后经环境变量注入，例如："
                 + "MEDPLAT_SECRET=$(python -c \'import secrets;print(secrets.token_hex(32))\')"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_prod_footguns(self) -> "Settings":
+        """生产守卫盲区（A2）：凭据强度之外还有两类"起得来但不该起"的配置。
+
+        - 演示种子：`start.sh` 在 MEDPLAT_SEED_DEMO=1 时等服务就绪后自动执行
+          `scripts/seed_demo.py`，向**运行中的库**灌入演示患者/机构/就诊。
+          生产库被灌过一次就无法与真实数据干净剥离，只能整库重建，故直接拒启。
+          该变量不是 Settings 字段（start.sh 的 shell 逻辑读它），这里直接读
+          os.environ，与 MEDPLAT_REDIS_URL 同一处理方式。
+        - SQLite：单文件库，多 worker 生产部署下并发写会锁库丢写，且迁移链
+          只在 PostgreSQL 上验证过（见 §4/ADR-0002）。开发默认值一路带到生产
+          是最容易犯的错，报错里把正确形态写明白。
+
+        注意本 validator 排在凭据强度校验**之后**（pydantic 按定义顺序执行）：
+        凭据弱时先报凭据——既有测试断言的就是那条报文。
+        """
+        if not self.is_production:
+            return self
+        problems = []
+        if os.environ.get("MEDPLAT_SEED_DEMO", "").strip().lower() in ("1", "true", "yes", "on"):
+            problems.append(
+                "MEDPLAT_SEED_DEMO 已开启——它会向运行中的数据库灌入演示患者/机构数据，"
+                "生产库灌入后无法与真实数据剥离；请移除该环境变量"
+            )
+        if self.database_url.strip().lower().startswith("sqlite"):
+            problems.append(
+                "MEDPLAT_DATABASE_URL 指向 SQLite——生产必须使用 PostgreSQL"
+                "（如 postgresql://user:pass@host:5432/medplat），"
+                "SQLite 无并发写能力且迁移链未在其上验证"
+            )
+        if problems:
+            raise RuntimeError("生产环境配置不安全，拒绝启动：" + "；".join(problems))
+        # 不拒启、只强警告：单实例部署没 Redis 是合法形态，多实例才是事故。
+        # 进程起点只有这里一定会执行到，故警告放配置校验而非某个懒加载路径。
+        if not os.environ.get("MEDPLAT_REDIS_URL", ""):
+            logging.getLogger("medplat.config").warning(
+                "生产环境未配置 MEDPLAT_REDIS_URL：登出令牌黑名单与登录防爆破锁定"
+                "仅在本进程内存中生效——多实例/多 worker 部署下，已登出的令牌在"
+                "其他实例仍可用、爆破计数互不相通。单实例可忽略本警告；"
+                "多实例必须配置 Redis 共享存储（见 app/state_store.py）。"
             )
         return self
 

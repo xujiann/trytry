@@ -215,8 +215,14 @@ def test_stock_shortage_ws_directed(client, admin, setup):
 # ---------------------------------------------------------------- M-3 portal 限速与 POST
 
 
-def test_portal_verify_rate_limited(client, setup):
-    """同一证件号连续5次核验失败 → 锁定，正确凭据也临时拒绝（429）。"""
+def test_portal_verify_rate_limited(client, setup, monkeypatch):
+    """同一证件号连续5次核验失败 → 锁定，正确凭据也临时拒绝（429）。
+
+    旧核验接口默认已关（portal_legacy_verify=False，A2/P1-3），
+    本条测的是限速逻辑本身，显式开启后再测。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "portal_legacy_verify", True)
     _reset_portal_failures()
     patient = setup["patient"]
     for _ in range(5):
@@ -237,8 +243,11 @@ def test_portal_verify_rate_limited(client, setup):
     _reset_portal_failures()
 
 
-def test_portal_my_archive_post_body(client, setup):
-    """POST body 传参（推荐）：不再经 URL 暴露身份证号。"""
+def test_portal_my_archive_post_body(client, setup, monkeypatch):
+    """POST body 传参（推荐）：不再经 URL 暴露身份证号。旧接口默认关，显式开启后测。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "portal_legacy_verify", True)
     _reset_portal_failures()
     patient = setup["patient"]
     resp = client.post(

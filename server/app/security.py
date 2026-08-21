@@ -1,5 +1,18 @@
-"""统一认证：口令散列与 HS256 令牌签发/校验（自包含实现，不依赖第三方 JWT 库）。"""
+"""统一认证：口令散列与 HS256 令牌签发/校验（自包含实现，不依赖第三方 JWT 库）。
+
+密钥派生与轮换（A1，阶段十三）：同一把 `MEDPLAT_SECRET` 原先直接用于三个用途——
+JWT 签名（本文件）、审计哈希链 MAC（audit_chain.py）、一码通动态码签名
+（routers/credentials.py）。任一用途的签名值泄露即可离线爆破出唯一主密钥，
+三处同时沦陷。现按用途派生子密钥（HMAC-SHA256，info 标签 medplat:jwt /
+medplat:audit / medplat:qr），**签发/写入一律用派生口径**。
+
+兼容与轮换：历史令牌/审计链/动态码是用原始 secret 直签的，验证路径按
+「当前派生 → 当前原始 → previous 派生 → previous 原始」多口径回退
+（见 `verification_keys`）——存量数据不因升级变"无效"或"被篡改"；
+设置 MEDPLAT_SECRET_PREVIOUS 后，旧密钥仅用于验证，宽限期结束清掉即可。
+"""
 import base64
+import hashlib
 import hmac
 import json
 import os
@@ -9,8 +22,40 @@ from . import gmcrypto
 from .config import settings
 from .state_store import TokenBlacklist
 
-SECRET_KEY = settings.secret
 TOKEN_TTL_SECONDS = settings.token_ttl_seconds
+
+
+def derive_key(secret: str, purpose: str) -> bytes:
+    """按用途派生子密钥：HMAC-SHA256(secret, "medplat:"+purpose)。
+
+    单段定长 info 场景下，HMAC 派生与 HKDF-Expand 强度等价；不引 HKDF
+    是"不为一个调用拉依赖/铺样板"的老原则。派生算法**固定 SHA-256**、
+    不随 crypto_suite 切换——它只是密钥分隔，不是对外声明的 MAC 算法，
+    固定住才能保证套件切换不使全部存量密钥作废。
+    """
+    return hmac.new(secret.encode(), f"medplat:{purpose}".encode(), hashlib.sha256).digest()
+
+
+def signing_key(purpose: str) -> bytes:
+    """签发/写入用的当前密钥：一律当前 secret 的派生口径。"""
+    return derive_key(settings.secret, purpose)
+
+
+def verification_keys(purpose: str) -> list[bytes]:
+    """验证用密钥候选，按命中概率排序：
+
+    1. 当前 secret 的派生口径（新签发的都是它）；
+    2. 当前 secret 的原始口径（升级到派生方案**之前**签出的存量数据）；
+    3./4. MEDPLAT_SECRET_PREVIOUS 的两种口径（密钥轮换宽限期内的旧数据）。
+
+    去掉 2-4 的回退会把存量令牌全部登出、存量审计链整段误判为"被篡改"，
+    tests/test_ops_key_rotation.py 有专门用例钉住。
+    """
+    keys = [derive_key(settings.secret, purpose), settings.secret.encode()]
+    if settings.secret_previous:
+        keys.append(derive_key(settings.secret_previous, purpose))
+        keys.append(settings.secret_previous.encode())
+    return keys
 
 # 登出黑名单（M4 整改）：默认进程内存实现（带 TTL 清理），
 # 配置 MEDPLAT_REDIS_URL 后自动切换 Redis 共享存储（多实例部署必须）。
@@ -72,7 +117,7 @@ def create_token(
     }
     claims.update(extra or {})
     payload = _b64url(json.dumps(claims).encode())
-    signature = _b64url(gmcrypto.mac(SECRET_KEY.encode(), f"{header}.{payload}".encode()))
+    signature = _b64url(gmcrypto.mac(signing_key("jwt"), f"{header}.{payload}".encode()))
     return f"{header}.{payload}.{signature}"
 
 
@@ -81,8 +126,13 @@ def decode_token(token: str) -> dict | None:
         header, payload, signature = token.split(".")
     except ValueError:
         return None
-    expected = _b64url(gmcrypto.mac(SECRET_KEY.encode(), f"{header}.{payload}".encode()))
-    if not hmac.compare_digest(signature, expected):
+    message = f"{header}.{payload}".encode()
+    # 多口径回退：任一候选密钥验过即有效（新派生 → 旧原始 → previous 两口径）
+    for key in verification_keys("jwt"):
+        expected = _b64url(gmcrypto.mac(key, message))
+        if hmac.compare_digest(signature, expected):
+            break
+    else:
         return None
     claims = json.loads(_b64url_decode(payload))
     if claims.get("exp", 0) < time.time():

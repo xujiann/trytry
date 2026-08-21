@@ -30,7 +30,14 @@ STRONG_PASSWORD = "Kx7!mQ2$vLp9"                  # 12 位、含多类字符
 
 
 def _prod(**kwargs) -> Settings:
-    base = {"env": "prod", "secret": STRONG_SECRET, "admin_password": STRONG_PASSWORD}
+    # database_url 给合规的 PG 串：A2 起"生产 + SQLite"另有守卫拒启
+    # （见 test_ops_prod_guard.py），本文件只聚焦凭据强度这一层。
+    base = {
+        "env": "prod",
+        "secret": STRONG_SECRET,
+        "admin_password": STRONG_PASSWORD,
+        "database_url": "postgresql://medplat:pw@db:5432/medplat",
+    }
     return Settings(**{**base, **kwargs})
 
 

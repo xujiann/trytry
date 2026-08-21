@@ -266,7 +266,11 @@ def test_infectious_multi_point_alert(client, headers, base_data):
     assert none == []
 
 
-def test_portal_identity_verification(client, headers, base_data):
+def test_portal_identity_verification(client, headers, base_data, monkeypatch):
+    # 旧双因子接口默认已关（portal_legacy_verify=False，A2/P1-3），显式开启后测
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "portal_legacy_verify", True)
     patient = base_data["patient"]
     # `chronic_care` 原本靠上一条用例（test_chronic_smart_leveling_and_overdue）
     # 顺带建出来——整模块跑得过是因为它排在前面；`pytest -k portal_identity`

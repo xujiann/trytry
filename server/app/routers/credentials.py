@@ -19,8 +19,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..config import settings
 from ..concurrency import insert_or_conflict
+from ..security import signing_key, verification_keys
 from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
@@ -200,10 +200,21 @@ def _one_code_payload(patient: Patient, expires_at: int) -> str:
     return f"{patient.ehc_no}.{expires_at}"
 
 
-def _sign(payload: str) -> str:
+def _sign(payload: str, key: bytes | None = None) -> str:
+    """动态码签名。签发一律用 qr 用途的派生子密钥（A1）；
+    `key` 仅供核验时按候选密钥逐个复算。"""
     return hmac.new(
-        settings.secret.encode(), payload.encode(), hashlib.sha256
+        key if key is not None else signing_key("qr"), payload.encode(), hashlib.sha256
     ).hexdigest()[:32]
+
+
+def _signature_valid(payload: str, signature: str) -> bool:
+    """核验动态码签名：多口径回退（新派生 → 旧原始 → previous 两口径），
+    密钥轮换的换轮瞬间，已出示未核销的码不失效。"""
+    return any(
+        hmac.compare_digest(_sign(payload, key), signature)
+        for key in verification_keys("qr")
+    )
 
 
 @router.post(
@@ -217,7 +228,8 @@ def issue_one_code(body: OneCodeIssue, db: Session = Depends(get_db)):
     JWT 同一思路。落库的话每扫一次码就要写一行、还要清理过期行，
     而它的生命周期只有一分钟。
 
-    签名用平台密钥，故换密钥即全部作废——这正是想要的行为。
+    签名用平台密钥的 qr 派生子密钥（A1）：换密钥并清掉 MEDPLAT_SECRET_PREVIOUS
+    即全部作废；轮换宽限期内（previous 已设）旧码仍可核验，换轮瞬间不失效。
     """
     patient = db.get(Patient, body.patient_id)
     if patient is None:
@@ -241,7 +253,7 @@ def resolve_one_code(body: OneCodeResolve, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="码格式不正确")
     ehc_no, expires_raw, signature = parts
     payload = f"{ehc_no}.{expires_raw}"
-    if not hmac.compare_digest(_sign(payload), signature):
+    if not _signature_valid(payload, signature):
         raise HTTPException(status_code=403, detail="码签名校验失败（可能为伪造）")
     try:
         expires_at = int(expires_raw)

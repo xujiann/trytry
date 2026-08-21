@@ -97,6 +97,9 @@ def test_prod_with_proper_credentials_starts(monkeypatch):
     # 含 passw0rd/password 字样一律判弱——那是最典型的示例口令，
     # 真部署里出现它基本等于没改。换成真随机值。
     monkeypatch.setenv("MEDPLAT_ADMIN_PASSWORD", "Kx7!mQ2$vLp9Zt")
+    # A2 起"生产 + SQLite"另有守卫拒启（conftest 注入的是 SQLite 测试库串），
+    # 本条只测凭据强度放行，给一个合规的 PG 串
+    monkeypatch.setenv("MEDPLAT_DATABASE_URL", "postgresql://medplat:pw@db:5432/medplat")
     settings = Settings()
     assert settings.is_production
 
