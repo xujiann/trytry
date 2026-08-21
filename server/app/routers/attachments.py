@@ -1,9 +1,11 @@
-"""通用附件服务：本地磁盘存储（MEDPLAT_UPLOAD_DIR 可配，默认 server/uploads/）。
+"""通用附件服务：字节存取走 `app.storage` 抽象（默认本地磁盘，MEDPLAT_UPLOAD_DIR 可配）。
 
 - 上传：multipart，≤10MB，类型白名单（图片/PDF），角色守卫 + 挂接对象归属校验
 - 下载：登录鉴权 + **按业务域可见性校验**后回源磁盘文件，患者类附件留痕
 - 查询：按 owner_type + owner_id 列出业务对象的全部附件（同一套可见性校验）
 - 接入场景：检查报告附件（影像截图/PDF）、不良事件佐证材料、课件资源、慢专病任务佐证
+- 存储（A5 整改）：本路由不再直接摸磁盘，统一经 `app.storage.get_storage()`——
+  多实例部署本地后端须挂共享卷、对象存储后端如何注册，见 `app/storage.py` docstring
 
 **可见性（P0 整改）**：此前下载/列举只要"登录"就放行——任何账号按 id 顺序遍历，
 就能把全县的检查报告附件拉下来，且不留任何痕迹，正是 CLAUDE.md §8 明令禁止的
@@ -12,17 +14,16 @@
 """
 import hashlib
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import AdverseEvent, Attachment, CourseMaterial, ExamReport, ExamRequest, User
+from ..storage import get_storage
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_patient_visible
 
 router = APIRouter(prefix="/api/attachments", tags=["附件"], dependencies=[Depends(get_current_user)])
@@ -213,9 +214,7 @@ def store_upload(
     if not data:
         raise HTTPException(status_code=422, detail="附件内容为空")
     sha256 = hashlib.sha256(data).hexdigest()
-    path = _stored_path(sha256)
-    if not path.exists():
-        path.write_bytes(data)
+    get_storage().save(sha256, data)  # 内容寻址、幂等：同 sha256 已存在则跳过
     attachment = Attachment(
         filename=filename or "unnamed",
         content_type=normalized,
@@ -227,19 +226,6 @@ def store_upload(
     )
     db.add(attachment)
     return attachment
-
-
-def _upload_root() -> Path:
-    root = Path(settings.upload_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _stored_path(sha256: str) -> Path:
-    """按 sha256 前2位分桶存储，同内容文件去重。"""
-    bucket = _upload_root() / sha256[:2]
-    bucket.mkdir(parents=True, exist_ok=True)
-    return bucket / sha256
 
 
 def _out(a: Attachment) -> dict:
@@ -323,9 +309,20 @@ def download_attachment(
         db, user, spec, attachment.owner_id,
         resource=_resource(attachment.owner_type, "download"),
     )
-    path = _stored_path(attachment.sha256)
-    if not path.exists():
+    storage = get_storage()
+    if not storage.exists(attachment.sha256):
         raise HTTPException(status_code=404, detail="附件文件缺失（存储目录可能被清理）")
-    return FileResponse(
-        path, media_type=attachment.content_type, filename=attachment.filename
+    path = storage.local_path(attachment.sha256)
+    if path is not None:
+        # 本地后端：FileResponse 零拷贝回源，与抽象前的响应逐字节一致
+        return FileResponse(
+            path, media_type=attachment.content_type, filename=attachment.filename
+        )
+    # 非本地后端（对象存储等）：流式回源。header 口径与 FileResponse 一致。
+    return StreamingResponse(
+        storage.open(attachment.sha256),
+        media_type=attachment.content_type,
+        headers={
+            "content-disposition": f'attachment; filename="{attachment.filename}"',
+        },
     )
