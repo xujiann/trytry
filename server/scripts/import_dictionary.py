@@ -6,6 +6,9 @@
 
 字典类型：diagnosis(诊断 ICD-10) | drug(药品) | consumable(耗材) | charge(收费)
 CSV 列（首行表头）：code,name
+可选属性列（D1 扩列，缺列/空值不填不报错）：
+    spec(规格) dosage_form(剂型) manufacturer(厂家) unit(单位)
+    insurance_code(医保对码) national_code(本位码/YPID) extra(JSON 备用)
 
 用法：
     cd server
@@ -30,6 +33,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.models import CodeEntry, CodeSystem  # noqa: E402
 from app.routers.dictionaries import SYSTEM_CODES  # noqa: E402
+
+# D1 扩列：可选属性列 → 列长上限（超长截断，与 name[:256] 同一策略）
+OPTIONAL_COLUMNS = {
+    "spec": 64,
+    "dosage_form": 32,
+    "manufacturer": 128,
+    "unit": 16,
+    "insurance_code": 64,
+    "national_code": 64,
+    "extra": 1024,
+}
 
 
 @dataclass
@@ -102,7 +116,15 @@ def run_import(
                 elif code in existing:
                     report.skipped += 1
                 else:
-                    db.add(CodeEntry(system_id=system.id, code=code, name=name[:256]))
+                    # 可选属性列：表头没有该列或值为空 → 不填（保持 NULL），不报错
+                    optional = {
+                        col: value.strip()[:limit]
+                        for col, limit in OPTIONAL_COLUMNS.items()
+                        if (value := (row.get(col) or "")).strip()
+                    }
+                    db.add(
+                        CodeEntry(system_id=system.id, code=code, name=name[:256], **optional)
+                    )
                     existing.add(code)
                     report.imported += 1
                 if progress_every and processed % progress_every == 0:

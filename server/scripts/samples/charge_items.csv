@@ -1,0 +1,4 @@
+code,name,category,price,active
+GH001,普通门诊挂号费,other,10.00,true
+CJ001,血常规,exam,22.50,true
+ZL001,静脉输液（每组）,treatment,8.00,true

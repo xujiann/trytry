@@ -1,0 +1,4 @@
+id_card,ehc_no,org_name,visit_date,encounter_type,doctor_name,diagnosis_code,diagnosis_name,summary
+320981196501012341,,示例镇中心卫生院,2026-06-01,outpatient,钱医生,I10,原发性高血压,血压145/92，调整用药
+320981197203154322,,示例镇中心卫生院,2026-06-03,outpatient,钱医生,E11,2型糖尿病,空腹血糖7.8，复诊随访
+320981198812243213,,示例县人民医院,2026-06-05,inpatient,赵医生,J44,慢性阻塞性肺疾病,急性加重入院

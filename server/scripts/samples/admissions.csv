@@ -1,0 +1,3 @@
+id_card,ehc_no,org_name,ward_name,bed_no,admitted_at,discharged_at,doctor_name,diagnosis_name
+320981198812243213,,示例县人民医院,呼吸内科病区,01,2026-06-05,2026-06-12,赵医生,慢性阻塞性肺疾病急性加重
+320981196501012341,,示例县人民医院,心内科病区,03,2026-07-20,,赵医生,不稳定型心绞痛

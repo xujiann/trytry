@@ -1,0 +1,4 @@
+id_card,ehc_no,org_name,bill_type,settle_date,total_amount,insurance_pay,self_pay
+320981196501012341,,示例镇中心卫生院,outpatient,2026-06-01,86.50,60.55,25.95
+320981197203154322,,示例镇中心卫生院,outpatient,2026-06-03,132.00,92.40,
+320981198812243213,,示例县人民医院,inpatient,2026-06-12,5680.25,3976.18,1704.07
