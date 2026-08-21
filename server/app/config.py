@@ -149,6 +149,29 @@ class Settings(BaseSettings):
     spd_call_provider: str = "manual"
     spd_call_gateway_url: str = ""
 
+    # ---------------- 生产运行整改（A1-A12，阶段十三） ----------------
+    # 密钥轮换宽限期：设置后，旧密钥仅用于**验证**既有令牌/审计链/动态码，
+    # 新签发一律用当前 secret。轮换步骤见运维手册"密钥轮换"节。
+    secret_previous: str = ""
+    # PG 连接池（0=沿用 SQLAlchemy 默认；SQLite 忽略）。生产参考：
+    # pool_size = worker 数 × 每 worker 并发 ÷ 实例数，超时给明确失败而非无限等。
+    db_pool_size: int = 0
+    db_max_overflow: int = 0
+    db_pool_timeout_seconds: int = 0
+    db_pool_recycle_seconds: int = 0
+    # 患者可见性判定的进程内短 TTL 缓存（秒；0=关闭）。命中只复用"允许"结论，
+    # 拒绝结论不缓存——授权收窄最迟 TTL 秒生效，放宽立即生效。
+    visibility_cache_ttl_seconds: int = 30
+    # 日志文件输出（空=仅 stdout；设路径则同时写轮转文件，配合等保 6 个月留存）
+    log_file: str = ""
+    log_rotate_max_mb: int = 64
+    log_rotate_backups: int = 14
+    # 运行数据保留期：任务运行记录按天清理；留痕/审计按天**归档导出后**截断
+    # （0=不自动处理）。审计链截断会另记锚点，见 jobs.py。
+    jobrun_retention_days: int = 90
+    access_log_archive_days: int = 0
+    audit_log_archive_days: int = 0
+
     @property
     def is_production(self) -> bool:
         return "prod" in (self.env, self.environment)
