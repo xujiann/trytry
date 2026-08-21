@@ -1253,3 +1253,39 @@ def test_模型名字集合零漂移():
         f"以下 ORM 类是新增的（{len(added)} 个）。有意新增请更新 SNAPSHOT_MODELS "
         f"并在 PR 里说明：\n  " + "\n  ".join(sorted(added))
     )
+
+
+# ---------------------------------------------------------------------------
+# ADR-0008 拆包的附加守卫
+# ---------------------------------------------------------------------------
+
+
+def test_拆包后导入路径不变():
+    """拆包对调用方必须透明：`from .routers import config` 再用 `config.router`。
+
+    ADR-0008 选方案 B（拆包 + `__init__.py` 重导出）而不是方案 C（改上千处 import），
+    理由就是"改 import 换不来任何功能收益"。这条钉住那个承诺。
+    """
+    from app.spd.routers import config
+
+    assert hasattr(config, "router"), "config.router 必须还在，否则调用方全断"
+    assert config.router.prefix == "/api/spd"
+
+
+def test_配置域子模块的注册顺序与原分节一致():
+    """路由靠 import 时的装饰器注册，顺序决定 FastAPI 的匹配优先级。
+
+    乱序**不会报错**，只会让某些路径悄悄匹配到别的处理函数上——正是那种
+    "测试全绿但线上行为变了"的改动。所以顺序本身要有人盯着。
+    """
+    import inspect
+
+    from app.spd.routers import config
+
+    source = inspect.getsource(config)
+    expected = ["catalog", "paths", "scales", "teams", "devices", "centers"]
+    line = next(l for l in source.splitlines() if l.startswith("from . import "))
+    actual = [m.strip() for m in line.removeprefix("from . import ").split("#")[0].split(",")]
+    assert actual == expected, (
+        f"子模块导入顺序变了：{actual}，应为 {expected}（= 原文件的分节顺序）"
+    )
