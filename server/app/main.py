@@ -350,7 +350,7 @@ app.include_router(gapfill.tcm_router)
 app.include_router(gapfill.cssd_router)
 app.include_router(gapfill.edu_router)
 app.include_router(gapfill.maternal_router)
-app.include_router(gapfill.perf_router)
+app.include_router(performance.improvement_router)  # ADR-0006：从 gapfill 搬回业务前缀
 app.include_router(gapfill.home_router)
 app.include_router(service_extras.router)
 # 全域慢专病子系统：装卸是一个动作，由 MEDPLAT_SPD_ENABLED 控制（见 app/spd/）

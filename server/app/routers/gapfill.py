@@ -6,7 +6,6 @@
 - ⑳ 课件资源管理：课件挂附件、点播计数              /api/education/courses/{id}/materials
 - ㉑ 适宜技术实训管理：计划 / 报名 / 考核            /api/education/training-plans
 - ㉔ 产前筛查与诊断：唐筛/无创/超声，高危自动标记    /api/maternal/screenings
-- ㉟ 绩效自评改进：问题→责任人→期限→完成确认        /api/performance/improvements
 - ⑨ 上门服务调度：申请→派单→完成，关联家医签约      /api/homevisits
 """
 from typing import Any
@@ -22,7 +21,7 @@ from sqlalchemy.orm import Session
 from ..datetypes import DateStr
 from ..clock import now_naive
 from ..concurrency import add_amount, claim_quota, insert_or_conflict, take_amount, upsert_unique
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
 from ..models import (
@@ -32,7 +31,6 @@ from ..models import (
     CssdCostItem,
     FamilyDoctorContract,
     HomeVisitOrder,
-    ImprovementTask,
     MaternalRecord,
     Organization,
     Patient,
@@ -750,185 +748,6 @@ def screening_stats(db: Session = Depends(get_db)):
         "by_type": {k: {"count": v, "name": SCREEN_TYPES.get(k, k)} for k, v in by_type.items()},
         "by_result": by_result,
         "high_risk_detect_rate_pct": round(high * 100.0 / total, 2) if total else 0.0,
-    }
-
-
-# ===========================================================================
-# ㉟ 绩效自评改进（整改任务闭环）
-# ===========================================================================
-
-perf_router = APIRouter(
-    prefix="/api/performance", tags=["绩效自评改进"], dependencies=[Depends(get_current_user)]
-)
-
-TASK_STATUS = {
-    "open": "待整改",
-    "in_progress": "整改中",
-    "completed": "已完成待确认",
-    "verified": "已确认关闭",
-}
-
-
-class TaskCreate(BaseModel):
-    org_id: int
-    problem: str = Field(min_length=1)
-    owner_name: str = Field(min_length=1)
-    due_date: DateStr
-    indicator_key: str = ""
-    measures: str = ""
-
-
-def _task_out(t: ImprovementTask, today: str) -> dict:
-    return {
-        "id": t.id,
-        "org_id": t.org_id,
-        "indicator_key": t.indicator_key,
-        "problem": t.problem,
-        "measures": t.measures,
-        "owner_name": t.owner_name,
-        "due_date": t.due_date,
-        "status": t.status,
-        "status_name": TASK_STATUS.get(t.status, t.status),
-        "overdue": t.status in ("open", "in_progress") and t.due_date < today,
-        "completion_note": t.completion_note,
-        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-        "verify_comment": t.verify_comment,
-        "verified_by": t.verified_by,
-    }
-
-
-@perf_router.post(
-    "/improvements", status_code=201, dependencies=[Depends(require_roles("director"))]
-)
-def create_task(body: TaskCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    assert_org_writable(db, user, body.org_id)
-    """下达绩效整改任务（问题 → 责任人 → 期限）。"""
-    if db.get(Organization, body.org_id) is None:
-        raise HTTPException(status_code=404, detail="机构不存在")
-    task = ImprovementTask(created_by=user.id, **body.model_dump())
-    db.add(task)
-    db.commit()
-    db.refresh(task)
-    return _task_out(task, date.today().isoformat())
-
-
-@perf_router.get("/improvements")
-def list_tasks(
-    response: Response,
-    org_id: int | None = None,
-    status: str | None = None,
-    overdue_only: bool = False,
-    today: str | None = None,
-    offset: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    business_date = resolve_business_date(today).isoformat()
-    query = db.query(ImprovementTask)
-    query = scope_org_list(db, user, query, ImprovementTask, org_id)
-    if status:
-        query = query.filter(ImprovementTask.status == status)
-    if overdue_only:
-        query = query.filter(
-            ImprovementTask.status.in_(["open", "in_progress"]),
-            ImprovementTask.due_date < business_date,
-        )
-    rows = paginate(query.order_by(ImprovementTask.id.desc()), response, offset, limit)
-    return [_task_out(t, business_date) for t in rows]
-
-
-class TaskProgress(BaseModel):
-    measures: str = ""
-    completion_note: str = ""
-    # 置为 True 表示整改完成、提交确认
-    complete: bool = False
-
-
-@perf_router.post(
-    "/improvements/{task_id}/progress",
-    dependencies=[Depends(require_roles("director", "operator"))],
-)
-def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """整改进展：登记措施；complete=true 时提交完成确认。"""
-    task = db.get(ImprovementTask, task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="整改任务不存在")
-    assert_obj_org_writable(db, user, task)
-    if task.status == "verified":
-        raise HTTPException(status_code=409, detail="任务已确认关闭")
-    if body.measures:
-        task.measures = body.measures
-    if body.complete:
-        if not body.completion_note:
-            raise HTTPException(status_code=422, detail="提交完成须填写整改结果说明")
-        task.status = "completed"
-        task.completion_note = body.completion_note
-        task.completed_at = now_naive()
-    else:
-        task.status = "in_progress"
-    db.commit()
-    db.refresh(task)
-    return _task_out(task, date.today().isoformat())
-
-
-class TaskVerify(BaseModel):
-    approve: bool
-    comment: str = ""
-
-
-@perf_router.post(
-    "/improvements/{task_id}/verify", dependencies=[Depends(require_roles("director"))]
-)
-def verify_task(
-    task_id: int,
-    body: TaskVerify,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """完成确认：通过则关闭任务，不通过退回整改中。"""
-    task = db.get(ImprovementTask, task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="整改任务不存在")
-    assert_obj_org_writable(db, user, task)
-    if task.status != "completed":
-        raise HTTPException(status_code=409, detail="仅已提交完成的任务可确认")
-    task.verify_comment = body.comment
-    task.verified_by = user.full_name or user.username
-    if body.approve:
-        task.status = "verified"
-        task.verified_at = now_naive()
-    else:
-        task.status = "in_progress"
-        task.completed_at = None
-    db.commit()
-    db.refresh(task)
-    return _task_out(task, date.today().isoformat())
-
-
-@perf_router.get("/improvement-stats")
-def improvement_stats(today: str | None = None, db: Session = Depends(get_db)):
-    business_date = resolve_business_date(today).isoformat()
-    by_status = row_dict(
-        db.query(ImprovementTask.status, func.count(ImprovementTask.id))
-        .group_by(ImprovementTask.status)
-        .all()
-    )
-    overdue = (
-        db.query(func.count(ImprovementTask.id))
-        .filter(
-            ImprovementTask.status.in_(["open", "in_progress"]),
-            ImprovementTask.due_date < business_date,
-        )
-        .scalar()
-        or 0
-    )
-    total = sum(by_status.values())
-    return {
-        "total": total,
-        "by_status": {k: {"count": v, "name": TASK_STATUS.get(k, k)} for k, v in by_status.items()},
-        "overdue": overdue,
-        "closed_rate_pct": round(by_status.get("verified", 0) * 100.0 / total, 2) if total else 0.0,
     }
 
 
