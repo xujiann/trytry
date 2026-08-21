@@ -48,7 +48,10 @@
 - ◐ 三套并行子域（ADR-0003 已 **Accepted**）：转诊读侧聚合的**接口侧**已落地——`GET /api/portal/me/referrals/all` 把平台 `referrals` 与 `spd_referral_cases` 并成一份（带 `source` + 分源中文标签 + 完整时间戳排序）；两个老接口响应字节不动（两条特征化用例各钉一个）；注册制登记源，子系统关掉自动降级为平台单源。实施中确认**无需去重**（两批单子真正不相交，spd 从不写 `referrals`），真正要处理的是**同名不同义**的状态码（平台 accepted=已接收 vs spd accepted=县级医院已接收），故每条带 `source` + 分源标签，措辞与 `m.js` 既有文案逐字对齐。
 - ✅ **居民端已切到聚合接口**：`static/m/m.js` 两个页面均取自 `/me/referrals/all`，慢专病页用 **`?source=spd` 服务端收窄**（不能客户端 filter——条数上限是合并后才截的，平台转诊一多就会把慢专病的单子整段挤出窗口，页面显示「暂无」而其实有在办的；回归用例已钉住）。**用户可感知的转诊孤岛就此消除**。顺带删掉前端两张 `REFERRAL_STATUS`/`SPD_REF_TEXT` 标签表——同一份映射不该有两个副本，状态文案权威统一到后端 `status_label`；两个页面的卡片渲染合并为一份 `referralCard()`；详情链接直接用后端 `detail_path`（已带 patient_id，代管家属才点得开）。静态守卫 `test_portal_referral_frontend.py` 七条防复开，四处变异验证。
 - ✅ 业务端转诊文案收归后端：`ReferralOut` 新增 `status_label`（三个端点都带上），`core.js` 只留配色。**刻意保留两套措辞**——居民端「待接收」面向患者、业务端「待接诊」面向医师，同一个状态、两个读者、两套词是对的；不对的是同一套词在前后端各存一份。回归 `test_referral_status_label.py` 四条，含「两套映射覆盖的状态码必须一致」与「后端映射覆盖全部可达状态」。
-- ☐ 三套并行子域的其余概念：病种目录 / 患者入组 / 随访的读侧聚合尚未做。
+- ◐ 三套并行子域的其余概念——**逐个核过是不是真孤岛**，不机械造接口：
+  - ✅ **患者入组**：确是居民端可感知的孤岛（`/me/archive` 的 `chronic_care` 读 `chronic_patients`，`/spd/archive` 的 `profiles` 读 `spd_enrollments`，看到哪份取决于点了哪个入口）。已加 `GET /api/portal/me/enrollments/all`，做法与转诊完全一致：注册制登记源、服务端 `source` 收窄、老接口字节不动。**刻意不统一分级词汇**：平台 `level` 是 1/2/3（控制良好/需干预/高危）、spd 是 low/mid/high/very_high（并发症风险分层），两把尺子量的不是同一件事，硬映射就是编一个不存在的等价关系——故各留原始码 + 各自中文标签。特征化网各钉一个老接口，九条用例，两处变异（只用平台源 / 硬映射分级）各自转红。
+  - ☐ **随访**：平台侧**没有**面向居民的随访列表（`/me/archive` 只给 `next_followup_due` 一个日期），只有 spd 有 `/spd/followups`。所以这不是"两份打架"，而是平台侧缺一块——聚合等于给居民**新增**平台慢病随访视图，属加功能而非消孤岛，需先定要不要给。
+  - ☐ **病种目录**：`chronic_disease_types` / `disease_programs` / `spd_programs` 三张表都是**运营配置**，只在管理端出现，居民端根本看不到，不存在"居民看到两份"的问题。真正的重复在配置口径（同一个 `hypertension` 码三处各带各的阈值），那是 ADR-0003 方案 C 的范围，不是读侧聚合能解的。
 - ✅ `docs/API_MAP.md` 已更新：写侧仍两套（方案 C 待立项），读侧已聚合。
 
 ## Later（C 类重构：**四项均已出 ADR，待批准后逐块动手**）
