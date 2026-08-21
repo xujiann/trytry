@@ -63,9 +63,11 @@
 - `doctor_name` · VARCHAR(64) · NOT NULL
 - `diagnosis_name` · VARCHAR(256) · NOT NULL
 - `status` · VARCHAR(16) · NOT NULL · index
-- `admitted_at` · DATETIME · NOT NULL
-- `discharged_at` · DATETIME
+- `admitted_at` · DATETIME · NOT NULL · index
+- `discharged_at` · DATETIME · index
 - `created_by` · INTEGER · NOT NULL · → users.id
+- _index_ ix_admissions_admitted_at(admitted_at)
+- _index_ ix_admissions_discharged_at(discharged_at)
 - _index_ ix_admissions_org_id(org_id)
 - _index_ ix_admissions_patient_id(patient_id)
 - _index_ ix_admissions_status(status)
@@ -235,8 +237,9 @@
 - `amount` · NUMERIC(14, 2) · NOT NULL
 - `settlement_id` · INTEGER · index · → settlements.id
 - `created_by` · INTEGER · NOT NULL · → users.id
-- `created_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_bill_details_admission_id(admission_id)
+- _index_ ix_bill_details_created_at(created_at)
 - _index_ ix_bill_details_encounter_id(encounter_id)
 - _index_ ix_bill_details_item_code(item_code)
 - _index_ ix_bill_details_patient_id(patient_id)
@@ -276,8 +279,9 @@
 - `drg_code` · VARCHAR(16) · NOT NULL · index
 - `drg_weight` · FLOAT · NOT NULL
 - `created_by_name` · VARCHAR(64) · NOT NULL
-- `created_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_case_summaries_admission_id(admission_id) UNIQUE
+- _index_ ix_case_summaries_created_at(created_at)
 - _index_ ix_case_summaries_drg_code(drg_code)
 
 ## charge_items
@@ -796,7 +800,8 @@
 - `diagnosis_code` · VARCHAR(64) · NOT NULL
 - `diagnosis_name` · VARCHAR(256) · NOT NULL
 - `summary` · VARCHAR(1024) · NOT NULL
-- `created_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_encounters_created_at(created_at)
 - _index_ ix_encounters_org_id(org_id)
 - _index_ ix_encounters_patient_id(patient_id)
 
@@ -1785,7 +1790,8 @@
 - `status` · VARCHAR(16) · NOT NULL · index
 - `review_comment` · VARCHAR(1024) · NOT NULL
 - `created_by` · INTEGER · NOT NULL · → users.id
-- `created_at` · DATETIME · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_prescriptions_created_at(created_at)
 - _index_ ix_prescriptions_patient_id(patient_id)
 - _index_ ix_prescriptions_status(status)
 
