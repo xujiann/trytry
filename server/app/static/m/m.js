@@ -5,13 +5,7 @@
    清本地令牌并退回登录态（不做静默刷新，居民端会话本来就有 7 天）。 */
 "use strict";
 
-const $ = (sel) => document.querySelector(sel);
 const TOKEN_KEY = "medplat_portal_token";
-
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
 
 const token = {
   get: () => localStorage.getItem(TOKEN_KEY) || "",

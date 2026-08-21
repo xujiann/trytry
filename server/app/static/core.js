@@ -11,7 +11,6 @@
  * 每个 renderX 的引用，而函数声明只在**同一个文件内**提升。
  */
 
-const $ = (sel) => document.querySelector(sel);
 let token = localStorage.getItem("medplat_token") || "";
 
 async function api(path, options = {}) {
@@ -70,11 +69,6 @@ function stopTodoPolling() {
   if (todoTimer) { clearInterval(todoTimer); todoTimer = null; }
   const bell = $("#todo-bell");
   if (bell) { bell.classList.add("hidden"); $("#todo-panel").classList.add("hidden"); }
-}
-
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function table(cols, rows, renderRow) {

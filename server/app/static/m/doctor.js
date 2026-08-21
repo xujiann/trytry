@@ -3,14 +3,8 @@
    复用居民端 m.css 风格，移动优先布局；令牌存 sessionStorage（关闭页面即失效）。 */
 "use strict";
 
-const $ = (sel) => document.querySelector(sel);
 const TOKEN_KEY = "medplat_doctor_token";
 const USER_KEY = "medplat_doctor_user";
-
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
 
 function token() { return sessionStorage.getItem(TOKEN_KEY) || ""; }
 
