@@ -323,8 +323,47 @@ def _task_out(t: ImprovementTask, today: str) -> dict:
     }
 
 
+
+
+class ImprovementTaskOut(BaseModel):
+    """整改任务出参，与 `_task_out()` 一一对应。"""
+
+    id: int
+    org_id: int
+    indicator_key: str
+    problem: str
+    measures: str
+    owner_name: str
+    due_date: str
+    status: str
+    status_name: str
+    #: 派生字段：未关闭且已过期。不是库里的列，是 `_task_out` 现算的
+    overdue: bool
+    completion_note: str
+    #: 未提交完成时为 null
+    completed_at: str | None
+    verify_comment: str
+    verified_by: str
+
+
+class StatusCount(BaseModel):
+    count: int
+    name: str
+
+
+class ImprovementStatsOut(BaseModel):
+    total: int
+    #: 键是任务状态码（open/in_progress/completed/verified），只列**出现过的**状态，
+    #: 所以是 dict 而不是逐个字段——没有 open 的机构就不该凭空多一个 open: 0
+    by_status: dict[str, StatusCount]
+    overdue: int
+    #: `round(x, 2)` 或字面量 `0.0`，两条分支都是 float
+    closed_rate_pct: float
+
+
 @improvement_router.post(
-    "/improvements", status_code=201, dependencies=[Depends(require_roles("director"))]
+    "/improvements", status_code=201, response_model=ImprovementTaskOut,
+    dependencies=[Depends(require_roles("director"))],
 )
 def create_task(body: TaskCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
@@ -338,7 +377,7 @@ def create_task(body: TaskCreate, db: Session = Depends(get_db), user: User = De
     return _task_out(task, date.today().isoformat())
 
 
-@improvement_router.get("/improvements")
+@improvement_router.get("/improvements", response_model=list[ImprovementTaskOut])
 def list_tasks(
     response: Response,
     org_id: int | None = None,
@@ -373,6 +412,7 @@ class TaskProgress(BaseModel):
 
 @improvement_router.post(
     "/improvements/{task_id}/progress",
+    response_model=ImprovementTaskOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -404,7 +444,8 @@ class TaskVerify(BaseModel):
 
 
 @improvement_router.post(
-    "/improvements/{task_id}/verify", dependencies=[Depends(require_roles("director"))]
+    "/improvements/{task_id}/verify", response_model=ImprovementTaskOut,
+    dependencies=[Depends(require_roles("director"))],
 )
 def verify_task(
     task_id: int,
@@ -432,7 +473,7 @@ def verify_task(
     return _task_out(task, date.today().isoformat())
 
 
-@improvement_router.get("/improvement-stats")
+@improvement_router.get("/improvement-stats", response_model=ImprovementStatsOut)
 def improvement_stats(
     today: str | None = None,
     db: Session = Depends(get_db),

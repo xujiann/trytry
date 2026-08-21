@@ -28,8 +28,8 @@ import app.spd.routers as spd_routers
 
 # —— 棘轮基线 ——
 # 当前无 response_model 的 /api 端点数。**只允许调小，不允许调大。**
-# 每治理一个模块就把这个数字改小（配合 FULLY_GOVERNED）。轨迹：881 中 757 → 756（checkups）→ 753（certs）→ 749（knowledge）→ 745（notifications）→ 743（infectious alerts/late-reports）→ 742（dictionaries import）→ 741（encounters /archive/360 全景视图，嵌套九段逐段建模）→ 740（performance /orgs 机构计分卡，动态 weights + 混形状 detail）。
-BASELINE_WITHOUT_RESPONSE_MODEL = 740
+# 每治理一个模块就把这个数字改小（配合 FULLY_GOVERNED）。轨迹：881 中 757 → 756（checkups）→ 753（certs）→ 749（knowledge）→ 745（notifications）→ 743（infectious alerts/late-reports）→ 742（dictionaries import）→ 741（encounters /archive/360 全景视图，嵌套九段逐段建模）→ 740（performance /orgs 机构计分卡，动态 weights + 混形状 detail）。→ 732（ADR-0006 搬家后补齐 cssd cost-* 3 个与 performance improvements* 5 个，两模块回归 FULLY_GOVERNED）。
+BASELINE_WITHOUT_RESPONSE_MODEL = 732
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -44,10 +44,7 @@ FULLY_GOVERNED = {
     "notifications",  # 见 test_notifications_characterization.py
     "infectious",  # 见 test_infectious_alerts_characterization.py
     "dictionaries",  # 见 test_dictionaries_characterization.py
-    # performance 暂时移出：ADR-0006 把 gapfill 里 5 个 `/api/performance/improvements*`
-    # 端点搬回了本模块（同前缀的代码该住在一起）。那 5 个本来就没有契约，
-    # 搬家没有新增欠账——`BASELINE_WITHOUT_RESPONSE_MODEL` 仍是 740，只是从
-    # gapfill 名下挪到了 performance 名下。补完这 5 个就把 performance 加回来。
+    "performance",  # 见 test_performance_orgs_contract.py、test_cssd_improvement_contracts.py
 }
 
 
