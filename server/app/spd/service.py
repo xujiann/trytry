@@ -571,3 +571,53 @@ def referral_feed(db: Session, patient_id: int) -> list[dict]:
         )
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# 居民端入组读侧聚合的 spd 源（ADR-0003 方案 B）
+# ---------------------------------------------------------------------------
+
+#: `spd_enrollments.status` → 中文。取值见该列的注释。
+_ENROLL_STATUS_LABELS = {
+    "active": "在管", "excluded": "已排除", "migrated": "已迁出",
+    "dead": "已死亡", "lost": "脱管", "recalled": "召回中", "completed": "已结案",
+}
+
+#: `risk_level` → 中文（成员端四级危险分层）。**不与平台的 1/2/3 互相映射**：
+#: 那是控制情况、这是并发症风险，两把尺子量的不是同一件事。
+_RISK_LABELS = {"low": "低危", "mid": "中危", "high": "高危", "very_high": "极高危"}
+
+
+def enrollment_feed(db: Session, patient_id: int) -> list[dict]:
+    """把本子系统的入组档案产出成聚合列表的统一形状。只读、不改任何状态。"""
+    from .platform import ENROLLMENT_FEED_LIMIT, enrollment_feed_item, org_names
+
+    rows = (
+        db.query(SpdEnrollment)
+        .filter(SpdEnrollment.patient_id == patient_id)
+        .order_by(SpdEnrollment.id.desc())
+        .limit(ENROLLMENT_FEED_LIMIT)
+        .all()
+    )
+    names = {
+        p.code: p.name
+        for p in db.query(SpdProgram)
+        .filter(SpdProgram.code.in_([r.program_code for r in rows] or [""]))
+        .all()
+    }
+    orgs = org_names(db, {r.org_id for r in rows})
+    return [
+        enrollment_feed_item(
+            source="spd", id=r.id,
+            program_code=r.program_code,
+            program_name=names.get(r.program_code, r.program_code),
+            status=r.status,
+            status_label=_ENROLL_STATUS_LABELS.get(r.status, r.status),
+            level_code=r.risk_level,
+            level_label=_RISK_LABELS.get(r.risk_level, r.risk_level),
+            stage=r.stage,
+            org=orgs.get(r.org_id, ""),
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]

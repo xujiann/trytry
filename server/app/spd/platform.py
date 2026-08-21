@@ -51,7 +51,10 @@ from ..routers.attachments import store_upload as _store_upload
 from ..routers.portal import accessible_patient, current_resident
 from ..routers.portal import REFERRAL_FEED_LIMIT as _REFERRAL_FEED_LIMIT
 from ..routers.portal import _org_names as _platform_org_names
+from ..routers.portal import ENROLLMENT_FEED_LIMIT as _ENROLLMENT_FEED_LIMIT
+from ..routers.portal import enrollment_feed_item as _enrollment_feed_item
 from ..routers.portal import referral_feed_item as _referral_feed_item
+from ..routers.portal import register_enrollment_source as _register_enrollment_source
 from ..routers.portal import register_referral_source as _register_referral_source
 from ..sms import get_sms_provider as _get_sms_provider
 from ..ws import manager as _ws_manager
@@ -176,6 +179,20 @@ def referral_feed_item(**kwargs) -> dict:
 #: 聚合列表的条数上限，由平台统一定义——子系统各写各的字面量，
 #: 改一处就会静默少报另一处的数据。
 REFERRAL_FEED_LIMIT = _REFERRAL_FEED_LIMIT
+
+
+def register_enrollment_source(name: str, loader) -> None:
+    """把子系统的入组档案登记进居民端**读侧聚合**（ADR-0003 方案 B）。"""
+    _register_enrollment_source(name, loader)
+
+
+def enrollment_feed_item(**kwargs) -> dict:
+    """入组聚合列表的统一条目形状（由平台定义，子系统照此产出）。"""
+    return _enrollment_feed_item(**kwargs)
+
+
+#: 入组聚合的条数上限，由平台统一定义。
+ENROLLMENT_FEED_LIMIT = _ENROLLMENT_FEED_LIMIT
 
 
 def org_names(db, ids) -> dict:

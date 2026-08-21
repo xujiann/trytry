@@ -68,6 +68,11 @@ def register_spd(app: FastAPI) -> int:
     from .platform import register_referral_source
 
     register_referral_source("spd", referral_feed)
+    # 入组档案同理（ADR-0003 方案 B 第二个概念）
+    from .service import enrollment_feed
+    from .platform import register_enrollment_source
+
+    register_enrollment_source("spd", enrollment_feed)
     # 订阅平台领域事件（出院、就诊）与注册定时任务。和路由一起装卸：
     # 子系统关掉就不再听、也不再跑，否则会出现"菜单里没有这个功能，
     # 但出院时它还在写数据"。

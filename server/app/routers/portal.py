@@ -43,6 +43,7 @@ from ..models import (
     BillDetail,
     ChargeItem,
     ChargePriceChange,
+    ChronicDiseaseType,
     ChronicPatient,
     ContractService,
     Encounter,
@@ -1079,6 +1080,143 @@ def portal_my_referrals_all(
     # 同一时刻再按源名与 id 兜底，保证顺序确定（否则分页与快照测试会飘）。
     items.sort(key=lambda i: (i["created_at"], i["source"], i["id"]), reverse=True)
     return items[:REFERRAL_FEED_LIMIT]
+
+
+# ---------------------------------------------------------------------------
+# 入组读侧聚合（ADR-0003 方案 B 第二个概念）
+# ---------------------------------------------------------------------------
+#
+# 与转诊同一个毛病：同一件事——"这个人被纳入了哪些疾病管理"——居民端有两份。
+# `/me/archive` 的 `chronic_care` 读平台 `chronic_patients`，
+# `/spd/archive` 的 `enrollments` 读 `spd_enrollments`，看到哪份取决于点了哪个入口。
+#
+# 做法与转诊完全一致：只读叠加、老接口字节不动、注册制登记源（平台不 import 子系统）。
+#
+# **刻意不统一分级词汇**：平台 `level` 是 1/2/3（控制良好/需干预/高危），
+# spd `risk_level` 是 low/mid/high/very_high（四级危险分层）。两把尺子量的不是
+# 同一件事——"控制良好"说的是当前控制情况，"低危"说的是发生并发症的风险。
+# 硬映射成一套码就是在编一个并不存在的等价关系，所以这里各留各的原始码，
+# 只各自给中文标签。这与转诊那边"同名不同义靠 source 分辨"是同一条原则。
+
+#: 各源的读取函数：(db, patient_id) -> 统一形状的 list。
+_ENROLLMENT_SOURCES: dict[str, Callable[[Session, int], list[dict]]] = {}
+
+#: 聚合列表条数上限。入组是低频事件（一个人管几个病种），比转诊更不可能超。
+ENROLLMENT_FEED_LIMIT = 50
+
+#: 平台慢病分级 1/2/3 的中文。取值见 `ChronicPatient.level` 的列注释。
+_CHRONIC_LEVEL_LABELS = {1: "控制良好", 2: "需干预", 3: "高危"}
+
+
+def register_enrollment_source(
+    name: str, loader: "Callable[[Session, int], list[dict]]"
+) -> None:
+    """登记一个入组数据源（子系统装载时调用一次，重复登记以后到者为准）。"""
+    _ENROLLMENT_SOURCES[name] = loader
+
+
+def enrollment_feed_item(
+    *, source: str, id: int, program_code: str, program_name: str,
+    status: str, status_label: str, level_code: str, level_label: str,
+    created_at: str, org: str = "", stage: str = "", next_followup_due: str = "",
+) -> dict:
+    """聚合列表的统一条目形状。各源都经这里出，省得两边字段名慢慢长歪。
+
+    `source` 指**数据来自哪套子域**（platform/spd）。注意勿与 `SpdEnrollment.source`
+    混淆——后者说的是"因何纳入"（筛查/转诊/…），是另一回事。
+    """
+    return {
+        "source": source, "id": id,
+        "program_code": program_code, "program_name": program_name,
+        "status": status, "status_label": status_label,
+        "level_code": level_code, "level_label": level_label,
+        "stage": stage, "org": org,
+        "next_followup_due": next_followup_due,
+        "created_at": created_at, "date": created_at[:10],
+    }
+
+
+def _platform_enrollment_source(db: Session, patient_id: int) -> list[dict]:
+    rows = (
+        db.query(ChronicPatient)
+        .filter(ChronicPatient.patient_id == patient_id)
+        .order_by(ChronicPatient.id.desc())
+        .limit(ENROLLMENT_FEED_LIMIT)
+        .all()
+    )
+    names = {
+        t.code: t.name
+        for t in db.query(ChronicDiseaseType)
+        .filter(ChronicDiseaseType.code.in_([r.disease for r in rows] or [""]))
+        .all()
+    }
+    org_names = _org_names(db, {r.managed_by_org_id for r in rows})
+    return [
+        enrollment_feed_item(
+            source="platform", id=r.id,
+            program_code=r.disease, program_name=names.get(r.disease, r.disease),
+            # 平台慢病档案没有状态列——建了就是在管，没有"已排除/已迁出"这些说法。
+            # 补一个恒定的 active 让两边形状对齐，而不是让这个字段时有时无。
+            status="active", status_label="在管",
+            level_code=str(r.level),
+            level_label=_CHRONIC_LEVEL_LABELS.get(r.level, str(r.level)),
+            org=org_names.get(r.managed_by_org_id, ""),
+            next_followup_due=r.next_due,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]
+
+
+register_enrollment_source("platform", _platform_enrollment_source)
+
+
+class EnrollmentFeedItem(BaseModel):
+    """聚合列表的响应契约（CLAUDE.md §11：每个端点声明 response_model）。"""
+
+    source: str
+    id: int
+    program_code: str
+    program_name: str
+    status: str
+    status_label: str
+    #: 两套分级不是同一把尺子（见上方说明），故各留原始码 + 各自的中文标签，
+    #: 不做跨源映射。
+    level_code: str
+    level_label: str
+    stage: str
+    org: str
+    next_followup_due: str
+    created_at: str
+    date: str
+
+
+@router.get("/me/enrollments/all", response_model=list[EnrollmentFeedItem])
+def portal_my_enrollments_all(
+    patient_id: int | None = None,
+    source: str | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的全部疾病管理档案：平台慢病与慢专病并成一份（ADR-0003 方案 B）。
+
+    每条都带 `source`——两套的分级词汇不通用，不标源就会被当成同一把尺子。
+    `source` 可收窄到单个源，且**在服务端收窄**：条数上限是合并之后才截的，
+    客户端自己筛会在另一源条目更多时把本源整段挤掉（与转诊聚合同一处理）。
+    子系统未启用时只返回平台那一份。
+    """
+    if source is not None and source not in _ENROLLMENT_SOURCES:
+        raise HTTPException(status_code=422, detail=f"未知入组数据源：{source}")
+    patient = accessible_patient(db, account, patient_id)
+    loaders = (
+        [_ENROLLMENT_SOURCES[source]] if source is not None
+        else list(_ENROLLMENT_SOURCES.values())
+    )
+    items: list[dict] = []
+    for loader in loaders:
+        items.extend(loader(db, patient.id))
+    items.sort(key=lambda i: (i["created_at"], i["source"], i["id"]), reverse=True)
+    return items[:ENROLLMENT_FEED_LIMIT]
 
 
 @router.get("/me/referrals")
