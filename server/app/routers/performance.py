@@ -103,7 +103,51 @@ def update_indicator(key: str, body: IndicatorPatch, db: Session = Depends(get_d
     return indicator
 
 
-@router.get("/orgs")
+class ReferralCompletion(BaseModel):
+    completed: int
+    total: int
+
+
+class ChronicFollowup(BaseModel):
+    followed: int
+    total: int
+
+
+class RxPass(BaseModel):
+    passed: int
+    total: int
+
+
+class ScorecardDetail(BaseModel):
+    """计分明细：三段是「分子/分母」小字典，两段是裸计数——形状本就不齐，
+    逐段建模而不是 `dict[str, Any]`（写成 Any 等于没声明契约）。"""
+
+    referral_completion: ReferralCompletion
+    remote_exams: int
+    chronic_followup: ChronicFollowup
+    rx_pass: RxPass
+    contract_services: int
+
+
+class OrgScorecard(BaseModel):
+    org_id: int
+    org_name: str
+    level: str
+    #: `round(sum(...), 1)`。`_normalized_weights` 表空时退回非空默认，
+    #: 求和恒在浮点上做，故这里恒为 float（`0.0` 而非 `0`）——
+    #: 若可能是 int，声明成 float 就会改掉响应字节。
+    score: float
+    detail: ScorecardDetail
+
+
+class OrgScorecardsOut(BaseModel):
+    #: 键来自 `performance_indicators` 表（可增删指标），是**动态**的，
+    #: 只能写 dict[str, float]，不能逐个字段写死。
+    weights: dict[str, float]
+    scorecards: list[OrgScorecard]
+
+
+@router.get("/orgs", response_model=OrgScorecardsOut)
 def org_scorecards(
     volume_cap: int = 5,
     include_auto_passed: bool = True,
