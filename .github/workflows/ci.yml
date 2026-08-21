@@ -46,8 +46,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install dependencies
-        run: pip install -r server/requirements.txt
+      - name: Install dependencies (locked)
+        # A7：按 lock 安装——CI 测的和镜像里装的是**同一组版本**，可复现
+        run: pip install -r server/requirements.lock
       - name: Run unit + smoke tests with coverage
         working-directory: server
         # 端到端测试（tests/e2e，标记 e2e）默认跳过，需 --e2e 且已安装浏览器内核
@@ -91,8 +92,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install dependencies (含开发工具)
-        run: pip install -r server/requirements.txt -r server/requirements-dev.txt
+      - name: Install dependencies (locked, 含开发工具)
+        # A7：运行时依赖按 lock 钉版；开发工具（ruff/mypy）仍走 dev 区间——
+        # 它们不进镜像，钉版收益低，且 lint/typecheck 存量清零后新版能早暴露新规则
+        run: pip install -r server/requirements.lock -r server/requirements-dev.txt
       - name: Build check (字节编译 + 迁移图)
         working-directory: server
         run: |
@@ -108,3 +111,20 @@ jobs:
         run: |
           python scripts/check_mypy_env.py
           mypy app
+
+  # A7：依赖漏洞扫描（对全钉版 lock 扫，结果可复现）。起步为 warning 档
+  # （continue-on-error）：先看清存量、修完已知项后再转阻断，与 lint/mypy
+  # 当年"先基线后棘轮"的路数一致。
+  audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: pip-audit (warning 档)
+        # --no-deps：lock 已含全部传递依赖，无需现场解析
+        run: |
+          pip install pip-audit
+          pip-audit --no-deps -r server/requirements.lock

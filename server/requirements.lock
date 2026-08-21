@@ -1,0 +1,50 @@
+# ============================================================================
+# requirements.lock —— 运行时依赖全钉版清单（A7：可复现构建）
+#
+# 生成方式：干净 venv 里解析 requirements.txt 后 pip freeze（含全部传递依赖）：
+#   python3 -m venv /tmp/lockenv
+#   /tmp/lockenv/bin/pip install --upgrade pip
+#   /tmp/lockenv/bin/pip install -r server/requirements.txt
+#   /tmp/lockenv/bin/pip freeze --all --exclude pip --exclude setuptools \
+#     | sort -f > server/requirements.lock   # （保留本文件头注释）
+#
+# 再生成：升级依赖时重复上述步骤，并跑通 `make verify` 后一并提交。
+# 本次生成环境：Python 3.11（容器内无 3.12；已验证该组合下应用可导入、
+# 附件套件全绿；清单内各包均同时支持 3.11/3.12，CI（3.12）会再次验证）。
+# 约束真源仍是 requirements.txt（区间声明）；本文件是它的一次可复现快照，
+# 两者同时存在：镜像与 CI 装 lock，人工开发装哪个都能跑。
+# ============================================================================
+alembic==1.19.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+certifi==2026.7.22
+click==8.4.2
+coverage==7.15.4
+fastapi==0.141.1
+greenlet==3.5.5
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.19
+iniconfig==2.3.0
+Mako==1.4.1
+MarkupSafe==3.0.3
+packaging==26.3
+pluggy==1.6.0
+psycopg2-binary==2.9.12
+pydantic-settings==2.15.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+Pygments==2.21.0
+pytest-cov==7.1.0
+pytest==9.1.1
+python-dotenv==1.2.3
+python-multipart==0.0.32
+qrcode==8.2
+redis==8.1.0
+SQLAlchemy==2.0.52
+starlette==1.6.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.52.4
