@@ -65,8 +65,8 @@ class Admission(Base):
     diagnosis_name: Mapped[str] = mapped_column(String(256), default="")
     # admitted=在院, discharged=已出院
     status: Mapped[str] = mapped_column(String(16), default="admitted", index=True)
-    admitted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    discharged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    admitted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    discharged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
     orders: Mapped[list["InpatientOrder"]] = relationship(back_populates="admission")
@@ -111,7 +111,7 @@ class CaseSummary(Base):
     drg_code: Mapped[str] = mapped_column(String(16), default="", index=True)
     drg_weight: Mapped[float] = mapped_column(Float, default=0)
     created_by_name: Mapped[str] = mapped_column(String(64), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     admission: Mapped[Admission] = relationship(back_populates="case_summary")
 

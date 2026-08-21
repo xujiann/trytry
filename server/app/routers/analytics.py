@@ -10,6 +10,7 @@ from typing import Any
 
 from datetime import date, datetime, timedelta
 
+import sqlalchemy as sa
 from sqlalchemy import func
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -71,6 +72,59 @@ def _period_bounds(period: str) -> tuple[date, date]:
     except ValueError:
         raise HTTPException(status_code=422, detail="period 须为 YYYY-MM 格式") from None
     return start, (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+# ---------------------------------------------------------------------------
+# 数据库内日期算术（A3 聚合化的方言层）
+# ---------------------------------------------------------------------------
+# 运行效率与用药强度的口径都建立在"天数差"上。此前是把全量 Admission /
+# BillDetail / PrescriptionItem 拉进内存逐行算——统计月报把三年历史搬一遍。
+# 聚合下推后，日期算术必须在数据库里做，而 SQLite（开发/测试）与
+# PostgreSQL（生产）没有共同的日期差函数，只能各写一句、收在这几个助手里。
+# 语义对齐 Python 侧原实现：日期级用 `date() 差`，时刻级用 `timedelta.days`
+# （对正值即向下取整），特征化测试锁住两种方言下的取值一致。
+
+
+def _is_sqlite(db: Session) -> bool:
+    return db.get_bind().dialect.name == "sqlite"
+
+
+def _sql_date_day(db: Session, col):
+    """列的**日期部分**在"天数轴"上的位置：同方言内两值之差即相隔天数。
+
+    SQLite 用儒略日（日期在 x.5 上，双精度可精确表示，差值为精确整数）；
+    PostgreSQL 转 date 后与固定纪元相减得整数。绝对值无意义，只比差。
+    """
+    if _is_sqlite(db):
+        return func.julianday(func.date(col))
+    return sa.cast(col, sa.Date) - date(1970, 1, 1)
+
+
+def _py_date_day(db: Session, d: date):
+    """把 Python date 常量换算到 `_sql_date_day` 同一条天数轴上。"""
+    if _is_sqlite(db):
+        # 儒略日 = 公历序数 + 1721424.5（午夜）
+        return d.toordinal() + 1721424.5
+    return (d - date(1970, 1, 1)).days
+
+
+def _sql_stay_days(db: Session, later, earlier):
+    """两个**时间戳**相隔的整天数，对齐 Python `(later - earlier).days` 的正值域。
+
+    SQLite 取 Unix 秒差再整除（避免儒略日小数在整天边界上的浮点抖动）；
+    PostgreSQL 取 interval 的 epoch 秒差后向下取整。
+    """
+    if _is_sqlite(db):
+        return (
+            sa.cast(func.strftime("%s", later), sa.Integer)
+            - sa.cast(func.strftime("%s", earlier), sa.Integer)
+        ) / 86400
+    return sa.cast(func.floor(sa.extract("epoch", later - earlier) / 86400.0), sa.Integer)
+
+
+def _at_least_one_day(expr):
+    """住院日/床日的 1 天下限：当日入出院也算 1 天（原 `max(days, 1)`）。"""
+    return sa.case((expr < 1, 1), else_=sa.cast(expr, sa.Integer))
 
 
 # ============================================================================
@@ -241,30 +295,58 @@ def efficiency(
         .group_by(Ward.org_id)
         .all()
     )
-    doctor_counts: dict[int, int] = {}
-    for emp in db.query(Employee).filter(Employee.status == "active").all():
-        if any(k in (emp.position or "") for k in DOCTOR_POSITION_KEYWORDS):
-            doctor_counts[emp.org_id] = doctor_counts.get(emp.org_id, 0) + 1
+    # 医师数：关键词匹配下推为 LIKE（语义同 Python 的子串 in），按机构分组计数
+    doctor_counts = row_dict(
+        db.query(Employee.org_id, func.count(Employee.id))
+        .filter(
+            Employee.status == "active",
+            sa.or_(*[Employee.position.like(f"%{k}%") for k in DOCTOR_POSITION_KEYWORDS]),
+        )
+        .group_by(Employee.org_id)
+        .all()
+    )
 
-    admissions = db.query(Admission).filter(Admission.admitted_at < end_dt).all()
-    discharged_days: dict[int, int] = {}
+    # 住院指标全部数据库内聚合。此前把 `admitted_at < 期末` 的**历史全量**住院
+    # 拉进内存逐行算，统计一个月要搬三年数据；现在按"与统计期有重叠"过滤
+    # （期前出院的记录本来就贡献 0，被 WHERE 直接裁掉），并把床日/住院日的
+    # 天数算术交给数据库（见上方方言助手）。
+    admitted_day = _sql_date_day(db, Admission.admitted_at)
+    start_day, end_day = _py_date_day(db, start), _py_date_day(db, end)
+    # 出院日：在院者视同期末（与原实现 `discharged or end` 一致）
+    discharged_day = sa.case(
+        (Admission.discharged_at.is_(None), end_day),
+        else_=_sql_date_day(db, Admission.discharged_at),
+    )
+    overlap_start = sa.case((admitted_day > start_day, admitted_day), else_=start_day)
+    overlap_end = sa.case((discharged_day < end_day, discharged_day), else_=end_day)
+    overlap = overlap_end - overlap_start
+    occupied_days: dict[int, int] = row_dict(
+        db.query(Admission.org_id, func.sum(_at_least_one_day(overlap)))
+        .filter(
+            Admission.admitted_at < end_dt,
+            sa.or_(Admission.discharged_at.is_(None), Admission.discharged_at >= start_dt),
+            overlap >= 0,
+        )
+        .group_by(Admission.org_id)
+        .all()
+    )
+    # 出院者：出院日落在期间内才计入本期出院人次与平均住院日
+    stay = _sql_date_day(db, Admission.discharged_at) - admitted_day
     discharged_count: dict[int, int] = {}
-    occupied_days: dict[int, int] = {}
-    for adm in admissions:
-        admitted = adm.admitted_at.date()
-        discharged = adm.discharged_at.date() if adm.discharged_at else end
-        overlap_start = max(admitted, start)
-        overlap_end = min(discharged, end)
-        if overlap_end >= overlap_start:
-            occupied_days[adm.org_id] = occupied_days.get(adm.org_id, 0) + max(
-                (overlap_end - overlap_start).days, 1
-            )
-        # 出院者：出院日落在期间内才计入本期出院人次与平均住院日
-        if adm.discharged_at is not None and start <= adm.discharged_at.date() < end:
-            discharged_count[adm.org_id] = discharged_count.get(adm.org_id, 0) + 1
-            discharged_days[adm.org_id] = discharged_days.get(adm.org_id, 0) + max(
-                (adm.discharged_at.date() - admitted).days, 1
-            )
+    discharged_days: dict[int, int] = {}
+    for oid, count, day_sum in (
+        db.query(Admission.org_id, func.count(Admission.id), func.sum(_at_least_one_day(stay)))
+        .filter(
+            Admission.admitted_at < end_dt,
+            Admission.discharged_at.isnot(None),
+            Admission.discharged_at >= start_dt,
+            Admission.discharged_at < end_dt,
+        )
+        .group_by(Admission.org_id)
+        .all()
+    ):
+        discharged_count[oid] = count
+        discharged_days[oid] = day_sum
 
     visits: dict[int, int] = {}
     for oid, count in (
@@ -579,64 +661,88 @@ def drug_use(
             inpatient[oid] = (float(total or 0), float(drug or 0))
 
     # ---- 门诊药占比（费用明细 × 收费目录分类）----
-    drug_codes = {
-        i.code for i in db.query(ChargeItem).filter(ChargeItem.category == "drug").all()
-    }
+    # 此前把整月 BillDetail 全行拉进内存逐条累加；改为按机构分组求和，
+    # 药品口径用 IN (收费目录 category=drug) 子查询在库内判定。
+    drug_code_sq = (
+        sa.select(ChargeItem.code).where(ChargeItem.category == "drug").scalar_subquery()
+    )
     outpatient_total: dict[int, float] = dict.fromkeys(org_ids, 0.0)
     outpatient_drug: dict[int, float] = dict.fromkeys(org_ids, 0.0)
     detail_rows = (
-        db.query(BillDetail.item_code, BillDetail.amount, Encounter.org_id)
+        db.query(
+            Encounter.org_id,
+            func.sum(BillDetail.amount),
+            func.sum(sa.case((BillDetail.item_code.in_(drug_code_sq), BillDetail.amount), else_=0)),
+        )
+        .select_from(BillDetail)
         .join(Encounter, BillDetail.encounter_id == Encounter.id)
         .filter(BillDetail.created_at >= start_dt, BillDetail.created_at < end_dt)
+        .group_by(Encounter.org_id)
         .all()
     )
-    for code, amount, oid in detail_rows:
+    for oid, total, drug in detail_rows:
         if oid not in outpatient_total:
             continue
-        outpatient_total[oid] += float(amount or 0)
-        if code in drug_codes:
-            outpatient_drug[oid] += float(amount or 0)
+        outpatient_total[oid] = float(total or 0)
+        outpatient_drug[oid] = float(drug or 0)
 
     # ---- 抗菌药物使用强度 ----
-    antibiotics = {
-        r.drug_code: r.ddd
-        for r in db.query(DrugRule)
-        .filter(DrugRule.antibiotic.is_(True), DrugRule.active.is_(True))
-        .all()
-    }
+    # 同样从"整月 PrescriptionItem 全行进内存"改为库内聚合：抗菌药目录直接
+    # JOIN 进来（drug_code 唯一），DDD>0 求 DDDs、DDD=0 计未覆盖数一次算完。
     ddd_sum: dict[int, float] = dict.fromkeys(org_ids, 0.0)
     uncovered: dict[int, int] = dict.fromkeys(org_ids, 0)
     item_rows = (
-        db.query(PrescriptionItem, Prescription.org_id)
+        db.query(
+            Prescription.org_id,
+            func.sum(
+                sa.case(
+                    (
+                        DrugRule.ddd > 0,
+                        func.coalesce(PrescriptionItem.daily_dose, 0)
+                        * func.coalesce(PrescriptionItem.days, 0)
+                        / DrugRule.ddd,
+                    ),
+                    else_=0.0,
+                )
+            ),
+            # 目录未维护 DDD（ddd<=0）的抗菌药条目：计为未覆盖
+            func.sum(sa.case((DrugRule.ddd <= 0, 1), else_=0)),
+        )
+        .select_from(PrescriptionItem)
         .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
+        .join(
+            DrugRule,
+            sa.and_(
+                DrugRule.drug_code == PrescriptionItem.drug_code,
+                DrugRule.antibiotic.is_(True),
+                DrugRule.active.is_(True),
+            ),
+        )
         .filter(Prescription.created_at >= start_dt, Prescription.created_at < end_dt)
+        .group_by(Prescription.org_id)
         .all()
     )
-    for item, oid in item_rows:
-        if oid not in ddd_sum or item.drug_code not in antibiotics:
+    for oid, ddds, uncov in item_rows:
+        if oid not in ddd_sum:
             continue
-        ddd = antibiotics[item.drug_code]
-        if ddd <= 0:
-            uncovered[oid] += 1  # 目录未维护 DDD，计为未覆盖
-            continue
-        ddd_sum[oid] += (item.daily_dose or 0) * (item.days or 0) / ddd
+        ddd_sum[oid] = float(ddds or 0)
+        uncovered[oid] = int(uncov or 0)
 
-    # 分母：收治人天 = 期内出院者占用总床日
+    # 分母：收治人天 = 期内出院者占用总床日（时刻级天数差，1 天下限）
     bed_days: dict[int, int] = dict.fromkeys(org_ids, 0)
-    for adm in (
-        db.query(Admission)
+    stay_days = _sql_stay_days(db, Admission.discharged_at, Admission.admitted_at)
+    for oid, day_sum in (
+        db.query(Admission.org_id, func.sum(_at_least_one_day(stay_days)))
         .filter(
             Admission.discharged_at.isnot(None),
             Admission.discharged_at >= start_dt,
             Admission.discharged_at < end_dt,
         )
+        .group_by(Admission.org_id)
         .all()
     ):
-        if adm.org_id in bed_days:
-            # 查询条件已含 `discharged_at >= start_dt`，这里必非 None；
-            # 判一句让类型也说得通，顺便挡住将来有人放宽那个过滤条件。
-            if adm.discharged_at is not None:
-                bed_days[adm.org_id] += max((adm.discharged_at - adm.admitted_at).days, 1)
+        if oid in bed_days:
+            bed_days[oid] = int(day_sum or 0)
 
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
