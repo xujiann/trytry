@@ -29,6 +29,7 @@ from typing import Callable, Iterator
 
 from sqlalchemy.orm import Session
 
+from .alerting import send_alert
 from .clock import now_naive
 from .database import SessionLocal
 from .models import JobRun, ScheduledJob
@@ -264,6 +265,8 @@ def run_job(db: Session, name: str, trigger: str = "scheduled") -> JobRun:
         db.rollback()
         status, message = "failed", f"{type(exc).__name__}: {exc}"[:1000]
         logger.exception("[SCHEDULER] 任务 %s 执行失败", name)
+        # 工程包 P2：任务失败主动外发告警（kind 带任务名，互不占用冷却）
+        send_alert(f"job_failed:{name}", f"定时任务 {spec.title}（{name}）执行失败：{message}")
     run = JobRun(
         job_name=name,
         trigger=trigger,

@@ -1,0 +1,38 @@
+# pgBackRest 配置样例（工程包 P2：WAL 归档 + PITR）
+#
+# 部署位置：/etc/pgbackrest/pgbackrest.conf（PG 服务器上，postgres 用户可读）。
+# 配合 postgresql.conf 开启连续归档：
+#
+#   archive_mode = on
+#   archive_command = 'pgbackrest --stanza=medplat archive-push %p'
+#   # WAL 段默认 16MB 写满才归档；低写入量时段用超时兜住 RPO（≤15min 目标取 60s~300s）
+#   archive_timeout = 60
+#
+# 初始化与验证（改完配置、重启 PG 后执行一次）：
+#
+#   sudo -u postgres pgbackrest --stanza=medplat stanza-create
+#   sudo -u postgres pgbackrest --stanza=medplat check
+#
+# 日常备份走 scripts/backup_pg_pitr.sh（封装 full/diff/incr/check/info）。
+
+[global]
+# 备份仓库：独立磁盘/挂载点，绝不能与 PG 数据盘同盘（盘坏两者一起丢）
+repo1-path=/var/lib/pgbackrest
+# 保留策略：2 个全量 + 差异随全量过期；按县里的留存要求调整
+repo1-retention-full=2
+repo1-retention-diff=7
+# 备份文件含居民敏感信息（运维手册第四节）：仓库必须加密
+repo1-cipher-type=aes-256-cbc
+# 口令用强随机值注入，不要提交进任何仓库：
+# repo1-cipher-pass=<openssl rand -base64 48 生成后填入>
+start-fast=y
+compress-type=gz
+process-max=2
+log-level-console=info
+log-level-file=detail
+
+[medplat]
+# pg1-path 指向 PGDATA（按发行版调整，如 /var/lib/postgresql/16/main）
+pg1-path=/var/lib/postgresql/16/main
+pg1-port=5432
+pg1-user=postgres

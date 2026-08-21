@@ -235,14 +235,24 @@ def patient_flow(start: str | None = None, end: str | None = None, db: Session =
         outside_q = outside_q.filter(OutboundVisit.visit_date < end)
 
     inside = inside_q.count()
-    outside_rows = outside_q.all()
-    outside = len(outside_rows)
+    # 聚合下推（工程包 P2）：此前把 OutboundVisit 全行取回内存逐行数——县外
+    # 就诊表按年增长，月报把历史全量搬一遍。改为按机构层级 GROUP BY 一次取回
+    # 计数/转诊计数/金额（COUNT(referral_id) 只数非 NULL，语义即"关联了转诊单"），
+    # 总量在 ≤3 行的分组结果上相加，明细行不再离库。
+    grouped = (
+        outside_q.with_entities(
+            OutboundVisit.external_org_level,
+            func.count(OutboundVisit.id),
+            func.count(OutboundVisit.referral_id),
+            func.coalesce(func.sum(OutboundVisit.total_amount), 0.0),
+        )
+        .group_by(OutboundVisit.external_org_level)
+        .all()
+    )
+    outside = sum(count for _, count, _, _ in grouped)
     total = inside + outside
-    referred = sum(1 for v in outside_rows if v.referral_id is not None)
-
-    by_level: dict[str, int] = {}
-    for v in outside_rows:
-        by_level[v.external_org_level] = by_level.get(v.external_org_level, 0) + 1
+    referred = sum(ref_count for _, _, ref_count, _ in grouped)
+    by_level = {level: count for level, count, _, _ in grouped}
 
     def pct(part: int, whole: int) -> float:
         return round(part * 100 / whole, 2) if whole else 0.0
@@ -256,7 +266,7 @@ def patient_flow(start: str | None = None, end: str | None = None, db: Session =
         "referred_outbound": referred,
         "ordered_referral_rate_pct": pct(referred, outside),
         "outside_by_level": by_level,
-        "outside_amount": round(sum(v.total_amount for v in outside_rows), 2),
+        "outside_amount": round(sum(amount for *_, amount in grouped), 2),
     }
 
 
