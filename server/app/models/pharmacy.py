@@ -67,7 +67,7 @@ class Prescription(Base):
     status: Mapped[str] = mapped_column(String(16), default="auto_passed", index=True)
     review_comment: Mapped[str] = mapped_column(String(1024), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     items: Mapped[list["PrescriptionItem"]] = relationship(back_populates="prescription")
 

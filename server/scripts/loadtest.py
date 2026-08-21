@@ -20,11 +20,28 @@
 说明：
 - 压测前自动用 admin 账号准备一个机构与一名患者（幂等）；
 - 开单场景会产生真实数据，请勿对生产库执行；
-- P95 基线建议（本地 SQLite 单实例、演示数据量）：login<300ms、patients<100ms、
-  exam_order<150ms、progress_note<150ms、service_requests<200ms、
-  patient_flow<200ms、perf_report<400ms。
-  perf_report 与 service_requests 是最需要盯的两条——前者是全机构 × 全公式的
-  报表，后者跨五类单据聚合，都随数据量增长最快。
+- 本脚本只打 HTTP（base_url 指到哪压哪）；数据库走**被压服务**读的
+  `MEDPLAT_DATABASE_URL`——压什么库由起服务的环境决定，脚本本身不连库。
+
+容量验证（A11）——在 PostgreSQL + 仿真规模数据上执行：
+
+    # 1) 准备专用压测库（禁止用生产库），建表用复数 heads（平台链 + spd 链）
+    export MEDPLAT_DATABASE_URL=postgresql+psycopg2://user:pass@host/medplat_bench
+    python -m alembic upgrade heads
+    # 2) 灌仿真数据（幂等可续跑，量按容量目标定；见 scripts/seed_bulk.py）
+    python scripts/seed_bulk.py --patients 100000 --encounters 1000000 \
+        --admissions 100000 --prescriptions 200000 --bill-details 500000
+    # 3) 以生产同构配置起服务（连接池按 MEDPLAT_DB_POOL_* 配置）并施压
+    uvicorn app.main:app --port 8000 &
+    python scripts/loadtest.py http://127.0.0.1:8000 --concurrency 50 --requests 500
+
+- 早期的 P95 基线（本地 SQLite、演示数据量，仅作烟囱参考）：login<300ms、
+  patients<100ms、exam_order<150ms、progress_note<150ms、service_requests<200ms、
+  patient_flow<200ms、perf_report<400ms。**容量结论以 PG + 仿真数据为准**：
+  验收口径是压测期间错误数为 0（含拿不到连接的超时）、核心读 P95 不随
+  历史数据量线性劣化；perf_report 与 service_requests 仍是最需要盯的两条，
+  统计聚合已下推数据库（A3），若它们随 seed_bulk 灌量线性变慢，先查
+  执行计划有没有走上日期索引。
 """
 import argparse
 from datetime import datetime

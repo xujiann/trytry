@@ -36,7 +36,7 @@ class Encounter(Base):
     diagnosis_code: Mapped[str] = mapped_column(String(64), default="")
     diagnosis_name: Mapped[str] = mapped_column(String(256), default="")
     summary: Mapped[str] = mapped_column(String(1024), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class ExamRequest(Base):

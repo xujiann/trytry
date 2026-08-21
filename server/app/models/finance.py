@@ -94,7 +94,7 @@ class BillDetail(Base):
         ForeignKey("settlements.id"), nullable=True, index=True
     )
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Settlement(Base):

@@ -40,14 +40,18 @@
 需要人记得的事就会被忘掉（D-5～D-7 三次复发、D-8 两个 GET 忘了换出参）。
 "能看"与"看了什么、凭什么"绑死在一次调用里，漏不掉。
 """
+import threading
+import time
+from collections import OrderedDict
 from datetime import date
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from .clock import now_naive
+from .config import settings
 from .database import SessionLocal
 from .models import (
     AccessLog,
@@ -71,6 +75,7 @@ __all__ = [
     "assert_obj_org_writable",
     "stats_org_ids",
     "patient_basis",
+    "clear_visibility_cache",
     "assert_patient_visible",
     "log_patient_access",
     "visible_patient_ids",
@@ -213,18 +218,94 @@ def stats_org_ids(db: Session, user: User) -> list[int] | None:
 
 
 # ---------------------------------------------------------------- 患者维度
+# ---- 判定结论的进程内 TTL 缓存（生产整改 A4） ----
+#
+# `patient_basis` 的服务关系判定要对几十张关系表逐一发 EXISTS 查询，患者 360
+# 视图一次页面就把同一 (用户, 患者) 判上十几遍。这里加一层进程内短 TTL 缓存，
+# 键 (user_id, patient_id) → basis，**只缓存"允许"结论**：
+#
+# - 拒绝（None）不缓存——授权**放宽立即生效**（建立就诊/签约关系后下一次
+#   调用就重新判定并放行），**收窄最迟 TTL 秒生效**（已缓存的允许结论最长
+#   再活 TTL 秒）。风险不对等：迟 TTL 秒关门可接受，迟 TTL 秒开门不可接受。
+# - 缓存只省**判定查询**，不改留痕语义：`assert_patient_visible` 每次调用
+#   照常写一条 AccessLog，命中缓存的调阅同样记账。
+# - TTL 取 settings.visibility_cache_ttl_seconds，0=关闭；条数有上限（LRU
+#   淘汰最久未用的），防止长时间运行下内存膨胀。
+
+
+class _BasisCache:
+    """线程安全的 (user_id, patient_id) → basis 小缓存：TTL + LRU 上限。"""
+
+    def __init__(self, max_entries: int = 50_000) -> None:
+        self._entries: OrderedDict[tuple[int, int], tuple[float, str]] = OrderedDict()
+        self._lock = threading.Lock()
+        self._max_entries = max_entries
+
+    def get(self, key: tuple[int, int], ttl: int) -> str | None:
+        now = time.monotonic()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            cached_at, basis = entry
+            if now - cached_at >= ttl:
+                del self._entries[key]
+                return None
+            self._entries.move_to_end(key)
+            return basis
+
+    def put(self, key: tuple[int, int], basis: str) -> None:
+        with self._lock:
+            self._entries[key] = (time.monotonic(), basis)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_basis_cache = _BasisCache()
+
+
+def clear_visibility_cache() -> None:
+    """清空可见性判定缓存（测试辅助；改授权数据后想立即收窄也可调用）。"""
+    _basis_cache.clear()
+
+
+# 库表被整体重建（测试的 reset_database、运维重建）时，缓存结论必然作废。
+event.listen(Base.metadata, "after_drop", lambda *args, **kwargs: _basis_cache.clear())
 
 
 def patient_basis(db: Session, user: User, patient_id: int) -> str | None:
     """该用户看这个患者的**依据**；看不了返回 None。
 
-    依据按"最不需要解释"的顺序判：本机构就诊过 > 签约 > 转诊 > 患者授权。
-    先判哪个不影响能不能看，只影响留痕里记下的那个词，所以取最直接的那条。
+    允许结论走进程内 TTL 缓存（见上方 `_BasisCache` 的口径说明）；
+    全域角色与拒绝结论不进缓存。
     """
     if user.role in GLOBAL_ROLES:
         return "global"
     if user.org_id is None:
         return None
+    ttl = settings.visibility_cache_ttl_seconds
+    key = (user.id, patient_id)
+    if ttl > 0:
+        cached = _basis_cache.get(key, ttl)
+        if cached is not None:
+            return cached
+    basis = _patient_basis_uncached(db, user, patient_id)
+    if ttl > 0 and basis is not None:  # 拒绝不缓存：放宽立即生效
+        _basis_cache.put(key, basis)
+    return basis
+
+
+def _patient_basis_uncached(db: Session, user: User, patient_id: int) -> str | None:
+    """逐表查库的判定本体（无缓存）。
+
+    依据按"最不需要解释"的顺序判：本机构就诊过 > 签约 > 转诊 > 患者授权。
+    先判哪个不影响能不能看，只影响留痕里记下的那个词，所以取最直接的那条。
+    """
     org_id = user.org_id
 
     if (
