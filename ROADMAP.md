@@ -43,6 +43,7 @@
 ## Next（治理逐块推进，只进不退）
 
 - ◐ 接口契约棘轮：按 `docs/接口标准与治理.md` 逐块迁移。已治理 12 模块，基线 **757→741**。本轮做掉 encounters 的 `/archive/360`——全平台聚合度最高的接口（一次吐出一个人的就诊/检查/慢病/处方/结算/体检），嵌套九段**逐段建模**而不是 `dict[str, Any]`（写成 Any 等于没声明契约，而这个接口恰恰最需要）。先补特征化网 `test_archive_360_contract.py` 十三条钉住键集合与类型、再加契约、加完网照样绿（响应字节不变）；网里六段都造了数据——空列表什么都钉不住。两处变异（契约少一个字段 / 字段名写错）各自转红。本轮再做掉 performance 的 `/orgs` 机构计分卡，基线 **741 → 740**，`performance` 三个端点全部有契约、已进 `FULLY_GOVERNED`。两处麻烦点：`weights` 的键来自指标表是**动态的**（只能 `dict[str, float]`）；`detail` 五段**混形状**（三段分子/分母、两段裸计数），逐段建模而非 `dict[str, Any]`。`score` 特意验过恒为 float——`_normalized_weights` 表空时退回非空默认，求和恒在浮点上做；若可能是 int，声明 float 就会把 `0` 变 `0.0`，那是改字节不是治理。特征化网 `test_performance_orgs_contract.py` 十条（造了五个维度的真实数据，全零响应什么都钉不住），并逐字钉住折算值（42.5 / 32.5 / 67.5）；三组参数下**响应字节逐字节比对一致**；两处变异各自转红。下一批候选：`analytics` / `metrics` 两簇（注意与 ADR-0007 口径合并有交集，先做契约不动口径）。
+- ☐ **给搬过来的 5 个 `improvements*` 端点补契约**：ADR-0006 把它们从 gapfill 搬进了 `performance.py`，而它们本来就没有 `response_model`。总欠账没变（基线仍 740，只是从 gapfill 名下挪到 performance 名下），但 `performance` 因此暂时移出 `FULLY_GOVERNED`；补完这 5 个就加回来。
 - ✅ `created_at` 欠账迁移**收官**：52 → **2**（16 个迁移批次，平台链+spd 链，全部常量默认回填→batch 撤默认范式，全程响应字节不变）。仅剩有意留置 2 张：`blood_stocks`（小型 upsert 表，价值低降级）、`admissions`（核心表，改列需先 ADR）。此后新表一律带 created_at（棘轮基线=2 顶住）。
 - ✅ 测试隔离修复：**七条**用例在 `pytest -k` 子集下会红（整模块跑得过，纯靠执行顺序）。根因不是共享库本身，是**跨用例借数据**——`GET …?keyword=张三` 取上一条用例建的人、`enrollments[0]` 取上一条用例建的档案、DRG 统计里指望上一条用例的病例已在。改法：把前置数据交给**幂等的模块级 fixture** 负责交付（已有就返回、没有才建），用例声明依赖即可。`path_template` fixture 顺带把模板发布掉——「可用的模板」本就该由建它的 fixture 交付，而不是靠 `test_publish_*` 排在前面顺带做掉。现每条单选跑均绿。
 - ◐ 三套并行子域（ADR-0003 已 **Accepted**）：转诊读侧聚合的**接口侧**已落地——`GET /api/portal/me/referrals/all` 把平台 `referrals` 与 `spd_referral_cases` 并成一份（带 `source` + 分源中文标签 + 完整时间戳排序）；两个老接口响应字节不动（两条特征化用例各钉一个）；注册制登记源，子系统关掉自动降级为平台单源。实施中确认**无需去重**（两批单子真正不相交，spd 从不写 `referrals`），真正要处理的是**同名不同义**的状态码（平台 accepted=已接收 vs spd accepted=县级医院已接收），故每条带 `source` + 分源标签，措辞与 `m.js` 既有文案逐字对齐。
@@ -61,6 +62,10 @@
 
 - ◐ 拆倾倒场 `gapfill.py`(1125 行/34 端点/6 前缀) / `service_extras.py`(521 行/20 端点) 回业务前缀 → **[ADR-0006](docs/adr/0006-倾倒场路由回归业务前缀.md)（**Accepted**）**。建议按前缀分批，第一批 `/api/performance`（与 `routers/performance.py` 前缀重叠、只有 2 个端点）；动手前先加「端点 URL 集合零漂移」守卫。
   - ✅ 前置守卫已就位：`test_refactor_drift_guards.py` 快照 885 个端点，搬漏/改名立刻红；另有 `test_遍历本身没瞎` 防守卫自身失效（写这个守卫时先踩过一次：遍历写错、快照只存下 1 个端点、用例照样绿）。
+  - ✅ **第一批 `/api/performance` 已搬回**：5 个 `improvements*` 端点从 `gapfill.py` 移进 `routers/performance.py`（gapfill 1125 → 945 行）。零漂移守卫实测 885 个端点纹丝不动。
+  - ⚠️ **搬出来一个真问题**：同一个 `/api/performance` 前缀上挂着**两套鉴权**——原 `performance.py` 的 router 是 `require_roles("director")`，gapfill 那个是 `get_current_user`（登录即可）。这正是 ADR-0006 problem 点名的「鉴权分裂」。搬家**刻意没有合并两个路由**：并成一个会把这 5 个端点从「登录可见」收紧到「仅 director」，那是行为变更不是搬家。收益是此前这个分裂散在两个文件里根本看不见，现在并排躺在同一文件里。已逐端点实测鉴权与搬前一致。
+  - ☐ **决策：`/api/performance/improvements*` 该不该收紧到 director**？绩效整改任务含机构问题描述与责任人，现状是全员登录可读。属鉴权口径决策，需你定。
+  - ☐ 下一批：`/api/tcm` / `/api/cssd` / `/api/education` / `/api/maternal` / `/api/homevisits` 依次搬回。
 - ☐ 统计簇 `analytics/metrics/reports/performance` 合并口径 → **[ADR-0007](docs/adr/0007-统计簇口径合并.md)（Proposed，待批）**。⚠️ 落地第一步**不是写代码，是出「同名指标在几处各算什么」的对照表交产品裁定**——统一口径必然让某些数字变，那是业务决策。对照表出来前本项不进入实施。
 - ◐ God 文件 `models.py`(3989 行/187 类) / `spd/routers/config.py`(1549 行) 分域拆包 → **[ADR-0008](docs/adr/0008-God文件分域拆包.md)（**Accepted**）**。拆成包 + `__init__.py` 重导出，**调用方 import 路径一行不改**；先拆 spd config 演练再动 models；动手前先加「模型名字集合零漂移」守卫。
   - ✅ 前置守卫已就位：同一份用例快照 246 个 ORM 类名——拆包漏了重导出会让类不再注册进 `Base.metadata`，**建表静默少一张**而不是报错，这条把「静默」变成「报错」。
