@@ -45,7 +45,9 @@ from ..models import (
     ChargePriceChange,
     ChronicDiseaseType,
     ChronicPatient,
+    ConsentRecord,
     ContractService,
+    CorrectionRequest,
     Encounter,
     ExamReport,
     ExamRequest,
@@ -72,6 +74,17 @@ from ..sms import get_sms_provider
 from ..state_store import LoginFailureTracker, SlidingWindowRateLimiter
 from ..wechat import MockWeChatProvider, get_wechat_provider
 from .appointments import book_slot, release_appointment
+from .consents import (
+    SCENE_PATTERN,
+    ConsentOut,
+    CorrectionOut,
+    active_text_version,
+    consent_out,
+    correction_out,
+    has_active_delegate_consent,
+    require_guardian_for_minor,
+    validate_correction_changes,
+)
 from .notifications import notification_out
 from .chronic import guidance_for
 
@@ -227,7 +240,13 @@ def _autobind_by_phone(db: Session, account: ResidentAccount) -> None:
     """
     if account.patient_id or not account.phone:
         return
-    matches = db.query(Patient).filter(Patient.phone == account.phone).limit(2).all()
+    # 已注销档案不参与自动绑定（个保法注销口径：绑定入口过滤，见 Patient.deactivated_at）
+    matches = (
+        db.query(Patient)
+        .filter(Patient.phone == account.phone, Patient.deactivated_at.is_(None))
+        .limit(2)
+        .all()
+    )
     if len(matches) != 1:
         return
     patient = matches[0]
@@ -421,7 +440,12 @@ def bind_realname(
         raise HTTPException(status_code=429, detail="绑定尝试过于频繁，请10分钟后再试")
     patient = (
         db.query(Patient)
-        .filter(Patient.name == body.name.strip(), Patient.id_card == body.id_card.strip())
+        .filter(
+            Patient.name == body.name.strip(),
+            Patient.id_card == body.id_card.strip(),
+            # 已注销档案不可再实名绑定（个保法注销口径：绑定入口过滤）
+            Patient.deactivated_at.is_(None),
+        )
         .first()
     )
     if patient is None:
@@ -611,6 +635,10 @@ class FamilyMemberIn(BaseModel):
     relation: str = Field(default="other", pattern="^(spouse|child|parent|other)$")
     # 被代管人档案上登记了不同手机号时，需填该号码收到的验证码（purpose=bind）
     code: str = ""
+    # 被代管人为未成年人（<14 岁）时必填的监护人三要素（个保法工程包 E2）
+    guardian_name: str = Field(default="", max_length=64)
+    guardian_id_card: str = Field(default="", max_length=18)
+    guardian_relation: str = Field(default="", max_length=16)
 
 
 @router.get("/me/family")
@@ -654,12 +682,16 @@ def add_family_member(
 ):
     """添加代管家庭成员。
 
-    核验分两档，取决于被代管人自己有没有留手机号：
+    核验分三档，取决于被代管人自己有没有留手机号（P1-2 双因子加固）：
 
     - 档案上登记的手机号与本账户不同 → 说明本人自己能收短信，必须提供**该号码**
       的验证码，光知道姓名和身份证号不足以代管（否则等于开了个证件号查档口子）；
-    - 档案未登记手机号或就是本账户手机号（老人、儿童常见）→ 姓名+身份证号核验即可。
+    - 档案手机号就是本账户手机号 → 该号码已在登录时核验过，即为第二因子；
+    - 档案**未登记手机号**（老人、儿童常见）→ "姓名+身份证号"是单因子，第二道
+      改为**窗口预登记的代管授权**：机构窗口当面核验身份后录入一条
+      ConsentRecord(scene=family_delegate)，无授权则 428 提示到窗口办理。
 
+    被代管人为未成年人（<14 岁）时，必须同时提供监护人三要素（个保法）。
     失败同样计入账户绑定锁定计数，防止拿账户逐个撞身份证号。
     """
     if not account.patient_id:
@@ -677,7 +709,12 @@ def add_family_member(
         raise HTTPException(status_code=429, detail="绑定尝试过于频繁，请10分钟后再试")
     patient = (
         db.query(Patient)
-        .filter(Patient.name == body.name.strip(), Patient.id_card == body.id_card.strip())
+        .filter(
+            Patient.name == body.name.strip(),
+            Patient.id_card == body.id_card.strip(),
+            # 已注销档案不可再被纳入代管（个保法注销口径：绑定入口过滤）
+            Patient.deactivated_at.is_(None),
+        )
         .first()
     )
     if patient is None:
@@ -685,6 +722,10 @@ def add_family_member(
         raise HTTPException(status_code=404, detail="未找到该身份的健康档案，请先到就近机构建档")
     if patient.id == account.patient_id:
         raise HTTPException(status_code=409, detail="本人档案无需添加为家庭成员")
+    # 未成年人：监护人三要素缺一即 422（与业务侧登记同意同一口径，见 consents.py）
+    require_guardian_for_minor(
+        patient, body.guardian_name, body.guardian_id_card, body.guardian_relation
+    )
 
     if patient.phone and patient.phone != account.phone:
         if not body.code:
@@ -693,6 +734,13 @@ def add_family_member(
                 detail=f"该成员已登记手机号 {mask_phone(patient.phone)}，请获取该号码的验证码后再代管",
             )
         _consume_code(db, patient.phone, body.code, "bind")
+    elif not patient.phone and not has_active_delegate_consent(db, patient.id):
+        # P1-2 双因子加固：无手机号档案光凭"姓名+身份证号"（单因子）不放行——
+        # 需机构窗口当面核验身份后预先登记代管授权（ConsentRecord scene=family_delegate）
+        raise HTTPException(
+            status_code=428,
+            detail="该档案未登记手机号，请到建档机构窗口核验身份并办理家庭代管授权后再纳管",
+        )
 
     member = ResidentFamilyMember(
         account_id=account.id, patient_id=patient.id, relation=body.relation
@@ -727,6 +775,121 @@ def remove_family_member(
     db.delete(member)
     db.commit()
     return {"removed": True}
+
+
+# ============================================================================
+# 个保法（工程包 E2）：知情同意自签/查询、更正与注销申请
+# ============================================================================
+
+
+class PortalConsentIn(BaseModel):
+    scene: str = Field(pattern=SCENE_PATTERN)
+    # 不传即本人；传则须是已代管的家庭成员（监护人替被代管的未成年人签）
+    patient_id: int | None = None
+    # 被签人为未成年人（<14 岁）时必填的监护人三要素
+    guardian_name: str = Field(default="", max_length=64)
+    guardian_id_card: str = Field(default="", max_length=18)
+    guardian_relation: str = Field(default="", max_length=16)
+
+
+@router.post("/me/consents", response_model=ConsentOut, status_code=201)
+def portal_sign_consent(
+    body: PortalConsentIn,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """居民端本人自签知情同意（method=self）。
+
+    自签不需要 evidence——登录态本身（已核验的手机号/微信 + 实名绑定）就是
+    "本人表示"的凭据，记录落 resident_account_id 即可回溯到账户。
+    文本版本取该场景当前生效版本，事后可对回"当时同意的是哪段话"。
+    """
+    patient = accessible_patient(db, account, body.patient_id)
+    require_guardian_for_minor(
+        patient, body.guardian_name, body.guardian_id_card, body.guardian_relation
+    )
+    record = ConsentRecord(
+        patient_id=patient.id,
+        scene=body.scene,
+        text_version=active_text_version(db, body.scene),
+        method="self",
+        resident_account_id=account.id,
+        guardian_name=body.guardian_name.strip(),
+        guardian_id_card=body.guardian_id_card.strip(),
+        guardian_relation=body.guardian_relation.strip(),
+    )
+    db.add(record)
+    db.commit()
+    return consent_out(record)
+
+
+@router.get("/me/consents", response_model=list[ConsentOut])
+def portal_my_consents(
+    patient_id: int | None = None,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我的同意记录：默认本人，传 patient_id 可切换到已代管的家庭成员。"""
+    patient = accessible_patient(db, account, patient_id)
+    rows = (
+        db.query(ConsentRecord)
+        .filter(ConsentRecord.patient_id == patient.id)
+        .order_by(ConsentRecord.id.desc())
+        .limit(100)
+        .all()
+    )
+    return [consent_out(r) for r in rows]
+
+
+class PortalCorrectionIn(BaseModel):
+    request_type: str = Field(default="correction", pattern="^(correction|deactivate)$")
+    changes: dict[str, str] = {}
+    reason: str = Field(min_length=1, max_length=256)
+    # 不传即本人；传则须是已代管的家庭成员
+    patient_id: int | None = None
+
+
+@router.post("/me/corrections", response_model=CorrectionOut, status_code=201)
+def portal_submit_correction(
+    body: PortalCorrectionIn,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """居民端提交更正/注销申请（个保法更正权/删除权入口）。
+
+    白名单与校验口径同窗口代提（consents.py:validate_correction_changes）：
+    可线上更正的只有姓名/性别/出生日期/电话，**不含身份证号**（须线下核验）。
+    注销（deactivate）通过审核后档案置 deactivated_at，不物理删除（法定保留），
+    此后检索与绑定入口不再出现，既有业务历史照常可查。
+    """
+    patient = accessible_patient(db, account, body.patient_id)
+    req = CorrectionRequest(
+        patient_id=patient.id,
+        request_type=body.request_type,
+        changes=validate_correction_changes(body.request_type, body.changes),
+        reason=body.reason.strip(),
+        source="portal",
+        applicant_account_id=account.id,
+    )
+    db.add(req)
+    db.commit()
+    return correction_out(req)
+
+
+@router.get("/me/corrections", response_model=list[CorrectionOut])
+def portal_my_corrections(
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """我提交过的更正/注销申请及其审核进度（按账户归集）。"""
+    rows = (
+        db.query(CorrectionRequest)
+        .filter(CorrectionRequest.applicant_account_id == account.id)
+        .order_by(CorrectionRequest.id.desc())
+        .limit(100)
+        .all()
+    )
+    return [correction_out(r) for r in rows]
 
 
 # ============================================================================

@@ -77,8 +77,13 @@ def search_patients(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """患者检索（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。"""
-    query = db.query(Patient)
+    """患者检索（L-3 分页：offset/limit，总数见 X-Total-Count 响应头）。
+
+    个保法注销口径（工程包 E2）：已注销档案（deactivated_at 非空）不出现在
+    检索结果里——检索是新业务的入口，注销后不应再被"找到"；按 ehc_no 直取与
+    既有业务历史（就诊/账单等）**照常可查**，医疗记录法定保留、不物理删除。
+    """
+    query = db.query(Patient).filter(Patient.deactivated_at.is_(None))
     if keyword:
         like = f"%{keyword}%"
         query = query.filter(

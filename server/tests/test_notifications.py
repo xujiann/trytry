@@ -221,6 +221,13 @@ def test_family_manager_receives_child_notifications(client, admin, setup, resid
     child = client.post(
         "/api/patients", json={"name": "消息孩子", "id_card": "331782201901011234"}, headers=admin
     ).json()
+    # P1-2 双因子：无手机号档案纳管前须先有窗口登记的代管授权（scene=family_delegate）
+    client.post(
+        "/api/consents",
+        json={"patient_id": child["id"], "scene": "family_delegate",
+              "evidence": "窗口身份核验记录#TEST"},
+        headers=admin,
+    )
     client.post(
         "/api/portal/me/family",
         json={"name": "消息孩子", "id_card": "331782201901011234", "relation": "child"},

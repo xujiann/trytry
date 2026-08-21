@@ -72,12 +72,29 @@ def me(client, admin):
     return {"patient": patient, "headers": login(client, "13700010001")}
 
 
+def grant_delegate(client, admin, patient_id):
+    """窗口预登记家庭代管授权（P1-2 双因子加固）。
+
+    无手机号档案的"姓名+身份证号"是单因子，纳管前必须先有一条窗口核验身份后
+    录入的 ConsentRecord(scene=family_delegate)，否则 428（见 portal.py）。
+    """
+    resp = client.post(
+        "/api/consents",
+        json={"patient_id": patient_id, "scene": "family_delegate",
+              "evidence": "窗口身份核验记录#TEST"},
+        headers=admin,
+    )
+    assert resp.status_code == 201, resp.text
+
+
 @pytest.fixture(scope="module")
 def child(client, admin):
-    """未留手机号的儿童档案：可凭姓名+身份证号直接代管。"""
-    return client.post(
+    """未留手机号的儿童档案：窗口已登记代管授权，可凭姓名+身份证号代管。"""
+    patient = client.post(
         "/api/patients", json={"name": "服务孩子", "id_card": "330782201801012345"}, headers=admin
     ).json()
+    grant_delegate(client, admin, patient["id"])
+    return patient
 
 
 # ---------------------------------------------------------------- 家庭成员代管
@@ -162,9 +179,10 @@ def test_family_archive_switch_and_isolation(client, admin, me, child):
 
 
 def test_remove_family_member(client, admin, me):
-    client.post(
+    temp = client.post(
         "/api/patients", json={"name": "临时成员", "id_card": "330782199404043456"}, headers=admin
-    )
+    ).json()
+    grant_delegate(client, admin, temp["id"])
     added = client.post(
         "/api/portal/me/family",
         json={"name": "临时成员", "id_card": "330782199404043456", "relation": "other"},
@@ -261,9 +279,10 @@ def test_portal_book_respects_capacity(client, me, child, slot, admin):
         json={"slot_id": slot["id"], "patient_id": child["id"]},
         headers=me["headers"],
     )
-    client.post(
+    third_patient = client.post(
         "/api/patients", json={"name": "第三人", "id_card": "330782199606065678"}, headers=admin
-    )
+    ).json()
+    grant_delegate(client, admin, third_patient["id"])
     client.post(
         "/api/portal/me/family",
         json={"name": "第三人", "id_card": "330782199606065678", "relation": "other"},

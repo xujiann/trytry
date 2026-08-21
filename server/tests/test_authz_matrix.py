@@ -48,6 +48,10 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/portal/auth/bind-wechat"),
     ("POST", "/api/portal/me/family"),
     ("DELETE", "/api/portal/me/family/{member_id}"),
+    # 个保法（E2）：同意自签与更正/注销申请都只写调用者本人（或其代管家人）的
+    # 记录，患者归属由 accessible_patient 判定，不走员工角色体系
+    ("POST", "/api/portal/me/consents"),
+    ("POST", "/api/portal/me/corrections"),
     ("POST", "/api/portal/me/appointments"),
     ("POST", "/api/portal/me/appointments/{appointment_id}/cancel"),
     ("POST", "/api/portal/me/notifications/{notification_id}/read"),

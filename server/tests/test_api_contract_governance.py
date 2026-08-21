@@ -45,6 +45,7 @@ FULLY_GOVERNED = {
     "infectious",  # 见 test_infectious_alerts_characterization.py
     "dictionaries",  # 见 test_dictionaries_characterization.py
     "performance",  # 见 test_performance_orgs_contract.py、test_cssd_improvement_contracts.py
+    "consents",  # E2 个保法新模块，生而全契约，见 test_consents.py
 }
 
 

@@ -37,6 +37,7 @@ from .routers import (
     certs,
     checkups,
     chronic,
+    consents,
     consultations,
     contracts,
     dataquality,
@@ -241,6 +242,10 @@ async def lifespan(_: FastAPI):
         # 随访方案与问卷、报告模板（幂等，按编码不覆盖现场调过的参数）；
         # 子系统未启用时这一步什么都不做
         seed_spd(db)
+        # E2 个保法：知情同意文本按场景各种一版默认文本（幂等只增，不覆盖现场修订）
+        from .routers.consents import seed_consent_texts
+
+        seed_consent_texts(db)
         # T1.1：把代码中注册的定时任务同步进库（幂等，不覆盖运维调过的参数）
         from . import jobs as _jobs  # noqa: F401 - 导入即完成任务注册
         from .scheduler import scheduler_loop, sync_registry
@@ -276,6 +281,7 @@ app = FastAPI(
 app.include_router(auth.router)
 app.include_router(organizations.router)
 app.include_router(patients.router)
+app.include_router(consents.router)
 app.include_router(dictionaries.router)
 app.include_router(referrals.router)
 app.include_router(encounters.router)

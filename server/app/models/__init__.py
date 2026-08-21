@@ -31,6 +31,7 @@ from .hr import *  # noqa: F403
 from .quality import *  # noqa: F403
 from .platform import *  # noqa: F403
 from .portal import *  # noqa: F403
+from .consent import *  # noqa: F403
 
 # ============================================================================
 # 全域慢专病全流程管理系统（`spd_*` 共 50 张表）

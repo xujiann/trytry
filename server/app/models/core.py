@@ -115,6 +115,11 @@ class Patient(Base):
     gender: Mapped[str] = mapped_column(String(8), default="未知")
     birth_date: Mapped[str] = mapped_column(String(10), default="")
     phone: Mapped[str] = mapped_column(String(20), default="")
+    # 个保法"删除权"的落地（工程包 E2）：注销时间。**不物理删除**——医疗记录有
+    # 法定保留义务。口径：患者检索与居民端绑定/代管入口过滤已注销档案（见
+    # routers/patients.py:search_patients 与 routers/portal.py 各绑定入口），
+    # 既有业务历史（就诊、账单等按 patient_id 关联的记录）照常可查。
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

@@ -555,6 +555,7 @@ PORTAL = {
     "portal.py:my_archive", "portal.py:my_archive_token", "portal.py:portal_my_contract",
     "portal.py:portal_my_bills", "portal.py:portal_my_referrals",
     "portal.py:portal_my_admissions", "portal.py:portal_my_surgeries",
+    "portal.py:portal_my_consents",
 }
 
 

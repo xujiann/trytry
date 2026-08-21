@@ -60,7 +60,9 @@ def test_模型表零漂移_每张表都被迁移建过():
 FROZEN_CORE_COLUMNS: dict[str, list[str]] = {
     "users": ["created_at", "full_name", "id", "org_id", "password_hash", "role", "token_valid_from", "username"],
     "organizations": ["address", "created_at", "id", "level", "name", "org_type", "parent_id"],
-    "patients": ["birth_date", "created_at", "ehc_no", "gender", "id", "id_card", "name", "phone"],
+    # deactivated_at：个保法"删除权"落地为注销标记（工程包 E2，见 models/consent.py 与
+    # routers/consents.py:review_correction）——注销不物理删除，检索/绑定入口过滤。
+    "patients": ["birth_date", "created_at", "deactivated_at", "ehc_no", "gender", "id", "id_card", "name", "phone"],
     "encounters": ["created_at", "diagnosis_code", "diagnosis_name", "doctor_name", "encounter_type", "id", "org_id", "patient_id", "summary"],
     "admissions": ["admitted_at", "bed_id", "created_by", "diagnosis_name", "discharged_at", "doctor_name", "id", "org_id", "patient_id", "status", "ward_id"],
 }
