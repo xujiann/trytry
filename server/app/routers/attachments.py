@@ -31,6 +31,20 @@ router = APIRouter(prefix="/api/attachments", tags=["附件"], dependencies=[Dep
 MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"}
 
+#: 文件头（magic bytes）校验：声明的 content_type 必须与实际内容一致。
+#: 只看 Content-Type 时，任何字节流都能自称 image/png 混进来，再经下载接口
+#: 以我们回填的 content-type 原样奉还——一个自称图片的 HTML/脚本文件就成了
+#: 存储型 XSS 的载体。白名单里的每一种类型都必须有对应的头校验；
+#: 新增类型时漏配这里会在上传时 KeyError 炸掉，而不是静默放过。
+_MAGIC_CHECKS: dict[str, Callable[[bytes], bool]] = {
+    "image/png": lambda h: h.startswith(b"\x89PNG\r\n\x1a\n"),
+    "image/jpeg": lambda h: h.startswith(b"\xff\xd8\xff"),
+    "image/gif": lambda h: h.startswith((b"GIF87a", b"GIF89a")),
+    "image/webp": lambda h: h[:4] == b"RIFF" and h[8:12] == b"WEBP",
+    "application/pdf": lambda h: h.startswith(b"%PDF-"),
+}
+assert set(_MAGIC_CHECKS) == ALLOWED_CONTENT_TYPES, "白名单类型必须逐一配置文件头校验"
+
 #: 可见性口径。取值刻意只有三档，多了就没人说得清某个附件到底谁能看：
 #:   patient —— 附件挂在患者身上，走 `assert_patient_visible`（校验 + 写 AccessLog）
 #:   org     —— 附件挂在机构身上，走机构可见性；读用 visible、写用 writable
@@ -213,6 +227,12 @@ def store_upload(
         raise HTTPException(status_code=413, detail="附件超过 10MB 大小限制")
     if not data:
         raise HTTPException(status_code=422, detail="附件内容为空")
+    # 文件头与声明类型不一致按 415 拒绝：Content-Type 是调用方自报的，
+    # 内容才是事实。只校验前 16 字节，足以覆盖白名单内全部格式的签名。
+    if not _MAGIC_CHECKS[normalized](data[:16]):
+        raise HTTPException(
+            status_code=415, detail="附件内容与声明的类型不一致（文件头校验未通过）"
+        )
     sha256 = hashlib.sha256(data).hexdigest()
     get_storage().save(sha256, data)  # 内容寻址、幂等：同 sha256 已存在则跳过
     attachment = Attachment(

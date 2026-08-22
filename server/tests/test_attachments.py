@@ -156,3 +156,41 @@ def test_upload_bad_type_and_bad_owner(client, setup):
     assert _upload(
         client, setup["doctor"], "exam_report", 99999, "a.png", b"\x89PNG", "image/png"
     ).status_code == 404
+
+
+def test_magic_bytes_内容与声明类型不一致415(client, setup):
+    """Content-Type 是调用方自报的：此前一段 HTML 自称 image/png 就能混进来，
+    下载时又按我们回填的 content-type 原样奉还——存储型 XSS 的现成载体。
+    现在读文件头校验，声明与内容不一致按 415 拒。"""
+    cases = [
+        ("fake.png", b"<html><script>alert(1)</script></html>", "image/png"),
+        ("fake.pdf", b"<html>not a pdf</html>", "application/pdf"),
+        ("fake.jpg", b"GIF89a-actually-a-gif", "image/jpeg"),
+        ("fake.gif", b"\x89PNG\r\n\x1a\n-actually-a-png", "image/gif"),
+        ("fake.webp", b"RIFF\x00\x00\x00\x00NOPE", "image/webp"),
+        # 截断的签名也不算数：前缀像但不全
+        ("trunc.png", b"\x89PNGxx", "image/png"),
+    ]
+    for filename, content, content_type in cases:
+        resp = _upload(
+            client, setup["doctor"], "exam_report", setup["report"]["id"],
+            filename, content, content_type,
+        )
+        assert resp.status_code == 415, f"{filename} 应 415，实际 {resp.status_code}: {resp.text[:80]}"
+
+
+def test_magic_bytes_真实文件头照常放行(client, setup):
+    """反向断言：校验不能把真文件挡掉——白名单五种类型逐一放行。"""
+    cases = [
+        ("ok.png", b"\x89PNG\r\n\x1a\n" + b"x" * 16, "image/png"),
+        ("ok.jpg", b"\xff\xd8\xff\xe0" + b"x" * 16, "image/jpeg"),
+        ("ok.gif", b"GIF89a" + b"x" * 16, "image/gif"),
+        ("ok.webp", b"RIFF\x28\x00\x00\x00WEBPVP8 " + b"x" * 8, "image/webp"),
+        ("ok.pdf", b"%PDF-1.7\n%minimal", "application/pdf"),
+    ]
+    for filename, content, content_type in cases:
+        resp = _upload(
+            client, setup["doctor"], "exam_report", setup["report"]["id"],
+            filename, content, content_type,
+        )
+        assert resp.status_code == 201, f"{filename} 被误拦：{resp.status_code} {resp.text[:80]}"

@@ -244,7 +244,7 @@ def test_task_requiring_evidence_blocks_submit(client, ph, h, base):
 
     upload = client.post(
         f"/api/portal/spd/tasks/{task['id']}/attachments",
-        files={"file": ("report.jpg", b"\xff\xd8fake-jpeg", "image/jpeg")},
+        files={"file": ("report.jpg", b"\xff\xd8\xff\xe0fake-jpeg", "image/jpeg")},
         headers=ph,
     )
     assert upload.status_code == 201, upload.text

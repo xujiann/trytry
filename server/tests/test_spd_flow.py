@@ -503,7 +503,7 @@ def test_evidence_required_blocks_completion(client, h, base):
 
     upload = client.post(
         "/api/attachments",
-        files={"file": ("bp.png", b"\x89PNG-fake-bytes", "image/png")},
+        files={"file": ("bp.png", b"\x89PNG\r\n\x1a\n" + b"fake-bytes", "image/png")},
         data={"owner_type": "spd_task", "owner_id": str(task["id"])},
         headers=h,
     )
