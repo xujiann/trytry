@@ -154,7 +154,9 @@ async function loadSpdTodo(box) {
       assess: "评估", revisit: "复诊", referral: "转诊", report: "上报",
       recall: "召回", edu: "宣教", screen: "筛查复核" }[t.task_type] || t.task_type))}
     ${kv("截止", esc(t.due_date || "—"))}
-    ${kv("状态", esc(t.status === "overdue" ? "已超期" : t.status === "pending" ? "待接收" : t.status))}
+    ${kv("状态", esc({ pending: "待接收", claimed: "已接收", doing: "办理中",
+      submitted: "待审核", done: "已完成", rejected: "已退回", overdue: "已超期",
+      cancelled: "已取消" }[t.status] || t.status))}
     <button type="button" class="ghost-btn" data-spd-claim="${t.id}">接收</button>
     <button type="button" class="ghost-btn" data-spd-done="${t.id}">办结</button>
   </div>`).join("") || '<p class="empty">暂无待办</p>';
