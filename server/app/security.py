@@ -20,7 +20,7 @@ import time
 
 from . import gmcrypto
 from .config import settings
-from .state_store import TokenBlacklist
+from .state_store import SessionRegistry, TokenBlacklist
 
 TOKEN_TTL_SECONDS = settings.token_ttl_seconds
 
@@ -60,6 +60,11 @@ def verification_keys(purpose: str) -> list[bytes]:
 # 登出黑名单（M4 整改）：默认进程内存实现（带 TTL 清理），
 # 配置 MEDPLAT_REDIS_URL 后自动切换 Redis 共享存储（多实例部署必须）。
 revoked_tokens = TokenBlacklist(default_ttl_seconds=TOKEN_TTL_SECONDS)
+
+# 会话登记（等保 E1）：空闲超时的活动时刻 + 并发会话计数。与黑名单同层、同一
+# 内存/Redis 双实现约定；两项开关（session_idle_timeout_seconds /
+# session_max_concurrent）为 0 时调用方（deps / routers/auth.py）直接旁路。
+active_sessions = SessionRegistry(default_ttl_seconds=TOKEN_TTL_SECONDS)
 
 
 def validate_password_strength(password: str) -> str | None:

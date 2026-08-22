@@ -1,4 +1,5 @@
-from datetime import date, timezone
+import time
+from datetime import date, timedelta, timezone
 from typing import Iterable, TypeVar
 
 from fastapi import Depends, HTTPException, Request, Response, status
@@ -6,11 +7,21 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
+from .clock import now_naive
+from .config import settings
 from .database import get_db
 from .models import OrgGroup, OrgGroupMember, User
-from .security import decode_token, revoked_tokens
+from .security import active_sessions, decode_token, revoked_tokens
 
 _bearer = HTTPBearer(auto_error=False)
+
+#: 等保 E1 口令最长使用期（天）。刻意用常量而不进 config：这是合规口径不是部署偏好，
+#: 做成环境变量只会诱导现场把它调成 36500"关掉"。超期判定见 get_current_user；
+#: password_updated_at 为 None（迁移前的开发库/未回填数据）不判超期，避免误伤。
+PASSWORD_MAX_AGE_DAYS = 90
+
+#: 428 强制改密的豁免路径：改密与登出必须放行，否则用户被锁进"改不了密"的死循环。
+PASSWORD_CHANGE_EXEMPT_PATHS = {"/api/auth/change-password", "/api/auth/logout"}
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -92,7 +103,53 @@ def token_issued_before_baseline(claims: dict, user: User) -> bool:
     return float(claims.get("iat", 0)) < baseline
 
 
+def _enforce_session_idle_timeout(claims: dict) -> None:
+    """等保 E1 空闲超时（简化口径）：距最近一次活动超过 idle_timeout 即拒。
+
+    "最近活动"记在 state_store（`SessionRegistry.touch`，内存/Redis 双实现）；
+    从未记录过活动的令牌（登录后第一个请求）以签发时刻 iat 为基准。
+    开关为 0 时上层直接旁路，本函数不会被调用。多实例部署需配 MEDPLAT_REDIS_URL，
+    否则活动记录不跨实例（与令牌黑名单同一约定）。
+    """
+    jti = str(claims.get("jti") or claims.get("sub") or "")
+    reference = active_sessions.last_seen(jti)
+    if reference is None:
+        reference = float(claims.get("iat", 0))
+    if time.time() - reference > settings.session_idle_timeout_seconds:
+        # 闲置淘汰立即释放并发名额，不占坑到令牌自然过期
+        active_sessions.remove(str(claims.get("sub", "")), jti)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已闲置超时，请重新登录"
+        )
+    active_sessions.touch(jti)
+
+
+def _enforce_password_lifecycle(user: User, request: Request) -> None:
+    """等保 E1 口令生命周期：重置后首登、或超过 90 天未改密 → 428 强制改密。
+
+    428 Precondition Required：语义就是"先完成前置动作（改密）再来"，
+    与 401（令牌问题）、403（权限问题）都不同，前端可据此直接跳改密页。
+    """
+    if request.url.path in PASSWORD_CHANGE_EXEMPT_PATHS:
+        return
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="口令已被管理员重置，请先修改口令（POST /api/auth/change-password）后再继续操作",
+        )
+    if (
+        user.password_updated_at is not None
+        and now_naive() - user.password_updated_at > timedelta(days=PASSWORD_MAX_AGE_DAYS)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail=f"口令已超过 {PASSWORD_MAX_AGE_DAYS} 天未修改，"
+                   "请先修改口令（POST /api/auth/change-password）后再继续操作",
+        )
+
+
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> User:
@@ -111,10 +168,21 @@ def get_current_user(
     user = db.query(User).filter(User.username == claims["sub"]).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
+    # 等保 E1 账号停用：每请求现查 users.status，停用即时生效，不等令牌过期。
+    # 403 而非 401——问题不在令牌，是账号被管理员禁用，重新登录也无济于事。
+    # 放在令牌基线判定**之前**：停用时会同步推基线吊销令牌，若先判基线，
+    # 停用账号收到的是"密码已修改请重新登录"——指引用户去做一件做不成的事。
+    if user.status == "disabled":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已停用，请联系管理员")
     if token_issued_before_baseline(claims, user):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="密码已修改，令牌失效，请重新登录"
         )
+    # 等保 E1 会话空闲超时（0=关闭，零开销旁路）
+    if settings.session_idle_timeout_seconds > 0:
+        _enforce_session_idle_timeout(claims)
+    # 等保 E1 口令生命周期（重置后首登 / 90 天超期 → 428；改密与登出豁免）
+    _enforce_password_lifecycle(user, request)
     return user
 
 

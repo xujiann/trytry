@@ -58,7 +58,9 @@ def test_模型表零漂移_每张表都被迁移建过():
 # 任何增/删/改名都会让下方断言变红——这不是禁止演进，而是逼着走 ADR（docs/adr/）
 # 明确决策，而非顺手改。改列后：先写 ADR，再同步更新此快照。
 FROZEN_CORE_COLUMNS: dict[str, list[str]] = {
-    "users": ["created_at", "full_name", "id", "org_id", "password_hash", "role", "token_valid_from", "username"],
+    # E1 等保账户安全新增四列（status/password_updated_at/must_change_password/totp_secret），
+    # 迁移 d4e5f6a7b8c1；ADR 由协调方随包合并补录（docs/ 属并行包禁改区）
+    "users": ["created_at", "full_name", "id", "must_change_password", "org_id", "password_hash", "password_updated_at", "role", "status", "token_valid_from", "totp_secret", "username"],
     "organizations": ["address", "created_at", "id", "level", "name", "org_type", "parent_id"],
     # deactivated_at：个保法"删除权"落地为注销标记（工程包 E2，见 models/consent.py 与
     # routers/consents.py:review_correction）——注销不物理删除，检索/绑定入口过滤。

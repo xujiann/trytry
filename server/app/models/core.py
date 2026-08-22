@@ -33,6 +33,17 @@ class User(Base):
     org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
     # M-4 整改：改密时刻基线——签发时刻(iat)早于该时刻的令牌一律拒绝（改密吊销既有令牌）
     token_valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 等保 E1 账号状态：active=在用, disabled=已停用。deps.get_current_user 每请求校验，
+    # 停用即时生效（不等令牌过期）。
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    # 等保 E1 口令生命周期：上次改密时刻（存量经迁移回填为升级时刻；None 视为不超期，
+    # 兼容 create_all 直建的开发库）；超期口径见 deps.PASSWORD_MAX_AGE_DAYS。
+    password_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 管理员重置口令后置 True：除改密/登出外的接口一律 428，强制首登改密
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    # TOTP 双因素密钥（base32）。"pending:" 前缀 = 已生成待本人验证，验证通过去前缀
+    # 即启用——用前缀而不是加第二列，是核心表冻结下的最小改动（见 routers/auth.py）。
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -84,6 +95,35 @@ class AccessLog(Base):
     resource: Mapped[str] = mapped_column(String(32), default="", index=True)
     # 依据：global｜encounter｜contract｜referral｜authorization｜self
     basis: Mapped[str] = mapped_column(String(16), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class LoginLog(Base):
+    """登录留痕（等保 E1）：成功/失败/锁定触发均落库，跨实例、可追溯。
+
+    与 `AuditLog` 分表：审计中间件只记**已通过认证**的写操作，而登录审计恰恰要记
+    "没登进来的那些"（爆破、锁定、停用账号的尝试）——两者的主键依据不同，
+    前者挂 user_id，后者常常只有一个对不上任何用户的 username。
+
+    `channel` 区分登录通道：password=员工账号口令, sms=居民端短信验证码,
+    wechat=居民端微信——居民端账号不在 users 表内，故 user_id 可空、username 存
+    通道内标识（如脱敏手机号）。
+    """
+
+    __tablename__ = "login_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # 登录名原样落库（包括不存在的用户名——爆破画像正需要它）
+    username: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # 对上了账号才有值；失败于"用户不存在"时为空
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    success: Mapped[bool] = mapped_column(Boolean, index=True)
+    # 失败原因代号：bad_credentials/locked/lock_triggered/ip_throttled/disabled/
+    # totp_required/totp_invalid/concurrent_limit；成功时为空
+    fail_reason: Mapped[str] = mapped_column(String(32), default="")
+    # 登录通道：password=员工口令, sms=居民短信, wechat=居民微信
+    channel: Mapped[str] = mapped_column(String(16), default="password")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

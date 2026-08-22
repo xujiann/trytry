@@ -38,6 +38,11 @@ UNGUARDED_WHITELIST = {
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),
     ("POST", "/api/auth/change-password"),
+    # TOTP 本人开通/关闭（E1）：任意登录用户的自助操作，只写调用者本人的
+    # totp_secret（user 从令牌取，不从请求体取），关闭还须验当前动态码。
+    ("POST", "/api/auth/totp/setup"),
+    ("POST", "/api/auth/totp/activate"),
+    ("POST", "/api/auth/totp/disable"),
     # 居民端：另有 portal 令牌 scope 校验，不走员工角色体系
     ("POST", "/api/portal/auth/sms/code"),
     ("POST", "/api/portal/auth/sms/login"),
