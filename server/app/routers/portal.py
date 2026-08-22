@@ -49,6 +49,7 @@ from ..models import (
     ConsentRecord,
     ContractService,
     CorrectionRequest,
+    Deposit,
     Encounter,
     ExamReport,
     ExamRequest,
@@ -76,6 +77,9 @@ from ..state_store import LoginFailureTracker, SlidingWindowRateLimiter
 from ..wechat import MockWeChatProvider, get_wechat_provider
 from .appointments import book_slot, release_appointment
 from .auth import record_login_event
+# 余额复用 billing 的流水现算口径（预交-退费-冲抵）——居民端另算一套
+# 只会造出第二个数字，对账时没人说得清哪个是对的（P1-24b）。
+from .billing import DEPOSIT_TYPES, deposit_balance
 from .consents import (
     SCENE_PATTERN,
     ConsentOut,
@@ -1570,6 +1574,63 @@ def portal_admission_bill(
                 "date": s.created_at.date().isoformat(),
             }
             for s in settlements
+        ],
+        # P1-24b：押金余额随费用清单一并透出（新增可选字段，既有字段与形状不变）
+        "deposit_balance": deposit_balance(db, admission_id),
+    }
+
+
+class PortalDepositItemOut(BaseModel):
+    id: int
+    amount: float
+    deposit_type: str
+    deposit_type_name: str
+    method: str
+    date: str
+
+
+class PortalDepositsOut(BaseModel):
+    admission_id: int
+    balance: float
+    items: list[PortalDepositItemOut]
+
+
+@router.get("/me/deposits", response_model=PortalDepositsOut)
+def portal_my_deposits(
+    admission_id: int,
+    patient: Patient = Depends(current_resident_patient),
+    db: Session = Depends(get_db),
+):
+    """本人住院押金流水与当前余额（P1-24b）。
+
+    余额复用 billing.deposit_balance 的流水现算口径。仅限**本人**住院，
+    不含家属代查（current_resident_patient）：押金涉及退费资金去向，比费用
+    清单更敏感。越权与不存在同按 404，未实名绑定 403，均与居民端既有口径一致。
+    经办人姓名（operator）是院内信息，不透出给居民端。
+    """
+    admission = db.get(Admission, admission_id)
+    if admission is None or admission.patient_id != patient.id:
+        raise HTTPException(status_code=404, detail="住院记录不存在")
+    rows = (
+        db.query(Deposit)
+        .filter(Deposit.admission_id == admission_id)
+        .order_by(Deposit.id.desc())
+        .limit(200)
+        .all()
+    )
+    return {
+        "admission_id": admission_id,
+        "balance": deposit_balance(db, admission_id),
+        "items": [
+            {
+                "id": d.id,
+                "amount": d.amount,
+                "deposit_type": d.deposit_type,
+                "deposit_type_name": DEPOSIT_TYPES.get(d.deposit_type, d.deposit_type),
+                "method": d.method,
+                "date": d.created_at.date().isoformat(),
+            }
+            for d in rows
         ],
     }
 

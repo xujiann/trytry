@@ -30,6 +30,8 @@ PLATFORM_ALLOWLIST = {
     "deps",          # 鉴权、分页、角色守卫、业务日期
     "visibility",    # 横向数据隔离（机构可见性、患者可见性与留痕）
     "concurrency",   # 原子累加/扣减、唯一约束冲突助手
+    "pii",           # 加密态等值检索（pii_filter）：证件号筛选在开态走索引列，
+                     # 否则密文列 contains 恒空，spd 检索静默失明（P1-25，经 platform.py 再导出）
     "formula",       # AST 白名单表达式求值（考核公式）
     "events",        # 领域事件总线（子系统订阅平台事件）
     "scheduler",     # 定时任务注册（任务体在子系统内）

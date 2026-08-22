@@ -362,6 +362,11 @@ class NursingRecord(Base):
     encounter_id: Mapped[int | None] = mapped_column(
         ForeignKey("encounters.id"), nullable=True, index=True
     )
+    # 护理执行联动（P1-24a）：本条护理记录若是执行某条住院医嘱产生的，挂上医嘱 id。
+    # 可空——日常巡视、病情观察类护理记录本来就不对应任何医嘱，强制关联是错的语义。
+    inpatient_order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inpatient_orders.id"), nullable=True, index=True
+    )
     # special=特级护理, level1=一级, level2=二级, level3=三级
     nursing_level: Mapped[str] = mapped_column(String(16), default="level2", index=True)
     content: Mapped[str] = mapped_column(String(2048), default="")

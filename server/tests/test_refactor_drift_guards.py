@@ -35,9 +35,10 @@ from app.main import app
 #: 真实规模是 800+，若某次遍历只捞到几条，说明穿封装的方式失效了。
 MIN_SANE_ENDPOINTS = 800
 
-#: 当前 /api 端点快照（944 个）。由真实应用生成，勿手写。
+#: 当前 /api 端点快照（945 个）。由真实应用生成，勿手写。
 #: 阶段十四第一波新增：E1 账户安全 7、E2 个保 11、I1 集成 8、D1 批量 1、B1 药事 15。
 #: B2 运营闭环新增 17：室内质控 7、体检分项/总检 2、打印单据补齐 8。
+#: G4 新增 1：居民端押金透出 GET /api/portal/me/deposits（P1-24b）。
 SNAPSHOT_ENDPOINTS = {
     "DELETE /api/analytics/formulas/{key}",
     "DELETE /api/appointments/blacklist/{patient_id}",
@@ -300,6 +301,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/portal/me/consents",
     "GET /api/portal/me/contract",
     "GET /api/portal/me/corrections",
+    "GET /api/portal/me/deposits",
     "GET /api/portal/me/enrollments/all",
     "GET /api/portal/me/family",
     "GET /api/portal/me/notifications",

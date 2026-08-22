@@ -21,6 +21,7 @@ from ..models import (
     CaseSummary,
     Encounter,
     InpatientOrder,
+    NursingRecord,
     OrderExecution,
     Organization,
     Patient,
@@ -466,7 +467,7 @@ def stop_order(
 # ---------- 医嘱执行记录（工程包 B1） ----------
 #
 # 停用医嘱不可再登记执行（409）；皮试结果可空——空与"阴性"是两回事。
-# 护理记录联动暂不做（待办，见 docs/TECH_DEBT.md 流程）。
+# 护理记录联动（P1-24a）：护理记录挂在医嘱上，执行视图按医嘱附护理记录计数。
 
 
 class ExecutionCreate(BaseModel):
@@ -483,9 +484,15 @@ class ExecutionOut(BaseModel):
     executed_at: str
     note: str
     skin_test_result: str | None
+    # 护理执行联动（P1-24a）：该医嘱名下的关联护理记录数。护理记录经
+    # nursing_records.inpatient_order_id 挂在**医嘱**上（不是单次执行上），
+    # 所以这是医嘱级计数，同一响应内各条相同——契约兼容扩展，旧客户端可忽略。
+    nursing_record_count: int = 0
 
 
-def _execution_out(e: OrderExecution, executed_by_name: str) -> dict:
+def _execution_out(
+    e: OrderExecution, executed_by_name: str, nursing_record_count: int = 0
+) -> dict:
     return {
         "id": e.id,
         "inpatient_order_id": e.inpatient_order_id,
@@ -494,7 +501,15 @@ def _execution_out(e: OrderExecution, executed_by_name: str) -> dict:
         "executed_at": e.executed_at.isoformat(),
         "note": e.note,
         "skin_test_result": e.skin_test_result,
+        "nursing_record_count": nursing_record_count,
     }
+
+
+def _order_nursing_count(db: Session, order_id: int) -> int:
+    """该医嘱关联的护理记录数（P1-24a）。"""
+    return (
+        db.query(NursingRecord).filter(NursingRecord.inpatient_order_id == order_id).count()
+    )
 
 
 @router.post(
@@ -526,7 +541,9 @@ def record_order_execution(
     db.add(execution)
     db.commit()
     db.refresh(execution)
-    return _execution_out(execution, user.full_name or user.username)
+    return _execution_out(
+        execution, user.full_name or user.username, _order_nursing_count(db, order_id)
+    )
 
 
 @router.get("/orders/{order_id}/executions", response_model=list[ExecutionOut])
@@ -541,7 +558,11 @@ def list_order_executions(order_id: int, db: Session = Depends(get_db)):
         .limit(200)
         .all()
     )
-    return [_execution_out(e, full_name or username or "") for e, full_name, username in rows]
+    nursing_count = _order_nursing_count(db, order_id)
+    return [
+        _execution_out(e, full_name or username or "", nursing_count)
+        for e, full_name, username in rows
+    ]
 
 
 # ---------- 床位效率统计（#15 运行效率数据源） ----------
