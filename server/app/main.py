@@ -278,6 +278,13 @@ app = FastAPI(
     version="0.1.0",
     description="第一期：基础平台与数据中心（统一认证、机构、EMPI、编码字典、双向转诊）",
     lifespan=lifespan,
+    # 生产关闭 API 文档面：/docs /redoc /openapi.json 会把 881 个端点的完整
+    # 结构（含入参形状与鉴权盲区）展示给任何能连到服务的人，是越权探测的现成
+    # 地图。开发/演示环境保留默认路径。附录/契约生成脚本走的是
+    # `app.openapi()`（进程内调用），不依赖这三个 HTTP 路由，不受影响。
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
 )
 
 app.include_router(auth.router)
