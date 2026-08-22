@@ -212,72 +212,87 @@ def org_scorecards(
     if scope is not None:
         orgs_q = orgs_q.filter(Organization.id.in_(scope))
     orgs = orgs_q.all()
+    org_ids = [o.id for o in orgs]
+
+    def by_org(query, org_col) -> dict[int, int]:
+        """一次分组聚合替代"每机构一条 count"。
+
+        原先这里是 N+1：每家机构 8 条查询，200 家就是 1600 条往返。改成 8 条
+        `GROUP BY org_id` 后总条数与机构数无关（`test_查询条数不随机构数增长` 钉住）。
+        没出现在结果里的机构就是 0——与原先 `.scalar() or 0` 完全同值。
+
+        `scope is not None` 时才加 `IN` 过滤：全域查询下把全部机构 id 灌进 IN
+        是纯开销，分组本来就只会产出有数据的那些机构。
+        """
+        if scope is not None:
+            query = query.filter(org_col.in_(org_ids))
+        return {oid: n for oid, n in query.group_by(org_col).all() if oid is not None}
+
+    window = (start_dt, end_dt)
+    ref_total_by = by_org(
+        db.query(Referral.from_org_id, func.count(Referral.id))
+        .filter(Referral.created_at >= window[0], Referral.created_at < window[1]),
+        Referral.from_org_id,
+    )
+    ref_completed_by = by_org(
+        db.query(Referral.from_org_id, func.count(Referral.id))
+        .filter(Referral.status == "completed",
+                Referral.created_at >= window[0], Referral.created_at < window[1]),
+        Referral.from_org_id,
+    )
+    exam_count_by = by_org(
+        db.query(ExamRequest.from_org_id, func.count(ExamRequest.id))
+        .filter(ExamRequest.status.in_(["reported", "recognized"]),
+                ExamRequest.created_at >= window[0], ExamRequest.created_at < window[1]),
+        ExamRequest.from_org_id,
+    )
+    # 分母是"周期结束时的在管存量"：**只设上界、不设下界**。
+    # 不设下界 → 三年前入组、至今在管的人今年照样要考核（这正是"存量"的意思）；
+    # 但必须设上界 → 否则查 2025 年度的分数会把 2026 年才入组的人算进分母，
+    # 历史分数会随新入组不断漂移、永远复现不出来。
+    chronic_total_by = by_org(
+        db.query(ChronicPatient.managed_by_org_id, func.count(ChronicPatient.id))
+        .filter(ChronicPatient.created_at < window[1]),
+        ChronicPatient.managed_by_org_id,
+    )
+    # 分子按期、分母不按期：问的是"在管的这些人里，本期随访到了几个"
+    chronic_followed_by = by_org(
+        db.query(
+            ChronicPatient.managed_by_org_id, func.count(func.distinct(FollowUp.chronic_id))
+        )
+        .join(ChronicPatient, FollowUp.chronic_id == ChronicPatient.id)
+        .filter(FollowUp.created_at >= window[0], FollowUp.created_at < window[1]),
+        ChronicPatient.managed_by_org_id,
+    )
+    rx_total_by = by_org(
+        db.query(Prescription.org_id, func.count(Prescription.id))
+        .filter(Prescription.created_at >= window[0], Prescription.created_at < window[1]),
+        Prescription.org_id,
+    )
+    rx_ok_by = by_org(
+        db.query(Prescription.org_id, func.count(Prescription.id))
+        .filter(Prescription.status.in_(rx_ok_statuses),
+                Prescription.created_at >= window[0], Prescription.created_at < window[1]),
+        Prescription.org_id,
+    )
+    contract_services_by = by_org(
+        db.query(FamilyDoctorContract.org_id, func.count(ContractService.id))
+        .join(FamilyDoctorContract, ContractService.contract_id == FamilyDoctorContract.id)
+        .filter(ContractService.created_at >= window[0],
+                ContractService.created_at < window[1]),
+        FamilyDoctorContract.org_id,
+    )
+
     results: list[dict[str, Any]] = []
     for org in orgs:
-        ref_total = (
-            db.query(func.count(Referral.id))
-            .filter(Referral.from_org_id == org.id,
-                    Referral.created_at >= start_dt, Referral.created_at < end_dt)
-            .scalar()
-            or 0
-        )
-        ref_completed = (
-            db.query(func.count(Referral.id))
-            .filter(Referral.from_org_id == org.id, Referral.status == "completed",
-                    Referral.created_at >= start_dt, Referral.created_at < end_dt)
-            .scalar()
-            or 0
-        )
-        exam_count = (
-            db.query(func.count(ExamRequest.id))
-            .filter(ExamRequest.from_org_id == org.id,
-                    ExamRequest.status.in_(["reported", "recognized"]),
-                    ExamRequest.created_at >= start_dt, ExamRequest.created_at < end_dt)
-            .scalar()
-            or 0
-        )
-        # 分母是"周期结束时的在管存量"：**只设上界、不设下界**。
-        # 不设下界 → 三年前入组、至今在管的人今年照样要考核（这正是"存量"的意思）；
-        # 但必须设上界 → 否则查 2025 年度的分数会把 2026 年才入组的人算进分母，
-        # 历史分数会随新入组不断漂移、永远复现不出来。
-        chronic_total = (
-            db.query(func.count(ChronicPatient.id))
-            .filter(ChronicPatient.managed_by_org_id == org.id,
-                    ChronicPatient.created_at < end_dt)
-            .scalar()
-            or 0
-        )
-        # 分子按期、分母不按期：问的是"在管的这些人里，本期随访到了几个"
-        chronic_followed = (
-            db.query(func.count(func.distinct(FollowUp.chronic_id)))
-            .join(ChronicPatient, FollowUp.chronic_id == ChronicPatient.id)
-            .filter(ChronicPatient.managed_by_org_id == org.id,
-                    FollowUp.created_at >= start_dt, FollowUp.created_at < end_dt)
-            .scalar()
-            or 0
-        )
-        rx_total = (
-            db.query(func.count(Prescription.id))
-            .filter(Prescription.org_id == org.id,
-                    Prescription.created_at >= start_dt, Prescription.created_at < end_dt)
-            .scalar()
-            or 0
-        )
-        rx_ok = (
-            db.query(func.count(Prescription.id))
-            .filter(Prescription.org_id == org.id, Prescription.status.in_(rx_ok_statuses),
-                    Prescription.created_at >= start_dt, Prescription.created_at < end_dt)
-            .scalar()
-            or 0
-        )
-        contract_services = (
-            db.query(func.count(ContractService.id))
-            .join(FamilyDoctorContract, ContractService.contract_id == FamilyDoctorContract.id)
-            .filter(FamilyDoctorContract.org_id == org.id,
-                    ContractService.created_at >= start_dt, ContractService.created_at < end_dt)
-            .scalar()
-            or 0
-        )
+        ref_total = ref_total_by.get(org.id, 0)
+        ref_completed = ref_completed_by.get(org.id, 0)
+        exam_count = exam_count_by.get(org.id, 0)
+        chronic_total = chronic_total_by.get(org.id, 0)
+        chronic_followed = chronic_followed_by.get(org.id, 0)
+        rx_total = rx_total_by.get(org.id, 0)
+        rx_ok = rx_ok_by.get(org.id, 0)
+        contract_services = contract_services_by.get(org.id, 0)
 
         def ratio(part: int, total: int) -> float:
             return part / total if total else 0.0

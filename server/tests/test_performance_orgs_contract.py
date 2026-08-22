@@ -382,3 +382,83 @@ def test_运营月报的绩效分跟着报表周期(client, admin, seeded):
     source = inspect.getsource(reports.export_operations_csv)
     assert "org_scorecards(period=period" in source, "绩效分列必须跟着报表周期"
     assert "score_period" in source, "表头要注明分数所属周期"
+
+
+def test_慢病随访按人去重_同一人随访多次只算一次(client, admin):
+    """覆盖率的分子是"被随访到的人"，不是"随访的次数"。
+
+    漏掉去重，一个被随访 3 次的患者会把分子顶到 3——在管 2 人却"覆盖 3 人"，
+    比率 >100%、慢病维度直接超分。这条独立建数据，不蹭 seeded（那里每人恰好
+    只有一次随访，正好测不出去重）。
+    """
+    org = client.post(
+        "/api/organizations",
+        json={"name": "随访去重院", "org_type": "township", "level": "township"},
+        headers=admin,
+    ).json()
+    patient = client.post(
+        "/api/patients", json={"name": "多次随访患者", "id_card": "330281199603034518"},
+        headers=admin,
+    ).json()
+    with SessionLocal() as db:
+        cp = ChronicPatient(
+            patient_id=patient["id"], disease="hypertension", managed_by_org_id=org["id"]
+        )
+        db.add(cp)
+        other = ChronicPatient(
+            patient_id=patient["id"], disease="diabetes", managed_by_org_id=org["id"]
+        )
+        db.add(other)
+        db.commit()
+        for sbp in (130.0, 135.0, 140.0):          # 同一人随访 3 次
+            db.add(FollowUp(chronic_id=cp.id, sbp=sbp, dbp=80.0))
+        db.commit()
+
+    card = _card(
+        client.get("/api/performance/orgs", headers=admin).json(), org["id"]
+    )
+    seg = card["detail"]["chronic_followup"]
+    assert seg == {"followed": 1, "total": 2}, seg
+    assert seg["followed"] <= seg["total"], "覆盖人数超过在管人数，说明分子按次数算了"
+
+
+def test_查询条数不随机构数增长(client, admin):
+    """N+1 防复发：机构数翻几倍，SQL 条数必须一条不变。
+
+    原实现每家机构 8 条 count，200 家就是 1600 条往返；改成 8 条 `GROUP BY org_id`
+    后条数与机构数解耦。用"两次不同机构数的实测差值"来判定，而不是写死一个
+    条数上限——上限会被无关改动（多一次鉴权查询）误伤，差值不会。
+    """
+    from sqlalchemy import event
+
+    from app.database import engine
+
+    def count_sql(n_new_orgs: int) -> int:
+        for i in range(n_new_orgs):
+            client.post(
+                "/api/organizations",
+                json={"name": f"N加一测试院{n_new_orgs}_{i}", "org_type": "township",
+                      "level": "township"},
+                headers=admin,
+            )
+        seen = []
+
+        def hook(conn, cursor, statement, params, context, executemany):
+            seen.append(statement)
+
+        event.listen(engine, "before_cursor_execute", hook)
+        try:
+            resp = client.get("/api/performance/orgs", headers=admin)
+            assert resp.status_code == 200
+        finally:
+            event.remove(engine, "before_cursor_execute", hook)
+        return len(seen)
+
+    first = count_sql(2)
+    second = count_sql(12)
+    assert second == first, (
+        f"多 10 家机构多跑了 {second - first} 条 SQL——N+1 回来了"
+    )
+    # 防呆：探针本身得真的在数（挂不上钩子时两边都是 0，上面的相等断言恒真）
+    assert first > 0, "SQL 探针一条都没抓到，本用例是空转"
+
