@@ -14,11 +14,12 @@
 逐条按"该条能通过的口径"判真——否则升级/轮换会把整段存量链误判为篡改。
 """
 import hmac
+import json
 
 from .gmcrypto import mac
 from .security import signing_key, verification_keys
 
-__all__ = ["audit_entry_hash", "verify_chain"]
+__all__ = ["anchor_mac", "anchor_mac_valid", "audit_entry_hash", "verify_chain"]
 
 
 def _payload(prev_hash: str, username: str, method: str, path: str, status_code: int) -> bytes:
@@ -40,6 +41,44 @@ def _entry_hash_valid(entry) -> bool:
     return any(
         hmac.compare_digest(mac(key, payload).hex(), entry.entry_hash)
         for key in verification_keys("audit")
+    )
+
+
+# ---------------------------------------------------------------------------
+# 外部锚点（P1-21）：锚点文件自身的 MAC 链
+#
+# 库内哈希链的盲区是"末尾截断"——删掉最新的 N 条，链照样自洽。补法是定期把
+# 链尾（id / entry_hash / 总行数）写到库外的锚点文件并可外发异机存证：截断后
+# 锚点所指的行不在库里，对账即暴露。锚点文件本身也要成链（每行对上一行的 mac
+# 再做 MAC），否则删改锚点行同样无痕。密钥用独立用途派生（audit_anchor），
+# 与链内哈希隔离。同样要说清边界：拿到磁盘与平台密钥的人仍可重算整个锚点文件，
+# 真正的保障来自 webhook 外发的异机副本——本地锚点链防的是"顺手删几行"。
+# ---------------------------------------------------------------------------
+
+_ANCHOR_PURPOSE = "audit_anchor"
+
+
+def _anchor_payload(prev_mac: str, record: dict) -> bytes:
+    """锚点行的签名内容：上一行 mac + 本行内容的定序 JSON（不含 prev_mac/mac 自身）。"""
+    body = json.dumps(
+        {k: v for k, v in record.items() if k not in ("prev_mac", "mac")},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return f"{prev_mac}|{body}".encode()
+
+
+def anchor_mac(prev_mac: str, record: dict) -> str:
+    """写入口径：当前密钥的 audit_anchor 派生子密钥。"""
+    return mac(signing_key(_ANCHOR_PURPOSE), _anchor_payload(prev_mac, record)).hex()
+
+
+def anchor_mac_valid(prev_mac: str, record: dict, given_mac: str) -> bool:
+    """校验一条锚点行：与链内哈希同样按多口径回退，轮换宽限期内旧行不误判。"""
+    payload = _anchor_payload(prev_mac, record)
+    return any(
+        hmac.compare_digest(mac(key, payload).hex(), given_mac)
+        for key in verification_keys(_ANCHOR_PURPOSE)
     )
 
 

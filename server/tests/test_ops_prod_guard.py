@@ -22,6 +22,9 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("MEDPLAT_SEED_DEMO", raising=False)
     monkeypatch.delenv("MEDPLAT_REDIS_URL", raising=False)
     monkeypatch.delenv("MEDPLAT_PORTAL_LEGACY_VERIFY", raising=False)
+    # P1-26 多实例守卫的两个信号：宿主残留会把"单实例只警告"误判成拒启
+    monkeypatch.delenv("MEDPLAT_WORKERS", raising=False)
+    monkeypatch.delenv("MEDPLAT_MIGRATE_ON_START", raising=False)
 
 
 def _prod(**kwargs) -> Settings:
