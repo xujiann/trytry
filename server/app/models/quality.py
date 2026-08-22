@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -192,6 +193,64 @@ class RecordQcRule(Base):
     deduct_points: Mapped[int] = mapped_column(Integer, default=5)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class QcLot(Base):
+    """检验室内质控（IQC）质控品批号：项目 × 批号 × 靶值/标准差。
+
+    **与 `QcRecord` 法域不同，互不替代**：`QcRecord` 是①-④共享中心的运行质量
+    台账（人工登记合格/不合格），本表与 `QcMeasurement` 是检验科**室内质控**的
+    数值体系——靶值/SD 定基线，测定值录入即按 Westgard 规则判定失控。
+    既有 `QcRecord` 台账保留不动。
+    """
+
+    __tablename__ = "qc_lots"
+    __table_args__ = (
+        UniqueConstraint("org_id", "item_code", "lot_no", name="uq_qc_lot_org_item_lot"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # 检验项目编码/名称（如 K-POTASSIUM 血清钾）
+    item_code: Mapped[str] = mapped_column(String(64), index=True)
+    item_name: Mapped[str] = mapped_column(String(128))
+    lot_no: Mapped[str] = mapped_column(String(64), index=True)
+    # 靶值与标准差（定值质控品说明书或前 20 次测定累积均值/SD）
+    target_value: Mapped[float] = mapped_column(Float)
+    sd: Mapped[float] = mapped_column(Float)
+    # 停用的批号不再接受测定值录入（换批后旧批停用）
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class QcMeasurement(Base):
+    """IQC 测定值：录入时即按 Westgard 基础四规则判定，结果落列。
+
+    - 1-2s 超±2SD → 警告（warning，不算失控）；
+    - 1-3s / 2-2s / R-4s 命中 → 失控（out_of_control），命中规则记 violated_rules；
+    - 失控须处理（原因 + 纠正措施）：未处理期间继续录入，响应里给警示。
+    """
+
+    __tablename__ = "qc_measurements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lot_id: Mapped[int] = mapped_column(ForeignKey("qc_lots.id"), index=True)
+    value: Mapped[float] = mapped_column(Float)
+    # 测定时刻（YYYY-MM-DD HH:MM），与录入时刻分开：补录时二者不同
+    measured_at: Mapped[str] = mapped_column(String(16), default="")
+    operator: Mapped[str] = mapped_column(String(64), default="")
+    # 1-2s 警告命中（不算失控，Westgard 里是"启动其他规则检查"的信号）
+    warning: Mapped[bool] = mapped_column(Boolean, default=False)
+    out_of_control: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # 命中的失控规则，分号分隔（如 "1-3s" / "2-2s;R-4s"）
+    violated_rules: Mapped[str] = mapped_column(String(64), default="")
+    # 失控处理留痕：原因 + 纠正措施（handled=False 的失控点是未闭环欠账）
+    handled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    handle_reason: Mapped[str] = mapped_column(String(512), default="")
+    corrective_action: Mapped[str] = mapped_column(String(512), default="")
+    handled_by: Mapped[str] = mapped_column(String(64), default="")
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class PerformanceFormula(Base):

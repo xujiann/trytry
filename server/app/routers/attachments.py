@@ -22,7 +22,16 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import AdverseEvent, Attachment, CourseMaterial, ExamReport, ExamRequest, User
+from ..models import (
+    AdverseEvent,
+    Attachment,
+    Consultation,
+    CourseMaterial,
+    ExamReport,
+    ExamRequest,
+    Referral,
+    User,
+)
 from ..storage import get_storage
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_patient_visible
 
@@ -109,6 +118,11 @@ def _exam_report_patient(db: Session, report: ExamReport) -> int | None:
     return request.patient_id if request else None
 
 
+def _own_patient(db: Session, owner) -> int | None:
+    """owner 对象自带 patient_id 列（会诊、转诊）时的直取解析。"""
+    return owner.patient_id
+
+
 _OWNERS: dict[str, OwnerSpec] = {
     "exam_report": OwnerSpec(
         "exam_report", ExamReport, ("doctor", "operator"), "patient",
@@ -125,6 +139,17 @@ _OWNERS: dict[str, OwnerSpec] = {
     "course_material": OwnerSpec(
         "course_material", CourseMaterial,
         ("director", "public_health", "operator", "doctor"), "all",
+    ),
+    # B2：会诊/转诊佐证材料（病历影像截图、检查单 PDF 等）。两类对象都直接挂
+    # 患者（patient_id 列），走患者档口径（校验 + AccessLog 留痕），与 exam_report
+    # 同档；上传角色对齐各自申请接口（require_roles("doctor", "operator")）。
+    "consultation": OwnerSpec(
+        "consultation", Consultation, ("doctor", "operator"), "patient",
+        patient_of=_own_patient,
+    ),
+    "referral": OwnerSpec(
+        "referral", Referral, ("doctor", "operator"), "patient",
+        patient_of=_own_patient,
     ),
 }
 

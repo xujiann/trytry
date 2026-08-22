@@ -313,6 +313,31 @@ class PhysicalExam(Base):
     # 分号分隔的异常项列表，非空自动置 has_abnormal
     abnormal_items: Mapped[str] = mapped_column(String(512), default="")
     has_abnormal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # 总检（B2）：分项录完后由总检医师出结论；两列均空 = 尚未总检
+    final_conclusion: Mapped[str] = mapped_column(String(1024), default="")
+    final_doctor: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CheckupItem(Base):
+    """体检分项结果（B2）：一次体检的逐项测值与参考范围。
+
+    汇总口径不变：`PhysicalExam.summary`/`abnormal_items` 保留兼容（存量记录
+    只有汇总），分项非空时 `has_abnormal` 由"汇总异常串非空 **或** 任一分项
+    abnormal"共同决定。
+    """
+
+    __tablename__ = "checkup_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    checkup_id: Mapped[int] = mapped_column(ForeignKey("physical_exams.id"), index=True)
+    item_code: Mapped[str] = mapped_column(String(64), index=True)
+    item_name: Mapped[str] = mapped_column(String(128))
+    # 结果值存字符串：定性项目（阴性/阳性）与定量项目（数值）同列
+    result_value: Mapped[str] = mapped_column(String(64))
+    unit: Mapped[str] = mapped_column(String(16), default="")
+    ref_range: Mapped[str] = mapped_column(String(64), default="")
+    abnormal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

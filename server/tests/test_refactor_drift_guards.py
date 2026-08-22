@@ -35,8 +35,9 @@ from app.main import app
 #: 真实规模是 800+，若某次遍历只捞到几条，说明穿封装的方式失效了。
 MIN_SANE_ENDPOINTS = 800
 
-#: 当前 /api 端点快照（908 个）。由真实应用生成，勿手写。
+#: 当前 /api 端点快照（944 个）。由真实应用生成，勿手写。
 #: 阶段十四第一波新增：E1 账户安全 7、E2 个保 11、I1 集成 8、D1 批量 1、B1 药事 15。
+#: B2 运营闭环新增 17：室内质控 7、体检分项/总检 2、打印单据补齐 8。
 SNAPSHOT_ENDPOINTS = {
     "DELETE /api/analytics/formulas/{key}",
     "DELETE /api/appointments/blacklist/{patient_id}",
@@ -99,6 +100,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/certs/{cert_id}/death-report-card",
     "GET /api/checkups",
     "GET /api/checkups/abnormal",
+    "GET /api/checkups/{checkup_id}/items",
     "GET /api/chronic",
     "GET /api/chronic/disease-types",
     "GET /api/chronic/overdue",
@@ -203,6 +205,9 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/jobs",
     "GET /api/jobs/runs",
     "GET /api/knowledge",
+    "GET /api/labqc/lots",
+    "GET /api/labqc/lots/{lot_id}/levey-jennings",
+    "GET /api/labqc/lots/{lot_id}/measurements",
     "GET /api/knowledge/expiring",
     "GET /api/materials/consumables",
     "GET /api/materials/consumables/trace/{barcode}",
@@ -327,11 +332,19 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/prescriptions/comment-stats",
     "GET /api/prescriptions/rules",
     "GET /api/prescriptions/{prescription_id}/review-points",
+    "GET /api/print/case-summaries/{admission_id}",
     "GET /api/print/certs/{cert_id}",
+    "GET /api/print/checkups/{checkup_id}",
+    "GET /api/print/consents/{record_id}",
+    "GET /api/print/discharge-summaries/{admission_id}",
     "GET /api/print/exam-reports/{report_id}",
     "GET /api/print/exam-requests/{request_id}",
+    "GET /api/print/inpatient-bills/{admission_id}",
     "GET /api/print/prescriptions/{prescription_id}",
+    "GET /api/print/referrals/{referral_id}",
+    "GET /api/print/settlements/{settlement_id}",
     "GET /api/print/templates",
+    "GET /api/print/vaccinations/{record_id}",
     "GET /api/projects",
     "GET /api/projects/stats/overview",
     "GET /api/projects/{project_id}",
@@ -590,6 +603,11 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/blood/stocks",
     "POST /api/certs",
     "POST /api/checkups",
+    "POST /api/checkups/{checkup_id}/review",
+    "PATCH /api/labqc/lots/{lot_id}",
+    "POST /api/labqc/lots",
+    "POST /api/labqc/lots/{lot_id}/measurements",
+    "POST /api/labqc/measurements/{measurement_id}/handle",
     "POST /api/chronic",
     "POST /api/chronic/disease-types",
     "POST /api/chronic/{chronic_id}/followups",
@@ -994,6 +1012,7 @@ SNAPSHOT_MODELS = {
     "Budget",
     "CaseSummary",
     "ChargeItem",
+    "CheckupItem",
     "ChargePriceChange",
     "ChildRecord",
     "ChildVisit",
@@ -1108,6 +1127,8 @@ SNAPSHOT_MODELS = {
     "ProjectMilestone",
     "PublicHealthEvent",
     "PurchaseOrder",
+    "QcLot",
+    "QcMeasurement",
     "QcRecord",
     "QcRule",
     "RecognitionItem",
