@@ -102,6 +102,25 @@ function table(cols, rows, renderRow) {
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+/**
+ * 面板外壳：`<div class="panel"><h3>标题</h3>内容</div>`（ADR-0009 第二步）。
+ *
+ * **`title` 由组件转义，`body` 不转**——这条边界要说清楚，不然会给人虚假的安全感：
+ * `body` 是调用方自己拼好的 HTML，组件没法替它转义，调用方内部该 `esc()` 的照旧。
+ * 组件收掉的是"标题忘了转义"这一类，不是全部。
+ *
+ * 放在 core.js 而不是 shared.js：`.panel`/`.card`/`table()` 是**管理端**这一套
+ * 前端的标记约定，居民端与医师端（`m/`）另有自己的一套，把它塞进三端共用的
+ * shared.js 只会给那两端加一段永远不会被调用的代码。shared.js 只放三端真的都在用的
+ * （`$`/`esc`）。
+ *
+ * `accent` 给左边框上色，既有页面用它区分警示／重点面板。
+ */
+function panel(title, body, { accent = "" } = {}) {
+  const style = accent ? ` style="border-left:4px solid ${esc(accent)}"` : "";
+  return `<div class="panel"${style}><h3>${esc(title)}</h3>${body}</div>`;
+}
+
 function setMsg(id, text, ok = true) {
   const el = $(id);
   if (el) { el.textContent = text; el.className = `msg ${ok ? "ok" : "err"}`; }

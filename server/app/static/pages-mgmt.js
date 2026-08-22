@@ -727,8 +727,9 @@ async function renderServiceRequests() {
   $("#page-desc").textContent = "预约 / 检查 / 会诊 / 用血 / 手术五类单据聚合视图，状态映射到统一口径";
   const pid = localStorage.getItem("medplat_sr_patient") || "";
   const data = await api(`/api/service-requests${pid ? `?patient_id=${pid}` : ""}`);
-  $("#page-body").innerHTML = `
-    <div class="panel"><h3>筛选</h3>
+  // ADR-0009 第二步的**第一页**：面板外壳改用 `panel()`（定义见 core.js）。
+  // 迁移范围只限本函数——组件与手写可以共存，ADR 的节奏就是"迁一页、人工过一页"。
+  $("#page-body").innerHTML = panel("筛选", `
       <form class="inline" id="sr-form"><input name="patient_id" type="number" value="${esc(pid)}" placeholder="患者ID（留空看全部）">
         <button>查询</button></form>
       <div class="cards">
@@ -737,15 +738,18 @@ async function renderServiceRequests() {
         ${Object.entries(data.by_type).map(([k, v]) =>
           `<div class="card"><span class="k">${esc(k)}</span><b>${v}</b></div>`).join("")}
       </div>
-      <p class="desc">刻意不建第六张单据表：五类单据各有必要的领域字段与状态机，这里做的是聚合视图。</p></div>
-    <div class="panel"><h3>在办事项（${data.total}）</h3>${
+      <p class="desc">刻意不建第六张单据表：五类单据各有必要的领域字段与状态机，这里做的是聚合视图。</p>`)
+    + panel(`在办事项（${data.total}）`,
       table(["类型", "单号", "患者", "机构", "事项", "统一状态", "原生状态", "时间"], data.items, (i) => {
+        // `text` 在 UNIFIED_STATUS 里查不到时会**回落成后端原始状态码**，
+        // 那是服务端数据，必须转义——迁移这一页时才看出来它一直是裸插值。
+        // （`color` 是本文件写死的 class 名，不是数据。）
         const [text, color] = UNIFIED_STATUS[i.status] || [i.status, ""];
         return `<tr><td>${esc(i.request_type_name)}</td><td>${i.id}</td><td>${esc(i.patient_name)}</td>
           <td>${esc(i.org_name)}</td><td>${esc(i.title)}</td>
-          <td><span class="tag ${color}">${text}</span></td><td>${esc(i.raw_status)}</td>
+          <td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(i.raw_status)}</td>
           <td>${esc(i.created_at.slice(0, 16).replace("T", " "))}</td></tr>`;
-      })}</div>`;
+      }));
   $("#sr-form").onsubmit = (e) => { e.preventDefault();
     localStorage.setItem("medplat_sr_patient", new FormData(e.target).get("patient_id") || ""); route(); };
 }
