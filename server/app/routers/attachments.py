@@ -20,6 +20,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
+# 导入即注册附件补扫任务 attachment_av_scan（附件域的旁路能力，随本路由装载）
+from .. import avscan  # noqa: F401
+from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import (
@@ -268,6 +271,10 @@ def store_upload(
         owner_type=owner_type,
         owner_id=owner_id,
         uploaded_by=uploaded_by,
+        # 病毒扫描旁路（P1-22）：上传不同步扫（clamd 慢/挂不能拦业务），落库即
+        # pending，由 avscan.attachment_av_scan 异步补扫。未配置 clamd 时明示
+        # skipped——"未配置=没扫"如实记录，不冒充已扫（clean）。
+        scan_status="pending" if settings.clamd_address.strip() else "skipped",
     )
     db.add(attachment)
     return attachment
@@ -354,6 +361,14 @@ def download_attachment(
         db, user, spec, attachment.owner_id,
         resource=_resource(attachment.owner_type, "download"),
     )
+    # 病毒扫描旁路（P1-22）：只拦已确证 infected，410=文件仍在库里登记但已被
+    # 隔离、不再提供。pending/unavailable/skipped 一律放行——旁路定位是可用性
+    # 优先：扫描器慢/挂/未配置都不该让业务下载不了文件，代价是"已上传未扫完"
+    # 窗口内可能放行带毒文件（取舍与协议见 app/avscan.py docstring）。
+    if attachment.scan_status == "infected":
+        raise HTTPException(
+            status_code=410, detail=f"附件已被病毒扫描隔离（{attachment.scan_detail}），禁止下载"
+        )
     storage = get_storage()
     if not storage.exists(attachment.sha256):
         raise HTTPException(status_code=404, detail="附件文件缺失（存储目录可能被清理）")

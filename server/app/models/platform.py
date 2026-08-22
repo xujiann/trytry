@@ -112,6 +112,14 @@ class Attachment(Base):
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
     # 可空：居民端上传（慢专病任务佐证）没有工作人员账号，记 NULL 而不是伪造一个
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # 病毒扫描旁路（P1-22，见 avscan.py）：pending=待扫, clean=已扫无毒,
+    # infected=检出病毒（下载拦截 410）, unavailable=扫描器不可用未能扫,
+    # skipped=未配置 clamd、明示未扫（不冒充已扫）
+    scan_status: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending", index=True
+    )
+    # 扫描详情：infected 记病毒签名名，unavailable 记原因；其余为空
+    scan_detail: Mapped[str] = mapped_column(String(256), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
