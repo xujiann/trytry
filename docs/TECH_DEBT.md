@@ -68,6 +68,22 @@
 | P1-25 | spd 两处证件号模糊检索未接 PII 加密态（需 spd 依赖白名单先放行 `pii`） | ✅ 已修（G4：白名单放行 `pii` 经 platform.py 再导出 pii_filter；开态全值命中、模糊落空与平台同口径，关态字节不变，test_spd_pii_search.py） |
 | P1-26 | 生产缺 Redis 仅警告不拒启（多实例下会话/锁定/限流静默降级）——是否升级为拒启属部署口径决策 | ✅ 已修（收口轮 G1：多实例特征+无 Redis 升级为拒启，test_redis_multi_instance_guard.py） |
 
+### P1 新增（守卫补强轮：闸门自证覆盖面后暴露的存量欠账）
+
+> 这一批**不是新引入的问题**，是三道守卫补强后第一次**被看见**的存量。
+> 每条都在测试里立了只减不增的棘轮：修一条删一条，新增一条即变红。
+> 本轮包只动脚本/测试/CI/文档，业务代码与迁移的修复归后续包。
+
+| 编号 | 问题 | 位置 / 棘轮 |
+|---|---|---|
+| P1-27 | **迁移与模型真实结构漂移 77 处**：旧"零漂移"守卫只比对 `create_table("表名")` 的**表名集合**，从不看列/索引/唯一性/外键/可空性，77 处一处未发现。分三类：18 个 spd 唯一索引被迁移建成**非唯一**（DB 级唯一约束根本不存在，并发下照样插出两条）、14 个外键模型有迁移无（生产不做参照完整性校验）、25 列迁移可空而模型 NOT NULL（开发 SQLite 被 create_all 掩盖） | 基线 `server/tests/snapshots/schema_drift_baseline.json`；棘轮 `tests/test_schema_governance.py::test_迁移与模型的真实结构差异只减不增_*`（SQLite 档 75 处、PG 档 77 处——多出的 2 处无名唯一约束 SQLite 反射不出来） |
+| P1-28 | **读-改-写的赋值形状 21 处**：旧规则只认 `obj.col += n`（`ast.AugAssign`），`obj.col = f(obj.col, n)` 一个都看不见。其中 8 处是真累加/追加（退款额累加、风险因素/药师意见字符串追加、随访日志与召回联系记录 JSON 列整体覆写），并发下后写覆盖先写；其余为幂等回填/取极值形状 | 清单 `tests/test_stage14_concurrency.py::KNOWN_READ_MODIFY_WRITE`；改法用 `app/concurrency.py` 的 `add_amount`/`take_amount` |
+| P1-29 | **逻辑唯一表写入不处理冲突 5 处**：号源批量创建、住院登记（同患者两条在院记录）、结算认领、账单明细重复记账、病程记录重复书写。这些表**业务上唯一、库上无约束**——比撞 IntegrityError 更坏，是**静默写出两条** | 清单 `tests/test_stage14_concurrency.py::KNOWN_UNGUARDED_UNIQUE_WRITES` + `LOGICAL_UNIQUE_TABLES` |
+| P1-30 | **并发防复发闸门覆盖面仅 27.5%**：229 个 `db.add` 写入点里，"唯一表"判据只覆盖 63 个，其余 166 个规则完全不看（未覆盖最多：`critical_actions` 5、`exchange_logs`/`followup_tasks`/`satisfaction_surveys`/`spd_screenings` 各 3）。补强前更低：87 文件 / 211 写入点 / 覆盖 42 个（19.9%），且 `app/spd/routers/config/` 整个子包（8 文件 18 写入点）从未被扫过 | 自证用例 `tests/test_stage14_concurrency.py::test_防复发闸门自证覆盖面`（每次运行打印分母，缺口显式化） |
+| P1-31 | `spd/care.py:dispatch_edu_push` 里 `push.frequency = push.frequency` 自赋值（写了等于没写），疑似笔误、非并发问题，待查原意 | `app/spd/routers/care.py`；已登记于 `KNOWN_READ_MODIFY_WRITE` |
+| P1-32 | **同一个不递归盲区还在另一道闸门上**：`tests/test_stage15_horizontal.py::_router_files()` 同样用 `os.listdir` 一层扫，横向越权防复发规则也看不到 `app/spd/routers/config/` 子包（8 文件）。本轮包不拥有该文件，未改；修法与 test_stage14 相同（改 `os.walk` 并补一条'必须递归'的自证用例） | `server/tests/test_stage15_horizontal.py:33` |
+
+
 ## P2 — 一致性与可维护性
 
 ### 命名

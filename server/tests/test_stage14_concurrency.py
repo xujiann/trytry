@@ -8,6 +8,7 @@
 import ast
 import os
 import threading
+import warnings
 
 import pytest
 import sqlalchemy as sa
@@ -26,14 +27,25 @@ ROUTER_DIRS = (ROUTER_DIR, SPD_ROUTER_DIR)
 
 
 def _router_files():
-    """全部路由文件的 (显示名, 绝对路径)。显示名带子系统前缀，报错时一眼看出出处。"""
+    """全部路由文件的 (显示名, 绝对路径)。显示名带子系统前缀与子目录，报错时一眼看出出处。
+
+    **必须递归**（os.walk 而不是 os.listdir）：`app/spd/routers/config/` 是一个
+    子包，用 listdir 一层扫只看得到 87 个文件，那 8 个文件里的 18 个写入点
+    从来没被任何一条防复发规则看过。"路由拆成子包"是这类扫描最常见的失效方式——
+    代码结构一变，闸门自己不声不响地缩了水，而它照样报绿。
+    """
     files = []
     for directory in ROUTER_DIRS:
         label = "spd/" if directory is SPD_ROUTER_DIR else ""
-        for name in sorted(os.listdir(directory)):
-            if name.endswith(".py"):
-                files.append((f"{label}{name}", os.path.join(directory, name)))
-    return files
+        root_dir = os.path.abspath(directory)
+        for root, dirs, names in os.walk(root_dir):
+            dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+            rel = os.path.relpath(root, root_dir)
+            prefix = "" if rel == "." else rel.replace(os.sep, "/") + "/"
+            for name in sorted(names):
+                if name.endswith(".py"):
+                    files.append((f"{label}{prefix}{name}", os.path.join(root, name)))
+    return sorted(files)
 
 
 
@@ -379,17 +391,50 @@ def test_物资全部出库后清单仍打得开(client, admin, org):
     assert rejected.status_code == 422
 
 
-def test_不得再用读改写累加计数(client):
-    """扫描：`obj.col += x` / `-= x` 形式的累加在路由层一律不允许。
+# 读-改-写的**赋值形状**存量欠账（只减不增）。
+# 规则原先只认 `ast.AugAssign`（`x.c += n`）——而同一个缺陷用赋值写出来
+# （`x.c = f(x.c, n)`）它一个也看不见：实测 21 处赋值形状的读-改-写全在规则之外，
+# 其中 8 处是货真价实的累加/追加（金额、字符串、JSON 列）。**不删规则、不放宽断言**，逐条登记为欠账：
+# 新增一条会顶破基线变红，修掉一条就把它从清单里删掉。
+# 修复归属：本包只动脚本/测试/CI/文档，业务代码改动交由后续包（见 docs/TECH_DEBT.md）。
+KNOWN_READ_MODIFY_WRITE = {
+    # —— 真累加/追加：并发下后写覆盖先写，会丢钱、丢内容（应修）——
+    "billing.py:refund_payment": "退款额累加（金额，丢更新=账实不符）",
+    "maternal.py:add_visit": "风险因素字符串追加",
+    "maternal.py:add_screening": "儿童风险备注字符串追加",
+    "maternal.py:create_screening": "风险因素字符串追加",
+    "prescriptions.py:review_prescription": "药师意见字符串追加",
+    "spd/care.py:update_revisit": "随访日志列表追加（JSON 列整体覆写）",
+    "spd/followup.py:record_call_result": "外呼结果字符串追加 + 证据列表追加",
+    "spd/population.py:update_recall": "召回联系记录列表追加",
+    # —— 幂等/取极值形状：同为读-改-写，但重复执行结果一致，丢更新后果有限（登记，暂不修）——
+    "education.py:submit_exam": "score = max(score, 新分)，取极值",
+    "portal.py:bind_wechat": "nickname = nickname or 新值，幂等回填",
+    "spd/portal.py:feedback_intervention": "read_at = read_at or now，幂等回填",
+    "spd/portal.py:read_education": "read_at = read_at or now，幂等回填",
+    "spd/tasks.py:escalate_task": "priority = max(priority, 2)，取极值",
+    "spd/tasks.py:submit_task": "assignee_id = assignee_id or 当前用户，幂等回填",
+    "spd/tasks.py:_finish_task": "assignee_id = assignee_id or 当前用户，幂等回填",
+    "spd/config/catalog.py:update_program": "version = _bump_version(version)，配置版本号自增（低频、单写者）",
+    # —— 顺带记一笔：这条是自赋值（写了等于没写），疑似笔误，非并发问题 ——
+    "spd/care.py:dispatch_edu_push": "push.frequency = push.frequency，自赋值疑似笔误（登记待查）",
+}
 
-    D-9 这一类的成因与 D-5～D-8 相同——正确做法（原子 UPDATE）平台早就有，
-    只是没抽出来，于是每写一个新模块就再手写一遍读-改-写。
-    抽出来之后要配一条规则盯住，否则下一个模块照旧。
+
+def _read_modify_write_offenders() -> list[str]:
+    """路由层里对 ORM 对象做读-改-写的位置，两种形状都要认：
+
+        obj.col += n                     # AugAssign——第一版只认这个
+        obj.col = f(obj.col, n)          # Assign 且右值里含同一个属性——**这才是多数**
+
+    只认 AugAssign 的那一版，在同一份代码上漏掉 21 处赋值形状的读-改-写：
+    一条只看得见一种写法的规则，给出的是虚假的安全感（第 17 章例三）。
     """
     allowed = {
         # 请求内新建、尚未提交的对象，不存在并发竞争
         "encounters.py:_accumulate_local",
     }
+    local_names = ("self", "totals", "acc")
     offenders = []
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
@@ -398,24 +443,52 @@ def test_不得再用读改写累加计数(client):
             if key in allowed:
                 continue
             for node in ast.walk(func):
-                if not isinstance(node, ast.AugAssign):
+                target = None
+                if isinstance(node, ast.AugAssign):
+                    if not isinstance(node.target, ast.Attribute):
+                        continue
+                    if not isinstance(node.op, (ast.Add, ast.Sub)):
+                        continue
+                    target = node.target
+                elif isinstance(node, ast.Assign):
+                    if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Attribute):
+                        continue
+                    target = node.targets[0]
+                    src = ast.unparse(target)
+                    # 右值里必须出现同一个属性，才叫"读了旧值再写回去"；
+                    # 纯赋新值（obj.col = body.x）不是读-改-写，不报。
+                    if not any(
+                        isinstance(sub, ast.Attribute) and ast.unparse(sub) == src
+                        for sub in ast.walk(node.value)
+                    ):
+                        continue
+                else:
                     continue
-                if not isinstance(node.target, ast.Attribute):
-                    continue
-                if not isinstance(node.op, (ast.Add, ast.Sub)):
-                    continue
-                # 只管 ORM 列上的累加；本地变量/累加器（sum += x）不在此列
-                if isinstance(node.target.value, ast.Name) and node.target.value.id in (
-                    "self",
-                    "totals",
-                    "acc",
-                ):
+                # 只管 ORM 列上的读-改-写；本地变量/累加器（sum += x）不在此列
+                if isinstance(target.value, ast.Name) and target.value.id in local_names:
                     continue
                 offenders.append(f"{key} → {ast.unparse(node)}")
-    assert offenders == [], (
-        "以下位置对数据库对象做读-改-写累加（并发下丢更新）：\n  "
-        + "\n  ".join(offenders)
-        + "\n请改用 app/concurrency.py 的 add_amount / take_amount / claim_quota。"
+    return offenders
+
+
+def test_不得再用读改写累加计数(client):
+    """扫描：`obj.col += x` 与 `obj.col = f(obj.col, x)` 两种读-改-写在路由层一律不允许。
+
+    D-9 这一类的成因与 D-5～D-8 相同——正确做法（原子 UPDATE）平台早就有，
+    只是没抽出来，于是每写一个新模块就再手写一遍读-改-写。
+    抽出来之后要配一条规则盯住，否则下一个模块照旧。
+    """
+    offenders = _read_modify_write_offenders()
+    new = sorted(o for o in offenders if o.split(" → ")[0] not in KNOWN_READ_MODIFY_WRITE)
+    print(
+        f"\n[读-改-写规则] 命中 {len(offenders)} 处（AugAssign + Assign 两种形状），"
+        f"其中已登记欠账 {len(offenders) - len(new)} 处、新增 {len(new)} 处"
+    )
+    assert new == [], (
+        "以下位置对数据库对象做读-改-写（并发下丢更新）：\n  "
+        + "\n  ".join(new)
+        + "\n请改用 app/concurrency.py 的 add_amount / take_amount / claim_quota；"
+        "\n确属存量欠账的，登记进 KNOWN_READ_MODIFY_WRITE 并写明性质（清单只减不增）。"
     )
 
 
@@ -449,6 +522,37 @@ def _model_to_table() -> dict[str, str]:
 # 豁免必须写理由——一旦可以不写，这份清单很快会变成绕过检查的后门。
 CONFLICT_SAFE = {
     "org_groups.py:add_member": "已捕获 IntegrityError",
+}
+
+# ——「逻辑唯一但库上没有约束」的表清单（只进不退）——
+#
+# 原判据只认"表上已有 DB 级唯一约束"：229 个写入点里只有 57 个落在这类表上（24.9%），
+# 剩下四分之三**规则完全不看**。而 check-then-act 的成因恰恰是"业务上唯一、
+# 库上没约束"——库上有约束的地方至少会撞 IntegrityError 报错，没约束的地方
+# 是**静默写出两条**，更坏。本轮实测新发现的四处（号源批量、住院登记、结算认领、
+# 退款）无一例外落在那 75% 里。
+#
+# 所以另立这份显式清单，把"逻辑唯一"的表也纳入判据。清单只许变长（覆盖变大），
+# 不许变短；某张表补了 DB 唯一约束之后，它会自动落进 _tables_with_unique_constraint()，
+# 那时才可以从这里删。
+LOGICAL_UNIQUE_TABLES = {
+    "appointment_slots": "同医生/同排班/同时段号源逻辑唯一（批量建号源会重复建）",
+    "admissions": "同患者同时只能有一条在院记录（status='in_hospital' 上的在院唯一）",
+    "settlements": "同一次结算认领只应成功一次（结算认领 check-then-act）",
+    "bill_details": "同账单同收费项逻辑唯一（重复记账即多收费）",
+    "progress_notes": "同住院同时间点病程记录逻辑唯一（重复书写产生双份法定文书）",
+}
+
+# 加进 LOGICAL_UNIQUE_TABLES 后被规则抓出来的**存量** offender（只减不增）。
+# 规则抓出存量不是删规则的理由（第 17 章：不许为了绿而放宽断言）——逐条登记，
+# 新增一条会顶破基线。修复归属：本包只动脚本/测试/CI/文档，业务代码改动交由
+# 后续包（见 docs/TECH_DEBT.md 的登记项）。
+KNOWN_UNGUARDED_UNIQUE_WRITES = {
+    "appointments.py:create_slot": "号源批量创建：先查后插，重复请求建出重复号源",
+    "billing.py:create_bill_detail": "账单明细：无冲突处理，重复记账即多收费",
+    "billing.py:create_settlement": "结算认领：check-then-act，并发下认领两次",
+    "clinical_docs.py:create_progress_note": "病程记录：重复书写产生双份法定文书",
+    "inpatient.py:create_admission": "住院登记：并发下同一患者建出两条在院记录",
 }
 
 
@@ -490,18 +594,10 @@ def _inserted_models(func: ast.FunctionDef, model_names: set[str]) -> set[str]:
     return inserted
 
 
-def test_写唯一约束表的接口必须处理约束冲突():
-    """防的是这一轮实测到的同一个错误再犯第四次。
-
-    判据：函数里 `db.add` 了某个模型，而该模型的表带唯一约束，则该函数必须
-    出现下列之一——捕获 `IntegrityError`，或调用 `app/concurrency.py` 的助手。
-
-    仍会有漏网（跨函数传对象、循环里从容器取对象），但**不会误报**：
-    命中的都确实是"往带唯一约束的表里插入"。宁可漏也不误报——一条经常误报的
-    规则会先被加豁免、再被加得没人看，最后被删掉。
-    """
+def _unguarded_unique_writes() -> list[str]:
+    """往"唯一表"（DB 级唯一约束 **或** LOGICAL_UNIQUE_TABLES）里插入却不处理冲突的位置。"""
     model_table = _model_to_table()
-    unique_tables = _tables_with_unique_constraint()
+    unique_tables = _tables_with_unique_constraint() | set(LOGICAL_UNIQUE_TABLES)
     helpers = {"insert_or_conflict", "insert_with_retry", "upsert_unique", "insert_if_absent"}
     offenders = []
 
@@ -513,20 +609,44 @@ def test_写唯一约束表的接口必须处理约束冲突():
             if key in CONFLICT_SAFE:
                 continue
             source = ast.dump(func)
-            handled = "IntegrityError" in source or any(h in source for h in helpers)
-            if handled:
+            if "IntegrityError" in source or any(h in source for h in helpers):
                 continue
             for model in sorted(_inserted_models(func, model_names)):
                 table = model_table[model]
                 if table in unique_tables:
                     offenders.append(f"{key} → {model}({table})")
                     break
+    return offenders
 
-    assert offenders == [], (
-        "以下接口往带唯一约束的表里直接插入，却没处理约束冲突"
-        "（并发下会 500 并丢数据）：\n  " + "\n  ".join(offenders) +
+
+def test_写唯一约束表的接口必须处理约束冲突():
+    """防的是这一轮实测到的同一个错误再犯第四次。
+
+    判据：函数里 `db.add` 了某个模型，而该模型的表**带 DB 级唯一约束、或列在
+    LOGICAL_UNIQUE_TABLES 里**，则该函数必须出现下列之一——捕获 `IntegrityError`，
+    或调用 `app/concurrency.py` 的助手。
+
+    只认"DB 级唯一约束"的那一版，判据只覆盖 229 个写入点里的 42 个（19.9%）；
+    而 check-then-act 恰恰爱长在"业务上唯一、库上没约束"的表上——那里撞不出
+    IntegrityError，是**静默写出两条**。所以另立逻辑唯一清单一并纳入。
+
+    仍会有漏网（跨函数传对象、循环里从容器取对象），但**不会误报**：
+    命中的都确实是"往唯一表里插入"。宁可漏也不误报——一条经常误报的
+    规则会先被加豁免、再被加得没人看，最后被删掉。覆盖面数字见
+    test_防复发闸门自证覆盖面。
+    """
+    offenders = _unguarded_unique_writes()
+    new = sorted(o for o in offenders if o.split(" → ")[0] not in KNOWN_UNGUARDED_UNIQUE_WRITES)
+    print(
+        f"\n[唯一表写入规则] 命中 {len(offenders)} 处，其中已登记欠账 "
+        f"{len(offenders) - len(new)} 处、新增 {len(new)} 处"
+    )
+    assert new == [], (
+        "以下接口往（DB 唯一约束或逻辑唯一）表里直接插入，却没处理约束冲突"
+        "（并发下会 500 丢数据，或静默写出两条）：\n  " + "\n  ".join(new) +
         "\n请改用 app/concurrency.py 的 insert_or_conflict / insert_with_retry / "
-        "upsert_unique，或显式捕获 IntegrityError；确属不会冲突的加进 CONFLICT_SAFE 并写明理由。"
+        "upsert_unique，或显式捕获 IntegrityError；确属不会冲突的加进 CONFLICT_SAFE 并写明理由；"
+        "\n确属存量欠账的登记进 KNOWN_UNGUARDED_UNIQUE_WRITES（清单只减不增）。"
     )
 
 
@@ -537,8 +657,9 @@ def test_豁免清单不得腐烂():
         tree = ast.parse(open(path, encoding="utf-8").read())
         for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             existing.add(f"{name}:{func.name}")
-    stale = sorted(set(CONFLICT_SAFE) - existing)
-    assert stale == [], f"豁免清单里这些函数已不存在，应删除：{stale}"
+    listed = set(CONFLICT_SAFE) | set(KNOWN_UNGUARDED_UNIQUE_WRITES) | set(KNOWN_READ_MODIFY_WRITE)
+    stale = sorted(listed - existing)
+    assert stale == [], f"豁免/欠账清单里这些函数已不存在，应删除：{stale}"
 
 
 # ============================================ 第十轮 P1：实训报名超额（延迟登记的欠账）
@@ -629,3 +750,142 @@ def test_退报名释放名额(client, admin):
     assert client.post(f"/api/education/training-plans/{pid}/enroll", headers=toks[1]).status_code == 201
     plans = client.get("/api/education/training-plans", headers=admin).json()
     assert [p for p in plans if p["id"] == pid][0]["enrolled"] == 1
+
+
+# ============================================ 闸门自证覆盖面（第 17 章 §17.5 第 4 条）
+#
+# "扫描器、闸门、校验器，凡是有上限、抽样、跳过的，必须把'看了多少、跳过多少'
+# 打印出来；欠账要显式、可量化、只减不增。"
+#
+# 上面那两条规则一直报绿，但从没交代过自己的**分母**。实测清点（口径见
+# _write_sites 的 docstring，可自行复算）：
+#
+#   补强前：os.listdir 只扫到 87 个路由文件 / 211 个写入点，形状识别 210 个（99.5%），
+#           而"唯一表"判据只覆盖 42 个（19.9%）——**另外八成规则完全不看**。
+#   补强后：os.walk 扫到 95 个文件 / 229 个写入点，形状识别 228 个（99.6%），
+#           判据覆盖 63 个（27.5%）。
+#
+# 覆盖率从 19.9% 到 27.5% 不是"合格"，是**把缺口显式化**：剩下 72.5% 明明白白
+# 写在输出里，谁都能看见它没被守住，而不是藏在一个绿灯后面。
+
+# 覆盖面基线：这两个数字**只许变好**（覆盖数只增、未识别数只减）。
+BASELINE_COVERED_WRITE_SITES = 63
+BASELINE_UNRESOLVED_WRITE_SITES = 1
+
+
+def _write_sites():
+    """全部 `db.add(...)` 写入点的清点。
+
+    口径（**连口径一起留档**，否则这个数字过后连被核对的资格都没有）：
+      * 文件：app/routers 与 app/spd/routers 下**递归**的全部 .py；
+      * 写入点：函数体内形如 `db.add(x)` 的调用，一次调用算一个；
+      * 形状可识别：能顺着 `db.add(Model(...))` 或 `obj = Model(...); db.add(obj)`
+        解析出模型名的写入点；
+      * 规则覆盖：模型对应的表带 DB 级唯一约束，或在 LOGICAL_UNIQUE_TABLES 里。
+    """
+    model_table = _model_to_table()
+    model_names = set(model_table)
+    guarded_tables = _tables_with_unique_constraint() | set(LOGICAL_UNIQUE_TABLES)
+
+    total = resolved = covered = 0
+    unresolved: list[str] = []
+    uncovered_tables: dict[str, int] = {}
+
+    for name, path in _router_files():
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            assigned: dict[str, str] = {}
+            for node in ast.walk(func):
+                if (
+                    isinstance(node, ast.Assign)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name)
+                    and node.value.func.id in model_names
+                ):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            assigned[target.id] = node.value.func.id
+            for node in ast.walk(func):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr != "add" or not node.args:
+                    continue
+                if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "db"):
+                    continue
+                total += 1
+                arg = node.args[0]
+                model = None
+                if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name):
+                    model = arg.func.id if arg.func.id in model_names else None
+                elif isinstance(arg, ast.Name):
+                    model = assigned.get(arg.id)
+                if model is None:
+                    unresolved.append(f"{name}:{func.name} → db.add({ast.unparse(arg)})")
+                    continue
+                resolved += 1
+                table = model_table[model]
+                if table in guarded_tables:
+                    covered += 1
+                else:
+                    uncovered_tables[table] = uncovered_tables.get(table, 0) + 1
+    return {
+        "files": len(_router_files()),
+        "total": total,
+        "resolved": resolved,
+        "covered": covered,
+        "unresolved": unresolved,
+        "uncovered_tables": uncovered_tables,
+    }
+
+
+def test_防复发闸门自证覆盖面():
+    """闸门必须自报分母：扫了多少文件、多少写入点、规则覆盖多少、剩多少没覆盖。
+
+    这条用例本身不判"代码有没有问题"，它判的是**闸门有没有缩水**：
+    路由挪进子包（少扫文件）、新写法让形状识别失效（少认写入点）、
+    判据退化（覆盖数下降），三者任一发生都会在这里变红。
+    """
+    stats = _write_sites()
+    top = sorted(stats["uncovered_tables"].items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+    summary = "\n".join([
+        "",
+        "[并发防复发闸门] 覆盖面自证",
+        f"  扫描文件：{stats['files']} 个（app/routers + app/spd/routers，递归，无跳过）",
+        f"  db.add 写入点：{stats['total']} 个",
+        f"  形状可识别：{stats['resolved']} 个"
+        f"（{stats['resolved'] / stats['total']:.1%}），未识别 {len(stats['unresolved'])} 个",
+        f"  唯一表判据覆盖：{stats['covered']} 个"
+        f"（{stats['covered'] / stats['total']:.1%}），**未覆盖 {stats['total'] - stats['covered']} 个**",
+        f"  未覆盖写入点最多的表（前 10）：{top}",
+        f"  未识别的写入点：{stats['unresolved'] or '无'}",
+        "  说明：未覆盖 ≠ 安全，只是这条规则看不到——缺口显式化，不许再藏在绿灯后面。",
+    ])
+    print(summary)
+    # print 在 `-q` 下被吞掉；warning 会进 "warnings summary"，
+    # 让覆盖面数字在 CI 默认输出里也看得见。
+    warnings.warn(summary, UserWarning, stacklevel=2)
+
+    assert stats["covered"] >= BASELINE_COVERED_WRITE_SITES, (
+        f"规则覆盖的写入点从 {BASELINE_COVERED_WRITE_SITES} 掉到 {stats['covered']}："
+        " 判据退化或路由文件没扫全（闸门缩水了）。"
+    )
+    assert len(stats["unresolved"]) <= BASELINE_UNRESOLVED_WRITE_SITES, (
+        f"形状识别不了的写入点从 {BASELINE_UNRESOLVED_WRITE_SITES} 涨到 "
+        f"{len(stats['unresolved'])}：{stats['unresolved']}"
+    )
+    if stats["covered"] > BASELINE_COVERED_WRITE_SITES:
+        print(f"[提示] 覆盖已升到 {stats['covered']}，请把 BASELINE_COVERED_WRITE_SITES 上调。")
+
+
+def test_路由扫描必须递归到子包():
+    """防的是"路由拆进子包 → 扫描静默缩水"这一种失效。
+
+    实测：app/spd/routers/config/ 是子包，os.listdir 一层扫漏掉它整包
+    （8 个文件、18 个 db.add 写入点），而闸门照样报绿。
+    """
+    scanned = {name for name, _ in _router_files()}
+    assert any(name.startswith("spd/config/") for name in scanned), (
+        "没扫到 app/spd/routers/config/ 子包——_router_files() 又退回成不递归了"
+    )
+    top_level_only = {n for n in scanned if "/" not in n.replace("spd/", "", 1)}
+    assert len(scanned) > len(top_level_only), "子包里的路由文件一个都没扫到"
