@@ -192,6 +192,13 @@ class Settings(BaseSettings):
     payment_gateway_url: str = ""
     payment_gateway_key: str = ""
 
+    # ---------------- 收口轮登记项（P1-21/22） ----------------
+    # 审计链外部锚点 webhook（空=仅本地锚点文件）：定期把链尾哈希外发异机存证，
+    # 防"有库权限者末尾截断"——锚点在库外，删库内记录对不上锚点即暴露。
+    audit_anchor_webhook_url: str = ""
+    # ClamAV clamd 地址（host:port 或 unix:/path；空=不扫描，附件标 skipped）
+    clamd_address: str = ""
+
     @property
     def is_production(self) -> bool:
         return "prod" in (self.env, self.environment)
