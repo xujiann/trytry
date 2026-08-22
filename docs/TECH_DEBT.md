@@ -121,6 +121,15 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P1-33 | **出口脱敏无守卫**：`privacy.py` 明写"新增返回身份证号/电话的接口必须复用本模块"，实际只有 2 处引用、无任何闸门。改造路径已验证可行：从响应模型含 `id_card`/`phone` 的端点推导集合，再要求函数体走 `desensitize`/`mask_*`，例外按好清单形态逐条写理由（`integration.fhir_patient_resource` 是按设计的明文导出，需保留例外） | `app/privacy.py:7` |
 | P1-34 | **月份口径正则不校验日历**：`\d{4}-\d{2}` 放行 `2026-13`，5 处（fund/admin_mgmt×2/quality/reports）。与 D-3 假日期同族，需新建 `PeriodStr` 类型 | `app/routers/fund.py:224` 等 |
 | P1-35 | **23 张带 `patient_id` 却无机构列的表**永远当不了可见性依据——补机构列还是确认无需依据，需逐表业务判断（现已可量化打印，见 `test_visibility_relation_derivation.py`） | `app/visibility.py` 推导面 |
+| P1-36 | **登出时"从请求取令牌"的双模回落各写了一份**（Header / Cookie），与唯一实现 `deps.token_from_request` 并行。今天不会漂：两个 logout 都由 `get_current_user`/`current_resident` 前置把过 CSRF 与准入，body 里只是重取同一枚令牌。收敛要先想清 `verify_csrf` 的语义边界 | `app/routers/auth.py:207`、`app/routers/portal.py:487-492` |
+| P1-37 | **`ws.py` 自读会话 Cookie**，不走 `deps.token_from_request`——后者吃 `Request`，而 WS 握手没有 `Request`。要收敛得先把"取令牌"与"校验 CSRF"两件事拆开（这两件事今天绑在一个函数里，本身就是下一步该拆的形状） | `app/ws.py:261` |
+| P1-38 | **居民端转诊状态另有一套措辞**（待接收/已接收/已完成 vs 业务端 待接诊/已接诊/已结案）。这是对外分叉、不是拷贝，但两套文案会各自演化；是否统一属另案（`tests/test_portal_referral_frontend.py:41` 记着这条）。业务端与打印件之间那份逐字拷贝已在本轮合掉 | `app/routers/portal.py:1229` |
+
+**本轮验证不成立、不予登记的一条**：J1 报"`integration.fhir_observation` 无任何鉴权依赖，只认 `X-Source-System` 头"。
+实测不成立——该端点无令牌访问返回 **401**，同文件另两个入站端点同样 401。原因是鉴权挂在
+`APIRouter(dependencies=[Depends(require_roles("operator"))])` 的**路由器层**（`app/routers/integration.py:62-66`），
+而 `require_roles` 内部 `Depends(get_current_user)`；只读函数签名看不见它。
+按本仓库的规矩，怀疑不值钱、触发才算数：跑一次探针比读一遍签名可靠，**"某处没写"不等于"某处没有"**。
 
 ## P2 — 一致性与可维护性
 

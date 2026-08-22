@@ -308,6 +308,11 @@ def _patient_basis_uncached(db: Session, user: User, patient_id: int) -> str | N
     先判哪个不影响能不能看，只影响留痕里记下的那个词，所以取最直接的那条。
     """
     org_id = user.org_id
+    if org_id is None:
+        # 调用方 `patient_basis` 已挡下无机构用户；这里再写一次不是冗余：
+        # 少了它，下面每一处 `列 == org_id` 在 SQL 里都会退化成 `IS NULL`，
+        # 也就是"和其它同样没机构的脏数据算作有关系"——静默放行，不报错。
+        return None
 
     if (
         db.query(Encounter.id)
