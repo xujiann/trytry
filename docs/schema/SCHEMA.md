@@ -1633,6 +1633,7 @@
 - `id` · INTEGER · PK · NOT NULL
 - `admission_id` · INTEGER · index · → admissions.id
 - `encounter_id` · INTEGER · index · → encounters.id
+- `inpatient_order_id` · INTEGER · index · → inpatient_orders.id
 - `nursing_level` · VARCHAR(16) · NOT NULL · index
 - `content` · VARCHAR(2048) · NOT NULL
 - `nurse_name` · VARCHAR(64) · NOT NULL
@@ -1642,6 +1643,7 @@
 - _index_ ix_nursing_records_admission_id(admission_id)
 - _index_ ix_nursing_records_created_at(created_at)
 - _index_ ix_nursing_records_encounter_id(encounter_id)
+- _index_ ix_nursing_records_inpatient_order_id(inpatient_order_id)
 - _index_ ix_nursing_records_nursing_level(nursing_level)
 
 ## official_docs

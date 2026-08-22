@@ -61,12 +61,12 @@
 
 | 编号 | 问题 | 位置 |
 |---|---|---|
-| P1-21 | 审计链无外部锚点：归档 manifest 只护"截断续验"，**末尾删除 N 条仍不可检出**；需定期把链头哈希锚定到异机/存证 | `audit_chain.py` |
-| P1-22 | 附件仅 magic-bytes 校验，无病毒扫描旁路（ClamAV 异步标记未做） | `attachments.py` |
-| P1-23 | 前端令牌仍存 localStorage（XSS 失窃面）；改 HttpOnly Cookie 需配套 CSRF token，属机制性改造 | `static/core.js` |
+| P1-21 | 审计链无外部锚点：归档 manifest 只护"截断续验"，**末尾删除 N 条仍不可检出**；需定期把链头哈希锚定到异机/存证 | ✅ 已修（收口轮 G1：审计锚点自链文件+webhook 异机存证、verify 带锚点对账，test_audit_anchor.py 含末尾截断实证） |
+| P1-22 | 附件仅 magic-bytes 校验，无病毒扫描旁路（ClamAV 异步标记未做） | ✅ 已修（收口轮 G2：clamd 零依赖客户端+扫描任务+感染件下载 410，test_attachment_avscan.py） |
+| P1-23 | 前端令牌仍存 localStorage（XSS 失窃面）；改 HttpOnly Cookie 需配套 CSRF token，属机制性改造 | ✅ 已修（收口轮 G3：令牌 HttpOnly Cookie + CSRF 双提交，前端不再落 localStorage；Header 模式完全兼容，test_auth_cookie_csrf.py） |
 | P1-24 | 护理执行联动/居民端押金透出/monitor 多实例集中化：三处已声明待办的接线（微信登录留痕已于收口轮接上） | ✅ 已修（G4 三项齐：护理记录挂医嘱外键+执行视图计数 test_nursing_order_link.py；居民端 `/me/deposits` 复用 billing 余额口径 test_portal_deposits.py；monitor 计数配 Redis 走 hash 汇总、无 Redis 字节不变 test_monitor_cluster_metrics.py） |
 | P1-25 | spd 两处证件号模糊检索未接 PII 加密态（需 spd 依赖白名单先放行 `pii`） | ✅ 已修（G4：白名单放行 `pii` 经 platform.py 再导出 pii_filter；开态全值命中、模糊落空与平台同口径，关态字节不变，test_spd_pii_search.py） |
-| P1-26 | 生产缺 Redis 仅警告不拒启（多实例下会话/锁定/限流静默降级）——是否升级为拒启属部署口径决策 | `config.py` |
+| P1-26 | 生产缺 Redis 仅警告不拒启（多实例下会话/锁定/限流静默降级）——是否升级为拒启属部署口径决策 | ✅ 已修（收口轮 G1：多实例特征+无 Redis 升级为拒启，test_redis_multi_instance_guard.py） |
 
 ## P2 — 一致性与可维护性
 
