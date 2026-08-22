@@ -1697,6 +1697,86 @@ const MR_FIELDS = [
 ];
 const MR_GRADE_COLOR = { 甲: "green", 乙: "orange", 丙: "red" };
 
+async function renderLabQc() {
+  $("#page-desc").textContent = "检验室内质控（IQC）：质控品批号维护 → 测定值录入即判 Westgard 四规则 → 失控处理闭环与 L-J 数据";
+  const lots = await api("/api/labqc/lots");
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>新建质控批号</h3>
+      <form class="inline" id="lot-form">
+        <input name="org_id" placeholder="机构ID" required style="width:90px">
+        <input name="item_code" placeholder="项目编码" required>
+        <input name="item_name" placeholder="项目名称" required>
+        <input name="lot_no" placeholder="质控品批号" required>
+        <input name="target_value" placeholder="靶值" required style="width:90px">
+        <input name="sd" placeholder="SD" required style="width:70px">
+        <button>建批号</button></form>
+      <p class="msg" id="labqc-msg"></p></div>
+    <div class="panel"><h3>批号台账</h3>${table(["ID", "项目", "批号", "靶值", "SD", "状态", "操作"], lots, (l) =>
+      `<tr><td>${l.id}</td><td>${esc(l.item_name)}（${esc(l.item_code)}）</td><td>${esc(l.lot_no)}</td>
+       <td>${l.target_value}</td><td>${l.sd}</td>
+       <td><span class="tag ${l.active ? "green" : ""}">${l.active ? "启用" : "停用"}</span></td>
+       <td><button class="btn secondary" data-lot="${l.id}">测定值/L-J</button>
+        <button class="btn" data-toggle="${l.id}" data-active="${l.active}">${l.active ? "停用" : "启用"}</button></td></tr>`)}</div>
+    <div class="panel hidden" id="lot-detail"></div>`;
+  const drawLot = async (lotId) => {
+    const lj = await api(`/api/labqc/lots/${lotId}/levey-jennings`);
+    const panel = $("#lot-detail");
+    panel.classList.remove("hidden");
+    panel.innerHTML = `
+      <h3>${esc(lj.item_name)} · 批号 ${esc(lj.lot_no)}（靶值 ${lj.target_value} ± SD ${lj.sd}）</h3>
+      <p>L-J 参考线：均值 ${lj.lines.mean} ｜ ±1SD [${lj.lines.sd1_lower}, ${lj.lines.sd1_upper}]
+        ｜ ±2SD [${lj.lines.sd2_lower}, ${lj.lines.sd2_upper}] ｜ ±3SD [${lj.lines.sd3_lower}, ${lj.lines.sd3_upper}]</p>
+      <form class="inline" id="meas-form">
+        <input name="value" placeholder="测得值" required style="width:100px">
+        <input name="measured_at" placeholder="测定时间 YYYY-MM-DD HH:MM（可空）" style="min-width:220px">
+        <input name="operator" placeholder="操作者（可空）">
+        <button>录入测定值</button></form>
+      <p class="msg" id="meas-msg"></p>
+      ${table(["ID", "测得值", "z", "测定时间", "判定", "处理", "操作"], lj.points, (p) =>
+        `<tr><td>${p.id}</td><td>${p.value}</td><td>${p.z}</td><td>${esc(p.measured_at)}</td>
+         <td>${p.out_of_control ? `<span class="tag red">失控 ${esc(p.violated_rules)}</span>`
+            : p.warning ? '<span class="tag orange">1-2s 警告</span>' : '<span class="tag green">在控</span>'}</td>
+         <td>${p.out_of_control ? (p.handled ? '<span class="tag green">已处理</span>' : '<span class="tag orange">未处理</span>') : "—"}</td>
+         <td>${p.out_of_control && !p.handled ? `<button class="btn secondary" data-handle="${p.id}">失控处理</button>` : "—"}</td></tr>`)}`;
+    $("#meas-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const body = formJson(e.target, ["value"]);
+      try {
+        const created = await api(`/api/labqc/lots/${lotId}/measurements`, { method: "POST", body: JSON.stringify(body) });
+        if (created.alert) { setMsg("#labqc-msg", created.alert, false); }
+        drawLot(lotId);
+      } catch (err) { setMsg("#meas-msg", err.message, false); }
+    };
+    panel.onclick = async (e) => {
+      const { handle } = e.target.dataset;
+      if (!handle) return;
+      const reason = prompt("失控原因（如：质控品失效、仪器漂移）");
+      if (!reason) return;
+      const action = prompt("纠正措施（如：更换质控品复测、重新定标）") || "";
+      try {
+        await api(`/api/labqc/measurements/${handle}/handle`, {
+          method: "POST", body: JSON.stringify({ reason, corrective_action: action }) });
+        drawLot(lotId);
+      } catch (err) { setMsg("#meas-msg", err.message, false); }
+    };
+  };
+  $("#lot-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/labqc/lots", formJson(e.target, ["org_id", "target_value", "sd"]), "#labqc-msg");
+  };
+  $("#page-body").addEventListener("click", async (e) => {
+    const { lot, toggle } = e.target.dataset;
+    try {
+      if (lot) await drawLot(lot);
+      if (toggle) {
+        await api(`/api/labqc/lots/${toggle}`, { method: "PATCH",
+          body: JSON.stringify({ active: e.target.dataset.active !== "true" }) });
+        route();
+      }
+    } catch (err) { setMsg("#labqc-msg", err.message, false); }
+  });
+}
+
 async function renderQuality() {
   $("#page-desc").textContent = "不良事件上报（可匿名）→ 审核 → 整改；结构化病历实时环节质控；病历抽检评分；院感上报核实";
   const [events, estats, qstats, infections, mrSummary, mrRecords] = await Promise.all([

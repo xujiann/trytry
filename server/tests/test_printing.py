@@ -189,12 +189,11 @@ def test_print_requires_login(client, fixtures):
 
 def test_template_defaults_listed_and_upsert_applies(client, admin, fixtures):
     listed = client.get("/api/print/templates", headers=admin).json()
-    assert {t["doc_type"] for t in listed} == {
-        "exam_report",
-        "prescription",
-        "exam_request",
-        "cert",
-    }
+    # B2 补齐 8 类单据后，默认占位清单与 DOC_TYPES 同步（原 4 类仍必须在）
+    from app.routers.printing import DOC_TYPES
+
+    assert {t["doc_type"] for t in listed} == set(DOC_TYPES)
+    assert {"exam_report", "prescription", "exam_request", "cert"} <= set(DOC_TYPES)
     assert all(t["id"] is None for t in listed)  # 尚未配置时给出默认占位
     resp = client.put(
         "/api/print/templates",

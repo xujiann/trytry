@@ -75,6 +75,7 @@ const PAGES = [
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
   { id: "perfind", title: "绩效指标调权", render: renderPerfIndicators, roles: ["director"] },
   { id: "quality", title: "质量安全", render: renderQuality },
+  { id: "labqc", title: "检验室内质控", render: renderLabQc },
   { id: "clinind", title: "医疗质量指标", render: renderClinicalIndicators },
   { id: "drgs", title: "DRGs分析", render: renderDrgs },
   { id: "education", title: "远程医学教育", render: renderEducation },

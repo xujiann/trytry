@@ -74,6 +74,7 @@ from .routers import (
     insurance,
     integration,
     knowledge,
+    labqc,
     maternal,
     medication,
     medwaste,
@@ -328,6 +329,7 @@ app.include_router(projects.router)
 app.include_router(surveillance.router)
 app.include_router(publichealth.router)
 app.include_router(quality.router)
+app.include_router(labqc.router)
 app.include_router(drgs.router)
 app.include_router(admin_mgmt.router)
 app.include_router(attachments.router)
