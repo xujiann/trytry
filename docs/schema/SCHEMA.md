@@ -1773,16 +1773,21 @@
 - `id` · INTEGER · PK · NOT NULL
 - `ehc_no` · VARCHAR(32) · NOT NULL · index
 - `name` · VARCHAR(64) · NOT NULL · index
-- `id_card` · VARCHAR(18) · NOT NULL · index
+- `id_card` · VARCHAR(256) · NOT NULL · index
 - `gender` · VARCHAR(8) · NOT NULL
 - `birth_date` · VARCHAR(10) · NOT NULL
-- `phone` · VARCHAR(20) · NOT NULL
+- `phone` · VARCHAR(256) · NOT NULL
+- `id_card_idx` · VARCHAR(64) · index
+- `phone_idx` · VARCHAR(64) · index
 - `deactivated_at` · DATETIME
 - `created_at` · DATETIME · NOT NULL
 - _unique_ (id_card) uq_patient_id_card
 - _index_ ix_patients_ehc_no(ehc_no) UNIQUE
 - _index_ ix_patients_id_card(id_card)
+- _index_ ix_patients_id_card_idx(id_card_idx)
 - _index_ ix_patients_name(name)
+- _index_ ix_patients_phone_idx(phone_idx)
+- _index_ uq_patient_id_card_idx(id_card_idx) UNIQUE
 
 ## payment_orders
 
@@ -1796,6 +1801,7 @@
 - `fail_reason` · VARCHAR(256) · NOT NULL
 - `paid_at` · DATETIME · index
 - `refunded_at` · DATETIME
+- `callback_at` · DATETIME
 - `created_by` · INTEGER · NOT NULL · → users.id
 - `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_payment_orders_channel(channel)
@@ -2155,18 +2161,21 @@
 ## resident_accounts
 
 - `id` · INTEGER · PK · NOT NULL
-- `phone` · VARCHAR(20)
+- `phone` · VARCHAR(256)
 - `wechat_openid` · VARCHAR(64)
 - `wechat_unionid` · VARCHAR(64) · NOT NULL
 - `nickname` · VARCHAR(64) · NOT NULL
 - `patient_id` · INTEGER · index · → patients.id
 - `status` · VARCHAR(16) · NOT NULL
+- `phone_idx` · VARCHAR(64) · index
 - `created_at` · DATETIME · NOT NULL
 - `last_login_at` · DATETIME
 - _unique_ (phone)
 - _unique_ (wechat_openid)
 - _index_ ix_resident_accounts_patient_id(patient_id)
+- _index_ ix_resident_accounts_phone_idx(phone_idx)
 - _index_ uq_resident_account_patient(patient_id) UNIQUE
+- _index_ uq_resident_account_phone_idx(phone_idx) UNIQUE
 
 ## resident_family_members
 
