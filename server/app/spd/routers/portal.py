@@ -39,7 +39,7 @@ from ..models import (
     SpdTask,
     SpdTeam,
 )
-from ..rules import score_scale
+from ..rules import is_suspect_risk, score_scale
 from ..service import judge_measurement
 from fastapi import File, Form, UploadFile
 
@@ -359,7 +359,7 @@ def self_screening(
         patient_id=patient.id, program_code=body.program_code, source="self",
         scale_code=body.scale_code, answers=body.answers, score=graded["score"],
         risk_level=graded["risk_level"] or "low",
-        result="suspect" if graded["risk_level"] in ("mid", "high") else "normal",
+        result="suspect" if is_suspect_risk(graded["risk_level"]) else "normal",
         advice=graded["advice"],
     )
     db.add(record)
@@ -367,7 +367,7 @@ def self_screening(
     return {
         "id": record.id, "score": record.score, "risk_level": record.risk_level,
         "result": record.result, "advice": record.advice,
-        "can_apply": record.risk_level in ("mid", "high"),
+        "can_apply": is_suspect_risk(record.risk_level),
     }
 
 

@@ -46,7 +46,7 @@ from ..models import (
     SpdTask,
     SpdTeam,
 )
-from ..rules import evaluate, score_scale
+from ..rules import evaluate, is_suspect_risk, score_scale
 from ..service import award_points, build_facts, close_open_work, match_program
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
@@ -130,7 +130,7 @@ def create_screening(
     matched = match_program(db, body.patient_id, program, extra=body.answers)
     if matched["result"] == "excluded":
         result = "excluded"
-    elif matched["result"] == "suspect" or risk == "high":
+    elif matched["result"] == "suspect" or is_suspect_risk(risk):
         result = "suspect"
     else:
         result = "normal"

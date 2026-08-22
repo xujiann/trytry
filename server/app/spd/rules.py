@@ -259,6 +259,19 @@ def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
     }
 
 
+#: 量表判定"疑似"的风险等级门槛。**只有这一份**——医生录入（population.py）与
+#: 居民自查（portal.py）曾各写各的：医生侧要 `high` 才算疑似、居民侧 `mid` 就算，
+#: 于是同一个人同一份问卷，自己做是"疑似、可申请服务"，医生代录是"未见异常"。
+#: 取 mid+ 而不是 high：种子量表里 mid 档的 advice 已经写着"建议复核 / 建议检测"，
+#: 判成"未见异常"与量表自己给的建议自相矛盾。
+SUSPECT_RISK_LEVELS = ("mid", "high", "very_high")
+
+
+def is_suspect_risk(risk_level: str) -> bool:
+    """量表风险等级是否达到"疑似"门槛（两个入口共用，别再各判各的）。"""
+    return risk_level in SUSPECT_RISK_LEVELS
+
+
 def grade_abnormal(rules: list[dict], answers: dict) -> tuple[str, str]:
     """随访问卷异常分级：返回 (级别, 处置措施)，取命中的最高级别。
 
