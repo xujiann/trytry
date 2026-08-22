@@ -326,3 +326,45 @@ def test_分子系统备份脚本只导子系统的表():
     assert "恢复目标库必须已有对应的 users/organizations/patients" in text, (
         "必须写明这份导出不自洽——以为备份了其实恢复不了，是备份最常见的坑"
     )
+
+
+def test_函数内的相对导入都解析得到():
+    """防的是"拆包之后 `..X` 少了一级"——模块级会当场炸，函数级要等有人调那个接口。
+
+    实测抓到两处：`config/centers.py::org_tree` 与 `config/paths.py::delete_path_template`
+    都写着 `from ..models import ...`，而 `config/` 是子包，实际解析成
+    `app.spd.routers.models`（不存在）。两个端点因此在主干上一直是 500，
+    而没有任何用例调过它们——模块导入测不出来，覆盖率也没盖到。
+    """
+    import ast
+    import importlib
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "app" / "spd"
+    broken = []
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        rel = path.relative_to(root.parent.parent)  # 相对 server/
+        package = str(rel.with_suffix("")).replace("/", ".")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or not node.level:
+                continue
+            # 模块级导入在 import app 时就会炸，这里只查函数/方法体内的
+            parent_funcs = [
+                f for f in ast.walk(tree)
+                if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node in ast.walk(f)
+            ]
+            if not parent_funcs:
+                continue
+            base = package.rsplit(".", node.level)[0] if node.level > 1 else package.rsplit(".", 1)[0]
+            target = f"{base}.{node.module}" if node.module else base
+            try:
+                importlib.import_module(target)
+            except ModuleNotFoundError:
+                broken.append(f"{rel}:{node.lineno} → {'.' * node.level}{node.module or ''}")
+    assert broken == [], (
+        "这些函数内的相对导入解析不到（调用时才 500）：\n  " + "\n  ".join(broken)
+    )
