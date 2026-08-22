@@ -400,7 +400,12 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail=f"分配公式不合法：{exc}") from None
 
     # 取当次绩效得分。范围跟着池子走：绑了分组的池子只在该分组内分。
+    #
+    # `period` 必须显式传 `pool.year`：绩效评分自 2026-08 起是**周期口径**，
+    # 缺省算当年。而基金池结算通常发生在次年年初——不传就会拿"次年至今"的
+    # 近乎空白的分数去分上一年度的钱，轻则份额全错，重则所有权重为 0 直接 422。
     scorecards = org_scorecards(
+        period=str(pool.year),
         volume_cap=body.volume_cap,
         include_auto_passed=body.include_auto_passed,
         group_id=pool.org_group_id,

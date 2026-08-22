@@ -7,7 +7,7 @@
 - 处方合格率（合理用药）
 - 家医签约履约量（签约服务）
 """
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -21,6 +21,7 @@ from ..deps import (
     get_current_user,
     paginate,
     require_roles,
+    period_bounds,
     resolve_business_date,
     resolve_org_scope,
     row_dict,
@@ -34,6 +35,7 @@ from ..visibility import (
 from ..models import (
     ChronicPatient,
     ContractService,
+    DrugRule,
     ExamRequest,
     FamilyDoctorContract,
     FollowUp,
@@ -41,6 +43,7 @@ from ..models import (
     Organization,
     PerformanceIndicator,
     Prescription,
+    PrescriptionItem,
     Referral,
     User,
 )
@@ -52,7 +55,11 @@ router = APIRouter(
 # 指标目录种子（启动时写入 performance_indicators 表；权重和不必为100，计分时按比例归一化）
 DEFAULT_INDICATORS: dict[str, dict[str, Any]] = {
     "referral": {"name": "转诊结案率", "weight": 20},
-    "remote_exam": {"name": "远程诊断服务量", "weight": 20},
+    # 改名（2026-08-22）：原名"远程诊断服务量"名不副实——它按 `from_org_id`（申请方）
+    # 计，衡量的是平台使用而非诊断工作量；且真正出报告的中心一分不得。
+    # 现在两侧都计（申请 + 出报告），名字改成能涵盖两侧的"协同量"。
+    # 存量库的指标名由迁移 b5d9f3a71c2e 就地改，且只改**没被现场改过**的那些。
+    "remote_exam": {"name": "共享诊断协同量", "weight": 20},
     "chronic": {"name": "慢病随访覆盖", "weight": 25},
     "rx": {"name": "处方合格率", "weight": 20},
     "contract": {"name": "家医签约履约量", "weight": 15},
@@ -133,6 +140,16 @@ class ChronicFollowup(BaseModel):
 class RxPass(BaseModel):
     passed: int
     total: int
+    #: 本期处方里**至少有一味药能对上生效规则**的张数（口径裁定 4，见
+    #: docs/统计口径对照表.md）。`auto_passed`（系统审通过）的真实含义是
+    #: "没有任何规则被触发"，而 `drug_rules` 是全县共用的一张表、按药品编码维护。
+    #: 规则库越稀疏，越多处方是"无规则可审"地自动通过——`passed/total` 就越接近
+    #: 100%，越不反映用药合理性。把可审张数一并给出，读数的人才判断得了
+    #: 这个合格率有没有意义。
+    #:
+    #: 同一张表里 `ddd` 未维护时的处理方式是既有先例（`models/pharmacy.py`）：
+    #: "跳过并计入未覆盖数——按缺省值硬算…比'明说没维护'更糟"。这里照它办。
+    rule_covered: int
 
 
 class ScorecardDetail(BaseModel):
@@ -140,7 +157,23 @@ class ScorecardDetail(BaseModel):
     逐段建模而不是 `dict[str, Any]`（写成 Any 等于没声明契约）。"""
 
     referral_completion: ReferralCompletion
+    #: 计分用的**合计**：`remote_exams_requested + remote_exams_provided`。
+    #: 字段名与类型不变，但**自 2026-08-22 起，作为共享诊断中心的机构这个数会变大**
+    #: ——此前中心出多少份报告都是 0 分。
     remote_exams: int
+    #: 作为**申请方**（`from_org_id`）：已出报告 + 已互认的申请单数。
+    #: 互认计入，因为这一侧衡量的是"通过平台解决了多少次检查需求"，
+    #: 而不重复做检查正是想要的结果（口径裁定 2）。
+    remote_exams_requested: int
+    #: 作为**共享诊断中心**（`claimed_org_id`）：本机构领取并出具报告的申请单数。
+    #: 只数 `reported`：互认不产生中心工作量，且结构上也数不到它——
+    #: `recognized` 是**建单时**就定下的状态，而领取只能发生在 `pending` 上，
+    #: 所以互认单永远没有 `claimed_org_id`。
+    #:
+    #: 注意历史数据：`claimed_org_id` 是 2026-08 才加的列，回填靠 `claimed_by`
+    #: 展示名反查用户，匹配不上的老单子仍是 NULL、数不进来。这一侧的数字对
+    #: 加列之前的周期是偏低的。
+    remote_exams_provided: int
     chronic_followup: ChronicFollowup
     rx_pass: RxPass
     contract_services: int
@@ -158,6 +191,9 @@ class OrgScorecard(BaseModel):
 
 
 class OrgScorecardsOut(BaseModel):
+    #: 本次计分覆盖的考核周期（YYYY 或 YYYY-MM）。**必须回给前端**——
+    #: 分数从"开天辟地累计"改成"周期内"之后，不标周期的数字是没法解读的。
+    period: str
     #: 键来自 `performance_indicators` 表（可增删指标），是**动态**的，
     #: 只能写 dict[str, float]，不能逐个字段写死。
     weights: dict[str, float]
@@ -166,13 +202,39 @@ class OrgScorecardsOut(BaseModel):
 
 @router.get("/orgs", response_model=OrgScorecardsOut)
 def org_scorecards(
+    period: str | None = None,
     volume_cap: int = 5,
     include_auto_passed: bool = True,
     org_id: int | None = None,
     group_id: int | None = None,
     db: Session = Depends(get_db),
 ):
-    """机构绩效计分。
+    """机构绩效计分（**按考核周期**）。
+
+    `period`：`YYYY` 年度或 `YYYY-MM` 月度，缺省为当年。
+
+    **口径变更（2026-08-21，产品裁定）**：此前本接口不带任何时间维度，算的是
+    开天辟地以来的累计数。累计口径的指标只涨不跌、随机构运营年限自然趋近满分，
+    考核意义会随时间流失——尤其"慢病随访覆盖"，一个管了三年的患者只要三年前
+    随访过一次就永远计入已覆盖。现改为周期口径，详见 `docs/统计口径对照表.md`。
+
+    分母的时间语义**逐项不同**，不是无脑全加时间窗：
+
+    - 转诊 / 共享诊断 / 处方 / 家医服务：分子分母都取**本期发生**的记录；
+    - 慢病随访覆盖：分母是**在管存量**患者（不按期），分子是**本期内随访过**的人。
+      分母若也按期就变成"本期新入组的有多少随访过"，那是另一个指标。
+
+    **共享诊断协同量（2026-08-22 口径变更）**：此前只按 `from_org_id`（申请方）计，
+    真正领取并出报告的**共享诊断中心一分不得**——"资源下沉"考的是上级把资源投向基层，
+    而提供服务的一方没有任何计分是说不通的。现改为两侧都计：
+
+    - 作为申请方：已出报告 + 已互认的申请单数（互认照计，见口径裁定 2）；
+    - 作为中心：本机构领取并出具报告的申请单数（只数 `reported`——互认不产生
+      中心工作量，且互认单结构上就没有 `claimed_org_id`）。
+
+    同一张单给两方各记一笔是有意的：本维度按机构算"参与了多少次协同"，
+    不是全县去重总量。**这会改变分数**（作为中心的机构分数上升），进而影响
+    此后按分数分配的基金池；已分配的池子是冻结快照，不受影响。
 
     L-1 口径参数化（向卫健考核口径过渡）：
     - volume_cap：量类维度（远程诊断/家医履约）封顶次数，达到即满分（默认 5，可按机构规模调大）；
@@ -184,6 +246,9 @@ def org_scorecards(
     """
     if volume_cap < 1:
         raise HTTPException(status_code=422, detail="volume_cap 须≥1")
+    period, start, end = period_bounds(period)   # UTC 口径，与 created_at 一致
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end, datetime.min.time())
     weights = _normalized_weights(db)
     rx_ok_statuses = ["auto_passed", "approved"] if include_auto_passed else ["approved"]
     scope = resolve_org_scope(db, group_id, org_id)
@@ -191,48 +256,111 @@ def org_scorecards(
     if scope is not None:
         orgs_q = orgs_q.filter(Organization.id.in_(scope))
     orgs = orgs_q.all()
+    org_ids = [o.id for o in orgs]
+
+    def by_org(query, org_col) -> dict[int, int]:
+        """一次分组聚合替代"每机构一条 count"。
+
+        原先这里是 N+1：每家机构 8 条查询，200 家就是 1600 条往返。改成 8 条
+        `GROUP BY org_id` 后总条数与机构数无关（`test_查询条数不随机构数增长` 钉住）。
+        没出现在结果里的机构就是 0——与原先 `.scalar() or 0` 完全同值。
+
+        `scope is not None` 时才加 `IN` 过滤：全域查询下把全部机构 id 灌进 IN
+        是纯开销，分组本来就只会产出有数据的那些机构。
+        """
+        if scope is not None:
+            query = query.filter(org_col.in_(org_ids))
+        return {oid: n for oid, n in query.group_by(org_col).all() if oid is not None}
+
+    window = (start_dt, end_dt)
+    ref_total_by = by_org(
+        db.query(Referral.from_org_id, func.count(Referral.id))
+        .filter(Referral.created_at >= window[0], Referral.created_at < window[1]),
+        Referral.from_org_id,
+    )
+    ref_completed_by = by_org(
+        db.query(Referral.from_org_id, func.count(Referral.id))
+        .filter(Referral.status == "completed",
+                Referral.created_at >= window[0], Referral.created_at < window[1]),
+        Referral.from_org_id,
+    )
+    exam_count_by = by_org(
+        db.query(ExamRequest.from_org_id, func.count(ExamRequest.id))
+        .filter(ExamRequest.status.in_(["reported", "recognized"]),
+                ExamRequest.created_at >= window[0], ExamRequest.created_at < window[1]),
+        ExamRequest.from_org_id,
+    )
+    # 作为共享诊断中心出具报告的量。只数 `reported`（理由见 ScorecardDetail
+    # 的字段注释）。`by_org` 会丢掉 `claimed_org_id IS NULL` 的行——未领取、
+    # 或加列之前的老单子，本就不该记到任何机构头上。
+    exam_provided_by = by_org(
+        db.query(ExamRequest.claimed_org_id, func.count(ExamRequest.id))
+        .filter(ExamRequest.status == "reported",
+                ExamRequest.created_at >= window[0], ExamRequest.created_at < window[1]),
+        ExamRequest.claimed_org_id,
+    )
+    # 分母是"周期结束时的在管存量"：**只设上界、不设下界**。
+    # 不设下界 → 三年前入组、至今在管的人今年照样要考核（这正是"存量"的意思）；
+    # 但必须设上界 → 否则查 2025 年度的分数会把 2026 年才入组的人算进分母，
+    # 历史分数会随新入组不断漂移、永远复现不出来。
+    chronic_total_by = by_org(
+        db.query(ChronicPatient.managed_by_org_id, func.count(ChronicPatient.id))
+        .filter(ChronicPatient.created_at < window[1]),
+        ChronicPatient.managed_by_org_id,
+    )
+    # 分子按期、分母不按期：问的是"在管的这些人里，本期随访到了几个"
+    chronic_followed_by = by_org(
+        db.query(
+            ChronicPatient.managed_by_org_id, func.count(func.distinct(FollowUp.chronic_id))
+        )
+        .join(ChronicPatient, FollowUp.chronic_id == ChronicPatient.id)
+        .filter(FollowUp.created_at >= window[0], FollowUp.created_at < window[1]),
+        ChronicPatient.managed_by_org_id,
+    )
+    rx_total_by = by_org(
+        db.query(Prescription.org_id, func.count(Prescription.id))
+        .filter(Prescription.created_at >= window[0], Prescription.created_at < window[1]),
+        Prescription.org_id,
+    )
+    rx_ok_by = by_org(
+        db.query(Prescription.org_id, func.count(Prescription.id))
+        .filter(Prescription.status.in_(rx_ok_statuses),
+                Prescription.created_at >= window[0], Prescription.created_at < window[1]),
+        Prescription.org_id,
+    )
+    # 规则可审张数：join 到 prescription_items 再 join 生效规则，按处方去重。
+    # 第 9 条分组聚合，仍与机构数无关（`test_查询条数不随机构数增长` 盯着）。
+    rx_rule_covered_by = by_org(
+        db.query(Prescription.org_id, func.count(func.distinct(Prescription.id)))
+        .join(PrescriptionItem, PrescriptionItem.prescription_id == Prescription.id)
+        .join(DrugRule, DrugRule.drug_code == PrescriptionItem.drug_code)
+        .filter(DrugRule.active.is_(True),
+                Prescription.created_at >= window[0], Prescription.created_at < window[1]),
+        Prescription.org_id,
+    )
+    contract_services_by = by_org(
+        db.query(FamilyDoctorContract.org_id, func.count(ContractService.id))
+        .join(FamilyDoctorContract, ContractService.contract_id == FamilyDoctorContract.id)
+        .filter(ContractService.created_at >= window[0],
+                ContractService.created_at < window[1]),
+        FamilyDoctorContract.org_id,
+    )
+
     results: list[dict[str, Any]] = []
     for org in orgs:
-        ref_total = db.query(func.count(Referral.id)).filter(Referral.from_org_id == org.id).scalar() or 0
-        ref_completed = (
-            db.query(func.count(Referral.id))
-            .filter(Referral.from_org_id == org.id, Referral.status == "completed")
-            .scalar()
-            or 0
-        )
-        exam_count = (
-            db.query(func.count(ExamRequest.id))
-            .filter(ExamRequest.from_org_id == org.id, ExamRequest.status.in_(["reported", "recognized"]))
-            .scalar()
-            or 0
-        )
-        chronic_total = (
-            db.query(func.count(ChronicPatient.id))
-            .filter(ChronicPatient.managed_by_org_id == org.id)
-            .scalar()
-            or 0
-        )
-        chronic_followed = (
-            db.query(func.count(func.distinct(FollowUp.chronic_id)))
-            .join(ChronicPatient, FollowUp.chronic_id == ChronicPatient.id)
-            .filter(ChronicPatient.managed_by_org_id == org.id)
-            .scalar()
-            or 0
-        )
-        rx_total = db.query(func.count(Prescription.id)).filter(Prescription.org_id == org.id).scalar() or 0
-        rx_ok = (
-            db.query(func.count(Prescription.id))
-            .filter(Prescription.org_id == org.id, Prescription.status.in_(rx_ok_statuses))
-            .scalar()
-            or 0
-        )
-        contract_services = (
-            db.query(func.count(ContractService.id))
-            .join(FamilyDoctorContract, ContractService.contract_id == FamilyDoctorContract.id)
-            .filter(FamilyDoctorContract.org_id == org.id)
-            .scalar()
-            or 0
-        )
+        ref_total = ref_total_by.get(org.id, 0)
+        ref_completed = ref_completed_by.get(org.id, 0)
+        exam_requested = exam_count_by.get(org.id, 0)
+        exam_provided = exam_provided_by.get(org.id, 0)
+        # 两侧相加：同一张单会给申请方与中心各记一笔，这是有意的——
+        # 本维度是**按机构**算"参与了多少次共享诊断协同"，不是全县去重总量。
+        exam_count = exam_requested + exam_provided
+        chronic_total = chronic_total_by.get(org.id, 0)
+        chronic_followed = chronic_followed_by.get(org.id, 0)
+        rx_total = rx_total_by.get(org.id, 0)
+        rx_ok = rx_ok_by.get(org.id, 0)
+        rx_rule_covered = rx_rule_covered_by.get(org.id, 0)
+        contract_services = contract_services_by.get(org.id, 0)
 
         def ratio(part: int, total: int) -> float:
             return part / total if total else 0.0
@@ -261,14 +389,17 @@ def org_scorecards(
                 "detail": {
                     "referral_completion": {"completed": ref_completed, "total": ref_total},
                     "remote_exams": exam_count,
+                    "remote_exams_requested": exam_requested,
+                    "remote_exams_provided": exam_provided,
                     "chronic_followup": {"followed": chronic_followed, "total": chronic_total},
-                    "rx_pass": {"passed": rx_ok, "total": rx_total},
+                    "rx_pass": {"passed": rx_ok, "total": rx_total,
+                                "rule_covered": rx_rule_covered},
                     "contract_services": contract_services,
                 },
             }
         )
     results.sort(key=lambda r: float(r["score"]), reverse=True)
-    return {"weights": weights, "scorecards": results}
+    return {"period": period, "weights": weights, "scorecards": results}
 
 
 # ===========================================================================

@@ -8,7 +8,16 @@ from fastapi.testclient import TestClient
 
 from conftest import reset_database
 
+from app.clock import now_naive
 from app.main import app
+
+# 按绩效分配的池子必须建在**当年**：绩效评分自 2026-08 起是周期口径
+# （见 docs/统计口径对照表.md 第 3 条），`distribute` 用 `pool.year` 取分。
+# 本文件的 business fixture 造的业务数据 `created_at` 都是"现在"，
+# 池子若沿用别处那种随手挑的未来年份（2036），当年没有任何业务落在窗口内，
+# 全员 0 分 → 权重和为 0 → 422。与得分无关的公式（`formula_expr="1"`）不受影响，
+# 所以只有这一个池子需要跟着当年走。
+SCORED_POOL_YEAR = now_naive().year
 
 
 @pytest.fixture(scope="module")
@@ -170,10 +179,15 @@ def business(client, admin, orgs):
 
 @pytest.fixture(scope="module")
 def settled(client, director, business):
-    """筹资 100 万、实际发生 80 万 → 结余 20 万。"""
-    pool = _pool(client, director, 2036, total=1000000.0)
+    """筹资 100 万、实际发生 80 万 → 结余 20 万。
+
+    年份取 `SCORED_POOL_YEAR`（当年）而非固定未来年——本池的用例要按绩效分配，
+    见文件头注释。
+    """
+    pool = _pool(client, director, SCORED_POOL_YEAR, total=1000000.0)
     client.post(f"/api/fund/pools/{pool['id']}/periods",
-                json={"period": "2036-06", "actual_amount": 800000}, headers=director)
+                json={"period": f"{SCORED_POOL_YEAR}-06", "actual_amount": 800000},
+                headers=director)
     settlement = client.post(f"/api/fund/pools/{pool['id']}/settle",
                              json={}, headers=director).json()
     return {"pool": pool, "settlement": settlement}

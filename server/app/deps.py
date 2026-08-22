@@ -1,6 +1,7 @@
 import hmac
+import re
 import time
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, TypeVar
 
 from fastapi import Depends, HTTPException, Request, Response, status
@@ -225,6 +226,83 @@ def resolve_org_scope(
     if org_id is not None:
         return [org_id] if org_id in ids else []
     return ids
+
+
+#: 只认半角数字。`str.isdigit()` 与 `\\d` 都会放行全角（"２０２６"），
+#: 那种值能通过校验却又不是合法年份，最后原样回显给前端。
+_ASCII_YEAR = re.compile(r"[0-9]{4}")
+_ASCII_MONTH = re.compile(r"[0-9]{4}-[0-9]{2}")
+
+
+def period_bounds(period: str | None) -> tuple[str, date, date]:
+    """把考核周期字符串解析成左闭右开的日期区间，返回 (规范化周期, start, end)。
+
+    支持两种粒度：
+
+    - `YYYY`    —— 年度考核（绩效考核的常用粒度）
+    - `YYYY-MM` —— 月度，与 `analytics` 既有的 `period` 约定一致
+
+    `period=None` 时默认**当年**。默认不取"全部历史"是有意的：累计口径的指标
+    只涨不跌、随机构运营年限自然趋近满分，考核意义会随时间流失
+    （见 `docs/统计口径对照表.md` 第 3 条）。
+
+    右端点取下一周期的起点（左闭右开），避免"12 月 31 日 23:59 的记录算不算"
+    这类边界扯皮。
+
+    与 `month_bounds`（只认 `YYYY-MM`、`period` 必填）的分工见那个函数的注释：
+    让月度接口也接受 `YYYY` 会把它们当前返回 422 的输入变成 200，
+    属于对未受改动影响的接口做行为变更，要改先走 ADR。
+    """
+    if period is None:
+        # 用 UTC 而不是本地日期：`created_at` 存的是 naive UTC
+        # （`models._base.utcnow`）。用 `date.today()` 会在 UTC+8 把每个周期
+        # 头 8 小时的记录算到上一期去。
+        period = str(now_naive().year)
+
+    # **右端点的计算也必须在 try 里**：`9999-12` 的次月是 10000 年，
+    # `date()` 抛 ValueError；漏在 try 外面就是 500 而不是 422。
+    # （初版把年度形式 `9999` 圈进来了、月度形式 `9999-12` 漏在外面，实测 500。）
+    # 同理 `int()` 与 `date()` 对 `0000` 这类越界输入也抛 ValueError。
+    try:
+        if _ASCII_YEAR.fullmatch(period):
+            year = int(period)
+            return period, date(year, 1, 1), date(year + 1, 1, 1)
+        if not _ASCII_MONTH.fullmatch(period):
+            raise ValueError(period)
+        start = date.fromisoformat(period + "-01")
+        end = (
+            date(start.year + 1, 1, 1)
+            if start.month == 12
+            else date(start.year, start.month + 1, 1)
+        )
+    except (ValueError, OverflowError):
+        raise HTTPException(
+            status_code=422, detail="period 须为 YYYY（年度）或 YYYY-MM（月度）格式"
+        ) from None
+    return period, start, end
+
+
+def month_bounds(period: str) -> tuple[date, date]:
+    """月度期间 `YYYY-MM` → 左闭右开的 `[首日, 次月首日)`。
+
+    `analytics` 与 `cost` 各有一份**逐字节相同**的 `_period_bounds`，这里合成一份
+    （CLAUDE.md §6：横切能力优先复用而非新建）。**行为完全保持**，包括它宽松的
+    地方：`2026-1` 照样接受（`strptime` 不要求补零），错误文案仍是原来那句
+    ——治理不得改响应字节（CLAUDE.md §11）。
+
+    与 `period_bounds`（认 `YYYY` 与 `YYYY-MM`、缺省当年）的分工：那条服务绩效
+    考核，这条只服务既有的月度接口且 `period` 必填。让这条也接受 `YYYY`
+    会把这些端点当前返回 422 的输入变成 200，属于对未受改动影响的接口做行为
+    变更，要改先走 ADR。
+    """
+    try:
+        start = datetime.strptime(period + "-01", "%Y-%m-%d").date()
+        # 次月首日的计算必须**在 try 里**：`9999-12` 会溢出到 10000 年，
+        # OverflowError 漏在外面就是 500 而不是 422（原实现实测如此）。
+        end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    except (ValueError, OverflowError):
+        raise HTTPException(status_code=422, detail="period 须为 YYYY-MM 格式") from None
+    return start, end
 
 
 def resolve_business_date(today: str | None) -> date:

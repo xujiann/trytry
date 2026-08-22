@@ -131,36 +131,31 @@ def test_迁移与模型的列集合零漂移(pg_engine):
     `create_all` 悄悄补齐（开发环境仍开着它），到 PG 上就是 UndefinedColumn。
 
     这正是 ADR-0002 记的残余缺口，这里补上。
+
+    比对逻辑与 `test_migration_model_parity.py`（SQLite 空库、跑在 test-unit 里）
+    **共用 `schema_parity.diff_schema`**，不是两份实现。本条守 SQLite 测不出来的
+    方言问题，那条负责让改模型的人在本地 7 秒内就拿到反馈。
     """
     from sqlalchemy import inspect
+
+    from schema_parity import diff_schema, format_columns
 
     from app.database import Base
     import app.models  # noqa: F401 - 导入即注册平台模型
     import app.spd.models  # noqa: F401 - 以及子系统模型
 
-    inspector = inspect(pg_engine)
-    actual_tables = set(inspector.get_table_names())
-
-    missing_columns: dict[str, set[str]] = {}
-    extra_columns: dict[str, set[str]] = {}
-    for table_name, table in sorted(Base.metadata.tables.items()):
-        if table_name not in actual_tables:
-            continue  # 表级缺失由 test_模型表零漂移 负责报，这里只管列
-        in_db = {c["name"] for c in inspector.get_columns(table_name)}
-        in_model = {c.name for c in table.columns}
-        if in_model - in_db:
-            missing_columns[table_name] = in_model - in_db
-        if in_db - in_model:
-            extra_columns[table_name] = in_db - in_model
-
-    assert not missing_columns, (
+    drift = diff_schema(inspect(pg_engine), Base.metadata)
+    # 表级缺失由 test_模型表零漂移 负责报，这里只管列
+    assert not drift["missing_columns"], (
         "模型上有、迁移没建的列（生产会 UndefinedColumn）：\n"
-        + "\n".join(f"  {t}: {sorted(cols)}" for t, cols in missing_columns.items())
+        + format_columns(drift["missing_columns"])
     )
-    assert not extra_columns, (
+    assert not drift["extra_columns"], (
         "迁移建了、模型上没有的列（多半是模型删列忘了写迁移，或迁移写错列名）：\n"
-        + "\n".join(f"  {t}: {sorted(cols)}" for t, cols in extra_columns.items())
+        + format_columns(drift["extra_columns"])
     )
+    # 防呆：PG 上没建出表时上面两条恒真
+    assert drift["table_count"] >= 200, f"PG 上只有 {drift['table_count']} 张表，迁移没跑完"
 
 
 def test_脏库上迁移只报告不删数据_处置脚本才归并(pg_engine):
