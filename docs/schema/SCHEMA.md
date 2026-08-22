@@ -1,7 +1,7 @@
 # SCHEMA（自动生成，勿手改）
 
 > 由 `server/scripts/dump_schema.py` 从 ORM 元数据生成。改了模型请重跑该脚本。
-> 表总数：**249**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
+> 表总数：**255**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
 
 ## access_logs
 
@@ -610,6 +610,19 @@
 - _index_ ix_departments_created_at(created_at)
 - _index_ ix_departments_org_id(org_id)
 
+## deposits
+
+- `id` · INTEGER · PK · NOT NULL
+- `admission_id` · INTEGER · NOT NULL · index · → admissions.id
+- `amount` · NUMERIC(14, 2) · NOT NULL
+- `deposit_type` · VARCHAR(16) · NOT NULL · index
+- `method` · VARCHAR(16) · NOT NULL
+- `operator` · VARCHAR(64) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_deposits_admission_id(admission_id)
+- _index_ ix_deposits_created_at(created_at)
+- _index_ ix_deposits_deposit_type(deposit_type)
+
 ## disease_enrollments
 
 - `id` · INTEGER · PK · NOT NULL
@@ -657,6 +670,36 @@
 - _index_ ix_disease_programs_code(code) UNIQUE
 - _index_ ix_disease_programs_org_id(org_id)
 
+## dispense_items
+
+- `id` · INTEGER · PK · NOT NULL
+- `dispense_id` · INTEGER · NOT NULL · index · → dispense_records.id
+- `batch_id` · INTEGER · NOT NULL · index · → drug_batches.id
+- `drug_code` · VARCHAR(64) · NOT NULL · index
+- `drug_name` · VARCHAR(128) · NOT NULL
+- `quantity` · INTEGER · NOT NULL
+- `created_at` · DATETIME · NOT NULL
+- _index_ ix_dispense_items_batch_id(batch_id)
+- _index_ ix_dispense_items_dispense_id(dispense_id)
+- _index_ ix_dispense_items_drug_code(drug_code)
+
+## dispense_records
+
+- `id` · INTEGER · PK · NOT NULL
+- `prescription_id` · INTEGER · NOT NULL · index · → prescriptions.id
+- `org_id` · INTEGER · NOT NULL · index · → organizations.id
+- `dispensed_by` · INTEGER · NOT NULL · → users.id
+- `status` · VARCHAR(16) · NOT NULL · index
+- `reverse_reason` · VARCHAR(256) · NOT NULL
+- `reversed_by` · INTEGER · → users.id
+- `reversed_at` · DATETIME
+- `created_at` · DATETIME · NOT NULL · index
+- _unique_ (prescription_id) uq_dispense_prescription
+- _index_ ix_dispense_records_created_at(created_at)
+- _index_ ix_dispense_records_org_id(org_id)
+- _index_ ix_dispense_records_prescription_id(prescription_id)
+- _index_ ix_dispense_records_status(status)
+
 ## drg_groups
 
 - `id` · INTEGER · PK · NOT NULL
@@ -674,6 +717,27 @@
 - _index_ ix_drg_groups_code(code) UNIQUE
 - _index_ ix_drg_groups_created_at(created_at)
 - _index_ ix_drg_groups_mdc(mdc)
+
+## drug_batches
+
+- `id` · INTEGER · PK · NOT NULL
+- `org_id` · INTEGER · NOT NULL · index · → organizations.id
+- `drug_code` · VARCHAR(64) · NOT NULL · index
+- `batch_no` · VARCHAR(64) · NOT NULL · index
+- `expire_date` · VARCHAR(10) · NOT NULL · index
+- `supplier` · VARCHAR(128) · NOT NULL
+- `quantity` · INTEGER · NOT NULL
+- `used_quantity` · INTEGER · NOT NULL
+- `status` · VARCHAR(16) · NOT NULL · index
+- `recall_reason` · VARCHAR(256) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _unique_ (org_id, drug_code, batch_no) uq_drug_batch
+- _index_ ix_drug_batches_batch_no(batch_no)
+- _index_ ix_drug_batches_created_at(created_at)
+- _index_ ix_drug_batches_drug_code(drug_code)
+- _index_ ix_drug_batches_expire_date(expire_date)
+- _index_ ix_drug_batches_org_id(org_id)
+- _index_ ix_drug_batches_status(status)
 
 ## drug_rules
 
@@ -1383,6 +1447,20 @@
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_live_sessions_status(status)
 
+## login_logs
+
+- `id` · INTEGER · PK · NOT NULL
+- `username` · VARCHAR(64) · NOT NULL · index
+- `user_id` · INTEGER · → users.id
+- `ip` · VARCHAR(64) · NOT NULL
+- `success` · BOOLEAN · NOT NULL · index
+- `fail_reason` · VARCHAR(32) · NOT NULL
+- `channel` · VARCHAR(16) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_login_logs_created_at(created_at)
+- _index_ ix_login_logs_success(success)
+- _index_ ix_login_logs_username(username)
+
 ## material_purchases
 
 - `id` · INTEGER · PK · NOT NULL
@@ -1584,6 +1662,18 @@
 - _unique_ (org_id, name) uq_or_org_name
 - _index_ ix_operating_rooms_active(active)
 - _index_ ix_operating_rooms_org_id(org_id)
+
+## order_executions
+
+- `id` · INTEGER · PK · NOT NULL
+- `inpatient_order_id` · INTEGER · NOT NULL · index · → inpatient_orders.id
+- `executed_by` · INTEGER · NOT NULL · → users.id
+- `executed_at` · DATETIME · NOT NULL · index
+- `note` · VARCHAR(512) · NOT NULL
+- `skin_test_result` · VARCHAR(16)
+- `created_at` · DATETIME · NOT NULL
+- _index_ ix_order_executions_executed_at(executed_at)
+- _index_ ix_order_executions_inpatient_order_id(inpatient_order_id)
 
 ## org_group_members
 
@@ -3762,7 +3852,12 @@
 - `role` · VARCHAR(32) · NOT NULL
 - `org_id` · INTEGER · → organizations.id
 - `token_valid_from` · DATETIME
+- `status` · VARCHAR(16) · NOT NULL · index
+- `password_updated_at` · DATETIME
+- `must_change_password` · BOOLEAN · NOT NULL
+- `totp_secret` · VARCHAR(64)
 - `created_at` · DATETIME · NOT NULL
+- _index_ ix_users_status(status)
 - _index_ ix_users_username(username) UNIQUE
 
 ## vaccination_records

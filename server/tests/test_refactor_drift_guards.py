@@ -35,9 +35,8 @@ from app.main import app
 #: 真实规模是 800+，若某次遍历只捞到几条，说明穿封装的方式失效了。
 MIN_SANE_ENDPOINTS = 800
 
-#: 当前 /api 端点快照（893 个）。由真实应用生成，勿手写。
-#: 工程包 I1 新增 8 个：HL7 ADT/ORU 入站、FHIR DiagnosticReport/Encounter 入站、
-#: 传染病/死因报告卡导出（单卡 JSON + 批量 CSV）。
+#: 当前 /api 端点快照（908 个）。由真实应用生成，勿手写。
+#: 阶段十四第一波新增：E1 账户安全 7、E2 个保 11、I1 集成 8、D1 批量 1、B1 药事 15。
 SNAPSHOT_ENDPOINTS = {
     "DELETE /api/analytics/formulas/{key}",
     "DELETE /api/appointments/blacklist/{patient_id}",
@@ -84,6 +83,9 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/audit/verify",
     "GET /api/billing/charge-items",
     "GET /api/billing/charge-items/{item_id}/price-history",
+    "GET /api/billing/deposits",
+    "GET /api/billing/deposits/alerts",
+    "GET /api/billing/deposits/balance",
     "GET /api/billing/details",
     "GET /api/billing/payments",
     "GET /api/billing/reconciliation",
@@ -125,6 +127,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/disease-programs/enrollments",
     "GET /api/disease-programs/enrollments/{enrollment_id}",
     "GET /api/disease-programs/{program_id}/stats",
+    "GET /api/dispense",
     "GET /api/drgs/groups",
     "GET /api/drgs/in-stay-alerts",
     "GET /api/drgs/stats",
@@ -188,6 +191,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/inpatient/beds",
     "GET /api/inpatient/handovers",
     "GET /api/inpatient/orders",
+    "GET /api/inpatient/orders/{order_id}/executions",
     "GET /api/inpatient/stats",
     "GET /api/inpatient/wards",
     "GET /api/insurance/dual-channel",
@@ -272,6 +276,9 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/performance/indicators",
     "GET /api/performance/orgs",
     "GET /api/pharmacy/alerts",
+    "GET /api/pharmacy/batches",
+    "GET /api/pharmacy/batches/expiring",
+    "GET /api/pharmacy/batches/{batch_id}/dispenses",
     "GET /api/pharmacy/purchase-orders",
     "GET /api/pharmacy/purchase-suggestions",
     "GET /api/pharmacy/stock-takes",
@@ -568,6 +575,8 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/auth/totp/setup",
     "POST /api/billing/charge-items",
     "POST /api/billing/charge-items/{item_id}/reprice",
+    "POST /api/billing/deposits",
+    "POST /api/billing/deposits/refund",
     "POST /api/billing/details",
     "POST /api/billing/payments",
     "POST /api/billing/payments/{order_id}/refund",
@@ -615,6 +624,8 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/disease-programs/enrollments/{enrollment_id}/exit",
     "POST /api/disease-programs/enrollments/{enrollment_id}/records",
     "POST /api/disease-programs/{program_id}/enrollments",
+    "POST /api/dispense",
+    "POST /api/dispense/{dispense_id}/reverse",
     "POST /api/drgs/groups",
     "POST /api/drgs/pre-check",
     "POST /api/education/articles",
@@ -677,6 +688,7 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/inpatient/beds",
     "POST /api/inpatient/handovers",
     "POST /api/inpatient/orders",
+    "POST /api/inpatient/orders/{order_id}/executions",
     "POST /api/inpatient/orders/{order_id}/stop",
     "POST /api/inpatient/wards",
     "POST /api/insurance/dual-channel",
@@ -758,6 +770,8 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/performance/improvements",
     "POST /api/performance/improvements/{task_id}/progress",
     "POST /api/performance/improvements/{task_id}/verify",
+    "POST /api/pharmacy/batches",
+    "POST /api/pharmacy/batches/{batch_id}/recall",
     "POST /api/pharmacy/purchase-orders",
     "POST /api/pharmacy/purchase-orders/{order_id}/approve",
     "POST /api/pharmacy/purchase-orders/{order_id}/receive",
@@ -957,7 +971,7 @@ SNAPSHOT_ENDPOINTS = {
     "PUT /api/print/templates",
 }
 
-#: 当前 ORM 类名快照（246 个）。由真实应用生成，勿手写。
+#: 当前 ORM 类名快照（251 个）。由真实应用生成，勿手写。
 SNAPSHOT_MODELS = {
     "AccessLog",
     "AccountSubject",
@@ -1002,10 +1016,14 @@ SNAPSHOT_MODELS = {
     "DeliveryRecord",
     "Department",
     "DepartmentCost",
+    "Deposit",
     "DiseaseEnrollment",
     "DiseasePathRecord",
     "DiseaseProgram",
+    "DispenseItem",
+    "DispenseRecord",
     "DrgGroup",
+    "DrugBatch",
     "DrugRule",
     "DrugShortage",
     "DrugStock",
@@ -1064,6 +1082,7 @@ SNAPSHOT_MODELS = {
     "OfficialDoc",
     "OnlineConsult",
     "OperatingRoom",
+    "OrderExecution",
     "OrgGroup",
     "OrgGroupMember",
     "Organization",

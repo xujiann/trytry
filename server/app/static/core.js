@@ -970,8 +970,11 @@ async function renderRx() {
 }
 
 async function renderPharmacy() {
-  $("#page-desc").textContent = "库存管理、县乡村余缺调拨、缺药预警";
-  const [stocks, alerts] = await Promise.all([api("/api/pharmacy/stocks"), api("/api/pharmacy/alerts")]);
+  $("#page-desc").textContent = "库存管理、批号效期、西药发药、县乡村余缺调拨、缺药预警";
+  const [stocks, alerts, expiring, dispenses] = await Promise.all([
+    api("/api/pharmacy/stocks"), api("/api/pharmacy/alerts"),
+    api("/api/pharmacy/batches/expiring"), api("/api/dispense"),
+  ]);
   const alertIds = new Set(alerts.map((a) => a.id));
   $("#page-body").innerHTML = `
     <div class="panel"><h3>入库</h3>
@@ -982,6 +985,27 @@ async function renderPharmacy() {
         <input name="quantity" type="number" placeholder="数量" required min="0">
         <input name="threshold" type="number" placeholder="预警阈值" value="0" min="0">
         <button>入库</button>
+      </form>
+      <h3 style="margin-top:14px">按批次入库（批号效期台账）</h3>
+      <form class="inline" id="batch-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="drug_code" placeholder="药品编码" required>
+        <input name="drug_name" placeholder="药品名称" required>
+        <input name="batch_no" placeholder="批号" required>
+        <input name="expire_date" placeholder="效期 YYYY-MM-DD" required>
+        <input name="quantity" type="number" placeholder="数量" required min="1">
+        <button>批次入库</button>
+      </form>
+      <h3 style="margin-top:14px">发药（凭审方通过处方，FEFO 先到效期先出）</h3>
+      <form class="inline" id="dispense-form">
+        <input name="prescription_id" type="number" placeholder="处方ID" required>
+        <button>发药</button>
+      </form>
+      <h3 style="margin-top:14px">退药冲销</h3>
+      <form class="inline" id="reverse-form">
+        <input name="dispense_id" type="number" placeholder="发药记录ID" required>
+        <input name="reason" placeholder="冲销原因" required>
+        <button>退药</button>
       </form>
       <h3 style="margin-top:14px">调拨</h3>
       <form class="inline" id="transfer-form">
@@ -994,7 +1018,17 @@ async function renderPharmacy() {
     <div class="panel"><h3>库存${alerts.length ? `（<span style="color:#c62828">${alerts.length} 项缺药预警</span>）` : ""}</h3>
       ${table(["机构ID", "药品", "数量", "阈值", "状态"], stocks, (s) =>
         `<tr><td>${s.org_id}</td><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${s.quantity}</td><td>${s.threshold}</td>
-         <td>${alertIds.has(s.id) ? '<span class="tag red">缺药</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
+         <td>${alertIds.has(s.id) ? '<span class="tag red">缺药</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}
+      <h3 style="margin-top:14px">近效期批次（90 天）</h3>
+      ${table(["机构ID", "药品", "批号", "效期", "余量", "剩余天数"], expiring, (b) =>
+        `<tr><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td><td>${esc(b.batch_no)}</td>
+         <td>${esc(b.expire_date)}</td><td>${b.remaining}</td>
+         <td>${b.expired ? '<span class="tag red">已过期</span>' : `${b.remaining_days} 天`}</td></tr>`)}
+      <h3 style="margin-top:14px">发药记录</h3>
+      ${table(["ID", "处方ID", "状态", "明细（批号×数量）"], dispenses, (d) =>
+        `<tr><td>${d.id}</td><td>${d.prescription_id}</td>
+         <td>${d.status === "reversed" ? '<span class="tag red">已冲销</span>' : '<span class="tag green">已发药</span>'}</td>
+         <td>${d.items.map((i) => `${esc(i.drug_name)} ${esc(i.batch_no)}×${i.quantity}`).join("，")}</td></tr>`)}</div>`;
   $("#stock-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1002,6 +1036,34 @@ async function renderPharmacy() {
       await api("/api/pharmacy/stocks", { method: "POST", body: JSON.stringify({
         org_id: Number(f.get("org_id")), drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
         quantity: Number(f.get("quantity")), threshold: Number(f.get("threshold")) }) });
+      route();
+    } catch (err) { setMsg("#pharm-msg", err.message, false); }
+  };
+  $("#batch-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({
+        org_id: Number(f.get("org_id")), drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
+        batch_no: f.get("batch_no"), expire_date: f.get("expire_date"), quantity: Number(f.get("quantity")) }) });
+      route();
+    } catch (err) { setMsg("#pharm-msg", err.message, false); }
+  };
+  $("#dispense-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/dispense", { method: "POST",
+        body: JSON.stringify({ prescription_id: Number(f.get("prescription_id")) }) });
+      route();
+    } catch (err) { setMsg("#pharm-msg", err.message, false); }
+  };
+  $("#reverse-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api(`/api/dispense/${Number(f.get("dispense_id"))}/reverse`, { method: "POST",
+        body: JSON.stringify({ reason: f.get("reason") }) });
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
