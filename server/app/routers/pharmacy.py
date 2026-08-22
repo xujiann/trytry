@@ -1,7 +1,7 @@
-"""中心药房：库存管理、县乡村余缺调拨、缺药预警、采购建议。"""
-from datetime import timedelta
+"""中心药房：库存管理、批号效期台账、县乡村余缺调拨、缺药预警、采购建议。"""
+from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -10,12 +10,17 @@ from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present, insert_if_absent, insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..datetypes import DateStr
+from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from pydantic import BaseModel, Field
 
 from ..models import (
+    DispenseItem,
+    DispenseRecord,
+    DrugBatch,
     DrugStock,
     Organization,
+    Patient,
     Prescription,
     PrescriptionItem,
     PurchaseOrder,
@@ -209,6 +214,309 @@ def stock_alerts(
     q = db.query(DrugStock).filter(DrugStock.quantity < DrugStock.threshold)
     q = scope_org_list(db, user, q, DrugStock, org_id)
     return q.order_by(DrugStock.org_id).all()
+
+
+# ---------- 工程包 B1：药品批号效期台账（对齐疫苗 VaccineBatch 先例） ----------
+#
+# 批次是明细、DrugStock 是汇总：入库/发药/退药在同一事务里两边同改，
+# 不变式 汇总量 == Σ(批次量 - 批次已用) 由 tests/test_pharmacy_batches.py 钉住。
+# 效期照疫苗批次的口径按日期现算，不设定时任务改状态。
+
+
+class BatchReceiveIn(BaseModel):
+    org_id: int
+    drug_code: str = Field(min_length=1, max_length=64)
+    drug_name: str = Field(min_length=1, max_length=128)
+    batch_no: str = Field(min_length=1, max_length=64)
+    expire_date: DateStr
+    supplier: str = Field(default="", max_length=128)
+    quantity: int = Field(gt=0)
+
+
+class BatchOut(BaseModel):
+    id: int
+    org_id: int
+    drug_code: str
+    drug_name: str
+    batch_no: str
+    expire_date: str
+    supplier: str
+    quantity: int
+    used_quantity: int
+    remaining: int
+    status: str
+    recall_reason: str
+
+
+class ExpiringBatchOut(BatchOut):
+    remaining_days: int
+    expired: bool
+
+
+class BatchRecallIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=256)
+
+
+class BatchDispenseRow(BaseModel):
+    dispense_id: int
+    prescription_id: int
+    patient_id: int
+    patient_name: str
+    quantity: int
+    status: str
+    dispensed_at: str
+
+
+class BatchTraceOut(BaseModel):
+    batch_id: int
+    org_id: int
+    drug_code: str
+    drug_name: str
+    batch_no: str
+    expire_date: str
+    status: str
+    total_dispensed: int
+    dispenses: list[BatchDispenseRow]
+
+
+def _stock_of(db: Session, org_id: int, drug_code: str) -> DrugStock | None:
+    return (
+        db.query(DrugStock)
+        .filter(DrugStock.org_id == org_id, DrugStock.drug_code == drug_code)
+        .first()
+    )
+
+
+def _batch_of(db: Session, org_id: int, drug_code: str, batch_no: str) -> DrugBatch | None:
+    return (
+        db.query(DrugBatch)
+        .filter(
+            DrugBatch.org_id == org_id,
+            DrugBatch.drug_code == drug_code,
+            DrugBatch.batch_no == batch_no,
+        )
+        .first()
+    )
+
+
+def _batch_out(b: DrugBatch, drug_name: str) -> dict:
+    return {
+        "id": b.id,
+        "org_id": b.org_id,
+        "drug_code": b.drug_code,
+        "drug_name": drug_name,
+        "batch_no": b.batch_no,
+        "expire_date": b.expire_date,
+        "supplier": b.supplier,
+        "quantity": b.quantity,
+        "used_quantity": b.used_quantity,
+        "remaining": b.quantity - b.used_quantity,
+        "status": b.status,
+        "recall_reason": b.recall_reason,
+    }
+
+
+def _stock_names(db: Session, batches: list[DrugBatch]) -> dict[tuple[int, str], str]:
+    keys = {(b.org_id, b.drug_code) for b in batches}
+    if not keys:
+        return {}
+    rows = (
+        db.query(DrugStock.org_id, DrugStock.drug_code, DrugStock.drug_name)
+        .filter(DrugStock.drug_code.in_({c for _, c in keys}))
+        .all()
+    )
+    return {(r.org_id, r.drug_code): r.drug_name for r in rows}
+
+
+@router.post(
+    "/batches",
+    response_model=BatchOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 入库=经办/药师
+)
+def receive_batch(
+    body: BatchReceiveIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """按批次入库：批次落明细行，同事务累加 DrugStock 汇总（保留原汇总语义）。
+
+    同批号再次到货按累加处理（与 /stocks 的入库累加语义一致），
+    但效期必须与首登一致——同一批号两个效期说明录错了，宁可拦下。
+    """
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
+    assert_org_writable(db, user, body.org_id)
+    # 汇总行与批次行都用"先试插零行、再原子累加"，并发同批入库不会 500（§6）
+    insert_if_absent(
+        db,
+        DrugStock(
+            org_id=body.org_id,
+            drug_code=body.drug_code,
+            drug_name=body.drug_name,
+            quantity=0,
+            threshold=0,
+        ),
+    )
+    stock = ensure_present(_stock_of(db, body.org_id, body.drug_code), "药品库存")
+    insert_if_absent(
+        db,
+        DrugBatch(
+            org_id=body.org_id,
+            drug_code=body.drug_code,
+            batch_no=body.batch_no,
+            expire_date=body.expire_date,
+            supplier=body.supplier,
+            quantity=0,
+        ),
+    )
+    batch = ensure_present(
+        _batch_of(db, body.org_id, body.drug_code, body.batch_no), "药品批次"
+    )
+    if batch.expire_date != body.expire_date:
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail=f"该批号已按效期 {batch.expire_date} 登记，与本次 {body.expire_date} 不一致",
+        )
+    if batch.status != "normal":
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该批次已召回，不得再入库")
+    add_amount(db, DrugBatch, batch.id, "quantity", body.quantity)
+    add_amount(db, DrugStock, stock.id, "quantity", body.quantity)
+    stock.drug_name = body.drug_name
+    db.commit()
+    db.refresh(batch)
+    return _batch_out(batch, body.drug_name)
+
+
+@router.get(
+    "/batches", response_model=list[BatchOut], dependencies=[Depends(get_current_user)]
+)
+def list_batches(
+    org_id: int | None = None,
+    drug_code: str | None = None,
+    batch_no: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    q = db.query(DrugBatch)
+    q = scope_org_list(db, user, q, DrugBatch, org_id)
+    if drug_code:
+        q = q.filter(DrugBatch.drug_code == drug_code)
+    if batch_no:
+        q = q.filter(DrugBatch.batch_no == batch_no)
+    rows = q.order_by(DrugBatch.org_id, DrugBatch.drug_code, DrugBatch.expire_date).limit(500).all()
+    names = _stock_names(db, rows)
+    return [_batch_out(b, names.get((b.org_id, b.drug_code), "")) for b in rows]
+
+
+@router.get(
+    "/batches/expiring",
+    response_model=list[ExpiringBatchOut],
+    dependencies=[Depends(get_current_user)],
+)
+def expiring_drug_batches(
+    days: int = Query(default=90, ge=1, le=3650),
+    org_id: int | None = None,
+    today: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """近效期预警：`days` 天内到期（含已过期）且仍有余量的批次。
+
+    学医废滞留预警的口径：剩余天数服务端直接算好、按到期先后排序返回——
+    预警页要按紧急程度排，别让前端自己减日期；已过期的负数天并标注，
+    不是催人用掉，而是提示按报废流程处理。
+    """
+    today_d = resolve_business_date(today)
+    limit_date = (today_d + timedelta(days=days)).isoformat()
+    q = db.query(DrugBatch).filter(DrugBatch.expire_date <= limit_date)
+    q = scope_org_list(db, user, q, DrugBatch, org_id)
+    rows = [
+        b
+        for b in q.order_by(DrugBatch.expire_date, DrugBatch.id).limit(500).all()
+        if b.quantity - b.used_quantity > 0
+    ]
+    names = _stock_names(db, rows)
+    return [
+        {
+            **_batch_out(b, names.get((b.org_id, b.drug_code), "")),
+            "remaining_days": (date.fromisoformat(b.expire_date) - today_d).days,
+            "expired": b.expire_date < today_d.isoformat(),
+        }
+        for b in rows
+    ]
+
+
+@router.post(
+    "/batches/{batch_id}/recall",
+    response_model=BatchOut,
+    dependencies=[Depends(require_roles("pharmacist", "director"))],  # 召回=药师/管理层
+)
+def recall_batch(
+    batch_id: int,
+    body: BatchRecallIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """召回批次：召回后不得再发药、不得再入库。不删行——发过的要查得到。"""
+    batch = db.get(DrugBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    assert_obj_org_writable(db, user, batch)
+    if batch.status == "recalled":
+        raise HTTPException(status_code=409, detail="该批次已召回")
+    batch.status = "recalled"
+    batch.recall_reason = body.reason
+    db.commit()
+    db.refresh(batch)
+    stock = _stock_of(db, batch.org_id, batch.drug_code)
+    return _batch_out(batch, stock.drug_name if stock else "")
+
+
+@router.get(
+    "/batches/{batch_id}/dispenses",
+    response_model=BatchTraceOut,
+    dependencies=[Depends(get_current_user)],
+)
+def batch_dispense_trace(batch_id: int, db: Session = Depends(get_db)):
+    """效期/召回按批号反查：这一批发给了谁——召回时唯一有用的那个查询。"""
+    batch = db.get(DrugBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    rows = (
+        db.query(DispenseItem, DispenseRecord, Prescription.patient_id, Patient.name)
+        .join(DispenseRecord, DispenseItem.dispense_id == DispenseRecord.id)
+        .join(Prescription, DispenseRecord.prescription_id == Prescription.id)
+        .outerjoin(Patient, Patient.id == Prescription.patient_id)
+        .filter(DispenseItem.batch_id == batch_id)
+        .order_by(DispenseItem.id.desc())
+        .limit(1000)
+        .all()
+    )
+    stock = _stock_of(db, batch.org_id, batch.drug_code)
+    return {
+        "batch_id": batch.id,
+        "org_id": batch.org_id,
+        "drug_code": batch.drug_code,
+        "drug_name": stock.drug_name if stock else "",
+        "batch_no": batch.batch_no,
+        "expire_date": batch.expire_date,
+        "status": batch.status,
+        # 冲销的不计入"仍在外面"的量——但行保留在下面清单里（status 标 reversed）
+        "total_dispensed": sum(i.quantity for i, r, _, _ in rows if r.status == "dispensed"),
+        "dispenses": [
+            {
+                "dispense_id": r.id,
+                "prescription_id": r.prescription_id,
+                "patient_id": patient_id,
+                "patient_name": name or "",
+                "quantity": i.quantity,
+                "status": r.status,
+                "dispensed_at": r.created_at.isoformat(),
+            }
+            for i, r, patient_id, name in rows
+        ],
+    }
 
 
 # ---------- 终审轮：供应商管理 / 采购申请-审批-验收 / 存货盘点（㉜㉝） ----------

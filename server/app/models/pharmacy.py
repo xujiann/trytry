@@ -232,6 +232,84 @@ class TcmPreparationBatch(Base):
     formula: Mapped[TcmFormula] = relationship(back_populates="batches")
 
 
+class DrugBatch(Base):
+    """药品批号效期台账：对齐疫苗批次（VaccineBatch）先例，入库按批次落明细。
+
+    与 `DrugStock` 的关系：**批次是明细、汇总是台账**。同一 (org, drug_code)
+    的 `DrugStock.quantity` 恒等于其各批次 `quantity - used_quantity` 之和——
+    入库、发药、退药冲销都在同一事务里两边同改（对账不变式由
+    tests/test_pharmacy_batches.py 钉住）。
+
+    效期照疫苗批次的口径**按日期现算不设过期状态**：靠定时任务改状态会让
+    "何时过期"取决于任务跑没跑，而这条直接决定能不能发药。
+    `status` 只表达人的决定（召回），不表达日期能算出来的事实。
+    """
+
+    __tablename__ = "drug_batches"
+    __table_args__ = (
+        UniqueConstraint("org_id", "drug_code", "batch_no", name="uq_drug_batch"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    drug_code: Mapped[str] = mapped_column(String(64), index=True)
+    batch_no: Mapped[str] = mapped_column(String(64), index=True)
+    expire_date: Mapped[str] = mapped_column(String(10), index=True)
+    supplier: Mapped[str] = mapped_column(String(128), default="")
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    used_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    # normal=正常, recalled=已召回（召回后不得再发药；不删行，发过的要查得到）
+    status: Mapped[str] = mapped_column(String(16), default="normal", index=True)
+    recall_reason: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class DispenseRecord(Base):
+    """西药发药记录：一张处方最多发一次（prescription_id 唯一防重复发药）。
+
+    退药不删行——`status` 置为 reversed 并留冲销人与时间，明细行原样保留：
+    批号追溯（这批药发给了谁）在退药之后仍要答得出来。
+    """
+
+    __tablename__ = "dispense_records"
+    __table_args__ = (
+        UniqueConstraint("prescription_id", name="uq_dispense_prescription"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prescription_id: Mapped[int] = mapped_column(ForeignKey("prescriptions.id"), index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    dispensed_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # dispensed=已发药, reversed=已退药冲销
+    status: Mapped[str] = mapped_column(String(16), default="dispensed", index=True)
+    reverse_reason: Mapped[str] = mapped_column(String(256), default="")
+    reversed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+    items: Mapped[list["DispenseItem"]] = relationship(back_populates="record")
+
+
+class DispenseItem(Base):
+    """发药明细：按批次一行一扣（FEFO 先到效期先出）。
+
+    单独成表而不是塞进发药记录的一个长字符串：召回按批号反查
+    "这批发给了谁"，只有按批次落行才查得出来。
+    """
+
+    __tablename__ = "dispense_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dispense_id: Mapped[int] = mapped_column(ForeignKey("dispense_records.id"), index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("drug_batches.id"), index=True)
+    drug_code: Mapped[str] = mapped_column(String(64), index=True)
+    drug_name: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    record: Mapped[DispenseRecord] = relationship(back_populates="items")
+
+
 class TcmMasterCase(Base):
     """⑬名老中医经验数字化传承：医案与按语。
 

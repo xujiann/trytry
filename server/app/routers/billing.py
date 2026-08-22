@@ -14,11 +14,12 @@
 """
 import secrets
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import case, func, insert, literal, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
@@ -33,6 +34,7 @@ from ..models import (
     ChargePriceChange,
     CodeEntry,
     CodeSystem,
+    Deposit,
     Encounter,
     InsuranceSettlement,
     Patient,
@@ -303,6 +305,257 @@ def list_bill_details(
     return [_bill_detail_out(d) for d in q.order_by(BillDetail.id.desc()).limit(500).all()]
 
 
+# ---------- 住院押金（工程包 B1） ----------
+#
+# 押金是**只增不改的流水**（预交/退费/结算冲抵），余额按流水现算：
+# admissions 是冻结核心表，不能加余额列。退费与冲抵的"不得超余额"用
+# INSERT..SELECT WHERE 余额充足 的单条 SQL 原子判定（与 take_amount 同一
+# 原则：判定与扣减在同一条语句里），并发退费不会把余额退成负数。
+
+DEPOSIT_TYPES = {"prepay": "预交", "refund": "退费", "offset": "结算冲抵"}
+
+
+class DepositCreate(BaseModel):
+    admission_id: int
+    amount: float = Field(gt=0)
+    method: str = Field(default="cash", pattern="^(cash|card|online)$")
+
+
+class DepositRefundIn(BaseModel):
+    admission_id: int
+    amount: float = Field(gt=0)
+    method: str = Field(default="cash", pattern="^(cash|card|online)$")
+
+
+class DepositOut(BaseModel):
+    id: int
+    admission_id: int
+    amount: float
+    deposit_type: str
+    deposit_type_name: str
+    method: str
+    operator: str
+    balance: float
+    created_at: str
+
+
+class DepositBalanceOut(BaseModel):
+    admission_id: int
+    prepaid: float
+    refunded: float
+    offset: float
+    balance: float
+
+
+class DepositAlertOut(BaseModel):
+    admission_id: int
+    patient_id: int
+    patient_name: str
+    org_id: int
+    balance: float
+    unsettled: float
+    gap: float
+
+
+def deposit_balance(db: Session, admission_id: int) -> float:
+    """押金余额 = 预交 - 退费 - 结算冲抵（流水现算）。"""
+    total = (
+        db.query(
+            func.coalesce(
+                func.sum(
+                    case((Deposit.deposit_type == "prepay", Deposit.amount), else_=-Deposit.amount)
+                ),
+                0.0,
+            )
+        )
+        .filter(Deposit.admission_id == admission_id)
+        .scalar()
+    )
+    return round(total or 0.0, 2)
+
+
+def _atomic_deposit_deduct(
+    db: Session, admission_id: int, amount: float, deposit_type: str, method: str, operator: str
+) -> bool:
+    """原子扣押金：INSERT..SELECT，仅当当前余额 ≥ 扣减额时才落行。
+
+    判定与扣减在同一条 SQL 里（同 concurrency.take_amount 的原则）——
+    先查余额再插行是 check-then-act，并发退费会把余额退成负数。
+    返回是否扣到；调用方随后自行 commit / rollback。
+    """
+    balance_expr = (
+        select(
+            func.coalesce(
+                func.sum(
+                    case((Deposit.deposit_type == "prepay", Deposit.amount), else_=-Deposit.amount)
+                ),
+                0.0,
+            )
+        )
+        .where(Deposit.admission_id == admission_id)
+        .scalar_subquery()
+    )
+    stmt = insert(Deposit).from_select(
+        ["admission_id", "amount", "deposit_type", "method", "operator", "created_at"],
+        select(
+            literal(admission_id),
+            literal(round(amount, 2)),
+            literal(deposit_type),
+            literal(method),
+            literal(operator),
+            literal(utcnow()),
+        ).where(balance_expr >= round(amount, 2)),
+    )
+    return bool(cast(CursorResult, db.execute(stmt)).rowcount)
+
+
+def _deposit_out(d: Deposit, balance: float) -> dict:
+    return {
+        "id": d.id,
+        "admission_id": d.admission_id,
+        "amount": d.amount,
+        "deposit_type": d.deposit_type,
+        "deposit_type_name": DEPOSIT_TYPES.get(d.deposit_type, d.deposit_type),
+        "method": d.method,
+        "operator": d.operator,
+        "balance": balance,
+        "created_at": d.created_at.isoformat(),
+    }
+
+
+@router.post(
+    "/deposits",
+    response_model=DepositOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator"))],  # 押金收退=经办（与结算同岗）
+)
+def create_deposit(
+    body: DepositCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """押金预交：仅在院患者可预交。"""
+    admission = db.get(Admission, body.admission_id)
+    if admission is None:
+        raise HTTPException(status_code=404, detail="住院记录不存在")
+    if admission.status != "admitted":
+        raise HTTPException(status_code=409, detail="患者已出院，不可预交押金")
+    deposit = Deposit(
+        admission_id=body.admission_id,
+        amount=round(body.amount, 2),
+        deposit_type="prepay",
+        method=body.method,
+        operator=user.full_name or user.username,
+    )
+    db.add(deposit)
+    db.commit()
+    db.refresh(deposit)
+    return _deposit_out(deposit, deposit_balance(db, body.admission_id))
+
+
+@router.post(
+    "/deposits/refund",
+    response_model=DepositOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator"))],
+)
+def refund_deposit(
+    body: DepositRefundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """押金退费：不得超余额（原子判定），出院后退余额也走这里。"""
+    if db.get(Admission, body.admission_id) is None:
+        raise HTTPException(status_code=404, detail="住院记录不存在")
+    operator = user.full_name or user.username
+    if not _atomic_deposit_deduct(
+        db, body.admission_id, body.amount, "refund", body.method, operator
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail=f"退费金额超出押金余额（当前余额 {deposit_balance(db, body.admission_id)}）",
+        )
+    db.commit()
+    deposit = (
+        db.query(Deposit)
+        .filter(Deposit.admission_id == body.admission_id, Deposit.deposit_type == "refund")
+        .order_by(Deposit.id.desc())
+        .first()
+    )
+    assert deposit is not None  # 刚插入成功，必有一行
+    return _deposit_out(deposit, deposit_balance(db, body.admission_id))
+
+
+@router.get("/deposits", response_model=list[DepositOut])
+def list_deposits(
+    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    if db.get(Admission, admission_id) is None:
+        raise HTTPException(status_code=404, detail="住院记录不存在")
+    balance = deposit_balance(db, admission_id)
+    rows = (
+        db.query(Deposit)
+        .filter(Deposit.admission_id == admission_id)
+        .order_by(Deposit.id.desc())
+        .limit(200)
+        .all()
+    )
+    return [_deposit_out(d, balance) for d in rows]
+
+
+@router.get("/deposits/balance", response_model=DepositBalanceOut)
+def get_deposit_balance(admission_id: int, db: Session = Depends(get_db)):
+    if db.get(Admission, admission_id) is None:
+        raise HTTPException(status_code=404, detail="住院记录不存在")
+    sums: dict[str, float] = {
+        row[0]: float(row[1] or 0.0)
+        for row in db.query(Deposit.deposit_type, func.coalesce(func.sum(Deposit.amount), 0.0))
+        .filter(Deposit.admission_id == admission_id)
+        .group_by(Deposit.deposit_type)
+        .all()
+    }
+    return {
+        "admission_id": admission_id,
+        "prepaid": round(sums.get("prepay", 0.0), 2),
+        "refunded": round(sums.get("refund", 0.0), 2),
+        "offset": round(sums.get("offset", 0.0), 2),
+        "balance": deposit_balance(db, admission_id),
+    }
+
+
+@router.get("/deposits/alerts", response_model=list[DepositAlertOut])
+def deposit_alerts(
+    threshold: float = 0,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """押金余额不足预警：在院患者中 押金余额 - 未结费用 < 阈值 的清单。
+
+    口径：gap = 余额 - 未结费用。阈值缺省 0，即"押金已不够抵未结费用"；
+    调大阈值可提前预警（如 gap < 500 就该催缴）。按 gap 从小到大排序——
+    预警页要按紧要程度排，最缺钱的排最前。
+    """
+    q = db.query(Admission).filter(Admission.status == "admitted")
+    q = scope_patient_list(db, user, q, Admission, None, "billing")
+    alerts = []
+    for admission in q.order_by(Admission.id).limit(500).all():
+        balance = deposit_balance(db, admission.id)
+        unsettled = unsettled_amount(db, admission.id)
+        gap = round(balance - unsettled, 2)
+        if gap < threshold:
+            patient = db.get(Patient, admission.patient_id)
+            alerts.append(
+                {
+                    "admission_id": admission.id,
+                    "patient_id": admission.patient_id,
+                    "patient_name": patient.name if patient else "",
+                    "org_id": admission.org_id,
+                    "balance": balance,
+                    "unsettled": unsettled,
+                    "gap": gap,
+                }
+            )
+    alerts.sort(key=lambda a: a["gap"])
+    return alerts
+
+
 # ---------- 结算 ----------
 
 
@@ -403,9 +656,31 @@ def create_settlement(
         settlement.insurance_settlement_id = ins.id
     for d in details:
         d.settlement_id = settlement.id
+    # 工程包 B1：住院结算自动用押金冲抵个人自付。
+    # 差额口径——冲抵额 = min(押金余额, 个人自付)：
+    #   余额 ≥ 自付：自付全额冲抵，剩余押金留待退费（/deposits/refund）；
+    #   余额 < 自付：全部押金冲抵，患者补缴 payable_after_offset。
+    # 冲抵走原子 INSERT..SELECT（判余额与落行同一条 SQL），并发下押金
+    # 被同时退费也不会冲出负余额；抢不到就按当下余额重算再试。
+    deposit_offset = 0.0
+    if body.bill_type == "inpatient" and body.admission_id is not None:
+        operator = user.full_name or user.username
+        for _ in range(3):
+            balance = deposit_balance(db, body.admission_id)
+            offset = round(min(balance, self_pay), 2)
+            if offset <= 0:
+                break
+            if _atomic_deposit_deduct(db, body.admission_id, offset, "offset", "settle", operator):
+                deposit_offset = offset
+                break
     db.commit()
     db.refresh(settlement)
-    return _settlement_out(settlement)
+    out = _settlement_out(settlement)
+    if body.bill_type == "inpatient" and body.admission_id is not None:
+        out["deposit_offset"] = deposit_offset
+        out["payable_after_offset"] = round(self_pay - deposit_offset, 2)
+        out["deposit_balance"] = deposit_balance(db, body.admission_id)
+    return out
 
 
 @router.get("/settlements")

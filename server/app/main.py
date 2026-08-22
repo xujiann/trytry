@@ -42,6 +42,7 @@ from .routers import (
     dataquality,
     cssd,
     dictionaries,
+    dispense,
     drgs,
     education,
     homevisits,
@@ -282,6 +283,7 @@ app.include_router(encounters.router)
 app.include_router(exams.router)
 app.include_router(prescriptions.router)
 app.include_router(pharmacy.router)
+app.include_router(dispense.router)
 app.include_router(chronic.router)
 app.include_router(infectious.router)
 app.include_router(consultations.router)

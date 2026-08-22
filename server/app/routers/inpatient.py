@@ -21,6 +21,7 @@ from ..models import (
     CaseSummary,
     Encounter,
     InpatientOrder,
+    OrderExecution,
     Organization,
     Patient,
     User,
@@ -460,6 +461,87 @@ def stop_order(
     order.stopped_by_name = user.full_name or user.username
     db.commit()
     return _order_out(order)
+
+
+# ---------- 医嘱执行记录（工程包 B1） ----------
+#
+# 停用医嘱不可再登记执行（409）；皮试结果可空——空与"阴性"是两回事。
+# 护理记录联动暂不做（待办，见 docs/TECH_DEBT.md 流程）。
+
+
+class ExecutionCreate(BaseModel):
+    note: str = Field(default="", max_length=512)
+    # negative=阴性, positive=阳性；不需要皮试的医嘱不传
+    skin_test_result: str | None = Field(default=None, pattern="^(negative|positive)$")
+
+
+class ExecutionOut(BaseModel):
+    id: int
+    inpatient_order_id: int
+    executed_by: int
+    executed_by_name: str
+    executed_at: str
+    note: str
+    skin_test_result: str | None
+
+
+def _execution_out(e: OrderExecution, executed_by_name: str) -> dict:
+    return {
+        "id": e.id,
+        "inpatient_order_id": e.inpatient_order_id,
+        "executed_by": e.executed_by,
+        "executed_by_name": executed_by_name,
+        "executed_at": e.executed_at.isoformat(),
+        "note": e.note,
+        "skin_test_result": e.skin_test_result,
+    }
+
+
+@router.post(
+    "/orders/{order_id}/executions",
+    response_model=ExecutionOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("doctor", "operator"))],  # 执行登记=医疗岗/经办
+)
+def record_order_execution(
+    order_id: int,
+    body: ExecutionCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    order = db.get(InpatientOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="医嘱不存在")
+    admission = db.get(Admission, order.admission_id)
+    if admission is not None:
+        assert_obj_org_writable(db, user, admission)
+    if order.status != "active":
+        raise HTTPException(status_code=409, detail="医嘱已停止，不可再登记执行")
+    execution = OrderExecution(
+        inpatient_order_id=order_id,
+        executed_by=user.id,
+        note=body.note,
+        skin_test_result=body.skin_test_result,
+    )
+    db.add(execution)
+    db.commit()
+    db.refresh(execution)
+    return _execution_out(execution, user.full_name or user.username)
+
+
+@router.get("/orders/{order_id}/executions", response_model=list[ExecutionOut])
+def list_order_executions(order_id: int, db: Session = Depends(get_db)):
+    if db.get(InpatientOrder, order_id) is None:
+        raise HTTPException(status_code=404, detail="医嘱不存在")
+    rows = (
+        db.query(OrderExecution, User.full_name, User.username)
+        .outerjoin(User, User.id == OrderExecution.executed_by)
+        .filter(OrderExecution.inpatient_order_id == order_id)
+        .order_by(OrderExecution.id.desc())
+        .limit(200)
+        .all()
+    )
+    return [_execution_out(e, full_name or username or "") for e, full_name, username in rows]
 
 
 # ---------- 床位效率统计（#15 运行效率数据源） ----------

@@ -93,6 +93,50 @@ class InpatientOrder(Base):
     admission: Mapped[Admission] = relationship(back_populates="orders")
 
 
+class OrderExecution(Base):
+    """医嘱执行记录：护理/医疗岗对住院医嘱的逐次执行登记。
+
+    停用医嘱不可再登记执行（路由层 409）；皮试结果可空——只有需要皮试的
+    医嘱才填，空与"阴性"是两回事，不能拿默认值混过去。
+    护理记录联动暂不做（登记为待办，见 docs/TECH_DEBT.md 流程）。
+    """
+
+    __tablename__ = "order_executions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    inpatient_order_id: Mapped[int] = mapped_column(
+        ForeignKey("inpatient_orders.id"), index=True
+    )
+    executed_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    executed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    note: Mapped[str] = mapped_column(String(512), default="")
+    # negative=阴性, positive=阳性；未做皮试为 NULL（与"阴性"是两回事）
+    skin_test_result: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Deposit(Base):
+    """住院押金流水：预交/退费/结算冲抵，只增不改的台账。
+
+    余额不是列而是**流水现算**（预交 - 退费 - 冲抵）：admissions 是冻结核心表，
+    不能加余额列；而退费/冲抵的"不得超余额"用 INSERT..SELECT WHERE 余额充足
+    的单条 SQL 原子判定（见 routers/billing.py），与 take_amount 同一原则——
+    判定与扣减在同一条语句里。
+    """
+
+    __tablename__ = "deposits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)
+    amount: Mapped[float] = mapped_column(Money)
+    # prepay=预交, refund=退费, offset=出院结算冲抵
+    deposit_type: Mapped[str] = mapped_column(String(16), index=True)
+    # cash=现金, card=银行卡, online=线上；冲抵无支付方式记 settle
+    method: Mapped[str] = mapped_column(String(16), default="cash")
+    operator: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class CaseSummary(Base):
     """病案首页（最小数据集）：出院诊断、手术、费用汇总、转归，出院时填写。"""
 
