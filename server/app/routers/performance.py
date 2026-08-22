@@ -35,6 +35,7 @@ from ..visibility import (
 from ..models import (
     ChronicPatient,
     ContractService,
+    DrugRule,
     ExamRequest,
     FamilyDoctorContract,
     FollowUp,
@@ -42,6 +43,7 @@ from ..models import (
     Organization,
     PerformanceIndicator,
     Prescription,
+    PrescriptionItem,
     Referral,
     User,
 )
@@ -134,6 +136,16 @@ class ChronicFollowup(BaseModel):
 class RxPass(BaseModel):
     passed: int
     total: int
+    #: 本期处方里**至少有一味药能对上生效规则**的张数（口径裁定 4，见
+    #: docs/统计口径对照表.md）。`auto_passed`（系统审通过）的真实含义是
+    #: "没有任何规则被触发"，而 `drug_rules` 是全县共用的一张表、按药品编码维护。
+    #: 规则库越稀疏，越多处方是"无规则可审"地自动通过——`passed/total` 就越接近
+    #: 100%，越不反映用药合理性。把可审张数一并给出，读数的人才判断得了
+    #: 这个合格率有没有意义。
+    #:
+    #: 同一张表里 `ddd` 未维护时的处理方式是既有先例（`models/pharmacy.py`）：
+    #: "跳过并计入未覆盖数——按缺省值硬算…比'明说没维护'更糟"。这里照它办。
+    rule_covered: int
 
 
 class ScorecardDetail(BaseModel):
@@ -275,6 +287,16 @@ def org_scorecards(
                 Prescription.created_at >= window[0], Prescription.created_at < window[1]),
         Prescription.org_id,
     )
+    # 规则可审张数：join 到 prescription_items 再 join 生效规则，按处方去重。
+    # 第 9 条分组聚合，仍与机构数无关（`test_查询条数不随机构数增长` 盯着）。
+    rx_rule_covered_by = by_org(
+        db.query(Prescription.org_id, func.count(func.distinct(Prescription.id)))
+        .join(PrescriptionItem, PrescriptionItem.prescription_id == Prescription.id)
+        .join(DrugRule, DrugRule.drug_code == PrescriptionItem.drug_code)
+        .filter(DrugRule.active.is_(True),
+                Prescription.created_at >= window[0], Prescription.created_at < window[1]),
+        Prescription.org_id,
+    )
     contract_services_by = by_org(
         db.query(FamilyDoctorContract.org_id, func.count(ContractService.id))
         .join(FamilyDoctorContract, ContractService.contract_id == FamilyDoctorContract.id)
@@ -292,6 +314,7 @@ def org_scorecards(
         chronic_followed = chronic_followed_by.get(org.id, 0)
         rx_total = rx_total_by.get(org.id, 0)
         rx_ok = rx_ok_by.get(org.id, 0)
+        rx_rule_covered = rx_rule_covered_by.get(org.id, 0)
         contract_services = contract_services_by.get(org.id, 0)
 
         def ratio(part: int, total: int) -> float:
@@ -322,7 +345,8 @@ def org_scorecards(
                     "referral_completion": {"completed": ref_completed, "total": ref_total},
                     "remote_exams": exam_count,
                     "chronic_followup": {"followed": chronic_followed, "total": chronic_total},
-                    "rx_pass": {"passed": rx_ok, "total": rx_total},
+                    "rx_pass": {"passed": rx_ok, "total": rx_total,
+                                "rule_covered": rx_rule_covered},
                     "contract_services": contract_services,
                 },
             }

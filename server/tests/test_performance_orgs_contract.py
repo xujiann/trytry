@@ -28,12 +28,14 @@ from app.main import app
 from app.models import (
     ChronicPatient,
     ContractService,
+    DrugRule,
     ExamRequest,
     FamilyDoctorContract,
     FollowUp,
     Organization,
     Patient,
     Prescription,
+    PrescriptionItem,
     Referral,
     User,
 )
@@ -161,7 +163,10 @@ def test_detail的五段形状_三段是分子分母两段是裸计数(client, a
     }
     assert detail["referral_completion"] == {"completed": 1, "total": 2}
     assert detail["chronic_followup"] == {"followed": 1, "total": 2}
-    assert detail["rx_pass"] == {"passed": 1, "total": 2}
+    # rule_covered：本期"至少一味药对得上生效规则"的处方张数（口径裁定 4）。
+    # seeded 没建 drug_rules，故为 0——真能数出非零的场景见
+    # test_规则覆盖数只数对得上生效规则的处方。
+    assert detail["rx_pass"] == {"passed": 1, "total": 2, "rule_covered": 0}
     assert detail["remote_exams"] == 1
     assert detail["contract_services"] == 2
 
@@ -193,7 +198,7 @@ def test_include_auto_passed收紧口径会降低rx段(client, admin, seeded):
         "/api/performance/orgs?include_auto_passed=false", headers=admin
     ).json()
     card = _card(payload, seeded["org_id"])
-    assert card["detail"]["rx_pass"] == {"passed": 0, "total": 2}
+    assert card["detail"]["rx_pass"] == {"passed": 0, "total": 2, "rule_covered": 0}
     assert card["score"] == 32.5, "rx 段 20 分归零，总分从 42.5 降到 32.5"
 
 
@@ -278,7 +283,7 @@ def test_显式指定去年能看到去年的数(client, admin, seeded):
     assert payload["period"] == str(last_year)
     card = _card(payload, marker_org)
     assert card["detail"]["referral_completion"] == {"completed": 2, "total": 3}
-    assert card["detail"]["rx_pass"] == {"passed": 0, "total": 0}, "去年没有处方"
+    assert card["detail"]["rx_pass"] == {"passed": 0, "total": 0, "rule_covered": 0}, "去年没有处方"
 
 
 def test_慢病口径不对称_分母是存量分子按期(client, admin, seeded):
@@ -462,3 +467,149 @@ def test_查询条数不随机构数增长(client, admin):
     # 防呆：探针本身得真的在数（挂不上钩子时两边都是 0，上面的相等断言恒真）
     assert first > 0, "SQL 探针一条都没抓到，本用例是空转"
 
+
+
+def test_规则覆盖数只数对得上生效规则的处方(client, admin):
+    """口径裁定 4：`auto_passed` 的真实含义是"没有规则被触发"，不是"药师看过"。
+
+    `drug_rules` 是全县共用的一张表，按药品编码维护。规则库越稀疏，越多处方是
+    "无规则可审"地自动通过，`passed/total` 就越接近 100% 而越不反映用药合理性。
+    所以把"可审张数"一并给出。这条证明它真的在数，且数的是对的：
+
+    - 建了生效规则的药 → 计入；
+    - **停用**的规则 → 不计入（`_active_rule` 把停用等同未维护，这里必须一致）；
+    - 没建规则的药 → 不计入。
+    """
+    org = client.post(
+        "/api/organizations",
+        json={"name": "规则覆盖院", "org_type": "township", "level": "township"},
+        headers=admin,
+    ).json()
+    patient = client.post(
+        "/api/patients", json={"name": "规则覆盖患者", "id_card": "330281199704044519"},
+        headers=admin,
+    ).json()
+    with SessionLocal() as db:
+        db.add(DrugRule(drug_code="RC_ACTIVE", max_daily_dose=100.0, active=True))
+        db.add(DrugRule(drug_code="RC_STOPPED", max_daily_dose=100.0, active=False))
+        doctor = db.query(User).filter(User.username == "admin").first()
+        for code in ("RC_ACTIVE", "RC_STOPPED", "RC_NO_RULE"):
+            rx = Prescription(patient_id=patient["id"], org_id=org["id"],
+                              diagnosis_name="高血压", status="auto_passed",
+                              created_by=doctor.id)
+            db.add(rx)
+            db.flush()
+            db.add(PrescriptionItem(prescription_id=rx.id, drug_code=code,
+                                    drug_name=code, daily_dose=1.0, days=1))
+        db.commit()
+
+    seg = _card(client.get("/api/performance/orgs", headers=admin).json(),
+                org["id"])["detail"]["rx_pass"]
+    assert seg["total"] == 3, seg
+    assert seg["passed"] == 3, "三张都是 auto_passed，默认口径下都算合格"
+    assert seg["rule_covered"] == 1, (
+        f"只有 RC_ACTIVE 那张有生效规则可审，实际 {seg['rule_covered']}——"
+        "停用规则必须与未维护同路处理（与 prescriptions._active_rule 一致）"
+    )
+    # 这正是本裁定要让人看见的事：合格率 100%，但三张里只有一张真被规则审过。
+    assert seg["passed"] == seg["total"] and seg["rule_covered"] < seg["total"]
+
+
+def test_一张处方有多味药命中规则也只算一张(client, admin):
+    """按处方去重——不去重的话覆盖数会超过总张数，比率大于 1。"""
+    org = client.post(
+        "/api/organizations",
+        json={"name": "多味药院", "org_type": "township", "level": "township"},
+        headers=admin,
+    ).json()
+    patient = client.post(
+        "/api/patients", json={"name": "多味药患者", "id_card": "330281199805054516"},
+        headers=admin,
+    ).json()
+    with SessionLocal() as db:
+        for code in ("MD_A", "MD_B"):
+            db.add(DrugRule(drug_code=code, max_daily_dose=100.0, active=True))
+        doctor = db.query(User).filter(User.username == "admin").first()
+        rx = Prescription(patient_id=patient["id"], org_id=org["id"], diagnosis_name="高血压",
+                          status="auto_passed", created_by=doctor.id)
+        db.add(rx)
+        db.flush()
+        for code in ("MD_A", "MD_B"):
+            db.add(PrescriptionItem(prescription_id=rx.id, drug_code=code, drug_name=code,
+                                    daily_dose=1.0, days=1))
+        db.commit()
+
+    seg = _card(client.get("/api/performance/orgs", headers=admin).json(),
+                org["id"])["detail"]["rx_pass"]
+    assert seg == {"passed": 1, "total": 1, "rule_covered": 1}, seg
+
+
+# ------------------------------------------------ 口径裁定 1、2 的特征化（分数不变）
+def test_结案率按转出机构计_接收方分母里没有这张单(client, admin):
+    """口径裁定 1：转诊结案率的分子分母都按 `from_org_id`（转出方）。
+
+    含义是接收方把单子结案了、功劳记在转出方头上，而接收方自己的分母里
+    根本没有这张单。保留这个口径的前提是**分子不能被任意机构改**——
+    见 `test_referral_status_authority.py`：改这条口径之前，任何机构的医师
+    都能把别人的单子结案，那时讨论分母属于谁毫无意义。
+    """
+    def org(name):
+        return client.post("/api/organizations",
+                           json={"name": name, "org_type": "township", "level": "township"},
+                           headers=admin).json()
+
+    sender, receiver = org("结案率转出院"), org("结案率接收院")
+    patient = client.post("/api/patients",
+                          json={"name": "结案率患者", "id_card": "330281199906064511"},
+                          headers=admin).json()
+    ref = client.post("/api/referrals",
+                      json={"patient_id": patient["id"], "from_org_id": sender["id"],
+                            "to_org_id": receiver["id"], "direction": "up", "reason": "上转"},
+                      headers=admin).json()
+    for status in ("accepted", "completed"):
+        client.patch(f"/api/referrals/{ref['id']}/status", json={"status": status}, headers=admin)
+
+    payload = client.get("/api/performance/orgs", headers=admin).json()
+    assert _card(payload, sender["id"])["detail"]["referral_completion"] == {
+        "completed": 1, "total": 1}, "转出方应拿到这张单的分子与分母"
+    assert _card(payload, receiver["id"])["detail"]["referral_completion"] == {
+        "completed": 0, "total": 0}, "接收方的分母里不该出现这张单（当前口径）"
+
+
+def test_互认计入远程诊断且按申请方计(client, admin):
+    """口径裁定 2：`recognized`（互认既往结果）与 `reported` 一样计入。
+
+    关键是**按谁计**：`ExamRequest.from_org_id` 是**申请方（基层）**，
+    `claimed_org_id` 才是干活的共享诊断中心。所以这一项衡量的是
+    "基层通过平台解决了多少次检查需求"，不是诊断工作量——互认恰恰是想要的结果
+    （不重复做检查），不计入等于惩罚正确行为。
+
+    指标名叫"远程诊断服务量"是**名不副实**的（服务量听起来是工作量），
+    已记进 docs/统计口径对照表.md；改名涉及可编辑的指标目录，另案。
+    """
+    def org(name):
+        return client.post("/api/organizations",
+                           json={"name": name, "org_type": "township", "level": "township"},
+                           headers=admin).json()
+
+    grassroots, center = org("互认基层院"), org("互认诊断中心")
+    patient = client.post("/api/patients",
+                          json={"name": "互认患者", "id_card": "330281200001014513"},
+                          headers=admin).json()
+    with SessionLocal() as db:
+        doctor = db.query(User).filter(User.username == "admin").first()
+        for status in ("reported", "recognized", "pending"):
+            db.add(ExamRequest(patient_id=patient["id"], from_org_id=grassroots["id"],
+                               claimed_org_id=center["id"], center_type="imaging",
+                               item_code="CT", item_name="胸部CT", status=status,
+                               created_by=doctor.id))
+        db.commit()
+
+    payload = client.get("/api/performance/orgs", headers=admin).json()
+    assert _card(payload, grassroots["id"])["detail"]["remote_exams"] == 2, (
+        "reported + recognized 都算，pending 不算"
+    )
+    assert _card(payload, center["id"])["detail"]["remote_exams"] == 0, (
+        "真正出报告的诊断中心在本维度拿 0 分——这是当前口径的已知缺口，"
+        "已记进 docs/统计口径对照表.md 待裁定；这条用例是为了让它改动时被看见"
+    )

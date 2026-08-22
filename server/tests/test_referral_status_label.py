@@ -54,6 +54,20 @@ def test_三个端点都返回status_label(client):
         "/api/auth/login", json={"username": "lbl_doc", "password": "pass123456"}
     ).json()
     doc = {"Authorization": f"Bearer {doc['access_token']}"}
+    # 推进状态要用**接收方**机构的医师：转诊状态流转已收归接收方
+    # （见 tests/test_referral_status_authority.py）。本用例考的是 status_label，
+    # 不是权限，所以老老实实按新规则准备一个接收方账号，而不是改用 admin 绕过去
+    # ——admin 走的是全域放行分支，那样就测不到机构账号这条正路了。
+    client.post(
+        "/api/users",
+        json={"username": "lbl_doc_recv", "password": "pass123456", "role": "doctor",
+              "org_id": orgs[1]["id"]},
+        headers=admin,
+    )
+    recv = client.post(
+        "/api/auth/login", json={"username": "lbl_doc_recv", "password": "pass123456"}
+    ).json()
+    recv = {"Authorization": f"Bearer {recv['access_token']}"}
     patient = client.post(
         "/api/patients", json={"name": "标签患者", "id_card": "330281199101016006"},
         headers=admin,
@@ -73,7 +87,7 @@ def test_三个端点都返回status_label(client):
 
     moved = client.patch(
         f"/api/referrals/{created.json()['id']}/status",
-        json={"status": "accepted"}, headers=doc,
+        json={"status": "accepted"}, headers=recv,
     )
     assert moved.status_code == 200, moved.text
     assert moved.json()["status_label"] == "已接诊"
