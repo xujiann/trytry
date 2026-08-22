@@ -1726,7 +1726,7 @@ async function renderQuality() {
           ? `<button class="btn secondary" data-review="${ev.id}">审核</button>`
           : ev.status === "reviewed"
           ? `<button class="btn secondary" data-rectify="${ev.id}">登记整改</button>` : "—";
-        return `<tr><td>${ev.id}</td><td>${AET[ev.event_type] || ev.event_type}</td><td>${ev.level}</td>
+        return `<tr><td>${ev.id}</td><td>${esc(AET[ev.event_type] || ev.event_type)}</td><td>${esc(ev.level)}</td>
           <td>${esc(ev.description)}</td><td>${esc(ev.reporter_name) || "（匿名）"}</td>
           <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
       })}</div>

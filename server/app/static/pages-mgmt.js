@@ -111,8 +111,8 @@ async function renderSurgery() {
     ${stats.length ? `<div class="panel"><h3>手术量统计</h3>${
       table(["机构", "台次", "切口构成", "麻醉构成", "并发症"], stats, (s) =>
         `<tr><td>${esc(s.org_name)}</td><td>${s.total}</td>
-         <td>${Object.entries(s.by_incision).map(([k, v]) => `${k}类:${v}`).join(" ")}</td>
-         <td>${Object.entries(s.by_anesthesia).map(([k, v]) => `${ANESTHESIA[k] || k}:${v}`).join(" ")}</td>
+         <td>${Object.entries(s.by_incision).map(([k, v]) => `${esc(k)}类:${v}`).join(" ")}</td>
+         <td>${Object.entries(s.by_anesthesia).map(([k, v]) => `${esc(ANESTHESIA[k] || k)}:${v}`).join(" ")}</td>
          <td>${s.complications}</td></tr>`)}</div>` : ""}
     <div class="panel"><h3>手术间（admin 建档）</h3>
       <form class="inline" id="room-form"><input name="org_id" type="number" placeholder="机构ID" required>
@@ -761,9 +761,9 @@ async function renderJobs() {
          <td>${j.last_status ? `<span class="tag ${j.last_status === "succeeded" ? "green" : "red"}">${
            j.last_status === "succeeded" ? "成功" : "失败"}</span>` : "—"}</td>
          <td>${esc((j.next_run_at || "—").slice(0, 16).replace("T", " "))}</td>
-         <td><button class="btn secondary" data-run="${j.name}">立即执行</button>
-             <button class="btn" data-toggle="${j.name}" data-enabled="${j.enabled}">${j.enabled ? "停用" : "启用"}</button>
-             <button class="btn" data-interval="${j.name}">改间隔</button>
+         <td><button class="btn secondary" data-run="${esc(j.name)}">立即执行</button>
+             <button class="btn" data-toggle="${esc(j.name)}" data-enabled="${j.enabled}">${j.enabled ? "停用" : "启用"}</button>
+             <button class="btn" data-interval="${esc(j.name)}">改间隔</button>
              ${j.implemented ? "" : '<span class="tag red">无实现</span>'}</td></tr>`)}
       <p class="msg" id="job-msg"></p></div>
     <div class="panel"><h3>执行历史（最近 ${runs.length} 条）</h3>${

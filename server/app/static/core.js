@@ -241,7 +241,7 @@ async function renderDashboard() {
   const trendColors = ["#0b6e6e", "#0a4d78", "#b26a00", "#8d4bab"];
   const trendNames = { encounters: "就诊", exam_reports: "远程诊断", referrals: "转诊", prescriptions: "处方" };
   const legend = Object.keys(trends.series).map((k, i) =>
-    `<span style="font-size:12.5px;margin-right:14px"><span style="display:inline-block;width:10px;height:10px;background:${trendColors[i]};border-radius:2px;margin-right:4px"></span>${trendNames[k] || k}</span>`).join("");
+    `<span style="font-size:12.5px;margin-right:14px"><span style="display:inline-block;width:10px;height:10px;background:${trendColors[i]};border-radius:2px;margin-right:4px"></span>${esc(trendNames[k] || k)}</span>`).join("");
   $("#page-body").innerHTML =
     `${alertBanner}
      <div class="cards">${cards.map(([label, value, warn, metric]) =>
@@ -463,7 +463,7 @@ async function renderPerformance() {
     <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "远程诊断", "慢病随访", "处方合格", "家医履约"],
       data.scorecards, (c, i) => {
         const d = c.detail;
-        return `<tr><td>${data.scorecards.indexOf(c) + 1}</td><td>${esc(c.org_name)}</td><td>${LEVELS[c.level] || c.level}</td>
+        return `<tr><td>${data.scorecards.indexOf(c) + 1}</td><td>${esc(c.org_name)}</td><td>${esc(LEVELS[c.level] || c.level)}</td>
           <td><b>${c.score}</b></td>
           <td>${d.referral_completion.completed}/${d.referral_completion.total}</td>
           <td>${d.remote_exams}</td>

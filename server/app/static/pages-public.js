@@ -36,7 +36,7 @@ async function renderEmTimeline() {
       <p class="msg" id="gc-msg"></p></div>
     <div class="panel"><h3>急救事件</h3>${table(["ID", "地点", "主诉", "通道", "状态", "操作"], cases, (c) =>
       `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td>
-       <td><span class="tag ${c.channel_type ? "red" : ""}">${CHANNELS[c.channel_type] || c.channel_type}</span></td>
+       <td><span class="tag ${c.channel_type ? "red" : ""}">${esc(CHANNELS[c.channel_type] || c.channel_type)}</span></td>
        <td>${esc(c.status)}</td>
        <td><button class="btn secondary" data-mile="${c.id}">录节点</button>
            <button class="btn" data-timeline="${c.id}">时间轴</button></td></tr>`)}</div>
