@@ -74,6 +74,7 @@ from ..sms import get_sms_provider
 from ..state_store import LoginFailureTracker, SlidingWindowRateLimiter
 from ..wechat import MockWeChatProvider, get_wechat_provider
 from .appointments import book_slot, release_appointment
+from .auth import record_login_event
 from .consents import (
     SCENE_PATTERN,
     ConsentOut,
@@ -311,14 +312,30 @@ class SmsLoginIn(BaseModel):
 
 
 @router.post("/auth/sms/login")
-def sms_login(body: SmsLoginIn, db: Session = Depends(get_db)):
+def sms_login(body: SmsLoginIn, request: Request, db: Session = Depends(get_db)):
     """手机号验证码登录：首次登录自动开户，命中唯一患者时顺带完成实名绑定。"""
     phone = _check_phone(body.phone)
-    _consume_code(db, phone, body.code, "login")
+    client_ip = request.client.host if request.client else "unknown"
+    try:
+        _consume_code(db, phone, body.code, "login")
+    except HTTPException as exc:
+        # 居民端登录留痕（等保 E1 接线）：失败同样落库，username 记通道内标识
+        record_login_event(
+            db, username=f"sms:{phone}", ip=client_ip, success=False,
+            fail_reason=f"code_{exc.status_code}", channel="sms",
+        )
+        raise
     account = _account_by(db, ResidentAccount.phone, phone, phone=phone)
     if account.status != "active":
+        record_login_event(
+            db, username=f"sms:{phone}", ip=client_ip, success=False,
+            fail_reason="disabled", channel="sms",
+        )
         raise HTTPException(status_code=403, detail="账户已停用，请联系服务机构")
     _autobind_by_phone(db, account)
+    record_login_event(
+        db, username=f"sms:{phone}", ip=client_ip, success=True, channel="sms"
+    )
     return _login_result(db, account)
 
 
