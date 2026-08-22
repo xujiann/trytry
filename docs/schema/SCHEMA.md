@@ -1,7 +1,7 @@
 # SCHEMA（自动生成，勿手改）
 
 > 由 `server/scripts/dump_schema.py` 从 ORM 元数据生成。改了模型请重跑该脚本。
-> 表总数：**255**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
+> 表总数：**258**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
 
 ## access_logs
 
@@ -307,6 +307,21 @@
 - `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_charge_price_changes_created_at(created_at)
 - _index_ ix_charge_price_changes_item_id(item_id)
+
+## checkup_items
+
+- `id` · INTEGER · PK · NOT NULL
+- `checkup_id` · INTEGER · NOT NULL · index · → physical_exams.id
+- `item_code` · VARCHAR(64) · NOT NULL · index
+- `item_name` · VARCHAR(128) · NOT NULL
+- `result_value` · VARCHAR(64) · NOT NULL
+- `unit` · VARCHAR(16) · NOT NULL
+- `ref_range` · VARCHAR(64) · NOT NULL
+- `abnormal` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL
+- _index_ ix_checkup_items_abnormal(abnormal)
+- _index_ ix_checkup_items_checkup_id(checkup_id)
+- _index_ ix_checkup_items_item_code(item_code)
 
 ## child_records
 
@@ -1893,6 +1908,8 @@
 - `summary` · VARCHAR(1024) · NOT NULL
 - `abnormal_items` · VARCHAR(512) · NOT NULL
 - `has_abnormal` · BOOLEAN · NOT NULL · index
+- `final_conclusion` · VARCHAR(1024) · NOT NULL
+- `final_doctor` · VARCHAR(64) · NOT NULL
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_physical_exams_has_abnormal(has_abnormal)
 - _index_ ix_physical_exams_patient_id(patient_id)
@@ -2011,6 +2028,45 @@
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_purchase_orders_org_id(org_id)
 - _index_ ix_purchase_orders_status(status)
+
+## qc_lots
+
+- `id` · INTEGER · PK · NOT NULL
+- `org_id` · INTEGER · NOT NULL · index · → organizations.id
+- `item_code` · VARCHAR(64) · NOT NULL · index
+- `item_name` · VARCHAR(128) · NOT NULL
+- `lot_no` · VARCHAR(64) · NOT NULL · index
+- `target_value` · FLOAT · NOT NULL
+- `sd` · FLOAT · NOT NULL
+- `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL · index
+- _unique_ (org_id, item_code, lot_no) uq_qc_lot_org_item_lot
+- _index_ ix_qc_lots_active(active)
+- _index_ ix_qc_lots_created_at(created_at)
+- _index_ ix_qc_lots_item_code(item_code)
+- _index_ ix_qc_lots_lot_no(lot_no)
+- _index_ ix_qc_lots_org_id(org_id)
+
+## qc_measurements
+
+- `id` · INTEGER · PK · NOT NULL
+- `lot_id` · INTEGER · NOT NULL · index · → qc_lots.id
+- `value` · FLOAT · NOT NULL
+- `measured_at` · VARCHAR(16) · NOT NULL
+- `operator` · VARCHAR(64) · NOT NULL
+- `warning` · BOOLEAN · NOT NULL
+- `out_of_control` · BOOLEAN · NOT NULL · index
+- `violated_rules` · VARCHAR(64) · NOT NULL
+- `handled` · BOOLEAN · NOT NULL · index
+- `handle_reason` · VARCHAR(512) · NOT NULL
+- `corrective_action` · VARCHAR(512) · NOT NULL
+- `handled_by` · VARCHAR(64) · NOT NULL
+- `handled_at` · DATETIME
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_qc_measurements_created_at(created_at)
+- _index_ ix_qc_measurements_handled(handled)
+- _index_ ix_qc_measurements_lot_id(lot_id)
+- _index_ ix_qc_measurements_out_of_control(out_of_control)
 
 ## qc_records
 
