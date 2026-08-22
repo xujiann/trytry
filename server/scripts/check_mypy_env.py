@@ -12,7 +12,14 @@
 
 所以在跑 mypy 之前先探一下：让它对 `Session.query` 做 `reveal_type`，
 若结果是 `Any`，说明 SQLAlchemy 的类型没被解析到，直接失败并说明怎么修。
+
+第二道探针是**版本**：`requirements-dev.txt` 把 mypy 钉在一个小版本区间里，
+因为大版本间推断差异极大（2.3 报 0 处，1.19 在同一份代码上报 138 处）。
+装了区间外的版本，本地和 CI 检查的就不是同一件事——这同样是「假绿」，
+只不过瞎的不是库解析而是版本。踩过一次：本地 1.19 全绿，CI 的 2.3
+报出 `is_suspect_risk` 收到 `Any | object`。
 """
+import re
 import shutil
 import subprocess
 import sys
@@ -26,10 +33,62 @@ PROBES = [
 ]
 
 
+#: 依赖清单的唯一真源——版本区间只写在 requirements-dev.txt，这里读它，不复制一份。
+REQUIREMENTS_DEV = Path(__file__).resolve().parent.parent / "requirements-dev.txt"
+
+
+def _version_tuple(text: str) -> tuple[int, ...]:
+    """把 "2.3.1" / "2.3" 变成可比较的整数元组（后缀如 rc1 直接截掉）。"""
+    return tuple(int(part) for part in re.findall(r"\d+", text)[:3])
+
+
+def _pinned_range() -> tuple[str, tuple[int, ...] | None, tuple[int, ...] | None]:
+    """从 requirements-dev.txt 里读 mypy 的下界/上界，读不到就返回空区间（不拦）。"""
+    spec = ""
+    for line in REQUIREMENTS_DEV.read_text(encoding="utf-8").splitlines():
+        line = line.split("#")[0].strip()
+        if line.lower().startswith("mypy"):
+            spec = line
+            break
+    low = high = None
+    for op, ver in re.findall(r"(>=|<=|<|==)\s*([0-9][0-9.]*)", spec):
+        if op in (">=", "=="):
+            low = _version_tuple(ver)
+        elif op in ("<", "<="):
+            high = _version_tuple(ver)
+    return spec, low, high
+
+
+def _check_version(mypy_bin: str) -> str:
+    """版本落在钉住的区间外就返回一段说明，落在区间内返回空串。"""
+    spec, low, high = _pinned_range()
+    if low is None and high is None:
+        return ""
+    out = subprocess.run([mypy_bin, "--version"], capture_output=True, text=True).stdout
+    found = re.search(r"(\d+\.\d+(?:\.\d+)?)", out)
+    if found is None:
+        return ""
+    got = _version_tuple(found.group(1))
+    if (low is not None and got < low) or (high is not None and got >= high):
+        return (
+            f"错误：mypy 版本 {found.group(1)} 不在 requirements-dev.txt 钉住的区间里"
+            f"（{spec}），本次检查结果与 CI 不可比。\n\n"
+            "大版本间推断差异极大，装错版本的「本地全绿」照样会在 CI 变红。\n\n"
+            f"当前用的 mypy：{mypy_bin}\n\n"
+            "怎么修：\n"
+            "    pip install -r server/requirements.txt -r server/requirements-dev.txt\n"
+        )
+    return ""
+
+
 def main() -> int:
     mypy_bin = shutil.which("mypy")
     if mypy_bin is None:
         print("错误：PATH 上找不到 mypy，请先 pip install -r requirements-dev.txt", file=sys.stderr)
+        return 1
+    version_problem = _check_version(mypy_bin)
+    if version_problem:
+        print(version_problem, file=sys.stderr)
         return 1
     blind = []
     with tempfile.TemporaryDirectory() as tmp:
