@@ -1,4 +1,5 @@
 """用户管理与审计日志（管理员），修改密码（本人）。"""
+import hmac
 import json
 from datetime import datetime, timedelta
 
@@ -233,7 +234,11 @@ def list_audit_logs(
 
 @router.get("/audit/verify", dependencies=[Depends(require_admin)])
 def verify_audit_chain(
-    start_id: int = 0, limit: int = 5000, db: Session = Depends(get_db)
+    start_id: int = 0,
+    limit: int = 5000,
+    anchor_id: int | None = None,
+    anchor_hash: str | None = None,
+    db: Session = Depends(get_db),
 ):
     """校验审计哈希链（阶段十一）。
 
@@ -243,7 +248,36 @@ def verify_audit_chain(
 
     起点若不是链首（start_id > 首条），只能校验这一段内部的自洽——
     这一点也如实报出，免得有人拿一段抽查结果当全量结论。
+
+    **外部锚点对账（P1-21）**：`anchor_id` + `anchor_hash` 传入某条锚点记录
+    （audit_anchor 任务写的 audit_anchors.jsonl / webhook 外发副本）的
+    tail_id / tail_entry_hash，校验"该行仍在库中、entry_hash 与锚点一致、
+    且其后链连续"——这是唯一能抓住"末尾截断"的口径：锚点所指行不在库里，
+    即疑似最新 N 条被删（或该段已归档，以归档 manifest 续查）。
+    不带锚点入参时响应字节与既有完全一致（新增字段仅在对账时出现）。
     """
+    if (anchor_id is None) != (anchor_hash is None):
+        raise HTTPException(status_code=422, detail="anchor_id 与 anchor_hash 须成对提供")
+    anchor: dict | None = None
+    if anchor_id is not None:
+        # 对账从锚点行起验：锚点行本身要在且哈希一致，其后（若有）链要连续
+        start_id = anchor_id
+        row = db.get(AuditLog, anchor_id)
+        if row is None:
+            anchor = {
+                "anchor_id": anchor_id,
+                "anchor_match": False,
+                "anchor_reason": "锚点所指的行已不在库中——疑似末尾截断"
+                                 "（若该段已归档，请核对归档 manifest 后续查）",
+            }
+        elif not hmac.compare_digest(row.entry_hash, anchor_hash or ""):
+            anchor = {
+                "anchor_id": anchor_id,
+                "anchor_match": False,
+                "anchor_reason": "该行 entry_hash 与外部锚点不符——锚点时刻之后该行被改动",
+            }
+        else:
+            anchor = {"anchor_id": anchor_id, "anchor_match": True, "anchor_reason": ""}
     rows = (
         db.query(AuditLog)
         .filter(AuditLog.id >= start_id)
@@ -252,12 +286,16 @@ def verify_audit_chain(
         .all()
     )
     if not rows:
-        return {"checked": 0, "valid": True, "note": "该区间没有审计记录"}
+        empty = {"checked": 0, "valid": True, "note": "该区间没有审计记录"}
+        if anchor is not None:
+            empty["valid"] = anchor["anchor_match"]
+            empty.update(anchor)
+        return empty
     # 未启用哈希链之前的历史记录（entry_hash 为空）不参与校验，单列报出
     legacy = [r for r in rows if not r.entry_hash]
     chained = [r for r in rows if r.entry_hash]
     result = verify_chain(chained) if chained else {"valid": True, "broken_at": None, "reason": ""}
-    return {
+    body = {
         "checked": len(chained),
         "legacy_unchained": len(legacy),
         "from_id": chained[0].id if chained else None,
@@ -267,6 +305,10 @@ def verify_audit_chain(
         "caliber": "哈希链能发现历史记录被改动；但拦不住有库权限且知道平台密钥者"
                    "重算整条链——不可抵赖需外部存证或只追加存储",
     }
+    if anchor is not None:
+        body["valid"] = bool(body["valid"]) and anchor["anchor_match"]
+        body.update(anchor)
+    return body
 
 
 @router.get("/audit/stats", dependencies=[Depends(require_admin)])

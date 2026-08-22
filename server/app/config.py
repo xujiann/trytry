@@ -265,6 +265,31 @@ class Settings(BaseSettings):
                 "（如 postgresql://user:pass@host:5432/medplat），"
                 "SQLite 无并发写能力且迁移链未在其上验证"
             )
+        # Redis 口径（P1-26）：**多实例特征 + 无 Redis = 拒启；单实例无 Redis = 强警告**。
+        # 取舍：单实例部署没 Redis 是合法形态（进程内存实现语义完整），一刀切拒启会
+        # 误伤小站；但多实例下登出令牌黑名单、登录防爆破锁定、限流计数与任务执行锁
+        # 全部退化为"各进程各一份"——已登出的令牌在别的 worker 仍可用，这是安全事故
+        # 而非降级，不该只靠一条没人看的警告兜着。多实例判据取部署面上仅有的两个信号
+        # （见 start.sh 与 docs/发布流程.md）：MEDPLAT_WORKERS>1（多 worker），或
+        # MEDPLAT_MIGRATE_ON_START=0（多实例部署要求迁移由发布流程单独跑）。
+        # 两个变量都是 start.sh 的 shell 口径而非 Settings 字段，与 MEDPLAT_SEED_DEMO
+        # 同一处理方式直接读 os.environ。
+        if not os.environ.get("MEDPLAT_REDIS_URL", ""):
+            workers = os.environ.get("MEDPLAT_WORKERS", "").strip()
+            multi_signals = []
+            if workers.isdigit() and int(workers) > 1:
+                multi_signals.append(f"MEDPLAT_WORKERS={workers}")
+            if os.environ.get("MEDPLAT_MIGRATE_ON_START", "").strip() == "0":
+                multi_signals.append("MEDPLAT_MIGRATE_ON_START=0")
+            if multi_signals:
+                problems.append(
+                    f"检测到多实例部署特征（{'、'.join(multi_signals)}）但未配置 "
+                    "MEDPLAT_REDIS_URL——多实例/多 worker 下登出令牌黑名单、"
+                    "登录防爆破锁定、限流计数与定时任务执行锁均依赖 Redis 共享存储，"
+                    "缺失即各进程各自为政（已登出令牌在其他实例仍可用）；"
+                    "请配置 Redis（见 app/state_store.py 与运维手册第八节），"
+                    "或确为单实例时移除该多实例配置"
+                )
         if problems:
             raise RuntimeError("生产环境配置不安全，拒绝启动：" + "；".join(problems))
         # 不拒启、只强警告：单实例部署没 Redis 是合法形态，多实例才是事故。

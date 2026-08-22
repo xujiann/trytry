@@ -14,14 +14,18 @@ import gzip
 import hashlib
 import hmac
 import json
+import logging
 from datetime import date, timedelta
 from pathlib import Path
 
+import httpx
 from sqlalchemy.orm import Session
 
 from .alerting import send_alert
+from .audit_chain import anchor_mac
 from .clock import now_naive
 from .config import settings
+from .egress import egress_url_allowed
 from .models import (
     AccessLog,
     AuditLog,
@@ -35,6 +39,8 @@ from .models import (
 )
 from .scheduler import register
 from .ws import manager
+
+logger = logging.getLogger("medplat.jobs")
 
 # 与 medwaste 路由同源的滞留天数上限
 from .routers.medwaste import STORAGE_LIMIT_DAYS
@@ -250,13 +256,11 @@ def esb_outbound_worker(db: Session) -> tuple[int, str]:
     - 投递失败走既有指数退避重试，耗尽转死信；**告警交由日志**——
       本轮有失败时打 warning，值班按日志与 /api/esb/stats 追查。
     """
-    import logging
-
     from .routers.esb import consume_pending_outbound
 
     processed, summary = consume_pending_outbound(db)
     if "失败 0" not in summary and processed:
-        logging.getLogger("medplat.jobs").warning("[ESB] 出站投递存在失败：%s", summary)
+        logger.warning("[ESB] 出站投递存在失败：%s", summary)
     return processed, summary
 
 
@@ -372,3 +376,83 @@ def audit_archive(db: Session) -> tuple[int, str]:
     except Exception as exc:  # 工程包 P2：审计归档失败涉及合规留存，主动外发告警后照常上抛
         send_alert("archive_failed:audit_logs", f"审计日志归档失败：{type(exc).__name__}: {exc}")
         raise
+
+
+# ---------------------------------------------------------------------------
+# 审计链外部锚点（P1-21）
+# ---------------------------------------------------------------------------
+
+#: 锚点文件：与归档 manifest 同目录，同样 append-only。
+ANCHOR_FILENAME = "audit_anchors.jsonl"
+#: 锚点外发超时（秒）：与 alerting 同一姿势——旁路外呼宁可发不出去也不拖任务。
+ANCHOR_WEBHOOK_TIMEOUT_SECONDS = 5.0
+
+
+def _last_anchor_mac(path: Path) -> str:
+    """锚点文件最后一行的 mac；无文件/空文件返回空串（链首）。"""
+    if not path.exists():
+        return ""
+    last = ""
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                last = line
+    if not last:
+        return ""
+    return str(json.loads(last).get("mac", ""))
+
+
+def _post_anchor(record: dict) -> str:
+    """锚点外发异机存证；返回结果摘要片段。失败仅 log——本地锚点已落盘。"""
+    url = settings.audit_anchor_webhook_url
+    if not url:
+        return ""
+    if not egress_url_allowed(url, "MEDPLAT_AUDIT_ANCHOR_WEBHOOK_URL"):
+        return "；webhook 未过出网校验，未外发"
+    try:
+        httpx.post(url, json=record, timeout=ANCHOR_WEBHOOK_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001 - 外发是旁路，失败不打断任务，下轮锚点会再发
+        logger.error("[AUDIT] 锚点 webhook 外发失败（本地锚点已写入），本条存证缺异机副本",
+                     exc_info=True)
+        return "；webhook 外发失败（见日志）"
+    return "；已外发异机存证"
+
+
+@register("audit_anchor", "审计链外部锚点", 86400)
+def audit_anchor(db: Session) -> tuple[int, str]:
+    """把审计链尾锚定到库外（P1-21）。
+
+    库内哈希链发现得了"历史记录被改"，发现不了"末尾删掉 N 条"——删尾之后
+    剩余链照样自洽。日跑一次，把链尾（最新带哈希行的 id / entry_hash + 全表
+    行数）写进 `upload_dir/archives/audit_anchors.jsonl`：截断后锚点所指的行
+    不在库里，`GET /api/audit/verify?anchor_id=&anchor_hash=` 对账即暴露。
+
+    - 锚点文件自身成链：每行含对上一行 mac 的 HMAC（audit_chain.anchor_mac，
+      独立用途派生密钥），删改锚点行同样看得出来；
+    - `MEDPLAT_AUDIT_ANCHOR_WEBHOOK_URL` 非空时同步 POST 外发（经 egress
+      出网校验，5s 超时，失败仅 log）——异机副本才是对"库+盘都有权限者"的
+      真正防线，本地锚点链防的是"顺手删几行"。
+    """
+    tail = (
+        db.query(AuditLog)
+        .filter(AuditLog.entry_hash != "")
+        .order_by(AuditLog.id.desc())
+        .first()
+    )
+    if tail is None:
+        return 0, "库内没有带哈希的审计记录，无链可锚"
+    total = db.query(AuditLog).count()
+    record = {
+        "at": now_naive().isoformat(),
+        "tail_id": tail.id,
+        "tail_entry_hash": tail.entry_hash,
+        "total_rows": total,
+    }
+    path = _archive_dir() / ANCHOR_FILENAME
+    prev_mac = _last_anchor_mac(path)
+    record["prev_mac"] = prev_mac
+    record["mac"] = anchor_mac(prev_mac, record)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    posted = _post_anchor(record)
+    return 1, f"锚定链尾 id={tail.id}（全表 {total} 行）{posted}"
