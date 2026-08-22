@@ -746,6 +746,7 @@
 - `supplier` · VARCHAR(128) · NOT NULL
 - `quantity` · INTEGER · NOT NULL
 - `used_quantity` · INTEGER · NOT NULL
+- `blocked_quantity` · INTEGER · NOT NULL
 - `status` · VARCHAR(16) · NOT NULL · index
 - `recall_reason` · VARCHAR(256) · NOT NULL
 - `created_at` · DATETIME · NOT NULL · index
@@ -2390,6 +2391,7 @@
 - _index_ ix_settlements_admission_id(admission_id)
 - _index_ ix_settlements_org_id(org_id)
 - _index_ ix_settlements_patient_id(patient_id)
+- _index_ uq_settlement_inpatient_admission(admission_id) UNIQUE
 
 ## shift_handovers
 
