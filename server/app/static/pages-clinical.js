@@ -258,8 +258,11 @@ async function uploadAttachment(ownerType, ownerId, fileInput) {
   fd.append("file", file);
   fd.append("owner_type", ownerType);
   fd.append("owner_id", ownerId);
+  // multipart 上传绕过 api()（不能带 JSON Content-Type）：Cookie 模式写请求补双提交 CSRF
   const resp = await fetch("/api/attachments", {
-    method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd });
+    method: "POST", credentials: "same-origin",
+    headers: token ? { Authorization: `Bearer ${token}` } : { "X-CSRF-Token": csrfToken() },
+    body: fd });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.detail || `上传失败(${resp.status})`);
   return data;
@@ -267,7 +270,10 @@ async function uploadAttachment(ownerType, ownerId, fileInput) {
 
 /* 块1：报告打印——服务端渲染的打印页需带令牌拉取，取回后写入新窗口并唤起打印 */
 async function openPrintPage(path) {
-  const resp = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+  const resp = await fetch(path, {
+    credentials: "same-origin",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
     throw new Error(data.detail || `打印页加载失败(${resp.status})`);
@@ -283,7 +289,10 @@ async function openPrintPage(path) {
 }
 
 async function downloadAttachment(id, filename) {
-  const resp = await fetch(`/api/attachments/${id}`, { headers: { Authorization: `Bearer ${token}` } });
+  const resp = await fetch(`/api/attachments/${id}`, {
+    credentials: "same-origin",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!resp.ok) throw new Error(`下载失败(${resp.status})`);
   const url = URL.createObjectURL(await resp.blob());
   const a = document.createElement("a");

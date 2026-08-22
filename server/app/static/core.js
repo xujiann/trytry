@@ -11,12 +11,27 @@
  * 每个 renderX 的引用，而函数声明只在**同一个文件内**提升。
  */
 
+/* 会话与鉴权（G3，P1-23 收口）：登录后令牌只存 HttpOnly Cookie（JS 读不到、
+ * XSS 偷不走），localStorage 只存非敏感的 role 与 CSRF token。
+ * - 迁移期兜底：旧版把 JWT 写进 localStorage("medplat_token")，这里**仍读取**
+ *   存量值并继续走 Header 模式，让升级前已登录的用户不被强制掉线；重新登录
+ *   （或登出）即切换 Cookie 模式并清掉旧存量。
+ * - CSRF token 存 localStorage 没有令牌那样的失窃风险：它防的是"跨站请求自动
+ *   携带 Cookie"，本身不是凭据——能读它的脚本已在同源页面内执行，那是 XSS
+ *   场景，CSRF 防线本就不针对它。 */
 let token = localStorage.getItem("medplat_token") || "";
+const CSRF_KEY = "medplat_csrf";
+
+function csrfToken() { return readCookie(CSRF_KEY) || localStorage.getItem(CSRF_KEY) || ""; }
+function isAuthed() { return Boolean(token) || Boolean(localStorage.getItem("medplat_role")); }
 
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const resp = await fetch(path, { ...options, headers });
+  if (token) headers.Authorization = `Bearer ${token}`;  // 迁移兜底：存量令牌仍走 Header
+  const method = (options.method || "GET").toUpperCase();
+  // Cookie 模式的写请求：双提交 CSRF（读请求服务端不强制）
+  if (!token && method !== "GET" && method !== "HEAD") headers["X-CSRF-Token"] = csrfToken();
+  const resp = await fetch(path, { ...options, credentials: "same-origin", headers });
   if (resp.status === 401) { logout(); throw new Error("登录已过期"); }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.detail || `请求失败(${resp.status})`);
@@ -24,9 +39,17 @@ async function api(path, options = {}) {
 }
 
 function logout() {
+  // 先请后端拉黑令牌并清 HttpOnly Cookie（直接 fetch 而不走 api()：
+  // api() 的 401 分支会调回本函数）；网络失败/本就未登录时照样本地退出。
+  fetch("/api/auth/logout", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrfToken(), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  }).catch(() => {});
   token = "";
   localStorage.removeItem("medplat_token");
   localStorage.removeItem("medplat_role");
+  localStorage.removeItem(CSRF_KEY);
   stopTodoPolling();
   $("#app-view").classList.add("hidden");
   $("#login-view").classList.remove("hidden");
@@ -129,7 +152,7 @@ let routeSeq = 0;
 let routing = false;
 
 async function route() {
-  if (!token) return;
+  if (!isAuthed()) return;
   routeSeq += 1;
   if (routing) return;  // 已有渲染在跑，它收尾时会处理最新这次
   routing = true;
@@ -433,7 +456,11 @@ async function renderAppointments() {
 
 async function downloadCsv(path, filename, msgSel) {
   try {
-    const resp = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+    // GET 导出：Cookie 模式凭 HttpOnly Cookie（credentials），迁移兜底仍带 Header
+    const resp = await fetch(path, {
+      credentials: "same-origin",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     if (!resp.ok) throw new Error(`导出失败(${resp.status})`);
     const url = URL.createObjectURL(await resp.blob());
     const a = document.createElement("a");

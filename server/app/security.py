@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 
 from . import gmcrypto
@@ -23,6 +24,36 @@ from .config import settings
 from .state_store import SessionRegistry, TokenBlacklist
 
 TOKEN_TTL_SECONDS = settings.token_ttl_seconds
+
+# ---------------------------------------------------------------------------
+# 会话 Cookie 与 CSRF（G3，P1-23 收口）：令牌双模下发的命名与随机源。
+#
+# 业务端与居民端各一对 Cookie：令牌本体进 **HttpOnly** Cookie（浏览器 JS 读不
+# 到，收掉 localStorage 存 JWT 的 XSS 失窃面），CSRF token 进**非 HttpOnly**
+# Cookie（双提交模式要求前端 JS 读出来放进 X-CSRF-Token 请求头）。两套名字
+# 严格分开——业务令牌与居民令牌本就互不越界（scope=portal），Cookie 也不共用。
+# ---------------------------------------------------------------------------
+
+#: 业务端令牌 / CSRF Cookie 名
+AUTH_COOKIE = "medplat_token"
+CSRF_COOKIE = "medplat_csrf"
+#: 居民端（portal）令牌 / CSRF Cookie 名
+PORTAL_AUTH_COOKIE = "medplat_portal_token"
+PORTAL_CSRF_COOKIE = "medplat_portal_csrf"
+#: 双提交校验的请求头名
+CSRF_HEADER = "X-CSRF-Token"
+#: 登录请求声明"走 Cookie 会话"的请求头（值须为 cookie）；见 deps.wants_cookie_auth
+COOKIE_MODE_HEADER = "X-Token-Transport"
+
+
+def new_csrf_token() -> str:
+    """生成 CSRF token（双提交 Cookie 模式）。
+
+    取舍：**无状态、不落库**。双提交只要求"请求头与随请求回带的 CSRF Cookie
+    一致"，服务端不必记住它；能改写受害者浏览器里本域 Cookie 的攻击者（XSS/
+    中间人）面前，落库版 CSRF 同样失守——落库换不来防护增量，只多一张表。
+    """
+    return secrets.token_urlsafe(32)
 
 
 def derive_key(secret: str, purpose: str) -> bytes:

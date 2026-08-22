@@ -29,7 +29,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .database import SessionLocal
 from .models import User
-from .security import decode_token, revoked_tokens
+from .security import AUTH_COOKIE, decode_token, revoked_tokens
 from .state_store import _redis_client
 
 router = APIRouter()
@@ -189,12 +189,21 @@ def _lookup_user_meta(token: str) -> tuple[int | None, str]:
 async def notifications_ws(websocket: WebSocket, token: str = ""):
     """实时通知通道。
 
-    鉴权方式（二选一）：
+    鉴权方式（三选一）：
     1. 首帧鉴权（推荐）：连接后第一条文本帧发送 JWT 令牌；
-    2. ?token= query 携带（兼容保留，注意令牌可能进入访问日志）。
+    2. ?token= query 携带（兼容保留，注意令牌可能进入访问日志）；
+    3. 会话 Cookie 兜底（G3）：Cookie 模式的前端不再持有裸令牌，握手时浏览器
+       自动携带的 HttpOnly Cookie 即凭据。仅当 Cookie 里的令牌**当前有效**时
+       采用；无效/缺失仍回退首帧鉴权，两种既有方式不受影响。WS 握手是 GET、
+       无副作用，SameSite=Lax 下跨站页面也无法用 Cookie 建立本通道的写能力，
+       故此处不做 CSRF 双提交。
     连接期每收到一条心跳消息即复核令牌有效性与黑名单，失效即断开。
     """
     await websocket.accept()
+    if not token:
+        cookie_token = websocket.cookies.get(AUTH_COOKIE, "")
+        if cookie_token and _token_valid(cookie_token):
+            token = cookie_token
     if not token:
         # 首帧鉴权：第一条文本帧即令牌
         try:

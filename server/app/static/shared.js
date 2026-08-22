@@ -34,3 +34,17 @@ function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+
+/**
+ * 读取一个**非 HttpOnly** Cookie 的值（G3 令牌 Cookie 化）。
+ *
+ * 三套前端都要用它取双提交 CSRF token（medplat_csrf / medplat_portal_csrf），
+ * 所以放本文件（与 $ / esc 同一"只许一份实现"的理由）。令牌本体在 HttpOnly
+ * Cookie 里，这个函数**读不到**——那正是 P1-23 收口的目的。
+ */
+function readCookie(name) {
+  for (const part of document.cookie.split("; ")) {
+    if (part.startsWith(name + "=")) return decodeURIComponent(part.slice(name.length + 1));
+  }
+  return "";
+}

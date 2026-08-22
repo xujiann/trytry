@@ -1,17 +1,31 @@
 /* 县域医共体 医生移动工作台（块4）
    待办 / 危急值确认与处置 / 待审检查申请 / 慢病随访录入 / 患者档案速查
-   复用居民端 m.css 风格，移动优先布局；令牌存 sessionStorage（关闭页面即失效）。 */
+   复用居民端 m.css 风格，移动优先布局。
+   会话（G3，P1-23 收口）：登录后令牌进 **HttpOnly Cookie**（与管理端共用
+   业务侧 medplat_token / medplat_csrf，JS 读不到令牌）；sessionStorage 只存
+   非敏感的用户名（兼作本页登录态标记，保留"关闭页面回登录页"的既有体验）。
+   迁移期兜底：旧版把令牌写 sessionStorage("medplat_doctor_token")，仍保留
+   读取并走 Header 模式，重新登录即切换 Cookie 模式。 */
 "use strict";
 
 const TOKEN_KEY = "medplat_doctor_token";
 const USER_KEY = "medplat_doctor_user";
+// 业务侧双提交 CSRF Cookie 名（非 HttpOnly，直接从 Cookie 读，不落 storage）
+const CSRF_KEY = "medplat_csrf";
 
-function token() { return sessionStorage.getItem(TOKEN_KEY) || ""; }
+function token() { return sessionStorage.getItem(TOKEN_KEY) || ""; }  // 仅迁移兜底
+function csrfToken() { return readCookie(CSRF_KEY); }
+function isAuthed() { return Boolean(token()) || Boolean(sessionStorage.getItem(USER_KEY)); }
 
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (token()) headers.Authorization = `Bearer ${token()}`;
-  const resp = await fetch(path, { ...options, headers });
+  if (token()) headers.Authorization = `Bearer ${token()}`;  // 迁移兜底：存量令牌走 Header
+  else {
+    const method = (options.method || "GET").toUpperCase();
+    // Cookie 模式的写请求：双提交 CSRF（读请求服务端不强制）
+    if (method !== "GET" && method !== "HEAD") headers["X-CSRF-Token"] = csrfToken();
+  }
+  const resp = await fetch(path, { ...options, credentials: "same-origin", headers });
   const data = await resp.json().catch(() => ({}));
   if (resp.status === 401) { logout(); throw new Error("登录已失效，请重新登录"); }
   if (!resp.ok) throw new Error(data.detail || `请求失败(${resp.status})`);
@@ -43,6 +57,13 @@ function showWorkbench(show) {
 }
 
 function logout() {
+  // 先请后端拉黑令牌并清 HttpOnly Cookie（直接 fetch 而不走 api()：
+  // api() 的 401 分支会调回本函数）；失败时照样本地退出
+  fetch("/api/auth/logout", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrfToken(), ...(token() ? { Authorization: `Bearer ${token()}` } : {}) },
+  }).catch(() => {});
   sessionStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(USER_KEY);
   showWorkbench(false);
@@ -54,11 +75,14 @@ $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#login-error").textContent = "";
   try {
-    const data = await api("/api/auth/login", {
+    // X-Token-Transport: cookie —— 声明走 Cookie 会话：令牌进 HttpOnly Cookie（G3）
+    await api("/api/auth/login", {
       method: "POST",
+      headers: { "X-Token-Transport": "cookie" },
       body: JSON.stringify({ username: $("#lg-user").value.trim(), password: $("#lg-pass").value }),
     });
-    sessionStorage.setItem(TOKEN_KEY, data.access_token);
+    // P1-23：不再把 access_token 写入 sessionStorage；旧存量一并清掉（切换 Cookie 模式）
+    sessionStorage.removeItem(TOKEN_KEY);
     sessionStorage.setItem(USER_KEY, $("#lg-user").value.trim());
     $("#lg-pass").value = "";
     showWorkbench(true);
@@ -230,7 +254,7 @@ function switchTab(tab) {
   document.querySelectorAll(".tab-btn").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === tab));
   window.scrollTo(0, 0);
-  if (token()) TABS[tab]();
+  if (isAuthed()) TABS[tab]();
 }
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -520,7 +544,9 @@ $("#pt-form").addEventListener("submit", async (e) => {
 
 /* ---------------- 启动 ---------------- */
 
-showWorkbench(Boolean(token()));
+// Cookie 会话下 USER_KEY（sessionStorage）是本页登录态标记：关闭页面即回登录页，
+// 保留旧版 sessionStorage 令牌时代的体验；Cookie 失效时首个 api() 401 统一登出
+showWorkbench(isAuthed());
 
 /* ============================================================================
  * 查房与手术（阶段二能力落到移动端）
