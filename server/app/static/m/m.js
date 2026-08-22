@@ -1,35 +1,61 @@
 /* 县域医共体 居民端移动版 H5
 
    身份体系：手机号验证码 / 微信网页授权登录 → 实名绑定 → 查档案。
-   令牌存 localStorage，所有 /api/portal/me/* 请求自动带上；401 即视为掉线，
-   清本地令牌并退回登录态（不做静默刷新，居民端会话本来就有 7 天）。 */
+   会话（G3，P1-23 收口）：登录后令牌只存 **HttpOnly Cookie**（JS 读不到、
+   XSS 偷不走），本地只存非敏感的双提交 CSRF token（medplat_portal_csrf，
+   其在 localStorage 的存在同时充当"已登录"标记）。401 即视为掉线，清本地
+   状态并退回登录态（不做静默刷新，居民端会话本来就有 7 天）。
+   迁移期兜底：旧版把令牌写 localStorage("medplat_portal_token")，仍保留
+   **读取**，让升级前已登录的用户继续以 Header 模式工作；新登录不再写入，
+   重新登录即切换 Cookie 模式。 */
 "use strict";
 
 const TOKEN_KEY = "medplat_portal_token";
+// CSRF token 可入 localStorage：它防"跨站自动携带 Cookie"，不是凭据本身——
+// 能读它的脚本已在同源内执行（XSS 场景），CSRF 防线本就不针对那种场景。
+const CSRF_KEY = "medplat_portal_csrf";
 
 const token = {
-  get: () => localStorage.getItem(TOKEN_KEY) || "",
-  set: (v) => localStorage.setItem(TOKEN_KEY, v),
+  get: () => localStorage.getItem(TOKEN_KEY) || "",   // 仅迁移兜底，登录不再写入
   clear: () => localStorage.removeItem(TOKEN_KEY),
 };
 
+function csrfToken() { return readCookie(CSRF_KEY) || localStorage.getItem(CSRF_KEY) || ""; }
+function isAuthed() { return Boolean(token.get()) || Boolean(localStorage.getItem(CSRF_KEY)); }
+/** 登录成功：令牌已在 HttpOnly Cookie 里，本地只记 CSRF（兼作登录态标记）。 */
+function markLoggedIn() {
+  token.clear();
+  localStorage.setItem(CSRF_KEY, readCookie(CSRF_KEY));
+}
+function clearAuth() {
+  token.clear();
+  localStorage.removeItem(CSRF_KEY);
+}
+
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  const resp = await fetch(path, { ...options, headers });
+  const resp = await fetch(path, { ...options, credentials: "same-origin", headers });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.detail || `请求失败(${resp.status})`);
   return data;
 }
 
-/** 带令牌的请求；令牌失效时清理本地状态并回到登录页。 */
+/** 登录态请求：Cookie 会话自动携带（写请求补双提交 CSRF 头）；
+    存量 localStorage 令牌走 Header 兜底。失效时清理本地状态并回到登录页。 */
 async function authApi(path, options = {}) {
+  if (!isAuthed()) throw new Error("请先登录");
   const t = token.get();
-  if (!t) throw new Error("请先登录");
+  const auth = {};
+  if (t) auth.Authorization = `Bearer ${t}`;
+  else {
+    const method = (options.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") auth["X-CSRF-Token"] = csrfToken();
+  }
   try {
-    return await api(path, { ...options, headers: { Authorization: `Bearer ${t}`, ...(options.headers || {}) } });
+    return await api(path, { ...options, headers: { ...auth, ...(options.headers || {}) } });
   } catch (err) {
     if (/401|登录状态无效|请先登录|已退出登录|账户不存在/.test(err.message)) {
-      token.clear();
+      clearAuth();
       renderArchiveTab();
     }
     throw err;
@@ -143,11 +169,12 @@ $("#btn-send-code").addEventListener("click", async () => {
 $("#sms-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
-    const data = await api("/api/portal/auth/sms/login", {
+    await api("/api/portal/auth/sms/login", {
       method: "POST",
+      headers: { "X-Token-Transport": "cookie" },  // 声明 Cookie 会话：令牌进 HttpOnly Cookie
       body: JSON.stringify({ phone: $("#in-phone").value.trim(), code: $("#in-code").value.trim() }),
     });
-    token.set(data.access_token);
+    markLoggedIn();
     $("#in-code").value = "";
     renderArchiveTab();
     refreshNotifyDot();
@@ -159,11 +186,12 @@ $("#sms-form").addEventListener("submit", async (e) => {
 /* ---------------- 登录：微信 ---------------- */
 
 async function wechatLogin(code) {
-  const data = await api("/api/portal/auth/wechat/login", {
+  await api("/api/portal/auth/wechat/login", {
     method: "POST",
+    headers: { "X-Token-Transport": "cookie" },  // 声明 Cookie 会话：令牌进 HttpOnly Cookie
     body: JSON.stringify({ code }),
   });
-  token.set(data.access_token);
+  markLoggedIn();
   renderArchiveTab();
   refreshNotifyDot();
 }
@@ -219,7 +247,7 @@ $("#btn-logout").addEventListener("click", async () => {
   } catch (err) {
     // 令牌本就失效时忽略，本地照样退出
   }
-  token.clear();
+  clearAuth();
   viewingPatientId = null;
   renderArchiveTab();
   renderServiceTab();
@@ -245,7 +273,7 @@ function showPane(name) {
 
 /** 依据登录/绑定状态渲染「我的档案」页，是该页唯一的状态入口。 */
 async function renderArchiveTab() {
-  if (!token.get()) {
+  if (!isAuthed()) {
     showPane("login");
     return;
   }
@@ -417,7 +445,7 @@ $("#btn-service-login").addEventListener("click", () => {
 
 async function renderServiceTab() {
   let bound = false;
-  if (token.get()) {
+  if (isAuthed()) {
     try {
       bound = (await authApi("/api/portal/me")).bound;
     } catch (err) {
@@ -672,7 +700,7 @@ $("#btn-goto-login").addEventListener("click", () => {
 
 async function renderSurveyTab() {
   let bound = false;
-  if (token.get()) {
+  if (isAuthed()) {
     try {
       bound = (await authApi("/api/portal/me")).bound;
     } catch (err) {
@@ -753,7 +781,7 @@ $("#btn-notify-login").addEventListener("click", () => {
 /** 未读红点。未登录时静默跳过——登录页不该因为拉不到消息而报错。 */
 async function refreshNotifyDot() {
   const dot = $("#notify-dot");
-  if (!token.get()) return dot.classList.add("hidden");
+  if (!isAuthed()) return dot.classList.add("hidden");
   try {
     const { unread } = await authApi("/api/portal/me/notifications/unread-count");
     dot.classList.toggle("hidden", unread === 0);
@@ -765,7 +793,7 @@ async function refreshNotifyDot() {
 async function renderNotifyTab() {
   const box = $("#notify-box");
   const guard = $("#notify-guard");
-  if (!token.get()) {
+  if (!isAuthed()) {
     guard.classList.remove("hidden");
     box.innerHTML = "";
     return;
@@ -866,7 +894,7 @@ if (spdLoginBtn) {
 
 async function renderSpdTab() {
   let bound = false;
-  if (token.get()) {
+  if (isAuthed()) {
     try { bound = (await authApi("/api/portal/me")).bound; } catch (err) { bound = false; }
   }
   $("#spd-guard").classList.toggle("hidden", bound);

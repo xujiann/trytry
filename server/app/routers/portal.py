@@ -24,7 +24,7 @@ import secrets
 from datetime import timedelta
 from typing import Callable, Iterable
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -70,7 +70,16 @@ from ..models import (
     Ward,
     utcnow,
 )
-from ..security import create_token, decode_token, hash_password, revoked_tokens, verify_password
+from ..deps import clear_auth_cookies, set_auth_cookies, token_from_request, wants_cookie_auth
+from ..security import (
+    PORTAL_AUTH_COOKIE,
+    PORTAL_CSRF_COOKIE,
+    create_token,
+    decode_token,
+    hash_password,
+    revoked_tokens,
+    verify_password,
+)
 from ..sms import get_sms_provider
 from ..state_store import LoginFailureTracker, SlidingWindowRateLimiter
 from ..wechat import MockWeChatProvider, get_wechat_provider
@@ -264,7 +273,9 @@ def _autobind_by_phone(db: Session, account: ResidentAccount) -> None:
         account.patient_id = patient.id
 
 
-def _login_result(db: Session, account: ResidentAccount) -> dict:
+def _login_result(
+    db: Session, account: ResidentAccount, request: Request, response: Response
+) -> dict:
     account_id = account.id
     account.last_login_at = now_naive()
     try:
@@ -277,8 +288,18 @@ def _login_result(db: Session, account: ResidentAccount) -> dict:
         account.last_login_at = now_naive()
         db.commit()
     patient = db.get(Patient, account.patient_id) if account.patient_id else None
+    token = _issue_token(account)
+    # G3 双模会话（P1-23）：前端声明 X-Token-Transport: cookie 时，居民令牌进
+    # HttpOnly Cookie 并配发 CSRF Cookie（与业务端同一套双提交防线，Cookie 名独立）。
+    # 响应体 access_token 保持原样，Header 模式对接方零感知。
+    if wants_cookie_auth(request):
+        set_auth_cookies(
+            response, token,
+            cookie_name=PORTAL_AUTH_COOKIE, csrf_cookie_name=PORTAL_CSRF_COOKIE,
+            max_age=settings.portal_token_ttl_seconds,
+        )
     return {
-        "access_token": _issue_token(account),
+        "access_token": token,
         "token_type": "bearer",
         "expires_in": settings.portal_token_ttl_seconds,
         "bound": patient is not None,
@@ -318,7 +339,7 @@ class SmsLoginIn(BaseModel):
 
 
 @router.post("/auth/sms/login")
-def sms_login(body: SmsLoginIn, request: Request, db: Session = Depends(get_db)):
+def sms_login(body: SmsLoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     """手机号验证码登录：首次登录自动开户，命中唯一患者时顺带完成实名绑定。"""
     phone = _check_phone(body.phone)
     client_ip = request.client.host if request.client else "unknown"
@@ -344,7 +365,7 @@ def sms_login(body: SmsLoginIn, request: Request, db: Session = Depends(get_db))
     record_login_event(
         db, username=f"sms:{phone}", ip=client_ip, success=True, channel="sms"
     )
-    return _login_result(db, account)
+    return _login_result(db, account, request, response)
 
 
 # ============================================================================
@@ -373,7 +394,7 @@ class WeChatLoginIn(BaseModel):
 
 
 @router.post("/auth/wechat/login")
-def wechat_login(body: WeChatLoginIn, request: Request, db: Session = Depends(get_db)):
+def wechat_login(body: WeChatLoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     """微信授权码登录：首次授权自动开户，仍需实名绑定后才可见档案。"""
     client_ip = request.client.host if request.client else "unknown"
     info = get_wechat_provider().exchange_code(body.code)
@@ -400,7 +421,7 @@ def wechat_login(body: WeChatLoginIn, request: Request, db: Session = Depends(ge
     record_login_event(
         db, username=f"wechat:{info['openid']}", ip=client_ip, success=True, channel="wechat"
     )
-    return _login_result(db, account)
+    return _login_result(db, account, request, response)
 
 
 # ============================================================================
@@ -409,16 +430,26 @@ def wechat_login(body: WeChatLoginIn, request: Request, db: Session = Depends(ge
 
 
 def current_resident(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_portal_bearer),
     db: Session = Depends(get_db),
 ) -> ResidentAccount:
-    """解析居民令牌 → 账户。业务端令牌（无 scope=portal）在此被拒。"""
-    if credentials is None:
+    """解析居民令牌 → 账户。业务端令牌（无 scope=portal）在此被拒。
+
+    G3 双模：header 优先，缺失时读居民端 HttpOnly Cookie（Cookie 模式的写请求
+    先过 CSRF 双提交校验，与业务端 get_current_user 同一套助手）。业务端的
+    medplat_token Cookie 在这里**不被读取**——两套 Cookie 名严格分开。
+    """
+    token = token_from_request(
+        request, credentials,
+        cookie_name=PORTAL_AUTH_COOKIE, csrf_cookie_name=PORTAL_CSRF_COOKIE,
+    )
+    if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
-    claims = decode_token(credentials.credentials)
+    claims = decode_token(token)
     if claims is None or claims.get("scope") != "portal":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登录状态无效，请重新登录")
-    if (claims.get("jti") or credentials.credentials) in revoked_tokens:
+    if (claims.get("jti") or token) in revoked_tokens:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="已退出登录")
     account = db.get(ResidentAccount, claims.get("account_id", 0))
     if account is None or account.status != "active":
@@ -438,14 +469,26 @@ def current_resident_patient(
 
 @router.post("/auth/logout")
 def portal_logout(
+    request: Request,
+    response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(_portal_bearer),
     account: ResidentAccount = Depends(current_resident),
 ):
-    """退出登录：按 jti 拉黑当前令牌（与业务端登出同一黑名单）。"""
-    if credentials is None:  # pragma: no cover - current_resident 先行 401，走不到这里
+    """退出登录：按 jti 拉黑当前令牌（与业务端登出同一黑名单）。
+
+    G3：Cookie 会话的令牌从 Cookie 里取（与 current_resident 同一优先级），
+    并顺带清掉两个会话 Cookie。
+    """
+    token = (
+        credentials.credentials
+        if credentials is not None
+        else request.cookies.get(PORTAL_AUTH_COOKIE, "")
+    )
+    if not token:  # pragma: no cover - current_resident 先行 401，走不到这里
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
-    claims = decode_token(credentials.credentials) or {}
-    revoked_tokens.add(claims.get("jti") or credentials.credentials, ttl_seconds=settings.portal_token_ttl_seconds)
+    claims = decode_token(token) or {}
+    revoked_tokens.add(claims.get("jti") or token, ttl_seconds=settings.portal_token_ttl_seconds)
+    clear_auth_cookies(response, cookie_name=PORTAL_AUTH_COOKIE, csrf_cookie_name=PORTAL_CSRF_COOKIE)
     return {"logged_out": True}
 
 

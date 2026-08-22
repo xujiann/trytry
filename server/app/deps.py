@@ -1,3 +1,4 @@
+import hmac
 import time
 from datetime import date, timedelta, timezone
 from typing import Iterable, TypeVar
@@ -11,9 +12,96 @@ from .clock import now_naive
 from .config import settings
 from .database import get_db
 from .models import OrgGroup, OrgGroupMember, User
-from .security import active_sessions, decode_token, revoked_tokens
+from .security import (
+    AUTH_COOKIE,
+    COOKIE_MODE_HEADER,
+    CSRF_COOKIE,
+    CSRF_HEADER,
+    active_sessions,
+    decode_token,
+    new_csrf_token,
+    revoked_tokens,
+)
 
 _bearer = HTTPBearer(auto_error=False)
+
+# ---------------------------------------------------------------------------
+# 双模会话（G3，P1-23 收口）：Authorization header 优先，缺失时读 HttpOnly Cookie。
+# 业务端与居民端（routers/portal.current_resident）共用下面三个助手，只是 Cookie
+# 名不同（security.AUTH_COOKIE/CSRF_COOKIE 与 PORTAL_*）。
+# ---------------------------------------------------------------------------
+
+#: Cookie 模式下必须过 CSRF 双提交校验的写方法；读请求不强制——无副作用，
+#: 且 SameSite=Lax 已挡住跨站自动携带的绝大多数场景。
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def wants_cookie_auth(request: Request) -> bool:
+    """登录请求是否声明走 Cookie 会话（前端带 `X-Token-Transport: cookie`）。
+
+    做成**显式 opt-in** 而不是登录一律 Set-Cookie，是刻意的取舍：令牌 Cookie
+    一旦无条件下发，任何 HTTP 客户端的 Cookie 罐都会在后续请求自动回带，
+    "无 Authorization 头 == 未认证（401）"这一既有语义就被悄悄改写——全仓
+    几十处既有用例与对接方脚本依赖它（第 7 条向后兼容）。三套浏览器前端
+    登录时总是带此头，拿到完整的 HttpOnly+CSRF 防线；Header 对接方零感知。
+    """
+    return request.headers.get(COOKIE_MODE_HEADER, "").strip().lower() == "cookie"
+
+
+def set_auth_cookies(
+    response: Response, token: str, *, cookie_name: str, csrf_cookie_name: str, max_age: int
+) -> None:
+    """下发会话 Cookie 对：令牌进 HttpOnly，CSRF token 进非 HttpOnly（双提交）。
+
+    SameSite=Lax 挡跨站写请求的自动携带；Path=/ 覆盖全站；生产环境
+    （settings.is_production）加 Secure，仅经 HTTPS 传输。
+    """
+    secure = settings.is_production
+    response.set_cookie(
+        cookie_name, token,
+        max_age=max_age, httponly=True, samesite="lax", secure=secure, path="/",
+    )
+    response.set_cookie(
+        csrf_cookie_name, new_csrf_token(),
+        max_age=max_age, httponly=False, samesite="lax", secure=secure, path="/",
+    )
+
+
+def clear_auth_cookies(response: Response, *, cookie_name: str, csrf_cookie_name: str) -> None:
+    """登出清 Cookie（Header 模式下浏览器本就没有这两个 Cookie，删除是空操作）。"""
+    response.delete_cookie(cookie_name, path="/")
+    response.delete_cookie(csrf_cookie_name, path="/")
+
+
+def token_from_request(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+    *,
+    cookie_name: str,
+    csrf_cookie_name: str,
+) -> str | None:
+    """双模取令牌：Authorization header 优先，缺失时读会话 Cookie。
+
+    - **Header 模式完全不做 CSRF 校验**：令牌由脚本显式放进请求头，浏览器
+      不会跨站自动携带，没有 CSRF 攻击面——既有对接方行为逐字节不变；
+    - **Cookie 模式的写请求**（POST/PUT/PATCH/DELETE）必须带 X-CSRF-Token 头
+      且与随请求回带的 CSRF Cookie 一致（双提交），否则 403。比较用
+      hmac.compare_digest，防时序侧信道。
+    """
+    if credentials is not None:
+        return credentials.credentials
+    token = request.cookies.get(cookie_name) or ""
+    if not token:
+        return None
+    if request.method.upper() in _UNSAFE_METHODS:
+        provided = request.headers.get(CSRF_HEADER) or ""
+        expected = request.cookies.get(csrf_cookie_name) or ""
+        if not provided or not expected or not hmac.compare_digest(provided, expected):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF 校验失败：Cookie 会话的写请求必须携带与 CSRF Cookie 一致的 X-CSRF-Token 头",
+            )
+    return token
 
 #: 等保 E1 口令最长使用期（天）。刻意用常量而不进 config：这是合规口径不是部署偏好，
 #: 做成环境变量只会诱导现场把它调成 36500"关掉"。超期判定见 get_current_user；
@@ -153,13 +241,17 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> User:
-    if credentials is None:
+    # G3 双模：header 优先，缺失时读 HttpOnly Cookie（Cookie 模式写请求先过 CSRF）
+    token = token_from_request(
+        request, credentials, cookie_name=AUTH_COOKIE, csrf_cookie_name=CSRF_COOKIE
+    )
+    if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未提供令牌")
-    claims = decode_token(credentials.credentials)
+    claims = decode_token(token)
     if claims is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌无效或已过期")
     # L-9 整改：黑名单按 jti 判定（存储中不再落完整令牌明文）；无 jti 的旧令牌按原文兜底
-    if (claims.get("jti") or credentials.credentials) in revoked_tokens:
+    if (claims.get("jti") or token) in revoked_tokens:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌已登出失效")
     # 居民端令牌（scope=portal）不得进入业务接口：居民账户不在 users 表内，
     # 这里显式拒绝，避免有人建一个叫 "resident:1" 的业务账号来撞 sub。

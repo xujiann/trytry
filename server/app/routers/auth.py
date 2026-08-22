@@ -12,7 +12,7 @@
 """
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -20,10 +20,13 @@ from sqlalchemy.orm import Session
 from .. import totp
 from ..config import settings
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import clear_auth_cookies, get_current_user, set_auth_cookies, wants_cookie_auth
 from ..models import LoginLog, User
 from ..schemas import LoginRequest, TokenResponse
 from ..security import (
+    AUTH_COOKIE,
+    CSRF_COOKIE,
+    TOKEN_TTL_SECONDS,
     active_sessions,
     create_token,
     decode_token,
@@ -113,7 +116,7 @@ class LoginOut(TokenResponse):
 
 
 @router.post("/login", response_model=LoginOut, response_model_exclude_none=True)
-def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
+def login(body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     client_ip = request.client.host if request.client else "unknown"
 
     def fail(status_code: int, detail: str, reason: str, user_id: int | None = None):
@@ -170,6 +173,14 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         ttl = max(int(claims.get("exp", 0) - time.time()), 60)
         active_sessions.register(user.username, str(claims.get("jti", "")), ttl_seconds=ttl)
     record_login_event(db, username=user.username, ip=client_ip, success=True, user_id=user.id)
+    # G3 双模会话（P1-23）：前端声明 X-Token-Transport: cookie 时，同一枚令牌
+    # 同时进 HttpOnly Cookie 并配发 CSRF Cookie（双提交）。响应体 access_token
+    # 保持原样返回，Header 模式对接方零感知；opt-in 的取舍见 deps.wants_cookie_auth。
+    if wants_cookie_auth(request):
+        set_auth_cookies(
+            response, token,
+            cookie_name=AUTH_COOKIE, csrf_cookie_name=CSRF_COOKIE, max_age=TOKEN_TTL_SECONDS,
+        )
     return LoginOut(
         access_token=token, role=user.role, totp_setup_required=totp_setup_required
     )
@@ -180,21 +191,29 @@ class LogoutOut(BaseModel):
 
 
 @router.post("/logout", response_model=LogoutOut, dependencies=[Depends(get_current_user)])
-def logout(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)):
+def logout(
+    request: Request,
+    response: Response,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+):
     """登出：当前令牌加入黑名单立即失效。
 
     L-9 整改：按令牌 jti 拉黑（Redis/内存中不再存完整令牌明文），
     TTL 取令牌剩余寿命；无 jti 的历史令牌退回按原文拉黑。
     等保 E1：同时从会话登记中移除，即时释放并发名额。
+    G3：Cookie 会话的令牌从 Cookie 里取（与 get_current_user 同一优先级：
+    header 优先），并顺带清掉两个会话 Cookie。
     """
-    if credentials is not None:
-        claims = decode_token(credentials.credentials)
+    token = credentials.credentials if credentials is not None else request.cookies.get(AUTH_COOKIE, "")
+    if token:
+        claims = decode_token(token)
         if claims and claims.get("jti"):
             ttl = max(int(claims.get("exp", 0) - time.time()), 60)
             revoked_tokens.add(claims["jti"], ttl_seconds=ttl)
             active_sessions.remove(str(claims.get("sub", "")), claims["jti"])
         else:  # pragma: no cover - 兼容无 jti 的历史令牌
-            revoked_tokens.add(credentials.credentials)
+            revoked_tokens.add(token)
+    clear_auth_cookies(response, cookie_name=AUTH_COOKIE, csrf_cookie_name=CSRF_COOKIE)
     return LogoutOut(logged_out=True)
 
 

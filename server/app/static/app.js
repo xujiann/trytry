@@ -109,17 +109,24 @@ const PAGES = [
 $("#login-form").onsubmit = async (e) => {
   e.preventDefault();
   try {
-    const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify({
-      username: $("#login-username").value, password: $("#login-password").value }) });
-    token = data.access_token;
-    localStorage.setItem("medplat_token", token);
+    // X-Token-Transport: cookie —— 声明走 Cookie 会话：令牌进 HttpOnly Cookie（G3）
+    const data = await api("/api/auth/login", { method: "POST",
+      headers: { "X-Token-Transport": "cookie" },
+      body: JSON.stringify({
+        username: $("#login-username").value, password: $("#login-password").value }) });
+    // P1-23：不再把 access_token 写入 localStorage；旧存量一并清掉（切换 Cookie 模式）
+    token = "";
+    localStorage.removeItem("medplat_token");
     localStorage.setItem("medplat_role", data.role);
+    localStorage.setItem(CSRF_KEY, readCookie(CSRF_KEY));
     enterApp();
   } catch (err) { $("#login-error").textContent = err.message; }
 };
 window.addEventListener("hashchange", route);
 
-if (token) enterApp();
+// Cookie 会话页面刷新后仍在（Cookie 持久）：以 role 标记判断登录态，
+// Cookie 失效时首个 api() 401 会统一走 logout() 回到登录页
+if (isAuthed()) enterApp();
 else $("#login-view").classList.remove("hidden");
 
 /* ============================================================================
