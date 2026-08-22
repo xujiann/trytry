@@ -22,7 +22,7 @@ WS 侧不会跟着补，谁也不会发现。
 | 2 | 登出黑名单用什么键 | `security.revocation_key` |
 | 3 | 档案调阅授权此刻是否有效 | `visibility.active_authorization_grants` |
 | 4 | 患者可见性判定与留痕（绑死的一次动作） | `visibility._write_access_log` |
-| 5 | PII 列（证件号/手机号）如何进查询 | `pii.pii_filter` / `pii.pii_index_match` |
+| 5 | PII 列（证件号/手机号）如何进查询 | `pii.pii_filter` / `pii.pii_index_match`（判定本身由 `tests/test_pii_query_point_guard.py` 守，本文件只把它计入覆盖面）|
 | 6 | 一个批次还能发多少 | `dispense.batch_available` |
 | 7 | 押金余额是多少 | `billing.deposit_balance` |
 
@@ -41,6 +41,12 @@ WS 侧不会跟着补，谁也不会发现。
 本文件第一版的 PII 那条就是这么被自己抓住的——它盯"裸等值比较"，
 而收敛后的代码里那种写法一处都没有，于是它永远不会响。现在每类判定的
 落脚点数为 0 即断言失败，扫描器空转当场暴露。
+
+第 5 条后来整条让给了 `tests/test_pii_query_point_guard.py`：同一条判定有
+两份守卫，正是本文件要消灭的形状；且那份的加密列清单是从模型元数据推导的，
+本文件初版却是手写的。留元数据那份。但它仍留在上表与覆盖面报表里——
+"由别人守"和"没人守"在报表上必须长得不一样，落脚点数直接引它的扫描结果，
+那份守卫被删或被改到空转，本文件跟着红。
 """
 import ast
 from pathlib import Path
@@ -360,100 +366,15 @@ def test_患者调阅留痕只由可见性模块写():
 # ---------------------------------------------------------------- 扫描 5
 
 
-#: 加密存储的 PII 列（见 `app/pii.py` 模块 docstring）与其检索助手。
-PII_MODELS = {"Patient", "ResidentAccount"}
-PII_COLUMNS = {"id_card", "phone", "id_card_idx", "phone_idx"}
-PII_HELPERS = {"pii_filter", "pii_index_match"}
-
-
-def _pii_column_uses(tree: ast.AST):
-    """每一处**在查询里用到 PII 列**的地方，以及它是不是经助手用的。
-
-    盯"用到"而不是盯"等值比较"：后者在收敛后的代码里一个落脚点都没有
-    （列都作为参数传给 `pii_filter` 了），于是那条扫描永远 0 违规——
-    看起来在守，其实是空转。本文件的自证断言就是这么发现它的。
-    """
-    allowed = set()
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id in PII_HELPERS
-        ):
-            for arg in node.args:
-                for inner in ast.walk(arg):
-                    allowed.add(id(inner))
-    # 模糊检索（like/contains）是**另一个问题**，不是等值检索的第二份实现：
-    # 密文列上它恒空，pii.py 的模块 docstring 把这条降级写在案——开态改走
-    # 索引列全值命中。所以放行它，但要求同一个函数里确实配了那条降级
-    # （只写模糊分支、不配降级，才是开关一打开就静默查不到的那种缺陷）。
-    fuzzy = set()
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in ("like", "contains", "ilike")
-        ):
-            fuzzy.add(id(node.func.value))
-
-    uses = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Attribute)
-            and node.attr in PII_COLUMNS
-            and isinstance(node.value, ast.Name)
-            and node.value.id in PII_MODELS
-        ):
-            kind = "helper" if id(node) in allowed else (
-                "fuzzy" if id(node) in fuzzy else "raw"
-            )
-            uses.append((f"{node.value.id}.{node.attr}", node.lineno, kind))
-    return uses
-
-
-def _function_has_pii_helper(fn: ast.AST) -> bool:
-    return any(
-        isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in PII_HELPERS
-        for n in ast.walk(fn)
-    )
-
-
-def test_PII列检索只有一份口径():
-    """证件号/手机号在查询里一律经 `pii_filter` / `pii_index_match`。
-
-    与 ws 那份拷贝同一形状的已发现实例：裸写 `id_card_idx == ...` 绕过
-    `pii_filter`，于是密钥轮换宽限期内旧钥数据检索不到——查不到不是报错，
-    而是"这人没建过档"，接口顺手再建一条重复主数据、居民端重复开户。
-    开关关态下裸比较照样"能跑"，两份口径于是可以一直各自演化。
-    """
-    bad = []
-    for module, tree in MODULES.items():
-        if module in ("app/pii.py", "app/models/core.py"):
-            continue
-        # 按函数遍历会漏掉"不在任何函数里"的模块级用法——先自查一遍扫描面，
-        # 数目对不上说明有用法落在函数之外，扫描器看不见（今天为 0，将来未必）。
-        covered = sum(len(_pii_column_uses(fn)) for _, fn in _functions(tree))
-        assert covered == len(_pii_column_uses(tree)), (
-            f"{module} 有 PII 列用法落在函数之外，本扫描看不见它"
-        )
-        # 按**函数**判：模糊分支要不要放行，取决于同一个函数里配没配那条降级。
-        for qualname, fn in _functions(tree):
-            paired = _function_has_pii_helper(fn)
-            for expr, lineno, kind in _pii_column_uses(fn):
-                if kind == "helper":
-                    continue
-                if kind == "fuzzy":
-                    if paired:
-                        continue  # 模糊检索 + 开态走索引列全值命中，pii.py 已写明的降级
-                    bad.append(
-                        f"{module}::{qualname}:{lineno} 对 {expr} 做模糊检索却没配开态降级"
-                        "（密文列上 like/contains 恒空，开关一打开就静默查不到）"
-                    )
-                else:
-                    bad.append(
-                        f"{module}::{qualname}:{lineno} 直接拿 {expr} 进查询，未经 pii_filter"
-                    )
-    _check(bad, "PII 列检索")
+# PII 加密列的检索口径**不在本文件重复判定**：`tests/test_pii_query_point_guard.py`
+# 已经守着同一条判定，且它的加密列清单是从模型元数据（`EncryptedPII` 列类型）
+# 推导的，本文件初版是手写的 `PII_COLUMNS = {...}`——两份同判定的守卫本身就是
+# 本轮要消灭的形状，手写清单更是上一轮刚拆掉的形状，所以留元数据那份、删这份。
+#
+# 但这类判定仍要出现在下面的覆盖面自证里：一条判定"由别人守"和"没人守"在
+# 报表上必须长得不一样。于是这里直接引它的扫描结果做落脚点计数——那份守卫哪天
+# 被删或被改到空转，本文件的自证断言会跟着红，而不是悄悄少守一条。
+from test_pii_query_point_guard import RESULT as _PII_SCAN  # noqa: E402
 
 
 # ---------------------------------------------------------------- 扫描 6
@@ -518,7 +439,9 @@ def _scan_census() -> dict[str, tuple[int, str]]:
     也报出来——点数掉到 0 就说明扫描器空转了，下面的断言会拦住。
     """
     admission = blacklist = authorization = access_log = 0
-    pii = dispensable = deposit = 0
+    dispensable = deposit = 0
+    # PII 一类的落脚点由 tests/test_pii_query_point_guard.py 数（清单从模型元数据推导）
+    pii = len(_PII_SCAN.sites)
     for module, tree in MODULES.items():
         for _, fn in _functions(tree):
             if _admission_signals(fn):
@@ -532,7 +455,6 @@ def _scan_census() -> dict[str, tuple[int, str]]:
         authorization += len(
             _model_attr_compares(tree, {"ArchiveAuthorization"}, {"status", "expire_date"})
         )
-        pii += len(_pii_column_uses(tree))
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Call)
@@ -552,7 +474,10 @@ def _scan_census() -> dict[str, tuple[int, str]]:
         "登出黑名单键口径": (blacklist, "security.revocation_key"),
         "档案授权有效期": (authorization, "visibility.active_authorization_grants"),
         "患者调阅留痕": (access_log, "visibility._write_access_log"),
-        "PII 列检索": (pii, "pii.pii_filter / pii_index_match"),
+        "PII 列检索": (
+            pii,
+            "pii.pii_filter / pii_index_match（守卫见 tests/test_pii_query_point_guard.py）",
+        ),
         "批次可发量": (dispensable, "dispense.batch_available"),
         "押金余额": (deposit, "billing.deposit_balance"),
     }
