@@ -11,10 +11,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
+from ...config import settings
 from ...database import get_db
 from ...datetypes import DateStr, OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
-from ..platform import Patient, User
+from ..platform import Patient, User, pii_filter
 from ..models import (
     SpdAssessment,
     SpdCaseReport,
@@ -965,10 +966,14 @@ def list_case_reports(
         if value is not None and value != "":
             query = query.filter(column == value)
     if id_card:
-        ids = [
-            p.id
-            for p in db.query(Patient).filter(Patient.id_card.contains(id_card)).limit(200)
-        ]
+        # PII 加密开态（P1-25）：密文列 contains 恒空，降级为**仅全值命中**
+        # （pii_filter 走索引列等值），前缀/中缀不再命中——与平台 patients.py
+        # 的模糊降级同一口径。关态保持 contains 原行为，字节不变。
+        if settings.pii_encryption_enabled:
+            match = pii_filter(Patient.id_card_idx, Patient.id_card, id_card)
+        else:
+            match = Patient.id_card.contains(id_card)
+        ids = [p.id for p in db.query(Patient).filter(match).limit(200)]
         query = query.filter(SpdCaseReport.patient_id.in_(ids or [0]))
     if date_from:
         query = query.filter(SpdCaseReport.created_at >= f"{date_from} 00:00:00")

@@ -98,7 +98,8 @@ class OrderExecution(Base):
 
     停用医嘱不可再登记执行（路由层 409）；皮试结果可空——只有需要皮试的
     医嘱才填，空与"阴性"是两回事，不能拿默认值混过去。
-    护理记录联动暂不做（登记为待办，见 docs/TECH_DEBT.md 流程）。
+    护理记录联动（P1-24a）：护理记录经 nursing_records.inpatient_order_id
+    挂在医嘱上（不是单次执行上），执行视图按医嘱附护理记录计数。
     """
 
     __tablename__ = "order_executions"

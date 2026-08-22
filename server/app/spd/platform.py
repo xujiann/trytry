@@ -25,6 +25,7 @@
 | 附件 | `Attachment` / `store_attachment` / `register_attachment_owner` | 任务佐证材料走平台附件服务（白名单/限额/去重同一份） |
 | 公卫数据 | `FollowUp`（慢病随访） | publichealth 采集器的数据源 |
 | 列类型 | `Money` / `utcnow` | 与平台其余表同一套金额与时间口径 |
+| PII 检索 | `pii_filter` | 加密态证件号等值检索：开态密文列 contains 恒空，必须走索引列（P1-25） |
 
 清单之外的平台模块（处方、医保、库存……）**不在依赖范围内**。确有需要时，
 先在这里加一行并说明理由，让依赖面始终是可数的。
@@ -46,6 +47,10 @@ from ..models import (
     utcnow,
 )
 from ..notify import notify_patient as _notify_patient
+# PII 加密态等值检索（P1-25）：开态下证件号密文列 contains 恒空，spd 的证件号
+# 筛选必须与平台 patients.py 走同一条索引列等值路径。只再导出 pii_filter 这一个
+# 名字——加解密原语（encrypt/decrypt）不在依赖面里，子系统不该碰密文本身。
+from ..pii import pii_filter
 from ..routers.attachments import register_owner as _register_attachment_owner
 from ..routers.attachments import store_upload as _store_upload
 from ..routers.portal import accessible_patient, current_resident

@@ -15,6 +15,7 @@ from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     Admission,
+    InpatientOrder,
     NursingRecord,
     ProgressNote,
     ShiftHandover,
@@ -157,6 +158,9 @@ class NursingIn(BaseModel):
     content: str = Field(default="", max_length=2048)
     nurse_name: str = ""
     recorded_at: str = ""
+    # 护理执行联动（P1-24a）：本条护理记录若由执行某条医嘱产生，传该医嘱 id。
+    # 医嘱必须存在且属于同一次住院——挂错住院的联动比不联动更糟（质控会拿它下结论）。
+    inpatient_order_id: int | None = None
 
 
 @router.post(
@@ -173,8 +177,14 @@ def create_nursing_record(
     admission = _admission_or_404(db, admission_id)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写护理记录")
+    if body.inpatient_order_id is not None:
+        order = db.get(InpatientOrder, body.inpatient_order_id)
+        if order is None or order.admission_id != admission_id:
+            # 422 而非 404：这是请求体里的关联字段不合法，与"路径资源不存在"区分开
+            raise HTTPException(status_code=422, detail="关联医嘱不存在或不属于本次住院")
     record = NursingRecord(
         admission_id=admission_id,
+        inpatient_order_id=body.inpatient_order_id,
         nursing_level=body.nursing_level,
         content=body.content,
         nurse_name=body.nurse_name or user.full_name,
@@ -187,6 +197,7 @@ def create_nursing_record(
     return {
         "id": record.id,
         "admission_id": admission_id,
+        "inpatient_order_id": record.inpatient_order_id,
         "nursing_level": record.nursing_level,
         "content": record.content,
         "nurse_name": record.nurse_name,
@@ -204,6 +215,7 @@ def list_nursing_records(
     return [
         {
             "id": r.id,
+            "inpatient_order_id": r.inpatient_order_id,
             "nursing_level": r.nursing_level,
             "content": r.content,
             "nurse_name": r.nurse_name,

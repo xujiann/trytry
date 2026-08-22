@@ -16,7 +16,7 @@ from ..config import settings
 from ..clock import now_naive
 from ..database import get_db
 from ..deps import require_admin
-from ..monitor import INSTANCE_ID, STARTED_AT, metrics
+from ..monitor import INSTANCE_ID, STARTED_AT, cluster_snapshot, metrics
 from ..monitor import heartbeat as monitor_heartbeat
 from ..monitor import known_instances
 from ..models import JobRun, ScheduledJob
@@ -105,9 +105,21 @@ def overview(db: Session = Depends(get_db)):
 
 @router.get("/api-stats")
 def api_stats():
-    """接口调用统计：总量、状态分布、模块 TOP、慢请求与错误样本。"""
+    """接口调用统计：总量、状态分布、模块 TOP、慢请求与错误样本。
+
+    配了 Redis（P1-24c）：计数字段取集群 hash 汇总（跨实例、跨重启），并附
+    `counter_scope: "cluster"`；慢请求/错误样本仍为本实例（定位用明细，合并
+    反而抹掉"哪台机器慢"）。未配 Redis：进程内口径，输出与引入集群计数前
+    逐字节一致——`scope` 文案本身就是 process 口径的标注，不另加字段。
+    """
     snapshot = metrics.snapshot()
-    snapshot["scope"] = "本实例自启动以来（进程重启即清零）"
+    cluster = cluster_snapshot()
+    if cluster is None:
+        snapshot["scope"] = "本实例自启动以来（进程重启即清零）"
+    else:
+        snapshot.update(cluster)
+        snapshot["scope"] = "集群（Redis 计数汇总，跨实例跨重启；慢请求与错误样本仍为本实例）"
+        snapshot["counter_scope"] = "cluster"
     snapshot["instance_id"] = INSTANCE_ID
     snapshot["slow_threshold_ms"] = 1000.0
     return snapshot

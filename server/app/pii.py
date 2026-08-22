@@ -52,9 +52,9 @@ EMPI 去重等）对旧钥数据不可用，跑完即恢复。
 密文态不支持 like/contains：患者检索（routers/patients.py）的证件号关键字
 在开态降级为**仅全值命中**（走索引列等值），前缀/中缀不再命中；姓名与
 健康卡号检索不受影响。spd 子系统两处按证件号 contains 的筛选
-（spd/routers/care.py、population.py）受子系统依赖边界约束未接入本模块，
-开态只命中未回填的存量明文行——这是已声明的降级而非静默错义，接入需先把
-`pii` 加进 tests/test_spd_boundary.py 的平台依赖白名单（一次被看见的决定）。
+（spd/routers/care.py、population.py）已按同一口径接入（P1-25）：`pii` 进了
+tests/test_spd_boundary.py 的平台依赖白名单，`pii_filter` 经 spd/platform.py
+再导出——关态保持 contains，开态仅全值命中。
 """
 import base64
 import hmac

@@ -20,10 +20,11 @@ from sqlalchemy.orm import Session
 
 from ...clock import now_naive
 from ...concurrency import ensure_present, insert_if_absent
+from ...config import settings
 from ...database import get_db
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, row_dict
-from ..platform import Organization, Patient, User
+from ..platform import Organization, Patient, User, pii_filter
 from ..models import (
     SpdAssessment,
     SpdCandidate,
@@ -620,10 +621,18 @@ def list_enrollments(
             SpdEnrollment.next_followup_at <= due_before,
         )
     if keyword:
+        # PII 加密开态（P1-25）：证件号密文列 contains 恒空，该分支降级为
+        # **仅全值命中**（pii_filter 走索引列等值），前缀/中缀不再命中——与平台
+        # patients.py 的模糊降级同一口径；姓名模糊不受影响。关态保持 contains
+        # 原行为，字节不变。
+        if settings.pii_encryption_enabled:
+            id_card_match = pii_filter(Patient.id_card_idx, Patient.id_card, keyword)
+        else:
+            id_card_match = Patient.id_card.contains(keyword)
         ids = [
             p.id
             for p in db.query(Patient)
-            .filter(Patient.name.contains(keyword) | Patient.id_card.contains(keyword))
+            .filter(Patient.name.contains(keyword) | id_card_match)
             .limit(500)
         ]
         query = query.filter(SpdEnrollment.patient_id.in_(ids or [0]))
