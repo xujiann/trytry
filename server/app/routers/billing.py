@@ -11,19 +11,29 @@
 
 块3 深化：统一支付（PaymentOrder + PaymentGateway 协议，内置 MockGateway）
 与日终对账（ReconciliationBatch/ReconciliationDiff，三类差异检出）。
+
+工程包 I2：真通道接入——`MEDPLAT_PAYMENT_GATEWAY_URL` 非空且过出网校验时，
+HTTP 网关（app/payments.py）注册为 channel="gateway"（异步语义：下单 pending，
+回调 `POST /api/billing/payments/callback` 验签确认后转 paid）；缺省渠道仍走
+Mock 同步语义，既有测试与演示不受影响。
 """
+import json
+import logging
 import secrets
 from datetime import datetime
 from typing import Protocol, cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, insert, literal, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict
+from ..egress import egress_url_allowed, verify_signature
+from ..payments import HttpGatewayPaymentGateway, to_fen
 from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
@@ -47,6 +57,8 @@ from ..models import (
 )
 
 router = APIRouter(prefix="/api/billing", tags=["费用结算"], dependencies=[Depends(get_current_user)])
+
+logger = logging.getLogger("medplat.billing")
 
 
 def unsettled_amount(db: Session, admission_id: int) -> float:
@@ -729,7 +741,10 @@ def billing_stats(db: Session = Depends(get_db)):
 # 仓库内置 MockGateway 仅供测试与演示（流水号本地生成、通道流水由本地单据派生）。
 # ---------------------------------------------------------------------------
 
-PAYMENT_CHANNELS = {"cash": "现金", "card": "银行卡", "insurance": "医保基金", "online": "线上支付"}
+PAYMENT_CHANNELS = {
+    "cash": "现金", "card": "银行卡", "insurance": "医保基金", "online": "线上支付",
+    "gateway": "网关支付",  # I2：HTTP 支付网关（异步回调确认），未注册时该渠道不可用
+}
 PAYMENT_STATUS = {"pending": "待支付", "paid": "已支付", "refunded": "已退款", "failed": "支付失败"}
 DIFF_TYPES = {
     "missing_local": "通道有本地无",
@@ -752,7 +767,11 @@ class PaymentGateway(Protocol):
         ...
 
     def query_transactions(self, db: Session, date: str) -> list[dict]:
-        """拉取某日通道流水，返回 [{"trade_no": str, "amount": float}]。"""
+        """拉取某日通道流水，返回 [{"trade_no": str, "amount": float}]。
+
+        拉取失败应抛 RuntimeError 中止对账（空列表会把当日全部本地单
+        误判成"通道缺失"）；Mock 实现本地镜像永不失败。
+        """
         ...
 
 
@@ -816,6 +835,27 @@ def _gateway(channel: str) -> PaymentGateway:
     return _GATEWAYS.get(channel, MOCK_GATEWAY)
 
 
+def register_http_gateway() -> bool:
+    """I2：`MEDPLAT_PAYMENT_GATEWAY_URL` 非空时注册 HTTP 网关为 channel="gateway"。
+
+    URL 未过出网校验（仅 http(s)、禁内网/环回，见 app/egress.py）时拒绝注册并
+    log——带病注册比该渠道不可用更糟。下单入参 channel 缺省仍走 Mock，向后兼容；
+    测试可 monkeypatch settings 后重呼本函数（幂等，先摘再挂）。
+    """
+    _GATEWAYS.pop("gateway", None)
+    if not settings.payment_gateway_url:
+        return False
+    if not egress_url_allowed(settings.payment_gateway_url, "MEDPLAT_PAYMENT_GATEWAY_URL"):
+        return False
+    _GATEWAYS["gateway"] = HttpGatewayPaymentGateway(
+        settings.payment_gateway_url, settings.payment_gateway_key
+    )
+    return True
+
+
+register_http_gateway()
+
+
 def _orders_of_day(db: Session, date: str) -> list[PaymentOrder]:
     """当日已支付/已退款且有流水号的支付单（对账本地侧口径）。"""
     return [
@@ -842,13 +882,14 @@ def _payment_out(o: PaymentOrder) -> dict:
         "fail_reason": o.fail_reason,
         "paid_at": o.paid_at.isoformat() if o.paid_at else None,
         "refunded_at": o.refunded_at.isoformat() if o.refunded_at else None,
+        "callback_at": o.callback_at.isoformat() if o.callback_at else None,
         "created_at": o.created_at.isoformat(),
     }
 
 
 class PaymentCreate(BaseModel):
     settlement_id: int
-    channel: str = Field(pattern="^(cash|card|insurance|online)$")
+    channel: str = Field(pattern="^(cash|card|insurance|online|gateway)$")
     # 缺省按结算单个人自付金额（医保渠道按医保支付金额）
     amount: float | None = Field(default=None, gt=0)
 
@@ -861,10 +902,18 @@ class PaymentCreate(BaseModel):
 def create_payment(
     body: PaymentCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """创建支付单并调用通道支付，回写状态与外部流水号。"""
+    """创建支付单并调用通道支付，回写状态与外部流水号。
+
+    同步渠道（Mock/现金类）通道应答即终态；gateway 渠道为异步语义——
+    下单只受理，订单停在 pending，由网关回调确认后转 paid（见 payment_callback）。
+    """
     settlement = db.get(Settlement, body.settlement_id)
     if settlement is None:
         raise HTTPException(status_code=404, detail="结算单不存在")
+    if body.channel == "gateway" and "gateway" not in _GATEWAYS:
+        # 未配置/未过出网校验时绝不能悄悄落回 Mock：Mock 会把单标成已支付，
+        # 而现实中一分钱都没收到。
+        raise HTTPException(status_code=503, detail="支付网关未配置或未通过出网校验，gateway 渠道不可用")
     default_amount = (
         settlement.insurance_pay if body.channel == "insurance" else settlement.self_pay
     )
@@ -894,6 +943,16 @@ def create_payment(
     db.add(order)
     db.flush()
     result = _gateway(body.channel).pay(order.id, amount, body.channel)
+    if result.get("success") and result.get("pending"):
+        # 异步通道：受理≠到账。留 pending 等回调，把跳转/二维码参数带回给收银端。
+        order.trade_no = result.get("trade_no", "")
+        db.commit()
+        db.refresh(order)
+        return {
+            **_payment_out(order),
+            "pay_url": result.get("pay_url", ""),
+            "qr_code": result.get("qr_code", ""),
+        }
     if result.get("success"):
         order.status = "paid"
         order.trade_no = result.get("trade_no", "")
@@ -921,6 +980,79 @@ def list_payments(
     if channel:
         q = q.filter(PaymentOrder.channel == channel)
     return [_payment_out(o) for o in q.order_by(PaymentOrder.id.desc()).limit(300).all()]
+
+
+class PaymentCallbackOut(BaseModel):
+    ok: bool
+    order_id: int
+    status: str
+    idempotent: bool = False
+
+
+# 回调免登录：支付网关没有平台账号，身份由 HMAC-SHA256 验签 + 时间窗承担
+# （口径见 app/egress.py）。billing 路由器带路由器级登录依赖，注册这一条时
+# 临时摘除、注册完立即恢复——只有回调走这条路，其余端点的鉴权一个字节不变。
+_authed_dependencies = router.dependencies
+router.dependencies = []
+
+
+@router.post("/payments/callback", response_model=PaymentCallbackOut)
+async def payment_callback(request: Request, db: Session = Depends(get_db)):
+    """支付网关回调：验签后把 pending 单置为终态（paid/failed）。
+
+    防重放两道：时间戳窗口（窗外 401）＋订单状态幂等（已 paid 的同单
+    重放不再产生任何写入，返回 idempotent=True）。金额与本地单核对，
+    不一致按篡改拒绝。既有"支付成功后续逻辑"（status/trade_no/paid_at
+    回写）原子迁移到这里，与 Mock 同步路径口径一致。
+    """
+    key = settings.payment_gateway_key
+    if not key:
+        raise HTTPException(status_code=503, detail="未配置支付网关密钥，回调不可用")
+    raw = await request.body()
+    problem = verify_signature(
+        key, request.headers.get("X-Timestamp", ""), raw, request.headers.get("X-Signature", "")
+    )
+    if problem:
+        logger.warning("[PAY-CALLBACK] 验签失败：%s", problem)
+        raise HTTPException(status_code=401, detail=f"回调验签失败：{problem}")
+    try:
+        payload = json.loads(raw)
+        order_id = int(payload["order_id"])
+        trade_no = str(payload.get("trade_no", ""))
+        result_status = str(payload["status"])
+        amount_fen = int(payload["amount_fen"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="回调报文缺字段或类型不合法") from None
+    if result_status not in ("paid", "failed"):
+        raise HTTPException(status_code=422, detail="status 仅接受 paid/failed")
+    order = db.get(PaymentOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="支付单不存在")
+    if amount_fen != to_fen(order.amount):
+        raise HTTPException(status_code=422, detail="回调金额与支付单不一致，拒绝入账")
+    if order.status == "paid":
+        if result_status == "paid" and (not order.trade_no or order.trade_no == trade_no):
+            # 幂等：同一笔的重复回调不再产生任何写入
+            return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": True}
+        raise HTTPException(status_code=409, detail="支付单已入账，回调与已有流水不符")
+    if order.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"当前状态 {PAYMENT_STATUS.get(order.status, order.status)} 不接受支付回调",
+        )
+    if result_status == "paid":
+        order.status = "paid"
+        order.trade_no = trade_no or order.trade_no
+        order.paid_at = utcnow()
+    else:
+        order.status = "failed"
+        order.fail_reason = str(payload.get("message", "通道回调支付失败"))[:256]
+    order.callback_at = utcnow()
+    db.commit()
+    return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": False}
+
+
+router.dependencies = _authed_dependencies
 
 
 class RefundIn(BaseModel):
@@ -1004,8 +1136,14 @@ def run_reconciliation(
         raise HTTPException(status_code=422, detail="date 参数须为 YYYY-MM-DD 格式") from None
 
     local_orders = _orders_of_day(db, date)
-    # 通道流水按渠道拉取；Mock 实现下各渠道共用同一份日流水
-    remote = {t["trade_no"]: round(float(t["amount"]), 2) for t in _gateway("").query_transactions(db, date)}
+    # 通道流水：注册了 HTTP 网关时拉真通道流水（GET /transactions?date=），
+    # 否则仍为 Mock 本地镜像；Mock 实现下各渠道共用同一份日流水。
+    try:
+        remote_rows = _gateway("gateway").query_transactions(db, date)
+    except RuntimeError as exc:
+        # 拉不到流水必须中止：空流水会把当日全部本地单误判成"通道缺失"
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    remote = {t["trade_no"]: round(float(t["amount"]), 2) for t in remote_rows}
 
     old = db.query(ReconciliationBatch).filter(ReconciliationBatch.date == date).all()
     for batch in old:

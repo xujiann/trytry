@@ -579,6 +579,8 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/billing/deposits/refund",
     "POST /api/billing/details",
     "POST /api/billing/payments",
+    # I2 支付真通道：网关异步回调（免登录，HMAC 验签 + 时间窗 + 状态机幂等）
+    "POST /api/billing/payments/callback",
     "POST /api/billing/payments/{order_id}/refund",
     "POST /api/billing/reconciliation/run",
     "POST /api/billing/settlements",
