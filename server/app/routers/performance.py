@@ -55,7 +55,11 @@ router = APIRouter(
 # 指标目录种子（启动时写入 performance_indicators 表；权重和不必为100，计分时按比例归一化）
 DEFAULT_INDICATORS: dict[str, dict[str, Any]] = {
     "referral": {"name": "转诊结案率", "weight": 20},
-    "remote_exam": {"name": "远程诊断服务量", "weight": 20},
+    # 改名（2026-08-22）：原名"远程诊断服务量"名不副实——它按 `from_org_id`（申请方）
+    # 计，衡量的是平台使用而非诊断工作量；且真正出报告的中心一分不得。
+    # 现在两侧都计（申请 + 出报告），名字改成能涵盖两侧的"协同量"。
+    # 存量库的指标名由迁移 b5d9f3a71c2e 就地改，且只改**没被现场改过**的那些。
+    "remote_exam": {"name": "共享诊断协同量", "weight": 20},
     "chronic": {"name": "慢病随访覆盖", "weight": 25},
     "rx": {"name": "处方合格率", "weight": 20},
     "contract": {"name": "家医签约履约量", "weight": 15},
@@ -153,7 +157,23 @@ class ScorecardDetail(BaseModel):
     逐段建模而不是 `dict[str, Any]`（写成 Any 等于没声明契约）。"""
 
     referral_completion: ReferralCompletion
+    #: 计分用的**合计**：`remote_exams_requested + remote_exams_provided`。
+    #: 字段名与类型不变，但**自 2026-08-22 起，作为共享诊断中心的机构这个数会变大**
+    #: ——此前中心出多少份报告都是 0 分。
     remote_exams: int
+    #: 作为**申请方**（`from_org_id`）：已出报告 + 已互认的申请单数。
+    #: 互认计入，因为这一侧衡量的是"通过平台解决了多少次检查需求"，
+    #: 而不重复做检查正是想要的结果（口径裁定 2）。
+    remote_exams_requested: int
+    #: 作为**共享诊断中心**（`claimed_org_id`）：本机构领取并出具报告的申请单数。
+    #: 只数 `reported`：互认不产生中心工作量，且结构上也数不到它——
+    #: `recognized` 是**建单时**就定下的状态，而领取只能发生在 `pending` 上，
+    #: 所以互认单永远没有 `claimed_org_id`。
+    #:
+    #: 注意历史数据：`claimed_org_id` 是 2026-08 才加的列，回填靠 `claimed_by`
+    #: 展示名反查用户，匹配不上的老单子仍是 NULL、数不进来。这一侧的数字对
+    #: 加列之前的周期是偏低的。
+    remote_exams_provided: int
     chronic_followup: ChronicFollowup
     rx_pass: RxPass
     contract_services: int
@@ -200,9 +220,21 @@ def org_scorecards(
 
     分母的时间语义**逐项不同**，不是无脑全加时间窗：
 
-    - 转诊 / 远程诊断 / 处方 / 家医服务：分子分母都取**本期发生**的记录；
+    - 转诊 / 共享诊断 / 处方 / 家医服务：分子分母都取**本期发生**的记录；
     - 慢病随访覆盖：分母是**在管存量**患者（不按期），分子是**本期内随访过**的人。
       分母若也按期就变成"本期新入组的有多少随访过"，那是另一个指标。
+
+    **共享诊断协同量（2026-08-22 口径变更）**：此前只按 `from_org_id`（申请方）计，
+    真正领取并出报告的**共享诊断中心一分不得**——"资源下沉"考的是上级把资源投向基层，
+    而提供服务的一方没有任何计分是说不通的。现改为两侧都计：
+
+    - 作为申请方：已出报告 + 已互认的申请单数（互认照计，见口径裁定 2）；
+    - 作为中心：本机构领取并出具报告的申请单数（只数 `reported`——互认不产生
+      中心工作量，且互认单结构上就没有 `claimed_org_id`）。
+
+    同一张单给两方各记一笔是有意的：本维度按机构算"参与了多少次协同"，
+    不是全县去重总量。**这会改变分数**（作为中心的机构分数上升），进而影响
+    此后按分数分配的基金池；已分配的池子是冻结快照，不受影响。
 
     L-1 口径参数化（向卫健考核口径过渡）：
     - volume_cap：量类维度（远程诊断/家医履约）封顶次数，达到即满分（默认 5，可按机构规模调大）；
@@ -258,6 +290,15 @@ def org_scorecards(
                 ExamRequest.created_at >= window[0], ExamRequest.created_at < window[1]),
         ExamRequest.from_org_id,
     )
+    # 作为共享诊断中心出具报告的量。只数 `reported`（理由见 ScorecardDetail
+    # 的字段注释）。`by_org` 会丢掉 `claimed_org_id IS NULL` 的行——未领取、
+    # 或加列之前的老单子，本就不该记到任何机构头上。
+    exam_provided_by = by_org(
+        db.query(ExamRequest.claimed_org_id, func.count(ExamRequest.id))
+        .filter(ExamRequest.status == "reported",
+                ExamRequest.created_at >= window[0], ExamRequest.created_at < window[1]),
+        ExamRequest.claimed_org_id,
+    )
     # 分母是"周期结束时的在管存量"：**只设上界、不设下界**。
     # 不设下界 → 三年前入组、至今在管的人今年照样要考核（这正是"存量"的意思）；
     # 但必须设上界 → 否则查 2025 年度的分数会把 2026 年才入组的人算进分母，
@@ -309,7 +350,11 @@ def org_scorecards(
     for org in orgs:
         ref_total = ref_total_by.get(org.id, 0)
         ref_completed = ref_completed_by.get(org.id, 0)
-        exam_count = exam_count_by.get(org.id, 0)
+        exam_requested = exam_count_by.get(org.id, 0)
+        exam_provided = exam_provided_by.get(org.id, 0)
+        # 两侧相加：同一张单会给申请方与中心各记一笔，这是有意的——
+        # 本维度是**按机构**算"参与了多少次共享诊断协同"，不是全县去重总量。
+        exam_count = exam_requested + exam_provided
         chronic_total = chronic_total_by.get(org.id, 0)
         chronic_followed = chronic_followed_by.get(org.id, 0)
         rx_total = rx_total_by.get(org.id, 0)
@@ -344,6 +389,8 @@ def org_scorecards(
                 "detail": {
                     "referral_completion": {"completed": ref_completed, "total": ref_total},
                     "remote_exams": exam_count,
+                    "remote_exams_requested": exam_requested,
+                    "remote_exams_provided": exam_provided,
                     "chronic_followup": {"followed": chronic_followed, "total": chronic_total},
                     "rx_pass": {"passed": rx_ok, "total": rx_total,
                                 "rule_covered": rx_rule_covered},

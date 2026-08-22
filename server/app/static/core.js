@@ -499,7 +499,7 @@ async function downloadCsv(path, filename, msgSel) {
 }
 
 async function renderPerformance() {
-  $("#page-desc").textContent = "按机构自动汇算：转诊结案、远程诊断、慢病随访、处方合格、家医履约；监测指标上报导出";
+  $("#page-desc").textContent = "按机构自动汇算：转诊结案、共享诊断、慢病随访、处方合格、家医履约；监测指标上报导出";
   const [data, monitoring] = await Promise.all([
     api("/api/performance/orgs"), api("/api/reports/monitoring").catch(() => null)]);
   // 口径变更后分数只统计考核周期内的业务量，页面必须说清是哪一期
@@ -520,15 +520,15 @@ async function renderPerformance() {
         当前评分周期（${esc(data.period)}）内的业务量。「决策分析」页的
         「期末综合绩效报告」走的是自定义公式，<b>两者不可比</b>。</p>
       ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}</div>
-    <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "远程诊断", "慢病随访", "处方合格", "家医履约"],
+    <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "共享诊断(申请/出报告)", "慢病随访", "处方合格(可审)", "家医履约"],
       data.scorecards, (c, i) => {
         const d = c.detail;
         return `<tr><td>${data.scorecards.indexOf(c) + 1}</td><td>${esc(c.org_name)}</td><td>${esc(LEVELS[c.level] || c.level)}</td>
           <td><b>${c.score}</b></td>
           <td>${d.referral_completion.completed}/${d.referral_completion.total}</td>
-          <td>${d.remote_exams}</td>
+          <td>${d.remote_exams}<span style="color:#8a939e">（${d.remote_exams_requested}/${d.remote_exams_provided}）</span></td>
           <td>${d.chronic_followup.followed}/${d.chronic_followup.total}</td>
-          <td>${d.rx_pass.passed}/${d.rx_pass.total}</td>
+          <td>${d.rx_pass.passed}/${d.rx_pass.total}<span style="color:#8a939e">（可审 ${d.rx_pass.rule_covered}）</span></td>
           <td>${d.contract_services}</td></tr>`;
       })}</div>`;
   $("#exp-monitor").onclick = () => downloadCsv("/api/reports/monitoring/export", "monitoring_indicators.csv", "#rpt-msg");

@@ -68,3 +68,20 @@ def test_提示文案确实落在页面html里而不是注释(core_js, mgmt_js):
             line.strip().startswith("//")
             for line in window.splitlines()[-1:]
         ), "口径提示被注释掉了"
+
+
+def test_考核页把共享诊断的两侧分开显示(core_js):
+    """合计说明不了分数来自哪一侧——中心和基层的 5 是完全不同的两件事。"""
+    body = core_js[core_js.index("async function renderPerformance()"):]
+    body = body[: body.index("\n}\n")]
+    assert "remote_exams_requested" in body and "remote_exams_provided" in body, (
+        "共享诊断列只显示了合计，看不出是申请方还是中心那一侧挣的分"
+    )
+    assert "共享诊断" in body, "列名还是旧的「远程诊断」"
+
+
+def test_考核页把处方可审张数显示出来(core_js):
+    """`passed/total` 是 100% 时，得看得见"其中只有几张真被规则审过"。"""
+    body = core_js[core_js.index("async function renderPerformance()"):]
+    body = body[: body.index("\n}\n")]
+    assert "rule_covered" in body, "处方合格列没显示可审张数，100% 无从判断有无意义"

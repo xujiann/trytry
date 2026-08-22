@@ -158,8 +158,8 @@ def test_detail的五段形状_三段是分子分母两段是裸计数(client, a
         client.get("/api/performance/orgs", headers=admin).json(), seeded["org_id"]
     )["detail"]
     assert set(detail) == {
-        "referral_completion", "remote_exams", "chronic_followup",
-        "rx_pass", "contract_services",
+        "referral_completion", "remote_exams", "remote_exams_requested",
+        "remote_exams_provided", "chronic_followup", "rx_pass", "contract_services",
     }
     assert detail["referral_completion"] == {"completed": 1, "total": 2}
     assert detail["chronic_followup"] == {"followed": 1, "total": 2}
@@ -167,7 +167,14 @@ def test_detail的五段形状_三段是分子分母两段是裸计数(client, a
     # seeded 没建 drug_rules，故为 0——真能数出非零的场景见
     # test_规则覆盖数只数对得上生效规则的处方。
     assert detail["rx_pass"] == {"passed": 1, "total": 2, "rule_covered": 0}
+    # remote_exams 是计分用的合计 = 申请方 + 中心两侧；seeded 那张单没被领取
+    # （无 claimed_org_id），故中心侧为 0。
     assert detail["remote_exams"] == 1
+    assert detail["remote_exams_requested"] == 1
+    assert detail["remote_exams_provided"] == 0
+    assert detail["remote_exams"] == (
+        detail["remote_exams_requested"] + detail["remote_exams_provided"]
+    ), "合计必须等于两侧之和，否则明细解释不了分数"
     assert detail["contract_services"] == 2
 
 
@@ -576,16 +583,18 @@ def test_结案率按转出机构计_接收方分母里没有这张单(client, a
         "completed": 0, "total": 0}, "接收方的分母里不该出现这张单（当前口径）"
 
 
-def test_互认计入远程诊断且按申请方计(client, admin):
-    """口径裁定 2：`recognized`（互认既往结果）与 `reported` 一样计入。
+def test_互认计入申请方_出报告计中心_两侧都算分(client, admin):
+    """口径裁定 2 + 中心计分（2026-08-22）。
 
-    关键是**按谁计**：`ExamRequest.from_org_id` 是**申请方（基层）**，
-    `claimed_org_id` 才是干活的共享诊断中心。所以这一项衡量的是
-    "基层通过平台解决了多少次检查需求"，不是诊断工作量——互认恰恰是想要的结果
-    （不重复做检查），不计入等于惩罚正确行为。
+    这一维度按两侧计：
 
-    指标名叫"远程诊断服务量"是**名不副实**的（服务量听起来是工作量），
-    已记进 docs/统计口径对照表.md；改名涉及可编辑的指标目录，另案。
+    - **申请方**（`from_org_id`）：`reported` + `recognized`。互认照计——
+      这一侧衡量的是"通过平台解决了多少次检查需求"，不重复做检查正是想要的结果；
+    - **共享诊断中心**（`claimed_org_id`）：只数 `reported`。互认不产生中心
+      工作量，而且互认单结构上就没有 `claimed_org_id`（`recognized` 是建单时
+      定下的状态，领取只发生在 `pending` 上）——本用例把这条结构性事实也断言住。
+
+    改之前中心是 0 分：出多少份报告都不计。那与"资源下沉"的考核意图相反。
     """
     def org(name):
         return client.post("/api/organizations",
@@ -598,18 +607,83 @@ def test_互认计入远程诊断且按申请方计(client, admin):
                           headers=admin).json()
     with SessionLocal() as db:
         doctor = db.query(User).filter(User.username == "admin").first()
-        for status in ("reported", "recognized", "pending"):
+        # 中心领取并出了报告的两张
+        for _ in range(2):
             db.add(ExamRequest(patient_id=patient["id"], from_org_id=grassroots["id"],
                                claimed_org_id=center["id"], center_type="imaging",
-                               item_code="CT", item_name="胸部CT", status=status,
+                               item_code="CT", item_name="胸部CT", status="reported",
                                created_by=doctor.id))
+        # 互认一张：申请方计入，中心不计（也没有 claimed_org_id）
+        db.add(ExamRequest(patient_id=patient["id"], from_org_id=grassroots["id"],
+                           center_type="imaging", item_code="CT", item_name="胸部CT",
+                           status="recognized", created_by=doctor.id))
+        # 还没领取的一张：两侧都不计
+        db.add(ExamRequest(patient_id=patient["id"], from_org_id=grassroots["id"],
+                           center_type="imaging", item_code="CT", item_name="胸部CT",
+                           status="pending", created_by=doctor.id))
         db.commit()
 
     payload = client.get("/api/performance/orgs", headers=admin).json()
-    assert _card(payload, grassroots["id"])["detail"]["remote_exams"] == 2, (
-        "reported + recognized 都算，pending 不算"
+    g = _card(payload, grassroots["id"])["detail"]
+    c = _card(payload, center["id"])["detail"]
+
+    assert g["remote_exams_requested"] == 3, "2 张已报告 + 1 张互认；pending 不算"
+    assert g["remote_exams_provided"] == 0, "基层不是中心"
+    assert g["remote_exams"] == 3
+
+    assert c["remote_exams_provided"] == 2, (
+        f"中心应拿到自己出的 2 份报告，实际 {c['remote_exams_provided']}——"
+        "改之前这里恒为 0，中心出多少报告都不计分"
     )
-    assert _card(payload, center["id"])["detail"]["remote_exams"] == 0, (
-        "真正出报告的诊断中心在本维度拿 0 分——这是当前口径的已知缺口，"
-        "已记进 docs/统计口径对照表.md 待裁定；这条用例是为了让它改动时被看见"
-    )
+    assert c["remote_exams_requested"] == 0, "中心没有以申请方身份建过单"
+    assert c["remote_exams"] == 2
+
+
+def test_互认单永远不计给中心(client, admin):
+    """即便硬把 claimed_org_id 塞进一张互认单，中心侧也不该数它。
+
+    互认不产生诊断工作量——中心侧只数 `reported`，这条守的是那个 filter。
+    """
+    center = client.post("/api/organizations",
+                         json={"name": "互认不计中心", "org_type": "lead_hospital",
+                               "level": "county"}, headers=admin).json()
+    patient = client.post("/api/patients",
+                          json={"name": "互认不计患者", "id_card": "330281200102024517"},
+                          headers=admin).json()
+    with SessionLocal() as db:
+        doctor = db.query(User).filter(User.username == "admin").first()
+        db.add(ExamRequest(patient_id=patient["id"], from_org_id=center["id"],
+                           claimed_org_id=center["id"], center_type="imaging",
+                           item_code="CT", item_name="胸部CT", status="recognized",
+                           created_by=doctor.id))
+        db.commit()
+    detail = _card(client.get("/api/performance/orgs", headers=admin).json(),
+                   center["id"])["detail"]
+    assert detail["remote_exams_provided"] == 0, "互认单被算进中心工作量了"
+    assert detail["remote_exams_requested"] == 1, "作为申请方仍应计入"
+
+
+def test_中心侧计分真的改变了得分(client, admin):
+    """不只是明细多了两个字段——`score` 必须真的跟着动。
+
+    否则"中心一分不得"这个问题根本没修，只是多报了两个数。
+    """
+    center = client.post("/api/organizations",
+                         json={"name": "中心得分院", "org_type": "lead_hospital",
+                               "level": "county"}, headers=admin).json()
+    before = _card(client.get("/api/performance/orgs", headers=admin).json(),
+                   center["id"])["score"]
+    patient = client.post("/api/patients",
+                          json={"name": "中心得分患者", "id_card": "330281200203034512"},
+                          headers=admin).json()
+    with SessionLocal() as db:
+        doctor = db.query(User).filter(User.username == "admin").first()
+        for _ in range(5):                      # 直接顶到 volume_cap
+            db.add(ExamRequest(patient_id=patient["id"], from_org_id=1,
+                               claimed_org_id=center["id"], center_type="imaging",
+                               item_code="CT", item_name="胸部CT", status="reported",
+                               created_by=doctor.id))
+        db.commit()
+    after = _card(client.get("/api/performance/orgs", headers=admin).json(),
+                  center["id"])["score"]
+    assert after > before, f"中心出了 5 份报告，得分却没变（{before} → {after}）"
