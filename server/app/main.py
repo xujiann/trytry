@@ -255,6 +255,19 @@ async def lifespan(_: FastAPI):
         from .scheduler import scheduler_loop, sync_registry
 
         sync_registry(db)
+        # PII 检索索引自检（启动期探一次；日常由 jobs.pii_index_health 定时跑）。
+        # 放在启动期是因为索引破损的两条来路都发生在**部署那一刻**：迁移拿默认
+        # 密钥算索引、或库已加密后重跑迁移把密文行整片跳过——等到 24 小时后的
+        # 定时任务才发现，中间这一天已经重复建档了。
+        # **告警不拒启**的取舍写在 jobs.report_pii_index_health 的 docstring 里
+        # （与 config.py "多实例无 Redis 拒启" 的差别一并写在那儿）。
+        # 探针自身绝不可打断启动：查不动（表还没建/权限不足）只记日志。
+        try:
+            _jobs.report_pii_index_health(db)
+        except Exception:  # noqa: BLE001 - 自检是旁路，失败不能拖垮启动
+            logging.getLogger("medplat.jobs").warning(
+                "[PII] 启动期检索索引自检未能完成，本次跳过（定时任务会再探）", exc_info=True
+            )
         # 阶段十一：内置六角色预置 + 权限点从路由表自动登记（幂等）。
         # 手工维护的权限点清单与真实接口的偏差，是这类系统最难查的问题之一。
         from .routers.rbac import seed_builtin_roles, sync_permissions

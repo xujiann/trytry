@@ -15,6 +15,10 @@
 实现要点：
 - **分批 bulk_insert_mappings + 分批提交**（--batch-size，默认 5000）：
   单事务插百万行会把 WAL/内存顶爆，逐行 ORM add 则慢两个数量级；
+  代价是**绕过 mapper 事件**——`app/pii.py` 的 `register_pii_index_sync` 挂在
+  before_insert 上，这条路进不来，`id_card_idx` 会留 NULL。所以患者行在这里
+  **显式算索引**（见 `seed_patients`）：压测库的患者检索若走在一片 NULL 索引上，
+  开态等值检索命中恒为 0，量出来的"检索很快"是假的，容量结论也就跟着假了；
 - **幂等可续跑**：每类数据带可识别标记（ehc_no/编码前缀 `SIM-`、
   doctor_name/diagnosis_name 为"仿真…"），启动时先数已有量、从断点继续，
   Ctrl-C 或崩溃后重跑同一命令即可接着灌，不会造出重复主数据；
@@ -50,6 +54,7 @@ from app.models import (  # noqa: E402
     User,
     Ward,
 )
+from app.pii import pii_index  # noqa: E402
 
 DOCTOR_MARK = "仿真医师"
 DIAG_MARK = "仿真诊断"
@@ -68,6 +73,18 @@ SIM_DRUG_RULES = [
     ("SIM-ABX-0", True, 0.0),
     ("SIM-DRUG-1", False, 1.0),
 ]
+
+
+def _patient_id_card(plain: str) -> dict[str, str]:
+    """证件号列 + 检索索引列的一对取值。
+
+    `bulk_insert_mappings` 不触发 mapper 事件，`app/pii.py` 自动维护索引的
+    before_insert 钩子进不来；开关开态时列类型 `EncryptedPII` 的 bind 处理仍
+    会把明文加密（那是类型层，不是事件层），于是密文进库、索引留 NULL——
+    检索命中恒为 0。这里按与 `pii.register_pii_index_sync` 完全相同的口径
+    （当前密钥、对**明文**取 HMAC）显式补上索引；明文列交给列类型自己处理。
+    """
+    return {"id_card": plain, "id_card_idx": pii_index(plain)}
 
 
 def _ts(base: datetime, i: int) -> datetime:
@@ -137,7 +154,7 @@ class BulkSeeder:
                 {
                     "ehc_no": f"SIM-{i:012d}",
                     "name": f"仿真患者{i}",
-                    "id_card": f"SIM{i:015d}",
+                    **_patient_id_card(f"SIM{i:015d}"),
                     "gender": "男" if i % 2 else "女",
                     "birth_date": f"{1940 + i % 80}-01-01",
                     "created_at": _ts(self.base_ts, i),

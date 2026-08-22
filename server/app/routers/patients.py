@@ -12,7 +12,7 @@ from ..deps import get_current_user, paginate, require_roles, resolve_business_d
 from pydantic import BaseModel, Field
 
 from ..models import ArchiveAuthorization, Organization, Patient, User
-from ..pii import pii_filter, pii_index
+from ..pii import pii_filter, pii_index_match
 from ..privacy import desensitize, mask_id_card, mask_phone  # noqa: F401  公共脱敏模块（H1）
 from ..schemas import PatientCreate, PatientOut
 from ..datetypes import DateStr
@@ -94,7 +94,7 @@ def search_patients(
             (Patient.name.like(like))
             | (Patient.id_card.like(like))
             | (Patient.ehc_no.like(like))
-            | (Patient.id_card_idx == pii_index(keyword))
+            | pii_index_match(Patient.id_card_idx, keyword)
         )
     rows = paginate(query.order_by(Patient.id), response, offset, limit)
     return [desensitize(p, user) for p in rows]
