@@ -25,6 +25,7 @@ from ..visibility import scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import Patient, User, VisitCredential, utcnow
+from ..pii import pii_filter
 
 router = APIRouter(
     prefix="/api/credentials", tags=["就诊凭据"], dependencies=[Depends(get_current_user)]
@@ -296,7 +297,7 @@ def resolve_any(identifier: str, db: Session = Depends(get_db)):
     patient = db.query(Patient).filter(Patient.ehc_no == identifier).first()
     if patient is not None:
         return {"matched_by": "ehc_no", "valid": True, "patient": _patient_brief(patient)}
-    patient = db.query(Patient).filter(Patient.id_card == identifier).first()
+    patient = db.query(Patient).filter(pii_filter(Patient.id_card_idx, Patient.id_card, identifier)).first()
     if patient is not None:
         return {"matched_by": "id_card", "valid": True, "patient": _patient_brief(patient)}
     raise HTTPException(status_code=404, detail="未匹配到任何身份标识（卡号/健康卡号/身份证号）")

@@ -10,13 +10,16 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
+from ..pii import EncryptedPII, register_pii_index_sync
 from ._base import utcnow
 
 
@@ -145,22 +148,43 @@ class Organization(Base):
 
 class Patient(Base):
     __tablename__ = "patients"
-    __table_args__ = (UniqueConstraint("id_card", name="uq_patient_id_card"),)
+    __table_args__ = (
+        # 双轨唯一（工程包 E3）：原 id_card 唯一约束**保留**——关态仍靠它挡重复
+        # 建档；开态密文带随机 nonce 各不相同，不会在它上面误撞。开态的唯一性
+        # 由 id_card_idx 的部分唯一索引承担（HMAC 确定性，同证件号同索引）。
+        UniqueConstraint("id_card", name="uq_patient_id_card"),
+        Index(
+            "uq_patient_id_card_idx",
+            "id_card_idx",
+            unique=True,
+            sqlite_where=text("id_card_idx IS NOT NULL"),
+            postgresql_where=text("id_card_idx IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     # 电子健康卡号（主索引对外标识），由平台生成
     ehc_no: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(64), index=True)
-    id_card: Mapped[str] = mapped_column(String(18), index=True)
+    # PII 列加密（工程包 E3，app/pii.py）：开关开则存 pii1$ 密文（长度上调容纳），
+    # 读取透明解密；关则明文，行为不变。等值检索一律走 pii_filter + *_idx 列。
+    id_card: Mapped[str] = mapped_column(EncryptedPII(256), index=True)
     gender: Mapped[str] = mapped_column(String(8), default="未知")
     birth_date: Mapped[str] = mapped_column(String(10), default="")
-    phone: Mapped[str] = mapped_column(String(20), default="")
+    phone: Mapped[str] = mapped_column(EncryptedPII(256), default="")
+    # HMAC 等值检索索引（密钥独立派生，见 pii.pii_index）；写入侧由模型事件维护
+    id_card_idx: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    phone_idx: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     # 个保法"删除权"的落地（工程包 E2）：注销时间。**不物理删除**——医疗记录有
     # 法定保留义务。口径：患者检索与居民端绑定/代管入口过滤已注销档案（见
     # routers/patients.py:search_patients 与 routers/portal.py 各绑定入口），
     # 既有业务历史（就诊、账单等按 patient_id 关联的记录）照常可查。
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# 写入侧自动维护检索索引列（建档/HL7 更新/居民端回填等全部写入点一处覆盖）
+register_pii_index_sync(Patient, ("id_card", "id_card_idx"), ("phone", "phone_idx"))
 
 
 class CodeSystem(Base):

@@ -64,7 +64,9 @@ FROZEN_CORE_COLUMNS: dict[str, list[str]] = {
     "organizations": ["address", "created_at", "id", "level", "name", "org_type", "parent_id"],
     # deactivated_at：个保法"删除权"落地为注销标记（工程包 E2，见 models/consent.py 与
     # routers/consents.py:review_correction）——注销不物理删除，检索/绑定入口过滤。
-    "patients": ["birth_date", "created_at", "deactivated_at", "ehc_no", "gender", "id", "id_card", "name", "phone"],
+    # id_card_idx/phone_idx：PII 列加密的 HMAC 等值检索索引（工程包 E3，见 app/pii.py），
+    # 迁移 a4b5c6d7e8f9；ADR 由协调方随包合并补录（docs/ 属并行包禁改区，同 E1 先例）。
+    "patients": ["birth_date", "created_at", "deactivated_at", "ehc_no", "gender", "id", "id_card", "id_card_idx", "name", "phone", "phone_idx"],
     "encounters": ["created_at", "diagnosis_code", "diagnosis_name", "doctor_name", "encounter_type", "id", "org_id", "patient_id", "summary"],
     "admissions": ["admitted_at", "bed_id", "created_by", "diagnosis_name", "discharged_at", "doctor_name", "id", "org_id", "patient_id", "status", "ward_id"],
 }

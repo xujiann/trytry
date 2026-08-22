@@ -19,6 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
+from ..pii import EncryptedPII, register_pii_index_sync
 from ._base import utcnow
 
 
@@ -45,10 +46,21 @@ class ResidentAccount(Base):
             sqlite_where=text("patient_id IS NOT NULL"),
             postgresql_where=text("patient_id IS NOT NULL"),
         ),
+        # 双轨唯一（工程包 E3，与 patients.id_card 同理）：phone 原唯一约束保留
+        # （关态靠它；开态密文各不相同不误撞），开态唯一性由 phone_idx 部分唯一
+        # 索引承担（NOT NULL 时唯一，多个 NULL 共存=未绑手机号的微信账户）。
+        Index(
+            "uq_resident_account_phone_idx",
+            "phone_idx",
+            unique=True,
+            sqlite_where=text("phone_idx IS NOT NULL"),
+            postgresql_where=text("phone_idx IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    phone: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
+    # PII 列加密（工程包 E3，app/pii.py）：开态存 pii1$ 密文，读取透明解密
+    phone: Mapped[str | None] = mapped_column(EncryptedPII(256), unique=True, nullable=True)
     wechat_openid: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     wechat_unionid: Mapped[str] = mapped_column(String(64), default="")
     nickname: Mapped[str] = mapped_column(String(64), default="")
@@ -56,8 +68,13 @@ class ResidentAccount(Base):
     patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True, index=True)
     # active=正常, disabled=停用（停用后令牌校验即失败）
     status: Mapped[str] = mapped_column(String(16), default="active")
+    # HMAC 等值检索索引（工程包 E3）；写入侧由模型事件维护
+    phone_idx: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+register_pii_index_sync(ResidentAccount, ("phone", "phone_idx"))
 
 
 class SmsCode(Base):
