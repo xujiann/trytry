@@ -1,7 +1,7 @@
 # SCHEMA（自动生成，勿手改）
 
 > 由 `server/scripts/dump_schema.py` 从 ORM 元数据生成。改了模型请重跑该脚本。
-> 表总数：**246**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
+> 表总数：**249**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
 
 ## access_logs
 
@@ -366,11 +366,20 @@
 - `system_id` · INTEGER · NOT NULL · index · → code_systems.id
 - `code` · VARCHAR(64) · NOT NULL · index
 - `name` · VARCHAR(256) · NOT NULL · index
+- `spec` · VARCHAR(64)
+- `dosage_form` · VARCHAR(32)
+- `manufacturer` · VARCHAR(128)
+- `unit` · VARCHAR(16)
+- `insurance_code` · VARCHAR(64) · index
+- `national_code` · VARCHAR(64) · index
+- `extra` · VARCHAR(1024)
 - `created_at` · DATETIME · NOT NULL · index
 - _unique_ (system_id, code) uq_entry_system_code
 - _index_ ix_code_entries_code(code)
 - _index_ ix_code_entries_created_at(created_at)
+- _index_ ix_code_entries_insurance_code(insurance_code)
 - _index_ ix_code_entries_name(name)
+- _index_ ix_code_entries_national_code(national_code)
 - _index_ ix_code_entries_system_id(system_id)
 
 ## code_systems
@@ -399,6 +408,25 @@
 - _index_ ix_cold_chain_records_org_id(org_id)
 - _index_ ix_cold_chain_records_recorded_at(recorded_at)
 
+## consent_records
+
+- `id` · INTEGER · PK · NOT NULL
+- `patient_id` · INTEGER · NOT NULL · index · → patients.id
+- `scene` · VARCHAR(32) · NOT NULL · index
+- `text_version` · VARCHAR(16) · NOT NULL
+- `method` · VARCHAR(16) · NOT NULL
+- `operator_user_id` · INTEGER · → users.id
+- `resident_account_id` · INTEGER · → resident_accounts.id
+- `evidence` · VARCHAR(256) · NOT NULL
+- `guardian_name` · VARCHAR(64) · NOT NULL
+- `guardian_id_card` · VARCHAR(18) · NOT NULL
+- `guardian_relation` · VARCHAR(16) · NOT NULL
+- `revoked_at` · DATETIME
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_consent_records_created_at(created_at)
+- _index_ ix_consent_records_patient_id(patient_id)
+- _index_ ix_consent_records_scene(scene)
+
 ## consent_templates
 
 - `id` · INTEGER · PK · NOT NULL
@@ -410,6 +438,18 @@
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_consent_templates_active(active)
 - _index_ ix_consent_templates_consent_type(consent_type)
+
+## consent_texts
+
+- `id` · INTEGER · PK · NOT NULL
+- `scene` · VARCHAR(32) · NOT NULL · index
+- `version` · VARCHAR(16) · NOT NULL
+- `content` · VARCHAR(1024) · NOT NULL
+- `active` · BOOLEAN · NOT NULL · index
+- `created_at` · DATETIME · NOT NULL
+- _unique_ (scene, version) uq_consent_text_scene_version
+- _index_ ix_consent_texts_active(active)
+- _index_ ix_consent_texts_scene(scene)
 
 ## consult_experts
 
@@ -441,6 +481,26 @@
 - _index_ ix_consultations_fee_settled(fee_settled)
 - _index_ ix_consultations_patient_id(patient_id)
 - _index_ ix_consultations_status(status)
+
+## correction_requests
+
+- `id` · INTEGER · PK · NOT NULL
+- `patient_id` · INTEGER · NOT NULL · index · → patients.id
+- `request_type` · VARCHAR(16) · NOT NULL · index
+- `changes` · VARCHAR(1024) · NOT NULL
+- `reason` · VARCHAR(256) · NOT NULL
+- `status` · VARCHAR(16) · NOT NULL · index
+- `source` · VARCHAR(16) · NOT NULL
+- `applicant_account_id` · INTEGER · → resident_accounts.id
+- `applicant_user_id` · INTEGER · → users.id
+- `reviewer_user_id` · INTEGER · → users.id
+- `review_comment` · VARCHAR(256) · NOT NULL
+- `reviewed_at` · DATETIME
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_correction_requests_created_at(created_at)
+- _index_ ix_correction_requests_patient_id(patient_id)
+- _index_ ix_correction_requests_request_type(request_type)
+- _index_ ix_correction_requests_status(status)
 
 ## cost_allocation_rules
 
@@ -1625,6 +1685,7 @@
 - `gender` · VARCHAR(8) · NOT NULL
 - `birth_date` · VARCHAR(10) · NOT NULL
 - `phone` · VARCHAR(20) · NOT NULL
+- `deactivated_at` · DATETIME
 - `created_at` · DATETIME · NOT NULL
 - _unique_ (id_card) uq_patient_id_card
 - _index_ ix_patients_ehc_no(ehc_no) UNIQUE
