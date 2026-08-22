@@ -10,7 +10,7 @@
    床日成本用**实际占用床日**做分母——不是床位数×天数，那是可用床日，
    两者混用会把成本算低。
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import upsert_unique
 from ..visibility import assert_org_visible, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, month_bounds, require_roles
 from ..models import (
     Admission,
     CostAllocationRule,
@@ -43,14 +43,6 @@ COST_TYPE_NAMES = {
 }
 
 
-def _period_bounds(period: str) -> tuple[date, date]:
-    """期间 YYYY-MM → [首日, 次月首日)。"""
-    try:
-        start = datetime.strptime(period + "-01", "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(status_code=422, detail="period 须为 YYYY-MM 格式") from None
-    end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
-    return start, end
 
 
 # ---------------------------------------------------------------- 直接成本归集
@@ -136,7 +128,7 @@ def department_cost_summary(
     未配满 100% 的来源科室，未分摊部分留在原科室，并在返回里标出来。
     """
     assert_org_visible(db, user, org_id)
-    _period_bounds(period)
+    month_bounds(period)
     query = db.query(DepartmentCost).filter(DepartmentCost.period == period)
     if org_id is not None:
         query = query.filter(DepartmentCost.org_id == org_id)
@@ -238,7 +230,7 @@ def unit_cost(
     精确拆分需要收费明细带科室，属后续 T4 依赖项。
     """
     assert_org_visible(db, user, org_id)
-    start, end = _period_bounds(period)
+    start, end = month_bounds(period)
     if db.get(Organization, org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
 

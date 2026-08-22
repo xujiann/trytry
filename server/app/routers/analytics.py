@@ -8,7 +8,7 @@
 """
 from typing import Any
 
-from datetime import date, datetime, timedelta
+from datetime import datetime
 
 import sqlalchemy as sa
 from sqlalchemy import func
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import (
     get_current_user,
+    month_bounds,
     paginate,
     row_dict,
     require_admin,
@@ -66,12 +67,6 @@ INTENSITY_IMPLAUSIBLE = 200
 MIN_BED_DAYS_FOR_INTENSITY = 100
 
 
-def _period_bounds(period: str) -> tuple[date, date]:
-    try:
-        start = datetime.strptime(period + "-01", "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(status_code=422, detail="period 须为 YYYY-MM 格式") from None
-    return start, (start.replace(day=28) + timedelta(days=4)).replace(day=1)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +285,7 @@ def efficiency(
     - 床位使用率 = 实际占用床日 ÷（实际开放床位数 × 期间天数）
     - 医师日均担负诊疗人次 = 期间诊疗人次 ÷ 医师数 ÷ 期间天数
     """
-    start, end = _period_bounds(period)
+    start, end = month_bounds(period)
     days = (end - start).days
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.min.time())
@@ -415,7 +410,7 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
     加 25 次全表扫描。这里改成按 org_id 分组聚合：无论多少家机构，
     固定 7 条分组查询 + 1 次 efficiency()。
     """
-    start, end = _period_bounds(period)
+    start, end = month_bounds(period)
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.min.time())
 
@@ -646,7 +641,7 @@ def drug_use(
     未维护 DDD 的抗菌药按**未覆盖**单独计数返回，不按 0 算也不悄悄丢掉——
     一个漏算了一半抗菌药的强度值，比明说"目录没维护全"更容易误导人。
     """
-    start, end = _period_bounds(period)
+    start, end = month_bounds(period)
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.min.time())
     org_names = {o.id: o.name for o in db.query(Organization).all()}
