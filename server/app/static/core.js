@@ -202,8 +202,14 @@ function lineChart(months, series, colors) {
     svg += `<polyline points="${points}" fill="none" stroke="${colors[si % colors.length]}" stroke-width="2"/>`;
     values.forEach((v, i) => { svg += `<circle cx="${x(i)}" cy="${y(v)}" r="2.5" fill="${colors[si % colors.length]}"/>`; });
   });
-  months.forEach((mo, i) => { svg += `<text x="${x(i)}" y="${h - 6}" font-size="10.5" fill="#5b6773" text-anchor="middle">${mo.slice(2)}</text>`; });
-  svg += `<text x="4" y="${y(max) + 4}" font-size="10.5" fill="#5b6773">${max}</text><text x="4" y="${y(0) + 4}" font-size="10.5" fill="#5b6773">0</text>`;
+  // 月份标签来自后端、格式固定（YYYY-MM），今天不含特殊字符——但图表组件是
+  // 三套前端共用的渲染出口，"这个入参恰好安全"不是组件该依赖的前提。
+  // 同文件的 barChart 早就 esc(label) 了，这里对齐（CLAUDE.md §8）。
+  months.forEach((mo, i) => { svg += `<text x="${x(i)}" y="${h - 6}" font-size="10.5" fill="#5b6773" text-anchor="middle">${esc(String(mo).slice(2))}</text>`; });
+  // `max` 是本函数自己算出来的数字，`esc()` 对它是恒等——照样包上，是为了让
+  // "<text> 里的插值一律过 esc" 这条规则**没有例外**。带例外清单的规则，
+  // 后来人得先判断自己算不算例外，判断错了就是漏转义。
+  svg += `<text x="4" y="${y(max) + 4}" font-size="10.5" fill="#5b6773">${esc(max)}</text><text x="4" y="${y(0) + 4}" font-size="10.5" fill="#5b6773">0</text>`;
   return `<svg width="${w}" height="${h}" role="img">${svg}</svg>`;
 }
 
