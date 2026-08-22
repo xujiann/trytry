@@ -873,6 +873,8 @@
 - `system_type` · VARCHAR(16) · NOT NULL · index
 - `direction` · VARCHAR(8) · NOT NULL · index
 - `auth_token_hash` · VARCHAR(200) · NOT NULL
+- `endpoint_url` · VARCHAR(512)
+- `secret` · VARCHAR(128)
 - `active` · BOOLEAN · NOT NULL · index
 - `rate_limit_per_min` · INTEGER · NOT NULL
 - `created_at` · DATETIME · NOT NULL
