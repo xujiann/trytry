@@ -153,7 +153,7 @@ make test-smoke    # 若动了启动/核心链路
 make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_URL）
 ```
 
-- 若改了迁移：`make build` 校验迁移图，且本地 `alembic upgrade heads` 能从空库跑通。
+- 若改了迁移或**模型的列**：`make build` 校验迁移图；`test_migration_model_parity.py` 已把「空库跑通 `alembic upgrade heads` + 逐表逐列比对模型」做成 test-unit 里的硬门禁（约 7 秒，无豁免名单），`make verify` 会带上，不必再手跑。真 PG 的方言问题仍由 `make test-integration` 守（两者共用 `tests/schema_parity.py` 一份比对逻辑）。
 - 若改了 spd：`pytest tests/test_spd_boundary.py -q` 必须绿（边界未被破坏）。
 - **lint 存量已清零并转为阻断**（`ruff` 起步规则集 0 项）：新增 lint 报错会拦下 CI。
 - **typecheck 存量已清零并转为阻断**（`mypy` 只查已注解代码，0 处）：新增类型报错会拦下 CI。范围仍是渐进式的（不开 `--check-untyped-defs`），扩大范围属单独任务。
