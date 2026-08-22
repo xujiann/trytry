@@ -239,6 +239,40 @@ def _archive_and_delete(
     return total, f"归档 {total} 行 → {filename}"
 
 
+@register("esb_outbound_worker", "ESB 出站消息投递", 60)
+def esb_outbound_worker(db: Session) -> tuple[int, str]:
+    """周期消费 ESB 出站待投递消息（工程包 I1：集成层出站闭环）。
+
+    口径与实现都在 routers/esb.py 的 `consume_pending_outbound`（与手工消费
+    同一套投递/重试/死信/交换日志逻辑，不另写一份判定）：
+    - 只消费出站端点（direction=outbound 且启用）的 queued 消息与到达
+      next_retry_at 的 failed 消息，每轮上限 OUTBOUND_BATCH_SIZE 条（分批）；
+    - 投递失败走既有指数退避重试，耗尽转死信；**告警交由日志**——
+      本轮有失败时打 warning，值班按日志与 /api/esb/stats 追查。
+    """
+    import logging
+
+    from .routers.esb import consume_pending_outbound
+
+    processed, summary = consume_pending_outbound(db)
+    if "失败 0" not in summary and processed:
+        logging.getLogger("medplat.jobs").warning("[ESB] 出站投递存在失败：%s", summary)
+    return processed, summary
+
+
+@register("fhir_batch_export", "FHIR 批量导出（省平台前置机）", 3600)
+def fhir_batch_export(db: Session) -> tuple[int, str]:
+    """按增量水位把新增 Patient/Encounter/ExamReport 导出为 FHIR NDJSON（工程包 I1）。
+
+    实现与序列化映射在 routers/integration.py 的 `run_fhir_batch_export`：
+    文件落 `settings.upload_dir/fhir_out/`（含 manifest.jsonl），水位存
+    system_params，重复执行幂等；供省平台前置机定期拉取。
+    """
+    from .routers.integration import run_fhir_batch_export
+
+    return run_fhir_batch_export(db)
+
+
 @register("jobrun_cleanup", "任务运行记录清理", 86400)
 def jobrun_cleanup(db: Session) -> tuple[int, str]:
     """删除超过保留期（MEDPLAT_JOBRUN_RETENTION_DAYS，默认 90 天）的 JobRun。
