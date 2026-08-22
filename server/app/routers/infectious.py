@@ -10,6 +10,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import InfectiousCase, InfectiousDisease, Organization
 from ..schemas import InfectiousCaseCreate, InfectiousCaseOut, InfectiousDiseaseOut
+from .reports import _csv_response
 
 router = APIRouter(prefix="/api/infectious", tags=["传染病监测"], dependencies=[Depends(get_current_user)])
 
@@ -131,6 +132,138 @@ def multi_point_alerts(
         }
         for r in rows
     ]
+
+
+# ---------- 工程包 I1：法定上报导出（传染病报告卡） ----------
+
+_CATEGORY_NAMES = {"A": "甲类", "B": "乙类", "C": "丙类"}
+
+
+class CaseReportCardOut(BaseModel):
+    """传染病报告卡导出契约（平台留存字段集 + 报告及时性判定）。
+
+    及时性口径与 GET /late-reports 完全一致（报告日−发病日折算小时数超
+    目录时限即迟报）；目录外病种/发病日期非法时三个及时性字段为 null。
+    """
+
+    case_id: int
+    org_id: int
+    org_name: str
+    disease_code: str
+    disease_name: str
+    category: str
+    category_name: str
+    onset_date: str
+    reported_at: str
+    report_hours: int | None
+    days_late: int | None
+    late: bool | None
+
+
+def _timeliness(
+    case: InfectiousCase, meta: tuple[str, str, int] | None
+) -> tuple[int | None, int | None, bool | None]:
+    """(法定时限小时, 迟报天数, 是否迟报)；口径与 late_reports 一致，判不了返回 None。"""
+    if meta is None:
+        return None, None, None
+    _, _, report_hours = meta
+    try:
+        onset = date.fromisoformat(case.onset_date)
+    except ValueError:
+        return report_hours, None, None
+    days_late = (case.reported_at.date() - onset).days
+    return report_hours, days_late, days_late * 24 > report_hours
+
+
+def _case_card(case: InfectiousCase, org_names: dict, meta_by_code: dict) -> dict:
+    meta = meta_by_code.get(case.disease_code)
+    report_hours, days_late, late = _timeliness(case, meta)
+    return {
+        "case_id": case.id,
+        "org_id": case.org_id,
+        "org_name": org_names.get(case.org_id, ""),
+        "disease_code": case.disease_code,
+        "disease_name": case.disease_name,
+        "category": case.category,
+        "category_name": _CATEGORY_NAMES.get(case.category, "目录外"),
+        "onset_date": case.onset_date,
+        "reported_at": case.reported_at.isoformat(),
+        "report_hours": report_hours,
+        "days_late": days_late,
+        "late": late,
+    }
+
+
+def _disease_meta(db: Session) -> dict:
+    return {
+        d.code: (d.name, d.category, d.report_hours) for d in db.query(InfectiousDisease).all()
+    }
+
+
+@router.get(
+    "/cases/export.csv",
+    response_model=str,
+    dependencies=[Depends(require_roles("director"))],  # 法定上报导出=管理层
+)
+def export_case_report_cards_csv(
+    disease_code: str | None = None,
+    late_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    """传染病报告卡批量导出（CSV，Excel 可直接打开）。
+
+    **报送方式说明**：平台与县疾控无网络直报专线，本导出供**手工网报**
+    （录入中国疾病预防控制信息系统/大疫情网）或交换前置机对接使用；
+    及时性列与"未及时上报清单"（GET /late-reports）同口径联动，
+    `late_only=true` 即只导迟报清单。
+    """
+    meta_by_code = _disease_meta(db)
+    org_names = {o.id: o.name for o in db.query(Organization).all()}
+    query = db.query(InfectiousCase)
+    if disease_code:
+        query = query.filter(InfectiousCase.disease_code == disease_code)
+    cards = [
+        _case_card(c, org_names, meta_by_code)
+        for c in query.order_by(InfectiousCase.id).limit(2000).all()
+    ]
+    if late_only:
+        cards = [c for c in cards if c["late"]]
+    rows = [
+        [
+            c["case_id"], c["org_name"], c["disease_code"], c["disease_name"],
+            c["category_name"], c["onset_date"], c["reported_at"],
+            c["report_hours"] if c["report_hours"] is not None else "",
+            c["days_late"] if c["days_late"] is not None else "",
+            "迟报" if c["late"] else ("" if c["late"] is None else "及时"),
+        ]
+        for c in cards
+    ]
+    return _csv_response(
+        "infectious_report_cards.csv",
+        ["卡片编号", "报告机构", "病种编码", "病种名称", "分类", "发病日期", "报告时间",
+         "法定时限(小时)", "迟报天数", "及时性"],
+        rows,
+    )
+
+
+@router.get(
+    "/cases/{case_id}/report-card",
+    response_model=CaseReportCardOut,
+    dependencies=[Depends(require_roles("director"))],  # 法定上报导出=管理层
+)
+def case_report_card(case_id: int, db: Session = Depends(get_db)):
+    """单张传染病报告卡（JSON，平台留存的法定字段集 + 及时性判定）。
+
+    **报送方式说明**：导出供手工网报（大疫情网）或县疾控前置机对接，
+    平台不直连国家传染病网络直报系统。病例登记未含患者个体标识
+    （infectious_cases 仅记报告机构/病种/发病日期），卡片即按此字段集导出，
+    不虚构未存储的字段。
+    """
+    case = db.get(InfectiousCase, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="病例不存在")
+    org = db.get(Organization, case.org_id)
+    return _case_card(case, {case.org_id: org.name if org else ""}, _disease_meta(db))
 
 
 @router.get("/late-reports", response_model=list[LateReportOut])

@@ -4,7 +4,9 @@
 本模块以数据库表承载队列语义，单实例部署即可运行；多实例部署时消费端
 以 status=processing 抢占，避免重复消费）。
 
-- EsbEndpoint  接入方注册：code 唯一、令牌散列存储、按分钟限流、可停用
+- EsbEndpoint  接入方注册：code 唯一、令牌散列存储、按分钟限流、可停用；
+               出站端点可配 endpoint_url + secret，消费时经 HTTP POST 真实投递
+               （HMAC-SHA256 签名头），未配置地址保持"仅登记"
 - EsbMessage   消息队列：queued → processing → succeeded / failed（重试）→ dead
 - EsbFlow      编排流程：有序步骤 transform | route | validate | persist
 - EsbFlowRun   编排执行记录：逐步结果与失败步骤定位
@@ -12,10 +14,14 @@
 与 integration.py 打通：transform 步骤直接调用入站接口同款转换函数
 （integration.parse_hl7v2_patient / parse_fhir_patient），解析口径唯一。
 """
+import hashlib
+import hmac
+import json
 import secrets
 import threading
 from datetime import timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func
@@ -52,6 +58,12 @@ STEP_TYPES = {"transform": "转换", "route": "路由", "validate": "校验", "p
 TRANSFORM_FORMATS = {"hl7v2_patient": "HL7 v2 ADT 患者", "fhir_patient": "FHIR R4 Patient"}
 # 重试退避基数（秒）：第 n 次失败后 next_retry_at = now + BACKOFF_SECONDS * 2^(n-1)
 BACKOFF_SECONDS = 60
+# 出站投递的 HTTP 超时（秒）：投递失败走既有重试/死信机制，不必挂长
+DELIVERY_TIMEOUT_SECONDS = 10
+# 出站签名头：X-Esb-Signature = HMAC-SHA256(endpoint.secret, 报文体字节) 的十六进制
+SIGNATURE_HEADER = "X-Esb-Signature"
+# esb_outbound_worker 每轮消费的消息上限（分批，防单轮长事务与全表拉取）
+OUTBOUND_BATCH_SIZE = 50
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +77,9 @@ class EndpointCreate(BaseModel):
     system_type: str = Field(pattern="^(his|lis|pacs|insurance|provincial)$")
     direction: str = Field(default="inbound", pattern="^(inbound|outbound)$")
     rate_limit_per_min: int = Field(default=60, ge=1, le=100000)
+    # 出站投递地址：留空即"仅登记"（消费成功但不投递）；签名密钥仅入库不回显
+    endpoint_url: str | None = Field(default=None, max_length=512)
+    secret: str | None = Field(default=None, max_length=128)
     active: bool = True
 
 
@@ -72,6 +87,8 @@ class EndpointUpdate(BaseModel):
     name: str | None = None
     active: bool | None = None
     rate_limit_per_min: int | None = Field(default=None, ge=1, le=100000)
+    endpoint_url: str | None = Field(default=None, max_length=512)
+    secret: str | None = Field(default=None, max_length=128)
 
 
 def _endpoint_out(e: EsbEndpoint) -> dict:
@@ -85,6 +102,8 @@ def _endpoint_out(e: EsbEndpoint) -> dict:
         "direction_name": DIRECTIONS.get(e.direction, e.direction),
         "active": e.active,
         "rate_limit_per_min": e.rate_limit_per_min,
+        # 投递地址可回显；签名密钥与接入令牌同口径，注册后不再回显
+        "endpoint_url": e.endpoint_url or "",
         "created_at": e.created_at.isoformat(),
     }
 
@@ -294,6 +313,43 @@ def _log_exchange(db: Session, endpoint: EsbEndpoint | None, message: EsbMessage
     )
 
 
+def _deliver(endpoint: EsbEndpoint, msg_type: str, body: dict) -> str:
+    """真实投递：转换后报文 POST 到端点 endpoint_url，HMAC-SHA256 签名头供对方验签。
+
+    - 报文体 = body 的 JSON 字节（UTF-8，非 ASCII 不转义），签名对**这串字节**计算，
+      对方收到后按同一字节流复算即可验签，不依赖 JSON 键序的再序列化稳定性；
+    - `secret` 未配置则不带签名头（对接方未约定验签的最小配置）；
+    - 响应 2xx 记投递成功（delivered）；非 2xx 与网络异常抛 ValueError，
+      由调用方走既有 `_record_failure` 重试/死信机制，不另造一套。
+    """
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json", "X-Esb-Msg-Type": msg_type}
+    if endpoint.secret:
+        headers[SIGNATURE_HEADER] = hmac.new(
+            endpoint.secret.encode("utf-8"), data, hashlib.sha256
+        ).hexdigest()
+    try:
+        resp = httpx.post(
+            endpoint.endpoint_url or "",
+            content=data,
+            headers=headers,
+            timeout=DELIVERY_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        raise ValueError(f"投递失败（网络异常）：{exc!r}") from exc
+    if not 200 <= resp.status_code < 300:
+        raise ValueError(f"投递失败：目标端返回 HTTP {resp.status_code}")
+    return f"已投递（delivered）至 {endpoint.endpoint_url}，HTTP {resp.status_code}"
+
+
+def _outbound_body(message: EsbMessage) -> dict:
+    """出站报文：可转换类型（hl7v2_patient / fhir_patient）投递**转换后**的标准化
+    字段字典（解析口径与入站同一实现），其它类型原样透传 payload。"""
+    if message.msg_type in TRANSFORM_FORMATS:
+        return _apply_transform(message.payload or {}, {"format": message.msg_type})
+    return dict(message.payload or {})
+
+
 def _apply_transform(payload: dict, config: dict) -> dict:
     """transform 步骤：复用 integration.py 入站解析（HL7 v2 / FHIR Patient）。"""
     fmt = config.get("format", "")
@@ -339,7 +395,13 @@ def _run_step(db: Session, step: dict, context: dict) -> str:
         if not target.active:
             raise ValueError(f"路由目标接入方 {target_code} 已停用")
         context["routed_to"] = target.code
-        return f"路由至 {target.name}（{target.code}）"
+        # 真实投递：目标配置了 endpoint_url 才 POST（报文取 transform 产物，
+        # 未经 transform 时投原始 payload）；未配置保持"仅登记"现状并在结果说明。
+        if target.endpoint_url:
+            body = context.get("data") or context.get("payload") or {}
+            detail = _deliver(target, str(context.get("msg_type", "")), body)
+            return f"路由至 {target.name}（{target.code}），{detail}"
+        return f"路由至 {target.name}（{target.code}）（未配置投递地址，仅登记不投递）"
 
     # persist
     entity = config.get("entity", "patient")
@@ -373,12 +435,24 @@ def _run_step(db: Session, step: dict, context: dict) -> str:
     raise ValueError(f"未知落库实体 {entity}")
 
 
-def _process_message(db: Session, message: EsbMessage) -> str:
-    """默认消费逻辑（未指定编排流程时）：按 msg_type 走内置转换校验。
+def _process_message(db: Session, message: EsbMessage, endpoint: EsbEndpoint | None = None) -> str:
+    """默认消费逻辑（未指定编排流程时）：按端点方向分流。
 
+    出站端点（direction=outbound）：报文转换后经 `_deliver` 真实投递——
+    - endpoint_url 已配置：POST 成功（2xx）记 delivered，失败抛 ValueError
+      进既有重试/死信；
+    - endpoint_url 为空：保持"仅登记"现状，消费成功并在结果里说明未投递。
+
+    入站端点：沿用既有逻辑——
     - hl7v2_patient / fhir_patient：复用 integration 解析并幂等建档；
     - 其它类型：要求 payload 非空（作为通用透传消息的最小校验）。
     """
+    if endpoint is not None and endpoint.direction == "outbound":
+        if not message.payload:
+            raise ValueError("消息载荷为空，无法处理")
+        if not endpoint.endpoint_url:
+            return "出站端点未配置投递地址（endpoint_url），仅登记不投递"
+        return _deliver(endpoint, message.msg_type, _outbound_body(message))
     if message.msg_type in TRANSFORM_FORMATS:
         data = _apply_transform(message.payload, {"format": message.msg_type})
         patient, created = create_patient_idempotent(
@@ -412,7 +486,7 @@ def process_message(message_id: int, db: Session = Depends(get_db)):
     message.status = "processing"
     db.flush()
     try:
-        detail = _process_message(db, message)
+        detail = _process_message(db, message, endpoint)
     except (ValueError, HTTPException) as exc:
         error = exc.detail if isinstance(exc, HTTPException) else str(exc)
         _record_failure(db, message, str(error))
@@ -423,6 +497,54 @@ def process_message(message_id: int, db: Session = Depends(get_db)):
     _log_exchange(db, endpoint, message, True, "")
     db.commit()
     return {**_message_out(message, endpoint.code if endpoint else ""), "detail": detail}
+
+
+def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE) -> tuple[int, str]:
+    """周期消费出站待投递消息（供 jobs.esb_outbound_worker 调用，也可测试直调）。
+
+    口径：
+    - 只挑**出站端点**（direction=outbound 且 active）的消息；
+    - queued 立即可投；failed 须到达 next_retry_at（尊重既有指数退避），
+      succeeded/dead/processing 一律不碰；
+    - 每轮至多 batch_size 条（分批，防单轮长事务），按 id 先进先出；
+    - 每条各自 commit：一条投挂不拖累同批其余消息；
+    - 成败均落 ExchangeLog（与手工消费同一监控口径）；告警交由日志——
+      本函数只返回摘要，失败计数由调用方（定时任务）记入 JobRun.message。
+    """
+    now = utcnow()
+    rows = (
+        db.query(EsbMessage)
+        .join(EsbEndpoint, EsbEndpoint.id == EsbMessage.endpoint_id)
+        .filter(
+            EsbEndpoint.direction == "outbound",
+            EsbEndpoint.active.is_(True),
+            (EsbMessage.status == "queued")
+            | ((EsbMessage.status == "failed") & (EsbMessage.next_retry_at <= now)),
+        )
+        .order_by(EsbMessage.id)
+        .limit(batch_size)
+        .all()
+    )
+    delivered = failed = 0
+    for message in rows:
+        endpoint = db.get(EsbEndpoint, message.endpoint_id)
+        message.status = "processing"
+        db.flush()
+        try:
+            _process_message(db, message, endpoint)
+        except (ValueError, HTTPException) as exc:
+            error = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            _record_failure(db, message, str(error))
+            _log_exchange(db, endpoint, message, False, str(error))
+            failed += 1
+        else:
+            _record_success(message)
+            _log_exchange(db, endpoint, message, True, "")
+            delivered += 1
+        db.commit()
+    return delivered + failed, (
+        f"出站消费 {delivered + failed} 条：成功 {delivered}，失败 {failed}（失败走重试/死信）"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +639,7 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
 
     message.status = "processing"
     db.flush()
-    context: dict = {"payload": message.payload or {}}
+    context: dict = {"payload": message.payload or {}, "msg_type": message.msg_type}
     step_results: list[dict] = []
     error = ""
     for idx, step in enumerate(flow.steps or [], start=1):

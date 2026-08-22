@@ -35,7 +35,9 @@ from app.main import app
 #: 真实规模是 800+，若某次遍历只捞到几条，说明穿封装的方式失效了。
 MIN_SANE_ENDPOINTS = 800
 
-#: 当前 /api 端点快照（885 个）。由真实应用生成，勿手写。
+#: 当前 /api 端点快照（893 个）。由真实应用生成，勿手写。
+#: 工程包 I1 新增 8 个：HL7 ADT/ORU 入站、FHIR DiagnosticReport/Encounter 入站、
+#: 传染病/死因报告卡导出（单卡 JSON + 批量 CSV）。
 SNAPSHOT_ENDPOINTS = {
     "DELETE /api/analytics/formulas/{key}",
     "DELETE /api/appointments/blacklist/{patient_id}",
@@ -88,7 +90,9 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/blood/requests",
     "GET /api/blood/stocks",
     "GET /api/certs",
+    "GET /api/certs/death-report-cards/export.csv",
     "GET /api/certs/stats",
+    "GET /api/certs/{cert_id}/death-report-card",
     "GET /api/checkups",
     "GET /api/checkups/abnormal",
     "GET /api/chronic",
@@ -169,6 +173,8 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/homevisits/stats",
     "GET /api/infectious/alerts",
     "GET /api/infectious/cases",
+    "GET /api/infectious/cases/export.csv",
+    "GET /api/infectious/cases/{case_id}/report-card",
     "GET /api/infectious/diseases",
     "GET /api/infectious/late-reports",
     "GET /api/inpatient/admissions",
@@ -661,8 +667,12 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/insurance/settlements",
     "POST /api/insurance/special-diseases",
     "POST /api/insurance/special-diseases/{app_id}/review",
+    "POST /api/integration/fhir/DiagnosticReport",
+    "POST /api/integration/fhir/Encounter",
     "POST /api/integration/fhir/Observation",
     "POST /api/integration/fhir/Patient",
+    "POST /api/integration/hl7v2/adt",
+    "POST /api/integration/hl7v2/oru",
     "POST /api/integration/hl7v2/patient",
     "POST /api/jobs/{name}/run",
     "POST /api/knowledge",

@@ -149,6 +149,10 @@ class EsbEndpoint(Base):
     direction: Mapped[str] = mapped_column(String(8), default="inbound", index=True)
     # 接入令牌只存散列（与用户口令同一 PBKDF2 实现），明文仅注册时返回一次
     auth_token_hash: Mapped[str] = mapped_column(String(200), default="")
+    # 出站投递地址：为空表示端点"仅登记"（消费时不真实投递，保持登记语义）
+    endpoint_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # 出站签名密钥（HMAC-SHA256 对投递报文体加签）；为空则投递时不带签名头
+    secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     rate_limit_per_min: Mapped[int] = mapped_column(Integer, default=60)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
