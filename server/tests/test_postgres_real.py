@@ -163,6 +163,99 @@ def test_迁移与模型的列集合零漂移(pg_engine):
     )
 
 
+def test_去重迁移把重复行归并掉且留得下痕(pg_engine):
+    """P0-1 的真数据验证：**在有重复行的存量库上**跑去重迁移会发生什么。
+
+    上面几条只能证明"新库建出来的索引是唯一的"——但真正危险的是**已经有脏数据的
+    生产库**：唯一索引建不上去，迁移会中途失败，或者（更糟）有人一怒之下加个
+    `DELETE` 把重复行直接删掉。这条用例把那个场景跑一遍：
+
+    1. 退到修复前的那版迁移（`d8e9f1a2b3c8`）——那时唯一索引还是普通索引；
+    2. 造两条同 user_id 的积分账户，各自带一条流水；
+    3. 升到 heads，断言：合并成一条、余额相加、流水全部改指、留痕表有整行 JSON、
+       且此后再插同一个 user_id 会被 DB 拦下。
+
+    用子进程跑 alembic：本进程的引擎早已按 `PG_URL` 定型，降级/升级要的是命令行口径。
+    """
+    import json
+
+    from sqlalchemy import text
+
+    def alembic(*args):
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=SERVER_DIR, capture_output=True, text=True,
+            env={**os.environ, "MEDPLAT_DATABASE_URL": PG_URL},
+        )
+        assert result.returncode == 0, f"alembic {args} 失败：\n{result.stderr[-1500:]}"
+
+    alembic("downgrade", "d8e9f1a2b3c8")
+    with pg_engine.begin() as conn:
+        assert not conn.execute(text(
+            "SELECT indexdef ~ 'UNIQUE' FROM pg_indexes "
+            "WHERE indexname = 'ix_spd_point_accounts_user_id'"
+        )).scalar(), "降级后该索引应回到非唯一（这正是修复前生产库的样子）"
+        conn.execute(text(
+            "INSERT INTO users (username, password_hash, full_name, role, created_at) "
+            "VALUES ('pg_dedup_vd', 'x', '去重验证村医', 'doctor', now())"
+        ))
+        uid = conn.execute(text(
+            "SELECT id FROM users WHERE username = 'pg_dedup_vd'")).scalar()
+        for balance, earned, used in ((10, 30, 20), (5, 7, 2)):
+            conn.execute(text(
+                "INSERT INTO spd_point_accounts (user_id, balance, earned, used, created_at, updated_at)"
+                " VALUES (:u, :b, :e, :s, now(), now())"
+            ), {"u": uid, "b": balance, "e": earned, "s": used})
+        account_ids = conn.execute(text(
+            "SELECT id FROM spd_point_accounts WHERE user_id = :u ORDER BY id"), {"u": uid}
+        ).scalars().all()
+        assert len(account_ids) == 2, "修复前的库允许一个人两个积分账户——这就是缺陷本身"
+        for account_id in account_ids:
+            conn.execute(text(
+                "INSERT INTO spd_point_records (account_id, rule_code, direction, points,"
+                " balance_after, ref_type, note, created_at)"
+                " VALUES (:a, 'sign', 'in', 1, 1, '', '去重验证流水', now())"
+            ), {"a": account_id})
+
+    alembic("upgrade", "heads")
+
+    with pg_engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT id, balance, earned, used FROM spd_point_accounts WHERE user_id = :u"
+        ), {"u": uid}).mappings().all()
+        assert len(rows) == 1, f"应归并成一条，实际 {len(rows)} 条"
+        merged = rows[0]
+        assert (merged["balance"], merged["earned"], merged["used"]) == (15, 37, 22), \
+            f"余额与累计应相加，实际 {dict(merged)}"
+        assert merged["id"] == account_ids[0], "应保留最早建的那条"
+
+        holders = conn.execute(text(
+            "SELECT DISTINCT account_id FROM spd_point_records WHERE note = '去重验证流水'"
+        )).scalars().all()
+        assert holders == [account_ids[0]], f"流水应全部改指到保留账户，实际 {holders}"
+
+        report = conn.execute(text(
+            "SELECT strategy, removed_id, removed_row FROM spd_dedup_reports "
+            "WHERE table_name = 'spd_point_accounts' AND key_value = :k"
+        ), {"k": str(uid)}).mappings().all()
+        assert len(report) == 1 and report[0]["strategy"] == "merge"
+        assert report[0]["removed_id"] == account_ids[1]
+        archived = report[0]["removed_row"]
+        archived = json.loads(archived) if isinstance(archived, str) else archived
+        assert archived["balance"] == 5 and archived["earned"] == 7, \
+            "留痕必须是被删那一行的**整行**，否则事后还原不了"
+
+    import sqlalchemy.exc
+
+    with pg_engine.connect() as conn:
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            with conn.begin():
+                conn.execute(text(
+                    "INSERT INTO spd_point_accounts (user_id, balance, earned, used,"
+                    " created_at, updated_at) VALUES (:u, 0, 0, 0, now(), now())"
+                ), {"u": uid})
+
+
 def test_金额并发闸门在真PG上成立(pg_engine):
     """把 `test_billing_money_concurrency.py` 换到 PG 上再跑一遍。
 

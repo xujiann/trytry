@@ -1,7 +1,7 @@
 # SCHEMA（自动生成，勿手改）
 
 > 由 `server/scripts/dump_schema.py` 从 ORM 元数据生成。改了模型请重跑该脚本。
-> 表总数：**258**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
+> 表总数：**259**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
 
 ## access_logs
 
@@ -2635,6 +2635,22 @@
 - _index_ ix_spd_data_sources_created_at(created_at)
 - _index_ ix_spd_data_sources_source_type(source_type)
 - _index_ ix_spd_data_sources_status(status)
+
+## spd_dedup_reports
+
+- `id` · INTEGER · PK · NOT NULL
+- `table_name` · VARCHAR(64) · NOT NULL · index
+- `key_column` · VARCHAR(64) · NOT NULL
+- `key_value` · VARCHAR(128) · NOT NULL · index
+- `kept_id` · INTEGER · NOT NULL
+- `removed_id` · INTEGER · NOT NULL
+- `strategy` · VARCHAR(16) · NOT NULL
+- `removed_row` · JSON · NOT NULL
+- `note` · VARCHAR(256) · NOT NULL
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_spd_dedup_reports_created_at(created_at)
+- _index_ ix_spd_dedup_reports_key_value(key_value)
+- _index_ ix_spd_dedup_reports_table_name(table_name)
 
 ## spd_devices
 
