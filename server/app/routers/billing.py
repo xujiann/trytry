@@ -17,16 +17,20 @@ HTTP 网关（app/payments.py）注册为 channel="gateway"（异步语义：下
 回调 `POST /api/billing/payments/callback` 验签确认后转 paid）；缺省渠道仍走
 Mock 同步语义，既有测试与演示不受影响。
 """
+import contextlib
 import json
 import logging
 import secrets
-from datetime import datetime
+import threading
+from collections.abc import Iterator
+from datetime import datetime, timedelta
 from typing import Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, insert, literal, select
+from sqlalchemy import case, func, insert, literal, select, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -69,6 +73,44 @@ def unsettled_amount(db: Session, admission_id: int) -> float:
         .scalar()
     )
     return round(total or 0.0, 2)
+
+
+# ---------- 金额并发闸门 ----------
+
+#: SQLite 侧的进程内互斥（见 `_serialized_on` 文档）。RLock 而非 Lock：
+#: 结算的临界区里还会再进押金冲抵这一段，同线程重入不该把自己锁死。
+_MONEY_SQLITE_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def _serialized_on(db: Session, model, row_id: int) -> Iterator[None]:
+    """把"读金额 → 判定 → 写金额"整段圈成临界区，两种方言各用各的办法。
+
+    **为什么"一条 SQL 里判定 + 写入"在这里不够用。** `concurrency.take_amount`
+    的 `UPDATE ... WHERE col >= amount` 之所以对，是因为 UPDATE 会对**既有行**
+    取行锁，等锁到手后再重新求值 WHERE（PG 的 EvalPlanQual）。而押金余额不是
+    一列而是流水现算，扣减写的是 `INSERT ... FROM SELECT ... WHERE 余额 >= 扣减额`
+    ——INSERT **不给任何既有行加锁**，聚合子查询读的是语句开始时的快照，
+    READ COMMITTED 下并发事务彼此不可见。实测（PG）：预交 1000、八路并发各退 200，
+    八笔全过，refunded=1600、balance=-600。SQLite 的库级写锁把这条掩盖了，
+    所以它只在生产库上现形。
+
+    - PostgreSQL：对父行（住院登记 / 就诊 / 支付单所属结算单）`SELECT ... FOR UPDATE`。
+      锁到手之后的每条语句都取新快照（READ COMMITTED 逐语句取快照），
+      判定读到的就是上一个赢家提交后的值。锁随事务提交/回滚释放，
+      因此 **commit 必须写在 with 块内**。
+    - SQLite：没有 FOR UPDATE，且库级写锁只在第一条**写**语句才生效，
+      判定阶段的读根本不排队。沿用 main.py 审计链的分流写法——单进程内用一把
+      进程内锁串行化（SQLite 本就只用于开发/单实例）。
+
+    临界区按"父行"划分而不是全局一把锁：不同住院登记、不同结算单的收退费互不阻塞。
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(select(model.id).where(model.id == row_id).with_for_update())
+        yield
+        return
+    with _MONEY_SQLITE_LOCK:
+        yield
 
 
 # ---------- 收费项目目录 ----------
@@ -389,10 +431,14 @@ def deposit_balance(db: Session, admission_id: int) -> float:
 def _atomic_deposit_deduct(
     db: Session, admission_id: int, amount: float, deposit_type: str, method: str, operator: str
 ) -> bool:
-    """原子扣押金：INSERT..SELECT，仅当当前余额 ≥ 扣减额时才落行。
+    """扣押金：INSERT..SELECT，仅当当前余额 ≥ 扣减额时才落行。
 
-    判定与扣减在同一条 SQL 里（同 concurrency.take_amount 的原则）——
-    先查余额再插行是 check-then-act，并发退费会把余额退成负数。
+    **调用方必须先进 `_serialized_on(db, Admission, admission_id)` 临界区**，
+    并在临界区内提交。这一条 SQL 本身**不是**原子判定：INSERT 不给既有流水行
+    加锁，聚合子查询读的是语句开始时的快照，PG READ COMMITTED 下八路并发退费
+    实测全部通过（余额 1000 退出 1600）。判定的原子性由外层的行锁承担，
+    这条 SQL 只负责"锁内再算一次，不够就一行都不落"这层兜底。
+
     返回是否扣到；调用方随后自行 commit / rollback。
     """
     balance_expr = (
@@ -476,21 +522,28 @@ def refund_deposit(
     if db.get(Admission, body.admission_id) is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
     operator = user.full_name or user.username
-    if not _atomic_deposit_deduct(
-        db, body.admission_id, body.amount, "refund", body.method, operator
-    ):
-        db.rollback()
-        raise HTTPException(
-            status_code=422,
-            detail=f"退费金额超出押金余额（当前余额 {deposit_balance(db, body.admission_id)}）",
+    # 判定余额与落退费行必须在同一段临界区里，且提交也要在里头——
+    # 锁一放，下一个退费请求读到的就必须是本笔已提交后的余额。
+    with _serialized_on(db, Admission, body.admission_id):
+        if not _atomic_deposit_deduct(
+            db, body.admission_id, body.amount, "refund", body.method, operator
+        ):
+            db.rollback()
+            raise HTTPException(
+                status_code=422,
+                detail=f"退费金额超出押金余额（当前余额 {deposit_balance(db, body.admission_id)}）",
+            )
+        deposit_id = (
+            db.query(Deposit.id)
+            .filter(
+                Deposit.admission_id == body.admission_id, Deposit.deposit_type == "refund"
+            )
+            .order_by(Deposit.id.desc())
+            .limit(1)
+            .scalar()
         )
-    db.commit()
-    deposit = (
-        db.query(Deposit)
-        .filter(Deposit.admission_id == body.admission_id, Deposit.deposit_type == "refund")
-        .order_by(Deposit.id.desc())
-        .first()
-    )
+        db.commit()
+    deposit = db.get(Deposit, deposit_id)
     assert deposit is not None  # 刚插入成功，必有一行
     return _deposit_out(deposit, deposit_balance(db, body.admission_id))
 
@@ -609,6 +662,21 @@ def _settlement_out(s: Settlement) -> dict:
 def create_settlement(
     body: SettlementCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    """建结算单：认领未结明细 → 医保分担 → 押金冲抵，整段落在一个临界区里。
+
+    并发下的老写法是 check-then-act：先查未结明细、再建单、再回填 settlement_id，
+    三步之间没有任何闸门。实测（PG）四路并发出院结算 → **四张结算单、四条医保
+    结算记录（基金支出重复计入）、押金被多冲 1500**，且前三张单挂着金额却一条
+    明细都没有（明细最终只归属最后一张）。
+
+    改成两道闸门：
+    1. 明细认领改为 `UPDATE ... WHERE settlement_id IS NULL` 按 rowcount 判定
+       ——UPDATE 对既有行取行锁、锁后重新求值，抢不到的那几路 rowcount=0，
+       整个事务回滚，结算单与医保结算记录一并不落库；
+    2. 住院结算再加一条部分唯一索引（bill_type='inpatient' 的 admission_id 唯一），
+       把"一次住院一张结算单"这条语义下沉到数据库——应用层的判定再怎么写，
+       兜底也该在库里（同全域基金池 D-2、居民账户绑定的先例）。
+    """
     if body.bill_type == "inpatient":
         if body.admission_id is None:
             raise HTTPException(status_code=422, detail="住院结算须提供 admission_id")
@@ -616,14 +684,9 @@ def create_settlement(
         if admission is None:
             raise HTTPException(status_code=404, detail="住院记录不存在")
         patient_id, org_id = admission.patient_id, admission.org_id
-        details = (
-            db.query(BillDetail)
-            .filter(
-                BillDetail.admission_id == body.admission_id,
-                BillDetail.settlement_id.is_(None),
-            )
-            .all()
-        )
+        gate_model: type = Admission
+        gate_id = body.admission_id
+        detail_filter = BillDetail.admission_id == body.admission_id
     else:
         if body.encounter_id is None:
             raise HTTPException(status_code=422, detail="门诊结算须提供 encounter_id")
@@ -631,68 +694,104 @@ def create_settlement(
         if encounter is None:
             raise HTTPException(status_code=404, detail="就诊记录不存在")
         patient_id, org_id = encounter.patient_id, encounter.org_id
-        details = (
-            db.query(BillDetail)
-            .filter(
-                BillDetail.encounter_id == body.encounter_id,
-                BillDetail.settlement_id.is_(None),
-            )
-            .all()
-        )
-    if not details:
-        raise HTTPException(status_code=422, detail="无未结清费用明细，无需结算")
-    total = round(sum(d.amount for d in details), 2)
-    if round(body.insurance_pay, 2) > total:
-        raise HTTPException(status_code=422, detail="医保支付不得超过费用总额")
-    insurance_pay = round(body.insurance_pay, 2)
-    self_pay = round(total - insurance_pay, 2)
+        gate_model = Encounter
+        gate_id = body.encounter_id
+        detail_filter = BillDetail.encounter_id == body.encounter_id
 
-    settlement = Settlement(
-        patient_id=patient_id,
-        org_id=org_id,
-        bill_type=body.bill_type,
-        admission_id=body.admission_id,
-        encounter_id=body.encounter_id,
-        total_amount=total,
-        insurance_pay=insurance_pay,
-        self_pay=self_pay,
-        created_by=user.id,
-    )
-    db.add(settlement)
-    db.flush()
-    if insurance_pay > 0:
-        # 复用医保结算记录（进入基金监测 fund-stats 口径）
-        ins = InsuranceSettlement(
+    # 临界区按"这次住院/这次就诊"划分：同一笔的并发结算排队，不同笔互不阻塞。
+    # 押金冲抵也在里头——它与 /deposits/refund 抢的是同一把住院登记行锁。
+    with _serialized_on(db, gate_model, gate_id):
+        # 前置轻读只为保住既有口径：没有任何未结明细时按 422 回，
+        # 与"重复结算"的既有响应一字不差（真正的并发判定在下面的 UPDATE）。
+        if (
+            db.query(BillDetail.id)
+            .filter(detail_filter, BillDetail.settlement_id.is_(None))
+            .first()
+            is None
+        ):
+            raise HTTPException(status_code=422, detail="无未结清费用明细，无需结算")
+
+        settlement = Settlement(
             patient_id=patient_id,
             org_id=org_id,
-            settle_type="local",
-            total_amount=total,
-            insurance_pay=insurance_pay,
-            self_pay=self_pay,
+            bill_type=body.bill_type,
+            admission_id=body.admission_id,
+            encounter_id=body.encounter_id,
+            total_amount=0,
+            insurance_pay=0,
+            self_pay=0,
+            created_by=user.id,
         )
-        db.add(ins)
-        db.flush()
-        settlement.insurance_settlement_id = ins.id
-    for d in details:
-        d.settlement_id = settlement.id
-    # 工程包 B1：住院结算自动用押金冲抵个人自付。
-    # 差额口径——冲抵额 = min(押金余额, 个人自付)：
-    #   余额 ≥ 自付：自付全额冲抵，剩余押金留待退费（/deposits/refund）；
-    #   余额 < 自付：全部押金冲抵，患者补缴 payable_after_offset。
-    # 冲抵走原子 INSERT..SELECT（判余额与落行同一条 SQL），并发下押金
-    # 被同时退费也不会冲出负余额；抢不到就按当下余额重算再试。
-    deposit_offset = 0.0
-    if body.bill_type == "inpatient" and body.admission_id is not None:
-        operator = user.full_name or user.username
-        for _ in range(3):
+        db.add(settlement)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=409, detail="该住院记录已有结算单，不可重复结算"
+            ) from None
+
+        # 认领明细：判定（settlement_id IS NULL）与写入在同一条 UPDATE 里，
+        # rowcount 就是"我认领到几条"。0 条 = 有人抢先结完了。
+        claimed = cast(
+            CursorResult,
+            db.execute(
+                update(BillDetail)
+                .where(detail_filter, BillDetail.settlement_id.is_(None))
+                .values(settlement_id=settlement.id)
+            ),
+        ).rowcount
+        if not claimed:
+            db.rollback()
+            raise HTTPException(status_code=422, detail="无未结清费用明细，无需结算")
+
+        # 总额按**实际认领到的**明细算，而不是认领前那次查询的结果
+        total = round(
+            db.query(func.coalesce(func.sum(BillDetail.amount), 0.0))
+            .filter(BillDetail.settlement_id == settlement.id)
+            .scalar()
+            or 0.0,
+            2,
+        )
+        if round(body.insurance_pay, 2) > total:
+            db.rollback()  # 回滚把明细认领一并退回，明细不会被这次失败的结算占住
+            raise HTTPException(status_code=422, detail="医保支付不得超过费用总额")
+        insurance_pay = round(body.insurance_pay, 2)
+        self_pay = round(total - insurance_pay, 2)
+        settlement.total_amount = total
+        settlement.insurance_pay = insurance_pay
+        settlement.self_pay = self_pay
+
+        if insurance_pay > 0:
+            # 复用医保结算记录（进入基金监测 fund-stats 口径）
+            ins = InsuranceSettlement(
+                patient_id=patient_id,
+                org_id=org_id,
+                settle_type="local",
+                total_amount=total,
+                insurance_pay=insurance_pay,
+                self_pay=self_pay,
+            )
+            db.add(ins)
+            db.flush()
+            settlement.insurance_settlement_id = ins.id
+
+        # 工程包 B1：住院结算自动用押金冲抵个人自付。
+        # 差额口径——冲抵额 = min(押金余额, 个人自付)：
+        #   余额 ≥ 自付：自付全额冲抵，剩余押金留待退费（/deposits/refund）；
+        #   余额 < 自付：全部押金冲抵，患者补缴 payable_after_offset。
+        # 余额在临界区内是稳定的（退费与冲抵抢同一把行锁），所以一次就够，
+        # 不必再像旧写法那样"抢不到就按当下余额重算再试"。
+        deposit_offset = 0.0
+        if body.bill_type == "inpatient" and body.admission_id is not None:
+            operator = user.full_name or user.username
             balance = deposit_balance(db, body.admission_id)
             offset = round(min(balance, self_pay), 2)
-            if offset <= 0:
-                break
-            if _atomic_deposit_deduct(db, body.admission_id, offset, "offset", "settle", operator):
+            if offset > 0 and _atomic_deposit_deduct(
+                db, body.admission_id, offset, "offset", "settle", operator
+            ):
                 deposit_offset = offset
-                break
-    db.commit()
+        db.commit()
     db.refresh(settlement)
     out = _settlement_out(settlement)
     if body.bill_type == "inpatient" and body.admission_id is not None:
@@ -894,6 +993,65 @@ def _payment_out(o: PaymentOrder) -> dict:
     }
 
 
+#: pending 支付单的占额时效（分钟）。异步渠道下单只是"受理"，钱还没到；
+#: 不占额就能同一张账单扫三次码收三次钱（实测 100 元账单收进 300），
+#: 占额不设时效又会被"只下单不付款"永久占死。取 30 分钟：比常见扫码码有效期
+#: （微信/支付宝 2 小时）短，比收银台一次交互长得多。
+_PENDING_ORDER_TTL_MINUTES = 30
+
+
+def _expire_stale_pending(db: Session, settlement_id: int) -> None:
+    """把超时未回调的 pending 单作废，释放它占住的额度。
+
+    取舍写明白：作废之后网关若再送来 paid 回调，`payment_callback` 会按
+    "当前状态不接受支付回调" 409 拒绝入账，这笔钱靠日终对账（missing_local）
+    捞出来人工处理。反过来不作废的代价更大——任何人都能用永不付款的扫码单
+    把一张账单占死，收银台再也收不了钱。
+    """
+    cutoff = utcnow() - timedelta(minutes=_PENDING_ORDER_TTL_MINUTES)
+    db.execute(
+        update(PaymentOrder)
+        .where(
+            PaymentOrder.settlement_id == settlement_id,
+            PaymentOrder.status == "pending",
+            PaymentOrder.created_at < cutoff,
+        )
+        .values(
+            status="failed",
+            fail_reason=f"下单后 {_PENDING_ORDER_TTL_MINUTES} 分钟未收到支付回调，自动作废",
+        )
+    )
+
+
+def _collected_amount(db: Session, settlement_id: int, *, include_pending: bool) -> float:
+    """结算单已占用的收款额。
+
+    两处口径差别都是缺陷修出来的：
+
+    - **按净额 `amount - refunded_amount` 而不是 amount**：全额退款的单原先
+      仍按全额计入已付，患者换个渠道重付就被 422 挡住——一张 100 元的账单
+      退过一次就再也收不了钱了；
+    - **pending 计入（include_pending）**：异步渠道下单后钱没到但额度必须先占住，
+      否则同一张账单能被扫码收多次。回调入账时的复核则**只看已到账的**
+      （include_pending=False）：那时要回答的是"这笔钱收下会不会收超"，
+      其它还没到账的 pending 不该抢这个额度。
+    """
+    statuses = ["paid", "refunded"] + (["pending"] if include_pending else [])
+    total = (
+        db.query(
+            func.coalesce(
+                func.sum(PaymentOrder.amount - PaymentOrder.refunded_amount), 0.0
+            )
+        )
+        .filter(
+            PaymentOrder.settlement_id == settlement_id,
+            PaymentOrder.status.in_(statuses),
+        )
+        .scalar()
+    )
+    return round(total or 0.0, 2)
+
+
 class PaymentCreate(BaseModel):
     settlement_id: int
     channel: str = Field(pattern="^(cash|card|insurance|online|gateway)$")
@@ -927,48 +1085,46 @@ def create_payment(
     amount = round(body.amount if body.amount is not None else default_amount, 2)
     if amount <= 0:
         raise HTTPException(status_code=422, detail="支付金额须大于 0")
-    paid_already = round(
-        sum(
-            o.amount
-            for o in db.query(PaymentOrder)
-            .filter(
-                PaymentOrder.settlement_id == settlement.id,
-                PaymentOrder.status.in_(["paid", "refunded"]),
+    # "算已付额 → 判超额 → 落单"三步之间原先没有闸门，通道 RTT 就是竞态窗口：
+    # 实测 1000 元结算单五路并发各缴 1000，五张单全部 paid，收进 5000。
+    # 判定与落单一起圈进结算单这一行的临界区，并在里头提交。
+    with _serialized_on(db, Settlement, settlement.id):
+        _expire_stale_pending(db, settlement.id)
+        paid_already = _collected_amount(db, settlement.id, include_pending=True)
+        if paid_already + amount > round(settlement.total_amount, 2) + 1e-6:
+            # 先收事务再抛：作废写入还挂在未提交的事务里，SQLite 的库级写锁
+            # 要等依赖清理才放，下一个请求会撞 "database is locked"
+            db.rollback()
+            raise HTTPException(
+                status_code=422,
+                detail=f"支付金额超出结算单未付余额（总额 {settlement.total_amount}，已付 {paid_already}）",
             )
-            .all()
-        ),
-        2,
-    )
-    if paid_already + amount > round(settlement.total_amount, 2) + 1e-6:
-        raise HTTPException(
-            status_code=422,
-            detail=f"支付金额超出结算单未付余额（总额 {settlement.total_amount}，已付 {paid_already}）",
+        order = PaymentOrder(
+            settlement_id=settlement.id, channel=body.channel, amount=amount, created_by=user.id
         )
-    order = PaymentOrder(
-        settlement_id=settlement.id, channel=body.channel, amount=amount, created_by=user.id
-    )
-    db.add(order)
-    db.flush()
-    result = _gateway(body.channel).pay(order.id, amount, body.channel)
-    if result.get("success") and result.get("pending"):
-        # 异步通道：受理≠到账。留 pending 等回调，把跳转/二维码参数带回给收银端。
-        order.trade_no = result.get("trade_no", "")
+        db.add(order)
+        db.flush()
+        result = _gateway(body.channel).pay(order.id, amount, body.channel)
+        pending = bool(result.get("success") and result.get("pending"))
+        if result.get("success"):
+            order.trade_no = result.get("trade_no", "")
+            # 异步通道（pending）受理≠到账，单子留在 pending 等回调；
+            # 同步通道通道应答即终态，当场转 paid。
+            if not pending:
+                order.status = "paid"
+                order.paid_at = utcnow()
+        else:
+            order.status = "failed"
+            order.fail_reason = result.get("message", "通道未返回原因")[:256]
         db.commit()
-        db.refresh(order)
+    db.refresh(order)
+    if pending:
+        # 把跳转/二维码参数带回给收银端
         return {
             **_payment_out(order),
             "pay_url": result.get("pay_url", ""),
             "qr_code": result.get("qr_code", ""),
         }
-    if result.get("success"):
-        order.status = "paid"
-        order.trade_no = result.get("trade_no", "")
-        order.paid_at = utcnow()
-    else:
-        order.status = "failed"
-        order.fail_reason = result.get("message", "通道未返回原因")[:256]
-    db.commit()
-    db.refresh(order)
     return _payment_out(order)
 
 
@@ -1047,15 +1203,36 @@ async def payment_callback(request: Request, db: Session = Depends(get_db)):
             status_code=409,
             detail=f"当前状态 {PAYMENT_STATUS.get(order.status, order.status)} 不接受支付回调",
         )
-    if result_status == "paid":
+    if result_status != "paid":
+        order.status = "failed"
+        order.fail_reason = str(payload.get("message", "通道回调支付失败"))[:256]
+        order.callback_at = utcnow()
+        db.commit()
+        return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": False}
+    # 入账前复核**结算单**层面的未付余额，而不只是"回调金额==本单金额"。
+    # 只核对本单金额挡不住"同一张账单开了多张单"这类超收：三张 100 元的
+    # gateway 单各自金额都对，回调三次就收进 300（实测）。这里按已到账口径
+    # （不含其它 pending）复核一次，收足了就拒绝入账。
+    with _serialized_on(db, Settlement, order.settlement_id):
+        settlement = db.get(Settlement, order.settlement_id)
+        settled = _collected_amount(db, order.settlement_id, include_pending=False)
+        if settlement is not None and settled + round(order.amount, 2) > round(
+            settlement.total_amount, 2
+        ) + 1e-6:
+            logger.error(
+                "[PAY-CALLBACK] 结算单 %s 已收 %s / 总额 %s，支付单 %s 的 %s 元回调超出未付余额，拒绝入账",
+                settlement.id, settled, settlement.total_amount, order.id, order.amount,
+            )
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"该结算单已收足（总额 {settlement.total_amount}，已收 {settled}），回调超出未付余额，拒绝入账",
+            )
         order.status = "paid"
         order.trade_no = trade_no or order.trade_no
         order.paid_at = utcnow()
-    else:
-        order.status = "failed"
-        order.fail_reason = str(payload.get("message", "通道回调支付失败"))[:256]
-    order.callback_at = utcnow()
-    db.commit()
+        order.callback_at = utcnow()
+        db.commit()
     return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": False}
 
 
@@ -1082,12 +1259,39 @@ def refund_payment(
         )
     refundable = round(order.amount - order.refunded_amount, 2)
     amount = round(body.amount if body.amount is not None else refundable, 2)
-    if amount > refundable + 1e-6:
-        raise HTTPException(status_code=422, detail=f"退款金额超出可退余额 {refundable}")
+    # 先占额、再调通道。老写法是"读 refunded_amount → 判可退 → 回写"的读-改-写，
+    # 且通道调用在提交之前：八路并发各退 50，八笔全部 200、通道真退了 400，
+    # 台账只记到 150——退出去的钱比账上多。
+    # 占额这条 UPDATE 同 concurrency.take_amount：判定与累加在一条 SQL 里，
+    # 对既有行取行锁、锁后重新求值，抢不到的那几路 rowcount=0 → 422。
+    claimed = cast(
+        CursorResult,
+        db.execute(
+            update(PaymentOrder)
+            .where(
+                PaymentOrder.id == order.id,
+                PaymentOrder.status == "paid",
+                PaymentOrder.amount - PaymentOrder.refunded_amount >= amount - 1e-6,
+            )
+            .values(refunded_amount=PaymentOrder.refunded_amount + amount)
+        ),
+    ).rowcount
+    if not claimed:
+        db.rollback()
+        db.refresh(order)  # 抢输了就把真实可退额报出来，别回一个读旧值算出的数
+        raise HTTPException(
+            status_code=422,
+            detail=f"退款金额超出可退余额 {round(order.amount - order.refunded_amount, 2)}",
+        )
     result = _gateway(order.channel).refund(order.trade_no, amount)
     if not result.get("success"):
+        # 通道明确回失败＝钱没出去，回滚把占额退回。
+        # 取舍：不落"待冲正"记录——通道已给出确定答复的失败，落一条待冲正
+        # 只会制造需要人工消化的假差错；真正的不确定（超时/无应答）由通道侧
+        # 返回失败结果 + 日终对账兜底，那才是对账要解决的问题。
+        db.rollback()
         raise HTTPException(status_code=502, detail=result.get("message", "通道退款失败"))
-    order.refunded_amount = round(order.refunded_amount + amount, 2)
+    db.refresh(order)  # 占额走的是 Core UPDATE，会话里的对象还是旧值
     order.refunded_at = utcnow()
     if order.refunded_amount >= round(order.amount, 2) - 1e-6:
         order.status = "refunded"  # 全额退回

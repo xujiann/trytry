@@ -11,7 +11,11 @@
   与类型宽容会把很多 PG 才报的错吞掉（已实测抓到过一个：boolean 列配了
   整数默认值，PG 直接 DatatypeMismatch）；
 - 部分唯一索引（仅 status='active'）真的只锁在管档案；
-- 业务测试套在 PG 上跑通由 conftest 的 MEDPLAT_DATABASE_URL 支持，
+- 金额并发闸门（押金退费 / 出院结算 / 缴费收款）——这三条**只在 PG 上现形**，
+  SQLite 的库级写锁把判定与写入之间的窗口一并锁掉了。用例本体在
+  `test_billing_money_concurrency.py`（默认跟 test-unit 跑 SQLite），
+  本文件用子进程把它换到 PG 上再跑一遍；
+- 其余业务测试套在 PG 上跑通由 conftest 的 MEDPLAT_DATABASE_URL 支持，
   不在本文件重复。
 """
 import os
@@ -156,4 +160,30 @@ def test_迁移与模型的列集合零漂移(pg_engine):
     assert not extra_columns, (
         "迁移建了、模型上没有的列（多半是模型删列忘了写迁移，或迁移写错列名）：\n"
         + "\n".join(f"  {t}: {sorted(cols)}" for t, cols in extra_columns.items())
+    )
+
+
+def test_金额并发闸门在真PG上成立(pg_engine):
+    """把 `test_billing_money_concurrency.py` 换到 PG 上再跑一遍。
+
+    起子进程而不是在本进程内切库：`app.database` 的引擎是模块级的，本进程早已
+    按 SQLite 导入定型，改环境变量已经晚了。子进程里 `MEDPLAT_BILLING_PG_URL`
+    会在导入 app 之前把连接串顶掉（那个模块头部有断言兜底）。
+
+    **本条要放在文件末尾**：子进程用 `reset_database()`（drop_all + create_all）
+    重建表，会把上面几条用例依赖的"迁移建出来的库"换成模型建出来的库。
+    往后加 PG 用例请加在这一条之前。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_billing_money_concurrency.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_BILLING_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "金额并发用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
     )
