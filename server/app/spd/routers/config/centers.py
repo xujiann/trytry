@@ -91,7 +91,10 @@ def org_tree(db: Session = Depends(get_db)):
     团队授权和考核"——所以这棵树不只是机构名称，还要带上这几项的实际数量，
     否则配置的人无法判断改动会影响到谁。
     """
-    from ..models import SpdEnrollment
+    # 拆包后这里要多一级：`config/` 是子包，`..models` 会解析成
+    # app.spd.routers.models（不存在）。此前没有任何用例调过这个端点，
+    # 于是它在主干上一直是 500——覆盖率缺口藏起来的正是这类。
+    from ...models import SpdEnrollment
 
     orgs = db.query(Organization).order_by(Organization.id).all()
     team_counts: dict[int, int] = {}

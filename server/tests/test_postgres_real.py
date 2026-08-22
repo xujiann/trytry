@@ -163,6 +163,139 @@ def test_迁移与模型的列集合零漂移(pg_engine):
     )
 
 
+def test_脏库上迁移只报告不删数据_处置脚本才归并(pg_engine):
+    """P0-1 的真数据验证：**在有重复行的存量库上**跑这条迁移会发生什么。
+
+    上面几条只能证明"新库建出来的索引是唯一的"——真正危险的是**已经有脏数据的
+    生产库**：唯一索引建不上去，迁移要么中途失败，要么（更糟）有人一怒之下加个
+    `DELETE` 把重复行直接删掉。平台通则是后者绝对不许（CLAUDE.md §4），
+    所以这条用例把两段都跑一遍：
+
+    1. 退到修复前那版（`d8e9f1a2b3c8`），此时唯一索引还是普通索引；
+    2. 造两条同 user_id 的积分账户，各带一条流水；
+    3. 升到 heads——断言**两行都还在**、索引没建成唯一、冲突进了台账（pending）；
+    4. 再跑 `scripts/spd_dedup.py --apply`——断言归并成一条、余额相加、流水改指、
+       台账落定为 merge 且存着整行 JSON，此后再插同一 user_id 被 DB 拦下。
+
+    第 3 步是这条用例真正的价值：迁移**没**替人做决定。
+
+    用子进程跑 alembic 与脚本：本进程的引擎早已按 `PG_URL` 定型，这两者要的是命令行口径。
+    """
+    import json
+
+    from sqlalchemy import text
+
+    def run(*args, what="", expect=0):
+        result = subprocess.run(
+            [sys.executable, *args],
+            cwd=SERVER_DIR, capture_output=True, text=True,
+            env={**os.environ, "MEDPLAT_DATABASE_URL": PG_URL},
+        )
+        assert result.returncode == expect, (
+            f"{what or args} 退出码应为 {expect}，实际 {result.returncode}：\n"
+            f"{result.stdout[-800:]}\n{result.stderr[-1500:]}"
+        )
+        return result
+
+    def alembic(*args):
+        return run("-m", "alembic", *args, what=f"alembic {args}")
+
+    def unique_index_exists() -> bool:
+        with pg_engine.connect() as conn:
+            return bool(conn.execute(text(
+                "SELECT indexdef ~ 'UNIQUE' FROM pg_indexes "
+                "WHERE indexname = 'ix_spd_point_accounts_user_id'"
+            )).scalar())
+
+    alembic("downgrade", "d8e9f1a2b3c8")
+    assert not unique_index_exists(), "降级后该索引应回到非唯一（这正是修复前生产库的样子）"
+
+    with pg_engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO users (username, password_hash, full_name, role, created_at) "
+            "VALUES ('pg_dedup_vd', 'x', '去重验证村医', 'doctor', now())"
+        ))
+        uid = conn.execute(text(
+            "SELECT id FROM users WHERE username = 'pg_dedup_vd'")).scalar()
+        for balance, earned, used in ((10, 30, 20), (5, 7, 2)):
+            conn.execute(text(
+                "INSERT INTO spd_point_accounts (user_id, balance, earned, used, created_at, updated_at)"
+                " VALUES (:u, :b, :e, :s, now(), now())"
+            ), {"u": uid, "b": balance, "e": earned, "s": used})
+        account_ids = conn.execute(text(
+            "SELECT id FROM spd_point_accounts WHERE user_id = :u ORDER BY id"), {"u": uid}
+        ).scalars().all()
+        assert len(account_ids) == 2, "修复前的库允许一个人两个积分账户——这就是缺陷本身"
+        for account_id in account_ids:
+            conn.execute(text(
+                "INSERT INTO spd_point_records (account_id, rule_code, direction, points,"
+                " balance_after, ref_type, note, created_at)"
+                " VALUES (:a, 'sign', 'in', 1, 1, '', '去重验证流水', now())"
+            ), {"a": account_id})
+
+    # ---- 第一段：升级只报告 ----
+    alembic("upgrade", "heads")
+
+    with pg_engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT id FROM spd_point_accounts WHERE user_id = :u ORDER BY id"), {"u": uid}
+        ).scalars().all()
+        assert rows == account_ids, (
+            f"迁移不得替人删数据：两行都应原封不动，实际 {rows}"
+        )
+        pending = conn.execute(text(
+            "SELECT strategy, kept_id, removed_id FROM spd_dedup_reports "
+            "WHERE table_name = 'spd_point_accounts' AND key_value = :k"
+        ), {"k": str(uid)}).mappings().all()
+        assert len(pending) == 1, f"冲突应进台账，实际 {pending}"
+        assert pending[0]["strategy"] == "pending", "迁移记下的冲突必须是待处置态"
+        assert (pending[0]["kept_id"], pending[0]["removed_id"]) == tuple(account_ids)
+    assert not unique_index_exists(), "有重复时不该建成唯一索引（那会让升级失败）"
+
+    # ---- 第二段：人执行处置脚本 ----
+    # 报告模式对"有冲突待处置"以退出码 1 收场——运维巡检据此告警，别改成 0
+    report = run("scripts/spd_dedup.py", what="报告模式", expect=1)
+    assert "未改动任何数据" in report.stdout
+    run("scripts/spd_dedup.py", "--apply", what="处置")
+
+    with pg_engine.connect() as conn:
+        merged = conn.execute(text(
+            "SELECT id, balance, earned, used FROM spd_point_accounts WHERE user_id = :u"
+        ), {"u": uid}).mappings().all()
+        assert len(merged) == 1, f"应归并成一条，实际 {len(merged)} 条"
+        row = merged[0]
+        assert (row["balance"], row["earned"], row["used"]) == (15, 37, 22), \
+            f"余额与累计应相加，实际 {dict(row)}"
+        assert row["id"] == account_ids[0], "应保留最早建的那条"
+
+        holders = conn.execute(text(
+            "SELECT DISTINCT account_id FROM spd_point_records WHERE note = '去重验证流水'"
+        )).scalars().all()
+        assert holders == [account_ids[0]], f"流水应全部改指到保留账户，实际 {holders}"
+
+        done = conn.execute(text(
+            "SELECT strategy, removed_id, removed_row FROM spd_dedup_reports "
+            "WHERE table_name = 'spd_point_accounts' AND key_value = :k"
+        ), {"k": str(uid)}).mappings().all()
+        assert len(done) == 1 and done[0]["strategy"] == "merge", f"台账未落定：{done}"
+        assert done[0]["removed_id"] == account_ids[1]
+        archived = done[0]["removed_row"]
+        archived = json.loads(archived) if isinstance(archived, str) else archived
+        assert archived["balance"] == 5 and archived["earned"] == 7, \
+            "留痕必须是被删那一行的**整行**，否则事后还原不了"
+
+    assert unique_index_exists(), "处置完脚本必须把迁移跳过的唯一索引补建上"
+
+    import sqlalchemy.exc
+
+    with pg_engine.connect() as conn:
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            with conn.begin():
+                conn.execute(text(
+                    "INSERT INTO spd_point_accounts (user_id, balance, earned, used,"
+                    " created_at, updated_at) VALUES (:u, 0, 0, 0, now(), now())"
+                ), {"u": uid})
+
 def test_金额并发闸门在真PG上成立(pg_engine):
     """把 `test_billing_money_concurrency.py` 换到 PG 上再跑一遍。
 

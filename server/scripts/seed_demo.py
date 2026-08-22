@@ -657,6 +657,16 @@ if not c.get("/api/spd/enrollments?limit=1").json():
         "name": "河西糖尿病管理团队", "org_id": zhen2["id"], "level": "township",
         "program_codes": ["diabetes"]}).json()
 
+    # 村医赵村医进团队并领活：不这么做，医生移动端的慢专病工作台在演示环境上
+    # 全是 0 与"未加入慢专病团队"——培训手册截出来的就是一张空表
+    _vd_user = next(u for u in c.get("/api/users").json() if u["username"] == "doc_village")
+    c.post(f"/api/spd/teams/{_spd_team1['id']}/members", json={
+        "user_id": _vd_user["id"], "member_role": "village_doctor",
+        "program_codes": ["hypertension"], "can_referral": True})
+    c.post("/api/spd/village-doctors", json={
+        "user_id": _vd_user["id"], "org_id": village["id"],
+        "township": "城东镇", "village": "杨庄村", "phone": "13900001234"})
+
     _spd_patients = [
         c.post("/api/patients", json={
             "name": f"慢专病演示{i:02d}", "id_card": f"32098119601001{i:04d}",
@@ -692,12 +702,16 @@ if not c.get("/api/spd/enrollments?limit=1").json():
     _spd_enrolls = []
     for i, p in enumerate(_spd_patients):
         hyper = i < 10
-        _spd_enrolls.append(c.post("/api/spd/enrollments", json={
+        _enroll_body = {
             "patient_id": p["id"], "program_code": "hypertension" if hyper else "diabetes",
             "org_id": (zhen1 if hyper else zhen2)["id"],
             "team_id": (_spd_team1 if hyper else _spd_team2)["id"],
             "risk_level": _risks[i % 4], "consent_signed": True,
-            "source": "screening"}).json())
+            "source": "screening"}
+        if i < 6:  # 前 6 人归赵村医：签约积分与"我的患者"因此有数
+            _enroll_body["village_doctor_id"] = _vd_user["id"]
+            _enroll_body["doctor_user_id"] = _vd_user["id"]
+        _spd_enrolls.append(c.post("/api/spd/enrollments", json=_enroll_body).json())
 
     # 标准路径：建一版演示模板并发布，前 5 个高血压患者入径、办结首节点
     _hyp_prog = next(pr for pr in c.get("/api/spd/programs").json()
@@ -718,6 +732,17 @@ if not c.get("/api/spd/enrollments?limit=1").json():
             if t["node_key"] == "assess" and t["status"] in ("pending", "claimed"):
                 c.post(f"/api/spd/tasks/{t['id']}/complete",
                        json={"result": {"note": "演示办结：完成首次评估"}})
+
+    # 村医的待办：两条随访 + 一条宣教，办结其中一条（随访积分随之入账）
+    for _i, _e in enumerate(_spd_enrolls[:3]):
+        _t = c.post("/api/spd/tasks", json={
+            "patient_id": _e["patient_id"], "title": ["入户随访", "血压复测", "用药指导"][_i],
+            "task_type": ["followup", "followup", "edu"][_i], "org_id": village["id"],
+            "enrollment_id": _e["id"], "due_days": [0, 3, 7][_i]}).json()
+        c.post(f"/api/spd/tasks/{_t['id']}/assign", json={"assignee_id": _vd_user["id"]})
+        if _i == 2:
+            c.post(f"/api/spd/tasks/{_t['id']}/complete",
+                   json={"result": {"note": "已完成用药指导"}})
 
     # 监测数据：前几名血压异常，触发工作台异常提醒
     for i, e in enumerate(_spd_enrolls[:5]):

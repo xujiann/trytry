@@ -641,22 +641,24 @@ def dispatch_edu_push(db: Session, push: SpdEduPush, material: SpdEduMaterial) -
 
     - sms：平台短信通道（无手机号 → failed，记原因）
     - app：居民端站内消息（尚无人绑定档案 → failed——推给不存在的收件箱不算送达）
-    - wechat：通道未接入，failed 并写明；接入后在这里补实现
+    - wechat：公众号模板消息，走平台既有通道与系统参数里的模板 id
+      （没配模板 / 没人绑微信 / 接口未受理，三种失败原因各自记明）
 
     供"立即推送"与定时派发两处调用——同一个动作只有一份实现。
     """
-    from ..platform import notify_resident, patient_of, send_sms
+    from ..platform import notify_resident, patient_of, send_sms, send_wechat_edu
 
     if push.channel == "sms":
         patient = patient_of(db, push.patient_id)
         phone = patient.phone if patient else ""
         if not phone:
             push.status = "failed"
-            push.frequency = push.frequency  # 保持
+            push.fail_reason = "患者档案没有手机号"
             return False
         content = f"【健康宣教】{material.title}：{(material.content or '')[:60]}"
         ok = send_sms(phone, content)
         push.status = "sent" if ok else "failed"
+        push.fail_reason = "" if ok else "短信通道未受理"
         return ok
     if push.channel == "app":
         delivered = notify_resident(
@@ -664,10 +666,17 @@ def dispatch_edu_push(db: Session, push: SpdEduPush, material: SpdEduMaterial) -
             body=(material.content or "")[:200], link_type="spd_edu_push", link_id=push.id,
         )
         push.status = "sent" if delivered else "failed"
+        push.fail_reason = "" if delivered else "该患者尚无绑定的居民账号"
         return bool(delivered)
-    # wechat：通道未接入。置 failed 而不是假装 sent——公众号打通后在此补实现
-    push.status = "failed"
-    return False
+    # wechat：公众号模板消息。发不出去时**如实置 failed 并把原因写进 result**——
+    # "没配模板"和"患者没绑微信"是两件事，处置也不同，不能都显示成"发送失败"
+    delivered, reason = send_wechat_edu(
+        db, push.patient_id, title=f"健康宣教：{material.title}",
+        body=(material.content or "")[:200],
+    )
+    push.status = "sent" if delivered else "failed"
+    push.fail_reason = "" if delivered else reason[:200]
+    return bool(delivered)
 
 
 @router.get("/edu-pushes")
@@ -696,7 +705,7 @@ def list_edu_pushes(
     return [
         {"id": r.id, "material_id": r.material_id, "title": titles.get(r.material_id, ""),
          "patient_id": r.patient_id, "channel": r.channel, "send_at": r.send_at,
-         "frequency": r.frequency, "status": r.status,
+         "frequency": r.frequency, "status": r.status, "fail_reason": r.fail_reason,
          "read_at": r.read_at.isoformat() if r.read_at else "",
          "created_at": r.created_at.isoformat()}
         for r in rows

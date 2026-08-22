@@ -1403,12 +1403,15 @@ def test_migration_covers_every_spd_table():
 
     from app.database import Base
 
-    migration = next(
-        p for p in (pathlib.Path(__file__).resolve().parent.parent / "alembic" / "versions")
-        .iterdir() if p.name.startswith("d1a2b3c4e5f6")
-    ).read_text(encoding="utf-8")
+    # 扫**整条链**而不是只看建表那一版：spd_dedup_reports 这类后来补的表建在
+    # 后续迁移里，只盯 d1a2b3c4e5f6 会把它们误报成"漏写"（实测撞到过），
+    # 更糟的反面是——真漏写的表如果碰巧不在那一版里，这条规则也发现不了。
+    versions = pathlib.Path(__file__).resolve().parent.parent / "alembic" / "versions"
+    all_migrations = "\n".join(
+        p.read_text(encoding="utf-8") for p in sorted(versions.glob("*.py"))
+    )
     missing = [
         name for name in Base.metadata.tables
-        if name.startswith("spd_") and f'"{name}"' not in migration
+        if name.startswith("spd_") and f'"{name}"' not in all_migrations
     ]
     assert missing == [], f"以下慢专病表没有写进迁移：{missing}"

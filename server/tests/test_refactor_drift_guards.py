@@ -1168,6 +1168,8 @@ SNAPSHOT_MODELS = {
     "SpdConsult",
     "SpdConsultMessage",
     "SpdDataSource",
+    # 唯一性修复（迁移 e1a2b3c4d5e9）的留痕表：建唯一索引前被归并/移除的行整行存档
+    "SpdDedupReport",
     "SpdDevice",
     "SpdEduMaterial",
     "SpdEduPush",

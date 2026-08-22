@@ -312,7 +312,8 @@ def set_path_status(
 def delete_path_template(
     template_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    from ..models import SpdPathInstance
+    # 同 centers.org-tree：`config/` 是子包，少一级会解析成不存在的模块
+    from ...models import SpdPathInstance
 
     template = db.get(SpdPathTemplate, template_id)
     if template is None:

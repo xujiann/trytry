@@ -853,6 +853,9 @@ class SpdEduPush(Base):
     frequency: Mapped[str] = mapped_column(String(32), default="once")
     # pending=待发送, sent=已发送, read=已阅读, failed=发送失败
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    #: 失败原因。"没配微信模板""患者没绑微信""通道未受理"是三件不同的事，
+    #: 处置也不同——只记一个 failed 等于让实施期去猜到底该找谁。
+    fail_reason: Mapped[str] = mapped_column(String(200), default="")
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
@@ -1415,4 +1418,40 @@ class SpdReportInstance(Base):
     org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
     content: Mapped[dict] = mapped_column(JSON, default=dict)
     subscriber_ids: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class SpdDedupReport(Base):
+    """唯一键冲突台账：迁移探到的重复行，整行 JSON 存档，处置进度记在这里。
+
+    存量库里 18 张 spd 表的唯一索引被迁移建成了普通索引（模型上一直写着
+    `unique=True`），于是"同一编码两条配置""同一村医两个积分账户"这类数据
+    真的能落库。补唯一索引前必须先去重，而**迁移不替人删数据**（CLAUDE.md §4）：
+    `e1a2b3c4d5e9` 探到重复只做三件事——跳过这张表的唯一索引、把冲突逐行记进
+    这张表、打一条点名到表/键值/行 id 的 ERROR 日志。
+
+    真正的归并由人执行 `python scripts/spd_dedup.py --apply`，它把处置结果写回
+    `strategy`。三个取值：
+
+    - `pending`：迁移刚记下的冲突，**还没处置**，业务表里两行都还在
+    - `merge`：已自动归并（当前只有积分账户：余额/累计相加后并成一条）
+    - `keep_earliest`：已保留最早一条、其余存档移除，
+      **差异是否补回保留的那条由实施期人工裁定**
+
+    `removed_row` 存被并掉那一行的完整原始字段——事后核对"两份配置差在哪"全靠它。
+    除处置脚本回填 `strategy`/`note` 外不改这张表：它是审计性质的账。
+    """
+
+    __tablename__ = "spd_dedup_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    table_name: Mapped[str] = mapped_column(String(64), default="", index=True)
+    key_column: Mapped[str] = mapped_column(String(64), default="")
+    key_value: Mapped[str] = mapped_column(String(128), default="", index=True)
+    kept_id: Mapped[int] = mapped_column(Integer, default=0)
+    removed_id: Mapped[int] = mapped_column(Integer, default=0)
+    # pending=迁移记下的冲突待处置；merge=已自动归并；keep_earliest=保留最早一条其余已存档移除
+    strategy: Mapped[str] = mapped_column(String(16), default="pending")
+    removed_row: Mapped[dict] = mapped_column(JSON, default=dict)
+    note: Mapped[str] = mapped_column(String(256), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

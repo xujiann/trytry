@@ -8,7 +8,7 @@
 - 迁入确认要在目标机构**重建**责任关系，且排除后允许再次纳管；
 - 路径进入条件不满足 → 暂停 + 通知，条件满足后可恢复。
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -237,15 +237,21 @@ def test_call_task_manual_provider_stays_pending(client, h, base):
     assert result["dispatch"] == {"accepted": True, "note": "待人工外呼"}
 
 
-def test_call_provider_http_failure_keeps_task_pending(client, h, base, monkeypatch):
-    """HTTP 通道派发失败：任务不报错、留在 pending、原因落 result。"""
-    from app.spd import callcenter
+def test_call_provider_http_failure_keeps_task_pending(client, h, base):
+    """HTTP 通道派发失败：任务不报错、留在 pending、原因落 result。
+
+    用 `set_call_provider` 注入而不是 monkeypatch 私有变量——那个注入口本来就是
+    为"换通道"准备的公开入口，用例用它才同时证明了它可用（此前它零调用）。
+    """
+    from app.spd.callcenter import set_call_provider
 
     class BoomProvider:
+        name = "boom"
+
         def dispatch(self, task_id, phone, ref_type):
             return False, "呼叫中心网关 502"
 
-    monkeypatch.setattr(callcenter, "_provider", BoomProvider())
+    set_call_provider(BoomProvider())
     try:
         result = client.post(
             "/api/spd/call-tasks",
@@ -253,7 +259,7 @@ def test_call_provider_http_failure_keeps_task_pending(client, h, base, monkeypa
             headers=h,
         ).json()
     finally:
-        monkeypatch.setattr(callcenter, "_provider", None)
+        set_call_provider(None)  # 复位成按配置构建，不影响后面的用例
     assert result["status"] == "pending"
     assert result["dispatch"] == {"accepted": False, "note": "呼叫中心网关 502"}
     listed = client.get("/api/spd/call-tasks?status=pending", headers=h).json()
@@ -522,3 +528,156 @@ def test_village_doctor_qr_svg(client, h, base):
     client.patch(f"/api/spd/village-doctors/{vd['id']}", json={"active": False}, headers=h)
     assert client.get(f"/api/spd/village-doctors/{vd['id']}/qr.svg", headers=h).status_code == 409, \
         "停用的村医不该再出绑定码"
+
+
+# ============================================================ P1（本轮）宣教微信通道
+
+
+def test_edu_push_wechat_reports_each_failure_reason(client, h, base):
+    """微信通道：三种发不出去要给**三种**原因，不能都写"发送失败"。
+
+    没配模板（运营该去配）、患者没绑微信（客服该去引导）、接口未受理（运维该去查），
+    处置完全不同——合成一句失败等于让实施期挨个猜。
+    """
+    from app.database import SessionLocal
+    from app.models import ResidentAccount, SystemParam
+    from app.spd.platform import WECHAT_EDU_TEMPLATE_KEY
+    from app.wechat import set_wechat_provider
+
+    material = client.post(
+        "/api/spd/edu-materials",
+        json={"code": "edu_wx", "title": "冬季血压管理", "content": "注意保暖与规律服药"},
+        headers=h,
+    ).json()
+    patient = base["patients"][3]
+
+    def push_once():
+        return client.post(
+            "/api/spd/edu-pushes",
+            json={"material_id": material["id"], "patient_ids": [patient["id"]],
+                  "channel": "wechat"},
+            headers=h,
+        ).json()
+
+    def last_push():
+        rows = client.get(
+            f"/api/spd/edu-pushes?material_id={material['id']}", headers=h
+        ).json()
+        return rows[0]
+
+    # ① 没配模板
+    assert push_once()["failed"] == 1
+    assert "未配置微信宣教模板" in last_push()["fail_reason"]
+
+    # ② 配了模板但没人绑微信
+    with SessionLocal() as db:
+        db.add(SystemParam(key=WECHAT_EDU_TEMPLATE_KEY, value="TPL_EDU_001"))
+        db.commit()
+    assert push_once()["failed"] == 1
+    assert "尚无绑定微信" in last_push()["fail_reason"]
+
+    # ③ 绑了微信、通道受理 → sent
+    with SessionLocal() as db:
+        db.add(ResidentAccount(patient_id=patient["id"], phone="13800009999",
+                               wechat_openid="openid-edu-1", status="active"))
+        db.commit()
+
+    sent_calls = []
+
+    class OkProvider:
+        name = "stub"
+
+        def authorize_url(self, state):
+            return ""
+
+        def exchange_code(self, code):
+            return None
+
+        def send_template_message(self, openid, template_id, data, url=""):
+            sent_calls.append((openid, template_id, data))
+            return True
+
+    set_wechat_provider(OkProvider())
+    try:
+        assert push_once()["sent"] == 1
+        row = last_push()
+        assert row["status"] == "sent" and row["fail_reason"] == ""
+        assert sent_calls and sent_calls[-1][1] == "TPL_EDU_001"
+
+        # ④ 通道未受理 → failed，且原因指向通道而不是配置
+        class DeadProvider(OkProvider):
+            def send_template_message(self, openid, template_id, data, url=""):
+                return False
+
+        set_wechat_provider(DeadProvider())
+        assert push_once()["failed"] == 1
+        assert "未受理" in last_push()["fail_reason"]
+    finally:
+        set_wechat_provider(None)
+
+
+def test_未注册采集器的源类型如实报未接入(client, h):
+    """HIS/EMR 不再挂那个只数数不落库的探针：没接就显示没接。
+
+    此前它们注册着 `collect_internal`（`query.count()`，一行不写库），
+    于是监控页显示"运行正常、本次 N 行"——看起来好的比明摆着没接更危险。
+    """
+    from app.spd.collectors import COLLECTORS, unregistered_types
+    from app.database import SessionLocal
+
+    assert "HIS" not in COLLECTORS and "EMR" not in COLLECTORS
+    source = client.post(
+        "/api/spd/data-sources",
+        json={"code": "his_probe", "name": "院内HIS", "source_type": "HIS",
+              "freq_minutes": 30},
+        headers=h,
+    ).json()
+    with SessionLocal() as db:
+        assert "HIS" in unregistered_types(db), "未注册的源类型要进实施待办清单"
+
+    from app.spd.collectors import run_source
+    from app.spd.models import SpdDataSource
+
+    with SessionLocal() as db:
+        log = run_source(db, db.get(SpdDataSource, source["id"]))
+        db.commit()
+        assert not log.success and "未注册" in log.message
+        assert db.get(SpdDataSource, source["id"]).status == "failed"
+
+
+def test_实施期可注册自己的采集器(client, h):
+    """`register_collector` 是实施期接真实院内系统的入口——用例证明它真的能用。
+
+    此前它零调用：一个"扩展点"如果没有任何东西证明它可用，
+    实施期第一次用它的时候就是第一次测它。
+    """
+    from app.database import SessionLocal
+    from app.spd.collectors import COLLECTORS, register_collector, run_source
+    from app.spd.models import SpdDataSource, SpdMeasurement
+
+    calls = []
+
+    def fake_lis(db, source):
+        calls.append(source.code)
+        db.add(SpdMeasurement(
+            patient_id=1, program_code="hypertension", metric="ldl", value=3.6,
+            unit="mmol/L", level="high", source="LIS", source_ref=f"lis:{source.id}:1",
+            measured_at=datetime(2026, 8, 22, 9, 0, 0),
+        ))
+        return 1
+
+    register_collector("LIS", fake_lis)
+    try:
+        source = client.post(
+            "/api/spd/data-sources",
+            json={"code": "lis_real", "name": "检验LIS", "source_type": "LIS",
+                  "freq_minutes": 15},
+            headers=h,
+        ).json()
+        with SessionLocal() as db:
+            log = run_source(db, db.get(SpdDataSource, source["id"]))
+            db.commit()
+            success, rows = log.success, log.rows  # commit 后实例会失联，先取值
+        assert success and rows == 1 and calls == ["lis_real"]
+    finally:
+        COLLECTORS.pop("LIS", None)

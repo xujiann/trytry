@@ -44,15 +44,17 @@ logger = logging.getLogger("medplat.spd.collectors")
 Collector = Callable[[Session, SpdDataSource], int]
 
 
-def collect_internal(db: Session, source: SpdDataSource) -> int:
-    """内置采集器：把院内就诊记录里的诊断同步为慢专病可用的事实。
+def collect_encounter_probe(db: Session, source: SpdDataSource) -> int:
+    """**探针**（不是采集器）：数一数本机构近期有多少条就诊记录，返回条数。
 
-    当前只做一件事——为**本机构近期就诊**的患者补一条"就诊事件"标记，
-    使纳入规则的自动识别不必每次扫全部历史。返回处理行数。
+    它一行都不落库。之所以留着，是因为"这个源的连通性与数据量看起来正常吗"
+    在实施期确实要看一眼；但它**不再注册给 HIS / EMR**——那两个源类型现在
+    如实显示"未注册采集器"（`unregistered_types()` 会把它们列进实施待办，
+    监控页也会告警）。
 
-    刻意做得很薄：真正的体征与检验值要从 LIS/体检系统来，那部分是实施期
-    对接的活。这里给出的是采集器该长什么样、日志与监控怎么串起来的样板，
-    而不是一个假装能用的模拟实现。
+    此前它顶着 HIS/EMR 的名字注册着，于是监控页显示"运行正常、本次 N 行"，
+    而实际一行数据都没进来。**看起来是好的**比"明摆着没接"更危险：
+    没接会有人去接，看起来好的没人会去查。
     """
     since = now_naive() - timedelta(minutes=max(source.freq_minutes, 1) * 2)
     query = db.query(Encounter).filter(Encounter.created_at >= since)
@@ -107,9 +109,10 @@ def collect_publichealth(db: Session, source: SpdDataSource) -> int:
     return written
 
 
+#: 已实现的采集器。**只登记真的会落库的实现**——把探针挂上来会让监控页
+#: 显示"正常"，而那正是最难发现的一种坏。HIS / EMR / LIS / 体检要等实施期
+#: 拿到院内接口再注册（`register_collector`），在那之前它们如实显示"未注册"。
 COLLECTORS: dict[str, Collector] = {
-    "HIS": collect_internal,
-    "EMR": collect_internal,
     "publichealth": collect_publichealth,
 }
 

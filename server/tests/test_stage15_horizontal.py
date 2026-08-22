@@ -14,6 +14,7 @@
 """
 import ast
 import os
+import warnings
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,13 +32,32 @@ SPD_ROUTER_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "spd", "ro
 
 
 def _router_files():
-    """全部路由文件的 (显示名, 绝对路径)；子系统文件带 spd/ 前缀便于定位。"""
+    """全部路由文件的 (显示名, 绝对路径)；子系统文件带 spd/ 前缀与子目录便于定位。
+
+    **必须递归**（os.walk 而不是 os.listdir）：`app/spd/routers/config/` 是一个子包，
+    一层扫会漏掉整包 6 个文件 58 条路由——横向越权规则从此看不见它们，而闸门照样报绿。
+    同一个盲区 `test_stage14_concurrency` 已经修过（并补了"必须递归"的自证用例），
+    这里是同一处失效的另一半：**规则没被删，只是不再看新目录了**。
+    """
     files = []
     for directory, label in ((ROUTER_DIR, ""), (SPD_ROUTER_DIR, "spd/")):
-        for name in sorted(os.listdir(directory)):
-            if name.endswith(".py"):
-                files.append((f"{label}{name}", os.path.join(directory, name)))
-    return files
+        root_dir = os.path.abspath(directory)
+        for root, dirs, names in os.walk(root_dir):
+            dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+            rel = os.path.relpath(root, root_dir)
+            prefix = "" if rel == "." else rel.replace(os.sep, "/") + "/"
+            for name in sorted(names):
+                if name.endswith(".py"):
+                    files.append((f"{label}{prefix}{name}", os.path.join(root, name)))
+    return sorted(files)
+
+
+def test_路由扫描必须递归到子包():
+    """防的是"路由拆进子包 → 扫描静默缩水"这一种失效（与 stage14 同一条自证）。"""
+    scanned = {name for name, _ in _router_files()}
+    assert any(name.startswith("spd/config/") for name in scanned), (
+        "没扫到 app/spd/routers/config/ 子包——_router_files() 又退回成不递归了"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -510,7 +530,20 @@ def test_按id写接口机构归属欠账不许变长():
 
     实测过的洞：乙院经办按 id 领走甲院 5 台 CT。补上机构写守卫后，
     只剩 4 个按业务设计跨机构的接口（集中审方 2 + 远程会诊 2），逐条写明理由。
+
+    **自证覆盖面**：扫了多少文件一并打印出来。这条规则曾经在 `app/spd/routers/config/`
+    拆成子包之后静默缩水（`os.listdir` 一层扫看不见子包），而它照样报绿——
+    一个不声张自己覆盖范围的绿灯，和假装看过全部的哨兵一样危险。
     """
+    scanned = _router_files()
+    summary = (
+        f"\n[横向越权闸门] 覆盖面自证\n"
+        f"  扫描文件：{len(scanned)} 个"
+        f"（app/routers + app/spd/routers，**递归**，其中子包文件 "
+        f"{sum(1 for n, _ in scanned if '/' in n.replace('spd/', '', 1))} 个）"
+    )
+    print(summary)
+    warnings.warn(summary, UserWarning, stacklevel=2)
     unguarded = _byid_org_write_endpoints()
     unexpected = unguarded - BYID_CROSS_ORG_OK
     assert unexpected == set(), (
