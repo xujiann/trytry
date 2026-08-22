@@ -34,6 +34,7 @@ from ..config import settings
 from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present
 from ..database import get_db
+from ..pii import pii_filter
 from ..privacy import mask_phone
 from ..models import (
     Admission,
@@ -244,7 +245,10 @@ def _autobind_by_phone(db: Session, account: ResidentAccount) -> None:
     # 已注销档案不参与自动绑定（个保法注销口径：绑定入口过滤，见 Patient.deactivated_at）
     matches = (
         db.query(Patient)
-        .filter(Patient.phone == account.phone, Patient.deactivated_at.is_(None))
+        .filter(
+            pii_filter(Patient.phone_idx, Patient.phone, account.phone),
+            Patient.deactivated_at.is_(None),
+        )
         .limit(2)
         .all()
     )
@@ -283,13 +287,15 @@ def _login_result(db: Session, account: ResidentAccount) -> dict:
     }
 
 
-def _account_by(db: Session, field, value: str, **create_kwargs) -> ResidentAccount:
-    """按唯一标识取账户，不存在则创建。
+def _account_by(db: Session, criterion, **create_kwargs) -> ResidentAccount:
+    """按唯一标识条件取账户，不存在则创建。
 
     并发首登会同时插入两条同 phone/openid 记录，靠数据库唯一约束挡住，
     撞约束后回滚并回查既有账户（与患者建档的幂等处理同一套路）。
+    参数从 `field == value` 改为现成的过滤条件：phone 是加密列，等值要走
+    `pii_filter`（索引列），openid 仍是普通等值，由调用方各自构造。
     """
-    account = db.query(ResidentAccount).filter(field == value).first()
+    account = db.query(ResidentAccount).filter(criterion).first()
     if account is not None:
         return account
     account = ResidentAccount(**create_kwargs)
@@ -298,7 +304,7 @@ def _account_by(db: Session, field, value: str, **create_kwargs) -> ResidentAcco
         db.commit()
     except IntegrityError:
         db.rollback()
-        account = db.query(ResidentAccount).filter(field == value).first()
+        account = db.query(ResidentAccount).filter(criterion).first()
         if account is None:  # pragma: no cover - 仅约束异常非本键冲突时
             raise
         return account
@@ -325,7 +331,9 @@ def sms_login(body: SmsLoginIn, request: Request, db: Session = Depends(get_db))
             fail_reason=f"code_{exc.status_code}", channel="sms",
         )
         raise
-    account = _account_by(db, ResidentAccount.phone, phone, phone=phone)
+    account = _account_by(
+        db, pii_filter(ResidentAccount.phone_idx, ResidentAccount.phone, phone), phone=phone
+    )
     if account.status != "active":
         record_login_event(
             db, username=f"sms:{phone}", ip=client_ip, success=False,
@@ -372,8 +380,7 @@ def wechat_login(body: WeChatLoginIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="微信授权失败，请重新发起")
     account = _account_by(
         db,
-        ResidentAccount.wechat_openid,
-        info["openid"],
+        ResidentAccount.wechat_openid == info["openid"],
         wechat_openid=info["openid"],
         wechat_unionid=info.get("unionid", ""),
         nickname=info.get("nickname", ""),
@@ -459,7 +466,7 @@ def bind_realname(
         db.query(Patient)
         .filter(
             Patient.name == body.name.strip(),
-            Patient.id_card == body.id_card.strip(),
+            pii_filter(Patient.id_card_idx, Patient.id_card, body.id_card.strip()),
             # 已注销档案不可再实名绑定（个保法注销口径：绑定入口过滤）
             Patient.deactivated_at.is_(None),
         )
@@ -506,7 +513,12 @@ def bind_phone(
     phone = _check_phone(body.phone)
     if account.phone:
         raise HTTPException(status_code=409, detail="该账户已绑定手机号")
-    if db.query(ResidentAccount).filter(ResidentAccount.phone == phone).first() is not None:
+    if (
+        db.query(ResidentAccount)
+        .filter(pii_filter(ResidentAccount.phone_idx, ResidentAccount.phone, phone))
+        .first()
+        is not None
+    ):
         raise HTTPException(status_code=409, detail="该手机号已被其他账号绑定")
     _consume_code(db, phone, body.code, "bind")
     account.phone = phone
@@ -728,7 +740,7 @@ def add_family_member(
         db.query(Patient)
         .filter(
             Patient.name == body.name.strip(),
-            Patient.id_card == body.id_card.strip(),
+            pii_filter(Patient.id_card_idx, Patient.id_card, body.id_card.strip()),
             # 已注销档案不可再被纳入代管（个保法注销口径：绑定入口过滤）
             Patient.deactivated_at.is_(None),
         )
@@ -1694,7 +1706,9 @@ def _verify_patient(db: Session, ehc_no: str, id_card: str) -> Patient:
     if _verify_failures.locked_remaining(key) > 0:
         raise HTTPException(status_code=429, detail="核验尝试过于频繁，请10分钟后再试")
     patient = (
-        db.query(Patient).filter(Patient.ehc_no == ehc_no, Patient.id_card == id_card).first()
+        db.query(Patient)
+        .filter(Patient.ehc_no == ehc_no, pii_filter(Patient.id_card_idx, Patient.id_card, id_card))
+        .first()
     )
     if patient is None:
         _verify_failures.record_failure(key)

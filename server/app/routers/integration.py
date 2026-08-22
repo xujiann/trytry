@@ -50,6 +50,7 @@ from ..models import (
     Ward,
     utcnow,
 )
+from ..pii import pii_filter
 from ..privacy import desensitize, mask_id_card, mask_phone
 from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, PatientOut
 from .chronic import _evaluate_level
@@ -535,7 +536,11 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
         )
 
     if code == "A08":  # 信息更新：档案必须已存在，非空字段覆盖
-        existing = db.query(Patient).filter(Patient.id_card == data["id_card"]).first()
+        existing = (
+            db.query(Patient)
+            .filter(pii_filter(Patient.id_card_idx, Patient.id_card, data["id_card"]))
+            .first()
+        )
         if existing is None:
             raise HTTPException(
                 status_code=404, detail="患者档案不存在，A08 更新拒收（请先以 A04 建档）"
@@ -593,7 +598,11 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
         )
 
     # A03 出院：镜像同步（不设病案首页/费用门禁，见端点 docstring）
-    inpatient = db.query(Patient).filter(Patient.id_card == data["id_card"]).first()
+    inpatient = (
+        db.query(Patient)
+        .filter(pii_filter(Patient.id_card_idx, Patient.id_card, data["id_card"]))
+        .first()
+    )
     if inpatient is None:
         raise HTTPException(status_code=404, detail="患者档案不存在，A03 出院拒收")
     admission = (
@@ -724,7 +733,11 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
     if pid is not None:
         id_card = _hl7_field(pid, 3).split("^")[0].strip()
         if id_card:
-            patient = db.query(Patient).filter(Patient.id_card == id_card).first()
+            patient = (
+                db.query(Patient)
+                .filter(pii_filter(Patient.id_card_idx, Patient.id_card, id_card))
+                .first()
+            )
             if patient is not None and patient.id != request.patient_id:
                 raise HTTPException(status_code=422, detail="PID 患者与申请单患者不一致，结果拒收")
 

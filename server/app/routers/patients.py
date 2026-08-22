@@ -12,6 +12,7 @@ from ..deps import get_current_user, paginate, require_roles, resolve_business_d
 from pydantic import BaseModel, Field
 
 from ..models import ArchiveAuthorization, Organization, Patient, User
+from ..pii import pii_filter, pii_index
 from ..privacy import desensitize, mask_id_card, mask_phone  # noqa: F401  公共脱敏模块（H1）
 from ..schemas import PatientCreate, PatientOut
 from ..datetypes import DateStr
@@ -22,7 +23,7 @@ router = APIRouter(
 
 
 def _find_by_id_card(db: Session, id_card: str) -> Patient | None:
-    return db.query(Patient).filter(Patient.id_card == id_card).first()
+    return db.query(Patient).filter(pii_filter(Patient.id_card_idx, Patient.id_card, id_card)).first()
 
 
 def create_patient_idempotent(db: Session, data: dict) -> tuple[Patient, bool]:
@@ -86,8 +87,14 @@ def search_patients(
     query = db.query(Patient).filter(Patient.deactivated_at.is_(None))
     if keyword:
         like = f"%{keyword}%"
+        # PII 加密开态的降级口径（工程包 E3，文档见 app/pii.py）：证件号模糊检索
+        # 对密文行不可用，追加索引列等值让**全值**证件号仍可命中；前缀/中缀不支持。
+        # 关态该等值分支是 like 的子集，结果集不变。
         query = query.filter(
-            (Patient.name.like(like)) | (Patient.id_card.like(like)) | (Patient.ehc_no.like(like))
+            (Patient.name.like(like))
+            | (Patient.id_card.like(like))
+            | (Patient.ehc_no.like(like))
+            | (Patient.id_card_idx == pii_index(keyword))
         )
     rows = paginate(query.order_by(Patient.id), response, offset, limit)
     return [desensitize(p, user) for p in rows]
