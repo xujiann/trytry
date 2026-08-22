@@ -63,7 +63,37 @@ jobs:
           MEDPLAT_PG_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/medplat_pg_test
           # 用 1 号库：与应用默认的 0 号隔开，别让用例的清理动作碰到别的东西
           MEDPLAT_REDIS_TEST_URL: redis://127.0.0.1:6379/1
-        run: python -m pytest tests/ -q -m integration
+        # --junitxml：让下一步能查"到底跑了几条"。集成档全靠 skipif 开关，
+        # 一旦连接串没传进来，**整档静默跳过而这一步照样绿**——这正是本轮要堵的假绿。
+        run: python -m pytest tests/ -q -m integration --junitxml=integration.xml
+      - name: Integration gate self-check (集成档必须真的跑过)
+        working-directory: server
+        # 闸门要自证覆盖面（第 17 章 §17.5 第 4 条）：把"收集多少、跳过多少、
+        # 真正执行多少"打印出来，并在**一条都没跑**时阻断——
+        # 集成档默认 skip，"没跑"和"跑过且全对"在退出码上长得一模一样。
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse("integration.xml").getroot()
+          suite = root if root.tag == "testsuite" else root.find("testsuite")
+          tests = int(suite.get("tests", 0))
+          skipped = int(suite.get("skipped", 0))
+          ran = tests - skipped
+          print(f"::notice title=Integration coverage::集成档收集 {tests} 条、跳过 {skipped} 条、真正执行 {ran} 条")
+          for case in suite.iter("testcase"):
+              if case.find("skipped") is not None:
+                  print(f"::warning title=Integration skipped::{case.get('classname')}::{case.get('name')}")
+          if ran <= 0:
+              print("::error title=Integration gate not running::集成档一条都没执行（多半是 MEDPLAT_PG_TEST_URL 没传进来），这一步的绿灯没有意义")
+              sys.exit(1)
+          PY
+      - name: Upload integration report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-junit
+          path: server/integration.xml
+          if-no-files-found: ignore
       - name: Coverage gate (blocking)
         working-directory: server
         run: |

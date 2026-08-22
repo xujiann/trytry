@@ -64,7 +64,8 @@ PYDUMP
     ;;
 esac
 
-sha256sum "$OUT" > "$OUT.sha256"
+# 与 backup.sh 同口径：校验文件里只写 basename，换 cwd 也能 `sha256sum -c`。
+(cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")") > "$OUT.sha256"
 TABLES=$(grep -c "^CREATE TABLE" "$OUT" || true)
 echo "完成：$OUT（$TABLES 张表）"
 echo "提醒：本导出依赖平台主数据，恢复目标库必须已有对应的 users/organizations/patients"
