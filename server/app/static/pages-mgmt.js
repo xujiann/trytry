@@ -543,7 +543,11 @@ async function renderAnalytics() {
          <td>${esc(f.unit)}</td><td>${f.weight}</td>
          <td><span class="tag ${f.active ? "green" : ""}">${f.active ? "启用" : "停用"}</span></td>
          <td>${f.active ? `<button class="btn danger" data-off="${f.key}">停用</button>` : "—"}</td></tr>`)}</div>
-    ${report ? `<div class="panel"><h3>期末综合绩效报告（${esc(period)}）</h3>${
+    ${report ? `<div class="panel"><h3>期末综合绩效报告（${esc(period)}）</h3>
+      <p class="desc">⚠️ 口径提示：本表的「加权得分」由上面的<b>自定义公式</b>算出，
+        公式与权重管理员可随时增删改，同一机构换套公式就是另一个分数。
+        它与「绩效考核」页的<b>机构绩效评分不是同一套口径，两个分数不可直接比较</b>，
+        也不要相互印证。对上考核用「绩效考核」页。</p>${
       table(["排名", "机构", "层级", ...report.orgs[0] ? report.orgs[0].items.map((i) => i.name) : [], "加权得分"],
         report.orgs, (o, idx) =>
         `<tr><td>${idx + 1}</td><td>${esc(o.org_name)}</td><td>${esc(o.level)}</td>

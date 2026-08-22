@@ -484,13 +484,16 @@ async function renderPerformance() {
     <div class="panel"><h3>上报报表导出（管理层）</h3>
       <p style="margin-bottom:8px">
         <button class="btn secondary" id="exp-monitor">监测指标CSV（14项）</button>
-        <button class="btn secondary" id="exp-ops">运营月报CSV（累计）</button>
+        <button class="btn secondary" id="exp-ops">运营月报CSV（业务量累计／绩效分当年）</button>
         <button class="btn" id="exp-ops-period">按月导出运营月报</button></p>
       <p class="msg" id="rpt-msg"></p>
       ${monitoring ? table(["#", "指标名", "口径", "当期值", "数据来源"], monitoring.indicators, (i) =>
         `<tr><td>${i.no}</td><td>${esc(i.name)}</td><td style="font-size:12.5px;color:#5b6773">${esc(i.caliber)}</td>
          <td><b>${esc(i.value)}</b> ${esc(i.unit)}</td><td><span class="tag">${esc(i.source)}</span></td></tr>`) : ""}</div>
     <div class="panel"><h3>机构评分排名</h3>
+      <p class="desc">本页是<b>考核口径</b>：指标与权重来自指标目录，分数只统计
+        当前评分周期（${esc(data.period)}）内的业务量。「决策分析」页的
+        「期末综合绩效报告」走的是自定义公式，<b>两者不可比</b>。</p>
       ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}</div>
     <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "远程诊断", "慢病随访", "处方合格", "家医履约"],
       data.scorecards, (c, i) => {
