@@ -192,9 +192,12 @@
 - `owner_type` · VARCHAR(32) · NOT NULL · index
 - `owner_id` · INTEGER · NOT NULL · index
 - `uploaded_by` · INTEGER · → users.id
+- `scan_status` · VARCHAR(16) · NOT NULL · index
+- `scan_detail` · VARCHAR(256) · NOT NULL
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_attachments_owner_id(owner_id)
 - _index_ ix_attachments_owner_type(owner_type)
+- _index_ ix_attachments_scan_status(scan_status)
 - _index_ ix_attachments_sha256(sha256)
 
 ## audit_logs
