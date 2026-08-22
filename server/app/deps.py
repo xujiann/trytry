@@ -17,6 +17,8 @@ from .security import (
     COOKIE_MODE_HEADER,
     CSRF_COOKIE,
     CSRF_HEADER,
+    PORTAL_AUTH_COOKIE,
+    PORTAL_CSRF_COOKIE,
     active_sessions,
     decode_token,
     new_csrf_token,
@@ -79,6 +81,7 @@ def token_from_request(
     *,
     cookie_name: str,
     csrf_cookie_name: str,
+    verify_csrf: bool = True,
 ) -> str | None:
     """双模取令牌：Authorization header 优先，缺失时读会话 Cookie。
 
@@ -87,13 +90,17 @@ def token_from_request(
     - **Cookie 模式的写请求**（POST/PUT/PATCH/DELETE）必须带 X-CSRF-Token 头
       且与随请求回带的 CSRF Cookie 一致（双提交），否则 403。比较用
       hmac.compare_digest，防时序侧信道。
+
+    `verify_csrf=False` 只给**不做任何准入判定的旁路**用（见 token_for_audit）：
+    留痕要回答的是"这次尝试是谁发的"，鉴权结论仍由默认口径的调用点给出。
+    鉴权路径一律走默认值，别在准入判定上关掉它。
     """
     if credentials is not None:
         return credentials.credentials
     token = request.cookies.get(cookie_name) or ""
     if not token:
         return None
-    if request.method.upper() in _UNSAFE_METHODS:
+    if verify_csrf and request.method.upper() in _UNSAFE_METHODS:
         provided = request.headers.get(CSRF_HEADER) or ""
         expected = request.cookies.get(csrf_cookie_name) or ""
         if not provided or not expected or not hmac.compare_digest(provided, expected):
@@ -102,6 +109,49 @@ def token_from_request(
                 detail="CSRF 校验失败：Cookie 会话的写请求必须携带与 CSRF Cookie 一致的 X-CSRF-Token 头",
             )
     return token
+
+
+#: 旁路留痕要遍历的会话 Cookie 名对：业务端在前、居民端兜底。顺序与
+#: get_current_user / portal.current_resident 的分工一致，两套 Cookie 名严格分开。
+_AUDIT_COOKIE_PAIRS = (
+    (AUTH_COOKIE, CSRF_COOKIE),
+    (PORTAL_AUTH_COOKIE, PORTAL_CSRF_COOKIE),
+)
+
+
+def token_for_audit(request: Request) -> str | None:
+    """旁路留痕取令牌：与 token_from_request **同一口径**，但不校验、不抛异常。
+
+    G3 把三套浏览器前端切成 Cookie 会话后，浏览器不再发 Authorization 头。
+    审计中间件若只认那个头，整个浏览器侧的写操作会全部留痕成 anonymous
+    ——留痕形同虚设。这里复用 token_from_request（header 优先、缺失时回落
+    业务端与居民端的 HttpOnly Cookie），保证取令牌口径不会与鉴权路径漂移。
+
+    与鉴权路径的两处差异，都是"留痕不是准入判定"的直接推论：
+
+    - **不做 CSRF 双提交校验**（verify_csrf=False）：CSRF 失败的写请求会被
+      鉴权路径 403 掉，但它同样是一次"谁发起的写尝试"，恰恰更该留下主体；
+      在中间件里抛 403 反而会改写业务响应。
+    - **不做黑名单/停用/超期判定**：那些是准入结论，由 get_current_user 给。
+
+    返回原始令牌串（调用方自己 decode），无令牌返回 None。
+    """
+    auth = request.headers.get("authorization", "")
+    credentials = None
+    if auth.lower().startswith("bearer ") and auth[7:].strip():
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=auth[7:].strip())
+    for cookie_name, csrf_cookie_name in _AUDIT_COOKIE_PAIRS:
+        token = token_from_request(
+            request,
+            credentials,
+            cookie_name=cookie_name,
+            csrf_cookie_name=csrf_cookie_name,
+            verify_csrf=False,
+        )
+        if token:
+            return token
+    return None
+
 
 #: 等保 E1 口令最长使用期（天）。刻意用常量而不进 config：这是合规口径不是部署偏好，
 #: 做成环境变量只会诱导现场把它调成 36500"关掉"。超期判定见 get_current_user；

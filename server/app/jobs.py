@@ -15,6 +15,8 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+import secrets
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -158,6 +160,10 @@ def sms_code_cleanup(db: Session) -> tuple[int, str]:
 #: 全表读进内存"——留痕表在生产是百万行级的。
 ARCHIVE_BATCH_SIZE = 1000
 
+#: 独占创建归档文件的换名重试次数。撞名说明同一秒里有第二路归档在跑
+#: （调度锁失效窗口，见 scheduler 的自认），换个随机后缀即可，不该覆盖对方。
+ARCHIVE_NAME_ATTEMPTS = 8
+
 
 def _archive_dir() -> Path:
     """归档目录：`settings.upload_dir` 下的 archives/ 子目录（不存在则建）。"""
@@ -166,11 +172,49 @@ def _archive_dir() -> Path:
     return d
 
 
+def _fsync(fileobj) -> None:
+    """把已写入的字节推到盘上：先冲用户态缓冲，再 fsync 真实文件描述符。
+
+    只 flush 不 fsync 等于没落盘——进程被 SIGKILL 时页缓存里的数据还在，
+    但归档任务的"删行"紧随其后，一旦机器同时掉电就是**行已删、导出没了**。
+    """
+    fileobj.flush()
+    os.fsync(fileobj.fileno())
+
+
+def _open_new_archive(table: str, first_id: int):
+    """**独占**创建归档文件，返回 (文件名, 原始二进制句柄)。
+
+    历史缺陷：文件名只到秒级（`表_YYYYmmddHHMMSS_首行id`），且用
+    `gzip.open(path,"wb")` 直接截断覆盖。调度锁失效窗口里两路归档同秒起跑、
+    首行 id 又相同（都从最旧一行开始）时，两个写者会写同一个文件——产出的
+    gzip 交错损坏，而两边的行都已经删掉了。
+
+    这里改成"随机后缀 + `open(path,'xb')` 独占创建"：撞名直接 FileExistsError，
+    换个后缀重试，**绝不覆盖别人的归档**。任务锁失效仍是既定前提，修的是
+    "锁失效时不能毁数据"。
+    """
+    d = _archive_dir()
+    stamp = now_naive().strftime("%Y%m%d%H%M%S")
+    for _ in range(ARCHIVE_NAME_ATTEMPTS):
+        filename = f"{table}_{stamp}_{first_id}_{secrets.token_hex(4)}.ndjson.gz"
+        try:
+            return filename, (d / filename).open("xb")
+        except FileExistsError:  # pragma: no cover - 8 次 32bit 随机撞名不可复现
+            continue
+    raise RuntimeError(f"归档文件名连续 {ARCHIVE_NAME_ATTEMPTS} 次撞名，放弃本轮归档（{table}）")
+
+
 def _append_manifest(entry: dict) -> None:
-    """manifest.jsonl 追加一行。只追加不改写：manifest 本身就是归档的账本。"""
+    """manifest.jsonl 追加一行并 fsync。只追加不改写：manifest 本身就是归档的账本。
+
+    账本落盘前不能算归档完成——manifest 只在页缓存里而机器掉电，等于归档
+    文件成了无主孤儿（校验方不知道该拿哪个 MAC 复算）。
+    """
     path = _archive_dir() / "manifest.jsonl"
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        _fsync(f)
 
 
 def _archive_and_delete(
@@ -185,8 +229,14 @@ def _archive_and_delete(
 
     - MAC 对**未压缩的 NDJSON 字节流**计算（HMAC-SHA256，密钥 settings.secret），
       校验方 `gunzip` 后即可复算，不依赖 gzip 实现的字节稳定性。
-    - 每批"写文件→删行→commit"，进程中途挂掉最多损失一个未记入 manifest 的
-      文件（行已删、文件还在），不会出现"行删了、导出没了"。
+    - **删行前先把这一批落盘**：每批写成一个独立的 gzip 成员（写完即 close，
+      补上 CRC/长度尾），再 `fsync` 到真实文件描述符，**然后**才删行 + commit。
+      于是任何时刻都满足「已删行数 ≤ 已落盘导出行数」——进程被 SIGKILL、
+      机器掉电，最多损失一个未记入 manifest 的文件（行还在库里、或行已删而
+      文件完整可读），**不会出现"行删了、导出没了"**。
+      多成员 gzip 是标准格式：`gunzip` 与 `gzip.open` 都会把它们连读成一个流，
+      崩溃后残留的是**完整的前 N 个成员**，而不是一个解不开的半截文件。
+    - 文件独占创建（见 `_open_new_archive`），双跑不会互相覆盖。
     - `anchors(first_rec, last_rec)` 收归档段首/尾行的**序列化字典**（ORM 实例在
       分批 commit 后会过期失效，锚点只能取自删除前的快照），供审计链记锚点。
     """
@@ -199,27 +249,29 @@ def _archive_and_delete(
     if not first_batch:
         return 0, "无超期数据"
 
-    stamp = now_naive().strftime("%Y%m%d%H%M%S")
-    filename = f"{table}_{stamp}_{first_batch[0].id}.ndjson.gz"
-    path = _archive_dir() / filename
+    filename, raw = _open_new_archive(table, first_batch[0].id)
     mac = hmac.new(settings.secret.encode(), digestmod=hashlib.sha256)
     total = 0
     first_rec: dict | None = None
     last_rec: dict | None = None
     ts_min = ts_max = None
-    with gzip.open(path, "wb") as gz:
+    with raw:
         rows = first_batch
         while rows:
-            for row in rows:
-                rec = row_to_dict(row)
-                data = (json.dumps(rec, ensure_ascii=False) + "\n").encode()
-                gz.write(data)
-                mac.update(data)
-                if first_rec is None:
-                    first_rec = rec
-                last_rec = rec
-                ts_min = rec["created_at"] if ts_min is None else min(ts_min, rec["created_at"])
-                ts_max = rec["created_at"] if ts_max is None else max(ts_max, rec["created_at"])
+            # 每批一个 gzip 成员：mtime=0 让产物只由内容决定，便于比对。
+            with gzip.GzipFile(fileobj=raw, mode="wb", filename="", mtime=0) as gz:
+                for row in rows:
+                    rec = row_to_dict(row)
+                    data = (json.dumps(rec, ensure_ascii=False) + "\n").encode()
+                    gz.write(data)
+                    mac.update(data)
+                    if first_rec is None:
+                        first_rec = rec
+                    last_rec = rec
+                    ts_min = rec["created_at"] if ts_min is None else min(ts_min, rec["created_at"])
+                    ts_max = rec["created_at"] if ts_max is None else max(ts_max, rec["created_at"])
+            # 落盘先于删行——这一步就是"行删了导出没了"的唯一防线，别挪到删除之后。
+            _fsync(raw)
             ids = [row.id for row in rows]
             db.query(model).filter(model.id.in_(ids)).delete(synchronize_session=False)
             db.commit()

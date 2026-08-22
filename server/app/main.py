@@ -109,6 +109,7 @@ from .routers import (
 from . import ws
 from .spd import register_spd, seed_spd
 from .audit_chain import audit_entry_hash
+from .deps import token_for_audit
 from .models import AuditLog
 from .security import decode_token, hash_password
 
@@ -488,20 +489,34 @@ def _write_audit(request, status_code: int) -> None:
     logger.error 后**吞掉异常，不拖垮业务响应**——业务写已经成功，为一条
     旁路留痕把响应打成 500 只会让现场更糟。取舍与读留痕（AccessLog 降级）
     一致：丢失的审计记入错误日志，由日志告警兜底其完整性。
+
+    **操作主体的取令牌口径复用 deps.token_for_audit**（header 优先、缺失时回落
+    业务端/居民端会话 Cookie）：G3 之后浏览器走 Cookie 会话、不再发
+    Authorization 头，只认该头会把三套前端的写操作全部记成 anonymous。
+    居民端令牌记成 `resident:{account_id}`（令牌 sub 本身就是这个值，见
+    portal._issue_token），既可辨识又不把手机号一类 PII 抄进审计表。
     """
     username, user_id = "", None
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        claims = decode_token(auth[7:])
-        if claims:
-            username = claims.get("sub", "")
+    try:
+        token = token_for_audit(request)
+        claims = decode_token(token) if token else None
+    except Exception:  # noqa: BLE001 - 见 docstring：取令牌失败不拖垮业务，按 anonymous 留痕
+        claims = None
+        _audit_logger.error("审计取令牌失败，本条按 anonymous 留痕", exc_info=True)
+    is_resident = False
+    if claims:
+        username = claims.get("sub", "")
+        is_resident = claims.get("scope") == "portal"
     try:
         db = SessionLocal()
     except Exception:  # noqa: BLE001 - 见 docstring：审计失败不拖垮业务
         _audit_logger.error("审计会话创建失败，本条审计丢失", exc_info=True)
         return
     try:
-        if username:
+        # 居民账户不在 users 表内，其 sub（resident:{id}）不参与 users 查库——
+        # 与 deps.get_current_user 拒收 scope=portal 同一顾虑：别让一个叫
+        # "resident:1" 的业务账号撞上居民主体。
+        if username and not is_resident:
             user = db.query(User).filter(User.username == username).first()
             user_id = user.id if user else None
 
