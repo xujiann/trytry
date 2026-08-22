@@ -17,3 +17,4 @@ htmlcov/
 server/e2e_uploads/
 # Claude 代理运行时工作树（临时，勿入库）
 .claude/worktrees/
+server/test_run.db*
