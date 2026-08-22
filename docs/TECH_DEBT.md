@@ -114,6 +114,14 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 真 PG 集成档默认 skip 且"整档跳过"与"全部通过"退出码不可分辨。
 **14 个包在隔离 worktree 里各自测绿、交互面无人验证**，是 48 条缺陷的共同成因。
 
+### 第十六轮（三条工程判断平台化）新登记
+
+| 编号 | 问题 | 位置 |
+|---|---|---|
+| P1-33 | **出口脱敏无守卫**：`privacy.py` 明写"新增返回身份证号/电话的接口必须复用本模块"，实际只有 2 处引用、无任何闸门。改造路径已验证可行：从响应模型含 `id_card`/`phone` 的端点推导集合，再要求函数体走 `desensitize`/`mask_*`，例外按好清单形态逐条写理由（`integration.fhir_patient_resource` 是按设计的明文导出，需保留例外） | `app/privacy.py:7` |
+| P1-34 | **月份口径正则不校验日历**：`\d{4}-\d{2}` 放行 `2026-13`，5 处（fund/admin_mgmt×2/quality/reports）。与 D-3 假日期同族，需新建 `PeriodStr` 类型 | `app/routers/fund.py:224` 等 |
+| P1-35 | **23 张带 `patient_id` 却无机构列的表**永远当不了可见性依据——补机构列还是确认无需依据，需逐表业务判断（现已可量化打印，见 `test_visibility_relation_derivation.py`） | `app/visibility.py` 推导面 |
+
 ## P2 — 一致性与可维护性
 
 ### 命名

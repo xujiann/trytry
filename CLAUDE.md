@@ -10,7 +10,7 @@
 ## 0. 项目速览
 
 - **单进程 FastAPI 单体**：县域医共体信息化平台（medplat）+ 全域慢专病全流程管理子系统（`app/spd`）。
-- 规模：246 张表 / 881 个 HTTP 端点 / 89 个路由文件 / 52 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
+- 规模：258 张表 / 946 个 HTTP 端点 / 85 个路由文件 / 85 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
 - 入口：`server/app/main.py`（`app.main:app`）。配置：`server/app/config.py`（`MEDPLAT_*` 环境变量）。
 - 开发库 SQLite，生产库 PostgreSQL 16，Redis 可选。
 
@@ -94,7 +94,7 @@ server/app/
   - **状态**：裸字符串，不用 Enum；取值范围写在列注释与路由 `pattern` 里。
   - **长文本**：`String(N)`（无 Text 类型），注意 1024 上限。
 - **表命名**：与所在业务域一致；spd 表一律 `spd_` 前缀。
-- **PII**：`id_card`/`phone` 目前明文存储、仅出口脱敏（`privacy.py`）——别在日志/响应里绕过脱敏。
+- **PII**：`id_card`/`phone`（含 `resident_accounts.phone`）已支持**列加密存储**（`app/pii.py`，SM4-CTR + HMAC 检索索引，开关 `MEDPLAT_PII_ENCRYPTION_ENABLED` 默认关；开启前须先跑 `scripts/pii_encrypt_backfill.py`）。**等值检索一律走 `pii_filter`、索引列比对走 `pii_index_match`**——裸写 `Model.col == v` 在开态恒空且不报错，由 `tests/test_pii_query_point_guard.py` 强制（加密列清单从列类型推导，新增即自动纳入）。出口一律经 `privacy.py` 脱敏，别在日志/响应里绕过。
 - 种子数据一律**幂等"只增不改"**（查已有 code 再 `add`），不要写会覆盖现场配置的种子。
 - **核心表已冻结**（`users`/`organizations`/`patients`/`encounters`/`admissions`）：改其列需先写 ADR，再更新 `tests/test_schema_governance.py` 的 `FROZEN_CORE_COLUMNS` 快照。**新表必须带 `created_at`**（棘轮强制）。改了模型重跑 `python scripts/dump_schema.py`。详见 `docs/数据模型治理.md`。
 - **核心数据是不可变定义**：核心概念只有一个权威表（`patients`/`organizations`/`users`/`encounters`/`admissions`/`resident_accounts`），**不得另造平行主数据**；人物身份（`id_card`/`ehc_no`）只存 `patients`，别处一律外键 `patient_id`。金额用 `Money`、日期用 `DateStr`，别自造。由 `tests/test_core_data_invariants.py` 强制，详见 `docs/核心数据不可变定义.md`。
