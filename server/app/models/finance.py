@@ -203,6 +203,8 @@ class PaymentOrder(Base):
     fail_reason: Mapped[str] = mapped_column(String(256), default="")
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     refunded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # I2 真通道异步语义：网关回调确认时间；同步渠道（Mock/现金类）恒为 NULL
+    callback_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 

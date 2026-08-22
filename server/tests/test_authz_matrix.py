@@ -110,6 +110,9 @@ UNGUARDED_WHITELIST = {
     # 能兑换不等于能核销。
     ("POST", "/api/spd/point-accounts/signin"),
     ("POST", "/api/spd/redeems"),
+    # 支付网关回调（I2）：网关没有平台账号，天然免登录；身份由 HMAC-SHA256
+    # 验签 + 时间戳窗口承担，重放由订单状态机幂等兜住（见 routers/billing.py）。
+    ("POST", "/api/billing/payments/callback"),
 }
 
 

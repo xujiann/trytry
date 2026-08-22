@@ -12,10 +12,12 @@
 
 新增厂商直连时实现 SmsProvider 协议并在 _build_provider 注册即可。
 """
+import json
 import logging
 from typing import Protocol
 
 from .config import settings
+from .egress import egress_url_allowed, signed_headers
 
 logger = logging.getLogger("medplat.sms")
 
@@ -44,6 +46,22 @@ class HttpGatewaySmsProvider:
     请求体 ``{"phone": ..., "content": ..., "sign": ...}``，网关返回 2xx 视为受理。
     网络异常/超时按投递失败处理，由调用方决定是否提示重试——绝不因为通道抖动
     把已生成的验证码当成"已发出"。
+
+    请求鉴权（I2，与支付网关同一口径，见 app/egress.py）：配置了
+    MEDPLAT_SMS_API_KEY 时，除 ``Authorization: Bearer`` 外另带
+    ``X-Timestamp`` / ``X-Signature``（HMAC-SHA256 对"时间戳.请求体原始字节"
+    签名），自建网关据此验签+时间窗防重放；未配置 key 则维持裸 Bearer 兼容旧网关。
+
+    厂商适配说明（部署期接入，不把厂商 SDK 拖进本仓库——运行时依赖只有 13 项）：
+
+    - **阿里云短信**：自建薄网关里用官方 SDK（``alibabacloud_dysmsapi``）调
+      ``SendSms``（AccessKey 签名、TemplateCode+TemplateParam 模板制），本类的
+      ``content`` 对应模板变量、``sign_name`` 对应阿里云"短信签名"。
+    - **腾讯云短信**：同法经 ``tencentcloud-sdk-python`` 调 ``SendSms``
+      （SecretId/SecretKey TC3 签名、TemplateId+TemplateParamSet）。
+    - 也可绕过统一网关直连：实现本文件的 SmsProvider 协议
+      （``send(phone, content) -> bool``，实现内完成厂商签名与模板映射），
+      在 ``_build_provider`` 里按新的 MEDPLAT_SMS_PROVIDER 取值注册。
     """
 
     name = "http"
@@ -55,18 +73,19 @@ class HttpGatewaySmsProvider:
 
     def send(self, phone: str, content: str) -> bool:
         if not self.url:
-            logger.error("[SMS-HTTP] 未配置 MEDPLAT_SMS_GATEWAY_URL，短信未发送")
+            logger.error("[SMS-HTTP] 未配置 MEDPLAT_SMS_GATEWAY_URL（或未通过出网校验），短信未发送")
             return False
         import httpx
 
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        body = json.dumps(
+            {"phone": phone, "content": content, "sign": self.sign_name}, ensure_ascii=False
+        ).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+            headers.update(signed_headers(self.api_key, body))  # HMAC 签名头，同支付口径
         try:
-            resp = httpx.post(
-                self.url,
-                json={"phone": phone, "content": content, "sign": self.sign_name},
-                headers=headers,
-                timeout=5.0,
-            )
+            resp = httpx.post(self.url, content=body, headers=headers, timeout=5.0)
         except Exception:  # pragma: no cover - 依赖真实网络
             logger.exception("[SMS-HTTP] 短信网关调用异常 phone=%s", phone)
             return False
@@ -78,7 +97,13 @@ class HttpGatewaySmsProvider:
 
 def _build_provider() -> SmsProvider:
     if settings.sms_provider == "http":
-        return HttpGatewaySmsProvider(settings.sms_gateway_url, settings.sms_api_key, settings.sms_sign_name)
+        url = settings.sms_gateway_url
+        if url and not egress_url_allowed(url, "MEDPLAT_SMS_GATEWAY_URL"):
+            # SSRF 防线（I2）：URL 指向内网/环回等非公网地址时拒绝启用通道。
+            # 置空 url 而非回退 console——console 会"成功"，等于把没发出去的
+            # 验证码当成已发出；置空后 send 一律失败并 log，语义诚实。
+            url = ""
+        return HttpGatewaySmsProvider(url, settings.sms_api_key, settings.sms_sign_name)
     return ConsoleSmsProvider()
 
 
