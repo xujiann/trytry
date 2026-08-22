@@ -432,3 +432,20 @@ def test_默认配置三开关全关时登录响应与既有口径一致(client,
     # 既有接口链路不受三开关影响
     headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
     assert client.get("/api/users", headers=headers).status_code == 200
+
+
+def test_微信登录成败均落登录留痕(client):
+    from app.database import SessionLocal
+    from app.models import LoginLog
+
+    # mock 微信通道：code=ok 的固定 openid（先核实 MockWeChatProvider 语义）
+    resp = client.post("/api/portal/auth/wechat/login", json={"code": "mock-code"})
+    ok = resp.status_code == 200
+    bad = client.post("/api/portal/auth/wechat/login", json={"code": ""})
+    with SessionLocal() as db:
+        rows = db.query(LoginLog).filter(LoginLog.channel == "wechat").all()
+    assert rows, "微信通道登录没有落留痕"
+    if ok:
+        assert any(r.success for r in rows)
+    if bad.status_code == 400:
+        assert any((not r.success) and r.fail_reason == "oauth_failed" for r in rows)

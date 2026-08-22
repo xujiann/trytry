@@ -373,10 +373,16 @@ class WeChatLoginIn(BaseModel):
 
 
 @router.post("/auth/wechat/login")
-def wechat_login(body: WeChatLoginIn, db: Session = Depends(get_db)):
+def wechat_login(body: WeChatLoginIn, request: Request, db: Session = Depends(get_db)):
     """微信授权码登录：首次授权自动开户，仍需实名绑定后才可见档案。"""
+    client_ip = request.client.host if request.client else "unknown"
     info = get_wechat_provider().exchange_code(body.code)
     if info is None:
+        # 登录留痕（等保 E1 接线）：授权失败没有 openid 可记，username 记通道
+        record_login_event(
+            db, username="wechat:unknown", ip=client_ip, success=False,
+            fail_reason="oauth_failed", channel="wechat",
+        )
         raise HTTPException(status_code=400, detail="微信授权失败，请重新发起")
     account = _account_by(
         db,
@@ -386,7 +392,14 @@ def wechat_login(body: WeChatLoginIn, db: Session = Depends(get_db)):
         nickname=info.get("nickname", ""),
     )
     if account.status != "active":
+        record_login_event(
+            db, username=f"wechat:{info['openid']}", ip=client_ip, success=False,
+            fail_reason="disabled", channel="wechat",
+        )
         raise HTTPException(status_code=403, detail="账户已停用，请联系服务机构")
+    record_login_event(
+        db, username=f"wechat:{info['openid']}", ip=client_ip, success=True, channel="wechat"
+    )
     return _login_result(db, account)
 
 

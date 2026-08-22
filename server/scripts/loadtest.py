@@ -42,6 +42,11 @@
   历史数据量线性劣化；perf_report 与 service_requests 仍是最需要盯的两条，
   统计聚合已下推数据库（A3），若它们随 seed_bulk 灌量线性变慢，先查
   执行计划有没有走上日期索引。
+  另一条实测教训（2026-08，SQLite 20k 患者/100k 就诊）：service_requests 的
+  P95 尖刺与 database-is-locked 错误来自**读留痕的写锁竞争**——按患者查询
+  每请求写一条 AccessLog，SQLite 单文件写锁让 8 路并发互相排队（首访另有
+  ~1s 语句编译预热，复访 53ms）。这是 SQLite 部署边界，不是算法缺陷；
+  PG 上写互不阻塞读，此场景须以 PG 结论为准。
 """
 import argparse
 from datetime import datetime
