@@ -92,6 +92,28 @@ def verification_keys(purpose: str) -> list[bytes]:
 # 配置 MEDPLAT_REDIS_URL 后自动切换 Redis 共享存储（多实例部署必须）。
 revoked_tokens = TokenBlacklist(default_ttl_seconds=TOKEN_TTL_SECONDS)
 
+
+def revocation_key(claims: dict | None, token: str) -> str:
+    """登出黑名单的**唯一键口径**：优先 jti，无 jti 的历史令牌退回令牌原文。
+
+    抽出来是因为这条规则同时被**写入端**与**判定端**依赖，而两端此前各写了一遍：
+
+    - 写入：`routers/auth.logout`（业务端）、`routers/portal.portal_logout`（居民端）；
+    - 判定：`deps.check_token_admission`（业务端）、`routers/portal.current_resident`（居民端）。
+
+    四处分处三个模块、写成三种形状（`if claims.get("jti") ... else ...`、
+    `claims.get("jti") or token`）。键规则一旦要改（例如按 scope 加前缀，
+    让居民端登出不至于误伤同 jti 的业务令牌），改到其中一处、漏掉另一处，
+    结果是**登出静默失效**：写进去一个键、准入按另一个键查，黑名单永远查不中，
+    而所有正常路径的用例照样绿——这类漂移正是 ws 那份"第二拷贝"的同一形状。
+
+    与 `check_token_admission` 的分工：这里只回答"这枚令牌在黑名单里登记成什么"，
+    "在不在黑名单里因此该不该放行"仍由各自的准入判定回答（业务端与居民端的
+    主体不同，判定条件本就不同，见 `current_resident` 的注释）。
+    """
+    return str((claims or {}).get("jti") or token)
+
+
 # 会话登记（等保 E1）：空闲超时的活动时刻 + 并发会话计数。与黑名单同层、同一
 # 内存/Redis 双实现约定；两项开关（session_idle_timeout_seconds /
 # session_max_concurrent）为 0 时调用方（deps / routers/auth.py）直接旁路。

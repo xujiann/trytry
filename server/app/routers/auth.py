@@ -30,6 +30,7 @@ from ..security import (
     active_sessions,
     create_token,
     decode_token,
+    revocation_key,
     revoked_tokens,
     verify_password,
 )
@@ -199,7 +200,10 @@ def logout(
     """登出：当前令牌加入黑名单立即失效。
 
     L-9 整改：按令牌 jti 拉黑（Redis/内存中不再存完整令牌明文），
-    TTL 取令牌剩余寿命；无 jti 的历史令牌退回按原文拉黑。
+    TTL 取令牌剩余寿命；无 jti 的历史令牌退回按原文拉黑。**键口径由
+    `security.revocation_key` 唯一给出**——判定端（deps.check_token_admission）
+    按同一函数取键，不再各写一遍"jti 优先、否则原文"（写入端与判定端一旦漂移，
+    黑名单就静默失效）。
     等保 E1：同时从会话登记中移除，即时释放并发名额。
     G3：Cookie 会话的令牌从 Cookie 里取（与 get_current_user 同一优先级：
     header 优先），并顺带清掉两个会话 Cookie。
@@ -207,12 +211,13 @@ def logout(
     token = credentials.credentials if credentials is not None else request.cookies.get(AUTH_COOKIE, "")
     if token:
         claims = decode_token(token)
+        key = revocation_key(claims, token)
         if claims and claims.get("jti"):
             ttl = max(int(claims.get("exp", 0) - time.time()), 60)
-            revoked_tokens.add(claims["jti"], ttl_seconds=ttl)
+            revoked_tokens.add(key, ttl_seconds=ttl)
             active_sessions.remove(str(claims.get("sub", "")), claims["jti"])
         else:  # pragma: no cover - 兼容无 jti 的历史令牌
-            revoked_tokens.add(token)
+            revoked_tokens.add(key)
     clear_auth_cookies(response, cookie_name=AUTH_COOKIE, csrf_cookie_name=CSRF_COOKIE)
     return LogoutOut(logged_out=True)
 

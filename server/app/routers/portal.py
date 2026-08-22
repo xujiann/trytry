@@ -78,6 +78,7 @@ from ..security import (
     create_token,
     decode_token,
     hash_password,
+    revocation_key,
     revoked_tokens,
     verify_password,
 )
@@ -443,6 +444,19 @@ def current_resident(
     G3 双模：header 优先，缺失时读居民端 HttpOnly Cookie（Cookie 模式的写请求
     先过 CSRF 双提交校验，与业务端 get_current_user 同一套助手）。业务端的
     medplat_token Cookie 在这里**不被读取**——两套 Cookie 名严格分开。
+
+    **为什么不合进 `deps.check_token_admission`**（看着像第二份准入判定，其实不是）：
+    那份判定的主体是 `users` 行，回答的是"这个**员工账号**还能不能用"——查
+    `users.status`、比 `users.token_valid_from` 改密基线、拒 `scope=portal`。
+    这里的主体是 `resident_accounts` 行，居民账户根本不在 `users` 表里，
+    既没有改密基线这一列，也没有"停用 403 / 令牌失效 401"的区分，
+    而且判定方向正好相反：这里**只收** `scope=portal`。
+    合成一份只会得到一个按 scope 分叉的双主体函数——两条互斥分支挤在一个名字下，
+    改任一侧都要先想清楚会不会碰到另一侧，比现在两处各自清楚更容易出错。
+
+    真正**必须**同口径的是两者共用的那一件事——登出黑名单的键。它已收敛到
+    `security.revocation_key`（写入端 portal_logout / auth.logout 与判定端
+    本函数 / check_token_admission 共四处同键）。
     """
     token = token_from_request(
         request, credentials,
@@ -453,7 +467,9 @@ def current_resident(
     claims = decode_token(token)
     if claims is None or claims.get("scope") != "portal":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登录状态无效，请重新登录")
-    if (claims.get("jti") or token) in revoked_tokens:
+    # 黑名单键与居民端登出的写入端同口径（security.revocation_key）——两端
+    # 各写一遍时，键规则一改就是"写进去一个键、这里按另一个键查"的静默失效。
+    if revocation_key(claims, token) in revoked_tokens:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="已退出登录")
     account = db.get(ResidentAccount, claims.get("account_id", 0))
     if account is None or account.status != "active":
@@ -491,7 +507,9 @@ def portal_logout(
     if not token:  # pragma: no cover - current_resident 先行 401，走不到这里
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
     claims = decode_token(token) or {}
-    revoked_tokens.add(claims.get("jti") or token, ttl_seconds=settings.portal_token_ttl_seconds)
+    revoked_tokens.add(
+        revocation_key(claims, token), ttl_seconds=settings.portal_token_ttl_seconds
+    )
     clear_auth_cookies(response, cookie_name=PORTAL_AUTH_COOKIE, csrf_cookie_name=PORTAL_CSRF_COOKIE)
     return {"logged_out": True}
 

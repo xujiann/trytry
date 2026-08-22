@@ -22,6 +22,7 @@ from .security import (
     active_sessions,
     decode_token,
     new_csrf_token,
+    revocation_key,
     revoked_tokens,
 )
 
@@ -274,7 +275,7 @@ def check_token_admission(db: Session, claims: dict, token: str) -> tuple[User |
     返回 `(user, "")` 表示放行；`(None, 原因代号)` 表示拒绝，代号见
     `TOKEN_DENIAL_RESPONSES`。判定顺序有意义，不要随手调换：
 
-    1. 登出黑名单（按 jti，无 jti 的历史令牌退回按原文）；
+    1. 登出黑名单（键口径见 `security.revocation_key`——登出写入端与这里必须同键）；
     2. 居民端作用域——居民账户不在 users 表内，这里显式拒绝，避免有人建一个
        叫 "resident:1" 的业务账号来撞 sub；
     3. 账号存在；
@@ -285,7 +286,7 @@ def check_token_admission(db: Session, claims: dict, token: str) -> tuple[User |
     只判"这枚令牌代表谁、这个人还能不能用"。空闲超时与 428 强制改密是 HTTP
     请求语义（要落活动时刻、要按路径豁免），留在 `get_current_user` 里。
     """
-    if (claims.get("jti") or token) in revoked_tokens:
+    if revocation_key(claims, token) in revoked_tokens:
         return None, "revoked"
     if claims.get("scope") == "portal":
         return None, "portal_scope"

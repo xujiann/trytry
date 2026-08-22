@@ -10,7 +10,7 @@
 ## 0. 项目速览
 
 - **单进程 FastAPI 单体**：县域医共体信息化平台（medplat）+ 全域慢专病全流程管理子系统（`app/spd`）。
-- 规模：246 张表 / 881 个 HTTP 端点 / 89 个路由文件 / 52 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
+- 规模：258 张表 / 945 个 HTTP 端点 / 92 个路由文件 / 86 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
 - 入口：`server/app/main.py`（`app.main:app`）。配置：`server/app/config.py`（`MEDPLAT_*` 环境变量）。
 - 开发库 SQLite，生产库 PostgreSQL 16，Redis 可选。
 
@@ -94,8 +94,25 @@ server/app/
   - **状态**：裸字符串，不用 Enum；取值范围写在列注释与路由 `pattern` 里。
   - **长文本**：`String(N)`（无 Text 类型），注意 1024 上限。
 - **表命名**：与所在业务域一致；spd 表一律 `spd_` 前缀。
-- **PII**：`id_card`/`phone` 目前明文存储、仅出口脱敏（`privacy.py`）——别在日志/响应里绕过脱敏。
+- **PII**：`id_card`/`phone`（含 `resident_accounts.phone`）已支持**列加密存储**（`app/pii.py`，SM4-CTR + HMAC 检索索引，开关 `MEDPLAT_PII_ENCRYPTION_ENABLED` 默认关；开启前须先跑 `scripts/pii_encrypt_backfill.py`）。**等值检索一律走 `pii_filter`、索引列比对走 `pii_index_match`**——裸写 `Model.col == v` 在开态恒空且不报错，由 `tests/test_pii_query_point_guard.py` 强制（加密列清单从列类型推导，新增即自动纳入）。出口一律经 `privacy.py` 脱敏，别在日志/响应里绕过。
 - 种子数据一律**幂等"只增不改"**（查已有 code 再 `add`），不要写会覆盖现场配置的种子。
+- **迁移不得静默改动存量业务数据。** 迁移可以改结构，不可以替人做业务决定——迁移里的
+  `UPDATE`/`DELETE` 不经过应用层，不留 `AuditLog`，出事后连"改了谁"都查不回来
+  （`d3e4f5a6b7c8` 曾 `SET patient_id = NULL` 静默解绑居民账户与档案，绑定关系已永久丢失）。
+  - **加约束遇存量冲突走不阻塞路径**：探到冲突就①**跳过**该约束的建立 + 打一条
+    **指名冲突记录**（主键/业务键，不是"有 N 条冲突"）的 ERROR 日志，或②直接失败；
+    两种都必须在迁移 docstring 里写清**人工处置 SQL**（怎么查冲突、怎么逐条处置、
+    怎么补建约束）。范式见 `e5b7c9d1f3a4` / `d3e4f5a6b7c8` / `d5e6f7a8b9c0`。
+    "留 id 最小的、其余清掉"不是处置方案——先建的未必是对的那条。
+  - **补值性回填必须可复算可修复**：只填本迁移新加的列，或只填既有列的空值
+    （`WHERE col IS NULL`，天然幂等）；算错了要能重算（回填脚本或一条 SQL 能重来），
+    并在 docstring 里写明"填错了怎么发现、怎么修"。
+  - `downgrade()` 同样受这条约束：回退时丢数据一样致命，且回退往往发生在出事的深夜。
+  - 已跑过的迁移要改成上述路径时，改法必须**重放安全**（先探索引/冲突再动手，
+    别让已升级的库二次损坏）；补不回来的既成损失如实写进 docstring 与
+    `docs/运维手册.md`，别假装能自动恢复。
+  - 由 `tests/test_migration_data_safety.py` 强制（AST 扫描全部迁移，A 档形状即变红；
+    豁免须带书面理由且**只减不增**）。
 - **核心表已冻结**（`users`/`organizations`/`patients`/`encounters`/`admissions`）：改其列需先写 ADR，再更新 `tests/test_schema_governance.py` 的 `FROZEN_CORE_COLUMNS` 快照。**新表必须带 `created_at`**（棘轮强制）。改了模型重跑 `python scripts/dump_schema.py`。详见 `docs/数据模型治理.md`。
 - **核心数据是不可变定义**：核心概念只有一个权威表（`patients`/`organizations`/`users`/`encounters`/`admissions`/`resident_accounts`），**不得另造平行主数据**；人物身份（`id_card`/`ehc_no`）只存 `patients`，别处一律外键 `patient_id`。金额用 `Money`、日期用 `DateStr`，别自造。由 `tests/test_core_data_invariants.py` 强制，详见 `docs/核心数据不可变定义.md`。
 

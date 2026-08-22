@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy.exc import IntegrityError
 
-from ..visibility import log_patient_access
+from ..visibility import active_authorization_grants, log_patient_access
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from pydantic import BaseModel, Field
@@ -197,18 +197,17 @@ def check_authorization(
 
     与上面同一条口径：只留痕不阻断。签发授权的机构要能回看自己发出去的授权
     还生不生效，那是正当的，也正是这条接口本来的用途。
+
+    **有效期判定不在这里实现**，调 `visibility.active_authorization_grants`——
+    与 `assert_patient_visible` 真正把门用的是同一份。此前这里自己拼
+    `status=active AND expire_date >= 今天`，与可见性那侧的
+    "`expire_date` 为空 = 不设到期日、按有效算"对不上：`expire_date` 是
+    `String(10) default=""` 的非空列，空串可达，于是同一条长期授权在可见性侧
+    能调阅、在这条校验接口上却报 `allowed=false`。范围（scope）仍在这里判——
+    那是本接口独有的问题，不是同一判定的第二份。
     """
     log_patient_access(db, user, patient_id, "authorization", "consent_admin")
     current = resolve_business_date(today).isoformat()
-    grants = (
-        db.query(ArchiveAuthorization)
-        .filter(
-            ArchiveAuthorization.patient_id == patient_id,
-            ArchiveAuthorization.grantee_org_id == org_id,
-            ArchiveAuthorization.status == "active",
-            ArchiveAuthorization.expire_date >= current,
-        )
-        .all()
-    )
+    grants = active_authorization_grants(db, patient_id, org_id, today=current)
     allowed = any(g.scope == "all" or g.scope == scope for g in grants)
     return {"patient_id": patient_id, "org_id": org_id, "scope": scope, "allowed": allowed}

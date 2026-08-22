@@ -10,6 +10,17 @@
 * 每治理一个模块 → 欠账变小 → 把 `BASELINE_WITHOUT_RESPONSE_MODEL` 下调到新值；
 * 已治理完的模块（`FULLY_GOVERNED`）若被改回裸 dict → 单独变红，防止回退。
 
+`FULLY_GOVERNED` 本身曾是一份**需要人记得去补**的清单：某个模块碰巧全部端点
+都带了契约，却没人把它登记进来，于是它后来被改回裸 dict 时不会单独变红——
+只要总欠账没顶破基线（比如别处刚好治理了一个端点，一增一减净持平），
+这次回退就**静默**发生了。实测这份清单已经落后现实 3 个模块
+（auth / dispense / encounters）。
+
+修法是让它跟着代码结构走：真实的"零欠账模块"集合由 `_coverage()` 从路由
+元数据算出来，`test_已治理模块清单不许落后现实` 要求登记表与它**逐字相等**。
+清单于是从"要靠人记得"变成"对不上就红"：模块治理干净了没登记 → 红；
+登记了却回退 → 红（另一条）。两个方向都关上，人不必再记得什么。
+
 这与仓库既有的"欠账不许变长"用例（如 test_stage15 的机构归属欠账）是同一手法。
 
 治理配方见 docs/接口标准与治理.md：先给端点写特征化网钉住当前 JSON，再加
@@ -19,6 +30,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import warnings
 
 from fastapi import APIRouter
 from fastapi.routing import APIRoute
@@ -50,6 +62,11 @@ FULLY_GOVERNED = {
     "consents",  # E2 个保法新模块，生而全契约，见 test_consents.py
     "printing",  # B2 全模块补契约：HTML 单据 response_model=str，模板端点建模，见 test_printing_documents.py
     "labqc",  # B2 室内质控新模块，生而全契约，见 test_labqc_westgard.py
+    # 以下三个是"清单落后现实"的存量：它们早就零欠账，却一直没人登记，
+    # 于是这些模块的回退一直不会单独变红。由 test_已治理模块清单不许落后现实 补上并钉住。
+    "auth",
+    "dispense",
+    "encounters",
 }
 
 
@@ -113,4 +130,41 @@ def test_已治理模块不许回退():
     }
     assert not regressed, (
         f"已治理模块出现无契约端点（回退）：{regressed}。这些模块应保持全部端点声明 response_model。"
+    )
+
+
+def _fully_governed_in_reality(per_module: dict[str, list[int]]) -> set[str]:
+    """从路由元数据算出"当前真的零欠账"的模块集合——不手工维护。"""
+    return {m for m, (_total, without) in per_module.items() if without == 0}
+
+
+def test_已治理模块清单不许落后现实():
+    """`FULLY_GOVERNED` 必须**逐字等于**真实的零欠账模块集合。
+
+    少登记（清单落后现实）：该模块日后回退时不会单独变红，只要总欠账没顶破
+    基线就静默过去——这正是"要靠人记得更新才正确"的坏清单。
+    多登记（清单超前现实）：由 `test_已治理模块不许回退` 报出来。
+    两条合起来，这份清单等价于从代码结构推导，人不需要再记得什么。
+    """
+    total, without, per_module = _coverage()
+    reality = _fully_governed_in_reality(per_module)
+    summary = "\n".join([
+        "",
+        "[接口契约棘轮] 覆盖面自证",
+        f"  分母：源路由模块 {len(per_module)} 个 / 端点 {total} 个"
+        "（app.routers + app.spd.routers 全量遍历，无抽样、无跳过）",
+        f"  契约欠账：{without}（基线 {BASELINE_WITHOUT_RESPONSE_MODEL}）"
+        f"    已治理端点：{total - without}    覆盖率 {(total - without) * 100 / total:.1f}%",
+        f"  零欠账模块：实测 {len(reality)} 个 / 清单登记 {len(FULLY_GOVERNED)} 个"
+        f"    未登记 {len(reality - FULLY_GOVERNED)} 个    登记了却已回退 "
+        f"{len(FULLY_GOVERNED - reality)} 个",
+    ])
+    print(summary)
+    warnings.warn(summary, UserWarning, stacklevel=2)
+
+    missing = sorted(reality - FULLY_GOVERNED)
+    assert missing == [], (
+        f"以下模块已经零契约欠账，但没登记进 FULLY_GOVERNED：{missing}。"
+        " 不登记 = 它日后被改回裸 dict 时不会单独变红（总欠账一增一减就掩盖过去了）。"
+        " 治理完一个模块，就把它加进清单。"
     )
