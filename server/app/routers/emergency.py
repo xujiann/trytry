@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization
+from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, User
+from ..visibility import assert_patient_visible
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
 
 router = APIRouter(prefix="/api/emergency", tags=["智慧急救"], dependencies=[Depends(get_current_user)])
@@ -174,9 +175,17 @@ def report_vitals(case_id: int, body: VitalCreate, db: Session = Depends(get_db)
 
 
 @router.get("/cases/{case_id}/vitals", response_model=list[VitalOut])
-def list_vitals(case_id: int, db: Session = Depends(get_db)):
-    if db.get(EmergencyCase, case_id) is None:
+def list_vitals(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    case = db.get(EmergencyCase, case_id)
+    if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
+    # 院前事件可能尚未关联患者（现场无法确认身份）；一旦关联即按患者维度守
+    if case.patient_id is not None:
+        assert_patient_visible(db, user, case.patient_id, resource="emergency")
     return db.query(EmergencyVital).filter(EmergencyVital.case_id == case_id).order_by(EmergencyVital.id).all()
 
 
@@ -236,11 +245,17 @@ def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(
 
 
 @router.get("/cases/{case_id}/timeline")
-def case_timeline(case_id: int, db: Session = Depends(get_db)):
+def case_timeline(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """绿道时间轴：按固定节点序列返回已记录/缺失情况。"""
     case = db.get(EmergencyCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
+    if case.patient_id is not None:
+        assert_patient_visible(db, user, case.patient_id, resource="emergency")
     recorded = {
         m.milestone: m
         for m in db.query(EmergencyMilestone).filter(EmergencyMilestone.case_id == case_id).all()

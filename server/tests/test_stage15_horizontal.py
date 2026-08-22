@@ -536,6 +536,81 @@ def _patient_scoped_endpoints() -> dict[str, list[str]]:
     return found
 
 
+def _patient_byid_read_endpoints() -> tuple[set[str], set[str]]:
+    """按 id 直取「挂在患者身上的资源」的 GET 接口，返回 (全部, 未防护)。
+
+    P1-4 的分母修正：矩阵原来只算"入参含 patient_id/ehc_no"，而
+    /chronic/{id}/followups、/billing/deposits?admission_id=、/emergency/cases/{id}/…
+    这类接口返回的是同一批患者数据，只因入参换了个名字就不进分母——覆盖率
+    因此虚高为 100%。这里按 `_byid_org_write_endpoints` 同一套机制补上这一族：
+    凡 GET 处理函数里 `db.get(带 patient_id 列的模型, ...)` 的，都算
+    "响应返回患者数据的端点"。打印/附件家族已在其中（printing.py 的四个打印
+    端点、attachments 的挂接对象解析都走 db.get(带患者模型)，分别由
+    assert_patient_visible / assert_owner_visible 判防护）。
+    """
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app import models
+    linked = {
+        c.__name__ for c in models.Base.registry._class_registry.values()
+        if hasattr(c, "__tablename__") and "patient_id" in c.__table__.columns
+    }
+    guards = ("assert_patient_visible", "assert_owner_visible", "accessible_patient")
+    all_eps: set[str] = set()
+    unguarded: set[str] = set()
+    for name, path in _router_files():
+        # 居民端另一套鉴权（portal 令牌 + accessible_patient），与 PORTAL 同理豁免
+        if name in ("portal.py", "spd/portal.py"):
+            continue
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            if not any(".get(" in ast.unparse(d) for d in fn.decorator_list):
+                continue
+            if {"patient_id", "ehc_no"} & {a.arg for a in fn.args.args}:
+                continue  # 已计入 _patient_scoped_endpoints，别重复算
+            u = ast.unparse(fn)
+            if not any(f"db.get({m}," in u for m in linked):
+                continue
+            key = f"{name}:{fn.name}"
+            all_eps.add(key)
+            if not any(g in u for g in guards):
+                unguarded.add(key)
+    return all_eps, unguarded
+
+
+# 按 id 读患者资源、但按业务设计要跨机构开放的接口——豁免，写明理由
+# （与 BYID_CROSS_ORG_OK 同一纪律：每一条都要答得出"为什么不守"）。
+BYID_PATIENT_READ_OK = {
+    # 集中审方是医共体核心协同：lead 药师审 member 处方，与患者天然无就诊/
+    # 签约/转诊关系，加患者可见性判定等于把审方关掉（与 review/comment 的
+    # 写侧豁免同理）。接口只回处方内药品的规则点评要点与剂量提示，
+    # 患者身份信息不在响应里。
+    "prescriptions.py:prescription_review_points",
+    # 法定死因上报导出：与 UNGUARDED 里 integration.py:export_fhir_patient 同一
+    # 口径——上报/对接类导出天然没有"业务关系"，机构可见性判定会把法定职责
+    # 关掉。已收紧到 director 角色，且每次导出都 log_patient_access 留痕
+    # （resource=death_report_card, basis=export），身份证号/电话按角色脱敏。
+    "certs.py:death_report_card",
+}
+
+
+def test_按id读患者资源接口可见性欠账不许变长():
+    """by-id 读侧与写侧同一纪律：缺口显式、可量化、只减不增。
+
+    修正 P1-4 时实测过的洞：无关机构凭 chronic_id/admission_id/case_id 顺序
+    遍历，就能拉到慢病随访史、住院押金流水、急救时间轴——都是患者数据，
+    只是入参不叫 patient_id。
+    """
+    _all_eps, unguarded = _patient_byid_read_endpoints()
+    unexpected = unguarded - BYID_PATIENT_READ_OK
+    assert unexpected == set(), (
+        "以下按 id 读患者资源的接口未纳入可见性判定，且不属于已声明的跨机构协同：\n  "
+        + "\n  ".join(sorted(unexpected))
+    )
+    stale = BYID_PATIENT_READ_OK - unguarded
+    assert stale == set(), f"这些豁免接口已加了守卫或不存在，应从清单删除：{sorted(stale)}"
+
+
 # 未纳入可见性判定的患者维度接口，逐条写明理由。
 # 第一批做完时这里有 20 条欠账，第二批清完只剩下面这一条。
 # 保留这份清单的意义不在于它现在多短，而在于**缺口必须是显式的**：
@@ -560,14 +635,26 @@ PORTAL = {
 
 
 def test_横向越权覆盖率矩阵():
-    """报出覆盖率，并盯住两件事：欠账不许变长，清单不许腐烂。"""
-    endpoints = {f"{f}:{fn}" for f, fns in _patient_scoped_endpoints().items() for fn in fns}
+    """报出覆盖率，并盯住两件事：欠账不许变长，清单不许腐烂。
+
+    分母口径（P1-4 修正）：从"入参含 patient_id/ehc_no"扩到"响应返回患者
+    数据的端点"——把按 id 直取患者资源的一族（/chronic/{id}/*、押金、急救、
+    签约服务、文书完整性、打印、附件挂接解析等）也计入。扩前分母 65、
+    覆盖率虚高；扩后欠账与豁免都显式列出。
+    """
+    param_eps = {f"{f}:{fn}" for f, fns in _patient_scoped_endpoints().items() for fn in fns}
+    byid_all, byid_unguarded = _patient_byid_read_endpoints()
+    endpoints = param_eps | byid_all
     business = endpoints - PORTAL
-    guarded = business - UNGUARDED
+    debt = business & UNGUARDED
+    exempt = business & (BYID_PATIENT_READ_OK & byid_unguarded)
+    guarded = business - debt - exempt
     pct = len(guarded) * 100 / len(business)
     print(
-        f"\n横向越权矩阵：患者维度业务接口 {len(business)} 个 = 已纳入可见性 {len(guarded)} "
-        f"+ 待纳入 {len(business & UNGUARDED)}；覆盖率 {pct:.1f}%"
+        f"\n横向越权矩阵：患者数据端点 {len(business)} 个"
+        f"（入参含患者标识 {len(param_eps - PORTAL)} + 按id直取患者资源 {len(byid_all)}）"
+        f" = 已纳入可见性 {len(guarded)} + 待纳入 {len(debt)}"
+        f" + 跨机构协同豁免 {len(exempt)}；覆盖率 {pct:.1f}%"
     )
 
     stale = (UNGUARDED | PORTAL) - endpoints
@@ -575,8 +662,8 @@ def test_横向越权覆盖率矩阵():
 
     # 欠账只许变少。改小这个数字要连同实现一起改——它是这一轮唯一防止
     # "看起来做完了"的机制。
-    assert len(business & UNGUARDED) <= 2, (
-        f"未纳入可见性判定的患者维度接口变多了：{sorted(business & UNGUARDED)}"
+    assert len(debt) <= 2, (
+        f"未纳入可见性判定的患者维度接口变多了：{sorted(debt)}"
     )
 
 
@@ -624,6 +711,70 @@ def test_已纳入的接口确实会拒绝无关机构(client, world, stranger):
         elif code != 403:
             leaked.append(f"{label} 未拦住无关机构，返回 {code}")
     assert leaked == [], "以下患者维度接口对无关机构仍然开放：\n  " + "\n  ".join(leaked)
+
+
+def test_按id直取的患者资源同样拒绝无关机构(client, world, stranger):
+    """P1-4 修正的实弹验证：光把 by-id 一族计入分母不算数，逐个真发一次请求。
+
+    这些接口的入参是 chronic_id/contract_id/case_id/encounter_id/admission_id，
+    不叫 patient_id——正是原分母漏掉的形状。"""
+    pid = world["patient"]["id"]
+    a = world["a"]["id"]
+    adm = world["admin"]
+    doc_a = world["doc_a"]
+
+    chronic = client.post(
+        "/api/chronic",
+        json={"patient_id": pid, "disease": "hypertension", "managed_by_org_id": a},
+        headers=doc_a,
+    ).json()
+    contract = client.post(
+        "/api/contracts",
+        json={"patient_id": pid, "org_id": a, "doctor_name": "甲医生", "signed_date": "2026-08-01"},
+        headers=doc_a,
+    ).json()
+    case = client.post(
+        "/api/emergency/cases",
+        json={"location": "甲县人民路", "patient_id": pid, "dest_org_id": a},
+        headers=doc_a,
+    ).json()
+    encounter_id = client.get(
+        f"/api/encounters?patient_id={pid}", headers=doc_a
+    ).json()[0]["id"]
+    ward = client.post(
+        "/api/inpatient/wards", json={"org_id": a, "name": "横向病区"}, headers=adm
+    ).json()
+    bed = client.post(
+        "/api/inpatient/beds", json={"ward_id": ward["id"], "bed_no": "H-01"}, headers=adm
+    ).json()
+    admission = client.post(
+        "/api/inpatient/admissions",
+        json={"patient_id": pid, "ward_id": ward["id"], "bed_id": bed["id"]},
+        headers=doc_a,
+    ).json()
+
+    cases = [
+        ("慢病随访史", f"/api/chronic/{chronic['id']}/followups"),
+        ("慢病风险评分", f"/api/chronic/{chronic['id']}/risk"),
+        ("签约服务记录", f"/api/contracts/{contract['id']}/services"),
+        ("急救时间轴", f"/api/emergency/cases/{case['id']}/timeline"),
+        ("急救生命体征", f"/api/emergency/cases/{case['id']}/vitals"),
+        ("文书完整性", f"/api/outpatient/encounters/{encounter_id}/completeness"),
+        ("押金流水", f"/api/billing/deposits?admission_id={admission['id']}"),
+        ("押金余额", f"/api/billing/deposits/balance?admission_id={admission['id']}"),
+    ]
+    leaked = []
+    for label, url in cases:
+        code = client.get(url, headers=stranger["headers"]).status_code
+        if code == 404:
+            leaked.append(f"{label} 路由 404（用例写错了）：{url}")
+        elif code != 403:
+            leaked.append(f"{label} 未拦住无关机构，返回 {code}")
+        # 隔离不能误伤本机构的正常诊疗
+        mine = client.get(url, headers=doc_a).status_code
+        if mine != 200:
+            leaked.append(f"{label} 误伤本机构：{mine}")
+    assert leaked == [], "按 id 直取的患者资源仍有缺口：\n  " + "\n  ".join(leaked)
 
 
 # ================================================================ 管理聚合角色口径（第十轮 P2）

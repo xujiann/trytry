@@ -23,7 +23,8 @@ from ..deps import (
     require_roles,
     resolve_business_date,
 )
-from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient
+from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient, User
+from ..visibility import assert_patient_visible
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
 
 router = APIRouter(prefix="/api/chronic", tags=["慢病管理"], dependencies=[Depends(get_current_user)])
@@ -303,7 +304,11 @@ def _risk_metric(db: Session, disease: str) -> str:
 
 
 @router.get("/{chronic_id}/risk")
-def risk_score(chronic_id: int, db: Session = Depends(get_db)):
+def risk_score(
+    chronic_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """简单风险评分：最近3次随访关键指标趋势 + 当前分级加权。
 
     score = 分级基础分（1级20 / 2级50 / 3级80）
@@ -313,6 +318,8 @@ def risk_score(chronic_id: int, db: Session = Depends(get_db)):
     chronic = db.get(ChronicPatient, chronic_id)
     if chronic is None:
         raise HTTPException(status_code=404, detail="慢病档案不存在")
+    # 慢病档案按 id 直取同样是患者维度数据：可见性判定 + 留痕
+    assert_patient_visible(db, user, chronic.patient_id, resource="chronic")
 
     metric = _risk_metric(db, chronic.disease)
     recent = (
@@ -357,9 +364,15 @@ def risk_score(chronic_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{chronic_id}/followups", response_model=list[FollowUpOut])
-def list_followups(chronic_id: int, db: Session = Depends(get_db)):
-    if db.get(ChronicPatient, chronic_id) is None:
+def list_followups(
+    chronic_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    chronic = db.get(ChronicPatient, chronic_id)
+    if chronic is None:
         raise HTTPException(status_code=404, detail="慢病档案不存在")
+    assert_patient_visible(db, user, chronic.patient_id, resource="chronic")
     return (
         db.query(FollowUp).filter(FollowUp.chronic_id == chronic_id).order_by(FollowUp.id.desc()).all()
     )

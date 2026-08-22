@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict
-from ..visibility import scope_patient_list
+from ..visibility import assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
@@ -487,8 +487,11 @@ def refund_deposit(
 def list_deposits(
     admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    if db.get(Admission, admission_id) is None:
+    admission = db.get(Admission, admission_id)
+    if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    # 押金流水挂在住院记录上，等同患者维度数据：按可见性判定并留痕
+    assert_patient_visible(db, user, admission.patient_id, resource="deposit")
     balance = deposit_balance(db, admission_id)
     rows = (
         db.query(Deposit)
@@ -501,9 +504,13 @@ def list_deposits(
 
 
 @router.get("/deposits/balance", response_model=DepositBalanceOut)
-def get_deposit_balance(admission_id: int, db: Session = Depends(get_db)):
-    if db.get(Admission, admission_id) is None:
+def get_deposit_balance(
+    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    admission = db.get(Admission, admission_id)
+    if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_patient_visible(db, user, admission.patient_id, resource="deposit")
     sums: dict[str, float] = {
         row[0]: float(row[1] or 0.0)
         for row in db.query(Deposit.deposit_type, func.coalesce(func.sum(Deposit.amount), 0.0))

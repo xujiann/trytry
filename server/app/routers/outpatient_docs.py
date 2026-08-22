@@ -406,7 +406,11 @@ def list_outpatient_nursing(encounter_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/encounters/{encounter_id}/completeness")
-def encounter_completeness(encounter_id: int, db: Session = Depends(get_db)):
+def encounter_completeness(
+    encounter_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """门急诊文书完整性自查：哪些该有而没有。
 
     与住院文书的完整性检查同一思路，但**不给"合格/不合格"结论**——门急诊
@@ -416,6 +420,8 @@ def encounter_completeness(encounter_id: int, db: Session = Depends(get_db)):
     encounter = db.get(Encounter, encounter_id)
     if encounter is None:
         raise HTTPException(status_code=404, detail="就诊记录不存在")
+    # 完整性清单会暴露该次就诊有哪些文书（病历/处置/知情同意），按患者维度守
+    assert_patient_visible(db, user, encounter.patient_id, resource="doc_completeness")
     treatments = (
         db.query(TreatmentRecord).filter(TreatmentRecord.encounter_id == encounter_id).count()
     )

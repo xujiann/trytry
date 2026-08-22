@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import assert_obj_org_writable, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ContractService, FamilyDoctorContract, Organization, Patient, User
@@ -97,9 +97,16 @@ def record_service(contract_id: int, body: ContractServiceCreate, db: Session = 
 
 
 @router.get("/{contract_id}/services", response_model=list[ContractServiceOut])
-def list_services(contract_id: int, db: Session = Depends(get_db)):
-    if db.get(FamilyDoctorContract, contract_id) is None:
+def list_services(
+    contract_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    contract = db.get(FamilyDoctorContract, contract_id)
+    if contract is None:
         raise HTTPException(status_code=404, detail="签约协议不存在")
+    # 服务记录挂在签约协议上，按协议患者做可见性判定 + 留痕
+    assert_patient_visible(db, user, contract.patient_id, resource="contract")
     return (
         db.query(ContractService)
         .filter(ContractService.contract_id == contract_id)
