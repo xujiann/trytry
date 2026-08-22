@@ -1,13 +1,35 @@
-"""中心药房：库存管理、批号效期台账、县乡村余缺调拨、缺药预警、采购建议。"""
+"""中心药房：库存管理、批号效期台账、县乡村余缺调拨、缺药预警、采购建议。
+
+**一条口径贯穿本模块**：`DrugStock.quantity` 是可用汇总，它的权威定义在批次侧——
+
+    quantity == Σ(批次 quantity - used_quantity - blocked_quantity)
+
+所以**任何改动汇总的端点都必须同事务改批次**。这不是洁癖：只改汇总那边会造出
+"幽灵库存"——汇总说有 40 片、批次一片没有，一张方都发不出来，而缺药预警看的
+恰恰是汇总，于是既发不出药、也不提示采购。实测四个存量端点都犯过这一条：
+直接入库 50（汇总 150/批次 100）、采购验收 30（180/100）、调拨 40 到乡镇院
+（乡镇院拿到 40 片发不出的幽灵库存）、盘点改 5（5/100）。
+
+没有批号可报的入库（直接入库、采购验收、盘点盘盈）落到兜底批次
+`未标批号`；有批号的一律走 `POST /batches`。
+"""
 from datetime import date, timedelta
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..concurrency import add_amount, ensure_present, insert_if_absent, insert_or_conflict
+from ..concurrency import (
+    add_amount,
+    ensure_present,
+    insert_if_absent,
+    insert_or_conflict,
+    take_amount,
+)
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr
@@ -31,13 +53,83 @@ from ..models import (
 )
 from ..schemas import StockOut, StockUpsert, TransferCreate
 from ..ws import manager
+from .dispense import _claim_batch, _fefo_batches, batch_available
 
 router = APIRouter(prefix="/api/pharmacy", tags=["中心药房"])
+
+#: 没有批号可报的入库落到的兜底批次批号。不是"允许不填批号"，
+#: 而是"这笔入库没人报批号"这件事要在台账上看得见——真按效期管理的药
+#: 必须走 POST /batches 报批号与效期。
+UNSPECIFIED_BATCH_NO = "未标批号"
+#: 兜底批次的效期哨兵：含义是"未登记效期"，不是"永不过期"。取远期是因为
+#: 空串在 `expire_date >= today` 的字符串比较里永远为假，会让这批药一片发不出去。
+UNSPECIFIED_EXPIRE_DATE = "9999-12-31"
+
+
+def _receive_unspecified(db: Session, org_id: int, drug_code: str, quantity: int) -> None:
+    """把没有批号可报的入库量落到兜底批次上（只动批次侧，汇总由调用方加）。
+
+    直接入库、采购验收、盘点盘盈三条路径都没有批号字段。以前它们只加汇总，
+    汇总就长出了没有实物对应的数——盘点对不上账，调拨还能把这个数搬到别的
+    机构去，变成一片也发不出的幽灵库存。宁可批号是"没填"，也不能没有行。
+
+    建行走 `insert_if_absent` + 原子累加：两笔入库同时落同一个兜底批次，
+    先查再插会双双撞唯一约束，两笔药都没入成（§6 的老坑）。
+    """
+    if quantity <= 0:
+        return
+    insert_if_absent(
+        db,
+        DrugBatch(
+            org_id=org_id,
+            drug_code=drug_code,
+            batch_no=UNSPECIFIED_BATCH_NO,
+            expire_date=UNSPECIFIED_EXPIRE_DATE,
+            quantity=0,
+        ),
+    )
+    batch = ensure_present(
+        _batch_of(db, org_id, drug_code, UNSPECIFIED_BATCH_NO), "药品批次"
+    )
+    add_amount(db, DrugBatch, batch.id, "quantity", quantity)
+
+
+def _consume_batches(db: Session, org_id: int, drug_code: str, amount: int, today: str) -> int:
+    """盘亏：按 FEFO 从批次扣掉 `amount`，返回实扣量。
+
+    可发批次先扣，不够再动已过期/已召回的——盘亏说的是"实物少了"，
+    与能不能发是两回事，只肯扣可发批次的话，一库过期药盘亏时两侧就再也对不上。
+    每个批次最多扣它的可发余量（`quantity - used_quantity - blocked_quantity`）：
+    已召回批次的余量早已记在 blocked 上、本就不在汇总里，不该被盘亏再扣一次。
+    """
+    rows = (
+        db.query(DrugBatch)
+        .filter(DrugBatch.org_id == org_id, DrugBatch.drug_code == drug_code)
+        .order_by(DrugBatch.expire_date, DrugBatch.id)
+        .all()
+    )
+    dispensable = [b for b in rows if b.status == "normal" and b.expire_date >= today]
+    picked = {b.id for b in dispensable}
+    rest = [b for b in rows if b.id not in picked]
+    taken = 0
+    for batch in [*dispensable, *rest]:
+        if taken >= amount:
+            break
+        step = min(batch_available(batch), amount - taken)
+        if step <= 0:
+            continue
+        if _claim_batch(db, batch.id, step, only_normal=False):
+            taken += step
+    return taken
 
 
 @router.post("/stocks", response_model=StockOut, dependencies=[Depends(require_admin)])
 def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
-    """入库/建档：已有库存记录则累加数量并更新阈值。"""
+    """入库/建档：已有库存记录则累加数量并更新阈值，同事务落兜底批次。
+
+    这条路径没有批号字段，入库量落到 `未标批号` 批次上——只加汇总不落批次，
+    加进去的 50 片就是发不出去的幽灵库存（实测汇总 150 / 批次和 100）。
+    """
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     stock = (
@@ -57,6 +149,7 @@ def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
         )
     stock = ensure_present(stock, "药品库存")
     add_amount(db, DrugStock, stock.id, "quantity", body.quantity)
+    _receive_unspecified(db, body.org_id, body.drug_code, body.quantity)
     stock.threshold = body.threshold
     stock.drug_name = body.drug_name
     db.commit()
@@ -82,10 +175,18 @@ def transfer_stock(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """余缺调拨：从调出机构扣减、调入机构增加，全程留痕。
+    """余缺调拨：从调出机构扣减、调入机构增加，**批次跟着一起搬**，全程留痕。
 
     H3 整改：调出扣减用条件 UPDATE（WHERE quantity >= 需求量）原子执行并校验
     影响行数，并发下不会把库存扣成负数。
+
+    **只搬汇总不搬批次是本模块最贵的那个错**：实测调 40 片到乡镇院，乡镇院汇总
+    多了 40、批次一行没有，一张方也发不出来（`_fefo_batches` 找不到批次），
+    而缺药预警看汇总，于是那家院既发不出药、也不会被提示缺药。
+
+    调出侧只从**可发批次**（未过期、未召回）按 FEFO 挑：过期与召回批次搬到哪
+    都是发不出去的，搬过去只是把幽灵库存换个地方放。因此这里可能出现
+    "汇总够、可发批次不够"而拒绝的情况——那说明调出方账上的量本就发不出。
     """
     if body.from_org_id == body.to_org_id:
         raise HTTPException(status_code=422, detail="调出与调入机构不能相同")
@@ -98,6 +199,27 @@ def transfer_stock(
         raise HTTPException(status_code=409, detail="调出机构库存不足")
     if db.get(Organization, body.to_org_id) is None:
         raise HTTPException(status_code=404, detail="调入机构不存在")
+
+    # 先按 FEFO 原子占用调出侧批次：判余量与占用同一条 SQL，抢不到就换下一批
+    today = resolve_business_date(None).isoformat()
+    moved: list[tuple[DrugBatch, int]] = []
+    outstanding = body.quantity
+    for batch in _fefo_batches(db, body.from_org_id, body.drug_code, today):
+        take = min(batch_available(batch), outstanding)
+        if take <= 0:
+            continue
+        if not _claim_batch(db, batch.id, take):
+            continue
+        moved.append((batch, take))
+        outstanding -= take
+        if outstanding <= 0:
+            break
+    if outstanding > 0:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="调出机构可发批次库存不足（过期与已召回批次不调拨，请先补入库）",
+        )
 
     # 原子扣减：条件不满足（库存不足）时影响行数为 0
     deducted = (
@@ -132,6 +254,36 @@ def transfer_stock(
         db.query(DrugStock).filter(DrugStock.id == dest.id).update(
             {DrugStock.quantity: DrugStock.quantity + body.quantity}, synchronize_session=False
         )
+    # 批次落到调入机构：同批号同效期累加，批号与效期跟着药走，
+    # 否则调入方发出去的药回头查不到是哪一批（召回时唯一有用的那个查询）
+    for batch, take in moved:
+        insert_if_absent(
+            db,
+            DrugBatch(
+                org_id=body.to_org_id,
+                drug_code=body.drug_code,
+                batch_no=batch.batch_no,
+                expire_date=batch.expire_date,
+                supplier=batch.supplier,
+                quantity=0,
+            ),
+        )
+        target = ensure_present(
+            _batch_of(db, body.to_org_id, body.drug_code, batch.batch_no), "药品批次"
+        )
+        if target.expire_date != batch.expire_date:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"调入机构批号 {batch.batch_no} 已按效期 {target.expire_date} 登记，"
+                f"与调出批次 {batch.expire_date} 不一致",
+            )
+        if target.status != "normal":
+            db.rollback()
+            raise HTTPException(
+                status_code=409, detail=f"调入机构批号 {batch.batch_no} 已召回，不得调入"
+            )
+        add_amount(db, DrugBatch, target.id, "quantity", take)
     db.add(StockTransfer(**body.model_dump(), created_by=user.id))
     try:
         db.commit()
@@ -243,7 +395,13 @@ class BatchOut(BaseModel):
     supplier: str
     quantity: int
     used_quantity: int
+    # 还躺在库房里的量（含退回来的不可发死货）
     remaining: int
+    # 退回本批次但已不可发（退回时已召回/已过效期）的量
+    blocked_quantity: int
+    # 计入可用汇总的余量 = remaining - blocked_quantity。
+    # 注意它不等于"今天发得出去"：批次过没过期按效期现算（见 ADR-0013 的口径边界）
+    available: int
     status: str
     recall_reason: str
 
@@ -311,6 +469,8 @@ def _batch_out(b: DrugBatch, drug_name: str) -> dict:
         "quantity": b.quantity,
         "used_quantity": b.used_quantity,
         "remaining": b.quantity - b.used_quantity,
+        "blocked_quantity": b.blocked_quantity,
+        "available": batch_available(b),
         "status": b.status,
         "recall_reason": b.recall_reason,
     }
@@ -458,19 +618,45 @@ def recall_batch(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """召回批次：召回后不得再发药、不得再入库。不删行——发过的要查得到。"""
+    """召回批次：召回后不得再发药、不得再入库，**余量同事务退出可用汇总**。
+
+    只翻 status 不动汇总，召回的药就一直被算成有货：实测召回一个余 80 片的批次
+    后汇总仍是 160、实际可发只剩 50，采购建议因此不提示采购——缺药预警长期少报。
+    余量记到批次的 `blocked_quantity` 上（药还在库房、只是发不出去），
+    对账不变式 汇总 == Σ(批次量-已用-退回不可发) 因此仍然成立。
+
+    状态翻转走条件 UPDATE：先判后改的话，两笔召回并发都判定"还没召回"，
+    余量会被扣两次。
+    """
     batch = db.get(DrugBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="批次不存在")
     assert_obj_org_writable(db, user, batch)
-    if batch.status == "recalled":
+    recalled = cast(
+        CursorResult,
+        db.execute(
+            update(DrugBatch)
+            .where(DrugBatch.id == batch.id, DrugBatch.status == "normal")
+            .values(status="recalled", recall_reason=body.reason)
+        ),
+    )
+    if not recalled.rowcount:
+        db.rollback()
         raise HTTPException(status_code=409, detail="该批次已召回")
-    batch.status = "recalled"
-    batch.recall_reason = body.reason
+    db.refresh(batch)  # 闸门已抢到，按行的最新值算余量（并发发药可能刚改过已用）
+    available = batch_available(batch)
+    if available > 0:
+        stock = ensure_present(_stock_of(db, batch.org_id, batch.drug_code), "药品库存")
+        if not take_amount(db, DrugStock, stock.id, "quantity", available):
+            db.rollback()
+            raise HTTPException(
+                status_code=409, detail="可用汇总不足以扣减该批次余量，台账不符请先盘点"
+            )
+        add_amount(db, DrugBatch, batch.id, "blocked_quantity", available)
     db.commit()
     db.refresh(batch)
-    stock = _stock_of(db, batch.org_id, batch.drug_code)
-    return _batch_out(batch, stock.drug_name if stock else "")
+    named = _stock_of(db, batch.org_id, batch.drug_code)
+    return _batch_out(batch, named.drug_name if named else "")
 
 
 @router.get(
@@ -611,13 +797,28 @@ def approve_purchase(
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 到货验收
 )
 def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """到货验收：采购单置 received，药品同事务入汇总与兜底批次。
+
+    状态闸门走条件 UPDATE 而不是先判后改：两笔验收同时判定"还没验收"，
+    库存就按同一张单加两次——这条路径正是往库存里加数的路径。
+    采购单没有批号字段，验收量与直接入库同样落 `未标批号` 批次
+    （实测只加汇总时：汇总 180 / 批次和 100）。
+    """
     order = db.get(PurchaseOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="采购单不存在")
     assert_obj_org_writable(db, user, order)
-    if order.status != "approved":
+    received = cast(
+        CursorResult,
+        db.execute(
+            update(PurchaseOrder)
+            .where(PurchaseOrder.id == order.id, PurchaseOrder.status == "approved")
+            .values(status="received")
+        ),
+    )
+    if not received.rowcount:
+        db.rollback()
         raise HTTPException(status_code=409, detail="仅已审批采购单可验收入库")
-    order.status = "received"
     stock_qty = None
     if order.item_type == "drug":
         # 药品验收自动入中心药房库存
@@ -647,10 +848,12 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = 
             )
         stock = ensure_present(stock, "药品库存")
         add_amount(db, DrugStock, stock.id, "quantity", order.quantity)
+        _receive_unspecified(db, order.org_id, order.item_code, order.quantity)
         db.flush()
         db.refresh(stock)
         stock_qty = stock.quantity
     db.commit()
+    db.refresh(order)
     return {"id": order.id, "status": order.status, "stock_quantity": stock_qty}
 
 
@@ -695,6 +898,7 @@ class StockTakeCreate(BaseModel):
 def create_stock_take(
     body: StockTakeCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    """盘点：账面调成实盘数，批次侧同事务调平（盘亏 FEFO 核销、盘盈落兜底批次）。"""
     assert_org_writable(db, user, body.org_id)
     stock = (
         db.query(DrugStock)
@@ -703,16 +907,42 @@ def create_stock_take(
     )
     if stock is None:
         raise HTTPException(status_code=404, detail="该机构无此药品库存记录")
+    book_qty = stock.quantity
+    diff = body.actual_qty - book_qty
+    # 账实相符要两边一起调：只改汇总的话，盘完账面 5 片、批次仍挂着 100 片，
+    # 下一次发药按批次照发不误，这次盘点等于白盘（实测汇总 5 / 批次和 100）。
+    # 汇总用条件 UPDATE 钉住盘点时读到的账面数：盘点期间有人发药或入库，
+    # 按旧账面写回去会把那笔一起抹掉——宁可让人重盘一次。
+    settled = cast(
+        CursorResult,
+        db.execute(
+            update(DrugStock)
+            .where(DrugStock.id == stock.id, DrugStock.quantity == book_qty)
+            .values(quantity=body.actual_qty)
+        ),
+    )
+    if not settled.rowcount:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="盘点期间库存发生变动，请重新盘点")
+    today = resolve_business_date(None).isoformat()
+    if diff > 0:
+        # 盘盈没有批号可归，落兜底批次
+        _receive_unspecified(db, body.org_id, body.drug_code, diff)
+    elif diff < 0:
+        if _consume_batches(db, body.org_id, body.drug_code, -diff, today) != -diff:
+            db.rollback()
+            raise HTTPException(
+                status_code=409, detail="批次余量不足以核销盘亏，台账不符请先核对批次"
+            )
     take = StockTake(
         org_id=body.org_id,
         drug_code=body.drug_code,
-        book_qty=stock.quantity,
+        book_qty=book_qty,
         actual_qty=body.actual_qty,
-        diff=body.actual_qty - stock.quantity,
+        diff=diff,
         note=body.note,
         created_by=user.id,
     )
-    stock.quantity = body.actual_qty  # 盘点后账实相符
     db.add(take)
     db.commit()
     return {

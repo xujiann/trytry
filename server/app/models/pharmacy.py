@@ -87,7 +87,22 @@ class PrescriptionItem(Base):
 
 
 class DrugStock(Base):
-    """中心药房库存：县乡村药品余缺调度的基础。"""
+    """中心药房库存汇总：县乡村药品余缺调度的基础。
+
+    `quantity` 是**可用汇总**，不是"库房里有多少盒"。它的权威定义是批次侧算出来的：
+
+        quantity == Σ(该 org+drug 每个批次的 quantity - used_quantity - blocked_quantity)
+
+    这条等式（下称对账不变式）由 tests/test_pharmacy_stock_invariant.py 钉住，
+    **每一个改动汇总的端点都必须同事务改批次**——入库、采购验收、调拨、盘点、
+    发药、退药冲销、召回，一个都不能只改一边。只改汇总那边会造出
+    **"幽灵库存"**：汇总说有 40 片，批次一片也没有，一张方都发不出来，
+    而缺药预警看的是汇总，于是既发不出药、又不提示采购。
+
+    没有批号可归的入库（`POST /stocks` 直接入库、采购验收、盘点盘盈）一律落到
+    批号 `未标批号`、效期 `9999-12-31` 的兜底批次上：宁可批号是"没填"，
+    也不能让汇总凭空长出没有实物对应的数。
+    """
 
     __tablename__ = "drug_stocks"
     __table_args__ = (UniqueConstraint("org_id", "drug_code", name="uq_stock_org_drug"),)
@@ -96,6 +111,7 @@ class DrugStock(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     drug_code: Mapped[str] = mapped_column(String(64), index=True)
     drug_name: Mapped[str] = mapped_column(String(128))
+    # 可用汇总：已召回批次的余量、以及退回到不可发批次的量都不计在内
     quantity: Mapped[int] = mapped_column(Integer, default=0)
     # 低于该阈值触发缺药预警
     threshold: Mapped[int] = mapped_column(Integer, default=0)
@@ -235,14 +251,37 @@ class TcmPreparationBatch(Base):
 class DrugBatch(Base):
     """药品批号效期台账：对齐疫苗批次（VaccineBatch）先例，入库按批次落明细。
 
-    与 `DrugStock` 的关系：**批次是明细、汇总是台账**。同一 (org, drug_code)
-    的 `DrugStock.quantity` 恒等于其各批次 `quantity - used_quantity` 之和——
-    入库、发药、退药冲销都在同一事务里两边同改（对账不变式由
-    tests/test_pharmacy_batches.py 钉住）。
+    与 `DrugStock` 的关系：**批次是明细、汇总是台账**。同一 (org, drug_code) 的
+
+        DrugStock.quantity == Σ(quantity - used_quantity - blocked_quantity)
+
+    入库、采购验收、调拨、盘点、发药、退药冲销、召回都在同一事务里两边同改
+    （对账不变式由 tests/test_pharmacy_batches.py 与
+    tests/test_pharmacy_stock_invariant.py 钉住）。
+
+    三个数量列分工：
+
+    - `quantity`：本批次**累计入库量**，是一条收货事实，只增不减；
+    - `used_quantity`：已出库量（发药、调出、盘亏），退药冲销时原路减回；
+    - `blocked_quantity`：**退回本批次、但退回时本批次已不可发**（已召回或已过
+      效期）的量。药回到了库房，却一片也发不出去，所以只回批次不回可用汇总。
+      不单独记这一笔的话，冲销就会把召回批次的量重新算成可发库存——实测一次
+      冲销让可用汇总从 160 涨到 180，而实际可发仍是 50，缺药预警因此长期少报。
+
+    可发余量因此是 `quantity - used_quantity - blocked_quantity`，
+    而不是 `quantity - used_quantity`（后者是"还在库房里的量"，含退回的死货）。
+    `blocked_quantity > 0` 的批次必然已召回或已过期，两者都不可逆，所以它不会
+    再被 FEFO 选中；批次在"被选中"与"被占用"之间才被召回的那道缝，由
+    `dispense._claim_batch` 把三列余量与 status 压进同一条 SQL 堵上。
 
     效期照疫苗批次的口径**按日期现算不设过期状态**：靠定时任务改状态会让
     "何时过期"取决于任务跑没跑，而这条直接决定能不能发药。
     `status` 只表达人的决定（召回），不表达日期能算出来的事实。
+
+    **这条口径的已知边界**（见 ADR-0013）：正因为不设定时任务，
+    "批次自己跨过效期"没有事件可挂，静置过期的量仍留在 `DrugStock.quantity` 里。
+    汇总回答的是"账上还有多少可用"，"此刻能发多少"必须按效期现算
+    （`dispense._fefo_batches`），**不能拿汇总当可发量**。
     """
 
     __tablename__ = "drug_batches"
@@ -258,6 +297,8 @@ class DrugBatch(Base):
     supplier: Mapped[str] = mapped_column(String(128), default="")
     quantity: Mapped[int] = mapped_column(Integer, default=0)
     used_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    # 退回本批次但已不可发（已召回/已过效期）的量：在库房但不计入可用汇总
+    blocked_quantity: Mapped[int] = mapped_column(Integer, default=0)
     # normal=正常, recalled=已召回（召回后不得再发药；不删行，发过的要查得到）
     status: Mapped[str] = mapped_column(String(16), default="normal", index=True)
     recall_reason: Mapped[str] = mapped_column(String(256), default="")
