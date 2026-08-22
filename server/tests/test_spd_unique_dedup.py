@@ -1,18 +1,24 @@
 """P0-1 的回归网：18 张 spd 表的唯一性必须落在**数据库**上，不是只写在模型注解里。
 
-这套用例守两件事：
+这套用例守三件事：
 
 1. **唯一索引真的建出来了**——模型声明 `unique=True` 的 spd 索引，迁移必须建成唯一。
    这是把"模型说了算"换成"数据库说了算"：应用层的 check-then-act 在并发下必然漏，
    DB 约束是最后一道，而这 18 处此前**一处都没有**（实测可插出同一村医的两个积分账户，
    余额 10 / 99，`award_points` 与兑换核销各取 `.first()`，账面对不上还不报错）。
-2. **去重迁移不静默删数据**——被移除的行整行 JSON 进 `spd_dedup_reports`，
-   积分账户按余额相加归并。删掉的可能是实施期现场调过的配置，必须可还原。
+2. **迁移不替人删数据**——存量有重复时，迁移跳过那张表的唯一索引、把冲突落进
+   `spd_dedup_reports` 台账并点名报错，业务表一行不动（平台通则，CLAUDE.md §4，
+   由 `test_migration_data_safety.py` 统一强制）。归并是 `scripts/spd_dedup.py`
+   由人执行的动作。
+3. **迁移与处置脚本口径同源**——脚本从迁移模块 import 那 18 张表与引用图，
+   不各写一份；两边分叉时会漏掉某张表的外键改指，删出孤儿行。
 
-第 1 条在 SQLite 上就能验（反射得出唯一性），第 2 条要真跑迁移，
-放在 `test_postgres_real.py` 的 PG 档里跑真数据（本文件只验模型侧的一致性与留痕表形状）。
+第 1、3 条在 SQLite 上就能验，第 2 条要真跑迁移灌脏数据，
+放在 `test_postgres_real.py` 的 PG 档里跑（本文件只验模型侧一致性与台账形状）。
 """
 from __future__ import annotations
+
+import pathlib
 
 import pytest
 from sqlalchemy import inspect
@@ -21,6 +27,10 @@ from conftest import reset_database
 
 from app.database import Base, engine
 import app.spd.models as spd_models  # noqa: F401 - 导入即注册
+
+SERVER = pathlib.Path(__file__).resolve().parents[1]
+MIGRATION = SERVER / "alembic" / "versions" / "e1a2b3c4d5e9_spd十八张表补唯一索引与去重.py"
+SCRIPT = SERVER / "scripts" / "spd_dedup.py"
 
 
 #: 迁移 e1a2b3c4d5e9 修掉的 18 处。写死在用例里而不是从模型现算——
@@ -100,6 +110,46 @@ def test_去重留痕表存得下整行(client):
     assert table.columns["removed_row"].type.__class__.__name__.upper().startswith("JSON")
     for column in ("table_name", "key_value", "kept_id", "removed_id", "strategy", "created_at"):
         assert column in table.columns, f"留痕表缺 {column}，事后没法定位是哪条被并掉的"
+
+
+def test_台账默认是待处置(client):
+    """迁移只记冲突不处置，所以默认必须是 pending。
+
+    默认值若是 merge/keep_earliest，台账看起来就像"已经并过了"，
+    而业务表里两行都还在——巡检据此放行，冲突就被漏掉了。
+    """
+    strategy = Base.metadata.tables["spd_dedup_reports"].columns["strategy"]
+    assert strategy.default.arg == "pending"
+
+
+def test_迁移与处置脚本的口径同源():
+    """脚本必须从迁移 import 那 18 张表与引用图，不许各写一份。
+
+    两边分叉的后果不是"不一致"这么抽象：脚本少一张表的引用清单，
+    归并时那张表的外键就不会改指，删完留下指向已删行的孤儿。
+    """
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "e1a2b3c4d5e9" in text, "处置脚本没绑定到那条迁移"
+    for name in ("TARGETS", "REFERENCES", "MERGE_SUM"):
+        assert f"mig.{name}" in text, f"脚本没复用迁移的 {name}，八成是自己抄了一份"
+    # 反向确认：迁移里确实导出了这三样，且脚本用的是迁移的探测函数
+    migration = MIGRATION.read_text(encoding="utf-8")
+    for name in ("TARGETS", "REFERENCES", "MERGE_SUM", "def duplicate_groups", "def row_json"):
+        assert name in migration, f"迁移里没有 {name}，脚本 import 会断"
+    assert "mig.duplicate_groups" in text, "脚本自己写了一套查重复的 SQL？口径必须同源"
+
+
+def test_迁移自己不删业务行():
+    """这条是 P0-1 的形态锁：修复迁移最容易变成事故的地方就是"顺手把重复删了"。
+
+    平台的 `test_migration_data_safety.py` 已按通则扫全部迁移，这里再钉一次
+    是因为**本迁移天生就在处理重复行**——最有动机去删的就是它。
+    """
+    text = MIGRATION.read_text(encoding="utf-8")
+    assert "DELETE FROM" not in text.upper(), (
+        "去重迁移里出现了 DELETE：归并属 scripts/spd_dedup.py，迁移只探测、落台账、点名"
+    )
+    assert "跳过建唯一索引" in text, "迁移没有'有重复就跳过'的分支？"
 
 
 def test_唯一冲突在接口上表现为409而不是500(client, admin_headers):

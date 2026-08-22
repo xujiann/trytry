@@ -1422,22 +1422,24 @@ class SpdReportInstance(Base):
 
 
 class SpdDedupReport(Base):
-    """唯一性修复留痕：建唯一索引前被归并/移除的重复行，整行 JSON 存档。
+    """唯一键冲突台账：迁移探到的重复行，整行 JSON 存档，处置进度记在这里。
 
     存量库里 18 张 spd 表的唯一索引被迁移建成了普通索引（模型上一直写着
     `unique=True`），于是"同一编码两条配置""同一村医两个积分账户"这类数据
-    真的能落库。补唯一索引前必须先去重，而**去重不能盲删**——删掉的可能是
-    实施期现场调过的配置。
+    真的能落库。补唯一索引前必须先去重，而**迁移不替人删数据**（CLAUDE.md §4）：
+    `e1a2b3c4d5e9` 探到重复只做三件事——跳过这张表的唯一索引、把冲突逐行记进
+    这张表、打一条点名到表/键值/行 id 的 ERROR 日志。
 
-    所以这张表是那次修复的账：每移除一行就存一条，含**整行 JSON**
-    （`removed_row`）与处置方式（`strategy`）。人工事后要核对"两份配置差在哪、
-    留下的那份对不对"时，凭这张表可以完整还原被删的那一行。
+    真正的归并由人执行 `python scripts/spd_dedup.py --apply`，它把处置结果写回
+    `strategy`。三个取值：
 
-    - `strategy=merge`：可自动归并（当前只有积分账户：余额/累计相加后并成一条）
-    - `strategy=keep_earliest`：无法自动归并，保留最早一条、其余存档移除，
-      **由实施期人工裁定**是否要把差异补回保留的那条上
+    - `pending`：迁移刚记下的冲突，**还没处置**，业务表里两行都还在
+    - `merge`：已自动归并（当前只有积分账户：余额/累计相加后并成一条）
+    - `keep_earliest`：已保留最早一条、其余存档移除，
+      **差异是否补回保留的那条由实施期人工裁定**
 
-    只增不改：这是一张审计性质的表，任何时候都不该被 UPDATE。
+    `removed_row` 存被并掉那一行的完整原始字段——事后核对"两份配置差在哪"全靠它。
+    除处置脚本回填 `strategy`/`note` 外不改这张表：它是审计性质的账。
     """
 
     __tablename__ = "spd_dedup_reports"
@@ -1448,8 +1450,8 @@ class SpdDedupReport(Base):
     key_value: Mapped[str] = mapped_column(String(128), default="", index=True)
     kept_id: Mapped[int] = mapped_column(Integer, default=0)
     removed_id: Mapped[int] = mapped_column(Integer, default=0)
-    # merge=已自动归并；keep_earliest=保留最早一条、其余存档移除待人工裁定
-    strategy: Mapped[str] = mapped_column(String(16), default="keep_earliest")
+    # pending=迁移记下的冲突待处置；merge=已自动归并；keep_earliest=保留最早一条其余已存档移除
+    strategy: Mapped[str] = mapped_column(String(16), default="pending")
     removed_row: Mapped[dict] = mapped_column(JSON, default=dict)
     note: Mapped[str] = mapped_column(String(256), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
