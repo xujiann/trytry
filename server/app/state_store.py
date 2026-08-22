@@ -210,6 +210,26 @@ class SessionRegistry:
             self._sessions.get(username, {}).pop(jti, None)
             self._last_seen.pop(jti, None)
 
+    def clear_user(self, username: str) -> None:
+        """清空该账号的全部会话登记，立即释放它占的所有并发名额。
+
+        用在"推令牌基线"的地方（改密 / 管理员重置口令 / 停用账号）：基线一推，
+        该账号既有令牌全部作废，可登记里的名额还挂着。并发上限为 1 时这会把人
+        彻底锁死——改完密码登不进来（409 会话已达上限），旧令牌又过不了基线校验
+        所以也登不出去（401），名额要占满令牌自然寿命（8 小时）才由空闲淘汰释放。
+        `remove()` 只能按 jti 单个释放，而推基线时手上并没有那些 jti。
+        """
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            key = f"medplat:sessions:{username}"
+            jtis = self._redis.zrange(key, 0, -1)
+            if jtis:
+                self._redis.delete(*[f"medplat:lastseen:{j}" for j in jtis])
+            self._redis.delete(key)
+            return
+        with self._lock:
+            for jti in self._sessions.pop(username, {}):
+                self._last_seen.pop(jti, None)
+
     def _prune(self, now: float) -> None:
         expired = [j for j, (_, exp) in self._last_seen.items() if exp <= now]
         for j in expired:
