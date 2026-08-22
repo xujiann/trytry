@@ -1,15 +1,17 @@
 """用户管理与审计日志（管理员），修改密码（本人）。"""
 import hmac
 import json
+import time
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
+from ..config import settings
 from ..visibility import assert_obj_org_writable
 from ..database import get_db
 from ..deps import (
@@ -19,10 +21,21 @@ from ..deps import (
     require_admin,
     require_roles,
     resolve_business_date,
+    set_auth_cookies,
 )
 from ..audit_chain import verify_chain
 from ..models import AuditLog, LoginLog, Organization, RoleChangeLog, User, utcnow
-from ..security import hash_password, validate_password_strength, verify_password
+from ..security import (
+    AUTH_COOKIE,
+    CSRF_COOKIE,
+    TOKEN_TTL_SECONDS,
+    active_sessions,
+    create_token,
+    decode_token,
+    hash_password,
+    validate_password_strength,
+    verify_password,
+)
 
 router = APIRouter(prefix="/api", tags=["用户与审计"])
 
@@ -124,9 +137,48 @@ class ChangePasswordOut(BaseModel):
     tokens_revoked: bool
 
 
+def _refresh_cookie_session(request: Request, response: Response, user: User) -> None:
+    """Cookie 会话的改密续期：重签一枚令牌，刷新 HttpOnly 令牌 Cookie。
+
+    改密推基线后旧令牌立即失效。Header 模式的对接方自己持有令牌，重新登录即可；
+    Cookie 模式不行——令牌在 HttpOnly Cookie 里，前端**既读不到也删不掉**，改密后
+    浏览器会一直回带一枚死 Cookie：业务接口 401，连 `/api/auth/logout` 都因为依赖
+    `get_current_user` 而 401，用户没有任何自清通道（除非手动清浏览器数据）。
+
+    两条修法里取"重签续期"而不是"放宽 logout 的鉴权让它能清 Cookie"：改密本就是
+    本人已经通过鉴权的操作，没有理由把他踢下线再让他自己捡回来；而为了一个纯清理
+    动作在认证边界上开口子（让 logout 接受失效令牌），代价明显更大。
+
+    只在**本次请求确实走 Cookie 鉴权**时下发，Header 模式响应逐字节不变。
+    """
+    if request.headers.get("authorization"):
+        return  # Header 模式：令牌由对接方自己持有，不下发 Cookie
+    if not request.cookies.get(AUTH_COOKIE):
+        return
+    token = create_token(user.username, user.role)
+    # 名额刚被 clear_user 清空，续期的这枚要重新占一个，否则 Cookie 会话不计数、
+    # 并发上限形同虚设
+    if settings.session_max_concurrent > 0:
+        claims = decode_token(token) or {}
+        ttl = max(int(claims.get("exp", 0) - time.time()), 60)
+        active_sessions.register(user.username, str(claims.get("jti", "")), ttl_seconds=ttl)
+    set_auth_cookies(
+        response,
+        token,
+        cookie_name=AUTH_COOKIE,
+        csrf_cookie_name=CSRF_COOKIE,
+        max_age=TOKEN_TTL_SECONDS,
+        # CSRF token 不轮换：它与口令无关，换掉只会让改密响应到达前已发出的
+        # 并发写请求全部 403（前端每次现读 Cookie，但请求头里是发出时的旧值）
+        csrf_token=request.cookies.get(CSRF_COOKIE) or None,
+    )
+
+
 @router.post("/auth/change-password", response_model=ChangePasswordOut)
 def change_password(
     body: ChangePassword,
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -139,6 +191,9 @@ def change_password(
     user.password_updated_at = utcnow()
     user.must_change_password = False
     db.commit()
+    # 推基线只让旧令牌"验不过"，会话登记里的名额还挂在账号上（理由见 clear_user）
+    active_sessions.clear_user(user.username)
+    _refresh_cookie_session(request, response, user)
     return ChangePasswordOut(changed=True, tokens_revoked=True)
 
 
@@ -452,6 +507,10 @@ def set_user_status(
     target.status = body.status
     db.commit()
     db.refresh(target)
+    if body.status == "disabled":
+        # 令牌都作废了，别让它们继续占着并发名额——否则重新启用后本人还要先撞
+        # 一轮 409 才登得进来（理由见 SessionRegistry.clear_user）
+        active_sessions.clear_user(target.username)
     return target
 
 
@@ -490,6 +549,8 @@ def admin_reset_password(
     target.password_updated_at = utcnow()
     target.token_valid_from = utcnow()
     db.commit()
+    # 同上：基线一推旧令牌全废，名额也该一起放掉，否则用户拿着临时口令都登不进来
+    active_sessions.clear_user(target.username)
     return PasswordResetOut(reset=True, must_change_password=True)
 
 

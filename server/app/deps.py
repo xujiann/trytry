@@ -51,12 +51,22 @@ def wants_cookie_auth(request: Request) -> bool:
 
 
 def set_auth_cookies(
-    response: Response, token: str, *, cookie_name: str, csrf_cookie_name: str, max_age: int
+    response: Response,
+    token: str,
+    *,
+    cookie_name: str,
+    csrf_cookie_name: str,
+    max_age: int,
+    csrf_token: str | None = None,
 ) -> None:
     """下发会话 Cookie 对：令牌进 HttpOnly，CSRF token 进非 HttpOnly（双提交）。
 
     SameSite=Lax 挡跨站写请求的自动携带；Path=/ 覆盖全站；生产环境
     （settings.is_production）加 Secure，仅经 HTTPS 传输。
+
+    `csrf_token` 缺省时新签一枚（登录路径的原有行为，逐字节不变）。**改密续期**
+    走的是"换令牌不换 CSRF"：双提交里 CSRF token 只是一枚随请求回带的随机对照
+    值，与口令无关；轮换它会让改密响应到达前已发出的并发写请求全部 403。
     """
     secure = settings.is_production
     response.set_cookie(
@@ -64,7 +74,7 @@ def set_auth_cookies(
         max_age=max_age, httponly=True, samesite="lax", secure=secure, path="/",
     )
     response.set_cookie(
-        csrf_cookie_name, new_csrf_token(),
+        csrf_cookie_name, csrf_token or new_csrf_token(),
         max_age=max_age, httponly=False, samesite="lax", secure=secure, path="/",
     )
 
@@ -241,6 +251,56 @@ def token_issued_before_baseline(claims: dict, user: User) -> bool:
     return float(claims.get("iat", 0)) < baseline
 
 
+#: 令牌准入判定的拒绝原因 → (HTTP 状态码, detail)。HTTP 侧照此抛 HTTPException；
+#: WS 侧只关心"是否被拒"（统一 1008 关连接），故两侧共用一份判定、各自决定出口。
+TOKEN_DENIAL_RESPONSES: dict[str, tuple[int, str]] = {
+    "revoked": (status.HTTP_401_UNAUTHORIZED, "令牌已登出失效"),
+    "portal_scope": (status.HTTP_401_UNAUTHORIZED, "居民端令牌不可用于业务接口"),
+    "no_user": (status.HTTP_401_UNAUTHORIZED, "用户不存在"),
+    "disabled": (status.HTTP_403_FORBIDDEN, "账号已停用，请联系管理员"),
+    "stale_baseline": (status.HTTP_401_UNAUTHORIZED, "密码已修改，令牌失效，请重新登录"),
+}
+
+
+def check_token_admission(db: Session, claims: dict, token: str) -> tuple[User | None, str]:
+    """一枚已验签、未过期的令牌能否代表一个可用账号——**全平台唯一一份判定**。
+
+    抽出来是因为原先只有 `get_current_user` 有这套判定，`ws._token_valid` 自己
+    写了一套只看「签名 + 过期 + 登出黑名单」的简版：同一枚停用账号的令牌在
+    HTTP 侧 403、在 WebSocket 侧照常建连并收本机构的危急值/缺药定向广播；
+    居民端令牌（scope=portal）HTTP 侧 401、WS 侧也能进。两套口径注定漂移，
+    所以这里只留一处实现，调用方（deps / ws）各自决定怎么把拒绝告诉对方。
+
+    返回 `(user, "")` 表示放行；`(None, 原因代号)` 表示拒绝，代号见
+    `TOKEN_DENIAL_RESPONSES`。判定顺序有意义，不要随手调换：
+
+    1. 登出黑名单（按 jti，无 jti 的历史令牌退回按原文）；
+    2. 居民端作用域——居民账户不在 users 表内，这里显式拒绝，避免有人建一个
+       叫 "resident:1" 的业务账号来撞 sub；
+    3. 账号存在；
+    4. 账号停用 —— 放在基线判定**之前**：停用时会同步推基线吊销令牌，若先判
+       基线，停用账号收到的是"密码已修改请重新登录"，指引用户去做一件做不成的事；
+    5. 改密/停用推的令牌基线。
+
+    只判"这枚令牌代表谁、这个人还能不能用"。空闲超时与 428 强制改密是 HTTP
+    请求语义（要落活动时刻、要按路径豁免），留在 `get_current_user` 里。
+    """
+    if (claims.get("jti") or token) in revoked_tokens:
+        return None, "revoked"
+    if claims.get("scope") == "portal":
+        return None, "portal_scope"
+    user = db.query(User).filter(User.username == claims.get("sub", "")).first()
+    if user is None:
+        return None, "no_user"
+    # 等保 E1 账号停用：每次判定现查 users.status，停用即时生效，不等令牌过期。
+    # 403 而非 401——问题不在令牌，是账号被管理员禁用，重新登录也无济于事。
+    if user.status == "disabled":
+        return None, "disabled"
+    if token_issued_before_baseline(claims, user):
+        return None, "stale_baseline"
+    return user, ""
+
+
 def _enforce_session_idle_timeout(claims: dict) -> None:
     """等保 E1 空闲超时（简化口径）：距最近一次活动超过 idle_timeout 即拒。
 
@@ -300,26 +360,12 @@ def get_current_user(
     claims = decode_token(token)
     if claims is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌无效或已过期")
-    # L-9 整改：黑名单按 jti 判定（存储中不再落完整令牌明文）；无 jti 的旧令牌按原文兜底
-    if (claims.get("jti") or token) in revoked_tokens:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="令牌已登出失效")
-    # 居民端令牌（scope=portal）不得进入业务接口：居民账户不在 users 表内，
-    # 这里显式拒绝，避免有人建一个叫 "resident:1" 的业务账号来撞 sub。
-    if claims.get("scope") == "portal":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="居民端令牌不可用于业务接口")
-    user = db.query(User).filter(User.username == claims["sub"]).first()
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
-    # 等保 E1 账号停用：每请求现查 users.status，停用即时生效，不等令牌过期。
-    # 403 而非 401——问题不在令牌，是账号被管理员禁用，重新登录也无济于事。
-    # 放在令牌基线判定**之前**：停用时会同步推基线吊销令牌，若先判基线，
-    # 停用账号收到的是"密码已修改请重新登录"——指引用户去做一件做不成的事。
-    if user.status == "disabled":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已停用，请联系管理员")
-    if token_issued_before_baseline(claims, user):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="密码已修改，令牌失效，请重新登录"
-        )
+    # 登出黑名单 / 居民端作用域 / 账号存在与停用 / 改密基线：判定与理由见
+    # check_token_admission（WS 侧共用同一份，口径不再各写一套）
+    user, denial = check_token_admission(db, claims, token)
+    if denial or user is None:
+        code, detail = TOKEN_DENIAL_RESPONSES[denial]
+        raise HTTPException(status_code=code, detail=detail)
     # 等保 E1 会话空闲超时（0=关闭，零开销旁路）
     if settings.session_idle_timeout_seconds > 0:
         _enforce_session_idle_timeout(claims)

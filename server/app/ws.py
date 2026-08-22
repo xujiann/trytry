@@ -19,17 +19,26 @@ M-2 整改（定向通知）：
 - 连接建立时登记用户 org_id 与角色；
 - broadcast(target_org_id=...) 时仅推送给该机构在线用户与监管角色
   （admin/director），无关机构不再收到含患者临床信息的危急值/缺药消息。
+
+本轮整改（WS 鉴权口径对齐 HTTP）：
+- 握手鉴权原先只验「签名 + 过期 + 登出黑名单」，不查 `users.status`、不判改密
+  基线、不拒居民端令牌——停用账号与居民端令牌在 HTTP 侧 403/401，在本通道却能
+  建连并收到定向广播。现三条握手路径（query token / 首帧 / Cookie 兜底）一律
+  走 `deps.check_token_admission`，与 `get_current_user` 同一份判定；
+- 长连接存活期同样复核：心跳时现查（保住 M3 的"登出即断开"），每次广播投递前
+  按令牌带短 TTL 缓存复核（挡住一条心跳都不发的沉默连接），取舍见 `_authorize`。
 """
 import asyncio
 import json
 import logging
 import threading
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .database import SessionLocal
-from .models import User
-from .security import AUTH_COOKIE, decode_token, revoked_tokens
+from .deps import check_token_admission
+from .security import AUTH_COOKIE, decode_token
 from .state_store import _redis_client
 
 router = APIRouter()
@@ -39,6 +48,62 @@ logger = logging.getLogger("medplat.ws")
 #: 跨进程广播的 Redis 频道
 _BROADCAST_CHANNEL = "medplat:ws:broadcast"
 
+#: 长连接存活期复核的缓存窗口（秒）；握手不吃缓存。取舍见 `_authorize`。
+_REVALIDATE_TTL_SECONDS = 30.0
+
+#: token -> (判定时刻, (是否放行, org_id, 角色))
+_admission_cache: dict[str, tuple[float, tuple[bool, int | None, str]]] = {}
+_admission_lock = threading.Lock()
+
+
+def _authorize_uncached(token: str) -> tuple[bool, int | None, str]:
+    """现查一次：令牌是否放行，以及定向广播要登记的 org_id / 角色。"""
+    claims = decode_token(token)
+    if claims is None:
+        return False, None, ""
+    db = SessionLocal()
+    try:
+        user, denial = check_token_admission(db, claims, token)
+        if denial or user is None:
+            return False, None, ""
+        return True, user.org_id, user.role
+    finally:
+        db.close()
+
+
+def _authorize(token: str, *, cached: bool = False) -> tuple[bool, int | None, str]:
+    """本通道的准入判定。判定本身不在这里实现，调 `deps.check_token_admission`
+    ——与 HTTP 侧 `get_current_user` 同一份代码，不再各留一套口径。
+
+    **`cached` 的取舍**——缓存只开在一条路径上：
+
+    - `cached=False`（**握手** + **心跳复核**）一律现查。握手是鉴权本身，不能吃
+      缓存的滞后；心跳是客户端驱动的低频事件，现查才保得住 M3 那条"登出后下一次
+      心跳即断开"的既有语义（`test_p0_fixes.test_ws_heartbeat_revalidates_revoked_token`
+      钉着它）。
+    - `cached=True` 只用于**广播投递前**的复核。这条路径按在线连接数放大：一次
+      危急值广播若逐连接现查，就是"连接数"次查库，且发生在事件循环里。所以按
+      令牌缓存 `_REVALIDATE_TTL_SECONDS` 秒，每枚令牌每 30 秒至多一次查询，
+      代价是停用/改密之后最多再多收 30 秒消息——而在此之前这条路径**一次都不查**。
+      选它而不选"推送前按 user_id 批量查一次"，是因为后者要把连接按用户聚合、
+      还要处理首帧鉴权尚未登记用户的中间态，复杂度换来的只是同一量级的窗口。
+    """
+    if not token:
+        return False, None, ""
+    now = time.time()
+    if cached:
+        with _admission_lock:
+            hit = _admission_cache.get(token)
+        if hit is not None and now - hit[0] < _REVALIDATE_TTL_SECONDS:
+            return hit[1]
+    result = _authorize_uncached(token)
+    with _admission_lock:
+        for stale in [t for t, (at, _) in _admission_cache.items()
+                      if now - at >= _REVALIDATE_TTL_SECONDS]:
+            _admission_cache.pop(stale, None)
+        _admission_cache[token] = (now, result)
+    return result
+
 
 class ConnectionManager:
     """在线连接管理器：接入/断开/（定向）广播。"""
@@ -47,15 +112,19 @@ class ConnectionManager:
     SUPERVISOR_ROLES = ("admin", "director")
 
     def __init__(self) -> None:
-        # websocket -> {"org_id": int|None, "role": str}
+        # websocket -> {"org_id": int|None, "role": str, "token": str}
+        # token 留着是为了投递前复核准入（见 _send_all）；它本就是本连接的凭据，
+        # 不写日志、不进广播消息。
         self.active: dict[WebSocket, dict] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         # Redis Pub/Sub 订阅线程（每进程至多一条，惰性启动）
         self._subscriber_started = False
         self._subscriber_lock = threading.Lock()
 
-    async def connect(self, websocket: WebSocket, org_id: int | None = None, role: str = "") -> None:
-        self.active[websocket] = {"org_id": org_id, "role": role}
+    async def connect(
+        self, websocket: WebSocket, org_id: int | None = None, role: str = "", token: str = ""
+    ) -> None:
+        self.active[websocket] = {"org_id": org_id, "role": role, "token": token}
         self._loop = asyncio.get_running_loop()
         # 持有连接的进程必须订阅总线：广播可能由**别的 worker** 发布
         self._ensure_subscriber()
@@ -65,6 +134,16 @@ class ConnectionManager:
 
     async def _send_all(self, message: dict, target_org_id: int | None) -> None:
         for websocket, meta in list(self.active.items()):
+            # 投递前复核准入（缓存 + 短 TTL，见 _authorize）：账号被停用、令牌被
+            # 登出或被改密基线吊销的连接不再收消息，不必等它下一次心跳——
+            # 沉默的客户端可以一条心跳都不发，握手时的一次校验挡不住这种连接。
+            if not _authorize(meta.get("token", ""), cached=True)[0]:
+                self.disconnect(websocket)
+                try:
+                    await websocket.close(code=1008)
+                except Exception:  # noqa: BLE001 - 已断开的连接无需再关
+                    pass
+                continue
             if (
                 target_org_id is not None
                 and meta.get("org_id") != target_org_id
@@ -159,32 +238,6 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-def _token_valid(token: str) -> bool:
-    if not token:
-        return False
-    claims = decode_token(token)
-    if claims is None:
-        return False
-    # L-9 整改：黑名单按 jti 判定，与 HTTP 侧口径一致
-    return (claims.get("jti") or token) not in revoked_tokens
-
-
-def _lookup_user_meta(token: str) -> tuple[int | None, str]:
-    """按令牌主体查询用户 org_id 与角色（定向广播登记用）。"""
-    claims = decode_token(token) or {}
-    username = claims.get("sub", "")
-    if not username:
-        return None, ""
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.username == username).first()
-        if user is None:
-            return None, ""
-        return user.org_id, user.role
-    finally:
-        db.close()
-
-
 @router.websocket("/ws/notifications")
 async def notifications_ws(websocket: WebSocket, token: str = ""):
     """实时通知通道。
@@ -197,29 +250,38 @@ async def notifications_ws(websocket: WebSocket, token: str = ""):
        采用；无效/缺失仍回退首帧鉴权，两种既有方式不受影响。WS 握手是 GET、
        无副作用，SameSite=Lax 下跨站页面也无法用 Cookie 建立本通道的写能力，
        故此处不做 CSRF 双提交。
-    连接期每收到一条心跳消息即复核令牌有效性与黑名单，失效即断开。
+    三条路径鉴权口径**完全一致**（`_authorize` → `deps.check_token_admission`）：
+    令牌有效且未登出、账号存在且未停用、令牌未被改密/停用推的基线吊销、
+    不是居民端令牌（scope=portal）。连接期每收到一条心跳消息复核一次，
+    每次广播投递前也复核一次（见 `ConnectionManager._send_all`）。
     """
     await websocket.accept()
+    ok, org_id, role = False, None, ""
     if not token:
         cookie_token = websocket.cookies.get(AUTH_COOKIE, "")
-        if cookie_token and _token_valid(cookie_token):
-            token = cookie_token
+        if cookie_token:
+            ok, org_id, role = _authorize(cookie_token)
+            if ok:
+                token = cookie_token
     if not token:
         # 首帧鉴权：第一条文本帧即令牌
         try:
             token = (await websocket.receive_text()).strip()
         except WebSocketDisconnect:
             return
-    if not _token_valid(token):
+    if not ok:
+        ok, org_id, role = _authorize(token)
+    if not ok:
         await websocket.close(code=1008)
         return
-    org_id, role = _lookup_user_meta(token)
-    await manager.connect(websocket, org_id=org_id, role=role)
+    await manager.connect(websocket, org_id=org_id, role=role, token=token)
     try:
         while True:
-            # 客户端可发送心跳文本；每次心跳复核令牌（登出/过期即断开）
+            # 客户端可发送心跳文本；每次心跳**现查**复核准入（登出/过期/停用/改密
+            # 即断开）。心跳是客户端驱动的低频事件，一次查库换"登出即时生效"这条
+            # M3 既有语义，值；缓存只用在广播扇出那条按连接数放大的路径上。
             await websocket.receive_text()
-            if not _token_valid(token):
+            if not _authorize(token)[0]:
                 manager.disconnect(websocket)
                 await websocket.close(code=1008)
                 return
