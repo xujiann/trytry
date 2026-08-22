@@ -490,16 +490,13 @@ def test_spd_admin_screen_enroll_path_task(page, base_url, spd_seed):
     _submit(page, "#spd-enroll-form button")
 
     # 拿刚建的纳管档案 id（UI 列表异步画出，直接查接口更稳）
-    import json
-    from urllib.request import Request
-
-    token = page.evaluate("() => localStorage.getItem('medplat_token')")
-    req = Request(
-        f"{base_url}/api/spd/enrollments?program_code=hypertension",
-        headers={"Authorization": f"Bearer {token}"},
+    # 取刚建的纳管档案 id。**在浏览器里发这个请求**而不是用 urllib 带令牌：
+    # 会话已经是 HttpOnly Cookie（G3/P1-23），JS 与用例都读不到令牌，
+    # 只有同源 fetch 才会自动带上它。
+    enrollments = page.evaluate(
+        "async () => (await fetch('/api/spd/enrollments?program_code=hypertension',"
+        " {credentials: 'same-origin'})).json()"
     )
-    with urlopen(req, timeout=10) as resp:
-        enrollments = json.loads(resp.read())
     enrollment = next(
         e for e in enrollments if e["patient_id"] == spd_seed["patient"]["id"]
     )
