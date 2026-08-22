@@ -69,6 +69,7 @@ from .models import (
 GLOBAL_ROLES = {"admin", "director"}
 
 __all__ = [
+    "active_authorization_grants",
     "visible_org_ids",
     "assert_org_visible",
     "assert_org_writable",
@@ -357,23 +358,54 @@ def _patient_basis_uncached(db: Session, user: User, patient_id: int) -> str | N
             # 事后审计要一眼分得出"这次调阅是因为转诊"。
             return "referral" if model is Referral else "service"
 
-    # 患者授权：过期与撤销都当作无效。**按日期现算不看状态字段**，
-    # 理由与疫苗禁忌一致——定时任务改状态会让"何时失效"取决于任务跑没跑，
-    # 而这条判定直接决定档案给不给看。
-    today = date.today().isoformat()
-    grants = (
+    # 患者授权：过期与撤销都当作无效，判定见 `active_authorization_grants`
+    # （与 patients.check_authorization 共用同一份，不再两处各判一遍有效期）。
+    if active_authorization_grants(db, patient_id, org_id):
+        return "authorization"
+
+    return None
+
+
+def active_authorization_grants(
+    db: Session, patient_id: int, org_id: int, today: str | None = None
+) -> list[ArchiveAuthorization]:
+    """该机构此刻对该患者持有的**有效**调阅授权（浙#59）——全平台唯一一份有效期判定。
+
+    抽出来的起因与 ws 那份"第二拷贝"同形：同一个问题
+    （"这家机构的调阅授权此刻还算数吗"）此前有两份可以各自演化的答案——
+
+    - 本模块（`_patient_basis_uncached`）：`status=active` 且
+      **`expire_date` 为空视为不设到期日、按有效算**；
+    - `routers/patients.check_authorization`：`status=active` 且
+      `expire_date >= 今天`，在 SQL 里比较，**空串一律比不过、判为无效**。
+
+    `archive_authorizations.expire_date` 是 `String(10) default=""`（非空列），
+    空串因此是可达状态。于是同一条长期授权：可见性判定说"能调阅"，
+    而给对接方看的校验接口说 `allowed=false`。两个答案都能各自继续演化，
+    却谁也不会跟着谁改——收敛掉的正是这个。
+
+    口径以可见性这一侧为准：它才是真正把门的那个判定，校验接口只是把同一件事
+    说给对接方听；让"说的"去追"做的"，不能反过来。
+
+    **`scope` 刻意不在这里判**，由调用方各自决定：可见性判定不分范围
+    （拿到任一有效授权即构成调阅依据），而校验接口回答的是"我要的这个范围
+    在不在授权里"。这是两个不同的问题，不是同一个问题的两份答案。
+    """
+    current = today or date.today().isoformat()
+    return (
         db.query(ArchiveAuthorization)
         .filter(
             ArchiveAuthorization.patient_id == patient_id,
             ArchiveAuthorization.grantee_org_id == org_id,
             ArchiveAuthorization.status == "active",
+            sa.or_(
+                ArchiveAuthorization.expire_date == "",
+                ArchiveAuthorization.expire_date.is_(None),
+                ArchiveAuthorization.expire_date >= current,
+            ),
         )
         .all()
     )
-    if any(not g.expire_date or g.expire_date >= today for g in grants):
-        return "authorization"
-
-    return None
 
 
 def _write_access_log(user: User, patient_id: int, resource: str, basis: str) -> None:
