@@ -1,4 +1,5 @@
 import hmac
+import re
 import time
 from datetime import date, timedelta, timezone
 from typing import Iterable, TypeVar
@@ -225,6 +226,55 @@ def resolve_org_scope(
     if org_id is not None:
         return [org_id] if org_id in ids else []
     return ids
+
+
+#: 只认半角数字。`str.isdigit()` 与 `\\d` 都会放行全角（"２０２６"），
+#: 那种值能通过校验却又不是合法年份，最后原样回显给前端。
+_ASCII_YEAR = re.compile(r"[0-9]{4}")
+_ASCII_MONTH = re.compile(r"[0-9]{4}-[0-9]{2}")
+
+
+def period_bounds(period: str | None) -> tuple[str, date, date]:
+    """把考核周期字符串解析成左闭右开的日期区间，返回 (规范化周期, start, end)。
+
+    支持两种粒度：
+
+    - `YYYY`    —— 年度考核（绩效考核的常用粒度）
+    - `YYYY-MM` —— 月度，与 `analytics` 既有的 `period` 约定一致
+
+    `period=None` 时默认**当年**。默认不取"全部历史"是有意的：累计口径的指标
+    只涨不跌、随机构运营年限自然趋近满分，考核意义会随时间流失
+    （见 `docs/统计口径对照表.md` 第 3 条）。
+
+    右端点取下一周期的起点（左闭右开），避免"12 月 31 日 23:59 的记录算不算"
+    这类边界扯皮。
+
+    注：`analytics._period_bounds` 是另一份只认 `YYYY-MM` 的实现。**暂不合并**——
+    让它接受 `YYYY` 会把那个端点当前返回 422 的输入变成 200，属于对未受本次改动
+    影响的接口做行为变更。已登记 ROADMAP 另案。
+    """
+    if period is None:
+        # 用 UTC 而不是本地日期：`created_at` 存的是 naive UTC
+        # （`models._base.utcnow`）。用 `date.today()` 会在 UTC+8 把每个周期
+        # 头 8 小时的记录算到上一期去。
+        period = str(now_naive().year)
+
+    # 整段包在 try 里：`int()` 与 `date()` 都会对越界输入抛 ValueError
+    # （`9999` → year 10000 out of range、`0000` → year 0），
+    # 漏在外面就是 500 而不是 422。
+    try:
+        if _ASCII_YEAR.fullmatch(period):
+            year = int(period)
+            return period, date(year, 1, 1), date(year + 1, 1, 1)
+        if not _ASCII_MONTH.fullmatch(period):
+            raise ValueError(period)
+        start = date.fromisoformat(period + "-01")
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="period 须为 YYYY（年度）或 YYYY-MM（月度）格式"
+        ) from None
+    end = date(start.year + 1, 1, 1) if start.month == 12 else date(start.year, start.month + 1, 1)
+    return period, start, end
 
 
 def resolve_business_date(today: str | None) -> date:

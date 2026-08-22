@@ -7,7 +7,7 @@
 - 处方合格率（合理用药）
 - 家医签约履约量（签约服务）
 """
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -21,6 +21,7 @@ from ..deps import (
     get_current_user,
     paginate,
     require_roles,
+    period_bounds,
     resolve_business_date,
     resolve_org_scope,
     row_dict,
@@ -158,6 +159,9 @@ class OrgScorecard(BaseModel):
 
 
 class OrgScorecardsOut(BaseModel):
+    #: 本次计分覆盖的考核周期（YYYY 或 YYYY-MM）。**必须回给前端**——
+    #: 分数从"开天辟地累计"改成"周期内"之后，不标周期的数字是没法解读的。
+    period: str
     #: 键来自 `performance_indicators` 表（可增删指标），是**动态**的，
     #: 只能写 dict[str, float]，不能逐个字段写死。
     weights: dict[str, float]
@@ -166,13 +170,27 @@ class OrgScorecardsOut(BaseModel):
 
 @router.get("/orgs", response_model=OrgScorecardsOut)
 def org_scorecards(
+    period: str | None = None,
     volume_cap: int = 5,
     include_auto_passed: bool = True,
     org_id: int | None = None,
     group_id: int | None = None,
     db: Session = Depends(get_db),
 ):
-    """机构绩效计分。
+    """机构绩效计分（**按考核周期**）。
+
+    `period`：`YYYY` 年度或 `YYYY-MM` 月度，缺省为当年。
+
+    **口径变更（2026-08-21，产品裁定）**：此前本接口不带任何时间维度，算的是
+    开天辟地以来的累计数。累计口径的指标只涨不跌、随机构运营年限自然趋近满分，
+    考核意义会随时间流失——尤其"慢病随访覆盖"，一个管了三年的患者只要三年前
+    随访过一次就永远计入已覆盖。现改为周期口径，详见 `docs/统计口径对照表.md`。
+
+    分母的时间语义**逐项不同**，不是无脑全加时间窗：
+
+    - 转诊 / 远程诊断 / 处方 / 家医服务：分子分母都取**本期发生**的记录；
+    - 慢病随访覆盖：分母是**在管存量**患者（不按期），分子是**本期内随访过**的人。
+      分母若也按期就变成"本期新入组的有多少随访过"，那是另一个指标。
 
     L-1 口径参数化（向卫健考核口径过渡）：
     - volume_cap：量类维度（远程诊断/家医履约）封顶次数，达到即满分（默认 5，可按机构规模调大）；
@@ -184,6 +202,9 @@ def org_scorecards(
     """
     if volume_cap < 1:
         raise HTTPException(status_code=422, detail="volume_cap 须≥1")
+    period, start, end = period_bounds(period)   # UTC 口径，与 created_at 一致
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end, datetime.min.time())
     weights = _normalized_weights(db)
     rx_ok_statuses = ["auto_passed", "approved"] if include_auto_passed else ["approved"]
     scope = resolve_org_scope(db, group_id, org_id)
@@ -193,43 +214,67 @@ def org_scorecards(
     orgs = orgs_q.all()
     results: list[dict[str, Any]] = []
     for org in orgs:
-        ref_total = db.query(func.count(Referral.id)).filter(Referral.from_org_id == org.id).scalar() or 0
+        ref_total = (
+            db.query(func.count(Referral.id))
+            .filter(Referral.from_org_id == org.id,
+                    Referral.created_at >= start_dt, Referral.created_at < end_dt)
+            .scalar()
+            or 0
+        )
         ref_completed = (
             db.query(func.count(Referral.id))
-            .filter(Referral.from_org_id == org.id, Referral.status == "completed")
+            .filter(Referral.from_org_id == org.id, Referral.status == "completed",
+                    Referral.created_at >= start_dt, Referral.created_at < end_dt)
             .scalar()
             or 0
         )
         exam_count = (
             db.query(func.count(ExamRequest.id))
-            .filter(ExamRequest.from_org_id == org.id, ExamRequest.status.in_(["reported", "recognized"]))
+            .filter(ExamRequest.from_org_id == org.id,
+                    ExamRequest.status.in_(["reported", "recognized"]),
+                    ExamRequest.created_at >= start_dt, ExamRequest.created_at < end_dt)
             .scalar()
             or 0
         )
+        # 分母是"周期结束时的在管存量"：**只设上界、不设下界**。
+        # 不设下界 → 三年前入组、至今在管的人今年照样要考核（这正是"存量"的意思）；
+        # 但必须设上界 → 否则查 2025 年度的分数会把 2026 年才入组的人算进分母，
+        # 历史分数会随新入组不断漂移、永远复现不出来。
         chronic_total = (
             db.query(func.count(ChronicPatient.id))
-            .filter(ChronicPatient.managed_by_org_id == org.id)
+            .filter(ChronicPatient.managed_by_org_id == org.id,
+                    ChronicPatient.created_at < end_dt)
             .scalar()
             or 0
         )
+        # 分子按期、分母不按期：问的是"在管的这些人里，本期随访到了几个"
         chronic_followed = (
             db.query(func.count(func.distinct(FollowUp.chronic_id)))
             .join(ChronicPatient, FollowUp.chronic_id == ChronicPatient.id)
-            .filter(ChronicPatient.managed_by_org_id == org.id)
+            .filter(ChronicPatient.managed_by_org_id == org.id,
+                    FollowUp.created_at >= start_dt, FollowUp.created_at < end_dt)
             .scalar()
             or 0
         )
-        rx_total = db.query(func.count(Prescription.id)).filter(Prescription.org_id == org.id).scalar() or 0
+        rx_total = (
+            db.query(func.count(Prescription.id))
+            .filter(Prescription.org_id == org.id,
+                    Prescription.created_at >= start_dt, Prescription.created_at < end_dt)
+            .scalar()
+            or 0
+        )
         rx_ok = (
             db.query(func.count(Prescription.id))
-            .filter(Prescription.org_id == org.id, Prescription.status.in_(rx_ok_statuses))
+            .filter(Prescription.org_id == org.id, Prescription.status.in_(rx_ok_statuses),
+                    Prescription.created_at >= start_dt, Prescription.created_at < end_dt)
             .scalar()
             or 0
         )
         contract_services = (
             db.query(func.count(ContractService.id))
             .join(FamilyDoctorContract, ContractService.contract_id == FamilyDoctorContract.id)
-            .filter(FamilyDoctorContract.org_id == org.id)
+            .filter(FamilyDoctorContract.org_id == org.id,
+                    ContractService.created_at >= start_dt, ContractService.created_at < end_dt)
             .scalar()
             or 0
         )
@@ -268,7 +313,7 @@ def org_scorecards(
             }
         )
     results.sort(key=lambda r: float(r["score"]), reverse=True)
-    return {"weights": weights, "scorecards": results}
+    return {"period": period, "weights": weights, "scorecards": results}
 
 
 # ===========================================================================

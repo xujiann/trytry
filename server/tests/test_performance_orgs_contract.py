@@ -16,6 +16,8 @@
 网里造了真实数据（转诊完成 1/2、远程诊断 1 次、慢病随访 1/2、处方合格 1/2、
 家医服务 2 次）：全零的响应什么都钉不住，比率分母为 0 时代码走的是另一条分支。
 """
+from datetime import date, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -114,7 +116,7 @@ def seeded(client, admin):
         for service_type in ("visit", "followup"):
             db.add(ContractService(contract_id=contract.id, service_type=service_type))
         db.commit()
-        return {"org_id": org.id, "other_id": other.id}
+        return {"org_id": org.id, "other_id": other.id, "patient_id": patient.id}
 
 
 def _card(payload, org_id):
@@ -124,9 +126,11 @@ def _card(payload, org_id):
 # ---------------------------------------------------------------- 特征化：形状
 
 
-def test_顶层只有weights与scorecards两段(client, admin, seeded):
+def test_顶层三段_period必须回给前端(client, admin, seeded):
+    """分数从"累计"改成"周期内"之后，不标周期的数字没法解读，故 period 必须回传。"""
     payload = client.get("/api/performance/orgs", headers=admin).json()
-    assert set(payload) == {"weights", "scorecards"}
+    assert set(payload) == {"period", "weights", "scorecards"}
+    assert payload["period"] == str(date.today().year), "缺省为当年"
 
 
 def test_weights键动态且值恒为float(client, admin, seeded):
@@ -207,3 +211,174 @@ def test_按分数倒序(client, admin, seeded):
 
 def test_volume_cap非法拒绝(client, admin, seeded):
     assert client.get("/api/performance/orgs?volume_cap=0", headers=admin).status_code == 422
+
+
+# ---------------------------------------------------------------- 周期口径
+
+
+def test_上一年度的业务量不计入本年得分(client, admin, seeded):
+    """口径变更的核心断言：本接口此前算的是**开天辟地累计**。
+
+    往去年塞一批转诊，本年度的分数**必须一点都不动**——若还是累计口径，
+    分母会变大、结案率会变，分数就会掉。
+    """
+    from app.models import Referral
+
+    before = _card(
+        client.get("/api/performance/orgs", headers=admin).json(), seeded["org_id"]
+    )["score"]
+
+    last_year = date.today().year - 1
+    with SessionLocal() as db:
+        doctor = db.query(User).filter(User.username == "admin").first()
+        for _ in range(20):
+            db.add(Referral(
+                patient_id=seeded["patient_id"], from_org_id=seeded["org_id"],
+                to_org_id=seeded["other_id"], direction="up", reason="去年的",
+                status="pending", created_by=doctor.id,
+                created_at=datetime(last_year, 6, 1, 12, 0),
+            ))
+        db.commit()
+
+    after = _card(
+        client.get("/api/performance/orgs", headers=admin).json(), seeded["org_id"]
+    )["score"]
+    assert after == before, (
+        f"去年的 20 条转诊影响了本年得分（{before} → {after}）——说明时间窗没生效"
+    )
+
+
+def test_显式指定去年能看到去年的数(client, admin, seeded):
+    """周期口径的另一半：指定哪一期就该算哪一期，不能只会算当年。
+
+    **自己造去年的数据**，不依赖上一条用例插进去的那批——模块级 DB 下
+    "靠前一条留下的状态"会让本条单跑即红（`-k` / `-x` / 分片 / 随机序都会踩）。
+    这个坑本轮之前在 `test_org_tree_health` 上踩过一次，不该再踩第二次。
+    """
+    from app.models import Referral
+
+    last_year = date.today().year - 1
+    marker_org = seeded["org_id"]
+    with SessionLocal() as db:
+        doctor = db.query(User).filter(User.username == "admin").first()
+        # 先清掉可能由别的用例留下的去年数据，再造自己的
+        db.query(Referral).filter(
+            Referral.created_at < datetime(date.today().year, 1, 1)
+        ).delete(synchronize_session=False)
+        for status in ("completed", "completed", "pending"):
+            db.add(Referral(
+                patient_id=seeded["patient_id"], from_org_id=marker_org,
+                to_org_id=seeded["other_id"], direction="up", reason="去年的",
+                status=status, created_by=doctor.id,
+                created_at=datetime(last_year, 6, 1, 12, 0),
+            ))
+        db.commit()
+
+    payload = client.get(f"/api/performance/orgs?period={last_year}", headers=admin).json()
+    assert payload["period"] == str(last_year)
+    card = _card(payload, marker_org)
+    assert card["detail"]["referral_completion"] == {"completed": 2, "total": 3}
+    assert card["detail"]["rx_pass"] == {"passed": 0, "total": 0}, "去年没有处方"
+
+
+def test_慢病口径不对称_分母是存量分子按期(client, admin, seeded):
+    """分母若也按期，指标就变成"本期新入组的有多少随访过"，那是另一个东西。
+
+    构造能**区分**两种实现的场景：两名慢病患者**去年就入组了、今年仍在管**，
+    其中一人在**本年**随访过。
+
+    - 正确（分母存量、分子按期）：total=2、followed=1
+    - 错误（分母也按期）：total=0——去年入组的人凭空从分母里消失，
+      而他们明明还在管。这正是"在管覆盖率"与"新入组随访率"的区别。
+
+    （第一版这条用例没造这个场景——患者建于当下，把分母按期过滤掉也照样是 2，
+    变异测试把它揪了出来。）
+    """
+    from app.models import ChronicPatient, FollowUp
+
+    last_year = datetime(date.today().year - 1, 3, 1, 12, 0)
+    with SessionLocal() as db:
+        # 两名患者去年入组，今年仍在管
+        for cp in db.query(ChronicPatient).all():
+            cp.created_at = last_year
+        # 其中一人的随访保持在本年（fixture 里就是当下建的）
+        assert db.query(FollowUp).count() == 1
+        db.commit()
+
+    card = _card(client.get("/api/performance/orgs", headers=admin).json(), seeded["org_id"])
+    assert card["detail"]["chronic_followup"] == {"followed": 1, "total": 2}, (
+        "分母必须是在管存量 2（去年入组的人今年仍要考核），分子是本期随访到的 1"
+    )
+
+
+def test_月度粒度(client, admin, seeded):
+    month = date.today().strftime("%Y-%m")
+    payload = client.get(f"/api/performance/orgs?period={month}", headers=admin).json()
+    assert payload["period"] == month
+    # 本月建的数据仍在窗口内
+    assert _card(payload, seeded["org_id"])["detail"]["rx_pass"]["total"] == 2
+
+
+def test_非法period拒绝(client, admin, seeded):
+    for bad in ("2026-13-01", "abc", "20261"):
+        r = client.get(f"/api/performance/orgs?period={bad}", headers=admin)
+        assert r.status_code == 422, f"{bad} 应被拒绝，实际 {r.status_code}"
+
+
+# ---------------------------------------------------------------- 内部调用方
+
+
+def test_历史周期的分数可复现_新入组不得改旧分(client, admin, seeded):
+    """分母只设上界不设下界：去年的分数不能随今年新入组的人漂移。
+
+    没有上界的话，查 2025 年度会把 2026 才入组的人算进分母——
+    历史分数每天都在变，考核结论无从复核。
+    """
+    from app.models import ChronicPatient
+
+    last_year = str(date.today().year - 1)
+    before = _card(
+        client.get(f"/api/performance/orgs?period={last_year}", headers=admin).json(),
+        seeded["org_id"],
+    )["detail"]["chronic_followup"]
+
+    with SessionLocal() as db:                       # 今年新入组一个
+        db.add(ChronicPatient(
+            patient_id=seeded["patient_id"], disease="copd",
+            managed_by_org_id=seeded["org_id"],
+        ))
+        db.commit()
+
+    after = _card(
+        client.get(f"/api/performance/orgs?period={last_year}", headers=admin).json(),
+        seeded["org_id"],
+    )["detail"]["chronic_followup"]
+    assert after == before, f"今年新入组改变了去年的分母：{before} → {after}"
+
+
+def test_基金分配用池子年度的分数而不是当年(client, admin, seeded):
+    """`fund.distribute()` 内部调 `org_scorecards()`——绩效改周期口径后，
+    不显式传 `period` 就会拿"次年至今"的空白分数去分上一年度的钱。
+
+    基金池结算通常就发生在次年年初，这不是边角场景。
+    """
+    import inspect
+
+    from app.routers import fund
+
+    source = inspect.getsource(fund.distribute)
+    assert "org_scorecards(" in source
+    assert "period=str(pool.year)" in source, (
+        "分配基金必须按池子所属年度取分数，否则次年初结算会拿到近乎空白的当年分数"
+    )
+
+
+def test_运营月报的绩效分跟着报表周期(client, admin, seeded):
+    """CSV 其余各列都按 period 过滤，分数列不跟就会一行里两个口径。"""
+    import inspect
+
+    from app.routers import reports
+
+    source = inspect.getsource(reports.export_operations_csv)
+    assert "org_scorecards(period=period" in source, "绩效分列必须跟着报表周期"
+    assert "score_period" in source, "表头要注明分数所属周期"

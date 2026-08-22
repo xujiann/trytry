@@ -253,7 +253,9 @@ async function renderDashboard() {
   try {
     const perf = await api("/api/performance/orgs");
     const top = perf.scorecards.slice(0, 8).map((c) => [c.org_name, c.score]);
-    if (top.length) perfHtml = `<div class="panel"><h3>机构绩效评分（前8）</h3>${barChart(top, { unit: " 分" })}</div>`;
+    // 分数是**周期口径**（缺省当年），标题必须带上周期——不标的话读的人会
+    // 以为是累计数（这正是口径变更前的行为）
+    if (top.length) perfHtml = `<div class="panel"><h3>机构绩效评分（${esc(perf.period)} 年度，前8）</h3>${barChart(top, { unit: " 分" })}</div>`;
   } catch (e) { /* 绩效不可用不阻塞驾驶舱 */ }
   const [alerts, trends] = await Promise.all([api("/api/metrics/alerts"), api("/api/metrics/trends?months=6")]);
   const alertBanner = alerts.total
@@ -475,6 +477,9 @@ async function renderPerformance() {
   $("#page-desc").textContent = "按机构自动汇算：转诊结案、远程诊断、慢病随访、处方合格、家医履约；监测指标上报导出";
   const [data, monitoring] = await Promise.all([
     api("/api/performance/orgs"), api("/api/reports/monitoring").catch(() => null)]);
+  // 口径变更后分数只统计考核周期内的业务量，页面必须说清是哪一期
+  $("#page-desc").textContent =
+    `${$("#page-desc").textContent}｜当前评分周期：${data.period}`;
   $("#page-body").innerHTML = `
     <div class="panel"><h3>上报报表导出（管理层）</h3>
       <p style="margin-bottom:8px">

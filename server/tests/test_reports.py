@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from conftest import reset_database
 
+from app.clock import now_naive
 from app.main import app
 
 
@@ -133,7 +134,10 @@ def test_operations_csv_export(client, setup):
     resp = client.get("/api/reports/operations/export", headers=setup["director"])
     assert resp.status_code == 200
     rows = list(csv.reader(io.StringIO(resp.content.decode("utf-8-sig"))))
-    assert rows[0] == ["机构ID", "机构名称", "层级", "门急诊人次", "住院人次", "收入(元)", "支出(元)", "结余(元)", "绩效评分"]
+    # 绩效评分列名带周期：该列自 2026-08 起是**周期口径**（缺省=当年），
+    # 与同一行"累计"的其它列不同源。列名不标周期，二次加工的人会当成同一口径。
+    assert rows[0] == ["机构ID", "机构名称", "层级", "门急诊人次", "住院人次", "收入(元)", "支出(元)",
+                       "结余(元)", f"绩效评分({now_naive().year})"]
     by_name = {r[1]: r for r in rows[1:]}
     county = by_name["报表总院"]
     assert county[3] == "1"  # 就诊1次
@@ -156,3 +160,7 @@ def test_operations_period_filter(client, setup):
         client.get("/api/reports/operations/export?period=202607", headers=setup["director"]).status_code
         == 422
     )
+    # 指定期间时绩效分列跟着报表周期，不再是当年——一行里两个口径是最容易被
+    # 误读的报表缺陷，这里把"分数列跟随 period"钉死。
+    header = list(csv.reader(io.StringIO(hit.content.decode("utf-8-sig"))))[0]
+    assert header[8] == "绩效评分(2026-07)", header[8]
