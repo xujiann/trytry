@@ -41,11 +41,19 @@
 
 加密列一律用**当前** secret 的派生密钥写入；解密在 MAC 对不上时回退尝试
 `secret_previous` 的派生密钥（与 security.verification_keys 同哲学）——
-换钥后、重加密完成前，存量密文仍可读。但**检索索引没有多口径**：索引是
-写入时用旧钥算好的列值，查询用新钥算出的索引对不上它，等值检索会漏。
-所以运维口径是：换钥后**立即**跑 ``scripts/pii_encrypt_backfill.py
---old-secret <旧值>`` 重加密并重算索引，宽限期内等值检索（实名绑定、
-EMPI 去重等）对旧钥数据不可用，跑完即恢复。
+换钥后、重加密完成前，存量密文仍可读。**检索索引同口径回退**：
+`pii_filter` 在配了 `secret_previous` 时把当前钥与旧钥各算一次索引取并集
+（`_index_candidates`），宽限期内等值检索对旧钥数据照样命中。
+
+这一条是硬要求而非优化：索引单口径时，宽限期内按证件号查"查不到"不是
+报错而是"这人没建过档"——建档接口于是新建一条（明文列唯一约束因随机
+nonce 永不冲突，idx 部分唯一索引因新钥算出新值也不冲突，两道约束同时
+失效），居民端同理重复开户且绑不上本人档案。静默重复主数据比检索漏更
+严重，故读侧多口径、写侧仍单口径（新数据统一收敛到当前钥）。
+
+运维口径不变：换钥后仍应**立即**跑 ``scripts/pii_encrypt_backfill.py
+--old-secret <旧值>`` 重加密并重算索引，跑完清掉 `MEDPLAT_SECRET_PREVIOUS`
+即回到单口径；多口径只是宽限期的安全网，不是长期形态。
 
 ## 模糊检索的降级（开态，如实声明）
 
@@ -71,6 +79,7 @@ __all__ = [
     "encrypt_pii",
     "decrypt_pii",
     "pii_index",
+    "pii_index_match",
     "pii_filter",
     "EncryptedPII",
     "register_pii_index_sync",
@@ -133,19 +142,57 @@ def pii_index(plain: str, secret: str | None = None) -> str:
     return gmcrypto.mac(_idx_key(secret), plain.encode()).hex()
 
 
+def _index_candidates(value: str) -> list[str]:
+    """检索索引的**多口径**取值：当前钥 + 轮换宽限期内的旧钥。
+
+    索引是写入时算好的列值：换钥之后、`scripts/pii_encrypt_backfill.py`
+    重算完成之前，存量行的索引是**旧钥**算的，只用当前钥去比一定漏。
+    解密早就有 `secret_previous` 回退（见 `decrypt_pii`），检索这一侧
+    必须同口径，否则宽限期内 EMPI 去重/实名绑定静默失效——查不到不是
+    报错而是"这人没建过档"，于是重复建档、重复开户。
+
+    写入侧**不**多口径：新写入一律用当前钥（见 `register_pii_index_sync`
+    与回填脚本），旧钥索引只读不写，回填跑完即自然收敛为单一口径。
+    """
+    candidates = [pii_index(value)]
+    if settings.secret_previous:
+        previous = pii_index(value, settings.secret_previous)
+        if previous not in candidates:
+            candidates.append(previous)
+    return candidates
+
+
+def pii_index_match(col_index, value: str):
+    """索引列等值条件（多口径）——替换裸写 ``col_index == pii_index(value)``。
+
+    独立导出是因为不是每个调用点都能用 `pii_filter`：patients 的关键字检索
+    要把索引等值并进 name/ehc_no 的 like 里（见 routers/patients.py），
+    只需要这半个条件。两处走同一函数，轮换口径不会再只修一边。
+    """
+    candidates = _index_candidates(value)
+    if len(candidates) == 1:
+        return col_index == candidates[0]
+    return col_index.in_(candidates)
+
+
 def pii_filter(col_index, col_plain, value: str):
     """PII 列等值过滤条件（替换 ``Model.col == value`` 的唯一入口）。
 
-    - 开态：索引列等值。回填迁移保证索引列完整（写入侧 event 持续维护），
-      单条件即可命中全部行，且走 `*_idx` 上的索引。
+    - 开态：索引列等值（当前钥；配了 `MEDPLAT_SECRET_PREVIOUS` 时并上旧钥
+      口径，见 `_index_candidates`）。回填迁移保证索引列完整（写入侧 event
+      持续维护），走 `*_idx` 上的索引。
     - 关态：明文列等值 **OR** 索引列等值。取舍：只查明文列在"开过又关回"
       的场景会漏掉尚未解密回写的密文行；多出的 OR 分支对从未开启过的部署
       是恒假条件（索引确定性、无碰撞），不改变结果集，只多一个索引探查——
       拿这点开销换"开关来回切不丢数据"，值得。
+
+    未配 `secret_previous`（绝大多数部署的常态）时条件与原来逐字节一致，
+    只有轮换宽限期才多一个索引探查。
     """
+    index_match = pii_index_match(col_index, value)
     if settings.pii_encryption_enabled:
-        return col_index == pii_index(value)
-    return or_(col_plain == value, col_index == pii_index(value))
+        return index_match
+    return or_(col_plain == value, index_match)
 
 
 class EncryptedPII(TypeDecorator):
@@ -181,9 +228,14 @@ def register_pii_index_sync(model, *pairs: tuple[str, str]) -> None:
 
     用 mapper 级 before_insert/before_update 事件而不是各写入点显式赋值：
     写入点散在建档、HL7 入站更新、居民端绑定/回填等多处（还有 seed 与
-    import 脚本），事件挂在模型上一处生效、**新增写入点也不会漏**。
+    import 脚本），事件挂在模型上一处生效、**走 ORM 的新增写入点不会漏**。
     开关关闭时同样维护——索引列不进任何 API 响应，先把索引铺满，
     开启开关那一刻检索才无缝。
+
+    **例外（如实写）**：`Session.bulk_insert_mappings` / `bulk_update_mappings`
+    与 Core 层 `insert()` 绕过 mapper 事件，索引列不会被自动填上。仓库里唯一
+    这么写的是 `scripts/seed_bulk.py`（压测灌数），它自己显式算索引；再有新的
+    批量写入点必须照办，或改走 ORM 实例。
     """
 
     def _sync(mapper, connection, target) -> None:

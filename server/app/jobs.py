@@ -19,6 +19,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .alerting import send_alert
@@ -37,6 +38,7 @@ from .models import (
     StaffContract,
     TcmPreparationBatch,
 )
+from .pii import PII_PREFIX, decrypt_pii, pii_index
 from .scheduler import register
 from .ws import manager
 
@@ -48,6 +50,17 @@ from .routers.medwaste import STORAGE_LIMIT_DAYS
 # 合同/制剂的提前提醒窗口
 CONTRACT_NOTICE_DAYS = 60
 PREPARATION_NOTICE_DAYS = 30
+
+#: PII 索引自检的抽样行数上限（每列）。抽样而非全表：真要全量校对得把整列解密一遍，
+#: 百万级患者库会把自检本身变成一次全库解密——抽样只为**发现**破损，修复靠
+#: `scripts/pii_encrypt_backfill.py --rebuild-index` 全量重算。
+PII_INDEX_SAMPLE_SIZE = 200
+#: 自检覆盖的 (表, 明文列, 索引列)——与回填脚本 TARGETS 同一份清单
+PII_INDEX_TARGETS = [
+    ("patients", "id_card", "id_card_idx"),
+    ("patients", "phone", "phone_idx"),
+    ("resident_accounts", "phone", "phone_idx"),
+]
 
 
 def _alert(kind: str, title: str, count: int) -> None:
@@ -62,6 +75,110 @@ def _alert(kind: str, title: str, count: int) -> None:
     delivered = manager.broadcast({"type": kind, "title": title, "count": count})
     if not delivered:
         send_alert(f"unattended:{kind}", f"{title}：{count} 条（无在线管理端，广播未送达）")
+
+
+def _index_ok(plain: str, stored_idx: str | None) -> bool:
+    """库中索引是否算得对。轮换宽限期内旧钥索引同样算对——`pii_filter` 已按
+    当前钥+旧钥双口径检索（见 app/pii.py），此时旧钥索引是**正常状态**而非破损，
+    自检不该在整个宽限期里持续误报。"""
+    if stored_idx == pii_index(plain):
+        return True
+    return bool(settings.secret_previous) and stored_idx == pii_index(
+        plain, settings.secret_previous
+    )
+
+
+def check_pii_index_health(db: Session) -> list[str]:
+    """PII 检索索引健康自检：返回问题描述列表（空 = 健康）。
+
+    查两类破损，都以"零报错零日志地静默失效"为特征：
+
+    1. **密文行索引为空**——迁移的索引回填带 ``NOT LIKE 'pii1$%'``，库已加密后
+       重跑迁移（回滚重来、换库重建）会把密文行全部跳过，索引列留一片 NULL；
+    2. **抽样解密重算与库中不符**——跑迁移的 shell 没导 MEDPLAT_SECRET，索引
+       用默认密钥算出，非空但全错。
+
+    两者的后果一样：等值检索命中 0，业务读成"这人没建过档"，于是重复建档、
+    重复开户——主数据被静默污染，而唯一约束帮不上忙（密文列随机 nonce 永不
+    冲突，idx 唯一索引因值不同也不冲突）。所以这条自检查的不是"检索慢了"，
+    是**核心数据完整性**。
+
+    修法固定：`python scripts/pii_encrypt_backfill.py --rebuild-index`。
+    """
+    problems: list[str] = []
+    for table, plain_col, idx_col in PII_INDEX_TARGETS:
+        missing = db.execute(
+            text(
+                f"SELECT count(*) FROM {table} "  # noqa: S608 - 表列名来自本文件常量
+                f"WHERE {plain_col} LIKE :prefix AND {idx_col} IS NULL"
+            ),
+            {"prefix": PII_PREFIX + "%"},
+        ).scalar_one()
+        if missing:
+            problems.append(f"{table}.{plain_col}：{missing} 行密文但检索索引为空")
+        rows = db.execute(
+            text(
+                f"SELECT id, {plain_col} AS plain, {idx_col} AS idx FROM {table} "  # noqa: S608
+                f"WHERE {idx_col} IS NOT NULL AND {plain_col} IS NOT NULL AND {plain_col} != '' "
+                f"ORDER BY id DESC LIMIT :limit"
+            ),
+            {"limit": PII_INDEX_SAMPLE_SIZE},
+        ).fetchall()
+        mismatched = 0
+        for row in rows:
+            try:
+                plain = decrypt_pii(str(row.plain))
+            except ValueError:
+                mismatched += 1  # 解不开的密文同样是"索引不可信"，一并计入
+                continue
+            if not _index_ok(plain, row.idx):
+                mismatched += 1
+        if mismatched:
+            problems.append(
+                f"{table}.{plain_col}：抽样 {len(rows)} 行中 {mismatched} 行索引与重算值不符"
+            )
+    return problems
+
+
+#: 自检告警的 kind（启动期探针与定时任务共用，走同一条冷却）
+PII_INDEX_ALERT_KIND = "pii_index_broken"
+#: 自检发现问题时的统一修复指引
+PII_INDEX_REMEDY = "修复：python scripts/pii_encrypt_backfill.py --rebuild-index"
+
+
+def report_pii_index_health(db: Session) -> list[str]:
+    """跑自检并把问题外发告警（无问题时零外呼）。返回问题列表。
+
+    **不拒启、只告警**——与 config.py 里"多实例无 Redis 拒启"的先例是**不同**
+    的取舍，理由写在这里免得日后看着不一致：
+
+    - 那条拦的是**配置**错误（改个环境变量就能修），失效面是**安全**（已登出
+      的令牌在别的实例仍然可用），必须在开始对外服务之前拦住；
+    - 这条发现的是**数据面**状态（索引列的值），修复动作本身要求应用环境与
+      真实密钥都在位（`--rebuild-index` 就在同一份代码同一份配置里跑）。
+      拒启会让运维在一个起不来的实例上救火，还会把"证件号检索降级"升级成
+      "整个县域平台不可用"——而此刻按 ehc_no / 姓名的检索、门诊住院医嘱、
+      发药结算全都是好的，临床业务不该为一列索引停摆。
+
+    所以：启动期探一次 + 每天定时探一次，问题走 alerting 的 webhook 推出去
+    （未配 webhook 时退化为 ERROR 日志，与既有告警通道口径一致）。
+    """
+    problems = check_pii_index_health(db)
+    if not problems:
+        return problems
+    message = "PII 检索索引异常，EMPI 去重与实名绑定可能静默失效：" + "；".join(problems)
+    logger.error("[PII] %s。%s", message, PII_INDEX_REMEDY)
+    send_alert(PII_INDEX_ALERT_KIND, f"{message}。{PII_INDEX_REMEDY}")
+    return problems
+
+
+@register("pii_index_health", "PII 检索索引自检", 86400)
+def pii_index_health_scan(db: Session) -> tuple[int, str]:
+    """日跑一次索引自检（口径见 `check_pii_index_health`）。"""
+    problems = report_pii_index_health(db)
+    if not problems:
+        return 0, "PII 检索索引正常"
+    return len(problems), "；".join(problems) + f"。{PII_INDEX_REMEDY}"
 
 
 @register("chronic_overdue_scan", "慢病随访超期扫描", 3600)
