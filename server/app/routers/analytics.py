@@ -8,7 +8,7 @@
 """
 from typing import Any
 
-from datetime import datetime
+from datetime import date, datetime
 
 import sqlalchemy as sa
 from sqlalchemy import func
