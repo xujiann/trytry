@@ -41,3 +41,7 @@ migration cost / risk / recommendation**。
 | [0007](0007-统计簇口径合并.md) | 统计簇（analytics/metrics/reports/performance）口径合并 | Accepted |
 | [0008](0008-God文件分域拆包.md) | God 文件（models.py / spd config.py）分域拆包 | Accepted |
 | [0009](0009-前端组件抽取与工具函数合并.md) | 前端 render 组件抽取与三套工具函数合并 | Accepted |
+| [0010](0010-患者档案注销列与个保法行权通道.md) | 患者档案注销列（deactivated_at）与个保法行权通道 | Accepted |
+| [0011](0011-用户账号安全列与登录留痕.md) | 用户核心表安全四列与登录留痕（等保整改 E1） | Accepted |
+| [0012](0012-PII列加密与检索索引.md) | PII 列加密存储与 HMAC 检索索引 | Accepted |
+| [0013](0013-药品可用汇总的口径与批次同改约束.md) | 药品可用汇总的口径与批次同改约束 | Accepted |
