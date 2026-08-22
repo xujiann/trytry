@@ -101,6 +101,20 @@ class Settlement(Base):
     """结算单：汇总未结清明细→医保分担（联动 InsuranceSettlement）→结清。"""
 
     __tablename__ = "settlements"
+    __table_args__ = (
+        # 一次住院一张结算单。应用层的"先查未结明细再建单"是 check-then-act，
+        # 并发出院结算实测（PG）建出四张单、四条医保结算记录、押金多冲 1500——
+        # 与全域基金池 D-2、居民账户绑定同一个形状，兜底同样落在数据库上。
+        # 部分索引而不是全量唯一：门诊结算 admission_id 恒为 NULL，
+        # 且同一次就诊本来就允许多张结算单。
+        Index(
+            "uq_settlement_inpatient_admission",
+            "admission_id",
+            unique=True,
+            sqlite_where=text("bill_type = 'inpatient' AND admission_id IS NOT NULL"),
+            postgresql_where=text("bill_type = 'inpatient' AND admission_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
