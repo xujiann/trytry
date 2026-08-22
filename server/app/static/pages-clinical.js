@@ -190,6 +190,50 @@ async function renderAccessLogs() {
   };
 }
 
+async function renderConsents() {
+  // 个保法落地（阶段十四 E2）：知情同意台账 + 更正/注销申请审核。
+  $("#page-desc").textContent = "知情同意登记与查询；居民更正/注销申请的受理与审核（审核限管理层）";
+  const drawConsents = async (patientId) => {
+    if (!patientId) { $("#ct-table").innerHTML = '<p class="desc">输入患者ID查询其同意记录（查询会落调阅留痕）。</p>'; return; }
+    const rows = await api(`/api/consents?patient_id=${encodeURIComponent(patientId)}`);
+    $("#ct-table").innerHTML = table(
+      ["时间", "场景", "文本版本", "方式", "凭证", "状态"], rows, (r) =>
+      `<tr><td>${esc((r.created_at || "").replace("T", " ").slice(0, 19))}</td>
+       <td>${esc(r.scene)}</td><td>${esc(r.text_version)}</td><td>${esc(r.method)}</td>
+       <td>${esc(r.evidence || "—")}</td>
+       <td>${r.revoked_at ? '<span class="tag">已撤回</span>' : '<span class="tag ok">有效</span>'}</td></tr>`);
+  };
+  const drawCorrections = async () => {
+    const rows = await api("/api/consents/corrections?status=pending");
+    $("#cr-table").innerHTML = table(
+      ["ID", "患者", "类型", "内容", "理由", "操作"], rows, (r) =>
+      `<tr><td>${esc(String(r.id))}</td><td>${esc(String(r.patient_id))}</td>
+       <td>${esc(r.request_type)}</td><td>${esc(r.changes || "—")}</td><td>${esc(r.reason || "")}</td>
+       <td><button data-review="${esc(String(r.id))}" data-verdict="approved">通过</button>
+           <button data-review="${esc(String(r.id))}" data-verdict="rejected" class="danger">拒绝</button></td></tr>`);
+  };
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>知情同意台账</h3>
+      <form class="inline" id="ct-search"><input name="patient_id" placeholder="患者ID"><button>查询</button></form>
+      <div id="ct-table"></div></div>
+    <div class="panel"><h3>更正 / 注销申请（待审核）</h3>
+      <p class="desc">通过即按白名单字段执行变更并落审计；拒绝必须填写意见。</p>
+      <div id="cr-table"></div><p id="cr-msg"></p></div>`;
+  await drawConsents(); await drawCorrections();
+  $("#ct-search").onsubmit = async (e) => { e.preventDefault(); await drawConsents(new FormData(e.target).get("patient_id")); };
+  $("#cr-table").onclick = async (e) => {
+    const id = e.target.dataset.review; if (!id) return;
+    const verdict = e.target.dataset.verdict;
+    const comment = verdict === "rejected" ? prompt("拒绝意见（必填）") : (prompt("审核意见（可空）") || "");
+    if (verdict === "rejected" && !comment) return;
+    try {
+      await api(`/api/consents/corrections/${id}/review`, { method: "POST",
+        body: JSON.stringify({ approve: verdict === "approved", comment }) });
+      await drawCorrections(); setMsg("#cr-msg", "已处理", true);
+    } catch (err) { setMsg("#cr-msg", err.message, false); }
+  };
+}
+
 /* ---------- 通用小工具：表单序列化 + 动作分派 ---------- */
 function formJson(form, numFields = []) {
   const f = new FormData(form), out = {};
