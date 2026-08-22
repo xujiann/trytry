@@ -241,12 +241,18 @@ def test_就诊识别是幂等的(client, h, base, monkeypatch):
 
 
 def test_采集器跑通并写同步日志(client, h, base):
+    """用**真会落库**的 publichealth 采集器验这条链路。
+
+    原先这里用的是 HIS——那时 HIS 挂着一个只 `count()` 不写库的探针，
+    这条用例于是在证明"假采集器也能报成功"。探针摘掉注册后（P1-2），
+    HIS 如实变成"未注册"，本用例改用唯一一个真实现。
+    """
     from app.database import SessionLocal
     from app.spd.collectors import run_due_sources
 
     source = client.post(
         "/api/spd/data-sources",
-        json={"code": "his_main", "name": "县医院HIS", "source_type": "HIS",
+        json={"code": "ph_main", "name": "公卫随访库", "source_type": "publichealth",
               "org_id": base["org"]["id"], "freq_minutes": 5},
         headers=h,
     ).json()

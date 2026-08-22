@@ -43,6 +43,7 @@ from ..models import (
     Organization,
     Patient,
     ResidentAccount,
+    SystemParam,
     User,
     utcnow,
 )
@@ -51,6 +52,7 @@ from ..notify import notify_patient as _notify_patient
 # 筛选必须与平台 patients.py 走同一条索引列等值路径。只再导出 pii_filter 这一个
 # 名字——加解密原语（encrypt/decrypt）不在依赖面里，子系统不该碰密文本身。
 from ..pii import pii_filter
+from ..wechat import get_wechat_provider as _get_wechat_provider
 from ..routers.attachments import register_owner as _register_attachment_owner
 from ..routers.attachments import store_upload as _store_upload
 from ..routers.portal import accessible_patient, current_resident
@@ -63,13 +65,6 @@ from ..routers.portal import register_enrollment_source as _register_enrollment_
 from ..routers.portal import register_referral_source as _register_referral_source
 from ..sms import get_sms_provider as _get_sms_provider
 from ..ws import manager as _ws_manager
-
-#: 子系统对平台的依赖清单，供边界用例与架构文档共同引用（改这里即改约束）。
-PLATFORM_MODELS = (
-    "Patient", "Organization", "User", "Encounter", "Admission",
-    "ResidentAccount", "Notification",
-)
-
 
 def patient_of(db: Session, patient_id: int) -> Patient | None:
     return db.get(Patient, patient_id)
@@ -154,6 +149,47 @@ def notify_resident(
         db, patient_id, category=category, title=title, body=body,
         link_type=link_type, link_id=link_id,
     )
+
+
+#: 慢专病宣教的微信模板参数键。与平台站内信的模板旁路同一套约定
+#: （`notify.WECHAT_TEMPLATE_PARAM_PREFIX + 类目`），由管理端 /api/mgmt/params 维护，
+#: 不进 config——各县用哪个模板 id 是运营配置，不是部署配置。
+WECHAT_EDU_TEMPLATE_KEY = "wechat_template_spd_edu"
+
+
+def send_wechat_edu(db: Session, patient_id: int, *, title: str, body: str) -> tuple[int, str]:
+    """给患者绑定的微信推一条宣教模板消息；返回 (送达人数, 说明)。
+
+    走平台既有的公众号通道（`app/wechat.py` 的 provider，mock/official 两实现），
+    模板 id 从系统参数取——与站内信的模板旁路完全同一套配置，不另起一套。
+
+    三种"发不出去"给出**不同的原因**，而不是笼统一句失败：没配模板（运营没配）、
+    没人绑定微信（患者侧）、接口未受理（通道侧）。这三件事的处置完全不同，
+    合成一句"发送失败"等于让实施期去猜。
+    """
+    param = db.query(SystemParam).filter(SystemParam.key == WECHAT_EDU_TEMPLATE_KEY).first()
+    if param is None or not param.value:
+        return 0, f"未配置微信宣教模板（系统参数 {WECHAT_EDU_TEMPLATE_KEY}）"
+    openids = [
+        a.wechat_openid
+        for a in db.query(ResidentAccount)
+        .filter(
+            ResidentAccount.patient_id == patient_id,
+            ResidentAccount.status == "active",
+            ResidentAccount.wechat_openid.isnot(None),
+        )
+        .all()
+        if a.wechat_openid
+    ]
+    if not openids:
+        return 0, "该患者尚无绑定微信的居民账号"
+    send = getattr(_get_wechat_provider(), "send_template_message", None)
+    if send is None:  # 测试注入的旧桩件可能没实现模板消息
+        return 0, "当前微信通道不支持模板消息"
+    delivered = sum(1 for openid in openids if send(openid, param.value, {"title": title, "body": body}, ""))
+    if not delivered:
+        return 0, "微信模板消息接口未受理（通道侧失败）"
+    return delivered, f"已推送 {delivered} 个微信账号"
 
 
 def register_attachment_owner(

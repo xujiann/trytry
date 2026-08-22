@@ -2692,6 +2692,7 @@
 - `send_at` · VARCHAR(19) · NOT NULL
 - `frequency` · VARCHAR(32) · NOT NULL
 - `status` · VARCHAR(16) · NOT NULL · index
+- `fail_reason` · VARCHAR(200) · NOT NULL
 - `read_at` · DATETIME
 - `operator_id` · INTEGER · → users.id
 - `created_at` · DATETIME · NOT NULL · index

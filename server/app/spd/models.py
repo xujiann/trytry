@@ -853,6 +853,9 @@ class SpdEduPush(Base):
     frequency: Mapped[str] = mapped_column(String(32), default="once")
     # pending=待发送, sent=已发送, read=已阅读, failed=发送失败
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    #: 失败原因。"没配微信模板""患者没绑微信""通道未受理"是三件不同的事，
+    #: 处置也不同——只记一个 failed 等于让实施期去猜到底该找谁。
+    fail_reason: Mapped[str] = mapped_column(String(200), default="")
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
