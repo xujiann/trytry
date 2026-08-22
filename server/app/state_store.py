@@ -127,6 +127,112 @@ class LoginFailureTracker:
             self._memory.clear()
 
 
+class SessionRegistry:
+    """会话登记（等保 E1）：令牌活动时刻 + 每账号活跃令牌集合。
+
+    与 TokenBlacklist / LoginFailureTracker 同一存储约定：默认进程内存
+    （单实例可用、进程重启即清空），配置 MEDPLAT_REDIS_URL 自动切换 Redis——
+    **多实例部署必须配 Redis**，否则空闲超时的活动记录与并发会话计数只在
+    单个实例内生效。
+
+    两组数据都以令牌自然寿命为 TTL，不用者自动过期：
+
+    - `last_seen:{jti}`：该令牌最近一次通过校验的时刻，deps 的空闲超时用；
+    - `sessions:{username}`：该账号活跃令牌集合（Redis 用 zset、score=过期时刻），
+      登录时计数判并发上限，登出/闲置淘汰时移除释放名额。
+
+    两项开关（session_idle_timeout_seconds / session_max_concurrent）为 0 时
+    调用方直接旁路，不会触到本类——0 值零开销由调用方保证。
+    """
+
+    def __init__(self, default_ttl_seconds: int = 8 * 3600) -> None:
+        self._ttl = default_ttl_seconds
+        self._redis = _redis_client()
+        self._lock = threading.Lock()
+        self._last_seen: dict[str, tuple[float, float]] = {}  # jti -> (时刻, 过期时刻)
+        self._sessions: dict[str, dict[str, float]] = {}  # username -> {jti: 过期时刻}
+
+    # ---------- 空闲超时：令牌活动时刻 ----------
+
+    def touch(self, jti: str, ttl_seconds: int | None = None) -> None:
+        """记录一次活动（滑动续签的"续"就是这一步）。"""
+        ttl = ttl_seconds or self._ttl
+        now = time.time()
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            self._redis.setex(f"medplat:lastseen:{jti}", ttl, str(now))
+            return
+        with self._lock:
+            self._prune(now)
+            self._last_seen[jti] = (now, now + ttl)
+
+    def last_seen(self, jti: str) -> float | None:
+        """该令牌最近活动时刻；从未记录（如登录后首个请求）返回 None。"""
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            raw = self._redis.get(f"medplat:lastseen:{jti}")
+            return float(raw) if raw else None
+        with self._lock:
+            self._prune(time.time())
+            record = self._last_seen.get(jti)
+            return record[0] if record else None
+
+    # ---------- 并发上限：每账号活跃令牌集合 ----------
+
+    def register(self, username: str, jti: str, ttl_seconds: int | None = None) -> None:
+        """登录成功后登记新令牌。"""
+        expires = time.time() + (ttl_seconds or self._ttl)
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            key = f"medplat:sessions:{username}"
+            self._redis.zadd(key, {jti: expires})
+            self._redis.expire(key, ttl_seconds or self._ttl)
+            return
+        with self._lock:
+            self._prune(time.time())
+            self._sessions.setdefault(username, {})[jti] = expires
+
+    def active_count(self, username: str) -> int:
+        """该账号当前活跃（未过期、未登出）的令牌数。"""
+        now = time.time()
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            key = f"medplat:sessions:{username}"
+            self._redis.zremrangebyscore(key, 0, now)
+            return int(self._redis.zcard(key))
+        with self._lock:
+            self._prune(now)
+            return len(self._sessions.get(username, {}))
+
+    def remove(self, username: str, jti: str) -> None:
+        """登出/闲置淘汰时移除令牌，立即释放并发名额。"""
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            self._redis.zrem(f"medplat:sessions:{username}", jti)
+            self._redis.delete(f"medplat:lastseen:{jti}")
+            return
+        with self._lock:
+            self._sessions.get(username, {}).pop(jti, None)
+            self._last_seen.pop(jti, None)
+
+    def _prune(self, now: float) -> None:
+        expired = [j for j, (_, exp) in self._last_seen.items() if exp <= now]
+        for j in expired:
+            self._last_seen.pop(j, None)
+        for username in list(self._sessions):
+            alive = {j: exp for j, exp in self._sessions[username].items() if exp > now}
+            if alive:
+                self._sessions[username] = alive
+            else:
+                self._sessions.pop(username, None)
+
+    def clear_all(self) -> None:
+        """测试辅助。"""
+        if self._redis is not None:  # pragma: no cover - 需真实 Redis
+            for pattern in ("medplat:lastseen:*", "medplat:sessions:*"):
+                for key in self._redis.scan_iter(pattern):
+                    self._redis.delete(key)
+            return
+        with self._lock:
+            self._last_seen.clear()
+            self._sessions.clear()
+
+
 # 滑动窗口限速的 Redis 实现（T1.2）：必须原子，否则多实例并发下
 # "先数后加"会各自读到未超限的旧计数，配额被击穿。用 Lua 在服务端一次做完
 # 剔除过期成员 → 计数 → 未超限则写入，避免任何中间态被其他实例看到。

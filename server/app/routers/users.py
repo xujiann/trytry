@@ -16,10 +16,11 @@ from ..deps import (
     get_current_user,
     paginate,
     require_admin,
+    require_roles,
     resolve_business_date,
 )
 from ..audit_chain import verify_chain
-from ..models import AuditLog, Organization, RoleChangeLog, User, utcnow
+from ..models import AuditLog, LoginLog, Organization, RoleChangeLog, User, utcnow
 from ..security import hash_password, validate_password_strength, verify_password
 
 router = APIRouter(prefix="/api", tags=["用户与审计"])
@@ -55,6 +56,10 @@ class UserCreate(BaseModel):
     # 合法性改为对 `roles` 表现查（见 _check_role_exists），非法角色仍 422。
     role: str = Field(default="operator", min_length=2, max_length=32)
     org_id: int | None = None
+    # 等保 E1：建号即要求首登改密（初始口令是管理员代设的临时口令时置 true）。
+    # 默认 false 而非 true——大量既有对接/测试以"建号即用"为前提，强制默认 true
+    # 会破坏向后兼容（CLAUDE.md 第 1/7 条）；管理端 UI 建号时应显式传 true。
+    must_change_password: bool = False
 
     # 密码复杂度：≥8位且含字母数字
     _password_strength = field_validator("password")(_check_password)
@@ -66,6 +71,8 @@ class UserOut(BaseModel):
     full_name: str
     role: str
     org_id: int | None
+    # 等保 E1：账号状态（active/disabled），管理端据此渲染停用/启用按钮
+    status: str
 
     model_config = {"from_attributes": True}
 
@@ -92,6 +99,9 @@ def create_user(body: UserCreate, db: Session = Depends(get_db)):
             full_name=body.full_name,
             role=body.role,
             org_id=body.org_id,
+            # 等保 E1 口令生命周期：建号时刻即口令基线，90 天超期从此起算
+            password_updated_at=utcnow(),
+            must_change_password=body.must_change_password,
         ),
         "用户名已存在",
     )
@@ -108,7 +118,12 @@ def list_roles():
     return ROLE_NAMES
 
 
-@router.post("/auth/change-password")
+class ChangePasswordOut(BaseModel):
+    changed: bool
+    tokens_revoked: bool
+
+
+@router.post("/auth/change-password", response_model=ChangePasswordOut)
 def change_password(
     body: ChangePassword,
     db: Session = Depends(get_db),
@@ -119,8 +134,11 @@ def change_password(
     user.password_hash = hash_password(body.new_password)
     # M-4 整改：改密即吊销该用户既有全部令牌（iat 早于基线的令牌一律拒绝）
     user.token_valid_from = utcnow()
+    # 等保 E1 口令生命周期：改密成功刷新基线、解除 428 强制改密
+    user.password_updated_at = utcnow()
+    user.must_change_password = False
     db.commit()
-    return {"changed": True, "tokens_revoked": True}
+    return ChangePasswordOut(changed=True, tokens_revoked=True)
 
 
 # 归档导出的批读大小：既不让单批占太多内存，也不至于把查询打得太碎
@@ -347,6 +365,155 @@ def change_user_role(
     db.commit()
     db.refresh(target)
     return target
+
+
+# ---------- 等保 E1：账号停用/启用、口令重置、TOTP 重置、登录留痕查询 ----------
+
+
+class UserStatusUpdate(BaseModel):
+    # active=在用, disabled=停用（列注释同款口径；裸字符串遵循仓库约定，不用 Enum）
+    status: str = Field(pattern="^(active|disabled)$")
+
+
+@router.patch(
+    "/users/{user_id}/status", response_model=UserOut, dependencies=[Depends(require_admin)]
+)
+def set_user_status(
+    user_id: int,
+    body: UserStatusUpdate,
+    db: Session = Depends(get_db),
+    operator: User = Depends(get_current_user),
+):
+    """停用/启用员工账号（限管理员）。停用**即时生效**：deps 每请求校验 status，
+    既有令牌下一次请求就被拒，不等过期；同时把令牌基线推到当前，重新启用后
+    旧令牌也不复活，必须重新登录。
+    """
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    assert_obj_org_writable(db, operator, target)
+    if body.status == "disabled":
+        # 最后一个可用 admin 的保护放在"不可停用自己"之前：两条规则同时命中时，
+        # 报"最后一个管理员"才说到点子上——那不是操作习惯问题，是要把平台锁死。
+        if target.role == "admin":
+            others = (
+                db.query(User)
+                .filter(User.role == "admin", User.status == "active", User.id != target.id)
+                .count()
+            )
+            if others == 0:
+                raise HTTPException(status_code=422, detail="不可停用最后一个可用的管理员账号")
+        if target.id == operator.id:
+            raise HTTPException(status_code=422, detail="不可停用自己的账号")
+        # 停用即吊销既有令牌：status 校验挡当下，令牌基线防"启用后旧令牌复活"
+        target.token_valid_from = utcnow()
+    target.status = body.status
+    db.commit()
+    db.refresh(target)
+    return target
+
+
+class AdminPasswordReset(BaseModel):
+    new_password: str
+
+    _password_strength = field_validator("new_password")(_check_password)
+
+
+class PasswordResetOut(BaseModel):
+    reset: bool
+    must_change_password: bool
+
+
+@router.post(
+    "/users/{user_id}/reset-password",
+    response_model=PasswordResetOut,
+    dependencies=[Depends(require_admin)],
+)
+def admin_reset_password(
+    user_id: int,
+    body: AdminPasswordReset,
+    db: Session = Depends(get_db),
+    operator: User = Depends(get_current_user),
+):
+    """管理员重置口令（等保 E1）：临时口令只该用一次——置 must_change_password，
+    该用户此后除改密/登出外一律 428，直到本人改成只有自己知道的口令；
+    同时吊销既有令牌（重置口令的常见场景正是"号可能已失陷"）。
+    """
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    assert_obj_org_writable(db, operator, target)
+    target.password_hash = hash_password(body.new_password)
+    target.must_change_password = True
+    target.password_updated_at = utcnow()
+    target.token_valid_from = utcnow()
+    db.commit()
+    return PasswordResetOut(reset=True, must_change_password=True)
+
+
+class TotpResetOut(BaseModel):
+    reset: bool
+
+
+@router.post(
+    "/users/{user_id}/totp/reset",
+    response_model=TotpResetOut,
+    dependencies=[Depends(require_admin)],
+)
+def admin_reset_totp(
+    user_id: int,
+    db: Session = Depends(get_db),
+    operator: User = Depends(get_current_user),
+):
+    """管理员重置他人 TOTP（换手机/令牌丢失时的解困通道）：清空密钥，
+    该用户下次登录按"未开通"处理（若其角色被要求双因素，会收到 setup 提示）。
+    """
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    assert_obj_org_writable(db, operator, target)
+    target.totp_secret = None
+    db.commit()
+    return TotpResetOut(reset=True)
+
+
+class LoginLogOut(BaseModel):
+    id: int
+    username: str
+    user_id: int | None
+    ip: str
+    success: bool
+    fail_reason: str
+    channel: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get(
+    "/audit/logins",
+    response_model=list[LoginLogOut],
+    dependencies=[Depends(require_roles("director"))],
+)
+def list_login_logs(
+    response: Response,
+    offset: int = 0,
+    limit: int = 100,
+    username: str | None = None,
+    success: bool | None = None,
+    channel: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """登录留痕查询（director/admin；等保 E1）。分页走统一 offset/limit，
+    总数经 X-Total-Count 响应头返回。"""
+    query = db.query(LoginLog)
+    if username:
+        query = query.filter(LoginLog.username == username)
+    if success is not None:
+        query = query.filter(LoginLog.success.is_(success))
+    if channel:
+        query = query.filter(LoginLog.channel == channel)
+    return paginate(query.order_by(LoginLog.id.desc()), response, offset, limit)
 
 
 @router.get("/users/role-changes", dependencies=[Depends(require_admin)])

@@ -75,6 +75,8 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/attachments",
     "GET /api/attachments/{attachment_id}",
     "GET /api/audit",
+    # E1 等保账户安全：登录留痕查询（director/admin）
+    "GET /api/audit/logins",
     "GET /api/audit/export",
     "GET /api/audit/stats",
     "GET /api/audit/verify",
@@ -530,6 +532,8 @@ SNAPSHOT_ENDPOINTS = {
     "PATCH /api/staffing/employees/{employee_id}/title-level",
     "PATCH /api/surveillance/resources/{resource_id}",
     "PATCH /api/users/{user_id}/role",
+    # E1 等保账户安全：账号停用/启用
+    "PATCH /api/users/{user_id}/status",
     "PATCH /api/vaccine-supply/aefi/{report_id}/outcome",
     "POST /api/accounting/subjects",
     "POST /api/accounting/vouchers",
@@ -546,6 +550,10 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/auth/change-password",
     "POST /api/auth/login",
     "POST /api/auth/logout",
+    # E1 等保账户安全：TOTP 本人开通/关闭
+    "POST /api/auth/totp/activate",
+    "POST /api/auth/totp/disable",
+    "POST /api/auth/totp/setup",
     "POST /api/billing/charge-items",
     "POST /api/billing/charge-items/{item_id}/reprice",
     "POST /api/billing/details",
@@ -908,6 +916,9 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/telemedicine/consults/{consult_id}/reply",
     "POST /api/triage/suggest",
     "POST /api/users",
+    # E1 等保账户安全：管理员重置口令/重置他人 TOTP
+    "POST /api/users/{user_id}/reset-password",
+    "POST /api/users/{user_id}/totp/reset",
     "POST /api/vaccination/contraindications",
     "POST /api/vaccination/contraindications/{contra_id}/lift",
     "POST /api/vaccination/records",
@@ -1015,6 +1026,7 @@ SNAPSHOT_MODELS = {
     "KnowledgeEntry",
     "LiveFeedback",
     "LiveSession",
+    "LoginLog",  # E1 等保账户安全：登录留痕
     "MaterialPurchase",
     "MaternalRecord",
     "MaternalVisit",
