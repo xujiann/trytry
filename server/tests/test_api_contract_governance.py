@@ -91,7 +91,14 @@ import app.spd.routers as spd_routers
 #   凭空要求了 `created_at`（响应校验拦下）、`SpdScreeningOut` 字段顺序排错
 #   （序列化按声明顺序走，逐字节比对拦下）。
 #   41 个请求加契约前后逐字节一致，五处变异各自转红，见 test_spd_portal_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 648
+# → 635（`spd/config` 第一批：catalog 9 + centers 4。config 是个包（ADR-0008 拆的），
+#   58 个端点分在 6 个子模块里，按子模块分批做——一次比 58 个端点，逐字节比对出了
+#   问题不好定位，粒度本身就是这套办法的价值。三处判断：`ProgramDetailOut` 继承
+#   `ProgramOut` 是对的（详情是列表的**严格超集**，只多 targets——与 spd/portal 那批
+#   的转诊详情正相反，那个不是超集，继承就错了）；`target_low`/`target_high` 是可空
+#   Float（定性目标没有上下限）；`org-tree` 是**自引用递归**模型（树深由数据决定）。
+#   23 个请求逐字节一致，五处变异各自转红，见 test_spd_config_catalog_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 635
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {

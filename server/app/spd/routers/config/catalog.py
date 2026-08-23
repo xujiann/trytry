@@ -3,7 +3,7 @@
 由原 `config.py`（1549 行）按业务分节拆出，见 ADR-0008。
 路由对象与跨节工具在 `._base`，本模块只放本域的端点。
 """
-
+from typing import Any
 
 from fastapi import Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -23,10 +23,99 @@ from ...rules import FIELD_SOURCES, OPERATORS
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
 
 
+# ============================================================ 响应契约
+#
+# 模型集中放在**所有端点之前**：`response_model=` 是装饰器参数，在导入时就要求值，
+# 模型定义晚于使用点会直接 F821。（这个坑在 analytics / portal 两批各踩过一次。）
+
+
+class RuleOptionOut(BaseModel):
+    key: str
+    name: str
+
+
+class RiskLevelOptionOut(RuleOptionOut):
+    color: str
+
+
+class RuleMetaOut(BaseModel):
+    """规则编辑器的可选项。
+
+    `fields`/`operators` 来自 `rules` 模块的字典，键随采集项扩充而变，故是列表；
+    `task_types`/`member_roles` 直接是"码 → 中文名"的映射，键同样由代码维护，
+    用 dict 而不是逐字段模型——把十个任务类型写成十个字段，加一种就要改契约。
+    """
+
+    fields: list[RuleOptionOut]
+    operators: list[RuleOptionOut]
+    risk_levels: list[RiskLevelOptionOut]
+    task_types: dict[str, str]
+    member_roles: dict[str, str]
+
+
+class TargetOut(BaseModel):
+    """管理目标。`target_low`/`target_high` 是**可空 Float**：定性目标（戒烟、
+    规律服药）没有上下限，为 null；量化目标的整数下限读回来是 `90.0`。"""
+
+    id: int
+    program_id: int
+    stage: str
+    metric: str
+    metric_name: str
+    kind: str
+    target_low: float | None
+    target_high: float | None
+    unit: str
+    qualitative: str
+    risk_level: str
+    followup_interval_days: int
+    form_code: str
+    edu_code: str
+    active: bool
+
+
+class ProgramOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    # 未指定牵头机构时为 null
+    lead_org_id: int | None
+    lead_dept: str
+    description: str
+    # 四个都是 JSON 列：规则条件与阶段/里程碑定义，字段随规则类型而变
+    include_rules: list[dict[str, Any]]
+    exclude_rules: list[dict[str, Any]]
+    stages: list[dict[str, Any]]
+    milestones: list[dict[str, Any]]
+    version: str
+    effective_from: str
+    active: bool
+
+
+class ProgramDetailOut(ProgramOut):
+    """单个专病档案。**是列表形状的严格超集**——`get_program` 在 `_program_out`
+    的结果上追加 `targets`，别的键一个不差，所以这里继承是对的
+    （spd/portal 那批的转诊详情不是超集，继承就错了）。"""
+
+    targets: list[TargetOut]
+
+
+class ProgramVersionOut(BaseModel):
+    id: int
+    version: str
+    changed_by: str
+    note: str
+    # 历史快照：存的是当时的 `_program_out`，老快照可能缺字段（形状会随版本漂移），
+    # 逐字段建模会给老快照注入 null——快照的意义就是"当时长什么样"，不该被改写
+    snapshot: dict[str, Any]
+    created_at: str
+
+
 # ============================================================ 元数据（规则可选项）
 
 
-@router.get("/meta")
+@router.get("/meta", response_model=RuleMetaOut)
 def rule_meta():
     """规则可用字段与比较符，供管理端渲染规则编辑器。
 
@@ -95,7 +184,8 @@ def _program_out(p: SpdProgram) -> dict:
     }
 
 
-@router.post("/programs", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/programs", response_model=ProgramOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_program(body: ProgramIn, db: Session = Depends(get_db)):
     if body.lead_org_id is not None and db.get(Organization, body.lead_org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -113,7 +203,7 @@ def create_program(body: ProgramIn, db: Session = Depends(get_db)):
     return _program_out(program)
 
 
-@router.get("/programs")
+@router.get("/programs", response_model=list[ProgramOut])
 def list_programs(
     response: Response,
     category: str | None = None,
@@ -134,7 +224,7 @@ def list_programs(
     return [_program_out(p) for p in rows]
 
 
-@router.get("/programs/{program_id}")
+@router.get("/programs/{program_id}", response_model=ProgramDetailOut)
 def get_program(program_id: int, db: Session = Depends(get_db)):
     program = db.get(SpdProgram, program_id)
     if program is None:
@@ -145,7 +235,8 @@ def get_program(program_id: int, db: Session = Depends(get_db)):
     return out
 
 
-@router.patch("/programs/{program_id}", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.patch("/programs/{program_id}", response_model=ProgramOut,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_program(
     program_id: int,
     body: ProgramUpdate,
@@ -178,7 +269,7 @@ def update_program(
     return _program_out(program)
 
 
-@router.get("/programs/{program_id}/versions")
+@router.get("/programs/{program_id}/versions", response_model=list[ProgramVersionOut])
 def program_versions(program_id: int, db: Session = Depends(get_db)):
     rows = (
         db.query(SpdProgramVersion)
@@ -222,7 +313,7 @@ def _target_out(t: SpdTarget) -> dict:
     }
 
 
-@router.post("/programs/{program_id}/targets", status_code=201,
+@router.post("/programs/{program_id}/targets", response_model=TargetOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_target(program_id: int, body: TargetIn, db: Session = Depends(get_db)):
     if db.get(SpdProgram, program_id) is None:
@@ -245,7 +336,7 @@ def create_target(program_id: int, body: TargetIn, db: Session = Depends(get_db)
     return _target_out(target)
 
 
-@router.get("/programs/{program_id}/targets")
+@router.get("/programs/{program_id}/targets", response_model=list[TargetOut])
 def list_targets(program_id: int, stage: str | None = None, db: Session = Depends(get_db)):
     query = db.query(SpdTarget).filter(SpdTarget.program_id == program_id)
     if stage is not None:
@@ -253,7 +344,8 @@ def list_targets(program_id: int, stage: str | None = None, db: Session = Depend
     return [_target_out(t) for t in query.order_by(SpdTarget.id).all()]
 
 
-@router.patch("/targets/{target_id}", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.patch("/targets/{target_id}", response_model=TargetOut,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_target(target_id: int, body: dict, db: Session = Depends(get_db)):
     target = db.get(SpdTarget, target_id)
     if target is None:
