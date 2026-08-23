@@ -9,6 +9,7 @@ from typing import Any
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,130 @@ from ..models import (
 )
 
 router = APIRouter(prefix="/api/metrics", tags=["决策驾驶舱"], dependencies=[Depends(get_current_user)])
+
+
+# ---------------------------------------------------------------------------
+# 响应契约（docs/接口标准与治理.md）
+#
+# 三处建模判断，都是**先实测再决定**（见 tests/test_metrics_contract.py）：
+#  · `*_pct` 恒为 float —— `pct()` 分母为 0 时返回字面量 `0.0`，非 0 时是
+#    `round(part * 100.0 / total, 2)`，两条分支都走浮点。同类接口里
+#    `round(x, 2)` 对整数入参会返回 **int**（`cssd.total_cost` 即是），
+#    那种地方声明 float 就是改字节——这类判断只能一个个实测。
+#  · `by_level` 的键是慢病分级的实际取值（数据决定）→ 宽键 `dict[str, int]`。
+#  · `drilldown.items` 是真多态（八个 metric 各有各的行渲染）→ `dict[str, Any]`；
+#    不是无契约：同一响应里的 `fields` 就是这批行的字段清单，
+#    用例钉住"行的键集合必须等于 fields"。
+# ---------------------------------------------------------------------------
+
+
+class TrendSeries(BaseModel):
+    """近 N 月四条业务量曲线。
+
+    键在 `monthly_trends` 里写死，故逐字段建模（比 `dict[str, list[int]]` 更强）。
+    代价是**加第五条序列而不改这里，会被 response_model 静默过滤掉**——
+    `test_trends_的series键是静态的_加新序列必须同步契约` 盯着这一点。
+    """
+
+    encounters: list[int]
+    exam_reports: list[int]
+    referrals: list[int]
+    prescriptions: list[int]
+
+
+class TrendsOut(BaseModel):
+    #: `YYYY-MM`，按时间正序，长度等于请求的月份数
+    months: list[str]
+    series: TrendSeries
+
+
+class AlertItem(BaseModel):
+    type: str
+    label: str
+    count: int
+
+
+class AlertsOut(BaseModel):
+    #: 五类风险的**全部**计数之和；`items` 只列 count>0 的，故 total 可能大于逐项之和？
+    #: 不会——求和在过滤之前做，但被过滤掉的项计数恒为 0，两者必然相等（用例钉住）。
+    total: int
+    items: list[AlertItem]
+
+
+class DrilldownMetricOut(BaseModel):
+    metric: str
+    label: str
+    page: str
+    count: int
+
+
+class DrilldownOut(BaseModel):
+    metric: str
+    label: str
+    #: 前端 `location.hash` 跳转目标页
+    page: str
+    #: 明细表头，与 `fields` 一一对应
+    columns: list[str]
+    #: 明细行的字段清单——`items` 的每一行键集合必须与它相等
+    fields: list[str]
+    total: int
+    offset: int
+    limit: int
+    #: **真多态**：八个 metric 各有各的行形状，除 `id` 外字段完全不同。
+    #: 逐字段建模在这里做不到，也不该做——形状由 `metric` 决定，
+    #: 运行期靠上面的 `fields` 自描述。
+    items: list[dict[str, Any]]
+
+
+class ResourcesOut(BaseModel):
+    organizations: int
+    patients: int
+
+
+class ServiceDivisionOut(BaseModel):
+    encounters_total: int
+    grassroots_encounters: int
+    grassroots_encounter_ratio_pct: float
+
+
+class RemoteDiagnosisOut(BaseModel):
+    reported_total: int
+    recognized_total: int
+    recognition_ratio_pct: float
+    critical_values: int
+
+
+class ReferralCountsOut(BaseModel):
+    up: int
+    down: int
+    completed: int
+
+
+class PrescriptionReviewOut(BaseModel):
+    total: int
+    auto_pass_ratio_pct: float
+    rejected: int
+    pending_review: int
+
+
+class ChronicManagementOut(BaseModel):
+    total: int
+    #: 键是慢病分级的实际取值（数据决定），故宽键
+    by_level: dict[str, int]
+
+
+class PharmacyOut(BaseModel):
+    stock_alerts: int
+
+
+class OverviewOut(BaseModel):
+    resources: ResourcesOut
+    service_division: ServiceDivisionOut
+    remote_diagnosis: RemoteDiagnosisOut
+    referrals: ReferralCountsOut
+    prescription_review: PrescriptionReviewOut
+    chronic_management: ChronicManagementOut
+    pharmacy: PharmacyOut
 
 # 未闭环危急值口径（M-5 整改）：notified/acknowledged 与存量空串，resolved 不计入
 OPEN_CRITICAL_STATUSES = ["notified", "acknowledged", ""]
@@ -352,7 +477,7 @@ def metric_count(db: Session, metric: str) -> int:
     return METRIC_QUERIES[metric]["query"](db).count()
 
 
-@router.get("/trends")
+@router.get("/trends", response_model=TrendsOut)
 def monthly_trends(months: int = 6, db: Session = Depends(get_db)):
     """近N月业务量趋势：就诊、远程诊断、转诊、处方（Python侧聚合，兼容SQLite/PostgreSQL）。"""
     from collections import Counter
@@ -384,7 +509,7 @@ def monthly_trends(months: int = 6, db: Session = Depends(get_db)):
     return {"months": keys, "series": series}
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=AlertsOut)
 def alert_summary(db: Session = Depends(get_db)):
     """全局风险预警汇总：五类风险一屏聚合，供驾驶舱预警横幅使用。
 
@@ -397,7 +522,7 @@ def alert_summary(db: Session = Depends(get_db)):
     return {"total": sum(i["count"] for i in items), "items": [i for i in items if i["count"] > 0]}
 
 
-@router.get("/drilldown")
+@router.get("/drilldown", response_model=DrilldownOut)
 def drilldown(
     response: Response,
     metric: str,
@@ -435,7 +560,7 @@ def drilldown(
     }
 
 
-@router.get("/drilldown-metrics")
+@router.get("/drilldown-metrics", response_model=list[DrilldownMetricOut])
 def drilldown_metrics(db: Session = Depends(get_db)):
     """可下钻指标目录（含当前计数），供前端指标卡绑定下钻入口。"""
     return [
@@ -449,7 +574,7 @@ def drilldown_metrics(db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/overview")
+@router.get("/overview", response_model=OverviewOut)
 def overview(db: Session = Depends(get_db)):
     org_total = db.query(func.count(Organization.id)).scalar() or 0
     patient_total = db.query(func.count(Patient.id)).scalar() or 0

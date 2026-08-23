@@ -43,7 +43,25 @@ import app.spd.routers as spd_routers
 # 每治理一个模块就把这个数字改小（配合 FULLY_GOVERNED）。轨迹：881 中 757 → 756（checkups）→ 753（certs）→ 749（knowledge）→ 745（notifications）→ 743（infectious alerts/late-reports）→ 742（dictionaries import）→ 741（encounters /archive/360 全景视图，嵌套九段逐段建模）→ 740（performance /orgs 机构计分卡，动态 weights + 混形状 detail）。→ 732（ADR-0006 搬家后补齐 cssd cost-* 3 个与 performance improvements* 5 个，两模块回归 FULLY_GOVERNED）。
 # → 724（B2 运营闭环：printing 全模块补契约——HTML 单据以 response_model=str 声明
 # "text/html 字符串"契约、模板两端点建 Pydantic 模型；labqc/checkups 新端点生而全契约）。
-BASELINE_WITHOUT_RESPONSE_MODEL = 724
+# → 719（决策驾驶舱 metrics 全模块补契约：五个端点。三处建模判断都先实测再决定——
+#   `*_pct` 恒为 float（分母 0 时返回字面量 0.0，不是 round 出来的 int）、
+#   `by_level` 键由数据决定故宽键、`drilldown.items` 是八种行形状的真多态故
+#   dict[str, Any]（同响应的 `fields` 自描述，用例钉住两者相等）。
+#   46 个请求加契约前后逐字节一致，见 test_metrics_contract.py。）
+# → 709（analytics 全模块补契约：十个端点。核心判断是 `round()` 与 Money 列派生的
+#   数值一律 `int | float` 而非 float——实测同一个 `total_amount` 字段一行返回
+#   `1234.5`、另一行返回 `100`（int）；写成 float 会把 `100` 变 `100.0`，即改字节
+#   （变异验证实测到了这一字节差）。`performance-report` 的 items 是多态的
+#   （失败项多一个 `error` 键），逐字段建模会给成功项注入 `"error": null`，
+#   同样改字节，故用宽字典。17 个请求加契约前后逐字节一致，见 test_analytics_contract.py。）
+# → 706（reports 三端点。**其中两个是 CSV 下载**，`response_model` 对它们没有意义
+#   （函数直接返回 Response 对象，FastAPI 会跳过模型），故棘轮的判据同步放宽为
+#   "有 response_model **或**显式声明了非 JSON 媒体类型"——判据从路由推导，不是
+#   手工豁免清单。放宽没有白送任何端点：写这条时全仓库只有 printing 的 12 个端点
+#   声明过 response_class，且它们本来就都有 response_model
+#   （`test_放宽媒体类型口径没有白送任何端点` 钉住）。
+#   把永远还不掉的账算进欠账，数字就不再表示"还有多少接口没契约"。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 706
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -62,6 +80,10 @@ FULLY_GOVERNED = {
     "consents",  # E2 个保法新模块，生而全契约，见 test_consents.py
     "printing",  # B2 全模块补契约：HTML 单据 response_model=str，模板端点建模，见 test_printing_documents.py
     "labqc",  # B2 室内质控新模块，生而全契约，见 test_labqc_westgard.py
+    "metrics",  # 决策驾驶舱五端点，见 test_metrics_contract.py
+    "analytics",  # 决策指标扩展十端点，见 test_analytics_contract.py
+    "reports",  # /monitoring 走 Pydantic；两个 CSV 导出以 CsvResponse 声明媒体类型，
+                # 见 test_reports_contract.py
     # 以下三个是"清单落后现实"的存量：它们早就零欠账，却一直没人登记，
     # 于是这些模块的回退一直不会单独变红。由 test_已治理模块清单不许落后现实 补上并钉住。
     "auth",
@@ -86,6 +108,43 @@ def _iter_endpoints():
                     yield modinfo.name, route
 
 
+def _declares_non_json_media(route) -> bool:
+    """端点是否**显式声明了非 JSON 的响应媒体类型**（CSV/文件下载这类）。
+
+    为什么这也算"声明了契约"：直接返回 `StreamingResponse` 的端点，
+    `response_model` 对它没有意义——函数不返回可序列化对象，FastAPI 也会跳过模型。
+    把这类端点永远算作欠账，等于往棘轮里掺进一笔**永远还不掉的账**，
+    数字就不再表示"还有多少接口没契约"。它们的契约是"我返回 text/csv 字节流"，
+    在 `responses` 里写明媒体类型就是把这句话写进 OpenAPI，是真的声明，不是豁免。
+
+    判据从**路由对象推导**，不是手工清单——这是本仓库最近的治理方向
+    （见"坏清单改自动推导"那批守卫）。门槛定在"必须写出媒体类型"而不是
+    "设了 response_class 就算"：后者对 StreamingResponse 根本不写媒体类型，
+    等于什么都没声明。
+
+    放宽这个口径**没有让任何端点白捡"已治理"**：写这条时全仓库只有 printing 的
+    12 个端点声明过 response_class，而它们本来就都有 response_model
+    （`test_放宽媒体类型口径没有白送任何端点` 钉住这一点）。
+    """
+    from fastapi.datastructures import DefaultPlaceholder
+
+    response_class = getattr(route, "response_class", None)
+    if not isinstance(response_class, DefaultPlaceholder):
+        media = getattr(response_class, "media_type", None)
+        if media and not str(media).startswith("application/json"):
+            return True
+    for spec in (getattr(route, "responses", None) or {}).values():
+        content = (spec or {}).get("content") or {}
+        if any(not str(ct).startswith("application/json") for ct in content):
+            return True
+    return False
+
+
+def _has_contract(route) -> bool:
+    """声明了响应契约：Pydantic 模型，或显式的非 JSON 媒体类型。"""
+    return route.response_model is not None or _declares_non_json_media(route)
+
+
 def _coverage():
     total = 0
     without = 0
@@ -94,10 +153,32 @@ def _coverage():
         total += 1
         per_module.setdefault(mod, [0, 0])
         per_module[mod][0] += 1
-        if route.response_model is None:
+        if not _has_contract(route):
             without += 1
             per_module[mod][1] += 1
     return total, without, per_module
+
+
+def test_放宽媒体类型口径没有白送任何端点():
+    """把"声明了非 JSON 媒体类型"也算作有契约，只能让**真的写了声明**的端点脱账。
+
+    这条盯的是口径本身会不会变成漏洞：凡是靠媒体类型算作已治理的端点，
+    必须真的在 `responses` 里写出了媒体类型。顺带钉住数量——
+    悄悄给一批端点挂上空的 `responses` 来刷低欠账，会让这里的清单变长。
+    """
+    by_media = sorted(
+        f"{mod} {sorted(route.methods - {'HEAD', 'OPTIONS'})[0]} {route.path}"
+        for mod, route in _iter_endpoints()
+        if route.response_model is None and _declares_non_json_media(route)
+    )
+    assert by_media == [
+        "reports GET /api/reports/monitoring/export",
+        "reports GET /api/reports/operations/export",
+    ], (
+        f"靠媒体类型算作已治理的端点清单变了：{by_media}。"
+        "新增这类端点是可以的，但必须是真的返回非 JSON 的下载/单据类接口，"
+        "并在此处同步——别拿空 responses 刷低欠账。"
+    )
 
 
 def test_响应契约欠账不许变大():
