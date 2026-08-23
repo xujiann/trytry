@@ -150,7 +150,97 @@ def _check_phone(phone: str) -> str:
     return phone
 
 
-@router.post("/auth/sms/code")
+# ---------------------------------------------------------------------------
+# 响应契约：auth 组 + 两个公开列表（docs/接口标准与治理.md）
+#
+# 本组有两个**条件键**，是这批建模的关键：
+#  · `auth/sms/code` 的 `debug_code` —— 仅 console 通道 + 显式开关 + 非生产三者
+#    同时满足才回显；
+#  · `auth/wechat/authorize` 的 `mock_code` —— 仅 Mock provider 才有。
+#
+# 用 Pydantic 声明可选字段并给默认值，会给**每一个**响应注入 `"debug_code": null`
+# —— 既改响应字节，又等于在生产响应与 OpenAPI 里公告这个字段的存在。
+# 这不只是洁癖问题：`debug_code` 是登录验证码的回显口子，P0 整改专门收紧过它
+# （见本文件 `send_sms_code` 的 docstring）。
+# 故这两个端点带 `response_model_exclude_unset=True`：字段没被设置就不出现在响应里。
+# 两条分支（有 / 无该键）都做了逐字节比对，见 tests/test_portal_auth_contract.py。
+# ---------------------------------------------------------------------------
+
+
+class SmsCodeSentOut(BaseModel):
+    sent: bool
+    expires_in: int
+    cooldown_seconds: int
+    #: **条件键**：仅本地联调回显，生产永不出现。靠 `response_model_exclude_unset=True`
+    #: 保证"没设置就不出现"，而不是出现一个 `null`。
+    debug_code: str | None = None
+
+
+class PortalLoginOut(BaseModel):
+    """短信登录与微信登录**同形**，共用一个模型（两处实测键集合一致）。"""
+
+    access_token: str
+    token_type: str
+    expires_in: int
+    #: 是否已实名绑定到 `patients`——未绑定时看不到档案
+    bound: bool
+    name: str
+    nickname: str
+
+
+class WeChatAuthorizeOut(BaseModel):
+    provider: str
+    state: str
+    authorize_url: str
+    #: **条件键**：仅 Mock provider 才有，供没有公众号的演示站走通流程。
+    mock_code: str | None = None
+
+
+class RealnameBoundOut(BaseModel):
+    bound: bool
+    name: str
+    ehc_no: str
+
+
+class BindPhoneOut(BaseModel):
+    phone: str
+    bound_patient: bool
+
+
+class BindWeChatOut(BaseModel):
+    bound: bool
+    nickname: str
+
+
+class PortalLogoutOut(BaseModel):
+    logged_out: bool
+
+
+class HealthArticleOut(BaseModel):
+    id: int
+    title: str
+    category: str
+    content: str
+
+
+class PriceListItemOut(BaseModel):
+    code: str
+    name: str
+    category: str
+    category_name: str
+    #: `Money` 列（`Numeric(14,2, asdecimal=False)`）：**整数价格读回来是 int**，
+    #: 声明成 float 会把 `50` 变成 `50.0` —— 改字节。与 analytics 那批同一个陷阱。
+    price: int | float
+    #: 无调价记录时是空串而非 null（`if i.id in latest else ""`）
+    last_adjusted_at: str
+    effective_date: str
+
+
+@router.post(
+    "/auth/sms/code",
+    response_model=SmsCodeSentOut,
+    response_model_exclude_unset=True,  # debug_code 没设置就不该出现（见上方注释）
+)
 def send_sms_code(body: SendCodeIn, request: Request, db: Session = Depends(get_db)):
     """下发登录验证码。
 
@@ -343,7 +433,7 @@ class SmsLoginIn(BaseModel):
     code: str = Field(min_length=4, max_length=8)
 
 
-@router.post("/auth/sms/login")
+@router.post("/auth/sms/login", response_model=PortalLoginOut)
 def sms_login(body: SmsLoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     """手机号验证码登录：首次登录自动开户，命中唯一患者时顺带完成实名绑定。"""
     phone = _check_phone(body.phone)
@@ -378,7 +468,11 @@ def sms_login(body: SmsLoginIn, request: Request, response: Response, db: Sessio
 # ============================================================================
 
 
-@router.get("/auth/wechat/authorize")
+@router.get(
+    "/auth/wechat/authorize",
+    response_model=WeChatAuthorizeOut,
+    response_model_exclude_unset=True,  # mock_code 没设置就不该出现
+)
 def wechat_authorize():
     """返回微信授权页地址。
 
@@ -398,7 +492,7 @@ class WeChatLoginIn(BaseModel):
     state: str = ""
 
 
-@router.post("/auth/wechat/login")
+@router.post("/auth/wechat/login", response_model=PortalLoginOut)
 def wechat_login(body: WeChatLoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     """微信授权码登录：首次授权自动开户，仍需实名绑定后才可见档案。"""
     client_ip = request.client.host if request.client else "unknown"
@@ -487,7 +581,7 @@ def current_resident_patient(
     return patient
 
 
-@router.post("/auth/logout")
+@router.post("/auth/logout", response_model=PortalLogoutOut)
 def portal_logout(
     request: Request,
     response: Response,
@@ -524,7 +618,7 @@ class RealNameIn(BaseModel):
     id_card: str = Field(min_length=6, max_length=18)
 
 
-@router.post("/auth/realname")
+@router.post("/auth/realname", response_model=RealnameBoundOut)
 def bind_realname(
     body: RealNameIn,
     account: ResidentAccount = Depends(current_resident),
@@ -581,7 +675,7 @@ class BindPhoneIn(BaseModel):
     code: str = Field(min_length=4, max_length=8)
 
 
-@router.post("/auth/bind-phone")
+@router.post("/auth/bind-phone", response_model=BindPhoneOut)
 def bind_phone(
     body: BindPhoneIn,
     account: ResidentAccount = Depends(current_resident),
@@ -609,7 +703,7 @@ class BindWeChatIn(BaseModel):
     code: str = Field(min_length=1)
 
 
-@router.post("/auth/bind-wechat")
+@router.post("/auth/bind-wechat", response_model=BindWeChatOut)
 def bind_wechat(
     body: BindWeChatIn,
     account: ResidentAccount = Depends(current_resident),
@@ -1906,7 +2000,7 @@ CHARGE_CATEGORY_NAMES = {
 }
 
 
-@router.get("/health-articles")
+@router.get("/health-articles", response_model=list[HealthArticleOut])
 def published_articles(category: str | None = None, db: Session = Depends(get_db)):
     """健康宣教：居民端展示已发布文章（无需登录）。"""
     q = db.query(HealthArticle).filter(HealthArticle.status == "published")
@@ -1918,7 +2012,7 @@ def published_articles(category: str | None = None, db: Session = Depends(get_db
     ]
 
 
-@router.get("/price-list")
+@router.get("/price-list", response_model=list[PriceListItemOut])
 def public_price_list(
     category: str | None = None, keyword: str | None = None, db: Session = Depends(get_db)
 ):

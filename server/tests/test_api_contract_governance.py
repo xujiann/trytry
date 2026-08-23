@@ -61,7 +61,15 @@ import app.spd.routers as spd_routers
 #   声明过 response_class，且它们本来就都有 response_model
 #   （`test_放宽媒体类型口径没有白送任何端点` 钉住）。
 #   把永远还不掉的账算进欠账，数字就不再表示"还有多少接口没契约"。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 706
+# → 696（portal 的 auth 组 8 个 + 两个公开列表。**没做完整个 portal**：
+#   `me`(19) 与 `spd`(26) 另批——`my-archive`/`surveys` 三个遗留端点与 `me/archive`
+#   共用 `_build_archive`，拆开做会把同一个形状建模两次，故留给 me 那批一起做。
+#   本批的关键是两个**条件键**：`auth/sms/code` 的 `debug_code` 与
+#   `auth/wechat/authorize` 的 `mock_code`——声明成带默认值的可选字段会给**每一个**
+#   响应注入 `null`，既改字节又等于公告该字段存在（`debug_code` 是登录验证码的
+#   回显口子，P0 整改专门收紧过）。两个端点用 `response_model_exclude_unset=True`，
+#   两条分支都做了逐字节比对，见 test_portal_auth_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 696
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
