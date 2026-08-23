@@ -101,7 +101,7 @@ from .consents import (
     require_guardian_for_minor,
     validate_correction_changes,
 )
-from .notifications import notification_out
+from .notifications import NotificationOut, UnreadCountOut, notification_out
 from .chronic import guidance_for
 
 router = APIRouter(prefix="/api/portal", tags=["居民端"])
@@ -727,7 +727,17 @@ def bind_wechat(
     return {"bound": True, "nickname": account.nickname}
 
 
-@router.get("/me")
+class PortalMeOut(BaseModel):
+    account_id: int
+    phone: str
+    wechat_bound: bool
+    nickname: str
+    bound: bool
+    name: str
+    ehc_no: str
+
+
+@router.get("/me", response_model=PortalMeOut)
 def portal_me(account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)):
     """当前账户信息：手机号脱敏返回，实名信息只回姓名与健康卡号。"""
     patient = db.get(Patient, account.patient_id) if account.patient_id else None
@@ -745,6 +755,35 @@ def portal_me(account: ResidentAccount = Depends(current_resident), db: Session 
 # ============================================================================
 # 档案与评价（令牌方式）
 # ============================================================================
+
+
+class ArchiveEncounterOut(BaseModel):
+    diagnosis_name: str
+    encounter_type: str
+    summary: str
+
+
+class ArchiveExamReportOut(BaseModel):
+    conclusion: str
+    critical: bool
+
+
+class ArchiveChronicOut(BaseModel):
+    disease: str
+    level: int
+    next_followup_due: str
+    guidance_points: str
+
+
+class ArchiveOut(BaseModel):
+    """健康档案。`/me/archive` 与两个已废弃的 `/my-archive` 共用同一形状——
+    三处都出自 `_build_archive`，形状只该建模一次，否则日后改一处漏两处。"""
+
+    name: str
+    ehc_no: str
+    encounters: list[ArchiveEncounterOut]
+    exam_reports: list[ArchiveExamReportOut]
+    chronic_care: list[ArchiveChronicOut]
 
 
 def _build_archive(db: Session, patient: Patient) -> dict:
@@ -812,7 +851,7 @@ def accessible_patient(
     return patient
 
 
-@router.get("/me/archive")
+@router.get("/me/archive", response_model=ArchiveOut)
 def my_archive_token(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -842,7 +881,25 @@ class FamilyMemberIn(BaseModel):
     guardian_relation: str = Field(default="", max_length=16)
 
 
-@router.get("/me/family")
+class FamilyMemberOut(BaseModel):
+    """家庭成员行。
+
+    本人那一行**没有** `member_id`（本人不是一条代管关系，删不得）。声明成
+    可选字段会给本人行注入 `"member_id": null`，客户端若照着 null 去调
+    DELETE /me/family/None 就是一个平白多出来的错误路径——故带
+    `response_model_exclude_unset=True`，让该键在本人行整个不出现。
+    """
+
+    patient_id: int
+    name: str
+    ehc_no: str
+    relation: str
+    is_self: bool
+    member_id: int | None = None
+
+
+@router.get("/me/family", response_model=list[FamilyMemberOut],
+            response_model_exclude_unset=True)
 def list_family(
     account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)
 ):
@@ -875,7 +932,13 @@ def list_family(
     return members
 
 
-@router.post("/me/family", status_code=201)
+class FamilyMemberAddedOut(BaseModel):
+    member_id: int
+    patient_id: int
+    name: str
+
+
+@router.post("/me/family", response_model=FamilyMemberAddedOut, status_code=201)
 def add_family_member(
     body: FamilyMemberIn,
     account: ResidentAccount = Depends(current_resident),
@@ -956,7 +1019,11 @@ def add_family_member(
     return {"member_id": member.id, "patient_id": patient.id, "name": patient.name}
 
 
-@router.delete("/me/family/{member_id}")
+class FamilyMemberRemovedOut(BaseModel):
+    removed: bool
+
+
+@router.delete("/me/family/{member_id}", response_model=FamilyMemberRemovedOut)
 def remove_family_member(
     member_id: int,
     account: ResidentAccount = Depends(current_resident),
@@ -1098,7 +1165,18 @@ def portal_my_corrections(
 # ============================================================================
 
 
-@router.get("/me/slots")
+class PortalSlotOut(BaseModel):
+    id: int
+    org_id: int
+    org_name: str
+    resource_type: str
+    resource_name: str
+    slot_date: str
+    slot_time: str
+    remaining: int
+
+
+@router.get("/me/slots", response_model=list[PortalSlotOut])
 def portal_slots(
     org_id: int | None = None,
     slot_date: str | None = None,
@@ -1134,7 +1212,13 @@ class PortalBookIn(BaseModel):
     patient_id: int | None = None
 
 
-@router.post("/me/appointments", status_code=201)
+class PortalBookedOut(BaseModel):
+    id: int
+    slot_id: int
+    status: str
+
+
+@router.post("/me/appointments", response_model=PortalBookedOut, status_code=201)
 def portal_book(
     body: PortalBookIn,
     account: ResidentAccount = Depends(current_resident),
@@ -1158,7 +1242,18 @@ def _my_patient_ids(db: Session, account: ResidentAccount) -> list[int]:
     return ids
 
 
-@router.get("/me/appointments")
+class PortalAppointmentOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    org_name: str
+    resource_name: str
+    slot_date: str
+    slot_time: str
+    status: str
+
+
+@router.get("/me/appointments", response_model=list[PortalAppointmentOut])
 def portal_my_appointments(
     account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)
 ):
@@ -1191,7 +1286,13 @@ def portal_my_appointments(
     ]
 
 
-@router.post("/me/appointments/{appointment_id}/cancel")
+class PortalAppointmentStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+@router.post("/me/appointments/{appointment_id}/cancel",
+             response_model=PortalAppointmentStatusOut)
 def portal_cancel(
     appointment_id: int,
     account: ResidentAccount = Depends(current_resident),
@@ -1205,7 +1306,23 @@ def portal_cancel(
     return {"id": appointment.id, "status": appointment.status}
 
 
-@router.get("/me/contract")
+class PortalContractServiceOut(BaseModel):
+    service_type: str
+    note: str
+    date: str
+
+
+class PortalContractOut(BaseModel):
+    id: int
+    org_name: str
+    doctor_name: str
+    package: str
+    signed_date: str
+    status: str
+    services: list[PortalContractServiceOut]
+
+
+@router.get("/me/contract", response_model=list[PortalContractOut])
 def portal_my_contract(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -1247,7 +1364,21 @@ def portal_my_contract(
     return result
 
 
-@router.get("/me/bills")
+class PortalBillOut(BaseModel):
+    """我的账单。金额三项都是 `Money` 列（`Numeric(14,2, asdecimal=False)`）——
+    整数金额读回来是 int，声明成 float 会把「200 元」变成「200.0 元」。"""
+
+    id: int
+    org_name: str
+    bill_type: str
+    total_amount: int | float
+    insurance_pay: int | float
+    self_pay: int | float
+    paid: bool
+    date: str
+
+
+@router.get("/me/bills", response_model=list[PortalBillOut])
 def portal_my_bills(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -1583,7 +1714,17 @@ def portal_my_enrollments_all(
     return items[:ENROLLMENT_FEED_LIMIT]
 
 
-@router.get("/me/referrals")
+class PortalReferralOut(BaseModel):
+    id: int
+    direction: str
+    from_org: str
+    to_org: str
+    reason: str
+    status: str
+    date: str
+
+
+@router.get("/me/referrals", response_model=list[PortalReferralOut])
 def portal_my_referrals(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -1613,7 +1754,22 @@ def portal_my_referrals(
     ]
 
 
-@router.get("/me/admissions")
+class PortalAdmissionOut(BaseModel):
+    id: int
+    org_name: str
+    ward_name: str
+    bed_no: str
+    doctor_name: str
+    diagnosis_name: str
+    status: str
+    admitted_date: str
+    # 在院时为空串（不是 null）——照实建模，别顺手改成可空
+    discharged_date: str
+    days: int
+    settled: bool
+
+
+@router.get("/me/admissions", response_model=list[PortalAdmissionOut])
 def portal_my_admissions(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -1668,7 +1824,43 @@ def portal_my_admissions(
     return result
 
 
-@router.get("/me/admissions/{admission_id}/bill")
+class PortalAdmissionBillItemOut(BaseModel):
+    item_name: str
+    unit_price: int | float
+    quantity: int
+    amount: int | float
+    category: str
+    settled: bool
+    date: str
+
+
+class PortalAdmissionSettlementOut(BaseModel):
+    id: int
+    total_amount: int | float
+    insurance_pay: int | float
+    self_pay: int | float
+    date: str
+
+
+class PortalAdmissionBillOut(BaseModel):
+    """住院费用清单。全部金额都是 `Money` 派生的 `int | float`（见 PortalBillOut）。
+
+    `by_category` 的键是**收费类别**，来自 `ChargeItem.category`（可配置、
+    只出现在有明细的类别上），故是动态键的 dict 而非固定字段的模型。
+    """
+
+    admission_id: int
+    diagnosis_name: str
+    status: str
+    total_amount: int | float
+    by_category: dict[str, int | float]
+    items: list[PortalAdmissionBillItemOut]
+    settlements: list[PortalAdmissionSettlementOut]
+    deposit_balance: int | float
+
+
+@router.get("/me/admissions/{admission_id}/bill",
+            response_model=PortalAdmissionBillOut)
 def portal_admission_bill(
     admission_id: int,
     account: ResidentAccount = Depends(current_resident),
@@ -1790,7 +1982,21 @@ def portal_my_deposits(
     }
 
 
-@router.get("/me/surgeries")
+class PortalSurgeryOut(BaseModel):
+    id: int
+    surgery_name: str
+    org_name: str
+    surgeon_name: str
+    urgency: str
+    status: str
+    planned_date: str
+    # 未排期时三项均为空串（不是 null）
+    scheduled_date: str
+    scheduled_time: str
+    room_name: str
+
+
+@router.get("/me/surgeries", response_model=list[PortalSurgeryOut])
 def portal_my_surgeries(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -1839,7 +2045,7 @@ def portal_my_surgeries(
     ]
 
 
-@router.get("/me/notifications")
+@router.get("/me/notifications", response_model=list[NotificationOut])
 def portal_my_notifications(
     unread_only: bool = False,
     limit: int = 50,
@@ -1862,7 +2068,7 @@ def portal_my_notifications(
     return [notification_out(n) for n in rows]
 
 
-@router.get("/me/notifications/unread-count")
+@router.get("/me/notifications/unread-count", response_model=UnreadCountOut)
 def portal_unread_count(
     account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)
 ):
@@ -1876,7 +2082,13 @@ def portal_unread_count(
     return {"unread": count}
 
 
-@router.post("/me/notifications/{notification_id}/read")
+class NotificationReadOut(BaseModel):
+    id: int
+    read: bool
+
+
+@router.post("/me/notifications/{notification_id}/read",
+             response_model=NotificationReadOut)
 def portal_mark_read(
     notification_id: int,
     account: ResidentAccount = Depends(current_resident),
@@ -1898,7 +2110,12 @@ class MySurveyIn(BaseModel):
     comment: str = ""
 
 
-@router.post("/me/surveys", status_code=201)
+class SurveySubmittedOut(BaseModel):
+    id: int
+    submitted: bool
+
+
+@router.post("/me/surveys", response_model=SurveySubmittedOut, status_code=201)
 def my_survey(
     body: MySurveyIn,
     patient: Patient = Depends(current_resident_patient),
@@ -1951,7 +2168,7 @@ class ArchiveQuery(BaseModel):
     id_card: str = Field(min_length=1)
 
 
-@router.get("/my-archive", deprecated=True)
+@router.get("/my-archive", response_model=ArchiveOut, deprecated=True)
 def my_archive(ehc_no: str, id_card: str, db: Session = Depends(get_db)):
     """【已废弃】身份证号入 query 有日志泄露面，请改用登录态 GET /api/portal/me/archive。"""
     _require_legacy_enabled()
@@ -1959,7 +2176,7 @@ def my_archive(ehc_no: str, id_card: str, db: Session = Depends(get_db)):
     return _build_archive(db, patient)
 
 
-@router.post("/my-archive", deprecated=True)
+@router.post("/my-archive", response_model=ArchiveOut, deprecated=True)
 def my_archive_post(body: ArchiveQuery, db: Session = Depends(get_db)):
     """【已废弃】请改用登录态 GET /api/portal/me/archive。"""
     _require_legacy_enabled()
@@ -1976,7 +2193,8 @@ class PortalSurveyCreate(BaseModel):
     comment: str = ""
 
 
-@router.post("/surveys", status_code=201, deprecated=True)
+@router.post("/surveys", response_model=SurveySubmittedOut, status_code=201,
+             deprecated=True)
 def portal_submit_survey(body: PortalSurveyCreate, db: Session = Depends(get_db)):
     """【已废弃】请改用登录态 POST /api/portal/me/surveys。"""
     _require_legacy_enabled()

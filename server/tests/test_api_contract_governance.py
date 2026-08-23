@@ -69,7 +69,18 @@ import app.spd.routers as spd_routers
 #   响应注入 `null`，既改字节又等于公告该字段存在（`debug_code` 是登录验证码的
 #   回显口子，P0 整改专门收紧过）。两个端点用 `response_model_exclude_unset=True`，
 #   两条分支都做了逐字节比对，见 test_portal_auth_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 696
+# → 674（portal 的 me 组 19 个 + 三个已废弃的遗留端点，`app/routers/portal.py`
+#   契约欠账清零。三处判断：①`me/family` 的条件键 `member_id`——本人那一行没有它
+#   （本人不是一条代管关系），声明成可选字段会注入 `"member_id": null`，客户端
+#   照着 null 调 `DELETE /me/family/None` 就是平白多出来的错误路径，故用
+#   `response_model_exclude_unset=True`；②Money 陷阱在这一批出现了四处
+#   （账单三项、费用明细单价与金额、分类汇总的**值**、押金余额），整数金额声明成
+#   float 会把「200 元」变成「200.0 元」；③`_build_archive` 被三个端点共用，
+#   只建一个 `ArchiveOut`，并有用例钉住三者形状相等，免得日后改一处漏两处。
+#   消息两端点复用 notifications 已有的 `NotificationOut`/`UnreadCountOut`，
+#   不另建同形模型。29 个请求加契约前后逐字节一致，四处变异各自转红，
+#   见 test_portal_me_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 674
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -101,7 +112,9 @@ FULLY_GOVERNED = {
 
 
 def _iter_endpoints():
-    """遍历所有源路由模块里的 APIRoute（环境无关，不依赖 app.routes 的运行期封装）。"""
+    """遍历所有源路由模块里的 APIRoute（环境无关，不依赖 app.routes 的运行期封装）。
+
+"""
     for pkg in (platform_routers, spd_routers):
         for modinfo in pkgutil.iter_modules(pkg.__path__):
             if modinfo.name.startswith("_"):
