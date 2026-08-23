@@ -102,6 +102,25 @@ function table(cols, rows, renderRow) {
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+/**
+ * 面板外壳：`<div class="panel"><h3>标题</h3>内容</div>`（ADR-0009 第二步）。
+ *
+ * **`title` 由组件转义，`body` 不转**——这条边界要说清楚，不然会给人虚假的安全感：
+ * `body` 是调用方自己拼好的 HTML，组件没法替它转义，调用方内部该 `esc()` 的照旧。
+ * 组件收掉的是"标题忘了转义"这一类，不是全部。
+ *
+ * 放在 core.js 而不是 shared.js：`.panel`/`.card`/`table()` 是**管理端**这一套
+ * 前端的标记约定，居民端与医师端（`m/`）另有自己的一套，把它塞进三端共用的
+ * shared.js 只会给那两端加一段永远不会被调用的代码。shared.js 只放三端真的都在用的
+ * （`$`/`esc`）。
+ *
+ * `accent` 给左边框上色，既有页面用它区分警示／重点面板。
+ */
+function panel(title, body, { accent = "" } = {}) {
+  const style = accent ? ` style="border-left:4px solid ${esc(accent)}"` : "";
+  return `<div class="panel"${style}><h3>${esc(title)}</h3>${body}</div>`;
+}
+
 function setMsg(id, text, ok = true) {
   const el = $(id);
   if (el) { el.textContent = text; el.className = `msg ${ok ? "ok" : "err"}`; }
@@ -202,8 +221,14 @@ function lineChart(months, series, colors) {
     svg += `<polyline points="${points}" fill="none" stroke="${colors[si % colors.length]}" stroke-width="2"/>`;
     values.forEach((v, i) => { svg += `<circle cx="${x(i)}" cy="${y(v)}" r="2.5" fill="${colors[si % colors.length]}"/>`; });
   });
-  months.forEach((mo, i) => { svg += `<text x="${x(i)}" y="${h - 6}" font-size="10.5" fill="#5b6773" text-anchor="middle">${mo.slice(2)}</text>`; });
-  svg += `<text x="4" y="${y(max) + 4}" font-size="10.5" fill="#5b6773">${max}</text><text x="4" y="${y(0) + 4}" font-size="10.5" fill="#5b6773">0</text>`;
+  // 月份标签来自后端、格式固定（YYYY-MM），今天不含特殊字符——但图表组件是
+  // 三套前端共用的渲染出口，"这个入参恰好安全"不是组件该依赖的前提。
+  // 同文件的 barChart 早就 esc(label) 了，这里对齐（CLAUDE.md §8）。
+  months.forEach((mo, i) => { svg += `<text x="${x(i)}" y="${h - 6}" font-size="10.5" fill="#5b6773" text-anchor="middle">${esc(String(mo).slice(2))}</text>`; });
+  // `max` 是本函数自己算出来的数字，`esc()` 对它是恒等——照样包上，是为了让
+  // "<text> 里的插值一律过 esc" 这条规则**没有例外**。带例外清单的规则，
+  // 后来人得先判断自己算不算例外，判断错了就是漏转义。
+  svg += `<text x="4" y="${y(max) + 4}" font-size="10.5" fill="#5b6773">${esc(max)}</text><text x="4" y="${y(0) + 4}" font-size="10.5" fill="#5b6773">0</text>`;
   return `<svg width="${w}" height="${h}" role="img">${svg}</svg>`;
 }
 
@@ -253,7 +278,9 @@ async function renderDashboard() {
   try {
     const perf = await api("/api/performance/orgs");
     const top = perf.scorecards.slice(0, 8).map((c) => [c.org_name, c.score]);
-    if (top.length) perfHtml = `<div class="panel"><h3>机构绩效评分（前8）</h3>${barChart(top, { unit: " 分" })}</div>`;
+    // 分数是**周期口径**（缺省当年），标题必须带上周期——不标的话读的人会
+    // 以为是累计数（这正是口径变更前的行为）
+    if (top.length) perfHtml = `<div class="panel"><h3>机构绩效评分（${esc(perf.period)} 年度，前8）</h3>${barChart(top, { unit: " 分" })}</div>`;
   } catch (e) { /* 绩效不可用不阻塞驾驶舱 */ }
   const [alerts, trends] = await Promise.all([api("/api/metrics/alerts"), api("/api/metrics/trends?months=6")]);
   const alertBanner = alerts.total
@@ -472,30 +499,36 @@ async function downloadCsv(path, filename, msgSel) {
 }
 
 async function renderPerformance() {
-  $("#page-desc").textContent = "按机构自动汇算：转诊结案、远程诊断、慢病随访、处方合格、家医履约；监测指标上报导出";
+  $("#page-desc").textContent = "按机构自动汇算：转诊结案、共享诊断、慢病随访、处方合格、家医履约；监测指标上报导出";
   const [data, monitoring] = await Promise.all([
     api("/api/performance/orgs"), api("/api/reports/monitoring").catch(() => null)]);
+  // 口径变更后分数只统计考核周期内的业务量，页面必须说清是哪一期
+  $("#page-desc").textContent =
+    `${$("#page-desc").textContent}｜当前评分周期：${data.period}`;
   $("#page-body").innerHTML = `
     <div class="panel"><h3>上报报表导出（管理层）</h3>
       <p style="margin-bottom:8px">
         <button class="btn secondary" id="exp-monitor">监测指标CSV（14项）</button>
-        <button class="btn secondary" id="exp-ops">运营月报CSV（累计）</button>
+        <button class="btn secondary" id="exp-ops">运营月报CSV（业务量累计／绩效分当年）</button>
         <button class="btn" id="exp-ops-period">按月导出运营月报</button></p>
       <p class="msg" id="rpt-msg"></p>
       ${monitoring ? table(["#", "指标名", "口径", "当期值", "数据来源"], monitoring.indicators, (i) =>
         `<tr><td>${i.no}</td><td>${esc(i.name)}</td><td style="font-size:12.5px;color:#5b6773">${esc(i.caliber)}</td>
          <td><b>${esc(i.value)}</b> ${esc(i.unit)}</td><td><span class="tag">${esc(i.source)}</span></td></tr>`) : ""}</div>
     <div class="panel"><h3>机构评分排名</h3>
+      <p class="desc">本页是<b>考核口径</b>：指标与权重来自指标目录，分数只统计
+        当前评分周期（${esc(data.period)}）内的业务量。「决策分析」页的
+        「期末综合绩效报告」走的是自定义公式，<b>两者不可比</b>。</p>
       ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}</div>
-    <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "远程诊断", "慢病随访", "处方合格", "家医履约"],
+    <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "共享诊断(申请/出报告)", "慢病随访", "处方合格(可审)", "家医履约"],
       data.scorecards, (c, i) => {
         const d = c.detail;
         return `<tr><td>${data.scorecards.indexOf(c) + 1}</td><td>${esc(c.org_name)}</td><td>${esc(LEVELS[c.level] || c.level)}</td>
           <td><b>${c.score}</b></td>
           <td>${d.referral_completion.completed}/${d.referral_completion.total}</td>
-          <td>${d.remote_exams}</td>
+          <td>${d.remote_exams}<span style="color:#8a939e">（${d.remote_exams_requested}/${d.remote_exams_provided}）</span></td>
           <td>${d.chronic_followup.followed}/${d.chronic_followup.total}</td>
-          <td>${d.rx_pass.passed}/${d.rx_pass.total}</td>
+          <td>${d.rx_pass.passed}/${d.rx_pass.total}<span style="color:#8a939e">（可审 ${d.rx_pass.rule_covered}）</span></td>
           <td>${d.contract_services}</td></tr>`;
       })}</div>`;
   $("#exp-monitor").onclick = () => downloadCsv("/api/reports/monitoring/export", "monitoring_indicators.csv", "#rpt-msg");

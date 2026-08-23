@@ -158,13 +158,31 @@ def _guard_of(route) -> tuple[set[str], bool]:
     return roles, admin
 
 
+# 测试脚手架挂上去的路由（`include_in_schema=False`）。
+#
+# pytest 会在跑任何一条用例**之前**导入全部测试模块，所以
+# `tests/test_p0_fixes.py` 在导入时注册的 `POST /api/_test/boom` 到底在不在
+# `app.routes` 里，取决于**模块导入顺序**：正序（test_authz… 在 test_p0… 之前）
+# 看不到它，逆序就看得到。这条守卫因此曾在逆序下转红——实测过，不是理论担忧。
+#
+# 排除办法不能是"无条件跳过 include_in_schema=False"：那等于给隐藏的写接口开了
+# 一道免检门，将来真加一个就被静默跳过，而这是**鉴权**守卫，静默跳过即漏洞。
+# 所以跳过之后还要**清账**：`test_跳过的隐藏写接口只能是测试脚手架` 要求跳过的
+# 恰好只在这份名单里。写这条时全仓库的隐藏写接口只有下面这一个（实测）。
+TEST_ONLY_ROUTES = {("POST", "/api/_test/boom")}
+
+
 def _collect():
-    guarded, unguarded = [], []
+    guarded, unguarded, hidden = [], [], []
     for route in _iter_api_routes(app.routes):
         methods = route.methods & WRITE_METHODS
         if not methods:
             continue
         method = sorted(methods)[0]
+        if not route.include_in_schema:
+            # 不进鉴权矩阵，但要记账——见 TEST_ONLY_ROUTES 上方注释
+            hidden.append((method, route.path))
+            continue
         roles, admin = _guard_of(route)
         if admin:
             guarded.append((method, route.path, frozenset({"admin"})))
@@ -172,10 +190,10 @@ def _collect():
             guarded.append((method, route.path, frozenset(roles)))
         else:
             unguarded.append((method, route.path))
-    return guarded, unguarded
+    return guarded, unguarded, hidden
 
 
-GUARDED, UNGUARDED = _collect()
+GUARDED, UNGUARDED, HIDDEN = _collect()
 # 六个内置角色，admin 除外（admin 始终放行，测它没有意义）
 NON_ADMIN_ROLES = [r for r in ROLE_NAMES if r != "admin"]
 
@@ -261,6 +279,43 @@ def test_未守卫写接口清单必须是审阅过的白名单():
     )
     stale = UNGUARDED_WHITELIST - actual
     assert stale == set(), f"白名单里这些接口已加上守卫或已删除，应从白名单移除：{sorted(stale)}"
+
+
+def test_跳过的隐藏写接口只能是测试脚手架():
+    """`_collect()` 跳过了 `include_in_schema=False` 的写接口，这里给它清账。
+
+    跳过本身是为了让本模块不受**测试模块导入顺序**影响（见 TEST_ONLY_ROUTES
+    上方注释）。但"跳过"对一条鉴权守卫来说是危险动作：真加一个隐藏的写接口，
+    它就绕过了整个越权矩阵。这条要求跳过的每一条都在审阅过的名单里。
+
+    用子集而不是相等：`/api/_test/boom` 在不在，取决于 `test_p0_fixes` 有没有
+    被导入（单跑本文件时就没有）。相等断言会让单跑本文件转红。
+    """
+    unknown = set(HIDDEN) - TEST_ONLY_ROUTES
+    assert unknown == set(), (
+        f"这些写接口带 include_in_schema=False，被越权矩阵跳过了：{sorted(unknown)}\n"
+        "隐藏不等于免检——要么去掉 include_in_schema=False 让它进矩阵，"
+        "要么确认是测试脚手架后加进 TEST_ONLY_ROUTES。"
+    )
+
+
+def test_矩阵不受测试脚手架路由影响_与模块导入顺序无关():
+    """把那个顺序依赖钉死：**强制**先导入注册脚手架路由的模块，再重跑 `_collect()`。
+
+    这样正序跑本文件也能复现逆序下的条件，未守卫清单不该因此多出任何东西。
+    没有这一条，回归只在"逆序跑全量"时才看得见——而没人会天天那么跑。
+    """
+    import test_p0_fixes  # noqa: F401  导入即注册 POST /api/_test/boom
+
+    _, unguarded_now, hidden_now = _collect()
+    assert ("POST", "/api/_test/boom") in hidden_now, (
+        "脚手架路由没被注册，本用例失去了区分力——"
+        "test_p0_fixes 若不再注册它，本用例与 TEST_ONLY_ROUTES 都该一起删"
+    )
+    unexpected = {(m, p) for m, p in unguarded_now} - UNGUARDED_WHITELIST
+    assert unexpected == set(), (
+        f"测试脚手架路由漏进了未守卫清单：{sorted(unexpected)}"
+    )
 
 
 def test_越权覆盖率是100(capsys):

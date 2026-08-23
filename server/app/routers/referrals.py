@@ -6,6 +6,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import Organization, Patient, Referral, User
 from ..schemas import ReferralCreate, ReferralOut, ReferralStatusUpdate
+from ..visibility import GLOBAL_ROLES
 
 router = APIRouter(
     prefix="/api/referrals", tags=["双向转诊"], dependencies=[Depends(get_current_user)]
@@ -33,6 +34,28 @@ _ALLOWED_TRANSITIONS = {
     "pending": {"accepted", "rejected"},
     "accepted": {"completed"},
 }
+
+
+def _assert_receiving_org(user: User, referral: Referral) -> None:
+    """推进转诊状态（接诊／退回／结案）只有**接收方机构**能做；全域角色放行。
+
+    此前这个端点只有 `require_roles("doctor")`——**任何机构的任何医师都能把别人的
+    单子接诊掉、结案掉**。实测过：与本单毫无关系的第三家机构的医师，`accepted`
+    与 `completed` 都返回 200。这是 CLAUDE.md §8「别按 id 直取、不校验归属」的存量违规。
+
+    它还不只是越权。`completed` 是「转诊结案率」的**分子**，该指标进绩效评分，
+    绩效评分又用于切分基金池（`fund.distribute`）——一个谁都能改的计分口径等于
+    没有口径，讨论"分母该按转出方还是接收方"在此之前都是空谈。
+
+    判定用 `to_org_id` 而不是 spd 那套"当前持有机构"：平台侧转诊只有
+    pending→accepted/rejected→completed 一条直链，三步全部由接收方推进
+    （上转时接收方是上级、下转时是基层），不存在分级审核那种锚点逐级转移，
+    因此不需要 `current_org_id`。两边规则不同是业务不同，不是漏抄。
+    """
+    if user.role in GLOBAL_ROLES:
+        return
+    if user.org_id is None or user.org_id != referral.to_org_id:
+        raise HTTPException(status_code=403, detail="仅转诊接收机构可推进该单状态")
 
 
 @router.post(
@@ -73,10 +96,17 @@ def list_referrals(status: str | None = None, db: Session = Depends(get_db)):
     response_model=ReferralOut,
     dependencies=[Depends(require_roles("doctor"))],  # H2: 接诊/结案/退回属诊疗行为，限医师
 )
-def update_status(referral_id: int, body: ReferralStatusUpdate, db: Session = Depends(get_db)):
+def update_status(
+    referral_id: int,
+    body: ReferralStatusUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     referral = db.get(Referral, referral_id)
     if referral is None:
         raise HTTPException(status_code=404, detail="转诊记录不存在")
+    # 先校验归属再校验状态机：否则 403 与 409 的先后顺序会泄露"这张单现在什么状态"
+    _assert_receiving_org(user, referral)
     if body.status not in _ALLOWED_TRANSITIONS.get(referral.status, set()):
         raise HTTPException(
             status_code=409, detail=f"状态不可从 {referral.status} 变更为 {body.status}"

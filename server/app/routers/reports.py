@@ -169,11 +169,20 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
     """运营月报 CSV：各机构 就诊/住院/收入/支出/结余/绩效分。
 
     period=YYYY-MM 时就诊/住院按发生月份、收支按记账期间过滤；缺省为累计口径。
+
+    **例外：绩效分列没有"累计"**——绩效评分自 2026-08 起是周期口径
+    （见 docs/统计口径对照表.md 第 3 条），缺省即当年。表头已注明分数所属周期。
     """
     if period is not None and not re.fullmatch(r"\d{4}-\d{2}", period):
         raise HTTPException(status_code=422, detail="period 格式须为 YYYY-MM")
     orgs = db.query(Organization).order_by(Organization.id).all()
-    scores = {c["org_id"]: c["score"] for c in org_scorecards(db=db)["scorecards"]}
+    # 绩效分跟着报表周期走：其余各列都按 period 过滤，分数列不跟就会出现
+    # "本月就诊 30 人次、绩效分却是全年累计"这种一行里两个口径的报表。
+    # （绩效评分自 2026-08 起是周期口径，`period=None` 即当年，
+    #  故"累计"导出的分数列实为当年——CSV 表头已注明。）
+    scorecard_payload = org_scorecards(period=period, db=db)
+    score_period = scorecard_payload["period"]
+    scores = {c["org_id"]: c["score"] for c in scorecard_payload["scorecards"]}
     level_names = {"county": "县级", "township": "乡级", "village": "村级", "city": "市级"}
 
     def month_of(dt) -> str:
@@ -226,6 +235,9 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
     suffix = period or "all"
     return _csv_response(
         f"operations_report_{suffix}.csv",
-        ["机构ID", "机构名称", "层级", "门急诊人次", "住院人次", "收入(元)", "支出(元)", "结余(元)", "绩效评分"],
+        # 绩效评分列注明所属周期：它是周期口径，与同一行"累计"的其它列不同源，
+        # 表头不标清楚，拿去做二次加工的人会当成同一口径。
+        ["机构ID", "机构名称", "层级", "门急诊人次", "住院人次", "收入(元)", "支出(元)",
+         "结余(元)", f"绩效评分({score_period})"],
         rows,
     )
