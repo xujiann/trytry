@@ -10,6 +10,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -38,6 +39,53 @@ router = APIRouter(
     tags=["上报报表"],
     dependencies=[Depends(require_roles("director"))],  # 报表上报=管理层（admin 放行）
 )
+
+
+# ---------------------------------------------------------------------------
+# 响应契约（docs/接口标准与治理.md）
+#
+# 本模块三个端点分两类：
+#  · `/monitoring` 是 JSON，走 Pydantic 契约；
+#  · 两个 `*/export` 直接返回 `StreamingResponse`（CSV 字节流），`response_model`
+#    对它们**没有意义**——函数根本不返回可序列化对象，FastAPI 也会跳过模型。
+#    `printing` 那批 HTML 单据用的 `response_model=str` 在这里不适用：那些端点
+#    真的返回 str 再由 `HTMLResponse` 渲染，这里返回的是 Response 对象本身，
+#    写 `response_model=str` 是在说假话。
+#    改为在 `responses` 里**显式声明媒体类型** `text/csv` —— 这是 FastAPI 表达
+#    非 JSON 响应契约的正规写法，OpenAPI 里也就真的写着"这个端点返回 CSV"。
+# ---------------------------------------------------------------------------
+
+class CsvResponse(StreamingResponse):
+    """带 `media_type` 的 CSV 流式响应。
+
+    既当 `response_class`（决定 OpenAPI 里 200 响应的媒体类型），
+    **也是 `_csv_response` 实际返回的类** —— 声明与实际返回是同一个对象，
+    不是两处各写一遍。只在装饰器里写 `responses={200: {"content": {"text/csv": {}}}}`
+    的话，FastAPI 仍会保留默认的 `application/json` 条目，OpenAPI 就会说
+    "这个端点可能返回 JSON"，那是假的（实测如此，用例钉住）。
+    """
+
+    media_type = "text/csv; charset=utf-8"
+
+
+class MonitoringIndicatorOut(BaseModel):
+    no: int
+    name: str
+    #: 口径说明，前端与上报材料直接显示
+    caliber: str
+    #: **`int | float` 不能写 float**：计数类指标（机构数/建档数/例数）是 int，
+    #: 比率与均次费用是 `round(...)` 出来的 float。声明成 float 会把 `12` 变成
+    #: `12.0`，那是改响应字节（CLAUDE.md §11）——与 analytics 那批同一个陷阱。
+    value: int | float
+    unit: str
+    source: str
+
+
+class MonitoringOut(BaseModel):
+    #: `now_aware().isoformat()`，带时区
+    generated_at: str
+    total: int
+    indicators: list[MonitoringIndicatorOut]
 
 
 def _pct(part: float, total: float) -> float:
@@ -134,14 +182,13 @@ def _csv_response(filename: str, header: list[str], rows: list[list]) -> Streami
     writer.writerow(header)
     writer.writerows(rows)
     payload = "\ufeff" + buffer.getvalue()  # BOM：Excel 直接打开不乱码
-    return StreamingResponse(
+    return CsvResponse(
         iter([payload]),
-        media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
-@router.get("/monitoring")
+@router.get("/monitoring", response_model=MonitoringOut)
 def monitoring_report(db: Session = Depends(get_db)):
     """监测指标体系 14 项指标当期值（JSON，供上报与驾驶舱复核）。"""
     indicators = _monitoring_indicators(db)
@@ -152,7 +199,7 @@ def monitoring_report(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/monitoring/export")
+@router.get("/monitoring/export", response_class=CsvResponse)
 def export_monitoring_csv(db: Session = Depends(get_db)):
     """监测指标 CSV 下载：序号/指标名/口径/当期值/单位/数据来源。"""
     rows = [
@@ -164,7 +211,7 @@ def export_monitoring_csv(db: Session = Depends(get_db)):
     )
 
 
-@router.get("/operations/export")
+@router.get("/operations/export", response_class=CsvResponse)
 def export_operations_csv(period: str | None = None, db: Session = Depends(get_db)):
     """运营月报 CSV：各机构 就诊/住院/收入/支出/结余/绩效分。
 
