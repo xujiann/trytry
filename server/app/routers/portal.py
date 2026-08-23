@@ -1929,7 +1929,8 @@ def portal_admission_bill(
 
 class PortalDepositItemOut(BaseModel):
     id: int
-    amount: float
+    # Money 列：整数金额读回来是 int，声明成 float 会把「1000 元」变成「1000.0 元」
+    amount: int | float
     deposit_type: str
     deposit_type_name: str
     method: str
@@ -1938,7 +1939,8 @@ class PortalDepositItemOut(BaseModel):
 
 class PortalDepositsOut(BaseModel):
     admission_id: int
-    balance: float
+    # 同上；deposit_balance() 是 round(...)，整数余额同样返回 int
+    balance: int | float
     items: list[PortalDepositItemOut]
 
 

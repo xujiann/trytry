@@ -103,6 +103,9 @@ FULLY_GOVERNED = {
     "analytics",  # 决策指标扩展十端点，见 test_analytics_contract.py
     "reports",  # /monitoring 走 Pydantic；两个 CSV 导出以 CsvResponse 声明媒体类型，
                 # 见 test_reports_contract.py
+    # 平台侧居民端。spd 那份是**另一个 key** `spd/portal`（尚有 26 项欠账）——
+    # 模块名按包限定就是为了让这两者分开，见 _iter_endpoints 的 docstring。
+    "portal",  # 见 test_portal_auth_contract.py、test_portal_me_contract.py
     # 以下三个是"清单落后现实"的存量：它们早就零欠账，却一直没人登记，
     # 于是这些模块的回退一直不会单独变红。由 test_已治理模块清单不许落后现实 补上并钉住。
     "auth",
@@ -114,11 +117,18 @@ FULLY_GOVERNED = {
 def _iter_endpoints():
     """遍历所有源路由模块里的 APIRoute（环境无关，不依赖 app.routes 的运行期封装）。
 
-"""
-    for pkg in (platform_routers, spd_routers):
+    模块名按包限定（spd 的加 `spd/` 前缀）。不加前缀时两个包里的同名模块会被
+    合并成一个 key——现实里就有一对：`app/routers/portal.py` 与
+    `app/spd/routers/portal.py`。合并的后果是**前者治理干净了也进不了
+    `FULLY_GOVERNED`**（合并后的 key 还带着后者的欠账），于是它被改回裸 dict
+    时不会单独变红，只剩总基线兜底——而总基线是可以被别处的治理抵消的。
+    这正是本文件开头说要关掉的那种"静默回退"，只是换了个入口。
+    """
+    for pkg, prefix in ((platform_routers, ""), (spd_routers, "spd/")):
         for modinfo in pkgutil.iter_modules(pkg.__path__):
             if modinfo.name.startswith("_"):
                 continue
+            name = f"{prefix}{modinfo.name}"
             module = importlib.import_module(f"{pkg.__name__}.{modinfo.name}")
             for router in (v for v in vars(module).values() if isinstance(v, APIRouter)):
                 for route in router.routes:
@@ -126,7 +136,7 @@ def _iter_endpoints():
                         continue
                     if not (route.methods - {"HEAD", "OPTIONS"}):
                         continue
-                    yield modinfo.name, route
+                    yield name, route
 
 
 def _declares_non_json_media(route) -> bool:
@@ -200,6 +210,23 @@ def test_放宽媒体类型口径没有白送任何端点():
         "新增这类端点是可以的，但必须是真的返回非 JSON 的下载/单据类接口，"
         "并在此处同步——别拿空 responses 刷低欠账。"
     )
+
+
+def test_两个包里的同名模块不被合并成一个key():
+    """`app/routers/portal.py` 与 `app/spd/routers/portal.py` 必须是两个 key。
+
+    这条是上面那个前缀的**反空转守卫**：把前缀去掉，两者合并成 `portal`，
+    平台侧 portal 就再也进不了 `FULLY_GOVERNED`（合并后的 key 带着 spd 那 26 项
+    欠账），它被改回裸 dict 时便不再单独变红。届时这条会直接转红——
+    合并后 `spd/portal` 这个 key 根本不存在。
+    """
+    _, _, per_module = _coverage()
+    assert "portal" in per_module and "spd/portal" in per_module, sorted(per_module)
+    assert per_module["portal"][1] == 0, (
+        f"平台侧 portal 出现了 {per_module['portal'][1]} 项契约欠账——它已登记为零欠账模块"
+    )
+    # spd 那份还有欠账；等它也治理完，这里改成 0 并把 "spd/portal" 加进 FULLY_GOVERNED
+    assert per_module["spd/portal"][1] > 0
 
 
 def test_响应契约欠账不许变大():

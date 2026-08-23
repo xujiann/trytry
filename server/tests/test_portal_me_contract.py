@@ -392,3 +392,17 @@ def test_家庭成员的增与删的响应形状(client, auth):
     removed = client.request("DELETE", f"/api/portal/me/family/{member_id}", headers=auth)
     assert removed.status_code == 200 and removed.json() == {"removed": True}
 
+
+# ------------------------------------------------- 顺手修：押金金额被 float 化
+def test_押金流水的整数金额不被float化(client, auth, seeded):
+    """`/me/deposits` 的契约（a911f61 引入）把 `amount`/`balance` 声明成了 float，
+    而 `Deposit.amount` 是 `Money` 列、`deposit_balance()` 也返回 int——
+    1000 元的押金因此以 `1000.0` 出账。这是与本批同一类的 Money 陷阱，就近修掉。
+
+    这条同时是回归网：改回 `float` 立刻转红。
+    """
+    body = client.get("/api/portal/me/deposits", headers=auth,
+                      params={"admission_id": seeded["adm"]}).json()
+    assert body["balance"] == 1000 and isinstance(body["balance"], int)
+    assert body["items"][0]["amount"] == 1000
+    assert isinstance(body["items"][0]["amount"], int)
