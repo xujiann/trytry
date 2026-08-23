@@ -127,6 +127,135 @@ def _at_least_one_day(expr):
 # ============================================================================
 
 
+# ---------------------------------------------------------------------------
+# 响应契约（docs/接口标准与治理.md）
+#
+# **本簇的核心判断：`round()` 与 Money 列派生的数值一律 `int | float`，不写 float。**
+# 实测证据（见 tests/test_analytics_contract.py）：同一个 `total_amount` 字段，
+# 一行返回 `1234.5`（float）、另一行返回 `100`（**int**）——`Money` 是
+# `Numeric(14,2, asdecimal=False)`，整数值读回来就是 int；`round(x, 2)` 对整数入参
+# 同样返回 int（`cssd.total_cost` 早有前例）。声明成 `float` 会把 `100` 变成 `100.0`，
+# 那是**改响应字节**，不是治理（CLAUDE.md §11）。
+# Pydantic 的智能联合对 `int | float` 原样保留输入类型，故它是这里唯一字节安全的写法。
+#
+# 比率字段（`*_pct`）例外：它们的两条分支都走浮点（分母为 0 时返回字面量 `0.0`），
+# 实测恒为 float，故照实声明 float。
+# ---------------------------------------------------------------------------
+
+
+class OutboundVisitOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    visit_date: str
+    external_org_name: str
+    external_org_level: str
+    visit_type: str
+    diagnosis_name: str
+    #: Money 列：整数金额读回来是 int，见本段顶部注释
+    total_amount: int | float
+    insurance_pay: int | float
+    referral_id: int | None
+    referred: bool
+    source: str
+
+
+class PatientFlowOut(BaseModel):
+    inside_visits: int
+    outside_visits: int
+    total_visits: int
+    county_visit_rate_pct: float
+    outbound_rate_pct: float
+    referred_outbound: int
+    ordered_referral_rate_pct: float
+    #: 键是县外机构层级的实际取值（数据决定）
+    outside_by_level: dict[str, int]
+    #: Money 求和：全为整数时是 int（空窗口实测为 `0`）
+    outside_amount: int | float
+
+
+class EfficiencyRow(BaseModel):
+    org_id: int
+    org_name: str
+    beds: int
+    discharges: int
+    occupied_bed_days: int | float
+    avg_length_of_stay: int | float
+    bed_turnover: int | float
+    bed_occupancy_rate_pct: int | float
+    visits: int
+    doctors: int
+    visits_per_doctor_per_day: int | float
+
+
+class FormulaVariableOut(BaseModel):
+    name: str
+    description: str
+
+
+class FormulaOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    expression: str
+    unit: str
+    higher_is_better: bool
+    weight: int | float
+    active: bool
+
+
+class OrgReportOut(BaseModel):
+    org_id: int
+    org_name: str
+    level: str
+    #: **多态**：正常项是 `{key,name,unit,weight,value}`；公式求值失败时
+    #: `value` 为 `None` 且**多出一个 `error` 键**。用 Pydantic 逐字段建模就得声明
+    #: `error`，那会给成功项注入 `"error": null` —— 改字节。故与
+    #: `metrics.drilldown.items` 同样处理为宽字典。
+    items: list[dict[str, Any]]
+    weighted_score: int | float
+
+
+class PerformanceReportOut(BaseModel):
+    period: str
+    formula_count: int
+    orgs: list[OrgReportOut]
+
+
+class DrugUseCaliberOut(BaseModel):
+    drug_ratio: str
+    antibiotic_intensity: str
+
+
+class DrugUseOrgOut(BaseModel):
+    org_id: int
+    org_name: str
+    inpatient_total: int | float
+    inpatient_drug: int | float
+    inpatient_drug_ratio_pct: int | float
+    outpatient_total: int | float
+    outpatient_drug: int | float
+    outpatient_drug_ratio_pct: int | float
+    antibiotic_ddds: int | float
+    bed_days: int
+    antibiotic_intensity: int | float
+    #: DDD 未维护的药品数——"明说没维护"而不是按缺省值硬算（见 models/pharmacy.py）
+    ddd_uncovered_items: int
+    intensity_unstable: bool
+
+
+class DrugUseOut(BaseModel):
+    period: str
+    caliber: DrugUseCaliberOut
+    warnings: list[str]
+    orgs: list[DrugUseOrgOut]
+
+
+class FormulaDeactivateOut(BaseModel):
+    key: str
+    active: bool
+
+
 class OutboundIn(BaseModel):
     patient_id: int
     visit_date: str = Field(min_length=10, max_length=10)
@@ -141,7 +270,10 @@ class OutboundIn(BaseModel):
 
 
 @router.post(
-    "/outbound-visits", status_code=201, dependencies=[Depends(require_roles("operator", "director"))]
+    "/outbound-visits",
+    status_code=201,
+    response_model=OutboundVisitOut,
+    dependencies=[Depends(require_roles("operator", "director"))],
 )
 def create_outbound_visit(
     body: OutboundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -184,7 +316,7 @@ def _outbound_out(db: Session, v: OutboundVisit) -> dict:
     }
 
 
-@router.get("/outbound-visits")
+@router.get("/outbound-visits", response_model=list[OutboundVisitOut])
 def list_outbound_visits(
     response: Response,
     visit_type: str | None = None,
@@ -204,7 +336,7 @@ def list_outbound_visits(
     ]
 
 
-@router.get("/patient-flow")
+@router.get("/patient-flow", response_model=PatientFlowOut)
 def patient_flow(start: str | None = None, end: str | None = None, db: Session = Depends(get_db)):
     """就医流向：县域就诊率、外转率、有序转诊率。
 
@@ -270,7 +402,7 @@ def patient_flow(start: str | None = None, end: str | None = None, db: Session =
 # ============================================================================
 
 
-@router.get("/efficiency")
+@router.get("/efficiency", response_model=list[EfficiencyRow])
 def efficiency(
     period: str,
     org_id: int | None = None,
@@ -497,7 +629,7 @@ VARIABLE_DESCRIPTIONS = {
 }
 
 
-@router.get("/formula-variables")
+@router.get("/formula-variables", response_model=list[FormulaVariableOut])
 def list_formula_variables():
     """公式可用变量清单：管理员写表达式时的字段字典。"""
     return [{"name": k, "description": v} for k, v in sorted(VARIABLE_DESCRIPTIONS.items())]
@@ -512,7 +644,10 @@ class FormulaIn(BaseModel):
     weight: float = Field(default=0, ge=0, le=100)
 
 
-@router.post("/formulas", status_code=201, dependencies=[Depends(require_admin)])
+@router.post(
+    "/formulas", status_code=201, response_model=FormulaOut,
+    dependencies=[Depends(require_admin)],
+)
 def create_formula(body: FormulaIn, db: Session = Depends(get_db)):
     """录入自定义公式。表达式在录入时就用哑值试算一遍，非法直接 422，
     不留到出报表那天才炸。"""
@@ -544,7 +679,7 @@ def _formula_out(f: PerformanceFormula) -> dict:
     }
 
 
-@router.get("/formulas")
+@router.get("/formulas", response_model=list[FormulaOut])
 def list_formulas(db: Session = Depends(get_db)):
     return [
         _formula_out(f)
@@ -552,7 +687,10 @@ def list_formulas(db: Session = Depends(get_db)):
     ]
 
 
-@router.delete("/formulas/{key}", dependencies=[Depends(require_admin)])
+@router.delete(
+    "/formulas/{key}", response_model=FormulaDeactivateOut,
+    dependencies=[Depends(require_admin)],
+)
 def deactivate_formula(key: str, db: Session = Depends(get_db)):
     """停用公式（不物理删除：历史报表还要能解释当时的口径）。"""
     formula = db.query(PerformanceFormula).filter(PerformanceFormula.key == key).first()
@@ -563,7 +701,10 @@ def deactivate_formula(key: str, db: Session = Depends(get_db)):
     return {"key": key, "active": False}
 
 
-@router.get("/performance-report", dependencies=[Depends(require_roles("director"))])
+@router.get(
+    "/performance-report", response_model=PerformanceReportOut,
+    dependencies=[Depends(require_roles("director"))],
+)
 def performance_report(period: str, db: Session = Depends(get_db)):
     """期末综合绩效报告：逐机构算出全部启用公式的取值，按加权总分排名。
 
@@ -622,7 +763,7 @@ def performance_report(period: str, db: Session = Depends(get_db)):
 # ============================================================================
 
 
-@router.get("/drug-use")
+@router.get("/drug-use", response_model=DrugUseOut)
 def drug_use(
     period: str,
     org_id: int | None = None,

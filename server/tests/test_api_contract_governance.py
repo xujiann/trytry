@@ -48,7 +48,13 @@ import app.spd.routers as spd_routers
 #   `by_level` 键由数据决定故宽键、`drilldown.items` 是八种行形状的真多态故
 #   dict[str, Any]（同响应的 `fields` 自描述，用例钉住两者相等）。
 #   46 个请求加契约前后逐字节一致，见 test_metrics_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 719
+# → 709（analytics 全模块补契约：十个端点。核心判断是 `round()` 与 Money 列派生的
+#   数值一律 `int | float` 而非 float——实测同一个 `total_amount` 字段一行返回
+#   `1234.5`、另一行返回 `100`（int）；写成 float 会把 `100` 变 `100.0`，即改字节
+#   （变异验证实测到了这一字节差）。`performance-report` 的 items 是多态的
+#   （失败项多一个 `error` 键），逐字段建模会给成功项注入 `"error": null`，
+#   同样改字节，故用宽字典。17 个请求加契约前后逐字节一致，见 test_analytics_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 709
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -68,6 +74,7 @@ FULLY_GOVERNED = {
     "printing",  # B2 全模块补契约：HTML 单据 response_model=str，模板端点建模，见 test_printing_documents.py
     "labqc",  # B2 室内质控新模块，生而全契约，见 test_labqc_westgard.py
     "metrics",  # 决策驾驶舱五端点，见 test_metrics_contract.py
+    "analytics",  # 决策指标扩展十端点，见 test_analytics_contract.py
     # 以下三个是"清单落后现实"的存量：它们早就零欠账，却一直没人登记，
     # 于是这些模块的回退一直不会单独变红。由 test_已治理模块清单不许落后现实 补上并钉住。
     "auth",
