@@ -259,3 +259,28 @@ def test_批量开通回逐行结果而不是一个成败(client, auth, seeded):
     assert set(body.json()["skipped"][0]) == {"user_id", "reason"}
     assert reasons[seeded["doc"]] == "已建档"
     assert reasons[999999] == "用户不存在"
+
+
+# ------------------------------------------------- 顺手修：绑定二维码指向 404
+def test_两个二维码编的地址都能真的打开(client, auth, seeded):
+    """村医绑定码原本编的是 `/m/doctor.html`，而那个地址**没有路由**——
+    `main.py` 只挂了 `/static`，医生端入口是显式的 `/m/doctor`。印出去的码
+    扫开是一张 404，村医绑不上账号，还看不出是码的问题。
+
+    这条不比对字符串——只比字符串的话，写错成另一个同样不存在的路径照样绿。
+    改成把 URL 里的 path 抠出来真的请求一次，能打开才算数。
+    """
+    import pathlib
+    import re
+
+    # 反面先立住：曾经被编进码里的那个地址确实是 404，别让它悄悄回来
+    assert client.get("/m/doctor.html").status_code == 404
+
+    config_dir = pathlib.Path(__file__).resolve().parents[1] / "app" / "spd" / "routers" / "config"
+    encoded = []
+    for module in ("teams.py", "scales.py"):
+        encoded += re.findall(r'base_url\)\.rstrip\(.\/.\)\}(/[^#"]*)#',
+                              (config_dir / module).read_text())
+    assert len(encoded) == 2, f"没能从源码里抠出两个二维码路径，用例失效了：{encoded}"
+    for path in encoded:
+        assert client.get(path).status_code == 200, f"二维码编的 {path} 打不开"

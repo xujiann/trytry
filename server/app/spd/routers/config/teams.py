@@ -417,11 +417,17 @@ def village_doctor_qr(vd_id: int, request: Request, db: Session = Depends(get_db
     """村医绑定二维码：扫码进入医生移动端并带上绑定令牌（村医赋能端 #1）。
 
     停用的村医不出码——码是入口，入口先于账号被回收。
+
+    路径是 `/m/doctor`，**不是** `/m/doctor.html`。后者曾经写在这里，但那个
+    地址根本没有路由：`main.py` 只挂了 `/static`，`/m/doctor` 是一条显式的
+    FileResponse 路由，`/m/doctor.html` 一路 404。也就是说印出去的绑定码扫开
+    是一张 404 —— 村医绑不上账号，还看不出是码的问题。量表那个码用的是
+    `/m/`（有路由），所以只有这一处中招。
     """
     record = db.get(SpdVillageDoctor, vd_id)
     if record is None:
         raise HTTPException(status_code=404, detail="村医档案不存在")
     if not record.active or not record.bind_token:
         raise HTTPException(status_code=409, detail="村医已停用或没有绑定令牌")
-    url = f"{str(request.base_url).rstrip('/')}/m/doctor.html#bind={record.bind_token}"
+    url = f"{str(request.base_url).rstrip('/')}/m/doctor#bind={record.bind_token}"
     return SvgResponse(content=_qr_svg(url))
