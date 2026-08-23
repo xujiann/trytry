@@ -106,7 +106,17 @@ import app.spd.routers as spd_routers
 #   类型那次不同，那次是 0 个），故 614 = 619 - 5；由
 #   test_204口径没有白送别的端点 钉住清单。38 个请求逐字节一致，五处变异转红，
 #   见 test_spd_config_paths_devices_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 614
+# → 588（第三批：scales 15 + teams 12，`spd/config` 58 个端点清零、进
+#   FULLY_GOVERNED。四处判断：服务包 `price` 是 Money（Numeric）列，整数价
+#   声明成 float 就把「200 元」变「200.0 元」；标签**新建与列表不同形**
+#   （列表没有 active，它本身已按 active 过滤），两个模型不能合并；`_team_out`
+#   出三种形状用 exclude_unset，且 member_count 声明在 members 之前；两个二维码
+#   端点改用 `_base.SvgResponse`（与 reports.CsvResponse 同一写法，声明与实际
+#   返回是同一个类）。41 个请求逐字节一致，五处变异各自转红——SVG 的字节数
+#   随 token_urlsafe 每次都变，做过对照实验（同一份代码跑两次一样变），
+#   比对时按令牌归一化，令牌写死的那个二维码前后完全一致。
+#   见 test_spd_config_scales_teams_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 588
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -133,6 +143,9 @@ FULLY_GOVERNED = {
     # docstring）——不分开的话，其中一方的回退不会单独变红。
     "portal",  # 见 test_portal_auth_contract.py、test_portal_me_contract.py
     "spd/portal",  # 见 test_spd_portal_contract.py
+    # 配置域：包，58 个端点分 6 个子模块，分三批做完（catalog+centers /
+    # paths+devices / scales+teams），见 test_spd_config_*_contract.py
+    "spd/config",
     # 以下三个是"清单落后现实"的存量：它们早就零欠账，却一直没人登记，
     # 于是这些模块的回退一直不会单独变红。由 test_已治理模块清单不许落后现实 补上并钉住。
     "auth",
@@ -255,6 +268,9 @@ def test_放宽媒体类型口径没有白送任何端点():
     assert by_media == [
         "reports GET /api/reports/monitoring/export",
         "reports GET /api/reports/operations/export",
+        # 两个二维码：`_base.SvgResponse` 同时是 response_class 与实际返回的类
+        "spd/config GET /api/spd/scales/{scale_id}/qr.svg",
+        "spd/config GET /api/spd/village-doctors/{vd_id}/qr.svg",
     ], (
         f"靠媒体类型算作已治理的端点清单变了：{by_media}。"
         "新增这类端点是可以的，但必须是真的返回非 JSON 的下载/单据类接口，"

@@ -22,7 +22,96 @@ from ...models import (
     SpdVillageDoctor,
 )
 from ....visibility import assert_org_writable
-from ._base import CONFIG_ROLES, _qr_svg, router
+from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
+
+
+# ============================================================ 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class TeamMemberOut(BaseModel):
+    id: int
+    user_id: int
+    user_name: str
+    member_role: str
+    program_codes: list[str]
+    stage_scope: str
+    patient_scope: str
+    can_view: bool
+    can_followup: bool
+    can_referral: bool
+    can_audit: bool
+    can_assess: bool
+    active: bool
+
+
+class TeamOut(BaseModel):
+    """服务团队。`_team_out` 出三种形状：改团队只有基础字段、列表与新建多
+    `member_count`、详情再多 `members`。故 `response_model_exclude_unset=True`，
+    且 `member_count` 声明在 `members` 之前——`_team_out` 先塞 member_count，
+    `get_team` 再追加 members，序列化按声明顺序走，顺序不同即改字节。"""
+
+    id: int
+    name: str
+    org_id: int
+    level: str
+    program_codes: list[str]
+    # 未指定组长时为 null
+    leader_user_id: int | None
+    dept: str
+    service_area: str
+    data_scope: str
+    active: bool
+    member_count: int | None = None
+    members: list[TeamMemberOut] | None = None
+
+
+class TeamMemberAddedOut(BaseModel):
+    id: int
+    team_id: int
+    user_id: int
+    member_role: str
+
+
+class TeamMemberUpdatedOut(BaseModel):
+    """改成员只回三个键——与新增的四个键**不是同一组**（没有 team_id/user_id，
+    多了 active），所以是两个模型，不能合并。"""
+
+    id: int
+    member_role: str
+    active: bool
+
+
+class VillageDoctorOut(BaseModel):
+    id: int
+    user_id: int
+    # 单条新建/改档时 handler 不查用户名，回空串（列表才带名字）
+    user_name: str
+    org_id: int
+    township: str
+    village: str
+    license_no: str
+    license_valid_to: str
+    phone: str
+    bind_token: str
+    active: bool
+
+
+class VillageDoctorSkippedOut(BaseModel):
+    user_id: int
+    reason: str
+
+
+class VillageDoctorBatchOut(BaseModel):
+    """批量开通的逐行结果：成功计数 + 逐条跳过原因。
+
+    不是"成功/失败"两个字——一条重复就整批回滚的话，导入方只知道失败了，
+    还得自己二分查是哪一行（见 batch_village_doctors 的 docstring）。
+    """
+
+    created: int
+    skipped: list[VillageDoctorSkippedOut]
 
 
 # ============================================================ 服务团队
@@ -67,7 +156,8 @@ def _team_out(t: SpdTeam, members: int | None = None) -> dict:
     return out
 
 
-@router.post("/teams", status_code=201, dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/teams", response_model=TeamOut, response_model_exclude_unset=True,
+             status_code=201, dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_team(
     body: TeamIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -80,7 +170,7 @@ def create_team(
     return _team_out(team, 0)
 
 
-@router.get("/teams")
+@router.get("/teams", response_model=list[TeamOut], response_model_exclude_unset=True)
 def list_teams(
     response: Response,
     org_id: int | None = None,
@@ -106,7 +196,8 @@ def list_teams(
     return [_team_out(t, counts.get(t.id, 0)) for t in rows]
 
 
-@router.get("/teams/{team_id}")
+@router.get("/teams/{team_id}", response_model=TeamOut,
+            response_model_exclude_unset=True)
 def get_team(team_id: int, db: Session = Depends(get_db)):
     team = db.get(SpdTeam, team_id)
     if team is None:
@@ -131,7 +222,9 @@ def get_team(team_id: int, db: Session = Depends(get_db)):
     return out
 
 
-@router.patch("/teams/{team_id}", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.patch("/teams/{team_id}", response_model=TeamOut,
+              response_model_exclude_unset=True,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_team(
     team_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -147,8 +240,8 @@ def update_team(
     return _team_out(team)
 
 
-@router.post("/teams/{team_id}/members", status_code=201,
-             dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/teams/{team_id}/members", response_model=TeamMemberAddedOut,
+             status_code=201, dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def add_team_member(
     team_id: int,
     body: MemberIn,
@@ -172,7 +265,8 @@ def add_team_member(
             "member_role": member.member_role}
 
 
-@router.patch("/team-members/{member_id}", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.patch("/team-members/{member_id}", response_model=TeamMemberUpdatedOut,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)):
     member = db.get(SpdTeamMember, member_id)
     if member is None:
@@ -222,7 +316,7 @@ def _vd_out(v: SpdVillageDoctor, name: str = "") -> dict:
     }
 
 
-@router.post("/village-doctors", status_code=201,
+@router.post("/village-doctors", response_model=VillageDoctorOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_village_doctor(
     body: VillageDoctorIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -240,7 +334,8 @@ def create_village_doctor(
     return _vd_out(record)
 
 
-@router.post("/village-doctors/batch", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/village-doctors/batch", response_model=VillageDoctorBatchOut,
+             dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def batch_village_doctors(
     body: VillageDoctorBatchIn,
     db: Session = Depends(get_db),
@@ -275,7 +370,7 @@ def batch_village_doctors(
     return {"created": len(created), "skipped": skipped}
 
 
-@router.get("/village-doctors")
+@router.get("/village-doctors", response_model=list[VillageDoctorOut])
 def list_village_doctors(
     response: Response,
     org_id: int | None = None,
@@ -300,7 +395,8 @@ def list_village_doctors(
     return [_vd_out(v, names.get(v.user_id, "")) for v in rows]
 
 
-@router.patch("/village-doctors/{vd_id}", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.patch("/village-doctors/{vd_id}", response_model=VillageDoctorOut,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_village_doctor(
     vd_id: int, body: dict, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -316,7 +412,7 @@ def update_village_doctor(
     return _vd_out(record)
 
 
-@router.get("/village-doctors/{vd_id}/qr.svg")
+@router.get("/village-doctors/{vd_id}/qr.svg", response_class=SvgResponse)
 def village_doctor_qr(vd_id: int, request: Request, db: Session = Depends(get_db)):
     """村医绑定二维码：扫码进入医生移动端并带上绑定令牌（村医赋能端 #1）。
 
@@ -328,4 +424,4 @@ def village_doctor_qr(vd_id: int, request: Request, db: Session = Depends(get_db
     if not record.active or not record.bind_token:
         raise HTTPException(status_code=409, detail="村医已停用或没有绑定令牌")
     url = f"{str(request.base_url).rstrip('/')}/m/doctor.html#bind={record.bind_token}"
-    return Response(content=_qr_svg(url), media_type="image/svg+xml")
+    return SvgResponse(content=_qr_svg(url))
