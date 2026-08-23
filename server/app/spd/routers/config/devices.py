@@ -24,6 +24,69 @@ from ....visibility import assert_org_writable
 from ._base import router
 
 
+# ============================================================ 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class DeviceOut(BaseModel):
+    id: int
+    sn: str
+    device_type: str
+    model: str
+    # 未指定归属机构 / 未绑定患者时为 null
+    org_id: int | None
+    bound_patient_id: int | None
+    status: str
+    # 从未同步过时是空串（handler 已把 None 折成 ""），不是 null
+    last_sync_at: str
+
+
+class DataSourceOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    source_type: str
+    org_id: int | None
+    endpoint: str
+    freq_minutes: int
+    scope: str
+    active: bool
+    status: str
+    last_sync_at: str
+    last_rows: int
+    last_latency_ms: int
+    # Float 列 + round(..., 2)：100 分也是 100.0，声明 float 即原样
+    success_rate: float
+
+
+class SyncRecordedOut(BaseModel):
+    """登记同步结果后连带回最新的数据源快照——前端不必再拉一次列表。"""
+
+    id: int
+    source: DataSourceOut
+
+
+class SyncLogOut(BaseModel):
+    id: int
+    started_at: str
+    rows: int
+    latency_ms: int
+    success: bool
+    message: str
+
+
+class DataSourceMonitorOut(BaseModel):
+    """接入总览。`by_status` 的键是数据源状态（running/delayed/failed…），
+    只出现在**实际存在**的状态上，故是 dict 而非固定字段——没有 failed 的时候
+    不该硬塞一个 `"failed": 0`。"""
+
+    total: int
+    by_status: dict[str, int]
+    stale_over_24h: list[DataSourceOut]
+    avg_success_rate: float
+
+
 # ============================================================ 设备
 
 
@@ -42,7 +105,7 @@ def _device_out(d: SpdDevice) -> dict:
     }
 
 
-@router.post("/devices", status_code=201,
+@router.post("/devices", response_model=DeviceOut, status_code=201,
              dependencies=[Depends(require_roles("director", "operator"))])
 def create_device(
     body: DeviceIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -58,7 +121,7 @@ def create_device(
     return _device_out(device)
 
 
-@router.get("/devices")
+@router.get("/devices", response_model=list[DeviceOut])
 def list_devices(
     response: Response,
     device_type: str | None = None,
@@ -83,7 +146,7 @@ class DeviceBindIn(BaseModel):
     patient_id: int | None = None
 
 
-@router.post("/devices/{device_id}/bind",
+@router.post("/devices/{device_id}/bind", response_model=DeviceOut,
              dependencies=[Depends(require_roles("director", "doctor", "operator"))])
 def bind_device(
     device_id: int,
@@ -127,7 +190,8 @@ def _source_out(s: SpdDataSource) -> dict:
     }
 
 
-@router.post("/data-sources", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/data-sources", response_model=DataSourceOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_data_source(body: DataSourceIn, db: Session = Depends(get_db)):
     source = SpdDataSource(**body.model_dump())
     db.add(source)
@@ -139,7 +203,7 @@ def create_data_source(body: DataSourceIn, db: Session = Depends(get_db)):
     return _source_out(source)
 
 
-@router.get("/data-sources")
+@router.get("/data-sources", response_model=list[DataSourceOut])
 def list_data_sources(source_type: str | None = None, db: Session = Depends(get_db)):
     query = db.query(SpdDataSource)
     if source_type:
@@ -147,7 +211,8 @@ def list_data_sources(source_type: str | None = None, db: Session = Depends(get_
     return [_source_out(s) for s in query.order_by(SpdDataSource.id).limit(200).all()]
 
 
-@router.patch("/data-sources/{source_id}", dependencies=[Depends(require_admin)])
+@router.patch("/data-sources/{source_id}", response_model=DataSourceOut,
+              dependencies=[Depends(require_admin)])
 def update_data_source(
     source_id: int, body: dict, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -170,7 +235,8 @@ class SyncLogIn(BaseModel):
     message: str = Field(default="", max_length=256)
 
 
-@router.post("/data-sources/{source_id}/sync-logs", status_code=201,
+@router.post("/data-sources/{source_id}/sync-logs", response_model=SyncRecordedOut,
+             status_code=201,
              dependencies=[Depends(require_roles("director", "operator"))])
 def record_sync(
     source_id: int, body: SyncLogIn, db: Session = Depends(get_db),
@@ -210,7 +276,7 @@ def record_sync(
     return {"id": log.id, "source": _source_out(source)}
 
 
-@router.get("/data-sources/{source_id}/sync-logs")
+@router.get("/data-sources/{source_id}/sync-logs", response_model=list[SyncLogOut])
 def list_sync_logs(source_id: int, response: Response, offset: int = 0, limit: int = 50,
                    db: Session = Depends(get_db)):
     query = db.query(SpdSyncLog).filter(SpdSyncLog.source_id == source_id)
@@ -222,7 +288,7 @@ def list_sync_logs(source_id: int, response: Response, offset: int = 0, limit: i
     ]
 
 
-@router.get("/data-sources-monitor")
+@router.get("/data-sources-monitor", response_model=DataSourceMonitorOut)
 def data_source_monitor(db: Session = Depends(get_db)):
     """接入总览：按状态汇总 + 24 小时内未同步的数据源清单。"""
     sources = db.query(SpdDataSource).filter(SpdDataSource.active.is_(True)).all()

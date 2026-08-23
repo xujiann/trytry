@@ -98,7 +98,15 @@ import app.spd.routers as spd_routers
 #   的转诊详情正相反，那个不是超集，继承就错了）；`target_low`/`target_high` 是可空
 #   Float（定性目标没有上下限）；`org-tree` 是**自引用递归**模型（树深由数据决定）。
 #   23 个请求逐字节一致，五处变异各自转红，见 test_spd_config_catalog_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 635
+# → 614（第二批：paths 7 + devices 9，外加**判据第二次放宽**——204 无响应体也算
+#   声明了契约。`_template_out` 出三种形状（列表只带 node_count、详情/新建带
+#   nodes+node_count、复制/改状态两个都不带），用 exclude_unset，且 nodes 必须
+#   声明在 node_count 之前（序列化按声明顺序走）。`success_rate` 是 Float 列 +
+#   round(...,2)，满分也是 100.0。204 那条**确实白送了 5 个端点**（与放宽媒体
+#   类型那次不同，那次是 0 个），故 614 = 619 - 5；由
+#   test_204口径没有白送别的端点 钉住清单。38 个请求逐字节一致，五处变异转红，
+#   见 test_spd_config_paths_devices_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 614
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -190,9 +198,32 @@ def _declares_non_json_media(route) -> bool:
     return False
 
 
+def _declares_empty_body(route) -> bool:
+    """端点是否声明了**没有响应体**（HTTP 204）。
+
+    与 CSV 下载同一个道理：204 按定义就没有 body，`response_model` 对它没有意义
+    ——函数直接返回 `Response(status_code=204)`，FastAPI 也不会走模型。把这类
+    端点永远算作欠账，等于往棘轮里掺进第二笔**永远还不掉的账**。
+
+    「204」本身就是写进 OpenAPI 的契约声明（"这个接口成功时不返回内容"），
+    不是豁免。判据同样从路由对象推导，不是手工清单。
+
+    放宽这一条**确实白送了 5 个端点**（3 个 spd/config + spd/followup 与
+    spd/population 各 1 个，都是删除接口，写这条时它们都没有 response_model）
+    ——这与放宽媒体类型那次不同，那次是 0 个。数字因此一次性降 5，
+    但降掉的是本来就还不掉的账。`test_204口径没有白送别的端点` 钉住这份清单，
+    往后谁想靠改 status_code 刷低欠账，那条会变红。
+    """
+    return route.status_code == 204
+
+
 def _has_contract(route) -> bool:
-    """声明了响应契约：Pydantic 模型，或显式的非 JSON 媒体类型。"""
-    return route.response_model is not None or _declares_non_json_media(route)
+    """声明了响应契约：Pydantic 模型、显式的非 JSON 媒体类型，或 204 无响应体。"""
+    return (
+        route.response_model is not None
+        or _declares_non_json_media(route)
+        or _declares_empty_body(route)
+    )
 
 
 def _coverage():
@@ -228,6 +259,30 @@ def test_放宽媒体类型口径没有白送任何端点():
         f"靠媒体类型算作已治理的端点清单变了：{by_media}。"
         "新增这类端点是可以的，但必须是真的返回非 JSON 的下载/单据类接口，"
         "并在此处同步——别拿空 responses 刷低欠账。"
+    )
+
+
+def test_204口径没有白送别的端点():
+    """靠 204 脱账的端点必须是**真的不返回内容**的删除类接口，且清单是这几个。
+
+    与媒体类型那条同样的用途：口径本身不能变成漏洞。给一个原本返回 JSON 的
+    端点改成 `status_code=204` 会改响应字节（body 直接没了），不可能"顺手"发生；
+    真发生了，这里的清单会变长，当场看得见。
+    """
+    by_204 = sorted(
+        f"{mod} {sorted(route.methods - {'HEAD', 'OPTIONS'})[0]} {route.path}"
+        for mod, route in _iter_endpoints()
+        if route.response_model is None and _declares_empty_body(route)
+    )
+    assert by_204 == [
+        "spd/config DELETE /api/spd/path-nodes/{node_id}",
+        "spd/config DELETE /api/spd/path-templates/{template_id}",
+        "spd/config DELETE /api/spd/team-members/{member_id}",
+        "spd/followup DELETE /api/spd/report-tasks/{task_id}",
+        "spd/population DELETE /api/spd/groups/{group_id}/members/{patient_id}",
+    ], (
+        f"靠 204 算作已治理的端点清单变了：{by_204}。"
+        "新增这类端点是可以的，但必须真的是无响应体的删除接口，并在此处同步。"
     )
 
 
