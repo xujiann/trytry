@@ -7,6 +7,7 @@
 包括为家人代管的那份。
 """
 from datetime import date, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -67,7 +68,68 @@ def _program_names(db: Session, codes: list[str]) -> dict[str, str]:
 # ============================================================ 首页与档案
 
 
-@router.get("/home")
+class SpdPatientBriefOut(BaseModel):
+    id: int
+    name: str
+    gender: str
+    birth_date: str
+
+
+class SpdHomeProgramOut(BaseModel):
+    program_code: str
+    program_name: str
+    stage: str
+    risk_level: str
+    # 尚未分派团队/主管医生时为 null（外键可空），照实建模
+    team_id: int | None
+    team_name: str
+    doctor_user_id: int | None
+    next_followup_at: str
+
+
+class SpdLatestMetricOut(BaseModel):
+    value: float
+    unit: str
+    level: str
+    measured_at: str
+
+
+class SpdHomeTodoOut(BaseModel):
+    followups: int
+    tasks: int
+    revisits: int
+    interventions: int
+    unread_edu: int
+
+
+class SpdHomePackageOut(BaseModel):
+    binding_id: int
+    name: str
+    program_code: str
+    total: int
+    used: int
+    # 恒为 float：`used / total * 100` 走真除法，无服务项时字面量 0.0
+    progress: float
+    period_end: str
+
+
+class SpdHomeOut(BaseModel):
+    """居民首页。
+
+    `latest_metrics` 的键是**指标名**，且只有测过的指标才在里面——固定字段
+    的模型会给没测过的指标注入 `null`，故用 dict。取值范围是代码里的五项
+    （bp_sys/bp_dia/glucose_fasting/bmi/spo2），不是任意键。
+    """
+
+    patient: SpdPatientBriefOut
+    programs: list[SpdHomeProgramOut]
+    latest_metrics: dict[str, SpdLatestMetricOut]
+    todo: SpdHomeTodoOut
+    packages: list[SpdHomePackageOut]
+    enrolled: bool
+
+
+@router.get("/home", response_model=SpdHomeOut)
 def home(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -161,7 +223,41 @@ def home(
     }
 
 
-@router.get("/archive")
+class SpdArchivePatientOut(SpdPatientBriefOut):
+    phone: str
+    ehc_no: str
+
+
+class SpdArchiveProfileOut(BaseModel):
+    program_code: str
+    program_name: str
+    status: str
+    stage: str
+    risk_level: str
+    # 四个都是 JSON 列，内容由业务配置决定，宽类型如实反映
+    habits: dict[str, Any]
+    risk_factors: list[Any]
+    complications: list[Any]
+    tags: list[Any]
+
+
+class SpdTimelineItemOut(BaseModel):
+    """时间轴条目。就诊与随访两个来源**同形**（合并后还要一起排序），
+    故只建一个模型——两种 kind 的键集合必须一致，否则排序键都对不齐。"""
+
+    kind: str
+    at: str
+    title: str
+    detail: str
+
+
+class SpdArchiveOut(BaseModel):
+    patient: SpdArchivePatientOut
+    profiles: list[SpdArchiveProfileOut]
+    timeline: list[SpdTimelineItemOut]
+
+
+@router.get("/archive", response_model=SpdArchiveOut)
 def archive(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -229,7 +325,13 @@ class SelfMeasureIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.post("/measurements", status_code=201)
+class SpdMeasurementCreatedOut(BaseModel):
+    id: int
+    level: str
+    measured_at: str
+
+
+@router.post("/measurements", response_model=SpdMeasurementCreatedOut, status_code=201)
 def add_measurement(
     body: SelfMeasureIn,
     account: ResidentAccount = Depends(current_resident),
@@ -259,7 +361,19 @@ def add_measurement(
     return {"id": record.id, "level": level, "measured_at": record.measured_at.isoformat()}
 
 
-@router.get("/measurements")
+class SpdMeasurementOut(BaseModel):
+    id: int
+    metric: str
+    # Float 列：整数读回来也是 float（140 → 140.0），与 Money 列的陷阱相反，
+    # 这里声明 float 才是原样
+    value: float
+    unit: str
+    level: str
+    source: str
+    measured_at: str
+
+
+@router.get("/measurements", response_model=list[SpdMeasurementOut])
 def list_measurements(
     response: Response,
     metric: str = "",
@@ -289,7 +403,18 @@ def list_measurements(
 # ============================================================ 风险自查与服务申请
 
 
-@router.get("/scales")
+class SpdScaleOut(BaseModel):
+    """量表。`items` 是题目数组（key/type/options 由 rules.score_scale 消费），
+    题目字段随题型而变，故用宽字典——但元素必须是对象，否则评分函数本身会炸。"""
+
+    id: int
+    code: str
+    name: str
+    program_code: str
+    items: list[dict[str, Any]]
+
+
+@router.get("/scales", response_model=list[SpdScaleOut])
 def list_screen_scales(program_code: str = "", db: Session = Depends(get_db)):
     """可自查的筛查量表清单（#11/#13）。只暴露已发布的筛查类量表。"""
     query = db.query(SpdScale).filter(
@@ -304,7 +429,15 @@ def list_screen_scales(program_code: str = "", db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/scales/by-token/{qr_token}")
+class SpdScaleByTokenOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    items: list[dict[str, Any]]
+
+
+@router.get("/scales/by-token/{qr_token}", response_model=SpdScaleByTokenOut)
 def scale_by_token(qr_token: str, db: Session = Depends(get_db)):
     """扫码进入评估问卷（#5）。令牌无效一律 404，不透露量表是否存在。"""
     scale = (
@@ -326,7 +459,39 @@ class SelfScreenIn(BaseModel):
     draft: bool = False
 
 
-@router.post("/screenings", status_code=201)
+class SpdScreeningOut(BaseModel):
+    """自查结果。这个端点有**三种形状**，全靠条件键区分：
+
+    1. 草稿 + 有量表 → `draft/score/risk_level/advice/answered/total_items`
+       （后两个来自 `score_scale`，答了几题、共几题）；
+    2. 草稿 + 无量表 → `draft/score/risk_level/advice`（无量表时是固定兜底值，
+       没有 answered/total_items 可言）；
+    3. 落库 → `id/score/risk_level/result/advice/can_apply`。
+
+    逐字段建模会把三种形状的字段互相注入 `null`（草稿响应里冒出 `"id": null`、
+    落库响应里冒出 `"answered": null`），故带 `response_model_exclude_unset=True`。
+
+    `score` 是 `int | float` 而不是 float：有量表时是 `round(total, 2)`（float），
+    无量表时是字面量 `0`（int）。声明成 float 会把兜底分从 `0` 变成 `0.0`。
+
+    字段顺序必须与 handler 的出键顺序一致（`result` 在 `advice` 之前）——
+    序列化按模型声明顺序走，顺序不同即改字节。写这个模型时就排错过一次，
+    逐字节比对当场抓到。
+    """
+
+    draft: bool | None = None
+    id: int | None = None
+    score: int | float | None = None
+    risk_level: str | None = None
+    result: str | None = None
+    advice: str | None = None
+    answered: int | None = None
+    total_items: int | None = None
+    can_apply: bool | None = None
+
+
+@router.post("/screenings", response_model=SpdScreeningOut,
+             response_model_exclude_unset=True, status_code=201)
 def self_screening(
     body: SelfScreenIn,
     account: ResidentAccount = Depends(current_resident),
@@ -381,7 +546,12 @@ class ApplyIn(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
-@router.post("/service-applies", status_code=201)
+class SpdServiceApplyCreatedOut(BaseModel):
+    id: int
+    status: str
+
+
+@router.post("/service-applies", response_model=SpdServiceApplyCreatedOut, status_code=201)
 def apply_service(
     body: ApplyIn,
     account: ResidentAccount = Depends(current_resident),
@@ -409,7 +579,16 @@ def apply_service(
     return {"id": apply.id, "status": apply.status}
 
 
-@router.get("/service-applies")
+class SpdServiceApplyOut(BaseModel):
+    id: int
+    program_code: str
+    status: str
+    note: str
+    handle_note: str
+    created_at: str
+
+
+@router.get("/service-applies", response_model=list[SpdServiceApplyOut])
 def my_applies(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -434,7 +613,45 @@ def my_applies(
 # ============================================================ 全流程进度与任务
 
 
-@router.get("/journey")
+class SpdJourneyPathOut(BaseModel):
+    id: int
+    template_code: str
+    current_node_key: str
+    progress: int
+    status: str
+
+
+class SpdJourneyTaskOut(BaseModel):
+    id: int
+    title: str
+    task_type: str
+    status: str
+    due_date: str
+
+
+class SpdJourneyReferralOut(BaseModel):
+    id: int
+    direction: str
+    status: str
+    created_at: str
+
+
+class SpdJourneyProgramOut(BaseModel):
+    program_code: str
+    program_name: str
+    stage: str
+    risk_level: str
+    status: str
+    paths: list[SpdJourneyPathOut]
+    tasks: list[SpdJourneyTaskOut]
+    referrals: list[SpdJourneyReferralOut]
+
+
+class SpdJourneyOut(BaseModel):
+    programs: list[SpdJourneyProgramOut]
+
+
+@router.get("/journey", response_model=SpdJourneyOut)
 def journey(
     program_code: str = "",
     patient_id: int | None = None,
@@ -504,7 +721,25 @@ class TaskSubmitIn(BaseModel):
     evidence: list[int | str] = Field(default_factory=list)
 
 
-@router.get("/tasks")
+class SpdTaskOut(BaseModel):
+    id: int
+    title: str
+    task_type: str
+    status: str
+    due_date: str
+    form_code: str
+    require_evidence: bool
+    # 任务填报结果：字段由 form_code 指定的表单决定，故宽字典
+    result: dict[str, Any]
+    review_note: str
+
+
+class SpdTaskStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+@router.get("/tasks", response_model=list[SpdTaskOut])
 def my_tasks(
     patient_id: int | None = None,
     status: str = "",
@@ -526,7 +761,7 @@ def my_tasks(
     ]
 
 
-@router.post("/tasks/{task_id}/submit")
+@router.post("/tasks/{task_id}/submit", response_model=SpdTaskStatusOut)
 def submit_task(
     task_id: int,
     body: TaskSubmitIn,
@@ -560,7 +795,14 @@ def submit_task(
 # ============================================================ 随访 / 干预 / 宣教 / 复诊
 
 
-@router.post("/tasks/{task_id}/attachments", status_code=201)
+class SpdTaskAttachmentOut(BaseModel):
+    attachment_id: int
+    filename: str
+    size: int
+
+
+@router.post("/tasks/{task_id}/attachments", response_model=SpdTaskAttachmentOut,
+             status_code=201)
 async def upload_task_evidence(
     task_id: int,
     file: UploadFile = File(...),
@@ -592,7 +834,19 @@ async def upload_task_evidence(
             "size": attachment.size}
 
 
-@router.get("/followups")
+class SpdFollowupOut(BaseModel):
+    id: int
+    scene: str
+    planned_at: str
+    # 未执行时为空串（不是 null）
+    executed_at: str
+    channel: str
+    status: str
+    result: str
+    abnormal_level: str
+
+
+@router.get("/followups", response_model=list[SpdFollowupOut])
 def my_followups(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -620,7 +874,14 @@ class SelfFollowupIn(BaseModel):
     answers: dict = Field(default_factory=dict)
 
 
-@router.post("/followups/{record_id}/self-answer")
+class SpdSelfAnswerOut(BaseModel):
+    id: int
+    abnormal_level: str
+    # 无问卷或无异常规则命中时为空串
+    action: str
+
+
+@router.post("/followups/{record_id}/self-answer", response_model=SpdSelfAnswerOut)
 def self_answer_followup(
     record_id: int,
     body: SelfFollowupIn,
@@ -666,7 +927,20 @@ def self_answer_followup(
     return {"id": record.id, "abnormal_level": record.abnormal_level, "action": action}
 
 
-@router.get("/interventions")
+class SpdInterventionOut(BaseModel):
+    id: int
+    goal: str
+    content: str
+    measures: str
+    frequency: str
+    next_at: str
+    status: str
+    feedback: str
+    read: bool
+    created_at: str
+
+
+@router.get("/interventions", response_model=list[SpdInterventionOut])
 def my_interventions(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -696,7 +970,14 @@ class FeedbackIn(BaseModel):
     done: bool = False
 
 
-@router.post("/interventions/{intervention_id}/feedback")
+class SpdInterventionFeedbackOut(BaseModel):
+    id: int
+    status: str
+    read: bool
+
+
+@router.post("/interventions/{intervention_id}/feedback",
+             response_model=SpdInterventionFeedbackOut)
 def feedback_intervention(
     intervention_id: int,
     body: FeedbackIn,
@@ -717,7 +998,21 @@ def feedback_intervention(
     return {"id": record.id, "status": record.status, "read": True}
 
 
-@router.get("/edu")
+class SpdEduPushOut(BaseModel):
+    """宣教推送。素材被删时四个素材字段回落为空串（不是 null）——
+    推送记录还在，只是内容找不回来了。"""
+
+    id: int
+    material_id: int
+    title: str
+    media_type: str
+    content: str
+    media_url: str
+    status: str
+    created_at: str
+
+
+@router.get("/edu", response_model=list[SpdEduPushOut])
 def my_education(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -747,7 +1042,12 @@ def my_education(
     ]
 
 
-@router.post("/edu/{push_id}/read")
+class SpdEduReadOut(BaseModel):
+    id: int
+    status: str
+
+
+@router.post("/edu/{push_id}/read", response_model=SpdEduReadOut)
 def read_education(
     push_id: int,
     patient_id: int | None = None,
@@ -764,7 +1064,17 @@ def read_education(
     return {"id": push.id, "status": push.status}
 
 
-@router.get("/revisits")
+class SpdRevisitOut(BaseModel):
+    id: int
+    plan_date: str
+    dept: str
+    # items 是 String 列（顿号分隔的复诊项目文本），不是 JSON 数组
+    items: str
+    status: str
+    actual_date: str
+
+
+@router.get("/revisits", response_model=list[SpdRevisitOut])
 def my_revisits(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -785,7 +1095,17 @@ def my_revisits(
     ]
 
 
-@router.get("/assessments")
+class SpdAssessmentOut(BaseModel):
+    id: int
+    scale_code: str
+    # Float 列：整数分读回来是 2.0
+    score: float
+    risk_level: str
+    advice: str
+    created_at: str
+
+
+@router.get("/assessments", response_model=list[SpdAssessmentOut])
 def my_assessments(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -810,7 +1130,18 @@ def my_assessments(
 # ============================================================ 转诊与咨询
 
 
-@router.get("/referrals")
+class SpdReferralOut(BaseModel):
+    id: int
+    direction: str
+    status: str
+    current_level: str
+    reason: str
+    # 触发证据由触发规则决定字段（血压值、化验项…），故宽字典
+    trigger_evidence: dict[str, Any]
+    created_at: str
+
+
+@router.get("/referrals", response_model=list[SpdReferralOut])
 def my_referrals(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -834,7 +1165,29 @@ def my_referrals(
     ]
 
 
-@router.get("/referrals/{case_id}")
+class SpdReferralStepOut(BaseModel):
+    step: str
+    action: str
+    opinion: str
+    created_at: str
+
+
+class SpdReferralDetailOut(BaseModel):
+    """转诊详情。**不继承** `SpdReferralOut`——列表有 `created_at` 而详情没有，
+    继承会凭空要求一个详情不返回的字段（写这行时就是这么错的，被响应校验当场拦下）。
+    字段顺序也与 handler 一致：序列化按模型声明顺序走，顺序不同即改字节。"""
+
+    id: int
+    direction: str
+    status: str
+    current_level: str
+    reason: str
+    trigger_evidence: dict[str, Any]
+    materials: list[Any]
+    steps: list[SpdReferralStepOut]
+
+
+@router.get("/referrals/{case_id}", response_model=SpdReferralDetailOut)
 def my_referral_detail(
     case_id: int,
     patient_id: int | None = None,
@@ -870,7 +1223,12 @@ class ConsultIn(BaseModel):
     content: str = Field(min_length=1, max_length=2048)
 
 
-@router.post("/consults", status_code=201)
+class SpdConsultStartedOut(BaseModel):
+    consult_id: int
+    status: str
+
+
+@router.post("/consults", response_model=SpdConsultStartedOut, status_code=201)
 def start_consult(
     body: ConsultIn,
     account: ResidentAccount = Depends(current_resident),
@@ -912,7 +1270,16 @@ def start_consult(
     return {"consult_id": consult.id, "status": consult.status}
 
 
-@router.get("/consults")
+class SpdConsultOut(BaseModel):
+    id: int
+    program_code: str
+    # 未纳管（查不到 enrollment）时无主管医生，为 null
+    doctor_id: int | None
+    status: str
+    created_at: str
+
+
+@router.get("/consults", response_model=list[SpdConsultOut])
 def my_consults(
     patient_id: int | None = None,
     account: ResidentAccount = Depends(current_resident),
@@ -933,7 +1300,15 @@ def my_consults(
     ]
 
 
-@router.get("/consults/{consult_id}/messages")
+class SpdConsultMessageOut(BaseModel):
+    id: int
+    sender: str
+    content: str
+    created_at: str
+
+
+@router.get("/consults/{consult_id}/messages",
+            response_model=list[SpdConsultMessageOut])
 def my_consult_messages(
     consult_id: int,
     patient_id: int | None = None,

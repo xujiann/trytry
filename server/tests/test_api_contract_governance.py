@@ -80,7 +80,18 @@ import app.spd.routers as spd_routers
 #   消息两端点复用 notifications 已有的 `NotificationOut`/`UnreadCountOut`，
 #   不另建同形模型。29 个请求加契约前后逐字节一致，四处变异各自转红，
 #   见 test_portal_me_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 674
+# → 648（`spd/portal` 慢专病患者移动端 26 个端点，两侧居民端契约就此都清零）。
+#   最要紧的是 `/screenings` 的**三种形状**：草稿+量表（带 answered/total_items）、
+#   草稿无量表（只有四个键）、落库（带 id/result/can_apply）。逐字段建模会把三者
+#   的字段互相注入 null，故 `response_model_exclude_unset=True`，三条分支各钉一遍。
+#   `score` 是 `int | float`——有量表时 `round(total, 2)` 是 float，无量表时兜底
+#   字面量 `0` 是 int。与平台侧相反，spd 这边多是 **Float 列**（measurement.value、
+#   assessment.score），整数值读回来就是 `140.0`，声明 float 才是原样。
+#   两处自己犯的错都由机制当场抓到，写进了模型 docstring：详情模型继承列表模型
+#   凭空要求了 `created_at`（响应校验拦下）、`SpdScreeningOut` 字段顺序排错
+#   （序列化按声明顺序走，逐字节比对拦下）。
+#   41 个请求加契约前后逐字节一致，五处变异各自转红，见 test_spd_portal_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 648
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -103,9 +114,10 @@ FULLY_GOVERNED = {
     "analytics",  # 决策指标扩展十端点，见 test_analytics_contract.py
     "reports",  # /monitoring 走 Pydantic；两个 CSV 导出以 CsvResponse 声明媒体类型，
                 # 见 test_reports_contract.py
-    # 平台侧居民端。spd 那份是**另一个 key** `spd/portal`（尚有 26 项欠账）——
-    # 模块名按包限定就是为了让这两者分开，见 _iter_endpoints 的 docstring。
+    # 两侧居民端。它们是**两个 key**（模块名按包限定，见 _iter_endpoints 的
+    # docstring）——不分开的话，其中一方的回退不会单独变红。
     "portal",  # 见 test_portal_auth_contract.py、test_portal_me_contract.py
+    "spd/portal",  # 见 test_spd_portal_contract.py
     # 以下三个是"清单落后现实"的存量：它们早就零欠账，却一直没人登记，
     # 于是这些模块的回退一直不会单独变红。由 test_已治理模块清单不许落后现实 补上并钉住。
     "auth",
@@ -215,18 +227,24 @@ def test_放宽媒体类型口径没有白送任何端点():
 def test_两个包里的同名模块不被合并成一个key():
     """`app/routers/portal.py` 与 `app/spd/routers/portal.py` 必须是两个 key。
 
-    这条是上面那个前缀的**反空转守卫**：把前缀去掉，两者合并成 `portal`，
-    平台侧 portal 就再也进不了 `FULLY_GOVERNED`（合并后的 key 带着 spd 那 26 项
-    欠账），它被改回裸 dict 时便不再单独变红。届时这条会直接转红——
-    合并后 `spd/portal` 这个 key 根本不存在。
+    这条是上面那个前缀的**反空转守卫**：把前缀去掉，两者合并成一个 `portal`，
+    `spd/portal` 这个 key 根本不存在，本条当场转红。
+
+    为什么这个前缀不是可有可无的整洁癖：两者现在都零欠账、都登记在
+    `FULLY_GOVERNED` 里。合并成一个 key 之后，**其中一方回退成裸 dict 时另一方
+    还撑着这个 key**——`without` 不为 0 才会红，可这个 key 的 without 是两者之和，
+    只要没人去看总基线（而总基线可以被别处的治理抵消），回退就静默发生了。
+    分成两个 key，谁退谁红。
     """
     _, _, per_module = _coverage()
     assert "portal" in per_module and "spd/portal" in per_module, sorted(per_module)
-    assert per_module["portal"][1] == 0, (
-        f"平台侧 portal 出现了 {per_module['portal'][1]} 项契约欠账——它已登记为零欠账模块"
-    )
-    # spd 那份还有欠账；等它也治理完，这里改成 0 并把 "spd/portal" 加进 FULLY_GOVERNED
-    assert per_module["spd/portal"][1] > 0
+    for key in ("portal", "spd/portal"):
+        assert per_module[key][1] == 0, (
+            f"{key} 出现了 {per_module[key][1]} 项契约欠账——它已登记为零欠账模块"
+        )
+    # 两者的端点数都不为零：万一哪天某个包里的 portal.py 被搬走，这个 key 会
+    # 变成 [0, 0]，上面的断言照样绿——那时这条守卫就空转了。
+    assert per_module["portal"][0] > 0 and per_module["spd/portal"][0] > 0
 
 
 def test_响应契约欠账不许变大():
