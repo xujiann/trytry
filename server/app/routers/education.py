@@ -51,6 +51,159 @@ class CourseOut(CourseCreate):
     model_config = {"from_attributes": True}
 
 
+# ============================================================ 响应契约
+#
+# 两处类型判据（都不是看字段名）：
+#  · `score` 来自 **Float 列**（`TrainingRecord.score` / `TrainingAssessment.score`），
+#    整数分读回来就是 `90.0`——声明 float 才是原样，写 `int | float` 反而没意义。
+#    与 Money 列方向相反（那边整数值是 int）。
+#  · `avg_rating` 无人评价时回 **None** 而不是 0——"没人评"与"评了 0 分"不是
+#    一回事，兜底成 0 会让空场次看起来是差评。
+
+
+class ExamResultOut(BaseModel):
+    course_id: int
+    score: float
+    passed: bool
+
+
+class CourseStatsOut(BaseModel):
+    course_id: int
+    trainees: int
+    passed: int
+    pass_rate_pct: float
+
+
+class MyRecordOut(BaseModel):
+    course_id: int
+    title: str
+    score: float
+    passed: bool
+
+
+class LiveCreatedOut(BaseModel):
+    id: int
+    title: str
+    status: str
+
+
+class LiveStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+class LiveRecordingOut(BaseModel):
+    id: int
+    recording_url: str
+
+
+class FeedbackCreatedOut(BaseModel):
+    id: int
+    updated: bool
+
+
+class FeedbackItemOut(BaseModel):
+    id: int
+    user_id: int
+    rating: int
+    comment: str
+
+
+class FeedbackSummaryOut(BaseModel):
+    """场次评价汇总。`avg_rating` 可为 null——一条评价都没有时不该编个 0 出来。"""
+
+    session_id: int
+    count: int
+    avg_rating: float | None
+    feedbacks: list[FeedbackItemOut]
+
+
+class LiveSessionOut(BaseModel):
+    id: int
+    title: str
+    speaker: str
+    planned_at: str
+    status: str
+    review_comment: str
+    recording_url: str
+
+
+class MaterialOut(BaseModel):
+    id: int
+    course_id: int | None
+    title: str
+    material_type: str
+    material_type_name: str
+    url: str
+    play_count: int
+    attachments: int
+
+
+class MaterialStatsOut(BaseModel):
+    total_materials: int
+    total_plays: int
+    top: list[MaterialOut]
+
+
+class TrainingPlanOut(BaseModel):
+    id: int
+    title: str
+    technique_id: int | None
+    org_id: int
+    plan_date: str
+    capacity: int
+    trainer: str
+    status: str
+    enrolled: int
+    remaining: int
+
+
+class EnrollCreatedOut(BaseModel):
+    id: int
+    plan_id: int
+    user_id: int
+    status: str
+
+
+class CancelEnrollOut(BaseModel):
+    plan_id: int
+    user_id: int
+    status: str
+
+
+class EnrollmentOut(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    full_name: str
+    status: str
+
+
+class AssessmentOut(BaseModel):
+    id: int
+    plan_id: int
+    user_id: int
+    score: float
+    passed: bool
+    assessor: str
+
+
+class AssessmentItemOut(BaseModel):
+    id: int
+    user_id: int
+    score: float
+    passed: bool
+    comment: str
+    assessor: str
+
+
+class AssessmentStatsOut(BaseModel):
+    total: int
+    passed: int
+    pass_rate_pct: float
+    items: list[AssessmentItemOut]
+
+
 @router.post("/courses", response_model=CourseOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_course(body: CourseCreate, db: Session = Depends(get_db)):
     course = Course(**body.model_dump())
@@ -72,7 +225,7 @@ class ExamSubmit(BaseModel):
     score: float = Field(ge=0, le=100)
 
 
-@router.post("/courses/{course_id}/exam")
+@router.post("/courses/{course_id}/exam", response_model=ExamResultOut)
 def submit_exam(course_id: int, body: ExamSubmit, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """培训考核：每人每课一条记录，重考取最高分。"""
     if db.get(Course, course_id) is None:
@@ -99,7 +252,7 @@ def submit_exam(course_id: int, body: ExamSubmit, db: Session = Depends(get_db),
     return {"course_id": course_id, "score": record.score, "passed": record.passed}
 
 
-@router.get("/courses/{course_id}/stats")
+@router.get("/courses/{course_id}/stats", response_model=CourseStatsOut)
 def course_stats(course_id: int, db: Session = Depends(get_db)):
     if db.get(Course, course_id) is None:
         raise HTTPException(status_code=404, detail="课程不存在")
@@ -118,7 +271,7 @@ def course_stats(course_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/my-records")
+@router.get("/my-records", response_model=list[MyRecordOut])
 def my_records(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = (
         db.query(TrainingRecord, Course.title)
@@ -145,6 +298,7 @@ class LiveCreate(BaseModel):
 
 @router.post(
     "/live-sessions",
+    response_model=LiveCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator", "public_health"))],  # 直播申请
 )
@@ -161,6 +315,7 @@ def request_live(
 
 @router.post(
     "/live-sessions/{session_id}/review",
+    response_model=LiveStatusOut,
     dependencies=[Depends(require_roles("director"))],  # 直播审核=管理层
 )
 def review_live(session_id: int, approve: bool, comment: str = "", db: Session = Depends(get_db)):
@@ -177,6 +332,7 @@ def review_live(session_id: int, approve: bool, comment: str = "", db: Session =
 
 @router.post(
     "/live-sessions/{session_id}/finish",
+    response_model=LiveStatusOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def finish_live(session_id: int, db: Session = Depends(get_db)):
@@ -196,6 +352,7 @@ class LiveRecording(BaseModel):
 
 @router.post(
     "/live-sessions/{session_id}/recording",
+    response_model=LiveRecordingOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def upload_recording(session_id: int, body: LiveRecording, db: Session = Depends(get_db)):
@@ -220,7 +377,7 @@ class LiveFeedbackIn(BaseModel):
     comment: str = Field(default="", max_length=512)
 
 
-@router.post("/live-sessions/{session_id}/feedback", status_code=201)
+@router.post("/live-sessions/{session_id}/feedback", response_model=FeedbackCreatedOut, status_code=201)
 def submit_live_feedback(
     session_id: int,
     body: LiveFeedbackIn,
@@ -243,7 +400,7 @@ def submit_live_feedback(
     return {"id": feedback.id, "updated": updated}
 
 
-@router.get("/live-sessions/{session_id}/feedback")
+@router.get("/live-sessions/{session_id}/feedback", response_model=FeedbackSummaryOut)
 def list_live_feedback(session_id: int, db: Session = Depends(get_db)):
     rows = (
         db.query(LiveFeedback)
@@ -263,7 +420,7 @@ def list_live_feedback(session_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/live-sessions")
+@router.get("/live-sessions", response_model=list[LiveSessionOut])
 def list_live_sessions(status: str | None = None, db: Session = Depends(get_db)):
     q = db.query(LiveSession)
     if status:
@@ -311,6 +468,7 @@ def _material_out(m: CourseMaterial, attachments: int = 0) -> dict:
 
 @router.post(
     "/courses/{course_id}/materials",
+    response_model=MaterialOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "public_health", "operator", "doctor"))],
 )
@@ -330,7 +488,7 @@ def create_material(
     return _material_out(material)
 
 
-@router.get("/courses/{course_id}/materials")
+@router.get("/courses/{course_id}/materials", response_model=list[MaterialOut])
 def list_materials(course_id: int, db: Session = Depends(get_db)):
     if db.get(Course, course_id) is None:
         raise HTTPException(status_code=404, detail="课程不存在")
@@ -352,7 +510,7 @@ def list_materials(course_id: int, db: Session = Depends(get_db)):
     return [_material_out(m, counts.get(m.id, 0)) for m in materials]
 
 
-@router.post("/materials/{material_id}/play")
+@router.post("/materials/{material_id}/play", response_model=MaterialOut)
 def play_material(material_id: int, db: Session = Depends(get_db)):
     """点播计数：每次调阅 +1（点播量用于课件资源热度统计）。"""
     material = db.get(CourseMaterial, material_id)
@@ -364,7 +522,7 @@ def play_material(material_id: int, db: Session = Depends(get_db)):
     return _material_out(material)
 
 
-@router.get("/material-stats")
+@router.get("/material-stats", response_model=MaterialStatsOut)
 def material_stats(db: Session = Depends(get_db)):
     """课件点播排行（前 20）与总点播量。"""
     materials = (
@@ -404,6 +562,7 @@ def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
 
 @router.post(
     "/training-plans",
+    response_model=TrainingPlanOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "doctor", "public_health"))],
 )
@@ -421,7 +580,7 @@ def create_plan(body: PlanCreate, db: Session = Depends(get_db), user: User = De
     return _plan_out(plan)
 
 
-@router.get("/training-plans")
+@router.get("/training-plans", response_model=list[TrainingPlanOut])
 def list_plans(status: str | None = None, db: Session = Depends(get_db)):
     query = db.query(TrainingPlan)
     if status:
@@ -430,7 +589,7 @@ def list_plans(status: str | None = None, db: Session = Depends(get_db)):
     return [_plan_out(p, p.enrolled_count) for p in plans]
 
 
-@router.post("/training-plans/{plan_id}/enroll", status_code=201)
+@router.post("/training-plans/{plan_id}/enroll", response_model=EnrollCreatedOut, status_code=201)
 def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """学员报名（登录用户本人报名，名额满则 409）。"""
     plan = db.get(TrainingPlan, plan_id)
@@ -474,7 +633,7 @@ def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depend
     }
 
 
-@router.post("/training-plans/{plan_id}/cancel-enroll")
+@router.post("/training-plans/{plan_id}/cancel-enroll", response_model=CancelEnrollOut)
 def cancel_enroll(plan_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     enrollment = (
         db.query(TrainingEnrollment)
@@ -490,7 +649,7 @@ def cancel_enroll(plan_id: int, db: Session = Depends(get_db), user: User = Depe
     return {"plan_id": plan_id, "user_id": user.id, "status": "cancelled"}
 
 
-@router.get("/training-plans/{plan_id}/enrollments")
+@router.get("/training-plans/{plan_id}/enrollments", response_model=list[EnrollmentOut])
 def list_enrollments(plan_id: int, db: Session = Depends(get_db)):
     if db.get(TrainingPlan, plan_id) is None:
         raise HTTPException(status_code=404, detail="实训计划不存在")
@@ -521,6 +680,7 @@ class AssessmentCreate(BaseModel):
 
 @router.post(
     "/training-plans/{plan_id}/assessments",
+    response_model=AssessmentOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "doctor"))],
 )
@@ -568,7 +728,7 @@ def create_assessment(
     }
 
 
-@router.get("/training-plans/{plan_id}/assessments")
+@router.get("/training-plans/{plan_id}/assessments", response_model=AssessmentStatsOut)
 def list_assessments(plan_id: int, db: Session = Depends(get_db)):
     rows = (
         db.query(TrainingAssessment)

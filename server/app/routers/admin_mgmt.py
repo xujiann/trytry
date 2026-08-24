@@ -54,6 +54,188 @@ class EmployeeOut(EmployeeCreate):
     model_config = {"from_attributes": True}
 
 
+# ============================================================ 响应契约
+#
+# 本模块是 Money 陷阱密集区：`FinanceEntry.amount` / `Budget.amount` /
+# `PayrollRecord.{base_salary,perf_bonus,total}` 全是 `Money`
+# （`Numeric(14,2, asdecimal=False)`），**整数金额读回来是 int**，
+# `round(x, 2)` 作用在整数上同样返回 int。一律 `int | float` 原样透传，
+# 声明成 float 会把工资单上的「8000 元」变成「8000.0 元」。
+#
+# 唯一的例外是 `perf_coefficient`——它是 **Float 列**，声明 float 才是原样。
+# 判据是列类型，不是字段名里有没有"金额"。
+
+
+class SecondmentCreatedOut(BaseModel):
+    id: int
+    employee_id: int
+    status: str
+
+
+class SecondmentEndedOut(BaseModel):
+    id: int
+    end_date: str
+
+
+class SecondmentStatsOut(BaseModel):
+    active_secondments: int
+    total_secondments: int
+
+
+class FinanceOrgOut(BaseModel):
+    """单机构收支。`balance` 由 handler **最后**追加，排在 income/expense 之后。"""
+
+    org_id: int
+    income: int | float
+    expense: int | float
+    balance: int | float
+
+
+class FinanceConsolidatedOut(BaseModel):
+    income: int | float
+    expense: int | float
+    balance: int | float
+
+
+class FinanceSummaryOut(BaseModel):
+    period: str
+    orgs: list[FinanceOrgOut]
+    consolidated: FinanceConsolidatedOut
+
+
+class DepartmentCreatedOut(BaseModel):
+    id: int
+    org_id: int
+    code: str
+    name: str
+
+
+class DepartmentOut(BaseModel):
+    id: int
+    org_id: int
+    code: str
+    name: str
+    category: str
+
+
+class DeptAssignedOut(BaseModel):
+    employee_id: int
+    dept_id: int
+
+
+class EmployeeChangeCreatedOut(BaseModel):
+    id: int
+    employee_id: int
+    change_type: str
+    employee_status: str
+    employee_org_id: int | None
+
+
+class EmployeeChangeOut(BaseModel):
+    id: int
+    change_type: str
+    to_org_id: int | None
+    detail: str
+    effective_date: str
+
+
+class StaffContractCreatedOut(BaseModel):
+    id: int
+    contract_no: str
+    status: str
+
+
+class ExpiringContractOut(BaseModel):
+    id: int
+    employee_id: int
+    contract_no: str
+    end_date: str
+
+
+class StaffContractOut(BaseModel):
+    id: int
+    employee_id: int
+    contract_no: str
+    start_date: str
+    end_date: str
+    status: str
+
+
+class PayrollCreatedOut(BaseModel):
+    id: int
+    period: str
+    total: int | float
+
+
+class PayrollRecordOut(BaseModel):
+    id: int
+    employee_id: int
+    period: str
+    base_salary: int | float
+    perf_bonus: int | float
+    # 系数是 Float 列，不是金额——这里声明 float 才是原样
+    perf_coefficient: float
+    total: int | float
+
+
+class PayrollListOut(BaseModel):
+    total_amount: int | float
+    records: list[PayrollRecordOut]
+
+
+class BudgetCreatedOut(BaseModel):
+    id: int
+    amount: int | float
+    adjusted: bool
+
+
+class BudgetCategoryOut(BaseModel):
+    """单类别执行情况。`execution_pct` 可为 null——预算为 0 时算不出执行率，
+    编个 0 出来会让"没编预算"看起来像"一分没花"。"""
+
+    budget: int | float
+    actual: int | float
+    execution_pct: float | None
+
+
+class BudgetExecutionOut(BaseModel):
+    """预算执行。handler 写的是 `{"org_id":…, "year":…, **result}`，
+    `result` 的键固定是 income / expense 两个（循环常量），故逐字段建模。"""
+
+    org_id: int
+    year: int
+    income: BudgetCategoryOut
+    expense: BudgetCategoryOut
+
+
+class AssetMovementCreatedOut(BaseModel):
+    id: int
+    asset_id: int
+    movement_type: str
+    asset_quantity: int
+    asset_status: str
+
+
+class AssetMovementOut(BaseModel):
+    id: int
+    movement_type: str
+    quantity: int
+    note: str
+    at: str
+
+
+class ParamOut(BaseModel):
+    key: str
+    value: str
+
+
+class ParamDetailOut(BaseModel):
+    key: str
+    value: str
+    description: str
+    updated_at: str
+
+
 @router.post(
     "/employees",
     response_model=EmployeeOut,
@@ -86,6 +268,7 @@ class SecondmentCreate(BaseModel):
 
 @router.post(
     "/secondments",
+    response_model=SecondmentCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # H2: 人员下派
 )
@@ -112,6 +295,7 @@ def second_employee(body: SecondmentCreate, db: Session = Depends(get_db)):
 
 @router.post(
     "/secondments/{secondment_id}/end",
+    response_model=SecondmentEndedOut,
     dependencies=[Depends(require_roles("director", "operator"))],  # H2
 )
 def end_secondment(
@@ -135,7 +319,7 @@ def end_secondment(
     return {"id": secondment_id, "end_date": end_date}
 
 
-@router.get("/secondments/stats")
+@router.get("/secondments/stats", response_model=SecondmentStatsOut)
 def secondment_stats(db: Session = Depends(get_db)):
     """在派人数（监测指标4的过程数据）。"""
     active = db.query(func.count(Secondment.id)).filter(Secondment.end_date == "").scalar() or 0
@@ -172,7 +356,7 @@ def add_finance_entry(body: FinanceCreate, db: Session = Depends(get_db), user: 
     return entry
 
 
-@router.get("/finance/summary")
+@router.get("/finance/summary", response_model=FinanceSummaryOut)
 def finance_summary(
     period: str | None = None,
     db: Session = Depends(get_db),
@@ -446,6 +630,7 @@ class DeptCreate(BaseModel):
 
 @router.post(
     "/departments",
+    response_model=DepartmentCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # 科室建档
 )
@@ -463,7 +648,7 @@ def create_department(body: DeptCreate, db: Session = Depends(get_db), user: Use
     return {"id": dept.id, "org_id": dept.org_id, "code": dept.code, "name": dept.name}
 
 
-@router.get("/departments")
+@router.get("/departments", response_model=list[DepartmentOut])
 def list_departments(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     q = db.query(Department).filter(Department.active.is_(True))
     q = scope_org_list(db, user, q, Department, org_id)
@@ -475,6 +660,7 @@ def list_departments(org_id: int | None = None, db: Session = Depends(get_db), u
 
 @router.post(
     "/employees/{employee_id}/department",
+    response_model=DeptAssignedOut,
     dependencies=[Depends(require_roles("director", "operator"))],  # 员工科室挂接
 )
 def assign_department(employee_id: int, dept_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -504,6 +690,7 @@ class ChangeCreate(BaseModel):
 
 @router.post(
     "/employees/{employee_id}/changes",
+    response_model=EmployeeChangeCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # 人员变动
 )
@@ -540,7 +727,7 @@ def create_employee_change(
     }
 
 
-@router.get("/employees/{employee_id}/changes")
+@router.get("/employees/{employee_id}/changes", response_model=list[EmployeeChangeOut])
 def list_employee_changes(employee_id: int, db: Session = Depends(get_db)):
     if db.get(Employee, employee_id) is None:
         raise HTTPException(status_code=404, detail="员工不存在")
@@ -571,6 +758,7 @@ class ContractCreate(BaseModel):
 
 @router.post(
     "/staff-contracts",
+    response_model=StaffContractCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # 合同管理
 )
@@ -585,7 +773,7 @@ def create_staff_contract(body: ContractCreate, db: Session = Depends(get_db)):
     return {"id": contract.id, "contract_no": contract.contract_no, "status": contract.status}
 
 
-@router.get("/staff-contracts/expiring")
+@router.get("/staff-contracts/expiring", response_model=list[ExpiringContractOut])
 def expiring_contracts(days: int = 60, today: str | None = None, db: Session = Depends(get_db)):
     """合同到期提醒：end_date 距今 ≤days 的履行中合同（续签管理）。"""
     from datetime import timedelta
@@ -606,7 +794,7 @@ def expiring_contracts(days: int = 60, today: str | None = None, db: Session = D
     ]
 
 
-@router.get("/staff-contracts")
+@router.get("/staff-contracts", response_model=list[StaffContractOut])
 def list_staff_contracts(employee_id: int | None = None, db: Session = Depends(get_db)):
     q = db.query(StaffContract)
     if employee_id is not None:
@@ -637,6 +825,7 @@ class PayrollCreate(BaseModel):
 
 @router.post(
     "/payroll",
+    response_model=PayrollCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("director"))],  # 薪酬发放=管理层
 )
@@ -656,7 +845,7 @@ def create_payroll(body: PayrollCreate, db: Session = Depends(get_db)):
     return {"id": record.id, "period": record.period, "total": record.total}
 
 
-@router.get("/payroll", dependencies=[Depends(require_roles("director"))])
+@router.get("/payroll", response_model=PayrollListOut, dependencies=[Depends(require_roles("director"))])
 def list_payroll(period: str | None = None, employee_id: int | None = None, db: Session = Depends(get_db)):
     q = db.query(PayrollRecord)
     if period:
@@ -693,6 +882,7 @@ class BudgetCreate(BaseModel):
 
 @router.post(
     "/budgets",
+    response_model=BudgetCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("director"))],  # 预算编制=管理层
 )
@@ -710,7 +900,7 @@ def create_budget(body: BudgetCreate, db: Session = Depends(get_db), user: User 
     return {"id": budget.id, "amount": budget.amount, "adjusted": adjusted}
 
 
-@router.get("/budgets/execution")
+@router.get("/budgets/execution", response_model=BudgetExecutionOut)
 def budget_execution(
     org_id: int,
     year: str,
@@ -754,6 +944,7 @@ class MovementCreate(BaseModel):
 
 @router.post(
     "/assets/{asset_id}/movements",
+    response_model=AssetMovementCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # 物资出入库
 )
@@ -793,7 +984,7 @@ def create_asset_movement(
     }
 
 
-@router.get("/assets/{asset_id}/movements")
+@router.get("/assets/{asset_id}/movements", response_model=list[AssetMovementOut])
 def list_asset_movements(asset_id: int, db: Session = Depends(get_db)):
     if db.get(Asset, asset_id) is None:
         raise HTTPException(status_code=404, detail="物资不存在")
@@ -821,7 +1012,7 @@ class ParamUpsert(BaseModel):
     description: str = ""
 
 
-@router.post("/params", dependencies=[Depends(require_admin)])
+@router.post("/params", response_model=ParamOut, dependencies=[Depends(require_admin)])
 def upsert_param(body: ParamUpsert, db: Session = Depends(get_db)):
     values = {"value": body.value}
     if body.description:
@@ -831,7 +1022,7 @@ def upsert_param(body: ParamUpsert, db: Session = Depends(get_db)):
     return {"key": param.key, "value": param.value}
 
 
-@router.get("/params", dependencies=[Depends(require_admin)])
+@router.get("/params", response_model=list[ParamDetailOut], dependencies=[Depends(require_admin)])
 def list_params(db: Session = Depends(get_db)):
     return [
         {
