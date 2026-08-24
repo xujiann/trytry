@@ -29,6 +29,99 @@ router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], depende
 NOTE_TYPES = ("first", "daily", "ward_round", "rescue", "consultation", "discharge")
 
 
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class ProgressNoteOut(BaseModel):
+    id: int
+    admission_id: int
+    note_type: str
+    content: str
+    doctor_name: str
+    # 没填记录时刻就落创建时刻（"%Y-%m-%d %H:%M"，与 created_at 的 isoformat 不同格式）
+    recorded_at: str
+    created_at: str
+
+
+class DocumentCompletenessOut(BaseModel):
+    admission_id: int
+    note_types: list[str]
+    nursing_records: int
+    vital_records: int
+    missing: list[str]
+    complete: bool
+
+
+class NursingRecordCreatedOut(BaseModel):
+    """新建护理记录**带** `admission_id`，列表里不带——两处形状不同，
+    故是两个模型。（列表是按 admission 查的，再回一遍 id 是冗余。）"""
+
+    id: int
+    admission_id: int
+    inpatient_order_id: int | None
+    nursing_level: str
+    content: str
+    nurse_name: str
+    recorded_at: str
+
+
+class NursingRecordOut(BaseModel):
+    id: int
+    inpatient_order_id: int | None
+    nursing_level: str
+    content: str
+    nurse_name: str
+    recorded_at: str
+
+
+class VitalCreatedOut(BaseModel):
+    id: int
+    measured_at: str
+
+
+class VitalSignOut(BaseModel):
+    """体温单一行。八项体征**全部可空**：一次测量未必测全，
+    用 0 冒充"未测"会污染趋势曲线（见 VitalIn 的注释）。"""
+
+    id: int
+    measured_at: str
+    temperature: float | None
+    pulse: int | None
+    respiration: int | None
+    sbp: int | None
+    dbp: int | None
+    intake_ml: int | None
+    output_ml: int | None
+    weight_kg: float | None
+    recorder: str
+
+
+class HandoverCreatedOut(BaseModel):
+    """交接班新建只回六个键（没有 from_staff/to_staff/content），
+    与列表的九个键不同形。"""
+
+    id: int
+    ward_id: int
+    shift: str
+    handover_date: str
+    patient_count: int
+    critical_count: int
+
+
+class HandoverOut(BaseModel):
+    id: int
+    ward_id: int
+    shift: str
+    handover_date: str
+    from_staff: str
+    to_staff: str
+    patient_count: int
+    critical_count: int
+    content: str
+
+
 def _admission_or_404(db: Session, admission_id: int) -> Admission:
     admission = db.get(Admission, admission_id)
     if admission is None:
@@ -48,6 +141,7 @@ class ProgressNoteIn(BaseModel):
 
 @router.post(
     "/admissions/{admission_id}/progress-notes",
+    response_model=ProgressNoteOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],  # 病程记录=医师
 )
@@ -98,7 +192,8 @@ def _note_out(n: ProgressNote) -> dict:
     }
 
 
-@router.get("/admissions/{admission_id}/progress-notes")
+@router.get("/admissions/{admission_id}/progress-notes",
+            response_model=list[ProgressNoteOut])
 def list_progress_notes(
     admission_id: int,
     response: Response,
@@ -114,7 +209,8 @@ def list_progress_notes(
     return [_note_out(n) for n in paginate(query.order_by(ProgressNote.id), response, offset, limit)]
 
 
-@router.get("/admissions/{admission_id}/document-completeness")
+@router.get("/admissions/{admission_id}/document-completeness",
+            response_model=DocumentCompletenessOut)
 def document_completeness(admission_id: int, db: Session = Depends(get_db)):
     """文书完整性检查：住院病历该有而没有的部分。
 
@@ -165,6 +261,7 @@ class NursingIn(BaseModel):
 
 @router.post(
     "/admissions/{admission_id}/nursing-records",
+    response_model=NursingRecordCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator"))],  # 护士在本平台映射为 operator
 )
@@ -205,7 +302,8 @@ def create_nursing_record(
     }
 
 
-@router.get("/admissions/{admission_id}/nursing-records")
+@router.get("/admissions/{admission_id}/nursing-records",
+            response_model=list[NursingRecordOut])
 def list_nursing_records(
     admission_id: int, response: Response, offset: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
@@ -244,6 +342,7 @@ class VitalIn(BaseModel):
 
 @router.post(
     "/admissions/{admission_id}/vitals",
+    response_model=VitalCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator"))],
 )
@@ -266,7 +365,7 @@ def create_vital(
     return {"id": record.id, "measured_at": record.measured_at}
 
 
-@router.get("/admissions/{admission_id}/vitals")
+@router.get("/admissions/{admission_id}/vitals", response_model=list[VitalSignOut])
 def list_vitals(admission_id: int, db: Session = Depends(get_db)):
     """体温单数据：按测量时刻升序，供前端画趋势曲线。"""
     _admission_or_404(db, admission_id)
@@ -309,7 +408,8 @@ class HandoverIn(BaseModel):
 
 
 @router.post(
-    "/handovers", status_code=201, dependencies=[Depends(require_roles("doctor", "operator"))]
+    "/handovers", response_model=HandoverCreatedOut, status_code=201,
+    dependencies=[Depends(require_roles("doctor", "operator"))]
 )
 def create_handover(
     body: HandoverIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -338,7 +438,7 @@ def create_handover(
     }
 
 
-@router.get("/handovers")
+@router.get("/handovers", response_model=list[HandoverOut])
 def list_handovers(
     response: Response,
     ward_id: int | None = None,

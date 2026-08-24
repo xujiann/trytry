@@ -69,7 +69,99 @@ def _template_out(t: ConsentTemplate) -> dict:
     }
 
 
-@router.post("/consent-templates", status_code=201, dependencies=[Depends(require_admin)])
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class ConsentTemplateOut(BaseModel):
+    id: int
+    consent_type: str
+    # 中文名由服务端折算——前端不该自己再维护一份 code→中文 的映射
+    consent_type_name: str
+    title: str
+    body: str
+    version: str
+    active: bool
+
+
+class InformedConsentOut(BaseModel):
+    id: int
+    patient_id: int
+    org_id: int
+    consent_type: str
+    consent_type_name: str
+    title: str
+    content: str
+    template_version: str
+    related_type: str
+    related_id: int | None
+    doctor_name: str
+    status: str
+    status_name: str
+    signer_name: str
+    signer_relation: str
+    signer_relation_name: str
+    # 未签署时是 **null**（handler 写的就是 None，不是空串）——这一处与本仓库
+    # 多数"空串"的写法不同，照实建模，别顺手统一
+    signed_at: str | None
+    refuse_reason: str
+    created_at: str
+
+
+class TreatmentRecordOut(BaseModel):
+    id: int
+    encounter_id: int
+    patient_id: int
+    org_id: int
+    treatment_name: str
+    treatment_code: str
+    site: str
+    dose: str
+    executor_name: str
+    performed_at: str
+    reaction: str
+    note: str
+    created_at: str
+
+
+class OutpatientNursingCreatedOut(BaseModel):
+    """门诊护理记录新建**带** `encounter_id`，列表里不带——两处形状不同，
+    两个模型（与住院那套 clinical_docs 同样的情况）。"""
+
+    id: int
+    encounter_id: int
+    nursing_level: str
+    content: str
+    nurse_name: str
+    recorded_at: str
+
+
+class OutpatientNursingOut(BaseModel):
+    id: int
+    nursing_level: str
+    content: str
+    nurse_name: str
+    recorded_at: str
+
+
+class EncounterCompletenessOut(BaseModel):
+    """就诊文书完整性。**只报事实、不判合格**——门急诊并非每次就诊都需处置与
+    告知，判"不合格"会逼着人补无意义的记录（口径随响应一起出，见 note）。"""
+
+    encounter_id: int
+    patient_id: int
+    treatment_records: int
+    nursing_records: int
+    consents_total: int
+    consents_pending: int
+    # 拒签不是缺陷：拒签是患者的权利，真正该追的是"待签"
+    consents_refused: int
+    note: str
+
+
+@router.post("/consent-templates", response_model=ConsentTemplateOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_template(body: TemplateIn, db: Session = Depends(get_db)):
     template = ConsentTemplate(**body.model_dump())
     db.add(template)
@@ -77,7 +169,7 @@ def create_template(body: TemplateIn, db: Session = Depends(get_db)):
     return _template_out(template)
 
 
-@router.get("/consent-templates")
+@router.get("/consent-templates", response_model=list[ConsentTemplateOut])
 def list_templates(
     consent_type: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
 ):
@@ -89,7 +181,8 @@ def list_templates(
     return [_template_out(t) for t in query.order_by(ConsentTemplate.id.desc()).limit(200).all()]
 
 
-@router.patch("/consent-templates/{template_id}", dependencies=[Depends(require_admin)])
+@router.patch("/consent-templates/{template_id}", response_model=ConsentTemplateOut,
+              dependencies=[Depends(require_admin)])
 def update_template(template_id: int, body: TemplateUpdate, db: Session = Depends(get_db)):
     """改模板只影响**之后**签署的告知书，已签的不受影响（正文已冻结快照）。"""
     template = db.get(ConsentTemplate, template_id)
@@ -153,7 +246,8 @@ def _consent_out(c: InformedConsent) -> dict:
     }
 
 
-@router.post("/consents", status_code=201, dependencies=[Depends(require_roles("doctor"))])
+@router.post("/consents", response_model=InformedConsentOut, status_code=201,
+             dependencies=[Depends(require_roles("doctor"))])
 def create_consent(
     body: ConsentIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -197,7 +291,7 @@ def create_consent(
     return _consent_out(consent)
 
 
-@router.get("/consents")
+@router.get("/consents", response_model=list[InformedConsentOut])
 def list_consents(
     response: Response,
     patient_id: int | None = None,
@@ -220,7 +314,8 @@ def list_consents(
     return [_consent_out(c) for c in rows]
 
 
-@router.post("/consents/{consent_id}/sign", dependencies=[Depends(require_roles("doctor"))])
+@router.post("/consents/{consent_id}/sign", response_model=InformedConsentOut,
+             dependencies=[Depends(require_roles("doctor"))])
 def sign_consent(consent_id: int, body: SignIn, db: Session = Depends(get_db)):
     """记录患方签署。已有结论的不可改写——告知书是证据，不是可编辑的表单。"""
     consent = _pending(db, consent_id)
@@ -232,7 +327,8 @@ def sign_consent(consent_id: int, body: SignIn, db: Session = Depends(get_db)):
     return _consent_out(consent)
 
 
-@router.post("/consents/{consent_id}/refuse", dependencies=[Depends(require_roles("doctor"))])
+@router.post("/consents/{consent_id}/refuse", response_model=InformedConsentOut,
+             dependencies=[Depends(require_roles("doctor"))])
 def refuse_consent(consent_id: int, body: RefuseIn, db: Session = Depends(get_db)):
     """记录拒绝签署。这是一等状态，机构据此证明"告知过、对方拒绝了"。"""
     consent = _pending(db, consent_id)
@@ -285,6 +381,7 @@ def _treatment_out(t: TreatmentRecord) -> dict:
 
 @router.post(
     "/encounters/{encounter_id}/treatments",
+    response_model=TreatmentRecordOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],
 )
@@ -310,7 +407,8 @@ def create_treatment(
     return _treatment_out(record)
 
 
-@router.get("/encounters/{encounter_id}/treatments")
+@router.get("/encounters/{encounter_id}/treatments",
+            response_model=list[TreatmentRecordOut])
 def list_treatments(encounter_id: int, db: Session = Depends(get_db)):
     rows = (
         db.query(TreatmentRecord)
@@ -322,7 +420,7 @@ def list_treatments(encounter_id: int, db: Session = Depends(get_db)):
     return [_treatment_out(t) for t in rows]
 
 
-@router.get("/treatments")
+@router.get("/treatments", response_model=list[TreatmentRecordOut])
 def list_treatments_by_patient(
     response: Response,
     patient_id: int,
@@ -353,6 +451,7 @@ class OutpatientNursingIn(BaseModel):
 
 @router.post(
     "/encounters/{encounter_id}/nursing-records",
+    response_model=OutpatientNursingCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],
 )
@@ -387,7 +486,8 @@ def create_outpatient_nursing(
     }
 
 
-@router.get("/encounters/{encounter_id}/nursing-records")
+@router.get("/encounters/{encounter_id}/nursing-records",
+            response_model=list[OutpatientNursingOut])
 def list_outpatient_nursing(encounter_id: int, db: Session = Depends(get_db)):
     rows = (
         db.query(NursingRecord)
@@ -405,7 +505,8 @@ def list_outpatient_nursing(encounter_id: int, db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/encounters/{encounter_id}/completeness")
+@router.get("/encounters/{encounter_id}/completeness",
+            response_model=EncounterCompletenessOut)
 def encounter_completeness(
     encounter_id: int,
     db: Session = Depends(get_db),

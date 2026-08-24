@@ -12,7 +12,7 @@
 3. **点位停用不影响历史记录**。点位会撤并，但"这包医废当年是从哪个科室出来的"
    必须永远查得到，故引用不做级联清理。
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -41,6 +41,98 @@ WASTE_TYPES = {
 }
 
 
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class WasteLocationOut(BaseModel):
+    id: int
+    org_id: int
+    name: str
+    location_type: str
+    # 中文名由服务端折算，前端不该自己维护第二份 source→"产生点" 的映射
+    location_type_name: str
+    manager_name: str
+    active: bool
+
+
+class LocationActiveOut(BaseModel):
+    """停用/启用只回 id 与新状态——两个端点同形，共用一个模型。"""
+
+    id: int
+    active: bool
+
+
+class MedicalWasteOut(BaseModel):
+    """一包医废。
+
+    注意与 `schemas.WasteOut` 区分：那个是阶段五的旧 schema，**没有追溯码**，
+    清单页曾经套过它，于是本模块最核心的一列一列都看不到（见 list_wastes 的
+    docstring）。这里是 `_waste_out` 的如实映射，不要再把两者混用。
+
+    三个时间列是 `DateTime`（可空），不是字符串——`stored_at`/`handed_over_at`
+    直接透出 datetime 对象，序列化成 ISO 串；`collected_date` 才是 String 列。
+    """
+
+    id: int
+    org_id: int
+    trace_code: str
+    waste_type: str
+    waste_type_name: str
+    weight_kg: float
+    status: str
+    collected_date: str
+    # 三个可空外键：点位是后补的（历史记录没有），转运人员可只留名字不挂档案
+    source_location_id: int | None
+    storage_location_id: int | None
+    handler_name: str
+    handler_employee_id: int | None
+    stored_at: datetime | None
+    handed_over_at: datetime | None
+
+
+class WasteTimelineStepOut(BaseModel):
+    step: str
+    # 收集那步是 `collected_date`（YYYY-MM-DD），后两步是 isoformat 时间戳，
+    # 都是字符串；`location` 在交接那步放的是转运人姓名（沿用现状，不改字节）
+    at: str
+    location: str
+
+
+class WasteTraceOut(MedicalWasteOut):
+    """扫码追溯 = 医废本身 + 时间轴。是 `_waste_out` 的**严格超集**，故继承。"""
+
+    timeline: list[WasteTimelineStepOut]
+
+
+class WasteOverdueOut(MedicalWasteOut):
+    """滞留预警 = 医废本身 + 超期天数与限期。同样是严格超集。"""
+
+    overdue_days: int
+    limit_date: str
+
+
+class HandlerWorkloadOut(BaseModel):
+    employee_id: int
+    name: str
+    count: int
+    weight_kg: float
+
+
+class UnlinkedHandoverOut(BaseModel):
+    """未挂员工档案的交接：只有计数与重量，没有 employee_id/name——
+    硬凑到某个人头上会张冠李戴（见 handler_stats 的 docstring）。"""
+
+    count: int
+    weight_kg: float
+
+
+class HandlerStatsOut(BaseModel):
+    handlers: list[HandlerWorkloadOut]
+    unlinked_records: UnlinkedHandoverOut
+
+
 # ---------------------------------------------------------------- 点位
 
 
@@ -63,7 +155,8 @@ def _location_out(loc: WasteLocation) -> dict:
     }
 
 
-@router.post("/locations", status_code=201, dependencies=[Depends(require_roles("operator", "director"))])
+@router.post("/locations", response_model=WasteLocationOut, status_code=201,
+             dependencies=[Depends(require_roles("operator", "director"))])
 def create_location(body: LocationIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
@@ -75,7 +168,7 @@ def create_location(body: LocationIn, db: Session = Depends(get_db), user: User 
     return _location_out(loc)
 
 
-@router.get("/locations")
+@router.get("/locations", response_model=list[WasteLocationOut])
 def list_locations(
     org_id: int | None = None,
     location_type: str | None = None,
@@ -91,7 +184,8 @@ def list_locations(
     return [_location_out(r) for r in query.order_by(WasteLocation.id).limit(500).all()]
 
 
-@router.delete("/locations/{location_id}", dependencies=[Depends(require_roles("operator", "director"))])
+@router.delete("/locations/{location_id}", response_model=LocationActiveOut,
+               dependencies=[Depends(require_roles("operator", "director"))])
 def deactivate_location(
     location_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -106,7 +200,8 @@ def deactivate_location(
     return {"id": location_id, "active": False}
 
 
-@router.post("/locations/{location_id}/reactivate", dependencies=[Depends(require_roles("operator", "director"))])
+@router.post("/locations/{location_id}/reactivate", response_model=LocationActiveOut,
+             dependencies=[Depends(require_roles("operator", "director"))])
 def reactivate_location(
     location_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -163,6 +258,7 @@ def _waste_out(w: MedicalWaste) -> dict:
 
 @router.post(
     "",
+    response_model=MedicalWasteOut,
     status_code=201,
     dependencies=[Depends(require_roles("operator"))],  # H2: 医废收集=经办
 )
@@ -190,7 +286,7 @@ def collect(body: WasteCollect, db: Session = Depends(get_db)):
     return _waste_out(waste)
 
 
-@router.get("")
+@router.get("", response_model=list[MedicalWasteOut])
 def list_wastes(org_id: int | None = None, status: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     """医废清单。
 
@@ -211,7 +307,8 @@ class WasteStore(BaseModel):
     storage_location_id: int
 
 
-@router.post("/{waste_id}/store", dependencies=[Depends(require_roles("operator"))])
+@router.post("/{waste_id}/store", response_model=MedicalWasteOut,
+             dependencies=[Depends(require_roles("operator"))])
 def store(
     waste_id: int,
     body: WasteStore,
@@ -248,6 +345,7 @@ class WasteHandoverIn(WasteHandover):
 
 @router.post(
     "/{waste_id}/handover",
+    response_model=MedicalWasteOut,
     dependencies=[Depends(require_roles("operator"))],  # H2: 医废交接=经办
 )
 def handover(
@@ -278,7 +376,7 @@ def handover(
     return _waste_out(waste)
 
 
-@router.get("/trace/{trace_code}")
+@router.get("/trace/{trace_code}", response_model=WasteTraceOut)
 def trace(trace_code: str, db: Session = Depends(get_db)):
     """扫码追溯：一包医废从哪来、经过哪里、谁交接的、现在到哪一步。"""
     waste = db.query(MedicalWaste).filter(MedicalWaste.trace_code == trace_code).first()
@@ -305,7 +403,7 @@ def trace(trace_code: str, db: Session = Depends(get_db)):
     return {**_waste_out(waste), "timeline": timeline}
 
 
-@router.get("/handler-stats")
+@router.get("/handler-stats", response_model=HandlerStatsOut)
 def handler_stats(
     start_date: str | None = None, end_date: str | None = None, db: Session = Depends(get_db)
 ):
@@ -341,7 +439,7 @@ def handler_stats(
     }
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=list[WasteOverdueOut])
 def overdue_alerts(today: str | None = None, db: Session = Depends(get_db)):
     """滞留预警：收集超过 2 天仍未交接的医废。
 

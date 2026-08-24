@@ -15,6 +15,8 @@
 一张没人写入的空表。真正缺的是"一个地方看全某位患者/某家机构所有在办事项"，
 所以这里做的是**聚合视图**：把五类单据归一成统一字段返回，状态映射到统一口径。
 """
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -79,7 +81,99 @@ def _validate_nodes(nodes: list[NodeIn]) -> None:
         raise HTTPException(status_code=422, detail="流程必须有终态节点（next 为空）")
 
 
-@router.post("/definitions", status_code=201, dependencies=[Depends(require_admin)])
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class WorkflowDefinitionCreatedOut(BaseModel):
+    """新建流程定义只回四个键（没有 active），与列表的五个键不同形。"""
+
+    id: int
+    key: str
+    name: str
+    # 节点定义（JSON 列）：每个节点的字段随节点类型而变，宽字典如实反映
+    nodes: list[dict[str, Any]]
+
+
+class WorkflowDefinitionOut(WorkflowDefinitionCreatedOut):
+    active: bool
+
+
+class WorkflowInstanceOut(BaseModel):
+    id: int
+    definition_key: str
+    business_type: str
+    business_id: int
+    title: str
+    org_id: int | None
+    current_node: str
+    # 定义被删/节点不存在时折成空串，不是 null
+    current_node_name: str
+    current_node_role: str
+    status: str
+    updated_at: str
+
+
+class WorkflowInstanceStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+class WorkflowTransitionOut(BaseModel):
+    id: int
+    from_node: str
+    to_node: str
+    action: str
+    comment: str
+    actor: str
+    created_at: str
+
+
+class MyTasksOut(BaseModel):
+    count: int
+    tasks: list[WorkflowInstanceOut]
+
+
+class UnifiedRequestOut(BaseModel):
+    """统一申请单：五类单据折成同一形状。`raw_status` 与 `status` 都出——
+    统一口径便于筛选，原生状态便于回到原单据核对，缺一个都要再查一次。
+
+    `patient_name`/`org_name` **不在 `_unified()` 里**——它们是 handler 拿到
+    列表之后统一回填的（一次查全部姓名，避免每条一次查询）。写这个模型时只照着
+    `_unified()` 建，漏了这两个键，契约把它们静默丢掉，被
+    `test_unified_requests_aggregates_five_types` 当场抓住。
+    教训：**只读 helper 不够，要读完整个 handler**——返回值在 return 之前还会被改。
+    """
+
+    request_type: str
+    request_type_name: str
+    id: int
+    patient_id: int | None
+    org_id: int | None
+    title: str
+    raw_status: str
+    status: str
+    created_at: str
+    # 由 handler 在 _unified() 之后统一回填（见上）
+    patient_name: str
+    org_name: str
+
+
+class UnifiedRequestsOut(BaseModel):
+    """`truncated` 明说截断了没有——只回 `items` 的话，看的人会把截断后的
+    列表当成全部。"""
+
+    total: int
+    returned: int
+    truncated: bool
+    by_status: dict[str, int]
+    by_type: dict[str, int]
+    items: list[UnifiedRequestOut]
+
+
+@router.post("/definitions", response_model=WorkflowDefinitionCreatedOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_definition(body: DefinitionIn, db: Session = Depends(get_db)):
     _validate_nodes(body.nodes)
     definition = WorkflowDefinition(
@@ -96,7 +190,7 @@ def create_definition(body: DefinitionIn, db: Session = Depends(get_db)):
             "nodes": definition.nodes}
 
 
-@router.get("/definitions")
+@router.get("/definitions", response_model=list[WorkflowDefinitionOut])
 def list_definitions(db: Session = Depends(get_db)):
     return [
         {"id": d.id, "key": d.key, "name": d.name, "nodes": d.nodes, "active": d.active}
@@ -148,7 +242,7 @@ def _instance_out(i: WorkflowInstance, node: dict | None = None) -> dict:
     }
 
 
-@router.post("/instances", status_code=201)
+@router.post("/instances", response_model=WorkflowInstanceOut, status_code=201)
 def start_instance(
     body: StartIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -177,7 +271,7 @@ class AdvanceIn(BaseModel):
     comment: str = ""
 
 
-@router.post("/instances/{instance_id}/advance")
+@router.post("/instances/{instance_id}/advance", response_model=WorkflowInstanceOut)
 def advance_instance(
     instance_id: int,
     body: AdvanceIn,
@@ -220,7 +314,8 @@ def advance_instance(
     return _instance_out(instance, _node(definition, instance.current_node))
 
 
-@router.post("/instances/{instance_id}/cancel")
+@router.post("/instances/{instance_id}/cancel",
+             response_model=WorkflowInstanceStatusOut)
 def cancel_instance(
     instance_id: int,
     body: AdvanceIn,
@@ -249,7 +344,7 @@ def cancel_instance(
     return {"id": instance.id, "status": instance.status}
 
 
-@router.get("/instances")
+@router.get("/instances", response_model=list[WorkflowInstanceOut])
 def list_instances(
     response: Response,
     definition_key: str | None = None,
@@ -277,7 +372,8 @@ def list_instances(
     ]
 
 
-@router.get("/instances/{instance_id}/history")
+@router.get("/instances/{instance_id}/history",
+            response_model=list[WorkflowTransitionOut])
 def instance_history(instance_id: int, db: Session = Depends(get_db)):
     if db.get(WorkflowInstance, instance_id) is None:
         raise HTTPException(status_code=404, detail="流程实例不存在")
@@ -302,7 +398,7 @@ def instance_history(instance_id: int, db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/my-tasks")
+@router.get("/my-tasks", response_model=MyTasksOut)
 def my_tasks(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """待办联动：当前用户角色可推进的流转中实例。
 
@@ -372,7 +468,7 @@ def _unified(kind: str, obj_id: int, patient_id: int | None, org_id: int | None,
     }
 
 
-@service_router.get("")
+@service_router.get("", response_model=UnifiedRequestsOut)
 def unified_requests(
     patient_id: int | None = None,
     status: str | None = None,

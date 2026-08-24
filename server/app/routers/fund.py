@@ -18,6 +18,8 @@
 """
 from datetime import datetime, timedelta
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -108,7 +110,119 @@ def _pool_out(pool: FundPool, db: Session) -> dict:
     }
 
 
-@router.post("/pools", status_code=201, dependencies=[Depends(require_roles("director"))])
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+#
+# **本模块的金额直接决定各机构分到多少钱**，Money 陷阱在这里不是显示问题：
+# 所有 `Numeric` 列及其 round/sum 派生值一律 `int | float`，声明成 float 会把
+# 「500000 元」印成「500000.0 元」。`FundDistribution` 的 score/weight/share_pct
+# 是 Float 列（不是金额），那三个才该声明 float。
+
+
+class FundPoolOut(BaseModel):
+    id: int
+    year: int
+    insurance_type: str
+    # 全域池没有分组（部分唯一索引 uq_fund_pool_global 靠这一列为 NULL 生效）
+    org_group_id: int | None
+    total_amount: int | float
+    prepay_ratio_pct: int | float
+    planned_prepay: int | float
+    prepaid_amount: int | float
+    accrued_expense: int | float
+    # 账面结余 = 筹资 − 已归集发生额。**这不是清算结果**，清算另有单据
+    book_balance: int | float
+    status: str
+    note: str
+
+
+class FundPoolWithWarningOut(FundPoolOut):
+    """追加预付后的回执。`warning` 是**条件键**：只有累计预付超过计划预付额时
+    才出现。声明成带默认值的可选字段会给每一次正常预付也注入
+    `"warning": null`，故端点带 `response_model_exclude_unset=True`——
+    一个恒为 null 的告警字段，看的人迟早不再看它。"""
+
+    warning: str | None = None
+
+
+class PrepaymentOut(BaseModel):
+    id: int
+    batch_no: str
+    amount: int | float
+    paid_date: str
+    note: str
+
+
+class PeriodOut(BaseModel):
+    period: str
+    actual_amount: int | float
+    source: str
+    note: str
+
+
+class PeriodClosedOut(BaseModel):
+    """预结的回执。`cash_flow: False` 与 `note` 是**刻意写进响应体**的：
+    预结只是账面对冲，不产生资金流——不写在响应里，看的人会以为钱动了。"""
+
+    period: str
+    actual_amount: int | float
+    source: str
+    cash_flow: bool
+    note: str
+    pool: FundPoolOut
+
+
+class FormulaVariableOut(BaseModel):
+    name: str
+    desc: str
+
+
+class FormulaVariablesOut(BaseModel):
+    variables: list[FormulaVariableOut]
+    note: str
+    examples: list[str]
+
+
+class DistributionOut(BaseModel):
+    org_id: int
+    org_name: str
+    # score/weight/share_pct 是 Float 列（权重与占比，不是金额），amount 才是 Money
+    score: float
+    # 得分明细快照（JSON 列）：指标构成随考核方案变，宽字典如实反映
+    score_detail: dict[str, Any]
+    weight: float
+    share_pct: float
+    amount: int | float
+
+
+class SettlementCaliberOut(BaseModel):
+    balance: str
+    # 超支不自动扣减任何机构——只记录处置选择，由主管部门另行决定
+    overrun: str
+    score: str
+
+
+class SettlementOut(BaseModel):
+    pool_id: int
+    total_income: int | float
+    total_expense: int | float
+    balance: int | float
+    is_overrun: bool
+    overrun_action: str
+    overrun_action_name: str
+    formula_expr: str
+    score_basis: str
+    settled_at: str
+    distributed_amount: int | float
+    distributions: list[DistributionOut]
+    # 口径随金额一起出：分配依据是**分配当时冻结的绩效快照**，这句话不写在
+    # 响应里，事后调权重的人会以为已分结果会跟着变
+    caliber: SettlementCaliberOut
+
+
+@router.post("/pools", response_model=FundPoolOut, status_code=201,
+             dependencies=[Depends(require_roles("director"))])
 def create_pool(
     body: PoolIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -140,7 +254,7 @@ def create_pool(
     return _pool_out(pool, db)
 
 
-@router.get("/pools")
+@router.get("/pools", response_model=list[FundPoolOut])
 def list_pools(
     year: int | None = None, status: str | None = None, db: Session = Depends(get_db)
 ):
@@ -152,7 +266,8 @@ def list_pools(
     return [_pool_out(p, db) for p in query.order_by(FundPool.id.desc()).limit(200).all()]
 
 
-@router.patch("/pools/{pool_id}", dependencies=[Depends(require_roles("director"))])
+@router.patch("/pools/{pool_id}", response_model=FundPoolOut,
+              dependencies=[Depends(require_roles("director"))])
 def update_pool(pool_id: int, body: PoolUpdate, db: Session = Depends(get_db)):
     pool = _pool(db, pool_id)
     if pool.status == "settled":
@@ -176,6 +291,8 @@ class PrepaymentIn(BaseModel):
 
 @router.post(
     "/pools/{pool_id}/prepayments",
+    response_model=FundPoolWithWarningOut,
+    response_model_exclude_unset=True,
     status_code=201,
     dependencies=[Depends(require_roles("director"))],
 )
@@ -201,7 +318,7 @@ def add_prepayment(
     return out
 
 
-@router.get("/pools/{pool_id}/prepayments")
+@router.get("/pools/{pool_id}/prepayments", response_model=list[PrepaymentOut])
 def list_prepayments(pool_id: int, db: Session = Depends(get_db)):
     _pool(db, pool_id)
     rows = (
@@ -244,7 +361,8 @@ def _collect_expense(db: Session, pool: FundPool, period: str) -> float:
 
 
 @router.post(
-    "/pools/{pool_id}/periods", status_code=201, dependencies=[Depends(require_roles("director"))]
+    "/pools/{pool_id}/periods", response_model=PeriodClosedOut, status_code=201,
+    dependencies=[Depends(require_roles("director"))]
 )
 def close_period(pool_id: int, body: PeriodIn, db: Session = Depends(get_db)):
     """月度预结：归集当期发生额，与预付对冲看进度。
@@ -278,7 +396,7 @@ def close_period(pool_id: int, body: PeriodIn, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/pools/{pool_id}/periods")
+@router.get("/pools/{pool_id}/periods", response_model=list[PeriodOut])
 def list_periods(pool_id: int, db: Session = Depends(get_db)):
     _pool(db, pool_id)
     rows = (
@@ -313,7 +431,7 @@ class DistributeIn(BaseModel):
     include_auto_passed: bool = True
 
 
-@router.get("/formula-variables")
+@router.get("/formula-variables", response_model=FormulaVariablesOut)
 def formula_variables():
     """分配公式可用变量。变量刻意保持极少——多了就没人能复核了。"""
     return {
@@ -325,7 +443,8 @@ def formula_variables():
 
 
 @router.post(
-    "/pools/{pool_id}/settle", status_code=201, dependencies=[Depends(require_roles("director"))]
+    "/pools/{pool_id}/settle", response_model=SettlementOut, status_code=201,
+    dependencies=[Depends(require_roles("director"))]
 )
 def settle(
     pool_id: int,
@@ -365,7 +484,7 @@ def settle(
     return _settlement_out(settlement, db)
 
 
-@router.get("/pools/{pool_id}/settlement")
+@router.get("/pools/{pool_id}/settlement", response_model=SettlementOut)
 def get_settlement(pool_id: int, db: Session = Depends(get_db)):
     settlement = (
         db.query(FundSettlement).filter(FundSettlement.pool_id == pool_id).first()
@@ -376,7 +495,8 @@ def get_settlement(pool_id: int, db: Session = Depends(get_db)):
 
 
 @router.post(
-    "/pools/{pool_id}/distribute", dependencies=[Depends(require_roles("director"))]
+    "/pools/{pool_id}/distribute", response_model=SettlementOut,
+    dependencies=[Depends(require_roles("director"))]
 )
 def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     """按公式分配结余，并**冻结**当次绩效得分快照。
@@ -480,7 +600,7 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     return _settlement_out(settlement, db)
 
 
-@router.get("/pools/{pool_id}/distributions")
+@router.get("/pools/{pool_id}/distributions", response_model=list[DistributionOut])
 def list_distributions(pool_id: int, db: Session = Depends(get_db)):
     settlement = db.query(FundSettlement).filter(FundSettlement.pool_id == pool_id).first()
     if settlement is None:

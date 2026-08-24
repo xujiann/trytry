@@ -45,7 +45,108 @@ class RoomIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
 
 
-@router.post("/rooms", status_code=201, dependencies=[Depends(require_admin)])
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class OperatingRoomOut(BaseModel):
+    id: int
+    org_id: int
+    name: str
+    active: bool
+
+
+class SurgeryRequestOut(BaseModel):
+    id: int
+    admission_id: int
+    patient_id: int
+    org_id: int
+    surgery_name: str
+    surgery_code: str
+    incision_level: str
+    anesthesia_type: str
+    surgeon_name: str
+    urgency: str
+    planned_date: str
+    status: str
+
+
+class SurgeryStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+class SurgeryScheduledOut(BaseModel):
+    id: int
+    request_id: int
+    room_id: int
+    scheduled_date: str
+    start_time: str
+    end_time: str
+
+
+class SurgeryScheduleOut(BaseModel):
+    """排班列表连带申请单的字段一起出——排班表要直接看得到术式与术者，
+    否则每行都得再拉一次申请单。与 `SurgeryScheduledOut`（新建时的回执）
+    不是同一组键，是两个模型。"""
+
+    id: int
+    request_id: int
+    room_name: str
+    scheduled_date: str
+    start_time: str
+    end_time: str
+    surgery_name: str
+    surgeon_name: str
+    anesthesia_type: str
+    urgency: str
+    status: str
+
+
+class SurgeryRecordCreatedOut(BaseModel):
+    id: int
+    request_id: int
+    outcome: str
+
+
+class SurgeryRecordOut(BaseModel):
+    """手术记录全文。注意这**不是**居民端会看到的内容——出血量、术中所见、
+    并发症是给医生看的专业文书（见 portal 的 my_surgeries docstring）。"""
+
+    id: int
+    request_id: int
+    actual_surgery_name: str
+    surgeon_name: str
+    assistants: str
+    anesthetist_name: str
+    anesthesia_type: str
+    incision_level: str
+    start_at: str
+    end_at: str
+    blood_loss_ml: int
+    findings: str
+    procedure: str
+    complications: str
+    outcome: str
+    preop_diagnosis: str
+    postop_diagnosis: str
+
+
+class SurgeryStatsOut(BaseModel):
+    """按机构的手术量。`by_incision`/`by_anesthesia` 的键是实际出现过的
+    切口等级与麻醉方式，没出现的不该硬塞一个 0，故是 dict 而非固定字段。"""
+
+    org_id: int
+    org_name: str
+    total: int
+    by_incision: dict[str, int]
+    by_anesthesia: dict[str, int]
+    complications: int
+
+
+@router.post("/rooms", response_model=OperatingRoomOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_room(body: RoomIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
@@ -61,7 +162,7 @@ def create_room(body: RoomIn, db: Session = Depends(get_db), user: User = Depend
     return {"id": room.id, "org_id": room.org_id, "name": room.name, "active": room.active}
 
 
-@router.get("/rooms")
+@router.get("/rooms", response_model=list[OperatingRoomOut])
 def list_rooms(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(OperatingRoom)
     query = scope_org_list(db, user, query, OperatingRoom, org_id)
@@ -105,7 +206,8 @@ def _request_out(r: SurgeryRequest) -> dict:
     }
 
 
-@router.post("/requests", status_code=201, dependencies=[Depends(require_roles("doctor"))])
+@router.post("/requests", response_model=SurgeryRequestOut, status_code=201,
+             dependencies=[Depends(require_roles("doctor"))])
 def create_request(
     body: SurgeryRequestIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -128,7 +230,7 @@ def create_request(
     return _request_out(request)
 
 
-@router.get("/requests")
+@router.get("/requests", response_model=list[SurgeryRequestOut])
 def list_requests(
     response: Response,
     status: str | None = None,
@@ -155,7 +257,8 @@ class ApproveIn(BaseModel):
     note: str = ""
 
 
-@router.post("/requests/{request_id}/approve", dependencies=[Depends(require_roles("director"))])
+@router.post("/requests/{request_id}/approve", response_model=SurgeryStatusOut,
+             dependencies=[Depends(require_roles("director"))])
 def approve_request(
     request_id: int,
     body: ApproveIn,
@@ -190,6 +293,7 @@ class ScheduleIn(BaseModel):
 
 @router.post(
     "/requests/{request_id}/schedule",
+    response_model=SurgeryScheduledOut,
     status_code=201,
     dependencies=[Depends(require_roles("operator", "director"))],
 )
@@ -267,7 +371,7 @@ def schedule_surgery(
     }
 
 
-@router.get("/schedules")
+@router.get("/schedules", response_model=list[SurgeryScheduleOut])
 def list_schedules(
     scheduled_date: str | None = None, room_id: int | None = None, db: Session = Depends(get_db)
 ):
@@ -323,7 +427,8 @@ class SurgeryRecordIn(BaseModel):
 
 
 @router.post(
-    "/requests/{request_id}/record", status_code=201, dependencies=[Depends(require_roles("doctor"))]
+    "/requests/{request_id}/record", response_model=SurgeryRecordCreatedOut,
+    status_code=201, dependencies=[Depends(require_roles("doctor"))]
 )
 def create_record(
     request_id: int,
@@ -373,7 +478,7 @@ def create_record(
     return {"id": record.id, "request_id": request_id, "outcome": record.outcome}
 
 
-@router.get("/requests/{request_id}/record")
+@router.get("/requests/{request_id}/record", response_model=SurgeryRecordOut)
 def get_record(request_id: int, db: Session = Depends(get_db)):
     record = db.query(SurgeryRecord).filter(SurgeryRecord.request_id == request_id).first()
     if record is None:
@@ -399,7 +504,8 @@ def get_record(request_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/stats", dependencies=[Depends(require_roles("director"))])
+@router.get("/stats", response_model=list[SurgeryStatsOut],
+            dependencies=[Depends(require_roles("director"))])
 def surgery_stats(db: Session = Depends(get_db)):
     # 第十轮 P2：手术量按机构汇总，属管理聚合，限 director/admin。
     """手术量统计：按机构分总台次、切口等级构成、麻醉方式构成。"""

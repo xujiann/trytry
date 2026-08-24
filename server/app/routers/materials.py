@@ -64,7 +64,75 @@ def _purchase_out(p: MaterialPurchase) -> dict:
     }
 
 
-@router.post("/purchases", status_code=201, dependencies=[Depends(require_roles("operator", "director"))])
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class MaterialPurchaseOut(BaseModel):
+    """采购申请。`estimated_price` 与 `contract_amount` 都是 `Money`（Numeric）列
+    ——整数金额读回来是 int，声明成 float 会把「50000 元」变成「50000.0 元」。"""
+
+    id: int
+    org_id: int
+    # 未指定申领科室 / 未定供应商时为 null
+    dept_id: int | None
+    item_name: str
+    spec: str
+    unit: str
+    quantity: int
+    estimated_price: int | float
+    status: str
+    supplier_id: int | None
+    contract_no: str
+    contract_amount: int | float
+    received_quantity: int
+
+
+class PurchaseStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+class PurchaseContractOut(PurchaseStatusOut):
+    contract_no: str
+
+
+class PurchaseReceivedOut(PurchaseStatusOut):
+    """到货验收会顺带建/加资产台账，故多回资产 id 与结存数量。"""
+
+    asset_id: int
+    asset_quantity: int
+
+
+class ConsumableOut(BaseModel):
+    """高值耗材。`used_at` 未使用时是空串（handler 已折），不是 null。"""
+
+    id: int
+    barcode: str
+    name: str
+    spec: str
+    org_id: int
+    supplier_id: int | None
+    batch_no: str
+    expire_date: str
+    unit_price: int | float
+    status: str
+    used_patient_id: int | None
+    used_patient_name: str
+    used_surgery_id: int | None
+    used_surgery_name: str
+    used_at: str
+
+
+class ConsumableTraceOut(ConsumableOut):
+    """正向追溯 = 耗材本身 + 供应商名。是严格超集，故继承。"""
+
+    supplier_name: str
+
+
+@router.post("/purchases", response_model=MaterialPurchaseOut, status_code=201,
+             dependencies=[Depends(require_roles("operator", "director"))])
 def create_purchase(
     body: PurchaseIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -80,7 +148,7 @@ def create_purchase(
     return _purchase_out(purchase)
 
 
-@router.get("/purchases")
+@router.get("/purchases", response_model=list[MaterialPurchaseOut])
 def list_purchases(
     response: Response,
     org_id: int | None = None,
@@ -103,7 +171,8 @@ class ApproveIn(BaseModel):
     approved: bool = True
 
 
-@router.post("/purchases/{purchase_id}/approve", dependencies=[Depends(require_roles("director"))])
+@router.post("/purchases/{purchase_id}/approve", response_model=PurchaseStatusOut,
+             dependencies=[Depends(require_roles("director"))])
 def approve_purchase(
     purchase_id: int,
     body: ApproveIn,
@@ -132,7 +201,8 @@ class ContractIn(BaseModel):
 
 
 @router.post(
-    "/purchases/{purchase_id}/contract", dependencies=[Depends(require_roles("operator", "director"))]
+    "/purchases/{purchase_id}/contract", response_model=PurchaseContractOut,
+    dependencies=[Depends(require_roles("operator", "director"))]
 )
 def sign_contract(purchase_id: int, body: ContractIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     purchase = db.get(MaterialPurchase, purchase_id)
@@ -158,7 +228,8 @@ class ReceiveIn(BaseModel):
 
 
 @router.post(
-    "/purchases/{purchase_id}/receive", dependencies=[Depends(require_roles("operator", "director"))]
+    "/purchases/{purchase_id}/receive", response_model=PurchaseReceivedOut,
+    dependencies=[Depends(require_roles("operator", "director"))]
 )
 def receive_purchase(
     purchase_id: int,
@@ -228,7 +299,8 @@ class ConsumableIn(BaseModel):
 
 
 @router.post(
-    "/consumables", status_code=201, dependencies=[Depends(require_roles("operator", "director"))]
+    "/consumables", response_model=ConsumableOut, status_code=201,
+    dependencies=[Depends(require_roles("operator", "director"))]
 )
 def register_consumable(body: ConsumableIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
@@ -275,7 +347,8 @@ class UseIn(BaseModel):
     surgery_id: int | None = None
 
 
-@router.post("/consumables/{barcode}/use", dependencies=[Depends(require_roles("doctor", "operator"))])
+@router.post("/consumables/{barcode}/use", response_model=ConsumableOut,
+             dependencies=[Depends(require_roles("doctor", "operator"))])
 def use_consumable(
     barcode: str,
     body: UseIn,
@@ -307,7 +380,7 @@ def use_consumable(
     return _consumable_out(db, item)
 
 
-@router.get("/consumables/trace/{barcode}")
+@router.get("/consumables/trace/{barcode}", response_model=ConsumableTraceOut)
 def trace_consumable(barcode: str, db: Session = Depends(get_db)):
     """按条码正向追溯：这枚耗材从哪来、用在谁身上、哪台手术。"""
     item = db.query(HighValueConsumable).filter(HighValueConsumable.barcode == barcode).first()
@@ -319,7 +392,7 @@ def trace_consumable(barcode: str, db: Session = Depends(get_db)):
     return out
 
 
-@router.get("/consumables")
+@router.get("/consumables", response_model=list[ConsumableOut])
 def list_consumables(
     response: Response,
     org_id: int | None = None,

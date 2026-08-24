@@ -116,7 +116,21 @@ import app.spd.routers as spd_routers
 #   随 token_urlsafe 每次都变，做过对照实验（同一份代码跑两次一样变），
 #   比对时按令牌归一化，令牌写死的那个二维码前后完全一致。
 #   见 test_spd_config_scales_teams_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 588
+# → 470（一次十二个模块：medwaste 11 / clinical_docs 9 / materials 9 / surgery 10 /
+#   accounting 9 / disease_programs 9 / rbac 9 / surveillance 9 / tcm_heritage 9 /
+#   workflows 9 / outpatient_docs 13 / fund 12，共 118 个端点，十二个模块全部清零。
+#   覆盖率首次过半（50.26%）。
+#   这一批换了**取证方式**：不再每个模块手写一份捕获脚本，改成给 app 装一个
+#   中间件，把**整个测试套件**跑出来的每个响应按 (方法, 路由模板, 状态码) 记下
+#   字节，加契约前后各跑一次逐项比对——一次覆盖所有模块。噪声底先做过对照实验
+#   （同一份代码跑两次），把随机项（验证码、令牌、二维码内容、时间戳）归一化到
+#   0 处差异后才开始用。工具见 tests/capture_plugin.py 与 docs/接口标准与治理.md。
+#   建模判断沿用既有几类：Money 列一律 int | float（accounting 全模块金额、
+#   materials 的采购与耗材单价）；条件键用 exclude_unset（accounting 凭证的
+#   entries、rbac 内置角色的 note、tcm_heritage 决策点的 answer/explain——
+#   最后这个是**嵌套**条件键，学员拉题目时答案整个键不出现）；
+#   "新建回执"与"列表行"键集合不同的一律两个模型，不硬套继承。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 470
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -146,6 +160,20 @@ FULLY_GOVERNED = {
     # 配置域：包，58 个端点分 6 个子模块，分三批做完（catalog+centers /
     # paths+devices / scales+teams），见 test_spd_config_*_contract.py
     "spd/config",
+    # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
+    # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
+    "medwaste",
+    "clinical_docs",
+    "materials",
+    "surgery",
+    "accounting",
+    "disease_programs",
+    "rbac",
+    "surveillance",
+    "tcm_heritage",
+    "workflows",
+    "outpatient_docs",
+    "fund",
     # 以下三个是"清单落后现实"的存量：它们早就零欠账，却一直没人登记，
     # 于是这些模块的回退一直不会单独变红。由 test_已治理模块清单不许落后现实 补上并钉住。
     "auth",
