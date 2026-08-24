@@ -3,12 +3,35 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-
 from ..clock import now_naive
-from ..concurrency import ensure_present, insert_if_absent, upsert_unique
+from ..concurrency import (
+    add_amount,
+    claim_quota,
+    ensure_present,
+    insert_if_absent,
+    take_amount,
+    upsert_unique,
+)
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
-from ..models import Course, LiveFeedback, LiveSession, TrainingRecord, User
+from ..deps import get_current_user, require_admin, require_roles, row_dict
+from ..models import (
+    Attachment,
+    Course,
+    CourseMaterial,
+    HealthArticle,
+    LiveFeedback,
+    LiveSession,
+    Organization,
+    TcmTechnique,
+    TrainingAssessment,
+    TrainingEnrollment,
+    TrainingPlan,
+    TrainingRecord,
+    User,
+)
+from sqlalchemy.exc import IntegrityError
+from ..datetypes import DateStr
+from ..visibility import assert_obj_org_writable, assert_org_writable
 
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
 
@@ -258,30 +281,6 @@ def list_live_sessions(status: str | None = None, db: Session = Depends(get_db))
         for s in q.order_by(LiveSession.id.desc()).limit(200).all()
     ]
 
-
-
-
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-
-from ..datetypes import DateStr
-from ..concurrency import add_amount, claim_quota, take_amount
-from ..visibility import assert_obj_org_writable, assert_org_writable
-from ..database import get_db
-from ..deps import get_current_user, require_roles, row_dict
-from ..models import (
-    Attachment,
-    CourseMaterial,
-    HealthArticle,
-    Organization,
-    TcmTechnique,
-    TrainingAssessment,
-    TrainingEnrollment,
-    TrainingPlan,
-    User,
-)
 
 # ===========================================================================
 # ⑳ 课件资源管理 + ㉑ 适宜技术实训管理
