@@ -3,7 +3,7 @@
 由原 `config.py`（1549 行）按业务分节拆出，见 ADR-0008。
 路由对象与跨节工具在 `._base`，本模块只放本域的端点。
 """
-
+from typing import Any
 
 from fastapi import Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -20,6 +20,65 @@ from ...models import (
 )
 from ....visibility import assert_org_writable
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
+
+
+# ============================================================ 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class PathNodeOut(BaseModel):
+    id: int
+    template_id: int
+    key: str
+    name: str
+    stage: str
+    seq: int
+    dept: str
+    exec_role: str
+    service_type: str
+    # 两个 JSON 列，存的是规则条件数组（经 _conditions 校验过形状）
+    enter_condition: list[dict[str, Any]]
+    complete_condition: list[dict[str, Any]]
+    next_key: str
+    due_days: int
+    timeout_action: str
+    require_form: bool
+    require_evidence: bool
+    form_code: str
+    note: str
+
+
+class PathTemplateOut(BaseModel):
+    """路径模板。`_template_out` 会出**三种形状**，靠两个条件键区分：
+
+    - 列表：基础字段 + `node_count`（另算的计数，不带节点明细）；
+    - 详情/新建：基础字段 + `nodes` + `node_count`；
+    - 复制/改状态：只有基础字段。
+
+    声明成带默认值的可选字段会给复制/改状态的响应注入 `"nodes": null`，
+    故带 `response_model_exclude_unset=True`。字段顺序也照 handler 排：
+    `nodes` 在 `node_count` 之前（`_template_out` 就是这个顺序），列表那条
+    省掉 `nodes` 后 `node_count` 仍在末尾，三种形状同一个模型就能对齐。
+    """
+
+    id: int
+    program_id: int
+    code: str
+    name: str
+    scene: str
+    risk_level: str
+    version: str
+    status: str
+    scope: str
+    # 区域级路径不挂机构/团队；未复制而来的没有来源 id
+    org_id: int | None
+    team_id: int | None
+    description: str
+    copied_from_id: int | None
+    created_by: str
+    nodes: list[PathNodeOut] | None = None
+    node_count: int | None = None
 
 
 # ============================================================ 标准化指导路径
@@ -86,7 +145,8 @@ def _node_out(n: SpdPathNode) -> dict:
     }
 
 
-@router.post("/path-templates", status_code=201,
+@router.post("/path-templates", response_model=PathTemplateOut,
+             response_model_exclude_unset=True, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_path_template(
     body: PathTemplateIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -105,7 +165,8 @@ def create_path_template(
     return _template_out(template, [])
 
 
-@router.get("/path-templates")
+@router.get("/path-templates", response_model=list[PathTemplateOut],
+            response_model_exclude_unset=True)
 def list_path_templates(
     response: Response,
     program_id: int | None = None,
@@ -134,7 +195,8 @@ def list_path_templates(
     return [{**_template_out(t), "node_count": counts.get(t.id, 0)} for t in rows]
 
 
-@router.get("/path-templates/{template_id}")
+@router.get("/path-templates/{template_id}", response_model=PathTemplateOut,
+            response_model_exclude_unset=True)
 def get_path_template(template_id: int, db: Session = Depends(get_db)):
     template = db.get(SpdPathTemplate, template_id)
     if template is None:
@@ -148,8 +210,8 @@ def get_path_template(template_id: int, db: Session = Depends(get_db)):
     return _template_out(template, nodes)
 
 
-@router.post("/path-templates/{template_id}/nodes", status_code=201,
-             dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/path-templates/{template_id}/nodes", response_model=PathNodeOut,
+             status_code=201, dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def add_path_node(
     template_id: int,
     body: PathNodeIn,
@@ -179,7 +241,8 @@ def add_path_node(
     return _node_out(node)
 
 
-@router.patch("/path-nodes/{node_id}", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.patch("/path-nodes/{node_id}", response_model=PathNodeOut,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_path_node(
     node_id: int,
     body: dict,
@@ -230,7 +293,8 @@ class CopyIn(BaseModel):
     version: str = Field(default="", max_length=16)
 
 
-@router.post("/path-templates/{template_id}/copy", status_code=201,
+@router.post("/path-templates/{template_id}/copy", response_model=PathTemplateOut,
+             response_model_exclude_unset=True, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def copy_path_template(
     template_id: int,
@@ -278,7 +342,8 @@ class StatusIn(BaseModel):
     status: str = Field(pattern="^(draft|published|disabled)$")
 
 
-@router.post("/path-templates/{template_id}/status",
+@router.post("/path-templates/{template_id}/status", response_model=PathTemplateOut,
+             response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def set_path_status(
     template_id: int,

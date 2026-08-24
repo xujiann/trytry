@@ -69,7 +69,68 @@ import app.spd.routers as spd_routers
 #   响应注入 `null`，既改字节又等于公告该字段存在（`debug_code` 是登录验证码的
 #   回显口子，P0 整改专门收紧过）。两个端点用 `response_model_exclude_unset=True`，
 #   两条分支都做了逐字节比对，见 test_portal_auth_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 696
+# → 674（portal 的 me 组 19 个 + 三个已废弃的遗留端点，`app/routers/portal.py`
+#   契约欠账清零。三处判断：①`me/family` 的条件键 `member_id`——本人那一行没有它
+#   （本人不是一条代管关系），声明成可选字段会注入 `"member_id": null`，客户端
+#   照着 null 调 `DELETE /me/family/None` 就是平白多出来的错误路径，故用
+#   `response_model_exclude_unset=True`；②Money 陷阱在这一批出现了四处
+#   （账单三项、费用明细单价与金额、分类汇总的**值**、押金余额），整数金额声明成
+#   float 会把「200 元」变成「200.0 元」；③`_build_archive` 被三个端点共用，
+#   只建一个 `ArchiveOut`，并有用例钉住三者形状相等，免得日后改一处漏两处。
+#   消息两端点复用 notifications 已有的 `NotificationOut`/`UnreadCountOut`，
+#   不另建同形模型。29 个请求加契约前后逐字节一致，四处变异各自转红，
+#   见 test_portal_me_contract.py。）
+# → 648（`spd/portal` 慢专病患者移动端 26 个端点，两侧居民端契约就此都清零）。
+#   最要紧的是 `/screenings` 的**三种形状**：草稿+量表（带 answered/total_items）、
+#   草稿无量表（只有四个键）、落库（带 id/result/can_apply）。逐字段建模会把三者
+#   的字段互相注入 null，故 `response_model_exclude_unset=True`，三条分支各钉一遍。
+#   `score` 是 `int | float`——有量表时 `round(total, 2)` 是 float，无量表时兜底
+#   字面量 `0` 是 int。与平台侧相反，spd 这边多是 **Float 列**（measurement.value、
+#   assessment.score），整数值读回来就是 `140.0`，声明 float 才是原样。
+#   两处自己犯的错都由机制当场抓到，写进了模型 docstring：详情模型继承列表模型
+#   凭空要求了 `created_at`（响应校验拦下）、`SpdScreeningOut` 字段顺序排错
+#   （序列化按声明顺序走，逐字节比对拦下）。
+#   41 个请求加契约前后逐字节一致，五处变异各自转红，见 test_spd_portal_contract.py。）
+# → 635（`spd/config` 第一批：catalog 9 + centers 4。config 是个包（ADR-0008 拆的），
+#   58 个端点分在 6 个子模块里，按子模块分批做——一次比 58 个端点，逐字节比对出了
+#   问题不好定位，粒度本身就是这套办法的价值。三处判断：`ProgramDetailOut` 继承
+#   `ProgramOut` 是对的（详情是列表的**严格超集**，只多 targets——与 spd/portal 那批
+#   的转诊详情正相反，那个不是超集，继承就错了）；`target_low`/`target_high` 是可空
+#   Float（定性目标没有上下限）；`org-tree` 是**自引用递归**模型（树深由数据决定）。
+#   23 个请求逐字节一致，五处变异各自转红，见 test_spd_config_catalog_contract.py。）
+# → 614（第二批：paths 7 + devices 9，外加**判据第二次放宽**——204 无响应体也算
+#   声明了契约。`_template_out` 出三种形状（列表只带 node_count、详情/新建带
+#   nodes+node_count、复制/改状态两个都不带），用 exclude_unset，且 nodes 必须
+#   声明在 node_count 之前（序列化按声明顺序走）。`success_rate` 是 Float 列 +
+#   round(...,2)，满分也是 100.0。204 那条**确实白送了 5 个端点**（与放宽媒体
+#   类型那次不同，那次是 0 个），故 614 = 619 - 5；由
+#   test_204口径没有白送别的端点 钉住清单。38 个请求逐字节一致，五处变异转红，
+#   见 test_spd_config_paths_devices_contract.py。）
+# → 588（第三批：scales 15 + teams 12，`spd/config` 58 个端点清零、进
+#   FULLY_GOVERNED。四处判断：服务包 `price` 是 Money（Numeric）列，整数价
+#   声明成 float 就把「200 元」变「200.0 元」；标签**新建与列表不同形**
+#   （列表没有 active，它本身已按 active 过滤），两个模型不能合并；`_team_out`
+#   出三种形状用 exclude_unset，且 member_count 声明在 members 之前；两个二维码
+#   端点改用 `_base.SvgResponse`（与 reports.CsvResponse 同一写法，声明与实际
+#   返回是同一个类）。41 个请求逐字节一致，五处变异各自转红——SVG 的字节数
+#   随 token_urlsafe 每次都变，做过对照实验（同一份代码跑两次一样变），
+#   比对时按令牌归一化，令牌写死的那个二维码前后完全一致。
+#   见 test_spd_config_scales_teams_contract.py。）
+# → 470（一次十二个模块：medwaste 11 / clinical_docs 9 / materials 9 / surgery 10 /
+#   accounting 9 / disease_programs 9 / rbac 9 / surveillance 9 / tcm_heritage 9 /
+#   workflows 9 / outpatient_docs 13 / fund 12，共 118 个端点，十二个模块全部清零。
+#   覆盖率首次过半（50.26%）。
+#   这一批换了**取证方式**：不再每个模块手写一份捕获脚本，改成给 app 装一个
+#   中间件，把**整个测试套件**跑出来的每个响应按 (方法, 路由模板, 状态码) 记下
+#   字节，加契约前后各跑一次逐项比对——一次覆盖所有模块。噪声底先做过对照实验
+#   （同一份代码跑两次），把随机项（验证码、令牌、二维码内容、时间戳）归一化到
+#   0 处差异后才开始用。工具见 tests/capture_plugin.py 与 docs/接口标准与治理.md。
+#   建模判断沿用既有几类：Money 列一律 int | float（accounting 全模块金额、
+#   materials 的采购与耗材单价）；条件键用 exclude_unset（accounting 凭证的
+#   entries、rbac 内置角色的 note、tcm_heritage 决策点的 answer/explain——
+#   最后这个是**嵌套**条件键，学员拉题目时答案整个键不出现）；
+#   "新建回执"与"列表行"键集合不同的一律两个模型，不硬套继承。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 470
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -92,6 +153,27 @@ FULLY_GOVERNED = {
     "analytics",  # 决策指标扩展十端点，见 test_analytics_contract.py
     "reports",  # /monitoring 走 Pydantic；两个 CSV 导出以 CsvResponse 声明媒体类型，
                 # 见 test_reports_contract.py
+    # 两侧居民端。它们是**两个 key**（模块名按包限定，见 _iter_endpoints 的
+    # docstring）——不分开的话，其中一方的回退不会单独变红。
+    "portal",  # 见 test_portal_auth_contract.py、test_portal_me_contract.py
+    "spd/portal",  # 见 test_spd_portal_contract.py
+    # 配置域：包，58 个端点分 6 个子模块，分三批做完（catalog+centers /
+    # paths+devices / scales+teams），见 test_spd_config_*_contract.py
+    "spd/config",
+    # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
+    # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
+    "medwaste",
+    "clinical_docs",
+    "materials",
+    "surgery",
+    "accounting",
+    "disease_programs",
+    "rbac",
+    "surveillance",
+    "tcm_heritage",
+    "workflows",
+    "outpatient_docs",
+    "fund",
     # 以下三个是"清单落后现实"的存量：它们早就零欠账，却一直没人登记，
     # 于是这些模块的回退一直不会单独变红。由 test_已治理模块清单不许落后现实 补上并钉住。
     "auth",
@@ -101,11 +183,20 @@ FULLY_GOVERNED = {
 
 
 def _iter_endpoints():
-    """遍历所有源路由模块里的 APIRoute（环境无关，不依赖 app.routes 的运行期封装）。"""
-    for pkg in (platform_routers, spd_routers):
+    """遍历所有源路由模块里的 APIRoute（环境无关，不依赖 app.routes 的运行期封装）。
+
+    模块名按包限定（spd 的加 `spd/` 前缀）。不加前缀时两个包里的同名模块会被
+    合并成一个 key——现实里就有一对：`app/routers/portal.py` 与
+    `app/spd/routers/portal.py`。合并的后果是**前者治理干净了也进不了
+    `FULLY_GOVERNED`**（合并后的 key 还带着后者的欠账），于是它被改回裸 dict
+    时不会单独变红，只剩总基线兜底——而总基线是可以被别处的治理抵消的。
+    这正是本文件开头说要关掉的那种"静默回退"，只是换了个入口。
+    """
+    for pkg, prefix in ((platform_routers, ""), (spd_routers, "spd/")):
         for modinfo in pkgutil.iter_modules(pkg.__path__):
             if modinfo.name.startswith("_"):
                 continue
+            name = f"{prefix}{modinfo.name}"
             module = importlib.import_module(f"{pkg.__name__}.{modinfo.name}")
             for router in (v for v in vars(module).values() if isinstance(v, APIRouter)):
                 for route in router.routes:
@@ -113,7 +204,7 @@ def _iter_endpoints():
                         continue
                     if not (route.methods - {"HEAD", "OPTIONS"}):
                         continue
-                    yield modinfo.name, route
+                    yield name, route
 
 
 def _declares_non_json_media(route) -> bool:
@@ -148,9 +239,32 @@ def _declares_non_json_media(route) -> bool:
     return False
 
 
+def _declares_empty_body(route) -> bool:
+    """端点是否声明了**没有响应体**（HTTP 204）。
+
+    与 CSV 下载同一个道理：204 按定义就没有 body，`response_model` 对它没有意义
+    ——函数直接返回 `Response(status_code=204)`，FastAPI 也不会走模型。把这类
+    端点永远算作欠账，等于往棘轮里掺进第二笔**永远还不掉的账**。
+
+    「204」本身就是写进 OpenAPI 的契约声明（"这个接口成功时不返回内容"），
+    不是豁免。判据同样从路由对象推导，不是手工清单。
+
+    放宽这一条**确实白送了 5 个端点**（3 个 spd/config + spd/followup 与
+    spd/population 各 1 个，都是删除接口，写这条时它们都没有 response_model）
+    ——这与放宽媒体类型那次不同，那次是 0 个。数字因此一次性降 5，
+    但降掉的是本来就还不掉的账。`test_204口径没有白送别的端点` 钉住这份清单，
+    往后谁想靠改 status_code 刷低欠账，那条会变红。
+    """
+    return route.status_code == 204
+
+
 def _has_contract(route) -> bool:
-    """声明了响应契约：Pydantic 模型，或显式的非 JSON 媒体类型。"""
-    return route.response_model is not None or _declares_non_json_media(route)
+    """声明了响应契约：Pydantic 模型、显式的非 JSON 媒体类型，或 204 无响应体。"""
+    return (
+        route.response_model is not None
+        or _declares_non_json_media(route)
+        or _declares_empty_body(route)
+    )
 
 
 def _coverage():
@@ -182,11 +296,61 @@ def test_放宽媒体类型口径没有白送任何端点():
     assert by_media == [
         "reports GET /api/reports/monitoring/export",
         "reports GET /api/reports/operations/export",
+        # 两个二维码：`_base.SvgResponse` 同时是 response_class 与实际返回的类
+        "spd/config GET /api/spd/scales/{scale_id}/qr.svg",
+        "spd/config GET /api/spd/village-doctors/{vd_id}/qr.svg",
     ], (
         f"靠媒体类型算作已治理的端点清单变了：{by_media}。"
         "新增这类端点是可以的，但必须是真的返回非 JSON 的下载/单据类接口，"
         "并在此处同步——别拿空 responses 刷低欠账。"
     )
+
+
+def test_204口径没有白送别的端点():
+    """靠 204 脱账的端点必须是**真的不返回内容**的删除类接口，且清单是这几个。
+
+    与媒体类型那条同样的用途：口径本身不能变成漏洞。给一个原本返回 JSON 的
+    端点改成 `status_code=204` 会改响应字节（body 直接没了），不可能"顺手"发生；
+    真发生了，这里的清单会变长，当场看得见。
+    """
+    by_204 = sorted(
+        f"{mod} {sorted(route.methods - {'HEAD', 'OPTIONS'})[0]} {route.path}"
+        for mod, route in _iter_endpoints()
+        if route.response_model is None and _declares_empty_body(route)
+    )
+    assert by_204 == [
+        "spd/config DELETE /api/spd/path-nodes/{node_id}",
+        "spd/config DELETE /api/spd/path-templates/{template_id}",
+        "spd/config DELETE /api/spd/team-members/{member_id}",
+        "spd/followup DELETE /api/spd/report-tasks/{task_id}",
+        "spd/population DELETE /api/spd/groups/{group_id}/members/{patient_id}",
+    ], (
+        f"靠 204 算作已治理的端点清单变了：{by_204}。"
+        "新增这类端点是可以的，但必须真的是无响应体的删除接口，并在此处同步。"
+    )
+
+
+def test_两个包里的同名模块不被合并成一个key():
+    """`app/routers/portal.py` 与 `app/spd/routers/portal.py` 必须是两个 key。
+
+    这条是上面那个前缀的**反空转守卫**：把前缀去掉，两者合并成一个 `portal`，
+    `spd/portal` 这个 key 根本不存在，本条当场转红。
+
+    为什么这个前缀不是可有可无的整洁癖：两者现在都零欠账、都登记在
+    `FULLY_GOVERNED` 里。合并成一个 key 之后，**其中一方回退成裸 dict 时另一方
+    还撑着这个 key**——`without` 不为 0 才会红，可这个 key 的 without 是两者之和，
+    只要没人去看总基线（而总基线可以被别处的治理抵消），回退就静默发生了。
+    分成两个 key，谁退谁红。
+    """
+    _, _, per_module = _coverage()
+    assert "portal" in per_module and "spd/portal" in per_module, sorted(per_module)
+    for key in ("portal", "spd/portal"):
+        assert per_module[key][1] == 0, (
+            f"{key} 出现了 {per_module[key][1]} 项契约欠账——它已登记为零欠账模块"
+        )
+    # 两者的端点数都不为零：万一哪天某个包里的 portal.py 被搬走，这个 key 会
+    # 变成 [0, 0]，上面的断言照样绿——那时这条守卫就空转了。
+    assert per_module["portal"][0] > 0 and per_module["spd/portal"][0] > 0
 
 
 def test_响应契约欠账不许变大():

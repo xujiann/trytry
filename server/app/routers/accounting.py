@@ -35,7 +35,134 @@ class SubjectIn(BaseModel):
     direction: str = Field(default="debit", pattern="^(debit|credit)$")
 
 
-@router.post("/subjects", status_code=201, dependencies=[Depends(require_admin)])
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+#
+# 本模块**所有金额都是 `Money`（Numeric）列或其 round/sum 派生值**，一律
+# `int | float`：整数金额读回来是 int，声明成 float 会把「50000 元」印成
+# 「50000.0 元」——会计报表上尤其不能这样。
+
+
+class AccountSubjectOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    direction: str
+    active: bool
+
+
+class VoucherEntryOut(BaseModel):
+    subject_code: str
+    summary: str
+    debit: int | float
+    credit: int | float
+
+
+class VoucherOut(BaseModel):
+    """记账凭证。`entries` 是**条件键**：列表不带分录（一张凭证十几条分录，
+    列表页塞进去没人看），详情与新建才带。声明成可选字段会给列表每一行注入
+    `"entries": null`，故端点带 `response_model_exclude_unset=True`。"""
+
+    id: int
+    org_id: int
+    period: str
+    voucher_no: str
+    voucher_date: str
+    summary: str
+    total_debit: int | float
+    total_credit: int | float
+    status: str
+    entries: list[VoucherEntryOut] | None = None
+
+
+class VoucherStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+class TrialBalanceLineOut(BaseModel):
+    subject_code: str
+    subject_name: str
+    category: str
+    debit: int | float
+    credit: int | float
+
+
+class TrialBalanceOut(BaseModel):
+    period: str
+    lines: list[TrialBalanceLineOut]
+    total_debit: int | float
+    total_credit: int | float
+    balanced: bool
+
+
+class BalanceSheetOut(BaseModel):
+    assets: int | float
+    liabilities: int | float
+    net_assets: int | float
+    # 恒等式校验值：期间结余尚未结转净资产，故右边要把它算进去
+    check: int | float
+
+
+class IncomeStatementOut(BaseModel):
+    income: int | float
+    expense: int | float
+    surplus: int | float
+
+
+class StatementOut(BaseModel):
+    balance_sheet: BalanceSheetOut
+    income_statement: IncomeStatementOut
+
+
+class OrgStatementOut(BaseModel):
+    """单机构报表 = 机构标识 + 两张表。
+
+    **不继承 `StatementOut`**：handler 写的是
+    `{"org_id":…, "org_name":…, **statement(bucket)}`，机构标识在前；
+    继承会把父类字段排到前面，序列化顺序随之颠倒——那是改字节。
+    这一处正是套件级字节捕获抓到的（先写成了继承，比对当场报出键序变化）。
+    """
+
+    org_id: int
+    org_name: str
+    balance_sheet: BalanceSheetOut
+    income_statement: IncomeStatementOut
+
+
+class VoucherTotalsOut(BaseModel):
+    debit: int | float
+    credit: int | float
+    balanced: bool
+    # 不平也出表，把差额标出来——出不了表的时候恰恰最需要看表
+    difference: int | float
+
+
+class ConsolidationCaliberOut(BaseModel):
+    """口径说明随报表一起出。这几段是**给看报表的人**的，不是注释：
+    "未做内部往来抵销"这件事不写在响应里，看的人会当成真合并报表。"""
+
+    elimination: bool
+    note: str
+    direction: str
+    check: str
+
+
+class ConsolidatedStatementsOut(BaseModel):
+    period: str
+    group_id: int | None
+    orgs: list[OrgStatementOut]
+    consolidated: StatementOut
+    voucher_totals: VoucherTotalsOut
+    # 科目表里查不到的编码单列，不静默丢弃也不硬塞进某一类
+    unknown_subject_codes: list[str]
+    caliber: ConsolidationCaliberOut
+
+
+@router.post("/subjects", response_model=AccountSubjectOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_subject(body: SubjectIn, db: Session = Depends(get_db)):
     subject = AccountSubject(**body.model_dump())
     db.add(subject)
@@ -59,7 +186,7 @@ def _subject_out(s: AccountSubject) -> dict:
     }
 
 
-@router.get("/subjects")
+@router.get("/subjects", response_model=list[AccountSubjectOut])
 def list_subjects(category: str | None = None, db: Session = Depends(get_db)):
     query = db.query(AccountSubject).filter(AccountSubject.active.is_(True))
     if category:
@@ -130,7 +257,8 @@ def _voucher_out(v: Voucher, entries: list[VoucherEntry] | None = None) -> dict:
     return out
 
 
-@router.post("/vouchers", status_code=201, dependencies=[Depends(require_roles("director"))])
+@router.post("/vouchers", response_model=VoucherOut, response_model_exclude_unset=True,
+             status_code=201, dependencies=[Depends(require_roles("director"))])
 def create_voucher(
     body: VoucherIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -175,7 +303,8 @@ def create_voucher(
     return _voucher_out(voucher, entries)
 
 
-@router.get("/vouchers")
+@router.get("/vouchers", response_model=list[VoucherOut],
+            response_model_exclude_unset=True)
 def list_vouchers(
     response: Response,
     org_id: int | None = None,
@@ -196,7 +325,8 @@ def list_vouchers(
     ]
 
 
-@router.get("/vouchers/{voucher_id}")
+@router.get("/vouchers/{voucher_id}", response_model=VoucherOut,
+            response_model_exclude_unset=True)
 def get_voucher(voucher_id: int, db: Session = Depends(get_db)):
     voucher = db.get(Voucher, voucher_id)
     if voucher is None:
@@ -205,7 +335,8 @@ def get_voucher(voucher_id: int, db: Session = Depends(get_db)):
     return _voucher_out(voucher, entries)
 
 
-@router.post("/vouchers/{voucher_id}/post", dependencies=[Depends(require_roles("director"))])
+@router.post("/vouchers/{voucher_id}/post", response_model=VoucherStatusOut,
+             dependencies=[Depends(require_roles("director"))])
 def post_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """过账：草稿 → 已过账，之后不可修改。"""
     voucher = db.get(Voucher, voucher_id)
@@ -221,7 +352,8 @@ def post_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = De
     return {"id": voucher.id, "status": voucher.status}
 
 
-@router.post("/vouchers/{voucher_id}/void", dependencies=[Depends(require_roles("director"))])
+@router.post("/vouchers/{voucher_id}/void", response_model=VoucherStatusOut,
+             dependencies=[Depends(require_roles("director"))])
 def void_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """作废：已过账凭证的更正手段。不提供删除——账错了也要看得见。"""
     voucher = db.get(Voucher, voucher_id)
@@ -235,7 +367,7 @@ def void_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = De
     return {"id": voucher.id, "status": voucher.status}
 
 
-@router.get("/trial-balance")
+@router.get("/trial-balance", response_model=TrialBalanceOut)
 def trial_balance(
     period: str,
     org_id: int | None = None,
@@ -321,7 +453,7 @@ def _balances(db: Session, period: str, org_ids: list[int] | None):
     return query.group_by(Voucher.org_id, VoucherEntry.subject_code).all()
 
 
-@router.get("/consolidated-statements")
+@router.get("/consolidated-statements", response_model=ConsolidatedStatementsOut)
 def consolidated_statements(
     period: str,
     org_id: int | None = None,

@@ -3,7 +3,7 @@
 由原 `config.py`（1549 行）按业务分节拆出，见 ADR-0008。
 路由对象与跨节工具在 `._base`，本模块只放本域的端点。
 """
-
+from typing import Any
 from secrets import token_urlsafe
 
 from fastapi import Depends, HTTPException, Request, Response
@@ -19,7 +19,74 @@ from ...models import (
     SpdServicePackage,
     SpdTag,
 )
-from ._base import CONFIG_ROLES, _qr_svg, router
+from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
+
+
+# ============================================================ 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class ScaleOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    program_code: str
+    version: str
+    status: str
+    # 题目数组与评分规则：形状由题型与量表设计决定，宽类型如实反映
+    items: list[dict[str, Any]]
+    scoring: dict[str, Any]
+    # 未发布时是空串（未生成令牌），不是 null
+    qr_token: str
+    owner_team_id: int | None
+
+
+class EduMaterialOut(BaseModel):
+    id: int
+    code: str
+    title: str
+    program_code: str
+    media_type: str
+    content: str
+    media_url: str
+    dept: str
+    active: bool
+
+
+class ServicePackageOut(BaseModel):
+    """服务包。`price` 是 `Money`（`Numeric`）列——整数价读回来是 int，
+    声明成 float 会把「200 元」变成「200.0 元」。"""
+
+    id: int
+    code: str
+    name: str
+    program_code: str
+    price: int | float
+    period_days: int
+    items: list[dict[str, Any]]
+    active: bool
+
+
+class TagOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    color: str
+    active: bool
+
+
+class TagBriefOut(BaseModel):
+    """列表里的标签**没有** `active`——列表本身已按 active 过滤，再回一个
+    恒为 true 的字段没有意义。与新建的返回形状不同，故是两个模型而不是继承。"""
+
+    id: int
+    code: str
+    name: str
+    category: str
+    color: str
 
 
 # ============================================================ 评估量表
@@ -45,7 +112,8 @@ def _scale_out(s: SpdScale) -> dict:
     }
 
 
-@router.post("/scales", status_code=201, dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/scales", response_model=ScaleOut, status_code=201,
+             dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_scale(body: ScaleIn, db: Session = Depends(get_db)):
     keys = [i.get("key") for i in body.items]
     if len(keys) != len(set(keys)):
@@ -60,7 +128,7 @@ def create_scale(body: ScaleIn, db: Session = Depends(get_db)):
     return _scale_out(scale)
 
 
-@router.get("/scales")
+@router.get("/scales", response_model=list[ScaleOut])
 def list_scales(
     response: Response,
     category: str | None = None,
@@ -80,7 +148,7 @@ def list_scales(
     return [_scale_out(s) for s in paginate(query.order_by(SpdScale.id), response, offset, limit)]
 
 
-@router.get("/scales/{scale_id}")
+@router.get("/scales/{scale_id}", response_model=ScaleOut)
 def get_scale(scale_id: int, db: Session = Depends(get_db)):
     scale = db.get(SpdScale, scale_id)
     if scale is None:
@@ -88,7 +156,8 @@ def get_scale(scale_id: int, db: Session = Depends(get_db)):
     return _scale_out(scale)
 
 
-@router.patch("/scales/{scale_id}", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.patch("/scales/{scale_id}", response_model=ScaleOut,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_scale(scale_id: int, body: dict, db: Session = Depends(get_db)):
     scale = db.get(SpdScale, scale_id)
     if scale is None:
@@ -102,7 +171,8 @@ def update_scale(scale_id: int, body: dict, db: Session = Depends(get_db)):
     return _scale_out(scale)
 
 
-@router.post("/scales/{scale_id}/publish", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/scales/{scale_id}/publish", response_model=ScaleOut,
+             dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def publish_scale(scale_id: int, db: Session = Depends(get_db)):
     """发布并生成二维码令牌——量表要"经审核发布"后才允许被评估引用。"""
     scale = db.get(SpdScale, scale_id)
@@ -117,7 +187,7 @@ def publish_scale(scale_id: int, db: Session = Depends(get_db)):
     return _scale_out(scale)
 
 
-@router.get("/scales/{scale_id}/qr.svg")
+@router.get("/scales/{scale_id}/qr.svg", response_class=SvgResponse)
 def scale_qr(scale_id: int, request: Request, db: Session = Depends(get_db)):
     """量表评估二维码（成员端 #8）：扫码直达居民端自查页并预选该量表。
 
@@ -131,10 +201,11 @@ def scale_qr(scale_id: int, request: Request, db: Session = Depends(get_db)):
     if scale.status != "published" or not scale.qr_token:
         raise HTTPException(status_code=409, detail="量表未发布，先发布生成令牌")
     url = f"{str(request.base_url).rstrip('/')}/m/#scale={scale.qr_token}"
-    return Response(content=_qr_svg(url), media_type="image/svg+xml")
+    return SvgResponse(content=_qr_svg(url))
 
 
-@router.post("/scales/{scale_id}/disable", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/scales/{scale_id}/disable", response_model=ScaleOut,
+             dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def disable_scale(scale_id: int, db: Session = Depends(get_db)):
     scale = db.get(SpdScale, scale_id)
     if scale is None:
@@ -157,7 +228,7 @@ class EduIn(BaseModel):
     dept: str = Field(default="", max_length=64)
 
 
-@router.post("/edu-materials", status_code=201,
+@router.post("/edu-materials", response_model=EduMaterialOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor", "public_health"))])
 def create_edu(body: EduIn, db: Session = Depends(get_db)):
     material = SpdEduMaterial(**body.model_dump())
@@ -178,7 +249,7 @@ def _edu_out(m: SpdEduMaterial) -> dict:
     }
 
 
-@router.get("/edu-materials")
+@router.get("/edu-materials", response_model=list[EduMaterialOut])
 def list_edu(
     response: Response,
     program_code: str | None = None,
@@ -199,7 +270,7 @@ def list_edu(
     return [_edu_out(m) for m in rows]
 
 
-@router.patch("/edu-materials/{material_id}",
+@router.patch("/edu-materials/{material_id}", response_model=EduMaterialOut,
               dependencies=[Depends(require_roles("director", "doctor", "public_health"))])
 def update_edu(material_id: int, body: dict, db: Session = Depends(get_db)):
     material = db.get(SpdEduMaterial, material_id)
@@ -232,7 +303,7 @@ def _package_out(p: SpdServicePackage) -> dict:
     }
 
 
-@router.post("/service-packages", status_code=201,
+@router.post("/service-packages", response_model=ServicePackageOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_package(body: PackageIn, db: Session = Depends(get_db)):
     for item in body.items:
@@ -248,7 +319,7 @@ def create_package(body: PackageIn, db: Session = Depends(get_db)):
     return _package_out(package)
 
 
-@router.get("/service-packages")
+@router.get("/service-packages", response_model=list[ServicePackageOut])
 def list_packages(
     response: Response,
     program_code: str | None = None,
@@ -263,7 +334,7 @@ def list_packages(
     return [_package_out(p) for p in rows]
 
 
-@router.patch("/service-packages/{package_id}",
+@router.patch("/service-packages/{package_id}", response_model=ServicePackageOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_package(package_id: int, body: dict, db: Session = Depends(get_db)):
     package = db.get(SpdServicePackage, package_id)
@@ -286,7 +357,8 @@ class TagIn(BaseModel):
     color: str = Field(default="", max_length=16)
 
 
-@router.post("/tags", status_code=201, dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/tags", response_model=TagOut, status_code=201,
+             dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_tag(body: TagIn, db: Session = Depends(get_db)):
     tag = SpdTag(**body.model_dump())
     db.add(tag)
@@ -299,7 +371,7 @@ def create_tag(body: TagIn, db: Session = Depends(get_db)):
             "color": tag.color, "active": tag.active}
 
 
-@router.get("/tags")
+@router.get("/tags", response_model=list[TagBriefOut])
 def list_tags(category: str | None = None, db: Session = Depends(get_db)):
     query = db.query(SpdTag).filter(SpdTag.active.is_(True))
     if category:

@@ -140,7 +140,78 @@ def _role_out(role: Role, permission_count: int = 0) -> dict:
     }
 
 
-@router.get("/roles")
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class RoleOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    description: str
+    builtin: bool
+    active: bool
+    permission_count: int
+    # 内置角色的权限来自代码声明、不来自授权表——这里明说，而不是显示一个 0
+    # 让人以为"这个角色没权限"
+    permission_source: str
+
+
+class RoleDeletedOut(BaseModel):
+    deleted: bool
+
+
+class PermissionRevokedOut(BaseModel):
+    revoked: bool
+
+
+class PermissionOut(BaseModel):
+    id: int
+    code: str
+    method: str
+    path: str
+    module: str
+    builtin_roles: str
+
+
+class PermissionBriefOut(BaseModel):
+    """角色权限清单里的权限只带五个键（没有 builtin_roles）——
+    与 `/permissions` 全量清单不同形，故是两个模型。"""
+
+    id: int
+    code: str
+    module: str
+    path: str
+    method: str
+
+
+class ModuleOut(BaseModel):
+    module: str
+    permission_count: int
+
+
+class RolePermissionsOut(BaseModel):
+    """角色的权限点。`note` 是**条件键**：只有内置角色才有（它的权限不走授权表，
+    要当面说清楚，否则看到空列表会以为是没配）。声明成带默认值的可选字段会给
+    自定义角色也注入 `"note": null`，故端点带 `response_model_exclude_unset=True`。
+    """
+
+    role: RoleOut
+    permissions: list[PermissionBriefOut]
+    note: str | None = None
+
+
+class GrantResultOut(BaseModel):
+    role_id: int
+    granted: int
+    already_had: int
+    # 不存在的权限点 id 单列报出，不静默忽略——静默忽略会让人以为授成功了
+    unknown_permission_ids: list[int]
+    total: int
+
+
+@router.get("/roles", response_model=list[RoleOut])
 def list_roles(db: Session = Depends(get_db)):
     roles = db.query(Role).order_by(Role.builtin.desc(), Role.id).all()
     counts = row_dict(
@@ -151,7 +222,8 @@ def list_roles(db: Session = Depends(get_db)):
     return [_role_out(r, counts.get(r.id, 0)) for r in roles]
 
 
-@router.post("/roles", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/roles", response_model=RoleOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_role(body: RoleIn, db: Session = Depends(get_db)):
     if body.key in ROLE_NAMES:
         raise HTTPException(status_code=409, detail="该 key 与内置角色冲突")
@@ -166,7 +238,8 @@ def create_role(body: RoleIn, db: Session = Depends(get_db)):
     return _role_out(role)
 
 
-@router.patch("/roles/{role_id}", dependencies=[Depends(require_admin)])
+@router.patch("/roles/{role_id}", response_model=RoleOut,
+              dependencies=[Depends(require_admin)])
 def update_role(role_id: int, body: RoleUpdate, db: Session = Depends(get_db)):
     role = _role(db, role_id)
     data = body.model_dump(exclude_unset=True)
@@ -183,7 +256,8 @@ def update_role(role_id: int, body: RoleUpdate, db: Session = Depends(get_db)):
     return _role_out(role)
 
 
-@router.delete("/roles/{role_id}", dependencies=[Depends(require_admin)])
+@router.delete("/roles/{role_id}", response_model=RoleDeletedOut,
+               dependencies=[Depends(require_admin)])
 def delete_role(role_id: int, db: Session = Depends(get_db)):
     """删除自定义角色。内置角色不可删——删掉 doctor 这一行，全平台
     `require_roles("doctor")` 会同时失效，那不是配置，是拆平台。"""
@@ -209,7 +283,7 @@ def _role(db: Session, role_id: int) -> Role:
 # ---------------------------------------------------------------- 权限点
 
 
-@router.get("/permissions")
+@router.get("/permissions", response_model=list[PermissionOut])
 def list_permissions(
     module: str | None = None, keyword: str | None = None, db: Session = Depends(get_db)
 ):
@@ -226,7 +300,7 @@ def list_permissions(
     ]
 
 
-@router.get("/modules")
+@router.get("/modules", response_model=list[ModuleOut])
 def list_modules(db: Session = Depends(get_db)):
     rows = (
         db.query(Permission.module, sa.func.count(Permission.id))
@@ -245,7 +319,8 @@ class GrantIn(BaseModel):
     copy_from_builtin: str | None = None
 
 
-@router.get("/roles/{role_id}/permissions")
+@router.get("/roles/{role_id}/permissions", response_model=RolePermissionsOut,
+            response_model_exclude_unset=True)
 def role_permissions(role_id: int, db: Session = Depends(get_db)):
     role = _role(db, role_id)
     if role.builtin:
@@ -272,7 +347,8 @@ def role_permissions(role_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/roles/{role_id}/permissions", dependencies=[Depends(require_admin)])
+@router.post("/roles/{role_id}/permissions", response_model=GrantResultOut,
+             dependencies=[Depends(require_admin)])
 def grant_permissions(role_id: int, body: GrantIn, db: Session = Depends(get_db)):
     """授权（增量，不覆盖）。三种给法可叠加：逐个、按模块、复制内置角色。"""
     role = _role(db, role_id)
@@ -323,7 +399,8 @@ def grant_permissions(role_id: int, body: GrantIn, db: Session = Depends(get_db)
 
 
 @router.delete(
-    "/roles/{role_id}/permissions/{permission_id}", dependencies=[Depends(require_admin)]
+    "/roles/{role_id}/permissions/{permission_id}", response_model=PermissionRevokedOut,
+    dependencies=[Depends(require_admin)]
 )
 def revoke_permission(role_id: int, permission_id: int, db: Session = Depends(get_db)):
     row = (

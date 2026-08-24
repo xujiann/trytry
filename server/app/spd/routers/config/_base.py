@@ -7,7 +7,7 @@
 """
 
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from ....deps import get_current_user
 from ...rules import RuleError, validate_conditions
@@ -34,6 +34,17 @@ def _bump_version(version: str) -> str:
     if version.startswith("v") and version[1:].isdigit():
         return f"v{int(version[1:]) + 1}"
     return f"{version}-r2"
+
+
+class SvgResponse(Response):
+    """带 `media_type` 的 SVG 响应。
+
+    既当 `response_class=`（把媒体类型写进 OpenAPI，也让契约棘轮认得出这是
+    "我返回 image/svg+xml 字节流"的声明），也是二维码端点实际返回的类——
+    声明与实际返回是同一个类，不会各说各话。写法与 `reports.CsvResponse` 一致。
+    """
+
+    media_type = "image/svg+xml"
 
 
 def _qr_svg(content: str) -> str:

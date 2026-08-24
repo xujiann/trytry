@@ -22,6 +22,45 @@ from ...models import (
 from ._base import CONFIG_ROLES, router
 
 
+# ============================================================ 响应契约
+#
+# 与 catalog 同理，模型放在所有端点之前（`response_model=` 在导入时求值）。
+
+
+class CenterOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    program_code: str
+    # 牵头机构与负责人都可为空（中心刚建、还没定人时）
+    lead_org_id: int | None
+    lead_dept: str
+    leader_user_id: int | None
+    # 两个 JSON 列，存的是 id 数组
+    org_ids: list[int]
+    team_ids: list[int]
+    version: str
+    status: str
+
+
+class OrgTreeNodeOut(BaseModel):
+    """机构树节点——**自引用**：`children` 是同类型节点的列表。
+
+    树深由数据决定（县—乡—村是三级，市级四层也合法），所以只能递归声明，
+    不能把层级摊平成固定字段。
+    """
+
+    id: int
+    name: str
+    org_type: str
+    level: str
+    # 根节点（县级/市级）没有上级
+    parent_id: int | None
+    team_count: int
+    enrolled: int
+    children: list["OrgTreeNodeOut"]
+
+
 # ============================================================ 重点慢专病中心
 
 
@@ -45,7 +84,8 @@ def _center_out(c: SpdCenter) -> dict:
     }
 
 
-@router.post("/centers", status_code=201, dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.post("/centers", response_model=CenterOut, status_code=201,
+             dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_center(body: CenterIn, db: Session = Depends(get_db)):
     if db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first() is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
@@ -59,7 +99,7 @@ def create_center(body: CenterIn, db: Session = Depends(get_db)):
     return _center_out(center)
 
 
-@router.get("/centers")
+@router.get("/centers", response_model=list[CenterOut])
 def list_centers(program_code: str | None = None, db: Session = Depends(get_db)):
     query = db.query(SpdCenter)
     if program_code:
@@ -67,7 +107,8 @@ def list_centers(program_code: str | None = None, db: Session = Depends(get_db))
     return [_center_out(c) for c in query.order_by(SpdCenter.id).limit(200).all()]
 
 
-@router.patch("/centers/{center_id}", dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+@router.patch("/centers/{center_id}", response_model=CenterOut,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_center(center_id: int, body: dict, db: Session = Depends(get_db)):
     center = db.get(SpdCenter, center_id)
     if center is None:
@@ -83,7 +124,7 @@ def update_center(center_id: int, body: dict, db: Session = Depends(get_db)):
 # ============================================================ 机构树（三级）
 
 
-@router.get("/org-tree")
+@router.get("/org-tree", response_model=list[OrgTreeNodeOut])
 def org_tree(db: Session = Depends(get_db)):
     """县—乡—村三级机构树，附各机构的慢专病团队数与在管人数。
 

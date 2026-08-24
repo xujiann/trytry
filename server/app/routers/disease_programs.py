@@ -9,6 +9,8 @@
 """
 from datetime import date
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -88,7 +90,80 @@ def _program_out(p: DiseaseProgram) -> dict:
 # ============================================================ 专病目录
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_admin)])
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class DiseaseProgramOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    description: str
+    org_id: int | None
+    # 路径节点定义（JSON 列）：字段由节点类型决定，宽字典如实反映
+    path_nodes: list[dict[str, Any]]
+    active: bool
+
+
+class PathRecordOut(BaseModel):
+    node_key: str
+    performed_at: str
+    operator_name: str
+    result: str
+    note: str
+
+
+class CompletionOut(BaseModel):
+    """路径完成度。`nodes` 是 `{**节点定义, "done": bool}`——节点定义来自
+    `path_nodes` JSON 列，字段不固定，故只能是宽字典。"""
+
+    nodes: list[dict[str, Any]]
+    required_total: int
+    required_done: int
+    required_done_pct: float
+    pending_required: list[str]
+
+
+class DiseaseEnrollmentOut(BaseModel):
+    id: int
+    program_id: int
+    patient_id: int
+    org_id: int
+    status: str
+    status_name: str
+    enrolled_at: str
+    exited_at: str
+    outcome: str
+    # 未评价时折成"未评价"而不是空串——报表上"空"和"未评价"是两回事
+    outcome_name: str
+    outcome_note: str
+    exit_reason: str
+    completion: CompletionOut
+    records: list[PathRecordOut]
+
+
+class CountedNameOut(BaseModel):
+    count: int
+    name: str
+
+
+class ProgramStatsOut(BaseModel):
+    """按状态与疗效的构成。两个 dict 的键都是**实际出现过的**取值，
+    没出现的不该硬塞 0；`unrated`（出组但未评价）与各项疗效并列，
+    不并进任何一项——并进去就等于替临床下了结论。"""
+
+    program_id: int
+    total: int
+    by_status: dict[str, CountedNameOut]
+    by_outcome: dict[str, CountedNameOut]
+    avg_required_completion_pct: float
+    # 口径随数字一起出：不写在响应里，看的人会按自己的理解解释这个百分比
+    caliber: str
+
+
+@router.post("", response_model=DiseaseProgramOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_program(body: ProgramIn, db: Session = Depends(get_db)):
     if body.org_id is not None and db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -108,7 +183,7 @@ def create_program(body: ProgramIn, db: Session = Depends(get_db)):
     return _program_out(program)
 
 
-@router.get("")
+@router.get("", response_model=list[DiseaseProgramOut])
 def list_programs(active: bool | None = None, db: Session = Depends(get_db)):
     query = db.query(DiseaseProgram)
     if active is not None:
@@ -116,7 +191,8 @@ def list_programs(active: bool | None = None, db: Session = Depends(get_db)):
     return [_program_out(p) for p in query.order_by(DiseaseProgram.id).limit(200).all()]
 
 
-@router.patch("/{program_id}", dependencies=[Depends(require_admin)])
+@router.patch("/{program_id}", response_model=DiseaseProgramOut,
+              dependencies=[Depends(require_admin)])
 def update_program(program_id: int, body: ProgramUpdate, db: Session = Depends(get_db)):
     """改路径只影响**此后**的执行判定，已记录的节点不会被删。
 
@@ -139,7 +215,8 @@ def update_program(program_id: int, body: ProgramUpdate, db: Session = Depends(g
 # ============================================================ 入组与路径推进
 
 
-@router.post("/{program_id}/enrollments", status_code=201,
+@router.post("/{program_id}/enrollments", response_model=DiseaseEnrollmentOut,
+             status_code=201,
              dependencies=[Depends(require_roles("doctor", "public_health"))])
 def enroll(
     program_id: int,
@@ -180,7 +257,7 @@ def enroll(
     return _enrollment_out(row, db)
 
 
-@router.get("/enrollments")
+@router.get("/enrollments", response_model=list[DiseaseEnrollmentOut])
 def list_enrollments(
     response: Response,
     program_id: int | None = None,
@@ -205,7 +282,8 @@ def list_enrollments(
     return [_enrollment_out(r, db) for r in rows]
 
 
-@router.post("/enrollments/{enrollment_id}/records", status_code=201,
+@router.post("/enrollments/{enrollment_id}/records", response_model=DiseaseEnrollmentOut,
+             status_code=201,
              dependencies=[Depends(require_roles("doctor", "public_health"))])
 def record_node(
     enrollment_id: int,
@@ -237,7 +315,7 @@ def record_node(
     return _enrollment_out(enrollment, db)
 
 
-@router.post("/enrollments/{enrollment_id}/exit",
+@router.post("/enrollments/{enrollment_id}/exit", response_model=DiseaseEnrollmentOut,
              dependencies=[Depends(require_roles("doctor", "public_health"))])
 def exit_enrollment(enrollment_id: int, body: ExitIn, db: Session = Depends(get_db)):
     """出组并做疗效评价。
@@ -259,12 +337,12 @@ def exit_enrollment(enrollment_id: int, body: ExitIn, db: Session = Depends(get_
     return _enrollment_out(enrollment, db)
 
 
-@router.get("/enrollments/{enrollment_id}")
+@router.get("/enrollments/{enrollment_id}", response_model=DiseaseEnrollmentOut)
 def get_enrollment(enrollment_id: int, db: Session = Depends(get_db)):
     return _enrollment_out(_enrollment(db, enrollment_id), db)
 
 
-@router.get("/{program_id}/stats")
+@router.get("/{program_id}/stats", response_model=ProgramStatsOut)
 def program_stats(
     program_id: int, group_id: int | None = None, db: Session = Depends(get_db)
 ):

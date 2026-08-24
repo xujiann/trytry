@@ -70,8 +70,120 @@ def _syndrome_out(r: SyndromeMonitor) -> dict:
     }
 
 
+# ---------------------------------------------------------------- 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class SyndromeOut(BaseModel):
+    id: int
+    org_id: int
+    syndrome: str
+    syndrome_name: str
+    case_count: int
+    threshold: int
+    record_date: str
+    # 阈值为 0 即不参与预警，而不是"任何数都超阈值"
+    alert: bool
+    note: str
+
+
+class SyndromeReportedOut(SyndromeOut):
+    """当日重复上报会覆盖前一条，`overwritten` 明说覆盖没覆盖——
+    不说的话，上报方以为新增了一条，实际把别人填的盖掉了。是严格超集，故继承。"""
+
+    overwritten: bool
+
+
+class PathogenOut(BaseModel):
+    id: int
+    org_id: int
+    pathogen_name: str
+    specimen_type: str
+    tested_count: int
+    positive_count: int
+    # 送检为 0 时是 **null** 而不是 0.0——0 会被读成"检了没检出"，实际是"没检"
+    positive_rate_pct: float | None
+    record_date: str
+    note: str
+
+
+class AlertWindowOut(BaseModel):
+    start: str
+    end: str
+    days: int
+
+
+class AlertCaliberOut(BaseModel):
+    syndrome: str
+    pathogen: str
+    no_score: str
+
+
+class MultiPointAlertsOut(BaseModel):
+    """多点触发预警。两路信号**分列且不做综合评分**——处置动作取决于是哪一路
+    在响，合成一个分数就丢掉了这个信息（口径随响应一起出，见 caliber）。"""
+
+    window: AlertWindowOut
+    group_id: int | None
+    syndrome_alerts: list[SyndromeOut]
+    pathogen_alerts: list[PathogenOut]
+    caliber: AlertCaliberOut
+
+
+class EmergencyResourceOut(BaseModel):
+    id: int
+    org_id: int
+    resource_type: str
+    resource_type_name: str
+    name: str
+    quantity: int
+    unit: str
+    min_quantity: int
+    expire_date: str
+    expired: bool
+    below_min: bool
+    contact: str
+    location: str
+
+
+class ResourceShortageOut(BaseModel):
+    name: str
+    quantity: int
+    min_quantity: int
+
+
+class ResourceExpiredOut(BaseModel):
+    name: str
+    expire_date: str
+
+
+class OrgReadinessOut(BaseModel):
+    org_id: int
+    org_name: str
+    total: int
+    # 缺口与过期分列：前者是补货问题，后者是报废问题，两种处置动作不同
+    below_min: list[ResourceShortageOut]
+    expired: list[ResourceExpiredOut]
+
+
+class CountedNameOut(BaseModel):
+    count: int
+    name: str
+
+
+class ReadinessOut(BaseModel):
+    today: str
+    group_id: int | None
+    orgs: list[OrgReadinessOut]
+    # 键是实际出现过的物资类型，没有的不该硬塞一个 0
+    by_type: dict[str, CountedNameOut]
+    caliber: str
+
+
 @router.post(
-    "/syndromes", status_code=201, dependencies=[Depends(require_roles("public_health", "doctor"))]
+    "/syndromes", response_model=SyndromeReportedOut, status_code=201,
+    dependencies=[Depends(require_roles("public_health", "doctor"))]
 )
 def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
@@ -98,7 +210,7 @@ def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User 
     return {**_syndrome_out(record), "overwritten": overwritten}
 
 
-@router.get("/syndromes")
+@router.get("/syndromes", response_model=list[SyndromeOut])
 def list_syndromes(
     org_id: int | None = None,
     syndrome: str | None = None,
@@ -152,7 +264,8 @@ def _pathogen_out(r: PathogenMonitor) -> dict:
 
 
 @router.post(
-    "/pathogens", status_code=201, dependencies=[Depends(require_roles("public_health", "doctor"))]
+    "/pathogens", response_model=PathogenOut, status_code=201,
+    dependencies=[Depends(require_roles("public_health", "doctor"))]
 )
 def report_pathogen(body: PathogenIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
@@ -167,7 +280,7 @@ def report_pathogen(body: PathogenIn, db: Session = Depends(get_db), user: User 
     return _pathogen_out(record)
 
 
-@router.get("/pathogens")
+@router.get("/pathogens", response_model=list[PathogenOut])
 def list_pathogens(
     org_id: int | None = None,
     pathogen_name: str | None = None,
@@ -190,7 +303,7 @@ def list_pathogens(
 # ============================================================ 多点触发汇总
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=MultiPointAlertsOut)
 def multi_point_alerts(
     today: str | None = None,
     days: int = Query(default=7, ge=1, le=90),
@@ -287,7 +400,8 @@ def _resource_out(r: EmergencyResource, today: str) -> dict:
 
 
 @router.post(
-    "/resources", status_code=201, dependencies=[Depends(require_roles("public_health", "operator"))]
+    "/resources", response_model=EmergencyResourceOut, status_code=201,
+    dependencies=[Depends(require_roles("public_health", "operator"))]
 )
 def create_resource(body: ResourceIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
@@ -302,7 +416,7 @@ def create_resource(body: ResourceIn, db: Session = Depends(get_db), user: User 
     return _resource_out(resource, resolve_business_date(None).isoformat())
 
 
-@router.get("/resources")
+@router.get("/resources", response_model=list[EmergencyResourceOut])
 def list_resources(
     org_id: int | None = None,
     resource_type: str | None = None,
@@ -328,7 +442,8 @@ def list_resources(
 
 
 @router.patch(
-    "/resources/{resource_id}", dependencies=[Depends(require_roles("public_health", "operator"))]
+    "/resources/{resource_id}", response_model=EmergencyResourceOut,
+    dependencies=[Depends(require_roles("public_health", "operator"))]
 )
 def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     resource = db.get(EmergencyResource, resource_id)
@@ -343,7 +458,7 @@ def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depend
     return _resource_out(resource, resolve_business_date(None).isoformat())
 
 
-@router.get("/resources/readiness")
+@router.get("/resources/readiness", response_model=ReadinessOut)
 def readiness(today: str | None = None, group_id: int | None = None, db: Session = Depends(get_db)):
     """应急资源保障情况：按机构给出缺口与过期。
 
