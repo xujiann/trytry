@@ -556,6 +556,65 @@ def recognition_stats(db: Session = Depends(get_db)):
 _CENTERS = {"imaging", "ecg", "lab", "pathology"}
 
 
+class ReportTemplateCreatedOut(BaseModel):
+    """新建只回 id——与列表的四个键不同形，两个模型。"""
+
+    id: int
+
+
+class ReportTemplateOut(BaseModel):
+    id: int
+    center_type: str
+    name: str
+    content: str
+
+
+class ReportAmendedOut(BaseModel):
+    """报告修订回执。只回受影响的四项，不回整份报告——修订人关心的是
+    "改成什么了、危急值闭环现在什么状态"。"""
+
+    id: int
+    conclusion: str
+    critical: bool
+    critical_status: str
+
+
+class ReportRevisionOut(BaseModel):
+    """修订历史一条。字段名带 `prev_` 前缀是**修订前**的值，
+    `at` 是修订时刻（`created_at.isoformat()`，与其他模块的 `created_at` 同物异名，
+    沿用现状不改字节）。"""
+
+    id: int
+    prev_conclusion: str
+    prev_finding: str
+    prev_critical: bool
+    revised_by: str
+    reason: str
+    at: str
+
+
+class ExamResourceCreatedOut(BaseModel):
+    """新建资源只回三个键，与列表的八个键不同形。"""
+
+    id: int
+    center_type: str
+    item_name: str
+
+
+class ExamResourceOut(BaseModel):
+    """检查资源要素档案。`price` 是 `Money`（Numeric）列——整数价读回来是 int，
+    声明成 float 会把公示的「120 元」变成「120.0 元」。"""
+
+    id: int
+    org_id: int
+    center_type: str
+    item_name: str
+    device: str
+    price: int | float
+    duration_min: int
+    notes: str
+
+
 # ---- ①-④ 报告模板管理 / 诊断报告修改 ----
 
 
@@ -565,7 +624,8 @@ class TemplateCreate(BaseModel):
     content: str = ""
 
 
-@router.post("/templates", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/templates", response_model=ReportTemplateCreatedOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_template(body: TemplateCreate, db: Session = Depends(get_db)):
     if body.center_type not in _CENTERS:
         raise HTTPException(status_code=422, detail="未知中心类型")
@@ -575,7 +635,7 @@ def create_template(body: TemplateCreate, db: Session = Depends(get_db)):
     return {"id": t.id}
 
 
-@router.get("/templates")
+@router.get("/templates", response_model=list[ReportTemplateOut])
 def list_templates(center_type: str | None = None, db: Session = Depends(get_db)):
     q = db.query(ReportTemplate)
     if center_type:
@@ -594,7 +654,8 @@ class ReportAmend(BaseModel):
 # 守卫写在 dependencies=[] 而不是函数参数里：写成参数时它与请求体一起解析，
 # 校验错误会先于鉴权返回——非授权角色会拿到一份 422，里面列着这个接口要哪些字段。
 # 既是信息泄露，也让"越权一律 403"这条口径不成立。
-@router.patch("/reports/{report_id}", dependencies=[Depends(require_roles("doctor"))])
+@router.patch("/reports/{report_id}", response_model=ReportAmendedOut,
+              dependencies=[Depends(require_roles("doctor"))])
 def amend_report(
     report_id: int,
     body: ReportAmend,
@@ -655,7 +716,7 @@ def amend_report(
     }
 
 
-@router.get("/reports/{report_id}/revisions")
+@router.get("/reports/{report_id}/revisions", response_model=list[ReportRevisionOut])
 def list_report_revisions(report_id: int, db: Session = Depends(get_db)):
     """报告修订历史（前值留痕轨迹）。"""
     if db.get(ExamReport, report_id) is None:
@@ -692,7 +753,8 @@ class ExamResourceCreate(BaseModel):
     notes: str = ""
 
 
-@router.post("/resources", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/resources", response_model=ExamResourceCreatedOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_exam_resource(body: ExamResourceCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
@@ -703,7 +765,7 @@ def create_exam_resource(body: ExamResourceCreate, db: Session = Depends(get_db)
     return {"id": resource.id, "center_type": resource.center_type, "item_name": resource.item_name}
 
 
-@router.get("/resources")
+@router.get("/resources", response_model=list[ExamResourceOut])
 def list_exam_resources(
     center_type: str | None = None, org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):

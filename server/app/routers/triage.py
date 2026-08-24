@@ -11,6 +11,7 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -19,6 +20,21 @@ from ..deps import get_current_user
 router = APIRouter(
     prefix="/api/triage", tags=["智能导诊"], dependencies=[Depends(get_current_user)]
 )
+
+
+class TriageRecommendationOut(BaseModel):
+    department: str
+    # 命中的症状词；无命中时回落项给的是空列表
+    matched: list[str]
+    urgent: bool
+
+
+class TriageSuggestOut(BaseModel):
+    """导诊建议。一条都没匹配上时**不返回空列表**，而是回落到「全科门诊」——
+    让居民永远拿得到一个可去的地方，比诚实地回一个空数组有用。"""
+
+    recommendations: list[TriageRecommendationOut]
+    emergency_hint: bool
 
 
 _TRIAGE_KB = [
@@ -31,7 +47,7 @@ _TRIAGE_KB = [
 ]
 
 
-@router.post("/suggest")
+@router.post("/suggest", response_model=TriageSuggestOut)
 def triage_suggest(symptoms: list[str], db: Session = Depends(get_db)):
     """智能导诊：症状匹配推荐科室，急症症状提示急诊。"""
     given = set(symptoms)

@@ -366,6 +366,25 @@ def fulfill(appointment_id: int, db: Session = Depends(get_db)):
 # router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
 
 
+class BlacklistAddedOut(BaseModel):
+    id: int
+    domain: str
+
+
+class BlacklistOut(BaseModel):
+    id: int
+    domain: str
+    # 中文名服务端折算，前端不该自己再维护一份 appointment→"预约爽约" 的映射
+    domain_name: str
+    patient_id: int
+    reason: str
+
+
+class BlacklistRemovedOut(BaseModel):
+    removed: bool
+    domain: str
+
+
 # ---- ⑫ 预约黑名单 ----
 
 
@@ -378,7 +397,8 @@ class BlacklistCreate(BaseModel):
 BLACKLIST_DOMAINS = {"appointment": "预约爽约", "shortage": "缺药登记后不取药"}
 
 
-@router.post("/blacklist", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/blacklist", response_model=BlacklistAddedOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def add_blacklist(body: BlacklistCreate, db: Session = Depends(get_db)):
     """加入服务黑名单。
 
@@ -406,7 +426,8 @@ def add_blacklist(body: BlacklistCreate, db: Session = Depends(get_db)):
     return {"id": entry.id, "domain": entry.domain}
 
 
-@router.get("/blacklist", dependencies=[Depends(get_current_user)])
+@router.get("/blacklist", response_model=list[BlacklistOut],
+            dependencies=[Depends(get_current_user)])
 def list_blacklist(domain: str | None = None, db: Session = Depends(get_db)):
     query = db.query(ServiceBlacklist)
     if domain:
@@ -418,7 +439,8 @@ def list_blacklist(domain: str | None = None, db: Session = Depends(get_db)):
     ]
 
 
-@router.delete("/blacklist/{patient_id}", dependencies=[Depends(require_admin)])
+@router.delete("/blacklist/{patient_id}", response_model=BlacklistRemovedOut,
+               dependencies=[Depends(require_admin)])
 def remove_blacklist(
     patient_id: int, domain: str = "appointment", db: Session = Depends(get_db)
 ):

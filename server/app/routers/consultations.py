@@ -194,6 +194,20 @@ def rate(consultation_id: int, body: ConsultationRate, db: Session = Depends(get
 # router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
 
 
+class ConsultExpertCreatedOut(BaseModel):
+    """新建只回 id——与列表的五个键不同形。"""
+
+    id: int
+
+
+class ConsultExpertOut(BaseModel):
+    id: int
+    name: str
+    org_id: int
+    specialty: str
+    available: bool
+
+
 # ---- ⑤ 会诊专家管理 ----
 
 
@@ -204,7 +218,8 @@ class ExpertCreate(BaseModel):
     available: bool = True
 
 
-@router.post("/experts", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/experts", response_model=ConsultExpertCreatedOut, status_code=201,
+             dependencies=[Depends(require_admin)])
 def create_expert(body: ExpertCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
     if db.query(ConsultExpert).filter(ConsultExpert.name == body.name).first():
@@ -213,7 +228,7 @@ def create_expert(body: ExpertCreate, db: Session = Depends(get_db), user: User 
     return {"id": e.id}
 
 
-@router.get("/experts")
+@router.get("/experts", response_model=list[ConsultExpertOut])
 def list_experts(available: bool | None = None, db: Session = Depends(get_db)):
     q = db.query(ConsultExpert)
     if available is not None:

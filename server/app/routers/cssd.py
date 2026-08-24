@@ -216,6 +216,30 @@ def cost_stats(batch_id: int | None = None, db: Session = Depends(get_db)):
 # router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
 
 
+class CssdRequestCreatedOut(BaseModel):
+    id: int
+    status: str
+
+
+class CssdRequestOut(BaseModel):
+    id: int
+    org_id: int
+    item_name: str
+    quantity: int
+    status: str
+    # 未响应前没有批次；响应后指向那一批已灭菌物品
+    batch_id: int | None
+
+
+class CssdRequestFulfilledOut(BaseModel):
+    """响应回执。`status` 是字面量 "fulfilled"（不是读回来的列），
+    `batch_id` 是入参回显——照实建模，不改字节。"""
+
+    id: int
+    status: str
+    batch_id: int
+
+
 # ---- ⑥ 消毒供应物品申领 ----
 
 
@@ -227,6 +251,7 @@ class CssdReqCreate(BaseModel):
 
 @router.post(
     "/requests",
+    response_model=CssdRequestCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("operator"))],  # H2: 物品申领=经办
 )
@@ -240,7 +265,7 @@ def create_cssd_request(body: CssdReqCreate, db: Session = Depends(get_db), user
     return {"id": r.id, "status": r.status}
 
 
-@router.get("/requests")
+@router.get("/requests", response_model=list[CssdRequestOut])
 def list_cssd_requests(
     status: str | None = None,
     org_id: int | None = None,
@@ -259,6 +284,7 @@ def list_cssd_requests(
 
 @router.post(
     "/requests/{request_id}/fulfill",
+    response_model=CssdRequestFulfilledOut,
     dependencies=[Depends(require_roles("operator"))],  # H2: 申领响应=经办
 )
 def fulfill_cssd_request(request_id: int, batch_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):

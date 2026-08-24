@@ -602,6 +602,14 @@ def list_assessments(plan_id: int, db: Session = Depends(get_db)):
 # router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
 
 
+class HealthArticleOut(BaseModel):
+    """建稿与发布两个端点同形（都只回 id + status），共用一个模型。
+    发布那个的 status 是字面量 "published"，不是读回来的列——照实建模。"""
+
+    id: int
+    status: str
+
+
 # ---- ⑨⑩ 健康宣教 ----
 
 
@@ -613,6 +621,7 @@ class ArticleCreate(BaseModel):
 
 @router.post(
     "/articles",
+    response_model=HealthArticleOut,
     status_code=201,
     dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教编制
 )
@@ -625,6 +634,7 @@ def create_article(body: ArticleCreate, db: Session = Depends(get_db)):
 
 @router.post(
     "/articles/{article_id}/publish",
+    response_model=HealthArticleOut,
     dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教发布
 )
 def publish_article(article_id: int, db: Session = Depends(get_db)):
