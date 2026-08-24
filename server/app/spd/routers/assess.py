@@ -97,7 +97,251 @@ def _indicator_out(i: SpdIndicator) -> dict:
     }
 
 
-@router.post("/indicators", status_code=201, dependencies=[Depends(require_roles("director"))])
+# ============================================================ 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+
+
+class IndicatorOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    program_codes: list[str]
+    object_type: str
+    data_source: str
+    scope_expr: str
+    formula: str
+    # 评分规则的形状由规则类型决定（阈值/区间/枚举），宽字典如实反映
+    score_rule: dict[str, Any]
+    weight: float
+    # 无目标值的定性指标为 null
+    target_value: float | None
+    abnormal_rule: str
+    version: str
+    effective_from: str
+    effective_scope: str
+    active: bool
+
+
+class IndicatorPlanRefOut(BaseModel):
+    """引用了某指标的考核方案。
+
+    `weight` 从方案的 **JSON 列** `items` 里捞，不是数据库的 Float 列——
+    里面存 int 还是 float 由写入方决定，实测存的就是整数 `100`。声明成 float
+    会把它变成 `100.0`（逐字节比对当场抓到）。这是 Money 陷阱的同一形状，
+    只是来源从 Numeric 列换成了 JSON 值：**判据仍是"实际存的是什么"**。
+
+    没给权重时为 null——没设与设成 0 是两回事。
+    """
+
+    id: int
+    code: str
+    name: str
+    level: str
+    weight: int | float | None
+
+
+class IndicatorUsageOut(BaseModel):
+    indicator: IndicatorOut
+    plans: list[IndicatorPlanRefOut]
+    used_by: int
+
+
+class AssessPlanOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    level: str
+    program_codes: list[str]
+    object_type: str
+    period_type: str
+    # 考核项：每项是 {indicator_code, weight, ...}，字段随指标类型而变
+    items: list[dict[str, Any]]
+    active: bool
+
+
+class ScoreRankRowOut(BaseModel):
+    object_id: int
+    object_name: str
+    total_score: float
+    # 未排名时为 null
+    rank: int | None
+
+
+class ScoringRunOut(BaseModel):
+    plan: AssessPlanOut
+    period: str
+    scored: int
+    top: list[ScoreRankRowOut]
+
+
+class ScoreOut(BaseModel):
+    id: int
+    plan_id: int
+    period: str
+    object_type: str
+    object_id: int
+    object_name: str
+    program_code: str
+    total_score: float
+    rank: int | None
+    created_at: str
+
+
+class ScoreDetailOut(BaseModel):
+    """单条得分。`plan` 可为 null——方案被删了，历史得分仍要查得到
+    （删方案不该让已发生的考核结果消失）。
+
+    `detail` 是逐指标的扣分明细，字段随指标而变（含下钻用的原始 metrics），
+    故是宽字典列表。
+    """
+
+    id: int
+    plan: AssessPlanOut | None
+    period: str
+    object_type: str
+    object_id: int
+    object_name: str
+    total_score: float
+    rank: int | None
+    detail: list[dict[str, Any]]
+    created_at: str
+
+
+class WorkloadItemOut(BaseModel):
+    """工作量一行。**字段顺序照 handler 实际出键排**：先建
+    `{object_id, total, done, by_type}`，之后才追加 `object_name` 与
+    `completion_rate`——排成"顺眼"的顺序（名字紧跟 id）就是改字节。
+
+    `by_type` 的键是任务类型，只出现**实际完成过**的类型（它在 `status == "done"`
+    分支里才累加），没有的不该硬塞 0。
+    """
+
+    object_id: int
+    total: int
+    done: int
+    by_type: dict[str, int]
+    object_name: str
+    completion_rate: float
+
+
+class WorkloadOut(BaseModel):
+    period: str
+    object_type: str
+    items: list[WorkloadItemOut]
+
+
+class PointRuleCreatedOut(BaseModel):
+    """新建只回四个键，与列表的七个键不同形。"""
+
+    id: int
+    code: str
+    event: str
+    points: int
+
+
+class PointRuleOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    event: str
+    points: int
+    daily_limit: int
+    active: bool
+
+
+class PointRuleUpdatedOut(BaseModel):
+    id: int
+    points: int
+    active: bool
+
+
+class PointRecordOut(BaseModel):
+    id: int
+    rule_code: str
+    direction: str
+    points: int
+    balance_after: int
+    note: str
+    created_at: str
+
+
+class MyPointsOut(BaseModel):
+    """我的积分。**没有积分账户时 `account_id` 整个键不出现**（早返回分支
+    只给 balance/earned/used/records 四个零值），故带
+    `response_model_exclude_unset=True`；`account_id` 声明在最前，
+    去掉它之后剩下的顺序与早返回分支一致。"""
+
+    account_id: int | None = None
+    balance: int
+    earned: int
+    used: int
+    records: list[PointRecordOut]
+
+
+class PointAccountOut(BaseModel):
+    id: int
+    user_id: int
+    user_name: str
+    # 账户未挂机构时为 null
+    org_id: int | None
+    balance: int
+    earned: int
+    used: int
+
+
+class SigninOut(BaseModel):
+    points: int
+    balance: int
+
+
+class GoodsCreatedOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    stock: int
+
+
+class GoodsOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    points: int
+    stock: int
+    image_url: str
+    active: bool
+
+
+class GoodsUpdatedOut(BaseModel):
+    id: int
+    stock: int
+    active: bool
+
+
+class RedeemCreatedOut(BaseModel):
+    id: int
+    verify_code: str
+    balance: int
+
+
+class RedeemOut(BaseModel):
+    id: int
+    goods_id: int
+    goods_name: str
+    points: int
+    verify_code: str
+    status: str
+    created_at: str
+    # 未核销时是空串（handler 已折 None），不是 null
+    verified_at: str
+
+
+class RedeemVerifiedOut(BaseModel):
+    id: int
+    status: str
+
+
+@router.post("/indicators", response_model=IndicatorOut, status_code=201, dependencies=[Depends(require_roles("director"))])
 def create_indicator(body: IndicatorIn, db: Session = Depends(get_db)):
     if body.formula:
         try:
@@ -114,7 +358,7 @@ def create_indicator(body: IndicatorIn, db: Session = Depends(get_db)):
     return _indicator_out(indicator)
 
 
-@router.get("/indicators")
+@router.get("/indicators", response_model=list[IndicatorOut])
 def list_indicators(
     response: Response,
     object_type: str | None = None,
@@ -138,7 +382,7 @@ def list_indicators(
     return [_indicator_out(i) for i in rows]
 
 
-@router.patch("/indicators/{indicator_id}", dependencies=[Depends(require_roles("director"))])
+@router.patch("/indicators/{indicator_id}", response_model=IndicatorOut, dependencies=[Depends(require_roles("director"))])
 def update_indicator(indicator_id: int, body: dict, db: Session = Depends(get_db)):
     indicator = db.get(SpdIndicator, indicator_id)
     if indicator is None:
@@ -160,7 +404,7 @@ def update_indicator(indicator_id: int, body: dict, db: Session = Depends(get_db
     return _indicator_out(indicator)
 
 
-@router.get("/indicators/{indicator_id}/usage")
+@router.get("/indicators/{indicator_id}/usage", response_model=IndicatorUsageOut)
 def indicator_usage(indicator_id: int, db: Session = Depends(get_db)):
     """指标使用情况：被哪些考核方案引用（平台管理端 #17"使用情况查询"）。"""
     indicator = db.get(SpdIndicator, indicator_id)
@@ -494,7 +738,7 @@ def _plan_out(p: SpdAssessPlan) -> dict:
     }
 
 
-@router.post("/assess-plans", status_code=201, dependencies=[Depends(require_roles("director"))])
+@router.post("/assess-plans", response_model=AssessPlanOut, status_code=201, dependencies=[Depends(require_roles("director"))])
 def create_plan(body: PlanIn, db: Session = Depends(get_db)):
     codes: list[Any] = [i.get("indicator_code") for i in body.items]
     if not codes:
@@ -515,7 +759,7 @@ def create_plan(body: PlanIn, db: Session = Depends(get_db)):
     return _plan_out(plan)
 
 
-@router.get("/assess-plans")
+@router.get("/assess-plans", response_model=list[AssessPlanOut])
 def list_plans(level: str | None = None, active: bool | None = None,
                db: Session = Depends(get_db)):
     query = db.query(SpdAssessPlan)
@@ -526,7 +770,7 @@ def list_plans(level: str | None = None, active: bool | None = None,
     return [_plan_out(p) for p in query.order_by(SpdAssessPlan.id).limit(200).all()]
 
 
-@router.patch("/assess-plans/{plan_id}", dependencies=[Depends(require_roles("director"))])
+@router.patch("/assess-plans/{plan_id}", response_model=AssessPlanOut, dependencies=[Depends(require_roles("director"))])
 def update_plan(plan_id: int, body: dict, db: Session = Depends(get_db)):
     plan = db.get(SpdAssessPlan, plan_id)
     if plan is None:
@@ -580,7 +824,7 @@ def _objects_of(db: Session, plan: SpdAssessPlan, object_ids: list[int]) -> list
     return [(u.id, u.full_name or u.username) for u in user_query.limit(500).all()]
 
 
-@router.post("/scores/run", dependencies=[Depends(require_roles("director"))])
+@router.post("/scores/run", response_model=ScoringRunOut, dependencies=[Depends(require_roles("director"))])
 def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
     """按方案跑一次考核计分，写入 `SpdScore`（含分项明细与扣分依据）。
 
@@ -675,7 +919,7 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/scores")
+@router.get("/scores", response_model=list[ScoreOut])
 def list_scores(
     response: Response,
     plan_id: int | None = None,
@@ -706,7 +950,7 @@ def list_scores(
     ]
 
 
-@router.get("/scores/{score_id}")
+@router.get("/scores/{score_id}", response_model=ScoreDetailOut)
 def score_detail(score_id: int, db: Session = Depends(get_db)):
     """下钻到指标、原始数据与扣分依据（卫健端 #12）。"""
     record = db.get(SpdScore, score_id)
@@ -774,7 +1018,7 @@ def score_analysis(
 # ============================================================ 工作量统计
 
 
-@router.get("/workload")
+@router.get("/workload", response_model=WorkloadOut)
 def workload(
     object_type: str = "doctor",
     period: str = "",
@@ -851,7 +1095,7 @@ class PointRuleIn(BaseModel):
     condition: str = Field(default="", max_length=256)
 
 
-@router.post("/point-rules", status_code=201, dependencies=[Depends(require_roles("director"))])
+@router.post("/point-rules", response_model=PointRuleCreatedOut, status_code=201, dependencies=[Depends(require_roles("director"))])
 def create_point_rule(body: PointRuleIn, db: Session = Depends(get_db)):
     rule = SpdPointRule(**body.model_dump())
     db.add(rule)
@@ -863,7 +1107,7 @@ def create_point_rule(body: PointRuleIn, db: Session = Depends(get_db)):
     return {"id": rule.id, "code": rule.code, "event": rule.event, "points": rule.points}
 
 
-@router.get("/point-rules")
+@router.get("/point-rules", response_model=list[PointRuleOut])
 def list_point_rules(db: Session = Depends(get_db)):
     return [
         {"id": r.id, "code": r.code, "name": r.name, "event": r.event,
@@ -872,7 +1116,7 @@ def list_point_rules(db: Session = Depends(get_db)):
     ]
 
 
-@router.patch("/point-rules/{rule_id}", dependencies=[Depends(require_roles("director"))])
+@router.patch("/point-rules/{rule_id}", response_model=PointRuleUpdatedOut, dependencies=[Depends(require_roles("director"))])
 def update_point_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
     rule = db.get(SpdPointRule, rule_id)
     if rule is None:
@@ -884,7 +1128,7 @@ def update_point_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
     return {"id": rule.id, "points": rule.points, "active": rule.active}
 
 
-@router.get("/point-accounts/me")
+@router.get("/point-accounts/me", response_model=MyPointsOut, response_model_exclude_unset=True)
 def my_points(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """本人积分账户与明细（医生移动端 #20）。"""
     account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user.id).first()
@@ -909,7 +1153,7 @@ def my_points(db: Session = Depends(get_db), user: User = Depends(get_current_us
     }
 
 
-@router.get("/point-accounts")
+@router.get("/point-accounts", response_model=list[PointAccountOut])
 def list_point_accounts(
     response: Response, org_id: int | None = None, offset: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
@@ -929,7 +1173,7 @@ def list_point_accounts(
     ]
 
 
-@router.post("/point-accounts/signin")
+@router.post("/point-accounts/signin", response_model=SigninOut)
 def signin(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """每日签到积分。唯一约束保证一天只能签一次，重复签到返回 409 而不是静默。"""
     rule = (
@@ -974,7 +1218,7 @@ class GoodsIn(BaseModel):
     image_url: str = Field(default="", max_length=256)
 
 
-@router.post("/goods", status_code=201, dependencies=[Depends(require_roles("director"))])
+@router.post("/goods", response_model=GoodsCreatedOut, status_code=201, dependencies=[Depends(require_roles("director"))])
 def create_goods(body: GoodsIn, db: Session = Depends(get_db)):
     goods = SpdGoods(**body.model_dump())
     db.add(goods)
@@ -986,7 +1230,7 @@ def create_goods(body: GoodsIn, db: Session = Depends(get_db)):
     return {"id": goods.id, "code": goods.code, "name": goods.name, "stock": goods.stock}
 
 
-@router.get("/goods")
+@router.get("/goods", response_model=list[GoodsOut])
 def list_goods(db: Session = Depends(get_db)):
     return [
         {"id": g.id, "code": g.code, "name": g.name, "points": g.points,
@@ -996,7 +1240,7 @@ def list_goods(db: Session = Depends(get_db)):
     ]
 
 
-@router.patch("/goods/{goods_id}", dependencies=[Depends(require_roles("director"))])
+@router.patch("/goods/{goods_id}", response_model=GoodsUpdatedOut, dependencies=[Depends(require_roles("director"))])
 def update_goods(goods_id: int, body: dict, db: Session = Depends(get_db)):
     goods = db.get(SpdGoods, goods_id)
     if goods is None:
@@ -1012,7 +1256,7 @@ class RedeemIn(BaseModel):
     goods_id: int
 
 
-@router.post("/redeems", status_code=201)
+@router.post("/redeems", response_model=RedeemCreatedOut, status_code=201)
 def redeem(
     body: RedeemIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -1055,7 +1299,7 @@ def redeem(
     return {"id": record.id, "verify_code": record.verify_code, "balance": account.balance}
 
 
-@router.get("/redeems")
+@router.get("/redeems", response_model=list[RedeemOut])
 def list_redeems(
     response: Response, status: str | None = None, mine: bool = False,
     offset: int = 0, limit: int = 100,
@@ -1082,7 +1326,7 @@ class VerifyIn(BaseModel):
     verify_code: str = Field(min_length=4, max_length=16)
 
 
-@router.post("/redeems/verify", dependencies=[Depends(require_roles("director", "operator"))])
+@router.post("/redeems/verify", response_model=RedeemVerifiedOut, dependencies=[Depends(require_roles("director", "operator"))])
 def verify_redeem(
     body: VerifyIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):

@@ -140,7 +140,18 @@ import app.spd.routers as spd_routers
 #   出键排——它 `pop("count")` 之后又重新赋值，`count` 因此被挪到 `distribution`
 #   与 `negative` 之后，照读起来顺眼的顺序排就是改字节。
 #   见 test_service_extras_split_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 450
+# → 427（`spd/assess` 24 个端点里的 23 个。**`GET /api/spd/scores-analysis` 刻意
+#   不加**：它两个分支的键集合与**键顺序都不同**（空数据 4 键 total/distribution/
+#   top_deductions/average，有数据 5 键 total/average/distribution/top_deductions/
+#   ranking），Pydantic 按声明顺序序列化，单个模型最多只能满足一个分支（实测确认）。
+#   用宽字典是"拿它逃避契约"（这里没有任何东西自描述形状），改 handler 统一两分支
+#   是行为变更、不该夹在契约批次里——故留在欠账并写明原因，由
+#   test_scores_analysis_两分支形状不一致 钉住（统一了它就红，提醒补契约）。
+#   一处**逐字节比对抓到的真改动**：`IndicatorPlanRefOut.weight` 取自方案的
+#   **JSON 列** items（不是数据库 Float 列），实测存的是整数 100，声明成 float
+#   会变 `100.0`——Money 陷阱的同一形状换了来源，判据仍是"实际存的是什么"。
+#   见 test_spd_assess_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 427
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {

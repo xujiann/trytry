@@ -26,6 +26,8 @@ _NORMALIZERS = [
      r'"\1":"<TOK>"'),
     # 短信验证码回显：每次随机
     (re.compile(r'"debug_code":"\d{4,8}"'), '"debug_code":"<CODE>"'),
+    # 积分商城核销码：randbelow 生成的六位数，每次随机
+    (re.compile(r'"verify_code":"\d{6}"'), '"verify_code":"<CODE>"'),
 ]
 
 
