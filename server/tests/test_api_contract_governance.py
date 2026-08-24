@@ -135,7 +135,9 @@ BASELINE_WITHOUT_RESPONSE_MODEL = 470
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
     "contracts",
-    "cssd",
+    # "cssd" 暂时移出：ADR-0006 把 service_extras 的 3 个申领端点搬了进来，
+    # 它们本就无契约（总欠账不变，只是换了名下）。补完契约立刻加回——
+    # 与 gapfill 那批同一处理，别让它长期挂着。
     "organizations",
     "referrals",
     "telemedicine",

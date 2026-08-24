@@ -2,16 +2,28 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import insert_or_conflict
-from ..visibility import log_patient_access
+from ..visibility import assert_org_writable, log_patient_access, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
-from ..models import CriticalAction, ExamReport, ExamRequest, Organization, Patient, RecognitionItem, User
+from ..models import (
+    CriticalAction,
+    ExamReport,
+    ExamRequest,
+    ExamResource,
+    Organization,
+    Patient,
+    RecognitionItem,
+    ReportRevision,
+    ReportTemplate,
+    User,
+)
 from ..schemas import (
     CriticalActionOut,
     CriticalResolveBody,
@@ -530,3 +542,185 @@ def recognition_stats(db: Session = Depends(get_db)):
             for r in by_item
         ],
     }
+
+# ---------------------------------------------------------------- ADR-0006 搬家
+#
+# 以下自 `service_extras.py`（倾倒场）搬入：报告模板 / 报告修订 / 检查资源要素档案。
+# `_CENTERS` 也一并搬来——它定义在倾倒场的 router 那行下面，不在任何分节内，
+# 差点漏掉（ruff 的 F821 当场拦下）。
+# 路径一字未改（`/api/exams...` 原样），两边 router 的鉴权本就一致
+# （都是 `dependencies=[Depends(get_current_user)]`），故可直接并入本模块的
+# router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
+
+
+_CENTERS = {"imaging", "ecg", "lab", "pathology"}
+
+
+# ---- ①-④ 报告模板管理 / 诊断报告修改 ----
+
+
+class TemplateCreate(BaseModel):
+    center_type: str
+    name: str = Field(min_length=1)
+    content: str = ""
+
+
+@router.post("/templates", status_code=201, dependencies=[Depends(require_admin)])
+def create_template(body: TemplateCreate, db: Session = Depends(get_db)):
+    if body.center_type not in _CENTERS:
+        raise HTTPException(status_code=422, detail="未知中心类型")
+    t = ReportTemplate(**body.model_dump())
+    db.add(t)
+    db.commit()
+    return {"id": t.id}
+
+
+@router.get("/templates")
+def list_templates(center_type: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(ReportTemplate)
+    if center_type:
+        q = q.filter(ReportTemplate.center_type == center_type)
+    return [{"id": t.id, "center_type": t.center_type, "name": t.name, "content": t.content} for t in q.all()]
+
+
+class ReportAmend(BaseModel):
+    conclusion: str = Field(min_length=1)
+    finding: str | None = None
+    # 允许修订危急值标记：置 True/False 均联动闭环状态
+    critical: bool | None = None
+    reason: str = Field(default="", max_length=512)
+
+
+# 守卫写在 dependencies=[] 而不是函数参数里：写成参数时它与请求体一起解析，
+# 校验错误会先于鉴权返回——非授权角色会拿到一份 422，里面列着这个接口要哪些字段。
+# 既是信息泄露，也让"越权一律 403"这条口径不成立。
+@router.patch("/reports/{report_id}", dependencies=[Depends(require_roles("doctor"))])
+def amend_report(
+    report_id: int,
+    body: ReportAmend,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """诊断报告修改（限医师）。
+
+    M-6 整改：
+    - 修订前值写入 ReportRevision 历史表（前结论/前所见/前危急标记/修订人），可追溯；
+    - 危急值联动：修订后仍为危急值 → 闭环状态复位为"已通知"须重新确认；
+      解除危急标记 → 闭环状态清空；两种变化均写入 CriticalAction 留痕。
+    """
+    report = db.get(ExamReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    actor = user.full_name or user.username
+    was_critical = report.critical
+    db.add(
+        ReportRevision(
+            report_id=report.id,
+            prev_conclusion=report.conclusion,
+            prev_finding=report.finding,
+            prev_critical=report.critical,
+            revised_by=actor,
+            reason=body.reason,
+        )
+    )
+    report.conclusion = body.conclusion
+    if body.finding is not None:
+        report.finding = body.finding
+    if body.critical is not None:
+        report.critical = body.critical
+    if report.critical:
+        # 修订后（仍/新）为危急值：闭环状态复位，须重新确认接收
+        report.critical_status = "notified"
+        db.add(
+            CriticalAction(
+                report_id=report.id,
+                action=f"报告修订，危急值闭环状态复位为已通知：{report.conclusion}",
+                actor=actor,
+            )
+        )
+    elif was_critical:
+        # 修订解除危急标记：闭环状态清空并留痕
+        report.critical_status = ""
+        db.add(
+            CriticalAction(
+                report_id=report.id, action="报告修订解除危急值标记", actor=actor
+            )
+        )
+    db.commit()
+    return {
+        "id": report.id,
+        "conclusion": report.conclusion,
+        "critical": report.critical,
+        "critical_status": report.critical_status,
+    }
+
+
+@router.get("/reports/{report_id}/revisions")
+def list_report_revisions(report_id: int, db: Session = Depends(get_db)):
+    """报告修订历史（前值留痕轨迹）。"""
+    if db.get(ExamReport, report_id) is None:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    rows = (
+        db.query(ReportRevision)
+        .filter(ReportRevision.report_id == report_id)
+        .order_by(ReportRevision.id)
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "prev_conclusion": r.prev_conclusion,
+            "prev_finding": r.prev_finding,
+            "prev_critical": r.prev_critical,
+            "revised_by": r.revised_by,
+            "reason": r.reason,
+            "at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
+
+# ---------- 终审轮：检查资源要素档案（浙#18 设备/项目/价格/时长/注意事项） ----------
+
+
+class ExamResourceCreate(BaseModel):
+    org_id: int
+    center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
+    item_name: str = Field(min_length=1)
+    device: str = ""
+    price: float = Field(default=0, ge=0)
+    duration_min: int = Field(default=15, gt=0)
+    notes: str = ""
+
+
+@router.post("/resources", status_code=201, dependencies=[Depends(require_admin)])
+def create_exam_resource(body: ExamResourceCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
+    resource = ExamResource(**body.model_dump())
+    db.add(resource)
+    db.commit()
+    return {"id": resource.id, "center_type": resource.center_type, "item_name": resource.item_name}
+
+
+@router.get("/resources")
+def list_exam_resources(
+    center_type: str | None = None, org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    q = db.query(ExamResource).filter(ExamResource.active.is_(True))
+    if center_type:
+        q = q.filter(ExamResource.center_type == center_type)
+    q = scope_org_list(db, user, q, ExamResource, org_id)
+    return [
+        {
+            "id": r.id,
+            "org_id": r.org_id,
+            "center_type": r.center_type,
+            "item_name": r.item_name,
+            "device": r.device,
+            "price": r.price,
+            "duration_min": r.duration_min,
+            "notes": r.notes,
+        }
+        for r in q.order_by(ExamResource.id).all()
+    ]

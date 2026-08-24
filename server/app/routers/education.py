@@ -274,6 +274,7 @@ from ..deps import get_current_user, require_roles, row_dict
 from ..models import (
     Attachment,
     CourseMaterial,
+    HealthArticle,
     Organization,
     TcmTechnique,
     TrainingAssessment,
@@ -593,3 +594,44 @@ def list_assessments(plan_id: int, db: Session = Depends(get_db)):
             for r in rows
         ],
     }
+
+# ---------------------------------------------------------------- ADR-0006 搬家
+#
+# 以下自 `service_extras.py`（倾倒场）搬入：健康宣教文章。
+# 路径一字未改（`/api/education...` 原样），两边 router 的鉴权本就一致
+# （都是 `dependencies=[Depends(get_current_user)]`），故可直接并入本模块的
+# router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
+
+
+# ---- ⑨⑩ 健康宣教 ----
+
+
+class ArticleCreate(BaseModel):
+    title: str = Field(min_length=1)
+    category: str = "general"
+    content: str = ""
+
+
+@router.post(
+    "/articles",
+    status_code=201,
+    dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教编制
+)
+def create_article(body: ArticleCreate, db: Session = Depends(get_db)):
+    a = HealthArticle(**body.model_dump())
+    db.add(a)
+    db.commit()
+    return {"id": a.id, "status": a.status}
+
+
+@router.post(
+    "/articles/{article_id}/publish",
+    dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教发布
+)
+def publish_article(article_id: int, db: Session = Depends(get_db)):
+    a = db.get(HealthArticle, article_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    a.status = "published"
+    db.commit()
+    return {"id": a.id, "status": "published"}

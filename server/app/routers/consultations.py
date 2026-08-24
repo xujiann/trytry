@@ -3,9 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..visibility import assert_org_writable
+from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_roles
-from ..models import Consultation, Organization, Patient, User
+from ..deps import get_current_user, require_admin, require_roles
+from ..models import ConsultExpert, Consultation, Organization, Patient, User
 from ..schemas import (
     ConsultationAccept,
     ConsultationComplete,
@@ -183,3 +185,37 @@ def rate(consultation_id: int, body: ConsultationRate, db: Session = Depends(get
     db.commit()
     db.refresh(consultation)
     return consultation
+
+# ---------------------------------------------------------------- ADR-0006 搬家
+#
+# 以下自 `service_extras.py`（倾倒场）搬入：会诊专家档案。
+# 路径一字未改（`/api/consultations...` 原样），两边 router 的鉴权本就一致
+# （都是 `dependencies=[Depends(get_current_user)]`），故可直接并入本模块的
+# router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
+
+
+# ---- ⑤ 会诊专家管理 ----
+
+
+class ExpertCreate(BaseModel):
+    name: str = Field(min_length=1)
+    org_id: int
+    specialty: str = ""
+    available: bool = True
+
+
+@router.post("/experts", status_code=201, dependencies=[Depends(require_admin)])
+def create_expert(body: ExpertCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
+    if db.query(ConsultExpert).filter(ConsultExpert.name == body.name).first():
+        raise HTTPException(status_code=409, detail="专家已存在")
+    e = insert_or_conflict(db, ConsultExpert(**body.model_dump()), "专家已存在")
+    return {"id": e.id}
+
+
+@router.get("/experts")
+def list_experts(available: bool | None = None, db: Session = Depends(get_db)):
+    q = db.query(ConsultExpert)
+    if available is not None:
+        q = q.filter(ConsultExpert.available.is_(available))
+    return [{"id": e.id, "name": e.name, "org_id": e.org_id, "specialty": e.specialty, "available": e.available} for e in q.all()]
