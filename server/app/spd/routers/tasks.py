@@ -8,6 +8,8 @@
 三个旁支。所有动作接口都只在这条链上移动一格，没有"直接置为任意状态"的口子——
 有那个口子，前端一定会用它来绕过审核。
 """
+from typing import Any
+
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -49,6 +51,182 @@ class StartPathIn(BaseModel):
     overrides: dict = Field(default_factory=dict)
 
 
+# ============================================================ 响应契约
+#
+# 这个模块有本轮最绕的一处：`POST /path-instances/{id}/advance` 的**两条分支
+# 键集合不同、但顺序相容**——
+#
+#     正常流转 : instance, status, current_node_key, [next_node], [paused_reason]
+#     恢复暂停 : instance, status, resumed, matched
+#
+# 恢复分支多出的两个键排在正常分支所有可选键**之后**，所以一个模型 +
+# `exclude_unset` 能同时满足（与 `spd/assess` 的 scores-analysis 不同，
+# 那个两分支顺序互斥，无解，只能留在欠账里）。
+
+
+class EvidenceUrlOut(BaseModel):
+    attachment_id: int
+    url: str
+
+
+class TaskOut(BaseModel):
+    """任务。三个条件键都在末尾：
+    `patient_name`/`phone` 只在带 brief 的端点出现；`advanced` 只在
+    `_finish_task` 推动了路径时追加（办结后路径往前走了一步的回执）。
+    """
+
+    id: int
+    program_code: str
+    patient_id: int
+    enrollment_id: int | None
+    instance_id: int | None
+    node_key: str
+    task_type: str
+    title: str
+    org_id: int | None
+    team_id: int | None
+    assignee_id: int | None
+    exec_role: str
+    status: str
+    priority: int
+    due_date: str
+    form_code: str
+    require_evidence: bool
+    # 表单与结果都是 JSON 列，形状由 form_code 指向的表单定义决定
+    form: dict[str, Any]
+    result: dict[str, Any]
+    evidence: list[Any]
+    # 名字是 urls，装的却是 `{attachment_id, url}` 对象——`evidence_urls()`
+    # 回的是可下载地址**与其附件 id** 的配对，前端要凭 id 做权限跳转。
+    # 又一处"名字不是形状"。
+    evidence_urls: list[EvidenceUrlOut]
+    urged_count: int
+    escalated: bool
+    review_note: str
+    source: str
+    created_at: str
+    # 未办结时是空串（handler 已折 None）
+    finished_at: str
+    patient_name: str | None = None
+    phone: str | None = None
+    advanced: dict[str, Any] | None = None
+
+
+class InstanceOut(BaseModel):
+    id: int
+    enrollment_id: int
+    template_id: int
+    template_code: str
+    template_name: str
+    scene: str
+    program_code: str
+    patient_id: int | None
+    patient_name: str
+    current_node_key: str
+    current_stage: str
+    status: str
+    progress: int
+    # 节点级覆盖配置
+    overrides: dict[str, Any]
+    owner_user_id: int | None
+    started_at: str
+    finished_at: str
+
+
+class NodeTaskOut(BaseModel):
+    id: int
+    status: str
+    assignee_id: int | None
+    due_date: str
+    finished_at: str
+
+
+class InstanceNodeOut(BaseModel):
+    key: str
+    name: str
+    stage: str
+    seq: int
+    dept: str
+    exec_role: str
+    service_type: str
+    due_days: int
+    timeout_action: str
+    require_form: bool
+    require_evidence: bool
+    is_current: bool
+    tasks: list[NodeTaskOut]
+
+
+class InstanceDetailOut(InstanceOut):
+    """路径明细 = 实例形状 + `nodes`。handler 先取 `_instance_out` 再追加
+    `nodes`，确实在最后，所以继承是对的。"""
+
+    nodes: list[InstanceNodeOut]
+
+
+class AdvanceOut(BaseModel):
+    """路径推进。两条分支见本节顶部的说明。`matched` 是命中的进入条件表。"""
+
+    instance: InstanceOut
+    status: str
+    current_node_key: str | None = None
+    next_node: str | None = None
+    paused_reason: str | None = None
+    resumed: bool | None = None
+    matched: list[Any] | None = None
+
+
+class NodeEnterCheckOut(BaseModel):
+    allowed: bool
+    matched: list[Any]
+    # 节点进入条件表，逐条形状由条件类型决定
+    conditions: list[dict[str, Any]]
+
+
+class TaskSummaryOut(BaseModel):
+    """待办统计。两个 by_* 的键由数据决定（状态 / 任务类型），
+    没出现过的不该硬塞 0。`swept` 是本次顺手扫出的超期条数。"""
+
+    by_status: dict[str, int]
+    open_by_type: dict[str, int]
+    open_total: int
+    overdue: int
+    escalated: int
+    due_today: int
+    # `swept` 是 `sweep_overdue()` 的**四项明细**（overdue/escalated/revisits/
+    # followups），不是"扫了几条"。本仓库这类"名字像计数、实为明细"的返回值
+    # 已撞到三次（population 的 closed、这里的 swept 与 skipped），
+    # 判据只能是去看被调函数实际返回什么。
+    swept: dict[str, int]
+
+
+class SkippedTaskOut(BaseModel):
+    id: int
+    reason: str
+
+
+class BatchResultOut(BaseModel):
+    """批量处理。`skipped` 是**逐条明细**（哪条、为什么跳过），不是计数——
+    批量操作只回一个数字，调用方无从知道是哪几条没成、要不要补办。"""
+
+    processed: int
+    skipped: list[SkippedTaskOut]
+
+
+class TaskExportOut(BaseModel):
+    """任务导出：**位置数组**格式（columns + rows），不是对象数组。
+
+    一行里混着 int（任务ID/优先级/催办次数）与 str（患者/标题/日期），
+    `assignee_id or ""` 更是同一列既可能 int 又可能空串——所以行只能声明成
+    `list[int | str]`。这不是拿宽类型逃避契约：位置数组的语义就在 `columns`
+    里，逐字段建模反而会把"第几列是什么"这个真信息丢掉。
+    """
+
+    columns: list[str]
+    rows: list[list[int | str]]
+    total: int
+
+
 def _instance_out(db: Session, i: SpdPathInstance) -> dict:
     template = db.get(SpdPathTemplate, i.template_id)
     enrollment = db.get(SpdEnrollment, i.enrollment_id)
@@ -69,7 +247,7 @@ def _instance_out(db: Session, i: SpdPathInstance) -> dict:
     }
 
 
-@router.post("/path-instances", status_code=201,
+@router.post("/path-instances", response_model=InstanceOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def start_path_instance(
     body: StartPathIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -109,7 +287,7 @@ def start_path_instance(
     return _instance_out(db, instance)
 
 
-@router.get("/path-instances")
+@router.get("/path-instances", response_model=list[InstanceOut])
 def list_path_instances(
     response: Response,
     enrollment_id: int | None = None,
@@ -149,7 +327,7 @@ def list_path_instances(
     return [_instance_out(db, i) for i in rows]
 
 
-@router.get("/path-instances/{instance_id}")
+@router.get("/path-instances/{instance_id}", response_model=InstanceDetailOut)
 def get_path_instance(instance_id: int, db: Session = Depends(get_db)):
     """路径执行明细：节点清单 + 每个节点的任务状态与责任人。"""
     instance = db.get(SpdPathInstance, instance_id)
@@ -191,7 +369,7 @@ class InstanceAdjustIn(BaseModel):
     owner_user_id: int | None = None
 
 
-@router.patch("/path-instances/{instance_id}",
+@router.patch("/path-instances/{instance_id}", response_model=InstanceOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def adjust_path_instance(
     instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db)
@@ -218,7 +396,7 @@ def adjust_path_instance(
     return _instance_out(db, instance)
 
 
-@router.post("/path-instances/{instance_id}/advance",
+@router.post("/path-instances/{instance_id}/advance", response_model=AdvanceOut, response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def advance_instance(
     instance_id: int, db: Session = Depends(get_db),
@@ -286,7 +464,7 @@ def advance_instance(
     return {"instance": _instance_out(db, instance), **result}
 
 
-@router.get("/path-nodes/{node_id}/enter-check")
+@router.get("/path-nodes/{node_id}/enter-check", response_model=NodeEnterCheckOut)
 def check_node_enter(node_id: int, instance_id: int, db: Session = Depends(get_db)):
     """校验患者是否满足节点进入条件，供前端在办理前给出提示。"""
     node = db.get(SpdPathNode, node_id)
@@ -339,7 +517,7 @@ def _task_out(t: SpdTask, brief: dict | None = None) -> dict:
     return out
 
 
-@router.post("/tasks", status_code=201, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks", response_model=TaskOut, response_model_exclude_unset=True, status_code=201, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_task(
     body: TaskIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -369,7 +547,7 @@ def create_task(
     return _task_out(task)
 
 
-@router.get("/tasks")
+@router.get("/tasks", response_model=list[TaskOut], response_model_exclude_unset=True)
 def list_tasks(
     response: Response,
     task_type: str | None = None,
@@ -425,7 +603,7 @@ def list_tasks(
     return [_task_out(r, briefs.get(r.patient_id)) for r in rows]
 
 
-@router.get("/tasks/summary")
+@router.get("/tasks/summary", response_model=TaskSummaryOut)
 def task_summary(
     program_code: str | None = None,
     org_id: int | None = None,
@@ -477,7 +655,7 @@ def task_summary(
     }
 
 
-@router.get("/tasks/{task_id}")
+@router.get("/tasks/{task_id}", response_model=TaskOut, response_model_exclude_unset=True)
 def get_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     task = db.get(SpdTask, task_id)
     if task is None:
@@ -494,7 +672,7 @@ def _load_task(db: Session, task_id: int) -> SpdTask:
     return task
 
 
-@router.post("/tasks/{task_id}/claim", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/claim", response_model=TaskOut, response_model_exclude_unset=True, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def claim_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """接收任务。已被别人接收的返回 409——静默改责任人会让原责任人白干一场。"""
     task = _load_task(db, task_id)
@@ -513,7 +691,7 @@ class AssignIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.post("/tasks/{task_id}/assign", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/assign", response_model=TaskOut, response_model_exclude_unset=True, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def assign_task(
     task_id: int,
     body: AssignIn,
@@ -538,7 +716,7 @@ def assign_task(
     return _task_out(task)
 
 
-@router.post("/tasks/{task_id}/urge", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/urge", response_model=TaskOut, response_model_exclude_unset=True, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def urge_task(task_id: int, db: Session = Depends(get_db)):
     """催办：计数 +1 并给责任人发站内消息。催办不改状态——催过还是待办。
 
@@ -562,7 +740,7 @@ def urge_task(task_id: int, db: Session = Depends(get_db)):
     return _task_out(task)
 
 
-@router.post("/tasks/{task_id}/escalate", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/escalate", response_model=TaskOut, response_model_exclude_unset=True, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def escalate_task(task_id: int, db: Session = Depends(get_db)):
     """超时升级：置紧急并标记升级，由上级机构接手督办。"""
     task = _load_task(db, task_id)
@@ -582,7 +760,7 @@ class SubmitIn(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
-@router.post("/tasks/{task_id}/submit", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/submit", response_model=TaskOut, response_model_exclude_unset=True, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def submit_task(
     task_id: int, body: SubmitIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -620,7 +798,7 @@ class ReviewTaskIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.post("/tasks/{task_id}/review", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/review", response_model=TaskOut, response_model_exclude_unset=True, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def review_task(
     task_id: int, body: ReviewTaskIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -638,7 +816,7 @@ def review_task(
     return _finish_task(db, task, user)
 
 
-@router.post("/tasks/{task_id}/complete", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/complete", response_model=TaskOut, response_model_exclude_unset=True, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def complete_task(
     task_id: int, body: SubmitIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -723,7 +901,7 @@ class BatchTaskIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.post("/tasks/batch", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/batch", response_model=BatchResultOut, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def batch_tasks(
     body: BatchTaskIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -764,7 +942,7 @@ def batch_tasks(
     return {"processed": done, "skipped": skipped}
 
 
-@router.get("/tasks-export")
+@router.get("/tasks-export", response_model=TaskExportOut)
 def export_tasks(
     program_code: str | None = None,
     status: str | None = None,

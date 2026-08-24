@@ -203,7 +203,10 @@ class BudgetExecutionOut(BaseModel):
     `result` 的键固定是 income / expense 两个（循环常量），故逐字段建模。"""
 
     org_id: int
-    year: int
+    # `year` 是**查询参数原样回显**，handler 签名是 `year: str`——声明成 int
+    # 会把 `"2026"` 悄悄变成 `2026`。逐字节比对当场抓到（键集合与顺序都没变，
+    # 只有这一个值的引号没了）。契约不该顺手改类型，那是行为变更。
+    year: str
     income: BudgetCategoryOut
     expense: BudgetCategoryOut
 
