@@ -1,14 +1,23 @@
 """中医药服务：⑬智能辅诊（体质辨识+辨证推荐）、⑭共享中药房、㉑适宜技术库。"""
 from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
-from ..models import Organization, Patient, TcmDispenseOrder, TcmTechnique
+from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..models import (
+    Organization,
+    Patient,
+    TcmDispenseOrder,
+    TcmFormula,
+    TcmPreparationBatch,
+    TcmTechnique,
+    User,
+)
+from datetime import date, timedelta
+from ..datetypes import DateStr
+from ..visibility import assert_obj_org_writable, assert_org_writable
 
 router = APIRouter(prefix="/api/tcm", tags=["中医药服务"], dependencies=[Depends(get_current_user)])
 
@@ -240,24 +249,6 @@ def list_techniques(keyword: str = "", db: Session = Depends(get_db)):
         query = query.filter((TcmTechnique.name.like(like)) | (TcmTechnique.indication.like(like)))
     return query.order_by(TcmTechnique.id).limit(200).all()
 
-
-from typing import Any
-
-from datetime import date, timedelta
-
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
-
-from ..datetypes import DateStr
-from ..visibility import assert_obj_org_writable, assert_org_writable
-from ..database import get_db
-from ..deps import get_current_user, require_roles, resolve_business_date
-from ..models import (
-    TcmFormula,
-    TcmPreparationBatch,
-    User,
-)
 
 # ===========================================================================
 # ⑭ 中药制剂管理（配方 / 批次 / 效期）

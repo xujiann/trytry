@@ -3,12 +3,35 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-
 from ..clock import now_naive
-from ..concurrency import ensure_present, insert_if_absent, upsert_unique
+from ..concurrency import (
+    add_amount,
+    claim_quota,
+    ensure_present,
+    insert_if_absent,
+    take_amount,
+    upsert_unique,
+)
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
-from ..models import Course, LiveFeedback, LiveSession, TrainingRecord, User
+from ..deps import get_current_user, require_admin, require_roles, row_dict
+from ..models import (
+    Attachment,
+    Course,
+    CourseMaterial,
+    HealthArticle,
+    LiveFeedback,
+    LiveSession,
+    Organization,
+    TcmTechnique,
+    TrainingAssessment,
+    TrainingEnrollment,
+    TrainingPlan,
+    TrainingRecord,
+    User,
+)
+from sqlalchemy.exc import IntegrityError
+from ..datetypes import DateStr
+from ..visibility import assert_obj_org_writable, assert_org_writable
 
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
 
@@ -258,29 +281,6 @@ def list_live_sessions(status: str | None = None, db: Session = Depends(get_db))
         for s in q.order_by(LiveSession.id.desc()).limit(200).all()
     ]
 
-
-
-
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-
-from ..datetypes import DateStr
-from ..concurrency import add_amount, claim_quota, take_amount
-from ..visibility import assert_obj_org_writable, assert_org_writable
-from ..database import get_db
-from ..deps import get_current_user, require_roles, row_dict
-from ..models import (
-    Attachment,
-    CourseMaterial,
-    Organization,
-    TcmTechnique,
-    TrainingAssessment,
-    TrainingEnrollment,
-    TrainingPlan,
-    User,
-)
 
 # ===========================================================================
 # ⑳ 课件资源管理 + ㉑ 适宜技术实训管理
@@ -593,3 +593,54 @@ def list_assessments(plan_id: int, db: Session = Depends(get_db)):
             for r in rows
         ],
     }
+
+# ---------------------------------------------------------------- ADR-0006 搬家
+#
+# 以下自 `service_extras.py`（倾倒场）搬入：健康宣教文章。
+# 路径一字未改（`/api/education...` 原样），两边 router 的鉴权本就一致
+# （都是 `dependencies=[Depends(get_current_user)]`），故可直接并入本模块的
+# router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
+
+
+class HealthArticleOut(BaseModel):
+    """建稿与发布两个端点同形（都只回 id + status），共用一个模型。
+    发布那个的 status 是字面量 "published"，不是读回来的列——照实建模。"""
+
+    id: int
+    status: str
+
+
+# ---- ⑨⑩ 健康宣教 ----
+
+
+class ArticleCreate(BaseModel):
+    title: str = Field(min_length=1)
+    category: str = "general"
+    content: str = ""
+
+
+@router.post(
+    "/articles",
+    response_model=HealthArticleOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教编制
+)
+def create_article(body: ArticleCreate, db: Session = Depends(get_db)):
+    a = HealthArticle(**body.model_dump())
+    db.add(a)
+    db.commit()
+    return {"id": a.id, "status": a.status}
+
+
+@router.post(
+    "/articles/{article_id}/publish",
+    response_model=HealthArticleOut,
+    dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教发布
+)
+def publish_article(article_id: int, db: Session = Depends(get_db)):
+    a = db.get(HealthArticle, article_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail="文章不存在")
+    a.status = "published"
+    db.commit()
+    return {"id": a.id, "status": "published"}

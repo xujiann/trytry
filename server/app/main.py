@@ -97,11 +97,12 @@ from .routers import (
     surveillance,
     reports,
     resources,
-    service_extras,
+    surveys,
     tcm,
     tcm_heritage,
     telemedicine,
     todos,
+    triage,
     users,
     vaccination,
     vaccine_supply,
@@ -381,7 +382,10 @@ app.include_router(workflows.service_router)
 # 块4：细目补齐（中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务）
 app.include_router(performance.improvement_router)  # ADR-0006：从 gapfill 搬回业务前缀
 app.include_router(homevisits.router)  # ADR-0006：原 gapfill.home_router
-app.include_router(service_extras.router)
+# ADR-0006：倾倒场 service_extras 已拆解，20 个端点回到各自业务前缀；
+# 满意度与智能导诊不隶属任何既有业务域，新建两个模块（见各自 docstring）。
+app.include_router(surveys.router)
+app.include_router(triage.router)
 # 全域慢专病子系统：装卸是一个动作，由 MEDPLAT_SPD_ENABLED 控制（见 app/spd/）
 register_spd(app)
 app.include_router(todos.router)

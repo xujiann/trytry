@@ -54,7 +54,8 @@
 - ✅ **一次十二个模块，基线 588 → 470**（118 个端点）：medwaste 11 / clinical_docs 9 / materials 9 / surgery 10 / accounting 9 / disease_programs 9 / rbac 9 / surveillance 9 / tcm_heritage 9 / workflows 9 / outpatient_docs 13 / fund 12，十二个模块全部清零。覆盖率首次过半（**50.26%**），已治理模块 24 → 36 个。
 - 🔧 **取证方式换了**，这是本轮真正的产出：不再每个模块手写一份捕获脚本，改成给 app 装一个中间件，把**整个测试套件**跑出来的每个响应按 `(方法, 路由模板, 状态码)` 记下字节，加契约前后各跑一次逐项比对——一次覆盖 **1847 个组合**，治理十个模块和治理一个模块的取证成本一样。工具 `tests/capture_plugin.py`，用法与**三条注意事项**写进了 `docs/接口标准与治理.md`：①用之前必须先量噪声底（同一份代码跑两次差异必须为 0，实测第一次有 2 处随机项）；②它覆盖不到测试没跑过的端点，那是**沉默的缺口**不是保证；③改了路由代码就要重跑（pytest 启动时导入 app，之后的编辑不影响正在跑的那轮——踩过一次）。
 - 本轮的建模判断：Money 列一律 `int | float`（accounting 全模块、fund 全模块、materials 采购与耗材单价——fund 那个直接决定各机构分到多少钱，不是显示问题）；条件键用 `exclude_unset`（accounting 凭证的 entries、rbac 内置角色的 note、fund 超额预付的 warning、**tcm_heritage 决策点的 answer/explain**——最后这个是嵌套条件键，学员拉题目时答案整个键不出现，声明成可选字段等于把答案的存在公告出去）；「新建回执」与「列表行」键集合不同的一律两个模型，不硬套继承。
-- 剩余候选：`spd/care`(31) / `spd/followup`(29) / `spd/population`(28) / `spd/assess`(24) / `education`(21) / `service_extras`(20) / `quality`(20) / `admin_mgmt`(20) / `spd/tasks`(19)…（共 470，模块数 63 → 51）。
+- ✅ **ADR-0006 收官批的 20 个端点已补契约，基线 470 → 450**（覆盖率 52.38%）。`cssd` 加回 `FULLY_GOVERNED`（搬家那个提交里因搬入 3 个无契约端点短暂移出——**总欠账当时一点没变**，470→470 只是换了名下，只有总基线的话那次回退会完全静默）；`surveys`/`triage` 生而全契约。两处会改字节的判断：`ExamResource.price` 是 Money 列（捕获里实测到 `"price":240`，声明 float 就变 `240.0`）；`survey_stats` 的**字段顺序**照 handler 实际出键排——它 `pop("count")` 后又重新赋值，`count` 因此被挪到 `distribution` 与 `negative` 之后。套件级捕获 1856 个组合前后比对，**落在这 20 个端点内的差异 0 处**；捕获盖不到的两处另补了用例（`GET /api/surveys` 一次没被跑过、`GET /api/cssd/requests` 只跑到过空列表——空集钉不住字段），四处变异各自转红。
+- 剩余候选：`spd/care`(31) / `spd/followup`(29) / `spd/population`(28) / `spd/assess`(24) / `education`(21) / `quality`(20) / `admin_mgmt`(20) / `spd/tasks`(19)…（共 450，模块数 50）。
 - ✅ **搬家带来的 8 个端点契约已补齐**，基线 **740 → 732**，`cssd` 与 `performance` 双双回归 `FULLY_GOVERNED`。最容易踩的是 `cssd` 的 `total_cost`：它是 `round(totals.get(id, 0), 2)`，**没有成本项时返回 int `0` 而不是 `0.0`**，声明成 `float` 就会把 `0` 变成 `0.0`（改字节）。契约写 `int | float` 原样透传，变异验证：改成 `float` 立刻转红。八个端点响应字节逐字节比对一致（含空集与有数据两条分支）。
 - ✅ `created_at` 欠账迁移**收官**：52 → **2**（16 个迁移批次，平台链+spd 链，全部常量默认回填→batch 撤默认范式，全程响应字节不变）。仅剩有意留置 2 张：`blood_stocks`（小型 upsert 表，价值低降级）、`admissions`（核心表，改列需先 ADR）。此后新表一律带 created_at（棘轮基线=2 顶住）。
 - ✅ 测试隔离修复：**七条**用例在 `pytest -k` 子集下会红（整模块跑得过，纯靠执行顺序）。根因不是共享库本身，是**跨用例借数据**——`GET …?keyword=张三` 取上一条用例建的人、`enrollments[0]` 取上一条用例建的档案、DRG 统计里指望上一条用例的病例已在。改法：把前置数据交给**幂等的模块级 fixture** 负责交付（已有就返回、没有才建），用例声明依赖即可。`path_template` fixture 顺带把模板发布掉——「可用的模板」本就该由建它的 fixture 交付，而不是靠 `test_publish_*` 排在前面顺带做掉。现每条单选跑均绿。
@@ -82,7 +83,7 @@
 > 这四项都是对**可运行模块**的结构性改动，按 CLAUDE.md §1.2/§9 必须先有 ADR。
 > ADR 已写齐（0006-0009，七段式，含实测数据与分批建议），等的是批准，不是分析。
 
-- ◐ 拆倾倒场 `gapfill.py`(1125 行/34 端点/6 前缀) / `service_extras.py`(521 行/20 端点) 回业务前缀 → **[ADR-0006](docs/adr/0006-倾倒场路由回归业务前缀.md)（**Accepted**）**。建议按前缀分批，第一批 `/api/performance`（与 `routers/performance.py` 前缀重叠、只有 2 个端点）；动手前先加「端点 URL 集合零漂移」守卫。
+- ✅ **拆倾倒场收官（ADR-0006 Done）**：`gapfill.py`(1125 行/34 端点/6 前缀) 与 `service_extras.py`(521 行/20 端点) 两个倾倒场**均已删除**，54 个端点全部回到业务前缀。分批做的，每批前先跑「端点 URL 集合零漂移」守卫拿基线。
   - ✅ 前置守卫已就位：`test_refactor_drift_guards.py` 快照 885 个端点，搬漏/改名立刻红；另有 `test_遍历本身没瞎` 防守卫自身失效（写这个守卫时先踩过一次：遍历写错、快照只存下 1 个端点、用例照样绿）。
   - ✅ **第一批 `/api/performance` 已搬回**：5 个 `improvements*` 端点从 `gapfill.py` 移进 `routers/performance.py`（gapfill 1125 → 945 行）。零漂移守卫实测 885 个端点纹丝不动。
   - ⚠️ **搬出来一个真问题**：同一个 `/api/performance` 前缀上挂着**两套鉴权**——原 `performance.py` 的 router 是 `require_roles("director")`，gapfill 那个是 `get_current_user`（登录即可）。这正是 ADR-0006 problem 点名的「鉴权分裂」。搬家**刻意没有合并两个路由**：并成一个会把这 5 个端点从「登录可见」收紧到「仅 director」，那是行为变更不是搬家。收益是此前这个分裂散在两个文件里根本看不见，现在并排躺在同一文件里。已逐端点实测鉴权与搬前一致。
@@ -90,6 +91,9 @@
   - ✅ **剩余五个前缀一次搬完，`gapfill.py` 已删除**——倾倒场从 1125 行归零。`tcm`/`cssd`/`education`/`maternal` 并入同名模块（四者鉴权与目标 router **完全一致**，可直接合成一个 router，不像 performance 那样存在鉴权分裂）；`homevisits` 新建模块。零漂移守卫实测 885 端点不变。
   - 搬家顺带撞出一处**同名遮蔽**：`maternal.py` 里出现两个 `ScreeningCreate`（儿童筛查 vs 产前筛查）与两个 `list_screenings`。当前行为是对的（各自的使用点都在自己的定义之后、重定义之前），但一个写在 417 行之后、想用儿童筛查 schema 的新端点会**静默拿到产前筛查的校验规则**。已把搬来的那套改名 `PrenatalScreeningCreate`/`list_prenatal_screenings`，并实测两套 422 校验各自正确。
   - `cssd` 与 `performance` 暂时移出 `FULLY_GOVERNED`：搬进来的端点本就无契约，总欠账仍 740（只是换了名下），补完即加回。
+  - ✅ **`service_extras.py` 一次拆完并删除（2026-08-24）**：20 个端点 → `exams`(6，报告模板/报告修订/检查资源要素档案) · `cssd`(3，物品申领) · `appointments`(3，服务黑名单) · `consultations`(2，会诊专家) · `education`(2，宣教文章)；`surveys`(3) 与 `triage`(1) **新建模块**——满意度评价的对象横跨签约/就诊/会诊三类，导诊是到院前环节，挂进任何一个既有域都会让别的看起来像附属品，理由写进了各自 docstring。零漂移守卫实测 885 个端点纹丝不动。
+  - 搬之前逐项核过三件事，**都清**，所以这批比第一批 `/api/performance` 简单得多：六个目标模块的 router 鉴权与倾倒场**完全一致**（都是 `dependencies=[Depends(get_current_user)]`，不存在鉴权分裂）；**无同名遮蔽**（gapfill 那次撞到过两个 `ScreeningCreate`）；**无路径冲突**。
+  - 差点漏一个：`_CENTERS` 常量定义在倾倒场 router 那行的**下面**、不在任何分节里，按分节切块时没带上——ruff 的 F821 当场拦下。分节切块这个手法对"节外的模块级常量"是有盲区的。
 - ◐ 统计簇 `analytics/metrics/reports/performance` 合并口径 → **[ADR-0007](docs/adr/0007-统计簇口径合并.md)（Accepted）**。**第一步已交付**：`docs/统计口径对照表.md` —— 逐条比对四个模块的实际代码，摸出 5 处口径分歧 + 1 处更严重的问题：
   - 🔴 **有两个平行的机构评分体系**：`performance/orgs`（`performance_indicators` 表 + 硬编码五维度）与 `analytics/performance-report`（`performance_formulas` 表 + 可编辑公式）。两个接口都叫「机构绩效」、两个分数不可比。
   - ⚠️ **随访覆盖率不带时间窗**：「有过任意一次随访」就永久计入覆盖，数字只涨不跌、随管理年限趋近 100%，基本没有考核价值。更像缺陷而非分歧，但修它会让所有机构该项得分明显下降。
@@ -106,7 +110,7 @@
   - ✅ 周期解析器合并完毕，而且**是三份不是两份**——`cost._period_bounds` 与 `analytics._period_bounds` 逐字节相同（16 组输入实测同值）。合成 `deps.month_bounds` 一份，五个既有端点行为零漂移（含原实现宽松的 `2026-1` 也照收、422 文案一字不改）。
   - ✅ 顺带修掉三份副本共有的一个 **500**：右端点的计算写在 `try` 外面，`9999-12` 的次月是 10000 年，溢出没人接 → `?period=9999-12` 在 5 个端点上返回 500 而不是 422。**`deps.period_bounds` 自己也中招**（本轮周期口径改动里只圈进了年度形式 `9999`，月度形式漏在外面），一并修。`tests/test_period_parsing.py` 27 条守住，三处变异验证。
   - ✅ **已裁定（2026-08-22）：月度解析器不接受 `YYYY`，两个解析器分工保持**。合并会把 5 个既有端点当前的 422 变成 200——那不是去重，是给未受影响的接口加功能；而且「年度成本」「年度运行效率」这些口径本身没定义过（`efficiency` 的日均担负按天数摊，年度窗口下含义完全不同）。想要年度粒度应当是一次带口径设计的新需求，不是解析器合并的副产物。已有 `test_两个解析器分工不同_月度那个不认年度` 防「顺手统一」。
-- ◐ God 文件 `models.py`(3989 行/187 类) / `spd/routers/config.py`(1549 行) 分域拆包 → **[ADR-0008](docs/adr/0008-God文件分域拆包.md)（**Accepted**）**。拆成包 + `__init__.py` 重导出，**调用方 import 路径一行不改**；先拆 spd config 演练再动 models；动手前先加「模型名字集合零漂移」守卫。
+- ✅ **God 文件分域拆包已完成（ADR-0008 Done）**：`spd/routers/config.py`(1549 行) 与 `models.py`(3989 行/187 类) 都已拆成包，**调用方 import 路径一行没改**。下面的子条目记着两次拆包的实测数据与踩到的坑。（顶行此前一直挂着 ◐，是标记没跟上——子条目早就写着 ✅。）
   - ✅ 前置守卫已就位：同一份用例快照 246 个 ORM 类名——拆包漏了重导出会让类不再注册进 `Base.metadata`，**建表静默少一张**而不是报错，这条把「静默」变成「报错」。
   - ✅ **演练完成：`spd/routers/config.py` 1549 行 → 包（8 个文件，最大 331 行）**。按业务分节拆成 catalog / paths / scales / teams / devices / centers 六个子模块 + `_base`（路由对象与跨节工具）。**导入路径一行没改**（`from .routers import config` 照旧），零漂移守卫实测 885 端点 + 246 模型纹丝不动。
   - 拆之前先用 AST 扫了一遍**跨节引用**：`_bump_version`（专病档案↔标准路径）、`_qr_svg`（评估量表↔村医档案）、`_target_out`（管理目标↔专病档案）三个共用件——靠肉眼读 1549 行是找不全的，找漏一个就是 NameError。前两个跨了分组边界，收进 `_base`。

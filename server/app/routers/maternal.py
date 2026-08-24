@@ -3,12 +3,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-
 from ..datetypes import DateStr
 from ..concurrency import insert_if_absent
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_roles, row_dict
 from ..models import (
     ChildRecord,
     ChildVisit,
@@ -18,9 +17,11 @@ from ..models import (
     NewbornScreening,
     Organization,
     Patient,
+    PrenatalScreening,
     User,
     WomenHealthRecord,
 )
+from sqlalchemy import func
 
 router = APIRouter(prefix="/api/maternal", tags=["妇幼保健"], dependencies=[Depends(get_current_user)])
 
@@ -383,21 +384,6 @@ def list_women_health(
         query = query.filter(WomenHealthRecord.record_type == record_type)
     return query.order_by(WomenHealthRecord.id.desc()).limit(200).all()
 
-
-
-
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
-from sqlalchemy import func
-from sqlalchemy.orm import Session
-
-from ..datetypes import DateStr
-from ..database import get_db
-from ..deps import get_current_user, require_roles, row_dict
-from ..models import (
-    PrenatalScreening,
-    User,
-)
 
 # ===========================================================================
 # ㉔ 产前筛查与诊断（高危自动标记）

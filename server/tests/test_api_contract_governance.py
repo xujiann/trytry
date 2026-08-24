@@ -130,12 +130,22 @@ import app.spd.routers as spd_routers
 #   entries、rbac 内置角色的 note、tcm_heritage 决策点的 answer/explain——
 #   最后这个是**嵌套**条件键，学员拉题目时答案整个键不出现）；
 #   "新建回执"与"列表行"键集合不同的一律两个模型，不硬套继承。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 470
+# → 450（ADR-0006 收官批：`service_extras` 拆解后落到七个模块的那 20 个端点。
+#   `cssd` 在搬家那个提交里短暂移出 FULLY_GOVERNED——搬进去 3 个无契约端点让它
+#   回退了，而**总欠账一点没变**（470→470，只是换了名下）：只有总基线的话这次
+#   回退会完全静默，"已治理模块不许回退"那条盯的正是这个。本批补完即加回。
+#   `surveys`/`triage` 是收官时新建的模块，生而全契约。
+#   两处建模判断：`ExamResource.price` 是 Money 列（`int | float`，公示价
+#   「120 元」不能变「120.0 元」）；`survey_stats` 的**字段顺序**照 handler 实际
+#   出键排——它 `pop("count")` 之后又重新赋值，`count` 因此被挪到 `distribution`
+#   与 `negative` 之后，照读起来顺眼的顺序排就是改字节。
+#   见 test_service_extras_split_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 450
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
     "contracts",
-    "cssd",
+    "cssd",  # 上个提交因 ADR-0006 搬入 3 个无契约端点短暂移出，本批补完即加回
     "organizations",
     "referrals",
     "telemedicine",
@@ -160,6 +170,9 @@ FULLY_GOVERNED = {
     # 配置域：包，58 个端点分 6 个子模块，分三批做完（catalog+centers /
     # paths+devices / scales+teams），见 test_spd_config_*_contract.py
     "spd/config",
+    # ADR-0006 收官时新建的两个模块，生而全契约
+    "surveys",
+    "triage",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

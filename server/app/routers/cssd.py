@@ -1,12 +1,15 @@
 """消毒供应中心：复用器械批次灭菌→发放→回收全流程追溯。"""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
 from ..concurrency import insert_or_conflict
+from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import Organization, SterilizationBatch
+from ..models import CssdCostItem, CssdRequest, Organization, SterilizationBatch, User
 from ..schemas import BatchCreate, BatchOut
+from typing import Any
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 
 router = APIRouter(prefix="/api/cssd", tags=["消毒供应"], dependencies=[Depends(get_current_user)])
 
@@ -63,21 +66,6 @@ def advance(batch_id: int, dispatched_to_org_id: int | None = None, db: Session 
     return batch
 
 
-from typing import Any
-
-
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
-from sqlalchemy import func
-from sqlalchemy.orm import Session
-
-from ..database import get_db
-from ..deps import get_current_user, require_roles
-from ..models import (
-    CssdCostItem,
-    User,
-)
-
 # ===========================================================================
 # ⑥ 消毒供应成本核算
 # ===========================================================================
@@ -97,8 +85,6 @@ class CostItemCreate(BaseModel):
     cost_type: str = Field(pattern="^(labor|material|energy|equipment|other)$")
     amount: float = Field(gt=0)
     note: str = ""
-
-
 
 
 class CostItemOut(BaseModel):
@@ -221,3 +207,98 @@ def cost_stats(batch_id: int | None = None, db: Session = Depends(get_db)):
             k: {"amount": v, "name": COST_TYPES.get(k, k)} for k, v in sorted(by_type.items())
         },
     }
+
+# ---------------------------------------------------------------- ADR-0006 搬家
+#
+# 以下自 `service_extras.py`（倾倒场）搬入：物品申领。
+# 路径一字未改（`/api/cssd...` 原样），两边 router 的鉴权本就一致
+# （都是 `dependencies=[Depends(get_current_user)]`），故可直接并入本模块的
+# router——不像 ADR-0006 第一批的 `/api/performance` 那样存在鉴权分裂。
+
+
+class CssdRequestCreatedOut(BaseModel):
+    id: int
+    status: str
+
+
+class CssdRequestOut(BaseModel):
+    id: int
+    org_id: int
+    item_name: str
+    quantity: int
+    status: str
+    # 未响应前没有批次；响应后指向那一批已灭菌物品
+    batch_id: int | None
+
+
+class CssdRequestFulfilledOut(BaseModel):
+    """响应回执。`status` 是字面量 "fulfilled"（不是读回来的列），
+    `batch_id` 是入参回显——照实建模，不改字节。"""
+
+    id: int
+    status: str
+    batch_id: int
+
+
+# ---- ⑥ 消毒供应物品申领 ----
+
+
+class CssdReqCreate(BaseModel):
+    org_id: int
+    item_name: str = Field(min_length=1)
+    quantity: int = Field(default=1, ge=1)
+
+
+@router.post(
+    "/requests",
+    response_model=CssdRequestCreatedOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 物品申领=经办
+)
+def create_cssd_request(body: CssdReqCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.org_id)
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="申领机构不存在")
+    r = CssdRequest(**body.model_dump())
+    db.add(r)
+    db.commit()
+    return {"id": r.id, "status": r.status}
+
+
+@router.get("/requests", response_model=list[CssdRequestOut])
+def list_cssd_requests(
+    status: str | None = None,
+    org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    q = db.query(CssdRequest)
+    q = scope_org_list(db, user, q, CssdRequest, org_id)
+    if status:
+        q = q.filter(CssdRequest.status == status)
+    return [
+        {"id": r.id, "org_id": r.org_id, "item_name": r.item_name, "quantity": r.quantity, "status": r.status, "batch_id": r.batch_id}
+        for r in q.order_by(CssdRequest.id.desc()).limit(200).all()
+    ]
+
+
+@router.post(
+    "/requests/{request_id}/fulfill",
+    response_model=CssdRequestFulfilledOut,
+    dependencies=[Depends(require_roles("operator"))],  # H2: 申领响应=经办
+)
+def fulfill_cssd_request(request_id: int, batch_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """中心以已灭菌批次响应申领。"""
+    r = db.get(CssdRequest, request_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="申领不存在")
+    assert_obj_org_writable(db, user, r)
+    if r.status != "requested":
+        raise HTTPException(status_code=409, detail="申领已处理")
+    batch = db.get(SterilizationBatch, batch_id)
+    if batch is None or batch.status not in ("sterile", "dispatched"):
+        raise HTTPException(status_code=409, detail="批次不存在或未完成灭菌")
+    r.status = "fulfilled"
+    r.batch_id = batch_id
+    db.commit()
+    return {"id": r.id, "status": "fulfilled", "batch_id": batch_id}
