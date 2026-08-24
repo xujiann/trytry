@@ -151,7 +151,14 @@ import app.spd.routers as spd_routers
 #   **JSON 列** items（不是数据库 Float 列），实测存的是整数 100，声明成 float
 #   会变 `100.0`——Money 陷阱的同一形状换了来源，判据仍是"实际存的是什么"。
 #   见 test_spd_assess_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 427
+# → 396（`spd/care` 31 个端点，覆盖率 58.10%）。四处判断：`by_item` 是**两层
+#   动态字典**（题目 key → 选项 → 计数，两层的键都由量表决定，逐字段建模等于
+#   把某张量表写死进契约）；`trend.latest` 可为 null（"最近一次不存在"与
+#   "最近一次是空的"是两回事）；`RevisitOut.items` 是 String 列不是 JSON 数组
+#   （名字像数组，列类型说了算）；三处"新建回执与列表不同形"各建两个模型。
+#   套件级比对落在 spd/care 内 0 处差异；7 个零覆盖端点另补了用例。
+#   见 test_spd_care_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 396
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -184,6 +191,8 @@ FULLY_GOVERNED = {
     # ADR-0006 收官时新建的两个模块，生而全契约
     "surveys",
     "triage",
+    # 慢专病照护域：31 个端点，见 test_spd_care_contract.py
+    "spd/care",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",
