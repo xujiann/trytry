@@ -28,6 +28,16 @@ _NORMALIZERS = [
     (re.compile(r'"debug_code":"\d{4,8}"'), '"debug_code":"<CODE>"'),
     # 积分商城核销码：randbelow 生成的六位数，每次随机
     (re.compile(r'"verify_code":"\d{6}"'), '"verify_code":"<CODE>"'),
+    # ↓ 以下三条是**实测噪声地板**后补的（2026-08-24）。补之前同一份代码跑两次
+    #   有 76 个组合"有差异"，全是这三类，足以把真回归淹掉；补完 spd 七个模块
+    #   的噪声地板全部归零。
+    # 电子健康卡号：建档时随机生成，每次运行都不同
+    (re.compile(r'EHC[0-9A-F]{10,}'), "<EHC>"),
+    # 墙钟时间戳：上面那条 <TS> 只认 ISO 的 T 分隔形式，这里是空格分隔的
+    #   "YYYY-MM-DD HH:MM[:SS]"（多处 strftime 出来的展示用时间）
+    (re.compile(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?'), "<WALL>"),
+    # 单实例 id：进程启动时随机
+    (re.compile(r'vm-[0-9a-f]{6,}'), "<VM>"),
 ]
 
 
