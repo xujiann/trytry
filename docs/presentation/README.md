@@ -39,6 +39,7 @@ node docs/presentation/build_deck.js [输出路径]
 | 2,360 项自动化测试 | `pytest tests/ --collect-only` | `cd server && python -m pytest tests/ -q --collect-only \| tail -1` |
 | 89 个迁移 | `server/alembic/versions/` | `ls server/alembic/versions/*.py \| wc -l` |
 | 六项 CI 阻断门、覆盖率门禁 70% | `.github/workflows/ci.yml` | 读 `COVERAGE_MIN` 与两个 job 的步骤 |
+| 行覆盖率实测 92% | 本地全量单元套件 | `cd server && python -m pytest tests/ -q -m "not integration and not e2e" --cov=app`（约 19 分钟，本版实测 2341 passed / 5 skipped，TOTAL 92%）。**README 徽章的 93% 与 CI 注释里的 87% 都是旧数，别照抄** |
 | 14 份 ADR | `docs/adr/` | `ls docs/adr/0*.md \| wc -l` |
 | 36 项功能 / 379 项子功能 | `docs/功能指引对照表.md`、第七轮重审文档 | 逐条对照表 |
 | 163 条慢专病需求 / 239 个子系统接口 | `docs/全域慢专病全流程管理系统_需求对照表.md` | 逐条对照表 |
