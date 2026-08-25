@@ -503,6 +503,10 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/users",
     "GET /api/users/role-changes",
     "GET /api/users/roles",
+    # ADR-0015：可选人员清单（最小披露 + 按可见范围收窄），登录即可读。
+    # 有意新增——配置域的写操作放给 director/doctor，而 GET /api/users 是
+    # require_admin，那两个角色本来列不出可选的人。
+    "GET /api/users/selectable",
     "GET /api/vaccination/contraindications",
     "GET /api/vaccination/pre-check",
     "GET /api/vaccination/records",

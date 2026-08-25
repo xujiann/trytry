@@ -89,10 +89,22 @@
   - **顺带修**：一家机构都没有时，机构下拉是空的 → 提交缺 `org_id` → 后端 422 且 detail 是
     pydantic 的数组，界面上给不出人话，用的人只看到"点了没反应"。改成不渲染表单、直接说
     "先去机构管理建机构"。
-  - ☐ **待裁定（authz）**：`GET /api/users` 是 `require_admin`，而配置域写操作放给
-    `CONFIG_ROLES=("director","doctor")`——于是 doctor 能建团队却列不出可选的人。
-    本轮**没改鉴权**（放宽用户枚举是 §8 红线上的事，要走 ADR），页面改成拿不到就退化为填
-    user_id 并在界面上说明原因。要不要给非 admin 一个"可选成员清单"接口，需要定。
+  - ✅ **已裁定并落地：[ADR-0015](docs/adr/0015-可选人员清单接口与用户枚举面.md)（Accepted）**。
+    问题是 `GET /api/users` 为 `require_admin`，而配置域写操作放给 `CONFIG_ROLES=("director","doctor")`
+    ——doctor 能建团队却列不出可选的人，页面只能退化成手填 user_id。
+    裁定**不放宽那个管理清单**，另开 `GET /api/users/selectable`：登录即可读，
+    只回 `id/name/role/org_id/org_name`（**不回 `username`**——登录句柄是撞库字典的一半；
+    也不回 `status`），按 `visibility.visible_org_ids` 收窄（全域角色看全部，其余只看本机构，
+    未挂机构的账号看不到任何人），只回在册账号，跨机构 `org_id` 显式 403 而不是空表，
+    `keyword` 只匹配显示名（无条件放开按登录名搜就是个用户名探测口）。
+    - **守卫自证（变异验证逼出来的一课）**：往 handler 的 dict 里塞 `username`，
+      `test_selectable_users.py` **15 条全绿**——`response_model` 会把契约外的键过滤掉。
+      真正会泄露的是**动契约**（换 `UserOut` / 往 `SelectableUserOut` 加字段），各让 11 条转红；
+      而"干脆不声明 `response_model`"由兄弟棘轮 `test_api_contract_governance` 接住
+      （欠账 450 → 451 变红）。**两道合起来才闭环**：那条管"必须有契约"，这条管"契约不许变宽"。
+      单看任一条都会高估自己的覆盖面。
+    - **⚠️ 待人复核**：ADR 的残余风险那段——"同机构同事的真实姓名对本机构所有登录账号可见"
+      是否符合本地隐私口径。要更严的话收紧方式现成（换成"仅本人所在团队"或给本接口加独立权限点）。
   - ☐ 余下 59 个，下批候选：`config/devices.py`（设备 3 · 数据源监控 1）、`config/paths.py`（路径节点 3）、
     `spd/assess.py`（积分规则 3 · 评估 3）、`spd/care.py`（干预模板 2 · 宣教推送 3 · 健康处方 2）。
 - ☐ **② 八张打印件没有入口（8 个端点）** —— 出院小结 · 住院费用清单 · 结算单 · 转诊单 · 接种证 · 体检报告 · 知情同意书 · 病案首页。

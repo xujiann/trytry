@@ -1659,12 +1659,11 @@ async function renderSpdConfig() {
  * 对应后端 `app/spd/routers/config/teams.py` 的三个域（12 个端点），
  * 与第 12 页同属可用性线第一步：后端做完了、前端没入口。
  *
- * 一个**没有绕过去的权限口子**，如实写在这里也写在界面上：
- * `GET /api/users` 是 `require_admin`（deps.py），而本页的写操作放给
- * `CONFIG_ROLES=("director","doctor")`。于是 director 能建团队、却列不出可选的人。
- * 这里**不改鉴权**——放宽用户枚举是 §8 红线上的事，要走 ADR，不是配页面时顺手做的。
- * 改成：拿得到就给下拉，拿不到就退化成填 user_id 并在界面上说清为什么，
- * 而不是整页 403 白屏。已登记进 ROADMAP 可用性线待裁定。
+ * 选人清单走 `GET /api/users/selectable`（ADR-0015）而不是 `GET /api/users`：
+ * 后者是 `require_admin` 的管理清单、回完整账号档案，而本页的写操作放给
+ * `CONFIG_ROLES=("director","doctor")`——用管理清单的话这两个角色只能手填 user_id。
+ * selectable 是为这件事单开的最小披露入口：只回显示名/角色/机构、不回登录名，
+ * 且非全域角色只看得到本机构的人。拿不到仍退化成填 ID，不让一次失败白屏。
  * ==========================================================*/
 
 const SPD_TEAM_LEVEL = {
@@ -1677,15 +1676,22 @@ const SPD_MEMBER_ROLE = {
 const SPD_DATA_SCOPE = { org: "本机构", group: "医共体分组", region: "全域" };
 const SPD_PATIENT_SCOPE = { self: "本人", team: "本团队", org: "本机构", region: "全域" };
 
-/* 可选用户清单：admin 拿得到，director/doctor 拿不到（见本节顶部）。
- * null 表示「没取到」，与「取到但是空的」区分开——前者要给退化输入框并解释，
- * 后者是真的一个用户都没有。 */
+/* 可选人员清单，取自 `GET /api/users/selectable`（登录即可读，按可见范围收窄）。
+ *
+ * **不用 `GET /api/users`**：那个是 require_admin 的管理清单，回完整账号档案
+ * （含登录名与账号状态）。本页的写操作放给 director/doctor，用管理清单的话
+ * 这两个角色只能手填 user_id。selectable 是为这件事单开的最小披露入口：
+ * 只回显示名/角色/机构，不回登录名，且非全域角色只看得到本机构的人。
+ *
+ * null 表示「没取到」（网络或权限异常），与「取到但是空的」区分开——
+ * 前者退化成填 ID 并解释，后者是真的一个可选的人都没有。 */
 let SPD_USERS = null;
 
 function spdUserControl(name, label) {
   if (SPD_USERS && SPD_USERS.length) {
     return `<select name="${esc(name)}">
-      ${SPD_USERS.map((u) => `<option value="${u.id}">${esc(u.full_name || u.username)}（${esc(u.username)}）</option>`).join("")}
+      ${SPD_USERS.map((u) => `<option value="${u.id}">${esc(u.name)}${
+        u.org_name ? `｜${esc(u.org_name)}` : ""}</option>`).join("")}
     </select>`;
   }
   return `<input name="${esc(name)}" type="number" min="1" placeholder="${esc(label)}ID" required>`;
@@ -1694,14 +1700,14 @@ function spdUserControl(name, label) {
 function spdUserName(userId) {
   if (!SPD_USERS) return String(userId);
   const u = SPD_USERS.find((x) => x.id === Number(userId));
-  return u ? (u.full_name || u.username) : String(userId);
+  return u ? u.name : String(userId);
 }
 
 async function renderSpdTeams() {
   $("#page-desc").textContent =
     "配置中心：服务团队与成员权限、村医档案与绑定二维码（含批量开通）";
-  // /api/users 是 admin-only：拿不到就退化，不让整页因为一个 403 白屏
-  const usersP = api("/api/users").catch(() => null);
+  // 拿不到就退化，不让整页因为一次失败白屏（现在登录即可读，这条是兜底不是常态）
+  const usersP = api("/api/users/selectable?limit=200").catch(() => null);
   const [orgs, teams, vds, users] = await Promise.all([
     api("/api/organizations"),
     api("/api/spd/teams?limit=50"),
@@ -1715,9 +1721,12 @@ async function renderSpdTeams() {
     return o ? o.name : String(id);
   };
   const noUserList = !SPD_USERS
-    ? `<p class="desc" style="color:#b26a00">当前账号列不出用户清单
-       （<code>GET /api/users</code> 限管理员），下面按用户 ID 填写。
-       用管理员账号打开本页可直接下拉选人。</p>` : "";
+    ? `<p class="desc" style="color:#b26a00">没取到可选人员清单
+       （<code>GET /api/users/selectable</code> 没回来），下面按用户 ID 填写。</p>`
+    : SPD_USERS.length === 0
+      ? `<p class="desc" style="color:#b26a00">可见范围内没有在册账号可选。
+         非全域角色只看得到<strong>本机构</strong>的人；跨机构配团队请用管理层账号。</p>`
+      : "";
 
   /* 一家机构都没有时，机构下拉是空的 —— 提交上去 org_id 缺字段，后端回 422
    * 且 detail 是 pydantic 的数组，界面上给不出人话，用的人只会看到"点了没反应"。

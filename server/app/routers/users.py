@@ -7,12 +7,14 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import and_ as sa_and
 from sqlalchemy import func
+from sqlalchemy import or_ as sa_or
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..config import settings
-from ..visibility import assert_obj_org_writable
+from ..visibility import assert_obj_org_writable, assert_org_visible, visible_org_ids
 from ..database import get_db
 from ..deps import (
     ROLE_NAMES,
@@ -130,6 +132,88 @@ def list_users(db: Session = Depends(get_db)):
 @router.get("/users/roles", dependencies=[Depends(get_current_user)])
 def list_roles():
     return ROLE_NAMES
+
+
+class SelectableUserOut(BaseModel):
+    """"选个人"控件用的最小披露形状。
+
+    刻意**不回 `username`**：那是登录句柄，把它枚举给全体在册账号，等于把撞库
+    要用的用户名字典白送出去。选人只需要"认得出是谁"——显示名 + 角色 + 机构，
+    同名的人靠这两项区分，不靠登录名。
+    也**不回 `status`**：列表本身只回在用账号（停用的人不该还能被加进团队），
+    再回一个恒为 "active" 的字段没有意义（与 spd 标签列表同一口径）。
+    """
+
+    id: int
+    #: 显示名：`full_name` 非空取它，否则回落到 `username`（全仓库既有惯例）
+    name: str
+    role: str
+    org_id: int | None
+    #: 未挂机构时为空串，不是 null——省得前端每处都判一次
+    org_name: str
+
+
+@router.get("/users/selectable", response_model=list[SelectableUserOut])
+def list_selectable_users(
+    response: Response,
+    keyword: str = "",
+    role: str | None = None,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """可被选为团队成员/村医的在册账号（登录即可读，按可见范围收窄）。
+
+    **为什么单开一个接口，而不是放宽 `GET /users`**：那个是 `require_admin` 的
+    管理清单，回的是完整账号档案（含登录名与账号状态）。慢专病配置域的写操作
+    放给 `CONFIG_ROLES=("director","doctor")`，于是 doctor 能建团队、却列不出可选
+    的人——管理端配置页只能退化成让人手填 user_id。放宽那个接口等于把管理清单
+    开给全体登录用户；这里改成另开一个**最小披露 + 按可见范围收窄**的只读入口，
+    权限面只扩到"看得见同机构同事的显示名"，不扩到账号档案。
+
+    收窄口径与明细数据同一档（`visibility.visible_org_ids`）：
+    - `admin` / `director` 是全域角色，看全部（他们本来就能跨机构配团队）；
+    - 其余角色只看**本机构**在册账号；未挂机构的账号看不到任何人（也不被任何人看到）。
+
+    `keyword` 匹配的是**显示名**——`full_name` 非空时只匹配它，为空时才匹配
+    `username`。不无条件放开按登录名搜：那会变成一个用户名探测口子
+    （输入猜测值、看有没有人跳出来），而本接口的整个设计前提就是不外泄登录名。
+    """
+    allowed = visible_org_ids(db, user)
+    query = (
+        db.query(User, Organization.name)
+        .outerjoin(Organization, User.org_id == Organization.id)
+        .filter(User.status == "active")
+    )
+    if allowed is not None:
+        # 空列表（没挂机构的业务账号）→ in_([]) 天然不匹配任何行，与"看不到任何机构明细"一致
+        query = query.filter(User.org_id.in_(allowed))
+    if org_id is not None:
+        assert_org_visible(db, user, org_id)
+        query = query.filter(User.org_id == org_id)
+    if role:
+        query = query.filter(User.role == role)
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.filter(
+            sa_or(
+                sa_and(User.full_name != "", User.full_name.like(like)),
+                sa_and(User.full_name == "", User.username.like(like)),
+            )
+        )
+    rows = paginate(query.order_by(User.id), response, offset, limit)
+    return [
+        {
+            "id": u.id,
+            "name": u.full_name or u.username,
+            "role": u.role,
+            "org_id": u.org_id,
+            "org_name": org_name or "",
+        }
+        for u, org_name in rows
+    ]
 
 
 class ChangePasswordOut(BaseModel):
