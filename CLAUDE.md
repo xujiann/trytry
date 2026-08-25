@@ -10,7 +10,8 @@
 ## 0. 项目速览
 
 - **单进程 FastAPI 单体**：县域医共体信息化平台（medplat）+ 全域慢专病全流程管理子系统（`app/spd`）。
-- 规模：258 张表 / 945 个 HTTP 端点 / 92 个路由文件 / 86 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
+- 规模：258 张表 / 946 个 HTTP 端点 / 93 个路由文件 / 89 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
+  （端点与 ORM 类的权威数字取 `tests/test_refactor_drift_guards.py` 的快照，改这里先去那儿核。）
 - 入口：`server/app/main.py`（`app.main:app`）。配置：`server/app/config.py`（`MEDPLAT_*` 环境变量）。
 - 开发库 SQLite，生产库 PostgreSQL 16，Redis 可选。
 
@@ -49,7 +50,7 @@ make verify            # build + lint + typecheck + test-unit（提交前自检�
 9. **新功能必须带测试**（见 §6）。
 10. **改 Bug 尽量带回归测试**。
 11. **不得为了让 CI 变绿而删测试。**
-12. **不得无理由引入新依赖。** 运行时依赖只有 13 项（`server/requirements.txt`），全无 lockfile；新增需在 PR 里说明必要性。
+12. **不得无理由引入新依赖。** 运行时依赖只有 13 项（`server/requirements.txt`）；新增需在 PR 里说明必要性。**装依赖以 `server/requirements.lock` 为准**——CI 两个 job 都装它，门一旦阻断就必须可复现（实测 mypy 2.3 报 139 处、1.19 在同一份代码上报 187 处，版本飘一下结论就变）。
 13. **架构级变更需要 ADR**（见 §9）。
 14. **完成前必须跑测试、lint、类型检查**（见 §7）。`make verify` 一把跑全。注意 mypy 必须与项目依赖装在**同一环境**，否则结果是假的——`make typecheck` 会先跑探针拦住这种情况。
 15. **改动范围限定在任务本身**，不顺手重构无关代码。（其正向补充是"童子军法则"，见 §12：在你**已经动到**的代码附近，做小而安全的清理是鼓励的；无关的大重构不是。）
