@@ -71,6 +71,9 @@ const PAGES = [
   { id: "spdassess", title: "专病考核与积分", render: renderSpdAssess },
   { id: "spdfollowup", title: "智能随访服务端", render: renderSpdFollowup },
   { id: "spdreport", title: "智能辅助报告端", render: renderSpdReport },
+  // 写操作的后端守卫是 config/_base.py 的 CONFIG_ROLES=("director","doctor")，
+  // 这里跟着收窄——其它角色进来只能看，按钮点一个报一个 403。
+  { id: "spdconfig", title: "配置中心·量表与素材", render: renderSpdConfig, roles: ["director", "doctor"] },
   { group: "综合管理" },
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
   { id: "perfind", title: "绩效指标调权", render: renderPerfIndicators, roles: ["director"] },

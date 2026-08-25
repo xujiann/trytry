@@ -1287,3 +1287,368 @@ async function renderSpdReport() {
     }
   };
 }
+
+/* ============================================================
+ * 12. 配置中心 · 评估量表 / 宣教素材 / 服务包 / 专病标签
+ *
+ * 对应后端 `app/spd/routers/config/scales.py` 的四个域（15 个端点）。
+ * 这四个域此前**没有任何前端入口**：后端在 ADR-0008 那轮拆包并补齐了契约，
+ * 但量表配不了、素材录不进、服务包建不了——子系统只能拿演示种子跑给人看。
+ *
+ * 量表按后端语义走 draft → 配题 → publish 三段：
+ * 新建只给壳（后端置 status=draft），题目与评分区间在编辑器里整份 PATCH，
+ * 发布后后端拒绝再改题（409），二维码令牌也是发布时才生成（未发布取码 409）。
+ *
+ * 编辑器**不走 postAction**——它成功后会 route() 重渲染整页，改到一半的题目
+ * 就没了。编辑器自己持本地草稿、直接调 api()，保存成功再手动重画那一块。
+ * ==========================================================*/
+
+const SPD_SCALE_CATEGORY = {
+  risk: "风险评估", stage: "分期评估", rehab: "康复评估", screen: "筛查问卷",
+};
+const SPD_SCALE_STATUS = {
+  draft: ["草稿", "orange"], published: ["已发布", "green"], disabled: ["已停用", ""],
+};
+const SPD_ITEM_TYPE = { single: "单选", multi: "多选", number: "数值" };
+const SPD_MEDIA_TYPE = { text: "图文", audio: "音频", video: "视频" };
+
+/* 量表编辑器的本地草稿：{scaleId, items, scoring}。
+ * 只在编辑期间存在，切页即弃——配置改了要能刷新页面就生效，与 SPD_CATALOG 同口径。 */
+let SPD_SCALE_DRAFT = null;
+
+/* 可空数值：留空回 null（后端的「不限 / 不计分」），填了非数字回 Error 让调用方报错。
+ * 不用 spdModal 的 type:"number" 是有原因的——它把空的数值字段转成 0，
+ * 而 `max: 0` 与 `max: null` 在 score_scale 里是两回事：前者让区间永远命不中，
+ * 于是「6 分以上=高危」这条配出来是死的，且不报错。守卫见
+ * tests/test_spd_config_frontend.py。 */
+function spdOptionalNumber(raw, label) {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : new Error(`${label}应为数字，收到「${text}」`);
+}
+
+function spdOptionsText(item) {
+  if (item.type === "number") {
+    const per = item.score_per_unit;
+    return per == null || per === "" ? "不计分" : `每单位 ${esc(per)} 分`;
+  }
+  return (item.options || []).map((o) => `${esc(o.label)}=${esc(o.score ?? 0)}`).join("　") || "—";
+}
+
+function spdRangeText(r) {
+  const low = r.min == null || r.min === "" ? "不限" : esc(r.min);
+  const high = r.max == null || r.max === "" ? "不限" : esc(r.max);
+  return `${low} ~ ${high}`;
+}
+
+/* 题目选项用「标签=分值」的一行文本收，不做逐行控件：
+ * 这里通常只有两三个选项，而逐行控件要另起一套增删状态。
+ * 解析失败当场报错，不静默丢分值——分值错了量表算出来的风险等级就是错的。 */
+function spdParseOptions(raw) {
+  const out = [];
+  for (const pair of String(raw || "").split(/[,，\s]+/).filter(Boolean)) {
+    const m = pair.match(/^(.+?)=(-?\d+(?:\.\d+)?)$/);
+    if (!m) throw new Error(`选项「${pair}」格式应为「标签=分值」，如 是=2`);
+    out.push({ label: m[1], score: Number(m[2]) });
+  }
+  if (!out.length) throw new Error("至少填一个选项，如「是=2 否=0」");
+  return out;
+}
+
+function spdScaleEditorHtml() {
+  const d = SPD_SCALE_DRAFT;
+  if (!d) return "";
+  const ranges = (d.scoring && d.scoring.ranges) || [];
+  return `
+    <p class="desc">编辑「${esc(d.name)}」（${esc(d.code)} ${esc(d.version)}）——
+      改完点保存才写回后端；已发布的量表不能改题，要改请新建版本</p>
+    <h4>题目（${d.items.length}）</h4>
+    ${table(["序", "key", "题目", "题型", "选项 / 计分", "操作"], d.items, (it, i) =>
+      `<tr><td>${i + 1}</td><td>${esc(it.key)}</td><td>${esc(it.title || "")}</td>
+       <td>${esc(SPD_ITEM_TYPE[it.type] || it.type || "single")}</td>
+       <td>${spdOptionsText(it)}</td>
+       <td><button class="btn secondary" data-item-del="${i}">删除</button></td></tr>`)}
+    <h4>评分区间（${ranges.length}）</h4>
+    <p class="desc">按顺序取第一个命中的区间；留空表示不限。没有区间时量表只出分、不出风险等级</p>
+    ${table(["序", "分数区间", "风险等级", "建议", "操作"], ranges, (r, i) =>
+      `<tr><td>${i + 1}</td><td>${spdRangeText(r)}</td>
+       <td>${spdTag(SPD_RISK, r.risk)}</td><td>${esc(r.advice || "")}</td>
+       <td><button class="btn secondary" data-range-del="${i}">删除</button></td></tr>`)}
+    <p class="msg" id="spd-editor-msg"></p>
+    <button class="btn secondary" data-item-add="1">加题目</button>
+    <button class="btn secondary" data-range-add="1">加评分区间</button>
+    <button class="btn" data-editor-save="1">保存到后端</button>
+    <button class="btn secondary" data-editor-close="1">关闭</button>`;
+}
+
+async function renderSpdConfig() {
+  $("#page-desc").textContent =
+    "配置中心：评估量表（配题→发布→扫码自查）、宣教素材、服务包、专病标签";
+  const [catalog, scales, edus, packages, tags] = await Promise.all([
+    spdCatalog(),
+    api("/api/spd/scales?limit=50"),
+    api("/api/spd/edu-materials?limit=50"),
+    api("/api/spd/service-packages?limit=50"),
+    api("/api/spd/tags"),
+  ]);
+  const programOpts = spdProgramOptions(catalog, true);
+
+  $("#page-body").innerHTML = `
+    ${spdCards([
+      ["量表", scales.length],
+      ["已发布量表", scales.filter((s) => s.status === "published").length],
+      ["宣教素材", edus.length],
+      ["服务包", packages.length],
+      ["专病标签", tags.length],
+    ])}
+
+    ${panel("评估量表", `
+      <p class="desc">新建只出草稿；配完题目再发布，发布时才生成扫码令牌，发布后不能改题</p>
+      <form class="inline" id="spd-scale-form">
+        <input name="code" placeholder="量表编码" required>
+        <input name="name" placeholder="量表名称" required>
+        <select name="category">
+          ${Object.entries(SPD_SCALE_CATEGORY).map(([k, v]) =>
+            `<option value="${esc(k)}">${esc(v)}</option>`).join("")}
+        </select>
+        <select name="program_code">${programOpts}</select>
+        <input name="version" placeholder="版本" value="v1">
+        <button>新建草稿</button>
+      </form><p class="msg" id="spd-scale-msg"></p>
+      ${table(["ID", "编码", "名称", "类别", "病种", "版本", "题数", "状态", "操作"], scales, (s) =>
+        `<tr><td>${s.id}</td><td>${esc(s.code)}</td><td>${esc(s.name)}</td>
+         <td>${esc(SPD_SCALE_CATEGORY[s.category] || s.category)}</td>
+         <td>${esc(s.program_code || "—")}</td><td>${esc(s.version)}</td>
+         <td>${(s.items || []).length}</td>
+         <td>${spdTag(SPD_SCALE_STATUS, s.status)}</td>
+         <td><button class="btn secondary" data-scale-edit="${s.id}">配题</button>
+             ${s.status === "draft"
+               ? `<button class="btn secondary" data-scale-pub="${s.id}">发布</button>` : ""}
+             ${s.status === "published"
+               ? `<button class="btn secondary" data-scale-qr="${s.id}">二维码</button>` : ""}
+             ${s.status !== "disabled"
+               ? `<button class="btn secondary" data-scale-off="${s.id}">停用</button>` : ""}
+         </td></tr>`)}
+      <div id="spd-scale-editor"></div>
+      <div id="spd-scale-qr"></div>`)}
+
+    ${panel("宣教素材", `
+      <p class="desc">图文/音频/视频三类；停用的素材不再进推送候选，但历史推送记录保留</p>
+      <form class="inline" id="spd-edu-form">
+        <input name="code" placeholder="素材编码" required>
+        <input name="title" placeholder="标题" required>
+        <select name="media_type">
+          ${Object.entries(SPD_MEDIA_TYPE).map(([k, v]) =>
+            `<option value="${esc(k)}">${esc(v)}</option>`).join("")}
+        </select>
+        <select name="program_code">${programOpts}</select>
+        <input name="dept" placeholder="归属科室">
+        <input name="media_url" placeholder="音视频地址（图文可空）">
+        <button>新建素材</button>
+      </form><p class="msg" id="spd-edu-msg"></p>
+      ${table(["ID", "编码", "标题", "类型", "病种", "科室", "状态", "操作"], edus, (m) =>
+        `<tr><td>${m.id}</td><td>${esc(m.code)}</td><td>${esc(m.title)}</td>
+         <td>${esc(SPD_MEDIA_TYPE[m.media_type] || m.media_type)}</td>
+         <td>${esc(m.program_code || "—")}</td><td>${esc(m.dept || "—")}</td>
+         <td>${m.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-edu-text="${m.id}">改正文</button>
+             <button class="btn secondary" data-edu-toggle="${m.id}"
+                     data-active="${m.active ? 1 : 0}">${m.active ? "停用" : "启用"}</button>
+         </td></tr>`)}`)}
+
+    ${panel("服务包", `
+      <p class="desc">项目按「编码:次数」填，次数须大于 0；价格是定点数，整数价原样显示</p>
+      <form class="inline" id="spd-pkg-form">
+        <input name="code" placeholder="服务包编码" required>
+        <input name="name" placeholder="服务包名称" required>
+        <select name="program_code">${programOpts}</select>
+        <input name="price" type="number" step="0.01" min="0" placeholder="价格（元）" value="0">
+        <input name="period_days" type="number" min="1" max="3650" placeholder="周期(天)" value="365">
+        <input name="items_raw" placeholder="项目，如 followup:4 bp:12">
+        <button>新建服务包</button>
+      </form><p class="msg" id="spd-pkg-msg"></p>
+      ${table(["ID", "编码", "名称", "病种", "价格", "周期(天)", "项目", "状态", "操作"], packages, (p) =>
+        `<tr><td>${p.id}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
+         <td>${esc(p.program_code || "—")}</td><td>${esc(p.price)}</td>
+         <td>${p.period_days}</td>
+         <td>${(p.items || []).map((i) => `${esc(i.code)}×${esc(i.times)}`).join("　") || "—"}</td>
+         <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-pkg-toggle="${p.id}"
+                     data-active="${p.active ? 1 : 0}">${p.active ? "停用" : "启用"}</button>
+         </td></tr>`)}`)}
+
+    ${panel("专病标签", `
+      <p class="desc">列表只回启用中的标签——后端已按 active 过滤，故这里没有状态列</p>
+      <form class="inline" id="spd-tag-form">
+        <input name="code" placeholder="标签编码" required>
+        <input name="name" placeholder="标签名称" required>
+        <input name="category" placeholder="分类" value="patient">
+        <input name="color" placeholder="颜色，如 red">
+        <button>新建标签</button>
+      </form><p class="msg" id="spd-tag-msg"></p>
+      ${table(["ID", "编码", "名称", "分类", "颜色"], tags, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.code)}</td><td>${esc(t.name)}</td>
+         <td>${esc(t.category)}</td><td>${esc(t.color || "—")}</td></tr>`)}`)}`;
+
+  const drawEditor = () => {
+    $("#spd-scale-editor").innerHTML = SPD_SCALE_DRAFT
+      ? `<div class="panel" style="border-left:4px solid #0b6e6e">
+           <h3>量表配题</h3>${spdScaleEditorHtml()}</div>` : "";
+  };
+
+  $("#spd-scale-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/scales", formJson(e.target), "#spd-scale-msg");
+  };
+  $("#spd-edu-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/edu-materials", formJson(e.target), "#spd-edu-msg");
+  };
+  $("#spd-pkg-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["price", "period_days"]);
+    const raw = body.items_raw || "";
+    delete body.items_raw;
+    try {
+      body.items = String(raw).split(/[,，\s]+/).filter(Boolean).map((pair) => {
+        const m = pair.match(/^(.+?)[:：](\d+)$/);
+        if (!m) throw new Error(`项目「${pair}」格式应为「编码:次数」，如 followup:4`);
+        return { code: m[1], times: Number(m[2]) };
+      });
+    } catch (err) { return setMsg("#spd-pkg-msg", err.message, false); }
+    return postAction("/api/spd/service-packages", body, "#spd-pkg-msg");
+  };
+  $("#spd-tag-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/tags", formJson(e.target), "#spd-tag-msg");
+  };
+
+  $("#page-body").onclick = async (e) => {
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const edit = el("data-scale-edit"), pub = el("data-scale-pub");
+    const qr = el("data-scale-qr"), off = el("data-scale-off");
+    const eduText = el("data-edu-text"), eduToggle = el("data-edu-toggle");
+    const pkgToggle = el("data-pkg-toggle");
+    const itemAdd = el("data-item-add"), itemDel = el("data-item-del");
+    const rangeAdd = el("data-range-add"), rangeDel = el("data-range-del");
+    const save = el("data-editor-save"), close = el("data-editor-close");
+
+    if (edit) {
+      const s = scales.find((x) => String(x.id) === edit.dataset.scaleEdit);
+      if (!s) return;
+      // 深拷贝：编辑器改的是草稿，关掉时列表里那份不能已经被改花了
+      SPD_SCALE_DRAFT = {
+        scaleId: s.id, code: s.code, name: s.name, version: s.version,
+        items: JSON.parse(JSON.stringify(s.items || [])),
+        scoring: JSON.parse(JSON.stringify(s.scoring || {})),
+      };
+      drawEditor();
+      return $("#spd-scale-editor").scrollIntoView({ block: "nearest" });
+    }
+    if (pub) return postAction(`/api/spd/scales/${pub.dataset.scalePub}/publish`, null, "#spd-scale-msg");
+    if (off) return postAction(`/api/spd/scales/${off.dataset.scaleOff}/disable`, null, "#spd-scale-msg");
+    if (qr) {
+      // <img> 走 Cookie 会话，与页面同源；未发布的量表后端回 409，此处按钮本就不出现
+      const id = encodeURIComponent(qr.dataset.scaleQr);
+      $("#spd-scale-qr").innerHTML = `
+        <div class="panel" style="border-left:4px solid #0b6e6e"><h3>量表扫码</h3>
+          <p class="desc">扫码直达居民端自查页并预选该量表；停用后码自然失效，不用重印</p>
+          <img src="/api/spd/scales/${id}/qr.svg" alt="量表二维码" width="180" height="180">
+        </div>`;
+      return $("#spd-scale-qr").scrollIntoView({ block: "nearest" });
+    }
+
+    if (eduText) {
+      const m = edus.find((x) => String(x.id) === eduText.dataset.eduText);
+      const form = await spdModal("编辑宣教正文", [
+        { name: "content", label: "正文", type: "textarea", value: (m && m.content) || "" },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/edu-materials/${eduText.dataset.eduText}`,
+        { content: form.content || "" }, "#spd-edu-msg", "PATCH");
+    }
+    if (eduToggle) {
+      return postAction(`/api/spd/edu-materials/${eduToggle.dataset.eduToggle}`,
+        { active: eduToggle.dataset.active !== "1" }, "#spd-edu-msg", "PATCH");
+    }
+    if (pkgToggle) {
+      return postAction(`/api/spd/service-packages/${pkgToggle.dataset.pkgToggle}`,
+        { active: pkgToggle.dataset.active !== "1" }, "#spd-pkg-msg", "PATCH");
+    }
+
+    if (!SPD_SCALE_DRAFT) return;
+    if (itemAdd) {
+      const form = await spdModal("添加题目", [
+        { name: "key", label: "题目 key（英文，同一量表内不得重复）", required: true },
+        { name: "title", label: "题干" },
+        { name: "type", label: "题型", type: "select",
+          options: Object.entries(SPD_ITEM_TYPE).map(([k, v]) => ({ value: k, label: v })) },
+        { name: "options", label: "选项「标签=分值」，空格分隔，如：是=2 否=0" },
+        // 刻意用文本而非 type:"number"——spdModal 把空的数值字段转成 0，
+        // 而这里「留空」与「填 0」不是一回事（留空=不计分）。评分区间同理且更要命。
+        { name: "score_per_unit", label: "数值题：每单位分值（留空=不计分；其它题型忽略）" },
+      ]);
+      if (!form || !form.key) return;
+      if (SPD_SCALE_DRAFT.items.some((i) => i.key === form.key)) {
+        return setMsg("#spd-editor-msg", `题目 key「${form.key}」已存在`, false);
+      }
+      const item = { key: form.key, title: form.title || form.key, type: form.type || "single" };
+      if (item.type === "number") {
+        const per = spdOptionalNumber(form.score_per_unit, "每单位分值");
+        if (per instanceof Error) return setMsg("#spd-editor-msg", per.message, false);
+        if (per !== null) item.score_per_unit = per;
+      } else {
+        try { item.options = spdParseOptions(form.options); }
+        catch (err) { return setMsg("#spd-editor-msg", err.message, false); }
+      }
+      SPD_SCALE_DRAFT.items.push(item);
+      return drawEditor();
+    }
+    if (itemDel) {
+      SPD_SCALE_DRAFT.items.splice(Number(itemDel.dataset.itemDel), 1);
+      return drawEditor();
+    }
+    if (rangeAdd) {
+      const form = await spdModal("添加评分区间", [
+        // 同样刻意用文本：留空必须落成 null（不限），不能被转成 0
+        { name: "min", label: "下限（留空=不限）" },
+        { name: "max", label: "上限（留空=不限）" },
+        { name: "risk", label: "风险等级", type: "select",
+          options: Object.entries(SPD_RISK).map(([k, v]) => ({ value: k, label: v[0] })) },
+        { name: "advice", label: "建议", type: "textarea" },
+      ]);
+      if (!form) return;
+      const low = spdOptionalNumber(form.min, "下限");
+      const high = spdOptionalNumber(form.max, "上限");
+      for (const v of [low, high]) {
+        if (v instanceof Error) return setMsg("#spd-editor-msg", v.message, false);
+      }
+      if (low !== null && high !== null && low > high) {
+        return setMsg("#spd-editor-msg", "下限不能大于上限", false);
+      }
+      SPD_SCALE_DRAFT.scoring = SPD_SCALE_DRAFT.scoring || {};
+      SPD_SCALE_DRAFT.scoring.ranges = SPD_SCALE_DRAFT.scoring.ranges || [];
+      SPD_SCALE_DRAFT.scoring.ranges.push({
+        min: low, max: high, risk: form.risk || "low", advice: form.advice || "",
+      });
+      return drawEditor();
+    }
+    if (rangeDel) {
+      SPD_SCALE_DRAFT.scoring.ranges.splice(Number(rangeDel.dataset.rangeDel), 1);
+      return drawEditor();
+    }
+    if (close) { SPD_SCALE_DRAFT = null; return drawEditor(); }
+    if (save) {
+      const d = SPD_SCALE_DRAFT;
+      try {
+        await api(`/api/spd/scales/${d.scaleId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ items: d.items, scoring: d.scoring }),
+        });
+      } catch (err) { return setMsg("#spd-editor-msg", err.message, false); }
+      SPD_SCALE_DRAFT = null;
+      return route();
+    }
+  };
+}

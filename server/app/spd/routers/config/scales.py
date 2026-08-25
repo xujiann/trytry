@@ -112,12 +112,23 @@ def _scale_out(s: SpdScale) -> dict:
     }
 
 
+def _assert_unique_item_keys(items: list[dict]) -> None:
+    """题目 key 不得重复。
+
+    `score_scale` 按 `item["key"]` 去 `answers` 里取值，重复的 key 会让**同一个
+    答案被计两次分**——量表照样出分、出的是错的风险等级，不报错。
+    此前只有 POST 查这一条，PATCH 不查；而"新建只给壳、题目随后 PATCH 上去"
+    正是配题的常规走法（管理端配置页就是这么做的），等于查重形同虚设。
+    """
+    keys = [i.get("key") for i in items or []]
+    if len(keys) != len(set(keys)):
+        raise HTTPException(status_code=422, detail="量表题目 key 不得重复")
+
+
 @router.post("/scales", response_model=ScaleOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_scale(body: ScaleIn, db: Session = Depends(get_db)):
-    keys = [i.get("key") for i in body.items]
-    if len(keys) != len(set(keys)):
-        raise HTTPException(status_code=422, detail="量表题目 key 不得重复")
+    _assert_unique_item_keys(body.items)
     scale = SpdScale(**body.model_dump(), status="draft")
     db.add(scale)
     try:
@@ -164,6 +175,8 @@ def update_scale(scale_id: int, body: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="量表不存在")
     if scale.status == "published" and ("items" in body or "scoring" in body):
         raise HTTPException(status_code=409, detail="已发布量表不可改题目或评分，请新建版本")
+    if "items" in body:
+        _assert_unique_item_keys(body["items"])
     for key in ("name", "items", "scoring", "category", "owner_team_id"):
         if key in body:
             setattr(scale, key, body[key])
