@@ -1652,3 +1652,307 @@ async function renderSpdConfig() {
     }
   };
 }
+
+/* ============================================================
+ * 13. 配置中心 · 服务团队 / 团队成员 / 村医档案
+ *
+ * 对应后端 `app/spd/routers/config/teams.py` 的三个域（12 个端点），
+ * 与第 12 页同属可用性线第一步：后端做完了、前端没入口。
+ *
+ * 一个**没有绕过去的权限口子**，如实写在这里也写在界面上：
+ * `GET /api/users` 是 `require_admin`（deps.py），而本页的写操作放给
+ * `CONFIG_ROLES=("director","doctor")`。于是 director 能建团队、却列不出可选的人。
+ * 这里**不改鉴权**——放宽用户枚举是 §8 红线上的事，要走 ADR，不是配页面时顺手做的。
+ * 改成：拿得到就给下拉，拿不到就退化成填 user_id 并在界面上说清为什么，
+ * 而不是整页 403 白屏。已登记进 ROADMAP 可用性线待裁定。
+ * ==========================================================*/
+
+const SPD_TEAM_LEVEL = {
+  county: "县级", township: "乡级", village: "村级", center: "专病中心",
+};
+const SPD_MEMBER_ROLE = {
+  doctor: "医师", nurse: "护士", rehab: "康复", case_manager: "个案管理师",
+  village_doctor: "村医", expert: "专家",
+};
+const SPD_DATA_SCOPE = { org: "本机构", group: "医共体分组", region: "全域" };
+const SPD_PATIENT_SCOPE = { self: "本人", team: "本团队", org: "本机构", region: "全域" };
+
+/* 可选用户清单：admin 拿得到，director/doctor 拿不到（见本节顶部）。
+ * null 表示「没取到」，与「取到但是空的」区分开——前者要给退化输入框并解释，
+ * 后者是真的一个用户都没有。 */
+let SPD_USERS = null;
+
+function spdUserControl(name, label) {
+  if (SPD_USERS && SPD_USERS.length) {
+    return `<select name="${esc(name)}">
+      ${SPD_USERS.map((u) => `<option value="${u.id}">${esc(u.full_name || u.username)}（${esc(u.username)}）</option>`).join("")}
+    </select>`;
+  }
+  return `<input name="${esc(name)}" type="number" min="1" placeholder="${esc(label)}ID" required>`;
+}
+
+function spdUserName(userId) {
+  if (!SPD_USERS) return String(userId);
+  const u = SPD_USERS.find((x) => x.id === Number(userId));
+  return u ? (u.full_name || u.username) : String(userId);
+}
+
+async function renderSpdTeams() {
+  $("#page-desc").textContent =
+    "配置中心：服务团队与成员权限、村医档案与绑定二维码（含批量开通）";
+  // /api/users 是 admin-only：拿不到就退化，不让整页因为一个 403 白屏
+  const usersP = api("/api/users").catch(() => null);
+  const [orgs, teams, vds, users] = await Promise.all([
+    api("/api/organizations"),
+    api("/api/spd/teams?limit=50"),
+    api("/api/spd/village-doctors?limit=50"),
+    usersP,
+  ]);
+  SPD_USERS = users;
+  const orgOpts = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
+  const orgName = (id) => {
+    const o = orgs.find((x) => x.id === id);
+    return o ? o.name : String(id);
+  };
+  const noUserList = !SPD_USERS
+    ? `<p class="desc" style="color:#b26a00">当前账号列不出用户清单
+       （<code>GET /api/users</code> 限管理员），下面按用户 ID 填写。
+       用管理员账号打开本页可直接下拉选人。</p>` : "";
+
+  /* 一家机构都没有时，机构下拉是空的 —— 提交上去 org_id 缺字段，后端回 422
+   * 且 detail 是 pydantic 的数组，界面上给不出人话，用的人只会看到"点了没反应"。
+   * 与其让表单静默失败，不如直接不给表单、说清先去哪儿建机构。 */
+  const needOrg = orgs.length === 0;
+  const orgHint = `<p class="msg err">还没有任何机构，建不了团队/村医档案。
+    先去「基础平台 · 机构管理」建机构，再回来配置。</p>`;
+  const formOr = (html) => (needOrg ? orgHint : html);
+
+  $("#page-body").innerHTML = `
+    ${spdCards([
+      ["服务团队", teams.length],
+      ["团队成员", teams.reduce((n, t) => n + (t.member_count || 0), 0)],
+      ["村医档案", vds.length],
+      ["在岗村医", vds.filter((v) => v.active).length],
+    ])}
+
+    ${panel("服务团队", `
+      <p class="desc">列表只回启用中的团队；停用请用「停用」按钮，不删除——历史任务还挂在团队上</p>
+      ${noUserList}
+      ${formOr(`<form class="inline" id="spd-team-form">
+        <input name="name" placeholder="团队名称" required>
+        <select name="org_id">${orgOpts}</select>
+        <select name="level">
+          ${Object.entries(SPD_TEAM_LEVEL).map(([k, v]) =>
+            `<option value="${esc(k)}"${k === "township" ? " selected" : ""}>${esc(v)}</option>`).join("")}
+        </select>
+        <select name="data_scope">
+          ${Object.entries(SPD_DATA_SCOPE).map(([k, v]) =>
+            `<option value="${esc(k)}">${esc(v)}</option>`).join("")}
+        </select>
+        <input name="dept" placeholder="科室">
+        <input name="service_area" placeholder="服务范围">
+        <button>新建团队</button>
+      </form>`)}<p class="msg" id="spd-team-msg"></p>
+      ${table(["ID", "名称", "层级", "机构", "科室", "数据范围", "成员", "操作"], teams, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.name)}</td>
+         <td>${esc(SPD_TEAM_LEVEL[t.level] || t.level)}</td>
+         <td>${esc(orgName(t.org_id))}</td><td>${esc(t.dept || "—")}</td>
+         <td>${esc(SPD_DATA_SCOPE[t.data_scope] || t.data_scope)}</td>
+         <td>${t.member_count ?? 0}</td>
+         <td><button class="btn secondary" data-team-open="${t.id}">成员</button>
+             <button class="btn secondary" data-team-edit="${t.id}">改</button>
+             <button class="btn secondary" data-team-off="${t.id}">停用</button></td></tr>`)}
+      <div id="spd-team-detail"></div>`)}
+
+    ${panel("村医档案", `
+      <p class="desc">绑定码指向 <code>/m/doctor</code>（医生移动端），停用的村医不出码——入口先于账号回收</p>
+      ${formOr(`<form class="inline" id="spd-vd-form">
+        ${spdUserControl("user_id", "用户")}
+        <select name="org_id">${orgOpts}</select>
+        <input name="township" placeholder="乡镇">
+        <input name="village" placeholder="村">
+        <input name="license_no" placeholder="执业证号">
+        <input name="license_valid_to" placeholder="有效期至 YYYY-MM-DD">
+        <input name="phone" placeholder="手机号">
+        <button>建村医档案</button>
+      </form>`)}<p class="msg" id="spd-vd-msg"></p>
+      ${table(["ID", "村医", "机构", "乡镇/村", "执业证", "有效期", "状态", "操作"], vds, (v) =>
+        `<tr><td>${v.id}</td><td>${esc(v.user_name || spdUserName(v.user_id))}</td>
+         <td>${esc(orgName(v.org_id))}</td>
+         <td>${esc(v.township || "—")} / ${esc(v.village || "—")}</td>
+         <td>${esc(v.license_no || "—")}</td><td>${esc(v.license_valid_to || "—")}</td>
+         <td>${v.active ? '<span class="tag green">在岗</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-vd-edit="${v.id}">改</button>
+             ${v.active
+               ? `<button class="btn secondary" data-vd-qr="${v.id}">绑定码</button>
+                  <button class="btn secondary" data-vd-off="${v.id}">停用</button>`
+               : `<button class="btn secondary" data-vd-on="${v.id}">启用</button>`}
+         </td></tr>`)}
+      <div id="spd-vd-qr"></div>`)}
+
+    ${panel("批量开通村医", `
+      <p class="desc">一行一个「用户ID,乡镇,村」；重复的跳过、其余照建，逐行给结果，
+        不会因为一行重复整批回滚</p>
+      ${formOr(`<form id="spd-vdbatch-form">
+        <select name="org_id" style="margin-bottom:8px">${orgOpts}</select>
+        <textarea name="rows" rows="4" style="width:100%"
+          placeholder="12,城东镇,杨庄村&#10;13,城东镇,李庄村"></textarea>
+        <button style="margin-top:8px">批量开通</button>
+      </form>`)}<p class="msg" id="spd-vdbatch-msg"></p>
+      <div id="spd-vdbatch-result"></div>`)}`;
+
+  const drawTeamDetail = async (teamId) => {
+    const t = await api(`/api/spd/teams/${teamId}`);
+    $("#spd-team-detail").innerHTML = `
+      <div class="panel" style="border-left:4px solid #0b6e6e">
+        <h3>${esc(t.name)} · 成员（${t.member_count ?? 0}）</h3>
+        <p class="desc">权限勾选决定成员在移动端能做什么；停用保留历史，移除是真删</p>
+        <form class="inline" id="spd-member-form">
+          ${spdUserControl("user_id", "成员")}
+          <select name="member_role">
+            ${Object.entries(SPD_MEMBER_ROLE).map(([k, v]) =>
+              `<option value="${esc(k)}">${esc(v)}</option>`).join("")}
+          </select>
+          <select name="patient_scope">
+            ${Object.entries(SPD_PATIENT_SCOPE).map(([k, v]) =>
+              `<option value="${esc(k)}"${k === "team" ? " selected" : ""}>${esc(v)}</option>`).join("")}
+          </select>
+          <label style="font-size:13px"><input type="checkbox" name="can_referral" value="true"> 可转诊</label>
+          <label style="font-size:13px"><input type="checkbox" name="can_audit" value="true"> 可审核</label>
+          <label style="font-size:13px"><input type="checkbox" name="can_assess" value="true"> 可评估</label>
+          <button>加入团队</button>
+        </form><p class="msg" id="spd-member-msg"></p>
+        ${table(["ID", "成员", "角色", "患者范围", "权限", "状态", "操作"], t.members || [], (m) =>
+          `<tr><td>${m.id}</td><td>${esc(m.user_name || spdUserName(m.user_id))}</td>
+           <td>${esc(SPD_MEMBER_ROLE[m.member_role] || m.member_role)}</td>
+           <td>${esc(SPD_PATIENT_SCOPE[m.patient_scope] || m.patient_scope)}</td>
+           <td>${[m.can_view && "查看", m.can_followup && "随访", m.can_referral && "转诊",
+                  m.can_audit && "审核", m.can_assess && "评估"].filter(Boolean)
+                 .map((x) => `<span class="tag">${esc(x)}</span>`).join(" ") || "—"}</td>
+           <td>${m.active ? '<span class="tag green">在岗</span>' : '<span class="tag">停用</span>'}</td>
+           <td><button class="btn secondary" data-member-role="${m.id}">改角色</button>
+               <button class="btn secondary" data-member-toggle="${m.id}"
+                       data-active="${m.active ? 1 : 0}">${m.active ? "停用" : "启用"}</button>
+               <button class="btn secondary" data-member-del="${m.id}">移除</button></td></tr>`)}
+      </div>`;
+    $("#spd-member-form").onsubmit = (e) => {
+      e.preventDefault();
+      const body = formJson(e.target, ["user_id"]);
+      // 未勾选的复选框不进 FormData，后端默认 false——这里显式补齐，
+      // 免得「没勾=没传=用后端默认」这条链在后端默认值变了的时候悄悄换意思
+      for (const k of ["can_referral", "can_audit", "can_assess"]) body[k] = body[k] === "true";
+      return postAction(`/api/spd/teams/${teamId}/members`, body, "#spd-member-msg");
+    };
+  };
+
+  // 没有机构时上面三个表单根本没渲染出来，$() 会回 null —— 逐个判在
+  if ($("#spd-team-form")) $("#spd-team-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/teams", formJson(e.target, ["org_id"]), "#spd-team-msg");
+  };
+  if ($("#spd-vd-form")) $("#spd-vd-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/village-doctors",
+      formJson(e.target, ["user_id", "org_id"]), "#spd-vd-msg");
+  };
+  if ($("#spd-vdbatch-form")) $("#spd-vdbatch-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const orgId = Number(f.get("org_id"));
+    const items = [];
+    for (const line of String(f.get("rows") || "").split("\n").map((x) => x.trim()).filter(Boolean)) {
+      const [uid, township, village] = line.split(/[,，]/).map((x) => (x || "").trim());
+      if (!uid || !Number(uid)) {
+        return setMsg("#spd-vdbatch-msg", `第一列应为用户ID，收到「${line}」`, false);
+      }
+      items.push({ user_id: Number(uid), org_id: orgId,
+                   township: township || "", village: village || "" });
+    }
+    if (!items.length) return setMsg("#spd-vdbatch-msg", "至少填一行", false);
+    try {
+      const r = await api("/api/spd/village-doctors/batch",
+        { method: "POST", body: JSON.stringify({ items }) });
+      // 逐行结果单独渲染而不是走 postAction —— 那个成功即 route()，
+      // 跳过原因还没来得及看就被整页重渲染冲掉了
+      $("#spd-vdbatch-result").innerHTML = `
+        <p class="msg ok">已开通 ${r.created} 个，跳过 ${r.skipped.length} 个</p>
+        ${r.skipped.length ? table(["用户ID", "跳过原因"], r.skipped, (s) =>
+          `<tr><td>${s.user_id}</td><td>${esc(s.reason)}</td></tr>`) : ""}`;
+    } catch (err) { setMsg("#spd-vdbatch-msg", err.message, false); }
+  };
+
+  $("#page-body").onclick = async (e) => {
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const open = el("data-team-open"), tEdit = el("data-team-edit"), tOff = el("data-team-off");
+    const vdEdit = el("data-vd-edit"), vdQr = el("data-vd-qr");
+    const vdOff = el("data-vd-off"), vdOn = el("data-vd-on");
+    const mRole = el("data-member-role"), mToggle = el("data-member-toggle"), mDel = el("data-member-del");
+
+    if (open) {
+      await drawTeamDetail(open.dataset.teamOpen);
+      return $("#spd-team-detail").scrollIntoView({ block: "nearest" });
+    }
+    if (tEdit) {
+      const t = teams.find((x) => String(x.id) === tEdit.dataset.teamEdit);
+      const form = await spdModal("修改团队", [
+        { name: "name", label: "团队名称", value: (t && t.name) || "" },
+        { name: "dept", label: "科室", value: (t && t.dept) || "" },
+        { name: "service_area", label: "服务范围", value: (t && t.service_area) || "" },
+        { name: "data_scope", label: "数据范围", type: "select",
+          value: (t && t.data_scope) || "org",
+          options: Object.entries(SPD_DATA_SCOPE).map(([k, v]) => ({ value: k, label: v })) },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/teams/${tEdit.dataset.teamEdit}`, form, "#spd-team-msg", "PATCH");
+    }
+    if (tOff) {
+      return postAction(`/api/spd/teams/${tOff.dataset.teamOff}`,
+        { active: false }, "#spd-team-msg", "PATCH");
+    }
+
+    if (vdEdit) {
+      const v = vds.find((x) => String(x.id) === vdEdit.dataset.vdEdit);
+      const form = await spdModal("修改村医档案", [
+        { name: "township", label: "乡镇", value: (v && v.township) || "" },
+        { name: "village", label: "村", value: (v && v.village) || "" },
+        { name: "license_no", label: "执业证号", value: (v && v.license_no) || "" },
+        { name: "license_valid_to", label: "有效期至 YYYY-MM-DD", value: (v && v.license_valid_to) || "" },
+        { name: "phone", label: "手机号", value: (v && v.phone) || "" },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/village-doctors/${vdEdit.dataset.vdEdit}`, form, "#spd-vd-msg", "PATCH");
+    }
+    if (vdOff || vdOn) {
+      const btn = vdOff || vdOn;
+      return postAction(`/api/spd/village-doctors/${btn.dataset.vdOff || btn.dataset.vdOn}`,
+        { active: Boolean(vdOn) }, "#spd-vd-msg", "PATCH");
+    }
+    if (vdQr) {
+      const id = encodeURIComponent(vdQr.dataset.vdQr);
+      $("#spd-vd-qr").innerHTML = `
+        <div class="panel" style="border-left:4px solid #0b6e6e"><h3>村医绑定码</h3>
+          <p class="desc">扫码进入医生移动端并带上绑定令牌；停用后不再出码</p>
+          <img src="/api/spd/village-doctors/${id}/qr.svg" alt="村医绑定二维码" width="180" height="180">
+        </div>`;
+      return $("#spd-vd-qr").scrollIntoView({ block: "nearest" });
+    }
+
+    if (mRole) {
+      const form = await spdModal("修改成员角色", [
+        { name: "member_role", label: "角色", type: "select",
+          options: Object.entries(SPD_MEMBER_ROLE).map(([k, v]) => ({ value: k, label: v })) },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/team-members/${mRole.dataset.memberRole}`,
+        form, "#spd-member-msg", "PATCH");
+    }
+    if (mToggle) {
+      return postAction(`/api/spd/team-members/${mToggle.dataset.memberToggle}`,
+        { active: mToggle.dataset.active !== "1" }, "#spd-member-msg", "PATCH");
+    }
+    if (mDel) {
+      return postAction(`/api/spd/team-members/${mDel.dataset.memberDel}`,
+        null, "#spd-member-msg", "DELETE");
+    }
+  };
+}

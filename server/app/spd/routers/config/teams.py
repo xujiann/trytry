@@ -265,12 +265,34 @@ def add_team_member(
             "member_role": member.member_role}
 
 
+def _assert_member_org_writable(db: Session, user: User, member: SpdTeamMember) -> None:
+    """成员的机构归属跟着**所属团队**走，成员表自己没有 org_id。
+
+    正因为没有 org_id，横向越权闸门的 AST 扫描（只认 `db.get(带org_id的模型, …)`）
+    看不见这两个端点——它们不是已声明的豁免，是闸门的盲区。实测（非全域角色）：
+    乙卫生院的医师能改、能删甲卫生院团队的成员，而**同一组的「加成员」是拦住的**
+    （那个有 assert_org_writable）。同一批接口一半拦一半不拦，是漏写不是设计。
+
+    改成员权限直接决定那个人在移动端能看谁的患者、能不能审核转诊；
+    删成员则是把人从别人的团队里踢出去——两者都不该跨机构。
+    """
+    team = db.get(SpdTeam, member.team_id)
+    # 团队被删而成员还在（当前没有删团队的接口，防御性处理）：无从判断归属，一律拒
+    if team is None:
+        raise HTTPException(status_code=404, detail="团队不存在")
+    assert_org_writable(db, user, team.org_id)
+
+
 @router.patch("/team-members/{member_id}", response_model=TeamMemberUpdatedOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)):
+def update_team_member(
+    member_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     member = db.get(SpdTeamMember, member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="团队成员不存在")
+    _assert_member_org_writable(db, user, member)
     for key in ("member_role", "program_codes", "stage_scope", "patient_scope", "can_view",
                 "can_followup", "can_referral", "can_audit", "can_assess", "active"):
         if key in body:
@@ -281,10 +303,14 @@ def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)
 
 @router.delete("/team-members/{member_id}", status_code=204,
                dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def remove_team_member(member_id: int, db: Session = Depends(get_db)):
+def remove_team_member(
+    member_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     member = db.get(SpdTeamMember, member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="团队成员不存在")
+    _assert_member_org_writable(db, user, member)
     db.delete(member)
     db.commit()
     return Response(status_code=204)

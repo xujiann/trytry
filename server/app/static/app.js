@@ -74,6 +74,7 @@ const PAGES = [
   // 写操作的后端守卫是 config/_base.py 的 CONFIG_ROLES=("director","doctor")，
   // 这里跟着收窄——其它角色进来只能看，按钮点一个报一个 403。
   { id: "spdconfig", title: "配置中心·量表与素材", render: renderSpdConfig, roles: ["director", "doctor"] },
+  { id: "spdteams", title: "配置中心·团队与村医", render: renderSpdTeams, roles: ["director", "doctor"] },
   { group: "综合管理" },
   { id: "performance", title: "绩效考核", render: renderPerformance, roles: ["director"] },
   { id: "perfind", title: "绩效指标调权", render: renderPerfIndicators, roles: ["director"] },
