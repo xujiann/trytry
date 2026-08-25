@@ -158,7 +158,7 @@ import app.spd.routers as spd_routers
 #   （名字像数组，列类型说了算）；三处"新建回执与列表不同形"各建两个模型。
 #   套件级比对落在 spd/care 内 0 处差异；7 个零覆盖端点另补了用例。
 #   见 test_spd_care_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 259
+BASELINE_WITHOUT_RESPONSE_MODEL = 190
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -191,6 +191,13 @@ FULLY_GOVERNED = {
     # ADR-0006 收官时新建的两个模块，生而全契约
     "surveys",
     "triage",
+    # 线 B 第三批：收费结算链 + 转诊闭环 + 住院 + 集成平台 + 疫苗供应
+    # （69 个端点，见 test_line_b_batch3_contract.py）
+    "billing",
+    "spd/referral",
+    "inpatient",
+    "esb",
+    "vaccine_supply",
     # 慢专病照护域：31 个端点，见 test_spd_care_contract.py
     "spd/care",
     # 慢专病随访域：29 个端点，见 test_spd_followup_contract.py
