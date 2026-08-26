@@ -1,0 +1,37 @@
+# 构建上下文 = server/（本目录的 Dockerfile 用 `COPY . .`）
+#
+# 没有这个文件的后果（上线前审计查出）：`COPY . .` 会把开发机上的一切都烧进
+# 镜像。最要紧的一条是 **.env**——`.gitignore` 里自己写着"里面是真实密钥，
+# 绝不入库"，而 `app/config.py` 的 `env_file=".env"` 会在**运行时真的去读它**。
+# 环境变量优先级更高，所以被显式注入的键没事；**没被注入的键会静默取到开发值**
+# （比如 MEDPLAT_SMS_API_KEY）。这种泄漏不会报错，只会安静地生效。
+#
+# CI 构建的镜像本来是干净的（fresh checkout，这些文件都不在 git 里），
+# **本地/compose 构建的不是**——差别恰恰出在"谁构建"上，所以更难被发现。
+
+# 密钥与本地配置
+.env
+.env.*
+!.env.example
+
+# 测试与运行时产物
+test_run.db*
+*.db
+test_uploads/
+e2e_uploads/
+uploads/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+
+# 开发工具
+.venv/
+venv/
+node_modules/

@@ -19,22 +19,44 @@ fi
 # 注意：进程内状态（如 ws 连接管理）不跨 worker 共享，多 worker 需 Redis 在位。
 WORKERS="${MEDPLAT_WORKERS:-1}"
 if [ "$WORKERS" -gt 1 ] 2>/dev/null; then
-  uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --workers "$WORKERS" &
+  set -- uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --workers "$WORKERS"
 else
-  uvicorn app.main:app --host 0.0.0.0 --port "$PORT" &
+  set -- uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
 fi
+
+# 优雅关闭（上线前审计）。容器里 PID 1 就是本脚本，`docker stop` 的 SIGTERM
+# 打在它身上——原先它把 uvicorn 放后台再 `wait`，既没 `exec` 也没 `trap`：
+# shell 收到 TERM 直接退出，PID 1 一退，内核把命名空间里剩下的进程**全部
+# SIGKILL**。后果是每次发布/重启，**在途请求全被硬切**，`lifespan` 的收尾
+# （main.py 里取消调度任务那段）永不执行。
+#
+# 分两条路，而不是给两条路都套一个 trap：
+#
+# - **不灌演示数据（也就是生产形态）→ `exec`**。让 uvicorn 直接**变成** PID 1，
+#   信号由它亲自收，中间没有任何一层需要转发。这比 trap 转发更可靠——
+#   trap 只在 shell 处于可中断状态时才跑得到。
+# - **要灌演示数据（仅演示站）→ 后台 + trap 转发**。这条路必须在服务起来之后
+#   再干一件事，没法 exec，所以老老实实转发信号并等它退干净。
+if [ "$MEDPLAT_SEED_DEMO" != "1" ]; then
+  exec "$@"
+fi
+
+"$@" &
 UV_PID=$!
+# 收到信号先转发给 uvicorn，然后摘掉 trap 再 wait 一次——第一次 wait 会被
+# 信号打断并返回 128+signo，那时子进程还在收尾，直接退出等于没等。
+trap 'kill -TERM "$UV_PID" 2>/dev/null' TERM INT
 
-if [ "$MEDPLAT_SEED_DEMO" = "1" ]; then
-  i=0
-  while [ $i -lt 30 ]; do
-    sleep 1
-    if python -c "import httpx;httpx.get('http://127.0.0.1:$PORT/api/health',timeout=2)" 2>/dev/null; then
-      python scripts/seed_demo.py "http://127.0.0.1:$PORT" || true
-      break
-    fi
-    i=$((i+1))
-  done
-fi
+i=0
+while [ $i -lt 30 ]; do
+  sleep 1
+  if python -c "import httpx;httpx.get('http://127.0.0.1:$PORT/api/health',timeout=2)" 2>/dev/null; then
+    python scripts/seed_demo.py "http://127.0.0.1:$PORT" || true
+    break
+  fi
+  i=$((i+1))
+done
 
-wait $UV_PID
+wait "$UV_PID"
+trap - TERM INT
+wait "$UV_PID" 2>/dev/null
