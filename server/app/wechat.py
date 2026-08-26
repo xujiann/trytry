@@ -65,6 +65,19 @@ class MockWeChatProvider:
         return f"mock-{state}"
 
     def exchange_code(self, code: str) -> dict | None:
+        # 生产环境硬门：桩件只要 code 以 `mock-` 开头就发 openid，而
+        # `POST /api/portal/auth/wechat/login` 是**公开**端点——生产上留着这条，
+        # 等于任何人构造一个 `code=mock-x` 就能开一个居民账号。
+        # 与 `sms_debug_echo` 同一口径（生产即便显式配了也永不回显）：
+        # 配置能不能配错是一回事，**生产上这条路必须走不通**是另一回事。
+        # 不拒启而是在使用处失败——只用现金、没上微信的县不该被拒绝启动。
+        if settings.is_production:
+            logger.error(
+                "生产环境仍在使用微信 mock 桩，已拒绝换码。桩会让任何 "
+                "`code=mock-xxx` 登录成功并开户；请配置 MEDPLAT_WECHAT_PROVIDER=official "
+                "与 appid/secret，或确认本县不开放微信登录。"
+            )
+            return None
         if not code.startswith("mock-"):
             return None
         seed = code[len("mock-") :] or "demo"
@@ -199,7 +212,28 @@ class OfficialWeChatProvider:
 
 
 def _build_provider() -> WeChatProvider:
-    if settings.wechat_provider == "official" and settings.wechat_appid:
+    """按配置选驱动。**声明了 official 就绝不回落 Mock**，哪怕配置不全。
+
+    原实现是 `provider == "official" and appid` —— 漏配 appid 就静默变成 Mock。
+    那不是降级，是**认证绕过**：`MockWeChatProvider.exchange_code` 只要 code 以
+    `mock-` 开头就发一个 openid（本文件 67-71 行），于是任何人构造
+    `code=mock-随便什么` 都能登录并开户，唯一兜底只剩"未实名绑定看不到档案"。
+    生产守卫（config.py）当时也不查通道 provider，所以这条路上没有任何一处会喊。
+
+    口径与短信通道对齐——`sms.py` 的同一位置早就写对了，注释说得很清楚：
+    置空网关地址而**不**回退 console，因为"console 会成功，等于把没发出去的
+    验证码当成已发出"。同理，这里宁可返回一个**必定失败**的 official
+    （空 appid 换码必然被微信拒绝），也不返回一个**会成功**的桩。
+    失败是可见的，假成功不是。
+    """
+    if settings.wechat_provider == "official":
+        if not settings.wechat_appid:
+            logger.error(
+                "MEDPLAT_WECHAT_PROVIDER=official 但未配置 MEDPLAT_WECHAT_APPID："
+                "微信登录将一律失败。**不会**回落到 mock 桩——桩会让任何 "
+                "`code=mock-xxx` 登录成功并开户。请补齐 appid/secret/回调域名，"
+                "或显式改回 MEDPLAT_WECHAT_PROVIDER=mock。"
+            )
         return OfficialWeChatProvider(
             settings.wechat_appid, settings.wechat_secret, settings.wechat_redirect_uri
         )

@@ -1079,6 +1079,18 @@ def create_payment(
         # 未配置/未过出网校验时绝不能悄悄落回 Mock：Mock 会把单标成已支付，
         # 而现实中一分钱都没收到。
         raise HTTPException(status_code=503, detail="支付网关未配置或未通过出网校验，gateway 渠道不可用")
+    if settings.is_production and body.channel == "online" and "online" not in _GATEWAYS:
+        # 同一条理由，`online` 上原先漏了。`_gateway()` 对任何未注册的渠道一律
+        # 回落 `MOCK_GATEWAY`，而 Mock 的 `pay()` 直接返回 success、流水号本地编——
+        # 于是生产上"线上支付"会把单据标成已付，而一分钱都没出账。
+        # 只拦 `online`：`cash`/`card` 是窗口当面收讫、`insurance` 是医保基金结算，
+        # 它们**本来就**没有网关，当场置 paid 正是真实语义，拦了才是错的。
+        # 放在使用处而非启动守卫：只收现金的县没有网关是合法形态，不该被拒启。
+        raise HTTPException(
+            status_code=503,
+            detail="线上支付渠道未配置真实网关，拒绝受理——"
+                   "否则会把单据标成已支付而实际未收到款",
+        )
     default_amount = (
         settlement.insurance_pay if body.channel == "insurance" else settlement.self_pay
     )

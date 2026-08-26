@@ -423,3 +423,64 @@ def test_网关流水单位兼容元与分():
     with mock.patch.object(httpx, "get", return_value=R()):
         rows = gw.query_transactions(None, TODAY)
     assert rows == [{"trade_no": "A", "amount": 123.45}, {"trade_no": "B", "amount": 6.7}]
+
+
+# ---------------------------------------------------------------------------
+# 生产上「线上支付」不得落回 Mock（上线前审计）
+#
+# 上面那条 `test_网关未注册时gateway渠道拒绝而非落回Mock` 只堵了 `gateway`
+# 一个渠道，而 `_gateway()` 对**任何**未注册渠道一律回落 `MOCK_GATEWAY`，
+# `MockGateway.pay()` 直接返回 success、流水号本地编。于是生产上
+# `channel="online"`（合法取值，见 PaymentIn 的 pattern）会把单据标成已支付，
+# 而一分钱都没出账——正是那条注释说的"现实中一分钱都没收到"。
+#
+# 只拦 `online`：`cash`/`card` 是窗口当面收讫、`insurance` 是医保基金结算，
+# 它们本来就没有网关，当场置 paid 正是真实语义。
+
+
+def test_生产环境线上支付无真实网关时拒绝受理(client, admin, base, monkeypatch):
+    billing._GATEWAYS.pop("online", None)
+    settlement = new_settlement(client, base, admin)
+    monkeypatch.setattr(settings, "env", "prod")
+    resp = client.post(
+        "/api/billing/payments",
+        json={"settlement_id": settlement["id"], "channel": "online"},
+        headers=base["operator"],
+    )
+    assert resp.status_code == 503, resp.text
+    assert "标成已支付" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("channel", ["cash", "card", "insurance"])
+def test_生产环境窗口类渠道照常受理(client, admin, base, monkeypatch, channel):
+    """防误伤——这三个渠道本来就没有网关，拦了才是错的。
+
+    没有这条，"生产不许落 Mock" 很容易被写成一刀切，把只收现金的县整个挡住。
+    """
+    settlement = new_settlement(client, base, admin)
+    monkeypatch.setattr(settings, "env", "prod")
+    resp = client.post(
+        "/api/billing/payments",
+        # 显式给金额：`insurance` 渠道缺省取 `settlement.insurance_pay`，
+        # 本夹具没走医保、该值为 0，会先被"支付金额须大于 0"挡在 422。
+        # 那条校验是对的，但它会遮住这里真正要验的东西（守卫有没有误伤）。
+        json={"settlement_id": settlement["id"], "channel": channel, "amount": 10},
+        headers=base["operator"],
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["status"] == "paid"
+
+
+def test_非生产环境线上支付仍走Mock(client, admin, base):
+    """本地联调与演示站依赖这条路，硬门不能顺手把它也堵了。
+
+    （同一事实在 `test_网关未注册时gateway渠道拒绝而非落回Mock` 里也断言过一次，
+    那条是顺带；这里是专门钉住"硬门只在生产生效"这个边界。）
+    """
+    settlement = new_settlement(client, base, admin)
+    order = client.post(
+        "/api/billing/payments",
+        json={"settlement_id": settlement["id"], "channel": "online"},
+        headers=base["operator"],
+    ).json()
+    assert order["status"] == "paid" and order["trade_no"].startswith("MOCK")
