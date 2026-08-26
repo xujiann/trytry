@@ -18,9 +18,13 @@
  * 依赖（只用 Node 内置的 fs/vm/path），删掉它对应用没有任何影响。
  *
  * 用法：
- *   node scripts/render_diff.js <renderFn> [<renderFn> …]      # 工作区 vs HEAD
- *   node scripts/render_diff.js --base <git-ref> <renderFn> …   # 工作区 vs 指定版本
- *   node scripts/render_diff.js --list                          # 列出有夹具的页面
+ *   node scripts/render_diff.js <页面键> [<页面键> …]            # 工作区 vs HEAD
+ *   node scripts/render_diff.js --base <git-ref> <页面键> …      # 工作区 vs 指定版本
+ *   node scripts/render_diff.js                                 # 不给页面键 = 全跑
+ *   node scripts/render_diff.js --list                          # 列出页面键与对应的渲染函数
+ *
+ * 注意实参是**页面键**（夹具里的 key，如 `monitor`），不是渲染函数名
+ * （`renderMonitor`）。`--list` 两列分别是这两个。
  *
  * 夹具在 fixtures/render_fixtures.json：按接口路径前缀给假数据。**夹具必须造出
  * 非空数据**——空列表下 `table()` 走"暂无数据"分支，什么都比不出来（这个坑上一轮
@@ -72,17 +76,25 @@ function makeElement(id) {
     children: [],
     options: [],
   };
+  // 未知**方法**吞掉，未知**属性**必须是 undefined。
+  // 初版对未知属性一律返回 `function(){}`，那是个陷阱：函数是 truthy，于是
+  // `if (el.firstChild)` / `el.files` / `el.selectedOptions` 这类判断会走到与
+  // 真浏览器**相反**的分支上去。两版都走错同一条分支，比对照样报"逐字符相同"
+  // ——工具会给一段浏览器根本不执行的代码发合格证。
+  // 按名字区分：JS 里没法知道调用方想要方法还是属性，取一份 DOM 常用方法名单，
+  // 名单外的未知读取返回 undefined（与真 DOM 一致）。
+  const METHOD_LIKE = /^(add|remove|set|get|has|toggle|insert|append|prepend|replace|scroll|select|submit|reset|blur|focus|click|contains|matches|closest|query|dispatch|createElement|before|after|animate|check|report)/;
   return new Proxy(el, {
     get(target, prop) {
       if (prop in target) return target[prop];
       if (typeof prop === "symbol") return undefined;
-      return function () {};   // 未知方法一律 no-op
+      return METHOD_LIKE.test(prop) ? function () {} : undefined;
     },
     set(target, prop, value) { target[prop] = value; return true; },
   });
 }
 
-function buildSandbox(apiFixture) {
+function buildSandbox() {
   const elements = new Map();
   const el = (sel) => {
     if (!elements.has(sel)) elements.set(sel, makeElement(sel));
@@ -111,12 +123,11 @@ function buildSandbox(apiFixture) {
     fetch: async () => { throw new Error("渲染比对不该真发请求——api() 已被替身接管"); },
     setInterval: () => 0,
     clearInterval() {},
-    setTimeout: (fn) => { return 0; },
+    setTimeout: () => 0,
     clearTimeout() {},
     alert() {}, confirm: () => true, prompt: () => "x",
     URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },
     Blob: function () {},
-    __apiFixture: apiFixture,
     __elements: elements,
   };
   sandbox.globalThis = sandbox;
@@ -136,8 +147,11 @@ function fixtureFor(page, url) {
   return table[best];
 }
 
-function render(staticDir, page, fnName) {
-  const ctx = buildSandbox(null);
+/** 渲染一版。**async**：读文件与 vm 求值都会同步抛，包在 async 里才落进调用方的
+ *  `.catch`——否则"旧版崩溃、新版正常"那条分支根本走不到（同步异常会直接掀掉
+ *  `Promise.all`，打出一段栈而不是逐页结论）。 */
+async function render(staticDir, page, fnName) {
+  const ctx = buildSandbox();
   for (const f of FILES) {
     const src = fs.readFileSync(path.join(staticDir, f), "utf8");
     vm.runInContext(src, ctx, { filename: f });
@@ -168,9 +182,13 @@ function exportBase(ref) {
   return dir;
 }
 
-/** 忽略标签之间的纯空白差异——换行与缩进不进 DOM，改模板必然动它们。 */
+/** 只折叠**标签之间**的空白——换行与缩进不进 DOM，而改模板必然动它们。
+ *
+ * 初版第二步还做了个全局 `\s+ → " "`，那就折过头了：属性值与文本节点里的空白
+ * 也被抹平，`title="待  审核"` 改成单空格这种**真的字节变化**会被判成"相同"，
+ * 而本工具的全部卖点就是"证明输出字节没变"。只留第一步。 */
 function normalize(html) {
-  return html.replace(/>\s+</g, "><").replace(/\s+/g, " ").trim();
+  return html.replace(/>[ \t\r\n]+</g, "><").trim();
 }
 
 function firstDiff(a, b) {
@@ -190,6 +208,15 @@ async function main() {
   const pages = argv.length ? argv : Object.keys(FIXTURES);
 
   const baseDir = exportBase(base);
+  try {
+    process.exitCode = (await compare(baseDir, pages)) ? 1 : 0;
+  } finally {
+    // 放 finally 里：任何一条错误路径都不该在 tmp 里留下 renderdiff-* 目录。
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
+}
+
+async function compare(baseDir, pages) {
   const workDir = path.join(ROOT, STATIC_REL);
   let bad = 0;
   for (const page of pages) {
@@ -215,6 +242,17 @@ async function main() {
     }
     const a = normalize(before.html), b = normalize(after.html);
     if (!a.length) { console.log(`✗ ${page}: 迁移前渲染为空，夹具没造出数据，比对无意义`); bad++; continue; }
+    // 夹具第一条约定（"列表必须非空"）**必须真的检**，不能只写在注释里。
+    // 光看 `a.length > 0` 挡不住：空列表下 `table()` 照样吐一整个
+    // `<table>…<td colspan=N>暂无数据</td></table>`，外面还包着 panel，
+    // 长度好几百——于是工具报"逐字符相同"，而**行模板一次都没求值**，
+    // 那里恰恰是 `esc()` 的唯一出现处。这种绿是假的，比红更糟。
+    const empties = (before.html.match(/暂无数据/g) || []).length;
+    if (empties) {
+      console.log(`✗ ${page}: 有 ${empties} 处表格走了"暂无数据"分支——那一段的行模板`
+        + `一次都没求值，比对证明不了它。把夹具里对应的列表填上数据。`);
+      bad++; continue;
+    }
     if (a === b) {
       console.log(`✓ ${page} (${spec.fn}): 忽略标签间空白后逐字符相同（${a.length} 字符, ${after.calls.length} 个接口）`);
     } else {
@@ -226,8 +264,7 @@ async function main() {
     }
     if (before.desc !== after.desc) { console.log(`  ! #page-desc 变了：\n    前: ${before.desc}\n    后: ${after.desc}`); bad++; }
   }
-  fs.rmSync(baseDir, { recursive: true, force: true });
-  process.exit(bad ? 1 : 0);
+  return bad;
 }
 
 main().catch((e) => { console.error(e); process.exit(2); });

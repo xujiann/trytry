@@ -74,7 +74,7 @@
         { "id": 3, "created_at": "2026-08-26T09:12:00", "category": "critical_value", "title": "危急值：血钾 6.8<img src=x onerror=alert(1)>", "body": "请立即处理 & 回执", "read": false, "link_type": "exam_report" },
         { "id": 4, "created_at": "2026-08-25T18:02:00", "category": "未知分类<b>", "title": "普通通知", "body": null, "read": true, "link_type": "none" }
       ],
-      "/api/notifications/unread-count": {"unread": 1}
+      "/api/notifications/unread-count": { "unread": 1 }
     }
   },
   "clinical_indicators": {
@@ -187,20 +187,24 @@
         { "id": 1, "org_id": 3, "drug_name": "二甲双胍", "quantity": 2, "status": "registered" },
         { "id": 2, "org_id": 3, "drug_name": "厄贝沙坦", "quantity": 1, "status": "collected" }
       ],
-      "/api/medication/usage-stats": {
-        "orgs": [],
-        "drugs": []
-      },
+      "/api/medication/usage-stats": [
+        { "drug_code": "A10BA02", "drug_name": "二甲双胍<img src=x onerror=alert(1)>", "rx_count": 412, "patient_count": 260 },
+        { "drug_code": "C09CA06", "drug_name": "坎地沙坦", "rx_count": 208, "patient_count": 150 }
+      ],
       "/api/medication/supply-risk": {
-        "total": 0,
-        "risks": []
+        "total": 2,
+        "risks": [
+          { "drug_code": "A10BA02", "drug_name": "二甲双胍", "low_stock_orgs": 3, "open_shortages": 2, "risk_level": "high<b>" },
+          { "drug_code": "C09CA06", "drug_name": "坎地沙坦'", "low_stock_orgs": 1, "open_shortages": 1, "risk_level": "mid" }
+        ]
       }
     },
     "_why": [
       "这一页也**没有迁面板**，收进来是为了钉住一个真崩溃：",
       "`const [t, col] = SS[s.status]` 没有兜底，而后端会把状态写成 collected / no_show /",
       "cancelled（medication.py `shortage.status = body.result`）——`SS` 里没有这三个，",
-      "解构 undefined 直接 TypeError，**整页白屏**。夹具里第二条就是 collected。"
+      "解构 undefined 直接 TypeError，**整页白屏**。夹具里第二条就是 collected。",
+      "夹具形状必须跟后端一致：`usage-stats` 后端返回**列表**（medication.py:230），起初写成了对象，`stats.length` 是 undefined → 直接走 \"暂无数据\"，全县用药地图那一段一次都没被渲染过，比对等于没覆盖它。"
     ]
   }
 }
