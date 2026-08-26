@@ -124,7 +124,9 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 1. 打开 `/m` → 「我的档案」；
 2. 点「微信一键登录」（默认 mock 通道，无需公众号即可走通），或填手机号点「获取验证码」——
-   开发/演示环境（`MEDPLAT_SMS_PROVIDER=console` 且非 prod）验证码会直接回显并自动填入；
+   验证码回显要**三道门同时开**才生效：`MEDPLAT_SMS_PROVIDER=console`（默认）+ 显式设
+   `MEDPLAT_SMS_DEBUG_ECHO=1`（默认关）+ 非 prod（见 `routers/portal.py:292`）；
+   三门全开时验证码直接回显并自动填入，否则只打日志；
 3. 首次登录需实名绑定：填姓名 + 身份证号匹配已建档的患者。若登录手机号已登记在
    某份档案上且**全库唯一**，则登录即自动完成绑定，跳过这步。
 
@@ -135,6 +137,48 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 数据库默认使用 SQLite（开发环境），通过 `MEDPLAT_DATABASE_URL` 环境变量可切换 PostgreSQL。
 配置统一由 pydantic-settings 读取 `MEDPLAT_*` 环境变量（见 `server/app/config.py`）。
+
+## 公网访问（Render 演示实例）
+
+想要一条"发出去别人点开就能用"的地址，用仓库根的 `render.yaml`：Render 控制台
+**New → Blueprint** → 选本仓库 → 它会读到那份蓝图 → 按提示填 `MEDPLAT_ADMIN_PASSWORD`
+（≥12 位；这是唯一需要手填的值，其余环境变量蓝图里已写好）→ Apply。首次构建约 5～8 分钟，
+完成后拿到形如 `https://medplat-demo.onrender.com` 的域名，三个入口都在同一域名下：
+
+| 入口 | 路径 | 登录方式 |
+|---|---|---|
+| 管理端 | `/` | `admin` / 你在 Render 填的口令 |
+| 居民端 | `/m` | 手机号 `13800138001` → 「获取验证码」自动回填（演示档回显），或「微信一键登录」走 mock 通道 |
+| 医生移动端 | `/m/doctor` | `doc_village` / `doctor123`（种子账号，另有 `doc_zhen1` / `doc_county`） |
+
+三个已知边界，演示前先知道：
+
+- **free 计划会休眠**：15 分钟无访问后实例下线，下一次访问要等 30～60 秒冷启动。第一个
+  点开链接的人会以为站挂了——发链接时顺手说一句，或自己先点一下把它叫醒。
+- **数据每次重启清零**：free 计划无持久盘，SQLite 落在容器临时磁盘上。这里不算缺陷：
+  `MEDPLAT_SEED_DEMO=1` 让 `start.sh` 每次启动重灌演示种子，演示站因此永远是干净的初始态。
+  要留住数据就得换成 Render 的 PostgreSQL 实例并设 `MEDPLAT_DATABASE_URL`——但**换成持久库后
+  改 `MEDPLAT_ADMIN_PASSWORD` 就不再生效**：`admin` 账号只在库里没有它时才按这个变量建
+  （`main.py:128`），已存在就走应用内改密，不走环境变量。
+- **它是演示档，不是生产档**：种子数据全为虚构造数，且刻意不设 `MEDPLAT_ENVIRONMENT=prod`
+  （原因见 `render.yaml` 里的注释）。**别把真实患者数据灌进这台机器**；真实部署走
+  下面的「生产部署」。
+
+### 为什么不能像 GitHub Pages 那样只托管静态页
+
+常见的想法是"前端是免构建的原生 JS，那把 `server/app/static/` 丢到 GitHub Pages 上不就完了"。
+不行——本项目不是静态站点：页面和接口由**同一个 FastAPI 进程同源提供**。
+
+- 前端约 700 处 `/api/…` 调用最终汇入 9 个 `fetch()` 出口，全部用**相对路径 + 同源**；
+  GitHub Pages 上没有后端，这些请求会拿到 Pages 的 404 页面，除登录框外整站无数据。
+- 认证是 HttpOnly Cookie + 非 HttpOnly CSRF Cookie 的双提交，`SameSite=Lax`
+  （`app/deps.py:74`），本就为同源设计；应用里也**没有** CORS 中间件。
+
+要拆成"Pages 托前端 + 别处托后端"，改前端 URL 只是小工程（9 个 `fetch` 出口 + 3 个 HTML
+里 15 处 `/static/` 绝对路径），真正的代价在认证：得加 CORS 白名单、把 Cookie 改成
+`SameSite=None; Secure`，还要面对浏览器对第三方 Cookie 的拦截。那是动 CLAUDE.md §8 红线的
+改动，按 §9 要先写 ADR 并请人复核——为了一个访问地址不值得。要 `github.io` 那种地址形态，
+更省的做法是在 Pages 上放一个静态入口页，链接指向这里的 Render 实例。
 
 ## 测试与覆盖率
 

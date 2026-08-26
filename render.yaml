@@ -3,9 +3,13 @@ services:
     name: medplat-demo
     runtime: docker
     plan: free
-    branch: claude/county-medical-platform-plan-2p7456
+    branch: claude/access-method-config-g0qsw4
     dockerfilePath: ./server/Dockerfile
     dockerContext: ./server
+    # 部署完成判据交给应用自己的健康探针（附带数据库连通性探测），而不是
+    # "端口通了就算活"——迁移失败时 start.sh 会中止，端口根本不会开，但
+    # 探针能让 Render 在"起来了但连不上库"这种半死状态下也判为失败。
+    healthCheckPath: /api/health
     envVars:
       # 公网**演示**实例：种子数据全部为虚构演示数据（人名/身份证/病历均为造数），
       # 不含任何真实患者信息。镜像默认已不带演示种子（A8），这里显式开启。
@@ -17,7 +21,24 @@ services:
       - key: MEDPLAT_SECRET
         generateValue: true
       # 管理员口令必填、不入库不入 git：`sync: false` 要求部署者在 Render
-      # 控制台手工填入（≥12 位强口令，应用侧生产守卫会拒绝弱口令）。
+      # 控制台手工填入。取 ≥12 位强口令——注意应用侧的凭据强度守卫**只在生产档生效**
+      # （config.py `_reject_weak_credentials_in_prod` 开头就 `if not is_production: return`），
+      # 这台演示机是非生产档，填 `123456` 它照样起得来，把关的是填的人。
       # 之前用 generateValue 会生成一个没人知道的口令，演示者反而登不进去。
       - key: MEDPLAT_ADMIN_PASSWORD
         sync: false
+      # 居民端（/m）能不能演示，取决于这一个开关。验证码回显有**三道门**
+      # （通道=console + 显式开这个开关 + 非生产环境，见 routers/portal.py:292），
+      # 三道全开才回显。不开的后果不止是"演示者收不到码"——`seed_demo.py:77`
+      # 拿 `debug_code` 建那个绑定到「张伟」的居民账户，拿不到就整段跳过
+      # （`_resident_ready=False`），演示站的居民端会是个**空壳**：能打开、
+      # 能登录、但没有可看的档案与消息。演示数据全是造数，回显造数的验证码
+      # 不泄露任何真实信息；真实部署不设此项即自动关闭。
+      - key: MEDPLAT_SMS_DEBUG_ECHO
+        value: "1"
+      # 刻意**不设** MEDPLAT_ENVIRONMENT=prod。这不是疏漏：本文件设了
+      # MEDPLAT_SEED_DEMO=1 且用 SQLite，两者都在 config.py 的 `_reject_prod_footguns`
+      # 拒启名单里——真给这台机器挂上 prod，它会**直接起不来**。生产档同时关掉
+      # 上面那道验证码回显门，居民端也就跟着没法演示了。
+      # 这台机器上没有真实数据，它不是生产环境，不该假装是。真实部署另起一台，
+      # 按 README「生产部署 → 生产环境安全硬化」配（PostgreSQL + 真实短信/微信通道）。
