@@ -431,9 +431,13 @@ async function renderMedication() {
         <input name="drug_name" placeholder="药品名称" required><input name="quantity" type="number" value="1" min="1" style="min-width:70px"><button>登记</button>
       </form><p class="msg" id="short-msg"></p>
       ${table(["ID", "机构", "药品", "数量", "状态", "操作"], shortages, (s) => {
-        const [t, col] = SS[s.status];
+        // `SS` 只有流转中的三个状态，而后端还会写 collected / no_show / cancelled
+        // （medication.py `shortage.status = body.result`）。没有兜底时
+        // `SS[s.status]` 是 undefined，解构直接 TypeError——**整页白屏**，
+        // 不是这一行降级。只要有一条缺药登记结了案，这一页就打不开了。
+        const [t, col] = SS[s.status] || [s.status, ""];
         return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
-          <td><span class="tag ${col}">${t}</span></td>
+          <td><span class="tag ${col}">${esc(t)}</span></td>
           <td>${s.status !== "delivered" ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
       })}</div>
     <div class="panel"><h3>用药画像查询</h3>

@@ -43,6 +43,7 @@ DESTRUCTURED_FALLBACK = re.compile(
     r"const \[(\w+), *\w+\] *= *[A-Z_][\w]*\[[^\]\n]+\]\s*\|\|\s*\[([^\]\n]*?),\s*\"\"\]"
 )
 
+
 def _enclosing_block(src: str, start: int) -> str:
     """从解构语句往后取到**它所在那层花括号结束**为止。
 
@@ -144,3 +145,60 @@ def test_守卫本身没瞎(tmp_path):
     assert _destructured_offenders([literal]) == [], (
         "兜底是字面量却被报了——它永远不含服务端数据，误报会逼人加豁免"
     )
+
+
+# ---------------------------------------------------------------------------
+# 第三种失败方式：**根本没有兜底**
+#
+# 上面两条盯的是"兜底了但没转义"（XSS）。同一次形状扫描顺手带出了第三种写法——
+# 查表**不写兜底**：
+#
+#     const [t, col] = SS[s.status];      // SS 里没有这个 status → undefined
+#
+# 后果比未转义更直接：解构 undefined 抛 TypeError，而它在 `table()` 的行渲染
+# 回调里，于是**整页白屏**，不是这一行降级。实测过一处真的：`renderMedication`
+# 的缺药登记，`SS` 只有 registered/purchasing/delivered 三个流转态，而后端会写
+# collected / no_show / cancelled（`medication.py` 的 `shortage.status = body.result`）
+# ——只要有一条缺药登记结了案，这一页就再也打不开。
+#
+# 判据故意收得很窄：只认"解构 + 大写映射名 + 无 `||`"。别的查表写法
+# （`MAP[x]` 取单值、`MAP[x]?.y`）不在此列，它们拿到 undefined 不会抛。
+
+NO_FALLBACK_DESTRUCTURE = re.compile(
+    r"const \[\w+, *\w+\] *= *([A-Z_][\w]*)\[([^\]\n]+)\]\s*;"
+)
+
+
+def _no_fallback_offenders(files):
+    offenders = []
+    for path in files:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            hit = NO_FALLBACK_DESTRUCTURE.search(line)
+            if hit:
+                offenders.append(
+                    f"{path.name}:{lineno}: {hit.group(1)}[{hit.group(2)}] 没有兜底"
+                )
+    return offenders
+
+
+def test_查表解构必须带兜底否则整页白屏():
+    """映射查不到时解构 undefined 会抛 TypeError，整页渲染失败。
+
+    安全写法与本仓库其余 30+ 处一致：`|| [x.status, ""]`，再把兜底出来的值
+    过一遍 `esc()`（后端原始状态码是服务端数据）。
+    """
+    offenders = _no_fallback_offenders(sorted(STATIC.rglob("*.js")))
+    assert offenders == [], (
+        "以下查表解构没写兜底——映射未命中时解构 undefined 抛 TypeError，"
+        "整页白屏而不是这一行降级：\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_无兜底守卫本身没瞎(tmp_path):
+    bad = tmp_path / "bad.js"
+    bad.write_text("const [t, col] = SS[s.status];\n", encoding="utf-8")
+    assert _no_fallback_offenders([bad]), "植回缺陷却没抓到，扫描是空转的"
+
+    good = tmp_path / "good.js"
+    good.write_text('const [t, col] = SS[s.status] || [s.status, ""];\n', encoding="utf-8")
+    assert _no_fallback_offenders([good]) == [], "带兜底的写法被误报了"
