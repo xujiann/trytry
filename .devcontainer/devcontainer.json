@@ -1,0 +1,43 @@
+// 从 GitHub 网址一键在线跑起来：仓库首页 → Code → Codespaces → Create codespace。
+// GitHub 起容器、装依赖、跑迁移、灌演示数据、起服务，浏览器里直接开 8000 端口即是演示站。
+//
+// 为什么把演示环境钉在这里而不是写篇文档教人手敲：手敲的步骤会和 start.sh / Dockerfile
+// 漂开（本仓库已经因为"演示口令两处不一致"让公网演示站空了一次），所以这里**不自造启动
+// 逻辑**，只做两件事：装依赖、调用云端同一个入口脚本 start.sh。
+{
+  "name": "medplat 在线演示",
+  // Python 版本与 CI / 两个 Dockerfile / pyproject 同版（3.12），
+  // 由 tests/test_python_version_alignment.py 钉住——升级要一起改。
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+
+  "containerEnv": {
+    // 演示档：等服务就绪后自动灌入虚构演示数据（start.sh 只认 "1"）。
+    // 注意这个开关在生产（MEDPLAT_ENV=prod）会被 config.py 的守卫直接拒绝启动，
+    // 所以它只可能出现在演示环境里——Codespace 与 render.yaml 各显式开一次。
+    "MEDPLAT_SEED_DEMO": "1",
+    // 居民端登录走短信验证码：console 通道只打日志不真发短信，
+    // 配合 debug_echo 让验证码直接回显在响应里，演示时不用去翻日志。
+    // （config.py 限定：仅 console + 非生产才生效。）
+    "MEDPLAT_SMS_PROVIDER": "console",
+    "MEDPLAT_SMS_DEBUG_ECHO": "1"
+  },
+
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postAttachCommand": {
+    "演示服务": "bash .devcontainer/start-demo.sh"
+  },
+
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "medplat 演示站",
+      "onAutoForward": "openPreview"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  }
+}

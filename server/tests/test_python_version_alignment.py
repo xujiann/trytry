@@ -1,4 +1,4 @@
-"""守卫：CI、生产镜像、工具配置必须用**同一个** Python 版本。
+"""守卫：CI、生产镜像、演示环境、工具配置必须用**同一个** Python 版本。
 
 修的问题：CI 两个 job 装 3.11，而生产镜像是 `python:3.12-slim`，
 `pyproject.toml` 里 ruff `target-version` / mypy `python_version` 也是 3.12。
@@ -8,8 +8,11 @@
 2. 两个阻断门口径不一：lint/typecheck 按 3.12 语义检查、测试按 3.11 语义执行，
    3.12 才有的写法能过 quality、却在 test 里炸（反之亦然）。
 
-这四处没有任何机制互相约束，正是它们悄悄漂开的原因。这里把它们钉在一起：
-以后升级 Python 要么四处一起改，要么这两条用例变红。
+这几处没有任何机制互相约束，正是它们悄悄漂开的原因。这里把它们钉在一起：
+以后升级 Python 要么一起改，要么这两条用例变红。
+
+（`.devcontainer/devcontainer.json` 是后来补进来的第五处——在线演示环境同样是
+"跑我们代码的解释器"，理由见 `_devcontainer_version`。）
 """
 import re
 from pathlib import Path
@@ -42,6 +45,19 @@ def _dockerfile_versions() -> dict[str, str]:
     return out
 
 
+def _devcontainer_version() -> dict[str, str]:
+    """在线演示（Codespaces）用的镜像同样是"跑我们这份代码的解释器"。
+
+    它和 CI/生产镜像漂开的后果与别处同构：演示站跑在另一个版本上，
+    "在 Codespaces 里能跑起来"就不再说明生产跑得起来——而演示恰恰是
+    最常被拿来当"证明它能跑"的那个环境。
+    """
+    path = ROOT / ".devcontainer" / "devcontainer.json"
+    match = re.search(r'"image"\s*:\s*"[^"]*python:([\d.]+)', _read(path))
+    assert match, f"{path} 的 image 不是 .../python:<版本>-… 形态"
+    return {".devcontainer/devcontainer.json": match.group(1)}
+
+
 def _pyproject_versions() -> dict[str, str]:
     text = _read(SERVER / "pyproject.toml")
     ruff = re.search(r'target-version\s*=\s*"py(\d)(\d+)"', text)
@@ -55,13 +71,19 @@ def _pyproject_versions() -> dict[str, str]:
 
 def test_ci_生产镜像_工具配置同版本():
     ci = _ci_python_version()
-    everything = {"ci.yml PYTHON_VERSION": ci, **_dockerfile_versions(), **_pyproject_versions()}
+    everything = {
+        "ci.yml PYTHON_VERSION": ci,
+        **_dockerfile_versions(),
+        **_devcontainer_version(),
+        **_pyproject_versions(),
+    }
     mismatched = {k: v for k, v in everything.items() if v != ci}
     assert not mismatched, (
         f"Python 版本不一致：CI 是 {ci}，但 {mismatched} 不同。\n"
         "CI 与生产镜像不同版 = 测的和发的不是同一个解释器；\n"
         "工具配置与 CI 不同版 = lint/typecheck 与测试两个阻断门口径不一。\n"
-        "升级 Python 请四处一起改，并先在目标版本上跑通 make verify。"
+        "升级 Python 请五处一起改（CI / 两个 Dockerfile / devcontainer / pyproject），"
+        "并先在目标版本上跑通 make verify。"
     )
 
 

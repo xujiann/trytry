@@ -140,3 +140,29 @@ def test_render演示站不用代码默认密钥():
     render = (ROOT / "render.yaml").read_text(encoding="utf-8")
     assert "MEDPLAT_SECRET" in render, "render.yaml 未设置 MEDPLAT_SECRET，会退回代码默认值"
     assert "generateValue: true" in render, "应让平台生成随机值，而不是写死在文件里"
+
+
+def test_演示种子脚本的管理员口令随部署走():
+    """回归：种子脚本写死 admin123，公网演示站因此一条数据都没有。
+
+    `render.yaml` 要求部署者手工填强口令（`MEDPLAT_ADMIN_PASSWORD: sync: false`，
+    上一条用例正是这么要求的），而 `seed_demo.py` 曾写死 `admin123` 去登录——两边
+    口径必然不一致，登录 401、`start.sh` 又 `|| true` 吞掉错误，最终「服务起来了、
+    演示数据为空」，日志里没有任何线索。
+
+    这条把两处钉在一起：口令只能读应用自己的配置，脚本里不许再有第二份。
+    """
+    script = (ROOT / "server" / "scripts" / "seed_demo.py").read_text(encoding="utf-8")
+
+    assert not re.search(r'"username":\s*"admin"\s*,\s*"password":\s*"', script), (
+        "seed_demo.py 又把 admin 登录口令写死了——部署方一改口令，演示数据就灌不进去"
+    )
+    assert "get_settings().admin_password" in script, (
+        "seed_demo.py 应直接读 app.config.get_settings().admin_password，"
+        "这样环境变量与 .env 的解析口径与被灌数据的那个实例完全一致"
+    )
+    # 连兜底默认值也不许再抄一份——抄了就有漂开的余地，而这正是原 bug 的形状
+    assert DEFAULT_ADMIN_PASSWORD not in script, (
+        f"seed_demo.py 里又出现了口令字面量 {DEFAULT_ADMIN_PASSWORD!r}；"
+        "默认值的唯一真源是 app.config.DEFAULT_ADMIN_PASSWORD"
+    )

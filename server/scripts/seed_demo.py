@@ -3,14 +3,41 @@
 用法：先启动服务（uvicorn app.main:app --port 8000），再执行
     python scripts/seed_demo.py [base_url]
 默认 base_url 为 http://127.0.0.1:8000。
+
+管理员口令**不写死**，直接读应用自己的配置（`app.config.get_settings()`）——环境变量与
+`.env` 的解析口径因此与被灌数据的那个实例完全一致，不存在"脚本这边另有一份口令"。
+
+此前这里写死了开发默认口令，而公网演示站（render.yaml）要求部署者手工填一个强口令
+（`MEDPLAT_ADMIN_PASSWORD: sync: false`）——两边口径必然对不上：演示站每次启动都登录
+失败，`start.sh` 又把错误吞掉（`|| true`），最终「服务起来了、一条演示数据都没有」，
+日志里没有任何线索。改口令是部署方的正常操作，脚本要跟着走，而不是让现场迁就脚本。
+
+注意读的是**本地**配置：把 base_url 指向远端实例时，需自行保证本地口令与那边一致。
 """
 import sys
+from pathlib import Path
 
 import httpx
 
+# 与 dump_schema.py / import_users.py 等同一套路：脚本以 server/ 为根 import 应用自身
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.config import get_settings  # noqa: E402
+
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 c = httpx.Client(base_url=BASE, timeout=30)
-token = c.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["access_token"]
+_login = c.post(
+    "/api/auth/login", json={"username": "admin", "password": get_settings().admin_password}
+)
+if _login.status_code != 200:
+    # 报错必须说清怎么修——静默失败正是上面那个 bug 的成因。
+    raise SystemExit(
+        f"管理员登录失败（HTTP {_login.status_code}），演示数据未灌入。\n"
+        "口令读自应用配置（环境变量 MEDPLAT_ADMIN_PASSWORD 或 .env，未设置时为开发默认值）；\n"
+        "请确认它与该实例**启动时**用的口令一致——该变量只在首次建 admin 账号时写进库，\n"
+        "库里已有 admin 之后再改它，改的只是这里登录用的口令，账号口令不会跟着变。"
+    )
+token = _login.json()["access_token"]
 c.headers["Authorization"] = f"Bearer {token}"
 
 def ensure_org(payload):

@@ -27,14 +27,23 @@ UV_PID=$!
 
 if [ "$MEDPLAT_SEED_DEMO" = "1" ]; then
   i=0
+  ready=0
   while [ $i -lt 30 ]; do
     sleep 1
     if python -c "import httpx;httpx.get('http://127.0.0.1:$PORT/api/health',timeout=2)" 2>/dev/null; then
-      python scripts/seed_demo.py "http://127.0.0.1:$PORT" || true
+      ready=1
+      # 灌种子失败不该拖垮服务（演示站没数据，也好过起不来），但**必须留声**：
+      # 此前是 `|| true`，公网演示站一条数据都没有时，日志里连一行线索都没有。
+      if ! python scripts/seed_demo.py "http://127.0.0.1:$PORT"; then
+        echo "⚠️ 演示数据灌入失败：服务继续运行，但演示数据为空（原因见上一行脚本报错）。"
+      fi
       break
     fi
     i=$((i+1))
   done
+  if [ "$ready" = "0" ]; then
+    echo "⚠️ 等待 30 秒服务仍未就绪，跳过演示数据灌入；服务继续启动。"
+  fi
 fi
 
 wait $UV_PID

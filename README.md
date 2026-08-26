@@ -8,6 +8,24 @@
 - 建设规划：[县域医共体信息化平台建设规划.md](县域医共体信息化平台建设规划.md)
 - 开发时间计划：[docs/开发时间计划.md](docs/开发时间计划.md)
 
+## 在线演示
+
+本机什么都不用装，直接从这个仓库把演示站跑起来：
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/xujiann/trytry)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/xujiann/trytry)
+
+- **Codespaces**（最快，约 1 分钟）：点上面第一个按钮，或仓库首页 `Code` → `Codespaces`。
+  GitHub 起容器 → 装依赖 → 跑迁移 → 灌演示数据 → 起服务；`PORTS` 面板打开 8000 端口即是
+  管理端，居民端在 `/m`、接口文档在 `/docs`。要给别人看，先把该端口可见性改成 Public。
+- **Render**（要一个能收藏的公网地址）：点第二个按钮，用仓库根的 `render.yaml` 蓝图部署。
+  部署时**必须手工填** `MEDPLAT_ADMIN_PASSWORD`（≥12 位、含多类字符），其余变量蓝图已备好。
+  免费档冷启动约十几秒，容器内 SQLite 每次重部署重置（重置后会自动重灌演示数据）。
+
+演示账号口令、居民端验证码怎么拿、以及「演示站起来了但一条数据都没有」怎么排查，见
+[docs/在线演示.md](docs/在线演示.md)。演示数据（人名/身份证号/病历/费用）**全部为虚构造数**，
+不含任何真实患者信息。
+
 ## 当前进度
 
 后端 + 管理端前端（免构建 SPA，58 个页面，启动后访问 `http://127.0.0.1:8000/`）均已就绪，
