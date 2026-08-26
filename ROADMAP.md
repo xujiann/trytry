@@ -121,6 +121,12 @@
   - 实测确认："漏掉一个域"**不会静默**——187 个类全都被某处按名 import，漏一个立刻 ImportError。快照守卫仍有价值（挡的是将来新增却没人按名引用的类），已用加一个探针类验证它能报出单个类的增减。
 - ◐ 前端组件抽取与工具函数合并（[ADR-0009](docs/adr/0009-前端组件抽取与工具函数合并.md) **Accepted**）。**第一步已完成**：`$` 与 `esc` 三份逐字相同的实现合并进 `static/shared.js`，三个 HTML 入口都把它排在第一个 script；守卫 `test_frontend_shared_utils.py` 十三条（含转义表逐字符、加载顺序、消费方不得再自定义），三处变异各自转红。动机不是整洁而是安全：`esc()` 是 §8 红线，近百处手写插值，一份实现才有一处审查点。**`api()` 刻意未合并**——三套认证语义不同（localStorage / sessionStorage / 不带令牌），连 401 的处理时机与文案都不一样，合并需要把令牌来源与 401 回调参数化，那是行为重构不是去重，留作后续单独一步。
 - ◐ ADR-0009 第二步已启动：`panel()` 已抽出（放 core.js 与 `table()` 并列，**不放 shared.js**——`.panel` 是管理端的标记约定，居民端/医师端另有一套）；第一页 `renderServiceRequests` 迁完，Node 比对确认 `panel()` 本身是 no-op。**人工过这一页找出了全量扫描的盲区**：一个解构出来的局部变量（`UNIFIED_STATUS` 查不到时 `text` 回落成后端原始状态码）一直裸插进 innerHTML，扫描只认 `x.y` 属性访问所以漏了。已修并回归。后续逐页迁，不设期限。
+- ◐ **ADR-0009 第二批（2026-08-26）：又迁六页**——随访 / 定时任务 / 满意度 / 站内消息 / 质量指标 / 运行监控，`pages-mgmt.js` 里 16 处手写外壳换成 `panel()`，六页输出逐字符一致。三件事值得记：
+  - 🔴 **顺着"人工过一页"把上一轮那个盲区按形状扫了一遍，又挖出 33 处同样的未转义**（core 6 / pages-clinical 9 / pages-mgmt 5 / pages-public 11 / m 2）。全是 `const [text, color] = MAP[x.status] || [x.status, ""]` 之后 `${text}` 裸插——映射查不到时 `text` 就是**后端原始状态码**。上一轮撞见这个形状时只修了眼前那一处，**个案修复漏掉了 97%**。已全部修掉并加形状守卫（`test_frontend_escape_guard.py` 新增一条，含防空转与"兜底是字面量不得误报"）；实测该守卫在修复前的代码上正报 33 处、修复后 0 处。教训：撞见一处未转义要立刻扫**形状**，别只修个案。
+  - **取证工具做成了可复用的**：`scripts/render_diff.js` + `scripts/fixtures/render_fixtures.json`——在 Node 里按夹具真渲染页面，拿迁移前后的 innerHTML 逐字符比。上一轮那个是一次性脚本；剩下还有 ~300 处外壳要迁，每页重写一遍取证脚本不合算。夹具刻意**塞 XSS 载荷**，这样比对的不只是"标签没挪位"而是"转义行为没变"；三处变异（吃掉 esc / 外壳掉 class / 标题重复转义）各自转红。
+  - **标题里的 `esc()` 必须去掉**：`panel()` 自己转义 title，留着就是转两遍（`&` → `&amp;amp;`），是改字节。`renderMonitor` 上实测到 `本实例进程内&lt;b&gt;` → `本实例进程内&amp;lt;b&amp;gt;`，已加守卫。
+  - 剩余手写外壳约 300 处（core 43 / pages-clinical 106 / pages-mgmt 56 / pages-spd 52 / pages-public 40），继续逐页迁，不设期限。
+- ✅ **顺手修（同一次形状扫描带出来的第三种失败方式）**：`pages-clinical.js` 的缺药登记 `const [t, col] = SS[s.status]` **没有兜底**，而后端会把状态写成 `collected`/`no_show`/`cancelled`（`medication.py` 的 `shortage.status = body.result`）——`SS` 里没有这三个，解构 undefined 抛 TypeError，且这一句在 `table()` 的行渲染回调里，所以炸的是**整页**：只要有一条缺药登记结了案，这一页就再也打不开。已用比对器复现（旧版抛 `undefined is not iterable`，新版正常）并按仓库既有写法修掉（`|| [s.status, ""]` + `esc`）。全仓库扫过只此一处，已加守卫。
 
 ## 待决策（先 ADR，后动手）
 
