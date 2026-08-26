@@ -602,13 +602,12 @@ async function renderInpatient(box) {
 async function renderSurgeries(box) {
   const rows = await authApi(`/api/portal/me/surgeries${svcQuery()}`);
   box.innerHTML = rows.length ? rows.map((s) => {
-    const [text, color] = SURGERY_STATUS_TEXT[s.status] || [s.status, ""];
     return `<div class="m-card">
       ${kv("手术名称", esc(s.surgery_name))}
       ${kv("医院", esc(s.org_name))}
       ${kv("术者", esc(s.surgeon_name || "—"))}
       ${kv("类别", esc(URGENCY_TEXT[s.urgency] || s.urgency))}
-      ${kv("状态", `<span class="tag ${color}">${esc(text)}</span>`)}
+      ${kv("状态", statusTag(SURGERY_STATUS_TEXT, s.status))}
       ${s.scheduled_date
         ? kv("安排时间", `${esc(s.scheduled_date)} ${esc(s.scheduled_time)}`) +
           kv("手术间", esc(s.room_name))
@@ -916,9 +915,11 @@ const SPD_RISK_TAGS = {
 };
 const SPD_LEVEL_TAGS = { normal: ["正常", "green"], high: ["偏高", "red"], low: ["偏低", "orange"] };
 
+/* 与 `pages-spd.js` 的 `spdTag` 是同一件事（两份实现此前逐字相同），
+ * 现在都委托给 shared.js 的 `statusTag()`。名字保持各自原样：这两个前端不共享
+ * 作用域（管理端与居民端是两个页面），改名只会让 diff 变大而不带来任何好处。 */
 function spdTagOf(map, key) {
-  const [text, cls] = map[key] || [key || "—", ""];
-  return `<span class="tag ${cls}">${esc(text)}</span>`;
+  return statusTag(map, key || "—");
 }
 
 async function loadSpd() {

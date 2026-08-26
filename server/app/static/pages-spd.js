@@ -38,9 +38,13 @@ const SPD_REF_STATUS = {
   closed: ["已闭环", "green"], rejected: ["已退回", "red"], withdrawn: ["已撤回", ""],
 };
 
+/* 慢专病的状态标签：与三端共用的 `statusTag()`（shared.js）同一份实现，
+ * 这里只多一条自己的约定——**状态为空时显示 `—` 而不是空白**。
+ * 合并时刻意没有把这条约定推给管理端（管理端历来显示空白），那是改字节不是去重。
+ * 等价性由 `scripts/statustag_equiv.js` 证明，含一条前提扫描：
+ * 传进来的映射表都不能用假值当键（否则 `key || "—"` 会改掉查表的那个键）。 */
 function spdTag(map, key) {
-  const [text, cls] = map[key] || [key || "—", ""];
-  return `<span class="tag ${cls}">${esc(text)}</span>`;
+  return statusTag(map, key || "—");
 }
 
 function spdCards(items) {

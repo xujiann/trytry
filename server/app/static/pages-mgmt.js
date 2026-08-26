@@ -131,7 +131,6 @@ async function renderSurgery() {
         <input name="planned_date" placeholder="拟手术日 YYYY-MM-DD"><button>提出申请</button></form></div>
     <div class="panel"><h3>手术申请（${requests.length}）</h3>${
       table(["ID", "住院", "术式", "切口", "麻醉", "急缓", "状态", "操作"], requests, (r) => {
-        const [text, color] = SURGERY_STATUS[r.status] || [r.status, ""];
         let ops = "—";
         if (r.status === "requested") ops = `<button class="btn secondary" data-approve="${r.id}">审批通过</button>
           <button class="btn danger" data-reject="${r.id}">否决</button>`;
@@ -140,7 +139,7 @@ async function renderSurgery() {
         else if (r.status === "completed") ops = `<button class="btn" data-view="${r.id}">查看记录</button>`;
         return `<tr><td>${r.id}</td><td>${r.admission_id}</td><td>${esc(r.surgery_name)}</td>
           <td>${esc(r.incision_level)}</td><td>${esc(ANESTHESIA[r.anesthesia_type] || "")}</td>
-          <td>${esc(URGENCY[r.urgency] || "")}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${ops}</td></tr>`;
+          <td>${esc(URGENCY[r.urgency] || "")}</td><td>${statusTag(SURGERY_STATUS, r.status)}</td><td>${ops}</td></tr>`;
       })}</div>
     <div class="panel"><h3>手术排班表</h3>${
       table(["日期", "手术间", "时段", "术式", "术者", "麻醉", "急缓"], schedules, (s) =>
@@ -263,13 +262,12 @@ async function renderAccounting() {
       <p class="msg" id="acc-msg"></p></div>
     <div class="panel"><h3>${esc(period)} 凭证（${vouchers.length}）</h3>${
       table(["ID", "凭证号", "日期", "摘要", "借方", "贷方", "状态", "操作"], vouchers, (v) => {
-        const [text, color] = VS[v.status] || [v.status, ""];
         const ops = v.status === "draft"
           ? `<button class="btn secondary" data-post="${v.id}">过账</button>`
           : (v.status === "posted" ? `<button class="btn danger" data-void="${v.id}">作废</button>` : "—");
         return `<tr><td>${v.id}</td><td>${esc(v.voucher_no)}</td><td>${esc(v.voucher_date)}</td>
           <td>${esc(v.summary)}</td><td>${v.total_debit.toFixed(2)}</td><td>${v.total_credit.toFixed(2)}</td>
-          <td><span class="tag ${color}">${esc(text)}</span></td>
+          <td>${statusTag(VS, v.status)}</td>
           <td><button class="btn" data-detail="${v.id}">明细</button> ${ops}</td></tr>
     <div class="panel"><h3>合并报表（${esc(period)}）</h3>
       <p class="hint">${esc(consolidated.caliber.note)}</p>
@@ -430,13 +428,12 @@ async function renderMaterials() {
       <p class="msg" id="mat-msg"></p></div>
     <div class="panel"><h3>采购流程（${purchases.length}）</h3>${
       table(["ID", "物资", "规格", "数量", "状态", "合同", "已验收", "操作"], purchases, (p) => {
-        const [text, color] = PURCHASE_STATUS[p.status] || [p.status, ""];
         let ops = "—";
         if (p.status === "requested") ops = `<button class="btn secondary" data-approve="${p.id}">审批</button>`;
         else if (p.status === "approved") ops = `<button class="btn secondary" data-contract="${p.id}">签合同</button>`;
         else if (p.status === "contracted") ops = `<button class="btn secondary" data-receive="${p.id}">验收</button>`;
         return `<tr><td>${p.id}</td><td>${esc(p.item_name)}</td><td>${esc(p.spec)}</td><td>${p.quantity}${esc(p.unit)}</td>
-          <td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(p.contract_no || "—")}</td>
+          <td>${statusTag(PURCHASE_STATUS, p.status)}</td><td>${esc(p.contract_no || "—")}</td>
           <td>${p.received_quantity || "—"}</td><td>${ops}</td></tr>`;
       })}</div>
     <div class="panel"><h3>高值耗材登记（一物一码）</h3>
@@ -450,9 +447,8 @@ async function renderMaterials() {
       <div id="trace-result"></div></div>
     <div class="panel"><h3>耗材台账（${consumables.length}）</h3>${
       table(["条码", "名称", "批号", "效期", "状态", "用于患者", "关联手术", "操作"], consumables, (c) => {
-        const [text, color] = CONSUMABLE_STATUS[c.status] || [c.status, ""];
         return `<tr><td>${esc(c.barcode)}</td><td>${esc(c.name)}</td><td>${esc(c.batch_no)}</td>
-          <td>${esc(c.expire_date)}</td><td><span class="tag ${color}">${esc(text)}</span></td>
+          <td>${esc(c.expire_date)}</td><td>${statusTag(CONSUMABLE_STATUS, c.status)}</td>
           <td>${esc(c.used_patient_name || "—")}</td><td>${esc(c.used_surgery_name || "—")}</td>
           <td>${c.status === "in_stock" ? `<button class="btn secondary" data-use="${c.barcode}">使用登记</button>` : "—"}</td></tr>`;
       })}</div>`;
@@ -597,9 +593,8 @@ async function renderRules() {
       ${domains.map((d) => `<p class="desc"><b>${esc(d.domain)}</b>：${
         d.variables.map((v) => `<code>${esc(v.name)}</code>(${esc(v.type)})`).join("　")}</p>`).join("")}
       ${table(["编码", "名称", "域", "条件", "严重度", "扣分", "状态", "操作"], rules, (r) => {
-        const [text, color] = SEVERITY[r.severity] || [r.severity, ""];
         return `<tr><td>${esc(r.key)}</td><td>${esc(r.name)}</td><td>${esc(r.domain)}</td>
-          <td><code>${esc(r.condition)}</code></td><td><span class="tag ${color}">${esc(text)}</span></td>
+          <td><code>${esc(r.condition)}</code></td><td>${statusTag(SEVERITY, r.severity)}</td>
           <td>${r.deduct_points}</td><td>${r.active ? "启用" : "停用"}</td>
           <td>${r.active ? `<button class="btn danger" data-off="${r.key}">停用</button>` : "—"}</td></tr>`;
       })}</div>
@@ -745,10 +740,9 @@ async function renderServiceRequests() {
         // `text` 在 UNIFIED_STATUS 里查不到时会**回落成后端原始状态码**，
         // 那是服务端数据，必须转义——迁移这一页时才看出来它一直是裸插值。
         // （`color` 是本文件写死的 class 名，不是数据。）
-        const [text, color] = UNIFIED_STATUS[i.status] || [i.status, ""];
         return `<tr><td>${esc(i.request_type_name)}</td><td>${i.id}</td><td>${esc(i.patient_name)}</td>
           <td>${esc(i.org_name)}</td><td>${esc(i.title)}</td>
-          <td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(i.raw_status)}</td>
+          <td>${statusTag(UNIFIED_STATUS, i.status)}</td><td>${esc(i.raw_status)}</td>
           <td>${esc(i.created_at.slice(0, 16).replace("T", " "))}</td></tr>`;
       }));
   $("#sr-form").onsubmit = (e) => { e.preventDefault();

@@ -328,7 +328,6 @@ async function renderConsultations() {
         <button>提交</button>
       </form><p class="msg" id="cons-msg"></p></div>
     <div class="panel">${table(["ID", "患者", "申请→受邀", "问题", "专家", "意见", "评价", "状态", "操作"], consultations, (c) => {
-      const [text, color] = CS[c.status] || [c.status, ""];
       const actions = c.status === "applied"
         ? `<button class="btn secondary" data-act="accept" data-id="${c.id}">受理</button>
            <button class="btn danger" data-act="decline" data-id="${c.id}">拒绝</button>`
@@ -338,7 +337,7 @@ async function renderConsultations() {
         ? `<button class="btn secondary" data-act="rate" data-id="${c.id}">评价</button>` : "—";
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.from_org_id} → ${c.to_org_id}</td>
         <td>${esc(c.question)}</td><td>${esc(c.expert_name) || "—"}</td><td>${esc(c.opinion) || "—"}</td>
-        <td>${c.rating ? "★".repeat(c.rating) : "—"}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${actions}</td></tr>`;
+        <td>${c.rating ? "★".repeat(c.rating) : "—"}</td><td>${statusTag(CS, c.status)}</td><td>${actions}</td></tr>`;
     })}</div>`;
   $("#cons-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -445,9 +444,8 @@ async function renderAppointments() {
        <td>${esc(s.slot_date)} ${esc(s.slot_time)}</td>
        <td><span class="tag ${s.booked >= s.capacity ? "red" : "green"}">${s.booked}/${s.capacity}</span></td></tr>`)}</div>
     <div class="panel"><h3>预约记录</h3>${table(["ID", "号源", "患者", "状态", "操作"], appointments, (a) => {
-      const [text, color] = AS[a.status] || [a.status, ""];
       return `<tr><td>${a.id}</td><td>${a.slot_id}</td><td>${a.patient_id}</td>
-        <td><span class="tag ${color}">${esc(text)}</span></td>
+        <td>${statusTag(AS, a.status)}</td>
         <td>${a.status === "booked"
           ? `<button class="btn secondary" data-fulfill="${a.id}">核销</button>
              <button class="btn danger" data-cancel="${a.id}">取消</button>` : "—"}</td></tr>`;
@@ -555,11 +553,10 @@ async function renderCssd() {
         <button>创建</button>
       </form><p class="msg" id="cssd-msg"></p></div>
     <div class="panel">${table(["ID", "批次号", "器械", "数量", "接收机构", "状态", "操作"], batches, (b) => {
-      const [text, color] = BS[b.status] || [b.status, ""];
       const next = { sterilizing: "标记已灭菌", sterile: "发放", dispatched: "回收" }[b.status];
       return `<tr><td>${b.id}</td><td><span class="tag">${esc(b.batch_no)}</span></td><td>${esc(b.item_name)}</td>
         <td>${b.quantity}</td><td>${b.dispatched_to_org_id ?? "—"}</td>
-        <td><span class="tag ${color}">${esc(text)}</span></td>
+        <td>${statusTag(BS, b.status)}</td>
         <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${b.status}">${next}</button>` : "—"}</td></tr>`;
     })}</div>`;
   $("#batch-form").onsubmit = async (e) => {
@@ -605,10 +602,9 @@ async function renderMedwaste() {
       </form><p class="msg" id="waste-msg"></p></div>
     ${alerts.length ? `<div class="panel"><h3>⚠ 滞留预警（${alerts.length}）</h3><p class="desc">收集超过2天仍未交接</p></div>` : ""}
     <div class="panel">${table(["ID", "机构", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
-      const [text, color] = WS[w.status] || [w.status, ""];
       return `<tr><td>${w.id}</td><td>${w.org_id}</td><td>${WT[w.waste_type]}</td><td>${w.weight_kg}kg</td>
         <td>${esc(w.collected_date)}${alertIds.has(w.id) ? ' <span class="tag red">滞留</span>' : ""}</td>
-        <td>${esc(w.handler_name) || "—"}</td><td><span class="tag ${color}">${esc(text)}</span></td>
+        <td>${esc(w.handler_name) || "—"}</td><td>${statusTag(WS, w.status)}</td>
         <td>${w.status !== "handed_over" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : "—"}</td></tr>`;
     })}</div>`;
   $("#waste-form").onsubmit = async (e) => {
@@ -800,14 +796,13 @@ async function renderExams() {
         `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
          <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button></td></tr>`)}</div>` : ""}
     <div class="panel"><h3>申请单</h3>${table(["ID", "患者", "中心", "项目", "状态", "操作"], requests, (r) => {
-      const [text, color] = EXAM_STATUS[r.status] || [r.status, ""];
       let actions = r.status === "pending"
         ? `<button class="btn secondary" data-claim="${r.id}">领取</button>`
         : r.status === "diagnosing"
         ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "";
       actions += ` <button class="btn secondary" data-printreq="${r.id}">打印申请单</button>`;
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${CENTER_NAMES[r.center_type]}</td>
-        <td>${esc(r.item_name)}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${actions}</td></tr>`;
+        <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td><td>${actions}</td></tr>`;
     })}</div>
     <div class="panel"><h3>报告打印</h3>
       <form class="inline" id="exam-print-form">
@@ -955,14 +950,13 @@ async function renderRx() {
          <td>${esc(r.interactions) || "—"}</td><td>${esc(r.contraindicated_diagnoses) || "—"}</td>
          <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td></tr>`)}</div>
     <div class="panel"><h3>处方队列</h3>${table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
-      const [text, color] = RX_STATUS[p.status] || [p.status, ""];
       let actions = p.status === "pending_review"
         ? `<button class="btn secondary" data-approve="1" data-id="${p.id}">通过</button>
            <button class="btn danger" data-approve="0" data-id="${p.id}">退回</button>` : "";
       if (canComment && !commented.has(p.id)) actions += ` <button class="btn" data-rxcomment="${p.id}">点评</button>`;
       actions += ` <button class="btn secondary" data-printrx="${p.id}">打印</button>`;
       return `<tr><td>${p.id}</td><td>${p.patient_id}</td><td>${esc(p.diagnosis_name)}</td>
-        <td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(p.review_comment) || "—"}</td><td>${actions || "—"}</td></tr>`;
+        <td>${statusTag(RX_STATUS, p.status)}</td><td>${esc(p.review_comment) || "—"}</td><td>${actions || "—"}</td></tr>`;
     })}</div>
     <div class="panel"><h3>处方点评（事后监管）</h3>
       <div class="cards">

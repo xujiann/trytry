@@ -54,6 +54,25 @@ DESTRUCTURED_FALLBACK = re.compile(
 )
 
 
+def _strip_comments(src: str) -> str:
+    """去掉块注释与整行注释——注释里的字不是代码。
+
+    被自己抓了个现行：`shared.js` 的 `statusTag()` 文档注释里，为了说明"这个组件
+    要替换掉的是什么"而**原样抄了一段有缺陷的写法**，扫描当场把它报成了真缺陷。
+    `test_frontend_chart_escaping.py` 的文件注释里记着同一个坑（注释里的字面
+    `<text>` 标签被正则当成真标签），这里是第二次踩。
+
+    刻意**只**去块注释与整行注释，不做"行内 `//` 到行尾"那种粗暴处理：
+    这是安全守卫，过度剥离会**藏起真缺陷**（比如把含 `://` 的模板字符串截断，
+    后面真正的裸插值就扫不到了）。宁可少剥一点。
+    """
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    return "\n".join(
+        "" if line.lstrip().startswith(("//", "*")) else line
+        for line in src.splitlines()
+    )
+
+
 def _enclosing_block(src: str, start: int) -> str:
     """从解构语句往后取到**它所在那层花括号结束**为止。
 
@@ -79,7 +98,7 @@ def test_映射兜底不得裸插值():
     offenders = []
     for path in sorted(STATIC.rglob("*.js")):
         for lineno, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), 1
+            _strip_comments(path.read_text(encoding="utf-8")).splitlines(), 1
         ):
             if BARE_MAP_FALLBACK.search(line):
                 offenders.append(
@@ -96,7 +115,7 @@ def _destructured_offenders(files):
     """找出"解构出服务端兜底、又把它裸插进模板"的位置。"""
     offenders = []
     for path in files:
-        src = path.read_text(encoding="utf-8")
+        src = _strip_comments(path.read_text(encoding="utf-8"))
         for hit in DESTRUCTURED_FALLBACK.finditer(src):
             var, fallback = hit.group(1), hit.group(2).strip()
             if fallback.startswith(('"', "'")):
@@ -215,7 +234,7 @@ NO_FALLBACK_DESTRUCTURE = re.compile(
 def _no_fallback_offenders(files):
     offenders = []
     for path in files:
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        for lineno, line in enumerate(_strip_comments(path.read_text(encoding="utf-8")).splitlines(), 1):
             hit = NO_FALLBACK_DESTRUCTURE.search(line)
             if hit:
                 offenders.append(

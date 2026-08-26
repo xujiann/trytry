@@ -347,7 +347,6 @@ async function loadCritical() {
       return;
     }
     box.innerHTML = reports.map((r) => {
-      const [label, color] = CRITICAL_TAGS[r.critical_status] || [r.critical_status, ""];
       const pending = ["notified", ""].includes(r.critical_status);
       const ops = pending
         ? `<button data-ack="${r.id}">确认接收</button>`
@@ -355,7 +354,7 @@ async function loadCritical() {
           ? `<button data-resolve="${r.id}">处置反馈</button>` : "";
       return card(
         kv("报告编号", esc(r.id)) + kv("申请单", esc(r.request_id)) +
-        kv("结论", esc(r.conclusion)) + kv("状态", `<span class="tag ${color}">${esc(label)}</span>`),
+        kv("结论", esc(r.conclusion)) + kv("状态", statusTag(CRITICAL_TAGS, r.critical_status)),
         ops + `<button class="ghost" data-trace="${r.id}">处置轨迹</button>`
       );
     }).join("");
@@ -406,13 +405,12 @@ async function loadExams() {
       return;
     }
     box.innerHTML = rows.map((r) => {
-      const [label, color] = EXAM_STATUS[r.status] || [r.status, ""];
       const ops = r.status === "pending"
         ? `<button data-claim="${r.id}">领取</button><button class="ghost" data-report="${r.id}">出报告</button>`
         : `<button data-report="${r.id}">出报告</button>`;
       return card(
         kv("申请单", esc(r.id)) + kv("中心", esc(CENTER_NAMES[r.center_type] || r.center_type)) +
-        kv("项目", esc(r.item_name)) + kv("状态", `<span class="tag ${color}">${esc(label)}</span>`),
+        kv("项目", esc(r.item_name)) + kv("状态", statusTag(EXAM_STATUS, r.status)),
         ops
       );
     }).join("");
@@ -686,10 +684,9 @@ async function loadSurgery() {
   $("#surgery-requests").innerHTML = `<div class="sec-title">待填术中记录（${pending.length}）</div>` + (
     pending.length
       ? pending.map((r) => {
-          const [text, color] = SURGERY_STATUS_NAMES[r.status] || [r.status, ""];
           return card(
             `${kv("术式", esc(r.surgery_name))}${kv("住院号", String(r.admission_id))}
-             ${kv("状态", `<span class="tag ${color}">${esc(text)}</span>`)}`,
+             ${kv("状态", statusTag(SURGERY_STATUS_NAMES, r.status))}`,
             `<button class="op" data-record="${r.id}">填写术中记录</button>`);
         }).join("")
       : '<p class="empty">没有待填写的术中记录</p>');

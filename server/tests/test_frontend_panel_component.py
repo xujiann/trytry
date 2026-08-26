@@ -161,15 +161,20 @@ def test_已迁移的页面标题不得重复转义(page):
         )
 
 
-def test_统一状态列的回落值必须转义():
-    """`UNIFIED_STATUS` 查不到时 `text` 就是后端原始状态码，是服务端数据。
+def test_统一状态列走组件而不是手写():
+    """`UNIFIED_STATUS` 查不到时回落成后端原始状态码——那是服务端数据。
 
-    这条是本轮真正修掉的那个裸插值的回归。
+    这条原本钉的是"手写的那一处有没有 `esc()`"（2026-08-22 修掉的那个裸插值）。
+    现在这一列已收敛到 `statusTag()`（P2-26），判据随之**变强**：不再是
+    "这一处记得转义了吗"，而是"这一处根本不自己拼 HTML"——转义由组件负责，
+    调用点连忘的机会都没有。组件自身的转义由
+    `test_frontend_shared_utils.py::test_statusTag把文案与配色都转义了` 盯着。
     """
-    fn = _fn(MGMT, MIGRATED)
-    assert re.search(r'class="tag \$\{color\}">\$\{esc\(text\)\}', fn), (
-        "统一状态列的 text 没过 esc()——查不到映射时它是后端原始状态码"
+    fn = _code(_fn(MGMT, MIGRATED))
+    assert "statusTag(UNIFIED_STATUS, i.status)" in fn, (
+        "统一状态列没走 statusTag()——退回手写就等于把转义责任又交回给人"
     )
+    assert 'class="tag ${color}"' not in fn, "又出现了手写的状态标签"
     assert "${text}</span>" not in fn, "还留着裸插的 ${text}"
 
 

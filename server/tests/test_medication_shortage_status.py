@@ -56,15 +56,20 @@ def test_终态一个都不显示流转按钮():
     assert terminal, "终态集合算空了，这条用例失去了区分力"
 
 
-def test_状态标签查表必须带兜底():
+def test_状态标签走组件而不是手写查表():
     """回归第 1 条：`SS[s.status]` 没有兜底会让整页白屏。
 
+    原本钉的是"手写的那一处有没有补上 `|| [...]` 兜底"。这一列现已收敛到
+    `statusTag()`（P2-26），判据随之变强——查表、兜底、转义三件事都在组件里，
+    调用点**不可能**再漏掉任何一件。`statusTag` 本身查不到就原样显示状态码，
+    永远不会解构 undefined。
+
     通用形状守卫在 `test_frontend_escape_guard.py`；这里再钉一次具体位置，
-    因为这一处有过真实故障，而通用守卫是按形状扫的、将来可能被调窄。
+    因为这一处有过真实故障（整页打不开），而通用守卫是按形状扫的、将来可能被调窄。
     """
     fn = _render_medication()
-    assert re.search(r"const \[t, col\] = SS\[s\.status\] \|\| \[", fn), (
-        "SS[s.status] 又没有兜底了——映射未命中时解构 undefined 抛 TypeError，"
-        "整页白屏"
+    assert "statusTag(SS, s.status)" in fn, (
+        "缺药登记的状态列没走 statusTag()——退回手写查表就会重新面对"
+        "「忘了写兜底 → 解构 undefined → 整页白屏」这条老路"
     )
-    assert "${esc(t)}" in fn, "兜底出来的是后端原始状态码，必须 esc()"
+    assert "const [t, col] = SS[" not in fn, "又退回手写解构了"

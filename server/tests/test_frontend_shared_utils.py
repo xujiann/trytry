@@ -77,3 +77,61 @@ def test_esc_覆盖五个危险字符():
                          ('"', "&quot;"), ("'", "&#39;")):
         assert entity in source, f"esc 的转义表少了 {char!r} → {entity}"
     assert "?? \"\"" in source, "null/undefined 应转成空串，而不是字面量 'null'"
+
+
+# ---------------------------------------------------------------------------
+# ADR-0009 第二步 / P2-26：`statusTag()` 也收成一份实现
+#
+# 起因是本轮那 33 处未转义：全都是在手抄同一段三行代码，而其中的 `esc()` 谁都
+# 可以忘。收进组件之后，调用点连"要不要转义"这个问题都不会遇到——这正是
+# ADR-0009 的论点（`barChart` 是第一个样本，这是第二个，也是有血的那个）。
+#
+# 放 shared.js 而不是 core.js：`.panel` 是管理端独有的标记，而 `.tag` 三端都在用
+# （style.css 与 m/m.css 各自定义 `.tag` 与 `.tag.red/.green/.orange`，
+# 配色不同、类名约定一致）。判据始终是"三端是不是真的都在用"。
+
+def test_shared_js_定义了statusTag():
+    source = SHARED.read_text(encoding="utf-8")
+    assert re.search(r"^function statusTag\(", source, re.M), "shared.js 应定义 statusTag"
+
+
+def test_statusTag把文案与配色都转义了():
+    """转义收在组件里是它存在的**全部理由**——漏一个就白抽了。"""
+    source = SHARED.read_text(encoding="utf-8")
+    body = source[source.index("function statusTag("):]
+    body = body[: body.index("\n}")]
+    assert "esc(hit ? hit[0] : key ?? \"\")" in body, "statusTag 没有转义文案"
+    assert "esc(hit ? hit[1] : \"\")" in body, "statusTag 没有转义配色类名"
+
+
+def test_statusTag兜底用空值合并而不是或():
+    """`key || ""` 会把数字 0 吞成空白，而本仓库有数字状态码（慢病分级 1/2/3）。
+
+    这不是假想：`scripts/statustag_equiv.js` 的等价性矩阵当场抓到过这一条。
+    """
+    source = SHARED.read_text(encoding="utf-8")
+    body = source[source.index("function statusTag("):]
+    body = body[: body.index("\n}")]
+    assert "key ?? \"\"" in body, "兜底应当用 ?? 而不是 ||，否则数字 0 会被吞掉"
+    assert "key || " not in body, "statusTag 内部不该用 || 兜底 key"
+
+
+@pytest.mark.parametrize(
+    "path,helper",
+    [(STATIC / "pages-spd.js", "spdTag"), (STATIC / "m" / "m.js", "spdTagOf")],
+    ids=["pages-spd", "m.js"],
+)
+def test_慢专病的标签助手必须委托而不是再抄一遍(path, helper):
+    """两个助手此前是**逐字相同**的两份实现，现在都只许委托给 statusTag。
+
+    它们各自保留"空状态显示 `—`"的约定（管理端历来显示空白），那条约定写在
+    调用点上即可——合并实现不等于统一行为，后者是改字节。
+    """
+    source = path.read_text(encoding="utf-8")
+    body = source[source.index(f"function {helper}("):]
+    body = body[: body.index("\n}")]
+    assert "statusTag(" in body, f"{helper} 应当委托给 statusTag"
+    assert "<span" not in body, (
+        f"{helper} 里又出现了 <span> 标记——它应该只委托，不再自己拼 HTML"
+    )
+    assert "esc(" not in body, f"{helper} 不该再自己转义，那是 statusTag 的事"
