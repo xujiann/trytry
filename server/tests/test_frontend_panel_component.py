@@ -60,6 +60,42 @@ def _code(src: str) -> str:
     return "\n".join(re.sub(r"//.*$", "", line) for line in src.splitlines())
 
 
+def _panel_titles(src: str):
+    """把每个 `panel(` 调用的**第一个实参**切出来。
+
+    初版判据是一条正则 `panel\\(\\s*`[^`]*\\$\\{esc\\(`——它要求 `panel(` 后面
+    紧跟一个反引号，于是只认"模板字符串标题"。自审时试出来：标题是**单个动态值**
+    时最自然的写法是 `panel(esc(stats.scope), …)`，一个反引号都没有，判据直接漏掉，
+    而这恰恰是迁移前 `<h3>接口调用（${esc(stats.scope)}）</h3>` 最容易被改成的样子。
+    改成按逗号切实参——判据要认的是"标题里有没有 esc()"，不是"标题怎么引号"。
+    """
+    titles, i = [], 0
+    while (i := src.find("panel(", i)) != -1:
+        i += len("panel(")
+        depth, start, quote = 0, i, None
+        while i < len(src):
+            ch = src[i]
+            if quote:                                   # 字符串/模板内部不看括号
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+            elif ch in "\"'`":
+                quote = ch
+            elif ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                if depth == 0:
+                    break                               # 只有一个实参
+                depth -= 1
+            elif ch == "," and depth == 0:
+                break                                   # 第一个实参到此为止
+            i += 1
+        titles.append(src[start:i])
+    return titles
+
+
 # ------------------------------------------------------------ 组件自身
 def test_panel转义标题():
     """标题由组件负责转义——这是抽组件的**全部理由**（CLAUDE.md §8）。"""
@@ -118,12 +154,11 @@ def test_已迁移的页面标题不得重复转义(page):
     转义序列——是**改字节**。迁 `renderMonitor` 时原样保留 `esc(stats.scope)`
     当场被渲染比对器抓到（`本实例进程内&lt;b&gt;` → `本实例进程内&amp;lt;b&amp;gt;`）。
     """
-    fn = _fn(MGMT, page)
-    bad = re.findall(r"panel\(\s*`[^`]*\$\{esc\(", fn)
-    assert bad == [], (
-        f"{page} 的 panel() 标题里还留着 esc()——组件已经转义过一次了，"
-        f"留着就是转两遍（改字节）"
-    )
+    for title in _panel_titles(_code(_fn(MGMT, page))):
+        assert "esc(" not in title, (
+            f"{page} 的 panel() 标题 `{title.strip()[:60]}` 里还留着 esc()——"
+            f"组件已经转义过一次了，留着就是转两遍（改字节）"
+        )
 
 
 def test_统一状态列的回落值必须转义():
@@ -150,3 +185,31 @@ def test_守卫本身没瞎():
     assert 500 < len(fn) < 4000, f"{MIGRATED} 取到 {len(fn)} 字符，函数体范围不对"
     assert "sr-form" in fn, "取到的不是这个函数"
     assert len(_fn(CORE, "panel")) < 400, "panel 函数体取得过长，范围不对"
+
+
+@pytest.mark.parametrize(
+    "label,call",
+    [
+        # 初版判据要求 `panel(` 后紧跟反引号，只认模板字符串标题。
+        # 标题是**单个动态值**时最自然的写法没有反引号，直接漏掉——而它恰恰是
+        # 迁移前 `<h3>接口调用（${esc(stats.scope)}）</h3>` 最容易被改成的样子。
+        ("裸 esc() 标题", "panel(esc(stats.scope), `body`)"),
+        ("单引号拼接标题", "panel('接口调用（' + esc(s.scope) + '）', `body`)"),
+        ("模板字符串标题", "panel(`接口调用（${esc(s.scope)}）`, `body`)"),
+    ],
+)
+def test_重复转义判据不得被标题的写法绕开(label, call):
+    titles = _panel_titles(call)
+    assert titles and any("esc(" in t for t in titles), (
+        f"「{label}」这种写法绕过了「标题不得重复转义」的判据"
+    )
+
+
+def test_标题切分不会把body也算进来():
+    """防误报：`body` 里出现 esc() 是**正常且必须**的（组件不转义 body）。
+
+    切分要是把整个调用都当成标题，这条守卫会把每一个用了 esc() 的页面都报红，
+    最后只能被删掉或加豁免。
+    """
+    titles = _panel_titles('panel("运行环境", `<b>${esc(ov.instance_id)}</b>`)')
+    assert titles == ['"运行环境"'], f"标题切分越界了：{titles}"

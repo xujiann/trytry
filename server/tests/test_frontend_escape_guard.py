@@ -31,6 +31,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
 
 #: ${IDENT[...] || bare.chain} —— 整体未包 esc()、兜底未转义
@@ -38,9 +40,17 @@ BARE_MAP_FALLBACK = re.compile(
     r"\$\{\s*[A-Za-z_$][\w$]*\[[^\]\n]+\]\s*\|\|\s*[A-Za-z_$][\w$.]*\s*\}"
 )
 
-#: const [text, color] = MAP[…] || [兜底, ""]  —— 捕获变量名与兜底表达式
+#: const [text, …] = 任意映射[…] || [兜底, …]  —— 捕获变量名与兜底表达式
+#:
+#: 判据刻意**不**限定映射名首字母大写、也**不**限定兜底数组的第二个元素是 `""`。
+#: 初版两条都限了，自审时用合成用例试出来：`st[p.status] || [p.status, ""]`
+#: （小写映射名，本仓库 `spdTag(map, key)` 就是小写形参）和
+#: `ST[p.status] || [p.status, "orange"]`（兜底带默认配色）都能绕过去——
+#: 而这两种写法的缺陷与被抓到的那 33 处**一模一样**。
+#: 守卫的判据比缺陷窄，等于给缺陷留了个拼写上的后门；本轮的教训正是"扫形状"，
+#: 那就不该让形状被首字母大小写这种无关的东西挡住。
 DESTRUCTURED_FALLBACK = re.compile(
-    r"const \[(\w+), *\w+\] *= *[A-Z_][\w]*\[[^\]\n]+\]\s*\|\|\s*\[([^\]\n]*?),\s*\"\"\]"
+    r"const \[(\w+),[^\]\n]*\] *= *[A-Za-z_$][\w$]*\[[^\]\n]+\]\s*\|\|\s*\[([^\]\n]*?)(?:,[^\]\n]*)?\]"
 )
 
 
@@ -147,6 +157,31 @@ def test_守卫本身没瞎(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "label,src",
+    [
+        # 初版判据限定了"映射名首字母大写"。本仓库的 `spdTag(map, key)` 就用小写形参，
+        # 照着它写一个不安全的版本立刻绕过去。
+        ("小写映射名", 'const [text, color] = st[p.status] || [p.status, ""];'),
+        # 初版判据要求兜底数组第二个元素**恰好**是 `""`。带个默认配色就绕过去了，
+        # 而缺陷一模一样。
+        ("兜底带默认配色", 'const [text, color] = ST[p.status] || [p.status, "orange"];'),
+        # 初版判据写死了"两元解构"。
+        ("三元解构", 'const [text, color, x] = ST[p.status] || [p.status, "", 1];'),
+    ],
+)
+def test_判据不得被无关的拼写差异绕开(tmp_path, label, src):
+    """同一个缺陷换个拼写就漏掉，等于给它留后门。
+
+    这三条都是自审时用合成用例试出来的——初版判据（大写映射名 + 兜底恰好是 `""`
+    + 两元解构）三条全能绕过。本轮的教训是"扫形状"，那形状就不该被首字母大小写、
+    默认配色、解构元数这类与缺陷无关的东西挡住。
+    """
+    f = tmp_path / "bypass.js"
+    f.write_text(src + '\nreturn `<span class="tag ${color}">${text}</span>`;\n', encoding="utf-8")
+    assert _destructured_offenders([f]), f"「{label}」这种写法绕过了判据"
+
+
 # ---------------------------------------------------------------------------
 # 第三种失败方式：**根本没有兜底**
 #
@@ -161,11 +196,19 @@ def test_守卫本身没瞎(tmp_path):
 # collected / no_show / cancelled（`medication.py` 的 `shortage.status = body.result`）
 # ——只要有一条缺药登记结了案，这一页就再也打不开。
 #
-# 判据故意收得很窄：只认"解构 + 大写映射名 + 无 `||`"。别的查表写法
-# （`MAP[x]` 取单值、`MAP[x]?.y`）不在此列，它们拿到 undefined 不会抛。
+# 判据只认"**数组解构** + 查表 + 无 `||`"——因为会抛的正是解构这一步。
+# 别的查表写法（`MAP[x]` 取单值、`MAP[x]?.y`）不在此列：它们拿到 undefined
+# 不会抛，只会把 "undefined" 显示出来。那是另一类问题（显示缺陷而非崩溃），
+# 已登记在 docs/TECH_DEBT.md，不混进这条守卫——一条守卫混两种严重度，
+# 迟早会因为噪声被加豁免。
 
+#: 判据同样不限定大小写、不要求分号（JS 有 ASI，不写分号照样跑）、不限定解构元数。
+#: 初版三条都限了，合成用例一试就绕过去：`ss[s.status];`（小写）、
+#: `SS[s.status]`（无分号）、`const [t, col, x] = SS[s.status];`（三元解构）——
+#: 三种在 `table()` 回调里都照样整页白屏。
 NO_FALLBACK_DESTRUCTURE = re.compile(
-    r"const \[\w+, *\w+\] *= *([A-Z_][\w]*)\[([^\]\n]+)\]\s*;"
+    r"const \[\w+,[^\]\n]*\] *= *([A-Za-z_$][\w$]*)\[([^\]\n]+)\]\s*(?:;|$)",
+    re.MULTILINE,
 )
 
 
@@ -202,3 +245,19 @@ def test_无兜底守卫本身没瞎(tmp_path):
     good = tmp_path / "good.js"
     good.write_text('const [t, col] = SS[s.status] || [s.status, ""];\n', encoding="utf-8")
     assert _no_fallback_offenders([good]) == [], "带兜底的写法被误报了"
+
+
+@pytest.mark.parametrize(
+    "label,src",
+    [
+        ("小写映射名", "const [t, col] = ss[s.status];"),
+        # JS 有 ASI，不写分号照样跑；初版判据要求行尾分号。
+        ("无分号(ASI)", "const [t, col] = SS[s.status]\n"),
+        ("三元解构", "const [t, col, x] = SS[s.status];"),
+    ],
+)
+def test_无兜底判据不得被无关的拼写差异绕开(tmp_path, label, src):
+    """三种写法在 `table()` 回调里都照样整页白屏，判据不能只认其中一种。"""
+    f = tmp_path / "bypass.js"
+    f.write_text(src, encoding="utf-8")
+    assert _no_fallback_offenders([f]), f"「{label}」这种写法绕过了判据"
