@@ -195,19 +195,20 @@ async function renderFollowups() {
   $("#page-desc").textContent = "慢病 / 出院 / 术后 / 妇幼四类随访统一任务；出院与手术结案自动派生";
   const [pending, overdue, stats] = await Promise.all([
     api("/api/followups?status=pending"), api("/api/followups/overdue"), api("/api/followups/stats")]);
-  $("#page-body").innerHTML = `
-    <div class="panel"><h3>随访完成情况</h3>${
+  // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  $("#page-body").innerHTML =
+    panel("随访完成情况",
       table(["类别", "待随访", "已完成", "已取消", "超期", "完成率"], stats, (s) =>
         `<tr><td>${esc(s.category_name)}</td><td>${s.pending}</td><td>${s.done}</td>
          <td>${s.cancelled}</td><td><span class="tag ${s.overdue ? "red" : "green"}">${s.overdue}</span></td>
-         <td>${s.completion_rate_pct}%</td></tr>`)}
-      <p class="desc">完成率分母排除已取消项——取消的任务不该拉低随访绩效。</p></div>
-    <div class="panel"><h3>超期未随访（${overdue.length}）</h3>${
+         <td>${s.completion_rate_pct}%</td></tr>`)
+      + '<p class="desc">完成率分母排除已取消项——取消的任务不该拉低随访绩效。</p>')
+    + panel(`超期未随访（${overdue.length}）`,
       table(["ID", "患者", "类别", "事项", "应随访日", "操作"], overdue, (t) =>
         `<tr><td>${t.id}</td><td>${esc(t.patient_name)}</td><td>${esc(t.category_name)}</td>
          <td>${esc(t.title)}</td><td><span class="tag red">${esc(t.due_date)}</span></td>
-         <td><button class="btn secondary" data-done="${t.id}">完成随访</button></td></tr>`)}</div>
-    <div class="panel"><h3>待随访任务（${pending.length}）</h3>
+         <td><button class="btn secondary" data-done="${t.id}">完成随访</button></td></tr>`))
+    + panel(`待随访任务（${pending.length}）`, `
       <form class="inline" id="fu-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="category"><option value="chronic">慢病随访</option><option value="discharge">出院随访</option>
@@ -219,7 +220,7 @@ async function renderFollowups() {
         `<tr><td>${t.id}</td><td>${esc(t.patient_name)}</td><td>${esc(t.org_name)}</td>
          <td>${esc(t.category_name)}</td><td>${esc(t.title)}</td><td>${esc(t.due_date)}</td>
          <td><button class="btn secondary" data-done="${t.id}">完成</button>
-             <button class="btn danger" data-cancel="${t.id}">取消</button></td></tr>`)}</div>`;
+             <button class="btn danger" data-cancel="${t.id}">取消</button></td></tr>`)}`);
   $("#fu-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/followups", formJson(e.target, ["patient_id", "org_id"]), "#fu-msg"); };
   $("#page-body").onclick = async (e) => {
@@ -759,8 +760,9 @@ async function renderServiceRequests() {
 async function renderJobs() {
   $("#page-desc").textContent = "任务注册表与执行留痕；多实例下靠 Redis 抢锁保证只跑一次";
   const [jobs, runs] = await Promise.all([api("/api/jobs"), api("/api/jobs/runs")]);
-  $("#page-body").innerHTML = `
-    <div class="panel"><h3>任务清单（${jobs.length}）</h3>${
+  // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  $("#page-body").innerHTML =
+    panel(`任务清单（${jobs.length}）`,
       table(["任务", "说明", "间隔", "启停", "上次执行", "上次结果", "下次到期", "操作"], jobs, (j) =>
         `<tr><td><code>${esc(j.name)}</code></td><td>${esc(j.title)}</td>
          <td>${Math.round(j.interval_seconds / 60)} 分钟</td>
@@ -772,15 +774,15 @@ async function renderJobs() {
          <td><button class="btn secondary" data-run="${esc(j.name)}">立即执行</button>
              <button class="btn" data-toggle="${esc(j.name)}" data-enabled="${j.enabled}">${j.enabled ? "停用" : "启用"}</button>
              <button class="btn" data-interval="${esc(j.name)}">改间隔</button>
-             ${j.implemented ? "" : '<span class="tag red">无实现</span>'}</td></tr>`)}
-      <p class="msg" id="job-msg"></p></div>
-    <div class="panel"><h3>执行历史（最近 ${runs.length} 条）</h3>${
+             ${j.implemented ? "" : '<span class="tag red">无实现</span>'}</td></tr>`)
+      + '<p class="msg" id="job-msg"></p>')
+    + panel(`执行历史（最近 ${runs.length} 条）`,
       table(["时间", "任务", "触发", "结果", "处理数", "耗时", "摘要"], runs, (r) =>
         `<tr><td>${esc(r.created_at.slice(0, 19).replace("T", " "))}</td><td><code>${esc(r.job_name)}</code></td>
          <td>${r.trigger === "manual" ? "人工" : "计划"}</td>
          <td><span class="tag ${r.status === "succeeded" ? "green" : "red"}">${
            r.status === "succeeded" ? "成功" : "失败"}</span></td>
-         <td>${r.affected}</td><td>${r.duration_ms} ms</td><td>${esc(r.message)}</td></tr>`)}</div>`;
+         <td>${r.affected}</td><td>${r.duration_ms} ms</td><td>${esc(r.message)}</td></tr>`));
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
@@ -807,8 +809,9 @@ async function renderSurveys() {
     api("/api/surveys/stats"), api("/api/surveys?limit=50"), api("/api/surveys?max_score=2&limit=50")]);
   const totalCount = stats.reduce((s, x) => s + x.count, 0);
   const totalNegative = stats.reduce((s, x) => s + x.negative, 0);
-  $("#page-body").innerHTML = `
-    <div class="panel"><h3>总览</h3>
+  // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  $("#page-body").innerHTML =
+    panel("总览", `
       <div class="cards">
         <div class="card"><span class="k">评价总数</span><b>${totalCount}</b></div>
         <div class="card"><span class="k">差评（≤2分）</span><b>${totalNegative}</b></div>
@@ -821,14 +824,14 @@ async function renderSurveys() {
          ${[1, 2, 3, 4, 5].map((n) => `<td>${s.distribution[String(n)]}</td>`).join("")}
          <td><span class="tag ${s.negative ? "red" : "green"}">${s.negative}</span></td>
          <td>${s.negative_rate_pct}%</td></tr>`)}
-      ${stats.length ? barChart(stats.map((s) => [SURVEY_TARGETS[s.target_type] || s.target_type, s.avg_score])) : ""}</div>
-    <div class="panel"><h3>差评清单（${negative.length}）</h3>
+      ${stats.length ? barChart(stats.map((s) => [SURVEY_TARGETS[s.target_type] || s.target_type, s.avg_score])) : ""}`)
+    + panel(`差评清单（${negative.length}）`, `
       <p class="desc">带评语的差评最有改进价值——这是投诉发生前唯一的信号。</p>
       ${table(["日期", "对象", "患者", "评分", "评语"], negative, (s) =>
         `<tr><td>${esc(s.date)}</td><td>${esc(SURVEY_TARGETS[s.target_type] || s.target_type)}</td>
          <td>${esc(s.patient_name)}</td><td><span class="tag red">${s.score}</span></td>
-         <td>${esc(s.comment || "（未填写）")}</td></tr>`)}</div>
-    <div class="panel"><h3>代录评价（经办）</h3>
+         <td>${esc(s.comment || "（未填写）")}</td></tr>`)}`)
+    + panel("代录评价（经办）", `
       <form class="inline" id="survey-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="target_type">${Object.entries(SURVEY_TARGETS).map(([k, v]) =>
           `<option value="${k}">${v}</option>`).join("")}</select>
@@ -836,13 +839,13 @@ async function renderSurveys() {
         <input name="score" type="number" min="1" max="5" placeholder="评分1-5" required>
         <input name="comment" placeholder="评语" style="min-width:240px"><button>提交</button></form>
       <p class="msg" id="survey-msg"></p>
-      <p class="desc">居民本人评价走居民端 /m，此处仅供窗口代录。</p></div>
-    <div class="panel"><h3>最近评价（${recent.length}）</h3>${
+      <p class="desc">居民本人评价走居民端 /m，此处仅供窗口代录。</p>`)
+    + panel(`最近评价（${recent.length}）`,
       table(["日期", "对象", "患者", "评分", "评语"], recent, (s) =>
         `<tr><td>${esc(s.date)}</td><td>${esc(SURVEY_TARGETS[s.target_type] || s.target_type)}</td>
          <td>${esc(s.patient_name)}</td>
          <td><span class="tag ${s.score >= 4 ? "green" : s.score <= 2 ? "red" : "orange"}">${s.score}</span></td>
-         <td>${esc(s.comment || "—")}</td></tr>`)}</div>`;
+         <td>${esc(s.comment || "—")}</td></tr>`));
   $("#survey-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/surveys", formJson(e.target, ["patient_id", "target_id", "score"]), "#survey-msg"); };
 }
@@ -871,8 +874,8 @@ async function renderNotifications() {
     "站内消息解决「人不在线也不丢」；求快仍看铃铛与实时广播，此处是可追溯的留存";
   const rows = await api(`/api/notifications?limit=100${notifyUnreadOnly ? "&unread_only=true" : ""}`);
   const { unread } = await api("/api/notifications/unread-count");
-  $("#page-body").innerHTML = `
-    <div class="panel"><h3>我的消息</h3>
+  // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  $("#page-body").innerHTML = panel("我的消息", `
       <div class="cards">
         <div class="card"><span class="k">未读</span><b>${unread}</b></div>
         <div class="card"><span class="k">本页条数</span><b>${rows.length}</b></div>
@@ -888,7 +891,7 @@ async function renderNotifications() {
          <td>${n.read ? "" : `<button data-ntread="${n.id}">标记已读</button>`}
              ${NOTIFY_LINK_PAGE[n.link_type]
                ? `<button data-ntgo="${NOTIFY_LINK_PAGE[n.link_type]}">前往处理</button>` : ""}</td></tr>`)}
-    </div>`;
+    `);
   $("#nt-toggle").onclick = () => { notifyUnreadOnly = !notifyUnreadOnly; route(); };
   $("#nt-readall").onclick = async () => {
     await postAction("/api/notifications/read-all", null, "#nt-msg");
@@ -915,17 +918,18 @@ async function renderClinicalIndicators() {
   ]);
   const byDimension = {};
   quality.indicators.forEach((i) => (byDimension[i.dimension] ||= []).push(i));
-  $("#page-body").innerHTML = `
-    <div class="panel"><h3>医疗质量指标（${esc(quality.period)}）</h3>
-      ${Object.entries(byDimension).map(([dim, items]) => `<h4>${esc(dim)}</h4>${
+  // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 末尾的 barChart 刻意留在面板**外**——它原本就不在任何 panel 里。
+  $("#page-body").innerHTML =
+    panel(`医疗质量指标（${quality.period}）`,
+      Object.entries(byDimension).map(([dim, items]) => `<h4>${esc(dim)}</h4>${
         table(["指标", "分子", "分母", "比率", "口径"], items, (i) =>
           `<tr><td><b>${esc(i.name)}</b></td><td>${i.numerator}</td>
            <td>${i.denominator || "—"}${i.uncollected
              ? `<span class="tag orange">未采集 ${i.uncollected}</span>` : ""}</td>
            <td>${i.denominator ? `${i.rate_pct}%` : "样本为空"}</td>
-           <td class="muted">${esc(i.caliber)}</td></tr>`)}`).join("")}
-    </div>
-    <div class="panel"><h3>用药结构（${esc(drug.period)}）</h3>
+           <td class="muted">${esc(i.caliber)}</td></tr>`)}`).join(""))
+    + panel(`用药结构（${drug.period}）`, `
       <p class="desc">${esc(drug.caliber.drug_ratio)}；${esc(drug.caliber.antibiotic_intensity)}</p>
       ${(drug.warnings || []).map((w) => `<p class="msg err">${esc(w)}</p>`).join("")}
       ${table(["机构", "住院药占比", "门诊药占比", "抗菌药 DDDs", "收治人天", "使用强度", "未维护DDD"],
@@ -938,9 +942,9 @@ async function renderClinicalIndicators() {
              : `<b>${o.antibiotic_intensity}</b>`}</td>
            <td>${o.ddd_uncovered_items
              ? `<span class="tag red">${o.ddd_uncovered_items}</span>` : "—"}</td></tr>`)}
-    </div>
-    ${barChart(drug.orgs.filter((o) => o.antibiotic_intensity > 0 && !o.intensity_unstable)
-      .map((o) => [o.org_name, o.antibiotic_intensity]), { unit: " DDDs/百人天" })}`;
+    `)
+    + barChart(drug.orgs.filter((o) => o.antibiotic_intensity > 0 && !o.intensity_unstable)
+      .map((o) => [o.org_name, o.antibiotic_intensity]), { unit: " DDDs/百人天" });
 }
 
 /* ---------------- 运行监控（浙#47 / #46） ---------------- */
@@ -953,8 +957,11 @@ async function renderMonitor() {
     api("/api/monitor/nodes"), api("/api/audit/stats?days=30"),
   ]);
   const dot = (ok) => `<span class="tag ${ok ? "green" : "red"}">${ok ? "正常" : "异常"}</span>`;
-  $("#page-body").innerHTML = `
-    <div class="panel"><h3>运行环境</h3>
+  // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 标题里的 `stats.scope` / `audit.scope` 原本手写了 `esc()`，迁移后**必须去掉**——
+  // `panel()` 自己转义 title，留着就是转义两遍（`&` 会变成 `&amp;amp;`），那是改字节。
+  $("#page-body").innerHTML =
+    panel("运行环境", `
       <div class="cards">
         <div class="card"><span class="k">实例</span><b>${esc(ov.instance_id)}</b></div>
         <div class="card"><span class="k">运行时长</span><b>${
@@ -966,17 +973,15 @@ async function renderMonitor() {
           ov.redis.configured ? dot(ov.redis.connected) : '<span class="tag orange">未配置</span>'}</b></div>
       </div>
       ${ov.redis.note ? `<p class="msg err">${esc(ov.redis.note)}</p>` : ""}
-    </div>
-
-    <div class="panel"><h3>集群节点</h3>
+    `)
+    + panel("集群节点", `
       ${nodes.instances
         ? table(["实例", "本机", "运行时长(秒)"], nodes.instances, (n) =>
             `<tr><td>${esc(n.instance_id)}</td><td>${n.self ? "是" : ""}</td>
              <td>${n.uptime_seconds ?? "—"}</td></tr>`)
         : `<p class="msg err">${esc(nodes.note)}</p>`}
-    </div>
-
-    <div class="panel"><h3>接口调用（${esc(stats.scope)}）</h3>
+    `)
+    + panel(`接口调用（${stats.scope}）`, `
       <div class="cards">
         <div class="card"><span class="k">请求总数</span><b>${stats.total_requests}</b></div>
         <div class="card"><span class="k">平均耗时</span><b>${stats.avg_duration_ms}ms</b></div>
@@ -995,9 +1000,8 @@ async function renderMonitor() {
       ${table(["时间", "方法", "路径", "状态"], stats.error_samples, (r) =>
         `<tr><td>${esc(r.at)}</td><td>${esc(r.method)}</td><td>${esc(r.path)}</td>
          <td><span class="tag ${r.status >= 500 ? "red" : "orange"}">${r.status}</span></td></tr>`)}
-    </div>
-
-    <div class="panel"><h3>审计统计（近 ${audit.days} 天 · ${esc(audit.scope)}）</h3>
+    `)
+    + panel(`审计统计（近 ${audit.days} 天 · ${audit.scope}）`, `
       <div class="cards">
         <div class="card"><span class="k">写操作</span><b>${audit.total}</b></div>
         <div class="card"><span class="k">失败</span><b>${audit.failed}</b></div>
@@ -1017,7 +1021,7 @@ async function renderMonitor() {
       <h4>操作最多的用户</h4>
       ${table(["用户", "次数"], audit.top_users, (r) =>
         `<tr><td>${esc(r.key)}</td><td>${r.count}</td></tr>`)}
-    </div>`;
+    `);
 }
 
 /* ---------------- 就诊凭据（浙#27） ---------------- */

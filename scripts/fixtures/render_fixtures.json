@@ -1,0 +1,206 @@
+{
+  "_readme": [
+    "scripts/render_diff.js 的页面夹具（ADR-0009 第二步）。",
+    "两条约定，都是踩过坑才写下的：",
+    "① 列表**必须非空**——空列表下 table() 走「暂无数据」分支，整段模板根本不求值，",
+    "   比对结果永远是「一致」，什么都证明不了（契约治理那轮踩过同样的坑：空集钉不住字段）。",
+    "② 文本字段一律塞 XSS 载荷（<img src=x onerror=alert(1)> 之类）。这样比对就不只是",
+    "   「标签没挪位」，而是「转义行为没变」——迁移中手滑吃掉一个 esc()，差异会直接现形。"
+  ],
+  "followups": {
+    "fn": "renderFollowups",
+    "api": {
+      "/api/followups/stats": [
+        { "category_name": "慢病随访<img src=x onerror=alert(1)>", "pending": 12, "done": 40, "cancelled": 3, "overdue": 5, "completion_rate_pct": 76.9 },
+        { "category_name": "出院随访", "pending": 4, "done": 18, "cancelled": 0, "overdue": 0, "completion_rate_pct": 81.8 }
+      ],
+      "/api/followups/overdue": [
+        { "id": 7, "patient_name": "张\"三<b>", "category_name": "慢病随访", "title": "血压复测 & 用药核对", "due_date": "2026-08-01" },
+        { "id": 9, "patient_name": "李四", "category_name": "术后随访", "title": "切口愈合", "due_date": "2026-08-10" }
+      ],
+      "/api/followups?status=pending": [
+        { "id": 11, "patient_name": "王<五>", "org_name": "城关镇卫生院'", "category_name": "妇幼访视", "title": "产后 42 天", "due_date": "2026-08-30" },
+        { "id": 12, "patient_name": "赵六", "org_name": "红星村卫生室", "category_name": "慢病随访", "title": "血糖复测", "due_date": "2026-09-02" }
+      ]
+    }
+  },
+  "jobs": {
+    "fn": "renderJobs",
+    "api": {
+      "/api/jobs": [
+        { "name": "followup_derive<script>", "title": "出院/术后随访派生", "interval_seconds": 3600, "enabled": true, "last_run_at": "2026-08-26T03:00:00", "last_status": "succeeded", "next_run_at": "2026-08-26T04:00:00", "implemented": true },
+        { "name": "stock_alert", "title": "库存预警 & 效期", "interval_seconds": 900, "enabled": false, "last_run_at": null, "last_status": "failed", "next_run_at": null, "implemented": false }
+      ],
+      "/api/jobs/runs": [
+        { "created_at": "2026-08-26T03:00:01", "job_name": "followup_derive", "trigger": "manual", "status": "succeeded", "affected": 12, "duration_ms": 43, "message": "派生 12 条<img src=x onerror=alert(1)>" },
+        { "created_at": "2026-08-26T02:00:01", "job_name": "stock_alert", "trigger": "schedule", "status": "failed", "affected": 0, "duration_ms": 7, "message": "Redis 不可用" }
+      ]
+    }
+  },
+  "surveys": {
+    "fn": "renderSurveys",
+    "api": {
+      "/api/surveys/stats": [
+        {
+          "target_type": "contract",
+          "count": 120,
+          "avg_score": 4.3,
+          "distribution": { "1": 2, "2": 5, "3": 18, "4": 40, "5": 55 },
+          "negative": 7,
+          "negative_rate_pct": 5.83
+        },
+        {
+          "target_type": "未知类型<img src=x onerror=alert(1)>",
+          "count": 8,
+          "avg_score": 3.1,
+          "distribution": { "1": 1, "2": 2, "3": 2, "4": 2, "5": 1 },
+          "negative": 3,
+          "negative_rate_pct": 37.5
+        }
+      ],
+      "/api/surveys?limit=50": [
+        { "date": "2026-08-25", "target_type": "encounter", "patient_name": "张\"三", "score": 5, "comment": "很好 & 满意" },
+        { "date": "2026-08-24", "target_type": "未知类型<b>", "patient_name": "李四", "score": 2, "comment": null }
+      ],
+      "/api/surveys?max_score=2&limit=50": [
+        { "date": "2026-08-24", "target_type": "consultation", "patient_name": "王<五>", "score": 1, "comment": "等太久<img src=x onerror=alert(1)>" }
+      ]
+    }
+  },
+  "notifications": {
+    "fn": "renderNotifications",
+    "api": {
+      "/api/notifications?limit=100": [
+        { "id": 3, "created_at": "2026-08-26T09:12:00", "category": "critical_value", "title": "危急值：血钾 6.8<img src=x onerror=alert(1)>", "body": "请立即处理 & 回执", "read": false, "link_type": "exam_report" },
+        { "id": 4, "created_at": "2026-08-25T18:02:00", "category": "未知分类<b>", "title": "普通通知", "body": null, "read": true, "link_type": "none" }
+      ],
+      "/api/notifications/unread-count": {"unread": 1}
+    }
+  },
+  "clinical_indicators": {
+    "fn": "renderClinicalIndicators",
+    "api": {
+      "/api/quality/clinical-indicators": {
+        "period": "2026-08",
+        "indicators": [
+          { "dimension": "合理用药<img src=x onerror=alert(1)>", "name": "抗菌药使用率", "numerator": 32, "denominator": 210, "uncollected": 4, "rate_pct": 15.2, "caliber": "住院医嘱含抗菌药的人次 / 出院人次" },
+          { "dimension": "合理用药<img src=x onerror=alert(1)>", "name": "注射剂使用率", "numerator": 88, "denominator": 0, "uncollected": 0, "rate_pct": 0, "caliber": "门诊处方含注射剂张数 / 门诊处方总数" },
+          { "dimension": "医疗安全", "name": "非计划重返率", "numerator": 3, "denominator": 210, "uncollected": 0, "rate_pct": 1.4, "caliber": "31 天内非计划再入院 / 出院人次" }
+        ]
+      },
+      "/api/analytics/drug-use": {
+        "period": "2026-08",
+        "caliber": { "drug_ratio": "药品收入 / 医疗收入", "antibiotic_intensity": "DDDs / 收治人天 × 100 & 口径" },
+        "warnings": [
+          "部分机构 DDD 未维护<img src=x onerror=alert(1)>"
+        ],
+        "orgs": [
+          { "org_name": "县人民医院'", "inpatient_drug_ratio_pct": 28.4, "outpatient_drug_ratio_pct": 41.2, "antibiotic_ddds": 812, "bed_days": 5400, "antibiotic_intensity": 15.0, "intensity_unstable": false, "ddd_uncovered_items": 2 },
+          { "org_name": "城关镇卫生院", "inpatient_drug_ratio_pct": 33.1, "outpatient_drug_ratio_pct": 45.6, "antibiotic_ddds": 40, "bed_days": 120, "antibiotic_intensity": 33.3, "intensity_unstable": true, "ddd_uncovered_items": 0 }
+        ]
+      }
+    }
+  },
+  "materials": {
+    "_why": [
+      "这一页**没有迁面板**，收进来是为了给「解构兜底裸插值」那批修复留证据：",
+      "`PURCHASE_STATUS[p.status] || [p.status, \"\"]` 查不到映射时，`text` 就是后端原始状态码。",
+      "故意给一条状态码带载荷的记录——修复前它原样吐进 innerHTML，修复后被转义。",
+      "跑 `node scripts/render_diff.js --base <修复前的提交> materials` 就能看到这处差异。"
+    ],
+    "fn": "renderMaterials",
+    "api": {
+      "/api/materials/purchases": [
+        { "id": 1, "item_name": "监护仪", "spec": "12 导", "quantity": 3, "unit": "台", "status": "requested", "contract_no": null, "received_quantity": 0 },
+        { "id": 2, "item_name": "轮椅", "spec": "标准", "quantity": 5, "unit": "台", "status": "<img src=x onerror=alert(1)>", "contract_no": "HT-2026-08", "received_quantity": 5 }
+      ],
+      "/api/materials/consumables": [
+        { "barcode": "6901234567890", "name": "冠脉支架", "batch_no": "B2026-07", "expire_date": "2028-07-01", "status": "in_stock", "used_patient_name": null, "used_surgery_name": null },
+        { "barcode": "6901234567891", "name": "起搏器", "batch_no": "B2026-06", "expire_date": "2029-01-01", "status": "<script>alert(2)</script>", "used_patient_name": "张三", "used_surgery_name": "植入术" }
+      ]
+    }
+  },
+  "monitor": {
+    "fn": "renderMonitor",
+    "api": {
+      "/api/monitor/overview": {
+        "instance_id": "inst-a1<img src=x onerror=alert(1)>",
+        "uptime_seconds": 7325,
+        "environment": "dev & test",
+        "database": { "connected": true, "dialect": "sqlite'", "latency_ms": 3 },
+        "redis": { "configured": true, "connected": false, "note": "连接被拒绝 <b>127.0.0.1:6379</b>" }
+      },
+      "/api/monitor/api-stats": {
+        "scope": "本实例进程内<b>",
+        "total_requests": 4210,
+        "avg_duration_ms": 18,
+        "by_status_class": { "2xx": 4001, "4xx<img src=x onerror=alert(1)>": 190, "5xx": 19 },
+        "top_modules": [
+          { "module": "patients", "count": 900, "avg_duration_ms": 12 },
+          { "module": "analytics<b>", "count": 210, "avg_duration_ms": 260 }
+        ],
+        "slow_threshold_ms": 200,
+        "slow_samples": [
+          { "at": "2026-08-26T03:11:02", "method": "GET", "path": "/api/analytics/drilldown?q=<img src=x onerror=alert(1)>", "duration_ms": 410 }
+        ],
+        "error_samples": [
+          { "at": "2026-08-26T03:12:40", "method": "POST", "path": "/api/prescriptions'", "status": 500 },
+          { "at": "2026-08-26T03:12:41", "method": "GET", "path": "/api/x", "status": 404 }
+        ]
+      },
+      "/api/monitor/nodes": {
+        "instances": [
+          { "instance_id": "inst-a1<b>", "self": true, "uptime_seconds": 7325 },
+          { "instance_id": "inst-b2", "self": false, "uptime_seconds": null }
+        ],
+        "note": null
+      },
+      "/api/audit/stats": {
+        "days": 30,
+        "scope": "全县<img src=x onerror=alert(1)>",
+        "total": 1820,
+        "failed": 24,
+        "failed_ratio_pct": 1.32,
+        "daily": [
+          { "date": "2026-08-24", "ok": 60, "failed": 1 },
+          { "date": "2026-08-25", "ok": 72, "failed": 0 },
+          { "date": "2026-08-26", "ok": 41, "failed": 3 }
+        ],
+        "top_paths": [
+          { "key": "POST /api/prescriptions<img src=x onerror=alert(1)>", "count": 310 },
+          { "key": "POST /api/encounters", "count": 220 }
+        ],
+        "top_failed_paths": [
+          { "key": "POST /api/settlements'", "count": 9 }
+        ],
+        "top_users": [
+          { "key": "doctor01<b>", "count": 540 },
+          { "key": "nurse02", "count": 310 }
+        ]
+      }
+    }
+  },
+  "medication": {
+    "fn": "renderMedication",
+    "api": {
+      "/api/medication/shortages": [
+        { "id": 1, "org_id": 3, "drug_name": "二甲双胍", "quantity": 2, "status": "registered" },
+        { "id": 2, "org_id": 3, "drug_name": "厄贝沙坦", "quantity": 1, "status": "collected" }
+      ],
+      "/api/medication/usage-stats": {
+        "orgs": [],
+        "drugs": []
+      },
+      "/api/medication/supply-risk": {
+        "total": 0,
+        "risks": []
+      }
+    },
+    "_why": [
+      "这一页也**没有迁面板**，收进来是为了钉住一个真崩溃：",
+      "`const [t, col] = SS[s.status]` 没有兜底，而后端会把状态写成 collected / no_show /",
+      "cancelled（medication.py `shortage.status = body.result`）——`SS` 里没有这三个，",
+      "解构 undefined 直接 TypeError，**整页白屏**。夹具里第二条就是 collected。"
+    ]
+  }
+}
