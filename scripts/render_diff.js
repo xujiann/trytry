@@ -128,6 +128,13 @@ function buildSandbox() {
     alert() {}, confirm: () => true, prompt: () => "x",
     URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },
     Blob: function () {},
+    // vm 上下文不继承 Node 的全局，用到什么就得显式给什么。
+    // `FormData` 是替身（从假 DOM 上读不出真表单值，一律返回空 → 走"不加筛选"
+    // 那条分支，这正是首屏的行为）；`URLSearchParams` 直接借 Node 的实现。
+    FormData: function () { this.get = () => null; },
+    URLSearchParams,
+    encodeURIComponent,
+    JSON,
     __elements: elements,
   };
   sandbox.globalThis = sandbox;
@@ -165,11 +172,20 @@ async function render(staticDir, page, fnName) {
   }
   const fn = ctx[fnName];
   if (typeof fn !== "function") throw new Error(`找不到渲染函数 ${fnName}`);
-  return Promise.resolve(fn()).then(() => ({
-    html: ctx.__elements.get("#page-body") ? ctx.__elements.get("#page-body").innerHTML : "",
+  await fn();
+  // 捕获**每一个**被写过 innerHTML 的元素，不只是 `#page-body`。
+  // 起初只捕 `#page-body`，于是 `renderEsb` 这类"外壳写 page-body、表格由
+  // 内层函数写进 `#esb-messages`"的页面，表格那一段根本没进比对——而那正是
+  // 要取证的地方。按选择器排序拼起来，顺序稳定。
+  const panes = [...ctx.__elements.entries()]
+    .filter(([, node]) => node.innerHTML)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return {
+    html: panes.map(([sel, node]) => `/*${sel}*/${node.innerHTML}`).join("\n"),
+    panes: panes.map(([sel]) => sel),
     desc: ctx.__elements.get("#page-desc") ? ctx.__elements.get("#page-desc").textContent : "",
     calls: seen,
-  }));
+  };
 }
 
 /** 把 <base> 版本的 static/ 导出到临时目录（不碰工作区）。 */
@@ -254,7 +270,7 @@ async function compare(baseDir, pages) {
       bad++; continue;
     }
     if (a === b) {
-      console.log(`✓ ${page} (${spec.fn}): 忽略标签间空白后逐字符相同（${a.length} 字符, ${after.calls.length} 个接口）`);
+      console.log(`✓ ${page} (${spec.fn}): 忽略标签间空白后逐字符相同（${a.length} 字符, ${after.calls.length} 个接口, 容器 ${after.panes.join(" ")}）`);
     } else {
       const i = firstDiff(a, b);
       console.log(`✗ ${page} (${spec.fn}): 输出有差异，第 ${i} 字符起`);

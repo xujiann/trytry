@@ -206,5 +206,77 @@
       "解构 undefined 直接 TypeError，**整页白屏**。夹具里第二条就是 collected。",
       "夹具形状必须跟后端一致：`usage-stats` 后端返回**列表**（medication.py:230），起初写成了对象，`stats.length` 是 undefined → 直接走 \"暂无数据\"，全县用药地图那一段一次都没被渲染过，比对等于没覆盖它。"
     ]
+  },
+  "esb": {
+    "_why": [
+      "收进来是为了给 statusTag 收敛留证据——`ESB_MSG_STATUS` 那处是**手工**改的",
+      "（脚本因为把 CSS 的 `color:` 误判成第二处用途而跳过了它）。",
+      "另外这一页的消息表格由内层 drawMessages() 写进 `#esb-messages`，",
+      "不在 `#page-body` 里——比对器改成捕获全部容器之后才盖得到。"
+    ],
+    "fn": "renderEsb",
+    "api": {
+      "/api/esb/stats": {
+        "totals": { "endpoints": 3, "total": 1200, "success_rate_pct": 98.2, "backlog": 4, "dead": 1 },
+        "by_endpoint": [
+          { "code": "his<b>", "name": "HIS", "total": 900, "succeeded": 890, "failed": 6, "dead": 1, "success_rate_pct": 98.9 }
+        ]
+      },
+      "/api/esb/endpoints": [
+        { "id": 1, "code": "his<b>", "name": "县医院 HIS", "system_type_name": "HIS", "direction_name": "入站", "rate_limit_per_min": 60, "active": true },
+        { "id": 2, "code": "lis", "name": "检验 LIS'", "system_type_name": "LIS", "direction_name": "出站", "rate_limit_per_min": 30, "active": false }
+      ],
+      "/api/esb/flows": [
+        {
+          "code": "f1",
+          "name": "检验回传<b>",
+          "step_count": 2,
+          "steps": [
+            { "type": "transform" },
+            { "type": "persist" }
+          ],
+          "active": true
+        }
+      ],
+      "/api/esb/messages": [
+        { "id": 11, "endpoint_code": "his", "msg_type": "ADT^A01", "status": "queued", "retry_count": 0, "max_retries": 3, "last_error": "" },
+        { "id": 12, "endpoint_code": "lis", "msg_type": "ORU^R01", "status": "<img src=x onerror=alert(1)>", "retry_count": 2, "max_retries": 3, "last_error": "超时 & 重试" }
+      ]
+    }
+  },
+  "billing": {
+    "_why": [
+      "`PAY_STATUS` 那处也是**手工**改的（同一个 CSS `color:` 误判），故收进来取证。"
+    ],
+    "fn": "renderBilling",
+    "api": {
+      "/api/billing/charge-items": [
+        { "id": 1, "code": "T001", "name": "静脉输液<b>", "category": "treatment", "price": 12, "active": true },
+        { "id": 2, "code": "T002", "name": "换药'", "category": "treatment", "price": 8.5, "active": false }
+      ],
+      "/api/billing/settlements": [
+        { "id": 5, "patient_id": 3, "bill_type": "inpatient", "total_amount": 4210.5, "insurance_pay": 3000, "self_pay": 1210.5, "created_at": "2026-08-20T10:00:00" }
+      ],
+      "/api/billing/stats": [
+        { "bill_type": "inpatient", "count": 12, "total_amount": 50210, "avg_amount": 4184.2, "insurance_ratio_pct": 71.3 }
+      ],
+      "/api/billing/payments": [
+        { "id": 9, "settlement_id": 5, "channel_name": "微信支付", "amount": 1210.5, "refunded_amount": 0, "status": "paid", "trade_no": "WX-2026<b>", "fail_reason": null },
+        { "id": 10, "settlement_id": 5, "channel_name": "银联'", "amount": 100, "refunded_amount": 0, "status": "<img src=x onerror=alert(1)>", "trade_no": null, "fail_reason": "通道超时 & 未知" }
+      ],
+      "/api/billing/reconciliation": [
+        {
+          "date": "2026-08-25",
+          "total_orders": 12,
+          "total_amount": 5210,
+          "matched": 11,
+          "unmatched": 1,
+          "diff_amount": 100,
+          "diffs": [
+            { "type": "amount", "payment_id": 10, "trade_no": "UP-1<b>", "local_amount": 100, "channel_amount": 90, "note": "金额不符 & 待查" }
+          ]
+        }
+      ]
+    }
   }
 }
