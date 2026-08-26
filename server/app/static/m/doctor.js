@@ -689,7 +689,7 @@ async function loadSurgery() {
           const [text, color] = SURGERY_STATUS_NAMES[r.status] || [r.status, ""];
           return card(
             `${kv("术式", esc(r.surgery_name))}${kv("住院号", String(r.admission_id))}
-             ${kv("状态", `<span class="tag ${color}">${text}</span>`)}`,
+             ${kv("状态", `<span class="tag ${color}">${esc(text)}</span>`)}`,
             `<button class="op" data-record="${r.id}">填写术中记录</button>`);
         }).join("")
       : '<p class="empty">没有待填写的术中记录</p>');

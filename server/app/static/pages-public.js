@@ -9,7 +9,7 @@ async function renderInfectiousDir() {
     ${late.length ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 迟报清单（${late.length}）</h3>${
       table(["病例ID", "病种", "类别", "发病日期", "报告时间", "迟报"], late, (l) => {
         const [t, c] = CAT[l.category] || [l.category, ""];
-        return `<tr><td>${l.case_id}</td><td>${esc(l.disease_name)}</td><td><span class="tag ${c}">${t}</span></td>
+        return `<tr><td>${l.case_id}</td><td>${esc(l.disease_name)}</td><td><span class="tag ${c}">${esc(t)}</span></td>
           <td>${esc(l.onset_date)}</td><td>${esc((l.reported_at || "").slice(0, 16).replace("T", " "))}</td>
           <td><span class="tag red">迟报 ${l.days_late} 天</span></td></tr>`;
       })}</div>` : '<div class="panel"><h3>迟报清单</h3><p style="color:#8a939e">无迟报病例</p></div>'}
@@ -17,7 +17,7 @@ async function renderInfectiousDir() {
       table(["编码", "名称", "类别", "报告时限"], diseases, (d) => {
         const [t, c] = CAT[d.category] || [d.category, ""];
         return `<tr><td>${esc(d.code)}</td><td>${esc(d.name)}</td>
-          <td><span class="tag ${c}">${t}</span></td><td>${d.report_hours} 小时</td></tr>`;
+          <td><span class="tag ${c}">${esc(t)}</span></td><td>${d.report_hours} 小时</td></tr>`;
       })}</div>`;
 }
 
@@ -141,7 +141,7 @@ async function renderBlood() {
         ? `<button class="btn secondary" data-bissue="${r.id}">发血</button>` : "—";
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${r.org_id}</td>
         <td>${esc(r.blood_type)} / ${BLOOD_COMPONENTS[r.component] || esc(r.component)}</td><td>${r.quantity_ml}ml</td>
-        <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+        <td><span class="tag ${color}">${esc(text)}</span></td><td>${actions}</td></tr>`;
     })}</div>`;
   const bs = $("#bs-form");
   if (bs) bs.onsubmit = (e) => { e.preventDefault(); postAction("/api/blood/stocks", formJson(e.target, ["quantity_ml"]), "#blood-msg"); };
@@ -191,7 +191,7 @@ async function renderProcure() {
           ? `<button class="btn secondary" data-porec="${o.id}">验收入库</button>` : "—";
         return `<tr><td>${o.id}</td><td>${o.org_id}</td><td>${esc(supNames[o.supplier_id] || o.supplier_id)}</td>
           <td>${o.item_type === "drug" ? "药品" : "物资"}</td><td>${esc(o.item_name)}（${esc(o.item_code)}）</td>
-          <td>${o.quantity}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+          <td>${o.quantity}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${actions}</td></tr>`;
       })}</div>
     <div class="panel"><h3>存货盘点（经办/药师，盘后账实相符）</h3>
       <form class="inline" id="st-form">
@@ -298,7 +298,7 @@ async function renderEsb() {
       const [text, color] = ESB_MSG_STATUS[m.status] || [m.status, ""];
       const retryable = m.status === "queued" || m.status === "failed";
       return `<tr><td>${m.id}</td><td><span class="tag">${esc(m.endpoint_code)}</span></td><td>${esc(m.msg_type)}</td>
-        <td><span class="tag ${color}">${text}</span></td><td>${m.retry_count}/${m.max_retries}</td>
+        <td><span class="tag ${color}">${esc(text)}</span></td><td>${m.retry_count}/${m.max_retries}</td>
         <td style="max-width:280px;font-size:12px;color:#b23c3c">${esc(m.last_error)}</td>
         <td>${retryable ? `<button class="btn secondary" data-esbproc="${m.id}">消费/重试</button>` : "—"}
           <button class="btn secondary" data-esbpayload="${m.id}">查看载荷</button></td></tr>`;
@@ -420,7 +420,7 @@ async function renderDataQuality() {
         const [text, color] = QC_SEVERITY[v.severity] || [v.severity, ""];
         return `<tr><td><span class="tag">${esc(v.rule_code)}</span></td><td>${esc(v.rule_name)}</td>
           <td>${esc(v.table)}</td><td>${v.record_id}</td><td>${esc(v.message)}</td>
-          <td><span class="tag ${color}">${text}</span></td></tr>`;
+          <td><span class="tag ${color}">${esc(text)}</span></td></tr>`;
       });
   };
   $("#page-body").innerHTML = `
@@ -439,14 +439,14 @@ async function renderDataQuality() {
     <div class="panel"><h3>规则汇总</h3>${table(["规则", "名称", "类型", "表", "严重度", "违规数"], summary.by_rule, (r) => {
       const [text, color] = QC_SEVERITY[r.severity] || [r.severity, ""];
       return `<tr><td><span class="tag">${esc(r.rule_code)}</span></td><td>${esc(r.rule_name)}</td>
-        <td>${esc(r.rule_type_name)}</td><td>${esc(r.table)}</td><td><span class="tag ${color}">${text}</span></td>
+        <td>${esc(r.rule_type_name)}</td><td>${esc(r.table)}</td><td><span class="tag ${color}">${esc(text)}</span></td>
         <td>${r.violations ? `<span class="tag ${color}">${r.violations}</span>` : 0}</td></tr>`;
     })}</div>
     <div class="panel"><h3>规则库（管理员可停用/启用与调整严重度）</h3>
       ${table(["编码", "名称", "类型", "被检表", "严重度", "状态", "操作"], rules, (r) => {
         const [text, color] = QC_SEVERITY[r.severity] || [r.severity, ""];
         return `<tr><td><span class="tag">${esc(r.code)}</span></td><td>${esc(r.name)}</td><td>${esc(r.rule_type_name)}</td>
-          <td>${esc(r.target_table)}</td><td><span class="tag ${color}">${text}</span></td>
+          <td>${esc(r.target_table)}</td><td><span class="tag ${color}">${esc(text)}</span></td>
           <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
           <td><button class="btn secondary" data-qctoggle="${r.id}" data-active="${r.active ? 1 : 0}">${r.active ? "停用" : "启用"}</button>
             <button class="btn secondary" data-qcsev="${r.id}" data-sev="${esc(r.severity)}">切换严重度</button></td></tr>`;
@@ -787,7 +787,7 @@ async function drawPrenatalScreenings() {
       ${table(["ID", "档案", "项目", "日期", "孕周", "结论", "指标", "高危标记"], screenings, (s) => {
         const [text, color] = SCREEN_RESULTS[s.result] || [s.result, ""];
         return `<tr><td>${s.id}</td><td>${s.record_id}</td><td>${esc(s.screen_type_name)}</td><td>${esc(s.screen_date)}</td>
-          <td>${s.gest_week ?? "—"}</td><td><span class="tag ${color}">${text}</span></td><td>${esc(s.indicator) || "—"}</td>
+          <td>${s.gest_week ?? "—"}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(s.indicator) || "—"}</td>
           <td>${s.flagged_high_risk ? '<span class="tag red">已标记高危</span>' : "—"}</td></tr>`;
       })}</div>`);
   holder.querySelector("#ps-form").onsubmit = (e) => {
@@ -826,7 +826,7 @@ async function drawImprovementTasks() {
              <button class="btn secondary" data-impdone="${t.id}">提交完成</button>`;
         return `<tr><td>${t.id}</td><td>${t.org_id}</td><td>${esc(t.problem)}</td><td>${esc(t.owner_name)}</td>
           <td>${t.overdue ? `<span class="tag red">${esc(t.due_date)} 超期</span>` : esc(t.due_date)}</td>
-          <td><span class="tag ${color}">${text}</span></td>
+          <td><span class="tag ${color}">${esc(text)}</span></td>
           <td>${esc(t.completion_note || t.measures) || "—"}</td><td>${actions}</td></tr>`;
       })}</div>`);
   holder.querySelector("#imp-form").onsubmit = (e) => {
@@ -876,7 +876,7 @@ async function drawHomeVisits() {
           ? `<button class="btn secondary" data-hvdone="${o.id}">完成</button>` : "—";
         return `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${o.contract_id ?? "—"}</td>
           <td>${esc(o.service_type_name)}</td><td>${esc(o.demand) || "—"}</td>
-          <td><span class="tag ${color}">${text}</span></td><td>${esc(o.assignee_name) || "—"}</td><td>${actions}</td></tr>`;
+          <td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(o.assignee_name) || "—"}</td><td>${actions}</td></tr>`;
       })}</div>`);
   holder.querySelector("#hv-form").onsubmit = (e) => {
     e.preventDefault();

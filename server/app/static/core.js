@@ -338,7 +338,7 @@ async function renderConsultations() {
         ? `<button class="btn secondary" data-act="rate" data-id="${c.id}">评价</button>` : "—";
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.from_org_id} → ${c.to_org_id}</td>
         <td>${esc(c.question)}</td><td>${esc(c.expert_name) || "—"}</td><td>${esc(c.opinion) || "—"}</td>
-        <td>${c.rating ? "★".repeat(c.rating) : "—"}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+        <td>${c.rating ? "★".repeat(c.rating) : "—"}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${actions}</td></tr>`;
     })}</div>`;
   $("#cons-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -447,7 +447,7 @@ async function renderAppointments() {
     <div class="panel"><h3>预约记录</h3>${table(["ID", "号源", "患者", "状态", "操作"], appointments, (a) => {
       const [text, color] = AS[a.status] || [a.status, ""];
       return `<tr><td>${a.id}</td><td>${a.slot_id}</td><td>${a.patient_id}</td>
-        <td><span class="tag ${color}">${text}</span></td>
+        <td><span class="tag ${color}">${esc(text)}</span></td>
         <td>${a.status === "booked"
           ? `<button class="btn secondary" data-fulfill="${a.id}">核销</button>
              <button class="btn danger" data-cancel="${a.id}">取消</button>` : "—"}</td></tr>`;
@@ -559,7 +559,7 @@ async function renderCssd() {
       const next = { sterilizing: "标记已灭菌", sterile: "发放", dispatched: "回收" }[b.status];
       return `<tr><td>${b.id}</td><td><span class="tag">${esc(b.batch_no)}</span></td><td>${esc(b.item_name)}</td>
         <td>${b.quantity}</td><td>${b.dispatched_to_org_id ?? "—"}</td>
-        <td><span class="tag ${color}">${text}</span></td>
+        <td><span class="tag ${color}">${esc(text)}</span></td>
         <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${b.status}">${next}</button>` : "—"}</td></tr>`;
     })}</div>`;
   $("#batch-form").onsubmit = async (e) => {
@@ -608,7 +608,7 @@ async function renderMedwaste() {
       const [text, color] = WS[w.status] || [w.status, ""];
       return `<tr><td>${w.id}</td><td>${w.org_id}</td><td>${WT[w.waste_type]}</td><td>${w.weight_kg}kg</td>
         <td>${esc(w.collected_date)}${alertIds.has(w.id) ? ' <span class="tag red">滞留</span>' : ""}</td>
-        <td>${esc(w.handler_name) || "—"}</td><td><span class="tag ${color}">${text}</span></td>
+        <td>${esc(w.handler_name) || "—"}</td><td><span class="tag ${color}">${esc(text)}</span></td>
         <td>${w.status !== "handed_over" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : "—"}</td></tr>`;
     })}</div>`;
   $("#waste-form").onsubmit = async (e) => {
@@ -807,7 +807,7 @@ async function renderExams() {
         ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "";
       actions += ` <button class="btn secondary" data-printreq="${r.id}">打印申请单</button>`;
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${CENTER_NAMES[r.center_type]}</td>
-        <td>${esc(r.item_name)}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+        <td>${esc(r.item_name)}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${actions}</td></tr>`;
     })}</div>
     <div class="panel"><h3>报告打印</h3>
       <form class="inline" id="exam-print-form">
@@ -962,7 +962,7 @@ async function renderRx() {
       if (canComment && !commented.has(p.id)) actions += ` <button class="btn" data-rxcomment="${p.id}">点评</button>`;
       actions += ` <button class="btn secondary" data-printrx="${p.id}">打印</button>`;
       return `<tr><td>${p.id}</td><td>${p.patient_id}</td><td>${esc(p.diagnosis_name)}</td>
-        <td><span class="tag ${color}">${text}</span></td><td>${esc(p.review_comment) || "—"}</td><td>${actions || "—"}</td></tr>`;
+        <td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(p.review_comment) || "—"}</td><td>${actions || "—"}</td></tr>`;
     })}</div>
     <div class="panel"><h3>处方点评（事后监管）</h3>
       <div class="cards">

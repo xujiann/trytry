@@ -331,7 +331,7 @@ async function renderEmergency() {
     <div class="panel">${table(["ID", "地点", "主诉", "车辆", "状态", "操作"], cases, (c) => {
       const [t, col] = ES[c.status] || [c.status, ""];
       return `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td><td>${esc(c.ambulance_no)}</td>
-        <td><span class="tag ${col}">${t}</span></td>
+        <td><span class="tag ${col}">${esc(t)}</span></td>
         <td>${c.status !== "admitted" ? `<button class="btn secondary" data-adv="${c.id}">流转</button>
           <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "—"}</td></tr>`;
     })}</div>`;
@@ -361,7 +361,7 @@ async function renderTelemedicine() {
       const [t, col] = TS[c.status] || [c.status, ""];
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.consult_type === "repeat_rx" ? "续方" : "咨询"}</td>
         <td>${esc(c.question)}</td><td>${esc(c.reply) || "—"}</td><td>${c.prescription_id ?? "—"}</td>
-        <td><span class="tag ${col}">${t}</span></td>
+        <td><span class="tag ${col}">${esc(t)}</span></td>
         <td>${c.status === "open" ? `<button class="btn secondary" data-reply="${c.id}">回复</button>`
           : c.status === "replied" ? `<button class="btn secondary" data-close="${c.id}">结束</button>` : "—"}</td></tr>`;
     })}</div>`;
@@ -541,7 +541,7 @@ async function renderEducation() {
           : s.status === "approved" && ["director", "operator", "admin"].includes(role)
           ? `<button class="btn secondary" data-livefin="${s.id}">结束</button>` : "—";
         return `<tr><td>${s.id}</td><td>${esc(s.title)}</td><td>${esc(s.speaker) || "—"}</td><td>${esc(s.planned_at) || "—"}</td>
-          <td><span class="tag ${color}">${text}</span></td><td>${esc(s.review_comment) || "—"}</td><td>${actions}</td></tr>`;
+          <td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(s.review_comment) || "—"}</td><td>${actions}</td></tr>`;
       })}</div>`;
   $("#course-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/courses", formJson(e.target), "#edu-msg"); };
   $("#live-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/live-sessions", formJson(e.target), "#edu-msg"); };
@@ -1248,7 +1248,7 @@ async function renderHrFinance() {
     <div class="panel"><h3>员工（变动留痕联动机构与状态）</h3>${table(["ID", "机构", "姓名", "职称", "科室", "状态", "操作"], employees, (em) => {
       const [t, col] = EST[em.status] || [em.status, ""];
       return `<tr><td>${em.id}</td><td>${em.org_id}</td><td>${esc(em.name)}</td><td>${esc(em.title)}</td>
-        <td>${em.dept_id ? esc(deptNames[em.dept_id] || em.dept_id) : "—"}</td><td><span class="tag ${col}">${t}</span></td>
+        <td>${em.dept_id ? esc(deptNames[em.dept_id] || em.dept_id) : "—"}</td><td><span class="tag ${col}">${esc(t)}</span></td>
         <td><button class="btn secondary" data-empdept="${em.id}">挂科室</button>
             <button class="btn secondary" data-empchg="${em.id}">登记变动</button>
             <button class="btn" data-emphist="${em.id}">变动史</button>
@@ -1414,7 +1414,7 @@ async function renderCritical() {
           : r.critical_status === "acknowledged"
           ? `<button class="btn secondary" data-resolve="${r.id}">处置反馈</button>` : "—";
         return `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
-          <td><span class="tag ${color}">${text}</span></td>
+          <td><span class="tag ${color}">${esc(text)}</span></td>
           <td>${actions} <button class="btn" data-trail="${r.id}">留痕</button></td></tr>`;
       })}</div>
     <div class="panel hidden" id="crit-trail-panel"><h3>处置留痕轨迹</h3><div id="crit-trail"></div></div>`;
@@ -1521,7 +1521,7 @@ async function renderInpatient() {
              <button class="btn danger" data-discharge="${a.id}">出院</button>`
           : "—";
         return `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(wardName[a.ward_id] || a.ward_id)} / ${a.bed_id}</td>
-          <td>${esc(a.diagnosis_name)}</td><td><span class="tag ${color}">${text}</span></td>
+          <td>${esc(a.diagnosis_name)}</td><td><span class="tag ${color}">${esc(text)}</span></td>
           <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button></td></tr>`;
       })}</div>
     <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div></div>`;
@@ -1622,7 +1622,7 @@ async function renderBilling() {
       ${table(["ID", "结算单", "渠道", "金额", "已退", "状态", "外部流水号", "操作"], payments.slice(0, 30), (p) => {
         const [text, color] = PAY_STATUS[p.status] || [p.status, ""];
         return `<tr><td>${p.id}</td><td>${p.settlement_id}</td><td>${esc(p.channel_name)}</td><td>${p.amount}</td>
-          <td>${p.refunded_amount || 0}</td><td><span class="tag ${color}">${text}</span>${p.fail_reason ? `<div style="font-size:12px;color:#b23c3c">${esc(p.fail_reason)}</div>` : ""}</td>
+          <td>${p.refunded_amount || 0}</td><td><span class="tag ${color}">${esc(text)}</span>${p.fail_reason ? `<div style="font-size:12px;color:#b23c3c">${esc(p.fail_reason)}</div>` : ""}</td>
           <td style="font-size:12px">${esc(p.trade_no) || "—"}</td>
           <td>${p.status === "paid" ? `<button class="btn secondary" data-refund="${p.id}">退款</button>` : "—"}</td></tr>`;
       })}</div>
@@ -1817,7 +1817,7 @@ async function renderQuality() {
           ? `<button class="btn secondary" data-rectify="${ev.id}">登记整改</button>` : "—";
         return `<tr><td>${ev.id}</td><td>${esc(AET[ev.event_type] || ev.event_type)}</td><td>${esc(ev.level)}</td>
           <td>${esc(ev.description)}</td><td>${esc(ev.reporter_name) || "（匿名）"}</td>
-          <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+          <td><span class="tag ${color}">${esc(text)}</span></td><td>${actions}</td></tr>`;
       })}</div>
     <div class="panel"><h3>不良事件附件（现场照片/佐证PDF，≤10MB）</h3>
       <form class="inline" id="ae-att-form">
@@ -1869,7 +1869,7 @@ async function renderQuality() {
           ? `<button class="btn secondary" data-verify="${r.id}" data-ok="true">确认</button>
              <button class="btn" data-verify="${r.id}" data-ok="false">排除</button>` : "—";
         return `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${r.patient_id}</td><td>${SITE[r.infection_site]}</td>
-          <td>${esc(r.pathogen)}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+          <td>${esc(r.pathogen)}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${actions}</td></tr>`;
       })}</div>`;
   $("#ae-form").onsubmit = (e) => {
     e.preventDefault();

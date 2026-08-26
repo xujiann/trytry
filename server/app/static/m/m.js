@@ -608,7 +608,7 @@ async function renderSurgeries(box) {
       ${kv("医院", esc(s.org_name))}
       ${kv("术者", esc(s.surgeon_name || "—"))}
       ${kv("类别", esc(URGENCY_TEXT[s.urgency] || s.urgency))}
-      ${kv("状态", `<span class="tag ${color}">${text}</span>`)}
+      ${kv("状态", `<span class="tag ${color}">${esc(text)}</span>`)}
       ${s.scheduled_date
         ? kv("安排时间", `${esc(s.scheduled_date)} ${esc(s.scheduled_time)}`) +
           kv("手术间", esc(s.room_name))

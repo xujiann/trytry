@@ -140,7 +140,7 @@ async function renderSurgery() {
         else if (r.status === "completed") ops = `<button class="btn" data-view="${r.id}">查看记录</button>`;
         return `<tr><td>${r.id}</td><td>${r.admission_id}</td><td>${esc(r.surgery_name)}</td>
           <td>${esc(r.incision_level)}</td><td>${esc(ANESTHESIA[r.anesthesia_type] || "")}</td>
-          <td>${esc(URGENCY[r.urgency] || "")}</td><td><span class="tag ${color}">${text}</span></td><td>${ops}</td></tr>`;
+          <td>${esc(URGENCY[r.urgency] || "")}</td><td><span class="tag ${color}">${esc(text)}</span></td><td>${ops}</td></tr>`;
       })}</div>
     <div class="panel"><h3>手术排班表</h3>${
       table(["日期", "手术间", "时段", "术式", "术者", "麻醉", "急缓"], schedules, (s) =>
@@ -268,7 +268,7 @@ async function renderAccounting() {
           : (v.status === "posted" ? `<button class="btn danger" data-void="${v.id}">作废</button>` : "—");
         return `<tr><td>${v.id}</td><td>${esc(v.voucher_no)}</td><td>${esc(v.voucher_date)}</td>
           <td>${esc(v.summary)}</td><td>${v.total_debit.toFixed(2)}</td><td>${v.total_credit.toFixed(2)}</td>
-          <td><span class="tag ${color}">${text}</span></td>
+          <td><span class="tag ${color}">${esc(text)}</span></td>
           <td><button class="btn" data-detail="${v.id}">明细</button> ${ops}</td></tr>
     <div class="panel"><h3>合并报表（${esc(period)}）</h3>
       <p class="hint">${esc(consolidated.caliber.note)}</p>
@@ -435,7 +435,7 @@ async function renderMaterials() {
         else if (p.status === "approved") ops = `<button class="btn secondary" data-contract="${p.id}">签合同</button>`;
         else if (p.status === "contracted") ops = `<button class="btn secondary" data-receive="${p.id}">验收</button>`;
         return `<tr><td>${p.id}</td><td>${esc(p.item_name)}</td><td>${esc(p.spec)}</td><td>${p.quantity}${esc(p.unit)}</td>
-          <td><span class="tag ${color}">${text}</span></td><td>${esc(p.contract_no || "—")}</td>
+          <td><span class="tag ${color}">${esc(text)}</span></td><td>${esc(p.contract_no || "—")}</td>
           <td>${p.received_quantity || "—"}</td><td>${ops}</td></tr>`;
       })}</div>
     <div class="panel"><h3>高值耗材登记（一物一码）</h3>
@@ -451,7 +451,7 @@ async function renderMaterials() {
       table(["条码", "名称", "批号", "效期", "状态", "用于患者", "关联手术", "操作"], consumables, (c) => {
         const [text, color] = CONSUMABLE_STATUS[c.status] || [c.status, ""];
         return `<tr><td>${esc(c.barcode)}</td><td>${esc(c.name)}</td><td>${esc(c.batch_no)}</td>
-          <td>${esc(c.expire_date)}</td><td><span class="tag ${color}">${text}</span></td>
+          <td>${esc(c.expire_date)}</td><td><span class="tag ${color}">${esc(text)}</span></td>
           <td>${esc(c.used_patient_name || "—")}</td><td>${esc(c.used_surgery_name || "—")}</td>
           <td>${c.status === "in_stock" ? `<button class="btn secondary" data-use="${c.barcode}">使用登记</button>` : "—"}</td></tr>`;
       })}</div>`;
@@ -598,7 +598,7 @@ async function renderRules() {
       ${table(["编码", "名称", "域", "条件", "严重度", "扣分", "状态", "操作"], rules, (r) => {
         const [text, color] = SEVERITY[r.severity] || [r.severity, ""];
         return `<tr><td>${esc(r.key)}</td><td>${esc(r.name)}</td><td>${esc(r.domain)}</td>
-          <td><code>${esc(r.condition)}</code></td><td><span class="tag ${color}">${text}</span></td>
+          <td><code>${esc(r.condition)}</code></td><td><span class="tag ${color}">${esc(text)}</span></td>
           <td>${r.deduct_points}</td><td>${r.active ? "启用" : "停用"}</td>
           <td>${r.active ? `<button class="btn danger" data-off="${r.key}">停用</button>` : "—"}</td></tr>`;
       })}</div>
