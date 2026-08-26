@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import insert_or_conflict
-from ..visibility import assert_org_writable, log_patient_access, scope_org_list
+from ..visibility import (
+    assert_org_writable,
+    assert_patient_visible,
+    log_patient_access,
+    scope_org_list,
+)
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import (
@@ -672,6 +677,13 @@ def amend_report(
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    # 归属校验（上线前审计）：`ExamReport` 自己不带 org_id/patient_id，归属隔一跳
+    # 在 `exam_requests.patient_id` 上，所以走患者可见性而不是机构可写。
+    # 原先只有 `require_roles("doctor")`——任一成员单位的医师遍历 report_id
+    # 就能改别家的报告结论，并把危急值闭环状态复位（见下面的 M-6 联动）。
+    req = db.get(ExamRequest, report.request_id)
+    if req is not None:
+        assert_patient_visible(db, user, req.patient_id)
     actor = user.full_name or user.username
     was_critical = report.critical
     db.add(
