@@ -436,9 +436,15 @@ async function renderMedication() {
         // `SS[s.status]` 是 undefined，解构直接 TypeError——**整页白屏**，
         // 不是这一行降级。只要有一条缺药登记结了案，这一页就打不开了。
         const [t, col] = SS[s.status] || [s.status, ""];
+        // 「流转」只在**还能往下走**的状态出现。原判据是 `!== "delivered"`，
+        // 那是把"终态"等同于"已配送"——而后端的终态还有 collected / no_show /
+        // cancelled，这些行会显示一个点下去必定 409（"状态 collected 已是终态"）
+        // 的按钮。此前看不出来是因为这一页在有结案登记时根本打不开。
+        // 判据与后端 `_SHORTAGE_FLOW` 的键一一对应：能流转的只有这两个状态。
+        const canAdvance = s.status === "registered" || s.status === "purchasing";
         return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
           <td><span class="tag ${col}">${esc(t)}</span></td>
-          <td>${s.status !== "delivered" ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
+          <td>${canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
       })}</div>
     <div class="panel"><h3>用药画像查询</h3>
       <form class="inline" id="prof-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
