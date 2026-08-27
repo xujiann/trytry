@@ -1,0 +1,464 @@
+/* ============================================================
+   紧密型县域医共体信息化建设 —— 样书排版样式（WeasyPrint）
+   开本：787mm×1092mm 1/16（成品 185mm×260mm）
+   字体：正文 思源宋体（Noto Serif CJK SC）
+         标题/强调 思源黑体（Noto Sans CJK SC）
+         代码 Noto Sans Mono CJK SC
+   ============================================================ */
+
+/* ---------- 页面基础 ---------- */
+@page {
+  size: 185mm 260mm;
+  margin: 21mm 17mm 19mm 23mm; /* 上 外 下 内（以右手页为基准） */
+}
+@page :left  { margin-left: 17mm; margin-right: 23mm; }
+@page :right { margin-left: 23mm; margin-right: 17mm; }
+
+/* ---------- 封面（整版出血，无页边距） ---------- */
+@page cover { margin: 0; }
+
+/* ---------- 空白页（封二、封三、篇前补白）：无任何页眉页脚 ---------- */
+@page plain { }
+
+/* ---------- 扉页 / 版权页：不显示页码 ---------- */
+@page titlepage { }
+@page copyright { }
+
+/* ---------- 前置部分（前言、目录）：小写罗马页码，居中 ---------- */
+@page preface {
+  @bottom-center { content: counter(page, lower-roman);
+                   font-family: "Noto Serif CJK SC", serif; font-size: 9pt; }
+}
+@page :nth(1 of preface) { counter-reset: page 1; }
+@page toc {
+  @bottom-center { content: counter(page, lower-roman);
+                   font-family: "Noto Serif CJK SC", serif; font-size: 9pt; }
+}
+
+/* ---------- 篇章页：正文页码从第一篇篇章页起算，不显示 ---------- */
+@page partfirst { counter-reset: page 1; }
+@page part { }
+
+/* ---------- 正文页：书眉 + 页码 ----------
+   双码页（左）：书眉外侧排书名；单码页（右）：书眉外侧排章题。
+   页码一律排在版口外侧下方。章首页不排书眉，页码居中。 */
+@page body:left {
+  @top-left {
+    content: string(booktitle);
+    font-family: "Noto Sans CJK SC", sans-serif;
+    font-size: 7.5pt; color: #444; letter-spacing: 0.12em;
+    vertical-align: bottom; padding-bottom: 4.5mm;
+  }
+  @bottom-left {
+    content: counter(page);
+    font-family: "Noto Serif CJK SC", serif; font-size: 9pt;
+    vertical-align: top; padding-top: 2.5mm;
+  }
+}
+@page body:right {
+  @top-right {
+    content: string(chaptitle);
+    font-family: "Noto Sans CJK SC", sans-serif;
+    font-size: 7.5pt; color: #444; letter-spacing: 0.05em;
+    vertical-align: bottom; padding-bottom: 4.5mm;
+  }
+  @bottom-right {
+    content: counter(page);
+    font-family: "Noto Serif CJK SC", serif; font-size: 9pt;
+    vertical-align: top; padding-top: 2.5mm;
+  }
+}
+/* 章首页：去书眉，页码居中 */
+@page :nth(1 of body) {
+  @top-left { content: none; }
+  @top-right { content: none; }
+  @bottom-left { content: none; }
+  @bottom-right { content: none; }
+  @bottom-center {
+    content: counter(page);
+    font-family: "Noto Serif CJK SC", serif; font-size: 9pt;
+    vertical-align: top; padding-top: 2.5mm;
+  }
+}
+/* 自动生成的空白页（单页起补白）：清掉一切 */
+@page body:blank {
+  @top-left { content: none; } @top-right { content: none; }
+  @bottom-left { content: none; } @bottom-right { content: none; }
+  @bottom-center { content: none; }
+}
+
+/* ============================================================
+   正文基础版式
+   ============================================================ */
+html { font-size: 10pt; }
+body {
+  margin: 0; padding: 0;
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 10pt;
+  line-height: 1.72;
+  color: #000;
+  string-set: booktitle "紧密型县域医共体信息化建设";
+}
+
+p { margin: 0; text-indent: 2em; text-align: justify; orphans: 2; widows: 2; }
+li p, blockquote p, td p, .noindent { text-indent: 0; }
+
+/* 中文强调惯例：宋体正文中以黑体表强调，不用斜体 */
+strong { font-family: "Noto Sans CJK SC", sans-serif; font-weight: bold; }
+em { font-family: "Noto Sans CJK SC", sans-serif; font-style: normal; font-weight: normal; }
+
+a { color: #000; text-decoration: none; }
+
+hr {
+  border: none; border-top: 0.4pt solid #999;
+  width: 28%; margin: 1.4em auto;
+}
+
+/* ---------- 节 / 小节标题 ---------- */
+h2 {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 12.5pt; font-weight: bold; line-height: 1.45;
+  margin: 1.7em 0 0.75em;
+  break-after: avoid;
+  bookmark-level: 3;
+}
+h3 {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 11pt; font-weight: bold; line-height: 1.45;
+  margin: 1.35em 0 0.55em;
+  break-after: avoid;
+  bookmark-level: 4;
+}
+
+/* ---------- 列表 ---------- */
+ul, ol { margin: 0.45em 0 0.65em; padding-left: 2.2em; }
+li { margin: 0.18em 0; text-align: justify; }
+li > ul, li > ol { margin: 0.15em 0 0.2em; }
+
+/* ---------- 引文 ---------- */
+blockquote {
+  margin: 0.8em 1.2em 0.9em;
+  padding: 0.45em 1em;
+  border-left: 2pt solid #1F5F73;
+  background: #F3F6F7;
+  font-size: 9.5pt;
+  break-inside: avoid;
+}
+
+/* ---------- 代码 ---------- */
+code {
+  font-family: "Noto Sans Mono CJK SC", monospace;
+  font-size: 88%;
+  background: #F2F2EF;
+  padding: 0 0.18em;
+}
+pre {
+  font-family: "Noto Sans Mono CJK SC", monospace;
+  font-size: 8pt; line-height: 1.5;
+  background: #F7F7F4;
+  border: 0.4pt solid #B9B9B4;
+  padding: 6pt 8pt;
+  margin: 0.7em 0 0.9em;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  break-inside: avoid;
+}
+pre code { background: none; padding: 0; font-size: 100%; }
+
+/* ---------- 表格（三线表） ---------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.7em 0 0.95em;
+  font-size: 8.5pt; line-height: 1.5;
+}
+thead th {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-weight: bold; font-size: 8.5pt;
+  border-top: 1pt solid #000;
+  border-bottom: 0.5pt solid #000;
+  padding: 2.6pt 4pt;
+  text-align: left;
+}
+td { padding: 2.4pt 4pt; vertical-align: top; }
+tbody tr:last-child td { border-bottom: 1pt solid #000; }
+td code, th code { background: none; padding: 0; font-size: 95%; }
+
+/* ============================================================
+   章（另页起；章首页大标题）
+   ============================================================ */
+section.chapter { page: body; break-before: page; }
+section.chapter.recto { break-before: right; }
+
+header.chap-open {
+  margin: 22mm 0 13mm;
+  string-set: chaptitle content(text);
+}
+h1.chap-title {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 20pt; font-weight: 900; line-height: 1.4;
+  margin: 0;
+  bookmark-level: 2;
+}
+/* 章序（"第 9 章"）排在章题上方，含短分隔线；并入 h1 使 PDF 书签带章序 */
+span.chap-no {
+  display: block;
+  font-size: 13pt; font-weight: bold;
+  letter-spacing: 0.3em;
+  color: #1F5F73;
+}
+span.chap-no::after {
+  content: "";
+  display: block; width: 16mm;
+  border-top: 1.1pt solid #1F5F73;
+  margin: 3.2mm 0 4.5mm;
+}
+section.chapter.frontmatter h1.chap-title,
+section.chapter.backmatter h1.chap-title { bookmark-level: 1; }
+
+/* ============================================================
+   篇章页（单页起，独立一面）
+   ============================================================ */
+section.part { page: part; break-before: right; }
+section.part.first { page: partfirst; }
+.part-inner { margin-top: 62mm; text-align: center; }
+.part-label {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 14pt; font-weight: bold; letter-spacing: 0.55em;
+  color: #1F5F73;
+}
+.part-label:empty { display: none; }
+h1.part-title {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 25pt; font-weight: 900; line-height: 1.45;
+  margin: 7mm 0 0;
+  bookmark-level: 1;
+}
+.part-sep {
+  width: 12mm; border-top: 1.1pt solid #1F5F73;
+  margin: 9mm auto 10mm;
+}
+ul.part-chapters { list-style: none; padding: 0; margin: 0; }
+ul.part-chapters li {
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 10pt; color: #333; margin: 1.7mm 0;
+  text-align: center;
+}
+
+/* ============================================================
+   前置部分
+   ============================================================ */
+
+/* ---------- 扉页 ---------- */
+section.titlepage { page: titlepage; text-align: center; }
+.tp-space { height: 46mm; }
+.tp-title {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 25pt; font-weight: 900; line-height: 1.5;
+  letter-spacing: 0.08em;
+}
+.tp-subtitle {
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 11pt; color: #333;
+  margin-top: 9mm; line-height: 1.8;
+}
+.tp-author {
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 13pt; margin-top: 26mm; letter-spacing: 0.15em;
+}
+.tp-press {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 11.5pt; letter-spacing: 0.2em;
+  margin-top: 70mm;
+}
+
+/* ---------- 版权页 ---------- */
+section.copyright { page: copyright; font-size: 8.5pt; line-height: 1.7; }
+.cp-abstract {
+  border: 0.5pt solid #666;
+  padding: 4mm 5mm;
+  margin: 4mm 0 7mm;
+}
+.cp-abstract h2 {
+  font-size: 10.5pt; margin: 0 0 2.2mm; text-align: center;
+  letter-spacing: 0.5em; border: none;
+  bookmark-level: none;
+}
+.cp-abstract p { text-indent: 2em; margin: 0 0 1.2mm; text-align: justify; }
+.cp-block { margin: 2.5mm 0; }
+.cp-block p { text-indent: 0; margin: 0.8mm 0; }
+.cp-note { color: #333; margin-top: 6mm; }
+.cp-rule { border: none; border-top: 0.5pt solid #000; width: 100%; margin: 5mm 0 3mm; }
+.cp-imprint p { text-indent: 0; margin: 0.9mm 0; }
+
+/* ---------- 前言 ---------- */
+section.preface { page: preface; break-before: right; }
+
+/* ---------- 目录 ---------- */
+section.toc { page: toc; break-before: right; }
+.toc-title {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 20pt; font-weight: 900; text-align: center;
+  letter-spacing: 1em; text-indent: 1em; /* 抵消末字间距，视觉居中 */
+  margin: 14mm 0 12mm;
+  bookmark-level: 1;
+}
+nav.toc p { text-indent: 0; margin: 0; }
+nav.toc a { display: block; }
+nav.toc a::after {
+  content: leader('. ') target-counter(attr(href), page);
+  font-family: "Noto Serif CJK SC", serif; font-weight: normal; font-size: 9pt;
+}
+nav.toc a.roman::after {
+  content: leader('. ') target-counter(attr(href), page, lower-roman);
+}
+p.toc-front a, p.toc-back a {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-weight: bold; font-size: 10.5pt;
+}
+p.toc-front, p.toc-back { margin: 1.2mm 0; }
+p.toc-part {
+  margin: 4.5mm 0 1.6mm;
+}
+p.toc-part a {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-weight: bold; font-size: 11pt;
+}
+p.toc-ch { margin: 1.5mm 0 0.4mm; }
+p.toc-ch a { font-family: "Noto Sans CJK SC", sans-serif; font-size: 10pt; }
+p.toc-s2 { margin: 0.35mm 0; }
+p.toc-s2 a { padding-left: 2em; font-size: 9.5pt; }
+p.toc-s3 { margin: 0.3mm 0; }
+p.toc-s3 a { padding-left: 3.6em; font-size: 9pt; color: #222; }
+
+/* ============================================================
+   空白页
+   ============================================================ */
+section.blankpage { page: plain; }
+.blankfill { height: 8mm; }
+
+/* ============================================================
+   封面 / 封底
+   ============================================================ */
+section.cover { page: cover; position: relative; width: 185mm; height: 260mm; }
+section.cover * { text-indent: 0; }
+
+/* ----- 封面（正） ----- */
+.cv-ground {
+  position: absolute; left: 0; top: 0; width: 185mm; height: 260mm;
+  background: #F6F4EE;
+}
+.cv-band {
+  position: absolute; left: 0; bottom: 0; width: 185mm; height: 102mm;
+  background: #14425C;
+}
+.cv-band-accent {
+  position: absolute; left: 0; bottom: 102mm; width: 185mm; height: 1.6mm;
+  background: #C8A45C;
+}
+.cv-topline {
+  position: absolute; left: 16mm; top: 18mm; width: 153mm;
+  border-top: 0.5pt solid #14425C;
+}
+.cv-series {
+  position: absolute; left: 16mm; top: 20.5mm;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 8.5pt; letter-spacing: 0.35em; color: #14425C;
+}
+.cv-title {
+  position: absolute; left: 16mm; top: 47mm; width: 155mm;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-weight: 900; font-size: 31pt; line-height: 1.42;
+  letter-spacing: 0.04em; color: #10293A;
+}
+.cv-subtitle-rule {
+  position: absolute; left: 16.5mm; top: 96mm; width: 34mm;
+  border-top: 1.2pt solid #C8A45C;
+}
+.cv-subtitle {
+  position: absolute; left: 16mm; top: 101mm; width: 150mm;
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 11.5pt; line-height: 1.9; color: #2E4A5C;
+}
+.cv-author {
+  position: absolute; left: 16.5mm; top: 128mm;
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 13pt; letter-spacing: 0.22em; color: #10293A;
+}
+.cv-points {
+  position: absolute; left: 16mm; bottom: 30mm; width: 104mm;
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 9pt; line-height: 2.05; color: #DCE6EC;
+}
+.cv-points b {
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-weight: bold; color: #E8D5A8;
+}
+.cv-motif { position: absolute; right: 8mm; bottom: 20mm; }
+.cv-press {
+  position: absolute; left: 0; bottom: 10mm; width: 185mm;
+  text-align: center;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 11pt; letter-spacing: 0.28em; color: #FFFFFF;
+}
+
+/* ----- 封底 ----- */
+.bk-ground {
+  position: absolute; left: 0; top: 0; width: 185mm; height: 260mm;
+  background: #14425C;
+}
+.bk-topline {
+  position: absolute; left: 16mm; top: 20mm; width: 153mm;
+  border-top: 0.5pt solid #C8A45C;
+}
+.bk-lead {
+  position: absolute; left: 16mm; top: 30mm; width: 150mm;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 13.5pt; font-weight: bold; line-height: 1.9; color: #FFFFFF;
+}
+.bk-questions {
+  position: absolute; left: 16mm; top: 62mm; width: 152mm;
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 10pt; line-height: 2.1; color: #DCE6EC;
+}
+.bk-questions b {
+  font-family: "Noto Sans CJK SC", sans-serif; color: #E8D5A8;
+}
+.bk-stance {
+  position: absolute; left: 16mm; top: 128mm; width: 152mm;
+  border-top: 0.5pt solid #4A6E82; padding-top: 7mm;
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 10pt; line-height: 2.0; color: #DCE6EC;
+}
+.bk-stance .st { color: #FFFFFF; font-family: "Noto Sans CJK SC", sans-serif; font-weight: bold; }
+.bk-close {
+  position: absolute; left: 16mm; top: 186mm; width: 152mm;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 10.5pt; font-weight: bold; line-height: 1.9; color: #E8D5A8;
+}
+.bk-isbnbox {
+  position: absolute; left: 16mm; bottom: 12mm;
+  background: #FFFFFF; padding: 3mm 5mm;
+  font-family: "Noto Sans Mono CJK SC", monospace;
+  font-size: 8.5pt; line-height: 1.7; color: #10293A;
+}
+.bk-press {
+  position: absolute; right: 16mm; bottom: 14mm;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 10.5pt; letter-spacing: 0.24em; color: #FFFFFF;
+}
+
+/* ============================================================
+   附录微调
+   ============================================================ */
+section.chapter.appendix h3 {
+  font-family: "Noto Sans Mono CJK SC", monospace;
+  font-size: 9.5pt;
+  margin: 1.2em 0 0.35em;
+  bookmark-level: none;
+}
+section.chapter.appendix table { font-size: 8pt; }
+section.chapter.appendix thead th { font-size: 8pt; }
+
+/* 后记签名行 */
+p.signature { text-align: right; text-indent: 0; margin-top: 2em; }
