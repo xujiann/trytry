@@ -167,14 +167,14 @@ def test_detail的五段形状_三段是分子分母两段是裸计数(client, a
     # seeded 没建 drug_rules，故为 0——真能数出非零的场景见
     # test_规则覆盖数只数对得上生效规则的处方。
     assert detail["rx_pass"] == {"passed": 1, "total": 2, "rule_covered": 0}
-    # remote_exams 是计分用的合计 = 申请方 + 中心两侧；seeded 那张单没被领取
-    # （无 claimed_org_id），故中心侧为 0。
+    # remote_exams 是**计分值**。当前口径（2026-08-27 回退待批）= 仅申请方一侧；
+    # 中心侧 provided 单独展示、不入计分。卫健批复后此不变量翻转为"两侧之和"。
     assert detail["remote_exams"] == 1
     assert detail["remote_exams_requested"] == 1
     assert detail["remote_exams_provided"] == 0
-    assert detail["remote_exams"] == (
-        detail["remote_exams_requested"] + detail["remote_exams_provided"]
-    ), "合计必须等于两侧之和，否则明细解释不了分数"
+    assert detail["remote_exams"] == detail["remote_exams_requested"], (
+        "计分值必须等于申请方侧，否则明细解释不了分数（回退口径，见 performance.py）"
+    )
     assert detail["contract_services"] == 2
 
 
@@ -583,18 +583,20 @@ def test_结案率按转出机构计_接收方分母里没有这张单(client, a
         "completed": 0, "total": 0}, "接收方的分母里不该出现这张单（当前口径）"
 
 
-def test_互认计入申请方_出报告计中心_两侧都算分(client, admin):
-    """口径裁定 2 + 中心计分（2026-08-22）。
+def test_互认计入申请方_中心出报告量可见但不入计分(client, admin):
+    """口径裁定 2 + 中心侧计分回退（2026-08-27，待卫健批复）。
 
-    这一维度按两侧计：
+    - **申请方**（`from_org_id`）：`reported` + `recognized` 计入 `remote_exams`
+      （计分值）。互认照计——这一侧衡量的是"通过平台解决了多少次检查需求"，
+      不重复做检查正是想要的结果；
+    - **共享诊断中心**（`claimed_org_id`）：出报告量在 `remote_exams_provided`
+      里**可见**，但**不进计分值**。2026-08-22 曾改为两侧都计，因该口径改变基金
+      分配却查不到卫健批复记录，按治理默认回退；批复后恢复见 performance.py
+      端点 docstring（一行 + 本文件两条哨兵用例翻转）。
 
-    - **申请方**（`from_org_id`）：`reported` + `recognized`。互认照计——
-      这一侧衡量的是"通过平台解决了多少次检查需求"，不重复做检查正是想要的结果；
-    - **共享诊断中心**（`claimed_org_id`）：只数 `reported`。互认不产生中心
-      工作量，而且互认单结构上就没有 `claimed_org_id`（`recognized` 是建单时
-      定下的状态，领取只发生在 `pending` 上）——本用例把这条结构性事实也断言住。
-
-    改之前中心是 0 分：出多少份报告都不计。那与"资源下沉"的考核意图相反。
+    `provided` 只数 `reported`：互认不产生中心工作量，而且互认单结构上就没有
+    `claimed_org_id`（`recognized` 是建单时定下的状态，领取只发生在 `pending` 上）
+    ——本用例把这条结构性事实也断言住。
     """
     def org(name):
         return client.post("/api/organizations",
@@ -632,11 +634,14 @@ def test_互认计入申请方_出报告计中心_两侧都算分(client, admin)
     assert g["remote_exams"] == 3
 
     assert c["remote_exams_provided"] == 2, (
-        f"中心应拿到自己出的 2 份报告，实际 {c['remote_exams_provided']}——"
-        "改之前这里恒为 0，中心出多少报告都不计分"
+        f"中心出的 2 份报告必须**可见**，实际 {c['remote_exams_provided']}——"
+        "这个字段是'中心工作量被看见但没算分'的哨兵，删掉它这件事就彻底隐形了"
     )
     assert c["remote_exams_requested"] == 0, "中心没有以申请方身份建过单"
-    assert c["remote_exams"] == 2
+    assert c["remote_exams"] == 0, (
+        "当前口径（回退待批）计分值只取申请方一侧；中心的 2 份报告不该进计分值。"
+        "卫健批复后本断言翻转为 == 2"
+    )
 
 
 def test_互认单永远不计给中心(client, admin):
@@ -663,10 +668,14 @@ def test_互认单永远不计给中心(client, admin):
     assert detail["remote_exams_requested"] == 1, "作为申请方仍应计入"
 
 
-def test_中心侧计分真的改变了得分(client, admin):
-    """不只是明细多了两个字段——`score` 必须真的跟着动。
+def test_中心出报告暂不改变得分_待卫健批复(client, admin):
+    """哨兵（2026-08-27 回退待批）：中心出再多报告，`score` 也不动。
 
-    否则"中心一分不得"这个问题根本没修，只是多报了两个数。
+    这不是说"中心不该得分"——多半该得。但这个口径决定各机构分多少钱，
+    实现方不能替卫健拍板；2026-08-22 那次实施查不到批复记录，故回退到
+    "只按申请方计分"的既批口径。**批复到位后本用例翻转为 `after > before`**
+    （恢复点见 performance.py 端点 docstring），届时中心侧计分即生效。
+    在那之前，中心的工作量由 `remote_exams_provided` 字段保持可见。
     """
     center = client.post("/api/organizations",
                          json={"name": "中心得分院", "org_type": "lead_hospital",
@@ -678,12 +687,15 @@ def test_中心侧计分真的改变了得分(client, admin):
                           headers=admin).json()
     with SessionLocal() as db:
         doctor = db.query(User).filter(User.username == "admin").first()
-        for _ in range(5):                      # 直接顶到 volume_cap
+        for _ in range(5):                      # 若计分，这个量足以顶到 volume_cap
             db.add(ExamRequest(patient_id=patient["id"], from_org_id=1,
                                claimed_org_id=center["id"], center_type="imaging",
                                item_code="CT", item_name="胸部CT", status="reported",
                                created_by=doctor.id))
         db.commit()
-    after = _card(client.get("/api/performance/orgs", headers=admin).json(),
-                  center["id"])["score"]
-    assert after > before, f"中心出了 5 份报告，得分却没变（{before} → {after}）"
+    card = _card(client.get("/api/performance/orgs", headers=admin).json(), center["id"])
+    assert card["score"] == before, (
+        f"回退期间中心出报告不该改变得分（{before} → {card['score']}）——"
+        "若这是有意恢复中心侧计分，请先确认卫健批复，再按 docstring 的恢复点整体翻转"
+    )
+    assert card["detail"]["remote_exams_provided"] == 5, "工作量必须保持可见"
