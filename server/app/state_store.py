@@ -8,14 +8,70 @@ import os
 import threading
 import time
 
+#: 出网超时（秒）。**必须显式写死，不能吃 redis-py 的默认值**——
+#: 那个默认值随版本变，而 `requirements.txt` 只钉了 `redis>=5.0` 且全仓库没有 lockfile，
+#: 于是同一份代码装出来的行为完全不同（两个版本都实测过）：
+#:
+#: - **redis-py 5.0.0**：`socket_timeout` / `socket_connect_timeout` 默认都是 `None`。
+#:   没有超时的 socket 不是"慢"，是"挂着"——`except Exception` 一行都救不了，
+#:   因为根本没有异常抛出来。
+#: - **redis-py 8.1.0**：两者默认 5 秒。把 MEDPLAT_REDIS_URL 指向一个丢包地址，
+#:   实测一次调用阻塞 **5.01 秒**后抛 TimeoutError。
+#:
+#: 两种都不能要：一种永久挂起，另一种在**每个请求**的主路径上付 5 秒
+#: （见 monitor._record_cluster）。所以超时由调用方按"这条路慢了要紧不要紧"显式选，
+#: 谁都别去猜库的默认值。`scheduler.py` 早就给自己的客户端 setdefault 过 5 秒——
+#: 超时这条口径仓库里本来就有，只是没铺到这里。
+DEFAULT_REDIS_TIMEOUT = 5.0
 
-def _redis_client():
+#: **`socket_timeout` 不影响 pub/sub 的订阅循环**（实测 redis-py 8.1.0）：
+#: `PubSub.parse_response(block=True)` 显式传 `timeout=None`，把这一次读的超时关掉，
+#: 所以 `ws.py` 的订阅线程在频道安静时不会被超时踢出去——
+#: 用 `socket_timeout=0.3` 的客户端安静等 9 秒仍能收到广播。
+#: 写在这里是免得后来人看到"共用客户端 + 短超时"就以为订阅坏了，回头去给它开特例。
+
+#: 客户端缓存：**每次 from_url 都会新建一个连接池和一条 TCP 连接**。
+#: 原实现每调用一次就建一次（实测两次调用 `client is client2` 为 False、
+#: 连接池也不是同一个），于是每个请求都要走一遍三次握手——健康时是吞吐天花板，
+#: 不健康时是每请求一次完整的连接超时。
+#: 键是 (url, timeout)，**值里连 redis 模块一起存**，取用前比对模块身份。
+#: 这一条是被自己的测试逼出来的：`test_config_matrix.py` 用同一个 URL 连着跑两个
+#: 用例、每次换一个假 redis 模块，只按键做判断时第二个用例拿到的是第一个缓存的桩——
+#: 单独跑绿、整模块跑红。与其要求每个测试记得清缓存（迟早有人忘），
+#: 不如让"换了一套 redis 实现"**自动**算作缓存未命中。
+#: 身份放在值里而不是键里：放键里的话每换一次模块就多一条永不回收的条目。
+_CLIENTS: dict[tuple[str, float], tuple[object, object]] = {}
+_CLIENTS_LOCK = threading.Lock()
+
+
+def _redis_client(timeout: float = DEFAULT_REDIS_TIMEOUT):
+    """按 MEDPLAT_REDIS_URL 取一个**复用的**客户端；未配置时返回 None。
+
+    `timeout` 同时用作连接超时与读写超时。调用方按"这条路慢了要紧不要紧"选值：
+    请求热路径上的监控计数用很短的值（丢一条计数无所谓，拖慢请求是事故），
+    后台任务用默认值。
+    """
     url = os.environ.get("MEDPLAT_REDIS_URL", "")
     if not url:
         return None
     import redis  # 延迟导入：未配置 Redis 时不要求安装
 
-    return redis.Redis.from_url(url, decode_responses=True)
+    key = (url, timeout)
+    with _CLIENTS_LOCK:
+        cached = _CLIENTS.get(key)
+        if cached is not None and cached[0] is redis:
+            return cached[1]
+        client = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_timeout=timeout,
+            socket_connect_timeout=timeout,
+            # 连接空闲久了对端可能已经悄悄断开，取用前先探活，
+            # 免得把一条死连接的失败算到某个倒霉请求头上。
+            health_check_interval=30,
+        )
+        _CLIENTS[key] = (redis, client)
+        return client
 
 
 class TokenBlacklist:

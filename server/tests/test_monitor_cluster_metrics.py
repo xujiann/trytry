@@ -68,7 +68,7 @@ def _stats(client, admin) -> dict:
 
 def test_无redis_进程内口径与现状一致(client, admin, monkeypatch):
     """默认部署（无 Redis）回归：键集合与 scope 文案不变，无 counter_scope。"""
-    monkeypatch.setattr(monitor, "_redis_client", lambda: None)
+    monkeypatch.setattr(monitor, "_redis_client", lambda *_a, **_kw: None)
     body = _stats(client, admin)
     assert body["scope"] == "本实例自启动以来（进程重启即清零）"
     assert "counter_scope" not in body
@@ -80,14 +80,14 @@ def test_无redis_进程内口径与现状一致(client, admin, monkeypatch):
 
 
 def test_无redis_record不触碰集群计数(monkeypatch):
-    monkeypatch.setattr(monitor, "_redis_client", lambda: None)
+    monkeypatch.setattr(monitor, "_redis_client", lambda *_a, **_kw: None)
     metrics.record("GET", "/api/exams/1", 200, 12.0)  # 不该抛，也无处可写
     assert cluster_snapshot() is None, "未配置 Redis 时集群快照必须是 None（无从得知，不冒充）"
 
 
 def test_有redis_计数走hash且响应标注集群口径(client, admin, monkeypatch):
     fake = FakeRedis()
-    monkeypatch.setattr(monitor, "_redis_client", lambda: fake)
+    monkeypatch.setattr(monitor, "_redis_client", lambda *_a, **_kw: fake)
     # 两个"实例"各自 record（进程内计数器只吃得到本实例，Redis hash 吃得到全部）
     metrics.record("GET", "/api/exams/1", 200, 10.0)
     metrics.record("GET", "/api/exams/2", 200, 30.0)
@@ -113,7 +113,7 @@ def test_有redis_计数走hash且响应标注集群口径(client, admin, monkey
 def test_有redis_计数跨清零仍在(monkeypatch):
     """进程重启（这里用 metrics.reset 模拟）后集群 hash 不清零——这正是集群口径的意义。"""
     fake = FakeRedis()
-    monkeypatch.setattr(monitor, "_redis_client", lambda: fake)
+    monkeypatch.setattr(monitor, "_redis_client", lambda *_a, **_kw: fake)
     metrics.record("GET", "/api/exams/1", 200, 10.0)
     metrics.reset()
     snap = cluster_snapshot()

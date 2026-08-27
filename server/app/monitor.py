@@ -125,13 +125,70 @@ metrics = ApiMetrics()
 _METRICS_PREFIX = "medplat:metrics:"
 
 
+#: 集群计数的出网超时：这条路在**每个请求**的主路径上（见 main.py 的
+#: request_log_middleware），而它记的只是一条计数。丢一条无所谓，拖慢请求是事故，
+#: 所以给一个远比默认值短的超时。
+_CLUSTER_TIMEOUT = 0.3
+
+#: 熔断：连续失败到阈值就停一段时间不再尝试。
+#:
+#: 光有超时不够——Redis 整段不可达时，每个请求仍要付一次 0.3 秒（20ms 的请求变成
+#: 320ms，慢 16 倍），而**推荐的生产形态恰恰强制配 Redis**（多实例无 Redis 会拒启），
+#: 所以这条路一定会被踩到。熔断之后一次故障最多付几次超时，之后归零。
+#:
+#: 时钟用 `time.monotonic()` 而不是 `time.time()`：后者会被 NTP 校时、
+#: 运维改系统时间往前后拨，那会让熔断器要么一直开着几小时、要么立刻放行。
+#: 口径与 `alerting.py` 的冷却一致（那里本来就用的 monotonic）。
+#: 本文件其余地方的 `time.time()` 是**给人看的墙钟**（实例启动时刻、样本时间戳），
+#: 两者不是一回事，别顺手统一。
+_BREAKER_THRESHOLD = 3
+_BREAKER_COOLDOWN_SECONDS = 30.0
+_breaker_lock = threading.Lock()
+_breaker_failures = 0
+_breaker_open_until = 0.0
+
+
+def _breaker_allows() -> bool:
+    with _breaker_lock:
+        return time.monotonic() >= _breaker_open_until
+
+
+def _breaker_record(ok: bool) -> None:
+    global _breaker_failures, _breaker_open_until
+    with _breaker_lock:
+        if ok:
+            _breaker_failures = 0
+            return
+        _breaker_failures += 1
+        if _breaker_failures >= _BREAKER_THRESHOLD:
+            _breaker_open_until = time.monotonic() + _BREAKER_COOLDOWN_SECONDS
+            _breaker_failures = 0
+
+
+def _breaker_reset() -> None:
+    """仅供测试：把熔断器恢复到初始状态，免得用例之间互相影响。"""
+    global _breaker_failures, _breaker_open_until
+    with _breaker_lock:
+        _breaker_failures = 0
+        _breaker_open_until = 0.0
+
+
 def _record_cluster(module: str, status: int, duration_ms: float) -> None:
     """把一次调用累加进 Redis hash（未配置 Redis 时空操作）。
 
     一次 pipeline 六个 incr，单个往返；Redis 抖动不该影响业务请求，
     失败静默丢这一条——监控计数丢一条无所谓，请求变慢或报错才是事故。
+
+    这段注释的**意图**一直是对的，但原实现兑现不了：超时是吃 redis-py 的默认值的，
+    而那个值随版本变（`requirements.txt` 只钉 `redis>=5.0`，无 lockfile）——
+    redis-py 5.0 默认 `None`（永久挂起，`except Exception` 接不到任何东西），
+    8.1 默认 5 秒（实测把 URL 指向丢包地址，一次调用阻塞 **5.01 秒**）。
+    而这段跑在事件循环上、**每个请求一次**：Redis 一丢包，全站降到 5 秒一个请求。
+    现在靠三件事兑现：复用客户端（不再每请求建连）、短超时、以及熔断。
     """
-    redis = _redis_client()
+    if not _breaker_allows():
+        return
+    redis = _redis_client(_CLUSTER_TIMEOUT)
     if redis is None:
         return
     try:
@@ -143,8 +200,10 @@ def _record_cluster(module: str, status: int, duration_ms: float) -> None:
         pipe.hincrby(f"{_METRICS_PREFIX}module_count", module, 1)
         pipe.hincrbyfloat(f"{_METRICS_PREFIX}module_duration", module, duration_ms)
         pipe.execute()
-    except Exception:  # pragma: no cover - Redis 抖动不该影响业务请求
-        pass
+    except Exception:  # Redis 抖动不该影响业务请求
+        _breaker_record(False)
+    else:
+        _breaker_record(True)
 
 
 def cluster_snapshot() -> dict | None:
