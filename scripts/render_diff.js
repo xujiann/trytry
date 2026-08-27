@@ -219,6 +219,18 @@ async function main() {
     for (const [page, spec] of Object.entries(FIXTURES)) console.log(`${page}\t${spec.fn}`);
     return;
   }
+  if (argv[0] === "--dump") {
+    // 只渲染工作区并打印 HTML：给**新增页面**用——它们在 base 里不存在，
+    // 比对路径走不到"暂无数据/转义"那两道检查，这里把渲染物吐出来让
+    // 调用方自己 grep（有没有未转义的载荷、有没有空表）。
+    for (const page of argv.slice(1)) {
+      const spec = FIXTURES[page];
+      if (!spec) { console.log(`✗ ${page}: 夹具里没有这一页`); process.exitCode = 1; continue; }
+      const out = await render(path.join(ROOT, STATIC_REL), page, spec.fn);
+      console.log(`/*==page:${page}==*/\n${out.html}`);
+    }
+    return;
+  }
   let base = "HEAD";
   if (argv[0] === "--base") { base = argv[1]; argv.splice(0, 2); }
   const pages = argv.length ? argv : Object.keys(FIXTURES);

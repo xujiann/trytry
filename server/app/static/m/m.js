@@ -932,6 +932,7 @@ async function loadSpd() {
     if (activeSpd === "followup") return await renderSpdFollowups(box);
     if (activeSpd === "plan") return await renderSpdPlans(box);
     if (activeSpd === "referral") return await renderSpdReferrals(box);
+    if (activeSpd === "consult") return await renderSpdConsults(box);
     return await renderSpdScreen(box);
   } catch (err) {
     box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
@@ -1099,6 +1100,82 @@ async function renderSpdReferrals(box) {
     ? rows.map((r) => referralCard(r)).join("")
     : '<p class="empty">暂无转诊记录</p>';
   bindReferralDetails(box);
+}
+
+/* 在线咨询（患者移动端 #18）：与主管医生一对一沟通，同病种复用开放会话。
+ *
+ * 发消息统一走 POST /api/portal/spd/consults——后端对同病种的 open 会话是
+ * **复用**而不是新开，所以"继续聊"和"发起新咨询"是同一个动作；会话已结束时
+ * 同一动作自然开新会话，界面上如实写明这一点，不做两套入口。 */
+const SPD_CONSULT_STATUS_TAGS = { open: ["进行中", "orange"], closed: ["已结束", ""] };
+
+async function renderSpdConsults(box) {
+  const [consults, home] = await Promise.all([
+    authApi(`/api/portal/spd/consults${spdQuery()}`),
+    authApi(`/api/portal/spd/home${spdQuery()}`),
+  ]);
+  const programs = (home.enrolled ? home.programs : []).map((p) =>
+    `<option value="${esc(p.program_code)}">${esc(p.program_name || p.program_code)}</option>`);
+  box.innerHTML = `
+    <div class="m-card">
+      <p class="hint">向主管医生发起专病咨询；同一病种的进行中会话会继续，不会重复新开</p>
+      <select id="spd-consult-program">${programs.join("") ||
+        '<option value="">（未纳管，可发一般咨询）</option>'}</select>
+      <textarea id="spd-consult-input" rows="3" placeholder="想咨询的问题…"></textarea>
+      <button type="button" id="spd-consult-send">发送</button>
+      <p id="spd-consult-msg" class="msg"></p>
+    </div>
+    ${consults.length ? consults.map((c) => `<div class="m-card">
+      ${kv("病种", esc(c.program_code || "一般咨询"))}
+      ${kv("状态", spdTagOf(SPD_CONSULT_STATUS_TAGS, c.status))}
+      ${kv("发起时间", esc(c.created_at.slice(0, 16)))}
+      <button class="consult-open" data-consult="${c.id}">查看对话</button>
+    </div>`).join("") : '<p class="empty">暂无咨询记录</p>'}
+    <div id="spd-consult-thread"></div>`;
+
+  const send = async (programCode, content) => {
+    const body = { program_code: programCode, content };
+    if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+    return authApi("/api/portal/spd/consults", {
+      method: "POST", body: JSON.stringify(body) });
+  };
+  $("#spd-consult-send").addEventListener("click", async () => {
+    const content = $("#spd-consult-input").value.trim();
+    if (!content) return;
+    try {
+      await send($("#spd-consult-program").value, content);
+      await loadSpd();
+    } catch (err) { $("#spd-consult-msg").textContent = err.message; }
+  });
+  box.querySelectorAll(".consult-open").forEach((btn) => {
+    btn.addEventListener("click", () => showConsultThread(btn.dataset.consult,
+      consults.find((c) => String(c.id) === btn.dataset.consult), send));
+  });
+}
+
+async function showConsultThread(consultId, consult, send) {
+  const messages = await authApi(
+    `/api/portal/spd/consults/${consultId}/messages${spdQuery()}`);
+  const closed = consult && consult.status === "closed";
+  $("#spd-consult-thread").innerHTML = `<div class="m-card">
+    <div class="sec-title">对话记录</div>
+    ${messages.map((m) => kv(m.sender === "patient" ? "我" : "医生",
+      `${esc(m.content)}<br><small>${esc(m.created_at.slice(0, 16))}</small>`)).join("")
+      || '<p class="empty">暂无消息</p>'}
+    <textarea id="spd-thread-input" rows="2"
+      placeholder="${closed ? "该会话已结束，发送将开启新会话…" : "继续沟通…"}"></textarea>
+    <button type="button" id="spd-thread-send">发送</button>
+    <p id="spd-thread-msg" class="msg"></p>
+  </div>`;
+  $("#spd-consult-thread").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#spd-thread-send").addEventListener("click", async () => {
+    const content = $("#spd-thread-input").value.trim();
+    if (!content) return;
+    try {
+      await send(consult ? consult.program_code : "", content);
+      await loadSpd();
+    } catch (err) { $("#spd-thread-msg").textContent = err.message; }
+  });
 }
 
 async function renderSpdScreen(box) {
