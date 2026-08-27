@@ -84,10 +84,16 @@ class MockWeChatProvider:
         return {"openid": f"mock_{seed}", "unionid": "", "nickname": f"微信用户{seed[:6]}"}
 
     def send_template_message(self, openid: str, template_id: str, data: dict, url: str = "") -> bool:
-        """联调桩：不出网，只把要发的内容落日志。"""
+        """联调桩：不出网，只把要发的**字段名**落日志。
+
+        原实现打的是 `data=%s`——模板消息的 value 里是姓名、就诊时间这类居民信息，
+        而 `medplat.*` 现在全部落 stdout + 轮转文件（等保 6 个月留存）。
+        打字段名足够联调（看得出模板对不对、少没少字段），打值就是把居民信息
+        写进留存档案。同 `sms.ConsoleSmsProvider` 的取舍。
+        """
         logger.info(
-            "[WECHAT-MOCK] 模板消息 openid=%s template=%s url=%s data=%s",
-            openid, template_id, url, data,
+            "[WECHAT-MOCK] 模板消息 openid=%s template=%s url=%s data字段=%s",
+            openid, template_id, url, sorted(data),
         )
         return True
 

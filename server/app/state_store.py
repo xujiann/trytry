@@ -24,11 +24,20 @@ import time
 #: 超时这条口径仓库里本来就有，只是没铺到这里。
 DEFAULT_REDIS_TIMEOUT = 5.0
 
-#: **`socket_timeout` 不影响 pub/sub 的订阅循环**（实测 redis-py 8.1.0）：
-#: `PubSub.parse_response(block=True)` 显式传 `timeout=None`，把这一次读的超时关掉，
-#: 所以 `ws.py` 的订阅线程在频道安静时不会被超时踢出去——
-#: 用 `socket_timeout=0.3` 的客户端安静等 9 秒仍能收到广播。
-#: 写在这里是免得后来人看到"共用客户端 + 短超时"就以为订阅坏了，回头去给它开特例。
+#: **订阅循环必须传 `timeout=None`**，这是 `_redis_client` 唯一允许的例外。
+#:
+#: `pubsub.listen()` 是长阻塞读，频道安静多久就要阻塞多久。它扛不扛得住读超时
+#: **也随 redis-py 版本变**，两版都实测过（假 Redis 起订阅、安静 9 秒后发一条）：
+#:
+#: - **8.1.0**：`PubSub.parse_response(block=True)` 显式传 `timeout=None` 关掉这次读的
+#:   超时，`socket_timeout=0.3` 的客户端安静等 9 秒照样收到广播；
+#: - **5.0.1**：`Connection.read_response` **根本没有 timeout 形参**，socket 自己的
+#:   超时就生效——安静 5 秒后抛 TimeoutError，`ws._subscriber_loop` 的 `except` 记一条
+#:   warning 就退出线程，**跨实例广播从此静默丢失**（危急值、缺药推送都走这条）。
+#:
+#: 也就是说"给客户端统一设读超时"这件事，在 5.x 上会打死订阅线程。所以订阅那一路
+#: 显式要 `timeout=None`：不设读超时，但**连接超时始终有界**（见下面的实现）。
+#: 这正是本模块开头那条口径的另一面——不吃库的默认值，也不假设库的行为跨版本一致。
 
 #: 客户端缓存：**每次 from_url 都会新建一个连接池和一条 TCP 连接**。
 #: 原实现每调用一次就建一次（实测两次调用 `client is client2` 为 False、
@@ -40,16 +49,20 @@ DEFAULT_REDIS_TIMEOUT = 5.0
 #: 单独跑绿、整模块跑红。与其要求每个测试记得清缓存（迟早有人忘），
 #: 不如让"换了一套 redis 实现"**自动**算作缓存未命中。
 #: 身份放在值里而不是键里：放键里的话每换一次模块就多一条永不回收的条目。
-_CLIENTS: dict[tuple[str, float], tuple[object, object]] = {}
+_CLIENTS: dict[tuple[str, float | None], tuple[object, object]] = {}
 _CLIENTS_LOCK = threading.Lock()
 
 
-def _redis_client(timeout: float = DEFAULT_REDIS_TIMEOUT):
+def _redis_client(timeout: float | None = DEFAULT_REDIS_TIMEOUT):
     """按 MEDPLAT_REDIS_URL 取一个**复用的**客户端；未配置时返回 None。
 
-    `timeout` 同时用作连接超时与读写超时。调用方按"这条路慢了要紧不要紧"选值：
+    `timeout` 是**读写**超时。调用方按"这条路慢了要紧不要紧"选值：
     请求热路径上的监控计数用很短的值（丢一条计数无所谓，拖慢请求是事故），
     后台任务用默认值。
+
+    `timeout=None` = 不设读写超时，**只给 pub/sub 的订阅循环用**（理由见上面的注释块）。
+    即便如此**连接超时依然有界**——连不上和连上后不回包是两码事，
+    前者没有任何理由无限等下去。
     """
     url = os.environ.get("MEDPLAT_REDIS_URL", "")
     if not url:
@@ -65,11 +78,18 @@ def _redis_client(timeout: float = DEFAULT_REDIS_TIMEOUT):
             url,
             decode_responses=True,
             socket_timeout=timeout,
-            socket_connect_timeout=timeout,
+            socket_connect_timeout=DEFAULT_REDIS_TIMEOUT if timeout is None else timeout,
             # 连接空闲久了对端可能已经悄悄断开，取用前先探活，
             # 免得把一条死连接的失败算到某个倒霉请求头上。
             health_check_interval=30,
         )
+        # 换掉一条作废的缓存项时，把旧客户端的连接池关掉——否则它的 socket
+        # 会一直挂到进程结束（缓存本身永不淘汰，见上）。
+        if cached is not None:
+            try:
+                cached[1].close()  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 - 关不掉就算了，不能因此拿不到新客户端
+                pass
         _CLIENTS[key] = (redis, client)
         return client
 

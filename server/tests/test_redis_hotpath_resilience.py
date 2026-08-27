@@ -170,6 +170,44 @@ def test_未配置redis时返回None(monkeypatch):
     assert state_store._redis_client() is None
 
 
+def test_建客户端抛异常不得逃逸(monkeypatch):
+    """`MEDPLAT_REDIS_URL` 直接读 os.environ（绕过 Settings 校验，TECH_DEBT P2-25），
+    把 `redis://` 敲成 `http://`、端口敲成非数字，`from_url` 当场抛 ValueError。
+    这个异常若从 `_record_cluster` 逃出去，会一路穿过 `metrics.record` → 请求中间件：
+    **一个环境变量的错别字让每一个请求（含 /api/health）都变成 500**。"""
+    def _boom(timeout=state_store.DEFAULT_REDIS_TIMEOUT):
+        raise ValueError("Redis URL must specify one of the following schemes")
+
+    monkeypatch.setattr(monitor, "_redis_client", _boom)
+    monitor._record_cluster("exams", 200, 12.0)  # 不抛即通过
+
+
+def test_坏URL只记一条错误日志(monkeypatch, caplog):
+    """配置错误不会自愈：每请求记一条会刷爆日志，一条不记则运维永远不知道
+    集群计数其实一直是空的。只记第一条。"""
+    import logging
+
+    def _boom(timeout=state_store.DEFAULT_REDIS_TIMEOUT):
+        raise ValueError("bad url")
+
+    monkeypatch.setattr(monitor, "_redis_client", _boom)
+    with caplog.at_level(logging.ERROR, logger="medplat.monitor"):
+        for _ in range(5):
+            monitor._record_cluster("exams", 200, 12.0)
+    hits = [r for r in caplog.records if "MEDPLAT_REDIS_URL" in r.getMessage()]
+    assert len(hits) == 1, f"应恰好记 1 条，实际 {len(hits)} 条"
+
+
+def test_未配置redis时不碰熔断锁(monkeypatch):
+    """默认部署没配 Redis，此时本函数是纯空操作，不该让每个请求都白付一次加锁。"""
+    calls = []
+    monkeypatch.setattr(monitor, "_redis_client", lambda *a, **kw: None)
+    real_allows = monitor._breaker_allows
+    monkeypatch.setattr(monitor, "_breaker_allows", lambda: calls.append(1) or real_allows())
+    monitor._record_cluster("exams", 200, 12.0)
+    assert not calls, "没配 Redis 也去查了熔断器——热路径上白付一次加锁"
+
+
 # ---------------------------------------------------------------- 熔断
 
 def test_连续失败到阈值后停止出网():

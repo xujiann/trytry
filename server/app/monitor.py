@@ -14,6 +14,7 @@
 响应里始终带上 `scope` 字段说明口径。监控数据最怕的不是不准，
 是**看起来像全局的其实只是一台**——那会让人在扩容后误判流量掉了一半。
 """
+import logging
 import os
 import threading
 import time
@@ -21,6 +22,8 @@ import uuid
 from collections import Counter, defaultdict, deque
 
 from .state_store import _redis_client
+
+logger = logging.getLogger("medplat.monitor")
 
 # 实例标识：进程启动时生成，同一台机器重启即换号（重启本身就是要被看见的事件）
 INSTANCE_ID = f"{os.uname().nodename}-{uuid.uuid4().hex[:8]}"
@@ -147,6 +150,21 @@ _breaker_lock = threading.Lock()
 _breaker_failures = 0
 _breaker_open_until = 0.0
 
+#: `MEDPLAT_REDIS_URL` 写错导致建客户端失败时，只记第一条（见 `_record_cluster`）。
+_client_error_logged = False
+
+
+def _log_client_error_once() -> None:
+    global _client_error_logged
+    with _breaker_lock:
+        if _client_error_logged:
+            return
+        _client_error_logged = True
+    logger.error(
+        "MEDPLAT_REDIS_URL 无法建立客户端，集群计数将一直为空（本条只记一次）",
+        exc_info=True,
+    )
+
 
 def _breaker_allows() -> bool:
     with _breaker_lock:
@@ -166,11 +184,17 @@ def _breaker_record(ok: bool) -> None:
 
 
 def _breaker_reset() -> None:
-    """仅供测试：把熔断器恢复到初始状态，免得用例之间互相影响。"""
-    global _breaker_failures, _breaker_open_until
+    """仅供测试：把熔断器与"已记过一次"标记恢复到初始状态，免得用例之间互相影响。
+
+    熔断器是**进程级全局**、冷却按真实的 30 秒算——任何一个用例把它推开，
+    后面的用例就会拿到空的集群计数，而报错信息会指向 Redis 接线而不是泄漏的全局状态。
+    故 `conftest.py` 里按 autouse 每个用例复位一次。
+    """
+    global _breaker_failures, _breaker_open_until, _client_error_logged
     with _breaker_lock:
         _breaker_failures = 0
         _breaker_open_until = 0.0
+        _client_error_logged = False
 
 
 def _record_cluster(module: str, status: int, duration_ms: float) -> None:
@@ -186,10 +210,26 @@ def _record_cluster(module: str, status: int, duration_ms: float) -> None:
     而这段跑在事件循环上、**每个请求一次**：Redis 一丢包，全站降到 5 秒一个请求。
     现在靠三件事兑现：复用客户端（不再每请求建连）、短超时、以及熔断。
     """
-    if not _breaker_allows():
+    try:
+        redis = _redis_client(_CLUSTER_TIMEOUT)
+    except Exception:  # noqa: BLE001 - 见下
+        # **建客户端本身也会抛。** `MEDPLAT_REDIS_URL` 是直接读 os.environ 的
+        # （绕过 Settings 校验，见 TECH_DEBT P2-25），把 `redis://` 敲成 `http://`
+        # 或端口敲成非数字，`from_url` 当场抛 ValueError。原先这一句在 try 外面，
+        # 于是这个异常会一路穿过 `metrics.record` → 请求中间件 → 最外层：
+        # **一个环境变量的错别字让每一个请求（含 /api/health）都变成 500**，
+        # 与本函数"Redis 抖动不该影响业务请求"的承诺正相反。
+        #
+        # 这是配置错误、不会自愈，所以不进熔断（熔断管的是网络抖动），
+        # 而是**只记一次**——每请求记一条会把日志刷爆，一条都不记则运维永远
+        # 不知道集群计数其实一直是空的。
+        _log_client_error_once()
         return
-    redis = _redis_client(_CLUSTER_TIMEOUT)
     if redis is None:
+        return
+    # 熔断判断放在"有没有配 Redis"之后：默认部署根本没配，这时本函数是纯空操作，
+    # 不该让每个请求都白付一次加锁。
+    if not _breaker_allows():
         return
     try:
         pipe = redis.pipeline()

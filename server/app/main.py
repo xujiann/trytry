@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import sys
 import threading
 import time
 import uuid
@@ -21,6 +22,7 @@ from pathlib import Path
 from fastapi import FastAPI, Response, status
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from .config import settings
@@ -442,23 +444,31 @@ def _configure_logging() -> None:
     RotatingFileHandler 指着同一个文件**：各自独立翻滚会互相改名对方的文件，
     轮转一次就丢一段日志。
     """
-    if _root_logger.handlers:
-        return
-    formatter = _MedplatFormatter()
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    _root_logger.addHandler(stream_handler)
-    if settings.log_file:
-        log_path = Path(settings.log_file)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = RotatingFileHandler(
-            log_path,
-            maxBytes=settings.log_rotate_max_mb * 1024 * 1024,
-            backupCount=settings.log_rotate_backups,
-            encoding="utf-8",
-        )
-        file_handler.setFormatter(formatter)
-        _root_logger.addHandler(file_handler)
+    # 幂等**只挡"重复挂 handler"这一件事**，级别与 propagate 一律照设。
+    # 早前的写法是整个函数 `if handlers: return`，那样一来：uvicorn 在 import
+    # 本模块**之前**就会应用 `--log-config`，运维若在那份 dictConfig 里给
+    # `medplat` 配了 handler（现在所有日志都归到这个父 logger 下，那正是最自然的
+    # 配置点），本函数会当场返回——`MEDPLAT_LOG_FILE` 静默失效、级别不设、
+    # access 也拿不到 propagate，**恰好退回本次要修的那个故障**，而且不报错。
+    if not _root_logger.handlers:
+        formatter = _MedplatFormatter()
+        # 显式 stdout：`StreamHandler()` 不带参数走的是 **stderr**，
+        # 而本函数与 `docs/运维手册.md` 都写着 stdout。docker/journald 两个流都收，
+        # 但只 tail stdout 的采集边车会把这 18 个 logger 整个漏掉。
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        _root_logger.addHandler(stream_handler)
+        if settings.log_file:
+            log_path = Path(settings.log_file)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                log_path,
+                maxBytes=settings.log_rotate_max_mb * 1024 * 1024,
+                backupCount=settings.log_rotate_backups,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            _root_logger.addHandler(file_handler)
     _root_logger.setLevel(logging.INFO)
     # `medplat` 的 propagate 保持默认的 True——这 17 个 logger 本来就往 root 传，
     # 改成 False 属于本次修复不需要的行为变更（CLAUDE.md 第 1 条），还会让
@@ -699,7 +709,16 @@ async def audit_middleware(request, call_next):
     return response
 
 
-@app.get("/api/health", tags=["平台"])
+class HealthOut(BaseModel):
+    """健康检查响应。字段顺序即出参顺序，改动会改响应字节（见 §11 治理口径）。"""
+
+    status: str        # ok / degraded
+    service: str
+    version: str
+    database: str      # ok / error
+
+
+@app.get("/api/health", tags=["平台"], response_model=HealthOut)
 def health(response: Response):
     """健康检查：附带数据库连通性探测。
 

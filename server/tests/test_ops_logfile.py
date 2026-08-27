@@ -168,6 +168,47 @@ def test_初始化幂等(reinit_logger):
     assert len(logger.handlers) == before
 
 
+def test_已有handler时级别与propagate仍被设置():
+    """幂等只挡"重复挂 handler"，级别与 propagate 一律照设。
+
+    uvicorn 在 import 本模块**之前**就应用 `--log-config`；运维在那份 dictConfig
+    里给 `medplat` 配了 handler 的话，整函数 `if handlers: return` 会当场返回——
+    级别不设、access 拿不到 propagate，恰好退回本次要修的故障，而且不报错。"""
+    logger = logging.getLogger("medplat")
+    access = main_mod._access_logger
+    old_handlers, old_level = logger.handlers[:], logger.level
+    old_acc_prop, old_acc_level = access.propagate, access.level
+    try:
+        # 模拟 uvicorn --log-config 先行配置：已有一个 handler、级别是 WARNING
+        logger.handlers = [logging.NullHandler()]
+        logger.setLevel(logging.WARNING)
+        access.propagate = False
+        main_mod._configure_logging()
+        assert len(logger.handlers) == 1, "已有 handler 时不该再挂（那是双写）"
+        assert logger.level == logging.INFO, "级别没被设置——INFO 又被丢掉了"
+        assert access.propagate is True, "access 没拿到 propagate——访问日志进不了 handler"
+    finally:
+        logger.handlers = old_handlers
+        logger.setLevel(old_level)
+        access.propagate = old_acc_prop
+        access.setLevel(old_acc_level)
+
+
+def test_流输出走stdout而非stderr(reinit_logger):
+    """`StreamHandler()` 不带参数走 stderr，而本函数与运维手册都写着 stdout。
+    docker/journald 两个流都收，但只 tail stdout 的采集边车会把 18 个 logger 整个漏掉。"""
+    import sys
+
+    logger, _ = reinit_logger
+    streams = [
+        h.stream for h in logger.handlers
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler)
+    ]
+    assert streams and all(s is sys.stdout for s in streams), (
+        "流 handler 没有显式指到 stdout"
+    )
+
+
 def test_no_file_handler_when_log_file_empty(monkeypatch):
     monkeypatch.setattr(settings, "log_file", "")
     logger = logging.getLogger("medplat")
