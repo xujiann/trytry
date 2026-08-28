@@ -47,3 +47,5 @@ migration cost / risk / recommendation**。
 | [0013](0013-药品可用汇总的口径与批次同改约束.md) | 药品可用汇总的口径与批次同改约束 | Accepted |
 | [0014](0014-病种目录收敛为单一权威表.md) | 病种目录收敛为单一权威表（ADR-0003 方案 C 第二阶段） | **Proposed** |
 | [0015](0015-打印件防伪验真.md) | 打印件防伪验真：签名令牌二维码 + 公开最小披露核验 | Accepted |
+| [0016](0016-审计落库移出事件循环.md) | 审计落库移出事件循环（await run_in_threadpool） | Accepted |
+| [0017](0017-运行时依赖锁定.md) | 运行时依赖锁定（requirements.lock 钉版快照） | Accepted |
