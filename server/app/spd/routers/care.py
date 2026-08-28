@@ -4,6 +4,7 @@
 医生移动端 #8/#9/#12/#13、患者端 #4/#7/#10/#12。
 """
 from datetime import date, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -58,6 +59,281 @@ def _enrollment_of(db: Session, patient_id: int, program_code: str) -> SpdEnroll
         query.filter(SpdEnrollment.status == "active").first()
         or query.order_by(SpdEnrollment.id.desc()).first()
     )
+
+
+# ============================================================ 响应契约
+#
+# 模型集中放在**所有端点之前**：`response_model=` 是装饰器参数，在导入时就要求值
+# （与 `spd/config` 各子模块同一布局）。字段与顺序**精确镜像**各 `_xxx_out` 的
+# 当前出参——治理不得改响应字节（CLAUDE.md 第 7 条），逐字节取证见
+# tests/test_spd_care_contract.py 与套件级捕获（tests/capture_plugin.py）。
+#
+# 三个模型带 `Care` 前缀是**去重名**：labqc/eldercare/telemedicine 已各有
+# MeasurementOut/AssessmentOut/ConsultOut，OpenAPI 遇重名会把冲突双方都改写成
+# `app__routers__...` 的长限定名——连带把别的模块的规格书弄乱。
+
+
+class CareMeasurementOut(BaseModel):
+    """监测记录。`value` 是 **Float 列**：整数入参读回来是 `160.0`，声明 float
+    才是原样（与平台 Money 列正相反，判断依据是列类型，见 docs/接口标准与治理.md）。
+    `measured_at`/`created_at` 一类时间戳在 handler 里已 `isoformat()` 成串。"""
+
+    id: int
+    patient_id: int
+    program_code: str
+    metric: str
+    value: float
+    unit: str
+    level: str
+    source: str
+    device_sn: str
+    note: str
+    measured_at: str
+
+
+class MeasurementBatchOut(BaseModel):
+    created: int
+    abnormal: int
+
+
+class TrendPointOut(BaseModel):
+    label: str
+    # Float 列的聚合值：avg 经 round() 仍是 float，min/max 取自原值
+    avg: float
+    min: float
+    max: float
+    count: int
+
+
+class MeasurementTrendOut(BaseModel):
+    metric: str
+    granularity: str
+    points: list[TrendPointOut]
+    # 键是等级取值（normal/high/low），随数据出现而定
+    level_distribution: dict[str, int]
+    total: int
+    # 无数据时为 null——键永远在，不是条件键
+    latest: CareMeasurementOut | None
+
+
+class CareAssessmentOut(BaseModel):
+    """评估记录。`score` 是 Float 列（3 分读回来是 3.0）；`answers` 是 JSON 列，
+    题目键随量表而变，宽字典原样透出。"""
+
+    id: int
+    patient_id: int
+    patient_name: str
+    scale_id: int
+    scale_code: str
+    scale_version: str
+    program_code: str
+    answers: dict[str, Any]
+    score: float
+    risk_level: str
+    advice: str
+    channel: str
+    created_at: str
+
+
+class AssessmentStatsOut(BaseModel):
+    persons: int
+    times: int
+    # 键：风险等级（未分级记"未分级"）；逐题分布键：题目 key → 选项 → 次数
+    by_risk: dict[str, int]
+    by_item: dict[str, dict[str, int]]
+
+
+class InterventionTemplateCreatedOut(BaseModel):
+    id: int
+    code: str
+    name: str
+
+
+class InterventionTemplateOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    program_code: str
+    category: str
+    content: str
+    measures: str
+    frequency: str
+    cycle_days: int
+    auto_risk_level: str
+
+
+class InterventionsCreatedOut(BaseModel):
+    created: int
+    ids: list[int]
+
+
+class InterventionOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    # 患者未纳管该病种时为 null
+    enrollment_id: int | None
+    program_code: str
+    template_id: int | None
+    goal: str
+    content: str
+    measures: str
+    frequency: str
+    next_at: str
+    owner_id: int | None
+    status: str
+    feedback: str
+    # 未读时是空串 ""，不是 null（handler 写的是 `"" if None`）
+    read_at: str
+    created_at: str
+
+
+class EduPushedOut(BaseModel):
+    pushed: int
+    sent: int
+    failed: int
+    material: str
+
+
+class EduPushOut(BaseModel):
+    id: int
+    material_id: int
+    title: str
+    patient_id: int
+    channel: str
+    send_at: str
+    frequency: str
+    status: str
+    fail_reason: str
+    read_at: str
+    created_at: str
+
+
+class EduStatsOut(BaseModel):
+    covered_patients: int
+    push_times: int
+    sent: int
+    read: int
+    # 两条分支（做除法 / 分母为零兜底 0.0）都是 float
+    read_rate: float
+    by_channel: dict[str, int]
+
+
+class RevisitOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    program_code: str
+    plan_date: str
+    dept: str
+    doctor_user_id: int | None
+    items: str
+    source: str
+    status: str
+    remind_status: str
+    actual_date: str
+    # JSON 日志列：[{"at": 日期, "note": 说明}]，办理与超期扫描都会追加
+    log: list[dict[str, Any]]
+
+
+class CaseReportTaskCreatedOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    active: bool
+
+
+class CaseReportTaskOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    program_code: str
+    dept: str
+    manager_user_id: int | None
+    # 两个 JSON 列，存的是 id 数组
+    assignee_ids: list[int]
+    org_ids: list[int]
+    active: bool
+
+
+class CaseReportTaskUpdatedOut(BaseModel):
+    """改上报任务只回三个键——与新建回执（多 code）不是同一组，故是两个模型。"""
+
+    id: int
+    name: str
+    active: bool
+
+
+class CaseReportStatusOut(BaseModel):
+    """上报单的动作回执（新建 / 处置共用同一形状）。"""
+
+    id: int
+    status: str
+
+
+class CaseReportOut(BaseModel):
+    id: int
+    task_id: int | None
+    patient_id: int
+    patient_name: str
+    program_code: str
+    report_type: str
+    content: str
+    trigger_rule: str
+    status: str
+    handle_note: str
+    created_at: str
+
+
+class HealthPrescriptionCreatedOut(BaseModel):
+    id: int
+    created_at: str
+
+
+class HealthPrescriptionOut(BaseModel):
+    id: int
+    program_code: str
+    drug_advice: str
+    rehab_advice: str
+    life_advice: str
+    target_note: str
+    doctor_id: int | None
+    created_at: str
+
+
+class CareConsultOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    program_code: str
+    # 尚无医生接管时为 null（首次回复即认领）
+    doctor_id: int | None
+    status: str
+    messages: int
+    created_at: str
+
+
+class ConsultMessageOut(BaseModel):
+    id: int
+    sender: str
+    sender_id: int | None
+    content: str
+    created_at: str
+
+
+class ConsultRepliedOut(BaseModel):
+    id: int
+    created_at: str
+
+
+class ConsultClosedOut(BaseModel):
+    id: int
+    status: str
+
+
+class ConsultToFollowupOut(BaseModel):
+    task_id: int
+    due_date: str
 
 
 # ============================================================ 监测数据
@@ -115,7 +391,7 @@ def _record_measurement(db: Session, body: MeasurementIn, user_id: int | None) -
     return record
 
 
-@router.post("/measurements", status_code=201,
+@router.post("/measurements", response_model=CareMeasurementOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES, "operator"))])
 def create_measurement(
     body: MeasurementIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -144,7 +420,7 @@ def create_measurement(
     return _measure_out(record)
 
 
-@router.post("/measurements/batch",
+@router.post("/measurements/batch", response_model=MeasurementBatchOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES, "operator"))])
 def batch_measurements(
     body: MeasurementBatchIn, db: Session = Depends(get_db),
@@ -162,7 +438,7 @@ def batch_measurements(
     return {"created": created, "abnormal": abnormal}
 
 
-@router.get("/measurements")
+@router.get("/measurements", response_model=list[CareMeasurementOut])
 def list_measurements(
     response: Response,
     patient_id: int,
@@ -189,7 +465,7 @@ def list_measurements(
     return [_measure_out(m) for m in rows]
 
 
-@router.get("/measurements/trend")
+@router.get("/measurements/trend", response_model=MeasurementTrendOut)
 def measurement_trend(
     patient_id: int,
     metric: str,
@@ -264,7 +540,7 @@ def _assess_out(a: SpdAssessment, patient_name: str = "") -> dict:
     }
 
 
-@router.post("/assessments", status_code=201,
+@router.post("/assessments", response_model=CareAssessmentOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_assessment(
     body: AssessIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -359,7 +635,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
         )
 
 
-@router.get("/assessments")
+@router.get("/assessments", response_model=list[CareAssessmentOut])
 def list_assessments(
     response: Response,
     patient_id: int | None = None,
@@ -389,7 +665,7 @@ def list_assessments(
     return [_assess_out(r, names.get(r.patient_id, "")) for r in rows]
 
 
-@router.get("/assessments/stats")
+@router.get("/assessments/stats", response_model=AssessmentStatsOut)
 def assessment_stats(
     scale_code: str | None = None,
     program_code: str | None = None,
@@ -433,7 +709,8 @@ class InterventionTemplateIn(BaseModel):
     auto_risk_level: str = Field(default="", pattern="^(|low|mid|high|very_high)$")
 
 
-@router.post("/intervention-templates", status_code=201,
+@router.post("/intervention-templates", response_model=InterventionTemplateCreatedOut,
+             status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_intervention_template(
     body: InterventionTemplateIn, db: Session = Depends(get_db)
@@ -450,7 +727,7 @@ def create_intervention_template(
     return {"id": template.id, "code": template.code, "name": template.name}
 
 
-@router.get("/intervention-templates")
+@router.get("/intervention-templates", response_model=list[InterventionTemplateOut])
 def list_intervention_templates(
     program_code: str | None = None, category: str | None = None, db: Session = Depends(get_db)
 ):
@@ -492,7 +769,7 @@ def _intervention_out(i: SpdIntervention, patient_name: str = "") -> dict:
     }
 
 
-@router.post("/interventions", status_code=201,
+@router.post("/interventions", response_model=InterventionsCreatedOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_interventions(
     body: InterventionIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -540,7 +817,7 @@ def create_interventions(
     return {"created": len(created), "ids": created}
 
 
-@router.get("/interventions")
+@router.get("/interventions", response_model=list[InterventionOut])
 def list_interventions(
     response: Response,
     patient_id: int | None = None,
@@ -576,7 +853,7 @@ class InterventionUpdate(BaseModel):
     next_at: OptionalDateStr | None = None
 
 
-@router.patch("/interventions/{intervention_id}",
+@router.patch("/interventions/{intervention_id}", response_model=InterventionOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def update_intervention(
     intervention_id: int, body: InterventionUpdate, db: Session = Depends(get_db)
@@ -604,7 +881,7 @@ class EduPushIn(BaseModel):
     frequency: str = Field(default="once", max_length=32)
 
 
-@router.post("/edu-pushes", status_code=201,
+@router.post("/edu-pushes", response_model=EduPushedOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES, "operator"))])
 def push_education(
     body: EduPushIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -679,7 +956,7 @@ def dispatch_edu_push(db: Session, push: SpdEduPush, material: SpdEduMaterial) -
     return bool(delivered)
 
 
-@router.get("/edu-pushes")
+@router.get("/edu-pushes", response_model=list[EduPushOut])
 def list_edu_pushes(
     response: Response,
     patient_id: int | None = None,
@@ -712,7 +989,7 @@ def list_edu_pushes(
     ]
 
 
-@router.get("/edu-pushes/stats")
+@router.get("/edu-pushes/stats", response_model=EduStatsOut)
 def edu_stats(program_code: str | None = None, db: Session = Depends(get_db)):
     """宣教成效统计（成员端 #16）：覆盖人数、执行次数、阅读完成率。"""
     query = db.query(SpdEduPush)
@@ -763,7 +1040,8 @@ def _revisit_out(r: SpdRevisit, patient_name: str = "") -> dict:
     }
 
 
-@router.post("/revisits", status_code=201, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/revisits", response_model=RevisitOut, status_code=201,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_revisit(
     body: RevisitIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -774,7 +1052,7 @@ def create_revisit(
     return _revisit_out(record)
 
 
-@router.get("/revisits")
+@router.get("/revisits", response_model=list[RevisitOut])
 def list_revisits(
     response: Response,
     patient_id: int | None = None,
@@ -833,7 +1111,8 @@ class RevisitUpdate(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.patch("/revisits/{revisit_id}", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.patch("/revisits/{revisit_id}", response_model=RevisitOut,
+              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def update_revisit(revisit_id: int, body: RevisitUpdate, db: Session = Depends(get_db)):
     """编辑 / 移除 / 恢复复诊计划，并留日志（医生移动端 #12 要求日志记录能力）。"""
     record = db.get(SpdRevisit, revisit_id)
@@ -864,7 +1143,7 @@ class ReportTaskIn(BaseModel):
     org_ids: list[int] = Field(default_factory=list)
 
 
-@router.post("/case-report-tasks", status_code=201,
+@router.post("/case-report-tasks", response_model=CaseReportTaskCreatedOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_case_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     from sqlalchemy.exc import IntegrityError
@@ -879,7 +1158,7 @@ def create_case_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     return {"id": task.id, "code": task.code, "name": task.name, "active": task.active}
 
 
-@router.get("/case-report-tasks")
+@router.get("/case-report-tasks", response_model=list[CaseReportTaskOut])
 def list_case_report_tasks(active: bool | None = None, db: Session = Depends(get_db)):
     query = db.query(SpdCaseReportTask)
     if active is not None:
@@ -892,7 +1171,7 @@ def list_case_report_tasks(active: bool | None = None, db: Session = Depends(get
     ]
 
 
-@router.patch("/case-report-tasks/{task_id}",
+@router.patch("/case-report-tasks/{task_id}", response_model=CaseReportTaskUpdatedOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def update_case_report_task(task_id: int, body: dict, db: Session = Depends(get_db)):
     task = db.get(SpdCaseReportTask, task_id)
@@ -915,7 +1194,7 @@ class CaseReportIn(BaseModel):
     trigger_rule: str = Field(default="", max_length=128)
 
 
-@router.post("/case-reports", status_code=201,
+@router.post("/case-reports", response_model=CaseReportStatusOut, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_case_report(
     body: CaseReportIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -948,7 +1227,7 @@ def create_case_report(
     return {"id": report.id, "status": report.status}
 
 
-@router.get("/case-reports")
+@router.get("/case-reports", response_model=list[CaseReportOut])
 def list_case_reports(
     response: Response,
     patient_id: int | None = None,
@@ -1008,7 +1287,7 @@ class HandleReportIn(BaseModel):
     handle_note: str = Field(default="", max_length=512)
 
 
-@router.post("/case-reports/{report_id}/handle",
+@router.post("/case-reports/{report_id}/handle", response_model=CaseReportStatusOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def handle_case_report(
     report_id: int, body: HandleReportIn, db: Session = Depends(get_db),
@@ -1039,7 +1318,8 @@ class PrescriptionIn(BaseModel):
     target_note: str = Field(default="", max_length=512)
 
 
-@router.post("/health-prescriptions", status_code=201,
+@router.post("/health-prescriptions", response_model=HealthPrescriptionCreatedOut,
+             status_code=201,
              dependencies=[Depends(require_roles("doctor", "director"))])
 def create_health_prescription(
     body: PrescriptionIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -1053,7 +1333,7 @@ def create_health_prescription(
     return {"id": record.id, "created_at": record.created_at.isoformat()}
 
 
-@router.get("/health-prescriptions")
+@router.get("/health-prescriptions", response_model=list[HealthPrescriptionOut])
 def list_health_prescriptions(
     response: Response, patient_id: int, offset: int = 0, limit: int = 50,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
@@ -1079,7 +1359,7 @@ class ConsultReplyIn(BaseModel):
     content: str = Field(min_length=1, max_length=2048)
 
 
-@router.get("/consults")
+@router.get("/consults", response_model=list[CareConsultOut])
 def list_consults(
     response: Response,
     status: str | None = None,
@@ -1116,7 +1396,7 @@ def list_consults(
     ]
 
 
-@router.get("/consults/{consult_id}/messages")
+@router.get("/consults/{consult_id}/messages", response_model=list[ConsultMessageOut])
 def consult_messages(
     consult_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -1138,7 +1418,7 @@ def consult_messages(
     ]
 
 
-@router.post("/consults/{consult_id}/reply",
+@router.post("/consults/{consult_id}/reply", response_model=ConsultRepliedOut,
              dependencies=[Depends(require_roles("doctor", "director"))])
 def reply_consult(
     consult_id: int, body: ConsultReplyIn, db: Session = Depends(get_db),
@@ -1160,7 +1440,7 @@ def reply_consult(
     return {"id": message.id, "created_at": message.created_at.isoformat()}
 
 
-@router.post("/consults/{consult_id}/close",
+@router.post("/consults/{consult_id}/close", response_model=ConsultClosedOut,
              dependencies=[Depends(require_roles("doctor", "director"))])
 def close_consult(consult_id: int, db: Session = Depends(get_db)):
     consult = db.get(SpdConsult, consult_id)
@@ -1178,7 +1458,7 @@ class ConsultFollowupIn(BaseModel):
     due_days: int = Field(default=7, ge=0, le=365)
 
 
-@router.post("/consults/{consult_id}/to-followup",
+@router.post("/consults/{consult_id}/to-followup", response_model=ConsultToFollowupOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def consult_to_followup(
     consult_id: int, body: ConsultFollowupIn, db: Session = Depends(get_db),

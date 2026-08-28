@@ -152,7 +152,14 @@ import app.spd.routers as spd_routers
 #   分支缺 account_id→声明在最前+exclude_unset；advance 恢复/推进两形→
 #   可选键按出键序+exclude_unset；任务动作回执 27 键与清单行 29 键拆两模型。
 #   见 test_spd_assess_contract.py / test_spd_tasks_contract.py，五处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 375
+# → 336（spd/care 31 + spd/workbench 8，共 39，零跳过。判断集锦：监测值/评估
+#   分/趋势统计是 Float 列→float（整数入参读回 160.0，与 Money 相反）；
+#   read_at 是 "" 或 ISO 串非 null；workbench/team 三种角色条件键→
+#   exclude_unset 三种键序各钉一遍；by_org/team_patients 键是 id→
+#   dict[int,int]（序列化仍字符串键，字节不变）；4 个与他模块重名的模型
+#   改名避免 OpenAPI 把 labqc/eldercare 等既有 schema 名改写成长限定名。
+#   见 test_spd_care_contract.py / test_spd_workbench_contract.py。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 336
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -194,6 +201,10 @@ FULLY_GOVERNED = {
     # 见 test_spd_assess_contract.py / test_spd_tasks_contract.py
     "spd/assess",
     "spd/tasks",
+    # spd 照护与工作台两簇（care 31/workbench 8），欠账 375→336 那批，
+    # 见 test_spd_care_contract.py / test_spd_workbench_contract.py
+    "spd/care",
+    "spd/workbench",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",
