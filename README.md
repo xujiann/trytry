@@ -1,7 +1,7 @@
 # 县域医共体信息化平台（medplat）
 
-![tests](https://img.shields.io/badge/tests-520%20passed%20%2B%207%20e2e-brightgreen)
-![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)
+![tests](https://img.shields.io/badge/tests-2546%20passed%20%2B%2030%20skipped-brightgreen)
+![coverage](https://img.shields.io/badge/coverage%20gate-%E2%89%A570%25%20blocking-brightgreen)
 
 紧密型县域医共体信息化平台，依据国家卫生健康委《紧密型县域医共体信息化功能指引》（国卫办规划函〔2025〕63号）等文件建设。
 
@@ -10,7 +10,7 @@
 
 ## 当前进度
 
-后端 + 管理端前端（免构建 SPA，58 个页面，启动后访问 `http://127.0.0.1:8000/`）均已就绪，
+后端 + 管理端前端（免构建 SPA，91 个页面，启动后访问 `http://127.0.0.1:8000/`）均已就绪，
 每个后端业务模块都有对应管理端入口（`tests/test_api.py::test_spa_covers_every_backend_module` 防回退）：
 
 | 模块 | 说明 | 接口前缀 |
@@ -102,7 +102,7 @@
 演示数据：启动服务后执行 `python scripts/seed_demo.py` 一键灌入（覆盖全部模块，含住院文书、手术、成本、会计、随访、规则与流程）。
 脚本会顺带建好演示账号——三名医师 `doc_zhen1` / `doc_village` / `doc_county`、
 一名管理层 `dir_demo`（口令均为 `doctor123`），以及一个绑定到「张伟」的居民端账户
-（手机号 `13800138001`，验证码在 console 短信通道下由接口直接返回）。
+（手机号 `13800138001`，console 短信通道且显式设 `MEDPLAT_SMS_DEBUG_ECHO=1` 时验证码由接口直接返回，默认不回显）。
 站内消息不单独灌数据，它由报告出具/手术排班/出院这些动作自动派生；
 脚本末尾有一段终态自检，某个业务校验把中间步骤挡下来时会当场报错而不是静悄悄跳过。
 对接规范：见 [docs/接口对接规范.md](docs/接口对接规范.md)（含 FHIR R4 资源映射）。
@@ -124,7 +124,8 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 1. 打开 `/m` → 「我的档案」；
 2. 点「微信一键登录」（默认 mock 通道，无需公众号即可走通），或填手机号点「获取验证码」——
-   开发/演示环境（`MEDPLAT_SMS_PROVIDER=console` 且非 prod）验证码会直接回显并自动填入；
+   开发/演示环境（`MEDPLAT_SMS_PROVIDER=console`、显式设 `MEDPLAT_SMS_DEBUG_ECHO=1` 且非 prod
+   三者同时满足）验证码会直接回显并自动填入，默认不回显，生产环境恒不回显；
 3. 首次登录需实名绑定：填姓名 + 身份证号匹配已建档的患者。若登录手机号已登记在
    某份档案上且**全库唯一**，则登录即自动完成绑定，跳过这步。
 
@@ -140,18 +141,20 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 ```bash
 cd server
-python -m pytest tests/ -q                                        # 全量单元/接口测试（520 项通过，7 项 e2e 默认跳过）
+python -m pytest tests/ -q                                        # 全量单元/接口测试（实测 2546 项通过 + 30 项跳过；跳过项为 e2e（11 条）与真 PG 集成档等，需显式开启）
 python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖率报告
 ```
 
-- 当前行覆盖率 **93%**（阈值 70%），徽章值见文首；
-- CI（`.github/workflows/ci.yml`）每次推送执行全量测试并产出 `coverage.xml`
-  工件；覆盖率门禁当前为 **warning 模式**：低于 `COVERAGE_MIN`（70%）只告警不
-  阻断构建，去掉门禁步骤的 `|| true` 即切换为强制门禁。
+- 覆盖率门禁为**强制阻断**：低于 `COVERAGE_MIN`（70%）CI 直接失败（ADR-0002
+  落地时实测 87%，门槛留有余量）；
+- CI（`.github/workflows/ci.yml`）**六项全阻断**：unit+smoke、真 PostgreSQL 集成档
+  （含"整档没跑即失败"的自证闸门）、覆盖率门禁、build（字节编译 + 迁移图校验）、
+  ruff、mypy（含环境探针）；另有 pip-audit 依赖漏洞扫描（warning 档）。每次推送
+  仍产出 `coverage.xml` 工件。
 
 ### 端到端测试（Playwright）
 
-`server/tests/e2e/test_flows.py` 用真实浏览器驱动管理端 SPA，覆盖
+`server/tests/e2e/test_flows.py` 用真实浏览器驱动管理端 SPA（共 11 条用例），覆盖
 **登录 → 决策驾驶舱 → 共享诊断中心开单 → 领取并出报告（危急值）→ 危急值确认接收
 → 处置反馈闭环**、**住院文书（首次病程→护理→体征→完整性自查）**、
 **手术全流程（申请→审批→排班→术中记录）**、**随访闭环**，以及医生移动工作台

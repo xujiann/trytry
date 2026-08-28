@@ -9,15 +9,15 @@
 
 | # | 问题 | 位置 | 影响 |
 |---|---|---|---|
-| P0-1 | **render.yaml 是公网默认口令实例**：未设 ENV/SECRET → dev 密钥(仓库明文，JWT 可伪造 admin) + admin/admin123 + 验证码回显 + 免登录查档案全开 + SQLite 无持久盘 | `render.yaml` | 医疗数据平台公网等于无认证 |
-| P0-2 | **`docker compose up -d` 开箱崩溃循环**：`ENV=prod` + `admin123` 默认 → 守卫拒启动 + `restart:unless-stopped` | `docker-compose.yml:12` | README 第一条部署命令必然失败 |
-| P0-3 | **配置守卫被自家 compose 绕过**：黑名单式字面量比对，`change-me-in-production`≠`dev-secret-...` 判定"安全" | `config.py:86` + `compose:11` | 硬编码密钥上线，令牌可任意伪造 |
-| P0-4 | **验证码回显可被利用**：console+非prod → `/api/portal/auth/sms/code` 回显 `debug_code` → 任意手机号登录 → 唯一命中自动实名绑定读他人档案 | `routers/portal.py:168` | 最现实的可利用链 |
+| P0-1 | **render.yaml 是公网默认口令实例**：未设 ENV/SECRET → dev 密钥(仓库明文，JWT 可伪造 admin) + admin/admin123 + 验证码回显 + 免登录查档案全开 + SQLite 无持久盘 | `render.yaml` | ✅ 已修（`render.yaml:17-18` MEDPLAT_SECRET `generateValue: true` 随机生成；`:22-23` ADMIN_PASSWORD `sync: false` 须控制台手填强口令；验证码回显默认关 `config.py:133` 且生产恒不回显 `portal.py:292`；免登录查档默认关 `config.py:124`；演示种子显式开且声明数据全虚构 `render.yaml:10-13`。残余：free 档 SQLite 仍无持久盘——该实例已明示纯演示、无真实患者数据，重启丢的只是演示数据） |
+| P0-2 | **`docker compose up -d` 开箱崩溃循环**：`ENV=prod` + `admin123` 默认 → 守卫拒启动 + `restart:unless-stopped` | `docker-compose.yml:12` | ✅ 已修（三凭据全部 `${VAR:?}` 必填：`docker-compose.yml:20,22,23,57`——未设即 compose 报错退出，不再带默认值起动进崩溃循环；头注 `:3-13` 记录整改原因与用法） |
+| P0-3 | **配置守卫被自家 compose 绕过**：黑名单式字面量比对，`change-me-in-production`≠`dev-secret-...` 判定"安全" | `config.py:86` + `compose:11` | ✅ 已修（改为长度+字符多样性+字符类别+占位符词表校验 `config.py:78-93`，生产不达标拒启 `config.py:240-270`；`change-me` 等词形在词表 `config.py:56-61`；守卫测试 `tests/test_prod_credential_guard.py`） |
+| P0-4 | **验证码回显可被利用**：console+非prod → `/api/portal/auth/sms/code` 回显 `debug_code` → 任意手机号登录 → 唯一命中自动实名绑定读他人档案 | `routers/portal.py:168` | ✅ 已修（`sms_debug_echo` 默认 False `config.py:133`；回显须 console+显式开关+非生产三重门 `portal.py:292`，生产即便误开也恒不回显；日志明文同口径 `sms.py:54`；未设置时字段不出现在响应 `portal.py:242`） |
 | P0-5 | **打印/附件跨机构越权**：按 id 遍历读他院患者报告/处方/附件，**无留痕** | `printing.py:178,222,271,315`；`attachments.py:159` | ✅ 已修（治理线：打印/附件全部接 assert_patient_visible+留痕，test_print_attachment_visibility.py） |
-| P0-6 | **SPD 转诊审核无机构层级校验**：`level` 只写状态列不用于鉴权，单 doctor 账号可伪造整条转诊链 | `spd/routers/referral.py:393` | 越权 |
-| P0-7 | **确认的存储型 XSS**：会计科目 code/name 未转义直插 `<option value="...">` | `static/pages-mgmt.js:248` | 属性注入事件处理器 |
+| P0-6 | **SPD 转诊审核无机构层级校验**：`level` 只写状态列不用于鉴权，单 doctor 账号可伪造整条转诊链 | `spd/routers/referral.py:393` | ✅ 已修（ADR-0004 机构树 parent_id 口径：`spd/routers/referral.py:250` `_assert_review_authority`、`:453` 审核处调用；`:273` `_assert_holds_case` 把校验推广到到院/下转/随访接收；回归 `tests/test_spd_flow.py:723`；平台侧转诊另有接收方校验 `tests/test_referral_status_authority.py`） |
+| P0-7 | **确认的存储型 XSS**：会计科目 code/name 未转义直插 `<option value="...">` | `static/pages-mgmt.js:248` | ✅ 已修（`pages-mgmt.js:248` code/name 已全部 `esc()` 后插入 option；防复发守卫 `tests/test_frontend_escape_guard.py`） |
 | P0-8 | **同一病种两套目录互不感知**：chronic 与 spd 用相同 code 写不同表各带阈值 | `chronic_seed.py:26` vs `spd/seed.py:19` | 统计口径必然对不上 |
-| P0-9 | **CI 是"假绿"**：覆盖率门禁 `\|\| true`；52 迁移从不执行；真 PG 用例永远 skip；11 e2e 永远 skip；无 lint/类型/安全扫描 | `.github/workflows/ci.yml` | 回归拦不住 |
+| P0-9 | **CI 是"假绿"**：覆盖率门禁 `\|\| true`；52 迁移从不执行；真 PG 用例永远 skip；11 e2e 永远 skip；无 lint/类型/安全扫描 | `.github/workflows/ci.yml` | ✅ 已修（六项全阻断：unit+smoke `ci.yml:52-58`；真 PG service `:23-34` + integration 阻断 `:59-68` + "整档没跑即红"自证闸门 `:69-89`；覆盖率门禁无 `\|\| true`、低于阈值 `sys.exit(1)` `:97-108`；build 字节编译+迁移图 `:129-133`；ruff 阻断 `:134-136`；mypy+环境探针阻断 `:137-143`。迁移执行另有 unit 档硬门禁 `tests/test_migration_model_parity.py`。如实保留两点：pip-audit 尚为 warning 档 `:148-160`；e2e 仍默认不进 CI `:54`） |
 
 ## P1 — 结构性风险
 
@@ -28,15 +28,15 @@
 | P1-2 | 家庭代管单因子绑定（目标无手机号时仅凭姓名+身份证号纳管） | ✅ 已修（阶段十四 E2：无手机号档案须 family_delegate 窗口授权，portal.py） |
 | P1-3 | `portal_legacy_verify` 默认开启，免登录查档案，限流键是被猜的身份证号 | ✅ 已修（阶段十三 S：默认翻转 False + 生产守卫） |
 | P1-4 | 横向越权覆盖率矩阵失真（分母只算"入参含 patient_id"，虚高为 100%） | ✅ 已修（阶段十四 Q1：分母扩 by-id 族 65→84，8 端点补防，覆盖率 95.2% 实） |
-| P1-5 | 管理端 token+role 明文存 localStorage，CSP 含 `unsafe-inline`，一处 XSS = 全站管理员失窃 | `static/core.js:15` |
+| P1-5 | 管理端 token+role 明文存 localStorage，CSP 含 `unsafe-inline`，一处 XSS = 全站管理员失窃 | ✅ 已修（G3/P1-23：令牌改 HttpOnly Cookie + CSRF 双提交，localStorage 只剩非敏感 role 与 CSRF token（另保留迁移期存量令牌兜底读），口径见 `core.js:14-26` 头注；`tests/test_auth_cookie_csrf.py`。CSP `unsafe-inline` 因免构建内联脚本刻意保留，取舍记档 `main.py:498-506`——令牌已不可被 XSS 读走） |
 
 ### 部署 / 运行
 | # | 问题 | 位置 |
 |---|---|---|
-| P1-6 | create_all 与 alembic 双轨，部署产物无一执行迁移；README `upgrade head` 单数在双 head 下失败且漏 spd 59 表 | `main.py:113`；README:202 |
-| P1-7 | 分布式锁可被误删（`_release_lock` 无条件 DELETE 不校验持有者，任务超 300s TTL 时删别实例的锁） | `scheduler.py:94` |
+| P1-6 | create_all 与 alembic 双轨，部署产物无一执行迁移；README `upgrade head` 单数在双 head 下失败且漏 spd 59 表 | ✅ 已修（ADR-0002 已实施：生产跳过 create_all `main.py:123-128`，守卫 `tests/test_adr0002_create_all_guard.py`；`start.sh:15` 启动前 `alembic upgrade heads`（多实例走 `MEDPLAT_MIGRATE_ON_START=0` 由发布流程单独跑，`start.sh:10-13`）；README:202 已改复数 heads） |
+| P1-7 | 分布式锁可被误删（`_release_lock` 无条件 DELETE 不校验持有者，任务超 300s TTL 时删别实例的锁） | ✅ 已修（释放走 Lua"值等于本实例 token 才删"原子比对 `scheduler.py:52-57`，`_release_lock` `:125-130`；续期同口径防续别人的锁 `:59-63`；`tests/test_scheduler_lock.py` + CI 真 Redis 验 Lua 语义 `ci.yml:37-43`） |
 | P1-8 | 审计中间件全局串行点：每写请求新开 Session+读哈希+insert，无 `FOR UPDATE`，PG 高并发哈希链静默分叉；无 try/except（审计失败使业务 500） | ✅ 已修（阶段十四 P2：PG 咨询锁 + SQLite 进程锁 + try/except 兜底，test_audit_middleware_hardening.py） |
-| P1-9 | startup 重量级种子化，无锁/无宽限/无 try/except，一条脏种子=全站不可用 | `main.py:113-246` |
+| P1-9 | startup 重量级种子化**仍无锁、种子块仍无 try 兜底**（部分缓解：种子已全部幂等"只增不改"（查已有 code 再 add）；ADR-0002 后生产不再 create_all；PII 索引自检有 try 兜底 `main.py:269-274`）。残余风险：十余个种子块一步抛错即启动失败；"查-插"非原子，多实例同时对空库首启会在 unique(code)（如 `code_systems.code`，`models/core.py:195`）上撞 IntegrityError 把后到实例的启动打崩 | `main.py:121-292` |
 | P1-10 | JobRun 表无清理任务，无界增长 | ✅ 已修（阶段十三 R：jobrun_cleanup 按保留期清理） |
 
 ### 重复实现 / 边界
@@ -47,12 +47,12 @@
 | P1-13 | 三套随访（followups/followup_tasks/spd_followup_*），统一中心未收编旧随访 | chronic/followups/spd |
 | P1-14 | 规则引擎抽象 6 次统一 0 次，`/api/rules/catalog` 对 spd 数据为 0 | app/rules vs spd/rules vs quality vs dataquality |
 | P1-15 | 通用能力困在可卸载子系统：spd followup 随访/报告随 `SPD_ENABLED=false` 一并关闭 | `spd/routers/followup.py` |
-| P1-16 | gapfill/service_extras 倾倒场，按验收条目号分区 → 6 组前缀重叠 + 鉴权分裂 | gapfill.py；service_extras.py |
+| P1-16 | gapfill/service_extras 倾倒场，按验收条目号分区 → 6 组前缀重叠 + 鉴权分裂 | ✅ 已修（ADR-0006 拆解落地：`routers/gapfill.py` 与 `routers/service_extras.py` 均已不存在，路由回归业务前缀） |
 
 ### 测试
 | # | 问题 | 位置 |
 |---|---|---|
-| P1-17 | spd 子系统 46 条路由零测试引用（config 全部 PATCH/DELETE、assess 积分规则整块） | spd/routers/* |
+| P1-17 | spd 子系统 46 条路由零测试引用（config 全部 PATCH/DELETE、assess 积分规则整块） | ✅ 已修（tests/ 现有 **19 个 `test_spd_*` 专档**、44 个测试文件引用 spd；当年点名的两块缺口均有专测：config 域改/删分支 `test_spd_config_admin.py` + 三份 config 契约档，考核取数与积分兑换 `test_spd_assess_metrics.py`） |
 | P1-18 | 并发测试跑在 SQLite（全库写锁+无 MVCC），证不了 PG READ COMMITTED 竞争窗口 | conftest.py:7 |
 | P1-19 | 事务边界测试几乎不存在（全仓仅 3 文件提及 rollback，书稿有专章） | tests/ |
 | P1-20 | 74 份复制粘贴 client fixture + 46 处硬编码登录（约 700-900 行可消除） | conftest 无 fixture + 74 文件 |
@@ -194,10 +194,10 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | # | 问题 |
 |---|---|
 | ~~P2-24~~ | ~~CI Python 3.11 vs 运行时 Docker 3.12 版本不一致~~ —— **已修**：CI 两个 job 统一走 `PYTHON_VERSION: "3.12"`，与两个 Dockerfile、ruff `target-version`、mypy `python_version` 同版；`tests/test_python_version_alignment.py` 钉住四处不许再漂 |
-| P2-25 | 影子配置 `MEDPLAT_REDIS_URL` 绕过 Settings（**仍待办**）；~~Redis 客户端每次调用新建~~ —— **已修 2026-08-27**：`_redis_client` 按 `(url, timeout)` 复用客户端 + 显式超时 + 熔断，见 `tests/test_redis_hotpath_resilience.py` |
-| P2-26 | 两份等价 Dockerfile；~~无 .dockerignore~~（已补）；镜像默认灌演示数据；测试依赖进生产镜像 |
-| P2-27 | README 数字陈旧（徽章 520 passed 实际 920 测试函数；7 e2e 实际 11） |
-| P2-28 | 审计链可末尾截断 + 与 JWT 复用密钥；员工账号无停用机制；登录不落审计 |
+| P2-25 | ~~影子配置 `MEDPLAT_REDIS_URL` 绕过 Settings~~ —— **设计决定已记档 2026-08-28**：CLAUDE.md §0/§3 明文把它列为 config.py 唯一真源的记录在案例外（"MEDPLAT_REDIS_URL 例外，直接读 os.environ"）；`config.py:279-280`、`:308-310` 把该口径引为既定处理方式（MEDPLAT_SEED_DEMO/WORKERS 同法）；读取点 `state_store.py:67`。不再算待办，要收编进 Settings 属另案决策；~~Redis 客户端每次调用新建~~ —— **已修 2026-08-27**：`_redis_client` 按 `(url, timeout)` 复用客户端 + 显式超时 + 熔断，见 `tests/test_redis_hotpath_resilience.py` |
+| P2-26 | 逐子项（2026-08-28 实核，状态不同分开记）：① 两份等价 Dockerfile **仍在**（根/ 与 server/ 各一份，差异仅 COPY 上下文两行，同构靠互指注释与 `tests/test_python_version_alignment.py` 钉版本——保留）；② ~~无 .dockerignore~~（已补，根与 server/ 各一份）；③ ~~镜像默认灌演示数据~~ —— ✅ 已修（A8：两个 Dockerfile 不再 `ENV MEDPLAT_SEED_DEMO=1`（根 `Dockerfile:19-21`、`server/Dockerfile:18-19`），compose 默认 0（`docker-compose.yml:26-29`），生产开种子直接拒启 `config.py:291-295`）；④ 测试依赖进生产镜像 **仍在且换了形态**：两 Dockerfile 改装 `requirements.lock`（各自 `:8-9`），而 lock 是干净 venv 全量 freeze，含 `pytest==9.1.1`/`pytest-cov==7.1.0`/`coverage==7.15.4`（`requirements.lock:23,40,41`）——测试工具随 lock 进镜像 |
+| ~~P2-27~~ | ~~README 数字陈旧（徽章 520 passed 实际 920 测试函数；7 e2e 实际 11）~~ —— **已修 2026-08-28**：徽章与正文更新为实测 2546 passed + 30 skipped、e2e 实数 11（`tests/e2e/test_flows.py` 11 个用例）、管理端页面 58→91（`app.js` 注册表实数）；覆盖率陈述改为"门禁 ≥70% 强制阻断"口径，删去早已不存在的 `\|\| true` warning 模式说法 |
+| ~~P2-28~~ | ~~审计链可末尾截断 + 与 JWT 复用密钥；员工账号无停用机制；登录不落审计~~ —— **已修**（四项分见：末尾截断 → P1-21 锚点 ✅，`tests/test_audit_anchor.py` 含末尾截断实证；密钥复用 → 审计链改 `signing_key("audit")` 域分隔派生不再与 JWT 共钥（`audit_chain.py:11-12,33`，派生与轮换回退 `security.py:59-89`、`tests/test_ops_key_rotation.py`）；账号停用 → ADR-0011 `users.status` active/disabled 每请求校验（`models/core.py:39`）；登录留痕 → `login_logs` 表 + record_login_event（`models/core.py:116`，ADR-0011）） |
 | ~~P2-30~~ | ~~审计落库在事件循环上同步跑~~ —— **已修 2026-08-28（ADR-0016）**：`audit_middleware` 两条路径改 `await run_in_threadpool(_write_audit, …)`，事件循环不再陪等（登记时实测单次中位 2.49ms×每写请求）；本请求仍等落库完成才返回，"响应返回时已尝试落库"与吞异常两条保证一字不变，串行化锁原样复用。AST 钉：不得直调 + 必须 await（丢 await 即静默全丢），见 `tests/test_audit_middleware_hardening.py`，两处变异验证 |
 | ~~P2-29~~ | ~~13 项运行时依赖全是下界钉（`>=`），无 lockfile~~ —— **已修（A7 批次，ADR-0017 补记决策）**：`requirements.lock`（干净 venv freeze 全钉版含传递依赖）+ 两个 Dockerfile 与 CI 全部改装 lock + `pip-audit` 扫 lock。真源仍是 `requirements.txt` 区间；lock 是可复现快照。守卫 `tests/test_dependency_lock.py`：直接依赖必须全部入锁、锁必须全钉版、四处安装点必须走锁。redis 超时一例的就地修（`DEFAULT_REDIS_TIMEOUT` + AST 棘轮）保留不动 |
 
