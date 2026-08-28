@@ -12,9 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
-from ..database import get_db
 from ..deps import get_current_user
 
 router = APIRouter(
@@ -48,8 +46,14 @@ _TRIAGE_KB = [
 
 
 @router.post("/suggest", response_model=TriageSuggestOut)
-def triage_suggest(symptoms: list[str], db: Session = Depends(get_db)):
-    """智能导诊：症状匹配推荐科室，急症症状提示急诊。"""
+def triage_suggest(symptoms: list[str]):
+    """智能导诊：症状匹配推荐科室，急症症状提示急诊。
+
+    没有 `db` 形参是**有意的**：知识库是模块级常量，此前签名里挂着
+    `Depends(get_db)` 却一次都没用——每次调用白白从连接池借还一条连接，
+    高峰期还占着 `db_pool_timeout` 的名额。日后知识库落表（见模块 docstring）
+    再把会话加回来，别为"将来可能用"预付现在的代价。
+    """
     given = set(symptoms)
     candidates: list[dict[str, Any]] = [
         {"department": dept, "matched": sorted(kb & given), "urgent": urgent}

@@ -418,11 +418,18 @@ async function renderContracts() {
 }
 
 async function renderAppointments() {
-  $("#page-desc").textContent = "机构发布分时段号源，一站式预约挂号/检查/检验";
+  $("#page-desc").textContent = "智能导诊 + 机构发布分时段号源，一站式预约挂号/检查/检验";
   const [slots, appointments] = await Promise.all([api("/api/appointments/slots"), api("/api/appointments")]);
   const RT = { outpatient: "门诊", exam: "检查", lab: "检验" };
   const AS = { booked: ["已预约", "green"], cancelled: ["已取消", "red"], fulfilled: ["已就诊", ""] };
   $("#page-body").innerHTML = `
+    <div class="panel"><h3>智能导诊台（功能指引 ⑨）</h3>
+      <p class="desc">分诊工位用：录症状出科室建议，急症症状直接提示走急诊——导诊完就地预约</p>
+      <form class="inline" id="triage-form">
+        <input name="symptoms" placeholder="症状，逗号分隔（如：胸痛,心悸）" required style="min-width:260px">
+        <button>导诊</button>
+      </form><p class="msg" id="triage-msg"></p>
+      <div id="triage-result"></div></div>
     <div class="panel"><h3>发布号源</h3>
       <form class="inline" id="slot-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
@@ -450,6 +457,24 @@ async function renderAppointments() {
           ? `<button class="btn secondary" data-fulfill="${a.id}">核销</button>
              <button class="btn danger" data-cancel="${a.id}">取消</button>` : "—"}</td></tr>`;
     })}</div>`;
+  $("#triage-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const symptoms = String(new FormData(e.target).get("symptoms") || "")
+      .split(/[，,、\s]+/).filter(Boolean);
+    if (!symptoms.length) return;
+    try {
+      const r = await api("/api/triage/suggest", {
+        method: "POST", body: JSON.stringify(symptoms) });
+      $("#triage-result").innerHTML = `
+        ${r.emergency_hint
+          ? '<p class="msg err">⚠ 首选建议命中急症症状，请引导走急诊通道</p>' : ""}
+        ${table(["建议科室", "命中症状", "急症"], r.recommendations, (x) =>
+          `<tr><td>${esc(x.department)}</td>
+           <td>${x.matched.length ? x.matched.map((s) => esc(s)).join("、") : "—"}</td>
+           <td>${x.urgent ? '<span class="tag red">急症</span>' : "—"}</td></tr>`)}`;
+      setMsg("#triage-msg", "");
+    } catch (err) { setMsg("#triage-msg", err.message, false); }
+  };
   $("#slot-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
