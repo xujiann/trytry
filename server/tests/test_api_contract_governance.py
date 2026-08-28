@@ -140,7 +140,13 @@ import app.spd.routers as spd_routers
 #   出键排——它 `pop("count")` 之后又重新赋值，`count` 因此被挪到 `distribution`
 #   与 `negative` 之后，照读起来顺眼的顺序排就是改字节。
 #   见 test_service_extras_split_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 450
+# → 418（quality 20 + dataquality 6 + rules 6，共 32。三处建模判断：
+#   clinical-indicators 的 uncollected 是条件键（仅术前术后诊断符合率行有）
+#   → exclude_unset；qc-summary 分组行 key 按机构=int 按医师=str；
+#   /rules/domains 的 sample 三型并存（float|str|bool，bool 不得变 0/1）。
+#   见 test_quality_contract.py / test_dataquality_contract.py /
+#   test_rules_contract.py，四处变异各自转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 418
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -173,6 +179,11 @@ FULLY_GOVERNED = {
     # ADR-0006 收官时新建的两个模块，生而全契约
     "surveys",
     "triage",
+    # 质控三簇（quality 20/dataquality 6/rules 6），欠账 450→418 那批，
+    # 见 test_quality_contract.py / test_dataquality_contract.py / test_rules_contract.py
+    "quality",
+    "dataquality",
+    "rules",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

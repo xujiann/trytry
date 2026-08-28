@@ -6,6 +6,7 @@
 - 启动时按 app/data/qc_rules_seed.py 幂等种子化 15 条规则（已存在编码不覆盖本地调整）
 """
 from datetime import date, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -318,7 +319,28 @@ def _active_rules(db: Session, rule_code: str | None = None, target_table: str |
     return query.order_by(QcRule.code).all()
 
 
-@router.get("/run")
+class ViolationOut(BaseModel):
+    """违规明细行：字段与顺序精确镜像 `run_rule` 的产出。"""
+
+    rule_code: str
+    rule_name: str
+    rule_type: str
+    severity: str
+    table: str
+    record_id: int
+    message: str
+
+
+class RunChecksOut(BaseModel):
+    total: int
+    error_total: int
+    warn_total: int
+    offset: int
+    limit: int
+    items: list[ViolationOut]
+
+
+@router.get("/run", response_model=RunChecksOut)
 def run_checks(
     response: Response,
     rule_code: str | None = None,
@@ -347,7 +369,27 @@ def run_checks(
     }
 
 
-@router.get("/summary")
+class SummaryRuleOut(BaseModel):
+    rule_code: str
+    rule_name: str
+    rule_type: str
+    rule_type_name: str
+    table: str
+    severity: str
+    violations: int
+
+
+class SummaryOut(BaseModel):
+    rules_checked: int
+    total: int
+    #: 键固定 error/warn（函数头初始化两键；启用规则逐条累加）
+    by_severity: dict[str, int]
+    #: 键是启用规则的被检表实际取值（数据决定）
+    by_table: dict[str, int]
+    by_rule: list[SummaryRuleOut]
+
+
+@router.get("/summary", response_model=SummaryOut)
 def summary(db: Session = Depends(get_db)):
     """违规汇总：按规则、按严重度、按被检表三个维度。"""
     by_rule, by_severity = [], {"error": 0, "warn": 0}
@@ -411,7 +453,23 @@ def _rule_out(r: QcRule) -> dict:
     }
 
 
-@router.get("/rules")
+class QcRuleOut(BaseModel):
+    """字段与顺序精确镜像 `_rule_out`（新建回执与列表行同形）。"""
+
+    id: int
+    code: str
+    name: str
+    target_table: str
+    rule_type: str
+    rule_type_name: str
+    #: JSON 列，结构随 rule_type 而异（见模块 docstring），宽字典透传
+    config: dict[str, Any]
+    severity: str
+    severity_name: str
+    active: bool
+
+
+@router.get("/rules", response_model=list[QcRuleOut])
 def list_rules(active: bool | None = None, db: Session = Depends(get_db)):
     query = db.query(QcRule)
     if active is not None:
@@ -419,7 +477,9 @@ def list_rules(active: bool | None = None, db: Session = Depends(get_db)):
     return [_rule_out(r) for r in query.order_by(QcRule.code).all()]
 
 
-@router.post("/rules", status_code=201, dependencies=[Depends(require_admin)])
+@router.post(
+    "/rules", status_code=201, response_model=QcRuleOut, dependencies=[Depends(require_admin)]
+)
 def create_rule(body: RuleCreate, db: Session = Depends(get_db)):
     if db.query(QcRule).filter(QcRule.code == body.code).first():
         raise HTTPException(status_code=409, detail="规则编码已存在")
@@ -432,7 +492,9 @@ def create_rule(body: RuleCreate, db: Session = Depends(get_db)):
     return _rule_out(rule)
 
 
-@router.patch("/rules/{rule_id}", dependencies=[Depends(require_admin)])
+@router.patch(
+    "/rules/{rule_id}", response_model=QcRuleOut, dependencies=[Depends(require_admin)]
+)
 def update_rule(rule_id: int, body: RuleUpdate, db: Session = Depends(get_db)):
     rule = db.get(QcRule, rule_id)
     if rule is None:
@@ -444,7 +506,13 @@ def update_rule(rule_id: int, body: RuleUpdate, db: Session = Depends(get_db)):
     return _rule_out(rule)
 
 
-@router.delete("/rules/{rule_id}", dependencies=[Depends(require_admin)])
+class RuleDeleteOut(BaseModel):
+    deleted: int
+
+
+@router.delete(
+    "/rules/{rule_id}", response_model=RuleDeleteOut, dependencies=[Depends(require_admin)]
+)
 def delete_rule(rule_id: int, db: Session = Depends(get_db)):
     rule = db.get(QcRule, rule_id)
     if rule is None:

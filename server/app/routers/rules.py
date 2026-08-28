@@ -61,7 +61,20 @@ DOMAIN_VARIABLES: dict[str, dict] = {
 }
 
 
-@router.get("/domains")
+class DomainVariableOut(BaseModel):
+    name: str
+    #: 样例值三种真实类型并存（float/str/bool，见 DOMAIN_VARIABLES 注释）。
+    #: smart union 逐值原样透传：float 不得变 int、bool 不得变 0/1（改字节）。
+    sample: float | str | bool
+    type: str
+
+
+class DomainOut(BaseModel):
+    domain: str
+    variables: list[DomainVariableOut]
+
+
+@router.get("/domains", response_model=list[DomainOut])
 def list_domains():
     """规则域与可用变量清单：管理员写条件时的字段字典。"""
     return [
@@ -100,7 +113,21 @@ def _rule_out(r: RuleDefinition) -> dict:
     }
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_admin)])
+class RuleOut(BaseModel):
+    """字段与顺序精确镜像 `_rule_out`（新建回执与列表行同形）。"""
+
+    id: int
+    key: str
+    name: str
+    domain: str
+    condition: str
+    message: str
+    severity: str
+    deduct_points: int
+    active: bool
+
+
+@router.post("", status_code=201, response_model=RuleOut, dependencies=[Depends(require_admin)])
 def create_rule(body: RuleIn, db: Session = Depends(get_db)):
     """录入统一规则。条件在录入时就用样例值试算，非法直接 422。"""
     if body.domain not in DOMAIN_VARIABLES:
@@ -122,7 +149,7 @@ def create_rule(body: RuleIn, db: Session = Depends(get_db)):
     return _rule_out(rule)
 
 
-@router.get("")
+@router.get("", response_model=list[RuleOut])
 def list_rules(domain: str | None = None, db: Session = Depends(get_db)):
     query = db.query(RuleDefinition)
     if domain:
@@ -130,7 +157,12 @@ def list_rules(domain: str | None = None, db: Session = Depends(get_db)):
     return [_rule_out(r) for r in query.order_by(RuleDefinition.key).all()]
 
 
-@router.delete("/{key}", dependencies=[Depends(require_admin)])
+class RuleDeactivateOut(BaseModel):
+    key: str
+    active: bool
+
+
+@router.delete("/{key}", response_model=RuleDeactivateOut, dependencies=[Depends(require_admin)])
 def deactivate_rule(key: str, db: Session = Depends(get_db)):
     """停用规则（不物理删除：历史判定结果要能解释当时的口径）。"""
     rule = db.query(RuleDefinition).filter(RuleDefinition.key == key).first()
@@ -146,7 +178,31 @@ class EvaluateIn(BaseModel):
     variables: dict
 
 
-@router.post("/evaluate")
+class RuleHitOut(BaseModel):
+    key: str
+    name: str
+    severity: str
+    #: 规则未配置消息时回落到规则名（`rule.message or rule.name`），恒非空
+    message: str
+    deduct_points: int
+
+
+class RuleEvalErrorOut(BaseModel):
+    key: str
+    error: str
+
+
+class EvaluateOut(BaseModel):
+    domain: str
+    evaluated: int
+    hits: list[RuleHitOut]
+    errors: list[RuleEvalErrorOut]
+    #: Integer 列求和（空集为字面量 0），恒 int——不涉 Money
+    total_deduction: int
+    blocked: bool
+
+
+@router.post("/evaluate", response_model=EvaluateOut)
 def evaluate_rules(body: EvaluateIn, db: Session = Depends(get_db)):
     """按域求值：返回命中的规则、总扣分与是否存在拦截级命中。
 
@@ -188,7 +244,26 @@ def evaluate_rules(body: EvaluateIn, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/catalog")
+class CatalogEntryOut(BaseModel):
+    """五路来源（unified + 四套 legacy）的行形状完全一致——不是多态，逐字段建模。"""
+
+    source: str
+    engine: str
+    domain: str
+    key: str
+    name: str
+    #: 各来源拼好的说明字符串（条件表达式 / 剂量上限 / 权重等），恒为 str
+    detail: str
+    active: bool
+
+
+class CatalogOut(BaseModel):
+    total: int
+    by_source: dict[str, int]
+    entries: list[CatalogEntryOut]
+
+
+@router.get("/catalog", response_model=CatalogOut)
 def rule_catalog(db: Session = Depends(get_db)):
     """全平台规则总目录。
 
