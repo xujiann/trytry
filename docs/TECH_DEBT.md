@@ -24,7 +24,7 @@
 ### 安全
 | # | 问题 | 位置 |
 |---|---|---|
-| P1-1 | 居民端零 AccessLog，家庭代管调阅他人档案完全无痕 | `routers/portal.py:556` |
+| P1-1 | 居民端零 AccessLog，家庭代管调阅他人档案完全无痕 | ✅ 已修 2026-08-28：平台居民端 + spd 患者端共 28 个读端点经 `accessible_patient(resource=...)`/`_patient(resource=...)` 统一留痕（resource 必填关键字参数，新端点忘表态即 TypeError）；主体 `resident:{account_id}` 与 AuditLog 同口径，依据 self/delegate 分本人与代管；表结构未动。`tests/test_portal_access_log.py` 33 条 + 变异验证 23 条转红 |
 | P1-2 | 家庭代管单因子绑定（目标无手机号时仅凭姓名+身份证号纳管） | ✅ 已修（阶段十四 E2：无手机号档案须 family_delegate 窗口授权，portal.py） |
 | P1-3 | `portal_legacy_verify` 默认开启，免登录查档案，限流键是被猜的身份证号 | ✅ 已修（阶段十三 S：默认翻转 False + 生产守卫） |
 | P1-4 | 横向越权覆盖率矩阵失真（分母只算"入参含 patient_id"，虚高为 100%） | ✅ 已修（阶段十四 Q1：分母扩 by-id 族 65→84，8 端点补防，覆盖率 95.2% 实） |
