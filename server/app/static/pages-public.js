@@ -470,7 +470,7 @@ async function renderDataQuality() {
 
 /* 块1：打印模板维护（管理员）——抬头机构名、页脚说明与二维码开关按单据类型配置 */
 async function renderPrintTemplates() {
-  $("#page-desc").textContent = "按单据类型配置打印抬头、页脚与二维码占位；抬头留空时回落到单据所属机构名";
+  $("#page-desc").textContent = "按单据类型配置打印抬头、页脚与验真二维码；抬头留空时回落到单据所属机构名";
   const templates = await api("/api/print/templates");
   $("#page-body").innerHTML = `
     <div class="panel"><h3>打印模板</h3>
@@ -482,7 +482,7 @@ async function renderPrintTemplates() {
         <select name="doc_type">${templates.map((t) => `<option value="${t.doc_type}">${esc(t.doc_type_name)}</option>`).join("")}</select>
         <input name="header_org_name" placeholder="抬头机构名（可空）" style="min-width:200px">
         <input name="footer_note" placeholder="页脚说明（可空）" style="min-width:220px">
-        <label style="font-size:13px"><input type="checkbox" name="show_qr" checked> 显示二维码</label>
+        <label style="font-size:13px"><input type="checkbox" name="show_qr" checked> 显示验真二维码</label>
         <button>保存模板</button></form>
       <p class="msg" id="tpl-msg"></p></div>`;
   $("#tpl-form").onsubmit = async (e) => {
