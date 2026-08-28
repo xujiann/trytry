@@ -198,8 +198,8 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P2-26 | 两份等价 Dockerfile；~~无 .dockerignore~~（已补）；镜像默认灌演示数据；测试依赖进生产镜像 |
 | P2-27 | README 数字陈旧（徽章 520 passed 实际 920 测试函数；7 e2e 实际 11） |
 | P2-28 | 审计链可末尾截断 + 与 JWT 复用密钥；员工账号无停用机制；登录不落审计 |
-| P2-30 | **审计落库在事件循环上同步跑**：`audit_middleware` 是 `async def`（跑在事件循环上），里面直接同步调 `_write_audit`——开会话、查 `users`、算哈希链、插一行，全程不让出。实测（**SQLite、无 advisory lock**）每次 **中位 2.49ms / p90 2.77ms / 最大 5.11ms**，而它挂在**每个写请求**（POST/PATCH/PUT/DELETE）上。**生产 PG 上更重且没量到**：那条路还要先拿 `pg_advisory_xact_lock` 把审计链写入**跨实例串行化**，等于让各实例的事件循环互相排队。修法（`run_in_threadpool` 或落队列异步写）会改并发语义与审计链的顺序保证，**须走 ADR**，不适合夹带。登记时间 2026-08-27 |
-| P2-29 | **13 项运行时依赖全是下界钉（`>=`），无 lockfile——库的默认值变了会静默改变生产行为。** 已实测到一例：`redis>=5.0` 下，redis-py **5.0.0 的 `socket_timeout` 默认 `None`**（出网永久挂起），**8.1.0 默认 5 秒**；同一份代码装出两种行为，而这条路在每个请求的主路径上。已就地修法是**显式写死超时**（`state_store.DEFAULT_REDIS_TIMEOUT`）+ AST 棘轮 `tests/test_outbound_timeout_guard.py`，把这一处堵死；但**"不吃库默认值"这条口径没有铺满**，其余 12 项依赖同样可能藏着这种版本敏感的默认值。彻底解法是加 lockfile（`pip-compile` / `uv lock`）并把镜像构建钉到锁上——那是独立任务，涉及发布流程，须走 ADR |
+| ~~P2-30~~ | ~~审计落库在事件循环上同步跑~~ —— **已修 2026-08-28（ADR-0016）**：`audit_middleware` 两条路径改 `await run_in_threadpool(_write_audit, …)`，事件循环不再陪等（登记时实测单次中位 2.49ms×每写请求）；本请求仍等落库完成才返回，"响应返回时已尝试落库"与吞异常两条保证一字不变，串行化锁原样复用。AST 钉：不得直调 + 必须 await（丢 await 即静默全丢），见 `tests/test_audit_middleware_hardening.py`，两处变异验证 |
+| ~~P2-29~~ | ~~13 项运行时依赖全是下界钉（`>=`），无 lockfile~~ —— **已修（A7 批次，ADR-0017 补记决策）**：`requirements.lock`（干净 venv freeze 全钉版含传递依赖）+ 两个 Dockerfile 与 CI 全部改装 lock + `pip-audit` 扫 lock。真源仍是 `requirements.txt` 区间；lock 是可复现快照。守卫 `tests/test_dependency_lock.py`：直接依赖必须全部入锁、锁必须全钉版、四处安装点必须走锁。redis 超时一例的就地修（`DEFAULT_REDIS_TIMEOUT` + AST 棘轮）保留不动 |
 
 ---
 

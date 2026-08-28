@@ -172,3 +172,38 @@ def test_audit_commit_failure_rolls_back_and_business_ok(client, admin, monkeypa
     entries = _chain_entries()
     assert len(entries) == before
     assert verify_chain(entries)["valid"] is True
+
+
+def test_审计落库必须经线程池且必须await(client):
+    """ADR-0016（P2-30）：`audit_middleware` 是 async def、跑在事件循环上，而
+    `_write_audit` 是同步阻塞 I/O（会话/查链尾/commit，生产 PG 还要等跨实例
+    advisory lock）——在循环上直调会让**全部在途请求**陪着一条审计等库。
+
+    钉两头：
+    - 不得直调 `_write_audit`（挡"顺手改回去"）；
+    - 两条路径（正常返回 + 异常 500）都必须 `await run_in_threadpool(...)`——
+      丢掉 await 变 fire-and-forget，"响应返回时审计已尝试落库"的保证会
+      **静默**消失（协程根本没跑，审计一条都不落，还不报错）。
+    """
+    import ast
+    import textwrap
+
+    src = textwrap.dedent(inspect.getsource(main_mod.audit_middleware))
+    tree = ast.parse(src)
+    direct = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == "_write_audit"
+    ]
+    assert not direct, "审计落库回到了事件循环直调——P2-30 复发"
+    hops = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == "run_in_threadpool"
+        and any(isinstance(a, ast.Name) and a.id == "_write_audit" for a in node.args)
+    ]
+    assert len(hops) == 2, "正常与异常两条路径都必须经线程池落审计"
+    awaited = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Await)}
+    assert all(id(h) in awaited for h in hops), (
+        "run_in_threadpool 必须 await——不 await 协程根本不执行，审计静默全丢"
+    )

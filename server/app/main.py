@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import text
+from starlette.concurrency import run_in_threadpool
 
 from .config import settings
 from .database import Base, SessionLocal, engine
@@ -693,7 +694,17 @@ def _write_audit(request, status_code: int) -> None:
 @app.middleware("http")
 async def audit_middleware(request, call_next):
     """M2 整改：try/except 包住 call_next——业务路由抛未捕获异常（500）时
-    同样落审计（status_code=500）后重新抛出，保证写操作全量留痕。"""
+    同样落审计（status_code=500）后重新抛出，保证写操作全量留痕。
+
+    **落库跑在线程池而不是事件循环上（ADR-0016，P2-30）**：`_write_audit` 是
+    同步阻塞 I/O（开会话、查链尾、插行、commit；生产 PG 还要等跨实例的
+    advisory lock）。本函数是 `async def`、跑在事件循环上，直接调它会让
+    **全部在途请求**陪着这一条审计等库——实测单次中位 2.49ms，挂在每个写
+    请求上。`await run_in_threadpool` 把等待挪去线程池：事件循环继续跑别的
+    请求，而**本请求仍等审计落库完成才返回**——"响应返回时审计已尝试落库"
+    的既有保证一字不变（换成 fire-and-forget 才会变，那是被否掉的方案，
+    见 ADR-0016）。审计链的串行化（PG advisory lock / SQLite 进程锁）与
+    吞异常语义都在 `_write_audit` 里，线程池里跑一样成立。"""
     path = request.url.path
     audited = (
         request.method in _AUDITED_METHODS
@@ -704,10 +715,10 @@ async def audit_middleware(request, call_next):
         response = await call_next(request)
     except Exception:
         if audited:
-            _write_audit(request, 500)
+            await run_in_threadpool(_write_audit, request, 500)
         raise
     if audited:
-        _write_audit(request, response.status_code)
+        await run_in_threadpool(_write_audit, request, response.status_code)
     return response
 
 
