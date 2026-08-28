@@ -584,13 +584,15 @@ def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
         sel.select_option("是")
     page.click("#spd-screen-submit")
     expect(page.locator("#spd-screen-msg")).to_contain_text("风险等级")
-    # 确认弹窗被自动应答成"申请专病管理服务"后，提交链路还有半截在跑：
-    # 申请 POST 成功 → `await loadSpd()` 把自查分段**再重画一次**（列出申请单）。
-    # m.js 的 loadSpd 没有管理端 route() 那样的串行化，这时立刻切"监测"分段，
-    # 两次异步渲染会竞写同一个 #spd-result，后完成的自查重画把监测表单整个
-    # 盖掉（约四成概率复现；这是居民端的产品级竞态，见报告）。用例侧等申请
-    # 重画的终点信号——申请单卡片"待受理"——落定后再切分段。
-    expect(page.locator("#spd-result")).to_contain_text("待受理")
+    # **故意不等申请链路收尾就切分段**——走的是曾经竞态的真实路径：
+    # 确认弹窗被自动应答成"申请专病管理服务"后，提交链路还有半截在跑
+    # （申请 POST 成功 → `await loadSpd()` 重画自查分段列出申请单），此刻
+    # 立即切"监测"曾把监测表单整个盖掉（两次异步渲染竞写同一个
+    # #spd-result，后完成者胜）。现 loadSpd 已串行化（序号+互斥+收尾补画，
+    # 与管理端 route() 同构），最后一次请求的分段必定是最终画面。
+    # 注意：竞态窗口取决于机器时序（本容器里申请链路快到断言间隙内就收尾，
+    # 拆掉串行化也未必在这里复现）——**确定性的防拆卸由静态守卫
+    # test_mobile_render_serialization.py 承担**，本用例负责真实路径可用。
 
     # 自报监测：血压 165 → 落库为待医生处置的异常值。
     # 保存成功后整个分段会重画（提示语随之被抹掉），所以断言重画后的列表里

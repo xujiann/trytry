@@ -132,16 +132,33 @@ async function loadSpdTab() {
   await loadSpdList();
 }
 
+/* 渲染串行化：与 core.js route()、m.js loadSpd() 同一套（序号 + 互斥 +
+ * 收尾补画）。触发路径：动作按钮（接收/审核）成功后重画列表 vs 用户同时
+ * 切 [data-dspd] 页签——两个并发渲染写同一个 #spd-list，后完成者盖掉前者。 */
+let dspdSeq = 0;
+let dspdRendering = false;
+
 async function loadSpdList() {
-  const box = $("#spd-list");
-  box.innerHTML = '<p class="empty">加载中…</p>';
+  dspdSeq += 1;
+  if (dspdRendering) return;  // 已有渲染在跑，它收尾时会按最新页签补画
+  dspdRendering = true;
   try {
-    if (activeDoctorSpd === "todo") return await loadSpdTodo(box);
-    if (activeDoctorSpd === "referral") return await loadSpdReferral(box);
-    if (activeDoctorSpd === "patient") return await loadSpdPatients(box);
-    return await loadSpdPerf(box);
-  } catch (err) {
-    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    for (;;) {
+      const seq = dspdSeq;
+      const box = $("#spd-list");
+      box.innerHTML = '<p class="empty">加载中…</p>';
+      try {
+        if (activeDoctorSpd === "todo") await loadSpdTodo(box);
+        else if (activeDoctorSpd === "referral") await loadSpdReferral(box);
+        else if (activeDoctorSpd === "patient") await loadSpdPatients(box);
+        else await loadSpdPerf(box);
+      } catch (err) {
+        box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+      }
+      if (seq === dspdSeq) break;  // 期间没有新的渲染请求，收工
+    }
+  } finally {
+    dspdRendering = false;
   }
 }
 

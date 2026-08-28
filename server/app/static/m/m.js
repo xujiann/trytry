@@ -922,20 +922,39 @@ function spdTagOf(map, key) {
   return statusTag(map, key || "—");
 }
 
+/* 渲染串行化：与 core.js 的 route() 同一个问题、同一套修法（序号 + 互斥 +
+ * 收尾补画，为什么不能"发现过期就重画"见那边的注释——会死循环）。
+ * 这里的具体触发路径：自查提交 → 确认申请专病服务 → 网络往返里用户切到
+ * "监测"分段——两个 loadSpd() 并发写同一个 #spd-result，慢的后落地就把
+ * 新分段整个盖掉，无任何报错（e2e 用例约 40% 概率复现过）。 */
+let spdSeq = 0;
+let spdRendering = false;
+
 async function loadSpd() {
-  const box = $("#spd-result");
-  box.innerHTML = '<p class="empty">加载中…</p>';
+  spdSeq += 1;
+  if (spdRendering) return;  // 已有渲染在跑，它收尾时会按最新的 activeSpd 补画
+  spdRendering = true;
   try {
-    if (activeSpd === "home") return await renderSpdHome(box);
-    if (activeSpd === "measure") return await renderSpdMeasure(box);
-    if (activeSpd === "task") return await renderSpdTasks(box);
-    if (activeSpd === "followup") return await renderSpdFollowups(box);
-    if (activeSpd === "plan") return await renderSpdPlans(box);
-    if (activeSpd === "referral") return await renderSpdReferrals(box);
-    if (activeSpd === "consult") return await renderSpdConsults(box);
-    return await renderSpdScreen(box);
-  } catch (err) {
-    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    for (;;) {
+      const seq = spdSeq;
+      const box = $("#spd-result");
+      box.innerHTML = '<p class="empty">加载中…</p>';
+      try {
+        if (activeSpd === "home") await renderSpdHome(box);
+        else if (activeSpd === "measure") await renderSpdMeasure(box);
+        else if (activeSpd === "task") await renderSpdTasks(box);
+        else if (activeSpd === "followup") await renderSpdFollowups(box);
+        else if (activeSpd === "plan") await renderSpdPlans(box);
+        else if (activeSpd === "referral") await renderSpdReferrals(box);
+        else if (activeSpd === "consult") await renderSpdConsults(box);
+        else await renderSpdScreen(box);
+      } catch (err) {
+        box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+      }
+      if (seq === spdSeq) break;  // 期间没有新的渲染请求，收工
+    }
+  } finally {
+    spdRendering = false;
   }
 }
 
