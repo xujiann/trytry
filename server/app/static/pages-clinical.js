@@ -329,9 +329,8 @@ async function renderEmergency() {
         <input name="patient_id" type="number" placeholder="患者ID(可空)"><button>调度</button>
       </form><p class="msg" id="em-msg"></p></div>
     <div class="panel">${table(["ID", "地点", "主诉", "车辆", "状态", "操作"], cases, (c) => {
-      const [t, col] = ES[c.status] || [c.status, ""];
       return `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td><td>${esc(c.ambulance_no)}</td>
-        <td><span class="tag ${col}">${t}</span></td>
+        <td>${statusTag(ES, c.status)}</td>
         <td>${c.status !== "admitted" ? `<button class="btn secondary" data-adv="${c.id}">流转</button>
           <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "—"}</td></tr>`;
     })}</div>`;
@@ -358,10 +357,9 @@ async function renderTelemedicine() {
         <input name="question" placeholder="咨询内容" required style="min-width:220px"><button>提交</button>
       </form><p class="msg" id="tm-msg"></p></div>
     <div class="panel">${table(["ID", "患者", "类型", "内容", "回复", "关联处方", "状态", "操作"], consults, (c) => {
-      const [t, col] = TS[c.status] || [c.status, ""];
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.consult_type === "repeat_rx" ? "续方" : "咨询"}</td>
         <td>${esc(c.question)}</td><td>${esc(c.reply) || "—"}</td><td>${c.prescription_id ?? "—"}</td>
-        <td><span class="tag ${col}">${t}</span></td>
+        <td>${statusTag(TS, c.status)}</td>
         <td>${c.status === "open" ? `<button class="btn secondary" data-reply="${c.id}">回复</button>`
           : c.status === "replied" ? `<button class="btn secondary" data-close="${c.id}">结束</button>` : "—"}</td></tr>`;
     })}</div>`;
@@ -431,10 +429,19 @@ async function renderMedication() {
         <input name="drug_name" placeholder="药品名称" required><input name="quantity" type="number" value="1" min="1" style="min-width:70px"><button>登记</button>
       </form><p class="msg" id="short-msg"></p>
       ${table(["ID", "机构", "药品", "数量", "状态", "操作"], shortages, (s) => {
-        const [t, col] = SS[s.status];
+        // `SS` 只有流转中的三个状态，而后端还会写 collected / no_show / cancelled
+        // （medication.py `shortage.status = body.result`）。没有兜底时
+        // `SS[s.status]` 是 undefined，解构直接 TypeError——**整页白屏**，
+        // 不是这一行降级。只要有一条缺药登记结了案，这一页就打不开了。
+        // 「流转」只在**还能往下走**的状态出现。原判据是 `!== "delivered"`，
+        // 那是把"终态"等同于"已配送"——而后端的终态还有 collected / no_show /
+        // cancelled，这些行会显示一个点下去必定 409（"状态 collected 已是终态"）
+        // 的按钮。此前看不出来是因为这一页在有结案登记时根本打不开。
+        // 判据与后端 `_SHORTAGE_FLOW` 的键一一对应：能流转的只有这两个状态。
+        const canAdvance = s.status === "registered" || s.status === "purchasing";
         return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
-          <td><span class="tag ${col}">${t}</span></td>
-          <td>${s.status !== "delivered" ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
+          <td>${statusTag(SS, s.status)}</td>
+          <td>${canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
       })}</div>
     <div class="panel"><h3>用药画像查询</h3>
       <form class="inline" id="prof-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
@@ -534,14 +541,13 @@ async function renderEducation() {
         <input name="planned_at" placeholder="计划时间（如 2026-09-01 19:00）">
         <button>申请直播</button></form>
       ${table(["ID", "主题", "主讲", "计划时间", "状态", "审核意见", "操作"], lives, (s) => {
-        const [text, color] = LS[s.status] || [s.status, ""];
         const actions = s.status === "pending" && ["director", "admin"].includes(role)
           ? `<button class="btn secondary" data-liveok="${s.id}">排期</button>
              <button class="btn danger" data-liveno="${s.id}">驳回</button>`
           : s.status === "approved" && ["director", "operator", "admin"].includes(role)
           ? `<button class="btn secondary" data-livefin="${s.id}">结束</button>` : "—";
         return `<tr><td>${s.id}</td><td>${esc(s.title)}</td><td>${esc(s.speaker) || "—"}</td><td>${esc(s.planned_at) || "—"}</td>
-          <td><span class="tag ${color}">${text}</span></td><td>${esc(s.review_comment) || "—"}</td><td>${actions}</td></tr>`;
+          <td>${statusTag(LS, s.status)}</td><td>${esc(s.review_comment) || "—"}</td><td>${actions}</td></tr>`;
       })}</div>`;
   $("#course-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/courses", formJson(e.target), "#edu-msg"); };
   $("#live-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/live-sessions", formJson(e.target), "#edu-msg"); };
@@ -1246,9 +1252,8 @@ async function renderHrFinance() {
       ${table(["ID", "机构", "编码", "名称", "类别"], departments, (d) =>
         `<tr><td>${d.id}</td><td>${d.org_id}</td><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td><td>${esc(d.category)}</td></tr>`)}</div>
     <div class="panel"><h3>员工（变动留痕联动机构与状态）</h3>${table(["ID", "机构", "姓名", "职称", "科室", "状态", "操作"], employees, (em) => {
-      const [t, col] = EST[em.status] || [em.status, ""];
       return `<tr><td>${em.id}</td><td>${em.org_id}</td><td>${esc(em.name)}</td><td>${esc(em.title)}</td>
-        <td>${em.dept_id ? esc(deptNames[em.dept_id] || em.dept_id) : "—"}</td><td><span class="tag ${col}">${t}</span></td>
+        <td>${em.dept_id ? esc(deptNames[em.dept_id] || em.dept_id) : "—"}</td><td>${statusTag(EST, em.status)}</td>
         <td><button class="btn secondary" data-empdept="${em.id}">挂科室</button>
             <button class="btn secondary" data-empchg="${em.id}">登记变动</button>
             <button class="btn" data-emphist="${em.id}">变动史</button>
@@ -1408,13 +1413,12 @@ async function renderCritical() {
          <td>${esc(r.reported_by)}</td><td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>` : ""}
     <div class="panel"><h3>危急值清单</h3><p class="msg" id="crit-msg"></p>${
       table(["报告ID", "申请单", "结论", "闭环状态", "操作"], critical, (r) => {
-        const [text, color] = CRIT_STATUS[r.critical_status] || [r.critical_status, ""];
         const actions = (r.critical_status === "notified" || r.critical_status === "")
           ? `<button class="btn secondary" data-ack="${r.id}">确认接收</button>`
           : r.critical_status === "acknowledged"
           ? `<button class="btn secondary" data-resolve="${r.id}">处置反馈</button>` : "—";
         return `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
-          <td><span class="tag ${color}">${text}</span></td>
+          <td>${statusTag(CRIT_STATUS, r.critical_status)}</td>
           <td>${actions} <button class="btn" data-trail="${r.id}">留痕</button></td></tr>`;
       })}</div>
     <div class="panel hidden" id="crit-trail-panel"><h3>处置留痕轨迹</h3><div id="crit-trail"></div></div>`;
@@ -1513,7 +1517,6 @@ async function renderInpatient() {
          <td><span class="tag ${b.status === "free" ? "green" : "orange"}">${b.status === "free" ? "空闲" : "占用"}</span></td></tr>`)}</div>
     <div class="panel"><h3>住院记录</h3>${
       table(["ID", "患者", "病区/床位", "诊断", "状态", "操作"], admissions, (a) => {
-        const [text, color] = AS[a.status] || [a.status, ""];
         const actions = a.status === "admitted"
           ? `<button class="btn secondary" data-transfer="${a.id}">转床</button>
              <button class="btn secondary" data-order="${a.id}">开医嘱</button>
@@ -1521,7 +1524,7 @@ async function renderInpatient() {
              <button class="btn danger" data-discharge="${a.id}">出院</button>`
           : "—";
         return `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(wardName[a.ward_id] || a.ward_id)} / ${a.bed_id}</td>
-          <td>${esc(a.diagnosis_name)}</td><td><span class="tag ${color}">${text}</span></td>
+          <td>${esc(a.diagnosis_name)}</td><td>${statusTag(AS, a.status)}</td>
           <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button></td></tr>`;
       })}</div>
     <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div></div>`;
@@ -1620,9 +1623,8 @@ async function renderBilling() {
       <p class="msg" id="pay-msg"></p>
       <p style="font-size:12.5px;color:#8a939e">渠道对接经 PaymentGateway 协议实现，演示环境使用内置 Mock 通道；仅已支付单可退款且不超可退余额</p>
       ${table(["ID", "结算单", "渠道", "金额", "已退", "状态", "外部流水号", "操作"], payments.slice(0, 30), (p) => {
-        const [text, color] = PAY_STATUS[p.status] || [p.status, ""];
         return `<tr><td>${p.id}</td><td>${p.settlement_id}</td><td>${esc(p.channel_name)}</td><td>${p.amount}</td>
-          <td>${p.refunded_amount || 0}</td><td><span class="tag ${color}">${text}</span>${p.fail_reason ? `<div style="font-size:12px;color:#b23c3c">${esc(p.fail_reason)}</div>` : ""}</td>
+          <td>${p.refunded_amount || 0}</td><td>${statusTag(PAY_STATUS, p.status)}${p.fail_reason ? `<div style="font-size:12px;color:#b23c3c">${esc(p.fail_reason)}</div>` : ""}</td>
           <td style="font-size:12px">${esc(p.trade_no) || "—"}</td>
           <td>${p.status === "paid" ? `<button class="btn secondary" data-refund="${p.id}">退款</button>` : "—"}</td></tr>`;
       })}</div>
@@ -1810,14 +1812,13 @@ async function renderQuality() {
         <label style="font-size:13px"><input type="checkbox" name="anonymous" value="true"> 匿名</label><button>上报</button></form>
       <p class="msg" id="qa-msg"></p>
       ${table(["ID", "类型", "等级", "经过", "报告人", "状态", "操作"], events, (ev) => {
-        const [text, color] = AES[ev.status] || [ev.status, ""];
         const actions = ev.status === "reported"
           ? `<button class="btn secondary" data-review="${ev.id}">审核</button>`
           : ev.status === "reviewed"
           ? `<button class="btn secondary" data-rectify="${ev.id}">登记整改</button>` : "—";
         return `<tr><td>${ev.id}</td><td>${esc(AET[ev.event_type] || ev.event_type)}</td><td>${esc(ev.level)}</td>
           <td>${esc(ev.description)}</td><td>${esc(ev.reporter_name) || "（匿名）"}</td>
-          <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+          <td>${statusTag(AES, ev.status)}</td><td>${actions}</td></tr>`;
       })}</div>
     <div class="panel"><h3>不良事件附件（现场照片/佐证PDF，≤10MB）</h3>
       <form class="inline" id="ae-att-form">
@@ -1864,12 +1865,11 @@ async function renderQuality() {
         <select name="infection_site">${Object.entries(SITE).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="pathogen" placeholder="病原体"><input name="report_date" placeholder="日期 YYYY-MM-DD"><button>上报</button></form>
       ${table(["ID", "机构", "患者", "部位", "病原体", "状态", "操作"], infections, (r) => {
-        const [text, color] = IST[r.status] || [r.status, ""];
         const actions = r.status === "reported"
           ? `<button class="btn secondary" data-verify="${r.id}" data-ok="true">确认</button>
              <button class="btn" data-verify="${r.id}" data-ok="false">排除</button>` : "—";
         return `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${r.patient_id}</td><td>${SITE[r.infection_site]}</td>
-          <td>${esc(r.pathogen)}</td><td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+          <td>${esc(r.pathogen)}</td><td>${statusTag(IST, r.status)}</td><td>${actions}</td></tr>`;
       })}</div>`;
   $("#ae-form").onsubmit = (e) => {
     e.preventDefault();

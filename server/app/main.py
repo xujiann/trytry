@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import sys
 import threading
 import time
 import uuid
@@ -18,9 +19,10 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Response, status
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from .config import settings
@@ -391,39 +393,96 @@ register_spd(app)
 app.include_router(todos.router)
 app.include_router(ws.router)
 
-_access_logger = logging.getLogger("medplat.access")
+ACCESS_LOGGER_NAME = "medplat.access"
+_access_logger = logging.getLogger(ACCESS_LOGGER_NAME)
+#: 全部 medplat.* 日志的共同祖先。handler 挂在**这一层**，不是挂在 access 上。
+_root_logger = logging.getLogger("medplat")
 
 
-def _configure_access_logger() -> None:
-    """请求日志输出（A10）：stdout 恒开；`MEDPLAT_LOG_FILE` 非空时另附轮转文件。
+class _MedplatFormatter(logging.Formatter):
+    """一份 handler 承接全部 `medplat.*` 日志，输出统一为一行 JSON。
+
+    访问日志的 message 本身**已经是**那一行 JSON，原样透出（逐字节不变）；
+    其余日志（审计失败、任务、告警、支付、短信……）格成同构的一行，
+    好让同一个采集器一把解析，而不是一个文件里两种格式。
+
+    `exc_info` 必须带上：`_write_audit` 里那句"审计写失败，本条审计丢失"
+    正是靠 traceback 才能查出是库抖动还是锁超时，而它恰恰是**丢了一条审计**
+    时唯一的凭据。
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        if record.name == ACCESS_LOGGER_NAME:
+            return record.getMessage()
+        row = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(record.created)),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            row["traceback"] = self.formatException(record.exc_info)
+        return json.dumps(row, ensure_ascii=False)
+
+
+def _configure_logging() -> None:
+    """全部 `medplat.*` 日志的输出（A10）：stdout 恒开；`MEDPLAT_LOG_FILE` 非空时另附轮转文件。
 
     容器部署 stdout 由 docker/journald 收集即可；裸机/等保 6 个月留存场景
     设 `MEDPLAT_LOG_FILE` 落轮转文件（大小与份数由 `MEDPLAT_LOG_ROTATE_MAX_MB`
     / `MEDPLAT_LOG_ROTATE_BACKUPS` 控制），目录不存在则自动创建。
     幂等：已有 handler 时不重复附加（reload/多次 import 不会写两遍）。
+
+    **handler 挂在 `medplat` 而不是 `medplat.access`。** 原实现只配了 access 一个
+    logger，另外 17 个（audit / jobs / alerting / payments / sms / wechat / …）
+    没有任何 handler，一路 propagate 到 root——root 也没配，于是落到
+    `logging.lastResort`：**INFO 整个被丢掉，ERROR 只去 stderr、进不了那个文件**。
+    也就是说运维配了 `MEDPLAT_LOG_FILE`、以为拿到了 6 个月留存，实际只留下了访问日志；
+    偏偏"审计写失败、本条审计丢失"这种**必须留存**的记录就在被丢掉的那一半里。
+
+    只挂一份 handler、让 access 往上 propagate，是为了**别让两个
+    RotatingFileHandler 指着同一个文件**：各自独立翻滚会互相改名对方的文件，
+    轮转一次就丢一段日志。
     """
-    if _access_logger.handlers:
-        return
-    formatter = logging.Formatter("%(message)s")
-    _handler = logging.StreamHandler()
-    _handler.setFormatter(formatter)
-    _access_logger.addHandler(_handler)
-    if settings.log_file:
-        log_path = Path(settings.log_file)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = RotatingFileHandler(
-            log_path,
-            maxBytes=settings.log_rotate_max_mb * 1024 * 1024,
-            backupCount=settings.log_rotate_backups,
-            encoding="utf-8",
-        )
-        file_handler.setFormatter(formatter)
-        _access_logger.addHandler(file_handler)
+    # 幂等**只挡"重复挂 handler"这一件事**，级别与 propagate 一律照设。
+    # 早前的写法是整个函数 `if handlers: return`，那样一来：uvicorn 在 import
+    # 本模块**之前**就会应用 `--log-config`，运维若在那份 dictConfig 里给
+    # `medplat` 配了 handler（现在所有日志都归到这个父 logger 下，那正是最自然的
+    # 配置点），本函数会当场返回——`MEDPLAT_LOG_FILE` 静默失效、级别不设、
+    # access 也拿不到 propagate，**恰好退回本次要修的那个故障**，而且不报错。
+    if not _root_logger.handlers:
+        formatter = _MedplatFormatter()
+        # 显式 stdout：`StreamHandler()` 不带参数走的是 **stderr**，
+        # 而本函数与 `docs/运维手册.md` 都写着 stdout。docker/journald 两个流都收，
+        # 但只 tail stdout 的采集边车会把这 18 个 logger 整个漏掉。
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        _root_logger.addHandler(stream_handler)
+        if settings.log_file:
+            log_path = Path(settings.log_file)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                log_path,
+                maxBytes=settings.log_rotate_max_mb * 1024 * 1024,
+                backupCount=settings.log_rotate_backups,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            _root_logger.addHandler(file_handler)
+    _root_logger.setLevel(logging.INFO)
+    # `medplat` 的 propagate 保持默认的 True——这 17 个 logger 本来就往 root 传，
+    # 改成 False 属于本次修复不需要的行为变更（CLAUDE.md 第 1 条），还会让
+    # 8 个测试文件里的 caplog 收不到记录。挂上 handler 之后 `logging.lastResort`
+    # 不再触发（它只在整条链上一个 handler 都没有时才兜底），双打的问题本来就没有。
+    #
+    # access 自己不留 handler，交给上面那一份——**这一条是本次唯一的行为变更**：
+    # 它以前 propagate=False，现在要靠往上传才拿得到 handler。
+    # 级别单独钉住，免得有人调高 medplat 的级别时把请求日志一起关掉。
     _access_logger.setLevel(logging.INFO)
-    _access_logger.propagate = False
+    _access_logger.propagate = True
 
 
-_configure_access_logger()
+_configure_logging()
 
 
 @app.middleware("http")
@@ -452,31 +511,80 @@ async def security_headers_middleware(request, call_next):
     return response
 
 
+def _log_access(
+    request, request_id: str, status_code: int, duration_ms: float, error: str = ""
+) -> None:
+    """写一条结构化访问日志。`error` 仅在未捕获异常时带上异常类名。
+
+    形参叫 `status_code` 而不是 `status`：模块里 `status` 已经是 fastapi 那个常量模块
+    （health 用它取 503），同名会把它遮住。命名也与同文件的 `_write_audit` 一致。
+    """
+    if not settings.log_json:
+        return
+    row = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "request_id": request_id,
+        "method": request.method,
+        "path": request.url.path,
+        "status": status_code,
+        "duration_ms": duration_ms,
+    }
+    if error:
+        row["error"] = error
+    _access_logger.info(json.dumps(row, ensure_ascii=False))
+
+
 @app.middleware("http")
 async def request_log_middleware(request, call_next):
-    """结构化 JSON 请求日志：method/path/status/耗时/追踪ID（X-Request-ID 透传或生成）。"""
+    """结构化 JSON 请求日志：method/path/status/耗时/追踪ID（X-Request-ID 透传或生成）。
+
+    **未捕获异常必须走同一条记账路径。** 原实现只在 `call_next` 正常返回后才计数、
+    才写日志、才回 X-Request-ID；而未捕获异常会从 `await call_next` 一路抛到
+    Starlette 最外层的 ServerErrorMiddleware，把这三件事整个跳过。后果不是"少一条
+    日志"，是**监控台的错误率在全站 500 时显示 0%**——`by_status_class` 里根本没有
+    这次调用，看板越红的时候越干净，恰好在最需要它的时刻骗人。
+    （`audit_middleware` 早就 try/except 兜住了写操作的留痕，这里是把同一条口径
+    补到监控与访问日志上；`_unhandled_exception_handler` 补的是响应头。）
+    """
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    # 挂到 request.state 上，好让 ServerErrorMiddleware 那层的异常处理器也拿得到
+    # ——异常一抛，本函数的局部变量就跟着栈一起没了。
+    request.state.request_id = request_id
     start = time.perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        monitor_metrics.record(request.method, request.url.path, 500, duration_ms)
+        _log_access(request, request_id, 500, duration_ms, error=type(exc).__name__)
+        raise
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     response.headers["X-Request-ID"] = request_id
     # 监控计数：进程内，随进程启停清零（见 app/monitor.py 的取舍说明）
     monitor_metrics.record(request.method, request.url.path, response.status_code, duration_ms)
-    if settings.log_json:
-        _access_logger.info(
-            json.dumps(
-                {
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                    "request_id": request_id,
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status": response.status_code,
-                    "duration_ms": duration_ms,
-                },
-                ensure_ascii=False,
-            )
-        )
+    _log_access(request, request_id, response.status_code, duration_ms)
     return response
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request, exc):
+    """给未捕获异常的 500 响应补上 X-Request-ID，**响应体逐字节不变**。
+
+    没有这个头，运维拿到用户报的"页面报错了"就只有一个时间点：日志里那一刻的
+    几十条记录挨个看。有了它，用户截图上的 ID 直接 grep 到那一条（含上面补的
+    `error` 字段与耗时）。
+
+    体和状态码照抄 Starlette `ServerErrorMiddleware.error_response` 的默认值
+    （`PlainTextResponse("Internal Server Error", 500)`），只加头不改字节——
+    500 的响应体也是对外行为，治理不得改响应字节（CLAUDE.md §11）。
+    ServerErrorMiddleware 发完响应仍会重新抛出异常，所以 uvicorn 的 traceback
+    与 TestClient 的 `raise_server_exceptions` 行为都不受影响。
+    """
+    return PlainTextResponse(
+        "Internal Server Error",
+        status_code=500,
+        headers={"X-Request-ID": getattr(request.state, "request_id", "")},
+    )
 
 
 _AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
@@ -601,15 +709,36 @@ async def audit_middleware(request, call_next):
     return response
 
 
-@app.get("/api/health", tags=["平台"])
-def health():
-    """健康检查：附带数据库连通性探测。"""
+class HealthOut(BaseModel):
+    """健康检查响应。字段顺序即出参顺序，改动会改响应字节（见 §11 治理口径）。"""
+
+    status: str        # ok / degraded
+    service: str
+    version: str
+    database: str      # ok / error
+
+
+@app.get("/api/health", tags=["平台"], response_model=HealthOut)
+def health(response: Response):
+    """健康检查：附带数据库连通性探测。
+
+    **库不通时回 503，而不是 200 带一句 degraded。** 探针看的是状态码，不是响应体：
+    `Dockerfile` 的 HEALTHCHECK 写的就是 `.raise_for_status()`，负载均衡与
+    k8s 探针同理。原实现永远回 200，等于那条 HEALTHCHECK **从设计之初就没生效过**
+    ——一个连不上库的实例会一直留在轮询里，把流量吸进去再全部报错，
+    而这正是探针存在的唯一理由。
+
+    响应体逐字节不变（`status` 仍是 "degraded"，字段不增不减），改的只有状态码；
+    `start.sh` 的启动等待循环不用 raise_for_status，只判"HTTP 通不通"，不受影响。
+    """
     db_status = "ok"
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception:  # noqa: BLE001 - 任何数据库异常均判定为不可用
         db_status = "error"
+    if db_status != "ok":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     payload = {
         "status": "ok" if db_status == "ok" else "degraded",
         "service": "medplat",

@@ -38,9 +38,13 @@ const SPD_REF_STATUS = {
   closed: ["已闭环", "green"], rejected: ["已退回", "red"], withdrawn: ["已撤回", ""],
 };
 
+/* 慢专病的状态标签：与三端共用的 `statusTag()`（shared.js）同一份实现，
+ * 这里只多一条自己的约定——**状态为空时显示 `—` 而不是空白**。
+ * 合并时刻意没有把这条约定推给管理端（管理端历来显示空白），那是改字节不是去重。
+ * 等价性由 `scripts/statustag_equiv.js` 证明，含一条前提扫描：
+ * 传进来的映射表都不能用假值当键（否则 `key || "—"` 会改掉查表的那个键）。 */
 function spdTag(map, key) {
-  const [text, cls] = map[key] || [key || "—", ""];
-  return `<span class="tag ${cls}">${esc(text)}</span>`;
+  return statusTag(map, key || "—");
 }
 
 function spdCards(items) {
@@ -363,11 +367,12 @@ async function renderSpdExpert() {
 
 async function renderSpdCenter() {
   $("#page-desc").textContent =
-    "统筹调度中枢：统一待办、目标池分发与认领、在途转诊、生命周期确认";
-  const [wb, candidates, catalog] = await Promise.all([
+    "统筹调度中枢：统一待办、目标池分发与认领、在途转诊、生命周期确认、上报任务配置";
+  const [wb, candidates, catalog, reportTasks] = await Promise.all([
     api("/api/spd/workbench/center"),
     api("/api/spd/candidates?status=target&limit=50"),
     spdCatalog(),
+    api("/api/spd/case-report-tasks"),
   ]);
   $("#page-body").innerHTML = `
     ${spdCards([
@@ -407,7 +412,24 @@ async function renderSpdCenter() {
     <div class="panel"><h3>转诊在途</h3>
       ${barChart(spdPairs(wb.referrals.by_status,
         Object.fromEntries(Object.entries(SPD_REF_STATUS).map(([k, v]) => [k, v[0]]))),
-        { color: "#0a4d78", unit: " 单" })}</div>`;
+        { color: "#0a4d78", unit: " 单" })}</div>
+    <div class="panel"><h3>上报任务配置（中心端 #11）</h3>
+      <p class="desc">配置病种、管理科室与负责人；停用的任务不再出现在成员端上报下拉里</p>
+      <form class="inline" id="spd-crt-form">
+        <input name="code" placeholder="任务编码" required>
+        <input name="name" placeholder="任务名称" required>
+        <select name="program_code">${spdProgramOptions(catalog, true)}</select>
+        <input name="dept" placeholder="管理科室" style="width:120px">
+        <input name="manager_user_id" type="number" placeholder="负责人用户ID" style="width:130px">
+        <button>新建任务</button>
+      </form><p class="msg" id="spd-crt-msg"></p>
+      ${table(["ID", "编码", "名称", "病种", "科室", "负责人", "状态", "操作"], reportTasks, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.code)}</td><td>${esc(t.name)}</td>
+         <td>${esc(t.program_code || "—")}</td><td>${esc(t.dept || "—")}</td>
+         <td>${t.manager_user_id ?? "—"}</td>
+         <td>${t.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-crt="${t.id}" data-active="${t.active ? 0 : 1}">
+           ${t.active ? "停用" : "启用"}</button></td></tr>`)}</div>`;
   $("#spd-dist-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target, ["team_id", "assigned_user_id"]);
@@ -415,6 +437,18 @@ async function renderSpdCenter() {
       .filter(Boolean).map(Number);
     return postAction("/api/spd/candidates/distribute", body, "#spd-dist-msg");
   };
+  $("#spd-crt-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/case-report-tasks",
+      formJson(e.target, ["manager_user_id"]), "#spd-crt-msg");
+  };
+  $("#page-body").addEventListener("click", (e) => {
+    const toggle = e.target.closest("[data-crt]");
+    if (toggle) {
+      return postAction(`/api/spd/case-report-tasks/${toggle.dataset.crt}`,
+        { active: toggle.dataset.active === "1" }, "#spd-crt-msg", "PATCH");
+    }
+  });
 }
 
 /* ============================================================
@@ -1285,5 +1319,455 @@ async function renderSpdReport() {
       $("#spd-rpt-view").innerHTML =
         `<div class="panel" style="border-left:4px solid #0b6e6e"><h3>${esc(d.title)}</h3>${sections}</div>`;
     }
+  };
+}
+
+/* ============================================================
+ * 12. 服务团队成员端（基层服务执行端）
+ *
+ * 对应招标需求「六、服务团队成员端」：#12 监测录入与趋势、#14 量表评估、
+ * #8 评估统计、#9/#15 干预模板与批量干预、#7/#16 宣教推送与成效、
+ * #11 异常上报与处置。后端（app/spd/routers/care.py）先于本页交付，
+ * 本页只消费既有端点，不新增任何接口。
+ * ==========================================================*/
+
+const SPD_MEAS_LEVEL = { normal: ["正常", "green"], high: ["偏高", "red"], low: ["偏低", "orange"] };
+const SPD_INTV_STATUS = {
+  planned: ["计划中", "orange"], doing: ["执行中", ""],
+  done: ["已完成", "green"], removed: ["已移除", ""],
+};
+const SPD_PUSH_STATUS = {
+  pending: ["待发送", "orange"], sent: ["已发送", "green"],
+  read: ["已读", "green"], failed: ["失败", "red"],
+};
+const SPD_REPORT_STATUS = {
+  pending: ["待处置", "orange"], handling: ["处置中", ""],
+  done: ["已处置", "green"], closed: ["已关闭", ""],
+};
+const SPD_INTV_CATEGORY = { diet: "饮食", exercise: "运动", drug: "用药", psych: "心理", other: "其他" };
+const SPD_EDU_CHANNEL = { sms: "短信", wechat: "公众号", app: "居民端" };
+const SPD_REPORT_TYPE = { review: "复核", referral: "转诊", followup: "随访", dispose: "处置" };
+/* 常用监测指标的输入提示。**不是白名单**——后端收任意 metric 字符串并按
+ * spd_targets 判级，这里只做 datalist 提示，别把它升级成 select 限死。 */
+const SPD_METRIC_HINTS = ["bp_sys", "bp_dia", "glucose_fasting", "glucose_post",
+  "hba1c", "bmi", "spo2", "heart_rate", "weight", "uric_acid"];
+
+async function renderSpdMember() {
+  $("#page-desc").textContent =
+    "基层服务执行：监测录入与趋势、量表评估与统计、干预模板与批量干预、宣教推送、异常上报";
+  const [catalog, templates, materials, interventions, assessStats, eduStats, pushes,
+         reportTasks, reports] = await Promise.all([
+    spdCatalog(),
+    api("/api/spd/intervention-templates"),
+    api("/api/spd/edu-materials?limit=100"),
+    api("/api/spd/interventions?limit=30"),
+    api("/api/spd/assessments/stats"),
+    api("/api/spd/edu-pushes/stats"),
+    api("/api/spd/edu-pushes?limit=20"),
+    api("/api/spd/case-report-tasks?active=true"),
+    api("/api/spd/case-reports?limit=30"),
+  ]);
+  const programOptions = spdProgramOptions(catalog, true);
+  $("#page-body").innerHTML = `
+    ${panel("监测数据录入（成员端 #12）", `
+      <p class="desc">按管理目标即时判级，偏高/偏低自动生成处置任务（3 日内办结）</p>
+      <form class="inline" id="spd-meas-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="metric" list="spd-metric-hints" placeholder="指标（如 bp_sys）" required>
+        <datalist id="spd-metric-hints">${SPD_METRIC_HINTS.map((m) =>
+          `<option value="${m}"></option>`).join("")}</datalist>
+        <input name="value" type="number" step="any" placeholder="数值" required>
+        <input name="unit" placeholder="单位" style="width:80px">
+        <select name="program_code">${programOptions}</select>
+        <input name="note" placeholder="备注">
+        <button>录入</button>
+      </form><p class="msg" id="spd-meas-msg"></p>
+      <form class="inline" id="spd-meas-query">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="metric" list="spd-metric-hints" placeholder="指标（趋势必填）">
+        <button class="secondary">查记录</button>
+        <button class="secondary" type="button" id="spd-meas-trend-btn">看趋势</button>
+      </form>
+      <div id="spd-meas-result"></div>`)}
+    ${panel("量表评估（成员端 #14 / 统计 #8）", `
+      <p class="desc">选择患者与已发布量表逐题作答，自动评分、给出风险等级并回写纳管档案</p>
+      <form class="inline" id="spd-assess-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="scale_id">${catalog.scales.map((s) =>
+          `<option value="${s.id}">${esc(s.name)}（${esc(s.code)}）</option>`).join("")}</select>
+        <button>开展评估</button>
+      </form><p class="msg" id="spd-assess-msg"></p>
+      ${spdCards([["评估人数", assessStats.persons], ["评估人次", assessStats.times]])}
+      ${barChart(spdPairs(assessStats.by_risk,
+        Object.fromEntries(Object.entries(SPD_RISK).map(([k, v]) => [k, v[0]]))),
+        { unit: " 人次" })}
+      <div id="spd-assess-list"></div>`)}
+    ${panel("干预模板与批量干预（成员端 #15 / 专家端 #9）", `
+      <form class="inline" id="spd-intvtpl-form">
+        <input name="code" placeholder="模板编码" required>
+        <input name="name" placeholder="模板名称" required>
+        <select name="program_code">${programOptions}</select>
+        <select name="category">${Object.entries(SPD_INTV_CATEGORY).map(([k, v]) =>
+          `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="content" placeholder="干预内容" required style="min-width:200px">
+        <input name="frequency" placeholder="频次（如 每周1次）" style="width:130px">
+        <input name="cycle_days" type="number" placeholder="周期天数" style="width:100px">
+        <select name="auto_risk_level"><option value="">不自动触发</option>
+          ${Object.entries(SPD_RISK).map(([k, v]) =>
+            `<option value="${k}">${esc(v[0])}自动触发</option>`).join("")}</select>
+        <button>建模板</button>
+      </form>
+      <form class="inline" id="spd-intv-form" style="margin-top:8px">
+        <input name="patient_ids" placeholder="患者ID，逗号分隔批量" required style="min-width:180px">
+        <select name="program_code">${programOptions}</select>
+        <select name="template_id"><option value="">不引用模板</option>
+          ${templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
+        <input name="goal" placeholder="干预目标">
+        <input name="next_at" type="date" title="下次干预时间">
+        <label style="font-size:13px"><input type="checkbox" name="create_task" checked> 生成任务</label>
+        <button>批量下发</button>
+      </form><p class="msg" id="spd-intv-msg"></p>
+      ${table(["ID", "患者", "目标", "内容", "频次", "下次时间", "状态", "反馈", "操作"],
+        interventions, (i) =>
+        `<tr><td>${i.id}</td><td>${esc(i.patient_name || i.patient_id)}</td>
+         <td>${esc(i.goal || "—")}</td><td>${esc((i.content || "").slice(0, 40))}</td>
+         <td>${esc(i.frequency || "—")}</td><td>${esc(i.next_at || "—")}</td>
+         <td>${spdTag(SPD_INTV_STATUS, i.status)}</td><td>${esc(i.feedback || "—")}</td>
+         <td>${i.status === "removed"
+           ? `<button class="btn secondary" data-intv="${i.id}" data-s="planned">恢复</button>`
+           : `<button class="btn secondary" data-intv="${i.id}" data-s="done">办结</button>
+              <button class="btn secondary" data-intv="${i.id}" data-s="removed">移除</button>`}
+         </td></tr>`)}`)}
+    ${panel("宣教推送与成效（成员端 #7 / #16）", `
+      <p class="desc">立即推送当场走通道（短信/居民端/公众号），定时推送到点派发；失败记原因不假成功</p>
+      <form class="inline" id="spd-edu-form">
+        <select name="material_id">${materials.filter((m) => m.active).map((m) =>
+          `<option value="${m.id}">${esc(m.title)}</option>`).join("")}</select>
+        <input name="patient_ids" placeholder="患者ID，逗号分隔" required style="min-width:180px">
+        <select name="channel">${Object.entries(SPD_EDU_CHANNEL).map(([k, v]) =>
+          `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="send_at" placeholder="定时（YYYY-MM-DD HH:MM:SS，留空立即）" style="min-width:230px">
+        <button>推送</button>
+      </form><p class="msg" id="spd-edu-msg"></p>
+      ${spdCards([["覆盖人数", eduStats.covered_patients], ["推送人次", eduStats.push_times],
+        ["实际送达", eduStats.sent], ["已读率", `${eduStats.read_rate}%`]])}
+      ${table(["素材", "患者", "渠道", "发送时间", "状态", "失败原因"], pushes, (p) =>
+        `<tr><td>${esc(p.title)}</td><td>${p.patient_id}</td>
+         <td>${esc(SPD_EDU_CHANNEL[p.channel] || p.channel)}</td><td>${esc(p.send_at)}</td>
+         <td>${spdTag(SPD_PUSH_STATUS, p.status)}</td><td>${esc(p.fail_reason || "—")}</td></tr>`)}`)}
+    ${panel("异常上报与处置（成员端 #11）", `
+      <p class="desc">上报同时生成统一任务——"上报了"和"有人在办"是同一件事的两面</p>
+      <form class="inline" id="spd-report-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="task_id"><option value="">无对应上报任务</option>
+          ${reportTasks.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
+        <select name="report_type">${Object.entries(SPD_REPORT_TYPE).map(([k, v]) =>
+          `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="content" placeholder="异常情况说明" required style="min-width:220px">
+        <button>上报</button>
+      </form><p class="msg" id="spd-report-msg"></p>
+      ${table(["ID", "患者", "类型", "内容", "触发规则", "状态", "处置意见", "操作"],
+        reports, (r) =>
+        `<tr><td>${r.id}</td><td>${esc(r.patient_name || r.patient_id)}</td>
+         <td>${esc(SPD_REPORT_TYPE[r.report_type] || r.report_type)}</td>
+         <td>${esc((r.content || "").slice(0, 40))}</td><td>${esc(r.trigger_rule || "—")}</td>
+         <td>${spdTag(SPD_REPORT_STATUS, r.status)}</td><td>${esc(r.handle_note || "—")}</td>
+         <td>${["pending", "handling"].includes(r.status)
+           ? `<button class="btn secondary" data-crpt="${r.id}">处置</button>` : "—"}</td></tr>`)}`)}`;
+
+  $("#spd-meas-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/measurements",
+      formJson(e.target, ["patient_id", "value"]), "#spd-meas-msg");
+  };
+  const measQuery = async () => {
+    const body = formJson($("#spd-meas-query"), ["patient_id"]);
+    if (!body.patient_id) return;
+    const params = new URLSearchParams({ patient_id: body.patient_id, limit: 30 });
+    if (body.metric) params.set("metric", body.metric);
+    const rows = await api(`/api/spd/measurements?${params}`);
+    $("#spd-meas-result").innerHTML = table(
+      ["时间", "指标", "数值", "等级", "来源", "备注"], rows, (m) =>
+      `<tr><td>${esc(m.measured_at.slice(0, 16))}</td><td>${esc(m.metric)}</td>
+       <td>${m.value}${esc(m.unit)}</td><td>${spdTag(SPD_MEAS_LEVEL, m.level)}</td>
+       <td>${esc(m.source)}</td><td>${esc(m.note || "—")}</td></tr>`);
+  };
+  $("#spd-meas-query").onsubmit = (e) => { e.preventDefault(); return measQuery(); };
+  $("#spd-meas-trend-btn").onclick = async () => {
+    const body = formJson($("#spd-meas-query"), ["patient_id"]);
+    if (!body.patient_id || !body.metric) {
+      return setMsg("#spd-meas-msg", "看趋势需要同时填患者ID与指标", false);
+    }
+    const t = await api(`/api/spd/measurements/trend?patient_id=${body.patient_id}`
+      + `&metric=${encodeURIComponent(body.metric)}`);
+    $("#spd-meas-result").innerHTML = `
+      ${barChart(t.points.map((p) => [p.label, p.avg]), { unit: t.latest?.unit || "" })}
+      ${table(["时段", "均值", "最低", "最高", "次数"], t.points, (p) =>
+        `<tr><td>${esc(p.label)}</td><td>${p.avg}</td><td>${p.min}</td>
+         <td>${p.max}</td><td>${p.count}</td></tr>`)}`;
+  };
+  $("#spd-assess-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const picked = formJson(e.target, ["patient_id", "scale_id"]);
+    const scale = await api(`/api/spd/scales/${picked.scale_id}`);
+    /* 逐题构造模态字段：single→下拉；multi→逗号分隔文本；number→数字。
+     * 选项 value 用 label 本身——score_scale 就是按 label 查分值表的。 */
+    const fields = (scale.items || []).map((item) => {
+      if (item.type === "number") {
+        return { name: item.key, label: item.title, type: "number" };
+      }
+      if (item.type === "multi") {
+        return { name: item.key, label: `${item.title}（多选，逗号分隔）`,
+                 placeholder: (item.options || []).map((o) => o.label).join("/") };
+      }
+      return { name: item.key, label: item.title, type: "select",
+               options: (item.options || []).map((o) => ({ value: o.label, label: o.label })) };
+    });
+    if (!fields.length) return setMsg("#spd-assess-msg", "该量表没有题目，先去量表配置补齐", false);
+    const answersRaw = await spdModal(`${scale.name} · 逐题作答`, fields);
+    if (!answersRaw) return;
+    const answers = {};
+    (scale.items || []).forEach((item) => {
+      const v = answersRaw[item.key];
+      answers[item.key] = item.type === "multi"
+        ? String(v || "").split(/[，,]/).map((s) => s.trim()).filter(Boolean)
+        : v;
+    });
+    try {
+      const r = await api("/api/spd/assessments", { method: "POST", body: JSON.stringify({
+        patient_id: picked.patient_id, scale_code: scale.code, answers }) });
+      /* 不调 route() 刷新整页——那会把这条结果消息一并刷掉。
+       * 统计卡片下次进入页面自然更新，当下要紧的是让操作者看到评估结论。 */
+      setMsg("#spd-assess-msg",
+        `评估完成：${r.score} 分，风险等级 ${SPD_RISK[r.risk_level]?.[0] || r.risk_level || "未分级"}。${r.advice || ""}`);
+    } catch (err) { setMsg("#spd-assess-msg", err.message, false); }
+  };
+  $("#spd-intvtpl-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/intervention-templates",
+      formJson(e.target, ["cycle_days"]), "#spd-intv-msg");
+  };
+  $("#spd-intv-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["template_id"]);
+    body.patient_ids = String(body.patient_ids || "").split(/[，,\s]+/)
+      .filter(Boolean).map(Number);
+    body.create_task = e.target.create_task.checked;
+    return postAction("/api/spd/interventions", body, "#spd-intv-msg");
+  };
+  $("#spd-edu-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["material_id"]);
+    body.patient_ids = String(body.patient_ids || "").split(/[，,\s]+/)
+      .filter(Boolean).map(Number);
+    return postAction("/api/spd/edu-pushes", body, "#spd-edu-msg");
+  };
+  $("#spd-report-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/case-reports",
+      formJson(e.target, ["patient_id", "task_id"]), "#spd-report-msg");
+  };
+  $("#page-body").addEventListener("click", async (e) => {
+    const intv = e.target.closest("[data-intv]");
+    const crpt = e.target.closest("[data-crpt]");
+    if (intv) {
+      const status = intv.dataset.s;
+      const body = { status };
+      if (status === "done") {
+        const form = await spdModal("办结干预", [
+          { name: "feedback", label: "患者反馈（可空）", type: "textarea" }]);
+        if (!form) return;
+        if (form.feedback) body.feedback = form.feedback;
+      }
+      return postAction(`/api/spd/interventions/${intv.dataset.intv}`, body,
+        "#spd-intv-msg", "PATCH");
+    }
+    if (crpt) {
+      const form = await spdModal("处置异常上报", [
+        { name: "status", label: "处置结果", type: "select", options: [
+          { value: "handling", label: "开始处置" }, { value: "done", label: "处置完成" },
+          { value: "closed", label: "关闭（无需处理）" }] },
+        { name: "handle_note", label: "处置意见", type: "textarea" }]);
+      if (!form) return;
+      return postAction(`/api/spd/case-reports/${crpt.dataset.crpt}/handle`, form,
+        "#spd-report-msg");
+    }
+  });
+}
+
+/* ============================================================
+ * 13. 个案管理师端（专属服务衔接端）
+ *
+ * 对应招标需求「七、个案管理师端」：#6 在线咨询（会话/回复/病例调阅/转随访）、
+ * #9 复诊计划（看板/新增/移除恢复/邀约留痕）、#14 健康处方。
+ * 居民发起的咨询在这里被应答——这个页面存在之前，医生工作台的
+ * "待回复咨询"计数是一扇没有门的窗。
+ * ==========================================================*/
+
+const SPD_CONSULT_STATUS = { open: ["进行中", "orange"], closed: ["已结束", ""] };
+const SPD_REVISIT_STATUS = {
+  planned: ["已排期", "orange"], done: ["已复诊", "green"],
+  overdue: ["已逾期", "red"], removed: ["已移除", ""],
+};
+const SPD_REMIND_STATUS = { none: ["未提醒", ""], sent: ["已提醒", "orange"], contacted: ["已联系", "green"] };
+const SPD_REVISIT_SOURCE = { path: "路径生成", discharge: "出院计划", high_risk: "高危触发", manual: "手工" };
+
+async function renderSpdManager() {
+  $("#page-desc").textContent =
+    "专属服务衔接：应答居民在线咨询并可转随访、复诊计划看板与邀约留痕、健康处方";
+  const [catalog, consults, revisits] = await Promise.all([
+    spdCatalog(),
+    api("/api/spd/consults?limit=50"),
+    api("/api/spd/revisits?limit=50"),
+  ]);
+  const programOptions = spdProgramOptions(catalog, true);
+  $("#page-body").innerHTML = `
+    ${panel("在线咨询（个案管理师端 #6）", `
+      <p class="desc">居民端发起的专病咨询在此应答；可依据咨询记录一键转随访任务</p>
+      ${table(["ID", "患者", "病种", "消息数", "发起时间", "状态", "操作"], consults, (c) =>
+        `<tr><td>${c.id}</td><td>${esc(c.patient_name || c.patient_id)}</td>
+         <td>${esc(c.program_code || "—")}</td><td>${c.messages}</td>
+         <td>${esc(c.created_at.slice(0, 16))}</td>
+         <td>${spdTag(SPD_CONSULT_STATUS, c.status)}</td>
+         <td><button class="btn secondary" data-consult="${c.id}">打开会话</button>
+          ${c.status === "open"
+            ? `<button class="btn secondary" data-consult-close="${c.id}">结束</button>` : ""}
+          <button class="btn secondary" data-consult-fu="${c.id}">转随访</button></td></tr>`)}
+      <p class="msg" id="spd-consult-msg"></p>
+      <div id="spd-consult-thread"></div>`)}
+    ${panel("复诊计划看板（个案管理师端 #9 / 智能随访端 #7）", `
+      <form class="inline" id="spd-revisit-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="program_code">${programOptions}</select>
+        <input name="plan_date" type="date" required>
+        <input name="dept" placeholder="科室" style="width:110px">
+        <input name="items" placeholder="复查项目">
+        <button>新增计划</button>
+      </form>
+      <form class="inline" id="spd-revisit-filter" style="margin-top:8px">
+        <select name="status"><option value="">全部状态</option>
+          ${Object.entries(SPD_REVISIT_STATUS).map(([k, v]) =>
+            `<option value="${k}">${esc(v[0])}</option>`).join("")}</select>
+        <label style="font-size:13px"><input type="checkbox" name="overdue"> 只看逾期</label>
+        <button class="secondary">筛选</button>
+      </form><p class="msg" id="spd-revisit-msg"></p>
+      <div id="spd-revisit-list">${spdRevisitTable(revisits)}</div>`)}
+    ${panel("健康处方（个案管理师端 #14）", `
+      <p class="desc">用药 / 康复 / 生活三段至少填一段；居民端「干预」页可见</p>
+      <form class="inline" id="spd-rx-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="program_code">${programOptions}</select>
+        <input name="drug_advice" placeholder="用药指导" style="min-width:170px">
+        <input name="rehab_advice" placeholder="康复训练" style="min-width:170px">
+        <input name="life_advice" placeholder="生活方式建议" style="min-width:170px">
+        <button>开具</button>
+      </form>
+      <form class="inline" id="spd-rx-query" style="margin-top:8px">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <button class="secondary">查该患者的处方</button>
+      </form><p class="msg" id="spd-rx-msg"></p>
+      <div id="spd-rx-list"></div>`)}`;
+
+  $("#spd-revisit-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/revisits", formJson(e.target, ["patient_id"]), "#spd-revisit-msg");
+  };
+  $("#spd-revisit-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    const params = new URLSearchParams({ limit: 50 });
+    const status = e.target.status.value;
+    if (status) params.set("status", status);
+    if (e.target.overdue.checked) params.set("overdue", "true");
+    $("#spd-revisit-list").innerHTML = spdRevisitTable(
+      await api(`/api/spd/revisits?${params}`));
+  };
+  $("#spd-rx-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/health-prescriptions",
+      formJson(e.target, ["patient_id"]), "#spd-rx-msg");
+  };
+  $("#spd-rx-query").onsubmit = async (e) => {
+    e.preventDefault();
+    const pid = Number(e.target.patient_id.value);
+    if (!pid) return;
+    const rows = await api(`/api/spd/health-prescriptions?patient_id=${pid}`);
+    $("#spd-rx-list").innerHTML = table(
+      ["时间", "病种", "用药", "康复", "生活", "目标说明"], rows, (r) =>
+      `<tr><td>${esc(r.created_at.slice(0, 10))}</td><td>${esc(r.program_code || "—")}</td>
+       <td>${esc(r.drug_advice || "—")}</td><td>${esc(r.rehab_advice || "—")}</td>
+       <td>${esc(r.life_advice || "—")}</td><td>${esc(r.target_note || "—")}</td></tr>`);
+  };
+  $("#page-body").addEventListener("click", async (e) => {
+    const open = e.target.closest("[data-consult]");
+    const close = e.target.closest("[data-consult-close]");
+    const followup = e.target.closest("[data-consult-fu]");
+    const revisit = e.target.closest("[data-revisit]");
+    if (open) return spdShowConsultThread(Number(open.dataset.consult));
+    if (close) return postAction(`/api/spd/consults/${close.dataset.consultClose}/close`,
+      null, "#spd-consult-msg");
+    if (followup) {
+      const form = await spdModal("依据咨询发起随访", [
+        { name: "title", label: "随访标题", value: "咨询转随访", required: true },
+        { name: "due_days", label: "几天内完成", type: "number", value: 7 }]);
+      if (!form) return;
+      return postAction(`/api/spd/consults/${followup.dataset.consultFu}/to-followup`,
+        form, "#spd-consult-msg");
+    }
+    if (revisit) {
+      const action = revisit.dataset.s;
+      const body = { status: action };
+      if (action === "done") body.actual_date = new Date().toISOString().slice(0, 10);
+      if (action === "__remind") {
+        delete body.status;
+        body.remind_status = "contacted";
+        body.note = "电话/微信邀约已联系";
+      }
+      return postAction(`/api/spd/revisits/${revisit.dataset.revisit}`, body,
+        "#spd-revisit-msg", "PATCH");
+    }
+  });
+}
+
+function spdRevisitTable(rows) {
+  return table(["ID", "患者", "病种", "计划日期", "科室", "项目", "来源", "状态", "提醒", "操作"],
+    rows, (r) =>
+    `<tr><td>${r.id}</td><td>${esc(r.patient_name || r.patient_id)}</td>
+     <td>${esc(r.program_code || "—")}</td><td>${esc(r.plan_date)}</td>
+     <td>${esc(r.dept || "—")}</td><td>${esc(r.items || "—")}</td>
+     <td>${esc(SPD_REVISIT_SOURCE[r.source] || r.source)}</td>
+     <td>${spdTag(SPD_REVISIT_STATUS, r.status)}</td>
+     <td>${spdTag(SPD_REMIND_STATUS, r.remind_status)}</td>
+     <td>${r.status === "removed"
+       ? `<button class="btn secondary" data-revisit="${r.id}" data-s="planned">恢复</button>`
+       : `<button class="btn secondary" data-revisit="${r.id}" data-s="done">已复诊</button>
+          <button class="btn secondary" data-revisit="${r.id}" data-s="__remind">已联系</button>
+          <button class="btn secondary" data-revisit="${r.id}" data-s="removed">移除</button>`}
+     </td></tr>`);
+}
+
+async function spdShowConsultThread(consultId) {
+  const messages = await api(`/api/spd/consults/${consultId}/messages`);
+  $("#spd-consult-thread").innerHTML = `
+    <div class="panel" style="border-left:4px solid #0b6e6e">
+      <h3>会话 #${consultId}</h3>
+      ${messages.map((m) => `<p style="margin:6px 0">
+        <span class="tag ${m.sender === "patient" ? "orange" : "green"}">${
+          m.sender === "patient" ? "居民" : "医护"}</span>
+        ${esc(m.content)}
+        <small style="color:#8a939e">${esc(m.created_at.slice(0, 16))}</small></p>`).join("")
+        || '<p class="desc">暂无消息</p>'}
+      <form class="inline" id="spd-consult-reply">
+        <input name="content" placeholder="回复内容" required style="min-width:300px">
+        <button>回复</button>
+      </form></div>`;
+  $("#spd-consult-reply").onsubmit = async (e) => {
+    e.preventDefault();
+    const content = e.target.content.value.trim();
+    if (!content) return;
+    try {
+      await api(`/api/spd/consults/${consultId}/reply`,
+        { method: "POST", body: JSON.stringify({ content }) });
+      await spdShowConsultThread(consultId);
+    } catch (err) { setMsg("#spd-consult-msg", err.message, false); }
   };
 }

@@ -160,12 +160,10 @@ class _LockKeeper:
         self._stop = threading.Event()
         # 复用同一个客户端并设超时：每次心跳新建连接既浪费（长任务会攒下几十条
         # 无人回收的连接），又会在网络黑洞时无限阻塞——心跳就此静默停摆。
+        # 超时由 `_redis_client` 统一设（DEFAULT_REDIS_TIMEOUT=5s，与这里原先
+        # 就地 setdefault 的值一致）。**不能再在这里改 connection_kwargs**：
+        # 客户端现在是全局复用的，改它等于替所有调用方改超时。
         self._redis = _redis_client()
-        if self._redis is not None:
-            try:
-                self._redis.connection_pool.connection_kwargs.setdefault("socket_timeout", 5)
-            except Exception:  # noqa: BLE001 - 客户端实现不支持就算了，不影响续期
-                pass
         self._thread = threading.Thread(
             target=self._run, name=f"joblock-keeper-{name}", daemon=True
         )

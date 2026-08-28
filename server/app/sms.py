@@ -18,6 +18,7 @@ from typing import Protocol
 
 from .config import settings
 from .egress import egress_url_allowed, signed_headers
+from .privacy import mask_phone
 
 logger = logging.getLogger("medplat.sms")
 
@@ -31,12 +32,34 @@ class SmsProvider(Protocol):
 
 
 class ConsoleSmsProvider:
-    """开发/演示通道：只写日志，不产生外部调用。"""
+    """开发/演示通道：只写日志，不产生外部调用。
+
+    **默认不打明文**：手机号走 `privacy.mask_phone`，短信正文整段隐去（只留字数）。
+    正文里就是那串验证码——而验证码在库里是**只落散列**的
+    （见 routers/portal.py「验证码只落散列」），把它明文写进日志等于绕开了那条设计。
+
+    这条以前"看着没事"，是因为 `medplat.sms` 当时根本没有 handler、
+    `logger.info` 在建记录之前就被丢掉了。日志改成全部 `medplat.*` 都落
+    stdout + 轮转文件（等保 6 个月留存）之后，同一行代码就变成了
+    **把手机号和一次性口令写进留存档案**——`docs/运维手册.md` 恰好还写着
+    "访问日志不含请求体，不会落身份证号/电话等敏感字段"。
+
+    明文只在**显式开关 + 非生产**下才打，复用居民端回显 `debug_code` 的那对条件
+    （`MEDPLAT_SMS_DEBUG_ECHO` 默认关，生产恒不生效），不新增第 14 个开关。
+    """
 
     name = "console"
 
     def send(self, phone: str, content: str) -> bool:
-        logger.info("[SMS-CONSOLE] to=%s content=%s", phone, content)
+        if settings.sms_debug_echo and not settings.is_production:
+            logger.info("[SMS-CONSOLE] to=%s content=%s", phone, content)
+        else:
+            logger.info(
+                "[SMS-CONSOLE] to=%s content=<%d 字，已隐去；本地联调设 "
+                "MEDPLAT_SMS_DEBUG_ECHO=1 可打明文>",
+                mask_phone(phone),
+                len(content),
+            )
         return True
 
 
@@ -87,7 +110,8 @@ class HttpGatewaySmsProvider:
         try:
             resp = httpx.post(self.url, content=body, headers=headers, timeout=5.0)
         except Exception:  # pragma: no cover - 依赖真实网络
-            logger.exception("[SMS-HTTP] 短信网关调用异常 phone=%s", phone)
+            # 号码打掩码：这条 ERROR 恰恰是最会被留存、被贴进工单的日志。
+            logger.exception("[SMS-HTTP] 短信网关调用异常 phone=%s", mask_phone(phone))
             return False
         if resp.status_code >= 400:  # pragma: no cover - 依赖真实网络
             logger.error("[SMS-HTTP] 网关拒绝 status=%s body=%s", resp.status_code, resp.text[:200])

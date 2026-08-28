@@ -100,9 +100,13 @@ def fake_redis(monkeypatch):
 
     class Redis:  # noqa: D401 - mock
         @staticmethod
-        def from_url(url, decode_responses=False):
+        def from_url(url, decode_responses=False, **kwargs):
+            # 生产侧现在会传 socket_timeout / socket_connect_timeout /
+            # health_check_interval（见 state_store._redis_client 的说明）。
+            # 桩照收并记下来，好让下面的用例能断言"超时确实被设上了"。
             fake.url = url
             fake.decode_responses = decode_responses
+            fake.connect_kwargs = kwargs
             return fake
 
     module.Redis = Redis

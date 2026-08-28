@@ -38,7 +38,7 @@ from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict
 from ..egress import egress_url_allowed, verify_signature
 from ..payments import HttpGatewayPaymentGateway, to_fen
-from ..visibility import assert_patient_visible, scope_patient_list
+from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import (
@@ -1079,6 +1079,18 @@ def create_payment(
         # 未配置/未过出网校验时绝不能悄悄落回 Mock：Mock 会把单标成已支付，
         # 而现实中一分钱都没收到。
         raise HTTPException(status_code=503, detail="支付网关未配置或未通过出网校验，gateway 渠道不可用")
+    if settings.is_production and body.channel == "online" and "online" not in _GATEWAYS:
+        # 同一条理由，`online` 上原先漏了。`_gateway()` 对任何未注册的渠道一律
+        # 回落 `MOCK_GATEWAY`，而 Mock 的 `pay()` 直接返回 success、流水号本地编——
+        # 于是生产上"线上支付"会把单据标成已付，而一分钱都没出账。
+        # 只拦 `online`：`cash`/`card` 是窗口当面收讫、`insurance` 是医保基金结算，
+        # 它们**本来就**没有网关，当场置 paid 正是真实语义，拦了才是错的。
+        # 放在使用处而非启动守卫：只收现金的县没有网关是合法形态，不该被拒启。
+        raise HTTPException(
+            status_code=503,
+            detail="线上支付渠道未配置真实网关，拒绝受理——"
+                   "否则会把单据标成已支付而实际未收到款",
+        )
     default_amount = (
         settlement.insurance_pay if body.channel == "insurance" else settlement.self_pay
     )
@@ -1247,12 +1259,21 @@ class RefundIn(BaseModel):
 
 @router.post("/payments/{order_id}/refund", dependencies=[Depends(require_roles("operator"))])
 def refund_payment(
-    order_id: int, body: RefundIn, db: Session = Depends(get_db)
+    order_id: int,
+    body: RefundIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """退款：仅已支付单可退，退款金额不得超过剩余可退金额。"""
     order = db.get(PaymentOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="支付单不存在")
+    # 归属校验（上线前审计）：`PaymentOrder` 自己不带 org_id，归属隔一跳在
+    # `settlements` 上。原先只有 `require_roles("operator")`——那是**认证**不是
+    # 授权，且本函数连 user 参数都没有，于是任一成员单位的经办遍历 order_id
+    # 就能对别家机构的支付单发起退款。这条动的是钱。
+    # 归属判定排在状态机之前：先 403，免得用 409 的措辞探出别家单据的状态。
+    assert_obj_org_writable(db, user, db.get(Settlement, order.settlement_id))
     if order.status != "paid":
         raise HTTPException(
             status_code=409, detail=f"当前状态 {PAYMENT_STATUS.get(order.status, order.status)} 不可退款"

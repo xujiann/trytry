@@ -186,15 +186,20 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P2-21 | 11 个 UI 状态塞 localStorage 当参数，页面不可分享/不支持前进后退/跨标签污染 | pages-mgmt.js 等 |
 | P2-22 | 居民端靠正则匹配中文错误消息判断登录失效，后端改文案即失效 | `m/m.js:36` |
 | P2-23 | `MAP[x]\|\|x` 兜底未转义 4 处 | ✅ 已修（阶段十四 Q1：同形状实清 6 处 + test_frontend_escape_guard.py 防复发） |
+| P2-24 | **同一缺陷的第二种写法**：`const [text] = MAP[x] \|\| [x, ""]` 之后 `${text}` 裸插——P2-23 那条正则只认行内式，一条都抓不到 | ✅ 已修 2026-08-26（按形状全仓库扫出 **33 处**，五个文件；`test_frontend_escape_guard.py` 补第二条守卫，含三种"拼写绕过"的反证用例） |
+| P2-25 | 裸 `${MAP[key]}` 取单值、查不到时页面上显示字面量 `undefined` | ☐ **待办**：`core.js:809` `${CENTER_NAMES[r.center_type]}`、`core.js:609` `${WT[w.waste_type]}`、`pages-clinical.js:1875` `${SITE[r.infection_site]}` 等。与 P2-23/24 是同一族（查表没兜底），但**只是显示缺陷不是崩溃也不是 XSS**，故没并进那两条守卫——一条守卫混两种严重度，迟早因噪声被加豁免。安全写法仍是仓库自有的 `esc(MAP[x] \|\| x)`。**需要先逐处定文案**（显示原始码？显示"—"？），不是纯机械替换，故单列一项 |
+| P2-26 | 33 处状态标签在手工重复 `spdTag()` 已经做对的事 | ✅ 已修 2026-08-26：抽 `statusTag(map, key)` 进 `shared.js`（**三端共用**——`.tag` 的标记契约三套前端逐字相同，与 `.panel` 那种管理端独有的不一样），**34 处**调用点收敛，`spdTag`/`spdTagOf` 两份逐字相同的实现改为委托。等价性由 `scripts/statustag_equiv.js` 在输入矩阵上逐字符证明（含数字状态码、空串、null、XSS 载荷），10 个页面渲染字节比对一致 |
 
 ### 其它
 | # | 问题 |
 |---|---|
 | ~~P2-24~~ | ~~CI Python 3.11 vs 运行时 Docker 3.12 版本不一致~~ —— **已修**：CI 两个 job 统一走 `PYTHON_VERSION: "3.12"`，与两个 Dockerfile、ruff `target-version`、mypy `python_version` 同版；`tests/test_python_version_alignment.py` 钉住四处不许再漂 |
-| P2-25 | 影子配置 `MEDPLAT_REDIS_URL` 绕过 Settings；Redis 客户端每次调用新建 |
-| P2-26 | 两份等价 Dockerfile；无 .dockerignore；镜像默认灌演示数据；测试依赖进生产镜像 |
+| P2-25 | 影子配置 `MEDPLAT_REDIS_URL` 绕过 Settings（**仍待办**）；~~Redis 客户端每次调用新建~~ —— **已修 2026-08-27**：`_redis_client` 按 `(url, timeout)` 复用客户端 + 显式超时 + 熔断，见 `tests/test_redis_hotpath_resilience.py` |
+| P2-26 | 两份等价 Dockerfile；~~无 .dockerignore~~（已补）；镜像默认灌演示数据；测试依赖进生产镜像 |
 | P2-27 | README 数字陈旧（徽章 520 passed 实际 920 测试函数；7 e2e 实际 11） |
 | P2-28 | 审计链可末尾截断 + 与 JWT 复用密钥；员工账号无停用机制；登录不落审计 |
+| P2-30 | **审计落库在事件循环上同步跑**：`audit_middleware` 是 `async def`（跑在事件循环上），里面直接同步调 `_write_audit`——开会话、查 `users`、算哈希链、插一行，全程不让出。实测（**SQLite、无 advisory lock**）每次 **中位 2.49ms / p90 2.77ms / 最大 5.11ms**，而它挂在**每个写请求**（POST/PATCH/PUT/DELETE）上。**生产 PG 上更重且没量到**：那条路还要先拿 `pg_advisory_xact_lock` 把审计链写入**跨实例串行化**，等于让各实例的事件循环互相排队。修法（`run_in_threadpool` 或落队列异步写）会改并发语义与审计链的顺序保证，**须走 ADR**，不适合夹带。登记时间 2026-08-27 |
+| P2-29 | **13 项运行时依赖全是下界钉（`>=`），无 lockfile——库的默认值变了会静默改变生产行为。** 已实测到一例：`redis>=5.0` 下，redis-py **5.0.0 的 `socket_timeout` 默认 `None`**（出网永久挂起），**8.1.0 默认 5 秒**；同一份代码装出两种行为，而这条路在每个请求的主路径上。已就地修法是**显式写死超时**（`state_store.DEFAULT_REDIS_TIMEOUT`）+ AST 棘轮 `tests/test_outbound_timeout_guard.py`，把这一处堵死；但**"不吃库默认值"这条口径没有铺满**，其余 12 项依赖同样可能藏着这种版本敏感的默认值。彻底解法是加 lockfile（`pip-compile` / `uv lock`）并把镜像构建钉到锁上——那是独立任务，涉及发布流程，须走 ADR |
 
 ---
 

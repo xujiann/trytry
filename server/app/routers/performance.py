@@ -157,9 +157,9 @@ class ScorecardDetail(BaseModel):
     逐段建模而不是 `dict[str, Any]`（写成 Any 等于没声明契约）。"""
 
     referral_completion: ReferralCompletion
-    #: 计分用的**合计**：`remote_exams_requested + remote_exams_provided`。
-    #: 字段名与类型不变，但**自 2026-08-22 起，作为共享诊断中心的机构这个数会变大**
-    #: ——此前中心出多少份报告都是 0 分。
+    #: **计分用的值**。当前口径（2026-08-27 回退待批，见端点 docstring）＝仅申请方
+    #: `remote_exams_requested`；卫健批复中心侧计分后恢复为两侧合计。
+    #: 非中心机构两种口径下同值，回退不改它们的字节。
     remote_exams: int
     #: 作为**申请方**（`from_org_id`）：已出报告 + 已互认的申请单数。
     #: 互认计入，因为这一侧衡量的是"通过平台解决了多少次检查需求"，
@@ -173,6 +173,9 @@ class ScorecardDetail(BaseModel):
     #: 注意历史数据：`claimed_org_id` 是 2026-08 才加的列，回填靠 `claimed_by`
     #: 展示名反查用户，匹配不上的老单子仍是 NULL、数不进来。这一侧的数字对
     #: 加列之前的周期是偏低的。
+    #:
+    #: **当前不计分、只展示**（2026-08-27 回退待批）：这个字段就是"中心的工作量
+    #: 被看见了但没有算分"的哨兵——别因为它不进分数就把它删了。
     remote_exams_provided: int
     chronic_followup: ChronicFollowup
     rx_pass: RxPass
@@ -224,17 +227,21 @@ def org_scorecards(
     - 慢病随访覆盖：分母是**在管存量**患者（不按期），分子是**本期内随访过**的人。
       分母若也按期就变成"本期新入组的有多少随访过"，那是另一个指标。
 
-    **共享诊断协同量（2026-08-22 口径变更）**：此前只按 `from_org_id`（申请方）计，
-    真正领取并出报告的**共享诊断中心一分不得**——"资源下沉"考的是上级把资源投向基层，
-    而提供服务的一方没有任何计分是说不通的。现改为两侧都计：
+    **共享诊断协同量（2026-08-27 回退待批）**：只按 `from_org_id`（申请方）计分——
+    已出报告 + 已互认的申请单数（互认照计，见口径裁定 2）。
 
-    - 作为申请方：已出报告 + 已互认的申请单数（互认照计，见口径裁定 2）；
-    - 作为中心：本机构领取并出具报告的申请单数（只数 `reported`——互认不产生
-      中心工作量，且互认单结构上就没有 `claimed_org_id`）。
+    2026-08-22 曾改为"中心侧（`claimed_org_id` 出报告）也计分"。那个方向多半是对的
+    （提供服务的一方一分不得说不通），但它**改变各机构分数、进而改变基金分配**，
+    而留痕里只有"需卫健口径支持"、没有获批记录——ROADMAP 同时挂着"需口径"与
+    "已实施"两句互斥的话。按治理默认（影响资金分配的口径不由实现方拍板）回退，
+    等卫健批复后恢复。**恢复只需一处**：下面 `exam_count = exam_requested` 那行
+    改回 `exam_requested + exam_provided`，并翻转
+    `test_performance_orgs_contract.py` 里两条注明"待卫健裁定"的哨兵用例。
 
-    同一张单给两方各记一笔是有意的：本维度按机构算"参与了多少次协同"，
-    不是全县去重总量。**这会改变分数**（作为中心的机构分数上升），进而影响
-    此后按分数分配的基金池；已分配的池子是冻结快照，不受影响。
+    中心侧的量**仍然聚合并返回**（`remote_exams_provided`）：一是响应契约已含该
+    字段（去掉是破坏性变更），二是它正是"中心工作量在被看见但没有计分"的哨兵——
+    这恒等于回到 2026-08-22 之前的展示语义。已按旧口径分配的池子是冻结快照，
+    本次回退不追溯。
 
     L-1 口径参数化（向卫健考核口径过渡）：
     - volume_cap：量类维度（远程诊断/家医履约）封顶次数，达到即满分（默认 5，可按机构规模调大）；
@@ -352,9 +359,10 @@ def org_scorecards(
         ref_completed = ref_completed_by.get(org.id, 0)
         exam_requested = exam_count_by.get(org.id, 0)
         exam_provided = exam_provided_by.get(org.id, 0)
-        # 两侧相加：同一张单会给申请方与中心各记一笔，这是有意的——
-        # 本维度是**按机构**算"参与了多少次共享诊断协同"，不是全县去重总量。
-        exam_count = exam_requested + exam_provided
+        # 计分只取申请方一侧（2026-08-27 回退待批，理由见端点 docstring）。
+        # 卫健批复中心侧计分后，这一行改回 `exam_requested + exam_provided` 即恢复；
+        # `exam_provided` 继续单独返回，让"中心出了多少报告"始终可见。
+        exam_count = exam_requested
         chronic_total = chronic_total_by.get(org.id, 0)
         chronic_followed = chronic_followed_by.get(org.id, 0)
         rx_total = rx_total_by.get(org.id, 0)

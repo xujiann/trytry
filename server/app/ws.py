@@ -201,7 +201,11 @@ class ConnectionManager:
         with self._subscriber_lock:
             if self._subscriber_started:
                 return
-            redis = _redis_client()
+            # `timeout=None`：订阅循环是长阻塞读，频道安静多久就阻塞多久。
+            # 给它一个带读超时的客户端会在 redis-py 5.x 上**打死订阅线程**
+            # （实测安静 5 秒即 TimeoutError → 下面的 except → 线程退出 →
+            # 跨实例广播静默丢失）。详见 state_store 里那段版本实测记录。
+            redis = _redis_client(timeout=None)
             if redis is None:
                 return
             try:

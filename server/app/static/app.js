@@ -65,6 +65,8 @@ const PAGES = [
   { id: "spdexpert", title: "专病专家端·临床指导", render: renderSpdExpert },
   { id: "spdcenter", title: "全程管理中心端·统筹调度", render: renderSpdCenter },
   { id: "spdteam", title: "服务团队端·基层执行", render: renderSpdTeam },
+  { id: "spdmember", title: "服务团队成员端·日常服务", render: renderSpdMember },
+  { id: "spdmanager", title: "个案管理师端·专属衔接", render: renderSpdManager },
   { id: "spdpatients", title: "筛查建档与纳管", render: renderSpdPatients },
   { id: "spdpath", title: "标准路径与任务中心", render: renderSpdPath },
   { id: "spdreferral", title: "逐级转诊闭环", render: renderSpdReferral },

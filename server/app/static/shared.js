@@ -36,6 +36,42 @@ function esc(value) {
 }
 
 /**
+ * 状态标签：`<span class="tag 配色">文案</span>`（ADR-0009 第二步，P2-26）。
+ *
+ * **这是"把转义收进组件就漏不掉"的第二个样本**，而且是有血的那个：此前全仓库
+ * 有 33 处在手写它——
+ *
+ *     const [text, color] = MAP[x.status] || [x.status, ""];
+ *     `<span class="tag ${color}">${text}</span>`     // ← 少一个 esc()
+ *
+ * 映射查不到时 `text` 就是后端原始状态码，33 处**一处都没转义**（2026-08-26 修）。
+ * 而同一个仓库里 `spdTag()` 早就写对了——只是没铺满。收成一份实现之后，
+ * 调用点连"要不要转义"这个问题都不会遇到。
+ *
+ * 为什么放 shared.js 而不是 core.js（`panel()` 放的是 core.js）：`.panel`/`.card`
+ * 是管理端独有的标记约定，而 `.tag` **三套前端都在用**，且标记契约逐字相同
+ * （`style.css:60` / `m/m.css:141` 各自定义 `.tag` 与 `.tag.red/.green/.orange`，
+ * 配色不同、类名约定一致）。判据始终是"三端是不是真的都在用"，不是"看起来像工具"。
+ *
+ * 查不到映射时**原样显示状态码**（而不是吞掉），因为那正是"后端加了个新状态、
+ * 前端还没跟上"的现场——显示出来才有人去补，吞掉就永远没人知道。
+ *
+ * 注意兜底用 `key ?? ""` 而**不是** `key || ""`：本仓库有数字状态码
+ * （慢病分级是 1/2/3），`0 || ""` 会把 0 吞成空白。这不是假想——
+ * `scripts/statustag_equiv.js` 的等价性矩阵当场抓到过这一条。
+ *
+ * 慢专病历来把空状态显示成 `—` 而不是空白，那个约定保留在它自己的调用点上
+ * （`spdTag`），**没有**顺手统一——那是改字节，不是去重。
+ *
+ * @param map 状态码 → `[文案, 配色类名]`，**前端定义的常量**
+ * @param key 后端给的状态码
+ */
+function statusTag(map, key) {
+  const hit = map[key];
+  return `<span class="tag ${esc(hit ? hit[1] : "")}">${esc(hit ? hit[0] : key ?? "")}</span>`;
+}
+
+/**
  * 读取一个**非 HttpOnly** Cookie 的值（G3 令牌 Cookie 化）。
  *
  * 三套前端都要用它取双提交 CSRF token（medplat_csrf / medplat_portal_csrf），

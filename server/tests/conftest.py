@@ -22,6 +22,23 @@ def reset_database():
     Base.metadata.create_all(bind=engine)
 
 
+@pytest.fixture(autouse=True)
+def _reset_monitor_breaker():
+    """每个用例都从干净的熔断器出发。
+
+    `monitor` 的熔断状态是**进程级全局**、冷却按真实的 30 秒算。任何一个用例
+    （哪怕是无意的：装了个 `pipeline()` 不工作的假 redis 再发几个请求）把它推开，
+    后面 30 秒内所有用例的 `_record_cluster` 都直接返回——集群计数是空的，
+    而失败信息会指向"Redis 接线不对"，把人带到完全错误的方向。
+    放在这里而不是某一个测试文件里：泄漏是全局的，复位也该是全局的。
+    """
+    from app import monitor
+
+    monitor._breaker_reset()
+    yield
+    monitor._breaker_reset()
+
+
 # ---------- 块5：E2E 开关（Playwright 浏览器全链路，默认跳过） ----------
 
 

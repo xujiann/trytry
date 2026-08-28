@@ -455,6 +455,12 @@ def stop_order(
     order = db.get(InpatientOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="医嘱不存在")
+    # 归属校验（上线前审计）：`InpatientOrder` 自己不带 org_id，归属隔一跳在
+    # `admissions` 上。原先只有 `require_roles("doctor")`——那是**认证**不是授权，
+    # 于是任一成员单位的医师顺序遍历 order_id 就能停掉别家医院任何一条在用医嘱。
+    # 归属判定排在状态机之前：先 403，免得用 409/200 的差别探出别家医嘱的状态。
+    admission = db.get(Admission, order.admission_id)
+    assert_obj_org_writable(db, user, admission)
     if order.status != "active":
         raise HTTPException(status_code=409, detail="医嘱已停止")
     order.status = "stopped"

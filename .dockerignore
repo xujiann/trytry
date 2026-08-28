@@ -1,0 +1,42 @@
+# 构建上下文 = 仓库根（根 Dockerfile 用 `COPY server/ .`）
+#
+# 与 server/.dockerignore 同一个理由，见那份文件的说明。路径在这里是**相对仓库根**
+# 的，所以要写成 `server/xxx`——两份不能互相复制粘贴，这也是它们各写一份的原因。
+
+# 密钥与本地配置
+server/.env
+server/.env.*
+.env
+!server/.env.example
+
+# 测试与运行时产物
+server/test_run.db*
+*.db
+server/test_uploads/
+server/e2e_uploads/
+server/uploads/
+test_uploads/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+
+# 与镜像无关的目录（`COPY server/ .` 本就不会带上，写在这里是为了让
+# `docker build` 传输的上下文本身变小——大上下文会拖慢每一次构建）
+.git/
+.github/
+docs/
+book/
+scripts/
+.claude/
+
+# 开发工具
+.venv/
+venv/
+node_modules/

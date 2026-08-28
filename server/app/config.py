@@ -25,6 +25,7 @@
 import logging
 import os
 from functools import lru_cache
+from typing import ClassVar
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -203,6 +204,39 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return "prod" in (self.env, self.environment)
 
+    #: 「值写错就静默回落到默认实现」的枚举型配置项：配置名 → 合法取值。
+    #:
+    #: 这四项加上 crypto_suite 共用一个缺陷形状——选驱动的代码都写成
+    #: `if 配置 == "某个值": 真实现` + `return 兜底实现`（见 sms.py:99、
+    #: wechat.py、callcenter.py、gmcrypto.py:267）。于是把 `official` 敲成
+    #: `offical`、把 `http` 敲成 `htpp`，**不报错、不告警**，直接退回桩件或
+    #: 通用算法。其中微信那一条最狠：退回 mock 桩等于认证绕过。
+    #: 拼写错误是配置里最常见的错，而这个形状把它变成了静默降级。
+    _ENUM_SETTINGS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "crypto_suite": ("general", "sm"),
+        "sms_provider": ("console", "http"),
+        "wechat_provider": ("mock", "official"),
+        "spd_call_provider": ("manual", "http"),
+    }
+
+    @model_validator(mode="after")
+    def _reject_unknown_enum_values(self) -> "Settings":
+        """枚举型配置项取值必须在清单内——**所有环境**都查，不只生产。
+
+        开发环境同样会踩：本地把 provider 敲错、以为在测真通道、其实一直在测桩，
+        这种"验错了对象"比生产事故更难发现。
+        """
+        problems = [
+            f"MEDPLAT_{name.upper()}={getattr(self, name)!r} 不是合法取值"
+            f"（合法值：{'、'.join(allowed)}）——写错不会报错，只会**静默**"
+            f"退回默认实现"
+            for name, allowed in self._ENUM_SETTINGS.items()
+            if getattr(self, name) not in allowed
+        ]
+        if problems:
+            raise RuntimeError("配置取值非法：" + "；".join(problems))
+        return self
+
     @model_validator(mode="after")
     def _reject_weak_credentials_in_prod(self) -> "Settings":
         """生产环境凭据强度不足时拒绝启动。
@@ -290,6 +324,15 @@ class Settings(BaseSettings):
                     "请配置 Redis（见 app/state_store.py 与运维手册第八节），"
                     "或确为单实例时移除该多实例配置"
                 )
+        # 通道配置：只拒启**无歧义的配置事故**，其余交给使用处硬门 + preflight 清单。
+        # 判据沿用上面 Redis 那条的取舍——有确凿危险信号才拒启，合法形态只警告。
+        if self.wechat_provider == "official" and not self.wechat_appid:
+            problems.append(
+                "MEDPLAT_WECHAT_PROVIDER=official 但 MEDPLAT_WECHAT_APPID 为空——"
+                "这是配置事故，没有任何一种部署形态需要它：声明了走公众号却不给 appid，"
+                "微信登录必然全部失败。请补齐 appid/secret/回调域名，"
+                "或显式改回 MEDPLAT_WECHAT_PROVIDER=mock"
+            )
         if problems:
             raise RuntimeError("生产环境配置不安全，拒绝启动：" + "；".join(problems))
         # 不拒启、只强警告：单实例部署没 Redis 是合法形态，多实例才是事故。
