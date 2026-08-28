@@ -40,6 +40,8 @@
 需要人记得的事就会被忘掉（D-5～D-7 三次复发、D-8 两个 GET 忘了换出参）。
 "能看"与"看了什么、凭什么"绑死在一次调用里，漏不掉。
 """
+import contextlib
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -68,6 +70,8 @@ from .models import (
 # admin 是系统管理员——两者都留痕，全域不等于不记账。
 GLOBAL_ROLES = {"admin", "director"}
 
+logger = logging.getLogger("medplat.visibility")
+
 __all__ = [
     "active_authorization_grants",
     "visible_org_ids",
@@ -79,6 +83,7 @@ __all__ = [
     "clear_visibility_cache",
     "assert_patient_visible",
     "log_patient_access",
+    "log_resident_access",
     "visible_patient_ids",
     "scope_patient_list",
     "scope_org_list",
@@ -413,24 +418,37 @@ def active_authorization_grants(
     )
 
 
-def _write_access_log(user: User, patient_id: int, resource: str, basis: str) -> None:
-    """留痕落库，走独立会话。
+def _write_access_row(
+    *,
+    user_id: int | None,
+    username: str,
+    org_id: int | None,
+    patient_id: int,
+    resource: str,
+    basis: str,
+) -> None:
+    """留痕落库的共用底座，走独立会话（业务端与居民端两个主体共用）。
 
     与写审计同一条理由：**与业务事务解耦**。读接口本身不提交事务，
     在业务会话里写这一笔会把每一次患者档案调阅变成一次写事务——
     SQLite 上就是每读一次拿一次写锁（第八轮实测过 `database is locked`）。
 
     留痕失败不能挡住看病。记不下来是运维问题，看不了病是医疗事故，
-    两者不对等，所以这里吞掉异常——但**吞掉的是落库失败，不是校验失败**，
-    校验不过在上面就已经 403 了。
+    两者不对等，所以这里吞掉异常、只记错误日志（与 `main._write_audit`
+    同一降级口径）——但**吞掉的是落库失败，不是校验失败**，
+    校验不过在调用方就已经 403 了。
     """
-    db = SessionLocal()
+    try:
+        db = SessionLocal()
+    except Exception:  # noqa: BLE001 - 会话都开不出来时同样不阻断读请求
+        logger.error("调阅留痕会话创建失败，本条留痕丢失", exc_info=True)
+        return
     try:
         db.add(
             AccessLog(
-                user_id=user.id,
-                username=user.username,
-                org_id=user.org_id,
+                user_id=user_id,
+                username=username,
+                org_id=org_id,
                 patient_id=patient_id,
                 resource=resource,
                 basis=basis,
@@ -438,10 +456,60 @@ def _write_access_log(user: User, patient_id: int, resource: str, basis: str) ->
             )
         )
         db.commit()
-    except Exception:  # pragma: no cover - 留痕失败不阻断诊疗
-        db.rollback()
+    except Exception:  # noqa: BLE001 - 留痕失败不阻断诊疗
+        with contextlib.suppress(Exception):
+            db.rollback()
+        logger.error(
+            "调阅留痕写入失败（读请求不受影响，本条留痕丢失）：%s -> patient %s (%s/%s)",
+            username, patient_id, resource, basis, exc_info=True,
+        )
     finally:
-        db.close()
+        with contextlib.suppress(Exception):  # 连 close 都抛时也不迁怒读请求
+            db.close()
+
+
+def _write_access_log(user: User, patient_id: int, resource: str, basis: str) -> None:
+    """业务端留痕：主体是 `users` 行（user_id/username/org_id 全从账号取）。"""
+    _write_access_row(
+        user_id=user.id,
+        username=user.username,
+        org_id=user.org_id,
+        patient_id=patient_id,
+        resource=resource,
+        basis=basis,
+    )
+
+
+def log_resident_access(
+    account_id: int | None, patient_id: int, resource: str, basis: str
+) -> None:
+    """居民端（服务门户）的患者数据调阅留痕（TECH_DEBT P1-1）。
+
+    主体是 `resident_accounts` 行而不是 `users` 行：`user_id` 留空，
+    `username` 记 `resident:{account_id}`——与写审计（`main._write_audit`）里
+    居民主体的口径一字不差，AccessLog 与 AuditLog 事后能对上同一个人。
+    `org_id` 留空（居民账号不挂机构，本表建列时已按此设计为可空）。
+
+    `basis` 用居民端自己的两个词，与业务端的关系型依据同表共存、互不混淆：
+
+    - ``self``：本人读自己的档案（`AccessLog.basis` 列注释里预留的那个词）；
+    - ``delegate``：家庭代管人读**被代管成员**的档案——审计上必须与本人调阅
+      分得开（「居民端零 AccessLog，家庭代管调阅他人档案完全无痕」正是这次
+      整改的第一优先场景）。
+
+    `account_id=None` 是过渡兼容的双因子查档（`/api/portal/my-archive`，
+    无账户体系，默认已关）：记 ``portal:legacy``，这条通道只要开着就同样
+    查得到账。留痕失败不拖垮读请求，降级口径见 `_write_access_row`。
+    """
+    username = f"resident:{account_id}" if account_id is not None else "portal:legacy"
+    _write_access_row(
+        user_id=None,
+        username=username,
+        org_id=None,
+        patient_id=patient_id,
+        resource=resource,
+        basis=basis,
+    )
 
 
 def visible_patient_ids(db: Session, user: User):

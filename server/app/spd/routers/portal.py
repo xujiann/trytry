@@ -54,8 +54,17 @@ from ..platform import (
 router = APIRouter(prefix="/api/portal/spd", tags=["慢专病·患者移动端"])
 
 
-def _patient(db: Session, account: ResidentAccount, patient_id: int | None) -> Patient:
-    return accessible_patient(db, account, patient_id)
+def _patient(
+    db: Session, account: ResidentAccount, patient_id: int | None, *, resource: str | None
+) -> Patient:
+    """解析并校验"这次要看谁的档案"，读接口顺带落调阅留痕（AccessLog）。
+
+    与平台 `accessible_patient` 同一契约（经 platform 适配层，边界不破）：
+    **读接口**给一个 `spd_` 前缀的资源词（沿用业务端 spd 路由的既有词表），
+    留痕主体 `resident:{account_id}`、依据 self/delegate；**写接口**传 ``None``
+    （写操作由审计中间件按同一居民主体落 AuditLog）。
+    """
+    return accessible_patient(db, account, patient_id, resource=resource)
 
 
 def _program_names(db: Session, codes: list[str]) -> dict[str, str]:
@@ -136,7 +145,7 @@ def home(
     db: Session = Depends(get_db),
 ):
     """居民首页（#1/#2）：签约团队、主管医生、纳管病种、最新指标、待办与服务包进度。"""
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_home")
     enrollments = (
         db.query(SpdEnrollment)
         .filter(SpdEnrollment.patient_id == patient.id, SpdEnrollment.status == "active")
@@ -264,7 +273,7 @@ def archive(
     db: Session = Depends(get_db),
 ):
     """个人全周期档案（#3）：基本资料、生活习惯、危险因素 + 就诊时间线。"""
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_archive")
     enrollments = (
         db.query(SpdEnrollment).filter(SpdEnrollment.patient_id == patient.id).all()
     )
@@ -338,7 +347,7 @@ def add_measurement(
     db: Session = Depends(get_db),
 ):
     """居家健康台账（#4）：手工记录或设备回传，落库即按管理目标判定等级。"""
-    patient = _patient(db, account, body.patient_id)
+    patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     enrollment = (
         db.query(SpdEnrollment)
         .filter(
@@ -385,7 +394,7 @@ def list_measurements(
     db: Session = Depends(get_db),
 ):
     """指标历史与趋势（#7）。按日返回原始点，前端自行按日/周/月切换展示。"""
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_measurement")
     since = now_naive() - timedelta(days=max(min(days, 730), 1))
     query = db.query(SpdMeasurement).filter(
         SpdMeasurement.patient_id == patient.id, SpdMeasurement.measured_at >= since
@@ -503,7 +512,7 @@ def self_screening(
     要经基层复核。这里只落一条 `source='self'` 的筛查记录，
     在中心端的"待复核"清单里等人看。
     """
-    patient = _patient(db, account, body.patient_id)
+    patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     scale = None
     if body.scale_code:
         scale = (
@@ -558,7 +567,7 @@ def apply_service(
     db: Session = Depends(get_db),
 ):
     """提交专病服务申请（#2）。同一病种已有待受理申请时不重复提交。"""
-    patient = _patient(db, account, body.patient_id)
+    patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     pending = (
         db.query(SpdServiceApply)
         .filter(
@@ -594,7 +603,7 @@ def my_applies(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_apply")
     rows = (
         db.query(SpdServiceApply)
         .filter(SpdServiceApply.patient_id == patient.id)
@@ -659,7 +668,7 @@ def journey(
     db: Session = Depends(get_db),
 ):
     """居民专病全流程视图（#14）：病种、团队、风险、阶段、节点进度与时间轴。"""
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_journey")
     query = db.query(SpdEnrollment).filter(SpdEnrollment.patient_id == patient.id)
     if program_code:
         query = query.filter(SpdEnrollment.program_code == program_code)
@@ -747,7 +756,7 @@ def my_tasks(
     db: Session = Depends(get_db),
 ):
     """居民健康任务（#15）：需要本人填报的任务清单。"""
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_task")
     query = db.query(SpdTask).filter(SpdTask.patient_id == patient.id)
     if status:
         query = query.filter(SpdTask.status == status)
@@ -773,7 +782,7 @@ def submit_task(
     居民提交一律落 `submitted` 而不是 `done`——居民填的内容要由医护确认，
     否则"任务完成率"会变成"居民点了几次提交"。
     """
-    patient = _patient(db, account, body.patient_id)
+    patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     task = db.get(SpdTask, task_id)
     if task is None or task.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -817,7 +826,7 @@ async def upload_task_evidence(
     只有鉴权（居民令牌 + 本人任务）是这里自己的。`uploaded_by` 记 NULL：
     居民不在 users 表内，伪造一个工作人员 id 会在 PG 上撞外键、在审计上撒谎。
     """
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource=None)  # 写走 AuditLog
     task = db.get(SpdTask, task_id)
     if task is None or task.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -853,7 +862,7 @@ def my_followups(
     db: Session = Depends(get_db),
 ):
     """随访计划与历史记录（#9/#12）。"""
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_followup")
     rows = (
         db.query(SpdFollowupRecord)
         .filter(SpdFollowupRecord.patient_id == patient.id)
@@ -892,7 +901,7 @@ def self_answer_followup(
     from ..models import SpdQuestionnaire
     from ..rules import grade_abnormal
 
-    patient = _patient(db, account, body.patient_id)
+    patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     record = db.get(SpdFollowupRecord, record_id)
     if record is None or record.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="随访任务不存在")
@@ -947,7 +956,7 @@ def my_interventions(
     db: Session = Depends(get_db),
 ):
     """医生推送的干预方案（#10）。"""
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_intervention")
     rows = (
         db.query(SpdIntervention)
         .filter(SpdIntervention.patient_id == patient.id)
@@ -985,7 +994,7 @@ def feedback_intervention(
     db: Session = Depends(get_db),
 ):
     """标记已读并反馈执行情况（#10 的患者端闭环）。"""
-    patient = _patient(db, account, body.patient_id)
+    patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     record = db.get(SpdIntervention, intervention_id)
     if record is None or record.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="干预方案不存在")
@@ -1018,7 +1027,7 @@ def my_education(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_edu")
     rows = (
         db.query(SpdEduPush)
         .filter(SpdEduPush.patient_id == patient.id)
@@ -1054,7 +1063,7 @@ def read_education(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource=None)  # 写走 AuditLog
     push = db.get(SpdEduPush, push_id)
     if push is None or push.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="宣教记录不存在")
@@ -1080,7 +1089,7 @@ def my_revisits(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_revisit")
     rows = (
         db.query(SpdRevisit)
         .filter(SpdRevisit.patient_id == patient.id)
@@ -1111,7 +1120,7 @@ def my_assessments(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_assessment")
     rows = (
         db.query(SpdAssessment)
         .filter(SpdAssessment.patient_id == patient.id)
@@ -1148,7 +1157,7 @@ def my_referrals(
     db: Session = Depends(get_db),
 ):
     """转诊记录与进度（#16/#17）。"""
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_referral")
     rows = (
         db.query(SpdReferralCase)
         .filter(SpdReferralCase.patient_id == patient.id)
@@ -1194,7 +1203,7 @@ def my_referral_detail(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_referral")
     case = db.get(SpdReferralCase, case_id)
     if case is None or case.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="转诊记录不存在")
@@ -1235,7 +1244,7 @@ def start_consult(
     db: Session = Depends(get_db),
 ):
     """发起或继续专病在线咨询（#18）。同病种已有开放会话时复用，不新开一条。"""
-    patient = _patient(db, account, body.patient_id)
+    patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     consult = (
         db.query(SpdConsult)
         .filter(
@@ -1285,7 +1294,7 @@ def my_consults(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_consult")
     rows = (
         db.query(SpdConsult)
         .filter(SpdConsult.patient_id == patient.id)
@@ -1315,7 +1324,7 @@ def my_consult_messages(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    patient = _patient(db, account, patient_id)
+    patient = _patient(db, account, patient_id, resource="spd_consult")
     consult = db.get(SpdConsult, consult_id)
     if consult is None or consult.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="咨询会话不存在")

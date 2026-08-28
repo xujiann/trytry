@@ -72,6 +72,9 @@ from ..models import (
     utcnow,
 )
 from ..deps import clear_auth_cookies, set_auth_cookies, token_from_request, wants_cookie_auth
+# 居民端调阅留痕（TECH_DEBT P1-1）：与业务端同一张 AccessLog、同一套降级
+# （独立会话 + 失败吞掉不阻断读），主体口径 resident:{account_id}（同 AuditLog）。
+from ..visibility import log_resident_access
 from ..security import (
     PORTAL_AUTH_COOKIE,
     PORTAL_CSRF_COOKIE,
@@ -825,29 +828,49 @@ def _build_archive(db: Session, patient: Patient) -> dict:
 
 
 def accessible_patient(
-    db: Session, account: ResidentAccount, patient_id: int | None
+    db: Session, account: ResidentAccount, patient_id: int | None, *, resource: str | None
 ) -> Patient:
-    """解析本次请求要访问哪一份档案，并校验访问权。
+    """解析本次请求要访问哪一份档案，校验访问权，读接口顺带留痕（AccessLog）。
 
     可访问集合 = 本人档案 ∪ 已代管的家庭成员档案。不传 patient_id 时默认本人。
     越权一律 403，且不区分"不存在"与"无权"，避免被用来探测他人档案是否存在。
+
+    `resource` 是**必填的关键字参数**，逼每个调用点表态——与 visibility 的
+    「判定与留痕是同一个动作」同一个道理：需要人记得另外去记的事就会被忘掉
+    （居民端此前正是零 AccessLog，家庭代管调阅他人档案完全无痕）。
+
+    - **读接口**给一个说明数据类别的词（archive/consent/bill/…，spd 侧沿用
+      业务端既有的 spd_ 前缀词表）：校验通过即落一条 AccessLog，主体
+      `resident:{account_id}`，依据 `self`（本人）或 `delegate`（代管成员）；
+    - **写接口**传 ``None``：写操作已由审计中间件按同一居民主体落 AuditLog，
+      再记一条"读留痕"只会让 AccessLog 混进写流量。
+
+    留痕是副作用不是出参：响应字节与留痕前完全一致，失败也不拖垮读请求
+    （见 `visibility.log_resident_access`）。
     """
     if patient_id is None or patient_id == account.patient_id:
         patient = db.get(Patient, account.patient_id) if account.patient_id else None
         if patient is None:
             raise HTTPException(status_code=403, detail="请先完成实名绑定")
-        return patient
-    managed = (
-        db.query(ResidentFamilyMember)
-        .filter(
-            ResidentFamilyMember.account_id == account.id,
-            ResidentFamilyMember.patient_id == patient_id,
+    else:
+        managed = (
+            db.query(ResidentFamilyMember)
+            .filter(
+                ResidentFamilyMember.account_id == account.id,
+                ResidentFamilyMember.patient_id == patient_id,
+            )
+            .first()
         )
-        .first()
-    )
-    patient = db.get(Patient, patient_id) if managed else None
-    if patient is None:
-        raise HTTPException(status_code=403, detail="无权访问该档案")
+        patient = db.get(Patient, patient_id) if managed else None
+        if patient is None:
+            raise HTTPException(status_code=403, detail="无权访问该档案")
+    if resource is not None:
+        log_resident_access(
+            account.id,
+            patient.id,
+            resource=resource,
+            basis="self" if patient.id == account.patient_id else "delegate",
+        )
     return patient
 
 
@@ -858,7 +881,7 @@ def my_archive_token(
     db: Session = Depends(get_db),
 ):
     """登录态查档案：默认本人，传 patient_id 可切换到已代管的家庭成员。"""
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="archive")
     return _build_archive(db, patient)
 
 
@@ -1072,7 +1095,7 @@ def portal_sign_consent(
     "本人表示"的凭据，记录落 resident_account_id 即可回溯到账户。
     文本版本取该场景当前生效版本，事后可对回"当时同意的是哪段话"。
     """
-    patient = accessible_patient(db, account, body.patient_id)
+    patient = accessible_patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     require_guardian_for_minor(
         patient, body.guardian_name, body.guardian_id_card, body.guardian_relation
     )
@@ -1098,7 +1121,7 @@ def portal_my_consents(
     db: Session = Depends(get_db),
 ):
     """我的同意记录：默认本人，传 patient_id 可切换到已代管的家庭成员。"""
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="consent")
     rows = (
         db.query(ConsentRecord)
         .filter(ConsentRecord.patient_id == patient.id)
@@ -1130,7 +1153,7 @@ def portal_submit_correction(
     注销（deactivate）通过审核后档案置 deactivated_at，不物理删除（法定保留），
     此后检索与绑定入口不再出现，既有业务历史照常可查。
     """
-    patient = accessible_patient(db, account, body.patient_id)
+    patient = accessible_patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     req = CorrectionRequest(
         patient_id=patient.id,
         request_type=body.request_type,
@@ -1225,7 +1248,7 @@ def portal_book(
     db: Session = Depends(get_db),
 ):
     """居民自助预约：复用管理端的号源占位逻辑（黑名单/原子占号/重复判定一致）。"""
-    patient = accessible_patient(db, account, body.patient_id)
+    patient = accessible_patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     appointment = book_slot(db, body.slot_id, patient.id)
     return {"id": appointment.id, "slot_id": appointment.slot_id, "status": appointment.status}
 
@@ -1261,6 +1284,13 @@ def portal_my_appointments(
     ids = _my_patient_ids(db, account)
     if not ids:
         return []
+    # 列表一次覆盖本人 + 全部代管成员的就诊预约，留痕逐人各记一条——
+    # AccessLog 一行一个 patient_id，"看了谁"必须逐个说清（≤1+5 人，量可控）。
+    for pid in ids:
+        log_resident_access(
+            account.id, pid, resource="appointment",
+            basis="self" if pid == account.patient_id else "delegate",
+        )
     rows = (
         db.query(Appointment, AppointmentSlot, Patient)
         .join(AppointmentSlot, Appointment.slot_id == AppointmentSlot.id)
@@ -1329,7 +1359,7 @@ def portal_my_contract(
     db: Session = Depends(get_db),
 ):
     """我的家医签约：协议、服务包与履约记录。"""
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="contract")
     contracts = (
         db.query(FamilyDoctorContract)
         .filter(FamilyDoctorContract.patient_id == patient.id)
@@ -1385,7 +1415,7 @@ def portal_my_bills(
     db: Session = Depends(get_db),
 ):
     """我的账单：结算单与对应支付单状态。"""
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="bill")
     settlements = (
         db.query(Settlement)
         .filter(Settlement.patient_id == patient.id)
@@ -1563,7 +1593,7 @@ def portal_my_referrals_all(
     """
     if source is not None and source not in _REFERRAL_SOURCES:
         raise HTTPException(status_code=422, detail=f"未知转诊数据源：{source}")
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="referral")
     loaders = (
         [_REFERRAL_SOURCES[source]] if source is not None
         else list(_REFERRAL_SOURCES.values())
@@ -1702,7 +1732,7 @@ def portal_my_enrollments_all(
     """
     if source is not None and source not in _ENROLLMENT_SOURCES:
         raise HTTPException(status_code=422, detail=f"未知入组数据源：{source}")
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="enrollment")
     loaders = (
         [_ENROLLMENT_SOURCES[source]] if source is not None
         else list(_ENROLLMENT_SOURCES.values())
@@ -1731,7 +1761,7 @@ def portal_my_referrals(
     db: Session = Depends(get_db),
 ):
     """我的转诊进度。"""
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="referral")
     rows = (
         db.query(Referral)
         .filter(Referral.patient_id == patient.id)
@@ -1780,7 +1810,7 @@ def portal_my_admissions(
     住院天数按"当日入当日出计 1 天"，与成本核算、运行效率的口径一致，
     免得同一次住院在三个地方显示三个天数。
     """
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="admission")
     rows = (
         db.query(Admission)
         .filter(Admission.patient_id == patient.id)
@@ -1874,6 +1904,10 @@ def portal_admission_bill(
     allowed = _my_patient_ids(db, account)
     if admission is None or admission.patient_id not in allowed:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    log_resident_access(
+        account.id, admission.patient_id, resource="admission_bill",
+        basis="self" if admission.patient_id == account.patient_id else "delegate",
+    )
 
     details = (
         db.query(BillDetail)
@@ -1947,6 +1981,7 @@ class PortalDepositsOut(BaseModel):
 @router.get("/me/deposits", response_model=PortalDepositsOut)
 def portal_my_deposits(
     admission_id: int,
+    account: ResidentAccount = Depends(current_resident),
     patient: Patient = Depends(current_resident_patient),
     db: Session = Depends(get_db),
 ):
@@ -1960,6 +1995,7 @@ def portal_my_deposits(
     admission = db.get(Admission, admission_id)
     if admission is None or admission.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    log_resident_access(account.id, patient.id, resource="deposit", basis="self")
     rows = (
         db.query(Deposit)
         .filter(Deposit.admission_id == admission_id)
@@ -2010,7 +2046,7 @@ def portal_my_surgeries(
     术中所见、并发症）不在居民端展示——那是给医生看的专业文书，直接推给
     患者容易造成误读，需要时由医生当面解释。
     """
-    patient = accessible_patient(db, account, patient_id)
+    patient = accessible_patient(db, account, patient_id, resource="surgery")
     rows = (
         db.query(SurgeryRequest)
         .filter(SurgeryRequest.patient_id == patient.id)
@@ -2175,6 +2211,8 @@ def my_archive(ehc_no: str, id_card: str, db: Session = Depends(get_db)):
     """【已废弃】身份证号入 query 有日志泄露面，请改用登录态 GET /api/portal/me/archive。"""
     _require_legacy_enabled()
     patient = _verify_patient(db, ehc_no, id_card)
+    # 无账户体系的过渡通道：主体记 portal:legacy（account_id=None），只要开着就有账可查
+    log_resident_access(None, patient.id, resource="archive", basis="self")
     return _build_archive(db, patient)
 
 
@@ -2183,6 +2221,7 @@ def my_archive_post(body: ArchiveQuery, db: Session = Depends(get_db)):
     """【已废弃】请改用登录态 GET /api/portal/me/archive。"""
     _require_legacy_enabled()
     patient = _verify_patient(db, body.ehc_no, body.id_card)
+    log_resident_access(None, patient.id, resource="archive", basis="self")
     return _build_archive(db, patient)
 
 
