@@ -1,6 +1,6 @@
 # 县域医共体信息化平台（medplat）
 
-![tests](https://img.shields.io/badge/tests-2546%20passed%20%2B%2030%20skipped-brightgreen)
+![tests](https://img.shields.io/badge/tests-2665%20passed%20%2B%2030%20skipped-brightgreen)
 ![coverage](https://img.shields.io/badge/coverage%20gate-%E2%89%A570%25%20blocking-brightgreen)
 
 紧密型县域医共体信息化平台，依据国家卫生健康委《紧密型县域医共体信息化功能指引》（国卫办规划函〔2025〕63号）等文件建设。
@@ -141,7 +141,7 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 
 ```bash
 cd server
-python -m pytest tests/ -q                                        # 全量单元/接口测试（实测 2546 项通过 + 30 项跳过；跳过项为 e2e（11 条）与真 PG 集成档等，需显式开启）
+python -m pytest tests/ -q                                        # 全量单元/接口测试（实测 2665 项通过 + 30 项跳过；跳过项为 e2e（11 条）与真 PG 集成档等，需显式开启）
 python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖率报告
 ```
 
