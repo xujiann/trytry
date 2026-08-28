@@ -146,7 +146,13 @@ import app.spd.routers as spd_routers
 #   /rules/domains 的 sample 三型并存（float|str|bool，bool 不得变 0/1）。
 #   见 test_quality_contract.py / test_dataquality_contract.py /
 #   test_rules_contract.py，四处变异各自转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 418
+# → 375（spd/assess 24 + spd/tasks 19，共 43，零跳过。四个双分支端点全部
+#   字节安全建模：scores-analysis 两分支键序不同→二选一联合（空分支
+#   extra=forbid、满分支必填 ranking，匹配确定）；point-accounts/me 无账户
+#   分支缺 account_id→声明在最前+exclude_unset；advance 恢复/推进两形→
+#   可选键按出键序+exclude_unset；任务动作回执 27 键与清单行 29 键拆两模型。
+#   见 test_spd_assess_contract.py / test_spd_tasks_contract.py，五处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 375
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -184,6 +190,10 @@ FULLY_GOVERNED = {
     "quality",
     "dataquality",
     "rules",
+    # spd 考核与任务两簇（assess 24/tasks 19），欠账 418→375 那批，
+    # 见 test_spd_assess_contract.py / test_spd_tasks_contract.py
+    "spd/assess",
+    "spd/tasks",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",
