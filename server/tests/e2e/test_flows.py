@@ -27,13 +27,21 @@ from urllib.request import urlopen
 import pytest
 
 pytest.importorskip("playwright", reason="端到端测试需要 playwright")
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError  # noqa: E402
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
 pytestmark = pytest.mark.e2e
 
+# expect() 断言的重试窗口默认只有 5 秒，而本文件把动作超时设为 15 秒（page 夹具）。
+# CI 跑在共享的慢机器上，写操作后整页重画（route()）常常不止 5 秒——把两个口径
+# 对齐，断言和动作用同一把尺子等页面。
+expect.set_options(timeout=15_000)
+
 SERVER_DIR = Path(__file__).resolve().parents[2]
 E2E_DB = SERVER_DIR / "e2e_run.db"
-STARTUP_TIMEOUT_S = 40
+# CI 的共享 runner 冷启动 uvicorn（258 张表 create_all + 种子化）比本地慢得多，
+# 40 秒在慢盘上偶发不够；90 秒只是上限，就绪即返回，不拖慢正常路径。
+STARTUP_TIMEOUT_S = 90
 
 
 def _free_port() -> int:
@@ -397,12 +405,23 @@ def test_拆分脚本后每一页都还渲染得出来(page, base_url):
     page_ids = page.eval_on_selector_all("#nav a", "els => els.map(e => e.dataset.page)")
     assert len(page_ids) > 60, f"导航项只有 {len(page_ids)} 个，注册表可能没加载全"
 
+    # 每页的等待不用固定 sleep（慢机器上 400ms 常常不够渲染完，会把好页面误判成
+    # 空白）：给当前 #page-body 打标记，等到出现一个**没有标记且不是"加载中…"**的
+    # #page-body——那才是"这一页真的重画出了内容"。导航按 hash 路由，循环里每次
+    # 点击的都是与上一页不同的页，hashchange 必然触发重画，标记必然被换掉。
     blank = []
     for page_id in page_ids:
+        page.eval_on_selector("#page-body", "el => el.dataset.stamp = 'e2e-prev-page'")
         page.click(f'#nav a[data-page="{page_id}"]')
-        page.wait_for_timeout(400)
-        body = page.eval_on_selector("#page-body", "e => e.textContent.trim()")
-        if body in ("", "加载中…"):
+        try:
+            page.wait_for_function(
+                "() => { const el = document.querySelector('#page-body');"
+                " if (!el || el.dataset.stamp === 'e2e-prev-page') return false;"
+                " const text = el.textContent.trim();"
+                " return text !== '' && text !== '加载中…'; }",
+                timeout=5000,
+            )
+        except PlaywrightTimeoutError:
             blank.append(page_id)
     assert blank == [], f"这些页面没有渲染出内容：{blank}"
     assert errors == [], "管理端有 JS 报错：\n" + "\n".join(errors[:10])
@@ -443,12 +462,21 @@ def spd_seed(base_url):
         "birth_date": "1972-06-06", "phone": "13788990011"}, token)
     call("/api/users", {"username": "e2e_spd_doc", "password": "passw0rd1", "role": "doctor",
                         "full_name": "E2E慢专病医生", "org_id": org["id"]}, token)
-    doctor_login = call("/api/auth/login", {"username": "e2e_spd_doc", "password": "passw0rd1"})
     doctor_id = None
-    # 找到医生 id（分配任务用）：用户列表按机构过滤
+    # 找到医生 id（创建任务时直接指派用）：用户列表按机构过滤
     for u in call(f"/api/users?org_id={org['id']}", None, token, method="GET"):
         if u["username"] == "e2e_spd_doc":
             doctor_id = u["id"]
+    # 三级机构树（ADR-0004/0005）：转诊分级审核按机构树 parent_id 逐级上收——
+    # 只有"当前机构的直接上级"能把单子推进一格。要让医生端（乡镇卫生院）的
+    # "通过"真正生效，单子必须由其**子机构**（村卫生室）发起；此前由同一机构的
+    # 医生自发自审，点"通过"实际收到 403，列表纹丝不动，用例却因断言太弱而全绿。
+    village = call("/api/organizations",
+                   {"name": "E2E慢专病村卫生室", "org_type": "village", "level": "village",
+                    "parent_id": org["id"]}, token)
+    call("/api/users", {"username": "e2e_spd_vill", "password": "passw0rd1", "role": "doctor",
+                        "full_name": "E2E村医", "org_id": village["id"]}, token)
+    village_login = call("/api/auth/login", {"username": "e2e_spd_vill", "password": "passw0rd1"})
 
     # 已发布的演示路径（UI 只驱动"启动实例→办结任务"）
     programs = call("/api/spd/programs", None, token, method="GET")
@@ -460,17 +488,26 @@ def spd_seed(base_url):
          {"key": "assess", "name": "首次评估", "seq": 1, "due_days": 7}, token)
     call(f"/api/spd/path-templates/{template['id']}/status", {"status": "published"}, token)
 
-    # 医生移动端的待办：建一条任务并直接指派给该医生
+    # 医生移动端的待办：创建时直接带 assignee（spawn_task 保持 pending，可接收）。
+    # 不能建完再走 /assign 指派——assign 会把 pending 顺手置成 claimed，
+    # 移动端点"接收"永远 409"不处于可接收状态"，而旧用例对此毫无察觉。
     task = call("/api/spd/tasks", {
         "patient_id": patient["id"], "title": "E2E随访任务", "task_type": "followup",
-        "org_id": org["id"], "due_days": 7}, token)
-    call(f"/api/spd/tasks/{task['id']}/assign", {"assignee_id": doctor_id}, token)
-    # 在途转诊：submitted 状态，医生端点"通过"走一步复核。
-    # 用医生身份发起——admin 未绑定机构，患者又尚未纳管，发起机构定不出来（422）
+        "org_id": org["id"], "due_days": 7, "assignee_id": doctor_id}, token)
+    # 患者 ↔ 村卫生室的服务关系记录（visibility 的 service 依据）：患者是 admin
+    # 建的、与村卫生室尚无任何业务关联，村医直接发起转诊会被档案调阅校验 403。
+    # 任何"patient_id + 机构外键"的业务记录都构成依据，这里用一条村级任务垫底。
+    call("/api/spd/tasks", {
+        "patient_id": patient["id"], "title": "E2E村级建档服务", "task_type": "followup",
+        "org_id": village["id"], "due_days": 7}, token)
+    # 在途转诊：由村医发起、目标机构=乡镇卫生院，落 submitted（"待卫生院审核"）。
+    # target_org_id 必填：医生的可见范围只有本机构（无子树），乡镇卫生院医生要在
+    # 列表里看到这张村级发起的单子，只能靠 target 命中自己。
     referral = call("/api/spd/referrals", {
         "patient_id": patient["id"], "program_code": "hypertension", "direction": "up",
-        "reason": "E2E演示转诊"}, doctor_login["access_token"])
-    return {"org": org, "patient": patient, "template": template,
+        "reason": "E2E演示转诊", "target_org_id": org["id"]},
+        village_login["access_token"])
+    return {"org": org, "village": village, "patient": patient, "template": template,
             "task": task, "referral": referral, "doctor_id": doctor_id}
 
 
@@ -508,14 +545,17 @@ def test_spd_admin_screen_enroll_path_task(page, base_url, spd_seed):
     _submit(page, "#spd-inst-form button")
 
     _open_page(page, "spdpath", "标准路径与任务中心")
-    page.click("[data-task-done]")  # 打开 spdModal 办结表单
+    # 精确点到"首次评估"那一行的办结按钮：任务中心里还躺着 seed 预置的其他任务
+    # （按 priority/due/id 排序），拍第一个按钮拍到谁取决于排序细节，太脆。
+    page.locator("#spd-task-list tr", has_text="首次评估").locator(
+        "[data-task-done]").click()  # 打开 spdModal 办结表单
     modal = page.locator("form.panel").last
     expect(modal).to_be_visible()
     modal.locator('textarea[name="note"]').fill("E2E 完成首次评估")
     modal.locator('button[type="submit"]').click()
-    page.wait_for_timeout(600)
-    body = page.eval_on_selector("#page-body", "e => e.textContent")
-    assert "已完成" in body or "done" in body
+    # postAction 成功后 route() 整页重画——用重试断言等"已完成"出现，
+    # 固定 sleep 在慢机器上会在重画完成前就抓取正文
+    expect(page.locator("#page-body")).to_contain_text("已完成")
 
 
 def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
@@ -544,6 +584,13 @@ def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
         sel.select_option("是")
     page.click("#spd-screen-submit")
     expect(page.locator("#spd-screen-msg")).to_contain_text("风险等级")
+    # 确认弹窗被自动应答成"申请专病管理服务"后，提交链路还有半截在跑：
+    # 申请 POST 成功 → `await loadSpd()` 把自查分段**再重画一次**（列出申请单）。
+    # m.js 的 loadSpd 没有管理端 route() 那样的串行化，这时立刻切"监测"分段，
+    # 两次异步渲染会竞写同一个 #spd-result，后完成的自查重画把监测表单整个
+    # 盖掉（约四成概率复现；这是居民端的产品级竞态，见报告）。用例侧等申请
+    # 重画的终点信号——申请单卡片"待受理"——落定后再切分段。
+    expect(page.locator("#spd-result")).to_contain_text("待受理")
 
     # 自报监测：血压 165 → 落库为待医生处置的异常值。
     # 保存成功后整个分段会重画（提示语随之被抹掉），所以断言重画后的列表里
@@ -552,13 +599,25 @@ def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
     page.wait_for_selector("#spd-measure-form")
     page.fill("#spd-value", "165")
     page.click('#spd-measure-form button[type="submit"]')
-    page.wait_for_timeout(900)
-    body = page.eval_on_selector("#spd-result", "e => e.textContent")
-    assert "165" in body, "自报的监测数值应出现在记录列表里"
+    # 保存成功后分段重画、数值落进记录列表——重试断言等它出现（替代固定 sleep）
+    expect(page.locator("#spd-result")).to_contain_text("165")
 
 
 def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
-    """医生移动端：登录 → 慢专病待办接收 → 转诊复核通过（prompt 应答意见）。"""
+    """医生移动端：登录 → 慢专病待办接收 → 转诊复核通过（prompt 应答意见）。
+
+    两步都断言**动作成功后的新状态**，而不是"页面还是老样子"：
+
+    - 接收：任务状态从"待接收"翻到"已接收"。claim 要求 pending 且指派给本人，
+      seed 必须在创建任务时就带 assignee——先建再 /assign 会被顺手置成 claimed，
+      "接收"永远 409；
+    - 复核通过：单据从"待卫生院审核"（submitted）推进到"待县级接收"
+      （township_reviewed）。分级审核按机构树 parent_id 上收（ADR-0004/0005）：
+      单子由村卫生室（子机构）发起，登录的乡镇卫生院医生才是有权审核的上级。
+
+    旧断言"通过后列表仍显示待卫生院审核或暂无在途转诊"恰好把 403/409 的静默失败
+    （spdPost 失败不重画列表）也判成通过——两步实际都没发生，用例常年全绿。
+    """
     page.goto(f"{base_url}/m/doctor")
     page.fill("#lg-user", "e2e_spd_doc")
     page.fill("#lg-pass", "passw0rd1")
@@ -567,13 +626,14 @@ def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
 
     page.click('[data-tab="spd"]')
     page.wait_for_selector("[data-spd-claim]")
+    expect(page.locator("#spd-list")).to_contain_text("待接收")
     page.click("[data-spd-claim]")
-    page.wait_for_timeout(400)
+    # spdPost 成功后整块重画——等新状态出现（显式等待，替代固定 sleep）
+    expect(page.locator("#spd-list")).to_contain_text("已接收")
 
     with _answers(page, ["同意上转"]):
         page.click('[data-dspd="referral"]')
-        page.wait_for_selector("[data-spd-pass]")
+        expect(page.locator("#spd-list")).to_contain_text("待卫生院审核")
         page.click("[data-spd-pass]")
-        page.wait_for_timeout(500)
-    body = page.eval_on_selector("#spd-list", "e => e.textContent")
-    assert "待卫生院审核" in body or "暂无在途转诊" in body
+        # 通过即推进一格：待卫生院审核 → 待县级接收（重画完成的确定信号）
+        expect(page.locator("#spd-list")).to_contain_text("待县级接收")

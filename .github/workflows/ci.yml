@@ -142,6 +142,54 @@ jobs:
           python scripts/check_mypy_env.py
           mypy app
 
+  # 块5：Playwright 端到端（真浏览器驱动三套前端，用例自起独立 uvicorn + 独立
+  # SQLite，见 tests/e2e/test_flows.py）。本地连跑 3 遍全绿后接入，**阻断**；
+  # 与 test/quality 并行，不拖长关键路径。浏览器内核 CI 现装（runner 无预装）。
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies (locked, 含开发工具)
+        # playwright（Python 包）在 requirements-dev.txt；运行时依赖按 lock 钉版
+        run: pip install -r server/requirements.lock -r server/requirements-dev.txt
+      - name: Install Playwright Chromium (with system deps)
+        run: python -m playwright install --with-deps chromium
+      - name: Run E2E tests (Playwright, blocking)
+        working-directory: server
+        # conftest 的 --e2e 开关：不传则整档 skip。--junitxml 供下一步自证真的跑过
+        run: python -m pytest tests/e2e -v --e2e --junitxml=e2e.xml
+      - name: E2E gate self-check (端到端档必须真的跑过)
+        working-directory: server
+        # 同 integration gate 的口径（第 17 章 §17.5 第 4 条）：playwright 的
+        # importorskip 或 --e2e 开关一旦失效，整档 skip 而退出码照样是 0——
+        # "没跑"与"跑过且全对"的绿灯长得一模一样，必须数一遍真正执行的条数。
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse("e2e.xml").getroot()
+          suite = root if root.tag == "testsuite" else root.find("testsuite")
+          tests = int(suite.get("tests", 0))
+          skipped = int(suite.get("skipped", 0))
+          ran = tests - skipped
+          print(f"::notice title=E2E coverage::端到端档收集 {tests} 条、跳过 {skipped} 条、真正执行 {ran} 条")
+          for case in suite.iter("testcase"):
+              if case.find("skipped") is not None:
+                  print(f"::warning title=E2E skipped::{case.get('classname')}::{case.get('name')}")
+          if ran <= 0:
+              print("::error title=E2E gate not running::端到端档一条都没执行（多半是 playwright/浏览器内核没装上，或 --e2e 开关没生效），这一步的绿灯没有意义")
+              sys.exit(1)
+          PY
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-junit
+          path: server/e2e.xml
+          if-no-files-found: ignore
+
   # A7：依赖漏洞扫描（对全钉版 lock 扫，结果可复现）。起步为 warning 档
   # （continue-on-error）：先看清存量、修完已知项后再转阻断，与 lint/mypy
   # 当年"先基线后棘轮"的路数一致。
