@@ -359,6 +359,8 @@ app.include_router(admin_mgmt.router)
 app.include_router(attachments.router)
 app.include_router(reports.router)
 app.include_router(printing.router)
+# 打印件公开核验（ADR-0015）：扫码的人在平台外，无鉴权、有限速，单独一条路由
+app.include_router(printing.public_router)
 app.include_router(dataquality.router)
 # 块1：集成平台底座 ESB（接入方注册/消息队列/流程编排/统计）
 app.include_router(esb.router)
@@ -767,3 +769,9 @@ def mobile_index():
 def mobile_doctor():
     """块4：医生移动工作台入口（页内登录后可用，接口鉴权仍由 JWT 承担）。"""
     return FileResponse(_STATIC_DIR / "m" / "doctor.html")
+
+
+@app.get("/verify", include_in_schema=False)
+def print_verify_page():
+    """打印件扫码验真页（ADR-0015）：公开页面，令牌在 URL `#` 片段里由页内 JS 读取。"""
+    return FileResponse(_STATIC_DIR / "verify.html")

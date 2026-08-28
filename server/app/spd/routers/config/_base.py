@@ -50,15 +50,10 @@ class SvgResponse(Response):
 def _qr_svg(content: str) -> str:
     """把一段文本编成二维码 SVG。
 
-    `qrcode` 是纯 Python 实现（无 Pillow 也能出 SVG），符合"不引重依赖"的约束；
-    SVG 而不是 PNG：打印培训海报要放大到 A4，位图会糊。
+    实现已上移平台侧 `app/qrsvg.py`（ADR-0015 打印件验真也要用，而平台侧
+    按单向依赖不能来 spd 里拿）；这里经 `platform.py` 委托，名字与签名保持
+    原样——spd 内部的调用点一行不用改。
     """
-    import io
+    from ...platform import qr_svg
 
-    import qrcode
-    import qrcode.image.svg
-
-    img = qrcode.make(content, image_factory=qrcode.image.svg.SvgPathImage, box_size=16)
-    buf = io.BytesIO()
-    img.save(buf)
-    return buf.getvalue().decode()
+    return qr_svg(content)

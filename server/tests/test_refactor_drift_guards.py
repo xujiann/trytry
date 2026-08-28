@@ -347,6 +347,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/print/settlements/{settlement_id}",
     "GET /api/print/templates",
     "GET /api/print/vaccinations/{record_id}",
+    "GET /api/print/verify",  # ADR-0015 打印件公开核验（免登录，限速）
     "GET /api/projects",
     "GET /api/projects/stats/overview",
     "GET /api/projects/{project_id}",

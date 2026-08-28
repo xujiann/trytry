@@ -52,6 +52,9 @@ from ..notify import notify_patient as _notify_patient
 # 筛选必须与平台 patients.py 走同一条索引列等值路径。只再导出 pii_filter 这一个
 # 名字——加解密原语（encrypt/decrypt）不在依赖面里，子系统不该碰密文本身。
 from ..pii import pii_filter
+# 二维码 SVG：实现在平台侧 qrsvg（ADR-0015 打印件验真也要用），spd 经这里取。
+# 方向由此变顺：原实现长在 spd 内部时，平台侧想复用只能违反单向依赖。
+from ..qrsvg import qr_svg
 from ..wechat import get_wechat_provider as _get_wechat_provider
 from ..routers.attachments import register_owner as _register_attachment_owner
 from ..routers.attachments import store_upload as _store_upload

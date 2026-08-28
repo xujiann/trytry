@@ -126,7 +126,8 @@ def test_exam_report_print_contains_key_fields(client, admin, fixtures):
         "危急值",  # 危急值标记
         "报告医师",
         "报告时间",
-        "二维码",  # 二维码占位
+        "扫码验真",  # 验真二维码（ADR-0015：占位框已替换为真码）
+        "<svg",  # 真 SVG 码而非占位框
         "打印时间",  # 页脚
         "@page",  # A4 版式
         "@media print",
@@ -209,11 +210,11 @@ def test_template_defaults_listed_and_upsert_applies(client, admin, fixtures):
     html = client.get(f"/api/print/exam-reports/{fixtures['report']['id']}", headers=admin).text
     assert "县域医共体总院（模板抬头）" in html
     assert "本报告仅对送检样本负责" in html
-    assert "二维码" not in html  # show_qr=False 时不渲染二维码占位
+    assert "扫码验真" not in html and "<svg" not in html  # show_qr=False 时不渲染验真码
     # 未配置模板的单据类型不受影响，仍走机构名与默认页脚
     rx_html = client.get(f"/api/print/prescriptions/{fixtures['rx']['id']}", headers=admin).text
     assert "打印测试县医院" in rx_html
-    assert "二维码" in rx_html
+    assert "扫码验真" in rx_html and "<svg" in rx_html
 
 
 def test_template_upsert_is_admin_only(client, fixtures):

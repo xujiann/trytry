@@ -30,7 +30,7 @@
 """
 from html import escape
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -61,7 +61,10 @@ from ..models import (
     User,
     VaccinationRecord,
 )
+from ..printverify import make_verify_token, verify_document
 from ..privacy import mask_id_card, mask_phone
+from ..qrsvg import qr_svg
+from ..state_store import SlidingWindowRateLimiter
 from ..visibility import assert_org_visible, assert_patient_visible
 
 router = APIRouter(prefix="/api/print", tags=["报告打印"], dependencies=[Depends(get_current_user)])
@@ -143,6 +146,8 @@ table.items th { background: #f2f5f7; }
 .qr { margin-top: 14px; }
 .qr .box { width: 76px; height: 76px; border: 1px solid #666; display: flex; align-items: center;
            justify-content: center; font-size: 11px; color: #666; text-align: center; }
+.qr svg { width: 84px; height: 84px; display: block; }
+.qr .cap { font-size: 10px; color: #666; margin-top: 2px; }
 .doc-footer { margin-top: 16px; border-top: 1px solid #999; padding-top: 6px; font-size: 11.5px; color: #555;
               display: flex; justify-content: space-between; }
 .toolbar { text-align: center; margin: 10px; }
@@ -200,6 +205,8 @@ def _patient_rows(patient: Patient | None, viewer: User) -> str:
 def _render(
     *,
     doc_type: str,
+    doc_id: int,
+    request: Request,
     template: PrintTemplate | None,
     org_name: str,
     doc_title: str,
@@ -210,10 +217,19 @@ def _render(
     header_org = (template.header_org_name if template and template.header_org_name else org_name) or "县域医共体"
     footer = (template.footer_note if template and template.footer_note else DEFAULT_FOOTER)
     show_qr = True if template is None else bool(template.show_qr)
-    qr_html = (
-        '<div class="qr"><div class="box">二维码<br>（验真占位）</div></div>' if show_qr else ""
-    )
     printed_at = now_local().strftime("%Y-%m-%d %H:%M:%S")
+    if show_qr:
+        # 验真二维码（ADR-0015）：编的是**页面地址**而不是 API——扫码的人是院外
+        # 核验者，拿到的必须是能直接打开的东西（与 spd 量表码同一教训）。
+        # 令牌放 `#` 片段：不进服务端访问日志，也不被中间设备缓存键收录。
+        token = make_verify_token(
+            doc_type=doc_type, doc_id=doc_id, doc_no=doc_no,
+            org_name=org_name or header_org, issued_date=printed_at[:10],
+        )
+        verify_url = f"{str(request.base_url).rstrip('/')}/verify#{token}"
+        qr_html = f'<div class="qr">{qr_svg(verify_url)}<div class="cap">扫码验真</div></div>'
+    else:
+        qr_html = ""
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <title>{_esc(doc_title)}</title>
@@ -238,7 +254,7 @@ def _render(
 
 @router.get("/exam-reports/{report_id}", response_class=HTMLResponse, response_model=str)
 def print_exam_report(
-    report_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    report_id: int, http_request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """检查检验报告单打印版：机构抬头、患者信息、项目、所见、结论、危急值标记与报告医师。"""
     report = db.get(ExamReport, report_id)
@@ -272,6 +288,8 @@ def print_exam_report(
     <span>报告时间：{_esc(report.reported_at.strftime("%Y-%m-%d %H:%M"))}</span></div>"""
     return _render(
         doc_type="exam_report",
+        doc_id=report.id,
+        request=http_request,
         template=_template(db, "exam_report"),
         org_name=org_name,
         doc_title=DOC_TYPES["exam_report"],
@@ -286,7 +304,7 @@ def print_exam_report(
 
 @router.get("/prescriptions/{prescription_id}", response_class=HTMLResponse, response_model=str)
 def print_prescription(
-    prescription_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    prescription_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """处方笺打印版：患者信息、临床诊断、药品明细（用法用量）、审核状态与开方医师。"""
     rx = db.get(Prescription, prescription_id)
@@ -322,6 +340,8 @@ def print_prescription(
     <span>审核药师签名：____________</span><span>发药/核对：____________</span></div>"""
     return _render(
         doc_type="prescription",
+        doc_id=rx.id,
+        request=request,
         template=_template(db, "prescription"),
         org_name=org_name,
         doc_title=DOC_TYPES["prescription"],
@@ -336,7 +356,7 @@ def print_prescription(
 
 @router.get("/exam-requests/{request_id}", response_class=HTMLResponse, response_model=str)
 def print_exam_request(
-    request_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    request_id: int, http_request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """检查检验申请单打印版：患者信息、申请项目、临床资料、样本状态与申请医师。"""
     request = db.get(ExamRequest, request_id)
@@ -367,6 +387,8 @@ def print_exam_request(
     <span>接收/执行签名：____________</span></div>"""
     return _render(
         doc_type="exam_request",
+        doc_id=request.id,
+        request=http_request,
         template=_template(db, "exam_request"),
         org_name=org_name,
         doc_title=DOC_TYPES["exam_request"],
@@ -380,7 +402,7 @@ def print_exam_request(
 
 
 @router.get("/certs/{cert_id}", response_class=HTMLResponse, response_model=str)
-def print_cert(cert_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def print_cert(cert_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """出生/死亡医学证明与缺陷登记打印版：证明编号、当事人信息、事件日期与诊断说明。"""
     cert = db.get(MedicalCert, cert_id)
     if cert is None:
@@ -408,6 +430,8 @@ def print_cert(cert_id: int, db: Session = Depends(get_db), user: User = Depends
     <span>签发机构（章）：____________</span></div>"""
     return _render(
         doc_type="cert",
+        doc_id=cert.id,
+        request=request,
         template=_template(db, "cert"),
         org_name=org_name,
         doc_title=type_name,
@@ -429,7 +453,7 @@ def _get_admission(db: Session, admission_id: int) -> Admission:
 
 @router.get("/inpatient-bills/{admission_id}", response_class=HTMLResponse, response_model=str)
 def print_inpatient_bill(
-    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    admission_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """住院费用清单打印版：按住院登记汇总费用明细（计费时价格快照口径）。"""
     admission = _get_admission(db, admission_id)
@@ -463,6 +487,8 @@ def print_inpatient_bill(
   <div class="sign"><span>费用合计：{total:.2f} 元</span><span>制单：____________</span></div>"""
     return _render(
         doc_type="inpatient_bill",
+        doc_id=admission.id,
+        request=request,
         template=_template(db, "inpatient_bill"),
         org_name=org_name,
         doc_title=DOC_TYPES["inpatient_bill"],
@@ -477,7 +503,7 @@ def print_inpatient_bill(
 
 @router.get("/settlements/{settlement_id}", response_class=HTMLResponse, response_model=str)
 def print_settlement(
-    settlement_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    settlement_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """结算单打印版（住院/门诊同一版式）：总额、医保统筹支付与个人自付。"""
     settlement = db.get(Settlement, settlement_id)
@@ -506,6 +532,8 @@ def print_settlement(
     <span>收讫（章）：____________</span></div>"""
     return _render(
         doc_type="settlement",
+        doc_id=settlement.id,
+        request=request,
         template=_template(db, "settlement"),
         org_name=org_name,
         doc_title=f"{bill_type}{DOC_TYPES['settlement']}",
@@ -520,7 +548,7 @@ def print_settlement(
 
 @router.get("/case-summaries/{admission_id}", response_class=HTMLResponse, response_model=str)
 def print_case_summary(
-    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    admission_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """病案首页打印版：现有最小数据集（出院诊断/手术/费用/转归/DRG）。"""
     admission = _get_admission(db, admission_id)
@@ -554,6 +582,8 @@ def print_case_summary(
     <span>填写时间：{_esc(summary.created_at.strftime("%Y-%m-%d %H:%M"))}</span></div>"""
     return _render(
         doc_type="case_summary",
+        doc_id=admission.id,
+        request=request,
         template=_template(db, "case_summary"),
         org_name=org_name,
         doc_title=DOC_TYPES["case_summary"],
@@ -568,7 +598,7 @@ def print_case_summary(
 
 @router.get("/checkups/{checkup_id}", response_class=HTMLResponse, response_model=str)
 def print_checkup_report(
-    checkup_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    checkup_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """体检报告打印版：套餐、分项结果（异常标注）、汇总小结与总检结论。"""
     exam = db.get(PhysicalExam, checkup_id)
@@ -610,6 +640,8 @@ def print_checkup_report(
   {review}"""
     return _render(
         doc_type="checkup_report",
+        doc_id=exam.id,
+        request=request,
         template=_template(db, "checkup_report"),
         org_name=org_name,
         doc_title=DOC_TYPES["checkup_report"],
@@ -624,7 +656,7 @@ def print_checkup_report(
 
 @router.get("/consents/{record_id}", response_class=HTMLResponse, response_model=str)
 def print_consent(
-    record_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    record_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """知情同意书打印版：告知文本（按记录引用版本取 consent_texts）+ 同意要件。
 
@@ -680,6 +712,8 @@ def print_consent(
     <span>经办人：{_esc(_user_name(db, record.operator_user_id)) or "—"}</span></div>"""
     return _render(
         doc_type="consent",
+        doc_id=record.id,
+        request=request,
         template=_template(db, "consent"),
         org_name="",
         doc_title=f"{scene_name}知情同意书",
@@ -694,7 +728,7 @@ def print_consent(
 
 @router.get("/vaccinations/{record_id}", response_class=HTMLResponse, response_model=str)
 def print_vaccine_cert(
-    record_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    record_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """疫苗接种证明打印版：按单条接种记录出证（剂次/批号/接种单位/接种者）。"""
     record = db.get(VaccinationRecord, record_id)
@@ -720,6 +754,8 @@ def print_vaccine_cert(
     <span>登记时间：{_esc(record.created_at.strftime("%Y-%m-%d %H:%M"))}</span></div>"""
     return _render(
         doc_type="vaccine_cert",
+        doc_id=record.id,
+        request=request,
         template=_template(db, "vaccine_cert"),
         org_name=org_name,
         doc_title=DOC_TYPES["vaccine_cert"],
@@ -734,7 +770,7 @@ def print_vaccine_cert(
 
 @router.get("/referrals/{referral_id}", response_class=HTMLResponse, response_model=str)
 def print_referral(
-    referral_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    referral_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """转诊单打印版：转出/转入机构、方向、事由与当前状态。"""
     referral = db.get(Referral, referral_id)
@@ -759,6 +795,8 @@ def print_referral(
     <span>接诊签收：____________</span></div>"""
     return _render(
         doc_type="referral",
+        doc_id=referral.id,
+        request=request,
         template=_template(db, "referral"),
         org_name=from_org,
         doc_title=DOC_TYPES["referral"],
@@ -773,7 +811,7 @@ def print_referral(
 
 @router.get("/discharge-summaries/{admission_id}", response_class=HTMLResponse, response_model=str)
 def print_discharge_summary(
-    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    admission_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """出院小结打印版：仅限已出院者（在院打印的"出院小结"没有出院时间，是伪造文书）。
 
@@ -815,6 +853,8 @@ def print_discharge_summary(
     <span>打印核对：____________</span></div>"""
     return _render(
         doc_type="discharge_summary",
+        doc_id=admission.id,
+        request=request,
         template=_template(db, "discharge_summary"),
         org_name=org_name,
         doc_title=DOC_TYPES["discharge_summary"],
@@ -890,3 +930,41 @@ def upsert_template(body: TemplateUpsert, db: Session = Depends(get_db)):
         },
     )
     return _template_out(template)
+
+
+# ---------- 公开核验端点（ADR-0015） ----------
+
+#: 单独的无鉴权路由：扫码核验的人在平台外（外院窗口、用人单位、保险公司），
+#: 没有账号。安全性不靠登录靠令牌本身——HMAC 签名令牌不可枚举、不可伪造，
+#: 返回字段全部是纸面已印内容（见 printverify 模块 docstring 与 ADR-0015）。
+public_router = APIRouter(prefix="/api/print", tags=["报告打印"])
+
+#: 公开端点必须限速：核验是低频人工动作（窗口工作人员扫一张核一张），
+#: 30 次/分/IP 对正常使用毫无感知，对脚本批量试探令牌是硬墙。
+_verify_limiter = SlidingWindowRateLimiter(max_events=30, window_seconds=60)
+
+
+class VerifyOut(BaseModel):
+    """核验结果（统一形状：三种结局都返回全部键，前端不用猜哪个键存在）。"""
+
+    valid: bool
+    reason: str
+    doc_type: str
+    doc_label: str
+    doc_no: str
+    org_name: str
+    issued_date: str
+    status: str
+
+
+@public_router.get("/verify", response_model=VerifyOut)
+def verify_print_document(token: str, request: Request, db: Session = Depends(get_db)):
+    """核验打印件验真令牌（公开，无需登录）。
+
+    无效令牌也返回 200 + ``valid=False``——"这张纸是假的"是核验的正常业务结果，
+    不是请求错误；4xx 会让扫码页把"假件"显示成"系统故障"。
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    if not _verify_limiter.allow(f"print:verify:{client_ip}"):
+        raise HTTPException(status_code=429, detail="核验过于频繁，请稍后再试")
+    return verify_document(db, token)

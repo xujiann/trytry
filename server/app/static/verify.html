@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>打印件验真 · 县域医共体</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%95%3C/text%3E%3C/svg%3E">
+<style>
+/* 独立小页：扫码的人在平台外，不复用 SPA 的整套样式，秒开优先 */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+       background: #f3f5f7; color: #222; min-height: 100vh;
+       display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+h1 { font-size: 18px; color: #1a5c9c; margin-bottom: 4px; }
+.sub { font-size: 12px; color: #888; margin-bottom: 20px; }
+.card { background: #fff; border-radius: 10px; padding: 20px 18px; width: 100%;
+        max-width: 420px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.badge { display: flex; align-items: center; gap: 10px; font-size: 17px;
+         font-weight: 600; margin-bottom: 14px; }
+.badge .ico { width: 34px; height: 34px; border-radius: 50%; color: #fff;
+              display: flex; align-items: center; justify-content: center;
+              font-size: 19px; flex: none; }
+.ok .ico { background: #2e9e5b; } .ok { color: #2e9e5b; }
+.warn .ico { background: #d9822b; } .warn { color: #d9822b; }
+.bad .ico { background: #c0392b; } .bad { color: #c0392b; }
+.reason { font-size: 13px; color: #555; line-height: 1.6; margin-bottom: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+td { padding: 7px 4px; border-bottom: 1px solid #f0f0f0; }
+td.k { color: #888; width: 84px; white-space: nowrap; }
+.hint { font-size: 12px; color: #999; line-height: 1.7; margin-top: 18px;
+        max-width: 420px; }
+.loading { color: #888; font-size: 14px; text-align: center; padding: 30px 0; }
+</style>
+</head>
+<body>
+<h1>打印件验真</h1>
+<p class="sub">县域医共体信息平台 · 单据真伪核验</p>
+<div class="card" id="result"><div class="loading">正在核验…</div></div>
+<p class="hint">本页核验单据是否由本平台签发、内容是否与签发时一致。核验结果仅展示
+纸面已印信息，不含任何患者隐私。若结果与纸面不符，请以本页为准并联系签发机构。</p>
+
+<script src="/static/shared.js"></script>
+<script>
+"use strict";
+(async function () {
+  const box = $("#result");
+  // 令牌在 # 片段里：不进服务端访问日志，也不被中间设备当缓存键收录
+  const token = location.hash.slice(1);
+  if (!token) {
+    box.innerHTML = '<div class="badge warn"><span class="ico">?</span>缺少核验令牌</div>'
+      + '<p class="reason">请直接扫描单据右下角的"扫码验真"二维码打开本页，不要手动输入网址。</p>';
+    return;
+  }
+  let r;
+  try {
+    const resp = await fetch("/api/print/verify?token=" + encodeURIComponent(token));
+    if (resp.status === 429) {
+      box.innerHTML = '<div class="badge warn"><span class="ico">!</span>核验过于频繁</div>'
+        + '<p class="reason">请稍等一分钟后重新扫码。</p>';
+      return;
+    }
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    r = await resp.json();
+  } catch (e) {
+    box.innerHTML = '<div class="badge warn"><span class="ico">!</span>核验服务暂不可用</div>'
+      + '<p class="reason">网络异常或服务维护中，请稍后重试。本结果不代表单据真伪。</p>';
+    return;
+  }
+  const rows = r.doc_no
+    ? '<table>'
+      + '<tr><td class="k">单据类型</td><td>' + esc(r.doc_label) + '</td></tr>'
+      + '<tr><td class="k">单据编号</td><td>' + esc(r.doc_no) + '</td></tr>'
+      + '<tr><td class="k">签发机构</td><td>' + esc(r.org_name) + '</td></tr>'
+      + '<tr><td class="k">签发日期</td><td>' + esc(r.issued_date) + '</td></tr>'
+      + (r.status ? '<tr><td class="k">当前状态</td><td>' + esc(r.status) + '</td></tr>' : '')
+      + '</table>'
+    : "";
+  if (r.valid && r.status === "已撤回") {
+    // 纸是真的，但同意已撤回——比"无效"更需要醒目：拿着真纸主张已不存在的授权
+    box.innerHTML = '<div class="badge warn"><span class="ico">!</span>单据真实，但已被撤回</div>'
+      + '<p class="reason">该知情同意此后已由当事人撤回，本单据不再代表有效同意。</p>' + rows;
+  } else if (r.valid) {
+    box.innerHTML = '<div class="badge ok"><span class="ico">✓</span>核验通过：平台签发的真实单据</div>'
+      + '<p class="reason">以下信息与平台签发记录一致，请与纸面内容逐项核对。</p>' + rows;
+  } else if (r.doc_no) {
+    box.innerHTML = '<div class="badge warn"><span class="ico">!</span>签发信息有效，但已查无此单</div>'
+      + '<p class="reason">' + esc(r.reason) + '</p>' + rows;
+  } else {
+    box.innerHTML = '<div class="badge bad"><span class="ico">✕</span>核验未通过</div>'
+      + '<p class="reason">' + esc(r.reason || "该二维码不是本平台签发，或单据内容被篡改。") + '</p>';
+  }
+})();
+</script>
+</body>
+</html>
