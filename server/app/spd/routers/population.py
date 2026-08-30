@@ -1113,6 +1113,20 @@ def _bind_package(db: Session, enrollment: SpdEnrollment, package_id: int) -> Sp
     return binding
 
 
+def _assert_binding_writable(db: Session, user: User, binding: SpdPackageBinding) -> None:
+    """服务包绑定的归属校验（扣减 / 解绑共用）。
+
+    `SpdPackageBinding` 自己不带 org_id——归属隔一跳挂在 `spd_enrollments.org_id`
+    （这份档案由哪家机构在管）。扣减动的是患者已购服务包的**剩余次数**，
+    解绑动的是这份权益本身：别家机构遍历 binding_id 就能把本院患者的次数扣光
+    或直接解绑，患者到院时被告知"没次数了"，而台账上确实扣过。
+    档案不存在时不拦（数据不一致，不是越权）。
+    """
+    enrollment = db.get(SpdEnrollment, binding.enrollment_id)
+    if enrollment is not None:
+        assert_org_writable(db, user, enrollment.org_id)
+
+
 def _binding_out(db: Session, b: SpdPackageBinding) -> dict:
     package = db.get(SpdServicePackage, b.package_id)
     items = b.items or []
@@ -1162,10 +1176,15 @@ def bind_package(
 
 @router.post("/package-bindings/{binding_id}/unbind",
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def unbind_package(binding_id: int, db: Session = Depends(get_db)):
+def unbind_package(
+    binding_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     binding = db.get(SpdPackageBinding, binding_id)
     if binding is None:
         raise HTTPException(status_code=404, detail="服务包绑定不存在")
+    _assert_binding_writable(db, user, binding)
     binding.status = "unbound"
     binding.unbound_at = now_naive()
     db.commit()
@@ -1190,6 +1209,7 @@ def add_usage(
     binding = db.get(SpdPackageBinding, binding_id)
     if binding is None:
         raise HTTPException(status_code=404, detail="服务包绑定不存在")
+    _assert_binding_writable(db, user, binding)
     if binding.status != "bound":
         raise HTTPException(status_code=409, detail="该服务包已解绑，不能扣减")
     # 深拷贝再改：JSON 列没开 MutableList，就地改内层 dict 时 SQLAlchemy 比对

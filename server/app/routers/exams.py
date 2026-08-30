@@ -395,6 +395,23 @@ def list_critical_reports(db: Session = Depends(get_db)):
     )
 
 
+def _assert_report_patient_visible(db: Session, user: User, report: ExamReport) -> None:
+    """`/reports/{id}` 型写接口的归属校验（修订 / 确认接收 / 处置反馈共用）。
+
+    `ExamReport` 自己不带 org_id/patient_id——归属隔一跳挂在
+    `exam_requests.patient_id` 上，所以走**患者可见性**而不是机构可写：
+    共享诊断中心的中心医师与申请机构的医师分属两家，机构口径会误伤中心侧。
+
+    抽成一处而不是三处各写一遍：这三个端点是同一个模型、同一条归属路径，
+    上一轮只修了修订报告、漏了危急值那两条，正是"同一判断散在三处"的代价。
+    `req is None` 时不拦——那是数据不一致（报告挂着不存在的申请单），
+    归属判定管不了，交给后面的业务逻辑按各自语义处理。
+    """
+    req = db.get(ExamRequest, report.request_id)
+    if req is not None:
+        assert_patient_visible(db, user, req.patient_id)
+
+
 # ---------- 危急值闭环：通知 → 确认接收 → 处置反馈 ----------
 
 
@@ -410,6 +427,15 @@ def acknowledge_critical(
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    # 归属校验：与 `revise_report` 同一族——`ExamReport` 自己不带 org_id/patient_id，
+    # 归属隔一跳在 `exam_requests.patient_id` 上。上一轮修了修订报告却漏了危急值闭环
+    # 这两条，正因为闸门的分母只认"对象自己带 org_id"，看不见隔一跳的这一族。
+    # 后果比改报告结论更直接：别家医师遍历 report_id 就能替本院"确认接收"危急值，
+    # 闭环状态跳到 acknowledged，本院医师再来确认拿到 409，**真正该看到的人反而
+    # 被挡在门外**，而台账上这条危急值显示已有人接手。
+    # 判定排在状态机之前：先 403，免得用 422/409 的差别探出别家报告是不是危急值、
+    # 处在哪一步。
+    _assert_report_patient_visible(db, user, report)
     if not report.critical:
         raise HTTPException(status_code=422, detail="非危急值报告，无需确认")
     # M-1 整改：存量危急报告（迁移前 critical_status=''）等同"已通知"，可正常进入闭环
@@ -443,6 +469,10 @@ def resolve_critical(
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    # 归属校验：同 `acknowledge_critical`。这一条更重——它把危急值闭环**结案**，
+    # 别家医师遍历 report_id 就能替本院写下处置反馈并把状态推到 resolved，
+    # 本院真正的处置人从此无门可进，而质控报表上这条已经"闭环完成"。
+    _assert_report_patient_visible(db, user, report)
     if not report.critical:
         raise HTTPException(status_code=422, detail="非危急值报告，无需处置反馈")
     if report.critical_status != "acknowledged":
@@ -677,13 +707,10 @@ def amend_report(
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
-    # 归属校验（上线前审计）：`ExamReport` 自己不带 org_id/patient_id，归属隔一跳
-    # 在 `exam_requests.patient_id` 上，所以走患者可见性而不是机构可写。
-    # 原先只有 `require_roles("doctor")`——任一成员单位的医师遍历 report_id
-    # 就能改别家的报告结论，并把危急值闭环状态复位（见下面的 M-6 联动）。
-    req = db.get(ExamRequest, report.request_id)
-    if req is not None:
-        assert_patient_visible(db, user, req.patient_id)
+    # 归属校验（上线前审计）：原先只有 `require_roles("doctor")`——任一成员单位的
+    # 医师遍历 report_id 就能改别家的报告结论，并把危急值闭环状态复位（见下面的
+    # M-6 联动）。判定本体见 `_assert_report_patient_visible`（三个端点共用）。
+    _assert_report_patient_visible(db, user, report)
     actor = user.full_name or user.username
     was_critical = report.critical
     db.add(

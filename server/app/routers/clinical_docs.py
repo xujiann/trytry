@@ -23,6 +23,7 @@ from ..models import (
     VitalSignRecord,
     Ward,
 )
+from ..visibility import assert_obj_org_writable
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], dependencies=[Depends(get_current_user)])
 
@@ -129,6 +130,23 @@ def _admission_or_404(db: Session, admission_id: int) -> Admission:
     return admission
 
 
+def _admission_for_write(db: Session, user: User, admission_id: int) -> Admission:
+    """写文书前的取件 + 归属校验。
+
+    本模块的文书全部挂在 admission 上，而 `NursingRecord`/`ProgressNote`/
+    `VitalSignRecord` 自己都不带 org_id——归属隔一跳在 `admissions.org_id` 上。
+    此前四个写接口一个守卫都没有：任一成员单位的医师或经办按 admission_id
+    就能往**别家医院的住院病历**里写病程记录、护理记录和体温单。病历是法律
+    文书，别家写进来的内容既删不掉也说不清是谁的责任。
+
+    单独包一层而不是把校验塞进 `_admission_or_404`：那个还被四个读接口用着，
+    读侧的可见性口径与"能不能以这家机构名义写"不是一回事，混在一起会误伤读。
+    """
+    admission = _admission_or_404(db, admission_id)
+    assert_obj_org_writable(db, user, admission)
+    return admission
+
+
 # ---------------------------------------------------------------- 病程记录
 
 
@@ -155,7 +173,7 @@ def create_progress_note(
 
     两条规则：出院后不得再补录（病历应在住院期间形成）；首次病程每次住院唯一。
     """
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_for_write(db, user, admission_id)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写病程记录")
     if body.note_type == "first":
@@ -271,7 +289,7 @@ def create_nursing_record(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_for_write(db, user, admission_id)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写护理记录")
     if body.inpatient_order_id is not None:
@@ -352,7 +370,7 @@ def create_vital(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_for_write(db, user, admission_id)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再记录体征")
     record = VitalSignRecord(
@@ -415,8 +433,14 @@ def create_handover(
     body: HandoverIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """交接班：在院人数由系统按当前住院数据快照，不让人工填——这个数填错就没意义了。"""
-    if db.get(Ward, body.ward_id) is None:
+    ward = db.get(Ward, body.ward_id)
+    if ward is None:
         raise HTTPException(status_code=404, detail="病区不存在")
+    # 归属校验：与同模块另外三个写接口同一族，只是归属由 body 里的 ward_id 定
+    # 而非路径参数——`Ward` 自带 org_id，直接按对象校验即可。
+    # 顺带说明它为何不在闸门的名单里：闸门只扫路径参数型（`/{id}`）写接口，
+    # 归属走 body 的这一类它一个都看不见。这是**第三个**结构性盲区，已登记。
+    assert_obj_org_writable(db, user, ward)
     patient_count = (
         db.query(Admission)
         .filter(Admission.ward_id == body.ward_id, Admission.status == "admitted")

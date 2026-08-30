@@ -262,3 +262,162 @@ def test_守卫本身没瞎(client, world, order_in_org_a, report_in_org_a, paid
     # 说明 403 确实来自归属判定，而不是"什么都拒绝"。
     resp = client.post("/api/inpatient/orders/999999/stop", headers=world["doc_b"])
     assert resp.status_code == 404, resp.text
+
+
+# ================================================================
+# 第二批：分母扩到"归属隔一跳"之后照出来的洞
+#
+# 上一批（停医嘱 / 修订报告 / 支付退款）是人工审计翻出来的，翻完在
+# `test_stage15_horizontal.py` 里留了一句"扩大分母是独立任务，未做"。
+# 这一批是把那件事做掉之后闸门自己报出来的——判据从"对象自己带 org_id"
+# 扩到"归属隔一跳外键可达"，并排除指向 users 的审计列（`created_by` 顺着走
+# 会把"谁创建的"误当成"归属谁"）。
+# ================================================================
+
+
+# ---------------------------------------------------------------- 危急值闭环
+
+
+@pytest.fixture(scope="module")
+def critical_report_in_org_a(client, world):
+    """甲院的一份**危急值**报告，停在 notified。"""
+    req = client.post(
+        "/api/exams",
+        json={"patient_id": world["patient"]["id"], "from_org_id": world["orgs"]["a"]["id"],
+              "center_type": "lab", "item_code": "LAB009", "item_name": "血钾"},
+        headers=world["doc_a"],
+    )
+    assert req.status_code in (200, 201), req.text
+    rep = client.post(
+        f"/api/exams/{req.json()['id']}/report",
+        json={"findings": "血钾 6.9mmol/L", "conclusion": "高钾血症", "critical": True},
+        headers=world["doc_a"],
+    )
+    assert rep.status_code in (200, 201), rep.text
+    return rep.json()
+
+
+def test_别家医师不得确认本院危急值(client, world, critical_report_in_org_a):
+    """比"改结论"更直接：别家替本院把危急值签收了，闭环跳到 acknowledged，
+    本院医师再来确认反而拿 409——**真正该处置的人被挡在门外**，
+    而台账上这条危急值显示已有人接手。"""
+    resp = client.post(
+        f"/api/exams/reports/{critical_report_in_org_a['id']}/acknowledge",
+        headers=world["doc_b"],
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_本院医师照常确认本院危急值(client, world, critical_report_in_org_a):
+    resp = client.post(
+        f"/api/exams/reports/{critical_report_in_org_a['id']}/acknowledge",
+        headers=world["doc_a"],
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_别家医师不得处置本院危急值(client, world, critical_report_in_org_a):
+    """此刻报告已是 acknowledged（上一条用例推的）。别家来处置必须仍是 403
+    而不是 409——否则状态码的差别就成了旁路，外人能探出别家危急值走到哪一步。"""
+    resp = client.post(
+        f"/api/exams/reports/{critical_report_in_org_a['id']}/resolve",
+        json={"note": "被别家写的处置反馈"},
+        headers=world["doc_b"],
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_本院医师照常处置本院危急值(client, world, critical_report_in_org_a):
+    resp = client.post(
+        f"/api/exams/reports/{critical_report_in_org_a['id']}/resolve",
+        json={"note": "已静脉降钾并复查"},
+        headers=world["doc_a"],
+    )
+    assert resp.status_code == 200, resp.text
+
+
+# ---------------------------------------------------------------- 住院临床文书
+
+
+@pytest.fixture(scope="module")
+def admission_in_org_a(client, world):
+    """甲院的一次在院住院（文书全部挂在它上面）。
+
+    **另起一位患者**而不是复用 `world["patient"]`：那位已被停医嘱那批 fixture
+    收治入院，同一人重复入院登记会 409。fixture 之间借数据正是本仓库
+    2026-08-22 那次测试隔离普查里点名的坏味道。
+    """
+    patient = client.post(
+        "/api/patients",
+        json={"name": "跨机构文书患者", "id_card": "330400199203034567"},
+        headers=world["admin"],
+    ).json()
+    ward = client.post(
+        "/api/inpatient/wards",
+        json={"org_id": world["orgs"]["a"]["id"], "name": "跨机构甲院文书病区"},
+        headers=world["admin"],
+    ).json()
+    bed = client.post(
+        "/api/inpatient/beds",
+        json={"ward_id": ward["id"], "bed_no": "XO-DOC-01"},
+        headers=world["admin"],
+    ).json()
+    adm = client.post(
+        "/api/inpatient/admissions",
+        json={"patient_id": patient["id"], "org_id": world["orgs"]["a"]["id"],
+              "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "高钾血症"},
+        headers=world["doc_a"],
+    )
+    assert adm.status_code in (200, 201), adm.text
+    return {"admission": adm.json(), "ward": ward}
+
+
+def test_别家医师不得往本院病历写病程记录(client, world, admission_in_org_a):
+    """病历是法律文书。别家写进来的内容既删不掉，也说不清是谁的责任。"""
+    resp = client.post(
+        f"/api/inpatient/admissions/{admission_in_org_a['admission']['id']}/progress-notes",
+        json={"note_type": "daily", "content": "别家写入的病程"},
+        headers=world["doc_b"],
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_别家经办不得往本院病历写护理记录(client, world, admission_in_org_a):
+    resp = client.post(
+        f"/api/inpatient/admissions/{admission_in_org_a['admission']['id']}/nursing-records",
+        json={"nursing_level": "level1", "content": "别家写入的护理记录"},
+        headers=world["op_b"],
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_别家经办不得往本院病历写体温单(client, world, admission_in_org_a):
+    resp = client.post(
+        f"/api/inpatient/admissions/{admission_in_org_a['admission']['id']}/vitals",
+        json={"measured_at": "2026-08-27 08:00", "temperature": 39.5},
+        headers=world["op_b"],
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_别家经办不得给本院病区建交接班(client, world, admission_in_org_a):
+    """交接班的归属走 body 里的 ward_id 而不是路径参数——闸门只扫 `/{id}` 型，
+    这一条它看不见，是就近顺手补的（同文件同一族洞）。"""
+    resp = client.post(
+        "/api/inpatient/handovers",
+        json={"ward_id": admission_in_org_a["ward"]["id"], "shift": "day",
+              "handover_date": "2026-08-27", "from_staff": "甲", "to_staff": "乙",
+              "critical_count": 0, "content": "别家建的交接班"},
+        headers=world["op_b"],
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_本院医师照常书写本院病程记录(client, world, admission_in_org_a):
+    """防误伤：守卫收得太紧会把正常临床书写拦住，那比不管更糟。"""
+    resp = client.post(
+        f"/api/inpatient/admissions/{admission_in_org_a['admission']['id']}/progress-notes",
+        json={"note_type": "first", "content": "首次病程：高钾血症，予降钾治疗"},
+        headers=world["doc_a"],
+    )
+    assert resp.status_code == 201, resp.text

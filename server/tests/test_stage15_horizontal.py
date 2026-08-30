@@ -489,18 +489,67 @@ BYID_CROSS_ORG_OK = {
     "spd/referral.py:review_referral",
     "spd/referral.py:arrive_referral",
     "spd/referral.py:down_referral",
+    # 站内消息标记已读：归属**按人**不按机构，且已经是更严的口径——
+    # handler 里 `notification.user_id != user.id` 直接按 404 处理（连存在性都
+    # 不暴露）。分母扩到隔一跳后它被 `resident_account_id→ResidentAccount`
+    # 这条边捞了进来，但机构守卫在这里是错的尺子：同机构的同事也不该替人已读。
+    "notifications.py:mark_read",
 }
 
 
-def _byid_org_write_endpoints():
-    """按 id 直取带 org_id 主对象的写接口。"""
+def _owning_models():
+    """归属模型两族：①自带 org_id/patient_id；②隔一跳外键指到①。
+
+    **为什么要有②**：上线前审计实测到三个洞（停医嘱 / 修订报告 / 支付退款），
+    这个闸门一个都没报出来——`InpatientOrder` 的归属在 `admissions.org_id`、
+    `ExamReport` 的在 `exam_requests.patient_id`、`PaymentOrder` 的在
+    `settlements.org_id`，**归属隔一跳的对象，只认"自己带 org_id"的判据结构上
+    看不见**。那份自证报的 95.5% 是真的，只是分母漏了一整族。
+
+    **为什么排除指向 `users` 的外键**：`created_by`/`requested_by`/`sampler_id`
+    这类列指向 `users`，而 `users` 自己带 org_id——顺着它走会把"谁创建的"
+    误当成"归属谁"，于是知识库条目、名老中医医案、课件都被判成需要机构守卫，
+    推出"只能改本机构人写的知识条目"这种不存在的规则。实测这一条排除把误报从
+    23 个压到 12 个，且剩下的每一个都有真实归属路径。审计列不是归属列。
+    """
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from app import models
-    direct = {
-        c.__name__ for c in models.Base.registry._class_registry.values()
-        if hasattr(c, "__tablename__") and "org_id" in c.__table__.columns
+    classes = {
+        c.__name__: c for c in models.Base.registry._class_registry.values()
+        if hasattr(c, "__tablename__")
     }
+    table_to_class = {c.__table__.name: n for n, c in classes.items()}
+
+    def owns(c):
+        return "org_id" in c.__table__.columns or "patient_id" in c.__table__.columns
+
+    # ①自带 org_id：判据原本就有的那一族，**范围不变**。
+    #   刻意不把"自带 patient_id"也并进来：那是另一次扩大（实测再多约 30 个端点，
+    #   分布在 maternal / insurance / vaccination / tcm / emergency / spd/care 等），
+    #   与"隔一跳"是两件事，混在一批里就分不清哪个洞是被哪次扩大照出来的。
+    #   已登记在 ROADMAP，另案处理。
+    direct = {n for n, c in classes.items() if "org_id" in c.__table__.columns}
+    # ②隔一跳：外键指向"自带 org_id 或 patient_id"的表。跳的**目标**放宽到
+    #   patient_id 是必须的——`ExamReport` 的归属正是 `exam_requests.patient_id`。
+    owning = {n for n, c in classes.items() if owns(c)}
+    onehop = set()
+    for name, cls in classes.items():
+        if name in owning:
+            continue
+        for col in cls.__table__.columns:
+            for fk in col.foreign_keys:
+                if fk.column.table.name == "users":
+                    continue  # 审计列，不是归属列
+                target = table_to_class.get(fk.column.table.name)
+                if target in owning:
+                    onehop.add(name)
+    return direct | onehop
+
+
+def _byid_org_write_endpoints():
+    """按 id 直取**有归属**主对象的写接口（归属可以隔一跳，见 `_owning_models`）。"""
+    direct = _owning_models()
     guards = {"assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
               "assert_patient_visible", "scope_org_list", "scope_patient_list",
               "log_patient_access"}
@@ -511,6 +560,17 @@ def _byid_org_write_endpoints():
         if name in ("portal.py", "spd/portal.py"):
             continue
         tree = ast.parse(open(path, encoding="utf-8").read())
+        # 本模块内**自己带守卫**的辅助函数：判据按字符串认守卫，把校验抽进
+        # helper（同一判断被三四个端点共用时该抽）会让端点函数体里只剩
+        # `_assert_xxx(...)`，于是明明守住了却被报成没守——这是判据的假阳性，
+        # 不是真欠账。故先扫一遍模块级函数，把"体内含守卫调用"的名字收进来，
+        # 端点调用了它们同样算守住。只跟**一层**：再深就该怀疑守卫藏得太远了。
+        helpers = {
+            n.name for n in tree.body
+            if isinstance(n, ast.FunctionDef)
+            and n.name.startswith("_")
+            and any(g in ast.unparse(n) for g in guards)
+        }
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             decs = [ast.unparse(d) for d in fn.decorator_list]
             if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
@@ -518,6 +578,8 @@ def _byid_org_write_endpoints():
             if not any("{" in d for d in decs):
                 continue
             u = ast.unparse(fn)
+            if any(f"{h}(" in u for h in helpers):
+                continue
             if any(g in u for g in guards):
                 continue
             if any(f"db.get({m}," in u for m in direct):
@@ -552,6 +614,40 @@ def test_按id写接口机构归属欠账不许变长():
     )
     stale = BYID_CROSS_ORG_OK - unguarded
     assert stale == set(), f"这些豁免接口已加了守卫或不存在，应从清单删除：{sorted(stale)}"
+
+
+def test_分母确实覆盖归属隔一跳的对象():
+    """防空转：判据一旦退回"只认自己带 org_id"，这条必须转红。
+
+    钉三个**实测出过洞**的模型——它们的归属都隔一跳，正是既有闸门看不见、
+    要靠人工审计才翻出来的那一族。拿它们当哨兵而不是断言个数：
+    个数会随模型增减漂，而"这三个必须在分母里"是判据的语义本身。
+    """
+    owning = _owning_models()
+    for model in ("InpatientOrder", "ExamReport", "PaymentOrder"):
+        assert model in owning, (
+            f"{model} 的归属隔一跳（分别在 admissions / exam_requests / settlements 上），"
+            "它掉出分母意味着判据退回了只认自带 org_id 的老形状——"
+            "上线前审计正是靠人工才翻出这三个洞的。"
+        )
+
+
+def test_审计列不得被当成归属列():
+    """防空转：`created_by` 这类指向 `users` 的外键必须**不算**归属路径。
+
+    去掉那条排除会怎样：`users` 自己带 org_id，于是任何有 `created_by` 的表
+    都被判成"归属隔一跳可达"，知识库条目、名老中医医案、课件、模拟病例全部
+    涌进分母（实测误报 12 → 23），并推出"只能改本机构人写的知识条目"这种
+    不存在的业务规则。**谁创建的 ≠ 归属谁**。
+
+    拿 `KnowledgeEntry` 当哨兵：它除了 `created_by` 再没有别的外键，
+    是这条排除的纯样本——排除一撤销，它立刻进分母。
+    """
+    owning = _owning_models()
+    assert "KnowledgeEntry" not in owning, (
+        "KnowledgeEntry 只有 created_by 一条外键（指向 users）。它进了分母，"
+        "说明判据把审计列当成了归属列——统一知识库是全域配置，没有机构归属。"
+    )
 
 
 def _patient_scoped_endpoints() -> dict[str, list[str]]:

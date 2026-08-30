@@ -195,16 +195,36 @@ def add_milestone(project_id: int, body: MilestoneIn, db: Session = Depends(get_
     return _milestone_out(milestone, resolve_business_date(None).isoformat())
 
 
+def _assert_milestone_writable(db: Session, user: User, milestone: ProjectMilestone) -> None:
+    """里程碑的归属校验（完成 / 撤销完成共用）。
+
+    `ProjectMilestone` 自己不带 org_id——归属隔一跳挂在 `admin_projects.org_id`
+    上，所以要先取项目再按项目校验。项目不存在时不拦（那是数据不一致，
+    不是越权），交给业务逻辑各自处理。
+    """
+    project = db.get(AdminProject, milestone.project_id)
+    if project is not None:
+        assert_org_writable(db, user, project.org_id)
+
+
 @router.post(
     "/milestones/{milestone_id}/done",
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def complete_milestone(
-    milestone_id: int, done_date: OptionalDateStr = "", db: Session = Depends(get_db)
+    milestone_id: int,
+    done_date: OptionalDateStr = "",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     milestone = db.get(ProjectMilestone, milestone_id)
     if milestone is None:
         raise HTTPException(status_code=404, detail="里程碑不存在")
+    # 归属校验：`ProjectMilestone` 自己不带 org_id，归属隔一跳在
+    # `admin_projects.org_id` 上。此前任一 director/operator 遍历 milestone_id
+    # 就能替别家机构把里程碑标成已完成——项目进度与结项据此判定。
+    # 判定排在状态机之前：先 403，免得用 409 探出别家里程碑的完成状态。
+    _assert_milestone_writable(db, user, milestone)
     if milestone.done:
         raise HTTPException(status_code=409, detail="该里程碑已完成")
     milestone.done = True
@@ -218,11 +238,16 @@ def complete_milestone(
     "/milestones/{milestone_id}/reopen",
     dependencies=[Depends(require_roles("director", "operator"))],
 )
-def reopen_milestone(milestone_id: int, db: Session = Depends(get_db)):
+def reopen_milestone(
+    milestone_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """撤销完成。误点了要能改回来——凡是拦得住的都要放得开。"""
     milestone = db.get(ProjectMilestone, milestone_id)
     if milestone is None:
         raise HTTPException(status_code=404, detail="里程碑不存在")
+    _assert_milestone_writable(db, user, milestone)
     milestone.done = False
     milestone.done_date = ""
     db.commit()

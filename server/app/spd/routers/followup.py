@@ -824,10 +824,21 @@ class QcResultIn(BaseModel):
 
 @router.post("/qc-samples/{sample_id}/result",
              dependencies=[Depends(require_roles("director", "doctor"))])
-def record_qc_result(sample_id: int, body: QcResultIn, db: Session = Depends(get_db)):
+def record_qc_result(
+    sample_id: int,
+    body: QcResultIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     sample = db.get(SpdQcSample, sample_id)
     if sample is None:
         raise HTTPException(status_code=404, detail="抽查记录不存在")
+    # 归属校验：`SpdQcSample` 自己不带 org_id，归属隔一跳在
+    # `spd_followup_records.org_id`（被抽查的那条随访属于哪家机构）。
+    # 质控结论直接进随访质量统计与考核扣分，别家写进来的结论会改别家的分。
+    record = db.get(SpdFollowupRecord, sample.record_id)
+    if record is not None:
+        assert_org_writable(db, user, record.org_id)
     sample.result = body.result
     sample.method = body.method
     sample.note = body.note

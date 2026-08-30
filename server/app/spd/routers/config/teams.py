@@ -144,6 +144,19 @@ class MemberIn(BaseModel):
     can_assess: bool = False
 
 
+def _assert_member_writable(db: Session, user: User, member: SpdTeamMember) -> None:
+    """团队成员的归属校验（改成员 / 删成员共用）。
+
+    `SpdTeamMember` 自己不带 org_id——归属隔一跳挂在 `spd_teams.org_id` 上。
+    慢专病团队本身可以跨科室、跨机构收人，但**团队归哪家机构管**是定死的，
+    改它名下的成员就该由那家机构的配置角色来做。
+    团队不存在时不拦（数据不一致，不是越权）。
+    """
+    team = db.get(SpdTeam, member.team_id)
+    if team is not None:
+        assert_org_writable(db, user, team.org_id)
+
+
 def _team_out(t: SpdTeam, members: int | None = None) -> dict:
     out = {
         "id": t.id, "name": t.name, "org_id": t.org_id, "level": t.level,
@@ -267,10 +280,20 @@ def add_team_member(
 
 @router.patch("/team-members/{member_id}", response_model=TeamMemberUpdatedOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)):
+def update_team_member(
+    member_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     member = db.get(SpdTeamMember, member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="团队成员不存在")
+    # 归属校验：`SpdTeamMember` 自己不带 org_id，归属隔一跳在 `spd_teams.org_id`。
+    # 这一条比"改错一条成员记录"重：body 里可写的键包含五个权限位
+    # （can_view/can_followup/can_referral/can_audit/can_assess），别家机构的
+    # 配置角色遍历 member_id 就能给自己人开权限——这是**权限提升**，不只是越权写。
+    _assert_member_writable(db, user, member)
     for key in ("member_role", "program_codes", "stage_scope", "patient_scope", "can_view",
                 "can_followup", "can_referral", "can_audit", "can_assess", "active"):
         if key in body:
@@ -281,10 +304,15 @@ def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)
 
 @router.delete("/team-members/{member_id}", status_code=204,
                dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def remove_team_member(member_id: int, db: Session = Depends(get_db)):
+def remove_team_member(
+    member_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     member = db.get(SpdTeamMember, member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="团队成员不存在")
+    _assert_member_writable(db, user, member)
     db.delete(member)
     db.commit()
     return Response(status_code=204)

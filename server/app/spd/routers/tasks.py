@@ -194,12 +194,22 @@ class InstanceAdjustIn(BaseModel):
 @router.patch("/path-instances/{instance_id}",
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def adjust_path_instance(
-    instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db)
+    instance_id: int,
+    body: InstanceAdjustIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """个性化调整：改的是**实例**不是模板（服务团队专家端 #2）。"""
     instance = db.get(SpdPathInstance, instance_id)
     if instance is None:
         raise HTTPException(status_code=404, detail="路径实例不存在")
+    # 归属校验：`SpdPathInstance` 自己不带 org_id，归属隔一跳在
+    # `spd_enrollments.org_id`（这条路径是谁在管）。别家机构遍历 instance_id
+    # 就能改本院患者的管理路径——阶段、节点、负责人都在可改字段里。
+    # 判定排在状态机之前：先 403，免得用 409 探出别家路径是不是已完成。
+    enrollment = db.get(SpdEnrollment, instance.enrollment_id)
+    if enrollment is not None:
+        assert_org_writable(db, user, enrollment.org_id)
     if instance.status == "completed":
         raise HTTPException(status_code=409, detail="已完成的路径不可调整")
     data = body.model_dump(exclude_unset=True)
