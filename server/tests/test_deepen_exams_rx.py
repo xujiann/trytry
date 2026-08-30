@@ -194,6 +194,13 @@ def test_critical_closed_loop(client, admin, setup):
     pid, org = setup["adult"]["id"], setup["township"]["id"]
 
     req = _order_exam(client, doc, pid, org, "K-CRIT", "血钾", "lab").json()
+    # 先「领取」再出报告：`dp_doc` 属县医院，而这张单是卫生院开的（共享诊断中心的
+    # 常态）。领取会把 `claimed_org_id` 落成中心机构，中心与该患者的服务关系
+    # 正是靠这一列成立的（visibility._relation_tables 的后缀推导）——平台当初加
+    # 这一列，就是为了修「中心医师写完报告打不开自己写的那份」。
+    # 原先这条用例跳过了领取，于是危急值闭环的三个动作都由一个与该患者
+    # **没有任何服务关系**的县医院医师完成，只是当时闭环上没有归属守卫才绿着。
+    client.post(f"/api/exams/{req['id']}/claim", headers=doc)
     report = client.post(
         f"/api/exams/{req['id']}/report",
         json={"conclusion": "血钾 7.1 mmol/L 危急", "critical": True, "reported_by": "检验科张主任"},

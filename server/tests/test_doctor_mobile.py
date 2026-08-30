@@ -190,13 +190,16 @@ def test_doctor_mobile_tabs_registered_in_js(client):
 
 def test_round_tab_backend_flow(client, admin, setup):
     """查房页用到的三个接口串起来：写病程 → 录体征 → 完整性自查反映变化。"""
-    org = client.post(
-        "/api/organizations",
-        json={"name": "查房演示院", "org_type": "lead_hospital", "level": "county"},
-        headers=admin,
-    ).json()
+    # 病区建在 **m_doctor 所属机构**名下。原先这里另建一家"查房演示院"并把病区
+    # 挂在它下面，而 m_doctor 属于 setup 里的"医生工作台卫生院"——
+    # 于是这个用例一直在做**跨机构写病历**：甲院医师往乙院的住院病历里写病程
+    # 记录、体温单。此前没有归属守卫，一直绿着；分母扩到"归属隔一跳"之后
+    # 才照出来（`admissions.org_id` 正是隔一跳的那一跳）。
+    # 这不是为了让新守卫过关而改测试——是这条用例本身编码了一个越权动作。
     ward = client.post(
-        "/api/inpatient/wards", json={"org_id": org["id"], "name": "查房病区"}, headers=admin
+        "/api/inpatient/wards",
+        json={"org_id": setup["org"]["id"], "name": "查房病区"},
+        headers=admin,
     ).json()
     bed = client.post(
         "/api/inpatient/beds", json={"ward_id": ward["id"], "bed_no": "R01"}, headers=admin
