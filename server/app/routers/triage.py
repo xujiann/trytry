@@ -12,9 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
-from ..database import get_db
 from ..deps import get_current_user
 
 router = APIRouter(
@@ -48,7 +46,7 @@ _TRIAGE_KB = [
 
 
 @router.post("/suggest", response_model=TriageSuggestOut)
-def triage_suggest(symptoms: list[str], db: Session = Depends(get_db)):
+def triage_suggest(symptoms: list[str]):
     """智能导诊：症状匹配推荐科室，急症症状提示急诊。"""
     given = set(symptoms)
     candidates: list[dict[str, Any]] = [
