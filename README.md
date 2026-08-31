@@ -111,7 +111,7 @@
 
 ```bash
 cd server
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt   # dev 含 pytest 等测试工具（生产镜像只装 requirements.lock）
 uvicorn app.main:app --reload      # 启动开发服务器，接口文档见 http://127.0.0.1:8000/docs
 python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过）
 ```

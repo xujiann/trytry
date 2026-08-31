@@ -15,7 +15,8 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  # 门禁：单元 + 冒烟全绿才准出镜像（依赖装 lock，和镜像内完全同版）
+  # 门禁：单元 + 冒烟全绿才准出镜像（运行时依赖装 lock，和镜像内完全同版；
+  # P2-26④ 后 lock 不含测试工具，pytest 由 dev 钉版提供）
   test:
     runs-on: ubuntu-latest
     steps:
@@ -23,8 +24,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install dependencies (locked)
-        run: pip install -r server/requirements.lock
+      - name: Install dependencies (locked, 含开发工具)
+        run: pip install -r server/requirements.lock -r server/requirements-dev.txt
       - name: Run unit + smoke tests
         working-directory: server
         run: python -m pytest tests/ -q -m "not integration and not e2e"

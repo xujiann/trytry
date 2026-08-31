@@ -16,7 +16,7 @@
 
 ```bash
 cd server
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt   # pytest 在 dev（不进生产镜像）
 uvicorn app.main:app --reload      # http://127.0.0.1:8000/  接口文档 /docs
 python -m pytest tests/ -q         # 全量测试（e2e 默认跳过）
 ```
@@ -49,7 +49,7 @@ make verify            # build + lint + typecheck + test-unit（提交前自检�
 9. **新功能必须带测试**（见 §6）。
 10. **改 Bug 尽量带回归测试**。
 11. **不得为了让 CI 变绿而删测试。**
-12. **不得无理由引入新依赖。** 运行时依赖只有 13 项（`server/requirements.txt`），全无 lockfile；新增需在 PR 里说明必要性。
+12. **不得无理由引入新依赖。** 运行时依赖只有 11 项（`server/requirements.txt`；全钉版快照 `requirements.lock` 须随之再生成，见 ADR-0017），测试/开发工具走 `requirements-dev.txt`，不进生产镜像；新增需在 PR 里说明必要性。
 13. **架构级变更需要 ADR**（见 §9）。
 14. **完成前必须跑测试、lint、类型检查**（见 §7）。`make verify` 一把跑全。注意 mypy 必须与项目依赖装在**同一环境**，否则结果是假的——`make typecheck` 会先跑探针拦住这种情况。
 15. **改动范围限定在任务本身**，不顺手重构无关代码。（其正向补充是"童子军法则"，见 §12：在你**已经动到**的代码附近，做小而安全的清理是鼓励的；无关的大重构不是。）

@@ -46,9 +46,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install dependencies (locked)
-        # A7：按 lock 安装——CI 测的和镜像里装的是**同一组版本**，可复现
-        run: pip install -r server/requirements.lock
+      - name: Install dependencies (locked, 含开发工具)
+        # A7：按 lock 安装——CI 测的和镜像里装的是**同一组版本**，可复现。
+        # P2-26④：pytest/pytest-cov 移出运行时依赖后 lock 不再含测试工具，
+        # 本 job 要跑 pytest --cov，故叠加 dev（其中 pytest/pytest-cov 为钉版）；
+        # 运行时各包仍按 lock 钉住（dev 引用的 requirements.txt 区间被 lock 的 == 满足）
+        run: pip install -r server/requirements.lock -r server/requirements-dev.txt
       - name: Run unit + smoke tests with coverage
         working-directory: server
         # 端到端测试（tests/e2e，标记 e2e）默认跳过，需 --e2e 且已安装浏览器内核
