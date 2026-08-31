@@ -257,7 +257,6 @@ async function renderCerts() {
     <div class="panel"><h3>体检记录</h3>${table(["ID", "患者", "套餐", "日期", "结论", "异常"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
        <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
-  await draw();
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
   $("#cert-filter").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("cert_type")); };
   $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };
@@ -267,6 +266,8 @@ async function renderCerts() {
     try { await openPrintPage(`/api/print/certs/${printcert}`); }
     catch (err) { setMsg("#cert-msg", err.message, false); }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await draw();
 }
 
 /* 块3：数据质控（管理员）——规则驱动扫描存量数据，看违规明细与汇总 */
@@ -373,7 +374,6 @@ async function renderEsb() {
       route();
     } catch (err) { setMsg("#esb-flow-msg", err.message, false); }
   };
-  await drawMessages();
   $("#page-body").onclick = async (e) => {
     const { esbproc, esbpayload, esbtoggle, active, esbrotate, esbrun } = e.target.dataset;
     try {
@@ -400,6 +400,8 @@ async function renderEsb() {
       }
     } catch (err) { setMsg("#esb-msg", err.message, false); }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await drawMessages();
 }
 
 const QC_SEVERITY = { error: ["错误", "red"], warn: ["警告", "orange"] };
@@ -453,7 +455,6 @@ async function renderDataQuality() {
     try { await drawViolations(`?${params}`); }
     catch (err) { setMsg("#qc-msg", err.message, false); }
   };
-  await drawViolations();
   $("#page-body").onclick = async (e) => {
     const { qctoggle, active, qcsev, sev } = e.target.dataset;
     try {
@@ -466,6 +467,8 @@ async function renderDataQuality() {
       }
     } catch (err) { setMsg("#qc-msg", err.message, false); }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await drawViolations();
 }
 
 /* 块1：打印模板维护（管理员）——抬头机构名、页脚说明与二维码开关按单据类型配置 */
@@ -532,7 +535,6 @@ async function renderKnowledge() {
         <label style="font-size:13px"><input type="checkbox" name="include_expired"> 含过期</label>
         <button>检索</button></form>
       <div id="kb-table"></div></div>`;
-  await draw();
   const kb = $("#kb-form");
   if (kb) kb.onsubmit = (e) => { e.preventDefault(); postAction("/api/knowledge", formJson(e.target), "#kb-msg"); };
   $("#kb-search").onsubmit = async (e) => {
@@ -559,6 +561,8 @@ async function renderKnowledge() {
       }
     } catch (err) { setMsg("#kb-msg", err.message, false); }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await draw();
 }
 
 /* ================= 块4：细目补齐（合并进既有页面的追加面板） ================= */

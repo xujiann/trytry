@@ -1234,6 +1234,9 @@ async function renderSpdScreen(box) {
     scaleTokenFromQr = "";
   }
   drawItems();
+  // P2-31 例外：提交回调读取 drawItems() 画出的 [data-q] 选项，而 drawItems 又必须等上方
+  // 扫码令牌预选的 await 之后才能画——提前挂会把扫码窗口期的点击从「无反应」变成
+  // 「提交空答卷」，非零行为差。按钮是 type=button，无原生提交路径，窗口期点击无副作用。
   $("#spd-scale").addEventListener("change", drawItems);
   $("#spd-screen-submit").addEventListener("click", async () => {
     const scale = scales.find((s) => s.code === $("#spd-scale").value);

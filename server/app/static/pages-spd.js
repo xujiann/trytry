@@ -244,6 +244,8 @@ async function renderSpdAdmin() {
          <td>${s.status === "running" ? '<span class="tag green">正常</span>'
             : s.status === "delayed" ? '<span class="tag orange">延迟</span>'
             : '<span class="tag red">异常</span>'}</td></tr>`)}</div>`;
+  // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的两个规则编辑器，提前挂会把窗口期提交从
+  // 「兜底无效」变成「TypeError」，非零行为差；窗口期由 shared.js 的 document 层兜底护住。
   const meta = await spdMeta();
   const includeEditor = spdRuleEditor($("#spd-include-rules"), meta, []);
   const excludeEditor = spdRuleEditor($("#spd-exclude-rules"), meta, []);
@@ -632,8 +634,6 @@ async function renderSpdPatients() {
        <td>${v.confirmed ? '<span class="tag green">已确认</span>' : '<span class="tag orange">待确认</span>'}</td>
        <td>${v.confirmed ? "—" : `<button class="btn secondary" data-confirm="${v.id}">确认迁入</button>`}</td></tr>`);
   };
-  await Promise.all([drawScreenings(), drawEnrollments(), drawLifecycle()]);
-
   $("#spd-screen-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/screenings", formJson(e.target, ["patient_id"]), "#spd-screen-msg");
@@ -675,6 +675,8 @@ async function renderSpdPatients() {
         null, "#spd-life-msg");
     }
   };
+  // 取数放最后：以上监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 renderSpdPath）
+  await Promise.all([drawScreenings(), drawEnrollments(), drawLifecycle()]);
   const drawGroups = async () => {
     const groups = await api("/api/spd/groups");
     $("#spd-group-list").innerHTML = table(
@@ -684,6 +686,8 @@ async function renderSpdPatients() {
        <td>${g.member_count ?? "—"}</td></tr>`);
   };
   await drawGroups();
+  // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的 groupEditor，提前挂会把窗口期提交从
+  // 「兜底无效」变成「TypeError」，非零行为差；窗口期由 shared.js 的 document 层兜底护住。
   const meta = await spdMeta();
   const groupEditor = spdRuleEditor($("#spd-group-rules"), meta, []);
   $("#spd-group-form").onsubmit = (e) => {
@@ -946,6 +950,8 @@ async function renderSpdReferral() {
         { opinion: form.opinion }, "#spd-ref-msg");
     }
   };
+  // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的 condEditor，提前挂会把窗口期提交从
+  // 「兜底无效」变成「TypeError」，非零行为差；窗口期由 shared.js 的 document 层兜底护住。
   const meta = await spdMeta();
   const condEditor = spdRuleEditor($("#spd-refrule-rules"), meta, []);
   $("#spd-refrule-form").onsubmit = (e) => {
@@ -1181,8 +1187,6 @@ async function renderSpdFollowup() {
              <button class="btn secondary" data-fu-call="${r.id}" data-pid="${r.patient_id}">转呼叫</button>`
           : "—"}</td></tr>`);
   };
-  await drawRecords();
-
   $("#spd-fuplan-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/followup-plans",
@@ -1226,6 +1230,10 @@ async function renderSpdFollowup() {
       }, "#spd-fu-msg");
     }
   };
+  // 取数放最后：以上监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 renderSpdPath）
+  await drawRecords();
+  // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的 abnormalEditor，提前挂会把窗口期提交从
+  // 「兜底无效」变成「TypeError」，非零行为差；窗口期由 shared.js 的 document 层兜底护住。
   const meta = await spdMeta();
   const abnormalEditor = spdRuleEditor($("#spd-quest-rules"), meta, []);
   $("#spd-quest-form").onsubmit = (e) => {

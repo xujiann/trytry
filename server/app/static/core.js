@@ -716,7 +716,6 @@ async function renderPatients() {
         <select name="scope"><option value="all">全部档案</option><option value="encounter">就诊记录</option><option value="exam">检查报告</option></select>
         <button>校验调阅权限</button></form>
       <p class="msg" id="auth-msg"></p><div id="auth-table"></div></div>`;
-  await draw();
   const SCOPES = { all: "全部档案", encounter: "就诊记录", exam: "检查报告" };
   const drawAuths = async (pid) => {
     const auths = await api(`/api/patients/${pid}/authorizations`);
@@ -768,6 +767,8 @@ async function renderPatients() {
     } catch (err) { setMsg("#patient-msg", err.message, false); }
   };
   $("#patient-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("keyword")); };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await draw();
 }
 
 async function renderDicts() {
@@ -787,7 +788,6 @@ async function renderDicts() {
         <button>新增条目</button>
       </form><p class="msg" id="dict-msg"></p>
       <div id="dict-table"></div></div>`;
-  await draw("diagnosis");
   $("#dict-system").onchange = (e) => draw(e.target.value);
   $("#dict-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -800,6 +800,8 @@ async function renderDicts() {
       await draw(system);
     } catch (err) { setMsg("#dict-msg", err.message, false); }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await draw("diagnosis");
 }
 
 async function renderExams() {

@@ -156,8 +156,9 @@ async function renderAudit() {
     <div class="panel">
       <form class="inline" id="audit-search"><input name="username" placeholder="按用户名过滤"><button>查询</button></form>
       <div id="audit-table"></div></div>`;
-  await draw();
   $("#audit-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("username")); };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await draw();
 }
 
 async function renderAccessLogs() {
@@ -184,10 +185,11 @@ async function renderAccessLogs() {
         <button>查询</button></form>
       <p class="desc">按患者查询会一并留痕——查"谁看过某人"本身也是在看这个人的隐私。</p>
       <div id="al-table"></div></div>`;
-  await draw();
   $("#al-search").onsubmit = async (e) => {
     e.preventDefault(); await draw(formJson(e.target));
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await draw();
 }
 
 async function renderConsents() {
@@ -219,7 +221,6 @@ async function renderConsents() {
     <div class="panel"><h3>更正 / 注销申请（待审核）</h3>
       <p class="desc">通过即按白名单字段执行变更并落审计；拒绝必须填写意见。</p>
       <div id="cr-table"></div><p id="cr-msg"></p></div>`;
-  await drawConsents(); await drawCorrections();
   $("#ct-search").onsubmit = async (e) => { e.preventDefault(); await drawConsents(new FormData(e.target).get("patient_id")); };
   $("#cr-table").onclick = async (e) => {
     const id = e.target.dataset.review; if (!id) return;
@@ -232,6 +233,8 @@ async function renderConsents() {
       await drawCorrections(); setMsg("#cr-msg", "已处理", true);
     } catch (err) { setMsg("#cr-msg", err.message, false); }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await drawConsents(); await drawCorrections();
 }
 
 /* ---------- 通用小工具：表单序列化 + 动作分派 ---------- */
