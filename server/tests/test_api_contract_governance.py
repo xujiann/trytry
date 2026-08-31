@@ -201,7 +201,14 @@ import app.spd.routers as spd_routers
 #   GroupOut/GroupMemberOut 已被占用故命名 OrgGroupOut 等，零改写既有
 #   schema 名。见 test_resources_contract.py / test_projects_contract.py /
 #   test_org_groups_contract.py / test_credentials_contract.py，六处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 125
+# → 100（pharmacy 9 + prescriptions 7 + tcm 9，共 25，零跳过。判断集锦：
+#   stock_quantity/max_daily_dose 是「键恒在值可空」→X|None 非条件键；
+#   daily_dose 等 Float 列钉 float 且真除法与兜底 0.0 两条产地各钉一遍；
+#   expired 是 bool 不得声明 int（0 is False 陷阱）；TcmFormulaOut 避开
+#   analytics 的 FormulaOut 撞名；ADR-0013 汇总/批次同改语义一行未动。
+#   见 test_pharmacy_contract.py / test_prescriptions_contract.py /
+#   test_tcm_contract.py，七处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 100
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -273,6 +280,11 @@ FULLY_GOVERNED = {
     "projects",
     "org_groups",
     "credentials",
+    # 药事三簇（pharmacy 9/prescriptions 7/tcm 9），欠账 125→100 那批，
+    # 见 test_pharmacy_contract.py / test_prescriptions_contract.py / test_tcm_contract.py
+    "pharmacy",
+    "prescriptions",
+    "tcm",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

@@ -84,7 +84,19 @@ def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db)):
     return rule
 
 
-@router.post("/rules/import", dependencies=[Depends(require_admin)])
+class RuleImportOut(BaseModel):
+    imported: int
+    updated: int
+
+
+class RuleActiveOut(BaseModel):
+    """停用/恢复回执同形：编码 + 最新生效位。"""
+
+    drug_code: str
+    active: bool
+
+
+@router.post("/rules/import", response_model=RuleImportOut, dependencies=[Depends(require_admin)])
 def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db)):
     """审方规则批量导入：drug_code 已存在则整条更新，不存在则新建。"""
     imported, updated = 0, 0
@@ -115,7 +127,9 @@ def list_rules(include_inactive: bool = False, db: Session = Depends(get_db)):
     return query.order_by(DrugRule.drug_code).all()
 
 
-@router.delete("/rules/{drug_code}", dependencies=[Depends(require_admin)])
+@router.delete(
+    "/rules/{drug_code}", response_model=RuleActiveOut, dependencies=[Depends(require_admin)]
+)
 def deactivate_rule(drug_code: str, db: Session = Depends(get_db)):
     """停用规则（不删行）。
 
@@ -133,7 +147,11 @@ def deactivate_rule(drug_code: str, db: Session = Depends(get_db)):
     return {"drug_code": drug_code, "active": False}
 
 
-@router.post("/rules/{drug_code}/reactivate", dependencies=[Depends(require_admin)])
+@router.post(
+    "/rules/{drug_code}/reactivate",
+    response_model=RuleActiveOut,
+    dependencies=[Depends(require_admin)],
+)
 def reactivate_rule(drug_code: str, db: Session = Depends(get_db)):
     rule = db.query(DrugRule).filter(DrugRule.drug_code == drug_code).first()
     if rule is None:
@@ -278,7 +296,38 @@ class RxCommentCreate(BaseModel):
     comment: str = ""
 
 
-@router.get("/{prescription_id}/review-points", dependencies=[Depends(get_current_user)])
+class ReviewPointItemOut(BaseModel):
+    """逐药点评要点行。`daily_dose`/`max_daily_dose` 是 **Float 列**
+    （`prescription_items.daily_dose` / `drug_rules.max_daily_dose`）：整数入参 4
+    落库读回就是 4.0，声明 float 才是原样——与 Money 列相反。
+    无规则时上限为 null（键恒在值可空），单位与要点回落空串。"""
+
+    drug_code: str
+    drug_name: str
+    daily_dose: float
+    max_daily_dose: float | None
+    dose_unit: str
+    dose_exceeded: bool
+    review_points: str
+    renal_hepatic_note: str
+    no_rule: bool
+
+
+class ReviewPointsOut(BaseModel):
+    prescription_id: int
+    diagnosis_name: str
+    status: str
+    system_review_comment: str
+    items: list[ReviewPointItemOut]
+    # 两条产地（round(x*100.0/n, 2) 与空方兜底字面量 0.0）都是浮点
+    rule_coverage_pct: float
+
+
+@router.get(
+    "/{prescription_id}/review-points",
+    response_model=ReviewPointsOut,
+    dependencies=[Depends(get_current_user)],
+)
 def prescription_review_points(prescription_id: int, db: Session = Depends(get_db)):
     """块2：处方点评规则化——按处方内药品汇总规则库点评要点与肝肾功能提示。
 
@@ -320,8 +369,31 @@ def prescription_review_points(prescription_id: int, db: Session = Depends(get_d
     }
 
 
+class RxCommentCreatedOut(BaseModel):
+    id: int
+    prescription_id: int
+    grade: str
+
+
+class RxCommentOut(BaseModel):
+    id: int
+    prescription_id: int
+    grade: str
+    issues: str
+    comment: str
+    at: str
+
+
+class RxCommentStatsOut(BaseModel):
+    commented: int
+    unreasonable: int
+    # 两条产地（真除法 *100.0 与零点评兜底字面量 0.0）都是浮点
+    reasonable_rate_pct: float
+
+
 @router.post(
     "/{prescription_id}/comment-review",
+    response_model=RxCommentCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("pharmacist"))],  # 处方点评=药师
 )
@@ -346,7 +418,11 @@ def comment_prescription(
     return {"id": record.id, "prescription_id": prescription_id, "grade": record.grade}
 
 
-@router.get("/comment-reviews", dependencies=[Depends(get_current_user)])
+@router.get(
+    "/comment-reviews",
+    response_model=list[RxCommentOut],
+    dependencies=[Depends(get_current_user)],
+)
 def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)):
     q = db.query(PrescriptionComment)
     if grade:
@@ -364,7 +440,9 @@ def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)
     ]
 
 
-@router.get("/comment-stats", dependencies=[Depends(get_current_user)])
+@router.get(
+    "/comment-stats", response_model=RxCommentStatsOut, dependencies=[Depends(get_current_user)]
+)
 def comment_stats(db: Session = Depends(get_db)):
     """点评统计：点评覆盖数、合理率（事后监管口径）。"""
     total = db.query(func.count(PrescriptionComment.id)).scalar() or 0

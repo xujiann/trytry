@@ -309,7 +309,23 @@ def transfer_stock(
     return dest
 
 
-@router.get("/purchase-suggestions", dependencies=[Depends(get_current_user)])
+class PurchaseSuggestionOut(BaseModel):
+    """采购建议行。`usage_30d` 唯一产地是 `float(row.usage or 0)`——整数用量也以
+    30.0 出参，声明 float 才是原样；库存与建议量是 Integer 列/int() 取整，恒 int
+    （契约取证见 tests/test_pharmacy_contract.py）。"""
+
+    drug_code: str
+    drug_name: str
+    usage_30d: float
+    current_stock: int
+    suggested_quantity: int
+
+
+@router.get(
+    "/purchase-suggestions",
+    response_model=list[PurchaseSuggestionOut],
+    dependencies=[Depends(get_current_user)],
+)
 def purchase_suggestions(db: Session = Depends(get_db)):
     """采购建议：近30天处方用药量与全网当前库存差值为正的品种清单。
 
@@ -714,8 +730,25 @@ class SupplierCreate(BaseModel):
     license_no: str = ""
 
 
+class SupplierCreatedOut(BaseModel):
+    """建档回执：只回三键（与清单行不同形，不硬套一个模型）。"""
+
+    id: int
+    name: str
+    active: bool
+
+
+class SupplierOut(BaseModel):
+    id: int
+    name: str
+    contact: str
+    license_no: str
+    active: bool
+
+
 @router.post(
     "/suppliers",
+    response_model=SupplierCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # 供应商建档
 )
@@ -726,7 +759,9 @@ def create_supplier(body: SupplierCreate, db: Session = Depends(get_db)):
     return {"id": supplier.id, "name": supplier.name, "active": supplier.active}
 
 
-@router.get("/suppliers", dependencies=[Depends(get_current_user)])
+@router.get(
+    "/suppliers", response_model=list[SupplierOut], dependencies=[Depends(get_current_user)]
+)
 def list_suppliers(db: Session = Depends(get_db)):
     return [
         {
@@ -750,8 +785,39 @@ class PurchaseCreate(BaseModel):
     note: str = ""
 
 
+class PurchaseOrderActionOut(BaseModel):
+    """申请/审批回执同形：只回单号与最新状态。"""
+
+    id: int
+    status: str
+
+
+class PurchaseReceiveOut(BaseModel):
+    """验收回执：药品自动入库后回最新汇总量；非药品（material）该键为 null。
+
+    `stock_quantity` 是"键恒在值可空"，不是条件键——`DrugStock.quantity` 是
+    Integer 列，声明成 float 会把 50 印成 50.0。
+    """
+
+    id: int
+    status: str
+    stock_quantity: int | None
+
+
+class PurchaseOrderOut(BaseModel):
+    id: int
+    org_id: int
+    supplier_id: int
+    item_type: str
+    item_code: str
+    item_name: str
+    quantity: int
+    status: str
+
+
 @router.post(
     "/purchase-orders",
+    response_model=PurchaseOrderActionOut,
     status_code=201,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 采购申请
 )
@@ -772,6 +838,7 @@ def create_purchase(
 
 @router.post(
     "/purchase-orders/{order_id}/approve",
+    response_model=PurchaseOrderActionOut,
     dependencies=[Depends(require_roles("director"))],  # 采购审批=管理层
 )
 def approve_purchase(
@@ -794,6 +861,7 @@ def approve_purchase(
 
 @router.post(
     "/purchase-orders/{order_id}/receive",
+    response_model=PurchaseReceiveOut,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 到货验收
 )
 def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -857,7 +925,11 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = 
     return {"id": order.id, "status": order.status, "stock_quantity": stock_qty}
 
 
-@router.get("/purchase-orders", dependencies=[Depends(get_current_user)])
+@router.get(
+    "/purchase-orders",
+    response_model=list[PurchaseOrderOut],
+    dependencies=[Depends(get_current_user)],
+)
 def list_purchases(
     status: str | None = None,
     org_id: int | None = None,
@@ -890,8 +962,28 @@ class StockTakeCreate(BaseModel):
     note: str = ""
 
 
+class StockTakeCreatedOut(BaseModel):
+    """盘点回执：账面/实盘/差异（Integer 列，盘亏为负 int）。"""
+
+    id: int
+    book_qty: int
+    actual_qty: int
+    diff: int
+
+
+class StockTakeOut(BaseModel):
+    id: int
+    org_id: int
+    drug_code: str
+    book_qty: int
+    actual_qty: int
+    diff: int
+    note: str
+
+
 @router.post(
     "/stock-takes",
+    response_model=StockTakeCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 盘点
 )
@@ -953,7 +1045,9 @@ def create_stock_take(
     }
 
 
-@router.get("/stock-takes", dependencies=[Depends(get_current_user)])
+@router.get(
+    "/stock-takes", response_model=list[StockTakeOut], dependencies=[Depends(get_current_user)]
+)
 def list_stock_takes(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     q = db.query(StockTake)
     q = scope_org_list(db, user, q, StockTake, org_id)
