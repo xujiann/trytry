@@ -36,7 +36,7 @@
 | P1-6 | create_all 与 alembic 双轨，部署产物无一执行迁移；README `upgrade head` 单数在双 head 下失败且漏 spd 59 表 | ✅ 已修（ADR-0002 已实施：生产跳过 create_all `main.py:123-128`，守卫 `tests/test_adr0002_create_all_guard.py`；`start.sh:15` 启动前 `alembic upgrade heads`（多实例走 `MEDPLAT_MIGRATE_ON_START=0` 由发布流程单独跑，`start.sh:10-13`）；README:202 已改复数 heads） |
 | P1-7 | 分布式锁可被误删（`_release_lock` 无条件 DELETE 不校验持有者，任务超 300s TTL 时删别实例的锁） | ✅ 已修（释放走 Lua"值等于本实例 token 才删"原子比对 `scheduler.py:52-57`，`_release_lock` `:125-130`；续期同口径防续别人的锁 `:59-63`；`tests/test_scheduler_lock.py` + CI 真 Redis 验 Lua 语义 `ci.yml:37-43`） |
 | P1-8 | 审计中间件全局串行点：每写请求新开 Session+读哈希+insert，无 `FOR UPDATE`，PG 高并发哈希链静默分叉；无 try/except（审计失败使业务 500） | ✅ 已修（阶段十四 P2：PG 咨询锁 + SQLite 进程锁 + try/except 兜底，test_audit_middleware_hardening.py） |
-| P1-9 | startup 重量级种子化**仍无锁、种子块仍无 try 兜底**（部分缓解：种子已全部幂等"只增不改"（查已有 code 再 add）；ADR-0002 后生产不再 create_all；PII 索引自检有 try 兜底 `main.py:269-274`）。残余风险：十余个种子块一步抛错即启动失败；"查-插"非原子，多实例同时对空库首启会在 unique(code)（如 `code_systems.code`，`models/core.py:195`）上撞 IntegrityError 把后到实例的启动打崩 | `main.py:121-292` |
+| P1-9 | ~~startup 重量级种子化仍无锁、种子块仍无 try 兜底~~ —— ✅ 已修 2026-08-31：①逐块隔离 `_seed_step`（14 具名块进循环 + rbac 两步）——一条脏种子从「全站起不来」降级为「缺那块参考数据启动 + ERROR 点名」；②多实例空库首启竞态双防——PG 上 `pg_advisory_lock` 把种子阶段跨实例串行化（锁挂**专用连接**：种子有十几次 commit，事务锁/Session 会话锁两条歪路都拿不住），撞 unique 按「另一实例已先种好」rollback 继续。`tests/test_startup_seed_hardening.py` 七条，三处变异验证转红 | `main.py` lifespan |
 | P1-10 | JobRun 表无清理任务，无界增长 | ✅ 已修（阶段十三 R：jobrun_cleanup 按保留期清理） |
 
 ### 重复实现 / 边界

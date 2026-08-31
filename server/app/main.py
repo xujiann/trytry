@@ -117,6 +117,40 @@ from .deps import token_for_audit
 from .models import AuditLog
 from .security import decode_token, hash_password
 
+# ---- 启动种子化的加固（P1-9） ----
+# 两条历史风险，各一根柱子：
+# 1. **多实例空库首启的查-插竞态**：种子全是"查已有 code 再 add"，两个实例同时
+#    对空库启动，都看到"没有"、都插，慢的那个撞 unique(code) 崩掉启动。
+#    → PG 上用 advisory lock 把整个种子阶段跨实例串行化（与审计链同一先例）。
+#    锁拿在**专用连接**上而不是种子用的 Session：种子有十几次 commit——事务级
+#    锁在第一次 commit 就没了，Session 上的会话级锁在 commit 归还连接池后就
+#    不在同一条连接上了。SQLite 是单写者文件且生产已被 config 拒启，无需锁。
+# 2. **一条脏种子 = 全站不可用**：任何一块抛错，此前会把整个启动打死。
+#    → 逐块隔离（_seed_step）：参考数据缺一块是**降级**（记 ERROR，运维看日志
+#    补），起不来才是事故。IntegrityError 单独分流——那是竞态窗口里别的实例
+#    先种成功了，rollback 后按"已种好"继续，不算失败。
+_SEED_PG_LOCK_KEY = 0x53454544  # ASCII "SEED"，与审计链的 0x41554449 互不冲突
+_seed_logger = logging.getLogger("medplat.seed")
+
+
+def _seed_step(db, name: str, step) -> None:
+    """跑一个种子块，按上面注释里的双柱策略兜错。块内自带 commit。"""
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        step()
+    except IntegrityError:
+        with contextlib.suppress(Exception):
+            db.rollback()
+        _seed_logger.info("种子块「%s」撞唯一键——另一实例已先种好，按已完成继续", name)
+    except Exception:  # noqa: BLE001 - 见上：缺参考数据是降级，起不来是事故
+        with contextlib.suppress(Exception):
+            db.rollback()
+        _seed_logger.error(
+            "种子块「%s」失败，跳过——平台以缺这部分参考数据的状态启动，请按日志修复后重启补种",
+            name, exc_info=True,
+        )
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -126,139 +160,195 @@ async def lifespan(_: FastAPI):
     # 零配置起库。
     if not settings.is_production:
         Base.metadata.create_all(bind=engine)
+    # 多实例串行化（见 _seed_step 上方注释）：锁挂在专用连接上，覆盖整个种子阶段
+    seed_lock_conn = None
+    if engine.dialect.name == "postgresql":  # pragma: no cover - 需真实 PG
+        seed_lock_conn = engine.connect()
+        seed_lock_conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": _SEED_PG_LOCK_KEY})
     db = SessionLocal()
     try:
-        if db.query(User).filter(User.username == "admin").first() is None:
-            # 公网部署时通过 MEDPLAT_ADMIN_PASSWORD 指定初始密码，避免默认口令暴露
-            initial_password = settings.admin_password
-            db.add(
-                User(
-                    username="admin",
-                    password_hash=hash_password(initial_password),
-                    full_name="平台管理员",
-                    role="admin",
-                )
-            )
-            db.commit()
-        # M5 整改：字典基础数据（CodeSystem）启动时种子化，读路径不再产生写副作用
-        from .models import CodeSystem
-        from .routers.dictionaries import SYSTEM_CODES
 
-        existing_codes = {code for (code,) in db.query(CodeSystem.code).all()}
-        for code, name in SYSTEM_CODES.items():
-            if code not in existing_codes:
-                db.add(CodeSystem(code=code, name=name))
-        db.commit()
-        # 块3：标准字典种子扩充——常用 ICD-10 诊断 100 条 + 常用药品 50 条（幂等）
-        from .dict_seed import SEED_COMMON_DRUGS, SEED_ICD10_DIAGNOSES
-        from .models import CodeEntry
-
-        for system_code, seed_entries in (
-            ("diagnosis", SEED_ICD10_DIAGNOSES),
-            ("drug", SEED_COMMON_DRUGS),
-        ):
-            system = db.query(CodeSystem).filter(CodeSystem.code == system_code).first()
-            if system is None:  # pragma: no cover - 上一块刚种过，查不到只可能是被并发删了
-                continue
-            existing_entries = {
-                code
-                for (code,) in db.query(CodeEntry.code)
-                .filter(CodeEntry.system_id == system.id)
-                .all()
-            }
-            for code, name in seed_entries:
-                if code not in existing_entries:
-                    db.add(CodeEntry(system_id=system.id, code=code, name=name))
-        db.commit()
-        # 深化轮：绩效指标目录种子化（现有5维权重入表，管理层可调）
-        from .models import PerformanceIndicator
-        from .routers.performance import DEFAULT_INDICATORS
-
-        existing_keys = {key for (key,) in db.query(PerformanceIndicator.key).all()}
-        for key, meta in DEFAULT_INDICATORS.items():
-            if key not in existing_keys:
+        def _seed_admin():
+            if db.query(User).filter(User.username == "admin").first() is None:
+                # 公网部署时通过 MEDPLAT_ADMIN_PASSWORD 指定初始密码，避免默认口令暴露
+                initial_password = settings.admin_password
                 db.add(
-                    PerformanceIndicator(
-                        key=key, name=meta["name"], weight=meta["weight"], active=True
+                    User(
+                        username="admin",
+                        password_hash=hash_password(initial_password),
+                        full_name="平台管理员",
+                        role="admin",
                     )
                 )
-        db.commit()
-        # 深化轮：法定传染病目录种子化（甲类2小时/乙丙类24小时报告时限）
-        from .models import InfectiousDisease
-        from .routers.infectious import SEED_DISEASES
+                db.commit()
 
-        existing_diseases = {code for (code,) in db.query(InfectiousDisease.code).all()}
-        for seed in SEED_DISEASES:
-            if seed["code"] not in existing_diseases:
-                db.add(InfectiousDisease(**seed))
-        db.commit()
-        # 块2：审方规则库种子化（50 条常用药品规则，幂等；已存在编码不覆盖本地调整）
-        from .data.drug_rules_seed import SEED_DRUG_RULES
-        from .models import DrugRule
+        def _seed_code_systems():
+            # M5 整改：字典基础数据（CodeSystem）启动时种子化，读路径不再产生写副作用
+            from .models import CodeSystem
+            from .routers.dictionaries import SYSTEM_CODES
 
-        existing_rules = {code for (code,) in db.query(DrugRule.drug_code).all()}
-        for seed in SEED_DRUG_RULES:
-            if seed["drug_code"] not in existing_rules:
-                db.add(DrugRule(**seed))
-        db.commit()
-        # 块1：慢病病种目录种子化（8 个县域重点病种，含分级规则/指导要点/随访周期）
-        from .chronic_seed import SEED_CHRONIC_DISEASE_TYPES
-        from .models import ChronicDiseaseType
+            existing_codes = {code for (code,) in db.query(CodeSystem.code).all()}
+            for code, name in SYSTEM_CODES.items():
+                if code not in existing_codes:
+                    db.add(CodeSystem(code=code, name=name))
+            db.commit()
 
-        existing_chronic_types = {code for (code,) in db.query(ChronicDiseaseType.code).all()}
-        for seed in SEED_CHRONIC_DISEASE_TYPES:
-            if seed["code"] not in existing_chronic_types:
-                db.add(ChronicDiseaseType(**seed))
-        db.commit()
-        # M12/块3：DRG 分组目录种子化（62 个县域常见组 + QY 兜底组，admin 可调权）
-        from .data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
-        from .models import DrgGroup
+        def _seed_code_entries():
+            # 块3：标准字典种子扩充——常用 ICD-10 诊断 100 条 + 常用药品 50 条（幂等）
+            from .dict_seed import SEED_COMMON_DRUGS, SEED_ICD10_DIAGNOSES
+            from .models import CodeEntry, CodeSystem
 
-        existing_drgs = {code for (code,) in db.query(DrgGroup.code).all()}
-        for seed in [*SEED_DRG_GROUPS, FALLBACK_DRG_GROUP]:
-            if seed["code"] not in existing_drgs:
-                db.add(DrgGroup(**seed))
-        db.commit()
-        # 块3：数据质控规则种子化（15 条，幂等；已存在编码不覆盖本地调整）
-        from .data.qc_rules_seed import SEED_QC_RULES
-        from .models import QcRule
+            for system_code, seed_entries in (
+                ("diagnosis", SEED_ICD10_DIAGNOSES),
+                ("drug", SEED_COMMON_DRUGS),
+            ):
+                system = db.query(CodeSystem).filter(CodeSystem.code == system_code).first()
+                if system is None:  # pragma: no cover - 上一块刚种过，查不到只可能是被并发删了
+                    continue
+                existing_entries = {
+                    code
+                    for (code,) in db.query(CodeEntry.code)
+                    .filter(CodeEntry.system_id == system.id)
+                    .all()
+                }
+                for code, name in seed_entries:
+                    if code not in existing_entries:
+                        db.add(CodeEntry(system_id=system.id, code=code, name=name))
+            db.commit()
 
-        existing_qc = {code for (code,) in db.query(QcRule.code).all()}
-        for qc_rule in SEED_QC_RULES:
-            if qc_rule["code"] not in existing_qc:
-                db.add(QcRule(**qc_rule))
-        db.commit()
-        # 块2：病历环节质控规则种子化（12 条，幂等；已存在编码不覆盖本地调整）
-        from .data.record_qc_rules_seed import SEED_RECORD_QC_RULES
-        from .models import RecordQcRule
+        def _seed_performance_indicators():
+            # 深化轮：绩效指标目录种子化（现有5维权重入表，管理层可调）
+            from .models import PerformanceIndicator
+            from .routers.performance import DEFAULT_INDICATORS
 
-        existing_mrqc = {code for (code,) in db.query(RecordQcRule.code).all()}
-        for record_qc_rule in SEED_RECORD_QC_RULES:
-            if record_qc_rule["code"] not in existing_mrqc:
-                db.add(RecordQcRule(**record_qc_rule))
-        db.commit()
-        # T3.1：会计科目种子（医院会计制度常用一级科目，幂等；不覆盖本地调整）
-        from .data.account_subjects_seed import SEED_ACCOUNT_SUBJECTS
-        from .models import AccountSubject
+            existing_keys = {key for (key,) in db.query(PerformanceIndicator.key).all()}
+            for key, meta in DEFAULT_INDICATORS.items():
+                if key not in existing_keys:
+                    db.add(
+                        PerformanceIndicator(
+                            key=key, name=meta["name"], weight=meta["weight"], active=True
+                        )
+                    )
+            db.commit()
 
-        existing_subjects = {code for (code,) in db.query(AccountSubject.code).all()}
-        for subject in SEED_ACCOUNT_SUBJECTS:
-            if subject["code"] not in existing_subjects:
-                db.add(AccountSubject(**subject))
-        db.commit()
-        # 全域慢专病子系统：病种规则、管理目标、筛查量表、考核指标、积分规则、
-        # 随访方案与问卷、报告模板（幂等，按编码不覆盖现场调过的参数）；
-        # 子系统未启用时这一步什么都不做
-        seed_spd(db)
-        # E2 个保法：知情同意文本按场景各种一版默认文本（幂等只增，不覆盖现场修订）
-        from .routers.consents import seed_consent_texts
+        def _seed_infectious_diseases():
+            # 深化轮：法定传染病目录种子化（甲类2小时/乙丙类24小时报告时限）
+            from .models import InfectiousDisease
+            from .routers.infectious import SEED_DISEASES
 
-        seed_consent_texts(db)
-        # T1.1：把代码中注册的定时任务同步进库（幂等，不覆盖运维调过的参数）
-        from . import jobs as _jobs  # noqa: F401 - 导入即完成任务注册
-        from .scheduler import scheduler_loop, sync_registry
+            existing_diseases = {code for (code,) in db.query(InfectiousDisease.code).all()}
+            for seed in SEED_DISEASES:
+                if seed["code"] not in existing_diseases:
+                    db.add(InfectiousDisease(**seed))
+            db.commit()
 
-        sync_registry(db)
+        def _seed_drug_rules():
+            # 块2：审方规则库种子化（50 条常用药品规则，幂等；已存在编码不覆盖本地调整）
+            from .data.drug_rules_seed import SEED_DRUG_RULES
+            from .models import DrugRule
+
+            existing_rules = {code for (code,) in db.query(DrugRule.drug_code).all()}
+            for seed in SEED_DRUG_RULES:
+                if seed["drug_code"] not in existing_rules:
+                    db.add(DrugRule(**seed))
+            db.commit()
+
+        def _seed_chronic_types():
+            # 块1：慢病病种目录种子化（8 个县域重点病种，含分级规则/指导要点/随访周期）
+            from .chronic_seed import SEED_CHRONIC_DISEASE_TYPES
+            from .models import ChronicDiseaseType
+
+            existing_chronic_types = {
+                code for (code,) in db.query(ChronicDiseaseType.code).all()
+            }
+            for seed in SEED_CHRONIC_DISEASE_TYPES:
+                if seed["code"] not in existing_chronic_types:
+                    db.add(ChronicDiseaseType(**seed))
+            db.commit()
+
+        def _seed_drg_groups():
+            # M12/块3：DRG 分组目录种子化（62 个县域常见组 + QY 兜底组，admin 可调权）
+            from .data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
+            from .models import DrgGroup
+
+            existing_drgs = {code for (code,) in db.query(DrgGroup.code).all()}
+            for seed in [*SEED_DRG_GROUPS, FALLBACK_DRG_GROUP]:
+                if seed["code"] not in existing_drgs:
+                    db.add(DrgGroup(**seed))
+            db.commit()
+
+        def _seed_qc_rules():
+            # 块3：数据质控规则种子化（15 条，幂等；已存在编码不覆盖本地调整）
+            from .data.qc_rules_seed import SEED_QC_RULES
+            from .models import QcRule
+
+            existing_qc = {code for (code,) in db.query(QcRule.code).all()}
+            for qc_rule in SEED_QC_RULES:
+                if qc_rule["code"] not in existing_qc:
+                    db.add(QcRule(**qc_rule))
+            db.commit()
+
+        def _seed_record_qc_rules():
+            # 块2：病历环节质控规则种子化（12 条，幂等；已存在编码不覆盖本地调整）
+            from .data.record_qc_rules_seed import SEED_RECORD_QC_RULES
+            from .models import RecordQcRule
+
+            existing_mrqc = {code for (code,) in db.query(RecordQcRule.code).all()}
+            for record_qc_rule in SEED_RECORD_QC_RULES:
+                if record_qc_rule["code"] not in existing_mrqc:
+                    db.add(RecordQcRule(**record_qc_rule))
+            db.commit()
+
+        def _seed_account_subjects():
+            # T3.1：会计科目种子（医院会计制度常用一级科目，幂等；不覆盖本地调整）
+            from .data.account_subjects_seed import SEED_ACCOUNT_SUBJECTS
+            from .models import AccountSubject
+
+            existing_subjects = {code for (code,) in db.query(AccountSubject.code).all()}
+            for subject in SEED_ACCOUNT_SUBJECTS:
+                if subject["code"] not in existing_subjects:
+                    db.add(AccountSubject(**subject))
+            db.commit()
+
+        def _seed_spd_subsystem():
+            # 全域慢专病子系统：病种规则、管理目标、筛查量表、考核指标、积分规则、
+            # 随访方案与问卷、报告模板（幂等，按编码不覆盖现场调过的参数）；
+            # 子系统未启用时这一步什么都不做
+            seed_spd(db)
+
+        def _seed_consent_texts_step():
+            # E2 个保法：知情同意文本按场景各种一版默认文本（幂等只增，不覆盖现场修订）
+            from .routers.consents import seed_consent_texts
+
+            seed_consent_texts(db)
+
+        def _seed_job_registry():
+            # T1.1：把代码中注册的定时任务同步进库（幂等，不覆盖运维调过的参数）
+            from . import jobs as _jobs_reg  # noqa: F401 - 导入即完成任务注册
+            from .scheduler import sync_registry
+
+            sync_registry(db)
+
+        # 顺序即依赖：字典系统在字典条目之前。逐块隔离的策略见 _seed_step。
+        for step_name, step_fn in (
+            ("管理员账号", _seed_admin),
+            ("字典系统", _seed_code_systems),
+            ("字典条目", _seed_code_entries),
+            ("绩效指标", _seed_performance_indicators),
+            ("法定传染病目录", _seed_infectious_diseases),
+            ("审方规则库", _seed_drug_rules),
+            ("慢病病种目录", _seed_chronic_types),
+            ("DRG 分组目录", _seed_drg_groups),
+            ("数据质控规则", _seed_qc_rules),
+            ("病历质控规则", _seed_record_qc_rules),
+            ("会计科目", _seed_account_subjects),
+            ("慢专病子系统", _seed_spd_subsystem),
+            ("知情同意文本", _seed_consent_texts_step),
+            ("定时任务注册", _seed_job_registry),
+        ):
+            _seed_step(db, step_name, step_fn)
+        from . import jobs as _jobs  # noqa: F401 - PII 探针与调度循环仍需该模块
+        from .scheduler import scheduler_loop
         # PII 检索索引自检（启动期探一次；日常由 jobs.pii_index_health 定时跑）。
         # 放在启动期是因为索引破损的两条来路都发生在**部署那一刻**：迁移拿默认
         # 密钥算索引、或库已加密后重跑迁移把密文行整片跳过——等到 24 小时后的
@@ -276,10 +366,17 @@ async def lifespan(_: FastAPI):
         # 手工维护的权限点清单与真实接口的偏差，是这类系统最难查的问题之一。
         from .routers.rbac import seed_builtin_roles, sync_permissions
 
-        seed_builtin_roles(db)
-        sync_permissions(app, db)
+        _seed_step(db, "内置角色", lambda: seed_builtin_roles(db))
+        _seed_step(db, "权限点登记", lambda: sync_permissions(app, db))
     finally:
         db.close()
+        if seed_lock_conn is not None:  # pragma: no cover - 需真实 PG
+            with contextlib.suppress(Exception):
+                seed_lock_conn.execute(
+                    text("SELECT pg_advisory_unlock(:key)"), {"key": _SEED_PG_LOCK_KEY}
+                )
+            with contextlib.suppress(Exception):
+                seed_lock_conn.close()
 
     # 后台调度循环随应用启停；测试用 TestClient 也会走到这里，
     # 但首个 tick 在 30 秒后，单测早已结束，不会产生干扰。
