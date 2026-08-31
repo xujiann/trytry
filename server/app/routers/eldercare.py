@@ -68,7 +68,55 @@ def list_assessments(patient_id: int | None = None, care_level: str | None = Non
     return query.order_by(ElderlyAssessment.id.desc()).limit(200).all()
 
 
-@router.get("/disabled")
+class DisabledElderOut(BaseModel):
+    """失能老人清单行（每人取最新一次评估）。"""
+
+    patient_id: int
+    care_level: str
+    adl_score: int
+
+
+class EldercareAlertOut(BaseModel):
+    patient_id: int
+    alert_type: str
+    message: str
+    assessed_date: str
+
+
+class EldercareAlertsOut(BaseModel):
+    total: int
+    alerts: list[EldercareAlertOut]
+
+
+class EldercareCognitiveOut(BaseModel):
+    """认知筛查小结。`avg_score` 是真除法派生：有筛查必 float、无人筛查为 null
+    （键恒在值可空，非条件键）。"""
+
+    screened: int
+    unscreened: int
+    avg_score: float | None
+
+
+class EldercareTcmOut(BaseModel):
+    done: int
+    not_done: int
+
+
+class EldercareStatsOut(BaseModel):
+    """老年健康统计。`by_care_level` 键是失能等级中文名、随数据变 → 宽 dict；
+    `disabled_rate_pct` 真除法派生：有人必 float、无人为 null。"""
+
+    assessed_people: int
+    assessment_records: int
+    by_care_level: dict[str, int]
+    disabled_count: int
+    disabled_rate_pct: float | None
+    cognitive: EldercareCognitiveOut
+    tcm_constitution: EldercareTcmOut
+    caliber: str
+
+
+@router.get("/disabled", response_model=list[DisabledElderOut])
 def disabled_elderly(db: Session = Depends(get_db)):
     """失能老人清单（每人取最新一次评估），供上门服务与家庭病床对接。"""
     latest: dict[int, ElderlyAssessment] = {}
@@ -81,7 +129,7 @@ def disabled_elderly(db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=EldercareAlertsOut)
 def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
     """㉓老年健康预警/智能提醒：重度失能专案提示 + 年度评估到期复评提醒。"""
     from datetime import timedelta
@@ -116,7 +164,7 @@ def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
     return {"total": len(alerts), "alerts": alerts}
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=EldercareStatsOut)
 def eldercare_stats(db: Session = Depends(get_db)):
     """老年健康统计（指引㉓"统计分析"）。
 

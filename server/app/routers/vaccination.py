@@ -1,5 +1,5 @@
 """㉕疫苗接种业务协同：接种记录、禁忌管理、接种前综合评估。"""
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -159,8 +159,44 @@ def _contra_out(c: VaccineContraindication, today: str) -> dict:
     }
 
 
+class ContraindicationOut(BaseModel):
+    """禁忌出参——`_contra_out` 的如实镜像（登记回执/清单行/解除回执/
+    pre-check 的 inactive 行同一产地，共用一个模型）。
+
+    - `valid_until` 是 `String(10)` 非空列：空串=无期限须人工解除，恒 str 非 null；
+    - `lifted_at` 是 `DateTime` 可空列且**不经手工 isoformat 直接透出**：未解除
+      为 null，解除后序列化为 ISO 串（与 jsonable_encoder 字节一致，医废
+      `stored_at` 同款先例）；
+    - `expired`/`blocking` 由日期现算不落库（见 `_effective_contraindications`）。
+    """
+
+    id: int
+    patient_id: int
+    vaccine_code: str
+    reason: str
+    contra_type: str
+    status: str
+    valid_until: str
+    expired: bool
+    blocking: bool
+    lift_reason: str
+    lifted_at: datetime | None
+
+
+class PreVaccinationCheckOut(BaseModel):
+    """接种前综合评估。`contraindications` 是**生效禁忌的 reason 字符串列表**，
+    与 `inactive_contraindications` 的整行不同形——两者别合并成一个形状。"""
+
+    allowed: bool
+    contraindications: list[str]
+    inactive_contraindications: list[ContraindicationOut]
+    previous_doses: int
+    next_dose_no: int
+
+
 @router.post(
     "/contraindications",
+    response_model=ContraindicationOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 禁忌登记
 )
@@ -181,7 +217,7 @@ def add_contraindication(body: ContraCreate, db: Session = Depends(get_db)):
     return _contra_out(contra, date.today().isoformat())
 
 
-@router.get("/contraindications")
+@router.get("/contraindications", response_model=list[ContraindicationOut])
 def list_contraindications(
     patient_id: int,
     vaccine_code: str | None = None,
@@ -210,6 +246,7 @@ def list_contraindications(
 
 @router.post(
     "/contraindications/{contra_id}/lift",
+    response_model=ContraindicationOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 解除禁忌
 )
 def lift_contraindication(
@@ -237,7 +274,7 @@ def lift_contraindication(
     return _contra_out(contra, date.today().isoformat())
 
 
-@router.get("/pre-check")
+@router.get("/pre-check", response_model=PreVaccinationCheckOut)
 def pre_vaccination_check(
     patient_id: int,
     vaccine_code: str,

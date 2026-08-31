@@ -224,7 +224,15 @@ import app.spd.routers as spd_routers
 #   下载端点（audit/export NDJSON、附件字节流）照 CsvResponse 先例走
 #   response_class 声明媒体类型，入册下方豁免清单。见八份 test_*_contract.py，
 #   九处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 40
+# → 19（收官批②八散点：patients 4 + vaccination 4 + eldercare 3 + exams 3
+#   + publichealth 3 + consultations 2 + appointments 1 + emergency 1，共 21，
+#   零跳过。判断集锦：Money 三态各钉——回执整额是 int、round(sum([]),2) 空
+#   分支是 int 0、混入小数即 float；条件键仅 exams recognition-check 三分支
+#   exclude_unset；occurred_at/lifted_at/各比率是「键恒在值可空」X|None；
+#   lifted_at: datetime|None 透传先实证三种取值字节一致再回绑 isoformat；
+#   patients 授权四端点的脱敏双视角与 AccessLog 留痕逐字节钉住，visibility
+#   一行未动。见八份 test_*_contract.py，五处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 19
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -317,6 +325,17 @@ FULLY_GOVERNED = {
     "attachments",
     "access_logs",
     "todos",
+    # 收官批②八散点（patients 4/vaccination 4/eldercare 3/exams 3/
+    # publichealth 3/consultations 2/appointments 1/emergency 1），欠账
+    # 40→19 那批，见八份 test_<模块>_contract.py
+    "patients",
+    "vaccination",
+    "eldercare",
+    "exams",
+    "publichealth",
+    "consultations",
+    "appointments",
+    "emergency",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

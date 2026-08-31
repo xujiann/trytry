@@ -117,8 +117,43 @@ class AuthorizationCreate(BaseModel):
     expire_date: DateStr
 
 
+class AuthorizationGrantedOut(BaseModel):
+    """授权发放回执四键——与撤销回执（两键）不同形，两个模型，不互相注入。"""
+
+    id: int
+    patient_id: int
+    scope: str
+    status: str
+
+
+class AuthorizationRevokedOut(BaseModel):
+    id: int
+    status: str
+
+
+class AuthorizationOut(BaseModel):
+    """授权清单行。`expire_date` 是 `String(10)` 非空列：空串=不设到期日
+    （可见性侧按有效算，见 `visibility.active_authorization_grants`），恒 str 非 null。"""
+
+    id: int
+    grantee_org_id: int
+    scope: str
+    expire_date: str
+    status: str
+
+
+class AuthorizationCheckOut(BaseModel):
+    """调阅授权校验：四键恒在，`allowed` 是唯一判定结论。"""
+
+    patient_id: int
+    org_id: int
+    scope: str
+    allowed: bool
+
+
 @router.post(
     "/{patient_id}/authorizations",
+    response_model=AuthorizationGrantedOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator"))],  # 授权代录（患者知情）
 )
@@ -140,6 +175,7 @@ def grant_authorization(
 
 @router.post(
     "/{patient_id}/authorizations/{auth_id}/revoke",
+    response_model=AuthorizationRevokedOut,
     dependencies=[Depends(require_roles("doctor", "operator"))],
 )
 def revoke_authorization(patient_id: int, auth_id: int, db: Session = Depends(get_db)):
@@ -151,7 +187,7 @@ def revoke_authorization(patient_id: int, auth_id: int, db: Session = Depends(ge
     return {"id": auth.id, "status": "revoked"}
 
 
-@router.get("/{patient_id}/authorizations")
+@router.get("/{patient_id}/authorizations", response_model=list[AuthorizationOut])
 def list_authorizations(
     patient_id: int,
     db: Session = Depends(get_db),
@@ -181,7 +217,7 @@ def list_authorizations(
     ]
 
 
-@router.get("/{patient_id}/authorizations/check")
+@router.get("/{patient_id}/authorizations/check", response_model=AuthorizationCheckOut)
 def check_authorization(
     patient_id: int,
     org_id: int,

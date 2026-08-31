@@ -107,8 +107,49 @@ class ConsultationFee(BaseModel):
     fee_note: str = Field(default="", max_length=256)
 
 
+class ConsultationFeeOut(BaseModel):
+    """计费回执。`fee` 是 **Money 列**（Numeric asdecimal=False）：整数金额
+    读回是 int——声明成 float 会把「200 元」变「200.0 元」，故 int | float。"""
+
+    id: int
+    fee: int | float
+    fee_settled: bool
+    fee_note: str
+
+
+class ConsultationRatingStatsOut(BaseModel):
+    """评分小结。`avg` 只算已评价的（真除法派生）：有评必 float、无评为 null
+    （键恒在值可空，非条件键）。"""
+
+    rated_count: int
+    unrated_count: int
+    avg: float | None
+
+
+class ConsultationFeeStatsOut(BaseModel):
+    """费用小结。`total_amount` 是 Money 求和的 `round(x, 2)` 派生：全整数时
+    是 int（空表 `round(sum([]), 2)` 也是 int 0），混入小数才是 float。"""
+
+    settled_count: int
+    unsettled_count: int
+    total_amount: int | float
+
+
+class ConsultationStatsOut(BaseModel):
+    """会诊统计。`by_status` 键是状态码、随数据变 → 宽 dict；
+    `completion_rate_pct` 真除法派生：有单必 float、空表为 null。"""
+
+    total: int
+    by_status: dict[str, int]
+    completion_rate_pct: float | None
+    rating: ConsultationRatingStatsOut
+    fee: ConsultationFeeStatsOut
+    caliber: str
+
+
 @router.post(
     "/{consultation_id}/fee",
+    response_model=ConsultationFeeOut,
     dependencies=[Depends(require_roles("operator", "director"))],  # H2: 计费=经办/管理层
 )
 def settle_fee(consultation_id: int, body: ConsultationFee, db: Session = Depends(get_db)):
@@ -134,7 +175,7 @@ def settle_fee(consultation_id: int, body: ConsultationFee, db: Session = Depend
     }
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=ConsultationStatsOut)
 def consultation_stats(db: Session = Depends(get_db)):
     """会诊统计（指引⑤"统计分析"）：量、时效、评价与费用。
 

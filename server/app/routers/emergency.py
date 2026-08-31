@@ -192,6 +192,27 @@ def list_vitals(
 # ---------- 急救绿道时间节点 ----------
 
 
+class TimelineNodeOut(BaseModel):
+    """绿道时间轴节点行。`occurred_at` 是**键恒在值可空**：未记录为 null，
+    记录后回显录入原文（`String(32)`，如 "2026-08-10 14:02" 带空格变体，
+    不是 isoformat 的 T 分隔）→ `str | None`，非条件键，无需 exclude_unset。"""
+
+    milestone: str
+    name: str
+    occurred_at: str | None
+    recorded: bool
+
+
+class CaseTimelineOut(BaseModel):
+    """绿道时间轴：timeline 恒为 MILESTONE_SEQUENCE 六节点全序列（含未记录的）。"""
+
+    case_id: int
+    channel_type: str
+    status: str
+    timeline: list[TimelineNodeOut]
+    recorded_count: int
+
+
 @router.post(
     "/cases/{case_id}/milestones",
     response_model=MilestoneOut,
@@ -244,7 +265,7 @@ def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(
     )
 
 
-@router.get("/cases/{case_id}/timeline")
+@router.get("/cases/{case_id}/timeline", response_model=CaseTimelineOut)
 def case_timeline(
     case_id: int,
     db: Session = Depends(get_db),

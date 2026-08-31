@@ -64,8 +64,24 @@ class ActionCreate(BaseModel):
     actor: str = ""
 
 
+class EventActionCreatedOut(BaseModel):
+    """处置动作回执只回一个 id——与清单行四键不同形，两个模型。"""
+
+    id: int
+
+
+class EventActionOut(BaseModel):
+    """处置留痕行。`at` 是 handler 里 `created_at.isoformat()` 过的字符串。"""
+
+    id: int
+    action: str
+    actor: str
+    at: str
+
+
 @router.post(
     "/events/{event_id}/actions",
+    response_model=EventActionCreatedOut,
     status_code=201,
     dependencies=[Depends(require_roles("public_health", "doctor"))],  # H2/L5: 事件处置
 )
@@ -82,7 +98,7 @@ def add_action(event_id: int, body: ActionCreate, db: Session = Depends(get_db))
     return {"id": action.id}
 
 
-@router.get("/events/{event_id}/actions")
+@router.get("/events/{event_id}/actions", response_model=list[EventActionOut])
 def list_actions(event_id: int, db: Session = Depends(get_db)):
     if db.get(PublicHealthEvent, event_id) is None:
         raise HTTPException(status_code=404, detail="事件不存在")
@@ -112,7 +128,20 @@ def close_event(event_id: int, db: Session = Depends(get_db)):
 # ---------- ㉗ 医防协同提醒（诊间提醒） ----------
 
 
-@router.get("/reminders/{patient_id}")
+class ClinicReminderOut(BaseModel):
+    """诊间提醒行：五种来源（慢病随访超期/慢病高危/生活方式指导/疫苗禁忌/
+    处置中公卫事件）同形两键，`detail` 是服务端拼好的整句。"""
+
+    type: str
+    detail: str
+
+
+class ClinicRemindersOut(BaseModel):
+    patient_id: int
+    reminders: list[ClinicReminderOut]
+
+
+@router.get("/reminders/{patient_id}", response_model=ClinicRemindersOut)
 def clinic_reminders(
     patient_id: int,
     today: str | None = None,

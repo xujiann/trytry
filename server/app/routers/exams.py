@@ -146,7 +146,53 @@ def _find_recognizable(db: Session, patient_id: int, item_code: str) -> ExamRequ
     )
 
 
-@router.get("/recognition-check")
+class RecognitionCheckOut(BaseModel):
+    """开单前互认检查——**条件键**三分支（见 handler）：无可互认报告只有
+    `recognizable` 一键；目录阻断多 `reason`；可互认多 `request_id/item_name/
+    conclusion`。可选键按出键序声明 + `response_model_exclude_unset=True`，
+    handler 没放的键整个不出现（不是 null）；`reason` 与后三键从不同分支出现，
+    声明序只需分别满足各分支的出键序。"""
+
+    recognizable: bool
+    reason: str | None = None
+    request_id: int | None = None
+    item_name: str | None = None
+    conclusion: str | None = None
+
+
+class UnackedCriticalOut(BaseModel):
+    """超时未确认危急值行。`reported_at` 是 handler 手工 `isoformat()` 的字符串。"""
+
+    report_id: int
+    request_id: int
+    conclusion: str
+    reported_by: str
+    reported_at: str
+    critical_status: str
+
+
+class RecognitionStatsItemOut(BaseModel):
+    item_code: str
+    item_name: str
+    recognized_count: int
+
+
+class RecognitionStatsOut(BaseModel):
+    """互认统计。`recognition_ratio_pct` 恒 float：`round(x/total*100, 1)` 与
+    空表兜底字面量 `0.0` 两条分支都是浮点，不涉 Money。"""
+
+    recognized_total: int
+    reported_total: int
+    recognition_ratio_pct: float
+    saved_exams: int
+    by_item: list[RecognitionStatsItemOut]
+
+
+@router.get(
+    "/recognition-check",
+    response_model=RecognitionCheckOut,
+    response_model_exclude_unset=True,  # 三分支条件键，见模型注释
+)
 def recognition_check(
     patient_id: int,
     item_code: str,
@@ -473,7 +519,7 @@ def list_critical_actions(report_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/critical/unacknowledged")
+@router.get("/critical/unacknowledged", response_model=list[UnackedCriticalOut])
 def list_unacknowledged_critical(
     today: str | None = None, timeout_minutes: int = 30, db: Session = Depends(get_db)
 ):
@@ -509,7 +555,7 @@ def list_unacknowledged_critical(
 # ---------- 互认统计 ----------
 
 
-@router.get("/recognition-stats")
+@router.get("/recognition-stats", response_model=RecognitionStatsOut)
 def recognition_stats(db: Session = Depends(get_db)):
     """互认统计：互认率、按项目统计、节约检查次数。"""
     reported = (
