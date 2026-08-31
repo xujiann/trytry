@@ -67,9 +67,15 @@ def test_手写SQL里没有库专有写法():
 
 def test_手写SQL总量可控():
     """手写 SQL 越多，换库的工作量越大。这条不是禁止，是把量盯住——
-    数字涨了要有人解释为什么不能用 ORM 表达。"""
+    数字涨了要有人解释为什么不能用 ORM 表达。
+
+    15 → 17（2026-08-31，P1-9 启动种子化加固）：新增 `main.py` 的
+    `SELECT pg_advisory_lock/unlock(:key)` 两处——PG 咨询锁没有 ORM 表达
+    （与审计链既有的 `pg_advisory_xact_lock` 同族），且按方言分流只在 PG
+    上执行，换库不受影响。这两处是本仓库"手写 SQL 的合法理由"之一：
+    锁定原语本就是方言特性，硬套 ORM 只会造出更难审的抽象。"""
     total = sum(len(list(_raw_sql_snippets(src))) for _p, src in _python_sources())
-    assert total <= 15, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
+    assert total <= 17, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
 
 
 # 金额列的命名族。`debit`/`credit`/`bonus` 是补进来的——阶段十二第一遍只按
