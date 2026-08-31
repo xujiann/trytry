@@ -133,6 +133,24 @@
 
 ## Next（治理逐块推进，只进不退）
 
+- ✅ **迁移-模型结构漂移清零（2026-08-31）：P1-27 两个方言档 39/41 → 0**。迁移
+  `e7c4b19d02fa` 一次收口三类"模型说了、库没做"的差异：补 **14 处外键**（此前生产
+  PG 根本不做参照完整性校验，孤儿行静默落库）、收紧 **25 列 NOT NULL**（迁移建成
+  可空、模型 NOT NULL，非 ORM 写入能把 NULL 塞进 created_at 与 JSON 列）、删掉
+  **2 处**与模型唯一索引重复的无名唯一约束（删前先确认同列另有唯一索引在守，
+  不会出现"删完没人守唯一"）。存量冲突按 CLAUDE.md §4 走不阻塞路径：**逐项**探测、
+  探到孤儿行/NULL 只跳过该项并打**指名主键**的 ERROR 日志，人工处置 SQL 写进迁移
+  docstring；纯 DDL，不 UPDATE/DELETE 任何存量业务数据。跳过分支由
+  `test_migration_conflict_skip.py` 六条**行为**回归咬住（三处变异转红——其中"日志
+  指名"那条最初假绿：冲突行 id=1 时退化文案"共 1 条"里也有个 1，改用可辨识主键后
+  才真的咬住）。
+- 🔧 **本机集成档不再赊给 CI**：新增 `server/scripts/dev_services.sh`（start/env/stop），
+  一行拉起本机 PG+Redis 并导出两个 `*_TEST_URL`。开发容器里这两个服务往往**已经装好
+  只是没跑**，而缺服务时 integration 档会**整档 skip 且退出码为 0**（"没跑"与"全对"
+  的绿灯长得一样）。落地即验：`make test-integration` 本地 **19 passed / 0 skipped**
+  （真 PG 12 + 真 Redis 7），本轮 PG 档漂移清零正是这样实测的，而不是只跑 SQLite
+  就宣布结论。
+
 - ✅ **契约治理收官（2026-08-31）：收官两批 40 → 0，946 端点覆盖率 100%，欠账账户销户**。
   收官批②八散点（patients/vaccination/eldercare/exams/publichealth/consultations/
   appointments/emergency，21 端点，40→19）+ 收官批①（chronic/insurance/integration/

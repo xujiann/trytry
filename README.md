@@ -143,7 +143,14 @@ python -m pytest tests/ -q          # 运行测试（端到端用例默认跳过
 cd server
 python -m pytest tests/ -q                                        # 全量单元/接口测试（实测 3045 项通过 + 34 项跳过；跳过项为 e2e（11 条）与真 PG 集成档（11 条）等，需显式开启）
 python -m pytest tests/ -q --cov=app --cov-report=term-missing    # 附带覆盖率报告
+
+eval "$(scripts/dev_services.sh start)"   # 起本机 PG+Redis（开发容器里通常已装好只是没跑）
+python -m pytest tests/ -q -m integration                         # 真 PG + 真 Redis：19 条
+scripts/dev_services.sh stop
 ```
+
+> 集成档缺服务时会**整档 skip 而退出码为 0**——"没跑"与"全对"的绿灯长得一样（CI 因此
+> 专门加了闸门数执行条数）。本地起一套服务再跑，别把"SQLite 绿了"当成"PG 也对"。
 
 - 覆盖率门禁为**强制阻断**：低于 `COVERAGE_MIN`（70%）CI 直接失败（ADR-0002
   落地时实测 87%，门槛留有余量）；

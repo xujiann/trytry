@@ -29,9 +29,18 @@ make build             # 字节编译 + 校验 alembic 迁移图（双 head）
 make lint              # ruff
 make typecheck         # mypy（渐进式，仅查已注解代码）
 make test-unit         # 进程内 SQLite 快速套件（无外部依赖）
-make test-integration  # 真 PostgreSQL（需 MEDPLAT_PG_TEST_URL）
+make test-integration  # 真 PostgreSQL + 真 Redis（需两个 *_TEST_URL，见下方一行起服务）
 make test-smoke        # 应用可启动 + 核心接口有响应
 make verify            # build + lint + typecheck + test-unit（提交前自检）
+```
+
+集成档（真 PG 的并发/方言用例、结构漂移 PG 档、调度锁真 Redis 档）**不必赊给 CI**——
+开发容器里这两个服务通常已装好，只是没跑；一行起完即可本地全绿（实测 19 条）：
+
+```bash
+eval "$(server/scripts/dev_services.sh start)"   # 起本机 PG+Redis 并导出两个 *_TEST_URL
+make test-integration                            # 缺服务时这些档会整档 skip 而退出码为 0
+server/scripts/dev_services.sh stop
 ```
 
 ---
@@ -150,7 +159,7 @@ server/app/
 ```bash
 make verify        # = build + lint + typecheck + test-unit（对应第14条）
 make test-smoke    # 若动了启动/核心链路
-make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_URL）
+make test-integration   # 若动了迁移/PG 方言相关（先 eval "$(server/scripts/dev_services.sh start)"）
 ```
 
 - 若改了迁移或**模型的列**：`make build` 校验迁移图；`test_migration_model_parity.py` 已把「空库跑通 `alembic upgrade heads` + 逐表逐列比对模型」做成 test-unit 里的硬门禁（约 7 秒，无豁免名单），`make verify` 会带上，不必再手跑。真 PG 的方言问题仍由 `make test-integration` 守（两者共用 `tests/schema_parity.py` 一份比对逻辑）。
