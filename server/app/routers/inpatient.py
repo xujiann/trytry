@@ -34,6 +34,10 @@ router = APIRouter(prefix="/api/inpatient", tags=["住院与床位"], dependenci
 
 
 # ---------- 病区/床位资源库 ----------
+#
+# 响应契约（特征化网见 tests/test_inpatient_contract.py）：金额是 Money 列，
+# 一律 `int | float`（整数读回 int，声明 float 会把「6000 元」印成「6000.0 元」）；
+# `drg_weight`/`occupancy_pct` 是 Float 列或真除法产地，恒 float。
 
 
 class WardCreate(BaseModel):
@@ -41,7 +45,13 @@ class WardCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
 
 
-@router.post("/wards", status_code=201, dependencies=[Depends(require_admin)])
+class WardOut(BaseModel):
+    id: int
+    org_id: int
+    name: str
+
+
+@router.post("/wards", response_model=WardOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_ward(body: WardCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
@@ -52,7 +62,7 @@ def create_ward(body: WardCreate, db: Session = Depends(get_db), user: User = De
     return {"id": ward.id, "org_id": ward.org_id, "name": ward.name}
 
 
-@router.get("/wards")
+@router.get("/wards", response_model=list[WardOut])
 def list_wards(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     q = db.query(Ward)
     q = scope_org_list(db, user, q, Ward, org_id)
@@ -64,7 +74,14 @@ class BedCreate(BaseModel):
     bed_no: str = Field(min_length=1, max_length=16)
 
 
-@router.post("/beds", status_code=201, dependencies=[Depends(require_admin)])
+class BedOut(BaseModel):
+    id: int
+    ward_id: int
+    bed_no: str
+    status: str
+
+
+@router.post("/beds", response_model=BedOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_bed(body: BedCreate, db: Session = Depends(get_db)):
     if db.get(Ward, body.ward_id) is None:
         raise HTTPException(status_code=404, detail="病区不存在")
@@ -74,7 +91,7 @@ def create_bed(body: BedCreate, db: Session = Depends(get_db)):
     return {"id": bed.id, "ward_id": bed.ward_id, "bed_no": bed.bed_no, "status": bed.status}
 
 
-@router.get("/beds")
+@router.get("/beds", response_model=list[BedOut])
 def list_beds(ward_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)):
     q = db.query(Bed)
     if ward_id is not None:
@@ -120,6 +137,19 @@ class AdmissionCreate(BaseModel):
     diagnosis_name: str = ""
 
 
+class AdmissionOut(BaseModel):
+    id: int
+    patient_id: int
+    org_id: int
+    ward_id: int
+    bed_id: int
+    doctor_name: str
+    diagnosis_name: str
+    status: str
+    admitted_at: str
+    discharged_at: str | None
+
+
 def _admission_out(a: Admission) -> dict:
     return {
         "id": a.id,
@@ -137,6 +167,7 @@ def _admission_out(a: Admission) -> dict:
 
 @router.post(
     "/admissions",
+    response_model=AdmissionOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator"))],  # 入院登记=医疗岗/经办
 )
@@ -174,7 +205,7 @@ def create_admission(
     return _admission_out(admission)
 
 
-@router.get("/admissions")
+@router.get("/admissions", response_model=list[AdmissionOut])
 def list_admissions(
     status: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
@@ -192,6 +223,7 @@ class TransferBody(BaseModel):
 
 @router.post(
     "/admissions/{admission_id}/transfer",
+    response_model=AdmissionOut,
     dependencies=[Depends(require_roles("doctor"))],  # 转科/转床=医师
 )
 def transfer_admission(admission_id: int, body: TransferBody, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -229,6 +261,40 @@ class CaseSummaryCreate(BaseModel):
     note: str = ""
 
 
+class CaseSummaryOut(BaseModel):
+    id: int
+    admission_id: int
+    discharge_diagnosis: str
+    operation: str
+    total_cost: int | float
+    drug_cost: int | float
+    outcome: str
+    note: str
+    drg_code: str
+    drg_weight: float  # Float 列（非 Money）：整数权重读回来就是 x.0
+    created_by_name: str
+
+
+class DrgAssignOut(BaseModel):
+    """`assign_drg_group` 的入组结果（routers/drgs.py 唯一产地，恒六键）。"""
+
+    drg_code: str
+    drg_name: str
+    mdc: str
+    mdc_name: str
+    weight: float
+    fallback: bool
+
+
+class CaseSummaryCreateOut(CaseSummaryOut):
+    """结案回执。`drg` 是**条件键**：M12（drgs 模块）在位时恒出现（含兜底组
+    QY；兜底组种子缺失时为 null），模块摘除（ImportError 分支）时键整个不
+    出现——故端点带 `response_model_exclude_unset=True`，镜像该分支而不是
+    把它声明成恒在。"""
+
+    drg: DrgAssignOut | None = None
+
+
 def _case_summary_out(s: CaseSummary) -> dict:
     return {
         "id": s.id,
@@ -261,6 +327,8 @@ def _operations_of_admission(db: Session, admission_id: int) -> str:
 
 @router.post(
     "/admissions/{admission_id}/case-summary",
+    response_model=CaseSummaryCreateOut,
+    response_model_exclude_unset=True,  # drg 键仅 M12 在位时出现（见模型注释）
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],  # 病案首页=医师
 )
@@ -301,7 +369,7 @@ def create_case_summary(
     return out
 
 
-@router.get("/admissions/{admission_id}/case-summary")
+@router.get("/admissions/{admission_id}/case-summary", response_model=CaseSummaryOut)
 def get_case_summary(admission_id: int, db: Session = Depends(get_db)):
     summary = db.query(CaseSummary).filter(CaseSummary.admission_id == admission_id).first()
     if summary is None:
@@ -314,6 +382,7 @@ def get_case_summary(admission_id: int, db: Session = Depends(get_db)):
 
 @router.post(
     "/admissions/{admission_id}/discharge",
+    response_model=AdmissionOut,
     dependencies=[Depends(require_roles("doctor"))],  # 出院=医师
 )
 def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -397,8 +466,22 @@ class OrderCreate(BaseModel):
     content: str = Field(min_length=1, max_length=512)
 
 
+class OrderOut(BaseModel):
+    id: int
+    admission_id: int
+    order_type: str
+    content: str
+    status: str
+    created_by_name: str
+    # 出院批量停止不回填姓名（bulk UPDATE），手工停止才有——保持空串语义
+    stopped_by_name: str
+    created_at: str
+    stopped_at: str | None
+
+
 @router.post(
     "/orders",
+    response_model=OrderOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],  # 医嘱开立=医师
 )
@@ -433,7 +516,7 @@ def _order_out(o: InpatientOrder) -> dict:
     }
 
 
-@router.get("/orders")
+@router.get("/orders", response_model=list[OrderOut])
 def list_orders(
     admission_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)
 ):
@@ -447,6 +530,7 @@ def list_orders(
 
 @router.post(
     "/orders/{order_id}/stop",
+    response_model=OrderOut,
     dependencies=[Depends(require_roles("doctor"))],  # 医嘱停止=医师
 )
 def stop_order(
@@ -574,7 +658,17 @@ def list_order_executions(order_id: int, db: Session = Depends(get_db)):
 # ---------- 床位效率统计（#15 运行效率数据源） ----------
 
 
-@router.get("/stats")
+class InpatientStatOut(BaseModel):
+    org_id: int
+    org_name: str
+    beds_total: int
+    beds_occupied: int
+    occupancy_pct: float  # *100.0 真除法或兜底 0.0：恒 float
+    in_hospital: int
+    discharged_total: int
+
+
+@router.get("/stats", response_model=list[InpatientStatOut])
 def inpatient_stats(
     org_id: int | None = None,
     group_id: int | None = None,

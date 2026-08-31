@@ -182,7 +182,13 @@ import app.spd.routers as spd_routers
 #   3.0 照钉；AEFI 十万剂次率 float|None；PeriodOut 与 fund.py 重名故
 #   命名 VaccinePeriodOut。见 test_spd_population_contract.py /
 #   test_vaccine_supply_contract.py，五处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 218
+# → 189（billing 15 + inpatient 14，共 29，零跳过——Money 列重灾区批：
+#   金额一律 int|float 且用 type(x) is int 显式钉（dict 相等对 15==15.0
+#   是盲的）；零押金余额 or 0.0 兜底是 0.0 不是 0；refund_amount 入参
+#   经 float 字段但缺省全额分支取 DB 读回可为 int；结算/支付回执的
+#   条件键（deposit_offset 三键、pay_url/qr_code）exclude_unset 双向钉。
+#   见 test_billing_contract.py / test_inpatient_contract.py，五处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 189
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -240,6 +246,10 @@ FULLY_GOVERNED = {
     # 259→218 那批，见 test_spd_population_contract.py / test_vaccine_supply_contract.py
     "spd/population",
     "vaccine_supply",
+    # 收费与住院两簇（billing 15/inpatient 14），欠账 218→189 那批，
+    # 见 test_billing_contract.py / test_inpatient_contract.py
+    "billing",
+    "inpatient",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

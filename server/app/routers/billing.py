@@ -131,6 +131,33 @@ class ChargeItemUpdate(BaseModel):
     active: bool | None = None
 
 
+# ---------------------------------------------------------------- 响应契约
+#
+# 本模块所有金额都是 `Money`（Numeric）列或其 round/sum 派生值，一律
+# `int | float`：整数金额读回来是 int，声明成 float 会把「15 元」印成
+# 「15.0 元」（收银台与账单页都不能这样）。真除法/兜底 `0.0` 产地的
+# `avg_amount`/`insurance_ratio_pct` 恒 float，声明 float 才是原样。
+# 特征化网见 tests/test_billing_contract.py（键序/条件键/int-float 均有断言）。
+
+
+class ChargeItemOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    price: int | float
+    active: bool
+
+
+class ChargePriceChangeOut(BaseModel):
+    id: int
+    old_price: int | float
+    new_price: int | float
+    reason: str
+    effective_date: str
+    changed_at: str
+
+
 def _charge_item_out(i: ChargeItem) -> dict:
     return {
         "id": i.id, "code": i.code, "name": i.name,
@@ -156,7 +183,12 @@ def _charge_dict_blocked(db: Session, code: str) -> bool:
     )
 
 
-@router.post("/charge-items", status_code=201, dependencies=[Depends(require_admin)])
+@router.post(
+    "/charge-items",
+    response_model=ChargeItemOut,
+    status_code=201,
+    dependencies=[Depends(require_admin)],
+)
 def create_charge_item(body: ChargeItemCreate, db: Session = Depends(get_db)):
     if db.query(ChargeItem).filter(ChargeItem.code == body.code).first():
         raise HTTPException(status_code=409, detail="该收费项目编码已存在")
@@ -166,7 +198,7 @@ def create_charge_item(body: ChargeItemCreate, db: Session = Depends(get_db)):
     return _charge_item_out(item)
 
 
-@router.get("/charge-items")
+@router.get("/charge-items", response_model=list[ChargeItemOut])
 def list_charge_items(
     active: bool | None = None, category: str | None = None, db: Session = Depends(get_db)
 ):
@@ -184,7 +216,9 @@ class RepriceIn(BaseModel):
     effective_date: OptionalDateStr = ""
 
 
-@router.patch("/charge-items/{item_id}", dependencies=[Depends(require_admin)])
+@router.patch(
+    "/charge-items/{item_id}", response_model=ChargeItemOut, dependencies=[Depends(require_admin)]
+)
 def update_charge_item(
     item_id: int,
     body: ChargeItemUpdate,
@@ -207,7 +241,11 @@ def update_charge_item(
     return _charge_item_out(item)
 
 
-@router.post("/charge-items/{item_id}/reprice", dependencies=[Depends(require_admin)])
+@router.post(
+    "/charge-items/{item_id}/reprice",
+    response_model=ChargeItemOut,
+    dependencies=[Depends(require_admin)],
+)
 def reprice_charge_item(
     item_id: int,
     body: RepriceIn,
@@ -238,7 +276,11 @@ def reprice_charge_item(
     return _charge_item_out(item)
 
 
-@router.get("/charge-items/{item_id}/price-history", dependencies=[Depends(require_admin)])
+@router.get(
+    "/charge-items/{item_id}/price-history",
+    response_model=list[ChargePriceChangeOut],
+    dependencies=[Depends(require_admin)],
+)
 def charge_price_history(item_id: int, db: Session = Depends(get_db)):
     if db.get(ChargeItem, item_id) is None:
         raise HTTPException(status_code=404, detail="收费项目不存在")
@@ -273,6 +315,21 @@ class BillDetailCreate(BaseModel):
     quantity: int = Field(default=1, ge=1)
 
 
+class BillDetailOut(BaseModel):
+    id: int
+    patient_id: int
+    # 门诊/住院二选一：另一侧恒为 null（键恒在，不是条件键）
+    admission_id: int | None
+    encounter_id: int | None
+    item_code: str
+    item_name: str
+    unit_price: int | float
+    quantity: int
+    amount: int | float
+    settled: bool
+    settlement_id: int | None
+
+
 def _bill_detail_out(d: BillDetail) -> dict:
     return {
         "id": d.id,
@@ -291,6 +348,7 @@ def _bill_detail_out(d: BillDetail) -> dict:
 
 @router.post(
     "/details",
+    response_model=BillDetailOut,
     status_code=201,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # 计费=经办/医师
 )
@@ -338,7 +396,7 @@ def create_bill_detail(
     return _bill_detail_out(detail)
 
 
-@router.get("/details")
+@router.get("/details", response_model=list[BillDetailOut])
 def list_bill_details(
     patient_id: int | None = None,
     admission_id: int | None = None,
@@ -638,6 +696,41 @@ class SettlementCreate(BaseModel):
     insurance_pay: float = Field(default=0, ge=0)
 
 
+class SettlementOut(BaseModel):
+    id: int
+    patient_id: int
+    org_id: int
+    bill_type: str
+    admission_id: int | None
+    encounter_id: int | None
+    total_amount: int | float
+    insurance_pay: int | float
+    self_pay: int | float
+    insurance_settlement_id: int | None
+    created_at: str
+
+
+class SettlementCreateOut(SettlementOut):
+    """建单回执。末三键是**条件键**：仅住院结算出现（押金冲抵口径），门诊
+    回执整个没有——声明成带默认值的普通字段会给门诊回执注入 `null`，
+    故端点带 `response_model_exclude_unset=True`。零余额走 `or 0.0` 兜底
+    字面量分支，故 `deposit_balance` 可为 0.0（int|float 两者都真实出现）。"""
+
+    deposit_offset: int | float | None = None
+    payable_after_offset: int | float | None = None
+    deposit_balance: int | float | None = None
+
+
+class BillingStatOut(BaseModel):
+    bill_type: str
+    count: int
+    total_amount: int | float
+    insurance_pay: int | float
+    # 均次=真除法、占比=*100.0 或兜底 0.0：两条产地恒 float
+    avg_amount: float
+    insurance_ratio_pct: float
+
+
 def _settlement_out(s: Settlement) -> dict:
     return {
         "id": s.id,
@@ -656,6 +749,8 @@ def _settlement_out(s: Settlement) -> dict:
 
 @router.post(
     "/settlements",
+    response_model=SettlementCreateOut,
+    response_model_exclude_unset=True,  # 押金三键仅住院分支出现（见模型注释）
     status_code=201,
     dependencies=[Depends(require_roles("operator"))],  # 结算=经办（对齐医保结算矩阵）
 )
@@ -801,7 +896,7 @@ def create_settlement(
     return out
 
 
-@router.get("/settlements")
+@router.get("/settlements", response_model=list[SettlementOut])
 def list_settlements(
     patient_id: int | None = None, bill_type: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
@@ -812,7 +907,7 @@ def list_settlements(
     return [_settlement_out(s) for s in q.order_by(Settlement.id.desc()).limit(200).all()]
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=list[BillingStatOut])
 def billing_stats(db: Session = Depends(get_db)):
     """费用分析基础口径：门诊/住院结算笔数与金额、均次费用、医保占比。"""
     rows = (
@@ -993,6 +1088,41 @@ def _payment_out(o: PaymentOrder) -> dict:
     }
 
 
+class PaymentOut(BaseModel):
+    id: int
+    settlement_id: int
+    channel: str
+    channel_name: str
+    amount: int | float
+    refunded_amount: int | float
+    status: str
+    status_name: str
+    trade_no: str
+    fail_reason: str
+    paid_at: str | None
+    refunded_at: str | None
+    callback_at: str | None
+    created_at: str
+
+
+class PaymentCreateOut(PaymentOut):
+    """下单回执。末两键是**条件键**：仅异步网关受理（pending）分支把跳转/
+    二维码参数带回收银端，同步渠道（Mock/现金类）回执整个没有——故端点带
+    `response_model_exclude_unset=True`，别给每张现金单注入 `"pay_url": null`。"""
+
+    pay_url: str | None = None
+    qr_code: str | None = None
+
+
+class PaymentRefundOut(PaymentOut):
+    """退款回执 = 支付单 + 两个恒在尾键。`refund_amount` 有两条产地：入参走
+    `float` 字段（整数入参也是 3.0），缺省全额退款取 DB 读回的可退余额
+    （整数值是 int）——仍是 int|float。"""
+
+    refund_no: str
+    refund_amount: int | float
+
+
 #: pending 支付单的占额时效（分钟）。异步渠道下单只是"受理"，钱还没到；
 #: 不占额就能同一张账单扫三次码收三次钱（实测 100 元账单收进 300），
 #: 占额不设时效又会被"只下单不付款"永久占死。取 30 分钟：比常见扫码码有效期
@@ -1061,6 +1191,8 @@ class PaymentCreate(BaseModel):
 
 @router.post(
     "/payments",
+    response_model=PaymentCreateOut,
+    response_model_exclude_unset=True,  # pay_url/qr_code 仅 pending 分支出现（见模型注释）
     status_code=201,
     dependencies=[Depends(require_roles("operator"))],  # 收费=经办（与结算同岗）
 )
@@ -1140,7 +1272,7 @@ def create_payment(
     return _payment_out(order)
 
 
-@router.get("/payments")
+@router.get("/payments", response_model=list[PaymentOut])
 def list_payments(
     settlement_id: int | None = None,
     status: str | None = None,
@@ -1257,7 +1389,11 @@ class RefundIn(BaseModel):
     reason: str = Field(default="", max_length=256)
 
 
-@router.post("/payments/{order_id}/refund", dependencies=[Depends(require_roles("operator"))])
+@router.post(
+    "/payments/{order_id}/refund",
+    response_model=PaymentRefundOut,
+    dependencies=[Depends(require_roles("operator"))],
+)
 def refund_payment(
     order_id: int,
     body: RefundIn,
@@ -1324,6 +1460,29 @@ def refund_payment(
 # ---------- 日终对账 ----------
 
 
+class ReconciliationDiffOut(BaseModel):
+    id: int
+    order_id: int | None  # missing_local（通道有本地无）没有本地单
+    trade_no: str
+    diff_type: str
+    diff_type_name: str
+    local_amount: int | float
+    remote_amount: int | float
+    detail: str
+
+
+class ReconciliationBatchOut(BaseModel):
+    id: int
+    date: str
+    total_orders: int
+    total_amount: int | float
+    matched: int
+    unmatched: int
+    diff_amount: int | float
+    created_at: str
+    diffs: list[ReconciliationDiffOut]
+
+
 def _batch_out(b: ReconciliationBatch, diffs: list[ReconciliationDiff]) -> dict:
     return {
         "id": b.id,
@@ -1352,6 +1511,7 @@ def _batch_out(b: ReconciliationBatch, diffs: list[ReconciliationDiff]) -> dict:
 
 @router.post(
     "/reconciliation/run",
+    response_model=ReconciliationBatchOut,
     status_code=201,
     dependencies=[Depends(require_roles("operator", "director"))],  # 日终对账=财务/经办
 )
@@ -1446,7 +1606,7 @@ def run_reconciliation(
     return _batch_out(batch, diffs)
 
 
-@router.get("/reconciliation")
+@router.get("/reconciliation", response_model=list[ReconciliationBatchOut])
 def list_reconciliation(date: str | None = None, db: Session = Depends(get_db)):
     """对账单列表与差异明细（date 缺省返回最近 30 个批次）。"""
     q = db.query(ReconciliationBatch)
