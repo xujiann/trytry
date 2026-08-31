@@ -89,8 +89,23 @@ class VisitCreate(BaseModel):
     visit_date: str = ""
 
 
+class VisitReceiptOut(BaseModel):
+    """产检/产后访视回执：回显档案联动后的高危标记与状态。"""
+
+    id: int
+    record_id: int
+    high_risk: bool
+    status: str
+
+
+class RecordCloseOut(BaseModel):
+    id: int
+    status: str
+
+
 @router.post(
     "/records/{record_id}/visits",
+    response_model=VisitReceiptOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 产检随访
 )
@@ -117,6 +132,7 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
 
 @router.post(
     "/records/{record_id}/close",
+    response_model=RecordCloseOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5
 )
 def close_record(record_id: int, db: Session = Depends(get_db)):
@@ -170,8 +186,14 @@ class ChildVisitCreate(BaseModel):
     visit_date: str = ""
 
 
+class ChildVisitReceiptOut(BaseModel):
+    id: int
+    child_id: int
+
+
 @router.post(
     "/children/{child_id}/visits",
+    response_model=ChildVisitReceiptOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 儿童随访
 )
@@ -195,8 +217,28 @@ class DeliveryCreate(BaseModel):
     outcome: str = ""
 
 
+class DeliveryReceiptOut(BaseModel):
+    """分娩登记回执（4 键，含档案联动状态）——与 7 键查询详情不同形。"""
+
+    id: int
+    record_id: int
+    delivery_mode: str
+    status: str
+
+
+class DeliveryDetailOut(BaseModel):
+    id: int
+    record_id: int
+    org_id: int
+    delivery_date: str
+    delivery_mode: str
+    newborn_count: int
+    outcome: str
+
+
 @router.post(
     "/records/{record_id}/delivery",
+    response_model=DeliveryReceiptOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],  # 分娩记录=医师
 )
@@ -223,7 +265,7 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
     }
 
 
-@router.get("/records/{record_id}/delivery")
+@router.get("/records/{record_id}/delivery", response_model=DeliveryDetailOut)
 def get_delivery(record_id: int, db: Session = Depends(get_db)):
     delivery = db.query(DeliveryRecord).filter(DeliveryRecord.record_id == record_id).first()
     if delivery is None:
@@ -252,8 +294,27 @@ class ScreeningCreate(BaseModel):
 _SCREEN_ITEM_NAMES = {"metabolic": "遗传代谢病筛查", "hearing": "听力筛查", "chd": "先心病筛查"}
 
 
+class NewbornScreeningReceiptOut(BaseModel):
+    """新筛回执：回显儿童档案联动后的高危标记。"""
+
+    id: int
+    child_id: int
+    item: str
+    result: str
+    child_high_risk: bool
+
+
+class NewbornScreeningRowOut(BaseModel):
+    id: int
+    item: str
+    result: str
+    screen_date: str
+    note: str
+
+
 @router.post(
     "/children/{child_id}/screenings",
+    response_model=NewbornScreeningReceiptOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 新筛
 )
@@ -277,7 +338,7 @@ def add_screening(child_id: int, body: ScreeningCreate, db: Session = Depends(ge
     }
 
 
-@router.get("/children/{child_id}/screenings")
+@router.get("/children/{child_id}/screenings", response_model=list[NewbornScreeningRowOut])
 def list_screenings(child_id: int, db: Session = Depends(get_db)):
     if db.get(ChildRecord, child_id) is None:
         raise HTTPException(status_code=404, detail="儿童档案不存在")
@@ -304,8 +365,22 @@ class HighRiskUpdate(BaseModel):
     risk_note: str = ""
 
 
+class ChildHighRiskOut(BaseModel):
+    id: int
+    high_risk: bool
+    risk_note: str
+
+
+class HighRiskChildRowOut(BaseModel):
+    id: int
+    name: str
+    birth_date: str
+    risk_note: str
+
+
 @router.post(
     "/children/{child_id}/high-risk",
+    response_model=ChildHighRiskOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 高危儿标记/解除
 )
 def set_high_risk(child_id: int, body: HighRiskUpdate, db: Session = Depends(get_db)):
@@ -318,7 +393,7 @@ def set_high_risk(child_id: int, body: HighRiskUpdate, db: Session = Depends(get
     return {"id": child_id, "high_risk": child.high_risk, "risk_note": child.risk_note}
 
 
-@router.get("/children/high-risk")
+@router.get("/children/high-risk", response_model=list[HighRiskChildRowOut])
 def list_high_risk_children(db: Session = Depends(get_db)):
     """高危儿清单：新筛异常自动纳入 + 人工标记，供专案随访。"""
     return [
@@ -410,6 +485,37 @@ class PrenatalScreeningCreate(BaseModel):
     conclusion: str = ""
 
 
+class PrenatalScreeningOut(BaseModel):
+    """产前筛查回执与列表行同形（`_screening_out` 唯一产地），共用一个模型。
+    gest_week 是**值可空**的恒在键：未填时为 null，不是键消失。"""
+
+    id: int
+    record_id: int
+    screen_type: str
+    screen_type_name: str
+    screen_date: str
+    gest_week: int | None
+    result: str
+    indicator: str
+    conclusion: str
+    flagged_high_risk: bool
+
+
+class ScreeningTypeCountOut(BaseModel):
+    count: int
+    name: str
+
+
+class ScreeningStatsOut(BaseModel):
+    """筛查统计。by_type/by_result 的键是筛查类型/结论代码（随数据变），
+    值形状固定；检出率恒 float（round(x*100.0/n, 2) 与兜底 0.0 都是浮点）。"""
+
+    total: int
+    by_type: dict[str, ScreeningTypeCountOut]
+    by_result: dict[str, int]
+    high_risk_detect_rate_pct: float
+
+
 def _screening_out(s: PrenatalScreening) -> dict:
     return {
         "id": s.id,
@@ -427,6 +533,7 @@ def _screening_out(s: PrenatalScreening) -> dict:
 
 @router.post(
     "/screenings",
+    response_model=PrenatalScreeningOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],
 )
@@ -451,7 +558,7 @@ def create_screening(
     return _screening_out(screening)
 
 
-@router.get("/screenings")
+@router.get("/screenings", response_model=list[PrenatalScreeningOut])
 def list_prenatal_screenings(
     record_id: int | None = None, result: str | None = None, db: Session = Depends(get_db)
 ):
@@ -465,7 +572,7 @@ def list_prenatal_screenings(
     ]
 
 
-@router.get("/screening-stats")
+@router.get("/screening-stats", response_model=ScreeningStatsOut)
 def screening_stats(db: Session = Depends(get_db)):
     """筛查统计：按筛查类型与结论分布，高危检出率。"""
     by_type = row_dict(

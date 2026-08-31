@@ -188,7 +188,13 @@ import app.spd.routers as spd_routers
 #   经 float 字段但缺省全额分支取 DB 读回可为 int；结算/支付回执的
 #   条件键（deposit_offset 三键、pay_url/qr_code）exclude_unset 双向钉。
 #   见 test_billing_contract.py / test_inpatient_contract.py，五处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 189
+# → 157（admin_mgmt 20 + maternal 12，共 32，零跳过。判断集锦：Money 列及
+#   其 SUM/round 派生一律 int|float（整数 6000 以 int 出参，refresh 读回
+#   同样 int）；空分支 round(sum([]),2) 是 int 0；perf_coefficient 是
+#   Float 列→float；execution_pct/gest_week 是键恒在值可空→X|None 而非
+#   exclude_unset；contracts 回执 3 键/到期行 4 键/清单行 6 键分三模型。
+#   见 test_admin_mgmt_contract.py / test_maternal_contract.py，六处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 157
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -250,6 +256,10 @@ FULLY_GOVERNED = {
     # 见 test_billing_contract.py / test_inpatient_contract.py
     "billing",
     "inpatient",
+    # 行政人事与妇幼两簇（admin_mgmt 20/maternal 12），欠账 189→157 那批，
+    # 见 test_admin_mgmt_contract.py / test_maternal_contract.py
+    "admin_mgmt",
+    "maternal",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",
