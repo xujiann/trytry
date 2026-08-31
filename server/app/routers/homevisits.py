@@ -70,8 +70,46 @@ def _visit_out(o: HomeVisitOrder) -> dict:
     }
 
 
+# ---- 响应契约（字段精确镜像 `_visit_out`/`visit_stats` 的现输出，勿改字节）----
+# 取证与建模判断见 tests/test_homevisits_contract.py 的 docstring。
+
+
+class HomeVisitOut(BaseModel):
+    """工单回执与列表行同形（`_visit_out` 唯一产地）；四个动作回执共用本模型。
+
+    contract_id 与两个时刻是「键恒在值可空」（无签约/未派单/未完成时为 null，
+    不是键消失）；时刻出参是 isoformat 字符串。
+    """
+
+    id: int
+    patient_id: int
+    contract_id: int | None
+    org_id: int
+    service_type: str
+    service_type_name: str
+    demand: str
+    address: str
+    expect_date: str
+    status: str
+    assignee_name: str
+    dispatched_at: str | None
+    service_note: str
+    completed_at: str | None
+
+
+class HomeVisitStatsOut(BaseModel):
+    # by_status 键是状态码（随数据变）；比率是真除法/兜底 0.0 的浮点产地
+    total: int
+    by_status: dict[str, int]
+    contract_linked: int
+    contract_linked_ratio_pct: float
+
+
 @router.post(
-    "", status_code=201, dependencies=[Depends(require_roles("operator", "doctor", "public_health"))]
+    "",
+    status_code=201,
+    response_model=HomeVisitOut,
+    dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
 )
 def create_visit(body: VisitCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
@@ -109,7 +147,7 @@ def create_visit(body: VisitCreate, db: Session = Depends(get_db), user: User = 
     return _visit_out(order)
 
 
-@router.get("")
+@router.get("", response_model=list[HomeVisitOut])
 def list_visits(
     response: Response,
     status: str | None = None,
@@ -137,7 +175,9 @@ class VisitDispatch(BaseModel):
 
 
 @router.post(
-    "/{order_id}/dispatch", dependencies=[Depends(require_roles("operator", "doctor"))]
+    "/{order_id}/dispatch",
+    response_model=HomeVisitOut,
+    dependencies=[Depends(require_roles("operator", "doctor"))],
 )
 def dispatch_visit(order_id: int, body: VisitDispatch, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """派单：指派上门人员（仅待派单工单可派）。"""
@@ -160,7 +200,9 @@ class VisitComplete(BaseModel):
 
 
 @router.post(
-    "/{order_id}/complete", dependencies=[Depends(require_roles("operator", "doctor", "public_health"))]
+    "/{order_id}/complete",
+    response_model=HomeVisitOut,
+    dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
 )
 def complete_visit(order_id: int, body: VisitComplete, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """完成上门服务：登记服务记录（仅已派单工单可完成）。"""
@@ -179,7 +221,9 @@ def complete_visit(order_id: int, body: VisitComplete, db: Session = Depends(get
 
 
 @router.post(
-    "/{order_id}/cancel", dependencies=[Depends(require_roles("operator", "doctor"))]
+    "/{order_id}/cancel",
+    response_model=HomeVisitOut,
+    dependencies=[Depends(require_roles("operator", "doctor"))],
 )
 def cancel_visit(order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     order = db.get(HomeVisitOrder, order_id)
@@ -194,7 +238,7 @@ def cancel_visit(order_id: int, db: Session = Depends(get_db), user: User = Depe
     return _visit_out(order)
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=HomeVisitStatsOut)
 def visit_stats(db: Session = Depends(get_db)):
     """上门服务统计：状态分布、签约关联率（体现家医签约履约）。"""
     by_status = row_dict(

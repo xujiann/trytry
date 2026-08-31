@@ -60,6 +60,59 @@ class SpecimenAdvance(BaseModel):
     slide_count: int = Field(default=0, ge=0)
 
 
+# ---- 响应契约（字段精确镜像 `_out`/`specimen_stats` 的现输出，勿改字节）----
+# 取证与建模判断见 tests/test_pathology_contract.py 的 docstring。
+
+
+class SpecimenOut(BaseModel):
+    """标本回执与列表行同形（`_out` 唯一产地）；四个动作回执共用本模型。
+
+    `cold_ischemia_minutes` 是「键恒在值可空」：时间未填全/倒序时为 null，
+    填全时是整分钟数（秒差整除，int 不是 float）。
+    """
+
+    id: int
+    request_id: int
+    specimen_no: str
+    site: str
+    excised_at: str
+    fixed_at: str
+    fixative: str
+    cold_ischemia_minutes: int | None
+    status: str
+    status_name: str
+    reject_reason: str
+    received_by: str
+    block_count: int
+    slide_count: int
+    note: str
+
+
+class SpecimenStatusBucketOut(BaseModel):
+    count: int
+    name: str
+
+
+class SpecimenColdIschemiaOut(BaseModel):
+    # avg_minutes 有实测时是真除法产地（恒 float），无实测为 null——不拿当前时间凑数
+    measured: int
+    unmeasured: int
+    avg_minutes: float | None
+    over_60min: int
+
+
+class SpecimenStatsOut(BaseModel):
+    # by_status 的键是状态码（随数据变），值恒为 {count, name} 两键子形状；
+    # reject_rate_pct 无标本时为 null、有标本时真除法恒 float。
+    total: int
+    by_status: dict[str, SpecimenStatusBucketOut]
+    rejected: int
+    reject_rate_pct: float | None
+    cold_ischemia: SpecimenColdIschemiaOut
+    reject_reason_options: list[str]
+    caliber: str
+
+
 def _cold_ischemia_minutes(specimen: PathologySpecimen) -> int | None:
     """冷缺血时间（离体到固定），病理质控的核心指标。
 
@@ -113,7 +166,10 @@ def _specimen(db: Session, specimen_id: int) -> PathologySpecimen:
 
 
 @router.post(
-    "/specimens", status_code=201, dependencies=[Depends(require_roles("doctor", "operator"))]
+    "/specimens",
+    status_code=201,
+    response_model=SpecimenOut,
+    dependencies=[Depends(require_roles("doctor", "operator"))],
 )
 def submit_specimen(body: SpecimenIn, db: Session = Depends(get_db)):
     """送检登记。一张病理申请单可对应多个标本（多部位取材），故不做一对一约束。"""
@@ -131,7 +187,7 @@ def submit_specimen(body: SpecimenIn, db: Session = Depends(get_db)):
     return _out(specimen)
 
 
-@router.get("/specimens")
+@router.get("/specimens", response_model=list[SpecimenOut])
 def list_specimens(
     request_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)
 ):
@@ -144,7 +200,9 @@ def list_specimens(
 
 
 @router.post(
-    "/specimens/{specimen_id}/receive", dependencies=[Depends(require_roles("doctor", "operator"))]
+    "/specimens/{specimen_id}/receive",
+    response_model=SpecimenOut,
+    dependencies=[Depends(require_roles("doctor", "operator"))],
 )
 def receive_specimen(specimen_id: int, body: SpecimenReceive, db: Session = Depends(get_db)):
     """核收。核收人必填——标本出了问题，要找得到当时是谁签的收。"""
@@ -159,7 +217,9 @@ def receive_specimen(specimen_id: int, body: SpecimenReceive, db: Session = Depe
 
 
 @router.post(
-    "/specimens/{specimen_id}/reject", dependencies=[Depends(require_roles("doctor", "operator"))]
+    "/specimens/{specimen_id}/reject",
+    response_model=SpecimenOut,
+    dependencies=[Depends(require_roles("doctor", "operator"))],
 )
 def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depends(get_db)):
     """拒收。只能在核收环节拒——已经开始取材制片了才说标本不合格，晚了。"""
@@ -181,7 +241,9 @@ def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depend
 
 
 @router.post(
-    "/specimens/{specimen_id}/advance", dependencies=[Depends(require_roles("doctor", "operator"))]
+    "/specimens/{specimen_id}/advance",
+    response_model=SpecimenOut,
+    dependencies=[Depends(require_roles("doctor", "operator"))],
 )
 def advance_specimen(specimen_id: int, body: SpecimenAdvance, db: Session = Depends(get_db)):
     """推进：核收→取材→制片→阅片。蜡块数与切片数在对应环节记录。"""
@@ -204,7 +266,7 @@ def advance_specimen(specimen_id: int, body: SpecimenAdvance, db: Session = Depe
     return _out(specimen)
 
 
-@router.get("/specimen-stats")
+@router.get("/specimen-stats", response_model=SpecimenStatsOut)
 def specimen_stats(db: Session = Depends(get_db)):
     """标本质控统计：拒收率与冷缺血时间。"""
     by_status = row_dict(

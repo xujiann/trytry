@@ -208,7 +208,14 @@ import app.spd.routers as spd_routers
 #   analytics 的 FormulaOut 撞名；ADR-0013 汇总/批次同改语义一行未动。
 #   见 test_pharmacy_contract.py / test_prescriptions_contract.py /
 #   test_tcm_contract.py，七处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 100
+# → 70（pathology/blood/drgs/homevisits/followups 各 6，共 30，零跳过。
+#   判断集锦：全簇无条件键——「键恒在值可空」一律 X|None（冷缺血分钟、
+#   拒收率、weight_range、dispatched_at…），followups 的 completed_at
+#   是空串非 null 声明 str；事中预警行 HTTP 种不出跨天住院→SessionLocal
+#   回填固定日期+today 同传基准日压出真实行（analytics 契约网既有做法）；
+#   DRG 事前提示候选行=目录行+match_score 继承尾键。见五份
+#   test_*_contract.py，七处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 70
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -285,6 +292,12 @@ FULLY_GOVERNED = {
     "pharmacy",
     "prescriptions",
     "tcm",
+    # 临床支撑五小簇（各 6），欠账 100→70 那批，见五份对应契约档
+    "pathology",
+    "blood",
+    "drgs",
+    "homevisits",
+    "followups",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

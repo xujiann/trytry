@@ -21,8 +21,45 @@ class BloodStockUpsert(BaseModel):
     quantity_ml: int = Field(gt=0)
 
 
+# ---- 响应契约（字段精确镜像现输出，勿改字节）----
+# 取证与建模判断见 tests/test_blood_contract.py 的 docstring。
+# 全簇无 Money/Float 列：毫升数是 Integer，声明 float 会把 600 印成 600.0。
+
+
+class BloodStockOut(BaseModel):
+    """库存回执与列表行同形（插入与累加两条路也同形）。"""
+
+    blood_type: str
+    component: str
+    quantity_ml: int
+
+
+class TransfusionReceiptOut(BaseModel):
+    """申请/审批回执共用；发血回执多一个库存尾键，另建模型不互相注入。"""
+
+    id: int
+    status: str
+
+
+class TransfusionIssueOut(BaseModel):
+    id: int
+    status: str
+    stock_remaining_ml: int
+
+
+class TransfusionRowOut(BaseModel):
+    id: int
+    patient_id: int
+    org_id: int
+    blood_type: str
+    component: str
+    quantity_ml: int
+    status: str
+
+
 @router.post(
     "/stocks",
+    response_model=BloodStockOut,
     dependencies=[Depends(require_roles("operator"))],  # 血库登记=经办
 )
 def upsert_blood_stock(body: BloodStockUpsert, db: Session = Depends(get_db)):
@@ -47,7 +84,7 @@ def upsert_blood_stock(body: BloodStockUpsert, db: Session = Depends(get_db)):
     return {"blood_type": stock.blood_type, "component": stock.component, "quantity_ml": stock.quantity_ml}
 
 
-@router.get("/stocks")
+@router.get("/stocks", response_model=list[BloodStockOut])
 def list_blood_stocks(db: Session = Depends(get_db)):
     return [
         {"blood_type": s.blood_type, "component": s.component, "quantity_ml": s.quantity_ml}
@@ -67,6 +104,7 @@ class TransfusionCreate(BaseModel):
 @router.post(
     "/requests",
     status_code=201,
+    response_model=TransfusionReceiptOut,
     dependencies=[Depends(require_roles("doctor"))],  # 用血申请=医师
 )
 def create_transfusion_request(
@@ -85,6 +123,7 @@ def create_transfusion_request(
 
 @router.post(
     "/requests/{request_id}/review",
+    response_model=TransfusionReceiptOut,
     dependencies=[Depends(require_roles("director"))],  # 用血审批=管理层（申请/审批分离）
 )
 def review_transfusion(
@@ -107,6 +146,7 @@ def review_transfusion(
 
 @router.post(
     "/requests/{request_id}/issue",
+    response_model=TransfusionIssueOut,
     dependencies=[Depends(require_roles("operator"))],  # 发血=血库经办
 )
 def issue_blood(request_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -135,7 +175,7 @@ def issue_blood(request_id: int, db: Session = Depends(get_db), user: User = Dep
     return {"id": request.id, "status": "issued", "stock_remaining_ml": stock.quantity_ml}
 
 
-@router.get("/requests")
+@router.get("/requests", response_model=list[TransfusionRowOut])
 def list_transfusion_requests(
     status: str | None = None,
     org_id: int | None = None,
