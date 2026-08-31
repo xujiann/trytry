@@ -1,20 +1,9 @@
 """居民端账号体系：手机号验证码登录、微信登录、实名绑定与登录态访问。"""
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
 from app.models import SmsCode
 from app.routers.portal import SEND_COOLDOWN_SECONDS, _reset_portal_failures
 from app.sms import ConsoleSmsProvider, set_sms_provider
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(autouse=True)
@@ -25,12 +14,6 @@ def clean_state():
     yield
     _reset_portal_failures()
     set_sms_provider(None)
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture(scope="module")

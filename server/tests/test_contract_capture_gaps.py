@@ -13,21 +13,10 @@
 如果形状不对，没有任何东西会发现。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import Organization, User
 from app.security import hash_password
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(scope="module")

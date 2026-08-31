@@ -2,29 +2,8 @@
 from datetime import date, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-def _login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+from conftest import login
 
 
 @pytest.fixture(scope="module")
@@ -41,10 +20,10 @@ def roles(client, admin, ward):
             headers=admin,
         )
     return {
-        "doctor": _login(client, "surg_doc", "passw0rd1"),
-        "doctor2": _login(client, "surg_doc2", "passw0rd1"),
-        "director": _login(client, "surg_dir", "passw0rd1"),
-        "operator": _login(client, "surg_op", "passw0rd1"),
+        "doctor": login(client, "surg_doc", "passw0rd1"),
+        "doctor2": login(client, "surg_doc2", "passw0rd1"),
+        "director": login(client, "surg_dir", "passw0rd1"),
+        "operator": login(client, "surg_op", "passw0rd1"),
     }
 
 
@@ -302,7 +281,7 @@ def test_requester_cannot_approve_own_request(client, admin, ward, roles):
               "role": "director"},
         headers=admin,
     )
-    dirdoc = _login(client, "surg_dirdoc", "passw0rd1")
+    dirdoc = login(client, "surg_dirdoc", "passw0rd1")
     # director 也能开手术申请？——申请限 doctor，故用 admin 建单再验证自批拦截
     req = client.post(
         "/api/surgery/requests",

@@ -1,28 +1,9 @@
 """阶段一：定时任务基座、内置任务、限流器行为。"""
 from datetime import date, datetime, timedelta, timezone
 
-import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
 from app.models import ChronicPatient, JobRun, ScheduledJob, SmsCode
 from app.scheduler import REGISTRY, due_jobs, run_job, sync_registry, tick
 from app.state_store import SlidingWindowRateLimiter
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def _naive_now():

@@ -4,13 +4,9 @@
 process 口径的标注，不另加字段）；配了 Redis 时计数字段取集群 hash（跨实例、
 跨重启），附 counter_scope="cluster"，样本仍为本实例。
 """
-import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
 
 from app import monitor
-from app.main import app
 from app.monitor import cluster_snapshot, metrics
 
 
@@ -45,19 +41,6 @@ class FakeRedis:
             else:
                 bucket[field] = str(float(bucket.get(field, "0")) + amount)
         self._queued = []
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def _stats(client, admin) -> dict:

@@ -5,35 +5,13 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
 from app.routers import esb as esb_module
 
 HL7_MESSAGE = (
     "MSH|^~\\&|MEDPLAT|COUNTY|HIS|COUNTY|20260821090000||ADT^A01|OUT0001|P|2.4\r"
     "PID|1||330281199203046014^^^CN^ID||王出站||19920304|M|||杭州市||13800001111"
 )
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
 
 
 def register_endpoint(client, admin, code, **kwargs):

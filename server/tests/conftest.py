@@ -22,6 +22,56 @@ def reset_database():
     Base.metadata.create_all(bind=engine)
 
 
+# ---------- 共享 client / admin / login（P1-20：74 份复制粘贴收敛于此） ----------
+#
+# 主流形状只有一种：module 级"重建库表 + 进 lifespan 上下文"的 TestClient，
+# 加一个拿 admin Bearer 头的 fixture。以下三件套即该形状的唯一权威副本；
+# 测试文件不必再各抄一份。
+#
+# 覆盖语义（pytest 就近原则）：文件里定义**同名** fixture 即自动覆盖共享版，
+# 无需任何注册动作。需要不同形状的模块（函数级隔离、raise_server_exceptions=False、
+# 额外的进程内状态复位、临时路由、上传目录清理等）就该这么做——本地定义是
+# "有意为之的差异"的显式记号，别为绕开共享版另起名字。
+# 注意：本地 client 若是 function 级，依赖它的 admin 也必须一并本地定义，
+# 否则 module 级的共享 admin 会与之 ScopeMismatch。
+
+
+def login(client, username, password):
+    """登录取 Bearer 头（普通函数，非 fixture；`from conftest import login` 使用）。
+
+    断言 200：登录失败当场报出响应体，比调用点 KeyError('access_token') 可定位。
+    """
+    resp = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+@pytest.fixture(scope="module")
+def client():
+    """module 级共享 TestClient：先重建库表，再进 lifespan 上下文（admin 账号在那里种）。
+
+    惰性 import：保持 `app.main` 在首个用到它的测试模块收集时才加载的现状，
+    不因 conftest 提前拉起整个应用。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    reset_database()
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture(scope="module")
+def admin(client):
+    """平台管理员（admin/admin123）的 Bearer 头，module 级、跟随 client 生命周期。
+
+    文件本地覆盖了 `client` 时，本 fixture 拿到的就是那个本地版本（pytest 按
+    用例所在模块就近解析依赖），无需连带覆盖 admin——除非本地 client 是 function 级。
+    """
+    return login(client, "admin", "admin123")
+
+
 @pytest.fixture(autouse=True)
 def _reset_monitor_breaker():
     """每个用例都从干净的熔断器出发。

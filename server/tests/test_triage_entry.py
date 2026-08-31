@@ -10,26 +10,7 @@
 """
 import inspect
 
-import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
 from app.routers import triage
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:   # 进上下文才跑 lifespan，admin 账号在那里种
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def test_症状命中给出科室与急症提示(client, admin):

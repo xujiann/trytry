@@ -1,27 +1,9 @@
 """D1 号源批量生成（POST /api/appointments/slots/batch）：模板×日期区间展开、
 节假日/周末跳过、生成量上限保护、重复日期幂等跳过。"""
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import AppointmentSlot, Employee, Organization
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture(scope="module")

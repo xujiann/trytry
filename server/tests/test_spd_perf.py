@@ -7,26 +7,16 @@ N+1 的本质是"对象多一个、查询多一条"，那么固定操作、把�
 from contextlib import contextmanager
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import event
 
-from conftest import reset_database
-
 from app.database import engine
-from app.main import app
 
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
+from conftest import login
 
 
 @pytest.fixture(scope="module")
 def h(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 @contextmanager

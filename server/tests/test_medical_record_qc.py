@@ -1,10 +1,8 @@
 """块2：结构化病历与环节质控——缺陷检出、评分分级、修正后复评提分、统计口径。"""
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
-from app.main import app
 
 GOOD_ILLNESS = (
     "患者3天前无明显诱因出现咳嗽咳痰，痰白质黏，伴发热，最高体温38.5℃，"
@@ -19,24 +17,6 @@ GOOD_RECORD = {
     "diagnosis_basis": GOOD_BASIS,
     "treatment_plan": "予头孢呋辛抗感染用药，止咳化痰对症处置，3天后门诊随访复查",
 }
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

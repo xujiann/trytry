@@ -7,11 +7,9 @@ infectious 的 diseases/cases 端点已有契约（用 schemas），只剩这两
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
-from app.main import app
 
 ALERT_KEYS = {"disease_code", "disease_name", "case_count", "org_count", "window_days", "severity"}
 LATE_KEYS = {
@@ -21,21 +19,8 @@ LATE_KEYS = {
 
 
 @pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def _login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
 def ctx(client):
-    admin = _login(client, "admin", "admin123")
+    admin = login(client, "admin", "admin123")
     org = client.post(
         "/api/organizations",
         json={"name": "传染病特征化院", "org_type": "township", "level": "township"},
@@ -46,7 +31,7 @@ def ctx(client):
         json={"username": "inf_ph", "password": "pass123456", "role": "public_health", "org_id": org["id"]},
         headers=admin,
     )
-    ph = _login(client, "inf_ph", "pass123456")
+    ph = login(client, "inf_ph", "pass123456")
     # A15=肺结核（乙类 24h，启动种子）；发病日取较早，reported_at=now → 迟报 + 落入宽窗
     r = client.post(
         "/api/infectious/cases",

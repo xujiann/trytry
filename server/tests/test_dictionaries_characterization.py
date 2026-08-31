@@ -6,26 +6,14 @@ dictionaries 其余端点已有契约（CodeEntryOut），只剩批量导入返�
 """
 from __future__ import annotations
 
-import pytest
-from fastapi.testclient import TestClient
+from conftest import login
 
-from conftest import reset_database
-
-from app.main import app
 
 IMPORT_KEYS = {"imported", "skipped"}
 
 
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
 def _admin(client):
-    r = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 def test_import_keys_and_counts(client):

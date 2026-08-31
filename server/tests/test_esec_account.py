@@ -15,14 +15,10 @@ import time as _time
 from datetime import timedelta
 
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app import totp
 from app.config import settings
 from app.database import SessionLocal
-from app.main import app
 from app.models import LoginLog, User, utcnow
 from app.routers.auth import _reset_login_failures
 from app.security import revoked_tokens
@@ -73,13 +69,6 @@ def test_totp校验时间窗与格式防线():
 # ---------------------------------------------------------------------------
 # 应用层
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(autouse=True)

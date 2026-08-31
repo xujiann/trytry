@@ -23,10 +23,10 @@ import pathlib
 import pytest
 from sqlalchemy import inspect
 
-from conftest import reset_database
-
 from app.database import Base, engine
 import app.spd.models as spd_models  # noqa: F401 - 导入即注册
+
+from conftest import login
 
 SERVER = pathlib.Path(__file__).resolve().parents[1]
 MIGRATION = SERVER / "alembic" / "versions" / "e1a2b3c4d5e9_spd十八张表补唯一索引与去重.py"
@@ -58,20 +58,8 @@ EXPECTED_UNIQUE = {
 
 
 @pytest.fixture(scope="module")
-def client():
-    reset_database()
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
 def admin_headers(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 def test_十八处唯一索引在模型上都还是唯一的(client):

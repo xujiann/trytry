@@ -10,24 +10,13 @@
 缺陷唯一测得住的形态：只测一个入口，两边分叉时照样全绿。
 """
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
+from conftest import login
 
 
 @pytest.fixture(scope="module")
 def h(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")
@@ -134,8 +123,10 @@ def test_口径只写在一处():
     import pathlib
     import re
 
+    routers_dir = pathlib.Path(__file__).resolve().parent.parent / "app" / "spd" / "routers"
     for name in ("population.py", "portal.py"):
-        src = pathlib.Path("app/spd/routers", name).read_text(encoding="utf-8")
+        # 锚在 __file__ 而非 CWD——隔离工作目录跑单测（多 agent 并行的既定做法）不该假红
+        src = (routers_dir / name).read_text(encoding="utf-8")
         hits = re.findall(r'risk_level["\']?\s*(?:in|==)\s*\(?["\'](?:mid|high)', src)
         assert not hits, (
             f"{name} 里又出现了自己判风险等级的写法（{hits}）——"

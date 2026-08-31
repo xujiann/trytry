@@ -5,20 +5,9 @@
 监管能查、患者本人能查、查询动作本身也留痕、越权读被拦。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import AccessLog, SmsCode
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 def _login(client, username, password="pw123456"):

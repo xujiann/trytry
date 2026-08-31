@@ -7,20 +7,9 @@ center_type 判定、L-8 登录失败滑动窗口、L-9 jti 黑名单、L-11 特
 import time
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
 from app.security import decode_token, revoked_tokens
 from app.state_store import LoginFailureTracker
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 def login(client, username, password):

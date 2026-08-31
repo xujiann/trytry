@@ -15,25 +15,10 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
 from app.config import settings
 from app.main import app
 from app.routers.auth import _reset_login_failures
 from app.security import AUTH_COOKIE, COOKIE_MODE_HEADER, CSRF_COOKIE, CSRF_HEADER
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture(autouse=True)

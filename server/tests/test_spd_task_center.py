@@ -8,24 +8,13 @@
 它们与任务共享同一批状态词，改一处很容易漏另一处。
 """
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
+from conftest import login
 
 
 @pytest.fixture(scope="module")
 def h(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

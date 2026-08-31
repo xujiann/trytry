@@ -20,15 +20,11 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import text
-
-from conftest import reset_database
 
 from app import jobs
 from app.config import DEFAULT_SECRET, settings
 from app.database import SessionLocal, engine
-from app.main import app
 from app.models import Patient, ResidentAccount, SmsCode
 from app.pii import PII_PREFIX, pii_filter, pii_index
 from app.routers.portal import _account_by, _reset_portal_failures
@@ -39,21 +35,6 @@ SERVER_DIR = Path(__file__).resolve().parent.parent
 #: 用例聚焦的是检索索引口径，不是令牌口径。
 OLD_SECRET = settings.secret
 NEW_SECRET = "rotation-new-secret-for-pii-index-test"
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    token = client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin123"}
-    ).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture()

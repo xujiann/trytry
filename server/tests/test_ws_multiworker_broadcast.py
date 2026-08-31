@@ -9,19 +9,8 @@ import json
 import queue
 
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 import app.ws as ws_mod
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(scope="module")

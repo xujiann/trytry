@@ -4,12 +4,8 @@
 超支会不会被自动扣、账面数会不会被当成资金流、分配办法有没有被写死。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.clock import now_naive
-from app.main import app
 
 # 按绩效分配的池子必须建在**当年**：绩效评分自 2026-08 起是周期口径
 # （见 docs/统计口径对照表.md 第 3 条），`distribute` 用 `pool.year` 取分。
@@ -18,19 +14,6 @@ from app.main import app
 # 全员 0 分 → 权重和为 0 → 422。与得分无关的公式（`formula_expr="1"`）不受影响，
 # 所以只有这一个池子需要跟着当年走。
 SCORED_POOL_YEAR = now_naive().year
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture(scope="module")

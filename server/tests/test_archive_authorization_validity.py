@@ -19,21 +19,10 @@
 （那样写的话，两边一起漂走也照样绿）。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import ArchiveAuthorization, User
 from app.visibility import clear_visibility_cache, patient_basis
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 def _login(client, username, password="pw123456"):

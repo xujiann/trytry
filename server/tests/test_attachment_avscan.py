@@ -14,7 +14,7 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login, reset_database
 
 import app.avscan as avscan
 from app.avscan import attachment_av_scan, ping, scan_bytes
@@ -132,12 +132,6 @@ def client():
     with TestClient(app) as c:
         yield c
     shutil.rmtree("./test_uploads", ignore_errors=True)
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture(scope="module")

@@ -17,32 +17,14 @@
 import inspect
 import threading
 
-import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
-
-from conftest import reset_database
 
 import app.main as main_mod
 from app.audit_chain import verify_chain
 from app.database import SessionLocal
-from app.main import app
 from app.models import AuditLog
 
 WORKERS = 8
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 class _FakeURL:

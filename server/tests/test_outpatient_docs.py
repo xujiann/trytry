@@ -5,24 +5,6 @@
 这些都不是功能问题，是这份文书还算不算数的问题。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture(scope="module")

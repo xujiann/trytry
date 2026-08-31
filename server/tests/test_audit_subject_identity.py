@@ -15,12 +15,8 @@ G3 把三套浏览器前端切成 Cookie 会话后，浏览器不再发 Authoriz
 用例 1、3 的"不是 anonymous"断言必红。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import AuditLog, SmsCode, User
 from app.security import (
     COOKIE_MODE_HEADER,
@@ -32,13 +28,6 @@ from app.security import (
 
 COOKIE_MODE = {COOKIE_MODE_HEADER: "cookie"}
 RESIDENT_PHONE = "13700008888"
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(autouse=True)

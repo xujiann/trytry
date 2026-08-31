@@ -9,24 +9,13 @@
 （前者委托后者），但"设计上同源"和"真的同源"之间要有一条用例。
 """
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
+from conftest import login
 
 
 @pytest.fixture(scope="module")
 def h(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

@@ -9,32 +9,17 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
-from app.main import app
 
 ISSUE_KEYS = {"id", "cert_type", "cert_type_name", "cert_no", "name", "event_date"}
 LIST_KEYS = {"id", "cert_type", "cert_no", "name", "gender", "event_date", "detail", "org_id"}
 
 
 @pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def _login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
 def ctx(client):
-    admin = _login(client, "admin", "admin123")
+    admin = login(client, "admin", "admin123")
     org = client.post(
         "/api/organizations",
         json={"name": "证明特征化医院", "org_type": "lead_hospital", "level": "county"},
@@ -45,7 +30,7 @@ def ctx(client):
         json={"username": "cert_doc", "password": "pass123456", "role": "doctor", "org_id": org["id"]},
         headers=admin,
     )
-    doc = _login(client, "cert_doc", "pass123456")
+    doc = login(client, "cert_doc", "pass123456")
     issued = client.post(
         "/api/certs",
         json={"cert_type": "birth", "name": "新生儿甲", "gender": "男",

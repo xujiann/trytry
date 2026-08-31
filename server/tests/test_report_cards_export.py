@@ -1,30 +1,10 @@
 """工程包 I1：法定上报导出——传染病报告卡与死因报告卡（单卡 JSON + 批量 CSV + 权限/留痕）。"""
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import AccessLog
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

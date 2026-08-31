@@ -1,28 +1,7 @@
 """块1：报告打印——检查报告/处方/申请单/证明的 A4 可打印 HTML、脱敏、模板生效与404。"""
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
+from conftest import login
 
 
 @pytest.fixture(scope="module")

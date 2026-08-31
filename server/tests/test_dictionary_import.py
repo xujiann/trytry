@@ -7,37 +7,15 @@ import sys
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from import_dictionary import run_import  # noqa: E402
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import CodeEntry, CodeSystem
 
 SAMPLES = Path(__file__).resolve().parent.parent / "scripts" / "samples"
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
 
 
 def _entry_count(system_code: str) -> int:

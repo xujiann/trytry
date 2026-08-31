@@ -25,17 +25,6 @@ def client():
         yield c
 
 
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
-
-
 @pytest.fixture(scope="module")
 def org(client, admin):
     return client.post(

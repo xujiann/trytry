@@ -6,16 +6,12 @@
 import os
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-
-from conftest import reset_database
 
 from app import gmcrypto
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.main import app
 from app.models import Patient, ResidentAccount, SmsCode
 from app.pii import PII_PREFIX, decrypt_pii, encrypt_pii, pii_filter, pii_index
 from app.routers.portal import _reset_portal_failures
@@ -111,18 +107,6 @@ def test_密钥轮换_旧钥密文经previous回退可解(monkeypatch):
 
 
 # ---------------------------------------------------------------- 应用两态行为
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture()

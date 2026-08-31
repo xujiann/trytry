@@ -1,10 +1,6 @@
 """工程包 I1：HL7 v2 入站深度——ORU^R01 检验结果回写、ADT 事件细分、白名单 422 与交换日志留证。"""
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
 
 ID_CARD = "330281199203046014"
 OTHER_ID_CARD = "330281198802027015"
@@ -19,24 +15,6 @@ def adt(event, control_id="MSG01", pid=True, pv1="", dg1=""):
     if dg1:
         lines.append(dg1)
     return "\r".join(lines)
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

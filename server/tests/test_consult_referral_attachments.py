@@ -4,7 +4,7 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login, reset_database
 
 from app.main import app
 from app.database import SessionLocal
@@ -18,12 +18,6 @@ def client():
     reset_database()
     with TestClient(app) as c:
         yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture()

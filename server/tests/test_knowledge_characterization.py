@@ -8,11 +8,9 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
-from app.main import app
 
 CREATE_KEYS = {"id", "category", "title"}
 UPDATE_KEYS = {"id", "active", "expire_date"}
@@ -21,21 +19,8 @@ EXPIRING_KEYS = {"id", "category", "title", "expire_date"}
 
 
 @pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def _login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
 def ctx(client):
-    admin = _login(client, "admin", "admin123")
+    admin = login(client, "admin", "admin123")
     org = client.post(
         "/api/organizations",
         json={"name": "知识库特征化医院", "org_type": "lead_hospital", "level": "county"},
@@ -46,7 +31,7 @@ def ctx(client):
         json={"username": "kn_dir", "password": "pass123456", "role": "director", "org_id": org["id"]},
         headers=admin,
     )
-    dir_h = _login(client, "kn_dir", "pass123456")
+    dir_h = login(client, "kn_dir", "pass123456")
     created = client.post(
         "/api/knowledge",
         json={"category": "regulation", "title": "病历质控制度", "body": "正文", "expire_date": "2026-06-15"},

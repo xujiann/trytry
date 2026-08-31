@@ -16,13 +16,11 @@ from datetime import datetime, timezone
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
 from app.config import settings
 from app.egress import gateway_sign
-from app.main import app
 from app.payments import HttpGatewayPaymentGateway
 from app.routers import billing
 
@@ -41,13 +39,6 @@ class DummyResp:
         return self._payload
 
 
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
 @pytest.fixture(autouse=True)
 def gateway_channel(monkeypatch):
     """每个用例注册好 http 网关与验签密钥，用完摘除，不污染其他测试模块。"""
@@ -56,17 +47,6 @@ def gateway_channel(monkeypatch):
     assert billing.register_http_gateway() is True
     yield
     billing._GATEWAYS.pop("gateway", None)
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

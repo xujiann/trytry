@@ -1,23 +1,5 @@
 """阶段三：会计凭证（复式记账）、成本核算、物资采购、高值耗材追溯。"""
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def _login(client, username, password="passw0rd1"):

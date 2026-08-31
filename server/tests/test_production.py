@@ -1,17 +1,6 @@
 """M1 生产化基础：统一配置、请求追踪、健康检查数据库探测。"""
-import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
 
 
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 def test_settings_reads_medplat_env():

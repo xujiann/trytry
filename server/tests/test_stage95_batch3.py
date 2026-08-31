@@ -1,25 +1,5 @@
 """阶段九·五 第三批：⑧一码通与多卡协同、⑨便捷寻医、⑬名老中医传承、㉑模拟诊疗。"""
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    token = client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin123"}
-    ).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(scope="module")

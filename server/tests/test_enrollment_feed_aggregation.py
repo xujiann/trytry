@@ -10,7 +10,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login, reset_database
 
 from app.database import SessionLocal
 from app.main import app
@@ -32,8 +32,7 @@ def client():
 
 
 def _admin(client):
-    r = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 @pytest.fixture()

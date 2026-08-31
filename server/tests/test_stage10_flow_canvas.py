@@ -4,27 +4,9 @@
 补上并配用例。
 """
 
+from pathlib import Path
+
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    token = client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin123"}
-    ).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 # ================================================================ 图形化编排
@@ -53,7 +35,9 @@ def test_画布的校验与服务端三条规则一致(client, admin):
     assert "指向不存在的节点" in body
     assert "必须有终态节点" in body
 
-    server = open("app/routers/workflows.py", encoding="utf-8").read()
+    # 锚在 __file__ 而非 CWD——隔离工作目录跑单测（多 agent 并行的既定做法）不该假红
+    workflows_py = Path(__file__).resolve().parent.parent / "app" / "routers" / "workflows.py"
+    server = workflows_py.read_text(encoding="utf-8")
     rules = server[server.index("def _validate_nodes"):server.index("def _validate_nodes") + 1200]
     assert "节点 key 不得重复" in rules
     assert "指向不存在的节点" in rules

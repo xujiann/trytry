@@ -16,13 +16,9 @@ test_cookie会话_写请求必须过CSRF双提交 的"缺头 403"断言必红。
 import time
 
 import pytest
-from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from conftest import reset_database
-
 from app.config import settings
-from app.main import app
 from app.models import SmsCode
 from app.routers.auth import _reset_login_failures
 from app.routers.portal import _reset_portal_failures
@@ -35,14 +31,9 @@ from app.security import (
     PORTAL_CSRF_COOKIE,
 )
 
+from conftest import login
+
 COOKIE_MODE = {COOKIE_MODE_HEADER: "cookie"}
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(autouse=True)
@@ -57,9 +48,7 @@ def clean_state(client):
 
 @pytest.fixture(scope="module")
 def admin_headers(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    assert resp.status_code == 200
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

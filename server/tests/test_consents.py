@@ -8,25 +8,14 @@
 from datetime import date
 
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import AccessLog, AuditLog, ConsentRecord, Patient, SmsCode
 from app.routers.portal import _reset_portal_failures
 from app.sms import set_sms_provider
 
 MINOR_BIRTH = f"{date.today().year - 8}-01-01"    # 现龄 8 岁 < 14
 ADULT_BIRTH = f"{date.today().year - 30}-01-01"   # 现龄 30 岁
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(autouse=True)

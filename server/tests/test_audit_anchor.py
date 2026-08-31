@@ -43,12 +43,6 @@ def client():
         yield c
 
 
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
 def _seed_chain(count: int) -> list[tuple[int, str]]:
     """按真实链算法造一段连续审计链，返回 [(id, entry_hash), ...]。"""
     with SessionLocal() as db:

@@ -10,6 +10,8 @@ Lua 比对后删（仅当值等于自己的 token 才删）。
 """
 from __future__ import annotations
 
+from conftest import login
+
 import app.scheduler as scheduler
 
 KEY = "medplat:joblock:job"
@@ -188,10 +190,7 @@ def test_手工触发在任务执行中返回409(monkeypatch):
     name = next(iter(scheduler.REGISTRY))
 
     with TestClient(app) as client:
-        token = client.post(
-            "/api/auth/login", json={"username": "admin", "password": "admin123"}
-        ).json()["access_token"]
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = login(client, "admin", "admin123")
 
         # 锁空闲：正常跑
         ok = client.post(f"/api/jobs/{name}/run", headers=headers)

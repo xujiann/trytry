@@ -13,24 +13,6 @@
 会把 `0` 变成 `0.0`——那是改响应字节，不是治理。故契约写 `int | float`。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    r = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
 @pytest.fixture(scope="module")

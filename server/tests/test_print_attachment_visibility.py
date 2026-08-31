@@ -14,7 +14,7 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login, reset_database
 
 from app.main import app
 from app.database import SessionLocal
@@ -29,16 +29,10 @@ def client():
         yield c
 
 
-def _login(client, username, password):
-    r = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
-
-
 @pytest.fixture()
 def world(client):
     """两家互不相干的县医院，各有自己的患者、报告、处方与医师。"""
-    admin = _login(client, "admin", "admin123")
+    admin = login(client, "admin", "admin123")
     out = {"admin": admin}
     for tag in ("甲", "乙"):
         org = client.post(
@@ -52,7 +46,7 @@ def world(client):
                   "role": "doctor", "org_id": org["id"]},
             headers=admin,
         )
-        doc = _login(client, f"doc_{tag}", "pass123456")
+        doc = login(client, f"doc_{tag}", "pass123456")
         patient = client.post(
             "/api/patients",
             json={"name": f"{tag}患者",
@@ -124,7 +118,7 @@ def test_共享诊断中心医师能打印与挂载自己写的报告(client, wo
               "org_id": third_org["id"]},
         headers=admin,
     )
-    third = _login(client, "doc_丙", "pass123456")
+    third = login(client, "doc_丙", "pass123456")
     assert client.get(f"/api/print/exam-reports/{rid}", headers=third).status_code == 403
 
 

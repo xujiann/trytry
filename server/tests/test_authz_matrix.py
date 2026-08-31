@@ -20,9 +20,8 @@ import inspect
 
 import pytest
 from fastapi.routing import APIRoute
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
 from app.deps import ROLE_NAMES
 from app.main import app
@@ -199,19 +198,9 @@ NON_ADMIN_ROLES = [r for r in ROLE_NAMES if r != "admin"]
 
 
 @pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
 def tokens(client):
     """给每个非 admin 角色各建一个账号，返回角色 → 请求头。"""
-    admin = client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin123"}
-    ).json()["access_token"]
-    headers = {"Authorization": f"Bearer {admin}"}
+    headers = login(client, "admin", "admin123")
     out = {}
     for role in NON_ADMIN_ROLES:
         username = f"authz_{role}"
@@ -220,10 +209,7 @@ def tokens(client):
             json={"username": username, "password": "passw0rd1", "role": role},
             headers=headers,
         )
-        token = client.post(
-            "/api/auth/login", json={"username": username, "password": "passw0rd1"}
-        ).json()["access_token"]
-        out[role] = {"Authorization": f"Bearer {token}"}
+        out[role] = login(client, username, "passw0rd1")
     return out
 
 

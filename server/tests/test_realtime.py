@@ -1,18 +1,6 @@
 """M5 实时消息：WebSocket 通知广播与任务待办中心。"""
 import pytest
-from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(scope="module")

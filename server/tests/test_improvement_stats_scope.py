@@ -16,7 +16,7 @@ Promise.all 里同时取，于是同一屏上"列表 2 条"、"汇总 87 条"。
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login, reset_database
 
 from app.database import SessionLocal
 from app.main import app
@@ -30,16 +30,10 @@ def client():
         yield c
 
 
-def _login(client, username, password):
-    r = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
-
-
 @pytest.fixture()
 def world(client):
     """两家互不相干的卫生院，各有自己的整改任务。"""
-    admin = _login(client, "admin", "admin123")
+    admin = login(client, "admin", "admin123")
     out = {"admin": admin}
     with SessionLocal() as db:
         creator = db.query(User).filter(User.username == "admin").first()
@@ -68,7 +62,7 @@ def world(client):
                     due_date="2030-01-01", status="verified", created_by=creator_id,
                 ))
             db.commit()
-        out[tag] = {"org": org, "op": _login(client, f"op_{tag}", "pass123456")}
+        out[tag] = {"org": org, "op": login(client, f"op_{tag}", "pass123456")}
     return out
 
 

@@ -1,10 +1,7 @@
 """块1：集成平台底座 ESB——入队鉴权/限流、编排逐步执行、失败重试与死信、统计口径。"""
-import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
-from app.main import app
 
 HL7_MESSAGE = (
     "MSH|^~\\&|HIS|COUNTY|MEDPLAT|COUNTY|20240101090000||ADT^A01|MSG0001|P|2.4\r"
@@ -18,24 +15,6 @@ FHIR_PATIENT = {
     "birthDate": "1988-02-02",
     "telecom": [{"system": "phone", "value": "13900002222"}],
 }
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
 
 
 def register_endpoint(client, admin, code, **kwargs):

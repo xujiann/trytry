@@ -20,14 +20,6 @@ def client():
 
 
 @pytest.fixture(scope="module")
-def admin(client):
-    token = client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin123"}
-    ).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture(scope="module")
 def org(client, admin):
     return client.post(
         "/api/organizations",

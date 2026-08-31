@@ -2,21 +2,12 @@
 from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
-from app.main import app
 from app.routers.billing import MOCK_GATEWAY
 
 TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 @pytest.fixture(autouse=True)
@@ -25,17 +16,6 @@ def clean_gateway():
     MOCK_GATEWAY.reset()
     yield
     MOCK_GATEWAY.reset()
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

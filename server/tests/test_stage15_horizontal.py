@@ -17,12 +17,8 @@ import os
 import warnings
 
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import AccessLog
 
 ROUTER_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "routers")
@@ -58,13 +54,6 @@ def test_路由扫描必须递归到子包():
     assert any(name.startswith("spd/config/") for name in scanned), (
         "没扫到 app/spd/routers/config/ 子包——_router_files() 又退回成不递归了"
     )
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 def _login(client, username, password="pw123456"):

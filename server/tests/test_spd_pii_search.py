@@ -7,31 +7,12 @@
 前缀/中缀模糊落空是**既定降级**而非 bug。
 """
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import text
-
-from conftest import reset_database
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.main import app
 from app.pii import PII_PREFIX
 from app.spd.models import SpdCaseReport, SpdEnrollment
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    token = client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin123"}
-    ).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture()

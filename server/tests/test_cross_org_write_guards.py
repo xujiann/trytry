@@ -22,17 +22,6 @@
 **发起退款**（钱）。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from app.main import app
-from tests.conftest import reset_database
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
 
 
 def _login(client, username, password="pw123456"):

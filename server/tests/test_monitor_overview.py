@@ -13,31 +13,11 @@
 """
 from __future__ import annotations
 
-import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
-
-from app.main import app
 from app.database import SessionLocal
 from app.models import JobRun
 
 #: 端点 recent_failures 的返回条数上限（与 routers/monitor.py 保持一致）
 RECENT_FAILURES_LIMIT = 5
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def _seed_runs(*runs: tuple[str, str]) -> None:

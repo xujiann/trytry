@@ -15,12 +15,8 @@
    特征化用例在改动前先跑绿过一遍，见各用例 docstring）。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.database import SessionLocal
-from app.main import app
 from app.models import (
     AccessLog,
     Admission,
@@ -37,13 +33,6 @@ from app.routers.portal import _reset_portal_failures
 from app.sms import set_sms_provider
 
 
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
 @pytest.fixture(autouse=True)
 def clean_state():
     _reset_portal_failures()
@@ -51,12 +40,6 @@ def clean_state():
     yield
     _reset_portal_failures()
     set_sms_provider(None)
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def _clear_cooldown(phone: str) -> None:

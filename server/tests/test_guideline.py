@@ -1,23 +1,12 @@
 """功能指引补齐模块测试：⑦⑨⑬⑭⑮⑯⑲⑳㉑㉓㉔㉕㉖㉗㉘㉚㉛㉜㉞及排班/质控/样本物流。"""
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
+from conftest import login
 
 
 @pytest.fixture(scope="module")
 def h(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

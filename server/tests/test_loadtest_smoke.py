@@ -5,9 +5,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.main import app
 
@@ -16,14 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from loadtest import format_results, run_benchmark  # noqa: E402
 
 pytestmark = pytest.mark.smoke
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    # TestClient 上下文触发 lifespan（种子化 admin 账号）
-    with TestClient(app) as c:
-        yield c
 
 
 def test_benchmark_smoke(client):

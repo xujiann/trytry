@@ -2,28 +2,9 @@
 
 自定义角色与权限点、审计防篡改哈希链、国密算法适配层、CSP 响应头。
 """
-import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
 
 from app import gmcrypto
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    token = client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin123"}
-    ).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 # ================================================================ 国密适配层

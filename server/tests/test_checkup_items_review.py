@@ -1,23 +1,7 @@
 """体检分项结果与总检流程（B2）：分项录入、异常标志口径、总检角色与响应兼容。"""
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
-
-from app.main import app
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+from conftest import login
 
 
 @pytest.fixture(scope="module")

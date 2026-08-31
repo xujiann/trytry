@@ -13,31 +13,16 @@ abnormal_items} 四个，不多不少。response_model 若少声明一个字段�
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import login
 
-from app.main import app
 
 EXPECTED_KEYS = {"id", "patient_id", "exam_date", "abnormal_items"}
 
 
 @pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-def _login(client, username, password):
-    resp = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
-
-
-@pytest.fixture(scope="module")
 def ctx(client):
-    admin = _login(client, "admin", "admin123")
+    admin = login(client, "admin", "admin123")
     org = client.post(
         "/api/organizations",
         json={"name": "体检特征化医院", "org_type": "lead_hospital", "level": "county"},
@@ -53,7 +38,7 @@ def ctx(client):
         json={"username": "chk_ph", "password": "pass123456", "role": "public_health", "org_id": org["id"]},
         headers=admin,
     )
-    ph = _login(client, "chk_ph", "pass123456")
+    ph = login(client, "chk_ph", "pass123456")
     # 一条异常 + 一条正常，确认 /abnormal 只出异常那条
     client.post(
         "/api/checkups",

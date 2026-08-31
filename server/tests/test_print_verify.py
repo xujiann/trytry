@@ -13,12 +13,8 @@
    漏配注册表，这里第一时间变红，而不是"印了验真码却永远查无此单"。
 """
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app.config import settings
-from app.main import app
 from app.printverify import (
     VERIFY_REGISTRY,
     make_verify_token,
@@ -27,19 +23,6 @@ from app.printverify import (
 )
 from app.routers import printing
 from app.state_store import SlidingWindowRateLimiter
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:  # 进上下文才跑 lifespan，admin 账号在那里种
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture(scope="module")

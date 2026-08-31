@@ -9,26 +9,16 @@ import ast
 import os
 
 import pytest
-from fastapi.testclient import TestClient
-
-from conftest import reset_database
 
 from app import models
 from app.clock import now_aware, now_naive, today_str
-from app.main import app
 
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
+from conftest import login
 
 
 @pytest.fixture(scope="module")
 def admin_headers(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    return login(client, "admin", "admin123")
 
 
 @pytest.fixture(scope="module")

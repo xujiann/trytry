@@ -19,13 +19,9 @@ from contextlib import contextmanager
 from datetime import datetime
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import event
 
-from conftest import reset_database
-
 from app.database import SessionLocal, engine
-from app.main import app
 from app.models import (
     Admission,
     Bed,
@@ -44,19 +40,6 @@ from app.models import (
 )
 
 PERIOD = "2026-05"
-
-
-@pytest.fixture(scope="module")
-def client():
-    reset_database()
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def admin(client):
-    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
-    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture(scope="module")
