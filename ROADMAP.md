@@ -133,6 +133,22 @@
 
 ## Next（治理逐块推进，只进不退）
 
+- ✅ **多 agent 并行批第三、四轮（2026-08-31）：二十一模块 148 端点，基线 218 → 40，覆盖率 95.8%**。
+  七个并行会话分两波（billing+inpatient 29 / admin_mgmt+maternal 32 / 四小簇 32 //
+  药事三簇 25 / 临床五小簇 30 / 运维八小簇 30），主会话分六次收基线
+  218→189→157→125→100→70→40，每批隔离 worktree 验证后推送。取证升级点：Money 的
+  int/float 一律 `type(x) is int` 显式钉（dict 相等对 15==15.0 是盲的）；cost 汇总同一行
+  两族并存（0.0 桶起加恒 float vs .get(id,0) 兜底 int|float）——判据是产地不是字段名；
+  todos 分节真多态照 drilldown 先例宽字典+type 自描述；两个真下载端点（audit/export
+  NDJSON、附件字节流）照 CsvResponse 先例走媒体类型声明并入册豁免清单钉（+2）。
+  四轮合计 **410 端点（450→40）、三十四模块进 FULLY_GOVERNED**；剩余 40 处零散分布在
+  exams(3)/insurance(5)/integration(5)/chronic(5)/consultations(2)/medication(4)/
+  patients(4)/publichealth(3)/vaccination(2)/eldercare(2)/emergency(1)/appointments(1)
+  等部分治理模块，可按同法一批收完。
+  同日另收：**P1-9 启动种子化加固**（逐块隔离 + PG advisory lock 专用连接串行化 +
+  撞键按已种好继续，见 TECH_DEBT 销账行与 ADR 先例注释）；**CI 两条 e2e flake 根修**
+  （原生表单提交竞态——监听先于 await + shared.js document 层兜底，P2-31 登记剩余面；
+  瞬态断言改稳定终态）；手写 SQL 棘轮 15→17（advisory lock 为 ORM 无法表达的合法增量）。
 - ✅ **多 agent 并行批第二轮（2026-08-28）：六模块 118 端点，基线 336 → 218，覆盖率首破 77%**。
   同一套编队与纪律（三会话各领一簇、互不碰文件、主会话分三次收基线 336→302→259→218、
   每批隔离 worktree 验证后推送）：①esb 13 + education 21（payload/steps 外来 JSON 宽 dict
