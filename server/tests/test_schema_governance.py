@@ -74,7 +74,9 @@ FROZEN_CORE_COLUMNS: dict[str, list[str]] = {
     # 迁移 a4b5c6d7e8f9；ADR 由协调方随包合并补录（docs/ 属并行包禁改区，同 E1 先例）。
     "patients": ["birth_date", "created_at", "deactivated_at", "ehc_no", "gender", "id", "id_card", "id_card_idx", "name", "phone", "phone_idx"],
     "encounters": ["created_at", "diagnosis_code", "diagnosis_name", "doctor_name", "encounter_type", "id", "org_id", "patient_id", "summary"],
-    "admissions": ["admitted_at", "bed_id", "created_by", "diagnosis_name", "discharged_at", "doctor_name", "id", "org_id", "patient_id", "status", "ward_id"],
+    # created_at：ADR-0018（created_at 欠账收官）——行写入时间，与 admitted_at
+    # 的业务时间区分；迁移 c1d2e3f4a5b6，历史行哨兵 1970 回填。
+    "admissions": ["admitted_at", "bed_id", "created_at", "created_by", "diagnosis_name", "discharged_at", "doctor_name", "id", "org_id", "patient_id", "status", "ward_id"],
 }
 
 
@@ -104,8 +106,10 @@ def test_核心表结构已冻结():
 #      → 28（tcm_techniques + system_params + code_systems + code_entries，字典/参数类四表打包）
 #      → 22（spd 规则/模板类六表打包，spd 链）→ 14（平台零散八表打包）
 #      → 2（spd 其余配置/关联十二表收官批，spd 链）。仅剩 blood_stocks（降级）与
-#      admissions（核心表，改列需先 ADR）——欠账清偿完毕，此后新表一律带 created_at。
-BASELINE_MISSING_CREATED_AT = 2
+#      admissions（核心表，改列需先 ADR）。
+#      → 0（2026-08-31 收官：blood_stocks 顺路补齐；admissions 走 ADR-0018 后补，
+#      迁移 c1d2e3f4a5b6）。豁免清零——此后任何新表缺 created_at 都直接变红。
+BASELINE_MISSING_CREATED_AT = 0
 
 
 def test_缺created_at的表不许变多():

@@ -68,6 +68,9 @@ class Admission(Base):
     admitted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     discharged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # 行写入时间（ADR-0018）：补录历史住院时与 admitted_at 不同——审计维度。
+    # 历史行为哨兵 1970-01-01（真值不可考，不用 admitted_at 冒充，见 ADR）。
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     orders: Mapped[list["InpatientOrder"]] = relationship(back_populates="admission")
     case_summary: Mapped["CaseSummary | None"] = relationship(back_populates="admission")
@@ -173,6 +176,7 @@ class BloodStock(Base):
     # rbc=红细胞, plasma=血浆, platelet=血小板
     component: Mapped[str] = mapped_column(String(16))
     quantity_ml: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class TransfusionRequest(Base):

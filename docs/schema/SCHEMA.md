@@ -66,6 +66,7 @@
 - `admitted_at` · DATETIME · NOT NULL · index
 - `discharged_at` · DATETIME · index
 - `created_by` · INTEGER · NOT NULL · → users.id
+- `created_at` · DATETIME · NOT NULL
 - _index_ ix_admissions_admitted_at(admitted_at)
 - _index_ ix_admissions_discharged_at(discharged_at)
 - _index_ ix_admissions_org_id(org_id)
@@ -254,6 +255,7 @@
 - `blood_type` · VARCHAR(4) · NOT NULL · index
 - `component` · VARCHAR(16) · NOT NULL
 - `quantity_ml` · INTEGER · NOT NULL
+- `created_at` · DATETIME · NOT NULL
 - _unique_ (blood_type, component) uq_blood_type_component
 - _index_ ix_blood_stocks_blood_type(blood_type)
 
