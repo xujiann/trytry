@@ -291,6 +291,238 @@ def test_脏库上迁移只报告不删数据_处置脚本才归并(pg_engine):
                     " created_at, updated_at) VALUES (:u, 0, 0, 0, now(), now())"
                 ), {"u": uid})
 
+# ---------------------------------------------------------------------------
+# P1-18：READ COMMITTED 竞争窗口的直测（SQLite 的库级写锁证不了这些）
+#
+# 下面四条不走 HTTP：本进程的 app 引擎早按 SQLite 定型，HTTP 档已由文件末尾的
+# 子进程用例（test_billing_money_concurrency.py 换库重跑）覆盖。这里把**最热的
+# check-then-act 防线本体**——建档幂等、upsert_unique、押金临界区、批次占用——
+# 直接绑到 pg_engine 上多线程真并发，PG 逐语句取快照、并发事务互不可见，
+# 竞态窗口是真实打开的。每条的断言都是不变量：恰一行 / 恰 N 笔 / 不超余量。
+
+
+def _race_on_pg(worker, times):
+    """Barrier 真并发（写法同 test_billing_money_concurrency._race）。
+
+    只起线程不够——线程创建有先后，前一个常常已提交完了后一个才开始读，
+    窗口根本没打开。等待点全部带 timeout：会阻塞的回归测试不是回归测试
+    （见 conftest 看门狗注释）。
+    """
+    import threading
+
+    results: list = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(times)
+
+    def run(index: int):
+        try:
+            barrier.wait(timeout=30)
+            outcome = worker(index)
+            with lock:
+                results.append(outcome)
+        except BaseException as exc:  # noqa: BLE001 - 收集断言用
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(times)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+    return results, errors
+
+
+def test_并发同证件号建档_唯一约束兜底后恰得一行(pg_engine):
+    """EMPI 建档幂等（routers/patients.create_patient_idempotent）在 PG 下的形状：
+
+    先查后插是 check-then-act，六路同时查不到就六路都去插；防线是唯一约束 +
+    捕获 IntegrityError 后重查。PG 上 IntegrityError 要等赢家 **commit** 才在
+    输家的 INSERT 上抛出来（SQLite 的写锁在语句层就把并发压平了），这条兜底
+    路径只有真 PG 能走到。不变量：库里恰一行、六路拿到同一份档案、恰一路真建档。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models import Patient
+    from app.pii import pii_filter
+    from app.routers.patients import create_patient_idempotent
+
+    Session = sessionmaker(bind=pg_engine)
+    id_card = "331000199303034567"
+
+    def worker(_i):
+        with Session() as db:
+            patient, created = create_patient_idempotent(
+                db, {"name": "PG并发建档患者", "id_card": id_card}
+            )
+            return patient.id, created
+
+    results, errors = _race_on_pg(worker, times=6)
+    assert not errors, f"并发建档不该把 IntegrityError 漏给调用方：{errors}"
+    assert len(results) == 6
+    assert len({pid for pid, _ in results}) == 1, f"六路必须拿到同一份档案：{results}"
+    assert sum(1 for _, created in results if created) == 1, f"恰一路真建档：{results}"
+    with Session() as db:
+        rows = db.query(Patient).filter(
+            pii_filter(Patient.id_card_idx, Patient.id_card, id_card)
+        ).all()
+        assert len(rows) == 1, f"同证件号建出 {len(rows)} 份档案——主索引分叉"
+
+
+def test_upsert_unique并发写同一唯一键_收敛成一行不抛冲突(pg_engine):
+    """`concurrency.upsert_unique` 的先插后改在 PG 下真并发验证。
+
+    反着写（先查再插）就是 check-then-act；正写法下输家的 INSERT 在赢家 commit
+    后抛约束冲突，回滚重查转为 UPDATE。不变量：一行、全部调用方成功返回、
+    恰一路是"新建"，其余是"覆盖"。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.concurrency import upsert_unique
+    from app.models import LiveFeedback, LiveSession, User
+
+    Session = sessionmaker(bind=pg_engine)
+    with Session() as db:
+        user = User(username="pg_upsert_user", password_hash="x", full_name="并发反馈者")
+        db.add(user)
+        db.flush()
+        session_row = LiveSession(title="PG并发直播", status="finished", requested_by=user.id)
+        db.add(session_row)
+        db.commit()
+        user_id, session_id = user.id, session_row.id
+
+    def worker(i):
+        with Session() as db:
+            obj, updated = upsert_unique(
+                db,
+                LiveFeedback,
+                keys={"session_id": session_id, "user_id": user_id},
+                values={"rating": i + 1, "comment": f"线程{i}"},
+            )
+            return obj.id, updated
+
+    results, errors = _race_on_pg(worker, times=6)
+    assert not errors, f"upsert_unique 并发下不该抛错（这正是它存在的理由）：{errors}"
+    assert len(results) == 6
+    assert len({row_id for row_id, _ in results}) == 1, f"六路必须落在同一行上：{results}"
+    assert sum(1 for _, updated in results if not updated) == 1, f"恰一路新建：{results}"
+    with Session() as db:
+        rows = db.query(LiveFeedback).filter(
+            LiveFeedback.session_id == session_id, LiveFeedback.user_id == user_id
+        ).all()
+        assert len(rows) == 1
+        assert 1 <= rows[0].rating <= 6  # 终值是某个赢家的完整写入，不是撕裂值
+
+
+def test_押金退费与结算冲抵混合并发_扣减合计不超余额(pg_engine):
+    """`_serialized_on`(FOR UPDATE) + `_atomic_deposit_deduct` 的 PG 分支直测。
+
+    HTTP 档已各自验证过退费、结算的并发；这里补两者**互抢同一笔余额**的组合：
+    退费与冲抵抢的是同一把住院登记行锁，谁都不能按旧余额判定。押金余额是流水
+    现算，INSERT..SELECT 不锁既有行、聚合读的是语句快照——修复前实测八路全过、
+    余额 -600（文件头表格），防线全靠外层 FOR UPDATE。
+    不变量：1000 元恰成 3 笔 300（无论退费还是冲抵），余额恰 100、绝不为负。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models import Admission, Bed, Deposit, Organization, Patient, User, Ward
+    from app.routers.billing import _atomic_deposit_deduct, _serialized_on, deposit_balance
+
+    Session = sessionmaker(bind=pg_engine)
+    with Session() as db:
+        org = Organization(name="PG押金并发院", org_type="lead_hospital", level="county")
+        operator = User(username="pg_deposit_op", password_hash="x", full_name="并发收退员")
+        patient = Patient(name="PG押金患者", id_card="331000199404045678",
+                          ehc_no="PG-EHC-DEP1")
+        db.add_all([org, operator, patient])
+        db.flush()
+        ward = Ward(org_id=org.id, name="PG押金病区")
+        db.add(ward)
+        db.flush()
+        bed = Bed(ward_id=ward.id, bed_no="PGD-1")
+        db.add(bed)
+        db.flush()
+        admission = Admission(patient_id=patient.id, org_id=org.id, ward_id=ward.id,
+                              bed_id=bed.id, created_by=operator.id)
+        db.add(admission)
+        db.flush()
+        db.add(Deposit(admission_id=admission.id, amount=1000, deposit_type="prepay",
+                       operator="并发收退员"))
+        db.commit()
+        admission_id = admission.id
+
+    def worker(i):
+        deposit_type = "refund" if i % 2 == 0 else "offset"
+        with Session() as db:
+            # commit 必须在临界区内：行锁随事务释放，锁一放下一路读到的
+            # 就必须是本笔已提交后的余额（`_serialized_on` 文档约定）。
+            with _serialized_on(db, Admission, admission_id):
+                ok = _atomic_deposit_deduct(
+                    db, admission_id, 300, deposit_type, "cash", "并发收退员"
+                )
+                if ok:
+                    db.commit()
+                else:
+                    db.rollback()
+            return deposit_type, ok
+
+    results, errors = _race_on_pg(worker, times=8)
+    assert not errors, f"混合并发扣减不该抛错：{errors}"
+    succeeded = [r for r in results if r[1]]
+    assert len(succeeded) == 3, f"1000 元只够扣 3 笔 300，实际成了 {len(succeeded)} 笔：{results}"
+    with Session() as db:
+        assert deposit_balance(db, admission_id) == 100.0, "余额必须恰为 100，绝不为负"
+        deduct_rows = (
+            db.query(Deposit)
+            .filter(Deposit.admission_id == admission_id, Deposit.deposit_type != "prepay")
+            .all()
+        )
+        assert len(deduct_rows) == 3, "台账行数必须与成功笔数一致（钱账相符）"
+        assert all(float(d.amount) == 300.0 for d in deduct_rows)
+
+
+def test_发药批次并发占用_合计不超过批次余量(pg_engine):
+    """`dispense._claim_batch` 的原子占用在 PG 行锁 + EvalPlanQual 下的直测。
+
+    判"够不够"与占用压在同一条 UPDATE 里才成立：UPDATE 对既有行取行锁、
+    锁到手后重新求值 WHERE，输家的条件按赢家提交后的 used_quantity 重算。
+    批次量 10、八路各占 3：恰 3 路占到（9≤10），第 4 路起 12>10 一律空手。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models import DrugBatch, Organization
+    from app.routers.dispense import _claim_batch
+
+    Session = sessionmaker(bind=pg_engine)
+    with Session() as db:
+        org = Organization(name="PG批次并发院", org_type="township", level="township")
+        db.add(org)
+        db.flush()
+        batch = DrugBatch(org_id=org.id, drug_code="PG-RACE", batch_no="PGB-1",
+                          expire_date="2031-01-01", quantity=10)
+        db.add(batch)
+        db.commit()
+        batch_id = batch.id
+
+    def worker(_i):
+        with Session() as db:
+            ok = _claim_batch(db, batch_id, 3)
+            if ok:
+                db.commit()
+            else:
+                db.rollback()
+            return ok
+
+    results, errors = _race_on_pg(worker, times=8)
+    assert not errors, f"批次占用并发下不该抛错：{errors}"
+    assert results.count(True) == 3, f"余量 10 只够 3 路各占 3，实际 {results.count(True)} 路占到"
+    with Session() as db:
+        row = db.get(DrugBatch, batch_id)
+        assert row is not None and row.used_quantity == 9, (
+            f"已用量必须等于 3 路×3（={row.used_quantity if row else '?'}），超 10 即超发"
+        )
+
+
 def test_金额并发闸门在真PG上成立(pg_engine):
     """把 `test_billing_money_concurrency.py` 换到 PG 上再跑一遍。
 
