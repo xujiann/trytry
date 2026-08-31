@@ -133,6 +133,24 @@ class DiseaseTypeUpdate(BaseModel):
     active: bool | None = None
 
 
+class DiseaseTypeOut(BaseModel):
+    """病种目录行/回执（列表、新建、修改三个端点同形，`_disease_type_out` 是唯一产地）。
+
+    `level_rules` 是**宽 dict 透传**（workflows.nodes 先例）：规则结构由目录数据
+    决定（metrics 数组、require_all、以及自定义键），逐字段建模会把自定义键静默
+    滤掉、把 int 阈值（hypertension 的 160）coerce 成 160.0——int/float 两种取值
+    由 test_chronic_contract.py 各钉一遍。
+    """
+
+    id: int
+    code: str
+    name: str
+    level_rules: dict
+    guidance: str
+    followup_interval_days: int
+    active: bool
+
+
 def _disease_type_out(dt: ChronicDiseaseType) -> dict:
     return {
         "id": dt.id,
@@ -145,7 +163,7 @@ def _disease_type_out(dt: ChronicDiseaseType) -> dict:
     }
 
 
-@router.get("/disease-types")
+@router.get("/disease-types", response_model=list[DiseaseTypeOut])
 def list_disease_types(active: bool | None = None, db: Session = Depends(get_db)):
     """慢病病种目录：前端病种下拉与分级规则展示的唯一数据源。"""
     query = db.query(ChronicDiseaseType)
@@ -154,7 +172,12 @@ def list_disease_types(active: bool | None = None, db: Session = Depends(get_db)
     return [_disease_type_out(dt) for dt in query.order_by(ChronicDiseaseType.id).all()]
 
 
-@router.post("/disease-types", status_code=201, dependencies=[Depends(require_admin)])
+@router.post(
+    "/disease-types",
+    response_model=DiseaseTypeOut,
+    status_code=201,
+    dependencies=[Depends(require_admin)],
+)
 def create_disease_type(body: DiseaseTypeCreate, db: Session = Depends(get_db)):
     if get_disease_type(db, body.code) is not None:
         raise HTTPException(status_code=409, detail="病种编码已存在")
@@ -164,7 +187,11 @@ def create_disease_type(body: DiseaseTypeCreate, db: Session = Depends(get_db)):
     return _disease_type_out(disease_type)
 
 
-@router.patch("/disease-types/{type_id}", dependencies=[Depends(require_admin)])
+@router.patch(
+    "/disease-types/{type_id}",
+    response_model=DiseaseTypeOut,
+    dependencies=[Depends(require_admin)],
+)
 def update_disease_type(type_id: int, body: DiseaseTypeUpdate, db: Session = Depends(get_db)):
     disease_type = db.get(ChronicDiseaseType, type_id)
     if disease_type is None:
@@ -257,8 +284,20 @@ def list_overdue(today: str | None = None, db: Session = Depends(get_db)):
     )
 
 
+class FollowupResultOut(BaseModel):
+    """随访提交回执：随访单 + 智能分级 + 指导要点 + 下次到期日（六键恒在，无条件键）。"""
+
+    followup: FollowUpOut
+    level: int
+    guidance_points: str
+    next_due: str
+    next_due_suggested: bool
+    refer_up_suggested: bool
+
+
 @router.post(
     "/{chronic_id}/followups",
+    response_model=FollowupResultOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 随访属诊疗/公卫岗
 )
@@ -303,7 +342,27 @@ def _risk_metric(db: Session, disease: str) -> str:
     return _RISK_METRICS.get(disease, "")
 
 
-@router.get("/{chronic_id}/risk")
+class ChronicRiskOut(BaseModel):
+    """风险评分回执。
+
+    `recent_values` 恒 float：两条产地——sbp/dbp/glucose 是 Float 列，metrics JSON
+    的值入库前经 FollowUpCreate 的 `dict[str, float]` 校验——整数入参读回都是
+    float（170 → 170.0）。`score` 恒 int：分级基础分与趋势修正全是 int 字面量
+    （声明成 float 会把 95 印成 95.0，即改字节）。取证见 test_chronic_contract.py。
+    """
+
+    chronic_id: int
+    disease: str
+    level: int
+    metric: str
+    recent_values: list[float]
+    trend: str
+    score: int
+    risk_level: str
+    refer_up_suggested: bool
+
+
+@router.get("/{chronic_id}/risk", response_model=ChronicRiskOut)
 def risk_score(
     chronic_id: int,
     db: Session = Depends(get_db),

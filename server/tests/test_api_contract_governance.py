@@ -232,7 +232,15 @@ import app.spd.routers as spd_routers
 #   lifted_at: datetime|None 透传先实证三种取值字节一致再回绑 isoformat；
 #   patients 授权四端点的脱敏双视角与 AccessLog 留痕逐字节钉住，visibility
 #   一行未动。见八份 test_*_contract.py，五处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 19
+# → 0（收官批①：chronic 5 + insurance 5 + integration 5 + medication 4，
+#   共 19，零跳过——至此 946 端点全部声明契约，欠账清零，本基线只许为 0。
+#   判断集锦：level_rules/FHIR 出站资源是外部标准或配置形状 → 宽 dict 透传
+#   （workflows.nodes 先例，字段面由用例逐键钉住）；医保 Money 之和
+#   int|float 三态钉；recent_values/max_daily_dose 是 Float 列恒 float；
+#   fulfillment_rate_pct 键恒在值可空 float|None 双分支；全批无条件键，
+#   19 端点响应键面恒在，无一处 exclude_unset。见四份 test_*_contract.py，
+#   五处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 0
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -325,6 +333,12 @@ FULLY_GOVERNED = {
     "attachments",
     "access_logs",
     "todos",
+    # 收官批①（chronic 5/insurance 5/integration 5/medication 4），欠账
+    # 19→0 收官那批，见四份 test_<模块>_contract.py
+    "chronic",
+    "insurance",
+    "integration",
+    "medication",
     # 收官批②八散点（patients 4/vaccination 4/eldercare 3/exams 3/
     # publichealth 3/consultations 2/appointments 1/emergency 1），欠账
     # 40→19 那批，见八份 test_<模块>_contract.py

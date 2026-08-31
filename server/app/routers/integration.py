@@ -116,7 +116,15 @@ def _upsert_patient(db: Session, data: dict) -> tuple[Patient, bool]:
     return create_patient_idempotent(db, data)
 
 
-@router.post("/hl7v2/patient", status_code=201)
+class Hl7PatientInboundOut(BaseModel):
+    """HL7 简化建档回执：patient 按调用者角色脱敏（H1 口径，同 AdtInboundOut 先例）。"""
+
+    created: bool
+    ack: str
+    patient: PatientOut
+
+
+@router.post("/hl7v2/patient", status_code=201, response_model=Hl7PatientInboundOut)
 def hl7v2_patient(
     body: Hl7Message,
     db: Session = Depends(get_db),
@@ -195,7 +203,14 @@ def _build_ack(control_id: str, code: str = "AA") -> str:
     return f"MSH|^~\\&|MEDPLAT|COUNTY|||{ts}||ACK|{control_id}|P|2.4\rMSA|{code}|{control_id}"
 
 
-@router.post("/fhir/Patient", status_code=201)
+class FhirPatientInboundOut(BaseModel):
+    """FHIR Patient 建档回执：patient 按调用者角色脱敏（H1 口径）。"""
+
+    created: bool
+    patient: PatientOut
+
+
+@router.post("/fhir/Patient", status_code=201, response_model=FhirPatientInboundOut)
 def fhir_patient(
     resource: dict,
     db: Session = Depends(get_db),
@@ -258,7 +273,17 @@ _LOINC_FIELDS = {"8480-6": "sbp", "8462-4": "dbp", "2339-0": "glucose"}
 _FIELD_DISEASE = {"sbp": "hypertension", "dbp": "hypertension", "glucose": "diabetes"}
 
 
-@router.post("/fhir/Observation", status_code=201)
+class FhirObservationInboundOut(BaseModel):
+    """Observation 入站归档回执：`values` 的产地都经 `float(quantity)`，恒 float。"""
+
+    followup_id: int
+    chronic_id: int
+    disease: str
+    values: dict[str, float]
+    level: int
+
+
+@router.post("/fhir/Observation", status_code=201, response_model=FhirObservationInboundOut)
 def fhir_observation(
     resource: dict, db: Session = Depends(get_db), x_source_system: str = Header(default="")
 ):
@@ -331,7 +356,10 @@ def _do_fhir_observation(resource: dict, db: Session):
     }
 
 
-@router.get("/fhir/Patient/{ehc_no}")
+# FHIR R4 Patient 是**外部标准形状**（identifier/name/telecom 皆为标准定义的嵌套
+# 数组），照 workflows.nodes 先例宽 dict 透传——给国际标准建窄模型等于替 HL7 另立
+# 规格；当前导出的 7 键字段面由 test_integration_contract.py 逐键钉住。
+@router.get("/fhir/Patient/{ehc_no}", response_model=dict[str, Any])
 def export_fhir_patient(
     ehc_no: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -372,7 +400,38 @@ def export_fhir_patient(
 # ---------- M11 交换监控 ----------
 
 
-@router.get("/exchange-logs")
+class ExchangeLogTypeStatOut(BaseModel):
+    """按消息类型统计行：count/failed 恒 int（COUNT 与 `int(x or 0)`），
+    failure_rate_pct 恒 float（真除法与兜底字面量 0.0 两条产地都是浮点）。"""
+
+    message_type: str
+    count: int
+    failed: int
+    failure_rate_pct: float
+
+
+class ExchangeLogEntryOut(BaseModel):
+    id: int
+    source_system: str
+    message_type: str
+    direction: str
+    success: bool
+    error_detail: str
+    at: str
+
+
+class ExchangeLogsOut(BaseModel):
+    """交换监控回执：`total`/`failed`/`by_type` 恒为全量口径，过滤参数只作用于
+    `logs` 明细（test_integration_contract.py 专门钉过这一点）。"""
+
+    total: int
+    failed: int
+    failure_rate_pct: float
+    by_type: list[ExchangeLogTypeStatOut]
+    logs: list[ExchangeLogEntryOut]
+
+
+@router.get("/exchange-logs", response_model=ExchangeLogsOut)
 def exchange_logs(
     message_type: str | None = None,
     success: bool | None = None,

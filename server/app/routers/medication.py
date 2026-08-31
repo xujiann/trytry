@@ -144,7 +144,24 @@ def close_shortage(shortage_id: int, body: ShortageClose, db: Session = Depends(
     return shortage
 
 
-@router.get("/shortages/stats")
+class ShortageStatsOut(BaseModel):
+    """缺药登记统计（test_medication_contract.py 逐字节取证）。
+
+    `by_status` 宽键窄值：键面由数据里出现过的状态决定（metrics.by_level 先例），
+    值恒为 COUNT。`fulfillment_rate_pct` 是「键恒在值可空」→ `float | None`：
+    无可判定登记时就是 null（caliber 里写明的口径），有分母时真除法恒 float——
+    不是条件键，无需 exclude_unset。
+    """
+
+    by_status: dict[str, int]
+    in_transit: int
+    collected: int
+    no_show: int
+    fulfillment_rate_pct: float | None
+    caliber: str
+
+
+@router.get("/shortages/stats", response_model=ShortageStatsOut)
 def shortage_stats(db: Session = Depends(get_db)):
     """缺药登记统计：履约率与在途量。
 
@@ -172,7 +189,24 @@ def shortage_stats(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/profile/{patient_id}")
+class MedicationProfileDrugOut(BaseModel):
+    """在用药品行：`max_daily_dose` 来自 Float 列（整数剂量 5/10 读回 5.0/10.0，
+    `max(0.0, …)` 也不改型），恒 float——与 Money 列相反，判据是列类型。"""
+
+    drug_code: str
+    drug_name: str
+    times: int
+    max_daily_dose: float
+
+
+class MedicationProfileOut(BaseModel):
+    patient_id: int
+    distinct_drugs: int
+    polypharmacy_warning: bool
+    drugs: list[MedicationProfileDrugOut]
+
+
+@router.get("/profile/{patient_id}", response_model=MedicationProfileOut)
 def medication_profile(
     patient_id: int,
     db: Session = Depends(get_db),
@@ -207,7 +241,16 @@ def medication_profile(
     }
 
 
-@router.get("/usage-stats")
+class DrugUsageStatOut(BaseModel):
+    """用药地图行：rx_count/patient_count 恒 int（COUNT），声明成 float 即改字节。"""
+
+    drug_code: str
+    drug_name: str
+    rx_count: int
+    patient_count: int
+
+
+@router.get("/usage-stats", response_model=list[DrugUsageStatOut])
 def usage_stats(db: Session = Depends(get_db)):
     """全县用药地图：品种使用排名，支撑药品需求预测与供应保障。"""
     rows = (
@@ -230,7 +273,23 @@ def usage_stats(db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/supply-risk")
+class SupplyRiskItemOut(BaseModel):
+    """供应风险行：仅缺药登记出现的药品 `drug_name` 是空串（不回填库存名，照抄
+    现状）；`open_shortages` 的口径是 `status != "delivered"`（终态登记也计入）。"""
+
+    drug_code: str
+    drug_name: str
+    low_stock_orgs: int
+    open_shortages: int
+    risk_level: str
+
+
+class SupplyRiskOut(BaseModel):
+    total: int
+    risks: list[SupplyRiskItemOut]
+
+
+@router.get("/supply-risk", response_model=SupplyRiskOut)
 def supply_risk(db: Session = Depends(get_db)):
     """⑯药品供应风险评估：库存低于阈值 + 未结案缺药登记数 → 分级风险。"""
     low_stocks = (
