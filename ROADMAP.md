@@ -133,6 +133,22 @@
 
 ## Next（治理逐块推进，只进不退）
 
+- ✅ **契约治理收官（2026-08-31）：收官两批 40 → 0，946 端点覆盖率 100%，欠账账户销户**。
+  收官批②八散点（patients/vaccination/eldercare/exams/publichealth/consultations/
+  appointments/emergency，21 端点，40→19）+ 收官批①（chronic/insurance/integration/
+  medication，19 端点，19→0），**四十六模块全数 FULLY_GOVERNED，基线归 0 从此只许为 0**。
+  取证同前法（capture_plugin 套件级逐字节、噪声底先归零：831/91 键 0 差异；变异 5+5 转红；
+  patients 授权四端点带脱敏双视角与 AccessLog 留痕逐字节钉）。六轮并行批合计 450→0。
+  收官轮同日另收六件：**created_at 棘轮 2→0 收官**（blood_stocks 顺路补齐；admissions
+  冻结表先过 ADR-0018——历史行回填 1970 哨兵而非抄 admitted_at，取舍见 ADR）；
+  **P2-31 渲染器监听窗口全仓根修收官**（acorn AST 清点 8 文件 22 条挂载移到 await 前，
+  守卫升级 ROOT_FIXED_RENDERERS 清单式 12 渲染器 + 5 处登记例外）；**P1-18/P1-19
+  事务边界专档**（8 条资金/库存/状态机链路「失败无半写 + 重来恰一次」，真 PG 档扩至
+  11 条）；顺带实证并随即修复 **spd 并发认领洞**（claim/批量/办结三处条件 UPDATE 收口，
+  回归 7 条 + 防拆卸静态钉）；**P1-20 测试 fixture 去重**（136 文件收敛 conftest 共享
+  三件套，净 −1914 行，两轮受控全量探针验证零回退；顺带根修两处 CWD 相对路径假红）；
+  **P2-26④ 生产锁剔除测试工具**（运行时依赖 13→11、lock 重生成，镜像不再含 pytest，
+  ADR-0017 后记留档）。
 - ✅ **多 agent 并行批第三、四轮（2026-08-31）：二十四模块 178 端点，基线 218 → 40，覆盖率 95.8%**。
   七个并行会话分两波（billing+inpatient 29 / admin_mgmt+maternal 32 / 四小簇 32 //
   药事三簇 25 / 临床五小簇 30 / 运维八小簇 30），主会话分六次收基线
