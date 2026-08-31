@@ -84,3 +84,19 @@ function readCookie(name) {
   }
   return "";
 }
+
+/* 原生表单提交兜底（CI 实锤的一类竞态，2026-08-31）。
+ *
+ * 三套前端的表单**全部**由 JS 的 submit 监听接管（全仓库没有一个 <form action=...>），
+ * 原生提交从来不是本仓库的意图。但"innerHTML 画出表单 → await 取数 → 挂监听"
+ * 的写法在页面渲染器里很常见，那两趟网络往返是一扇窗：窗口里点提交按钮或按回车，
+ * submit 没人接管，浏览器就走原生 GET——表单数据泄进 URL、整页重载、操作丢失。
+ * CI 抓到的现场：管理端"启动路径"表单在慢 runner 上打出
+ * `/?enrollment_id=1&template_id=1#spdpath`，POST 根本没发出（两次失败同一 URL 形状）。
+ *
+ * 这里在 document 层兜住：没被页面监听接管的 submit 一律 preventDefault——
+ * 把"导航 + 数据丢失"降级成"这一下没生效"（用户填的内容还在，监听挂上后重按
+ * 即可）。页面自己的监听先于 document 收到事件且各自 preventDefault，本兜底
+ * 对它们是幂等的。**这不是免死金牌**：渲染器仍应把挂监听放在任何 await 之前
+ * （见 pages-spd.js renderSpdPath 的注释与教训），兜底只保证最坏情况不再是丢数据。 */
+document.addEventListener("submit", (e) => e.preventDefault());

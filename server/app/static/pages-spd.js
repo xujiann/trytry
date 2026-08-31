@@ -779,8 +779,10 @@ async function renderSpdPath() {
            <button class="btn secondary" data-task-urge="${t.id}">催办</button>
            <button class="btn secondary" data-task-done="${t.id}">办结</button></td></tr>`);
   };
-  await Promise.all([drawInstances(), drawTasks()]);
-
+  // 监听器必须在任何 await 之前挂上（CI 实锤的窗口：innerHTML 画出表单后、
+  // 两次取数的网络往返里点"启动路径"，submit 没有监听器接管，浏览器走原生
+  // GET 提交——表单参数进了 URL（?enrollment_id=1&template_id=1）、整页重载、
+  // POST 根本没发出。挂监听与 innerHTML 同一个同步块里完成，窗口才是零。
   $("#spd-tpl-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/path-templates", formJson(e.target, ["program_id"]), "#spd-tpl-msg");
@@ -831,6 +833,9 @@ async function renderSpdPath() {
         { result: { note: form.note } }, "#spd-task-msg");
     }
   };
+  // 取数放最后：首屏 innerHTML 与全部监听器已在同一个同步块里就位，
+  // 这两趟网络往返期间的任何点击都有人接（见上方"监听器必须在 await 前"注释）
+  await Promise.all([drawInstances(), drawTasks()]);
 }
 
 /* ============================================================
