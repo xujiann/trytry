@@ -174,7 +174,15 @@ import app.spd.routers as spd_routers
 #   created_at 之前，继承追加会改键序）；空串非 null 全部照钉；分级审核
 #   （ADR-0004/0005）语义一行未动。见 test_spd_followup_contract.py /
 #   test_spd_referral_contract.py，五处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 259
+# → 218（spd/population 28 + vaccine_supply 13，共 41，零跳过；population
+#   第 29 个端点是既有 204。判断集锦：患者 brief 是条件键（单条回执与
+#   列表行键数不同，同模型+exclude_unset 双向钉）；closed 只能宽字典
+#   （resume/迁出是 {}，本地事件是四项计数）；360 档案与纳管详情的 paths
+#   是两个形状（前者无 current_stage）；Money 整数价 int|float、Float 列
+#   3.0 照钉；AEFI 十万剂次率 float|None；PeriodOut 与 fund.py 重名故
+#   命名 VaccinePeriodOut。见 test_spd_population_contract.py /
+#   test_vaccine_supply_contract.py，五处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 218
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -228,6 +236,10 @@ FULLY_GOVERNED = {
     # 见 test_spd_followup_contract.py / test_spd_referral_contract.py
     "spd/followup",
     "spd/referral",
+    # 人群分层与疫苗供应两簇（population 28/vaccine_supply 13），欠账
+    # 259→218 那批，见 test_spd_population_contract.py / test_vaccine_supply_contract.py
+    "spd/population",
+    "vaccine_supply",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

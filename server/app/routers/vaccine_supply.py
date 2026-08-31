@@ -56,6 +56,143 @@ AEFI_OUTCOMES = {
 }
 
 
+# ============================================================ 响应契约
+#
+# 模型集中放在**所有端点之前**：`response_model=` 是装饰器参数，导入时就要求值。
+# 字段与顺序**精确镜像**各 `_xxx_out` 的当前出参——治理不得改响应字节
+# （CLAUDE.md 第 7 条），逐字节取证见 tests/test_vaccine_supply_contract.py
+# 与套件级捕获（tests/capture_plugin.py）。
+
+
+class VaccineBatchOut(BaseModel):
+    """批次。`expired`/`usable` 按 today 现算（模块口径 1）；quantity 一族是
+    Integer 列，`remaining` 是它们的差，全是 int。"""
+
+    id: int
+    vaccine_code: str
+    vaccine_name: str
+    batch_no: str
+    manufacturer: str
+    expire_date: str
+    org_id: int
+    quantity: int
+    used_quantity: int
+    remaining: int
+    status: str
+    frozen_reason: str
+    expired: bool
+    usable: bool
+    unusable_reason: str
+
+
+class BatchRecipientOut(BaseModel):
+    record_id: int
+    patient_id: int
+    patient_name: str
+    dose_no: int
+    vaccinated_date: str
+    org_id: int
+
+
+class BatchRecipientsOut(BaseModel):
+    batch_no: str
+    vaccine_name: str
+    total: int
+    recipients: list[BatchRecipientOut]
+
+
+class ColdChainOut(BaseModel):
+    """冷链记录。`temperature` 是 **Float 列**（整数入参读回来是 8.0），
+    声明 float 才是原样；`range` 是 handler 拼好的 "2.0~8.0℃" 字符串。"""
+
+    id: int
+    org_id: int
+    device_name: str
+    temperature: float
+    range: str
+    exceeded: bool
+    recorded_at: str
+    handled: bool
+    handle_note: str
+
+
+class ColdChainCreatedOut(ColdChainOut):
+    """录温回执 = 冷链记录 + **条件键** `hint`：只在超温时出现，未超温时
+    键**整个不出现**（不是 null），靠 exclude_unset 钉住。"""
+
+    hint: str | None = None
+
+
+class AefiOut(BaseModel):
+    id: int
+    patient_id: int
+    # 未关联接种记录时为 null（键仍在）
+    record_id: int | None
+    vaccine_code: str
+    batch_no: str
+    reaction_type: str
+    reaction_type_name: str
+    symptom: str
+    onset_date: str
+    outcome: str
+    outcome_name: str
+    org_id: int
+
+
+class VaccinePeriodOut(BaseModel):
+    start: str
+    end: str
+
+
+class AefiReactionCountOut(BaseModel):
+    count: int
+    name: str
+
+
+class AefiStatsOut(BaseModel):
+    total: int
+    severe: int
+    # 键是反应分级取值（general/severe/…），随数据出现而定
+    by_reaction: dict[str, AefiReactionCountOut]
+    # 分母为 0 时明说无接种（null），不报 0——两个比率恒 float | None
+    rate_per_100k_doses: float | None
+    severe_rate_per_100k_doses: float | None
+
+
+class VaccineBatchStatsOut(BaseModel):
+    total: int
+    expired: int
+    frozen: int
+    expiring_soon: int
+
+
+class ColdChainStatsOut(BaseModel):
+    exceeded: int
+    exceeded_unhandled: int
+
+
+class VaccineCaliberOut(BaseModel):
+    aefi_rate: str
+    batch_status: str
+
+
+class VaccineStatsOut(BaseModel):
+    period: VaccinePeriodOut
+    group_id: int | None
+    doses: int
+    aefi: AefiStatsOut
+    batches: VaccineBatchStatsOut
+    cold_chain: ColdChainStatsOut
+    caliber: VaccineCaliberOut
+
+
+class ExpiringBatchesOut(BaseModel):
+    today: str
+    within_days: int
+    batches: list[VaccineBatchOut]
+    generated_at: str
+
+
 # ============================================================ 批次
 
 
@@ -101,7 +238,8 @@ def _batch_out(batch: VaccineBatch, today: str) -> dict:
     }
 
 
-@router.post("/batches", status_code=201, dependencies=[Depends(require_roles("public_health", "operator"))])
+@router.post("/batches", response_model=VaccineBatchOut, status_code=201,
+             dependencies=[Depends(require_roles("public_health", "operator"))])
 def create_batch(body: BatchIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
@@ -117,7 +255,7 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db), user: User = Depe
     return _batch_out(batch, resolve_business_date(None).isoformat())
 
 
-@router.get("/batches")
+@router.get("/batches", response_model=list[VaccineBatchOut])
 def list_batches(
     vaccine_code: str | None = None,
     org_id: int | None = None,
@@ -136,6 +274,7 @@ def list_batches(
 
 @router.post(
     "/batches/{batch_id}/freeze",
+    response_model=VaccineBatchOut,
     dependencies=[Depends(require_roles("public_health", "director"))],
 )
 def freeze_batch(batch_id: int, body: BatchFreeze, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -155,6 +294,7 @@ def freeze_batch(batch_id: int, body: BatchFreeze, db: Session = Depends(get_db)
 
 @router.post(
     "/batches/{batch_id}/unfreeze",
+    response_model=VaccineBatchOut,
     dependencies=[Depends(require_roles("public_health", "director"))],
 )
 def unfreeze_batch(batch_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -172,7 +312,7 @@ def unfreeze_batch(batch_id: int, db: Session = Depends(get_db), user: User = De
     return _batch_out(batch, resolve_business_date(None).isoformat())
 
 
-@router.get("/batches/{batch_id}/recipients")
+@router.get("/batches/{batch_id}/recipients", response_model=BatchRecipientsOut)
 def batch_recipients(batch_id: int, db: Session = Depends(get_db)):
     """按批号反查受种者——召回时唯一有用的那个查询。"""
     batch = db.get(VaccineBatch, batch_id)
@@ -235,7 +375,8 @@ def _cold_out(r: ColdChainRecord) -> dict:
 
 
 @router.post(
-    "/cold-chain", status_code=201, dependencies=[Depends(require_roles("public_health", "operator"))]
+    "/cold-chain", response_model=ColdChainCreatedOut, response_model_exclude_unset=True,
+    status_code=201, dependencies=[Depends(require_roles("public_health", "operator"))]
 )
 def record_temperature(body: ColdChainIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
@@ -255,7 +396,7 @@ def record_temperature(body: ColdChainIn, db: Session = Depends(get_db), user: U
     return out
 
 
-@router.get("/cold-chain")
+@router.get("/cold-chain", response_model=list[ColdChainOut])
 def list_temperatures(
     org_id: int | None = None,
     exceeded_only: bool = False,
@@ -276,6 +417,7 @@ def list_temperatures(
 
 @router.post(
     "/cold-chain/{record_id}/handle",
+    response_model=ColdChainOut,
     dependencies=[Depends(require_roles("public_health", "operator"))],
 )
 def handle_exceedance(record_id: int, body: ColdChainHandle, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -328,7 +470,8 @@ def _aefi_out(r: AefiReport) -> dict:
 
 
 @router.post(
-    "/aefi", status_code=201, dependencies=[Depends(require_roles("doctor", "public_health"))]
+    "/aefi", response_model=AefiOut, status_code=201,
+    dependencies=[Depends(require_roles("doctor", "public_health"))]
 )
 def report_aefi(
     body: AefiIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -359,7 +502,7 @@ def report_aefi(
     return _aefi_out(report)
 
 
-@router.get("/aefi")
+@router.get("/aefi", response_model=list[AefiOut])
 def list_aefi(
     patient_id: int | None = None,
     vaccine_code: str | None = None,
@@ -380,6 +523,7 @@ def list_aefi(
 
 @router.patch(
     "/aefi/{report_id}/outcome",
+    response_model=AefiOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],
 )
 def update_outcome(report_id: int, body: AefiOutcome, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -397,7 +541,7 @@ def update_outcome(report_id: int, body: AefiOutcome, db: Session = Depends(get_
 # ============================================================ 统计
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=VaccineStatsOut)
 def vaccination_stats(
     start_date: OptionalDateStr = Query(default=""),
     end_date: OptionalDateStr = Query(default=""),
@@ -489,7 +633,7 @@ def _plus_days(date_str: str, days: int) -> str:
     return (date.fromisoformat(date_str) + timedelta(days=days)).isoformat()
 
 
-@router.get("/expiring")
+@router.get("/expiring", response_model=ExpiringBatchesOut)
 def expiring_batches(
     days: int = Query(default=30, ge=1, le=365),
     today: str | None = None,

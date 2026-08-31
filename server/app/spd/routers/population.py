@@ -11,6 +11,7 @@
 """
 from copy import deepcopy
 from datetime import date, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
@@ -70,6 +71,343 @@ def _patient_brief(db: Session, patient_ids: list[int]) -> dict[int, dict]:
     }
 
 
+# ============================================================ 响应契约
+#
+# 模型集中放在**所有端点之前**：`response_model=` 是装饰器参数，导入时就要求值
+# （与 spd/care、spd/config 同一布局）。字段与顺序**精确镜像**各 `_xxx_out` 的
+# 当前出参——治理不得改响应字节（CLAUDE.md 第 7 条），逐字节取证见
+# tests/test_spd_population_contract.py 与套件级捕获（tests/capture_plugin.py）。
+#
+# 两类反复出现的建模判断：
+# * **患者简要信息是条件键**：`_patient_brief` 查不到患者（或单条回执压根不带
+#   brief，如新建/认领）时这几个键**整个不出现**，不是 null——声明为
+#   `X | None = None` 并在端点上开 `response_model_exclude_unset=True`。
+# * **JSON 列宽字典透传**（matched_rules/habits/contacts/auto_rule/items/facts）：
+#   键与值的形状由写入方/规则数据决定，逐字段建模会互相注入 null。
+
+
+class ScreeningOut(BaseModel):
+    """筛查记录。`score` 是 **Float 列**（量表 `score_scale` 也恒返回 float），
+    整数分读回来是 `3.0`，声明 float 才是原样（与平台 Money 列正相反）。"""
+
+    id: int
+    patient_id: int
+    program_code: str
+    source: str
+    org_id: int | None
+    scale_code: str
+    score: float
+    risk_level: str
+    result: str
+    advice: str
+    reviewed: bool
+    review_result: str
+    review_note: str
+    answers: dict[str, Any]
+    created_at: str
+    # 患者简要信息：仅列表带（新建/复核回执不带）——条件键，见块头注释
+    patient_name: str | None = None
+    gender: str | None = None
+
+
+class AutoScreenOut(BaseModel):
+    scanned: int
+    suspect: int
+    excluded: int
+    normal: int
+    # SpdProgram.version 是 String(16)（"v1"），不是数字
+    rule_version: str
+
+
+class CandidateOut(BaseModel):
+    id: int
+    patient_id: int
+    program_code: str
+    status: str
+    source: str
+    org_id: int | None
+    team_id: int | None
+    assigned_user_id: int | None
+    risk_level: str
+    reason: str
+    # 命中的规则明细（JSON 透传，形状由病种规则决定）
+    matched_rules: list[dict[str, Any]]
+    # 未认领是空串 ""，不是 null（handler 写的是 `"" if None`）
+    claimed_at: str
+    created_at: str
+    patient_name: str | None = None
+    gender: str | None = None
+    birth_date: str | None = None
+    phone: str | None = None
+
+
+class DistributeOut(BaseModel):
+    distributed: int
+    not_found: int
+
+
+class EnrollmentOut(BaseModel):
+    id: int
+    patient_id: int
+    program_code: str
+    org_id: int
+    team_id: int | None
+    doctor_user_id: int | None
+    manager_user_id: int | None
+    village_doctor_id: int | None
+    stage: str
+    risk_level: str
+    status: str
+    source: str
+    sign_date: str
+    consent_signed: bool
+    consent_no: str
+    service_start: str
+    service_end: str
+    archived: bool
+    habits: dict[str, Any]
+    risk_factors: list[str]
+    complications: list[str]
+    tags: list[str]
+    last_followup_at: str
+    next_followup_at: str
+    created_at: str
+    patient_name: str | None = None
+    gender: str | None = None
+    birth_date: str | None = None
+    phone: str | None = None
+    ehc_no: str | None = None
+
+
+class PackageBindingOut(BaseModel):
+    """服务包绑定。`price` 是 **Money 列**（整数价是 int，声明 float 会把
+    「200 元」变「200.0 元」）；`usage_rate` 两条分支（真除法 / 兜底 0.0）恒 float。"""
+
+    id: int
+    enrollment_id: int
+    package_id: int
+    package_name: str
+    price: int | float
+    items: list[dict[str, Any]]
+    status: str
+    period_end: str
+    bound_at: str
+    usage_rate: float
+    remaining: int
+
+
+class EnrollPathOut(BaseModel):
+    id: int
+    template_code: str
+    status: str
+    current_node_key: str
+    current_stage: str
+    progress: int
+
+
+class EnrollmentDetailOut(EnrollmentOut):
+    """纳管详情 = 列表行的**严格超集**（多 packages/paths），继承是对的
+    （与 spd/config 的 ProgramDetailOut 同一判断）。"""
+
+    packages: list[PackageBindingOut]
+    paths: list[EnrollPathOut]
+
+
+class LifecycleResultOut(BaseModel):
+    """生命周期回执。resume 分支只有 enrollment+closed 两个键，event_id 与
+    pending_confirm **整个不出现**——条件键，靠 exclude_unset 钉住。
+    `closed` 是 `close_open_work` 的四项计数，resume 分支是空 `{}`，故宽字典。"""
+
+    enrollment: EnrollmentOut
+    event_id: int | None = None
+    pending_confirm: bool | None = None
+    closed: dict[str, int]
+
+
+class MigrationConfirmOut(BaseModel):
+    enrollment: EnrollmentOut
+    # 键永远在；handler 有 None 分支（不是条件键）
+    incoming_enrollment: EnrollmentOut | None
+    closed: dict[str, int]
+
+
+class LifecycleEventOut(BaseModel):
+    id: int
+    enrollment_id: int
+    event: str
+    reason: str
+    detail: str
+    target_org_id: int | None
+    confirmed: bool
+    occurred_at: str
+    program_code: str
+    # 档案已不存在时为 null（键仍在）
+    patient_id: int | None
+    patient_name: str
+    created_at: str
+
+
+class RecallProgressOut(BaseModel):
+    id: int
+    status: str
+    result: str
+
+
+class RecallOut(BaseModel):
+    id: int
+    enrollment_id: int
+    reason: str
+    status: str
+    result: str
+    # 联系过程留痕：[{"at": 日期, "note": 说明}]（JSON 列）
+    contacts: list[dict[str, Any]]
+    created_at: str
+
+
+class GroupCreatedOut(BaseModel):
+    id: int
+    name: str
+    scope: str
+    member_count: int
+
+
+class GroupOut(BaseModel):
+    id: int
+    name: str
+    scope: str
+    dept: str
+    owner_user_id: int
+    auto_rule: list[dict[str, Any]]
+    member_count: int
+    updated_at: str
+
+
+class GroupMembersAddedOut(BaseModel):
+    added: int
+    total: int
+
+
+class GroupMemberOut(BaseModel):
+    id: int
+    patient_id: int
+    added_at: str
+    # `**(briefs.get(...) or {})` 展开：键名是 name（不是 patient_name），患者
+    # 查不到时五个键整个不出现
+    name: str | None = None
+    gender: str | None = None
+    birth_date: str | None = None
+    ehc_no: str | None = None
+    phone: str | None = None
+
+
+class UsageCreatedOut(BaseModel):
+    usage_id: int
+    binding: PackageBindingOut
+
+
+class PackageUsageOut(BaseModel):
+    id: int
+    item_code: str
+    item_name: str
+    qty: int
+    # Money 列：整数价原样是 int
+    price: int | float
+    note: str
+    used_at: str
+
+
+class ServiceApplyOut(BaseModel):
+    id: int
+    patient_id: int
+    program_code: str
+    note: str
+    status: str
+    handle_note: str
+    created_at: str
+    name: str | None = None
+    gender: str | None = None
+    birth_date: str | None = None
+    ehc_no: str | None = None
+    phone: str | None = None
+
+
+class ApplyHandledOut(BaseModel):
+    id: int
+    status: str
+
+
+class ProfilePatientOut(BaseModel):
+    id: int
+    name: str
+    gender: str
+    birth_date: str
+    ehc_no: str
+    phone: str
+
+
+class ProfilePathOut(BaseModel):
+    """360 档案里的路径行——比纳管详情的 `EnrollPathOut` 少 current_stage，
+    是**另一个形状**，不能共用（少声明会删字段、多声明会注入 null）。"""
+
+    id: int
+    template_code: str
+    status: str
+    current_node_key: str
+    progress: int
+
+
+class ProfileTaskOut(BaseModel):
+    id: int
+    title: str
+    task_type: str
+    status: str
+    due_date: str
+
+
+class ProfileProgramOut(BaseModel):
+    enrollment: EnrollmentOut
+    program_name: str
+    paths: list[ProfilePathOut]
+    packages: list[PackageBindingOut]
+    open_tasks: int
+    recent_tasks: list[ProfileTaskOut]
+
+
+class ProfileMeasurementOut(BaseModel):
+    metric: str
+    # Float 列：整数入参读回来是 160.0
+    value: float
+    unit: str
+    level: str
+    source: str
+    measured_at: str
+
+
+class ProfileAssessmentOut(BaseModel):
+    id: int
+    scale_code: str
+    score: float
+    risk_level: str
+    created_at: str
+
+
+class ProfileReferralOut(BaseModel):
+    id: int
+    direction: str
+    status: str
+    created_at: str
+
+
+class PatientProfileOut(BaseModel):
+    patient: ProfilePatientOut
+    programs: list[ProfileProgramOut]
+    measurements: list[ProfileMeasurementOut]
+    assessments: list[ProfileAssessmentOut]
+    referrals: list[ProfileReferralOut]
+    # build_facts 的事实字典：键随患者数据而变（age/gender/diagnosis/各指标）
+    facts: dict[str, Any]
+
+
 # ============================================================ 筛查
 
 
@@ -96,7 +434,8 @@ def _screening_out(s: SpdScreening, brief: dict | None = None) -> dict:
     return out
 
 
-@router.post("/screenings", status_code=201,
+@router.post("/screenings", response_model=ScreeningOut,
+             response_model_exclude_unset=True, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES, "operator"))])
 def create_screening(
     body: ScreeningIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -202,7 +541,8 @@ def _upsert_candidate(
     return candidate
 
 
-@router.get("/screenings")
+@router.get("/screenings", response_model=list[ScreeningOut],
+            response_model_exclude_unset=True)
 def list_screenings(
     response: Response,
     patient_id: int | None = None,
@@ -242,7 +582,8 @@ class ReviewIn(BaseModel):
     review_note: str = Field(default="", max_length=256)
 
 
-@router.post("/screenings/{screening_id}/review",
+@router.post("/screenings/{screening_id}/review", response_model=ScreeningOut,
+             response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def review_screening(
     screening_id: int,
@@ -282,7 +623,8 @@ class AutoScreenIn(BaseModel):
     limit: int = Field(default=500, ge=1, le=5000)
 
 
-@router.post("/screenings/auto-run", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/screenings/auto-run", response_model=AutoScreenOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def auto_screen(
     body: AutoScreenIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -360,7 +702,8 @@ def _candidate_out(c: SpdCandidate, brief: dict | None = None) -> dict:
     return out
 
 
-@router.get("/candidates")
+@router.get("/candidates", response_model=list[CandidateOut],
+            response_model_exclude_unset=True)
 def list_candidates(
     response: Response,
     program_code: str | None = None,
@@ -402,7 +745,8 @@ class DistributeIn(BaseModel):
     org_id: int | None = None
 
 
-@router.post("/candidates/distribute", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/candidates/distribute", response_model=DistributeOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def distribute_candidates(
     body: DistributeIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -423,7 +767,8 @@ def distribute_candidates(
     return {"distributed": len(rows), "not_found": len(body.candidate_ids) - len(rows)}
 
 
-@router.post("/candidates/{candidate_id}/claim",
+@router.post("/candidates/{candidate_id}/claim", response_model=CandidateOut,
+             response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def claim_candidate(
     candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -448,7 +793,8 @@ class CandidateStatusIn(BaseModel):
     reason: str = Field(default="", max_length=256)
 
 
-@router.post("/candidates/{candidate_id}/status",
+@router.post("/candidates/{candidate_id}/status", response_model=CandidateOut,
+             response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def set_candidate_status(
     candidate_id: int,
@@ -517,7 +863,8 @@ def _enroll_out(e: SpdEnrollment, brief: dict | None = None) -> dict:
     return out
 
 
-@router.post("/enrollments", status_code=201,
+@router.post("/enrollments", response_model=EnrollmentOut,
+             response_model_exclude_unset=True, status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_enrollment(
     body: EnrollIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -578,7 +925,8 @@ def create_enrollment(
     return _enroll_out(enrollment)
 
 
-@router.get("/enrollments")
+@router.get("/enrollments", response_model=list[EnrollmentOut],
+            response_model_exclude_unset=True)
 def list_enrollments(
     response: Response,
     program_code: str | None = None,
@@ -641,7 +989,8 @@ def list_enrollments(
     return [_enroll_out(r, briefs.get(r.patient_id)) for r in rows]
 
 
-@router.get("/enrollments/{enrollment_id}")
+@router.get("/enrollments/{enrollment_id}", response_model=EnrollmentDetailOut,
+            response_model_exclude_unset=True)
 def get_enrollment(
     enrollment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -686,7 +1035,8 @@ class EnrollUpdate(BaseModel):
     next_followup_at: OptionalDateStr | None = None
 
 
-@router.patch("/enrollments/{enrollment_id}",
+@router.patch("/enrollments/{enrollment_id}", response_model=EnrollmentOut,
+              response_model_exclude_unset=True,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def update_enrollment(
     enrollment_id: int,
@@ -727,7 +1077,8 @@ _EVENT_STATUS = {
 }
 
 
-@router.post("/enrollments/{enrollment_id}/lifecycle",
+@router.post("/enrollments/{enrollment_id}/lifecycle", response_model=LifecycleResultOut,
+             response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def lifecycle_event(
     enrollment_id: int,
@@ -791,7 +1142,8 @@ def lifecycle_event(
     }
 
 
-@router.post("/lifecycle-events/{event_id}/confirm",
+@router.post("/lifecycle-events/{event_id}/confirm", response_model=MigrationConfirmOut,
+             response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def confirm_migration(
     event_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -857,7 +1209,7 @@ def confirm_migration(
     }
 
 
-@router.get("/lifecycle-events")
+@router.get("/lifecycle-events", response_model=list[LifecycleEventOut])
 def list_lifecycle_events(
     response: Response,
     event: str | None = None,
@@ -901,7 +1253,7 @@ class RecallUpdate(BaseModel):
     result: str = Field(default="", max_length=256)
 
 
-@router.post("/recalls/{recall_id}/progress",
+@router.post("/recalls/{recall_id}/progress", response_model=RecallProgressOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def update_recall(
     recall_id: int,
@@ -930,7 +1282,7 @@ def update_recall(
     return {"id": recall.id, "status": recall.status, "result": recall.result}
 
 
-@router.get("/recalls")
+@router.get("/recalls", response_model=list[RecallOut])
 def list_recalls(
     response: Response, status: str | None = None, offset: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
@@ -957,7 +1309,8 @@ class GroupIn(BaseModel):
     auto_rule: list[dict] = Field(default_factory=list)
 
 
-@router.post("/groups", status_code=201, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/groups", response_model=GroupCreatedOut, status_code=201,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_group(
     body: GroupIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -967,7 +1320,7 @@ def create_group(
     return {"id": group.id, "name": group.name, "scope": group.scope, "member_count": 0}
 
 
-@router.get("/groups")
+@router.get("/groups", response_model=list[GroupOut])
 def list_groups(
     scope: str | None = None, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -1004,7 +1357,7 @@ class GroupMembersIn(BaseModel):
     program_code: str = Field(default="", max_length=32)
 
 
-@router.post("/groups/{group_id}/members",
+@router.post("/groups/{group_id}/members", response_model=GroupMembersAddedOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def add_group_members(
     group_id: int,
@@ -1053,7 +1406,8 @@ def add_group_members(
     return {"added": added, "total": len(existing) + added}
 
 
-@router.get("/groups/{group_id}/members")
+@router.get("/groups/{group_id}/members", response_model=list[GroupMemberOut],
+            response_model_exclude_unset=True)
 def list_group_members(
     group_id: int, response: Response, offset: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
@@ -1132,8 +1486,8 @@ class BindPackageIn(BaseModel):
     package_id: int
 
 
-@router.post("/enrollments/{enrollment_id}/packages", status_code=201,
-             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/enrollments/{enrollment_id}/packages", response_model=PackageBindingOut,
+             status_code=201, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def bind_package(
     enrollment_id: int,
     body: BindPackageIn,
@@ -1160,7 +1514,7 @@ def bind_package(
     return _binding_out(db, binding)
 
 
-@router.post("/package-bindings/{binding_id}/unbind",
+@router.post("/package-bindings/{binding_id}/unbind", response_model=PackageBindingOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def unbind_package(binding_id: int, db: Session = Depends(get_db)):
     binding = db.get(SpdPackageBinding, binding_id)
@@ -1178,7 +1532,8 @@ class UsageIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.post("/package-bindings/{binding_id}/usages", status_code=201,
+@router.post("/package-bindings/{binding_id}/usages", response_model=UsageCreatedOut,
+             status_code=201,
              dependencies=[Depends(require_roles(*SERVICE_ROLES, "operator"))])
 def add_usage(
     binding_id: int,
@@ -1211,7 +1566,7 @@ def add_usage(
     return {"usage_id": usage.id, "binding": _binding_out(db, binding)}
 
 
-@router.get("/package-bindings/{binding_id}/usages")
+@router.get("/package-bindings/{binding_id}/usages", response_model=list[PackageUsageOut])
 def list_usages(binding_id: int, response: Response, offset: int = 0, limit: int = 100,
                 db: Session = Depends(get_db)):
     query = db.query(SpdPackageUsage).filter(SpdPackageUsage.binding_id == binding_id)
@@ -1226,7 +1581,8 @@ def list_usages(binding_id: int, response: Response, offset: int = 0, limit: int
 # ============================================================ 居民专病服务申请
 
 
-@router.get("/service-applies")
+@router.get("/service-applies", response_model=list[ServiceApplyOut],
+            response_model_exclude_unset=True)
 def list_service_applies(
     response: Response, status: str | None = "pending", offset: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
@@ -1250,7 +1606,7 @@ class ApplyHandleIn(BaseModel):
     handle_note: str = Field(default="", max_length=256)
 
 
-@router.post("/service-applies/{apply_id}/handle",
+@router.post("/service-applies/{apply_id}/handle", response_model=ApplyHandledOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def handle_service_apply(
     apply_id: int,
@@ -1296,7 +1652,8 @@ def handle_service_apply(
 # ============================================================ 患者专病 360 档案
 
 
-@router.get("/patients/{patient_id}/profile")
+@router.get("/patients/{patient_id}/profile", response_model=PatientProfileOut,
+            response_model_exclude_unset=True)
 def patient_profile(
     patient_id: int,
     program_code: str = Query(default=""),
