@@ -54,7 +54,7 @@
 |---|---|---|
 | P1-17 | spd 子系统 46 条路由零测试引用（config 全部 PATCH/DELETE、assess 积分规则整块） | ✅ 已修（tests/ 现有 **19 个 `test_spd_*` 专档**、44 个测试文件引用 spd；当年点名的两块缺口均有专测：config 域改/删分支 `test_spd_config_admin.py` + 三份 config 契约档，考核取数与积分兑换 `test_spd_assess_metrics.py`） |
 | ~~P1-18~~ | ~~并发测试跑在 SQLite（全库写锁+无 MVCC），证不了 PG READ COMMITTED 竞争窗口~~ —— ✅ 已修 2026-08-31：真 PG 档 `test_postgres_real.py` 扩至 11 条（+4：并发同证件号建档/upsert_unique 同键/押金退费×结算冲抵混合并发/发药批次并发占用——测的是防线原语本体在 MVCC 下的形状，直绑 pg_engine 多线程 Barrier），CI integration job 阻断且有「执行 0 条即红」自证闸门。单测档跑 SQLite 的定位不变（快速反馈），PG 语义由真 PG 档守 |
-| ~~P1-19~~ | ~~事务边界测试几乎不存在（全仓仅 3 文件提及 rollback）~~ —— ✅ 已修 2026-08-31：专档 `test_transaction_boundaries.py` 8 条覆盖 6 条资金/库存/状态机链路（住院结算/发药扣库存/退药冲销/押金退费/缴费下单通道异常/跨机构调拨），每条验证「失败后无半写（独立会话逐字段实查）+ 重来恰好生效一次」，commit 断连注入照 audit 硬化档范式；6 处变异各自转红（含断言灵敏度自证）。顺带实证一处产品洞：spd claim_task 裸 check-then-act（并发认领静默改责任人），另行修复 |
+| ~~P1-19~~ | ~~事务边界测试几乎不存在（全仓仅 3 文件提及 rollback）~~ —— ✅ 已修 2026-08-31：专档 `test_transaction_boundaries.py` 8 条覆盖 6 条资金/库存/状态机链路（住院结算/发药扣库存/退药冲销/押金退费/缴费下单通道异常/跨机构调拨），每条验证「失败后无半写（独立会话逐字段实查）+ 重来恰好生效一次」，commit 断连注入照 audit 硬化档范式；6 处变异各自转红（含断言灵敏度自证）。顺带实证一处产品洞：spd claim_task 裸 check-then-act（并发认领静默改责任人）——已随即修复：claim/batch-claim/_finish_task 三处收口为条件 UPDATE（判定与写同一条 SQL 看 rowcount，与 `_claim_batch`/`claim_quota` 同范式），409 文案与成功响应字节不变；回归 `test_spd_task_claim_race.py` 7 条（行为面 5 + 防拆卸静态钉），3 处变异各自转红 |
 | P1-20 | 74 份复制粘贴 client fixture + 46 处硬编码登录（约 700-900 行可消除） | conftest 无 fixture + 74 文件 |
 
 ### P1 新增（阶段十四收口时如实补登记）

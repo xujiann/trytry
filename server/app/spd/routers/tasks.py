@@ -9,11 +9,12 @@
 有那个口子，前端一定会用它来绕过审核。
 """
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, or_, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
@@ -684,15 +685,31 @@ def _load_task(db: Session, task_id: int) -> SpdTask:
 @router.post("/tasks/{task_id}/claim", response_model=TaskOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def claim_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """接收任务。已被别人接收的返回 409——静默改责任人会让原责任人白干一场。"""
+    """接收任务。已被别人接收的返回 409——静默改责任人会让原责任人白干一场。
+
+    判定与写压进同一条 UPDATE（_claim_batch/claim_quota 同一范式）：此前是
+    "读→Python 判→写"，PG READ COMMITTED 下两人并发认领同一 pending 任务
+    可双双 200、后提交者静默覆盖 assignee——恰是本 docstring 承诺要防的事
+    （SQLite 全库写锁把窗口压得看不见，真 PG 上窗口是真的）。
+    """
     task = _load_task(db, task_id)
-    if task.status not in ("pending", "overdue"):
-        raise HTTPException(status_code=409, detail="该任务不处于可接收状态")
-    if task.assignee_id not in (None, user.id):
+    won = cast(CursorResult, db.execute(
+        update(SpdTask)
+        .where(
+            SpdTask.id == task_id,
+            SpdTask.status.in_(("pending", "overdue")),
+            or_(SpdTask.assignee_id.is_(None), SpdTask.assignee_id == user.id),
+        )
+        .values(assignee_id=user.id, status="claimed")
+    )).rowcount
+    if not won:
+        db.rollback()
+        db.refresh(task)  # 按落库现状给出与旧实现同一优先序的 409 文案
+        if task.status not in ("pending", "overdue"):
+            raise HTTPException(status_code=409, detail="该任务不处于可接收状态")
         raise HTTPException(status_code=409, detail="该任务已由其他人员接收")
-    task.assignee_id = user.id
-    task.status = "claimed"
     db.commit()
+    db.refresh(task)
     return _task_out(task)
 
 
@@ -856,13 +873,29 @@ def complete_task(
 
 
 def _finish_task(db: Session, task: SpdTask, user: User) -> dict:
-    """任务办结的收尾动作：置完成、推进路径、村医计分、更新随访日期。"""
-    task.status = "done"
-    task.finished_at = now_naive()
-    task.assignee_id = task.assignee_id or user.id
-    # 会话是 autoflush=False 的：不显式 flush，下面数"还有几条没办完"时
-    # 会把刚办完的这条也数进去，路径就永远推不动。
+    """任务办结的收尾动作：置完成、推进路径、村医计分、更新随访日期。
+
+    终态翻转是一条**条件 UPDATE**（同 claim 的取舍）：并发的两次办结/审核
+    只有一次能把 status 翻成 done——输家 409 且其待写字段随 rollback 丢弃，
+    计分与路径推进因此天然只发生一次，不再依赖调用方 Python 侧的预检。
+    """
+    won = cast(CursorResult, db.execute(
+        update(SpdTask)
+        .where(SpdTask.id == task.id, SpdTask.status.notin_(("done", "cancelled")))
+        .values(
+            status="done",
+            finished_at=now_naive(),
+            assignee_id=func.coalesce(SpdTask.assignee_id, user.id),
+        )
+    )).rowcount
+    if not won:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该任务已结束")
+    # 会话是 autoflush=False 的：先 flush 把调用方挂起的 result/evidence/审核
+    # 字段落库，再 refresh 取回 done/finished_at/assignee 的落库值——下面数
+    # "还有几条没办完"与出参序列化才不会拿着旧内存值。
     db.flush()
+    db.refresh(task)
 
     advanced = None
     if task.instance_id is not None:
@@ -936,10 +969,21 @@ def batch_tasks(
             skipped.append({"id": task.id, "reason": "任务已结束"})
             continue
         if body.action == "claim":
-            if task.assignee_id not in (None, user.id):
-                skipped.append({"id": task.id, "reason": "已被他人接收"})
+            # 与单条 claim 同一范式：判定与写同一条 UPDATE，抢输的进 skipped
+            won = cast(CursorResult, db.execute(
+                update(SpdTask)
+                .where(
+                    SpdTask.id == task.id,
+                    SpdTask.status.in_(OPEN_STATUSES),
+                    or_(SpdTask.assignee_id.is_(None), SpdTask.assignee_id == user.id),
+                )
+                .values(assignee_id=user.id, status="claimed")
+            )).rowcount
+            if not won:
+                db.refresh(task)
+                skipped.append({"id": task.id, "reason": "任务已结束"
+                                if task.status not in OPEN_STATUSES else "已被他人接收"})
                 continue
-            task.assignee_id, task.status = user.id, "claimed"
         elif body.action == "urge":
             add_amount(db, SpdTask, task.id, "urged_count", 1)
         elif body.action == "escalate":
