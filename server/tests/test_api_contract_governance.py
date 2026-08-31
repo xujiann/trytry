@@ -166,7 +166,15 @@ import app.spd.routers as spd_routers
 #   score 是 Float 列→float（85 本就以 85.0 出参，与 Money 相反）；
 #   next_retry_at/avg_rating 是值可空的恒在键不是条件键，无需 exclude_unset。
 #   见 test_esb_contract.py / test_education_contract.py，五处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 302
+# → 259（spd/followup 29 + spd/referral 14，共 43，零跳过；followup 第 30 个
+#   端点本就 204 声明契约。判断集锦：execute 的 action 条件键→末尾声明+
+#   exclude_unset 双向钉；auto-match 两分支键集不同→二选一联合（无方案分支
+#   extra=forbid）；详情独有的 steps→继承拆两模型而非可空字段（避免给其余
+#   端点注入 null）；ReportInstanceDetailOut 不继承列表行（content 插在
+#   created_at 之前，继承追加会改键序）；空串非 null 全部照钉；分级审核
+#   （ADR-0004/0005）语义一行未动。见 test_spd_followup_contract.py /
+#   test_spd_referral_contract.py，五处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 259
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -216,6 +224,10 @@ FULLY_GOVERNED = {
     # 见 test_esb_contract.py / test_education_contract.py
     "esb",
     "education",
+    # spd 随访与转诊两簇（followup 29/referral 14），欠账 302→259 那批，
+    # 见 test_spd_followup_contract.py / test_spd_referral_contract.py
+    "spd/followup",
+    "spd/referral",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

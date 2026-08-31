@@ -62,6 +62,111 @@ _NEXT = {
 _TERMINAL = ("closed", "rejected", "withdrawn")
 
 
+# ============================================================ 响应契约
+#
+# 模型集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）。
+# 字段与各 handler 的当前出参**逐字段逐序**对应（治理不得改响应字节，第7条），
+# 取值由 tests/test_spd_referral_contract.py 钉住。**只加出参声明**：分级审核的
+# 越权判定（ADR-0004 机构树 parent 口径、ADR-0005 三级链）一行未动。
+# 数值只有 Integer 裸 int 与 `round(x/y*100, 1)` 派生的 float
+# （closure_rate / effective_rate，空分母也是 `0.0`）。
+
+
+class ReferralRuleOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    program_code: str
+    scene: str
+    # validate_conditions 规范化后的条件（{"field","op","value","label"}，
+    # value 随 op 是标量或 [下限, 上限]），照存照出
+    conditions: list[dict[str, Any]]
+    notify_role: str
+    handle_level: str
+    target_org_id: int | None
+    auto_task: bool
+    active: bool
+
+
+class ReferralCaseOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    program_code: str
+    enrollment_id: int | None
+    direction: str
+    initiator_org_id: int
+    initiator_id: int | None
+    current_org_id: int | None
+    current_level: str
+    target_org_id: int | None
+    status: str
+    reason: str
+    trigger_rule_code: str
+    # 规则开单时是 {"matched": [...]}，手工开单照录调用方给的 JSON
+    trigger_evidence: dict[str, Any]
+    materials: list[dict[str, Any]]
+    effective_visit: bool
+    stable_for_down: bool
+    created_at: str
+    # 未结案是空串不是 null（isoformat() if ... else ""）
+    closed_at: str
+
+
+class ReferralStepOut(BaseModel):
+    id: int
+    step: str
+    action: str
+    actor_id: int | None
+    org_id: int | None
+    opinion: str
+    created_at: str
+
+
+class ReferralCaseDetailOut(ReferralCaseOut):
+    """详情端点独有：末尾追加全轨迹 `steps`（详情恒带，非条件键）。
+    列表与各动作回执**从不带** steps——用继承拆成两个模型，而不是同一个模型上
+    的可空 steps（那会给其余 8 个端点的出参注入 `"steps": null`）。"""
+
+    steps: list[ReferralStepOut]
+
+
+class ReferralRuleHitOut(BaseModel):
+    """命中的规则 + 命中的条件明细。与 `rules` 模块的 RuleHitOut 同名不同形，
+    改名避免 OpenAPI 把对方既有 schema 名改写成长限定名。"""
+
+    rule: ReferralRuleOut
+    matched: list[dict[str, Any]]
+
+
+class ReferralRuleCheckOut(BaseModel):
+    triggered: bool
+    hits: list[ReferralRuleHitOut]
+    # 事实字典：age/gender/diagnosis/各监测值（Float 列，整数取值读回带 .0），
+    # 键随 MEASURE_FIELDS 与调用方 extra 扩充，宽字典
+    facts: dict[str, Any]
+    # auto_create=false 或未命中时为 null
+    case: ReferralCaseOut | None
+
+
+class ReferralClosureStatsOut(BaseModel):
+    total: int
+    denominator: int
+    closed: int
+    closure_rate: float
+    effective_visits: int
+    effective_rate: float
+    # 状态/链路层级 → 数量：键是状态机取值，宽键映射
+    by_status: dict[str, int]
+    pending_by_level: dict[str, int]
+
+
+class ReferralAlertsOut(BaseModel):
+    threshold_hours: int
+    count: int
+    items: list[ReferralCaseOut]
+
+
 # ============================================================ 转诊规则
 
 
@@ -86,7 +191,7 @@ def _rule_out(r: SpdReferralRule) -> dict:
     }
 
 
-@router.post("/referral-rules", status_code=201,
+@router.post("/referral-rules", response_model=ReferralRuleOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def create_referral_rule(body: ReferralRuleIn, db: Session = Depends(get_db)):
     try:
@@ -105,7 +210,7 @@ def create_referral_rule(body: ReferralRuleIn, db: Session = Depends(get_db)):
     return _rule_out(rule)
 
 
-@router.get("/referral-rules")
+@router.get("/referral-rules", response_model=list[ReferralRuleOut])
 def list_referral_rules(
     program_code: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
 ):
@@ -117,7 +222,7 @@ def list_referral_rules(
     return [_rule_out(r) for r in query.order_by(SpdReferralRule.id).limit(200).all()]
 
 
-@router.patch("/referral-rules/{rule_id}",
+@router.patch("/referral-rules/{rule_id}", response_model=ReferralRuleOut,
               dependencies=[Depends(require_roles("director", "doctor"))])
 def update_referral_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
     rule = db.get(SpdReferralRule, rule_id)
@@ -143,7 +248,8 @@ class RuleCheckIn(BaseModel):
     auto_create: bool = False
 
 
-@router.post("/referral-rules/check", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/referral-rules/check", response_model=ReferralRuleCheckOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def check_referral_rules(
     body: RuleCheckIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -334,7 +440,8 @@ def _create_case(
     return case
 
 
-@router.post("/referrals", status_code=201, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/referrals", response_model=ReferralCaseOut, status_code=201,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_referral(
     body: ReferralIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -369,7 +476,7 @@ def create_referral(
     return _case_out(db, case)
 
 
-@router.get("/referrals")
+@router.get("/referrals", response_model=list[ReferralCaseOut])
 def list_referrals(
     response: Response,
     patient_id: int | None = None,
@@ -412,7 +519,7 @@ def list_referrals(
     return [_case_out(db, r) for r in rows]
 
 
-@router.get("/referrals/{case_id}")
+@router.get("/referrals/{case_id}", response_model=ReferralCaseDetailOut)
 def get_referral(
     case_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -436,7 +543,8 @@ class ReviewIn(BaseModel):
     target_org_id: int | None = None
 
 
-@router.post("/referrals/{case_id}/review", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/referrals/{case_id}/review", response_model=ReferralCaseOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def review_referral(
     case_id: int, body: ReviewIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -488,7 +596,8 @@ class ArriveIn(BaseModel):
     opinion: str = Field(default="", max_length=512)
 
 
-@router.post("/referrals/{case_id}/arrive", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/referrals/{case_id}/arrive", response_model=ReferralCaseOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def arrive_referral(
     case_id: int, body: ArriveIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -528,7 +637,8 @@ class DownIn(BaseModel):
     followup_days: int = Field(default=14, ge=1, le=365)
 
 
-@router.post("/referrals/{case_id}/down", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/referrals/{case_id}/down", response_model=ReferralCaseOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def down_referral(
     case_id: int, body: DownIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -563,7 +673,7 @@ class ReceiveIn(BaseModel):
     opinion: str = Field(default="", max_length=512)
 
 
-@router.post("/referrals/{case_id}/receive-followup",
+@router.post("/referrals/{case_id}/receive-followup", response_model=ReferralCaseOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def receive_followup(
     case_id: int, body: ReceiveIn, db: Session = Depends(get_db),
@@ -587,7 +697,7 @@ def receive_followup(
     return _case_out(db, case)
 
 
-@router.post("/referrals/{case_id}/withdraw",
+@router.post("/referrals/{case_id}/withdraw", response_model=ReferralCaseOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def withdraw_referral(
     case_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -609,7 +719,7 @@ def withdraw_referral(
     return _case_out(db, case)
 
 
-@router.get("/referrals-stats/closure")
+@router.get("/referrals-stats/closure", response_model=ReferralClosureStatsOut)
 def closure_rate(
     program_code: str | None = None,
     org_id: int | None = None,
@@ -664,7 +774,7 @@ def closure_rate(
     }
 
 
-@router.get("/referrals-alerts")
+@router.get("/referrals-alerts", response_model=ReferralAlertsOut)
 def referral_alerts(
     hours: int = 48, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
