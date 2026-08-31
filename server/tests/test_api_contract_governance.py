@@ -215,7 +215,16 @@ import app.spd.routers as spd_routers
 #   回填固定日期+today 同传基准日压出真实行（analytics 契约网既有做法）；
 #   DRG 事前提示候选行=目录行+match_score 继承尾键。见五份
 #   test_*_contract.py，七处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 70
+# → 40（users 6 + staffing 5 + cost 5 + jobs 4 + monitor 3 + attachments 3
+#   + access_logs 3 + todos 1，共 30，零跳过。判断集锦：cost 汇总同一行
+#   两族并存——0.0 桶起加的恒 float 与 .get(id,0) 兜底的 int|float，判据是
+#   产地不是字段名；todos 分节 list 是真多态（5 种行形且待确认行是危急值行
+#   真子集，smart union 会吞 critical_status）→照 drilldown 先例宽字典 +
+#   type 自描述逐形钉死；monitor 探活块分支异形全 exclude_unset；两个真
+#   下载端点（audit/export NDJSON、附件字节流）照 CsvResponse 先例走
+#   response_class 声明媒体类型，入册下方豁免清单。见八份 test_*_contract.py，
+#   九处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 40
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -298,6 +307,16 @@ FULLY_GOVERNED = {
     "drgs",
     "homevisits",
     "followups",
+    # 运维八小簇（users 6/staffing 5/cost 5/jobs 4/monitor 3/attachments 3/
+    # access_logs 3/todos 1），欠账 70→40 那批，见八份对应契约档
+    "users",
+    "staffing",
+    "cost",
+    "jobs",
+    "monitor",
+    "attachments",
+    "access_logs",
+    "todos",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",
@@ -432,11 +451,18 @@ def test_放宽媒体类型口径没有白送任何端点():
         if route.response_model is None and _declares_non_json_media(route)
     )
     assert by_media == [
+        # 附件下载是文件字节流：AttachmentContentResponse（FileResponse 子类）
+        # 同时是 response_class 与本地分支实际返回的类，运行时 content-type
+        # 仍逐附件回填
+        "attachments GET /api/attachments/{attachment_id}",
         "reports GET /api/reports/monitoring/export",
         "reports GET /api/reports/operations/export",
         # 两个二维码：`_base.SvgResponse` 同时是 response_class 与实际返回的类
         "spd/config GET /api/spd/scales/{scale_id}/qr.svg",
         "spd/config GET /api/spd/village-doctors/{vd_id}/qr.svg",
+        # 审计导出是 NDJSON 流式下载：NdjsonResponse 照 reports.CsvResponse
+        # 写法，声明与实际返回同一类
+        "users GET /api/audit/export",
     ], (
         f"靠媒体类型算作已治理的端点清单变了：{by_media}。"
         "新增这类端点是可以的，但必须是真的返回非 JSON 的下载/单据类接口，"

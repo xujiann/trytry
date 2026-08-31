@@ -20,7 +20,22 @@ router = APIRouter(
 )
 
 
-@router.get("")
+class JobOut(BaseModel):
+    """任务清单行。`last_run_at`/`next_run_at` 是 isoformat **或空串**
+    （从未跑过是 ""，不是 null）→ str。"""
+
+    id: int
+    name: str
+    title: str
+    interval_seconds: int
+    enabled: bool
+    last_run_at: str
+    next_run_at: str
+    last_status: str
+    implemented: bool
+
+
+@router.get("", response_model=list[JobOut])
 def list_jobs(db: Session = Depends(get_db)):
     """任务清单：库中调度参数 + 代码中是否有对应实现。"""
     rows = db.query(ScheduledJob).order_by(ScheduledJob.name).all()
@@ -46,7 +61,13 @@ class JobUpdate(BaseModel):
     enabled: bool | None = None
 
 
-@router.patch("/{name}", dependencies=[Depends(require_admin)])
+class JobUpdateOut(BaseModel):
+    name: str
+    interval_seconds: int
+    enabled: bool
+
+
+@router.patch("/{name}", response_model=JobUpdateOut, dependencies=[Depends(require_admin)])
 def update_job(name: str, body: JobUpdate, db: Session = Depends(get_db)):
     """调整调度参数（限管理员）。间隔下限 60 秒，防止误配成高频空转。"""
     job = db.query(ScheduledJob).filter(ScheduledJob.name == name).first()
@@ -60,7 +81,18 @@ def update_job(name: str, body: JobUpdate, db: Session = Depends(get_db)):
     return {"name": job.name, "interval_seconds": job.interval_seconds, "enabled": job.enabled}
 
 
-@router.post("/{name}/run", status_code=201)
+class JobRunReceiptOut(BaseModel):
+    """触发回执（6 键）：与 8 键历史行不同形（少 trigger/created_at），两个模型。"""
+
+    id: int
+    job_name: str
+    status: str
+    message: str
+    affected: int
+    duration_ms: int
+
+
+@router.post("/{name}/run", response_model=JobRunReceiptOut, status_code=201)
 def trigger_job(name: str, db: Session = Depends(get_db)):
     """手动触发一次（限管理层）：排障与补跑用，执行结果同样落 JobRun。
 
@@ -85,7 +117,18 @@ def trigger_job(name: str, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/runs")
+class JobRunOut(BaseModel):
+    id: int
+    job_name: str
+    trigger: str
+    status: str
+    message: str
+    affected: int
+    duration_ms: int
+    created_at: str
+
+
+@router.get("/runs", response_model=list[JobRunOut])
 def list_runs(
     response: Response,
     job_name: str | None = None,

@@ -17,6 +17,7 @@ verify/stats 四个读接口，读留痕一个都没有。
 不带患者定位的全表浏览与全局聚合不记（也没有 patient_id 可记）。
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -58,6 +59,37 @@ RESOURCE_NAMES = {
 }
 
 
+class AccessLogOut(BaseModel):
+    """监管清单与患者视角 `/mine` 共用的 `_row_out()` 形状（11 键）。
+
+    `viewer_org_id` 是键恒在值可空（居民端/平台账号不挂机构记 null）；
+    `at` 是 isoformat **或空串**（created_at 缺省兜底），不是 null。
+    """
+
+    id: int
+    viewer: str
+    viewer_org_id: int | None
+    viewer_org_name: str
+    patient_id: int
+    patient_name: str
+    resource: str
+    resource_name: str
+    basis: str
+    basis_name: str
+    at: str
+
+
+class BasisCountOut(BaseModel):
+    basis: str
+    basis_name: str
+    count: int
+
+
+class AccessLogStatsOut(BaseModel):
+    total: int
+    by_basis: list[BasisCountOut]
+
+
 def _row_out(log: AccessLog, org_name: str = "", patient_name: str = "") -> dict:
     return {
         "id": log.id,
@@ -91,7 +123,8 @@ def _decorate(db: Session, rows: list[AccessLog]) -> list[dict]:
     return [_row_out(r, orgs.get(r.org_id, ""), patients.get(r.patient_id, "")) for r in rows]
 
 
-@router.get("", dependencies=[Depends(require_roles("director"))])
+@router.get("", response_model=list[AccessLogOut],
+            dependencies=[Depends(require_roles("director"))])
 def list_access_logs(
     response: Response,
     patient_id: int | None = None,
@@ -161,7 +194,7 @@ def _log_view(db: Session, user: User, patient_id: int) -> None:
         s.close()
 
 
-@router.get("/mine")
+@router.get("/mine", response_model=list[AccessLogOut])
 def my_access_logs(
     response: Response,
     offset: int = 0,
@@ -186,7 +219,8 @@ def my_access_logs(
     return _decorate(db, rows)
 
 
-@router.get("/stats", dependencies=[Depends(require_roles("director"))])
+@router.get("/stats", response_model=AccessLogStatsOut,
+            dependencies=[Depends(require_roles("director"))])
 def access_log_stats(
     patient_id: int | None = None,
     db: Session = Depends(get_db),

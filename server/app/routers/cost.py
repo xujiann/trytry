@@ -55,7 +55,22 @@ class CostIn(BaseModel):
     amount: float = Field(ge=0)
 
 
-@router.post("/departments", status_code=201, dependencies=[Depends(require_roles("director"))])
+class CostUpsertOut(BaseModel):
+    """归集回执。`amount` 是 Money 列经 `db.refresh` 读回：整数金额是 **int**
+    （2000），带小数才是 float——声明 `float` 会把「2000 元」变「2000.0 元」
+    （陷阱一，见 docs/接口标准与治理.md）。"""
+
+    id: int
+    updated: bool
+    amount: int | float
+
+
+@router.post(
+    "/departments",
+    response_model=CostUpsertOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("director"))],
+)
 def upsert_department_cost(body: CostIn, db: Session = Depends(get_db)):
     """归集科室直接成本。同科室同期间同成本项重复提交按覆盖处理——
     月末成本数据往往要反复调整，报错逼人先删再建没有意义。"""
@@ -77,7 +92,32 @@ class AllocationIn(BaseModel):
     ratio_pct: float = Field(gt=0, le=100)
 
 
-@router.post("/allocation-rules", status_code=201, dependencies=[Depends(require_roles("director"))])
+class AllocationRuleCreateOut(BaseModel):
+    """建规则回执（4 键，无 org_id——与 5 键清单行不同形，两个模型不合并）。
+
+    `ratio_pct` 是 **Float** 列：整数比例读回来就是 60.0，声明 `float` 才是原样
+    ——与本模块 Money 列相反，判据是列类型不是字段名。"""
+
+    id: int
+    from_dept_id: int
+    to_dept_id: int
+    ratio_pct: float
+
+
+class AllocationRuleOut(BaseModel):
+    id: int
+    org_id: int
+    from_dept_id: int
+    to_dept_id: int
+    ratio_pct: float
+
+
+@router.post(
+    "/allocation-rules",
+    response_model=AllocationRuleCreateOut,
+    status_code=201,
+    dependencies=[Depends(require_roles("director"))],
+)
 def create_allocation_rule(body: AllocationIn, db: Session = Depends(get_db)):
     """建立分摊规则（来源科室 → 目标科室 × 比例）。"""
     source = db.get(Department, body.from_dept_id)
@@ -100,7 +140,7 @@ def create_allocation_rule(body: AllocationIn, db: Session = Depends(get_db)):
             "ratio_pct": rule.ratio_pct}
 
 
-@router.get("/allocation-rules")
+@router.get("/allocation-rules", response_model=list[AllocationRuleOut])
 def list_allocation_rules(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(CostAllocationRule)
     query = scope_org_list(db, user, query, CostAllocationRule, org_id)
@@ -114,7 +154,29 @@ def list_allocation_rules(org_id: int | None = None, db: Session = Depends(get_d
 # ---------------------------------------------------------------- 科室成本汇总
 
 
-@router.get("/departments")
+class DeptCostSummaryOut(BaseModel):
+    """科室成本行：两族数值并存，判据是**产地**不是字段名——
+
+    - `direct_cost`/`by_type`/`total_cost` 恒 float：成本桶从字面量 0.0 起加
+      （`{t: 0.0}`），整数金额加进来也是 float（2000 出参为 2000.0）；
+    - `allocated_in`/`allocated_out`/`unallocated_ratio_amount` 是 `int | float`：
+      无分摊侧的兜底是字面量 int 0（`.get(dept_id, 0)`），有分摊才是 round 出的
+      float——声明 float 会把 0 变 0.0，改字节。
+    """
+
+    dept_id: int
+    dept_name: str
+    dept_category: str
+    org_name: str
+    direct_cost: float
+    by_type: dict[str, float]
+    allocated_in: int | float
+    allocated_out: int | float
+    total_cost: float
+    unallocated_ratio_amount: int | float
+
+
+@router.get("/departments", response_model=list[DeptCostSummaryOut])
 def department_cost_summary(
     period: str,
     org_id: int | None = None,
@@ -214,7 +276,23 @@ def _occupied_bed_days(db: Session, org_id: int, start: date, end: date) -> int:
     return total
 
 
-@router.get("/unit-cost")
+class UnitCostOut(BaseModel):
+    """单位成本：`total_cost` 是 Money 求和（空期间 `sum([])` 为 int 0，有数原样
+    int/float）→ `int | float`；四个成本/单价字段经真除法或字面量 0.0 兜底，
+    恒 float。"""
+
+    period: str
+    org_id: int
+    total_cost: int | float
+    outpatient_visits: int
+    occupied_bed_days: int
+    outpatient_cost: float
+    inpatient_cost: float
+    cost_per_visit: float
+    cost_per_bed_day: float
+
+
+@router.get("/unit-cost", response_model=UnitCostOut)
 def unit_cost(
     period: str,
     org_id: int,

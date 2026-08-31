@@ -9,6 +9,7 @@
 import time
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -63,7 +64,52 @@ def _probe_redis() -> dict:
         return {"configured": True, "connected": False, "error": type(exc).__name__}
 
 
-@router.get("/overview")
+class DatabaseProbeOut(BaseModel):
+    """数据库探活：成功带 `latency_ms`、失败带 `error`（条件键，exclude_unset），
+    `connected`/`dialect` 两分支恒在。字段序=两分支各自的出键序。"""
+
+    connected: bool
+    latency_ms: float | None = None
+    error: str | None = None
+    dialect: str
+
+
+class RedisProbeOut(BaseModel):
+    """Redis 探活三形态：未配置带 `note`、连通带 `latency_ms`、失败带 `error`
+    ——三个条件键每个分支恰出一个（exclude_unset）。"""
+
+    configured: bool
+    connected: bool
+    latency_ms: float | None = None
+    error: str | None = None
+    note: str | None = None
+
+
+class SchedulerFailureOut(BaseModel):
+    name: str
+    at: str
+    status: str
+    message: str
+
+
+class SchedulerStatusOut(BaseModel):
+    jobs_total: int
+    jobs_enabled: int
+    overdue_jobs: list[str]
+    recent_failures: list[SchedulerFailureOut]
+
+
+class MonitorOverviewOut(BaseModel):
+    scope: str
+    instance_id: str
+    uptime_seconds: int
+    environment: str
+    database: DatabaseProbeOut
+    redis: RedisProbeOut
+    scheduler: SchedulerStatusOut
+
+
+@router.get("/overview", response_model=MonitorOverviewOut, response_model_exclude_unset=True)
 def overview(db: Session = Depends(get_db)):
     """运行环境概览：版本、实例、启动时长、依赖连通性、调度器状态。"""
     monitor_heartbeat()
@@ -103,7 +149,46 @@ def overview(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/api-stats")
+class TopModuleOut(BaseModel):
+    module: str
+    count: int
+    avg_duration_ms: float
+
+
+class SlowSampleOut(BaseModel):
+    method: str
+    path: str
+    duration_ms: float
+    at: str
+
+
+class ErrorSampleOut(BaseModel):
+    method: str
+    path: str
+    status: int
+    at: str
+
+
+class ApiStatsOut(BaseModel):
+    """调用统计：`counter_scope` 是**真条件键**（仅集群口径出现，进程口径整键
+    不在——P1-24c 明确"不另加字段"）→ 声明于 `scope` 之后 + exclude_unset。
+    `by_status_code` 的键是 int 状态码，JSON 化后仍是字符串键，字节不变。
+    计数 int；均值/阈值恒 float（round 与字面量 1000.0）。"""
+
+    total_requests: int
+    avg_duration_ms: float
+    by_status_class: dict[str, int]
+    by_status_code: dict[int, int]
+    top_modules: list[TopModuleOut]
+    slow_samples: list[SlowSampleOut]
+    error_samples: list[ErrorSampleOut]
+    scope: str
+    counter_scope: str | None = None
+    instance_id: str
+    slow_threshold_ms: float
+
+
+@router.get("/api-stats", response_model=ApiStatsOut, response_model_exclude_unset=True)
 def api_stats():
     """接口调用统计：总量、状态分布、模块 TOP、慢请求与错误样本。
 
@@ -125,7 +210,23 @@ def api_stats():
     return snapshot
 
 
-@router.get("/nodes")
+class NodeInstanceOut(BaseModel):
+    instance_id: str
+    self: bool
+    uptime_seconds: int | None
+
+
+class NodesOut(BaseModel):
+    """节点状态两形状：无 Redis 四键（`instances` 是**值为 null 的恒在键**），
+    有 Redis 两键（`instance_id`/`note` 整键不在）→ exclude_unset 双向钉。"""
+
+    scope: str
+    instance_id: str | None = None
+    instances: list[NodeInstanceOut] | None
+    note: str | None = None
+
+
+@router.get("/nodes", response_model=NodesOut, response_model_exclude_unset=True)
 def nodes():
     """集群节点状态。
 

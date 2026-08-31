@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 # 导入即注册附件补扫任务 attachment_av_scan（附件域的旁路能力，随本路由装载）
@@ -280,6 +281,34 @@ def store_upload(
     return attachment
 
 
+class AttachmentOut(BaseModel):
+    """上传回执与列表行共用的 `_out()` 形状（9 键）。`uploaded_by` 是键恒在
+    值可空（居民端上传记 null）；`created_at` 是 isoformat 字符串。"""
+
+    id: int
+    filename: str
+    content_type: str
+    size: int
+    sha256: str
+    owner_type: str
+    owner_id: int
+    uploaded_by: int | None
+    created_at: str
+
+
+class AttachmentContentResponse(FileResponse):
+    """附件字节流的契约声明（`reports.CsvResponse` 同款写法）。
+
+    既当 `response_class`（OpenAPI 里 200 的媒体类型），也是本地存储分支实际
+    返回的类；类级 `application/octet-stream` 只进规格书——运行时两条分支都
+    **逐附件显式回填真实 content-type**（image/png、application/pdf……），
+    对象存储分支仍以 `StreamingResponse` 流式回源，响应字节一概不变。
+    `response_model` 对文件下载没有意义：函数不返回可序列化对象。
+    """
+
+    media_type = "application/octet-stream"
+
+
 def _out(a: Attachment) -> dict:
     return {
         "id": a.id,
@@ -294,7 +323,7 @@ def _out(a: Attachment) -> dict:
     }
 
 
-@router.post("", status_code=201)
+@router.post("", response_model=AttachmentOut, status_code=201)
 async def upload_attachment(
     file: UploadFile = File(...),
     owner_type: str = Form(...),
@@ -323,7 +352,7 @@ async def upload_attachment(
     return _out(attachment)
 
 
-@router.get("")
+@router.get("", response_model=list[AttachmentOut])
 def list_attachments(
     owner_type: str,
     owner_id: int,
@@ -345,7 +374,7 @@ def list_attachments(
     ]
 
 
-@router.get("/{attachment_id}")
+@router.get("/{attachment_id}", response_class=AttachmentContentResponse)
 def download_attachment(
     attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -375,7 +404,8 @@ def download_attachment(
     path = storage.local_path(attachment.sha256)
     if path is not None:
         # 本地后端：FileResponse 零拷贝回源，与抽象前的响应逐字节一致
-        return FileResponse(
+        # （AttachmentContentResponse 即 FileResponse 子类，media_type 显式回填）
+        return AttachmentContentResponse(
             path, media_type=attachment.content_type, filename=attachment.filename
         )
     # 非本地后端（对象存储等）：流式回源。header 口径与 FileResponse 一致。

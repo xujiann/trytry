@@ -127,7 +127,7 @@ def list_users(db: Session = Depends(get_db)):
     return db.query(User).order_by(User.id).all()
 
 
-@router.get("/users/roles", dependencies=[Depends(get_current_user)])
+@router.get("/users/roles", response_model=dict[str, str], dependencies=[Depends(get_current_user)])
 def list_roles():
     return ROLE_NAMES
 
@@ -201,7 +201,20 @@ def change_password(
 AUDIT_EXPORT_BATCH = 1000
 
 
-@router.get("/audit/export", dependencies=[Depends(require_admin)])
+class NdjsonResponse(StreamingResponse):
+    """带 `media_type` 的 NDJSON 流式响应。
+
+    既当 `response_class`（决定 OpenAPI 里 200 响应的媒体类型），**也是
+    `export_audit_logs` 实际返回的类**——声明与实际返回是同一个对象，不是两处
+    各写一遍（`reports.CsvResponse` 同款写法，见 docs/接口标准与治理.md
+    「非 JSON 端点」一节）。`response_model` 对流式下载没有意义：函数不返回
+    可序列化对象，FastAPI 也会跳过模型。
+    """
+
+    media_type = "application/x-ndjson"
+
+
+@router.get("/audit/export", response_class=NdjsonResponse, dependencies=[Depends(require_admin)])
 def export_audit_logs(
     since_id: int = 0,
     until: str | None = None,
@@ -254,14 +267,25 @@ def export_audit_logs(
             ensure_ascii=False,
         ) + "\n"
 
-    return StreamingResponse(
+    # media_type 由 NdjsonResponse 类自带（与 response_class 是同一个类），响应头不变
+    return NdjsonResponse(
         rows(),
-        media_type="application/x-ndjson",
         headers={"Content-Disposition": 'attachment; filename="audit_logs.ndjson"'},
     )
 
 
-@router.get("/audit", dependencies=[Depends(require_admin)])
+class AuditLogOut(BaseModel):
+    """审计流水行：`at` 是 `created_at.isoformat()` 字符串（非 datetime 序列化）。"""
+
+    id: int
+    username: str
+    method: str
+    path: str
+    status_code: int
+    at: str
+
+
+@router.get("/audit", response_model=list[AuditLogOut], dependencies=[Depends(require_admin)])
 def list_audit_logs(
     response: Response,
     limit: int = 100,
@@ -287,7 +311,39 @@ def list_audit_logs(
     ]
 
 
-@router.get("/audit/verify", dependencies=[Depends(require_admin)])
+class AuditVerifyOut(BaseModel):
+    """链校验回执：一模型两形状 + 可选的锚点对账段，条件键按出键序声明。
+
+    - 空区间分支只出 `checked/valid/note`；非空分支出 `checked/legacy_unchained/
+      from_id/to_id/partial_segment/valid/broken_at/reason/caliber`——端点用
+      `response_model_exclude_unset=True`，handler 没放的键整个不出现（不是 null）。
+      `note` 声明在 `caliber` 之前即可同时满足两分支的键序（两键从不同场出现）。
+    - `broken_at` 是非空分支**值可空的恒在键**：链完好为 null，断链是断点 id。
+    - `anchor_*` 三键仅在带锚点入参对账时于**末尾**追加（两种分支皆然）。
+    - `from_id`/`to_id` 在非空分支恒在，但该段全为未入链历史时值为 null。
+    """
+
+    checked: int
+    legacy_unchained: int | None = None
+    from_id: int | None = None
+    to_id: int | None = None
+    partial_segment: bool | None = None
+    valid: bool
+    broken_at: int | None = None
+    reason: str | None = None
+    note: str | None = None
+    caliber: str | None = None
+    anchor_id: int | None = None
+    anchor_match: bool | None = None
+    anchor_reason: str | None = None
+
+
+@router.get(
+    "/audit/verify",
+    response_model=AuditVerifyOut,
+    response_model_exclude_unset=True,
+    dependencies=[Depends(require_admin)],
+)
 def verify_audit_chain(
     start_id: int = 0,
     limit: int = 5000,
@@ -366,7 +422,39 @@ def verify_audit_chain(
     return body
 
 
-@router.get("/audit/stats", dependencies=[Depends(require_admin)])
+class AuditDailyOut(BaseModel):
+    date: str
+    ok: int
+    failed: int
+
+
+class AuditFailedStatusOut(BaseModel):
+    status: int
+    count: int
+
+
+class AuditTopOut(BaseModel):
+    key: str
+    count: int
+
+
+class AuditStatsOut(BaseModel):
+    """审计统计：`failed_ratio_pct` 恒 float（round(x*100, 2) 与兜底 0.0 皆 float），
+    不涉 Money；三个 TOP 榜同为 {key, count} 行形。"""
+
+    days: int
+    scope: str
+    total: int
+    failed: int
+    failed_ratio_pct: float
+    daily: list[AuditDailyOut]
+    failed_status_codes: list[AuditFailedStatusOut]
+    top_users: list[AuditTopOut]
+    top_paths: list[AuditTopOut]
+    top_failed_paths: list[AuditTopOut]
+
+
+@router.get("/audit/stats", response_model=AuditStatsOut, dependencies=[Depends(require_admin)])
 def audit_stats(days: int = 30, db: Session = Depends(get_db)):
     """审计统计（浙#46 日志图形化）：按日趋势、失败码分布、高频操作与用户 TOP。
 
@@ -619,7 +707,20 @@ def list_login_logs(
     return paginate(query.order_by(LoginLog.id.desc()), response, offset, limit)
 
 
-@router.get("/users/role-changes", dependencies=[Depends(require_admin)])
+class RoleChangeOut(BaseModel):
+    id: int
+    user_id: int
+    old_role: str
+    new_role: str
+    changed_by: int
+    at: str
+
+
+@router.get(
+    "/users/role-changes",
+    response_model=list[RoleChangeOut],
+    dependencies=[Depends(require_admin)],
+)
 def list_role_changes(user_id: int | None = None, db: Session = Depends(get_db)):
     q = db.query(RoleChangeLog)
     if user_id is not None:

@@ -7,7 +7,10 @@
 M-5 整改：危急值口径随闭环状态更新——仅 notified/acknowledged（含存量空串）
 计入待办与预警，已处置(resolved)不再累积；医师待办补"待确认危急值"。
 """
+from typing import Any
+
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -15,6 +18,25 @@ from ..deps import get_current_user
 from ..models import DrugStock, ExamReport, ExamRequest, Prescription, User
 
 router = APIRouter(prefix="/api/todos", tags=["待办中心"])
+
+
+class TodoSectionOut(BaseModel):
+    """待办分节。`list` 的行形随 `type` 换（审方 3 键/待诊断 4 键/缺药 4 键/
+    危急值 4 键/待确认 3 键）——真多态而非条件键：逐字段并模会把五种行的键互相
+    注入 null，且待确认行（id/request_id/conclusion）是危急值行的真子集，smart
+    union 会静默吞掉 critical_status。照 metrics/drilldown 的先例用宽字典透传，
+    行形由同一行的 `type` 自描述，五种行形在 test_todos_contract.py 各钉一遍。"""
+
+    type: str
+    title: str
+    count: int
+    list: list[dict[str, Any]]
+
+
+class TodosOut(BaseModel):
+    role: str
+    total: int
+    items: list[TodoSectionOut]
 
 
 def _pending_prescriptions(db: Session) -> dict:
@@ -121,7 +143,7 @@ def _unacknowledged_critical(db: Session) -> dict:
     }
 
 
-@router.get("")
+@router.get("", response_model=TodosOut)
 def my_todos(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if user.role == "pharmacist":
         items = [_pending_prescriptions(db)]
