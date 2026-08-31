@@ -545,6 +545,20 @@ def test_spd_admin_screen_enroll_path_task(page, base_url, spd_seed):
     _submit(page, "#spd-inst-form button")
 
     _open_page(page, "spdpath", "标准路径与任务中心")
+    # 防哑火诊断（CI 上此处曾无声超时过一次、复跑即绿，机理未钉死）：先经 API
+    # 证实任务已存在，把"任务根本没生成"（后端/种子）与"UI 没画出来"（前端/
+    # 时序）分开——下一次失败自带凶手名单，而不是一句 Timeout。路径实例的
+    # 首节点任务是 POST 内同步生成的（tasks.start_path_instance → start_path
+    # → commit 后才返回），API 里查不到即后端问题实锤。
+    tasks = page.evaluate(
+        "async () => (await fetch('/api/spd/tasks?open_only=true&limit=100',"
+        " {credentials: 'same-origin'})).json()"
+    )
+    # 子串匹配：任务标题是 spawn_task 拼的「模板名·节点名」（如
+    # E2E高血压路径·首次评估），与 UI 行过滤 has_text 同一判定口径
+    assert any("首次评估" in (t.get("title") or "") for t in tasks), (
+        f"路径实例已建但任务 API 里没有『首次评估』，现有任务：{[t.get('title') for t in tasks]}"
+    )
     # 精确点到"首次评估"那一行的办结按钮：任务中心里还躺着 seed 预置的其他任务
     # （按 priority/due/id 排序），拍第一个按钮拍到谁取决于排序细节，太脆。
     page.locator("#spd-task-list tr", has_text="首次评估").locator(
