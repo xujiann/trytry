@@ -194,7 +194,14 @@ import app.spd.routers as spd_routers
 #   Float 列→float；execution_pct/gest_week 是键恒在值可空→X|None 而非
 #   exclude_unset；contracts 回执 3 键/到期行 4 键/清单行 6 键分三模型。
 #   见 test_admin_mgmt_contract.py / test_maternal_contract.py，六处变异转红。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 157
+# → 125（resources 8 + projects 8 + org_groups 8 + credentials 8，共 32，
+#   零跳过。判断集锦：项目预算 Money int|float（空库统计 total_budget=0
+#   是 int、均值 None）；多卡协同 resolve 三分支与手术间撮合无房分支的
+#   条件键→exclude_unset 双向钉；status/status_name 相邻键序即字节；
+#   GroupOut/GroupMemberOut 已被占用故命名 OrgGroupOut 等，零改写既有
+#   schema 名。见 test_resources_contract.py / test_projects_contract.py /
+#   test_org_groups_contract.py / test_credentials_contract.py，六处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 125
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -260,6 +267,12 @@ FULLY_GOVERNED = {
     # 见 test_admin_mgmt_contract.py / test_maternal_contract.py
     "admin_mgmt",
     "maternal",
+    # 资源/项目/机构组/证照四小簇（各 8），欠账 157→125 那批，
+    # 见 test_resources_contract.py 等四份契约档
+    "resources",
+    "projects",
+    "org_groups",
+    "credentials",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",

@@ -99,7 +99,50 @@ def _project_out(p: AdminProject, today: str, milestones: list[ProjectMilestone]
     }
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_roles("director", "operator"))])
+class ProjectMilestoneOut(BaseModel):
+    """字段与顺序精确镜像 `_milestone_out`（新增/完成/撤销回执与项目内嵌行同形）。"""
+
+    id: int
+    name: str
+    due_date: str
+    done: bool
+    done_date: str
+    overdue: bool
+    note: str
+
+
+class AdminProjectOut(BaseModel):
+    """字段与顺序精确镜像 `_project_out`。
+
+    `budget_amount` 是 Money 列（Numeric(14,2, asdecimal=False)）：整数预算读回来
+    是 **int**，声明 `int | float` 原样透传——写成 float 会把 20000 变成 20000.0
+    （陷阱一，docs/接口标准与治理.md）。创建与更新回执的 `milestones` 恒为 `[]`
+    （handler 传空列表、三个计数为 0），契约如实镜像当前字节。
+    """
+
+    id: int
+    org_id: int
+    name: str
+    category: str
+    owner_name: str
+    start_date: str
+    due_date: str
+    status: str
+    status_name: str
+    progress_pct: int
+    budget_amount: int | float
+    description: str
+    milestones: list[ProjectMilestoneOut]
+    milestone_done: int
+    milestone_total: int
+    milestone_overdue: int
+    overdue: bool
+
+
+@router.post(
+    "", status_code=201, response_model=AdminProjectOut,
+    dependencies=[Depends(require_roles("director", "operator"))],
+)
 def create_project(
     body: ProjectIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -115,7 +158,7 @@ def create_project(
     return _project_out(project, resolve_business_date(None).isoformat(), [])
 
 
-@router.get("")
+@router.get("", response_model=list[AdminProjectOut])
 def list_projects(
     org_id: int | None = None,
     status: str | None = None,
@@ -145,7 +188,7 @@ def list_projects(
     return [r for r in rows if r["overdue"]] if overdue_only else rows
 
 
-@router.get("/{project_id}")
+@router.get("/{project_id}", response_model=AdminProjectOut)
 def get_project(project_id: int, today: str | None = None, db: Session = Depends(get_db)):
     project = _project(db, project_id)
     milestones = (
@@ -157,7 +200,10 @@ def get_project(project_id: int, today: str | None = None, db: Session = Depends
     return _project_out(project, resolve_business_date(today).isoformat(), milestones)
 
 
-@router.patch("/{project_id}", dependencies=[Depends(require_roles("director", "operator"))])
+@router.patch(
+    "/{project_id}", response_model=AdminProjectOut,
+    dependencies=[Depends(require_roles("director", "operator"))],
+)
 def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(get_db)):
     """更新进度与状态。
 
@@ -184,6 +230,7 @@ def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(g
 @router.post(
     "/{project_id}/milestones",
     status_code=201,
+    response_model=ProjectMilestoneOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def add_milestone(project_id: int, body: MilestoneIn, db: Session = Depends(get_db)):
@@ -197,6 +244,7 @@ def add_milestone(project_id: int, body: MilestoneIn, db: Session = Depends(get_
 
 @router.post(
     "/milestones/{milestone_id}/done",
+    response_model=ProjectMilestoneOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def complete_milestone(
@@ -216,6 +264,7 @@ def complete_milestone(
 
 @router.post(
     "/milestones/{milestone_id}/reopen",
+    response_model=ProjectMilestoneOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def reopen_milestone(milestone_id: int, db: Session = Depends(get_db)):
@@ -230,7 +279,24 @@ def reopen_milestone(milestone_id: int, db: Session = Depends(get_db)):
     return _milestone_out(milestone, resolve_business_date(None).isoformat())
 
 
-@router.get("/stats/overview")
+class ProjectStatusBucketOut(BaseModel):
+    count: int
+    name: str
+
+
+class ProjectStatsOut(BaseModel):
+    total: int
+    by_status: dict[str, ProjectStatusBucketOut]
+    active: int
+    overdue: int
+    #: `round(真除法, 1)`：有在办项目时恒 float（整数均值也是 15.0），无在办为 None
+    avg_progress_pct_active: float | None
+    #: Money 求和再 round：全整数（含空集的 0）是 int，混小数为 float（陷阱一）
+    total_budget: int | float
+    caliber: str
+
+
+@router.get("/stats/overview", response_model=ProjectStatsOut)
 def project_stats(
     group_id: int | None = None, today: str | None = None, db: Session = Depends(get_db)
 ):

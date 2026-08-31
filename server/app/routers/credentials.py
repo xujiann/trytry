@@ -63,6 +63,41 @@ def _credential_out(c: VisitCredential) -> dict:
     }
 
 
+class CredentialOut(BaseModel):
+    """字段与顺序精确镜像 `_credential_out`（列表行与回收/作废回执）。"""
+
+    id: int
+    patient_id: int
+    credential_no: str
+    credential_type: str
+    credential_type_name: str
+    status: str
+    status_name: str
+    #: DateTime 列的 isoformat 字符串
+    issued_at: str
+    closed_at: str | None
+    close_reason: str
+
+
+class CredentialIssueOut(CredentialOut):
+    """发放回执 = 列表行 + 本次被自动作废的旧凭据号（挂失换发语义；首发为空列表，键恒在）。"""
+
+    superseded: list[str]
+
+
+class CredentialPatientBriefOut(BaseModel):
+    id: int
+    name: str
+    ehc_no: str
+
+
+class CredentialLookupOut(CredentialOut):
+    """核验回执 = 列表行 + valid + 持有人摘要（档案缺失时为 null）。"""
+
+    valid: bool
+    patient: CredentialPatientBriefOut | None
+
+
 def _generate_no(db: Session, patient: Patient, credential_type: str) -> str:
     """系统生成凭据号：健康卡号 + 类型 + 序号。
 
@@ -73,7 +108,10 @@ def _generate_no(db: Session, patient: Patient, credential_type: str) -> str:
     return f"{patient.ehc_no}-{credential_type[:1].upper()}{seq:02d}"
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_roles("operator", "doctor"))])
+@router.post(
+    "", status_code=201, response_model=CredentialIssueOut,
+    dependencies=[Depends(require_roles("operator", "doctor"))],
+)
 def issue_credential(
     body: CredentialIssue, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -113,7 +151,7 @@ def issue_credential(
     return result
 
 
-@router.get("")
+@router.get("", response_model=list[CredentialOut])
 def list_credentials(
     response: Response,
     patient_id: int | None = None,
@@ -130,7 +168,7 @@ def list_credentials(
     return [_credential_out(c) for c in rows]
 
 
-@router.get("/lookup/{credential_no}")
+@router.get("/lookup/{credential_no}", response_model=CredentialLookupOut)
 def lookup(credential_no: str, db: Session = Depends(get_db)):
     """凭据核验：刷卡/扫码时用，返回持有人与是否有效。
 
@@ -153,14 +191,20 @@ def lookup(credential_no: str, db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/{credential_id}/recycle", dependencies=[Depends(require_roles("operator"))])
+@router.post(
+    "/{credential_id}/recycle", response_model=CredentialOut,
+    dependencies=[Depends(require_roles("operator"))],
+)
 def recycle(credential_id: int, body: CredentialClose, db: Session = Depends(get_db)):
     """回收：患者主动交回实体卡。与作废分开记——回收是正常结束，作废是异常终止，
     统计报损率时必须区分。"""
     return _close(db, credential_id, "recycled", body.reason or "患者交回")
 
 
-@router.post("/{credential_id}/void", dependencies=[Depends(require_roles("operator", "doctor"))])
+@router.post(
+    "/{credential_id}/void", response_model=CredentialOut,
+    dependencies=[Depends(require_roles("operator", "doctor"))],
+)
 def void(credential_id: int, body: CredentialClose, db: Session = Depends(get_db)):
     """作废：挂失、损坏、盗用嫌疑。作废后该凭据立即不可用于核验。"""
     if not body.reason:
@@ -218,8 +262,17 @@ def _signature_valid(payload: str, signature: str) -> bool:
     )
 
 
+class OneCodeIssueOut(BaseModel):
+    #: 自包含串「健康卡号.过期时刻.签名」，不落库
+    code: str
+    ehc_no: str
+    expires_in: int
+    note: str
+
+
 @router.post(
     "/one-code",
+    response_model=OneCodeIssueOut,
     dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
 )
 def issue_one_code(body: OneCodeIssue, db: Session = Depends(get_db)):
@@ -245,7 +298,14 @@ def issue_one_code(body: OneCodeIssue, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/one-code/resolve")
+class OneCodeResolveOut(BaseModel):
+    patient_id: int
+    name: str
+    ehc_no: str
+    remaining_seconds: int
+
+
+@router.post("/one-code/resolve", response_model=OneCodeResolveOut)
 def resolve_one_code(body: OneCodeResolve, db: Session = Depends(get_db)):
     """核验一码通动态码。过期与签名错误分别报出——前者让人重新出码，
     后者是伪造，处置完全不同。"""
@@ -273,7 +333,21 @@ def resolve_one_code(body: OneCodeResolve, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/resolve")
+class IdentityResolveOut(BaseModel):
+    """多卡（码）协同命中回执。
+
+    `credential_status` 是**条件键**（docs/接口标准与治理.md 陷阱二）：只在命中
+    实体凭据号那一支出现，健康卡号/身份证分支整个不出现（不是 null）——
+    端点带 `response_model_exclude_unset=True`。
+    """
+
+    matched_by: str
+    credential_status: str | None = None
+    valid: bool
+    patient: CredentialPatientBriefOut | None
+
+
+@router.get("/resolve", response_model=IdentityResolveOut, response_model_exclude_unset=True)
 def resolve_any(identifier: str, db: Session = Depends(get_db)):
     """多卡（码）协同：一个入口认全部身份标识（指引⑧"多卡(码)协同应用"）。
 
