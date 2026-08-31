@@ -108,7 +108,35 @@ def _endpoint_out(e: EsbEndpoint) -> dict:
     }
 
 
-@router.post("/endpoints", status_code=201, dependencies=[Depends(require_admin)])
+class EndpointOut(BaseModel):
+    """字段与顺序精确镜像 `_endpoint_out`（签名密钥与令牌散列不出参；
+    `endpoint_url` 空值以空串呈现，不是 null）。"""
+
+    id: int
+    code: str
+    name: str
+    system_type: str
+    system_type_name: str
+    direction: str
+    direction_name: str
+    active: bool
+    rate_limit_per_min: int
+    endpoint_url: str
+    created_at: str
+
+
+class EndpointWithTokenOut(EndpointOut):
+    """注册/轮换回执：接入方字段之外多一个尾键 auth_token（明文仅此一次回显）。"""
+
+    auth_token: str
+
+
+@router.post(
+    "/endpoints",
+    response_model=EndpointWithTokenOut,
+    status_code=201,
+    dependencies=[Depends(require_admin)],
+)
 def create_endpoint(body: EndpointCreate, db: Session = Depends(get_db)):
     """注册接入方：返回的 auth_token 明文仅此一次可见（库内只留散列）。"""
     if db.query(EsbEndpoint).filter(EsbEndpoint.code == body.code).first():
@@ -118,7 +146,7 @@ def create_endpoint(body: EndpointCreate, db: Session = Depends(get_db)):
     return {**_endpoint_out(endpoint), "auth_token": token}
 
 
-@router.get("/endpoints", dependencies=[Depends(get_current_user)])
+@router.get("/endpoints", response_model=list[EndpointOut], dependencies=[Depends(get_current_user)])
 def list_endpoints(
     system_type: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
 ):
@@ -130,7 +158,9 @@ def list_endpoints(
     return [_endpoint_out(e) for e in q.order_by(EsbEndpoint.code).limit(500).all()]
 
 
-@router.patch("/endpoints/{endpoint_id}", dependencies=[Depends(require_admin)])
+@router.patch(
+    "/endpoints/{endpoint_id}", response_model=EndpointOut, dependencies=[Depends(require_admin)]
+)
 def update_endpoint(endpoint_id: int, body: EndpointUpdate, db: Session = Depends(get_db)):
     endpoint = db.get(EsbEndpoint, endpoint_id)
     if endpoint is None:
@@ -143,7 +173,11 @@ def update_endpoint(endpoint_id: int, body: EndpointUpdate, db: Session = Depend
     return _endpoint_out(endpoint)
 
 
-@router.post("/endpoints/{endpoint_id}/rotate-token", dependencies=[Depends(require_admin)])
+@router.post(
+    "/endpoints/{endpoint_id}/rotate-token",
+    response_model=EndpointWithTokenOut,
+    dependencies=[Depends(require_admin)],
+)
 def rotate_endpoint_token(endpoint_id: int, db: Session = Depends(get_db)):
     """令牌轮换：旧令牌立即失效，新令牌明文仅此一次返回。"""
     endpoint = db.get(EsbEndpoint, endpoint_id)
@@ -223,7 +257,37 @@ def _message_out(m: EsbMessage, endpoint_code: str = "") -> dict:
     }
 
 
-@router.post("/messages", status_code=201)
+class MessageOut(BaseModel):
+    """字段与顺序精确镜像 `_message_out`。
+
+    - `payload` 是接入方投进来的任意 JSON 对象（JSON 列），宽 dict 原样透传
+      （workflows.nodes 先例）：嵌套结构与非 ASCII 键不猜不滤；
+    - `next_retry_at` 键恒在、值随状态：queued/succeeded/dead 为 null，
+      failed 为 ISO 字符串——不是条件键，无需 exclude_unset。
+    """
+
+    id: int
+    endpoint_id: int
+    endpoint_code: str
+    msg_type: str
+    payload: dict
+    status: str
+    status_name: str
+    retry_count: int
+    max_retries: int
+    last_error: str
+    next_retry_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class MessageProcessOut(MessageOut):
+    """消费回执：消息全量字段加尾键 detail（成功说明或失败原因，两分支同形）。"""
+
+    detail: str
+
+
+@router.post("/messages", response_model=MessageOut, status_code=201)
 def enqueue_message(
     body: MessageIn,
     db: Session = Depends(get_db),
@@ -247,7 +311,7 @@ def enqueue_message(
     return _message_out(message, endpoint.code)
 
 
-@router.get("/messages", dependencies=[Depends(get_current_user)])
+@router.get("/messages", response_model=list[MessageOut], dependencies=[Depends(get_current_user)])
 def list_messages(
     response: Response,
     status: str | None = None,
@@ -473,6 +537,7 @@ def _process_message(db: Session, message: EsbMessage, endpoint: EsbEndpoint | N
 
 @router.post(
     "/messages/{message_id}/process",
+    response_model=MessageProcessOut,
     dependencies=[Depends(require_roles("operator"))],  # 消费/重试=经办（admin 全通）
 )
 def process_message(message_id: int, db: Session = Depends(get_db)):
@@ -587,7 +652,24 @@ def _flow_out(f: EsbFlow) -> dict:
     }
 
 
-@router.post("/flows", status_code=201, dependencies=[Depends(require_admin)])
+class FlowOut(BaseModel):
+    """字段与顺序精确镜像 `_flow_out`。
+
+    `steps` 是建流程时提交的原样步骤数组（JSON 列）：`_validate_steps` 只约束
+    type/config 两键，步骤 dict 里的其余自定义键原样保留——宽 dict 透传，
+    逐字段建模会把它们静默滤掉（workflows.nodes 先例）。
+    """
+
+    id: int
+    code: str
+    name: str
+    steps: list[dict]
+    step_count: int
+    active: bool
+    created_at: str
+
+
+@router.post("/flows", response_model=FlowOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_flow(body: FlowCreate, db: Session = Depends(get_db)):
     if db.query(EsbFlow).filter(EsbFlow.code == body.code).first():
         raise HTTPException(status_code=409, detail="该流程编码已存在")
@@ -596,7 +678,7 @@ def create_flow(body: FlowCreate, db: Session = Depends(get_db)):
     return _flow_out(flow)
 
 
-@router.get("/flows", dependencies=[Depends(get_current_user)])
+@router.get("/flows", response_model=list[FlowOut], dependencies=[Depends(get_current_user)])
 def list_flows(active: bool | None = None, db: Session = Depends(get_db)):
     q = db.query(EsbFlow)
     if active is not None:
@@ -604,7 +686,7 @@ def list_flows(active: bool | None = None, db: Session = Depends(get_db)):
     return [_flow_out(f) for f in q.order_by(EsbFlow.code).limit(200).all()]
 
 
-@router.patch("/flows/{flow_id}", dependencies=[Depends(require_admin)])
+@router.patch("/flows/{flow_id}", response_model=FlowOut, dependencies=[Depends(require_admin)])
 def update_flow(flow_id: int, body: FlowUpdate, db: Session = Depends(get_db)):
     flow = db.get(EsbFlow, flow_id)
     if flow is None:
@@ -619,8 +701,32 @@ def update_flow(flow_id: int, body: FlowUpdate, db: Session = Depends(get_db)):
     return _flow_out(flow)
 
 
+class FlowStepResultOut(BaseModel):
+    """单步执行结果：`run_flow` 是唯一产地（落库快照亦出自它），恒为四键
+    （成功/失败仅 status/detail 取值不同）——照 quality.defects 先例逐字段建模。"""
+
+    step: int
+    type: str
+    status: str
+    detail: str
+
+
+class FlowRunResultOut(BaseModel):
+    """`run_flow` 的执行回执（带消息侧终态）；列表行另有 flow_id/created_at，不同形。"""
+
+    id: int
+    flow_code: str
+    message_id: int
+    status: str
+    step_results: list[FlowStepResultOut]
+    error: str
+    message_status: str
+    retry_count: int
+
+
 @router.post(
     "/flows/{code}/run",
+    response_model=FlowRunResultOut,
     dependencies=[Depends(require_roles("operator"))],
 )
 def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
@@ -683,7 +789,20 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/flow-runs", dependencies=[Depends(get_current_user)])
+class FlowRunOut(BaseModel):
+    """执行记录列表行：与执行回执不同形（有 flow_id/created_at，无消息终态两键）。"""
+
+    id: int
+    flow_id: int
+    flow_code: str
+    message_id: int
+    status: str
+    step_results: list[FlowStepResultOut]
+    error: str
+    created_at: str
+
+
+@router.get("/flow-runs", response_model=list[FlowRunOut], dependencies=[Depends(get_current_user)])
 def list_flow_runs(
     response: Response,
     flow_id: int | None = None,
@@ -722,7 +841,43 @@ def list_flow_runs(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/stats", dependencies=[Depends(get_current_user)])
+class EsbStatsTotalsOut(BaseModel):
+    """全局合计。计数键恒 int（COUNT 与 int 累加，声明成 float 会把 6 变 6.0，
+    即改字节）；比率键恒 float（`round(x*100.0/n, 2)` 与兜底字面量 `0.0`
+    两条分支都是浮点，不存在 Money 那种 int/float 并存）。"""
+
+    total: int
+    succeeded: int
+    dead: int
+    backlog: int
+    success_rate_pct: float
+    failure_rate_pct: float
+    endpoints: int
+    flows: int
+
+
+class EsbStatsEndpointOut(BaseModel):
+    """分端点行：int/float 之别同上。"""
+
+    endpoint_id: int
+    endpoint_code: str
+    endpoint_name: str
+    total: int
+    succeeded: int
+    dead: int
+    queued: int
+    failed: int
+    backlog: int
+    success_rate_pct: float
+    failure_rate_pct: float
+
+
+class EsbStatsOut(BaseModel):
+    totals: EsbStatsTotalsOut
+    by_endpoint: list[EsbStatsEndpointOut]
+
+
+@router.get("/stats", response_model=EsbStatsOut, dependencies=[Depends(get_current_user)])
 def esb_stats(db: Session = Depends(get_db)):
     """总线统计口径：
 

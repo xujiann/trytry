@@ -72,7 +72,18 @@ class ExamSubmit(BaseModel):
     score: float = Field(ge=0, le=100)
 
 
-@router.post("/courses/{course_id}/exam")
+class ExamResultOut(BaseModel):
+    """考核回执。score 是 Float 列（training_records.score）：整数成绩读回来
+    就是 85.0，声明 `float` 才是原样——与 Money 列相反，判据是列类型
+    （见 docs/接口标准与治理.md 陷阱一）；入参侧 Pydantic float 也已把
+    `{"score": 85}` 转成 85.0，不存在 int 分支。"""
+
+    course_id: int
+    score: float
+    passed: bool
+
+
+@router.post("/courses/{course_id}/exam", response_model=ExamResultOut)
 def submit_exam(course_id: int, body: ExamSubmit, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """培训考核：每人每课一条记录，重考取最高分。"""
     if db.get(Course, course_id) is None:
@@ -99,7 +110,15 @@ def submit_exam(course_id: int, body: ExamSubmit, db: Session = Depends(get_db),
     return {"course_id": course_id, "score": record.score, "passed": record.passed}
 
 
-@router.get("/courses/{course_id}/stats")
+class CourseStatsOut(BaseModel):
+    course_id: int
+    trainees: int
+    passed: int
+    #: 两条分支（round 出的浮点 / 兜底字面量 0.0）都是 float，不存在 int 取值
+    pass_rate_pct: float
+
+
+@router.get("/courses/{course_id}/stats", response_model=CourseStatsOut)
 def course_stats(course_id: int, db: Session = Depends(get_db)):
     if db.get(Course, course_id) is None:
         raise HTTPException(status_code=404, detail="课程不存在")
@@ -118,7 +137,16 @@ def course_stats(course_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/my-records")
+class MyRecordOut(BaseModel):
+    """我的培训记录行：score 同为 Float 列，声明 float 才是原样。"""
+
+    course_id: int
+    title: str
+    score: float
+    passed: bool
+
+
+@router.get("/my-records", response_model=list[MyRecordOut])
 def my_records(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = (
         db.query(TrainingRecord, Course.title)
@@ -143,8 +171,25 @@ class LiveCreate(BaseModel):
     course_id: int | None = None
 
 
+class LiveRequestedOut(BaseModel):
+    """申请回执（id/title/status 三键）；审核/结束只回两键，是另一个模型。"""
+
+    id: int
+    title: str
+    status: str
+
+
+class LiveStatusOut(BaseModel):
+    """审核与结束两个端点同形（都只回 id + status），共用一个模型。
+    结束那个的 status 是字面量 "finished"，不是读回来的列——照实建模。"""
+
+    id: int
+    status: str
+
+
 @router.post(
     "/live-sessions",
+    response_model=LiveRequestedOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator", "public_health"))],  # 直播申请
 )
@@ -161,6 +206,7 @@ def request_live(
 
 @router.post(
     "/live-sessions/{session_id}/review",
+    response_model=LiveStatusOut,
     dependencies=[Depends(require_roles("director"))],  # 直播审核=管理层
 )
 def review_live(session_id: int, approve: bool, comment: str = "", db: Session = Depends(get_db)):
@@ -177,6 +223,7 @@ def review_live(session_id: int, approve: bool, comment: str = "", db: Session =
 
 @router.post(
     "/live-sessions/{session_id}/finish",
+    response_model=LiveStatusOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def finish_live(session_id: int, db: Session = Depends(get_db)):
@@ -194,8 +241,14 @@ class LiveRecording(BaseModel):
     recording_url: str = Field(min_length=1, max_length=512)
 
 
+class LiveRecordingOut(BaseModel):
+    id: int
+    recording_url: str
+
+
 @router.post(
     "/live-sessions/{session_id}/recording",
+    response_model=LiveRecordingOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def upload_recording(session_id: int, body: LiveRecording, db: Session = Depends(get_db)):
@@ -220,7 +273,16 @@ class LiveFeedbackIn(BaseModel):
     comment: str = Field(default="", max_length=512)
 
 
-@router.post("/live-sessions/{session_id}/feedback", status_code=201)
+class LiveFeedbackReceiptOut(BaseModel):
+    """一人一场一条：updated=false 为新建、true 为覆盖，同一形状。"""
+
+    id: int
+    updated: bool
+
+
+@router.post(
+    "/live-sessions/{session_id}/feedback", response_model=LiveFeedbackReceiptOut, status_code=201
+)
 def submit_live_feedback(
     session_id: int,
     body: LiveFeedbackIn,
@@ -243,7 +305,23 @@ def submit_live_feedback(
     return {"id": feedback.id, "updated": updated}
 
 
-@router.get("/live-sessions/{session_id}/feedback")
+class LiveFeedbackItemOut(BaseModel):
+    id: int
+    user_id: int
+    rating: int
+    comment: str
+
+
+class LiveFeedbackListOut(BaseModel):
+    session_id: int
+    count: int
+    #: 键恒在、无反馈时值为 null（不是条件键）——`float | None` 即原样，
+    #: 有数据分支是 `round(sum/len, 2)` 的浮点
+    avg_rating: float | None
+    feedbacks: list[LiveFeedbackItemOut]
+
+
+@router.get("/live-sessions/{session_id}/feedback", response_model=LiveFeedbackListOut)
 def list_live_feedback(session_id: int, db: Session = Depends(get_db)):
     rows = (
         db.query(LiveFeedback)
@@ -263,7 +341,19 @@ def list_live_feedback(session_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/live-sessions")
+class LiveSessionRowOut(BaseModel):
+    """直播列表行：申请/审核/回放各环节字段的合并视图（列全非空，空值为空串）。"""
+
+    id: int
+    title: str
+    speaker: str
+    planned_at: str
+    status: str
+    review_comment: str
+    recording_url: str
+
+
+@router.get("/live-sessions", response_model=list[LiveSessionRowOut])
 def list_live_sessions(status: str | None = None, db: Session = Depends(get_db)):
     q = db.query(LiveSession)
     if status:
@@ -309,8 +399,23 @@ def _material_out(m: CourseMaterial, attachments: int = 0) -> dict:
     }
 
 
+class MaterialOut(BaseModel):
+    """字段与顺序精确镜像 `_material_out`（新建/点播回执与列表行同形，
+    attachments 在不查附件数的端点恒为 0——照实建模，不是条件键）。"""
+
+    id: int
+    course_id: int
+    title: str
+    material_type: str
+    material_type_name: str
+    url: str
+    play_count: int
+    attachments: int
+
+
 @router.post(
     "/courses/{course_id}/materials",
+    response_model=MaterialOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "public_health", "operator", "doctor"))],
 )
@@ -330,7 +435,7 @@ def create_material(
     return _material_out(material)
 
 
-@router.get("/courses/{course_id}/materials")
+@router.get("/courses/{course_id}/materials", response_model=list[MaterialOut])
 def list_materials(course_id: int, db: Session = Depends(get_db)):
     if db.get(Course, course_id) is None:
         raise HTTPException(status_code=404, detail="课程不存在")
@@ -352,7 +457,7 @@ def list_materials(course_id: int, db: Session = Depends(get_db)):
     return [_material_out(m, counts.get(m.id, 0)) for m in materials]
 
 
-@router.post("/materials/{material_id}/play")
+@router.post("/materials/{material_id}/play", response_model=MaterialOut)
 def play_material(material_id: int, db: Session = Depends(get_db)):
     """点播计数：每次调阅 +1（点播量用于课件资源热度统计）。"""
     material = db.get(CourseMaterial, material_id)
@@ -364,7 +469,13 @@ def play_material(material_id: int, db: Session = Depends(get_db)):
     return _material_out(material)
 
 
-@router.get("/material-stats")
+class MaterialStatsOut(BaseModel):
+    total_materials: int
+    total_plays: int
+    top: list[MaterialOut]
+
+
+@router.get("/material-stats", response_model=MaterialStatsOut)
 def material_stats(db: Session = Depends(get_db)):
     """课件点播排行（前 20）与总点播量。"""
     materials = (
@@ -402,8 +513,25 @@ def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
     }
 
 
+class TrainingPlanOut(BaseModel):
+    """字段与顺序精确镜像 `_plan_out`（technique_id 是可空外键，值可为 null；
+    新建回执 enrolled 恒 0，列表行带实时报名数，同一形状）。"""
+
+    id: int
+    title: str
+    technique_id: int | None
+    org_id: int
+    plan_date: str
+    capacity: int
+    trainer: str
+    status: str
+    enrolled: int
+    remaining: int
+
+
 @router.post(
     "/training-plans",
+    response_model=TrainingPlanOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "doctor", "public_health"))],
 )
@@ -421,7 +549,7 @@ def create_plan(body: PlanCreate, db: Session = Depends(get_db), user: User = De
     return _plan_out(plan)
 
 
-@router.get("/training-plans")
+@router.get("/training-plans", response_model=list[TrainingPlanOut])
 def list_plans(status: str | None = None, db: Session = Depends(get_db)):
     query = db.query(TrainingPlan)
     if status:
@@ -430,7 +558,16 @@ def list_plans(status: str | None = None, db: Session = Depends(get_db)):
     return [_plan_out(p, p.enrolled_count) for p in plans]
 
 
-@router.post("/training-plans/{plan_id}/enroll", status_code=201)
+class EnrollmentReceiptOut(BaseModel):
+    """报名回执（四键）；退报名回执**没有 id**（三键），是另一个模型，不许互相注入。"""
+
+    id: int
+    plan_id: int
+    user_id: int
+    status: str
+
+
+@router.post("/training-plans/{plan_id}/enroll", response_model=EnrollmentReceiptOut, status_code=201)
 def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """学员报名（登录用户本人报名，名额满则 409）。"""
     plan = db.get(TrainingPlan, plan_id)
@@ -474,7 +611,15 @@ def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depend
     }
 
 
-@router.post("/training-plans/{plan_id}/cancel-enroll")
+class CancelEnrollOut(BaseModel):
+    """退报名回执：status 是字面量 "cancelled"，照实建模。"""
+
+    plan_id: int
+    user_id: int
+    status: str
+
+
+@router.post("/training-plans/{plan_id}/cancel-enroll", response_model=CancelEnrollOut)
 def cancel_enroll(plan_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     enrollment = (
         db.query(TrainingEnrollment)
@@ -490,7 +635,17 @@ def cancel_enroll(plan_id: int, db: Session = Depends(get_db), user: User = Depe
     return {"plan_id": plan_id, "user_id": user.id, "status": "cancelled"}
 
 
-@router.get("/training-plans/{plan_id}/enrollments")
+class EnrollmentRowOut(BaseModel):
+    """报名名册行（带学员账号与姓名，full_name 列非空默认空串）。"""
+
+    id: int
+    user_id: int
+    username: str
+    full_name: str
+    status: str
+
+
+@router.get("/training-plans/{plan_id}/enrollments", response_model=list[EnrollmentRowOut])
 def list_enrollments(plan_id: int, db: Session = Depends(get_db)):
     if db.get(TrainingPlan, plan_id) is None:
         raise HTTPException(status_code=404, detail="实训计划不存在")
@@ -519,8 +674,21 @@ class AssessmentCreate(BaseModel):
     comment: str = ""
 
 
+class AssessmentReceiptOut(BaseModel):
+    """考核录入回执。score 是 Float 列（training_assessments.score），
+    声明 float 才是原样（同 ExamResultOut 的判断）。"""
+
+    id: int
+    plan_id: int
+    user_id: int
+    score: float
+    passed: bool
+    assessor: str
+
+
 @router.post(
     "/training-plans/{plan_id}/assessments",
+    response_model=AssessmentReceiptOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "doctor"))],
 )
@@ -568,7 +736,24 @@ def create_assessment(
     }
 
 
-@router.get("/training-plans/{plan_id}/assessments")
+class AssessmentItemOut(BaseModel):
+    id: int
+    user_id: int
+    score: float
+    passed: bool
+    comment: str
+    assessor: str
+
+
+class AssessmentBoardOut(BaseModel):
+    total: int
+    passed: int
+    #: 两条分支（round 出的浮点 / 兜底字面量 0.0）都是 float
+    pass_rate_pct: float
+    items: list[AssessmentItemOut]
+
+
+@router.get("/training-plans/{plan_id}/assessments", response_model=AssessmentBoardOut)
 def list_assessments(plan_id: int, db: Session = Depends(get_db)):
     rows = (
         db.query(TrainingAssessment)

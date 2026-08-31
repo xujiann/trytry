@@ -159,7 +159,14 @@ import app.spd.routers as spd_routers
 #   dict[int,int]（序列化仍字符串键，字节不变）；4 个与他模块重名的模型
 #   改名避免 OpenAPI 把 labqc/eldercare 等既有 schema 名改写成长限定名。
 #   见 test_spd_care_contract.py / test_spd_workbench_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 336
+# → 302（esb 13 + education 21，共 34，零跳过。判断集锦：payload/steps 是
+#   外部投入的 JSON 列→宽 dict 透传（workflows.nodes 先例），step_results
+#   是唯一产地固定四键→逐字段；不同形回执分模型（注册/轮换多尾键
+#   auth_token、消费回执多尾键 detail——继承加尾键保键序）；education 的
+#   score 是 Float 列→float（85 本就以 85.0 出参，与 Money 相反）；
+#   next_retry_at/avg_rating 是值可空的恒在键不是条件键，无需 exclude_unset。
+#   见 test_esb_contract.py / test_education_contract.py，五处变异转红。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 302
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -205,6 +212,10 @@ FULLY_GOVERNED = {
     # 见 test_spd_care_contract.py / test_spd_workbench_contract.py
     "spd/care",
     "spd/workbench",
+    # 集成底座与宣教两簇（esb 13/education 21），欠账 336→302 那批，
+    # 见 test_esb_contract.py / test_education_contract.py
+    "esb",
+    "education",
     # 以下十个模块由**套件级字节捕获**（tests/capture_plugin.py）一次性取证：
     # 加契约前后各跑一遍全套件，逐 (方法,路径,状态) 比对响应字节。
     "medwaste",
