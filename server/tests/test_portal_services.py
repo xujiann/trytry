@@ -1,4 +1,6 @@
 """居民端在线服务：家庭成员代管、档案切换、自助预约、签约/账单/转诊查询。"""
+import itertools
+
 import pytest
 
 from app.models import SmsCode
@@ -200,13 +202,24 @@ def test_unbound_account_cannot_add_family(client):
 
 # ---------------------------------------------------------------- 自助预约
 
+#: 号源时段序号：号源五元组在库里唯一，每次取用给一个没被占过的时段。
+_SLOT_SEQ = itertools.count(1)
+
 
 @pytest.fixture()
 def slot(client, admin, org):
+    """每条用例拿**自己的一条**号源（按序号取不同时段）。
+
+    此前所有用例共用同一组「机构+资源+日期+时段」，函数级夹具于是把同一条号源
+    重复建了很多遍——现实里那就是放号量翻倍（uq_slot_* 之后库里直接 409）。
+    用例真正需要的只是"一条属于自己的号源"，与时段取值无关（slot_time 只有
+    16 字符，故用短序号而不是用例名）。
+    """
     return client.post(
         "/api/appointments/slots",
         json={"org_id": org["id"], "resource_type": "outpatient", "resource_name": "全科门诊",
-              "slot_date": "2026-09-01", "slot_time": "09:00-10:00", "capacity": 2},
+              "slot_date": "2026-09-01", "slot_time": f"09:{next(_SLOT_SEQ):02d}",
+              "capacity": 2},
         headers=admin,
     ).json()
 

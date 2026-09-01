@@ -1,6 +1,8 @@
 """第三阶段 P0 整改回归测试：H1-H4 高危与 M1-M6 中危、L1 修复验证。"""
 import time
 
+import itertools
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -215,6 +217,12 @@ def test_role_matrix_publichealth_records(client, setup):
 # ---------------------------------------------------------------- H3 并发原子性 + M1 状态机
 
 
+#: 号源时段序号：五元组（机构+医师+资源+日期+时段）在库里唯一（uq_slot_*，P1-29），
+#: 每条用例取一个没被占过的时段——此前共用同一组参数，函数级夹具把同一条号源重复
+#: 建了很多遍，现实里那就是放号量翻倍。
+_SLOT_SEQ = itertools.count(1)
+
+
 @pytest.fixture()
 def slot(client, admin, setup):
     return client.post(
@@ -223,6 +231,7 @@ def slot(client, admin, setup):
             "org_id": setup["org"]["id"],
             "resource_type": "outpatient",
             "resource_name": "P0门诊",
+            "slot_time": f"10:{next(_SLOT_SEQ):02d}",
             "slot_date": "2026-09-10",
             "capacity": 2,
         },

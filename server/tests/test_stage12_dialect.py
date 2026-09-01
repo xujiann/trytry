@@ -73,9 +73,22 @@ def test_手写SQL总量可控():
     `SELECT pg_advisory_lock/unlock(:key)` 两处——PG 咨询锁没有 ORM 表达
     （与审计链既有的 `pg_advisory_xact_lock` 同族），且按方言分流只在 PG
     上执行，换库不受影响。这两处是本仓库"手写 SQL 的合法理由"之一：
-    锁定原语本就是方言特性，硬套 ORM 只会造出更难审的抽象。"""
+    锁定原语本就是方言特性，硬套 ORM 只会造出更难审的抽象。
+
+    17 → 25（2026-09-01，P1-29 逻辑唯一下沉）：新增四条**部分唯一索引**，每条在
+    模型 `__table_args__` 里要给 `sqlite_where` 与 `postgresql_where` 各写一次
+    谓词，故 4 条 = 8 处。这类文本无法用 ORM 消掉——部分索引的条件本就是要交给
+    数据库的 SQL 片段（既有的 uq_settlement_inpatient_admission 等同样如此），
+    而它们恰恰是把业务不变式钉进库里的那道兜底：删掉等于把静默双写放回来。
+
+    **给后来者的读法**：这个数字如今由**声明**（部分索引谓词，占 24/25）而不是
+    **查询**主导——真正该警惕的是新增的手写查询串（当前仅 routers/monitor.py
+    一处）。下次数字上涨时先看增量落在哪一类：又一条部分索引是良性的，一条新拼的
+    SELECT/UPDATE 才该被追问"为什么不能用 ORM 表达"。迁移里的一次性冲突探测已按
+    这条教义写成 Core 构造（e7c4b19d02fa/b8e3d5f70a91 的 _orphans/_null_rows/
+    _duplicates），本就不计入这个数。"""
     total = sum(len(list(_raw_sql_snippets(src))) for _p, src in _python_sources())
-    assert total <= 17, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
+    assert total <= 25, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
 
 
 # 金额列的命名族。`debit`/`credit`/`bonus` 是补进来的——阶段十二第一遍只按

@@ -12,9 +12,11 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -328,6 +330,20 @@ class ProgressNote(Base):
     """
 
     __tablename__ = "progress_notes"
+    __table_args__ = (
+        # **只有首次病程是每次住院唯一的**：日常病程、查房、抢救记录本就该有多条，
+        # 连同一时刻两位医师各记一条也是正常的（上面 docstring 说的"连续文书流"）。
+        # 所以唯一性只钉 note_type='first' 这一条——接口层已按此判 409，但那是
+        # check-then-act：并发双击"书写首次病程"会写出**两份首次病程**，
+        # 而病历是法定文书，双份意味着质控与归档都要有人来判哪份算数。
+        Index(
+            "uq_progress_note_first",
+            "admission_id",
+            unique=True,
+            sqlite_where=text("note_type = 'first'"),
+            postgresql_where=text("note_type = 'first'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)

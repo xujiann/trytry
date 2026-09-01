@@ -155,21 +155,26 @@ def _fk_name(table: str, column: str, target: str) -> str:
 
 
 def _orphans(bind, table: str, column: str, target: str, target_col: str) -> list:
-    rows = bind.execute(sa.text(
-        f"SELECT c.id FROM {table} c "  # noqa: S608 - 表列名全部来自本文件字面量
-        f"LEFT JOIN {target} p ON c.{column} = p.{target_col} "
-        f"WHERE c.{column} IS NOT NULL AND p.{target_col} IS NULL "
-        f"LIMIT {_PROBE_LIMIT + 1}"
-    )).fetchall()
-    return [row[0] for row in rows]
+    """孤儿行探测：用 Core 的轻量表构造（迁移不该导入模型——模型是"现在"的形状，
+    迁移要按"此刻这一版"的结构做事），让 SQLAlchemy 按方言渲染 JOIN/LIMIT，
+    而不是自己拼 SQL 字符串（手写 SQL 棘轮 test_手写SQL总量可控 的教义）。"""
+    child = sa.table(table, sa.column("id"), sa.column(column))
+    parent = sa.table(target, sa.column(target_col))
+    stmt = (
+        sa.select(child.c.id)
+        .select_from(sa.join(
+            child, parent, child.c[column] == parent.c[target_col], isouter=True,
+        ))
+        .where(child.c[column].is_not(None), parent.c[target_col].is_(None))
+        .limit(_PROBE_LIMIT + 1)
+    )
+    return [row[0] for row in bind.execute(stmt).fetchall()]
 
 
 def _null_rows(bind, table: str, column: str) -> list:
-    rows = bind.execute(sa.text(
-        f"SELECT id FROM {table} WHERE {column} IS NULL "  # noqa: S608 - 同上
-        f"LIMIT {_PROBE_LIMIT + 1}"
-    )).fetchall()
-    return [row[0] for row in rows]
+    tbl = sa.table(table, sa.column("id"), sa.column(column))
+    stmt = sa.select(tbl.c.id).where(tbl.c[column].is_(None)).limit(_PROBE_LIMIT + 1)
+    return [row[0] for row in bind.execute(stmt).fetchall()]
 
 
 def _named(ids: list) -> str:

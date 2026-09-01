@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..visibility import scope_org_list, scope_patient_list
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..datetypes import DateStr
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
@@ -135,9 +136,10 @@ def create_slot(body: SlotCreate, db: Session = Depends(get_db)):
         if employee.org_id != body.org_id:
             raise HTTPException(status_code=422, detail="医师不属于该机构")
     slot = AppointmentSlot(**body.model_dump())
-    db.add(slot)
-    db.commit()
-    db.refresh(slot)
+    # 同机构+医师+资源+日期+时段唯一（uq_slot_with_employee /
+    # uq_slot_without_employee 两条部分索引，NULL != NULL 故拆两条）：
+    # 重复号源各带 capacity，放号量会凭空翻倍。
+    insert_or_conflict(db, slot, "该时段号源已存在（同机构/医师/资源/日期/时段）")
     return slot
 
 

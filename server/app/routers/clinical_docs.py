@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -174,9 +175,10 @@ def create_progress_note(
         recorded_at=body.recorded_at,
         created_by=user.id,
     )
-    db.add(note)
-    db.commit()
-    db.refresh(note)
+    # 上面那句"首次病程已存在"是 check-then-act：并发双击会写出两份法定文书。
+    # uq_progress_note_first（部分唯一索引，只约束 note_type='first'）是兜底，
+    # 抢输者拿到与顺序请求同一句 409；其余病程类型本就该有多条，不受影响。
+    insert_or_conflict(db, note, "首次病程记录已存在")
     return _note_out(note)
 
 

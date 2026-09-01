@@ -55,7 +55,12 @@ def world(client):
         db.flush()
 
         patient = Patient(ehc_no="EHC-CHAR-0001", name="特征化患者", id_card="330382199001015678")
-        db.add(patient)
+        # 第二位患者：本档要造"期内入院仍在院"与"期后入院"两条**同时在院**的记录，
+        # 而同一个人不可能同时占两张床——接口层一直用 409 拒绝这种登记，
+        # uq_admission_patient_admitted（P1-29）之后库里也拦得住。聚合口径按行/床
+        # 统计，与患者是谁无关，故把期后那条挂到第二位患者上，不改任何断言数字。
+        patient2 = Patient(ehc_no="EHC-CHAR-0002", name="特征化患者乙", id_card="330382199001015694")
+        db.add_all([patient, patient2])
         db.flush()
 
         ward_a = Ward(org_id=a.id, name="特征化A病区")
@@ -80,9 +85,9 @@ def world(client):
             Employee(org_id=b.id, name="乙全科", position="全科医师", status="active"),
         ])
 
-        def adm(org_id, bed, admitted, discharged):
+        def adm(org_id, bed, admitted, discharged, who=None):
             row = Admission(
-                patient_id=patient.id, org_id=org_id, ward_id=bed.ward_id, bed_id=bed.id,
+                patient_id=(who or patient).id, org_id=org_id, ward_id=bed.ward_id, bed_id=bed.id,
                 status="discharged" if discharged else "admitted",
                 admitted_at=admitted, discharged_at=discharged, created_by=admin_id,
             )
@@ -98,8 +103,9 @@ def world(client):
         adm3 = adm(a.id, beds[2], datetime(2026, 3, 1, 9, 0), datetime(2026, 3, 10, 9, 0))
         # 当日入出院：住院日与床日都按下限 1 天
         adm4 = adm(b.id, beds[3], datetime(2026, 5, 15, 12, 0), datetime(2026, 5, 15, 18, 0))
-        # 期后入院（6/2），应被 admitted_at < 期末 过滤
-        adm(b.id, beds[4], datetime(2026, 6, 2, 8, 0), None)
+        # 期后入院（6/2），应被 admitted_at < 期末 过滤（挂第二位患者：见上方说明，
+        # 同一人不能与 5/10 那条"仍在院"记录同时在院）
+        adm(b.id, beds[4], datetime(2026, 6, 2, 8, 0), None, who=patient2)
         # 期末跨期：占用 5/30→6/1=2 天；出院在期后不计出院人次
         adm(a.id, beds[0], datetime(2026, 5, 30, 8, 0), datetime(2026, 6, 3, 9, 0))
 

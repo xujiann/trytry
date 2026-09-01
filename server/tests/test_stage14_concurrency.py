@@ -528,23 +528,32 @@ CONFLICT_SAFE = {
 # 不许变短；某张表补了 DB 唯一约束之后，它会自动落进 _tables_with_unique_constraint()，
 # 那时才可以从这里删。
 LOGICAL_UNIQUE_TABLES = {
-    "appointment_slots": "同医生/同排班/同时段号源逻辑唯一（批量建号源会重复建）",
-    "admissions": "同患者同时只能有一条在院记录（status='in_hospital' 上的在院唯一）",
+    "appointment_slots": "同机构/医师/资源/日期/时段号源逻辑唯一（重复号源放号量翻倍）",
+    "admissions": "同患者同时只能有一条在院记录（status='admitted' 上的在院唯一）",
     "settlements": "同一次结算认领只应成功一次（结算认领 check-then-act）",
-    "bill_details": "同账单同收费项逻辑唯一（重复记账即多收费）",
-    "progress_notes": "同住院同时间点病程记录逻辑唯一（重复书写产生双份法定文书）",
+    "progress_notes": "首次病程每次住院唯一（重复书写产生双份法定文书）",
 }
+# **`bill_details` 于 2026-09-01 从清单移出**（不是为了让规则变绿，是原判据不成立）：
+# 当年写的是"同账单同收费项逻辑唯一，重复记账即多收费"，但账单明细本就带 `quantity`
+# 列，且住院床位费、护理费这类**按天逐条记同一 item_code** 是正常业务——真加上唯一
+# 约束，第二天的合法计费会被拒。真正该防的是"同一笔费用重复提交"，那要靠请求级幂等键
+# （客户端提交号）而不是表级唯一约束，属另案。此处如实登记判据被推翻，而不是留着一条
+# 永远修不掉的"欠账"让后来者去硬修。当前行为由 test_billing_duplicate_charges.py
+# 的特征化用例钉住：同项目重复记账合法且金额累加。
 
 # 加进 LOGICAL_UNIQUE_TABLES 后被规则抓出来的**存量** offender（只减不增）。
 # 规则抓出存量不是删规则的理由（第 17 章：不许为了绿而放宽断言）——逐条登记，
 # 新增一条会顶破基线。修复归属：本包只动脚本/测试/CI/文档，业务代码改动交由
 # 后续包（见 docs/TECH_DEBT.md 的登记项）。
-KNOWN_UNGUARDED_UNIQUE_WRITES = {
-    "appointments.py:create_slot": "号源批量创建：先查后插，重复请求建出重复号源",
-    "billing.py:create_bill_detail": "账单明细：无冲突处理，重复记账即多收费",
-    "billing.py:create_settlement": "结算认领：check-then-act，并发下认领两次",
-    "clinical_docs.py:create_progress_note": "病程记录：重复书写产生双份法定文书",
-    "inpatient.py:create_admission": "住院登记：并发下同一患者建出两条在院记录",
+KNOWN_UNGUARDED_UNIQUE_WRITES: dict[str, str] = {
+    # 2026-09-01 清零（P1-29）。五条各自的去向，如实记账：
+    # - create_slot / create_progress_note / create_admission：三条不变式已由迁移
+    #   b8e3d5f70a91 下沉为**部分唯一索引**，接口层改走 insert_or_conflict，
+    #   抢输者拿到与顺序请求一致的 409（回归见 test_logical_unique_races.py）；
+    # - create_settlement：**早已修好**（e5b7c9d1f3a4 的部分唯一索引 + UPDATE 认领），
+    #   只是这份清单没跟上——陈账也是账，一并销掉；
+    # - create_bill_detail：判据本身不成立（账单明细按天重复记账是正常业务），
+    #   已连同 bill_details 一起从 LOGICAL_UNIQUE_TABLES 移出，理由见上。
 }
 
 
@@ -761,7 +770,15 @@ def test_退报名释放名额(client, admin):
 # 写在输出里，谁都能看见它没被守住，而不是藏在一个绿灯后面。
 
 # 覆盖面基线：这两个数字**只许变好**（覆盖数只增、未识别数只减）。
-BASELINE_COVERED_WRITE_SITES = 63
+#
+# 2026-09-01（P1-29）63 → 59，**唯一一次下调，且是判据被推翻而非闸门放水**：
+# `bill_details` 从 LOGICAL_UNIQUE_TABLES 移出（账单明细按天重复记同一 item_code
+# 是正常业务，详见该清单里的说明），它的 4 个写入点本就不该算进"唯一表判据覆盖"
+# 的分子——原来的 63 是把一条不成立的不变式也算成了覆盖，属虚高。
+# 同一批次里覆盖的**质量**是升的：admissions / appointment_slots / progress_notes
+# 三张表从"只在清单里逻辑唯一"变成库里真有部分唯一索引（迁移 b8e3d5f70a91），
+# 抢输者拿 409 而不是静默写出两条。此后仍只许变好。
+BASELINE_COVERED_WRITE_SITES = 59
 BASELINE_UNRESOLVED_WRITE_SITES = 1
 
 

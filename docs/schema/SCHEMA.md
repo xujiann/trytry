@@ -72,6 +72,7 @@
 - _index_ ix_admissions_org_id(org_id)
 - _index_ ix_admissions_patient_id(patient_id)
 - _index_ ix_admissions_status(status)
+- _index_ uq_admission_patient_admitted(patient_id) UNIQUE
 
 ## adverse_events
 
@@ -133,6 +134,8 @@
 - _index_ ix_appointment_slots_employee_id(employee_id)
 - _index_ ix_appointment_slots_org_id(org_id)
 - _index_ ix_appointment_slots_slot_date(slot_date)
+- _index_ uq_slot_with_employee(org_id, employee_id, resource_type, resource_name, slot_date, slot_time) UNIQUE
+- _index_ uq_slot_without_employee(org_id, resource_type, resource_name, slot_date, slot_time) UNIQUE
 
 ## appointments
 
@@ -2005,6 +2008,7 @@
 - _index_ ix_progress_notes_created_at(created_at)
 - _index_ ix_progress_notes_created_by(created_by)
 - _index_ ix_progress_notes_note_type(note_type)
+- _index_ uq_progress_note_first(admission_id) UNIQUE
 
 ## project_milestones
 

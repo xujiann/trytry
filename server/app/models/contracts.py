@@ -9,9 +9,11 @@ from datetime import datetime
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -56,6 +58,28 @@ class AppointmentSlot(Base):
     """预约资源：机构发布分时段号源（门诊/检查/检验）。"""
 
     __tablename__ = "appointment_slots"
+    __table_args__ = (
+        # 同机构+同医师+同资源+同日期+同时段只应有一条号源：重复建出来的两条各带
+        # capacity，放号量凭空翻倍，超出的号最终无人可看。批量生成接口本就把这五元组
+        # 当幂等键用（且已在防御性接 IntegrityError，注释写着"若后续加约束"），
+        # 缺的正是库里这道兜底。
+        # **拆成两条部分索引**是因为 SQL 里 NULL != NULL：检查/检验号源不挂医师
+        # （employee_id 为 NULL），单一复合唯一索引对这类号源等于不设防。
+        Index(
+            "uq_slot_with_employee",
+            "org_id", "employee_id", "resource_type", "resource_name", "slot_date", "slot_time",
+            unique=True,
+            sqlite_where=text("employee_id IS NOT NULL"),
+            postgresql_where=text("employee_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_slot_without_employee",
+            "org_id", "resource_type", "resource_name", "slot_date", "slot_time",
+            unique=True,
+            sqlite_where=text("employee_id IS NULL"),
+            postgresql_where=text("employee_id IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)

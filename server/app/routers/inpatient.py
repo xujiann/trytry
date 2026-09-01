@@ -187,9 +187,9 @@ def create_admission(
     if in_hospital:
         raise HTTPException(status_code=409, detail="该患者已在院，不可重复入院登记")
     _occupy_bed(db, body.bed_id, body.ward_id)
-    admission = Admission(**body.model_dump(), org_id=ward.org_id, created_by=user.id)
-    db.add(admission)
-    # 住院就诊记录入档（Encounter inpatient 类型），进入 360 视图
+    # 住院就诊记录入档（Encounter inpatient 类型），进入 360 视图。
+    # 先挂起、与 admission 同一次 commit 落库：抢输的那一路整体回滚，
+    # 不会留下"有就诊记录没有住院记录"的半截档案，占的床也一并退回。
     db.add(
         Encounter(
             patient_id=body.patient_id,
@@ -200,8 +200,11 @@ def create_admission(
             summary="住院入院登记",
         )
     )
-    db.commit()
-    db.refresh(admission)
+    admission = Admission(**body.model_dump(), org_id=ward.org_id, created_by=user.id)
+    # 上面那句"已在院"判定是 check-then-act：并发下两路都查不到在院记录都会建单。
+    # uq_admission_patient_admitted（部分唯一索引）是兜底，抢输者拿到的
+    # 409 文案与顺序请求完全一致——对调用方来说两种情形没有区别。
+    insert_or_conflict(db, admission, "该患者已在院，不可重复入院登记")
     return _admission_out(admission)
 
 

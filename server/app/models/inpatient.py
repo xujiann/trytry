@@ -11,9 +11,11 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -55,6 +57,21 @@ class Admission(Base):
     """住院登记（ADT）：入院→转科/转床→出院，床位占用原子分配。"""
 
     __tablename__ = "admissions"
+    __table_args__ = (
+        # 一个患者同时只能有一条在院记录。应用层的"先查在院再建单"是 check-then-act：
+        # 两路并发入院登记都查不到在院记录，就都建——**同一个人被登记住进两张床**，
+        # 此后计费、医嘱、护理各自挂在两条 admission 上，出院结算只结得掉一条。
+        # 与结算单（uq_settlement_inpatient_admission）、居民账户绑定同一先例：
+        # 应用层怎么判是一回事，兜底该落在库里。
+        # 部分索引：出院后的历史记录当然允许同患者多条，唯一性只约束"在院"这一态。
+        Index(
+            "uq_admission_patient_admitted",
+            "patient_id",
+            unique=True,
+            sqlite_where=text("status = 'admitted'"),
+            postgresql_where=text("status = 'admitted'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
