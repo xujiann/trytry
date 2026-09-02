@@ -186,8 +186,8 @@ class ReadinessOut(BaseModel):
     dependencies=[Depends(require_roles("public_health", "doctor"))]
 )
 def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    assert_org_writable(db, user, body.org_id)
     """症候群日报。同机构同症候群同日重复上报按**覆盖**处理（见模块口径 2）。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     # 先查有没有、没有就插，是 check-then-act：并发下两个请求都查不到就都去插，

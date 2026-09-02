@@ -505,8 +505,8 @@ class ImprovementStatsOut(BaseModel):
     dependencies=[Depends(require_roles("director"))],
 )
 def create_task(body: TaskCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    assert_org_writable(db, user, body.org_id)
     """下达绩效整改任务（问题 → 责任人 → 期限）。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     task = ImprovementTask(created_by=user.id, **body.model_dump())

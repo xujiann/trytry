@@ -112,8 +112,8 @@ class HomeVisitStatsOut(BaseModel):
     dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
 )
 def create_visit(body: VisitCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    assert_org_writable(db, user, body.org_id)
     """上门服务申请：显式指定签约或按患者+机构自动关联履约中的家医签约。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:

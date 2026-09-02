@@ -251,8 +251,8 @@ def _consent_out(c: InformedConsent) -> dict:
 def create_consent(
     body: ConsentIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    assert_org_writable(db, user, body.org_id)
     """生成待签告知书（限医师——告知义务在医师，不能由窗口代劳）。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:

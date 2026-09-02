@@ -379,8 +379,8 @@ def _cold_out(r: ColdChainRecord) -> dict:
     status_code=201, dependencies=[Depends(require_roles("public_health", "operator"))]
 )
 def record_temperature(body: ColdChainIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    assert_org_writable(db, user, body.org_id)
     """录温。超温由平台判定并标记，**不自动封存批次**（见模块口径 1）。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if body.max_allowed <= body.min_allowed:

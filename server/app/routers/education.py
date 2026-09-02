@@ -536,8 +536,8 @@ class TrainingPlanOut(BaseModel):
     dependencies=[Depends(require_roles("director", "doctor", "public_health"))],
 )
 def create_plan(body: PlanCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    assert_org_writable(db, user, body.org_id)
     """发布适宜技术实训计划。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="承办机构不存在")
     if body.technique_id is not None and db.get(TcmTechnique, body.technique_id) is None:

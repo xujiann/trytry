@@ -97,10 +97,11 @@
   **待卫健批复后恢复**：`performance.py` 端点 docstring 写明恢复点（一行 + 两条用例翻转）。
 
 ### 一行/小修（童子军级，碰到即修）
-- ☐ `routers/triage.py` 的 `triage_suggest` 注入了 `db: Session = Depends(get_db)`
+- ✅ `routers/triage.py` 的 `triage_suggest` 注入了 `db: Session = Depends(get_db)`
   却**一次都没用**——每次调用白白从连接池借还一次连接。看着像是「知识库将来落表」
   的占位（模块 docstring 明写硬编码 KB 是现状不是设计），但占位不该真开会话。
-  本轮没动它：不在改动范围内，登记在这里等碰到时顺手修。
+  **已修（陈账，2026-09-02 核实销账）**：签名里早已没有 `db`，函数 docstring 记着
+  "没有 db 形参是有意的"及原因；路线上这条一直没勾。
 - ✅ 打印件验真二维码落地（**ADR-0015**）：占位框替换为真码。设计正是此前登记的顾虑
   的答案——「按单据号开放查询」违反 §8，故走**签名不透明令牌**（HMAC 域分隔派生密钥，
   sm 套件下 HMAC-SM3；不可枚举、不可伪造），公开核验端点 `GET /api/print/verify`
@@ -133,6 +134,12 @@
 
 ## Next（治理逐块推进，只进不退）
 
+- ✅ **11 处被顶下去的 docstring 换回首行（2026-09-02，P2-4 的 docstring 半边）**。
+  形状全部一样：补横向越权校验那轮把 `assert_org_writable(...)` 插到了 docstring 上面，
+  Python 不报错但 `__doc__` 为 None，接口文档页上这 11 个端点是空白。守卫
+  `test_docstring_position.py`：源码形状（docstring 不得是第二条语句）+ 生成物闭环
+  （有 docstring 的端点 OpenAPI 必有 description，分母从源路由模块推导——`app.routes`
+  上挂的是 `_IncludedRouter` 包装，APIRoute 只剩个位数，拿它当分母会什么也守不住）。
 - ✅ **月度期间口径收敛到单一真源（2026-09-02）：P1-34 五处 `2026-13` 放行清零**。
   财务记账、薪酬、基金周期预结的 `period` 与月报导出、质控统计的查询参数原先各自写着
   "四位-两位"的正则——只管形状不管日历，`2026-13` 入了库就是一条永远对不上任何月份的

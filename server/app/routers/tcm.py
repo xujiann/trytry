@@ -429,8 +429,8 @@ def _batch_out(b: TcmPreparationBatch, today: str) -> dict:
     dependencies=[Depends(require_roles("pharmacist", "operator"))],
 )
 def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    assert_org_writable(db, user, body.org_id)
     """制剂投料生产建批次：效期缺省按配方有效期（月）自动推算。"""
+    assert_org_writable(db, user, body.org_id)
     formula = db.get(TcmFormula, body.formula_id)
     if formula is None:
         raise HTTPException(status_code=404, detail="制剂配方不存在")

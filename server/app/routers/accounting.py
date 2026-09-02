@@ -262,8 +262,8 @@ def _voucher_out(v: Voucher, entries: list[VoucherEntry] | None = None) -> dict:
 def create_voucher(
     body: VoucherIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    assert_org_writable(db, user, body.org_id)
     """录入凭证（草稿）。借贷不平直接 422，不给"先存下来以后再平"的口子。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     total_debit, total_credit = _validate_entries(db, body.entries)

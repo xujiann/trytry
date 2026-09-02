@@ -303,8 +303,8 @@ class ConsumableIn(BaseModel):
     dependencies=[Depends(require_roles("operator", "director"))]
 )
 def register_consumable(body: ConsumableIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    assert_org_writable(db, user, body.org_id)
     """高值耗材入库登记（一物一码）。"""
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if body.supplier_id is not None and db.get(Supplier, body.supplier_id) is None:

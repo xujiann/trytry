@@ -140,7 +140,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P2-1 | 表名前缀 6 套粒度（fd_/ph_/cssd_/tcm_/esb_/spd_），多数表无前缀；同概念不同词 |
 | P2-2 | 迁移文件名 51/52 中文 slug，混杂 5 套编号；revision id 手写伪 hex，3 组仅差 1 位近碰撞 |
 | P2-3 | `spd/platform.py` 遮蔽标准库；`spd/rules` 与 `app/rules` 同名 `RuleError` 不同类 |
-| P2-4 | 测试函数命名双轨（600 英文 / 301 中文）；11 处 docstring 位置错误（OpenAPI 无描述） |
+| P2-4 | 测试函数命名双轨（600 英文 / 301 中文）；~~11 处 docstring 位置错误（OpenAPI 无描述）~~ —— ✅ 已修 2026-09-02：11 处全是同一形状（补横向越权校验那轮把 `assert_org_writable(...)` 插到了 docstring **上面**，`__doc__` 从此为 None、OpenAPI 无 description），已换回首行；`tests/test_docstring_position.py` 两条守住（源码形状：docstring 不得被顶到第二条语句；生成物闭环：有 docstring 的端点 OpenAPI 必有 description，分母从源路由模块推导） |
 
 ### 契约 / 响应
 | # | 问题 |
