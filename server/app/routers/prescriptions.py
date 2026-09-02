@@ -1,13 +1,15 @@
 """集中审方中心："系统+药师"双重审方，每方必审。"""
 from datetime import date
+from typing import Any, cast
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, update
+from sqlalchemy.engine import CursorResult
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_if_absent, insert_or_conflict
+from ..concurrency import appended_text, insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -273,18 +275,33 @@ def review_prescription(prescription_id: int, body: PrescriptionReview, db: Sess
     prescription = db.get(Prescription, prescription_id)
     if prescription is None:
         raise HTTPException(status_code=404, detail="处方不存在")
-    if prescription.status != "pending_review":
+    if not _apply_review(db, prescription_id, "approved" if body.approve else "rejected", body.comment):
+        db.rollback()
+        db.refresh(prescription)  # 抢输了就按真实状态措辞，别拿锁外读到的旧值
         raise HTTPException(status_code=409, detail=f"当前状态 {prescription.status} 无需药师审核")
-    prescription.status = "approved" if body.approve else "rejected"
-    if body.comment:
-        prescription.review_comment = (
-            f"{prescription.review_comment}；药师意见：{body.comment}"
-            if prescription.review_comment
-            else f"药师意见：{body.comment}"
-        )
     db.commit()
     db.refresh(prescription)
     return prescription
+
+
+def _apply_review(db: Session, prescription_id: int, status: str, comment: str) -> bool:
+    """药师审核落库：状态迁移与意见追加压在**同一条带状态条件的 UPDATE** 里，返回是否审到。
+
+    旧写法是"读状态 → 判 pending_review → 改对象 → commit"：两位药师同时点审核，
+    都读到 pending_review，八路并发八路全过——结论以最后提交的为准（通过被盖成退回，
+    或反过来），意见串也是读-改-写、只剩最后一位的。`WHERE status = 'pending_review'`
+    让后到的那几路 rowcount 为 0，与顺序请求一样拿 409：一张处方只被审一次，
+    意见追加在系统审意见之后（空则不带分隔符，同旧写法）。
+    """
+    values: dict[str, Any] = {"status": status}
+    if comment:
+        values["review_comment"] = appended_text(Prescription.review_comment, f"药师意见：{comment}")
+    reviewed = cast(CursorResult, db.execute(
+        update(Prescription)
+        .where(Prescription.id == prescription_id, Prescription.status == "pending_review")
+        .values(**values)
+    ))
+    return bool(reviewed.rowcount)
 
 
 # ---------- 终审轮：处方点评（⑱事后点评与监管） ----------

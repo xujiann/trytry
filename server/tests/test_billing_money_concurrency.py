@@ -175,7 +175,7 @@ def _encounter_settlement(client, admin, org, name, code, quantity):
 def test_并发退押金不得把余额退成负数(client, admin, ward):
     """预交 1000、八路并发各退 200：最多 5 笔，余额落到 0，绝不为负。
 
-    改回旧写法（去掉 `_serialized_on`，只留 INSERT..SELECT）时，PG 上八笔全过、
+    改回旧写法（去掉 `serialized_on`，只留 INSERT..SELECT）时，PG 上八笔全过、
     refunded=1600、balance=-600——押金台账凭空多退出 600 元。
     """
     _, admission = _admission(client, admin, ward, "押金并发患者")

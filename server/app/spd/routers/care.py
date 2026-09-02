@@ -12,6 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
+from ...concurrency import serialized_on
 from ...config import settings
 from ...database import get_db
 from ...datetypes import DateStr, OptionalDateStr
@@ -1120,13 +1121,18 @@ def update_revisit(revisit_id: int, body: RevisitUpdate, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="复诊计划不存在")
     data = body.model_dump(exclude_unset=True)
     note = data.pop("note", "")
-    for key, value in data.items():
-        setattr(record, key, value)
-    record.log = (record.log or []) + [{
-        "at": date.today().isoformat(),
-        "note": note or f"状态变更为{record.status}",
-    }]
-    db.commit()
+    # 日志是 JSON 列整体覆写（读旧列表 + 本条再写回）：两路并发改期/办结，后写的把
+    # 先写的那条日志盖掉——"事后说不清是谁改的"正是这条日志要防的事。JSON 列没有
+    # 可移植的原子追加，锁住这一行、重读、再追加（concurrency.serialized_on）。
+    with serialized_on(db, SpdRevisit, revisit_id):
+        db.refresh(record)
+        for key, value in data.items():
+            setattr(record, key, value)
+        record.log = (record.log or []) + [{
+            "at": date.today().isoformat(),
+            "note": note or f"状态变更为{record.status}",
+        }]
+        db.commit()
     return _revisit_out(record)
 
 

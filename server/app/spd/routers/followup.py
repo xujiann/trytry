@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
+from ...concurrency import serialized_on
 from ...database import get_db
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
@@ -1020,16 +1021,25 @@ def record_call_result(
     task.result = body.result
     task.started_at = task.started_at or now_naive()
     task.operator_id = task.operator_id or user.id
+    record = None
     if body.status == "connected" and task.ref_type == "followup" and task.ref_id:
         record = db.get(SpdFollowupRecord, task.ref_id)
         if record is not None:
             assert_org_writable(db, user, record.org_id)
-        if record is not None and record.status in ("planned", "overdue"):
-            record.result = (record.result + " " + body.result).strip()[:500]
-            record.evidence = (record.evidence or []) + (
-                [body.record_url] if body.record_url else []
-            )
-    db.commit()
+    if record is not None and record.status in ("planned", "overdue"):
+        # 结果串与证据列表都是"读旧值 + 本次 → 整体写回"：同一条随访记录挂着的两个
+        # 呼叫任务同时回写，后写的把先写的结果与录音地址盖掉。锁住随访记录这一行、
+        # 重读、再追加（concurrency.serialized_on）；锁到手后若已被别人办结就不再往上写。
+        with serialized_on(db, SpdFollowupRecord, record.id):
+            db.refresh(record)
+            if record.status in ("planned", "overdue"):
+                record.result = (record.result + " " + body.result).strip()[:500]
+                record.evidence = (record.evidence or []) + (
+                    [body.record_url] if body.record_url else []
+                )
+            db.commit()
+    else:
+        db.commit()
     return {"id": task.id, "status": task.status, "duration_s": task.duration_s}
 
 

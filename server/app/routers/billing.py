@@ -17,12 +17,9 @@ HTTP 网关（app/payments.py）注册为 channel="gateway"（异步语义：下
 回调 `POST /api/billing/payments/callback` 验签确认后转 paid）；缺省渠道仍走
 Mock 同步语义，既有测试与演示不受影响。
 """
-import contextlib
 import json
 import logging
 import secrets
-import threading
-from collections.abc import Iterator
 from datetime import datetime, timedelta
 from typing import Protocol, cast
 
@@ -35,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..datetypes import OptionalDateStr
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, serialized_on
 from ..egress import egress_url_allowed, verify_signature
 from ..payments import HttpGatewayPaymentGateway, to_fen
 from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
@@ -75,42 +72,10 @@ def unsettled_amount(db: Session, admission_id: int) -> float:
     return round(total or 0.0, 2)
 
 
-# ---------- 金额并发闸门 ----------
-
-#: SQLite 侧的进程内互斥（见 `_serialized_on` 文档）。RLock 而非 Lock：
-#: 结算的临界区里还会再进押金冲抵这一段，同线程重入不该把自己锁死。
-_MONEY_SQLITE_LOCK = threading.RLock()
-
-
-@contextlib.contextmanager
-def _serialized_on(db: Session, model, row_id: int) -> Iterator[None]:
-    """把"读金额 → 判定 → 写金额"整段圈成临界区，两种方言各用各的办法。
-
-    **为什么"一条 SQL 里判定 + 写入"在这里不够用。** `concurrency.take_amount`
-    的 `UPDATE ... WHERE col >= amount` 之所以对，是因为 UPDATE 会对**既有行**
-    取行锁，等锁到手后再重新求值 WHERE（PG 的 EvalPlanQual）。而押金余额不是
-    一列而是流水现算，扣减写的是 `INSERT ... FROM SELECT ... WHERE 余额 >= 扣减额`
-    ——INSERT **不给任何既有行加锁**，聚合子查询读的是语句开始时的快照，
-    READ COMMITTED 下并发事务彼此不可见。实测（PG）：预交 1000、八路并发各退 200，
-    八笔全过，refunded=1600、balance=-600。SQLite 的库级写锁把这条掩盖了，
-    所以它只在生产库上现形。
-
-    - PostgreSQL：对父行（住院登记 / 就诊 / 支付单所属结算单）`SELECT ... FOR UPDATE`。
-      锁到手之后的每条语句都取新快照（READ COMMITTED 逐语句取快照），
-      判定读到的就是上一个赢家提交后的值。锁随事务提交/回滚释放，
-      因此 **commit 必须写在 with 块内**。
-    - SQLite：没有 FOR UPDATE，且库级写锁只在第一条**写**语句才生效，
-      判定阶段的读根本不排队。沿用 main.py 审计链的分流写法——单进程内用一把
-      进程内锁串行化（SQLite 本就只用于开发/单实例）。
-
-    临界区按"父行"划分而不是全局一把锁：不同住院登记、不同结算单的收退费互不阻塞。
-    """
-    if db.get_bind().dialect.name == "postgresql":
-        db.execute(select(model.id).where(model.id == row_id).with_for_update())
-        yield
-        return
-    with _MONEY_SQLITE_LOCK:
-        yield
+# 金额并发闸门：读金额 → 判定 → 写金额整段要圈成临界区（PG 行锁 / SQLite 进程内锁），
+# 原先是本模块私有的 `_serialized_on`，慢专病的 JSON 列追加也要用，已上提为
+# `concurrency.serialized_on`——"为什么一条 SQL 里判定 + 写入在这里不够用"的
+# 推理与实测数字（八路退费退出 -600）都在那边的 docstring 里。
 
 
 # ---------- 收费项目目录 ----------
@@ -491,7 +456,7 @@ def _atomic_deposit_deduct(
 ) -> bool:
     """扣押金：INSERT..SELECT，仅当当前余额 ≥ 扣减额时才落行。
 
-    **调用方必须先进 `_serialized_on(db, Admission, admission_id)` 临界区**，
+    **调用方必须先进 `serialized_on(db, Admission, admission_id)` 临界区**，
     并在临界区内提交。这一条 SQL 本身**不是**原子判定：INSERT 不给既有流水行
     加锁，聚合子查询读的是语句开始时的快照，PG READ COMMITTED 下八路并发退费
     实测全部通过（余额 1000 退出 1600）。判定的原子性由外层的行锁承担，
@@ -582,7 +547,7 @@ def refund_deposit(
     operator = user.full_name or user.username
     # 判定余额与落退费行必须在同一段临界区里，且提交也要在里头——
     # 锁一放，下一个退费请求读到的就必须是本笔已提交后的余额。
-    with _serialized_on(db, Admission, body.admission_id):
+    with serialized_on(db, Admission, body.admission_id):
         if not _atomic_deposit_deduct(
             db, body.admission_id, body.amount, "refund", body.method, operator
         ):
@@ -795,7 +760,7 @@ def create_settlement(
 
     # 临界区按"这次住院/这次就诊"划分：同一笔的并发结算排队，不同笔互不阻塞。
     # 押金冲抵也在里头——它与 /deposits/refund 抢的是同一把住院登记行锁。
-    with _serialized_on(db, gate_model, gate_id):
+    with serialized_on(db, gate_model, gate_id):
         # 前置轻读只为保住既有口径：没有任何未结明细时按 422 回，
         # 与"重复结算"的既有响应一字不差（真正的并发判定在下面的 UPDATE）。
         if (
@@ -1232,7 +1197,7 @@ def create_payment(
     # "算已付额 → 判超额 → 落单"三步之间原先没有闸门，通道 RTT 就是竞态窗口：
     # 实测 1000 元结算单五路并发各缴 1000，五张单全部 paid，收进 5000。
     # 判定与落单一起圈进结算单这一行的临界区，并在里头提交。
-    with _serialized_on(db, Settlement, settlement.id):
+    with serialized_on(db, Settlement, settlement.id):
         _expire_stale_pending(db, settlement.id)
         paid_already = _collected_amount(db, settlement.id, include_pending=True)
         if paid_already + amount > round(settlement.total_amount, 2) + 1e-6:
@@ -1357,7 +1322,7 @@ async def payment_callback(request: Request, db: Session = Depends(get_db)):
     # 只核对本单金额挡不住"同一张账单开了多张单"这类超收：三张 100 元的
     # gateway 单各自金额都对，回调三次就收进 300（实测）。这里按已到账口径
     # （不含其它 pending）复核一次，收足了就拒绝入账。
-    with _serialized_on(db, Settlement, order.settlement_id):
+    with serialized_on(db, Settlement, order.settlement_id):
         settlement = db.get(Settlement, order.settlement_id)
         settled = _collected_amount(db, order.settlement_id, include_pending=False)
         if settlement is not None and settled + round(order.amount, 2) > round(

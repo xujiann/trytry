@@ -7,8 +7,10 @@
 """
 import ast
 import os
+import textwrap
 import threading
 import warnings
+from collections import Counter
 
 import pytest
 import sqlalchemy as sa
@@ -388,33 +390,62 @@ def test_物资全部出库后清单仍打得开(client, admin, org):
 # （`x.c = f(x.c, n)`）它一个也看不见：实测 21 处赋值形状的读-改-写全在规则之外，
 # 其中 8 处是货真价实的累加/追加（金额、字符串、JSON 列）。**不删规则、不放宽断言**，逐条登记为欠账：
 # 新增一条会顶破基线变红，修掉一条就把它从清单里删掉。
-# 修复归属：本包只动脚本/测试/CI/文档，业务代码改动交由后续包（见 docs/TECH_DEBT.md）。
-KNOWN_READ_MODIFY_WRITE = {
-    # —— 真累加/追加：并发下后写覆盖先写，会丢钱、丢内容（应修）——
-    "billing.py:refund_payment": "退款额累加（金额，丢更新=账实不符）",
-    "maternal.py:add_visit": "风险因素字符串追加",
-    "maternal.py:add_screening": "儿童风险备注字符串追加",
-    "maternal.py:create_screening": "风险因素字符串追加",
-    "prescriptions.py:review_prescription": "药师意见字符串追加",
-    "spd/care.py:update_revisit": "随访日志列表追加（JSON 列整体覆写）",
-    "spd/followup.py:record_call_result": "外呼结果字符串追加 + 证据列表追加",
-    "spd/population.py:update_recall": "召回联系记录列表追加",
+#
+# 8 处真累加/追加已于 P1-28 清零（字符串追加 → `concurrency.append_text`；处方审核 →
+# 一条带状态条件的 UPDATE；JSON 列整体覆写 → `serialized_on` 行锁临界区内重读再写）。
+# 登记粒度随之改成 **函数 × 条数**（`{key: (条数, 性质)}`）而不只是函数名：清零那一轮
+# 发现 `record_call_result` 一个名字下同时挂着两条真追加与两条幂等回填——只登函数名，
+# 真追加修掉之后谁再往这个函数里塞一条新的读-改-写，规则照样报绿。条数**只许变小**，
+# 且必须与实际相等：多了由 `test_不得再用读改写累加计数` 判红，少了由
+# `test_读改写欠账清单不得腐烂` 逼着把条数调低（为 0 则删条目）。
+KNOWN_READ_MODIFY_WRITE: dict[str, tuple[int, str]] = {
     # —— 幂等/取极值形状：同为读-改-写，但重复执行结果一致，丢更新后果有限（登记，暂不修）——
-    "education.py:submit_exam": "score = max(score, 新分)，取极值",
-    "portal.py:bind_wechat": "nickname = nickname or 新值，幂等回填",
-    "spd/portal.py:feedback_intervention": "read_at = read_at or now，幂等回填",
-    "spd/portal.py:read_education": "read_at = read_at or now，幂等回填",
-    "spd/tasks.py:escalate_task": "priority = max(priority, 2)，取极值",
-    "spd/tasks.py:submit_task": "assignee_id = assignee_id or 当前用户，幂等回填",
-    "spd/tasks.py:_finish_task": "assignee_id = assignee_id or 当前用户，幂等回填",
-    "spd/config/catalog.py:update_program": "version = _bump_version(version)，配置版本号自增（低频、单写者）",
-    # —— 顺带记一笔：这条是自赋值（写了等于没写），疑似笔误，非并发问题 ——
-    "spd/care.py:dispatch_edu_push": "push.frequency = push.frequency，自赋值疑似笔误（登记待查）",
+    "education.py:submit_exam": (1, "score = max(score, 新分)，取极值"),
+    "portal.py:bind_wechat": (1, "nickname = nickname or 新值，幂等回填"),
+    "spd/followup.py:record_call_result": (
+        2, "started_at / operator_id = 旧值 or 新值，幂等回填（同函数的两条真追加已进 serialized_on 临界区）",
+    ),
+    "spd/portal.py:feedback_intervention": (1, "read_at = read_at or now，幂等回填"),
+    "spd/portal.py:read_education": (1, "read_at = read_at or now，幂等回填"),
+    "spd/tasks.py:escalate_task": (1, "priority = max(priority, 2)，取极值"),
+    "spd/tasks.py:submit_task": (1, "assignee_id = assignee_id or 当前用户，幂等回填"),
+    "spd/config/catalog.py:update_program": (1, "version = _bump_version(version)，配置版本号自增（低频、单写者）"),
 }
 
 
-def _read_modify_write_offenders() -> list[str]:
-    """路由层里对 ORM 对象做读-改-写的位置，两种形状都要认：
+def _serialized_nodes(func: ast.FunctionDef) -> set[int]:
+    """`with serialized_on(...)` 临界区里、且 `db.refresh(...)` **之后**的全部节点 id。
+
+    行锁到手后重读再改写，才不是丢更新（`concurrency.serialized_on` 文档约定）；
+    锁内但 refresh 之前的赋值用的仍是锁外读到的旧值，不豁免。别的 with
+    （`begin_nested()` 之类）不是临界区，也不豁免。
+    """
+    guarded: set[int] = set()
+    for node in ast.walk(func):
+        if not isinstance(node, ast.With):
+            continue
+        if not any(
+            isinstance(item.context_expr, ast.Call)
+            and ast.unparse(item.context_expr.func).rsplit(".", 1)[-1] == "serialized_on"
+            for item in node.items
+        ):
+            continue
+        refreshed = False
+        for stmt in node.body:
+            if refreshed:
+                guarded.update(id(n) for n in ast.walk(stmt))
+            elif any(
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "refresh"
+                for n in ast.walk(stmt)
+            ):
+                refreshed = True
+    return guarded
+
+
+def _read_modify_writes_in(func: ast.FunctionDef) -> list[ast.stmt]:
+    """一个函数里对 ORM 对象做读-改-写的语句，两种形状都要认：
 
         obj.col += n                     # AugAssign——第一版只认这个
         obj.col = f(obj.col, n)          # Assign 且右值里含同一个属性——**这才是多数**
@@ -422,11 +453,46 @@ def _read_modify_write_offenders() -> list[str]:
     只认 AugAssign 的那一版，在同一份代码上漏掉 21 处赋值形状的读-改-写：
     一条只看得见一种写法的规则，给出的是虚假的安全感（第 17 章例三）。
     """
+    local_names = ("self", "totals", "acc")
+    guarded = _serialized_nodes(func)
+    found: list[ast.stmt] = []
+    for node in ast.walk(func):
+        if id(node) in guarded:
+            continue
+        target = None
+        if isinstance(node, ast.AugAssign):
+            if not isinstance(node.target, ast.Attribute):
+                continue
+            if not isinstance(node.op, (ast.Add, ast.Sub)):
+                continue
+            target = node.target
+        elif isinstance(node, ast.Assign):
+            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Attribute):
+                continue
+            target = node.targets[0]
+            src = ast.unparse(target)
+            # 右值里必须出现同一个属性，才叫"读了旧值再写回去"；
+            # 纯赋新值（obj.col = body.x）不是读-改-写，不报。
+            if not any(
+                isinstance(sub, ast.Attribute) and ast.unparse(sub) == src
+                for sub in ast.walk(node.value)
+            ):
+                continue
+        else:
+            continue
+        # 只管 ORM 列上的读-改-写；本地变量/累加器（sum += x）不在此列
+        if isinstance(target.value, ast.Name) and target.value.id in local_names:
+            continue
+        found.append(node)
+    return found
+
+
+def _read_modify_write_offenders() -> list[str]:
+    """路由层里全部读-改-写的位置（`文件:函数 → 语句`），豁免见 `_read_modify_writes_in`。"""
     allowed = {
         # 请求内新建、尚未提交的对象，不存在并发竞争
         "encounters.py:_accumulate_local",
     }
-    local_names = ("self", "totals", "acc")
     offenders = []
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
@@ -434,32 +500,7 @@ def _read_modify_write_offenders() -> list[str]:
             key = f"{name}:{func.name}"
             if key in allowed:
                 continue
-            for node in ast.walk(func):
-                target = None
-                if isinstance(node, ast.AugAssign):
-                    if not isinstance(node.target, ast.Attribute):
-                        continue
-                    if not isinstance(node.op, (ast.Add, ast.Sub)):
-                        continue
-                    target = node.target
-                elif isinstance(node, ast.Assign):
-                    if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Attribute):
-                        continue
-                    target = node.targets[0]
-                    src = ast.unparse(target)
-                    # 右值里必须出现同一个属性，才叫"读了旧值再写回去"；
-                    # 纯赋新值（obj.col = body.x）不是读-改-写，不报。
-                    if not any(
-                        isinstance(sub, ast.Attribute) and ast.unparse(sub) == src
-                        for sub in ast.walk(node.value)
-                    ):
-                        continue
-                else:
-                    continue
-                # 只管 ORM 列上的读-改-写；本地变量/累加器（sum += x）不在此列
-                if isinstance(target.value, ast.Name) and target.value.id in local_names:
-                    continue
-                offenders.append(f"{key} → {ast.unparse(node)}")
+            offenders.extend(f"{key} → {ast.unparse(node)}" for node in _read_modify_writes_in(func))
     return offenders
 
 
@@ -471,7 +512,15 @@ def test_不得再用读改写累加计数(client):
     抽出来之后要配一条规则盯住，否则下一个模块照旧。
     """
     offenders = _read_modify_write_offenders()
-    new = sorted(o for o in offenders if o.split(" → ")[0] not in KNOWN_READ_MODIFY_WRITE)
+    by_function: dict[str, list[str]] = {}
+    for offender in offenders:
+        by_function.setdefault(offender.split(" → ")[0], []).append(offender)
+    new = sorted(
+        f"{offender}（该函数登记 {KNOWN_READ_MODIFY_WRITE.get(key, (0,))[0]} 条，实际 {len(items)} 条）"
+        for key, items in by_function.items()
+        if len(items) > KNOWN_READ_MODIFY_WRITE.get(key, (0, ""))[0]
+        for offender in items
+    )
     print(
         f"\n[读-改-写规则] 命中 {len(offenders)} 处（AugAssign + Assign 两种形状），"
         f"其中已登记欠账 {len(offenders) - len(new)} 处、新增 {len(new)} 处"
@@ -479,9 +528,71 @@ def test_不得再用读改写累加计数(client):
     assert new == [], (
         "以下位置对数据库对象做读-改-写（并发下丢更新）：\n  "
         + "\n  ".join(new)
-        + "\n请改用 app/concurrency.py 的 add_amount / take_amount / claim_quota；"
-        "\n确属存量欠账的，登记进 KNOWN_READ_MODIFY_WRITE 并写明性质（清单只减不增）。"
+        + "\n请改用 app/concurrency.py 的 add_amount / take_amount / claim_quota / append_text；"
+        "一条 SQL 压不进去的（JSON 列）进 serialized_on 临界区并先 db.refresh；"
+        "\n确属存量欠账的，登记进 KNOWN_READ_MODIFY_WRITE 并写明条数与性质（清单只减不增）。"
     )
+
+
+def test_读改写欠账清单不得腐烂():
+    """清单条目登记的条数必须与该函数里实际剩下的读-改-写条数**相等**。
+
+    只登函数名的旧清单里挂了三条早已修好的陈账（`refund_payment` / `_finish_task` /
+    `dispatch_edu_push`），没有任何检查在证明它们还成立。欠账清单腐烂的方向永远是
+    "欠账其实已经还了、清单还在替它占位"——占着的位以后就能被新欠账悄悄坐进去。
+    修掉一条就把条数调低，调到 0 就删条目。
+    """
+    counts = Counter(o.split(" → ")[0] for o in _read_modify_write_offenders())
+    loose = sorted(
+        f"{key}：登记 {cap} 条，实际 {counts.get(key, 0)} 条"
+        for key, (cap, _reason) in KNOWN_READ_MODIFY_WRITE.items()
+        if counts.get(key, 0) < cap
+    )
+    assert loose == [], (
+        "欠账清单里这些条目登记的条数高于实际，请调低（为 0 则删掉条目）：\n  " + "\n  ".join(loose)
+    )
+
+
+def test_读改写规则自证_临界区豁免只认refresh之后():
+    """规则自己的行为用一段合成代码钉住，五种形状各得其所——规则改坏了这里先红。"""
+    source = textwrap.dedent(
+        '''
+        def plain(db, obj, body):
+            obj.note = obj.note + body.note
+
+        def locked_after_refresh(db, obj, body):
+            with serialized_on(db, Model, obj.id):
+                db.refresh(obj)
+                obj.log = (obj.log or []) + [body.entry]
+                db.commit()
+
+        def locked_before_refresh(db, obj, body):
+            with serialized_on(db, Model, obj.id):
+                obj.log = (obj.log or []) + [body.entry]
+                db.refresh(obj)
+                db.commit()
+
+        def other_with(db, obj, body):
+            with db.begin_nested():
+                db.refresh(obj)
+                obj.count += 1
+
+        def fresh_value(db, obj, body):
+            obj.note = body.note
+        '''
+    )
+    flagged = {
+        func.name: [ast.unparse(node) for node in _read_modify_writes_in(func)]
+        for func in ast.parse(source).body
+        if isinstance(func, ast.FunctionDef)
+    }
+    assert flagged == {
+        "plain": ["obj.note = obj.note + body.note"],           # 裸读-改-写：报
+        "locked_after_refresh": [],                              # 锁内、refresh 后：豁免
+        "locked_before_refresh": ["obj.log = (obj.log or []) + [body.entry]"],  # 锁内但 refresh 前：报
+        "other_with": ["obj.count += 1"],                        # 别的 with 不是临界区：报
+        "fresh_value": [],                                       # 纯赋新值：不报
+    }
 
 
 # ================================================================ 防复发扫描

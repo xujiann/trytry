@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from ..datetypes import DateStr
-from ..concurrency import insert_if_absent
+from ..concurrency import append_text, insert_if_absent
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
@@ -122,7 +122,9 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
             sbp = float(body.bp.split("/")[0])
             if sbp >= 140 and not record.high_risk:
                 record.high_risk = True
-                record.risk_factors = (record.risk_factors + "；" if record.risk_factors else "") + "妊娠期高血压可能"
+                # 风险因素是追加不是覆写：拼接下沉到 SQL（concurrency.append_text），
+                # 与同时落下的产前筛查风险因素两笔都留下，而不是后写的盖掉先写的。
+                append_text(db, MaternalRecord, record_id, "risk_factors", "妊娠期高血压可能")
         except ValueError:
             pass
     db.add(visit)
@@ -325,8 +327,7 @@ def add_screening(child_id: int, body: ScreeningCreate, db: Session = Depends(ge
     screening = NewbornScreening(child_id=child_id, **body.model_dump())
     if body.result == "abnormal" and not child.high_risk:
         child.high_risk = True
-        note = f"{_SCREEN_ITEM_NAMES[body.item]}阳性/可疑"
-        child.risk_note = (child.risk_note + "；" if child.risk_note else "") + note
+        append_text(db, ChildRecord, child_id, "risk_note", f"{_SCREEN_ITEM_NAMES[body.item]}阳性/可疑")
     db.add(screening)
     db.commit()
     return {
@@ -549,9 +550,8 @@ def create_screening(
     if screening.flagged_high_risk:
         record.high_risk = True
         factor = f"{SCREEN_TYPES[body.screen_type]}{'高风险' if body.result == 'high_risk' else '临界风险'}"
-        record.risk_factors = (
-            f"{record.risk_factors}；{factor}" if record.risk_factors else factor
-        )
+        # 同一本册子的几项筛查常常同一天出结果、同时录入：追加下沉到 SQL，每一项都留下。
+        append_text(db, MaternalRecord, body.record_id, "risk_factors", factor)
     db.add(screening)
     db.commit()
     db.refresh(screening)

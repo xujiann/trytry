@@ -14,10 +14,13 @@
 正确写法固定成函数，并配一条扫描用例（`test_stage14_concurrency.py`）盯住
 "往带唯一约束的表里写、却没处理约束冲突"的形状。
 """
-from typing import TypeVar, cast
+import contextlib
+import threading
+from collections.abc import Iterator
+from typing import Any, TypeVar, cast
 
 from fastapi import HTTPException
-from sqlalchemy import update
+from sqlalchemy import ColumnElement, case, func, literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -32,6 +35,9 @@ __all__ = [
     "insert_if_absent",
     "add_amount",
     "take_amount",
+    "append_text",
+    "appended_text",
+    "serialized_on",
 ]
 
 
@@ -219,3 +225,89 @@ def claim_quota(db: Session, model, obj_id: int, used_col: str, limit_col: str, 
         .values(**{used_col: used + step})
     ))
     return bool(claimed.rowcount)
+
+
+def appended_text(
+    column, text: str, sep: str = "；", max_len: int | None = None
+) -> ColumnElement[Any]:
+    """"在 column 末尾追加 text"的 SQL 表达式：空/NULL 时不带分隔符，否则 `col || sep || text`。
+
+    给需要把追加与别的条件压进**同一条 UPDATE** 的调用方（处方审核：状态迁移与
+    意见追加要在同一条带状态条件的 UPDATE 里，见 `prescriptions._apply_review`）；
+    只是追加一列的直接用 `append_text`。`max_len` 对应旧写法末尾的 `[:n]`（`substr`）。
+    """
+    expr: ColumnElement[Any] = case(
+        (func.coalesce(column, "") == "", literal(text)),
+        else_=column + sep + literal(text),
+    )
+    if max_len is not None:
+        expr = func.substr(expr, 1, max_len)
+    return expr
+
+
+def append_text(
+    db: Session, model, obj_id: int, col: str, text: str,
+    sep: str = "；", max_len: int | None = None,
+) -> None:
+    """原子追加字符串：`UPDATE ... SET col = col || sep || :text WHERE id = :id`。
+
+    替代 `obj.col = (obj.col + sep if obj.col else "") + text`。那句同 `add_amount`
+    要替代的 `+=` 一样是读-改-写，只是把数字换成了字符串：两路并发各往孕产妇档案
+    追加一条风险因素，后写的把先写的盖掉——高危档案上少一条风险因素，随访就少盯
+    一项，而两笔的日志看上去都成功了。拼接下沉到 SQL 里由行锁排队，两笔都留下
+    （先后由谁先拿到行锁决定）。
+
+    调用方随后仍要 `db.commit()`；要读回新值请在提交后 `db.refresh(obj)`——
+    这条 UPDATE 走的是 Core，会话里那个对象仍是旧值。
+    """
+    column = getattr(model, col)
+    db.execute(
+        update(model)
+        .where(model.id == obj_id)
+        .values(**{col: appended_text(column, text, sep, max_len)})
+    )
+
+
+#: SQLite 侧的进程内互斥（见 `serialized_on`）。RLock 而非 Lock：结算的临界区里
+#: 还会再进押金冲抵这一段，同线程重入不该把自己锁死。
+_SQLITE_ROW_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def serialized_on(db: Session, model, row_id: int) -> Iterator[None]:
+    """把"读 → 判定/计算 → 写"整段圈成以某一行为界的临界区，两种方言各用各的办法。
+
+    留给**一条 SQL 压不进去**的读-改-写。上面几个 `UPDATE ... WHERE` 之所以对，是因为
+    UPDATE 会对**既有行**取行锁，锁到手后重新求值 WHERE / SET（PG 的 EvalPlanQual）；
+    以下两类没有这条可走：
+
+    - 判定读的不是一列而是流水现算（押金余额）。扣减写的是 `INSERT ... FROM SELECT`
+      ——INSERT **不给任何既有行加锁**，聚合子查询读的是语句开始时的快照，
+      READ COMMITTED 下并发事务彼此不可见。实测（PG）：预交 1000、八路并发各退 200，
+      八笔全过，refunded=1600、balance=-600。SQLite 的库级写锁把这条掩盖了，
+      所以它只在生产库上现形。
+    - 追加的是 JSON 列（复诊日志、外呼证据、召回联系记录）。两种方言都没有可移植的
+      "原子往数组末尾追加"，只能锁住这一行、重读、整体写回。
+
+    两种方言：
+
+    - PostgreSQL：对目标行 `SELECT ... FOR UPDATE`。锁到手之后的每条语句都取新快照
+      （READ COMMITTED 逐语句取快照），此后读到的就是上一个赢家提交后的值。
+      锁随事务提交/回滚释放，因此 **commit 必须写在 with 块内**。
+    - SQLite：没有 FOR UPDATE，且库级写锁只在第一条**写**语句才生效，判定阶段的读
+      根本不排队。沿用 main.py 审计链的分流写法——单进程内用一把进程内锁串行化
+      （SQLite 本就只用于开发/单实例）。
+
+    **块内先 `db.refresh(obj)` 再读改写**：进临界区之前拿到的 ORM 对象是锁外读的
+    旧值，锁到手不会自动把它刷新，不刷新就照旧覆盖别人刚提交的那一笔。
+    `test_stage14_concurrency.py` 的读-改-写规则只豁免"`serialized_on` 块内、
+    且已 refresh 之后"的赋值——顺序写反了照样判红。
+
+    临界区按行划分而不是全局一把锁：不同住院登记、不同复诊计划之间互不阻塞。
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(select(model.id).where(model.id == row_id).with_for_update())
+        yield
+        return
+    with _SQLITE_ROW_LOCK:
+        yield

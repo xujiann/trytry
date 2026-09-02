@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
-from ...concurrency import ensure_present, insert_if_absent
+from ...concurrency import ensure_present, insert_if_absent, serialized_on
 from ...config import settings
 from ...database import get_db
 from ...datetypes import OptionalDateStr
@@ -1267,18 +1267,22 @@ def update_recall(
         raise HTTPException(status_code=404, detail="召回记录不存在")
     enrollment = db.get(SpdEnrollment, recall.enrollment_id)
     assert_org_writable(db, user, enrollment.org_id if enrollment else None)
-    recall.status = body.status
-    recall.result = body.result or recall.result
-    if body.contact_note:
-        recall.contacts = (recall.contacts or []) + [
-            {"at": date.today().isoformat(), "note": body.contact_note}
-        ]
-    if body.status in ("returned", "failed"):
-        recall.closed_at = now_naive()
-    if body.status == "returned":
-        if enrollment is not None and enrollment.status == "recalled":
-            enrollment.status = "active"
-    db.commit()
+    # 联系记录是 JSON 列整体覆写：两次并发留痕后写的盖掉先写的，召回过程就少一段。
+    # 锁住召回记录这一行、重读、再追加（concurrency.serialized_on）。
+    with serialized_on(db, SpdRecall, recall_id):
+        db.refresh(recall)
+        recall.status = body.status
+        recall.result = body.result or recall.result
+        if body.contact_note:
+            recall.contacts = (recall.contacts or []) + [
+                {"at": date.today().isoformat(), "note": body.contact_note}
+            ]
+        if body.status in ("returned", "failed"):
+            recall.closed_at = now_naive()
+        if body.status == "returned":
+            if enrollment is not None and enrollment.status == "recalled":
+                enrollment.status = "active"
+        db.commit()
     return {"id": recall.id, "status": recall.status, "result": recall.result}
 
 

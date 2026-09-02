@@ -415,7 +415,7 @@ def test_upsert_unique并发写同一唯一键_收敛成一行不抛冲突(pg_en
 
 
 def test_押金退费与结算冲抵混合并发_扣减合计不超余额(pg_engine):
-    """`_serialized_on`(FOR UPDATE) + `_atomic_deposit_deduct` 的 PG 分支直测。
+    """`serialized_on`(FOR UPDATE) + `_atomic_deposit_deduct` 的 PG 分支直测。
 
     HTTP 档已各自验证过退费、结算的并发；这里补两者**互抢同一笔余额**的组合：
     退费与冲抵抢的是同一把住院登记行锁，谁都不能按旧余额判定。押金余额是流水
@@ -425,8 +425,9 @@ def test_押金退费与结算冲抵混合并发_扣减合计不超余额(pg_eng
     """
     from sqlalchemy.orm import sessionmaker
 
+    from app.concurrency import serialized_on
     from app.models import Admission, Bed, Deposit, Organization, Patient, User, Ward
-    from app.routers.billing import _atomic_deposit_deduct, _serialized_on, deposit_balance
+    from app.routers.billing import _atomic_deposit_deduct, deposit_balance
 
     Session = sessionmaker(bind=pg_engine)
     with Session() as db:
@@ -455,8 +456,8 @@ def test_押金退费与结算冲抵混合并发_扣减合计不超余额(pg_eng
         deposit_type = "refund" if i % 2 == 0 else "offset"
         with Session() as db:
             # commit 必须在临界区内：行锁随事务释放，锁一放下一路读到的
-            # 就必须是本笔已提交后的余额（`_serialized_on` 文档约定）。
-            with _serialized_on(db, Admission, admission_id):
+            # 就必须是本笔已提交后的余额（`serialized_on` 文档约定）。
+            with serialized_on(db, Admission, admission_id):
                 ok = _atomic_deposit_deduct(
                     db, admission_id, 300, deposit_type, "cash", "并发收退员"
                 )
@@ -521,6 +522,138 @@ def test_发药批次并发占用_合计不超过批次余量(pg_engine):
         assert row is not None and row.used_quantity == 9, (
             f"已用量必须等于 3 路×3（={row.used_quantity if row else '?'}），超 10 即超发"
         )
+
+
+def test_字符串原子追加_八路并发一条不丢(pg_engine):
+    """`concurrency.append_text` 的 PG 直测：八路各追加一条不同的风险因素，八条都得在。
+
+    旧写法 `obj.col = (obj.col + "；" if obj.col else "") + new` 是读-改-写：八路都读到
+    空串、各写回自己那一条，终值只剩最后提交的一条（SQLite 的库级写锁把这掩盖了，
+    在 test-unit 里永远测不出来）。拼接下沉到 SQL 后由行锁排队，顺序不定但一条不丢，
+    且首条不带分隔符。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.concurrency import append_text
+    from app.models import MaternalRecord, Patient
+
+    Session = sessionmaker(bind=pg_engine)
+    with Session() as db:
+        patient = Patient(name="PG追加孕妇", id_card="330900199202022345", gender="女",
+                          birth_date="1992-02-02", ehc_no="PG-EHC-APP1")
+        db.add(patient)
+        db.flush()
+        record = MaternalRecord(patient_id=patient.id)
+        db.add(record)
+        db.commit()
+        record_id = record.id
+
+    def worker(i):
+        with Session() as db:
+            append_text(db, MaternalRecord, record_id, "risk_factors", f"因素{i}")
+            db.commit()
+            return i
+
+    results, errors = _race_on_pg(worker, times=8)
+    assert not errors, f"原子追加并发下不该抛错：{errors}"
+    assert len(results) == 8
+    with Session() as db:
+        row = db.get(MaternalRecord, record_id)
+        assert row is not None
+        value = row.risk_factors
+    assert sorted(value.split("；")) == [f"因素{i}" for i in range(8)], (
+        f"八条风险因素必须全在、以'；'相接且首条不带分隔符，实际：{value!r}"
+    )
+
+
+def test_JSON列临界区追加_八路并发八条都在(pg_engine):
+    """`serialized_on`（FOR UPDATE）保护下的 JSON 列整体覆写：八路各追加一条复诊日志，终值八条。
+
+    JSON 列没有可移植的原子追加，只能锁行、重读、整体写回。去掉块内的 `db.refresh`
+    （锁到手却仍用锁外读到的旧列表）终值就只剩 1 条——这正是读-改-写规则只豁免
+    "refresh 之后"的原因；本条同时是 `care.update_revisit` 修法的直测。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.concurrency import serialized_on
+    from app.models import Patient
+    from app.spd.models import SpdRevisit
+
+    Session = sessionmaker(bind=pg_engine)
+    with Session() as db:
+        patient = Patient(name="PG复诊患者", id_card="330900199303033456", gender="男",
+                          birth_date="1993-03-03", ehc_no="PG-EHC-REV1")
+        db.add(patient)
+        db.flush()
+        revisit = SpdRevisit(patient_id=patient.id, plan_date="2026-09-10")
+        db.add(revisit)
+        db.commit()
+        revisit_id = revisit.id
+
+    def worker(i):
+        with Session() as db:
+            row = db.get(SpdRevisit, revisit_id)
+            with serialized_on(db, SpdRevisit, revisit_id):
+                db.refresh(row)
+                row.log = (row.log or []) + [{"at": "2026-09-02", "note": f"第{i}路"}]
+                db.commit()
+            return i
+
+    results, errors = _race_on_pg(worker, times=8)
+    assert not errors, f"临界区追加并发下不该抛错：{errors}"
+    assert len(results) == 8
+    with Session() as db:
+        row = db.get(SpdRevisit, revisit_id)
+        assert row is not None
+        notes = sorted(entry["note"] for entry in row.log)
+    assert notes == sorted(f"第{i}路" for i in range(8)), f"八条日志必须全在，实际：{notes}"
+
+
+def test_处方审核条件更新_八路并发恰一路审到(pg_engine):
+    """`prescriptions._apply_review` 的 PG 直测：八位药师同时审同一张待审处方，恰一路成功。
+
+    旧写法读到 pending_review 就各自改对象提交：八路全过、结论以最后提交的为准
+    （通过被盖成退回或反过来）、意见串只剩一位的。状态条件压进 UPDATE 后，
+    行锁 + EvalPlanQual 让后到的七路按赢家提交后的状态重算 WHERE，rowcount=0。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models import Organization, Patient, Prescription, User
+    from app.routers.prescriptions import _apply_review
+
+    Session = sessionmaker(bind=pg_engine)
+    with Session() as db:
+        org = Organization(name="PG审方院", org_type="township", level="township")
+        doctor = User(username="pg_rx_doc", password_hash="x", full_name="开方医生")
+        patient = Patient(name="PG审方患者", id_card="330900199404044567", gender="女",
+                          birth_date="1994-04-04", ehc_no="PG-EHC-RX1")
+        db.add_all([org, doctor, patient])
+        db.flush()
+        rx = Prescription(patient_id=patient.id, org_id=org.id, diagnosis_name="高血压",
+                          status="pending_review", review_comment="系统审：日剂量超过上限",
+                          created_by=doctor.id)
+        db.add(rx)
+        db.commit()
+        rx_id = rx.id
+
+    def worker(i):
+        with Session() as db:
+            ok = _apply_review(db, rx_id, "approved" if i % 2 == 0 else "rejected", f"第{i}位药师")
+            if ok:
+                db.commit()
+            else:
+                db.rollback()
+            return ok
+
+    results, errors = _race_on_pg(worker, times=8)
+    assert not errors, f"条件更新并发下不该抛错：{errors}"
+    assert results.count(True) == 1, f"一张处方只能被审一次，实际 {results.count(True)} 路审到"
+    with Session() as db:
+        row = db.get(Prescription, rx_id)
+        assert row is not None
+        assert row.status in ("approved", "rejected")
+        assert row.review_comment.count("药师意见：") == 1, row.review_comment
+        assert row.review_comment.startswith("系统审：日剂量超过上限；药师意见：第"), row.review_comment
 
 
 def test_金额并发闸门在真PG上成立(pg_engine):
