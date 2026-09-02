@@ -34,7 +34,9 @@ def _check(value: object, *, allow_blank: bool) -> object:
         if allow_blank:
             return value
         raise ValueError("日期不能为空，格式须为 YYYY-MM-DD")
-    if not _SHAPE.match(value):
+    # fullmatch 而不是 match：`$` 允许末尾一个换行，"2026-02-28\n" 会先过形状、
+    # 再在日历校验里以"日期不存在"被拒，文案对不上真正的毛病。
+    if not _SHAPE.fullmatch(value):
         raise ValueError("日期格式须为 YYYY-MM-DD")
     try:
         date.fromisoformat(value)
@@ -71,7 +73,7 @@ MONTH_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}$")
 
 def check_month(value: str) -> str:
     """校验 `YYYY-MM`：先卡形状，再用日历确认月份存在。非法时抛 ValueError（带人话）。"""
-    if not MONTH_SHAPE.match(value):
+    if not MONTH_SHAPE.fullmatch(value):  # 同上：`$` 放过末尾换行，fullmatch 不放
         raise ValueError("期间格式须为 YYYY-MM")
     try:
         date.fromisoformat(value + "-01")

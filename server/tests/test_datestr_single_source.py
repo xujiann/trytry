@@ -21,6 +21,8 @@ import pathlib
 import re
 import warnings
 
+import pytest
+
 from app import datetypes
 
 SERVER_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -110,9 +112,12 @@ def test_真源本身仍在做日历校验():
 
     assert _Probe(day="2026-02-28").day == "2026-02-28"
     assert _Probe(day="2026-02-28", maybe="").maybe == ""
-    for bad in ("2026-02-31", "20260228", "2026-W07-1", "2026-2-8", ""):
+    for bad in ("2026-02-31", "20260228", "2026-W07-1", "2026-2-8", "", "2026-02-28\n"):
         try:
             _Probe(day=bad)
         except ValidationError:
             continue
         raise AssertionError(f"DateStr 放行了非法日期 {bad!r}——日历校验已退化")
+    # 末尾换行是形状问题不是日历问题：`$` 放过换行、`fullmatch` 不放（/review 指出）
+    with pytest.raises(ValueError, match="格式"):
+        datetypes._check("2026-02-28\n", allow_blank=False)

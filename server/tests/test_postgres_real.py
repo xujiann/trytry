@@ -609,6 +609,46 @@ def test_JSON列临界区追加_八路并发八条都在(pg_engine):
     assert notes == sorted(f"第{i}路" for i in range(8)), f"八条日志必须全在，实际：{notes}"
 
 
+def test_首次标高危条件更新_八路并发恰一路标上(pg_engine):
+    """`maternal._mark_high_risk` 的 PG 直测：八次高血压产检同时到达，只有一路标上、因素只记一条。
+
+    /review 抓出来的形状：追加改成原子的之后，外面那层 `if not record.high_risk` 仍是
+    check-then-act——八路都读到 False、八路都追加，档案上会挂八条"妊娠期高血压可能"。
+    判定压进 UPDATE 的 WHERE 后，行锁 + EvalPlanQual 让后到的七路按赢家提交后的
+    high_risk 重算条件，rowcount=0。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models import MaternalRecord, Patient
+    from app.routers.maternal import _mark_high_risk
+
+    Session = sessionmaker(bind=pg_engine)
+    with Session() as db:
+        patient = Patient(name="PG高危孕妇", id_card="330900199505055678", gender="女",
+                          birth_date="1995-05-05", ehc_no="PG-EHC-HR1")
+        db.add(patient)
+        db.flush()
+        record = MaternalRecord(patient_id=patient.id)
+        db.add(record)
+        db.commit()
+        record_id = record.id
+
+    def worker(_i):
+        with Session() as db:
+            marked = _mark_high_risk(db, MaternalRecord, record_id, "risk_factors", "妊娠期高血压可能")
+            db.commit()
+            return marked
+
+    results, errors = _race_on_pg(worker, times=8)
+    assert not errors, f"条件更新并发下不该抛错：{errors}"
+    assert results.count(True) == 1, f"只能有一路标上高危，实际 {results.count(True)} 路"
+    with Session() as db:
+        row = db.get(MaternalRecord, record_id)
+        assert row is not None
+        assert row.high_risk is True
+        assert row.risk_factors == "妊娠期高血压可能", f"因素只记一条，实际：{row.risk_factors!r}"
+
+
 def test_处方审核条件更新_八路并发恰一路审到(pg_engine):
     """`prescriptions._apply_review` 的 PG 直测：八位药师同时审同一张待审处方，恰一路成功。
 

@@ -1,10 +1,13 @@
 """㉔妇幼保健业务协同：孕产妇建册/高危管理/产检/产后访视/分娩记录，
 儿童保健档案与访视、新生儿疾病筛查、高危儿管理，婚前/孕前/妇女保健与避孕节育记录。"""
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from ..datetypes import DateStr
-from ..concurrency import append_text, insert_if_absent
+from ..concurrency import append_text, appended_text, insert_if_absent
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
@@ -21,9 +24,26 @@ from ..models import (
     User,
     WomenHealthRecord,
 )
-from sqlalchemy import func
+from sqlalchemy import func, update
 
 router = APIRouter(prefix="/api/maternal", tags=["妇幼保健"], dependencies=[Depends(get_current_user)])
+
+
+def _mark_high_risk(db: Session, model, obj_id: int, col: str, factor: str) -> bool:
+    """首次标高危并追加风险因素，判定与写入压在**同一条 UPDATE** 里；返回本次是否标上。
+
+    旧写法 `if not obj.high_risk: obj.high_risk = True; 追加因素` 是 check-then-act：两次
+    高血压产检并发到达，都读到 high_risk=False，都追加——追加本身原子了，"只记第一次"
+    这条不变式照样守不住（/review 指出）。`WHERE high_risk = false` 让第二路 rowcount=0，
+    档案上只留一条"妊娠期高血压可能"。
+    """
+    column = getattr(model, col)
+    marked = cast(CursorResult, db.execute(
+        update(model)
+        .where(model.id == obj_id, model.high_risk.is_(False))
+        .values(high_risk=True, **{col: appended_text(column, factor)})
+    ))
+    return bool(marked.rowcount)
 
 
 class MaternalCreate(BaseModel):
@@ -120,11 +140,10 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
     if body.bp:
         try:
             sbp = float(body.bp.split("/")[0])
-            if sbp >= 140 and not record.high_risk:
-                record.high_risk = True
-                # 风险因素是追加不是覆写：拼接下沉到 SQL（concurrency.append_text），
+            if sbp >= 140:
+                # 首次标高危 + 追加风险因素压在一条条件 UPDATE 里：判定不留在 Python 侧，
                 # 与同时落下的产前筛查风险因素两笔都留下，而不是后写的盖掉先写的。
-                append_text(db, MaternalRecord, record_id, "risk_factors", "妊娠期高血压可能")
+                _mark_high_risk(db, MaternalRecord, record_id, "risk_factors", "妊娠期高血压可能")
         except ValueError:
             pass
     db.add(visit)
@@ -325,9 +344,8 @@ def add_screening(child_id: int, body: ScreeningCreate, db: Session = Depends(ge
     if child is None:
         raise HTTPException(status_code=404, detail="儿童档案不存在")
     screening = NewbornScreening(child_id=child_id, **body.model_dump())
-    if body.result == "abnormal" and not child.high_risk:
-        child.high_risk = True
-        append_text(db, ChildRecord, child_id, "risk_note", f"{_SCREEN_ITEM_NAMES[body.item]}阳性/可疑")
+    if body.result == "abnormal":
+        _mark_high_risk(db, ChildRecord, child_id, "risk_note", f"{_SCREEN_ITEM_NAMES[body.item]}阳性/可疑")
     db.add(screening)
     db.commit()
     return {

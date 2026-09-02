@@ -385,8 +385,12 @@ def test_召回两次留痕_两条联系记录都在(client, admin, world):
 def test_八处修法不得被拆掉_静态钉():
     """三种修法各自的形状必须还在源码里：谁把它改回 `obj.col = f(obj.col, x)`，这里先红。"""
     maternal = (APP / "routers" / "maternal.py").read_text(encoding="utf-8")
-    assert maternal.count('append_text(db, MaternalRecord, ') == 2, "产检高血压 + 产前筛查两处风险因素追加"
-    assert maternal.count('append_text(db, ChildRecord, ') == 1, "新筛异常风险备注追加"
+    assert maternal.count('append_text(db, MaternalRecord, ') == 1, "产前筛查风险因素追加（无守卫，纯追加）"
+    # 产检高血压 / 新筛异常带"只记第一次"守卫：判定必须压进同一条 UPDATE 的 WHERE 里，
+    # 留在 Python 侧的 `if not x.high_risk` 是 check-then-act（/review 指出）
+    assert maternal.count('_mark_high_risk(db, MaternalRecord, ') == 1
+    assert maternal.count('_mark_high_risk(db, ChildRecord, ') == 1
+    assert "model.high_risk.is_(False)" in maternal and "appended_text(column, factor)" in maternal
 
     prescriptions = (APP / "routers" / "prescriptions.py").read_text(encoding="utf-8")
     assert "update(Prescription)" in prescriptions

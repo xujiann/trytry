@@ -294,7 +294,7 @@ def require_month(period: str) -> str:
     进了 `strftime("%Y-%m") == period` 的过滤就是一个永远为空、却不报错的结果集。
     形状不对沿用原文案；月份不存在给出新的一句。
     """
-    if not datetypes.MONTH_SHAPE.match(period):
+    if not datetypes.MONTH_SHAPE.fullmatch(period):
         raise HTTPException(status_code=422, detail="period 格式须为 YYYY-MM")
     try:
         return datetypes.check_month(period)

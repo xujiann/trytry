@@ -67,11 +67,23 @@ def test_真源放行合法月份(period):
 @pytest.mark.parametrize(
     "period",
     ["2026-13", "2026-00", "2026-1", "202601", "2026-01-01", "2026", "", "0000-01",
-     "２０２６-０１", "2026-1a", " 2026-01", "2026-01 "],
+     "２０２６-０１", "2026-1a", " 2026-01", "2026-01 ", "2026-01\n"],
 )
 def test_真源拒绝非法或不存在的月份(period):
     with pytest.raises(ValidationError):
         _Probe(period=period)
+
+
+def test_末尾换行按形状错报_不是按月份不存在报():
+    """`$` 会放过末尾一个换行，`match` 就先过了形状、再被日历以"月份不存在"拒掉——
+    文案对不上真正的毛病（/review 指出）。真源与查询参数形态都要 `fullmatch`。"""
+    from fastapi import HTTPException
+
+    with pytest.raises(ValueError, match="格式"):
+        datetypes.check_month("2026-12\n")
+    with pytest.raises(HTTPException) as exc:
+        require_month("2026-12\n")
+    assert exc.value.detail == "period 格式须为 YYYY-MM"
 
 
 def test_真源不是纯正则_日历校验在(monkeypatch):

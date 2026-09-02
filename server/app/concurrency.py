@@ -227,28 +227,20 @@ def claim_quota(db: Session, model, obj_id: int, used_col: str, limit_col: str, 
     return bool(claimed.rowcount)
 
 
-def appended_text(
-    column, text: str, sep: str = "；", max_len: int | None = None
-) -> ColumnElement[Any]:
+def appended_text(column, text: str, sep: str = "；") -> ColumnElement[Any]:
     """"在 column 末尾追加 text"的 SQL 表达式：空/NULL 时不带分隔符，否则 `col || sep || text`。
 
-    给需要把追加与别的条件压进**同一条 UPDATE** 的调用方（处方审核：状态迁移与
-    意见追加要在同一条带状态条件的 UPDATE 里，见 `prescriptions._apply_review`）；
-    只是追加一列的直接用 `append_text`。`max_len` 对应旧写法末尾的 `[:n]`（`substr`）。
+    给需要把追加与别的条件压进**同一条 UPDATE** 的调用方（处方审核：状态迁移与意见追加
+    要在同一条带状态条件的 UPDATE 里，见 `prescriptions._apply_review`；首次标高危 +
+    追加风险因素，见 `maternal._mark_high_risk`）；只是追加一列的直接用 `append_text`。
     """
-    expr: ColumnElement[Any] = case(
+    return case(
         (func.coalesce(column, "") == "", literal(text)),
         else_=column + sep + literal(text),
     )
-    if max_len is not None:
-        expr = func.substr(expr, 1, max_len)
-    return expr
 
 
-def append_text(
-    db: Session, model, obj_id: int, col: str, text: str,
-    sep: str = "；", max_len: int | None = None,
-) -> None:
+def append_text(db: Session, model, obj_id: int, col: str, text: str, sep: str = "；") -> None:
     """原子追加字符串：`UPDATE ... SET col = col || sep || :text WHERE id = :id`。
 
     替代 `obj.col = (obj.col + sep if obj.col else "") + text`。那句同 `add_amount`
@@ -257,14 +249,17 @@ def append_text(
     一项，而两笔的日志看上去都成功了。拼接下沉到 SQL 里由行锁排队，两笔都留下
     （先后由谁先拿到行锁决定）。
 
+    **追加之外还有判定的，别用这条**：追加本身原子了，外面包一层
+    `if not obj.flag:` 照样是 check-then-act（两路都读到 False、都追加）。把判定压进
+    同一条 UPDATE 的 WHERE 里，用 `appended_text` 自己拼语句（范式见
+    `maternal._mark_high_risk` / `prescriptions._apply_review`）。
+
     调用方随后仍要 `db.commit()`；要读回新值请在提交后 `db.refresh(obj)`——
     这条 UPDATE 走的是 Core，会话里那个对象仍是旧值。
     """
     column = getattr(model, col)
     db.execute(
-        update(model)
-        .where(model.id == obj_id)
-        .values(**{col: appended_text(column, text, sep, max_len)})
+        update(model).where(model.id == obj_id).values(**{col: appended_text(column, text, sep)})
     )
 
 
