@@ -103,7 +103,7 @@ server/app/
   - **状态**：裸字符串，不用 Enum；取值范围写在列注释与路由 `pattern` 里。
   - **长文本**：`String(N)`（无 Text 类型），注意 1024 上限。
 - **表命名**：与所在业务域一致；spd 表一律 `spd_` 前缀。
-- **PII**：`id_card`/`phone`（含 `resident_accounts.phone`）已支持**列加密存储**（`app/pii.py`，SM4-CTR + HMAC 检索索引，开关 `MEDPLAT_PII_ENCRYPTION_ENABLED` 默认关；开启前须先跑 `scripts/pii_encrypt_backfill.py`）。**等值检索一律走 `pii_filter`、索引列比对走 `pii_index_match`**——裸写 `Model.col == v` 在开态恒空且不报错，由 `tests/test_pii_query_point_guard.py` 强制（加密列清单从列类型推导，新增即自动纳入）。出口一律经 `privacy.py` 脱敏，别在日志/响应里绕过。
+- **PII**：`id_card`/`phone`（含 `resident_accounts.phone`）已支持**列加密存储**（`app/pii.py`，SM4-CTR + HMAC 检索索引，开关 `MEDPLAT_PII_ENCRYPTION_ENABLED` 默认关；开启前须先跑 `scripts/pii_encrypt_backfill.py`）。**等值检索一律走 `pii_filter`、索引列比对走 `pii_index_match`**——裸写 `Model.col == v` 在开态恒空且不报错，由 `tests/test_pii_query_point_guard.py` 强制（加密列清单从列类型推导，新增即自动纳入）。出口一律经 `privacy.py` 脱敏，别在日志/响应里绕过——响应侧由 `tests/test_privacy_egress_guard.py` 强制：响应模型含 `id_card`/`phone` 的端点必须（直接或经帮手）走 `desensitize`/`mask_*`，业务必需明文的登记进 `ACCEPTED_PLAINTEXT_EGRESS` 并写理由（只减不增）。
 - 种子数据一律**幂等"只增不改"**（查已有 code 再 `add`），不要写会覆盖现场配置的种子。
 - **迁移不得静默改动存量业务数据。** 迁移可以改结构，不可以替人做业务决定——迁移里的
   `UPDATE`/`DELETE` 不经过应用层，不留 `AuditLog`，出事后连"改了谁"都查不回来

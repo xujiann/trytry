@@ -63,10 +63,14 @@ def _generate_ehc_no(db: Session) -> str:
     # L-10 整改：建档纳入角色矩阵（经办/医师/公卫），药师/管理层不建档
     dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
 )
-def register_patient(body: PatientCreate, db: Session = Depends(get_db)):
+def register_patient(
+    body: PatientCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     # 主索引幂等：同一身份证号返回既有档案，不重复建档（并发竞态由唯一约束+重查兜底）
     patient, _created = create_patient_idempotent(db, body.model_dump())
-    return patient
+    # 出口脱敏（H1）：幂等命中时返回的是**别人录入的**那份档案——电话不是本次请求方
+    # 提供的信息。原样返回，一个只知道证件号的账号借"建档"就能把号码套出来。
+    return desensitize(patient, user)
 
 
 @router.get("", response_model=list[PatientOut])
