@@ -99,7 +99,7 @@ server/app/
 - 每个迁移**必须实现 `downgrade()`**（当前 52/52 全部实现，保持这个纪录）。
 - 类型约定（照抄现状，别自创）：
   - **金额**：一律用 `Money`（`= Numeric(14,2, asdecimal=False)`，`models.py:44`）。**禁止用 Float 存金额。**
-  - **日期**：`String(10)`（配 `datetypes.DateStr`/`OptionalDateStr` 做入参校验）。**时间戳**：`DateTime` + `utcnow()`（naive UTC）。
+  - **日期**：`String(10)`（配 `datetypes.DateStr`/`OptionalDateStr` 做入参校验）。**月度期间** `YYYY-MM`：body 字段用 `datetypes.PeriodStr`、查询参数用 `deps.require_month`，别再写月份正则（`tests/test_periodstr_single_source.py` 与 `test_datestr_single_source.py` 分别盯着两种形状）。**时间戳**：`DateTime` + `utcnow()`（naive UTC）。
   - **状态**：裸字符串，不用 Enum；取值范围写在列注释与路由 `pattern` 里。
   - **长文本**：`String(N)`（无 Text 类型），注意 1024 上限。
 - **表命名**：与所在业务域一致；spd 表一律 `spd_` 前缀。

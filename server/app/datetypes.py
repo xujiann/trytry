@@ -55,3 +55,37 @@ def _optional(value: object) -> object:
 DateStr = Annotated[str, BeforeValidator(_required)]
 #: 可空日期，空串表示未填；非空则同样做日历校验
 OptionalDateStr = Annotated[str, BeforeValidator(_optional)]
+
+
+# ---------------------------------------------------------------- 月度期间 YYYY-MM
+#
+# 同一个坑的月度版（P1-34）：财务/薪酬/基金预结的 `period` 与两个报表查询参数各自写着
+# `^\d{4}-\d{2}$`，`2026-13` 照过——入了库就是一条永远对不上任何月份的记账，进了
+# `strftime("%Y-%m") == period` 的过滤就是一个永远为空、却不报错的结果集。
+# 形状用 `[0-9]` 而不是 `\d`：`\d` 认全角数字，`２０２６-１２` 会先过形状再在日历校验里
+# 以一句"月份不存在"被拒，报错文案对不上真正的毛病。
+
+#: 月度期间的形状（唯一真源；`deps.period_bounds` 也从这里取，不另写一份）
+MONTH_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}$")
+
+
+def check_month(value: str) -> str:
+    """校验 `YYYY-MM`：先卡形状，再用日历确认月份存在。非法时抛 ValueError（带人话）。"""
+    if not MONTH_SHAPE.match(value):
+        raise ValueError("期间格式须为 YYYY-MM")
+    try:
+        date.fromisoformat(value + "-01")
+    except ValueError:
+        raise ValueError(f"期间 {value} 不存在（月份须为 01~12）") from None
+    return value
+
+
+def _month_required(value: object) -> object:
+    if not isinstance(value, str):
+        return value  # 交给 pydantic 报类型错
+    return check_month(value)
+
+
+#: 必填月度期间，`YYYY-MM`，做真实日历校验（`2026-13` 不放行）。
+#: 查询参数形态请用 `deps.require_month`（同一校验，报 422）。
+PeriodStr = Annotated[str, BeforeValidator(_month_required)]

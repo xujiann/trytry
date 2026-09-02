@@ -6,9 +6,8 @@
 """
 import csv
 import io
-import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
@@ -16,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_aware
 from ..database import get_db
-from ..deps import require_roles
+from ..deps import require_month, require_roles
 from ..models import (
     Admission,
     ChronicPatient,
@@ -220,8 +219,8 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
     **例外：绩效分列没有"累计"**——绩效评分自 2026-08 起是周期口径
     （见 docs/统计口径对照表.md 第 3 条），缺省即当年。表头已注明分数所属周期。
     """
-    if period is not None and not re.fullmatch(r"\d{4}-\d{2}", period):
-        raise HTTPException(status_code=422, detail="period 格式须为 YYYY-MM")
+    if period is not None:
+        period = require_month(period)  # 形状 + 日历：`2026-13` 不能变成一张全空的月报
     orgs = db.query(Organization).order_by(Organization.id).all()
     # 绩效分跟着报表周期走：其余各列都按 period 过滤，分数列不跟就会出现
     # "本月就诊 30 人次、绩效分却是全年累计"这种一行里两个口径的报表。

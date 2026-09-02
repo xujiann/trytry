@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
+from . import datetypes
 from .clock import now_naive
 from .config import settings
 from .database import get_db
@@ -231,7 +232,8 @@ def resolve_org_scope(
 #: 只认半角数字。`str.isdigit()` 与 `\\d` 都会放行全角（"２０２６"），
 #: 那种值能通过校验却又不是合法年份，最后原样回显给前端。
 _ASCII_YEAR = re.compile(r"[0-9]{4}")
-_ASCII_MONTH = re.compile(r"[0-9]{4}-[0-9]{2}")
+# 月度形状只有 datetypes 一份真源（`test_periodstr_single_source.py` 盯着别处别再写一遍）
+_ASCII_MONTH = datetypes.MONTH_SHAPE
 
 
 def period_bounds(period: str | None) -> tuple[str, date, date]:
@@ -280,6 +282,26 @@ def period_bounds(period: str | None) -> tuple[str, date, date]:
             status_code=422, detail="period 须为 YYYY（年度）或 YYYY-MM（月度）格式"
         ) from None
     return period, start, end
+
+
+def require_month(period: str) -> str:
+    """查询参数形态的 `YYYY-MM` 严格校验，原样返回；非法一律 422。
+
+    body 字段请直接用 `datetypes.PeriodStr`，这条只服务查询参数（FastAPI 对查询参数
+    走不了同一套人话报错，且既有的 422 文案要保持）。与 `month_bounds` 的分工：那条把
+    期间展开成日期区间且**特征化地**宽松（`2026-1` 照收），这条只校验不展开。
+    替代的是各端点手写的"四位-两位"月度正则——正则只管形状不管日历，`2026-13` 照过，
+    进了 `strftime("%Y-%m") == period` 的过滤就是一个永远为空、却不报错的结果集。
+    形状不对沿用原文案；月份不存在给出新的一句。
+    """
+    if not datetypes.MONTH_SHAPE.match(period):
+        raise HTTPException(status_code=422, detail="period 格式须为 YYYY-MM")
+    try:
+        return datetypes.check_month(period)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail=f"period {period} 不存在（月份须为 01~12）"
+        ) from None
 
 
 def month_bounds(period: str) -> tuple[date, date]:

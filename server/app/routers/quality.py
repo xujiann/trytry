@@ -19,7 +19,14 @@ from sqlalchemy.orm import Session
 from ..concurrency import ensure_present, insert_if_absent
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope, row_dict
+from ..deps import (
+    get_current_user,
+    require_admin,
+    require_month,
+    require_roles,
+    resolve_org_scope,
+    row_dict,
+)
 from ..models import (
     Admission,
     AdverseEvent,
@@ -752,8 +759,8 @@ def record_qc_summary(
     user: User = Depends(get_current_user),
 ):
     """全量环节质控统计：按机构/医师的甲乙丙分布与平均分（period=YYYY-MM 过滤）。"""
-    if period is not None and not re.fullmatch(r"\d{4}-\d{2}", period):
-        raise HTTPException(status_code=422, detail="period 格式须为 YYYY-MM")
+    if period is not None:
+        period = require_month(period)  # 形状 + 日历：`2026-13` 不能变成一份全零的质控统计
     q = db.query(MedicalRecord)
     # 质控统计是管理口径：牵头医院要看得到片区的病历质量分布
     q = scope_org_list(db, user, q, MedicalRecord, org_id, stats=True)

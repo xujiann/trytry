@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
 from ..database import get_db
-from ..datetypes import DateStr
+from ..datetypes import DateStr, PeriodStr
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_visible,
@@ -168,7 +168,7 @@ def secondment_stats(db: Session = Depends(get_db)):
 
 class FinanceCreate(BaseModel):
     org_id: int
-    period: str = Field(pattern=r"^\d{4}-\d{2}$")
+    period: PeriodStr
     category: str = Field(pattern="^(income|expense)$")
     item: str = ""
     amount: float = Field(gt=0)
@@ -738,7 +738,7 @@ def list_staff_contracts(employee_id: int | None = None, db: Session = Depends(g
 
 class PayrollCreate(BaseModel):
     employee_id: int
-    period: str = Field(pattern=r"^\d{4}-\d{2}$")
+    period: PeriodStr
     base_salary: float = Field(ge=0)
     perf_bonus: float = Field(default=0, ge=0)
     perf_coefficient: float = Field(default=1.0, ge=0, le=2)
