@@ -367,39 +367,41 @@ async function renderCost() {
     api("/api/cost/allocation-rules")]);
   const unit = orgId ? await api(`/api/cost/unit-cost?period=${period}&org_id=${orgId}`).catch(() => null) : null;
   const deptName = Object.fromEntries(depts.map((d) => [d.id, d.name]));
+  // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 单位成本面板按有无 unit 条件渲染；"期间"进标题时不再自己 esc()——组件转义标题。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>期间与机构</h3>
+    ${panel("期间与机构", `
       <form class="inline" id="cost-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM">
-        <input name="org_id" type="number" value="${orgId || ""}" placeholder="机构ID（算单位成本）"><button>切换</button></form></div>
-    ${unit ? `<div class="panel"><h3>单位成本</h3>${
+        <input name="org_id" type="number" value="${orgId || ""}" placeholder="机构ID（算单位成本）"><button>切换</button></form>`)}
+    ${unit ? panel("单位成本", `${
       table(["总成本", "门诊人次", "占用床日", "门诊成本", "住院成本", "诊次成本", "床日成本"], [unit], (u) =>
         `<tr><td>${u.total_cost.toFixed(2)}</td><td>${u.outpatient_visits}</td><td>${u.occupied_bed_days}</td>
          <td>${u.outpatient_cost.toFixed(2)}</td><td>${u.inpatient_cost.toFixed(2)}</td>
          <td><b>${u.cost_per_visit.toFixed(2)}</b></td><td><b>${u.cost_per_bed_day.toFixed(2)}</b></td></tr>`)}
-      <p class="desc">床日成本分母是实际占用床日，不是床位数×天数——后者是可用床日，混用会把成本算低。</p></div>` : ""}
-    <div class="panel"><h3>归集科室直接成本</h3>
+      <p class="desc">床日成本分母是实际占用床日，不是床位数×天数——后者是可用床日，混用会把成本算低。</p>`) : ""}
+    ${panel("归集科室直接成本", `
       <form class="inline" id="cost-form"><select name="dept_id">${
         depts.map((d) => `<option value="${d.id}">${esc(d.name)}（${d.category}）</option>`).join("")}</select>
         <input name="period" value="${esc(period)}" placeholder="YYYY-MM" required>
         <select name="cost_type">${Object.entries(COST_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <input name="amount" type="number" step="0.01" placeholder="金额" required><button>归集</button></form>
       <p class="msg" id="cost-msg"></p>
-      <p class="desc">同科室同期间同成本项重复提交按覆盖处理——月末成本反复调整是常态。</p></div>
-    <div class="panel"><h3>分摊规则</h3>
+      <p class="desc">同科室同期间同成本项重复提交按覆盖处理——月末成本反复调整是常态。</p>`)}
+    ${panel("分摊规则", `
       <form class="inline" id="alloc-form">
         <select name="from_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
         →<select name="to_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
         <input name="ratio_pct" type="number" step="0.01" placeholder="比例%" required><button>新增规则</button></form>
       ${table(["来源科室", "目标科室", "比例"], rules, (r) =>
         `<tr><td>${esc(deptName[r.from_dept_id] || r.from_dept_id)}</td>
-         <td>${esc(deptName[r.to_dept_id] || r.to_dept_id)}</td><td>${r.ratio_pct}%</td></tr>`)}</div>
-    <div class="panel"><h3>${esc(period)} 科室成本</h3>${
+         <td>${esc(deptName[r.to_dept_id] || r.to_dept_id)}</td><td>${r.ratio_pct}%</td></tr>`)}`)}
+    ${panel(`${period} 科室成本`, `${
       table(["科室", "类别", "直接成本", "分摊转入", "分摊转出", "总成本", "未分摊"], costs, (c) =>
         `<tr><td>${esc(c.dept_name)}</td><td>${esc(c.dept_category)}</td><td>${c.direct_cost.toFixed(2)}</td>
          <td>${c.allocated_in.toFixed(2)}</td><td>${c.allocated_out.toFixed(2)}</td>
          <td><b>${c.total_cost.toFixed(2)}</b></td>
          <td>${c.unallocated_ratio_amount ? `<span class="tag orange">${c.unallocated_ratio_amount.toFixed(2)}</span>` : "—"}</td></tr>`)}
-      ${costs.length ? barChart(costs.map((c) => [c.dept_name, c.total_cost])) : ""}</div>`;
+      ${costs.length ? barChart(costs.map((c) => [c.dept_name, c.total_cost])) : ""}`)}`;
   $("#cost-period").onsubmit = (e) => { e.preventDefault();
     const f = new FormData(e.target);
     localStorage.setItem("medplat_cost_period", f.get("period"));

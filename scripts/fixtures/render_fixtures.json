@@ -1420,5 +1420,637 @@
         }
       ]
     }
+  },
+  "vaccination": {
+    "_why": [
+      "第五批（2026-09-02）：接种页渲染时不调任何接口（四个面板都是表单 + 空结果容器），",
+      "夹具为空 api 是如实的——这页没有可钉的数据行，比对钉的是外壳与表单字节。"
+    ],
+    "fn": "renderVaccination",
+    "api": {}
+  },
+  "tcmheritage": {
+    "_why": [
+      "第五批（2026-09-02）：名老中医医案。master-cases 与 master-cases/stats 共前缀，",
+      "靠比对器的最长前缀匹配分流；草稿行的空字段走 `|| \"—\"` 分支。"
+    ],
+    "fn": "renderTcmHeritage",
+    "api": {
+      "/api/tcm-heritage/master-cases": [
+        {
+          "id": 1,
+          "master_name": "张老<img src=x onerror=alert(1)>",
+          "title": "咳嗽案<b>",
+          "disease": "咳嗽",
+          "syndrome": "痰热壅肺<img src=x onerror=alert(1)>",
+          "treatment_method": "清热化痰",
+          "prescription": "麻杏石甘汤加减<script>alert(1)</script>",
+          "published": true
+        },
+        {
+          "id": 2,
+          "master_name": "李老",
+          "title": "眩晕案",
+          "disease": null,
+          "syndrome": "",
+          "treatment_method": "",
+          "prescription": "",
+          "published": false
+        }
+      ],
+      "/api/tcm-heritage/master-cases/stats": {
+        "masters": [
+          {
+            "master_name": "张老<img src=x onerror=alert(1)>",
+            "total": 3,
+            "published": 2,
+            "diseases": [
+              "咳嗽",
+              "眩晕<b>"
+            ],
+            "successors": [
+              "王传承<img src=x onerror=alert(1)>"
+            ]
+          },
+          {
+            "master_name": "李老",
+            "total": 1,
+            "published": 0,
+            "diseases": [],
+            "successors": []
+          }
+        ]
+      },
+      "/api/tcm-heritage/simulations": [
+        {
+          "title": "胸痹模拟<b>",
+          "category": "internal<img src=x onerror=alert(1)>",
+          "decision_points": [
+            1,
+            2,
+            3
+          ],
+          "total_score": 100,
+          "pass_score": 60
+        }
+      ]
+    }
+  },
+  "drgs": {
+    "_why": [
+      "第五批（2026-09-02）：DRGs。三个统计面板都是条件渲染，夹具让 orgs / mdcs / groups 都非空；",
+      "目录里给一条 mdc/keywords 为 null 的行走 `|| \"—\"` 分支。"
+    ],
+    "fn": "renderDrgs",
+    "api": {
+      "/api/drgs/groups": [
+        {
+          "id": 1,
+          "code": "BR1<b>",
+          "mdc": "MDCB",
+          "name": "急性心梗<img src=x onerror=alert(1)>",
+          "base_weight": 1.35,
+          "keywords": "心肌梗死;心梗",
+          "procedure_keywords": "",
+          "require_procedure": false,
+          "active": true
+        },
+        {
+          "id": 2,
+          "code": "QY",
+          "mdc": null,
+          "name": "未入组",
+          "base_weight": 0.5,
+          "keywords": null,
+          "procedure_keywords": "支架植入<script>alert(2)</script>",
+          "require_procedure": true,
+          "active": false
+        }
+      ],
+      "/api/drgs/stats": {
+        "orgs": [
+          {
+            "org_name": "县医院<img src=x onerror=alert(1)>",
+            "cases": 120,
+            "grouped": 110,
+            "grouped_pct": 91.7,
+            "fallback": 10,
+            "fallback_pct": 8.3,
+            "cmi": 1.12,
+            "avg_cost": 5600.5
+          },
+          {
+            "org_name": "卫生院",
+            "cases": 40,
+            "grouped": 30,
+            "grouped_pct": 75,
+            "fallback": 10,
+            "fallback_pct": 25,
+            "cmi": 0.8,
+            "avg_cost": 2100
+          }
+        ],
+        "mdcs": [
+          {
+            "mdc": "MDCB<b>",
+            "mdc_name": "循环系统<img src=x onerror=alert(1)>",
+            "groups": 5,
+            "cases": 60,
+            "cmi": 1.2,
+            "avg_cost": 6000,
+            "fallback": false
+          },
+          {
+            "mdc": "QY",
+            "mdc_name": "兜底",
+            "groups": 1,
+            "cases": 10,
+            "cmi": 0.5,
+            "avg_cost": 1000,
+            "fallback": true
+          }
+        ],
+        "groups": [
+          {
+            "drg_code": "BR1<b>",
+            "drg_name": "急性心梗<img src=x onerror=alert(1)>",
+            "avg_cost": 7000
+          },
+          {
+            "drg_code": "ER2",
+            "drg_name": "肺炎",
+            "avg_cost": 3000
+          }
+        ]
+      }
+    }
+  },
+  "cost": {
+    "_why": [
+      "第五批（2026-09-02）：科室成本。期间与机构从 localStorage 读，夹具固定成 2026-08 / 机构 1，",
+      "让单位成本面板渲染出来；一条分摊规则指向不存在的科室 99，走 `|| r.to_dept_id` 分支。"
+    ],
+    "fn": "renderCost",
+    "localStorage": {
+      "medplat_cost_period": "2026-08",
+      "medplat_cost_org": "1"
+    },
+    "api": {
+      "/api/mgmt/departments": [
+        {
+          "id": 1,
+          "name": "内科<img src=x onerror=alert(1)>",
+          "category": "clinical<b>"
+        },
+        {
+          "id": 2,
+          "name": "行政办",
+          "category": "admin"
+        }
+      ],
+      "/api/cost/departments": [
+        {
+          "dept_name": "内科<img src=x onerror=alert(1)>",
+          "dept_category": "clinical<b>",
+          "direct_cost": 12000.5,
+          "allocated_in": 3000,
+          "allocated_out": 0,
+          "total_cost": 15000.5,
+          "unallocated_ratio_amount": 120.25
+        },
+        {
+          "dept_name": "行政办",
+          "dept_category": "admin",
+          "direct_cost": 5000,
+          "allocated_in": 0,
+          "allocated_out": 3000,
+          "total_cost": 2000,
+          "unallocated_ratio_amount": 0
+        }
+      ],
+      "/api/cost/allocation-rules": [
+        {
+          "from_dept_id": 2,
+          "to_dept_id": 1,
+          "ratio_pct": 60
+        },
+        {
+          "from_dept_id": 2,
+          "to_dept_id": 99,
+          "ratio_pct": 40
+        }
+      ],
+      "/api/cost/unit-cost": {
+        "total_cost": 17000.5,
+        "outpatient_visits": 800,
+        "occupied_bed_days": 150,
+        "outpatient_cost": 9000,
+        "inpatient_cost": 8000.5,
+        "cost_per_visit": 11.25,
+        "cost_per_bed_day": 53.3367
+      }
+    }
+  },
+  "spdadmin": {
+    "_why": [
+      "第六批（2026-09-02）：慢专病运行中枢。提醒面板是条件渲染，夹具让 overdue_tasks 非零；",
+      "页面尾部还会拉 /api/spd/meta 建规则编辑器，夹具要给 fields/operators，否则渲染函数在 innerHTML 之后抛错。"
+    ],
+    "fn": "renderSpdAdmin",
+    "api": {
+      "/api/spd/workbench/admin": {
+        "alerts": {
+          "overdue_tasks": 3,
+          "overdue_followups": 2,
+          "pending_review_screenings": 1,
+          "pending_applies": 4,
+          "pending_migrations": 1,
+          "swept": {
+            "overdue": 3,
+            "escalated": 1
+          }
+        },
+        "enrollment": {
+          "enrolled": 70,
+          "high_risk": 9,
+          "new_this_month": 5
+        },
+        "tasks": {
+          "open": 12,
+          "overdue": 3
+        },
+        "parallel_tracks": {
+          "chronic": {
+            "programs": 2,
+            "enrolled": 50
+          },
+          "specialty": {
+            "programs": 1,
+            "enrolled": 20
+          }
+        },
+        "config_health": {
+          "teams": 3,
+          "village_doctors": 8,
+          "active_programs": 2,
+          "programs": 3,
+          "published_paths": 2,
+          "draft_paths": 1,
+          "published_scales": 4,
+          "programs_without_rules": [
+            "ckd<img src=x onerror=alert(1)>"
+          ]
+        },
+        "data_sources": {
+          "total": 3,
+          "failed": 1,
+          "delayed": 1,
+          "stale_over_24h": 1,
+          "avg_success_rate": 92.5
+        }
+      },
+      "/api/spd/catalog": {
+        "programs": [
+          {
+            "code": "hyp",
+            "name": "高血压<img src=x onerror=alert(1)>",
+            "category": "chronic",
+            "version": "v2<b>",
+            "stages": [
+              {
+                "code": "s1"
+              }
+            ],
+            "active": true
+          },
+          {
+            "code": "ckd<img src=x onerror=alert(1)>",
+            "name": "慢性肾病",
+            "category": "specialty",
+            "version": null,
+            "stages": [],
+            "active": false
+          }
+        ],
+        "teams": [],
+        "scales": [],
+        "centers": [],
+        "path_templates": []
+      },
+      "/api/spd/data-sources": [
+        {
+          "code": "his<b>",
+          "name": "HIS 就诊<img src=x onerror=alert(1)>",
+          "source_type": "his",
+          "freq_minutes": 30,
+          "last_sync_at": "2026-09-02T07:30:00",
+          "last_rows": 120,
+          "last_latency_ms": 350,
+          "success_rate": 99.0,
+          "status": "running"
+        },
+        {
+          "code": "lis",
+          "name": "LIS 检验",
+          "source_type": "lis<img src=x onerror=alert(1)>",
+          "freq_minutes": 60,
+          "last_sync_at": null,
+          "last_rows": 0,
+          "last_latency_ms": 0,
+          "success_rate": 80.0,
+          "status": "delayed"
+        },
+        {
+          "code": "pacs",
+          "name": "PACS",
+          "source_type": "pacs",
+          "freq_minutes": 120,
+          "last_sync_at": "2026-08-30T01:00:00",
+          "last_rows": 5,
+          "last_latency_ms": 9000,
+          "success_rate": 40.0,
+          "status": "failed"
+        }
+      ],
+      "/api/spd/meta": {
+        "fields": [
+          {
+            "key": "age",
+            "label": "年龄"
+          }
+        ],
+        "operators": [
+          {
+            "key": ">=",
+            "label": "≥"
+          }
+        ]
+      }
+    }
+  },
+  "surveillance": {
+    "_why": [
+      "第六批（2026-09-02）：症候群 / 病原监测。标题里带 alerts.window.days 动态值；",
+      "readiness 的 below_min / expired 两个嵌套数组各给一条，走 span 拼接分支。"
+    ],
+    "fn": "renderSurveillance",
+    "api": {
+      "/api/surveillance/syndromes": [
+        {
+          "org_id": 2,
+          "syndrome_name": "发热<img src=x onerror=alert(1)>",
+          "case_count": 12,
+          "threshold": 10,
+          "record_date": "2026-09-01<b>",
+          "alert": true
+        },
+        {
+          "org_id": 3,
+          "syndrome_name": "腹泻",
+          "case_count": 2,
+          "threshold": 0,
+          "record_date": "2026-09-01",
+          "alert": false
+        }
+      ],
+      "/api/surveillance/pathogens": [
+        {
+          "org_id": 2,
+          "pathogen_name": "甲流<img src=x onerror=alert(1)>",
+          "specimen_type": "咽拭子<b>",
+          "tested_count": 20,
+          "positive_count": 6,
+          "positive_rate_pct": 30.0,
+          "record_date": "2026-09-01"
+        },
+        {
+          "org_id": 3,
+          "pathogen_name": "诺如",
+          "specimen_type": null,
+          "tested_count": 0,
+          "positive_count": 0,
+          "positive_rate_pct": null,
+          "record_date": "2026-08-31"
+        }
+      ],
+      "/api/surveillance/alerts": {
+        "window": {
+          "days": 7
+        },
+        "syndrome_alerts": [
+          {
+            "org_id": 2,
+            "syndrome_name": "发热<img src=x onerror=alert(1)>",
+            "case_count": 12,
+            "threshold": 10,
+            "record_date": "2026-09-01"
+          }
+        ],
+        "pathogen_alerts": [
+          {
+            "org_id": 2,
+            "pathogen_name": "甲流<img src=x onerror=alert(1)>",
+            "specimen_type": null,
+            "positive_count": 6,
+            "tested_count": 20,
+            "positive_rate_pct": 30.0
+          }
+        ],
+        "caliber": {
+          "pathogen": "阳性率较前一窗口抬升≥50%<img src=x onerror=alert(1)>"
+        }
+      },
+      "/api/surveillance/resources/readiness": {
+        "caliber": "低于下限或已过期即计入<img src=x onerror=alert(1)>",
+        "orgs": [
+          {
+            "org_id": 2,
+            "org_name": "县医院<img src=x onerror=alert(1)>",
+            "total": 5,
+            "below_min": [
+              {
+                "name": "N95<b>",
+                "quantity": 10,
+                "min_quantity": 50
+              }
+            ],
+            "expired": [
+              {
+                "name": "消毒液<img src=x onerror=alert(1)>",
+                "expire_date": "2026-08-01"
+              }
+            ]
+          },
+          {
+            "org_id": 3,
+            "org_name": null,
+            "total": 1,
+            "below_min": [],
+            "expired": []
+          }
+        ]
+      }
+    }
+  },
+  "resources": {
+    "_why": [
+      "第六批（2026-09-02）：通用资源。/api/resources 是 catalog 与 match/slots 的前缀，靠最长前缀匹配分流；",
+      "统一视图给一条 available 为 null 的行走 \"—\" 分支。"
+    ],
+    "fn": "renderResources",
+    "api": {
+      "/api/resources": [
+        {
+          "id": 1,
+          "code": "MR-01<b>",
+          "name": "大会议室<img src=x onerror=alert(1)>",
+          "resource_type_name": "会议室",
+          "capacity": 30,
+          "unit": "人",
+          "location": "3 楼",
+          "status": "published",
+          "status_name": "已发布",
+          "withdraw_reason": ""
+        },
+        {
+          "id": 2,
+          "code": "EQ-02",
+          "name": "移动 DR",
+          "resource_type_name": "通用设备<img src=x onerror=alert(1)>",
+          "capacity": 1,
+          "unit": "台",
+          "location": null,
+          "status": "draft",
+          "status_name": "草稿<b>",
+          "withdraw_reason": "上次撤回：维修<img src=x onerror=alert(1)>"
+        }
+      ],
+      "/api/resources/catalog": {
+        "by_kind": {
+          "会议室<img src=x onerror=alert(1)>": {
+            "usable": 1,
+            "total": 2
+          },
+          "号源": {
+            "usable": 30,
+            "total": 40
+          }
+        },
+        "caliber": "可用量按当日剩余计算<img src=x onerror=alert(1)>",
+        "items": [
+          {
+            "kind_name": "号源<b>",
+            "name": "内科普通号<img src=x onerror=alert(1)>",
+            "detail": "2026-09-03 上午",
+            "available": 12,
+            "unit": "个",
+            "usable": true
+          },
+          {
+            "kind_name": "手术间",
+            "name": "OR-1",
+            "detail": null,
+            "available": null,
+            "unit": "",
+            "usable": false
+          }
+        ]
+      },
+      "/api/resources/match/slots": {
+        "caliber": "未来 14 天，按机构汇总<img src=x onerror=alert(1)>",
+        "candidates": [
+          {
+            "org_id": 2,
+            "org_name": "县医院<img src=x onerror=alert(1)>",
+            "earliest": "2026-09-03",
+            "remaining_total": 25,
+            "slots": [
+              {
+                "slot_date": "2026-09-03",
+                "slot_time": "08:00",
+                "resource_name": "内科<img src=x onerror=alert(1)>",
+                "remaining": 5
+              }
+            ]
+          },
+          {
+            "org_id": 3,
+            "org_name": null,
+            "earliest": "2026-09-04",
+            "remaining_total": 3,
+            "slots": []
+          }
+        ]
+      }
+    }
+  },
+  "insurance": {
+    "_why": [
+      "第六批（2026-09-02）：医保。双通道审核按钮按角色显示，夹具把角色固定成 admin；",
+      "特病申报状态字面量原样裸插（后端枚举），夹具给一条带载荷的状态验证现状。"
+    ],
+    "fn": "renderInsurance",
+    "localStorage": {
+      "medplat_role": "admin"
+    },
+    "api": {
+      "/api/insurance/fund-stats": {
+        "insurance_pay_total": 123456.78,
+        "local_ratio_pct": 81.2,
+        "grassroots_ratio_pct": 43.5
+      },
+      "/api/insurance/settlements": [
+        {
+          "id": 1,
+          "patient_id": 5,
+          "org_id": 2,
+          "settle_type": "local",
+          "total_amount": 800,
+          "insurance_pay": 560,
+          "self_pay": 240
+        },
+        {
+          "id": 2,
+          "patient_id": 6,
+          "org_id": 3,
+          "settle_type": "remote",
+          "total_amount": 1200.5,
+          "insurance_pay": 900,
+          "self_pay": 300.5
+        }
+      ],
+      "/api/insurance/special-diseases": [
+        {
+          "id": 1,
+          "patient_id": 5,
+          "disease_name": "尿毒症<img src=x onerror=alert(1)>",
+          "status": "applied"
+        },
+        {
+          "id": 2,
+          "patient_id": 6,
+          "disease_name": "恶性肿瘤",
+          "status": "approved<b>"
+        }
+      ],
+      "/api/insurance/dual-channel": [
+        {
+          "id": 1,
+          "patient_id": 5,
+          "drug_name": "靶向药<img src=x onerror=alert(1)>",
+          "reason": "指南推荐<b>",
+          "status": "pending",
+          "review_comment": ""
+        },
+        {
+          "id": 2,
+          "patient_id": 6,
+          "drug_name": "胰岛素泵",
+          "reason": "",
+          "status": "rejected",
+          "review_comment": "资料不全<img src=x onerror=alert(1)>"
+        }
+      ]
+    }
   }
 }

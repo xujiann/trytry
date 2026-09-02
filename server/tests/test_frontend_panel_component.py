@@ -154,6 +154,16 @@ MIGRATED_PAGES = {
     "renderOaQc": 4,
     "renderInfectious": 3,
     "renderBlood": 4,
+    # 第五批 2026-09-02：接种（渲染时不调接口，夹具 api 为空）/ 名老中医医案 / DRGs / 科室成本
+    "renderVaccination": 4,
+    "renderTcmHeritage": 4,
+    "renderDrgs": 4,
+    "renderCost": 5,                # 标题里的期间不再 esc()：组件转义标题
+    # 第六批 2026-09-02：慢专病运行中枢 / 症候群病原监测 / 通用资源 / 医保
+    "renderSpdAdmin": 5,
+    "renderSurveillance": 4,
+    "renderResources": 4,
+    "renderInsurance": 4,
 }
 MIGRATED = "renderServiceRequests"
 

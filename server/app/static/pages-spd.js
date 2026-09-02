@@ -173,16 +173,19 @@ async function renderSpdAdmin() {
     api("/api/spd/data-sources"),
   ]);
   const a = wb.alerts, cfg = wb.config_health, ds = wb.data_sources;
+  // ADR-0009 第六批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 提醒面板的红色左边框走 `accent`，"有待处理才渲染"的条件仍留在调用点。
   $("#page-body").innerHTML = `
     ${(a.overdue_tasks || a.overdue_followups || a.pending_review_screenings)
-      ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 待处理提醒</h3>
+      ? panel("⚠ 待处理提醒", `
          <p style="font-size:13.5px">
            <span class="tag red" style="margin-right:8px">超期任务 ${a.overdue_tasks}</span>
            <span class="tag red" style="margin-right:8px">超期随访 ${a.overdue_followups}</span>
            <span class="tag orange" style="margin-right:8px">待复核筛查 ${a.pending_review_screenings}</span>
            <span class="tag orange" style="margin-right:8px">待受理申请 ${a.pending_applies}</span>
            <span class="tag orange">待确认迁出 ${a.pending_migrations}</span></p>
-         <p class="desc" style="font-size:12.5px">本次刷新已扫描并置超期 ${a.swept.overdue} 条、升级 ${a.swept.escalated} 条</p></div>`
+         <p class="desc" style="font-size:12.5px">本次刷新已扫描并置超期 ${a.swept.overdue} 条、升级 ${a.swept.escalated} 条</p>`,
+        { accent: "#c62828" })
       : ""}
     ${spdCards([
       ["在管患者", wb.enrollment.enrolled],
@@ -195,20 +198,20 @@ async function renderSpdAdmin() {
       ["服务团队", cfg.teams],
       ["村医账号", cfg.village_doctors],
     ])}
-    <div class="panel"><h3>慢病 / 专病并行运行（共用底座，分别统计）</h3>
-      ${table(["业务线", "病种数", "在管人数"], [
+    ${panel("慢病 / 专病并行运行（共用底座，分别统计）",
+      table(["业务线", "病种数", "在管人数"], [
         ["慢病管理", wb.parallel_tracks.chronic.programs, wb.parallel_tracks.chronic.enrolled],
         ["专病管理", wb.parallel_tracks.specialty.programs, wb.parallel_tracks.specialty.enrolled],
-      ], (r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`)}</div>
-    <div class="panel"><h3>配置完备度</h3>
-      ${table(["配置项", "数量", "说明"], [
+      ], (r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`))}
+    ${panel("配置完备度",
+      table(["配置项", "数量", "说明"], [
         ["专病档案（启用/全部）", `${cfg.active_programs}/${cfg.programs}`, "病种定义与纳入排除规则"],
         ["已发布路径", cfg.published_paths, `草稿 ${cfg.draft_paths} 个`],
         ["已发布量表", cfg.published_scales, "风险/阶段/康复/筛查"],
         ["未配纳入规则的病种", (cfg.programs_without_rules || []).join("、") || "无",
           "缺规则则无法自动识别患者"],
-      ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`)}</div>
-    <div class="panel"><h3>专病档案配置</h3>
+      ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`))}
+    ${panel("专病档案配置", `
       <form class="inline" id="spd-program-form">
         <input name="code" placeholder="病种编码" required>
         <input name="name" placeholder="病种名称" required>
@@ -230,8 +233,8 @@ async function renderSpdAdmin() {
          <td>${esc(p.version || "")}</td><td>${(p.stages || []).length}</td>
          <td>${(cfg.programs_without_rules || []).includes(p.code)
             ? '<span class="tag red">未配置</span>' : '<span class="tag green">已配置</span>'}</td>
-         <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}</div>
-    <div class="panel"><h3>数据源接入与运行监控</h3>
+         <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}`)}
+    ${panel("数据源接入与运行监控", `
       <p class="desc">成功率按最近 100 次同步计算；超过 24 小时未同步计入陈旧</p>
       ${spdCards([["数据源", ds.total], ["异常", ds.failed, ds.failed > 0],
                   ["延迟", ds.delayed, ds.delayed > 0], ["24h未同步", ds.stale_over_24h, ds.stale_over_24h > 0],
@@ -243,7 +246,7 @@ async function renderSpdAdmin() {
          <td>${s.last_rows}</td><td>${s.last_latency_ms}</td><td>${s.success_rate}%</td>
          <td>${s.status === "running" ? '<span class="tag green">正常</span>'
             : s.status === "delayed" ? '<span class="tag orange">延迟</span>'
-            : '<span class="tag red">异常</span>'}</td></tr>`)}</div>`;
+            : '<span class="tag red">异常</span>'}</td></tr>`)}`)}`;
   // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的两个规则编辑器，提前挂会把窗口期提交从
   // 「兜底无效」变成「TypeError」，非零行为差；窗口期由 shared.js 的 document 层兜底护住。
   const meta = await spdMeta();

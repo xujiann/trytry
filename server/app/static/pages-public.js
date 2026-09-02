@@ -70,26 +70,28 @@ async function renderEmTimeline() {
 async function renderDrgs() {
   $("#page-desc").textContent = "DRGs 分析：62 组目录（多关键词 + 主手术入组，未匹配落 QY）、机构 CMI、MDC 汇总";
   const [groups, stats] = await Promise.all([api("/api/drgs/groups"), api("/api/drgs/stats")]);
+  // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 三个统计面板"有数据才渲染"，条件仍留在调用点。
   $("#page-body").innerHTML = `
-    ${stats.orgs.length ? `<div class="panel"><h3>机构 CMI 对比（病例组合指数 = Σ权重 / 正式入组例数，QY 兜底组不计入）</h3>${
+    ${stats.orgs.length ? panel("机构 CMI 对比（病例组合指数 = Σ权重 / 正式入组例数，QY 兜底组不计入）",
       table(["机构", "出院病例", "正式入组", "入组率", "QY兜底", "兜底率", "CMI", "均次费用"], stats.orgs, (o) =>
         `<tr><td>${esc(o.org_name)}</td><td>${o.cases}</td><td>${o.grouped}</td>
          <td>${o.grouped_pct}%</td><td>${o.fallback}</td>
          <td><span class="tag ${o.fallback_pct > 10 ? "red" : "green"}">${o.fallback_pct}%</span></td>
-         <td><b>${o.cmi}</b></td><td>${o.avg_cost} 元</td></tr>`)}</div>` : ""}
-    ${(stats.mdcs || []).length ? `<div class="panel"><h3>按 MDC（主要诊断大类）汇总</h3>${
+         <td><b>${o.cmi}</b></td><td>${o.avg_cost} 元</td></tr>`)) : ""}
+    ${(stats.mdcs || []).length ? panel("按 MDC（主要诊断大类）汇总",
       table(["MDC", "名称", "分组数", "例数", "CMI", "均次费用"], stats.mdcs, (m) =>
         `<tr><td>${esc(m.mdc)}${m.fallback ? ' <span class="tag red">兜底</span>' : ""}</td><td>${esc(m.mdc_name)}</td>
-         <td>${m.groups}</td><td>${m.cases}</td><td>${m.cmi}</td><td>${m.avg_cost} 元</td></tr>`)}</div>` : ""}
-    ${stats.groups.length ? `<div class="panel"><h3>组均费用</h3>${
-      barChart(stats.groups.map((g) => [`${g.drg_code} ${g.drg_name}`, g.avg_cost]), { unit: " 元" })}</div>` : ""}
-    <div class="panel"><h3>分组目录（admin 可调权）</h3><p class="msg" id="drg-msg"></p>${
+         <td>${m.groups}</td><td>${m.cases}</td><td>${m.cmi}</td><td>${m.avg_cost} 元</td></tr>`)) : ""}
+    ${stats.groups.length ? panel("组均费用",
+      barChart(stats.groups.map((g) => [`${g.drg_code} ${g.drg_name}`, g.avg_cost]), { unit: " 元" })) : ""}
+    ${panel("分组目录（admin 可调权）", `<p class="msg" id="drg-msg"></p>${
       table(["编码", "MDC", "名称", "基准权重", "主诊断关键词", "主手术关键词", "状态", "操作"], groups, (g) =>
         `<tr><td>${esc(g.code)}</td><td>${esc(g.mdc) || "—"}</td><td>${esc(g.name)}</td><td>${g.base_weight}</td>
          <td>${esc(g.keywords) || "—"}</td>
          <td>${esc(g.procedure_keywords) || "—"}${g.require_procedure ? ' <span class="tag orange">必须</span>' : ""}</td>
          <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td>
-         <td><button class="btn secondary" data-drg-weight="${g.id}">调权</button></td></tr>`)}</div>`;
+         <td><button class="btn secondary" data-drg-weight="${g.id}">调权</button></td></tr>`)}`)}`;
   $("#page-body").onclick = async (e) => {
     const id = e.target.dataset.drgWeight;
     if (!id) return;

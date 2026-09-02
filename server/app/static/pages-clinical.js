@@ -475,7 +475,7 @@ async function renderInsurance() {
       <div class="card"><div class="label">医保基金支出总额</div><div class="value">${fund.insurance_pay_total}</div></div>
       <div class="card"><div class="label">县域内结算占比</div><div class="value">${fund.local_ratio_pct}%</div></div>
       <div class="card"><div class="label">基层支出占比</div><div class="value">${fund.grassroots_ratio_pct}%</div></div></div>
-    <div class="panel"><h3>结算登记</h3>
+    ${panel("结算登记", `
       <form class="inline" id="ins-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="org_id" type="number" placeholder="机构ID" required>
         <select name="settle_type"><option value="local">本地</option><option value="remote">异地</option></select>
@@ -485,12 +485,12 @@ async function renderInsurance() {
       <h3 style="margin-top:12px">转诊证明 / 特病申报</h3>
       <form class="inline" id="cert-form"><input name="referral_id" type="number" placeholder="转诊记录ID" required><button>签发证明</button></form>
       <form class="inline" id="spec-form"><input name="patient_id" type="number" placeholder="患者ID" required><input name="disease_name" placeholder="病种" required><button>特病申报</button></form>
-      <p class="msg" id="ins-msg"></p></div>
-    <div class="panel"><h3>特病申报队列</h3>${table(["ID", "患者", "病种", "状态", "操作"], apps, (a) =>
+      <p class="msg" id="ins-msg"></p>`)}
+    ${panel("特病申报队列", table(["ID", "患者", "病种", "状态", "操作"], apps, (a) =>
       `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.disease_name)}</td>
        <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${a.status}</span></td>
-       <td>${a.status === "applied" ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`)}</div>
-    <div class="panel"><h3>双通道药品申报（医师/经办申报 → 管理层审核）</h3>
+       <td>${a.status === "applied" ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`))}
+    ${panel("双通道药品申报（医师/经办申报 → 管理层审核）", `
       <form class="inline" id="dual-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="drug_name" placeholder="药品名称" required>
@@ -501,10 +501,10 @@ async function renderInsurance() {
          <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${a.status === "approved" ? "已批准" : a.status === "rejected" ? "已驳回" : "待审核"}</span></td>
          <td>${esc(a.review_comment) || "—"}</td>
          <td>${a.status === "pending" && canReviewDual
-           ? `<button class="btn secondary" data-dualok="${a.id}">批准</button><button class="btn danger" data-dualno="${a.id}">驳回</button>` : "—"}</td></tr>`)}</div>
-    <div class="panel"><h3>结算记录</h3>${table(["ID", "患者", "机构", "类型", "总额", "医保付", "自付"], settlements, (s) =>
+           ? `<button class="btn secondary" data-dualok="${a.id}">批准</button><button class="btn danger" data-dualno="${a.id}">驳回</button>` : "—"}</td></tr>`)}`)}
+    ${panel("结算记录", table(["ID", "患者", "机构", "类型", "总额", "医保付", "自付"], settlements, (s) =>
       `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${s.org_id}</td><td>${s.settle_type === "local" ? "本地" : "异地"}</td>
-       <td>${s.total_amount}</td><td>${s.insurance_pay}</td><td>${s.self_pay}</td></tr>`)}</div>`;
+       <td>${s.total_amount}</td><td>${s.insurance_pay}</td><td>${s.self_pay}</td></tr>`))}`;
   $("#ins-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/settlements", formJson(e.target, ["patient_id", "org_id", "total_amount", "insurance_pay", "self_pay"]), "#ins-msg"); };
   $("#cert-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -691,12 +691,13 @@ async function renderMaternal() {
 
 async function renderVaccination() {
   $("#page-desc").textContent = "接种前综合评估（禁忌硬拦截）、接种登记、禁忌管理";
+  // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>接种前评估</h3>
+    ${panel("接种前评估", `
       <form class="inline" id="vac-check"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="vaccine_code" placeholder="疫苗编码" required><button>评估</button></form>
-      <div id="vac-check-result"></div></div>
-    <div class="panel"><h3>接种登记 / 禁忌登记</h3>
+      <div id="vac-check-result"></div>`)}
+    ${panel("接种登记 / 禁忌登记", `
       <form class="inline" id="vac-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="vaccine_code" placeholder="疫苗编码" required>
         <input name="vaccine_name" placeholder="疫苗名称" required><input name="dose_no" type="number" value="1" min="1" style="min-width:60px">
@@ -706,13 +707,13 @@ async function renderVaccination() {
         <input name="reason" placeholder="禁忌原因" required>
         <select name="contra_type"><option value="permanent">长期禁忌</option><option value="temporary">暂时禁忌</option></select>
         <input name="valid_until" placeholder="有效期末日（暂时禁忌必填）"><button class="btn danger">登记禁忌</button></form>
-      <p class="msg" id="vac-msg"></p></div>
-    <div class="panel"><h3>禁忌清单（可解除）</h3>
+      <p class="msg" id="vac-msg"></p>`)}
+    ${panel("禁忌清单（可解除）", `
       <form class="inline" id="contra-list"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
-      <div id="contra-result"></div></div>
-    <div class="panel"><h3>接种史查询</h3>
+      <div id="contra-result"></div>`)}
+    ${panel("接种史查询", `
       <form class="inline" id="vac-hist"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
-      <div id="vac-hist-result"></div></div>`;
+      <div id="vac-hist-result"></div>`)}`;
   $("#vac-check").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -837,8 +838,9 @@ async function renderSurveillance() {
     api("/api/surveillance/alerts"), api("/api/surveillance/resources/readiness"),
   ]);
   const SYN = { fever: "发热", respiratory: "呼吸道", diarrhea: "腹泻", rash: "皮疹", jaundice: "黄疸", neuro: "脑炎脑膜炎" };
+  // ADR-0009 第六批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>多点触发预警（近 ${alerts.window.days} 天）</h3>
+    ${panel(`多点触发预警（近 ${alerts.window.days} 天）`, `
       <p class="hint">两路信号分列，不做综合评分：症候群异常查接诊，病原阳性抬头查实验室。</p>
       <h4>症候群超阈值</h4>
       ${table(["机构", "症候群", "例数", "阈值", "日期"], alerts.syndrome_alerts, (r) =>
@@ -847,8 +849,8 @@ async function renderSurveillance() {
       ${table(["机构", "病原", "标本", "阳性/送检", "阳性率"], alerts.pathogen_alerts, (r) =>
         `<tr><td>${r.org_id}</td><td>${esc(r.pathogen_name)}</td><td>${esc(r.specimen_type || "—")}</td>` +
         `<td>${r.positive_count}/${r.tested_count}</td><td><b>${r.positive_rate_pct}%</b></td></tr>`)}
-      <p class="hint">口径：${esc(alerts.caliber.pathogen)}</p></div>
-    <div class="panel"><h3>症候群日报</h3>
+      <p class="hint">口径：${esc(alerts.caliber.pathogen)}</p>`)}
+    ${panel("症候群日报", `
       <form class="inline" id="syn-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="syndrome">${Object.entries(SYN).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
@@ -859,8 +861,8 @@ async function renderSurveillance() {
       ${table(["机构", "症候群", "例数", "阈值", "日期", "预警"], syndromes.slice(0, 50), (r) =>
         `<tr><td>${r.org_id}</td><td>${esc(r.syndrome_name)}</td><td>${r.case_count}</td><td>${r.threshold || "不设"}</td>` +
         `<td>${esc(r.record_date)}</td><td>${r.alert ? '<span class="tag danger">超阈值</span>' : "—"}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>病原监测</h3>
+    `)}
+    ${panel("病原监测", `
       <form class="inline" id="pat-form">
         <input name="org_id" type="number" placeholder="机构ID" required><input name="pathogen_name" placeholder="病原名称" required>
         <input name="specimen_type" placeholder="标本类型"><input name="tested_count" type="number" placeholder="送检数" required>
@@ -871,8 +873,8 @@ async function renderSurveillance() {
         `<tr><td>${r.org_id}</td><td>${esc(r.pathogen_name)}</td><td>${esc(r.specimen_type || "—")}</td>` +
         `<td>${r.positive_count}/${r.tested_count}</td><td>${r.positive_rate_pct === null ? "未送检" : r.positive_rate_pct + "%"}</td>` +
         `<td>${esc(r.record_date)}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>应急资源保障</h3>
+    `)}
+    ${panel("应急资源保障", `
       <form class="inline" id="res-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="resource_type"><option value="material">应急物资</option><option value="team">应急队伍</option><option value="equipment">应急装备</option></select>
@@ -886,7 +888,7 @@ async function renderSurveillance() {
         `<tr><td>${esc(o.org_name || o.org_id)}</td><td>${o.total}</td>` +
         `<td>${o.below_min.length ? '<span class="tag danger">' + o.below_min.map((x) => esc(x.name) + `(${x.quantity}/${x.min_quantity})`).join("、") + "</span>" : "—"}</td>` +
         `<td>${o.expired.length ? '<span class="tag warn">' + o.expired.map((x) => esc(x.name) + `(${esc(x.expire_date)})`).join("、") + "</span>" : "—"}</td></tr>`)}
-    </div>`;
+    `)}`;
   $("#syn-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/syndromes", formJson(e.target, ["org_id", "case_count", "threshold"]), "#syn-msg"); };
   $("#pat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/pathogens", formJson(e.target, ["org_id", "tested_count", "positive_count"]), "#pat-msg"); };
   $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/resources", formJson(e.target, ["org_id", "quantity", "min_quantity"]), "#res-msg"); };
@@ -1007,13 +1009,14 @@ async function renderTcmHeritage() {
     api("/api/tcm-heritage/master-cases/stats"),
     api("/api/tcm-heritage/simulations"),
   ]);
+  // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>传承概览</h3>
+    ${panel("传承概览", `
       ${table(["名老中医", "医案数", "已发布", "涉及病种", "传承人"], stats.masters, (m) =>
         `<tr><td>${esc(m.master_name)}</td><td>${m.total}</td><td>${m.published}</td>` +
         `<td>${esc(m.diseases.join("、") || "—")}</td><td>${esc(m.successors.join("、") || "—")}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>医案录入</h3>
+    `)}
+    ${panel("医案录入", `
       <form id="mc-form">
         <div class="inline">
           <input name="master_name" placeholder="名老中医" required><input name="successor_name" placeholder="传承人">
@@ -1023,15 +1026,15 @@ async function renderTcmHeritage() {
           <input name="four_exams" placeholder="四诊摘要" style="min-width:280px">
           <input name="treatment_method" placeholder="治法"><input name="prescription" placeholder="处方" style="min-width:220px">
           <input name="commentary" placeholder="按语" style="min-width:280px"><button>保存草稿</button></div></form>
-      <p class="msg" id="mc-msg"></p></div>
-    <div class="panel"><h3>医案库</h3>
+      <p class="msg" id="mc-msg"></p>`)}
+    ${panel("医案库", `
       <form class="inline" id="mc-search"><input name="keyword" placeholder="搜方药/按语/标题"><button>检索</button></form>
-      <div id="mc-list">${renderCaseTable(cases)}</div></div>
-    <div class="panel"><h3>模拟诊疗病例</h3>
+      <div id="mc-list">${renderCaseTable(cases)}</div>`)}
+    ${panel("模拟诊疗病例", `
       ${table(["标题", "类别", "决策点", "满分", "及格分"], sims, (s) =>
         `<tr><td>${esc(s.title)}</td><td>${esc(s.category)}</td><td>${s.decision_points.length}</td>` +
         `<td>${s.total_score}</td><td>${s.pass_score}</td></tr>`)}
-      <p class="hint">模拟诊疗的作答与评分在医师端 H5 完成；此处仅维护病例。列表刻意不含正确答案。</p></div>`;
+      <p class="hint">模拟诊疗的作答与评分在医师端 H5 完成；此处仅维护病例。列表刻意不含正确答案。</p>`)}`;
   $("#mc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/tcm-heritage/master-cases", formJson(e.target, []), "#mc-msg"); };
   $("#mc-search").onsubmit = async (e) => {
     e.preventDefault();
@@ -1068,7 +1071,7 @@ async function renderResources() {
         `<div class="card"><div class="label">${esc(k)}</div>` +
         `<div class="value">${v.usable}/${v.total}</div></div>`).join("")}
     </div>
-    <div class="panel"><h3>通用资源登记</h3>
+    ${panel("通用资源登记", `
       <p class="hint">只收没有领域表的资源（工勤/后勤/通用设备/会议室）；号源、检查资源、手术间、血制品各有自己的模块。</p>
       <form class="inline" id="rs-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
@@ -1084,27 +1087,27 @@ async function renderResources() {
         `<td>${esc(r.status_name)}${r.withdraw_reason ? "<br><small>" + esc(r.withdraw_reason) + "</small>" : ""}</td>` +
         `<td>${r.status === "published" ? `<button class="btn sm danger" data-withdraw="${r.id}">撤回</button>`
                                         : `<button class="btn sm" data-publish="${r.id}">发布</button>`}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>统一资源视图</h3>
+    `)}
+    ${panel("统一资源视图", `
       <p class="hint">${esc(catalog.caliber)}</p>
       ${table(["类别", "名称", "详情", "可用量", "状态"], catalog.items.slice(0, 100), (i) =>
         `<tr><td>${esc(i.kind_name)}</td><td>${esc(i.name)}</td><td>${esc(i.detail || "—")}</td>` +
         `<td>${i.available === null ? "—" : i.available + esc(i.unit)}</td>` +
         `<td>${i.usable ? '<span class="tag ok">可用</span>' : "不可用"}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>号源撮合（未来 14 天）</h3>
+    `)}
+    ${panel("号源撮合（未来 14 天）", `
       <p class="hint">${esc(slotMatch.caliber)}</p>
       ${table(["机构", "最早可约", "余量合计", "近期号源"], slotMatch.candidates, (c) =>
         `<tr><td>${esc(c.org_name || c.org_id)}</td><td>${esc(c.earliest)}</td><td>${c.remaining_total}</td>` +
         `<td>${c.slots.map((s) => esc(`${s.slot_date} ${s.slot_time} ${s.resource_name}(余${s.remaining})`)).join("；")}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>手术间撮合</h3>
+    `)}
+    ${panel("手术间撮合", `
       <form class="inline" id="or-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="scheduled_date" placeholder="日期 YYYY-MM-DD">
         <input name="start_time" value="08:00" style="min-width:80px"><input name="end_time" value="18:00" style="min-width:80px">
         <button>查空档</button></form>
-      <div id="or-result"></div></div>`;
+      <div id="or-result"></div>`)}`;
   $("#rs-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/resources", formJson(e.target, ["org_id", "capacity"]), "#rs-msg"); };
   $("#or-form").onsubmit = async (e) => {
     e.preventDefault();
