@@ -300,14 +300,16 @@ async function renderEsb() {
           <button class="btn secondary" data-esbpayload="${m.id}">查看载荷</button></td></tr>`;
     });
   };
+  // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 顶部的统计卡片区不是面板，原样保留。
   $("#page-body").innerHTML = `
     <div class="cards">
       <div class="card"><div class="label">接入方</div><div class="value">${stats.totals.endpoints}</div></div>
       <div class="card"><div class="label">消息总量</div><div class="value">${stats.totals.total || 0}</div></div>
       <div class="card"><div class="label">成功率</div><div class="value">${stats.totals.success_rate_pct || 0}%</div></div>
       <div class="card"><div class="label">积压</div><div class="value${stats.totals.backlog ? " warn" : ""}">${stats.totals.backlog || 0}</div></div>
-      <div class="card"><div class="label">死信</div><div class="value${stats.totals.dead ? " warn" : ""}">${stats.totals.dead || 0}</div></div></div>
-    <div class="panel"><h3>接入方注册</h3>
+      <div class="card"><div class="label">死信</div><div class="value${stats.totals.dead ? " warn" : ""}">${stats.totals.dead || 0}</div></div></div>`
+    + panel("接入方注册", `
       <form class="inline" id="esb-ep-form">
         <input name="code" placeholder="接入方编码" required>
         <input name="name" placeholder="名称" required style="min-width:180px">
@@ -321,14 +323,14 @@ async function renderEsb() {
          <td>${esc(e.direction_name)}</td><td>${e.rate_limit_per_min}</td>
          <td>${e.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
          <td><button class="btn secondary" data-esbtoggle="${e.id}" data-active="${e.active ? 1 : 0}">${e.active ? "停用" : "启用"}</button>
-           <button class="btn secondary" data-esbrotate="${e.id}">轮换令牌</button></td></tr>`)}</div>
-    <div class="panel"><h3>消息队列</h3>
+           <button class="btn secondary" data-esbrotate="${e.id}">轮换令牌</button></td></tr>`)}`)
+    + panel("消息队列", `
       <form class="inline" id="esb-msg-filter">
         <select name="status"><option value="">全部状态</option>${Object.entries(ESB_MSG_STATUS).map(([v, t]) => `<option value="${v}">${t[0]}</option>`).join("")}</select>
         <select name="endpoint_id"><option value="">全部接入方</option>${endpoints.map((e) => `<option value="${e.id}">${esc(e.code)}</option>`).join("")}</select>
         <button>查询</button></form>
-      <p class="msg" id="esb-msg"></p><div id="esb-messages"></div></div>
-    <div class="panel"><h3>流程编排（步骤 JSON：transform / validate / route / persist）</h3>
+      <p class="msg" id="esb-msg"></p><div id="esb-messages"></div>`)
+    + panel("流程编排（步骤 JSON：transform / validate / route / persist）", `
       <form id="esb-flow-form">
         <div class="inline"><input name="code" placeholder="流程编码" required>
           <input name="name" placeholder="流程名称" required style="min-width:180px"></div>
@@ -339,14 +341,14 @@ async function renderEsb() {
         `<tr><td><span class="tag">${esc(f.code)}</span></td><td>${esc(f.name)}</td><td>${f.step_count}</td>
          <td style="max-width:320px;font-size:12px">${esc((f.steps || []).map((s) => s.type).join(" → "))}</td>
          <td>${f.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
-         <td><button class="btn secondary" data-esbrun="${esc(f.code)}">对消息执行</button></td></tr>`)}</div>
-    <div class="panel"><h3>接入方统计</h3>
-      ${table(["接入方", "总量", "成功", "死信", "积压", "成功率", "失败率"], stats.by_endpoint, (r) =>
+         <td><button class="btn secondary" data-esbrun="${esc(f.code)}">对消息执行</button></td></tr>`)}`)
+    + panel("接入方统计",
+      table(["接入方", "总量", "成功", "死信", "积压", "成功率", "失败率"], stats.by_endpoint, (r) =>
         `<tr><td><span class="tag">${esc(r.endpoint_code)}</span> ${esc(r.endpoint_name)}</td><td>${r.total}</td>
          <td><span class="tag green">${r.succeeded}</span></td>
          <td>${r.dead ? `<span class="tag red">${r.dead}</span>` : 0}</td>
          <td>${r.backlog ? `<span class="tag orange">${r.backlog}</span>` : 0}</td>
-         <td>${r.success_rate_pct}%</td><td>${r.failure_rate_pct}%</td></tr>`)}</div>`;
+         <td>${r.success_rate_pct}%</td><td>${r.failure_rate_pct}%</td></tr>`));
   $("#esb-msg-filter").onsubmit = async (e) => {
     e.preventDefault();
     try { await drawMessages(); } catch (err) { setMsg("#esb-msg", err.message, false); }

@@ -42,6 +42,15 @@ import pytest
 STATIC = pathlib.Path(__file__).resolve().parent.parent / "app" / "static"
 CORE = (STATIC / "core.js").read_text(encoding="utf-8")
 MGMT = (STATIC / "pages-mgmt.js").read_text(encoding="utf-8")
+#: 第三批起已迁页面不再只在 pages-mgmt.js 里（clinical / public / spd 各有），按函数名找文件。
+SOURCES = {p.name: p.read_text(encoding="utf-8") for p in sorted(STATIC.glob("*.js"))}
+
+
+def _src_for(page: str) -> str:
+    """含 `function <page>(` 定义的那份源码；找不到就报名字，别让 `_fn` 报一个看不懂的 ValueError。"""
+    hits = [name for name, text in SOURCES.items() if f"function {page}(" in text]
+    assert len(hits) == 1, f"{page} 应恰在一个 static/*.js 里定义，实际：{hits}"
+    return SOURCES[hits[0]]
 
 
 def _fn(src: str, name: str) -> str:
@@ -131,13 +140,20 @@ MIGRATED_PAGES = {
     "renderNotifications": 1,
     "renderClinicalIndicators": 2,
     "renderMonitor": 4,
+    # 第三批 2026-09-02：挑的是 render_diff 夹具**已经有**的五页——比对取证零成本，
+    # 也是第一次迁出 pages-mgmt.js（clinical / public / spd 各一到两页）
+    "renderMaterials": 4,
+    "renderMedication": 4,          # 含一处带 accent 的条件面板（供应风险）
+    "renderBilling": 5,
+    "renderEsb": 4,
+    "renderSpdCenter": 5,
 }
 MIGRATED = "renderServiceRequests"
 
 
 @pytest.mark.parametrize("page,count", sorted(MIGRATED_PAGES.items()))
 def test_已迁移的页面不再手写panel外壳(page, count):
-    fn = _code(_fn(MGMT, page))
+    fn = _code(_fn(_src_for(page), page))
     assert '<div class="panel"' not in fn, (
         f"{page} 又出现了手写的 panel 外壳——迁过的页面不要退回去"
     )
@@ -154,7 +170,7 @@ def test_已迁移的页面标题不得重复转义(page):
     转义序列——是**改字节**。迁 `renderMonitor` 时原样保留 `esc(stats.scope)`
     当场被渲染比对器抓到（`本实例进程内&lt;b&gt;` → `本实例进程内&amp;lt;b&amp;gt;`）。
     """
-    for title in _panel_titles(_code(_fn(MGMT, page))):
+    for title in _panel_titles(_code(_fn(_src_for(page), page))):
         assert "esc(" not in title, (
             f"{page} 的 panel() 标题 `{title.strip()[:60]}` 里还留着 esc()——"
             f"组件已经转义过一次了，留着就是转两遍（改字节）"

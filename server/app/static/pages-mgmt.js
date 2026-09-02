@@ -417,16 +417,17 @@ async function renderMaterials() {
   $("#page-desc").textContent = "非药品物资：申请 → 审批 → 合同 → 验收（自动入库流水）；高值耗材一物一码正反向追溯";
   const [purchases, consumables] = await Promise.all([
     api("/api/materials/purchases"), api("/api/materials/consumables")]);
+  // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>提出采购申请</h3>
+    ${panel("提出采购申请", `
       <form class="inline" id="mp-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="dept_id" type="number" placeholder="科室ID">
         <input name="item_name" placeholder="物资名称" required><input name="spec" placeholder="规格">
         <input name="unit" placeholder="单位" value="件"><input name="quantity" type="number" placeholder="数量" required>
         <input name="estimated_price" type="number" step="0.01" placeholder="预估单价">
         <input name="reason" placeholder="事由"><button>提交申请</button></form>
-      <p class="msg" id="mat-msg"></p></div>
-    <div class="panel"><h3>采购流程（${purchases.length}）</h3>${
+      <p class="msg" id="mat-msg"></p>`)}
+    ${panel(`采购流程（${purchases.length}）`,
       table(["ID", "物资", "规格", "数量", "状态", "合同", "已验收", "操作"], purchases, (p) => {
         let ops = "—";
         if (p.status === "requested") ops = `<button class="btn secondary" data-approve="${p.id}">审批</button>`;
@@ -435,8 +436,8 @@ async function renderMaterials() {
         return `<tr><td>${p.id}</td><td>${esc(p.item_name)}</td><td>${esc(p.spec)}</td><td>${p.quantity}${esc(p.unit)}</td>
           <td>${statusTag(PURCHASE_STATUS, p.status)}</td><td>${esc(p.contract_no || "—")}</td>
           <td>${p.received_quantity || "—"}</td><td>${ops}</td></tr>`;
-      })}</div>
-    <div class="panel"><h3>高值耗材登记（一物一码）</h3>
+      }))}
+    ${panel("高值耗材登记（一物一码）", `
       <form class="inline" id="hv-form"><input name="barcode" placeholder="条码" required>
         <input name="name" placeholder="耗材名称" required><input name="spec" placeholder="规格">
         <input name="org_id" type="number" placeholder="机构ID" required>
@@ -444,14 +445,14 @@ async function renderMaterials() {
         <input name="expire_date" placeholder="效期 YYYY-MM-DD">
         <input name="unit_price" type="number" step="0.01" placeholder="单价"><button>入库登记</button></form>
       <form class="inline" id="trace-form"><input name="barcode" placeholder="按条码追溯" required><button>追溯</button></form>
-      <div id="trace-result"></div></div>
-    <div class="panel"><h3>耗材台账（${consumables.length}）</h3>${
+      <div id="trace-result"></div>`)}
+    ${panel(`耗材台账（${consumables.length}）`,
       table(["条码", "名称", "批号", "效期", "状态", "用于患者", "关联手术", "操作"], consumables, (c) => {
         return `<tr><td>${esc(c.barcode)}</td><td>${esc(c.name)}</td><td>${esc(c.batch_no)}</td>
           <td>${esc(c.expire_date)}</td><td>${statusTag(CONSUMABLE_STATUS, c.status)}</td>
           <td>${esc(c.used_patient_name || "—")}</td><td>${esc(c.used_surgery_name || "—")}</td>
           <td>${c.status === "in_stock" ? `<button class="btn secondary" data-use="${c.barcode}">使用登记</button>` : "—"}</td></tr>`;
-      })}</div>`;
+      }))}`;
   $("#mp-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/materials/purchases", formJson(e.target, ["org_id", "dept_id", "quantity", "estimated_price"]), "#mat-msg"); };
   $("#hv-form").onsubmit = (e) => { e.preventDefault();

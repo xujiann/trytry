@@ -376,6 +376,8 @@ async function renderSpdCenter() {
     spdCatalog(),
     api("/api/spd/case-report-tasks"),
   ]);
+  // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 顶部的 spdCards 卡片区不是面板，原样保留。
   $("#page-body").innerHTML = `
     ${spdCards([
       ["我的待办", wb.todo.mine.open], ["全部待办", wb.todo.all.open],
@@ -388,9 +390,8 @@ async function renderSpdCenter() {
       ["在管患者", wb.enrollment.enrolled], ["本月新增", wb.monthly.new_enrollments],
       ["在途转诊", wb.referrals.open],
     ])}
-    <div class="panel"><h3>待办按类型</h3>
-      ${barChart(spdPairs(wb.todo.all.by_type, SPD_TASK_TYPES), { unit: " 条" })}</div>
-    <div class="panel"><h3>目标池分发</h3>
+    ${panel("待办按类型", barChart(spdPairs(wb.todo.all.by_type, SPD_TASK_TYPES), { unit: " 条" }))}
+    ${panel("目标池分发", `
       <p class="desc">按辖区、病种、风险把目标人群分给服务团队；已被认领的患者不会被覆盖</p>
       <form class="inline" id="spd-dist-form">
         <input name="candidate_ids" placeholder="目标池ID，逗号分隔" required style="min-width:220px">
@@ -404,18 +405,16 @@ async function renderSpdCenter() {
         `<tr><td>${c.id}</td><td>${esc(c.patient_name || c.patient_id)}</td>
          <td>${esc(c.program_code)}</td><td>${spdTag(SPD_RISK, c.risk_level)}</td>
          <td>${c.org_id ?? "—"}</td><td>${c.team_id ?? "—"}</td>
-         <td>${c.assigned_user_id ?? "—"}</td><td>${esc(c.reason || "—")}</td></tr>`)}</div>
-    <div class="panel"><h3>生命周期</h3>
-      ${table(["状态", "人数"], [
+         <td>${c.assigned_user_id ?? "—"}</td><td>${esc(c.reason || "—")}</td></tr>`)}`)}
+    ${panel("生命周期", table(["状态", "人数"], [
         ["已排除", wb.lifecycle.excluded], ["已迁出", wb.lifecycle.migrated],
         ["已死亡", wb.lifecycle.dead], ["召回中", wb.lifecycle.recalling],
         ["待确认迁入", wb.lifecycle.pending_migrations],
-      ], (r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td></tr>`)}</div>
-    <div class="panel"><h3>转诊在途</h3>
-      ${barChart(spdPairs(wb.referrals.by_status,
+      ], (r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td></tr>`))}
+    ${panel("转诊在途", barChart(spdPairs(wb.referrals.by_status,
         Object.fromEntries(Object.entries(SPD_REF_STATUS).map(([k, v]) => [k, v[0]]))),
-        { color: "#0a4d78", unit: " 单" })}</div>
-    <div class="panel"><h3>上报任务配置（中心端 #11）</h3>
+        { color: "#0a4d78", unit: " 单" }))}
+    ${panel("上报任务配置（中心端 #11）", `
       <p class="desc">配置病种、管理科室与负责人；停用的任务不再出现在成员端上报下拉里</p>
       <form class="inline" id="spd-crt-form">
         <input name="code" placeholder="任务编码" required>
@@ -431,7 +430,7 @@ async function renderSpdCenter() {
          <td>${t.manager_user_id ?? "—"}</td>
          <td>${t.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
          <td><button class="btn secondary" data-crt="${t.id}" data-active="${t.active ? 0 : 1}">
-           ${t.active ? "停用" : "启用"}</button></td></tr>`)}</div>`;
+           ${t.active ? "停用" : "启用"}</button></td></tr>`)}`)}`;
   $("#spd-dist-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target, ["team_id", "assigned_user_id"]);

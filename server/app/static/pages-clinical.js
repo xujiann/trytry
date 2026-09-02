@@ -420,13 +420,16 @@ async function renderMedication() {
   const [shortages, stats, risk] = await Promise.all([
     api("/api/medication/shortages"), api("/api/medication/usage-stats"), api("/api/medication/supply-risk")]);
   const SS = { registered: ["已登记", "orange"], purchasing: ["采购中", "orange"], delivered: ["已配送", "green"] };
+  // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 供应风险面板的红色左边框走 `accent`；"有风险才渲染"这个条件仍留在调用点。
   $("#page-body").innerHTML = `
-    ${risk.total ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 药品供应风险评估（${risk.total}）</h3>${
+    ${risk.total ? panel(`⚠ 药品供应风险评估（${risk.total}）`,
       table(["药品编码", "药品", "库存告警机构数", "未结案缺药登记", "风险等级"], risk.risks, (r) =>
         `<tr><td>${esc(r.drug_code)}</td><td>${esc(r.drug_name) || "—"}</td><td>${r.low_stock_orgs}</td><td>${r.open_shortages}</td>
-         <td><span class="tag ${r.risk_level === "high" ? "red" : "orange"}">${r.risk_level === "high" ? "高" : "中"}</span></td></tr>`)}</div>` : ""}`;
+         <td><span class="tag ${r.risk_level === "high" ? "red" : "orange"}">${r.risk_level === "high" ? "高" : "中"}</span></td></tr>`),
+      { accent: "#c62828" }) : ""}`;
   $("#page-body").innerHTML += `
-    <div class="panel"><h3>缺药登记</h3>
+    ${panel("缺药登记", `
       <form class="inline" id="short-form">
         <input name="org_id" type="number" placeholder="机构ID" required><input name="drug_code" placeholder="药品编码" required>
         <input name="drug_name" placeholder="药品名称" required><input name="quantity" type="number" value="1" min="1" style="min-width:70px"><button>登记</button>
@@ -445,12 +448,12 @@ async function renderMedication() {
         return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
           <td>${statusTag(SS, s.status)}</td>
           <td>${canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
-      })}</div>
-    <div class="panel"><h3>用药画像查询</h3>
+      })}`)}
+    ${panel("用药画像查询", `
       <form class="inline" id="prof-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
-      <div id="prof-result"></div></div>
-    <div class="panel"><h3>全县用药地图（品种排名）</h3>
-      ${stats.length ? barChart(stats.slice(0, 8).map((s) => [s.drug_name, s.rx_count]), { unit: " 方" }) : "暂无数据"}</div>`;
+      <div id="prof-result"></div>`)}
+    ${panel("全县用药地图（品种排名）",
+      stats.length ? barChart(stats.slice(0, 8).map((s) => [s.drug_name, s.rx_count]), { unit: " 方" }) : "暂无数据")}`;
   $("#short-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/medication/shortages", formJson(e.target, ["org_id", "quantity"]), "#short-msg"); };
   $("#prof-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -1588,12 +1591,14 @@ async function renderBilling() {
     api("/api/billing/charge-items"), api("/api/billing/settlements"), api("/api/billing/stats"),
     api("/api/billing/payments"), api("/api/billing/reconciliation")]);
   const BT = { outpatient: "门诊", inpatient: "住院" };
+  // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 顶部的统计卡片区不是面板，原样保留。
   $("#page-body").innerHTML = `
     ${stats.length ? `<div class="cards">${stats.map((s) =>
       `<div class="card"><div class="label">${BT[s.bill_type]}结算 ${s.count} 笔</div>
        <div class="value">${s.total_amount} 元</div>
-       <div class="label">均次 ${s.avg_amount} 元 · 医保 ${s.insurance_ratio_pct}%</div></div>`).join("")}</div>` : ""}
-    <div class="panel"><h3>收费项目目录（admin 维护）</h3>
+       <div class="label">均次 ${s.avg_amount} 元 · 医保 ${s.insurance_ratio_pct}%</div></div>`).join("")}</div>` : ""}`
+    + panel("收费项目目录（admin 维护）", `
       <form class="inline" id="ci-form"><input name="code" placeholder="编码" required>
         <input name="name" placeholder="名称" required>
         <select name="category"><option value="treatment">治疗处置</option><option value="drug">药品</option>
@@ -1604,8 +1609,8 @@ async function renderBilling() {
         `<tr><td>${esc(i.code)}</td><td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.price}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
          <td><button class="btn secondary" data-reprice="${i.id}">调价</button>
-             <button class="btn secondary" data-history="${i.id}">调价历史</button></td></tr>`)}</div>
-    <div class="panel"><h3>计费与结算</h3>
+             <button class="btn secondary" data-history="${i.id}">调价历史</button></td></tr>`)}`)
+    + panel("计费与结算", `
       <form class="inline" id="bd-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="admission_id" type="number" placeholder="住院单ID(住院)"><input name="encounter_id" type="number" placeholder="就诊ID(门诊)">
         <input name="item_code" placeholder="收费编码" required><input name="quantity" type="number" value="1" min="1" style="min-width:70px"><button>计费</button></form>
@@ -1613,11 +1618,11 @@ async function renderBilling() {
         <select name="bill_type"><option value="inpatient">住院结算</option><option value="outpatient">门诊结算</option></select>
         <input name="admission_id" type="number" placeholder="住院单ID"><input name="encounter_id" type="number" placeholder="就诊ID">
         <input name="insurance_pay" type="number" step="any" placeholder="医保支付(元)" value="0"><button>结算</button></form>
-      <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p></div>
-    <div class="panel"><h3>结算单</h3>${table(["ID", "患者", "类型", "总额", "医保", "自付", "时间"], settlements, (s) =>
+      <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p>`)
+    + panel("结算单", table(["ID", "患者", "类型", "总额", "医保", "自付", "时间"], settlements, (s) =>
       `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${BT[s.bill_type]}</td><td>${s.total_amount}</td>
-       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>
-    <div class="panel"><h3>统一支付（经办）</h3>
+       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td></tr>`))
+    + panel("统一支付（经办）", `
       <form class="inline" id="pay-form">
         <input name="settlement_id" type="number" placeholder="结算单ID" required>
         <select name="channel">${Object.entries(PAY_CHANNELS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
@@ -1630,8 +1635,8 @@ async function renderBilling() {
           <td>${p.refunded_amount || 0}</td><td>${statusTag(PAY_STATUS, p.status)}${p.fail_reason ? `<div style="font-size:12px;color:#b23c3c">${esc(p.fail_reason)}</div>` : ""}</td>
           <td style="font-size:12px">${esc(p.trade_no) || "—"}</td>
           <td>${p.status === "paid" ? `<button class="btn secondary" data-refund="${p.id}">退款</button>` : "—"}</td></tr>`;
-      })}</div>
-    <div class="panel"><h3>日终对账</h3>
+      })}`)
+    + panel("日终对账", `
       <form class="inline" id="recon-form">
         <input name="date" placeholder="对账日期 YYYY-MM-DD" value="${today}" required>
         <button>生成对账单</button></form>
@@ -1644,7 +1649,7 @@ async function renderBilling() {
           `<tr><td><span class="tag red">${esc(RECON_DIFF[d.diff_type] || d.diff_type)}</span></td>
            <td>${d.order_id ?? "—"}</td><td style="font-size:12px">${esc(d.trade_no)}</td>
            <td>${d.local_amount}</td><td>${d.remote_amount}</td><td style="font-size:12px">${esc(d.detail)}</td></tr>`) : ""}
-        </div>`).join("") || '<p class="desc">暂无对账单</p>'}</div>`;
+        </div>`).join("") || '<p class="desc">暂无对账单</p>'}`);
   $("#ci-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/charge-items", formJson(e.target, ["price"]), "#bill-msg"); };
   $("#bd-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/details", formJson(e.target, ["patient_id", "admission_id", "encounter_id", "quantity"]), "#bill-msg"); };
   $("#settle-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/settlements", formJson(e.target, ["admission_id", "encounter_id", "insurance_pay"]), "#bill-msg"); };
