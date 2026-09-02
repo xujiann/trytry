@@ -284,35 +284,35 @@ async function renderSpdHealthCommission() {
       ["路径完成率", wb.paths.completion_rate + "%"],
     ])}
     <p class="desc">数据更新时间：${esc((c.updated_at || "").replace("T", " ").slice(0, 19))}</p>
-    <div class="panel"><h3>县乡村三级服务能力</h3>
-      ${table(["层级", "机构数", "在管患者", "服务团队"],
+    ${panel("县乡村三级服务能力",
+      table(["层级", "机构数", "在管患者", "服务团队"],
         Object.entries(wb.by_level), ([level, v]) =>
-        `<tr><td>${esc(level)}</td><td>${v.orgs}</td><td>${v.enrolled}</td><td>${v.teams}</td></tr>`)}</div>
-    <div class="panel"><h3>病种分布（在管）</h3>
-      ${barChart(spdPairs(region.by_program, names), { color: "#0b6e6e", unit: " 人" })}</div>
-    <div class="panel"><h3>风险分层</h3>
-      ${barChart(spdPairs(region.by_risk,
+        `<tr><td>${esc(level)}</td><td>${v.orgs}</td><td>${v.enrolled}</td><td>${v.teams}</td></tr>`))}
+    ${panel("病种分布（在管）",
+      barChart(spdPairs(region.by_program, names), { color: "#0b6e6e", unit: " 人" }))}
+    ${panel("风险分层",
+      barChart(spdPairs(region.by_risk,
         { low: "低危", mid: "中危", high: "高危", very_high: "极高危" }),
-        { color: "#b26a00", unit: " 人" })}</div>
-    <div class="panel"><h3>年龄结构</h3>
-      ${barChart(Object.entries(region.age_distribution), { color: "#0a4d78", unit: " 人" })}</div>
-    <div class="panel"><h3>分级诊疗与转诊</h3>
-      ${table(["指标", "数值"], [
+        { color: "#b26a00", unit: " 人" }))}
+    ${panel("年龄结构",
+      barChart(Object.entries(region.age_distribution), { color: "#0a4d78", unit: " 人" }))}
+    ${panel("分级诊疗与转诊",
+      table(["指标", "数值"], [
         ["转诊总量", wb.referrals.total], ["在途", wb.referrals.open],
         ["已闭环", wb.referrals.closed], ["闭环率", wb.referrals.closure_rate + "%"],
         ["有效上转就诊", wb.referrals.effective_visits],
-      ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`)}</div>
-    <div class="panel"><h3>重点慢专病中心运行</h3>
-      ${table(["编码", "名称", "病种", "适用机构", "团队", "状态"], wb.centers, (x) =>
+      ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`))}
+    ${panel("重点慢专病中心运行",
+      table(["编码", "名称", "病种", "适用机构", "团队", "状态"], wb.centers, (x) =>
         `<tr><td>${esc(x.code)}</td><td>${esc(x.name)}</td>
          <td>${esc(names[x.program_code] || x.program_code)}</td>
          <td>${x.orgs}</td><td>${x.teams}</td>
          <td>${x.status === "running" ? '<span class="tag green">运行中</span>'
-            : '<span class="tag orange">' + esc(x.status) + "</span>"}</td></tr>`)}</div>
-    <div class="panel"><h3>考核结果排名</h3>
-      ${table(["排名", "考核对象", "周期", "综合得分"], wb.scores, (s) =>
+            : '<span class="tag orange">' + esc(x.status) + "</span>"}</td></tr>`))}
+    ${panel("考核结果排名",
+      table(["排名", "考核对象", "周期", "综合得分"], wb.scores, (s) =>
         `<tr><td>${s.rank}</td><td>${esc(s.object_name)}</td><td>${esc(s.period)}</td>
-         <td>${s.total_score}</td></tr>`)}</div>`;
+         <td>${s.total_score}</td></tr>`))}`;
 }
 
 /* ============================================================
@@ -462,11 +462,13 @@ async function renderSpdTeam() {
   const role = localStorage.getItem("spd_team_role") || "member";
   const wb = await api(`/api/spd/workbench/team?role=${role}`);
   const roleNames = { expert: "团队专家端", member: "团队成员端", case_manager: "个案管理师端" };
+  // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 预警面板的红色左边框走 `accent`；两处"有数据才渲染"的条件仍留在调用点。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>视角切换</h3>
+    ${panel("视角切换", `
       <p>${Object.entries(roleNames).map(([k, v]) =>
         `<button class="btn ${k === role ? "" : "secondary"}" data-role="${k}" style="margin-right:8px">${esc(v)}</button>`).join("")}</p>
-      <p class="desc">当前：${esc(roleNames[role])}。三个端的数字同源，只是聚合口径不同。</p></div>
+      <p class="desc">当前：${esc(roleNames[role])}。三个端的数字同源，只是聚合口径不同。</p>`)}
     ${spdCards([
       ["在管患者", wb.patients.managed], ["本月新增", wb.patients.new_this_month],
       ["高危患者", wb.patients.high_risk, wb.patients.high_risk > 0],
@@ -477,27 +479,27 @@ async function renderSpdTeam() {
       ["到期复诊", wb.plans.due_revisits],
     ])}
     ${(wb.alerts.abnormal_measure || wb.alerts.referrals || wb.alerts.recall || wb.alerts.dead)
-      ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 预警</h3>
+      ? panel("⚠ 预警", `
          <p style="font-size:13.5px">
            <span class="tag red" style="margin-right:8px">指标异常 ${wb.alerts.abnormal_measure}</span>
            <span class="tag orange" style="margin-right:8px">在途转诊 ${wb.alerts.referrals}</span>
            <span class="tag orange" style="margin-right:8px">召回中 ${wb.alerts.recall}</span>
-           <span class="tag">死亡登记 ${wb.alerts.dead}</span></p></div>`
+           <span class="tag">死亡登记 ${wb.alerts.dead}</span></p>`, { accent: "#c62828" })
       : ""}
-    <div class="panel"><h3>所属团队</h3>
-      ${table(["ID", "团队", "层级", "机构", "服务病种"], wb.teams, (t) =>
+    ${panel("所属团队",
+      table(["ID", "团队", "层级", "机构", "服务病种"], wb.teams, (t) =>
         `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(t.level)}</td>
-         <td>${t.org_id}</td><td>${esc((t.program_codes || []).join("、") || "—")}</td></tr>`)}</div>
-    <div class="panel"><h3>患者风险分层</h3>
-      ${barChart(spdPairs(wb.patients.by_risk,
+         <td>${t.org_id}</td><td>${esc((t.program_codes || []).join("、") || "—")}</td></tr>`))}
+    ${panel("患者风险分层",
+      barChart(spdPairs(wb.patients.by_risk,
         { low: "低危", mid: "中危", high: "高危", very_high: "极高危" }),
-        { color: "#b26a00", unit: " 人" })}</div>
-    ${wb.packages ? `<div class="panel"><h3>服务包执行</h3>
-      ${table(["已绑服务包", "项目总次数", "已消耗", "消费率"], [wb.packages], (p) =>
+        { color: "#b26a00", unit: " 人" }))}
+    ${wb.packages ? panel("服务包执行",
+      table(["已绑服务包", "项目总次数", "已消耗", "消费率"], [wb.packages], (p) =>
         `<tr><td>${p.bound}</td><td>${p.total_items}</td><td>${p.used_items}</td>
-         <td>${p.usage_rate}%</td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>待办按类型</h3>
-      ${barChart(spdPairs(wb.tasks.by_type, SPD_TASK_TYPES), { unit: " 条" })}</div>`;
+         <td>${p.usage_rate}%</td></tr>`)) : ""}
+    ${panel("待办按类型",
+      barChart(spdPairs(wb.tasks.by_type, SPD_TASK_TYPES), { unit: " 条" }))}`;
   $("#page-body").onclick = (e) => {
     const btn = e.target.closest("[data-role]");
     if (!btn) return;

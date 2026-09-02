@@ -3,21 +3,22 @@
 async function renderInfectious() {
   $("#page-desc").textContent = "病例报告 + 滑动窗口多点触发预警（多机构同报升级为高风险）";
   const [cases, alerts] = await Promise.all([api("/api/infectious/cases"), api("/api/infectious/alerts")]);
+  // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>病例报告</h3>
+    ${panel("病例报告", `
       <form class="inline" id="case-form">
         <input name="org_id" type="number" placeholder="报告机构ID" required>
         <input name="disease_code" placeholder="病种编码" required>
         <input name="disease_name" placeholder="病种名称" required>
         <input name="onset_date" placeholder="发病日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
         <button>报告</button>
-      </form><p class="msg" id="case-msg"></p></div>
-    ${alerts.length ? `<div class="panel"><h3>⚠ 当前预警</h3>${
+      </form><p class="msg" id="case-msg"></p>`)}
+    ${alerts.length ? panel("⚠ 当前预警",
       table(["病种", "7日病例数", "报告机构数", "风险等级"], alerts, (a) =>
         `<tr><td>${esc(a.disease_name)}</td><td>${a.case_count}</td><td>${a.org_count}</td>
-         <td><span class="tag ${a.severity === "high" ? "red" : "orange"}">${a.severity === "high" ? "高" : "中"}</span></td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>病例列表</h3>${table(["ID", "机构", "病种", "发病日期"], cases, (c) =>
-      `<tr><td>${c.id}</td><td>${c.org_id}</td><td>${esc(c.disease_name)}</td><td>${esc(c.onset_date)}</td></tr>`)}</div>`;
+         <td><span class="tag ${a.severity === "high" ? "red" : "orange"}">${a.severity === "high" ? "高" : "中"}</span></td></tr>`)) : ""}
+    ${panel("病例列表", table(["ID", "机构", "病种", "发病日期"], cases, (c) =>
+      `<tr><td>${c.id}</td><td>${c.org_id}</td><td>${esc(c.disease_name)}</td><td>${esc(c.onset_date)}</td></tr>`))}`;
   $("#case-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1378,8 +1379,9 @@ async function renderOaQc() {
   $("#page-desc").textContent = "行政公文（起草→发布）、共享中心排班与质控";
   const [docs, rosters, qc] = await Promise.all([api("/api/mgmt/docs"), api("/api/mgmt/rosters"), api("/api/mgmt/qc")]);
   const CN = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
+  // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>公文起草 / 排班 / 质控登记</h3>
+    ${panel("公文起草 / 排班 / 质控登记", `
       <form class="inline" id="doc-form"><input name="title" placeholder="公文标题" required style="min-width:240px">
         <select name="doc_type"><option value="notice">通知</option><option value="policy">政策文件</option><option value="minutes">会议纪要</option></select>
         <input name="issuer" placeholder="发文单位"><button>起草</button></form>
@@ -1388,16 +1390,16 @@ async function renderOaQc() {
       <form class="inline" id="qc-form"><select name="center_type">${Object.entries(CN).map(([v, t]) => `<option value="${v}">${t}中心</option>`).join("")}</select>
         <input name="item" placeholder="质控项目" required><select name="result"><option value="pass">合格</option><option value="fail">不合格</option></select>
         <input name="note" placeholder="备注"><input name="record_date" placeholder="日期"><button>登记质控</button></form>
-      <p class="msg" id="oa-msg"></p></div>
-    <div class="panel"><h3>公文</h3>${table(["ID", "标题", "类型", "发文单位", "状态", "操作"], docs, (d) =>
+      <p class="msg" id="oa-msg"></p>`)}
+    ${panel("公文", table(["ID", "标题", "类型", "发文单位", "状态", "操作"], docs, (d) =>
       `<tr><td>${d.id}</td><td>${esc(d.title)}</td><td>${esc(d.doc_type)}</td><td>${esc(d.issuer)}</td>
        <td><span class="tag ${d.status === "published" ? "green" : "orange"}">${d.status === "published" ? "已发布" : "草稿"}</span></td>
-       <td>${d.status === "draft" ? `<button class="btn secondary" data-pub="${d.id}">发布</button>` : "—"}</td></tr>`)}</div>
-    <div class="panel"><h3>排班</h3>${table(["中心", "日期", "班次", "医师"], rosters, (r) =>
-      `<tr><td>${CN[r.center_type]}</td><td>${esc(r.duty_date)}</td><td>${esc(r.shift)}</td><td>${esc(r.doctor_name)}</td></tr>`)}</div>
-    <div class="panel"><h3>质控记录</h3>${table(["中心", "项目", "结果", "备注"], qc, (q) =>
+       <td>${d.status === "draft" ? `<button class="btn secondary" data-pub="${d.id}">发布</button>` : "—"}</td></tr>`))}
+    ${panel("排班", table(["中心", "日期", "班次", "医师"], rosters, (r) =>
+      `<tr><td>${CN[r.center_type]}</td><td>${esc(r.duty_date)}</td><td>${esc(r.shift)}</td><td>${esc(r.doctor_name)}</td></tr>`))}
+    ${panel("质控记录", table(["中心", "项目", "结果", "备注"], qc, (q) =>
       `<tr><td>${CN[q.center_type]}</td><td>${esc(q.item)}</td>
-       <td><span class="tag ${q.result === "pass" ? "green" : "red"}">${q.result === "pass" ? "合格" : "不合格"}</span></td><td>${esc(q.note)}</td></tr>`)}</div>`;
+       <td><span class="tag ${q.result === "pass" ? "green" : "red"}">${q.result === "pass" ? "合格" : "不合格"}</span></td><td>${esc(q.note)}</td></tr>`))}`;
   $("#doc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/docs", formJson(e.target), "#oa-msg"); };
   $("#roster-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/rosters", formJson(e.target), "#oa-msg"); };
   $("#qc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/qc", formJson(e.target), "#oa-msg"); };

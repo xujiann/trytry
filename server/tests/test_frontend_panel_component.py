@@ -147,6 +147,13 @@ MIGRATED_PAGES = {
     "renderBilling": 5,
     "renderEsb": 4,
     "renderSpdCenter": 5,
+    # 第四批 2026-09-02：先给五页补夹具（team / hc / oaqc / infectious / blood 各带 XSS 载荷）再迁；
+    # 条件面板（预警 / 服务包 / 按角色显示的表单）条件仍留在调用点
+    "renderSpdTeam": 6,
+    "renderSpdHealthCommission": 7,
+    "renderOaQc": 4,
+    "renderInfectious": 3,
+    "renderBlood": 4,
 }
 MIGRATED = "renderServiceRequests"
 

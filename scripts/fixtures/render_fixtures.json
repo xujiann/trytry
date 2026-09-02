@@ -1093,5 +1093,332 @@
         }
       ]
     }
+  },
+  "spdteam": {
+    "_why": [
+      "第四批（2026-09-02）：团队端。role 从 localStorage 读，夹具固定成 member；",
+      "预警面板与服务包面板都是条件渲染，夹具故意让两者都渲染出来。"
+    ],
+    "fn": "renderSpdTeam",
+    "localStorage": {
+      "spd_team_role": "member"
+    },
+    "api": {
+      "/api/spd/workbench/team": {
+        "patients": {
+          "managed": 12,
+          "new_this_month": 3,
+          "high_risk": 2,
+          "by_risk": {
+            "low": 5,
+            "mid": 4,
+            "high": 2,
+            "very_high": 1
+          }
+        },
+        "tasks": {
+          "open": 7,
+          "due_today": 2,
+          "overdue": 1,
+          "by_type": {
+            "followup": 3,
+            "revisit": 2,
+            "": 1
+          }
+        },
+        "plans": {
+          "pending_assess": 1,
+          "pending_target": 2,
+          "pending_path": 0,
+          "due_followups": 3,
+          "due_revisits": 1
+        },
+        "alerts": {
+          "abnormal_measure": 2,
+          "referrals": 1,
+          "recall": 0,
+          "dead": 0
+        },
+        "teams": [
+          {
+            "id": 1,
+            "name": "团队甲<img src=x onerror=alert(1)>",
+            "level": "township<b>",
+            "org_id": 2,
+            "program_codes": [
+              "hyp",
+              "dm"
+            ]
+          },
+          {
+            "id": 2,
+            "name": "团队乙",
+            "level": "village",
+            "org_id": 3,
+            "program_codes": []
+          }
+        ],
+        "packages": {
+          "bound": 4,
+          "total_items": 40,
+          "used_items": 15,
+          "usage_rate": 37.5
+        }
+      }
+    }
+  },
+  "spdhc": {
+    "_why": [
+      "第四批（2026-09-02）：卫健委决策端。by_level 的键与 centers.status 都带载荷——",
+      "前者裸插进 <td> 走 esc(level)，后者走 esc(x.status)，缺一个 esc 都会现形。"
+    ],
+    "fn": "renderSpdHealthCommission",
+    "api": {
+      "/api/spd/workbench/health-commission": {
+        "core": {
+          "registered_patients": 1000,
+          "screened": 800,
+          "suspect": 120,
+          "candidates": 90,
+          "enrolled": 70,
+          "self_managed": 20,
+          "service_persons": 65,
+          "service_times": 300,
+          "screening_conversion_rate": 8.8,
+          "updated_at": "2026-09-02T07:00:00"
+        },
+        "referrals": {
+          "closure_rate": 75,
+          "total": 20,
+          "open": 5,
+          "closed": 15,
+          "effective_visits": 12
+        },
+        "followups": {
+          "completion_rate": 88.5
+        },
+        "paths": {
+          "completion_rate": 60
+        },
+        "by_level": {
+          "county": {
+            "orgs": 1,
+            "enrolled": 30,
+            "teams": 2
+          },
+          "township<img src=x onerror=alert(1)>": {
+            "orgs": 5,
+            "enrolled": 30,
+            "teams": 6
+          },
+          "village": {
+            "orgs": 20,
+            "enrolled": 10,
+            "teams": 3
+          }
+        },
+        "centers": [
+          {
+            "code": "c1<b>",
+            "name": "高血压中心<img src=x onerror=alert(1)>",
+            "program_code": "hyp",
+            "orgs": 3,
+            "teams": 2,
+            "status": "running"
+          },
+          {
+            "code": "c2",
+            "name": "糖尿病中心",
+            "program_code": "dm",
+            "orgs": 1,
+            "teams": 1,
+            "status": "paused<script>alert(1)</script>"
+          }
+        ],
+        "scores": [
+          {
+            "rank": 1,
+            "object_name": "卫生院甲<img src=x onerror=alert(1)>",
+            "period": "2026-Q3<b>",
+            "total_score": 92.5
+          },
+          {
+            "rank": 2,
+            "object_name": "卫生院乙",
+            "period": "2026-Q3",
+            "total_score": 88
+          }
+        ]
+      },
+      "/api/spd/stats/region": {
+        "by_program": {
+          "hyp": 40,
+          "dm": 30,
+          "unknown<img src=x onerror=alert(1)>": 1
+        },
+        "by_risk": {
+          "low": 30,
+          "mid": 25,
+          "high": 10,
+          "very_high": 5
+        },
+        "age_distribution": {
+          "<60": 20,
+          "60-69<b>": 30,
+          "70+": 21
+        }
+      },
+      "/api/spd/catalog": {
+        "programs": [
+          {
+            "code": "hyp",
+            "name": "高血压<img src=x onerror=alert(1)>"
+          },
+          {
+            "code": "dm",
+            "name": "糖尿病"
+          }
+        ],
+        "teams": [],
+        "scales": [],
+        "centers": [],
+        "path_templates": []
+      }
+    }
+  },
+  "oaqc": {
+    "_why": [
+      "第四批（2026-09-02）：行政公文 / 排班 / 质控。三张表各一条带载荷的文本字段。"
+    ],
+    "fn": "renderOaQc",
+    "api": {
+      "/api/mgmt/docs": [
+        {
+          "id": 1,
+          "title": "关于<img src=x onerror=alert(1)>的通知",
+          "doc_type": "notice<b>",
+          "issuer": "卫健局",
+          "status": "draft"
+        },
+        {
+          "id": 2,
+          "title": "纪要",
+          "doc_type": "minutes",
+          "issuer": "办公室<script>alert(2)</script>",
+          "status": "published"
+        }
+      ],
+      "/api/mgmt/rosters": [
+        {
+          "center_type": "imaging",
+          "duty_date": "2026-09-02",
+          "shift": "全天<b>",
+          "doctor_name": "王医生<img src=x onerror=alert(1)>"
+        }
+      ],
+      "/api/mgmt/qc": [
+        {
+          "center_type": "lab",
+          "item": "室内质控<img src=x onerror=alert(1)>",
+          "result": "pass",
+          "note": "正常"
+        },
+        {
+          "center_type": "ecg",
+          "item": "设备校准",
+          "result": "fail",
+          "note": "<b>待整改</b>"
+        }
+      ]
+    }
+  },
+  "infectious": {
+    "_why": [
+      "第四批（2026-09-02）：传染病病例与预警。预警面板是条件渲染，夹具给非空 alerts。"
+    ],
+    "fn": "renderInfectious",
+    "api": {
+      "/api/infectious/cases": [
+        {
+          "id": 1,
+          "org_id": 2,
+          "disease_name": "流感<img src=x onerror=alert(1)>",
+          "onset_date": "2026-08-30<b>"
+        },
+        {
+          "id": 2,
+          "org_id": 3,
+          "disease_name": "手足口病",
+          "onset_date": "2026-08-31"
+        }
+      ],
+      "/api/infectious/alerts": [
+        {
+          "disease_name": "流感<img src=x onerror=alert(1)>",
+          "case_count": 7,
+          "org_count": 3,
+          "severity": "high"
+        },
+        {
+          "disease_name": "腹泻",
+          "case_count": 4,
+          "org_count": 1,
+          "severity": "medium"
+        }
+      ]
+    }
+  },
+  "blood": {
+    "_why": [
+      "第四批（2026-09-02）：血库。两个表单面板按角色条件渲染，夹具把角色固定成 admin 让两者都出现；",
+      "component 给一个映射表里没有的值，走 `|| esc(s.component)` 分支。"
+    ],
+    "fn": "renderBlood",
+    "localStorage": {
+      "medplat_role": "admin"
+    },
+    "api": {
+      "/api/blood/stocks": [
+        {
+          "blood_type": "A<img src=x onerror=alert(1)>",
+          "component": "rbc",
+          "quantity_ml": 1200
+        },
+        {
+          "blood_type": "O",
+          "component": "unknown<b>",
+          "quantity_ml": 300
+        }
+      ],
+      "/api/blood/requests": [
+        {
+          "id": 1,
+          "patient_id": 5,
+          "org_id": 2,
+          "blood_type": "A",
+          "component": "plasma",
+          "quantity_ml": 400,
+          "status": "pending"
+        },
+        {
+          "id": 2,
+          "patient_id": 6,
+          "org_id": 2,
+          "blood_type": "B<b>",
+          "component": "platelet",
+          "quantity_ml": 200,
+          "status": "approved"
+        },
+        {
+          "id": 3,
+          "patient_id": 7,
+          "org_id": 3,
+          "blood_type": "AB",
+          "component": "rbc",
+          "quantity_ml": 100,
+          "status": "weird<img src=x onerror=alert(1)>"
+        }
+      ]
+    }
   }
 }

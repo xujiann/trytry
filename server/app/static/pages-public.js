@@ -111,14 +111,16 @@ async function renderBlood() {
   const role = currentRole();
   const typeOpts = ["A", "B", "AB", "O"].map((t) => `<option>${t}</option>`).join("");
   const compOpts = Object.entries(BLOOD_COMPONENTS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
+  // 两个表单面板按角色条件渲染，条件仍留在调用点。
   $("#page-body").innerHTML = `
-    ${["operator", "admin"].includes(role) ? `<div class="panel"><h3>血库入库登记（经办）</h3>
+    ${["operator", "admin"].includes(role) ? panel("血库入库登记（经办）", `
       <form class="inline" id="bs-form">
         <select name="blood_type">${typeOpts}</select>
         <select name="component">${compOpts}</select>
         <input name="quantity_ml" type="number" min="1" placeholder="数量(ml)" required>
-        <button>入库</button></form></div>` : ""}
-    ${["doctor", "admin"].includes(role) ? `<div class="panel"><h3>临床用血申请（医师）</h3>
+        <button>入库</button></form>`) : ""}
+    ${["doctor", "admin"].includes(role) ? panel("临床用血申请（医师）", `
       <form class="inline" id="br-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="用血机构ID" required>
@@ -126,11 +128,11 @@ async function renderBlood() {
         <select name="component">${compOpts}</select>
         <input name="quantity_ml" type="number" min="1" placeholder="数量(ml)" required>
         <input name="reason" placeholder="用血原因">
-        <button>申请</button></form></div>` : ""}
+        <button>申请</button></form>`) : ""}
     <p class="msg" id="blood-msg"></p>
-    <div class="panel"><h3>血液库存台账</h3>${table(["血型", "成分", "库存(ml)"], stocks, (s) =>
-      `<tr><td><span class="tag">${esc(s.blood_type)}</span></td><td>${BLOOD_COMPONENTS[s.component] || esc(s.component)}</td><td>${s.quantity_ml}</td></tr>`)}</div>
-    <div class="panel"><h3>用血申请队列</h3>${table(["ID", "患者", "机构", "血型/成分", "数量", "状态", "操作"], requests, (r) => {
+    ${panel("血液库存台账", table(["血型", "成分", "库存(ml)"], stocks, (s) =>
+      `<tr><td><span class="tag">${esc(s.blood_type)}</span></td><td>${BLOOD_COMPONENTS[s.component] || esc(s.component)}</td><td>${s.quantity_ml}</td></tr>`))}
+    ${panel("用血申请队列", table(["ID", "患者", "机构", "血型/成分", "数量", "状态", "操作"], requests, (r) => {
       const actions = r.status === "pending" && ["director", "admin"].includes(role)
         ? `<button class="btn secondary" data-brev="${r.id}" data-ok="true">批准</button>
            <button class="btn danger" data-brev="${r.id}" data-ok="false">驳回</button>`
@@ -139,7 +141,7 @@ async function renderBlood() {
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${r.org_id}</td>
         <td>${esc(r.blood_type)} / ${BLOOD_COMPONENTS[r.component] || esc(r.component)}</td><td>${r.quantity_ml}ml</td>
         <td>${statusTag(BLOOD_REQ_STATUS, r.status)}</td><td>${actions}</td></tr>`;
-    })}</div>`;
+    }))}`;
   const bs = $("#bs-form");
   if (bs) bs.onsubmit = (e) => { e.preventDefault(); postAction("/api/blood/stocks", formJson(e.target, ["quantity_ml"]), "#blood-msg"); };
   const br = $("#br-form");
