@@ -668,18 +668,166 @@ KNOWN_UNGUARDED_UNIQUE_WRITES: dict[str, str] = {
 }
 
 
-def _inserted_models(func: ast.FunctionDef, model_names: set[str]) -> set[str]:
-    """函数里被 `db.add(...)` 插入的模型名。
+# ——「已审计：多行合法」的表清单（P1-30，2026-09-03）——
+#
+# 下面覆盖面自证里的"未覆盖"从来不是"安全"，只是"这条规则看不到"。P1-30 把这些
+# 只被 db.add、库上又没有唯一约束的表**逐张**审了一遍（每张：分类员按模型/写入点/
+# 读方/测试/文档给判定 → 怀疑者复审 → 业务语义/代码路径/存量数据三个独立视角分别
+# 试图推翻，一张表 148 个代理来回）。四种去向：
+#   * 多行是设计本意，或唯一性已由别处守住（流水/台账/时序/单据/配置目录/父表约束/
+#     条件 UPDATE）→ 登记在 AUDITED_MULTI_ROW_TABLES，附一句"为什么多行合法"；
+#   * 业务上确实唯一 → 部分/全量唯一索引下沉到库、写入点改走 insert_or_conflict——
+#     它们自动落进 _tables_with_unique_constraint()，**不**在此清单；
+#   * 唯一性长在父表/状态行上、不是本表的键 → 父行条件 UPDATE，本表只在 UPDATE
+#     命中时追加 → 登记在 GUARDED_BY_PARENT_UPDATE，附守在哪；
+#   * 审过但定不了——键在表上表达不出来（缺身份列/编码列）或要产品决定 →
+#     AUDITED_UNDECIDED_TABLES，只减不增。
+#
+# 这些清单的语义是"审过"，**不是豁免**：登记进来的表日后补了唯一约束，会自动被规则
+# 接管，此时要把它从这里删掉（test_已审计清单不得腐烂 会提醒）。理由必须写——
+# 一旦可以不写，这里就会变成第二个绕过检查的后门。理由里的行号是审计当日的，
+# 定位用 grep 函数名而不是行号。
+AUDITED_MULTI_ROW_TABLES: dict[str, str] = {
+    "admin_projects": "项目无业务自然键（没有项目编号，名称不唯一），路由不查重、顺序请求同样允许同机构同名项目，测试就在同机构循环建 5 个同名'批量项目'当夹具——两行同名不是缺陷而是被现有用例当成合法。重复提交属请求级幂等问题，不是表级唯一",
+    "adverse_events": "不良事件上报是事件登记：一条记录=一次事件，没有患者/就诊等主体外键，description 自由文本且可匿名，业务上不存在可判重的自然键；统计口径（quality.py:206-217）就是按条数与闭环率计数，多行是设计本意",
+    "aefi_reports": "AEFI 是按不良事件逐条上报的流水：同一剂次可先后出现不同反应（局部红肿后又出现严重反应）而分别上报，record_id 可空、仅凭 vaccine_code 上报的记录更无从取键；模型注释里“关联到剂次”是为归因，不是为唯一",
+    "archive_authorizations": "scope 是单值列，患者要授权多个范围或续期只能再发一条，同患者同机构多条 active 授权是设计本意：契约测试 test_patients_contract.py:137-148 对同一患者、同一乡镇院连发 scope=encounter 与 scope=all 两条并断言清单 2 行，check 接口用 any() 合并多条有效授…",
+    "attachments": "通用附件按 owner_type+owner_id 挂接，一个业务对象挂多份附件是设计本意（契约测试同一不良事件传 png+pdf 两条、列举返回 2 行）；sha256 去重只发生在磁盘（内容寻址、幂等），DB 行是元数据，同一文件重传两条元数据行不是需要仲裁的缺陷",
+    "bill_details": "已被推翻的先例：明细带 quantity，且床位费/护理费按天逐条记同一 item_code 是正常业务，(admission_id,item_code) 唯一会拒掉第二天的合法计费；test_billing_duplicate_charges 已把\"重复记账合法且金额累加\"钉成特征化网",
+    "checkup_items": "分项只在 create_checkup 里随本事务刚 flush 出来的 PhysicalExam 一起写（checkup_id 取自新生成主键），仓库里没有第二个写入者（grep `CheckupItem(` 仅此一处，无“向既有体检追加分项”的端点），跨请求不可能共享同一 checkup_id——属单写者形态",
+    "child_visits": "儿童访视是流水：checkup 按满月/3/6/8/12/18/24/30月/3-6岁反复发生，newborn 访视对高危新生儿按规范也要增加次数，同儿童同类型多行是设计本意；visit_date 默认空串，(child_id, visit_type, visit_date) 连做键都不成立",
+    "cold_chain_records": "[业务视角复核] (org_id, device_name, recorded_at) 不是这张表的自然键，同键两行有合法并存场景，且模型自身的设计就预留了这种并存： 1. 允许区间是按行存的，不是按设备存的（app/models/publichealth.py:410-412，作者注释\"该设备的允许区间（不同疫苗要求不同，故记在记录上而不是写死常量）\"）",
+    "consent_records": "[业务视角复核] consent_records 的一行不是\"开关状态\"，而是一次同意行为的举证记录：models/consent.py:9-10、62-65 明写\"谁、在什么场景、对哪版文本、经什么方式表示了同意；撤回置 revoked_at 不删——撤回本身也要可举证\"",
+    "consent_templates": "模板是无自然键的配置目录：consent_type 只有 6 个粗粒度值，同一类型下多份模板（surgery 下几十种手术告知书、exam 下增强CT/胃镜）与多版本并存是设计本意；签署引用一律走 template_id 并把正文拷贝冻结，版本升级走 PATCH 原地改 body/version 而非新建行，种子也只按'列表为空'幂等建一…",
+    "consultations": "远程会诊申请是按次生成的业务单据，同一患者同一对机构可多次申请（tests/test_stage95_batch2.py 对同一患者同一机构对连开两单都成功，第二单还被拿去测“未完成不可计费”），每单各自走 applied→accepted→completed 状态机并独立计费、评分",
+    "correction_requests": "更正/注销申请是独立的审批流水：同一患者可先后提交不同字段、不同时间的更正或注销，每条按 request_id 单独审核，pending→approved/rejected 由 review_correction 的 status!=pending 检查守住重复审核",
+    "course_materials": "课程下的课件条目，同一课程挂多条是设计本意（契约测试同课程连挂两条并断言 total_materials==2）；无业务码列，title 为自由文本，同名重复至多是内容冗余，维护者删改即可，不需要事后仲裁",
+    "courses": "课程目录没有课程编码列，只有 title/course_type/category/speaker 自由文本；同名课程按期重开、同题分直播/点播各一条都是合法的，加不了唯一键。两条同名课程会让 training_records（按 course_id+user_id 唯一）分散在两个 id 下，但这是「缺课程编码」的功能项，不是并发写入缺…",
+    "critical_actions": "危急值闭环留痕表（'通知→确认→处置反馈全程记录'），一份报告按流程至少三行，报告修订还会再追加'复位'/'解除'行，测试直接断言 len(actions)==3 与含'复位'/'解除'的多行。五个写入点都是随状态迁移追加一行",
+    "cssd_cost_items": "成本项是灭菌批次下的成本流水，cost_stats 按 (batch_id, cost_type) 做 sum 聚合，同一批次同一成本类型分多笔登记（两班人工、两批耗材、追加能耗）合法且金额累加——与 bill_details 反例同构，加 (batch_id, cost_type) 唯一会拒掉合法的分笔登记",
+    "cssd_requests": "物品申领单按次生成，同机构同物品反复申领是常态（每次一张单、各带 quantity），每单独立走 requested→fulfilled，响应侧 fulfill_cssd_request 有 status!=requested 的 409 检查防重复发放",
+    "deposits": "住院押金流水，模型注释明写\"只增不改的台账\"，余额由流水现算：一次住院分多次预交、多次退费、结算冲抵各自一行都合法（test_billing_deposits 断言\"流水只增不改：两笔都在\"）。db.add 写入点是 prepay，纯追加无自然键",
+    "disease_path_records": "路径节点执行记录是“某次入组走到哪一步、谁做的、结果如何”的执行日志，模型与端点都没有“每节点只记一次”的声明；完成度用 set(node_key) 去重（_completion 与 program_stats 都是），同一节点重复执行（疗效复评做两次、补做）多条并存对完成度无影响，records 列表按 id 如实列出",
+    "dispense_items": "发药明细「按批次一行一扣」，一张发药单下多行（多批次、同一药跨批）是 FEFO 设计本意，表本身没有自然键；真正要防的「同一处方发两次」落在父表 dispense_records.prescription_id 唯一约束上，且每一行明细只在 _claim_batch 条件 UPDATE 抢到批次余量之后才 add",
+    "drug_shortages": "缺药登记是按次需求单：同机构同药品多次报缺、同患者多次登记都是正常业务（契约测试对同 org+drug_code 连登 s2/s3 两条均 201 并计入统计；黑名单口径'两次登记未取药'也预设一人多条登记），supply-risk 按未结案登记条数计风险本就是多行语义，表带 quantity 列——与 bill_details 反例同类…",
+    "duty_rosters": "[业务视角复核] duty_rosters 不应登记为\"逻辑唯一\"，提议键 (center_type, duty_date, shift, doctor_name) 下存在两行合法并存的业务场景，加唯一索引会拒掉合法排班",
+    "elderly_assessments": "老年评估按次追加，所有读侧都取「每人最新一次」（失能清单/预警/统计三处都是 latest[patient_id]=a），同一人同一 assessed_date 评三次被测试明确当成合法（assessment_records==3、assessed_people==1）",
+    "emergency_cases": "呼救事件流水，每次 120 调度生成一条；patient_id 可空、无事件号/呼救单号列，同一地点/同一患者多次呼救合法（测试同地点连建两条、三条）。两个调度员对同一起事故各建一单是现实里的重复，但表上没有任何列能表达「同一起事故」，加不了键，也不是并发特有的问题",
+    "emergency_vitals": "院前生命体征是车载终端持续回传的时间序列，一次急救事件天然有多条（模型注释'实时回传'，路由 docstring'院内可实时调阅'），没有任何业务列能构成自然键；同文件的 EmergencyMilestone 有意加了 UniqueConstraint 而 EmergencyVital 没加，是作者的明确取舍",
+    "employee_changes": "人员变动留痕表（入职/转正/调动/离职），同一员工多条变动是设计本意，每行对应一次对 employees 的状态联动；并发两笔调动会让 employees.org_id 最后写者胜出，那是 employees 的丢失更新，变动日志如实记两笔反而是对的",
+    "employees": "人员主数据表但 schema 里没有工号/证件号等身份列，(org_id, name) 同名同姓合法，系统无法从列判断两行是否同一人，唯一约束无从表达；'同一人建两档'只能靠业务流程/后续加工号列解决，不属并发闸门范畴",
+    "encounters": "就诊记录一次就诊一条，同患者同机构同日可多次就诊（不同科室/复诊），表上没有就诊流水号或外部单号列，不存在可加约束的自然键；create_encounter 不查重是设计本意。住院入院那条 Encounter 与 Admission 同事务提交，Admission 走 insert_or_conflict 命中部分唯一索引时整体回滚，等于…",
+    "esb_flow_runs": "每次按流程消费一条消息落一行执行记录（模型 docstring'逐步结果落 step_results 便于回溯'），同一 flow+message 重跑是重试机制的一部分：test_esb.py 明确对同一消息重跑同一流程并断言 failed 运行 ≥2 条",
+    "esb_messages": "消息队列表：外部接入方每次 POST 入队即一条新消息，MessageIn 只有 msg_type/payload/max_retries，没有客户端消息号或去重键，表上也没有任何可判'同一条'的业务列",
+    "exam_requests": "检查申请单按次开单，同患者同项目多张是设计本意：互认流程（accept_recognition_of）就要求为同一患者同一 item_code 再开一张新单并指向源单，契约测试也为同患者同项目一次塞四张不同状态的单",
+    "exam_resources": "[业务视角复核] 核验对象：`ExamResource`（/home/user/trytry/server/app/models/clinical.py:279-293）与唯一写入点 `create_exam_resource`（/home/user/trytry/server/app/routers/exams.py:814-823）",
+    "exchange_logs": "交换日志，模型 docstring 即'每次入站转换落一条日志'，是监控与失败率统计的流水；三处写入点都是每次交换/每个 persist 步落一行，integration.py 甚至用独立 SessionLocal 写入以保证业务失败也留痕——典型审计流水，多行是全部价值所在",
+    "fd_contract_services": "履约记录是签约协议下的服务流水（上门/咨询/随访/转诊按次记），绩效统计按时间窗 count 条数（performance.py），同一协议同一 service_type 多条正是设计本意。唯一性在上一层 fd_contracts 已由 uq_contract_patient_org + insert_or_conflict 守住，服务记…",
+    "finance_entries": "收支流水台账（accounting.py 自述 FinanceEntry 是'期间 + 收/支 + 金额的流水台账'），汇总端点按 org+period+category SUM(amount)，同期间同类目多笔（item 可为空串）正是 bill_details 那种'累加合法'形状——加唯一约束会拒掉第二笔合法记账",
+    "followups": "慢病随访是按次追加的随访序列（每条随访推进 chronic.next_due 到下一次），同一 chronic_id 多条是设计本意——tests/test_performance_orgs_contract.py:425-426 注释“同一人随访 3 次”、test_dataquality.py:184-185 同档案两条",
+    "fund_prepayments": "[业务视角复核] (pool_id, batch_no) 不是 fund_prepayments 的自然键：这张表记录的是\"每一笔真实到账\"，batch_no 只是挂在到账上的分组标签，同一批次下多笔到账是设计本意。依据： 1. 设计文档对这张表的定义是「预付：按比例预付，记批次与到账」（docs/通用平台能力补全开发计划.md:75）——行的粒度是\"到账…",
+    "health_articles": "健康宣教稿件，无编号列，title 自由文本、status 只分草稿/已发布；同题多稿（改版、换分类）合法，重复稿由编制人员删改处理，不需要仲裁。写入点不查重也无可查之键",
+    "health_monitor_records": "监测记录是测量流水（营养/环境/职业/放射/学校），同机构同指标同日多次采样本就合法，record_date 缺省为空串（大量行连日期键都没有），exceeded 由每行自算；读路径只做筛选与倒序列表，不聚合、不去重，没有任何地方假设 (domain, org_id, indicator, record_date) 唯一",
+    "home_visit_orders": "上门服务是按次申请的工单（申请→派单→完成），同一患者/机构/服务类型多张工单是常态，expect_date 可空且同日多次上门也合法，找不到可用的自然键；契约测试里同一患者同一机构建了两张不同类型工单并钉为合法",
+    "improvement_tasks": "整改任务是自由文本的问题项，同机构同指标可以同时下达多条不同问题的任务，没有可用的自然键；测试也为同一机构批量种入 owner/due_date 完全相同的多条任务",
+    "infection_reports": "院感病例登记：同一患者可多次、多部位发生感染，测试固定装置就为同一患者连报两条（不同部位）并各自核实；\"重复上报\"由业务里的核实环节（confirmed/excluded）仲裁，统计只数 confirmed（quality.py:435-448）",
+    "infectious_cases": "传染病病例报告是逐例流水，表里根本没有患者身份列（只有 org/disease/onset_date），同机构同病种同发病日多例是正常疫情（预警就是按例数聚合），无法也不该构造自然键；重复上报同一例属请求级幂等问题",
+    "informed_consents": "知情告知书是逐份签署的证据记录：同一就诊可合法并存多份同类型待签告知书（如两项不同检查各一份 exam），且 related_id 默认 0 的“未关联”写法是常规用法（test_outpatient_docs.py:74 就这么写），任何含 related_id 的自然键都会在 0 上塌缩",
+    "insurance_settlements": "医保结算记录本身按次产生：同一患者在同一机构多次就诊各结算一次、门诊一次就诊允许多张结算单（finance.py:108-109）→ 多条 InsuranceSettlement 合法，且表上没有医保侧结算流水号可判\"同一笔\"（test_guideline 同患者两条并汇总进 fund-stats）",
+    "knowledge_entries": "知识条目是内容库，同分类同标题多行是\"历史版本\"的正常形态：旧版靠 active=False/expire_date 停用，新版重发同名条目（测试里就有标题为「旧版病历书写制度」的条目）。title 索引本就非唯一，也没有机构维度",
+    "live_sessions": "直播申请单，按次提交、走 pending→approved/rejected/finished 审核流；同人同题再次申请是正常的重提，「主题重复」由审核人驳回处理（契约测试即以 comment=主题重复 驳回第二条），不是数据层要拦的重复",
+    "login_logs": "等保登录留痕，成功/失败/锁定每次尝试各落一行且立即 commit，同一 username 多行正是爆破画像所需（测试里同一账号连错 5 次 + 锁定命中全部入库）；纯审计流水，无自然键",
+    "material_purchases": "非药品物资采购申请是按批生成的单据：同机构同品名多次申请（分批补货）是常态，表上没有申请单号/合同号唯一列，contract_no 默认空串且在后续 contract 步骤才填。并发双提只是两张待审申请，审批人驳回其一即可，无需事后仲裁",
+    "maternal_visits": "产检/产后访视是按次流水，同一册子多次 prenatal 访视是设计本意（契约测试对同一册子连做 v1/v2 两次产检、再一次产后访视，均 201）；表上无任何自然键列，写入点不查重是正确的。与行数相关的唯一不变式——'高血压只标一次高危'——已由 _mark_high_risk 的条件 UPDATE 守住，不落在本表上",
+    "newborn_screenings": "新筛按项目（metabolic/hearing/chd）逐次记录，而听力/代谢筛查本就有初筛→复筛→召回复查多次结果（初筛 abnormal、复筛 normal 是要同时留下的两行），列表端点语义就是'筛查史'，表上无轮次列——同一 (child_id, item) 多行是合法史料而非缺陷",
+    "nursing_records": "护理记录是巡视/病情观察/医嘱执行的流水，同一住院或就诊多条是本意；文书完整性也只按 count 统计（clinical_docs.py:230、outpatient_docs.py:529、inpatient.py:604），tests/test_nursing_order_link.py:128-135 对同一住院同一医嘱循环多次写记…",
+    "official_docs": "公文/通知发布表，无文号列，title 是自由文本，同标题同类型反复发（年度例行通知）合法；draft→published 是单行状态跃迁，与插入唯一性无关",
+    "online_consults": "在线咨询是按次生成的工单（open→replied→closed），同一患者在同一机构同时有多条 open 咨询是正常业务（问了两个问题/一条咨询一条续方），列里没有任何可充当自然键的组合；写入点也不查重、不需要查重",
+    "order_executions": "医嘱执行记录是\"逐次执行登记\"（模型 docstring 原话），长期医嘱 bid/tid 每次执行各记一行，同一医嘱多行是设计本意；测试也把同一医嘱登记两次并断言 len==2 当合法。唯一的写入点只校验医嘱存在且 active，不查重也不需要查重",
+    "outbound_visits": "县外就诊登记是按次记录：同一患者多次外出就诊、同日同院门诊两次都合法（test_analytics 同患者两条即 outside_visits=2），表上没有医保结算号之类的外部键可判\"同一笔\"；双击重复登记属请求级幂等问题，与 bill_details 同形，不是表级自然键",
+    "pathogen_monitors": "病原监测是按次上报的送检计数流水：同机构同病原同日可多批送检（标本类型还是自由文本），而且该资源只有 POST 与 GET、没有 PATCH，同日重报事实上就是修正路径；预警 multi_point_alerts 按行独立判定“送检≥10 且阳性率≥10%”而不跨行求和，重复行不会产生需要事后仲裁的汇总失真",
+    "payment_orders": "模型注释明写\"一次结算可分多笔渠道支付\"，同一 settlement 多张单（现金+医保拆付、失败后重付、部分退款后换渠道）都是设计本意（test_payment_reconciliation 断言 2 张、失败后重试 paid），trade_no 由通道事后回填且默认空串，不能当键——所以没有\"两行同键\"的自然键",
+    "ph_event_actions": "处置动作留痕（docstring 明写'处置动作留痕：应急值守、流调、资源调度等指挥记录'），同事件多条动作是设计本意，契约测试对同一事件连记两条并按 id 正序回读。唯一的前置检查是事件是否 active，那是状态门禁不是唯一性——与 close_event 之间的竞态（结案瞬间追加一条动作）属 ph_events 状态机问题，不是本表…",
+    "ph_events": "突发公卫事件无业务自然键（无事件编号，title/disease_name 可重复——同一病种在不同学校可同时立多起 active 事件），路由不查重、顺序请求同样允许同名事件，诊间提醒只数 active 事件总数不关心重复",
+    "physical_exams": "体检记录是患者的体检史，同一患者多次体检天然多行；tests/test_error_branches.py:274-290、test_final_gap1.py:216-247、test_checkups_characterization.py:43-53 都对同一患者连建多条并断言 ≥2 / ==2，360 档案（encounters.…",
+    "prenatal_screenings": "同一册子多项筛查（唐筛/无创/超声/产前诊断）与同一类型不同孕周复查（早孕 NT 与中孕结构超声都是 ultrasound）都是常规流程；代码注释明说'同一本册子的几项筛查常常同一天出结果、同时录入'，测试断言同一 record 两条并入统计",
+    "prescription_items": "明细只在 create_prescription 同一事务内随刚 flush 出来的处方头一起写入，不存在第二个写入者能对同一 prescription_id 并发追加；且同方重复 drug_code 被明确定义为合法输入（转药师审并写入 review_comment，不是拒绝），两条同 (prescription_id, drug_co…",
+    "prescriptions": "处方是按次开具的单据，同患者同机构同日多张处方（不同就诊、退回后重开、分方）都是正常业务，表上没有任何业务自然键，顺序请求同样不查重；医师双击重复提交属请求级幂等键问题（与 bill_details 被推翻的判据同类），不是表级唯一",
+    "project_milestones": "里程碑是项目下的多条节点，同名多条（如分期验收）没有业务禁令，路由不查重、顺序请求同样可重复，测试给每个项目建同名'节点'；重复行只影响展示计数，不驱动任何状态机（done/reopen 都按 milestone_id 单行操作）",
+    "purchase_orders": "采购单是按次生成的申请单据，同机构同品种反复采购本就是多行；唯一需要防重的是验收入库那一步，已由 receive 的条件 UPDATE 状态闸门守住，与插入无关",
+    "qc_measurements": "室内质控测定值是同一批号下的时间序列，Westgard 2-2s/R-4s 规则本身就依赖同批号连续多点（写入时读取上一条 prev），同分钟重复测定也是正常复测；测试每个批号连录多值。多行是本意，无自然键",
+    "qc_records": "共享中心质控记录，同中心同项目同日可多次质控（失控→重新定标→复测，既有用例的 note 就是'失控，重新定标'），按次记录是本意；无样本/申请单级的唯一主体可挂",
+    "record_qcs": "病历抽检评分：同一份病历可被不同质控员、不同轮次多次抽检，现有测试明确对同一 encounter 连打两次（95 分与 72 分）并断言 total==2、平均分按两条算——多行是既定合法行为，加唯一约束会把这些用例打红",
+    "reconciliation_diffs": "对账差异明细：一批对账下每条差异（本地有通道无/通道有本地无/金额不一致）各一行，多行是表的全部意义；`for d in diffs: db.add(d)` 这形状在 2026-09-03 之前扫描器解析不了，是唯一的“未识别”写入点，本表此前从未进过审计分母。批次级唯一性归父表 reconciliation_batches",
+    "referrals": "平台侧转诊单是按次开具的单据：同患者可先后多次上转/下转，代码与文档里都没有\"同患者同时只允许一条在途转诊\"的规则（spd 那套更完整的转诊实现也不查在途重复），居民端把它当时间线全量展示；测试固定装置更直接为同一患者/同方向/同两机构造出两条 pending 单并断言排序",
+    "report_revisions": "报告修订历史表（M-6），每次 PATCH 报告都追加一行修订前值，同一 report_id 多行是设计本意——审计流水；test_stage4_m1 明确断言两次修订后 revisions 长度为 2",
+    "role_change_logs": "角色变更留痕，同一用户多条是变更历史的设计本意（浙#43），查询端按 id 倒序列全部。并发下两个管理员同时改同一用户会写出两条内容相同的日志，但那是 users.role 上的 read-then-write 丢失更新（users.py:540 先比对再赋值），日志只是如实记录了两次请求，不构成要仲裁的重复实体",
+    "satisfaction_surveys": "满意度评价是按次提交的评分流水，现有测试 test_extras.py:48-51 对同一 target_type/target_id/patient 连提两次并断言均分 4.5，多行被明确当成合法",
+    "secondments": "[业务视角复核] 断言把 secondments 当成\"全职派驻台账\"，但这张表按设计装的不只是派驻。app/models/hr.py:91-93 与迁移 c4d5e6f7a8b9 的注释都明写 assignment_type 有 long_term=长期派驻 / support=短期支援 / rounds=巡诊 / other=其他，且\"巡诊与短期支援不…",
+    "shift_handovers": "[业务视角复核] (ward_id, handover_date, shift) 下两行合法并存的场景不止一个，且代码本身处处按\"追加型记录\"设计，没有任何\"每班一条\"的前提，判 append_only 而非逻辑唯一",
+    "simulation_attempts": "模型 docstring 明写“允许重复作答并全部留痕，取最高分参与考核”，测试 test_重做取最高分但全部留痕 断言同人同病例两条作答记录都保留、attempt_no 还作为教学反馈输出；同 (case_id, user_id) 多行是设计本意",
+    "simulation_cases": "教学内容条目（标题 + 情境 + 决策点 JSON），没有业务自然键，标题重复只是内容重复而非需要仲裁的数据冲突；写入点只校验决策点 key 唯一与答案在选项内，不查重也无需查重",
+    "sms_codes": "验证码是按次下发的一次性凭证：60 秒冷却过后同号同用途再发一条是设计本意，校验只认 id 最大且未消费未过期的那条（旧码自然作废，由 sms_code_cleanup 定时清掉），测试里同号连发 5 条视为合法",
+    "spd_assessments": "评估记录是历史序列：同一患者同一量表反复评估以观察风险变化是功能本意（模型注释\"量表版本随记录固化，量表改版不回改历史评估结论\"，居民端与档案页都按 id 倒序列历史，趋势统计按时间段数评估人次）。没有可判重的自然键",
+    "spd_case_reports": "异常上报明细按事件生成：同一患者可因不同触发规则、不同时间多次被上报，每条上报同时派生一条处置任务并计一次积分；唯一写入点是人工 POST，没有自动规则引擎批量生成，因此不存在\"同规则同患者同日\"这种可被并发写重的机器键",
+    "spd_consult_messages": "在线咨询的聊天消息流水：同一会话、同一发送方连发多条是设计本意（列表端点按 consult 计数、按 id 顺序回放 500 条）。start_consult 里的 check-then-act 守的是 spd_consults 的\"同病种只开一条会话\"，与消息表无关",
+    "spd_edu_pushes": "宣教推送记录按次生成：同一素材对同一患者可先立即推一次再定时推一次，表带 frequency 列，成效统计 push_times 就是按行数累计（契约测试里同素材同患者两次推送、push_times=3 被钉死）",
+    "spd_followup_records": "[业务视角复核] (patient_id, rule_id, planned_at) 不是 spd_followup_records 的自然键——同键两行合法并存的场景不止一个，且都不是\"边角案例\"，而是接口现有契约与医共体核心流程直接产生的： 1) 同患者同方案合法重排（再入院 / 下转再出院）",
+    "spd_groups": "患者分组是配置实体：name 自由文本、无唯一约束、代码里没有按 name 查找分组的地方（grep `SpdGroup.name ==` 为空），成员关系已由 spd_group_members 的 (group_id, patient_id) 唯一约束守住",
+    "spd_health_prescriptions": "健康处方是医生每次开具一份的历史记录，同患者同病种随时间多份是常态（列表按 patient_id 分页、id 倒序），没有任何列能构成\"同时只能一份\"的键。写入点无查重也无需查重，双击重复提交属请求级幂等另案",
+    "spd_measurements": "体征测量天然多行：同患者同指标反复测、设备一分钟回传多次都合法，复合索引 (patient_id, metric, measured_at) 本身就是非唯一的时序索引，测试里同患者同指标两条→趋势 total>=2 被钉死",
+    "spd_package_usages": "服务项目扣减台账（docstring“消费台账”），同一绑定同一 item_code 按次多行是设计本意，带 qty/used_at，测试也对同一项目连扣两次并期望都 201。附注：这里真正的并发风险是 binding.items 的 JSON 读改写（deepcopy 后整体覆写、无 serialized_on）可能多扣越额，属丢失更新…",
+    "spd_recalls": "[业务视角复核] spd_recalls 一行 = 一次召回\"尝试\"（reason + contacts 联系过程 + result 结果），属于\"多次尝试\"形状；而\"这个档案当前是否召回中\"的权威状态并不在这张表，而在 spd_enrollments.status=='recalled'（workbench.py:1070/1188 的\"召回中\"计数、u…",
+    "spd_redeems": "兑换单按次生成：同一账户可多次兑换同一商品，每次都是一张新的待核销单，可兑换的次数由库存与余额的原子 take_amount 条件扣减限定（第二次库存不足返回 409，测试已钉住）。verify_code 是 6 位随机码、非唯一，核销按 (verify_code, status='pending') 取 first()——这是随机碰撞的…",
+    "spd_referral_cases": "转诊单是按次生成的单据：同一患者同一病种可多次转诊（多次发作、上转与下转、退回后再发起），代码里没有任何“同时只允许一张在途单”的规则（_create_case 不查、check_referral_rules 把是否开单留给医生），测试也自由给同一患者种多条单",
+    "spd_report_instances": "报告实例是'按次生成的快照'：手工 generate_report 不查重、period_label 可由请求体任意给，同模板同期间重新生成是正常操作，且 docstring 明说报告只是'同一批数字的另一种排版'，两份并存无需仲裁",
+    "spd_report_tasks": "报告推送任务是配置实体：同一模板可配多条任务（不同订阅人/频率/机构集/有效期），name 是自由文本，模型与路由都没有任何自然键或查重，测试通过 API 为不同模板各建一条也从未断言唯一。重复配置最多导致重复推送，属配置卫生问题而非需仲裁的数据缺陷",
+    "spd_revisits": "[业务视角复核] spd_revisits 是\"复诊计划\"表，一行就是一次排期；(patient_id, program_code) 在 source='high_risk' AND status='planned' 范围内并不是业务不变式，只是 _auto_intervene 自动路径的一个去重便利，业务上存在多种两行合法并存的场景： 1. 手工路径明确…",
+    "spd_screenings": "筛查记录是按次留痕：同一患者同一病种可反复被机会性筛查、主动筛查、居民自查、规则导入（source 四种），每条都是独立判定，多行合法。去重发生在下游目标池 spd_candidates（唯一约束 uq_spd_candidate_patient_program + _upsert_candidate），就诊事件订阅者也是先查候选池再写筛…",
+    "spd_sync_logs": "数据源同步日志：每跑一次（定时 run_source 或人工回填 record_sync）追加一行，成功率按最近 100 行统计，测试里对同一 source 连发两条日志且两条都要在、按新到旧排列。同一 source 多行是表的全部意义，没有自然键",
+    "spd_teams": "配置/主数据实体：name 是自由文本、无 UniqueConstraint、无任何按 name 查找的代码（grep `SpdTeam.name ==` 为空），成员/任务/纳管都外键到 team.id",
+    "stock_takes": "盘点是每次一行的账实差异流水，同机构同药品反复盘点是常态（契约测试对 PHCT-MET 连盘两次并断言 2 行）；并发下真正要防的是重复调账，已由写入前对 DrugStock.quantity == book_qty 的条件 UPDATE 守住，抢输者 409 不会落盘点行",
+    "stock_transfers": "调拨流水带 quantity，同药品同两机构之间多次调拨是正常业务；行只在批次原子占用与调出侧条件扣减都成功后才写入，并发争抢的是库存而不是这张流水表",
+    "surgery_requests": "同一次住院可以有多台手术申请（分期手术、计划内二次探查），模型注释专门为此说明 unplanned_return 必须由医师显式标记而不能靠“同住院第二台”推断；测试也把同一 admission 两条申请当合法数据 seed",
+    "tcm_dispense_orders": "每次代煎下单都是新的一张单（herbs/doses/decoct 由本次处方决定），同患者同机构多次下单、甚至同方复购都是正常业务；表上没有业务自然键，双击产生的两单与合法复购不可区分，只能靠请求级幂等键处理，不是唯一约束场景",
+    "tcm_master_cases": "名老中医医案是内容条目，同一老师同病同证可有多则验案，title/visit_date 都是自由文本，无业务自然键；重复提交只是内容重复，stats 里 total 多计 1 不构成要事后仲裁的冲突，发布/撤回按 id 单条操作",
+    "training_plans": "实训计划是按期发布的班次单，同机构同技术同日开两班（不同 trainer/title/上下午）合法，表上没有能表达「同一班次」的键；名额并发已在报名侧由 enrolled_count 原子占额守住，计划本身多一条不产生需要仲裁的数据缺陷，多余的计划由发布方 status=closed 关掉即可",
+    "transfusion_requests": "用血申请是按次提交的申请单，同一患者一次住院里多次申请（术中备血→追加用血）是正常业务；tests/test_final_gap4.py:64-99 对同一患者/机构/血型/成分连发两张申请并各自走审批、发血，被当成合法流程",
+    "treatment_records": "门急诊处置记录一次处置一行，同一就诊多次雾化/换药本就是多行；完整性接口按 encounter 计数处置条数，没有任何“每就诊一条”的语义",
+    "vaccination_records": "[业务视角复核] 这张表的行粒度是「一针/一支」，不是「接种程序里的一个剂次号」，所以「同患者、同疫苗、同剂次号、同日期两行」在业务上可以是两针合法接种，不是必然缺陷。依据：(1) app/routers/vaccination.py:103-109 每写一行恰好对批次 claim_quota 扣 1 支库存，行与\"支\"一一对应",
+    "vaccine_contraindications": "同一患者同一疫苗可以同时存在多条生效禁忌（暂时+长期各一条），契约测试就是这么建的且两条都 201、都 blocking；解除走留痕不删行，历史条目继续保留。判定函数返回的是列表并取 forbidden[0]，本身就按多条设计，(patient_id, vaccine_code[, status='active']) 不是唯一键",
+    "vital_sign_records": "体温单是体征时序流水；measured_at 是分钟级自由字符串，同一时刻可有互补的部分记录（模型注释“一次测量未必测全”、各项可空）或异常后复测，列表接口显式按 (measured_at, id) 排序即预期同一 measured_at 多行",
+    "waste_locations": "[业务视角复核] (org_id, location_type, name) WHERE active 不是 waste_locations 的自然键，name 只是一个自由文本标签，不是点位身份；两行同键并存不构成\"要人事后仲裁的数据缺陷\"，判据证据不足，不宜登记为逻辑唯一",
+    "women_health_records": "婚前/孕前/妇女保健/避孕节育是按次服务流水，同一人同一 record_type 可反复发生（年度妇检、多次避孕节育服务、再婚再做婚检），表上无任何自然键列，写入点不查重是正确的；测试只是每种类型各建一条并按类型过滤，未把同类型两行当非法",
+    "workflow_instances": "[业务视角复核] (definition_key, business_type, business_id) 在 status='running' 上并不构成\"两行即缺陷\"的自然键，理由有三： 1. 锚点不是\"单据\"而是\"任何业务对象\"",
+}
 
-    两种写法都要认：
-        db.add(Model(...))            # 内联
-        obj = Model(...); db.add(obj)  # 先赋值再插——**这才是绝大多数**
+AUDITED_UNDECIDED_TABLES: dict[str, str] = {
+    "child_records": "两难：它是儿童保健\"档案\"，同一儿童被建两份档案确实是缺陷（访视/新筛/高危标记会分裂在两行上，要人合并），但表上没有任何身份列（无 id_card/ehc_no，儿童不是 patients），guardian_patient_id 可空，(name, birth_date, guardian_patient_id) 既约束不住 guardian 为 NULL 的行、也拦不住重名/同日双胞胎等合法…",
+    "emergency_resources": "两难：一方面它是“一物一行、PATCH 调数量”的台账（update_resource 只改 quantity/min_quantity/expire_date 等），暗示 (org_id, resource_type, name) 应当唯一，双击会多出一行并让 readiness 的 total/by_type 多计 1、below_min 列表出现重名",
+    "followup_tasks": "派生路径 create_task 确实是 (category, source_id, status='pending') 上的 check-then-act，作者 docstring 也把重复派生视为缺陷；但人工补建路径 create_followup 自由写任意 (category, source_id)，绝大多数人工任务 source_id=0，且同一来源多时点随访（如术后第 7 天/第 30…",
+    "report_templates": "共享中心报告模板是配置表，候选键只有 (center_type, name)，但代码/测试/文档没有任何地方把同名模板当缺陷（无 code 列、无查重、无删改端点、无种子），重复只是列表里多一条可选项而非要仲裁的数据；对比 spd_report_templates 是靠 code 列唯一",
+    "spd_interventions": "两难：自动路径 _auto_intervene 明确按 (enrollment_id, template_id, status∈planned/doing) 先查再插（check-then-act），两次评估并发会写出两条一模一样的\"高危自动干预\"",
+}
 
-    第一版只认内联写法，结果 192 处插入里只看得见 22 处（11%），
-    而变量写法里藏着 48 处真问题。**一条只覆盖 11% 的规则给出的是虚假的安全感**，
-    比没有规则更糟——它会让人以为这一类已经被守住了。
+# 唯一性不在本表、而在**父表/状态行**上的表：本表是流水/日志/子行，"不得重复"的真正含义是
+# "父行的那次状态跃迁只能成功一次"。守法是父行条件 UPDATE（`UPDATE … WHERE status = 期望态`，
+# rowcount 为 0 即 409），本表只在 UPDATE 命中后追加——判定与写入在同一条 SQL 里，
+# 与 add_amount / claim_quota 同理。值写"守在哪个函数、哪条 UPDATE"。
+GUARDED_BY_PARENT_UPDATE: dict[str, str] = {
+}
+
+
+def _model_bindings(func: ast.FunctionDef, model_names: set[str]) -> dict[str, str]:
+    """函数体内"变量名 → 模型名"的绑定表，供 `db.add(变量)` 反查模型。
+
+    三种形状：
+        obj = Model(...)                       # 直接赋值
+        xs.append(Model(...)); for x in xs:    # 容器只装过**同一种**模型，循环变量才可解析
+    容器里装过两种模型、或装过非模型的东西，一律放弃解析（记成 "?"）——宁可漏也不误报。
     """
     assigned: dict[str, str] = {}
+    appended: dict[str, str] = {}
     for node in ast.walk(func):
         if (
             isinstance(node, ast.Assign)
@@ -690,6 +838,42 @@ def _inserted_models(func: ast.FunctionDef, model_names: set[str]) -> set[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     assigned[target.id] = node.value.func.id
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "append"
+            and isinstance(node.func.value, ast.Name)
+            and node.args
+        ):
+            arg = node.args[0]
+            model = (
+                arg.func.id
+                if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id in model_names
+                else "?"
+            )
+            prev = appended.get(node.func.value.id)
+            appended[node.func.value.id] = model if prev in (None, model) else "?"
+    for node in ast.walk(func):
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name) and isinstance(node.iter, ast.Name):
+            model = appended.get(node.iter.id)
+            if model and model != "?":
+                assigned.setdefault(node.target.id, model)
+    return assigned
+
+
+def _inserted_models(func: ast.FunctionDef, model_names: set[str]) -> set[str]:
+    """函数里被 `db.add(...)` 插入的模型名。
+
+    三种写法都要认：
+        db.add(Model(...))            # 内联
+        obj = Model(...); db.add(obj)  # 先赋值再插——**这才是绝大多数**
+        for x in xs: db.add(x)         # xs 只 append 过同一种模型（对账差异明细就是这形状）
+
+    第一版只认内联写法，结果 192 处插入里只看得见 22 处（11%），
+    而变量写法里藏着 48 处真问题。**一条只覆盖 11% 的规则给出的是虚假的安全感**，
+    比没有规则更糟——它会让人以为这一类已经被守住了。
+    """
+    assigned = _model_bindings(func, model_names)
 
     inserted = set()
     for node in ast.walk(func):
@@ -890,7 +1074,16 @@ def test_退报名释放名额(client, admin):
 # 三张表从"只在清单里逻辑唯一"变成库里真有部分唯一索引（迁移 b8e3d5f70a91），
 # 抢输者拿 409 而不是静默写出两条。此后仍只许变好。
 BASELINE_COVERED_WRITE_SITES = 59
-BASELINE_UNRESOLVED_WRITE_SITES = 1
+# 2026-09-03（P1-30）1 → 0：最后一个未识别写入点（billing.run_reconciliation 的
+# `for d in diffs: db.add(d)`）由 _model_bindings 认出了"容器只装同一种模型"的形状。
+BASELINE_UNRESOLVED_WRITE_SITES = 0
+# 2026-09-03（P1-30）新增两条棘轮：未覆盖的写入点里"既没审计过"的个数与"待决"的个数，
+# 都只许变小。前者的意义是：**新表**进路由之前必须先回答"多行合法吗"（见上面三份清单）。
+# 起点 26：正是审计判为"业务上确实唯一/守在父行"的 20 张表的写入点——它们的去向是
+# 唯一索引下沉 + insert_or_conflict、或父行条件 UPDATE（同一工程包后续提交），落地一张
+# 这个数就该降一次；待决 8 个对应 AUDITED_UNDECIDED_TABLES 的 5 张表。
+BASELINE_UNAUDITED_WRITE_SITES = 26
+BASELINE_UNDECIDED_WRITE_SITES = 8
 
 
 def _write_sites():
@@ -899,32 +1092,26 @@ def _write_sites():
     口径（**连口径一起留档**，否则这个数字过后连被核对的资格都没有）：
       * 文件：app/routers 与 app/spd/routers 下**递归**的全部 .py；
       * 写入点：函数体内形如 `db.add(x)` 的调用，一次调用算一个；
-      * 形状可识别：能顺着 `db.add(Model(...))` 或 `obj = Model(...); db.add(obj)`
-        解析出模型名的写入点；
+      * 形状可识别：能顺着 `db.add(Model(...))`、`obj = Model(...); db.add(obj)` 或
+        `xs.append(Model(...)); for x in xs: db.add(x)` 解析出模型名的写入点；
       * 规则覆盖：模型对应的表带 DB 级唯一约束，或在 LOGICAL_UNIQUE_TABLES 里。
     """
     model_table = _model_to_table()
     model_names = set(model_table)
     guarded_tables = _tables_with_unique_constraint() | set(LOGICAL_UNIQUE_TABLES)
+    audited_tables = set(AUDITED_MULTI_ROW_TABLES) | set(GUARDED_BY_PARENT_UPDATE)
+    undecided_tables = set(AUDITED_UNDECIDED_TABLES)
 
-    total = resolved = covered = 0
+    total = resolved = covered = audited = undecided = 0
     unresolved: list[str] = []
     uncovered_tables: dict[str, int] = {}
+    unaudited_tables: dict[str, int] = {}
+    written_tables: set[str] = set()
 
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
         for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
-            assigned: dict[str, str] = {}
-            for node in ast.walk(func):
-                if (
-                    isinstance(node, ast.Assign)
-                    and isinstance(node.value, ast.Call)
-                    and isinstance(node.value.func, ast.Name)
-                    and node.value.func.id in model_names
-                ):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            assigned[target.id] = node.value.func.id
+            assigned = _model_bindings(func, model_names)
             for node in ast.walk(func):
                 if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
                     continue
@@ -944,17 +1131,28 @@ def _write_sites():
                     continue
                 resolved += 1
                 table = model_table[model]
+                written_tables.add(table)
                 if table in guarded_tables:
                     covered += 1
+                    continue
+                uncovered_tables[table] = uncovered_tables.get(table, 0) + 1
+                if table in audited_tables:
+                    audited += 1
+                elif table in undecided_tables:
+                    undecided += 1
                 else:
-                    uncovered_tables[table] = uncovered_tables.get(table, 0) + 1
+                    unaudited_tables[table] = unaudited_tables.get(table, 0) + 1
     return {
         "files": len(_router_files()),
         "total": total,
         "resolved": resolved,
         "covered": covered,
+        "audited": audited,
+        "undecided": undecided,
         "unresolved": unresolved,
         "uncovered_tables": uncovered_tables,
+        "unaudited_tables": unaudited_tables,
+        "written_tables": written_tables,
     }
 
 
@@ -967,6 +1165,7 @@ def test_防复发闸门自证覆盖面():
     """
     stats = _write_sites()
     top = sorted(stats["uncovered_tables"].items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+    unaudited = sum(stats["unaudited_tables"].values())
     summary = "\n".join([
         "",
         "[并发防复发闸门] 覆盖面自证",
@@ -977,8 +1176,11 @@ def test_防复发闸门自证覆盖面():
         f"  唯一表判据覆盖：{stats['covered']} 个"
         f"（{stats['covered'] / stats['total']:.1%}），**未覆盖 {stats['total'] - stats['covered']} 个**",
         f"  未覆盖写入点最多的表（前 10）：{top}",
+        f"  未覆盖里已逐表审计——多行合法/父行守住：{stats['audited']} 个，待决：{stats['undecided']} 个，"
+        f"**既未覆盖也未审计：{unaudited} 个** {sorted(stats['unaudited_tables']) or ''}",
         f"  未识别的写入点：{stats['unresolved'] or '无'}",
-        "  说明：未覆盖 ≠ 安全，只是这条规则看不到——缺口显式化，不许再藏在绿灯后面。",
+        "  说明：未覆盖 ≠ 安全，只是这条规则看不到；审计清单说的是“审过、多行合法”，"
+        "不是豁免——缺口显式化，不许再藏在绿灯后面。",
     ])
     print(summary)
     # print 在 `-q` 下被吞掉；warning 会进 "warnings summary"，
@@ -993,8 +1195,55 @@ def test_防复发闸门自证覆盖面():
         f"形状识别不了的写入点从 {BASELINE_UNRESOLVED_WRITE_SITES} 涨到 "
         f"{len(stats['unresolved'])}：{stats['unresolved']}"
     )
+    assert unaudited <= BASELINE_UNAUDITED_WRITE_SITES, (
+        f"既无唯一约束、也没审计过的写入点从 {BASELINE_UNAUDITED_WRITE_SITES} 涨到 {unaudited}："
+        f"{stats['unaudited_tables']}。新表往路由里 db.add 之前先回答“多行合法吗”："
+        "唯一就建唯一索引 + insert_or_conflict；多行合法就登记进 AUDITED_MULTI_ROW_TABLES "
+        "并写明理由；守在父行上的登记进 GUARDED_BY_PARENT_UPDATE；定不了的进 "
+        "AUDITED_UNDECIDED_TABLES（那份只减不增，进一条要有书面理由）。"
+    )
+    assert stats["undecided"] <= BASELINE_UNDECIDED_WRITE_SITES, (
+        f"待决写入点从 {BASELINE_UNDECIDED_WRITE_SITES} 涨到 {stats['undecided']}：待决清单只减不增。"
+    )
     if stats["covered"] > BASELINE_COVERED_WRITE_SITES:
         print(f"[提示] 覆盖已升到 {stats['covered']}，请把 BASELINE_COVERED_WRITE_SITES 上调。")
+    if unaudited < BASELINE_UNAUDITED_WRITE_SITES or stats["undecided"] < BASELINE_UNDECIDED_WRITE_SITES:
+        print("[提示] 未审计/待决数已下降，请把对应 BASELINE_* 下调，让棘轮咬住新位置。")
+
+
+def test_已审计清单不得腐烂():
+    """三份审计清单说的是"审过、多行合法/父行守住/待决"，条目必须还成立：
+
+    * 表还在模型里（表删了条目还挂着，是死账）；
+    * 表还**没有**唯一约束（补了约束规则就接管了，条目该删，否则"审计"与"约束"
+      两本账对不上）；
+    * 表还在路由里被 db.add（不再写入的表登记着没意义）；
+    * 三份清单互不重叠，且每条都写了理由。
+    """
+    tables = set(models.Base.metadata.tables)
+    unique = _tables_with_unique_constraint() | set(LOGICAL_UNIQUE_TABLES)
+    stats = _write_sites()
+    books = {
+        "AUDITED_MULTI_ROW_TABLES": AUDITED_MULTI_ROW_TABLES,
+        "GUARDED_BY_PARENT_UPDATE": GUARDED_BY_PARENT_UPDATE,
+        "AUDITED_UNDECIDED_TABLES": AUDITED_UNDECIDED_TABLES,
+    }
+    names = list(books)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            overlap = sorted(set(books[a]) & set(books[b]))
+            assert overlap == [], f"{a} 与 {b} 同时登记了 {overlap}：一张表只能有一种去向"
+    listed = {t: why for book in books.values() for t, why in book.items()}
+    missing = sorted(t for t in listed if t not in tables)
+    assert missing == [], f"审计清单里这些表已不在模型里，应删除：{missing}"
+    taken_over = sorted(t for t in listed if t in unique)
+    assert taken_over == [], (
+        f"这些表已有唯一约束、规则已接管，应从审计清单删除（两本账不能同时记）：{taken_over}"
+    )
+    not_written = sorted(t for t in listed if t not in stats["written_tables"])
+    assert not_written == [], f"审计清单里这些表已不再被路由 db.add，条目是死账：{not_written}"
+    blank = sorted(t for t, why in listed.items() if len(why.strip()) < 12)
+    assert blank == [], f"审计清单条目必须写明理由：{blank}"
 
 
 def test_路由扫描必须递归到子包():
