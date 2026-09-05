@@ -807,7 +807,6 @@ AUDITED_UNDECIDED_TABLES: dict[str, str] = {
     "emergency_resources": "两难：一方面它是“一物一行、PATCH 调数量”的台账（update_resource 只改 quantity/min_quantity/expire_date 等），暗示 (org_id, resource_type, name) 应当唯一，双击会多出一行并让 readiness 的 total/by_type 多计 1、below_min 列表出现重名",
     "followup_tasks": "派生路径 create_task 确实是 (category, source_id, status='pending') 上的 check-then-act，作者 docstring 也把重复派生视为缺陷；但人工补建路径 create_followup 自由写任意 (category, source_id)，绝大多数人工任务 source_id=0，且同一来源多时点随访（如术后第 7 天/第 30…",
     "report_templates": "共享中心报告模板是配置表，候选键只有 (center_type, name)，但代码/测试/文档没有任何地方把同名模板当缺陷（无 code 列、无查重、无删改端点、无种子），重复只是列表里多一条可选项而非要仲裁的数据；对比 spd_report_templates 是靠 code 列唯一",
-    "spd_interventions": "两难：自动路径 _auto_intervene 明确按 (enrollment_id, template_id, status∈planned/doing) 先查再插（check-then-act），两次评估并发会写出两条一模一样的\"高危自动干预\"",
     "spd_lifecycle_events": "不变式成立但**故意不建索引**（P1-30 复核，2026-09-04）：\"一份档案同时只有一次待目标机构确认的跨机构迁出\"是真的，可这张表没有\"撤回待确认迁出\"的通道——只有 confirm，没有拒绝/撤回。今天迁错机构还能再发一条指向正确机构的迁出（多出的那条不确认即无副作用），加了 (enrollment_id) WHERE event='migrate' AND NOT confirmed 就变成\"发不出第二条、也撤不掉第一条\"，把一条良性多余行换成一份卡死的档案。补上撤回通道再建索引",
 }
 
@@ -821,6 +820,7 @@ GUARDED_BY_PARENT_UPDATE: dict[str, str] = {
     "spd_referral_steps": "转诊轨迹每格只走一次：不变式长在转诊单 `spd_referral_cases` 的状态跃迁上，由 `referral._advance_case` 的 `UPDATE … WHERE id=:id AND status=期望态` 守住；轨迹行与派生的任务/积分同事务，抢输者一次 rollback 全退",
     "spd_tasks": "随访办结派出的\"异常处置\"任务只该派一次：表上没有指向随访记录的列（现有列组不成键），闸门在 `spd/service.close_followup_record` 的 `UPDATE spd_followup_records SET status=终态 WHERE id=:id AND status IN 允许态`——医护端与居民端两个入口共用它，任务只在命中后派",
     "workflow_transitions": "一个流程实例离开某个节点只该有一条流转行：唯一性长在实例行上，由 `workflows._move_instance` 的 `UPDATE workflow_instances … WHERE status='running' AND current_node=读到的节点` 守住。**刻意不建 (instance_id, from_node) 唯一索引**——节点定义不拒环（a→b→a 合法），环形流程的第二圈会撞索引，单子从此既推不动也终止不了；条件 UPDATE 认的是\"当前位置\"而非历史，对环同样成立",
+    "spd_interventions": "高危自动干预/自动复诊只该派一次：表级唯一被证伪（手工路径按同一模板批量、按周期反复开具是设计功能，`update_intervention` 还允许 removed→planned 恢复），而自动路径 `care._auto_intervene` 的「查在途 → 判 → 插」一条 SQL 压不进去（判的是有没有在途行，写的是 INSERT，INSERT 不给既有行加锁）。故整段圈进以纳管档案行为界的临界区（`concurrency.serialized_on(db, SpdEnrollment, …)`，commit 在块内且是块内最后一句）：抢输者重查时看到赢家提交后的行而跳过插入，与顺序发生的第二次评估表现一致——不 409，仍 201，只是不再多写一条。这一格守的是父行**行锁**而非条件 UPDATE，是本清单里唯一的那一种",
     "spd_point_records": "积分流水多行是台账本义（同一账户反复签到/兑换）。带业务事件的入账走 `service.award_points` 的 (rule_code, ref_type, ref_id) 幂等判定；assess.py 的两处不带 ref_id——签到\"一天一笔\"由 spd_signins 的唯一约束守、兑换扣分由 take_amount 的条件 UPDATE 守，都在事件键之外（回归见 tests/test_spd_point_record_ledger.py）",
 }
 
@@ -1107,7 +1107,9 @@ BASELINE_UNAUDITED_WRITE_SITES = 0
 # （建了就把一条良性的多余行换成一份卡死的档案，理由见 AUDITED_UNDECIDED_TABLES
 # 与 TECH_DEBT P1-40）。它是从"没审过"挪进"审过但定不了"，总缺口在变小。
 # P1-40 补上撤回通道并建索引后，这个数要跟着降回 8。
-BASELINE_UNDECIDED_WRITE_SITES = 10
+# 2026-09-05：10 → 8 —— `spd_interventions` 的两处从待决挪进 GUARDED_BY_PARENT_UPDATE
+# （自动干预改由纳管档案行的临界区串行，见该清单里的理由），净额回到只减不增。
+BASELINE_UNDECIDED_WRITE_SITES = 8
 
 
 #: 走 `app/concurrency.py` 助手插入的写法（第一个模型实参就是要写的行）。

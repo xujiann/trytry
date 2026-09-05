@@ -573,6 +573,9 @@ def create_assessment(
     if enrollment is not None and graded["risk_level"] in ("low", "mid", "high", "very_high"):
         enrollment.risk_level = graded["risk_level"]
         if graded["risk_level"] in ("high", "very_high"):
+            # `_auto_intervene` 在档案行临界区**内**提交（连同上面待插的评估记录与
+            # risk_level 回写），所以它必须是本次请求的最后一步写：这行与下面的
+            # commit 之间不许再插入"不该提前落库"的写。
             _auto_intervene(db, enrollment, graded["risk_level"])
     db.commit()
     patient = db.get(Patient, body.patient_id)
@@ -584,56 +587,87 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
 
     模板按 `auto_risk_level` 匹配；没有配模板就只建复诊，不静默什么都不做——
     "高危了但系统没动静"是这套系统最不该出现的状态。
+
+    **去重守在纳管档案这一行上，不是唯一索引（P1-30）**：
+
+    - 表级唯一被证伪。`spd_interventions` 的 (enrollment_id, template_id) 不是键：
+      手工路径 `create_interventions` 按同一模板批量/按周期反复开具是设计功能，
+      `update_intervention` 还允许 removed→planned 恢复，两列本身都可空。
+      建唯一索引会把这些合法多行拒掉，比多写一条自动干预坏得多。
+    - 下面两段都是 check-then-act（在途干预按 (档案, 模板)、高危复诊按
+      (患者, 病种)），而会话是 `autoflush=False`：直到调用方提交前**没有任何语句
+      到库**，连 `create_assessment` 里那句 risk_level 回写都不会顺带给档案行上锁。
+      PG 的 READ COMMITTED 下同一档案两次高危评估并发，两路都查不到、两路都插，
+      档案上挂两条一模一样的"高危自动干预"。SQLite 的库级写锁在这里也挡不住
+      （它只锁写，判定阶段的读根本不排队），只是红绿看调度——所以确定性的取证
+      在真 PG 档（tests/test_spd_intervention_unique_races.py）。
+    - 一条 SQL 压不进去（要判的是"有没有在途行"，写的是 INSERT，INSERT 不给
+      既有行加锁），也不能改成按 risk_level 的条件 UPDATE——已经 high 的患者
+      复评仍 high、而上一次自动干预已办结/移除时，必须重新开一条，
+      条件 UPDATE 会把这条静默掐掉，正是上面那句"最不该出现的状态"。
+      于是整段"查 → 判 → 插"圈进以档案行为界的临界区（`concurrency.serialized_on`）。
+    - **commit 写在块内且是块内最后一句**：PG 的 FOR UPDATE 锁随事务提交释放，
+      提交挪到块外等于没锁；SQLite 侧也要让进程锁活过提交，否则下一位在赢家
+      落盘前就读完了。因此本函数会提交调用方的整笔事务（含 `create_assessment`
+      里待插的评估记录与 risk_level 回写），**必须是调用方的最后一步写**。
+    - 块内**不要** `db.refresh(enrollment)`：档案对象上带着调用方还没 flush 的
+      risk_level 回写，refresh 会把它丢掉。这里也没有对档案行的读-改-写
+      （只有新 SELECT + 新对象 db.add），静态规则不要求 refresh。
+
+    抢输的一路重查时看到的是赢家提交后的行，于是跳过 db.add——与顺序发生的
+    第二次评估完全一样：不报 409，接口照旧 201，只是不再多写一条。
     """
-    template = (
-        db.query(SpdInterventionTemplate)
-        .filter(
-            SpdInterventionTemplate.program_code == enrollment.program_code,
-            SpdInterventionTemplate.auto_risk_level == risk_level,
-            SpdInterventionTemplate.active.is_(True),
-        )
-        .first()
-    )
-    if template is not None:
-        exists = (
-            db.query(SpdIntervention)
+    with serialized_on(db, SpdEnrollment, enrollment.id):
+        template = (
+            db.query(SpdInterventionTemplate)
             .filter(
-                SpdIntervention.enrollment_id == enrollment.id,
-                SpdIntervention.template_id == template.id,
-                SpdIntervention.status.in_(["planned", "doing"]),
+                SpdInterventionTemplate.program_code == enrollment.program_code,
+                SpdInterventionTemplate.auto_risk_level == risk_level,
+                SpdInterventionTemplate.active.is_(True),
             )
             .first()
         )
-        if exists is None:
+        if template is not None:
+            exists = (
+                db.query(SpdIntervention)
+                .filter(
+                    SpdIntervention.enrollment_id == enrollment.id,
+                    SpdIntervention.template_id == template.id,
+                    SpdIntervention.status.in_(["planned", "doing"]),
+                )
+                .first()
+            )
+            if exists is None:
+                db.add(
+                    SpdIntervention(
+                        patient_id=enrollment.patient_id, enrollment_id=enrollment.id,
+                        program_code=enrollment.program_code, template_id=template.id,
+                        goal=f"{risk_level}风险自动干预", content=template.content,
+                        measures=template.measures, frequency=template.frequency,
+                        next_at=(date.today() + timedelta(days=7)).isoformat(),
+                        owner_id=enrollment.doctor_user_id, status="planned",
+                    )
+                )
+        already = (
+            db.query(SpdRevisit)
+            .filter(
+                SpdRevisit.patient_id == enrollment.patient_id,
+                SpdRevisit.program_code == enrollment.program_code,
+                SpdRevisit.source == "high_risk",
+                SpdRevisit.status == "planned",
+            )
+            .first()
+        )
+        if already is None:
             db.add(
-                SpdIntervention(
-                    patient_id=enrollment.patient_id, enrollment_id=enrollment.id,
-                    program_code=enrollment.program_code, template_id=template.id,
-                    goal=f"{risk_level}风险自动干预", content=template.content,
-                    measures=template.measures, frequency=template.frequency,
-                    next_at=(date.today() + timedelta(days=7)).isoformat(),
-                    owner_id=enrollment.doctor_user_id, status="planned",
+                SpdRevisit(
+                    patient_id=enrollment.patient_id, program_code=enrollment.program_code,
+                    plan_date=(date.today() + timedelta(days=14)).isoformat(),
+                    doctor_user_id=enrollment.doctor_user_id, items="高危复诊评估",
+                    source="high_risk", status="planned",
                 )
             )
-    already = (
-        db.query(SpdRevisit)
-        .filter(
-            SpdRevisit.patient_id == enrollment.patient_id,
-            SpdRevisit.program_code == enrollment.program_code,
-            SpdRevisit.source == "high_risk",
-            SpdRevisit.status == "planned",
-        )
-        .first()
-    )
-    if already is None:
-        db.add(
-            SpdRevisit(
-                patient_id=enrollment.patient_id, program_code=enrollment.program_code,
-                plan_date=(date.today() + timedelta(days=14)).isoformat(),
-                doctor_user_id=enrollment.doctor_user_id, items="高危复诊评估",
-                source="high_risk", status="planned",
-            )
-        )
+        db.commit()
 
 
 @router.get("/assessments", response_model=list[CareAssessmentOut])
