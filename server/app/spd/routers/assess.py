@@ -1227,6 +1227,10 @@ def signin(db: Session = Depends(get_db), user: User = Depends(get_current_user)
         db.rollback()
         raise HTTPException(status_code=409, detail="今日已签到") from None
     db.refresh(account)  # Core UPDATE 不经过 ORM，会话里的对象还是旧值
+    # 这条流水**不带 ref_id**：签到不挂在某次业务事件上，因而落在 spd_point_records
+    # 的 (rule_code, ref_type, ref_id) 事件键之外。"一天只入一笔"由上面 spd_signins
+    # 的唯一约束 + IntegrityError 守住，不必也不该再加一层按 ref 的去重
+    # （带 ref 的入账才走 service.award_points，见 tests/test_spd_point_record_ledger.py）。
     db.add(
         SpdPointRecord(
             account_id=account.id, rule_code=rule.code, direction="in", points=rule.points,
@@ -1318,6 +1322,8 @@ def redeem(
         verify_code=f"{randbelow(1000000):06d}", status="pending",
     )
     db.add(record)
+    # 同样落在事件键之外：direction='out' 且不带 ref_id，同一账户多次兑换本就合法。
+    # "扣得起才扣"由上面两次 take_amount 的条件 UPDATE 守住。
     db.add(
         SpdPointRecord(
             account_id=account.id, rule_code="", direction="out", points=goods.points,

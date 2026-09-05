@@ -56,7 +56,7 @@ from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, Patient
 from .chronic import _evaluate_level
 from .encounters import create_encounter
 from .exams import submit_report
-from .inpatient import AdmissionCreate, _release_bed, create_admission
+from .inpatient import AdmissionCreate, _mark_discharged, _release_bed, create_admission
 from .patients import create_patient_idempotent
 
 router = APIRouter(
@@ -671,21 +671,27 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
     )
     if admission is None:
         raise HTTPException(status_code=409, detail="该患者无在院记录，A03 出院拒收")
+    # 上面那句"有没有在院记录"是快路径；闸门是 `_mark_discharged` 那条带状态条件的
+    # UPDATE，且必须是本次事务的第一条写语句。A03 与平台端点是**同一行的两个出院入口**，
+    # 谁抢输都拿与顺序重复完全一致的 409（`_run_inbound` 照旧把它写进交换日志）。
+    now = utcnow()
+    if not _mark_discharged(db, admission.id, now):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该患者无在院记录，A03 出院拒收")
+    db.refresh(admission)  # 中途有转床提交时，要释放的是新床
     db.query(InpatientOrder).filter(
         InpatientOrder.admission_id == admission.id, InpatientOrder.status == "active"
     ).update(
-        {InpatientOrder.status: "stopped", InpatientOrder.stopped_at: utcnow()},
+        {InpatientOrder.status: "stopped", InpatientOrder.stopped_at: now},
         synchronize_session=False,
     )
     _release_bed(db, admission.bed_id)
-    admission.status = "discharged"
-    admission.discharged_at = utcnow()
     events.publish(db, events.ADMISSION_DISCHARGED, {
         "admission_id": admission.id,
         "patient_id": admission.patient_id,
         "org_id": admission.org_id,
         "diagnosis_name": admission.diagnosis_name or "",
-        "discharged_on": admission.discharged_at.date().isoformat(),
+        "discharged_on": now.date().isoformat(),
     })
     db.commit()
     return _adt_out(

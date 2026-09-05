@@ -17,13 +17,14 @@
 状态机写死在 `_NEXT` 表里而不是让调用方传目标状态：让调用方传，等于把
 "谁能把单子推到哪一步"交给前端决定。
 """
-from typing import Any
+from typing import Any, cast
 
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -396,12 +397,64 @@ def _assert_holds_case(user: User, case: SpdReferralCase) -> None:
 def _add_step(
     db: Session, case: SpdReferralCase, step: str, action: str, user: User, opinion: str = ""
 ) -> None:
+    """写一条环节轨迹。**只在 `_advance_case` 命中之后、或新单 `db.flush()` 之后调用。**
+
+    保持裸 `db.add` 且**不 commit**：轨迹行必须与父单那条状态 UPDATE、随之派生的
+    `spawn_task`/`award_points` 同属一个事务，抢输者一次 `db.rollback()` 就该把三样
+    一起收回。本表因此不设唯一约束——"同一格只走一次"这条不变式长在父单
+    `spd_referral_cases` 的状态跃迁上，不是本表的键（登记在
+    tests/test_stage14_concurrency.py 的 GUARDED_BY_PARENT_UPDATE）。
+    """
     db.add(
         SpdReferralStep(
             case_id=case.id, step=step, action=action, actor_id=user.id,
             org_id=user.org_id, opinion=opinion,
         )
     )
+
+
+def _advance_case(
+    db: Session, case_id: int, expected: str | tuple[str, ...], **values: Any
+) -> bool:
+    """父单状态推进：判定与写入压进**同一条** `UPDATE … WHERE id=:id AND status=期望态`，
+    返回本次是否推进到。
+
+    旧写法 `db.get` → Python 判 `case.status` → ORM 属性赋值 → `commit`，是典型的
+    check-then-act：flush 出来的 UPDATE 只有 `WHERE id=?`，PG READ COMMITTED 下两路
+    都读到同一旧态、都推进、各写一条 `SpdReferralStep`，并各自 `spawn_task`/
+    `award_points`（都没有幂等键），轨迹与终态互相矛盾、积分与任务翻倍。期望态进了
+    WHERE 之后，后到的一路在行锁上等赢家提交、再按新值重算条件（EvalPlanQual），
+    `rowcount` 为 0——调用方 `db.rollback()` + 409，轨迹行与副作用一个都不落。
+
+    `expected` 传单值即等值匹配，传元组即 `IN`（下转允许 accepted/arrived 两态进入，
+    撤回允许 submitted/station_reviewed 两态进入）。范式同
+    `prescriptions._apply_review` / `maternal._mark_high_risk`。
+    """
+    status_ok = (
+        SpdReferralCase.status == expected
+        if isinstance(expected, str)
+        else SpdReferralCase.status.in_(expected)
+    )
+    moved = cast(CursorResult, db.execute(
+        update(SpdReferralCase)
+        .where(SpdReferralCase.id == case_id, status_ok)
+        .values(**values)
+    ))
+    return bool(moved.rowcount)
+
+
+def _review_conflict_detail(status: str) -> str:
+    """审核抢输后按父单**真实的新状态**措辞（读之前必须先 rollback + refresh）。
+
+    对得上前置校验的两种情形沿用同一句；赢家只把单子推进了一格、新态仍可审时，
+    既不重试也不代为推进——抢输者手里的 action/opinion 是写给**上一个环节**的，
+    拿去写下一格等于伪造另一家机构的审核意见，只能请调用方刷新后重来。
+    """
+    if status in _TERMINAL:
+        return "该转诊单已结束"
+    if _NEXT.get(status) is None:
+        return "当前状态不需要审核"
+    return "该转诊单刚被其他操作推进，请刷新后重试"
 
 
 def _create_case(
@@ -560,23 +613,26 @@ def review_referral(
         raise HTTPException(status_code=409, detail="当前状态不需要审核")
     _assert_review_authority(db, user, case)
     next_status, step_name, level = nxt
+    # 期望态必须是刚读到的**精确**状态：环节名、下一态、层级都由它派生，
+    # 写成 in_(_NEXT) 会在抢输时匹配到另一个可审态，把错误的环节名写进轨迹。
+    expected = case.status
     if body.action == "reject":
-        case.status = "rejected"
-        case.closed_at = now_naive()
-        _add_step(db, case, step_name, "reject", user, body.opinion)
-        db.commit()
-        return _case_out(db, case)
-    case.status = next_status
-    case.current_level = level
-    # 全域角色（admin/director 常不绑机构）代推进时，不要把机构锚点清成 None——
-    # 否则后续环节的 parent 校验（_assert_review_authority 读 current_org_id）会把
-    # 所有非全域账号锁死（ADR-0004）。无机构的代推进保留上一个真实机构锚点。
-    if user.org_id is not None:
-        case.current_org_id = user.org_id
-    if body.target_org_id is not None:
-        case.target_org_id = body.target_org_id
-    _add_step(db, case, step_name, "pass", user, body.opinion)
-    if next_status == "accepted":
+        values: dict[str, Any] = {"status": "rejected", "closed_at": now_naive()}
+    else:
+        values = {"status": next_status, "current_level": level}
+        # 全域角色（admin/director 常不绑机构）代推进时，不要把机构锚点清成 None——
+        # 否则后续环节的 parent 校验（_assert_review_authority 读 current_org_id）会把
+        # 所有非全域账号锁死（ADR-0004）。无机构的代推进保留上一个真实机构锚点。
+        if user.org_id is not None:
+            values["current_org_id"] = user.org_id
+        if body.target_org_id is not None:
+            values["target_org_id"] = body.target_org_id
+    if not _advance_case(db, case.id, expected, **values):
+        db.rollback()
+        db.refresh(case)  # 抢输了就按真实状态措辞，别拿锁外读到的旧值
+        raise HTTPException(status_code=409, detail=_review_conflict_detail(case.status))
+    _add_step(db, case, step_name, body.action, user, body.opinion)
+    if body.action == "pass" and next_status == "accepted":
         # 接收即给发起方（村医）建一条"跟踪到院"的任务，闭环不靠人惦记
         enrollment = (
             db.get(SpdEnrollment, case.enrollment_id) if case.enrollment_id else None
@@ -613,8 +669,11 @@ def arrive_referral(
     if case.status != "accepted":
         raise HTTPException(status_code=409, detail="只有已接收的转诊单可登记到院")
     _assert_holds_case(user, case)
-    case.status = "arrived"
-    case.effective_visit = body.effective_visit
+    if not _advance_case(
+        db, case.id, "accepted", status="arrived", effective_visit=body.effective_visit
+    ):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="只有已接收的转诊单可登记到院")
     _add_step(db, case, "到院", "arrive", user, body.opinion)
     if body.effective_visit:
         enrollment = (
@@ -652,11 +711,17 @@ def down_referral(
     _assert_holds_case(user, case)
     if db.get(Organization, body.target_org_id) is None:
         raise HTTPException(status_code=404, detail="下转目标机构不存在")
-    case.status = "down_referred"
-    case.stable_for_down = body.stable
-    case.target_org_id = body.target_org_id
-    case.current_org_id = body.target_org_id
-    case.current_level = _level_of(db, body.target_org_id)
+    # 期望态保持 IN ("accepted", "arrived")：下转输给并发的到院登记时（accepted 已变
+    # arrived）本条 UPDATE 仍应命中——那正是 accepted→arrived→down_referred 这条合法
+    # 顺序路径；只有输给另一路下转（已是 down_referred）才该 409。
+    if not _advance_case(
+        db, case.id, ("accepted", "arrived"),
+        status="down_referred", stable_for_down=body.stable,
+        target_org_id=body.target_org_id, current_org_id=body.target_org_id,
+        current_level=_level_of(db, body.target_org_id),
+    ):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="只有已接收/已到院的患者可下转")
     _add_step(db, case, "下转", "down", user, body.opinion)
     enrollment = db.get(SpdEnrollment, case.enrollment_id) if case.enrollment_id else None
     spawn_task(
@@ -686,8 +751,9 @@ def receive_followup(
     if case.status != "down_referred":
         raise HTTPException(status_code=409, detail="只有已下转的转诊单可接收随访")
     _assert_holds_case(user, case)
-    case.status = "closed"
-    case.closed_at = now_naive()
+    if not _advance_case(db, case.id, "down_referred", status="closed", closed_at=now_naive()):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="只有已下转的转诊单可接收随访")
     _add_step(db, case, "随访接收", "receive", user, body.opinion)
     award_points(
         db, user.id, "referral_down", ref_type="referral", ref_id=case.id,
@@ -712,8 +778,14 @@ def withdraw_referral(
     # 卫生院审核，与 submitted 同样允许撤回；新单不再产生该状态。
     if case.status not in ("submitted", "station_reviewed"):
         raise HTTPException(status_code=409, detail="已进入上级审核的转诊单不能撤回")
-    case.status = "withdrawn"
-    case.closed_at = now_naive()
+    # 抢输给并发的审核（新态 township_reviewed / rejected）或另一路撤回（withdrawn）
+    # 时，顺序重放走的都是上面这句前置校验，所以文案完全一致。
+    if not _advance_case(
+        db, case.id, ("submitted", "station_reviewed"),
+        status="withdrawn", closed_at=now_naive(),
+    ):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已进入上级审核的转诊单不能撤回")
     _add_step(db, case, "撤回", "withdraw", user, "")
     db.commit()
     return _case_out(db, case)

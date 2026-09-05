@@ -808,6 +808,7 @@ AUDITED_UNDECIDED_TABLES: dict[str, str] = {
     "followup_tasks": "派生路径 create_task 确实是 (category, source_id, status='pending') 上的 check-then-act，作者 docstring 也把重复派生视为缺陷；但人工补建路径 create_followup 自由写任意 (category, source_id)，绝大多数人工任务 source_id=0，且同一来源多时点随访（如术后第 7 天/第 30…",
     "report_templates": "共享中心报告模板是配置表，候选键只有 (center_type, name)，但代码/测试/文档没有任何地方把同名模板当缺陷（无 code 列、无查重、无删改端点、无种子），重复只是列表里多一条可选项而非要仲裁的数据；对比 spd_report_templates 是靠 code 列唯一",
     "spd_interventions": "两难：自动路径 _auto_intervene 明确按 (enrollment_id, template_id, status∈planned/doing) 先查再插（check-then-act），两次评估并发会写出两条一模一样的\"高危自动干预\"",
+    "spd_lifecycle_events": "不变式成立但**故意不建索引**（P1-30 复核，2026-09-04）：\"一份档案同时只有一次待目标机构确认的跨机构迁出\"是真的，可这张表没有\"撤回待确认迁出\"的通道——只有 confirm，没有拒绝/撤回。今天迁错机构还能再发一条指向正确机构的迁出（多出的那条不确认即无副作用），加了 (enrollment_id) WHERE event='migrate' AND NOT confirmed 就变成\"发不出第二条、也撤不掉第一条\"，把一条良性多余行换成一份卡死的档案。补上撤回通道再建索引",
 }
 
 # 唯一性不在本表、而在**父表/状态行**上的表：本表是流水/日志/子行，"不得重复"的真正含义是
@@ -815,6 +816,12 @@ AUDITED_UNDECIDED_TABLES: dict[str, str] = {
 # rowcount 为 0 即 409），本表只在 UPDATE 命中后追加——判定与写入在同一条 SQL 里，
 # 与 add_amount / claim_quota 同理。值写"守在哪个函数、哪条 UPDATE"。
 GUARDED_BY_PARENT_UPDATE: dict[str, str] = {
+    "charge_price_changes": "调价历史一次跃迁一行：唯一性长在收费项的**价格本身**上（10→12→10 的往返调价里 old_price 会合法重复，静态部分唯一索引表达不了），由 `billing._change_price` 的 `UPDATE charge_items SET price=新价 WHERE id=:id AND price=:旧价` 守住——rowcount 0 即抢输，拿 409，历史行只在命中后追加",
+    "asset_movements": "采购验收那条入库流水一张单只该有一条：表上没有任何列能表明\"这是采购单 X 的验收\"（手工出入库同表、note 自由文本），闸门在父单 `materials._mark_received` 的 `UPDATE material_purchases … WHERE status='contracted'`——加库存与写流水都只在 rowcount 命中后发生（姊妹路径 pharmacy.receive_purchase 同形）",
+    "spd_referral_steps": "转诊轨迹每格只走一次：不变式长在转诊单 `spd_referral_cases` 的状态跃迁上，由 `referral._advance_case` 的 `UPDATE … WHERE id=:id AND status=期望态` 守住；轨迹行与派生的任务/积分同事务，抢输者一次 rollback 全退",
+    "spd_tasks": "随访办结派出的\"异常处置\"任务只该派一次：表上没有指向随访记录的列（现有列组不成键），闸门在 `spd/service.close_followup_record` 的 `UPDATE spd_followup_records SET status=终态 WHERE id=:id AND status IN 允许态`——医护端与居民端两个入口共用它，任务只在命中后派",
+    "workflow_transitions": "一个流程实例离开某个节点只该有一条流转行：唯一性长在实例行上，由 `workflows._move_instance` 的 `UPDATE workflow_instances … WHERE status='running' AND current_node=读到的节点` 守住。**刻意不建 (instance_id, from_node) 唯一索引**——节点定义不拒环（a→b→a 合法），环形流程的第二圈会撞索引，单子从此既推不动也终止不了；条件 UPDATE 认的是\"当前位置\"而非历史，对环同样成立",
+    "spd_point_records": "积分流水多行是台账本义（同一账户反复签到/兑换）。带业务事件的入账走 `service.award_points` 的 (rule_code, ref_type, ref_id) 幂等判定；assess.py 的两处不带 ref_id——签到\"一天一笔\"由 spd_signins 的唯一约束守、兑换扣分由 take_amount 的条件 UPDATE 守，都在事件键之外（回归见 tests/test_spd_point_record_ledger.py）",
 }
 
 
@@ -1073,7 +1080,14 @@ def test_退报名释放名额(client, admin):
 # 同一批次里覆盖的**质量**是升的：admissions / appointment_slots / progress_notes
 # 三张表从"只在清单里逻辑唯一"变成库里真有部分唯一索引（迁移 b8e3d5f70a91），
 # 抢输者拿 409 而不是静默写出两条。此后仍只许变好。
-BASELINE_COVERED_WRITE_SITES = 59
+# 2026-09-04（P1-30 第二步）59 → 131。**两件事叠在一起，分开记账**：
+#   * 口径变了：插入助手（insert_or_conflict / insert_if_absent / insert_with_retry）
+#     也算写入点，分母 226 → 284。不这么改，"把 db.add 改成 insert_or_conflict"会让
+#     那处从分子分母一起消失、覆盖数不升反降——一条会因为修复而报警的度量留不住。
+#   * 事情也真的变好了：13 条（部分）唯一索引下沉到库（迁移 b9c8d7e6f5a4 / f4e3d2c1b0a9），
+#     原本"业务上唯一、库上无约束"的表进了 _tables_with_unique_constraint()。
+# 因此 131/284（46.1%）与旧的 59/226（26.1%）**不可直接相比**；此后仍只许变好。
+BASELINE_COVERED_WRITE_SITES = 131
 # 2026-09-03（P1-30）1 → 0：最后一个未识别写入点（billing.run_reconciliation 的
 # `for d in diffs: db.add(d)`）由 _model_bindings 认出了"容器只装同一种模型"的形状。
 BASELINE_UNRESOLVED_WRITE_SITES = 0
@@ -1082,19 +1096,63 @@ BASELINE_UNRESOLVED_WRITE_SITES = 0
 # 起点 26：正是审计判为"业务上确实唯一/守在父行"的 20 张表的写入点——它们的去向是
 # 唯一索引下沉 + insert_or_conflict、或父行条件 UPDATE（同一工程包后续提交），落地一张
 # 这个数就该降一次；待决 8 个对应 AUDITED_UNDECIDED_TABLES 的 5 张表。
-BASELINE_UNAUDITED_WRITE_SITES = 26
-BASELINE_UNDECIDED_WRITE_SITES = 8
+# 2026-09-04（P1-30 收口）26 → **0**：284 个写入点，每一个都有了去向——要么库上真有唯一
+# 约束（131），要么审过并写明"为什么多行合法/由哪条父行 UPDATE 守住"（143），要么明确待决
+# 并写明"卡在什么地方"（10）。这个 0 的含义是**没有一处写入点是没人看过的**，不是"没有并发
+# 问题"；新表进路由前必须先回答"多行合法吗"，答案落到某一份清单或一条唯一索引上，否则这里变红。
+BASELINE_UNAUDITED_WRITE_SITES = 0
+# 2026-09-04：8 → 10，**唯一一次上调，且是"从更差的那一档挪进来"而不是放水**。
+# `spd_lifecycle_events` 的两个写入点原本落在"既未覆盖也未审计"（26 那一档）里；
+# 审计判定它的不变式为真，却因为这张表没有"撤回待确认迁出"的通道而**故意不建索引**
+# （建了就把一条良性的多余行换成一份卡死的档案，理由见 AUDITED_UNDECIDED_TABLES
+# 与 TECH_DEBT P1-40）。它是从"没审过"挪进"审过但定不了"，总缺口在变小。
+# P1-40 补上撤回通道并建索引后，这个数要跟着降回 8。
+BASELINE_UNDECIDED_WRITE_SITES = 10
+
+
+#: 走 `app/concurrency.py` 助手插入的写法（第一个模型实参就是要写的行）。
+#: 这些**也是写入点**——见 `_write_sites` docstring 里那条"分母不许因为修好而缩水"。
+_INSERT_HELPERS = {"insert_or_conflict", "insert_if_absent", "insert_with_retry"}
+
+
+def _first_model_call(node: ast.AST, model_names: set[str]) -> str | None:
+    """节点里第一处 `Model(...)` 构造的模型名（按源码顺序）。"""
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+            if child.func.id in model_names:
+                return child.func.id
+    return None
+
+
+def _model_built_by(func: ast.FunctionDef, name: str, model_names: set[str]) -> str | None:
+    """`insert_with_retry(db, _build)` 里那个 `_build` 造的是哪个模型。
+
+    `insert_with_retry` 收的是**每次重试都重新构造一行**的工厂函数（服务端生成
+    的顺序编号要重算），所以第二个实参不是行对象而是可调用对象——不顺着它走，
+    这三处（医废追溯码、病理标本号、证书编号）就会一直挂在"形状识别不了"里。
+    """
+    for node in ast.walk(func):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return _first_model_call(node, model_names)
+    return None
 
 
 def _write_sites():
-    """全部 `db.add(...)` 写入点的清点。
+    """全部**插入点**的清点（`db.add(...)` 与 `app/concurrency.py` 的插入助手）。
 
     口径（**连口径一起留档**，否则这个数字过后连被核对的资格都没有）：
       * 文件：app/routers 与 app/spd/routers 下**递归**的全部 .py；
-      * 写入点：函数体内形如 `db.add(x)` 的调用，一次调用算一个；
+      * 写入点：函数体内形如 `db.add(x)` 的调用，或 `insert_or_conflict(db, x, ...)` /
+        `insert_if_absent(db, x)` / `insert_with_retry(...)` 这类助手调用，一次算一个；
       * 形状可识别：能顺着 `db.add(Model(...))`、`obj = Model(...); db.add(obj)` 或
         `xs.append(Model(...)); for x in xs: db.add(x)` 解析出模型名的写入点；
       * 规则覆盖：模型对应的表带 DB 级唯一约束，或在 LOGICAL_UNIQUE_TABLES 里。
+
+    **为什么助手调用也要算进来**（2026-09-04，P1-30 落地时发现的度量缺陷）：
+    原口径只数 `db.add`，于是把一处写入点改成 `insert_or_conflict` 之后，那处就从
+    分子分母里一起消失——代码变安全了，"覆盖数"反而**下降**，`covered >= 基线`
+    这条棘轮会因为有人修好了东西而变红。一条会因为修复而报警的度量，早晚被当噪音
+    调松或删掉。把助手调用一并计入，分母才稳定，覆盖数才随修复上升。
     """
     model_table = _model_to_table()
     model_names = set(model_table)
@@ -1113,21 +1171,33 @@ def _write_sites():
         for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             assigned = _model_bindings(func, model_names)
             for node in ast.walk(func):
-                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                if not isinstance(node, ast.Call) or not node.args:
                     continue
-                if node.func.attr != "add" or not node.args:
-                    continue
-                if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "db"):
+                if isinstance(node.func, ast.Attribute):
+                    if node.func.attr != "add":
+                        continue
+                    if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "db"):
+                        continue
+                    arg, how = node.args[0], "db.add"
+                elif isinstance(node.func, ast.Name) and node.func.id in _INSERT_HELPERS:
+                    # 助手的第一个实参是 session，第二个才是要写的行
+                    if len(node.args) < 2:
+                        continue
+                    arg, how = node.args[1], node.func.id
+                else:
                     continue
                 total += 1
-                arg = node.args[0]
                 model = None
                 if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name):
                     model = arg.func.id if arg.func.id in model_names else None
                 elif isinstance(arg, ast.Name):
-                    model = assigned.get(arg.id)
+                    # `insert_with_retry(db, _build)` 传的是**构造函数**而不是行对象：
+                    # 顺着同名内嵌 def 的函数体去找它 return 的那个模型。
+                    model = assigned.get(arg.id) or _model_built_by(func, arg.id, model_names)
+                elif isinstance(arg, ast.Lambda):
+                    model = _first_model_call(arg, model_names)
                 if model is None:
-                    unresolved.append(f"{name}:{func.name} → db.add({ast.unparse(arg)})")
+                    unresolved.append(f"{name}:{func.name} → {how}({ast.unparse(arg)})")
                     continue
                 resolved += 1
                 table = model_table[model]

@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable, scope_patient_list
+from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -135,10 +136,11 @@ def apply_special_disease(body: SpecialDiseaseCreate, db: Session = Depends(get_
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     app_ = SpecialDiseaseApp(**body.model_dump())
-    db.add(app_)
-    db.commit()
-    db.refresh(app_)
-    return app_
+    # 同患者同病种同时只能挂一条待批申报，由部分唯一索引
+    # uq_special_disease_app_applied（status='applied'）兜底。这里**不写预检**：
+    # 预检与兜底两条路径迟早会给出不同的文案，走单一路径则"顺序重复"与
+    # "并发抢输"拿到的 409 天然逐字节相同。批准/驳回后不在索引范围内，可再申报。
+    return insert_or_conflict(db, app_, "该患者同病种已有待审核的特病申报，不可重复申报")
 
 
 @router.get("/special-diseases", response_model=list[SpecialDiseaseOut])
@@ -256,8 +258,11 @@ def apply_dual_channel(
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     app_ = DualChannelApp(created_by=user.id, **body.model_dump())
-    db.add(app_)
-    db.commit()
+    # 同患者同药品同时只能挂一条待审核申报，由部分唯一索引
+    # uq_dual_channel_pending（status='pending'）兜底；双击提交此前会静默落两条，
+    # 最后要管理层人工分辨哪条才是真的。与特病申报同理不加预检——单一路径才能
+    # 保证顺序重复与并发抢输拿到同一句话。审核（通过/驳回）后可再申报。
+    insert_or_conflict(db, app_, "该患者该药品已有待审核的双通道申报，请先由管理层审核后再申报")
     return {"id": app_.id, "status": app_.status, "drug_name": app_.drug_name}
 
 

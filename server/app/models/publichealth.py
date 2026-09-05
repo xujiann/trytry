@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -252,6 +253,12 @@ class DeliveryRecord(Base):
     """㉔分娩服务：住院分娩记录（联动孕产妇档案状态流转）。"""
 
     __tablename__ = "delivery_records"
+    __table_args__ = (
+        # 一本孕产妇档案只登记一次分娩：多胎由 newborn_count 表达，不是多行；
+        # add_delivery 的"已有分娩记录"预检是 check-then-act，并发下会写出两条，
+        # 而查询侧 .first() 无序，此后取到哪条全看运气。
+        Index("uq_delivery_record", "record_id", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     record_id: Mapped[int] = mapped_column(ForeignKey("maternal_records.id"), index=True)

@@ -5,9 +5,13 @@
 - 出院前置：病案首页已填写（M8 计费上线后另加"费用已结清"校验）；
 - 病案首页含出院诊断/手术/费用汇总/转归（WS 445 最小集），为 DRGs（M12）数据底座。
 """
+from datetime import datetime
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func
+from sqlalchemy import case, func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
@@ -124,6 +128,35 @@ def _release_bed(db: Session, bed_id: int) -> None:
     db.query(Bed).filter(Bed.id == bed_id).update(
         {Bed.status: "free"}, synchronize_session=False
     )
+
+
+def _mark_discharged(db: Session, admission_id: int, now: datetime) -> bool:
+    """出院状态迁移与出院时间压在**同一条带状态条件的 UPDATE** 里，返回本次是否由这一路迁移。
+
+    旧写法是"读 status → 判 admitted → `admission.status = 'discharged'` → commit"：
+    两路出院（平台端点与 HL7 A03 镜像也算两路）同时到达都读到 admitted，
+    PG 的 READ COMMITTED 下八路全过——床被释放八次、出院随访与通知各派生一份、
+    ADMISSION_DISCHARGED 发布八次、discharged_at 以最后提交的为准。
+    `WHERE status = 'admitted'` 让后到的那几路 rowcount 为 0，与顺序请求一样拿 409。
+
+    两条使用约定，都不是可选项：
+
+    - `synchronize_session=False`：ORM 版 UPDATE 默认会把 SET 值评估到会话内对象上
+      （连 rowcount=0 的抢输方也会被翻成 discharged，因为它手上那份**旧属性**恰好
+      满足 WHERE），这里关掉，对象保持读到时的样子；
+    - rowcount=0 一路**先 `db.rollback()` 再读任何东西**（这条 UPDATE 已经开了写事务，
+      不回滚就一路攥着 SQLite 写锁，随后审计中间件/交换日志另开会话即
+      `database is locked`，见 `concurrency.insert_if_absent`）；rowcount=1 一路
+      **先 `db.refresh()` 再用 `bed_id`**——中途有转床提交时，拿到的才是新床，
+      否则释放旧床、把新床漏成永久占用。
+    """
+    discharged = cast(CursorResult, db.execute(
+        update(Admission)
+        .where(Admission.id == admission_id, Admission.status == "admitted")
+        .values(status="discharged", discharged_at=now)
+        .execution_options(synchronize_session=False)
+    ))
+    return bool(discharged.rowcount)
 
 
 # ---------- 入出转（ADT） ----------
@@ -243,10 +276,43 @@ def transfer_admission(admission_id: int, body: TransferBody, db: Session = Depe
         raise HTTPException(status_code=404, detail="目标病区不存在")
     if ward.org_id != admission.org_id:
         raise HTTPException(status_code=422, detail="转科仅限同机构病区（跨机构请走双向转诊）")
+    # 目标床位校验前移：原先它长在 `_occupy_bed` 里，而下面的比较交换要写
+    # `admissions.bed_id`——那是 PG 上一条**真的、不可延迟的外键**（SQLite 不校验）。
+    # 不先查一下，转到不存在的床在 PG 上会在比较交换处抛 IntegrityError，
+    # 由 404 变成没人接的 500。位置紧跟病区校验之后，顺序请求的报错次序不变。
+    bed = db.get(Bed, body.bed_id)
+    if bed is None or bed.ward_id != body.ward_id:
+        raise HTTPException(status_code=404, detail="床位不存在或不属于该病区")
+    # 比较交换排在占床/释床**之前**：出院已改为先锁 admission 行，转床若仍先锁床，
+    # 转床与出院并发就会形成锁环（PG 上一方被判 DeadlockDetected → 500）。
+    # 但"先 admission 后床"只覆盖出院与转床两条迁移，**不是全局不变式**：入院登记
+    # （`create_admission`）至今仍是先占床、后插 admission 行（既有顺序，本轮未动）。
+    # 要用它构造出环得让"同一患者的重复入院登记"恰好撞上"把这位患者转进那张登记
+    # 目标床"，概率极低，单列技术债；别照着这里以为三条路径的加锁顺序已经统一。
+    # 上面那句 status 预检同样是 check-then-act（两路并发转床都读到 admitted、
+    # 都读到同一张旧床），把"从我读到的那张床上移走"压进 WHERE 才拦得住：
+    # 抢输的一路 rowcount=0，占的目标床随回滚退回，不会留下没有住院记录的占用床。
+    old_bed_id = admission.bed_id
+    moved = cast(CursorResult, db.execute(
+        update(Admission)
+        .where(
+            Admission.id == admission.id,
+            Admission.status == "admitted",
+            Admission.bed_id == old_bed_id,
+        )
+        .values(ward_id=body.ward_id, bed_id=body.bed_id)
+        .execution_options(synchronize_session=False)
+    ))
+    if not moved.rowcount:
+        # 先 rollback 再 db.get：回滚把会话内的旧状态一并过期，重查才读得到已提交的真相
+        # （也释放这条 UPDATE 已经开出的写事务）。不要在 rollback 前读 admission 的任何属性。
+        db.rollback()
+        current = db.get(Admission, admission_id)
+        if current is None or current.status != "admitted":
+            raise HTTPException(status_code=409, detail="仅在院患者可转科/转床")
+        raise HTTPException(status_code=409, detail="床位信息刚被其他操作变更，请刷新后重试")
     _occupy_bed(db, body.bed_id, body.ward_id)
-    _release_bed(db, admission.bed_id)
-    admission.ward_id = body.ward_id
-    admission.bed_id = body.bed_id
+    _release_bed(db, old_bed_id)
     db.commit()
     db.refresh(admission)
     return _admission_out(admission)
@@ -399,16 +465,23 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: 
     if summary is None:
         raise HTTPException(status_code=409, detail="病案首页未填写，不可出院")
     _assert_billing_settled(db, admission)
+    # 上面那句"是否仍在院"是 check-then-act，只是快路径；真正的闸门是这条带状态条件的
+    # UPDATE，抢输的一路拿到的 409 与顺序重复出院完全一致——对调用方没有区别。
+    # 闸门必须是本次事务的**第一条写语句**：停医嘱、释床、派随访、发通知、发事件
+    # 全部只在命中后执行，抢输的一路一行都不动。
+    now = utcnow()
+    if not _mark_discharged(db, admission.id, now):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该患者已出院")
+    db.refresh(admission)  # 行锁已到手：bed_id 以库内为准（中途有转床提交时拿到的是新床）
     # 停止全部执行中医嘱
     db.query(InpatientOrder).filter(
         InpatientOrder.admission_id == admission_id, InpatientOrder.status == "active"
     ).update(
-        {InpatientOrder.status: "stopped", InpatientOrder.stopped_at: utcnow()},
+        {InpatientOrder.status: "stopped", InpatientOrder.stopped_at: now},
         synchronize_session=False,
     )
     _release_bed(db, admission.bed_id)
-    admission.status = "discharged"
-    admission.discharged_at = utcnow()
     # T2.4：出院即派生出院随访任务，交给统一随访中心跟踪
     from .followups import DISCHARGE_FOLLOWUP_DAYS, create_task
 
@@ -440,7 +513,7 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: 
         "patient_id": admission.patient_id,
         "org_id": admission.org_id,
         "diagnosis_name": admission.diagnosis_name or "",
-        "discharged_on": admission.discharged_at.date().isoformat(),
+        "discharged_on": now.date().isoformat(),
     })
     db.commit()
     db.refresh(admission)
@@ -467,6 +540,11 @@ class OrderCreate(BaseModel):
     admission_id: int
     order_type: str = Field(pattern="^(long|temp)$")
     content: str = Field(min_length=1, max_length=512)
+
+
+#: 预检与库兜底共用同一句文案：两处分头写，早晚会分叉，
+#: 调用方就能从措辞上分辨"并发抢输"与"本来就重复"，那正是要避免的。
+_DUPLICATE_LONG_ORDER_DETAIL = "该住院已有内容相同的执行中长期医嘱，请先停止原医嘱再开立"
 
 
 class OrderOut(BaseModel):
@@ -496,12 +574,29 @@ def create_order(
         raise HTTPException(status_code=404, detail="住院记录不存在")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可开立医嘱")
+    # 长期医嘱按"一条一直执行"开立，同一次住院里内容一模一样的在执行长期医嘱只该有一条：
+    # 两条就是两行医嘱单、两笔执行登记，最后要主管医师回头人工仲裁停掉一条。
+    # 临时医嘱按次开立（同内容多条合法）、停用后重开也合法，故只查 long+active。
+    if body.order_type == "long":
+        duplicate = (
+            db.query(InpatientOrder.id)
+            .filter(
+                InpatientOrder.admission_id == body.admission_id,
+                InpatientOrder.order_type == "long",
+                InpatientOrder.status == "active",
+                InpatientOrder.content == body.content,
+            )
+            .first()
+        )
+        if duplicate:
+            raise HTTPException(status_code=409, detail=_DUPLICATE_LONG_ORDER_DETAIL)
     order = InpatientOrder(
         **body.model_dump(), created_by_name=user.full_name or user.username
     )
-    db.add(order)
-    db.commit()
-    db.refresh(order)
+    # 上面那句查重是 check-then-act：并发下（含双击）两路都查不到就都开立。
+    # uq_inpatient_order_active_long（部分唯一索引）是兜底，抢输者拿到的
+    # 409 文案与顺序重复完全一致——对调用方来说两种情形没有区别。
+    insert_or_conflict(db, order, _DUPLICATE_LONG_ORDER_DETAIL)
     return _order_out(order)
 
 

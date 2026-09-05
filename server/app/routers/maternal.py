@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from ..datetypes import DateStr
-from ..concurrency import append_text, appended_text, insert_if_absent
+from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
@@ -276,8 +276,12 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
         raise HTTPException(status_code=409, detail="该档案已有分娩记录")
     delivery = DeliveryRecord(record_id=record_id, **body.model_dump())
     record.status = "delivered"
-    db.add(delivery)
-    db.commit()
+    # 上面那句"已有分娩记录"预检是 check-then-act：两路并发都查不到就都会插，
+    # 静默写出两条，而查询侧 `.first()` 无序，此后取到哪条全看运气。真正的闸门是
+    # `uq_delivery_record`（一档一分娩，多胎由 newborn_count 表达），抢输的一路在这里
+    # 撞约束 → 回滚 → 拿到与顺序请求逐字相同的 409。回滚同时也退掉上一句的
+    # status='delivered'（同一 session、同一事务），无需额外补偿。
+    insert_or_conflict(db, delivery, "该档案已有分娩记录")
     return {
         "id": delivery.id,
         "record_id": record_id,

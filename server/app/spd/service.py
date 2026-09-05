@@ -11,7 +11,10 @@
 5. `close_open_work`  —— 死亡/迁出/排除时终止后续任务（三处生命周期事件共用）
 """
 from datetime import date, timedelta
+from typing import cast
 
+from sqlalchemy import update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
@@ -19,6 +22,7 @@ from ..concurrency import add_amount
 from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of
 from .models import (
     SpdEnrollment,
+    SpdFollowupRecord,
     SpdIntervention,
     SpdMeasurement,
     SpdPathInstance,
@@ -171,6 +175,38 @@ def spawn_task(
     db.add(task)
     db.flush()
     return task
+
+
+def close_followup_record(
+    db: Session, record_id: int, new_status: str, *, allowed_from: tuple[str, ...]
+) -> bool:
+    """随访记录的终态跃迁：判定与写入压在**同一条带状态条件的 UPDATE** 里，返回是否跃迁到。
+
+    两个调用方（医护 `followup.execute_followup`、居民 `portal.self_answer_followup`）
+    此前都是"读 → Python 判 status → `record.status = 'done'` → commit"。这层
+    check-then-act 守的不只是随访记录本身：办结命中异常规则时要**派一条处置任务**，
+    而 `spd_tasks` 上没有指向随访记录的列，"一次执行只派一条任务"这条不变式在子表上
+    压根建不出唯一索引（同患者同病种同日两条不同随访各派一条是合法的）。PG
+    READ COMMITTED 下两路并发（两名医护、或医护与居民同时）都读到 planned 就都办结、
+    都派单，多出来的那条待办随后被 `sweep_overdue` 翻成超期，一路挂进督办与考核，
+    要人手工作废。
+
+    `WHERE status IN 期望态` 让后到的那路 rowcount 为 0（PG 取行锁后
+    EvalPlanQual 按赢家提交后的状态重算条件），调用方据此给出与顺序请求一致的 409，
+    处置任务只在返回 True 之后才 `db.add`。
+
+    `allowed_from` 由调用方给，因为两条通道的可办结态本就不同：医护执行允许
+    `planned|overdue|unreachable`（失访后拿到答案再补录是现有行为），居民自助只允许
+    `planned|overdue`。二者都恰是各自预检的补集——**状态取值是封闭的五个**
+    （planned|done|overdue|removed|unreachable）；日后新增状态值必须同时改预检与这里，
+    否则快路径放行、闸门 409，两边说法不一致。
+    """
+    closed = cast(CursorResult, db.execute(
+        update(SpdFollowupRecord)
+        .where(SpdFollowupRecord.id == record_id, SpdFollowupRecord.status.in_(allowed_from))
+        .values(status=new_status)
+    ))
+    return bool(closed.rowcount)
 
 
 def start_path(
@@ -478,8 +514,6 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
             escalated += 1
 
     # 复诊：plan_date 已过且仍是 planned → overdue，并写日志（谁标的、何时标的）
-    from .models import SpdFollowupRecord
-
     overdue_revisits = (
         db.query(SpdRevisit)
         .filter(SpdRevisit.status == "planned", SpdRevisit.plan_date != "",

@@ -1467,7 +1467,19 @@ def _bind_package(db: Session, enrollment: SpdEnrollment, package_id: int) -> Sp
         status="bound", period_end=period_end,
     )
     db.add(binding)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # 部分唯一索引 uq_spd_pkg_binding_enroll_pkg_bound 兜底：bind_package 的
+        # "先查在绑、没有再建"是 check-then-act，并发两路各自查空、各自插入，
+        # 会写出两条 bound——剩余次数分裂在两条台账上，居民端出现两张同名卡片。
+        # 抢输的一路在这里撞索引，回给它与预检**同一句** 409，调用方分不出
+        # "本来就重复"与"并发撞车"。rollback 不能省：PG 上失败的 INSERT 会让
+        # 整个事务转入 aborted，后续审计/访问日志写入会连带失败成 500。
+        # 代价：create_enrollment 路径上若因别的原因（如服务包被并发删除导致
+        # 外键失败）撞到这里，也会报成 409 而不是 500——可接受。
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该服务包已绑定") from None
     return binding
 
 
@@ -1502,6 +1514,8 @@ def bind_package(
     if enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
     assert_org_writable(db, user, enrollment.org_id)
+    # 快路径预检：顺序重复绑定在这里就被挡下。并发抢输者查不到这条，
+    # 由 _bind_package 里 uq_spd_pkg_binding_enroll_pkg_bound 的兜底给出同一句 409。
     exists = (
         db.query(SpdPackageBinding)
         .filter(

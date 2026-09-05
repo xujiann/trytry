@@ -6,8 +6,12 @@
 - **高值耗材追溯**：一物一码，使用时绑定患者与手术，形成"这枚支架用在谁身上、
   哪台手术、哪个批次、哪家供应商"的完整链条。这是耗材召回时唯一有用的东西。
 """
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -227,6 +231,28 @@ class ReceiveIn(BaseModel):
     note: str = ""
 
 
+def _mark_received(db: Session, purchase_id: int, received_quantity: int, note: str) -> bool:
+    """验收落库：contracted→received 的跃迁与验收量/备注压在**同一条带状态条件的 UPDATE** 里，返回是否验到。
+
+    旧写法"读 status → 判 contracted → 加库存 → 写入库流水 → 置 received → commit"是
+    check-then-act：两笔验收同时到达都读到 contracted，库存就按同一张单加两次、
+    写出两条一模一样的 `采购验收 {contract_no}` 流水——而 asset_movements 上没有
+    任何列能表明"这是采购单 X 的那次验收"，事后连哪条是真的都分辨不出来
+    （姊妹路径 pharmacy.receive_purchase 早已改成这个形状）。`WHERE status = 'contracted'`
+    让后到的那几路 rowcount 为 0，与顺序请求一样拿 409；加库存与写流水只在命中后才发生。
+
+    条件里写死的 `contracted` 是当前"一次性验收"状态机的一部分：若日后要支持分批到货，
+    必须连同语义一起改（放宽到 `IN ('contracted','partially_received')`、
+    received_quantity 改累加并加上不超过采购量的条件），别只把 WHERE 放松了事。
+    """
+    received = cast(CursorResult, db.execute(
+        update(MaterialPurchase)
+        .where(MaterialPurchase.id == purchase_id, MaterialPurchase.status == "contracted")
+        .values(status="received", received_quantity=received_quantity, received_note=note)
+    ))
+    return bool(received.rowcount)
+
+
 @router.post(
     "/purchases/{purchase_id}/receive", response_model=PurchaseReceivedOut,
     dependencies=[Depends(require_roles("operator", "director"))]
@@ -237,7 +263,11 @@ def receive_purchase(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """到货验收：数量不得超过合同量；验收通过后自动生成物资台账与入库流水。"""
+    """到货验收：数量不得超过合同量；验收通过后自动生成物资台账与入库流水。
+
+    状态闸门走条件 UPDATE（见 `_mark_received`），Python 预检只是快路径——
+    先判后改会让两笔并发验收各加一次库存、各写一条入库流水。
+    """
     purchase = db.get(MaterialPurchase, purchase_id)
     if purchase is None:
         raise HTTPException(status_code=404, detail="采购申请不存在")
@@ -246,6 +276,11 @@ def receive_purchase(
         raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可验收")
     if body.received_quantity > purchase.quantity:
         raise HTTPException(status_code=422, detail="验收数量不得超过采购数量")
+    # 闸门放在 422 之后：否则超量验收会先把单据翻成 received 再报 422，错误路径上悄悄改了状态。
+    if not _mark_received(db, purchase_id, body.received_quantity, body.note):
+        db.rollback()
+        db.refresh(purchase)  # 抢输了就按真实状态措辞，别拿锁外读到的旧值
+        raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可验收")
 
     code = f"MP{purchase.id:06d}"
     asset = db.query(Asset).filter(Asset.code == code).first()
@@ -272,10 +307,7 @@ def receive_purchase(
             created_by=user.id,
         )
     )
-    purchase.received_quantity = body.received_quantity
-    purchase.received_note = body.note
-    purchase.status = "received"
-    db.commit()
+    db.commit()  # 验收量/备注/状态已随 _mark_received 的 UPDATE 落在同一事务里
     return {
         "id": purchase.id,
         "status": purchase.status,

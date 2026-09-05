@@ -227,6 +227,11 @@ class ReconciliationBatch(Base):
     """日终对账单：某自然日本地支付单与通道流水的比对结果汇总。"""
 
     __tablename__ = "reconciliation_batches"
+    __table_args__ = (
+        # 一个自然日一张对账单：跑两次日终对账会写出两张口径不同的单子，
+        # 差异明细挂在各自 batch 下，事后没人知道哪张算数。
+        Index("uq_reconciliation_batch_date", "date", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     date: Mapped[str] = mapped_column(String(10), index=True)
@@ -501,6 +506,11 @@ class FundDistribution(Base):
     """
 
     __tablename__ = "fund_distributions"
+    __table_args__ = (
+        # 一次清算里同一家机构只能分到一条钱：分配明细是"分完就冻结的快照"，
+        # 两条同键明细意味着这家机构在同一次清算里被分了两次。
+        Index("uq_fund_distribution_settlement_org", "settlement_id", "org_id", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     settlement_id: Mapped[int] = mapped_column(ForeignKey("fund_settlements.id"), index=True)

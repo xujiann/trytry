@@ -97,6 +97,17 @@ class InpatientOrder(Base):
     """住院医嘱：长期/临时，开立/停止（限医师）。"""
 
     __tablename__ = "inpatient_orders"
+    __table_args__ = (
+        # 部分唯一索引：同一次住院里，内容相同的**长期医嘱**同时只能有一条在执行。
+        # 临时医嘱按次开立（同内容多条合法），停用后重开也合法，故只锁 long+active。
+        Index(
+            "uq_inpatient_order_active_long",
+            "admission_id", "content",
+            unique=True,
+            sqlite_where=text("order_type = 'long' AND status = 'active'"),
+            postgresql_where=text("order_type = 'long' AND status = 'active'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     admission_id: Mapped[int] = mapped_column(ForeignKey("admissions.id"), index=True)

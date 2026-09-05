@@ -181,6 +181,65 @@ class RepriceIn(BaseModel):
     effective_date: OptionalDateStr = ""
 
 
+def _change_price(
+    db: Session,
+    item: ChargeItem,
+    new_price: float,
+    *,
+    reason: str = "",
+    effective_date: str = "",
+    changed_by: int | None,
+) -> bool:
+    """改价并留痕：**判定与写入压进同一条带现价条件的 UPDATE**，命中才写历史行。
+
+    调价历史的"唯一"长在父行 `charge_items.price` 上，不是本表的静态键：每条
+    `charge_price_changes` 的 `old_price` 必须等于**写入那一刻**的现价，一次真实的
+    价格跃迁只该留一行。这条不变式没法写成 `(item_id, old_price)` 唯一索引——
+    10→12→10→12 这种往返调价里 `old_price=10` 是合法重复，加了索引会把正常业务拒掉。
+
+    旧写法是"`db.get` 读现价 → Python 比一下 → `db.add` 历史行 → 无条件 UPDATE"，
+    两步之间没有闸门：两个管理员同时把 10 元改成 12 元，两路都读到 10、都写一行
+    `10→12`，价格只跳了一次，历史里却有两笔；改成不同价（12 与 15）更坏——历史成了
+    `10→12` 与 `10→15` 两条并列的"幽灵链"，事后按链还原价格轨迹直接断掉，
+    而对外公示与患者质疑靠的正是这条链。
+
+    抢输者（rowcount 0）的处置：
+    * **必须先 `db.rollback()` 再 `db.refresh(item)`**——这条 ORM UPDATE 的
+      `synchronize_session` 即便一行没改到，也已经把内存里的 `item.price` 改成新值了
+      （SQLAlchemy 2.0 实测）。不刷新就会把"别人改成了别的价"误判成"同价"，
+      答出错误的 409、甚至让 PATCH 拿着错的内存值返回 200；
+    * 刷新后现价**恰好就是**请求想要的价：等价于顺序请求下的"同价"，返回 False
+      交调用方按既有语义处理（reprice 抛既有 409、PATCH 静默不留痕）；
+    * 否则现价是第三个值：管理员是照着一个已经不存在的价做的决定，让他刷新重判，
+      而不是替他从没见过的价往下接链。
+    """
+    old_price = item.price
+    if new_price == old_price:
+        return False
+    changed = cast(CursorResult, db.execute(
+        update(ChargeItem)
+        .where(ChargeItem.id == item.id, ChargeItem.price == old_price)
+        .values(price=new_price)
+    ))
+    if not changed.rowcount:
+        db.rollback()
+        db.refresh(item)
+        if new_price == item.price:
+            return False
+        raise HTTPException(status_code=409, detail="现价已被其他操作修改，请刷新后重试")
+    db.add(
+        ChargePriceChange(
+            item_id=item.id,
+            old_price=old_price,
+            new_price=new_price,
+            reason=reason,
+            effective_date=effective_date,
+            changed_by=changed_by,
+        )
+    )
+    return True
+
+
 @router.patch(
     "/charge-items/{item_id}", response_model=ChargeItemOut, dependencies=[Depends(require_admin)]
 )
@@ -195,10 +254,14 @@ def update_charge_item(
     if item is None:
         raise HTTPException(status_code=404, detail="收费项目不存在")
     changes = body.model_dump(exclude_unset=True)
-    new_price = changes.get("price")
-    if new_price is not None and new_price != item.price:
-        db.add(ChargePriceChange(item_id=item.id, old_price=item.price,
-                                 new_price=new_price, changed_by=user.id))
+    # 价格从 changes 里摘出来单独走 _change_price，且**必须排在下面的赋值循环之前**：
+    # 抢输时它会回滚，排在后面会把已经改好的名称/分类一起冲掉；留在循环里则等于
+    # 在条件 UPDATE 之后再无条件写一次价，把刚关上的竞态重新打开。
+    new_price = changes.pop("price", None)
+    if new_price is not None:
+        # 返回值有意不看：同价（顺序请求或抢输者刷新后同价）就是既有语义
+        # ——不留痕、不报错，其余字段照常应用。
+        _change_price(db, item, new_price, changed_by=user.id)
     for field, value in changes.items():
         if value is not None:
             setattr(item, field, value)
@@ -224,19 +287,17 @@ def reprice_charge_item(
     item = db.get(ChargeItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="收费项目不存在")
-    if body.new_price == item.price:
+    if not _change_price(
+        db,
+        item,
+        body.new_price,
+        reason=body.reason,
+        effective_date=body.effective_date,
+        changed_by=user.id,
+    ):
+        # 顺序请求下的同价（快路径，未发一条 SQL）与抢输后刷新仍是同价，
+        # 对调用方是同一件事，措辞也就该是同一句。
         raise HTTPException(status_code=409, detail="新价格与现价相同，无需调价")
-    db.add(
-        ChargePriceChange(
-            item_id=item.id,
-            old_price=item.price,
-            new_price=body.new_price,
-            reason=body.reason,
-            effective_date=body.effective_date,
-            changed_by=user.id,
-        )
-    )
-    item.price = body.new_price
     db.commit()
     return _charge_item_out(item)
 
@@ -1502,15 +1563,35 @@ def run_reconciliation(
         raise HTTPException(status_code=502, detail=str(exc)) from None
     remote = {t["trade_no"]: round(float(t["amount"]), 2) for t in remote_rows}
 
-    old = db.query(ReconciliationBatch).filter(ReconciliationBatch.date == date).all()
-    for batch in old:
-        db.query(ReconciliationDiff).filter(ReconciliationDiff.batch_id == batch.id).delete()
-        db.delete(batch)
+    # 删旧批次走**批量 DELETE** 而不是 `db.delete(obj)`：并发同日对账时，我们 SELECT 到的
+    # 那条旧批次可能已被赢家删掉，ORM 的逐对象删除会因"预期删 1 行、实际 0 行"发出
+    # SAWarning（行为无碍，但把一条正常的竞态吵成告警，久了没人看告警）。
+    old_ids = [row.id for row in db.query(ReconciliationBatch.id).filter(
+        ReconciliationBatch.date == date
+    )]
+    if old_ids:
+        db.query(ReconciliationDiff).filter(
+            ReconciliationDiff.batch_id.in_(old_ids)
+        ).delete(synchronize_session=False)
+        db.query(ReconciliationBatch).filter(
+            ReconciliationBatch.id.in_(old_ids)
+        ).delete(synchronize_session=False)
     db.flush()
 
     batch = ReconciliationBatch(date=date, created_by=user.id)
     db.add(batch)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # 撞 uq_reconciliation_batch_date：另一路同日期对账已经"删旧建新"并提交，
+        # 上面那次 SELECT 到的旧批次早被它删掉，我们这条 INSERT 落在它的新行上。
+        # 一天两张口径不同的对账单，事后没人分得清哪张算数——所以让后到的这路
+        # 去看赢家那张，而不是重试（重试只会把刚建好的那张再删一遍重算同样的结果）。
+        # 先 rollback 再抛：写事务（SQLite 下还有库文件锁）得在响应之前放掉。
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="该日期的对账刚由另一请求完成，请刷新查看最新对账单"
+        ) from None
 
     diffs: list[ReconciliationDiff] = []
     matched = 0

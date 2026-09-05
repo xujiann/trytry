@@ -12,9 +12,11 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -84,6 +86,16 @@ class SpecialDiseaseApp(Base):
     """⑲特殊病种门诊治疗待遇申报。"""
 
     __tablename__ = "special_disease_apps"
+    __table_args__ = (
+        # 部分唯一索引：同患者同病种同时只有一条**已申报待批**记录；批准/驳回后可再申报。
+        Index(
+            "uq_special_disease_app_applied",
+            "patient_id", "disease_name",
+            unique=True,
+            sqlite_where=text("status = 'applied'"),
+            postgresql_where=text("status = 'applied'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
@@ -98,6 +110,17 @@ class DualChannelApp(Base):
     """⑲双通道药品申报：申报→管理层审核。"""
 
     __tablename__ = "dual_channel_apps"
+    __table_args__ = (
+        # 部分唯一索引：同患者同药品同时只有一条**待审核**申报。审核后（通过/驳回）
+        # 可以再申报，故只锁 pending 一态。
+        Index(
+            "uq_dual_channel_pending",
+            "patient_id", "drug_name",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
@@ -202,6 +225,19 @@ class DiseaseEnrollment(Base):
     """
 
     __tablename__ = "disease_enrollments"
+    __table_args__ = (
+        # 部分唯一索引："同患者同专病同时只有一条**在管**记录"（模型 docstring 与
+        # disease_programs.enroll 的 409 都这么写）。接口层"先查在管再建"是 check-then-act，
+        # 并发下静默写出两条：program_stats 双计、出组只能翻掉一条，剩下那条永远挡着复发再入组。
+        # 只锁 enrolled 一态——完成/退出后复发再入组是常态，全量唯一会拒掉它。
+        Index(
+            "uq_disease_enrollment_program_patient_enrolled",
+            "program_id", "patient_id",
+            unique=True,
+            sqlite_where=text("status = 'enrolled'"),
+            postgresql_where=text("status = 'enrolled'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     program_id: Mapped[int] = mapped_column(ForeignKey("disease_programs.id"), index=True)

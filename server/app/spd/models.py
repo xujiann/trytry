@@ -95,6 +95,10 @@ class SpdProgramVersion(Base):
     """
 
     __tablename__ = "spd_program_versions"
+    __table_args__ = (
+        # 同一病种同一版本号只留一份快照：两份同版本快照会让"按哪版规则纳的管"失去意义。
+        Index("uq_spd_program_version", "program_id", "version", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     program_id: Mapped[int] = mapped_column(ForeignKey("spd_programs.id"), index=True)
@@ -629,6 +633,17 @@ class SpdPackageBinding(Base):
     """服务包绑定：剩余次数随扣减实时更新，解绑保留台账不删记录。"""
 
     __tablename__ = "spd_package_bindings"
+    __table_args__ = (
+        # 部分唯一索引：同一份纳管档案同一服务包同时只能绑一条。解绑保留台账，
+        # 解绑后可再绑，故只锁 bound 一态——两条 bound 会让剩余次数分裂在两条台账上。
+        Index(
+            "uq_spd_pkg_binding_enroll_pkg_bound",
+            "enrollment_id", "package_id",
+            unique=True,
+            sqlite_where=text("status = 'bound'"),
+            postgresql_where=text("status = 'bound'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     enrollment_id: Mapped[int] = mapped_column(ForeignKey("spd_enrollments.id"), index=True)
@@ -945,6 +960,17 @@ class SpdConsult(Base):
     """专病在线咨询会话（患者端 #18 / 个案管理师端 #6）。"""
 
     __tablename__ = "spd_consults"
+    __table_args__ = (
+        # 部分唯一索引：同患者同病种同时只有一条**开放**会话（患者端 #18 明写
+        # "进行中会话会继续，不会重复新开"）。关闭后再发起是合法多行，故只锁 open。
+        Index(
+            "uq_spd_consult_open_patient_program",
+            "patient_id", "program_code",
+            unique=True,
+            sqlite_where=text("status = 'open'"),
+            postgresql_where=text("status = 'open'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
@@ -971,6 +997,17 @@ class SpdServiceApply(Base):
     """居民专病服务申请：未纳管居民自查后提交，由团队受理（患者端 #2/#13）。"""
 
     __tablename__ = "spd_service_applies"
+    __table_args__ = (
+        # 部分唯一索引：同患者同病种同时只有一条**待受理**申请（接口 docstring：
+        # "同一病种已有待受理申请时不重复提交"）。被拒后可再申请，故只锁 pending。
+        Index(
+            "uq_spd_apply_pending_patient_program",
+            "patient_id", "program_code",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
@@ -1326,6 +1363,18 @@ class SpdCallTask(Base):
     """呼叫任务与通话记录：随访 / 复诊 / 宣教 / 异常处置统一转呼叫。"""
 
     __tablename__ = "spd_call_tasks"
+    __table_args__ = (
+        # 部分唯一索引：同一个被引用对象（某条随访/复诊）同时只应有一条**待呼叫**任务。
+        # 呼叫失败后重派是先前那条已置 failed 之后的新一行，天然在范围外；
+        # 无 ref_id 的患者级外呼不在键内（SQL 里 NULL != NULL，故显式排除以免误锁）。
+        Index(
+            "uq_spd_call_task_pending_ref",
+            "patient_id", "ref_type", "ref_id",
+            unique=True,
+            sqlite_where=text("status = 'pending' AND ref_id IS NOT NULL"),
+            postgresql_where=text("status = 'pending' AND ref_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
@@ -1346,6 +1395,10 @@ class SpdQcSample(Base):
     """随访质量抽查：按比例或数量抽，回听录音并记录抽查结果。"""
 
     __tablename__ = "spd_qc_samples"
+    __table_args__ = (
+        # 同一质控记录同一抽样批次只抽一次：重复抽样行会让质控合格率的分母虚高。
+        Index("uq_spd_qc_sample_record_batch", "record_id", "batch", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     record_id: Mapped[int] = mapped_column(ForeignKey("spd_followup_records.id"), index=True)

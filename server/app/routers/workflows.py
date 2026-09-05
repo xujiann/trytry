@@ -15,10 +15,12 @@
 一张没人写入的空表。真正缺的是"一个地方看全某位患者/某家机构所有在办事项"，
 所以这里做的是**聚合视图**：把五类单据归一成统一字段返回，状态映射到统一口径。
 """
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -271,6 +273,62 @@ class AdvanceIn(BaseModel):
     comment: str = ""
 
 
+def _move_instance(db: Session, instance_id: int, from_node: str, **values: Any) -> bool:
+    """实例的一次状态跃迁：判定与写入压在**同一条带状态条件的 UPDATE** 里，返回这次是否跃迁到。
+
+    旧写法是"`db.get` 读实例 → 判 `status == 'running'` → `db.add` 流转行 → 赋值
+    `current_node`/`status` → commit"，典型的 check-then-act：两个人同时点"推进"
+    （或一人推进、一人终止），都读到 running 且都读到同一节点，于是**两条流转行**都落库，
+    实例的终态以最后提交的为准——留痕上看是同一个节点被批了两次，业务上是一次审批
+    被另一次悄悄盖掉。`WHERE status = 'running' AND current_node = 读到的节点` 让后到的
+    那几路 rowcount 为 0，与顺序请求一样拿 409：一个实例离开某个节点恰好一次，
+    流转行也就恰好一条。
+
+    唯一性长在**实例行**上，所以刻意**不**在 workflow_transitions 上建
+    `(instance_id, from_node)` 唯一索引：`_validate_nodes` 不拒环（a→b→a 只要另有终态
+    就存得下），环形定义里合法的第二圈会撞上索引，单子从此既推不动也终止不了——
+    把一条多余的留痕换成一份卡死的单子。条件 UPDATE 认的是"当前位置"而不是历史，
+    对环形定义同样成立，也不需要迁移。
+
+    `from_node` 必须由调用方在 UPDATE **之前**读好再传进来：SQLAlchemy 2.0 的
+    ORM `update()` 会顺手把 session 里的同一个对象同步成新值，UPDATE 之后再读
+    `instance.current_node` 拿到的是推进后的节点，留痕里的 from_node 会等于 to_node。
+    """
+    moved = cast(CursorResult, db.execute(
+        update(WorkflowInstance)
+        .where(
+            WorkflowInstance.id == instance_id,
+            WorkflowInstance.status == "running",
+            WorkflowInstance.current_node == from_node,
+        )
+        .values(updated_at=utcnow(), **values)
+    ))
+    return bool(moved.rowcount)
+
+
+def _stale_move_409(db: Session, instance: WorkflowInstance, verb: str) -> HTTPException:
+    """跃迁没命中时的措辞：按**库里此刻的样子**说话，而不是锁外读到的旧值。
+
+    先 `rollback`（哪怕一行没命中，ORM `update()` 也可能已把内存里的对象同步成新值），
+    再 `refresh` 读赢家提交后的实况，然后分两种：
+
+    - 状态被改走了（对方终止了、或对方把最后一步推成了 completed）——复用顺序请求
+      那句 409，调用方分辨不出"撞了车"与"本来就晚了一步"；
+    - 状态还是 running、只是节点被推走了——才用这句新增的。顺序路径下这一刻根本不会
+      409（晚到的人看到的是下一个节点，去推它或撞角色 403），没有可照抄的文案；
+      而自动跟着推下一个节点等于替人做了另一道审批（下一节点的角色多半也不是他），
+      所以宁可让人刷新后重来。
+
+    连带的行为变化：同一个人双击"推进"，从前是两个 200 加一条多余留痕，现在是
+    一个 200 一个 409。前端（pages-mgmt.js）对非 2xx 一律展示 `detail`，无需改动。
+    """
+    db.rollback()
+    db.refresh(instance)
+    if instance.status != "running":
+        return HTTPException(status_code=409, detail=f"当前状态 {instance.status} 不可{verb}")
+    return HTTPException(status_code=409, detail="当前节点刚被其他人推进，请刷新后重试")
+
+
 @router.post("/instances/{instance_id}/advance", response_model=WorkflowInstanceOut)
 def advance_instance(
     instance_id: int,
@@ -294,21 +352,24 @@ def advance_instance(
     if required_role and user.role not in (required_role, "admin"):
         raise HTTPException(status_code=403, detail=f"该节点需 {required_role} 角色推进")
 
+    # 先把当前位置读进本地变量：UPDATE 之后再读对象拿到的是新值（见 _move_instance）
+    from_node = instance.current_node
     next_key = current.get("next", "")
-    transition = WorkflowTransition(
-        instance_id=instance.id,
-        from_node=instance.current_node,
-        to_node=next_key,
-        action="advance",
-        comment=body.comment,
-        actor_id=user.id,
+    values: dict[str, Any] = {"current_node": next_key} if next_key else {"status": "completed"}
+    if not _move_instance(db, instance.id, from_node, **values):
+        raise _stale_move_409(db, instance, "推进")
+    # 留痕只在跃迁命中后追加，且与它同一个事务：UPDATE 拿到的行锁一直持到 commit，
+    # 中间没人能把实例挪走，from_node 记的就是这次推进真正的起点。
+    db.add(
+        WorkflowTransition(
+            instance_id=instance.id,
+            from_node=from_node,
+            to_node=next_key,
+            action="advance",
+            comment=body.comment,
+            actor_id=user.id,
+        )
     )
-    db.add(transition)
-    if next_key:
-        instance.current_node = next_key
-    else:
-        instance.status = "completed"
-    instance.updated_at = utcnow()
     db.commit()
     db.refresh(instance)
     return _instance_out(instance, _node(definition, instance.current_node))
@@ -328,19 +389,23 @@ def cancel_instance(
     assert_obj_org_writable(db, user, instance)
     if instance.status != "running":
         raise HTTPException(status_code=409, detail=f"当前状态 {instance.status} 不可终止")
+    from_node = instance.current_node
+    # 终止的条件里也带上 current_node：终止撞上一次推进时宁可让终止方拿 409 重来，
+    # 也不要在一个自己没读到过的节点上落一条"从这里终止"的留痕——那条留痕会说谎。
+    if not _move_instance(db, instance.id, from_node, status="cancelled"):
+        raise _stale_move_409(db, instance, "终止")
     db.add(
         WorkflowTransition(
             instance_id=instance.id,
-            from_node=instance.current_node,
+            from_node=from_node,
             to_node="",
             action="cancel",
             comment=body.comment,
             actor_id=user.id,
         )
     )
-    instance.status = "cancelled"
-    instance.updated_at = utcnow()
     db.commit()
+    db.refresh(instance)
     return {"id": instance.id, "status": instance.status}
 
 

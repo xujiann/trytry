@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..concurrency import insert_or_conflict
 from ..datetypes import OptionalDateStr
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
@@ -252,8 +253,13 @@ def enroll(
         enrolled_at=body.enrolled_at or date.today().isoformat(),
         created_by=user.id,
     )
-    db.add(row)
-    db.commit()
+    # 上面那句"已在管"判定是 check-then-act：并发下两路都查不到在管记录都会建组，
+    # 静默写出两条——program_stats 双计、出组只翻掉一条，剩下那条永远挡着复发再入组。
+    # uq_disease_enrollment_program_patient_enrolled（部分唯一索引，只锁 enrolled 一态）
+    # 是兜底，抢输者拿到的 409 文案与上面顺序请求那句完全一致；两处文案必须同改，
+    # 改一处会让并发输家拿到旧话。代价与 inpatient.create_admission 同：上面那三条
+    # 404 之后目录/患者/机构被删的话，PG 的外键冲突也会被归到这句 409（SQLite 不查外键）。
+    insert_or_conflict(db, row, "该患者已在本专病在管中")
     return _enrollment_out(row, db)
 
 

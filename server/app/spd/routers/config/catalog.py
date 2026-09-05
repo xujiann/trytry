@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ....concurrency import insert_or_conflict
 from ....database import get_db
 from ....datetypes import OptionalDateStr
 from ....deps import get_current_user, paginate, require_admin, require_roles
@@ -243,7 +244,14 @@ def update_program(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """改规则即升版本并留快照——半年后要能回答"这批人当初按哪版规则纳的管"。"""
+    """改规则即升版本并留快照——半年后要能回答"这批人当初按哪版规则纳的管"。
+
+    读-改-写（读版本号 → 存快照 → 升版）本身没有闸门：两个配置员同时改同一病种，
+    两路都读到 v1、各写一份 (program_id,'v1') 快照、却只升一次版，中间那一版的
+    规则永久消失，而"按哪版规则纳的管"从此对不上账。兜底放在库上——
+    `uq_spd_program_version` 让快照与升版**同一次提交**，输家撞索引后整笔回滚
+    （它改的字段连同版本号一起），拿到 409 "该专病规则刚被他人修改，请刷新后重试"。
+    """
     program = db.get(SpdProgram, program_id)
     if program is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
@@ -251,21 +259,26 @@ def update_program(
     rules_changed = any(
         key in data for key in ("include_rules", "exclude_rules", "stages", "milestones")
     )
+    snapshot: SpdProgramVersion | None = None
     if rules_changed:
-        db.add(
-            SpdProgramVersion(
-                program_id=program.id, version=program.version,
-                snapshot=_program_out(program), changed_by=user.username, note=body.note,
-            )
+        # 先于 setattr 构造：快照存的是"改之前"这一版。只构造不入库，
+        # 留到最后与字段改动、升版同一次提交——早提交会在后续校验失败时留下孤儿快照。
+        snapshot = SpdProgramVersion(
+            program_id=program.id, version=program.version,
+            snapshot=_program_out(program), changed_by=user.username, note=body.note,
         )
     for key in ("include_rules", "exclude_rules"):
         if key in data:
             data[key] = _conditions(data[key])
     for key, value in data.items():
         setattr(program, key, value)
-    if rules_changed:
+    if snapshot is not None:
         program.version = _bump_version(program.version)
-    db.commit()
+        # 一次提交里同时落 UPDATE spd_programs 与 INSERT spd_program_versions：
+        # 撞唯一索引说明这一版已被别人退役，本次改动整笔回滚为 409。
+        insert_or_conflict(db, snapshot, "该专病规则刚被他人修改，请刷新后重试")
+    else:
+        db.commit()
     return _program_out(program)
 
 

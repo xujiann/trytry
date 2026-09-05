@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
+from ...concurrency import ensure_present, insert_if_absent, insert_or_conflict
 from ...database import get_db
 from ...deps import paginate
 from ..platform import Encounter, Patient, ResidentAccount
@@ -41,7 +42,7 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import judge_measurement
+from ..service import close_followup_record, judge_measurement
 from fastapi import File, Form, UploadFile
 
 from ..platform import (
@@ -583,8 +584,10 @@ def apply_service(
         patient_id=patient.id, program_code=body.program_code,
         screening_id=body.screening_id, note=body.note, status="pending",
     )
-    db.add(apply)
-    db.commit()
+    # 上面的"有没有待受理"是 check-then-act：并发/连点两路都查不到就都建，多出来的
+    # 那条待受理会一直挂在团队收件箱里等人拒绝。部分唯一索引
+    # uq_spd_apply_pending_patient_program 兜底，抢输者拿到的 409 与顺序请求一字不差。
+    insert_or_conflict(db, apply, "该病种已有待受理的服务申请")
     return {"id": apply.id, "status": apply.status}
 
 
@@ -910,7 +913,12 @@ def self_answer_followup(
         raise HTTPException(status_code=409, detail="该随访已结束")
     record.answers = body.answers
     record.channel = "self"
-    record.status = "done"
+    # 与医护执行同一道闸：办结的判定与写入压在同一条 UPDATE 里（见
+    # service.close_followup_record）。居民连点两次、或居民与医护同时办同一条随访时，
+    # 抢输的一路 rowcount 为 0，拿到与预检一致的 409，异常处置任务只派一次。
+    if not close_followup_record(db, record.id, "done", allowed_from=("planned", "overdue")):
+        db.rollback()  # 先退掉写事务再抛，避免后续审计落库撞写锁
+        raise HTTPException(status_code=409, detail="该随访已结束")
     record.executed_at = date.today().isoformat()
     questionnaire = (
         db.query(SpdQuestionnaire)
@@ -1267,8 +1275,24 @@ def start_consult(
             patient_id=patient.id, program_code=body.program_code,
             doctor_id=enrollment.doctor_user_id if enrollment else None, status="open",
         )
-        db.add(consult)
-        db.flush()
+        if not insert_if_absent(db, consult):
+            # 并发抢输：另一路刚建出同病种的开放会话（撞 uq_spd_consult_open_patient_program）。
+            # 与顺序第二次请求同一语义——复用那条，不新开也不 409，本条消息照样落进去；
+            # 否则两条线程各显一半消息，医生列表与工作台也会各看到两条会话。
+            opened = (
+                db.query(SpdConsult)
+                .filter(
+                    SpdConsult.patient_id == patient.id,
+                    SpdConsult.program_code == body.program_code,
+                    SpdConsult.status == "open",
+                )
+                .first()
+            )
+            if opened is None:
+                # 病态窗口：赢家刚提交、医生又立刻把会话关了。抛之前先退事务——
+                # SAVEPOINT 回滚只退掉那一行，外层写事务还开着（见 insert_if_absent 文档）
+                db.rollback()
+            consult = ensure_present(opened, "开放咨询会话")
     db.add(
         SpdConsultMessage(
             consult_id=consult.id, sender="patient", sender_id=account.id,

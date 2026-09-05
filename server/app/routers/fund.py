@@ -555,7 +555,17 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
                    "此时应改用与得分无关的公式（如均分写 1）",
         )
 
-    # 重新分配即覆盖上一次结果——分配方案改了要能重来，但快照随之刷新
+    # 重新分配即覆盖上一次结果——分配方案改了要能重来，但快照随之刷新。
+    #
+    # 「先删旧的、再插一整套」是 check-then-act：两路并发时各自只删得掉自己
+    # 快照里看得见的行（PG 读已提交下输家的 DELETE 阻塞在赢家的行锁上，解锁后
+    # 那些行已不存在，而赢家新插的行它又看不见），于是两套明细各插一遍——
+    # 库里 2n 行、`distributed_amount` 直接翻倍，钱的账当场对不上。
+    # 真正兜底的是唯一索引 `uq_fund_distribution_settlement_org`
+    # （settlement_id, org_id；两列都 NOT NULL 才没有 NULL 逃逸，哪天 org_id
+    # 改成可空就得改成部分索引）：输家的 INSERT 撞索引抛 IntegrityError，
+    # 下面 commit 处回滚**整个事务连同它的 DELETE**，赢家那套明细完好无损，
+    # 输家重试一次即正常覆盖。
     db.query(FundDistribution).filter(
         FundDistribution.settlement_id == settlement.id
     ).delete(synchronize_session=False)
@@ -596,7 +606,18 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
         f"volume_cap={body.volume_cap},include_auto_passed={body.include_auto_passed},"
         f"at={utcnow().strftime('%Y-%m-%d %H:%M')}"
     )
-    db.commit()
+    # 删除 + n 条插入 + 结算单两个字段必须**同一次提交**：整套快照要么全落库、
+    # 要么全不落。所以这里不能逐行 insert_or_conflict（它每行各自 commit，
+    # 会把 DELETE 单独提交掉，中途撞约束就留下一套残缺明细，"分出去的总额
+    # 分毫等于结余"随之破功），也不能 insert_if_absent（静默跳过输家的行，
+    # 等于把两次得分快照掺在一起）。
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="本池结余分配正被另一请求处理，请刷新后重试"
+        ) from None
     return _settlement_out(settlement, db)
 
 

@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...clock import now_naive
-from ...concurrency import serialized_on
+from ...concurrency import insert_if_absent, insert_or_conflict, serialized_on
 from ...database import get_db
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
@@ -37,6 +37,7 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
+from ..service import close_followup_record
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -810,13 +811,22 @@ def execute_followup(
     record.result = body.result
     if body.evidence:
         record.evidence = body.evidence
+    # 上面那道预检是 check-then-act：两名随访人员（或医护与居民自助）同时执行同一条
+    # 随访，都读到 planned 就都办结、都派一条处置任务。终态跃迁改成条件 UPDATE——
+    # 判定与写在同一条 SQL 里，抢输的一路 rowcount 为 0，拿到与预检完全一致的 409；
+    # 处置任务只在跃迁命中之后才派（`spd_tasks` 上没有指向随访记录的列，
+    # "一次执行只派一条任务"只能守在父行的状态上，见 service.close_followup_record）。
+    if not close_followup_record(
+        db, record.id, "unreachable" if body.unreachable else "done",
+        allowed_from=("planned", "overdue", "unreachable"),
+    ):
+        db.rollback()  # 先退掉本请求的写事务，再抛——否则后续审计落库会撞写锁
+        raise HTTPException(status_code=409, detail="该随访已结束")
     if body.unreachable:
-        record.status = "unreachable"
         db.commit()
         return _record_out(record)
 
     record.answers = body.answers
-    record.status = "done"
     questionnaire = (
         db.query(SpdQuestionnaire)
         .filter(SpdQuestionnaire.code == record.questionnaire_code)
@@ -983,8 +993,14 @@ def create_call_task(
         patient_id=body.patient_id, phone=phone, ref_type=body.ref_type,
         ref_id=body.ref_id, operator_id=user.id, status="pending",
     )
-    db.add(task)
-    db.flush()
+    # 先落库再派发。同一患者、同一被引用对象（某条随访/复诊）上只许有一条**待呼叫**
+    # 任务：双击「转呼叫」或两名坐席同时发起，旧写法会静默建出两条 pending——网关被
+    # 推两次（患者被拨两遍）、人工队列同一条随访出现两行，先接通后另一条永远挂着等
+    # 人手工取消。部分唯一索引 uq_spd_call_task_pending_ref 兜底，抢输的一路在此 409。
+    # 先提交也让网关拿到 task_id 立刻回调 result 时查得到这一行（旧写法 flush 未提交）。
+    insert_or_conflict(
+        db, task, "该患者对同一对象已有待呼叫任务，请先回写其结果（未接通/取消）后再发起"
+    )
     # 经呼叫通道派发（manual=等人工外呼，http=推给呼叫中心）。
     # 派发失败不报错：任务留在 pending、结果里记原因——通道抖一下
     # 不该让"发起随访"这个动作失败。
@@ -993,7 +1009,7 @@ def create_call_task(
     accepted, note = get_call_provider().dispatch(task.id, phone, body.ref_type)
     if not accepted:
         task.result = note
-    db.commit()
+        db.commit()
     return {"id": task.id, "phone": task.phone, "status": task.status,
             "dispatch": {"accepted": accepted, "note": note}}
 
@@ -1120,15 +1136,21 @@ def plan_qc(
         for (rid,) in db.query(SpdQcSample.record_id).filter(SpdQcSample.batch == batch).all()
     }
     created = 0
+    # 上面的 existing 是快路径（重跑一次批次一条 SAVEPOINT 都不用开）；真正兜住并发的是
+    # 唯一索引 uq_spd_qc_sample_record_batch——两个质控员同时点"生成抽查计划"，旧写法两路
+    # 都读到空集、都插一遍，同一条随访在同一批次里被抽两次，合格率的分母直接翻倍。
+    # 抢输的那行按顺序重跑的语义静默跳过（不计进 created），整批不因此回滚。
+    # `picked` 必须保持 id.desc() 的顺序：所有请求按同一顺序取键锁，PG 上才不会互等成死锁。
     for record in picked:
         if record.id in existing:
             continue
-        db.add(
+        if insert_if_absent(
+            db,
             SpdQcSample(
                 record_id=record.id, batch=batch, dept=record.dept, sampler_id=user.id
-            )
-        )
-        created += 1
+            ),
+        ):
+            created += 1
     db.commit()
     return {"batch": batch, "pool": len(rows), "planned": len(picked), "created": created}
 

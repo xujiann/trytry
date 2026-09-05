@@ -604,6 +604,7 @@
 - `outcome` · VARCHAR(256) · NOT NULL
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_delivery_records_record_id(record_id)
+- _index_ uq_delivery_record(record_id) UNIQUE
 
 ## department_costs
 
@@ -664,6 +665,7 @@
 - _index_ ix_disease_enrollments_patient_id(patient_id)
 - _index_ ix_disease_enrollments_program_id(program_id)
 - _index_ ix_disease_enrollments_status(status)
+- _index_ uq_disease_enrollment_program_patient_enrolled(program_id, patient_id) UNIQUE
 
 ## disease_path_records
 
@@ -827,6 +829,7 @@
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_dual_channel_apps_patient_id(patient_id)
 - _index_ ix_dual_channel_apps_status(status)
+- _index_ uq_dual_channel_pending(patient_id, drug_name) UNIQUE
 
 ## duty_rosters
 
@@ -1165,6 +1168,7 @@
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_fund_distributions_org_id(org_id)
 - _index_ ix_fund_distributions_settlement_id(settlement_id)
+- _index_ uq_fund_distribution_settlement_org(settlement_id, org_id) UNIQUE
 
 ## fund_periods
 
@@ -1403,6 +1407,7 @@
 - `stopped_at` · DATETIME
 - _index_ ix_inpatient_orders_admission_id(admission_id)
 - _index_ ix_inpatient_orders_status(status)
+- _index_ uq_inpatient_order_active_long(admission_id, content) UNIQUE
 
 ## insurance_settlements
 
@@ -2133,6 +2138,7 @@
 - `created_by` · INTEGER · NOT NULL · → users.id
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_reconciliation_batches_date(date)
+- _index_ uq_reconciliation_batch_date(date) UNIQUE
 
 ## reconciliation_diffs
 
@@ -2512,6 +2518,7 @@
 - _index_ ix_spd_call_tasks_patient_id(patient_id)
 - _index_ ix_spd_call_tasks_phone(phone)
 - _index_ ix_spd_call_tasks_status(status)
+- _index_ uq_spd_call_task_pending_ref(patient_id, ref_type, ref_id) UNIQUE
 
 ## spd_candidates
 
@@ -2618,6 +2625,7 @@
 - _index_ ix_spd_consults_patient_id(patient_id)
 - _index_ ix_spd_consults_program_code(program_code)
 - _index_ ix_spd_consults_status(status)
+- _index_ uq_spd_consult_open_patient_program(patient_id, program_code) UNIQUE
 
 ## spd_data_sources
 
@@ -2980,6 +2988,7 @@
 - _index_ ix_spd_package_bindings_enrollment_id(enrollment_id)
 - _index_ ix_spd_package_bindings_package_id(package_id)
 - _index_ ix_spd_package_bindings_status(status)
+- _index_ uq_spd_pkg_binding_enroll_pkg_bound(enrollment_id, package_id) UNIQUE
 
 ## spd_package_usages
 
@@ -3121,6 +3130,7 @@
 - `note` · VARCHAR(256) · NOT NULL
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_spd_program_versions_program_id(program_id)
+- _index_ uq_spd_program_version(program_id, version) UNIQUE
 
 ## spd_programs
 
@@ -3158,6 +3168,7 @@
 - _index_ ix_spd_qc_samples_created_at(created_at)
 - _index_ ix_spd_qc_samples_record_id(record_id)
 - _index_ ix_spd_qc_samples_result(result)
+- _index_ uq_spd_qc_sample_record_batch(record_id, batch) UNIQUE
 
 ## spd_questionnaires
 
@@ -3427,6 +3438,7 @@
 - _index_ ix_spd_service_applies_patient_id(patient_id)
 - _index_ ix_spd_service_applies_program_code(program_code)
 - _index_ ix_spd_service_applies_status(status)
+- _index_ uq_spd_apply_pending_patient_program(patient_id, program_code) UNIQUE
 
 ## spd_service_packages
 
@@ -3612,6 +3624,7 @@
 - `reason` · VARCHAR(512) · NOT NULL
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_special_disease_apps_patient_id(patient_id)
+- _index_ uq_special_disease_app_applied(patient_id, disease_name) UNIQUE
 
 ## staff_contracts
 
