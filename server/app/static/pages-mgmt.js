@@ -247,9 +247,9 @@ async function renderAccounting() {
   const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
   const options = subjects.map((s) => `<option value="${esc(s.code)}">${esc(s.code)} ${esc(s.name)}</option>`).join("");
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>会计期间</h3>
-      <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form></div>
-    <div class="panel"><h3>录入凭证</h3>
+    ${panel("会计期间", `
+      <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>`)}
+    ${panel("录入凭证", `
       <form id="voucher-form">
         <div class="inline"><input name="org_id" type="number" placeholder="机构ID" required>
           <input name="voucher_no" placeholder="凭证号" required>
@@ -259,8 +259,8 @@ async function renderAccounting() {
         <div class="inline"><button type="button" id="add-entry" class="btn secondary">加一行分录</button>
           <span id="entry-total" class="desc"></span></div>
         <button>保存凭证（草稿）</button></form>
-      <p class="msg" id="acc-msg"></p></div>
-    <div class="panel"><h3>${esc(period)} 凭证（${vouchers.length}）</h3>${
+      <p class="msg" id="acc-msg"></p>`)}
+    ${panel(`${period} 凭证（${vouchers.length}）`,
       table(["ID", "凭证号", "日期", "摘要", "借方", "贷方", "状态", "操作"], vouchers, (v) => {
         const ops = v.status === "draft"
           ? `<button class="btn secondary" data-post="${v.id}">过账</button>`
@@ -268,8 +268,9 @@ async function renderAccounting() {
         return `<tr><td>${v.id}</td><td>${esc(v.voucher_no)}</td><td>${esc(v.voucher_date)}</td>
           <td>${esc(v.summary)}</td><td>${v.total_debit.toFixed(2)}</td><td>${v.total_credit.toFixed(2)}</td>
           <td>${statusTag(VS, v.status)}</td>
-          <td><button class="btn" data-detail="${v.id}">明细</button> ${ops}</td></tr>
-    <div class="panel"><h3>合并报表（${esc(period)}）</h3>
+          <td><button class="btn" data-detail="${v.id}">明细</button> ${ops}</td></tr>`;
+      }))}
+    ${panel(`合并报表（${period}）`, `
       <p class="hint">${esc(consolidated.caliber.note)}</p>
       <div class="cards">
         ${[["合并收入", consolidated.consolidated.income_statement.income],
@@ -290,14 +291,13 @@ async function renderAccounting() {
         ? `<p class="msg err">科目表里查不到的编码：${esc(consolidated.unknown_subject_codes.join("、"))}</p>` : ""}
       ${consolidated.voucher_totals.balanced ? "" :
         `<p class="msg err">本期凭证借贷不平，差额 ${consolidated.voucher_totals.difference} 元——报表照出，差额在此标明</p>`}
-    </div>`;
-      })}</div>
-    <div class="panel"><h3>试算平衡表（仅统计已过账）</h3>
+    `)}
+    ${panel("试算平衡表（仅统计已过账）", `
       <p class="msg ${balance.balanced ? "ok" : "err"}">借方合计 ${balance.total_debit.toFixed(2)}　贷方合计 ${
         balance.total_credit.toFixed(2)}　${balance.balanced ? "平衡" : "不平衡"}</p>
       ${table(["科目", "名称", "类别", "借方", "贷方"], balance.lines, (l) =>
         `<tr><td>${esc(l.subject_code)}</td><td>${esc(l.subject_name)}</td><td>${esc(l.category)}</td>
-         <td>${l.debit.toFixed(2)}</td><td>${l.credit.toFixed(2)}</td></tr>`)}</div>
+         <td>${l.debit.toFixed(2)}</td><td>${l.credit.toFixed(2)}</td></tr>`)}`)}
     <div class="panel hidden" id="voucher-detail"><h3>凭证明细</h3><div id="voucher-detail-body"></div></div>`;
 
   const addEntryRow = () => {

@@ -176,14 +176,15 @@ MIGRATED_PAGES = {
     # 没登记就等于没有"不许退回去"的网，顺手补上。
     "renderSpdMember": 5,
     "renderSpdManager": 3,
-    # 第八批 2026-09-06：pages-mgmt.js 四页（住院文书 / 手术麻醉 / 流程引擎 / 运营分析）。
-    # 同批的 renderAccounting **没迁**：它的合并报表面板嵌在凭证表格的行模板里，
-    # 一条凭证渲染一份（夹具两条凭证 → 出现两次），迁移会把这个结构固化得更难看清；
-    # 缺陷已登记（TECH_DEBT P1-41），修完再迁。
+    # 第八批 2026-09-06：pages-mgmt.js 五页（住院文书 / 手术麻醉 / 流程引擎 / 运营分析 / 会计核算）。
+    # 会计页是先修 P1-41 再迁的：它的合并报表面板本来嵌在凭证表格的行回调里，
+    # 一条凭证渲染一份（夹具两条凭证 → 出现两次）。回归见
+    # test_会计页的合并报表面板不在凭证表格的行回调里。
     "renderClinicalDocs": 5,
     "renderSurgery": 5,             # 另有一处 class="panel hidden" 的术中记录容器
     "renderWorkflows": 5,           # 另有一处 class="panel hidden" 的流转记录容器
     "renderAnalytics": 5,           # 标题里的期间不再 esc()：组件转义标题
+    "renderAccounting": 5,          # 另有一处 class="panel hidden" 的凭证明细容器
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。
@@ -204,6 +205,30 @@ KNOWN_UNMIGRATED_SHELLS = {
     "renderSpdAssess": (1, "点击后才渲染的下钻明细面板，render_diff 覆盖不到"),
 }
 MIGRATED = "renderServiceRequests"
+
+
+def test_会计页的合并报表面板不在凭证表格的行回调里():
+    """P1-41 的回归：面板嵌进 `table()` 的行回调，就会一条凭证渲染一份。
+
+    这不是假想——修之前拿夹具实测：两条凭证 → 页面上"合并报表"出现 **2 次**，
+    而且都夹在 `</tr>` 之后（浏览器会把它甩出表格），生产上 30 条凭证就是 30 份。
+    成因只是模板字符串的反引号收错了位置，肉眼极难看出来，所以钉成静态用例：
+    合并报表那段必须排在凭证 `table(...)` 调用**结束之后**。
+    """
+    fn = _code(_fn(_src_for("renderAccounting"), "renderAccounting"))
+    start = fn.index('table(["ID", "凭证号"')
+    depth, i = 0, fn.index("(", start)
+    while i < len(fn):                       # 括号配平找这次 table() 调用的收尾
+        if fn[i] == "(":
+            depth += 1
+        elif fn[i] == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    assert fn.index("合并报表") > i, (
+        "合并报表面板又落进凭证表格的行回调里了——它会按凭证条数重复渲染（P1-41）"
+    )
 
 
 @pytest.mark.parametrize("page,count", sorted(MIGRATED_PAGES.items()))
