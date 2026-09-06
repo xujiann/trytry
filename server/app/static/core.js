@@ -549,7 +549,7 @@ async function renderPerformance() {
   $("#page-desc").textContent =
     `${$("#page-desc").textContent}｜当前评分周期：${data.period}`;
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>上报报表导出（管理层）</h3>
+    ${panel("上报报表导出（管理层）", `
       <p style="margin-bottom:8px">
         <button class="btn secondary" id="exp-monitor">监测指标CSV（14项）</button>
         <button class="btn secondary" id="exp-ops">运营月报CSV（业务量累计／绩效分当年）</button>
@@ -557,13 +557,13 @@ async function renderPerformance() {
       <p class="msg" id="rpt-msg"></p>
       ${monitoring ? table(["#", "指标名", "口径", "当期值", "数据来源"], monitoring.indicators, (i) =>
         `<tr><td>${i.no}</td><td>${esc(i.name)}</td><td style="font-size:12.5px;color:#5b6773">${esc(i.caliber)}</td>
-         <td><b>${esc(i.value)}</b> ${esc(i.unit)}</td><td><span class="tag">${esc(i.source)}</span></td></tr>`) : ""}</div>
-    <div class="panel"><h3>机构评分排名</h3>
+         <td><b>${esc(i.value)}</b> ${esc(i.unit)}</td><td><span class="tag">${esc(i.source)}</span></td></tr>`) : ""}`)}
+    ${panel("机构评分排名", `
       <p class="desc">本页是<b>考核口径</b>：指标与权重来自指标目录，分数只统计
         当前评分周期（${esc(data.period)}）内的业务量。「决策分析」页的
         「期末综合绩效报告」走的是自定义公式，<b>两者不可比</b>。</p>
-      ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}</div>
-    <div class="panel">${table(["排名", "机构", "层级", "总分", "转诊结案", "共享诊断(申请/出报告)", "慢病随访", "处方合格(可审)", "家医履约"],
+      ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}`)}
+    ${panel("", table(["排名", "机构", "层级", "总分", "转诊结案", "共享诊断(申请/出报告)", "慢病随访", "处方合格(可审)", "家医履约"],
       data.scorecards, (c, i) => {
         const d = c.detail;
         return `<tr><td>${data.scorecards.indexOf(c) + 1}</td><td>${esc(c.org_name)}</td><td>${esc(LEVELS[c.level] || c.level)}</td>
@@ -573,7 +573,7 @@ async function renderPerformance() {
           <td>${d.chronic_followup.followed}/${d.chronic_followup.total}</td>
           <td>${d.rx_pass.passed}/${d.rx_pass.total}<span style="color:#8a939e">（可审 ${d.rx_pass.rule_covered}）</span></td>
           <td>${d.contract_services}</td></tr>`;
-      })}</div>`;
+      }))}`;
   $("#exp-monitor").onclick = () => downloadCsv("/api/reports/monitoring/export", "monitoring_indicators.csv", "#rpt-msg");
   $("#exp-ops").onclick = () => downloadCsv("/api/reports/operations/export", "operations_report_all.csv", "#rpt-msg");
   $("#exp-ops-period").onclick = () => {
@@ -589,21 +589,21 @@ async function renderCssd() {
   const batches = await api("/api/cssd/batches");
   const BS = { sterilizing: ["灭菌中", "orange"], sterile: ["已灭菌", ""], dispatched: ["已发放", "green"], recycled: ["已回收", "green"] };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>新建批次</h3>
+    ${panel("新建批次", `
       <form class="inline" id="batch-form">
         <input name="batch_no" placeholder="批次号" required>
         <input name="center_org_id" type="number" placeholder="消毒中心机构ID" required>
         <input name="item_name" placeholder="器械名称" required>
         <input name="quantity" type="number" placeholder="数量" required min="1">
         <button>创建</button>
-      </form><p class="msg" id="cssd-msg"></p></div>
-    <div class="panel">${table(["ID", "批次号", "器械", "数量", "接收机构", "状态", "操作"], batches, (b) => {
+      </form><p class="msg" id="cssd-msg"></p>`)}
+    ${panel("", table(["ID", "批次号", "器械", "数量", "接收机构", "状态", "操作"], batches, (b) => {
       const next = { sterilizing: "标记已灭菌", sterile: "发放", dispatched: "回收" }[b.status];
       return `<tr><td>${b.id}</td><td><span class="tag">${esc(b.batch_no)}</span></td><td>${esc(b.item_name)}</td>
         <td>${b.quantity}</td><td>${b.dispatched_to_org_id ?? "—"}</td>
         <td>${statusTag(BS, b.status)}</td>
         <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${b.status}">${next}</button>` : "—"}</td></tr>`;
-    })}</div>`;
+    }))}`;
   $("#batch-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -637,21 +637,21 @@ async function renderMedwaste() {
   const WT = { infectious: "感染性", sharp: "损伤性", pathological: "病理性", pharmaceutical: "药物性", chemical: "化学性" };
   const WS = { collected: ["已收集", "orange"], stored: ["已暂存", "orange"], handed_over: ["已交接", "green"] };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>收集登记</h3>
+    ${panel("收集登记", `
       <form class="inline" id="waste-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="waste_type">${Object.entries(WT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="weight_kg" type="number" step="any" placeholder="重量(kg)" required>
         <input name="collected_date" placeholder="收集日期 YYYY-MM-DD" required>
         <button>登记</button>
-      </form><p class="msg" id="waste-msg"></p></div>
-    ${alerts.length ? `<div class="panel"><h3>⚠ 滞留预警（${alerts.length}）</h3><p class="desc">收集超过2天仍未交接</p></div>` : ""}
-    <div class="panel">${table(["ID", "机构", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
+      </form><p class="msg" id="waste-msg"></p>`)}
+    ${alerts.length ? panel(`⚠ 滞留预警（${alerts.length}）`, `<p class="desc">收集超过2天仍未交接</p>`) : ""}
+    ${panel("", table(["ID", "机构", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
       return `<tr><td>${w.id}</td><td>${w.org_id}</td><td>${WT[w.waste_type]}</td><td>${w.weight_kg}kg</td>
         <td>${esc(w.collected_date)}${alertIds.has(w.id) ? ' <span class="tag red">滞留</span>' : ""}</td>
         <td>${esc(w.handler_name) || "—"}</td><td>${statusTag(WS, w.status)}</td>
         <td>${w.status !== "handed_over" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : "—"}</td></tr>`;
-    })}</div>`;
+    }))}`;
   $("#waste-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -678,17 +678,17 @@ async function renderOrgs() {
   const orgs = await api("/api/organizations");
   const options = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>新增机构</h3>
+    ${panel("新增机构", `
       <form class="inline" id="org-form">
         <input name="name" placeholder="机构名称" required>
         <select name="org_type">${Object.entries(ORG_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <select name="level">${Object.entries(LEVELS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <select name="parent_id"><option value="">无上级机构</option>${options}</select>
         <button>新增</button>
-      </form><p class="msg" id="org-msg"></p></div>
-    <div class="panel">${table(["ID", "名称", "类型", "层级", "上级机构ID"], orgs, (o) =>
+      </form><p class="msg" id="org-msg"></p>`)}
+    ${panel("", table(["ID", "名称", "类型", "层级", "上级机构ID"], orgs, (o) =>
       `<tr><td>${o.id}</td><td>${esc(o.name)}</td><td>${ORG_TYPES[o.org_type] || esc(o.org_type)}</td>
-       <td><span class="tag">${LEVELS[o.level] || esc(o.level)}</span></td><td>${o.parent_id ?? "—"}</td></tr>`)}</div>`;
+       <td><span class="tag">${LEVELS[o.level] || esc(o.level)}</span></td><td>${o.parent_id ?? "—"}</td></tr>`))}`;
   $("#org-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -710,18 +710,18 @@ async function renderPatients() {
        <td>${esc(p.id_card)}</td><td>${esc(p.gender)}</td><td>${esc(p.phone)}</td></tr>`);
   };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>建档（重复身份证号幂等返回既有档案）</h3>
+    ${panel("建档（重复身份证号幂等返回既有档案）", `
       <form class="inline" id="patient-form">
         <input name="name" placeholder="姓名" required>
         <input name="id_card" placeholder="身份证号" required minlength="15">
         <select name="gender"><option>未知</option><option>男</option><option>女</option></select>
         <input name="phone" placeholder="电话">
         <button>建档</button>
-      </form><p class="msg" id="patient-msg"></p></div>
-    <div class="panel">
+      </form><p class="msg" id="patient-msg"></p>`)}
+    ${panel("", `
       <form class="inline" id="patient-search"><input name="keyword" placeholder="姓名/身份证/健康卡号"><button>搜索</button></form>
-      <div id="patient-table"></div></div>
-    <div class="panel"><h3>档案调阅授权（医师/经办代录，患者知情）</h3>
+      <div id="patient-table"></div>`)}
+    ${panel("档案调阅授权（医师/经办代录，患者知情）", `
       <form class="inline" id="auth-grant-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="grantee_org_id" type="number" placeholder="被授权机构ID" required>
@@ -735,7 +735,7 @@ async function renderPatients() {
         <input name="org_id" type="number" placeholder="调阅机构ID" required>
         <select name="scope"><option value="all">全部档案</option><option value="encounter">就诊记录</option><option value="exam">检查报告</option></select>
         <button>校验调阅权限</button></form>
-      <p class="msg" id="auth-msg"></p><div id="auth-table"></div></div>`;
+      <p class="msg" id="auth-msg"></p><div id="auth-table"></div>`)}`;
   const SCOPES = { all: "全部档案", encounter: "就诊记录", exam: "检查报告" };
   const drawAuths = async (pid) => {
     const auths = await api(`/api/patients/${pid}/authorizations`);

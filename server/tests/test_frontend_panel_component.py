@@ -232,6 +232,13 @@ MIGRATED_PAGES = {
     "renderCerts": 4,               # 证明表格由末尾的 draw() 写进 #cert-table（不在本页计数内）
     "renderOutpatientDocs": 4,      # 其中两个包在 `${encounterId ? … : ""}` 里
     "renderFund": 4,                # 其中三个包在 `${picked ? … : ""}` 里
+    # 第十二批 2026-09-06：core.js 五页（绩效考核 / 消毒供应 / 医疗废物 / 成员机构 / 居民主索引）。
+    # 五页各带一处无标题裸面板——第十一批给组件加了空标题分支，这批第一次成批用上。
+    "renderPerformance": 3,         # 监测指标那块的接口带 .catch(() => null)：缺夹具会静默不渲染
+    "renderCssd": 2,                # 渲染末尾还会 drawCssdCosts() 追加成本面板（不在本页计数内）
+    "renderMedwaste": 3,            # 滞留预警是条件面板
+    "renderOrgs": 2,
+    "renderPatients": 3,            # 患者表由末尾的 draw() 写进 #patient-table（不在本页计数内）
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。

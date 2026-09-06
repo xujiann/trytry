@@ -4446,5 +4446,334 @@
         ]
       }
     }
+  },
+  "performance": {
+    "_why": [
+      "第十二批（2026-09-06）：绩效考核。三个面板，第三个是无标题裸面板（排名表自带表头）。",
+      "监测指标那块是条件的，而且它的接口带 `.catch(() => null)`——夹具缺了不报错、",
+      "只是整块不渲染，比对照样绿。这种「静默降级」的分支必须显式喂上才比得出东西。",
+      "渲染末尾还会 await drawImprovementTasks() 追加绩效自评改进面板（另两个接口），",
+      "整改任务四条覆盖 open/in_progress/completed/verified 四种按钮组合 + 超期红标签。",
+      "level 必须是 LEVELS 的键（county/township/village），否则表格里出 undefined。"
+    ],
+    "fn": "renderPerformance",
+    "api": {
+      "/api/performance/orgs": {
+        "period": "2026<img src=x onerror=alert(1)>",
+        "scorecards": [
+          {
+            "org_name": "县人民医院 & 总院",
+            "level": "county",
+            "score": 92.5,
+            "detail": {
+              "referral_completion": {
+                "completed": 38,
+                "total": 41
+              },
+              "remote_exams": 120,
+              "remote_exams_requested": 70,
+              "remote_exams_provided": 50,
+              "chronic_followup": {
+                "followed": 410,
+                "total": 512
+              },
+              "rx_pass": {
+                "passed": 860,
+                "total": 900,
+                "rule_covered": 780
+              },
+              "contract_services": 1320
+            }
+          },
+          {
+            "org_name": "XX镇卫生院<b>",
+            "level": "legacy_level<b>",
+            "score": 81.0,
+            "detail": {
+              "referral_completion": {
+                "completed": 12,
+                "total": 20
+              },
+              "remote_exams": 40,
+              "remote_exams_requested": 40,
+              "remote_exams_provided": 0,
+              "chronic_followup": {
+                "followed": 90,
+                "total": 150
+              },
+              "rx_pass": {
+                "passed": 200,
+                "total": 260,
+                "rule_covered": 180
+              },
+              "contract_services": 300
+            }
+          }
+        ]
+      },
+      "/api/reports/monitoring": {
+        "indicators": [
+          {
+            "no": 1,
+            "name": "基层诊疗人次占比 &",
+            "caliber": "基层就诊人次 / 总就诊人次<b>",
+            "value": 63.2,
+            "unit": "%",
+            "source": "encounters"
+          },
+          {
+            "no": 2,
+            "name": "县域内就诊率",
+            "caliber": "县域内就诊人次 / 总就诊人次",
+            "value": 91.4,
+            "unit": "%",
+            "source": "encounters<img src=x onerror=alert(1)>"
+          }
+        ]
+      },
+      "/api/performance/improvement-stats": {
+        "total": 4,
+        "overdue": 1,
+        "closed_rate_pct": 25.0
+      },
+      "/api/performance/improvements": [
+        {
+          "id": 1,
+          "org_id": 3,
+          "problem": "慢病随访率偏低 &",
+          "owner_name": "张三<b>",
+          "due_date": "2026-08-01",
+          "overdue": true,
+          "status": "open",
+          "measures": "",
+          "completion_note": ""
+        },
+        {
+          "id": 2,
+          "org_id": 3,
+          "problem": "处方合格率不达标",
+          "owner_name": "李四",
+          "due_date": "2026-10-01",
+          "overdue": false,
+          "status": "in_progress",
+          "measures": "已开展处方点评培训 &",
+          "completion_note": ""
+        },
+        {
+          "id": 3,
+          "org_id": 4,
+          "problem": "转诊结案不及时",
+          "owner_name": "王五",
+          "due_date": "2026-09-20",
+          "overdue": false,
+          "status": "completed",
+          "measures": "",
+          "completion_note": "已建立每日结案清单<b>"
+        },
+        {
+          "id": 4,
+          "org_id": 4,
+          "problem": "家医履约记录缺失",
+          "owner_name": "赵六",
+          "due_date": "2026-07-15",
+          "overdue": false,
+          "status": "verified",
+          "measures": "",
+          "completion_note": ""
+        }
+      ]
+    }
+  },
+  "cssd": {
+    "_why": [
+      "第十二批（2026-09-06）：消毒供应中心。两个面板，第二个是无标题裸面板。",
+      "批次四条覆盖 sterilizing/sterile/dispatched/recycled 四态——操作列的按钮文案",
+      "由状态决定，已回收那条走「—」支。",
+      "渲染末尾还会 await drawCssdCosts() 追加成本核算面板（另一个接口）。"
+    ],
+    "fn": "renderCssd",
+    "api": {
+      "/api/cssd/batches": [
+        {
+          "id": 11,
+          "batch_no": "XD-2026-01 &",
+          "item_name": "手术器械包<b>",
+          "quantity": 20,
+          "dispatched_to_org_id": null,
+          "status": "sterilizing"
+        },
+        {
+          "id": 12,
+          "batch_no": "XD-2026-02",
+          "item_name": "换药包",
+          "quantity": 40,
+          "dispatched_to_org_id": null,
+          "status": "sterile"
+        },
+        {
+          "id": 13,
+          "batch_no": "XD-2026-03<img src=x onerror=alert(1)>",
+          "item_name": "产包",
+          "quantity": 10,
+          "dispatched_to_org_id": 4,
+          "status": "dispatched"
+        },
+        {
+          "id": 14,
+          "batch_no": "XD-2026-04",
+          "item_name": "穿刺包",
+          "quantity": 15,
+          "dispatched_to_org_id": 4,
+          "status": "recycled"
+        }
+      ],
+      "/api/cssd/cost-stats": {
+        "total_cost": 12600.0,
+        "total_quantity": 85,
+        "overall_unit_cost": 148.24,
+        "by_cost_type": {
+          "material": {
+            "name": "耗材 &",
+            "amount": 8000.0
+          },
+          "labor": {
+            "name": "人工<b>",
+            "amount": 4600.0
+          }
+        },
+        "batches": [
+          {
+            "batch_id": 11,
+            "batch_no": "XD-2026-01 &",
+            "item_name": "手术器械包<b>",
+            "quantity": 20,
+            "total_cost": 4000.0,
+            "unit_cost": 200.0
+          },
+          {
+            "batch_id": 12,
+            "batch_no": "XD-2026-02",
+            "item_name": "换药包",
+            "quantity": 40,
+            "total_cost": 4800.0,
+            "unit_cost": 120.0
+          }
+        ]
+      }
+    }
+  },
+  "medwaste": {
+    "_why": [
+      "第十二批（2026-09-06）：医疗废物监管。三个面板，滞留预警是条件面板、",
+      "第三个是无标题裸面板。",
+      "废物三条：一条在预警集合里（收集日期后带红色「滞留」标签）、一条已交接走「—」支、",
+      "一条转运人为空走 `esc(x) || \"—\"` 支。"
+    ],
+    "fn": "renderMedwaste",
+    "api": {
+      "/api/medwaste": [
+        {
+          "id": 21,
+          "org_id": 3,
+          "waste_type": "infectious",
+          "weight_kg": 12.5,
+          "collected_date": "2026-09-01",
+          "handler_name": "",
+          "status": "collected"
+        },
+        {
+          "id": 22,
+          "org_id": 3,
+          "waste_type": "sharp",
+          "weight_kg": 3.2,
+          "collected_date": "2026-09-04",
+          "handler_name": "转运员甲 &",
+          "status": "handed_over"
+        },
+        {
+          "id": 23,
+          "org_id": 4,
+          "waste_type": "pathological",
+          "weight_kg": 7.0,
+          "collected_date": "2026-09-05",
+          "handler_name": "转运员乙<b>",
+          "status": "stored"
+        }
+      ],
+      "/api/medwaste/alerts": [
+        {
+          "id": 21,
+          "org_id": 3,
+          "waste_type": "infectious",
+          "weight_kg": 12.5,
+          "collected_date": "2026-09-01",
+          "handler_name": "",
+          "status": "collected"
+        }
+      ]
+    }
+  },
+  "orgs": {
+    "_why": [
+      "第十二批（2026-09-06）：成员机构。两个面板，第二个是无标题裸面板。",
+      "机构第三条给一个不在 ORG_TYPES / LEVELS 里的取值，把两条 `|| esc(...)` 兜底都走到；",
+      "parent_id 给一条 null 走 `?? \"—\"`。"
+    ],
+    "fn": "renderOrgs",
+    "api": {
+      "/api/organizations": [
+        {
+          "id": 3,
+          "name": "县人民医院 & 总院",
+          "org_type": "lead_hospital",
+          "level": "county",
+          "parent_id": null
+        },
+        {
+          "id": 4,
+          "name": "XX镇卫生院<b>",
+          "org_type": "township",
+          "level": "township",
+          "parent_id": 3
+        },
+        {
+          "id": 5,
+          "name": "YY村卫生室<img src=x onerror=alert(1)>",
+          "org_type": "legacy_type<b>",
+          "level": "legacy_level &",
+          "parent_id": 4
+        }
+      ]
+    }
+  },
+  "patients": {
+    "_why": [
+      "第十二批（2026-09-06）：居民主索引。三个面板，第二个是无标题裸面板（搜索表单 + 结果容器）。",
+      "患者表不是随 innerHTML 一起渲染的——`await draw()` 在渲染函数最后再拉一次",
+      "/api/patients 写进 #patient-table，夹具缺了整页抛错。",
+      "身份证与电话是**合成的假值**（明显不是真号），只为验证转义行为；",
+      "真实出口一律经 privacy.py 脱敏，这里不承担那个职责。"
+    ],
+    "fn": "renderPatients",
+    "api": {
+      "/api/patients": [
+        {
+          "id": 31,
+          "ehc_no": "EHC-0000031",
+          "name": "张三 & 测试",
+          "id_card": "310101********1234",
+          "gender": "男",
+          "phone": "138****0001"
+        },
+        {
+          "id": 32,
+          "ehc_no": "EHC-0000032<img src=x onerror=alert(1)>",
+          "name": "李四<b>",
+          "id_card": "310101********5678",
+          "gender": "女",
+          "phone": "139****0002"
+        }
+      ]
+    }
   }
 }
