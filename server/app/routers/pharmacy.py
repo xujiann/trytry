@@ -190,6 +190,11 @@ def transfer_stock(
     """
     if body.from_org_id == body.to_org_id:
         raise HTTPException(status_code=422, detail="调出与调入机构不能相同")
+    # 只校验**调出方**（ADR-0020）：减少谁的库存就要能写谁。
+    # 刻意不校验 `to_org_id`——收货不减少任何人的库存，而"甲把药调给乙"正是本接口的
+    # 主用法，两端都要求可写等于只剩 admin/director 能调拨。
+    # 这与 ADR-0019（目标池分发两端都校验）**故意不同**：那里的去向是改归属，这里是收货。
+    assert_org_writable(db, user, body.from_org_id)
     source = (
         db.query(DrugStock)
         .filter(DrugStock.org_id == body.from_org_id, DrugStock.drug_code == body.drug_code)
