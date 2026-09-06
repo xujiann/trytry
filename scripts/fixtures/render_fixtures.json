@@ -2052,5 +2052,586 @@
         }
       ]
     }
+  },
+  "knowledge": {
+    "_why": [
+      "第七批（2026-09-06）：五分类统一知识库。三个面板里有两个是条件渲染——",
+      "发布面板要 director/public_health/admin 之一（localStorage 固定 director），",
+      "临期提醒面板要 /expiring 返回非空（故意给两条，其中一条标题带 XSS 载荷）。",
+      "检索面板的表格由 innerHTML 之后的 draw() 填，故 /api/knowledge 也要给非空数据。"
+    ],
+    "fn": "renderKnowledge",
+    "localStorage": {
+      "medplat_role": "director"
+    },
+    "api": {
+      "/api/knowledge/expiring": [
+        {
+          "id": 11,
+          "category": "policy",
+          "category_name": "政策文件",
+          "title": "县域医共体绩效办法<img src=x onerror=alert(1)>",
+          "expire_date": "2026-09-20"
+        },
+        {
+          "id": 12,
+          "category": "guideline",
+          "category_name": "临床指南",
+          "title": "高血压基层诊疗指南",
+          "expire_date": "2026-09-28"
+        }
+      ],
+      "/api/knowledge": [
+        {
+          "id": 11,
+          "category": "policy",
+          "category_name": "政策文件",
+          "title": "县域医共体绩效办法<img src=x onerror=alert(1)>",
+          "expire_date": "2026-09-20",
+          "expired": false
+        },
+        {
+          "id": 13,
+          "category": "sop",
+          "category_name": "操作规程",
+          "title": "消毒供应中心 SOP & 复核要点",
+          "expire_date": "",
+          "expired": false
+        },
+        {
+          "id": 14,
+          "category": "training",
+          "category_name": "培训资料",
+          "title": "旧版病历书写制度",
+          "expire_date": "2025-01-01",
+          "expired": true
+        }
+      ]
+    }
+  },
+  "hrfinance": {
+    "_why": [
+      "第七批（2026-09-06）：人力资源 + 财务集中核算 + 物资。三处条件渲染都故意让它渲染出来——",
+      "合同到期卡片与带橙色左边框的提醒面板要 /staff-contracts/expiring 非空；",
+      "薪酬与预算两个面板要 director 角色（localStorage 固定 director）且 /payroll 非空。",
+      "两处 `class=\"panel hidden\" id=…` 的容器面板不迁：panel() 出不了额外 class 与 id，迁了就是改字节。"
+    ],
+    "fn": "renderHrFinance",
+    "localStorage": {
+      "medplat_role": "director"
+    },
+    "api": {
+      "/api/mgmt/employees": [
+        {
+          "id": 1,
+          "org_id": 2,
+          "name": "张三<img src=x onerror=alert(1)>",
+          "title": "主治医师",
+          "dept_id": 11,
+          "status": "active"
+        },
+        {
+          "id": 2,
+          "org_id": 3,
+          "name": "李四",
+          "title": "护师",
+          "dept_id": null,
+          "status": "seconded"
+        }
+      ],
+      "/api/mgmt/secondments/stats": {
+        "active_secondments": 7
+      },
+      "/api/mgmt/finance/summary": {
+        "consolidated": {
+          "income": 1250000.5,
+          "expense": 980000.25,
+          "balance": 270000.25
+        },
+        "orgs": [
+          {
+            "org_id": 2,
+            "income": 800000.5,
+            "expense": 600000.25,
+            "balance": 200000.25
+          },
+          {
+            "org_id": 3,
+            "income": 450000,
+            "expense": 380000,
+            "balance": 70000
+          }
+        ]
+      },
+      "/api/mgmt/assets": [
+        {
+          "id": 5,
+          "code": "OF-001",
+          "name": "打印机 & 耗材",
+          "org_id": 2,
+          "quantity": 3,
+          "status": "in_use"
+        },
+        {
+          "id": 6,
+          "code": "EQ-002",
+          "name": "离心机",
+          "org_id": 3,
+          "quantity": 1,
+          "status": "scrapped"
+        }
+      ],
+      "/api/mgmt/departments": [
+        {
+          "id": 11,
+          "org_id": 2,
+          "code": "NK",
+          "name": "内科",
+          "category": "clinical"
+        },
+        {
+          "id": 12,
+          "org_id": 2,
+          "code": "YJ",
+          "name": "医技科<b>",
+          "category": "medtech"
+        }
+      ],
+      "/api/mgmt/staff-contracts/expiring": [
+        {
+          "contract_no": "HT-2026-001",
+          "employee_id": 1,
+          "end_date": "2026-10-20"
+        },
+        {
+          "contract_no": "HT-2026-002",
+          "employee_id": 2,
+          "end_date": "2026-11-02"
+        }
+      ],
+      "/api/mgmt/payroll": {
+        "total_amount": 86500.75,
+        "records": [
+          {
+            "id": 31,
+            "employee_id": 1,
+            "period": "2026-08",
+            "base_salary": 8000,
+            "perf_bonus": 2500,
+            "perf_coefficient": 1.2,
+            "total": 11000
+          },
+          {
+            "id": 32,
+            "employee_id": 2,
+            "period": "2026-08",
+            "base_salary": 6000,
+            "perf_bonus": 1200,
+            "perf_coefficient": 1.0,
+            "total": 7200
+          }
+        ]
+      }
+    }
+  },
+  "quality": {
+    "_why": [
+      "第七批（2026-09-06）：医疗质量（不良事件 / 病历环节质控 / 抽检 / 院感）。",
+      "六个面板都是无条件渲染，夹具的作用是把四张表都喂出数据行——空列表下 table() 走",
+      "「暂无数据」分支，比对器就证明不了表格那段没变。事件与病历各给一条带 XSS 载荷的文本。",
+      "注意 /api/quality/adverse-events 与 /adverse-events-stats 共前缀，靠最长前缀匹配分流。"
+    ],
+    "fn": "renderQuality",
+    "api": {
+      "/api/quality/adverse-events-stats": {
+        "total": 9,
+        "closed_loop_pct": 66.7
+      },
+      "/api/quality/adverse-events": [
+        {
+          "id": 1,
+          "event_type": "medication",
+          "level": "III",
+          "description": "给药剂量核对失误<img src=x onerror=alert(1)>",
+          "reporter_name": "",
+          "status": "reported"
+        },
+        {
+          "id": 2,
+          "event_type": "fall",
+          "level": "II",
+          "description": "患者夜间跌倒",
+          "reporter_name": "王护士",
+          "status": "reviewed"
+        },
+        {
+          "id": 3,
+          "event_type": "device",
+          "level": "IV",
+          "description": "输液泵报警",
+          "reporter_name": "李医生",
+          "status": "rectified"
+        }
+      ],
+      "/api/quality/record-qc-stats": {
+        "total": 24,
+        "avg_score": 88.5,
+        "grade_a_pct": 62.5
+      },
+      "/api/quality/infection-reports": [
+        {
+          "id": 7,
+          "org_id": 2,
+          "patient_id": 31,
+          "infection_site": "respiratory",
+          "pathogen": "肺炎克雷伯菌 & MRSA",
+          "status": "reported"
+        },
+        {
+          "id": 8,
+          "org_id": 3,
+          "patient_id": 32,
+          "infection_site": "urinary",
+          "pathogen": "大肠埃希菌",
+          "status": "confirmed"
+        }
+      ],
+      "/api/quality/records/qc-summary": {
+        "grade_distribution": {
+          "甲": 15,
+          "乙": 7,
+          "丙": 2
+        },
+        "avg_score": 88.5,
+        "by_org": [
+          {
+            "name": "县人民医院",
+            "total": 16,
+            "avg_score": 90.1,
+            "grade_a": 11,
+            "grade_b": 4,
+            "grade_c": 1,
+            "grade_a_pct": 68.8
+          },
+          {
+            "name": "东镇卫生院<b>",
+            "total": 8,
+            "avg_score": 85.3,
+            "grade_a": 4,
+            "grade_b": 3,
+            "grade_c": 1,
+            "grade_a_pct": 50.0
+          }
+        ],
+        "by_doctor": [
+          {
+            "name": "张医生",
+            "total": 9,
+            "avg_score": 91.2,
+            "grade_a": 7,
+            "grade_b": 2,
+            "grade_c": 0
+          },
+          {
+            "name": "",
+            "total": 5,
+            "avg_score": 82.4,
+            "grade_a": 2,
+            "grade_b": 2,
+            "grade_c": 1
+          }
+        ]
+      },
+      "/api/quality/records": [
+        {
+          "id": 41,
+          "encounter_id": 501,
+          "doctor_name": "张医生",
+          "chief_complaint": "发热咳嗽 3 天<script>",
+          "qc_score": 92,
+          "qc_grade": "甲"
+        },
+        {
+          "id": 42,
+          "encounter_id": 502,
+          "doctor_name": "李医生",
+          "chief_complaint": "",
+          "qc_score": 78,
+          "qc_grade": "乙"
+        }
+      ]
+    }
+  },
+  "spdassess": {
+    "_why": [
+      "第七批（2026-09-06）：慢专病考核与积分。五个面板都无条件渲染，夹具只负责把五张表喂满。",
+      "指标名与商品名各带一条 XSS 载荷；`formula` 故意给一条为空，钉住 `|| \"—\"` 那个回落分支。",
+      "/api/spd/scores 与 /api/spd/scores/{id} 共前缀，但后者只在点\"下钻明细\"时才调，渲染路径用不到。"
+    ],
+    "fn": "renderSpdAssess",
+    "api": {
+      "/api/spd/indicators": [
+        {
+          "code": "followup_rate",
+          "name": "随访完成率<img src=x onerror=alert(1)>",
+          "object_type": "org",
+          "data_source": "spd_followup_records",
+          "formula": "done / planned * 100",
+          "weight": 40,
+          "target_value": 90,
+          "version": "v2",
+          "active": true
+        },
+        {
+          "code": "path_rate",
+          "name": "路径入组率",
+          "object_type": "village_doctor",
+          "data_source": "spd_enrollments",
+          "formula": "",
+          "weight": 30,
+          "target_value": null,
+          "version": "v1",
+          "active": false
+        }
+      ],
+      "/api/spd/assess-plans": [
+        {
+          "id": 3,
+          "code": "P-2026-TOWN",
+          "name": "卫生院年度考核 & 复核",
+          "level": "township",
+          "object_type": "org",
+          "period_type": "year",
+          "items": [
+            {
+              "code": "followup_rate",
+              "weight": 40
+            },
+            {
+              "code": "path_rate",
+              "weight": 30
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "code": "P-2026-VD",
+          "name": "村医季度考核",
+          "level": "village",
+          "object_type": "village_doctor",
+          "period_type": "quarter",
+          "items": []
+        }
+      ],
+      "/api/spd/scores": [
+        {
+          "id": 21,
+          "rank": 1,
+          "object_name": "东镇卫生院<b>",
+          "period": "2026",
+          "total_score": 92.5
+        },
+        {
+          "id": 22,
+          "rank": 2,
+          "object_name": "西镇卫生院",
+          "period": "2026",
+          "total_score": 85.0
+        }
+      ],
+      "/api/spd/goods": [
+        {
+          "code": "G-001",
+          "name": "血压计 & 袖带",
+          "points": 300,
+          "stock": 12
+        },
+        {
+          "code": "G-002",
+          "name": "体检套餐",
+          "points": 800,
+          "stock": 3
+        }
+      ],
+      "/api/spd/point-accounts": [
+        {
+          "user_id": 51,
+          "user_name": "村医甲<script>",
+          "balance": 420,
+          "earned": 900,
+          "used": 480
+        },
+        {
+          "user_id": 52,
+          "user_name": "村医乙",
+          "balance": 150,
+          "earned": 150,
+          "used": 0
+        }
+      ]
+    }
+  },
+  "spdfollowup": {
+    "_why": [
+      "第七批（2026-09-06）：通用随访能力。五个面板无条件渲染，随访看板那张表由 innerHTML 之后的",
+      "drawRecords() 填，故 /api/spd/followup-records 也要给非空数据。",
+      "`by_executor` 故意给非空——它是条件渲染的第二个 barChart，空数组下那段什么都不出。",
+      "方案名与患者名各带 XSS 载荷；`dept`/`questionnaire_code` 各留一条空值钉住 `|| \"—\"` 回落。",
+      "赋完 innerHTML 之后还会拉 /api/spd/meta 建异常规则编辑器（spdRuleEditor），夹具不给它整页抛错。"
+    ],
+    "fn": "renderSpdFollowup",
+    "api": {
+      "/api/spd/followup-rules": [
+        {
+          "id": 1,
+          "code": "FU-DIS",
+          "name": "出院随访方案<img src=x onerror=alert(1)>",
+          "scene": "inpatient",
+          "dept": "内科",
+          "points": [
+            3,
+            7,
+            30
+          ],
+          "questionnaire_code": "Q-DIS",
+          "executor_role": "nurse",
+          "preset": true
+        },
+        {
+          "id": 2,
+          "code": "FU-SURG",
+          "name": "术后随访",
+          "scene": "surgery",
+          "dept": "",
+          "points": [
+            1,
+            7
+          ],
+          "questionnaire_code": "",
+          "executor_role": "doctor",
+          "preset": false
+        }
+      ],
+      "/api/spd/questionnaires": [
+        {
+          "code": "Q-DIS",
+          "name": "出院随访问卷 & 复核",
+          "scene": "inpatient",
+          "items": [
+            1,
+            2,
+            3
+          ],
+          "abnormal_rules": [
+            1
+          ],
+          "track_dept": "内科",
+          "handle_role": "doctor"
+        },
+        {
+          "code": "Q-SURG",
+          "name": "术后问卷",
+          "scene": "surgery",
+          "items": [
+            1,
+            2
+          ],
+          "abnormal_rules": [],
+          "track_dept": "",
+          "handle_role": "nurse"
+        }
+      ],
+      "/api/spd/followup-stats": {
+        "total": 120,
+        "done": 96,
+        "completion_rate": 80.0,
+        "overdue": 6,
+        "abnormal": 9,
+        "by_abnormal": {
+          "none": 87,
+          "low": 5,
+          "mid": 3,
+          "high": 1
+        },
+        "by_executor": [
+          {
+            "executor_id": 7,
+            "executor_name": "王护士",
+            "done": 52
+          },
+          {
+            "executor_id": 8,
+            "executor_name": "",
+            "done": 44
+          }
+        ]
+      },
+      "/api/spd/call-tasks": [
+        {
+          "id": 301,
+          "patient_name": "周某某<b>",
+          "phone": "138****0011",
+          "ref_type": "followup",
+          "status": "connected",
+          "duration_s": 83,
+          "record_url": "/rec/301.mp3",
+          "created_at": "2026-09-01T09:12:33"
+        },
+        {
+          "id": 302,
+          "patient_name": "吴某某",
+          "phone": "",
+          "ref_type": "revisit",
+          "status": "pending",
+          "duration_s": 0,
+          "record_url": "",
+          "created_at": "2026-09-02T14:05:00"
+        }
+      ],
+      "/api/spd/followup-records": [
+        {
+          "id": 901,
+          "patient_name": "周某某<b>",
+          "scene": "inpatient",
+          "planned_at": "2026-09-03",
+          "executed_at": "2026-09-03",
+          "channel": "phone",
+          "abnormal_level": "none",
+          "status": "done"
+        },
+        {
+          "id": 902,
+          "patient_name": "吴某某",
+          "scene": "surgery",
+          "planned_at": "2026-09-05",
+          "executed_at": "",
+          "channel": "",
+          "abnormal_level": "high",
+          "status": "planned"
+        }
+      ],
+      "/api/spd/meta": {
+        "fields": [
+          {
+            "key": "age",
+            "label": "年龄"
+          },
+          {
+            "key": "bp_sys",
+            "label": "收缩压"
+          }
+        ],
+        "operators": [
+          {
+            "key": ">=",
+            "label": "≥"
+          },
+          {
+            "key": "<",
+            "label": "<"
+          }
+        ]
+      }
+    }
   }
 }

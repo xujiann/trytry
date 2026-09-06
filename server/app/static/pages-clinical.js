@@ -1242,7 +1242,7 @@ async function renderHrFinance() {
       <div class="card"><div class="label">医共体收入合计</div><div class="value">${finance.consolidated.income}</div></div>
       <div class="card"><div class="label">医共体结余</div><div class="value">${finance.consolidated.balance}</div></div>
       ${expiringContracts.length ? `<div class="card"><div class="label">60天内到期合同</div><div class="value warn">${expiringContracts.length}</div></div>` : ""}</div>
-    <div class="panel"><h3>员工 / 派驻 / 财务 / 物资录入</h3>
+    ${panel("员工 / 派驻 / 财务 / 物资录入", `
       <form class="inline" id="emp-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="name" placeholder="姓名" required>
         <input name="title" placeholder="职称"><input name="position" placeholder="岗位"><button>登记员工</button></form>
       <form class="inline" id="sec-form"><input name="employee_id" type="number" placeholder="员工ID" required>
@@ -1253,27 +1253,27 @@ async function renderHrFinance() {
       <form class="inline" id="asset-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="code" placeholder="物资编码" required>
         <input name="name" placeholder="名称" required><select name="category"><option value="office">办公用品</option><option value="equipment">非医疗设备</option></select>
         <input name="quantity" type="number" value="1" min="1" style="min-width:60px"><button>物资建档</button></form>
-      <p class="msg" id="hrf-msg"></p></div>
-    <div class="panel"><h3>科室信息基础库（机构内编码唯一，员工跨机构挂接拦截）</h3>
+      <p class="msg" id="hrf-msg"></p>`)}
+    ${panel("科室信息基础库（机构内编码唯一，员工跨机构挂接拦截）", `
       <form class="inline" id="dept-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="code" placeholder="科室编码" required><input name="name" placeholder="科室名称" required>
         <select name="category"><option value="clinical">临床</option><option value="medtech">医技</option><option value="admin">行政</option></select>
         <button>科室建档</button></form>
       ${table(["ID", "机构", "编码", "名称", "类别"], departments, (d) =>
-        `<tr><td>${d.id}</td><td>${d.org_id}</td><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td><td>${esc(d.category)}</td></tr>`)}</div>
-    <div class="panel"><h3>员工（变动留痕联动机构与状态）</h3>${table(["ID", "机构", "姓名", "职称", "科室", "状态", "操作"], employees, (em) => {
+        `<tr><td>${d.id}</td><td>${d.org_id}</td><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td><td>${esc(d.category)}</td></tr>`)}`)}
+    ${panel("员工（变动留痕联动机构与状态）", table(["ID", "机构", "姓名", "职称", "科室", "状态", "操作"], employees, (em) => {
       return `<tr><td>${em.id}</td><td>${em.org_id}</td><td>${esc(em.name)}</td><td>${esc(em.title)}</td>
         <td>${em.dept_id ? esc(deptNames[em.dept_id] || em.dept_id) : "—"}</td><td>${statusTag(EST, em.status)}</td>
         <td><button class="btn secondary" data-empdept="${em.id}">挂科室</button>
             <button class="btn secondary" data-empchg="${em.id}">登记变动</button>
             <button class="btn" data-emphist="${em.id}">变动史</button>
             <button class="btn secondary" data-empct="${em.id}">签合同</button></td></tr>`;
-    })}</div>
+    }))}
     <div class="panel hidden" id="empchg-panel"><h3>人员变动记录</h3><div id="empchg-list"></div></div>
-    ${expiringContracts.length ? `<div class="panel" style="border-left:4px solid #b26a00"><h3>⚠ 合同到期提醒（60天内 ${expiringContracts.length} 份，续签管理）</h3>${
+    ${expiringContracts.length ? panel(`⚠ 合同到期提醒（60天内 ${expiringContracts.length} 份，续签管理）`,
       table(["合同号", "员工", "止期"], expiringContracts, (c) =>
-        `<tr><td><span class="tag">${esc(c.contract_no)}</span></td><td>${c.employee_id}</td><td><span class="tag orange">${esc(c.end_date)}</span></td></tr>`)}</div>` : ""}
-    ${isDirector ? `<div class="panel"><h3>月度薪酬（管理层：基础 + 绩效×系数）</h3>
+        `<tr><td><span class="tag">${esc(c.contract_no)}</span></td><td>${c.employee_id}</td><td><span class="tag orange">${esc(c.end_date)}</span></td></tr>`), { accent: "#b26a00" }) : ""}
+    ${isDirector ? `${panel("月度薪酬（管理层：基础 + 绩效×系数）", `
       <form class="inline" id="pay-form">
         <input name="employee_id" type="number" placeholder="员工ID" required>
         <input name="period" placeholder="期间 YYYY-MM" required pattern="\\d{4}-\\d{2}">
@@ -1284,8 +1284,8 @@ async function renderHrFinance() {
       ${payroll ? `<p style="font-size:13px">合计发放：<b>${payroll.total_amount}</b> 元</p>${
         table(["ID", "员工", "期间", "基础", "绩效", "系数", "实发"], payroll.records, (r) =>
           `<tr><td>${r.id}</td><td>${r.employee_id}</td><td>${esc(r.period)}</td><td>${r.base_salary}</td>
-           <td>${r.perf_bonus}</td><td>${r.perf_coefficient}</td><td><b>${r.total}</b></td></tr>`)}` : ""}</div>
-    <div class="panel"><h3>预算编制与执行（管理层）</h3>
+           <td>${r.perf_bonus}</td><td>${r.perf_coefficient}</td><td><b>${r.total}</b></td></tr>`)}` : ""}`)}
+    ${panel("预算编制与执行（管理层）", `
       <form class="inline" id="bud-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="year" placeholder="年度 YYYY" required pattern="\\d{4}">
@@ -1296,14 +1296,14 @@ async function renderHrFinance() {
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="year" placeholder="年度 YYYY" required pattern="\\d{4}">
         <button>查执行率</button></form>
-      <div id="bud-exec"></div></div>` : ""}
-    <div class="panel"><h3>各单位收支（全部期间）</h3>${table(["机构", "收入", "支出", "结余"], finance.orgs, (o) =>
-      `<tr><td>${o.org_id}</td><td>${o.income}</td><td>${o.expense}</td><td>${o.balance}</td></tr>`)}</div>
-    <div class="panel"><h3>物资（出入库全程留痕）</h3>${table(["ID", "编码", "名称", "机构", "数量", "状态", "操作"], assets, (a) =>
+      <div id="bud-exec"></div>`)}` : ""}
+    ${panel("各单位收支（全部期间）", table(["机构", "收入", "支出", "结余"], finance.orgs, (o) =>
+      `<tr><td>${o.org_id}</td><td>${o.income}</td><td>${o.expense}</td><td>${o.balance}</td></tr>`))}
+    ${panel("物资（出入库全程留痕）", table(["ID", "编码", "名称", "机构", "数量", "状态", "操作"], assets, (a) =>
       `<tr><td>${a.id}</td><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${a.org_id}</td><td>${a.quantity}</td>
        <td><span class="tag ${a.status === "scrapped" ? "red" : ""}">${a.status === "scrapped" ? "已报废" : a.status}</span></td>
        <td>${a.status !== "scrapped" ? `<button class="btn secondary" data-assetmv="${a.id}">出入库</button>` : ""}
-           <button class="btn" data-assethist="${a.id}">记录</button></td></tr>`)}</div>
+           <button class="btn" data-assethist="${a.id}">记录</button></td></tr>`))}
     <div class="panel hidden" id="assetmv-panel"><h3>物资出入库记录</h3><div id="assetmv-list"></div></div>`;
   $("#emp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/employees", formJson(e.target, ["org_id"]), "#hrf-msg"); };
   $("#sec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/secondments", formJson(e.target, ["employee_id", "to_org_id"]), "#hrf-msg"); };
@@ -1816,7 +1816,7 @@ async function renderQuality() {
     ["病历抽检", qstats.total], ["病历均分", qstats.avg_score], ["病历甲级率", qstats.grade_a_pct + "%"]];
   $("#page-body").innerHTML = `
     <div class="cards">${cards.map(([l, v]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div></div>`).join("")}</div>
-    <div class="panel"><h3>不良事件上报</h3>
+    ${panel("不良事件上报", `
       <form class="inline" id="ae-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <select name="event_type">${Object.entries(AET).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <select name="level"><option value="IV">IV级(隐患)</option><option value="III">III级(无后果)</option>
@@ -1832,8 +1832,8 @@ async function renderQuality() {
         return `<tr><td>${ev.id}</td><td>${esc(AET[ev.event_type] || ev.event_type)}</td><td>${esc(ev.level)}</td>
           <td>${esc(ev.description)}</td><td>${esc(ev.reporter_name) || "（匿名）"}</td>
           <td>${statusTag(AES, ev.status)}</td><td>${actions}</td></tr>`;
-      })}</div>
-    <div class="panel"><h3>不良事件附件（现场照片/佐证PDF，≤10MB）</h3>
+      })}`)}
+    ${panel("不良事件附件（现场照片/佐证PDF，≤10MB）", `
       <form class="inline" id="ae-att-form">
         <input name="event_id" type="number" placeholder="事件ID" required>
         <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" required>
@@ -1841,8 +1841,8 @@ async function renderQuality() {
       <form class="inline" id="ae-att-query">
         <input name="event_id" type="number" placeholder="事件ID" required>
         <button>查附件</button></form>
-      <p class="msg" id="ae-att-msg"></p><div id="ae-att-list"></div></div>
-    <div class="panel"><h3>结构化病历录入（医师）——提交即出环节质控评分</h3>
+      <p class="msg" id="ae-att-msg"></p><div id="ae-att-list"></div>`)}
+    ${panel("结构化病历录入（医师）——提交即出环节质控评分", `
       <form id="mr-form">
         <div class="inline"><input name="encounter_id" type="number" placeholder="就诊ID" required>
           <span class="desc" style="font-size:12px">同一就诊仅一份病历，再次提交为修正并复评</span></div>
@@ -1850,8 +1850,8 @@ async function renderQuality() {
           `<div style="margin-top:8px"><label style="font-size:13px">${label}<span class="desc" style="font-size:12px">（${hint}）</span></label>
            <textarea name="${key}" rows="${rows}" style="width:100%"></textarea></div>`).join("")}
         <div class="inline" style="margin-top:8px"><button>提交并质控评分</button></div></form>
-      <p class="msg" id="mr-msg"></p><div id="mr-result"></div></div>
-    <div class="panel"><h3>环节质控概览（甲 ${mrSummary.grade_distribution["甲"]} / 乙 ${mrSummary.grade_distribution["乙"]} / 丙 ${mrSummary.grade_distribution["丙"]}，均分 ${mrSummary.avg_score}）</h3>
+      <p class="msg" id="mr-msg"></p><div id="mr-result"></div>`)}
+    ${panel(`环节质控概览（甲 ${mrSummary.grade_distribution["甲"]} / 乙 ${mrSummary.grade_distribution["乙"]} / 丙 ${mrSummary.grade_distribution["丙"]}，均分 ${mrSummary.avg_score}）`, `
       ${table(["机构", "病历数", "均分", "甲", "乙", "丙", "甲级率"], mrSummary.by_org, (o) =>
         `<tr><td>${esc(o.name)}</td><td>${o.total}</td><td>${o.avg_score}</td>
          <td><span class="tag green">${o.grade_a}</span></td><td><span class="tag orange">${o.grade_b}</span></td>
@@ -1865,14 +1865,14 @@ async function renderQuality() {
         `<tr><td>${r.id}</td><td>${r.encounter_id}</td><td>${esc(r.doctor_name)}</td>
          <td>${esc(r.chief_complaint) || "（未填）"}</td><td>${r.qc_score}</td>
          <td><span class="tag ${MR_GRADE_COLOR[r.qc_grade] || ""}">${r.qc_grade}级</span></td>
-         <td><button class="btn secondary" data-mrqc="${r.id}">复评并看缺陷</button></td></tr>`)}</div>
-    <div class="panel"><h3>病历质控抽检（人工评分）</h3>
+         <td><button class="btn secondary" data-mrqc="${r.id}">复评并看缺陷</button></td></tr>`)}`)}
+    ${panel("病历质控抽检（人工评分）", `
       <form class="inline" id="qc-rec-form">
         <select name="target_type"><option value="encounter">门急诊病历</option><option value="case_summary">病案首页</option></select>
         <input name="target_id" type="number" placeholder="对象ID" required>
         <input name="score" type="number" min="0" max="100" placeholder="评分0-100" required>
-        <input name="defects" placeholder="缺陷项（分号分隔）" style="min-width:200px"><button>评分</button></form></div>
-    <div class="panel"><h3>院感上报</h3>
+        <input name="defects" placeholder="缺陷项（分号分隔）" style="min-width:200px"><button>评分</button></form>`)}
+    ${panel("院感上报", `
       <form class="inline" id="inf-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="infection_site">${Object.entries(SITE).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
@@ -1883,7 +1883,7 @@ async function renderQuality() {
              <button class="btn" data-verify="${r.id}" data-ok="false">排除</button>` : "—";
         return `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${r.patient_id}</td><td>${SITE[r.infection_site]}</td>
           <td>${esc(r.pathogen)}</td><td>${statusTag(IST, r.status)}</td><td>${actions}</td></tr>`;
-      })}</div>`;
+      })}`)}`;
   $("#ae-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target, ["org_id"]);

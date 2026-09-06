@@ -164,6 +164,36 @@ MIGRATED_PAGES = {
     "renderSurveillance": 4,
     "renderResources": 4,
     "renderInsurance": 4,
+    # 第七批 2026-09-06：知识库 / 人力财务物资 / 医疗质量 / 慢专病考核 / 慢专病随访。
+    # 五页都是先补 render_fixtures.json 条目（迁前比一次证明表格真渲染出来了：
+    # 2486～7057 字符），迁完再比一次仍逐字符相同，全部 31 个夹具页一并重跑无一差异。
+    "renderKnowledge": 3,           # 含一处带橙色左边框的临期提醒（走 accent）
+    "renderHrFinance": 8,           # 另有两处 `class="panel hidden" id=…` 的容器面板不迁（规则也数不到，见下）
+    "renderQuality": 6,
+    "renderSpdAssess": 5,           # 第 6 处外壳在点击后的下钻明细里，比对器到不了，见下
+    "renderSpdFollowup": 5,
+    # 这两页本来就是 panel() 写的（不是本批迁的），但一直没进白名单——
+    # 没登记就等于没有"不许退回去"的网，顺手补上。
+    "renderSpdMember": 5,
+    "renderSpdManager": 3,
+}
+
+#: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。
+#:
+#: 迁移的取证方式是 `scripts/render_diff.js`：喂夹具、真渲染、逐字符比。它只能覆盖
+#: **渲染路径**——点击之后才产生的 HTML、以及 `panel()` 表达不出来的外壳，都证明不了
+#: "换完字节没变"。没有证据就不换，是这套流程的前提，不是偷懒。
+#:
+#: 注意这里数的是 `<div class="panel"`（`panel` 后面紧跟引号）。`class="panel hidden"`
+#: 那种带附加 class 的容器**这条规则本来就看不见**——`renderHrFinance` 里就有两个
+#: （先渲染成 hidden、点击后才填内容），它们同样迁不了（panel() 出不了额外 class 与 id），
+#: 只是不必登记在这里。别把"计数为 0"读成"这页一个手写外壳都没有了"。
+KNOWN_UNMIGRATED_SHELLS = {
+    # 点"下钻明细"之后才写进 #spd-score-detail 的带 accent 面板。标题里现在是
+    # `${esc(d.object_name)}`，换成 panel() 要把 esc 去掉交给组件——**通常**等价，
+    # 但若后端把 total_score 之类的数值字段返回成带 & 的字符串，两种写法的字节就不同了。
+    # 比对器点不到这条路径，也就证不了这一步，所以留着等取证工具能覆盖点击路径再说。
+    "renderSpdAssess": (1, "点击后才渲染的下钻明细面板，render_diff 覆盖不到"),
 }
 MIGRATED = "renderServiceRequests"
 
@@ -171,8 +201,12 @@ MIGRATED = "renderServiceRequests"
 @pytest.mark.parametrize("page,count", sorted(MIGRATED_PAGES.items()))
 def test_已迁移的页面不再手写panel外壳(page, count):
     fn = _code(_fn(_src_for(page), page))
-    assert '<div class="panel"' not in fn, (
-        f"{page} 又出现了手写的 panel 外壳——迁过的页面不要退回去"
+    allowed, why = KNOWN_UNMIGRATED_SHELLS.get(page, (0, ""))
+    shells = fn.count('<div class="panel"')
+    assert shells == allowed, (
+        f"{page} 的手写 panel 外壳应为 {allowed} 处"
+        + (f"（{why}）" if why else "——迁过的页面不要退回去")
+        + f"，实际 {shells} 处"
     )
     assert fn.count("panel(") == count, (
         f"{page} 应当有 {count} 处 panel() 调用，实际 {fn.count('panel(')} 处"

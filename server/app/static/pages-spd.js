@@ -980,7 +980,7 @@ async function renderSpdAssess() {
   ]);
   const objectNames = { org: "机构", doctor: "医生", village_doctor: "村医", team: "团队" };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>考核指标库</h3>
+    ${panel("考核指标库", `
       <p class="desc">取数口径 + 公式（AST 白名单求值）+ 评分规则三段式，各县只需调权重与目标值</p>
       ${table(["编码", "名称", "对象", "取数口径", "公式", "权重", "目标值", "版本", "状态"],
         indicators, (i) =>
@@ -988,8 +988,8 @@ async function renderSpdAssess() {
          <td>${esc(objectNames[i.object_type] || i.object_type)}</td>
          <td>${esc(i.data_source)}</td><td><code>${esc(i.formula || "—")}</code></td>
          <td>${i.weight}</td><td>${i.target_value ?? "—"}</td><td>${esc(i.version)}</td>
-         <td>${i.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}</div>
-    <div class="panel"><h3>分级考核方案</h3>
+         <td>${i.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}`)}
+    ${panel("分级考核方案", `
       <form class="inline" id="spd-plan-form">
         <input name="code" placeholder="方案编码" required>
         <input name="name" placeholder="方案名称" required>
@@ -1009,18 +1009,18 @@ async function renderSpdAssess() {
         `<tr><td>${p.id}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
          <td>${esc(p.level)}</td><td>${esc(objectNames[p.object_type] || p.object_type)}</td>
          <td>${esc(p.period_type)}</td><td>${(p.items || []).length}</td>
-         <td><button class="btn secondary" data-run="${p.id}">跑分</button></td></tr>`)}</div>
-    <div class="panel"><h3>考核结果</h3>
+         <td><button class="btn secondary" data-run="${p.id}">跑分</button></td></tr>`)}`)}
+    ${panel("考核结果", `
       ${table(["排名", "对象", "周期", "综合得分", "操作"], scores, (s) =>
         `<tr><td>${s.rank}</td><td>${esc(s.object_name)}</td><td>${esc(s.period)}</td>
          <td>${s.total_score}</td>
          <td><button class="btn secondary" data-score="${s.id}">下钻明细</button></td></tr>`)}
-      <div id="spd-score-detail"></div></div>
-    <div class="panel"><h3>村医积分账户</h3>
+      <div id="spd-score-detail"></div>`)}
+    ${panel("村医积分账户", `
       ${table(["用户ID", "姓名", "余额", "累计获得", "累计兑换"], accounts, (a) =>
         `<tr><td>${a.user_id}</td><td>${esc(a.user_name)}</td><td>${a.balance}</td>
-         <td>${a.earned}</td><td>${a.used}</td></tr>`)}</div>
-    <div class="panel"><h3>积分商品与核销</h3>
+         <td>${a.earned}</td><td>${a.used}</td></tr>`)}`)}
+    ${panel("积分商品与核销", `
       <form class="inline" id="spd-goods-form">
         <input name="code" placeholder="商品编码" required>
         <input name="name" placeholder="商品名称" required>
@@ -1034,7 +1034,7 @@ async function renderSpdAssess() {
       </form><p class="msg" id="spd-goods-msg"></p>
       ${table(["编码", "名称", "所需积分", "库存"], goods, (g) =>
         `<tr><td>${esc(g.code)}</td><td>${esc(g.name)}</td><td>${g.points}</td>
-         <td>${g.stock}</td></tr>`)}</div>`;
+         <td>${g.stock}</td></tr>`)}`)}`;
   $("#spd-plan-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target);
@@ -1095,7 +1095,7 @@ async function renderSpdFollowup() {
       ["超期", stats.overdue, stats.overdue > 0],
       ["异常随访", stats.abnormal, stats.abnormal > 0],
     ])}
-    <div class="panel"><h3>随访方案（诊断/手术/医嘱关键词命中）</h3>
+    ${panel("随访方案（诊断/手术/医嘱关键词命中）", `
       <p class="desc">没配关键词的方案不匹配任何人——否则一个空方案会给全院出院患者都排上随访</p>
       ${table(["编码", "名称", "场景", "科室", "时间点(天)", "问卷", "执行角色", "预置"],
         rules, (r) =>
@@ -1116,8 +1116,8 @@ async function renderSpdFollowup() {
         </select>
         <input name="days" type="number" value="7" placeholder="回溯天数">
         <button class="secondary">按患者特征自动匹配</button>
-      </form><p class="msg" id="spd-fu-msg"></p></div>
-    <div class="panel"><h3>随访问卷与异常分级</h3>
+      </form><p class="msg" id="spd-fu-msg"></p>`)}
+    ${panel("随访问卷与异常分级", `
       ${table(["编码", "名称", "场景", "题目数", "异常规则", "跟踪科室", "处置角色"],
         questionnaires, (q) =>
         `<tr><td>${esc(q.code)}</td><td>${esc(q.name)}</td><td>${esc(q.scene)}</td>
@@ -1135,8 +1135,8 @@ async function renderSpdFollowup() {
       </form>
       <p class="desc">异常判定规则（答案命中任一条即标记异常并派处置任务）</p>
       <div id="spd-quest-rules"></div>
-      <p class="msg" id="spd-quest-msg"></p></div>
-    <div class="panel"><h3>随访看板</h3>
+      <p class="msg" id="spd-quest-msg"></p>`)}
+    ${panel("随访看板", `
       <form class="inline" id="spd-fu-filter">
         <select name="status"><option value="">全部状态</option>
           <option value="planned">待随访</option><option value="done">已完成</option>
@@ -1147,8 +1147,8 @@ async function renderSpdFollowup() {
         <label style="font-size:13px"><input type="checkbox" name="overdue" value="true"> 只看超期</label>
         <button class="secondary">查询</button>
       </form>
-      <div id="spd-fu-list"></div></div>
-    <div class="panel"><h3>随访质量</h3>
+      <div id="spd-fu-list"></div>`)}
+    ${panel("随访质量", `
       ${barChart(spdPairs(stats.by_abnormal,
         { none: "无异常", low: "轻度", mid: "中度", high: "重度" }),
         { color: "#b26a00", unit: " 例" })}
@@ -1160,8 +1160,8 @@ async function renderSpdFollowup() {
         <input name="dept" placeholder="科室（可留空）">
         <input name="ratio" type="number" step="0.05" value="0.1" placeholder="抽查比例">
         <button class="secondary">生成抽查计划</button>
-      </form><p class="msg" id="spd-qc-msg"></p></div>
-    <div class="panel"><h3>呼叫任务与录音</h3>
+      </form><p class="msg" id="spd-qc-msg"></p>`)}
+    ${panel("呼叫任务与录音", `
       ${table(["ID", "患者", "号码", "来源", "状态", "时长(秒)", "录音", "创建时间"], calls, (c) =>
         `<tr><td>${c.id}</td><td>${esc(c.patient_name)}</td><td>${esc(c.phone || "—")}</td>
          <td>${esc(c.ref_type)}</td>
@@ -1169,7 +1169,7 @@ async function renderSpdFollowup() {
             : c.status === "failed" ? '<span class="tag red">未接通</span>'
             : '<span class="tag orange">待呼叫</span>'}</td>
          <td>${c.duration_s}</td><td>${c.record_url ? "有" : "—"}</td>
-         <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td></tr>`)}</div>`;
+         <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td></tr>`)}`)}`;
 
   const drawRecords = async (query) => {
     const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();

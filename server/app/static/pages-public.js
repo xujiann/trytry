@@ -523,24 +523,24 @@ async function renderKnowledge() {
             <button class="btn danger" data-deact="${k.id}">停用</button>` : "—"}</td></tr>`);
   };
   $("#page-body").innerHTML = `
-    ${canEdit ? `<div class="panel"><h3>发布知识条目（管理层/公卫）</h3>
+    ${canEdit ? panel("发布知识条目（管理层/公卫）", `
       <form class="inline" id="kb-form">
         <select name="category">${catOpts}</select>
         <input name="title" placeholder="标题" required style="min-width:240px">
         <input name="body" placeholder="正文/摘要" style="min-width:220px">
         <input name="expire_date" placeholder="有效期至 YYYY-MM-DD（可空）">
-        <button>发布</button></form><p class="msg" id="kb-msg"></p></div>` : '<p class="msg" id="kb-msg"></p>'}
-    ${expiring.length ? `<div class="panel" style="border-left:4px solid #b26a00"><h3>⚠ 30天内到期资料（${expiring.length}）</h3>${
+        <button>发布</button></form><p class="msg" id="kb-msg"></p>`) : '<p class="msg" id="kb-msg"></p>'}
+    ${expiring.length ? panel(`⚠ 30天内到期资料（${expiring.length}）`,
       table(["ID", "分类", "标题", "到期日"], expiring, (k) =>
         `<tr><td>${k.id}</td><td>${KB_CATEGORIES[k.category] || esc(k.category)}</td><td>${esc(k.title)}</td>
-         <td><span class="tag orange">${esc(k.expire_date)}</span></td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>知识检索</h3>
+         <td><span class="tag orange">${esc(k.expire_date)}</span></td></tr>`), { accent: "#b26a00" }) : ""}
+    ${panel("知识检索", `
       <form class="inline" id="kb-search">
         <select name="category"><option value="">全部分类</option>${catOpts}</select>
         <input name="q" placeholder="标题关键字">
         <label style="font-size:13px"><input type="checkbox" name="include_expired"> 含过期</label>
         <button>检索</button></form>
-      <div id="kb-table"></div></div>`;
+      <div id="kb-table"></div>`)}`;
   const kb = $("#kb-form");
   if (kb) kb.onsubmit = (e) => { e.preventDefault(); postAction("/api/knowledge", formJson(e.target), "#kb-msg"); };
   $("#kb-search").onsubmit = async (e) => {
