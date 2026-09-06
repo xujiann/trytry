@@ -6,17 +6,17 @@ async function renderInfectiousDir() {
     api("/api/infectious/diseases"), api("/api/infectious/late-reports")]);
   const CAT = { A: ["甲类", "red"], B: ["乙类", "orange"], C: ["丙类", ""] };
   $("#page-body").innerHTML = `
-    ${late.length ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 迟报清单（${late.length}）</h3>${
+    ${late.length ? panel(`⚠ 迟报清单（${late.length}）`, `${
       table(["病例ID", "病种", "类别", "发病日期", "报告时间", "迟报"], late, (l) => {
         return `<tr><td>${l.case_id}</td><td>${esc(l.disease_name)}</td><td>${statusTag(CAT, l.category)}</td>
           <td>${esc(l.onset_date)}</td><td>${esc((l.reported_at || "").slice(0, 16).replace("T", " "))}</td>
           <td><span class="tag red">迟报 ${l.days_late} 天</span></td></tr>`;
-      })}</div>` : '<div class="panel"><h3>迟报清单</h3><p style="color:#8a939e">无迟报病例</p></div>'}
-    <div class="panel"><h3>法定传染病目录（${diseases.length}）</h3>${
+      })}`, { accent: "#c62828" }) : panel("迟报清单", '<p style="color:#8a939e">无迟报病例</p>')}
+    ${panel(`法定传染病目录（${diseases.length}）`, `${
       table(["编码", "名称", "类别", "报告时限"], diseases, (d) => {
         return `<tr><td>${esc(d.code)}</td><td>${esc(d.name)}</td>
           <td>${statusTag(CAT, d.category)}</td><td>${d.report_hours} 小时</td></tr>`;
-      })}</div>`;
+      })}`)}`;
 }
 
 const MILESTONES = { onset: "发病", call: "呼救", depart: "出车", arrive_scene: "到达现场", arrive_hospital: "到达医院", treatment: "开始救治" };
@@ -26,18 +26,18 @@ async function renderEmTimeline() {
   $("#page-desc").textContent = "急救绿道：通道建单 → 节点录入 → 时间轴时效展示";
   const cases = await api("/api/emergency/cases");
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>绿道建单</h3>
+    ${panel("绿道建单", `
       <form class="inline" id="gc-form"><input name="location" placeholder="事发地点" required>
         <input name="symptom" placeholder="主诉">
         <select name="channel_type">${Object.entries(CHANNELS).map(([v, t]) => `<option value="${v}">${t}通道</option>`).join("")}</select>
         <input name="dest_org_id" type="number" placeholder="目标医院ID"><button>建单</button></form>
-      <p class="msg" id="gc-msg"></p></div>
-    <div class="panel"><h3>急救事件</h3>${table(["ID", "地点", "主诉", "通道", "状态", "操作"], cases, (c) =>
+      <p class="msg" id="gc-msg"></p>`)}
+    ${panel("急救事件", table(["ID", "地点", "主诉", "通道", "状态", "操作"], cases, (c) =>
       `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td>
        <td><span class="tag ${c.channel_type ? "red" : ""}">${esc(CHANNELS[c.channel_type] || c.channel_type)}</span></td>
        <td>${esc(c.status)}</td>
        <td><button class="btn secondary" data-mile="${c.id}">录节点</button>
-           <button class="btn" data-timeline="${c.id}">时间轴</button></td></tr>`)}</div>
+           <button class="btn" data-timeline="${c.id}">时间轴</button></td></tr>`))}
     <div class="panel hidden" id="gc-tl-panel"><h3>绿道时间轴</h3><div id="gc-tl"></div></div>`;
   $("#gc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/emergency/cases", formJson(e.target, ["dest_org_id"]), "#gc-msg"); };
   $("#page-body").onclick = async (e) => {
@@ -164,7 +164,7 @@ async function renderProcure() {
   const role = currentRole();
   const supNames = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>供应商建档（管理层/经办）</h3>
+    ${panel("供应商建档（管理层/经办）", `
       <form class="inline" id="sup-form">
         <input name="name" placeholder="供应商名称" required>
         <input name="contact" placeholder="联系方式">
@@ -172,8 +172,8 @@ async function renderProcure() {
         <button>建档</button></form>
       ${table(["ID", "名称", "联系方式", "许可证", "状态"], suppliers, (s) =>
         `<tr><td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.contact)}</td><td>${esc(s.license_no)}</td>
-         <td><span class="tag ${s.active ? "green" : "red"}">${s.active ? "在用" : "停用"}</span></td></tr>`)}</div>
-    <div class="panel"><h3>采购申请（经办/药师）</h3>
+         <td><span class="tag ${s.active ? "green" : "red"}">${s.active ? "在用" : "停用"}</span></td></tr>`)}`)}
+    ${panel("采购申请（经办/药师）", `
       <form class="inline" id="po-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="supplier_id" type="number" placeholder="供应商ID" required>
@@ -192,8 +192,8 @@ async function renderProcure() {
         return `<tr><td>${o.id}</td><td>${o.org_id}</td><td>${esc(supNames[o.supplier_id] || o.supplier_id)}</td>
           <td>${o.item_type === "drug" ? "药品" : "物资"}</td><td>${esc(o.item_name)}（${esc(o.item_code)}）</td>
           <td>${o.quantity}</td><td>${statusTag(PO_STATUS, o.status)}</td><td>${actions}</td></tr>`;
-      })}</div>
-    <div class="panel"><h3>存货盘点（经办/药师，盘后账实相符）</h3>
+      })}`)}
+    ${panel("存货盘点（经办/药师，盘后账实相符）", `
       <form class="inline" id="st-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="drug_code" placeholder="药品编码" required>
@@ -202,7 +202,7 @@ async function renderProcure() {
         <button>盘点</button></form>
       ${table(["ID", "机构", "药品编码", "账面", "实盘", "差异"], takes, (t) =>
         `<tr><td>${t.id}</td><td>${t.org_id}</td><td>${esc(t.drug_code)}</td><td>${t.book_qty}</td><td>${t.actual_qty}</td>
-         <td><span class="tag ${t.diff === 0 ? "green" : "red"}">${t.diff > 0 ? "+" : ""}${t.diff}</span></td></tr>`)}</div>`;
+         <td><span class="tag ${t.diff === 0 ? "green" : "red"}">${t.diff > 0 ? "+" : ""}${t.diff}</span></td></tr>`)}`)}`;
   $("#sup-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/suppliers", formJson(e.target), "#po-msg"); };
   $("#po-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/purchase-orders", formJson(e.target, ["org_id", "supplier_id", "quantity"]), "#po-msg"); };
   $("#st-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pharmacy/stock-takes", formJson(e.target, ["org_id", "actual_qty"]), "#po-msg"); };
@@ -431,27 +431,27 @@ async function renderDataQuality() {
       <div class="card"><div class="label">违规总数</div><div class="value${summary.total ? " warn" : ""}">${summary.total}</div></div>
       <div class="card"><div class="label">错误级</div><div class="value${summary.by_severity.error ? " warn" : ""}">${summary.by_severity.error || 0}</div></div>
       <div class="card"><div class="label">警告级</div><div class="value">${summary.by_severity.warn || 0}</div></div></div>
-    <div class="panel"><h3>违规明细</h3>
+    ${panel("违规明细", `
       <form class="inline" id="qc-run-form">
         <select name="rule_code"><option value="">全部规则</option>${rules.map((r) =>
           `<option value="${esc(r.code)}">${esc(r.code)} ${esc(r.name)}</option>`).join("")}</select>
         <select name="severity"><option value="">全部严重度</option><option value="error">错误</option><option value="warn">警告</option></select>
         <button>运行检查</button></form>
-      <p class="msg" id="qc-msg"></p><div id="qc-violations">点击「运行检查」开始扫描</div></div>
-    <div class="panel"><h3>规则汇总</h3>${table(["规则", "名称", "类型", "表", "严重度", "违规数"], summary.by_rule, (r) => {
+      <p class="msg" id="qc-msg"></p><div id="qc-violations">点击「运行检查」开始扫描</div>`)}
+    ${panel("规则汇总", `${table(["规则", "名称", "类型", "表", "严重度", "违规数"], summary.by_rule, (r) => {
       const [text, color] = QC_SEVERITY[r.severity] || [r.severity, ""];
       return `<tr><td><span class="tag">${esc(r.rule_code)}</span></td><td>${esc(r.rule_name)}</td>
         <td>${esc(r.rule_type_name)}</td><td>${esc(r.table)}</td><td><span class="tag ${color}">${esc(text)}</span></td>
         <td>${r.violations ? `<span class="tag ${color}">${r.violations}</span>` : 0}</td></tr>`;
-    })}</div>
-    <div class="panel"><h3>规则库（管理员可停用/启用与调整严重度）</h3>
+    })}`)}
+    ${panel("规则库（管理员可停用/启用与调整严重度）", `
       ${table(["编码", "名称", "类型", "被检表", "严重度", "状态", "操作"], rules, (r) => {
         return `<tr><td><span class="tag">${esc(r.code)}</span></td><td>${esc(r.name)}</td><td>${esc(r.rule_type_name)}</td>
           <td>${esc(r.target_table)}</td><td>${statusTag(QC_SEVERITY, r.severity)}</td>
           <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
           <td><button class="btn secondary" data-qctoggle="${r.id}" data-active="${r.active ? 1 : 0}">${r.active ? "停用" : "启用"}</button>
             <button class="btn secondary" data-qcsev="${r.id}" data-sev="${esc(r.severity)}">切换严重度</button></td></tr>`;
-      })}</div>`;
+      })}`)}`;
   $("#qc-run-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -482,7 +482,7 @@ async function renderPrintTemplates() {
   $("#page-desc").textContent = "按单据类型配置打印抬头、页脚与验真二维码；抬头留空时回落到单据所属机构名";
   const templates = await api("/api/print/templates");
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>打印模板</h3>
+    ${panel("打印模板", `
       ${table(["单据类型", "抬头机构名", "页脚说明", "二维码"], templates, (t) =>
         `<tr><td>${esc(t.doc_type_name)}</td><td>${esc(t.header_org_name) || "（用机构名）"}</td>
          <td>${esc(t.footer_note) || "（默认页脚）"}</td>
@@ -493,7 +493,7 @@ async function renderPrintTemplates() {
         <input name="footer_note" placeholder="页脚说明（可空）" style="min-width:220px">
         <label style="font-size:13px"><input type="checkbox" name="show_qr" checked> 显示验真二维码</label>
         <button>保存模板</button></form>
-      <p class="msg" id="tpl-msg"></p></div>`;
+      <p class="msg" id="tpl-msg"></p>`)}`;
   $("#tpl-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -589,7 +589,7 @@ async function drawTcmPreparations() {
     api("/api/tcm/formulas"), api("/api/tcm/preparation-batches"),
     api("/api/tcm/preparation-batches/expiring?days=60")]);
   const holder = appendSection(`
-    <div class="panel"><h3>⑭ 中药制剂配方（药师/中医师维护）</h3>
+    ${panel("⑭ 中药制剂配方（药师/中医师维护）", `
       <form class="inline" id="tf-form">
         <input name="code" placeholder="制剂编码" required>
         <input name="name" placeholder="制剂名称" required>
@@ -601,12 +601,12 @@ async function drawTcmPreparations() {
       ${table(["ID", "编码", "名称", "剂型", "组成", "适应症", "有效期(月)"], formulas, (f) =>
         `<tr><td>${f.id}</td><td><span class="tag">${esc(f.code)}</span></td><td>${esc(f.name)}</td>
          <td>${esc(f.dosage_form_name)}</td><td>${esc(f.composition) || "—"}</td><td>${esc(f.indication) || "—"}</td>
-         <td>${f.shelf_life_months}</td></tr>`)}</div>
-    ${expiring.length ? `<div class="panel" style="border-left:4px solid #b26a00"><h3>⚠ 制剂效期预警（60天内到期/已过期 ${expiring.length}）</h3>${
+         <td>${f.shelf_life_months}</td></tr>`)}`)}
+    ${expiring.length ? panel(`⚠ 制剂效期预警（60天内到期/已过期 ${expiring.length}）`, `${
       table(["批号", "制剂", "效期", "状态"], expiring, (b) =>
         `<tr><td>${esc(b.batch_no)}</td><td>${b.formula_id}</td>
-         <td><span class="tag ${b.expired ? "red" : "orange"}">${esc(b.expire_date)}</span></td><td>${esc(b.status)}</td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>制剂批次（效期缺省按配方有效期推算；过期批次禁止发放）</h3>
+         <td><span class="tag ${b.expired ? "red" : "orange"}">${esc(b.expire_date)}</span></td><td>${esc(b.status)}</td></tr>`)}`, { accent: "#b26a00" }) : ""}
+    ${panel("制剂批次（效期缺省按配方有效期推算；过期批次禁止发放）", `
       <form class="inline" id="tb-form">
         <input name="formula_id" type="number" placeholder="配方ID" required>
         <input name="batch_no" placeholder="批号" required>
@@ -620,7 +620,7 @@ async function drawTcmPreparations() {
         `<tr><td>${b.id}</td><td>${esc(b.batch_no)}</td><td>${b.formula_id}</td><td>${b.quantity}${esc(b.unit)}</td>
          <td>${esc(b.produced_date)}</td><td><span class="tag ${b.expired ? "red" : ""}">${esc(b.expire_date)}</span></td>
          <td>${esc(b.status)}</td>
-         <td>${b.status === "produced" ? `<button class="btn secondary" data-release="${b.id}">发放</button>` : "—"}</td></tr>`)}</div>`);
+         <td>${b.status === "produced" ? `<button class="btn secondary" data-release="${b.id}">发放</button>` : "—"}</td></tr>`)}`)}`);
   holder.querySelector("#tf-form").onsubmit = (e) => {
     e.preventDefault();
     postAction("/api/tcm/formulas", formJson(e.target, ["shelf_life_months"]), "#tp-msg");
@@ -643,7 +643,7 @@ const CSSD_COST_TYPES = { labor: "人工", material: "耗材", energy: "能耗",
 async function drawCssdCosts() {
   const stats = await api("/api/cssd/cost-stats");
   const holder = appendSection(`
-    <div class="panel"><h3>⑥ 消毒供应成本核算</h3>
+    ${panel("⑥ 消毒供应成本核算", `
       <div class="cards">
         <div class="card"><div class="label">成本合计</div><div class="value">${stats.total_cost}</div></div>
         <div class="card"><div class="label">灭菌件数</div><div class="value">${stats.total_quantity}</div></div>
@@ -659,7 +659,7 @@ async function drawCssdCosts() {
         `<span class="tag" style="margin-right:6px">${esc(v.name)} ${v.amount}</span>`).join("") || "暂无"}</p>
       ${table(["批次", "批号", "物品", "件数", "总成本", "单件成本"], stats.batches, (b) =>
         `<tr><td>${b.batch_id}</td><td>${esc(b.batch_no)}</td><td>${esc(b.item_name)}</td><td>${b.quantity}</td>
-         <td>${b.total_cost}</td><td><span class="tag">${b.unit_cost}</span></td></tr>`)}</div>`);
+         <td>${b.total_cost}</td><td><span class="tag">${b.unit_cost}</span></td></tr>`)}`)}`);
   holder.querySelector("#cost-form").onsubmit = (e) => {
     e.preventDefault();
     postAction("/api/cssd/cost-items", formJson(e.target, ["batch_id", "amount"]), "#cost-msg");
@@ -673,7 +673,7 @@ async function drawEduGaps() {
   const [mstats, plans] = await Promise.all([
     api("/api/education/material-stats"), api("/api/education/training-plans")]);
   const holder = appendSection(`
-    <div class="panel"><h3>⑳ 课件资源管理（点播总量 ${mstats.total_plays}，课件 ${mstats.total_materials} 个）</h3>
+    ${panel(`⑳ 课件资源管理（点播总量 ${mstats.total_plays}，课件 ${mstats.total_materials} 个）`, `
       <form class="inline" id="cm-form">
         <input name="course_id" type="number" placeholder="课程ID" required>
         <input name="title" placeholder="课件标题" required style="min-width:200px">
@@ -688,8 +688,8 @@ async function drawEduGaps() {
       <h4 style="margin-top:10px">点播排行</h4>
       ${table(["课件ID", "标题", "类型", "点播量"], mstats.top, (m) =>
         `<tr><td>${m.id}</td><td>${esc(m.title)}</td><td>${esc(m.material_type_name)}</td>
-         <td><span class="tag">${m.play_count}</span></td></tr>`)}</div>
-    <div class="panel"><h3>㉑ 适宜技术实训（计划 → 报名 → 考核）</h3>
+         <td><span class="tag">${m.play_count}</span></td></tr>`)}`)}
+    ${panel("㉑ 适宜技术实训（计划 → 报名 → 考核）", `
       <form class="inline" id="tp-plan-form">
         <input name="title" placeholder="实训主题" required style="min-width:180px">
         <input name="org_id" type="number" placeholder="承办机构ID" required>
@@ -706,7 +706,7 @@ async function drawEduGaps() {
              <button class="btn secondary" data-unenroll="${p.id}">退报</button>
              <button class="btn secondary" data-assess="${p.id}">录考核</button>
              <button class="btn secondary" data-roster="${p.id}">名单成绩</button></td></tr>`)}
-      <div id="tp-roster"></div></div>`);
+      <div id="tp-roster"></div>`)}`);
   const drawMaterials = async (courseId) => {
     const list = await api(`/api/education/courses/${courseId}/materials`);
     holder.querySelector("#cm-list").innerHTML = table(["ID", "标题", "类型", "附件", "点播", "操作"], list, (m) =>
@@ -773,7 +773,7 @@ async function drawPrenatalScreenings() {
   const [screenings, stats] = await Promise.all([
     api("/api/maternal/screenings"), api("/api/maternal/screening-stats")]);
   const holder = appendSection(`
-    <div class="panel"><h3>㉔ 产前筛查与诊断（高风险/临界风险自动标记孕产妇高危）</h3>
+    ${panel("㉔ 产前筛查与诊断（高风险/临界风险自动标记孕产妇高危）", `
       <div class="cards">
         <div class="card"><div class="label">筛查总数</div><div class="value">${stats.total}</div></div>
         <div class="card"><div class="label">高危检出率</div><div class="value${stats.high_risk_detect_rate_pct > 0 ? " warn" : ""}">${stats.high_risk_detect_rate_pct}%</div></div></div>
@@ -791,7 +791,7 @@ async function drawPrenatalScreenings() {
         return `<tr><td>${s.id}</td><td>${s.record_id}</td><td>${esc(s.screen_type_name)}</td><td>${esc(s.screen_date)}</td>
           <td>${s.gest_week ?? "—"}</td><td>${statusTag(SCREEN_RESULTS, s.result)}</td><td>${esc(s.indicator) || "—"}</td>
           <td>${s.flagged_high_risk ? '<span class="tag red">已标记高危</span>' : "—"}</td></tr>`;
-      })}</div>`);
+      })}`)}`);
   holder.querySelector("#ps-form").onsubmit = (e) => {
     e.preventDefault();
     postAction("/api/maternal/screenings", formJson(e.target, ["record_id", "gest_week"]), "#ps-msg");
@@ -805,7 +805,7 @@ async function drawImprovementTasks() {
   const [tasks, stats] = await Promise.all([
     api("/api/performance/improvements"), api("/api/performance/improvement-stats")]);
   const holder = appendSection(`
-    <div class="panel"><h3>㉟ 绩效自评改进（问题 → 责任人 → 期限 → 完成确认）</h3>
+    ${panel("㉟ 绩效自评改进（问题 → 责任人 → 期限 → 完成确认）", `
       <div class="cards">
         <div class="card"><div class="label">整改任务</div><div class="value">${stats.total}</div></div>
         <div class="card"><div class="label">超期未办</div><div class="value${stats.overdue ? " warn" : ""}">${stats.overdue}</div></div>
@@ -829,7 +829,7 @@ async function drawImprovementTasks() {
           <td>${t.overdue ? `<span class="tag red">${esc(t.due_date)} 超期</span>` : esc(t.due_date)}</td>
           <td>${statusTag(TASK_STATUS, t.status)}</td>
           <td>${esc(t.completion_note || t.measures) || "—"}</td><td>${actions}</td></tr>`;
-      })}</div>`);
+      })}`)}`);
   holder.querySelector("#imp-form").onsubmit = (e) => {
     e.preventDefault();
     postAction("/api/performance/improvements", formJson(e.target, ["org_id"]), "#imp-msg");
@@ -855,7 +855,7 @@ const VISIT_STATUS = { applied: ["待派单", "orange"], dispatched: ["已派单
 async function drawHomeVisits() {
   const [orders, stats] = await Promise.all([api("/api/homevisits"), api("/api/homevisits/stats")]);
   const holder = appendSection(`
-    <div class="panel"><h3>⑨ 送医送护上门（申请 → 派单 → 完成；自动关联履约中家医签约）</h3>
+    ${panel("⑨ 送医送护上门（申请 → 派单 → 完成；自动关联履约中家医签约）", `
       <div class="cards">
         <div class="card"><div class="label">上门工单</div><div class="value">${stats.total}</div></div>
         <div class="card"><div class="label">签约关联率</div><div class="value">${stats.contract_linked_ratio_pct}%</div></div></div>
@@ -877,7 +877,7 @@ async function drawHomeVisits() {
         return `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${o.contract_id ?? "—"}</td>
           <td>${esc(o.service_type_name)}</td><td>${esc(o.demand) || "—"}</td>
           <td>${statusTag(VISIT_STATUS, o.status)}</td><td>${esc(o.assignee_name) || "—"}</td><td>${actions}</td></tr>`;
-      })}</div>`);
+      })}`)}`);
   holder.querySelector("#hv-form").onsubmit = (e) => {
     e.preventDefault();
     postAction("/api/homevisits", formJson(e.target, ["patient_id", "org_id"]), "#hv-msg");

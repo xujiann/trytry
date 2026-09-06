@@ -6147,5 +6147,306 @@
         }
       }
     }
+  },
+  "infectiousdir": {
+    "_why": [
+      "第十六批（2026-09-06）：法定传染病目录。这一页的第一个面板是**条件的两支**——",
+      "有迟报走带红色左边框的清单，没有迟报走一段固定文案。两支都是面板外壳，",
+      "都要迁，所以造了两份夹具：本页走「有迟报」，infectiousdir_empty 走「无迟报」。",
+      "只造一份的话，另一支迁完一个字节的证据都没有。",
+      "category 三条覆盖 CAT 的 A/B/C（红/橙/无色三种标签）。"
+    ],
+    "fn": "renderInfectiousDir",
+    "api": {
+      "/api/infectious/diseases": [
+        {
+          "code": "A01<b>",
+          "name": "鼠疫 & 甲类",
+          "category": "A",
+          "report_hours": 2
+        },
+        {
+          "code": "B15",
+          "name": "病毒性肝炎<img src=x onerror=alert(1)>",
+          "category": "B",
+          "report_hours": 24
+        },
+        {
+          "code": "C30",
+          "name": "流行性感冒",
+          "category": "C",
+          "report_hours": 24
+        }
+      ],
+      "/api/infectious/late-reports": [
+        {
+          "case_id": 1,
+          "disease_name": "病毒性肝炎<img src=x onerror=alert(1)>",
+          "category": "B",
+          "onset_date": "2026-08-20",
+          "reported_at": "2026-08-23T10:00:00",
+          "days_late": 2
+        },
+        {
+          "case_id": 2,
+          "disease_name": "鼠疫 & 甲类",
+          "category": "A",
+          "onset_date": "2026-08-25",
+          "reported_at": null,
+          "days_late": 5
+        }
+      ]
+    }
+  },
+  "infectiousdir_empty": {
+    "_why": [
+      "同 infectiousdir，但 late-reports 为空——专门渲染「无迟报病例」那一支的面板外壳。",
+      "注意这一支里没有 table() 调用，所以空列表不会触发比对器的「暂无数据」拦截。"
+    ],
+    "fn": "renderInfectiousDir",
+    "api": {
+      "/api/infectious/diseases": [
+        {
+          "code": "A01<b>",
+          "name": "鼠疫 & 甲类",
+          "category": "A",
+          "report_hours": 2
+        },
+        {
+          "code": "B15",
+          "name": "病毒性肝炎<img src=x onerror=alert(1)>",
+          "category": "B",
+          "report_hours": 24
+        },
+        {
+          "code": "C30",
+          "name": "流行性感冒",
+          "category": "C",
+          "report_hours": 24
+        }
+      ],
+      "/api/infectious/late-reports": []
+    }
+  },
+  "emtimeline": {
+    "_why": [
+      "第十六批（2026-09-06）：急救绿道。两个面板迁；第三处 `class=\"panel hidden\" id=\"gc-tl-panel\"`",
+      "的时间轴容器带额外 class 与 id，panel() 出不来，这条规则也数不到。",
+      "事件三条：一条 chest_pain（红标签）、一条空通道走 CHANNELS[\"\"]（普通、无色），",
+      "一条给不在表里的通道走 `|| c.channel_type` 兜底。"
+    ],
+    "fn": "renderEmTimeline",
+    "api": {
+      "/api/emergency/cases": [
+        {
+          "id": 1,
+          "location": "XX路口 & 东侧",
+          "symptom": "胸痛<b>",
+          "channel_type": "chest_pain",
+          "status": "dispatched"
+        },
+        {
+          "id": 2,
+          "location": "YY小区",
+          "symptom": "跌倒",
+          "channel_type": "",
+          "status": "closed"
+        },
+        {
+          "id": 3,
+          "location": "ZZ工地<img src=x onerror=alert(1)>",
+          "symptom": "外伤",
+          "channel_type": "legacy_channel &",
+          "status": "open"
+        }
+      ]
+    }
+  },
+  "procure": {
+    "_why": [
+      "第十六批（2026-09-06）：采购与盘点。三个面板无条件渲染。",
+      "**这一页的操作列按角色显示**（currentRole() 读 localStorage），夹具把角色设成 admin——",
+      "只有 admin 才能同时走到「批准/驳回」（pending）与「验收入库」（approved）两支。",
+      "采购三条覆盖 pending / approved / received（第三条走「—」）。",
+      "盘点两条走 diff===0（绿）与 diff>0（红、带 + 号）。"
+    ],
+    "fn": "renderProcure",
+    "localStorage": {
+      "medplat_role": "admin"
+    },
+    "api": {
+      "/api/pharmacy/suppliers": [
+        {
+          "id": 1,
+          "name": "某某医药公司 &",
+          "contact": "13800000000",
+          "license_no": "XK-001<b>",
+          "active": true
+        },
+        {
+          "id": 2,
+          "name": "XX器械<img src=x onerror=alert(1)>",
+          "contact": "021-0000",
+          "license_no": "XK-002",
+          "active": false
+        }
+      ],
+      "/api/pharmacy/purchase-orders": [
+        {
+          "id": 11,
+          "org_id": 4,
+          "supplier_id": 1,
+          "item_type": "drug",
+          "item_code": "A10BA02",
+          "item_name": "二甲双胍 & 缓释片",
+          "quantity": 200,
+          "status": "pending"
+        },
+        {
+          "id": 12,
+          "org_id": 4,
+          "supplier_id": 2,
+          "item_type": "material",
+          "item_code": "M-001<b>",
+          "item_name": "一次性口罩",
+          "quantity": 5000,
+          "status": "approved"
+        },
+        {
+          "id": 13,
+          "org_id": 3,
+          "supplier_id": 99,
+          "item_type": "drug",
+          "item_code": "C08CA01",
+          "item_name": "氨氯地平",
+          "quantity": 100,
+          "status": "received"
+        }
+      ],
+      "/api/pharmacy/stock-takes": [
+        {
+          "id": 21,
+          "org_id": 4,
+          "drug_code": "A10BA02<b>",
+          "book_qty": 200,
+          "actual_qty": 200,
+          "diff": 0
+        },
+        {
+          "id": 22,
+          "org_id": 4,
+          "drug_code": "C08CA01",
+          "book_qty": 100,
+          "actual_qty": 107,
+          "diff": 7
+        }
+      ]
+    }
+  },
+  "dataquality": {
+    "_why": [
+      "第十六批（2026-09-06）：数据质控。三个面板无条件渲染。",
+      "违规明细面板里的表格是 innerHTML **之后**由末尾的 `await drawViolations()` 写进",
+      "#qc-violations 的（P2-31 之后取数放最后），夹具缺 /api/dataquality/run 整页抛错。",
+      "严重度两条走 QC_SEVERITY 的 error/warn；规则库两条走启用/停用。",
+      "汇总里一条 violations=0 走 `? … : 0` 的另一支。"
+    ],
+    "fn": "renderDataQuality",
+    "api": {
+      "/api/dataquality/summary": {
+        "rules_checked": 12,
+        "total": 37,
+        "by_severity": {
+          "error": 5,
+          "warn": 32
+        },
+        "by_rule": [
+          {
+            "rule_code": "QC-001<b>",
+            "rule_name": "身份证格式 &",
+            "rule_type_name": "格式校验",
+            "table": "patients",
+            "severity": "error",
+            "violations": 5
+          },
+          {
+            "rule_code": "QC-002",
+            "rule_name": "机构必填<img src=x onerror=alert(1)>",
+            "rule_type_name": "非空校验",
+            "table": "encounters",
+            "severity": "warn",
+            "violations": 0
+          }
+        ]
+      },
+      "/api/dataquality/rules": [
+        {
+          "id": 1,
+          "code": "QC-001<b>",
+          "name": "身份证格式 &",
+          "rule_type_name": "格式校验",
+          "target_table": "patients",
+          "severity": "error",
+          "active": true
+        },
+        {
+          "id": 2,
+          "code": "QC-002",
+          "name": "机构必填<img src=x onerror=alert(1)>",
+          "rule_type_name": "非空校验",
+          "target_table": "encounters",
+          "severity": "warn",
+          "active": false
+        }
+      ],
+      "/api/dataquality/run": {
+        "total": 37,
+        "error_total": 5,
+        "warn_total": 32,
+        "items": [
+          {
+            "rule_code": "QC-001<b>",
+            "rule_name": "身份证格式 &",
+            "table": "patients",
+            "record_id": 31,
+            "message": "身份证号长度不足<b>",
+            "severity": "error"
+          },
+          {
+            "rule_code": "QC-002",
+            "rule_name": "机构必填",
+            "table": "encounters",
+            "record_id": 88,
+            "message": "org_id 为空 &",
+            "severity": "warn"
+          }
+        ]
+      }
+    }
+  },
+  "printtemplates": {
+    "_why": [
+      "第十六批（2026-09-06）：打印模板。整页只有一个面板。",
+      "两条分别走抬头/页脚有值与为空（`esc(x) || \"（用机构名）\"` 两支）、二维码显示与隐藏。"
+    ],
+    "fn": "renderPrintTemplates",
+    "api": {
+      "/api/print/templates": [
+        {
+          "doc_type": "cert",
+          "doc_type_name": "医学证明 &",
+          "header_org_name": "县人民医院<b>",
+          "footer_note": "本证明经二维码验真 &",
+          "show_qr": true
+        },
+        {
+          "doc_type": "rx<img src=x onerror=alert(1)>",
+          "doc_type_name": "处方笺",
+          "header_org_name": "",
+          "footer_note": "",
+          "show_qr": false
+        }
+      ]
+    }
   }
 }

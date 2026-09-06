@@ -266,6 +266,25 @@ MIGRATED_PAGES = {
     "renderOrgGroups": 3,           # 中间那个包在 `${selected ? … : ""}` 里；覆盖面板标题不再 esc()
     "renderStaffing": 3,
     "renderDiseasePrograms": 2,     # 第二个包在 `${picked && current ? … : ""}` 里；标题不再 esc()
+    # 第十六批 2026-09-06：pages-public.js 21 处。**这条规则数得到的手写外壳，
+    # pages-public.js 至此清零**（文件里仍有 1 个 `class="panel hidden"` 的时间轴容器）。
+    # 这批先扩了取证工具：`render_diff.js` 原先只捕经 `document.querySelector` 拿到的容器，
+    # 于是六个 `drawXxx()` 用 `appendSection()` 追加的面板一个字节都没进过比对
+    # （此前几批记的"不在本页计数内"说的就是这里）。补上之后 tcm/education/maternal/
+    # performance/contracts/cssd 六页的比对长度当场涨了一到两倍，这些 draw* 才敢迁。
+    "renderInfectiousDir": 3,       # 迟报清单是**条件的两支**，两支都是面板，各造了一份夹具
+    "renderEmTimeline": 2,          # 另有一处 class="panel hidden" 的时间轴容器
+    "renderProcure": 3,             # 操作列按角色显示，夹具把角色设成 admin 才走得到两支
+    "renderDataQuality": 3,         # 违规明细表由末尾的 drawViolations() 写进 #qc-violations
+    "renderPrintTemplates": 1,
+    # 以下六个是挂在**别的页面**末尾追加内容的函数，不是页面本身；
+    # 它们的面板计入各自宿主页的夹具比对，但外壳归属在这里。
+    "drawTcmPreparations": 3,       # 效期预警走 accent（橙）
+    "drawCssdCosts": 1,
+    "drawEduGaps": 2,
+    "drawPrenatalScreenings": 1,
+    "drawImprovementTasks": 1,
+    "drawHomeVisits": 1,
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。

@@ -100,13 +100,25 @@ function buildSandbox() {
     if (!elements.has(sel)) elements.set(sel, makeElement(sel));
     return elements.get(sel);
   };
+  // `document.createElement` 造出来的节点**也要登记**，否则 `appendSection()` 追加的
+  // 那一整批面板一个字节都进不了比对。这不是理论盲区：`pages-public.js` 有六个
+  // `drawXxx()` 用它往页面尾部追加面板（中药制剂 / 课件资源 / 产前筛查 / 绩效改进 /
+  // 上门服务 / 消毒成本），此前几批的记录里写的"不在本页计数内"，说的就是这里。
+  // 只按创建顺序编号即可：两侧跑的是同一段代码、同一份夹具，顺序天然一致。
+  // 没写过 innerHTML 的节点（如导出 CSV 用的 <a>）会被下游的非空过滤掉，不产生噪音。
+  let created = 0;
+  const makeCreated = () => {
+    const key = `created#${String(++created).padStart(2, "0")}`;
+    elements.set(key, makeElement(key));
+    return elements.get(key);
+  };
   const store = new Map();
   const sandbox = {
     console,
     document: {
       querySelector: el,
       querySelectorAll: () => [],
-      createElement: () => makeElement("created"),
+      createElement: makeCreated,
       getElementById: (id) => el("#" + id),
       body: makeElement("body"),
       cookie: "",
