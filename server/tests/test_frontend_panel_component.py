@@ -176,6 +176,14 @@ MIGRATED_PAGES = {
     # 没登记就等于没有"不许退回去"的网，顺手补上。
     "renderSpdMember": 5,
     "renderSpdManager": 3,
+    # 第八批 2026-09-06：pages-mgmt.js 四页（住院文书 / 手术麻醉 / 流程引擎 / 运营分析）。
+    # 同批的 renderAccounting **没迁**：它的合并报表面板嵌在凭证表格的行模板里，
+    # 一条凭证渲染一份（夹具两条凭证 → 出现两次），迁移会把这个结构固化得更难看清；
+    # 缺陷已登记（TECH_DEBT P1-41），修完再迁。
+    "renderClinicalDocs": 5,
+    "renderSurgery": 5,             # 另有一处 class="panel hidden" 的术中记录容器
+    "renderWorkflows": 5,           # 另有一处 class="panel hidden" 的流转记录容器
+    "renderAnalytics": 5,           # 标题里的期间不再 esc()：组件转义标题
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。

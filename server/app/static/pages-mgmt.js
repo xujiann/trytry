@@ -33,15 +33,15 @@ async function renderClinicalDocs() {
     : [[], [], [], null];
 
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>选择住院记录</h3>
+    ${panel("选择住院记录", `
       <form class="inline" id="doc-pick"><select name="admission_id">${
         inHospital.map((a) => `<option value="${a.id}" ${a.id === current ? "selected" : ""}>#${a.id} 患者${a.patient_id} ${esc(a.diagnosis_name || "")}</option>`).join("")
       }</select><button>切换</button></form>
       ${completeness ? `<p class="msg ${completeness.complete ? "ok" : "err"}">${
         completeness.complete ? "文书完整" : "缺项：" + completeness.missing.join("、")}</p>` : '<p class="msg">暂无在院患者</p>'}
-    </div>
+    `)}
     ${current ? `
-    <div class="panel"><h3>病程记录（${notes.length}）</h3>
+    ${panel(`病程记录（${notes.length}）`, `
       <form class="inline" id="note-form">
         <select name="note_type">${Object.entries(NOTE_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <input name="doctor_name" placeholder="记录医师">
@@ -50,16 +50,16 @@ async function renderClinicalDocs() {
       <p class="msg" id="doc-msg"></p>
       ${table(["时间", "类型", "医师", "内容"], notes, (n) =>
         `<tr><td>${esc(n.recorded_at)}</td><td>${esc(NOTE_TYPES[n.note_type] || n.note_type)}</td>
-         <td>${esc(n.doctor_name)}</td><td>${esc(n.content)}</td></tr>`)}</div>
-    <div class="panel"><h3>护理记录（${nursing.length}）</h3>
+         <td>${esc(n.doctor_name)}</td><td>${esc(n.content)}</td></tr>`)}`)}
+    ${panel(`护理记录（${nursing.length}）`, `
       <form class="inline" id="nursing-form">
         <select name="nursing_level">${Object.entries(NURSING_LEVELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <input name="nurse_name" placeholder="护士">
         <input name="content" placeholder="护理内容" style="min-width:280px"><button>记录</button></form>
       ${table(["时间", "级别", "护士", "内容"], nursing, (r) =>
         `<tr><td>${esc(r.recorded_at)}</td><td>${esc(NURSING_LEVELS[r.nursing_level] || r.nursing_level)}</td>
-         <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}</div>
-    <div class="panel"><h3>体温单（${vitals.length}）</h3>
+         <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}`)}
+    ${panel(`体温单（${vitals.length}）`, `
       <form class="inline" id="vital-form">
         <input name="measured_at" placeholder="YYYY-MM-DD HH:MM" required>
         <input name="temperature" type="number" step="0.1" placeholder="体温℃">
@@ -71,8 +71,8 @@ async function renderClinicalDocs() {
         ["#c0392b", "#0b6e6e"]) : ""}
       ${table(["测量时刻", "体温", "脉搏", "呼吸", "血压", "记录人"], vitals, (v) =>
         `<tr><td>${esc(v.measured_at)}</td><td>${v.temperature ?? "—"}</td><td>${v.pulse ?? "—"}</td>
-         <td>${v.respiration ?? "—"}</td><td>${v.sbp ?? "—"}/${v.dbp ?? "—"}</td><td>${esc(v.recorder)}</td></tr>`)}</div>
-    <div class="panel"><h3>交接班</h3>
+         <td>${v.respiration ?? "—"}</td><td>${v.sbp ?? "—"}/${v.dbp ?? "—"}</td><td>${esc(v.recorder)}</td></tr>`)}`)}
+    ${panel("交接班", `
       <form class="inline" id="handover-form">
         <input name="ward_id" type="number" placeholder="病区ID" required>
         <select name="shift"><option value="day">白班</option><option value="evening">小夜</option><option value="night">大夜</option></select>
@@ -80,7 +80,7 @@ async function renderClinicalDocs() {
         <input name="from_staff" placeholder="交班"><input name="to_staff" placeholder="接班">
         <input name="critical_count" type="number" placeholder="危重数">
         <input name="content" placeholder="交班内容" style="min-width:240px"><button>交班</button></form>
-      <p class="desc">在院人数由系统按当前住院数据快照，不接受人工填写。</p></div>` : ""}`;
+      <p class="desc">在院人数由系统按当前住院数据快照，不接受人工填写。</p>`)}` : ""}`;
 
   $("#doc-pick").onsubmit = (e) => {
     e.preventDefault();
@@ -108,28 +108,28 @@ async function renderSurgery() {
     api("/api/surgery/schedules"), api("/api/surgery/stats")]);
   const roomName = Object.fromEntries(rooms.map((r) => [r.id, r.name]));
   $("#page-body").innerHTML = `
-    ${stats.length ? `<div class="panel"><h3>手术量统计</h3>${
+    ${stats.length ? panel("手术量统计",
       table(["机构", "台次", "切口构成", "麻醉构成", "并发症"], stats, (s) =>
         `<tr><td>${esc(s.org_name)}</td><td>${s.total}</td>
          <td>${Object.entries(s.by_incision).map(([k, v]) => `${esc(k)}类:${v}`).join(" ")}</td>
          <td>${Object.entries(s.by_anesthesia).map(([k, v]) => `${esc(ANESTHESIA[k] || k)}:${v}`).join(" ")}</td>
-         <td>${s.complications}</td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>手术间（admin 建档）</h3>
+         <td>${s.complications}</td></tr>`)) : ""}
+    ${panel("手术间（admin 建档）", `
       <form class="inline" id="room-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="name" placeholder="手术间名称" required><button>新建</button></form>
       <p class="msg" id="surg-msg"></p>
       ${table(["ID", "机构", "名称", "状态"], rooms, (r) =>
         `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${esc(r.name)}</td>
-         <td><span class="tag ${r.active ? "green" : ""}">${r.active ? "启用" : "停用"}</span></td></tr>`)}</div>
-    <div class="panel"><h3>提出手术申请（医师）</h3>
+         <td><span class="tag ${r.active ? "green" : ""}">${r.active ? "启用" : "停用"}</span></td></tr>`)}`)}
+    ${panel("提出手术申请（医师）", `
       <form class="inline" id="surg-form"><input name="admission_id" type="number" placeholder="住院ID" required>
         <input name="surgery_name" placeholder="拟施手术" required>
         <select name="incision_level"><option value="I">I类切口</option><option value="II" selected>II类切口</option>
           <option value="III">III类切口</option><option value="IV">IV类切口</option></select>
         <select name="anesthesia_type">${Object.entries(ANESTHESIA).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <select name="urgency">${Object.entries(URGENCY).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
-        <input name="planned_date" placeholder="拟手术日 YYYY-MM-DD"><button>提出申请</button></form></div>
-    <div class="panel"><h3>手术申请（${requests.length}）</h3>${
+        <input name="planned_date" placeholder="拟手术日 YYYY-MM-DD"><button>提出申请</button></form>`)}
+    ${panel(`手术申请（${requests.length}）`,
       table(["ID", "住院", "术式", "切口", "麻醉", "急缓", "状态", "操作"], requests, (r) => {
         let ops = "—";
         if (r.status === "requested") ops = `<button class="btn secondary" data-approve="${r.id}">审批通过</button>
@@ -140,12 +140,12 @@ async function renderSurgery() {
         return `<tr><td>${r.id}</td><td>${r.admission_id}</td><td>${esc(r.surgery_name)}</td>
           <td>${esc(r.incision_level)}</td><td>${esc(ANESTHESIA[r.anesthesia_type] || "")}</td>
           <td>${esc(URGENCY[r.urgency] || "")}</td><td>${statusTag(SURGERY_STATUS, r.status)}</td><td>${ops}</td></tr>`;
-      })}</div>
-    <div class="panel"><h3>手术排班表</h3>${
+      }))}
+    ${panel("手术排班表",
       table(["日期", "手术间", "时段", "术式", "术者", "麻醉", "急缓"], schedules, (s) =>
         `<tr><td>${esc(s.scheduled_date)}</td><td>${esc(s.room_name)}</td><td>${esc(s.start_time)}-${esc(s.end_time)}</td>
          <td>${esc(s.surgery_name)}</td><td>${esc(s.surgeon_name)}</td>
-         <td>${esc(ANESTHESIA[s.anesthesia_type] || "")}</td><td>${esc(URGENCY[s.urgency] || "")}</td></tr>`)}</div>
+         <td>${esc(ANESTHESIA[s.anesthesia_type] || "")}</td><td>${esc(URGENCY[s.urgency] || "")}</td></tr>`))}
     <div class="panel hidden" id="surg-detail"><h3>术中记录</h3><div id="surg-detail-body"></div></div>`;
 
   $("#room-form").onsubmit = (e) => { e.preventDefault();
@@ -506,9 +506,9 @@ async function renderAnalytics() {
   const report = currentRole() === "admin" || currentRole() === "director"
     ? await api(`/api/analytics/performance-report?period=${period}`).catch(() => null) : null;
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>期间</h3>
-      <form class="inline" id="ana-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form></div>
-    <div class="panel"><h3>就医流向</h3>
+    ${panel("期间", `
+      <form class="inline" id="ana-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>`)}
+    ${panel("就医流向", `
       <div class="cards">
         <div class="card"><span class="k">县域就诊率</span><b>${flow.county_visit_rate_pct}%</b></div>
         <div class="card"><span class="k">外转率</span><b>${flow.outbound_rate_pct}%</b></div>
@@ -525,13 +525,13 @@ async function renderAnalytics() {
         <input name="insurance_pay" type="number" step="0.01" placeholder="医保支付">
         <input name="referral_id" type="number" placeholder="转诊单ID（有则为有序转诊）">
         <button>登记县外就诊</button></form>
-      <p class="msg" id="ana-msg"></p></div>
-    <div class="panel"><h3>运行效率（${esc(period)}）</h3>${
+      <p class="msg" id="ana-msg"></p>`)}
+    ${panel(`运行效率（${period}）`,
       table(["机构", "床位", "出院", "占用床日", "平均住院日", "床位周转", "使用率", "诊疗量", "医师", "日均担负"], eff, (r) =>
         `<tr><td>${esc(r.org_name)}</td><td>${r.beds}</td><td>${r.discharges}</td><td>${r.occupied_bed_days}</td>
          <td>${r.avg_length_of_stay}</td><td>${r.bed_turnover}</td><td>${r.bed_occupancy_rate_pct}%</td>
-         <td>${r.visits}</td><td>${r.doctors}</td><td>${r.visits_per_doctor_per_day}</td></tr>`)}</div>
-    <div class="panel"><h3>自定义绩效公式</h3>
+         <td>${r.visits}</td><td>${r.doctors}</td><td>${r.visits_per_doctor_per_day}</td></tr>`))}
+    ${panel("自定义绩效公式", `
       <form class="inline" id="formula-form"><input name="key" placeholder="编码" required>
         <input name="name" placeholder="名称" required>
         <input name="expression" placeholder="表达式，如 round(referrals_up / encounters * 100, 2)" required style="min-width:320px">
@@ -542,8 +542,8 @@ async function renderAnalytics() {
         `<tr><td>${esc(f.key)}</td><td>${esc(f.name)}</td><td><code>${esc(f.expression)}</code></td>
          <td>${esc(f.unit)}</td><td>${f.weight}</td>
          <td><span class="tag ${f.active ? "green" : ""}">${f.active ? "启用" : "停用"}</span></td>
-         <td>${f.active ? `<button class="btn danger" data-off="${f.key}">停用</button>` : "—"}</td></tr>`)}</div>
-    ${report ? `<div class="panel"><h3>期末综合绩效报告（${esc(period)}）</h3>
+         <td>${f.active ? `<button class="btn danger" data-off="${f.key}">停用</button>` : "—"}</td></tr>`)}`)}
+    ${report ? panel(`期末综合绩效报告（${period}）`, `
       <p class="desc">⚠️ 口径提示：本表的「加权得分」由上面的<b>自定义公式</b>算出，
         公式与权重管理员可随时增删改，同一机构换套公式就是另一个分数。
         它与「绩效考核」页的<b>机构绩效评分不是同一套口径，两个分数不可直接比较</b>，
@@ -552,7 +552,7 @@ async function renderAnalytics() {
         report.orgs, (o, idx) =>
         `<tr><td>${idx + 1}</td><td>${esc(o.org_name)}</td><td>${esc(o.level)}</td>
          ${o.items.map((i) => `<td>${i.value === null ? `<span class="tag red" title="${esc(i.error || "")}">错误</span>` : i.value}</td>`).join("")}
-         <td><b>${o.weighted_score}</b></td></tr>`)}</div>` : ""}`;
+         <td><b>${o.weighted_score}</b></td></tr>`)}`) : ""}`;
   $("#ana-period").onsubmit = (e) => { e.preventDefault();
     localStorage.setItem("medplat_ana_period", new FormData(e.target).get("period")); route(); };
   $("#ob-form").onsubmit = (e) => { e.preventDefault();
@@ -643,14 +643,14 @@ async function renderWorkflows() {
     api("/api/workflows/definitions"), api("/api/workflows/instances?status=running"),
     api("/api/workflows/my-tasks")]);
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>我的待办（${tasks.count}）</h3>${
+    ${panel(`我的待办（${tasks.count}）`, `${
       table(["实例", "流程", "事项", "当前节点", "需要角色", "操作"], tasks.tasks, (t) =>
         `<tr><td>${t.id}</td><td>${esc(t.definition_key)}</td><td>${esc(t.title)}</td>
          <td>${esc(t.current_node_name || t.current_node)}</td><td>${esc(t.current_node_role || "任意")}</td>
          <td><button class="btn secondary" data-advance="${t.id}">推进</button>
              <button class="btn danger" data-cancel="${t.id}">终止</button></td></tr>`)}
-      <p class="msg" id="wf-msg"></p></div>
-    <div class="panel"><h3>流程图形化编排（admin）</h3>
+      <p class="msg" id="wf-msg"></p>`)}
+    ${panel("流程图形化编排（admin）", `
       <p class="hint">画布产出的就是下面那份 JSON——<b>后端一行没改</b>，接口仍是
         <code>POST /api/workflows/definitions</code>。手写 JSON 的入口保留在下方，两条路等价。</p>
       <form class="inline" id="wfc-meta">
@@ -668,8 +668,8 @@ async function renderWorkflows() {
       <div id="wfc-canvas" style="overflow-x:auto"></div>
       <p class="msg" id="wfc-msg"></p>
       <details><summary>产出的 JSON（提交给后端的就是它）</summary>
-        <pre id="wfc-json" style="white-space:pre-wrap"></pre></details></div>
-    <div class="panel"><h3>流程定义（手写 JSON）</h3>
+        <pre id="wfc-json" style="white-space:pre-wrap"></pre></details>`)}
+    ${panel("流程定义（手写 JSON）", `
       <form class="inline" id="def-form"><input name="key" placeholder="流程编码" required>
         <input name="name" placeholder="流程名称" required>
         <input name="nodes" placeholder='节点 JSON，如 [{"key":"apply","name":"申请","role":"doctor","next":"approve"},{"key":"approve","name":"审批","role":"director","next":""}]'
@@ -677,18 +677,17 @@ async function renderWorkflows() {
       ${table(["编码", "名称", "节点链", "状态"], definitions, (d) =>
         `<tr><td>${esc(d.key)}</td><td>${esc(d.name)}</td>
          <td>${d.nodes.map((n) => `${esc(n.name)}${n.role ? `(${esc(n.role)})` : ""}`).join(" → ")}</td>
-         <td>${d.active ? "启用" : "停用"}</td></tr>`)}</div>
-    <div class="panel"><h3>发起流程</h3>
+         <td>${d.active ? "启用" : "停用"}</td></tr>`)}`)}
+    ${panel("发起流程", `
       <form class="inline" id="inst-form">
         <select name="definition_key">${definitions.map((d) => `<option value="${esc(d.key)}">${esc(d.name)}</option>`).join("")}</select>
         <input name="business_type" placeholder="业务类型" required><input name="business_id" type="number" placeholder="业务ID">
         <input name="title" placeholder="事项标题" style="min-width:220px">
-        <input name="org_id" type="number" placeholder="机构ID"><button>发起</button></form></div>
-    <div class="panel"><h3>流转中实例（${instances.length}）</h3>${
-      table(["ID", "流程", "事项", "当前节点", "更新时间", "操作"], instances, (i) =>
+        <input name="org_id" type="number" placeholder="机构ID"><button>发起</button></form>`)}
+    ${panel(`流转中实例（${instances.length}）`, table(["ID", "流程", "事项", "当前节点", "更新时间", "操作"], instances, (i) =>
         `<tr><td>${i.id}</td><td>${esc(i.definition_key)}</td><td>${esc(i.title)}</td>
          <td>${esc(i.current_node_name || i.current_node)}</td><td>${esc(i.updated_at.slice(0, 16).replace("T", " "))}</td>
-         <td><button class="btn" data-history="${i.id}">流转记录</button></td></tr>`)}</div>
+         <td><button class="btn" data-history="${i.id}">流转记录</button></td></tr>`))}
     <div class="panel hidden" id="wf-history"><h3>流转记录</h3><div id="wf-history-body"></div></div>`;
   wfCanvasInit(definitions);
   $("#def-form").onsubmit = async (e) => {

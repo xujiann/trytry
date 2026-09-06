@@ -2633,5 +2633,516 @@
         ]
       }
     }
+  },
+  "clinicaldocs": {
+    "_why": [
+      "第八批（2026-09-06）：住院文书。四个面板挂在 `current ? … : \"\"` 的条件里——",
+      "夹具让 /admissions 返回一条 status=admitted 的在院记录，`current` 才有值、四个面板才渲染。",
+      "完整性自查故意给 complete=false 带缺项，钉住那条 err 分支；体温单给两条才画得出折线。",
+      "子资源路径都以 /api/inpatient/admissions/ 开头，靠最长前缀匹配分流到各自的键。"
+    ],
+    "fn": "renderClinicalDocs",
+    "localStorage": {
+      "medplat_doc_adm": "77"
+    },
+    "api": {
+      "/api/inpatient/admissions/77/progress-notes": [
+        {
+          "recorded_at": "2026-09-01 09:00",
+          "note_type": "first",
+          "doctor_name": "张医生",
+          "content": "首次病程：社区获得性肺炎<img src=x onerror=alert(1)>"
+        },
+        {
+          "recorded_at": "2026-09-02 08:30",
+          "note_type": "daily",
+          "doctor_name": "李医生",
+          "content": "查房：体温下降"
+        }
+      ],
+      "/api/inpatient/admissions/77/nursing-records": [
+        {
+          "recorded_at": "2026-09-01 10:00",
+          "nursing_level": "level1",
+          "nurse_name": "王护士",
+          "content": "一级护理 & 巡视"
+        },
+        {
+          "recorded_at": "2026-09-02 10:00",
+          "nursing_level": "level2",
+          "nurse_name": "赵护士",
+          "content": "二级护理"
+        }
+      ],
+      "/api/inpatient/admissions/77/vitals": [
+        {
+          "measured_at": "2026-09-01 06:00",
+          "temperature": 38.6,
+          "pulse": 96,
+          "respiration": 20,
+          "sbp": 128,
+          "dbp": 78,
+          "recorder": "王护士"
+        },
+        {
+          "measured_at": "2026-09-02 06:00",
+          "temperature": 37.2,
+          "pulse": 84,
+          "respiration": 18,
+          "sbp": null,
+          "dbp": null,
+          "recorder": "赵护士"
+        }
+      ],
+      "/api/inpatient/admissions/77/document-completeness": {
+        "complete": false,
+        "missing": [
+          "首次病程",
+          "护理记录"
+        ]
+      },
+      "/api/inpatient/admissions": [
+        {
+          "id": 77,
+          "patient_id": 31,
+          "status": "admitted",
+          "diagnosis_name": "社区获得性肺炎<b>"
+        },
+        {
+          "id": 78,
+          "patient_id": 32,
+          "status": "discharged",
+          "diagnosis_name": "急性阑尾炎"
+        }
+      ]
+    }
+  },
+  "surgery": {
+    "_why": [
+      "第八批（2026-09-06）：手术麻醉。手术量统计面板是条件渲染，夹具给非空 stats 让它渲染出来；",
+      "申请表里四种状态各给一条，把四组不同的操作按钮都渲染到（ops 那段 if/else 全走一遍）。",
+      "`class=\"panel hidden\" id=\"surg-detail\"` 那个术中记录容器不迁：panel() 出不了额外 class 与 id。"
+    ],
+    "fn": "renderSurgery",
+    "api": {
+      "/api/surgery/requests": [
+        {
+          "id": 1,
+          "admission_id": 77,
+          "surgery_name": "腹腔镜阑尾切除术<img src=x onerror=alert(1)>",
+          "incision_level": "II",
+          "anesthesia_type": "general",
+          "urgency": "elective",
+          "status": "requested"
+        },
+        {
+          "id": 2,
+          "admission_id": 78,
+          "surgery_name": "胆囊切除术",
+          "incision_level": "II",
+          "anesthesia_type": "spinal",
+          "urgency": "urgent",
+          "status": "approved"
+        },
+        {
+          "id": 3,
+          "admission_id": 79,
+          "surgery_name": "疝修补术",
+          "incision_level": "I",
+          "anesthesia_type": "local",
+          "urgency": "elective",
+          "status": "scheduled"
+        },
+        {
+          "id": 4,
+          "admission_id": 80,
+          "surgery_name": "清创缝合术",
+          "incision_level": "III",
+          "anesthesia_type": "local",
+          "urgency": "emergency",
+          "status": "completed"
+        }
+      ],
+      "/api/surgery/rooms": [
+        {
+          "id": 1,
+          "org_id": 2,
+          "name": "手术间一 & 层流",
+          "active": true
+        },
+        {
+          "id": 2,
+          "org_id": 2,
+          "name": "手术间二",
+          "active": false
+        }
+      ],
+      "/api/surgery/schedules": [
+        {
+          "scheduled_date": "2026-09-08",
+          "room_name": "手术间一 & 层流",
+          "start_time": "09:00",
+          "end_time": "11:00",
+          "surgery_name": "疝修补术",
+          "surgeon_name": "孙医生",
+          "anesthesia_type": "local",
+          "urgency": "elective"
+        },
+        {
+          "scheduled_date": "2026-09-09",
+          "room_name": "手术间二",
+          "start_time": "14:00",
+          "end_time": "16:30",
+          "surgery_name": "胆囊切除术",
+          "surgeon_name": "钱医生<b>",
+          "anesthesia_type": "spinal",
+          "urgency": "urgent"
+        }
+      ],
+      "/api/surgery/stats": [
+        {
+          "org_name": "县人民医院",
+          "total": 42,
+          "by_incision": {
+            "I": 10,
+            "II": 25,
+            "III": 7
+          },
+          "by_anesthesia": {
+            "general": 20,
+            "spinal": 12,
+            "local": 10
+          },
+          "complications": 2
+        },
+        {
+          "org_name": "东镇卫生院<b>",
+          "total": 8,
+          "by_incision": {
+            "I": 6,
+            "II": 2
+          },
+          "by_anesthesia": {
+            "local": 8
+          },
+          "complications": 0
+        }
+      ]
+    }
+  },
+  "accounting": {
+    "_why": [
+      "第八批（2026-09-06）：会计核算。两条凭证分别是 draft/posted，把两组操作按钮都渲染到。",
+      "合并报表里 unknown_subject_codes 与 balanced=false 两处提示都故意触发。",
+      "注：本页的合并报表面板在现状里嵌在凭证表格的行模板里（见 ROADMAP 登记的缺陷），",
+      "夹具给两条凭证正好把这个重复暴露出来。",
+      "本页本批**未迁**：合并报表面板嵌在凭证行模板里（缺陷已登记），迁移会把这个结构固化得更难看清。"
+    ],
+    "fn": "renderAccounting",
+    "localStorage": {
+      "medplat_acc_period": "2026-08"
+    },
+    "api": {
+      "/api/accounting/subjects": [
+        {
+          "code": "1001",
+          "name": "库存现金 & 备用金",
+          "category": "asset"
+        },
+        {
+          "code": "6001",
+          "name": "医疗收入",
+          "category": "income"
+        }
+      ],
+      "/api/accounting/vouchers": [
+        {
+          "id": 11,
+          "voucher_no": "JZ-2026-08-001",
+          "voucher_date": "2026-08-03",
+          "summary": "门诊收入结转<b>",
+          "total_debit": 12000.0,
+          "total_credit": 12000.0,
+          "status": "draft"
+        },
+        {
+          "id": 12,
+          "voucher_no": "JZ-2026-08-002",
+          "voucher_date": "2026-08-15",
+          "summary": "采购付款",
+          "total_debit": 5000.0,
+          "total_credit": 5000.0,
+          "status": "posted"
+        }
+      ],
+      "/api/accounting/trial-balance": {
+        "balanced": false,
+        "total_debit": 17000.0,
+        "total_credit": 16000.0,
+        "lines": [
+          {
+            "subject_code": "1001",
+            "subject_name": "库存现金 & 备用金",
+            "category": "asset",
+            "debit": 12000.0,
+            "credit": 0.0
+          },
+          {
+            "subject_code": "6001",
+            "subject_name": "医疗收入",
+            "category": "income",
+            "debit": 0.0,
+            "credit": 16000.0
+          }
+        ]
+      },
+      "/api/accounting/consolidated-statements": {
+        "caliber": {
+          "note": "内部往来已抵销<img src=x onerror=alert(1)>"
+        },
+        "consolidated": {
+          "income_statement": {
+            "income": 1250000,
+            "expense": 980000,
+            "surplus": 270000
+          },
+          "balance_sheet": {
+            "assets": 3400000,
+            "liabilities": 1200000,
+            "net_assets": 2200000
+          }
+        },
+        "orgs": [
+          {
+            "org_name": "县人民医院",
+            "org_id": 2,
+            "income_statement": {
+              "income": 800000,
+              "expense": 600000,
+              "surplus": 200000
+            },
+            "balance_sheet": {
+              "assets": 2000000,
+              "liabilities": 700000,
+              "net_assets": 1300000
+            }
+          }
+        ],
+        "unknown_subject_codes": [
+          "9999"
+        ],
+        "voucher_totals": {
+          "balanced": false,
+          "difference": 1000.0
+        }
+      }
+    }
+  },
+  "workflows": {
+    "_why": [
+      "第八批（2026-09-06）：流程引擎。五个面板都无条件渲染；夹具让待办、定义、实例三张表都出行，",
+      "定义的 node 链故意带 role 与不带 role 各一段，钉住 `n.role ? \"(role)\" : \"\"` 两个分支。",
+      "赋完 innerHTML 后还会 wfCanvasInit(definitions) 画编排画布，夹具的 definitions 必须是完整节点结构。",
+      "`class=\"panel hidden\" id=\"wf-history\"` 的流转记录容器不迁：panel() 出不了额外 class 与 id。"
+    ],
+    "fn": "renderWorkflows",
+    "api": {
+      "/api/workflows/definitions": [
+        {
+          "key": "drug_intro",
+          "name": "新药引进 & 论证",
+          "active": true,
+          "nodes": [
+            {
+              "key": "apply",
+              "name": "科室申请",
+              "role": "doctor",
+              "next": "pharmacy"
+            },
+            {
+              "key": "pharmacy",
+              "name": "药学审核",
+              "role": "pharmacist",
+              "next": "approve"
+            },
+            {
+              "key": "approve",
+              "name": "院长审批",
+              "role": "",
+              "next": ""
+            }
+          ]
+        },
+        {
+          "key": "equip_buy",
+          "name": "设备采购<img src=x onerror=alert(1)>",
+          "active": false,
+          "nodes": [
+            {
+              "key": "apply",
+              "name": "申请",
+              "role": "operator",
+              "next": "end"
+            },
+            {
+              "key": "end",
+              "name": "结束",
+              "role": "",
+              "next": ""
+            }
+          ]
+        }
+      ],
+      "/api/workflows/instances": [
+        {
+          "id": 31,
+          "definition_key": "drug_intro",
+          "title": "引进注射用头孢<b>",
+          "current_node": "pharmacy",
+          "current_node_name": "药学审核",
+          "updated_at": "2026-09-05T11:20:31"
+        },
+        {
+          "id": 32,
+          "definition_key": "equip_buy",
+          "title": "采购彩超",
+          "current_node": "apply",
+          "current_node_name": "",
+          "updated_at": "2026-09-06T08:02:00"
+        }
+      ],
+      "/api/workflows/my-tasks": {
+        "count": 2,
+        "tasks": [
+          {
+            "id": 31,
+            "definition_key": "drug_intro",
+            "title": "引进注射用头孢<b>",
+            "current_node": "pharmacy",
+            "current_node_name": "药学审核",
+            "current_node_role": "pharmacist"
+          },
+          {
+            "id": 32,
+            "definition_key": "equip_buy",
+            "title": "采购彩超",
+            "current_node": "apply",
+            "current_node_name": "",
+            "current_node_role": ""
+          }
+        ]
+      }
+    }
+  },
+  "analytics": {
+    "_why": [
+      "第八批（2026-09-06）：运营分析。综合绩效报告面板是条件渲染，要 admin/director 角色 +",
+      "/performance-report 非空（localStorage 固定 admin）。公式表里 active 给一真一假，",
+      "钉住停用按钮那个三元；报告行里给一个 value=null 的项，钉住那条带 title 的红色「错误」标记。",
+      "标题里的 `esc(period)` 迁移时要去掉——panel() 自己转义标题，留着就是转两遍（第五批的坑）。"
+    ],
+    "fn": "renderAnalytics",
+    "localStorage": {
+      "medplat_role": "admin",
+      "medplat_ana_period": "2026-08"
+    },
+    "api": {
+      "/api/analytics/patient-flow": {
+        "county_visit_rate_pct": 88.4,
+        "outbound_rate_pct": 11.6,
+        "ordered_referral_rate_pct": 72.0,
+        "outside_visits": 143,
+        "outside_amount": 286540.75
+      },
+      "/api/analytics/efficiency": [
+        {
+          "org_name": "县人民医院 & 分院",
+          "beds": 320,
+          "discharges": 1250,
+          "occupied_bed_days": 8600,
+          "avg_length_of_stay": 6.9,
+          "bed_turnover": 3.9,
+          "bed_occupancy_rate_pct": 86.7,
+          "visits": 42000,
+          "doctors": 150,
+          "visits_per_doctor_per_day": 9.3
+        },
+        {
+          "org_name": "东镇卫生院<b>",
+          "beds": 40,
+          "discharges": 180,
+          "occupied_bed_days": 900,
+          "avg_length_of_stay": 5.0,
+          "bed_turnover": 4.5,
+          "bed_occupancy_rate_pct": 61.6,
+          "visits": 9000,
+          "doctors": 18,
+          "visits_per_doctor_per_day": 16.7
+        }
+      ],
+      "/api/analytics/formulas": [
+        {
+          "key": "up_ref_rate",
+          "name": "上转率<img src=x onerror=alert(1)>",
+          "expression": "round(referrals_up / encounters * 100, 2)",
+          "unit": "%",
+          "weight": 0.4,
+          "active": true
+        },
+        {
+          "key": "obs_only",
+          "name": "仅观测指标",
+          "expression": "encounters",
+          "unit": "人次",
+          "weight": 0,
+          "active": false
+        }
+      ],
+      "/api/analytics/formula-variables": [
+        {
+          "name": "encounters",
+          "description": "门急诊人次"
+        },
+        {
+          "name": "referrals_up",
+          "description": "上转例数 & 含急诊"
+        }
+      ],
+      "/api/analytics/performance-report": {
+        "orgs": [
+          {
+            "org_name": "县人民医院 & 分院",
+            "level": "county",
+            "weighted_score": 91.2,
+            "items": [
+              {
+                "name": "上转率",
+                "value": 8.4
+              },
+              {
+                "name": "仅观测指标",
+                "value": 42000
+              }
+            ]
+          },
+          {
+            "org_name": "东镇卫生院<b>",
+            "level": "township",
+            "weighted_score": 78.5,
+            "items": [
+              {
+                "name": "上转率",
+                "value": null,
+                "error": "除零：encounters 为 0<b>"
+              },
+              {
+                "name": "仅观测指标",
+                "value": 9000
+              }
+            ]
+          }
+        ]
+      }
+    }
   }
 }
