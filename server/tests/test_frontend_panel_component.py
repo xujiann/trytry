@@ -285,6 +285,22 @@ MIGRATED_PAGES = {
     "drawPrenatalScreenings": 1,
     "drawImprovementTasks": 1,
     "drawHomeVisits": 1,
+    # 第十七批 2026-09-06：pages-clinical.js 最后 25 处（门诊档案 / 写审计 / 调阅留痕 /
+    # 知情同意 / 院前急救 / 在线咨询 / 病理标本 / 行政项目 / 角色权限 / 公卫应急 /
+    # 危急值 / 室内质控 / 绩效指标）。**至此四个页面文件的可迁外壳全部清零。**
+    "renderArchive": 2,
+    "renderAudit": 1,               # 整页一个无标题裸面板；表格由末尾的 draw() 写进 #audit-table
+    "renderAccessLogs": 1,          # 同上，写进 #al-table
+    "renderConsents": 2,            # drawConsents() 不带参数调，走的是"没输入患者ID"那一支
+    "renderEmergency": 2,
+    "renderTelemedicine": 2,
+    "renderPathology": 2,
+    "renderProjects": 2,
+    "renderRbac": 3,
+    "renderPublicHealth": 3,
+    "renderCritical": 2,            # 催办面板走 accent；另有一处 class="panel hidden" 的留痕容器
+    "renderLabQc": 2,               # 另有一处 class="panel hidden" 的 L-J 明细容器
+    "renderPerfIndicators": 1,      # 整页一个无标题裸面板
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。
@@ -315,6 +331,90 @@ KNOWN_UNMIGRATED_SHELLS = {
     "renderSpdReport": (1, "点击「查看」后才写进 #spd-rpt-view 的报告详情面板，render_diff 覆盖不到"),
 }
 MIGRATED = "renderServiceRequests"
+
+
+def _strip_comments(src: str) -> str:
+    """去掉 `//` 行注释**与** `/* */` 块注释。
+
+    比 `_code()` 多去一种：棘轮是按**整个文件**数外壳的，而 `panel()` 的文档注释里
+    就写着一个 `<div class="panel">…` 的示例。示例不是代码，数进去等于给棘轮凭空
+    加一条永远还不掉的账。（`_code()` 不用管这个：它的输入都是从 `function X(` 起切的
+    函数体，函数前面的块注释根本进不来。）
+    """
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    return "\n".join(re.sub(r"//.*$", "", line) for line in src.splitlines())
+
+
+#: **棘轮：全仓库仍然手写的面板外壳**（所在函数 → 条数 → 为什么留着）。只减不增。
+#:
+#: 到第十七批为止，四个页面文件（core / clinical / mgmt / public / spd）里
+#: **可迁的手写外壳已经清零**，剩下的每一处都有写下来的理由。此前 `MIGRATED_PAGES`
+#: 是白名单——只保证"迁过的别退回去"，拦不住**新写**一个手写外壳的页面。
+#: 现在总量到底了，才有资格把它钉成棘轮。
+#:
+#: 想加一条进来，先问三个问题：`panel()` 真的表达不了吗（标题里嵌 HTML / 需要额外
+#: class 与 id）？有没有字节证据证明迁移是 no-op（`scripts/render_diff.js`）？
+#: 如果只是"懒得造夹具"，那不是理由。
+#:
+#: 注意这条规则数的是 `<div class="panel"`（panel 后紧跟引号）。
+#: `class="panel hidden"` 那种带附加 class 的点击容器**本来就不在视野里**
+#: （全仓库还有 10 处：clinical 6 / mgmt 3 / public 1），它们同样迁不了
+#: （`panel()` 出不了额外的 class 与 id），只是不必登记在这里。
+HANDWRITTEN_SHELL_RATCHET = {
+    "panel": (1, "组件自己的模板——外壳的唯一来源，就该在这里"),
+    "openDrilldown": (1, "标题里嵌着「关闭」按钮，panel() 会把标题整段 esc() 掉"),
+    "renderPharmacy": (1, "标题里嵌着 <span> 显示缺药预警条数，同上"),
+    "renderChronic": (1, "标题里嵌着 <span> 显示随访超期人数，同上"),
+    "renderSpdReport": (1, "点击「查看」后才写进 #spd-rpt-view，render_diff 覆盖不到"),
+    "renderSpdAssess": (1, "点击后才渲染的下钻明细面板，同上"),
+    "spdShowConsultThread": (1, "点击后才渲染的会话面板，同上"),
+}
+
+
+def _handwritten_shells_by_owner() -> dict:
+    """全部 static/*.js 里的手写外壳 → 所在函数名。找不到归属就报 `<文件顶层>`。"""
+    owners: dict = {}
+    for name, raw in SOURCES.items():
+        text = _strip_comments(raw)
+        funcs = [(m.start(), m.group(1)) for m in re.finditer(r"\n(?:async )?function (\w+)\(", text)]
+        for hit in re.finditer(r'<div class="panel"', text):
+            owner = f"<{name} 顶层>"
+            for pos, fn in funcs:                      # 最近一个在它前面的函数定义
+                if pos < hit.start():
+                    owner = fn
+                else:
+                    break
+            owners[owner] = owners.get(owner, 0) + 1
+    return owners
+
+
+def test_手写面板外壳只减不增():
+    """棘轮：除登记在案的几处外，不许再有手写的 `<div class="panel">` 外壳。
+
+    ADR-0009 第二步到第十七批收官：四个页面文件的可迁外壳已全部清零，
+    剩下的每一处都写着理由。这条用例把那个状态钉住——**新页面必须用 `panel()`**，
+    不能再手抄一遍外壳，也不能悄悄把迁过的页面改回去。
+    """
+    actual = _handwritten_shells_by_owner()
+    expected = {k: v[0] for k, v in HANDWRITTEN_SHELL_RATCHET.items()}
+    extra = {k: n for k, n in actual.items() if k not in expected}
+    assert not extra, (
+        f"出现了未登记的手写面板外壳：{extra}。新页面请用 `panel()`；"
+        f"确实表达不了（标题里嵌 HTML、需要额外 class/id）就登记进 "
+        f"HANDWRITTEN_SHELL_RATCHET 并写清理由"
+    )
+    for owner, n in expected.items():
+        got = actual.get(owner, 0)
+        assert got <= n, f"{owner} 的手写外壳从 {n} 涨到了 {got}——这条棘轮只减不增"
+    total = sum(actual.values())
+    assert total <= sum(expected.values()), f"手写外壳总数 {total} 超过棘轮基线 {sum(expected.values())}"
+
+
+def test_棘轮里的每一条都要写理由():
+    """没有理由的豁免，下一个人就不知道能不能删——那条豁免会永远留着。"""
+    for owner, (n, why) in HANDWRITTEN_SHELL_RATCHET.items():
+        assert n > 0, f"{owner} 登记了 0 条，直接从棘轮里删掉"
+        assert len(why) >= 8, f"{owner} 的理由太短：{why!r}"
 
 
 def test_会计页的合并报表面板不在凭证表格的行回调里():

@@ -6448,5 +6448,482 @@
         }
       ]
     }
+  },
+  "archive": {
+    "_why": [
+      "第十七批（2026-09-06）：门诊接诊与 360 视图。两个面板；360 视图是点击后才出结果的，",
+      "外壳本身在首屏，照迁。就诊两条走门诊/住院两支、诊断与医师各留一条空走「—」。"
+    ],
+    "fn": "renderArchive",
+    "api": {
+      "/api/encounters": [
+        {
+          "id": 1,
+          "patient_id": 31,
+          "org_id": 4,
+          "encounter_type": "outpatient",
+          "diagnosis_name": "原发性高血压 &",
+          "doctor_name": "张医生<b>"
+        },
+        {
+          "id": 2,
+          "patient_id": 32,
+          "org_id": 3,
+          "encounter_type": "inpatient",
+          "diagnosis_name": null,
+          "doctor_name": null
+        }
+      ]
+    }
+  },
+  "audit": {
+    "_why": [
+      "第十七批（2026-09-06）：写操作审计。整页一个无标题裸面板；",
+      "表格由末尾的 `await draw()` 写进 #audit-table（P2-31 之后取数放最后）。",
+      "两条分别走 status_code<400（绿）与 >=400（红）；at 直接 slice(0,19)，要给够长度。"
+    ],
+    "fn": "renderAudit",
+    "api": {
+      "/api/audit": [
+        {
+          "at": "2026-09-01T09:00:00",
+          "username": "admin &",
+          "method": "POST",
+          "path": "/api/patients<b>",
+          "status_code": 200
+        },
+        {
+          "at": "2026-09-01T09:05:12",
+          "username": "doc01<img src=x onerror=alert(1)>",
+          "method": "DELETE",
+          "path": "/api/rbac/roles/9",
+          "status_code": 403
+        }
+      ]
+    }
+  },
+  "accesslogs": {
+    "_why": [
+      "第十七批（2026-09-06）：调阅留痕。整页一个无标题裸面板；",
+      "表格由末尾的 `await draw()` 写进 #al-table。at 用 `(r.at || \"\")` 兜底，",
+      "夹具第二条给 null 走那一支。"
+    ],
+    "fn": "renderAccessLogs",
+    "api": {
+      "/api/access-logs": [
+        {
+          "at": "2026-09-01T10:00:00",
+          "viewer": "doc01 &",
+          "viewer_org_name": "XX镇卫生院<b>",
+          "patient_name": "张三",
+          "resource_name": "就诊记录",
+          "basis_name": "本次就诊"
+        },
+        {
+          "at": null,
+          "viewer": "director<img src=x onerror=alert(1)>",
+          "viewer_org_name": "县人民医院",
+          "patient_name": "李四 &",
+          "resource_name": "检查报告",
+          "basis_name": "转诊协同"
+        }
+      ]
+    }
+  },
+  "consents": {
+    "_why": [
+      "第十七批（2026-09-06）：知情同意与更正申请。两个面板。",
+      "注意 `await drawConsents()` 是**不带参数**调的——走的是「没输入患者ID」那一支，",
+      "只往 #ct-table 写一段提示文字，根本不调 /api/consents。夹具因此只需要 corrections。",
+      "更正两条分别给 changes 有值/为空（走「—」）。"
+    ],
+    "fn": "renderConsents",
+    "api": {
+      "/api/consents/corrections": [
+        {
+          "id": 1,
+          "patient_id": 31,
+          "request_type": "correction",
+          "changes": "phone: 138**** &",
+          "reason": "号码变更<b>"
+        },
+        {
+          "id": 2,
+          "patient_id": 32,
+          "request_type": "erasure<img src=x onerror=alert(1)>",
+          "changes": null,
+          "reason": ""
+        }
+      ]
+    }
+  },
+  "emergency": {
+    "_why": [
+      "第十七批（2026-09-06）：院前急救。两个面板，第二个是无标题裸面板。",
+      "四条覆盖 ES 的 dispatched/en_route/arrived/admitted，最后一条走操作列「—」。"
+    ],
+    "fn": "renderEmergency",
+    "api": {
+      "/api/emergency/cases": [
+        {
+          "id": 1,
+          "location": "XX路口 &",
+          "symptom": "胸痛<b>",
+          "ambulance_no": "沪A·00001",
+          "status": "dispatched"
+        },
+        {
+          "id": 2,
+          "location": "YY小区",
+          "symptom": "晕厥",
+          "ambulance_no": "沪A·00002",
+          "status": "en_route"
+        },
+        {
+          "id": 3,
+          "location": "ZZ工地<img src=x onerror=alert(1)>",
+          "symptom": "外伤",
+          "ambulance_no": "沪A·00003",
+          "status": "arrived"
+        },
+        {
+          "id": 4,
+          "location": "WW街道",
+          "symptom": "腹痛",
+          "ambulance_no": "沪A·00004",
+          "status": "admitted"
+        }
+      ]
+    }
+  },
+  "telemedicine": {
+    "_why": [
+      "第十七批（2026-09-06）：在线咨询与复诊续方。两个面板，第二个是无标题裸面板。",
+      "三条覆盖 open（回复按钮）/replied（结束按钮）/closed（「—」）；",
+      "一条 consult_type=repeat_rx 走「续方」、带 prescription_id；一条回复为空走「—」。"
+    ],
+    "fn": "renderTelemedicine",
+    "api": {
+      "/api/telemedicine/consults": [
+        {
+          "id": 1,
+          "patient_id": 31,
+          "consult_type": "consult",
+          "question": "血压高怎么办 &",
+          "reply": "",
+          "prescription_id": null,
+          "status": "open"
+        },
+        {
+          "id": 2,
+          "patient_id": 32,
+          "consult_type": "repeat_rx",
+          "question": "续开降压药<b>",
+          "reply": "已按原方续开 &",
+          "prescription_id": 71,
+          "status": "replied"
+        },
+        {
+          "id": 3,
+          "patient_id": 33,
+          "consult_type": "consult",
+          "question": "复查时间<img src=x onerror=alert(1)>",
+          "reply": "两周后",
+          "prescription_id": null,
+          "status": "closed"
+        }
+      ]
+    }
+  },
+  "pathology": {
+    "_why": [
+      "第十七批（2026-09-06）：病理标本。两个面板。",
+      "四条覆盖操作列三支：pending（核收/拒收两个按钮）、rejected 与 read（都走「—」）、",
+      "其余状态（推进按钮）；冷缺血一条为 null 走「未记录」，拒收那条带 reject_reason 小字。"
+    ],
+    "fn": "renderPathology",
+    "api": {
+      "/api/pathology/specimen-stats": {
+        "total": 40,
+        "rejected": 3,
+        "reject_rate_pct": 7.5,
+        "cold_ischemia": {
+          "measured": 30,
+          "unmeasured": 10,
+          "avg_minutes": 42.5,
+          "over_60min": 4
+        },
+        "caliber": "冷缺血 = 固定时间 - 离体时间 &<b>，未记录不计入均值"
+      },
+      "/api/pathology/specimens": [
+        {
+          "id": 1,
+          "specimen_no": "BL-2026-001 &",
+          "site": "胃窦<b>",
+          "status": "pending",
+          "status_name": "待核收",
+          "reject_reason": "",
+          "cold_ischemia_minutes": 35,
+          "block_count": 0,
+          "slide_count": 0,
+          "received_by": null
+        },
+        {
+          "id": 2,
+          "specimen_no": "BL-2026-002",
+          "site": null,
+          "status": "rejected",
+          "status_name": "已拒收",
+          "reject_reason": "标本量不足 &",
+          "cold_ischemia_minutes": null,
+          "block_count": 0,
+          "slide_count": 0,
+          "received_by": "王技师<b>"
+        },
+        {
+          "id": 3,
+          "specimen_no": "BL-2026-003<img src=x onerror=alert(1)>",
+          "site": "结肠",
+          "status": "embedded",
+          "status_name": "已包埋",
+          "reject_reason": "",
+          "cold_ischemia_minutes": 70,
+          "block_count": 3,
+          "slide_count": 6,
+          "received_by": "李技师"
+        },
+        {
+          "id": 4,
+          "specimen_no": "BL-2026-004",
+          "site": "肺",
+          "status": "read",
+          "status_name": "已阅片",
+          "reject_reason": "",
+          "cold_ischemia_minutes": 28,
+          "block_count": 2,
+          "slide_count": 4,
+          "received_by": "赵技师"
+        }
+      ]
+    }
+  },
+  "projects": {
+    "_why": [
+      "第十七批（2026-09-06）：行政项目。两个面板。",
+      "两条分别走 overdue（名称后带红标签）与不逾期；里程碑一条带逾期数走 warn 标签、",
+      "一条不带；负责人与计划完成各留一条空走「—」。"
+    ],
+    "fn": "renderProjects",
+    "api": {
+      "/api/projects/stats/overview": {
+        "total": 12,
+        "active": 5,
+        "overdue": 2,
+        "avg_progress_pct_active": 63.5,
+        "total_budget": 1250000.0,
+        "caliber": "进度只统计在办项目 &<b>，已结项不计入均值"
+      },
+      "/api/projects": [
+        {
+          "id": 1,
+          "name": "医共体信息化二期 &",
+          "overdue": true,
+          "owner_name": "张主任<b>",
+          "status_name": "进行中",
+          "progress_pct": 40,
+          "due_date": "2026-08-31",
+          "milestone_done": 2,
+          "milestone_total": 5,
+          "milestone_overdue": 1
+        },
+        {
+          "id": 2,
+          "name": "检验中心扩建<img src=x onerror=alert(1)>",
+          "overdue": false,
+          "owner_name": null,
+          "status_name": "规划中",
+          "progress_pct": 0,
+          "due_date": null,
+          "milestone_done": 0,
+          "milestone_total": 3,
+          "milestone_overdue": 0
+        }
+      ]
+    }
+  },
+  "rbac": {
+    "_why": [
+      "第十七批（2026-09-06）：角色与权限点。三个面板；第三个只有一个占位容器",
+      "（明细是点「查看」之后才写进去的），外壳在首屏，照迁。",
+      "角色两条走 builtin（权限列显示来源、操作列「—」）与自定义（三个按钮）。"
+    ],
+    "fn": "renderRbac",
+    "api": {
+      "/api/rbac/roles": [
+        {
+          "id": 1,
+          "key": "admin",
+          "name": "平台管理员 &",
+          "builtin": true,
+          "permission_source": "代码内 require_roles<b>",
+          "permission_count": 0,
+          "active": true
+        },
+        {
+          "id": 9,
+          "key": "custom_ops<img src=x onerror=alert(1)>",
+          "name": "运维专员",
+          "builtin": false,
+          "permission_source": "",
+          "permission_count": 12,
+          "active": false
+        }
+      ],
+      "/api/rbac/modules": [
+        {
+          "module": "medwaste &",
+          "permission_count": 6
+        },
+        {
+          "module": "medication<b>",
+          "permission_count": 11
+        }
+      ]
+    }
+  },
+  "publichealth": {
+    "_why": [
+      "第十七批（2026-09-06）：公卫应急与监测。三个面板。",
+      "事件两条走 I/II 级（红）与 III/IV 级（橙）、active（两个按钮）与已结案（「—」）；",
+      "监测两条走超标（红）与正常（绿），domain 必须是 DM 的键否则出 undefined。"
+    ],
+    "fn": "renderPublicHealth",
+    "api": {
+      "/api/publichealth/events": [
+        {
+          "id": 1,
+          "title": "食源性疾病暴发 &",
+          "level": "II",
+          "disease_name": "细菌性食物中毒<b>",
+          "status": "active"
+        },
+        {
+          "id": 2,
+          "title": "手足口聚集<img src=x onerror=alert(1)>",
+          "level": "IV",
+          "disease_name": "手足口病",
+          "status": "closed"
+        }
+      ],
+      "/api/publichealth/monitors": [
+        {
+          "domain": "nutrition",
+          "indicator": "学生贫血率 &",
+          "value": 12.5,
+          "threshold": 10.0,
+          "exceeded": true
+        },
+        {
+          "domain": "school",
+          "indicator": "教室采光<b>",
+          "value": 320,
+          "threshold": 300,
+          "exceeded": false
+        }
+      ]
+    }
+  },
+  "critical": {
+    "_why": [
+      "第十七批（2026-09-06）：危急值闭环。两个面板迁（催办面板带红色左边框、条件渲染），",
+      "第三处 `class=\"panel hidden\" id=\"crit-trail-panel\"` 的留痕容器不迁。",
+      "清单三条覆盖 CRIT_STATUS 的空串（待回填，出确认按钮）、acknowledged（处置反馈）、",
+      "resolved（「—」）。"
+    ],
+    "fn": "renderCritical",
+    "api": {
+      "/api/exams/critical": [
+        {
+          "id": 11,
+          "request_id": 101,
+          "conclusion": "血钾 6.8 &",
+          "critical_status": ""
+        },
+        {
+          "id": 12,
+          "request_id": 102,
+          "conclusion": "血红蛋白 45<b>",
+          "critical_status": "acknowledged"
+        },
+        {
+          "id": 13,
+          "request_id": 103,
+          "conclusion": "肌钙蛋白升高<img src=x onerror=alert(1)>",
+          "critical_status": "resolved"
+        }
+      ],
+      "/api/exams/critical/unacknowledged": [
+        {
+          "report_id": 11,
+          "request_id": 101,
+          "conclusion": "血钾 6.8 &",
+          "reported_by": "李医生<b>",
+          "reported_at": "2026-09-01T08:30:00"
+        }
+      ]
+    }
+  },
+  "labqc": {
+    "_why": [
+      "第十七批（2026-09-06）：检验室内质控。两个面板迁；第三处 `class=\"panel hidden\" id=\"lot-detail\"`",
+      "的 L-J 明细容器不迁（点击后才填内容，且带额外 class 与 id）。",
+      "批号两条走启用/停用（标签与按钮文案都跟着翻）。"
+    ],
+    "fn": "renderLabQc",
+    "api": {
+      "/api/labqc/lots": [
+        {
+          "id": 1,
+          "item_name": "血糖 &",
+          "item_code": "GLU<b>",
+          "lot_no": "QC-2026-01",
+          "target_value": 5.5,
+          "sd": 0.2,
+          "active": true
+        },
+        {
+          "id": 2,
+          "item_name": "总胆固醇<img src=x onerror=alert(1)>",
+          "item_code": "CHOL",
+          "lot_no": "QC-2026-02",
+          "target_value": 4.8,
+          "sd": 0.3,
+          "active": false
+        }
+      ]
+    }
+  },
+  "perfindicators": {
+    "_why": [
+      "第十七批（2026-09-06）：绩效指标目录。整页一个无标题裸面板。",
+      "两条走启用/停用（绿/红标签 + 按钮文案）。"
+    ],
+    "fn": "renderPerfIndicators",
+    "api": {
+      "/api/performance/indicators": [
+        {
+          "key": "referral_completion<b>",
+          "name": "转诊结案率 &",
+          "weight": 20,
+          "active": true
+        },
+        {
+          "key": "rx_pass",
+          "name": "处方合格率<img src=x onerror=alert(1)>",
+          "weight": 15,
+          "active": false
+        }
+      ]
+    }
   }
 }

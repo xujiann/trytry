@@ -35,7 +35,7 @@ async function renderArchive() {
   $("#page-desc").textContent = "门诊接诊登记；按电子健康卡号汇聚档案、就诊、报告、慢病、处方";
   const encounters = await api("/api/encounters?limit=50");
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>门诊接诊登记</h3>
+    ${panel("门诊接诊登记", `
       <form class="inline" id="enc-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="doctor_name" placeholder="接诊医师">
@@ -46,13 +46,13 @@ async function renderArchive() {
       ${table(["ID", "患者", "机构", "类型", "诊断", "医师"], encounters, (e) =>
         `<tr><td>${e.id}</td><td>${e.patient_id}</td><td>${e.org_id}</td>
          <td>${e.encounter_type === "inpatient" ? "住院" : "门诊"}</td>
-         <td>${esc(e.diagnosis_name || "—")}</td><td>${esc(e.doctor_name || "—")}</td></tr>`)}</div>
-    <div class="panel"><h3>患者 360 视图</h3>
+         <td>${esc(e.diagnosis_name || "—")}</td><td>${esc(e.doctor_name || "—")}</td></tr>`)}`)}
+    ${panel("患者 360 视图", `
       <form class="inline" id="archive-form">
         <input name="ehc_no" placeholder="电子健康卡号" required>
         <button>查询</button>
       </form>
-      <div id="archive-result"></div></div>`;
+      <div id="archive-result"></div>`)}`;
   $("#enc-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/encounters", formJson(e.target, ["patient_id", "org_id"]), "#enc-msg"); };
   $("#archive-form").onsubmit = async (e) => {
@@ -154,9 +154,9 @@ async function renderAudit() {
        <td><span class="tag ${l.status_code < 400 ? "green" : "red"}">${l.status_code}</span></td></tr>`);
   };
   $("#page-body").innerHTML = `
-    <div class="panel">
+    ${panel("", `
       <form class="inline" id="audit-search"><input name="username" placeholder="按用户名过滤"><button>查询</button></form>
-      <div id="audit-table"></div></div>`;
+      <div id="audit-table"></div>`)}`;
   $("#audit-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("username")); };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();
@@ -177,7 +177,7 @@ async function renderAccessLogs() {
        <td><span class="tag">${esc(r.basis_name)}</span></td></tr>`);
   };
   $("#page-body").innerHTML = `
-    <div class="panel">
+    ${panel("", `
       <form class="inline" id="al-search">
         <input name="patient_id" placeholder="患者ID">
         <input name="username" placeholder="调阅人账号">
@@ -185,7 +185,7 @@ async function renderAccessLogs() {
         <input name="start" placeholder="起 YYYY-MM-DD"><input name="end" placeholder="止 YYYY-MM-DD">
         <button>查询</button></form>
       <p class="desc">按患者查询会一并留痕——查"谁看过某人"本身也是在看这个人的隐私。</p>
-      <div id="al-table"></div></div>`;
+      <div id="al-table"></div>`)}`;
   $("#al-search").onsubmit = async (e) => {
     e.preventDefault(); await draw(formJson(e.target));
   };
@@ -216,12 +216,12 @@ async function renderConsents() {
            <button data-review="${esc(String(r.id))}" data-verdict="rejected" class="danger">拒绝</button></td></tr>`);
   };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>知情同意台账</h3>
+    ${panel("知情同意台账", `
       <form class="inline" id="ct-search"><input name="patient_id" placeholder="患者ID"><button>查询</button></form>
-      <div id="ct-table"></div></div>
-    <div class="panel"><h3>更正 / 注销申请（待审核）</h3>
+      <div id="ct-table"></div>`)}
+    ${panel("更正 / 注销申请（待审核）", `
       <p class="desc">通过即按白名单字段执行变更并落审计；拒绝必须填写意见。</p>
-      <div id="cr-table"></div><p id="cr-msg"></p></div>`;
+      <div id="cr-table"></div><p id="cr-msg"></p>`)}`;
   $("#ct-search").onsubmit = async (e) => { e.preventDefault(); await drawConsents(new FormData(e.target).get("patient_id")); };
   $("#cr-table").onclick = async (e) => {
     const id = e.target.dataset.review; if (!id) return;
@@ -326,18 +326,18 @@ async function renderEmergency() {
   const cases = await api("/api/emergency/cases");
   const ES = { dispatched: ["已调度", "orange"], en_route: ["转运中", "orange"], arrived: ["已到院", ""], admitted: ["已收治", "green"] };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>呼救登记</h3>
+    ${panel("呼救登记", `
       <form class="inline" id="em-form">
         <input name="location" placeholder="事发地点" required><input name="symptom" placeholder="主诉">
         <input name="ambulance_no" placeholder="车牌"><input name="dest_org_id" type="number" placeholder="目标医院ID">
         <input name="patient_id" type="number" placeholder="患者ID(可空)"><button>调度</button>
-      </form><p class="msg" id="em-msg"></p></div>
-    <div class="panel">${table(["ID", "地点", "主诉", "车辆", "状态", "操作"], cases, (c) => {
+      </form><p class="msg" id="em-msg"></p>`)}
+    ${panel("", table(["ID", "地点", "主诉", "车辆", "状态", "操作"], cases, (c) => {
       return `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td><td>${esc(c.ambulance_no)}</td>
         <td>${statusTag(ES, c.status)}</td>
         <td>${c.status !== "admitted" ? `<button class="btn secondary" data-adv="${c.id}">流转</button>
           <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "—"}</td></tr>`;
-    })}</div>`;
+    }))}`;
   $("#em-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/emergency/cases", formJson(e.target, ["dest_org_id", "patient_id"]), "#em-msg"); };
   $("#page-body").onclick = async (e) => {
     const { adv, vital } = e.target.dataset;
@@ -354,19 +354,19 @@ async function renderTelemedicine() {
   const consults = await api("/api/telemedicine/consults");
   const TS = { open: ["待回复", "orange"], replied: ["已回复", "green"], closed: ["已结束", ""] };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>发起咨询</h3>
+    ${panel("发起咨询", `
       <form class="inline" id="tm-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="org_id" type="number" placeholder="机构ID" required>
         <select name="consult_type"><option value="consult">在线咨询</option><option value="repeat_rx">复诊续方</option></select>
         <input name="question" placeholder="咨询内容" required style="min-width:220px"><button>提交</button>
-      </form><p class="msg" id="tm-msg"></p></div>
-    <div class="panel">${table(["ID", "患者", "类型", "内容", "回复", "关联处方", "状态", "操作"], consults, (c) => {
+      </form><p class="msg" id="tm-msg"></p>`)}
+    ${panel("", table(["ID", "患者", "类型", "内容", "回复", "关联处方", "状态", "操作"], consults, (c) => {
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.consult_type === "repeat_rx" ? "续方" : "咨询"}</td>
         <td>${esc(c.question)}</td><td>${esc(c.reply) || "—"}</td><td>${c.prescription_id ?? "—"}</td>
         <td>${statusTag(TS, c.status)}</td>
         <td>${c.status === "open" ? `<button class="btn secondary" data-reply="${c.id}">回复</button>`
           : c.status === "replied" ? `<button class="btn secondary" data-close="${c.id}">结束</button>` : "—"}</td></tr>`;
-    })}</div>`;
+    }))}`;
   $("#tm-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/telemedicine/consults", formJson(e.target, ["patient_id", "org_id"]), "#tm-msg"); };
   $("#page-body").onclick = (e) => {
     const { reply, close } = e.target.dataset;
@@ -914,7 +914,7 @@ async function renderPathology() {
           `<div class="card"><div class="label">${esc(label)}</div>` +
           `<div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}
     </div>
-    <div class="panel"><h3>标本送检登记</h3>
+    ${panel("标本送检登记", `
       <form class="inline" id="sp-form">
         <input name="request_id" type="number" placeholder="病理申请单ID" required>
         <input name="site" placeholder="送检部位">
@@ -922,8 +922,8 @@ async function renderPathology() {
         <input name="fixed_at" placeholder="固定时间 YYYY-MM-DDTHH:MM:SS">
         <input name="fixative" placeholder="固定液"><button>登记</button></form>
       <p class="msg" id="sp-msg"></p>
-      <p class="hint">${esc(stats.caliber)}</p></div>
-    <div class="panel"><h3>标本流转</h3>
+      <p class="hint">${esc(stats.caliber)}</p>`)}
+    ${panel("标本流转", `
       ${table(["标本号", "部位", "状态", "冷缺血", "蜡块/切片", "核收人", "操作"], specimens, (s) =>
         `<tr><td>${esc(s.specimen_no)}</td><td>${esc(s.site || "—")}</td>` +
         `<td>${s.status === "rejected" ? '<span class="tag danger">' + esc(s.status_name) + "</span>" : esc(s.status_name)}` +
@@ -933,7 +933,7 @@ async function renderPathology() {
         `<td>${s.status === "pending"
           ? `<button class="btn sm" data-receive="${s.id}">核收</button><button class="btn sm danger" data-reject="${s.id}">拒收</button>`
           : (s.status === "rejected" || s.status === "read" ? "—" : `<button class="btn sm" data-advance="${s.id}">推进</button>`)}</td></tr>`)}
-    </div>`;
+    `)}`;
   $("#sp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pathology/specimens", formJson(e.target, ["request_id"]), "#sp-msg"); };
   $("#page-body").onclick = (e) => {
     const d = e.target.dataset;
@@ -969,15 +969,15 @@ async function renderProjects() {
           `<div class="card"><div class="label">${esc(label)}</div>` +
           `<div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}
     </div>
-    <div class="panel"><h3>立项</h3>
+    ${panel("立项", `
       <form class="inline" id="pj-form">
         <input name="org_id" type="number" placeholder="机构ID" required><input name="name" placeholder="项目名称" required>
         <input name="category" placeholder="类别" value="general"><input name="owner_name" placeholder="负责人">
         <input name="start_date" placeholder="开始 YYYY-MM-DD"><input name="due_date" placeholder="计划完成 YYYY-MM-DD">
         <input name="budget_amount" type="number" step="0.01" placeholder="预算"><button>立项</button></form>
       <p class="msg" id="pj-msg"></p>
-      <p class="hint">${esc(stats.caliber)}</p></div>
-    <div class="panel"><h3>项目清单</h3>
+      <p class="hint">${esc(stats.caliber)}</p>`)}
+    ${panel("项目清单", `
       ${table(["名称", "负责人", "状态", "进度", "计划完成", "里程碑", "操作"], projects, (p) =>
         `<tr><td>${esc(p.name)}${p.overdue ? ' <span class="tag danger">逾期</span>' : ""}</td>` +
         `<td>${esc(p.owner_name || "—")}</td><td>${esc(p.status_name)}</td>` +
@@ -986,7 +986,7 @@ async function renderProjects() {
         `${p.milestone_overdue ? ' <span class="tag warn">' + p.milestone_overdue + " 逾期</span>" : ""}</td>` +
         `<td><button class="btn sm" data-progress="${p.id}">报进度</button>` +
         `<button class="btn sm" data-ms="${p.id}">加里程碑</button></td></tr>`)}
-    </div>`;
+    `)}`;
   $("#pj-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/projects", formJson(e.target, ["org_id", "budget_amount"]), "#pj-msg"); };
   $("#page-body").onclick = (e) => {
     const d = e.target.dataset;
@@ -1137,7 +1137,7 @@ async function renderRbac() {
   $("#page-desc").textContent = "内置六角色（代码声明，不可删停）与自定义角色的权限点授权";
   const [roles, modules] = await Promise.all([api("/api/rbac/roles"), api("/api/rbac/modules")]);
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>角色</h3>
+    ${panel("角色", `
       <p class="hint">内置角色的权限来自代码内 require_roles 声明，不走授权表；自定义角色按权限点授权。</p>
       <form class="inline" id="role-form">
         <input name="key" placeholder="角色 key（小写字母数字下划线）" required>
@@ -1152,13 +1152,13 @@ async function renderRbac() {
         `<td>${r.builtin ? "—" : `<button class="btn sm" data-grant="${r.id}">授权</button>` +
           `<button class="btn sm" data-view="${r.id}">查看</button>` +
           `<button class="btn sm danger" data-del="${r.id}">删除</button>`}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>权限点模块（共 ${modules.reduce((a, m) => a + m.permission_count, 0)} 个写接口权限点）</h3>
+    `)}
+    ${panel(`权限点模块（共 ${modules.reduce((a, m) => a + m.permission_count, 0)} 个写接口权限点）`, `
       <p class="hint">权限点由平台启动时从路由表自动登记，不手工维护——手工清单与真实接口的偏差最难查。</p>
       ${table(["模块", "权限点数"], modules, (m) =>
         `<tr><td>${esc(m.module)}</td><td>${m.permission_count}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>角色权限明细</h3><div id="rbac-detail"><p class="empty">点上方「查看」</p></div></div>`;
+    `)}
+    ${panel("角色权限明细", `<div id="rbac-detail"><p class="empty">点上方「查看」</p></div>`)}`;
   $("#role-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/rbac/roles", formJson(e.target, []), "#role-msg"); };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
@@ -1186,19 +1186,19 @@ async function renderPublicHealth() {
   const [events, monitors] = await Promise.all([api("/api/publichealth/events"), api("/api/publichealth/monitors")]);
   const DM = { nutrition: "营养", environment: "环境", occupational: "职业", radiation: "放射", school: "学校" };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>事件立案</h3>
+    ${panel("事件立案", `
       <form class="inline" id="ev-form">
         <input name="title" placeholder="事件名称" required style="min-width:220px">
         <select name="level"><option>IV</option><option>III</option><option>II</option><option>I</option></select>
         <input name="disease_name" placeholder="相关病种"><button>立案</button></form>
       <h3 style="margin-top:12px">诊间医防提醒</h3>
       <form class="inline" id="rem-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询提醒</button></form>
-      <div id="rem-result"></div><p class="msg" id="ph-msg"></p></div>
-    <div class="panel"><h3>事件列表</h3>${table(["ID", "事件", "级别", "病种", "状态", "操作"], events, (ev) =>
+      <div id="rem-result"></div><p class="msg" id="ph-msg"></p>`)}
+    ${panel("事件列表", table(["ID", "事件", "级别", "病种", "状态", "操作"], events, (ev) =>
       `<tr><td>${ev.id}</td><td>${esc(ev.title)}</td><td><span class="tag ${ev.level === "I" || ev.level === "II" ? "red" : "orange"}">${ev.level}级</span></td>
        <td>${esc(ev.disease_name)}</td><td><span class="tag ${ev.status === "active" ? "red" : "green"}">${ev.status === "active" ? "处置中" : "已结案"}</span></td>
-       <td>${ev.status === "active" ? `<button class="btn secondary" data-act="${ev.id}">处置记录</button><button class="btn secondary" data-close="${ev.id}">结案</button>` : "—"}</td></tr>`)}</div>
-    <div class="panel"><h3>卫生监测（营养/环境/职业/放射/学校）</h3>
+       <td>${ev.status === "active" ? `<button class="btn secondary" data-act="${ev.id}">处置记录</button><button class="btn secondary" data-close="${ev.id}">结案</button>` : "—"}</td></tr>`))}
+    ${panel("卫生监测（营养/环境/职业/放射/学校）", `
       <form class="inline" id="mon-form">
         <select name="domain">${Object.entries(DM).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="org_id" type="number" placeholder="机构ID" required><input name="indicator" placeholder="监测指标" required>
@@ -1206,7 +1206,7 @@ async function renderPublicHealth() {
         <input name="record_date" placeholder="日期"><button>登记</button></form>
       ${table(["领域", "指标", "值/阈值", "状态"], monitors, (m) =>
         `<tr><td>${DM[m.domain]}</td><td>${esc(m.indicator)}</td><td>${m.value} / ${m.threshold}</td>
-         <td>${m.exceeded ? '<span class="tag red">超标</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
+         <td>${m.exceeded ? '<span class="tag red">超标</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}`)}`;
   $("#ev-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/events", formJson(e.target), "#ph-msg"); };
   $("#mon-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/monitors", formJson(e.target, ["org_id", "value", "threshold"]), "#ph-msg"); };
   $("#rem-form").onsubmit = async (e) => {
@@ -1420,11 +1420,11 @@ async function renderCritical() {
   const [critical, unacked] = await Promise.all([
     api("/api/exams/critical"), api("/api/exams/critical/unacknowledged")]);
   $("#page-body").innerHTML = `
-    ${unacked.length ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 超时未确认催办（${unacked.length}）</h3>${
+    ${unacked.length ? panel(`⚠ 超时未确认催办（${unacked.length}）`, `${
       table(["报告ID", "申请单", "结论", "报告人", "报告时间"], unacked, (r) =>
         `<tr><td>${r.report_id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
-         <td>${esc(r.reported_by)}</td><td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>危急值清单</h3><p class="msg" id="crit-msg"></p>${
+         <td>${esc(r.reported_by)}</td><td>${esc(r.reported_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`, { accent: "#c62828" }) : ""}
+    ${panel("危急值清单", `<p class="msg" id="crit-msg"></p>${
       table(["报告ID", "申请单", "结论", "闭环状态", "操作"], critical, (r) => {
         const actions = (r.critical_status === "notified" || r.critical_status === "")
           ? `<button class="btn secondary" data-ack="${r.id}">确认接收</button>`
@@ -1433,7 +1433,7 @@ async function renderCritical() {
         return `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
           <td>${statusTag(CRIT_STATUS, r.critical_status)}</td>
           <td>${actions} <button class="btn" data-trail="${r.id}">留痕</button></td></tr>`;
-      })}</div>
+      })}`)}
     <div class="panel hidden" id="crit-trail-panel"><h3>处置留痕轨迹</h3><div id="crit-trail"></div></div>`;
   $("#page-body").onclick = async (e) => {
     const { ack, resolve, trail } = e.target.dataset;
@@ -1727,7 +1727,7 @@ async function renderLabQc() {
   $("#page-desc").textContent = "检验室内质控（IQC）：质控品批号维护 → 测定值录入即判 Westgard 四规则 → 失控处理闭环与 L-J 数据";
   const lots = await api("/api/labqc/lots");
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>新建质控批号</h3>
+    ${panel("新建质控批号", `
       <form class="inline" id="lot-form">
         <input name="org_id" placeholder="机构ID" required style="width:90px">
         <input name="item_code" placeholder="项目编码" required>
@@ -1736,13 +1736,13 @@ async function renderLabQc() {
         <input name="target_value" placeholder="靶值" required style="width:90px">
         <input name="sd" placeholder="SD" required style="width:70px">
         <button>建批号</button></form>
-      <p class="msg" id="labqc-msg"></p></div>
-    <div class="panel"><h3>批号台账</h3>${table(["ID", "项目", "批号", "靶值", "SD", "状态", "操作"], lots, (l) =>
+      <p class="msg" id="labqc-msg"></p>`)}
+    ${panel("批号台账", table(["ID", "项目", "批号", "靶值", "SD", "状态", "操作"], lots, (l) =>
       `<tr><td>${l.id}</td><td>${esc(l.item_name)}（${esc(l.item_code)}）</td><td>${esc(l.lot_no)}</td>
        <td>${l.target_value}</td><td>${l.sd}</td>
        <td><span class="tag ${l.active ? "green" : ""}">${l.active ? "启用" : "停用"}</span></td>
        <td><button class="btn secondary" data-lot="${l.id}">测定值/L-J</button>
-        <button class="btn" data-toggle="${l.id}" data-active="${l.active}">${l.active ? "停用" : "启用"}</button></td></tr>`)}</div>
+        <button class="btn" data-toggle="${l.id}" data-active="${l.active}">${l.active ? "停用" : "启用"}</button></td></tr>`))}
     <div class="panel hidden" id="lot-detail"></div>`;
   const drawLot = async (lotId) => {
     const lj = await api(`/api/labqc/lots/${lotId}/levey-jennings`);
@@ -1962,12 +1962,12 @@ async function renderPerfIndicators() {
   $("#page-desc").textContent = "绩效指标目录：权重调节与启停（调整后按比例归一化计分）";
   const indicators = await api("/api/performance/indicators");
   $("#page-body").innerHTML = `
-    <div class="panel"><p class="msg" id="pi-msg"></p>${
+    ${panel("", `<p class="msg" id="pi-msg"></p>${
       table(["指标", "键", "权重", "状态", "操作"], indicators, (i) =>
         `<tr><td>${esc(i.name)}</td><td>${esc(i.key)}</td><td>${i.weight}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
          <td><button class="btn secondary" data-weight="${esc(i.key)}">调权重</button>
-             <button class="btn" data-toggle-ind="${esc(i.key)}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}</div>`;
+             <button class="btn" data-toggle-ind="${esc(i.key)}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}`)}`;
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
