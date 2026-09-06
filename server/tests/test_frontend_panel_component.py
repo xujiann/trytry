@@ -185,6 +185,13 @@ MIGRATED_PAGES = {
     "renderWorkflows": 5,           # 另有一处 class="panel hidden" 的流转记录容器
     "renderAnalytics": 5,           # 标题里的期间不再 esc()：组件转义标题
     "renderAccounting": 5,          # 另有一处 class="panel hidden" 的凭证明细容器
+    # 第九批 2026-09-06：第一次迁 core.js（剩余量第二大的文件），外加两页 clinical。
+    # 41 个夹具页全量重跑逐字符一致。
+    "renderExams": 5,               # 含一处条件渲染的危急值面板
+    "renderRx": 4,                  # 点评按钮按角色 + 是否已点评显示，条件仍留在调用点
+    "renderAppointments": 4,
+    "renderEducation": 4,           # 渲染末尾还会 drawEduGaps() 追加两个面板（不在本页计数内）
+    "renderInpatient": 4,           # 另有一处 class="panel hidden" 的医嘱单容器
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。

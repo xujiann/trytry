@@ -529,19 +529,19 @@ async function renderEducation() {
   const role = currentRole();
   const LS = { pending: ["待审核", "orange"], approved: ["已排期", ""], rejected: ["已驳回", "red"], finished: ["已结束", "green"] };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>新建课程（管理员）</h3>
+    ${panel("新建课程（管理员）", `
       <form class="inline" id="course-form">
         <input name="title" placeholder="课程名" required style="min-width:220px">
         <select name="course_type"><option value="vod">点播</option><option value="live">直播</option></select>
         <select name="category"><option value="clinical">临床医学</option><option value="tcm">中医适宜技术</option><option value="public_health">公共卫生</option></select>
         <input name="speaker" placeholder="讲者"><button>创建</button>
-      </form><p class="msg" id="edu-msg"></p></div>
-    <div class="panel"><h3>课程列表</h3>${table(["ID", "课程", "形式", "类别", "讲者", "操作"], courses, (c) =>
+      </form><p class="msg" id="edu-msg"></p>`)}
+    ${panel("课程列表", table(["ID", "课程", "形式", "类别", "讲者", "操作"], courses, (c) =>
       `<tr><td>${c.id}</td><td>${esc(c.title)}</td><td>${c.course_type === "live" ? "直播" : "点播"}</td><td>${esc(c.category)}</td><td>${esc(c.speaker)}</td>
-       <td><button class="btn secondary" data-exam="${c.id}">提交考核</button></td></tr>`)}</div>
-    <div class="panel"><h3>我的学习记录</h3>${table(["课程", "成绩", "结果"], mine, (r) =>
-      `<tr><td>${esc(r.title)}</td><td>${r.score}</td><td><span class="tag ${r.passed ? "green" : "red"}">${r.passed ? "合格" : "未合格"}</span></td></tr>`)}</div>
-    <div class="panel"><h3>直播管理（申请 → 管理层排期审核 → 结束；音视频通道为对接项）</h3>
+       <td><button class="btn secondary" data-exam="${c.id}">提交考核</button></td></tr>`))}
+    ${panel("我的学习记录", table(["课程", "成绩", "结果"], mine, (r) =>
+      `<tr><td>${esc(r.title)}</td><td>${r.score}</td><td><span class="tag ${r.passed ? "green" : "red"}">${r.passed ? "合格" : "未合格"}</span></td></tr>`))}
+    ${panel("直播管理（申请 → 管理层排期审核 → 结束；音视频通道为对接项）", `
       <form class="inline" id="live-form">
         <input name="title" placeholder="直播主题" required style="min-width:220px">
         <input name="speaker" placeholder="主讲人">
@@ -555,7 +555,7 @@ async function renderEducation() {
           ? `<button class="btn secondary" data-livefin="${s.id}">结束</button>` : "—";
         return `<tr><td>${s.id}</td><td>${esc(s.title)}</td><td>${esc(s.speaker) || "—"}</td><td>${esc(s.planned_at) || "—"}</td>
           <td>${statusTag(LS, s.status)}</td><td>${esc(s.review_comment) || "—"}</td><td>${actions}</td></tr>`;
-      })}</div>`;
+      })}`)}`;
   $("#course-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/courses", formJson(e.target), "#edu-msg"); };
   $("#live-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/live-sessions", formJson(e.target), "#edu-msg"); };
   $("#page-body").onclick = (e) => {
@@ -1510,10 +1510,10 @@ async function renderInpatient() {
   const AS = { admitted: ["在院", "orange"], discharged: ["已出院", "green"] };
   const wardName = Object.fromEntries(wards.map((w) => [w.id, w.name]));
   $("#page-body").innerHTML = `
-    ${stats.length ? `<div class="panel"><h3>床位效率</h3>${table(["机构", "床位", "占用", "使用率", "在院", "累计出院"], stats, (s) =>
+    ${stats.length ? panel("床位效率", table(["机构", "床位", "占用", "使用率", "在院", "累计出院"], stats, (s) =>
       `<tr><td>${esc(s.org_name)}</td><td>${s.beds_total}</td><td>${s.beds_occupied}</td>
-       <td>${s.occupancy_pct}%</td><td>${s.in_hospital}</td><td>${s.discharged_total}</td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>病区/床位建档（admin）与入院登记</h3>
+       <td>${s.occupancy_pct}%</td><td>${s.in_hospital}</td><td>${s.discharged_total}</td></tr>`)) : ""}
+    ${panel("病区/床位建档（admin）与入院登记", `
       <form class="inline" id="ward-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="name" placeholder="病区名称" required><button>建病区</button></form>
       <form class="inline" id="bed-form"><input name="ward_id" type="number" placeholder="病区ID" required>
@@ -1521,12 +1521,12 @@ async function renderInpatient() {
       <form class="inline" id="adm-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="ward_id" type="number" placeholder="病区ID" required><input name="bed_id" type="number" placeholder="床位ID" required>
         <input name="doctor_name" placeholder="主管医师"><input name="diagnosis_name" placeholder="入院诊断"><button>入院登记</button></form>
-      <p class="msg" id="inp-msg"></p></div>
-    <div class="panel"><h3>床位（${beds.filter((b) => b.status === "free").length} 空闲 / ${beds.length}）</h3>${
+      <p class="msg" id="inp-msg"></p>`)}
+    ${panel(`床位（${beds.filter((b) => b.status === "free").length} 空闲 / ${beds.length}）`,
       table(["ID", "病区", "床号", "状态"], beds, (b) =>
         `<tr><td>${b.id}</td><td>${esc(wardName[b.ward_id] || b.ward_id)}</td><td>${esc(b.bed_no)}</td>
-         <td><span class="tag ${b.status === "free" ? "green" : "orange"}">${b.status === "free" ? "空闲" : "占用"}</span></td></tr>`)}</div>
-    <div class="panel"><h3>住院记录</h3>${
+         <td><span class="tag ${b.status === "free" ? "green" : "orange"}">${b.status === "free" ? "空闲" : "占用"}</span></td></tr>`))}
+    ${panel("住院记录",
       table(["ID", "患者", "病区/床位", "诊断", "状态", "操作"], admissions, (a) => {
         const actions = a.status === "admitted"
           ? `<button class="btn secondary" data-transfer="${a.id}">转床</button>
@@ -1537,7 +1537,7 @@ async function renderInpatient() {
         return `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(wardName[a.ward_id] || a.ward_id)} / ${a.bed_id}</td>
           <td>${esc(a.diagnosis_name)}</td><td>${statusTag(AS, a.status)}</td>
           <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button></td></tr>`;
-      })}</div>
+      }))}
     <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div></div>`;
   $("#ward-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/wards", formJson(e.target, ["org_id"]), "#inp-msg"); };
   $("#bed-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/beds", formJson(e.target, ["ward_id"]), "#inp-msg"); };

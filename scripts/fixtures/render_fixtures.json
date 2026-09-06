@@ -3144,5 +3144,361 @@
         ]
       }
     }
+  },
+  "exams": {
+    "_why": [
+      "第九批（2026-09-06）：共享中心检查检验。危急值面板是条件渲染，夹具给非空 /exams/critical 让它渲染出来。",
+      "申请单表里 pending/diagnosing/其它 三种状态各给一条，把 actions 那段三元的三个分支都走到。",
+      "结论与项目名各带一条 XSS 载荷。"
+    ],
+    "fn": "renderExams",
+    "api": {
+      "/api/exams/critical": [
+        {
+          "id": 501,
+          "request_id": 301,
+          "conclusion": "血钾 6.8 mmol/L 危急<img src=x onerror=alert(1)>"
+        },
+        {
+          "id": 502,
+          "request_id": 302,
+          "conclusion": "疑似气胸"
+        }
+      ],
+      "/api/exams": [
+        {
+          "id": 301,
+          "patient_id": 31,
+          "center_type": "lab",
+          "item_name": "血生化全套 & 电解质",
+          "status": "pending"
+        },
+        {
+          "id": 302,
+          "patient_id": 32,
+          "center_type": "imaging",
+          "item_name": "胸部 CT",
+          "status": "diagnosing"
+        },
+        {
+          "id": 303,
+          "patient_id": 33,
+          "center_type": "ecg",
+          "item_name": "常规心电图<b>",
+          "status": "reported"
+        }
+      ]
+    }
+  },
+  "rx": {
+    "_why": [
+      "第九批（2026-09-06）：处方与合理用药。点评按钮只对 pharmacist/admin 显示且只对未点评的处方出现",
+      "（localStorage 固定 admin；41/42 已点评、43 未点评，正好把两种情况都渲染到）。",
+      "处方队列里 pending_review / auto_passed / approved 三态各一条，把 actions 三元的分支走全；",
+      "规则库第二条各列留空，钉住 `|| \"—\"` 回落；点评记录一条合理一条不合理，钉住绿/红两种 tag。"
+    ],
+    "fn": "renderRx",
+    "localStorage": {
+      "medplat_role": "admin"
+    },
+    "api": {
+      "/api/prescriptions/comment-stats": {
+        "commented": 18,
+        "unreasonable": 3,
+        "reasonable_rate_pct": 83.3
+      },
+      "/api/prescriptions/comment-reviews": [
+        {
+          "id": 71,
+          "prescription_id": 41,
+          "grade": "unreasonable",
+          "issues": "超说明书用药 & 重复给药",
+          "comment": "建议改为单药<b>",
+          "at": "2026-09-01T10:00:00"
+        },
+        {
+          "id": 72,
+          "prescription_id": 42,
+          "grade": "reasonable",
+          "issues": "",
+          "comment": "",
+          "at": "2026-09-02T11:30:00"
+        }
+      ],
+      "/api/prescriptions/rules": [
+        {
+          "drug_code": "AMOX",
+          "max_daily_dose": 3000,
+          "dose_unit": "mg",
+          "interactions": "华法林<img src=x onerror=alert(1)>",
+          "contraindicated_diagnoses": "青霉素过敏",
+          "special_groups": "孕妇慎用",
+          "renal_hepatic_note": "肾功能不全减量"
+        },
+        {
+          "drug_code": "MET",
+          "max_daily_dose": 2000,
+          "dose_unit": "mg",
+          "interactions": "",
+          "contraindicated_diagnoses": "",
+          "special_groups": "",
+          "renal_hepatic_note": ""
+        }
+      ],
+      "/api/prescriptions": [
+        {
+          "id": 41,
+          "patient_id": 31,
+          "diagnosis_name": "社区获得性肺炎<b>",
+          "status": "pending_review",
+          "review_comment": "日剂量超上限"
+        },
+        {
+          "id": 42,
+          "patient_id": 32,
+          "diagnosis_name": "2 型糖尿病",
+          "status": "auto_passed",
+          "review_comment": ""
+        },
+        {
+          "id": 43,
+          "patient_id": 33,
+          "diagnosis_name": "高血压",
+          "status": "approved",
+          "review_comment": "药师已复核"
+        }
+      ]
+    }
+  },
+  "appointments": {
+    "_why": [
+      "第九批（2026-09-06）：预约与导诊。四个面板都无条件渲染；号源表里给一条约满、一条未满，",
+      "钉住 booked>=capacity 那个红/绿 tag；预约记录里 booked / fulfilled 两态各一条，",
+      "把「核销/取消」与「—」两个分支都走到。导诊结果由点击后才渲染，本页比对不覆盖。"
+    ],
+    "fn": "renderAppointments",
+    "api": {
+      "/api/appointments/slots": [
+        {
+          "id": 9,
+          "org_id": 2,
+          "resource_type": "exam",
+          "resource_name": "CT 室上午 & 增强",
+          "slot_date": "2026-09-10",
+          "slot_time": "09:00-10:00",
+          "booked": 5,
+          "capacity": 5
+        },
+        {
+          "id": 10,
+          "org_id": 3,
+          "resource_type": "outpatient",
+          "resource_name": "内科门诊<b>",
+          "slot_date": "2026-09-10",
+          "slot_time": "",
+          "booked": 2,
+          "capacity": 20
+        }
+      ],
+      "/api/appointments": [
+        {
+          "id": 61,
+          "slot_id": 9,
+          "patient_id": 31,
+          "status": "booked"
+        },
+        {
+          "id": 62,
+          "slot_id": 10,
+          "patient_id": 32,
+          "status": "fulfilled"
+        }
+      ]
+    }
+  },
+  "education": {
+    "_why": [
+      "第九批（2026-09-06）：教育培训。直播表里的操作列按角色 + 状态分三支，",
+      "夹具固定 director 并给 pending/approved/finished 三态，把三支都渲染到。",
+      "渲染函数最后还会 await drawEduGaps() 往页面尾部追加两个面板（课件资源 / 实训计划），",
+      "那两个接口也要给数据，否则整页抛错——比对器会报「渲染失败」而不是「字节不同」。"
+    ],
+    "fn": "renderEducation",
+    "localStorage": {
+      "medplat_role": "director"
+    },
+    "api": {
+      "/api/education/courses": [
+        {
+          "id": 1,
+          "title": "县域医共体政策解读<img src=x onerror=alert(1)>",
+          "course_type": "vod",
+          "category": "clinical",
+          "speaker": "张主任"
+        },
+        {
+          "id": 2,
+          "title": "中医适宜技术 & 推拿",
+          "course_type": "live",
+          "category": "tcm",
+          "speaker": "李医师"
+        }
+      ],
+      "/api/education/my-records": [
+        {
+          "title": "县域医共体政策解读<img src=x onerror=alert(1)>",
+          "score": 88,
+          "passed": true
+        },
+        {
+          "title": "中医适宜技术 & 推拿",
+          "score": 52,
+          "passed": false
+        }
+      ],
+      "/api/education/live-sessions": [
+        {
+          "id": 11,
+          "title": "急救技能直播<b>",
+          "speaker": "王医师",
+          "planned_at": "2026-09-10 19:00",
+          "status": "pending",
+          "review_comment": ""
+        },
+        {
+          "id": 12,
+          "title": "合理用药",
+          "speaker": "",
+          "planned_at": "",
+          "status": "approved",
+          "review_comment": "同意排期"
+        },
+        {
+          "id": 13,
+          "title": "院感防控",
+          "speaker": "赵医师",
+          "planned_at": "2026-09-01 19:00",
+          "status": "finished",
+          "review_comment": ""
+        }
+      ],
+      "/api/education/material-stats": {
+        "total_plays": 420,
+        "total_materials": 16,
+        "top": [
+          {
+            "id": 21,
+            "title": "政策解读课件 & 附录",
+            "material_type_name": "PDF",
+            "play_count": 180
+          },
+          {
+            "id": 22,
+            "title": "推拿手法演示<b>",
+            "material_type_name": "视频",
+            "play_count": 95
+          }
+        ]
+      },
+      "/api/education/training-plans": [
+        {
+          "id": 5,
+          "title": "心肺复苏实训<b>",
+          "org_id": 2,
+          "plan_date": "2026-09-20",
+          "capacity": 20,
+          "enrolled": 12,
+          "remaining": 8,
+          "status": "open",
+          "trainer": "孙教员"
+        },
+        {
+          "id": 6,
+          "title": "静脉穿刺实训",
+          "org_id": 3,
+          "plan_date": "2026-09-25",
+          "capacity": 10,
+          "enrolled": 10,
+          "remaining": 0,
+          "status": "closed",
+          "trainer": ""
+        }
+      ]
+    }
+  },
+  "inpatient": {
+    "_why": [
+      "第九批（2026-09-06）：住院管理。床位效率面板是条件渲染（stats 非空才出）。",
+      "床位给一空闲一占用，钉住绿/橙两种 tag 与标题里的「N 空闲 / M」计数；",
+      "住院记录 admitted/discharged 各一条，把四个操作按钮与「—」两支都走到。",
+      "`class=\"panel hidden\" id=\"inp-orders-panel\"` 的医嘱单容器不迁：panel() 出不了额外 class 与 id。"
+    ],
+    "fn": "renderInpatient",
+    "api": {
+      "/api/inpatient/wards": [
+        {
+          "id": 1,
+          "org_id": 2,
+          "name": "内一科 & 呼吸",
+          "ward_type": "general"
+        },
+        {
+          "id": 2,
+          "org_id": 2,
+          "name": "外一科<b>",
+          "ward_type": "general"
+        }
+      ],
+      "/api/inpatient/beds": [
+        {
+          "id": 11,
+          "ward_id": 1,
+          "bed_no": "01-01",
+          "status": "free"
+        },
+        {
+          "id": 12,
+          "ward_id": 2,
+          "bed_no": "02-03",
+          "status": "occupied"
+        }
+      ],
+      "/api/inpatient/admissions": [
+        {
+          "id": 77,
+          "patient_id": 31,
+          "ward_id": 2,
+          "bed_id": 12,
+          "diagnosis_name": "社区获得性肺炎<img src=x onerror=alert(1)>",
+          "status": "admitted"
+        },
+        {
+          "id": 78,
+          "patient_id": 32,
+          "ward_id": 1,
+          "bed_id": 11,
+          "diagnosis_name": "急性阑尾炎",
+          "status": "discharged"
+        }
+      ],
+      "/api/inpatient/stats": [
+        {
+          "org_name": "县人民医院",
+          "beds_total": 320,
+          "beds_occupied": 278,
+          "occupancy_pct": 86.9,
+          "in_hospital": 278,
+          "discharged_total": 1250
+        },
+        {
+          "org_name": "东镇卫生院<b>",
+          "beds_total": 40,
+          "beds_occupied": 22,
+          "occupancy_pct": 55.0,
+          "in_hospital": 22,
+          "discharged_total": 180
+        }
+      ]
+    }
   }
 }

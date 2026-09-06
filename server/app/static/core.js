@@ -423,14 +423,14 @@ async function renderAppointments() {
   const RT = { outpatient: "门诊", exam: "检查", lab: "检验" };
   const AS = { booked: ["已预约", "green"], cancelled: ["已取消", "red"], fulfilled: ["已就诊", ""] };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>智能导诊台（功能指引 ⑨）</h3>
+    ${panel("智能导诊台（功能指引 ⑨）", `
       <p class="desc">分诊工位用：录症状出科室建议，急症症状直接提示走急诊——导诊完就地预约</p>
       <form class="inline" id="triage-form">
         <input name="symptoms" placeholder="症状，逗号分隔（如：胸痛,心悸）" required style="min-width:260px">
         <button>导诊</button>
       </form><p class="msg" id="triage-msg"></p>
-      <div id="triage-result"></div></div>
-    <div class="panel"><h3>发布号源</h3>
+      <div id="triage-result"></div>`)}
+    ${panel("发布号源", `
       <form class="inline" id="slot-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="resource_type">${Object.entries(RT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
@@ -445,18 +445,18 @@ async function renderAppointments() {
         <input name="slot_id" type="number" placeholder="号源ID" required>
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <button>预约</button>
-      </form><p class="msg" id="apt-msg"></p></div>
-    <div class="panel"><h3>号源</h3>${table(["ID", "机构", "类型", "资源", "日期/时段", "已约/容量"], slots, (s) =>
+      </form><p class="msg" id="apt-msg"></p>`)}
+    ${panel("号源", table(["ID", "机构", "类型", "资源", "日期/时段", "已约/容量"], slots, (s) =>
       `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${RT[s.resource_type]}</td><td>${esc(s.resource_name)}</td>
        <td>${esc(s.slot_date)} ${esc(s.slot_time)}</td>
-       <td><span class="tag ${s.booked >= s.capacity ? "red" : "green"}">${s.booked}/${s.capacity}</span></td></tr>`)}</div>
-    <div class="panel"><h3>预约记录</h3>${table(["ID", "号源", "患者", "状态", "操作"], appointments, (a) => {
+       <td><span class="tag ${s.booked >= s.capacity ? "red" : "green"}">${s.booked}/${s.capacity}</span></td></tr>`))}
+    ${panel("预约记录", table(["ID", "号源", "患者", "状态", "操作"], appointments, (a) => {
       return `<tr><td>${a.id}</td><td>${a.slot_id}</td><td>${a.patient_id}</td>
         <td>${statusTag(AS, a.status)}</td>
         <td>${a.status === "booked"
           ? `<button class="btn secondary" data-fulfill="${a.id}">核销</button>
              <button class="btn danger" data-cancel="${a.id}">取消</button>` : "—"}</td></tr>`;
-    })}</div>`;
+    }))}`;
   $("#triage-form").onsubmit = async (e) => {
     e.preventDefault();
     const symptoms = String(new FormData(e.target).get("symptoms") || "")
@@ -808,7 +808,7 @@ async function renderExams() {
   $("#page-desc").textContent = "影像/心电/检验/病理：基层检查、上级诊断、结果互认、危急值管理";
   const [requests, critical] = await Promise.all([api("/api/exams"), api("/api/exams/critical")]);
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>开单（先查互认）</h3>
+    ${panel("开单（先查互认）", `
       <form class="inline" id="exam-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="from_org_id" type="number" placeholder="申请机构ID" required>
@@ -817,12 +817,12 @@ async function renderExams() {
         <input name="item_name" placeholder="项目名称" required>
         <input name="clinical_info" placeholder="临床信息">
         <button>提交申请</button>
-      </form><p class="msg" id="exam-msg"></p></div>
-    ${critical.length ? `<div class="panel"><h3>⚠ 危急值（${critical.length}）</h3>${
+      </form><p class="msg" id="exam-msg"></p>`)}
+    ${critical.length ? panel(`⚠ 危急值（${critical.length}）`,
       table(["报告ID", "申请单", "结论", "操作"], critical, (r) =>
         `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
-         <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button></td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>申请单</h3>${table(["ID", "患者", "中心", "项目", "状态", "操作"], requests, (r) => {
+         <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button></td></tr>`)) : ""}
+    ${panel("申请单", table(["ID", "患者", "中心", "项目", "状态", "操作"], requests, (r) => {
       let actions = r.status === "pending"
         ? `<button class="btn secondary" data-claim="${r.id}">领取</button>`
         : r.status === "diagnosing"
@@ -830,13 +830,13 @@ async function renderExams() {
       actions += ` <button class="btn secondary" data-printreq="${r.id}">打印申请单</button>`;
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${CENTER_NAMES[r.center_type]}</td>
         <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td><td>${actions}</td></tr>`;
-    })}</div>
-    <div class="panel"><h3>报告打印</h3>
+    }))}
+    ${panel("报告打印", `
       <form class="inline" id="exam-print-form">
         <input name="report_id" type="number" placeholder="报告ID" required>
         <button>打印报告单</button></form>
-      <p class="msg" id="exam-print-msg"></p></div>
-    <div class="panel"><h3>报告附件（影像截图/PDF，≤10MB，医师/经办上传）</h3>
+      <p class="msg" id="exam-print-msg"></p>`)}
+    ${panel("报告附件（影像截图/PDF，≤10MB，医师/经办上传）", `
       <form class="inline" id="exam-att-form">
         <input name="report_id" type="number" placeholder="报告ID" required>
         <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" required>
@@ -844,7 +844,7 @@ async function renderExams() {
       <form class="inline" id="exam-att-query">
         <input name="report_id" type="number" placeholder="报告ID" required>
         <button>查附件</button></form>
-      <p class="msg" id="exam-att-msg"></p><div id="exam-att-list"></div></div>`;
+      <p class="msg" id="exam-att-msg"></p><div id="exam-att-list"></div>`)}`;
   $("#exam-att-form").onsubmit = async (e) => {
     e.preventDefault();
     const reportId = new FormData(e.target).get("report_id");
@@ -954,7 +954,7 @@ async function renderRx() {
   const canComment = ["pharmacist", "admin"].includes(currentRole());
   const commented = new Set(creviews.map((c) => c.prescription_id));
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>开方（单药演示）</h3>
+    ${panel("开方（单药演示）", `
       <form class="inline" id="rx-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="机构ID" required>
@@ -964,8 +964,8 @@ async function renderRx() {
         <input name="daily_dose" type="number" step="any" placeholder="日剂量" required>
         <input name="days" type="number" value="7" min="1" style="min-width:70px">
         <button>提交处方</button>
-      </form><p class="msg" id="rx-msg"></p></div>
-    <div class="panel"><h3>用药规则库</h3>
+      </form><p class="msg" id="rx-msg"></p>`)}
+    ${panel("用药规则库", `
       <form class="inline" id="rule-form">
         <input name="drug_code" placeholder="药品编码" required>
         <input name="max_daily_dose" type="number" step="any" placeholder="日剂量上限" required>
@@ -975,8 +975,8 @@ async function renderRx() {
       ${table(["药品编码", "日剂量上限", "相互作用", "禁忌诊断", "特殊人群", "肝肾功能提示"], rules, (r) =>
         `<tr><td>${esc(r.drug_code)}</td><td>${r.max_daily_dose}${esc(r.dose_unit)}</td>
          <td>${esc(r.interactions) || "—"}</td><td>${esc(r.contraindicated_diagnoses) || "—"}</td>
-         <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td></tr>`)}</div>
-    <div class="panel"><h3>处方队列</h3>${table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
+         <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td></tr>`)}`)}
+    ${panel("处方队列", table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
       let actions = p.status === "pending_review"
         ? `<button class="btn secondary" data-approve="1" data-id="${p.id}">通过</button>
            <button class="btn danger" data-approve="0" data-id="${p.id}">退回</button>` : "";
@@ -984,8 +984,8 @@ async function renderRx() {
       actions += ` <button class="btn secondary" data-printrx="${p.id}">打印</button>`;
       return `<tr><td>${p.id}</td><td>${p.patient_id}</td><td>${esc(p.diagnosis_name)}</td>
         <td>${statusTag(RX_STATUS, p.status)}</td><td>${esc(p.review_comment) || "—"}</td><td>${actions || "—"}</td></tr>`;
-    })}</div>
-    <div class="panel"><h3>处方点评（事后监管）</h3>
+    }))}
+    ${panel("处方点评（事后监管）", `
       <div class="cards">
         <div class="card"><div class="label">已点评处方</div><div class="value">${cstats.commented}</div></div>
         <div class="card"><div class="label">不合理处方</div><div class="value${cstats.unreasonable ? " warn" : ""}">${cstats.unreasonable}</div></div>
@@ -993,7 +993,7 @@ async function renderRx() {
       ${table(["处方ID", "结论", "问题类型", "点评意见", "时间"], creviews, (c) =>
         `<tr><td>${c.prescription_id}</td>
          <td><span class="tag ${c.grade === "reasonable" ? "green" : "red"}">${c.grade === "reasonable" ? "合理" : "不合理"}</span></td>
-         <td>${esc(c.issues) || "—"}</td><td>${esc(c.comment) || "—"}</td><td>${esc(c.at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>`;
+         <td>${esc(c.issues) || "—"}</td><td>${esc(c.comment) || "—"}</td><td>${esc(c.at.slice(0, 16).replace("T", " "))}</td></tr>`)}`)}`;
   $("#rx-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
