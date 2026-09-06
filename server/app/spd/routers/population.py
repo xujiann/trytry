@@ -750,10 +750,22 @@ class DistributeIn(BaseModel):
 def distribute_candidates(
     body: DistributeIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """按辖区/病种/风险把目标池患者分发给服务团队（全程管理中心端 #3）。"""
+    """按辖区/病种/风险把目标池患者分发给服务团队（全程管理中心端 #3）。
+
+    **两处机构校验缺一不可**（ADR-0019）：既要能写这条记录**现在**挂的机构（来源），
+    也要能写**要改挂进去**的那家机构（去向）。少了来源那一条，甲院的 doctor 就能把
+    乙院的目标人群改挂到自己名下——实测过，返回 200，且后续签约建档、任务派发、
+    考核计数都会跟着挪走。同文件的 `claim_candidate` 一直是对的，这里是漏了。
+
+    **先全量校验再落笔**：`candidate_ids` 上限 500，一批里混进一条别家的记录就整批 403，
+    不留半成品。这与下面"跳过不满足条件的"不是一回事——那是业务判定，这是越权。
+    """
     if body.team_id is not None and db.get(SpdTeam, body.team_id) is None:
         raise HTTPException(status_code=404, detail="团队不存在")
+    assert_org_writable(db, user, body.org_id)
     rows = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids)).all()
+    for candidate in rows:
+        assert_org_writable(db, user, candidate.org_id)
     for candidate in rows:
         if body.team_id is not None:
             candidate.team_id = body.team_id
