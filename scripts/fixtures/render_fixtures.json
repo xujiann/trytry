@@ -3500,5 +3500,522 @@
         }
       ]
     }
+  },
+  "tcm": {
+    "_why": [
+      "第十批（2026-09-06）：中医药服务。三个面板无条件渲染；下单表里 delivered 与非 delivered",
+      "各一条，把绿/橙 tag 与「流转/—」两支都走到。",
+      "渲染末尾还会 await drawTcmPreparations() 追加中药制剂面板（配方/批次/效期预警），",
+      "它自己要拉三个接口，夹具缺了整页抛错——第九批刚踩过同形状的坑。",
+      "制剂效期预警是条件面板（带橙色左边框），夹具给非空 expiring 让它渲染出来。"
+    ],
+    "fn": "renderTcm",
+    "api": {
+      "/api/tcm/dispense-orders": [
+        {
+          "id": 21,
+          "patient_id": 31,
+          "herbs": "黄芪 30g、当归 10g<img src=x onerror=alert(1)>",
+          "doses": 7,
+          "status": "ordered"
+        },
+        {
+          "id": 22,
+          "patient_id": 32,
+          "herbs": "党参 15g",
+          "doses": 3,
+          "status": "delivered"
+        }
+      ],
+      "/api/tcm/techniques": [
+        {
+          "name": "艾灸 & 温针",
+          "category": "针灸类",
+          "indication": "虚寒证<b>"
+        },
+        {
+          "name": "推拿",
+          "category": "手法类",
+          "indication": "颈肩痛"
+        }
+      ],
+      "/api/tcm/formulas": [
+        {
+          "id": 1,
+          "code": "ZJ-001",
+          "name": "玉屏风颗粒 & 加味",
+          "dosage_form_name": "颗粒剂",
+          "composition": "黄芪、白术、防风<b>",
+          "indication": "表虚自汗",
+          "shelf_life_months": 12
+        },
+        {
+          "id": 2,
+          "code": "ZJ-002",
+          "name": "藿香正气合剂",
+          "dosage_form_name": "合剂/汤剂",
+          "composition": "",
+          "indication": "",
+          "shelf_life_months": 6
+        }
+      ],
+      "/api/tcm/preparation-batches/expiring": [
+        {
+          "batch_no": "P2026-08-01",
+          "formula_id": 1,
+          "expire_date": "2026-09-20",
+          "expired": false,
+          "status": "produced"
+        },
+        {
+          "batch_no": "P2026-01-09",
+          "formula_id": 2,
+          "expire_date": "2026-07-31",
+          "expired": true,
+          "status": "expired"
+        }
+      ],
+      "/api/tcm/preparation-batches": [
+        {
+          "id": 31,
+          "batch_no": "P2026-08-01",
+          "formula_id": 1,
+          "quantity": 200,
+          "unit": "袋",
+          "produced_date": "2026-08-01",
+          "expire_date": "2026-09-20",
+          "expired": false,
+          "status": "produced"
+        },
+        {
+          "id": 32,
+          "batch_no": "P2026-01-09",
+          "formula_id": 2,
+          "quantity": 50,
+          "unit": "瓶",
+          "produced_date": "2026-01-09",
+          "expire_date": "2026-07-31",
+          "expired": true,
+          "status": "expired"
+        }
+      ]
+    }
+  },
+  "vaccinesupply": {
+    "_why": [
+      "第十批（2026-09-06）：疫苗批次与冷链。三个面板无条件渲染，难点全在行分支上——",
+      "批次行的「已过期」标签、可用/不可用、封存/解除封存两个按钮互斥；",
+      "冷链行的超温未处置（出「处置」按钮）/ 超温已处置（出处置说明）/ 正常三支；",
+      "AEFI 行的严重反应（红标签）与一般反应两支。每支都给一条数据走到。",
+      "批次表是 innerHTML 之后再写进 #vb-list 的，比对器会把它当独立容器一起抓。"
+    ],
+    "fn": "renderVaccineSupply",
+    "api": {
+      "/api/vaccine-supply/stats": {
+        "doses": 1240,
+        "aefi": {
+          "total": 2,
+          "severe": 1,
+          "rate_per_100k_doses": 161.29
+        },
+        "batches": {
+          "expired": 1,
+          "frozen": 1,
+          "expiring_soon": 2
+        },
+        "cold_chain": {
+          "exceeded_unhandled": 1
+        }
+      },
+      "/api/vaccine-supply/batches": [
+        {
+          "id": 11,
+          "vaccine_name": "乙肝疫苗 & 成人型",
+          "batch_no": "HB-2026-01<img src=x onerror=alert(1)>",
+          "manufacturer": "某某生物制品<b>",
+          "expire_date": "2027-03-01",
+          "expired": false,
+          "remaining": 180,
+          "quantity": 200,
+          "usable": true,
+          "unusable_reason": "",
+          "status": "normal"
+        },
+        {
+          "id": 12,
+          "vaccine_name": "流感疫苗",
+          "batch_no": "FLU-2025-09",
+          "manufacturer": null,
+          "expire_date": "2026-07-31",
+          "expired": true,
+          "remaining": 20,
+          "quantity": 100,
+          "usable": false,
+          "unusable_reason": "已过期 & 已封存",
+          "status": "frozen"
+        }
+      ],
+      "/api/vaccine-supply/cold-chain": [
+        {
+          "id": 21,
+          "org_id": 3,
+          "device_name": "疫苗冰箱A & 备用",
+          "temperature": 9.4,
+          "range": "2~8℃",
+          "exceeded": true,
+          "handled": false,
+          "handle_note": ""
+        },
+        {
+          "id": 22,
+          "org_id": 3,
+          "device_name": "疫苗冰箱B<img src=x onerror=alert(1)>",
+          "temperature": 5.1,
+          "range": "2~8℃",
+          "exceeded": false,
+          "handled": false,
+          "handle_note": ""
+        },
+        {
+          "id": 23,
+          "org_id": 4,
+          "device_name": "冷藏车",
+          "temperature": 10.2,
+          "range": "2~8℃",
+          "exceeded": true,
+          "handled": true,
+          "handle_note": "已转移至备用冰箱 & 记录复温<b>"
+        }
+      ],
+      "/api/vaccine-supply/aefi": [
+        {
+          "patient_id": 31,
+          "vaccine_code": "HB-01",
+          "batch_no": "HB-2026-01",
+          "reaction_type": "severe",
+          "reaction_type_name": "严重反应 &",
+          "symptom": "过敏性皮疹伴发热<b>",
+          "onset_date": "2026-08-20",
+          "outcome_name": "痊愈"
+        },
+        {
+          "patient_id": 32,
+          "vaccine_code": "FLU-01<img src=x onerror=alert(1)>",
+          "batch_no": null,
+          "reaction_type": "general",
+          "reaction_type_name": "一般反应",
+          "symptom": "接种部位红肿",
+          "onset_date": "2026-08-25",
+          "outcome_name": "好转"
+        }
+      ]
+    }
+  },
+  "recognition": {
+    "_why": [
+      "第十批（2026-09-06）：检查结果互认目录。三个面板，其中「按项目互认次数」是",
+      "条件面板（stats.by_item 非空才渲染），夹具给两条让它渲染出来。",
+      "目录行的启用/停用两支都要走到——标签颜色与按钮文案都跟着 active 翻。",
+      "center_type 必须是 CENTER_NAMES 的键（imaging/ecg/lab/pathology），否则渲染出 undefined。",
+      "资源档案的 device/notes 给一空一非空，覆盖 `esc(x) || \"—\"` 两支。"
+    ],
+    "fn": "renderRecognition",
+    "api": {
+      "/api/exams/recognition-stats": {
+        "recognized_total": 128,
+        "reported_total": 320,
+        "recognition_ratio_pct": 40.0,
+        "saved_exams": 128,
+        "by_item": [
+          {
+            "item_name": "胸部CT & 平扫",
+            "recognized_count": 61
+          },
+          {
+            "item_name": "血常规<b>",
+            "recognized_count": 40
+          }
+        ]
+      },
+      "/api/exams/recognition-items": [
+        {
+          "id": 1,
+          "item_code": "CT-001",
+          "item_name": "胸部CT & 平扫",
+          "center_type": "imaging",
+          "mutual_scope": "county",
+          "active": true
+        },
+        {
+          "id": 2,
+          "item_code": "LAB-002<img src=x onerror=alert(1)>",
+          "item_name": "血常规<b>",
+          "center_type": "lab",
+          "mutual_scope": "city",
+          "active": false
+        }
+      ],
+      "/api/exams/resources": [
+        {
+          "id": 5,
+          "org_id": 3,
+          "center_type": "imaging",
+          "item_name": "胸部CT & 平扫",
+          "device": "西门子 64 排<b>",
+          "price": 180.0,
+          "duration_min": 15,
+          "notes": "检查前去除金属物 & 空腹"
+        },
+        {
+          "id": 6,
+          "org_id": 4,
+          "center_type": "ecg",
+          "item_name": "常规心电图",
+          "device": "",
+          "price": 20.0,
+          "duration_min": 5,
+          "notes": ""
+        }
+      ]
+    }
+  },
+  "maternal": {
+    "_why": [
+      "第十批（2026-09-06）：妇幼保健。孕产妇档案三条覆盖 registered/delivered/closed——",
+      "操作列的按钮组合完全由 status 决定（结案后整列只剩「—」）。",
+      "高危儿清单是条件面板且带红色左边框（accent），夹具给一条让它渲染出来。",
+      "妇女保健第三条故意给一个不在 WH_TYPES 里的 record_type，走 `|| esc(...)` 兜底支。",
+      "渲染末尾还会 await drawPrenatalScreenings() 追加产前筛查面板，它自己拉两个接口；",
+      "缺了整页抛错——第七、九批各踩过一次同形状的坑，这里直接喂上。",
+      "筛查 result 必须是 SCREEN_RESULTS 的键（low_risk/high_risk/critical），statusTag 才出得来。"
+    ],
+    "fn": "renderMaternal",
+    "api": {
+      "/api/maternal/records": [
+        {
+          "id": 1,
+          "patient_id": 31,
+          "edc": "2026-11-20",
+          "gravidity": 2,
+          "parity": 1,
+          "high_risk": true,
+          "risk_factors": "高龄初产 & 妊娠期高血压<img src=x onerror=alert(1)>",
+          "status": "registered"
+        },
+        {
+          "id": 2,
+          "patient_id": 32,
+          "edc": "2026-06-02",
+          "gravidity": 1,
+          "parity": 0,
+          "high_risk": false,
+          "risk_factors": "",
+          "status": "delivered"
+        },
+        {
+          "id": 3,
+          "patient_id": 33,
+          "edc": "2026-01-15",
+          "gravidity": 3,
+          "parity": 2,
+          "high_risk": false,
+          "risk_factors": "",
+          "status": "closed"
+        }
+      ],
+      "/api/maternal/children": [
+        {
+          "id": 11,
+          "name": "张小宝 & 乳名",
+          "gender": "男",
+          "birth_date": "2026-02-01"
+        },
+        {
+          "id": 12,
+          "name": "李小妹<b>",
+          "gender": "女",
+          "birth_date": "2025-12-11"
+        }
+      ],
+      "/api/maternal/children/high-risk": [
+        {
+          "id": 11,
+          "name": "张小宝 & 乳名",
+          "birth_date": "2026-02-01",
+          "risk_note": "新筛听力异常 & 复查未通过<b>"
+        }
+      ],
+      "/api/maternal/women-health": [
+        {
+          "id": 21,
+          "patient_id": 31,
+          "record_type": "premarital",
+          "exam_date": "2026-03-02",
+          "result": "未见异常 & 建议复查",
+          "advice": "补充叶酸<b>"
+        },
+        {
+          "id": 22,
+          "patient_id": 32,
+          "record_type": "gynecology",
+          "exam_date": null,
+          "result": "",
+          "advice": ""
+        },
+        {
+          "id": 23,
+          "patient_id": 33,
+          "record_type": "other<img src=x onerror=alert(1)>",
+          "exam_date": "2026-04-01",
+          "result": "宫颈筛查阴性",
+          "advice": "一年后复查"
+        }
+      ],
+      "/api/maternal/screenings": [
+        {
+          "id": 41,
+          "record_id": 1,
+          "screen_type_name": "唐氏血清学筛查 & 复筛",
+          "screen_date": "2026-05-06",
+          "gest_week": 16,
+          "result": "high_risk",
+          "indicator": "1/180<b>",
+          "flagged_high_risk": true
+        },
+        {
+          "id": 42,
+          "record_id": 2,
+          "screen_type_name": "超声结构筛查<img src=x onerror=alert(1)>",
+          "screen_date": "2026-04-01",
+          "gest_week": null,
+          "result": "low_risk",
+          "indicator": "",
+          "flagged_high_risk": false
+        }
+      ],
+      "/api/maternal/screening-stats": {
+        "total": 12,
+        "high_risk_detect_rate_pct": 16.7
+      }
+    }
+  },
+  "dashboard": {
+    "_why": [
+      "第十批（2026-09-06）：驾驶舱。四个面板里三个是条件的——",
+      "风险预警（带红色左边框 accent）、慢病分级分组、机构绩效评分（另拉一个接口，",
+      "接口挂了就整块不渲染，夹具给上让它渲染出来）。",
+      "指标卡第4项是下钻 key，卡片上的 data-drill 属性跟着有无；warn 类跟着阈值。",
+      "绩效标题里插了服务端返回的周期，夹具把周期也塞成载荷，钉住 esc(perf.period)。",
+      "趋势图要 months 与 series 同长，四条线对应四个颜色。"
+    ],
+    "fn": "renderDashboard",
+    "api": {
+      "/api/metrics/overview": {
+        "resources": {
+          "organizations": 12,
+          "patients": 3480
+        },
+        "service_division": {
+          "grassroots_encounter_ratio_pct": 63.2
+        },
+        "remote_diagnosis": {
+          "reported_total": 320,
+          "recognized_total": 128,
+          "critical_values": 2
+        },
+        "referrals": {
+          "up": 41,
+          "down": 27
+        },
+        "prescription_review": {
+          "total": 900,
+          "pending_review": 7,
+          "rejected": 3
+        },
+        "chronic_management": {
+          "total": 512,
+          "by_level": {
+            "一": 210,
+            "二": 190,
+            "三": 112
+          }
+        },
+        "pharmacy": {
+          "stock_alerts": 4
+        }
+      },
+      "/api/performance/orgs": {
+        "period": "2026<img src=x onerror=alert(1)>",
+        "scorecards": [
+          {
+            "org_name": "县人民医院 & 总院",
+            "score": 92.5
+          },
+          {
+            "org_name": "XX镇卫生院<b>",
+            "score": 81.0
+          }
+        ]
+      },
+      "/api/metrics/alerts": {
+        "total": 2,
+        "items": [
+          {
+            "type": "critical_values",
+            "label": "危急值未处理 &",
+            "count": 2
+          },
+          {
+            "type": "stock_alerts",
+            "label": "缺药预警<b>",
+            "count": 4
+          }
+        ]
+      },
+      "/api/metrics/trends": {
+        "months": [
+          "2026-04",
+          "2026-05",
+          "2026-06",
+          "2026-07",
+          "2026-08",
+          "2026-09"
+        ],
+        "series": {
+          "encounters": [
+            100,
+            120,
+            90,
+            140,
+            160,
+            150
+          ],
+          "exam_reports": [
+            20,
+            30,
+            25,
+            40,
+            35,
+            45
+          ],
+          "referrals": [
+            5,
+            8,
+            6,
+            9,
+            7,
+            10
+          ],
+          "prescriptions": [
+            80,
+            90,
+            70,
+            110,
+            120,
+            115
+          ]
+        }
+      }
+    }
   }
 }

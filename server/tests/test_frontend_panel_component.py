@@ -192,6 +192,14 @@ MIGRATED_PAGES = {
     "renderAppointments": 4,
     "renderEducation": 4,           # 渲染末尾还会 drawEduGaps() 追加两个面板（不在本页计数内）
     "renderInpatient": 4,           # 另有一处 class="panel hidden" 的医嘱单容器
+    # 第十批 2026-09-06：中医药 / 疫苗批次冷链 / 互认目录 / 妇幼保健 / 驾驶舱。
+    # 驾驶舱是首页，四个面板里三个是条件的（预警 / 慢病分级 / 绩效评分），
+    # 绩效那块还另拉一个接口且失败时整块不渲染——夹具三支都喂到才比得出东西。
+    "renderTcm": 3,                 # 渲染末尾还会 drawTcmPreparations() 追加制剂面板（不在本页计数内）
+    "renderVaccineSupply": 3,       # 批次表是 innerHTML 之后再写进 #vb-list 的
+    "renderRecognition": 3,         # 含一处条件渲染的按项目互认次数
+    "renderMaternal": 5,            # 高危儿清单走 accent；另有一处 class="panel hidden" 的筛查史容器
+    "renderDashboard": 4,           # 风险预警走 accent；绩效标题里的期间不再 esc()：组件转义标题
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。

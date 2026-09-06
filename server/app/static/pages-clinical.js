@@ -384,10 +384,10 @@ async function renderTcm() {
   const [orders, techniques] = await Promise.all([api("/api/tcm/dispense-orders"), api("/api/tcm/techniques")]);
   const DS = { ordered: "已下单", dispensed: "已调配", decocted: "已煎煮", delivering: "配送中", delivered: "已送达" };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>智能辨证</h3>
+    ${panel("智能辨证", `
       <form class="inline" id="tcm-diag"><input name="symptoms" placeholder="症状（逗号分隔，如：乏力,气短）" required style="min-width:280px"><button>辨证</button></form>
-      <div id="tcm-diag-result"></div></div>
-    <div class="panel"><h3>共享中药房下单</h3>
+      <div id="tcm-diag-result"></div>`)}
+    ${panel("共享中药房下单", `
       <form class="inline" id="tcm-order">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="from_org_id" type="number" placeholder="机构ID" required>
         <input name="herbs" placeholder="处方饮片" required style="min-width:220px"><input name="doses" type="number" value="7" min="1" style="min-width:60px">
@@ -396,10 +396,10 @@ async function renderTcm() {
       ${table(["ID", "患者", "饮片", "剂数", "状态", "操作"], orders, (o) =>
         `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${esc(o.herbs)}</td><td>${o.doses}</td>
          <td><span class="tag ${o.status === "delivered" ? "green" : "orange"}">${DS[o.status]}</span></td>
-         <td>${o.status !== "delivered" ? `<button class="btn secondary" data-adv="${o.id}">流转</button>` : "—"}</td></tr>`)}</div>
-    <div class="panel"><h3>适宜技术库</h3>
+         <td>${o.status !== "delivered" ? `<button class="btn secondary" data-adv="${o.id}">流转</button>` : "—"}</td></tr>`)}`)}
+    ${panel("适宜技术库", `
       ${table(["名称", "分类", "适应症"], techniques, (t) =>
-        `<tr><td>${esc(t.name)}</td><td>${esc(t.category)}</td><td>${esc(t.indication)}</td></tr>`)}</div>`;
+        `<tr><td>${esc(t.name)}</td><td>${esc(t.category)}</td><td>${esc(t.indication)}</td></tr>`)}`)}`;
   $("#tcm-diag").onsubmit = async (e) => {
     e.preventDefault();
     const symptoms = new FormData(e.target).get("symptoms").split(/[,，]/).map((s) => s.trim()).filter(Boolean);
@@ -606,33 +606,34 @@ async function renderMaternal() {
   const SCREEN_ITEMS = { metabolic: "遗传代谢病", hearing: "听力", chd: "先心病" };
   const hrIds = new Set(highRisk.map((c) => c.id));
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>孕产妇建册 / 儿童建档</h3>
+    ${panel("孕产妇建册 / 儿童建档", `
       <form class="inline" id="mat-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="lmp" placeholder="末次月经 YYYY-MM-DD">
         <input name="edc" placeholder="预产期 YYYY-MM-DD"><button>建册</button></form>
       <form class="inline" id="child-form">
         <input name="name" placeholder="儿童姓名" required><select name="gender"><option>未知</option><option>男</option><option>女</option></select>
         <input name="birth_date" placeholder="出生日期 YYYY-MM-DD" required><input name="guardian_patient_id" type="number" placeholder="监护人患者ID"><button>建档</button></form>
-      <p class="msg" id="mat-msg"></p></div>
-    <div class="panel"><h3>孕产妇档案</h3>${table(["ID", "患者", "预产期", "孕/产次", "高危", "状态", "操作"], records, (r) =>
+      <p class="msg" id="mat-msg"></p>`)}
+    ${panel("孕产妇档案", table(["ID", "患者", "预产期", "孕/产次", "高危", "状态", "操作"], records, (r) =>
       `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${esc(r.edc)}</td><td>G${r.gravidity}P${r.parity}</td>
        <td>${r.high_risk ? `<span class="tag red">高危</span> ${esc(r.risk_factors)}` : '<span class="tag green">正常</span>'}</td>
        <td><span class="tag">${MS[r.status]}</span></td>
        <td>${r.status !== "closed" ? `<button class="btn secondary" data-visit="${r.id}">记录访视</button>
          ${r.status === "registered" ? `<button class="btn secondary" data-delivery="${r.id}">分娩登记</button>` : ""}
-         ${r.status === "delivered" ? `<button class="btn secondary" data-close="${r.id}">结案</button>` : ""}` : "—"}</td></tr>`)}</div>
-    ${highRisk.length ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 高危儿专案清单（${highRisk.length}）</h3>${
+         ${r.status === "delivered" ? `<button class="btn secondary" data-close="${r.id}">结案</button>` : ""}` : "—"}</td></tr>`))}
+    ${highRisk.length ? panel(`⚠ 高危儿专案清单（${highRisk.length}）`,
       table(["ID", "姓名", "出生日期", "高危原因"], highRisk, (c) =>
-        `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.birth_date)}</td><td><span class="tag red">${esc(c.risk_note)}</span></td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>儿童档案（新筛异常自动纳入高危儿）</h3>${table(["ID", "姓名", "性别", "出生日期", "高危", "操作"], children, (c) =>
+        `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.birth_date)}</td><td><span class="tag red">${esc(c.risk_note)}</span></td></tr>`),
+      { accent: "#c62828" }) : ""}
+    ${panel("儿童档案（新筛异常自动纳入高危儿）", table(["ID", "姓名", "性别", "出生日期", "高危", "操作"], children, (c) =>
       `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.gender)}</td><td>${esc(c.birth_date)}</td>
        <td>${hrIds.has(c.id) ? '<span class="tag red">高危</span>' : '<span class="tag green">—</span>'}</td>
        <td><button class="btn secondary" data-cvisit="${c.id}">记录访视</button>
            <button class="btn secondary" data-screen="${c.id}">新筛登记</button>
            <button class="btn" data-shist="${c.id}">筛查史</button>
-           <button class="btn ${hrIds.has(c.id) ? "" : "danger"}" data-hrtoggle="${c.id}" data-cur="${hrIds.has(c.id)}">${hrIds.has(c.id) ? "解除高危" : "标记高危"}</button></td></tr>`)}</div>
+           <button class="btn ${hrIds.has(c.id) ? "" : "danger"}" data-hrtoggle="${c.id}" data-cur="${hrIds.has(c.id)}">${hrIds.has(c.id) ? "解除高危" : "标记高危"}</button></td></tr>`))}
     <div class="panel hidden" id="screen-panel"><h3>新生儿筛查史</h3><div id="screen-list"></div></div>
-    <div class="panel"><h3>妇女保健记录（婚前/孕前/妇女病/避孕节育）</h3>
+    ${panel("妇女保健记录（婚前/孕前/妇女病/避孕节育）", `
       <form class="inline" id="wh-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="record_type">${Object.entries(WH_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
@@ -642,7 +643,7 @@ async function renderMaternal() {
         <button>登记</button></form>
       ${table(["ID", "患者", "类型", "日期", "结果", "指导"], womenHealth, (w) =>
         `<tr><td>${w.id}</td><td>${w.patient_id}</td><td><span class="tag">${WH_TYPES[w.record_type] || esc(w.record_type)}</span></td>
-         <td>${esc(w.exam_date) || "—"}</td><td>${esc(w.result) || "—"}</td><td>${esc(w.advice) || "—"}</td></tr>`)}</div>`;
+         <td>${esc(w.exam_date) || "—"}</td><td>${esc(w.result) || "—"}</td><td>${esc(w.advice) || "—"}</td></tr>`)}`)}`;
   $("#mat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/records", formJson(e.target, ["patient_id"]), "#mat-msg"); };
   $("#child-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/children", formJson(e.target, ["guardian_patient_id"]), "#mat-msg"); };
   $("#wh-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/women-health", formJson(e.target, ["patient_id"]), "#mat-msg"); };
@@ -767,15 +768,15 @@ async function renderVaccineSupply() {
           `<div class="card"><div class="label">${esc(label)}</div>` +
           `<div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}
     </div>
-    <div class="panel"><h3>登记批次</h3>
+    ${panel("登记批次", `
       <form class="inline" id="vb-form">
         <input name="vaccine_code" placeholder="疫苗编码" required><input name="vaccine_name" placeholder="疫苗名称" required>
         <input name="batch_no" placeholder="批号" required><input name="manufacturer" placeholder="厂家">
         <input name="expire_date" placeholder="效期 YYYY-MM-DD" required><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="quantity" type="number" placeholder="数量" value="0"><button>登记</button></form>
       <p class="msg" id="vb-msg"></p>
-      <div id="vb-list"></div></div>
-    <div class="panel"><h3>冷链录温</h3>
+      <div id="vb-list"></div>`)}
+    ${panel("冷链录温", `
       <form class="inline" id="cc-form">
         <input name="org_id" type="number" placeholder="机构ID" required><input name="device_name" placeholder="设备名称" required>
         <input name="temperature" type="number" step="0.1" placeholder="温度℃" required>
@@ -786,8 +787,8 @@ async function renderVaccineSupply() {
         `<tr><td>${r.org_id}</td><td>${esc(r.device_name)}</td><td>${r.temperature}</td><td>${esc(r.range)}</td>` +
         `<td>${r.exceeded ? '<span class="tag danger">超温</span>' : "正常"}</td>` +
         `<td>${r.exceeded ? (r.handled ? esc(r.handle_note) : `<button class="btn sm" data-handle="${r.id}">处置</button>`) : "—"}</td></tr>`)}
-    </div>
-    <div class="panel"><h3>AEFI 报告</h3>
+    `)}
+    ${panel("AEFI 报告", `
       <form class="inline" id="aefi-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="record_id" type="number" placeholder="接种记录ID（可空）">
         <input name="vaccine_code" placeholder="疫苗编码（未关联记录时必填）">
@@ -800,7 +801,7 @@ async function renderVaccineSupply() {
         `<tr><td>${r.patient_id}</td><td>${esc(r.vaccine_code)}</td><td>${esc(r.batch_no || "—")}</td>` +
         `<td>${r.reaction_type === "severe" ? '<span class="tag danger">' + esc(r.reaction_type_name) + "</span>" : esc(r.reaction_type_name)}</td>` +
         `<td>${esc(r.symptom)}</td><td>${esc(r.onset_date)}</td><td>${esc(r.outcome_name)}</td></tr>`)}
-    </div>`;
+    `)}`;
   $("#vb-list").innerHTML = table(["疫苗", "批号", "厂家", "效期", "在库", "状态", "操作"], batches, (r) =>
     `<tr><td>${esc(r.vaccine_name)}</td><td>${esc(r.batch_no)}</td><td>${esc(r.manufacturer || "—")}</td>` +
     `<td>${esc(r.expire_date)}${r.expired ? ' <span class="tag danger">已过期</span>' : ""}</td>` +
@@ -1461,9 +1462,9 @@ async function renderRecognition() {
     ["互认率", stats.recognition_ratio_pct + "%"], ["节约检查次数", stats.saved_exams]];
   $("#page-body").innerHTML = `
     <div class="cards">${cards.map(([l, v]) => `<div class="card"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div></div>`).join("")}</div>
-    ${stats.by_item.length ? `<div class="panel"><h3>按项目互认次数</h3>${
-      barChart(stats.by_item.slice(0, 10).map((i) => [i.item_name, i.recognized_count]), { unit: " 次" })}</div>` : ""}
-    <div class="panel"><h3>目录维护（admin）</h3>
+    ${stats.by_item.length ? panel("按项目互认次数",
+      barChart(stats.by_item.slice(0, 10).map((i) => [i.item_name, i.recognized_count]), { unit: " 次" })) : ""}
+    ${panel("目录维护（admin）", `
       <form class="inline" id="rec-form">
         <input name="item_code" placeholder="项目编码" required>
         <input name="item_name" placeholder="项目名称" required>
@@ -1475,8 +1476,8 @@ async function renderRecognition() {
         `<tr><td>${esc(i.item_code)}</td><td>${esc(i.item_name)}</td><td>${CENTER_NAMES[i.center_type]}</td>
          <td>${i.mutual_scope === "city" ? "市级" : "县域"}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
-         <td><button class="btn secondary" data-toggle="${i.id}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}</div>
-    <div class="panel"><h3>检查资源要素档案（设备/价格/时长/注意事项，admin 建档）</h3>
+         <td><button class="btn secondary" data-toggle="${i.id}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}`)}
+    ${panel("检查资源要素档案（设备/价格/时长/注意事项，admin 建档）", `
       <form class="inline" id="res-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="center_type">${Object.entries(CENTER_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
@@ -1488,7 +1489,7 @@ async function renderRecognition() {
         <button>建档</button></form>
       ${table(["ID", "机构", "中心", "项目", "设备", "价格", "时长", "注意事项"], resources, (r) =>
         `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${CENTER_NAMES[r.center_type]}</td><td>${esc(r.item_name)}</td>
-         <td>${esc(r.device) || "—"}</td><td>${r.price} 元</td><td>${r.duration_min} 分</td><td>${esc(r.notes) || "—"}</td></tr>`)}</div>`;
+         <td>${esc(r.device) || "—"}</td><td>${r.price} 元</td><td>${r.duration_min} 分</td><td>${esc(r.notes) || "—"}</td></tr>`)}`)}`;
   $("#rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/exams/recognition-items", formJson(e.target), "#rec-msg"); };
   $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/exams/resources", formJson(e.target, ["org_id", "price", "duration_min"]), "#rec-msg"); };
   $("#page-body").onclick = async (e) => {

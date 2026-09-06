@@ -279,14 +279,16 @@ async function renderDashboard() {
     const perf = await api("/api/performance/orgs");
     const top = perf.scorecards.slice(0, 8).map((c) => [c.org_name, c.score]);
     // 分数是**周期口径**（缺省当年），标题必须带上周期——不标的话读的人会
-    // 以为是累计数（这正是口径变更前的行为）
-    if (top.length) perfHtml = `<div class="panel"><h3>机构绩效评分（${esc(perf.period)} 年度，前8）</h3>${barChart(top, { unit: " 分" })}</div>`;
+    // 以为是累计数（这正是口径变更前的行为）。
+    // 周期这里**不再自己 esc()**：panel() 已经转义标题，套两层会把 `&` 变成 `&amp;amp;`。
+    if (top.length) perfHtml = panel(`机构绩效评分（${perf.period} 年度，前8）`, barChart(top, { unit: " 分" }));
   } catch (e) { /* 绩效不可用不阻塞驾驶舱 */ }
   const [alerts, trends] = await Promise.all([api("/api/metrics/alerts"), api("/api/metrics/trends?months=6")]);
   const alertBanner = alerts.total
-    ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 风险预警（${alerts.total}）</h3>
+    ? panel(`⚠ 风险预警（${alerts.total}）`, `
        <p style="font-size:13.5px">${alerts.items.map((a) =>
-        `<span class="tag red" style="margin-right:8px;cursor:pointer" data-drill="${esc(a.type)}">${esc(a.label)} ${a.count}</span>`).join("")}</p></div>`
+        `<span class="tag red" style="margin-right:8px;cursor:pointer" data-drill="${esc(a.type)}">${esc(a.label)} ${a.count}</span>`).join("")}</p>`,
+      { accent: "#c62828" })
     : "";
   const trendColors = ["#0b6e6e", "#0a4d78", "#b26a00", "#8d4bab"];
   const trendNames = { encounters: "就诊", exam_reports: "远程诊断", referrals: "转诊", prescriptions: "处方" };
@@ -298,19 +300,21 @@ async function renderDashboard() {
       `<div class="card"${metric ? ` data-drill="${esc(metric)}" style="cursor:pointer" title="点击查看明细"` : ""}>
         <div class="label">${esc(label)}${metric ? " ▸" : ""}</div><div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}</div>
      <div id="drill-panel" class="hidden"></div>
-     <div class="panel"><h3>近6月业务量趋势</h3><div style="margin-bottom:6px">${legend}</div>${lineChart(trends.months, trends.series, trendColors)}</div>
-     ${chronicItems.length ? `<div class="panel"><h3>慢病分级分组</h3>${barChart(chronicItems, { color: "#b26a00", unit: " 人" })}</div>` : ""}
+     ${panel("近6月业务量趋势", `<div style="margin-bottom:6px">${legend}</div>${lineChart(trends.months, trends.series, trendColors)}`)}
+     ${chronicItems.length ? panel("慢病分级分组", barChart(chronicItems, { color: "#b26a00", unit: " 人" })) : ""}
      ${perfHtml}`;
   $("#page-body").onclick = async (e) => {
     const hit = e.target.closest("[data-drill],[data-drillgo],[data-drillpage],[data-drillclose]");
     if (!hit) return;
-    const panel = $("#drill-panel");
+    // 这个局部变量原名 `panel`，正好遮住同名的面板组件函数——上面的模板已经在用
+    // `panel()` 了，同一个函数里两个 `panel` 是给后来人挖坑，就近改名。
+    const drill = $("#drill-panel");
     try {
-      if (hit.dataset.drillclose) return panel.classList.add("hidden");
+      if (hit.dataset.drillclose) return drill.classList.add("hidden");
       if (hit.dataset.drillgo) return nav(hit.dataset.drillgo);
-      if (hit.dataset.drillpage) return await openDrilldown(panel.dataset.metric, Number(hit.dataset.drillpage));
+      if (hit.dataset.drillpage) return await openDrilldown(drill.dataset.metric, Number(hit.dataset.drillpage));
       await openDrilldown(hit.dataset.drill, 0);
-    } catch (err) { panel.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+    } catch (err) { drill.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
 }
 
