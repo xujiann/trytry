@@ -37,20 +37,11 @@ def base(client, admin):
         },
         headers=admin,
     )
-    client.post(
-        "/api/users",
-        json={
-            "username": "mr_doc2",
-            "password": "pass123456",
-            "full_name": "赵医生",
-            "role": "doctor",
-            "org_id": org["id"],
-        },
-        headers=admin,
-    )
     doctor = login(client, "mr_doc", "pass123456")
-    doctor2 = login(client, "mr_doc2", "pass123456")
-    return {"org": org, "doctor": doctor, "doctor2": doctor2}
+    # 原先这里还建了个同院的「赵医生」，专供 test_qc_summary_by_org_and_doctor 去写
+    # **别家机构**的病历——ADR-0021 之后那条路走不通了，赵医生改由那个用例自己建在
+    # 第二家机构名下。这里的账号没有别的调用点，一并去掉。
+    return {"org": org, "doctor": doctor}
 
 
 def new_encounter(client, headers, base, id_card, name):
@@ -210,11 +201,30 @@ def test_critical_value_disposal_rule_conditional(client, admin, base):
 
 
 def test_qc_summary_by_org_and_doctor(client, admin, base):
+    """汇总要按机构与医师分组，所以得有第二家机构的病历。
+
+    **赵医生必须挂在这第二家机构名下**：ADR-0021 之后，医师只能写本机构就诊的病历
+    （原先这里用的是县医院的 `base["doctor2"]` 去写乡镇院的就诊——那正是 P1-46 那个
+    越权，用例当时把它当成了正常路径）。改的是**造数据的路径**，不是断言：
+    仍然是两家机构、赵医生仍然只有 1 份 C 级病历，覆盖面一个字都没少。
+    """
     org2 = client.post(
         "/api/organizations",
         json={"name": "环节质控卫生院", "org_type": "township", "level": "township"},
         headers=admin,
     ).json()
+    client.post(
+        "/api/users",
+        json={
+            "username": "mr_doc_town",
+            "password": "pass123456",
+            "full_name": "赵医生",
+            "role": "doctor",
+            "org_id": org2["id"],
+        },
+        headers=admin,
+    )
+    doctor_town = login(client, "mr_doc_town", "pass123456")
     patient = client.post(
         "/api/patients",
         json={"name": "周乡镇", "id_card": "330281198006069018", "gender": "女", "birth_date": "1980-06-06"},
@@ -223,12 +233,12 @@ def test_qc_summary_by_org_and_doctor(client, admin, base):
     encounter = client.post(
         "/api/encounters",
         json={"patient_id": patient["id"], "org_id": org2["id"], "diagnosis_name": "上呼吸道感染"},
-        headers=base["doctor2"],
+        headers=doctor_town,
     ).json()
     client.post(
         "/api/quality/records",
         json={"encounter_id": encounter["id"], "chief_complaint": "咽痛1天"},
-        headers=base["doctor2"],
+        headers=doctor_town,
     )
     summary = client.get("/api/quality/records/qc-summary", headers=admin).json()
     assert summary["total"] >= 6 and summary["period"] == "累计"

@@ -672,6 +672,11 @@ def upsert_medical_record(
     encounter = db.get(Encounter, body.encounter_id)
     if encounter is None:
         raise HTTPException(status_code=404, detail="就诊记录不存在")
+    # 病历落在**就诊发生的那家机构**名下（org_id 取自 encounter，不由调用方给），
+    # 所以能写到别家只可能是没校验——实测过：甲院 doctor 写乙院的就诊，201，
+    # 病历 org_id=乙院、书写人却是甲院医生，而且这条路径会同步跑 _apply_qc 算缺陷扣分，
+    # 写进去的内容直接进乙院的质控成绩（ADR-0021）。
+    assert_org_writable(db, user, encounter.org_id)
     record = (
         db.query(MedicalRecord).filter(MedicalRecord.encounter_id == body.encounter_id).first()
     )
