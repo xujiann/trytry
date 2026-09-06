@@ -1114,7 +1114,7 @@ async function renderOutpatientDocs() {
     };
   }
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>选择就诊</h3>
+    ${panel("选择就诊", `
       <form class="inline" id="od-pick">
         <input name="encounter_id" type="number" placeholder="就诊ID" value="${encounterId || ""}" required>
         <button>载入该次就诊的文书</button>
@@ -1128,10 +1128,10 @@ async function renderOutpatientDocs() {
             ? `<span class="tag orange">${scoped.completeness.consents_pending}</span>`
             : 0}</b></div>
       </div><p class="desc">${esc(scoped.completeness.note)}</p>` : ""}
-    </div>
+    `)}
 
     ${encounterId ? `
-    <div class="panel"><h3>治疗处置记录</h3>
+    ${panel("治疗处置记录", `
       <form class="inline" id="od-treat">
         <input name="treatment_name" placeholder="处置名称（如雾化吸入）" required>
         <input name="site" placeholder="部位"><input name="dose" placeholder="剂量/参数">
@@ -1145,9 +1145,9 @@ async function renderOutpatientDocs() {
          <td>${esc(t.dose || "—")}</td><td>${esc(t.executor_name || "—")}</td>
          <td>${t.reaction ? esc(t.reaction) : '<span class="tag orange">未记录</span>'}</td>
          <td>${esc(t.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}
-    </div>
+    `)}
 
-    <div class="panel"><h3>门急诊护理记录</h3>
+    ${panel("门急诊护理记录", `
       <form class="inline" id="od-nurse">
         <select name="nursing_level"><option value="level3">三级护理</option>
           <option value="level2">二级护理</option><option value="level1">一级护理</option>
@@ -1160,9 +1160,9 @@ async function renderOutpatientDocs() {
         `<tr><td>${esc(NURSING_LEVELS[n.nursing_level] || n.nursing_level)}</td>
          <td>${esc(n.content)}</td><td>${esc(n.nurse_name || "—")}</td>
          <td>${esc(n.recorded_at || "—")}</td></tr>`)}
-    </div>` : ""}
+    `)}` : ""}
 
-    <div class="panel"><h3>开具知情告知书</h3>
+    ${panel("开具知情告知书", `
       <form class="inline" id="od-consent">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="机构ID" required>
@@ -1184,7 +1184,7 @@ async function renderOutpatientDocs() {
          <td>${esc((c.signed_at || c.created_at).slice(0, 16).replace("T", " "))}</td>
          <td>${c.status === "pending"
            ? `<button data-csign="${c.id}">签署</button><button data-crefuse="${c.id}">拒签</button>` : ""}</td></tr>`)}
-    </div>`;
+    `)}`;
 
   $("#od-pick").onsubmit = (e) => { e.preventDefault();
     localStorage.setItem("medplat_od_encounter", e.target.encounter_id.value.trim()); route(); };
@@ -1347,7 +1347,7 @@ async function renderFund() {
   }
   const thisYear = new Date().getFullYear();
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>基金池</h3>
+    ${panel("基金池", `
       <form class="inline" id="fd-pool">
         <input name="year" type="number" value="${thisYear}" required style="min-width:90px">
         <select name="insurance_type">${Object.entries(INSURANCE_TYPES).map(([v, t]) =>
@@ -1367,10 +1367,10 @@ async function renderFund() {
            ? `<span class="tag red">${p.book_balance}</span>` : p.book_balance}</td>
          <td><span class="tag ${p.status === "settled" ? "green" : ""}">${esc(p.status)}</span></td>
          <td><button data-fdpick="${p.id}">打开</button></td></tr>`)}
-    </div>
+    `)}
 
     ${picked ? `
-    <div class="panel"><h3>预付批次（真实资金流）</h3>
+    ${panel("预付批次（真实资金流）", `
       <form class="inline" id="fd-prepay">
         <input name="batch_no" placeholder="批次号">
         <input name="amount" type="number" step="any" placeholder="金额(元)" required>
@@ -1379,9 +1379,9 @@ async function renderFund() {
       ${table(["批次", "金额", "拨付日期", "备注"], detail.prepay, (r) =>
         `<tr><td>${esc(r.batch_no || "—")}</td><td>${r.amount}</td>
          <td>${esc(r.paid_date || "—")}</td><td>${esc(r.note || "—")}</td></tr>`)}
-    </div>
+    `)}
 
-    <div class="panel"><h3>月度预结（账面对冲，不产生资金流）</h3>
+    ${panel("月度预结（账面对冲，不产生资金流）", `
       <form class="inline" id="fd-period">
         <input name="period" placeholder="YYYY-MM" required style="min-width:100px">
         <input name="actual_amount" type="number" step="any" placeholder="发生额(留空=按结算单归集)">
@@ -1391,9 +1391,9 @@ async function renderFund() {
         `<tr><td>${esc(r.period)}</td><td>${r.actual_amount}</td>
          <td>${r.source === "auto" ? "系统归集" : "人工核定"}</td>
          <td>${esc(r.note || "—")}</td></tr>`)}
-    </div>
+    `)}
 
-    <div class="panel"><h3>年终清算与结余分配</h3>
+    ${panel("年终清算与结余分配", `
       ${detail.settlement ? renderSettlement(detail.settlement, vars) : `
         <form class="inline" id="fd-settle">
           <input name="total_expense" type="number" step="any" placeholder="全年发生额(留空=各期之和)">
@@ -1403,7 +1403,7 @@ async function renderFund() {
           <button>清算</button>
         </form>
         <p class="desc">清算每个池只能做一次；超支不会自动扣减任何机构。</p>`}
-    </div>` : ""}`;
+    `)}` : ""}`;
 
   $("#fd-pool").onsubmit = (e) => {
     e.preventDefault();

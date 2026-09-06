@@ -231,7 +231,7 @@ async function renderCerts() {
       <div class="card"><div class="label">出生证明</div><div class="value">${stats.birth || 0}</div></div>
       <div class="card"><div class="label">死亡证明</div><div class="value">${stats.death || 0}</div></div>
       <div class="card"><div class="label">缺陷登记</div><div class="value">${stats.defect || 0}</div></div></div>
-    <div class="panel"><h3>证明签发（医师/公卫；死亡须关联患者并填死因，缺陷须填诊断）</h3>
+    ${panel("证明签发（医师/公卫；死亡须关联患者并填死因，缺陷须填诊断）", `
       <form class="inline" id="cert-form">
         <select name="cert_type">${Object.entries(CERT_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="name" placeholder="姓名" required>
@@ -245,8 +245,8 @@ async function renderCerts() {
       <form class="inline" id="cert-filter">
         <select name="cert_type"><option value="">全部类型</option>${Object.entries(CERT_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <button>筛选</button></form>
-      <div id="cert-table"></div></div>
-    <div class="panel"><h3>成人健康体检登记（医师/公卫，异常项自动标记并入360档案）</h3>
+      <div id="cert-table"></div>`)}
+    ${panel("成人健康体检登记（医师/公卫，异常项自动标记并入360档案）", `
       <form class="inline" id="chk-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="体检机构ID" required>
@@ -254,13 +254,13 @@ async function renderCerts() {
         <input name="exam_date" placeholder="体检日期 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
         <input name="summary" placeholder="体检结论" style="min-width:160px">
         <input name="abnormal_items" placeholder="异常项（有则填）" style="min-width:160px">
-        <button>登记</button></form></div>
-    ${abnormal.length ? `<div class="panel"><h3>⚠ 体检异常清单（${abnormal.length}，供慢病筛查建档衔接）</h3>${
+        <button>登记</button></form>`)}
+    ${abnormal.length ? panel(`⚠ 体检异常清单（${abnormal.length}，供慢病筛查建档衔接）`,
       table(["体检ID", "患者", "日期", "异常项"], abnormal, (a) =>
-        `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_items)}</span></td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>体检记录</h3>${table(["ID", "患者", "套餐", "日期", "结论", "异常"], checkups, (c) =>
+        `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_items)}</span></td></tr>`)) : ""}
+    ${panel("体检记录", table(["ID", "患者", "套餐", "日期", "结论", "异常"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
-       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
+       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td></tr>`))}`;
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
   $("#cert-filter").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("cert_type")); };
   $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };

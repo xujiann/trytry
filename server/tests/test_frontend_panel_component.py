@@ -117,6 +117,30 @@ def test_panel的accent也转义():
     assert "esc(accent)" in _fn(CORE, "panel")
 
 
+def test_panel的空标题分支必须是严格等于空串():
+    """`panel("", body)` 不出 `<h3>`——但判据必须是**严格等于空串**，不能是假值。
+
+    为什么要这个分支：仓库里有一批 `<div class="panel">${table(…)}</div>` 形状的
+    裸面板（表格自带表头，再加标题是重复）。组件若一律吐 `<h3></h3>`，迁这些外壳
+    就成了**往 DOM 里加一个空元素**——而 ADR-0009 的前提正是"换外壳是 no-op"。
+
+    为什么判据不能放宽成假值：`esc()` 把 `undefined`/`null` 变成空串（`shared.js:34`
+    的 `String(value ?? "")`），所以 `panel(undefined, …)` 今天渲染成 `<h3></h3>`
+    ——一个空标题块，在页面上占着位、看得见。放宽成假值判断后它会连 `<h3>` 一起消失，
+    "这个面板本来就没标题"与"标题算成了 undefined"两件事就再也分不开了。
+    留着那个空 `<h3>`，反而是能被发现的失败。
+
+    组件三支的实际输出（node 里跑出来的，不是推的）：
+        panel("统计 & 概览", "<b>x</b>") → <div class="panel"><h3>统计 &amp; 概览</h3><b>x</b></div>
+        panel("", "<table></table>")     → <div class="panel"><table></table></div>
+        panel(undefined, "<b>x</b>")     → <div class="panel"><h3></h3><b>x</b></div>
+    """
+    body = _fn(CORE, "panel")
+    assert 'title === ""' in body, "空标题分支要用严格等于空串（假值判断会吞掉 undefined 标题）"
+    assert "${head}" in body and "<h3>" in body, "标题应经由可为空的 head 片段拼进去"
+    assert body.count("<h3>") == 1, "`<h3>` 只该出现在那个可为空的片段里"
+
+
 def test_panel刻意不转义body_且这条边界写在注释里():
     """`body` 是调用方拼好的 HTML，组件不能替它转义。
 
@@ -200,6 +224,14 @@ MIGRATED_PAGES = {
     "renderRecognition": 3,         # 含一处条件渲染的按项目互认次数
     "renderMaternal": 5,            # 高危儿清单走 accent；另有一处 class="panel hidden" 的筛查史容器
     "renderDashboard": 4,           # 风险预警走 accent；绩效标题里的期间不再 esc()：组件转义标题
+    # 第十一批 2026-09-06：账号与参数 / 老年健康 / 证明与体检 / 门急诊文书 / 医保基金池。
+    # 这批开始能迁**无标题的裸面板**了——组件加了 `title === ""` 不出 `<h3>` 的分支，
+    # 在此之前这类外壳一迁就是往 DOM 里加一个空元素（见 test_panel的空标题分支必须是严格等于空串）。
+    "renderUsers": 5,               # 含一处无标题裸面板（用户表）
+    "renderEldercare": 4,           # 含一处无标题裸面板；预警走 accent；这页是 innerHTML= 之后再 +=
+    "renderCerts": 4,               # 证明表格由末尾的 draw() 写进 #cert-table（不在本页计数内）
+    "renderOutpatientDocs": 4,      # 其中两个包在 `${encounterId ? … : ""}` 里
+    "renderFund": 4,                # 其中三个包在 `${picked ? … : ""}` 里
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。

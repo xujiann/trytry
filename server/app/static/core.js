@@ -115,10 +115,20 @@ function table(cols, rows, renderRow) {
  * （`$`/`esc`）。
  *
  * `accent` 给左边框上色，既有页面用它区分警示／重点面板。
+ *
+ * **`title === ""` 表示这个面板本来就没有标题**，此时不出 `<h3>`。这不是洁癖：
+ * 仓库里有 16 处**裸面板**——外壳里直接就是一个 `table(…)`，没有 `<h3>`（表格自己带表头，
+ * 再加个标题是重复）。组件若一律吐 `<h3></h3>`，迁移就成了**加一个空元素**
+ * ——ADR-0009 的前提是"换外壳是 no-op"，加元素就不是 no-op 了。
+ * 判据取**严格等于空串**而不是假值：`esc()` 会把 `undefined`/`null` 变成空串，
+ * 所以 `panel(undefined, …)` 今天渲染成 `<h3></h3>`——一个空标题块，在页面上占着位、
+ * 看得见。放宽成假值判断，它就会连 `<h3>` 一起消失，于是"这个面板本来就没标题"和
+ * "标题算成了 undefined"两件事再也分不开。留着那个空 `<h3>`，反而是能被发现的失败。
  */
 function panel(title, body, { accent = "" } = {}) {
   const style = accent ? ` style="border-left:4px solid ${esc(accent)}"` : "";
-  return `<div class="panel"${style}><h3>${esc(title)}</h3>${body}</div>`;
+  const head = title === "" ? "" : `<h3>${esc(title)}</h3>`;
+  return `<div class="panel"${style}>${head}${body}</div>`;
 }
 
 function setMsg(id, text, ok = true) {
@@ -234,24 +244,30 @@ function lineChart(months, series, colors) {
 
 /* 块2：指标下钻——指标卡/预警横幅点击后拉取明细，行可跳转对应业务页 */
 async function openDrilldown(metric, offset = 0) {
-  const panel = $("#drill-panel");
-  if (!panel) return;
-  panel.classList.remove("hidden");
-  panel.innerHTML = "<div class='panel'>明细加载中…</div>";
+  // 局部变量叫 `drill` 而不是 `panel`：`panel()` 是面板组件（本文件上方），
+  // 在会用到它的文件里再声明一个同名局部变量，迟早有人在这儿写下 `panel(...)`
+  // 然后对着"panel is not a function"发呆。渲染驾驶舱那个函数里已经踩过一次。
+  const drill = $("#drill-panel");
+  if (!drill) return;
+  drill.classList.remove("hidden");
+  drill.innerHTML = "<div class='panel'>明细加载中…</div>";
   const limit = 20;
   const d = await api(`/api/metrics/drilldown?metric=${encodeURIComponent(metric)}&offset=${offset}&limit=${limit}`);
   const pager = [];
   if (offset > 0) pager.push(`<button class="btn secondary" data-drillpage="${Math.max(offset - limit, 0)}">上一页</button>`);
   if (offset + limit < d.total) pager.push(`<button class="btn secondary" data-drillpage="${offset + limit}">下一页</button>`);
-  panel.innerHTML = `<div class="panel" style="border-left:4px solid #0b6e6e">
+  // 这个外壳**迁不了** `panel()`：标题里嵌着一个「关闭」按钮，而组件会把标题整段
+  // `esc()` 掉——迁过去按钮就变成一段转义后的文本显示出来。理由记在
+  // docs/adr/0009 第十一批，别当成"漏迁的"。
+  drill.innerHTML = `<div class="panel" style="border-left:4px solid #0b6e6e">
     <h3>${esc(d.label)} 明细（${d.total}）　<button class="btn secondary" data-drillclose="1">关闭</button></h3>
     <p class="desc" style="font-size:12.5px">点击明细行跳转「${esc(d.page)}」业务页；口径与驾驶舱指标、预警横幅一致</p>
     ${table(d.columns, d.items, (row) =>
       `<tr data-drillgo="${esc(d.page)}" style="cursor:pointer">${
         d.fields.map((f) => `<td>${esc(row[f] ?? "—")}</td>`).join("")}</tr>`)}
     <div style="margin-top:8px">${pager.join(" ")}　<span style="font-size:12.5px;color:#5b6773">第 ${Math.floor(offset / limit) + 1} 页 / 共 ${Math.max(Math.ceil(d.total / limit), 1)} 页</span></div></div>`;
-  panel.dataset.metric = metric;
-  panel.dataset.offset = String(offset);
+  drill.dataset.metric = metric;
+  drill.dataset.offset = String(offset);
 }
 
 async function renderDashboard() {

@@ -4017,5 +4017,434 @@
         }
       }
     }
+  },
+  "users": {
+    "_why": [
+      "第十一批（2026-09-06）：账号与系统参数。五个面板，其中第三个是**无标题裸面板**",
+      "（`<div class=\"panel\">${table(…)}</div>`，表格自带表头），迁它靠 panel(\"\", …)。",
+      "用户第三条故意给一个不在 ROLE_NAMES 里的角色 + 一个不在 orgs 里的 org_id，",
+      "把 `ROLE_NAMES[u.role] || esc(u.role)` 与 `orgNames[…] || u.org_id` 两条兜底都走到。",
+      "role-changes 与 params 的时间都要 ≥16 字符——页面直接 `.slice(0, 16)`。"
+    ],
+    "fn": "renderUsers",
+    "api": {
+      "/api/users": [
+        {
+          "id": 1,
+          "username": "admin<b>",
+          "full_name": "张三 & 平台管理员",
+          "role": "admin",
+          "org_id": 3
+        },
+        {
+          "id": 2,
+          "username": "doc01",
+          "full_name": "",
+          "role": "doctor",
+          "org_id": null
+        },
+        {
+          "id": 3,
+          "username": "op07<img src=x onerror=alert(1)>",
+          "full_name": "李四",
+          "role": "legacy_role<b>",
+          "org_id": 99
+        }
+      ],
+      "/api/organizations": [
+        {
+          "id": 3,
+          "name": "县人民医院 & 总院"
+        },
+        {
+          "id": 4,
+          "name": "XX镇卫生院<b>"
+        }
+      ],
+      "/api/users/role-changes": [
+        {
+          "user_id": 2,
+          "old_role": "operator",
+          "new_role": "doctor",
+          "changed_by": 1,
+          "at": "2026-08-01T09:30:00"
+        },
+        {
+          "user_id": 3,
+          "old_role": "legacy_role<b>",
+          "new_role": "admin",
+          "changed_by": 1,
+          "at": "2026-08-02T10:00:00"
+        }
+      ],
+      "/api/mgmt/params": [
+        {
+          "key": "portal.verify_lock_seconds",
+          "value": "300",
+          "description": "居民端验证失败锁定秒数 & 说明",
+          "updated_at": "2026-08-30T12:00:00"
+        },
+        {
+          "key": "portal.notice<img src=x onerror=alert(1)>",
+          "value": "<b>维护中</b>",
+          "description": "",
+          "updated_at": "2026-09-01T08:00:00"
+        }
+      ]
+    }
+  },
+  "eldercare": {
+    "_why": [
+      "第十一批（2026-09-06）：老年健康。这页写法特别——先 `innerHTML =` 预警面板，",
+      "再 `innerHTML +=` 其余三个，比对器两侧行为一致，照比不误。",
+      "四个面板里两个是条件的（预警带红色左边框、失能清单），一个是无标题裸面板。",
+      "评估两条分别走 `care_level === \"能力完好\"` 的绿/红两支；",
+      "预警两条分别走 severe_disability（红）与复评到期（橙）。"
+    ],
+    "fn": "renderEldercare",
+    "api": {
+      "/api/eldercare/alerts": {
+        "total": 2,
+        "alerts": [
+          {
+            "patient_id": 31,
+            "alert_type": "severe_disability",
+            "message": "重度失能 & 未建专案",
+            "assessed_date": "2026-06-01"
+          },
+          {
+            "patient_id": 32,
+            "alert_type": "reassess_due",
+            "message": "年度复评到期<b>",
+            "assessed_date": null
+          }
+        ]
+      },
+      "/api/eldercare/disabled": [
+        {
+          "patient_id": 31,
+          "care_level": "重度失能 &",
+          "adl_score": 25
+        }
+      ],
+      "/api/eldercare/assessments": [
+        {
+          "id": 11,
+          "patient_id": 31,
+          "adl_score": 25,
+          "cognitive_score": 18,
+          "care_level": "重度失能 &",
+          "assessed_date": "2026-06-01"
+        },
+        {
+          "id": 12,
+          "patient_id": 33,
+          "adl_score": 100,
+          "cognitive_score": 29,
+          "care_level": "能力完好",
+          "assessed_date": "2026-07-15"
+        }
+      ]
+    }
+  },
+  "certs": {
+    "_why": [
+      "第十一批（2026-09-06）：出生死亡证明与成人体检。四个面板，异常清单是条件面板。",
+      "证明表格不是随 innerHTML 一起渲染的——`await draw()` 放在渲染函数**最后**",
+      "（P2-31 的根修：先挂监听再取数），它会再拉一次 /api/certs 写进 #cert-table，",
+      "夹具缺这个接口整页抛错。证明第二条给一个不在 CERT_TYPES 里的类型走兜底支。",
+      "体检两条分别走 has_abnormal 真/假，覆盖红标签与「正常」两支。"
+    ],
+    "fn": "renderCerts",
+    "api": {
+      "/api/certs/stats": {
+        "birth": 12,
+        "death": 3,
+        "defect": 1
+      },
+      "/api/certs": [
+        {
+          "id": 1,
+          "cert_no": "BC-2026-001",
+          "cert_type": "birth",
+          "name": "张小宝 & 乳名",
+          "gender": "男",
+          "event_date": "2026-02-01",
+          "detail": "",
+          "org_id": 3
+        },
+        {
+          "id": 2,
+          "cert_no": "DC-2026-002<img src=x onerror=alert(1)>",
+          "cert_type": "legacy_type<b>",
+          "name": "李四",
+          "gender": "女",
+          "event_date": "2026-03-05",
+          "detail": "心源性猝死 & 待查",
+          "org_id": 4
+        }
+      ],
+      "/api/checkups": [
+        {
+          "id": 21,
+          "patient_id": 31,
+          "package_name": "常规体检 & 加项",
+          "exam_date": "2026-05-06",
+          "summary": "血压偏高<b>",
+          "has_abnormal": true,
+          "abnormal_items": "收缩压 150 &"
+        },
+        {
+          "id": 22,
+          "patient_id": 32,
+          "package_name": "常规体检",
+          "exam_date": "2026-05-07",
+          "summary": "",
+          "has_abnormal": false,
+          "abnormal_items": ""
+        }
+      ],
+      "/api/checkups/abnormal": [
+        {
+          "id": 21,
+          "patient_id": 31,
+          "exam_date": "2026-05-06",
+          "abnormal_items": "收缩压 150 &"
+        }
+      ]
+    }
+  },
+  "outpatientdocs": {
+    "_why": [
+      "第十一批（2026-09-06）：门急诊文书。四个面板里两个包在 `${encounterId ? … : \"\"}` 里，",
+      "夹具靠 localStorage 的 medplat_od_encounter 打开那一支（不设就只剩两个面板，",
+      "比对覆盖不到处置与护理记录）。",
+      "告知书三条分别走 pending（出签署/拒签按钮）、signed（绿标签+签署人）、",
+      "refused（红标签+拒签理由），处置记录一条留空 reaction 走「未记录」支。"
+    ],
+    "fn": "renderOutpatientDocs",
+    "localStorage": {
+      "medplat_od_encounter": "7"
+    },
+    "api": {
+      "/api/outpatient/consent-templates": [
+        {
+          "id": 1,
+          "title": "静脉输液知情同意书 &",
+          "version": "v2<b>"
+        },
+        {
+          "id": 2,
+          "title": "特殊检查知情同意书",
+          "version": "v1"
+        }
+      ],
+      "/api/outpatient/consents": [
+        {
+          "id": 51,
+          "patient_id": 31,
+          "consent_type_name": "特殊治疗 &",
+          "title": "静脉输液知情同意书<b>",
+          "template_version": "v2",
+          "status": "pending",
+          "status_name": "待签署",
+          "refuse_reason": "",
+          "signer_name": "",
+          "signer_relation_name": "",
+          "signed_at": null,
+          "created_at": "2026-09-01T09:00:00"
+        },
+        {
+          "id": 52,
+          "patient_id": 32,
+          "consent_type_name": "手术",
+          "title": "手术知情同意书",
+          "template_version": null,
+          "status": "signed",
+          "status_name": "已签署",
+          "refuse_reason": "",
+          "signer_name": "王五 &",
+          "signer_relation_name": "配偶<b>",
+          "signed_at": "2026-09-02T10:30:00",
+          "created_at": "2026-09-02T09:00:00"
+        },
+        {
+          "id": 53,
+          "patient_id": 33,
+          "consent_type_name": "输血",
+          "title": "输血知情同意书",
+          "template_version": "v3",
+          "status": "refused",
+          "status_name": "已拒签",
+          "refuse_reason": "家属要求转院 & 待商议",
+          "signer_name": "赵六",
+          "signer_relation_name": "本人",
+          "signed_at": "2026-09-03T11:00:00",
+          "created_at": "2026-09-03T10:00:00"
+        }
+      ],
+      "/api/outpatient/encounters/7/treatments": [
+        {
+          "treatment_name": "雾化吸入 &",
+          "site": "口鼻",
+          "dose": "布地奈德 1mg<b>",
+          "executor_name": "护士甲",
+          "reaction": "无不适",
+          "created_at": "2026-09-01T09:20:00"
+        },
+        {
+          "treatment_name": "清创换药",
+          "site": null,
+          "dose": null,
+          "executor_name": null,
+          "reaction": "",
+          "created_at": "2026-09-01T10:05:00"
+        }
+      ],
+      "/api/outpatient/encounters/7/nursing-records": [
+        {
+          "nursing_level": "level2",
+          "content": "输液中滴速 40 滴/分 & 观察中",
+          "nurse_name": "护士乙<b>",
+          "recorded_at": "2026-09-01T09:40:00"
+        },
+        {
+          "nursing_level": "legacy_level<img src=x onerror=alert(1)>",
+          "content": "生命体征平稳",
+          "nurse_name": null,
+          "recorded_at": null
+        }
+      ],
+      "/api/outpatient/encounters/7/completeness": {
+        "treatment_records": 2,
+        "nursing_records": 2,
+        "consents_total": 3,
+        "consents_pending": 1,
+        "note": "待签署 1 份 & 请在离院前完成"
+      }
+    }
+  },
+  "fund": {
+    "_why": [
+      "第十一批（2026-09-06）：医保基金池。四个面板里三个包在 `${picked ? … : \"\"}` 里，",
+      "夹具靠 localStorage 的 medplat_fund_pool 打开（不设就只剩基金池一个面板）。",
+      "清算面板走的是**已清算**那一支（renderSettlement 渲染分配明细表）——",
+      "未清算那一支只有一个表单，`table()` 一次都不求值，比对不出东西。",
+      "settlement 给 is_overrun=false：超支支只有一段文字，结余支才有分配明细表。",
+      "基金池两条分别走账面结余为负（红标签）与非负。",
+      "注意这页读 `new Date().getFullYear()`——两侧同一时刻渲染，比对照样成立。"
+    ],
+    "fn": "renderFund",
+    "localStorage": {
+      "medplat_fund_pool": "3"
+    },
+    "api": {
+      "/api/fund/pools": [
+        {
+          "id": 3,
+          "year": 2026,
+          "insurance_type": "resident",
+          "org_group_id": 1,
+          "total_amount": 12000000.0,
+          "prepaid_amount": 8400000.0,
+          "accrued_expense": 9100000.0,
+          "book_balance": -1000000.0,
+          "status": "open<b>"
+        },
+        {
+          "id": 4,
+          "year": 2025,
+          "insurance_type": "legacy_type<img src=x onerror=alert(1)>",
+          "org_group_id": null,
+          "total_amount": 9000000.0,
+          "prepaid_amount": 6300000.0,
+          "accrued_expense": 5800000.0,
+          "book_balance": 500000.0,
+          "status": "settled"
+        }
+      ],
+      "/api/org-groups": [
+        {
+          "id": 1,
+          "name": "东部片区 & 医共体"
+        },
+        {
+          "id": 2,
+          "name": "西部片区<b>"
+        }
+      ],
+      "/api/fund/formula-variables": {
+        "note": "变量取自冻结的绩效快照 & 事后调权不影响已分结果",
+        "variables": [
+          {
+            "name": "score",
+            "desc": "机构绩效得分 &"
+          },
+          {
+            "name": "beds",
+            "desc": "开放床位数<b>"
+          }
+        ]
+      },
+      "/api/fund/pools/3/prepayments": [
+        {
+          "batch_no": "YF-2026-01",
+          "amount": 5000000.0,
+          "paid_date": "2026-01-20",
+          "note": "首笔预付 &"
+        },
+        {
+          "batch_no": null,
+          "amount": 3400000.0,
+          "paid_date": null,
+          "note": null
+        }
+      ],
+      "/api/fund/pools/3/periods": [
+        {
+          "period": "2026-07",
+          "actual_amount": 760000.0,
+          "source": "auto",
+          "note": "按结算单归集 &"
+        },
+        {
+          "period": "2026-08",
+          "actual_amount": 820000.0,
+          "source": "manual",
+          "note": null
+        }
+      ],
+      "/api/fund/pools/3/settlement": {
+        "total_income": 12000000.0,
+        "total_expense": 11200000.0,
+        "balance": 800000.0,
+        "is_overrun": false,
+        "distributed_amount": 0.0,
+        "formula_expr": "score * 1.0",
+        "score_basis": "2026 年度绩效快照 &",
+        "overrun_action_name": "超支不处理",
+        "caliber": {
+          "balance": "结余 = 筹资 - 全年发生额 &",
+          "overrun": "超支只记录<b>，不自动扣减任何机构",
+          "score": "得分取清算时冻结的快照 &"
+        },
+        "distributions": [
+          {
+            "org_name": "县人民医院 & 总院",
+            "score": 92.5,
+            "weight": 1.0,
+            "share_pct": 53.3,
+            "amount": 426400.0
+          },
+          {
+            "org_name": "XX镇卫生院<b>",
+            "score": 81.0,
+            "weight": 1.0,
+            "share_pct": 46.7,
+            "amount": 373600.0
+          }
+        ]
+      }
+    }
   }
 }

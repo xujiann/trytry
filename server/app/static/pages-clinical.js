@@ -75,7 +75,7 @@ async function renderUsers() {
     api("/api/users"), api("/api/organizations"), api("/api/users/role-changes"), api("/api/mgmt/params")]);
   const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>开通账号</h3>
+    ${panel("开通账号", `
       <form class="inline" id="user-form">
         <input name="username" placeholder="用户名（≥3位）" required minlength="3">
         <input name="password" type="password" placeholder="初始密码（≥6位）" required minlength="6">
@@ -83,24 +83,24 @@ async function renderUsers() {
         <select name="role">${Object.entries(ROLE_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <select name="org_id"><option value="">不挂机构</option>${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
         <button>开通</button>
-      </form><p class="msg" id="user-msg"></p></div>
-    <div class="panel"><h3>修改本人密码</h3>
+      </form><p class="msg" id="user-msg"></p>`)}
+    ${panel("修改本人密码", `
       <form class="inline" id="pwd-form">
         <input name="current_password" type="password" placeholder="当前密码" required>
         <input name="new_password" type="password" placeholder="新密码（≥6位）" required minlength="6">
         <button>修改</button>
-      </form><p class="msg" id="pwd-msg"></p></div>
-    <div class="panel">${table(["ID", "用户名", "姓名", "角色", "所属机构", "操作"], usersList, (u) =>
+      </form><p class="msg" id="pwd-msg"></p>`)}
+    ${panel("", table(["ID", "用户名", "姓名", "角色", "所属机构", "操作"], usersList, (u) =>
       `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td>${esc(u.full_name) || "—"}</td>
        <td><span class="tag">${ROLE_NAMES[u.role] || esc(u.role)}</span></td>
        <td>${u.org_id ? esc(orgNames[u.org_id] || u.org_id) : "—"}</td>
-       <td><button class="btn secondary" data-chrole="${u.id}">调角色</button></td></tr>`)}</div>
-    <div class="panel"><h3>角色变更记录（留痕，变更即吊销旧令牌）</h3>${
+       <td><button class="btn secondary" data-chrole="${u.id}">调角色</button></td></tr>`))}
+    ${panel("角色变更记录（留痕，变更即吊销旧令牌）",
       table(["用户ID", "原角色", "新角色", "操作人", "时间"], roleChanges, (r) =>
         `<tr><td>${r.user_id}</td><td><span class="tag">${ROLE_NAMES[r.old_role] || esc(r.old_role)}</span></td>
          <td><span class="tag green">${ROLE_NAMES[r.new_role] || esc(r.new_role)}</span></td>
-         <td>${r.changed_by}</td><td>${esc(r.at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>
-    <div class="panel"><h3>系统参数配置（键值集中管理）</h3>
+         <td>${r.changed_by}</td><td>${esc(r.at.slice(0, 16).replace("T", " "))}</td></tr>`))}
+    ${panel("系统参数配置（键值集中管理）", `
       <form class="inline" id="param-form">
         <input name="key" placeholder="参数键（如 portal.verify_lock_seconds）" required style="min-width:240px">
         <input name="value" placeholder="参数值" required>
@@ -109,7 +109,7 @@ async function renderUsers() {
       <p class="msg" id="param-msg"></p>
       ${table(["键", "值", "说明", "更新时间"], params, (p) =>
         `<tr><td><span class="tag">${esc(p.key)}</span></td><td>${esc(p.value)}</td><td>${esc(p.description) || "—"}</td>
-         <td>${esc(p.updated_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>`;
+         <td>${esc(p.updated_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`)}`;
   $("#user-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -576,23 +576,24 @@ async function renderEldercare() {
   const [assessments, disabled, alerts] = await Promise.all([
     api("/api/eldercare/assessments"), api("/api/eldercare/disabled"), api("/api/eldercare/alerts")]);
   $("#page-body").innerHTML = `
-    ${alerts.total ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 老年健康预警（${alerts.total}）</h3>${
+    ${alerts.total ? panel(`⚠ 老年健康预警（${alerts.total}）`,
       table(["患者", "预警类型", "提示", "末次评估"], alerts.alerts, (a) =>
         `<tr><td>${a.patient_id}</td>
          <td><span class="tag ${a.alert_type === "severe_disability" ? "red" : "orange"}">${a.alert_type === "severe_disability" ? "重度失能专案" : "复评到期"}</span></td>
-         <td>${esc(a.message)}</td><td>${esc(a.assessed_date) || "—"}</td></tr>`)}</div>` : ""}`;
+         <td>${esc(a.message)}</td><td>${esc(a.assessed_date) || "—"}</td></tr>`),
+      { accent: "#c62828" }) : ""}`;
   $("#page-body").innerHTML += `
-    <div class="panel"><h3>新评估</h3>
+    ${panel("新评估", `
       <form class="inline" id="eld-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="adl_score" type="number" min="0" max="100" placeholder="ADL(0-100)" required>
         <input name="cognitive_score" type="number" min="0" max="30" placeholder="认知(0-30)"><input name="tcm_constitution" placeholder="体质">
         <input name="assessed_date" placeholder="评估日期 YYYY-MM-DD"><button>评估</button>
-      </form><p class="msg" id="eld-msg"></p></div>
-    ${disabled.length ? `<div class="panel"><h3>⚠ 失能老人清单（${disabled.length}）</h3>${table(["患者", "分级", "ADL"], disabled, (d) =>
-      `<tr><td>${d.patient_id}</td><td><span class="tag red">${esc(d.care_level)}</span></td><td>${d.adl_score}</td></tr>`)}</div>` : ""}
-    <div class="panel">${table(["ID", "患者", "ADL", "认知", "分级", "日期"], assessments, (a) =>
+      </form><p class="msg" id="eld-msg"></p>`)}
+    ${disabled.length ? panel(`⚠ 失能老人清单（${disabled.length}）`, table(["患者", "分级", "ADL"], disabled, (d) =>
+      `<tr><td>${d.patient_id}</td><td><span class="tag red">${esc(d.care_level)}</span></td><td>${d.adl_score}</td></tr>`)) : ""}
+    ${panel("", table(["ID", "患者", "ADL", "认知", "分级", "日期"], assessments, (a) =>
       `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${a.adl_score}</td><td>${a.cognitive_score}</td>
-       <td><span class="tag ${a.care_level === "能力完好" ? "green" : "red"}">${esc(a.care_level)}</span></td><td>${esc(a.assessed_date)}</td></tr>`)}</div>`;
+       <td><span class="tag ${a.care_level === "能力完好" ? "green" : "red"}">${esc(a.care_level)}</span></td><td>${esc(a.assessed_date)}</td></tr>`))}`;
   $("#eld-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/eldercare/assessments", formJson(e.target, ["patient_id", "adl_score", "cognitive_score"]), "#eld-msg"); };
 }
 
