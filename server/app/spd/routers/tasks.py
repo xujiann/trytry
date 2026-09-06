@@ -963,6 +963,14 @@ def batch_tasks(
     不该让另外 197 条也办不成。
     """
     tasks = db.query(SpdTask).filter(SpdTask.id.in_(body.task_ids)).all()
+    # **越权不进 skipped，整批 403。** 上面那段"逐条判定、不满足条件的跳过"说的是
+    # **业务**条件（任务已结束、已被他人接收）——那些调用方看得到、也确实该继续办其余的。
+    # 机构归属不是业务条件：静默跳过会让调用方拿着 200 以为整批都办了，
+    # 而实际上他本来就不该碰那几条。同文件的单条接口一直是校验的（见 `claim_task`），
+    # 批量版漏了——与 ADR-0019 里 `claim_candidate`/`distribute_candidates` 是同一个形状：
+    # **单条版对、批量版漏**。实测过：甲院 doctor 一次请求把乙院的待办任务取消掉，返回 200。
+    for task in tasks:
+        assert_org_writable(db, user, task.org_id)
     done, skipped = 0, []
     for task in tasks:
         if body.action in ("claim", "urge", "escalate", "cancel") and task.status not in OPEN_STATUSES:
