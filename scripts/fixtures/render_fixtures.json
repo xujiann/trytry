@@ -5144,5 +5144,601 @@
         }
       ]
     }
+  },
+  "spdexpert": {
+    "_why": [
+      "第十四批（2026-09-06）：慢专病临床指导中枢。三个面板全部无条件渲染。",
+      "病种两条：一条规则已配、已发布路径（绿标签），一条两项都缺（红标签），",
+      "把 `has_include_rules` 与 `published_paths` 的四种组合走到两条对角线上。",
+      "category 只有 chronic/special 两支，各给一条。"
+    ],
+    "fn": "renderSpdExpert",
+    "api": {
+      "/api/spd/workbench/expert": {
+        "programs": [
+          {
+            "program_name": "高血压 & 原发性",
+            "category": "chronic",
+            "version": "v2<b>",
+            "has_include_rules": true,
+            "stages": 4,
+            "path_templates": 2,
+            "published_paths": 2,
+            "scales": 3,
+            "enrolled": 512
+          },
+          {
+            "program_name": "糖尿病<img src=x onerror=alert(1)>",
+            "category": "special",
+            "version": "v1",
+            "has_include_rules": false,
+            "stages": 0,
+            "path_templates": 0,
+            "published_paths": 0,
+            "scales": 0,
+            "enrolled": 88
+          }
+        ],
+        "enrollment": {
+          "enrolled": 600
+        },
+        "org_coverage": 12,
+        "paths": {
+          "total": 340,
+          "completion_rate": 71.5
+        },
+        "assessments": {
+          "total": 1280,
+          "by_risk": {
+            "low": 700,
+            "mid": 400,
+            "high": 150,
+            "very_high": 30
+          }
+        },
+        "referrals": {
+          "closure_rate": 88.2
+        },
+        "centers": [
+          {
+            "name": "高血压中心 &",
+            "program_code": "hyp<b>",
+            "lead_dept": "心内科",
+            "version": "v2",
+            "status": "running"
+          },
+          {
+            "name": "糖尿病中心",
+            "program_code": "dm",
+            "lead_dept": "内分泌科<b>",
+            "version": "v1",
+            "status": "draft"
+          }
+        ]
+      }
+    }
+  },
+  "spdpatients": {
+    "_why": [
+      "第十四批（2026-09-06）：筛查建档纳管。四个面板全部无条件渲染，",
+      "但四张表都是 innerHTML **之后**由 drawScreenings/drawEnrollments/drawLifecycle/drawGroups",
+      "分别写进各自容器的（P2-31 之后取数放最后），夹具缺任何一个整页抛错。",
+      "分组规则编辑器还要 /api/spd/meta（第六批踩过同一个坑）。"
+    ],
+    "fn": "renderSpdPatients",
+    "api": {
+      "/api/spd/catalog": {
+        "programs": [
+          {
+            "code": "hyp<img src=x onerror=alert(1)>",
+            "name": "高血压 & 原发性",
+            "category": "chronic",
+            "stages": [],
+            "active": true
+          },
+          {
+            "code": "dm",
+            "name": "糖尿病<b>",
+            "category": "special",
+            "stages": [],
+            "active": true
+          }
+        ],
+        "teams": [
+          {
+            "id": 1,
+            "name": "团队甲 & 全科",
+            "level": "township",
+            "org_id": 2
+          }
+        ],
+        "scales": [
+          {
+            "id": 7,
+            "code": "phq9<b>",
+            "name": "PHQ-9<img src=x onerror=alert(1)>",
+            "category": "screen",
+            "program_code": "hyp"
+          },
+          {
+            "id": 8,
+            "code": "risk1",
+            "name": "心血管风险量表",
+            "category": "risk",
+            "program_code": "hyp"
+          }
+        ],
+        "centers": [],
+        "path_templates": []
+      },
+      "/api/spd/meta": {
+        "fields": [
+          {
+            "key": "age",
+            "label": "年龄 &"
+          }
+        ],
+        "operators": [
+          {
+            "key": ">=",
+            "label": "≥"
+          }
+        ]
+      },
+      "/api/spd/screenings": [
+        {
+          "id": 1,
+          "patient_id": 31,
+          "patient_name": "张三 &",
+          "program_code": "hyp<b>",
+          "source": "opportunistic",
+          "score": 12,
+          "result": "target",
+          "status": "target",
+          "created_at": "2026-09-01T09:00:00"
+        },
+        {
+          "id": 2,
+          "patient_id": 32,
+          "patient_name": "李四<img src=x onerror=alert(1)>",
+          "program_code": "dm",
+          "source": "active",
+          "score": null,
+          "result": "excluded",
+          "status": "excluded",
+          "created_at": "2026-09-02T10:00:00"
+        }
+      ],
+      "/api/spd/enrollments": [
+        {
+          "id": 11,
+          "patient_id": 31,
+          "patient_name": "张三 &",
+          "program_code": "hyp<b>",
+          "risk_level": "high",
+          "status": "enrolled",
+          "team_id": 1,
+          "sign_date": "2026-03-01",
+          "doctor_user_id": 5,
+          "manager_user_id": 6,
+          "org_id": 2
+        },
+        {
+          "id": 12,
+          "patient_id": 32,
+          "patient_name": "李四",
+          "program_code": "dm",
+          "risk_level": "low",
+          "status": "migrated",
+          "team_id": null,
+          "sign_date": "",
+          "doctor_user_id": null,
+          "manager_user_id": null,
+          "org_id": 3
+        }
+      ],
+      "/api/spd/lifecycle-events": [
+        {
+          "id": 21,
+          "enrollment_id": 11,
+          "event": "migrate",
+          "reason": "迁往外地 & 待确认",
+          "status": "pending",
+          "target_org_id": 3,
+          "created_at": "2026-09-03T11:00:00"
+        },
+        {
+          "id": 22,
+          "enrollment_id": 12,
+          "event": "recall",
+          "reason": "",
+          "status": "done",
+          "target_org_id": null,
+          "created_at": "2026-09-04T08:00:00"
+        }
+      ],
+      "/api/spd/groups": [
+        {
+          "id": 31,
+          "name": "高危高血压 & 组",
+          "scope": "team",
+          "dept": "",
+          "member_count": 42,
+          "auto_rules": [
+            {
+              "field": "age",
+              "op": ">=",
+              "value": 65
+            }
+          ]
+        },
+        {
+          "id": 32,
+          "name": "糖尿病随访组<b>",
+          "scope": "dept",
+          "dept": "内分泌科",
+          "member_count": 18,
+          "auto_rules": []
+        }
+      ]
+    }
+  },
+  "spdpath": {
+    "_why": [
+      "第十四批（2026-09-06）：临床路径与任务中心。三个面板无条件渲染；",
+      "路径实例表与任务表都是 innerHTML 之后由 drawInstances/drawTasks 写进容器的。",
+      "任务四条覆盖 pending/doing/done/overdue 四态；一条 escalated、一条被催办过。"
+    ],
+    "fn": "renderSpdPath",
+    "api": {
+      "/api/spd/catalog": {
+        "programs": [
+          {
+            "code": "hyp<img src=x onerror=alert(1)>",
+            "name": "高血压 & 原发性",
+            "category": "chronic",
+            "stages": [],
+            "active": true
+          },
+          {
+            "code": "dm",
+            "name": "糖尿病<b>",
+            "category": "special",
+            "stages": [],
+            "active": true
+          }
+        ],
+        "teams": [
+          {
+            "id": 1,
+            "name": "团队甲 & 全科",
+            "level": "township",
+            "org_id": 2
+          }
+        ],
+        "scales": [
+          {
+            "id": 7,
+            "code": "phq9<b>",
+            "name": "PHQ-9<img src=x onerror=alert(1)>",
+            "category": "screen",
+            "program_code": "hyp"
+          },
+          {
+            "id": 8,
+            "code": "risk1",
+            "name": "心血管风险量表",
+            "category": "risk",
+            "program_code": "hyp"
+          }
+        ],
+        "centers": [],
+        "path_templates": []
+      },
+      "/api/spd/path-templates": [
+        {
+          "id": 41,
+          "code": "hyp-std<b>",
+          "name": "高血压标准路径 &",
+          "version": "v2",
+          "program_code": "hyp",
+          "node_count": 6,
+          "status": "published"
+        },
+        {
+          "id": 42,
+          "code": "dm-std",
+          "name": "糖尿病路径<img src=x onerror=alert(1)>",
+          "version": "v1",
+          "program_code": "dm",
+          "node_count": 0,
+          "status": "draft"
+        }
+      ],
+      "/api/spd/tasks/summary": {
+        "open": 12,
+        "overdue": 3,
+        "escalated": 1,
+        "done": 45
+      },
+      "/api/spd/path-instances": [
+        {
+          "id": 51,
+          "patient_id": 31,
+          "patient_name": "张三 &",
+          "template_name": "高血压标准路径<b>",
+          "current_stage": "随访期",
+          "current_node_key": "fu_1",
+          "progress": 50,
+          "status": "running"
+        },
+        {
+          "id": 52,
+          "patient_id": 32,
+          "patient_name": "李四",
+          "template_name": "糖尿病路径",
+          "current_stage": "",
+          "current_node_key": "",
+          "progress": 100,
+          "status": "finished"
+        }
+      ],
+      "/api/spd/tasks": [
+        {
+          "id": 61,
+          "patient_id": 31,
+          "patient_name": "张三 &",
+          "title": "首次随访<b>",
+          "task_type": "followup",
+          "scene": "path",
+          "priority": "high",
+          "status": "pending",
+          "due_date": "2026-09-10",
+          "escalated": false,
+          "urged_count": 0
+        },
+        {
+          "id": 62,
+          "patient_id": 31,
+          "patient_name": "张三 &",
+          "title": "复查血压",
+          "task_type": "followup",
+          "scene": "rule",
+          "priority": "normal",
+          "status": "doing",
+          "due_date": "2026-09-12",
+          "escalated": false,
+          "urged_count": 2
+        },
+        {
+          "id": 63,
+          "patient_id": 32,
+          "patient_name": "李四<img src=x onerror=alert(1)>",
+          "title": "健康教育推送",
+          "task_type": "edu",
+          "scene": "path",
+          "priority": "low",
+          "status": "done",
+          "due_date": "2026-09-01",
+          "escalated": false,
+          "urged_count": 0
+        },
+        {
+          "id": 64,
+          "patient_id": 32,
+          "patient_name": "李四",
+          "title": "转诊随访",
+          "task_type": "referral",
+          "scene": "manual",
+          "priority": "high",
+          "status": "overdue",
+          "due_date": "2026-08-20",
+          "escalated": true,
+          "urged_count": 3
+        }
+      ]
+    }
+  },
+  "spdreferral": {
+    "_why": [
+      "第十四批（2026-09-06）：双向转诊闭环。四个面板，其中超时预警是条件面板",
+      "（标题里带阈值小时数与条数），夹具给非空 alerts 让它渲染出来。",
+      "转诊三条覆盖上转/下转与不同 current_level；规则两条分别启用/停用、",
+      "带/不带自动建任务。渲染末尾还要 spdMeta() 画规则条件编辑器。"
+    ],
+    "fn": "renderSpdReferral",
+    "api": {
+      "/api/spd/meta": {
+        "fields": [
+          {
+            "key": "age",
+            "label": "年龄 &"
+          }
+        ],
+        "operators": [
+          {
+            "key": ">=",
+            "label": "≥"
+          }
+        ]
+      },
+      "/api/spd/referrals-stats/closure": {
+        "closure_rate": 88.2,
+        "total": 170,
+        "closed": 150,
+        "open_by_level": {
+          "county": 12,
+          "township": 6,
+          "village": 2
+        }
+      },
+      "/api/spd/referrals": [
+        {
+          "id": 71,
+          "patient_name": "张三 &",
+          "program_code": "hyp<b>",
+          "direction": "up",
+          "current_level": "county",
+          "status": "pending",
+          "effective_visit": false,
+          "created_at": "2026-09-01T09:00:00"
+        },
+        {
+          "id": 72,
+          "patient_name": "李四<img src=x onerror=alert(1)>",
+          "program_code": "dm",
+          "direction": "down",
+          "current_level": "township",
+          "status": "accepted",
+          "effective_visit": true,
+          "created_at": "2026-09-02T10:00:00"
+        },
+        {
+          "id": 73,
+          "patient_name": "王五",
+          "program_code": "hyp",
+          "direction": "up",
+          "current_level": "village",
+          "status": "closed",
+          "effective_visit": true,
+          "created_at": "2026-09-03T11:00:00"
+        }
+      ],
+      "/api/spd/referrals-alerts": {
+        "threshold_hours": 48,
+        "count": 2,
+        "items": [
+          {
+            "id": 71,
+            "patient_name": "张三 &",
+            "program_code": "hyp<b>",
+            "current_level": "county",
+            "status": "pending",
+            "hours": 61,
+            "created_at": "2026-09-01T09:00:00"
+          },
+          {
+            "id": 74,
+            "patient_name": "赵六<b>",
+            "program_code": "dm",
+            "current_level": "township",
+            "status": "pending",
+            "hours": 52,
+            "created_at": "2026-09-01T12:00:00"
+          }
+        ]
+      },
+      "/api/spd/referral-rules": [
+        {
+          "id": 81,
+          "code": "hyp-up<b>",
+          "name": "血压失控上转 &",
+          "program_code": "hyp",
+          "handle_level": "county",
+          "auto_task": true,
+          "active": true,
+          "conditions": [
+            {
+              "field": "age",
+              "op": ">=",
+              "value": 65
+            }
+          ]
+        },
+        {
+          "id": 82,
+          "code": "dm-down",
+          "name": "糖尿病稳定下转",
+          "program_code": "dm",
+          "handle_level": "township",
+          "auto_task": false,
+          "active": false,
+          "conditions": []
+        }
+      ]
+    }
+  },
+  "spdreport": {
+    "_why": [
+      "第十四批（2026-09-06）：报告与推送。三个面板迁了，第四处外壳在点击「查看」之后",
+      "才写进 #spd-rpt-view，比对器覆盖不到，登记进 KNOWN_UNMIGRATED_SHELLS。",
+      "模板两条：一条 period/scope_level 都在映射表里、段落非空、启用；",
+      "另一条两个取值都不在表里走 `|| t.period` / `|| t.scope_level` 兜底、段落为空、停用。",
+      "推送任务两条走 active/paused 两支（按钮文案与标签跟着翻），一条订阅人数为 0、",
+      "last_run_at 为 null 走「—」。**sections 是数组不是计数**——第一版夹具按'看起来该有的'",
+      "给了个数字，渲染当场抛 `(t.sections || []).map is not a function`；",
+      "又一次印证：写夹具前先读行模板怎么用这个字段，别照名字猜。"
+    ],
+    "fn": "renderSpdReport",
+    "api": {
+      "/api/spd/report-templates": [
+        {
+          "id": 91,
+          "code": "monthly<b>",
+          "name": "月度运行报告 &",
+          "period": "monthly",
+          "scope_level": "center",
+          "active": true,
+          "sections": [
+            {
+              "title": "在管人数 &"
+            },
+            {
+              "title": "随访完成率<b>"
+            }
+          ]
+        },
+        {
+          "id": 92,
+          "code": "quarterly",
+          "name": "季度质量报告<img src=x onerror=alert(1)>",
+          "period": "legacy_period<b>",
+          "scope_level": "legacy_scope &",
+          "active": false,
+          "sections": []
+        }
+      ],
+      "/api/spd/report-tasks": [
+        {
+          "id": 101,
+          "name": "月报推送 &",
+          "frequency": "monthly",
+          "push_time": "08:00",
+          "subscriber_ids": [
+            1,
+            2
+          ],
+          "priority": 1,
+          "status": "active",
+          "last_run_at": "2026-09-01T08:00:00"
+        },
+        {
+          "id": 102,
+          "name": "季报推送<b>",
+          "frequency": "quarterly",
+          "push_time": "09:00",
+          "subscriber_ids": [],
+          "priority": 3,
+          "status": "paused",
+          "last_run_at": null
+        }
+      ],
+      "/api/spd/report-instances": [
+        {
+          "id": 111,
+          "title": "2026年8月运行报告 &",
+          "period_label": "2026-08",
+          "scope_level": "center",
+          "created_at": "2026-09-01T08:05:00"
+        },
+        {
+          "id": 112,
+          "title": "2026年Q2质量报告<img src=x onerror=alert(1)>",
+          "period_label": "2026-Q2",
+          "scope_level": "legacy_scope &",
+          "created_at": "2026-07-01T09:05:00"
+        }
+      ]
+    }
   }
 }

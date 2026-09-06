@@ -248,6 +248,14 @@ MIGRATED_PAGES = {
     "renderReferrals": 2,           # 含一处无标题裸面板
     "renderPharmacy": 1,            # 第二个面板的标题里嵌着 <span>，迁不了，见下
     "renderChronic": 1,             # 同上
+    # 第十四批 2026-09-06：pages-spd.js 五页 17 处（临床指导中枢 / 筛查建档 / 路径与任务 /
+    # 转诊闭环 / 报告推送）。**pages-spd.js 至此没有可迁的手写外壳了**——剩的 3 处
+    # 全在点击之后才渲染的路径里（本表下方两条 + spdShowConsultThread 的会话面板）。
+    "renderSpdExpert": 3,
+    "renderSpdPatients": 4,         # 四张表都由末尾的 drawXxx() 写进各自容器（不在本页计数内）
+    "renderSpdPath": 3,             # 路径实例表与任务表同上
+    "renderSpdReferral": 4,         # 超时预警是条件面板，走 accent
+    "renderSpdReport": 3,           # 第 4 处外壳在点击「查看」之后的报告详情里，见下
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。
@@ -275,6 +283,7 @@ KNOWN_UNMIGRATED_SHELLS = {
     # 三处都不迁：把 span/button 挪出标题是**改 DOM**，而这一步的前提是"换外壳是 no-op"。
     "renderPharmacy": (1, "标题里嵌着 <span> 显示缺药预警条数，panel() 会把标题整段转义"),
     "renderChronic": (1, "标题里嵌着 <span> 显示随访超期人数，panel() 会把标题整段转义"),
+    "renderSpdReport": (1, "点击「查看」后才写进 #spd-rpt-view 的报告详情面板，render_diff 覆盖不到"),
 }
 MIGRATED = "renderServiceRequests"
 

@@ -334,7 +334,7 @@ async function renderSpdExpert() {
       ["评估人次", wb.assessments.total],
       ["转诊闭环率", wb.referrals.closure_rate + "%"],
     ])}
-    <div class="panel"><h3>病种标准落地情况</h3>
+    ${panel("病种标准落地情况", `
       <p class="desc">纳入规则、管理阶段、路径模板、量表——任一缺失都会让基层"没有可执行的规则"</p>
       ${table(["病种", "口径", "版本", "纳入规则", "阶段", "路径模板", "已发布", "量表", "在管"],
         wb.programs, (p) =>
@@ -344,8 +344,8 @@ async function renderSpdExpert() {
          <td>${p.stages}</td><td>${p.path_templates}</td>
          <td>${p.published_paths ? `<span class="tag green">${p.published_paths}</span>`
             : '<span class="tag red">0</span>'}</td>
-         <td>${p.scales}</td><td>${p.enrolled}</td></tr>`)}</div>
-    <div class="panel"><h3>重点慢专病中心</h3>
+         <td>${p.scales}</td><td>${p.enrolled}</td></tr>`)}`)}
+    ${panel("重点慢专病中心", `
       ${table(["名称", "病种", "牵头科室", "版本", "状态"], wb.centers, (c) =>
         `<tr><td>${esc(c.name)}</td><td>${esc(c.program_code)}</td><td>${esc(c.lead_dept)}</td>
          <td>${esc(c.version)}</td><td>${esc(c.status)}</td></tr>`)}
@@ -355,11 +355,11 @@ async function renderSpdExpert() {
         <input name="program_code" placeholder="病种编码" required>
         <input name="lead_dept" placeholder="牵头科室">
         <button>新建分中心</button>
-      </form><p class="msg" id="spd-center-msg"></p></div>
-    <div class="panel"><h3>风险评估结果分布</h3>
+      </form><p class="msg" id="spd-center-msg"></p>`)}
+    ${panel("风险评估结果分布", `
       ${barChart(spdPairs(wb.assessments.by_risk,
         { low: "低危", mid: "中危", high: "高危", very_high: "极高危" }),
-        { color: "#8d4bab", unit: " 人次" })}</div>`;
+        { color: "#8d4bab", unit: " 人次" })}`)}`;
   $("#spd-center-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/centers", formJson(e.target), "#spd-center-msg");
@@ -520,7 +520,7 @@ async function renderSpdPatients() {
     "筛查建档纳管：机会性/主动筛查、高危复核、签约建档、排除迁出死亡召回";
   const catalog = await spdCatalog();
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>筛查登记</h3>
+    ${panel("筛查登记", `
       <p class="desc">量表评分与病种规则双通道判定，任一命中即入目标池；排除规则优先于纳入</p>
       <form class="inline" id="spd-screen-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
@@ -540,8 +540,8 @@ async function renderSpdPatients() {
         <input name="org_id" type="number" placeholder="机构ID(留空取本机构)">
         <button class="secondary">按规则自动识别</button>
       </form><p class="msg" id="spd-screen-msg"></p>
-      <div id="spd-screen-list"></div></div>
-    <div class="panel"><h3>签约建档纳管</h3>
+      <div id="spd-screen-list"></div>`)}
+    ${panel("签约建档纳管", `
       <form class="inline" id="spd-enroll-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="program_code">${spdProgramOptions(catalog)}</select>
@@ -565,8 +565,8 @@ async function renderSpdPatients() {
         <input name="keyword" placeholder="姓名/证件号">
         <button class="secondary">查询</button>
       </form>
-      <div id="spd-enroll-list"></div></div>
-    <div class="panel"><h3>生命周期处置</h3>
+      <div id="spd-enroll-list"></div>`)}
+    ${panel("生命周期处置", `
       <p class="desc">排除 / 迁出 / 死亡 / 召回会同步终止后续任务、路径、干预与复诊；跨机构迁出需目标机构确认</p>
       <form class="inline" id="spd-life-form">
         <input name="enrollment_id" type="number" placeholder="纳管档案ID" required>
@@ -581,8 +581,8 @@ async function renderSpdPatients() {
         <input name="reason" placeholder="原因">
         <button>提交</button>
       </form><p class="msg" id="spd-life-msg"></p>
-      <div id="spd-life-list"></div></div>
-    <div class="panel"><h3>患者分组</h3>
+      <div id="spd-life-list"></div>`)}
+    ${panel("患者分组", `
       <p class="desc">自动规则命中的在管患者会被吸入分组；手工加入的成员不受规则影响</p>
       <form class="inline" id="spd-group-form">
         <input name="name" placeholder="分组名称" required>
@@ -596,7 +596,7 @@ async function renderSpdPatients() {
       <p class="desc">自动纳入规则（全部满足才吸入）</p>
       <div id="spd-group-rules"></div>
       <p class="msg" id="spd-group-msg"></p>
-      <div id="spd-group-list"></div></div>`;
+      <div id="spd-group-list"></div>`)}`;
 
   const drawScreenings = async () => {
     const rows = await api("/api/spd/screenings?limit=30");
@@ -717,7 +717,7 @@ async function renderSpdPath() {
       ["待办任务", summary.open_total], ["超期", summary.overdue, summary.overdue > 0],
       ["今日到期", summary.due_today], ["已升级", summary.escalated, summary.escalated > 0],
     ])}
-    <div class="panel"><h3>路径模板</h3>
+    ${panel("路径模板", `
       <p class="desc">已发布的模板不能直接改节点——要改就复制新版本，避免在跑的患者任务突然变形</p>
       <form class="inline" id="spd-tpl-form">
         <select name="program_id">
@@ -739,8 +739,8 @@ async function renderSpdPath() {
             : '<span class="tag">已停用</span>'}</td>
          <td><button class="btn secondary" data-tpl-node="${t.id}">加节点</button>
              <button class="btn secondary" data-tpl-pub="${t.id}">发布</button>
-             <button class="btn secondary" data-tpl-copy="${t.id}">复制</button></td></tr>`)}</div>
-    <div class="panel"><h3>启动患者路径</h3>
+             <button class="btn secondary" data-tpl-copy="${t.id}">复制</button></td></tr>`)}`)}
+    ${panel("启动患者路径", `
       <form class="inline" id="spd-inst-form">
         <input name="enrollment_id" type="number" placeholder="纳管档案ID" required>
         <select name="template_id">
@@ -748,8 +748,8 @@ async function renderSpdPath() {
         </select>
         <button>启动路径</button>
       </form><p class="msg" id="spd-inst-msg"></p>
-      <div id="spd-inst-list"></div></div>
-    <div class="panel"><h3>任务中心</h3>
+      <div id="spd-inst-list"></div>`)}
+    ${panel("任务中心", `
       <form class="inline" id="spd-task-filter">
         <select name="task_type"><option value="">全部类型</option>
           ${Object.entries(SPD_TASK_TYPES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
@@ -758,7 +758,7 @@ async function renderSpdPath() {
         <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看我的</label>
         <button class="secondary">查询</button>
       </form><p class="msg" id="spd-task-msg"></p>
-      <div id="spd-task-list"></div></div>`;
+      <div id="spd-task-list"></div>`)}`;
 
   const drawInstances = async () => {
     const rows = await api("/api/spd/path-instances?limit=20");
@@ -867,11 +867,11 @@ async function renderSpdReferral() {
       ["超时未推进", alerts.count, alerts.count > 0],
     ])}
     <p class="desc">闭环率分母不含撤回与退回单——退回是"该拦的拦住了"，计进去会逼着基层不敢退回</p>
-    <div class="panel"><h3>在途单据按层级</h3>
-      ${barChart(spdPairs(closure.pending_by_level,
+    ${panel("在途单据按层级",
+      barChart(spdPairs(closure.pending_by_level,
         { village: "村医", station: "服务站", township: "卫生院", county: "县级医院" }),
-        { color: "#0a4d78", unit: " 单" })}</div>
-    <div class="panel"><h3>发起转诊</h3>
+        { color: "#0a4d78", unit: " 单" }))}
+    ${panel("发起转诊", `
       <form class="inline" id="spd-ref-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="program_code" placeholder="病种编码">
@@ -890,8 +890,8 @@ async function renderSpdReferral() {
              <button class="btn secondary" data-ref-reject="${c.id}">退回</button>
              <button class="btn secondary" data-ref-arrive="${c.id}">到院</button>
              <button class="btn secondary" data-ref-down="${c.id}">下转</button>
-             <button class="btn secondary" data-ref-recv="${c.id}">随访接收</button></td></tr>`)}</div>
-    <div class="panel"><h3>转诊触发规则</h3>
+             <button class="btn secondary" data-ref-recv="${c.id}">随访接收</button></td></tr>`)}`)}
+    ${panel("转诊触发规则", `
       <p class="desc">命中规则默认只提示不自动开单——批量随访录入时自动开单会瞬间产生几十张单子</p>
       <form class="inline" id="spd-refrule-form">
         <input name="code" placeholder="规则编码" required>
@@ -910,12 +910,12 @@ async function renderSpdReferral() {
         `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.program_code || "全部")}</td>
          <td>${esc(r.handle_level)}</td><td>${(r.conditions || []).length}</td>
          <td>${r.auto_task ? "是" : "否"}</td>
-         <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}</div>
-    ${alerts.count ? `<div class="panel" style="border-left:4px solid #c62828">
-      <h3>⚠ 超过 ${alerts.threshold_hours} 小时未推进（${alerts.count}）</h3>
+         <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}`)}
+    ${alerts.count ? panel(`⚠ 超过 ${alerts.threshold_hours} 小时未推进（${alerts.count}）`, `
       ${table(["ID", "患者", "状态", "发起时间"], alerts.items, (c) =>
         `<tr><td>${c.id}</td><td>${esc(c.patient_name)}</td><td>${spdTag(SPD_REF_STATUS, c.status)}</td>
-         <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td></tr>`)}</div>` : ""}`;
+         <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td></tr>`)}`,
+      { accent: "#c62828" }) : ""}`;
   $("#spd-ref-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/referrals",
@@ -1261,7 +1261,7 @@ async function renderSpdReport() {
   ]);
   const scopeNames = { center: "专病中心", dept: "科室团队", grassroots: "基层机构", personal: "个人" };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>报告模板</h3>
+    ${panel("报告模板", `
       <p class="desc">段落取数与工作台同源——报告是同一批数字的另一种排版，不是另存一份统计</p>
       ${table(["编码", "名称", "周期", "层级", "段落", "状态"], templates, (t) =>
         `<tr><td>${esc(t.code)}</td><td>${esc(t.name)}</td>
@@ -1273,8 +1273,8 @@ async function renderSpdReport() {
         <select name="template_code">${templates.map((t) => `<option value="${esc(t.code)}">${esc(t.name)}</option>`).join("")}</select>
         <input name="org_id" type="number" placeholder="机构ID（留空取本机构）">
         <button>立即生成</button>
-      </form><p class="msg" id="spd-rpt-msg"></p></div>
-    <div class="panel"><h3>推送任务</h3>
+      </form><p class="msg" id="spd-rpt-msg"></p>`)}
+    ${panel("推送任务", `
       <form class="inline" id="spd-rpttask-form">
         <select name="template_id">${templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
         <input name="name" placeholder="任务名称" required>
@@ -1295,14 +1295,14 @@ async function renderSpdReport() {
          <td>${esc(t.last_run_at ? t.last_run_at.replace("T", " ").slice(0, 16) : "—")}</td>
          <td><button class="btn secondary" data-rpt-run="${t.id}">立即执行</button>
              <button class="btn secondary" data-rpt-toggle="${t.id}" data-s="${t.status === "active" ? "paused" : "active"}">
-               ${t.status === "active" ? "暂停" : "启用"}</button></td></tr>`)}</div>
-    <div class="panel"><h3>已生成报告</h3>
+               ${t.status === "active" ? "暂停" : "启用"}</button></td></tr>`)}`)}
+    ${panel("已生成报告", `
       ${table(["ID", "标题", "周期", "层级", "生成时间", "操作"], instances, (r) =>
         `<tr><td>${r.id}</td><td>${esc(r.title)}</td><td>${esc(r.period_label)}</td>
          <td>${esc(scopeNames[r.scope_level] || r.scope_level)}</td>
          <td>${esc(r.created_at.replace("T", " ").slice(0, 16))}</td>
          <td><button class="btn secondary" data-rpt-view="${r.id}">查看</button></td></tr>`)}
-      <div id="spd-rpt-view"></div></div>`;
+      <div id="spd-rpt-view"></div>`)}`;
   $("#spd-rpt-gen").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/report-instances", formJson(e.target, ["org_id"]), "#spd-rpt-msg");
