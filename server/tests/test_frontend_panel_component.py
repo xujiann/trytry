@@ -239,6 +239,15 @@ MIGRATED_PAGES = {
     "renderMedwaste": 3,            # 滞留预警是条件面板
     "renderOrgs": 2,
     "renderPatients": 3,            # 患者表由末尾的 draw() 写进 #patient-table（不在本页计数内）
+    # 第十三批 2026-09-06：core.js 收尾六页（会诊 / 签约 / 字典 / 转诊 / 药房 / 慢病），9 处。
+    # **core.js 至此没有可迁的手写外壳了**——剩的 5 处是 2 处非债（文档注释示例、组件自身
+    # 模板）+ 3 处标题里嵌了 HTML 的（见下面 KNOWN_UNMIGRATED_SHELLS 与 openDrilldown）。
+    "renderConsultations": 2,       # 含一处无标题裸面板
+    "renderContracts": 2,           # 含一处无标题裸面板；末尾还会 drawHomeVisits() 追加上门服务面板
+    "renderDicts": 1,               # 整页就一个无标题裸面板；条目表由末尾的 draw("diagnosis") 写进 #dict-table
+    "renderReferrals": 2,           # 含一处无标题裸面板
+    "renderPharmacy": 1,            # 第二个面板的标题里嵌着 <span>，迁不了，见下
+    "renderChronic": 1,             # 同上
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。
@@ -257,6 +266,15 @@ KNOWN_UNMIGRATED_SHELLS = {
     # 但若后端把 total_score 之类的数值字段返回成带 & 的字符串，两种写法的字节就不同了。
     # 比对器点不到这条路径，也就证不了这一步，所以留着等取证工具能覆盖点击路径再说。
     "renderSpdAssess": (1, "点击后才渲染的下钻明细面板，render_diff 覆盖不到"),
+    # 第十三批扫出来的一个**形状**（不是个案）：标题里嵌了 HTML 的外壳。
+    # `panel()` 会把 title 整段 `esc()`——这正是抽组件的理由，不是缺陷——
+    # 于是标题里的 `<span>` / `<button>` 迁过去就变成一段转义后的文本显示出来。
+    # 全仓库（含 m/ 那套前端）按 `<div class="panel"…><h3>…<…>…</h3>` 扫过，**恰好 3 处**：
+    # 这两处，加上 core.js 的 `openDrilldown`（标题里嵌「关闭」按钮，它不是"页面"、
+    # 不在这张表里，理由写在那个函数的注释与 ADR 里）。
+    # 三处都不迁：把 span/button 挪出标题是**改 DOM**，而这一步的前提是"换外壳是 no-op"。
+    "renderPharmacy": (1, "标题里嵌着 <span> 显示缺药预警条数，panel() 会把标题整段转义"),
+    "renderChronic": (1, "标题里嵌着 <span> 显示随访超期人数，panel() 会把标题整段转义"),
 }
 MIGRATED = "renderServiceRequests"
 

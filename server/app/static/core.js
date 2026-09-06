@@ -339,15 +339,15 @@ async function renderConsultations() {
   const consultations = await api("/api/consultations");
   const CS = { applied: ["已申请", "orange"], accepted: ["已受理", ""], completed: ["已完成", "green"], declined: ["已拒绝", "red"] };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>会诊申请</h3>
+    ${panel("会诊申请", `
       <form class="inline" id="cons-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="from_org_id" type="number" placeholder="申请机构ID" required>
         <input name="to_org_id" type="number" placeholder="受邀机构ID" required>
         <input name="question" placeholder="会诊问题" required style="min-width:240px">
         <button>提交</button>
-      </form><p class="msg" id="cons-msg"></p></div>
-    <div class="panel">${table(["ID", "患者", "申请→受邀", "问题", "专家", "意见", "评价", "状态", "操作"], consultations, (c) => {
+      </form><p class="msg" id="cons-msg"></p>`)}
+    ${panel("", table(["ID", "患者", "申请→受邀", "问题", "专家", "意见", "评价", "状态", "操作"], consultations, (c) => {
       const actions = c.status === "applied"
         ? `<button class="btn secondary" data-act="accept" data-id="${c.id}">受理</button>
            <button class="btn danger" data-act="decline" data-id="${c.id}">拒绝</button>`
@@ -358,7 +358,7 @@ async function renderConsultations() {
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.from_org_id} → ${c.to_org_id}</td>
         <td>${esc(c.question)}</td><td>${esc(c.expert_name) || "—"}</td><td>${esc(c.opinion) || "—"}</td>
         <td>${c.rating ? "★".repeat(c.rating) : "—"}</td><td>${statusTag(CS, c.status)}</td><td>${actions}</td></tr>`;
-    })}</div>`;
+    }))}`;
   $("#cons-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -396,7 +396,7 @@ async function renderContracts() {
   const PKG = { basic: "基础包", standard: "标准包", premium: "个性包" };
   const SVC = { visit: "上门服务", consult: "健康咨询", followup: "随访", referral: "转诊协助" };
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>签约</h3>
+    ${panel("签约", `
       <form class="inline" id="ct-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="org_id" type="number" placeholder="机构ID" required>
@@ -404,14 +404,14 @@ async function renderContracts() {
         <select name="package">${Object.entries(PKG).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="signed_date" placeholder="签约日期 YYYY-MM-DD">
         <button>签约</button>
-      </form><p class="msg" id="ct-msg"></p></div>
-    <div class="panel">${table(["ID", "患者", "机构", "医生", "服务包", "状态", "操作"], contracts, (c) =>
+      </form><p class="msg" id="ct-msg"></p>`)}
+    ${panel("", table(["ID", "患者", "机构", "医生", "服务包", "状态", "操作"], contracts, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.org_id}</td><td>${esc(c.doctor_name)}</td>
        <td><span class="tag">${PKG[c.package]}</span></td>
        <td><span class="tag ${c.status === "active" ? "green" : "red"}">${c.status === "active" ? "履约中" : "已解约"}</span></td>
        <td>${c.status === "active"
          ? `<button class="btn secondary" data-svc="${c.id}">记录履约</button>
-            <button class="btn danger" data-term="${c.id}">解约</button>` : "—"}</td></tr>`)}</div>`;
+            <button class="btn danger" data-term="${c.id}">解约</button>` : "—"}</td></tr>`))}`;
   $("#ct-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -800,14 +800,14 @@ async function renderDicts() {
       `<tr><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td></tr>`);
   };
   $("#page-body").innerHTML = `
-    <div class="panel">
+    ${panel("", `
       <form class="inline" id="dict-form">
         <select id="dict-system">${Object.entries(systems).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="code" placeholder="编码" required>
         <input name="name" placeholder="名称" required>
         <button>新增条目</button>
       </form><p class="msg" id="dict-msg"></p>
-      <div id="dict-table"></div></div>`;
+      <div id="dict-table"></div>`)}`;
   $("#dict-system").onchange = (e) => draw(e.target.value);
   $("#dict-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -927,7 +927,7 @@ async function renderReferrals() {
   $("#page-desc").textContent = "医共体内上转/下转：申请 → 接诊 → 结案";
   const referrals = await api("/api/referrals");
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>转诊申请</h3>
+    ${panel("转诊申请", `
       <form class="inline" id="ref-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="from_org_id" type="number" placeholder="转出机构ID" required>
@@ -935,8 +935,8 @@ async function renderReferrals() {
         <select name="direction"><option value="up">上转</option><option value="down">下转</option></select>
         <input name="reason" placeholder="转诊原因">
         <button>提交</button>
-      </form><p class="msg" id="ref-msg"></p></div>
-    <div class="panel">${table(["ID", "患者", "方向", "转出→转入", "原因", "状态", "操作"], referrals, (r) => {
+      </form><p class="msg" id="ref-msg"></p>`)}
+    ${panel("", table(["ID", "患者", "方向", "转出→转入", "原因", "状态", "操作"], referrals, (r) => {
       const text = r.status_label || r.status;
       const color = REF_STATUS_COLOR[r.status] || "";
       const actions = r.status === "pending"
@@ -947,7 +947,7 @@ async function renderReferrals() {
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${r.direction === "up" ? "上转" : "下转"}</td>
         <td>${r.from_org_id} → ${r.to_org_id}</td><td>${esc(r.reason)}</td>
         <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
-    })}</div>`;
+    }))}`;
   $("#ref-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1077,8 +1077,11 @@ async function renderPharmacy() {
     api("/api/pharmacy/batches/expiring"), api("/api/dispense"),
   ]);
   const alertIds = new Set(alerts.map((a) => a.id));
+  // 第二个面板的外壳**迁不了** `panel()`：它的标题里嵌着一个 `<span>`（缺药预警条数），
+  // 而组件会把标题整段 `esc()` 掉，迁过去那个 span 会变成一段转义文本显示出来。
+  // 同形状的还有慢病页与 openDrilldown，共 3 处，理由记在 docs/adr/0009 第十三批。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>入库</h3>
+    ${panel("入库", `
       <form class="inline" id="stock-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <input name="drug_code" placeholder="药品编码" required>
@@ -1115,7 +1118,7 @@ async function renderPharmacy() {
         <input name="to_org_id" type="number" placeholder="调入机构ID" required>
         <input name="quantity" type="number" placeholder="数量" required min="1">
         <button>调拨</button>
-      </form><p class="msg" id="pharm-msg"></p></div>
+      </form><p class="msg" id="pharm-msg"></p>`)}
     <div class="panel"><h3>库存${alerts.length ? `（<span style="color:#c62828">${alerts.length} 项缺药预警</span>）` : ""}</h3>
       ${table(["机构ID", "药品", "数量", "阈值", "状态"], stocks, (s) =>
         `<tr><td>${s.org_id}</td><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${s.quantity}</td><td>${s.threshold}</td>
@@ -1192,8 +1195,10 @@ async function renderChronic() {
     const keys = ((t.level_rules || {}).metrics || []).map((m) => `${m.name}(${m.key})`).join("、");
     return `<tr><td>${esc(t.name)}</td><td>${esc(t.code)}</td><td>${esc(keys) || "—"}</td><td>${t.followup_interval_days} 天</td></tr>`;
   }).join("");
+  // 第二个面板的外壳**迁不了** `panel()`：标题里嵌着一个 `<span>`（随访超期人数），
+  // 形状同药房页，组件会把它整段 `esc()` 掉。理由记在 docs/adr/0009 第十三批。
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>慢病建档</h3>
+    ${panel("慢病建档", `
       <form class="inline" id="chronic-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="disease">${Object.entries(DISEASES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
@@ -1211,7 +1216,7 @@ async function renderChronic() {
         <button>提交随访</button>
       </form><p class="msg" id="chronic-msg"></p>
       <h3 style="margin-top:14px">病种目录</h3>
-      <table><thead><tr><th>病种</th><th>编码</th><th>分级指标</th><th>随访周期</th></tr></thead><tbody>${metricHint}</tbody></table></div>
+      <table><thead><tr><th>病种</th><th>编码</th><th>分级指标</th><th>随访周期</th></tr></thead><tbody>${metricHint}</tbody></table>`)}
     <div class="panel"><h3>在管名单${overdue.length ? `（<span style="color:#c62828">${overdue.length} 人随访超期</span>）` : ""}</h3>
       ${table(["档案ID", "患者", "病种", "分级", "下次随访", "随访状态"], chronicList, (c) =>
         `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(DISEASES[c.disease] || c.disease)}</td>

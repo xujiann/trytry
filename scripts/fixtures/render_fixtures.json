@@ -4775,5 +4775,374 @@
         }
       ]
     }
+  },
+  "consultations": {
+    "_why": [
+      "第十三批（2026-09-06）：远程会诊。两个面板，第二个是无标题裸面板。",
+      "五条覆盖操作列的全部分支：applied（受理/拒绝两个按钮）、accepted（出意见）、",
+      "completed 且无评价（评价按钮）、completed 且已评价（走「—」）、declined（走「—」）。",
+      "专家与意见各留一条为空，走 `esc(x) || \"—\"`；评价用 ★ 重复，给个 3 星。"
+    ],
+    "fn": "renderConsultations",
+    "api": {
+      "/api/consultations": [
+        {
+          "id": 1,
+          "patient_id": 31,
+          "from_org_id": 4,
+          "to_org_id": 3,
+          "question": "胸痛待查 & 请会诊",
+          "expert_name": "",
+          "opinion": "",
+          "rating": null,
+          "status": "applied"
+        },
+        {
+          "id": 2,
+          "patient_id": 32,
+          "from_org_id": 4,
+          "to_org_id": 3,
+          "question": "血糖控制不佳<b>",
+          "expert_name": "王主任 &",
+          "opinion": "",
+          "rating": null,
+          "status": "accepted"
+        },
+        {
+          "id": 3,
+          "patient_id": 33,
+          "from_org_id": 5,
+          "to_org_id": 3,
+          "question": "肺部结节随访<img src=x onerror=alert(1)>",
+          "expert_name": "李主任",
+          "opinion": "建议三个月复查 & 低剂量CT",
+          "rating": null,
+          "status": "completed"
+        },
+        {
+          "id": 4,
+          "patient_id": 34,
+          "from_org_id": 5,
+          "to_org_id": 3,
+          "question": "术后康复指导",
+          "expert_name": "赵主任<b>",
+          "opinion": "按康复方案执行",
+          "rating": 3,
+          "status": "completed"
+        },
+        {
+          "id": 5,
+          "patient_id": 35,
+          "from_org_id": 4,
+          "to_org_id": 3,
+          "question": "普通感冒",
+          "expert_name": "",
+          "opinion": "",
+          "rating": null,
+          "status": "declined"
+        }
+      ]
+    }
+  },
+  "contracts": {
+    "_why": [
+      "第十三批（2026-09-06）：家庭医生签约。两个面板，第二个是无标题裸面板。",
+      "两条分别走 active（记录履约/解约两个按钮 + 绿标签）与非 active（「—」+ 红标签）。",
+      "渲染末尾还会 await drawHomeVisits() 追加上门服务面板（另两个接口），",
+      "工单三条覆盖 applied/dispatched/completed 三种按钮组合。",
+      "package 必须是 PKG 的键（basic/standard/premium）——这里没有兜底，写错就是 undefined。"
+    ],
+    "fn": "renderContracts",
+    "api": {
+      "/api/contracts": [
+        {
+          "id": 11,
+          "patient_id": 31,
+          "org_id": 4,
+          "doctor_name": "张医生 & 全科",
+          "package": "standard",
+          "status": "active"
+        },
+        {
+          "id": 12,
+          "patient_id": 32,
+          "org_id": 5,
+          "doctor_name": "李医生<b>",
+          "package": "basic",
+          "status": "terminated"
+        }
+      ],
+      "/api/homevisits/stats": {
+        "total": 3,
+        "contract_linked_ratio_pct": 66.7
+      },
+      "/api/homevisits": [
+        {
+          "id": 21,
+          "patient_id": 31,
+          "contract_id": 11,
+          "service_type_name": "上门护理 &",
+          "demand": "更换尿管<b>",
+          "status": "applied",
+          "assignee_name": ""
+        },
+        {
+          "id": 22,
+          "patient_id": 32,
+          "contract_id": null,
+          "service_type_name": "上门诊疗",
+          "demand": "",
+          "status": "dispatched",
+          "assignee_name": "护士甲 &"
+        },
+        {
+          "id": 23,
+          "patient_id": 33,
+          "contract_id": 11,
+          "service_type_name": "康复指导<img src=x onerror=alert(1)>",
+          "demand": "偏瘫康复",
+          "status": "completed",
+          "assignee_name": "康复师乙"
+        }
+      ]
+    }
+  },
+  "dicts": {
+    "_why": [
+      "第十三批（2026-09-06）：四统一编码字典。只有一个面板，而且是**无标题裸面板**。",
+      "条目表由末尾的 `await draw(\"diagnosis\")` 写进 #dict-table（P2-31 之后取数放最后），",
+      "夹具缺 /api/dictionaries/diagnosis/entries 整页抛错。"
+    ],
+    "fn": "renderDicts",
+    "api": {
+      "/api/dictionaries/diagnosis/entries": [
+        {
+          "code": "I10",
+          "name": "原发性高血压 & 未特指"
+        },
+        {
+          "code": "E11<img src=x onerror=alert(1)>",
+          "name": "2型糖尿病<b>"
+        }
+      ]
+    }
+  },
+  "referrals": {
+    "_why": [
+      "第十三批（2026-09-06）：双向转诊。两个面板，第二个是无标题裸面板。",
+      "四条覆盖 pending（接诊/退回）、accepted（结案）、completed（「—」）、rejected（「—」），",
+      "状态色取自 REF_STATUS_COLOR；最后一条故意给一个不在色表里的状态 + 空 status_label，",
+      "走 `r.status_label || r.status` 与 `|| \"\"` 两条兜底。",
+      "注意这一列的 text 是**裸插值**（历史写法），夹具塞载荷正好把它钉住。"
+    ],
+    "fn": "renderReferrals",
+    "api": {
+      "/api/referrals": [
+        {
+          "id": 41,
+          "patient_id": 31,
+          "direction": "up",
+          "from_org_id": 5,
+          "to_org_id": 3,
+          "reason": "病情加重 & 需上级处理",
+          "status": "pending",
+          "status_label": "待接诊"
+        },
+        {
+          "id": 42,
+          "patient_id": 32,
+          "direction": "down",
+          "from_org_id": 3,
+          "to_org_id": 5,
+          "reason": "康复期下转<b>",
+          "status": "accepted",
+          "status_label": "已接诊"
+        },
+        {
+          "id": 43,
+          "patient_id": 33,
+          "direction": "up",
+          "from_org_id": 4,
+          "to_org_id": 3,
+          "reason": "需手术",
+          "status": "completed",
+          "status_label": "已结案"
+        },
+        {
+          "id": 44,
+          "patient_id": 34,
+          "direction": "down",
+          "from_org_id": 3,
+          "to_org_id": 4,
+          "reason": "患者拒绝",
+          "status": "legacy_status<img src=x onerror=alert(1)>",
+          "status_label": ""
+        }
+      ]
+    }
+  },
+  "pharmacy": {
+    "_why": [
+      "第十三批（2026-09-06）：药房与库存。两个面板**只迁了第一个**——",
+      "第二个的标题里嵌着 `<span style=\"color:#c62828\">N 项缺药预警</span>`，",
+      "panel() 会把标题整段 esc()，迁过去那个 span 会变成一段转义文本显示出来。",
+      "登记在 KNOWN_UNMIGRATED_SHELLS，理由同 openDrilldown。",
+      "夹具照分支造：库存一条在预警集合里（红「缺药」）、一条正常；",
+      "近效期一条已过期（红标签）、一条给剩余天数；发药一条已冲销、一条已发药。"
+    ],
+    "fn": "renderPharmacy",
+    "api": {
+      "/api/pharmacy/stocks": [
+        {
+          "id": 51,
+          "org_id": 4,
+          "drug_name": "二甲双胍 & 缓释片",
+          "drug_code": "A10BA02<b>",
+          "quantity": 3,
+          "threshold": 20
+        },
+        {
+          "id": 52,
+          "org_id": 4,
+          "drug_name": "氨氯地平",
+          "drug_code": "C08CA01",
+          "quantity": 200,
+          "threshold": 20
+        }
+      ],
+      "/api/pharmacy/alerts": [
+        {
+          "id": 51,
+          "org_id": 4,
+          "drug_name": "二甲双胍 & 缓释片",
+          "drug_code": "A10BA02<b>",
+          "quantity": 3,
+          "threshold": 20
+        }
+      ],
+      "/api/pharmacy/batches/expiring": [
+        {
+          "org_id": 4,
+          "drug_name": "阿司匹林 &",
+          "drug_code": "B01AC06",
+          "batch_no": "P2026-03<img src=x onerror=alert(1)>",
+          "expire_date": "2026-07-31",
+          "remaining": 40,
+          "expired": true,
+          "remaining_days": -37
+        },
+        {
+          "org_id": 4,
+          "drug_name": "氨氯地平",
+          "drug_code": "C08CA01",
+          "batch_no": "P2026-06",
+          "expire_date": "2026-11-30",
+          "remaining": 120,
+          "expired": false,
+          "remaining_days": 85
+        }
+      ],
+      "/api/dispense": [
+        {
+          "id": 61,
+          "prescription_id": 71,
+          "status": "dispensed",
+          "items": [
+            {
+              "drug_name": "二甲双胍 &",
+              "batch_no": "P2026-06",
+              "quantity": 30
+            }
+          ]
+        },
+        {
+          "id": 62,
+          "prescription_id": 72,
+          "status": "reversed",
+          "items": [
+            {
+              "drug_name": "阿司匹林<b>",
+              "batch_no": "P2026-03",
+              "quantity": 10
+            },
+            {
+              "drug_name": "氨氯地平",
+              "batch_no": "P2026-06",
+              "quantity": 7
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "chronic": {
+    "_why": [
+      "第十三批（2026-09-06）：慢病管理。两个面板**只迁了第一个**——",
+      "第二个标题里嵌着 `<span style=\"color:#c62828\">N 人随访超期</span>`，形状同药房页，",
+      "panel() 会把它整段 esc() 掉，迁不了；登记在 KNOWN_UNMIGRATED_SHELLS。",
+      "病种目录那段的 level_rules 一条给 metrics、一条给空对象，走 `esc(keys) || \"—\"` 两支。",
+      "在管名单三条分别是 1/2/3 级（绿/橙/红三种标签），其中一条在超期集合里、",
+      "一条 next_due 为空走兜底。第三条的病种不在 DISEASES 里，走 `|| c.disease`。"
+    ],
+    "fn": "renderChronic",
+    "api": {
+      "/api/chronic/disease-types": [
+        {
+          "code": "hypertension",
+          "name": "高血压 & 原发性",
+          "level_rules": {
+            "metrics": [
+              {
+                "name": "收缩压 &",
+                "key": "sbp"
+              },
+              {
+                "name": "舒张压",
+                "key": "dbp"
+              }
+            ]
+          },
+          "followup_interval_days": 90
+        },
+        {
+          "code": "diabetes<b>",
+          "name": "糖尿病<img src=x onerror=alert(1)>",
+          "level_rules": {},
+          "followup_interval_days": 30
+        }
+      ],
+      "/api/chronic": [
+        {
+          "id": 81,
+          "patient_id": 31,
+          "disease": "hypertension",
+          "level": 1,
+          "next_due": "2026-10-01"
+        },
+        {
+          "id": 82,
+          "patient_id": 32,
+          "disease": "diabetes<b>",
+          "level": 2,
+          "next_due": ""
+        },
+        {
+          "id": 83,
+          "patient_id": 33,
+          "disease": "legacy_disease &",
+          "level": 3,
+          "next_due": "2026-08-01"
+        }
+      ],
+      "/api/chronic/overdue": [
+        {
+          "id": 83,
+          "patient_id": 33,
+          "disease": "legacy_disease &",
+          "level": 3,
+          "next_due": "2026-08-01"
+        }
+      ]
+    }
   }
 }
