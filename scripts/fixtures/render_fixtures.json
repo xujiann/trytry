@@ -5740,5 +5740,412 @@
         }
       ]
     }
+  },
+  "rules": {
+    "_why": [
+      "第十五批（2026-09-06）：统一规则目录。三个面板无条件渲染。",
+      "目录两条分别走 engine=unified（绿标签「统一引擎」）与既有实现；",
+      "规则两条走 active 真/假（操作列出停用按钮或「—」）、严重度取 SEVERITY 的两个键。",
+      "在线试算面板只有表单和一个空容器，结果是点击后才渲染的，比对到不了那一段——",
+      "但外壳本身在首屏，照迁不误。"
+    ],
+    "fn": "renderRules",
+    "api": {
+      "/api/rules/catalog": {
+        "total": 42,
+        "by_source": {
+          "unified": 12,
+          "prescriptions": 18,
+          "dataquality": 12
+        },
+        "entries": [
+          {
+            "source": "unified",
+            "engine": "unified",
+            "domain": "prescription",
+            "key": "max_dose<b>",
+            "name": "超日最大剂量 &",
+            "detail": "daily_dose > max_daily_dose",
+            "active": true
+          },
+          {
+            "source": "prescriptions<img src=x onerror=alert(1)>",
+            "engine": "legacy",
+            "domain": "prescription",
+            "key": "age_limit",
+            "name": "老年慎用",
+            "detail": "age >= 65 and drug in blacklist",
+            "active": false
+          }
+        ]
+      },
+      "/api/rules/domains": [
+        {
+          "domain": "prescription",
+          "variables": [
+            {
+              "name": "daily_dose",
+              "type": "number"
+            },
+            {
+              "name": "age &",
+              "type": "number<b>"
+            }
+          ]
+        },
+        {
+          "domain": "dataquality<img src=x onerror=alert(1)>",
+          "variables": [
+            {
+              "name": "null_rate",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "/api/rules": [
+        {
+          "key": "max_dose<b>",
+          "name": "超日最大剂量 &",
+          "domain": "prescription",
+          "condition": "daily_dose > max_daily_dose and age >= 65",
+          "severity": "error",
+          "deduct_points": 5,
+          "active": true
+        },
+        {
+          "key": "null_rate",
+          "name": "空值率过高<img src=x onerror=alert(1)>",
+          "domain": "dataquality",
+          "condition": "null_rate > 0.1",
+          "severity": "warning",
+          "deduct_points": 2,
+          "active": false
+        }
+      ]
+    }
+  },
+  "credentials": {
+    "_why": [
+      "第十五批（2026-09-06）：就诊凭据。三个面板无条件渲染；核验结果是点击后才渲染的。",
+      "台账三条覆盖 active（绿标签 + 回收/作废两个按钮）、recycled（无色标签、操作列空）、",
+      "voided（红标签）；结束原因一条为空走 `esc(x) || \"—\"`。",
+      "issued_at 直接 `.slice(0, 16)`，必须给够 16 字符的字符串。"
+    ],
+    "fn": "renderCredentials",
+    "api": {
+      "/api/credentials": [
+        {
+          "id": 1,
+          "credential_no": "CARD-0001 &",
+          "patient_id": 31,
+          "credential_type_name": "实体就诊卡<b>",
+          "status": "active",
+          "status_name": "有效",
+          "issued_at": "2026-03-01T09:00:00",
+          "close_reason": ""
+        },
+        {
+          "id": 2,
+          "credential_no": "QR-0002<img src=x onerror=alert(1)>",
+          "patient_id": 31,
+          "credential_type_name": "电子二维码",
+          "status": "recycled",
+          "status_name": "已回收",
+          "issued_at": "2026-01-15T10:30:00",
+          "close_reason": "换发新卡 & 原卡回收"
+        },
+        {
+          "id": 3,
+          "credential_no": "TMP-0003",
+          "patient_id": 32,
+          "credential_type_name": "临时凭据",
+          "status": "voided",
+          "status_name": "已作废<b>",
+          "issued_at": "2026-02-02T14:00:00",
+          "close_reason": "挂失作废"
+        }
+      ]
+    }
+  },
+  "orggroups": {
+    "_why": [
+      "第十五批（2026-09-06）：机构横向分组。三个面板，中间那个包在 `${selected ? … : \"\"}` 里，",
+      "夹具用 localStorage 的 medplat_group_id 打开它（不设就只剩两个面板）。",
+      "覆盖面板的标题里插了服务端返回的 group_type_name，原本写着 esc()——迁到 panel() 要去掉。",
+      "coverage.ungrouped 给非空，让「未入组」的橙标签与明细表两支都渲染出来（空的话走另一段文案）。"
+    ],
+    "fn": "renderOrgGroups",
+    "localStorage": {
+      "medplat_group_type": "zone",
+      "medplat_group_id": "7"
+    },
+    "api": {
+      "/api/organizations": [
+        {
+          "id": 3,
+          "name": "县人民医院 & 总院",
+          "org_type": "lead_hospital",
+          "level": "county",
+          "parent_id": null
+        },
+        {
+          "id": 4,
+          "name": "XX镇卫生院<b>",
+          "org_type": "township",
+          "level": "township",
+          "parent_id": 3
+        }
+      ],
+      "/api/org-groups": [
+        {
+          "id": 7,
+          "name": "东部片区 & 医共体",
+          "group_type": "zone",
+          "group_type_name": "片区/分片",
+          "lead_org_id": 3,
+          "member_count": 5,
+          "active": true
+        },
+        {
+          "id": 8,
+          "name": "呼吸专科联盟<img src=x onerror=alert(1)>",
+          "group_type": "alliance",
+          "group_type_name": "专科联盟<b>",
+          "lead_org_id": null,
+          "member_count": 0,
+          "active": false
+        }
+      ],
+      "/api/org-groups/coverage": {
+        "group_type_name": "片区/分片 &<b>",
+        "groups": 2,
+        "orgs_total": 12,
+        "orgs_grouped": 10,
+        "note": "有 2 家机构未入组 & 按分组统计之和会小于全域总数",
+        "ungrouped": [
+          {
+            "org_name": "YY村卫生室 &",
+            "level": "village"
+          },
+          {
+            "org_name": "ZZ社区服务站<b>",
+            "level": "township"
+          }
+        ]
+      },
+      "/api/org-groups/7/members": [
+        {
+          "org_id": 3,
+          "org_name": "县人民医院 & 总院",
+          "level": "county",
+          "joined_at": "2026-01-05"
+        },
+        {
+          "org_id": 4,
+          "org_name": "XX镇卫生院<b>",
+          "level": "township",
+          "joined_at": "2026-02-11"
+        }
+      ]
+    }
+  },
+  "staffing": {
+    "_why": [
+      "第十五批（2026-09-06）：人员下沉调度。三个面板无条件渲染。",
+      "指标面板里的「职称等级未维护」提示是条件的，夹具给非零让它渲染出来。",
+      "台账两条：一条 title_level=none 走橙色「未填」标签、在派（出结束按钮），",
+      "一条已填等级、已结束（操作列空、起止显示 end_date）。"
+    ],
+    "fn": "renderStaffing",
+    "api": {
+      "/api/organizations": [
+        {
+          "id": 3,
+          "name": "县人民医院 & 总院",
+          "org_type": "lead_hospital",
+          "level": "county",
+          "parent_id": null
+        },
+        {
+          "id": 4,
+          "name": "XX镇卫生院<b>",
+          "org_type": "township",
+          "level": "township",
+          "parent_id": 3
+        }
+      ],
+      "/api/staffing/dispatch-stats": {
+        "year": 2026,
+        "unknown_title_level": 2,
+        "orgs": [
+          {
+            "org_name": "XX镇卫生院<b>",
+            "ongoing": 3,
+            "total": 8,
+            "long_term_6m": 5,
+            "long_term_6m_senior": 3
+          },
+          {
+            "org_name": "YY村卫生室 &",
+            "ongoing": 1,
+            "total": 2,
+            "long_term_6m": 1,
+            "long_term_6m_senior": 0
+          }
+        ],
+        "caliber": {
+          "long_term_6m": "长期派驻且累计满 180 天 &",
+          "senior": "职称等级为中级及以上<b>（不从职称文本推断）"
+        }
+      },
+      "/api/staffing/secondments": [
+        {
+          "id": 21,
+          "employee_id": 101,
+          "employee_name": "张医生 & 全科",
+          "title": "主治医师",
+          "title_level": "none",
+          "title_level_name": "未填",
+          "from_org_name": "县人民医院 & 总院",
+          "to_org_name": "XX镇卫生院<b>",
+          "assignment_type_name": "长期派驻",
+          "start_date": "2026-01-05",
+          "end_date": "",
+          "ongoing": true,
+          "days": 244
+        },
+        {
+          "id": 22,
+          "employee_id": 102,
+          "employee_name": "李医生<img src=x onerror=alert(1)>",
+          "title": null,
+          "title_level": "intermediate",
+          "title_level_name": "中级<b>",
+          "from_org_name": "县人民医院 & 总院",
+          "to_org_name": "YY村卫生室 &",
+          "assignment_type_name": "巡诊",
+          "start_date": "2026-03-01",
+          "end_date": "2026-06-30",
+          "ongoing": false,
+          "days": 121
+        }
+      ]
+    }
+  },
+  "diseaseprograms": {
+    "_why": [
+      "第十五批（2026-09-06）：专病管理。两个面板，第二个包在 `${picked && current ? … : \"\"}` 里，",
+      "夹具用 localStorage 的 medplat_program 打开（不设就只剩目录一个面板）。",
+      "第二个面板的标题里插了 `esc(current.name)`——迁到 panel() 必须把 esc 去掉（组件已转义）。",
+      "**path_nodes 是数组不是计数**（第十四批同形状的坑）：行模板里是",
+      "`(p.path_nodes || []).map((n) => …)`，给数字会当场抛。一条给节点、一条为空走「—」。",
+      "入组两条走 enrolled（出记录节点/出组两个按钮）与 completed（绿标签、操作列空）。",
+      "by_outcome 给非空，让疗效汇总表那一支渲染出来。"
+    ],
+    "fn": "renderDiseasePrograms",
+    "localStorage": {
+      "medplat_program": "5"
+    },
+    "api": {
+      "/api/organizations": [
+        {
+          "id": 3,
+          "name": "县人民医院 & 总院",
+          "org_type": "lead_hospital",
+          "level": "county",
+          "parent_id": null
+        },
+        {
+          "id": 4,
+          "name": "XX镇卫生院<b>",
+          "org_type": "township",
+          "level": "township",
+          "parent_id": 3
+        }
+      ],
+      "/api/disease-programs": [
+        {
+          "id": 5,
+          "code": "OSA<b>",
+          "name": "睡眠呼吸暂停 & 专病",
+          "active": true,
+          "path_nodes": [
+            {
+              "key": "screen",
+              "name": "初筛 &",
+              "required": true
+            },
+            {
+              "key": "psg",
+              "name": "多导睡眠监测<b>",
+              "required": false
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "code": "CKD<img src=x onerror=alert(1)>",
+          "name": "慢性肾病",
+          "active": false,
+          "path_nodes": []
+        }
+      ],
+      "/api/disease-programs/enrollments": [
+        {
+          "id": 31,
+          "patient_id": 31,
+          "status": "enrolled",
+          "status_name": "在组 &",
+          "completion": {
+            "required_done": 1,
+            "required_total": 2,
+            "required_done_pct": 50,
+            "pending_required": [
+              "多导睡眠监测<b>"
+            ]
+          },
+          "outcome_name": "—"
+        },
+        {
+          "id": 32,
+          "patient_id": 32,
+          "status": "completed",
+          "status_name": "已出组<b>",
+          "completion": {
+            "required_done": 2,
+            "required_total": 2,
+            "required_done_pct": 100,
+            "pending_required": []
+          },
+          "outcome_name": "显效 &"
+        }
+      ],
+      "/api/disease-programs/5/stats": {
+        "total": 24,
+        "by_status": {
+          "enrolled": {
+            "name": "在组 &",
+            "count": 10
+          },
+          "completed": {
+            "name": "已出组<b>",
+            "count": 14
+          }
+        },
+        "avg_required_completion_pct": 78.5,
+        "caliber": "完成度只算必需节点 &<b>，选做节点不计入分母",
+        "by_outcome": {
+          "effective": {
+            "name": "显效 &",
+            "count": 9
+          },
+          "invalid": {
+            "name": "无效<b>",
+            "count": 5
+          }
+        }
+      }
+    }
   }
 }

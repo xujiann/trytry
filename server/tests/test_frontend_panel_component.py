@@ -256,6 +256,16 @@ MIGRATED_PAGES = {
     "renderSpdPath": 3,             # 路径实例表与任务表同上
     "renderSpdReferral": 4,         # 超时预警是条件面板，走 accent
     "renderSpdReport": 3,           # 第 4 处外壳在点击「查看」之后的报告详情里，见下
+    # 第十五批 2026-09-06：pages-mgmt.js 五页 14 处（统一规则 / 就诊凭据 / 机构分组 /
+    # 人员下沉 / 专病管理）。**这条规则数得到的手写外壳，pages-mgmt.js 至此清零。**
+    # 文件里仍有 3 个 `class="panel hidden"` 的点击容器（术中记录 / 凭证明细 / 流转记录）——
+    # 它们带额外 class 与 id，`panel()` 出不来，这条规则本来也数不到（见下方说明）。
+    # 别把"计数为 0"读成"这个文件一个 panel 外壳都没有了"。
+    "renderRules": 3,
+    "renderCredentials": 3,
+    "renderOrgGroups": 3,           # 中间那个包在 `${selected ? … : ""}` 里；覆盖面板标题不再 esc()
+    "renderStaffing": 3,
+    "renderDiseasePrograms": 2,     # 第二个包在 `${picked && current ? … : ""}` 里；标题不再 esc()
 }
 
 #: 已迁移的页面里**故意留下**的手写外壳（页面名 → 条数 → 为什么留）。

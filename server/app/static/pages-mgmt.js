@@ -574,7 +574,7 @@ async function renderRules() {
   const [catalog, domains, rules] = await Promise.all([
     api("/api/rules/catalog"), api("/api/rules/domains"), api("/api/rules")]);
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>全平台规则总目录（${catalog.total}）</h3>
+    ${panel(`全平台规则总目录（${catalog.total}）`, `
       <div class="cards">${Object.entries(catalog.by_source).map(([k, v]) =>
         `<div class="card"><span class="k">${esc(k)}</span><b>${v}</b></div>`).join("")}</div>
       ${table(["来源", "执行引擎", "域", "编码", "名称", "定义", "状态"], catalog.entries, (e) =>
@@ -583,8 +583,8 @@ async function renderRules() {
          <td>${esc(e.domain)}</td><td>${esc(e.key)}</td><td>${esc(e.name)}</td>
          <td><code>${esc(e.detail)}</code></td>
          <td>${e.active ? "启用" : "停用"}</td></tr>`)}
-      <p class="desc">目录已统一，执行路径尚未统一——engine 列如实标出，不含糊其辞。</p></div>
-    <div class="panel"><h3>新增统一规则（admin）</h3>
+      <p class="desc">目录已统一，执行路径尚未统一——engine 列如实标出，不含糊其辞。</p>`)}
+    ${panel("新增统一规则（admin）", `
       <form class="inline" id="rule-form"><input name="key" placeholder="编码" required>
         <input name="name" placeholder="名称" required>
         <select name="domain">${domains.map((d) => `<option value="${esc(d.domain)}">${esc(d.domain)}</option>`).join("")}</select>
@@ -600,13 +600,13 @@ async function renderRules() {
           <td><code>${esc(r.condition)}</code></td><td>${statusTag(SEVERITY, r.severity)}</td>
           <td>${r.deduct_points}</td><td>${r.active ? "启用" : "停用"}</td>
           <td>${r.active ? `<button class="btn danger" data-off="${r.key}">停用</button>` : "—"}</td></tr>`;
-      })}</div>
-    <div class="panel"><h3>在线试算</h3>
+      })}`)}
+    ${panel("在线试算", `
       <form id="eval-form"><div class="inline">
         <select name="domain">${domains.map((d) => `<option value="${esc(d.domain)}">${esc(d.domain)}</option>`).join("")}</select>
         <input name="variables" placeholder='变量 JSON，如 {"daily_dose": 3000, "age": 78}' required style="min-width:420px">
         <button>试算</button></div></form>
-      <div id="eval-result"></div></div>`;
+      <div id="eval-result"></div>`)}`;
   $("#rule-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/rules", formJson(e.target, ["deduct_points"]), "#rule-msg"); };
   $("#eval-form").onsubmit = async (e) => {
@@ -1027,7 +1027,7 @@ async function renderCredentials() {
     "凭据是介质（卡会丢、码会过期），电子健康卡号才是身份——换卡不换号";
   const rows = await api("/api/credentials?limit=100");
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>发放凭据</h3>
+    ${panel("发放凭据", `
       <form id="cred-form" class="inline">
         <input name="patient_id" placeholder="患者ID" required>
         <select name="credential_type">
@@ -1041,15 +1041,15 @@ async function renderCredentials() {
       </form>
       <p class="desc">该患者原有的有效凭据会自动作废——挂失换发后旧卡必须立刻失效。</p>
       <p class="msg" id="cred-msg"></p>
-    </div>
-    <div class="panel"><h3>凭据核验</h3>
+    `)}
+    ${panel("凭据核验", `
       <form id="cred-lookup" class="inline">
         <input name="credential_no" placeholder="扫码或输入凭据号" required>
         <button>核验</button>
       </form>
       <div id="cred-result"></div>
-    </div>
-    <div class="panel"><h3>凭据台账</h3>
+    `)}
+    ${panel("凭据台账", `
       ${table(["凭据号", "患者ID", "类型", "状态", "发放时间", "结束原因", "操作"], rows, (c) =>
         `<tr><td>${esc(c.credential_no)}</td><td>${c.patient_id}</td>
          <td>${esc(c.credential_type_name)}</td>
@@ -1059,7 +1059,7 @@ async function renderCredentials() {
          <td>${esc(c.close_reason || "—")}</td>
          <td>${c.status === "active"
            ? `<button data-crec="${c.id}">回收</button><button data-cvoid="${c.id}">作废</button>` : ""}</td></tr>`)}
-    </div>`;
+    `)}`;
   $("#cred-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/credentials", formJson(e.target, ["patient_id"]), "#cred-msg"); };
   $("#cred-lookup").onsubmit = async (e) => {
@@ -1238,7 +1238,7 @@ async function renderOrgGroups() {
   const selected = Number(localStorage.getItem("medplat_group_id") || 0);
   const members = selected ? await api(`/api/org-groups/${selected}/members`) : [];
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>新建分组</h3>
+    ${panel("新建分组", `
       <form class="inline" id="og-form">
         <input name="name" placeholder="分组名称" required>
         <select name="group_type">${Object.entries(GROUP_TYPES).map(([v, t]) =>
@@ -1256,9 +1256,9 @@ async function renderOrgGroups() {
          <td><button data-ogpick="${g.id}">管理成员</button>
              <button data-ogtoggle="${g.id}" data-active="${g.active}">${
                g.active ? "停用" : "启用"}</button></td></tr>`)}
-    </div>
+    `)}
 
-    ${selected ? `<div class="panel"><h3>成员机构（分组 #${selected}）</h3>
+    ${selected ? panel(`成员机构（分组 #${selected}）`, `
       <form class="inline" id="og-member">
         <select name="org_id">${orgs.map((o) =>
           `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
@@ -1268,9 +1268,9 @@ async function renderOrgGroups() {
         `<tr><td>${esc(m.org_name)}</td><td>${esc(m.level)}</td>
          <td>${esc(m.joined_at.slice(0, 10))}</td>
          <td><button data-ogdrop="${m.org_id}">移出</button></td></tr>`)}
-    </div>` : ""}
+    `) : ""}
 
-    <div class="panel"><h3>覆盖情况（${esc(coverage.group_type_name)}）</h3>
+    ${panel(`覆盖情况（${coverage.group_type_name}）`, `
       <form class="inline"><select id="og-type">${Object.entries(GROUP_TYPES).map(([v, t]) =>
         `<option value="${v}"${v === typeFilter ? " selected" : ""}>${t}</option>`).join("")}</select></form>
       <div class="cards">
@@ -1287,7 +1287,7 @@ async function renderOrgGroups() {
             table(["机构", "层级"], coverage.ungrouped, (o) =>
               `<tr><td>${esc(o.org_name)}</td><td>${esc(o.level)}</td></tr>`)}`
         : '<p class="desc">全部机构均已入组，按分组统计之和等于全域总数。</p>'}
-    </div>`;
+    `)}`;
 
   $("#og-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1485,7 +1485,7 @@ async function renderStaffing() {
     api("/api/organizations"),
   ]);
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>下沉指标（${stats.year} 年度）</h3>
+    ${panel(`下沉指标（${stats.year} 年度）`, `
       ${stats.unknown_title_level
         ? `<p class="msg err">有 ${stats.unknown_title_level} 人次满足长期派驻满半年，
             但职称等级未维护，未计入"中级及以上"。请在下方台账补齐等级。</p>` : ""}
@@ -1493,9 +1493,9 @@ async function renderStaffing() {
         `<tr><td>${esc(o.org_name)}</td><td>${o.ongoing}</td><td>${o.total}</td>
          <td>${o.long_term_6m}</td><td><b>${o.long_term_6m_senior}</b></td></tr>`)}
       <p class="desc">${esc(stats.caliber.long_term_6m)}；${esc(stats.caliber.senior)}</p>
-    </div>
+    `)}
 
-    <div class="panel"><h3>新建派驻</h3>
+    ${panel("新建派驻", `
       <form class="inline" id="st-form">
         <input name="employee_id" type="number" placeholder="员工ID" required>
         <select name="from_org_id">${orgs.map((o) =>
@@ -1509,9 +1509,9 @@ async function renderStaffing() {
         <button>建立</button>
       </form>
       <p class="msg" id="st-msg"></p>
-    </div>
+    `)}
 
-    <div class="panel"><h3>派驻台账</h3>
+    ${panel("派驻台账", `
       ${table(["员工", "职称", "等级", "派出", "接收", "类型", "起止", "天数", "操作"], rows, (r) =>
         `<tr><td>${esc(r.employee_name)}</td><td>${esc(r.title || "—")}</td>
          <td>${r.title_level === "none"
@@ -1522,7 +1522,7 @@ async function renderStaffing() {
          <td>${esc(r.start_date)} ~ ${r.ongoing ? "在派" : esc(r.end_date)}</td>
          <td>${r.days}</td>
          <td>${r.ongoing ? `<button data-stend="${r.id}">结束派驻</button>` : ""}</td></tr>`)}
-    </div>`;
+    `)}`;
   $("#st-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/staffing/secondments",
       formJson(e.target, ["employee_id", "from_org_id", "to_org_id"]), "#st-msg"); };
@@ -1561,7 +1561,7 @@ async function renderDiseasePrograms() {
   }
   const current = programs.find((p) => p.id === picked);
   $("#page-body").innerHTML = `
-    <div class="panel"><h3>专病目录</h3>
+    ${panel("专病目录", `
       <form class="inline" id="dp-form">
         <input name="code" placeholder="专病编码" required>
         <input name="name" placeholder="专病名称" required>
@@ -1577,10 +1577,9 @@ async function renderDiseasePrograms() {
            `${esc(n.name)}${n.required === false ? "（选做）" : ""}`).join(" → ") || "—"}</td>
          <td><span class="tag ${p.active ? "green" : "red"}">${p.active ? "启用" : "停用"}</span></td>
          <td><button data-dppick="${p.id}">打开</button></td></tr>`)}
-    </div>
+    `)}
 
-    ${picked && current ? `
-    <div class="panel"><h3>${esc(current.name)} · 入组管理</h3>
+    ${picked && current ? panel(`${current.name} · 入组管理`, `
       <form class="inline" id="dp-enroll">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="org_id">${orgs.map((o) =>
@@ -1610,7 +1609,7 @@ async function renderDiseasePrograms() {
          <td>${e.status === "enrolled"
            ? `<button data-dpnode="${e.id}">记录节点</button><button data-dpexit="${e.id}">出组</button>`
            : ""}</td></tr>`)}
-    </div>` : ""}`;
+    `) : ""}`;
 
   $("#dp-form").onsubmit = (e) => {
     e.preventDefault();
