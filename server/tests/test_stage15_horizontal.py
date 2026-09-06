@@ -514,6 +514,84 @@ def _byid_org_write_endpoints():
     return unguarded
 
 
+#: 「按一批 id 改带 `org_id` 的行」这类写接口，必须自带机构守卫。**基线为空**。
+#:
+#: 为什么单独立一条而不是把上面那条判据放宽：`_byid_org_write_endpoints` 的判据
+#: **比缺陷窄两层**——①只看路径带 `{}` 的端点，②只认 `db.get(Model, …)`。
+#: 而 2026-09-06 实测到的两个洞都是「id 从 **body** 收、用
+#: `db.query(...).filter(Model.id.in_(...))` 批量取」，两条判据都绕过去了，棘轮一路全绿：
+#:
+#:   | 单条（一直有守卫） | 批量（漏了） |
+#:   |---|---|
+#:   | `claim_candidate` | `distribute_candidates`（P1-42） |
+#:   | `assign_task`     | `batch_tasks`（P1-47） |
+#:
+#: 两次同形状——**批量接口是这套守卫的系统性盲区**，所以它值得一条自己的规则。
+#:
+#: **为什么不干脆写一条"管所有形状"的判据**：试过了，不成立。把判据放宽到
+#: `db.query(Model)` + `db.commit()` 会命中 31 处（把一大批纯新建行的接口也算进来）；
+#: 收窄成 `db.get` / `.id.in_` / `.id ==` 三选一又会**漏掉 `contracts:sign`**
+#: （它按 `(patient_id, org_id)` 找行，语法上不带 id）。
+#: 说明这件事**本质是语义的**（"改了一行你写不了的机构的数据"），语法只能逼近，
+#: 而且两个方向都会错。所以这里的做法是：**一种形状一条规则、每条都从零基线起、
+#: 每条都做变异验证**，而不是攒一个越来越大的正则再配一张越来越长的豁免名单。
+BATCH_BYIDS_GUARDS = {
+    "assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
+    "assert_patient_visible", "scope_org_list", "scope_patient_list",
+    "log_patient_access",
+    # 下面两个是这一轮补上的：判据窄成什么样，前两个版本都吃过亏——
+    # 只认 `require_roles` 会把 `Depends(require_admin)` 的接口误报成"无守卫"；
+    # 守卫名单里没有 `visible_org_ids` 会把已经限定过范围的误报成洞。
+    "visible_org_ids", "require_admin",
+}
+
+
+def _batch_byids_org_write_endpoints() -> set[str]:
+    """写接口里「按一批 id 取带 `org_id` 的行」且没有任何机构守卫的。"""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app import models
+    scoped = {
+        c.__name__ for c in models.Base.registry._class_registry.values()
+        if hasattr(c, "__tablename__") and "org_id" in c.__table__.columns
+    }
+    found = set()
+    for name, path in _router_files():
+        if name in ("portal.py", "spd/portal.py"):      # 与上面那条同一理由豁免
+            continue
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
+            if not any(m in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
+                continue
+            body = ast.unparse(fn)
+            # 守卫既可能在函数体里，也可能挂在 decorator 上（`require_admin` 就是）
+            if any(g in body or g in decs for g in BATCH_BYIDS_GUARDS):
+                continue
+            if any(f"{model}.id.in_(" in body for model in scoped):
+                found.add(f"{name}:{fn.name}")
+    return found
+
+
+def test_批量按id写接口必须有机构守卫():
+    """基线为空：这类接口一处都不许没有机构守卫。
+
+    实测过两次（P1-42 / P1-47）：甲院的 doctor 一次请求就能把乙院的目标池记录改挂到
+    自己名下、把乙院的待办任务取消掉，都返回 200。两处的单条版本一直是对的，
+    **漏的都是批量版**——所以这条规则盯的就是"批量"这个形状。
+
+    与上面那条欠账清单不同，这条**没有豁免名单**：真出现按设计跨机构的批量写接口，
+    再连同理由一起加，而不是先留个口子。
+    """
+    unguarded = _batch_byids_org_write_endpoints()
+    assert unguarded == set(), (
+        "以下批量写接口按一批 id 改带 org_id 的行，却没有任何机构守卫：\n  "
+        + "\n  ".join(sorted(unguarded))
+        + "\n（越权不要进 skipped——静默跳过会让调用方拿着 200 以为整批都办了；"
+        "参照 app/spd/routers/tasks.py::batch_tasks 的做法：先全量校验再落笔）"
+    )
+
+
 def test_按id写接口机构归属欠账不许变长():
     """第八轮那条 11% 的扫描教会的：缺口必须显式、可量化、只减不增。
 
