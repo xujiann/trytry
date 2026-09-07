@@ -548,7 +548,11 @@ async function renderAppointments() {
       await api("/api/appointments/slots", { method: "POST", body: JSON.stringify({
         org_id: Number(f.get("org_id")), resource_type: f.get("resource_type"),
         resource_name: f.get("resource_name"), slot_date: f.get("slot_date"),
-        slot_time: f.get("slot_time"), capacity: Number(f.get("capacity")) }) });
+        // 清空 `capacity` 会送 0（`Number("")` 是 0 不是 NaN），而后端是
+        // `Field(default=1, ge=1)`——0 违反 ge=1，用户拿到的是一句 422 而不是默认值。
+        // 与 `#og-form`「空字符串要去掉」、`#pay-form` 的 `if (f.get("amount"))` 同一写法。
+        slot_time: f.get("slot_time"),
+        ...(f.get("capacity") ? { capacity: Number(f.get("capacity")) } : {}) }) });
       route();
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
@@ -1068,7 +1072,9 @@ async function renderRx() {
         patient_id: Number(f.get("patient_id")), org_id: Number(f.get("org_id")),
         diagnosis_name: f.get("diagnosis_name"),
         items: [{ drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
-          daily_dose: Number(f.get("daily_dose")), days: Number(f.get("days")) }] }) });
+          // 同上：清空 `days` 送 0，后端 `Field(default=1, ge=1)` 直接 422。
+          daily_dose: Number(f.get("daily_dose")),
+          ...(f.get("days") ? { days: Number(f.get("days")) } : {}) }] }) });
       const base = p.status === "auto_passed" ? "系统审通过" : `转入药师审核：${p.review_comment}`;
       // 块2：肝肾功能提示为非拦截提醒，附在审方结论之后
       const tips = (p.advisories || []).length ? `｜${p.advisories.join("；")}` : "";
