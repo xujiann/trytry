@@ -36,7 +36,14 @@ async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   const resp = await fetch(path, { ...options, credentials: "same-origin", headers });
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.detail || `请求失败(${resp.status})`);
+  if (!resp.ok) {
+    // 把状态码挂在错误上。原先只抛 `data.detail`，**状态码就地丢了**，
+    // 于是 authApi 只能拿中文文案去反推「是不是掉线了」——后端改一句话，
+    // 居民端的掉线处理就静默失效（见 authApi 的说明）。
+    const err = new Error(data.detail || `请求失败(${resp.status})`);
+    err.status = resp.status;
+    throw err;
+  }
   return data;
 }
 
@@ -54,7 +61,17 @@ async function authApi(path, options = {}) {
   try {
     return await api(path, { ...options, headers: { ...auth, ...(options.headers || {}) } });
   } catch (err) {
-    if (/401|登录状态无效|请先登录|已退出登录|账户不存在/.test(err.message)) {
+    // **按状态码判掉线，不按文案。** 原先是
+    // `/401|登录状态无效|请先登录|已退出登录|账户不存在/.test(err.message)`：
+    // 后端把 `detail` 改一个字（"请先登录" → "登录已过期，请重新登录"），
+    // 这条正则就不再命中——居民端不会清本地登录态、也不回登录页，
+    // 只弹一句看不懂的错误，而**没有任何一处会报这个失效**。
+    // 更糟的是那个 `401` 分支只在后端**不给 detail** 时才命中（那时文案才是
+    // "请求失败(401)"）；一旦给了 detail，状态码在 api() 里就已经丢了。
+    // 现在 api() 会把 `status` 挂在错误上，这里只认它：后端新增任何一种 401
+    // 都自动覆盖，改文案也不影响。管理端 core.js:35 与医生端 doctor.js:30
+    // 本来就是先判 `resp.status === 401`——这次是把居民端这个异类拉齐。
+    if (err.status === 401) {
       clearAuth();
       renderArchiveTab();
     }

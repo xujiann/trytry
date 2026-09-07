@@ -198,7 +198,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P2-19 | 89 render 手抄同一模板，无 panel/crudPage/分页/加载态抽象 | pages-*.js |
 | P2-20 | `PAGES[1]` 硬编码下标作默认页，头部插分组即崩 | `core.js:141` |
 | P2-21 | 11 个 UI 状态塞 localStorage 当参数，页面不可分享/不支持前进后退/跨标签污染 | pages-mgmt.js 等 |
-| P2-22 | 居民端靠正则匹配中文错误消息判断登录失效，后端改文案即失效 | `m/m.js:36` |
+| ~~P2-22~~ | ~~居民端靠正则匹配中文错误消息判断登录失效~~ —— ✅ **已修 2026-09-07**：根因是 `api()` 里 `throw new Error(data.detail || …)` **把状态码就地丢了**，于是 `authApi` 只能拿人看的文案去反推机器该做的事；那条正则里的 `401` 分支还形同虚设——它只在后端**不给 detail** 时才命中，给了 detail 状态码就没了，也就是说「按状态码兜底」这层保险从来没生效过。改为 `api()` 把 `status` 挂在错误上、`authApi` 只认 `err.status === 401`。**这不是发明新约定而是把异类拉齐**：管理端 `core.js:35` 与医生端 `doctor.js:30` 本来就先判 `resp.status === 401`。守卫 `tests/test_portal_session_expiry_contract.py` 四条，**跨层两头都钉**（前端不得再按文案判 + `current_resident` 每条失败路径必须是 401）——只钉一头的话另一头改了照样静默失效，那正是原缺陷的成因；三处变异各自转红 | `app/static/m/m.js` |
 | P2-23 | `MAP[x]\|\|x` 兜底未转义 4 处 | ✅ 已修（阶段十四 Q1：同形状实清 6 处 + test_frontend_escape_guard.py 防复发） |
 | P2-24 | **同一缺陷的第二种写法**：`const [text] = MAP[x] \|\| [x, ""]` 之后 `${text}` 裸插——P2-23 那条正则只认行内式，一条都抓不到 | ✅ 已修 2026-08-26（按形状全仓库扫出 **33 处**，五个文件；`test_frontend_escape_guard.py` 补第二条守卫，含三种"拼写绕过"的反证用例） |
 | P2-25 | 裸 `${MAP[key]}` 取单值、查不到时页面上显示字面量 `undefined` | ☐ **待办**：`core.js:809` `${CENTER_NAMES[r.center_type]}`、`core.js:609` `${WT[w.waste_type]}`、`pages-clinical.js:1875` `${SITE[r.infection_site]}` 等。与 P2-23/24 是同一族（查表没兜底），但**只是显示缺陷不是崩溃也不是 XSS**，故没并进那两条守卫——一条守卫混两种严重度，迟早因噪声被加豁免。安全写法仍是仓库自有的 `esc(MAP[x] \|\| x)`。**需要先逐处定文案**（显示原始码？显示"—"？），不是纯机械替换，故单列一项 |
