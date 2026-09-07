@@ -70,7 +70,8 @@ import warnings
 #: → 128（同日重写 quality:record_qc_summary 的聚合口径，`.limit(5000)` 直接删掉）
 #: → 126（同日重写 spd 的 assessment_stats / edu_stats，同一个病的第三、第四例）
 #: → 118（同日切完第四批里 8 个有收口或按设计全域可见的端点）
-BASELINE_SILENT_TRUNCATION = 118
+#: → 117（同日修 drgs:in_stay_alerts，预警的输入不该有上限）
+BASELINE_SILENT_TRUNCATION = 117
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
@@ -215,6 +216,10 @@ NESTED_CAP_FALSE_POSITIVES = {
     "portal.py:portal_my_contract",
     "spd/portal.py:archive",
     "spd/portal.py:journey",
+    # 第五批人工核出的同类：上限是**写在 docstring 里的业务规则**，不是分页缺陷
+    "chronic.py:risk_score",            # `.limit(3)` = 「最近 3 次随访」的评分口径
+    "spd/followup.py:followup_context",  # 随访时给医生看的上下文，各取最近几条
+    "spd/population.py:patient_profile",  # 患者画像：各维度各附最近 N 条
 }
 
 
@@ -228,9 +233,14 @@ def test_portal两个模块只剩三处误报():
         e for e in silently_truncating_endpoints()
         if e.startswith(("portal.py:", "spd/portal.py:"))
     }
-    assert left == NESTED_CAP_FALSE_POSITIVES, (
-        f"多出来的（退回硬编码）：{sorted(left - NESTED_CAP_FALSE_POSITIVES)}；"
-        f"少掉的（嵌套上限被误迁）：{sorted(NESTED_CAP_FALSE_POSITIVES - left)}"
+    # 只比 portal 两个模块那部分——这张表后来收了别的模块的同类误报
+    expected = {
+        e for e in NESTED_CAP_FALSE_POSITIVES
+        if e.startswith(("portal.py:", "spd/portal.py:"))
+    }
+    assert left == expected, (
+        f"多出来的（退回硬编码）：{sorted(left - expected)}；"
+        f"少掉的（嵌套上限被误迁）：{sorted(expected - left)}"
     )
 
 

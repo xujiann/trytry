@@ -863,8 +863,15 @@ def referral_alerts(
             | SpdReferralCase.current_org_id.in_(orgs)
         )
     rows = query.order_by(SpdReferralCase.created_at).limit(200).all()
+    # `count` 必须是**超时在途单的总数**，不是「这次取回了几条」。
+    # 原实现是 `len(rows)`，而 rows 被 `.limit(200)` 截断——积压 500 单时
+    # 预警页显示「超时 200 单」，**与真的只有 200 单长得一模一样**，
+    # 而这正是拿来判断"积压有多严重"的那个数。
+    # 列表本身保留 200 条上限：排序是 `created_at` **升序**，留下的正是
+    # 最久未推进的那些（与临期预警那两处相反，那边升序 + 只有上界才砍错了端）。
+    total = query.count()
     return {
         "threshold_hours": hours,
-        "count": len(rows),
+        "count": total,
         "items": [_case_out(db, r) for r in rows],
     }

@@ -469,7 +469,13 @@ def in_stay_alerts(
         .filter(Admission.status == "admitted")
     )
     query = scope_org_list(db, user, query, Admission, org_id)
-    rows = query.order_by(Admission.id.desc()).limit(500).all()
+    # **预警不能只看前 500 条在院病例**：下面这圈把 rows 分成 alerts /
+    # insufficient_baseline / ungrouped 三类，`.limit(500)` 截断的是**预警的输入**，
+    # 超过 500 张在院床位之后，第 501 个病例即使住院日超均值三倍也不会被报出来
+    # ——而「没有预警」与「真的没问题」长得一模一样。`ungrouped_in_stay` 同样少算。
+    # 行数由**在院床位数**封顶（`status == "admitted"`），不随历史增长；
+    # 上面的 history 基线查询本来也没有上限，两边口径就此一致。
+    rows = query.order_by(Admission.id.desc()).all()
 
     alerts, insufficient, ungrouped = [], [], 0
     for adm, summary in rows:
