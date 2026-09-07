@@ -326,10 +326,23 @@ def batch_recipients(batch_id: int, db: Session = Depends(get_db)):
         .limit(1000)
         .all()
     )
+    # `total` 必须是**这一批实际接种了多少人次**，不是「这次取回了几行」。
+    # 原实现是 `len(rows)`，而 rows 被 `.limit(1000)` 截断——一个批次发给 3000 人时，
+    # 召回追溯页会显示「总计 1000」，**与真的只有 1000 人长得一模一样**。
+    # 这个接口的用途是召回时反查受种者（见 docstring），少报人数意味着
+    # 少通知的那 2000 人不会有任何一处提醒。列表本身仍受 1000 行上限约束
+    # （放开它要先解决这个端点没有机构收口的问题，见 P1-49），
+    # 但至少现在它会**如实说出还有多少人没列出来**。
+    total = (
+        db.query(func.count(VaccinationRecord.id))
+        .filter(VaccinationRecord.batch_id == batch_id)
+        .scalar()
+        or 0
+    )
     return {
         "batch_no": batch.batch_no,
         "vaccine_name": batch.vaccine_name,
-        "total": len(rows),
+        "total": total,
         "recipients": [
             {
                 "record_id": r.id,
@@ -643,19 +656,29 @@ def expiring_batches(
     而是提示尽快按报废流程处理，别让它躺在冰箱里被误用。"""
     today_str = resolve_business_date(today).isoformat()
     limit = _plus_days(today_str, days)
+    # 「仍有余量」必须在 SQL 里筛，不能取完 500 行再用 Python 丢行。
+    # 原实现两件事凑在一起，让这个预警实际上早就不预警了：
+    # 过滤**只有上界没有下界**（含已过期，见 docstring），排序又是按到期日**升序**,
+    # 于是 `.limit(500)` 砍掉的恰好是「即将到期」那一端，留下的是「早就过期、
+    # 也早就发完」那一端；而发完的批次不会删行（只累加 used_quantity），
+    # 真实库里这 500 行大半是零余量——**最该预警的批次一条都出不来**，
+    # 页面上和「没有临期批次」长得一模一样。同一形状已在 pharmacy 侧修过一次。
+    # 下界**不能加**：本端点的口径就是要把已过期的一并列出并标注，
+    # 提示按报废流程处理（见 docstring），加了下界等于把它们从预警里删掉。
     rows = (
         db.query(VaccineBatch)
-        .filter(VaccineBatch.expire_date <= limit)
-        .order_by(VaccineBatch.expire_date)
+        .filter(
+            VaccineBatch.expire_date <= limit,
+            VaccineBatch.quantity - VaccineBatch.used_quantity > 0,
+        )
+        # expire_date 只有 index、不唯一，补 id 尾键才有确定次序
+        .order_by(VaccineBatch.expire_date, VaccineBatch.id)
         .limit(500)
         .all()
     )
     return {
         "today": today_str,
         "within_days": days,
-        "batches": [
-            b for b in (_batch_out(r, today_str) for r in rows)
-            if b["remaining"] > 0
-        ],
+        "batches": [_batch_out(r, today_str) for r in rows],
         "generated_at": now_naive().isoformat(),
     }

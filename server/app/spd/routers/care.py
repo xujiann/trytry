@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+import sqlalchemy as sa
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -709,24 +710,43 @@ def assessment_stats(
     program_code: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """评估统计（成员端 #8）：人数、人次、结果分布与逐题分布。"""
+    """评估统计（成员端 #8）：人数、人次、结果分布与逐题分布。
+
+    **统计不能吃被截断的样本。** 原实现是 `query.order_by(id.desc()).limit(5000).all()`
+    之后再在 Python 里算——人数、人次、风险分布、逐题分布**全部**算在最新的
+    5000 条上。评估量过 5000 之后，更早的那些一条不剩地消失，而
+    「未分级 0 人」与真的零长得一模一样，不报错、不变红、不写日志。
+    与 `quality:record_qc_summary` 是同一个病（那边是 6000 份病历报「零丙级」）。
+
+    **改法是流式扫全量，不是加大上限**：`.limit(5000)` 删掉、换 `yield_per`。
+    逐题分布要读每行的 `answers` JSON，SQL 聚合表达不了，只能逐行过；
+    但**内存不随行数涨**——`persons` 是患者 id 的集合（上界是患者数），
+    `by_risk`/`by_item` 是小字典，三者都由**输出规模**而不是行数决定。
+    循环体一字未动，所以 `by_risk`/`by_item` 的键序（= 按 id 倒序首次出现的次序，
+    是响应字节的一部分）也原样保住，见 `tests/test_spd_stats_truncation.py`。
+    """
     query = db.query(SpdAssessment)
     if scale_code:
         query = query.filter(SpdAssessment.scale_code == scale_code)
     if program_code:
         query = query.filter(SpdAssessment.program_code == program_code)
-    rows = query.order_by(SpdAssessment.id.desc()).limit(5000).all()
+    rows = query.order_by(SpdAssessment.id.desc()).yield_per(1000)
+    persons: set[int] = set()
+    times = 0
     by_risk: dict[str, int] = {}
     by_item: dict[str, dict[str, int]] = {}
     for row in rows:
+        # 流式只能过一遍，所以人数/人次在同一圈里累计（原来是事后 len(rows)）
+        persons.add(row.patient_id)
+        times += 1
         by_risk[row.risk_level or "未分级"] = by_risk.get(row.risk_level or "未分级", 0) + 1
         for key, value in (row.answers or {}).items():
             options = by_item.setdefault(key, {})
             for one in value if isinstance(value, list) else [value]:
                 options[str(one)] = options.get(str(one), 0) + 1
     return {
-        "persons": len({r.patient_id for r in rows}),
-        "times": len(rows),
+        "persons": len(persons),
+        "times": times,
         "by_risk": by_risk,
         "by_item": by_item,
     }
@@ -1029,7 +1049,22 @@ def list_edu_pushes(
 
 @router.get("/edu-pushes/stats", response_model=EduStatsOut)
 def edu_stats(program_code: str | None = None, db: Session = Depends(get_db)):
-    """宣教成效统计（成员端 #16）：覆盖人数、执行次数、阅读完成率。"""
+    """宣教成效统计（成员端 #16）：覆盖人数、执行次数、阅读完成率。
+
+    **统计不能吃被截断的样本，这一条比同类更糟：它连 `order_by` 都没有。**
+    原实现是 `query.limit(20000).all()` 之后在 Python 里数——覆盖人数、执行次数、
+    已发、已读、完成率、按渠道分布**全部**算在那 20000 条上。推送量过 20000 之后
+    不只是「少算一点」：**取哪 20000 条由数据库自行决定**，同一份数据两次请求
+    可以给出不同的完成率，**不可复现**。而「完成率 100%」与真的 100% 长得一模一样。
+
+    改法是把整套口径下推 SQL（这个端点不像 `assessment_stats` 要读 JSON，
+    六个数全部表达得了），`.limit(20000)` 直接删掉——统计接口本来就不该有
+    「只算前 N 条」这种东西。
+
+    一处**变好了**的差异值得记：`by_channel` 的键序原来来自 `{r.channel for r in rows}`
+    这个**集合**的迭代序，而 Python 的字符串哈希是按进程随机化的——也就是说
+    同一份数据重启一次服务就可能换个键序。现在按 `channel` 排序，稳定了。
+    """
     query = db.query(SpdEduPush)
     if program_code:
         ids = [
@@ -1039,18 +1074,26 @@ def edu_stats(program_code: str | None = None, db: Session = Depends(get_db)):
             .all()
         ]
         query = query.filter(SpdEduPush.material_id.in_(ids or [0]))
-    rows = query.limit(20000).all()
-    read = sum(1 for r in rows if r.status == "read")
-    sent = sum(1 for r in rows if r.status in ("sent", "read"))
+    covered, times, sent, read = query.with_entities(
+        func.count(sa.distinct(SpdEduPush.patient_id)),
+        func.count(SpdEduPush.id),
+        func.count(sa.case((SpdEduPush.status.in_(("sent", "read")), 1))),
+        func.count(sa.case((SpdEduPush.status == "read", 1))),
+    ).one()
     return {
-        "covered_patients": len({r.patient_id for r in rows}),
-        "push_times": len(rows),
+        "covered_patients": covered,
+        "push_times": times,
         "sent": sent,
         "read": read,
         "read_rate": round(read / sent * 100, 1) if sent else 0.0,
         "by_channel": {
-            channel: sum(1 for r in rows if r.channel == channel)
-            for channel in {r.channel for r in rows}
+            channel: count
+            for channel, count in query.with_entities(
+                SpdEduPush.channel, func.count(SpdEduPush.id)
+            )
+            .group_by(SpdEduPush.channel)
+            .order_by(SpdEduPush.channel)
+            .all()
         },
     }
 
