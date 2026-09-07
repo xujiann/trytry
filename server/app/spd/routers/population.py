@@ -1338,7 +1338,11 @@ def create_group(
 
 @router.get("/groups", response_model=list[GroupOut])
 def list_groups(
-    scope: str | None = None, db: Session = Depends(get_db),
+    response: Response,
+    scope: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """本人与本科室分组。个人分组只看自己的，科室/团队分组按机构可见。"""
@@ -1351,7 +1355,7 @@ def list_groups(
             (SpdGroup.owner_user_id == user.id)
             | ((SpdGroup.scope != "personal") & SpdGroup.org_id.in_(orgs))
         )
-    rows = query.order_by(SpdGroup.id.desc()).limit(200).all()
+    rows = paginate(query.order_by(SpdGroup.id.desc()), response, offset, limit)
     counts = row_dict(
         db.query(SpdGroupMember.group_id, func.count(SpdGroupMember.id))
         .filter(SpdGroupMember.group_id.in_([g.id for g in rows] or [0]))

@@ -1,7 +1,7 @@
 """法定医学证明（浙#7、㉔出生医学证明签发）：出生/死亡医学证明签发与出生缺陷儿登记。"""
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_with_retry
 from ..visibility import assert_org_writable, log_patient_access, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import ChildRecord, MedicalCert, Organization, Patient, User
 from ..datetypes import DateStr
 from ..privacy import mask_id_card, mask_phone
@@ -103,7 +103,13 @@ def issue_cert(
 
 @router.get("", response_model=list[CertOut])
 def list_certs(
-    cert_type: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    cert_type: str | None = None,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(MedicalCert)
     if cert_type:
@@ -120,7 +126,7 @@ def list_certs(
             "detail": c.detail,
             "org_id": c.org_id,
         }
-        for c in query.order_by(MedicalCert.id.desc()).limit(200).all()
+        for c in paginate(query.order_by(MedicalCert.id.desc()), response, offset, limit)
     ]
 
 

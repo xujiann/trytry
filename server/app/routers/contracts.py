@@ -1,11 +1,11 @@
 """家庭医生签约：协议管理、服务包、履约记录。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import ContractService, FamilyDoctorContract, Organization, Patient, User
 from ..schemas import ContractCreate, ContractOut, ContractServiceCreate, ContractServiceOut
 
@@ -50,12 +50,22 @@ def sign(body: ContractCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[ContractOut])
-def list_contracts(org_id: int | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_contracts(
+    response: Response,
+    org_id: int | None = None,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(FamilyDoctorContract)
     if org_id is not None:
         query = query.filter(FamilyDoctorContract.org_id == org_id)
     query = scope_patient_list(db, user, query, FamilyDoctorContract, patient_id, "contract")
-    return query.order_by(FamilyDoctorContract.id.desc()).limit(500).all()
+    return paginate(
+        query.order_by(FamilyDoctorContract.id.desc()), response, offset, limit
+    )
 
 
 @router.post(

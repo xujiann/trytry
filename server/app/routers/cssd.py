@@ -1,10 +1,10 @@
 """消毒供应中心：复用器械批次灭菌→发放→回收全流程追溯。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import CssdCostItem, CssdRequest, Organization, SterilizationBatch, User
 from ..schemas import BatchCreate, BatchOut
 from typing import Any
@@ -267,8 +267,11 @@ def create_cssd_request(body: CssdReqCreate, db: Session = Depends(get_db), user
 
 @router.get("/requests", response_model=list[CssdRequestOut])
 def list_cssd_requests(
+    response: Response,
     status: str | None = None,
     org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -278,7 +281,7 @@ def list_cssd_requests(
         q = q.filter(CssdRequest.status == status)
     return [
         {"id": r.id, "org_id": r.org_id, "item_name": r.item_name, "quantity": r.quantity, "status": r.status, "batch_id": r.batch_id}
-        for r in q.order_by(CssdRequest.id.desc()).limit(200).all()
+        for r in paginate(q.order_by(CssdRequest.id.desc()), response, offset, limit)
     ]
 
 

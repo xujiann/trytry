@@ -71,7 +71,8 @@ import warnings
 #: → 126（同日重写 spd 的 assessment_stats / edu_stats，同一个病的第三、第四例）
 #: → 118（同日切完第四批里 8 个有收口或按设计全域可见的端点）
 #: → 117（同日修 drgs:in_stay_alerts，预警的输入不该有上限）
-BASELINE_SILENT_TRUNCATION = 117
+#: → 102（同日切完第五批 A 类里 15 个纯分页的端点）
+BASELINE_SILENT_TRUNCATION = 102
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),

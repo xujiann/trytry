@@ -1,12 +1,12 @@
 """血液管理服务（浙#71）：血液库存台账、临床用血申请→审批→发血（血站系统为对接项）。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import BloodStock, Organization, Patient, TransfusionRequest, User
 
 router = APIRouter(prefix="/api/blood", tags=["血液管理"], dependencies=[Depends(get_current_user)])
@@ -177,8 +177,11 @@ def issue_blood(request_id: int, db: Session = Depends(get_db), user: User = Dep
 
 @router.get("/requests", response_model=list[TransfusionRowOut])
 def list_transfusion_requests(
+    response: Response,
     status: str | None = None,
     org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -196,5 +199,5 @@ def list_transfusion_requests(
             "quantity_ml": r.quantity_ml,
             "status": r.status,
         }
-        for r in q.order_by(TransfusionRequest.id.desc()).limit(200).all()
+        for r in paginate(q.order_by(TransfusionRequest.id.desc()), response, offset, limit)
     ]

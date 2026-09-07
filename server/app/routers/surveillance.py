@@ -13,7 +13,7 @@
 3. **预警只提示不定性**。超阈值给出的是"值得看一眼"，不是"发生疫情"——
    平台不替疾控下判断。
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -22,7 +22,14 @@ from ..concurrency import upsert_unique
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
-from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope, row_dict
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_roles,
+    resolve_business_date,
+    resolve_org_scope,
+    row_dict,
+)
 from ..models import EmergencyResource, Organization, PathogenMonitor, SyndromeMonitor, User
 
 router = APIRouter(
@@ -282,10 +289,13 @@ def report_pathogen(body: PathogenIn, db: Session = Depends(get_db), user: User 
 
 @router.get("/pathogens", response_model=list[PathogenOut])
 def list_pathogens(
+    response: Response,
     org_id: int | None = None,
     pathogen_name: str | None = None,
     start_date: OptionalDateStr = Query(default=""),
     end_date: OptionalDateStr = Query(default=""),
+    offset: int = 0,
+    limit: int = 1000,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(PathogenMonitor)
@@ -297,7 +307,7 @@ def list_pathogens(
     if end_date:
         query = query.filter(PathogenMonitor.record_date <= end_date)
     rows = query.order_by(PathogenMonitor.record_date.desc(), PathogenMonitor.id.desc())
-    return [_pathogen_out(r) for r in rows.limit(1000).all()]
+    return [_pathogen_out(r) for r in paginate(rows, response, offset, limit, 1000)]
 
 
 # ============================================================ 多点触发汇总

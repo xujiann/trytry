@@ -12,13 +12,13 @@
 **与 `/api/mgmt/qc`（QcRecord）法域不同**：那是①-④共享中心的运行质量台账
 （人工登记合格/不合格），本模块是检验科室内质控的数值体系，互不替代。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import Organization, QcLot, QcMeasurement, User, utcnow
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
 
@@ -90,9 +90,12 @@ def create_lot(body: LotCreate, db: Session = Depends(get_db), user: User = Depe
 
 @router.get("/lots", response_model=list[LotOut])
 def list_lots(
+    response: Response,
     org_id: int | None = None,
     item_code: str | None = None,
     active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -102,7 +105,7 @@ def list_lots(
         q = q.filter(QcLot.item_code == item_code)
     if active is not None:
         q = q.filter(QcLot.active.is_(active))
-    return q.order_by(QcLot.id.desc()).limit(200).all()
+    return paginate(q.order_by(QcLot.id.desc()), response, offset, limit)
 
 
 @router.patch(

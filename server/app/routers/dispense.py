@@ -18,7 +18,7 @@
 import math
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.engine import CursorResult
@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, ensure_present, take_amount
 from ..database import get_db
-from ..deps import get_current_user, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import (
     DispenseItem,
     DispenseRecord,
@@ -268,9 +268,12 @@ def dispense_prescription(
 
 @router.get("", response_model=list[DispenseOut])
 def list_dispenses(
+    response: Response,
     prescription_id: int | None = None,
     org_id: int | None = None,
     status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -280,7 +283,7 @@ def list_dispenses(
         q = q.filter(DispenseRecord.prescription_id == prescription_id)
     if status:
         q = q.filter(DispenseRecord.status == status)
-    rows = q.order_by(DispenseRecord.id.desc()).limit(200).all()
+    rows = paginate(q.order_by(DispenseRecord.id.desc()), response, offset, limit)
     return [_dispense_out(db, r) for r in rows]
 
 

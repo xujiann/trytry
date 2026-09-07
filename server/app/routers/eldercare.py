@@ -1,11 +1,11 @@
 """㉓老年健康业务协同：自理能力评估（ADL自动分级）、认知筛查、体质辨识。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..visibility import scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import ElderlyAssessment, Patient, User
 
 router = APIRouter(prefix="/api/eldercare", tags=["老年健康"], dependencies=[Depends(get_current_user)])
@@ -60,12 +60,20 @@ def create_assessment(
 
 
 @router.get("/assessments", response_model=list[AssessmentOut])
-def list_assessments(patient_id: int | None = None, care_level: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_assessments(
+    response: Response,
+    patient_id: int | None = None,
+    care_level: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(ElderlyAssessment)
     query = scope_patient_list(db, user, query, ElderlyAssessment, patient_id, "eldercare")
     if care_level:
         query = query.filter(ElderlyAssessment.care_level == care_level)
-    return query.order_by(ElderlyAssessment.id.desc()).limit(200).all()
+    return paginate(query.order_by(ElderlyAssessment.id.desc()), response, offset, limit)
 
 
 class DisabledElderOut(BaseModel):

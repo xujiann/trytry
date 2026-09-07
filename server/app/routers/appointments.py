@@ -1,7 +1,7 @@
 """预约诊疗：机构发布分时段号源，居民一站式预约（挂号/检查/检验）。"""
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -10,7 +10,13 @@ from ..visibility import scope_org_list, scope_patient_list
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..datetypes import DateStr
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_roles,
+    resolve_business_date,
+)
 from ..models import (
     Appointment,
     AppointmentSlot,
@@ -253,12 +259,29 @@ def batch_create_slots(body: SlotBatchCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/slots", response_model=list[SlotOut])
-def list_slots(org_id: int | None = None, slot_date: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_slots(
+    response: Response,
+    org_id: int | None = None,
+    slot_date: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(AppointmentSlot)
     query = scope_org_list(db, user, query, AppointmentSlot, org_id)
     if slot_date:
         query = query.filter(AppointmentSlot.slot_date == slot_date)
-    return query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(500).all()
+    # 补 id 尾键：`(slot_date, slot_time)` 不是全序——号源表的唯一索引是
+    # (org_id, employee_id, resource_type, resource_name, slot_date, slot_time)，
+    # 同一个「日期+时段」上按设计并排着各机构各资源的号源。居民端同一张表的
+    # `/me/slots` 在第二批已经补过，这里是它的业务端孪生。
+    return paginate(
+        query.order_by(
+            AppointmentSlot.slot_date, AppointmentSlot.slot_time, AppointmentSlot.id
+        ),
+        response, offset, limit,
+    )
 
 
 def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
@@ -352,10 +375,17 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[AppointmentOut])
-def list_appointments(patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_appointments(
+    response: Response,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Appointment)
     query = scope_patient_list(db, user, query, Appointment, patient_id, "appointment")
-    return query.order_by(Appointment.id.desc()).limit(500).all()
+    return paginate(query.order_by(Appointment.id.desc()), response, offset, limit)
 
 
 @router.post(

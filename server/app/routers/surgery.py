@@ -163,12 +163,19 @@ def create_room(body: RoomIn, db: Session = Depends(get_db), user: User = Depend
 
 
 @router.get("/rooms", response_model=list[OperatingRoomOut])
-def list_rooms(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_rooms(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(OperatingRoom)
     query = scope_org_list(db, user, query, OperatingRoom, org_id)
     return [
         {"id": r.id, "org_id": r.org_id, "name": r.name, "active": r.active}
-        for r in query.order_by(OperatingRoom.id).limit(200).all()
+        for r in paginate(query.order_by(OperatingRoom.id), response, offset, limit)
     ]
 
 
