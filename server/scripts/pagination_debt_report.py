@@ -56,18 +56,47 @@ GUARDS = (
 PERSON_FK = ("patient_id", "employee_id", "user_id", "account_id", "doctor_id")
 
 
+def _scoped(body: str, local: dict[str, str], depth: int = 2) -> bool:
+    """函数体里有没有收口——**要顺着模块内的辅助函数往下看**。
+
+    第五次被同一个形状咬：`spd/workbench.py:region_stats` 明明有收口，
+    但它走的是模块内的 `_scope(db, user, org_id)` / `_apply_scope(...)`，
+    这两个名字不在 `GUARDS` 里，于是被判成「没有收口」。
+    B 类的数因此**报大了**——而那个数是给人拿去裁定的。
+
+    所以这里不只比对名字，还顺着**同模块的局部函数**递归两层：
+    只要最终落到某个 `GUARDS` 里的调用，就算有收口。
+    两层足够覆盖 `region_stats → _scope → visible_org_ids` 这种链；
+    再深就该怀疑那个模块的收口写法本身需要收敛了。
+    """
+    if any(w in body for w in GUARDS):
+        return True
+    if depth <= 0:
+        return False
+    for name, helper in local.items():
+        if re.search(rf"\b{re.escape(name)}\s*\(", body) and _scoped(helper, local, depth - 1):
+            return True
+    return False
+
+
 def classify() -> dict:
     models = {m.class_.__name__: m.class_ for m in Base.registry.mappers}
     bodies = {}
+    #: 文件 → {模块内函数名: 函数体}，用来顺着局部辅助函数找收口
+    local_by_file: dict[str, dict[str, str]] = {}
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
+        local_by_file[name] = {}
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
-            bodies[f"{name}:{fn.name}"] = ast.unparse(fn)
+            src = ast.unparse(fn)
+            bodies[f"{name}:{fn.name}"] = src
+            local_by_file[name][fn.name] = src
 
     buckets = collections.defaultdict(list)
     for endpoint in sorted(silently_truncating_endpoints() - NESTED_CAP_FALSE_POSITIVES):
         body = bodies.get(endpoint, "")
-        if any(w in body for w in GUARDS):
+        local = local_by_file.get(endpoint.rsplit(":", 1)[0], {})
+        if _scoped(body, local):
             buckets["A"].append(endpoint)
             continue
         match = re.search(r"db\.query\((\w+)", body)
