@@ -80,14 +80,14 @@ server/scripts/dev_services.sh stop
 server/app/
   main.py         入口 + lifespan 种子化 + 三层中间件
   config.py       配置（唯一真源；MEDPLAT_REDIS_URL 例外，直接读 os.environ）
-  models.py       全部平台 ORM（勿再无节制增长；见 §4）
+  models/         全部平台 ORM（ADR-0008 已按域拆成 17 个文件；勿再无节制增长；见 §4）
   spd/            慢专病子系统（独立包、单向依赖、可装卸）
   routers/        接口层——目前业务逻辑内联在此（无正式 service 层）
   deps/visibility/concurrency/events/clock/…  横切基础设施
 ```
 
 - **无独立 domain/service 层**：平台侧业务逻辑内联在路由里。若你要抽服务层，放 `app/services/`，别再往路由里堆。
-- **子系统边界（重要）**：`app/spd` 只能经 `app/spd/platform.py` 访问平台的**模型与路由**；主 app 只能通过 `main.py` + `models.py` 触达 spd。这条单向依赖由 `tests/test_spd_boundary.py` 的 AST 扫描强制，**不要绕过它**。
+- **子系统边界（重要）**：`app/spd` 只能经 `app/spd/platform.py` 访问平台的**模型与路由**；主 app 只能通过 `main.py` + `models/__init__.py`（末尾 `from ..spd.models import *`）触达 spd。这条单向依赖由 `tests/test_spd_boundary.py` 的 AST 扫描强制，**不要绕过它**。
 - 种子常量目前寄生在路由文件里被 `main.py` 反向 import——沿用现状即可，别新增这种寄生。
 
 ---
@@ -98,7 +98,7 @@ server/app/
 - **迁移升级用 `alembic upgrade heads`（复数）**——本仓库有两个 head（平台链 + spd 链）。单数 `head` 会报错并漏掉 spd 的 59 张表。
 - 每个迁移**必须实现 `downgrade()`**（当前 52/52 全部实现，保持这个纪录）。
 - 类型约定（照抄现状，别自创）：
-  - **金额**：一律用 `Money`（`= Numeric(14,2, asdecimal=False)`，`models.py:44`）。**禁止用 Float 存金额。**
+  - **金额**：一律用 `Money`（`= Numeric(14,2, asdecimal=False)`，`models/_base.py:29`）。**禁止用 Float 存金额。**
   - **日期**：`String(10)`（配 `datetypes.DateStr`/`OptionalDateStr` 做入参校验）。**月度期间** `YYYY-MM`：body 字段用 `datetypes.PeriodStr`、查询参数用 `deps.require_month`，别再写月份正则（`tests/test_periodstr_single_source.py` 与 `test_datestr_single_source.py` 分别盯着两种形状）。**时间戳**：`DateTime` + `utcnow()`（naive UTC）。
   - **状态**：裸字符串，不用 Enum；取值范围写在列注释与路由 `pattern` 里。
   - **长文本**：`String(N)`（无 Text 类型），注意 1024 上限。
