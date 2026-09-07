@@ -407,7 +407,7 @@ async function renderContracts() {
       </form><p class="msg" id="ct-msg"></p>`)}
     ${panel("", table(["ID", "患者", "机构", "医生", "服务包", "状态", "操作"], contracts, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.org_id}</td><td>${esc(c.doctor_name)}</td>
-       <td><span class="tag">${PKG[c.package]}</span></td>
+       <td><span class="tag">${esc(PKG[c.package] || c.package)}</span></td>
        <td><span class="tag ${c.status === "active" ? "green" : "red"}">${c.status === "active" ? "履约中" : "已解约"}</span></td>
        <td>${c.status === "active"
          ? `<button class="btn secondary" data-svc="${c.id}">记录履约</button>
@@ -467,7 +467,7 @@ async function renderAppointments() {
         <button>预约</button>
       </form><p class="msg" id="apt-msg"></p>`)}
     ${panel("号源", table(["ID", "机构", "类型", "资源", "日期/时段", "已约/容量"], slots, (s) =>
-      `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${RT[s.resource_type]}</td><td>${esc(s.resource_name)}</td>
+      `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(RT[s.resource_type] || s.resource_type)}</td><td>${esc(s.resource_name)}</td>
        <td>${esc(s.slot_date)} ${esc(s.slot_time)}</td>
        <td><span class="tag ${s.booked >= s.capacity ? "red" : "green"}">${s.booked}/${s.capacity}</span></td></tr>`))}
     ${panel("预约记录", table(["ID", "号源", "患者", "状态", "操作"], appointments, (a) => {
@@ -647,7 +647,7 @@ async function renderMedwaste() {
       </form><p class="msg" id="waste-msg"></p>`)}
     ${alerts.length ? panel(`⚠ 滞留预警（${alerts.length}）`, `<p class="desc">收集超过2天仍未交接</p>`) : ""}
     ${panel("", table(["ID", "机构", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
-      return `<tr><td>${w.id}</td><td>${w.org_id}</td><td>${WT[w.waste_type]}</td><td>${w.weight_kg}kg</td>
+      return `<tr><td>${w.id}</td><td>${w.org_id}</td><td>${esc(WT[w.waste_type] || w.waste_type)}</td><td>${w.weight_kg}kg</td>
         <td>${esc(w.collected_date)}${alertIds.has(w.id) ? ' <span class="tag red">滞留</span>' : ""}</td>
         <td>${esc(w.handler_name) || "—"}</td><td>${statusTag(WS, w.status)}</td>
         <td>${w.status !== "handed_over" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : "—"}</td></tr>`;
@@ -848,7 +848,7 @@ async function renderExams() {
         : r.status === "diagnosing"
         ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "";
       actions += ` <button class="btn secondary" data-printreq="${r.id}">打印申请单</button>`;
-      return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${CENTER_NAMES[r.center_type]}</td>
+      return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${esc(CENTER_NAMES[r.center_type] || r.center_type)}</td>
         <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td><td>${actions}</td></tr>`;
     }))}
     ${panel("报告打印", `

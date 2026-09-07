@@ -395,7 +395,7 @@ async function renderTcm() {
       </form><p class="msg" id="tcm-msg"></p>
       ${table(["ID", "患者", "饮片", "剂数", "状态", "操作"], orders, (o) =>
         `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${esc(o.herbs)}</td><td>${o.doses}</td>
-         <td><span class="tag ${o.status === "delivered" ? "green" : "orange"}">${DS[o.status]}</span></td>
+         <td><span class="tag ${o.status === "delivered" ? "green" : "orange"}">${esc(DS[o.status] || o.status)}</span></td>
          <td>${o.status !== "delivered" ? `<button class="btn secondary" data-adv="${o.id}">流转</button>` : "—"}</td></tr>`)}`)}
     ${panel("适宜技术库", `
       ${table(["名称", "分类", "适应症"], techniques, (t) =>
@@ -618,7 +618,7 @@ async function renderMaternal() {
     ${panel("孕产妇档案", table(["ID", "患者", "预产期", "孕/产次", "高危", "状态", "操作"], records, (r) =>
       `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${esc(r.edc)}</td><td>G${r.gravidity}P${r.parity}</td>
        <td>${r.high_risk ? `<span class="tag red">高危</span> ${esc(r.risk_factors)}` : '<span class="tag green">正常</span>'}</td>
-       <td><span class="tag">${MS[r.status]}</span></td>
+       <td><span class="tag">${esc(MS[r.status] || r.status)}</span></td>
        <td>${r.status !== "closed" ? `<button class="btn secondary" data-visit="${r.id}">记录访视</button>
          ${r.status === "registered" ? `<button class="btn secondary" data-delivery="${r.id}">分娩登记</button>` : ""}
          ${r.status === "delivered" ? `<button class="btn secondary" data-close="${r.id}">结案</button>` : ""}` : "—"}</td></tr>`))}
@@ -1205,7 +1205,7 @@ async function renderPublicHealth() {
         <input name="value" type="number" step="any" placeholder="监测值" required><input name="threshold" type="number" step="any" placeholder="阈值" required>
         <input name="record_date" placeholder="日期"><button>登记</button></form>
       ${table(["领域", "指标", "值/阈值", "状态"], monitors, (m) =>
-        `<tr><td>${DM[m.domain]}</td><td>${esc(m.indicator)}</td><td>${m.value} / ${m.threshold}</td>
+        `<tr><td>${esc(DM[m.domain] || m.domain)}</td><td>${esc(m.indicator)}</td><td>${m.value} / ${m.threshold}</td>
          <td>${m.exceeded ? '<span class="tag red">超标</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}`)}`;
   $("#ev-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/events", formJson(e.target), "#ph-msg"); };
   $("#mon-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/monitors", formJson(e.target, ["org_id", "value", "threshold"]), "#ph-msg"); };
@@ -1401,9 +1401,9 @@ async function renderOaQc() {
        <td><span class="tag ${d.status === "published" ? "green" : "orange"}">${d.status === "published" ? "已发布" : "草稿"}</span></td>
        <td>${d.status === "draft" ? `<button class="btn secondary" data-pub="${d.id}">发布</button>` : "—"}</td></tr>`))}
     ${panel("排班", table(["中心", "日期", "班次", "医师"], rosters, (r) =>
-      `<tr><td>${CN[r.center_type]}</td><td>${esc(r.duty_date)}</td><td>${esc(r.shift)}</td><td>${esc(r.doctor_name)}</td></tr>`))}
+      `<tr><td>${esc(CN[r.center_type] || r.center_type)}</td><td>${esc(r.duty_date)}</td><td>${esc(r.shift)}</td><td>${esc(r.doctor_name)}</td></tr>`))}
     ${panel("质控记录", table(["中心", "项目", "结果", "备注"], qc, (q) =>
-      `<tr><td>${CN[q.center_type]}</td><td>${esc(q.item)}</td>
+      `<tr><td>${esc(CN[q.center_type] || q.center_type)}</td><td>${esc(q.item)}</td>
        <td><span class="tag ${q.result === "pass" ? "green" : "red"}">${q.result === "pass" ? "合格" : "不合格"}</span></td><td>${esc(q.note)}</td></tr>`))}`;
   $("#doc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/docs", formJson(e.target), "#oa-msg"); };
   $("#roster-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/rosters", formJson(e.target), "#oa-msg"); };
@@ -1474,7 +1474,7 @@ async function renderRecognition() {
         <button>加入目录</button>
       </form><p class="msg" id="rec-msg"></p>
       ${table(["编码", "名称", "中心", "范围", "状态", "操作"], items, (i) =>
-        `<tr><td>${esc(i.item_code)}</td><td>${esc(i.item_name)}</td><td>${CENTER_NAMES[i.center_type]}</td>
+        `<tr><td>${esc(i.item_code)}</td><td>${esc(i.item_name)}</td><td>${esc(CENTER_NAMES[i.center_type] || i.center_type)}</td>
          <td>${i.mutual_scope === "city" ? "市级" : "县域"}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
          <td><button class="btn secondary" data-toggle="${i.id}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}`)}
@@ -1489,7 +1489,7 @@ async function renderRecognition() {
         <input name="notes" placeholder="注意事项" style="min-width:160px">
         <button>建档</button></form>
       ${table(["ID", "机构", "中心", "项目", "设备", "价格", "时长", "注意事项"], resources, (r) =>
-        `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${CENTER_NAMES[r.center_type]}</td><td>${esc(r.item_name)}</td>
+        `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${esc(CENTER_NAMES[r.center_type] || r.center_type)}</td><td>${esc(r.item_name)}</td>
          <td>${esc(r.device) || "—"}</td><td>${r.price} 元</td><td>${r.duration_min} 分</td><td>${esc(r.notes) || "—"}</td></tr>`)}`)}`;
   $("#rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/exams/recognition-items", formJson(e.target), "#rec-msg"); };
   $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/exams/resources", formJson(e.target, ["org_id", "price", "duration_min"]), "#rec-msg"); };
@@ -1602,7 +1602,7 @@ async function renderBilling() {
   // 顶部的统计卡片区不是面板，原样保留。
   $("#page-body").innerHTML = `
     ${stats.length ? `<div class="cards">${stats.map((s) =>
-      `<div class="card"><div class="label">${BT[s.bill_type]}结算 ${s.count} 笔</div>
+      `<div class="card"><div class="label">${esc(BT[s.bill_type] || s.bill_type)}结算 ${s.count} 笔</div>
        <div class="value">${s.total_amount} 元</div>
        <div class="label">均次 ${s.avg_amount} 元 · 医保 ${s.insurance_ratio_pct}%</div></div>`).join("")}</div>` : ""}`
     + panel("收费项目目录（admin 维护）", `
@@ -1627,7 +1627,7 @@ async function renderBilling() {
         <input name="insurance_pay" type="number" step="any" placeholder="医保支付(元)" value="0"><button>结算</button></form>
       <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p>`)
     + panel("结算单", table(["ID", "患者", "类型", "总额", "医保", "自付", "时间"], settlements, (s) =>
-      `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${BT[s.bill_type]}</td><td>${s.total_amount}</td>
+      `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${esc(BT[s.bill_type] || s.bill_type)}</td><td>${s.total_amount}</td>
        <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td></tr>`))
     + panel("统一支付（经办）", `
       <form class="inline" id="pay-form">
@@ -1883,7 +1883,7 @@ async function renderQuality() {
         const actions = r.status === "reported"
           ? `<button class="btn secondary" data-verify="${r.id}" data-ok="true">确认</button>
              <button class="btn" data-verify="${r.id}" data-ok="false">排除</button>` : "—";
-        return `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${r.patient_id}</td><td>${SITE[r.infection_site]}</td>
+        return `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${r.patient_id}</td><td>${esc(SITE[r.infection_site] || r.infection_site)}</td>
           <td>${esc(r.pathogen)}</td><td>${statusTag(IST, r.status)}</td><td>${actions}</td></tr>`;
       })}`)}`;
   $("#ae-form").onsubmit = (e) => {
