@@ -69,7 +69,8 @@ import warnings
 #: → 129（同日切完 admin_mgmt/pharmacy/inpatient/quality 里**有机构收口**的 10 个）
 #: → 128（同日重写 quality:record_qc_summary 的聚合口径，`.limit(5000)` 直接删掉）
 #: → 126（同日重写 spd 的 assessment_stats / edu_stats，同一个病的第三、第四例）
-BASELINE_SILENT_TRUNCATION = 126
+#: → 118（同日切完第四批里 8 个有收口或按设计全域可见的端点）
+BASELINE_SILENT_TRUNCATION = 118
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),

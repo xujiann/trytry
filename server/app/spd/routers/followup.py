@@ -480,11 +480,20 @@ def create_questionnaire(body: QuestionnaireIn, db: Session = Depends(get_db)):
 
 
 @router.get("/questionnaires", response_model=list[QuestionnaireOut])
-def list_questionnaires(scene: str | None = None, db: Session = Depends(get_db)):
+def list_questionnaires(
+    response: Response,
+    scene: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdQuestionnaire).filter(SpdQuestionnaire.active.is_(True))
     if scene:
         query = query.filter(SpdQuestionnaire.scene == scene)
-    return [_q_out(q) for q in query.order_by(SpdQuestionnaire.id).limit(200).all()]
+    return [
+        _q_out(q)
+        for q in paginate(query.order_by(SpdQuestionnaire.id), response, offset, limit)
+    ]
 
 
 @router.patch("/questionnaires/{q_id}", response_model=QuestionnaireOut,
@@ -1238,11 +1247,20 @@ def create_report_template(body: ReportTemplateIn, db: Session = Depends(get_db)
 
 
 @router.get("/report-templates", response_model=list[SpdReportTemplateOut])
-def list_report_templates(period: str | None = None, db: Session = Depends(get_db)):
+def list_report_templates(
+    response: Response,
+    period: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdReportTemplate)
     if period:
         query = query.filter(SpdReportTemplate.period == period)
-    return [_template_out(t) for t in query.order_by(SpdReportTemplate.id).limit(100).all()]
+    return [
+        _template_out(t)
+        for t in paginate(query.order_by(SpdReportTemplate.id), response, offset, limit)
+    ]
 
 
 @router.patch("/report-templates/{template_id}", response_model=SpdReportTemplateOut,

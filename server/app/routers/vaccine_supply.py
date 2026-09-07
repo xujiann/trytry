@@ -14,7 +14,7 @@
 3. **AEFI 关联到剂次**而不只是患者：同一人打过多种疫苗，不落到剂次上
    就归不了因。
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -24,7 +24,13 @@ from ..clock import now_naive
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
-from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_roles,
+    resolve_business_date,
+    resolve_org_scope,
+)
 from ..models import (
     AefiReport,
     ColdChainRecord,
@@ -257,19 +263,39 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db), user: User = Depe
 
 @router.get("/batches", response_model=list[VaccineBatchOut])
 def list_batches(
+    response: Response,
     vaccine_code: str | None = None,
     org_id: int | None = None,
     usable_only: bool = False,
     today: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
+    """疫苗批次台账。`usable_only` 的谓词下推 SQL，不在取完行之后丢行。
+
+    原实现是 `[r for r in rows if r["usable"]] if usable_only else rows`——
+    取完 500 行再用 Python 筛。留着它切分页会让 `X-Total-Count`（数的是**含不可用**
+    的结果集）与响应体（只剩可用的）对不上，调用方按「`len(page) < limit` 即最后一页」
+    翻页会在第一页就早停，**等于把静默截断换成静默早停**。
+    `usable` 的三个条件（未过期 / 未封存 / 尚有余量）与 `_batch_out` 里的判定一一对应，
+    见那里的口径说明。
+    """
     today_str = resolve_business_date(today).isoformat()
     query = db.query(VaccineBatch)
     if vaccine_code:
         query = query.filter(VaccineBatch.vaccine_code == vaccine_code)
     query = scope_org_list(db, user, query, VaccineBatch, org_id)
-    rows = [_batch_out(b, today_str) for b in query.order_by(VaccineBatch.id.desc()).limit(500).all()]
-    return [r for r in rows if r["usable"]] if usable_only else rows
+    if usable_only:
+        query = query.filter(
+            VaccineBatch.expire_date >= today_str,
+            VaccineBatch.status == "normal",
+            VaccineBatch.quantity - VaccineBatch.used_quantity > 0,
+        )
+    return [
+        _batch_out(b, today_str)
+        for b in paginate(query.order_by(VaccineBatch.id.desc()), response, offset, limit)
+    ]
 
 
 @router.post(
@@ -411,9 +437,12 @@ def record_temperature(body: ColdChainIn, db: Session = Depends(get_db), user: U
 
 @router.get("/cold-chain", response_model=list[ColdChainOut])
 def list_temperatures(
+    response: Response,
     org_id: int | None = None,
     exceeded_only: bool = False,
     unhandled_only: bool = False,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -425,7 +454,10 @@ def list_temperatures(
         query = query.filter(ColdChainRecord.exceeded.is_(True))
     if unhandled_only:
         query = query.filter(ColdChainRecord.exceeded.is_(True), ColdChainRecord.handled.is_(False))
-    return [_cold_out(r) for r in query.order_by(ColdChainRecord.id.desc()).limit(500).all()]
+    return [
+        _cold_out(r)
+        for r in paginate(query.order_by(ColdChainRecord.id.desc()), response, offset, limit)
+    ]
 
 
 @router.post(
@@ -517,10 +549,13 @@ def report_aefi(
 
 @router.get("/aefi", response_model=list[AefiOut])
 def list_aefi(
+    response: Response,
     patient_id: int | None = None,
     vaccine_code: str | None = None,
     batch_no: str | None = None,
     severe_only: bool = False,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(AefiReport)
@@ -531,7 +566,10 @@ def list_aefi(
         query = query.filter(AefiReport.batch_no == batch_no)
     if severe_only:
         query = query.filter(AefiReport.reaction_type == "severe")
-    return [_aefi_out(r) for r in query.order_by(AefiReport.id.desc()).limit(500).all()]
+    return [
+        _aefi_out(r)
+        for r in paginate(query.order_by(AefiReport.id.desc()), response, offset, limit)
+    ]
 
 
 @router.patch(

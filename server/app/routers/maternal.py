@@ -2,7 +2,7 @@
 儿童保健档案与访视、新生儿疾病筛查、高危儿管理，婚前/孕前/妇女保健与避孕节育记录。"""
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -10,7 +10,7 @@ from ..datetypes import DateStr
 from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles, row_dict
+from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..models import (
     ChildRecord,
     ChildVisit,
@@ -474,13 +474,21 @@ def add_women_health(
 
 @router.get("/women-health", response_model=list[WomenHealthOut])
 def list_women_health(
-    patient_id: int | None = None, record_type: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    patient_id: int | None = None,
+    record_type: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(WomenHealthRecord)
     query = scope_patient_list(db, user, query, WomenHealthRecord, patient_id, "maternal")
     if record_type:
         query = query.filter(WomenHealthRecord.record_type == record_type)
-    return query.order_by(WomenHealthRecord.id.desc()).limit(200).all()
+    return paginate(
+        query.order_by(WomenHealthRecord.id.desc()), response, offset, limit
+    )
 
 
 # ===========================================================================
