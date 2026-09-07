@@ -21,6 +21,7 @@ from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org
 from ..database import get_db
 from ..deps import (
     get_current_user,
+    month_bounds,
     paginate,
     require_admin,
     require_month,
@@ -779,29 +780,70 @@ def record_qc_summary(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """全量环节质控统计：按机构/医师的甲乙丙分布与平均分（period=YYYY-MM 过滤）。"""
+    """全量环节质控统计：按机构/医师的甲乙丙分布与平均分（period=YYYY-MM 过滤）。
+
+    **统计在库侧做，一行病历都不往内存搬。** 原实现是
+    `[r for r in q.order_by(id.desc()).limit(5000).all() if 月份匹配]`，
+    两个缺陷叠在一起，都不会报错：
+
+    1. `.limit(5000)` 截断的是**统计口径的输入行**，于是 total / avg_score /
+       甲乙丙分布 / by_org / by_doctor 全都算在被截断的样本上。库里 6000 份病历、
+       最新 5000 份恰好都是甲级时，接口会报「零丙级病历」——那 1000 份丙级
+       一条不剩地消失，且没有任何一处会红。
+    2. **月份过滤发生在截断之后**（Python `strftime` 比对）。查一个较早的月份时，
+       若最新 5000 条都落在更晚的月份，返回的就是 `total: 0`——**与「那个月确实
+       没有病历」完全无法区分**。而这个端点用 `require_month` 正是为了防
+       「一份全零的质控统计」，结果同一个函数里又从另一头造了一份。
+
+    改法是把两件事都下推 SQL：月份走 `month_bounds` 的左闭右开区间比 `created_at`
+    （该列有索引），分桶换成 `GROUP BY`，然后 `.limit(5000)` 直接删掉——
+    统计接口本来就不该有「只算前 N 条」这种东西。
+
+    **两处响应字节靠特征化网钉住，重写时必须原样保住**
+    （见 `tests/test_qc_summary_characterization.py`）：
+
+    - **并列组的次序**：原实现是 Python 稳定排序 + `records` 按 `id DESC` 迭代，
+      合起来等价于「total 相同时，最大 id 更大的组排在前」。所以这里排序键写成
+      `(-total, -max_id)`，`max_id` 由 `func.max` 取——漏了后半句，并列组的次序
+      就会跟着数据库的心情走，而那是响应字节的一部分。
+    - **意料之外的等级是「多长一个键」而不是被忽略**：`grade_distribution` 从
+      `_grade_bucket()` 起步再 `get(g, 0) + n`，所以库里出现 `qc_grade="丁"` 时
+      响应里会多出一个 `"丁"` 键；而每组的 `grade_a/b/c` 只读固定那三个，
+      于是 `grade_a + grade_b + grade_c < total` 是**现状允许**的形状。
+    """
     if period is not None:
         period = require_month(period)  # 形状 + 日历：`2026-13` 不能变成一份全零的质控统计
     q = db.query(MedicalRecord)
     # 质控统计是管理口径：牵头医院要看得到片区的病历质量分布
     q = scope_org_list(db, user, q, MedicalRecord, org_id, stats=True)
-    records = [
-        r
-        for r in q.order_by(MedicalRecord.id.desc()).limit(5000).all()
-        # 月份口径与运营月报一致：按病历创建月份归属
-        if period is None or (r.created_at and r.created_at.strftime("%Y-%m") == period)
-    ]
+    if period is not None:
+        # 月份口径与运营月报一致：按病历创建月份归属。下推 SQL 才能在过滤**之前**
+        # 不被任何上限截断——这正是原实现颠倒了顺序的那一步。
+        start, end = month_bounds(period)
+        q = q.filter(MedicalRecord.created_at >= start, MedicalRecord.created_at < end)
     org_names = row_dict(db.query(Organization.id, Organization.name).all())
 
-    def group(key_fn, label_fn) -> list[dict]:
+    def group(key_col, label_fn) -> list[dict]:
         buckets: dict = {}
-        for r in records:
-            bucket = buckets.setdefault(
-                key_fn(r), {"grades": _grade_bucket(), "total": 0, "score_sum": 0}
+        rows = (
+            q.with_entities(
+                key_col,
+                MedicalRecord.qc_grade,
+                func.count(MedicalRecord.id),
+                func.sum(MedicalRecord.qc_score),
+                func.max(MedicalRecord.id),
             )
-            bucket["grades"][r.qc_grade] = bucket["grades"].get(r.qc_grade, 0) + 1
-            bucket["total"] += 1
-            bucket["score_sum"] += r.qc_score
+            .group_by(key_col, MedicalRecord.qc_grade)
+            .all()
+        )
+        for key, grade, count, score_sum, max_id in rows:
+            bucket = buckets.setdefault(
+                key, {"grades": _grade_bucket(), "total": 0, "score_sum": 0, "max_id": 0}
+            )
+            bucket["grades"][grade] = bucket["grades"].get(grade, 0) + count
+            bucket["total"] += count
+            bucket["score_sum"] += int(score_sum or 0)
+            bucket["max_id"] = max(bucket["max_id"], max_id)
         return [
             {
                 "key": key,
@@ -813,21 +855,33 @@ def record_qc_summary(
                 "grade_c": b["grades"]["丙"],
                 "grade_a_pct": round(b["grades"]["甲"] * 100.0 / b["total"], 2) if b["total"] else 0.0,
             }
-            for key, b in sorted(buckets.items(), key=lambda kv: -kv[1]["total"])
+            # 并列时按 max_id 倒序 —— 复刻原来「稳定排序 + id DESC 迭代」的次序
+            for key, b in sorted(buckets.items(), key=lambda kv: (-kv[1]["total"], -kv[1]["max_id"]))
         ]
 
     grades = _grade_bucket()
-    for r in records:
-        grades[r.qc_grade] = grades.get(r.qc_grade, 0) + 1
-    total = len(records)
+    total = 0
+    score_sum = 0
+    for grade, count, grade_score_sum in (
+        q.with_entities(
+            MedicalRecord.qc_grade,
+            func.count(MedicalRecord.id),
+            func.sum(MedicalRecord.qc_score),
+        )
+        .group_by(MedicalRecord.qc_grade)
+        .all()
+    ):
+        grades[grade] = grades.get(grade, 0) + count
+        total += count
+        score_sum += int(grade_score_sum or 0)
     return {
         "period": period or "累计",
         "total": total,
-        "avg_score": round(sum(r.qc_score for r in records) / total, 1) if total else 0.0,
+        "avg_score": round(score_sum / total, 1) if total else 0.0,
         "grade_distribution": grades,
         "grade_a_pct": round(grades["甲"] * 100.0 / total, 2) if total else 0.0,
-        "by_org": group(lambda r: r.org_id, lambda k: org_names.get(k, "")),
-        "by_doctor": group(lambda r: r.doctor_name, lambda k: k),
+        "by_org": group(MedicalRecord.org_id, lambda k: org_names.get(k, "")),
+        "by_doctor": group(MedicalRecord.doctor_name, lambda k: k),
     }
 
 

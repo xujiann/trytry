@@ -58,6 +58,7 @@ adverse-events/record-qc、`pharmacy` 的 batch_dispense_trace）。给它们切
 `test_pagination_sort_stability.py` 独立守（零基线、零豁免），别指望这条规则替它把关。
 """
 import ast
+import copy
 import os
 import re
 import warnings
@@ -66,7 +67,8 @@ import warnings
 #: 170（2026-09-06 首次量化）→ 162（同日切完 billing.py 的 8 个）
 #: → 139（2026-09-07 切完 portal.py 与 spd/portal.py 的 23 个）
 #: → 129（同日切完 admin_mgmt/pharmacy/inpatient/quality 里**有机构收口**的 10 个）
-BASELINE_SILENT_TRUNCATION = 129
+#: → 128（同日重写 quality:record_qc_summary 的聚合口径，`.limit(5000)` 直接删掉）
+BASELINE_SILENT_TRUNCATION = 128
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
@@ -93,6 +95,31 @@ def _router_files():
     return sorted(files)
 
 
+def _code(fn: ast.FunctionDef) -> str:
+    """函数体源码，**剥掉全部 docstring**。
+
+    这条是被自己咬了一口之后加的：重写 `quality:record_qc_summary` 时，
+    docstring 里为了讲清楚缺陷，原样引了一句 `.limit(5000)`——扫描当场把这个
+    **散文里的例子**当成代码，于是一个已经改好的端点永远留在计数里，
+    成了一笔还不掉的账。（ADR-0009 那台外壳棘轮踩过同一个坑，那次是块注释。）
+
+    而且这个坑**两个方向都会错**：docstring 里提一句 `paginate(` 会让一个真有
+    缺陷的端点被静默排除——那是假阴性，比多算一条严重得多。所以剥 docstring
+    不是为了把数字做小，是为了让判据只看代码。
+    """
+    clean = copy.deepcopy(fn)
+    for node in ast.walk(clean):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            first = node.body[0] if node.body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                node.body = node.body[1:] or [ast.Pass()]
+    return ast.unparse(clean)
+
+
 def silently_truncating_endpoints() -> set[str]:
     """GET 端点里「硬编码 `.limit(数字)`、没用 `paginate`、也没有翻页参数」的。"""
     found = set()
@@ -102,7 +129,7 @@ def silently_truncating_endpoints() -> set[str]:
             decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
             if ".get(" not in decs:
                 continue
-            body = ast.unparse(fn)
+            body = _code(fn)
             if "paginate(" in body:
                 continue
             if not re.search(r"\.limit\(\d+\)", body):
@@ -205,22 +232,50 @@ def test_portal两个模块只剩三处误报():
     )
 
 
-def test_第三批只剩待裁定的和一个要重写的():
+def test_第三批只剩待裁定的那些():
     """四个模块里有机构收口的都切完了，剩下的必须**恰好**是那 11 处待裁定 + qc-summary。
 
     钉成"恰好等于"而不是"包含于"：
     - 多出来 → 有端点退回了硬编码 `.limit()`；
     - 少掉待裁定里的某条 → 有人在没裁定的情况下把暴露面放开了，**这比漏迁严重**。
 
-    `quality.py:record_qc_summary` 单列：它不是列表端点而是**聚合统计**，
-    `.limit(5000)` 截断的是统计口径的输入行（还有一处 period 过滤发生在截断
-    **之后**，查旧月份会静默返回 total: 0）。那要连同聚合一起重写、且得先补
-    特征化网，是单独一件事。
+    `quality.py:record_qc_summary` 已在同批的后一次提交里重写掉（它不是列表端点
+    而是**聚合统计**：`.limit(5000)` 截断的是统计口径的输入行，且 period 过滤
+    发生在截断**之后**，查旧月份会静默返回 total: 0）。改法是把月份下推 SQL、
+    分桶换 `GROUP BY`、`.limit(5000)` 直接删掉——统计接口本来就不该有
+    「只算前 N 条」这种东西。先补的特征化网见
+    `tests/test_qc_summary_characterization.py`，缺陷回归见
+    `tests/test_qc_summary_truncation.py`。
     """
     files = ("admin_mgmt.py:", "pharmacy.py:", "inpatient.py:", "quality.py:")
     left = {e for e in silently_truncating_endpoints() if e.startswith(files)}
-    expected = HELD_PENDING_SCOPE_DECISION | {"quality.py:record_qc_summary"}
+    expected = HELD_PENDING_SCOPE_DECISION
     assert left == expected, (
         f"多出来的（退回硬编码）：{sorted(left - expected)}；"
         f"少掉的（可能是在没裁定的情况下放开了暴露面）：{sorted(expected - left)}"
     )
+
+
+def test_docstring里的示例不算代码():
+    """自证：判据必须只看代码，不看散文。
+
+    重写 `record_qc_summary` 时 docstring 里原样引了一句 `.limit(5000)` 讲缺陷，
+    扫描当场把它当成代码——一个已经改好的端点因此永远留在计数里。
+    **两个方向都会错**：docstring 里提一句 `paginate(` 会让一个真有缺陷的端点
+    被静默排除，那是假阴性，比多算一条严重得多。这条用例拿真实的那个函数钉住。
+    """
+    src = open(
+        os.path.join(os.path.dirname(__file__), "..", "app", "routers", "quality.py"),
+        encoding="utf-8",
+    ).read()
+    fn = next(
+        n for n in ast.walk(ast.parse(src))
+        if isinstance(n, ast.FunctionDef) and n.name == "record_qc_summary"
+    )
+    assert ".limit(5000)" in ast.unparse(fn), (
+        "前提没了：这条用例靠 record_qc_summary 的 docstring 里那句 `.limit(5000)` 取证"
+    )
+    assert ".limit(5000)" not in _code(fn), "docstring 没被剥掉，判据仍在数散文"
+    assert "record_qc_summary" not in {
+        e.split(":")[1] for e in silently_truncating_endpoints()
+    }

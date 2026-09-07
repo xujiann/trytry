@@ -159,7 +159,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | ~~P2-5~~ | ~~`response_model=` 仅 14% 端点；309 内联 BaseModel + 93 手写 `_out()`~~ —— ✅ 已清 2026-08-31：六轮多 agent 并行批把 450 处欠账治理到 **0**，946 端点 100% 声明契约（含媒体类型/204 两类入册豁免，均有清单钉），46 模块 FULLY_GOVERNED，`BASELINE_WITHOUT_RESPONSE_MODEL = 0` 只进不退；全程套件级字节捕获取证（先量噪声底、before/after 逐字节比对、变异转红），响应字节零改动。内联 BaseModel 与 `_out()` 的**收敛**（挪进独立 schema 层）未做——那是结构整理不是契约缺口，归 P2-6/接口标准化后续 |
 | P2-6 | 无统一响应信封；动作响应键各自发明；`X-Total-Count` 三种来源 |
 | P2-7 | 状态流转 3 种风格；RPC 动词 80 个；PUT 仅 1 次（孤例） |
-| P2-8 | ◐ 逐块切分页。基线 170（2026-09-06 量化）→ 162（`billing.py` 8 个）→ 139（`portal.py`+`spd/portal.py` 23 个）→ **129**（四个业务模块里**有机构收口**的 10 个）。两台闸门：`test_list_pagination_ratchet.py` 计数只减不增；`test_pagination_sort_stability.py` 钉住每个 `paginate` 站点排序全序（零基线零豁免，112/112）——排序键不唯一时 OFFSET/LIMIT 会在并列行上重复+漏行，比原缺陷更糟，且 SQLite 照不出来。**剩下的 129 不全是「还没做」**：其中 11 个卡在 P1-49（没有机构收口，切了等于扩大暴露面）、1 个（`quality:record_qc_summary`）要连聚合口径一起重写、3 个是判据误报（`.limit` 在嵌套子查询上，见棘轮 docstring） |
+| P2-8 | ◐ 逐块切分页。基线 170（2026-09-06 量化）→ 162（`billing.py` 8 个）→ 139（`portal.py`+`spd/portal.py` 23 个）→ 129（四个业务模块里**有机构收口**的 10 个）→ **128**（重写 `quality:record_qc_summary` 的聚合口径）。两台闸门：`test_list_pagination_ratchet.py` 计数只减不增；`test_pagination_sort_stability.py` 钉住每个 `paginate` 站点排序全序（零基线零豁免，112/112）——排序键不唯一时 OFFSET/LIMIT 会在并列行上重复+漏行，比原缺陷更糟，且 SQLite 照不出来。**剩下的 128 不全是「还没做」**：其中 11 个卡在 P1-49（没有机构收口，切了等于扩大暴露面）、3 个是判据误报（`.limit` 在嵌套子查询上，见棘轮 docstring）。判据本身也修过一次：原先连 **docstring 里的示例**都当代码数，两个方向都会错（散文里提一句 `paginate(` 会让真缺陷被静默排除），已剥 docstring 并加自证用例 |
 
 ### 超大文件
 | 文件 | 行数 | 问题 |
