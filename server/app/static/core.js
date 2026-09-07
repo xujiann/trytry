@@ -148,6 +148,27 @@ function pageAllowed(p) {
   return role === "admin" || p.roles.includes(role);
 }
 
+/** 存量选择：localStorage 里那个 id，只有在**这次真拉到的列表里还在**时才认，
+    否则退回 `fallback`（默认 0 = 没有选择）。
+
+    这些键跨会话、跨标签页持久，而它指向的东西会消失——住院记录会出院，
+    基金池 / 协作分组 / 专病目录会被删或变得不可见。不校验有两种坏法：
+
+    1. **静默指错人**：住院文书的 `<select>` 只列在院记录，存量 id 出院之后
+       没有一个 option 带 selected，浏览器于是显示第一条；而下面四个面板与
+       三个写入表单仍然指向那条旧记录——屏幕上写着甲，病程记录写进了乙。
+    2. **永久卡死**：子资源取数（成员 / 预付批次 / 专病统计…）排在
+       `#page-body` 赋值之前，一个 404 就被 `route()` 的 catch 换成一行错误，
+       连"换一个"的那张列表都渲染不出来；而 id 在 localStorage 里不会自己
+       消失，于是这一页对这个用户**每次进来都是同一行错误**。
+
+    专病页本来就写对了一半（`programs.find((p) => p.id === picked)`），
+    但那份校验只兜住了渲染、没兜住排在它前面的取数。 */
+function pickedId(key, list, fallback = 0) {
+  const stored = Number(localStorage.getItem(key) || 0);
+  return list.some((item) => item.id === stored) ? stored : fallback;
+}
+
 /** 默认页 / 兜底页的 id。**按 id 取，不按下标取。**
 
     原先兜底写的是 `PAGES[1]`——它指到驾驶舱纯属排列的巧合：

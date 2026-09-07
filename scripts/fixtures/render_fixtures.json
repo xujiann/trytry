@@ -6925,5 +6925,120 @@
         }
       ]
     }
+  },
+  "clinicaldocs_stale": {
+    "_why": [
+      "P2-21 的取证夹具：存量选择指向一条**已出院**的住院记录（#78 出院、#77 在院）。",
+      "住院文书的 <select> 只列在院记录，所以修之前没有一个 option 带 selected——",
+      "浏览器显示第一条 #77，而四个面板与三个写入表单都指向 #78，屏幕与写入对象不是一个人。",
+      "两版 #78 的子资源都给了独立文案（钱医生/孙护士），一眼能看出渲染的是哪一条。",
+      "注意：拿修复前的版本当 --base 比对时这一页**会红**，那正是它要证明的差异。"
+    ],
+    "fn": "renderClinicalDocs",
+    "localStorage": {
+      "medplat_doc_adm": "78"
+    },
+    "api": {
+      "/api/inpatient/admissions": [
+        {
+          "id": 77,
+          "patient_id": 31,
+          "status": "admitted",
+          "diagnosis_name": "社区获得性肺炎<b>"
+        },
+        {
+          "id": 78,
+          "patient_id": 32,
+          "status": "discharged",
+          "diagnosis_name": "急性阑尾炎"
+        }
+      ],
+      "/api/inpatient/admissions/78/progress-notes": [
+        {
+          "recorded_at": "2026-08-01 09:00",
+          "note_type": "first",
+          "doctor_name": "钱医生",
+          "content": "这是已出院的78号的病程"
+        }
+      ],
+      "/api/inpatient/admissions/78/nursing-records": [
+        {
+          "recorded_at": "2026-08-01 10:00",
+          "nursing_level": "level1",
+          "nurse_name": "孙护士",
+          "content": "78号的护理"
+        }
+      ],
+      "/api/inpatient/admissions/78/vitals": [
+        {
+          "measured_at": "2026-08-01 06:00",
+          "temperature": 37.0,
+          "pulse": 80,
+          "respiration": 18,
+          "sbp": 120,
+          "dbp": 70,
+          "recorder": "孙护士"
+        }
+      ],
+      "/api/inpatient/admissions/78/document-completeness": {
+        "complete": true,
+        "missing": []
+      },
+      "/api/inpatient/admissions/77/progress-notes": [
+        {
+          "recorded_at": "2026-09-01 09:00",
+          "note_type": "first",
+          "doctor_name": "张医生",
+          "content": "首次病程：社区获得性肺炎<img src=x onerror=alert(1)>"
+        },
+        {
+          "recorded_at": "2026-09-02 08:30",
+          "note_type": "daily",
+          "doctor_name": "李医生",
+          "content": "查房：体温下降"
+        }
+      ],
+      "/api/inpatient/admissions/77/nursing-records": [
+        {
+          "recorded_at": "2026-09-01 10:00",
+          "nursing_level": "level1",
+          "nurse_name": "王护士",
+          "content": "一级护理 & 巡视"
+        },
+        {
+          "recorded_at": "2026-09-02 10:00",
+          "nursing_level": "level2",
+          "nurse_name": "赵护士",
+          "content": "二级护理"
+        }
+      ],
+      "/api/inpatient/admissions/77/vitals": [
+        {
+          "measured_at": "2026-09-01 06:00",
+          "temperature": 38.6,
+          "pulse": 96,
+          "respiration": 20,
+          "sbp": 128,
+          "dbp": 78,
+          "recorder": "王护士"
+        },
+        {
+          "measured_at": "2026-09-02 06:00",
+          "temperature": 37.2,
+          "pulse": 84,
+          "respiration": 18,
+          "sbp": null,
+          "dbp": null,
+          "recorder": "赵护士"
+        }
+      ],
+      "/api/inpatient/admissions/77/document-completeness": {
+        "complete": false,
+        "missing": [
+          "首次病程",
+          "护理记录"
+        ]
+      }
+    }
   }
 }

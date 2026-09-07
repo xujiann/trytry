@@ -21,7 +21,10 @@ async function renderClinicalDocs() {
   $("#page-desc").textContent = "病程记录 / 护理记录 / 体温单 / 交接班；出院前可做文书完整性自查";
   const admissions = await api("/api/inpatient/admissions");
   const inHospital = admissions.filter((a) => a.status === "admitted");
-  const current = Number(localStorage.getItem("medplat_doc_adm") || 0)
+  // 存量选择必须落在**这张在院列表里**：出院之后 `inHospital` 不再包含它，
+  // 而下面的 <select> 只列在院记录——于是没有一个 option 带 selected，浏览器
+  // 显示第一条，四个面板和三个写入表单却仍然指向那条已出院的记录。
+  const current = pickedId("medplat_doc_adm", inHospital)
     || (inHospital[0] && inHospital[0].id) || 0;
   const [notes, nursing, vitals, completeness] = current
     ? await Promise.all([
@@ -724,12 +727,22 @@ async function renderWorkflows() {
 async function renderServiceRequests() {
   $("#page-desc").textContent = "预约 / 检查 / 会诊 / 用血 / 手术五类单据聚合视图，状态映射到统一口径";
   const pid = localStorage.getItem("medplat_sr_patient") || "";
-  const data = await api(`/api/service-requests${pid ? `?patient_id=${pid}` : ""}`);
+  // 患者 ID 是手输的，而后端对它走 `assert_patient_visible`——本机构与该患者
+  // 没有就诊/签约/转诊关系就是 403（写错一个数字必然如此）。这是本页**唯一**
+  // 一次取数，且排在 `#page-body` 赋值之前：抛出去会被 route() 的 catch 换成
+  // 一行错误，连那个筛选框都没了，而 pid 存在 localStorage 里不会自己消失，
+  // 于是这一页对这个用户每次进来都是同一行错误，连清空筛选都做不到。
+  // 失败退化成"筛选那一段报错 + 空聚合"，页面本身照常渲染。
+  let data = { by_status: {}, by_type: {}, total: 0, items: [] };
+  let pidError = "";
+  try { data = await api(`/api/service-requests${pid ? `?patient_id=${pid}` : ""}`); }
+  catch (err) { pidError = err.message; }
   // ADR-0009 第二步的**第一页**：面板外壳改用 `panel()`（定义见 core.js）。
   // 迁移范围只限本函数——组件与手写可以共存，ADR 的节奏就是"迁一页、人工过一页"。
   $("#page-body").innerHTML = panel("筛选", `
       <form class="inline" id="sr-form"><input name="patient_id" type="number" value="${esc(pid)}" placeholder="患者ID（留空看全部）">
         <button>查询</button></form>
+      ${pidError ? `<p class="msg err">${esc(pidError)}</p>` : ""}
       <div class="cards">
         ${Object.entries(data.by_status).map(([k, v]) =>
           `<div class="card"><span class="k">${esc((UNIFIED_STATUS[k] || [k])[0])}</span><b>${v}</b></div>`).join("")}
@@ -1106,12 +1119,21 @@ async function renderOutpatientDocs() {
     api("/api/outpatient/consents?limit=50"),
   ]);
   let scoped = { treatments: [], nursing: [], completeness: null };
+  // 就诊 ID 是手输的，打错一次就 404（`/completeness` 还会因不可见 403）。
+  // 这三条取数排在 `#page-body` 赋值之前，抛出去会被 route() 的 catch 换成
+  // 一行错误——连那个输入框都跟着没了，而 id 存在 localStorage 里不会自己
+  // 消失，于是这一页对这个用户每次进来都是同一行错误，改都改不回来。
+  // 别的页面是拿列表校验存量选择（`pickedId`），这里没有列表可校验，
+  // 只能让取数失败退化成"就诊那一段报错"，页面本身照常渲染。
+  let scopeError = "";
   if (encounterId) {
-    scoped = {
-      treatments: await api(`/api/outpatient/encounters/${encounterId}/treatments`),
-      nursing: await api(`/api/outpatient/encounters/${encounterId}/nursing-records`),
-      completeness: await api(`/api/outpatient/encounters/${encounterId}/completeness`),
-    };
+    try {
+      scoped = {
+        treatments: await api(`/api/outpatient/encounters/${encounterId}/treatments`),
+        nursing: await api(`/api/outpatient/encounters/${encounterId}/nursing-records`),
+        completeness: await api(`/api/outpatient/encounters/${encounterId}/completeness`),
+      };
+    } catch (err) { scopeError = err.message; }
   }
   $("#page-body").innerHTML = `
     ${panel("选择就诊", `
@@ -1119,6 +1141,7 @@ async function renderOutpatientDocs() {
         <input name="encounter_id" type="number" placeholder="就诊ID" value="${encounterId || ""}" required>
         <button>载入该次就诊的文书</button>
       </form>
+      ${scopeError ? `<p class="msg err">就诊 #${encounterId}：${esc(scopeError)}</p>` : ""}
       ${scoped.completeness ? `<div class="cards">
         <div class="card"><span class="k">处置记录</span><b>${scoped.completeness.treatment_records}</b></div>
         <div class="card"><span class="k">护理记录</span><b>${scoped.completeness.nursing_records}</b></div>
@@ -1235,7 +1258,9 @@ async function renderOrgGroups() {
     api(`/api/org-groups/coverage?group_type=${typeFilter}`),
   ]);
   const orgName = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
-  const selected = Number(localStorage.getItem("medplat_group_id") || 0);
+  // 分组被删/不可见时退回"没有选择"：这行取数排在 `#page-body` 赋值之前，
+  // 让它 404 抛出去，连分组列表都渲染不出来，这一页就再也换不了分组。
+  const selected = pickedId("medplat_group_id", groups);
   const members = selected ? await api(`/api/org-groups/${selected}/members`) : [];
   $("#page-body").innerHTML = `
     ${panel("新建分组", `
@@ -1331,10 +1356,12 @@ const INSURANCE_TYPES = { resident: "城乡居民", employee: "城镇职工" };
 async function renderFund() {
   $("#page-desc").textContent =
     "预付与清算产生真实资金流，月度预结只是账面对冲；分配依据是冻结的绩效得分快照，事后调权不影响已分结果";
-  const picked = Number(localStorage.getItem("medplat_fund_pool") || 0);
   const [pools, groups, vars] = await Promise.all([
     api("/api/fund/pools"), api("/api/org-groups"), api("/api/fund/formula-variables"),
   ]);
+  // 先拿到池子列表再认存量选择——池子被删/不可见时下面那两条取数会 404，
+  // 而它们排在 `#page-body` 赋值之前，抛出去就连池子列表都渲染不出来了。
+  const picked = pickedId("medplat_fund_pool", pools);
   const groupName = Object.fromEntries(groups.map((g) => [g.id, g.name]));
   let detail = null;
   if (picked) {
@@ -1548,10 +1575,12 @@ const ENROLL_STATUS = { enrolled: "在管", completed: "完成出组", exited: "
 async function renderDiseasePrograms() {
   $("#page-desc").textContent =
     "专病是有始有终的诊疗路径（入组—节点—疗效评价—出组），与慢病的长期随访分级不是一回事；路径节点自行配置，平台不预置任何病种";
-  const picked = Number(localStorage.getItem("medplat_program") || 0);
   const [programs, orgs] = await Promise.all([
     api("/api/disease-programs"), api("/api/organizations"),
   ]);
+  // 校验提到取数之前：原先只有下面的 `current` 兜住了渲染，`/{picked}/stats`
+  // 仍然会对已删除的专病发出去，404 掀掉整页——包括那张换专病用的目录表。
+  const picked = pickedId("medplat_program", programs);
   let enrollments = [], stats = null;
   if (picked) {
     [enrollments, stats] = await Promise.all([
