@@ -148,6 +148,27 @@ function pageAllowed(p) {
   return role === "admin" || p.roles.includes(role);
 }
 
+/** 默认页 / 兜底页的 id。**按 id 取，不按下标取。**
+
+    原先兜底写的是 `PAGES[1]`——它指到驾驶舱纯属排列的巧合：
+    `PAGES[0]` 是 `{ group: "总览" }`，是**分组标题不是页面**（没有 id、
+    没有 title、没有 render）。往注册表头部插一个分组（很正常的改动），
+    `PAGES[1]` 就会指到一个分组项上，于是 `page.render()` 是 undefined
+    直接抛错、`page.title` 也是 undefined——**整个管理端路由不起来**，
+    而插分组的人完全想不到会碰这里。
+
+    同一个意图在上一行本来就是按 id 写的（`|| HOME_PAGE_ID`），
+    只有兜底这两处退回了下标。 */
+const HOME_PAGE_ID = "dashboard";
+
+/** 兜底页：先按 id 找首页，找不到就退到第一个**真的能渲染**的页面。
+
+    第二重兜底是为了让「首页被改名/删掉」这种情况退化成「进了别的页」，
+    而不是「拿到一个分组项然后抛错」——前者看得见，后者是白屏。 */
+function homePage() {
+  return PAGES.find((p) => p.id === HOME_PAGE_ID) || PAGES.find((p) => p.render);
+}
+
 const CENTER_NAMES = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
 const ORG_TYPES = { lead_hospital: "牵头医院", township: "乡镇卫生院", village: "村卫生室", public_health: "公卫机构" };
 const LEVELS = { county: "县级", township: "乡级", village: "村级" };
@@ -188,9 +209,9 @@ async function route() {
   try {
     for (;;) {
       const seq = routeSeq;
-      const id = location.hash.replace("#", "") || "dashboard";
-      let page = PAGES.find((p) => p.id === id) || PAGES[1];
-      if (!pageAllowed(page)) page = PAGES[1];
+      const id = location.hash.replace("#", "") || HOME_PAGE_ID;
+      let page = PAGES.find((p) => p.id === id) || homePage();
+      if (!pageAllowed(page)) page = homePage();
       document.querySelectorAll("#nav a").forEach((a) =>
         a.classList.toggle("active", a.dataset.page === page.id));
       $("#main").innerHTML = `<h2>${esc(page.title)}</h2><div class="desc" id="page-desc"></div><div id="page-body">加载中…</div>`;

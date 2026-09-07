@@ -196,7 +196,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 |---|---|---|
 | P2-18 | 三份独立 `$`/`esc`/`api` 实现，改一处另两处不跟 | ✅ 已修（治理线 ADR-0009：shared.js 唯一实现 + 守卫测试） |
 | P2-19 | 89 render 手抄同一模板，无 panel/crudPage/分页/加载态抽象 | pages-*.js |
-| P2-20 | `PAGES[1]` 硬编码下标作默认页，头部插分组即崩 | `core.js:141` |
+| ~~P2-20~~ | ~~`PAGES[1]` 硬编码下标作默认页，头部插分组即崩~~ —— ✅ **已修 2026-09-07**：`PAGES[0]` 是 `{ group: "总览" }`（**分组标题不是页面**，没有 id/title/render），所以 `PAGES[1]` 指到驾驶舱纯属排列的巧合。实测往头部插一个分组（很正常的改动）：`PAGES[1]` 拿到 `title=undefined render=undefined`，`page.render()` 直接抛 `TypeError: render is not a function`——**整个管理端路由不起来**，而插分组的人完全想不到会碰这里。同一个意图**上一行本来就是按 id 写的**，只有兜底那两处退回下标。改成 `homePage()` 按 `HOME_PAGE_ID` 取，并留第二重兜底（首页被改名/删掉时退到第一个真能渲染的页面）——那种情况退化成「进了别的页」而不是「拿到分组项然后白屏」。守卫 `tests/test_frontend_default_page_guard.py` 三条：形状（不许再按下标取）、**前提**（首项确实是分组——把「为什么下标不能用」钉在代码上，前提变了会红）、闭环（首页 id 真的在表里）；三处变异各自转红。91 个夹具页 render_diff 逐字符一致 | `app/static/core.js` |
 | P2-21 | 11 个 UI 状态塞 localStorage 当参数，页面不可分享/不支持前进后退/跨标签污染 | pages-mgmt.js 等 |
 | ~~P2-22~~ | ~~居民端靠正则匹配中文错误消息判断登录失效~~ —— ✅ **已修 2026-09-07**：根因是 `api()` 里 `throw new Error(data.detail || …)` **把状态码就地丢了**，于是 `authApi` 只能拿人看的文案去反推机器该做的事；那条正则里的 `401` 分支还形同虚设——它只在后端**不给 detail** 时才命中，给了 detail 状态码就没了，也就是说「按状态码兜底」这层保险从来没生效过。改为 `api()` 把 `status` 挂在错误上、`authApi` 只认 `err.status === 401`。**这不是发明新约定而是把异类拉齐**：管理端 `core.js:35` 与医生端 `doctor.js:30` 本来就先判 `resp.status === 401`。守卫 `tests/test_portal_session_expiry_contract.py` 四条，**跨层两头都钉**（前端不得再按文案判 + `current_resident` 每条失败路径必须是 401）——只钉一头的话另一头改了照样静默失效，那正是原缺陷的成因；三处变异各自转红 | `app/static/m/m.js` |
 | P2-23 | `MAP[x]\|\|x` 兜底未转义 4 处 | ✅ 已修（阶段十四 Q1：同形状实清 6 处 + test_frontend_escape_guard.py 防复发） |
