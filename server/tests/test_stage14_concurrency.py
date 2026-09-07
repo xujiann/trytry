@@ -27,6 +27,25 @@ ROUTER_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "routers")
 SPD_ROUTER_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "spd", "routers")
 ROUTER_DIRS = (ROUTER_DIR, SPD_ROUTER_DIR)
 
+#: **除路由之外**也要扫的模块。事件订阅者不是路由，却和路由一样**在正常业务流程中
+#: 同步运行**——`events.publish()` 是在发布方的事务里直接调它们的（契约 1「同事务、
+#: 只 add 不 commit」）。它们此前不在任何一条防复发规则的扫描范围内。
+#:
+#: `_router_files()` 的 docstring 早就写着「路由拆成子包是这类扫描最常见的失效方式」。
+#: 这里是**同一个失效方式再往外一层**：变的不是目录层级，是**模块类别**——
+#: 闸门盯着"路由"，而写库的不止路由。
+#:
+#: 只加订阅者，**不加种子与调度器**（`main.py` 的 lifespan 预置、`spd/seed.py`、
+#: `scheduler.py`，实测另有 21 处往唯一表 add）：那些是启动期一次性的幂等预置，
+#: 「要不要也强制处理 IntegrityError」是另一个判断（只有多实例同时启动才撞得到），
+#: 已在 docs/TECH_DEBT.md 登记待裁定，不在这里顺手扩。
+EXTRA_WRITE_SCAN_FILES = (
+    (
+        "spd/subscribers.py",
+        os.path.join(os.path.dirname(__file__), "..", "app", "spd", "subscribers.py"),
+    ),
+)
+
 
 def _router_files():
     """全部路由文件的 (显示名, 绝对路径)。显示名带子系统前缀与子目录，报错时一眼看出出处。
@@ -904,7 +923,7 @@ def _unguarded_unique_writes() -> list[str]:
     helpers = {"insert_or_conflict", "insert_with_retry", "upsert_unique", "insert_if_absent"}
     offenders = []
 
-    for name, path in _router_files():
+    for name, path in list(_router_files()) + list(EXTRA_WRITE_SCAN_FILES):
         tree = ast.parse(open(path, encoding="utf-8").read())
         model_names = set(model_table)
         for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
@@ -1216,6 +1235,7 @@ def _write_sites():
                     unaudited_tables[table] = unaudited_tables.get(table, 0) + 1
     return {
         "files": len(_router_files()),
+        "extra_files": len(EXTRA_WRITE_SCAN_FILES),
         "total": total,
         "resolved": resolved,
         "covered": covered,

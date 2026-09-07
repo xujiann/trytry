@@ -27,6 +27,7 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from .. import events
+from ..concurrency import insert_if_absent
 from ..config import settings
 from .models import SpdCandidate, SpdFollowupRecord, SpdFollowupRule, SpdProgram, SpdScreening
 from .service import match_program
@@ -127,7 +128,25 @@ def on_encounter_created(db: Session, payload: dict) -> None:
         )
         db.add(screening)
         db.flush()
-        db.add(
+        # 上面那次「已在池中就 continue」是幂等判断，但它是 **check-then-act**：
+        # 同一患者的两个就诊事件同时到达（门诊与检验回传各触发一次，或事件重投），
+        # 两边都查不到、都来插，撞上 `spd_candidates` 的
+        # `UniqueConstraint(patient_id, program_code)`。
+        #
+        # 而这里的 `IntegrityError` **不会**被 `events.publish()` 的 try/except 兜住：
+        # 按事件总线契约 1「同事务、只 add 不 commit」，这条 INSERT 推迟到**发布方
+        # commit** 时才执行，那时早已离开契约 2 的罩子——于是 500 落在**业务请求**
+        # （登记就诊）头上，业务写入一并回滚。契约 2 说「订阅者炸掉不连累业务」，
+        # 恰恰被契约 1 的延迟执行绕过去了。已实测复现。
+        #
+        # `insert_if_absent` 把冲突圈进 SAVEPOINT：撞了只退这一行，业务事务照常提交。
+        # 返回 False 表示"并发下别人先插了"，与上面那个 continue 同义。
+        # 残留：这种极少数的竞态下上面那条 screening 已 flush、不随之退掉——
+        # 它记录的"本次自动筛查判为疑似"确实发生过，多一条不影响纳管，但统计口径上
+        # 会多算一次筛查。要连它一起退需要手写 SAVEPOINT 包住两行，那是复制
+        # `insert_if_absent` 的逻辑，按 §6 优先复用，这里如实记下取舍。
+        if not insert_if_absent(
+            db,
             SpdCandidate(
                 patient_id=patient_id, program_code=program.code, status="suspect",
                 source="event", screening_id=screening.id, org_id=payload.get("org_id"),
@@ -135,8 +154,9 @@ def on_encounter_created(db: Session, payload: dict) -> None:
                 reason="；".join(
                     str(m.get("label") or m.get("field")) for m in matched["matched"]
                 )[:256],
-            )
-        )
+            ),
+        ):
+            continue
         logger.info("就诊事件识别疑似人群：patient=%s program=%s", patient_id, program.code)
 
 

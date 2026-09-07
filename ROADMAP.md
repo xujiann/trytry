@@ -134,6 +134,38 @@
 
 ## Next（治理逐块推进，只进不退）
 
+- ✅ **第八个形状问「闸门够不够宽」，结果闸门自己漏了一类模块——修一处真竞态、扩一格扫描面**（2026-09-07）。
+  挑这个靶子是因为「判据够不够宽」是本轮最有产出的一问。并发闸门
+  （`test_stage14_concurrency.py`）本身写得极好：唯一表清单**从 `Base.metadata` 推导**
+  （UniqueConstraint / column.unique / index.unique 三路），不是硬编码；还有逻辑唯一清单、
+  逐表书面理由、递归扫子包。它的 docstring 甚至写着「路由拆成子包是这类扫描最常见的失效方式」。
+  - **但它只遍历 `app/routers` 与 `app/spd/routers`。** 实测非路由模块里还有 **22 处**
+    往带唯一约束的表 `add()`。**同一个失效方式再往外一层**：变的不是目录层级，是模块类别
+    ——闸门盯着"路由"，而写库的不止路由。
+  - **其中一处是真竞态**：`app/spd/subscribers.py:on_encounter_created` 对
+    `spd_candidates`（`UniqueConstraint(patient_id, program_code)`）做 check-then-act，
+    而它是**事件订阅者**，在正常业务流程中同步运行。
+  - **而且它的后果比普通竞态更重，因为事件总线的两条契约在这里互相拆台**：
+    契约 2 说「订阅者不得连累业务，本模块统一兜住」，`publish()` 确实包了 try/except；
+    但契约 1 说「同事务、只 add 不 commit」——**这条 INSERT 推迟到发布方 commit 才执行**，
+    那时早已离开契约 2 的罩子。**实测复现**：
+
+        publish() 正常返回，投递 1 个订阅者 —— 没有任何异常被兜住
+        业务侧 commit：✗ IntegrityError: UNIQUE constraint failed: spd_candidates...
+
+    也就是说并发下**登记就诊会 500 并回滚**，起因是一个可装卸子系统的订阅者。
+  - **修法照抄仓库已有的助手**：`concurrency.insert_if_absent`（SAVEPOINT 圈单行，
+    撞了只退这一行），它的 docstring 描述的正是同一个形状。`concurrency` 在
+    spd 的平台白名单里，spd 内另有两处已在用——不是新约定。
+    如实记下残留：极少数竞态下上面那条 `screening` 已 flush、不随之退掉，统计口径上多算一次筛查；
+    要连它一起退需手写 SAVEPOINT 包两行，那是复制助手逻辑，按 §6 优先复用。
+  - **扫描面只扩一格**：把事件订阅者纳入闸门（零基线，变异验证——撤掉修复当场点名
+    `spd/subscribers.py:on_encounter_created → SpdCandidate(spd_candidates)`）。
+    **种子与调度器那 21 处没有一起扩**：它们是启动期一次性的幂等预置，
+    「要不要也强制处理 IntegrityError」是另一个判断，已登记 **P2-33** 待裁定；
+    同时登记的还有「要不要在 `publish()` 里给每个订阅者包 SAVEPOINT」——那是**改事件总线契约**，
+    影响所有订阅者，属架构级变更（§9 要 ADR）。本轮只做单点收口，没动总线。
+
 - ✅ **第六个形状：`except: pass` 吞异常——195 个处理器里只有 5 个，4 个正当，第 5 个是临床缺口（登记 P1-52，未修）**（2026-09-07）。
   - **AST 扫全部 `app/**.py`：195 个 except 处理器，体内只有 `pass` 的 5 个。** 逐条读：
     `monitor.py:298`（Redis 心跳，`# pragma` 注明「Redis 抖动不该影响业务请求」）、
