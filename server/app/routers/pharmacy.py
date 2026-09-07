@@ -16,7 +16,7 @@
 from datetime import date, timedelta
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -33,7 +33,13 @@ from ..concurrency import (
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_roles,
+    resolve_business_date,
+)
 from pydantic import BaseModel, Field
 
 from ..models import (
@@ -573,19 +579,32 @@ def receive_batch(
     "/batches", response_model=list[BatchOut], dependencies=[Depends(get_current_user)]
 )
 def list_batches(
+    response: Response,
     org_id: int | None = None,
     drug_code: str | None = None,
     batch_no: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # 排序补了 `id` 尾键：`expire_date` 只有 index、没有 unique，表级唯一约束是
+    # (org_id, drug_code, batch_no) 不含它——同一机构同一药品同日到期的多个批次
+    # 是常态。不补尾键翻页会在并列行上重复+漏行。
     q = db.query(DrugBatch)
     q = scope_org_list(db, user, q, DrugBatch, org_id)
     if drug_code:
         q = q.filter(DrugBatch.drug_code == drug_code)
     if batch_no:
         q = q.filter(DrugBatch.batch_no == batch_no)
-    rows = q.order_by(DrugBatch.org_id, DrugBatch.drug_code, DrugBatch.expire_date).limit(500).all()
+    rows = paginate(
+        q.order_by(
+            DrugBatch.org_id, DrugBatch.drug_code, DrugBatch.expire_date, DrugBatch.id
+        ),
+        response,
+        offset,
+        limit,
+    )
     names = _stock_names(db, rows)
     return [_batch_out(b, names.get((b.org_id, b.drug_code), "")) for b in rows]
 
@@ -596,9 +615,12 @@ def list_batches(
     dependencies=[Depends(get_current_user)],
 )
 def expiring_drug_batches(
+    response: Response,
     days: int = Query(default=90, ge=1, le=3650),
     org_id: int | None = None,
     today: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -607,16 +629,37 @@ def expiring_drug_batches(
     学医废滞留预警的口径：剩余天数服务端直接算好、按到期先后排序返回——
     预警页要按紧急程度排，别让前端自己减日期；已过期的负数天并标注，
     不是催人用掉，而是提示按报废流程处理。
+
+    **「仍有余量」这个条件必须下推到 SQL，不能在取完行之后用 Python 过滤。**
+    原实现是 `[b for b in q...limit(500).all() if b.quantity - b.used_quantity > 0]`
+    ——先取 500 行、再筛掉发完的，于是这个预警在库存量上来之后就基本失效了：
+    上面的过滤**只有上界没有下界**（含已过期），而排序是按到期日**升序**，
+    所以被 `.limit(500)` 砍掉的恰好是「即将到期」那一端，留下的是
+    「早就过期、也早就发完」那一端——**最该预警的批次一条都出不来**，
+    页面上和「没有近效期批次」长得一模一样。发完的批次不会删行（只累加
+    used_quantity），所以真实库里这 500 行大半是零余量。
+
+    条件下推之后，`X-Total-Count` 与响应体数的才是同一批行。留在外面则两者
+    对不上：头按「含已发完」的结果集计数，体只剩有余量的，按
+    `len(page) < limit 即最后一页` 翻页的调用方会在第一页就早停——
+    那是把静默截断换成了静默早停，比原缺陷更难发现。
+
+    **谓词按原样下推，没有顺手"修正"**：这里判的是 `quantity - used_quantity > 0`，
+    而 `DrugBatch` 的 docstring 说可发余量是 `quantity - used_quantity - blocked_quantity`
+    （退回本批次但已不可发的量）。两者不一致——本端点可能把"库房里还有、但一片也发不出去"
+    的批次也列进预警。**这是另一件事**：改谓词会改返回集合，属口径变更而非分页整改，
+    已登记进 `docs/TECH_DEBT.md`，别在这里顺手动它。
     """
     today_d = resolve_business_date(today)
     limit_date = (today_d + timedelta(days=days)).isoformat()
-    q = db.query(DrugBatch).filter(DrugBatch.expire_date <= limit_date)
+    q = db.query(DrugBatch).filter(
+        DrugBatch.expire_date <= limit_date,
+        DrugBatch.quantity - DrugBatch.used_quantity > 0,
+    )
     q = scope_org_list(db, user, q, DrugBatch, org_id)
-    rows = [
-        b
-        for b in q.order_by(DrugBatch.expire_date, DrugBatch.id).limit(500).all()
-        if b.quantity - b.used_quantity > 0
-    ]
+    rows = paginate(
+        q.order_by(DrugBatch.expire_date, DrugBatch.id), response, offset, limit
+    )
     names = _stock_names(db, rows)
     return [
         {
@@ -936,8 +979,11 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = 
     dependencies=[Depends(get_current_user)],
 )
 def list_purchases(
+    response: Response,
     status: str | None = None,
     org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -956,7 +1002,7 @@ def list_purchases(
             "quantity": o.quantity,
             "status": o.status,
         }
-        for o in q.order_by(PurchaseOrder.id.desc()).limit(200).all()
+        for o in paginate(q.order_by(PurchaseOrder.id.desc()), response, offset, limit)
     ]
 
 
@@ -1053,7 +1099,14 @@ def create_stock_take(
 @router.get(
     "/stock-takes", response_model=list[StockTakeOut], dependencies=[Depends(get_current_user)]
 )
-def list_stock_takes(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_stock_takes(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     q = db.query(StockTake)
     q = scope_org_list(db, user, q, StockTake, org_id)
     return [
@@ -1066,5 +1119,5 @@ def list_stock_takes(org_id: int | None = None, db: Session = Depends(get_db), u
             "diff": t.diff,
             "note": t.note,
         }
-        for t in q.order_by(StockTake.id.desc()).limit(200).all()
+        for t in paginate(q.order_by(StockTake.id.desc()), response, offset, limit)
     ]

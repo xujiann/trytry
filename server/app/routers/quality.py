@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -21,6 +21,7 @@ from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org
 from ..database import get_db
 from ..deps import (
     get_current_user,
+    paginate,
     require_admin,
     require_month,
     require_roles,
@@ -395,13 +396,22 @@ def create_infection_report(
 
 @router.get("/infection-reports", response_model=list[InfectionReportOut])
 def list_infection_reports(
-    status: str | None = None, org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    status: str | None = None,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     q = db.query(InfectionReport)
     if status:
         q = q.filter(InfectionReport.status == status)
     q = scope_org_list(db, user, q, InfectionReport, org_id)
-    return [_infection_out(r) for r in q.order_by(InfectionReport.id.desc()).limit(200).all()]
+    return [
+        _infection_out(r)
+        for r in paginate(q.order_by(InfectionReport.id.desc()), response, offset, limit)
+    ]
 
 
 @router.post(
@@ -711,10 +721,13 @@ def upsert_medical_record(
 
 @router.get("/records", response_model=list[MedicalRecordOut])
 def list_medical_records(
+    response: Response,
     encounter_id: int | None = None,
     org_id: int | None = None,
     grade: str | None = None,
     doctor_name: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     q = db.query(MedicalRecord)
@@ -725,7 +738,10 @@ def list_medical_records(
         q = q.filter(MedicalRecord.qc_grade == grade)
     if doctor_name:
         q = q.filter(MedicalRecord.doctor_name == doctor_name)
-    return [_record_out(r) for r in q.order_by(MedicalRecord.id.desc()).limit(200).all()]
+    return [
+        _record_out(r)
+        for r in paginate(q.order_by(MedicalRecord.id.desc()), response, offset, limit)
+    ]
 
 
 def _grade_bucket() -> dict:

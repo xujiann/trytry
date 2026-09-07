@@ -45,6 +45,14 @@
 **基线是量出来的，不是估的**：170（首次量化）→ 162（切完 billing.py 8 个）
 → 139（切完 portal.py 与 spd/portal.py 23 个）。每迁一个模块就把这个数改小，只减不增。
 
+**这个数里还混着一类「先别切」的**：第三批发现四个模块里有 11 个端点**函数体内
+根本没有 `scope_org_list`/`scope_patient_list`**（`admin_mgmt` 的 docs/rosters/qc/
+staff-contracts/payroll、`inpatient` 的 beds/orders/order-executions、`quality` 的
+adverse-events/record-qc、`pharmacy` 的 batch_dispense_trace）。给它们切分页会把
+任何登录用户的可枚举面从「最多 200 行」放大成「整表可翻」，还附送一个精确的全域
+总数头——**那是扩大暴露面，需要业务裁定谁该看见什么**，已登记 P1-49。
+所以这个数降不下去的部分里，有一块是「等裁定」而不是「没做」。
+
 **这条规则不管排序全序**：切分页时若排序键不唯一，OFFSET/LIMIT 会在并列行上重复+漏行
 ——那是拿「静默少返回」换「静默重复+漏行」，比原缺陷更糟。那件事由
 `test_pagination_sort_stability.py` 独立守（零基线、零豁免），别指望这条规则替它把关。
@@ -57,7 +65,8 @@ import warnings
 #: 当前仍会静默截断的 GET 列表端点数。**只减不增**。
 #: 170（2026-09-06 首次量化）→ 162（同日切完 billing.py 的 8 个）
 #: → 139（2026-09-07 切完 portal.py 与 spd/portal.py 的 23 个）
-BASELINE_SILENT_TRUNCATION = 139
+#: → 129（同日切完 admin_mgmt/pharmacy/inpatient/quality 里**有机构收口**的 10 个）
+BASELINE_SILENT_TRUNCATION = 129
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
@@ -154,6 +163,23 @@ def test_billing模块已经切完():
     assert left == set(), f"billing.py 又有端点退回硬编码 .limit()：{sorted(left)}"
 
 
+#: 第三批**故意没切**的 11 个端点：没有机构/患者收口，切分页等于把可枚举面
+#: 从「最多 200 行」放大成「整表可翻」+ 精确总数头。是暴露面决策不是分页决策，
+#: 待裁定（P1-49）。列在这里是为了让「为什么这个数不再往下降」有据可查。
+HELD_PENDING_SCOPE_DECISION = {
+    "admin_mgmt.py:list_docs",
+    "admin_mgmt.py:list_payroll",
+    "admin_mgmt.py:list_qc",
+    "admin_mgmt.py:list_rosters",
+    "admin_mgmt.py:list_staff_contracts",
+    "inpatient.py:list_beds",
+    "inpatient.py:list_order_executions",
+    "inpatient.py:list_orders",
+    "pharmacy.py:batch_dispense_trace",
+    "quality.py:list_adverse_events",
+    "quality.py:list_record_qc",
+}
+
 #: 第二批人工核过的三处**误报**：`.limit(N)` 在嵌套子查询上，是业务上限不是分页缺陷。
 #: 这不是豁免名单（它们照样计入基线），是给下一个人的"别去迁这三条"的记号。
 NESTED_CAP_FALSE_POSITIVES = {
@@ -176,4 +202,25 @@ def test_portal两个模块只剩三处误报():
     assert left == NESTED_CAP_FALSE_POSITIVES, (
         f"多出来的（退回硬编码）：{sorted(left - NESTED_CAP_FALSE_POSITIVES)}；"
         f"少掉的（嵌套上限被误迁）：{sorted(NESTED_CAP_FALSE_POSITIVES - left)}"
+    )
+
+
+def test_第三批只剩待裁定的和一个要重写的():
+    """四个模块里有机构收口的都切完了，剩下的必须**恰好**是那 11 处待裁定 + qc-summary。
+
+    钉成"恰好等于"而不是"包含于"：
+    - 多出来 → 有端点退回了硬编码 `.limit()`；
+    - 少掉待裁定里的某条 → 有人在没裁定的情况下把暴露面放开了，**这比漏迁严重**。
+
+    `quality.py:record_qc_summary` 单列：它不是列表端点而是**聚合统计**，
+    `.limit(5000)` 截断的是统计口径的输入行（还有一处 period 过滤发生在截断
+    **之后**，查旧月份会静默返回 total: 0）。那要连同聚合一起重写、且得先补
+    特征化网，是单独一件事。
+    """
+    files = ("admin_mgmt.py:", "pharmacy.py:", "inpatient.py:", "quality.py:")
+    left = {e for e in silently_truncating_endpoints() if e.startswith(files)}
+    expected = HELD_PENDING_SCOPE_DECISION | {"quality.py:record_qc_summary"}
+    assert left == expected, (
+        f"多出来的（退回硬编码）：{sorted(left - expected)}；"
+        f"少掉的（可能是在没裁定的情况下放开了暴露面）：{sorted(expected - left)}"
     )

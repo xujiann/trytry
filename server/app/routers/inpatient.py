@@ -8,7 +8,7 @@
 from datetime import datetime
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, update
 from sqlalchemy.engine import CursorResult
@@ -18,7 +18,14 @@ from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from .. import events
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope, row_dict
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_roles,
+    resolve_org_scope,
+    row_dict,
+)
 from ..models import (
     Admission,
     Bed,
@@ -67,10 +74,20 @@ def create_ward(body: WardCreate, db: Session = Depends(get_db), user: User = De
 
 
 @router.get("/wards", response_model=list[WardOut])
-def list_wards(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_wards(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     q = db.query(Ward)
     q = scope_org_list(db, user, q, Ward, org_id)
-    return [{"id": w.id, "org_id": w.org_id, "name": w.name} for w in q.order_by(Ward.id).limit(200).all()]
+    return [
+        {"id": w.id, "org_id": w.org_id, "name": w.name}
+        for w in paginate(q.order_by(Ward.id), response, offset, limit)
+    ]
 
 
 class BedCreate(BaseModel):
@@ -243,13 +260,22 @@ def create_admission(
 
 @router.get("/admissions", response_model=list[AdmissionOut])
 def list_admissions(
-    status: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    status: str | None = None,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     q = db.query(Admission)
     if status:
         q = q.filter(Admission.status == status)
     q = scope_patient_list(db, user, q, Admission, patient_id, "admission")
-    return [_admission_out(a) for a in q.order_by(Admission.id.desc()).limit(200).all()]
+    return [
+        _admission_out(a)
+        for a in paginate(q.order_by(Admission.id.desc()), response, offset, limit)
+    ]
 
 
 class TransferBody(BaseModel):

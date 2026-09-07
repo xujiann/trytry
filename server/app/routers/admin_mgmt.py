@@ -1,5 +1,5 @@
 """综合管理补齐：㉚人力资源、㉛财务、㉜物资、㉞行政公文，及①-④排班/质控。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -14,7 +14,13 @@ from ..visibility import (
     scope_org_list,
     stats_org_ids,
 )
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_roles,
+    resolve_business_date,
+)
 from ..models import (
     Asset,
     AssetMovement,
@@ -72,10 +78,17 @@ def create_employee(body: EmployeeCreate, db: Session = Depends(get_db), user: U
 
 
 @router.get("/employees", response_model=list[EmployeeOut])
-def list_employees(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_employees(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Employee)
     query = scope_org_list(db, user, query, Employee, org_id)
-    return query.order_by(Employee.id).limit(500).all()
+    return paginate(query.order_by(Employee.id), response, offset, limit)
 
 
 class SecondmentCreate(BaseModel):
@@ -302,10 +315,17 @@ def create_asset(body: AssetCreate, db: Session = Depends(get_db), user: User = 
 
 
 @router.get("/assets", response_model=list[AssetOut])
-def list_assets(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_assets(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Asset)
     query = scope_org_list(db, user, query, Asset, org_id)
-    return query.order_by(Asset.id).limit(500).all()
+    return paginate(query.order_by(Asset.id), response, offset, limit)
 
 
 @router.post(
