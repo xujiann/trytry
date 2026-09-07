@@ -197,6 +197,7 @@ make test-integration   # 若动了迁移/PG 方言相关（先 eval "$(server/s
 - 接口面与鉴权 → `docs/API_MAP.md`
 - 依赖与循环 → `docs/DEPENDENCY_MAP.md`
 - 分级技术债 + 不可丢的优点 → `docs/TECH_DEBT.md`
+- **待人工裁定的事项（问题/可选项/代价/建议，一处集中）→ `docs/待裁定事项清单.md`**
 - 完整 AS-IS 审计 → `docs/架构审计报告_AS-IS.md`
 - 模块分级（KEEP/IMPROVE/REFACTOR/REPLACE）→ `docs/模块分级_KEEP_IMPROVE_REFACTOR_REPLACE.md`
 - 接口标准与治理（混乱代码→标准接口，棘轮只进不退）→ `docs/接口标准与治理.md`
