@@ -462,7 +462,10 @@ def list_measurements(
             query = query.filter(column == value)
     if since:
         query = query.filter(SpdMeasurement.measured_at >= f"{since} 00:00:00")
-    rows = paginate(query.order_by(SpdMeasurement.measured_at.desc()), response, offset, limit)
+    rows = paginate(
+        query.order_by(SpdMeasurement.measured_at.desc(), SpdMeasurement.id.desc()),
+        response, offset, limit,
+    )
     return [_measure_out(m) for m in rows]
 
 
@@ -1130,7 +1133,9 @@ def list_revisits(
         query = query.filter(SpdRevisit.plan_date <= date_to)
     if overdue:
         query = query.filter(SpdRevisit.status == "overdue")
-    rows = paginate(query.order_by(SpdRevisit.plan_date), response, offset, limit)
+    rows = paginate(
+        query.order_by(SpdRevisit.plan_date, SpdRevisit.id), response, offset, limit
+    )
     names = {
         p.id: p.name
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))

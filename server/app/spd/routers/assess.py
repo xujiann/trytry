@@ -1188,7 +1188,11 @@ def list_point_accounts(
     query = db.query(SpdPointAccount)
     if org_id is not None:
         query = query.filter(SpdPointAccount.org_id == org_id)
-    rows = paginate(query.order_by(SpdPointAccount.balance.desc()), response, offset, limit)
+    # 积分榜按余额排，余额天然大量并列（新账户全是 0）——补 id 尾键才翻得动页。
+    rows = paginate(
+        query.order_by(SpdPointAccount.balance.desc(), SpdPointAccount.id),
+        response, offset, limit,
+    )
     names = {
         u.id: u.full_name or u.username
         for u in db.query(User).filter(User.id.in_([r.user_id for r in rows] or [0]))

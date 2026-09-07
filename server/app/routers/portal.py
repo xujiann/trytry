@@ -71,7 +71,13 @@ from ..models import (
     Ward,
     utcnow,
 )
-from ..deps import clear_auth_cookies, set_auth_cookies, token_from_request, wants_cookie_auth
+from ..deps import (
+    clear_auth_cookies,
+    paginate,
+    set_auth_cookies,
+    token_from_request,
+    wants_cookie_auth,
+)
 # 居民端调阅留痕（TECH_DEBT P1-1）：与业务端同一张 AccessLog、同一套降级
 # （独立会话 + 失败吞掉不阻断读），主体口径 resident:{account_id}（同 AuditLog）。
 from ..visibility import log_resident_access
@@ -1116,18 +1122,22 @@ def portal_sign_consent(
 
 @router.get("/me/consents", response_model=list[ConsentOut])
 def portal_my_consents(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 100,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我的同意记录：默认本人，传 patient_id 可切换到已代管的家庭成员。"""
     patient = accessible_patient(db, account, patient_id, resource="consent")
-    rows = (
+    rows = paginate(
         db.query(ConsentRecord)
         .filter(ConsentRecord.patient_id == patient.id)
-        .order_by(ConsentRecord.id.desc())
-        .limit(100)
-        .all()
+        .order_by(ConsentRecord.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [consent_out(r) for r in rows]
 
@@ -1169,16 +1179,20 @@ def portal_submit_correction(
 
 @router.get("/me/corrections", response_model=list[CorrectionOut])
 def portal_my_corrections(
+    response: Response,
+    offset: int = 0,
+    limit: int = 100,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我提交过的更正/注销申请及其审核进度（按账户归集）。"""
-    rows = (
+    rows = paginate(
         db.query(CorrectionRequest)
         .filter(CorrectionRequest.applicant_account_id == account.id)
-        .order_by(CorrectionRequest.id.desc())
-        .limit(100)
-        .all()
+        .order_by(CorrectionRequest.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [correction_out(r) for r in rows]
 
@@ -1201,18 +1215,36 @@ class PortalSlotOut(BaseModel):
 
 @router.get("/me/slots", response_model=list[PortalSlotOut])
 def portal_slots(
+    response: Response,
     org_id: int | None = None,
     slot_date: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """可约号源：只列还有余号的，避免居民点进去才发现约满。"""
+    """可约号源：只列还有余号的，避免居民点进去才发现约满。
+
+    排序补了 `id` 尾键：`(slot_date, slot_time)` 不是全序——号源表的唯一索引是
+    `(org_id, employee_id, resource_type, resource_name, slot_date, slot_time)`，
+    也就是说同一个「日期+时段」上**按设计**并排着全县各机构各资源的号源。
+    并列行的返回顺序数据库不保证，翻页时会重复吐已看过的号源、同时永久跳过另一些。
+    补尾键是切分页的**前提**而不是优化：不补就是拿「静默少返回」换「静默重复+漏行」，
+    后者更难发现。（SQLite 上按 rowid 稳定返回，这类缺陷本地测不出来。）
+    """
     query = db.query(AppointmentSlot).filter(AppointmentSlot.booked < AppointmentSlot.capacity)
     if org_id is not None:
         query = query.filter(AppointmentSlot.org_id == org_id)
     if slot_date:
         query = query.filter(AppointmentSlot.slot_date == slot_date)
-    rows = query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(200).all()
+    rows = paginate(
+        query.order_by(
+            AppointmentSlot.slot_date, AppointmentSlot.slot_time, AppointmentSlot.id
+        ),
+        response,
+        offset,
+        limit,
+    )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
         {
@@ -1278,11 +1310,24 @@ class PortalAppointmentOut(BaseModel):
 
 @router.get("/me/appointments", response_model=list[PortalAppointmentOut])
 def portal_my_appointments(
-    account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)
+    response: Response,
+    offset: int = 0,
+    limit: int = 100,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
 ):
-    """我的预约：含代管家庭成员的预约。"""
+    """我的预约：含代管家庭成员的预约。
+
+    两处与分页有关的口径：
+    - **空名单那条早退要自己补 `X-Total-Count: 0`**：它不经过 `paginate`，
+      不补就成了"同一个端点有时带头、有时不带"，调用方没法照一种写法处理。
+    - **留痕从"一次调阅一批"变成"一页一批"**：下面那圈 `log_resident_access`
+      在查询之前，翻 N 页就会把这批留痕写 N 遍。这是分页的必然结果、不是缺陷，
+      写在这儿是免得日后有人发现 AccessLog 量变大却找不到原因。
+    """
     ids = _my_patient_ids(db, account)
     if not ids:
+        response.headers["X-Total-Count"] = "0"
         return []
     # 列表一次覆盖本人 + 全部代管成员的就诊预约，留痕逐人各记一条——
     # AccessLog 一行一个 patient_id，"看了谁"必须逐个说清（≤1+5 人，量可控）。
@@ -1291,14 +1336,15 @@ def portal_my_appointments(
             account.id, pid, resource="appointment",
             basis="self" if pid == account.patient_id else "delegate",
         )
-    rows = (
+    rows = paginate(
         db.query(Appointment, AppointmentSlot, Patient)
         .join(AppointmentSlot, Appointment.slot_id == AppointmentSlot.id)
         .join(Patient, Appointment.patient_id == Patient.id)
         .filter(Appointment.patient_id.in_(ids))
-        .order_by(Appointment.id.desc())
-        .limit(100)
-        .all()
+        .order_by(Appointment.id.desc()),
+        response,
+        offset,
+        limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
@@ -1410,18 +1456,22 @@ class PortalBillOut(BaseModel):
 
 @router.get("/me/bills", response_model=list[PortalBillOut])
 def portal_my_bills(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我的账单：结算单与对应支付单状态。"""
     patient = accessible_patient(db, account, patient_id, resource="bill")
-    settlements = (
+    settlements = paginate(
         db.query(Settlement)
         .filter(Settlement.patient_id == patient.id)
-        .order_by(Settlement.id.desc())
-        .limit(50)
-        .all()
+        .order_by(Settlement.id.desc()),
+        response,
+        offset,
+        limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     paid_ids = {
@@ -1756,18 +1806,22 @@ class PortalReferralOut(BaseModel):
 
 @router.get("/me/referrals", response_model=list[PortalReferralOut])
 def portal_my_referrals(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我的转诊进度。"""
     patient = accessible_patient(db, account, patient_id, resource="referral")
-    rows = (
+    rows = paginate(
         db.query(Referral)
         .filter(Referral.patient_id == patient.id)
-        .order_by(Referral.id.desc())
-        .limit(50)
-        .all()
+        .order_by(Referral.id.desc()),
+        response,
+        offset,
+        limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
@@ -1801,7 +1855,10 @@ class PortalAdmissionOut(BaseModel):
 
 @router.get("/me/admissions", response_model=list[PortalAdmissionOut])
 def portal_my_admissions(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -1811,12 +1868,13 @@ def portal_my_admissions(
     免得同一次住院在三个地方显示三个天数。
     """
     patient = accessible_patient(db, account, patient_id, resource="admission")
-    rows = (
+    rows = paginate(
         db.query(Admission)
         .filter(Admission.patient_id == patient.id)
-        .order_by(Admission.id.desc())
-        .limit(50)
-        .all()
+        .order_by(Admission.id.desc()),
+        response,
+        offset,
+        limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     wards = {w.id: w.name for w in db.query(Ward).all()}
@@ -1893,12 +1951,23 @@ class PortalAdmissionBillOut(BaseModel):
             response_model=PortalAdmissionBillOut)
 def portal_admission_bill(
     admission_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 500,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """住院费用清单：按收费类别汇总 + 明细，附结算摘要。
 
     越权访问按 404 处理（不区分"不存在"与"不是你的"），与其他居民端接口同口径。
+
+    **汇总与明细走两条路，是修一个真缺陷。** 原实现把明细 `.limit(500)` 之后，
+    拿这批被截断的行去算 `total_amount` 与 `by_category`——一次住院的收费明细
+    （每次给药、每项检查各一行）过 500 条在长住院里很平常，于是**账单合计会少算**，
+    而页面上"合计 ¥X"和真的就是 X 长得一模一样，患者、收费员都发现不了。
+    截断少显示几行只是难用，合计算错是给患者看的数字不对，性质不同。
+    现在汇总对**全部明细**算（`all_details`），明细列表另走 `paginate` 翻页；
+    取整链路一字未动（合计一次取整、分类逐行累进取整），免得连带改了金额字节。
     """
     admission = db.get(Admission, admission_id)
     allowed = _my_patient_ids(db, account)
@@ -1909,16 +1978,16 @@ def portal_admission_bill(
         basis="self" if admission.patient_id == account.patient_id else "delegate",
     )
 
-    details = (
+    detail_query = (
         db.query(BillDetail)
         .filter(BillDetail.admission_id == admission_id)
         .order_by(BillDetail.id)
-        .limit(500)
-        .all()
     )
+    all_details = detail_query.all()
+    details = paginate(detail_query, response, offset, limit)
     categories = {c.code: c.category for c in db.query(ChargeItem).all()}
     by_category: dict[str, float] = {}
-    for d in details:
+    for d in all_details:
         key = categories.get(d.item_code, "other")
         by_category[key] = round(by_category.get(key, 0) + d.amount, 2)
 
@@ -1932,7 +2001,7 @@ def portal_admission_bill(
         "admission_id": admission_id,
         "diagnosis_name": admission.diagnosis_name,
         "status": admission.status,
-        "total_amount": round(sum(d.amount for d in details), 2),
+        "total_amount": round(sum(d.amount for d in all_details), 2),
         "by_category": by_category,
         "items": [
             {
@@ -1981,6 +2050,9 @@ class PortalDepositsOut(BaseModel):
 @router.get("/me/deposits", response_model=PortalDepositsOut)
 def portal_my_deposits(
     admission_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
     account: ResidentAccount = Depends(current_resident),
     patient: Patient = Depends(current_resident_patient),
     db: Session = Depends(get_db),
@@ -1996,12 +2068,16 @@ def portal_my_deposits(
     if admission is None or admission.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="住院记录不存在")
     log_resident_access(account.id, patient.id, resource="deposit", basis="self")
-    rows = (
+    # 响应是信封对象（balance + items），`X-Total-Count` 说的是 items 的总数；
+    # balance 走 billing.deposit_balance 的 SQL 聚合，与分页无关、不会被截断影响。
+    # 业务端的孪生接口 GET /api/billing/deposits 早已切了 paginate，这里对齐。
+    rows = paginate(
         db.query(Deposit)
         .filter(Deposit.admission_id == admission_id)
-        .order_by(Deposit.id.desc())
-        .limit(200)
-        .all()
+        .order_by(Deposit.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return {
         "admission_id": admission_id,
@@ -2036,7 +2112,10 @@ class PortalSurgeryOut(BaseModel):
 
 @router.get("/me/surgeries", response_model=list[PortalSurgeryOut])
 def portal_my_surgeries(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -2047,12 +2126,13 @@ def portal_my_surgeries(
     患者容易造成误读，需要时由医生当面解释。
     """
     patient = accessible_patient(db, account, patient_id, resource="surgery")
-    rows = (
+    rows = paginate(
         db.query(SurgeryRequest)
         .filter(SurgeryRequest.patient_id == patient.id)
-        .order_by(SurgeryRequest.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SurgeryRequest.id.desc()),
+        response,
+        offset,
+        limit,
     )
     schedules = {
         s.request_id: s
@@ -2260,20 +2340,36 @@ CHARGE_CATEGORY_NAMES = {
 
 
 @router.get("/health-articles", response_model=list[HealthArticleOut])
-def published_articles(category: str | None = None, db: Session = Depends(get_db)):
-    """健康宣教：居民端展示已发布文章（无需登录）。"""
+def published_articles(
+    response: Response,
+    category: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """健康宣教：居民端展示已发布文章（无需登录）。
+
+    `max_limit` 显式压回 50（而不是用 `paginate` 默认的 500）：这是个**免登录**
+    端点、且响应体带文章全文 `content`。切分页的目的是让第 51 篇之后翻得到，
+    不是把匿名调用者单次可取的量抬高十倍——翻页给的是可达性，不是吞吐。
+    """
     q = db.query(HealthArticle).filter(HealthArticle.status == "published")
     if category:
         q = q.filter(HealthArticle.category == category)
     return [
         {"id": a.id, "title": a.title, "category": a.category, "content": a.content}
-        for a in q.order_by(HealthArticle.id.desc()).limit(50).all()
+        for a in paginate(q.order_by(HealthArticle.id.desc()), response, offset, limit, 50)
     ]
 
 
 @router.get("/price-list", response_model=list[PriceListItemOut])
 def public_price_list(
-    category: str | None = None, keyword: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    category: str | None = None,
+    keyword: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
 ):
     """医疗服务价格公示（浙#55，无需登录）。
 
@@ -2288,7 +2384,11 @@ def public_price_list(
         query = query.filter(ChargeItem.category == category)
     if keyword:
         query = query.filter(ChargeItem.name.contains(keyword))
-    items = query.order_by(ChargeItem.category, ChargeItem.code).limit(500).all()
+    # 排序键 (category, code) 里 code 唯一（charge_items.code 唯一约束），已是全序，
+    # 不必再补尾键。原上限 500 == paginate 的 max_limit 默认值，第一页不变。
+    items = paginate(
+        query.order_by(ChargeItem.category, ChargeItem.code), response, offset, limit
+    )
 
     # 最近一次调价：一次查询取回全部相关记录，按项目取最新的那条
     latest: dict[int, ChargePriceChange] = {}

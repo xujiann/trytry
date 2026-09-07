@@ -708,7 +708,10 @@ def list_followup_records(
         query = query.filter(SpdFollowupRecord.planned_at <= date_to)
     if overdue:
         query = query.filter(SpdFollowupRecord.status == "overdue")
-    rows = paginate(query.order_by(SpdFollowupRecord.planned_at), response, offset, limit)
+    rows = paginate(
+        query.order_by(SpdFollowupRecord.planned_at, SpdFollowupRecord.id),
+        response, offset, limit,
+    )
     names = {
         p.id: p.name
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))

@@ -402,7 +402,14 @@ def list_measurements(
     )
     if metric:
         query = query.filter(SpdMeasurement.metric == metric)
-    rows = paginate(query.order_by(SpdMeasurement.measured_at.desc()), response, offset, limit)
+    # `measured_at` 不是唯一列（批量导入会造出同一时刻的多条），翻页需要尾键；
+    # 这是全仓既有 paginate 站点里唯一一处排序不全序的，顺手补上（童子军法则）。
+    rows = paginate(
+        query.order_by(SpdMeasurement.measured_at.desc(), SpdMeasurement.id.desc()),
+        response,
+        offset,
+        limit,
+    )
     return [
         {"id": r.id, "metric": r.metric, "value": r.value, "unit": r.unit,
          "level": r.level, "source": r.source, "measured_at": r.measured_at.isoformat()}
@@ -425,8 +432,18 @@ class SpdScaleOut(BaseModel):
 
 
 @router.get("/scales", response_model=list[SpdScaleOut])
-def list_screen_scales(program_code: str = "", db: Session = Depends(get_db)):
-    """可自查的筛查量表清单（#11/#13）。只暴露已发布的筛查类量表。"""
+def list_screen_scales(
+    response: Response,
+    program_code: str = "",
+    offset: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """可自查的筛查量表清单（#11/#13）。只暴露已发布的筛查类量表。
+
+    `max_limit` 显式压回 50：这是个**免登录**端点，响应体带整套题目 `items`。
+    翻页给的是"第 51 个量表也能看到"，不是把匿名单次可取量抬高十倍。
+    """
     query = db.query(SpdScale).filter(
         SpdScale.status == "published", SpdScale.category == "screen"
     )
@@ -435,7 +452,7 @@ def list_screen_scales(program_code: str = "", db: Session = Depends(get_db)):
     return [
         {"id": s.id, "code": s.code, "name": s.name, "program_code": s.program_code,
          "items": s.items or []}
-        for s in query.order_by(SpdScale.id).limit(50).all()
+        for s in paginate(query.order_by(SpdScale.id), response, offset, limit, 50)
     ]
 
 
@@ -602,17 +619,21 @@ class SpdServiceApplyOut(BaseModel):
 
 @router.get("/service-applies", response_model=list[SpdServiceApplyOut])
 def my_applies(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id, resource="spd_apply")
-    rows = (
+    rows = paginate(
         db.query(SpdServiceApply)
         .filter(SpdServiceApply.patient_id == patient.id)
-        .order_by(SpdServiceApply.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdServiceApply.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "program_code": r.program_code, "status": r.status,
@@ -753,17 +774,25 @@ class SpdTaskStatusOut(BaseModel):
 
 @router.get("/tasks", response_model=list[SpdTaskOut])
 def my_tasks(
+    response: Response,
     patient_id: int | None = None,
     status: str = "",
+    offset: int = 0,
+    limit: int = 100,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """居民健康任务（#15）：需要本人填报的任务清单。"""
+    """居民健康任务（#15）：需要本人填报的任务清单。
+
+    排序补了 `id` 尾键：`due_date` 是 `String(10)` 且 `default=""`——非路径生成的
+    任务到期日全是空串、彼此完全并列，路径模板批量派单出来的又整批同日。
+    并列行的返回顺序数据库不保证，翻页时会重复+漏行。补尾键是切分页的前提。
+    """
     patient = _patient(db, account, patient_id, resource="spd_task")
     query = db.query(SpdTask).filter(SpdTask.patient_id == patient.id)
     if status:
         query = query.filter(SpdTask.status == status)
-    rows = query.order_by(SpdTask.due_date).limit(100).all()
+    rows = paginate(query.order_by(SpdTask.due_date, SpdTask.id), response, offset, limit)
     return [
         {"id": r.id, "title": r.title, "task_type": r.task_type, "status": r.status,
          "due_date": r.due_date, "form_code": r.form_code,
@@ -860,18 +889,27 @@ class SpdFollowupOut(BaseModel):
 
 @router.get("/followups", response_model=list[SpdFollowupOut])
 def my_followups(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 100,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """随访计划与历史记录（#9/#12）。"""
+    """随访计划与历史记录（#9/#12）。
+
+    排序补了 `id` 尾键：`planned_at` 是 `String(10)` 的计划日期（不是时间戳）且
+    `default=""`，按病种批量生成的随访计划天生一批同日；索引 `(status, planned_at)`
+    本身就说明它是个批量维度。不补尾键翻页会重复+漏行。
+    """
     patient = _patient(db, account, patient_id, resource="spd_followup")
-    rows = (
+    rows = paginate(
         db.query(SpdFollowupRecord)
         .filter(SpdFollowupRecord.patient_id == patient.id)
-        .order_by(SpdFollowupRecord.planned_at.desc())
-        .limit(100)
-        .all()
+        .order_by(SpdFollowupRecord.planned_at.desc(), SpdFollowupRecord.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "scene": r.scene, "planned_at": r.planned_at,
@@ -959,18 +997,22 @@ class SpdInterventionOut(BaseModel):
 
 @router.get("/interventions", response_model=list[SpdInterventionOut])
 def my_interventions(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """医生推送的干预方案（#10）。"""
     patient = _patient(db, account, patient_id, resource="spd_intervention")
-    rows = (
+    rows = paginate(
         db.query(SpdIntervention)
         .filter(SpdIntervention.patient_id == patient.id)
-        .order_by(SpdIntervention.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdIntervention.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "goal": r.goal, "content": r.content, "measures": r.measures,
@@ -1031,17 +1073,21 @@ class SpdEduPushOut(BaseModel):
 
 @router.get("/edu", response_model=list[SpdEduPushOut])
 def my_education(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id, resource="spd_edu")
-    rows = (
+    rows = paginate(
         db.query(SpdEduPush)
         .filter(SpdEduPush.patient_id == patient.id)
-        .order_by(SpdEduPush.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdEduPush.id.desc()),
+        response,
+        offset,
+        limit,
     )
     materials = {
         m.id: m
@@ -1093,17 +1139,27 @@ class SpdRevisitOut(BaseModel):
 
 @router.get("/revisits", response_model=list[SpdRevisitOut])
 def my_revisits(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
+    """复诊计划：排序补了 `id` 尾键。
+
+    `plan_date` 是 `String(10)` 且 `default=""`；同一居民同日安排多科室复诊
+    （内分泌 + 眼科 + 足病是糖尿病的标准组合，表里专门有 `dept` 列区分）
+    并列是常态，不补尾键翻页会重复+漏行。
+    """
     patient = _patient(db, account, patient_id, resource="spd_revisit")
-    rows = (
+    rows = paginate(
         db.query(SpdRevisit)
         .filter(SpdRevisit.patient_id == patient.id)
-        .order_by(SpdRevisit.plan_date.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdRevisit.plan_date.desc(), SpdRevisit.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "plan_date": r.plan_date, "dept": r.dept, "items": r.items,
@@ -1124,17 +1180,21 @@ class SpdAssessmentOut(BaseModel):
 
 @router.get("/assessments", response_model=list[SpdAssessmentOut])
 def my_assessments(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id, resource="spd_assessment")
-    rows = (
+    rows = paginate(
         db.query(SpdAssessment)
         .filter(SpdAssessment.patient_id == patient.id)
-        .order_by(SpdAssessment.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdAssessment.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "scale_code": r.scale_code, "score": r.score,
@@ -1160,18 +1220,22 @@ class SpdReferralOut(BaseModel):
 
 @router.get("/referrals", response_model=list[SpdReferralOut])
 def my_referrals(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """转诊记录与进度（#16/#17）。"""
     patient = _patient(db, account, patient_id, resource="spd_referral")
-    rows = (
+    rows = paginate(
         db.query(SpdReferralCase)
         .filter(SpdReferralCase.patient_id == patient.id)
-        .order_by(SpdReferralCase.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdReferralCase.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "direction": r.direction, "status": r.status,
@@ -1314,17 +1378,21 @@ class SpdConsultOut(BaseModel):
 
 @router.get("/consults", response_model=list[SpdConsultOut])
 def my_consults(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 30,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id, resource="spd_consult")
-    rows = (
+    rows = paginate(
         db.query(SpdConsult)
         .filter(SpdConsult.patient_id == patient.id)
-        .order_by(SpdConsult.id.desc())
-        .limit(30)
-        .all()
+        .order_by(SpdConsult.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "program_code": r.program_code, "doctor_id": r.doctor_id,
@@ -1344,7 +1412,10 @@ class SpdConsultMessageOut(BaseModel):
             response_model=list[SpdConsultMessageOut])
 def my_consult_messages(
     consult_id: int,
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -1352,12 +1423,13 @@ def my_consult_messages(
     consult = db.get(SpdConsult, consult_id)
     if consult is None or consult.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="咨询会话不存在")
-    rows = (
+    rows = paginate(
         db.query(SpdConsultMessage)
         .filter(SpdConsultMessage.consult_id == consult_id)
-        .order_by(SpdConsultMessage.id)
-        .limit(500)
-        .all()
+        .order_by(SpdConsultMessage.id),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": m.id, "sender": m.sender, "content": m.content,

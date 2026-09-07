@@ -28,8 +28,26 @@
 记下来是因为：变异验证第一次没红，不是规则失效，是**我的变异造了一个规则本就
 不该管的形状**——把这种"没红"当成"规则不好使"去放宽判据，才是真会出事的那步。
 
-**基线是量出来的，不是估的**：切 `billing.py` 8 个端点之前是 170，切完 162。
-每迁一个模块就把这个数改小，只减不增。
+**判据会误报，误报率是量出来的：26 个里 3 个。** 第二批逐个人工核对 portal 两个
+模块的 26 处，发现 3 处的 `.limit(N)` 其实在**嵌套子查询**上——那是刻意的业务上限，
+不是分页缺陷，**照着这条规则去"迁"反而会改错语义**：
+
+- `portal.py:portal_my_contract` —— `.limit(20)` 在"每份签约附最近 20 条履约记录"的
+  子查询上；外层合同列表根本没有 limit。
+- `spd/portal.py:archive` —— 30 次就诊 + 20 条随访合并成时间轴后 `[:50]`，
+  30+20 恰好等于切片长度，实际永不真截断。
+- `spd/portal.py:journey` —— 每个 enrollment 附最近 30 条任务 / 10 条转诊。
+
+它们会**继续留在这个计数里**，因为规则看不出"limit 在子查询上"。不给它们建豁免名单
+（那条路的终点是"守卫全绿但没人信"），改为写在这里：**这个数是上限，不是精确值**；
+真要迁某一条之前，先按上面三种形状核一遍它是不是同类。
+
+**基线是量出来的，不是估的**：170（首次量化）→ 162（切完 billing.py 8 个）
+→ 139（切完 portal.py 与 spd/portal.py 23 个）。每迁一个模块就把这个数改小，只减不增。
+
+**这条规则不管排序全序**：切分页时若排序键不唯一，OFFSET/LIMIT 会在并列行上重复+漏行
+——那是拿「静默少返回」换「静默重复+漏行」，比原缺陷更糟。那件事由
+`test_pagination_sort_stability.py` 独立守（零基线、零豁免），别指望这条规则替它把关。
 """
 import ast
 import os
@@ -38,7 +56,8 @@ import warnings
 
 #: 当前仍会静默截断的 GET 列表端点数。**只减不增**。
 #: 170（2026-09-06 首次量化）→ 162（同日切完 billing.py 的 8 个）
-BASELINE_SILENT_TRUNCATION = 162
+#: → 139（2026-09-07 切完 portal.py 与 spd/portal.py 的 23 个）
+BASELINE_SILENT_TRUNCATION = 139
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
@@ -133,3 +152,28 @@ def test_billing模块已经切完():
     """
     left = {e for e in silently_truncating_endpoints() if e.startswith("billing.py:")}
     assert left == set(), f"billing.py 又有端点退回硬编码 .limit()：{sorted(left)}"
+
+
+#: 第二批人工核过的三处**误报**：`.limit(N)` 在嵌套子查询上，是业务上限不是分页缺陷。
+#: 这不是豁免名单（它们照样计入基线），是给下一个人的"别去迁这三条"的记号。
+NESTED_CAP_FALSE_POSITIVES = {
+    "portal.py:portal_my_contract",
+    "spd/portal.py:archive",
+    "spd/portal.py:journey",
+}
+
+
+def test_portal两个模块只剩三处误报():
+    """第二批切的是 `portal.py` + `spd/portal.py`——23 个已切，剩下的恰好是那三处误报。
+
+    钉成"恰好等于"而不是"包含于"：多出来一条说明有端点退回了硬编码，
+    少一条说明有人把嵌套上限当分页缺陷迁掉了——两种都该当场红。
+    """
+    left = {
+        e for e in silently_truncating_endpoints()
+        if e.startswith(("portal.py:", "spd/portal.py:"))
+    }
+    assert left == NESTED_CAP_FALSE_POSITIVES, (
+        f"多出来的（退回硬编码）：{sorted(left - NESTED_CAP_FALSE_POSITIVES)}；"
+        f"少掉的（嵌套上限被误迁）：{sorted(NESTED_CAP_FALSE_POSITIVES - left)}"
+    )
