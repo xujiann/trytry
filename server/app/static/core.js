@@ -162,8 +162,12 @@ function pageAllowed(p) {
        连"换一个"的那张列表都渲染不出来；而 id 在 localStorage 里不会自己
        消失，于是这一页对这个用户**每次进来都是同一行错误**。
 
-    专病页本来就写对了一半（`programs.find((p) => p.id === picked)`），
-    但那份校验只兜住了渲染、没兜住排在它前面的取数。 */
+    **这条规矩不是新发明的，管理端是三套前端里唯一没写的那个**：
+    居民端 `m/m.js:334` 的家庭成员切换（"代管成员被解除后回落到本人"）、
+    医师端 `m/doctor.js:599` 的查房住院记录（`admissions.some(...)` 后退到第一条）
+    本来就是这么写的，两处都还把选中项留在内存里、不进存储。管理端这边只有专病页
+    写对了一半（`programs.find((p) => p.id === picked)`），而那份校验只兜住了渲染、
+    没兜住排在它前面的取数。 */
 function pickedId(key, list, fallback = 0) {
   const stored = Number(localStorage.getItem(key) || 0);
   return list.some((item) => item.id === stored) ? stored : fallback;

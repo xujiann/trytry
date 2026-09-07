@@ -36,9 +36,12 @@ import re
 
 STATIC = os.path.join(os.path.dirname(__file__), "..", "app", "static")
 
-#: 管理端 SPA 的全部脚本（`m/` 是居民端与医师端，各有各的存储约定，不在本文范围）。
+#: 三套前端的全部脚本。**居民端与医师端也扫**——不是因为它们现在有问题，
+#: 恰恰相反：那两套本来就写对了（见 `pickedId` 的 docstring），把它们纳入
+#: 注册表是为了让"往里塞一个持久化的选中项"这件事也得先表态。
 FILES = ["core.js", "app.js", "pages-clinical.js", "pages-mgmt.js",
-         "pages-public.js", "pages-spd.js"]
+         "pages-public.js", "pages-spd.js",
+         os.path.join("m", "m.js"), os.path.join("m", "doctor.js")]
 
 #: 每个 localStorage 键的分类。**新增键必须在这里表态**，否则第一条用例转红。
 #:
@@ -62,7 +65,10 @@ KEYS = {
     "spd_team_role": ("state", "团队端视角枚举，取值来自本页按钮 dataset"),
     "medplat_role": ("state", "登录角色标记，不是 UI 状态（G3/P1-23）"),
     "medplat_token": ("state", "旧版令牌存量兜底（G3/P1-23），不是 UI 状态"),
-    "CSRF_KEY": ("state", "CSRF token（常量名，值为 medplat_csrf），不是 UI 状态"),
+    "CSRF_KEY": ("state", "常量名；管理端/医师端 medplat_csrf、居民端 medplat_portal_csrf"),
+    "TOKEN_KEY": ("state", "常量名；居民端 medplat_portal_token / 医师端 medplat_doctor_token，"
+                           "均为旧版令牌存量兜底（G3/P1-23）"),
+    "USER_KEY": ("state", "常量名；医师端 medplat_doctor_user，登录态标记不是 UI 状态"),
 }
 
 #: 键 → 它所属的 render 函数名（`typed` 那三条要按函数取正文查容错）。
@@ -101,6 +107,9 @@ def _body(code: str, fn: str) -> str:
 def test_每个localStorage键都得在注册表里表态():
     """新增一个键就必须分类——分类本身就是「这是不是个 id」的那次思考。
 
+    `sessionStorage` 一并扫：医师端用的是它，而它同样跨刷新存活，
+    "存量选择比它指的对象活得久"这条危险一模一样，只是窗口短一点。
+
     唯一的空洞是 `pickedId` 自己那行 `getItem(key)`：`key` 是形参不是键名。
     按**区间**跳过而不是按名字跳过——否则任何一处写成 `getItem(key)` 的裸读
     都能从这条用例底下溜过去。
@@ -110,7 +119,7 @@ def test_每个localStorage键都得在注册表里表态():
     helper = _body(codes["core.js"], "pickedId")
     helper_span = (codes["core.js"].index(helper), codes["core.js"].index(helper) + len(helper))
     for name, code in codes.items():
-        for m in re.finditer(r"localStorage\.(?:get|set|remove)Item\(\s*([^,)]+)", code):
+        for m in re.finditer(r"(?:local|session)Storage\.(?:get|set|remove)Item\(\s*([^,)]+)", code):
             if name == "core.js" and helper_span[0] <= m.start() < helper_span[1]:
                 continue
             key = m.group(1).strip().strip("\"'")
@@ -118,7 +127,7 @@ def test_每个localStorage键都得在注册表里表态():
                 line = code[:m.start()].count("\n") + 1
                 unknown.append(f"{name}:{line}  {key}")
     assert not unknown, (
-        "有 localStorage 键没在 KEYS 里分类。先回答一个问题：它是不是一个"
+        "有 local/sessionStorage 键没在 KEYS 里分类。先回答一个问题：它是不是一个"
         "**指向某条记录的 id**？是就填 list/typed 并按对应规矩收口，"
         "不是就填 state 写明理由：\n  " + "\n  ".join(unknown)
     )
