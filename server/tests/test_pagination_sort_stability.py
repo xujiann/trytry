@@ -110,7 +110,7 @@ def paginate_sites() -> list[tuple[str, str, str]]:
     sites: list[tuple[str, str, str]] = []
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             assigns: dict[str, list] = {}
             for node in ast.walk(fn):
                 if isinstance(node, ast.Assign):

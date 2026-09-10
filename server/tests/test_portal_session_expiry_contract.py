@@ -90,7 +90,7 @@ def test_居民端登录失效一律回401而不是403():
     tree = ast.parse(open(PORTAL_PY, encoding="utf-8").read())
     fn = next(
         n for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "current_resident"
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "current_resident"
     )
     raises = [
         n for n in ast.walk(fn)

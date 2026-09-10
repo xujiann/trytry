@@ -233,7 +233,7 @@ def _auto_intervene_func() -> ast.FunctionDef:
     tree = ast.parse(CARE_PATH.read_text(encoding="utf-8"))
     func = next(
         (n for n in ast.walk(tree)
-         if isinstance(n, ast.FunctionDef) and n.name == "_auto_intervene"), None
+         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "_auto_intervene"), None
     )
     assert func is not None, "care.py 里找不到 _auto_intervene"
     return func

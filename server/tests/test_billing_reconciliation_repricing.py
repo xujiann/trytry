@@ -321,7 +321,7 @@ def test_八路同价PATCH全部200且只留一行历史(client, admin):
 
 
 def _funcs(tree):
-    return [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
 
 def _calls(node, name):

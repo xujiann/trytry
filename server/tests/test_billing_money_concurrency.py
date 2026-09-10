@@ -500,3 +500,80 @@ def test_全额退款后可以换渠道重新收款(client, admin, org):
     )
     assert again.status_code == 201, f"全额退款后应能重新收款：{again.text}"
     assert again.json()["status"] == "paid"
+
+
+def test_同时到达的两路回调_输家不得覆盖赢家的网关流水号(client, admin, org, monkeypatch):
+    """支付回调的幂等判定原先只挡得住**先后到达**的重放。
+
+    2026-09-10 由「AST 闸门看不见 `async def`」那一轮扩分母后由读-改-写规则点名：
+    `payment_callback` 在 `serialized_on` 临界区里写
+    `order.trade_no = trade_no or order.trade_no`，**却没有先 `db.refresh(order)`**——
+    而 `serialized_on` 自己的 docstring 写得很清楚：进临界区之前拿到的 ORM 对象是
+    锁外读的旧值，锁到手不会自动刷新。
+
+    后果不是 500，是**更难发现的那一种**：两路回调同时到达时，两路的锁外状态检查
+    都在各自的旧快照上通过，赢家先把单置 paid、写下自己的网关流水号；输家进临界区
+    后照旧把这张单再置一次 paid，用**自己的** trade_no 覆盖掉赢家那个，还把 paid_at
+    改成自己的时间，然后回 200 idempotent=False。对账时这张单的流水号与网关那边
+    对不上，而平台侧看不出任何异常。
+
+    顺序重放走的是同一批判据，回的却是 409「回调与已有流水不符」——**同一件事，
+    并发下和顺序下答案不一样**，这本身就是缺陷。
+
+    用例把"赢家"精确地放在锁外检查与锁内之间（包一层 `serialized_on`，进锁前先用
+    另一个 Session 提交赢家那一笔），所以是确定性的，不靠调度运气。
+    """
+    import contextlib
+
+    from app.config import settings
+    from app.models import utcnow
+
+    monkeypatch.setattr(settings, "payment_gateway_key", "test-callback-race-key")
+    code = _charge_item(client, admin, "RACE-CB", 100)
+    # 总额 200 = 两倍单笔，好让"未付余额复核"这道防线不抢在幂等判定之前把输家拦掉：
+    # 要考的是幂等判定本身，不是余额复核（总额恰等于单笔时余额复核会先回 409，
+    # 缺陷就藏在它后面看不见了）。
+    settlement, _ = _encounter_settlement(client, admin, org, "回调并发患者", code, 2)
+
+    with SessionLocal() as db:
+        order = PaymentOrder(
+            settlement_id=settlement["id"], channel="gateway", amount=100,
+            status="pending", trade_no="", created_by=1,
+        )
+        db.add(order)
+        db.commit()
+        order_id = order.id
+
+    fired: list[int] = []
+    real_serialized_on = billing.serialized_on
+
+    @contextlib.contextmanager
+    def _winner_commits_first(db, model, row_id):
+        """第一次进临界区之前，让"赢家"那一路先提交完。"""
+        if not fired:
+            fired.append(1)
+            with SessionLocal() as winner:
+                won = winner.get(PaymentOrder, order_id)
+                won.status = "paid"
+                won.trade_no = "TN-WINNER"
+                won.paid_at = utcnow()
+                won.callback_at = utcnow()
+                winner.commit()
+        with real_serialized_on(db, model, row_id):
+            yield
+
+    monkeypatch.setattr(billing, "serialized_on", _winner_commits_first)
+
+    status_code, body = _callback(client, order_id, 10000, "TN-LOSER")
+    assert fired, "赢家那一笔没被触发，用例没造出竞态——先看 serialized_on 是否仍被 billing 直接引用"
+    assert status_code == 409, (
+        f"输家应与顺序重放同口径回 409「回调与已有流水不符」，实际 {status_code} {body}"
+    )
+
+    with SessionLocal() as db:
+        after = db.get(PaymentOrder, order_id)
+        assert after.trade_no == "TN-WINNER", (
+            f"赢家的网关流水号被输家覆盖了：{after.trade_no}——"
+            "临界区里少了 db.refresh(order)，读改写读的是锁外旧值"
+        )
+        assert after.status == "paid"

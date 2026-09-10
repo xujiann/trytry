@@ -1340,6 +1340,24 @@ class PaymentCallbackOut(BaseModel):
     idempotent: bool = False
 
 
+def _settled_callback_result(order: PaymentOrder, result_status: str, trade_no: str) -> dict:
+    """回调到达时支付单已不在 `pending`：同一笔的重放算幂等，其余一律 409。
+
+    抽出来是因为这段判定要用**两次**——一次在锁外（挡先后到达的重放，省掉
+    进临界区的开销），一次在锁内 `db.refresh` 之后（真正同时到达的两路只有
+    在锁内才分得出先来后到）。两处必须逐字同口径，所以只留一份实现。
+    """
+    if order.status == "paid":
+        if result_status == "paid" and (not order.trade_no or order.trade_no == trade_no):
+            # 幂等：同一笔的重复回调不再产生任何写入
+            return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": True}
+        raise HTTPException(status_code=409, detail="支付单已入账，回调与已有流水不符")
+    raise HTTPException(
+        status_code=409,
+        detail=f"当前状态 {PAYMENT_STATUS.get(order.status, order.status)} 不接受支付回调",
+    )
+
+
 # 回调免登录：支付网关没有平台账号，身份由 HMAC-SHA256 验签 + 时间窗承担
 # （口径见 app/egress.py）。billing 路由器带路由器级登录依赖，注册这一条时
 # 临时摘除、注册完立即恢复——只有回调走这条路，其余端点的鉴权一个字节不变。
@@ -1381,16 +1399,8 @@ async def payment_callback(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="支付单不存在")
     if amount_fen != to_fen(order.amount):
         raise HTTPException(status_code=422, detail="回调金额与支付单不一致，拒绝入账")
-    if order.status == "paid":
-        if result_status == "paid" and (not order.trade_no or order.trade_no == trade_no):
-            # 幂等：同一笔的重复回调不再产生任何写入
-            return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": True}
-        raise HTTPException(status_code=409, detail="支付单已入账，回调与已有流水不符")
     if order.status != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail=f"当前状态 {PAYMENT_STATUS.get(order.status, order.status)} 不接受支付回调",
-        )
+        return _settled_callback_result(order, result_status, trade_no)
     if result_status != "paid":
         order.status = "failed"
         order.fail_reason = str(payload.get("message", "通道回调支付失败"))[:256]
@@ -1402,6 +1412,17 @@ async def payment_callback(request: Request, db: Session = Depends(get_db)):
     # gateway 单各自金额都对，回调三次就收进 300（实测）。这里按已到账口径
     # （不含其它 pending）复核一次，收足了就拒绝入账。
     with serialized_on(db, Settlement, order.settlement_id):
+        # `serialized_on` 的口径写在它自己的 docstring 里：**进临界区之前拿到的
+        # ORM 对象是锁外读的旧值，锁到手不会自动刷新**。不刷新就会覆盖赢家刚
+        # 提交的那一笔——下面 `trade_no or order.trade_no` 读到的是旧的空串，
+        # 正好把赢家写进去的网关流水号抹掉，而这一路自己毫无察觉。
+        db.refresh(order)
+        if order.status != "pending":
+            # 上面那道状态检查做在**锁外的旧快照**上，只挡得住先后到达的重放；
+            # 真正同时到达的两路要到锁内才分得出先来后到。口径与锁外那处共用
+            # 同一个函数——写两遍就会漂。
+            db.rollback()
+            return _settled_callback_result(order, result_status, trade_no)
         settlement = db.get(Settlement, order.settlement_id)
         settled = _collected_amount(db, order.settlement_id, include_pending=False)
         if settlement is not None and settled + round(order.amount, 2) > round(

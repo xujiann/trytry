@@ -134,6 +134,50 @@
 
 ## Next（治理逐块推进，只进不退）
 
+- ✅ **第十一个形状：AST 闸门看不见 `async def` 端点——扩完分母第一次跑就点出一处真缺陷**（2026-09-10）。
+  `ast.walk()` 走出来的 `async def` 是 `ast.AsyncFunctionDef`，**不是** `ast.FunctionDef` 的子类。
+  而四个扫路由的闸门（stage14 并发 / stage15 横向越权 / 列表分页棘轮 / 分页排序稳定性）
+  共 **17 处**枚举点只写了 `isinstance(n, ast.FunctionDef)`——每一个 async 端点因此
+  **整个不在分母里**：规则没被删、豁免清单没变短也没变长、闸门照样报绿。
+  与「路由拆进子包，一层扫漏掉整包」是同一种失效的另一副面孔：那次换的是**目录**，这次换的是**关键字**。
+  - ⚠️ **不是纸面风险**。全仓 946 个端点里 3 个是 async，扩完分母跑第一遍，
+    读-改-写规则当场点名 `billing.py:payment_callback → order.trade_no = trade_no or order.trade_no`。
+  - **缺陷本身**：它在 `serialized_on` 临界区里做读-改-写，**却没有先 `db.refresh(order)`**——
+    而 `serialized_on` 自己的 docstring 正写着「进临界区之前拿到的 ORM 对象是锁外读的旧值，
+    锁到手不会自动刷新」。后果不是 500，是更难发现的一种：两路回调**同时**到达时，
+    两路的锁外幂等检查各自在旧快照上通过；赢家先把单置 paid、写下自己的网关流水号；
+    输家进临界区后再置一次 paid，用**自己的** trade_no 覆盖掉赢家那个、把 paid_at 也改成自己的时间，
+    然后回 200 `idempotent=false`。对账时这张单与网关那边对不上，而平台侧看不出任何异常。
+    同一批判据在**顺序**重放下回的是 409「回调与已有流水不符」——
+    **同一件事，并发下和顺序下答案不一样**，这本身就是缺陷。
+  - **修法**：锁内先 `refresh` 再复检状态；锁外与锁内两处幂等判定抽成同一个
+    `_settled_callback_result`（写两遍就会漂）。回归用例是**确定性**的——
+    把赢家那一笔精确塞在「锁外检查」与「锁内」之间，不靠调度运气；
+    撤掉修复即转红（200 且赢家流水号被覆盖）。
+  - **另外 2 个 async 端点逐条核过是干净的**（附件上传有 `assert_owner_visible(..., write=True)`；
+    spd 佐证上传在居民端体系内），所以这次扩分母对四个闸门是**零基线变化**，只多出这一处真命中。
+  - **新增 `tests/test_async_endpoint_scan_coverage.py` 两条钉住它**：一条**防空转**
+    （全仓一个 async 端点都没有就报错，并把清单打印出来——省得规则哪天变成空转还没人发现）、
+    一条**零基线棘轮**（扫路由的测试模块里 `isinstance(..., ast.FunctionDef)` 必须同时认 async）。
+    两条各做了变异验证（撤回一处枚举点 / 把扫描面缩到没有 async 的子包，分别转红）。
+
+- ✅ **两个形状各扫一遍，两遍都干净——负结果照样记账**（2026-09-10）。
+  - **除零**：151 处 `/`、`//`、`%`，剔掉 pathlib 的 `Path / "x"`（同一个运算符、完全不同的语义）
+    与字面量分母后剩 37 个候选，逐条追去向，**0 处可触发**——`sd`/`weight`/`volume_cap`/`ratio`
+    各自有 `Field(gt=0)`、`ge=1`、422 或提前返回挡着。
+    📌 **我的判据认不出「提前返回式」的守卫**（`if not xs: return` / `raise` / `continue`），
+    37 个里绝大多数是这个原因误报——所以它的产物是**候选**不是结论，必须逐条读。
+  - **用户可控字符串被直接解析（失败即 500 而不是 422）**：分母 946 个端点函数
+    （与路由对象数逐个对上，说明没缩水），命中 8 个，**0 处真缺陷**——四处入参本就是
+    `DateStr`/`OptionalDateStr`、`emergency` 的 `occurred_at` 有 `field_validator`、
+    `users:audit/export` 在**开流之前**先 `resolve_business_date(until)`
+    （这处尤其要紧：它是 NDJSON 流式响应，`ValueError` 真漏进生成器就不是 500 而是 **200 + 半截文件**）、
+    `1/body.ratio` 有 `Field(gt=0)`，还有一处把 Session 参数 `db` 当成用户输入的假阳性。
+    已知的 P1-52（`maternal.py` 的 `float(bp.split("/")[0])`）**没出现在命中里是对的**——
+    它包在 `try/except` 里，属于「静默不标高危」那条已登记的欠账，不是 500。
+  - 两次都**没有落棘轮**：判据误报率过高（提前返回认不出、pathlib 同符号不同义），
+    落下去只会被豁免名单填死。
+
 - ✅ **CI 抓到的真竞态：对账重跑在 `commit()` 与 `refresh()` 之间被另一路删掉 → 500**（2026-09-10）。
   run 544 的 integration 档红在 `test_八路同日对账在真PG上恰得一张单`，报
   `InvalidRequestError: Could not refresh instance '<ReconciliationBatch ...>'`。

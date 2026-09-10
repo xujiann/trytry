@@ -129,7 +129,7 @@ def silently_truncating_endpoints() -> set[str]:
     found = set()
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
             if ".get(" not in decs:
                 continue
@@ -283,7 +283,7 @@ def test_docstring里的示例不算代码():
     ).read()
     fn = next(
         n for n in ast.walk(ast.parse(src))
-        if isinstance(n, ast.FunctionDef) and n.name == "record_qc_summary"
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "record_qc_summary"
     )
     assert ".limit(5000)" in ast.unparse(fn), (
         "前提没了：这条用例靠 record_qc_summary 的 docstring 里那句 `.limit(5000)` 取证"

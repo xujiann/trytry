@@ -500,7 +500,7 @@ def _byid_org_write_endpoints():
         if name in ("portal.py", "spd/portal.py"):
             continue
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             decs = [ast.unparse(d) for d in fn.decorator_list]
             if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
                 continue
@@ -560,7 +560,7 @@ def _batch_byids_org_write_endpoints() -> set[str]:
         if name in ("portal.py", "spd/portal.py"):      # 与上面那条同一理由豁免
             continue
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
             if not any(m in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
                 continue
@@ -626,7 +626,7 @@ def _patient_scoped_endpoints() -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             if not any(".get(" in ast.unparse(d) for d in fn.decorator_list):
                 continue
             args = {a.arg for a in fn.args.args}
@@ -663,7 +663,7 @@ def _patient_byid_read_endpoints() -> tuple[set[str], set[str]]:
         if name in ("portal.py", "spd/portal.py"):
             continue
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             if not any(".get(" in ast.unparse(d) for d in fn.decorator_list):
                 continue
             if {"patient_id", "ehc_no"} & {a.arg for a in fn.args.args}:

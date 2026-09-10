@@ -222,7 +222,7 @@ def test_条件更新对过期读拦得住(client, admin, definitions):
 
 def _functions() -> dict[str, ast.FunctionDef]:
     tree = ast.parse(ROUTER_PATH.read_text(encoding="utf-8"))
-    return {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    return {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
 
 def _calls(func: ast.FunctionDef, name: str) -> list[ast.Call]:

@@ -515,7 +515,7 @@ def _read_modify_write_offenders() -> list[str]:
     offenders = []
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             key = f"{name}:{func.name}"
             if key in allowed:
                 continue
@@ -603,7 +603,7 @@ def test_读改写规则自证_临界区豁免只认refresh之后():
     flagged = {
         func.name: [ast.unparse(node) for node in _read_modify_writes_in(func)]
         for func in ast.parse(source).body
-        if isinstance(func, ast.FunctionDef)
+        if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     assert flagged == {
         "plain": ["obj.note = obj.note + body.note"],           # 裸读-改-写：报
@@ -926,7 +926,7 @@ def _unguarded_unique_writes() -> list[str]:
     for name, path in list(_router_files()) + list(EXTRA_WRITE_SCAN_FILES):
         tree = ast.parse(open(path, encoding="utf-8").read())
         model_names = set(model_table)
-        for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             key = f"{name}:{func.name}"
             if key in CONFLICT_SAFE:
                 continue
@@ -977,7 +977,7 @@ def test_豁免清单不得腐烂():
     existing = set()
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             existing.add(f"{name}:{func.name}")
     listed = set(CONFLICT_SAFE) | set(KNOWN_UNGUARDED_UNIQUE_WRITES) | set(KNOWN_READ_MODIFY_WRITE)
     stale = sorted(listed - existing)
@@ -1153,7 +1153,7 @@ def _model_built_by(func: ast.FunctionDef, name: str, model_names: set[str]) -> 
     这三处（医废追溯码、病理标本号、证书编号）就会一直挂在"形状识别不了"里。
     """
     for node in ast.walk(func):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
             return _first_model_call(node, model_names)
     return None
 
@@ -1189,7 +1189,7 @@ def _write_sites():
 
     for name, path in _router_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
-        for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             assigned = _model_bindings(func, model_names)
             for node in ast.walk(func):
                 if not isinstance(node, ast.Call) or not node.args:
