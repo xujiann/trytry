@@ -674,7 +674,21 @@ def _patient_byid_read_endpoints() -> tuple[set[str], set[str]]:
             if {"patient_id", "ehc_no"} & {a.arg for a in fn.args.args}:
                 continue  # 已计入 _patient_scoped_endpoints，别重复算
             u = astcode.code(fn)         # 剥 docstring，理由同上
-            if not any(f"db.get({m}," in u for m in linked):
+            # **取行方式不止一种**：`db.get(M, id)` 与
+            # `db.query(M).filter(M.id == id).first()` 在语义上一模一样，
+            # 只认前者等于给缺陷留了个拼写上的后门（写侧当年就是这么漏掉
+            # `.id.in_(` 那一族的，见 BATCH_BYIDS 那条的注释）。
+            # 2026-09-10 实测：放宽之后仍是 24 个，**今天没有任何端点靠等价
+            # 写法脱账**——补的不是今天的洞，是明天的。
+            params = {a.arg for a in fn.args.args}
+            by_get = any(f"db.get({m}," in u for m in linked)
+            by_query = any(
+                f"db.query({m})" in u
+                and any(f"{m}.id == {p}" in u for p in params)
+                and (".first()" in u or ".one_or_none()" in u)
+                for m in linked
+            )
+            if not (by_get or by_query):
                 continue
             key = f"{name}:{fn.name}"
             all_eps.add(key)
