@@ -483,6 +483,36 @@ BYID_CROSS_ORG_OK = {
 }
 
 
+def _with_local_helpers(tree: ast.AST, fn: ast.AST) -> str:
+    """端点源码 **＋ 它调用的本模块 helper 的源码**（跟进一层，剥 docstring）。
+
+    ⚠️ 2026-09-10 实测取证：`clinical_docs.py` 七个端点把取行放在本模块的
+    `_admission_or_404` 里，于是**整族掉出分母**——闸门照样报 95.5% 覆盖率，
+    而乙院医生按 admission_id 就能读到甲院患者的体温单、病程记录，
+    还能往里写病程记录（201）。
+
+    只跟进一层、只跟本模块：跟得太深会把 `db`/`paginate` 这类通用工具的源码
+    也卷进来，判据就糊了；一层足以覆盖"端点 → 取行/校验小助手"这个真实形状。
+    """
+    funcs = {
+        n.name: n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    called = {
+        n.func.id
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    parts = [astcode.code(fn)]
+    parts += [
+        astcode.code(funcs[name])
+        for name in sorted(called & funcs.keys())
+        if name != fn.name
+    ]
+    return "\n".join(parts)
+
+
 def _byid_org_write_endpoints():
     """按 id 直取带 org_id 主对象的写接口。"""
     import sys
@@ -511,7 +541,7 @@ def _byid_org_write_endpoints():
             # 剥 docstring 再匹配守卫名：散文里提一句 `assert_patient_visible`
             # 就能冒充守卫（2026-09-10 变异审计带对照组实测），而这是 §8 红线。
             # 共享实现与来龙去脉见 tests/astcode.py。
-            u = astcode.code(fn)
+            u = _with_local_helpers(tree, fn)
             if any(g in u for g in guards):
                 continue
             if any(f"db.get({m}," in u for m in direct):
@@ -597,6 +627,50 @@ def test_批量按id写接口必须有机构守卫():
     )
 
 
+#: 【欠账，只减不增】跟进一层本模块 helper 之后**新看见**的无守卫端点。
+#:
+#: ⚠️ **它们不是新坏的，是新看见的。** 2026-09-10 之前，闸门的分母只看端点自身
+#: 函数体里的 `db.get(…)`；凡是把取行放进本模块小 helper 的，整族掉出分母。
+#: 同一次改动实测取证并**已修**的那一族是 `clinical_docs.py` 的住院文书七个端点
+#: （乙院医生能读甲院患者的体温单与病程记录，还能往里写病程记录，全部 200/201；
+#: 见 `tests/test_clinical_docs_visibility.py`）。放宽分母后又露出下面这些。
+#:
+#: **这是欠账清单，不是豁免清单**——豁免要答得出"为什么不守"，这些答不出，
+#: 只是还没逐条判。按严重度，下一批先看这两个：
+#:   * `outpatient_docs.py:sign_consent` / `:refuse_consent`——**连 `user` 形参都没有**，
+#:     任一医师可为任意患者签署/拒签知情同意书。知情同意书是**证据性法律文书**。
+#: 其余以任务流转（`spd/tasks.py` 七个）与配置维护（projects/resources）为主，
+#: 该用机构守卫还是患者可见性，要逐条判——任务队列与档案调阅不是同一件事。
+NEWLY_VISIBLE_UNGUARDED_WRITES = {
+    "credentials.py:recycle",
+    "credentials.py:void",
+    "disease_programs.py:exit_enrollment",
+    "disease_programs.py:record_node",
+    "disease_programs.py:update_program",
+    "outpatient_docs.py:refuse_consent",
+    "outpatient_docs.py:sign_consent",
+    "projects.py:add_milestone",
+    "projects.py:update_project",
+    "resources.py:publish_resource",
+    "resources.py:update_resource",
+    "resources.py:withdraw_resource",
+    "spd/tasks.py:adjust_path_instance",
+    "spd/tasks.py:claim_task",
+    "spd/tasks.py:complete_task",
+    "spd/tasks.py:escalate_task",
+    "spd/tasks.py:review_task",
+    "spd/tasks.py:submit_task",
+    "spd/tasks.py:urge_task",
+}
+
+#: 同上，读侧。
+NEWLY_VISIBLE_UNGUARDED_READS = {
+    "disease_programs.py:get_enrollment",
+    "materials.py:trace_consumable",
+    "spd/tasks.py:get_path_instance",
+    "spd/tasks.py:list_path_instances",
+}
+
 def test_按id写接口机构归属欠账不许变长():
     """第八轮那条 11% 的扫描教会的：缺口必须显式、可量化、只减不增。
 
@@ -617,7 +691,7 @@ def test_按id写接口机构归属欠账不许变长():
     print(summary)
     warnings.warn(summary, UserWarning, stacklevel=2)
     unguarded = _byid_org_write_endpoints()
-    unexpected = unguarded - BYID_CROSS_ORG_OK
+    unexpected = unguarded - BYID_CROSS_ORG_OK - NEWLY_VISIBLE_UNGUARDED_WRITES
     assert unexpected == set(), (
         "以下按 id 写接口能操作别家机构记录，且不属于已声明的跨机构协同：\n  "
         + "\n  ".join(sorted(unexpected))
@@ -673,7 +747,7 @@ def _patient_byid_read_endpoints() -> tuple[set[str], set[str]]:
                 continue
             if {"patient_id", "ehc_no"} & {a.arg for a in fn.args.args}:
                 continue  # 已计入 _patient_scoped_endpoints，别重复算
-            u = astcode.code(fn)         # 剥 docstring，理由同上
+            u = _with_local_helpers(tree, fn)   # 跟进一层本模块 helper（剥 docstring）
             # **取行方式不止一种**：`db.get(M, id)` 与
             # `db.query(M).filter(M.id == id).first()` 在语义上一模一样，
             # 只认前者等于给缺陷留了个拼写上的后门（写侧当年就是这么漏掉
@@ -721,12 +795,12 @@ def test_按id读患者资源接口可见性欠账不许变长():
     只是入参不叫 patient_id。
     """
     _all_eps, unguarded = _patient_byid_read_endpoints()
-    unexpected = unguarded - BYID_PATIENT_READ_OK
+    unexpected = unguarded - BYID_PATIENT_READ_OK - NEWLY_VISIBLE_UNGUARDED_READS
     assert unexpected == set(), (
         "以下按 id 读患者资源的接口未纳入可见性判定，且不属于已声明的跨机构协同：\n  "
         + "\n  ".join(sorted(unexpected))
     )
-    stale = BYID_PATIENT_READ_OK - unguarded
+    stale = (BYID_PATIENT_READ_OK | NEWLY_VISIBLE_UNGUARDED_READS) - unguarded
     assert stale == set(), f"这些豁免接口已加了守卫或不存在，应从清单删除：{sorted(stale)}"
 
 

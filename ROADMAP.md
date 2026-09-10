@@ -11,6 +11,23 @@
 ## Now（本周期，优先）
 
 ### 🔴 安全止血（P0，独立于分级，尽快）
+- ✅ **P0-10 住院临床文书跨机构越权（实测取证，已修）**：`/api/inpatient/admissions/{id}/…`
+  七个端点一律**按 id 直取、不校验归属、不留痕**。乙院医生（与该患者毫无业务关系）实测：
+  读体温单 **200**（体温 38.5 / 脉搏 90）、病程记录 200、护理记录 200、文书完整性 200；
+  **写**病程记录 **201**——写进了别家的法定病历，写体温 201。全程无 `AccessLog`。
+  正是 §8 原文禁止的那一种。**闸门一直没报**，因为取行在本模块的 `_admission_or_404` 里，
+  而闸门只看端点自身函数体——「判据只认一种写法」这条线上的第三例。
+  修法：helper 改成「取行 + 校验 + 留痕」一体，四个读端点补 `user`；
+  回归八条**两个方向都钉**（无关机构 403 ×7、本院照常 200/201、放行留痕、被拒不留痕）。
+  闸门同步跟进一层本模块 helper，分母 89 → **101**，覆盖率 95.5% → 96.0%；
+  放宽后新看见的 19 个已登记为欠账（不是豁免），下一批先看
+  `outpatient_docs:sign_consent`/`refuse_consent`——**连 `user` 形参都没有**，
+  任一医师可为任意患者签署知情同意书。
+  📌 补上校验后 `test_doctor_mobile::test_round_tab_backend_flow` 当场变红，查下来
+  **不是修错了，是夹具不真实**：它把病区挂在另建的「查房演示院」下，于是那位医师
+  是在给别家机构的患者查房——它当时能过，只因这族端点根本不校验归属。
+  已改挂到该医师自己的机构（查房本就是在本院病区查自己的病人）。
+  **不是为了让 CI 变绿改测试，是改完这条用例才真的在测查房流程。**
 - ✅ 生产凭据守卫改为**强度校验**（长度 + 不同字符数 + 字符类别 + 占位符词表），部署文件弱默认值清零。原守卫只比对「是否等于代码默认值」，实测两处漏网：`docker-compose.yml` 注入的 `change-me-in-production` **不等于**代码默认的 `dev-secret-change-in-production`，而该文件里写着 `MEDPLAT_ENV: prod`——`docker compose up` 不设任何变量也能起来，起来的是一个用**仓库里人人可见的字符串签 JWT** 的生产实例；`MEDPLAT_SECRET=x` 一字符同样放行。compose 三个凭据改 `${VAR:?}` 形态（没设就报错退出），`render.yaml` 用 `generateValue: true` 让平台生成随机值。回归 `test_prod_credential_guard.py` 十八条，两处变异验证。
 - ✅ `routers/portal.py:168` `debug_code` 回显收紧为显式开关（新增 `sms_debug_echo` 默认关 + 生产双重门；回归测试 `test_portal_auth.py` 两条）。
 - ✅ 打印 4 端点 + `attachments` 下载/列举/上传补归属校验与 `AccessLog`。口径已定：附件按 owner_type 声明 `scope`（exam_report/spd_task=患者 · adverse_event=机构 · course_material=**全员**）；`scope` 无默认值，漏声明在装载期 TypeError 炸掉。顺带补 `exam_requests.claimed_org_id`（迁移 a4c8e2f60b19，带回填）——共享诊断中心与患者的服务关系此前在模型里没有落点，中心医师写完报告打不开自己写的那份（/review 提出并已复现）。回归 `test_print_attachment_visibility.py` 十条，两处变异验证。

@@ -168,14 +168,19 @@ def test_doctor_mobile_tabs_registered_in_js(client):
 
 
 def test_round_tab_backend_flow(client, admin, setup):
-    """查房页用到的三个接口串起来：写病程 → 录体征 → 完整性自查反映变化。"""
-    org = client.post(
-        "/api/organizations",
-        json={"name": "查房演示院", "org_type": "lead_hospital", "level": "county"},
-        headers=admin,
-    ).json()
+    """查房页用到的三个接口串起来：写病程 → 录体征 → 完整性自查反映变化。
+
+    ⚠️ **病区必须挂在这位医师自己的机构下**。原先另建了一家"查房演示院"，
+    于是这条用例里的医师是在给**别家机构**的住院患者查房——它当时能通过，
+    只是因为住院文书那族端点根本不校验归属（2026-09-10 实测：乙院医生可读可写，
+    见 `tests/test_clinical_docs_visibility.py`）。补上归属校验后这条当场变红，
+    暴露的是**夹具本身不真实**：查房是医师在本院病区查自己的病人。
+    改成同机构后，这条用例才真的在测"查房流程"。
+    """
     ward = client.post(
-        "/api/inpatient/wards", json={"org_id": org["id"], "name": "查房病区"}, headers=admin
+        "/api/inpatient/wards",
+        json={"org_id": setup["org"]["id"], "name": "查房病区"},
+        headers=admin,
     ).json()
     bed = client.post(
         "/api/inpatient/beds", json={"ward_id": ward["id"], "bed_no": "R01"}, headers=admin

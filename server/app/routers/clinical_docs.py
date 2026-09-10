@@ -24,6 +24,7 @@ from ..models import (
     VitalSignRecord,
     Ward,
 )
+from ..visibility import assert_patient_visible
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], dependencies=[Depends(get_current_user)])
 
@@ -123,10 +124,36 @@ class HandoverOut(BaseModel):
     content: str
 
 
-def _admission_or_404(db: Session, admission_id: int) -> Admission:
+def _admission_or_404(
+    db: Session, admission_id: int, user: User, *, resource: str
+) -> Admission:
+    """取住院记录，并在**同一次调用里**完成归属校验与留痕。
+
+    ⚠️ 这里原先只有"取行 + 404"，**七个端点因此一律不校验归属、不留痕**。
+    2026-09-10 实测取证（乙院医生、与该患者毫无业务关系）：
+
+        GET  /admissions/1/vitals                → 200  体温 38.5 / 脉搏 90
+        GET  /admissions/1/progress-notes        → 200
+        GET  /admissions/1/nursing-records       → 200
+        GET  /admissions/1/document-completeness → 200
+        POST /admissions/1/progress-notes        → 201  **写进了别家的病程记录**
+        POST /admissions/1/vitals                → 201
+
+    正是 CLAUDE.md §8 原文禁止的那一种：「按 id 直取、不校验归属、无留痕」。
+    病程记录是法定病历，越权写入比越权读更严重。
+
+    **为什么闸门没报**：横向越权闸门的分母只看**端点自身函数体**里的
+    `db.get(带 patient_id 的模型, …)`，而这里取行在本模块的小 helper 里——
+    七个端点整个掉出分母。判据只认一种写法，这是同一条线上的第三例
+    （前两例：`async def`、等价的 query 取行写法）。闸门已同步跟进一层本模块调用。
+
+    **判定与留痕绑在一起**，理由照抄 `visibility.assert_patient_visible` 的
+    docstring：分成两个函数意味着总有人只调其中一个。
+    """
     admission = db.get(Admission, admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_patient_visible(db, user, admission.patient_id, resource=resource)
     return admission
 
 
@@ -156,7 +183,7 @@ def create_progress_note(
 
     两条规则：出院后不得再补录（病历应在住院期间形成）；首次病程每次住院唯一。
     """
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_or_404(db, admission_id, user, resource="progress_note")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写病程记录")
     if body.note_type == "first":
@@ -203,8 +230,9 @@ def list_progress_notes(
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    _admission_or_404(db, admission_id)
+    _admission_or_404(db, admission_id, user, resource="progress_note")
     query = db.query(ProgressNote).filter(ProgressNote.admission_id == admission_id)
     if note_type:
         query = query.filter(ProgressNote.note_type == note_type)
@@ -213,13 +241,17 @@ def list_progress_notes(
 
 @router.get("/admissions/{admission_id}/document-completeness",
             response_model=DocumentCompletenessOut)
-def document_completeness(admission_id: int, db: Session = Depends(get_db)):
+def document_completeness(
+    admission_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """文书完整性检查：住院病历该有而没有的部分。
 
     出院前的自查工具，也是病历质控的抓手——缺首次病程、无护理记录、
     无体征记录都是终末质控里最常见的扣分项。
     """
-    _admission_or_404(db, admission_id)
+    _admission_or_404(db, admission_id, user, resource="document_completeness")
     types = {
         t
         for (t,) in db.query(ProgressNote.note_type)
@@ -273,7 +305,7 @@ def create_nursing_record(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_or_404(db, admission_id, user, resource="nursing_record")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写护理记录")
     if body.inpatient_order_id is not None:
@@ -309,8 +341,9 @@ def create_nursing_record(
 def list_nursing_records(
     admission_id: int, response: Response, offset: int = 0, limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    _admission_or_404(db, admission_id)
+    _admission_or_404(db, admission_id, user, resource="nursing_record")
     query = db.query(NursingRecord).filter(NursingRecord.admission_id == admission_id)
     return [
         {
@@ -354,7 +387,7 @@ def create_vital(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    admission = _admission_or_404(db, admission_id)
+    admission = _admission_or_404(db, admission_id, user, resource="vital_sign")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再记录体征")
     record = VitalSignRecord(
@@ -368,9 +401,13 @@ def create_vital(
 
 
 @router.get("/admissions/{admission_id}/vitals", response_model=list[VitalSignOut])
-def list_vitals(admission_id: int, db: Session = Depends(get_db)):
+def list_vitals(
+    admission_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """体温单数据：按测量时刻升序，供前端画趋势曲线。"""
-    _admission_or_404(db, admission_id)
+    _admission_or_404(db, admission_id, user, resource="vital_sign")
     rows = (
         db.query(VitalSignRecord)
         .filter(VitalSignRecord.admission_id == admission_id)
