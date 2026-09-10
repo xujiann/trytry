@@ -48,6 +48,8 @@ AST 只认"模型类名.列名"这种写法。手写 SQL 字符串、`getattr(Mo
 from __future__ import annotations
 
 import ast
+
+import astcode
 import pathlib
 import warnings
 
@@ -154,7 +156,9 @@ def _enclosing_functions(tree: ast.AST) -> dict[int, ast.AST]:
 
 
 def _has_safe_helper(fn: ast.AST | None) -> bool:
-    return fn is not None and any(h in ast.unparse(fn) for h in SAFE_HELPERS)
+    # 剥 docstring 再匹配：散文里提一句 `pii_filter` 不算做过检索保护
+    # （理由与共享实现见 tests/astcode.py）。
+    return fn is not None and any(h in astcode.code(fn) for h in SAFE_HELPERS)
 
 
 def _python_files() -> list[pathlib.Path]:

@@ -58,6 +58,8 @@ adverse-events/record-qc、`pharmacy` 的 batch_dispense_trace）。给它们切
 `test_pagination_sort_stability.py` 独立守（零基线、零豁免），别指望这条规则替它把关。
 """
 import ast
+
+import astcode
 import copy
 import os
 import re
@@ -111,17 +113,11 @@ def _code(fn: ast.FunctionDef) -> str:
     缺陷的端点被静默排除——那是假阴性，比多算一条严重得多。所以剥 docstring
     不是为了把数字做小，是为了让判据只看代码。
     """
-    clean = copy.deepcopy(fn)
-    for node in ast.walk(clean):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            first = node.body[0] if node.body else None
-            if (
-                isinstance(first, ast.Expr)
-                and isinstance(first.value, ast.Constant)
-                and isinstance(first.value.value, str)
-            ):
-                node.body = node.body[1:] or [ast.Pass()]
-    return ast.unparse(clean)
+    # 实现已抽到 tests/astcode.py 共用：2026-09-10 的变异审计发现另外三道闸门
+    # （并发冲突、横向越权、加密列检索点）都还没剥 docstring，一句散文就能冒充
+    # 守卫——**这条 docstring 里预言的那个假阴性，在别处应验了**。
+    # 教训写下来了却没有外推，所以这次把实现共享出去，而不是再各自修一遍。
+    return astcode.code(fn)
 
 
 def silently_truncating_endpoints() -> set[str]:

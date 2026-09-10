@@ -6,6 +6,8 @@
 往带唯一约束的表里写、却没处理约束冲突的，一律红。
 """
 import ast
+
+import astcode
 import os
 import textwrap
 import threading
@@ -930,7 +932,12 @@ def _unguarded_unique_writes() -> list[str]:
             key = f"{name}:{func.name}"
             if key in CONFLICT_SAFE:
                 continue
-            source = ast.dump(func)
+            # **必须剥 docstring 再匹配**：`ast.dump` 含 docstring，于是一句
+            # 「并发下会撞 IntegrityError，留待后续处理」就能冒充守卫——
+            # 而那正是知道有竞态却还没处理的人最会写的一句。
+            # 2026-09-10 变异审计带对照组实测过：真拿掉 except 是红的，
+            # 同样拿掉、docstring 里提一句就变绿。理由与共享实现见 tests/astcode.py。
+            source = astcode.dump(func)
             if "IntegrityError" in source or any(h in source for h in helpers):
                 continue
             for model in sorted(_inserted_models(func, model_names)):

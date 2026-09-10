@@ -13,6 +13,8 @@
 2. 断言留痕：能看的每一次都记下依据，事后答得出"谁在什么时候凭什么看了谁"。
 """
 import ast
+
+import astcode
 import os
 import warnings
 
@@ -506,7 +508,10 @@ def _byid_org_write_endpoints():
                 continue
             if not any("{" in d for d in decs):
                 continue
-            u = ast.unparse(fn)
+            # 剥 docstring 再匹配守卫名：散文里提一句 `assert_patient_visible`
+            # 就能冒充守卫（2026-09-10 变异审计带对照组实测），而这是 §8 红线。
+            # 共享实现与来龙去脉见 tests/astcode.py。
+            u = astcode.code(fn)
             if any(g in u for g in guards):
                 continue
             if any(f"db.get({m}," in u for m in direct):
@@ -564,7 +569,7 @@ def _batch_byids_org_write_endpoints() -> set[str]:
             decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
             if not any(m in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
                 continue
-            body = ast.unparse(fn)
+            body = astcode.code(fn)      # 剥 docstring，理由同上
             # 守卫既可能在函数体里，也可能挂在 decorator 上（`require_admin` 就是）
             if any(g in body or g in decs for g in BATCH_BYIDS_GUARDS):
                 continue
@@ -668,7 +673,7 @@ def _patient_byid_read_endpoints() -> tuple[set[str], set[str]]:
                 continue
             if {"patient_id", "ehc_no"} & {a.arg for a in fn.args.args}:
                 continue  # 已计入 _patient_scoped_endpoints，别重复算
-            u = ast.unparse(fn)
+            u = astcode.code(fn)         # 剥 docstring，理由同上
             if not any(f"db.get({m}," in u for m in linked):
                 continue
             key = f"{name}:{fn.name}"
