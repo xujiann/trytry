@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, insert, literal, select, update
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, InvalidRequestError
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -1666,7 +1666,24 @@ def run_reconciliation(
     for d in diffs:
         db.add(d)
     db.commit()
-    db.refresh(batch)
+    try:
+        db.refresh(batch)
+    except InvalidRequestError:
+        # 与上面 IntegrityError 那条**同因、不同窗口**：那条挡的是「我们 INSERT 时
+        # 赢家已经建好」，这条挡的是「我们**提交之后**另一路才来删旧建新」——
+        # commit() 到 refresh() 之间有一个真实窗口，对方的批量 DELETE 正好落在里面，
+        # 于是我们这张刚提交的批次连同它的差异明细一起没了，refresh 找不到行。
+        #
+        # 真 PG 上实测复现（8 路并发，把该窗口撑到 50ms 必现）：
+        #   InvalidRequestError: Could not refresh instance '<ReconciliationBatch ...>'
+        # 未捕获即 500——而这一路其实"成功"过，只是成果被覆盖了。
+        #
+        # 返回它的内容是不行的：那张单已经不在库里，差异明细也被一并删掉，
+        # 给出去等于一份查不到的对账单。按与 409 同一口径让调用方去看赢家那张。
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="该日期的对账刚由另一请求完成，请刷新查看最新对账单"
+        ) from None
     return _batch_out(batch, diffs)
 
 

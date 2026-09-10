@@ -382,3 +382,48 @@ def test_八路异价调价在真PG上历史不断链(pg_sessionmaker, actor):
             db.close()
     finally:
         _cleanup_item(pg_sessionmaker, item_id)
+
+
+def test_提交后被另一路删掉_返回409而不是500(pg_sessionmaker, actor, monkeypatch):
+    """`commit()` 与 `refresh()` 之间那个窗口：我们刚提交的批次被另一路删掉了。
+
+    **为什么要单独钉一条**：上面那条八路并发用例能抓到它，但只是**概率性**的——
+    窗口只有 commit 到 refresh 之间那几微秒。本机跑 8 遍 0 次复现，
+    CI 上（runner 更慢、更争抢）2026-09-10 的 run 544 抓到过一次：
+
+        InvalidRequestError: Could not refresh instance '<ReconciliationBatch ...>'
+
+    未捕获就是 500，而这一路其实已经**提交成功**过，只是成果被后到的那路覆盖了。
+    把 `db.refresh` 直接打桩成抛这个异常，窗口就不再靠运气：这条是确定性的。
+
+    口径与上面 `IntegrityError` 那条 409 一致——批次连同差异明细都已被删掉，
+    返回它的内容等于给出一份查不到的对账单。
+    """
+    from fastapi import HTTPException
+    from sqlalchemy.exc import InvalidRequestError
+    from sqlalchemy.orm import Session as _Session
+
+    from app.routers.billing import run_reconciliation
+
+    date = _free_date(pg_sessionmaker)
+    user = _Actor(actor)
+    db = pg_sessionmaker()
+    try:
+        def _boom(self, instance, *a, **kw):
+            raise InvalidRequestError(f"Could not refresh instance '{instance}'")
+
+        monkeypatch.setattr(_Session, "refresh", _boom)
+        try:
+            run_reconciliation(date=date, db=db, user=user)
+        except HTTPException as exc:
+            assert exc.status_code == 409, f"应按「赢家已覆盖」返回 409，实际 {exc.status_code}"
+            assert "刷新查看最新对账单" in exc.detail
+        except InvalidRequestError as exc:  # pragma: no cover - 修复前才走得到
+            raise AssertionError(
+                f"refresh 失败没有被兜住，直接抛给调用方（生产上就是 500）：{exc}"
+            ) from None
+        else:
+            raise AssertionError("refresh 已被打桩成必失败，却没有抛出 409")
+    finally:
+        db.rollback()
+        db.close()
