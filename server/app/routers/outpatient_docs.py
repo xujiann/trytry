@@ -316,9 +316,14 @@ def list_consents(
 
 @router.post("/consents/{consent_id}/sign", response_model=InformedConsentOut,
              dependencies=[Depends(require_roles("doctor"))])
-def sign_consent(consent_id: int, body: SignIn, db: Session = Depends(get_db)):
+def sign_consent(
+    consent_id: int,
+    body: SignIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """记录患方签署。已有结论的不可改写——告知书是证据，不是可编辑的表单。"""
-    consent = _pending(db, consent_id)
+    consent = _pending(db, consent_id, user)
     consent.status = "signed"
     consent.signer_name = body.signer_name
     consent.signer_relation = body.signer_relation
@@ -329,9 +334,14 @@ def sign_consent(consent_id: int, body: SignIn, db: Session = Depends(get_db)):
 
 @router.post("/consents/{consent_id}/refuse", response_model=InformedConsentOut,
              dependencies=[Depends(require_roles("doctor"))])
-def refuse_consent(consent_id: int, body: RefuseIn, db: Session = Depends(get_db)):
+def refuse_consent(
+    consent_id: int,
+    body: RefuseIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """记录拒绝签署。这是一等状态，机构据此证明"告知过、对方拒绝了"。"""
-    consent = _pending(db, consent_id)
+    consent = _pending(db, consent_id, user)
     consent.status = "refused"
     consent.signer_name = body.signer_name
     consent.signer_relation = body.signer_relation
@@ -341,10 +351,33 @@ def refuse_consent(consent_id: int, body: RefuseIn, db: Session = Depends(get_db
     return _consent_out(consent)
 
 
-def _pending(db: Session, consent_id: int) -> InformedConsent:
+def _pending(db: Session, consent_id: int, user: User) -> InformedConsent:
+    """取待处理的告知书，并**先**校验机构归属。
+
+    ⚠️ 这里原先只有"取行 + 404 + 状态机"，`sign_consent` / `refuse_consent`
+    连 `user` 形参都没有。2026-09-10 实测取证（乙院医师、与该患者及该机构均无关）：
+
+        POST /api/outpatient/consents/1/sign    → 200  签掉了甲院开的告知书
+        POST /api/outpatient/consents/2/refuse  → 200  替甲院记了一笔"患方拒签"
+
+    知情同意书是**证据性法律文书**——机构靠它证明"告知过"。被别家机构签掉或
+    记成拒签，等于伪造了这份证据，而系统里看不出任何异常。
+
+    **守卫口径照抄本文件的 `create_consent`**：`assert_org_writable(db, user, org_id)`。
+    开告知书要校验机构，签署/拒签当然更要——同一份文书上的两个动作用两套口径，
+    本身就是缺陷。
+
+    **归属判定排在状态机之前**（与 `billing.refund_payment` 同一理由）：
+    先 403，免得用 409 的措辞把别家单据的状态探出去。
+
+    **闸门为什么没报**：横向越权闸门只看端点自身函数体里的 `db.get(…)`，
+    而取行在本 helper 里——与 `clinical_docs` 那族同一个盲区，同一次改动已让闸门
+    跟进一层本模块调用。
+    """
     consent = db.get(InformedConsent, consent_id)
     if consent is None:
         raise HTTPException(status_code=404, detail="告知书不存在")
+    assert_obj_org_writable(db, user, consent)
     if consent.status != "pending":
         raise HTTPException(
             status_code=409,

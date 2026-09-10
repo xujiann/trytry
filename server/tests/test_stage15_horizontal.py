@@ -636,19 +636,24 @@ def test_批量按id写接口必须有机构守卫():
 #: 见 `tests/test_clinical_docs_visibility.py`）。放宽分母后又露出下面这些。
 #:
 #: **这是欠账清单，不是豁免清单**——豁免要答得出"为什么不守"，这些答不出，
-#: 只是还没逐条判。按严重度，下一批先看这两个：
-#:   * `outpatient_docs.py:sign_consent` / `:refuse_consent`——**连 `user` 形参都没有**，
-#:     任一医师可为任意患者签署/拒签知情同意书。知情同意书是**证据性法律文书**。
-#: 其余以任务流转（`spd/tasks.py` 七个）与配置维护（projects/resources）为主，
-#: 该用机构守卫还是患者可见性，要逐条判——任务队列与档案调阅不是同一件事。
+#: 只是还没逐条判。**清单只减不增**。
+#:
+#: ✅ **已减 2 条**：`outpatient_docs.py:sign_consent` / `:refuse_consent` 已修
+#: （2026-09-10，同批）。它们原先**连 `user` 形参都没有**，实测乙院医师可签掉、
+#: 可替甲院记拒签，各回 200——而知情同意书是**证据性法律文书**。
+#: 修法照抄本文件 `create_consent` 的口径（`assert_org_writable`）：
+#: 同一份文书上"开具"校验机构、"签署/拒签"不校验，本身就是缺陷。
+#: 见 `tests/test_consent_org_guard.py`。
+#:
+#: 余下 17 条以任务流转（`spd/tasks.py` 七个）与配置维护（projects/resources）、
+#: 互认（credentials）为主，该用机构守卫还是患者可见性要逐条判——
+#: 任务队列与档案调阅不是同一件事。
 NEWLY_VISIBLE_UNGUARDED_WRITES = {
     "credentials.py:recycle",
     "credentials.py:void",
     "disease_programs.py:exit_enrollment",
     "disease_programs.py:record_node",
     "disease_programs.py:update_program",
-    "outpatient_docs.py:refuse_consent",
-    "outpatient_docs.py:sign_consent",
     "projects.py:add_milestone",
     "projects.py:update_project",
     "resources.py:publish_resource",
@@ -696,8 +701,14 @@ def test_按id写接口机构归属欠账不许变长():
         "以下按 id 写接口能操作别家机构记录，且不属于已声明的跨机构协同：\n  "
         + "\n  ".join(sorted(unexpected))
     )
-    stale = BYID_CROSS_ORG_OK - unguarded
-    assert stale == set(), f"这些豁免接口已加了守卫或不存在，应从清单删除：{sorted(stale)}"
+    # 防腐烂：**豁免清单与欠账清单都要查**。
+    # 这一条是自审时用变异试出来的——只查豁免清单的那一版，把已修好的
+    # `sign_consent` 塞回欠账清单，闸门照样绿：**一份不会腐烂的欠账清单，
+    # 修完了也不会变短，那它就不再表示"还欠多少"了。**
+    stale = (BYID_CROSS_ORG_OK | NEWLY_VISIBLE_UNGUARDED_WRITES) - unguarded
+    assert stale == set(), (
+        f"这些登记项已加了守卫或不存在，应从清单删除（欠账只减不增，修完就要减）：{sorted(stale)}"
+    )
 
 
 def _patient_scoped_endpoints() -> dict[str, list[str]]:
