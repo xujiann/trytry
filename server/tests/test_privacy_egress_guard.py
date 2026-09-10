@@ -38,10 +38,12 @@ import ast
 import importlib
 import inspect
 import pkgutil
+import re
 import textwrap
 import typing
 
 from fastapi import APIRouter
+from fastapi.datastructures import DefaultPlaceholder
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
@@ -167,6 +169,62 @@ LOOSE_CONTRACT_REVIEWED: dict[str, str] = {
 }
 
 
+# ------------------------------------------------- 第二个结构性盲区：非 JSON 导出
+
+#: 构造「带响应体的非 JSON 响应」的调用名。**裸 `Response(status_code=204)` 不算**
+#: ——它没有响应体，出不了 PII（`spd` 那几个 delete/remove 就是这种）。
+_EXPORT_CTOR = re.compile(
+    r"\b(StreamingResponse|HTMLResponse|PlainTextResponse|FileResponse"
+    r"|CsvResponse|NdjsonResponse|SvgResponse|AttachmentContentResponse"
+    r"|_csv_response)\s*\(|\bResponse\s*\(\s*content\s*="
+)
+
+
+def _is_export_route(route) -> bool:
+    """这个端点吐的是非 JSON 的响应体（CSV / NDJSON / HTML / SVG / 文件流）吗？
+
+    **两个判据缺一不可**，这一点是实测出来的：
+
+    - 只看 `response_class`：漏掉 `certs.py:export_death_report_cards_csv` 与
+      `infectious.py:export_case_report_cards_csv`——它们**没有声明 response_class**，
+      只是函数里 `return _csv_response(...)`；
+    - 只看函数源码：漏掉 `printing.py` 那 12 个——它们声明了 `response_class=HTMLResponse`，
+      而 HTML 是共用帮手 `_page()` 组装的，端点自己的源码里没有构造调用。
+
+    单独一个判据只认得 8 个，两个并起来才是 20 个。
+    """
+    if not isinstance(route.response_class, DefaultPlaceholder):
+        return True
+    try:
+        src = textwrap.dedent(inspect.getsource(route.endpoint))
+    except (OSError, TypeError):
+        return False
+    return bool(_EXPORT_CTOR.search(re.sub(r'"""(?:.|\n)*?"""', "", src)))
+
+
+#: 非 JSON 导出里，经人工复核**确实不含**居民身份证号/电话的端点：`文件:函数 → 理由`。
+#: 与上面两张清单同一纪律：逐条写理由、只减不增、不得腐烂。
+EXPORT_NO_PII_REVIEWED: dict[str, str] = {
+    "attachments.py:download_attachment":
+        "回放的是上传上来的**文件字节流**（content_type 原样透传），不是平台组装的结构化字段；"
+        "里面有什么由上传方决定，掩码无从下手，访问控制由附件归属校验承担",
+    "infectious.py:export_case_report_cards_csv":
+        "列头是 卡片编号/报告机构/病种编码/病种名称/分类/发病日期/报告时间/法定时限/迟报天数/及时性，"
+        "**不含姓名、身份证号、电话**；与同为法定上报的死因卡不同——那份带姓名与证件号，走 _death_card 掩码",
+    "reports.py:export_monitoring_csv":
+        "监测指标聚合（序号/指标名/口径/当期值/单位/数据来源），无个体数据",
+    "reports.py:export_operations_csv":
+        "机构维度运营月报（就诊/住院/收入/支出/结余/绩效分），无个体数据",
+    "spd/config/scales.py:scale_qr": "量表二维码 SVG，内容是一条 URL",
+    "spd/config/teams.py:village_doctor_qr": "村医二维码 SVG，内容是一条 URL",
+    "users.py:export_audit_logs":
+        "NDJSON 每行只含 id/user_id/username/method/path/status_code/at。"
+        "path 取自 `request.url.path`（**不含 query**），且审计只记 _AUDITED_METHODS"
+        "（POST/PATCH/PUT/DELETE）；全仓把 ehc_no 放进路径模板的三个端点（/api/archive/{ehc_no}、"
+        "/api/patients/{ehc_no}、FHIR Patient/{ehc_no}）都是 GET，不落审计。已实测核对",
+}
+
+
 # --------------------------------------------------------- 判定：沿调用链找脱敏入口
 
 
@@ -229,6 +287,13 @@ def _classify() -> tuple[int, dict[str, tuple[str, list[str], str]]]:
                 verdict = "loose_reviewed"
             else:
                 verdict = "loose_unreviewed"
+        elif _is_export_route(route):
+            if _masks(route.endpoint):
+                verdict = "export_masked"
+            elif key in EXPORT_NO_PII_REVIEWED:
+                verdict = "export_reviewed"
+            else:
+                verdict = "export_unreviewed"
         else:
             continue
         rows[key] = (route.path, fields, verdict)
@@ -277,7 +342,10 @@ def test_明文出口登记不得腐烂():
 
 
 def test_裸契约逐个复核_不许新增未复核的():
-    """裸 dict/Any 契约是这道守卫唯一的结构性盲区：每一个都要么调了脱敏入口、要么人工复核登记。
+    """裸 dict/Any 契约是这道守卫的结构性盲区**之一**：每一个都要么调了脱敏入口、要么人工复核登记。
+
+    （原文写的是「唯一的结构性盲区」。2026-09-10 证伪：非 JSON 导出是第二个，
+    见 `test_非JSON导出也必须脱敏或书面复核`。）
 
     新增一个 `response_model=dict` 的端点会先在这里红——要么改成带字段的模型
     （契约治理也要求这样），要么复核后登记。登记同样不得腐烂。
@@ -295,6 +363,49 @@ def test_裸契约逐个复核_不许新增未复核的():
         if table.get(key, ("", [], "gone"))[2] != "loose_reviewed"
     )
     assert stale == [], "裸契约复核清单里这些条目已不成立，应删除：\n  " + "\n  ".join(stale)
+
+
+def test_非JSON导出也必须脱敏或书面复核():
+    """CSV / NDJSON / HTML / SVG / 文件流：`response_model` 看不出字段，出口照样是出口。
+
+    **这是这道守卫的第二个结构性盲区，2026-09-10 补上。** 此前 `_classify()` 对
+    「既没有 PII 字段、又不是裸 dict」的端点直接 `continue`——而 CSV 导出的
+    `response_model` 要么是 `str`、要么干脆没有，正好落进那条 `continue`：
+
+        certs.py:export_death_report_cards_csv   列头就写着「身份证号」
+        printing.py:print_cert 等 12 个          打印件渲染患者身份证号与电话
+
+    这两处**本来就写对了**（前者走 `_death_card`、后者走 `mask_id_card`/`mask_phone`），
+    但那是靠人记得，不是靠闸门——它们停止脱敏时，三条既有用例一条都不会红。
+
+    判据见 `_is_export_route`：`response_class` 与函数源码**两个判据缺一不可**
+    （单独任一个只认得 8 个，并起来才 20 个）。
+    """
+    _total, table = _classify()
+    exports = {k: v for k, v in table.items() if v[2].startswith("export_")}
+    masked = sum(1 for v in exports.values() if v[2] == "export_masked")
+    reviewed = sum(1 for v in exports.values() if v[2] == "export_reviewed")
+    print(
+        f"\n[PII 出口守卫·非 JSON 导出] 命中 {len(exports)} 个："
+        f"已脱敏 {masked}、复核登记无 PII {reviewed}、未处置 "
+        f"{len(exports) - masked - reviewed}"
+    )
+    unreviewed = sorted(
+        f"{key}（{path}）" for key, (path, _f, verdict) in exports.items()
+        if verdict == "export_unreviewed"
+    )
+    assert unreviewed == [], (
+        "以下端点吐的是非 JSON 响应体（CSV/NDJSON/HTML/SVG/文件流），"
+        "既没走 privacy 的脱敏入口，也没经复核登记：\n  " + "\n  ".join(unreviewed)
+        + "\n带居民身份证号/电话的，改走 desensitize / mask_id_card / mask_phone；"
+        "确实不含个体身份的，复核后登记进 EXPORT_NO_PII_REVIEWED 并写明理由（只减不增）。"
+    )
+    stale = sorted(
+        f"{key}：{'端点已不存在或不再是非 JSON 导出' if key not in table else '判定已是 ' + table[key][2]}"
+        for key in EXPORT_NO_PII_REVIEWED
+        if table.get(key, ("", [], "gone"))[2] != "export_reviewed"
+    )
+    assert stale == [], "非 JSON 导出复核清单里这些条目已不成立，应删除：\n  " + "\n  ".join(stale)
 
 
 def _self_test_helper(value):
