@@ -36,7 +36,12 @@ def _col_line(col) -> str:
     return " · ".join(parts)
 
 
-def main() -> None:
+def render() -> str:
+    """把当前 ORM 元数据渲染成 SCHEMA.md 的完整文本。
+
+    与 `main()` 分开是为了让治理用例能**不落盘**地拿到「此刻的模型应该长什么样」
+    ——快照文档一旦靠人记得重跑就会漂，而漂了没有任何东西会红（见 `tests/test_schema_snapshot_freshness.py`）。
+    """
     md = Base.metadata
     tables = sorted(md.tables.values(), key=lambda t: t.name)
     lines: list[str] = [
@@ -63,9 +68,13 @@ def main() -> None:
             cols = ", ".join(c.name for c in idx.columns)
             lines.append(f"- _index_ {idx.name}({cols}){' UNIQUE' if idx.unique else ''}")
         lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(lines), encoding="utf-8")
-    print(f"已写出 {OUT}（{len(tables)} 张表）")
+    OUT.write_text(render(), encoding="utf-8")
+    print(f"已写出 {OUT}（{len(Base.metadata.tables)} 张表）")
 
 
 if __name__ == "__main__":

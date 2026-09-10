@@ -80,6 +80,125 @@ FROZEN_CORE_COLUMNS: dict[str, list[str]] = {
 }
 
 
+#: 冻结核心表的**列签名**（类型 + 非空），与上面的列名清单配套。
+#:
+#: 为什么要有这一份：2026-09-10 的变异审计实测——把 `patients.gender` 从
+#: `String(8)` 改成 `String(16)`，`test_核心表结构已冻结` **照样绿**，因为它
+#: 比的是 `sorted(table.c.keys())`，**只有列名**。而 `tests/schema_parity.py`
+#: 比的同样是列名集合。于是「冻结的核心表」上改一个列的类型，全仓没有任何一道
+#: 闸门会红——可 CLAUDE.md §4 明写这类改动要**先写 ADR**。
+#:
+#: 类型渲染取 SQLAlchemy 的方言无关形式（`str(col.type)`），与
+#: `docs/schema/SCHEMA.md` 用的是同一种写法。
+FROZEN_CORE_COLUMN_TYPES: dict[str, dict[str, str]] = {
+    "users": {
+        "created_at": "DATETIME NOT NULL",
+        "full_name": "VARCHAR(64) NOT NULL",
+        "id": "INTEGER NOT NULL",
+        "must_change_password": "BOOLEAN NOT NULL",
+        "org_id": "INTEGER",
+        "password_hash": "VARCHAR(200) NOT NULL",
+        "password_updated_at": "DATETIME",
+        "role": "VARCHAR(32) NOT NULL",
+        "status": "VARCHAR(16) NOT NULL",
+        "token_valid_from": "DATETIME",
+        "totp_secret": "VARCHAR(64)",
+        "username": "VARCHAR(64) NOT NULL",
+    },
+    "organizations": {
+        "address": "VARCHAR(256) NOT NULL",
+        "created_at": "DATETIME NOT NULL",
+        "id": "INTEGER NOT NULL",
+        "level": "VARCHAR(16) NOT NULL",
+        "name": "VARCHAR(128) NOT NULL",
+        "org_type": "VARCHAR(32) NOT NULL",
+        "parent_id": "INTEGER",
+    },
+    "patients": {
+        "birth_date": "VARCHAR(10) NOT NULL",
+        "created_at": "DATETIME NOT NULL",
+        "deactivated_at": "DATETIME",
+        "ehc_no": "VARCHAR(32) NOT NULL",
+        "gender": "VARCHAR(8) NOT NULL",
+        "id": "INTEGER NOT NULL",
+        "id_card": "VARCHAR(256) NOT NULL",
+        "id_card_idx": "VARCHAR(64)",
+        "name": "VARCHAR(64) NOT NULL",
+        "phone": "VARCHAR(256) NOT NULL",
+        "phone_idx": "VARCHAR(64)",
+    },
+    "encounters": {
+        "created_at": "DATETIME NOT NULL",
+        "diagnosis_code": "VARCHAR(64) NOT NULL",
+        "diagnosis_name": "VARCHAR(256) NOT NULL",
+        "doctor_name": "VARCHAR(64) NOT NULL",
+        "encounter_type": "VARCHAR(16) NOT NULL",
+        "id": "INTEGER NOT NULL",
+        "org_id": "INTEGER NOT NULL",
+        "patient_id": "INTEGER NOT NULL",
+        "summary": "VARCHAR(1024) NOT NULL",
+    },
+    "admissions": {
+        "admitted_at": "DATETIME NOT NULL",
+        "bed_id": "INTEGER NOT NULL",
+        "created_at": "DATETIME NOT NULL",
+        "created_by": "INTEGER NOT NULL",
+        "diagnosis_name": "VARCHAR(256) NOT NULL",
+        "discharged_at": "DATETIME",
+        "doctor_name": "VARCHAR(64) NOT NULL",
+        "id": "INTEGER NOT NULL",
+        "org_id": "INTEGER NOT NULL",
+        "patient_id": "INTEGER NOT NULL",
+        "status": "VARCHAR(16) NOT NULL",
+        "ward_id": "INTEGER NOT NULL",
+    },
+}
+
+
+def test_核心表的列签名也已冻结():
+    """列名不变、类型变了，同样要红。
+
+    与上面那条分开写，是因为它们答的是两个问题：那条问「有没有多/少列」，
+    这条问「同一列还是不是同一种东西」。合成一条会让报错信息说不清是哪一种。
+    """
+    drift: dict[str, dict[str, str]] = {}
+    for name, frozen in FROZEN_CORE_COLUMN_TYPES.items():
+        actual = {
+            c.name: f"{c.type}{'' if c.nullable else ' NOT NULL'}"
+            for c in METADATA.tables[name].c
+        }
+        changed = {
+            col: f"{frozen[col]} → {actual[col]}"
+            for col in frozen.keys() & actual.keys()
+            if frozen[col] != actual[col]
+        }
+        if changed:
+            drift[name] = changed
+    assert not drift, (
+        f"冻结核心表的列签名发生变化：{drift}。"
+        " 核心表改列需先写 ADR（docs/adr/）明确决策，再同步更新"
+        " FROZEN_CORE_COLUMN_TYPES 与 FROZEN_CORE_COLUMNS 两份快照，"
+        " 并重跑 python scripts/dump_schema.py。"
+    )
+
+
+def test_两份冻结快照的列集合必须一致():
+    """防的是「加了列只更新一份快照」——那样另一份就成了摆设。"""
+    mismatched = {
+        name: {
+            "只在列名快照里": sorted(set(FROZEN_CORE_COLUMNS[name]) - set(types)),
+            "只在类型快照里": sorted(set(types) - set(FROZEN_CORE_COLUMNS[name])),
+        }
+        for name, types in FROZEN_CORE_COLUMN_TYPES.items()
+        if set(types) != set(FROZEN_CORE_COLUMNS[name])
+    }
+    assert not mismatched, f"两份冻结快照对不上，改列时漏更新了一份：{mismatched}"
+    assert set(FROZEN_CORE_COLUMN_TYPES) == set(FROZEN_CORE_COLUMNS), (
+        "两份快照覆盖的表不一致："
+        f"{sorted(set(FROZEN_CORE_COLUMNS) ^ set(FROZEN_CORE_COLUMN_TYPES))}"
+    )
+
+
 def test_核心表结构已冻结():
     drift = {}
     for name, frozen in FROZEN_CORE_COLUMNS.items():

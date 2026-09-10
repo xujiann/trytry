@@ -36,8 +36,18 @@ import pytest
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
 
 #: ${IDENT[...] || bare.chain} —— 整体未包 esc()、兜底未转义
+#: 判据两处放宽（2026-09-10 变异审计打出来的）：
+#: ① 外层可以有一对括号——`${(MAP[x] || x)}` 与 `${MAP[x] || x}` 是同一个缺陷，
+#:    而原判据只认后者。审计时把一处 `esc(MAP[x] || x)` 退成 `(MAP[x] || x)`，
+#:    这道闸门**照样绿**。
+#: ② 兜底运算符不止 `||`——`??`（空值合并）同样是兜底，同样把后端原始值放进 DOM。
+#: 与下面那条 parametrize 里记的三种一样，都属于「与缺陷无关的拼写差异」，
+#: 不该成为后门。放宽后在真实代码上实测**仍是 0 处**（没有白送任何一行）。
+#: `esc(...)` 不会被误伤：`${` 之后（可选括号之后）必须紧跟 `标识符[`，
+#: 而 `esc(` 的下一个字符是 `(` 不是 `[`。
 BARE_MAP_FALLBACK = re.compile(
-    r"\$\{\s*[A-Za-z_$][\w$]*\[[^\]\n]+\]\s*\|\|\s*[A-Za-z_$][\w$.]*\s*\}"
+    r"\$\{\s*\(?\s*[A-Za-z_$][\w$]*\[[^\]\n]+\]"
+    r"\s*(?:\|\||\?\?)\s*[A-Za-z_$][\w$.]*\s*\)?\s*\}"
 )
 
 #: const [text, …] = 任意映射[…] || [兜底, …]  —— 捕获变量名与兜底表达式
@@ -109,6 +119,43 @@ def test_映射兜底不得裸插值():
         "原样进 DOM（P2-23），应改为 ${esc(MAP[x] || x)}：\n  "
         + "\n  ".join(offenders)
     )
+
+
+@pytest.mark.parametrize(
+    "label,src",
+    [
+        ("原形", "`<td>${LV[r.lvl] || r.lvl}</td>`"),
+        # 2026-09-10 变异审计实测漏掉：把 esc( 拿掉、括号留着，闸门照样绿
+        ("外层括号", "`<td>${(LV[r.lvl] || r.lvl)}</td>`"),
+        # 空值合并是另一个兜底运算符，缺陷一模一样
+        ("空值合并 ??", "`<td>${LV[r.lvl] ?? r.lvl}</td>`"),
+        ("括号 + ??", "`<td>${( LV[r.lvl] ?? r.lvl )}</td>`"),
+    ],
+)
+def test_裸插值判据不得被无关的拼写差异绕开(label, src):
+    """与下面解构那条同一纪律：同一个缺陷换个拼写就漏掉，等于给它留后门。
+
+    前两条是 2026-09-10 那轮**变异审计**打出来的——给闸门注入它自称能抓的缺陷，
+    看它今天是不是真的会红。`${(MAP[x] || x)}` 这一种当时没红。
+    """
+    assert BARE_MAP_FALLBACK.search(src), f"「{label}」这种写法绕过了判据：{src}"
+
+
+@pytest.mark.parametrize(
+    "label,src",
+    [
+        ("已转义", "`<td>${esc(LV[r.lvl] || r.lvl)}</td>`"),
+        ("括号包着 esc", "`<td>${(esc(LV[r.lvl] || r.lvl))}</td>`"),
+        ("兜底是字面量", '`<td>${LV[r.lvl] || "未知"}</td>`'),
+    ],
+)
+def test_裸插值判据不得误伤已经写对的(label, src):
+    """放宽判据的另一半：不能把写对的也抓进来。
+
+    一条经常误报的规则会先被加豁免、再被加得没人看，最后被删掉——
+    所以放宽之后必须同时钉住"不误伤"，两个方向都有用例。
+    """
+    assert not BARE_MAP_FALLBACK.search(src), f"「{label}」被误报了：{src}"
 
 
 def _destructured_offenders(files):

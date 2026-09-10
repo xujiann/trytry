@@ -152,6 +152,206 @@ def test_扫描必须递归到子包():
     )
 
 
+#: 已经切到 `deps.paginate` 的 GET 端点。**这是一条反方向的棘轮：只许多、不许少。**
+#:
+#: 为什么需要它：2026-09-10 的变异审计实测——把 `labqc:list_lots` 的
+#: `return paginate(...)` 换成 `return q.all()`，上面那条棘轮**纹丝不动**
+#: （102 → 102，照样绿）。因为它的判据是「硬编码 `.limit(数字)` 且没有翻页参数」，
+#: 而退回 `.all()` 既没有 `.limit(N)`、也不叫截断——它是**无上界**返回，
+#: 比静默截断更糟，却正好落在判据之外。
+#:
+#: 于是 P2-8 五个批次切出来的成果**没有任何东西守着**：欠账那个数可以一边变小，
+#: 已切好的一边被改回去。这条补的就是这一格——与
+#: `test_api_contract_governance.py` 的 `FULLY_GOVERNED` 同一纪律
+#: （"已治理完的不许回退"）。
+#:
+#: 维护口径：**这是下限，不是全集**。新切的端点不必登记（多出来不报错），
+#: 只有当某个端点**不再**走 paginate 时才会红——那时要么是改错了，
+#: 要么是有意为之（比如端点被删/改名），后者请连同理由一起更新这份清单。
+PAGINATED_ENDPOINTS = {
+    "access_logs.py:list_access_logs",
+    "access_logs.py:my_access_logs",
+    "accounting.py:list_vouchers",
+    "admin_mgmt.py:list_assets",
+    "admin_mgmt.py:list_employees",
+    "analytics.py:list_outbound_visits",
+    "appointments.py:list_appointments",
+    "appointments.py:list_slots",
+    "billing.py:charge_price_history",
+    "billing.py:deposit_alerts",
+    "billing.py:list_bill_details",
+    "billing.py:list_charge_items",
+    "billing.py:list_deposits",
+    "billing.py:list_payments",
+    "billing.py:list_reconciliation",
+    "billing.py:list_settlements",
+    "blood.py:list_transfusion_requests",
+    "certs.py:list_certs",
+    "checkups.py:list_checkups",
+    "chronic.py:list_chronic",
+    "clinical_docs.py:list_handovers",
+    "clinical_docs.py:list_nursing_records",
+    "clinical_docs.py:list_progress_notes",
+    "consents.py:list_consents",
+    "consents.py:list_corrections",
+    "contracts.py:list_contracts",
+    "credentials.py:list_credentials",
+    "cssd.py:list_cssd_requests",
+    "disease_programs.py:list_enrollments",
+    "dispense.py:list_dispenses",
+    "eldercare.py:list_assessments",
+    "encounters.py:list_encounters",
+    "esb.py:list_flow_runs",
+    "esb.py:list_messages",
+    "exams.py:list_requests",
+    "followups.py:list_followups",
+    "homevisits.py:list_visits",
+    "inpatient.py:list_admissions",
+    "inpatient.py:list_wards",
+    "insurance.py:list_settlements",
+    "jobs.py:list_runs",
+    "labqc.py:list_lots",
+    "materials.py:list_consumables",
+    "materials.py:list_purchases",
+    "maternal.py:list_women_health",
+    "medwaste.py:list_locations",
+    "medwaste.py:list_wastes",
+    "notifications.py:list_notifications",
+    "outpatient_docs.py:list_consents",
+    "outpatient_docs.py:list_treatments_by_patient",
+    "patients.py:search_patients",
+    "performance.py:list_tasks",
+    "pharmacy.py:expiring_drug_batches",
+    "pharmacy.py:list_batches",
+    "pharmacy.py:list_purchases",
+    "pharmacy.py:list_stock_takes",
+    "portal.py:portal_admission_bill",
+    "portal.py:portal_my_admissions",
+    "portal.py:portal_my_appointments",
+    "portal.py:portal_my_bills",
+    "portal.py:portal_my_consents",
+    "portal.py:portal_my_corrections",
+    "portal.py:portal_my_deposits",
+    "portal.py:portal_my_referrals",
+    "portal.py:portal_my_surgeries",
+    "portal.py:portal_slots",
+    "portal.py:public_price_list",
+    "portal.py:published_articles",
+    "prescriptions.py:list_prescriptions",
+    "quality.py:list_infection_reports",
+    "quality.py:list_medical_records",
+    "spd/assess.py:list_indicators",
+    "spd/assess.py:list_point_accounts",
+    "spd/assess.py:list_redeems",
+    "spd/assess.py:list_scores",
+    "spd/care.py:consult_messages",
+    "spd/care.py:list_assessments",
+    "spd/care.py:list_case_reports",
+    "spd/care.py:list_consults",
+    "spd/care.py:list_edu_pushes",
+    "spd/care.py:list_health_prescriptions",
+    "spd/care.py:list_intervention_templates",
+    "spd/care.py:list_interventions",
+    "spd/care.py:list_measurements",
+    "spd/care.py:list_revisits",
+    "spd/config/catalog.py:list_programs",
+    "spd/config/devices.py:list_devices",
+    "spd/config/devices.py:list_sync_logs",
+    "spd/config/paths.py:list_path_templates",
+    "spd/config/scales.py:list_edu",
+    "spd/config/scales.py:list_packages",
+    "spd/config/scales.py:list_scales",
+    "spd/config/teams.py:list_teams",
+    "spd/config/teams.py:list_village_doctors",
+    "spd/followup.py:list_call_tasks",
+    "spd/followup.py:list_followup_records",
+    "spd/followup.py:list_qc_samples",
+    "spd/followup.py:list_questionnaires",
+    "spd/followup.py:list_report_instances",
+    "spd/followup.py:list_report_templates",
+    "spd/population.py:list_candidates",
+    "spd/population.py:list_enrollments",
+    "spd/population.py:list_group_members",
+    "spd/population.py:list_groups",
+    "spd/population.py:list_lifecycle_events",
+    "spd/population.py:list_recalls",
+    "spd/population.py:list_screenings",
+    "spd/population.py:list_service_applies",
+    "spd/population.py:list_usages",
+    "spd/portal.py:list_measurements",
+    "spd/portal.py:list_screen_scales",
+    "spd/portal.py:my_applies",
+    "spd/portal.py:my_assessments",
+    "spd/portal.py:my_consult_messages",
+    "spd/portal.py:my_consults",
+    "spd/portal.py:my_education",
+    "spd/portal.py:my_followups",
+    "spd/portal.py:my_interventions",
+    "spd/portal.py:my_referrals",
+    "spd/portal.py:my_revisits",
+    "spd/portal.py:my_tasks",
+    "spd/referral.py:list_referrals",
+    "spd/tasks.py:list_path_instances",
+    "spd/tasks.py:list_tasks",
+    "staffing.py:list_secondments",
+    "surgery.py:list_requests",
+    "surgery.py:list_rooms",
+    "surveillance.py:list_pathogens",
+    "surveys.py:list_surveys",
+    "users.py:list_audit_logs",
+    "users.py:list_login_logs",
+    "vaccine_supply.py:list_aefi",
+    "vaccine_supply.py:list_batches",
+    "vaccine_supply.py:list_temperatures",
+    "workflows.py:list_instances",
+}
+
+
+def paginated_endpoints() -> set[str]:
+    """当前真的调用了 `paginate(` 的 GET 端点。"""
+    found = set()
+    for name, path in _router_files():
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
+            if ".get(" not in decs:
+                continue
+            if "paginate(" in _code(fn):
+                found.add(f"{name}:{fn.name}")
+    return found
+
+
+def test_已切分页的端点不许改回去():
+    """反方向棘轮：切好的不许退回。
+
+    上面那条管"欠账只减不增"，这条管"成果只增不减"。两条缺一不可——
+    只有前者时，欠账可以一边变小、已切好的一边被改回 `.all()`，而那个数字
+    看不出任何异常（实测：变异前后都是 102）。
+    """
+    current = paginated_endpoints()
+    lost = sorted(PAGINATED_ENDPOINTS - current)
+    assert lost == [], (
+        "以下 GET 端点原先走 `deps.paginate`，现在不走了——列表回到无上界或硬编码"
+        "截断，P2-8 切分页的成果被改了回去：\n  " + "\n  ".join(lost)
+        + "\n若确属有意（端点删除/改名），请连同理由更新 PAGINATED_ENDPOINTS。"
+    )
+
+
+def test_已切分页清单不得腐烂():
+    """防空转：清单里的端点必须还存在，否则这条规则守的是一批不存在的函数。"""
+    existing = set()
+    for name, path in _router_files():
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            existing.add(f"{name}:{fn.name}")
+    gone = sorted(PAGINATED_ENDPOINTS - existing)
+    assert gone == [], f"这些登记项对应的函数已不存在（改名/删除），应更新清单：{gone}"
+    assert len(PAGINATED_ENDPOINTS) >= 100, (
+        f"清单只剩 {len(PAGINATED_ENDPOINTS)} 条——被谁删空了？这条规则要守的是"
+        " P2-8 五个批次的成果，清单一薄它就形同虚设"
+    )
+
+
 def test_静默截断的列表端点只减不增():
     """棘轮：这个数只许变小。
 
