@@ -237,3 +237,65 @@ def test_登出令牌WS被拒_原有黑名单口径未回退(client, admin):
         "/api/auth/logout", headers={"Authorization": f"Bearer {token}"}
     ).status_code == 200
     assert _ws_admitted(client, token) is False
+
+
+# ---------------------------------------------------------------------------
+# 4. 定向广播的过滤依据：现查值，不是握手那一刻的旧值
+# ---------------------------------------------------------------------------
+
+
+def test_定向广播按现查的机构过滤_不按握手时登记的旧值(client, admin):
+    """危急值定向广播推的是 `{patient_id, item_name, conclusion}`（见 exams.py）。
+
+    修复前 `_send_all` 每次投递都调 `_authorize(..., cached=True)` **现查**出
+    `(ok, org_id, role)`，却只取 `[0]`——过滤仍读 `connect()` 时登记的旧
+    `org_id`/`role`。于是账号的机构一旦变了，长连接会继续收**原机构**的危急值。
+
+    ⚠️ **这个洞今天走不通，靠的是两件巧合**：改角色会顺带吊销令牌
+    （`users.change_user_role` 推 `token_valid_from`），而 `User.org_id` 全仓
+    没有任何更新路径（人事调动改的是 `Employee` 不是 `User`）。所以用例只能
+    **直接改库**来造出"机构变了、令牌还有效"这个状态——这正是哪天补上
+    "调动用户机构"接口之后会真实发生的状态。
+
+    钉住它的意义不在于修了一个能复现的越权，而在于：让这条通道的隔离
+    **由代码保证**，而不是由"目前恰好没有那个接口"保证。
+    """
+    from app.database import SessionLocal
+    from app.models import User as UserModel
+
+    org_a = client.post(
+        "/api/organizations",
+        json={"name": "广播甲院", "org_type": "township", "level": "township"},
+        headers=admin,
+    ).json()
+    org_b = client.post(
+        "/api/organizations",
+        json={"name": "广播乙院", "org_type": "township", "level": "township"},
+        headers=admin,
+    ).json()
+    _make_user(client, admin, "ws_org_drift", role="doctor", org_id=org_a["id"])
+    token = _login_token(client, "ws_org_drift")
+
+    with client.websocket_connect(f"/ws/notifications?token={token}") as ws:
+        deadline = time.time() + 5
+        while not ws_mod.manager.active and time.time() < deadline:
+            time.sleep(0.02)
+        # 先证明这条连接确实在甲院的定向广播里——否则下面的"收不到"是空洞通过
+        ws_mod.manager.broadcast({"type": "critical_a"}, target_org_id=org_a["id"])
+        assert ws.receive_json()["type"] == "critical_a"
+
+        # 机构改到乙院（令牌不动：这正是"改角色吊销令牌"那条巧合盖不住的缺口）
+        with SessionLocal() as db:
+            row = db.query(UserModel).filter(UserModel.username == "ws_org_drift").one()
+            row.org_id = org_b["id"]
+            db.commit()
+
+        # 甲院的定向广播不该再送到这条连接上；乙院的应该送到。
+        # 两条按顺序发，只等一次接收：若甲院那条漏了出去，收到的就是它。
+        ws_mod.manager.broadcast({"type": "critical_a_after_move"}, target_org_id=org_a["id"])
+        ws_mod.manager.broadcast({"type": "critical_b_after_move"}, target_org_id=org_b["id"])
+        got = ws.receive_json()["type"]
+        assert got == "critical_b_after_move", (
+            f"收到的是 {got}——机构已改到乙院，却还在收甲院的定向广播："
+            "_send_all 的过滤读的是握手时登记的旧 org_id，不是现查值"
+        )

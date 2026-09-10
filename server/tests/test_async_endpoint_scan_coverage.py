@@ -124,3 +124,78 @@ def test_扫路由的闸门必须把async端点算进分母():
         + "\n  ".join(offenders)
         + "\n改成 `isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))`。"
     )
+
+
+#: 注册在 `app/routers` / `app/spd/routers` **之外**的端点——每一条都写明
+#: 「为什么它落在扫描面外没关系」。这份清单本身就是这一轮的产物：
+#: 闸门的判据说的是"我查什么"，这份清单说的是"我不查什么"——
+#: 后者才是下一个人判断"这盏绿灯值多少"的依据。
+#:
+#: 新增条目要么去掉（挪进 `app/routers/`），要么在这里写清理由。
+OUTSIDE_ROUTER_SCAN = {
+    # 健康探针：不碰患者数据，自带 response_model=HealthOut，库不通回 503。
+    "health@app/main.py",
+    # 四个静态页面入口：`include_in_schema=False`，返回打包好的 HTML 文件，
+    # 无入参、无查询、无患者数据；契约/分页/越权三类规则对它们都没有语义。
+    "index@app/main.py",
+    "mobile_index@app/main.py",
+    "mobile_doctor@app/main.py",
+    "print_verify_page@app/main.py",
+    # 实时通知通道（WebSocket）。**它推的是危急值**（`{patient_id, item_name,
+    # conclusion}`，见 `routers/exams.py`），所以它不是"无所谓"的一条，
+    # 而是"HTTP 侧那套规则不适用、另有专档盯着"的一条：
+    # 准入判定与 HTTP 侧共用 `deps.check_token_admission`，
+    # 边界由 `tests/test_ws_auth_boundary.py` 逐条钉（三条握手路径、停用/改密/
+    # 登出/居民端令牌、存活期复核、定向广播按**现查**机构过滤）。
+    "notifications_ws@app/ws.py",
+}
+
+
+def _routes_outside_router_dirs() -> set[str]:
+    """`app/` 里注册在两个路由目录之外的 HTTP / WebSocket 端点。"""
+    router_dirs = ("app/routers", "app/spd/routers")
+    methods = ("get", "post", "put", "patch", "delete", "head", "options", "websocket")
+    app_dir = os.path.abspath(os.path.join(TESTS_DIR, "..", "app"))
+    found: set[str] = set()
+    for root, dirs, names in os.walk(app_dir):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for name in sorted(n for n in names if n.endswith(".py")):
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, os.path.join(TESTS_DIR, "..")).replace(os.sep, "/")
+            if any(rel.startswith(d) for d in router_dirs):
+                continue
+            for node in ast.walk(ast.parse(open(path, encoding="utf-8").read())):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for dec in node.decorator_list:
+                    if not (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)):
+                        continue
+                    if dec.func.attr in methods and isinstance(dec.func.value, ast.Name):
+                        found.add(f"{node.name}@{rel}")
+    return found
+
+
+def test_路由扫描面之外的端点必须逐条写明理由():
+    """闸门只扫两个路由目录——**扫不到的那些必须是显式的**。
+
+    这是本轮的第二个收获。第一个是"换个关键字（`async def`）就绕过了检查"；
+    这一个是"换个**文件**就绕过了检查"：`app/main.py` 的 5 个与 `app/ws.py` 的
+    WebSocket 端点根本不在任何 AST 闸门的分母里，而且**任何一份自证输出里都
+    看不到它们**——分页闸门报"覆盖面自证"、契约闸门报"覆盖率 100.0%"，
+    说的都只是它们各自扫得到的那 946 个。
+
+    所以这里不是加一条新规则，而是把"我不查什么"钉成一份**要么去掉、要么
+    写明理由**的清单。清单只许变短，或者在新增时带上理由。
+    """
+    actual = _routes_outside_router_dirs()
+    unexpected = actual - OUTSIDE_ROUTER_SCAN
+    assert unexpected == set(), (
+        "以下端点注册在 app/routers、app/spd/routers 之外，因而不在任何 AST 闸门的"
+        "分母里，且没有登记理由：\n  " + "\n  ".join(sorted(unexpected))
+        + "\n请挪进 app/routers/，或加进 OUTSIDE_ROUTER_SCAN 并写明「为什么落在"
+        "扫描面外没关系」。"
+    )
+    stale = OUTSIDE_ROUTER_SCAN - actual
+    assert stale == set(), (
+        f"这些登记项已不存在（改名/挪走/删除），应从 OUTSIDE_ROUTER_SCAN 删掉：{sorted(stale)}"
+    )

@@ -137,17 +137,30 @@ class ConnectionManager:
             # 投递前复核准入（缓存 + 短 TTL，见 _authorize）：账号被停用、令牌被
             # 登出或被改密基线吊销的连接不再收消息，不必等它下一次心跳——
             # 沉默的客户端可以一条心跳都不发，握手时的一次校验挡不住这种连接。
-            if not _authorize(meta.get("token", ""), cached=True)[0]:
+            ok, current_org_id, current_role = _authorize(meta.get("token", ""), cached=True)
+            if not ok:
                 self.disconnect(websocket)
                 try:
                     await websocket.close(code=1008)
                 except Exception:  # noqa: BLE001 - 已断开的连接无需再关
                     pass
                 continue
+            # 定向过滤按**这一刻**的机构与角色判，不按握手那一刻的。
+            # `_authorize` 本来就把三样一并查了出来，此前只取 `[0]`、把 `[1]`/`[2]`
+            # 丢掉，于是过滤读的是 `connect()` 登记的旧值。
+            #
+            # 今天这两者不会漂，但那是**两件巧合**顶着的：改角色会顺带吊销令牌
+            # （`users.change_user_role` 推 `token_valid_from`），而 `User.org_id`
+            # 全仓压根没有更新路径（人事调动改的是 `Employee`，不是 `User`）。
+            # 这条通道推的是危急值——`{patient_id, item_name, conclusion}`
+            # （见 `routers/exams.py`）。「今天恰好不会漂」不该是它的安全依据：
+            # 哪天补一个"调动用户机构"的接口，长连接就会继续收原机构的危急值，
+            # 而且没有任何用例会因此变红。现查值本来就在手边，用它即可。
+            meta["org_id"], meta["role"] = current_org_id, current_role
             if (
                 target_org_id is not None
-                and meta.get("org_id") != target_org_id
-                and meta.get("role") not in self.SUPERVISOR_ROLES
+                and current_org_id != target_org_id
+                and current_role not in self.SUPERVISOR_ROLES
             ):
                 continue
             try:
