@@ -848,6 +848,13 @@ def test_领域守卫登记制不许悄悄长大():
 #: 按 `created_by.org_id` 判归属，等于说一份记录属于当初录入者所在的机构，
 #: 人一调动、代录一次就全错。排除之后是 14 个，都是指向**领域父对象**的外键。
 #:
+#: ✅ **已清零**（2026-09-11，三批）：先减 5 条误报（`spd/referral.py` 本就有守卫，
+#: 见 `DOMAIN_ORG_GUARDS`），再减 4 条、最后 5 条，全部实测取证后补守卫。
+#: **这张表现在是零基线**——比只减不增强一档：新出现一条就红。
+#: 最后五条各自的理由不一样，写在 `tests/test_onehop_org_guard_final.py`：
+#: 预约的守卫刻意**不**下沉进 `release_appointment`（与居民端共用），
+#: 质控抽查是把 `plan_qc` 已有的收口补到判结论那一半上。
+#:
 #: ✅ **已减 4 条**：`update_intervention` / `add_usage` / `unbind_package` /
 #: `adjust_path_instance` 已修（2026-09-11）。实测乙院 doctor 能办结甲院的干预任务、
 #: 扣甲院服务包的次数、把它解绑、取消甲院的临床路径实例，各 200/201。
@@ -856,13 +863,7 @@ def test_领域守卫登记制不许悄悄长大():
 #:
 #: 这条判据同样只是**逼近**：两跳可达的看不见，非外键的业务归属（例如靠
 #: `org_code` 字符串关联）也看不见。写在这里是为了下一个人知道它不看什么。
-ONEHOP_UNGUARDED_WRITES = {
-    "appointments.py:cancel",
-    "appointments.py:fulfill",
-    "spd/config/teams.py:remove_team_member",
-    "spd/config/teams.py:update_team_member",
-    "spd/followup.py:record_qc_result",
-}
+ONEHOP_UNGUARDED_WRITES: set[str] = set()
 
 
 def _onehop_org_models() -> dict[str, list[str]]:

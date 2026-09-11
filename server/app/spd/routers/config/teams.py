@@ -267,10 +267,21 @@ def add_team_member(
 
 @router.patch("/team-members/{member_id}", response_model=TeamMemberUpdatedOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)):
+def update_team_member(
+    member_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """改团队成员的角色与权限位。
+
+    归属隔着一跳：`spd_team_members` 没有机构列，经 `team_id` 回到
+    `spd_teams.org_id`。口径照抄同文件的 `update_team` / `add_team_member`
+    （本文件 `assert_org_writable` 已用了 7 处，只有成员改/删两个没跟上）。
+    """
     member = db.get(SpdTeamMember, member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="团队成员不存在")
+    team = db.get(SpdTeam, member.team_id)
+    assert_org_writable(db, user, team.org_id if team else None)
     for key in ("member_role", "program_codes", "stage_scope", "patient_scope", "can_view",
                 "can_followup", "can_referral", "can_audit", "can_assess", "active"):
         if key in body:
@@ -281,10 +292,16 @@ def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)
 
 @router.delete("/team-members/{member_id}", status_code=204,
                dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def remove_team_member(member_id: int, db: Session = Depends(get_db)):
+def remove_team_member(
+    member_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """移除团队成员。归属同 `update_team_member`：经 `team_id` 回到团队所属机构。"""
     member = db.get(SpdTeamMember, member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="团队成员不存在")
+    team = db.get(SpdTeam, member.team_id)
+    assert_org_writable(db, user, team.org_id if team else None)
     db.delete(member)
     db.commit()
     return Response(status_code=204)

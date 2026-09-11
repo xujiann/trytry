@@ -1175,10 +1175,31 @@ class QcResultIn(BaseModel):
 
 @router.post("/qc-samples/{sample_id}/result", response_model=QcResultOut,
              dependencies=[Depends(require_roles("director", "doctor"))])
-def record_qc_result(sample_id: int, body: QcResultIn, db: Session = Depends(get_db)):
+def record_qc_result(
+    sample_id: int, body: QcResultIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """记录质控抽查结论。
+
+    归属隔着一跳：`spd_qc_samples` 没有机构列，经 `record_id` 回到
+    `spd_followup_records.org_id`。
+
+    ⚠️ **这不是给质控加了一道新口径，是把同一个功能的两半对齐。**
+    同文件的 `plan_qc`（生成抽查计划）一直按 `visible_org_ids(db, user)` 收口——
+    抽得到谁，本来就只有可见范围内那些；而判结论这一半**什么都不校验**，
+    于是乙院的医师可以对甲院质控员抽出来的样本写"不合格"。
+    合格率是考核依据，能被无关机构写进去，这个数就不能用了。
+
+    用写档（`assert_org_writable`）而不是读档：记结论是**写**。
+    今天两档对非全域角色宽窄相同，将来若分化（授权代录之类），
+    这里该跟着写档走——见 `visibility.assert_org_writable` 的 docstring。
+    全域角色（县级中心）照常跨机构判，那正是质控的本意。
+    """
     sample = db.get(SpdQcSample, sample_id)
     if sample is None:
         raise HTTPException(status_code=404, detail="抽查记录不存在")
+    record = db.get(SpdFollowupRecord, sample.record_id)
+    assert_org_writable(db, user, record.org_id if record else None)
     sample.result = body.result
     sample.method = body.method
     sample.note = body.note

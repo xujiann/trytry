@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import scope_org_list, scope_patient_list
+from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..datetypes import DateStr
@@ -393,10 +393,24 @@ def list_appointments(
     response_model=AppointmentOut,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2
 )
-def cancel(appointment_id: int, db: Session = Depends(get_db)):
+def cancel(
+    appointment_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """经办端取消预约。
+
+    归属隔着一跳：`appointments` 没有机构列，经 `slot_id` 回到
+    `appointment_slots.org_id` 才判得了——号源属于哪家医院，谁家的前台就能动它。
+
+    ⚠️ **守卫写在端点里而不是 `release_appointment` 里，这是有意的**：
+    那个函数是**管理端与居民端共用**的（`portal.py:1381` 也调它），
+    居民取消自己的预约走的是门户令牌那套口径，不该被员工的机构规则判。
+    """
     appointment = db.get(Appointment, appointment_id)
     if appointment is None:
         raise HTTPException(status_code=404, detail="预约不存在")
+    slot = db.get(AppointmentSlot, appointment.slot_id)
+    assert_org_writable(db, user, slot.org_id if slot else None)
     return release_appointment(db, appointment)
 
 
@@ -405,10 +419,20 @@ def cancel(appointment_id: int, db: Session = Depends(get_db)):
     response_model=AppointmentOut,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 到诊核销
 )
-def fulfill(appointment_id: int, db: Session = Depends(get_db)):
+def fulfill(
+    appointment_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """到诊核销。归属同 `cancel`：经 `slot_id` 回到号源所属机构。
+
+    归属判定排在状态机之前：先 403，免得用"当前状态 X 不可核销"把别家号源的
+    状态探出去。
+    """
     appointment = db.get(Appointment, appointment_id)
     if appointment is None:
         raise HTTPException(status_code=404, detail="预约不存在")
+    slot = db.get(AppointmentSlot, appointment.slot_id)
+    assert_org_writable(db, user, slot.org_id if slot else None)
     if appointment.status != "booked":
         raise HTTPException(status_code=409, detail=f"当前状态 {appointment.status} 不可核销")
     appointment.status = "fulfilled"
