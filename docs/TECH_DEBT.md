@@ -155,6 +155,19 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P1-54 | **14 个写端点的主对象「本表没有机构列、但归属隔着一跳外键就能拿到」，且无任何机构守卫**（2026-09-11 修 projects/resources 时顺线量出）。实测取证：乙院 operator 能把甲院项目的里程碑标成已完成、再撤销完成（`POST /api/projects/milestones/{id}/done` / `/reopen`，各 **200**）——这两个端点**从来没进过任何欠账清单**，不是因为没问题，是因为没被数到：`_byid_org_write_endpoints` 的分母是「**直接取的那张表**带机构列」。已钉成只减不增（`test_stage15_horizontal.py::ONEHOP_UNGUARDED_WRITES`），逐条取证判定排入后续批次。⚠️ **立表当天即修正：14 条里 5 条是误报**——`spd/referral.py` 五个端点早有守卫，只是不叫 `assert_org_writable`（`_assert_holds_case` 按 `current_org_id`、`withdraw_referral` 按 `initiator_id`），而且**比通用守卫更对**：转诊天然跨机构，按 `enrollment.org_id` 判会把正常下转全挡掉。其中三条**早已**写在同一文件上一张表（`BYID_CROSS_ORG_OK`，带 ADR-0005 的理由）——答案本来就在那里，我的新判据只是没去问。已改为**登记制**（`DOMAIN_ORG_GUARDS`：形状发现候选、人读过写下理由才算数，且每条都验证今天仍然成立），实数 9 条。✅ **同日再减 4 条**：`spd/care.py:update_intervention`、`spd/population.py:add_usage`/`unbind_package`、`spd/tasks.py:adjust_path_instance` 已修（实测乙院 doctor 能办结甲院的干预任务、扣甲院服务包次数、把它解绑、取消甲院的临床路径实例，各 200/201；三个文件里 `assert_org_writable` 分别已用了 2/15/5 处，又是同一个文件两套口径，第五次）。✅ **同日清零**：最后 5 条（appointments cancel/fulfill、teams 成员改/删、record_qc_result）全部实测取证后补守卫，清单转为**零基线**。三处理由各不相同并逐条写进用例：预约的守卫刻意**不**下沉进 `release_appointment`（与居民端共用，居民取消走门户令牌那套口径）；团队成员是同文件既有口径（`assert_org_writable` 已用 7 处）没跟上；质控抽查**不是新加口径**，是把 `plan_qc` 一直用着的 `visible_org_ids` 收口补到判结论那一半上——合格率是考核依据，能被无关机构写进去这个数就不能用了。见 `tests/test_onehop_org_guard_final.py`。📌 **判据排除了指向 `users` 的外键**：不排除时命中 50 个，绝大多数是 `created_by`/`doctor_id`——`User` 确实有 `org_id`，但那是「谁建的」不是「归谁所有」，按它判归属，人一调动、代录一次就全错 | `appointments`(2) / `spd/referral`(5) / `spd/population`(2) / `spd/config/teams`(2) / `spd/care`(1) / `spd/followup`(1) / `spd/tasks`(1) |
 | P2-36 | **闸门只跟进一层本模块 helper，于是「修好了」与「闸门看不见了」长得一模一样**（2026-09-11 自审时用变异试出来，**已就地避开，未做结构性解决**）。本轮第一版把 `projects._project` 写成「调 `_project_readonly` 取行 + 加守卫」，取行退到**第二跳**，端点整个掉出分母——把守卫整条删掉，闸门照样报绿。已改成在本跳自取（代价是两行 404 重复，已在 docstring 写明"别合并"）。✅ **已解决 2026-09-11**：改成按调用图取**传递闭包**。那个"跟太深会把通用工具卷进来"的原始理由**不成立**——跟的是 `called & funcs`（本模块定义的函数），而 `db.get(...)` 是属性调用、`paginate` 是 import 进来的名字，都不在 `funcs` 里，跟多深都收不到；实测闭包多收的全是 `_row_out`/`_completion`/`_credential_out` 这类本模块小助手。改前逐项量过：分母 133 → 135（多出的正是 projects 的里程碑两条），无守卫 8 → 8，**假阴性 0 条**。顺带炸出一个真洞（`quality:rescore_medical_record`，见 P2-37） | `tests/test_stage15_horizontal.py::_with_local_helpers` |
 
+**2026-09-11 复核五份 Proposed ADR 的事实前提——结论：都还成立，不予改动。**
+今天已经撞见五处「写下来就没人回头核」的声明，所以顺手把等人裁的那五份也核了一遍：
+
+* ADR-0014（病种目录收敛）：`chronic_disease_types` 的路由引用数 15 → **16**（已就地更正），
+  `disease_programs` 仍是 9；`ChronicDiseaseType.level_rules` 在 `SpdProgram` 里**确实没有对应列**
+  （逐列比对过），所以「合表要么新增列、要么丢语义」这条论据仍然站得住。
+* ADR-0019 / 0020 / 0021（三份越权类，状态都是"已修、待复核"）：三处 `assert_org_writable`
+  **都还在**，三份回归档 11 条全绿。**声称已修的，确实还修着。**
+* ADR-0022（会写库的 GET）：本轮刚写，前提即当天实测。
+
+⚠️ 这次的结论是**负面结果**：核完没发现值得改的东西，只有一个差 1 的计数。
+如实记一笔，是为了让下一个人不必重核一遍——而不是因为它有多大发现。
+
 **本轮验证不成立、不予登记的一条**：J1 报"`integration.fhir_observation` 无任何鉴权依赖，只认 `X-Source-System` 头"。
 实测不成立——该端点无令牌访问返回 **401**，同文件另两个入站端点同样 401。原因是鉴权挂在
 `APIRouter(dependencies=[Depends(require_roles("operator"))])` 的**路由器层**（`app/routers/integration.py:62-66`），
