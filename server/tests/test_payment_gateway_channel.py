@@ -17,14 +17,12 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
-from conftest import login
+from conftest import login, utc_today_str
 
 from app.config import settings
 from app.egress import gateway_sign
 from app.payments import HttpGatewayPaymentGateway
 from app.routers import billing
-
-TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 GATEWAY_URL = "http://8.8.8.8/gw"  # 公网 IP 直写：egress 校验放行且无需 DNS
 GATEWAY_KEY = "test-gateway-key-1"
 
@@ -361,10 +359,10 @@ def test_对账改从网关拉流水并检出差异(client, admin, base, monkeyp
 
     monkeypatch.setattr(httpx, "get", fake_get)
     batch = client.post(
-        f"/api/billing/reconciliation/run?date={TODAY}", headers=base["operator"]
+        f"/api/billing/reconciliation/run?date={utc_today_str()}", headers=base["operator"]
     ).json()
     assert get_calls[0]["url"] == f"{GATEWAY_URL}/transactions"
-    assert get_calls[0]["params"] == {"date": TODAY}
+    assert get_calls[0]["params"] == {"date": utc_today_str()}
     by_type = {}
     for d in batch["diffs"]:
         by_type.setdefault(d["diff_type"], []).append(d)
@@ -379,12 +377,12 @@ def test_网关流水拉取失败时对账中止(client, admin, base, monkeypatc
         raise httpx.ConnectError("gateway down")
 
     monkeypatch.setattr(httpx, "get", boom)
-    before = client.get(f"/api/billing/reconciliation?date={TODAY}", headers=base["operator"]).json()
+    before = client.get(f"/api/billing/reconciliation?date={utc_today_str()}", headers=base["operator"]).json()
     resp = client.post(
-        f"/api/billing/reconciliation/run?date={TODAY}", headers=base["operator"]
+        f"/api/billing/reconciliation/run?date={utc_today_str()}", headers=base["operator"]
     )
     assert resp.status_code == 502
-    after = client.get(f"/api/billing/reconciliation?date={TODAY}", headers=base["operator"]).json()
+    after = client.get(f"/api/billing/reconciliation?date={utc_today_str()}", headers=base["operator"]).json()
     assert [b["id"] for b in after] == [b["id"] for b in before]  # 旧批次原样保留
 
 
@@ -401,7 +399,7 @@ def test_网关流水单位兼容元与分():
     import unittest.mock as mock
 
     with mock.patch.object(httpx, "get", return_value=R()):
-        rows = gw.query_transactions(None, TODAY)
+        rows = gw.query_transactions(None, utc_today_str())
     assert rows == [{"trade_no": "A", "amount": 123.45}, {"trade_no": "B", "amount": 6.7}]
 
 

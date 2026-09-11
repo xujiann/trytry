@@ -1,3 +1,4 @@
+from datetime import date, datetime, timezone
 import faulthandler
 import os
 import signal
@@ -34,6 +35,60 @@ def reset_database():
 # "有意为之的差异"的显式记号，别为绕开共享版另起名字。
 # 注意：本地 client 若是 function 级，依赖它的 admin 也必须一并本地定义，
 # 否则 module 级的共享 admin 会与之 ScopeMismatch。
+
+
+def business_today() -> date:
+    """当天业务日期，**在用例里现取，不要在模块顶层快照**。
+
+    ## 为什么单列一个函数
+
+    2026-09-11 的 CI run 552 红了 12 条，全是同一种：
+
+        {'at': '2026-09-10'}         != {'at': '2026-09-11'}
+        {'today': '2026-09-10'}      != {'today': '2026-09-11'}
+        {'period_end': '2026-10-10'} != {'period_end': '2026-10-11'}
+
+    那一轮 runner 偏慢，单元档跑了 **62 分钟**，23:42 开跑、**跨过了午夜**。
+    七个测试文件在**模块顶层**写着 `TODAY = date.today().isoformat()`——
+    它在 import 那一刻取值（09-10），而服务端是在请求发生时才取（09-11），
+    于是整套断言差一天。
+
+    **这不是 flake，是真缺陷**：判据（期望值）与被判对象（服务端算出的日期）
+    取自**两个时刻**，中间隔着整轮测试的时长。CI 什么时候跑不由人定，
+    深夜那一班必然踩上；而重跑一次就绿，正是让人误判成 flake 的原因。
+
+    改成现取之后，两个时刻之间只剩**毫秒级**的窗口（发请求 → 断言）。
+    ⚠️ 窗口没有归零，只是从"一小时"缩到"几毫秒"——真要归零得让
+    `app/clock.py` 成为**全部**日期的唯一来源再冻结它，而目前 `app/` 里还有
+    一批直接调 `date.today()` 的地方（基线见 `tests/test_clock.py`），那是另一件事。
+    """
+    return date.today()
+
+
+def business_today_str() -> str:
+    """`business_today()` 的 `YYYY-MM-DD` 形式，对应 `app/clock.today_str()`。"""
+    return business_today().isoformat()
+
+
+def utc_today_str() -> str:
+    """当天 **UTC** 日历日，`YYYY-MM-DD`。
+
+    ## 平台有两个"今天"，用例必须挑与被断对象同源的那个
+
+    - `app/clock.today()` —— **本地**业务日期。随访超期、服务周期、效期预警这类
+      按当地日历算的东西走它，对应本文件的 `business_today()`。
+    - `models.utcnow()` —— **naive UTC** 时间戳。落库的 `paid_at` / `created_at`
+      走它；凡是拿时间戳**再切出日期**的口径（典型是对账：
+      `billing._orders_of_day` 比的是 `paid_at.strftime("%Y-%m-%d")`），
+      切出来的就是 UTC 日，对应本函数。
+
+    挑错了在 CI 上也看不出来——runner 时区是 UTC，两者恒等；
+    换到东八区的开发机上，早八点前跑对账用例就会差一天。
+
+    （顺带记一笔：对账日切在 UTC 而非当地日历，是产品侧口径问题，不是测试问题。
+    已登记，未改——改它要动线上已出账的批次归属。）
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def login(client, username, password):

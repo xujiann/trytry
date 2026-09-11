@@ -3,11 +3,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from conftest import login
+from conftest import login, utc_today_str
 
 from app.routers.billing import MOCK_GATEWAY
-
-TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 @pytest.fixture(autouse=True)
@@ -230,7 +228,7 @@ def test_reconciliation_all_matched(client, admin, base):
         headers=base["operator"],
     )
     batch = client.post(
-        f"/api/billing/reconciliation/run?date={TODAY}", headers=base["operator"]
+        f"/api/billing/reconciliation/run?date={utc_today_str()}", headers=base["operator"]
     ).json()
     assert batch["unmatched"] == 0 and batch["diff_amount"] == 0.0
     assert batch["matched"] == batch["total_orders"] and batch["total_orders"] >= 1
@@ -262,7 +260,7 @@ def test_reconciliation_detects_three_diff_types(client, admin, base):
     MOCK_GATEWAY.amount_overrides = {b["trade_no"]: 180.0}
     MOCK_GATEWAY.extra_transactions = [{"trade_no": "MOCKGHOST0001", "amount": 45.5}]
     batch = client.post(
-        f"/api/billing/reconciliation/run?date={TODAY}", headers=base["operator"]
+        f"/api/billing/reconciliation/run?date={utc_today_str()}", headers=base["operator"]
     ).json()
     by_type = {}
     for d in batch["diffs"]:
@@ -293,10 +291,10 @@ def test_reconciliation_rerun_replaces_batch_and_refund_nets_out(client, admin, 
     )
     # 部分退款后本地净额 150，Mock 通道同步净额 → 仍匹配
     first = client.post(
-        f"/api/billing/reconciliation/run?date={TODAY}", headers=base["operator"]
+        f"/api/billing/reconciliation/run?date={utc_today_str()}", headers=base["operator"]
     ).json()
     assert first["unmatched"] == 0
-    batches = client.get(f"/api/billing/reconciliation?date={TODAY}", headers=base["operator"]).json()
+    batches = client.get(f"/api/billing/reconciliation?date={utc_today_str()}", headers=base["operator"]).json()
     assert len(batches) == 1 and batches[0]["id"] == first["id"]  # 重跑覆盖旧批次
     # 无支付发生的日期：空对账单
     empty = client.post(

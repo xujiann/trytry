@@ -5,17 +5,24 @@
 （患者字段真的变了、AuditLog/AccessLog 真的有记录、撤回行还在），
 而不是只看状态码。
 """
-from datetime import date
-
 import pytest
+
+from conftest import business_today
 
 from app.database import SessionLocal
 from app.models import AccessLog, AuditLog, ConsentRecord, Patient, SmsCode
 from app.routers.portal import _reset_portal_failures
 from app.sms import set_sms_provider
 
-MINOR_BIRTH = f"{date.today().year - 8}-01-01"    # 现龄 8 岁 < 14
-ADULT_BIRTH = f"{date.today().year - 30}-01-01"   # 现龄 30 岁
+
+def _minor_birth() -> str:
+    """现龄 8 岁 < 14（监护同意那条分支要求未成年）。"""
+    return f"{business_today().year - 8}-01-01"
+
+
+def _adult_birth() -> str:
+    """现龄 30 岁。"""
+    return f"{business_today().year - 30}-01-01"
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +68,7 @@ def world(client):
         )
     patient = client.post(
         "/api/patients",
-        json={"name": "同意患者", "id_card": "330782199001010011", "birth_date": ADULT_BIRTH},
+        json={"name": "同意患者", "id_card": "330782199001010011", "birth_date": _adult_birth()},
         headers=admin,
     ).json()
     doc_a = _login(client, "consent_doc_a")
@@ -169,7 +176,7 @@ def test_撤回置时间戳不删行且不可重复撤回(client, world):
 def test_未成年人窗口登记同意缺监护人422(client, world):
     minor = client.post(
         "/api/patients",
-        json={"name": "同意幼童", "id_card": "330782201801010022", "birth_date": MINOR_BIRTH},
+        json={"name": "同意幼童", "id_card": "330782201801010022", "birth_date": _minor_birth()},
         headers=world["admin"],
     ).json()
     lacking = client.post(
@@ -200,7 +207,7 @@ def me(client, world):
     patient = client.post(
         "/api/patients",
         json={"name": "同意本人", "id_card": "330782199201010044",
-              "birth_date": ADULT_BIRTH, "phone": "13800020001"},
+              "birth_date": _adult_birth(), "phone": "13800020001"},
         headers=world["admin"],
     ).json()
     return {"patient": patient, "headers": portal_login(client, "13800020001")}
@@ -313,7 +320,7 @@ def test_注销后检索不可见而历史照常可查(client, world):
     admin = world["admin"]
     gone = client.post(
         "/api/patients",
-        json={"name": "注销患者", "id_card": "330782198501010066", "birth_date": ADULT_BIRTH},
+        json={"name": "注销患者", "id_card": "330782198501010066", "birth_date": _adult_birth()},
         headers=admin,
     ).json()
     client.post(
@@ -362,7 +369,7 @@ def test_无手机号档案代管需窗口授权_无则428有则通过(client, w
     admin = world["admin"]
     elder = client.post(
         "/api/patients",
-        json={"name": "同意老人", "id_card": "330782194501010077", "birth_date": ADULT_BIRTH},
+        json={"name": "同意老人", "id_card": "330782194501010077", "birth_date": _adult_birth()},
         headers=admin,
     ).json()
     # 第一道尝试：仅凭姓名+身份证号（单因子）→ 428 提示到窗口办理
@@ -392,7 +399,7 @@ def test_授权撤回后单因子路径重新关闭(client, world, me):
     admin = world["admin"]
     uncle = client.post(
         "/api/patients",
-        json={"name": "同意亲属", "id_card": "330782195501010088", "birth_date": ADULT_BIRTH},
+        json={"name": "同意亲属", "id_card": "330782195501010088", "birth_date": _adult_birth()},
         headers=admin,
     ).json()
     consent = client.post(
@@ -414,7 +421,7 @@ def test_代管未成年人缺监护人信息422(client, world, me):
     admin = world["admin"]
     kid = client.post(
         "/api/patients",
-        json={"name": "同意小孩", "id_card": "330782201801010099", "birth_date": MINOR_BIRTH},
+        json={"name": "同意小孩", "id_card": "330782201801010099", "birth_date": _minor_birth()},
         headers=admin,
     ).json()
     client.post(

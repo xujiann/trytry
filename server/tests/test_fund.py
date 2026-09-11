@@ -13,7 +13,10 @@ from app.clock import now_naive
 # 池子若沿用别处那种随手挑的未来年份（2036），当年没有任何业务落在窗口内，
 # 全员 0 分 → 权重和为 0 → 422。与得分无关的公式（`formula_expr="1"`）不受影响，
 # 所以只有这一个池子需要跟着当年走。
-SCORED_POOL_YEAR = now_naive().year
+
+
+def _scored_pool_year() -> int:
+    return now_naive().year
 
 
 @pytest.fixture(scope="module")
@@ -164,12 +167,12 @@ def business(client, admin, orgs):
 def settled(client, director, business):
     """筹资 100 万、实际发生 80 万 → 结余 20 万。
 
-    年份取 `SCORED_POOL_YEAR`（当年）而非固定未来年——本池的用例要按绩效分配，
+    年份取 `_scored_pool_year()`（当年）而非固定未来年——本池的用例要按绩效分配，
     见文件头注释。
     """
-    pool = _pool(client, director, SCORED_POOL_YEAR, total=1000000.0)
+    pool = _pool(client, director, _scored_pool_year(), total=1000000.0)
     client.post(f"/api/fund/pools/{pool['id']}/periods",
-                json={"period": f"{SCORED_POOL_YEAR}-06", "actual_amount": 800000},
+                json={"period": f"{_scored_pool_year()}-06", "actual_amount": 800000},
                 headers=director)
     settlement = client.post(f"/api/fund/pools/{pool['id']}/settle",
                              json={}, headers=director).json()

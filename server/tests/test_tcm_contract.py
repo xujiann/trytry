@@ -24,7 +24,7 @@ from datetime import date, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import business_today, reset_database
 
 from app.main import app
 
@@ -42,13 +42,27 @@ BATCH_KEYS = [
     "produced_date", "expire_date", "status", "expired",
 ]
 
-TODAY = date.today()
-#: 在产批次：10 天前投产，配方效期 6 个月（180 天）→ 效期在约 170 天后
-PRODUCED_FRESH = (TODAY - timedelta(days=10)).isoformat()
-EXPIRE_FRESH = (TODAY - timedelta(days=10) + timedelta(days=180)).isoformat()
-#: 过期批次：400 天前投产 → 效期在约 220 天前
-PRODUCED_OLD = (TODAY - timedelta(days=400)).isoformat()
-EXPIRE_OLD = (TODAY - timedelta(days=400) + timedelta(days=180)).isoformat()
+# 投产/效期基准一律**现取**，不在模块顶层快照——顶层取值发生在 import 那一刻，
+# 而服务端是在请求发生时才算，跨午夜的那一轮 CI 两者必然差一天。
+# 见 conftest.business_today。
+
+
+def _produced_fresh() -> str:
+    """在产批次：10 天前投产，配方效期 6 个月（180 天）→ 效期在约 170 天后。"""
+    return (business_today() - timedelta(days=10)).isoformat()
+
+
+def _expire_fresh() -> str:
+    return (business_today() - timedelta(days=10) + timedelta(days=180)).isoformat()
+
+
+def _produced_old() -> str:
+    """过期批次：400 天前投产 → 效期在约 220 天前。"""
+    return (business_today() - timedelta(days=400)).isoformat()
+
+
+def _expire_old() -> str:
+    return (business_today() - timedelta(days=400) + timedelta(days=180)).isoformat()
 
 
 @pytest.fixture(scope="module")
@@ -116,13 +130,13 @@ def seed(client, admin):
         return resp.json()
 
     data["b1"] = batch({"batch_no": "TCCT-B1", "quantity": 100, "unit": "袋",
-                        "produced_date": PRODUCED_FRESH, "expire_date": "2099-12-31"})
+                        "produced_date": _produced_fresh(), "expire_date": "2099-12-31"})
     data["b2"] = batch({"batch_no": "TCCT-B2", "quantity": 50,
-                        "produced_date": PRODUCED_FRESH})  # 效期留空→按配方 6 个月推算
+                        "produced_date": _produced_fresh()})  # 效期留空→按配方 6 个月推算
     data["b3"] = batch({"batch_no": "TCCT-B3", "quantity": 30,
-                        "produced_date": PRODUCED_OLD})  # 已过期
+                        "produced_date": _produced_old()})  # 已过期
     data["b1_released"] = client.post(
-        f"/api/tcm/preparation-batches/{data['b1']['id']}/release?today={TODAY.isoformat()}",
+        f"/api/tcm/preparation-batches/{data['b1']['id']}/release?today={business_today().isoformat()}",
         headers=data["operator"],
     ).json()
     return data
@@ -284,7 +298,7 @@ def test_批次回执精确_显式效期与推算效期(seed):
         "org_id": seed["org"]["id"],
         "quantity": 100,
         "unit": "袋",
-        "produced_date": PRODUCED_FRESH,
+        "produced_date": _produced_fresh(),
         "expire_date": "2099-12-31",
         "status": "produced",
         "expired": False,
@@ -296,22 +310,22 @@ def test_批次回执精确_显式效期与推算效期(seed):
     assert seed["b2"] == {
         "id": seed["b2"]["id"], "formula_id": seed["f1"]["id"], "batch_no": "TCCT-B2",
         "org_id": seed["org"]["id"], "quantity": 50, "unit": "剂",
-        "produced_date": PRODUCED_FRESH, "expire_date": EXPIRE_FRESH,
+        "produced_date": _produced_fresh(), "expire_date": _expire_fresh(),
         "status": "produced", "expired": False,
     }
     # 投产即已过期的批次：回执上的 expired 按当天现算
-    assert seed["b3"]["expire_date"] == EXPIRE_OLD and seed["b3"]["expired"] is True
+    assert seed["b3"]["expire_date"] == _expire_old() and seed["b3"]["expired"] is True
 
 
 def test_批次列表与回执同形_过滤(client, admin, seed):
     released_b1 = {**seed["b1"], "status": "released"}
     rows = client.get(
-        f"/api/tcm/preparation-batches?today={TODAY.isoformat()}", headers=admin
+        f"/api/tcm/preparation-batches?today={business_today().isoformat()}", headers=admin
     ).json()
     assert [list(r.keys()) for r in rows] == [BATCH_KEYS] * 3  # id 倒序
     assert rows == [seed["b3"], seed["b2"], released_b1]
     assert client.get(
-        f"/api/tcm/preparation-batches?status=produced&today={TODAY.isoformat()}",
+        f"/api/tcm/preparation-batches?status=produced&today={business_today().isoformat()}",
         headers=admin,
     ).json() == [seed["b3"], seed["b2"]]
     assert client.get(
@@ -321,12 +335,12 @@ def test_批次列表与回执同形_过滤(client, admin, seed):
 
 def test_效期预警列表精确_按效期升序(client, admin, seed):
     rows = client.get(
-        f"/api/tcm/preparation-batches/expiring?days=30&today={TODAY.isoformat()}",
+        f"/api/tcm/preparation-batches/expiring?days=30&today={business_today().isoformat()}",
         headers=admin,
     ).json()
     assert rows == [seed["b3"]]  # 只有过期批次落进 30 天窗口
     rows = client.get(
-        f"/api/tcm/preparation-batches/expiring?days=200&today={TODAY.isoformat()}",
+        f"/api/tcm/preparation-batches/expiring?days=200&today={business_today().isoformat()}",
         headers=admin,
     ).json()
     assert [list(r.keys()) for r in rows] == [BATCH_KEYS] * 2  # 效期先后排序
@@ -345,7 +359,7 @@ def test_发放回执与批次回执同形(seed):
 def test_各类错误体都只有detail(client, admin, seed):
     pha = seed["pharmacist"]
     ok_batch = {"formula_id": seed["f1"]["id"], "org_id": seed["org"]["id"],
-                "batch_no": "TCCT-ERR", "quantity": 1, "produced_date": PRODUCED_FRESH}
+                "batch_no": "TCCT-ERR", "quantity": 1, "produced_date": _produced_fresh()}
     cases = [
         client.post("/api/tcm/constitution", json={}, headers=admin),  # 两种入参都缺 422
         client.post("/api/tcm/constitution",
@@ -361,11 +375,11 @@ def test_各类错误体都只有detail(client, admin, seed):
         client.post("/api/tcm/preparation-batches",
                     json={**ok_batch, "batch_no": "TCCT-B1"}, headers=pha),  # 批号重复 409
         client.post("/api/tcm/preparation-batches",
-                    json={**ok_batch, "expire_date": PRODUCED_FRESH}, headers=pha),  # 效期≤投产 422
+                    json={**ok_batch, "expire_date": _produced_fresh()}, headers=pha),  # 效期≤投产 422
         client.post(f"/api/tcm/preparation-batches/{seed['b3']['id']}/release"
-                    f"?today={TODAY.isoformat()}", headers=pha),  # 已过效期 409
+                    f"?today={business_today().isoformat()}", headers=pha),  # 已过效期 409
         client.post(f"/api/tcm/preparation-batches/{seed['b1']['id']}/release"
-                    f"?today={TODAY.isoformat()}", headers=pha),  # 已发放再发放 409
+                    f"?today={business_today().isoformat()}", headers=pha),  # 已发放再发放 409
         client.post("/api/tcm/preparation-batches/999999/release", headers=pha),  # 404
     ]
     assert [r.status_code for r in cases] == [422, 422, 422, 422, 409, 404, 409, 422, 409, 409, 404]

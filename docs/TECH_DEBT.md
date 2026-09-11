@@ -147,6 +147,13 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 而 `require_roles` 内部 `Depends(get_current_user)`；只读函数签名看不见它。
 按本仓库的规矩，怀疑不值钱、触发才算数：跑一次探针比读一遍签名可靠，**"某处没写"不等于"某处没有"**。
 
+### 第十七轮（时间口径）新登记
+
+| 编号 | 问题 | 位置 |
+|---|---|---|
+| P1-53 | **`app/` 里 69 处直接调 `date.today()`，绕过声明中的唯一入口 `clock.today()`**（2026-09-11 修 CI 跨午夜必红时量出）。**今天不是缺陷**——`clock.today()` 的实现就是 `date.today()`，取值恒等；它是**另一件事的前提**：想在测试里冻结时间（把"判据与被判对象取自两个时刻"的窗口真正归零），得先有一个能被冻住的唯一入口，只要还有 69 处各自去问系统时钟，冻结就只能冻住其中一部分，比不冻更难排查。已钉成**只减不增**基线（`tests/test_clock.py::DATE_TODAY_BASELINE`），逐步收敛是单独的任务。📌 这 69 里有 1 处是**解了 import 别名才数到**的（`app/spd/jobs.py` 的 `from datetime import date as _date`）——先按裸写法数出来的 68 是漏数 | `app/`（23 个文件），基线在 `tests/test_clock.py` |
+| P2-35 | **对账的"日"切在 UTC 而非当地日历**（2026-09-11 顺线发现，**未改，需业务裁定**）：`billing._orders_of_day` 比的是 `paid_at.strftime("%Y-%m-%d")`，而 `paid_at` 走 `models.utcnow()` 是 naive UTC。东八区**早 8 点前**发生的支付会落进**前一天**的对账批次里。CI runner 时区是 UTC，两者恒等，所以测试永远看不出来。不自行改：改口径要动线上**已出账批次的归属**，是业务决定不是技术决定 | `app/routers/billing.py:1101`（`_orders_of_day`） |
+
 ## P2 — 一致性与可维护性
 
 ### 命名

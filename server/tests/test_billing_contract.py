@@ -29,14 +29,12 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import reset_database, utc_today_str
 
 from app.config import settings
 from app.main import app
 from app.routers import billing as billing_router
 from app.routers.billing import MOCK_GATEWAY
-
-TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 CHARGE_ITEM_KEYS = ["id", "code", "name", "category", "price", "active"]
 PRICE_CHANGE_KEYS = ["id", "old_price", "new_price", "reason", "effective_date", "changed_at"]
@@ -563,7 +561,7 @@ def test_日终对账_三类差异精确形状(client, admin, seed):
     MOCK_GATEWAY.extra_transactions.append({"trade_no": "GHOST01", "amount": 45.5})
 
     resp = client.post(
-        f"/api/billing/reconciliation/run?date={TODAY}", headers=seed["operator"]
+        f"/api/billing/reconciliation/run?date={utc_today_str()}", headers=seed["operator"]
     )
     assert resp.status_code == 201, resp.text
     batch = resp.json()
@@ -571,7 +569,7 @@ def test_日终对账_三类差异精确形状(client, admin, seed):
     assert [list(d.keys()) for d in batch["diffs"]] == [DIFF_KEYS] * 3
     assert batch == {
         "id": batch["id"],
-        "date": TODAY,
+        "date": utc_today_str(),
         "total_orders": 2,          # pay1/pay2；pending 的网关单不进对账口径
         "total_amount": 182,        # 175.5 + (15-8.5)=6.5 → 182.0 落库读回 int
         "matched": 0,
@@ -617,7 +615,7 @@ def test_日终对账_三类差异精确形状(client, admin, seed):
 
     # 列表与回执同形；date 过滤；无批次的日期回空
     assert client.get("/api/billing/reconciliation", headers=admin).json() == [batch]
-    assert client.get(f"/api/billing/reconciliation?date={TODAY}", headers=admin).json() == [batch]
+    assert client.get(f"/api/billing/reconciliation?date={utc_today_str()}", headers=admin).json() == [batch]
     assert client.get("/api/billing/reconciliation?date=1999-01-01", headers=admin).json() == []
 
 

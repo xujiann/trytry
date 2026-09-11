@@ -21,11 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from conftest import login
+from conftest import business_today_str, login
 from test_stage14_concurrency import KNOWN_READ_MODIFY_WRITE
 
 APP = Path(__file__).resolve().parents[1] / "app"
-TODAY = date.today().isoformat()
 
 
 def _patient(client, admin, name, id_card, gender="女", birth_date="1994-04-04"):
@@ -251,16 +250,16 @@ def test_复诊计划两次办理_两条日志都在(client, admin, world):
         headers=admin,
     )
     assert changed.status_code == 200, changed.text
-    assert changed.json()["log"] == [{"at": TODAY, "note": "患者外出，改期一周"}]
+    assert changed.json()["log"] == [{"at": business_today_str(), "note": "患者外出，改期一周"}]
 
     finished = client.patch(
-        f"/api/spd/revisits/{rid}", json={"status": "done", "actual_date": TODAY}, headers=admin
+        f"/api/spd/revisits/{rid}", json={"status": "done", "actual_date": business_today_str()}, headers=admin
     )
     assert finished.status_code == 200, finished.text
     assert finished.json()["status"] == "done"
     assert finished.json()["log"] == [
-        {"at": TODAY, "note": "患者外出，改期一周"},
-        {"at": TODAY, "note": "状态变更为done"},
+        {"at": business_today_str(), "note": "患者外出，改期一周"},
+        {"at": business_today_str(), "note": "状态变更为done"},
     ]
 
 
@@ -276,7 +275,7 @@ def followup_record(client, admin, world):
     patient = _patient(client, admin, "随访患者", "330281199404041076", gender="男")
     plan = client.post(
         "/api/spd/followup-plans",
-        json={"patient_id": patient["id"], "rule_id": rule.json()["id"], "base_date": TODAY,
+        json={"patient_id": patient["id"], "rule_id": rule.json()["id"], "base_date": business_today_str(),
               "org_id": world["org"]["id"]},
         headers=admin,
     )
@@ -373,10 +372,10 @@ def test_召回两次留痕_两条联系记录都在(client, admin, world):
     progress(status="contacted", contact_note="电话已接", result="愿意复诊")
     progress(status="contacted", contact_note="约定周五复诊")  # result 为空：保留旧结果
     current = recall()
-    assert current["contacts"] == [{"at": TODAY, "note": "电话已接"}, {"at": TODAY, "note": "约定周五复诊"}]
+    assert current["contacts"] == [{"at": business_today_str(), "note": "电话已接"}, {"at": business_today_str(), "note": "约定周五复诊"}]
     assert current["result"] == "愿意复诊"
     assert progress(status="returned", result="已回访") == {"id": rid, "status": "returned", "result": "已回访"}
-    assert recall()["contacts"] == [{"at": TODAY, "note": "电话已接"}, {"at": TODAY, "note": "约定周五复诊"}]
+    assert recall()["contacts"] == [{"at": business_today_str(), "note": "电话已接"}, {"at": business_today_str(), "note": "约定周五复诊"}]
 
 
 # ---------------------------------------------------------------- 防拆卸

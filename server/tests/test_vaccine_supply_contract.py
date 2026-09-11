@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import business_today, business_today_str, reset_database
 
 from app.main import app
 
@@ -39,10 +39,25 @@ def h(client):
 
 
 B = "/api/vaccine-supply"
-TODAY = date.today().isoformat()
-EXPIRE_SOON = (date.today() + timedelta(days=20)).isoformat()   # 30 天内到期
-EXPIRE_FAR = (date.today() + timedelta(days=60)).isoformat()
-EXPIRED = (date.today() - timedelta(days=1)).isoformat()
+
+
+# 效期基准一律**现取**，不在模块顶层快照：顶层取值发生在 import 那一刻，
+# 而服务端是在请求发生时才算（`deps.resolve_business_date(None)` → `date.today()`），
+# 跨午夜的那一轮 CI 两者必然差一天。见 conftest.business_today。
+
+
+def _expire_soon() -> str:
+    """30 天内到期。"""
+    return (business_today() + timedelta(days=20)).isoformat()
+
+
+def _expire_far() -> str:
+    return (business_today() + timedelta(days=60)).isoformat()
+
+
+def _expired() -> str:
+    return (business_today() - timedelta(days=1)).isoformat()
+
 
 BATCH_KEYS = ["id", "vaccine_code", "vaccine_name", "batch_no", "manufacturer",
               "expire_date", "org_id", "quantity", "used_quantity", "remaining",
@@ -61,7 +76,7 @@ def _iso(value: str) -> str:
 
 def _batch(bid, code, name, batch_no, expire, org_id, qty, used=0, status="normal",
            frozen_reason="", manufacturer="契约生物"):
-    expired = expire < TODAY
+    expired = expire < business_today_str()
     remaining = qty - used
     return {
         "id": bid, "vaccine_code": code, "vaccine_name": name, "batch_no": batch_no,
@@ -105,13 +120,13 @@ def test_批次登记与三查口径(client, h, base):
         f"{B}/batches",
         json={"vaccine_code": "HPV9", "vaccine_name": "九价HPV疫苗",
               "batch_no": "LOT-A1", "manufacturer": "契约生物",
-              "expire_date": EXPIRE_SOON, "org_id": org_id, "quantity": 10},
+              "expire_date": _expire_soon(), "org_id": org_id, "quantity": 10},
         headers=h,
     )
     assert resp.status_code == 201, resp.text
     b1 = resp.json()
     assert list(b1) == BATCH_KEYS
-    assert b1 == _batch(b1["id"], "HPV9", "九价HPV疫苗", "LOT-A1", EXPIRE_SOON,
+    assert b1 == _batch(b1["id"], "HPV9", "九价HPV疫苗", "LOT-A1", _expire_soon(),
                         org_id, 10)
     base["b1"] = b1
 
@@ -119,10 +134,10 @@ def test_批次登记与三查口径(client, h, base):
         f"{B}/batches",
         json={"vaccine_code": "FLU4", "vaccine_name": "四价流感疫苗",
               "batch_no": "LOT-B2", "manufacturer": "契约生物",
-              "expire_date": EXPIRED, "org_id": org_id, "quantity": 5},
+              "expire_date": _expired(), "org_id": org_id, "quantity": 5},
         headers=h,
     ).json()
-    assert b2 == _batch(b2["id"], "FLU4", "四价流感疫苗", "LOT-B2", EXPIRED, org_id, 5)
+    assert b2 == _batch(b2["id"], "FLU4", "四价流感疫苗", "LOT-B2", _expired(), org_id, 5)
     assert (b2["expired"], b2["usable"], b2["unusable_reason"]) == (True, False, "已过效期")
     base["b2"] = b2
 
@@ -130,7 +145,7 @@ def test_批次登记与三查口径(client, h, base):
         f"{B}/batches",
         json={"vaccine_code": "HPV9", "vaccine_name": "九价HPV疫苗",
               "batch_no": "LOT-C3", "manufacturer": "契约生物",
-              "expire_date": EXPIRE_FAR, "org_id": org_id, "quantity": 0},
+              "expire_date": _expire_far(), "org_id": org_id, "quantity": 0},
         headers=h,
     ).json()
     assert (b3["usable"], b3["unusable_reason"]) == (False, "库存已用完")
@@ -164,7 +179,7 @@ def test_批号反查受种者(client, h, base):
     record = client.post(
         "/api/vaccination/records",
         json={"patient_id": base["v1"]["id"], "vaccine_code": "HPV9",
-              "vaccine_name": "九价HPV疫苗", "dose_no": 1, "vaccinated_date": TODAY,
+              "vaccine_name": "九价HPV疫苗", "dose_no": 1, "vaccinated_date": business_today_str(),
               "org_id": org_id, "batch_id": b1["id"]},
         headers=h,
     ).json()
@@ -176,7 +191,7 @@ def test_批号反查受种者(client, h, base):
         "batch_no": "LOT-A1", "vaccine_name": "九价HPV疫苗", "total": 1,
         "recipients": [{"record_id": record["id"], "patient_id": base["v1"]["id"],
                         "patient_name": "疫苗受种者一", "dose_no": 1,
-                        "vaccinated_date": TODAY, "org_id": org_id}],
+                        "vaccinated_date": business_today_str(), "org_id": org_id}],
     }
     # 接种扣减台账联动：批次余量随之减一
     base["b1"] = {**b1, "used_quantity": 1, "remaining": 9}
@@ -193,7 +208,7 @@ def test_冷链录温与处置(client, h, base):
     normal = client.post(
         f"{B}/cold-chain",
         json={"org_id": org_id, "device_name": "1号冷藏箱", "temperature": 5,
-              "recorded_at": f"{TODAY} 08:00:00"},
+              "recorded_at": f"{business_today_str()} 08:00:00"},
         headers=h,
     )
     assert normal.status_code == 201, normal.text
@@ -202,7 +217,7 @@ def test_冷链录温与处置(client, h, base):
     assert list(c1) == COLD_KEYS
     assert c1 == {"id": c1["id"], "org_id": org_id, "device_name": "1号冷藏箱",
                   "temperature": 5.0, "range": "2.0~8.0℃", "exceeded": False,
-                  "recorded_at": f"{TODAY} 08:00:00", "handled": False,
+                  "recorded_at": f"{business_today_str()} 08:00:00", "handled": False,
                   "handle_note": ""}
     # Float 列：整数入参读回来是 5.0
     assert isinstance(c1["temperature"], float)
@@ -211,14 +226,14 @@ def test_冷链录温与处置(client, h, base):
     hot = client.post(
         f"{B}/cold-chain",
         json={"org_id": org_id, "device_name": "1号冷藏箱", "temperature": 12.5,
-              "recorded_at": f"{TODAY} 09:30:00"},
+              "recorded_at": f"{business_today_str()} 09:30:00"},
         headers=h,
     )
     c2 = hot.json()
     assert list(c2) == COLD_KEYS + ["hint"]
     assert c2 == {"id": c2["id"], "org_id": org_id, "device_name": "1号冷藏箱",
                   "temperature": 12.5, "range": "2.0~8.0℃", "exceeded": True,
-                  "recorded_at": f"{TODAY} 09:30:00", "handled": False,
+                  "recorded_at": f"{business_today_str()} 09:30:00", "handled": False,
                   "handle_note": "",
                   "hint": "已超出允许区间，请核查该设备内疫苗批次并决定是否封存（平台不自动封存）"}
     c2_row = {k: v for k, v in c2.items() if k != "hint"}
@@ -249,7 +264,7 @@ def test_AEFI上报与转归(client, h, base):
     linked = client.post(
         f"{B}/aefi",
         json={"patient_id": base["v1"]["id"], "record_id": base["record"]["id"],
-              "symptom": "接种部位红肿", "onset_date": TODAY, "org_id": org_id},
+              "symptom": "接种部位红肿", "onset_date": business_today_str(), "org_id": org_id},
         headers=h,
     )
     assert linked.status_code == 201, linked.text
@@ -260,21 +275,21 @@ def test_AEFI上报与转归(client, h, base):
                   "record_id": base["record"]["id"], "vaccine_code": "HPV9",
                   "batch_no": "LOT-A1", "reaction_type": "general",
                   "reaction_type_name": "一般反应", "symptom": "接种部位红肿",
-                  "onset_date": TODAY, "outcome": "unknown", "outcome_name": "未知",
+                  "onset_date": business_today_str(), "outcome": "unknown", "outcome_name": "未知",
                   "org_id": org_id}
     base["a1"] = a1
 
     severe = client.post(
         f"{B}/aefi",
         json={"patient_id": base["v2"]["id"], "vaccine_code": "FLU4",
-              "reaction_type": "severe", "symptom": "过敏性休克", "onset_date": TODAY,
+              "reaction_type": "severe", "symptom": "过敏性休克", "onset_date": business_today_str(),
               "outcome": "improving", "org_id": org_id},
         headers=h,
     ).json()
     assert severe == {"id": severe["id"], "patient_id": base["v2"]["id"],
                       "record_id": None, "vaccine_code": "FLU4", "batch_no": "",
                       "reaction_type": "severe", "reaction_type_name": "严重反应",
-                      "symptom": "过敏性休克", "onset_date": TODAY,
+                      "symptom": "过敏性休克", "onset_date": business_today_str(),
                       "outcome": "improving", "outcome_name": "好转中",
                       "org_id": org_id}
     base["a2"] = severe
@@ -340,7 +355,7 @@ def test_临期与过期清单(client, h, base):
     assert list(body) == ["today", "within_days", "batches", "generated_at"]
     # 按效期升序：已过期的 B2 也列出（提示报废，防止误用）；零库存的 B3 不列
     assert body == {
-        "today": TODAY, "within_days": 30,
+        "today": business_today_str(), "within_days": 30,
         "batches": [base["b2"], base["b1"]],
         "generated_at": _iso(body["generated_at"]),
     }
@@ -356,10 +371,10 @@ def test_各类错误体都只有detail(client, h, base):
     cases = [
         client.post(f"{B}/batches", headers=h,
                     json={"vaccine_code": "X", "vaccine_name": "X", "batch_no": "X",
-                          "expire_date": TODAY, "org_id": 999999}),
+                          "expire_date": business_today_str(), "org_id": 999999}),
         client.post(f"{B}/batches", headers=h,
                     json={"vaccine_code": "HPV9", "vaccine_name": "九价HPV疫苗",
-                          "batch_no": "LOT-A1", "expire_date": EXPIRE_SOON,
+                          "batch_no": "LOT-A1", "expire_date": _expire_soon(),
                           "org_id": org_id, "quantity": 3}),   # 重复批号 → 409
         client.post(f"{B}/batches/999999/freeze", headers=h,
                     json={"frozen_reason": "x"}),
@@ -368,24 +383,24 @@ def test_各类错误体都只有detail(client, h, base):
         client.post(f"{B}/cold-chain", headers=h,
                     json={"org_id": org_id, "device_name": "x", "temperature": 5,
                           "min_allowed": 8, "max_allowed": 2,
-                          "recorded_at": f"{TODAY} 08:00:00"}),  # 区间颠倒 → 422
+                          "recorded_at": f"{business_today_str()} 08:00:00"}),  # 区间颠倒 → 422
         client.post(f"{B}/cold-chain/999999/handle", headers=h,
                     json={"handle_note": "x"}),
         client.post(f"{B}/cold-chain/{base['c1']['id']}/handle", headers=h,
                     json={"handle_note": "x"}),                 # 未超温 → 422
         client.post(f"{B}/aefi", headers=h,
                     json={"patient_id": 999999, "vaccine_code": "X", "symptom": "x",
-                          "onset_date": TODAY, "org_id": org_id}),
+                          "onset_date": business_today_str(), "org_id": org_id}),
         client.post(f"{B}/aefi", headers=h,
                     json={"patient_id": base["v1"]["id"], "record_id": 999999,
-                          "symptom": "x", "onset_date": TODAY, "org_id": org_id}),
+                          "symptom": "x", "onset_date": business_today_str(), "org_id": org_id}),
         client.post(f"{B}/aefi", headers=h,
                     json={"patient_id": base["v2"]["id"],
                           "record_id": base["record"]["id"], "symptom": "x",
-                          "onset_date": TODAY, "org_id": org_id}),  # 记录不属于该患者 → 422
+                          "onset_date": business_today_str(), "org_id": org_id}),  # 记录不属于该患者 → 422
         client.post(f"{B}/aefi", headers=h,
                     json={"patient_id": base["v1"]["id"], "symptom": "x",
-                          "onset_date": TODAY, "org_id": org_id}),  # 缺疫苗编码 → 422
+                          "onset_date": business_today_str(), "org_id": org_id}),  # 缺疫苗编码 → 422
         client.patch(f"{B}/aefi/999999/outcome", headers=h,
                      json={"outcome": "recovered"}),
     ]

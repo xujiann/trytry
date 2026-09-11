@@ -170,6 +170,24 @@
 - ✅ **CI 解释器与生产对齐**：两个 job 改用 `PYTHON_VERSION: "3.12"`（与两个 Dockerfile、ruff `target-version`、mypy `python_version` 同版）。切换前在 3.12 上实测过全套：compileall / alembic upgrade heads（247 表）/ ruff 0 项 / mypy 139（与 3.11 逐条相同）/ 单元 1465 passed / smoke 2 passed / app 起得来。新增 `test_python_version_alignment.py` 两条把四处钉在一起（版本一致 + 不许写死版本号，后者扫全部 workflow 且带不带引号都认）——以后升级要么四处一起改、要么用例变红（此前它们没有任何互相约束，正是漂开的原因）。
 
 ### 让 CI 变真（关联 ADR-0002）
+- ✅ **CI 跨午夜必红：九个测试文件在模块顶层快照时间**（2026-09-11，run 552 实证）。
+  那一轮单元档跑了 **62 分钟**、23:42 开跑，**跨过午夜**，12 条整齐地差一天：
+  `{'at': '2026-09-10'}` vs `'2026-09-11'`、`{'today': …}`、`{'period_end': …}`。
+  **不是 flake 是真缺陷**：判据（`TODAY = date.today().isoformat()`，import 那一刻取）
+  与被判对象（服务端在请求时才算）取自**两个时刻**，中间隔着整轮测试的时长；
+  重跑一次就绿，正是它被当成 flake 的原因。CI 什么时候跑不由人定，深夜那班必然踩上。
+  改成用例里现取（`conftest.business_today` / `utc_today_str`），窗口从一小时缩到毫秒。
+  📌 **两个"今天"必须分清**：`clock.today()` 是本地业务日期，`models.utcnow()` 切出来的是
+  UTC 日（对账走这条）。挑错了 CI 也照样绿——runner 时区是 UTC，只有东八区的开发机会红。
+  📌 **`app/clock.py` 的 docstring 声称 `test_clock.py` 有一条扫描用例——那个文件从来不存在。**
+  今天第二次被「一句声称守卫存在的注释」咬（上次是 `batch_tasks` 说 `claim_task` 有校验）。
+  已补 `tests/test_clock.py` 18 条：裸 `datetime.now/utcnow` 零基线、`date.today()` 只减不增
+  基线 69、`app/` 与 `tests/` 不得在**import 时**取时间（判据含函数默认值与装饰器参数——
+  `def f(d=date.today())` 是同一个缺陷，只按"顶层赋值"判会整族漏掉）。
+  📌 自己的判据又窄了一次（今天第五次）：不解 import 别名时，`from datetime import date as _d`
+  能让两道闸门都报绿；解了别名反而多数到一处真实存在的（`spd/jobs.py`），68 是漏数。
+  七处变异各自转红（含别名与非别名两种写法）；`date.today()` 绕过入口登记为 P1-53，
+  对账日切在 UTC 登记为 P2-35（未改，业务口径待裁定）。
 - ✅ 覆盖率门禁转阻断（落地实测 87%，门槛 70%）；集成/迁移门在真 PG 上转阻断。
 - ✅ 生产禁用 `create_all`（lifespan 环境分支 + 守卫测试 `test_adr0002_create_all_guard.py`）、`start.sh` 启动前 `alembic upgrade heads`、README 修正复数（ADR-0002 已 Accepted）。
 

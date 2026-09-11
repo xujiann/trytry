@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import business_today_str, reset_database
 
 from app.main import app
 
@@ -42,7 +42,6 @@ def h(client):
 
 
 B = "/api/spd"
-TODAY = date.today().isoformat()
 
 
 def _iso(value: str) -> str:
@@ -259,8 +258,8 @@ def test_签约建档与在管列表(client, h, base):
     created = client.post(
         f"{B}/enrollments",
         json={"patient_id": pid, "program_code": "ctp_dm", "org_id": org_id,
-              "sign_date": TODAY, "consent_signed": True, "consent_no": "TZ-001",
-              "service_start": TODAY, "tags": ["重点人群"]},
+              "sign_date": business_today_str(), "consent_signed": True, "consent_no": "TZ-001",
+              "service_start": business_today_str(), "tags": ["重点人群"]},
         headers=h,
     )
     assert created.status_code == 201, created.text
@@ -270,8 +269,8 @@ def test_签约建档与在管列表(client, h, base):
         "id": body["id"], "patient_id": pid, "program_code": "ctp_dm", "org_id": org_id,
         "team_id": None, "doctor_user_id": None, "manager_user_id": None,
         "village_doctor_id": None, "stage": "s1", "risk_level": "low",
-        "status": "active", "source": "screening", "sign_date": TODAY,
-        "consent_signed": True, "consent_no": "TZ-001", "service_start": TODAY,
+        "status": "active", "source": "screening", "sign_date": business_today_str(),
+        "consent_signed": True, "consent_no": "TZ-001", "service_start": business_today_str(),
         "service_end": "", "archived": False, "habits": {}, "risk_factors": [],
         "complications": [], "tags": ["重点人群"], "last_followup_at": "",
         "next_followup_at": "", "created_at": _iso(body["created_at"]),
@@ -455,7 +454,7 @@ def test_生命周期召回迁出确认与事件列表(client, h, base):
     assert returned.json() == {"id": rid, "status": "returned", "result": "已回访"}
     assert client.get(f"{B}/recalls", params={"status": "returned"}, headers=h).json() == [{
         "id": rid, "enrollment_id": e2["id"], "reason": "失访三月", "status": "returned",
-        "result": "已回访", "contacts": [{"at": TODAY, "note": "电话已接"}],
+        "result": "已回访", "contacts": [{"at": business_today_str(), "note": "电话已接"}],
         "created_at": recalls[0]["created_at"],
     }]
 
@@ -481,7 +480,7 @@ def test_生命周期召回迁出确认与事件列表(client, h, base):
             "org_id": org2, "team_id": None, "doctor_user_id": None,
             "manager_user_id": None, "village_doctor_id": None, "stage": "s1",
             "risk_level": "low", "status": "active", "source": "migrate",
-            "sign_date": TODAY, "consent_signed": False, "consent_no": "",
+            "sign_date": business_today_str(), "consent_signed": False, "consent_no": "",
             "service_start": "", "service_end": "", "archived": False, "habits": {},
             "risk_factors": [], "complications": [], "tags": [],
             "last_followup_at": "", "next_followup_at": "",
@@ -510,7 +509,7 @@ def test_生命周期召回迁出确认与事件列表(client, h, base):
     def _event(row, enrollment_id, event, reason, target):
         return {"id": row["id"], "enrollment_id": enrollment_id, "event": event,
                 "reason": reason, "detail": "", "target_org_id": target,
-                "confirmed": True, "occurred_at": TODAY, "program_code": "ctp_dm",
+                "confirmed": True, "occurred_at": business_today_str(), "program_code": "ctp_dm",
                 "patient_id": p_life, "patient_name": "契约人群二",
                 "created_at": _iso(row["created_at"])}
 
