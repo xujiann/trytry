@@ -491,33 +491,59 @@ BYID_CROSS_ORG_OK = {
 
 
 def _with_local_helpers(tree: ast.AST, fn: ast.AST) -> str:
-    """端点源码 **＋ 它调用的本模块 helper 的源码**（跟进一层，剥 docstring）。
+    """端点源码 **＋ 它（传递地）调用到的全部本模块函数的源码**（剥 docstring）。
 
     ⚠️ 2026-09-10 实测取证：`clinical_docs.py` 七个端点把取行放在本模块的
     `_admission_or_404` 里，于是**整族掉出分母**——闸门照样报 95.5% 覆盖率，
     而乙院医生按 admission_id 就能读到甲院患者的体温单、病程记录，
-    还能往里写病程记录（201）。
+    还能往里写病程记录（201）。那一轮由此加了"跟进一层"。
 
-    只跟进一层、只跟本模块：跟得太深会把 `db`/`paginate` 这类通用工具的源码
-    也卷进来，判据就糊了；一层足以覆盖"端点 → 取行/校验小助手"这个真实形状。
+    ## 为什么从"跟一层"改成"跟到底"（2026-09-11）
+
+    只跟一层时，**"修好了"与"闸门看不见了"长得一模一样**：本轮把
+    `projects._project` 写成「调 `_project_readonly` 取行 + 加守卫」，取行退到第二跳，
+    端点整个掉出分母——把那行守卫删掉，闸门照样报绿（变异实测）。登记为 P2-36。
+
+    当初只跟一层的理由是"跟太深会把 `db`/`paginate` 这类通用工具卷进来，判据就糊了"。
+    **那个理由不成立**：这里跟的是 `called & funcs`，即**本模块定义的函数**；
+    `db.get(...)` 是属性调用、`paginate` 是 import 进来的名字，两者都不在
+    `funcs` 里，跟多深都收不到。实测传递闭包多收的全是 `_row_out` / `_completion` /
+    `_credential_out` 这类本模块小助手。
+
+    改之前逐项量过（一层 → 闭包）：
+
+        分母          133 → 135   （多出的正是 projects 的里程碑两条，
+                                    它们的归属隔着 `_milestone` → `_project_readonly` 两跳）
+        无守卫         8  →  8
+        一层说无守卫、闭包说有守卫（假阴性风险）：**0 条**
+
+    也就是说今天这一改只放宽分母、不放过任何一条，所以敢改。
+    往后若出现"深处某个 helper 提了一句守卫名就把端点算成已守卫"，
+    那会是假阴性，应当在此处收窄并留下实测记录。
     """
     funcs = {
         n.name: n
         for n in ast.walk(tree)
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    called = {
-        n.func.id
-        for n in ast.walk(fn)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-    }
-    parts = [astcode.code(fn)]
-    parts += [
-        astcode.code(funcs[name])
-        for name in sorted(called & funcs.keys())
-        if name != fn.name
-    ]
-    return "\n".join(parts)
+
+    def local_calls(node) -> set[str]:
+        return {
+            n.func.id
+            for n in ast.walk(node)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in funcs
+        }
+
+    collected: set[str] = set()
+    frontier = local_calls(fn) - {fn.name}
+    while frontier:
+        collected |= frontier
+        nxt: set[str] = set()
+        for name in frontier:
+            nxt |= local_calls(funcs[name])
+        frontier = nxt - collected - {fn.name}
+
+    return "\n".join([astcode.code(fn)] + [astcode.code(funcs[n]) for n in sorted(collected)])
 
 
 def _byid_org_write_endpoints():
@@ -1045,6 +1071,15 @@ BYID_PATIENT_READ_OK = {
     # 关掉。已收紧到 director 角色，且每次导出都 log_patient_access 留痕
     # （resource=death_report_card, basis=export），身份证号/电话按角色脱敏。
     "certs.py:death_report_card",
+    # 病历复评：已按**机构**收口（`assert_org_writable(db, user, record.org_id)`，
+    # 口径同本文件 upsert_medical_record），而不是按患者可见性——因为它判的是
+    # "这份病历归谁"，不是"这位患者你能不能看"：响应里只有评分、等级、缺陷清单，
+    # 没有任何患者身份数据；患者那一跳（`_record_context` 里取 Encounter 查危急值）
+    # 只用来决定规则条件是否触发。
+    # 2026-09-11 实测取证并已修：修之前乙院 doctor / operator 都能把甲院病历的
+    # qc_score 从 100 改成 43、qc_grade 从甲改成丙（质控等级是考核依据）。
+    # 见 tests/test_quality_rescore_org_guard.py。
+    "quality.py:rescore_medical_record",
 }
 
 

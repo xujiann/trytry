@@ -910,11 +910,30 @@ class MedicalRecordRescoreOut(BaseModel):
 
 
 @router.get("/records/{record_id}/qc", response_model=MedicalRecordRescoreOut)
-def rescore_medical_record(record_id: int, db: Session = Depends(get_db)):
-    """按当前规则库重新评分（规则调整或病历修正后复评），结果回写快照。"""
+def rescore_medical_record(
+    record_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """按当前规则库重新评分（规则调整或病历修正后复评），结果回写快照。
+
+    口径照抄同文件的 `upsert_medical_record`——**同一条 `_apply_qc` 路径**，
+    那边的注释早就写明"写进去的内容直接进乙院的质控成绩"（ADR-0021）并加了
+    `assert_org_writable`，而这条复评入口一直什么都不校验。实测取证：
+    乙院的 doctor 与 operator 都能把甲院病历的 `qc_score` 从 100 改成 43、
+    `qc_grade` 从甲改成丙，而质控等级是考核依据。
+
+    ⚠️ **这是个会写库的 GET**（`db.commit()` 回写快照）。写侧的几道静态闸门
+    只扫 post/put/patch/delete，所以它一直落在写侧判据之外；本轮由读侧闸门
+    跟进传递闭包才看见（取到患者数据在
+    `_apply_qc → evaluate_record → _record_context` 的第三跳）。
+    改成 POST 属破坏性变更（§7），未做，已登记 P2-37。
+    """
     record = db.get(MedicalRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="病历不存在")
+    # 病历的 org_id 取自就诊（见 upsert_medical_record 的注释），与那边按
+    # encounter.org_id 判等价，且这里省一次查询。
+    assert_org_writable(db, user, record.org_id)
     result = _apply_qc(db, record)
     db.commit()
     return {"record_id": record.id, **result}
