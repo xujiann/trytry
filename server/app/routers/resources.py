@@ -154,8 +154,11 @@ def list_resources(
     "/{resource_id}", response_model=ResourceOut,
     dependencies=[Depends(require_roles("operator", "director"))],
 )
-def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db)):
-    resource = _resource(db, resource_id)
+def update_resource(
+    resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    resource = _resource(db, resource_id, user)
     for field, value in body.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(resource, field, value)
@@ -168,8 +171,11 @@ def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depend
     "/{resource_id}/publish", response_model=ResourceOut,
     dependencies=[Depends(require_roles("operator", "director"))],
 )
-def publish_resource(resource_id: int, db: Session = Depends(get_db)):
-    resource = _resource(db, resource_id)
+def publish_resource(
+    resource_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    resource = _resource(db, resource_id, user)
     if resource.status == "published":
         raise HTTPException(status_code=409, detail="该资源已发布")
     resource.status = "published"
@@ -187,10 +193,13 @@ class WithdrawIn(BaseModel):
     "/{resource_id}/withdraw", response_model=ResourceOut,
     dependencies=[Depends(require_roles("operator", "director"))],
 )
-def withdraw_resource(resource_id: int, body: WithdrawIn, db: Session = Depends(get_db)):
+def withdraw_resource(
+    resource_id: int, body: WithdrawIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """撤回（不删行）。撤回理由必填——"这台设备为什么不能约了"是使用方
     一定会问的，答不上来就会被反复问。"""
-    resource = _resource(db, resource_id)
+    resource = _resource(db, resource_id, user)
     if resource.status == "withdrawn":
         raise HTTPException(status_code=409, detail="该资源已撤回")
     resource.status = "withdrawn"
@@ -200,10 +209,17 @@ def withdraw_resource(resource_id: int, body: WithdrawIn, db: Session = Depends(
     return _resource_out(resource)
 
 
-def _resource(db: Session, resource_id: int) -> Resource:
+def _resource(db: Session, resource_id: int, user: User) -> Resource:
+    """取行 + 机构归属校验一体。
+
+    口径照抄同文件的 `register_resource`——登记一直是 `assert_org_writable` 的，
+    改名/发布/撤回三个动作却什么都不校验；同一张表上两套口径本身就是缺陷。
+    归属判定排在状态机之前：先 403，免得用"该资源已发布"把别家的状态探出去。
+    """
     resource = db.get(Resource, resource_id)
     if resource is None:
         raise HTTPException(status_code=404, detail="资源不存在")
+    assert_org_writable(db, user, resource.org_id)
     return resource
 
 

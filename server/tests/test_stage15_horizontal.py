@@ -652,12 +652,21 @@ def test_批量按id写接口必须有机构守卫():
 #: **而 `claim_task` 恰恰是没校验的那个**。批量版照着单条版修，可单条版本身就没有；
 #: 注释这么写了之后就再没人回头核过。见 `tests/test_spd_task_org_guard.py`。
 #:
-#: 余下 11 条：
-#:   * `spd/tasks.py:adjust_path_instance` —— **不是不想修，是修不了**：
-#:     `SpdPathInstance` **没有机构列**（AST 查过），`assert_org_writable` 无从下手。
-#:     这正是 P1-48 登记的那一条，属"归属未定义"，要先裁定补不补 `org_id` 列。
-#:   * `projects.py` / `resources.py` 五个配置维护 —— 先确认这些对象有没有机构归属，
-#:     没有就与上面同属 P1-35/48 那一类，登记而非硬修。
+#: ✅ **再减 5 条**：`projects.py` 的 update_project / add_milestone 与
+#: `resources.py` 的 update / publish / withdraw 已修（2026-09-11）。
+#: 实测乙院 operator 能中止甲院的项目、往里插里程碑、把甲院的超声机改名并发布撤回，
+#: 全部 200/201；而同一文件里**建**（`create_project` / `register_resource`）
+#: 一直是 `assert_org_writable` 的——又一次"同一张表上两套口径"。
+#: 见 `tests/test_projects_resources_org_guard.py`。
+#:
+#: ⚠️ **上一版这里写错了一条，更正**：`spd/tasks.py:adjust_path_instance` 曾被写成
+#: 「不是不想修是修不了：`SpdPathInstance` 没有机构列」。**前半句对，后半句错**——
+#: 它有 `enrollment_id → SpdEnrollment.org_id`，归属隔着一跳就能拿到，
+#: `assert_org_writable` 完全下得了手。见下方 `ONEHOP_UNGUARDED_WRITES`：
+#: 同形状的还有 13 个。**"这张表没有机构列"不等于"这个对象没有归属"。**
+#:
+#: 余下 6 条：
+#:   * `spd/tasks.py:adjust_path_instance` —— 可修（见上面的更正），排进下一批。
 #:   * `credentials.py:recycle/void` 与 `disease_programs.py` 三个 ——
 #:     互认按设计跨机构（本文件 `BYID_CROSS_ORG_OK` 里已有 `recognition` 口径的先例），
 #:     大概率是**写明理由的豁免**而不是补守卫，但要逐条取证再判。
@@ -667,11 +676,6 @@ NEWLY_VISIBLE_UNGUARDED_WRITES = {
     "disease_programs.py:exit_enrollment",
     "disease_programs.py:record_node",
     "disease_programs.py:update_program",
-    "projects.py:add_milestone",
-    "projects.py:update_project",
-    "resources.py:publish_resource",
-    "resources.py:update_resource",
-    "resources.py:withdraw_resource",
     "spd/tasks.py:adjust_path_instance",
 }
 
@@ -716,6 +720,125 @@ def test_按id写接口机构归属欠账不许变长():
     assert stale == set(), (
         f"这些登记项已加了守卫或不存在，应从清单删除（欠账只减不增，修完就要减）：{sorted(stale)}"
     )
+
+
+#: 【欠账，只减不增】主对象**本表没有机构列、但归属隔着一跳外键就能拿到**，
+#: 却没有任何机构守卫的写端点。
+#:
+#: ## 这一格是怎么被发现的
+#:
+#: 2026-09-11 修 `projects.py` 时实测到：乙院 operator 能把甲院项目的里程碑标成
+#: 已完成、再撤销完成（`POST /api/projects/milestones/{id}/done` / `/reopen`，各 200）。
+#: 这两个端点**从来没进过任何欠账清单**——不是因为没问题，是因为没被数到：
+#: `project_milestones` 没有 `org_id`，而 `_byid_org_write_endpoints` 的分母是
+#: 「**直接取的那张表**带机构列」。
+#:
+#: 同一天还发现上一轮把 `adjust_path_instance` 写成了"修不了"，理由是
+#: `SpdPathInstance` 没有机构列。**"这张表没有机构列"不等于"这个对象没有归属"**——
+#: 它的 `enrollment_id` 指向 `SpdEnrollment`，那张表是有 `org_id` 的。
+#:
+#: ## 判据为什么排除指向 `users` 的外键
+#:
+#: 不排除时命中 50 个，绝大多数是 `created_by` / `doctor_id` / `handled_by` 这类
+#: 指向 `User` 的列。`User` 确实有 `org_id`，但那是**"谁建的"不是"归谁所有"**：
+#: 按 `created_by.org_id` 判归属，等于说一份记录属于当初录入者所在的机构，
+#: 人一调动、代录一次就全错。排除之后是 14 个，都是指向**领域父对象**的外键。
+#:
+#: 这条判据同样只是**逼近**：两跳可达的看不见，非外键的业务归属（例如靠
+#: `org_code` 字符串关联）也看不见。写在这里是为了下一个人知道它不看什么。
+ONEHOP_UNGUARDED_WRITES = {
+    "appointments.py:cancel",
+    "appointments.py:fulfill",
+    "spd/care.py:update_intervention",
+    "spd/config/teams.py:remove_team_member",
+    "spd/config/teams.py:update_team_member",
+    "spd/followup.py:record_qc_result",
+    "spd/population.py:add_usage",
+    "spd/population.py:unbind_package",
+    "spd/referral.py:arrive_referral",
+    "spd/referral.py:down_referral",
+    "spd/referral.py:receive_followup",
+    "spd/referral.py:review_referral",
+    "spd/referral.py:withdraw_referral",
+    "spd/tasks.py:adjust_path_instance",
+}
+
+
+def _onehop_org_models() -> dict[str, list[str]]:
+    """本表无 `org_id`、但有外键指向带 `org_id` 的表（`users` 除外）的模型。"""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app import models
+    registered = [
+        c for c in models.Base.registry._class_registry.values()
+        if hasattr(c, "__tablename__")
+    ]
+    by_table = {c.__table__.name: c for c in registered}
+    out: dict[str, list[str]] = {}
+    for cls in registered:
+        if "org_id" in cls.__table__.columns:
+            continue
+        for col in cls.__table__.columns:
+            for fk in col.foreign_keys:
+                if fk.column.table.name == "users":
+                    continue   # created_by 是"谁建的"，不是"归谁所有"
+                parent = by_table.get(fk.column.table.name)
+                if parent is not None and "org_id" in parent.__table__.columns:
+                    out.setdefault(cls.__name__, []).append(parent.__name__)
+    return out
+
+
+def _onehop_unguarded_writes() -> set[str]:
+    onehop = _onehop_org_models()
+    guards = {"assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
+              "assert_patient_visible", "scope_org_list", "scope_patient_list",
+              "log_patient_access"}
+    unguarded = set()
+    for name, path in _router_files():
+        if name in ("portal.py", "spd/portal.py"):
+            continue
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for fn in [n for n in ast.walk(tree)
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            decs = [ast.unparse(d) for d in fn.decorator_list]
+            if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
+                continue
+            if not any("{" in d for d in decs):
+                continue
+            u = _with_local_helpers(tree, fn)
+            if any(g in u for g in guards):
+                continue
+            if any(f"db.get({m}," in u for m in onehop):
+                unguarded.add(f"{name}:{fn.name}")
+    return unguarded
+
+
+def test_归属隔一跳的无守卫写端点只减不增():
+    """把"看不见"变成"数得出、不许变大"。
+
+    与 `NEWLY_VISIBLE_UNGUARDED_WRITES` 一样是**欠账清单不是豁免清单**：
+    这些不是"按设计跨机构"，只是还没逐条取证判定。
+    """
+    hits = _onehop_unguarded_writes()
+    unexpected = sorted(hits - ONEHOP_UNGUARDED_WRITES)
+    assert unexpected == [], (
+        "新增了「归属一跳可达却不校验机构」的写端点：\n  " + "\n  ".join(unexpected)
+    )
+    stale = sorted(ONEHOP_UNGUARDED_WRITES - hits)
+    assert stale == [], (
+        f"这些已加守卫或已不存在，请从清单删除（欠账只减不增，修完就要减）：{stale}"
+    )
+
+
+def test_判据自证_里程碑那一族确实已被守住():
+    """防空转：这条规则是被 `projects.py` 的里程碑两条端点逼出来的，
+
+    它们现在必须**不在**命中集里——否则说明守卫没生效，或判据没在看这一格。
+    """
+    hits = _onehop_unguarded_writes()
+    assert "projects.py:complete_milestone" not in hits
+    assert "projects.py:reopen_milestone" not in hits
+    assert len(_onehop_org_models()) >= 40, "一跳可达的模型数异常，判据可能在空转"
 
 
 def _patient_scoped_endpoints() -> dict[str, list[str]]:

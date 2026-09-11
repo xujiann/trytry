@@ -55,11 +55,50 @@ class MilestoneIn(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
-def _project(db: Session, project_id: int) -> AdminProject:
+def _project_readonly(db: Session, project_id: int) -> AdminProject:
+    """只取行，**不判归属**。只给读接口用。
+
+    写接口一律用下面那个同名更短的 `_project`——默认的名字是带守卫的那个，
+    这样"顺手抄一行取行代码"落到的是安全的默认值，而不是需要额外记得加一步。
+    """
     project = db.get(AdminProject, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="项目不存在")
     return project
+
+
+def _project(db: Session, project_id: int, user: User) -> AdminProject:
+    """取行 + 机构归属校验，写接口用。
+
+    归属判定排在业务状态机之前（与 `outpatient_docs._pending` 同一理由）：
+    先 403，免得用"结项须把进度报到 100%"这类措辞把别家项目的状态探出去。
+    全域角色（`director`）由 `visibility` 那层自行放行——县级中心统筹督办照常。
+
+    ⚠️ **这里的两行"重复"是有意的，别合并到 `_project_readonly` 上。**
+    横向越权闸门只**跟进一层**本模块 helper（见 `_with_local_helpers` 的 docstring：
+    跟太深会把通用工具卷进来）。第一版写成 `_project_readonly(...)` 再加守卫，
+    取行就退到了**第二跳**——变异实测：把下面那行守卫整条删掉，闸门照样报绿，
+    因为这个端点已经整个掉出了分母。**"修好了"与"闸门看不见了"长得一模一样。**
+    """
+    project = db.get(AdminProject, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    assert_org_writable(db, user, project.org_id)
+    return project
+
+
+def _milestone(db: Session, milestone_id: int, user: User) -> ProjectMilestone:
+    """里程碑的归属**隔着一跳**：`project_milestones` 没有 `org_id`，
+    要经 `project_id` 回到 `admin_projects.org_id` 才判得了。
+
+    横向越权闸门看不见这一族，正因为它的分母是"直接取的那张表带机构列"。
+    实测取证：乙院 operator 可以把甲院项目的里程碑标完成、再撤销完成。
+    """
+    milestone = db.get(ProjectMilestone, milestone_id)
+    if milestone is None:
+        raise HTTPException(status_code=404, detail="里程碑不存在")
+    assert_org_writable(db, user, _project_readonly(db, milestone.project_id).org_id)
+    return milestone
 
 
 def _milestone_out(m: ProjectMilestone, today: str) -> dict:
@@ -190,7 +229,7 @@ def list_projects(
 
 @router.get("/{project_id}", response_model=AdminProjectOut)
 def get_project(project_id: int, today: str | None = None, db: Session = Depends(get_db)):
-    project = _project(db, project_id)
+    project = _project_readonly(db, project_id)
     milestones = (
         db.query(ProjectMilestone)
         .filter(ProjectMilestone.project_id == project_id)
@@ -204,13 +243,16 @@ def get_project(project_id: int, today: str | None = None, db: Session = Depends
     "/{project_id}", response_model=AdminProjectOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
-def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(get_db)):
+def update_project(
+    project_id: int, body: ProjectUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """更新进度与状态。
 
     结项要求进度报到 100：允许"已完成但进度 60%"，那份进度数就再也没人信了。
     确实做不完的项目走 suspended（中止），那是另一回事，不要求进度满格。
     """
-    project = _project(db, project_id)
+    project = _project(db, project_id, user)
     data = body.model_dump(exclude_unset=True)
     if data.get("status") == "done":
         target = data.get("progress_pct", project.progress_pct)
@@ -233,8 +275,11 @@ def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(g
     response_model=ProjectMilestoneOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
-def add_milestone(project_id: int, body: MilestoneIn, db: Session = Depends(get_db)):
-    _project(db, project_id)
+def add_milestone(
+    project_id: int, body: MilestoneIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _project(db, project_id, user)
     milestone = ProjectMilestone(project_id=project_id, **body.model_dump())
     db.add(milestone)
     db.commit()
@@ -248,11 +293,10 @@ def add_milestone(project_id: int, body: MilestoneIn, db: Session = Depends(get_
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def complete_milestone(
-    milestone_id: int, done_date: OptionalDateStr = "", db: Session = Depends(get_db)
+    milestone_id: int, done_date: OptionalDateStr = "", db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    milestone = db.get(ProjectMilestone, milestone_id)
-    if milestone is None:
-        raise HTTPException(status_code=404, detail="里程碑不存在")
+    milestone = _milestone(db, milestone_id, user)
     if milestone.done:
         raise HTTPException(status_code=409, detail="该里程碑已完成")
     milestone.done = True
@@ -267,11 +311,12 @@ def complete_milestone(
     response_model=ProjectMilestoneOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
-def reopen_milestone(milestone_id: int, db: Session = Depends(get_db)):
+def reopen_milestone(
+    milestone_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """撤销完成。误点了要能改回来——凡是拦得住的都要放得开。"""
-    milestone = db.get(ProjectMilestone, milestone_id)
-    if milestone is None:
-        raise HTTPException(status_code=404, detail="里程碑不存在")
+    milestone = _milestone(db, milestone_id, user)
     milestone.done = False
     milestone.done_date = ""
     db.commit()
