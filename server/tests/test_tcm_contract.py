@@ -24,7 +24,7 @@ from datetime import date, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import business_today, reset_database
+from conftest import business_today, freeze_business_date, reset_database
 
 from app.main import app
 
@@ -63,6 +63,14 @@ def _produced_old() -> str:
 
 def _expire_old() -> str:
     return (business_today() - timedelta(days=400) + timedelta(days=180)).isoformat()
+
+
+#: 把这一档的"今天"钉死——判据与被判对象走同一个入口（P1-53 收敛后的
+#: `clock.today()`），冻住它，真实时钟怎么走都不影响。选 6 月 15 号避开月末与闰日。
+@pytest.fixture(scope="module", autouse=True)
+def _frozen_today():
+    with freeze_business_date(date(2026, 6, 15)):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -385,3 +393,12 @@ def test_各类错误体都只有detail(client, admin, seed):
     assert [r.status_code for r in cases] == [422, 422, 422, 422, 409, 404, 409, 422, 409, 409, 404]
     for r in cases:
         assert set(r.json()) == {"detail"}
+
+
+def test_本档的今天确实被冻住了():
+    """防空转：冻结若失效，本档每一条**也照样绿**——判据与服务端都走真实时钟、
+    彼此一致，只是又回到"别跨午夜"那个前提上。所以必须单独钉一条正面断言。
+
+    这条红，说明 autouse 夹具没生效、或夹具顺序让播种落在了冻结之外。
+    """
+    assert business_today() == date(2026, 6, 15)

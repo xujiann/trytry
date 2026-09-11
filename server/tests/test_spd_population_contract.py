@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import business_today_str, reset_database
+from conftest import business_today, business_today_str, freeze_business_date, reset_database
 
 from app.main import app
 
@@ -41,6 +41,14 @@ def h(client):
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
+#: 把这一档的"今天"钉死——判据与被判对象走同一个入口（P1-53 收敛后的
+#: `clock.today()`），冻住它，真实时钟怎么走都不影响。选 6 月 15 号避开月末与闰日。
+@pytest.fixture(scope="module", autouse=True)
+def _frozen_today():
+    with freeze_business_date(date(2026, 6, 15)):
+        yield
+
+
 B = "/api/spd"
 
 
@@ -52,7 +60,7 @@ def _iso(value: str) -> str:
 
 def _age_of(birth_date: str) -> int:
     born = date.fromisoformat(birth_date)
-    today = date.today()
+    today = business_today()
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
 
@@ -278,7 +286,7 @@ def test_签约建档与在管列表(client, h, base):
     assert body == expected
     base["enroll"] = body
 
-    next_at = (date.today() + timedelta(days=30)).isoformat()
+    next_at = (business_today() + timedelta(days=30)).isoformat()
     patched = client.patch(
         f"{B}/enrollments/{body['id']}",
         json={"habits": {"smoke": "偶尔"}, "risk_factors": ["吸烟"],
@@ -310,7 +318,7 @@ def test_签约建档与在管列表(client, h, base):
 
 def test_服务包绑定与扣减(client, h, base):
     eid, pkg = base["enroll"]["id"], base["package"]
-    period_end = (date.today() + timedelta(days=30)).isoformat()
+    period_end = (business_today() + timedelta(days=30)).isoformat()
     bound = client.post(f"{B}/enrollments/{eid}/packages",
                         json={"package_id": pkg["id"]}, headers=h)
     assert bound.status_code == 201, bound.text
@@ -638,7 +646,7 @@ def test_居民服务申请受理(client, h, base):
 
 def test_专病360档案(client, h, base):
     pid = base["p_screen"]["id"]
-    measured_at = f"{(date.today() - timedelta(days=1)).isoformat()}T08:00:00"
+    measured_at = f"{(business_today() - timedelta(days=1)).isoformat()}T08:00:00"
     client.post(f"{B}/measurements",
                 json={"patient_id": pid, "metric": "bp_sys", "value": 160,
                       "unit": "mmHg", "measured_at": measured_at},
@@ -675,7 +683,7 @@ def test_专病360档案(client, h, base):
             "open_tasks": 1,
             "recent_tasks": [{"id": task["id"], "title": "契约慢病路径·随访评估",
                               "task_type": "path", "status": "pending",
-                              "due_date": (date.today() + timedelta(days=7)).isoformat()}],
+                              "due_date": (business_today() + timedelta(days=7)).isoformat()}],
         }],
         "measurements": [{"metric": "bp_sys", "value": 160.0, "unit": "mmHg",
                           "level": "normal", "source": "manual",
@@ -743,3 +751,12 @@ def test_各类错误体都只有detail(client, h, base):
                                               404, 409, 404, 404, 409, 404]
     for r in cases:
         assert set(r.json()) == {"detail"}
+
+
+def test_本档的今天确实被冻住了():
+    """防空转：冻结若失效，本档每一条**也照样绿**——判据与服务端都走真实时钟、
+    彼此一致，只是又回到"别跨午夜"那个前提上。所以必须单独钉一条正面断言。
+
+    这条红，说明 autouse 夹具没生效、或夹具顺序让播种落在了冻结之外。
+    """
+    assert business_today() == date(2026, 6, 15)

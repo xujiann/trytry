@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import business_today, business_today_str, reset_database
+from conftest import business_today, business_today_str, freeze_business_date, reset_database
 
 from app.main import app
 
@@ -38,11 +38,25 @@ def h(client):
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
+#: 把这一档的"今天"钉死。
+#:
+#: 这一档正是 CI run 552 红掉的那一族（`{'today': '2026-09-10'} != '2026-09-11'`）。
+#: 第一步把模块顶层快照改成用例里现取，窗口从一小时缩到毫秒；这一步把它归零——
+#: 判据（`business_today()`）与被判对象（服务端的 `clock.today()`）现在走**同一个入口**
+#: （P1-53 收敛），冻住它，两边取的就是同一个值，真实时钟怎么走都不影响。
+#:
+#: 选 6 月 15 号不是随手挑的：避开月末与闰日，`_expire_soon()`（+20 天）不跨年。
+@pytest.fixture(scope="module", autouse=True)
+def _frozen_today():
+    with freeze_business_date(date(2026, 6, 15)):
+        yield
+
+
 B = "/api/vaccine-supply"
 
 
 # 效期基准一律**现取**，不在模块顶层快照：顶层取值发生在 import 那一刻，
-# 而服务端是在请求发生时才算（`deps.resolve_business_date(None)` → `date.today()`），
+# 而服务端是在请求发生时才算（`deps.resolve_business_date(None)` → `business_today()`），
 # 跨午夜的那一轮 CI 两者必然差一天。见 conftest.business_today。
 
 
@@ -341,7 +355,7 @@ def test_统计口径(client, h, base):
     assert isinstance(body["aefi"]["severe_rate_per_100k_doses"], float)
 
     # 分母为 0：不报 0（会被读成零发生率），而是 null
-    future = (date.today() + timedelta(days=5)).isoformat()
+    future = (business_today() + timedelta(days=5)).isoformat()
     empty = client.get(f"{B}/stats", params={"start_date": future}, headers=h).json()
     assert empty["period"] == {"start": future, "end": "不限"}
     assert empty["doses"] == 0
@@ -408,3 +422,13 @@ def test_各类错误体都只有detail(client, h, base):
                                               404, 404, 422, 422, 404]
     for r in cases:
         assert set(r.json()) == {"detail"}
+
+
+def test_本档的今天确实被冻住了(client, h):
+    """防空转：冻结若失效，上面每一条**也照样绿**——两边都走真实时钟、彼此一致，
+    只是又回到"别跨午夜"那个前提上。所以必须单独钉一条正面断言。
+
+    这条红，说明 autouse 夹具没生效、或夹具顺序让播种落在冻结之外。
+    """
+    assert business_today_str() == "2026-06-15"
+    assert client.get(f"{B}/expiring?days=30", headers=h).json()["today"] == "2026-06-15"

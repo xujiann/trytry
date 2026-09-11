@@ -25,7 +25,12 @@ import pathlib
 
 import pytest
 
-from conftest import business_today, business_today_str, utc_today_str
+from conftest import (
+    business_today,
+    business_today_str,
+    freeze_business_date,
+    utc_today_str,
+)
 
 SERVER = pathlib.Path(__file__).resolve().parents[1]
 APP = SERVER / "app"
@@ -218,6 +223,50 @@ def test_app_内不得把_today_直接_import_进来():
     )
 
 
+def test_冻结了业务日期的用例档不得再裸调_date_today():
+    """**零基线。** 冻结与裸 `date.today()` 是一对会互相拆台的组合。
+
+    实测取证（2026-09-11，本轮当场踩到）：给 `test_spd_population_contract.py`
+    加上 `freeze_business_date(2026-06-15)` 之后五条用例当场红了——
+
+        {'period_end': '2026-07-15'} != {'period_end': '2026-10-11'}
+
+    服务端从冻住的 `service_start` 推算（06-15 + 30 天），而用例里那行
+    `date.today() + timedelta(days=30)` 问的是**真实时钟**。两边不再是同一把尺子。
+
+    所以规则不是"测试里不许用 `date.today()`"（不冻结的档用它没问题，
+    全仓还有一批），而是**冻了就不许再绕过入口**——判据必须与被判对象同源，
+    走 `conftest.business_today()`（它已接到 `app.clock.today` 上）。
+    """
+    offenders = []
+    for path in _py_files(TESTS):
+        src = path.read_text(encoding="utf-8")
+        if "freeze_business_date" not in src:
+            continue
+        tree = ast.parse(src)
+        aliases = _alias_map(tree)
+        for node in ast.walk(tree):
+            if _dotted_clock(node, aliases) == "date.today":
+                offenders.append(f"{_rel(path)}:{node.lineno}")
+    assert offenders == [], (
+        "这些用例档冻住了业务日期，却还在裸调 date.today()——判据与被判对象会取自"
+        "两把不同的尺子。请改用 conftest.business_today()：\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_自证_确实有档在用冻结():
+    """防空转：上一条的分母是"用了 freeze_business_date 的档"。
+
+    一个档都没有的话，那条规则恒为真——绿得毫无意义。
+    """
+    users = [
+        _rel(p) for p in _py_files(TESTS)
+        if "freeze_business_date(" in p.read_text(encoding="utf-8")
+        and p.name not in ("conftest.py", "test_clock.py")
+    ]
+    assert len(users) >= 4, f"在用冻结的档只有 {users}，规则的分母可能空了"
+
+
 # ---------------------------------------------------------------- §3 取值时刻
 
 
@@ -359,25 +408,41 @@ def test_取值时刻判据的边界(src, expected):
 
 
 def test_conftest_的三个取时间_helper_都是现取():
-    """它们必须是**函数**，每次调用都重问时钟——否则换了个名字的快照而已。"""
+    """它们必须是**函数**，每次调用都重问时钟——否则只是换了个名字的快照。
+
+    `business_today()` 现在走 `app.clock.today`（P1-53 之后的唯一入口），
+    所以这里用 `freeze_business_date()` 来证明"现取"：冻住之后取到的是冻住的值，
+    离开之后又回到真实时钟。**这同时也证明了判据与被判对象走的是同一个入口**——
+    如果 conftest 还自己去问 `date.today()`，冻住服务端会让两边对不上，比不冻更糟。
+    """
+    import datetime as _dt
+
+    before = business_today()
+    frozen = before + _dt.timedelta(days=1)
+    with freeze_business_date(frozen):
+        assert business_today() == frozen
+        assert business_today_str() == frozen.isoformat()
+    assert business_today() == before
+
+
+def test_utc_那个_helper_也是现取():
+    """UTC 那一支不在冻结范围内（只冻日期不冻时间戳），所以单独用打桩证明现取。"""
     import datetime as _dt
 
     import conftest
 
-    class _Tomorrow(_dt.date):
+    class _Tomorrow(_dt.datetime):
         @classmethod
-        def today(cls):
-            return _dt.date.today() + _dt.timedelta(days=1)
+        def now(cls, tz=None):
+            return _dt.datetime.now(tz) + _dt.timedelta(days=1)
 
-    before = business_today()
-    original = conftest.date
+    expected = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+    original = conftest.datetime
     try:
-        conftest.date = _Tomorrow
-        assert business_today() == before + _dt.timedelta(days=1)
-        assert business_today_str() == (before + _dt.timedelta(days=1)).isoformat()
+        conftest.datetime = _Tomorrow
+        assert utc_today_str() == expected
     finally:
-        conftest.date = original
-    assert business_today() == before
+        conftest.datetime = original
 
 
 def test_两个今天各自对应服务端的哪一把尺子():

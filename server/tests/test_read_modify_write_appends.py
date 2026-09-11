@@ -21,8 +21,16 @@ from pathlib import Path
 
 import pytest
 
-from conftest import business_today_str, login
+from conftest import business_today, business_today_str, freeze_business_date, login
 from test_stage14_concurrency import KNOWN_READ_MODIFY_WRITE
+
+#: 把这一档的"今天"钉死——判据与被判对象走同一个入口（P1-53 收敛后的
+#: `clock.today()`），冻住它，真实时钟怎么走都不影响。选 6 月 15 号避开月末与闰日。
+@pytest.fixture(scope="module", autouse=True)
+def _frozen_today():
+    with freeze_business_date(date(2026, 6, 15)):
+        yield
+
 
 APP = Path(__file__).resolve().parents[1] / "app"
 
@@ -237,7 +245,7 @@ def test_复诊计划两次办理_两条日志都在(client, admin, world):
     patient = _patient(client, admin, "复诊患者", "330281199404041065", gender="男")
     revisit = client.post(
         "/api/spd/revisits",
-        json={"patient_id": patient["id"], "plan_date": (date.today() + timedelta(days=7)).isoformat(),
+        json={"patient_id": patient["id"], "plan_date": (business_today() + timedelta(days=7)).isoformat(),
               "items": "复查血压", "source": "manual"},
         headers=admin,
     )
@@ -246,7 +254,7 @@ def test_复诊计划两次办理_两条日志都在(client, admin, world):
 
     changed = client.patch(
         f"/api/spd/revisits/{rid}",
-        json={"plan_date": (date.today() + timedelta(days=14)).isoformat(), "note": "患者外出，改期一周"},
+        json={"plan_date": (business_today() + timedelta(days=14)).isoformat(), "note": "患者外出，改期一周"},
         headers=admin,
     )
     assert changed.status_code == 200, changed.text
@@ -416,3 +424,12 @@ def test_八处不得再回到欠账清单():
     }
     assert not cleared & set(KNOWN_READ_MODIFY_WRITE), cleared & set(KNOWN_READ_MODIFY_WRITE)
     assert KNOWN_READ_MODIFY_WRITE["spd/followup.py:record_call_result"][0] <= 2
+
+
+def test_本档的今天确实被冻住了():
+    """防空转：冻结若失效，本档每一条**也照样绿**——判据与服务端都走真实时钟、
+    彼此一致，只是又回到"别跨午夜"那个前提上。所以必须单独钉一条正面断言。
+
+    这条红，说明 autouse 夹具没生效、或夹具顺序让播种落在了冻结之外。
+    """
+    assert business_today() == date(2026, 6, 15)
