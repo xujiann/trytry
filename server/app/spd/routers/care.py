@@ -921,12 +921,22 @@ class InterventionUpdate(BaseModel):
 @router.patch("/interventions/{intervention_id}", response_model=InterventionOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def update_intervention(
-    intervention_id: int, body: InterventionUpdate, db: Session = Depends(get_db)
+    intervention_id: int, body: InterventionUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """办理 / 移除 / 恢复干预任务，并可记录患者反馈。"""
+    """办理 / 移除 / 恢复干预任务，并可记录患者反馈。
+
+    归属隔着一跳：`spd_interventions` 没有机构列，经 `enrollment_id` 回到
+    `spd_enrollments.org_id` 才判得了。口径照抄同文件 `update_case_report`
+    （`assert_org_writable(db, user, report.org_id)`）。
+    `enrollment_id` 可空——沿用 `assert_org_writable` 的既定语义：
+    没有归属的记录不在此列，由各接口自己定语义。
+    """
     record = db.get(SpdIntervention, intervention_id)
     if record is None:
         raise HTTPException(status_code=404, detail="干预记录不存在")
+    enrollment = db.get(SpdEnrollment, record.enrollment_id) if record.enrollment_id else None
+    assert_org_writable(db, user, enrollment.org_id if enrollment else None)
     for key, value in body.model_dump(exclude_unset=True).items():
         if key == "feedback" and not value:
             continue

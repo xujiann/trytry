@@ -378,12 +378,21 @@ class InstanceAdjustIn(BaseModel):
 @router.patch("/path-instances/{instance_id}", response_model=PathInstanceOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def adjust_path_instance(
-    instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db)
+    instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """个性化调整：改的是**实例**不是模板（服务团队专家端 #2）。"""
+    """个性化调整：改的是**实例**不是模板（服务团队专家端 #2）。
+
+    ⚠️ 这一条曾被记成"修不了：`SpdPathInstance` 没有机构列"。没有机构列是真的，
+    "所以校验不了"是错的——`enrollment_id` 指向 `spd_enrollments`，那张表有 `org_id`。
+    **一张表没有机构列，不等于这个对象没有归属。**
+    归属校验排在状态机之前：先 403，免得用"已完成的路径不可调整"探别家档案的状态。
+    """
     instance = db.get(SpdPathInstance, instance_id)
     if instance is None:
         raise HTTPException(status_code=404, detail="路径实例不存在")
+    enrollment = db.get(SpdEnrollment, instance.enrollment_id)
+    assert_org_writable(db, user, enrollment.org_id if enrollment else None)
     if instance.status == "completed":
         raise HTTPException(status_code=409, detail="已完成的路径不可调整")
     data = body.model_dump(exclude_unset=True)

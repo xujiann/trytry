@@ -1550,10 +1550,20 @@ def bind_package(
 
 @router.post("/package-bindings/{binding_id}/unbind", response_model=PackageBindingOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def unbind_package(binding_id: int, db: Session = Depends(get_db)):
+def unbind_package(
+    binding_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """解绑服务包。
+
+    归属隔着一跳：`spd_package_bindings` 没有机构列，经 `enrollment_id` 回到
+    `spd_enrollments.org_id`。口径照抄同文件既有的 `assert_org_writable`（15 处）。
+    """
     binding = db.get(SpdPackageBinding, binding_id)
     if binding is None:
         raise HTTPException(status_code=404, detail="服务包绑定不存在")
+    enrollment = db.get(SpdEnrollment, binding.enrollment_id)
+    assert_org_writable(db, user, enrollment.org_id if enrollment else None)
     binding.status = "unbound"
     binding.unbound_at = now_naive()
     db.commit()
@@ -1575,10 +1585,15 @@ def add_usage(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """服务项目扣减登记。剩余次数不足时拒绝，不允许扣成负数。"""
+    """服务项目扣减登记。剩余次数不足时拒绝，不允许扣成负数。
+
+    归属校验排在状态机之前：先 403，免得用"该服务包已解绑"把别家档案的状态探出去。
+    """
     binding = db.get(SpdPackageBinding, binding_id)
     if binding is None:
         raise HTTPException(status_code=404, detail="服务包绑定不存在")
+    enrollment = db.get(SpdEnrollment, binding.enrollment_id)
+    assert_org_writable(db, user, enrollment.org_id if enrollment else None)
     if binding.status != "bound":
         raise HTTPException(status_code=409, detail="该服务包已解绑，不能扣减")
     # 深拷贝再改：JSON 列没开 MutableList，就地改内层 dict 时 SQLAlchemy 比对

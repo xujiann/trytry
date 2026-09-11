@@ -677,7 +677,6 @@ NEWLY_VISIBLE_UNGUARDED_WRITES = {
     "disease_programs.py:exit_enrollment",
     "disease_programs.py:record_node",
     "disease_programs.py:update_program",
-    "spd/tasks.py:adjust_path_instance",
 }
 
 #: 同上，读侧。
@@ -849,18 +848,20 @@ def test_领域守卫登记制不许悄悄长大():
 #: 按 `created_by.org_id` 判归属，等于说一份记录属于当初录入者所在的机构，
 #: 人一调动、代录一次就全错。排除之后是 14 个，都是指向**领域父对象**的外键。
 #:
+#: ✅ **已减 4 条**：`update_intervention` / `add_usage` / `unbind_package` /
+#: `adjust_path_instance` 已修（2026-09-11）。实测乙院 doctor 能办结甲院的干预任务、
+#: 扣甲院服务包的次数、把它解绑、取消甲院的临床路径实例，各 200/201。
+#: 三个文件里 `assert_org_writable` 分别已用了 2 / 15 / 5 处——又是同一个文件两套口径。
+#: 见 `tests/test_spd_enrollment_org_guard.py`。
+#:
 #: 这条判据同样只是**逼近**：两跳可达的看不见，非外键的业务归属（例如靠
 #: `org_code` 字符串关联）也看不见。写在这里是为了下一个人知道它不看什么。
 ONEHOP_UNGUARDED_WRITES = {
     "appointments.py:cancel",
     "appointments.py:fulfill",
-    "spd/care.py:update_intervention",
     "spd/config/teams.py:remove_team_member",
     "spd/config/teams.py:update_team_member",
     "spd/followup.py:record_qc_result",
-    "spd/population.py:add_usage",
-    "spd/population.py:unbind_package",
-    "spd/tasks.py:adjust_path_instance",
 }
 
 
