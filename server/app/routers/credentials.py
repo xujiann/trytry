@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..concurrency import insert_or_conflict
 from ..security import signing_key, verification_keys
-from ..visibility import scope_patient_list
+from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import Patient, User, VisitCredential, utcnow
@@ -195,27 +195,45 @@ def lookup(credential_no: str, db: Session = Depends(get_db)):
     "/{credential_id}/recycle", response_model=CredentialOut,
     dependencies=[Depends(require_roles("operator"))],
 )
-def recycle(credential_id: int, body: CredentialClose, db: Session = Depends(get_db)):
+def recycle(
+    credential_id: int, body: CredentialClose, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """回收：患者主动交回实体卡。与作废分开记——回收是正常结束，作废是异常终止，
     统计报损率时必须区分。"""
-    return _close(db, credential_id, "recycled", body.reason or "患者交回")
+    return _close(db, credential_id, "recycled", body.reason or "患者交回", user)
 
 
 @router.post(
     "/{credential_id}/void", response_model=CredentialOut,
     dependencies=[Depends(require_roles("operator", "doctor"))],
 )
-def void(credential_id: int, body: CredentialClose, db: Session = Depends(get_db)):
+def void(
+    credential_id: int, body: CredentialClose, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """作废：挂失、损坏、盗用嫌疑。作废后该凭据立即不可用于核验。"""
     if not body.reason:
         raise HTTPException(status_code=422, detail="作废须填写原因")
-    return _close(db, credential_id, "void", body.reason)
+    return _close(db, credential_id, "void", body.reason, user)
 
 
-def _close(db: Session, credential_id: int, status: str, reason: str) -> dict:
+def _close(db: Session, credential_id: int, status: str, reason: str, user: User) -> dict:
+    """回收 / 作废共用：取行 + 机构归属校验 + 状态机。
+
+    **互认是"认别家的卡"，不是"处置别家的卡"。** 本文件的读侧（`/lookup`、
+    `/resolve`）按设计跨机构——那是互认；而回收与作废是发卡机构对**自己那张卡**
+    的生命周期管理：作废之后该凭据立即不可用于核验，被别家机构作废掉，
+    等于让别人吊销了你发出去的证件。`issue_credential` 一直是按 `user.org_id`
+    发卡的，处置这一半却谁都能做。
+
+    归属判定排在状态机之前：先 403，免得用"凭据当前状态为已作废"把别家卡的
+    状态探出去。
+    """
     credential = db.get(VisitCredential, credential_id)
     if credential is None:
         raise HTTPException(status_code=404, detail="凭据不存在")
+    assert_org_writable(db, user, credential.org_id)
     if credential.status != "active":
         raise HTTPException(
             status_code=409, detail=f"凭据当前状态为{STATUS_NAMES.get(credential.status)}，不可再操作"

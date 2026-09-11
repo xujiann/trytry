@@ -481,6 +481,12 @@ BYID_CROSS_ORG_OK = {
     "spd/referral.py:review_referral",
     "spd/referral.py:arrive_referral",
     "spd/referral.py:down_referral",
+    # 专病目录配置：挂 require_admin（`user.role != "admin"` 即 403），而 admin 属
+    # GLOBAL_ROLES——`assert_org_writable` 对全域角色恒放行。给它加机构守卫是一句
+    # **永远不会触发**的代码：闸门变绿、行为一点没变。一句永不触发的守卫比没有守卫
+    # 更糟，它让闸门不再问这个端点，而问题（如果有）原封不动。
+    # 前提（角色仅限全域）由 test_credentials_disease_org_guard.py 钉住：角色一放宽就红。
+    "disease_programs.py:update_program",
 }
 
 
@@ -671,13 +677,7 @@ def test_批量按id写接口必须有机构守卫():
 #:   * `credentials.py:recycle/void` 与 `disease_programs.py` 三个 ——
 #:     互认按设计跨机构（本文件 `BYID_CROSS_ORG_OK` 里已有 `recognition` 口径的先例），
 #:     大概率是**写明理由的豁免**而不是补守卫，但要逐条取证再判。
-NEWLY_VISIBLE_UNGUARDED_WRITES = {
-    "credentials.py:recycle",
-    "credentials.py:void",
-    "disease_programs.py:exit_enrollment",
-    "disease_programs.py:record_node",
-    "disease_programs.py:update_program",
-}
+NEWLY_VISIBLE_UNGUARDED_WRITES: set[str] = set()
 
 #: 同上，读侧。
 NEWLY_VISIBLE_UNGUARDED_READS = {
