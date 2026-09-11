@@ -145,7 +145,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 
 | 编号 | 问题 | 位置 |
 |---|---|---|
-| P2-37 | **一个会写库的 GET**（2026-09-11 发现，**越权已修，方法未改**）：`GET /api/quality/records/{id}/qc`（`rescore_medical_record`）在处理函数里 `db.commit()` 回写评分快照。两个后果：①**写侧的几道静态闸门只扫 post/put/patch/delete**，它一直落在写侧判据之外；②浏览器/代理/客户端重试或预取都会静默触发一次重新评分。越权那一半已修（补 `assert_org_writable`，实测乙院 doctor 与 operator 原先都能把甲院病历的 qc_score 从 100 改成 43、qc_grade 从甲改成丙）；**方法改成 POST 属破坏性变更（§7），未做**——要同时改前端调用点并给过渡期，且会动已发布的接口契约 | `app/routers/quality.py:rescore_medical_record` |
+| P2-37 | **一个会写库的 GET**（2026-09-11 发现，**越权已修，方法未改**）：`GET /api/quality/records/{id}/qc`（`rescore_medical_record`）在处理函数里 `db.commit()` 回写评分快照。两个后果：①**写侧的几道静态闸门只扫 post/put/patch/delete**，它一直落在写侧判据之外；②浏览器/代理/客户端重试或预取都会静默触发一次重新评分。越权那一半已修（补 `assert_org_writable`，实测乙院 doctor 与 operator 原先都能把甲院病历的 qc_score 从 100 改成 43、qc_grade 从甲改成丙）；**方法改成 POST 属破坏性变更（§7），未做**——已写成 **ADR-0022** 交人裁定。顺带量清了范围：这类端点全仓有 **6 个**，其中 5 个是进页面顺手跑 `sweep_overdue`（有意为之且写了理由：只靠定时任务，演示环境没开调度就永远看不到超期），只有 `rescore_medical_record` 一个**不幂等于时间**（规则库一改，同一个 GET 会得到不同分数并回写）——ADR 里单独建议它先改。✅ **闸门那一半已落地**：写侧两道闸门的判据从「HTTP 方法是写」放宽到「会写库」（含 GET）；放宽当天 0 条新增，两臂实测证明新判据抓得到、旧判据漏得掉 | `app/routers/quality.py:rescore_medical_record` |
 
 
 ### 第十八轮（归属隔一跳）新登记

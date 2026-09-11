@@ -546,6 +546,26 @@ def _with_local_helpers(tree: ast.AST, fn: ast.AST) -> str:
     return "\n".join([astcode.code(fn)] + [astcode.code(funcs[n]) for n in sorted(collected)])
 
 
+def _is_write_endpoint(decorators: list[str], source: str) -> bool:
+    """这个端点会不会写库。
+
+    ⚠️ **`GET` 也可能写库**，别只看 HTTP 方法。2026-09-11 实测到的
+    `quality:rescore_medical_record` 就是个 `GET`——它在处理函数里 `db.commit()`
+    回写评分快照，于是**整族掉在写侧判据之外**：写侧几道闸门一直只扫
+    post/put/patch/delete。那个跨机构越权最后是靠读侧闸门（改成跟到底之后）
+    才现形的，而它本质上是一次**写**。
+
+    全仓目前有 6 个会写库的 GET（5 个是进页面顺手跑 `sweep_overdue`，
+    1 个是复评回写快照），逐条判定见 ADR-0022。
+
+    📌 **放宽当天找到 0 条新的**——补的不是今天的洞，是明天的：
+    再有人把写藏进 GET，写侧闸门这次看得见。
+    """
+    if any(m in d for d in decorators for m in (".post(", ".put(", ".patch(", ".delete(")):
+        return True
+    return any(".get(" in d for d in decorators) and ("db.commit()" in source or "db.add(" in source)
+
+
 def _byid_org_write_endpoints():
     """按 id 直取带 org_id 主对象的写接口。"""
     import sys
@@ -567,14 +587,14 @@ def _byid_org_write_endpoints():
         tree = ast.parse(open(path, encoding="utf-8").read())
         for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             decs = [ast.unparse(d) for d in fn.decorator_list]
-            if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
-                continue
             if not any("{" in d for d in decs):
                 continue
             # 剥 docstring 再匹配守卫名：散文里提一句 `assert_patient_visible`
             # 就能冒充守卫（2026-09-10 变异审计带对照组实测），而这是 §8 红线。
             # 共享实现与来龙去脉见 tests/astcode.py。
             u = _with_local_helpers(tree, fn)
+            if not _is_write_endpoint(decs, u):
+                continue
             if any(g in u for g in guards):
                 continue
             if any(f"db.get({m}," in u for m in direct):
@@ -929,11 +949,11 @@ def _onehop_unguarded_writes() -> set[str]:
         for fn in [n for n in ast.walk(tree)
                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             decs = [ast.unparse(d) for d in fn.decorator_list]
-            if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
-                continue
             if not any("{" in d for d in decs):
                 continue
             u = _with_local_helpers(tree, fn)
+            if not _is_write_endpoint(decs, u):
+                continue
             if any(g in u for g in guards):
                 continue
             if _has_domain_guard(name, tree, fn):

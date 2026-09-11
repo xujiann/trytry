@@ -50,3 +50,7 @@ migration cost / risk / recommendation**。
 | [0016](0016-审计落库移出事件循环.md) | 审计落库移出事件循环（await run_in_threadpool） | Accepted |
 | [0017](0017-运行时依赖锁定.md) | 运行时依赖锁定（requirements.lock 钉版快照） | Accepted |
 | [0018](0018-admissions补created_at列.md) | 冻结核心表 admissions 补 created_at（欠账收官） | Accepted |
+| [0019](0019-目标池分发补机构归属校验.md) | 慢专病目标池分发补机构归属校验 | **Proposed** |
+| [0020](0020-药品调拨补调出机构归属校验.md) | 药品余缺调拨补「调出机构」归属校验 | **Proposed** |
+| [0021](0021-病历质控写入补就诊机构归属校验.md) | 结构化病历写入补「就诊所属机构」归属校验 | **Proposed** |
+| [0022](0022-会写库的GET.md) | 会写库的 GET：是平台模式还是待改的欠账 | **Proposed** |
