@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, row_dict
@@ -145,7 +146,7 @@ def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, s
 
 def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
-    today = date.today().isoformat()
+    today = clock.today().isoformat()
     hits = []
     for row in db.query(model).limit(SCAN_LIMIT).all():
         value = getattr(row, field, None)

@@ -17,13 +17,14 @@ import json
 import logging
 import os
 import secrets
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from . import clock
 from .alerting import send_alert
 from .audit_chain import anchor_mac
 from .clock import now_naive
@@ -186,7 +187,7 @@ def pii_index_health_scan(db: Session) -> tuple[int, str]:
 @register("chronic_overdue_scan", "慢病随访超期扫描", 3600)
 def chronic_overdue_scan(db: Session) -> tuple[int, str]:
     """随访超期名单：口径与 GET /api/chronic/overdue 一致。"""
-    cutoff = date.today().isoformat()
+    cutoff = clock.today().isoformat()
     count = (
         db.query(ChronicPatient)
         .filter(ChronicPatient.next_due != "", ChronicPatient.next_due < cutoff)
@@ -199,7 +200,7 @@ def chronic_overdue_scan(db: Session) -> tuple[int, str]:
 @register("medwaste_overdue_scan", "医废滞留扫描", 3600)
 def medwaste_overdue_scan(db: Session) -> tuple[int, str]:
     """滞留预警：口径与 GET /api/medwaste/alerts 一致。"""
-    cutoff = (date.today() - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
+    cutoff = (clock.today() - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
     count = (
         db.query(MedicalWaste)
         .filter(MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= cutoff)
@@ -212,7 +213,7 @@ def medwaste_overdue_scan(db: Session) -> tuple[int, str]:
 @register("contract_expiry_scan", "聘用合同到期提醒", 86400)
 def contract_expiry_scan(db: Session) -> tuple[int, str]:
     """口径与 GET /api/mgmt/staff-contracts/expiring 一致（默认 60 天窗口）。"""
-    deadline = (date.today() + timedelta(days=CONTRACT_NOTICE_DAYS)).isoformat()
+    deadline = (clock.today() + timedelta(days=CONTRACT_NOTICE_DAYS)).isoformat()
     count = (
         db.query(StaffContract)
         .filter(StaffContract.status == "active", StaffContract.end_date <= deadline)
@@ -225,7 +226,7 @@ def contract_expiry_scan(db: Session) -> tuple[int, str]:
 @register("preparation_expiry_scan", "中药制剂效期提醒", 86400)
 def preparation_expiry_scan(db: Session) -> tuple[int, str]:
     """口径与 GET /api/tcm/preparation-batches/expiring 一致（默认 30 天窗口）。"""
-    cutoff = (date.today() + timedelta(days=PREPARATION_NOTICE_DAYS)).isoformat()
+    cutoff = (clock.today() + timedelta(days=PREPARATION_NOTICE_DAYS)).isoformat()
     count = (
         db.query(TcmPreparationBatch)
         .filter(
@@ -242,7 +243,7 @@ def preparation_expiry_scan(db: Session) -> tuple[int, str]:
 @register("followup_overdue_scan", "随访任务超期扫描", 3600)
 def followup_overdue_scan(db: Session) -> tuple[int, str]:
     """口径与 GET /api/followups/overdue 一致，覆盖慢病/出院/术后/妇幼四类。"""
-    cutoff = date.today().isoformat()
+    cutoff = clock.today().isoformat()
     count = (
         db.query(FollowupTask)
         .filter(FollowupTask.status == "pending", FollowupTask.due_date < cutoff)

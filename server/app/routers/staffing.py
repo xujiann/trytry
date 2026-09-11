@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..datetypes import DateStr, OptionalDateStr
 from ..visibility import assert_obj_org_writable
 from ..database import get_db
@@ -189,7 +190,7 @@ def create_secondment(body: SecondmentIn, db: Session = Depends(get_db)):
         employee.status = "seconded"
     db.commit()
     names = {o.id: o.name for o in db.query(Organization).all()}
-    return _out(row, employee, names, date.today())
+    return _out(row, employee, names, clock.today())
 
 
 @router.get("/secondments", response_model=list[SecondmentOut])
@@ -217,7 +218,7 @@ def list_secondments(
     rows = paginate(query.order_by(Secondment.id.desc()), response, offset, limit)
     employees = {e.id: e for e in db.query(Employee).all()}
     names = {o.id: o.name for o in db.query(Organization).all()}
-    today = date.today()
+    today = clock.today()
     return [_out(r, employees.get(r.employee_id), names, today) for r in rows]
 
 
@@ -235,7 +236,7 @@ def end_secondment(
     assert_obj_org_writable(db, user, row, org_attr="from_org_id")
     if row.end_date:
         raise HTTPException(status_code=409, detail="该派驻已结束")
-    finish = end_date or date.today().isoformat()
+    finish = end_date or clock.today().isoformat()
     if finish < row.start_date:
         raise HTTPException(status_code=422, detail="结束日期不得早于开始日期")
     row.end_date = finish
@@ -244,7 +245,7 @@ def end_secondment(
         employee.status = "active"
     db.commit()
     names = {o.id: o.name for o in db.query(Organization).all()}
-    return _out(row, employee, names, date.today())
+    return _out(row, employee, names, clock.today())
 
 
 @router.patch("/employees/{employee_id}/title-level", response_model=TitleLevelOut,
@@ -278,10 +279,10 @@ def dispatch_stats(
     - 只计 `title_level` 为中级及以上（未填等级的单独计数报出来，不默认算入）；
     - 派驻天数取落在统计年度内的部分，跨年派驻不重复计满。
     """
-    target_year = year or date.today().year
+    target_year = year or clock.today().year
     year_start = date(target_year, 1, 1)
     year_end = date(target_year, 12, 31)
-    today = date.today()
+    today = clock.today()
 
     # P1-2：这里原先把 Employee 与 Secondment 整表拉进内存再在 Python 里筛。
     # 数据量小的时候看不出来，但随年份累积会慢慢变差。改为 SQL 侧先筛：

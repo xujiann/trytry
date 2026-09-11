@@ -1,3 +1,4 @@
+import contextlib
 from datetime import date, datetime, timezone
 import faulthandler
 import os
@@ -89,6 +90,46 @@ def utc_today_str() -> str:
     已登记，未改——改它要动线上已出账的批次归属。）
     """
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+@contextlib.contextmanager
+def freeze_business_date(day: date):
+    """把**全平台**的业务日期冻在某一天。
+
+    ## 它为什么今天才做得到
+
+    `business_today()` 把「判据与被判对象取自两个时刻」的窗口从一小时缩到毫秒，
+    但没有归零——服务端仍然在请求发生时才取日期。真要归零，得让时间可冻，
+    而可冻的前提是**只有一个取日期的地方**。
+
+    2026-09-11（P1-53）把 `app/` 里 69 处 `date.today()` 全部收敛到 `clock.today()`，
+    并禁掉 `from …clock import today` 这种会**逃过冻结**的写法
+    （见 `test_clock.py`）。于是换掉 `app.clock.today` 这一个属性，
+    就覆盖了平台的全部业务日期取值。
+
+    ## 用它做什么
+
+    日期敏感的用例（效期预警、随访超期、服务周期）可以直接把"今天"钉死，
+    不必再依赖"发请求与断言之间不跨午夜"。
+
+        with freeze_business_date(date(2026, 3, 1)):
+            assert client.get(...).json()["today"] == "2026-03-01"
+
+    ## 它不冻什么（说清楚，别让它的绿灯值超过它该值的）
+
+    只冻业务**日期**（`clock.today` / `clock.today_str`），**不冻时间戳**
+    （`models.utcnow()` 落库的 `created_at`/`paid_at` 照旧走真实时钟）。
+    两者是平台里两把不同的尺子——冻错了会让"对账日切在 UTC"那类问题
+    在测试里消失，而线上还在（见 conftest.utc_today_str 的说明与 P2-35）。
+    """
+    from app import clock
+
+    original = clock.today
+    clock.today = lambda: day          # today_str() 内部走全局查找，跟着一起冻住
+    try:
+        yield day
+    finally:
+        clock.today = original
 
 
 def login(client, username, password):

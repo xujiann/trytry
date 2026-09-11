@@ -26,6 +26,7 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
+from .. import clock
 from .. import events
 from ..concurrency import insert_if_absent
 from ..config import settings
@@ -76,7 +77,7 @@ def on_admission_discharged(db: Session, payload: dict) -> None:
     try:
         base = date.fromisoformat(payload.get("discharged_on") or "")
     except ValueError:
-        base = date.today()
+        base = clock.today()
     for offset in rule.points or []:
         db.add(
             SpdFollowupRecord(

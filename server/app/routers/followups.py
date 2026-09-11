@@ -6,12 +6,13 @@
 
 任务由业务动作自动派生（出院时、术中记录结案时），也可人工补建。
 """
-from datetime import date, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
@@ -61,7 +62,7 @@ def create_task(
         category=category,
         source_id=source_id,
         title=title,
-        due_date=(date.today() + timedelta(days=due_days)).isoformat(),
+        due_date=(clock.today() + timedelta(days=due_days)).isoformat(),
     )
     db.add(task)
     return task

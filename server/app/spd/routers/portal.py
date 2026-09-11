@@ -6,13 +6,14 @@
 居民端的每个接口都必须经 `accessible_patient` 解析"这次要看谁的档案"，
 包括为家人代管的那份。
 """
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ... import clock
 from ...clock import now_naive
 from ...concurrency import ensure_present, insert_if_absent, insert_or_conflict
 from ...database import get_db
@@ -171,7 +172,7 @@ def home(
             latest[metric] = {"value": row.value, "unit": row.unit, "level": row.level,
                               "measured_at": row.measured_at.isoformat()}
 
-    today = date.today().isoformat()
+    today = clock.today().isoformat()
     packages = []
     for enrollment in enrollments:
         for binding in (
@@ -957,7 +958,7 @@ def self_answer_followup(
     if not close_followup_record(db, record.id, "done", allowed_from=("planned", "overdue")):
         db.rollback()  # 先退掉写事务再抛，避免后续审计落库撞写锁
         raise HTTPException(status_code=409, detail="该随访已结束")
-    record.executed_at = date.today().isoformat()
+    record.executed_at = clock.today().isoformat()
     questionnaire = (
         db.query(SpdQuestionnaire)
         .filter(SpdQuestionnaire.code == record.questionnaire_code)
@@ -974,7 +975,7 @@ def self_answer_followup(
                     task_type="report", title=f"自助随访异常处置：{action or level}",
                     org_id=record.org_id, status="pending",
                     priority=3 if level == "high" else 2,
-                    due_date=(date.today() + timedelta(days=1)).isoformat(),
+                    due_date=(clock.today() + timedelta(days=1)).isoformat(),
                     source="followup",
                 )
             )

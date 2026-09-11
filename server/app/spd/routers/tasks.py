@@ -8,7 +8,7 @@
 三个旁支。所有动作接口都只在这条链上移动一格，没有"直接置为任意状态"的口子——
 有那个口子，前端一定会用它来绕过审核。
 """
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -17,6 +17,7 @@ from sqlalchemy import func, or_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from ... import clock
 from ...clock import now_naive
 from ...concurrency import add_amount
 from ...database import get_db
@@ -961,10 +962,10 @@ def _finish_task(db: Session, task: SpdTask, user: User) -> dict:
     if task.task_type == "followup" and task.enrollment_id is not None:
         enrollment = db.get(SpdEnrollment, task.enrollment_id)
         if enrollment is not None:
-            enrollment.last_followup_at = date.today().isoformat()
+            enrollment.last_followup_at = clock.today().isoformat()
             interval = _followup_interval(db, enrollment)
             enrollment.next_followup_at = (
-                date.today() + timedelta(days=interval)
+                clock.today() + timedelta(days=interval)
             ).isoformat()
             award_points(
                 db, enrollment.village_doctor_id, "followup",

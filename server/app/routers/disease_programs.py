@@ -7,7 +7,6 @@
 路径节点由目录配置（`path_nodes` JSON），**不预置任何具体病种**——
 各地专病中心管什么病、分几步，差异极大，预置只会被删掉重配。
 """
-from datetime import date
 
 from typing import Any
 
@@ -16,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import insert_or_conflict
 from ..datetypes import OptionalDateStr
 from ..visibility import assert_org_writable, scope_patient_list
@@ -250,7 +250,7 @@ def enroll(
         program_id=program_id,
         patient_id=body.patient_id,
         org_id=body.org_id,
-        enrolled_at=body.enrolled_at or date.today().isoformat(),
+        enrolled_at=body.enrolled_at or clock.today().isoformat(),
         created_by=user.id,
     )
     # 上面那句"已在管"判定是 check-then-act：并发下两路都查不到在管记录都会建组，
@@ -320,7 +320,7 @@ def record_node(
             enrollment_id=enrollment_id,
             created_by=user.id,
             **{**body.model_dump(),
-               "performed_at": body.performed_at or date.today().isoformat()},
+               "performed_at": body.performed_at or clock.today().isoformat()},
         )
     )
     db.commit()
@@ -351,7 +351,7 @@ def exit_enrollment(
     enrollment.outcome = body.outcome
     enrollment.outcome_note = body.outcome_note
     enrollment.exit_reason = body.exit_reason
-    enrollment.exited_at = date.today().isoformat()
+    enrollment.exited_at = clock.today().isoformat()
     db.commit()
     return _enrollment_out(enrollment, db)
 

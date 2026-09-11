@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from .. import clock
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
@@ -449,7 +450,7 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = 
     batch = insert_or_conflict(db, TcmPreparationBatch(
             **body.model_dump(exclude={"expire_date"}), expire_date=expire_date, created_by=user.id
         ), "批号已存在")
-    return _batch_out(batch, date.today().isoformat())
+    return _batch_out(batch, clock.today().isoformat())
 
 
 @router.get("/preparation-batches", response_model=list[TcmPreparationBatchOut])

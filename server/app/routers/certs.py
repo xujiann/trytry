@@ -1,11 +1,11 @@
 """法定医学证明（浙#7、㉔出生医学证明签发）：出生/死亡医学证明签发与出生缺陷儿登记。"""
-from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import insert_with_retry
 from ..visibility import assert_org_writable, log_patient_access, scope_patient_list
 from ..database import get_db
@@ -87,7 +87,7 @@ def issue_cert(
             .scalar()
             or 0
         ) + 1
-        cert_no = f"{_PREFIX[body.cert_type]}{date.today().year}{seq:06d}"
+        cert_no = f"{_PREFIX[body.cert_type]}{clock.today().year}{seq:06d}"
         return MedicalCert(cert_no=cert_no, created_by=user.id, **body.model_dump())
 
     cert = insert_with_retry(db, _build)

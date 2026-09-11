@@ -22,6 +22,7 @@ from typing import Callable
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from .. import clock
 from .models import (
     SpdCandidate,
     SpdEnrollment,
@@ -61,7 +62,7 @@ def compose_section(db: Session, section: dict, org_id: int | None, period: str)
 
 
 def default_period_label(period: str, today: date | None = None) -> str:
-    today = today or date.today()
+    today = today or clock.today()
     if period == "weekly":
         return f"{today.isocalendar().year}年第{today.isocalendar().week}周"
     if period == "monthly":
@@ -127,7 +128,7 @@ def _workload(db, section, org_id, period):
 
 
 def _followup_trend(db, section, org_id, period):
-    since = date.today() - timedelta(days=30)
+    since = clock.today() - timedelta(days=30)
     query = db.query(SpdFollowupRecord).filter(SpdFollowupRecord.planned_at >= since.isoformat())
     if org_id is not None:
         query = query.filter(SpdFollowupRecord.org_id == org_id)
@@ -282,7 +283,7 @@ def _indicator(db, section, org_id, period):
     # 这里的 period 是模板的频率关键字（daily/weekly/monthly），考核取数要的是
     # 具体周期值（2026-08 / 2026-Q3 / 2026）；段落可用 "period" 显式指定，
     # 否则按当月取——日报/周报看的也是本月累计口径
-    period_value = section.get("period") or date.today().strftime("%Y-%m")
+    period_value = section.get("period") or clock.today().strftime("%Y-%m")
     metrics = collect_metrics(db, indicator, "org", org_id, period_value)
     try:
         value = (

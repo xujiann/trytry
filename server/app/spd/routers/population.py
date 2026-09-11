@@ -19,6 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ... import clock
 from ...clock import now_naive
 from ...concurrency import ensure_present, insert_if_absent, serialized_on
 from ...config import settings
@@ -1117,7 +1118,7 @@ def lifecycle_event(
             SpdLifecycleEvent(
                 enrollment_id=enrollment_id, event="resume", reason=body.reason,
                 detail=body.detail, operator_id=user.id,
-                occurred_at=body.occurred_at or date.today().isoformat(),
+                occurred_at=body.occurred_at or clock.today().isoformat(),
             )
         )
         db.commit()
@@ -1131,7 +1132,7 @@ def lifecycle_event(
         enrollment_id=enrollment_id, event=body.event, reason=body.reason,
         detail=body.detail, target_org_id=body.target_org_id,
         confirmed=not cross_org, operator_id=user.id,
-        occurred_at=body.occurred_at or date.today().isoformat(),
+        occurred_at=body.occurred_at or clock.today().isoformat(),
     )
     db.add(event)
 
@@ -1191,7 +1192,7 @@ def confirm_migration(
         patient_id=enrollment.patient_id, program_code=enrollment.program_code,
         org_id=event.target_org_id, risk_level=enrollment.risk_level,
         stage=enrollment.stage, status="active", source="migrate",
-        migrated_from_id=enrollment.id, sign_date=date.today().isoformat(),
+        migrated_from_id=enrollment.id, sign_date=clock.today().isoformat(),
         consent_signed=enrollment.consent_signed, consent_no=enrollment.consent_no,
         habits=enrollment.habits, risk_factors=enrollment.risk_factors,
         complications=enrollment.complications, tags=enrollment.tags,
@@ -1287,7 +1288,7 @@ def update_recall(
         recall.result = body.result or recall.result
         if body.contact_note:
             recall.contacts = (recall.contacts or []) + [
-                {"at": date.today().isoformat(), "note": body.contact_note}
+                {"at": clock.today().isoformat(), "note": body.contact_note}
             ]
         if body.status in ("returned", "failed"):
             recall.closed_at = now_naive()

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..clock import now_naive
 from ..concurrency import claim_quota
 from ..datetypes import OptionalDateStr
@@ -77,7 +78,7 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
         raise HTTPException(status_code=404, detail="接种机构不存在")
     # 接种禁忌硬拦截：只拦生效中的，已解除与已过期的不再拦
     forbidden = _effective_contraindications(
-        db, body.patient_id, body.vaccine_code, body.vaccinated_date or date.today().isoformat()
+        db, body.patient_id, body.vaccine_code, body.vaccinated_date or clock.today().isoformat()
     )
     if forbidden:
         raise HTTPException(status_code=409, detail=f"存在接种禁忌：{forbidden[0].reason}")
@@ -91,7 +92,7 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
             raise HTTPException(status_code=404, detail="疫苗批次不存在")
         if batch.vaccine_code != body.vaccine_code:
             raise HTTPException(status_code=422, detail="批次与所填疫苗编码不一致")
-        today = body.vaccinated_date or date.today().isoformat()
+        today = body.vaccinated_date or clock.today().isoformat()
         if batch.expire_date < today:
             raise HTTPException(status_code=409, detail=f"该批次已于 {batch.expire_date} 过期")
         if batch.status == "frozen":
@@ -214,7 +215,7 @@ def add_contraindication(body: ContraCreate, db: Session = Depends(get_db)):
     db.add(contra)
     db.commit()
     db.refresh(contra)
-    return _contra_out(contra, date.today().isoformat())
+    return _contra_out(contra, clock.today().isoformat())
 
 
 @router.get("/contraindications", response_model=list[ContraindicationOut])
@@ -271,7 +272,7 @@ def lift_contraindication(
     contra.lifted_at = now_naive()
     db.commit()
     db.refresh(contra)
-    return _contra_out(contra, date.today().isoformat())
+    return _contra_out(contra, clock.today().isoformat())
 
 
 @router.get("/pre-check", response_model=PreVaccinationCheckOut)

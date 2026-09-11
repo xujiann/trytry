@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
+from . import clock
 from . import datetypes
 from .clock import now_naive
 from .config import settings
@@ -257,7 +258,7 @@ def period_bounds(period: str | None) -> tuple[str, date, date]:
     """
     if period is None:
         # 用 UTC 而不是本地日期：`created_at` 存的是 naive UTC
-        # （`models._base.utcnow`）。用 `date.today()` 会在 UTC+8 把每个周期
+        # （`models._base.utcnow`）。用 `clock.today()` 会在 UTC+8 把每个周期
         # 头 8 小时的记录算到上一期去。
         period = str(now_naive().year)
 
@@ -334,7 +335,7 @@ def resolve_business_date(today: str | None) -> date:
     生产对接方不应传入；格式非法返回 422，不再直接信任客户端字符串比较。
     """
     if today is None:
-        return date.today()
+        return clock.today()
     try:
         return date.fromisoformat(today)
     except ValueError:

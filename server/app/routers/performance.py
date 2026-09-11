@@ -7,7 +7,7 @@
 - 处方合格率（合理用药）
 - 家医签约履约量（签约服务）
 """
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..database import get_db
 from ..datetypes import DateStr
 from ..deps import (
@@ -513,7 +514,7 @@ def create_task(body: TaskCreate, db: Session = Depends(get_db), user: User = De
     db.add(task)
     db.commit()
     db.refresh(task)
-    return _task_out(task, date.today().isoformat())
+    return _task_out(task, clock.today().isoformat())
 
 
 @improvement_router.get("/improvements", response_model=list[ImprovementTaskOut])
@@ -574,7 +575,7 @@ def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db
         task.status = "in_progress"
     db.commit()
     db.refresh(task)
-    return _task_out(task, date.today().isoformat())
+    return _task_out(task, clock.today().isoformat())
 
 
 class TaskVerify(BaseModel):
@@ -609,7 +610,7 @@ def verify_task(
         task.completed_at = None
     db.commit()
     db.refresh(task)
-    return _task_out(task, date.today().isoformat())
+    return _task_out(task, clock.today().isoformat())
 
 
 @improvement_router.get("/improvement-stats", response_model=ImprovementStatsOut)

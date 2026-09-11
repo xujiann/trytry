@@ -169,19 +169,13 @@ def test_扫描面自证_clock_py_自己确实被数到():
 
 # ---------------------------------------------------------------- §2 来源棘轮
 
-#: `app/` 里直接调 `date.today()`（绕过 `clock.today()`）的处数，不含 clock.py 自身。
-#: **只减不增。**
+#: `app/` 里直接调 `date.today()`（绕过 `clock.today()`）的处数。**零基线。**
 #:
-#: 这不是今天的缺陷：`clock.today()` 的实现就是 `date.today()`，两者取值恒等。
-#: 它是**另一件事的前提**——想在测试里冻结时间（把 CI run 552 那种"判据与被判
-#: 对象差一天"的窗口真正归零），得先有一个能被冻住的唯一入口；只要还有 68 处
-#: 各自去问系统时钟，冻结就只能冻住其中一部分，比不冻更难排查。
-#: 逐步收敛是单独的任务（见 docs/TECH_DEBT.md），本闸门只保证它不再变大。
-#:
-#: 69 这个数里有 1 处是解了别名才数到的（`app/spd/jobs.py` 的
-#: `from datetime import date as _date`）。先按裸 `date.today()` 数出来的 68
-#: 是漏数，不是"当时只有 68 处"。
-DATE_TODAY_BASELINE = 69
+#: 2026-09-11 由 69 收敛到 0（P1-53）。收敛的动机不是"整齐"，是**能冻得住**：
+#: 想在测试里把业务日期钉死（把 CI 跨午夜那条窗口真正归零），
+#: 得先有一个能冻的入口；只要还有 69 处各自去问系统时钟，冻结就只能冻住其中一部分，
+#: 比不冻更难排查。
+DATE_TODAY_BASELINE = 0
 
 
 def test_app_内直接调_date_today_的处数只减不增():
@@ -193,6 +187,34 @@ def test_app_内直接调_date_today_的处数只减不增():
     assert len(hits) == DATE_TODAY_BASELINE, (
         f"欠账减少了（{DATE_TODAY_BASELINE} → {len(hits)}），"
         "请把 DATE_TODAY_BASELINE 一并改小——基线不跟着减，就不再表示还欠多少。"
+    )
+
+
+def test_app_内不得把_today_直接_import_进来():
+    """`from ..clock import today` 也要禁——它**逃得过冻结**。
+
+    `clock.today()` 是每次调用时在模块对象上取属性，所以把 `app.clock.today` 换掉
+    就能一次覆盖全部调用点；而 `from ..clock import today` 在 import 那一刻就把函数
+    **绑成了本模块的名字**，之后再换 `app.clock.today` 对它无效。
+
+    这不是理论：收敛前 `app/routers/surgery.py` 正是这么写的，
+    一个模块就足以让"冻住业务日期"变成"冻住了大部分"——
+    而**冻住了大部分比没冻更难排查**：你会以为时间是固定的。
+    """
+    offenders = []
+    for path in _py_files(APP):
+        rel = _rel(path)
+        if rel == CLOCK_SELF:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("clock"):
+                for alias in node.names:
+                    if alias.name in ("today", "today_str"):
+                        offenders.append(f"{rel}:{node.lineno} → from …clock import {alias.name}")
+    assert offenders == [], (
+        "这些地方把 today/today_str 直接 import 进来了，冻结覆盖不到；"
+        "请改成 `from … import clock` + `clock.today()`：\n  " + "\n  ".join(offenders)
     )
 
 

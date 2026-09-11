@@ -17,6 +17,7 @@ from sqlalchemy import update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..clock import now_naive
 from ..concurrency import add_amount
 from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of
@@ -51,7 +52,7 @@ def _age_of(birth_date: str) -> int | None:
         born = date.fromisoformat(birth_date)
     except (ValueError, TypeError):
         return None
-    today = date.today()
+    today = clock.today()
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
 
@@ -152,7 +153,7 @@ def spawn_task(
     找不到人也照样建任务，落成待接收（`pending`）而不是报错——
     "没人认领的任务"在中心端待办里看得见，"没建出来的任务"谁也看不见。
     """
-    due = date.today() + timedelta(days=max(due_days, 0))
+    due = clock.today() + timedelta(days=max(due_days, 0))
     task = SpdTask(
         program_code=program_code or (enrollment.program_code if enrollment else ""),
         patient_id=patient_id,
@@ -378,7 +379,7 @@ def award_points(
         db.add(account)
         db.flush()
     if rule.daily_limit:
-        today = date.today().isoformat()
+        today = clock.today().isoformat()
         earned_today = sum(
             r.points
             for r in db.query(SpdPointRecord)
@@ -463,7 +464,7 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
     )
     for revisit in revisits:
         revisit.status = "removed"
-        revisit.log = (revisit.log or []) + [{"at": date.today().isoformat(), "note": reason}]
+        revisit.log = (revisit.log or []) + [{"at": clock.today().isoformat(), "note": reason}]
         stats["revisits"] += 1
     return stats
 
@@ -482,7 +483,7 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
     随访的 `unreachable`（失访）**不会**被覆盖成 overdue：失访是执行过但没联系上，
     完成率的分母含它、分子不含；标成超期等于把"打过电话"抹掉了。
     """
-    today = today or date.today()
+    today = today or clock.today()
     cutoff = today.isoformat()
     pending = (
         db.query(SpdTask)

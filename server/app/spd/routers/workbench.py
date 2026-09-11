@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ... import clock
 from ...clock import now_naive
 from ...database import get_db
 from ...deps import get_current_user, require_roles, resolve_business_date, row_dict
@@ -80,7 +81,7 @@ def _enroll_stats(db: Session, orgs: list[int] | None, program_code: str = "") -
     if program_code:
         query = query.filter(SpdEnrollment.program_code == program_code)
     active = query.filter(SpdEnrollment.status == "active")
-    month_start = date.today().replace(day=1).isoformat()
+    month_start = clock.today().replace(day=1).isoformat()
     return {
         "enrolled": active.count(),
         "high_risk": active.filter(
@@ -109,7 +110,7 @@ def _task_stats(
     db: Session, orgs: list[int] | None, assignee_id: int | None = None,
     program_code: str = "", today: date | None = None,
 ) -> dict:
-    today = today or date.today()
+    today = today or clock.today()
     query = _apply_scope(db.query(SpdTask), SpdTask.org_id, orgs)
     if assignee_id is not None:
         query = query.filter(SpdTask.assignee_id == assignee_id)
@@ -132,7 +133,7 @@ def _task_stats(
 
 
 def _followup_stats(db: Session, orgs: list[int] | None, today: date | None = None) -> dict:
-    today = today or date.today()
+    today = today or clock.today()
     query = _apply_scope(db.query(SpdFollowupRecord), SpdFollowupRecord.org_id, orgs)
     total = query.count()
     done = query.filter(SpdFollowupRecord.status == "done").count()
@@ -867,7 +868,7 @@ def region_stats(
     }
     age_buckets = {"0-17": 0, "18-44": 0, "45-59": 0, "60-74": 0, "75+": 0, "未知": 0}
     gender = {"男": 0, "女": 0, "未知": 0}
-    today = date.today()
+    today = clock.today()
     for enrollment in enrollments:
         patient = patients.get(enrollment.patient_id)
         if patient is None:
@@ -1008,7 +1009,7 @@ def center_workbench(
     swept = sweep_overdue(db, business_day)
     db.commit()
     orgs = _scope(db, user, None, stats=False)
-    month_start = date.today().replace(day=1).isoformat()
+    month_start = clock.today().replace(day=1).isoformat()
 
     return {
         "todo": {
@@ -1119,7 +1120,7 @@ def team_workbench(
     if program_code:
         mine_query = mine_query.filter(SpdEnrollment.program_code == program_code)
 
-    month_start = date.today().replace(day=1).isoformat()
+    month_start = clock.today().replace(day=1).isoformat()
     my_patients = [e.patient_id for e in mine_query.limit(5000).all()]
 
     # 待评估 / 待入径都用一条 IN 查询取"已有的"，再在内存里做差集。

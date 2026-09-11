@@ -45,13 +45,13 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from datetime import date
 
 import sqlalchemy as sa
 from fastapi import HTTPException
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
+from . import clock
 from .clock import now_naive
 from .config import settings
 from .database import SessionLocal
@@ -401,7 +401,7 @@ def active_authorization_grants(
     （拿到任一有效授权即构成调阅依据），而校验接口回答的是"我要的这个范围
     在不在授权里"。这是两个不同的问题，不是同一个问题的两份答案。
     """
-    current = today or date.today().isoformat()
+    current = today or clock.today().isoformat()
     return (
         db.query(ArchiveAuthorization)
         .filter(

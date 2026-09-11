@@ -9,6 +9,7 @@ from sqlalchemy.engine import CursorResult
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import appended_text, insert_if_absent, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
@@ -45,7 +46,7 @@ def _age_of(birth_date: str, today: date | None = None) -> int | None:
         born = date.fromisoformat(birth_date)
     except (TypeError, ValueError):
         return None
-    ref = today or date.today()
+    ref = today or clock.today()
     return ref.year - born.year - ((ref.month, ref.day) < (born.month, born.day))
 
 

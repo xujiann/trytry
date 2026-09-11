@@ -3,7 +3,7 @@
 对应招标文件：成员端 #7/#12/#14/#15/#16、个案管理师端 #6/#9/#14、
 医生移动端 #8/#9/#12/#13、患者端 #4/#7/#10/#12。
 """
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ... import clock
 from ...clock import now_naive
 from ...concurrency import serialized_on
 from ...config import settings
@@ -648,7 +649,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
                         program_code=enrollment.program_code, template_id=template.id,
                         goal=f"{risk_level}风险自动干预", content=template.content,
                         measures=template.measures, frequency=template.frequency,
-                        next_at=(date.today() + timedelta(days=7)).isoformat(),
+                        next_at=(clock.today() + timedelta(days=7)).isoformat(),
                         owner_id=enrollment.doctor_user_id, status="planned",
                     )
                 )
@@ -666,7 +667,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
             db.add(
                 SpdRevisit(
                     patient_id=enrollment.patient_id, program_code=enrollment.program_code,
-                    plan_date=(date.today() + timedelta(days=14)).isoformat(),
+                    plan_date=(clock.today() + timedelta(days=14)).isoformat(),
                     doctor_user_id=enrollment.doctor_user_id, items="高危复诊评估",
                     source="high_risk", status="planned",
                 )
@@ -850,7 +851,7 @@ def create_interventions(
     if not content:
         raise HTTPException(status_code=422, detail="干预内容不能为空")
     next_at = body.next_at or (
-        date.today() + timedelta(days=template.cycle_days if template else 30)
+        clock.today() + timedelta(days=template.cycle_days if template else 30)
     ).isoformat()
 
     created = []
@@ -1228,7 +1229,7 @@ def update_revisit(revisit_id: int, body: RevisitUpdate, db: Session = Depends(g
         for key, value in data.items():
             setattr(record, key, value)
         record.log = (record.log or []) + [{
-            "at": date.today().isoformat(),
+            "at": clock.today().isoformat(),
             "note": note or f"状态变更为{record.status}",
         }]
         db.commit()

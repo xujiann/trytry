@@ -16,6 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ... import clock
 from ...clock import now_naive
 from ...concurrency import insert_if_absent, insert_or_conflict, serialized_on
 from ...database import get_db
@@ -550,7 +551,7 @@ def generate_followup_plan(
     rule = db.get(SpdFollowupRule, body.rule_id)
     if rule is None or not rule.active:
         raise HTTPException(status_code=404, detail="随访方案不存在或已停用")
-    base = date.fromisoformat(body.base_date) if body.base_date else date.today()
+    base = date.fromisoformat(body.base_date) if body.base_date else clock.today()
     created = []
     for offset in rule.points or []:
         record = SpdFollowupRecord(
@@ -647,7 +648,7 @@ def auto_match_plans(
         try:
             base = date.fromisoformat(base_date)
         except (ValueError, TypeError):
-            base = date.today()
+            base = clock.today()
         for offset in rule.points or []:
             db.add(
                 SpdFollowupRecord(
@@ -819,7 +820,7 @@ def execute_followup(
         raise HTTPException(status_code=409, detail="该随访已结束")
     record.channel = body.channel
     record.executor_id = user.id
-    record.executed_at = date.today().isoformat()
+    record.executed_at = clock.today().isoformat()
     record.result = body.result
     if body.evidence:
         record.evidence = body.evidence
@@ -865,7 +866,7 @@ def execute_followup(
                     task_type="report", title=f"随访异常处置：{action or level}",
                     org_id=record.org_id, status="pending",
                     priority=3 if level == "high" else 2,
-                    due_date=(date.today() + timedelta(days=1 if level == "high" else 3))
+                    due_date=(clock.today() + timedelta(days=1 if level == "high" else 3))
                     .isoformat(),
                     source="followup",
                 )
@@ -1142,7 +1143,7 @@ def plan_qc(
     else:
         step = max(int(1 / body.ratio), 1)
         picked = [r for index, r in enumerate(rows) if index % step == 0]
-    batch = body.batch or f"QC{date.today().strftime('%Y%m%d')}"
+    batch = body.batch or f"QC{clock.today().strftime('%Y%m%d')}"
     existing = {
         rid
         for (rid,) in db.query(SpdQcSample.record_id).filter(SpdQcSample.batch == batch).all()
@@ -1470,7 +1471,7 @@ def health_calendar(
 ):
     """患者健康日历（智能随访端 #12）：某天的随访、宣教与复诊安排。"""
     assert_patient_visible(db, user, patient_id, resource="spd_calendar")
-    target = day or date.today().isoformat()
+    target = day or clock.today().isoformat()
     followups = (
         db.query(SpdFollowupRecord)
         .filter(

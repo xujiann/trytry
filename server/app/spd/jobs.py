@@ -9,6 +9,7 @@
 """
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..scheduler import register
 from .platform import broadcast
 
@@ -51,7 +52,6 @@ def spd_report_push(db: Session) -> tuple[int, str]:
     调度五分钟醒一次，一天要醒近三百次，靠"这次生成过了没有"判重，
     不靠"现在是不是正好那一分钟"。
     """
-    from datetime import date as _date
 
     from ..clock import now_naive
     from .models import SpdReportInstance, SpdReportTask, SpdReportTemplate
@@ -59,7 +59,7 @@ def spd_report_push(db: Session) -> tuple[int, str]:
     from .reporting import compose_section, default_period_label
 
     now = now_naive()
-    today = _date.today().isoformat()
+    today = clock.today().isoformat()
     generated = 0
     tasks = (
         db.query(SpdReportTask)

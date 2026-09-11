@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..clock import today
+from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
@@ -464,7 +464,7 @@ def create_record(
             category="surgery",
             source_id=request.id,
             title=f"术后随访：{body.actual_surgery_name}",
-            due_date=(today() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
+            due_date=(clock.today() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
         )
     )
     notify_patient(

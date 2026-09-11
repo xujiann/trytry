@@ -27,6 +27,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ... import clock
 from ...clock import now_naive
 from ...concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ...database import get_db
@@ -1056,7 +1057,7 @@ def workload(
     统计口径固定为"已完成任务数按类型拆分 + 纳管数 + 转诊数"，与考核指标
     共用同一批表——工作量报表和考核得分对不上，是这类系统最常见的投诉。
     """
-    period = period or date.today().strftime("%Y-%m")
+    period = period or clock.today().strftime("%Y-%m")
     start, end = _period_range(period)
     task_query = db.query(SpdTask).filter(
         SpdTask.created_at >= f"{start} 00:00:00", SpdTask.created_at <= f"{end} 23:59:59"
@@ -1219,7 +1220,7 @@ def signin(db: Session = Depends(get_db), user: User = Depends(get_current_user)
         account = SpdPointAccount(user_id=user.id, org_id=user.org_id)
         db.add(account)
         db.flush()
-    today = date.today().isoformat()
+    today = clock.today().isoformat()
     db.add(SpdSignin(account_id=account.id, day=today, points=rule.points))
     # 原子累加而不是 `account.balance += n`：读-改-写在并发下丢更新，
     # 平台第八轮为这一类缺陷专门抽了 `concurrency.add_amount`，新代码直接用。

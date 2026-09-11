@@ -6,13 +6,14 @@
 """
 from typing import Any
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..database import get_db
 from ..deps import get_current_user, row_dict
 from ..models import (
@@ -183,7 +184,7 @@ def q_stock_alerts(db: Session):
 
 def q_chronic_overdue(db: Session):
     """随访到期日已过的在管慢病患者。"""
-    today = date.today().isoformat()
+    today = clock.today().isoformat()
     return db.query(ChronicPatient).filter(
         ChronicPatient.next_due != "", ChronicPatient.next_due < today
     )
@@ -191,7 +192,7 @@ def q_chronic_overdue(db: Session):
 
 def q_medwaste_overdue(db: Session):
     """超期未交接的医疗废物批次。"""
-    cutoff = (date.today() - timedelta(days=MEDWASTE_OVERDUE_DAYS)).isoformat()
+    cutoff = (clock.today() - timedelta(days=MEDWASTE_OVERDUE_DAYS)).isoformat()
     return db.query(MedicalWaste).filter(
         MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= cutoff
     )
@@ -199,7 +200,7 @@ def q_medwaste_overdue(db: Session):
 
 def q_infectious_recent(db: Session):
     """近 7 日发病的传染病个案报告。"""
-    window_start = (date.today() - timedelta(days=INFECTIOUS_WINDOW_DAYS)).isoformat()
+    window_start = (clock.today() - timedelta(days=INFECTIOUS_WINDOW_DAYS)).isoformat()
     return db.query(InfectiousCase).filter(InfectiousCase.onset_date >= window_start)
 
 
@@ -486,7 +487,7 @@ def monthly_trends(months: int = 6, db: Session = Depends(get_db)):
         return f"{dt.year:04d}-{dt.month:02d}"
 
     def last_months(n: int) -> list[str]:
-        today = date.today()
+        today = clock.today()
         keys = []
         year, month = today.year, today.month
         for _ in range(n):
