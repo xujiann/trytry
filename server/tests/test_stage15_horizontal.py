@@ -13,6 +13,7 @@
 2. 断言留痕：能看的每一次都记下依据，事后答得出"谁在什么时候凭什么看了谁"。
 """
 import ast
+import functools
 
 import astcode
 import os
@@ -722,6 +723,110 @@ def test_按id写接口机构归属欠账不许变长():
     )
 
 
+#: 【登记制】本模块自己的**领域守卫**——不是 `visibility` 的通用助手，
+#: 但确确实实在按归属拒绝。判据认得的形状是「看着 `user` 抛 403」。
+#:
+#: ## 为什么要有这张表
+#:
+#: `ONEHOP_UNGUARDED_WRITES` 第一版立了 14 条，**其中 5 条是误报**：
+#: `spd/referral.py` 五个端点早就有守卫，只是守卫不叫 `assert_org_writable`。
+#: 而且它们的口径**比通用守卫更对**——转诊本来就是跨机构的，
+#: 按 `enrollment.org_id` 判会把正常的下转全挡掉；正确的问题是"这张单现在谁拿着"
+#: （`current_org_id`）、"这张单谁发起的"（`initiator_id`）。
+#:
+#: 一份三成是误报的欠账清单，下一个人只会学会忽略它。
+#:
+#: ## 为什么是"登记制"而不是纯判据
+#:
+#: 纯按形状认（凡是 403 都算守卫）会把 `if user.role != "admin": raise 403` 这种
+#: **纯角色判定**也算成归属判定——角色对不代表这条记录归你。
+#: 所以：形状用来**发现**候选，能不能算数由人逐条读过再登记，理由写在值里。
+#: 同时 `test_领域守卫登记项不许腐烂` 会验证每条登记今天仍然是那个形状——
+#: 守卫被删掉时，登记项不会替它继续报绿。
+DOMAIN_ORG_GUARDS = {
+    "spd/referral.py:_assert_holds_case":
+        "只有本单当前持有机构可操作（ADR-0004，按 current_org_id）。转诊天然跨机构，"
+        "这比按 enrollment.org_id 判既更贴业务也更严。",
+    "spd/referral.py:_assert_review_authority":
+        "分级审核逐级上收（ADR-0005 三级链），与上同源。",
+    "spd/referral.py:withdraw_referral":
+        "端点内联：只有发起人本人可撤（initiator_id == user.id），个体级判定，"
+        "比机构级更严——本院别人也撤不了。",
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _sites_raising_403_on_user() -> frozenset[str]:
+    """全部「看着 `user` 抛 403」的端点与本模块 helper，键为 `文件:函数名`。
+
+    缓存不是过早优化：`_has_domain_guard` 对**每个端点**都要问一次，
+    不缓存就是"每个端点各把全部路由文件重解析一遍"，实测把这一档从 27 秒
+    拖到分钟级。闸门自己太慢，下一个人就会开始用 `-k` 跳过它。
+    """
+    out = set()
+    for name, path in _router_files():
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for fn in [n for n in ast.walk(tree)
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            src = astcode.code(fn)
+            if "status_code=403" in src and "user" in src:
+                out.add(f"{name}:{fn.name}")
+    return frozenset(out)
+
+
+def _has_domain_guard(file_name: str, tree: ast.AST, fn: ast.AST) -> bool:
+    """端点自身或它调用的本模块 helper 里，有没有**登记在册且今天仍然成立**的领域守卫。
+
+    ⚠️ "仍然成立"这半句是变异实测补上的：第一版只查名字在不在登记表里，于是
+    把 `_assert_holds_case` 的判定整条删掉之后，这条端点照样被算成"已守卫"——
+    **一张只认名字的白名单，会替一个已经不存在的守卫继续报绿。**
+    现在两边都要：人读过并登记过（`DOMAIN_ORG_GUARDS`），且形状今天还在
+    （`_sites_raising_403_on_user`）。
+    """
+    live = _sites_raising_403_on_user()
+    registered_and_live = set(DOMAIN_ORG_GUARDS) & live
+    if f"{file_name}:{fn.name}" in registered_and_live:
+        return True
+    funcs = {
+        n.name for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    called = {
+        n.func.id for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    return any(f"{file_name}:{c}" in registered_and_live for c in called & funcs)
+
+
+def test_领域守卫登记项不许腐烂():
+    """每条登记今天仍须是「看着 user 抛 403」的形状。
+
+    没有这条，删掉 `_assert_holds_case` 的守卫之后，登记项会替它继续报绿——
+    一张只进不出的白名单，和没有闸门是一回事。
+    """
+    live = _sites_raising_403_on_user()
+    stale = sorted(set(DOMAIN_ORG_GUARDS) - live)
+    assert stale == [], (
+        f"这些登记的领域守卫已不再按 user 拒绝（被删了？改了？），请复核后更新登记：{stale}"
+    )
+
+
+def test_领域守卫登记制不许悄悄长大():
+    """新出现的「403 on user」站点必须被人读过、写下理由，才能算守卫。
+
+    这里只打印、不拦——拦住会把所有正常的 403（角色判定、业务规则）都变成负担。
+    真正只减不增的是下面两张欠账清单：新站点若没登记，它守的端点就仍然算欠账。
+    """
+    live = _sites_raising_403_on_user()
+    summary = (
+        f"\n[领域守卫] 形状命中 {len(live)} 处，其中已登记为归属判定的 "
+        f"{len(DOMAIN_ORG_GUARDS)} 处；其余按「未守卫」计入欠账清单。"
+    )
+    print(summary)
+    warnings.warn(summary, UserWarning, stacklevel=2)
+    assert len(live) >= len(DOMAIN_ORG_GUARDS), "扫描面异常，判据可能在空转"
+
+
 #: 【欠账，只减不增】主对象**本表没有机构列、但归属隔着一跳外键就能拿到**，
 #: 却没有任何机构守卫的写端点。
 #:
@@ -755,11 +860,6 @@ ONEHOP_UNGUARDED_WRITES = {
     "spd/followup.py:record_qc_result",
     "spd/population.py:add_usage",
     "spd/population.py:unbind_package",
-    "spd/referral.py:arrive_referral",
-    "spd/referral.py:down_referral",
-    "spd/referral.py:receive_followup",
-    "spd/referral.py:review_referral",
-    "spd/referral.py:withdraw_referral",
     "spd/tasks.py:adjust_path_instance",
 }
 
@@ -808,9 +908,13 @@ def _onehop_unguarded_writes() -> set[str]:
             u = _with_local_helpers(tree, fn)
             if any(g in u for g in guards):
                 continue
+            if _has_domain_guard(name, tree, fn):
+                continue   # 本模块自己的归属判定，逐条登记过（见 DOMAIN_ORG_GUARDS）
             if any(f"db.get({m}," in u for m in onehop):
                 unguarded.add(f"{name}:{fn.name}")
-    return unguarded
+    # 已裁定"按设计跨机构"的那批不该在这张欠账表里重列一遍——同一个决定
+    # 在两处各记一次，迟早只改其中一处。
+    return unguarded - BYID_CROSS_ORG_OK
 
 
 def test_归属隔一跳的无守卫写端点只减不增():
@@ -828,6 +932,20 @@ def test_归属隔一跳的无守卫写端点只减不增():
     assert stale == [], (
         f"这些已加守卫或已不存在，请从清单删除（欠账只减不增，修完就要减）：{stale}"
     )
+
+
+def test_已裁定跨机构的端点不在一跳欠账清单里():
+    """同一个决定不该在两张表里各记一次——记两处，迟早只改其中一处。
+
+    📌 说明这条为什么用直接断言而不是变异验证：`_onehop_unguarded_writes()` 末尾
+    那句 `- BYID_CROSS_ORG_OK` **今天是冗余的**（该表每一条都另有已登记的领域守卫，
+    拿掉它清单也不变），变异证不出来。冗余不等于可删：它防的是将来某条
+    "按设计跨机构"的端点没有本模块守卫时，又被这张表重列一遍。
+    所以改成直接钉住这条不变式本身。
+    """
+    overlap = sorted(BYID_CROSS_ORG_OK & ONEHOP_UNGUARDED_WRITES)
+    assert overlap == [], f"这些已裁定为按设计跨机构，不该同时登记成欠账：{overlap}"
+    assert not (_onehop_unguarded_writes() & BYID_CROSS_ORG_OK)
 
 
 def test_判据自证_里程碑那一族确实已被守住():
