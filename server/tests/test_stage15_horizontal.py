@@ -645,9 +645,22 @@ def test_批量按id写接口必须有机构守卫():
 #: 同一份文书上"开具"校验机构、"签署/拒签"不校验，本身就是缺陷。
 #: 见 `tests/test_consent_org_guard.py`。
 #:
-#: 余下 17 条以任务流转（`spd/tasks.py` 七个）与配置维护（projects/resources）、
-#: 互认（credentials）为主，该用机构守卫还是患者可见性要逐条判——
-#: 任务队列与档案调阅不是同一件事。
+#: ✅ **再减 6 条**：`spd/tasks.py` 的 claim / urge / escalate / submit / review /
+#: complete 已修（2026-09-11，P0-12）。实测乙院 doctor 对甲院任务全部 200。
+#: 📌 **最该记的一点**：同文件的 `batch_tasks` 早就修过这个形状（P1-47），
+#: 它的注释白纸黑字写着「同文件的单条接口一直是校验的（见 `claim_task`）」——
+#: **而 `claim_task` 恰恰是没校验的那个**。批量版照着单条版修，可单条版本身就没有；
+#: 注释这么写了之后就再没人回头核过。见 `tests/test_spd_task_org_guard.py`。
+#:
+#: 余下 11 条：
+#:   * `spd/tasks.py:adjust_path_instance` —— **不是不想修，是修不了**：
+#:     `SpdPathInstance` **没有机构列**（AST 查过），`assert_org_writable` 无从下手。
+#:     这正是 P1-48 登记的那一条，属"归属未定义"，要先裁定补不补 `org_id` 列。
+#:   * `projects.py` / `resources.py` 五个配置维护 —— 先确认这些对象有没有机构归属，
+#:     没有就与上面同属 P1-35/48 那一类，登记而非硬修。
+#:   * `credentials.py:recycle/void` 与 `disease_programs.py` 三个 ——
+#:     互认按设计跨机构（本文件 `BYID_CROSS_ORG_OK` 里已有 `recognition` 口径的先例），
+#:     大概率是**写明理由的豁免**而不是补守卫，但要逐条取证再判。
 NEWLY_VISIBLE_UNGUARDED_WRITES = {
     "credentials.py:recycle",
     "credentials.py:void",
@@ -660,12 +673,6 @@ NEWLY_VISIBLE_UNGUARDED_WRITES = {
     "resources.py:update_resource",
     "resources.py:withdraw_resource",
     "spd/tasks.py:adjust_path_instance",
-    "spd/tasks.py:claim_task",
-    "spd/tasks.py:complete_task",
-    "spd/tasks.py:escalate_task",
-    "spd/tasks.py:review_task",
-    "spd/tasks.py:submit_task",
-    "spd/tasks.py:urge_task",
 }
 
 #: 同上，读侧。

@@ -675,10 +675,38 @@ def get_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(g
     return _task_out(task, {"name": patient.name, "phone": patient.phone} if patient else None)
 
 
-def _load_task(db: Session, task_id: int) -> SpdTask:
+def _load_task(db: Session, task_id: int, user: User) -> SpdTask:
+    """取任务，并**在同一次调用里**校验机构归属。
+
+    ⚠️ 这里原先只有"取行 + 404"，七个流转端点因此一律不校验归属。
+    2026-09-11 实测取证（乙院 doctor，任务属甲院）：
+
+        POST /api/spd/tasks/{id}/claim     → 200
+        POST /api/spd/tasks/{id}/urge      → 200
+        POST /api/spd/tasks/{id}/escalate  → 200
+        POST /api/spd/tasks/{id}/submit    → 200
+        POST /api/spd/tasks/{id}/complete  → 200
+
+    📌 **最该记的一点**：同文件的 `batch_tasks` 早就修过这个形状（P1-47），
+    它的注释白纸黑字写着——
+
+        「同文件的单条接口一直是校验的（见 `claim_task`）」
+
+    **而 `claim_task` 恰恰是没校验的那个。** 批量版照着单条版修，可单条版本身
+    就没有；注释断言的与代码相反，从此再没人回头核过。同文件真正有守卫的是
+    `assign_task` 与 `advance_instance` 两个。
+
+    **闸门为什么没报**：横向越权闸门只看端点自身函数体里的 `db.get(…)`，
+    取行在本 helper 里——与 `clinical_docs` / `outpatient_docs` 同一个盲区。
+
+    `org_id` 为 None 的任务不拦（`assert_org_writable` 的既定语义：
+    "org_id 为 None 的记录不在此列，由各接口自己定语义"）。
+    `director` 属全域角色，县级中心跨机构审核照常。
+    """
     task = db.get(SpdTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
+    assert_org_writable(db, user, task.org_id)
     return task
 
 
@@ -692,7 +720,7 @@ def claim_task(task_id: int, db: Session = Depends(get_db), user: User = Depends
     可双双 200、后提交者静默覆盖 assignee——恰是本 docstring 承诺要防的事
     （SQLite 全库写锁把窗口压得看不见，真 PG 上窗口是真的）。
     """
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     won = cast(CursorResult, db.execute(
         update(SpdTask)
         .where(
@@ -727,8 +755,7 @@ def assign_task(
     user: User = Depends(get_current_user),
 ):
     """分配/转派任务。转派保留 `transferred_from`，方便追"这活是从谁那儿转来的"。"""
-    task = _load_task(db, task_id)
-    assert_org_writable(db, user, task.org_id)
+    task = _load_task(db, task_id, user)   # 机构校验已在 _load_task 里做
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="已结束的任务不可再分配")
     if db.get(User, body.assignee_id) is None:
@@ -746,13 +773,17 @@ def assign_task(
 
 @router.post("/tasks/{task_id}/urge", response_model=TaskOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def urge_task(task_id: int, db: Session = Depends(get_db)):
+def urge_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """催办：计数 +1 并给责任人发站内消息。催办不改状态——催过还是待办。
 
     走适配层的 `notify_user` 而不是平台的 `notify.notify_staff`：后者按机构+角色
     群发，发不到**具体某个人**（任务的责任人）。
     """
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需催办")
     # 催办计数走原子 UPDATE：两个人同时点催办，读-改-写只会记成一次
@@ -771,9 +802,13 @@ def urge_task(task_id: int, db: Session = Depends(get_db)):
 
 @router.post("/tasks/{task_id}/escalate", response_model=TaskOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def escalate_task(task_id: int, db: Session = Depends(get_db)):
+def escalate_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """超时升级：置紧急并标记升级，由上级机构接手督办。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需升级")
     task.escalated = True
@@ -801,7 +836,7 @@ def submit_task(
     `require_evidence` 的任务没传佐证材料时拒绝提交——这是节点配置里
     勾选过的硬要求，提交时不校验等于配置形同虚设。
     """
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
     task.result = body.result
@@ -837,7 +872,7 @@ def review_task(
     user: User = Depends(get_current_user),
 ):
     """审核任务：通过即完成并推进路径，退回则回到办理中。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status != "submitted":
         raise HTTPException(status_code=409, detail="只有待审核的任务可以审核")
     task.reviewer_id = user.id
@@ -857,7 +892,7 @@ def complete_task(
     user: User = Depends(get_current_user),
 ):
     """直接办结（不走审核的任务类型）。表单与佐证要求同 submit。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
     if body.result:
