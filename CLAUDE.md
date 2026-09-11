@@ -10,7 +10,12 @@
 ## 0. 项目速览
 
 - **单进程 FastAPI 单体**：县域医共体信息化平台（medplat）+ 全域慢专病全流程管理子系统（`app/spd`）。
-- 规模：258 张表 / 945 个 HTTP 端点 / 92 个路由文件 / 86 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
+- 规模（2026-09-11 实测）：259 张表 / 946 个 HTTP 端点 / 93 个路由文件 / 89 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
+  口径写明白，免得再各数各的：**表**取 `Base.metadata.tables`；**端点**取 `app.openapi()` 里
+  GET/POST/PUT/PATCH/DELETE 的操作数（730 条路径）；**路由文件**取 `app/routers/` 与
+  `app/spd/routers/` 两棵树下的 `.py`、不含 `__init__.py`（连 `__init__` 共 96 个，其中真正
+  `APIRouter(` 的 87 个——子包拆分后有文件只挂节点不建 router）；**迁移**取
+  `alembic/versions/*.py`。重数一遍见 `docs/系统功能清单.md` 文末的脚本。
 - 入口：`server/app/main.py`（`app.main:app`）。配置：`server/app/config.py`（`MEDPLAT_*` 环境变量）。
 - 开发库 SQLite，生产库 PostgreSQL 16，Redis 可选。
 

@@ -7,17 +7,23 @@
 
 ## P0 — 立即处理（安全 / 部署 / 数据正确性）
 
-| # | 问题 | 位置 | 影响 |
+> **状态核对：2026-09-11 逐条对着代码核过**（不是照抄 ROADMAP 的勾——那也是文档）。
+> 九条里 **八条已修、一条仍开**。此前这张表只有 P0-5 标了已修，另外七条实际早已修复
+> 却一直挂着未修的样子——**一份过期的技术债表比没有更危险**：它会让人把已经堵上的洞
+> 当成还开着的，也会掩盖真正还开着的那一条（P0-8）。
+> 已修条目保留原始问题描述，不要删——它们是"这类洞长什么样"的样本。
+
+| # | 问题 | 位置 | 状态（2026-09-11 实测） |
 |---|---|---|---|
-| P0-1 | **render.yaml 是公网默认口令实例**：未设 ENV/SECRET → dev 密钥(仓库明文，JWT 可伪造 admin) + admin/admin123 + 验证码回显 + 免登录查档案全开 + SQLite 无持久盘 | `render.yaml` | 医疗数据平台公网等于无认证 |
-| P0-2 | **`docker compose up -d` 开箱崩溃循环**：`ENV=prod` + `admin123` 默认 → 守卫拒启动 + `restart:unless-stopped` | `docker-compose.yml:12` | README 第一条部署命令必然失败 |
-| P0-3 | **配置守卫被自家 compose 绕过**：黑名单式字面量比对，`change-me-in-production`≠`dev-secret-...` 判定"安全" | `config.py:86` + `compose:11` | 硬编码密钥上线，令牌可任意伪造 |
-| P0-4 | **验证码回显可被利用**：console+非prod → `/api/portal/auth/sms/code` 回显 `debug_code` → 任意手机号登录 → 唯一命中自动实名绑定读他人档案 | `routers/portal.py:168` | 最现实的可利用链 |
-| P0-5 | **打印/附件跨机构越权**：按 id 遍历读他院患者报告/处方/附件，**无留痕** | `printing.py:178,222,271,315`；`attachments.py:159` | ✅ 已修（治理线：打印/附件全部接 assert_patient_visible+留痕，test_print_attachment_visibility.py） |
-| P0-6 | **SPD 转诊审核无机构层级校验**：`level` 只写状态列不用于鉴权，单 doctor 账号可伪造整条转诊链 | `spd/routers/referral.py:393` | 越权 |
-| P0-7 | **确认的存储型 XSS**：会计科目 code/name 未转义直插 `<option value="...">` | `static/pages-mgmt.js:248` | 属性注入事件处理器 |
-| P0-8 | **同一病种两套目录互不感知**：chronic 与 spd 用相同 code 写不同表各带阈值 | `chronic_seed.py:26` vs `spd/seed.py:19` | 统计口径必然对不上 |
-| P0-9 | **CI 是"假绿"**：覆盖率门禁 `\|\| true`；52 迁移从不执行；真 PG 用例永远 skip；11 e2e 永远 skip；无 lint/类型/安全扫描 | `.github/workflows/ci.yml` | 回归拦不住 |
+| P0-1 | **render.yaml 是公网默认口令实例**：未设 ENV/SECRET → dev 密钥(仓库明文，JWT 可伪造 admin) + admin/admin123 + 验证码回显 + 免登录查档案全开 + SQLite 无持久盘 | `render.yaml` | ✅ 已修：`MEDPLAT_SECRET` 改 `generateValue: true`（`render.yaml:17-18`），由平台每环境生成随机值 |
+| P0-2 | **`docker compose up -d` 开箱崩溃循环**：`ENV=prod` + `admin123` 默认 → 守卫拒启动 + `restart:unless-stopped` | `docker-compose.yml:12` | ✅ 已修：三个凭据改 `${VAR:?}` 形态（文件内 5 处），不设就报错退出，不再"起来一个弱口令生产实例" |
+| P0-3 | **配置守卫被自家 compose 绕过**：黑名单式字面量比对，`change-me-in-production`≠`dev-secret-...` 判定"安全" | `config.py:86` + `compose:11` | ✅ 已修：判据从字面量比对换成**强度校验**——长度 + 不同字符数 + 字符类别 + 占位符词表（`config.py` 的 `MIN_SECRET_LENGTH` / `MIN_CHAR_CLASSES` / `PLACEHOLDER_MARKERS`），回归 `test_prod_credential_guard.py` |
+| P0-4 | **验证码回显可被利用**：console+非prod → `/api/portal/auth/sms/code` 回显 `debug_code` → 任意手机号登录 → 唯一命中自动实名绑定读他人档案 | `routers/portal.py:168` | ✅ 已修：新增 `sms_debug_echo`（`config.py:133`，**默认 False**），回显需 console 通道 + 显式开关 + 非生产三重门同时成立（`portal.py:292`） |
+| P0-5 | **打印/附件跨机构越权**：按 id 遍历读他院患者报告/处方/附件，**无留痕** | `printing.py:178,222,271,315`；`attachments.py:159` | ✅ 已修：打印/附件全部接 `assert_patient_visible` + 留痕，`test_print_attachment_visibility.py` |
+| P0-6 | **SPD 转诊审核无机构层级校验**：`level` 只写状态列不用于鉴权，单 doctor 账号可伪造整条转诊链 | `spd/routers/referral.py:393` | ✅ 已修：按机构树 `parent_id` 校验，只有本单当前机构的**直接上级**能推进一格（`spd/routers/referral.py:251-267`，ADR-0004）；机构树未建好时非全域账号一律不放行 |
+| P0-7 | **确认的存储型 XSS**：会计科目 code/name 未转义直插 `<option value="...">` | `static/pages-mgmt.js:248` | ✅ 已修：同一行三处插值全部 `esc()`（`pages-mgmt.js:248`）；同轮还把全仓库 34 处状态标签收进 `statusTag()` 组件，转义收在一处 |
+| P0-8 | **同一病种两套目录互不感知**：chronic 与 spd 用相同 code 写不同表各带阈值 | `chronic_seed.py:26` vs `spd/seed.py:19` | ☐ **仍开**。**这是九条里唯一还开着的**。不是技术卡点——[ADR-0014](adr/0014-病种目录收敛为单一权威表.md) 状态仍是 `Proposed`，卡在业务裁定：慢病口径随访 90 天、慢专病治疗期 30 天，同一个高血压患者两个数字都进各自完成率的分母，**合表当天必须二选一，选谁都会让某一批机构的完成率当场变化**。需卫健口径裁定，实现方不应替客户决定 |
+| P0-9 | **CI 是"假绿"**：覆盖率门禁 `\|\| true`；52 迁移从不执行；真 PG 用例永远 skip；11 e2e 永远 skip；无 lint/类型/安全扫描 | `.github/workflows/ci.yml` | ✅ 已修：**六项门全部阻断**（build / lint / typecheck / unit+smoke / 真 PG 集成 / 覆盖率）；覆盖率门禁去掉 `\|\| true`（`COVERAGE_MIN=70`），迁移在真 PG 上空库跑 `upgrade heads` 并逐表逐列比对模型 |
 
 ## P1 — 结构性风险
 
