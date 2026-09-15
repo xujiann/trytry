@@ -109,8 +109,10 @@ ROOT_FIXED_RENDERERS = [
     ("pages-spd.js", "renderSpdFollowup",
      ['$("#spd-fuplan-form").onsubmit', '$("#spd-fumatch-form").onsubmit',
       '$("#spd-fu-filter").onsubmit', '$("#spd-qc-form").onsubmit',
+      '$("#spd-cal-form").onsubmit',   # 功能完善·spd/followup（2026-09-15）：健康日历查询表单
       '$("#page-body").onclick'],
-     "await drawRecords();"),
+     # 「调整」handler 里也有一句 await drawRecords()，带换行+两空格前缀只锚函数顶层那一条
+     "\n  await drawRecords();"),
 ]
 
 

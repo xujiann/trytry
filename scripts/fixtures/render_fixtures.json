@@ -2577,7 +2577,8 @@
       "drawRecords() 填，故 /api/spd/followup-records 也要给非空数据。",
       "`by_executor` 故意给非空——它是条件渲染的第二个 barChart，空数组下那段什么都不出。",
       "方案名与患者名各带 XSS 载荷；`dept`/`questionnaire_code` 各留一条空值钉住 `|| \"—\"` 回落。",
-      "赋完 innerHTML 之后还会拉 /api/spd/meta 建异常规则编辑器（spdRuleEditor），夹具不给它整页抛错。"
+      "赋完 innerHTML 之后还会拉 /api/spd/meta 建异常规则编辑器（spdRuleEditor），夹具不给它整页抛错。",
+    "功能完善·spd/followup（2026-09-15）：问卷行补 id、随访记录补 patient_id（按钮要用）；新增 /api/spd/qc-samples 三条：已判合格 / 待判定（患者名带载荷）/ 记录查不到（record 为 null 的防御分支），批次带载荷。"
     ],
     "fn": "renderSpdFollowup",
     "api": {
@@ -2614,6 +2615,7 @@
       ],
       "/api/spd/questionnaires": [
         {
+          "id": 11,
           "code": "Q-DIS",
           "name": "出院随访问卷 & 复核",
           "scene": "inpatient",
@@ -2629,6 +2631,7 @@
           "handle_role": "doctor"
         },
         {
+          "id": 12,
           "code": "Q-SURG",
           "name": "术后问卷",
           "scene": "surgery",
@@ -2691,6 +2694,7 @@
       "/api/spd/followup-records": [
         {
           "id": 901,
+          "patient_id": 5,
           "patient_name": "周某某<b>",
           "scene": "inpatient",
           "planned_at": "2026-09-03",
@@ -2701,6 +2705,7 @@
         },
         {
           "id": 902,
+          "patient_id": 6,
           "patient_name": "吴某某",
           "scene": "surgery",
           "planned_at": "2026-09-05",
@@ -2708,6 +2713,55 @@
           "channel": "",
           "abnormal_level": "high",
           "status": "planned"
+        }
+      ],
+      "/api/spd/qc-samples": [
+        {
+          "id": 71,
+          "record_id": 901,
+          "batch": "QC-2026-09<b>",
+          "dept": "心内科",
+          "result": "pass",
+          "method": "record",
+          "note": "记录完整",
+          "record": {
+            "id": 901,
+            "patient_id": 5,
+            "patient_name": "",
+            "scene": "inpatient",
+            "planned_at": "2026-09-03",
+            "status": "done"
+          },
+          "created_at": "2026-09-10T09:00:00"
+        },
+        {
+          "id": 72,
+          "record_id": 902,
+          "batch": "QC-2026-09<b>",
+          "dept": "",
+          "result": "",
+          "method": "record",
+          "note": "",
+          "record": {
+            "id": 902,
+            "patient_id": 6,
+            "patient_name": "吴某某<img src=x onerror=alert(1)>",
+            "scene": "surgery",
+            "planned_at": "2026-09-20",
+            "status": "planned"
+          },
+          "created_at": "2026-09-10T09:00:00"
+        },
+        {
+          "id": 73,
+          "record_id": 999,
+          "batch": "QC-2026-08",
+          "dept": "外科",
+          "result": "fail",
+          "method": "phone",
+          "note": "患者称未接到随访电话",
+          "record": null,
+          "created_at": "2026-08-10T09:00:00"
         }
       ],
       "/api/spd/meta": {

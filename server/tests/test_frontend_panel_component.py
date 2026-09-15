@@ -199,7 +199,8 @@ MIGRATED_PAGES = {
     "renderSpdAssess": 10,          # 功能完善·spd/assess（2026-09-15）：+工作量 / 积分规则 / 兑换记录三个面板，
                                     # +点「使用情况」「得分分析」后才渲染的两个 panel()；
                                     # 手写的那 1 处仍是点击后的下钻明细（KNOWN_UNMIGRATED_SHELLS，见下）
-    "renderSpdFollowup": 5,
+    "renderSpdFollowup": 7,          # 功能完善·spd/followup（2026-09-15）：+患者健康日历面板，
+                                    # +点「前置资料」后写进 #spd-fu-detail 的 panel()
     # 这两页本来就是 panel() 写的（不是本批迁的），但一直没进白名单——
     # 没登记就等于没有"不许退回去"的网，顺手补上。
     "renderSpdMember": 5,

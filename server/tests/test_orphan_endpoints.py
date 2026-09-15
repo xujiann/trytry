@@ -273,16 +273,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/rbac/roles/{role_id}/permissions/{permission_id}",
     # resources（1）
     "/api/resources/{resource_id}",
-    # spd/followup（9）
-    "/api/spd/call-tasks/{task_id}/result",
-    "/api/spd/followup-records/{record_id}",
-    "/api/spd/followup-records/{record_id}/context",
-    "/api/spd/followup-rules/{rule_id}",
-    "/api/spd/health-calendar",
-    "/api/spd/qc-samples",
-    "/api/spd/qc-samples/{sample_id}/result",
-    "/api/spd/questionnaires/{q_id}",
-    "/api/spd/report-templates/{template_id}",
     # spd/referral（4）
     "/api/spd/referral-rules/check",
     "/api/spd/referral-rules/{rule_id}",
