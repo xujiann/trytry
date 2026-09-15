@@ -99,7 +99,7 @@ ROOT_FIXED_RENDERERS = [
      ['$("#al-search").onsubmit'],
      "\n  await draw();"),
     ("pages-clinical.js", "renderConsents",
-     ['$("#ct-search").onsubmit', '$("#cr-table").onclick'],
+     ['$("#ct-search").onsubmit', '$("#ct-table").onclick', '$("#cr-table").onclick'],
      "await drawConsents(); await drawCorrections();"),
     ("pages-spd.js", "renderSpdPatients",
      ['$("#spd-screen-form").onsubmit', '$("#spd-autoscreen-form").onsubmit',

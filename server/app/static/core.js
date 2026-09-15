@@ -996,7 +996,8 @@ async function renderReferrals() {
         ? `<button class="btn secondary" data-status="completed" data-id="${r.id}">结案</button>` : "—";
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${r.direction === "up" ? "上转" : "下转"}</td>
         <td>${r.from_org_id} → ${r.to_org_id}</td><td>${esc(r.reason)}</td>
-        <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+        <td><span class="tag ${color}">${esc(text)}</span></td>
+        <td>${actions} <button class="btn secondary" data-print-ref="${r.id}">打印转诊单</button></td></tr>`;
     }))}`;
   $("#ref-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -1009,7 +1010,12 @@ async function renderReferrals() {
     } catch (err) { setMsg("#ref-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { status, id } = e.target.dataset;
+    const { status, id, printRef } = e.target.dataset;
+    if (printRef) {
+      try { await openPrintPage(`/api/print/referrals/${printRef}`); }
+      catch (err) { setMsg("#ref-msg", err.message, false); }
+      return;
+    }
     if (!status || !id) return;
     try { await api(`/api/referrals/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }); route(); }
     catch (err) { setMsg("#ref-msg", err.message, false); }

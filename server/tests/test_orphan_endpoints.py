@@ -260,15 +260,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/prescriptions/rules/import",
     "/api/prescriptions/rules/{drug_code}",
     "/api/prescriptions/rules/{drug_code}/reactivate",
-    # printing（8）
-    "/api/print/case-summaries/{admission_id}",
-    "/api/print/checkups/{checkup_id}",
-    "/api/print/consents/{record_id}",
-    "/api/print/discharge-summaries/{admission_id}",
-    "/api/print/inpatient-bills/{admission_id}",
-    "/api/print/referrals/{referral_id}",
-    "/api/print/settlements/{settlement_id}",
-    "/api/print/vaccinations/{record_id}",
     # projects（2）
     "/api/projects/milestones/{milestone_id}/done",
     "/api/projects/milestones/{milestone_id}/reopen",

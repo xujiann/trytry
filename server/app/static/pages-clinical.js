@@ -200,11 +200,12 @@ async function renderConsents() {
     if (!patientId) { $("#ct-table").innerHTML = '<p class="desc">输入患者ID查询其同意记录（查询会落调阅留痕）。</p>'; return; }
     const rows = await api(`/api/consents?patient_id=${encodeURIComponent(patientId)}`);
     $("#ct-table").innerHTML = table(
-      ["时间", "场景", "文本版本", "方式", "凭证", "状态"], rows, (r) =>
+      ["时间", "场景", "文本版本", "方式", "凭证", "状态", "操作"], rows, (r) =>
       `<tr><td>${esc((r.created_at || "").replace("T", " ").slice(0, 19))}</td>
        <td>${esc(r.scene)}</td><td>${esc(r.text_version)}</td><td>${esc(r.method)}</td>
        <td>${esc(r.evidence || "—")}</td>
-       <td>${r.revoked_at ? '<span class="tag">已撤回</span>' : '<span class="tag ok">有效</span>'}</td></tr>`);
+       <td>${r.revoked_at ? '<span class="tag">已撤回</span>' : '<span class="tag ok">有效</span>'}</td>
+       <td><button class="btn secondary" data-print-consent="${r.id}">打印</button></td></tr>`);
   };
   const drawCorrections = async () => {
     const rows = await api("/api/consents/corrections?status=pending");
@@ -223,6 +224,11 @@ async function renderConsents() {
       <p class="desc">通过即按白名单字段执行变更并落审计；拒绝必须填写意见。</p>
       <div id="cr-table"></div><p id="cr-msg"></p>`)}`;
   $("#ct-search").onsubmit = async (e) => { e.preventDefault(); await drawConsents(new FormData(e.target).get("patient_id")); };
+  $("#ct-table").onclick = async (e) => {
+    const id = e.target.dataset.printConsent; if (!id) return;
+    try { await openPrintPage(`/api/print/consents/${id}`); }
+    catch (err) { setMsg("#cr-msg", err.message, false); }
+  };
   $("#cr-table").onclick = async (e) => {
     const id = e.target.dataset.review; if (!id) return;
     const verdict = e.target.dataset.verdict;
@@ -744,8 +750,14 @@ async function renderVaccination() {
   $("#vac-hist").onsubmit = async (e) => {
     e.preventDefault();
     const records = await api(`/api/vaccination/records?patient_id=${new FormData(e.target).get("patient_id")}`);
-    $("#vac-hist-result").innerHTML = table(["疫苗", "剂次", "日期", "机构"], records, (r) =>
-      `<tr><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td><td>${r.org_id}</td></tr>`);
+    $("#vac-hist-result").innerHTML = table(["疫苗", "剂次", "日期", "机构", "操作"], records, (r) =>
+      `<tr><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td><td>${r.org_id}</td>
+       <td><button class="btn secondary" data-print-vac="${r.id}">打印接种证明</button></td></tr>`);
+  };
+  $("#vac-hist-result").onclick = async (e) => {
+    const id = e.target.dataset.printVac; if (!id) return;
+    try { await openPrintPage(`/api/print/vaccinations/${id}`); }
+    catch (err) { setMsg("#vac-msg", err.message, false); }
   };
 }
 
@@ -1536,9 +1548,13 @@ async function renderInpatient() {
              <button class="btn secondary" data-summary="${a.id}">病案首页</button>
              <button class="btn danger" data-discharge="${a.id}">出院</button>`
           : "—";
+        // 三种打印件都在后端按患者可见性再判一次；出院小结未出院时后端 409，故只给已出院的摆按钮
+        const prints = `<button class="btn secondary" data-print-bill="${a.id}">打印费用清单</button>
+             <button class="btn secondary" data-print-case="${a.id}">打印病案首页</button>`
+          + (a.status === "admitted" ? "" : ` <button class="btn secondary" data-print-discharge="${a.id}">打印出院小结</button>`);
         return `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(wardName[a.ward_id] || a.ward_id)} / ${a.bed_id}</td>
           <td>${esc(a.diagnosis_name)}</td><td>${statusTag(AS, a.status)}</td>
-          <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button></td></tr>`;
+          <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button> ${prints}</td></tr>`;
       }))}
     <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div></div>`;
   $("#ward-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/wards", formJson(e.target, ["org_id"]), "#inp-msg"); };
@@ -1547,6 +1563,9 @@ async function renderInpatient() {
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
+      if (d.printBill) return await openPrintPage(`/api/print/inpatient-bills/${d.printBill}`);
+      if (d.printCase) return await openPrintPage(`/api/print/case-summaries/${d.printCase}`);
+      if (d.printDischarge) return await openPrintPage(`/api/print/discharge-summaries/${d.printDischarge}`);
       if (d.transfer) {
         const wardId = prompt("目标病区ID"), bedId = prompt("目标床位ID");
         if (!wardId || !bedId) return;
@@ -1626,9 +1645,10 @@ async function renderBilling() {
         <input name="admission_id" type="number" placeholder="住院单ID"><input name="encounter_id" type="number" placeholder="就诊ID">
         <input name="insurance_pay" type="number" step="any" placeholder="医保支付(元)" value="0"><button>结算</button></form>
       <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p>`)
-    + panel("结算单", table(["ID", "患者", "类型", "总额", "医保", "自付", "时间"], settlements, (s) =>
+    + panel("结算单", table(["ID", "患者", "类型", "总额", "医保", "自付", "时间", "操作"], settlements, (s) =>
       `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${esc(BT[s.bill_type] || s.bill_type)}</td><td>${s.total_amount}</td>
-       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td></tr>`))
+       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td>
+       <td><button class="btn secondary" data-print-settle="${s.id}">打印结算单</button></td></tr>`))
     + panel("统一支付（经办）", `
       <form class="inline" id="pay-form">
         <input name="settlement_id" type="number" placeholder="结算单ID" required>
@@ -1682,8 +1702,9 @@ async function renderBilling() {
     } catch (err) { setMsg("#recon-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { reprice, history, refund } = e.target.dataset;
+    const { reprice, history, refund, printSettle } = e.target.dataset;
     try {
+      if (printSettle) return await openPrintPage(`/api/print/settlements/${printSettle}`);
       if (reprice) {
         const price = prompt("新单价（元）");
         if (!price) return;
