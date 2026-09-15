@@ -181,6 +181,25 @@
 - ✅ `spd/routers/referral.py` 转诊审核补机构层级校验（口径 1：按机构树 `parent_id`，见 ADR-0004）：`review` 仅本单当前机构的**直接上级**可推进，全域角色放行；回归 `test_referral_review_requires_parent_org`。**后续（另案）**：① 机构树 `parent_id` 缺陷可见 —— ✅ `GET /api/organizations/tree-health` 体检接口（列 orphans + broken_chains + `referral_ready`，`test_org_tree_health.py`）；☐ 运行期"补齐"parent_id（需真实机构关系，属数据/运维口径，不自动种子）；② ✅ `_NEXT` 已收敛为村→乡→县三级（ADR-0005，存量 station_reviewed 兼容续走）；③ ✅ 机构校验已推广到 `arrive`/`down`/`receive-followup`（`_assert_holds_case`：本单当前持有机构才能操作，全域放行；回归 `test_referral_arrive_down_receive_require_current_org`）。
 - ✅ `static/pages-mgmt.js` 会计科目等 `<option>` XSS 转义（含就近同类 4 处：会计科目 code/name、监测域 domain×2、流程定义 key）。
 
+### 📐 功能完善（规则已立，按台账逐模块推进）
+- ✅ **功能完善开发规则**（2026-09-15，用户要求「为本平台的继续开发制定开发规则，完善各模块功能」）：
+  `docs/功能完善开发规则.md`——模块「功能完整」的七项定义、开工前四问、跨模块排序、明确不做清单、
+  本月量出来的反模式；CLAUDE.md 新增 §13 摘要。规则同时做成可检，不然就是又一条没人回头核的声明：
+  - `tests/test_orphan_endpoints.py`：care 那条「每个端点有前端入口」扩到全平台，判据同源、右边界收紧
+    （只调过 `/tasks/${id}/assign` 不算调过列表 `/tasks`）。实测 730 条路径里 **209 条没有任何前端调用形态**，
+    扣掉 11 条按设计无界面（HL7/FHIR 9、支付回调、设备批量回传）仍有 **198 条欠账、分布在 50 个模块**，
+    只有 36/86 个模块无入口为 0——三张对照表里的「已实现」有相当一部分只是「有端点」。
+    显式名单只减不增、两个方向都钉（新孤儿红；接通未划掉也红），两臂变异各自转红后才提交。
+  - `docs/模块完成度.md`（生成器 `scripts/dump_module_completeness.py` + 新鲜度用例）：87 个模块逐行列
+    端点/路径/无入口/契约/分页/越权豁免/待裁读接口/读改写，附无入口路径明细——「完善各模块功能」从这张表挑批次。
+  - 判据先自证再用：字符串拼接 URL 三端 0 处，所以没有为它放宽正则；匹配器三种写法与右边界有专门用例钉住。
+- ☐ **孤儿端点 198 条逐模块清**（P1-55）。建议顺序按规则 §3（一线操作先于报表、写入口先于读入口）：
+  `spd/tasks`（9，任务分配/升级/提交/复核/批量）→ `spd/population`（13，目标池认领/召回/服务申请）
+  → `portal` + `spd/portal`（18，居民端绑定手机/微信、知情同意、纠错、押金、随访/复诊/宣教）
+  → `printing`（8，八种打印件模板都在只差按钮）→ `spd/config`（29，配置对象的改/删，多数与 P2-2 的 `prompt()` 编辑器是同一件事）
+  → 其余 44 个模块。每模块一个提交：界面 + 从 `KNOWN_ORPHANS` 划掉 + `render_diff` 夹具 + 重生成台账。
+  **顺序供裁定，不是决定。**
+
 ### 🚀 正式上线前（收口中）
 
 > 这一节记录「割接前必须解决」的口子。共同点是**平时完全看不出来，偏偏在最需要它们

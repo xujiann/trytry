@@ -10,7 +10,7 @@
 ## 0. 项目速览
 
 - **单进程 FastAPI 单体**：县域医共体信息化平台（medplat）+ 全域慢专病全流程管理子系统（`app/spd`）。
-- 规模：258 张表 / 945 个 HTTP 端点 / 92 个路由文件 / 86 个迁移；后端 Python，前端为**免构建**原生 JS SPA。
+- 规模：259 张表 / 947 个 HTTP 端点（730 条路径 / 87 个路由模块）/ 94 个迁移（2026-09-15 实测，随版本变动；逐模块数字看 `docs/模块完成度.md`）；后端 Python，前端为**免构建**原生 JS SPA。
 - 入口：`server/app/main.py`（`app.main:app`）。配置：`server/app/config.py`（`MEDPLAT_*` 环境变量）。
 - 开发库 SQLite，生产库 PostgreSQL 16，Redis 可选。
 
@@ -96,7 +96,7 @@ server/app/
 
 - **结构变更必须写 alembic 迁移**，且 `Base.metadata.create_all`（`main.py:113`）**不能代替迁移**——它只在开发 SQLite 上"看起来正常"，生产 PG 走迁移，漏写迁移会上线才炸（历史已发生过）。
 - **迁移升级用 `alembic upgrade heads`（复数）**——本仓库有两个 head（平台链 + spd 链）。单数 `head` 会报错并漏掉 spd 的 59 张表。
-- 每个迁移**必须实现 `downgrade()`**（当前 52/52 全部实现，保持这个纪录）。
+- 每个迁移**必须实现 `downgrade()`**（当前 94/94 全部实现，保持这个纪录）。
 - 类型约定（照抄现状，别自创）：
   - **金额**：一律用 `Money`（`= Numeric(14,2, asdecimal=False)`，`models/_base.py:29`）。**禁止用 Float 存金额。**
   - **日期**：`String(10)`（配 `datetypes.DateStr`/`OptionalDateStr` 做入参校验）。**月度期间** `YYYY-MM`：body 字段用 `datetypes.PeriodStr`、查询参数用 `deps.require_month`，别再写月份正则（`tests/test_periodstr_single_source.py` 与 `test_datestr_single_source.py` 分别盯着两种形状）。**时间戳**：`DateTime` + `utcnow()`（naive UTC）。
@@ -199,6 +199,7 @@ make test-integration   # 若动了迁移/PG 方言相关（先 eval "$(server/s
 - 分级技术债 + 不可丢的优点 → `docs/TECH_DEBT.md`
 - **各条棘轮的当下数字（自动生成，勿手改）→ `docs/闸门现状.md`**（生成器 `server/scripts/dump_gate_status.py`，新鲜度由 `test_gate_status_freshness.py` 钉住）
 - **待人工裁定的事项（问题/可选项/代价/建议，一处集中）→ `docs/待裁定事项清单.md`**
+- **功能完善开发规则（模块「功能完整」七项定义、开工前四问、跨模块排序）→ `docs/功能完善开发规则.md`**；**各模块当下完成度与无入口路径明细（自动生成，勿手改）→ `docs/模块完成度.md`**（生成器 `server/scripts/dump_module_completeness.py`，新鲜度由 `test_module_completeness_freshness.py` 钉住）
 - 完整 AS-IS 审计 → `docs/架构审计报告_AS-IS.md`
 - 模块分级（KEEP/IMPROVE/REFACTOR/REPLACE）→ `docs/模块分级_KEEP_IMPROVE_REFACTOR_REPLACE.md`
 - 接口标准与治理（混乱代码→标准接口，棘轮只进不退）→ `docs/接口标准与治理.md`
@@ -239,3 +240,20 @@ make test-integration   # 若动了迁移/PG 方言相关（先 eval "$(server/s
 - **清理与功能改动尽量分开提交**，让 review 能分辨"这是修 bug"还是"这是顺手擦干净"。
 - **修不动的先登记，别硬修**：清理超出"小而安全"就停手，写进 `docs/TECH_DEBT.md` 或开任务/ADR，而不是把大改夹带进无关提交。
 - 童子军法则是**只进不退**的日常版：每次触碰都让欠账（lint/类型/契约/created_at 棘轮）少一点，绝不让它变多。
+
+---
+
+## 13. 功能完善（新增/完善模块功能必读）
+
+- **「已实现」= 有端点，不等于能用。** 三张对照表（指引 36 项 / 招标 163 条 / 系统功能清单）证明的只是路由存在。
+  一个模块功能完整的七项定义在 `docs/功能完善开发规则.md` §1：每个端点有入口（或书面豁免）/ 有契约 /
+  列表能翻页且截断可见 / 归属校验与留痕 / 有测试（主链路 + 越权反例 + 唯一表冲突）/ 有演示数据与手册条目 /
+  录入不靠 `prompt()`、状态文案取自后端。逐模块差什么看 `docs/模块完成度.md`。
+- **孤儿端点棘轮**（`tests/test_orphan_endpoints.py`）：新端点要么同一批带界面，要么进 `EXEMPT_*` 写明**为什么不需要界面**；
+  欠账名单 `KNOWN_ORPHANS` 只许变少，接通一条划掉一条（不划掉也红）。**"后端先行、界面下次"不是合法形态。**
+- **开工前四问**（§2）：需求来源编号是什么 / 落在三套并行子域的哪一套、是不是改了名字其实已有 / 是不是平台侧该建（§7 明确不做清单）/
+  后端 + 界面 + 测试 + 种子 + 手册是否同一批交付。
+- **先做哪块**（§3）：安全止血 → 已交付功能的正确性缺陷 → 完成度欠账（按 `docs/模块完成度.md` 挑模块，一线操作先于报表、写入口先于读入口）→ 新功能。
+  一个模块一个批次一个提交。
+- **同一个文件一套口径**（§4）：往既有文件加端点，先读兄弟端点，把守卫/分页/契约/留痕原样照搬；不一致要在 docstring 写为什么。
+- **写下来的数字必须有东西盯着**（§5）：生成器 + 新鲜度用例，或日期 + commit，二选一；两者都没有的数字按"未知"处理。

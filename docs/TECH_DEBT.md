@@ -181,6 +181,12 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P1-53 | **`app/` 里 69 处直接调 `date.today()`，绕过声明中的唯一入口 `clock.today()`**（2026-09-11 修 CI 跨午夜必红时量出）。**今天不是缺陷**——`clock.today()` 的实现就是 `date.today()`，取值恒等；它是**另一件事的前提**：想在测试里冻结时间（把"判据与被判对象取自两个时刻"的窗口真正归零），得先有一个能被冻住的唯一入口，只要还有 69 处各自去问系统时钟，冻结就只能冻住其中一部分，比不冻更难排查。✅ **已清零 2026-09-11**：69 → **0**，转零基线；连 `from …clock import today` 这种写法也一并禁掉（它在 import 那一刻把函数绑成本模块的名字，**逃得过冻结**——收敛前 `surgery.py` 正是如此）。收敛的兑现是 `tests/conftest.py::freeze_business_date()`：换掉 `app.clock.today` 一个属性即覆盖全平台业务日期，日期敏感用例不必再依赖「发请求与断言之间不跨午夜」（见 `tests/test_business_date_freeze.py`）。**只冻日期不冻时间戳**，理由写在用例里。📌 这 69 里有 1 处是**解了 import 别名才数到**的（`app/spd/jobs.py` 的 `from datetime import date as _date`）——先按裸写法数出来的 68 是漏数 | `app/`（23 个文件），基线在 `tests/test_clock.py` |
 | P2-35 | **对账的"日"切在 UTC 而非当地日历**（2026-09-11 顺线发现，**未改，需业务裁定**）：`billing._orders_of_day` 比的是 `paid_at.strftime("%Y-%m-%d")`，而 `paid_at` 走 `models.utcnow()` 是 naive UTC。东八区**早 8 点前**发生的支付会落进**前一天**的对账批次里。CI runner 时区是 UTC，两者恒等，所以测试永远看不出来。不自行改：改口径要动线上**已出账批次的归属**，是业务决定不是技术决定 | `app/routers/billing.py:1101`（`_orders_of_day`） |
 
+### 第二十轮（功能完善规则）新登记
+| # | 问题 | 位置 |
+|---|---|---|
+| P1-55 | **198 条 `/api` 路径没有任何前端调用形态（50 个模块）——三张对照表里的"已实现"有相当一部分只是"有端点"**（2026-09-15 立功能完善规则时量出，判据与 `test_spd_care_frontend_coverage.py` 同源并收紧右边界）。730 条路径里 209 条无入口，扣掉 11 条按设计无界面（HL7/FHIR 9、支付回调、设备批量回传）余 198；只有 36/86 个模块无入口为 0。集中在 `spd/config`(29) / `spd/population`(13) / `spd/assess`(10) / `spd/tasks`(9) / `spd/portal`(9) / `spd/followup`(9) / `portal`(9) / `printing`(8) / `users`(7) / `medwaste`(6)。**不是一批新缺陷，是 care 那 31 个孤儿端点的全平台版**——当时只给 care 立了守卫。已钉成显式名单只减不增（`tests/test_orphan_endpoints.py::KNOWN_ORPHANS`，两个方向都红），逐模块明细在 `docs/模块完成度.md`，清账顺序建议见 `docs/功能完善开发规则.md` §3 | 50 个路由模块；名单在 `tests/test_orphan_endpoints.py` |
+| P2-38 | **前端 134 处 `prompt(` 弹窗录入**（core 13 / pages-clinical 61 / pages-mgmt 32 / pages-public 14 / pages-spd 1 / m/doctor 9 / m 4；含少量确认用途，未逐条区分）。`prompt()` 录不了多字段、没有校验提示、粘不了长文本，是"界面有了、功能没通"的记号（慢专病计划 P2-2 早登记过 spd 的 11 处：规则编辑器实际没做）。功能完善规则 §1 第 7 项：新代码不许再用；存量按模块批次随 P1-55 一起清，不单独开批 | `app/static/*.js`、`app/static/m/*.js` |
+
 ## P2 — 一致性与可维护性
 
 ### 命名
