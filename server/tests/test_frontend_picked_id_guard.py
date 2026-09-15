@@ -65,6 +65,7 @@ KEYS = {
     "spd_team_role": ("state", "团队端视角枚举，取值来自本页按钮 dataset"),
     "medplat_role": ("state", "登录角色标记，不是 UI 状态（G3/P1-23）"),
     "medplat_token": ("state", "旧版令牌存量兜底（G3/P1-23），不是 UI 状态"),
+    "WX_BIND_FLAG": ("state", "常量名 medplat_portal_wx_bind：微信补绑授权回跳标记（回跳带 code 走 bind-wechat 而不是登录），用完即删，不是对象 id"),
     "CSRF_KEY": ("state", "常量名；管理端/医师端 medplat_csrf、居民端 medplat_portal_csrf"),
     "TOKEN_KEY": ("state", "常量名；居民端 medplat_portal_token / 医师端 medplat_doctor_token，"
                            "均为旧版令牌存量兜底（G3/P1-23）"),

@@ -1804,7 +1804,7 @@ class PortalReferralOut(BaseModel):
     date: str
 
 
-@router.get("/me/referrals", response_model=list[PortalReferralOut])
+@router.get("/me/referrals", response_model=list[PortalReferralOut], deprecated=True)
 def portal_my_referrals(
     response: Response,
     patient_id: int | None = None,
@@ -1813,7 +1813,12 @@ def portal_my_referrals(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """我的转诊进度。"""
+    """【已由聚合接口取代】平台单源的转诊列表。
+
+    居民端「我的转诊」与「慢专病·转诊」两页都已改走 GET /me/referrals/all（ADR-0003
+    方案 B，可用 `source=platform` 收窄到本源），本端点保留给旧客户端，不再接新界面
+    （孤儿端点闸门里按此登记豁免）。
+    """
     patient = accessible_patient(db, account, patient_id, resource="referral")
     rows = paginate(
         db.query(Referral)

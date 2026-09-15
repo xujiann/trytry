@@ -63,6 +63,7 @@
     <!-- 3. 档案 -->
     <div id="pane-archive" class="hidden">
       <div id="account-bar" class="account-bar"></div>
+      <div id="account-bind"></div>
       <div id="family-switch" class="chips"></div>
       <details id="family-add" class="m-card fold">
         <summary>添加家庭成员（代管老人/儿童档案）</summary>
@@ -75,15 +76,19 @@
             <option value="spouse">配偶</option>
             <option value="other">其他</option>
           </select>
-          <div id="fm-code-row" class="code-row hidden">
-            <input id="fm-code" maxlength="6" placeholder="成员手机收到的验证码">
-            <button type="button" id="fm-send-code" class="ghost-btn">获取验证码</button>
+          <div id="fm-code-row" class="hidden">
+            <input id="fm-phone" type="tel" inputmode="numeric" maxlength="11" placeholder="成员在档案中登记的手机号">
+            <div class="code-row">
+              <input id="fm-code" maxlength="6" placeholder="成员手机收到的验证码">
+              <button type="button" id="fm-send-code" class="ghost-btn">获取验证码</button>
+            </div>
           </div>
           <button type="submit">添加</button>
           <p id="family-msg" class="msg"></p>
         </form>
       </details>
       <div id="archive-result"></div>
+      <div id="archive-extra"></div>
     </div>
   </section>
 

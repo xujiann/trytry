@@ -234,7 +234,13 @@ async function consumeWeChatRedirect() {
   if (!code) return false;
   history.replaceState(null, "", location.pathname + location.hash);
   try {
-    await wechatLogin(code);
+    if (localStorage.getItem(WX_BIND_FLAG)) {
+      // 从「绑定微信」跳出去授权的回跳：登录态还在（Cookie 会话），这是补绑不是登录
+      localStorage.removeItem(WX_BIND_FLAG);
+      await bindWeChat(code);
+    } else {
+      await wechatLogin(code);
+    }
     return true;
   } catch (err) {
     setMsg("#login-msg", err.message, false);
@@ -310,8 +316,70 @@ async function renderArchiveTab() {
   $("#account-bar").innerHTML = `
     <span class="who">${esc(me.name)}</span>
     <span class="sub">健康卡号 ${esc(me.ehc_no)}${me.phone ? " · " + esc(me.phone) : ""}</span>`;
+  renderAccountBinding(me);
   await renderFamily();
   await loadArchive();
+}
+
+/* ---------------- 账户补绑：微信登录的补手机号 / 手机号登录的补微信 ---------------- */
+
+const WX_BIND_FLAG = "medplat_portal_wx_bind";
+
+function renderAccountBinding(me) {
+  const box = $("#account-bind");
+  const needPhone = !me.phone, needWx = !me.wechat_bound;
+  box.innerHTML = `
+    ${needPhone ? '<button type="button" class="ghost-btn" id="btn-bind-phone">补绑手机号</button>' : ""}
+    ${needWx ? '<button type="button" class="ghost-btn" id="btn-bind-wechat">绑定微信</button>' : ""}
+    <div id="bind-phone-box" class="hidden"></div>
+    <p id="account-msg" class="msg"></p>`;
+  const phoneBtn = $("#btn-bind-phone");
+  if (phoneBtn) phoneBtn.addEventListener("click", () => {
+    const form = $("#bind-phone-box");
+    form.classList.remove("hidden");
+    form.innerHTML = `<form id="bp-form">
+      <input id="bp-phone" type="tel" inputmode="numeric" maxlength="11" placeholder="要绑定的手机号" required>
+      <div class="code-row">
+        <input id="bp-code" type="text" inputmode="numeric" maxlength="6" placeholder="6位验证码" required>
+        <button type="button" id="bp-send" class="ghost-btn">获取验证码</button>
+      </div>
+      <button type="submit">绑定手机号</button></form>`;
+    $("#bp-send").addEventListener("click", async () => {
+      const phone = $("#bp-phone").value.trim();
+      if (!/^1[3-9]\d{9}$/.test(phone)) { setMsg("#account-msg", "请输入正确的11位手机号", false); return; }
+      try {
+        const data = await api("/api/portal/auth/sms/code", {
+          method: "POST", body: JSON.stringify({ phone, purpose: "bind" }) });
+        if (data.debug_code) $("#bp-code").value = data.debug_code;
+        setMsg("#account-msg", data.debug_code ? `演示环境验证码：${data.debug_code}` : "验证码已发送", true);
+      } catch (err) { setMsg("#account-msg", err.message, false); }
+    });
+    $("#bp-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const r = await authApi("/api/portal/auth/bind-phone", { method: "POST",
+          body: JSON.stringify({ phone: $("#bp-phone").value.trim(), code: $("#bp-code").value.trim() }) });
+        await renderArchiveTab();
+        setMsg("#account-msg", `已绑定 ${r.phone}${r.bound_patient ? "，档案已关联" : ""}`, true);
+      } catch (err) { setMsg("#account-msg", err.message, false); }
+    });
+  });
+  const wxBtn = $("#btn-bind-wechat");
+  if (wxBtn) wxBtn.addEventListener("click", async () => {
+    try {
+      const auth = await api("/api/portal/auth/wechat/authorize");
+      if (auth.mock_code) { await bindWeChat(auth.mock_code); return; }
+      // 真实微信：跳出去授权，回跳带 code；先留标记，让回跳走"绑定"而不是"登录"
+      localStorage.setItem(WX_BIND_FLAG, "1");
+      location.href = auth.authorize_url;
+    } catch (err) { setMsg("#account-msg", err.message, false); }
+  });
+}
+
+async function bindWeChat(code) {
+  const r = await authApi("/api/portal/auth/bind-wechat", { method: "POST", body: JSON.stringify({ code }) });
+  await renderArchiveTab();
+  setMsg("#account-msg", `微信已绑定${r.nickname ? "：" + r.nickname : ""}`, true);
 }
 
 /* ---------------- 家庭成员代管 ---------------- */
@@ -358,12 +426,13 @@ async function renderFamily() {
 
 /** 代管成员自己留了手机号时后端返 428，此时展开验证码输入行。 */
 $("#fm-send-code").addEventListener("click", async () => {
-  const phone = prompt("请输入该成员在档案中登记的手机号");
-  if (!phone) return;
+  // 手机号在表单里填（#fm-phone），不再弹系统输入框（P2-38）
+  const phone = $("#fm-phone").value.trim();
+  if (!/^1[3-9]\d{9}$/.test(phone)) { setMsg("#family-msg", "请先填写该成员在档案中登记的手机号", false); return; }
   try {
     const data = await api("/api/portal/auth/sms/code", {
       method: "POST",
-      body: JSON.stringify({ phone: phone.trim(), purpose: "bind" }),
+      body: JSON.stringify({ phone, purpose: "bind" }),
     });
     if (data.debug_code) $("#fm-code").value = data.debug_code;
     setMsg("#family-msg", data.debug_code ? `演示环境验证码：${data.debug_code}` : "验证码已发送", true);
@@ -422,9 +491,24 @@ async function loadArchive() {
       ${kv("结论", esc(r.conclusion))}
       ${r.critical ? kv("危急值", '<span class="tag red">是，请尽快就医复诊</span>') : ""}
     </div>`).join("");
+    // 慢病 + 慢专病并成一份（ADR-0003 方案 B 的聚合接口），每条标来源——两套分级不是同一把尺子
+    let feed = null;
+    try { feed = await authApi(`/api/portal/me/enrollments/all${query}`); } catch (err) { feed = null; }
+    const feedHtml = feed === null ? '<p class="empty">疾病管理档案暂时无法加载</p>'
+      : feed.map((e) => `<div class="m-card">
+        ${kv("病种", esc(e.program_name || e.program_code))}
+        ${kv("来源", esc(ENROLL_SOURCE_NAMES[e.source] || e.source))}
+        ${kv("状态", esc(e.status_label || e.status))}
+        ${kv("分级", esc(e.level_label || e.level_code || "—"))}
+        ${e.stage ? kv("阶段", esc(e.stage)) : ""}
+        ${kv("管理机构", esc(e.org || "—"))}
+        ${kv("下次随访", esc(e.next_followup_due || "待安排"))}
+      </div>`).join("") || '<p class="empty">无疾病管理档案</p>';
     box.innerHTML = `
       <div class="sec-title">慢病管理（${data.chronic_care.length}）</div>
       ${chronic || '<p class="empty">无慢病在管记录</p>'}
+      <div class="sec-title">疾病管理档案 · 慢病 + 慢专病（${feed ? feed.length : "—"}）</div>
+      ${feedHtml}
       <div class="sec-title">就诊记录（${data.encounters.length}）</div>
       ${encounters || '<p class="empty">无就诊记录</p>'}
       <div class="sec-title">检查检验报告（${data.exam_reports.length}）</div>
@@ -432,6 +516,113 @@ async function loadArchive() {
   } catch (err) {
     box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
   }
+  await loadArchiveExtra(query);
+}
+
+const ENROLL_SOURCE_NAMES = { platform: "慢病管理", spd: "慢专病管理" };
+const CONSENT_SCENE_NAMES = {
+  archive: "建档", chronic_enroll: "慢病入组", followup: "随访", family_contract: "家医签约",
+  cross_org_access: "跨机构调阅", public_health_report: "公卫上报", family_delegate: "家庭代管授权",
+};
+const CONSENT_METHOD_NAMES = { self: "本人自签", proxy: "窗口代提" };
+const CORRECT_FIELD_NAMES = { name: "姓名", gender: "性别", birth_date: "出生日期", phone: "联系电话" };
+const CORRECTION_STATUS = { pending: ["待审核", "orange"], approved: ["已通过", "green"], rejected: ["已驳回", "red"] };
+
+/* 知情同意与个人信息权利（个保法更正权 / 删除权，ADR-0010）：
+ * 同意记录按被查看人（本人或代管成员）取；更正/注销申请按账户归集。 */
+async function loadArchiveExtra(query) {
+  const box = $("#archive-extra");
+  let consents = null, corrections = null;
+  try { consents = await authApi(`/api/portal/me/consents${query}`); } catch (err) { consents = null; }
+  try { corrections = await authApi("/api/portal/me/corrections"); } catch (err) { corrections = null; }
+  const changesText = (c) => {
+    try {
+      const o = JSON.parse(c.changes || "{}");
+      return Object.entries(o).map(([k, v]) => `${esc(CORRECT_FIELD_NAMES[k] || k)}→${esc(v)}`).join("，") || "—";
+    } catch (err) { return esc(c.changes || "—"); }
+  };
+  box.innerHTML = `
+    <div class="sec-title">知情同意（${consents ? consents.length : "—"}）</div>
+    ${consents === null ? '<p class="empty">同意记录暂时无法加载</p>' : consents.map((c) => `<div class="m-card">
+      ${kv("场景", esc(CONSENT_SCENE_NAMES[c.scene] || c.scene))}
+      ${kv("文本版本", esc(c.text_version || "—"))}
+      ${kv("方式", esc(CONSENT_METHOD_NAMES[c.method] || c.method))}
+      ${c.guardian_name ? kv("监护人", `${esc(c.guardian_name)}（${esc(c.guardian_relation || "监护人")}）`) : ""}
+      ${kv("状态", c.revoked_at ? `<span class="tag">已撤回 ${esc(c.revoked_at.slice(0, 10))}</span>` : '<span class="tag green">有效</span>')}
+    </div>`).join("") || '<p class="empty">尚无同意记录</p>'}
+    <details class="m-card fold"><summary>签署一项知情同意</summary>
+      <form id="consent-form">
+        <select id="cs-scene">${Object.entries(CONSENT_SCENE_NAMES).map(([k, v]) =>
+          `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <p class="hint">被签人为 14 岁以下未成年人时须填监护人三项</p>
+        <input id="cs-gname" placeholder="监护人姓名（未成年人必填）">
+        <input id="cs-gid" placeholder="监护人身份证号（未成年人必填）">
+        <select id="cs-grel"><option value="">监护关系</option><option value="parent">父母</option>
+          <option value="guardian">其他监护人</option></select>
+        <button type="submit">确认签署</button>
+        <p id="consent-msg" class="msg"></p>
+      </form></details>
+    <div class="sec-title">信息更正 / 注销申请（${corrections ? corrections.length : "—"}）</div>
+    ${corrections === null ? '<p class="empty">申请记录暂时无法加载</p>' : corrections.map((c) => `<div class="m-card">
+      ${kv("类型", c.request_type === "deactivate" ? "注销档案" : "更正信息")}
+      ${c.request_type === "deactivate" ? "" : kv("更正内容", changesText(c))}
+      ${kv("原因", esc(c.reason || "—"))}
+      ${kv("进度", statusTag(CORRECTION_STATUS, c.status))}
+      ${c.review_comment ? kv("审核意见", esc(c.review_comment)) : ""}
+      ${kv("提交时间", esc((c.created_at || "").slice(0, 16).replace("T", " ")))}
+    </div>`).join("") || '<p class="empty">尚无申请</p>'}
+    <details class="m-card fold"><summary>提交更正或注销申请</summary>
+      <form id="correction-form">
+        <select id="cr-type">
+          <option value="correction">更正个人信息（姓名 / 性别 / 出生日期 / 电话）</option>
+          <option value="deactivate">注销档案（法定保留，不物理删除）</option>
+        </select>
+        <div id="cr-fields">
+          <input id="cr-name" placeholder="新姓名（不改留空）">
+          <select id="cr-gender"><option value="">性别不改</option><option value="男">男</option><option value="女">女</option></select>
+          <input id="cr-birth" placeholder="新出生日期 YYYY-MM-DD（不改留空）">
+          <input id="cr-phone" type="tel" placeholder="新联系电话（不改留空）">
+          <p class="hint">身份证号不支持线上更正，须持证件原件到窗口办理</p>
+        </div>
+        <textarea id="cr-reason" rows="2" placeholder="申请原因（必填）" required></textarea>
+        <button type="submit">提交申请</button>
+        <p id="correction-msg" class="msg"></p>
+      </form></details>`;
+  $("#consent-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      scene: $("#cs-scene").value,
+      guardian_name: $("#cs-gname").value.trim(), guardian_id_card: $("#cs-gid").value.trim(),
+      guardian_relation: $("#cs-grel").value,
+    };
+    if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+    try {
+      await authApi("/api/portal/me/consents", { method: "POST", body: JSON.stringify(body) });
+      await loadArchiveExtra(query);
+      setMsg("#consent-msg", "已签署", true);
+    } catch (err) { setMsg("#consent-msg", err.message, false); }
+  });
+  $("#cr-type").addEventListener("change", () => {
+    $("#cr-fields").classList.toggle("hidden", $("#cr-type").value === "deactivate");
+  });
+  $("#correction-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const type = $("#cr-type").value;
+    const changes = {};
+    if (type === "correction") {
+      const picked = { name: $("#cr-name").value.trim(), gender: $("#cr-gender").value,
+        birth_date: $("#cr-birth").value.trim(), phone: $("#cr-phone").value.trim() };
+      Object.entries(picked).forEach(([k, v]) => { if (v) changes[k] = v; });
+      if (!Object.keys(changes).length) { setMsg("#correction-msg", "至少填一项要更正的内容", false); return; }
+    }
+    const body = { request_type: type, changes, reason: $("#cr-reason").value.trim() };
+    if (viewingPatientId !== null) body.patient_id = viewingPatientId;
+    try {
+      await authApi("/api/portal/me/corrections", { method: "POST", body: JSON.stringify(body) });
+      await loadArchiveExtra(query);
+      setMsg("#correction-msg", "申请已提交，审核结果会在这里更新", true);
+    } catch (err) { setMsg("#correction-msg", err.message, false); }
+  });
 }
 
 /* ---------------- 在线服务：预约 / 签约 / 账单 / 转诊 ---------------- */
@@ -586,7 +777,25 @@ async function renderInpatient(box) {
       ? '<span class="tag green">已结清</span>'
       : '<span class="tag orange">有未结清费用</span>')}
     <button class="bill-detail" data-adm="${a.id}">查看费用清单</button>
+    ${viewingPatientId === null ? `<button class="bill-detail" data-dep="${a.id}">押金余额</button>` : ""}
   </div>`).join("") + '<div id="adm-bill"></div>';
+  // 押金只给本人查（后端 current_resident_patient，不含家属代查）：涉及退费资金去向，比费用清单更敏感
+  box.querySelectorAll("[data-dep]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        const d = await authApi(`/api/portal/me/deposits?admission_id=${btn.dataset.dep}`);
+        $("#adm-bill").innerHTML = `
+          <div class="sec-title">住院押金（住院号 ${d.admission_id}）</div>
+          <div class="m-card">${kv("当前余额", `<b>¥${Number(d.balance).toFixed(2)}</b>`)}</div>
+          ${d.items.length ? d.items.map((i) => `<div class="m-card">
+            ${kv(i.deposit_type_name || i.deposit_type, `¥${Number(i.amount).toFixed(2)}`)}
+            ${kv("方式", esc(i.method || "—"))}
+            ${kv("日期", esc(i.date))}
+          </div>`).join("") : '<p class="empty">暂无押金流水</p>'}`;
+        $("#adm-bill").scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (err) { alert(err.message); }
+    });
+  });
   box.querySelectorAll(".bill-detail").forEach((btn) => {
     btn.addEventListener("click", async () => {
       try {

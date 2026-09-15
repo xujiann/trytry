@@ -34,7 +34,8 @@
 ## 三张名单，各管一件事
 
 * `EXEMPT_MODULES` / `EXEMPT_PATHS`：**按设计不需要界面**的端点，每条写明理由。
-  对机器不对人（HL7/FHIR、支付回调、设备批量回传）。只许变少。
+  两类：对机器不对人（HL7/FHIR、支付回调、设备批量回传）；已废弃或已被聚合接口取代、
+  只留给旧客户端的路径（接新界面是倒退）。只许变少。
 * `KNOWN_ORPHANS`：**该有界面但还没有**的端点——欠账名单，只许变少。
   它是显式名单而不是一个计数：计数会让"补上一个、新漏一个"净持平而不红
   （契约闸门早年就吃过这亏，见其模块 docstring）。
@@ -113,6 +114,16 @@ EXEMPT_MODULES: dict[str, str] = {
 EXEMPT_PATHS: dict[str, str] = {
     **CARE_EXEMPT,  # 设备/物联网批量回传（care 那条守卫登记的，理由见原处）
     "/api/billing/payments/callback": "支付网关的异步回调（签名验证 + 幂等落账），由网关服务器调用，不是页面",
+    # 第二类：已废弃 / 已被聚合接口取代的路径——接新界面是倒退，不是补齐
+    "/api/portal/my-archive": (
+        "【已废弃，deprecated=True】无账户体系的过渡通道（身份证号入参 + _require_legacy_enabled 开关），"
+        "界面走登录态 GET /me/archive；给它加入口等于把证件号重新放回 query"
+    ),
+    "/api/portal/surveys": "【已废弃，deprecated=True】同上的过渡通道，界面走登录态 POST /me/surveys",
+    "/api/portal/me/referrals": (
+        "已由 GET /me/referrals/all 取代（ADR-0003 聚合，可 source=platform 收窄），两页界面都走聚合；"
+        "保留给旧客户端并已标 deprecated=True"
+    ),
 }
 
 
@@ -235,16 +246,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/pharmacy/batches/{batch_id}/dispenses",
     "/api/pharmacy/batches/{batch_id}/recall",
     "/api/pharmacy/purchase-suggestions",
-    # portal（9）
-    "/api/portal/auth/bind-phone",
-    "/api/portal/auth/bind-wechat",
-    "/api/portal/me/consents",
-    "/api/portal/me/corrections",
-    "/api/portal/me/deposits",
-    "/api/portal/me/enrollments/all",
-    "/api/portal/me/referrals",
-    "/api/portal/my-archive",
-    "/api/portal/surveys",
     # prescriptions（3）
     "/api/prescriptions/rules/import",
     "/api/prescriptions/rules/{drug_code}",
@@ -391,7 +392,7 @@ def test_豁免仍然成立():
         assert module in modules, f"豁免的模块 {module} 已不存在，划掉"
     overlap = set(EXEMPT_PATHS) & KNOWN_ORPHANS
     assert not overlap, f"既豁免又欠账：{sorted(overlap)}"
-    assert len(EXEMPT_PATHS) <= 2 and len(EXEMPT_MODULES) <= 1, (
+    assert len(EXEMPT_PATHS) <= 5 and len(EXEMPT_MODULES) <= 1, (
         "豁免只许变少：新增前先问这个端点是不是真的没有人会点"
     )
 
