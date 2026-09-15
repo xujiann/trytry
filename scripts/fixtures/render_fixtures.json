@@ -2394,12 +2394,14 @@
     "_why": [
       "第七批（2026-09-06）：慢专病考核与积分。五个面板都无条件渲染，夹具只负责把五张表喂满。",
       "指标名与商品名各带一条 XSS 载荷；`formula` 故意给一条为空，钉住 `|| \"—\"` 那个回落分支。",
-      "/api/spd/scores 与 /api/spd/scores/{id} 共前缀，但后者只在点\"下钻明细\"时才调，渲染路径用不到。"
+      "/api/spd/scores 与 /api/spd/scores/{id} 共前缀，但后者只在点\"下钻明细\"时才调，渲染路径用不到。",
+    "功能完善·spd/assess（2026-09-15）：指标 / 商品行补上后端本就返回的 id（按钮要用）；新增积分规则、兑换记录、工作量三个接口，各带一条载荷；核销码在管理端不回显，夹具里的码只用来证明它没被渲染出来。"
     ],
     "fn": "renderSpdAssess",
     "api": {
       "/api/spd/indicators": [
         {
+          "id": 7,
           "code": "followup_rate",
           "name": "随访完成率<img src=x onerror=alert(1)>",
           "object_type": "org",
@@ -2411,6 +2413,7 @@
           "active": true
         },
         {
+          "id": 8,
           "code": "path_rate",
           "name": "路径入组率",
           "object_type": "village_doctor",
@@ -2469,12 +2472,14 @@
       ],
       "/api/spd/goods": [
         {
+          "id": 1,
           "code": "G-001",
           "name": "血压计 & 袖带",
           "points": 300,
           "stock": 12
         },
         {
+          "id": 2,
           "code": "G-002",
           "name": "体检套餐",
           "points": 800,
@@ -2496,7 +2501,74 @@
           "earned": 150,
           "used": 0
         }
-      ]
+      ],
+      "/api/spd/point-rules": [
+        {
+          "id": 1,
+          "code": "R-SIGNIN",
+          "name": "每日签到<img src=x onerror=alert(1)>",
+          "event": "signin",
+          "points": 2,
+          "daily_limit": 1,
+          "active": true
+        },
+        {
+          "id": 2,
+          "code": "R-FU",
+          "name": "完成随访",
+          "event": "followup",
+          "points": 5,
+          "daily_limit": 0,
+          "active": false
+        }
+      ],
+      "/api/spd/redeems": [
+        {
+          "id": 31,
+          "goods_id": 1,
+          "goods_name": "血压计 & 袖带",
+          "points": 300,
+          "verify_code": "483920",
+          "status": "pending",
+          "created_at": "2026-09-14T10:20:00",
+          "verified_at": ""
+        },
+        {
+          "id": 30,
+          "goods_id": 2,
+          "goods_name": "体检套餐<b>",
+          "points": 800,
+          "verify_code": "110234",
+          "status": "verified",
+          "created_at": "2026-09-01T09:00:00",
+          "verified_at": "2026-09-02T15:30:00"
+        }
+      ],
+      "/api/spd/workload": {
+        "period": "2026-09",
+        "object_type": "doctor",
+        "items": [
+          {
+            "object_id": 51,
+            "object_name": "村医甲<script>",
+            "total": 12,
+            "done": 9,
+            "by_type": {
+              "followup": 6,
+              "edu": 3
+            },
+            "completion_rate": 75.0
+          },
+          {
+            "object_id": 52,
+            "object_name": "村医乙",
+            "total": 4,
+            "done": 0,
+            "by_type": {},
+            "completion_rate": 0.0
+          }
+        ]
+      }
     }
   },
   "spdfollowup": {

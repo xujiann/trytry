@@ -273,17 +273,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/rbac/roles/{role_id}/permissions/{permission_id}",
     # resources（1）
     "/api/resources/{resource_id}",
-    # spd/assess（10）
-    "/api/spd/assess-plans/{plan_id}",
-    "/api/spd/goods/{goods_id}",
-    "/api/spd/indicators/{indicator_id}",
-    "/api/spd/indicators/{indicator_id}/usage",
-    "/api/spd/point-accounts/signin",
-    "/api/spd/point-rules",
-    "/api/spd/point-rules/{rule_id}",
-    "/api/spd/redeems",
-    "/api/spd/scores-analysis",
-    "/api/spd/workload",
     # spd/followup（9）
     "/api/spd/call-tasks/{task_id}/result",
     "/api/spd/followup-records/{record_id}",

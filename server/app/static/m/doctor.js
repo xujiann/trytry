@@ -237,15 +237,19 @@ async function loadSpdPatients(box) {
   </div>`).join("") || '<p class="empty">暂无在管患者</p>';
 }
 
+const REDEEM_STATUS_NAMES = { pending: "待核销", verified: "已核销", cancelled: "已取消" };
+
 async function loadSpdPerf(box) {
-  const [points, wb] = await Promise.all([
+  const [points, wb, goods, redeems] = await Promise.all([
     api("/api/spd/point-accounts/me"), api("/api/spd/workbench/doctor-mobile"),
+    api("/api/spd/goods"), api("/api/spd/redeems?mine=true&limit=20"),
   ]);
   const perf = wb.performance;
   box.innerHTML = `<div class="m-card">
       ${kv("积分余额", points.balance)}
       ${kv("累计获得", points.earned)}
       ${kv("累计兑换", points.used)}
+      <button type="button" class="ghost-btn" data-spd-signin>每日签到</button>
     </div>
     ${perf ? `<div class="m-card">
       ${kv("考核周期", esc(perf.period))}
@@ -255,10 +259,36 @@ async function loadSpdPerf(box) {
         kv(esc(d.indicator_name || d.indicator_code),
            `${d.score ?? "—"} 分${d.deduction ? `（扣 ${d.deduction}）` : ""}`)).join("")}
     </div>` : '<p class="empty">暂无考核结果</p>'}
+    ${goods.map((g) => `<div class="m-card">
+      ${kv("商品", esc(g.name))}
+      ${kv("所需积分", g.points)}
+      ${kv("库存", g.stock)}
+      ${g.stock > 0 && points.balance >= g.points
+        ? `<button type="button" class="ghost-btn" data-spd-redeem="${g.id}">兑换</button>`
+        : `<p class="empty">${g.stock > 0 ? "积分不足" : "暂无库存"}</p>`}
+    </div>`).join("") || '<p class="empty">暂无可兑换商品</p>'}
+    ${redeems.map((r) => `<div class="m-card">
+      ${kv("兑换", esc(r.goods_name))}
+      ${kv("核销码", esc(r.verify_code))}
+      ${kv("状态", esc(REDEEM_STATUS_NAMES[r.status] || r.status))}
+      ${kv("时间", esc(r.created_at.replace("T", " ").slice(0, 16)))}</div>`).join("")}
     ${(points.records || []).slice(0, 20).map((r) => `<div class="m-card">
       ${kv("积分", `${r.direction === "in" ? "+" : "-"}${r.points}（余额 ${r.balance_after}）`)}
       ${kv("来源", esc(r.note))}
       ${kv("时间", esc(r.created_at.replace("T", " ").slice(0, 16)))}</div>`).join("")}`;
+  // 签到 / 兑换的结果里有要给人看的数字（加了几分、核销码），不能走 spdPost 那句「操作成功」
+  const act = async (path, body, okText) => {
+    try {
+      const r = await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+      $("#spd-msg").textContent = okText(r);
+      await loadSpdTab();
+    } catch (err) { $("#spd-msg").textContent = err.message; }
+  };
+  box.querySelectorAll("[data-spd-signin]").forEach((b) => b.addEventListener("click", () =>
+    act("/api/spd/point-accounts/signin", null, (r) => `签到成功：+${r.points} 分，余额 ${r.balance}`)));
+  box.querySelectorAll("[data-spd-redeem]").forEach((b) => b.addEventListener("click", () =>
+    act("/api/spd/redeems", { goods_id: Number(b.dataset.spdRedeem) },
+      (r) => `兑换成功，核销码 ${r.verify_code}（到点位出示），余额 ${r.balance}`)));
 }
 
 async function spdPost(path, body) {

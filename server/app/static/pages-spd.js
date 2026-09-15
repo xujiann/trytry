@@ -2041,25 +2041,63 @@ async function renderSpdReferral() {
  * 9. 考核与积分
  * ==========================================================*/
 
+const SPD_ASSESS_OBJECTS = { org: "机构", doctor: "医生", village_doctor: "村医", team: "团队" };
+const SPD_PLAN_LEVELS = { hospital: "县级医院", township: "卫生院", station: "服务站", village: "村医", team: "团队" };
+const SPD_PERIOD_TYPES = { month: "月度", quarter: "季度", year: "年度" };
+const SPD_POINT_EVENTS = {
+  sign: "签约", referral_up: "上转", referral_down: "下转承接", followup: "随访",
+  abnormal_report: "异常上报", signin: "每日签到",
+};
+const SPD_REDEEM_STATUS = { pending: ["待核销", "orange"], verified: ["已核销", "green"], cancelled: ["已取消", ""] };
+
+/** 考核方案的指标串「指标:权重，指标:权重」→ items；新建与编辑共用同一份解析。 */
+function spdParsePlanItems(text) {
+  return String(text || "").split(/[，,]/).filter(Boolean).map((pair) => {
+    const [code, weight] = pair.split(":").map((s) => (s || "").trim());
+    return { indicator_code: code, weight: Number(weight || 0) };
+  });
+}
+
+/** 按方案周期类型给「得分分析」一个默认周期：month → 2026-09，quarter → 2026-Q3，year → 2026。 */
+function spdDefaultPeriod(periodType) {
+  const d = new Date(), y = d.getFullYear(), m = d.getMonth() + 1;
+  if (periodType === "year") return String(y);
+  if (periodType === "quarter") return `${y}-Q${Math.ceil(m / 3)}`;
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
 async function renderSpdAssess() {
   $("#page-desc").textContent =
-    "指标库 → 分级考核方案 → 自动取数计分 → 扣分下钻；村医积分与商品兑换核销";
-  const [indicators, plans, scores, goods, accounts] = await Promise.all([
+    "指标库 → 分级考核方案 → 自动取数计分 → 扣分下钻与得分分析；工作量统计；村医积分规则、商品兑换与核销";
+  const [indicators, plans, scores, goods, accounts, pointRules, redeems, workload] = await Promise.all([
     api("/api/spd/indicators?limit=50"), api("/api/spd/assess-plans"),
     api("/api/spd/scores?limit=30"), api("/api/spd/goods"),
     api("/api/spd/point-accounts?limit=20"),
+    api("/api/spd/point-rules"), api("/api/spd/redeems?limit=50"), api("/api/spd/workload"),
   ]);
-  const objectNames = { org: "机构", doctor: "医生", village_doctor: "村医", team: "团队" };
+  const objectNames = SPD_ASSESS_OBJECTS;
+  const onOff = (flag) => (flag ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>');
+  const workloadHtml = (w) => `
+      <p class="desc">${esc(w.period)} · ${w.object_type === "org" ? "按机构" : "按人员"}；已完成任务按类型拆分，与考核指标共用同一批表，报表与得分对得上</p>
+      ${table(["对象", "任务总数", "已完成", "完成率", "已完成按类型"], w.items || [], (x) =>
+        `<tr><td>${esc(x.object_name || String(x.object_id))}</td><td>${x.total}</td><td>${x.done}</td>
+         <td>${x.completion_rate}%</td>
+         <td>${esc(Object.entries(x.by_type || {}).map(([k, v]) => (SPD_TASK_TYPES[k] || k) + " " + v).join("，") || "—")}</td></tr>`)}`;
   $("#page-body").innerHTML = `
     ${panel("考核指标库", `
       <p class="desc">取数口径 + 公式（AST 白名单求值）+ 评分规则三段式，各县只需调权重与目标值</p>
-      ${table(["编码", "名称", "对象", "取数口径", "公式", "权重", "目标值", "版本", "状态"],
+      ${table(["ID", "编码", "名称", "对象", "取数口径", "公式", "权重", "目标值", "版本", "状态", "操作"],
         indicators, (i) =>
-        `<tr><td>${esc(i.code)}</td><td>${esc(i.name)}</td>
+        `<tr><td>${i.id}</td><td>${esc(i.code)}</td><td>${esc(i.name)}</td>
          <td>${esc(objectNames[i.object_type] || i.object_type)}</td>
          <td>${esc(i.data_source)}</td><td><code>${esc(i.formula || "—")}</code></td>
          <td>${i.weight}</td><td>${i.target_value ?? "—"}</td><td>${esc(i.version)}</td>
-         <td>${i.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}`)}
+         <td>${onOff(i.active)}</td>
+         <td><button class="btn secondary" data-ind-edit="${i.id}" data-name="${esc(i.name)}" data-weight="${i.weight}"
+              data-target="${i.target_value ?? ""}" data-formula="${esc(i.formula || "")}" data-active="${i.active ? 1 : 0}">编辑</button>
+             <button class="btn secondary" data-ind-usage="${i.id}">使用情况</button></td></tr>`)}
+      <p class="msg" id="spd-ind-msg"></p>
+      <div id="spd-ind-detail"></div>`)}
     ${panel("分级考核方案", `
       <form class="inline" id="spd-plan-form">
         <input name="code" placeholder="方案编码" required>
@@ -2076,21 +2114,50 @@ async function renderSpdAssess() {
         <input name="items" placeholder="指标:权重，如 followup_rate:40,path_rate:30" style="min-width:260px">
         <button>新建方案</button>
       </form><p class="msg" id="spd-plan-msg"></p>
-      ${table(["ID", "编码", "名称", "层级", "对象", "周期", "指标数", "操作"], plans, (p) =>
+      ${table(["ID", "编码", "名称", "层级", "对象", "周期", "指标数", "状态", "操作"], plans, (p) =>
         `<tr><td>${p.id}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
          <td>${esc(p.level)}</td><td>${esc(objectNames[p.object_type] || p.object_type)}</td>
          <td>${esc(p.period_type)}</td><td>${(p.items || []).length}</td>
-         <td><button class="btn secondary" data-run="${p.id}">跑分</button></td></tr>`)}`)}
+         <td>${onOff(p.active !== false)}</td>
+         <td><button class="btn secondary" data-run="${p.id}">跑分</button>
+             <button class="btn secondary" data-plan-analysis="${p.id}" data-period-type="${esc(p.period_type || "")}">得分分析</button>
+             <button class="btn secondary" data-plan-edit="${p.id}" data-name="${esc(p.name)}" data-period-type="${esc(p.period_type || "")}"
+              data-items="${esc((p.items || []).map((it) => `${it.indicator_code || it.code || ""}:${it.weight ?? 0}`).join(","))}"
+              data-active="${p.active === false ? 0 : 1}">编辑</button></td></tr>`)}`)}
     ${panel("考核结果", `
       ${table(["排名", "对象", "周期", "综合得分", "操作"], scores, (s) =>
         `<tr><td>${s.rank}</td><td>${esc(s.object_name)}</td><td>${esc(s.period)}</td>
          <td>${s.total_score}</td>
          <td><button class="btn secondary" data-score="${s.id}">下钻明细</button></td></tr>`)}
       <div id="spd-score-detail"></div>`)}
+    ${panel("工作量统计", `
+      <form class="inline" id="spd-workload-form">
+        <select name="object_type"><option value="doctor">按人员</option><option value="org">按机构</option></select>
+        <input name="period" placeholder="周期：2026-08 / 2026-Q3 / 2026" value="${esc(workload.period || "")}" style="width:190px">
+        <input name="org_id" type="number" placeholder="机构ID（可选）" style="width:120px">
+        <input name="program_code" placeholder="病种编码（可选）" style="width:130px">
+        <button>查询</button>
+      </form><p class="msg" id="spd-workload-msg"></p>
+      <div id="spd-workload-box">${workloadHtml(workload)}</div>`)}
     ${panel("村医积分账户", `
       ${table(["用户ID", "姓名", "余额", "累计获得", "累计兑换"], accounts, (a) =>
         `<tr><td>${a.user_id}</td><td>${esc(a.user_name)}</td><td>${a.balance}</td>
          <td>${a.earned}</td><td>${a.used}</td></tr>`)}`)}
+    ${panel("村医积分规则", `
+      <p class="desc">签约 / 上转 / 下转承接 / 随访 / 异常上报按事件自动入账；「每日签到」规则给医生移动端的签到按钮用；每日上限 0 = 不限</p>
+      <form class="inline" id="spd-prule-form">
+        <input name="code" placeholder="规则编码" required>
+        <input name="name" placeholder="规则名称" required>
+        <select name="event">${Object.entries(SPD_POINT_EVENTS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="points" type="number" placeholder="积分" style="width:90px">
+        <input name="daily_limit" type="number" placeholder="每日上限" style="width:110px">
+        <button>新建规则</button>
+      </form><p class="msg" id="spd-prule-msg"></p>
+      ${table(["ID", "编码", "名称", "事件", "积分", "每日上限", "状态", "操作"], pointRules, (r) =>
+        `<tr><td>${r.id}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(SPD_POINT_EVENTS[r.event] || r.event)}</td>
+         <td>${r.points}</td><td>${r.daily_limit || "不限"}</td><td>${onOff(r.active)}</td>
+         <td><button class="btn secondary" data-prule-edit="${r.id}" data-name="${esc(r.name)}" data-points="${r.points}"
+              data-limit="${r.daily_limit}" data-active="${r.active ? 1 : 0}">编辑</button></td></tr>`)}`)}
     ${panel("积分商品与核销", `
       <form class="inline" id="spd-goods-form">
         <input name="code" placeholder="商品编码" required>
@@ -2103,17 +2170,34 @@ async function renderSpdAssess() {
         <input name="verify_code" placeholder="核销码" required>
         <button class="secondary">核销</button>
       </form><p class="msg" id="spd-goods-msg"></p>
-      ${table(["编码", "名称", "所需积分", "库存"], goods, (g) =>
-        `<tr><td>${esc(g.code)}</td><td>${esc(g.name)}</td><td>${g.points}</td>
-         <td>${g.stock}</td></tr>`)}`)}`;
+      ${table(["ID", "编码", "名称", "所需积分", "库存", "操作"], goods, (g) =>
+        `<tr><td>${g.id}</td><td>${esc(g.code)}</td><td>${esc(g.name)}</td><td>${g.points}</td>
+         <td>${g.stock}</td>
+         <td><button class="btn secondary" data-goods-edit="${g.id}" data-name="${esc(g.name)}" data-points="${g.points}"
+              data-stock="${g.stock}">编辑</button></td></tr>`)}`)}
+    ${panel("兑换记录", `
+      <p class="desc">村医在移动端兑换后拿到核销码、到点位出示，经办在上方「核销」栏录码完成发放；这里只看状态，核销码不回显</p>
+      ${table(["ID", "商品", "积分", "状态", "兑换时间", "核销时间"], redeems, (r) =>
+        `<tr><td>${r.id}</td><td>${esc(r.goods_name)}</td><td>${r.points}</td><td>${spdTag(SPD_REDEEM_STATUS, r.status)}</td>
+         <td>${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</td>
+         <td>${esc((r.verified_at || "").replace("T", " ").slice(0, 16) || "—")}</td></tr>`)}`)}`;
   $("#spd-plan-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target);
-    body.items = String(body.items || "").split(/[，,]/).filter(Boolean).map((pair) => {
-      const [code, weight] = pair.split(":").map((s) => (s || "").trim());
-      return { indicator_code: code, weight: Number(weight || 0) };
-    });
+    body.items = spdParsePlanItems(body.items);
     return postAction("/api/spd/assess-plans", body, "#spd-plan-msg");
+  };
+  $("#spd-workload-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const query = new URLSearchParams(formJson(e.target)).toString();
+    try {
+      $("#spd-workload-box").innerHTML = workloadHtml(await api(`/api/spd/workload?${query}`));
+      setMsg("#spd-workload-msg", "");
+    } catch (err) { setMsg("#spd-workload-msg", err.message, false); }
+  };
+  $("#spd-prule-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/point-rules", formJson(e.target, ["points", "daily_limit"]), "#spd-prule-msg");
   };
   $("#spd-goods-form").onsubmit = (e) => {
     e.preventDefault();
@@ -2124,7 +2208,11 @@ async function renderSpdAssess() {
     return postAction("/api/spd/redeems/verify", formJson(e.target), "#spd-goods-msg");
   };
   $("#page-body").onclick = async (e) => {
-    const run = e.target.closest("[data-run]"), score = e.target.closest("[data-score]");
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const run = el("data-run"), score = el("data-score");
+    const indEdit = el("data-ind-edit"), indUsage = el("data-ind-usage");
+    const planEdit = el("data-plan-edit"), planAnalysis = el("data-plan-analysis");
+    const pruleEdit = el("data-prule-edit"), goodsEdit = el("data-goods-edit");
     if (run) {
       const form = await spdModal("跑一次考核计分", [
         { name: "period", label: "考核周期（如 2026-08 / 2026-Q3 / 2026）",
@@ -2144,6 +2232,95 @@ async function renderSpdAssess() {
            <td><code>${esc(JSON.stringify(x.metrics || {}))}</code></td>
            <td>${x.value ?? "—"}</td><td>${x.weight ?? "—"}</td><td>${x.score ?? "—"}</td>
            <td>${x.deduction ?? "—"}</td><td>${esc(x.reason || x.error || "—")}</td></tr>`)}</div>`;
+      return;
+    }
+    if (indEdit) {
+      const form = await spdModal("编辑考核指标（公式留空不改）", [
+        { name: "name", label: "名称", value: indEdit.dataset.name, required: true },
+        { name: "weight", label: "权重", type: "number", value: indEdit.dataset.weight },
+        { name: "target_value", label: "目标值（留空 = 不设目标）", value: indEdit.dataset.target },
+        { name: "formula", label: "公式（只能引用该取数口径的变量）", value: indEdit.dataset.formula },
+        { name: "active", label: "状态", type: "select", value: indEdit.dataset.active,
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      // 目标值 0 是合法目标，所以走文本框再自己转数：留空 = null，不能让 Number("") 把它变成 0
+      const target = form.target_value === "" ? null : Number(form.target_value);
+      if (target !== null && Number.isNaN(target)) return setMsg("#spd-ind-msg", "目标值须是数字", false);
+      const body = { name: form.name, weight: form.weight, target_value: target, active: form.active === "1" };
+      if (form.formula) body.formula = form.formula;
+      return postAction(`/api/spd/indicators/${indEdit.dataset.indEdit}`, body, "#spd-ind-msg", "PATCH");
+    }
+    if (indUsage) {
+      try {
+        const u = await api(`/api/spd/indicators/${indUsage.dataset.indUsage}/usage`);
+        $("#spd-ind-detail").innerHTML = panel(`使用情况 · ${u.indicator.name}（被 ${u.used_by} 个方案引用）`,
+          table(["方案ID", "编码", "名称", "层级", "权重"], u.plans || [], (p) =>
+            `<tr><td>${p.id}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
+             <td>${esc(SPD_PLAN_LEVELS[p.level] || p.level)}</td><td>${p.weight ?? "—"}</td></tr>`));
+      } catch (err) { setMsg("#spd-ind-msg", err.message, false); }
+      return;
+    }
+    if (planEdit) {
+      const form = await spdModal("编辑考核方案（指标串留空不改）", [
+        { name: "name", label: "名称", value: planEdit.dataset.name, required: true },
+        { name: "period_type", label: "考核周期", type: "select", value: planEdit.dataset.periodType,
+          options: Object.entries(SPD_PERIOD_TYPES).map(([k, v]) => ({ value: k, label: v })) },
+        { name: "items", label: "指标:权重，逗号分隔", value: planEdit.dataset.items },
+        { name: "active", label: "状态", type: "select", value: planEdit.dataset.active,
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      const body = { name: form.name, period_type: form.period_type, active: form.active === "1" };
+      if (form.items) body.items = spdParsePlanItems(form.items);
+      return postAction(`/api/spd/assess-plans/${planEdit.dataset.planEdit}`, body, "#spd-plan-msg", "PATCH");
+    }
+    if (planAnalysis) {
+      const planId = planAnalysis.dataset.planAnalysis;
+      const form = await spdModal("得分分布与高频扣分项", [
+        { name: "period", label: "考核周期（如 2026-08 / 2026-Q3 / 2026）",
+          value: spdDefaultPeriod(planAnalysis.dataset.periodType), required: true },
+      ]);
+      if (!form || !form.period) return;
+      try {
+        const a = await api(`/api/spd/scores-analysis?plan_id=${planId}&period=${encodeURIComponent(form.period)}`);
+        $("#spd-score-detail").innerHTML = panel(`得分分析 · 方案 #${planId} · ${form.period}`, a.total
+          ? `${spdCards([["对象数", a.total], ["平均分", a.average]])}
+             ${table(["分数段", "对象数"], Object.entries(a.distribution || {}), ([k, v]) =>
+               `<tr><td>${esc(k)}</td><td>${v}</td></tr>`)}
+             ${table(["高频扣分项", "扣分次数", "累计扣分"], a.top_deductions || [], (d) =>
+               `<tr><td>${esc(d.indicator_name || d.indicator_code)}</td><td>${d.count}</td><td>${d.total_deduction}</td></tr>`)}
+             ${table(["排名", "对象", "综合得分"], a.ranking || [], (r) =>
+               `<tr><td>${r.rank ?? "—"}</td><td>${esc(r.object_name)}</td><td>${r.total_score}</td></tr>`)}`
+          : '<p class="desc">该周期还没有计分结果，先在方案行「跑分」</p>');
+      } catch (err) { setMsg("#spd-plan-msg", err.message, false); }
+      return;
+    }
+    if (pruleEdit) {
+      const form = await spdModal("编辑积分规则", [
+        { name: "name", label: "名称", value: pruleEdit.dataset.name, required: true },
+        { name: "points", label: "积分", type: "number", value: pruleEdit.dataset.points },
+        { name: "daily_limit", label: "每日上限（0 = 不限）", type: "number", value: pruleEdit.dataset.limit },
+        { name: "active", label: "状态", type: "select", value: pruleEdit.dataset.active,
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/point-rules/${pruleEdit.dataset.pruleEdit}`, {
+        name: form.name, points: form.points, daily_limit: form.daily_limit, active: form.active === "1",
+      }, "#spd-prule-msg", "PATCH");
+    }
+    if (goodsEdit) {
+      const form = await spdModal("编辑商品（下架后村医端不再显示）", [
+        { name: "name", label: "名称", value: goodsEdit.dataset.name, required: true },
+        { name: "points", label: "所需积分", type: "number", value: goodsEdit.dataset.points },
+        { name: "stock", label: "库存", type: "number", value: goodsEdit.dataset.stock },
+        { name: "active", label: "状态", type: "select", value: "1",
+          options: [{ value: "1", label: "上架" }, { value: "0", label: "下架" }] },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/goods/${goodsEdit.dataset.goodsEdit}`, {
+        name: form.name, points: form.points, stock: form.stock, active: form.active === "1",
+      }, "#spd-goods-msg", "PATCH");
     }
   };
 }

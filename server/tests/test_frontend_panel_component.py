@@ -196,7 +196,9 @@ MIGRATED_PAGES = {
     "renderKnowledge": 3,           # 含一处带橙色左边框的临期提醒（走 accent）
     "renderHrFinance": 8,           # 另有两处 `class="panel hidden" id=…` 的容器面板不迁（规则也数不到，见下）
     "renderQuality": 6,
-    "renderSpdAssess": 5,           # 第 6 处外壳在点击后的下钻明细里，比对器到不了，见下
+    "renderSpdAssess": 10,          # 功能完善·spd/assess（2026-09-15）：+工作量 / 积分规则 / 兑换记录三个面板，
+                                    # +点「使用情况」「得分分析」后才渲染的两个 panel()；
+                                    # 手写的那 1 处仍是点击后的下钻明细（KNOWN_UNMIGRATED_SHELLS，见下）
     "renderSpdFollowup": 5,
     # 这两页本来就是 panel() 写的（不是本批迁的），但一直没进白名单——
     # 没登记就等于没有"不许退回去"的网，顺手补上。
