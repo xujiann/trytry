@@ -34,8 +34,9 @@
 ## 三张名单，各管一件事
 
 * `EXEMPT_MODULES` / `EXEMPT_PATHS`：**按设计不需要界面**的端点，每条写明理由。
-  两类：对机器不对人（HL7/FHIR、支付回调、设备批量回传）；已废弃或已被聚合接口取代、
-  只留给旧客户端的路径（接新界面是倒退）。只许变少。
+  三类：对机器不对人（HL7/FHIR、支付回调、设备批量回传）；已废弃或已被聚合接口取代、
+  只留给旧客户端的路径（接新界面是倒退）；地址由后端字段给出、前端按变量请求的路径
+  （字面匹配看不见，入口在——登记时写明是哪个字段、哪处调用）。只许变少。
 * `KNOWN_ORPHANS`：**该有界面但还没有**的端点——欠账名单，只许变少。
   它是显式名单而不是一个计数：计数会让"补上一个、新漏一个"净持平而不红
   （契约闸门早年就吃过这亏，见其模块 docstring）。
@@ -123,6 +124,15 @@ EXEMPT_PATHS: dict[str, str] = {
     "/api/portal/me/referrals": (
         "已由 GET /me/referrals/all 取代（ADR-0003 聚合，可 source=platform 收窄），两页界面都走聚合；"
         "保留给旧客户端并已标 deprecated=True"
+    ),
+    "/api/portal/spd/referrals": (
+        "已由 GET /me/referrals/all?source=spd 取代（同上），居民端慢专病·转诊页走聚合；"
+        "保留给旧客户端并已标 deprecated=True"
+    ),
+    # 第三类：地址由后端字段给出、前端按变量请求——字面匹配看不见，但入口真实存在
+    "/api/portal/spd/referrals/{case_id}": (
+        "聚合列表每条带 detail_path=/api/portal/spd/referrals/{id}?patient_id=…（spd/service.py），"
+        "居民端 bindReferralDetails 按该字段请求「查看全过程」；本闸门按字面匹配看不到变量地址"
     ),
 }
 
@@ -321,16 +331,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/spd/qc-samples/{sample_id}/result",
     "/api/spd/questionnaires/{q_id}",
     "/api/spd/report-templates/{template_id}",
-    # spd/portal（9）
-    "/api/portal/spd/archive",
-    "/api/portal/spd/assessments",
-    "/api/portal/spd/edu",
-    "/api/portal/spd/edu/{push_id}/read",
-    "/api/portal/spd/journey",
-    "/api/portal/spd/referrals",
-    "/api/portal/spd/referrals/{case_id}",
-    "/api/portal/spd/revisits",
-    "/api/portal/spd/tasks/{task_id}/attachments",
     # spd/referral（4）
     "/api/spd/referral-rules/check",
     "/api/spd/referral-rules/{rule_id}",
@@ -392,7 +392,7 @@ def test_豁免仍然成立():
         assert module in modules, f"豁免的模块 {module} 已不存在，划掉"
     overlap = set(EXEMPT_PATHS) & KNOWN_ORPHANS
     assert not overlap, f"既豁免又欠账：{sorted(overlap)}"
-    assert len(EXEMPT_PATHS) <= 5 and len(EXEMPT_MODULES) <= 1, (
+    assert len(EXEMPT_PATHS) <= 7 and len(EXEMPT_MODULES) <= 1, (
         "豁免只许变少：新增前先问这个端点是不是真的没有人会点"
     )
 

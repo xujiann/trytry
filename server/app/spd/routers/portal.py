@@ -1219,7 +1219,7 @@ class SpdReferralOut(BaseModel):
     created_at: str
 
 
-@router.get("/referrals", response_model=list[SpdReferralOut])
+@router.get("/referrals", response_model=list[SpdReferralOut], deprecated=True)
 def my_referrals(
     response: Response,
     patient_id: int | None = None,
@@ -1228,7 +1228,13 @@ def my_referrals(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """转诊记录与进度（#16/#17）。"""
+    """转诊记录与进度（#16/#17）。
+
+    【已由聚合接口取代】居民端「慢专病·转诊」页改走平台的 GET /api/portal/me/referrals/all
+    ?source=spd（ADR-0003 方案 B），文案与状态标签与「我的转诊」同源；本端点保留给旧客户端，
+    不再接新界面（孤儿端点闸门里按此登记豁免）。详情 GET /referrals/{case_id} 仍是活的——
+    聚合列表的 `detail_path` 指向它。
+    """
     patient = _patient(db, account, patient_id, resource="spd_referral")
     rows = paginate(
         db.query(SpdReferralCase)
