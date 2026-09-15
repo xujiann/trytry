@@ -282,7 +282,7 @@ KNOWN_ORPHANS: set[str] = {
     "/api/spd/redeems",
     "/api/spd/scores-analysis",
     "/api/spd/workload",
-    # spd/config（28）
+    # spd/config（27）
     "/api/spd/centers/{center_id}",
     "/api/spd/data-sources-monitor",
     "/api/spd/data-sources/{source_id}",
@@ -299,7 +299,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/spd/scales/{scale_id}/disable",
     "/api/spd/scales/{scale_id}/publish",
     "/api/spd/scales/{scale_id}/qr.svg",
-    "/api/spd/service-packages",
     "/api/spd/service-packages/{package_id}",
     "/api/spd/tags",
     "/api/spd/targets/{target_id}",
@@ -321,20 +320,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/spd/qc-samples/{sample_id}/result",
     "/api/spd/questionnaires/{q_id}",
     "/api/spd/report-templates/{template_id}",
-    # spd/population（13）
-    "/api/spd/candidates/{candidate_id}/claim",
-    "/api/spd/candidates/{candidate_id}/status",
-    "/api/spd/enrollments/{enrollment_id}",
-    "/api/spd/enrollments/{enrollment_id}/packages",
-    "/api/spd/groups/{group_id}/members",
-    "/api/spd/groups/{group_id}/members/{patient_id}",
-    "/api/spd/package-bindings/{binding_id}/unbind",
-    "/api/spd/package-bindings/{binding_id}/usages",
-    "/api/spd/patients/{patient_id}/profile",
-    "/api/spd/recalls",
-    "/api/spd/recalls/{recall_id}/progress",
-    "/api/spd/service-applies",
-    "/api/spd/service-applies/{apply_id}/handle",
     # spd/portal（9）
     "/api/portal/spd/archive",
     "/api/portal/spd/assessments",

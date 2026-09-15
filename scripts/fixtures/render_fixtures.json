@@ -981,6 +981,14 @@
   "spdcenter": {
     "fn": "renderSpdCenter",
     "api": {
+      "/api/spd/service-applies": [
+        {"id": 7, "patient_id": 5, "name": "申请人<img src=x onerror=alert(1)>", "program_code": "hyp", "note": "想加入 & 管理", "status": "pending", "handle_note": "", "created_at": "2026-09-14T09:00:00"},
+        {"id": 8, "patient_id": 6, "name": "李申请", "program_code": "dm", "note": "", "status": "rejected", "handle_note": "非辖区<b>", "created_at": "2026-09-13T09:00:00"}
+      ],
+      "/api/spd/recalls": [
+        {"id": 3, "enrollment_id": 11, "reason": "失访 <b>", "status": "contacted", "result": "", "contacts": [{"at": "2026-09-13", "note": "电话未接<img src=x onerror=alert(1)>"}], "created_at": "2026-09-12T08:00:00"},
+        {"id": 4, "enrollment_id": 12, "reason": "迁回", "status": "returned", "result": "已恢复在管", "contacts": [], "created_at": "2026-09-01T08:00:00"}
+      ],
       "/api/spd/workbench/center": {
         "todo": {
           "mine": {
@@ -1035,6 +1043,7 @@
           "org_id": 2,
           "team_id": null,
           "assigned_user_id": null,
+          "status": "target",
           "reason": "筛查高危<img src=x onerror=alert(1)>"
         }
       ],
@@ -5316,7 +5325,7 @@
           "patient_name": "张三 &",
           "program_code": "hyp<b>",
           "risk_level": "high",
-          "status": "enrolled",
+          "status": "active", "archived": true, "stage": "稳定期<b>", "next_followup_at": "2026-09-20",
           "team_id": 1,
           "sign_date": "2026-03-01",
           "doctor_user_id": 5,

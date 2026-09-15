@@ -366,6 +366,102 @@ async function renderSpdExpert() {
   };
 }
 
+const SPD_ENROLL_STATUS = {
+  active: "在管", excluded: "已排除", migrated: "已迁出", dead: "已死亡", recalled: "召回中",
+};
+const SPD_CAND_STATUS = { suspect: "疑似", target: "目标", excluded: "已排除", enrolled: "已纳管" };
+const SPD_RECALL_STATUS = {
+  pending: ["待联系", "orange"], contacted: ["已联系", ""], returned: ["已召回", "green"], failed: ["召回失败", "red"],
+};
+const SPD_APPLY_STATUS = { pending: ["待受理", "orange"], accepted: ["已受理", "green"], rejected: ["已拒绝", ""] };
+
+/** 专病 360 档案（GET /api/spd/patients/{id}/profile）：纳管、路径、服务包、任务、监测、评估、
+    转诊一屏聚合。中心端与纳管页共用（个案管理师端 #7 / 中心端 #8）。 */
+function spdProfileHtml(p) {
+  const pt = p.patient || {};
+  const programs = (p.programs || []).map((g) => {
+    const e = g.enrollment || {};
+    return `<div style="margin:8px 0;padding:8px;border:1px solid #e5e7eb;border-radius:6px">
+      <b>${esc(g.program_name || e.program_code || "")}</b>
+      ${spdTag(SPD_RISK, e.risk_level)} <span class="tag">${esc(SPD_ENROLL_STATUS[e.status] || e.status || "")}</span>
+      阶段 ${esc(e.stage || "—")} · 待办 ${g.open_tasks ?? 0} · 下次随访 ${esc(e.next_followup_at || "—")}
+      <div class="desc">路径：${(g.paths || []).map((i) =>
+        `#${i.id} ${esc(i.template_code)} ${esc(i.current_node_key || "—")} ${i.progress}%`).join("；") || "—"}</div>
+      <div class="desc">服务包：${(g.packages || []).map((b) =>
+        `${esc(b.package_name)} 余 ${b.remaining}（已用 ${b.usage_rate}%）`).join("；") || "—"}</div>
+      <div class="desc">近期任务：${(g.recent_tasks || []).map((t) =>
+        `#${t.id} ${esc(t.title)} ${spdTag(SPD_TASK_STATUS, t.status)}`).join("；") || "—"}</div>
+    </div>`;
+  }).join("") || '<p class="desc">该患者没有签约专病</p>';
+  const measurements = table(["指标", "值", "单位", "分级", "来源", "时间"], (p.measurements || []).slice(0, 10), (m) =>
+    `<tr><td>${esc(m.metric)}</td><td>${esc(String(m.value ?? ""))}</td><td>${esc(m.unit || "")}</td>
+     <td>${esc(m.level || "—")}</td><td>${esc(m.source || "—")}</td><td>${esc(m.measured_at || "")}</td></tr>`);
+  const assessments = table(["ID", "量表", "得分", "风险", "时间"], p.assessments || [], (a) =>
+    `<tr><td>${a.id}</td><td>${esc(a.scale_code)}</td><td>${esc(String(a.score ?? ""))}</td>
+     <td>${spdTag(SPD_RISK, a.risk_level)}</td><td>${esc(a.created_at || "")}</td></tr>`);
+  const referrals = table(["ID", "方向", "状态", "时间"], p.referrals || [], (r) =>
+    `<tr><td>${r.id}</td><td>${r.direction === "up" ? "上转" : "下转"}</td>
+     <td>${spdTag(SPD_REF_STATUS, r.status)}</td><td>${esc(r.created_at || "")}</td></tr>`);
+  return panel(`专病 360 档案 · ${pt.name || ""}`, `
+    <p class="desc">#${pt.id ?? ""} · ${esc(pt.gender || "—")} · ${esc(pt.birth_date || "—")}
+      · 健康卡 ${esc(pt.ehc_no || "—")} · ${esc(pt.phone || "—")}</p>
+    ${programs}
+    <h4>近期监测（最近 10 条）</h4>${measurements}
+    <h4>评估</h4>${assessments}
+    <h4>转诊</h4>${referrals}`);
+}
+
+async function spdShowProfile(sel, patientId) {
+  const box = $(sel);
+  box.innerHTML = '<p class="desc">加载中…</p>';
+  try { box.innerHTML = spdProfileHtml(await api(`/api/spd/patients/${patientId}/profile`)); }
+  catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+}
+
+/** 纳管档案明细（GET /api/spd/enrollments/{id}）：服务包绑定（记用量 / 用量明细 / 解绑）与路径实例。
+    「记用量」按钮把项目清单放在 data-items 里（esc 过的 JSON，读回 dataset 时浏览器已还原）。 */
+function spdEnrollmentDetailHtml(e) {
+  const packages = table(["ID", "服务包", "价格", "项目 已用/总", "余量", "使用率", "状态", "到期", "操作"], e.packages || [], (b) =>
+    `<tr><td>${b.id}</td><td>${esc(b.package_name)}</td><td>${b.price}</td>
+     <td>${(b.items || []).map((i) => `${esc(i.name || i.code || "")} ${i.used}/${i.total}`).join("；") || "—"}</td>
+     <td>${b.remaining}</td><td>${b.usage_rate}%</td>
+     <td>${b.status === "bound" ? '<span class="tag green">绑定中</span>' : '<span class="tag">已解绑</span>'}</td>
+     <td>${esc(b.period_end || "—")}</td>
+     <td><button class="btn secondary" data-bind-usages="${b.id}">用量明细</button>
+       ${b.status === "bound"
+         ? `<button class="btn secondary" data-bind-use="${b.id}" data-enr="${e.id}"
+              data-items="${esc(JSON.stringify((b.items || []).map((i) => ({ code: i.code, name: i.name }))))}">记用量</button>
+            <button class="btn secondary" data-bind-unbind="${b.id}" data-enr="${e.id}">解绑</button>`
+         : ""}</td></tr>`);
+  const paths = table(["ID", "路径", "状态", "当前节点", "阶段", "进度"], e.paths || [], (i) =>
+    `<tr><td>${i.id}</td><td>${esc(i.template_code)}</td><td>${esc(SPD_INST_STATUS[i.status] || i.status)}</td>
+     <td>${esc(i.current_node_key || "—")}</td><td>${esc(i.current_stage || "—")}</td><td>${i.progress}%</td></tr>`);
+  return panel(`纳管档案 #${e.id}`, `
+    <p class="desc">${esc(e.patient_name || String(e.patient_id))} · ${esc(e.program_code)}
+      · ${esc(SPD_ENROLL_STATUS[e.status] || e.status)} · ${spdTag(SPD_RISK, e.risk_level)} · 阶段 ${esc(e.stage || "—")}
+      · 签约 ${esc(e.sign_date || "—")} · 知情同意 ${e.consent_signed ? "已签" : "未签"}${e.consent_no ? " " + esc(e.consent_no) : ""}
+      · 服务期 ${esc(e.service_start || "—")} ~ ${esc(e.service_end || "—")}</p>
+    <p class="desc">危险因素：${esc((e.risk_factors || []).join("、") || "—")}；并发症：${esc((e.complications || []).join("、") || "—")}；
+      标签：${esc((e.tags || []).join("、") || "—")}</p>
+    <h4>服务包 <button class="btn secondary" data-enr-bind="${e.id}">绑定服务包</button></h4>${packages}
+    <div id="spd-usage-list"></div>
+    <h4>路径实例</h4>${paths}`);
+}
+
+function spdGroupMembersHtml(groupId, rows) {
+  return panel(`分组成员 · 分组 #${groupId}`, `
+    <form class="inline" id="spd-grp-add" data-group="${groupId}">
+      <input name="patient_ids" placeholder="患者ID，逗号分隔" style="min-width:200px">
+      <label style="font-size:13px"><input type="checkbox" name="use_auto_rule" value="true"> 按分组自动规则吸入在管患者</label>
+      <input name="program_code" placeholder="限定病种编码（可留空）" style="width:160px">
+      <button class="secondary">加入</button>
+    </form><p class="msg" id="spd-grp-msg"></p>
+    ${table(["患者ID", "姓名", "性别", "出生", "健康卡", "加入时间", "操作"], rows, (m) =>
+      `<tr><td>${m.patient_id}</td><td>${esc(m.name || "—")}</td><td>${esc(m.gender || "—")}</td>
+       <td>${esc(m.birth_date || "—")}</td><td>${esc(m.ehc_no || "—")}</td><td>${esc(m.added_at || "")}</td>
+       <td><button class="btn secondary" data-grp-remove="${m.patient_id}" data-group="${groupId}">移出</button></td></tr>`)}`);
+}
+
 /* ============================================================
  * 4. 全程管理中心端（统筹调度中枢）
  * ==========================================================*/
@@ -373,11 +469,13 @@ async function renderSpdExpert() {
 async function renderSpdCenter() {
   $("#page-desc").textContent =
     "统筹调度中枢：统一待办、目标池分发与认领、在途转诊、生命周期确认、上报任务配置";
-  const [wb, candidates, catalog, reportTasks] = await Promise.all([
+  const [wb, candidates, catalog, reportTasks, applies, recalls] = await Promise.all([
     api("/api/spd/workbench/center"),
     api("/api/spd/candidates?status=target&limit=50"),
     spdCatalog(),
     api("/api/spd/case-report-tasks"),
+    api("/api/spd/service-applies?status=pending&limit=30"),
+    api("/api/spd/recalls?limit=30"),
   ]);
   // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 顶部的 spdCards 卡片区不是面板，原样保留。
@@ -403,12 +501,40 @@ async function renderSpdCenter() {
         <input name="assigned_user_id" type="number" placeholder="责任人用户ID">
         <button>分发</button>
       </form><p class="msg" id="spd-dist-msg"></p>
-      ${table(["ID", "患者", "病种", "风险", "机构", "团队", "责任人", "纳入依据"],
+      ${table(["ID", "患者", "病种", "风险", "状态", "机构", "团队", "责任人", "纳入依据", "操作"],
         candidates, (c) =>
         `<tr><td>${c.id}</td><td>${esc(c.patient_name || c.patient_id)}</td>
          <td>${esc(c.program_code)}</td><td>${spdTag(SPD_RISK, c.risk_level)}</td>
+         <td>${esc(SPD_CAND_STATUS[c.status] || c.status || "—")}</td>
          <td>${c.org_id ?? "—"}</td><td>${c.team_id ?? "—"}</td>
-         <td>${c.assigned_user_id ?? "—"}</td><td>${esc(c.reason || "—")}</td></tr>`)}`)}
+         <td>${c.assigned_user_id ?? "—"}</td><td>${esc(c.reason || "—")}</td>
+         <td>${c.status === "enrolled" ? "" :
+           `<button class="btn secondary" data-cand-claim="${c.id}">认领</button>
+            <button class="btn secondary" data-cand-status="${c.id}">改状态</button> `}
+           <button class="btn secondary" data-profile="${c.patient_id}">画像</button></td></tr>`)}
+      <div id="spd-center-profile"></div>`)}
+    ${panel("居民服务申请（待受理）", `
+      <p class="desc">居民端提交的专病服务申请；受理即进目标池等待签约建档，拒绝须写明原因</p>
+      ${table(["ID", "居民", "病种", "申请说明", "状态", "时间", "操作"], applies, (a) =>
+        `<tr><td>${a.id}</td><td>${esc(a.name || String(a.patient_id))}</td><td>${esc(a.program_code)}</td>
+         <td>${esc(a.note || "—")}</td><td>${spdTag(SPD_APPLY_STATUS, a.status)}</td>
+         <td>${esc(a.created_at || "")}</td>
+         <td>${a.status === "pending"
+           ? `<button class="btn secondary" data-apply="${a.id}" data-decision="accepted">受理</button>
+              <button class="btn secondary" data-apply="${a.id}" data-decision="rejected">拒绝</button>`
+           : esc(a.handle_note || "—")}</td></tr>`)}
+      <p class="msg" id="spd-apply-msg"></p>`)}
+    ${panel("召回跟进", `
+      <p class="desc">失访/脱管患者的召回过程逐次留痕；登记为「已召回」时档案自动恢复在管</p>
+      ${table(["ID", "档案", "原因", "状态", "联系记录", "结果", "发起", "操作"], recalls, (r) =>
+        `<tr><td>${r.id}</td><td>${r.enrollment_id}</td><td>${esc(r.reason || "—")}</td>
+         <td>${spdTag(SPD_RECALL_STATUS, r.status)}</td>
+         <td>${(r.contacts || []).length} 次${(r.contacts || []).length
+           ? `，最近 ${esc((r.contacts[r.contacts.length - 1] || {}).at || "")} ${esc((r.contacts[r.contacts.length - 1] || {}).note || "")}` : ""}</td>
+         <td>${esc(r.result || "—")}</td><td>${esc(r.created_at || "")}</td>
+         <td>${r.status === "returned" || r.status === "failed" ? "—"
+           : `<button class="btn secondary" data-recall="${r.id}">登记进度</button>`}</td></tr>`)}
+      <p class="msg" id="spd-recall-msg"></p>`)}
     ${panel("生命周期", table(["状态", "人数"], [
         ["已排除", wb.lifecycle.excluded], ["已迁出", wb.lifecycle.migrated],
         ["已死亡", wb.lifecycle.dead], ["召回中", wb.lifecycle.recalling],
@@ -446,11 +572,47 @@ async function renderSpdCenter() {
     return postAction("/api/spd/case-report-tasks",
       formJson(e.target, ["manager_user_id"]), "#spd-crt-msg");
   };
-  $("#page-body").addEventListener("click", (e) => {
-    const toggle = e.target.closest("[data-crt]");
+  $("#page-body").addEventListener("click", async (e) => {
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const toggle = el("data-crt"), claim = el("data-cand-claim"), status = el("data-cand-status");
+    const profile = el("data-profile"), apply = el("data-apply"), recall = el("data-recall");
     if (toggle) {
       return postAction(`/api/spd/case-report-tasks/${toggle.dataset.crt}`,
         { active: toggle.dataset.active === "1" }, "#spd-crt-msg", "PATCH");
+    }
+    if (claim) return postAction(`/api/spd/candidates/${claim.dataset.candClaim}/claim`, null, "#spd-dist-msg");
+    if (status) {
+      const form = await spdModal("调整目标池状态", [
+        { name: "status", label: "状态", type: "select", value: "target", options: [
+          { value: "suspect", label: "疑似" }, { value: "target", label: "目标" }, { value: "excluded", label: "排除" }] },
+        { name: "reason", label: "依据 / 原因", type: "textarea" },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/candidates/${status.dataset.candStatus}/status`,
+        { status: form.status, reason: form.reason || "" }, "#spd-dist-msg");
+    }
+    if (profile) return spdShowProfile("#spd-center-profile", profile.dataset.profile);
+    if (apply) {
+      const accepted = apply.dataset.decision === "accepted";
+      const form = await spdModal(accepted ? "受理服务申请" : "拒绝服务申请", [
+        { name: "handle_note", label: accepted ? "受理说明（可留空）" : "拒绝原因", type: "textarea" },
+      ]);
+      if (!form) return;
+      if (!accepted && !form.handle_note) { setMsg("#spd-apply-msg", "拒绝须写明原因", false); return; }
+      return postAction(`/api/spd/service-applies/${apply.dataset.apply}/handle`,
+        { status: apply.dataset.decision, handle_note: form.handle_note || "" }, "#spd-apply-msg");
+    }
+    if (recall) {
+      const form = await spdModal("登记召回进度", [
+        { name: "status", label: "状态", type: "select", value: "contacted", options: [
+          { value: "pending", label: "待联系" }, { value: "contacted", label: "已联系" },
+          { value: "returned", label: "已召回（档案恢复在管）" }, { value: "failed", label: "召回失败" }] },
+        { name: "contact_note", label: "本次联系情况", type: "textarea" },
+        { name: "result", label: "结果（可留空）" },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/recalls/${recall.dataset.recall}/progress`,
+        { status: form.status, contact_note: form.contact_note || "", result: form.result || "" }, "#spd-recall-msg");
     }
   });
 }
@@ -565,7 +727,9 @@ async function renderSpdPatients() {
         <input name="keyword" placeholder="姓名/证件号">
         <button class="secondary">查询</button>
       </form>
-      <div id="spd-enroll-list"></div>`)}
+      <div id="spd-enroll-list"></div>
+      <div id="spd-enroll-detail"></div>
+      <div id="spd-profile"></div>`)}
     ${panel("生命周期处置", `
       <p class="desc">排除 / 迁出 / 死亡 / 召回会同步终止后续任务、路径、干预与复诊；跨机构迁出需目标机构确认</p>
       <form class="inline" id="spd-life-form">
@@ -596,7 +760,8 @@ async function renderSpdPatients() {
       <p class="desc">自动纳入规则（全部满足才吸入）</p>
       <div id="spd-group-rules"></div>
       <p class="msg" id="spd-group-msg"></p>
-      <div id="spd-group-list"></div>`)}`;
+      <div id="spd-group-list"></div>
+      <div id="spd-group-detail"></div>`)}`;
 
   const drawScreenings = async () => {
     const rows = await api("/api/spd/screenings?limit=30");
@@ -617,7 +782,7 @@ async function renderSpdPatients() {
     const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
     const rows = await api(`/api/spd/enrollments?${qs}`);
     $("#spd-enroll-list").innerHTML = table(
-      ["ID", "患者", "病种", "阶段", "风险", "机构", "团队", "建档", "下次随访", "状态"],
+      ["ID", "患者", "病种", "阶段", "风险", "机构", "团队", "建档", "下次随访", "状态", "操作"],
       rows, (e) =>
       `<tr><td>${e.id}</td><td>${esc(e.patient_name || e.patient_id)}</td>
        <td>${esc(e.program_code)}</td><td>${esc(e.stage || "—")}</td>
@@ -626,7 +791,39 @@ async function renderSpdPatients() {
        <td>${e.archived ? '<span class="tag green">已建档</span>' : '<span class="tag orange">待完善</span>'}</td>
        <td>${esc(e.next_followup_at || "—")}</td>
        <td>${e.status === "active" ? '<span class="tag green">在管</span>'
-          : '<span class="tag">' + esc(e.status) + "</span>"}</td></tr>`);
+          : '<span class="tag">' + esc(SPD_ENROLL_STATUS[e.status] || e.status) + "</span>"}</td>
+       <td><button class="btn secondary" data-enr-detail="${e.id}">明细</button>
+         ${e.status === "active" ? `<button class="btn secondary" data-enr-edit="${e.id}"
+           data-stage="${esc(e.stage || "")}" data-risk="${esc(e.risk_level || "low")}">调整</button>` : ""}
+         <button class="btn secondary" data-profile="${e.patient_id}">画像</button></td></tr>`);
+  };
+  const showEnrollment = async (id) => {
+    const box = $("#spd-enroll-detail");
+    box.innerHTML = '<p class="desc">加载中…</p>';
+    try { box.innerHTML = spdEnrollmentDetailHtml(await api(`/api/spd/enrollments/${id}`)); }
+    catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  const showGroup = async (groupId) => {
+    const box = $("#spd-group-detail");
+    box.innerHTML = '<p class="desc">加载中…</p>';
+    try {
+      box.innerHTML = spdGroupMembersHtml(groupId, await api(`/api/spd/groups/${groupId}/members?limit=100`));
+    } catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; return; }
+    // 这张表单是点开明细后才画出来的，监听紧随 innerHTML 同步挂上
+    $("#spd-grp-add").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = formJson(e.target);
+      const body = {
+        patient_ids: String(f.patient_ids || "").split(/[，,\s]+/).filter(Boolean).map(Number),
+        use_auto_rule: f.use_auto_rule === "true", program_code: f.program_code || "",
+      };
+      if (!body.patient_ids.length && !body.use_auto_rule) { setMsg("#spd-grp-msg", "填患者ID或勾选按规则吸入", false); return; }
+      try {
+        const r = await api(`/api/spd/groups/${groupId}/members`, { method: "POST", body: JSON.stringify(body) });
+        await showGroup(groupId);
+        setMsg("#spd-grp-msg", `新加入 ${r.added} 人，分组现有 ${r.total} 人`);
+      } catch (err) { setMsg("#spd-grp-msg", err.message, false); }
+    };
   };
   const drawLifecycle = async () => {
     const rows = await api("/api/spd/lifecycle-events?limit=20");
@@ -668,8 +865,11 @@ async function renderSpdPatients() {
       formJson(e.target, ["target_org_id"]), "#spd-life-msg");
   };
   $("#page-body").onclick = async (e) => {
-    const review = e.target.closest("[data-review]");
-    const confirm = e.target.closest("[data-confirm]");
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const review = el("data-review"), confirm = el("data-confirm");
+    const enrDetail = el("data-enr-detail"), enrEdit = el("data-enr-edit"), enrBind = el("data-enr-bind");
+    const bindUsages = el("data-bind-usages"), bindUse = el("data-bind-use"), bindUnbind = el("data-bind-unbind");
+    const profile = el("data-profile"), grpMembers = el("data-grp-members"), grpRemove = el("data-grp-remove");
     if (review) {
       return postAction(`/api/spd/screenings/${review.dataset.review}/review`,
         { review_result: review.dataset.r }, "#spd-screen-msg");
@@ -678,16 +878,108 @@ async function renderSpdPatients() {
       return postAction(`/api/spd/lifecycle-events/${confirm.dataset.confirm}/confirm`,
         null, "#spd-life-msg");
     }
+    if (enrDetail) return showEnrollment(enrDetail.dataset.enrDetail);
+    if (profile) return spdShowProfile("#spd-profile", profile.dataset.profile);
+    if (enrEdit) {
+      const form = await spdModal("调整纳管档案（留空的项不改）", [
+        { name: "stage", label: "管理阶段", value: enrEdit.dataset.stage || "" },
+        { name: "risk_level", label: "风险分层", type: "select", value: enrEdit.dataset.risk || "low", options: [
+          { value: "low", label: "低危" }, { value: "mid", label: "中危" },
+          { value: "high", label: "高危" }, { value: "very_high", label: "极高危" }] },
+        { name: "team_id", label: "服务团队ID", type: "number" },
+        { name: "doctor_user_id", label: "主管医生用户ID", type: "number" },
+        { name: "manager_user_id", label: "个案管理师用户ID", type: "number" },
+        { name: "next_followup_at", label: "下次随访日期 YYYY-MM-DD" },
+      ]);
+      if (!form) return;
+      const body = { risk_level: form.risk_level };
+      if (form.stage) body.stage = form.stage;
+      for (const k of ["team_id", "doctor_user_id", "manager_user_id"]) if (form[k]) body[k] = form[k];
+      if (form.next_followup_at) body.next_followup_at = form.next_followup_at;
+      return postAction(`/api/spd/enrollments/${enrEdit.dataset.enrEdit}`, body, "#spd-enroll-msg", "PATCH");
+    }
+    if (enrBind) {
+      const enrollmentId = enrBind.dataset.enrBind;
+      let packages = [];
+      try { packages = await api("/api/spd/service-packages?limit=100"); }
+      catch (err) { setMsg("#spd-enroll-msg", err.message, false); return; }
+      const active = packages.filter((k) => k.active !== false);
+      if (!active.length) { setMsg("#spd-enroll-msg", "没有可绑定的服务包，先在配置里建", false); return; }
+      const form = await spdModal("绑定服务包", [
+        { name: "package_id", label: "服务包", type: "select", value: String(active[0].id),
+          options: active.map((k) => ({ value: String(k.id), label: `${k.name}（${k.price} 元 / ${k.period_days} 天）` })) },
+      ]);
+      if (!form) return;
+      try {
+        await api(`/api/spd/enrollments/${enrollmentId}/packages`, { method: "POST",
+          body: JSON.stringify({ package_id: Number(form.package_id) }) });
+        await showEnrollment(enrollmentId);
+        setMsg("#spd-enroll-msg", "服务包已绑定");
+      } catch (err) { setMsg("#spd-enroll-msg", err.message, false); }
+      return;
+    }
+    if (bindUsages) {
+      try {
+        const rows = await api(`/api/spd/package-bindings/${bindUsages.dataset.bindUsages}/usages?limit=100`);
+        $("#spd-usage-list").innerHTML = panel(`用量明细 · 绑定 #${bindUsages.dataset.bindUsages}`,
+          table(["ID", "项目", "次数", "单价", "备注", "时间"], rows, (u) =>
+            `<tr><td>${u.id}</td><td>${esc(u.item_name || u.item_code)}</td><td>${u.qty}</td>
+             <td>${u.price}</td><td>${esc(u.note || "—")}</td><td>${esc(u.used_at || "")}</td></tr>`));
+      } catch (err) { setMsg("#spd-enroll-msg", err.message, false); }
+      return;
+    }
+    if (bindUse) {
+      let items = [];
+      try { items = JSON.parse(bindUse.dataset.items || "[]"); } catch (err) { items = []; }
+      if (!items.length) { setMsg("#spd-enroll-msg", "该服务包没有可扣减的项目", false); return; }
+      const form = await spdModal("服务项目扣减登记", [
+        { name: "item_code", label: "项目", type: "select", value: items[0].code,
+          options: items.map((i) => ({ value: i.code, label: i.name || i.code })) },
+        { name: "qty", label: "次数", type: "number", value: 1 },
+        { name: "note", label: "备注（可留空）", type: "textarea" },
+      ]);
+      if (!form) return;
+      try {
+        await api(`/api/spd/package-bindings/${bindUse.dataset.bindUse}/usages`, { method: "POST",
+          body: JSON.stringify({ item_code: form.item_code, qty: form.qty || 1, note: form.note || "" }) });
+        await showEnrollment(bindUse.dataset.enr);
+        setMsg("#spd-enroll-msg", "扣减已登记");
+      } catch (err) { setMsg("#spd-enroll-msg", err.message, false); }
+      return;
+    }
+    if (bindUnbind) {
+      const form = await spdModal("解绑服务包", [
+        { name: "ack", label: "解绑后不能再扣减，已用次数保留", type: "select", value: "yes",
+          options: [{ value: "yes", label: "确定解绑" }] },
+      ]);
+      if (!form) return;
+      try {
+        await api(`/api/spd/package-bindings/${bindUnbind.dataset.bindUnbind}/unbind`, { method: "POST" });
+        await showEnrollment(bindUnbind.dataset.enr);
+        setMsg("#spd-enroll-msg", "服务包已解绑");
+      } catch (err) { setMsg("#spd-enroll-msg", err.message, false); }
+      return;
+    }
+    if (grpMembers) return showGroup(grpMembers.dataset.grpMembers);
+    if (grpRemove) {
+      try {
+        await api(`/api/spd/groups/${grpRemove.dataset.group}/members/${grpRemove.dataset.grpRemove}`, { method: "DELETE" });
+        await showGroup(grpRemove.dataset.group);
+        setMsg("#spd-grp-msg", "已移出");
+      } catch (err) { setMsg("#spd-grp-msg", err.message, false); }
+      return;
+    }
   };
   // 取数放最后：以上监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 renderSpdPath）
   await Promise.all([drawScreenings(), drawEnrollments(), drawLifecycle()]);
   const drawGroups = async () => {
     const groups = await api("/api/spd/groups");
     $("#spd-group-list").innerHTML = table(
-      ["ID", "名称", "范围", "科室", "自动规则", "成员数"], groups, (g) =>
+      ["ID", "名称", "范围", "科室", "自动规则", "成员数", "操作"], groups, (g) =>
       `<tr><td>${g.id}</td><td>${esc(g.name)}</td><td>${esc(g.scope)}</td>
        <td>${esc(g.dept || "—")}</td><td>${(g.auto_rule || []).length} 条</td>
-       <td>${g.member_count ?? "—"}</td></tr>`);
+       <td>${g.member_count ?? "—"}</td>
+       <td><button class="btn secondary" data-grp-members="${g.id}">成员</button></td></tr>`);
   };
   await drawGroups();
   // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的 groupEditor，提前挂会把窗口期提交从

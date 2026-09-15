@@ -170,7 +170,7 @@ MIGRATED_PAGES = {
     "renderMedication": 4,          # 含一处带 accent 的条件面板（供应风险）
     "renderBilling": 5,
     "renderEsb": 4,
-    "renderSpdCenter": 5,
+    "renderSpdCenter": 7,           # 功能完善·spd/population（2026-09-15）：+居民服务申请、+召回跟进两个面板
     # 第四批 2026-09-02：先给五页补夹具（team / hc / oaqc / infectious / blood 各带 XSS 载荷）再迁；
     # 条件面板（预警 / 服务包 / 按角色显示的表单）条件仍留在调用点
     "renderSpdTeam": 6,
@@ -252,7 +252,8 @@ MIGRATED_PAGES = {
     # 转诊闭环 / 报告推送）。**pages-spd.js 至此没有可迁的手写外壳了**——剩的 3 处
     # 全在点击之后才渲染的路径里（本表下方两条 + spdShowConsultThread 的会话面板）。
     "renderSpdExpert": 3,
-    "renderSpdPatients": 4,         # 四张表都由末尾的 drawXxx() 写进各自容器（不在本页计数内）
+    "renderSpdPatients": 5,         # 四张表都由末尾的 drawXxx() 写进各自容器（不在本页计数内）；
+                                    # 第 5 处是点「用量明细」后写进 #spd-usage-list 的面板（功能完善·spd/population）
     "renderSpdPath": 3,             # 路径实例表与任务表同上
     "renderSpdReferral": 4,         # 超时预警是条件面板，走 accent
     "renderSpdReport": 3,           # 第 4 处外壳在点击「查看」之后的报告详情里，见下
