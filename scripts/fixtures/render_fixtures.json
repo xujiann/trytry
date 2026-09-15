@@ -5387,7 +5387,8 @@
     "_why": [
       "第十四批（2026-09-06）：临床路径与任务中心。三个面板无条件渲染；",
       "路径实例表与任务表都是 innerHTML 之后由 drawInstances/drawTasks 写进容器的。",
-      "任务四条覆盖 pending/doing/done/overdue 四态；一条 escalated、一条被催办过。"
+      "任务四条覆盖 pending/doing/done/overdue 四态；一条 escalated、一条被催办过。",
+      "功能完善·spd/tasks（2026-09-15）：加第五条 submitted + require_evidence 的任务，首屏才会渲染出「审核」与「上传佐证」两个分支；勾选列与批量表单无条件渲染。"
     ],
     "fn": "renderSpdPath",
     "api": {
@@ -5508,7 +5509,8 @@
           "status": "doing",
           "due_date": "2026-09-12",
           "escalated": false,
-          "urged_count": 2
+          "urged_count": 2,
+          "require_evidence": true
         },
         {
           "id": 63,
@@ -5535,6 +5537,21 @@
           "due_date": "2026-08-20",
           "escalated": true,
           "urged_count": 3
+        },
+        {
+          "id": 65,
+          "patient_id": 33,
+          "patient_name": "王五 & <b>",
+          "title": "季度评估<img src=x onerror=alert(1)>",
+          "task_type": "assess",
+          "scene": "path",
+          "priority": 2,
+          "status": "submitted",
+          "due_date": "2026-09-15",
+          "escalated": false,
+          "urged_count": 1,
+          "require_evidence": true,
+          "assignee_id": 9
         }
       ]
     }

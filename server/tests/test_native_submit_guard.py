@@ -67,7 +67,8 @@ def test_三个入口都先加载shared():
 ROOT_FIXED_RENDERERS = [
     ("pages-spd.js", "renderSpdPath",
      ['$("#spd-tpl-form").onsubmit', '$("#spd-inst-form").onsubmit',
-      '$("#spd-task-filter").onsubmit', '$("#page-body").onclick'],
+      '$("#spd-task-filter").onsubmit', '$("#spd-task-batch").onsubmit',
+      '$("#page-body").onclick'],
      "await Promise.all([drawInstances(), drawTasks()])"),
     ("core.js", "renderPatients",
      ['$("#auth-grant-form").onsubmit', '$("#auth-list-form").onsubmit',

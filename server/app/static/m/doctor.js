@@ -180,9 +180,23 @@ async function loadSpdTodo(box) {
   box.querySelectorAll("[data-spd-claim]").forEach((b) => b.addEventListener("click", async () => {
     await spdPost(`/api/spd/tasks/${b.dataset.spdClaim}/claim`);
   }));
-  box.querySelectorAll("[data-spd-done]").forEach((b) => b.addEventListener("click", async () => {
-    await spdPost(`/api/spd/tasks/${b.dataset.spdDone}/complete`,
-      { result: { note: prompt("办理结果") || "" } });
+  box.querySelectorAll("[data-spd-done]").forEach((b) => b.addEventListener("click", () => {
+    // 办理结果在卡片里用文本域收，不再弹系统输入框：弹窗录不了多行、没有校验提示、
+    // 粘不了长文本（功能完善规则 §1 第 7 项；存量登记 P2-38）。再点一次不重复插表单。
+    const card = b.closest(".m-card");
+    if (!card || card.querySelector(".spd-done-form")) return;
+    const form = document.createElement("form");
+    form.className = "spd-done-form";
+    form.innerHTML = `<textarea name="note" rows="2" placeholder="办理结果（可留空）"></textarea>
+      <button type="submit" class="ghost-btn">确认办结</button>
+      <button type="button" class="ghost-btn" data-cancel>取消</button>`;
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      await spdPost(`/api/spd/tasks/${b.dataset.spdDone}/complete`,
+        { result: { note: form.note.value.trim() } });
+    };
+    form.querySelector("[data-cancel]").onclick = () => form.remove();
+    card.appendChild(form);
   }));
 }
 

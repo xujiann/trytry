@@ -706,9 +706,101 @@ async function renderSpdPatients() {
  * 7. 路径与任务中心
  * ==========================================================*/
 
+const SPD_INST_STATUS = {
+  running: "执行中", paused: "已暂停", completed: "已完成", cancelled: "已取消",
+};
+
+/** 任务行的操作按钮按状态给：待接收的能接收/分派，办理中的能提交/转派/上传佐证，
+    待审核的只能审核，已结束的只剩详情。九个流转端点后端都还按角色（SERVICE_ROLES）
+    与机构归属再判一次——这里只是不把注定 409 的按钮摆出来。 */
+function spdTaskActions(t) {
+  const b = (attr, label) => `<button class="btn secondary" ${attr}="${t.id}">${label}</button>`;
+  const parts = [b("data-task-detail", "详情")];
+  if (t.status === "done" || t.status === "cancelled") return parts.join(" ");
+  if (t.status === "submitted") {
+    parts.push(b("data-task-review", "审核"));
+    return parts.join(" ");
+  }
+  if (t.status === "pending") parts.push(b("data-task-claim", "接收"));
+  parts.push(b("data-task-assign", t.assignee_id ? "转派" : "分派"));
+  parts.push(b("data-task-submit", "提交"));
+  if (t.require_evidence) parts.push(b("data-task-evidence", "上传佐证"));
+  parts.push(b("data-task-urge", "催办"));
+  if (!t.escalated) parts.push(b("data-task-escalate", "升级"));
+  parts.push(b("data-task-done", "办结"));
+  return parts.join(" ");
+}
+
+function spdPriorityLabel(p) {
+  return p === 3 ? "特急" : p === 2 ? "紧急" : "普通";
+}
+
+/** 任务详情（GET /api/spd/tasks/{id}）：列表行放不下的字段——表单、办理结果、佐证、
+    审核意见、来源。佐证走鉴权下载（`downloadAttachment`），不能用裸 <a href>：
+    Bearer 模式下浏览器直开链接没有令牌。 */
+function spdTaskDetailHtml(t) {
+  const kv = (k, v) => `<div><b>${k}</b>：${v}</div>`;
+  const json = (o) => `<pre style="white-space:pre-wrap;margin:4px 0">${esc(JSON.stringify(o || {}, null, 1))}</pre>`;
+  const evidence = (t.evidence_urls || []).map((e) =>
+    `<button class="btn secondary" data-attdl="${e.attachment_id}" data-fn="task-${t.id}-evidence-${e.attachment_id}">佐证 #${e.attachment_id}</button>`
+  ).join(" ") || "—";
+  return panel(`任务详情 #${t.id}`, `
+    ${kv("标题", esc(t.title))}
+    ${kv("患者", `${esc(t.patient_name || "")}（#${t.patient_id}）${t.phone ? " " + esc(t.phone) : ""}`)}
+    ${kv("病种 / 类型", `${esc(t.program_code || "—")} / ${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}`)}
+    ${kv("状态", spdTag(SPD_TASK_STATUS, t.status) + (t.escalated ? ' <span class="tag red">已升级</span>' : ""))}
+    ${kv("优先级 / 截止", `${spdPriorityLabel(t.priority)} / ${esc(t.due_date || "—")}`)}
+    ${kv("责任人ID / 团队ID / 机构ID", `${t.assignee_id ?? "—"} / ${t.team_id ?? "—"} / ${t.org_id ?? "—"}`)}
+    ${kv("执行角色 / 来源 / 表单编码", `${esc(t.exec_role || "—")} / ${esc(t.source || "—")} / ${esc(t.form_code || "—")}`)}
+    ${kv("催办次数", t.urged_count ?? 0)}
+    ${kv("审核意见", esc(t.review_note || "—"))}
+    ${kv("创建 / 完成", `${esc(t.created_at || "—")} / ${esc(t.finished_at || "—")}`)}
+    ${kv("佐证材料", evidence)}
+    ${kv("表单", json(t.form))}
+    ${kv("办理结果", json(t.result))}`);
+}
+
+/** 路径执行明细（GET /api/spd/path-instances/{id}）：节点清单 + 每节点任务状态。
+    `nodeIds` 由模板详情（GET /api/spd/path-templates/{id}）按 key 对出来——实例明细
+    里的节点没有 id，而进入条件校验要 node_id；模板看不到时明细照常显示，只少这个按钮。 */
+function spdInstanceDetailHtml(inst, nodeIds) {
+  const rows = inst.nodes || [];
+  return panel(`路径明细 #${inst.id}`, `
+    <p class="desc">${esc(inst.patient_name || String(inst.patient_id || ""))} · ${esc(inst.template_name)} ·
+      ${esc(SPD_INST_STATUS[inst.status] || inst.status)} · 进度 ${inst.progress}%
+      · 当前节点 ${esc(inst.current_node_key || "—")}</p>
+    ${table(["序", "节点", "阶段", "执行角色", "时限(天)", "本节点任务", "操作"], rows, (n) =>
+      `<tr><td>${n.seq}</td>
+       <td>${esc(n.name || n.key)}${n.is_current ? ' <span class="tag orange">当前</span>' : ""}</td>
+       <td>${esc(n.stage || "—")}</td><td>${esc(n.exec_role || "—")}</td><td>${n.due_days}</td>
+       <td>${(n.tasks || []).map((t) => `#${t.id} ${spdTag(SPD_TASK_STATUS, t.status)}`).join(" ") || "—"}</td>
+       <td>${nodeIds[n.key]
+          ? `<button class="btn secondary" data-node-check="${nodeIds[n.key]}" data-inst="${inst.id}">进入条件</button>`
+          : "—"}</td></tr>`)}`);
+}
+
+/** 导出端点（GET /api/spd/tasks-export）只回 columns+rows，CSV 在前端拼（后端 docstring 的
+    约定：平台的导出都走这个形状，不多养一份编码/换行/BOM 处理）。单元格含逗号/引号/换行
+    时加引号并把引号翻倍；开头放 BOM 让 Excel 认出 UTF-8；以 = + - @ 开头的非数字文本前置
+    单引号，免得被表格软件当公式执行。 */
+function spdDownloadCsv(filename, columns, rows) {
+  const cell = (v) => {
+    let s = v == null ? "" : String(v);
+    if (/^[=+\-@]/.test(s) && Number.isNaN(Number(s))) s = "'" + s;
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const text = [columns, ...rows].map((r) => r.map(cell).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["﻿" + text], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function renderSpdPath() {
   $("#page-desc").textContent =
-    "标准路径与统一任务：模板发布、患者路径实例、节点流转、任务接收分派催办升级";
+    "标准路径与统一任务：模板发布、患者路径实例与进入条件、任务接收分派提交审核催办升级、批量处理与导出";
   const [catalog, templates, summary] = await Promise.all([
     spdCatalog(), api("/api/spd/path-templates?limit=30"), api("/api/spd/tasks/summary"),
   ]);
@@ -748,7 +840,8 @@ async function renderSpdPath() {
         </select>
         <button>启动路径</button>
       </form><p class="msg" id="spd-inst-msg"></p>
-      <div id="spd-inst-list"></div>`)}
+      <div id="spd-inst-list"></div>
+      <div id="spd-inst-detail"></div>`)}
     ${panel("任务中心", `
       <form class="inline" id="spd-task-filter">
         <select name="task_type"><option value="">全部类型</option>
@@ -757,9 +850,23 @@ async function renderSpdPath() {
           ${Object.entries(SPD_TASK_STATUS).map(([k, v]) => `<option value="${k}">${esc(v[0])}</option>`).join("")}</select>
         <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看我的</label>
         <button class="secondary">查询</button>
+        <button type="button" class="btn secondary" data-task-export>导出 CSV</button>
       </form><p class="msg" id="spd-task-msg"></p>
-      <div id="spd-task-list"></div>`)}`;
+      <form class="inline" id="spd-task-batch">
+        <span style="font-size:13px">勾选后批量：</span>
+        <select name="action">
+          <option value="claim">接收</option><option value="urge">催办</option>
+          <option value="escalate">升级</option><option value="assign">分配</option>
+          <option value="cancel">取消</option>
+        </select>
+        <input name="assignee_id" type="number" placeholder="责任人用户ID（分配时必填）">
+        <input name="note" placeholder="备注（取消时作为原因）">
+        <button class="secondary">对勾选任务执行</button>
+      </form>
+      <div id="spd-task-list"></div>
+      <div id="spd-task-detail"></div>`)}`;
 
+  let lastTaskQuery = {};
   const drawInstances = async () => {
     const rows = await api("/api/spd/path-instances?limit=20");
     $("#spd-inst-list").innerHTML = table(
@@ -769,23 +876,47 @@ async function renderSpdPath() {
        <td>${esc(i.current_stage || "—")}</td><td>${i.progress}%</td>
        <td>${i.status === "running" ? '<span class="tag orange">执行中</span>'
           : i.status === "completed" ? '<span class="tag green">已完成</span>'
-          : '<span class="tag">' + esc(i.status) + "</span>"}</td>
-       <td>${i.status === "running"
-          ? `<button class="btn secondary" data-adv="${i.id}">推进节点</button>` : "—"}</td></tr>`);
+          : '<span class="tag">' + esc(SPD_INST_STATUS[i.status] || i.status) + "</span>"}</td>
+       <td>${i.status === "running" ? `<button class="btn secondary" data-adv="${i.id}">推进节点</button> ` : ""}
+           <button class="btn secondary" data-inst-detail="${i.id}">明细</button>
+           ${i.status === "completed" || i.status === "cancelled" ? ""
+             : `<button class="btn secondary" data-inst-adjust="${i.id}">调整</button>`}</td></tr>`);
   };
   const drawTasks = async (query) => {
-    const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
+    lastTaskQuery = query || {};
+    const qs = new URLSearchParams({ limit: "30", ...lastTaskQuery }).toString();
     const rows = await api(`/api/spd/tasks?${qs}`);
     $("#spd-task-list").innerHTML = table(
-      ["ID", "患者", "任务", "类型", "状态", "优先级", "截止", "催办", "操作"], rows, (t) =>
-      `<tr><td>${t.id}</td><td>${esc(t.patient_name || t.patient_id)}</td>
+      ["选", "ID", "患者", "任务", "类型", "状态", "优先级", "截止", "催办", "操作"], rows, (t) =>
+      `<tr><td><input type="checkbox" data-task-pick="${t.id}"></td><td>${t.id}</td>
+       <td>${esc(t.patient_name || t.patient_id)}</td>
        <td>${esc(t.title)}</td><td>${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}</td>
        <td>${spdTag(SPD_TASK_STATUS, t.status)}${t.escalated ? ' <span class="tag red">升级</span>' : ""}</td>
-       <td>${t.priority === 3 ? "特急" : t.priority === 2 ? "紧急" : "普通"}</td>
+       <td>${spdPriorityLabel(t.priority)}</td>
        <td>${esc(t.due_date || "—")}</td><td>${t.urged_count}</td>
-       <td><button class="btn secondary" data-task-claim="${t.id}">接收</button>
-           <button class="btn secondary" data-task-urge="${t.id}">催办</button>
-           <button class="btn secondary" data-task-done="${t.id}">办结</button></td></tr>`);
+       <td>${spdTaskActions(t)}</td></tr>`);
+  };
+  const showTask = async (id) => {
+    const box = $("#spd-task-detail");
+    box.innerHTML = '<p class="desc">加载中…</p>';
+    try { box.innerHTML = spdTaskDetailHtml(await api(`/api/spd/tasks/${id}`)); }
+    catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  const showInstance = async (id) => {
+    const box = $("#spd-inst-detail");
+    box.innerHTML = '<p class="desc">加载中…</p>';
+    try {
+      const inst = await api(`/api/spd/path-instances/${id}`);
+      let nodeIds = {};
+      try {
+        const tpl = await api(`/api/spd/path-templates/${inst.template_id}`);
+        nodeIds = Object.fromEntries((tpl.nodes || []).map((n) => [n.key, n.id]));
+      } catch (err) {
+        // 模板看不到（403/404）不影响看明细，只是没有"进入条件"按钮；原因给出来而不是吞掉
+        setMsg("#spd-inst-msg", `模板详情不可用：${err.message}`, false);
+      }
+      box.innerHTML = spdInstanceDetailHtml(inst, nodeIds);
+    } catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   // 监听器必须在任何 await 之前挂上（CI 实锤的窗口：innerHTML 画出表单后、
   // 两次取数的网络往返里点"启动路径"，submit 没有监听器接管，浏览器走原生
@@ -804,11 +935,29 @@ async function renderSpdPath() {
     e.preventDefault();
     await drawTasks(formJson(e.target));
   };
+  $("#spd-task-batch").onsubmit = async (e) => {
+    e.preventDefault();
+    const ids = [...document.querySelectorAll("[data-task-pick]:checked")]
+      .map((c) => Number(c.dataset.taskPick));
+    if (!ids.length) { setMsg("#spd-task-msg", "先勾选要处理的任务", false); return; }
+    try {
+      // 不走 postAction：批量端点逐条判定、跳过的要连原因一起给人看，整页重画会把它冲掉
+      const r = await api("/api/spd/tasks/batch", { method: "POST",
+        body: JSON.stringify({ task_ids: ids, ...formJson(e.target, ["assignee_id"]) }) });
+      const skipped = (r.skipped || []).map((s) => `#${s.id} ${s.reason}`).join("，");
+      setMsg("#spd-task-msg", `已处理 ${r.processed} 条${skipped ? `，跳过 ${r.skipped.length} 条：${skipped}` : ""}`);
+      await drawTasks(lastTaskQuery);
+    } catch (err) { setMsg("#spd-task-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const node = el("data-tpl-node"), pub = el("data-tpl-pub"), copy = el("data-tpl-copy");
-    const adv = el("data-adv");
+    const adv = el("data-adv"), instDetail = el("data-inst-detail"), instAdjust = el("data-inst-adjust");
+    const nodeCheck = el("data-node-check");
     const claim = el("data-task-claim"), urge = el("data-task-urge"), done = el("data-task-done");
+    const detail = el("data-task-detail"), assign = el("data-task-assign"), escalate = el("data-task-escalate");
+    const submit = el("data-task-submit"), review = el("data-task-review"), evidence = el("data-task-evidence");
+    const exportBtn = el("data-task-export"), attdl = el("data-attdl");
     if (node) {
       const form = await spdModal("添加路径节点", [
         { name: "key", label: "节点 key（英文，如 assess）", required: true },
@@ -830,8 +979,101 @@ async function renderSpdPath() {
       return postAction(`/api/spd/path-templates/${copy.dataset.tplCopy}/copy`, {}, "#spd-tpl-msg");
     }
     if (adv) return postAction(`/api/spd/path-instances/${adv.dataset.adv}/advance`, null, "#spd-inst-msg");
+    if (instDetail) return showInstance(instDetail.dataset.instDetail);
+    if (instAdjust) {
+      const form = await spdModal("调整路径实例（改的是实例不是模板）", [
+        { name: "status", label: "状态", type: "select", value: "", options: [
+          { value: "", label: "不改" }, { value: "running", label: "执行中（恢复）" },
+          { value: "paused", label: "暂停" }, { value: "cancelled", label: "取消（未完成的任务一并取消）" }] },
+        { name: "owner_user_id", label: "负责人用户ID（留空不改）", type: "number" },
+      ]);
+      if (!form) return;
+      const body = {};
+      if (form.status) body.status = form.status;
+      if (form.owner_user_id) body.owner_user_id = form.owner_user_id;
+      if (!Object.keys(body).length) return;
+      return postAction(`/api/spd/path-instances/${instAdjust.dataset.instAdjust}`, body, "#spd-inst-msg", "PATCH");
+    }
+    if (nodeCheck) {
+      try {
+        const r = await api(`/api/spd/path-nodes/${nodeCheck.dataset.nodeCheck}/enter-check?instance_id=${nodeCheck.dataset.inst}`);
+        const conds = (r.conditions || []).map((c) => JSON.stringify(c)).join("；") || "该节点没有进入条件";
+        const matched = (r.matched || []).map((c) => JSON.stringify(c)).join("；");
+        setMsg("#spd-inst-msg",
+          `${r.allowed ? "满足进入条件" : "不满足进入条件"}：${conds}${matched ? `｜已满足：${matched}` : ""}`, r.allowed);
+      } catch (err) { setMsg("#spd-inst-msg", err.message, false); }
+      return;
+    }
     if (claim) return postAction(`/api/spd/tasks/${claim.dataset.taskClaim}/claim`, null, "#spd-task-msg");
     if (urge) return postAction(`/api/spd/tasks/${urge.dataset.taskUrge}/urge`, null, "#spd-task-msg");
+    if (escalate) return postAction(`/api/spd/tasks/${escalate.dataset.taskEscalate}/escalate`, null, "#spd-task-msg");
+    if (detail) return showTask(detail.dataset.taskDetail);
+    if (assign) {
+      const form = await spdModal("分配 / 转派任务", [
+        { name: "assignee_id", label: "责任人用户ID", type: "number", required: true },
+        { name: "note", label: "备注（可留空）", type: "textarea" },
+      ]);
+      if (!form || !form.assignee_id) return;
+      return postAction(`/api/spd/tasks/${assign.dataset.taskAssign}/assign`,
+        { assignee_id: form.assignee_id, note: form.note || "" }, "#spd-task-msg");
+    }
+    if (submit) {
+      const form = await spdModal("提交任务", [
+        { name: "note", label: "办理结果 / 说明", type: "textarea" },
+        { name: "mode", label: "提交方式", type: "select", value: "final", options: [
+          { value: "final", label: "提交审核" }, { value: "draft", label: "保存草稿（状态转办理中）" }] },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/tasks/${submit.dataset.taskSubmit}/submit`,
+        { result: { note: form.note || "" }, draft: form.mode === "draft" }, "#spd-task-msg");
+    }
+    if (review) {
+      const form = await spdModal("审核任务", [
+        { name: "approved", label: "结论", type: "select", value: "true", options: [
+          { value: "true", label: "通过（完成并推进路径）" }, { value: "false", label: "退回（回到办理中）" }] },
+        { name: "note", label: "审核意见", type: "textarea" },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/tasks/${review.dataset.taskReview}/review`,
+        { approved: form.approved !== "false", note: form.note || "" }, "#spd-task-msg");
+    }
+    if (evidence) {
+      // 佐证 = 挂在该任务名下的附件（owner_type=spd_task）。上传后用"保存草稿"把附件 id
+      // 写进任务的 evidence 清单（要带上已有的，后端是整体替换），最终提交时后端再核一遍。
+      const taskId = evidence.dataset.taskEvidence;
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*,.pdf";
+      input.onchange = async () => {
+        try {
+          const att = await uploadAttachment("spd_task", taskId, input);
+          const t = await api(`/api/spd/tasks/${taskId}`);
+          const ids = [...(t.evidence || []).map(Number).filter(Boolean), att.id];
+          await api(`/api/spd/tasks/${taskId}/submit`, { method: "POST",
+            body: JSON.stringify({ result: t.result || {}, evidence: ids, draft: true }) });
+          setMsg("#spd-task-msg", `佐证 #${att.id} 已挂到任务 #${taskId}（共 ${ids.length} 份），提交时会一并核验`);
+          await drawTasks(lastTaskQuery);
+        } catch (err) { setMsg("#spd-task-msg", err.message, false); }
+      };
+      input.click();
+      return;
+    }
+    if (attdl) {
+      try { await downloadAttachment(attdl.dataset.attdl, attdl.dataset.fn); }
+      catch (err) { setMsg("#spd-task-msg", err.message, false); }
+      return;
+    }
+    if (exportBtn) {
+      const filters = formJson($("#spd-task-filter"));
+      delete filters.mine;   // 导出端点没有 mine 参数：它按调用方可见机构导出
+      const qs = new URLSearchParams({ limit: "2000", ...filters }).toString();
+      try {
+        const d = await api(`/api/spd/tasks-export?${qs}`);
+        spdDownloadCsv(`spd_tasks_${new Date().toISOString().slice(0, 10)}.csv`, d.columns, d.rows);
+        setMsg("#spd-task-msg", `已导出 ${d.total} 条（上限 2000，多于此请按状态/类型分次导）`);
+      } catch (err) { setMsg("#spd-task-msg", err.message, false); }
+      return;
+    }
     if (done) {
       const form = await spdModal("办结任务", [
         { name: "note", label: "办理结果", type: "textarea" },

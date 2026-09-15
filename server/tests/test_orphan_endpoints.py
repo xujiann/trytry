@@ -282,7 +282,7 @@ KNOWN_ORPHANS: set[str] = {
     "/api/spd/redeems",
     "/api/spd/scores-analysis",
     "/api/spd/workload",
-    # spd/config（29）
+    # spd/config（28）
     "/api/spd/centers/{center_id}",
     "/api/spd/data-sources-monitor",
     "/api/spd/data-sources/{source_id}",
@@ -292,7 +292,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/spd/edu-materials/{material_id}",
     "/api/spd/org-tree",
     "/api/spd/path-nodes/{node_id}",
-    "/api/spd/path-templates/{template_id}",
     "/api/spd/programs/{program_id}",
     "/api/spd/programs/{program_id}/targets",
     "/api/spd/programs/{program_id}/versions",
@@ -351,16 +350,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/spd/referral-rules/{rule_id}",
     "/api/spd/referrals/{case_id}",
     "/api/spd/referrals/{case_id}/withdraw",
-    # spd/tasks（9）
-    "/api/spd/path-instances/{instance_id}",
-    "/api/spd/path-nodes/{node_id}/enter-check",
-    "/api/spd/tasks-export",
-    "/api/spd/tasks/batch",
-    "/api/spd/tasks/{task_id}",
-    "/api/spd/tasks/{task_id}/assign",
-    "/api/spd/tasks/{task_id}/escalate",
-    "/api/spd/tasks/{task_id}/review",
-    "/api/spd/tasks/{task_id}/submit",
     # surveillance（1）
     "/api/surveillance/resources/{resource_id}",
     # tcm（2）
