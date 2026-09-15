@@ -1113,6 +1113,8 @@
       "spd_team_role": "member"
     },
     "api": {
+      "/api/spd/teams": [{"id": 1, "name": "团队甲<img src=x onerror=alert(1)>", "org_id": 2, "level": "township", "program_codes": ["hyp", "dm"], "leader_user_id": 5, "member_count": 4}, {"id": 2, "name": "团队乙 &", "org_id": 3, "level": "legacy_level<b>", "program_codes": [], "leader_user_id": null, "member_count": 0}],
+      "/api/spd/village-doctors": [{"id": 11, "user_id": 21, "user_name": "村医王<img src=x onerror=alert(1)>", "org_id": 3, "township": "东乡镇 &", "village": "河西村<b>", "license_no": "110x", "license_valid_to": "2027-12-31", "phone": "138****0001", "bind_token": "t", "active": true}, {"id": 12, "user_id": 22, "user_name": "", "org_id": 3, "township": "", "village": "", "license_no": "", "license_valid_to": "", "phone": "", "bind_token": "", "active": false}],
       "/api/spd/workbench/team": {
         "patients": {
           "managed": 12,
@@ -1667,6 +1669,23 @@
     ],
     "fn": "renderSpdAdmin",
     "api": {
+      "/api/spd/programs": [
+        {"id": 1, "code": "hyp", "name": "高血压<img src=x onerror=alert(1)>", "category": "chronic", "lead_org_id": 1, "lead_dept": "心内科 &", "description": "", "include_rules": [{"field": "age"}], "exclude_rules": [], "stages": [{"code": "s1"}], "milestones": [], "version": "v2<b>", "effective_from": "", "active": true},
+        {"id": 2, "code": "ckd<img src=x onerror=alert(1)>", "name": "慢性肾病", "category": "specialty", "lead_org_id": null, "lead_dept": "", "description": "", "include_rules": [], "exclude_rules": [], "stages": [], "milestones": [], "version": null, "effective_from": "", "active": false}
+      ],
+      "/api/spd/data-sources-monitor": {"total": 3, "by_status": {"running": 1, "delayed": 1, "failed<b>": 1}, "stale_over_24h": [{"id": 3}], "avg_success_rate": 76.3},
+      "/api/spd/devices": [
+        {"id": 5, "sn": "BP-001<img src=x onerror=alert(1)>", "device_type": "bp", "model": "欧姆龙 &", "org_id": 2, "bound_patient_id": 31, "status": "bound", "last_sync_at": "2026-09-14T08:00:00"},
+        {"id": 6, "sn": "GLU-002", "device_type": "legacy_type<b>", "model": "", "org_id": null, "bound_patient_id": null, "status": "idle", "last_sync_at": ""}
+      ],
+      "/api/spd/tags": [{"id": 1, "code": "elder", "name": "独居老人<img src=x onerror=alert(1)>", "category": "patient", "color": "red"}, {"id": 2, "code": "vip", "name": "重点 &", "category": "risk<b>", "color": ""}],
+      "/api/spd/org-tree": [{"id": 1, "name": "县人民医院<img src=x onerror=alert(1)>", "org_type": "hospital", "level": "county", "parent_id": null, "team_count": 2, "enrolled": 300, "children": [{"id": 2, "name": "东乡卫生院 &", "org_type": "township", "level": "township", "parent_id": 1, "team_count": 1, "enrolled": 120, "children": [{"id": 3, "name": "河西村卫生室<b>", "org_type": "village", "level": "village", "parent_id": 2, "team_count": 0, "enrolled": 40, "children": []}]}]}],
+      "/api/spd/scales": [
+        {"id": 7, "code": "phq9<b>", "name": "PHQ-9<img src=x onerror=alert(1)>", "category": "screen", "program_code": "hyp", "version": "v1", "status": "published", "items": [], "scoring": {}, "qr_token": "tok"},
+        {"id": 8, "code": "risk1", "name": "心血管风险量表", "category": "legacy_cat<b>", "program_code": "", "version": "v1", "status": "draft", "items": [], "scoring": {}, "qr_token": ""}
+      ],
+      "/api/spd/service-packages": [{"id": 3, "code": "pkg-a", "name": "高血压基础包<img src=x onerror=alert(1)>", "program_code": "hyp", "price": 200, "period_days": 365, "items": [{"code": "fu", "name": "随访", "times": 4}], "active": true}, {"id": 4, "code": "pkg-b", "name": "停用包 &", "program_code": "", "price": 0.5, "period_days": 90, "items": [], "active": false}],
+      "/api/spd/edu-materials": [{"id": 9, "code": "edu1", "title": "高血压防治<img src=x onerror=alert(1)>", "program_code": "hyp", "media_type": "text", "content": "c", "media_url": "", "dept": "", "active": true}, {"id": 10, "code": "edu2", "title": "停用素材<b>", "program_code": "hyp", "media_type": "video", "content": "", "media_url": "https://x/y.mp4", "dept": "内科 &", "active": false}],
       "/api/spd/workbench/admin": {
         "alerts": {
           "overdue_tasks": 3,
@@ -1748,7 +1767,7 @@
       },
       "/api/spd/data-sources": [
         {
-          "code": "his<b>",
+          "id": 1, "active": true, "code": "his<b>",
           "name": "HIS 就诊<img src=x onerror=alert(1)>",
           "source_type": "his",
           "freq_minutes": 30,
@@ -1759,7 +1778,7 @@
           "status": "running"
         },
         {
-          "code": "lis",
+          "id": 2, "active": true, "code": "lis",
           "name": "LIS 检验",
           "source_type": "lis<img src=x onerror=alert(1)>",
           "freq_minutes": 60,
@@ -1770,7 +1789,7 @@
           "status": "delayed"
         },
         {
-          "code": "pacs",
+          "id": 3, "active": true, "code": "pacs",
           "name": "PACS",
           "source_type": "pacs",
           "freq_minutes": 120,
@@ -5210,14 +5229,14 @@
         },
         "centers": [
           {
-            "name": "高血压中心 &",
+            "id": 1, "name": "高血压中心 &",
             "program_code": "hyp<b>",
             "lead_dept": "心内科",
             "version": "v2",
             "status": "running"
           },
           {
-            "name": "糖尿病中心",
+            "id": 2, "name": "糖尿病中心",
             "program_code": "dm",
             "lead_dept": "内分泌科<b>",
             "version": "v1",

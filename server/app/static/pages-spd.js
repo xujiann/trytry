@@ -166,13 +166,25 @@ function spdRuleEditor(el, meta, initial) {
 
 async function renderSpdAdmin() {
   $("#page-desc").textContent =
-    "运行中枢：超期任务提醒、慢病与专病并行运行状态、配置完备度、数据源接入监控";
-  const [wb, catalog, sources] = await Promise.all([
+    "运行中枢：超期任务提醒、慢病与专病并行运行状态、配置完备度；病种/量表/服务包/宣教素材/标签/设备/数据源维护与机构树";
+  const [wb, catalog, sources, programs, dsm, devices, tags, orgTree, scales, packages, materials] = await Promise.all([
     api("/api/spd/workbench/admin"),
     spdCatalog(true),
     api("/api/spd/data-sources"),
+    api("/api/spd/programs?limit=100"),
+    api("/api/spd/data-sources-monitor"),
+    api("/api/spd/devices?limit=100"),
+    api("/api/spd/tags"),
+    api("/api/spd/org-tree"),
+    api("/api/spd/scales?limit=100"),
+    api("/api/spd/service-packages?limit=100"),
+    api("/api/spd/edu-materials?limit=100"),
   ]);
   const a = wb.alerts, cfg = wb.config_health, ds = wb.data_sources;
+  const orgTreeHtml = (nodes, depth) => (nodes || []).map((n) =>
+    `<div style="padding-left:${depth * 18}px;font-size:13.5px">${esc(n.name)}
+       <span class="desc">${esc(n.level || n.org_type || "")} · 团队 ${n.team_count ?? 0} · 在管 ${n.enrolled ?? 0}</span></div>`
+    + orgTreeHtml(n.children, depth + 1)).join("");
   // ADR-0009 第六批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 提醒面板的红色左边框走 `accent`，"有待处理才渲染"的条件仍留在调用点。
   $("#page-body").innerHTML = `
@@ -226,27 +238,291 @@ async function renderSpdAdmin() {
           <div id="spd-exclude-rules"></div></div>
       </div>
       <p class="msg" id="spd-program-msg"></p>
-      ${table(["编码", "名称", "口径", "版本", "阶段数", "纳入规则", "状态"],
-        catalog.programs, (p) =>
-        `<tr><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
+      ${table(["ID", "编码", "名称", "口径", "版本", "阶段数", "纳入规则", "状态", "操作"],
+        programs, (p) =>
+        `<tr><td>${p.id}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
          <td>${p.category === "chronic" ? "慢病" : "专病"}</td>
          <td>${esc(p.version || "")}</td><td>${(p.stages || []).length}</td>
          <td>${(cfg.programs_without_rules || []).includes(p.code)
             ? '<span class="tag red">未配置</span>' : '<span class="tag green">已配置</span>'}</td>
-         <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}`)}
+         <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-prog-edit="${p.id}" data-name="${esc(p.name)}" data-dept="${esc(p.lead_dept || "")}">编辑</button>
+             <button class="btn secondary" data-prog-versions="${p.id}">版本</button>
+             <button class="btn secondary" data-prog-targets="${p.id}">管理目标</button></td></tr>`)}
+      <div id="spd-cfg-detail"></div>`)}
+    ${panel("评估量表", `
+      <p class="desc">发布后生成扫码自评令牌并进入评估下拉；停用即从下拉里消失，历史评估照常可查</p>
+      ${table(["ID", "编码", "名称", "类别", "病种", "版本", "状态", "操作"], scales, (sc) =>
+        `<tr><td>${sc.id}</td><td>${esc(sc.code)}</td><td>${esc(sc.name)}</td>
+         <td>${esc(SPD_SCALE_CATEGORY[sc.category] || sc.category)}</td><td>${esc(sc.program_code || "—")}</td>
+         <td>${esc(sc.version)}</td><td>${spdTag(SPD_SCALE_STATUS, sc.status)}</td>
+         <td>${sc.status === "published"
+           ? `<button class="btn secondary" data-scale-qr="${sc.id}">二维码</button>
+              <button class="btn secondary" data-scale-off="${sc.id}">停用</button>`
+           : `<button class="btn secondary" data-scale-pub="${sc.id}">发布</button>`}</td></tr>`)}
+      <p class="msg" id="spd-scale-msg"></p>`)}
+    ${panel("服务包", `
+      <form class="inline" id="spd-package-form">
+        <input name="code" placeholder="编码" required>
+        <input name="name" placeholder="名称" required>
+        <select name="program_code">${spdProgramOptions(catalog)}</select>
+        <input name="price" type="number" step="any" placeholder="价格(元)" style="width:100px">
+        <input name="period_days" type="number" placeholder="有效期(天)" style="width:110px">
+        <input name="items" placeholder="项目：编码:名称:次数，分号分隔" style="min-width:240px">
+        <button>新建服务包</button>
+      </form><p class="msg" id="spd-package-msg"></p>
+      ${table(["ID", "编码", "名称", "病种", "价格", "有效期(天)", "项目数", "状态", "操作"], packages, (k) =>
+        `<tr><td>${k.id}</td><td>${esc(k.code)}</td><td>${esc(k.name)}</td><td>${esc(k.program_code || "—")}</td>
+         <td>${k.price}</td><td>${k.period_days}</td><td>${(k.items || []).length}</td>
+         <td>${k.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-pkg-edit="${k.id}" data-name="${esc(k.name)}"
+              data-price="${k.price}" data-days="${k.period_days}" data-active="${k.active ? 1 : 0}">编辑</button></td></tr>`)}`)}
+    ${panel("宣教素材", `
+      ${table(["ID", "编码", "标题", "病种", "形式", "科室", "状态", "操作"], materials, (m) =>
+        `<tr><td>${m.id}</td><td>${esc(m.code)}</td><td>${esc(m.title)}</td><td>${esc(m.program_code || "—")}</td>
+         <td>${esc(m.media_type)}</td><td>${esc(m.dept || "—")}</td>
+         <td>${m.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-edu-edit="${m.id}" data-title="${esc(m.title)}" data-dept="${esc(m.dept || "")}"
+              data-url="${esc(m.media_url || "")}" data-active="${m.active ? 1 : 0}">编辑</button></td></tr>`)}
+      <p class="msg" id="spd-edu-msg"></p>`)}
+    ${panel("标签字典", `
+      <form class="inline" id="spd-tag-form">
+        <input name="code" placeholder="编码" required>
+        <input name="name" placeholder="名称" required>
+        <select name="category"><option value="patient">患者标签</option><option value="risk">风险标签</option>
+          <option value="service">服务标签</option></select>
+        <input name="color" placeholder="颜色（如 red）" style="width:120px">
+        <button>新建标签</button>
+      </form><p class="msg" id="spd-tag-msg"></p>
+      ${table(["ID", "编码", "名称", "类别", "颜色"], tags, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.code)}</td><td>${esc(t.name)}</td><td>${esc(t.category)}</td>
+         <td>${esc(t.color || "—")}</td></tr>`)}`)}
+    ${panel("设备台账", `
+      <form class="inline" id="spd-device-form">
+        <input name="sn" placeholder="设备序列号" required>
+        <select name="device_type">${Object.entries(SPD_DEVICE_TYPES).map(([k, v]) =>
+          `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="model" placeholder="型号">
+        <input name="org_id" type="number" placeholder="归属机构ID">
+        <button>登记设备</button>
+      </form><p class="msg" id="spd-device-msg"></p>
+      ${table(["ID", "序列号", "类型", "型号", "机构", "绑定患者", "状态", "最近同步", "操作"], devices, (d) =>
+        `<tr><td>${d.id}</td><td>${esc(d.sn)}</td><td>${esc(SPD_DEVICE_TYPES[d.device_type] || d.device_type)}</td>
+         <td>${esc(d.model || "—")}</td><td>${d.org_id ?? "—"}</td><td>${d.bound_patient_id ?? "—"}</td>
+         <td>${d.status === "bound" ? '<span class="tag green">已绑定</span>' : '<span class="tag">空闲</span>'}</td>
+         <td>${esc(d.last_sync_at ? d.last_sync_at.replace("T", " ").slice(0, 16) : "—")}</td>
+         <td><button class="btn secondary" data-dev-bind="${d.id}">${d.bound_patient_id ? "换绑 / 解绑" : "绑定患者"}</button></td></tr>`)}`)}
+    ${panel("机构树（县—乡—村）", `
+      <p class="desc">患者归属、任务派发、逐级转诊、团队授权与考核共用这一棵树；数字是各机构的活跃团队数与在管人数</p>
+      ${orgTreeHtml(orgTree, 0) || '<p class="desc">暂无机构</p>'}`)}
     ${panel("数据源接入与运行监控", `
       <p class="desc">成功率按最近 100 次同步计算；超过 24 小时未同步计入陈旧</p>
       ${spdCards([["数据源", ds.total], ["异常", ds.failed, ds.failed > 0],
                   ["延迟", ds.delayed, ds.delayed > 0], ["24h未同步", ds.stale_over_24h, ds.stale_over_24h > 0],
                   ["平均成功率", ds.avg_success_rate + "%"]])}
-      ${table(["编码", "名称", "类型", "频率(分)", "最近同步", "行数", "延迟(ms)", "成功率", "状态"],
-        sources, (s) =>
-        `<tr><td>${esc(s.code)}</td><td>${esc(s.name)}</td><td>${esc(s.source_type)}</td>
-         <td>${s.freq_minutes}</td><td>${esc(s.last_sync_at ? s.last_sync_at.replace("T", " ").slice(0, 16) : "—")}</td>
-         <td>${s.last_rows}</td><td>${s.last_latency_ms}</td><td>${s.success_rate}%</td>
-         <td>${s.status === "running" ? '<span class="tag green">正常</span>'
-            : s.status === "delayed" ? '<span class="tag orange">延迟</span>'
-            : '<span class="tag red">异常</span>'}</td></tr>`)}`)}`;
+      <p class="desc">监控接口：${Object.entries(dsm.by_status || {}).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "无状态记录"}；
+        陈旧 ${(dsm.stale_over_24h || []).length} 个，平均成功率 ${dsm.avg_success_rate}%</p>
+      ${table(["ID", "编码", "名称", "类型", "频率(分)", "最近同步", "行数", "延迟(ms)", "成功率", "状态", "操作"],
+        sources, (src) =>
+        `<tr><td>${src.id}</td><td>${esc(src.code)}</td><td>${esc(src.name)}</td><td>${esc(src.source_type)}</td>
+         <td>${src.freq_minutes}</td><td>${esc(src.last_sync_at ? src.last_sync_at.replace("T", " ").slice(0, 16) : "—")}</td>
+         <td>${src.last_rows}</td><td>${src.last_latency_ms}</td><td>${src.success_rate}%</td>
+         <td>${src.status === "running" ? '<span class="tag green">正常</span>'
+            : src.status === "delayed" ? '<span class="tag orange">延迟</span>'
+            : '<span class="tag red">异常</span>'}</td>
+         <td><button class="btn secondary" data-ds-edit="${src.id}" data-name="${esc(src.name)}"
+              data-freq="${src.freq_minutes}" data-active="${src.active === false ? 0 : 1}">编辑</button>
+             <button class="btn secondary" data-ds-logs="${src.id}">同步日志</button>
+             <button class="btn secondary" data-ds-sync="${src.id}">记一次同步</button></td></tr>`)}
+      <p class="msg" id="spd-ds-msg"></p>
+      <div id="spd-ds-detail"></div>`)}`;
+  const showTargets = async (programId) => {
+    const box = $("#spd-cfg-detail");
+    try {
+      const rows = await api(`/api/spd/programs/${programId}/targets`);
+      box.innerHTML = panel(`管理目标 · 病种 #${programId}`, `
+        <form class="inline" id="spd-target-form">
+          <input name="stage" placeholder="阶段（可留空）" style="width:120px">
+          <input name="metric" placeholder="指标编码（如 bp_sys）" required>
+          <input name="metric_name" placeholder="指标名称">
+          <select name="kind"><option value="quantitative">定量</option><option value="qualitative">定性</option></select>
+          <input name="target_low" type="number" step="any" placeholder="下限" style="width:90px">
+          <input name="target_high" type="number" step="any" placeholder="上限" style="width:90px">
+          <input name="unit" placeholder="单位" style="width:80px">
+          <input name="qualitative" placeholder="定性目标描述">
+          <button>新增目标</button>
+        </form>
+        ${table(["ID", "阶段", "指标", "名称", "类型", "下限", "上限", "单位", "定性", "操作"], rows, (t) =>
+          `<tr><td>${t.id}</td><td>${esc(t.stage || "—")}</td><td>${esc(t.metric)}</td><td>${esc(t.metric_name || "—")}</td>
+           <td>${t.kind === "qualitative" ? "定性" : "定量"}</td><td>${t.target_low ?? "—"}</td><td>${t.target_high ?? "—"}</td>
+           <td>${esc(t.unit || "—")}</td><td>${esc(t.qualitative || "—")}</td>
+           <td><button class="btn secondary" data-target-edit="${t.id}" data-prog="${programId}"
+                data-name="${esc(t.metric_name || "")}" data-unit="${esc(t.unit || "")}">编辑</button></td></tr>`)}`);
+      $("#spd-target-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const body = formJson(e.target, ["target_low", "target_high"]);
+        try {
+          await api(`/api/spd/programs/${programId}/targets`, { method: "POST", body: JSON.stringify(body) });
+          await showTargets(programId);
+          setMsg("#spd-program-msg", "管理目标已新增");
+        } catch (err) { setMsg("#spd-program-msg", err.message, false); }
+      };
+    } catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  // 监听与首屏 innerHTML 同一个同步块（P2-31）；病种表单例外见下方注释
+  $("#spd-package-form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = formJson(e.target, ["price", "period_days"]);
+    // "编码:名称:次数;…" → items；后端 _bind_package 读的是 code/name/times
+    f.items = String(f.items || "").split(/[;；]/).map((x) => x.trim()).filter(Boolean).map((x) => {
+      const [code, name, times] = x.split(/[:：]/);
+      return { code: (code || "").trim(), name: (name || code || "").trim(), times: Number(times) || 1 };
+    });
+    return postAction("/api/spd/service-packages", f, "#spd-package-msg");
+  };
+  $("#spd-tag-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/tags", formJson(e.target), "#spd-tag-msg");
+  };
+  $("#spd-device-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/devices", formJson(e.target, ["org_id"]), "#spd-device-msg");
+  };
+  $("#page-body").onclick = async (e) => {
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const progEdit = el("data-prog-edit"), progVersions = el("data-prog-versions"), progTargets = el("data-prog-targets");
+    const targetEdit = el("data-target-edit");
+    const scalePub = el("data-scale-pub"), scaleOff = el("data-scale-off"), scaleQr = el("data-scale-qr");
+    const pkgEdit = el("data-pkg-edit"), eduEdit = el("data-edu-edit"), devBind = el("data-dev-bind");
+    const dsEdit = el("data-ds-edit"), dsLogs = el("data-ds-logs"), dsSync = el("data-ds-sync");
+    if (progEdit) {
+      const form = await spdModal("编辑病种（规则请用下方编辑器新建版本）", [
+        { name: "name", label: "名称", value: progEdit.dataset.name, required: true },
+        { name: "lead_dept", label: "牵头科室", value: progEdit.dataset.dept },
+        { name: "description", label: "说明", type: "textarea" },
+      ]);
+      if (!form) return;
+      const body = {};
+      if (form.name) body.name = form.name;
+      body.lead_dept = form.lead_dept || "";
+      if (form.description) body.description = form.description;
+      return postAction(`/api/spd/programs/${progEdit.dataset.progEdit}`, body, "#spd-program-msg", "PATCH");
+    }
+    if (progVersions) {
+      try {
+        const rows = await api(`/api/spd/programs/${progVersions.dataset.progVersions}/versions`);
+        $("#spd-cfg-detail").innerHTML = panel(`版本历史 · 病种 #${progVersions.dataset.progVersions}`,
+          table(["版本", "修改人", "说明", "时间"], rows, (v) =>
+            `<tr><td>${esc(v.version)}</td><td>${esc(v.changed_by || "—")}</td><td>${esc(v.note || "—")}</td>
+             <td>${esc((v.created_at || "").replace("T", " ").slice(0, 16))}</td></tr>`));
+      } catch (err) { setMsg("#spd-program-msg", err.message, false); }
+      return;
+    }
+    if (progTargets) return showTargets(progTargets.dataset.progTargets);
+    if (targetEdit) {
+      const form = await spdModal("编辑管理目标（留空的项不改）", [
+        { name: "metric_name", label: "指标名称", value: targetEdit.dataset.name },
+        { name: "target_low", label: "下限", type: "number" },
+        { name: "target_high", label: "上限", type: "number" },
+        { name: "unit", label: "单位", value: targetEdit.dataset.unit },
+        { name: "qualitative", label: "定性目标描述" },
+      ]);
+      if (!form) return;
+      const body = {};
+      if (form.metric_name) body.metric_name = form.metric_name;
+      if (form.target_low) body.target_low = form.target_low;
+      if (form.target_high) body.target_high = form.target_high;
+      if (form.unit) body.unit = form.unit;
+      if (form.qualitative) body.qualitative = form.qualitative;
+      try {
+        await api(`/api/spd/targets/${targetEdit.dataset.targetEdit}`, { method: "PATCH", body: JSON.stringify(body) });
+        await showTargets(targetEdit.dataset.prog);
+        setMsg("#spd-program-msg", "管理目标已更新");
+      } catch (err) { setMsg("#spd-program-msg", err.message, false); }
+      return;
+    }
+    if (scalePub) return postAction(`/api/spd/scales/${scalePub.dataset.scalePub}/publish`, null, "#spd-scale-msg");
+    if (scaleOff) return postAction(`/api/spd/scales/${scaleOff.dataset.scaleOff}/disable`, null, "#spd-scale-msg");
+    if (scaleQr) {
+      try { await spdOpenSvg(`/api/spd/scales/${scaleQr.dataset.scaleQr}/qr.svg`); }
+      catch (err) { setMsg("#spd-scale-msg", err.message, false); }
+      return;
+    }
+    if (pkgEdit) {
+      const form = await spdModal("编辑服务包", [
+        { name: "name", label: "名称", value: pkgEdit.dataset.name, required: true },
+        { name: "price", label: "价格（元）", type: "number", value: pkgEdit.dataset.price },
+        { name: "period_days", label: "有效期（天）", type: "number", value: pkgEdit.dataset.days },
+        { name: "active", label: "状态", type: "select", value: pkgEdit.dataset.active,
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/service-packages/${pkgEdit.dataset.pkgEdit}`, {
+        name: form.name, price: form.price, period_days: form.period_days || 365, active: form.active === "1",
+      }, "#spd-package-msg", "PATCH");
+    }
+    if (eduEdit) {
+      const form = await spdModal("编辑宣教素材", [
+        { name: "title", label: "标题", value: eduEdit.dataset.title, required: true },
+        { name: "dept", label: "科室", value: eduEdit.dataset.dept },
+        { name: "media_url", label: "资料链接", value: eduEdit.dataset.url },
+        { name: "active", label: "状态", type: "select", value: eduEdit.dataset.active,
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/edu-materials/${eduEdit.dataset.eduEdit}`, {
+        title: form.title, dept: form.dept || "", media_url: form.media_url || "", active: form.active === "1",
+      }, "#spd-edu-msg", "PATCH");
+    }
+    if (devBind) {
+      const form = await spdModal("绑定 / 解绑设备", [
+        { name: "patient_id", label: "患者ID（填 0 或留空 = 解绑）", type: "number" },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/devices/${devBind.dataset.devBind}/bind`,
+        { patient_id: form.patient_id || null }, "#spd-device-msg");
+    }
+    if (dsEdit) {
+      const form = await spdModal("编辑数据源（管理员）", [
+        { name: "name", label: "名称", value: dsEdit.dataset.name, required: true },
+        { name: "endpoint", label: "接入地址（留空不改）" },
+        { name: "freq_minutes", label: "同步频率（分钟）", type: "number", value: dsEdit.dataset.freq },
+        { name: "scope", label: "数据范围说明（留空不改）" },
+        { name: "active", label: "状态", type: "select", value: dsEdit.dataset.active,
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      const body = { name: form.name, active: form.active === "1" };
+      if (form.freq_minutes) body.freq_minutes = form.freq_minutes;
+      if (form.endpoint) body.endpoint = form.endpoint;
+      if (form.scope) body.scope = form.scope;
+      return postAction(`/api/spd/data-sources/${dsEdit.dataset.dsEdit}`, body, "#spd-ds-msg", "PATCH");
+    }
+    if (dsLogs) {
+      try {
+        const rows = await api(`/api/spd/data-sources/${dsLogs.dataset.dsLogs}/sync-logs?limit=50`);
+        $("#spd-ds-detail").innerHTML = panel(`同步日志 · 数据源 #${dsLogs.dataset.dsLogs}`,
+          table(["开始时间", "行数", "延迟(ms)", "结果", "说明"], rows, (l) =>
+            `<tr><td>${esc((l.started_at || "").replace("T", " ").slice(0, 19))}</td><td>${l.rows}</td><td>${l.latency_ms}</td>
+             <td>${l.success ? '<span class="tag green">成功</span>' : '<span class="tag red">失败</span>'}</td>
+             <td>${esc(l.message || "—")}</td></tr>`));
+      } catch (err) { setMsg("#spd-ds-msg", err.message, false); }
+      return;
+    }
+    if (dsSync) {
+      const form = await spdModal("登记一次同步结果（接口方回报 / 手工补录）", [
+        { name: "rows", label: "同步行数", type: "number", value: 0 },
+        { name: "latency_ms", label: "耗时（毫秒）", type: "number", value: 0 },
+        { name: "success", label: "结果", type: "select", value: "1",
+          options: [{ value: "1", label: "成功" }, { value: "0", label: "失败" }] },
+        { name: "message", label: "说明（失败原因等）" },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/data-sources/${dsSync.dataset.dsSync}/sync-logs`, {
+        rows: form.rows || 0, latency_ms: form.latency_ms || 0, success: form.success === "1", message: form.message || "",
+      }, "#spd-ds-msg");
+    }
+  };
   // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的两个规则编辑器，提前挂会把窗口期提交从
   // 「兜底无效」变成「TypeError」，非零行为差；窗口期由 shared.js 的 document 层兜底护住。
   const meta = await spdMeta();
@@ -346,9 +622,11 @@ async function renderSpdExpert() {
             : '<span class="tag red">0</span>'}</td>
          <td>${p.scales}</td><td>${p.enrolled}</td></tr>`)}`)}
     ${panel("重点慢专病中心", `
-      ${table(["名称", "病种", "牵头科室", "版本", "状态"], wb.centers, (c) =>
-        `<tr><td>${esc(c.name)}</td><td>${esc(c.program_code)}</td><td>${esc(c.lead_dept)}</td>
-         <td>${esc(c.version)}</td><td>${esc(c.status)}</td></tr>`)}
+      ${table(["ID", "名称", "病种", "牵头科室", "版本", "状态", "操作"], wb.centers, (c) =>
+        `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.program_code)}</td><td>${esc(c.lead_dept)}</td>
+         <td>${esc(c.version)}</td><td>${esc(c.status)}</td>
+         <td><button class="btn secondary" data-center-edit="${c.id}" data-name="${esc(c.name)}"
+              data-dept="${esc(c.lead_dept || "")}" data-version="${esc(c.version || "")}" data-status="${esc(c.status || "")}">编辑</button></td></tr>`)}
       <form class="inline" id="spd-center-form" style="margin-top:10px">
         <input name="code" placeholder="中心编码" required>
         <input name="name" placeholder="中心名称" required>
@@ -363,6 +641,22 @@ async function renderSpdExpert() {
   $("#spd-center-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/centers", formJson(e.target), "#spd-center-msg");
+  };
+  $("#page-body").onclick = async (e) => {
+    const btn = e.target.closest("[data-center-edit]");
+    if (!btn) return;
+    const form = await spdModal("编辑专病中心", [
+      { name: "name", label: "名称", value: btn.dataset.name, required: true },
+      { name: "lead_dept", label: "牵头科室", value: btn.dataset.dept },
+      { name: "version", label: "版本", value: btn.dataset.version },
+      { name: "status", label: "状态", type: "select", value: btn.dataset.status || "running",
+        options: [{ value: "draft", label: "筹建" }, { value: "running", label: "运行中" }, { value: "paused", label: "暂停" }] },
+      { name: "leader_user_id", label: "负责人用户ID（留空不改）", type: "number" },
+    ]);
+    if (!form) return;
+    const body = { name: form.name, lead_dept: form.lead_dept || "", version: form.version || "", status: form.status };
+    if (form.leader_user_id) body.leader_user_id = form.leader_user_id;
+    return postAction(`/api/spd/centers/${btn.dataset.centerEdit}`, body, "#spd-center-msg", "PATCH");
   };
 }
 
@@ -625,7 +919,11 @@ async function renderSpdTeam() {
   $("#page-desc").textContent =
     "基层执行：团队专家、团队成员、个案管理师三个视角共用同一批数据，切换角色查看";
   const role = localStorage.getItem("spd_team_role") || "member";
-  const wb = await api(`/api/spd/workbench/team?role=${role}`);
+  const [wb, teams, villageDoctors] = await Promise.all([
+    api(`/api/spd/workbench/team?role=${role}`),
+    api("/api/spd/teams?limit=100"),
+    api("/api/spd/village-doctors?limit=100"),
+  ]);
   const roleNames = { expert: "团队专家端", member: "团队成员端", case_manager: "个案管理师端" };
   // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 预警面板的红色左边框走 `accent`；两处"有数据才渲染"的条件仍留在调用点。
@@ -664,12 +962,178 @@ async function renderSpdTeam() {
         `<tr><td>${p.bound}</td><td>${p.total_items}</td><td>${p.used_items}</td>
          <td>${p.usage_rate}%</td></tr>`)) : ""}
     ${panel("待办按类型",
-      barChart(spdPairs(wb.tasks.by_type, SPD_TASK_TYPES), { unit: " 条" }))}`;
-  $("#page-body").onclick = (e) => {
-    const btn = e.target.closest("[data-role]");
-    if (!btn) return;
-    localStorage.setItem("spd_team_role", btn.dataset.role);
-    route();
+      barChart(spdPairs(wb.tasks.by_type, SPD_TASK_TYPES), { unit: " 条" }))}
+    ${panel("团队维护", `
+      <form class="inline" id="spd-team-form">
+        <input name="name" placeholder="团队名称" required>
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="level">${Object.entries(SPD_TEAM_LEVELS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="program_codes" placeholder="服务病种编码，逗号分隔">
+        <input name="leader_user_id" type="number" placeholder="组长用户ID">
+        <button>新建团队</button>
+      </form><p class="msg" id="spd-team-msg"></p>
+      ${table(["ID", "团队", "层级", "机构", "服务病种", "组长", "成员数", "操作"], teams, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(SPD_TEAM_LEVELS[t.level] || t.level)}</td>
+         <td>${t.org_id}</td><td>${esc((t.program_codes || []).join("、") || "—")}</td>
+         <td>${t.leader_user_id ?? "—"}</td><td>${t.member_count ?? "—"}</td>
+         <td><button class="btn secondary" data-team-members="${t.id}">成员</button>
+             <button class="btn secondary" data-team-edit="${t.id}" data-name="${esc(t.name)}" data-level="${esc(t.level)}">编辑</button></td></tr>`)}
+      <div id="spd-team-detail"></div>`)}
+    ${panel("村医档案", `
+      <form class="inline" id="spd-vd-form">
+        <input name="user_id" type="number" placeholder="用户ID" required>
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="township" placeholder="乡镇"><input name="village" placeholder="村">
+        <input name="license_no" placeholder="执业证号"><input name="license_valid_to" placeholder="有效期至 YYYY-MM-DD">
+        <input name="phone" placeholder="电话">
+        <button>建档</button>
+      </form>
+      <details class="fold"><summary>批量导入（每行：用户ID,机构ID,乡镇,村,执业证号,有效期至,电话）</summary>
+        <form id="spd-vd-batch-form">
+          <textarea name="lines" rows="4" style="width:100%" placeholder="12,3,东乡镇,河西村,110xxxx,2027-12-31,138..."></textarea>
+          <button class="secondary">批量导入</button>
+        </form></details>
+      <p class="msg" id="spd-vd-msg"></p>
+      ${table(["ID", "村医", "机构", "乡镇", "村", "执业证", "有效期至", "电话", "状态", "操作"], villageDoctors, (v) =>
+        `<tr><td>${v.id}</td><td>${esc(v.user_name || String(v.user_id))}</td><td>${v.org_id}</td>
+         <td>${esc(v.township || "—")}</td><td>${esc(v.village || "—")}</td><td>${esc(v.license_no || "—")}</td>
+         <td>${esc(v.license_valid_to || "—")}</td><td>${esc(v.phone || "—")}</td>
+         <td>${v.active ? '<span class="tag green">在岗</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-vd-edit="${v.id}" data-township="${esc(v.township || "")}"
+              data-village="${esc(v.village || "")}" data-license="${esc(v.license_no || "")}"
+              data-valid="${esc(v.license_valid_to || "")}" data-phone="${esc(v.phone || "")}" data-active="${v.active ? 1 : 0}">编辑</button>
+             <button class="btn secondary" data-vd-qr="${v.id}">绑定二维码</button></td></tr>`)}`)}`;
+  const showTeam = async (teamId) => {
+    const box = $("#spd-team-detail");
+    try {
+      const t = await api(`/api/spd/teams/${teamId}`);
+      box.innerHTML = panel(`团队成员 · ${t.name}`, `
+        <form class="inline" id="spd-tm-form">
+          <input name="user_id" type="number" placeholder="用户ID" required>
+          <select name="member_role">${Object.entries(SPD_MEMBER_ROLES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+          <input name="program_codes" placeholder="负责病种编码，逗号分隔">
+          <button>加入团队</button>
+        </form>
+        ${table(["ID", "成员", "角色", "负责病种", "患者范围", "随访", "转诊", "审核", "评估", "状态", "操作"], t.members || [], (m) =>
+          `<tr><td>${m.id}</td><td>${esc(m.user_name || String(m.user_id))}</td><td>${esc(SPD_MEMBER_ROLES[m.member_role] || m.member_role)}</td>
+           <td>${esc((m.program_codes || []).join("、") || "—")}</td><td>${esc(m.patient_scope || "—")}</td>
+           <td>${m.can_followup ? "✓" : "—"}</td><td>${m.can_referral ? "✓" : "—"}</td><td>${m.can_audit ? "✓" : "—"}</td><td>${m.can_assess ? "✓" : "—"}</td>
+           <td>${m.active === false ? '<span class="tag">停用</span>' : '<span class="tag green">在岗</span>'}</td>
+           <td><button class="btn secondary" data-tm-edit="${m.id}" data-team="${teamId}" data-role="${esc(m.member_role)}">改角色</button>
+               <button class="btn danger" data-tm-del="${m.id}" data-team="${teamId}">移出</button></td></tr>`)}`);
+      $("#spd-tm-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const f = formJson(e.target, ["user_id"]);
+        f.program_codes = String(f.program_codes || "").split(/[，,\s]+/).filter(Boolean);
+        try {
+          await api(`/api/spd/teams/${teamId}/members`, { method: "POST", body: JSON.stringify(f) });
+          await showTeam(teamId);
+          setMsg("#spd-team-msg", "已加入团队");
+        } catch (err) { setMsg("#spd-team-msg", err.message, false); }
+      };
+    } catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  $("#spd-team-form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = formJson(e.target, ["org_id", "leader_user_id"]);
+    f.program_codes = String(f.program_codes || "").split(/[，,\s]+/).filter(Boolean);
+    return postAction("/api/spd/teams", f, "#spd-team-msg");
+  };
+  $("#spd-vd-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/village-doctors", formJson(e.target, ["user_id", "org_id"]), "#spd-vd-msg");
+  };
+  $("#spd-vd-batch-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const items = String(new FormData(e.target).get("lines") || "").split(/\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
+      const [user_id, org_id, township, village, license_no, license_valid_to, phone] = l.split(/[，,]/).map((x) => (x || "").trim());
+      return { user_id: Number(user_id), org_id: Number(org_id), township: township || "", village: village || "",
+        license_no: license_no || "", license_valid_to: license_valid_to || "", phone: phone || "" };
+    });
+    if (!items.length) { setMsg("#spd-vd-msg", "没有可导入的行", false); return; }
+    try {
+      const r = await api("/api/spd/village-doctors/batch", { method: "POST", body: JSON.stringify({ items }) });
+      // 后端按 user_id 报跳过原因（用户不存在 / 已建档 / 并发冲突），不是按行号
+      const skipped = (r.skipped || []).map((k) => `用户 ${k.user_id ?? "?"}：${k.reason || ""}`).join("；");
+      setMsg("#spd-vd-msg", `导入 ${r.created} 条${skipped ? `，跳过 ${r.skipped.length} 条：${skipped}` : ""}`);
+      route();
+    } catch (err) { setMsg("#spd-vd-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const roleBtn = el("data-role"), teamMembers = el("data-team-members"), teamEdit = el("data-team-edit");
+    const tmEdit = el("data-tm-edit"), tmDel = el("data-tm-del"), vdEdit = el("data-vd-edit"), vdQr = el("data-vd-qr");
+    if (roleBtn) {
+      localStorage.setItem("spd_team_role", roleBtn.dataset.role);
+      route();
+      return;
+    }
+    if (teamMembers) return showTeam(teamMembers.dataset.teamMembers);
+    if (teamEdit) {
+      const form = await spdModal("编辑团队", [
+        { name: "name", label: "团队名称", value: teamEdit.dataset.name, required: true },
+        { name: "level", label: "层级", type: "select", value: teamEdit.dataset.level,
+          options: Object.entries(SPD_TEAM_LEVELS).map(([k, v]) => ({ value: k, label: v })) },
+        { name: "leader_user_id", label: "组长用户ID（留空不改）", type: "number" },
+        { name: "active", label: "状态", type: "select", value: "1",
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      const body = { name: form.name, level: form.level, active: form.active === "1" };
+      if (form.leader_user_id) body.leader_user_id = form.leader_user_id;
+      return postAction(`/api/spd/teams/${teamEdit.dataset.teamEdit}`, body, "#spd-team-msg", "PATCH");
+    }
+    if (tmEdit) {
+      const form = await spdModal("调整成员角色与权限", [
+        { name: "member_role", label: "角色", type: "select", value: tmEdit.dataset.role,
+          options: Object.entries(SPD_MEMBER_ROLES).map(([k, v]) => ({ value: k, label: v })) },
+        { name: "patient_scope", label: "患者范围", type: "select", value: "team",
+          options: [{ value: "self", label: "本人" }, { value: "team", label: "本团队" }, { value: "org", label: "本机构" }, { value: "region", label: "全域" }] },
+        { name: "can_referral", label: "可发起转诊", type: "select", value: "0", options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
+        { name: "can_audit", label: "可审核", type: "select", value: "0", options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
+        { name: "can_assess", label: "可评估", type: "select", value: "0", options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
+        { name: "active", label: "状态", type: "select", value: "1", options: [{ value: "1", label: "在岗" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      try {
+        await api(`/api/spd/team-members/${tmEdit.dataset.tmEdit}`, { method: "PATCH", body: JSON.stringify({
+          member_role: form.member_role, patient_scope: form.patient_scope,
+          can_referral: form.can_referral === "1", can_audit: form.can_audit === "1", can_assess: form.can_assess === "1",
+          active: form.active === "1",
+        }) });
+        await showTeam(tmEdit.dataset.team);
+        setMsg("#spd-team-msg", "成员已更新");
+      } catch (err) { setMsg("#spd-team-msg", err.message, false); }
+      return;
+    }
+    if (tmDel) {
+      try {
+        await api(`/api/spd/team-members/${tmDel.dataset.tmDel}`, { method: "DELETE" });
+        await showTeam(tmDel.dataset.team);
+        setMsg("#spd-team-msg", "已移出团队");
+      } catch (err) { setMsg("#spd-team-msg", err.message, false); }
+      return;
+    }
+    if (vdEdit) {
+      const form = await spdModal("编辑村医档案", [
+        { name: "township", label: "乡镇", value: vdEdit.dataset.township },
+        { name: "village", label: "村", value: vdEdit.dataset.village },
+        { name: "license_no", label: "执业证号", value: vdEdit.dataset.license },
+        { name: "license_valid_to", label: "有效期至 YYYY-MM-DD", value: vdEdit.dataset.valid },
+        { name: "phone", label: "电话", value: vdEdit.dataset.phone },
+        { name: "active", label: "状态", type: "select", value: vdEdit.dataset.active,
+          options: [{ value: "1", label: "在岗" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/village-doctors/${vdEdit.dataset.vdEdit}`, {
+        township: form.township || "", village: form.village || "", license_no: form.license_no || "",
+        license_valid_to: form.license_valid_to || "", phone: form.phone || "", active: form.active === "1",
+      }, "#spd-vd-msg", "PATCH");
+    }
+    if (vdQr) {
+      try { await spdOpenSvg(`/api/spd/village-doctors/${vdQr.dataset.vdQr}/qr.svg`); }
+      catch (err) { setMsg("#spd-vd-msg", err.message, false); }
+    }
   };
 }
 
@@ -998,6 +1462,29 @@ async function renderSpdPatients() {
  * 7. 路径与任务中心
  * ==========================================================*/
 
+const SPD_SCALE_CATEGORY = { risk: "风险", stage: "分期", rehab: "康复", screen: "筛查" };
+const SPD_SCALE_STATUS = { draft: ["草稿", "orange"], published: ["已发布", "green"], disabled: ["已停用", ""] };
+const SPD_DEVICE_TYPES = { bp: "血压计", glucose: "血糖仪", band: "手环", scale: "体脂秤", poct: "POCT", ecg: "心电" };
+const SPD_TEAM_LEVELS = { county: "县级", township: "乡镇", village: "村级", center: "中心" };
+const SPD_MEMBER_ROLES = {
+  doctor: "医生", nurse: "护士", rehab: "康复", case_manager: "个案管理师", village_doctor: "村医", expert: "专家",
+};
+
+/** 量表 / 村医的二维码是鉴权 SVG：Bearer 模式下直接 window.open 没有令牌，得先 fetch 再写 blob。
+ *  开窗必须在点击手势里同步做（await 之后再开会被弹窗拦截），与 openPrintPage 同一口径。 */
+async function spdOpenSvg(path) {
+  const win = window.open("", "_blank");
+  if (!win) throw new Error("浏览器拦截了新窗口，请允许弹出后重试");
+  try {
+    const resp = await fetch(path, {
+      credentials: "same-origin",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!resp.ok) throw new Error(`获取二维码失败(${resp.status})`);
+    win.location = URL.createObjectURL(await resp.blob());
+  } catch (err) { win.close(); throw err; }
+}
+
 const SPD_INST_STATUS = {
   running: "执行中", paused: "已暂停", completed: "已完成", cancelled: "已取消",
 };
@@ -1121,9 +1608,11 @@ async function renderSpdPath() {
          <td>${t.status === "published" ? '<span class="tag green">已发布</span>'
             : t.status === "draft" ? '<span class="tag orange">草稿</span>'
             : '<span class="tag">已停用</span>'}</td>
-         <td><button class="btn secondary" data-tpl-node="${t.id}">加节点</button>
+         <td><button class="btn secondary" data-tpl-nodes="${t.id}" data-status="${esc(t.status)}">节点</button>
+             <button class="btn secondary" data-tpl-node="${t.id}">加节点</button>
              <button class="btn secondary" data-tpl-pub="${t.id}">发布</button>
-             <button class="btn secondary" data-tpl-copy="${t.id}">复制</button></td></tr>`)}`)}
+             <button class="btn secondary" data-tpl-copy="${t.id}">复制</button></td></tr>`)}
+      <div id="spd-tpl-detail"></div>`)}
     ${panel("启动患者路径", `
       <form class="inline" id="spd-inst-form">
         <input name="enrollment_id" type="number" placeholder="纳管档案ID" required>
@@ -1188,6 +1677,22 @@ async function renderSpdPath() {
        <td>${esc(t.due_date || "—")}</td><td>${t.urged_count}</td>
        <td>${spdTaskActions(t)}</td></tr>`);
   };
+  const showNodes = async (templateId) => {
+    const box = $("#spd-tpl-detail");
+    try {
+      const tpl = await api(`/api/spd/path-templates/${templateId}`);
+      const editable = tpl.status !== "published";   // 已发布的后端 409：复制新版本再改
+      box.innerHTML = panel(`节点 · ${tpl.name}（${tpl.status === "published" ? "已发布，只读；要改请复制新版本" : "可编辑"}）`,
+        table(["ID", "序", "key", "名称", "阶段", "执行角色", "服务类型", "时限(天)", "操作"], tpl.nodes || [], (n) =>
+          `<tr><td>${n.id}</td><td>${n.seq}</td><td>${esc(n.key)}</td><td>${esc(n.name)}</td><td>${esc(n.stage || "—")}</td>
+           <td>${esc(n.exec_role || "—")}</td><td>${esc(n.service_type || "—")}</td><td>${n.due_days}</td>
+           <td>${editable
+             ? `<button class="btn secondary" data-node-edit="${n.id}" data-tpl="${templateId}" data-name="${esc(n.name)}"
+                  data-stage="${esc(n.stage || "")}" data-seq="${n.seq}" data-days="${n.due_days}">编辑</button>
+                <button class="btn danger" data-node-del="${n.id}" data-tpl="${templateId}">删除</button>`
+             : "—"}</td></tr>`));
+    } catch (err) { box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
   const showTask = async (id) => {
     const box = $("#spd-task-detail");
     box.innerHTML = '<p class="desc">加载中…</p>';
@@ -1244,6 +1749,7 @@ async function renderSpdPath() {
   $("#page-body").onclick = async (e) => {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const node = el("data-tpl-node"), pub = el("data-tpl-pub"), copy = el("data-tpl-copy");
+    const tplNodes = el("data-tpl-nodes"), nodeEdit = el("data-node-edit"), nodeDel = el("data-node-del");
     const adv = el("data-adv"), instDetail = el("data-inst-detail"), instAdjust = el("data-inst-adjust");
     const nodeCheck = el("data-node-check");
     const claim = el("data-task-claim"), urge = el("data-task-urge"), done = el("data-task-done");
@@ -1269,6 +1775,37 @@ async function renderSpdPath() {
     }
     if (copy) {
       return postAction(`/api/spd/path-templates/${copy.dataset.tplCopy}/copy`, {}, "#spd-tpl-msg");
+    }
+    if (tplNodes) return showNodes(tplNodes.dataset.tplNodes);
+    if (nodeEdit) {
+      const form = await spdModal("编辑路径节点（留空的项不改）", [
+        { name: "name", label: "节点名称", value: nodeEdit.dataset.name },
+        { name: "stage", label: "所属阶段", value: nodeEdit.dataset.stage },
+        { name: "seq", label: "顺序", type: "number", value: nodeEdit.dataset.seq },
+        { name: "due_days", label: "时限（天）", type: "number", value: nodeEdit.dataset.days },
+        { name: "exec_role", label: "执行角色（doctor/nurse/village_doctor…，留空不改）" },
+      ]);
+      if (!form) return;
+      const body = {};
+      if (form.name) body.name = form.name;
+      body.stage = form.stage || "";
+      if (form.seq) body.seq = form.seq;
+      if (form.due_days) body.due_days = form.due_days;
+      if (form.exec_role) body.exec_role = form.exec_role;
+      try {
+        await api(`/api/spd/path-nodes/${nodeEdit.dataset.nodeEdit}`, { method: "PATCH", body: JSON.stringify(body) });
+        await showNodes(nodeEdit.dataset.tpl);
+        setMsg("#spd-tpl-msg", "节点已更新");
+      } catch (err) { setMsg("#spd-tpl-msg", err.message, false); }
+      return;
+    }
+    if (nodeDel) {
+      try {
+        await api(`/api/spd/path-nodes/${nodeDel.dataset.nodeDel}`, { method: "DELETE" });
+        await showNodes(nodeDel.dataset.tpl);
+        setMsg("#spd-tpl-msg", "节点已删除");
+      } catch (err) { setMsg("#spd-tpl-msg", err.message, false); }
+      return;
     }
     if (adv) return postAction(`/api/spd/path-instances/${adv.dataset.adv}/advance`, null, "#spd-inst-msg");
     if (instDetail) return showInstance(instDetail.dataset.instDetail);

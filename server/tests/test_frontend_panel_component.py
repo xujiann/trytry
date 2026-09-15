@@ -173,7 +173,8 @@ MIGRATED_PAGES = {
     "renderSpdCenter": 7,           # 功能完善·spd/population（2026-09-15）：+居民服务申请、+召回跟进两个面板
     # 第四批 2026-09-02：先给五页补夹具（team / hc / oaqc / infectious / blood 各带 XSS 载荷）再迁；
     # 条件面板（预警 / 服务包 / 按角色显示的表单）条件仍留在调用点
-    "renderSpdTeam": 6,
+    "renderSpdTeam": 9,             # 功能完善·spd/config（2026-09-15）：+团队维护、+村医档案，
+                                    # 及点「成员」后写进 #spd-team-detail 的成员面板（含空态两支）
     "renderSpdHealthCommission": 7,
     "renderOaQc": 4,
     "renderInfectious": 3,
@@ -184,7 +185,8 @@ MIGRATED_PAGES = {
     "renderDrgs": 4,
     "renderCost": 5,                # 标题里的期间不再 esc()：组件转义标题
     # 第六批 2026-09-02：慢专病运行中枢 / 症候群病原监测 / 通用资源 / 医保
-    "renderSpdAdmin": 5,
+    "renderSpdAdmin": 14,           # 功能完善·spd/config（2026-09-15）：+量表/服务包/宣教素材/标签/设备/机构树
+                                    # 六个维护面板，+点「管理目标」「版本」「同步日志」后写进 #spd-cfg-detail 的面板
     "renderSurveillance": 4,
     "renderResources": 4,
     "renderInsurance": 4,
@@ -254,7 +256,8 @@ MIGRATED_PAGES = {
     "renderSpdExpert": 3,
     "renderSpdPatients": 5,         # 四张表都由末尾的 drawXxx() 写进各自容器（不在本页计数内）；
                                     # 第 5 处是点「用量明细」后写进 #spd-usage-list 的面板（功能完善·spd/population）
-    "renderSpdPath": 3,             # 路径实例表与任务表同上
+    "renderSpdPath": 4,             # 路径实例表与任务表同上；第 4 处是点「节点」后写进 #spd-tpl-detail 的节点面板
+                                    # （功能完善·spd/config，2026-09-15）
     "renderSpdReferral": 4,         # 超时预警是条件面板，走 accent
     "renderSpdReport": 3,           # 第 4 处外壳在点击「查看」之后的报告详情里，见下
     # 第十五批 2026-09-06：pages-mgmt.js 五页 14 处（统一规则 / 就诊凭据 / 机构分组 /
