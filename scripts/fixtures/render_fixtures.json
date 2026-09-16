@@ -601,7 +601,9 @@
   },
   "billing": {
     "_why": [
-      "`PAY_STATUS` 那处也是**手工**改的（同一个 CSS `color:` 误判），故收进来取证。"
+      "`PAY_STATUS` 那处也是**手工**改的（同一个 CSS `color:` 误判），故收进来取证。",
+      "功能完善·billing（2026-09-16）：新增押金催缴预警两条——一条缺口为负（红，患者名带载荷）、一条缺口为正（橙，患者名空串走 `|| patient_id` 回落）。押金余额与流水是点「查余额与流水」之后才取的，渲染路径用不到。",
+      "同批顺手修：对账差异那一行夹具的键名四个全错（type/payment_id/channel_amount/note，而后端是 diff_type/order_id/remote_amount/detail），于是那张表一直渲染出空标签与 undefined——它从来没被比对器真正覆盖过。改成后端真实形状，并补一行 order_id 为 null（通道有本地无）+ 未知 diff_type 走 `|| d.diff_type` 回落的分支。"
     ],
     "fn": "renderBilling",
     "api": {
@@ -675,14 +677,46 @@
           "diff_amount": 100,
           "diffs": [
             {
-              "type": "amount",
-              "payment_id": 10,
+              "id": 7,
+              "order_id": 10,
               "trade_no": "UP-1<b>",
+              "diff_type": "amount_mismatch",
+              "diff_type_name": "金额不一致",
               "local_amount": 100,
-              "channel_amount": 90,
-              "note": "金额不符 & 待查"
+              "remote_amount": 90,
+              "detail": "金额不符 & 待查"
+            },
+            {
+              "id": 8,
+              "order_id": null,
+              "trade_no": "UP-2",
+              "diff_type": "legacy_type<b>",
+              "diff_type_name": "通道有本地无",
+              "local_amount": 0,
+              "remote_amount": 30,
+              "detail": ""
             }
           ]
+        }
+      ],
+      "/api/billing/deposits/alerts": [
+        {
+          "admission_id": 51,
+          "patient_id": 9,
+          "patient_name": "欠费患者<img src=x onerror=alert(1)>",
+          "org_id": 3,
+          "balance": 200.0,
+          "unsettled": 1850.5,
+          "gap": -1650.5
+        },
+        {
+          "admission_id": 52,
+          "patient_id": 10,
+          "patient_name": "",
+          "org_id": 4,
+          "balance": 900.0,
+          "unsettled": 640.0,
+          "gap": 260.0
         }
       ]
     }

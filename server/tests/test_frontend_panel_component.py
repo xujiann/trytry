@@ -168,7 +168,8 @@ MIGRATED_PAGES = {
     # 也是第一次迁出 pages-mgmt.js（clinical / public / spd 各一到两页）
     "renderMaterials": 4,
     "renderMedication": 4,          # 含一处带 accent 的条件面板（供应风险）
-    "renderBilling": 5,
+    "renderBilling": 6,
+                                    # 功能完善·billing（2026-09-16）：+住院押金面板
     "renderEsb": 4,
     "renderSpdCenter": 7,           # 功能完善·spd/population（2026-09-15）：+居民服务申请、+召回跟进两个面板
     # 第四批 2026-09-02：先给五页补夹具（team / hc / oaqc / infectious / blood 各带 XSS 载荷）再迁；

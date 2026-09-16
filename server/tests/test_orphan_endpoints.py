@@ -168,12 +168,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/auth/totp/activate",
     "/api/auth/totp/disable",
     "/api/auth/totp/setup",
-    # billing（5）
-    "/api/billing/charge-items/{item_id}",
-    "/api/billing/deposits",
-    "/api/billing/deposits/alerts",
-    "/api/billing/deposits/balance",
-    "/api/billing/deposits/refund",
     # certs（2）
     "/api/certs/death-report-cards/export.csv",
     "/api/certs/{cert_id}/death-report-card",
