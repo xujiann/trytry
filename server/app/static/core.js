@@ -1288,12 +1288,20 @@ async function renderReferrals() {
   };
 }
 
+// active 是个 bool，没有后端文案可取；这里把它映成两个状态码再走 statusTag，
+// 与本页其余状态列同一种写法（别在表格里直接写三元的中文）
+const RULE_STATUS = { on: ["生效中", "green"], off: ["已停用", "red"] };
+
 async function renderRx() {
   $("#page-desc").textContent = "“系统+药师”双重审方，每方必审；事后处方点评（药师）与合理率监管";
   const [prescriptions, rules, cstats, creviews] = await Promise.all([
-    api("/api/prescriptions"), api("/api/prescriptions/rules"),
+    // 带上 include_inactive：不带的话停用的规则整行看不见，于是"这条规则怎么不生效了"
+    // 在界面上无从查起，重新启用更无从谈起（后端 _active_rule 把停用一律当"未维护"）
+    api("/api/prescriptions"), api("/api/prescriptions/rules?include_inactive=true"),
     api("/api/prescriptions/comment-stats"), api("/api/prescriptions/comment-reviews")]);
   const canComment = ["pharmacist", "admin"].includes(currentRole());
+  // 规则的增删停启后端都是 require_admin：不是 admin 就别摆按钮，摆了只会点出 403
+  const canRule = currentRole() === "admin";
   const commented = new Set(creviews.map((c) => c.prescription_id));
   $("#page-body").innerHTML = `
     ${panel("开方（单药演示）", `
@@ -1314,10 +1322,27 @@ async function renderRx() {
         <input name="dose_unit" placeholder="单位" value="mg" style="min-width:70px">
         <button>新增规则</button>
       </form>
-      ${table(["药品编码", "日剂量上限", "相互作用", "禁忌诊断", "特殊人群", "肝肾功能提示"], rules, (r) =>
+      ${canRule ? `<details style="margin:8px 0">
+        <summary style="cursor:pointer;font-size:13px">批量导入（同 drug_code 整条覆盖，不存在则新建）</summary>
+        <form id="ruleimp-form">
+          <textarea name="payload" rows="5" style="width:100%;font-family:monospace"
+            placeholder='[{"drug_code":"AMOX","max_daily_dose":3000,"dose_unit":"mg","interactions":"","contraindicated_diagnoses":"","special_groups":"","renal_hepatic_note":"","review_points":"","antibiotic":true,"ddd":1500}]'></textarea>
+          <p class="desc">一个 JSON 数组，每项一条规则；只有 drug_code 与 max_daily_dose 必填，其余留空走默认。
+            <b>同 drug_code 的既有规则会被整条覆盖</b>（不是合并字段），回执报出新建与更新各几条。</p>
+          <button class="btn">导入</button>
+        </form></details>` : ""}
+      ${table(["药品编码", "日剂量上限", "相互作用", "禁忌诊断", "特殊人群", "肝肾功能提示", "抗菌/DDD", "状态"]
+          .concat(canRule ? ["操作"] : []), rules, (r) =>
         `<tr><td>${esc(r.drug_code)}</td><td>${r.max_daily_dose}${esc(r.dose_unit)}</td>
          <td>${esc(r.interactions) || "—"}</td><td>${esc(r.contraindicated_diagnoses) || "—"}</td>
-         <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td></tr>`)}`)}
+         <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td>
+         <td>${r.antibiotic ? `抗菌药物 / ${r.ddd ? `DDD ${r.ddd}` : '<span class="tag orange">DDD 未维护</span>'}` : "—"}</td>
+         <td>${statusTag(RULE_STATUS, r.active ? "on" : "off")}</td>
+         ${canRule ? `<td>${r.active
+           ? `<button class="btn danger" data-ruleoff="${esc(r.drug_code)}">停用</button>`
+           : `<button class="btn secondary" data-ruleon="${esc(r.drug_code)}">启用</button>`}</td>` : ""}</tr>`)}
+      <p class="desc">停用不删行：规则改过什么、什么时候不再生效，处方点评复核时要回溯得到。
+        <b>停用期间该药按"规则未维护"处理</b>——不是按上限 0 拦截，是根本不参与审方。</p>`)}
     ${panel("处方队列", table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
       let actions = p.status === "pending_review"
         ? `<button class="btn secondary" data-approve="1" data-id="${p.id}">通过</button>
@@ -1363,8 +1388,37 @@ async function renderRx() {
       route();
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
+  const impForm = $("#ruleimp-form");
+  if (impForm) impForm.onsubmit = async (e) => {
+    e.preventDefault();
+    let rows;
+    try {
+      rows = JSON.parse(new FormData(e.target).get("payload"));
+    } catch (err) {
+      // 自己先说清楚是 JSON 没写对，别把一句 422 的字段路径丢给人
+      return setMsg("#rx-msg", `JSON 解析失败：${err.message}`, false);
+    }
+    if (!Array.isArray(rows) || !rows.length) return setMsg("#rx-msg", "要一个非空的 JSON 数组", false);
+    try {
+      const r = await api("/api/prescriptions/rules/import", { method: "POST", body: JSON.stringify(rows) });
+      setMsg("#rx-msg", `导入完成：新建 ${r.imported} 条，覆盖更新 ${r.updated} 条`, true);
+      route();
+    } catch (err) { setMsg("#rx-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
-    const { approve, id, rxcomment, printrx } = e.target.dataset;
+    const { approve, id, rxcomment, printrx, ruleoff, ruleon } = e.target.dataset;
+    if (ruleoff || ruleon) {
+      // 两条路径分开写而不是拼动作：孤儿闸门按字面匹配，拼出来的地址它看不见
+      try {
+        if (ruleoff) {
+          if (!confirm(`停用 ${ruleoff} 的规则后，该药此后一律按"规则未维护"通过审方。确认停用？`)) return;
+          await api(`/api/prescriptions/rules/${encodeURIComponent(ruleoff)}`, { method: "DELETE" });
+        } else {
+          await api(`/api/prescriptions/rules/${encodeURIComponent(ruleon)}/reactivate`, { method: "POST" });
+        }
+        return route();
+      } catch (err) { return setMsg("#rx-msg", err.message, false); }
+    }
     if (printrx) {
       try { return await openPrintPage(`/api/print/prescriptions/${printrx}`); }
       catch (err) { return setMsg("#rx-msg", err.message, false); }

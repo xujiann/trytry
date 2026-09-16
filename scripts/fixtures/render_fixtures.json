@@ -3468,7 +3468,11 @@
       "第九批（2026-09-06）：处方与合理用药。点评按钮只对 pharmacist/admin 显示且只对未点评的处方出现",
       "（localStorage 固定 admin；41/42 已点评、43 未点评，正好把两种情况都渲染到）。",
       "处方队列里 pending_review / auto_passed / approved 三态各一条，把 actions 三元的分支走全；",
-      "规则库第二条各列留空，钉住 `|| \"—\"` 回落；点评记录一条合理一条不合理，钉住绿/红两种 tag。"
+      "规则库第二条各列留空，钉住 `|| \"—\"` 回落；点评记录一条合理一条不合理，钉住绿/红两种 tag。",
+      "第十八批（2026-09-16）：规则库接上停用/启用/批量导入。取规则改成 include_inactive=true，",
+      "**并把这份夹具改成后端 DrugRuleOut 的真形状**（原先 7 键，真身 13 键：缺 id/active/note/",
+      "review_points/antibiotic/ddd）——停用那一支、抗菌药 DDD 那一列都要靠这些字段才渲染得出来。",
+      "三条照分支造：生效+抗菌有 DDD / 生效+抗菌但 DDD 未维护（橙标签）/ 已停用（只摆「启用」）。"
     ],
     "fn": "renderRx",
     "localStorage": {
@@ -3500,22 +3504,49 @@
       ],
       "/api/prescriptions/rules": [
         {
+          "id": 1,
           "drug_code": "AMOX",
           "max_daily_dose": 3000,
           "dose_unit": "mg",
+          "note": "",
           "interactions": "华法林<img src=x onerror=alert(1)>",
           "contraindicated_diagnoses": "青霉素过敏",
           "special_groups": "孕妇慎用",
-          "renal_hepatic_note": "肾功能不全减量"
+          "renal_hepatic_note": "肾功能不全减量",
+          "review_points": "疗程不超过 7 天",
+          "antibiotic": true,
+          "ddd": 1500,
+          "active": true
         },
         {
+          "id": 2,
           "drug_code": "MET",
           "max_daily_dose": 2000,
           "dose_unit": "mg",
+          "note": "",
           "interactions": "",
           "contraindicated_diagnoses": "",
           "special_groups": "",
-          "renal_hepatic_note": ""
+          "renal_hepatic_note": "",
+          "review_points": "",
+          "antibiotic": false,
+          "ddd": 0,
+          "active": true
+        },
+        {
+          "id": 3,
+          "drug_code": "CEF<b>",
+          "max_daily_dose": 4000,
+          "dose_unit": "mg",
+          "note": "厂家停产",
+          "interactions": "",
+          "contraindicated_diagnoses": "头孢过敏",
+          "special_groups": "",
+          "renal_hepatic_note": "",
+          "review_points": "",
+          "antibiotic": true,
+          "ddd": 0,
+          "active": false
         }
       ],
       "/api/prescriptions": [
