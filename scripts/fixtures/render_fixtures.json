@@ -4771,10 +4771,13 @@
           "insurance_type": "resident",
           "org_group_id": 1,
           "total_amount": 12000000.0,
+          "prepay_ratio_pct": 70.0,
+          "planned_prepay": 8400000.0,
           "prepaid_amount": 8400000.0,
           "accrued_expense": 9100000.0,
           "book_balance": -1000000.0,
-          "status": "open<b>"
+          "status": "active",
+          "note": ""
         },
         {
           "id": 4,
@@ -4782,10 +4785,27 @@
           "insurance_type": "legacy_type<img src=x onerror=alert(1)>",
           "org_group_id": null,
           "total_amount": 9000000.0,
+          "prepay_ratio_pct": 70.0,
+          "planned_prepay": 6300000.0,
           "prepaid_amount": 6300000.0,
           "accrued_expense": 5800000.0,
           "book_balance": 500000.0,
-          "status": "settled"
+          "status": "settled",
+          "note": "已清算，不可再改"
+        },
+        {
+          "id": 5,
+          "year": 2024,
+          "insurance_type": "employee",
+          "org_group_id": 1,
+          "total_amount": 7000000.0,
+          "prepay_ratio_pct": 60.0,
+          "planned_prepay": 4200000.0,
+          "prepaid_amount": 4200000.0,
+          "accrued_expense": 6900000.0,
+          "book_balance": 100000.0,
+          "status": "closed",
+          "note": "年度关闭 &"
         }
       ],
       "/api/org-groups": [

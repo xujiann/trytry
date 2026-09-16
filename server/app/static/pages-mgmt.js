@@ -1485,6 +1485,9 @@ async function renderOrgGroups() {
 
 const INSURANCE_TYPES = { resident: "城乡居民", employee: "城镇职工" };
 
+// 取值真源是 fund.py：active/closed 由 PoolUpdate 的 pattern 限定，settled 由清算置
+const POOL_STATUS = { active: ["在用", "green"], closed: ["已关闭", ""], settled: ["已清算", "green"] };
+
 async function renderFund() {
   $("#page-desc").textContent =
     "预付与清算产生真实资金流，月度预结只是账面对冲；分配依据是冻结的绩效得分快照，事后调权不影响已分结果";
@@ -1524,8 +1527,15 @@ async function renderFund() {
          <td>${p.total_amount}</td><td>${p.prepaid_amount}</td><td>${p.accrued_expense}</td>
          <td>${p.book_balance < 0
            ? `<span class="tag red">${p.book_balance}</span>` : p.book_balance}</td>
-         <td><span class="tag ${p.status === "settled" ? "green" : ""}">${esc(p.status)}</span></td>
-         <td><button data-fdpick="${p.id}">打开</button></td></tr>`)}
+         <td>${statusTag(POOL_STATUS, p.status)}</td>
+         <td><button data-fdpick="${p.id}">打开</button>
+             ${p.status === "settled"
+               ? `<button class="btn secondary" data-fddist="${p.id}">分配结果</button>`
+               : `<button class="btn secondary" data-fdedit="${p.id}">编辑</button>`}</td></tr>`)}
+      <p class="desc">已清算的池子<b>不可再改</b>（后端 409）——清算是一次性动作，
+        改了筹资总额就等于改了已经分下去的结果。所以「编辑」只在未清算的池子上摆，
+        已清算的换成「分配结果」：不切换当前打开的池子，直接看那一池分给了谁多少。</p>
+      <div id="fd-dist"></div>
     `)}
 
     ${picked ? `
@@ -1591,7 +1601,7 @@ async function renderFund() {
       postAction(`/api/fund/pools/${picked}/settle`, body, "#fd-msg");
     };
   }
-  $("#page-body").onclick = (e) => {
+  $("#page-body").onclick = async (e) => {
     if (e.target.dataset.fdpick) {
       localStorage.setItem("medplat_fund_pool", e.target.dataset.fdpick);
       return route();
@@ -1599,6 +1609,41 @@ async function renderFund() {
     if (e.target.id === "fd-distribute") {
       const formula_expr = $("#fd-formula").value.trim() || "score";
       return postAction(`/api/fund/pools/${picked}/distribute`, { formula_expr }, "#fd-msg");
+    }
+    const { fddist, fdedit } = e.target.dataset;
+    if (fddist) {
+      try {
+        const rows = await api(`/api/fund/pools/${fddist}/distributions`);
+        $("#fd-dist").innerHTML = `<h3 style="margin-top:14px">基金池 ${fddist} 的分配结果</h3>
+          ${table(["机构", "绩效得分", "权重", "占比", "金额"], rows, (d) =>
+            `<tr><td>${esc(d.org_name) || d.org_id}</td><td>${d.score}</td><td>${d.weight}</td>
+             <td>${d.share_pct}%</td><td><b>${d.amount}</b></td></tr>`)}
+          <p class="desc">得分是<b>分配当时冻结的快照</b>，此后调整指标权重不影响已分结果。</p>`;
+      } catch (err) { $("#fd-dist").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+      return;
+    }
+    if (fdedit) {
+      const pool = pools.find((x) => x.id === Number(fdedit));
+      const picked2 = await spdModal(`编辑基金池 ${fdedit}（${pool ? pool.year : ""} 年度）`, [
+        { name: "total_amount", label: "筹资总额（元，留空不改）", type: "number",
+          value: pool ? pool.total_amount : "" },
+        { name: "prepay_ratio_pct", label: "预付比例 %（0-100，留空不改）", type: "number",
+          value: pool ? pool.prepay_ratio_pct : "" },
+        { name: "status", label: "状态（settled 由清算置，这里改不了）", type: "select",
+          value: pool ? pool.status : "active",
+          options: [{ value: "active", label: "在用" }, { value: "closed", label: "已关闭" }] },
+        { name: "note", label: "备注（留空不改）", type: "text", value: pool ? pool.note : "" },
+      ]);
+      if (!picked2) return;
+      // 后端 exclude_unset + `if value is not None`：留空的键不送
+      const body = { status: picked2.status };
+      if (picked2.total_amount) body.total_amount = picked2.total_amount;
+      if (picked2.prepay_ratio_pct) body.prepay_ratio_pct = picked2.prepay_ratio_pct;
+      if (picked2.note) body.note = picked2.note;
+      try {
+        await api(`/api/fund/pools/${fdedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        return route();
+      } catch (err) { return setMsg("#fd-msg", err.message, false); }
     }
   };
 }
