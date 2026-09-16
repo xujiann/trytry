@@ -104,6 +104,9 @@ ROOT_FIXED_RENDERERS = [
     ("pages-clinical.js", "renderAccessLogs",
      ['$("#al-search").onsubmit'],
      "\n  await draw();"),
+    ("pages-clinical.js", "renderRbac",   # 功能完善·rbac（2026-09-16）：权限点清单筛选
+     ['$("#role-form").onsubmit', '$("#perm-filter").onsubmit', '$("#page-body").onclick'],
+     "\n  await drawPerms();"),
     ("pages-clinical.js", "renderConsents",
      ['$("#ct-search").onsubmit', '$("#tx-filter").onsubmit',
       '$("#ct-table").onclick', '$("#cr-table").onclick'],

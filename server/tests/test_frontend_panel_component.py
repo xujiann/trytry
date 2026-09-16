@@ -325,7 +325,7 @@ MIGRATED_PAGES = {
     "renderPathology": 2,
     "renderProjects": 3,
                                     # 功能完善·projects（2026-09-16）：+里程碑（全部项目）面板
-    "renderRbac": 3,
+    "renderRbac": 4,
     "renderPublicHealth": 3,
     "renderCritical": 2,            # 催办面板走 accent；另有一处 class="panel hidden" 的留痕容器
     "renderLabQc": 2,               # 另有一处 class="panel hidden" 的 L-J 明细容器

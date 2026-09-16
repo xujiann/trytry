@@ -7627,6 +7627,7 @@
           "id": 1,
           "key": "admin",
           "name": "平台管理员 &",
+          "description": "全平台管理",
           "builtin": true,
           "permission_source": "代码内 require_roles<b>",
           "permission_count": 0,
@@ -7636,10 +7637,29 @@
           "id": 9,
           "key": "custom_ops<img src=x onerror=alert(1)>",
           "name": "运维专员",
+          "description": "只管医废与用药",
           "builtin": false,
           "permission_source": "",
           "permission_count": 12,
           "active": false
+        }
+      ],
+      "/api/rbac/permissions": [
+        {
+          "id": 31,
+          "code": "POST:/api/medwaste/handovers",
+          "method": "POST",
+          "path": "/api/medwaste/handovers<b>",
+          "module": "medwaste &",
+          "builtin_roles": "admin,nurse"
+        },
+        {
+          "id": 32,
+          "code": "DELETE:/api/medication/shortages/1",
+          "method": "DELETE",
+          "path": "/api/medication/shortages/{shortage_id}",
+          "module": "medication<b>",
+          "builtin_roles": ""
         }
       ],
       "/api/rbac/modules": [
