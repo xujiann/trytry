@@ -1647,10 +1647,15 @@ async function renderTcmHeritage() {
       <form class="inline" id="mc-search"><input name="keyword" placeholder="搜方药/按语/标题"><button>检索</button></form>
       <div id="mc-list">${renderCaseTable(cases)}</div>`)}
     ${panel("模拟诊疗病例", `
-      ${table(["标题", "类别", "决策点", "满分", "及格分"], sims, (s) =>
+      ${table(["标题", "类别", "决策点", "满分", "及格分", "状态", "操作"], sims, (s) =>
         `<tr><td>${esc(s.title)}</td><td>${esc(s.category)}</td><td>${s.decision_points.length}</td>` +
-        `<td>${s.total_score}</td><td>${s.pass_score}</td></tr>`)}
-      <p class="hint">模拟诊疗的作答与评分在医师端 H5 完成；此处仅维护病例。列表刻意不含正确答案。</p>`)}`;
+        `<td>${s.total_score}</td><td>${s.pass_score}</td>` +
+        `<td>${s.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>` +
+        `<td>${s.active && s.decision_points.length
+          ? `<button class="btn sm" data-simdo="${s.id}">作答</button>` : "—"}</td></tr>`)}
+      <p class="hint">列表<b>刻意不含正确答案</b>——答案与解析只在交卷回执里给，
+        所以这张表不能拿来对答案。停用的病例不摆「作答」：后端直接回 409。</p>
+      <div id="sim-box"></div>`)}`;
   $("#mc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/tcm-heritage/master-cases", formJson(e.target, []), "#mc-msg"); };
   $("#mc-search").onsubmit = async (e) => {
     e.preventDefault();
@@ -1662,6 +1667,53 @@ async function renderTcmHeritage() {
     const d = e.target.dataset;
     if (d.publish) return postAction(`/api/tcm-heritage/master-cases/${d.publish}/publish`, {}, "#mc-msg");
     if (d.unpublish) return postAction(`/api/tcm-heritage/master-cases/${d.unpublish}/unpublish`, {}, "#mc-msg");
+  };
+  const drawSim = (sim) => {
+    $("#sim-box").innerHTML = `<h3 style="margin-top:14px">${esc(sim.title)}</h3>
+      <p class="desc">${esc(sim.scenario)}</p>
+      <form id="sim-form">
+        ${sim.decision_points.map((p, i) => `<div style="margin:10px 0">
+          <div style="font-size:13.5px"><b>${i + 1}. ${esc(p.question)}</b>（${p.score} 分）</div>
+          ${p.options.map((o) => `<label style="display:block;font-size:13px;margin:2px 0 2px 12px">
+            <input type="radio" name="${esc(p.key)}" value="${esc(o)}"> ${esc(o)}</label>`).join("")}
+        </div>`).join("")}
+        <div class="inline"><button>交卷</button>
+          <button type="button" class="btn secondary" data-simclose="1">关闭</button></div></form>
+      <p class="msg" id="sim-msg"></p><div id="sim-result"></div>`;
+    $("#sim-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      // 没选的决策点**不送这个键**：后端 `body.answers.get(p["key"], "")` 会折成"未作答"，
+      // 送一个空串是同样的结果，但少送更贴近"这题跳过了"的本意
+      const answers = {};
+      sim.decision_points.forEach((p) => { const v = f.get(p.key); if (v) answers[p.key] = v; });
+      try {
+        const r = await api(`/api/tcm-heritage/simulations/${sim.id}/attempts`,
+          { method: "POST", body: JSON.stringify({ answers }) });
+        $("#sim-result").innerHTML = `
+          <div class="cards">
+            <div class="card"><div class="label">得分</div><div class="value">${r.score}</div></div>
+            <div class="card"><div class="label">及格线</div><div class="value">${r.pass_score}</div></div>
+            <div class="card"><div class="label">结果</div>
+              <div class="value${r.passed ? "" : " warn"}">${r.passed ? "通过" : "未通过"}</div></div>
+          </div>
+          ${table(["决策点", "你的选择", "对错", "正确答案", "解析"], r.detail, (d) =>
+            `<tr><td>${esc(d.question)}</td><td>${esc(d.chosen)}</td>
+             <td>${d.correct ? '<span class="tag green">对</span>' : '<span class="tag red">错</span>'}</td>
+             <td>${esc(d.answer)}</td><td style="font-size:12px">${esc(d.explain) || "—"}</td></tr>`)}
+          <p class="desc"><b>只有答错的才给解析</b>（后端的原话：答对的人不需要，堆一屏解析反而没人看），
+            所以解析列的「—」意味着这题答对了，不是"没写解析"。
+            每次交卷都会留一条尝试记录，分数不覆盖——练几次、进步多少都查得到。</p>`;
+        setMsg("#sim-msg", "", true);
+      } catch (err) { setMsg("#sim-msg", err.message, false); }
+    };
+  };
+  $("#page-body").onclick = (e) => {
+    const { simdo, simclose } = e.target.dataset;
+    if (simclose) return ($("#sim-box").innerHTML = "");
+    if (!simdo) return;
+    const sim = sims.find((x) => x.id === Number(simdo));
+    if (sim) drawSim(sim);
   };
 }
 

@@ -1589,15 +1589,37 @@
       },
       "/api/tcm-heritage/simulations": [
         {
+          "id": 71,
           "title": "胸痹模拟<b>",
           "category": "internal<img src=x onerror=alert(1)>",
+          "scenario": "男，62 岁，劳累后胸闷痛 3 月 &",
           "decision_points": [
-            1,
-            2,
-            3
+            {
+              "key": "syndrome",
+              "question": "首要证型判断<b>",
+              "options": ["心血瘀阻 &", "痰浊闭阻", "心肾阴虚"],
+              "score": 50
+            },
+            {
+              "key": "formula",
+              "question": "首选方剂",
+              "options": ["血府逐瘀汤", "瓜蒌薤白半夏汤<b>"],
+              "score": 50
+            }
           ],
           "total_score": 100,
-          "pass_score": 60
+          "pass_score": 60,
+          "active": true
+        },
+        {
+          "id": 72,
+          "title": "旧版消渴模拟（已停用）",
+          "category": "internal",
+          "scenario": "",
+          "decision_points": [],
+          "total_score": 0,
+          "pass_score": 60,
+          "active": false
         }
       ]
     }
