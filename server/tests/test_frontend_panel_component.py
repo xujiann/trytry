@@ -167,7 +167,8 @@ MIGRATED_PAGES = {
     # 第三批 2026-09-02：挑的是 render_diff 夹具**已经有**的五页——比对取证零成本，
     # 也是第一次迁出 pages-mgmt.js（clinical / public / spd 各一到两页）
     "renderMaterials": 4,
-    "renderMedication": 4,          # 含一处带 accent 的条件面板（供应风险）
+    "renderMedication": 5,          # 含一处带 accent 的条件面板（供应风险）
+                                    # 功能完善·medication（2026-09-16）：+缺药登记统计（履约率）面板
     "renderBilling": 6,
                                     # 功能完善·billing（2026-09-16）：+住院押金面板
     "renderEsb": 4,

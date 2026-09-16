@@ -273,7 +273,10 @@
       "这一页**没有迁面板**，收进来是为了给「解构兜底裸插值」那批修复留证据：",
       "`PURCHASE_STATUS[p.status] || [p.status, \"\"]` 查不到映射时，`text` 就是后端原始状态码。",
       "故意给一条状态码带载荷的记录——修复前它原样吐进 innerHTML，修复后被转义。",
-      "跑 `node scripts/render_diff.js --base <修复前的提交> materials` 就能看到这处差异。"
+      "跑 `node scripts/render_diff.js --base <修复前的提交> materials` 就能看到这处差异。",
+      "第二十七批（2026-09-16）：加「结案」与缺药登记统计。补一条 delivered 的登记——",
+      "只有它能走「已取药/未取药/已取消」三选一那一支，其余状态只给「已取消」。",
+      "SS 同批补齐三个结案状态（collected/no_show/cancelled），统计表的状态列也复用它。"
     ],
     "fn": "renderMaterials",
     "api": {
@@ -468,8 +471,28 @@
           "drug_name": "厄贝沙坦",
           "quantity": 1,
           "status": "collected"
+        },
+        {
+          "id": 3,
+          "org_id": 4,
+          "drug_name": "胰岛素<b>",
+          "quantity": 5,
+          "status": "delivered"
         }
       ],
+      "/api/medication/shortages/stats": {
+        "by_status": {
+          "registered": 1,
+          "delivered": 1,
+          "collected": 3,
+          "no_show": 1
+        },
+        "in_transit": 2,
+        "collected": 3,
+        "no_show": 1,
+        "fulfillment_rate_pct": 75.0,
+        "caliber": "履约率分母只含已判定取药与否的登记（collected + no_show），在途与已取消不计；无可判定登记时返回 null 而非 0"
+      },
       "/api/medication/usage-stats": [
         {
           "drug_code": "A10BA02",

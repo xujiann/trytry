@@ -580,9 +580,16 @@ async function renderTcm() {
 
 async function renderMedication() {
   $("#page-desc").textContent = "缺药登记流转、供应风险研判、全县用药地图、居民用药画像";
-  const [shortages, stats, risk] = await Promise.all([
-    api("/api/medication/shortages"), api("/api/medication/usage-stats"), api("/api/medication/supply-risk")]);
-  const SS = { registered: ["已登记", "orange"], purchasing: ["采购中", "orange"], delivered: ["已配送", "green"] };
+  const [shortages, stats, risk, sstats] = await Promise.all([
+    api("/api/medication/shortages"), api("/api/medication/usage-stats"),
+    api("/api/medication/supply-risk"), api("/api/medication/shortages/stats")]);
+  // 补齐三个**结案**状态：后端 `_SHORTAGE_CLOSED` 就是这三个，本批把结案接上之后
+  // 它们会真的出现在列表里。原先只有流转中的三个，结案行会把英文键直接印给人看。
+  const SS = {
+    registered: ["已登记", "orange"], purchasing: ["采购中", "orange"], delivered: ["已配送", "green"],
+    collected: ["已取药", "green"], no_show: ["未取药", "red"], cancelled: ["已取消", ""],
+  };
+  const CLOSED = ["collected", "no_show", "cancelled"];
   // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 供应风险面板的红色左边框走 `accent`；"有风险才渲染"这个条件仍留在调用点。
   $("#page-body").innerHTML = `
@@ -610,8 +617,25 @@ async function renderMedication() {
         const canAdvance = s.status === "registered" || s.status === "purchasing";
         return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
           <td>${statusTag(SS, s.status)}</td>
-          <td>${canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
-      })}`)}
+          <td>${[
+            canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "",
+            CLOSED.includes(s.status) ? "" : `<button class="btn" data-close="${s.id}">结案</button>`,
+          ].filter(Boolean).join(" ") || "—"}</td></tr>`;
+      })}
+      <p class="desc">结案分三种：<b>已取药 / 未取药只能在「已配送」之后判定</b>——药还没到就说
+        "未取药"是冤枉人（后端对未配送的直接 409）；<b>已取消</b>任何阶段都可以
+        （患者转院、药源已解决）。结案不可撤销，后端没有反向端点。</p>`)}
+    ${panel("缺药登记统计（履约率）", `
+      <div class="cards">
+        <div class="card"><div class="label">在途</div><div class="value">${sstats.in_transit}</div></div>
+        <div class="card"><div class="label">已取药</div><div class="value">${sstats.collected}</div></div>
+        <div class="card"><div class="label">未取药</div><div class="value${
+          sstats.no_show ? " warn" : ""}">${sstats.no_show}</div></div>
+        <div class="card"><div class="label">履约率</div><div class="value">${
+          sstats.fulfillment_rate_pct === null ? "—" : `${sstats.fulfillment_rate_pct}%`}</div></div></div>
+      ${table(["状态", "件数"], Object.entries(sstats.by_status), ([code, n]) =>
+        `<tr><td>${statusTag(SS, code)}</td><td>${n}</td></tr>`)}
+      <p class="desc">${esc(sstats.caliber)}</p>`)}
     ${panel("用药画像查询", `
       <form class="inline" id="prof-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
       <div id="prof-result"></div>`)}
@@ -623,7 +647,25 @@ async function renderMedication() {
     const profile = await api(`/api/medication/profile/${new FormData(e.target).get("patient_id")}`);
     $("#prof-result").innerHTML = `${profile.polypharmacy_warning ? '<p class="msg err">⚠ 多重用药风险</p>' : ""}<pre class="json">${esc(JSON.stringify(profile, null, 2))}</pre>`;
   };
-  $("#page-body").onclick = (e) => { if (e.target.dataset.adv) postAction(`/api/medication/shortages/${e.target.dataset.adv}/advance`, null, "#short-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const { adv, close } = e.target.dataset;
+    if (adv) return postAction(`/api/medication/shortages/${adv}/advance`, null, "#short-msg");
+    if (close) {
+      const row = shortages.find((x) => x.id === Number(close));
+      // 未配送的只给"已取消"：另外两个后端会 409，摆出来只会让人点一次看一句错
+      const options = row && row.status === "delivered"
+        ? [{ value: "collected", label: "已取药" }, { value: "no_show", label: "未取药" },
+           { value: "cancelled", label: "已取消" }]
+        : [{ value: "cancelled", label: "已取消（药未配送到位，只能取消）" }];
+      const picked = await spdModal(`结案缺药登记 ${close}`, [
+        { name: "result", label: "结案结论", type: "select", options },
+        { name: "reason", label: "结案说明", type: "text" },
+      ]);
+      if (!picked) return;
+      return postAction(`/api/medication/shortages/${close}/close`,
+        { result: picked.result, reason: picked.reason }, "#short-msg");
+    }
+  };
 }
 
 async function renderInsurance() {

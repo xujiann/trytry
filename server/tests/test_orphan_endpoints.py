@@ -191,9 +191,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/fund/pools/{pool_id}/distributions",
     # inpatient（1）
     "/api/inpatient/orders/{order_id}/executions",
-    # medication（2）
-    "/api/medication/shortages/stats",
-    "/api/medication/shortages/{shortage_id}/close",
     # metrics（1）
     "/api/metrics/drilldown-metrics",
     # org_groups（1）
