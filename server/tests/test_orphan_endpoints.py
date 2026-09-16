@@ -181,9 +181,6 @@ KNOWN_ORPHANS: set[str] = {
     # disease_programs（2）
     "/api/disease-programs/enrollments/{enrollment_id}",
     "/api/disease-programs/{program_id}",
-    # drgs（2）
-    "/api/drgs/in-stay-alerts",
-    "/api/drgs/pre-check",
     # eldercare（1）
     "/api/eldercare/stats",
     # esb（2）

@@ -70,6 +70,24 @@ async function renderEmTimeline() {
 async function renderDrgs() {
   $("#page-desc").textContent = "DRGs 分析：62 组目录（多关键词 + 主手术入组，未匹配落 QY）、机构 CMI、MDC 汇总";
   const [groups, stats] = await Promise.all([api("/api/drgs/groups"), api("/api/drgs/stats")]);
+  const drawAlerts = async (mult) => {
+    try {
+      const a = await api(`/api/drgs/in-stay-alerts?los_multiplier=${mult}`);
+      $("#drg-alerts").innerHTML = `
+        <p class="desc">业务日 ${esc(a.today)}，倍数 ${a.los_multiplier}；
+          <b>未入组的在院病例 ${a.ungrouped_in_stay} 例</b>（没有 DRG 就没有同组均值可比，不参与预警）。</p>
+        ${table(["住院号", "患者", "机构", "DRG", "已住(天)", "同组均值", "历史例数", "超出倍数"], a.alerts, (r) =>
+          `<tr><td>${r.admission_id}</td><td>${r.patient_id}</td><td>${r.org_id}</td>
+           <td><span class="tag">${esc(r.drg_code)}</span></td><td><b>${r.stayed_days}</b></td>
+           <td>${r.baseline_avg_days}</td><td>${r.baseline_cases}</td>
+           <td><span class="tag red">${r.over_ratio}×</span></td></tr>`)}
+        <h3 style="margin-top:14px">基线不足，未预警（单列报出，不是"没问题"）</h3>
+        ${table(["住院号", "DRG", "历史例数", "已住(天)"], a.insufficient_baseline, (r) =>
+          `<tr><td>${r.admission_id}</td><td><span class="tag">${esc(r.drg_code)}</span></td>
+           <td><span class="tag orange">${r.history_cases}</span></td><td>${r.stayed_days}</td></tr>`)}
+        <p class="desc">${esc(a.caliber)}</p>`;
+    } catch (err) { $("#drg-alerts").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
   // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 三个统计面板"有数据才渲染"，条件仍留在调用点。
   $("#page-body").innerHTML = `
@@ -91,15 +109,55 @@ async function renderDrgs() {
          <td>${esc(g.keywords) || "—"}</td>
          <td>${esc(g.procedure_keywords) || "—"}${g.require_procedure ? ' <span class="tag orange">必须</span>' : ""}</td>
          <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td>
-         <td><button class="btn secondary" data-drg-weight="${g.id}">调权</button></td></tr>`)}`)}`;
+         <td><button class="btn secondary" data-drg-weight="${g.id}">调权</button></td></tr>`)}`)}
+    ${panel("事中预警：在院病例住院日已明显超出同组均值", `
+      <form class="inline" id="drg-alert-form">
+        <input name="los_multiplier" type="number" step="0.1" min="1" max="5" value="1.5" style="min-width:120px"
+          title="后端限 1.0～5.0">
+        <button>按倍数重算</button>
+      </form>
+      <div id="drg-alerts"></div>`)}
+    ${panel("事前提示：按拟诊断预判入组（给候选组，不给结论）", `
+      <form class="inline" id="drg-pre-form">
+        <input name="diagnosis" placeholder="拟诊断" required style="min-width:220px">
+        <input name="operation" placeholder="拟手术（可空）" style="min-width:180px">
+        <button>预判</button>
+      </form>
+      <div id="drg-pre"></div>`)}`;
+  $("#drg-alert-form").onsubmit = async (e) => {
+    e.preventDefault();
+    await drawAlerts(Number(new FormData(e.target).get("los_multiplier")) || 1.5);
+  };
+  $("#drg-pre-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api("/api/drgs/pre-check", { method: "POST", body: JSON.stringify({
+        diagnosis: f.get("diagnosis"), operation: f.get("operation") || "" }) });
+      $("#drg-pre").innerHTML = `
+        ${r.matched
+          ? `<p class="msg ok">命中 ${r.candidates.length} 个候选组，基准权重区间
+             ${r.weight_range.min} ~ ${r.weight_range.max}</p>`
+          : `<p class="msg">未匹配到任何分组——<b>事前不落兜底组</b>（兜底组是出院入组时保证
+             每个病例都有归属用的，事前拿它当预测结果毫无信息量）。</p>`}
+        ${table(["编码", "MDC", "名称", "基准权重", "诊断命中", "手术命中"], r.candidates, (c) =>
+          `<tr><td>${esc(c.code)}</td><td>${esc(c.mdc) || "—"}</td><td>${esc(c.name)}</td>
+           <td>${c.base_weight}</td><td>${c.match_score.diagnosis_hits}</td>
+           <td>${c.match_score.procedure_hits}</td></tr>`)}
+        <p class="desc">${esc(r.caliber)}</p>`;
+    } catch (err) { $("#drg-pre").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
   $("#page-body").onclick = async (e) => {
     const id = e.target.dataset.drgWeight;
     if (!id) return;
-    const w = prompt("新基准权重（>0）");
-    if (!w) return;
-    try { await api(`/api/drgs/groups/${id}`, { method: "PATCH", body: JSON.stringify({ base_weight: Number(w) }) }); route(); }
+    const picked = await spdModal("调整基准权重", [
+      { name: "base_weight", label: "新基准权重（须 > 0）", type: "number" }]);
+    if (!picked || !picked.base_weight) return;
+    try { await api(`/api/drgs/groups/${id}`, { method: "PATCH", body: JSON.stringify({ base_weight: picked.base_weight }) }); route(); }
     catch (err) { setMsg("#drg-msg", err.message, false); }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修）
+  await drawAlerts(1.5);
 }
 
 /* ---------------- 终审轮新增页面 ---------------- */

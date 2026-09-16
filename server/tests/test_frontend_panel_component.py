@@ -184,7 +184,8 @@ MIGRATED_PAGES = {
     # 第五批 2026-09-02：接种（渲染时不调接口，夹具 api 为空）/ 名老中医医案 / DRGs / 科室成本
     "renderVaccination": 4,
     "renderTcmHeritage": 4,
-    "renderDrgs": 4,
+    "renderDrgs": 6,
+                                    # 功能完善·drgs（2026-09-16）：+事中预警、+事前提示两个面板
     "renderCost": 5,                # 标题里的期间不再 esc()：组件转义标题
     # 第六批 2026-09-02：慢专病运行中枢 / 症候群病原监测 / 通用资源 / 医保
     "renderSpdAdmin": 14,           # 功能完善·spd/config（2026-09-15）：+量表/服务包/宣教素材/标签/设备/机构树

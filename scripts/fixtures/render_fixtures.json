@@ -1551,6 +1551,32 @@
     ],
     "fn": "renderDrgs",
     "api": {
+      "/api/drgs/in-stay-alerts": {
+        "today": "2026-09-16",
+        "los_multiplier": 1.5,
+        "alerts": [
+          {
+            "admission_id": 501,
+            "patient_id": 31,
+            "org_id": 3,
+            "drg_code": "FM19<b>",
+            "stayed_days": 21,
+            "baseline_avg_days": 9.4,
+            "baseline_cases": 18,
+            "over_ratio": 2.23
+          }
+        ],
+        "insufficient_baseline": [
+          {
+            "admission_id": 502,
+            "drg_code": "GB29",
+            "history_cases": 3,
+            "stayed_days": 16
+          }
+        ],
+        "ungrouped_in_stay": 4,
+        "caliber": "均值取自本院已出院且已入组的历史病例；同组历史不足 5 例的不预警但单列报出"
+      },
       "/api/drgs/groups": [
         {
           "id": 1,
