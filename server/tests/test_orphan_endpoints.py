@@ -178,10 +178,6 @@ KNOWN_ORPHANS: set[str] = {
     # consents（2）
     "/api/consents/texts",
     "/api/consents/{consent_id}/revoke",
-    # credentials（3）
-    "/api/credentials/one-code",
-    "/api/credentials/one-code/resolve",
-    "/api/credentials/resolve",
     # cssd（2）
     "/api/cssd/requests",
     "/api/cssd/requests/{request_id}/fulfill",

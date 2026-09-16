@@ -1035,6 +1035,9 @@ async function renderMonitor() {
 
 /* ---------------- 就诊凭据（浙#27） ---------------- */
 
+// 取值真源是 credentials.py:resolve_any 的三条 return——按「从具体到一般」的顺序
+const MATCHED_BY = { credential_no: "凭据号", ehc_no: "电子健康卡号", id_card: "身份证号" };
+
 async function renderCredentials() {
   $("#page-desc").textContent =
     "凭据是介质（卡会丢、码会过期），电子健康卡号才是身份——换卡不换号";
@@ -1061,6 +1064,33 @@ async function renderCredentials() {
         <button>核验</button>
       </form>
       <div id="cred-result"></div>
+    `)}
+    ${panel("一码通（动态码：出码与核验）", `
+      <form id="onecode-form" class="inline">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="ttl_seconds" type="number" value="60" min="10" max="600" style="min-width:110px"
+          title="后端限 10～600 秒">
+        <button>出码</button>
+      </form>
+      <div id="onecode-result"></div>
+      <form id="onecode-check" class="inline" style="margin-top:10px">
+        <input name="code" placeholder="粘贴或扫入动态码（健康卡号.过期时刻.签名）" required style="min-width:340px">
+        <button>核验</button>
+      </form>
+      <div id="onecode-check-result"></div>
+      <p class="desc">动态码<b>不落库</b>：它是「健康卡号.过期时刻.签名」的自包含串，
+        过期即失效，换平台密钥即全部作废。默认 60 秒——给太长等于回到静态码。
+        核验时<b>过期与签名错误分开报</b>：前者让人重新出码，后者是伪造，处置完全不同。</p>
+    `)}
+    ${panel("多卡（码）协同：一个入口认全部身份标识", `
+      <form id="anyid-form" class="inline">
+        <input name="identifier" placeholder="实体卡号 / 电子健康卡号 / 身份证号" required style="min-width:300px">
+        <button>认人</button>
+      </form>
+      <div id="anyid-result"></div>
+      <p class="desc">按「从具体到一般」依次试：凭据号 → 电子健康卡号 → 身份证号，
+        回执<b>注明命中的是哪一类</b>——不注明的话，同一个人从不同介质进来看不出差别。
+        与上面「凭据核验」的分工：那条只认凭据号、回的是这张卡的台账行；这条认三类标识、回的是人。</p>
     `)}
     ${panel("凭据台账", `
       ${table(["凭据号", "患者ID", "类型", "状态", "发放时间", "结束原因", "操作"], rows, (c) =>
@@ -1091,6 +1121,47 @@ async function renderCredentials() {
       // 查无此卡与卡已作废是两回事，前者才是 404
       $("#cred-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
     }
+  };
+  $("#onecode-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api("/api/credentials/one-code", { method: "POST", body: JSON.stringify({
+        patient_id: Number(f.get("patient_id")), ttl_seconds: Number(f.get("ttl_seconds")) }) });
+      // 码本身要能被选中复制，所以印在 <code> 里而不是塞进提示行
+      $("#onecode-result").innerHTML = `<p class="msg ok">健康卡号 ${esc(r.ehc_no)}，
+        有效 ${r.expires_in} 秒</p>
+        <p><code style="word-break:break-all;user-select:all">${esc(r.code)}</code></p>
+        <p class="desc">${esc(r.note)}</p>`;
+    } catch (err) { $("#onecode-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  $("#onecode-check").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/credentials/one-code/resolve", { method: "POST",
+        body: JSON.stringify({ code: e.target.code.value.trim() }) });
+      // 卡片形状照搬同一页的 #cred-result——`kv()` 不是管理端的全局
+      // （它只存在于 pages-spd 某个函数内与两个 H5 文件里，index.html 根本不加载后者）
+      $("#onecode-check-result").innerHTML = `<div class="cards">
+        <div class="card"><span class="k">持有人</span><b>${esc(r.name)}</b></div>
+        <div class="card"><span class="k">健康卡号</span><b>${esc(r.ehc_no)}</b></div>
+        <div class="card"><span class="k">患者ID</span><b>${r.patient_id}</b></div>
+        <div class="card"><span class="k">剩余有效</span><b>${r.remaining_seconds} 秒</b></div></div>`;
+    } catch (err) { $("#onecode-check-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  $("#anyid-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const id = e.target.identifier.value.trim();
+    try {
+      const r = await api(`/api/credentials/resolve?identifier=${encodeURIComponent(id)}`);
+      $("#anyid-result").innerHTML = `<div class="cards">
+        <div class="card"><span class="k">命中方式</span><b><span class="tag">${
+          esc(MATCHED_BY[r.matched_by] || r.matched_by)}</span></b></div>
+        <div class="card"><span class="k">持有人</span><b>${esc(r.patient?.name || "—")}</b></div>
+        <div class="card"><span class="k">健康卡号</span><b>${esc(r.patient?.ehc_no || "—")}</b></div>
+        <div class="card"><span class="k">是否可用</span><b><span class="tag ${r.valid ? "green" : "red"}">${
+          r.valid ? "有效" : esc(`失效（${r.credential_status || "未知状态"}）`)}</span></b></div></div>`;
+    } catch (err) { $("#anyid-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   $("#page-body").onclick = (e) => {
     const { crec, cvoid } = e.target.dataset;

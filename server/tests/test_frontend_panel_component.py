@@ -281,7 +281,8 @@ MIGRATED_PAGES = {
     # 它们带额外 class 与 id，`panel()` 出不来，这条规则本来也数不到（见下方说明）。
     # 别把"计数为 0"读成"这个文件一个 panel 外壳都没有了"。
     "renderRules": 3,
-    "renderCredentials": 3,
+    "renderCredentials": 5,
+                                    # 功能完善·credentials（2026-09-16）：+一码通出码/核验、+多卡码协同两个面板
     "renderOrgGroups": 3,           # 中间那个包在 `${selected ? … : ""}` 里；覆盖面板标题不再 esc()
     "renderStaffing": 3,
     "renderDiseasePrograms": 2,     # 第二个包在 `${picked && current ? … : ""}` 里；标题不再 esc()
