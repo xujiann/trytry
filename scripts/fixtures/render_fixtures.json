@@ -7189,9 +7189,16 @@
   "emergency": {
     "_why": [
       "第十七批（2026-09-06）：院前急救。两个面板，第二个是无标题裸面板。",
-      "四条覆盖 ES 的 dispatched/en_route/arrived/admitted，最后一条走操作列「—」。"
+      "四条覆盖 ES 的 dispatched/en_route/arrived/admitted，最后一条走操作列「—」。",
+      "第二十五批（2026-09-16）：加抢救转归列与「判定转归」。角色固定 doctor（后端 require_roles(\"doctor\")）；",
+      "**补上 rescue_outcome 字段**——后端 CaseOut 一直有它（默认空串），夹具原先四条一条都没写。",
+      "五条覆盖：未到院两条（转归列走「—」）、已到院未判定（橙「未判定」+判定按钮）、",
+      "已收治且 success（绿）、已收治且 failed（红）——后两条的操作列只剩「判定转归」（可更正）。"
     ],
     "fn": "renderEmergency",
+    "localStorage": {
+      "medplat_role": "doctor"
+    },
     "api": {
       "/api/emergency/cases": [
         {
@@ -7199,28 +7206,40 @@
           "location": "XX路口 &",
           "symptom": "胸痛<b>",
           "ambulance_no": "沪A·00001",
-          "status": "dispatched"
+          "status": "dispatched",
+          "rescue_outcome": ""
         },
         {
           "id": 2,
           "location": "YY小区",
           "symptom": "晕厥",
           "ambulance_no": "沪A·00002",
-          "status": "en_route"
+          "status": "en_route",
+          "rescue_outcome": ""
         },
         {
           "id": 3,
           "location": "ZZ工地<img src=x onerror=alert(1)>",
           "symptom": "外伤",
           "ambulance_no": "沪A·00003",
-          "status": "arrived"
+          "status": "arrived",
+          "rescue_outcome": ""
         },
         {
           "id": 4,
           "location": "WW街道",
           "symptom": "腹痛",
           "ambulance_no": "沪A·00004",
-          "status": "admitted"
+          "status": "admitted",
+          "rescue_outcome": "success"
+        },
+        {
+          "id": 5,
+          "location": "VV广场",
+          "symptom": "心跳骤停",
+          "ambulance_no": "沪A·00005",
+          "status": "admitted",
+          "rescue_outcome": "failed"
         }
       ]
     }

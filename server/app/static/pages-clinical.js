@@ -456,9 +456,13 @@ async function drawAttachments(ownerType, ownerId, containerSel, msgSel) {
 }
 
 async function renderEmergency() {
-  $("#page-desc").textContent = "呼救调度→转运（生命体征回传）→到院→收治，上车即入院";
+  $("#page-desc").textContent = "呼救调度→转运（生命体征回传）→到院→收治，上车即入院；到院后判定抢救转归";
   const cases = await api("/api/emergency/cases");
   const ES = { dispatched: ["已调度", "orange"], en_route: ["转运中", "orange"], arrived: ["已到院", ""], admitted: ["已收治", "green"] };
+  // 空串是**未判定**，与 failed 是两回事：写成 failed 会把抢救成功率算低（后端注释的原话）
+  const RESCUE = { success: ["抢救成功", "green"], failed: ["抢救无效", "red"], "": ["未判定", "orange"] };
+  // 判定转归后端是 require_roles("doctor")（admin 全通）——这是临床结论，不是调度动作
+  const canOutcome = ["doctor", "admin"].includes(currentRole());
   $("#page-body").innerHTML = `
     ${panel("呼救登记", `
       <form class="inline" id="em-form">
@@ -466,19 +470,43 @@ async function renderEmergency() {
         <input name="ambulance_no" placeholder="车牌"><input name="dest_org_id" type="number" placeholder="目标医院ID">
         <input name="patient_id" type="number" placeholder="患者ID(可空)"><button>调度</button>
       </form><p class="msg" id="em-msg"></p>`)}
-    ${panel("", table(["ID", "地点", "主诉", "车辆", "状态", "操作"], cases, (c) => {
+    ${panel("", table(["ID", "地点", "主诉", "车辆", "状态", "抢救转归", "操作"], cases, (c) => {
+      const arrived = ["arrived", "admitted"].includes(c.status);
+      // 拼成一个数组再 join，比三段三元套着读得清楚（admitted 且无判定权时才是真的没动作可做）
+      const acts = [
+        c.status !== "admitted" ? `<button class="btn secondary" data-adv="${c.id}">流转</button>
+          <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "",
+        canOutcome && arrived ? `<button class="btn" data-outcome="${c.id}">判定转归</button>` : "",
+      ].filter(Boolean);
       return `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td><td>${esc(c.ambulance_no)}</td>
         <td>${statusTag(ES, c.status)}</td>
-        <td>${c.status !== "admitted" ? `<button class="btn secondary" data-adv="${c.id}">流转</button>
-          <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "—"}</td></tr>`;
-    }))}`;
+        <td>${arrived ? statusTag(RESCUE, c.rescue_outcome || "") : "—"}</td>
+        <td>${acts.length ? acts.join(" ") : "—"}</td></tr>`;
+    }) + `<p class="desc">抢救转归<b>只对已到院/已收治的病例开放</b>——车还在路上就写"抢救成功"，
+      这个指标就没有可信度了（后端对未到院的直接 409）。<b>未判定与抢救无效是两回事</b>：
+      留空表示还没下结论，误填「无效」会把抢救成功率算低。判定后可更正。</p>`)}`;
   $("#em-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/emergency/cases", formJson(e.target, ["dest_org_id", "patient_id"]), "#em-msg"); };
   $("#page-body").onclick = async (e) => {
-    const { adv, vital } = e.target.dataset;
+    const { adv, vital, outcome } = e.target.dataset;
     if (adv) return postAction(`/api/emergency/cases/${adv}/advance`, null, "#em-msg");
     if (vital) {
-      const hr = prompt("心率"); if (hr === null) return;
-      return postAction(`/api/emergency/cases/${vital}/vitals`, { heart_rate: Number(hr) || null, note: prompt("备注") || "" }, "#em-msg");
+      const picked = await spdModal("回传生命体征", [
+        { name: "heart_rate", label: "心率（次/分，留空表示未测）", type: "number" },
+        { name: "note", label: "备注", type: "text" },
+      ]);
+      if (!picked) return;
+      return postAction(`/api/emergency/cases/${vital}/vitals`,
+        { heart_rate: picked.heart_rate || null, note: picked.note }, "#em-msg");
+    }
+    if (outcome) {
+      const picked = await spdModal("判定抢救转归", [
+        { name: "rescue_outcome", label: "转归结论（后端只收这两种；还没下结论就直接取消，别填「无效」）",
+          type: "select", options: [
+            { value: "success", label: "抢救成功" }, { value: "failed", label: "抢救无效" }] },
+      ]);
+      if (!picked) return;
+      return postAction(`/api/emergency/cases/${outcome}/rescue-outcome`,
+        { rescue_outcome: picked.rescue_outcome }, "#em-msg");
     }
   };
 }

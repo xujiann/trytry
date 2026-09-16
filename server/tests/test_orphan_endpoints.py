@@ -186,8 +186,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/drgs/pre-check",
     # eldercare（1）
     "/api/eldercare/stats",
-    # emergency（1）
-    "/api/emergency/cases/{case_id}/rescue-outcome",
     # esb（2）
     "/api/esb/flow-runs",
     "/api/esb/flows/{flow_id}",
