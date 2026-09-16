@@ -4037,6 +4037,11 @@
   },
   "vaccinesupply": {
     "_why": [
+      "第三十八批（2026-09-16）：加「临期与过期批次」面板（GET /expiring，末尾 drawExpiring(30) 取数，",
+      "写进 #vx-list，比对器当独立容器抓）与 AEFI 行的「转归」按钮。",
+      "**AEFI 原先缺 id**（转归按钮要它）、outcome、record_id、org_id；`outcome_name` 还写了",
+      "「好转」——后端 AEFI_OUTCOMES 里是「好转中」，又一处后端不产生的取值。",
+      "批次的 manufacturer 原先写 null，而 VaccineBatchOut.manufacturer 是 str（照契约改空串）。",
       "第十批（2026-09-06）：疫苗批次与冷链。三个面板无条件渲染，难点全在行分支上——",
       "批次行的「已过期」标签、可用/不可用、封存/解除封存两个按钮互斥；",
       "冷链行的超温未处置（出「处置」按钮）/ 超温已处置（出处置说明）/ 正常三支；",
@@ -4079,7 +4084,7 @@
           "id": 12,
           "vaccine_name": "流感疫苗",
           "batch_no": "FLU-2025-09",
-          "manufacturer": null,
+          "manufacturer": "",
           "expire_date": "2026-07-31",
           "expired": true,
           "remaining": 20,
@@ -4123,26 +4128,75 @@
       ],
       "/api/vaccine-supply/aefi": [
         {
+          "id": 41,
           "patient_id": 31,
+          "record_id": 501,
           "vaccine_code": "HB-01",
           "batch_no": "HB-2026-01",
           "reaction_type": "severe",
           "reaction_type_name": "严重反应 &",
           "symptom": "过敏性皮疹伴发热<b>",
           "onset_date": "2026-08-20",
-          "outcome_name": "痊愈"
+          "outcome": "recovered",
+          "outcome_name": "痊愈",
+          "org_id": 3
         },
         {
+          "id": 42,
           "patient_id": 32,
+          "record_id": null,
           "vaccine_code": "FLU-01<img src=x onerror=alert(1)>",
-          "batch_no": null,
+          "batch_no": "",
           "reaction_type": "general",
           "reaction_type_name": "一般反应",
           "symptom": "接种部位红肿",
           "onset_date": "2026-08-25",
-          "outcome_name": "好转"
+          "outcome": "unknown",
+          "outcome_name": "未知",
+          "org_id": 4
         }
-      ]
+      ],
+      "/api/vaccine-supply/expiring": {
+        "today": "2026-09-16",
+        "within_days": 30,
+        "generated_at": "2026-09-16T14:30:11.204000",
+        "batches": [
+          {
+            "id": 12,
+            "vaccine_code": "FLU-01",
+            "vaccine_name": "流感疫苗",
+            "batch_no": "FLU-2025-09",
+            "manufacturer": "",
+            "expire_date": "2026-07-31",
+            "org_id": 3,
+            "quantity": 100,
+            "used_quantity": 80,
+            "remaining": 20,
+            "status": "frozen",
+            "frozen_reason": "过期待报废 &",
+            "expired": true,
+            "usable": false,
+            "unusable_reason": "已过期 & 已封存"
+          },
+          {
+            "id": 13,
+            "vaccine_code": "HPV-09",
+            "vaccine_name": "九价 HPV<b>",
+            "batch_no": "HPV-2026-03<img src=x onerror=alert(1)>",
+            "manufacturer": "某某生物制品",
+            "expire_date": "2026-10-05",
+            "org_id": 4,
+            "quantity": 60,
+            "used_quantity": 12,
+            "remaining": 48,
+            "status": "normal",
+            "frozen_reason": "",
+            "expired": false,
+            "usable": true,
+            "unusable_reason": ""
+          }
+        ]
+      }
     }
   },
   "recognition": {

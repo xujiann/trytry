@@ -1166,6 +1166,12 @@ async function renderVaccination() {
 }
 
 
+// 转归五个取值来自后端 `AefiOutcome` 的 pattern 与 `AEFI_OUTCOMES` 映射，键序照抄
+const AEFI_OUTCOMES = {
+  unknown: "未知", improving: "好转中", recovered: "痊愈",
+  sequelae: "留有后遗症", death: "死亡",
+};
+
 async function renderVaccineSupply() {
   $("#page-desc").textContent = "疫苗批次（批号/厂家/效期）、冷链温度监测、AEFI 上报与统计";
   const [batches, cold, aefi, stats] = await Promise.all([
@@ -1173,6 +1179,21 @@ async function renderVaccineSupply() {
     api("/api/vaccine-supply/aefi"), api("/api/vaccine-supply/stats"),
   ]);
   const a = stats.aefi, b = stats.batches;
+  const drawExpiring = async (days) => {
+    const r = await api(`/api/vaccine-supply/expiring?days=${encodeURIComponent(days)}`);
+    $("#vx-list").innerHTML =
+      table(["疫苗", "批号", "厂家", "效期", "余量", "状态"], r.batches, (x) =>
+        `<tr><td>${esc(x.vaccine_name)}</td><td>${esc(x.batch_no)}</td>
+         <td>${esc(x.manufacturer) || "—"}</td>
+         <td>${esc(x.expire_date)}${x.expired ? ' <span class="tag danger">已过期</span>' : ""}</td>
+         <td>${x.remaining}/${x.quantity}</td>
+         <td>${x.usable ? '<span class="tag ok">可用</span>' : esc(x.unusable_reason)}</td></tr>`)
+      // today 与 generated_at 都印出来：这张表的"临期"是相对**业务日期**算的，不是浏览器当下
+      + `<p class="desc">共 ${r.batches.length} 个批次，口径日期 ${esc(r.today)}、
+        未来 ${r.within_days} 天，生成于 ${esc((r.generated_at || "").slice(0, 19).replace("T", " "))}。
+        ${r.batches.length >= 500 ? "<b>已截到 500 条</b>，请缩小天数再看。" : ""}</p>`;
+    setMsg("#vx-msg", "", true);
+  };
   $("#page-body").innerHTML = `
     <div class="cards">
       ${[["接种剂次", stats.doses, false], ["AEFI 报告", a.total, false],
@@ -1193,6 +1214,17 @@ async function renderVaccineSupply() {
         <input name="quantity" type="number" placeholder="数量" value="0"><button>登记</button></form>
       <p class="msg" id="vb-msg"></p>
       <div id="vb-list"></div>`)}
+    ${panel("临期与过期批次", `
+      <form class="inline" id="vx-form">
+        <label style="font-size:13px">未来
+          <input name="days" type="number" min="1" max="365" value="30" style="width:80px"> 天内到期</label>
+        <button>查询</button></form>
+      <p class="desc">上面那张卡片只给得出「30天内到期 N 支」，具体是哪几个批号在这里看。
+        <b>已过期的也一并列出并标注</b>——不是催人用掉，是提示尽快按报废流程处理，
+        别让它躺在冰箱里被误用（后端 docstring 的原话）。
+        <b>只列还有余量的批次</b>：发完的批次不删行，只累加已用量，列出来没有意义。</p>
+      <p class="msg" id="vx-msg"></p>
+      <div id="vx-list"></div>`)}
     ${panel("冷链录温", `
       <form class="inline" id="cc-form">
         <input name="org_id" type="number" placeholder="机构ID" required><input name="device_name" placeholder="设备名称" required>
@@ -1217,7 +1249,12 @@ async function renderVaccineSupply() {
       ${table(["患者", "疫苗", "批号", "类型", "症状", "发生日期", "转归"], aefi, (r) =>
         `<tr><td>${r.patient_id}</td><td>${esc(r.vaccine_code)}</td><td>${esc(r.batch_no || "—")}</td>` +
         `<td>${r.reaction_type === "severe" ? '<span class="tag danger">' + esc(r.reaction_type_name) + "</span>" : esc(r.reaction_type_name)}</td>` +
-        `<td>${esc(r.symptom)}</td><td>${esc(r.onset_date)}</td><td>${esc(r.outcome_name)}</td></tr>`)}
+        `<td>${esc(r.symptom)}</td><td>${esc(r.onset_date)}</td>
+         <td>${esc(r.outcome_name)}
+           <button class="btn sm" data-aefioutcome="${r.id}">转归</button></td></tr>`)}
+      <p class="desc">转归随访随时可改：上报当时多半只能填「未知」，
+        好转、痊愈还是留有后遗症，是后续随访才知道的（后端 docstring 的原话）。
+        <b>没有"改完就锁"这一说</b>——随访结论变了就再改一次。</p>
     `)}`;
   $("#vb-list").innerHTML = table(["疫苗", "批号", "厂家", "效期", "在库", "状态", "操作"], batches, (r) =>
     `<tr><td>${esc(r.vaccine_name)}</td><td>${esc(r.batch_no)}</td><td>${esc(r.manufacturer || "—")}</td>` +
@@ -1230,16 +1267,39 @@ async function renderVaccineSupply() {
   $("#vb-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/batches", formJson(e.target, ["org_id", "quantity"]), "#vb-msg"); };
   $("#cc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/cold-chain", formJson(e.target, ["org_id", "temperature", "min_allowed", "max_allowed"]), "#cc-msg"); };
   $("#aefi-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/aefi", formJson(e.target, ["patient_id", "record_id", "org_id"]), "#aefi-msg"); };
+  $("#vx-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawExpiring(Number(new FormData(e.target).get("days")) || 30); }
+    catch (err) { setMsg("#vx-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
+    if (d.aefioutcome) {
+      const row = aefi.find((x) => x.id === Number(d.aefioutcome));
+      const picked = await spdModal(`转归随访（报告 ${d.aefioutcome}）`, [
+        { name: "outcome", label: "转归", type: "select", value: row ? row.outcome : "unknown",
+          options: Object.entries(AEFI_OUTCOMES).map(([k, v]) => ({ value: k, label: v })) },
+      ]);
+      if (!picked) return;
+      return postAction(`/api/vaccine-supply/aefi/${d.aefioutcome}/outcome`,
+        { outcome: picked.outcome }, "#aefi-msg", "PATCH");
+    }
     if (d.freeze) {
-      const reason = prompt("封存原因"); if (!reason) return;
-      return postAction(`/api/vaccine-supply/batches/${d.freeze}/freeze`, { frozen_reason: reason }, "#vb-msg");
+      const picked = await spdModal("封存批次", [
+        { name: "frozen_reason", label: "封存原因（会印在批次状态列上）", type: "text", value: "" },
+      ]);
+      if (!picked || !picked.frozen_reason) return;
+      return postAction(`/api/vaccine-supply/batches/${d.freeze}/freeze`,
+        { frozen_reason: picked.frozen_reason }, "#vb-msg");
     }
     if (d.unfreeze) return postAction(`/api/vaccine-supply/batches/${d.unfreeze}/unfreeze`, {}, "#vb-msg");
     if (d.handle) {
-      const note = prompt("处置说明"); if (!note) return;
-      return postAction(`/api/vaccine-supply/cold-chain/${d.handle}/handle`, { handle_note: note }, "#cc-msg");
+      const picked = await spdModal("超温处置", [
+        { name: "handle_note", label: "处置说明（处置后这一格印的就是它）", type: "textarea", value: "" },
+      ]);
+      if (!picked || !picked.handle_note) return;
+      return postAction(`/api/vaccine-supply/cold-chain/${d.handle}/handle`,
+        { handle_note: picked.handle_note }, "#cc-msg");
     }
     if (d.recipients) {
       const r = await api(`/api/vaccine-supply/batches/${d.recipients}/recipients`);
@@ -1247,6 +1307,8 @@ async function renderVaccineSupply() {
             r.recipients.slice(0, 20).map((x) => `${x.patient_name}(#${x.patient_id}) 第${x.dose_no}剂 ${x.vaccinated_date}`).join("\n"));
     }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await drawExpiring(30);
 }
 
 async function renderSurveillance() {

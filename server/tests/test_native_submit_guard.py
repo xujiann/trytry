@@ -104,6 +104,10 @@ ROOT_FIXED_RENDERERS = [
     ("pages-clinical.js", "renderAccessLogs",
      ['$("#al-search").onsubmit'],
      "\n  await draw();"),
+    ("pages-clinical.js", "renderVaccineSupply",   # 功能完善·vaccine_supply（2026-09-16）：临期批次筛选
+     ['$("#vb-form").onsubmit', '$("#cc-form").onsubmit', '$("#aefi-form").onsubmit',
+      '$("#vx-form").onsubmit', '$("#page-body").onclick'],
+     "await drawExpiring(30);"),
     ("pages-clinical.js", "renderTcm",   # 功能完善·tcm（2026-09-16）：体质辨识表单
      ['$("#tcm-diag").onsubmit', '$("#tcm-const").onsubmit',
       '$("#tcm-order").onsubmit', '$("#page-body").onclick'],
