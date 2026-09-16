@@ -323,7 +323,8 @@ MIGRATED_PAGES = {
     "renderEmergency": 2,
     "renderTelemedicine": 2,
     "renderPathology": 2,
-    "renderProjects": 2,
+    "renderProjects": 3,
+                                    # 功能完善·projects（2026-09-16）：+里程碑（全部项目）面板
     "renderRbac": 3,
     "renderPublicHealth": 3,
     "renderCritical": 2,            # 催办面板走 accent；另有一处 class="panel hidden" 的留痕容器

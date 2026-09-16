@@ -1299,8 +1299,15 @@ async function renderPathology() {
   };
 }
 
+// 取值真源是 projects.py 的 PROJECT_STATUS（项目行的 status_name 由后端给，这份只给下拉用）
+const PROJECT_STATUS_OPTS = [
+  { value: "planning", label: "筹备" }, { value: "ongoing", label: "进行中" },
+  { value: "done", label: "已完成" }, { value: "suspended", label: "已中止" },
+];
+const MS_STATUS = { done: ["已完成", "green"], overdue: ["逾期未完成", "red"], open: ["进行中", "orange"] };
+
 async function renderProjects() {
-  $("#page-desc").textContent = "行政协同项目管理：立项、里程碑、进度与逾期";
+  $("#page-desc").textContent = "行政协同项目管理：立项、里程碑（完成与撤销完成）、进度与逾期";
   const [projects, stats] = await Promise.all([
     api("/api/projects"), api("/api/projects/stats/overview"),
   ]);
@@ -1331,19 +1338,60 @@ async function renderProjects() {
         `${p.milestone_overdue ? ' <span class="tag warn">' + p.milestone_overdue + " 逾期</span>" : ""}</td>` +
         `<td><button class="btn sm" data-progress="${p.id}">报进度</button>` +
         `<button class="btn sm" data-ms="${p.id}">加里程碑</button></td></tr>`)}
-    `)}`;
+    `)}
+    ${panel("里程碑（全部项目）", `
+      ${table(["项目", "里程碑", "到期日", "状态", "完成日", "操作"],
+        projects.flatMap((p) => p.milestones.map((m) => ({ project: p.name, m }))), ({ project, m }) =>
+        `<tr><td>${esc(project)}</td><td>${esc(m.name)}</td><td>${esc(m.due_date) || "—"}</td>
+         <td>${statusTag(MS_STATUS, m.done ? "done" : m.overdue ? "overdue" : "open")}</td>
+         <td>${esc(m.done_date) || "—"}</td>
+         <td>${m.done
+           ? `<button class="btn secondary" data-msreopen="${m.id}">撤销完成</button>`
+           : `<button class="btn" data-msdone="${m.id}">完成</button>`}</td></tr>`)}
+      <p class="desc">逾期是<b>现算</b>的：已完成的不算逾期，没填到期日的也不算。
+        完成日留空按业务日期记。<b>撤销完成会把完成日一并清掉</b>——
+        误点了要能改回来，凡是拦得住的都要放得开（后端 reopen 那条 docstring 的原话）。</p>`)}`;
   $("#pj-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/projects", formJson(e.target, ["org_id", "budget_amount"]), "#pj-msg"); };
-  $("#page-body").onclick = (e) => {
+  $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     if (d.progress) {
-      const pct = prompt("当前进度（0-100）"); if (pct === null) return;
-      const status = prompt("状态：planning / ongoing / done / suspended", "ongoing"); if (!status) return;
-      return postAction(`/api/projects/${d.progress}`, { progress_pct: Number(pct), status }, "#pj-msg", "PATCH");
+      const p = projects.find((x) => x.id === Number(d.progress));
+      const picked = await spdModal(`报进度：${p ? p.name : d.progress}`, [
+        { name: "progress_pct", label: "当前进度（0-100）", type: "number", value: p ? p.progress_pct : 0 },
+        { name: "status", label: "状态", type: "select", value: p ? p.status : "ongoing",
+          options: PROJECT_STATUS_OPTS },
+      ]);
+      if (!picked) return;
+      return postAction(`/api/projects/${d.progress}`,
+        { progress_pct: picked.progress_pct, status: picked.status }, "#pj-msg", "PATCH");
     }
     if (d.ms) {
-      const name = prompt("里程碑名称"); if (!name) return;
-      const due = prompt("到期日 YYYY-MM-DD（可留空）") || "";
-      return postAction(`/api/projects/${d.ms}/milestones`, { name, due_date: due }, "#pj-msg");
+      const picked = await spdModal("新增里程碑", [
+        { name: "name", label: "里程碑名称", type: "text" },
+        { name: "due_date", label: "到期日 YYYY-MM-DD（留空=不设到期日，也就永远不算逾期）", type: "text" },
+      ]);
+      if (!picked || !picked.name) return;
+      return postAction(`/api/projects/${d.ms}/milestones`,
+        { name: picked.name, due_date: picked.due_date }, "#pj-msg");
+    }
+    if (d.msdone) {
+      const picked = await spdModal(`完成里程碑 ${d.msdone}`, [
+        { name: "done_date", label: "完成日 YYYY-MM-DD（留空按业务日期记）", type: "text" },
+      ]);
+      if (!picked) return;
+      // 两条路径分开写而不是拼查询串：地址本身要让孤儿闸门按字面看得见
+      const date = (picked.done_date || "").trim();
+      if (date) {
+        await api(`/api/projects/milestones/${d.msdone}/done?done_date=${encodeURIComponent(date)}`, { method: "POST" });
+      } else {
+        await api(`/api/projects/milestones/${d.msdone}/done`, { method: "POST" });
+      }
+      return route();
+    }
+    if (d.msreopen) {
+      if (!confirm("撤销完成会把完成日一并清掉，确认？")) return;
+      await api(`/api/projects/milestones/${d.msreopen}/reopen`, { method: "POST" });
+      return route();
     }
   };
 }

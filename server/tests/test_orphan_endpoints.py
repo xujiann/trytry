@@ -193,9 +193,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/organizations/tree-health",
     # patients（1）
     "/api/patients/{ehc_no}",
-    # projects（2）
-    "/api/projects/milestones/{milestone_id}/done",
-    "/api/projects/milestones/{milestone_id}/reopen",
     # rbac（2）
     "/api/rbac/permissions",
     "/api/rbac/roles/{role_id}/permissions/{permission_id}",

@@ -7495,11 +7495,41 @@
           "name": "医共体信息化二期 &",
           "overdue": true,
           "owner_name": "张主任<b>",
+          "status": "ongoing",
           "status_name": "进行中",
           "progress_pct": 40,
           "due_date": "2026-08-31",
-          "milestone_done": 2,
-          "milestone_total": 5,
+          "milestones": [
+            {
+              "id": 11,
+              "name": "需求确认 &",
+              "due_date": "2026-05-31",
+              "done": true,
+              "done_date": "2026-05-28",
+              "overdue": false,
+              "note": ""
+            },
+            {
+              "id": 12,
+              "name": "联调上线<b>",
+              "due_date": "2026-08-31",
+              "done": false,
+              "done_date": "",
+              "overdue": true,
+              "note": ""
+            },
+            {
+              "id": 13,
+              "name": "验收（未设到期日）",
+              "due_date": "",
+              "done": false,
+              "done_date": "",
+              "overdue": false,
+              "note": ""
+            }
+          ],
+          "milestone_done": 1,
+          "milestone_total": 3,
           "milestone_overdue": 1
         },
         {
@@ -7507,11 +7537,23 @@
           "name": "检验中心扩建<img src=x onerror=alert(1)>",
           "overdue": false,
           "owner_name": null,
+          "status": "planning",
           "status_name": "规划中",
           "progress_pct": 0,
           "due_date": null,
+          "milestones": [
+            {
+              "id": 21,
+              "name": "选址",
+              "due_date": "2026-12-31",
+              "done": false,
+              "done_date": "",
+              "overdue": false,
+              "note": ""
+            }
+          ],
           "milestone_done": 0,
-          "milestone_total": 3,
+          "milestone_total": 1,
           "milestone_overdue": 0
         }
       ]
