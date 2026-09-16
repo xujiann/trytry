@@ -179,9 +179,6 @@ KNOWN_ORPHANS: set[str] = {
     # consents（2）
     "/api/consents/texts",
     "/api/consents/{consent_id}/revoke",
-    # cssd（2）
-    "/api/cssd/requests",
-    "/api/cssd/requests/{request_id}/fulfill",
     # dictionaries（1）
     "/api/dictionaries/{system_code}/import",
     # disease_programs（2）

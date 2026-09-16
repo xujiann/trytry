@@ -246,7 +246,8 @@ MIGRATED_PAGES = {
     # 第十二批 2026-09-06：core.js 五页（绩效考核 / 消毒供应 / 医疗废物 / 成员机构 / 居民主索引）。
     # 五页各带一处无标题裸面板——第十一批给组件加了空标题分支，这批第一次成批用上。
     "renderPerformance": 3,         # 监测指标那块的接口带 .catch(() => null)：缺夹具会静默不渲染
-    "renderCssd": 2,                # 渲染末尾还会 drawCssdCosts() 追加成本面板（不在本页计数内）
+    "renderCssd": 3,                # 渲染末尾还会 drawCssdCosts() 追加成本面板（不在本页计数内）
+                                    # 功能完善·cssd（2026-09-16）：+基层物品申领与中心响应面板
     "renderMedwaste": 5,            # 滞留预警是条件面板
                                     # 功能完善·medwaste（2026-09-16）：+点位台账、+转运人员工作量两个面板
     "renderOrgs": 2,

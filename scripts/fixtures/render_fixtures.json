@@ -4929,10 +4929,42 @@
       "第十二批（2026-09-06）：消毒供应中心。两个面板，第二个是无标题裸面板。",
       "批次四条覆盖 sterilizing/sterile/dispatched/recycled 四态——操作列的按钮文案",
       "由状态决定，已回收那条走「—」支。",
-      "渲染末尾还会 await drawCssdCosts() 追加成本核算面板（另一个接口）。"
+      "渲染末尾还会 await drawCssdCosts() 追加成本核算面板（另一个接口）。",
+      "第二十二批（2026-09-16）：加「基层物品申领与中心响应」面板。",
+      "申领两条走 requested（摆「以批次响应」、响应批次列「—」）与 fulfilled（走「—」、有批次号）两支；",
+      "一条的申领机构故意不在 /api/organizations 名单里，走 orgNames 的回落。",
+      "批次四条里恰好两条是 sterile/dispatched，说明行里的「当前 N 个」应为 2。"
     ],
     "fn": "renderCssd",
     "api": {
+      "/api/organizations": [
+        {
+          "id": 3,
+          "name": "县人民医院 & 总院"
+        },
+        {
+          "id": 4,
+          "name": "XX镇卫生院<b>"
+        }
+      ],
+      "/api/cssd/requests": [
+        {
+          "id": 51,
+          "org_id": 4,
+          "item_name": "换药包 &",
+          "quantity": 5,
+          "status": "requested",
+          "batch_id": null
+        },
+        {
+          "id": 52,
+          "org_id": 99,
+          "item_name": "产包<img src=x onerror=alert(1)>",
+          "quantity": 2,
+          "status": "fulfilled",
+          "batch_id": 13
+        }
+      ],
       "/api/cssd/batches": [
         {
           "id": 11,

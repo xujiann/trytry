@@ -791,9 +791,17 @@ async function renderPerformance() {
 }
 
 async function renderCssd() {
-  $("#page-desc").textContent = "器械批次：灭菌中 → 已灭菌 → 已发放 → 已回收，全程追溯";
-  const batches = await api("/api/cssd/batches");
+  $("#page-desc").textContent =
+    "器械批次：灭菌中 → 已灭菌 → 已发放 → 已回收，全程追溯；基层物品申领与中心响应";
+  const [batches, requests, orgs] = await Promise.all([
+    api("/api/cssd/batches"), api("/api/cssd/requests?limit=200"), api("/api/organizations"),
+  ]);
   const BS = { sterilizing: ["灭菌中", "orange"], sterile: ["已灭菌", ""], dispatched: ["已发放", "green"], recycled: ["已回收", "green"] };
+  // 取值真源是 models/assets.py:CssdRequest.status 的列注释
+  const RS = { requested: ["已申领", "orange"], fulfilled: ["已发放", "green"] };
+  const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  // 后端只接受已完成灭菌的批次（sterile / dispatched），其余 409——按状态筛，别摆了等报错
+  const usable = batches.filter((b) => ["sterile", "dispatched"].includes(b.status));
   $("#page-body").innerHTML = `
     ${panel("新建批次", `
       <form class="inline" id="batch-form">
@@ -809,7 +817,24 @@ async function renderCssd() {
         <td>${b.quantity}</td><td>${b.dispatched_to_org_id ?? "—"}</td>
         <td>${statusTag(BS, b.status)}</td>
         <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${b.status}">${next}</button>` : "—"}</td></tr>`;
-    }))}`;
+    }))}
+    ${panel("基层物品申领与中心响应", `
+      <form class="inline" id="creq-form">
+        <select name="org_id">${orgs.map((o) =>
+          `<option value="${o.id}">申领机构：${esc(o.name)}</option>`).join("")}</select>
+        <input name="item_name" placeholder="物品名称" required>
+        <input name="quantity" type="number" value="1" min="1" style="min-width:80px">
+        <button>申领</button>
+      </form>
+      ${table(["ID", "申领机构", "物品", "数量", "状态", "响应批次", "操作"], requests, (r) =>
+        `<tr><td>${r.id}</td><td>${esc(orgNames[r.org_id] || r.org_id)}</td>
+         <td>${esc(r.item_name)}</td><td>${r.quantity}</td>
+         <td>${statusTag(RS, r.status)}</td><td>${r.batch_id ?? "—"}</td>
+         <td>${r.status === "requested"
+           ? `<button class="btn secondary" data-creqful="${r.id}">以批次响应</button>` : "—"}</td></tr>`)}
+      <p class="desc">响应时只能选<b>已完成灭菌</b>的批次（已灭菌或已发放，当前 ${usable.length} 个）——
+        灭菌中的批次后端直接 409。申领一经响应即定批次，<b>没有反向端点</b>。</p>
+      <p class="msg" id="creq-msg"></p>`)}`;
   $("#batch-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -820,14 +845,39 @@ async function renderCssd() {
       route();
     } catch (err) { setMsg("#cssd-msg", err.message, false); }
   };
+  $("#creq-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/cssd/requests", { method: "POST", body: JSON.stringify({
+        org_id: Number(f.get("org_id")), item_name: f.get("item_name"),
+        quantity: Number(f.get("quantity")) }) });
+      route();
+    } catch (err) { setMsg("#creq-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
-    const { adv, next } = e.target.dataset;
+    const { adv, next, creqful } = e.target.dataset;
+    if (creqful) {
+      if (!usable.length) return setMsg("#creq-msg", "没有已完成灭菌的批次可响应", false);
+      try {
+        const picked = await spdModal(`响应申领 ${creqful}`, [
+          { name: "batch_id", label: "以哪一批响应（只列已完成灭菌的）", type: "select",
+            options: usable.map((b) => ({ value: b.id, label: `${b.batch_no}｜${b.item_name}×${b.quantity}` })) }]);
+        if (!picked) return;
+        await api(`/api/cssd/requests/${creqful}/fulfill?batch_id=${Number(picked.batch_id)}`, { method: "POST" });
+        return route();
+      } catch (err) { return setMsg("#creq-msg", err.message, false); }
+    }
     if (!adv) return;
     try {
       let qs = "";
       if (next === "sterile") {
-        const org = prompt("接收机构ID"); if (!org) return;
-        qs = `?dispatched_to_org_id=${Number(org)}`;
+        // 原先是输机构ID的弹窗——这一步是"发给谁"，选机构比默写数字靠谱
+        const picked = await spdModal("发放批次", [
+          { name: "dispatched_to_org_id", label: "接收机构", type: "select",
+            options: orgs.map((o) => ({ value: o.id, label: o.name })) }]);
+        if (!picked) return;
+        qs = `?dispatched_to_org_id=${Number(picked.dispatched_to_org_id)}`;
       }
       await api(`/api/cssd/batches/${adv}/advance${qs}`, { method: "POST" });
       route();
