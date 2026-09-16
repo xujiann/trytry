@@ -2206,7 +2206,24 @@ async function renderInpatient() {
           <td>${esc(a.diagnosis_name)}</td><td>${statusTag(AS, a.status)}</td>
           <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button> ${prints}</td></tr>`;
       }))}
-    <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div></div>`;
+    <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div>
+      <div id="inp-exec"></div></div>`;
+  const drawExecutions = async (orderId) => {
+    // 只按行上的 id 取（行本身来自按住院单查的医嘱列表），不做"输入任意医嘱ID"的入口
+    const rows = await api(`/api/inpatient/orders/${encodeURIComponent(orderId)}/executions`);
+    $("#inp-exec").innerHTML = `<h3 style="margin-top:14px">医嘱 ${esc(orderId)} 的执行记录</h3>
+      ${table(["记录", "执行人", "执行时间", "皮试", "说明"], rows, (x) =>
+        `<tr><td>${x.id}</td><td>${esc(x.executed_by_name) || x.executed_by}</td>
+         <td>${esc((x.executed_at || "").slice(0, 16).replace("T", " "))}</td>
+         <td>${x.skin_test_result === null ? "—"
+           : x.skin_test_result === "positive" ? '<span class="tag red">阳性</span>'
+           : '<span class="tag green">阴性</span>'}</td>
+         <td>${esc(x.note) || "—"}</td></tr>`)}
+      <p class="desc">关联护理记录 ${rows.length ? rows[0].nursing_record_count : 0} 条。
+        护理记录挂在<b>医嘱</b>上而不是单次执行上，所以这个数每条执行都一样——
+        它回答的是"这条医嘱有没有护理记录跟着"，不是"这一次执行有几条"。
+        皮试列的「—」是<b>不需要皮试</b>，不是"没填"：后端那个字段可空，空就是不适用。</p>`;
+  };
   $("#ward-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/wards", formJson(e.target, ["org_id"]), "#inp-msg"); };
   $("#bed-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/beds", formJson(e.target, ["ward_id"]), "#inp-msg"); };
   $("#adm-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/admissions", formJson(e.target, ["patient_id", "ward_id", "bed_id"]), "#inp-msg"); };
@@ -2242,14 +2259,38 @@ async function renderInpatient() {
       }
       if (d.discharge) { await api(`/api/inpatient/admissions/${d.discharge}/discharge`, { method: "POST" }); route(); }
       if (d.stopOrder) { await api(`/api/inpatient/orders/${d.stopOrder}/stop`, { method: "POST" }); route(); }
+      if (d.execList) return await drawExecutions(d.execList);
+      if (d.execAdd) {
+        const picked = await spdModal(`登记执行（医嘱 ${d.execAdd}）`, [
+          { name: "note", label: "执行说明（可留空）", type: "text", value: "" },
+          { name: "skin_test_result", label: "皮试结果（不需要皮试的医嘱留「不适用」）",
+            type: "select", value: "",
+            options: [{ value: "", label: "不适用" }, { value: "negative", label: "阴性" },
+              { value: "positive", label: "阳性" }] },
+        ]);
+        if (!picked) return;
+        // 后端 `skin_test_result: str | None`，pattern 只认 negative/positive：
+        // 空串会被 422 拦下，不需要皮试就**不送这个键**
+        const body = { note: picked.note };
+        if (picked.skin_test_result) body.skin_test_result = picked.skin_test_result;
+        await api(`/api/inpatient/orders/${d.execAdd}/executions`,
+          { method: "POST", body: JSON.stringify(body) });
+        setMsg("#inp-msg", "已登记执行", true);
+        return await drawExecutions(d.execAdd);
+      }
       if (d.orders) {
         const orders = await api(`/api/inpatient/orders?admission_id=${d.orders}`);
         $("#inp-orders-panel").classList.remove("hidden");
+        $("#inp-exec").innerHTML = "";
         $("#inp-orders").innerHTML = table(["ID", "类型", "内容", "状态", "开立", "操作"], orders, (o) =>
           `<tr><td>${o.id}</td><td>${o.order_type === "long" ? "长期" : "临时"}</td><td>${esc(o.content)}</td>
            <td><span class="tag ${o.status === "active" ? "orange" : "green"}">${o.status === "active" ? "执行中" : "已停止"}</span></td>
            <td>${esc(o.created_by_name)}</td>
-           <td>${o.status === "active" ? `<button class="btn danger" data-stop-order="${o.id}">停止</button>` : "—"}</td></tr>`);
+           <td><button class="btn secondary" data-exec-list="${o.id}">执行记录</button>
+               ${o.status === "active"
+                 ? `<button class="btn secondary" data-exec-add="${o.id}">登记执行</button>` +
+                   `<button class="btn danger" data-stop-order="${o.id}">停止</button>`
+                 : ""}</td></tr>`);
       }
     } catch (err) { setMsg("#inp-msg", err.message, false); }
   };
