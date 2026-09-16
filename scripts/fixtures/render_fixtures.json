@@ -6822,6 +6822,8 @@
           "id": 5,
           "code": "OSA<b>",
           "name": "睡眠呼吸暂停 & 专病",
+          "description": "县域睡眠中心牵头<b>",
+          "org_id": 3,
           "active": true,
           "path_nodes": [
             {
@@ -6840,6 +6842,8 @@
           "id": 6,
           "code": "CKD<img src=x onerror=alert(1)>",
           "name": "慢性肾病",
+          "description": "",
+          "org_id": null,
           "active": false,
           "path_nodes": []
         }
@@ -6847,9 +6851,17 @@
       "/api/disease-programs/enrollments": [
         {
           "id": 31,
+          "program_id": 5,
           "patient_id": 31,
+          "org_id": 4,
           "status": "enrolled",
-          "status_name": "在组 &",
+          "status_name": "在管",
+          "enrolled_at": "2026-07-01",
+          "exited_at": "",
+          "outcome": "",
+          "outcome_name": "未评价",
+          "outcome_note": "",
+          "exit_reason": "",
           "completion": {
             "required_done": 1,
             "required_total": 2,
@@ -6858,44 +6870,60 @@
               "多导睡眠监测<b>"
             ]
           },
-          "outcome_name": "—"
+          "records": []
         },
         {
           "id": 32,
+          "program_id": 5,
           "patient_id": 32,
+          "org_id": 3,
           "status": "completed",
-          "status_name": "已出组<b>",
+          "status_name": "完成出组",
+          "enrolled_at": "2026-03-04",
+          "exited_at": "2026-08-20",
+          "outcome": "improved",
+          "outcome_name": "好转",
+          "outcome_note": "AHI 由 32 降至 9 &",
+          "exit_reason": "",
           "completion": {
             "required_done": 2,
             "required_total": 2,
             "required_done_pct": 100,
             "pending_required": []
           },
-          "outcome_name": "显效 &"
+          "records": []
         }
       ],
       "/api/disease-programs/5/stats": {
         "total": 24,
         "by_status": {
           "enrolled": {
-            "name": "在组 &",
+            "name": "在管",
             "count": 10
           },
           "completed": {
-            "name": "已出组<b>",
-            "count": 14
+            "name": "完成出组",
+            "count": 13
+          },
+          "exited": {
+            "name": "中途退出",
+            "count": 1
           }
         },
         "avg_required_completion_pct": 78.5,
         "caliber": "完成度只算必需节点 &<b>，选做节点不计入分母",
         "by_outcome": {
-          "effective": {
-            "name": "显效 &",
+          "improved": {
+            "name": "好转",
             "count": 9
           },
-          "invalid": {
-            "name": "无效<b>",
-            "count": 5
+          "stable": {
+            "name": "稳定",
+            "count": 4
+          },
+          "unrated": {
+            "name": "未评价",
+            "count": 1
           }
         }
       }

@@ -172,9 +172,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/auth/totp/setup",
     # dictionaries（1）
     "/api/dictionaries/{system_code}/import",
-    # disease_programs（2）
-    "/api/disease-programs/enrollments/{enrollment_id}",
-    "/api/disease-programs/{program_id}",
     # eldercare（1）
     "/api/eldercare/stats",
     # inpatient（1）

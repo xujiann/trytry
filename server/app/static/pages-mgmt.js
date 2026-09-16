@@ -1782,7 +1782,11 @@ async function renderDiseasePrograms() {
          <td>${(p.path_nodes || []).map((n) =>
            `${esc(n.name)}${n.required === false ? "（选做）" : ""}`).join(" → ") || "—"}</td>
          <td><span class="tag ${p.active ? "green" : "red"}">${p.active ? "启用" : "停用"}</span></td>
-         <td><button data-dppick="${p.id}">打开</button></td></tr>`)}
+         <td><button data-dppick="${p.id}">打开</button>
+             <button data-dpedit="${p.id}">编辑</button></td></tr>`)}
+      <p class="desc">改路径<b>只影响此后的判定</b>：已经记下的节点一条都不会删，
+        但在管病例的「待办节点」会跟着新路径变——把一个必需节点改成选做，
+        完成度当场就上去了。这不是 bug，是目录即口径。</p>
     `)}
 
     ${picked && current ? panel(`${current.name} · 入组管理`, `
@@ -1812,9 +1816,11 @@ async function renderDiseasePrograms() {
              （${e.completion.required_done_pct}%）</td>
          <td>${esc(e.completion.pending_required.join("、") || "—")}</td>
          <td>${esc(e.outcome_name)}</td>
-         <td>${e.status === "enrolled"
-           ? `<button data-dpnode="${e.id}">记录节点</button><button data-dpexit="${e.id}">出组</button>`
-           : ""}</td></tr>`)}
+         <td><button data-dptrace="${e.id}">轨迹</button>
+             ${e.status === "enrolled"
+               ? `<button data-dpnode="${e.id}">记录节点</button><button data-dpexit="${e.id}">出组</button>`
+               : ""}</td></tr>`)}
+      <div id="dp-detail"></div>
     `) : ""}`;
 
   $("#dp-form").onsubmit = (e) => {
@@ -1834,26 +1840,95 @@ async function renderDiseasePrograms() {
       postAction(`/api/disease-programs/${picked}/enrollments`,
         formJson(e.target, ["patient_id", "org_id"]), "#dp-msg"); };
   }
-  $("#page-body").onclick = (e) => {
-    const { dppick, dpnode, dpexit } = e.target.dataset;
-    if (dppick) { localStorage.setItem("medplat_program", dppick); return route(); }
-    if (dpnode) {
-      const keys = (current.path_nodes || []).map((n) => `${n.key}(${n.name})`).join(" ");
-      const node_key = prompt(`节点键，可选：${keys}`);
-      if (!node_key) return;
-      const result = prompt("执行结果（可留空）") || "";
-      return postAction(`/api/disease-programs/enrollments/${dpnode}/records`,
-        { node_key, result }, "#dp-msg");
-    }
-    if (dpexit) {
-      const status = prompt("出组方式：completed（完成）/ exited（中途退出）", "completed");
-      if (!status) return;
-      const outcome = prompt("疗效：cured/improved/stable/worsened/died，留空=未评价") || "";
-      const exit_reason = status === "exited" ? (prompt("退出原因（必填）") || "") : "";
-      if (status === "exited" && !exit_reason) return;
-      return postAction(`/api/disease-programs/enrollments/${dpexit}/exit`,
-        { status, outcome, exit_reason }, "#dp-msg");
-    }
+  const nodeName = (key) => {
+    const n = ((current && current.path_nodes) || []).find((x) => x.key === key);
+    return n ? `${n.name}${n.required === false ? "（选做）" : ""}` : key;
+  };
+  const drawTrace = async (enrollmentId) => {
+    try {
+      // 按行上的 id 取，不提供"输入任意入组ID"的入口：这条端点没有归属校验也不留痕
+      // （已登记 test_stage15_horizontal.py::NEWLY_VISIBLE_UNGUARDED_READS），
+      // 而行里的 id 是上面那张**按机构收口过**的列表给出来的。
+      const d = await api(`/api/disease-programs/enrollments/${encodeURIComponent(enrollmentId)}`);
+      $("#dp-detail").innerHTML = `<h3 style="margin-top:14px">入组 ${d.id} 的路径轨迹</h3>
+        <div class="cards">
+          <div class="card"><span class="k">患者</span><b>${d.patient_id}</b></div>
+          <div class="card"><span class="k">入组日</span><b>${esc(d.enrolled_at) || "—"}</b></div>
+          <div class="card"><span class="k">出组日</span><b>${esc(d.exited_at) || "—"}</b></div>
+          <div class="card"><span class="k">疗效</span><b>${esc(d.outcome_name)}</b></div>
+        </div>
+        ${d.exit_reason ? `<p class="desc">退出原因：${esc(d.exit_reason)}</p>` : ""}
+        ${d.outcome_note ? `<p class="desc">疗效备注：${esc(d.outcome_note)}</p>` : ""}
+        ${table(["节点", "完成时间", "经办人", "结果", "备注"], d.records, (r) =>
+          `<tr><td>${esc(nodeName(r.node_key))}</td><td>${esc(r.performed_at) || "—"}</td>
+           <td>${esc(r.operator_name) || "—"}</td><td>${esc(r.result) || "—"}</td>
+           <td>${esc(r.note) || "—"}</td></tr>`)}
+        <p class="desc">节点名按<b>当前目录</b>翻译：目录里已经删掉的节点，这里印的是原始 key
+          ——记录本身不会因为改目录而消失，这正是"改路径只影响此后的判定"的另一面。</p>`;
+    } catch (err) { $("#dp-detail").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { dppick, dpedit, dptrace, dpnode, dpexit } = e.target.dataset;
+    try {
+      if (dppick) { localStorage.setItem("medplat_program", dppick); return route(); }
+      if (dptrace) return await drawTrace(dptrace);
+      if (dpedit) {
+        const prog = programs.find((x) => x.id === Number(dpedit));
+        const picked = await spdModal(`编辑专病 ${prog ? prog.code : dpedit}`, [
+          { name: "name", label: "专病名称（留空不改）", type: "text", value: prog ? prog.name : "" },
+          { name: "description", label: "说明（留空不改）", type: "text",
+            value: prog ? prog.description || "" : "" },
+          { name: "active", label: "启停", type: "select", value: prog && prog.active ? "1" : "0",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+          { name: "path_nodes", label: "路径节点 JSON（留空不改；key 不得重复）", type: "textarea",
+            value: prog ? JSON.stringify(prog.path_nodes || []) : "" },
+        ]);
+        if (!picked) return;
+        // 后端 exclude_unset + `if value is not None`：留空的键不送，免得把说明清空
+        const body = { active: picked.active === "1" };
+        if (picked.name) body.name = picked.name;
+        if (picked.description) body.description = picked.description;
+        if (picked.path_nodes) {
+          try { body.path_nodes = JSON.parse(picked.path_nodes); }
+          catch (err) { return setMsg("#dp-msg", `路径节点 JSON 解析失败：${err.message}`, false); }
+        }
+        await api(`/api/disease-programs/${dpedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        return route();
+      }
+      if (dpnode) {
+        const nodes = (current.path_nodes || []);
+        if (!nodes.length) return setMsg("#dp-msg", "本专病还没有配置路径节点，先在目录里「编辑」加上", false);
+        // 节点键从目录里选：手打一个不在路径里的 key，后端 422，而完成度也永远算不对
+        const picked = await spdModal("记录路径节点", [
+          { name: "node_key", label: "节点", type: "select", value: nodes[0].key,
+            options: nodes.map((n) => ({ value: n.key,
+              label: `${n.name}${n.required === false ? "（选做）" : ""}` })) },
+          { name: "performed_at", label: "完成日期（留空按业务日期记）", type: "text", value: "" },
+          { name: "operator_name", label: "经办人（可留空）", type: "text", value: "" },
+          { name: "result", label: "执行结果（可留空）", type: "text", value: "" },
+          { name: "note", label: "备注（可留空）", type: "textarea", value: "" },
+        ]);
+        if (!picked) return;
+        return postAction(`/api/disease-programs/enrollments/${dpnode}/records`, picked, "#dp-msg");
+      }
+      if (dpexit) {
+        const picked = await spdModal("出组", [
+          { name: "status", label: "出组方式", type: "select", value: "completed",
+            options: [{ value: "completed", label: "完成出组" }, { value: "exited", label: "中途退出" }] },
+          { name: "outcome", label: "疗效（留空=未评价，与「无效」不是一回事）", type: "select", value: "",
+            options: [{ value: "", label: "未评价" }, { value: "cured", label: "治愈" },
+              { value: "improved", label: "好转" }, { value: "stable", label: "稳定" },
+              { value: "worsened", label: "加重" }, { value: "died", label: "死亡" }] },
+          { name: "outcome_note", label: "疗效备注（可留空）", type: "text", value: "" },
+          { name: "exit_reason", label: "退出原因（中途退出必填）", type: "text", value: "" },
+        ]);
+        if (!picked) return;
+        if (picked.status === "exited" && !picked.exit_reason) {
+          return setMsg("#dp-msg", "中途退出必须写退出原因——出组率的分母里，这一条要能解释", false);
+        }
+        return postAction(`/api/disease-programs/enrollments/${dpexit}/exit`, picked, "#dp-msg");
+      }
+    } catch (err) { setMsg("#dp-msg", err.message, false); }
   };
 }
 
