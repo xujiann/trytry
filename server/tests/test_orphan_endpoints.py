@@ -239,11 +239,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/rbac/roles/{role_id}/permissions/{permission_id}",
     # resources（1）
     "/api/resources/{resource_id}",
-    # spd/referral（4）
-    "/api/spd/referral-rules/check",
-    "/api/spd/referral-rules/{rule_id}",
-    "/api/spd/referrals/{case_id}",
-    "/api/spd/referrals/{case_id}/withdraw",
     # surveillance（1）
     "/api/surveillance/resources/{resource_id}",
     # tcm（2）

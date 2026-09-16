@@ -1921,6 +1921,8 @@ async function renderSpdPath() {
  * 8. 逐级转诊
  * ==========================================================*/
 
+const SPD_HANDLE_LEVELS = { village: "村医处置", station: "服务站处置", township: "卫生院处置", county: "县级处置" };
+
 async function renderSpdReferral() {
   $("#page-desc").textContent =
     "村医 → 乡镇卫生院 → 区市县医院三级转诊：分级审核、到院有效判定、下转随访接收闭环";
@@ -1957,11 +1959,15 @@ async function renderSpdReferral() {
          <td>${esc({ village: "村医", station: "服务站", township: "卫生院", county: "县级" }[c.current_level] || c.current_level)}</td>
          <td>${spdTag(SPD_REF_STATUS, c.status)}</td>
          <td>${c.effective_visit ? '<span class="tag green">是</span>' : "—"}</td>
-         <td><button class="btn secondary" data-ref-pass="${c.id}">通过</button>
+         <td><button class="btn secondary" data-ref-detail="${c.id}">全轨迹</button>
+             <button class="btn secondary" data-ref-pass="${c.id}">通过</button>
              <button class="btn secondary" data-ref-reject="${c.id}">退回</button>
              <button class="btn secondary" data-ref-arrive="${c.id}">到院</button>
              <button class="btn secondary" data-ref-down="${c.id}">下转</button>
-             <button class="btn secondary" data-ref-recv="${c.id}">随访接收</button></td></tr>`)}`)}
+             <button class="btn secondary" data-ref-recv="${c.id}">随访接收</button>
+             ${["submitted", "station_reviewed"].includes(c.status)
+               ? `<button class="btn danger" data-ref-withdraw="${c.id}">撤回</button>` : ""}</td></tr>`)}
+      <div id="spd-ref-detail"></div>`)}
     ${panel("转诊触发规则", `
       <p class="desc">命中规则默认只提示不自动开单——批量随访录入时自动开单会瞬间产生几十张单子</p>
       <form class="inline" id="spd-refrule-form">
@@ -1977,11 +1983,25 @@ async function renderSpdReferral() {
       <p class="desc">触发条件（任一满足即触发）</p>
       <div id="spd-refrule-rules"></div>
       <p class="msg" id="spd-refrule-msg"></p>
-      ${table(["编码", "名称", "病种", "处理层级", "条件数", "自动建任务", "状态"], rules, (r) =>
-        `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.program_code || "全部")}</td>
-         <td>${esc(r.handle_level)}</td><td>${(r.conditions || []).length}</td>
+      ${table(["ID", "编码", "名称", "病种", "处理层级", "条件数", "自动建任务", "状态", "操作"], rules, (r) =>
+        `<tr><td>${r.id}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.program_code || "全部")}</td>
+         <td>${esc(SPD_HANDLE_LEVELS[r.handle_level] || r.handle_level)}</td><td>${(r.conditions || []).length}</td>
          <td>${r.auto_task ? "是" : "否"}</td>
-         <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}`)}
+         <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-refrule-edit="${r.id}" data-name="${esc(r.name)}"
+              data-level="${esc(r.handle_level)}" data-auto="${r.auto_task ? 1 : 0}"
+              data-active="${r.active ? 1 : 0}">编辑</button></td></tr>`)}`)}
+    ${panel("按规则试算（不自动开单）", `
+      <p class="desc">拿某位患者的当前事实（年龄 / 性别 / 诊断 / 各监测值 / 风险分层）过一遍启用中的规则，
+        看命中哪几条、是哪个条件命中的。**默认只提示不开单**——命中即自动开单，
+        一次批量随访录入能开出几十张单子（后端 docstring 的原话）；要开单勾上下面那个框</p>
+      <form class="inline" id="spd-refcheck-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="program_code" placeholder="病种编码（可选）">
+        <label style="font-size:13px"><input type="checkbox" name="auto_create" value="true"> 命中即开上转单</label>
+        <button class="secondary">试算</button>
+      </form><p class="msg" id="spd-refcheck-msg"></p>
+      <div id="spd-refcheck-box"></div>`)}
     ${alerts.count ? panel(`⚠ 超过 ${alerts.threshold_hours} 小时未推进（${alerts.count}）`, `
       ${table(["ID", "患者", "状态", "发起时间"], alerts.items, (c) =>
         `<tr><td>${c.id}</td><td>${esc(c.patient_name)}</td><td>${spdTag(SPD_REF_STATUS, c.status)}</td>
@@ -1992,10 +2012,65 @@ async function renderSpdReferral() {
     return postAction("/api/spd/referrals",
       formJson(e.target, ["patient_id", "target_org_id"]), "#spd-ref-msg");
   };
+  $("#spd-refcheck-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api("/api/spd/referral-rules/check", { method: "POST", body: JSON.stringify({
+        patient_id: Number(f.get("patient_id")), program_code: f.get("program_code") || "",
+        auto_create: f.get("auto_create") === "true" }) });
+      $("#spd-refcheck-box").innerHTML = `
+        <p class="msg ${r.triggered ? "err" : "ok"}">${r.triggered
+          ? `命中 ${r.hits.length} 条规则${r.case ? `，已开转诊单 #${r.case.id}` : "（未开单）"}`
+          : "未命中任何启用中的规则"}</p>
+        ${table(["规则", "处理层级", "命中条件"], r.hits, (h) =>
+          `<tr><td>${esc(h.rule.code)} ${esc(h.rule.name)}</td>
+           <td>${esc(SPD_HANDLE_LEVELS[h.rule.handle_level] || h.rule.handle_level)}</td>
+           <td>${(h.matched || []).map((m) => esc(JSON.stringify(m))).join("；") || "—"}</td></tr>`)}
+        <p class="desc">本次参与判定的事实：${Object.entries(r.facts || {})
+          .map(([k, v]) => `${esc(k)}=${esc(v === null ? "—" : v)}`).join("，") || "（无）"}</p>`;
+      setMsg("#spd-refcheck-msg", "");
+      if (r.case) route();
+    } catch (err) { $("#spd-refcheck-box").innerHTML = ""; setMsg("#spd-refcheck-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const pass = e.target.closest("[data-ref-pass]"), reject = e.target.closest("[data-ref-reject]");
     const arrive = e.target.closest("[data-ref-arrive]"), down = e.target.closest("[data-ref-down]");
     const recv = e.target.closest("[data-ref-recv]");
+    const detail = e.target.closest("[data-ref-detail]"), withdraw = e.target.closest("[data-ref-withdraw]");
+    const ruleEdit = e.target.closest("[data-refrule-edit]");
+    if (detail) {
+      try {
+        const c = await api(`/api/spd/referrals/${detail.dataset.refDetail}`);
+        $("#spd-ref-detail").innerHTML = panel(`转诊单 #${c.id} 全轨迹 · ${c.patient_name}`,
+          table(["环节", "动作", "经办人", "机构", "意见", "时间"], c.steps, (s) =>
+            `<tr><td>${esc(s.step)}</td><td>${esc(s.action)}</td><td>${s.actor_id ?? "—"}</td>
+             <td>${s.org_id ?? "—"}</td><td>${esc(s.opinion) || "—"}</td>
+             <td>${esc((s.created_at || "").replace("T", " ").slice(0, 19))}</td></tr>`));
+      } catch (err) { setMsg("#spd-ref-msg", err.message, false); }
+      return;
+    }
+    if (withdraw) {
+      // 后端只允许发起人本人、且尚未进上级审核时撤回；按钮也只在这两个状态摆出来
+      if (!confirm("撤回后该转诊单即关闭，且不计入闭环率分母。确认撤回？")) return;
+      return postAction(`/api/spd/referrals/${withdraw.dataset.refWithdraw}/withdraw`, null, "#spd-ref-msg");
+    }
+    if (ruleEdit) {
+      const form = await spdModal("编辑转诊触发规则（条件请新建规则）", [
+        { name: "name", label: "规则名称", value: ruleEdit.dataset.name, required: true },
+        { name: "handle_level", label: "处理层级", type: "select", value: ruleEdit.dataset.level,
+          options: Object.entries(SPD_HANDLE_LEVELS).map(([k, v]) => ({ value: k, label: v })) },
+        { name: "auto_task", label: "命中后自动建任务", type: "select", value: ruleEdit.dataset.auto,
+          options: [{ value: "0", label: "否（只提示）" }, { value: "1", label: "是" }] },
+        { name: "active", label: "状态", type: "select", value: ruleEdit.dataset.active,
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+      ]);
+      if (!form) return;
+      return postAction(`/api/spd/referral-rules/${ruleEdit.dataset.refruleEdit}`, {
+        name: form.name, handle_level: form.handle_level,
+        auto_task: form.auto_task === "1", active: form.active === "1",
+      }, "#spd-refrule-msg", "PATCH");
+    }
     if (pass) {
       const form = await spdModal("审核通过", [{ name: "opinion", label: "审核意见", type: "textarea" }]);
       if (!form) return;

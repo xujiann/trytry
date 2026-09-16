@@ -5889,7 +5889,8 @@
       "第十四批（2026-09-06）：双向转诊闭环。四个面板，其中超时预警是条件面板",
       "（标题里带阈值小时数与条数），夹具给非空 alerts 让它渲染出来。",
       "转诊三条覆盖上转/下转与不同 current_level；规则两条分别启用/停用、",
-      "带/不带自动建任务。渲染末尾还要 spdMeta() 画规则条件编辑器。"
+      "带/不带自动建任务。渲染末尾还要 spdMeta() 画规则条件编辑器。",
+      "功能完善·spd/referral（2026-09-16）：闭环统计夹具此前是**旧形状**——缺 denominator / effective_visits / effective_rate，且把 pending_by_level 写成 open_by_level，于是卡片渲染出 0 与 `undefined%`、在途分级图恒空。改成后端 ReferralClosureStatsOut 的真实形状。转诊单的 status 原先写的 `pending` 不是这条状态机的取值（真值见 SPD_REF_STATUS），改成 submitted——正好走「撤回」按钮那一支（后端只允许 submitted / station_reviewed 撤回）。"
     ],
     "fn": "renderSpdReferral",
     "api": {
@@ -5908,10 +5909,18 @@
         ]
       },
       "/api/spd/referrals-stats/closure": {
-        "closure_rate": 88.2,
         "total": 170,
+        "denominator": 162,
         "closed": 150,
-        "open_by_level": {
+        "closure_rate": 92.59,
+        "effective_visits": 138,
+        "effective_rate": 92.0,
+        "by_status": {
+          "closed": 150,
+          "withdrawn": 5,
+          "rejected": 3
+        },
+        "pending_by_level": {
           "county": 12,
           "township": 6,
           "village": 2
@@ -5924,7 +5933,7 @@
           "program_code": "hyp<b>",
           "direction": "up",
           "current_level": "county",
-          "status": "pending",
+          "status": "submitted",
           "effective_visit": false,
           "created_at": "2026-09-01T09:00:00"
         },
@@ -5958,7 +5967,7 @@
             "patient_name": "张三 &",
             "program_code": "hyp<b>",
             "current_level": "county",
-            "status": "pending",
+            "status": "submitted",
             "hours": 61,
             "created_at": "2026-09-01T09:00:00"
           },
@@ -5967,7 +5976,7 @@
             "patient_name": "赵六<b>",
             "program_code": "dm",
             "current_level": "township",
-            "status": "pending",
+            "status": "submitted",
             "hours": 52,
             "created_at": "2026-09-01T12:00:00"
           }

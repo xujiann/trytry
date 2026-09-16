@@ -268,7 +268,9 @@ MIGRATED_PAGES = {
                                     # 第 5 处是点「用量明细」后写进 #spd-usage-list 的面板（功能完善·spd/population）
     "renderSpdPath": 4,             # 路径实例表与任务表同上；第 4 处是点「节点」后写进 #spd-tpl-detail 的节点面板
                                     # （功能完善·spd/config，2026-09-15）
-    "renderSpdReferral": 4,         # 超时预警是条件面板，走 accent
+    "renderSpdReferral": 6,         # 超时预警是条件面板，走 accent
+                                    # 功能完善·spd/referral（2026-09-16）：+按规则试算面板，
+                                    # +点「全轨迹」后写进 #spd-ref-detail 的 panel()
     "renderSpdReport": 3,           # 第 4 处外壳在点击「查看」之后的报告详情里，见下
     # 第十五批 2026-09-06：pages-mgmt.js 五页 14 处（统一规则 / 就诊凭据 / 机构分组 /
     # 人员下沉 / 专病管理）。**这条规则数得到的手写外壳，pages-mgmt.js 至此清零。**
