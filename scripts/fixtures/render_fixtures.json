@@ -3337,7 +3337,8 @@
     "_why": [
       "第九批（2026-09-06）：共享中心检查检验。危急值面板是条件渲染，夹具给非空 /exams/critical 让它渲染出来。",
       "申请单表里 pending/diagnosing/其它 三种状态各给一条，把 actions 那段三元的三个分支都走到。",
-      "结论与项目名各带一条 XSS 载荷。"
+      "结论与项目名各带一条 XSS 载荷。",
+      "功能完善·exams（2026-09-16）：申请单补 sample_status——lab+pending 那条给 collected（走「发起转运」按钮），另两条空串（非检验类整列显示「—」）。新增报告模板两条：一条 content 非空、一条空串走 `|| \"—\"` 支，名称与正文各带一条载荷。修订史由点击/按 ID 查之后才渲染，不在本页比对面内。"
     ],
     "fn": "renderExams",
     "api": {
@@ -3356,6 +3357,7 @@
       "/api/exams": [
         {
           "id": 301,
+          "sample_status": "collected",
           "patient_id": 31,
           "center_type": "lab",
           "item_name": "血生化全套 & 电解质",
@@ -3363,6 +3365,7 @@
         },
         {
           "id": 302,
+          "sample_status": "",
           "patient_id": 32,
           "center_type": "imaging",
           "item_name": "胸部 CT",
@@ -3370,10 +3373,25 @@
         },
         {
           "id": 303,
+          "sample_status": "",
           "patient_id": 33,
           "center_type": "ecg",
           "item_name": "常规心电图<b>",
           "status": "reported"
+        }
+      ],
+      "/api/exams/templates": [
+        {
+          "id": 1,
+          "center_type": "imaging",
+          "name": "胸部 CT 常规 & 平扫",
+          "content": "两肺纹理清晰<b>，未见实变"
+        },
+        {
+          "id": 2,
+          "center_type": "lab",
+          "name": "生化全套<img src=x onerror=alert(1)>",
+          "content": ""
         }
       ]
     }

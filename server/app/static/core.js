@@ -1060,9 +1060,15 @@ async function renderDicts() {
   await draw("diagnosis");
 }
 
+/* 检验样本物流：后端 _SAMPLE_FLOW 的前端镜像。空 → 采样 → 转运 → 核收，核收即到头。
+ * 键是当前状态、值是下一步的按钮文案；状态本身的中文名另表，两者别混。 */
+const SAMPLE_NEXT = { "": "登记采样", collected: "发起转运", in_transit: "中心核收" };
+const SAMPLE_STATUS = { "": "未采样", collected: "已采样", in_transit: "转运中", received: "已核收" };
+
 async function renderExams() {
   $("#page-desc").textContent = "影像/心电/检验/病理：基层检查、上级诊断、结果互认、危急值管理";
-  const [requests, critical] = await Promise.all([api("/api/exams"), api("/api/exams/critical")]);
+  const [requests, critical, templates] = await Promise.all([
+    api("/api/exams"), api("/api/exams/critical"), api("/api/exams/templates")]);
   $("#page-body").innerHTML = `
     ${panel("开单（先查互认）", `
       <form class="inline" id="exam-form">
@@ -1077,16 +1083,42 @@ async function renderExams() {
     ${critical.length ? panel(`⚠ 危急值（${critical.length}）`,
       table(["报告ID", "申请单", "结论", "操作"], critical, (r) =>
         `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
-         <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button></td></tr>`)) : ""}
-    ${panel("申请单", table(["ID", "患者", "中心", "项目", "状态", "操作"], requests, (r) => {
+         <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button>
+             <button class="btn secondary" data-amend="${r.id}" data-conclusion="${esc(r.conclusion)}">修订</button>
+             <button class="btn secondary" data-revs="${r.id}">修订史</button></td></tr>`)) : ""}
+    ${panel("申请单", table(["ID", "患者", "中心", "项目", "状态", "样本", "操作"], requests, (r) => {
       let actions = r.status === "pending"
         ? `<button class="btn secondary" data-claim="${r.id}">领取</button>`
         : r.status === "diagnosing"
         ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "";
       actions += ` <button class="btn secondary" data-printreq="${r.id}">打印申请单</button>`;
+      // 样本物流只有检验类有，且只在出报告前走（后端两处分别 422 / 409）；已核收即到头
+      const flow = r.center_type === "lab" && ["pending", "diagnosing"].includes(r.status)
+        && SAMPLE_NEXT[r.sample_status || ""]
+        ? ` <button class="btn secondary" data-sample="${r.id}">${SAMPLE_NEXT[r.sample_status || ""]}</button>` : "";
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${esc(CENTER_NAMES[r.center_type] || r.center_type)}</td>
-        <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td><td>${actions}</td></tr>`;
+        <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td>
+        <td>${r.center_type === "lab" ? esc(SAMPLE_STATUS[r.sample_status || ""] || r.sample_status) : "—"}</td>
+        <td>${actions}${flow}</td></tr>`;
     }))}
+    ${panel("报告模板（管理员维护，出报告时照着写）", `
+      <form class="inline" id="tpl-form">
+        <select name="center_type">${Object.entries(CENTER_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="name" placeholder="模板名称" required>
+        <input name="content" placeholder="模板正文" style="min-width:260px">
+        <button>新建模板</button>
+      </form><p class="msg" id="tpl-msg"></p>
+      ${table(["ID", "中心", "名称", "正文"], templates, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(CENTER_NAMES[t.center_type] || t.center_type)}</td><td>${esc(t.name)}</td>
+         <td>${esc(t.content) || "—"}</td></tr>`)}`)}
+    ${panel("报告修订与修订史（限医师；改前值逐条留痕）", `
+      <p class="desc">危急值报告可直接在上方预警表里改；这里按报告 ID 找任意一份。
+        修订会把改前的结论 / 所见 / 危急标记连同修订人与理由写进历史表；仍为危急值的会把闭环状态复位为「已通知」须重新确认</p>
+      <form class="inline" id="rev-form">
+        <input name="report_id" type="number" placeholder="报告ID" required>
+        <button class="secondary">查修订史</button>
+      </form><p class="msg" id="rev-msg"></p>
+      <div id="rev-box"></div>`)}
     ${panel("报告打印", `
       <form class="inline" id="exam-print-form">
         <input name="report_id" type="number" placeholder="报告ID" required>
@@ -1135,6 +1167,25 @@ async function renderExams() {
       route();
     } catch (err) { setMsg("#exam-msg", err.message, false); }
   };
+  const drawRevisions = async (reportId) => {
+    const rows = await api(`/api/exams/reports/${reportId}/revisions`);
+    $("#rev-box").innerHTML = table(["ID", "改前结论", "改前所见", "改前危急", "修订人", "理由", "时间"], rows, (r) =>
+      `<tr><td>${r.id}</td><td>${esc(r.prev_conclusion) || "—"}</td><td>${esc(r.prev_finding) || "—"}</td>
+       <td>${r.prev_critical ? '<span class="tag red">是</span>' : "否"}</td>
+       <td>${esc(r.revised_by) || "—"}</td><td>${esc(r.reason) || "—"}</td>
+       <td>${esc((r.at || "").replace("T", " ").slice(0, 19))}</td></tr>`);
+  };
+  $("#tpl-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/exams/templates", formJson(e.target), "#tpl-msg");
+  };
+  $("#rev-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await drawRevisions(new FormData(e.target).get("report_id"));
+      setMsg("#rev-msg", "");
+    } catch (err) { $("#rev-box").innerHTML = ""; setMsg("#rev-msg", err.message, false); }
+  };
   $("#exam-print-form").onsubmit = async (e) => {
     e.preventDefault();
     try { await openPrintPage(`/api/print/exam-reports/${new FormData(e.target).get("report_id")}`); }
@@ -1142,17 +1193,46 @@ async function renderExams() {
   };
   $("#page-body").onclick = async (e) => {
     const claim = e.target.dataset.claim, report = e.target.dataset.report;
-    const { printreq, printreport } = e.target.dataset;
+    const { printreq, printreport, sample, amend, revs } = e.target.dataset;
     try {
       if (printreq) return await openPrintPage(`/api/print/exam-requests/${printreq}`);
       if (printreport) return await openPrintPage(`/api/print/exam-reports/${printreport}`);
+      if (sample) { await api(`/api/exams/${sample}/sample/advance`, { method: "POST" }); route(); return; }
+      if (revs) {
+        try { await drawRevisions(revs); setMsg("#rev-msg", ""); }
+        catch (err) { setMsg("#rev-msg", err.message, false); }
+        return;
+      }
+      if (amend) {
+        const form = await spdModal("修订报告（改前值会连同理由留痕）", [
+          { name: "conclusion", label: "新结论", value: e.target.dataset.conclusion, required: true },
+          { name: "finding", label: "新所见（留空不改）" },
+          { name: "critical", label: "危急值标记", type: "select", value: "keep",
+            options: [{ value: "keep", label: "不改" }, { value: "1", label: "是危急值" }, { value: "0", label: "解除危急" }] },
+          { name: "reason", label: "修订理由", type: "textarea" },
+        ]);
+        if (!form || !form.conclusion) return;
+        const body = { conclusion: form.conclusion, reason: form.reason || "" };
+        // finding/critical 是 `| None` 的可选项：不改就别送，送 null 会把所见清空
+        if (form.finding) body.finding = form.finding;
+        if (form.critical !== "keep") body.critical = form.critical === "1";
+        const r = await api(`/api/exams/reports/${amend}`, { method: "PATCH", body: JSON.stringify(body) });
+        setMsg("#exam-msg", `报告 ${r.id} 已修订${r.critical ? `（仍为危急值，闭环状态 ${r.critical_status}）` : "（非危急值）"}`);
+        route();
+        return;
+      }
       if (claim) { await api(`/api/exams/${claim}/claim`, { method: "POST" }); route(); }
       if (report) {
-        const conclusion = prompt("诊断结论");
-        if (!conclusion) return;
-        const isCritical = confirm("是否为危急值？（确定=是）");
+        const form = await spdModal("出报告", [
+          { name: "conclusion", label: "诊断结论", required: true },
+          { name: "finding", label: "影像所见 / 检查所见" },
+          { name: "critical", label: "是否危急值", type: "select", value: "0",
+            options: [{ value: "0", label: "否" }, { value: "1", label: "是（进危急值闭环）" }] },
+        ]);
+        if (!form || !form.conclusion) return;
         await api(`/api/exams/${report}/report`, { method: "POST",
-          body: JSON.stringify({ conclusion, critical: isCritical }) });
+          body: JSON.stringify({ conclusion: form.conclusion, finding: form.finding || "",
+                                 critical: form.critical === "1" }) });
         route();
       }
     } catch (err) { setMsg("#exam-msg", err.message, false); }

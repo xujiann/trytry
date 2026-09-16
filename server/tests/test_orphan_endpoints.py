@@ -201,11 +201,6 @@ KNOWN_ORPHANS: set[str] = {
     # esb（2）
     "/api/esb/flow-runs",
     "/api/esb/flows/{flow_id}",
-    # exams（4）
-    "/api/exams/reports/{report_id}",
-    "/api/exams/reports/{report_id}/revisions",
-    "/api/exams/templates",
-    "/api/exams/{request_id}/sample/advance",
     # fund（2）
     "/api/fund/pools/{pool_id}",
     "/api/fund/pools/{pool_id}/distributions",

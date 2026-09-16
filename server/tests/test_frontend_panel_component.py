@@ -217,7 +217,8 @@ MIGRATED_PAGES = {
     "renderAccounting": 5,          # 另有一处 class="panel hidden" 的凭证明细容器
     # 第九批 2026-09-06：第一次迁 core.js（剩余量第二大的文件），外加两页 clinical。
     # 41 个夹具页全量重跑逐字符一致。
-    "renderExams": 5,               # 含一处条件渲染的危急值面板
+    "renderExams": 7,               # 含一处条件渲染的危急值面板
+                                    # 功能完善·exams（2026-09-16）：+报告模板、+报告修订与修订史两个面板
     "renderRx": 4,                  # 点评按钮按角色 + 是否已点评显示，条件仍留在调用点
     "renderAppointments": 6,
                                     # 功能完善·appointments（2026-09-16）：+便捷寻医、+服务黑名单两个面板
