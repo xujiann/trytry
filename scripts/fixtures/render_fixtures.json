@@ -5166,10 +5166,62 @@
       "第十三批（2026-09-06）：远程会诊。两个面板，第二个是无标题裸面板。",
       "五条覆盖操作列的全部分支：applied（受理/拒绝两个按钮）、accepted（出意见）、",
       "completed 且无评价（评价按钮）、completed 且已评价（走「—」）、declined（走「—」）。",
-      "专家与意见各留一条为空，走 `esc(x) || \"—\"`；评价用 ★ 重复，给个 3 星。"
+      "专家与意见各留一条为空，走 `esc(x) || \"—\"`；评价用 ★ 重复，给个 3 星。",
+      "第十九批（2026-09-16）：接上专家库、运行统计与计费。角色固定 admin，专家建档表单才渲染得到。",
+      "专家三条走 可排班有专业方向 / 可排班无专业方向（走 `|| \"—\"`）/ 暂停排班 三支。",
+      "统计里 completion_rate_pct 与 rating.avg 都给非空值（两者都可能是 null，空表分支另说）。",
+      "**顺手改正 rating**：后端 ConsultationOut.rating 是 int，空值是 0 不是 null；",
+      "夹具五条原先都写 null——渲染上看不出差别（两者都走「—」），但形状是错的。"
     ],
     "fn": "renderConsultations",
+    "localStorage": {
+      "medplat_role": "admin"
+    },
     "api": {
+      "/api/consultations/experts": [
+        {
+          "id": 11,
+          "name": "王主任 &",
+          "org_id": 3,
+          "specialty": "心血管<b>",
+          "available": true
+        },
+        {
+          "id": 12,
+          "name": "李主任",
+          "org_id": 3,
+          "specialty": "",
+          "available": true
+        },
+        {
+          "id": 13,
+          "name": "赵主任<b>",
+          "org_id": 3,
+          "specialty": "康复",
+          "available": false
+        }
+      ],
+      "/api/consultations/stats": {
+        "total": 5,
+        "by_status": {
+          "applied": 1,
+          "accepted": 1,
+          "completed": 2,
+          "declined": 1
+        },
+        "completion_rate_pct": 40.0,
+        "rating": {
+          "rated_count": 1,
+          "unrated_count": 1,
+          "avg": 3.0
+        },
+        "fee": {
+          "settled_count": 1,
+          "unsettled_count": 1,
+          "total_amount": 200
+        },
+        "caliber": "评分均值只算已评价的（rating>0），未评价单列；fee=0 与未计费是两回事，后者看 fee_settled"
+      },
       "/api/consultations": [
         {
           "id": 1,
@@ -5179,7 +5231,7 @@
           "question": "胸痛待查 & 请会诊",
           "expert_name": "",
           "opinion": "",
-          "rating": null,
+          "rating": 0,
           "status": "applied"
         },
         {
@@ -5190,7 +5242,7 @@
           "question": "血糖控制不佳<b>",
           "expert_name": "王主任 &",
           "opinion": "",
-          "rating": null,
+          "rating": 0,
           "status": "accepted"
         },
         {
@@ -5201,7 +5253,7 @@
           "question": "肺部结节随访<img src=x onerror=alert(1)>",
           "expert_name": "李主任",
           "opinion": "建议三个月复查 & 低剂量CT",
-          "rating": null,
+          "rating": 0,
           "status": "completed"
         },
         {
@@ -5223,7 +5275,7 @@
           "question": "普通感冒",
           "expert_name": "",
           "opinion": "",
-          "rating": null,
+          "rating": 0,
           "status": "declined"
         }
       ]

@@ -254,7 +254,8 @@ MIGRATED_PAGES = {
     # 第十三批 2026-09-06：core.js 收尾六页（会诊 / 签约 / 字典 / 转诊 / 药房 / 慢病），9 处。
     # **core.js 至此没有可迁的手写外壳了**——剩的 5 处是 2 处非债（文档注释示例、组件自身
     # 模板）+ 3 处标题里嵌了 HTML 的（见下面 KNOWN_UNMIGRATED_SHELLS 与 openDrilldown）。
-    "renderConsultations": 2,       # 含一处无标题裸面板
+    "renderConsultations": 4,       # 含一处无标题裸面板
+                                    # 功能完善·consultations（2026-09-16）：+运行统计、+会诊专家库两个面板
     "renderContracts": 2,           # 含一处无标题裸面板；末尾还会 drawHomeVisits() 追加上门服务面板
     "renderDicts": 1,               # 整页就一个无标题裸面板；条目表由末尾的 draw("diagnosis") 写进 #dict-table
     "renderReferrals": 2,           # 含一处无标题裸面板

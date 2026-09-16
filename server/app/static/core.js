@@ -380,10 +380,18 @@ async function renderDashboard() {
   };
 }
 
+// available 是 bool，没有后端文案可取；映成状态码再走 statusTag，与本页其余状态列同写法
+const EXPERT_STATUS = { on: ["可排班", "green"], off: ["暂停排班", "red"] };
+
 async function renderConsultations() {
-  $("#page-desc").textContent = "申请 → 受理 → 出具意见 → 评价";
-  const consultations = await api("/api/consultations");
+  $("#page-desc").textContent = "申请 → 受理 → 出具意见 → 评价 → 计费；专家库与运行统计";
+  const [consultations, experts, stats] = await Promise.all([
+    api("/api/consultations"), api("/api/consultations/experts"), api("/api/consultations/stats"),
+  ]);
   const CS = { applied: ["已申请", "orange"], accepted: ["已受理", ""], completed: ["已完成", "green"], declined: ["已拒绝", "red"] };
+  // 专家建档后端是 require_admin，不是 admin 就别摆那个表单
+  const canExpert = currentRole() === "admin";
+  const onDuty = experts.filter((x) => x.available);
   $("#page-body").innerHTML = `
     ${panel("会诊申请", `
       <form class="inline" id="cons-form">
@@ -393,18 +401,48 @@ async function renderConsultations() {
         <input name="question" placeholder="会诊问题" required style="min-width:240px">
         <button>提交</button>
       </form><p class="msg" id="cons-msg"></p>`)}
+    ${panel("运行统计", `
+      <div class="cards">
+        <div class="card"><div class="label">申请总量</div><div class="value">${stats.total}</div></div>
+        <div class="card"><div class="label">完成率</div><div class="value">${
+          stats.completion_rate_pct === null ? "—" : `${stats.completion_rate_pct}%`}</div></div>
+        <div class="card"><div class="label">评分均值</div><div class="value">${
+          stats.rating.avg === null ? "—" : stats.rating.avg}</div>
+          <div class="label">已评 ${stats.rating.rated_count} / 未评 ${stats.rating.unrated_count}</div></div>
+        <div class="card"><div class="label">已计费金额</div><div class="value">${stats.fee.total_amount}</div>
+          <div class="label">已计费 ${stats.fee.settled_count} / 未计费 ${
+            stats.fee.unsettled_count}</div></div></div>
+      ${table(["状态", "件数"], Object.entries(stats.by_status), ([code, n]) =>
+        `<tr><td>${statusTag(CS, code)}</td><td>${n}</td></tr>`)}
+      <p class="desc">${esc(stats.caliber)}</p>`)}
     ${panel("", table(["ID", "患者", "申请→受邀", "问题", "专家", "意见", "评价", "状态", "操作"], consultations, (c) => {
       const actions = c.status === "applied"
         ? `<button class="btn secondary" data-act="accept" data-id="${c.id}">受理</button>
            <button class="btn danger" data-act="decline" data-id="${c.id}">拒绝</button>`
         : c.status === "accepted"
         ? `<button class="btn secondary" data-act="complete" data-id="${c.id}">出意见</button>`
-        : c.status === "completed" && !c.rating
-        ? `<button class="btn secondary" data-act="rate" data-id="${c.id}">评价</button>` : "—";
+        : c.status === "completed"
+        ? `${c.rating ? "" : `<button class="btn secondary" data-act="rate" data-id="${c.id}">评价</button> `
+          }<button class="btn" data-act="fee" data-id="${c.id}">计费</button>` : "—";
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.from_org_id} → ${c.to_org_id}</td>
         <td>${esc(c.question)}</td><td>${esc(c.expert_name) || "—"}</td><td>${esc(c.opinion) || "—"}</td>
         <td>${c.rating ? "★".repeat(c.rating) : "—"}</td><td>${statusTag(CS, c.status)}</td><td>${actions}</td></tr>`;
-    }))}`;
+    }) + `<p class="desc">计费只对已完成的会诊开放（拒绝与未受理的没有发生服务）。
+      <b>行上看不到"这单计没计费"</b>——会诊列表的出参不含 fee 字段，
+      按已计费/未计费的件数看上方统计；再计一次是覆盖，不是追加。</p>`)}
+    ${panel("会诊专家库（受理时从这里选人，不再手打姓名）", `
+      ${canExpert ? `<form class="inline" id="expert-form">
+        <input name="name" placeholder="专家姓名" required>
+        <input name="org_id" type="number" placeholder="所属机构ID" required>
+        <input name="specialty" placeholder="专业方向">
+        <select name="available"><option value="1">可排班</option><option value="0">暂停排班</option></select>
+        <button>建档</button></form>` : ""}
+      ${table(["ID", "姓名", "机构", "专业方向", "排班状态"], experts, (x) =>
+        `<tr><td>${x.id}</td><td>${esc(x.name)}</td><td>${x.org_id}</td>
+         <td>${esc(x.specialty) || "—"}</td>
+         <td>${statusTag(EXPERT_STATUS, x.available ? "on" : "off")}</td></tr>`)}
+      <p class="desc">受理时的专家下拉只列<b>可排班</b>的（当前 ${onDuty.length} 人）；
+        专家库为空时退回手工输入，不至于卡住受理。</p>`)}`;
   $("#cons-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -415,21 +453,55 @@ async function renderConsultations() {
       route();
     } catch (err) { setMsg("#cons-msg", err.message, false); }
   };
+  const expertForm = $("#expert-form");
+  if (expertForm) expertForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/consultations/experts", { method: "POST", body: JSON.stringify({
+        name: f.get("name"), org_id: Number(f.get("org_id")),
+        specialty: f.get("specialty"), available: f.get("available") === "1" }) });
+      route();
+    } catch (err) { setMsg("#cons-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const { act, id } = e.target.dataset;
     if (!act || !id) return;
     try {
       if (act === "accept") {
-        const expert = prompt("受理专家姓名"); if (!expert) return;
-        await api(`/api/consultations/${id}/accept`, { method: "POST", body: JSON.stringify({ expert_name: expert }) });
+        // 有专家库就从库里选，没有才退回手打——手打进来的名字对不上任何一条专家记录，
+        // 后端 accept 只收字符串不校验，于是统计里"谁接得多"永远是一笔糊涂账
+        const picked = await spdModal("受理会诊", [onDuty.length
+          ? { name: "expert_name", label: "受理专家（只列可排班的）", type: "select",
+              options: onDuty.map((x) => ({ value: x.name, label: `${x.name}${x.specialty ? `（${x.specialty}）` : ""}` })) }
+          : { name: "expert_name", label: "受理专家姓名（专家库为空，先手工填）", type: "text", required: true }]);
+        if (!picked || !picked.expert_name) return;
+        await api(`/api/consultations/${id}/accept`, { method: "POST",
+          body: JSON.stringify({ expert_name: picked.expert_name }) });
       } else if (act === "decline") {
         await api(`/api/consultations/${id}/decline`, { method: "POST" });
       } else if (act === "complete") {
-        const opinion = prompt("会诊意见"); if (!opinion) return;
-        await api(`/api/consultations/${id}/complete`, { method: "POST", body: JSON.stringify({ opinion }) });
+        const picked = await spdModal("出具会诊意见", [
+          { name: "opinion", label: "会诊意见（后端上限 2048 字）", type: "textarea" }]);
+        if (!picked || !picked.opinion) return;
+        await api(`/api/consultations/${id}/complete`, { method: "POST",
+          body: JSON.stringify({ opinion: picked.opinion }) });
       } else if (act === "rate") {
-        const rating = Number(prompt("评价（1-5星）")); if (!rating) return;
-        await api(`/api/consultations/${id}/rate`, { method: "POST", body: JSON.stringify({ rating }) });
+        const picked = await spdModal("会诊评价", [
+          { name: "rating", label: "评分", type: "select", value: "5",
+            options: [5, 4, 3, 2, 1].map((n) => ({ value: n, label: `${"★".repeat(n)}（${n} 分）` })) }]);
+        if (!picked) return;
+        await api(`/api/consultations/${id}/rate`, { method: "POST",
+          body: JSON.stringify({ rating: Number(picked.rating) }) });
+      } else if (act === "fee") {
+        const picked = await spdModal("会诊计费", [
+          { name: "fee", label: "费用（元；0 与「未计费」是两回事，0 也会标成已计费）", type: "number" },
+          { name: "fee_note", label: "计费说明", type: "text" }]);
+        if (!picked) return;
+        // 不在这里 setMsg：下面紧接着 route() 会整页重画，写了也当场被冲掉。
+        // 计费的回馈看上方统计卡（已计费件数与金额会跟着变）
+        await api(`/api/consultations/${id}/fee`, { method: "POST",
+          body: JSON.stringify({ fee: picked.fee, fee_note: picked.fee_note }) });
       }
       route();
     } catch (err) { setMsg("#cons-msg", err.message, false); }
