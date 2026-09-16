@@ -1444,6 +1444,20 @@ async function renderOrgGroups() {
             table(["机构", "层级"], coverage.ungrouped, (o) =>
               `<tr><td>${esc(o.org_name)}</td><td>${esc(o.level)}</td></tr>`)}`
         : '<p class="desc">全部机构均已入组，按分组统计之和等于全域总数。</p>'}
+    `)}
+
+    ${panel("按机构查归属分组", `
+      <form class="inline" id="og-oforg">
+        <select name="org_id">${orgs.map((o) =>
+          `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
+        <button>查归属</button></form>
+      <p class="desc">上面两块都是「分组 → 成员」，这一块是反过来的「机构 → 它在哪些分组」。
+        一家机构可以既在某片区、又在某专科联盟，所以这里可能跨<b>多个分组类型</b>返回多条，
+        而覆盖情况那一块一次只看一种类型——"某机构没入组"要在这里才查得准。
+        分组归属是组织架构拓扑（转诊、调拨、统计口径都要引用），不含经营或诊疗数据，
+        所以这条按设计<b>不做横向隔离</b>：查别家机构的分组归属是允许的。</p>
+      <p class="msg" id="og-oforg-msg"></p>
+      <div id="og-oforg-result"></div>
     `)}`;
 
   $("#og-form").onsubmit = (e) => {
@@ -1456,6 +1470,20 @@ async function renderOrgGroups() {
   };
   $("#og-type").onchange = (e) => {
     localStorage.setItem("medplat_group_type", e.target.value); route();
+  };
+  $("#og-oforg").onsubmit = async (e) => {
+    e.preventDefault();
+    const orgId = new FormData(e.target).get("org_id");
+    try {
+      const rows = await api(`/api/org-groups/of-org/${encodeURIComponent(orgId)}`);
+      $("#og-oforg-result").innerHTML = rows.length
+        ? table(["名称", "类型", "牵头机构", "成员数", "状态"], rows, (g) =>
+            `<tr><td><b>${esc(g.name)}</b></td><td>${esc(g.group_type_name)}</td>
+             <td>${esc(orgName[g.lead_org_id] || "—")}</td><td>${g.member_count}</td>
+             <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td></tr>`)
+        : `<p class="empty">这家机构不在任何分组里——转诊、调拨与按分组的统计口径都不会把它算进去。</p>`;
+      setMsg("#og-oforg-msg", "", true);
+    } catch (err) { setMsg("#og-oforg-msg", err.message, false); }
   };
   if (selected) {
     $("#og-member").onsubmit = (e) => { e.preventDefault();

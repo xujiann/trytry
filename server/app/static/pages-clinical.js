@@ -2765,7 +2765,7 @@ async function renderQuality() {
         · 最近修正 ${esc((r.updated_at || "").replace("T", " ").slice(0, 16))}</p>
       ${table(["环节", "内容"], MR_FIELDS.map(([key, label]) => [label, r[key]]), ([label, value]) =>
         `<tr><td style="white-space:nowrap">${esc(label)}</td><td>${esc(value) || "（未填）"}</td></tr>`)}
-      <p class="desc" style="margin-top:8px">下面是**落库时**的缺陷快照（评分当时的结论）；
+      <p class="desc" style="margin-top:8px">下面是<b>落库时</b>的缺陷快照（评分当时的结论）；
         规则改过之后要看新结论，请用同一行的「复评」</p>
       ${d.defects.length
         ? table(["规则", "环节", "缺陷描述", "扣分"], d.defects, (x) =>

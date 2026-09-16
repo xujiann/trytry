@@ -289,7 +289,7 @@ MIGRATED_PAGES = {
     "renderRules": 3,
     "renderCredentials": 5,
                                     # 功能完善·credentials（2026-09-16）：+一码通出码/核验、+多卡码协同两个面板
-    "renderOrgGroups": 3,           # 中间那个包在 `${selected ? … : ""}` 里；覆盖面板标题不再 esc()
+    "renderOrgGroups": 4,           # 中间那个包在 `${selected ? … : ""}` 里；覆盖面板标题不再 esc()
     "renderStaffing": 3,
     "renderDiseasePrograms": 2,     # 第二个包在 `${picked && current ? … : ""}` 里；标题不再 esc()
     # 第十六批 2026-09-06：pages-public.js 21 处。**这条规则数得到的手写外壳，

@@ -624,7 +624,7 @@ async function renderAppointments() {
        <td>${esc(s.slot_date)} ${esc(s.slot_time)}</td>
        <td><span class="tag ${s.booked >= s.capacity ? "red" : "green"}">${s.booked}/${s.capacity}</span></td></tr>`))}
     ${panel("便捷寻医（指引⑨）", `
-      <p class="desc">按姓名 / 科室 / 职称找医师并带出近期可约号源。**没号的医师也在列**并标注——
+      <p class="desc">按姓名 / 科室 / 职称找医师并带出近期可约号源。<b>没号的医师也在列</b>并标注——
         只给有号的，居民会以为这位医师不存在。跨机构可查：这是面向居民的寻医目录，不是管理数据</p>
       <form class="inline" id="doctor-form">
         <input name="keyword" placeholder="姓名 / 科室 / 职称" style="min-width:200px">
