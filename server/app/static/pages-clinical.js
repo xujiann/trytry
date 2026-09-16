@@ -607,12 +607,29 @@ async function renderTelemedicine() {
 
 async function renderTcm() {
   $("#page-desc").textContent = "智能辅诊（辨证推荐）、共享中药房追溯、适宜技术库";
-  const [orders, techniques] = await Promise.all([api("/api/tcm/dispense-orders"), api("/api/tcm/techniques")]);
+  const [orders, techniques, spec] = await Promise.all([
+    api("/api/tcm/dispense-orders"), api("/api/tcm/techniques"), api("/api/tcm/constitution/spec")]);
   const DS = { ordered: "已下单", dispensed: "已调配", decocted: "已煎煮", delivering: "配送中", delivered: "已送达" };
+  // 平和质不收分：后端判定时 `k != "balanced"`——它是"八种偏颇都不够格"的结论，不是一个维度
+  const BIASED = spec.constitutions.filter((c) => c.key !== "balanced");
   $("#page-body").innerHTML = `
     ${panel("智能辨证", `
       <form class="inline" id="tcm-diag"><input name="symptoms" placeholder="症状（逗号分隔，如：乏力,气短）" required style="min-width:280px"><button>辨证</button></form>
       <div id="tcm-diag-result"></div>`)}
+    ${panel("体质辨识（标准化简表）", `
+      <p class="desc">${esc(spec.method)}。${esc(spec.item_scoring)}。<br>
+        ${esc(spec.raw_score)}；${esc(spec.transformed_score)}。<br>
+        判定：${esc(spec.judge.positive)}；${esc(spec.judge.tendency)}；${esc(spec.judge.balanced)}。</p>
+      <form id="tcm-const">
+        <div class="inline" style="flex-wrap:wrap">${BIASED.map((c) =>
+          `<label style="font-size:13px;margin-right:10px">${esc(c.name)}
+            <input name="${esc(c.key)}" type="number" min="0" max="100" placeholder="转化分"
+                   style="width:78px"></label>`).join("")}</div>
+        <div class="inline" style="margin-top:8px"><button>辨识</button></div></form>
+      <p class="desc">留空的维度不参与判定——只填了两三项就下结论，结论本身就不可靠，
+        但平台不替你拦：把哪几项当依据是辨识者的判断，界面只保证不替你编。</p>
+      <p class="msg" id="tcm-const-msg"></p>
+      <div id="tcm-const-result"></div>`)}
     ${panel("共享中药房下单", `
       <form class="inline" id="tcm-order">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="from_org_id" type="number" placeholder="机构ID" required>
@@ -630,7 +647,39 @@ async function renderTcm() {
     e.preventDefault();
     const symptoms = new FormData(e.target).get("symptoms").split(/[,，]/).map((s) => s.trim()).filter(Boolean);
     const result = await api("/api/tcm/assist-diagnosis", { method: "POST", body: JSON.stringify({ symptoms }) });
-    $("#tcm-diag-result").innerHTML = `<pre class="json">${esc(JSON.stringify(result.recommendations, null, 2))}</pre>`;
+    // 原先整块 JSON 甩在页面上：匹配了哪几个症状、推荐什么方，得让人自己从括号里读
+    $("#tcm-diag-result").innerHTML =
+      table(["证型", "命中症状", "命中数", "推荐方剂", "适宜技术"], result.recommendations, (r) =>
+        `<tr><td>${esc(r.syndrome)}</td><td>${esc(r.matched.join("、")) || "—"}</td>
+         <td>${r.match_count}</td><td>${esc(r.formula) || "—"}</td>
+         <td>${esc(r.techniques.join("、")) || "—"}</td></tr>`)
+      + `<p class="desc">${esc(result.note)}</p>`;
+  };
+  $("#tcm-const").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const scores = {};
+    BIASED.forEach((c) => { const v = f.get(c.key); if (v !== "" && v !== null) scores[c.key] = Number(v); });
+    if (!Object.keys(scores).length) return setMsg("#tcm-const-msg", "至少填一个维度的转化分", false);
+    try {
+      const r = await api("/api/tcm/constitution", { method: "POST", body: JSON.stringify({ scores }) });
+      // 判定一律取后端结果：是/倾向两条线由 CONSTITUTION_*_THRESHOLD 定，前端不再算一遍
+      const isTendency = (name) => r.tendencies.includes(name);
+      const nameOf = (key) => (BIASED.find((c) => c.key === key) || { name: key }).name;
+      $("#tcm-const-result").innerHTML = `
+        <div class="cards">
+          <div class="card"><div class="label">判定体质</div><div class="value">${esc(r.constitution)}</div></div>
+          <div class="card"><div class="label">最高转化分</div><div class="value">${r.score}</div></div>
+          <div class="card"><div class="label">倾向体质</div>
+            <div class="value">${esc(r.tendencies.join("、")) || "无"}</div></div></div>
+        <p class="desc">调养建议：${esc(r.advice)}${r.formula ? `；参考方剂：${esc(r.formula)}` : ""}</p>
+        ${table(["体质", "转化分", "判定"],
+          Object.entries(r.transformed_scores).sort((a, b) => b[1] - a[1]), ([key, v]) =>
+          `<tr><td>${esc(nameOf(key))}</td><td>${v}</td>
+           <td>${nameOf(key) === r.constitution ? '<span class="tag red">是</span>'
+             : isTendency(nameOf(key)) ? '<span class="tag orange">倾向是</span>' : "—"}</td></tr>`)}`;
+      setMsg("#tcm-const-msg", "", true);
+    } catch (err) { setMsg("#tcm-const-msg", err.message, false); }
   };
   $("#tcm-order").onsubmit = (e) => {
     e.preventDefault();

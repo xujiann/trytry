@@ -185,9 +185,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/resources/{resource_id}",
     # surveillance（1）
     "/api/surveillance/resources/{resource_id}",
-    # tcm（2）
-    "/api/tcm/constitution",
-    "/api/tcm/constitution/spec",
     # tcm_heritage（1）
     "/api/tcm-heritage/simulations/{case_id}/attempts",
     # vaccine_supply（2）

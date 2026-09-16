@@ -3923,6 +3923,28 @@
     ],
     "fn": "renderTcm",
     "api": {
+      "/api/tcm/constitution/spec": {
+        "method": "中医体质分类与判定标准化简表 &",
+        "item_scoring": "每一体质维度若干条目，按症状出现频度 1-5 分（没有=1 … 总是=5）逐条计分",
+        "raw_score": "原始分 = 该维度各条目得分之和",
+        "transformed_score": "转化分 = (原始分 - 条目数) / (条目数 × 4) × 100",
+        "judge": {
+          "positive": "偏颇体质转化分 ≥ 40 判定为该体质<b>",
+          "tendency": "转化分 30-39 判定为倾向体质",
+          "balanced": "各偏颇体质转化分均 < 40 判定为平和质"
+        },
+        "constitutions": [
+          { "key": "qi_deficiency", "name": "气虚质 &" },
+          { "key": "yang_deficiency", "name": "阳虚质" },
+          { "key": "yin_deficiency", "name": "阴虚质" },
+          { "key": "phlegm_damp", "name": "痰湿质<b>" },
+          { "key": "damp_heat", "name": "湿热质" },
+          { "key": "blood_stasis", "name": "血瘀质" },
+          { "key": "qi_stagnation", "name": "气郁质" },
+          { "key": "special", "name": "特禀质" },
+          { "key": "balanced", "name": "平和质" }
+        ]
+      },
       "/api/tcm/dispense-orders": [
         {
           "id": 21,
