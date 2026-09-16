@@ -1412,14 +1412,18 @@ async function renderHrFinance() {
   $("#page-desc").textContent = "人力资源（科室库/变动/合同/薪酬）、派驻下沉、财务集中核算与预算执行、物资出入库";
   const role = currentRole();
   const isDirector = ["director", "admin"].includes(role);
-  const [employees, secStats, finance, assets, departments, expiringContracts] = await Promise.all([
+  const [employees, secStats, finance, assets, departments, expiringContracts, orgs] = await Promise.all([
     api("/api/mgmt/employees"), api("/api/mgmt/secondments/stats"), api("/api/mgmt/finance/summary"),
-    api("/api/mgmt/assets"), api("/api/mgmt/departments"), api("/api/mgmt/staff-contracts/expiring?days=60")]);
+    api("/api/mgmt/assets"), api("/api/mgmt/departments"), api("/api/mgmt/staff-contracts/expiring?days=60"),
+    api("/api/organizations")]);
   const payroll = isDirector ? await api("/api/mgmt/payroll").catch(() => null) : null;
   const EST = { active: ["在岗", "green"], seconded: ["派驻中", "orange"], left: ["离职", ""] };
   const CHG_TYPES = { hire: "入职", regularize: "转正", transfer: "调动", leave: "离职" };
   const MV_TYPES = { inbound: "入库", issue: "领用", return: "归还", scrap: "报废" };
+  // 取值真源是 models/assets.py:Asset.status 的列注释（idle 目前没有端点能置上，留着是为了不吞值）
+  const ASSET_STATUS = { in_use: ["在用", "green"], idle: ["闲置", "orange"], scrapped: ["已报废", "red"] };
   const deptNames = Object.fromEntries(departments.map((d) => [d.id, d.name]));
+  const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   $("#page-body").innerHTML = `
     <div class="cards">
       <div class="card"><div class="label">在派人数</div><div class="value">${secStats.active_secondments}</div></div>
@@ -1430,7 +1434,9 @@ async function renderHrFinance() {
       <form class="inline" id="emp-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="name" placeholder="姓名" required>
         <input name="title" placeholder="职称"><input name="position" placeholder="岗位"><button>登记员工</button></form>
       <form class="inline" id="sec-form"><input name="employee_id" type="number" placeholder="员工ID" required>
-        <input name="to_org_id" type="number" placeholder="派驻机构ID" required><input name="start_date" placeholder="开始日期 YYYY-MM-DD" required><button>派驻下沉</button></form>
+        <input name="to_org_id" type="number" placeholder="派驻机构ID" required><input name="start_date" placeholder="开始日期 YYYY-MM-DD" required>
+        <select name="assignment_type" title="巡诊与短期支援不是下沉，选错会把国家监测指标做虚">${Object.entries(ASSIGN_TYPES).map(([v, t]) =>
+          `<option value="${v}">${t}</option>`).join("")}</select><button>派驻下沉</button></form>
       <form class="inline" id="fin-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="period" placeholder="期间 YYYY-MM" required>
         <select name="category"><option value="income">收入</option><option value="expense">支出</option></select>
         <input name="item" placeholder="科目"><input name="amount" type="number" step="any" placeholder="金额" required><button>记账</button></form>
@@ -1483,10 +1489,12 @@ async function renderHrFinance() {
       <div id="bud-exec"></div>`)}` : ""}
     ${panel("各单位收支（全部期间）", table(["机构", "收入", "支出", "结余"], finance.orgs, (o) =>
       `<tr><td>${o.org_id}</td><td>${o.income}</td><td>${o.expense}</td><td>${o.balance}</td></tr>`))}
-    ${panel("物资（出入库全程留痕）", table(["ID", "编码", "名称", "机构", "数量", "状态", "操作"], assets, (a) =>
-      `<tr><td>${a.id}</td><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${a.org_id}</td><td>${a.quantity}</td>
-       <td><span class="tag ${a.status === "scrapped" ? "red" : ""}">${a.status === "scrapped" ? "已报废" : a.status}</span></td>
-       <td>${a.status !== "scrapped" ? `<button class="btn secondary" data-assetmv="${a.id}">出入库</button>` : ""}
+    ${panel("物资（出入库全程留痕；报废与调拨都不可逆，后端无反向端点）", table(["ID", "编码", "名称", "机构", "数量", "状态", "操作"], assets, (a) =>
+      `<tr><td>${a.id}</td><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${esc(orgNames[a.org_id] || a.org_id)}</td><td>${a.quantity}</td>
+       <td>${statusTag(ASSET_STATUS, a.status)}</td>
+       <td>${a.status !== "scrapped" ? `<button class="btn secondary" data-assetmv="${a.id}">出入库</button>
+             <button class="btn secondary" data-assetxfer="${a.id}">调拨</button>
+             <button class="btn danger" data-assetscrap="${a.id}">报废</button>` : ""}
            <button class="btn" data-assethist="${a.id}">记录</button></td></tr>`))}
     <div class="panel hidden" id="assetmv-panel"><h3>物资出入库记录</h3><div id="assetmv-list"></div></div>`;
   $("#emp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/employees", formJson(e.target, ["org_id"]), "#hrf-msg"); };
@@ -1550,6 +1558,24 @@ async function renderHrFinance() {
         const qty = prompt("数量"); if (!qty) return;
         return postAction(`/api/mgmt/assets/${d.assetmv}/movements`,
           { movement_type: type, quantity: Number(qty), note: prompt("备注") || "" }, "#hrf-msg");
+      }
+      if (d.assetxfer) {
+        const asset = assets.find((a) => a.id === Number(d.assetxfer));
+        // 不把现属机构列进去：后端不拦"调给自己"，摆出来就是一次白点
+        const options = orgs.filter((o) => o.id !== asset?.org_id).map((o) => ({ value: o.id, label: o.name }));
+        if (!options.length) return setMsg("#hrf-msg", "没有可调入的其他机构", false);
+        const picked = await spdModal(`物资调拨：${asset ? asset.name : d.assetxfer}`, [
+          { name: "to_org_id", label: "调入机构（调出后归对方管，本机构不再能改）", type: "select", options },
+        ]);
+        if (!picked) return;
+        await api(`/api/mgmt/assets/${d.assetxfer}/transfer?to_org_id=${picked.to_org_id}`, { method: "POST" });
+        route();
+      }
+      if (d.assetscrap) {
+        // 报废没有反向端点：确认框里说清楚，而不是点完才发现回不去
+        if (!confirm("报废不可撤销（后端没有反向端点），此后这件物资不能再调拨或出入库。确认报废？")) return;
+        await api(`/api/mgmt/assets/${d.assetscrap}/scrap`, { method: "POST" });
+        route();
       }
       if (d.assethist) {
         const moves = await api(`/api/mgmt/assets/${d.assethist}/movements`);

@@ -2176,7 +2176,10 @@
       "第七批（2026-09-06）：人力资源 + 财务集中核算 + 物资。三处条件渲染都故意让它渲染出来——",
       "合同到期卡片与带橙色左边框的提醒面板要 /staff-contracts/expiring 非空；",
       "薪酬与预算两个面板要 director 角色（localStorage 固定 director）且 /payroll 非空。",
-      "两处 `class=\"panel hidden\" id=…` 的容器面板不迁：panel() 出不了额外 class 与 id，迁了就是改字节。"
+      "两处 `class=\"panel hidden\" id=…` 的容器面板不迁：panel() 出不了额外 class 与 id，迁了就是改字节。",
+      "第十六批（2026-09-16）：物资行加「调拨」「报废」——调拨要选调入机构，本页因此开始取 /api/organizations；",
+      "机构列随之由 ID 改印名字（不然调完只看到数字变了）。第三件物资故意挂一个不在机构名单里的 org_id 且处于 idle，",
+      "一次走到 orgNames 的回落分支与 ASSET_STATUS 的第三个取值；stats 补上后端真有的 total_secondments。"
     ],
     "fn": "renderHrFinance",
     "localStorage": {
@@ -2202,7 +2205,8 @@
         }
       ],
       "/api/mgmt/secondments/stats": {
-        "active_secondments": 7
+        "active_secondments": 7,
+        "total_secondments": 12
       },
       "/api/mgmt/finance/summary": {
         "consolidated": {
@@ -2241,6 +2245,28 @@
           "org_id": 3,
           "quantity": 1,
           "status": "scrapped"
+        },
+        {
+          "id": 7,
+          "code": "OF-003",
+          "name": "档案柜",
+          "org_id": 99,
+          "quantity": 0,
+          "status": "idle"
+        }
+      ],
+      "/api/organizations": [
+        {
+          "id": 2,
+          "name": "县人民医院 & 总院"
+        },
+        {
+          "id": 3,
+          "name": "XX镇卫生院<b>"
+        },
+        {
+          "id": 4,
+          "name": "YY社区服务中心"
         }
       ],
       "/api/mgmt/departments": [

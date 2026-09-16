@@ -88,7 +88,11 @@ def base(client, admin):
 
 @pytest.fixture(scope="module")
 def secondments(client, admin, base):
-    """emp1 派驻→结束（回到在岗），emp2 派驻在途——stats 两个口径都非零。"""
+    """emp1 派驻→结束（回到在岗），emp2 派驻在途——stats 两个口径都非零。
+
+    s1 **不送** `assignment_type`（走默认），s2 显式送 `rounds`：两条一起钉住
+    「默认仍是长期派驻」与「巡诊能落成巡诊」，见下方 `test_派驻类型…`。
+    """
     s1 = client.post(
         "/api/mgmt/secondments",
         json={"employee_id": base["emp1"]["id"], "to_org_id": base["org2"]["id"], "start_date": "2026-08-01"},
@@ -99,7 +103,12 @@ def secondments(client, admin, base):
     assert ended.status_code == 200, ended.text
     s2 = client.post(
         "/api/mgmt/secondments",
-        json={"employee_id": base["emp2"]["id"], "to_org_id": base["org1"]["id"], "start_date": "2026-08-15"},
+        json={
+            "employee_id": base["emp2"]["id"],
+            "to_org_id": base["org1"]["id"],
+            "start_date": "2026-08-15",
+            "assignment_type": "rounds",
+        },
         headers=admin,
     )
     assert s2.status_code == 201, s2.text
@@ -121,6 +130,42 @@ def test_派驻统计精确(client, admin, secondments):
     resp = client.get("/api/mgmt/secondments/stats", headers=admin)
     assert list(resp.json().keys()) == ["active_secondments", "total_secondments"]
     assert resp.json() == {"active_secondments": 1, "total_secondments": 2}
+
+
+def test_派驻类型可显式指定_不再一律落成长期派驻(client, admin, base, secondments):
+    """回归：本端点原先不收 `assignment_type`，建出来的派驻全按列默认落成长期派驻。
+
+    这不是"少一个字段"，是**把巡诊算进了国家监测指标**——`/api/staffing/dispatch-stats`
+    的"长期派驻满半年"只统计 `assignment_type == "long_term"` 的行
+    （`staffing.py` 里 `LONG_TERM_DAYS` 那段），而人财物页的派驻表单走的正是本端点。
+    同一张 `secondments` 表被两个模块写（另一头是 `/api/staffing/secondments`），
+    所以这里**用 staffing 的台账读回来**：读写两头看到的是同一个值才算真接上。
+    """
+    rows = client.get("/api/staffing/secondments?limit=100", headers=admin)
+    assert rows.status_code == 200, rows.text
+    by_id = {r["id"]: r for r in rows.json()}
+    assert secondments["s1"]["id"] in by_id and secondments["s2"]["id"] in by_id
+
+    # 不送这一项 → 仍是长期派驻（老调用方行为不变）
+    assert by_id[secondments["s1"]["id"]]["assignment_type"] == "long_term"
+    # 送了 rounds → 落成巡诊，且中文名由 staffing 的字典给出
+    s2_row = by_id[secondments["s2"]["id"]]
+    assert (s2_row["assignment_type"], s2_row["assignment_type_name"]) == ("rounds", "巡诊")
+
+
+def test_派驻类型取值范围由后端拦住(client, admin, base):
+    """取值不在四选一里要 422——不然前端下拉换个值就能写进统计口径。"""
+    resp = client.post(
+        "/api/mgmt/secondments",
+        json={
+            "employee_id": base["emp1"]["id"],
+            "to_org_id": base["org2"]["id"],
+            "start_date": "2026-09-01",
+            "assignment_type": "长期",
+        },
+        headers=admin,
+    )
+    assert resp.status_code == 422, resp.text
 
 
 # ---------------------------------------------------------------- ㉛ 集中核算

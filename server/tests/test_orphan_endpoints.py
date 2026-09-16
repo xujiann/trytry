@@ -155,9 +155,12 @@ KNOWN_ORPHANS: set[str] = {
     # access_logs（2）
     "/api/access-logs/mine",
     "/api/access-logs/stats",
-    # admin_mgmt（3）
-    "/api/mgmt/assets/{asset_id}/scrap",
-    "/api/mgmt/assets/{asset_id}/transfer",
+    # admin_mgmt（1）——两条物资的已接通（第十六批）；剩下这条不是"还没做界面"：
+    # 它与 /api/staffing/secondments/{id}/end 写同一张 secondments 表，而后者更全
+    # （不送日期默认今天、校验结束日不早于开始日、返回 18 键台账行）且**早有界面**
+    # （pages-mgmt.js 派驻台账的「结束派驻」）。再给它接一个入口，等于让同一个动作
+    # 有两条校验不同的路——所以不接，也不豁免（豁免是"按设计不需要界面"，这条不是）。
+    # 该怎么收口是架构裁定，已登记 docs/待裁定事项清单.md「mgmt / staffing 派驻两套实现」。
     "/api/mgmt/secondments/{secondment_id}/end",
     # auth（3）
     "/api/auth/totp/activate",

@@ -92,9 +92,22 @@ def list_employees(
 
 
 class SecondmentCreate(BaseModel):
+    """派驻入参。
+
+    `assignment_type` 不是可有可无的补充字段：不收它，本端点建出来的派驻**全部**
+    按列默认落成 `long_term`，而 `/api/staffing/dispatch-stats` 的"长期派驻满半年"
+    只认 `long_term`（`staffing.py:LONG_TERM_DAYS` 那段）——于是从人财物页派出去的
+    巡诊与短期支援，一律被算进国家监测指标。取值范围与 `staffing.SecondmentIn`
+    同一套（真源是 `models/hr.py:Secondment.assignment_type` 的列注释）。
+    默认值保持 `long_term`，老调用方不送这一项时行为不变。
+    """
+
     employee_id: int
     to_org_id: int
     start_date: DateStr
+    assignment_type: str = Field(
+        default="long_term", pattern="^(long_term|support|rounds|other)$"
+    )
 
 
 class SecondmentReceiptOut(BaseModel):
@@ -135,6 +148,7 @@ def second_employee(body: SecondmentCreate, db: Session = Depends(get_db)):
         from_org_id=employee.org_id,
         to_org_id=body.to_org_id,
         start_date=body.start_date,
+        assignment_type=body.assignment_type,
     )
     employee.status = "seconded"
     db.add(record)
