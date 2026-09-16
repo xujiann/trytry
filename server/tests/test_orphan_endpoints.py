@@ -199,12 +199,6 @@ KNOWN_ORPHANS: set[str] = {
     # drgs（2）
     "/api/drgs/in-stay-alerts",
     "/api/drgs/pre-check",
-    # education（5）
-    "/api/education/articles",
-    "/api/education/articles/{article_id}/publish",
-    "/api/education/courses/{course_id}/stats",
-    "/api/education/live-sessions/{session_id}/feedback",
-    "/api/education/live-sessions/{session_id}/recording",
     # eldercare（1）
     "/api/eldercare/stats",
     # emergency（1）

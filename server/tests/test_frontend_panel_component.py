@@ -220,7 +220,9 @@ MIGRATED_PAGES = {
     "renderExams": 5,               # 含一处条件渲染的危急值面板
     "renderRx": 4,                  # 点评按钮按角色 + 是否已点评显示，条件仍留在调用点
     "renderAppointments": 4,
-    "renderEducation": 4,           # 渲染末尾还会 drawEduGaps() 追加两个面板（不在本页计数内）
+    "renderEducation": 7,           # 渲染末尾还会 drawEduGaps() 追加两个面板（不在本页计数内）
+                                    # 功能完善·education（2026-09-16）：+健康宣教文章面板，
+                                    # +点「培训统计」「看评价」后写进 #edu-detail / #live-detail 的两个 panel()
     "renderInpatient": 4,           # 另有一处 class="panel hidden" 的医嘱单容器
     # 第十批 2026-09-06：中医药 / 疫苗批次冷链 / 互认目录 / 妇幼保健 / 驾驶舱。
     # 驾驶舱是首页，四个面板里三个是条件的（预警 / 慢病分级 / 绩效评分），

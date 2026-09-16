@@ -621,7 +621,9 @@ async function renderEducation() {
       </form><p class="msg" id="edu-msg"></p>`)}
     ${panel("课程列表", table(["ID", "课程", "形式", "类别", "讲者", "操作"], courses, (c) =>
       `<tr><td>${c.id}</td><td>${esc(c.title)}</td><td>${c.course_type === "live" ? "直播" : "点播"}</td><td>${esc(c.category)}</td><td>${esc(c.speaker)}</td>
-       <td><button class="btn secondary" data-exam="${c.id}">提交考核</button></td></tr>`))}
+       <td><button class="btn secondary" data-exam="${c.id}">提交考核</button>
+           <button class="btn secondary" data-cstats="${c.id}">培训统计</button></td></tr>`))}
+      <div id="edu-detail"></div>
     ${panel("我的学习记录", table(["课程", "成绩", "结果"], mine, (r) =>
       `<tr><td>${esc(r.title)}</td><td>${r.score}</td><td><span class="tag ${r.passed ? "green" : "red"}">${r.passed ? "合格" : "未合格"}</span></td></tr>`))}
     ${panel("直播管理（申请 → 管理层排期审核 → 结束；音视频通道为对接项）", `
@@ -630,26 +632,117 @@ async function renderEducation() {
         <input name="speaker" placeholder="主讲人">
         <input name="planned_at" placeholder="计划时间（如 2026-09-01 19:00）">
         <button>申请直播</button></form>
-      ${table(["ID", "主题", "主讲", "计划时间", "状态", "审核意见", "操作"], lives, (s) => {
+      ${table(["ID", "主题", "主讲", "计划时间", "状态", "审核意见", "回放", "操作"], lives, (s) => {
         const actions = s.status === "pending" && ["director", "admin"].includes(role)
           ? `<button class="btn secondary" data-liveok="${s.id}">排期</button>
              <button class="btn danger" data-liveno="${s.id}">驳回</button>`
           : s.status === "approved" && ["director", "operator", "admin"].includes(role)
-          ? `<button class="btn secondary" data-livefin="${s.id}">结束</button>` : "—";
+          ? `<button class="btn secondary" data-livefin="${s.id}">结束</button>` : "";
+        // 已结束的直播才谈得上回放与反馈（后端两处都是 409），所以按状态摆
+        const after = s.status === "finished"
+          ? `<button class="btn secondary" data-liverec="${s.id}">${s.recording_url ? "换回放" : "上传回放"}</button>
+             <button class="btn secondary" data-livefb="${s.id}">评价</button>
+             <button class="btn secondary" data-livefbs="${s.id}">看评价</button>` : "";
         return `<tr><td>${s.id}</td><td>${esc(s.title)}</td><td>${esc(s.speaker) || "—"}</td><td>${esc(s.planned_at) || "—"}</td>
-          <td>${statusTag(LS, s.status)}</td><td>${esc(s.review_comment) || "—"}</td><td>${actions}</td></tr>`;
-      })}`)}`;
+          <td>${statusTag(LS, s.status)}</td><td>${esc(s.review_comment) || "—"}</td>
+          <td>${s.recording_url ? `<a href="${esc(s.recording_url)}" target="_blank" rel="noopener">回放</a>` : "—"}</td>
+          <td>${actions + after || "—"}</td></tr>`;
+      })}
+      <div id="live-detail"></div>`)}
+    ${panel("健康宣教文章（公卫 / 经办编制，发布后进居民端）", `
+      <p class="desc">发布即对居民端可见（居民端只读已发布的）。管理端目前没有文章列表接口，
+        新建后这里给出文章 ID，发布按 ID 走——后端补上列表接口之前，先这样用</p>
+      <form class="inline" id="article-form">
+        <input name="title" placeholder="标题" required style="min-width:220px">
+        <select name="category"><option value="general">综合</option><option value="chronic">慢病</option>
+          <option value="maternal">妇幼</option><option value="infectious">传染病</option></select>
+        <input name="content" placeholder="正文" style="min-width:260px">
+        <button>新建文章</button>
+      </form>
+      <form class="inline" id="article-pub-form" style="margin-top:8px">
+        <input name="article_id" type="number" placeholder="文章ID" required>
+        <button class="secondary">发布</button>
+      </form>
+      <p class="msg" id="article-msg"></p>`)}`;
   $("#course-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/courses", formJson(e.target), "#edu-msg"); };
   $("#live-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/live-sessions", formJson(e.target), "#edu-msg"); };
-  $("#page-body").onclick = (e) => {
+  $("#article-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      // 新建回执只有 {id, status}，把 id 显出来——没有列表接口时它是发布的唯一线索
+      const a = await api("/api/education/articles", { method: "POST", body: JSON.stringify(formJson(e.target)) });
+      setMsg("#article-msg", `文章已新建：ID ${a.id}（${a.status === "published" ? "已发布" : "草稿"}），可在下方按 ID 发布`);
+      e.target.reset();
+    } catch (err) { setMsg("#article-msg", err.message, false); }
+  };
+  $("#article-pub-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const id = new FormData(e.target).get("article_id");
+    try {
+      const a = await api(`/api/education/articles/${id}/publish`, { method: "POST" });
+      setMsg("#article-msg", `文章 ${a.id} 已发布，居民端可见`);
+    } catch (err) { setMsg("#article-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
-    if (d.liveok) return postAction(`/api/education/live-sessions/${d.liveok}/review?approve=true&comment=${encodeURIComponent(prompt("审核意见") || "同意排期")}`, null, "#edu-msg");
-    if (d.liveno) return postAction(`/api/education/live-sessions/${d.liveno}/review?approve=false&comment=${encodeURIComponent(prompt("驳回理由") || "")}`, null, "#edu-msg");
+    if (d.liveok || d.liveno) {
+      const approve = Boolean(d.liveok);
+      const form = await spdModal(approve ? "排期审核" : "驳回直播申请", [
+        { name: "comment", label: approve ? "审核意见" : "驳回理由", type: "textarea" },
+      ]);
+      if (!form) return;
+      const comment = form.comment || (approve ? "同意排期" : "");
+      return postAction(
+        `/api/education/live-sessions/${d.liveok || d.liveno}/review?approve=${approve}&comment=${encodeURIComponent(comment)}`,
+        null, "#edu-msg");
+    }
     if (d.livefin) return postAction(`/api/education/live-sessions/${d.livefin}/finish`, null, "#edu-msg");
-    const id = d.exam;
-    if (!id) return;
-    const score = prompt("考核得分（0-100）"); if (score === null) return;
-    postAction(`/api/education/courses/${id}/exam`, { score: Number(score) }, "#edu-msg");
+    if (d.cstats) {
+      try {
+        const s = await api(`/api/education/courses/${d.cstats}/stats`);
+        $("#edu-detail").innerHTML = panel(`培训统计 · 课程 #${s.course_id}`,
+          spdCards([["参训人次", s.trainees], ["合格", s.passed], ["合格率", s.pass_rate_pct + "%"]]));
+      } catch (err) { setMsg("#edu-msg", err.message, false); }
+      return;
+    }
+    if (d.liverec) {
+      const form = await spdModal("上传课程回放（仅已结束的直播）", [
+        { name: "recording_url", label: "回放地址", required: true },
+      ]);
+      if (!form || !form.recording_url) return;
+      return postAction(`/api/education/live-sessions/${d.liverec}/recording`,
+        { recording_url: form.recording_url }, "#edu-msg");
+    }
+    if (d.livefb) {
+      const form = await spdModal("直播评价（一人一场一条，再评即覆盖）", [
+        { name: "rating", label: "评分", type: "select", value: "5",
+          options: [5, 4, 3, 2, 1].map((n) => ({ value: String(n), label: `${n} 分` })) },
+        { name: "comment", label: "评价", type: "textarea" },
+      ]);
+      if (!form) return;
+      try {
+        const r = await api(`/api/education/live-sessions/${d.livefb}/feedback`, { method: "POST",
+          body: JSON.stringify({ rating: Number(form.rating), comment: form.comment || "" }) });
+        setMsg("#edu-msg", r.updated ? "已更新你的评价" : "评价已提交");
+      } catch (err) { setMsg("#edu-msg", err.message, false); }
+      return;
+    }
+    if (d.livefbs) {
+      try {
+        const f = await api(`/api/education/live-sessions/${d.livefbs}/feedback`);
+        $("#live-detail").innerHTML = panel(
+          `直播评价 · 第 ${f.session_id} 场（${f.count} 条${f.avg_rating === null ? "" : `，均分 ${f.avg_rating}`}）`,
+          table(["用户", "评分", "评价"], f.feedbacks, (x) =>
+            `<tr><td>${x.user_id}</td><td>${x.rating}</td><td>${esc(x.comment) || "—"}</td></tr>`));
+      } catch (err) { setMsg("#edu-msg", err.message, false); }
+      return;
+    }
+    if (!d.exam) return;
+    const form = await spdModal("提交课程考核", [
+      { name: "score", label: "考核得分（0-100，≥60 合格）", type: "number", required: true },
+    ]);
+    if (!form) return;
+    return postAction(`/api/education/courses/${d.exam}/exam`, { score: form.score }, "#edu-msg");
   };
   await drawEduGaps();  // 块4⑳㉑ 课件资源与适宜技术实训
 }

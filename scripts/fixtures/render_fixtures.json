@@ -3509,7 +3509,8 @@
       "第九批（2026-09-06）：教育培训。直播表里的操作列按角色 + 状态分三支，",
       "夹具固定 director 并给 pending/approved/finished 三态，把三支都渲染到。",
       "渲染函数最后还会 await drawEduGaps() 往页面尾部追加两个面板（课件资源 / 实训计划），",
-      "那两个接口也要给数据，否则整页抛错——比对器会报「渲染失败」而不是「字节不同」。"
+      "那两个接口也要给数据，否则整页抛错——比对器会报「渲染失败」而不是「字节不同」。",
+      "功能完善·education（2026-09-16）：直播三条补 recording_url——已结束那条给一个带载荷的地址（回放链接 href 要 esc() 且 rel=noopener），另两条空串走「—」支。"
     ],
     "fn": "renderEducation",
     "localStorage": {
@@ -3547,6 +3548,7 @@
       "/api/education/live-sessions": [
         {
           "id": 11,
+          "recording_url": "",
           "title": "急救技能直播<b>",
           "speaker": "王医师",
           "planned_at": "2026-09-10 19:00",
@@ -3555,6 +3557,7 @@
         },
         {
           "id": 12,
+          "recording_url": "",
           "title": "合理用药",
           "speaker": "",
           "planned_at": "",
@@ -3563,6 +3566,7 @@
         },
         {
           "id": 13,
+          "recording_url": "https://vod.example.com/a<b>",
           "title": "院感防控",
           "speaker": "赵医师",
           "planned_at": "2026-09-01 19:00",
