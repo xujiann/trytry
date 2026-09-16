@@ -76,7 +76,8 @@ ROOT_FIXED_RENDERERS = [
       '$("#patient-form").onsubmit', '$("#patient-search").onsubmit'],
      "\n  await draw();"),
     ("core.js", "renderDicts",
-     ['$("#dict-system").onchange', '$("#dict-form").onsubmit'],
+     ['$("#dict-system").onchange', '$("#dict-form").onsubmit',
+      '$("#dict-import").onsubmit'],   # 功能完善·dictionaries（2026-09-16）：批量导入
      'await draw("diagnosis");'),
     ("pages-public.js", "renderCerts",
      ['$("#cert-form").onsubmit', '$("#cert-filter").onsubmit',

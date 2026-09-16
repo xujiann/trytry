@@ -1165,8 +1165,37 @@ async function renderDicts() {
         <input name="name" placeholder="名称" required>
         <button>新增条目</button>
       </form><p class="msg" id="dict-msg"></p>
-      <div id="dict-table"></div>`)}`;
+      <div id="dict-table"></div>
+      <h3 style="margin-top:14px">批量导入</h3>
+      <form id="dict-import">
+        <textarea name="entries" rows="6" required
+          style="width:100%;font-family:monospace;font-size:12px"
+          placeholder='[{"code":"E11.9","name":"2型糖尿病"},{"code":"I10","name":"原发性高血压"}]'></textarea>
+        <div class="inline" style="margin-top:8px"><button>导入到上方所选字典</button></div></form>
+      <p class="desc">JSON 数组，每条至少 <code>code</code> 与 <code>name</code>；还可带
+        spec / dosage_form / manufacturer / unit / insurance_code / national_code / extra。
+        <b>已存在的编码会被跳过，而不是更新。</b>要改一条已有条目的名称，导入是不管用的——
+        这一点与"导入"两个字给人的印象相反，所以写在这里。
+        整批一次提交，撞车的那一条自己跳过，不会把整批带回滚。</p>
+      <p class="msg" id="dict-import-msg"></p>`)}`;
   $("#dict-system").onchange = (e) => draw(e.target.value);
+  $("#dict-import").onsubmit = async (e) => {
+    e.preventDefault();
+    const system = $("#dict-system").value;
+    let entries;
+    try { entries = JSON.parse(new FormData(e.target).get("entries")); }
+    catch (err) { return setMsg("#dict-import-msg", `JSON 解析失败：${err.message}`, false); }
+    if (!Array.isArray(entries) || !entries.length) {
+      return setMsg("#dict-import-msg", "要一个非空的 JSON 数组", false);
+    }
+    try {
+      const r = await api(`/api/dictionaries/${system}/import`,
+        { method: "POST", body: JSON.stringify(entries) });
+      setMsg("#dict-import-msg",
+        `导入完成：新增 ${r.imported} 条，跳过（编码已存在）${r.skipped} 条`, true);
+      await draw(system);
+    } catch (err) { setMsg("#dict-import-msg", err.message, false); }
+  };
   $("#dict-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);

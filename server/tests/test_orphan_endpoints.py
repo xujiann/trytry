@@ -167,8 +167,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/auth/totp/activate",
     "/api/auth/totp/disable",
     "/api/auth/totp/setup",
-    # dictionaries（1）
-    "/api/dictionaries/{system_code}/import",
     # eldercare（1）
     "/api/eldercare/stats",
     # inpatient（1）

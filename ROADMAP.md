@@ -671,6 +671,17 @@
     夹具同批改正：AEFI 缺 `id`（转归按钮要它）、`outcome`、`record_id`、`org_id`；
     `outcome_name` 写的是「好转」而后端 `AEFI_OUTCOMES` 里是「**好转中**」；
     批次的 `manufacturer` 写了 `null` 而契约是 `str`。又两处"后端不产生的取值"。
+  - ✅ **第三十九批 `dictionaries`：1 条接通，欠账 14 → 13**（2026-09-16）。
+    「四统一」编码字典此前只能**一条一条敲**——国标 ICD-10 上万条，界面上没有任何批量入口。
+    加「批量导入」：JSON 数组，每条至少 code 与 name，另可带 spec / dosage_form /
+    manufacturer / unit / insurance_code / national_code / extra 七个可选键（入参模型有它们，
+    单条新增表单里一个都没有）。回执按后端原样印：新增 N 条、跳过（编码已存在）M 条。
+    **写在页面上的那句最要紧**：已存在的编码会被**跳过，而不是更新**。
+    入参模型叫 `CodeEntryUpsert`，但实现是 `if entry.code in existing: continue`，从不更新——
+    想靠重新导入去改一条已有条目的名称是不管用的，而这与"导入"两个字给人的印象正好相反。
+    不写这句，第一个拿它改名的人会以为改成功了。
+    另一句是并发口径：整批一次提交，撞车的那一条由 `insert_if_absent` 自己跳过，
+    不会把整批带回滚（后端注释里写得很清楚，值得让用的人也知道）。
   **顺序供裁定，不是决定。**
 
 ### 🚀 正式上线前（收口中）
