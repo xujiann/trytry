@@ -2095,10 +2095,11 @@ async function renderLabQc() {
 
 async function renderQuality() {
   $("#page-desc").textContent = "不良事件上报（可匿名）→ 审核 → 整改；结构化病历实时环节质控；病历抽检评分；院感上报核实";
-  const [events, estats, qstats, infections, mrSummary, mrRecords] = await Promise.all([
+  const [events, estats, qstats, infections, mrSummary, mrRecords, qcRules, infStats] = await Promise.all([
     api("/api/quality/adverse-events"), api("/api/quality/adverse-events-stats"),
     api("/api/quality/record-qc-stats"), api("/api/quality/infection-reports"),
-    api("/api/quality/records/qc-summary"), api("/api/quality/records")]);
+    api("/api/quality/records/qc-summary"), api("/api/quality/records"),
+    api("/api/quality/record-qc-rules"), api("/api/quality/infection-stats")]);
   const AES = { reported: ["已上报", "orange"], reviewed: ["已审核", ""], rectified: ["已整改", "green"] };
   const AET = { medication: "用药", device: "器械", fall: "跌倒", pressure_sore: "压疮", transfusion: "输血", identification: "查对", other: "其他" };
   const SITE = { respiratory: "呼吸道", surgical_site: "手术部位", urinary: "泌尿道", bloodstream: "血流", gastrointestinal: "消化道", other: "其他" };
@@ -2157,14 +2158,27 @@ async function renderQuality() {
         `<tr><td>${r.id}</td><td>${r.encounter_id}</td><td>${esc(r.doctor_name)}</td>
          <td>${esc(r.chief_complaint) || "（未填）"}</td><td>${r.qc_score}</td>
          <td><span class="tag ${MR_GRADE_COLOR[r.qc_grade] || ""}">${r.qc_grade}级</span></td>
-         <td><button class="btn secondary" data-mrqc="${r.id}">复评并看缺陷</button></td></tr>`)}`)}
+         <td><button class="btn secondary" data-mrqc="${r.id}">复评并看缺陷</button>
+             <button class="btn secondary" data-mrdetail="${r.id}">详情</button></td></tr>`)}`)}
+    ${panel("环节质控规则台账（管理员可改扣分与启停）", `
+      <p class="desc">规则是环节质控评分的唯一依据：停用一条，此后提交的病历不再按它扣分——
+        已评过的分数不会回溯重算（要重算走病历行的「复评」）</p>
+      ${table(["编码", "名称", "环节", "判定", "扣分", "状态", "操作"], qcRules, (r) =>
+        `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.field_name)}</td>
+         <td>${esc(r.rule_name)}</td><td>-${r.deduct_points}</td>
+         <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-ruleedit="${r.id}" data-points="${r.deduct_points}"
+              data-active="${r.active ? 1 : 0}">调整</button></td></tr>`)}
+      <p class="msg" id="rule-msg"></p>`)}
     ${panel("病历质控抽检（人工评分）", `
       <form class="inline" id="qc-rec-form">
         <select name="target_type"><option value="encounter">门急诊病历</option><option value="case_summary">病案首页</option></select>
         <input name="target_id" type="number" placeholder="对象ID" required>
         <input name="score" type="number" min="0" max="100" placeholder="评分0-100" required>
         <input name="defects" placeholder="缺陷项（分号分隔）" style="min-width:200px"><button>评分</button></form>`)}
-    ${panel("院感上报", `
+    ${panel(`院感上报（已确认 ${infStats.confirmed} 例 · 待核实 ${infStats.pending_verify} 例）`, `
+      <p class="desc">按部位分布（仅已确认）：${Object.entries(infStats.by_site || {})
+        .map(([k, v]) => `${esc(SITE[k] || k)} ${v}`).join("，") || "暂无确认病例"}</p>
       <form class="inline" id="inf-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="infection_site">${Object.entries(SITE).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
@@ -2219,21 +2233,60 @@ async function renderQuality() {
     } catch (err) { setMsg("#mr-msg", err.message, false); }
   };
   $("#qc-rec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/record-qc", formJson(e.target, ["target_id", "score"]), "#qa-msg"); };
+  const drawRecordDetail = async (recordId) => {
+    const d = await api(`/api/quality/records/${recordId}`);
+    const r = d.record;
+    $("#mr-result").innerHTML = `
+      <p style="font-size:13px">病历 #${r.id}（就诊 ${r.encounter_id} · ${esc(r.doctor_name) || "未署名"}）
+        得分 <b>${r.qc_score}</b> 分
+        <span class="tag ${MR_GRADE_COLOR[r.qc_grade] || ""}">${r.qc_grade}级</span>
+        · 提交 ${esc((r.created_at || "").replace("T", " ").slice(0, 16))}
+        · 最近修正 ${esc((r.updated_at || "").replace("T", " ").slice(0, 16))}</p>
+      ${table(["环节", "内容"], MR_FIELDS.map(([key, label]) => [label, r[key]]), ([label, value]) =>
+        `<tr><td style="white-space:nowrap">${esc(label)}</td><td>${esc(value) || "（未填）"}</td></tr>`)}
+      <p class="desc" style="margin-top:8px">下面是**落库时**的缺陷快照（评分当时的结论）；
+        规则改过之后要看新结论，请用同一行的「复评」</p>
+      ${d.defects.length
+        ? table(["规则", "环节", "缺陷描述", "扣分"], d.defects, (x) =>
+            `<tr style="color:#b23c3c"><td>${esc(x.rule_code)} ${esc(x.rule_name)}</td><td>${esc(x.field_name)}</td>
+             <td>${esc(x.message)}</td><td>-${x.deduct_points}</td></tr>`)
+        : '<p class="msg ok">评分当时无缺陷项</p>'}`;
+  };
   $("#inf-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/quality/infection-reports", formJson(e.target, ["org_id", "patient_id"]), "#qa-msg"); };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
-      if (d.review) {
-        const note = prompt("审核意见");
-        if (!note) return;
-        await api(`/api/quality/adverse-events/${d.review}/review`, { method: "POST", body: JSON.stringify({ note }) });
+      if (d.review || d.rectify) {
+        const rectify = Boolean(d.rectify);
+        const form = await spdModal(rectify ? "登记整改措施" : "不良事件审核", [
+          { name: "note", label: rectify ? "整改措施" : "审核意见", type: "textarea", required: true },
+        ]);
+        if (!form || !form.note) return;
+        // 两条路径分开写而不是拼动作名：孤儿闸门按字面匹配，拼出来的地址它看不见——
+        // 第一版就是拼的，闸门当场把这两条**已接通**的端点判回孤儿（本轮第二次踩）
+        const body = JSON.stringify({ note: form.note });
+        if (rectify) await api(`/api/quality/adverse-events/${d.rectify}/rectify`, { method: "POST", body });
+        else await api(`/api/quality/adverse-events/${d.review}/review`, { method: "POST", body });
         route();
+        return;
       }
-      if (d.rectify) {
-        const note = prompt("整改措施");
-        if (!note) return;
-        await api(`/api/quality/adverse-events/${d.rectify}/rectify`, { method: "POST", body: JSON.stringify({ note }) });
+      if (d.ruleedit) {
+        const form = await spdModal("调整质控规则（扣分与启停）", [
+          { name: "deduct_points", label: "扣分（0-100）", type: "number", value: d.points },
+          { name: "active", label: "状态", type: "select", value: d.active,
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+        ]);
+        if (!form) return;
+        // 后端 RecordQcRuleUpdate 只收这两项，且 exclude_unset——只送改动的那部分
+        await api(`/api/quality/record-qc-rules/${d.ruleedit}`, { method: "PATCH", body: JSON.stringify({
+          deduct_points: form.deduct_points, active: form.active === "1" }) });
         route();
+        return;
+      }
+      if (d.mrdetail) {
+        await drawRecordDetail(d.mrdetail);
+        $("#mr-result").scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
       }
       if (d.verify) {
         await api(`/api/quality/infection-reports/${d.verify}/verify?confirmed=${d.ok}`, { method: "POST" });

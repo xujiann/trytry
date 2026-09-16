@@ -234,11 +234,6 @@ KNOWN_ORPHANS: set[str] = {
     # projects（2）
     "/api/projects/milestones/{milestone_id}/done",
     "/api/projects/milestones/{milestone_id}/reopen",
-    # quality（4）
-    "/api/quality/infection-stats",
-    "/api/quality/record-qc-rules",
-    "/api/quality/record-qc-rules/{rule_id}",
-    "/api/quality/records/{record_id}",
     # rbac（2）
     "/api/rbac/permissions",
     "/api/rbac/roles/{role_id}/permissions/{permission_id}",

@@ -2301,7 +2301,8 @@
       "第七批（2026-09-06）：医疗质量（不良事件 / 病历环节质控 / 抽检 / 院感）。",
       "六个面板都是无条件渲染，夹具的作用是把四张表都喂出数据行——空列表下 table() 走",
       "「暂无数据」分支，比对器就证明不了表格那段没变。事件与病历各给一条带 XSS 载荷的文本。",
-      "注意 /api/quality/adverse-events 与 /adverse-events-stats 共前缀，靠最长前缀匹配分流。"
+      "注意 /api/quality/adverse-events 与 /adverse-events-stats 共前缀，靠最长前缀匹配分流。",
+      "功能完善·quality（2026-09-16）：新增质控规则两条（启用 / 停用两支，名称与判定名各带载荷）与院感统计（按部位分布含一个不在 SITE 字典里的键，走 `SITE[k] || k` 回落）。病历详情由点击后才渲染，不在本页比对面内。"
     ],
     "fn": "renderQuality",
     "api": {
@@ -2421,7 +2422,47 @@
           "qc_score": 78,
           "qc_grade": "乙"
         }
-      ]
+      ],
+      "/api/quality/record-qc-rules": [
+        {
+          "id": 1,
+          "code": "R-CC-01",
+          "name": "主诉不得为空 & 需≤20字",
+          "check_field": "chief_complaint",
+          "field_name": "主诉",
+          "rule": "required",
+          "rule_name": "必填",
+          "config": {
+            "max_len": 20
+          },
+          "deduct_points": 5,
+          "active": true
+        },
+        {
+          "id": 2,
+          "code": "R-DX-02<b>",
+          "name": "诊断依据须含体征描述",
+          "check_field": "diagnosis_basis",
+          "field_name": "诊断依据",
+          "rule": "keywords",
+          "rule_name": "关键词<img src=x onerror=alert(1)>",
+          "config": {
+            "keywords": [
+              "体征"
+            ]
+          },
+          "deduct_points": 10,
+          "active": false
+        }
+      ],
+      "/api/quality/infection-stats": {
+        "confirmed": 3,
+        "pending_verify": 1,
+        "by_site": {
+          "respiratory": 2,
+          "legacy_site<b>": 1
+        }
+      }
     }
   },
   "spdassess": {

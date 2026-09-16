@@ -196,7 +196,8 @@ MIGRATED_PAGES = {
     # 2486～7057 字符），迁完再比一次仍逐字符相同，全部 31 个夹具页一并重跑无一差异。
     "renderKnowledge": 3,           # 含一处带橙色左边框的临期提醒（走 accent）
     "renderHrFinance": 8,           # 另有两处 `class="panel hidden" id=…` 的容器面板不迁（规则也数不到，见下）
-    "renderQuality": 6,
+    "renderQuality": 7,
+                                    # 功能完善·quality（2026-09-16）：+环节质控规则台账面板
     "renderSpdAssess": 10,          # 功能完善·spd/assess（2026-09-15）：+工作量 / 积分规则 / 兑换记录三个面板，
                                     # +点「使用情况」「得分分析」后才渲染的两个 panel()；
                                     # 手写的那 1 处仍是点击后的下钻明细（KNOWN_UNMIGRATED_SHELLS，见下）
