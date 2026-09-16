@@ -1736,25 +1736,39 @@ async function renderPharmacy() {
   };
 }
 
+// active 是 bool；trend / risk_level 是后端的英文枚举，三处都要中文化（取值真源见 chronic.py）
+const TYPE_STATUS = { on: ["启用", "green"], off: ["停用", "red"] };
+const RISK_TREND = { rising: "上升", falling: "下降", stable: "平稳", insufficient_data: "数据不足" };
+const RISK_LEVEL = { high: ["高危", "red"], medium: ["中危", "orange"], low: ["低危", "green"] };
+
 async function renderChronic() {
   $("#page-desc").textContent = "病种目录驱动分级规则与随访周期，3级建议上转；膳食运动指导要点自动嵌入";
   const [chronicList, overdue, types] = await Promise.all([
-    api("/api/chronic"), api("/api/chronic/overdue"), api("/api/chronic/disease-types?active=true"),
+    // 目录改成**取全部**（不带 active）：停用的病种也要能在目录里看到并重新启用，
+    // 而且在管名单里那些挂着停用病种的档案，病种名也才查得到。
+    // 建档下拉仍只列启用的——后端对停用病种直接 422。
+    api("/api/chronic"), api("/api/chronic/overdue"), api("/api/chronic/disease-types"),
   ]);
   DISEASES = Object.fromEntries(types.map((t) => [t.code, t.name]));
+  const activeTypes = types.filter((t) => t.active);
+  const canType = currentRole() === "admin";
   const overdueIds = new Set(overdue.map((c) => c.id));
   // 各病种分级指标：随访录入时提示该病种应采集的指标与周期
-  const metricHint = types.map((t) => {
-    const keys = ((t.level_rules || {}).metrics || []).map((m) => `${m.name}(${m.key})`).join("、");
-    return `<tr><td>${esc(t.name)}</td><td>${esc(t.code)}</td><td>${esc(keys) || "—"}</td><td>${t.followup_interval_days} 天</td></tr>`;
-  }).join("");
+  const typeRows = table(["ID", "病种", "编码", "分级指标", "随访周期", "状态"].concat(canType ? ["操作"] : []),
+    types, (t) => {
+      const keys = ((t.level_rules || {}).metrics || []).map((m) => `${m.name}(${m.key})`).join("、");
+      return `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(t.code)}</td>
+        <td>${esc(keys) || "—"}</td><td>${t.followup_interval_days} 天</td>
+        <td>${statusTag(TYPE_STATUS, t.active ? "on" : "off")}</td>
+        ${canType ? `<td><button class="btn secondary" data-typeedit="${t.id}">编辑</button></td>` : ""}</tr>`;
+    });
   // 第二个面板的外壳**迁不了** `panel()`：标题里嵌着一个 `<span>`（随访超期人数），
   // 形状同药房页，组件会把它整段 `esc()` 掉。理由记在 docs/adr/0009 第十三批。
   $("#page-body").innerHTML = `
     ${panel("慢病建档", `
       <form class="inline" id="chronic-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <select name="disease">${Object.entries(DISEASES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="disease">${activeTypes.map((t) => `<option value="${esc(t.code)}">${esc(t.name)}</option>`).join("")}</select>
         <input name="managed_by_org_id" type="number" placeholder="管理机构ID" required>
         <button>建档</button>
       </form>
@@ -1768,14 +1782,19 @@ async function renderChronic() {
         <input name="next_due" placeholder="下次随访(留空按周期自动建议)">
         <button>提交随访</button>
       </form><p class="msg" id="chronic-msg"></p>
-      <h3 style="margin-top:14px">病种目录</h3>
-      <table><thead><tr><th>病种</th><th>编码</th><th>分级指标</th><th>随访周期</th></tr></thead><tbody>${metricHint}</tbody></table>`)}
+      <h3 style="margin-top:14px">病种目录（分级规则与随访周期的唯一数据源）</h3>
+      ${typeRows}
+      <p class="desc">停用一个病种后<b>不能再按它建档</b>（后端 422），
+        但已建的档案不受影响、仍按原规则随访——所以停用是"不再新增"，不是"作废存量"。
+        建档下拉只列启用中的病种。</p>`)}
     <div class="panel"><h3>在管名单${overdue.length ? `（<span style="color:#c62828">${overdue.length} 人随访超期</span>）` : ""}</h3>
-      ${table(["档案ID", "患者", "病种", "分级", "下次随访", "随访状态"], chronicList, (c) =>
+      ${table(["档案ID", "患者", "病种", "分级", "下次随访", "随访状态", "操作"], chronicList, (c) =>
         `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(DISEASES[c.disease] || c.disease)}</td>
          <td><span class="tag ${c.level === 3 ? "red" : c.level === 2 ? "orange" : "green"}">${c.level} 级</span></td>
          <td>${esc(c.next_due) || "—"}</td>
-         <td>${overdueIds.has(c.id) ? '<span class="tag red">超期</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
+         <td>${overdueIds.has(c.id) ? '<span class="tag red">超期</span>' : '<span class="tag green">正常</span>'}</td>
+         <td><button class="btn" data-risk="${c.id}">风险评分</button></td></tr>`)}
+      <div id="risk-box"></div></div>`;
   $("#chronic-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1801,6 +1820,55 @@ async function renderChronic() {
         body: JSON.stringify({ sbp: num("sbp"), dbp: num("dbp"), glucose: num("glucose"), metrics, next_due: f.get("next_due") }) });
       alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n下次随访：${result.next_due}${result.next_due_suggested ? "（按病种周期自动建议）" : ""}\n指导要点：${result.guidance_points}`);
       route();
+    } catch (err) { setMsg("#chronic-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { typeedit, risk } = e.target.dataset;
+    try {
+      if (typeedit) {
+        const t = types.find((x) => x.id === Number(typeedit));
+        const picked = await spdModal(`编辑病种 ${t ? t.code : typeedit}`, [
+          { name: "name", label: "病种名称（留空不改）", type: "text", value: t ? t.name : "" },
+          { name: "followup_interval_days", label: "随访周期（天，留空不改）", type: "number",
+            value: t ? t.followup_interval_days : "" },
+          { name: "active", label: "启停", type: "select", value: t && t.active ? "1" : "0",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+          { name: "guidance", label: "指导要点（留空不改）", type: "textarea", value: t ? t.guidance : "" },
+          { name: "level_rules", label: "分级规则 JSON（留空不改；结构由目录数据决定，不要删自定义键）",
+            type: "textarea", value: t ? JSON.stringify(t.level_rules || {}) : "" },
+        ]);
+        if (!picked) return;
+        // 后端 exclude_unset + `if value is not None`：**不送的键就是不改**。
+        // 所以留空的字段一律不放进 body，而不是送空串把人家的值清掉。
+        const body = { active: picked.active === "1" };
+        if (picked.name) body.name = picked.name;
+        if (picked.followup_interval_days) body.followup_interval_days = picked.followup_interval_days;
+        if (picked.guidance) body.guidance = picked.guidance;
+        if (picked.level_rules) {
+          try { body.level_rules = JSON.parse(picked.level_rules); }
+          catch (err) { return setMsg("#chronic-msg", `分级规则 JSON 解析失败：${err.message}`, false); }
+        }
+        await api(`/api/chronic/disease-types/${typeedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        return route();
+      }
+      if (risk) {
+        const r = await api(`/api/chronic/${risk}/risk`);
+        $("#risk-box").innerHTML = `
+          <div class="cards">
+            <div class="card"><span class="k">档案</span><b>${r.chronic_id}（${
+              esc(DISEASES[r.disease] || r.disease)}，${r.level} 级）</b></div>
+            <div class="card"><span class="k">趋势指标</span><b>${esc(r.metric) || "—"}</b></div>
+            <div class="card"><span class="k">最近三次</span><b>${
+              r.recent_values.length ? r.recent_values.join(" → ") : "—"}</b></div>
+            <div class="card"><span class="k">趋势</span><b>${esc(RISK_TREND[r.trend] || r.trend)}</b></div>
+            <div class="card"><span class="k">评分</span><b>${r.score}</b></div>
+            <div class="card"><span class="k">风险档</span><b>${statusTag(RISK_LEVEL, r.risk_level)}</b></div>
+          </div>
+          ${r.refer_up_suggested ? '<p class="msg err">评分达高危档，建议上转</p>' : ""}
+          <p class="desc">评分 = 分级基础分（1级20 / 2级50 / 3级80）+ 趋势修正（上升 +15，下降 −10，平稳 0）；
+            ≥70 高危、≥40 中危。<b>最近三次不足两次时趋势记「数据不足」、不作修正</b>——
+            一次随访推不出趋势。</p>`;
+      }
     } catch (err) { setMsg("#chronic-msg", err.message, false); }
   };
 }

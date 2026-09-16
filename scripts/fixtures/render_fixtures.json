@@ -5711,9 +5711,13 @@
       "一条 next_due 为空走兜底。第三条的病种不在 DISEASES 里，走 `|| c.disease`。"
     ],
     "fn": "renderChronic",
+    "localStorage": {
+      "medplat_role": "admin"
+    },
     "api": {
       "/api/chronic/disease-types": [
         {
+          "id": 1,
           "code": "hypertension",
           "name": "高血压 & 原发性",
           "level_rules": {
@@ -5728,13 +5732,34 @@
               }
             ]
           },
-          "followup_interval_days": 90
+          "guidance": "低盐饮食、规律服药",
+          "followup_interval_days": 90,
+          "active": true
         },
         {
+          "id": 2,
           "code": "diabetes<b>",
           "name": "糖尿病<img src=x onerror=alert(1)>",
           "level_rules": {},
-          "followup_interval_days": 30
+          "guidance": "",
+          "followup_interval_days": 30,
+          "active": true
+        },
+        {
+          "id": 3,
+          "code": "copd",
+          "name": "慢阻肺（已停用）",
+          "level_rules": {
+            "metrics": [
+              {
+                "name": "CAT 评分",
+                "key": "cat_score"
+              }
+            ]
+          },
+          "guidance": "戒烟、吸入剂使用指导",
+          "followup_interval_days": 60,
+          "active": false
         }
       ],
       "/api/chronic": [
