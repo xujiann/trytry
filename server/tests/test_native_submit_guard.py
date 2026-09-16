@@ -73,7 +73,8 @@ ROOT_FIXED_RENDERERS = [
     ("core.js", "renderPatients",
      ['$("#auth-grant-form").onsubmit', '$("#auth-list-form").onsubmit',
       '$("#auth-check-form").onsubmit', '$("#page-body").onclick',
-      '$("#patient-form").onsubmit', '$("#patient-search").onsubmit'],
+      '$("#patient-form").onsubmit', '$("#patient-search").onsubmit',
+      '$("#ehc-form").onsubmit'],   # 功能完善·patients（2026-09-16）：按卡号精确查
      "\n  await draw();"),
     ("core.js", "renderDicts",
      ['$("#dict-system").onchange', '$("#dict-form").onsubmit',

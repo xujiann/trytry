@@ -1132,6 +1132,16 @@ async function renderPatients() {
     ${panel("", `
       <form class="inline" id="patient-search"><input name="keyword" placeholder="姓名/身份证/健康卡号"><button>搜索</button></form>
       <div id="patient-table"></div>`)}
+    ${panel("按电子健康卡号精确查", `
+      <form class="inline" id="ehc-form">
+        <input name="ehc_no" placeholder="电子健康卡号" required style="min-width:220px">
+        <button>查档案</button></form>
+      <p class="desc">上面那个搜索是<b>模糊匹配</b>（姓名/身份证/卡号都往里匹），
+        窗口拿到一张卡时要的是<b>精确命中这一张</b>：卡号少打一位应当查不到，
+        而不是模糊匹出一串同前缀的人来让人挑。
+        两处都按角色脱敏（走 privacy 的 desensitize），没有全科室可见的明文。</p>
+      <p class="msg" id="ehc-msg"></p>
+      <div id="ehc-result"></div>`)}
     ${panel("档案调阅授权（医师/经办代录，患者知情）", `
       <form class="inline" id="auth-grant-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
@@ -1147,6 +1157,23 @@ async function renderPatients() {
         <select name="scope"><option value="all">全部档案</option><option value="encounter">就诊记录</option><option value="exam">检查报告</option></select>
         <button>校验调阅权限</button></form>
       <p class="msg" id="auth-msg"></p><div id="auth-table"></div>`)}`;
+  $("#ehc-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const ehc = new FormData(e.target).get("ehc_no").trim();
+    try {
+      const p = await api(`/api/patients/${encodeURIComponent(ehc)}`);
+      $("#ehc-result").innerHTML = table(
+        ["ID", "电子健康卡号", "姓名", "身份证号", "性别", "电话"], [p], (x) =>
+        `<tr><td>${x.id}</td><td><span class="tag">${esc(x.ehc_no)}</span></td><td>${esc(x.name)}</td>
+         <td>${esc(x.id_card)}</td><td>${esc(x.gender)}</td><td>${esc(x.phone)}</td></tr>`);
+      setMsg("#ehc-msg", "", true);
+    } catch (err) {
+      // 404 的文案是后端的「患者不存在」，原样给出来——这里最怕的是把"查不到"
+      // 说成别的意思，窗口会以为系统坏了而不是卡号打错了
+      $("#ehc-result").innerHTML = "";
+      setMsg("#ehc-msg", err.message, false);
+    }
+  };
   const SCOPES = { all: "全部档案", encounter: "就诊记录", exam: "检查报告" };
   const drawAuths = async (pid) => {
     const auths = await api(`/api/patients/${pid}/authorizations`);
