@@ -242,7 +242,7 @@ MIGRATED_PAGES = {
     # 这批开始能迁**无标题的裸面板**了——组件加了 `title === ""` 不出 `<h3>` 的分支，
     # 在此之前这类外壳一迁就是往 DOM 里加一个空元素（见 test_panel的空标题分支必须是严格等于空串）。
     "renderUsers": 5,               # 含一处无标题裸面板（用户表）
-    "renderEldercare": 4,           # 含一处无标题裸面板；预警走 accent；这页是 innerHTML= 之后再 +=
+    "renderEldercare": 5,           # 含一处无标题裸面板；预警走 accent；这页是 innerHTML= 之后再 +=
     "renderCerts": 5,               # 证明表格由末尾的 draw() 写进 #cert-table（不在本页计数内）
                                     # 功能完善·certs（2026-09-16）：+死因报告卡批量导出面板（限管理层）
     "renderOutpatientDocs": 6,      # 其中两个包在 `${encounterId ? … : ""}` 里

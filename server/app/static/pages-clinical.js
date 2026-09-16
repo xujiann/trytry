@@ -983,8 +983,9 @@ async function renderEducation() {
 
 async function renderEldercare() {
   $("#page-desc").textContent = "自理能力评估（Barthel自动分级）、失能老人清单、健康预警（重度失能专案+年度复评到期）";
-  const [assessments, disabled, alerts] = await Promise.all([
-    api("/api/eldercare/assessments"), api("/api/eldercare/disabled"), api("/api/eldercare/alerts")]);
+  const [assessments, disabled, alerts, stats] = await Promise.all([
+    api("/api/eldercare/assessments"), api("/api/eldercare/disabled"),
+    api("/api/eldercare/alerts"), api("/api/eldercare/stats")]);
   $("#page-body").innerHTML = `
     ${alerts.total ? panel(`⚠ 老年健康预警（${alerts.total}）`,
       table(["患者", "预警类型", "提示", "末次评估"], alerts.alerts, (a) =>
@@ -1001,6 +1002,28 @@ async function renderEldercare() {
       </form><p class="msg" id="eld-msg"></p>`)}
     ${disabled.length ? panel(`⚠ 失能老人清单（${disabled.length}）`, table(["患者", "分级", "ADL"], disabled, (d) =>
       `<tr><td>${d.patient_id}</td><td><span class="tag red">${esc(d.care_level)}</span></td><td>${d.adl_score}</td></tr>`)) : ""}
+    ${panel("老年健康统计", `
+      <div class="cards">
+        <div class="card"><div class="label">已评估老人</div><div class="value">${stats.assessed_people}</div></div>
+        <div class="card"><div class="label">评估条数</div><div class="value">${stats.assessment_records}</div></div>
+        <div class="card"><div class="label">失能人数</div>
+          <div class="value${stats.disabled_count ? " warn" : ""}">${stats.disabled_count}</div></div>
+        <div class="card"><div class="label">失能率</div><div class="value">${
+          stats.disabled_rate_pct === null ? "无评估" : stats.disabled_rate_pct + "%"}</div></div>
+        <div class="card"><div class="label">认知已筛 / 未筛</div>
+          <div class="value">${stats.cognitive.screened} / ${stats.cognitive.unscreened}</div></div>
+        <div class="card"><div class="label">认知平均分</div><div class="value">${
+          stats.cognitive.avg_score === null ? "无筛查" : stats.cognitive.avg_score}</div></div>
+        <div class="card"><div class="label">体质已辨 / 未辨</div>
+          <div class="value">${stats.tcm_constitution.done} / ${stats.tcm_constitution.not_done}</div></div>
+      </div>
+      <p class="desc">${esc(stats.caliber)}</p>
+      ${Object.keys(stats.by_care_level).length
+        ? barChart(Object.entries(stats.by_care_level), { unit: " 人" })
+        : '<p class="empty">尚无评估</p>'}
+      <p class="desc"><b>"未做"与"0 分"不是一回事</b>：认知筛查与体质辨识本就不是每次评估必做，
+        所以它们各自单列了"未做"的人数，而不是按 0 分并进平均值——
+        并进去会让筛查做得少的机构看起来认知水平特别差。</p>`)}
     ${panel("", table(["ID", "患者", "ADL", "认知", "分级", "日期"], assessments, (a) =>
       `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${a.adl_score}</td><td>${a.cognitive_score}</td>
        <td><span class="tag ${a.care_level === "能力完好" ? "green" : "red"}">${esc(a.care_level)}</span></td><td>${esc(a.assessed_date)}</td></tr>`))}`;

@@ -4603,6 +4603,28 @@
     ],
     "fn": "renderEldercare",
     "api": {
+      "/api/eldercare/stats": {
+        "assessed_people": 128,
+        "assessment_records": 197,
+        "by_care_level": {
+          "能力完好": 74,
+          "轻度失能 &": 31,
+          "中度失能": 15,
+          "重度失能<b>": 8
+        },
+        "disabled_count": 54,
+        "disabled_rate_pct": 42.19,
+        "cognitive": {
+          "screened": 96,
+          "unscreened": 32,
+          "avg_score": 24.6
+        },
+        "tcm_constitution": {
+          "done": 81,
+          "not_done": 47
+        },
+        "caliber": "按每位老人最近一次评估统计（非评估条数）；认知筛查与体质辨识未做的单列，不按 0 分并入 &<b>"
+      },
       "/api/eldercare/alerts": {
         "total": 2,
         "alerts": [
