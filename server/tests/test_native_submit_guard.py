@@ -106,6 +106,11 @@ ROOT_FIXED_RENDERERS = [
     ("pages-clinical.js", "renderAccessLogs",
      ['$("#al-search").onsubmit'],
      "\n  await draw();"),
+    ("pages-clinical.js", "renderSurveillance",   # 功能完善·surveillance（2026-09-16）：资源台账筛选
+     ['$("#syn-form").onsubmit', '$("#pat-form").onsubmit', '$("#res-form").onsubmit',
+      '$("#res-filter").onsubmit', '$("#page-body").onclick'],
+     # 两个 handler 里也各有一句同文的 await，故带换行+两空格前缀只锚函数顶层那条
+     "\n  await drawResources();"),
     ("pages-clinical.js", "renderVaccineSupply",   # 功能完善·vaccine_supply（2026-09-16）：临期批次筛选
      ['$("#vb-form").onsubmit', '$("#cc-form").onsubmit', '$("#aefi-form").onsubmit',
       '$("#vx-form").onsubmit', '$("#page-body").onclick'],

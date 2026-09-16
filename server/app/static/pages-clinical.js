@@ -1391,10 +1391,75 @@ async function renderSurveillance() {
         `<tr><td>${esc(o.org_name || o.org_id)}</td><td>${o.total}</td>` +
         `<td>${o.below_min.length ? '<span class="tag danger">' + o.below_min.map((x) => esc(x.name) + `(${x.quantity}/${x.min_quantity})`).join("、") + "</span>" : "—"}</td>` +
         `<td>${o.expired.length ? '<span class="tag warn">' + o.expired.map((x) => esc(x.name) + `(${esc(x.expire_date)})`).join("、") + "</span>" : "—"}</td></tr>`)}
+      <h3 style="margin-top:14px">资源台账</h3>
+      <form class="inline" id="res-filter">
+        <select name="resource_type"><option value="">全部类型</option><option value="material">应急物资</option>
+          <option value="team">应急队伍</option><option value="equipment">应急装备</option></select>
+        <label style="font-size:13px"><input type="checkbox" name="shortage_only" value="1"> 只看缺口与过期</label>
+        <button>查询</button></form>
+      <p class="desc">上面那张表按机构汇总，只说"哪家缺、缺什么"；要<b>补货、调下限、换效期</b>
+        得在这张台账上逐条改。应急队伍没有效期（后端允许留空），所以效期一列的「—」
+        对队伍是正常的，对物资才是没填。</p>
+      <div id="res-list"></div>
     `)}`;
+  const drawResources = async () => {
+    const f = new FormData($("#res-filter"));
+    const params = new URLSearchParams();
+    if (f.get("resource_type")) params.set("resource_type", f.get("resource_type"));
+    if (f.get("shortage_only")) params.set("shortage_only", "true");
+    const rows = await api(`/api/surveillance/resources?${params}`);
+    $("#res-list").innerHTML = table(
+      ["机构", "类型", "名称", "数量/下限", "效期", "联系方式", "位置", "操作"], rows, (r) =>
+      `<tr><td>${r.org_id}</td><td>${esc(r.resource_type_name)}</td><td>${esc(r.name)}</td>
+       <td>${r.below_min ? `<span class="tag danger">${r.quantity}${esc(r.unit)}/${r.min_quantity}</span>`
+         : `${r.quantity}${esc(r.unit)}/${r.min_quantity}`}</td>
+       <td>${r.expire_date
+         ? (r.expired ? `<span class="tag warn">${esc(r.expire_date)} 已过期</span>` : esc(r.expire_date))
+         : "—"}</td>
+       <td>${esc(r.contact) || "—"}</td><td>${esc(r.location) || "—"}</td>
+       <td><button class="btn sm" data-resedit="${r.id}">编辑</button></td></tr>`)
+      + `<p class="desc">共 ${rows.length} 条${rows.length >= 500 ? "——<b>已截到 500 条</b>，请按类型收窄" : ""}。</p>`;
+  };
   $("#syn-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/syndromes", formJson(e.target, ["org_id", "case_count", "threshold"]), "#syn-msg"); };
   $("#pat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/pathogens", formJson(e.target, ["org_id", "tested_count", "positive_count"]), "#pat-msg"); };
   $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/resources", formJson(e.target, ["org_id", "quantity", "min_quantity"]), "#res-msg"); };
+  $("#res-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawResources(); } catch (err) { setMsg("#res-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { resedit } = e.target.dataset;
+    if (!resedit) return;
+    // 数量与下限**用 text 而不是 number**：spdModal 的 number 字段把空串折成 0，
+    // 于是"留空不改"与"改成 0"变成同一个值——而下限 0 是合法且有意义的取值
+    // （= 不设下限，后端 `bool(r.min_quantity)` 据此判 below_min）。用 text 才分得开。
+    const picked = await spdModal(`编辑应急资源 ${resedit}`, [
+      { name: "quantity", label: "数量（留空不改）", type: "text", value: "" },
+      { name: "min_quantity", label: "储备下限（留空不改；填 0 表示不设下限）", type: "text", value: "" },
+      { name: "expire_date", label: "效期 YYYY-MM-DD（留空不改；应急队伍本就没有效期）", type: "text", value: "" },
+      { name: "contact", label: "联系方式（留空不改）", type: "text", value: "" },
+      { name: "location", label: "存放位置（留空不改）", type: "text", value: "" },
+    ]);
+    if (!picked) return;
+    // 后端 exclude_unset + `if value is not None`：留空的键不送
+    const body = {};
+    for (const k of ["quantity", "min_quantity"]) {
+      if (picked[k] === "") continue;
+      if (!/^\d+$/.test(picked[k])) return setMsg("#res-msg", `${k} 要填非负整数`, false);
+      body[k] = Number(picked[k]);
+    }
+    if (picked.expire_date) body.expire_date = picked.expire_date;
+    if (picked.contact) body.contact = picked.contact;
+    if (picked.location) body.location = picked.location;
+    if (!Object.keys(body).length) return setMsg("#res-msg", "五项都留空了，没有要改的", false);
+    try {
+      await api(`/api/surveillance/resources/${resedit}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMsg("#res-msg", "已更新", true);
+      await drawResources();
+    } catch (err) { setMsg("#res-msg", err.message, false); }
+  };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
+  await drawResources();
 }
 
 

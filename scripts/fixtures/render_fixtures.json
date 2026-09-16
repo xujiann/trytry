@@ -2009,6 +2009,38 @@
           "pathogen": "阳性率较前一窗口抬升≥50%<img src=x onerror=alert(1)>"
         }
       },
+      "/api/surveillance/resources": [
+        {
+          "id": 51,
+          "org_id": 3,
+          "resource_type": "material",
+          "resource_type_name": "应急物资 &",
+          "name": "N95 口罩<img src=x onerror=alert(1)>",
+          "quantity": 200,
+          "unit": "只",
+          "min_quantity": 1000,
+          "expire_date": "2026-06-30",
+          "expired": true,
+          "below_min": true,
+          "contact": "总务科 8012",
+          "location": "1 号库<b>"
+        },
+        {
+          "id": 52,
+          "org_id": 4,
+          "resource_type": "team",
+          "resource_type_name": "应急队伍",
+          "name": "流调队",
+          "quantity": 12,
+          "unit": "人",
+          "min_quantity": 0,
+          "expire_date": "",
+          "expired": false,
+          "below_min": false,
+          "contact": "",
+          "location": ""
+        }
+      ],
       "/api/surveillance/resources/readiness": {
         "caliber": "低于下限或已过期即计入<img src=x onerror=alert(1)>",
         "orgs": [
