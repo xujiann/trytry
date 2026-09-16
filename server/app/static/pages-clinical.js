@@ -70,9 +70,12 @@ async function renderArchive() {
 }
 
 async function renderUsers() {
-  $("#page-desc").textContent = "账号开通、角色分配与变更留痕、系统参数配置（仅管理员）";
-  const [usersList, orgs, roleChanges, params] = await Promise.all([
-    api("/api/users"), api("/api/organizations"), api("/api/users/role-changes"), api("/api/mgmt/params")]);
+  $("#page-desc").textContent = "账号开通、停用与解困（重置口令 / 动态口令）、角色分配与变更留痕、系统参数配置（仅管理员）";
+  const [usersList, orgs, roleChanges, params, roleMap] = await Promise.all([
+    api("/api/users"), api("/api/organizations"), api("/api/users/role-changes"), api("/api/mgmt/params"),
+    api("/api/users/roles")]);
+  // 角色字典以后端为准（自定义角色只在后端有名字），六个内置角色仍有本地兜底
+  const roles = { ...ROLE_NAMES, ...(roleMap || {}) };
   const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   $("#page-body").innerHTML = `
     ${panel("开通账号", `
@@ -80,7 +83,7 @@ async function renderUsers() {
         <input name="username" placeholder="用户名（≥3位）" required minlength="3">
         <input name="password" type="password" placeholder="初始密码（≥6位）" required minlength="6">
         <input name="full_name" placeholder="姓名">
-        <select name="role">${Object.entries(ROLE_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="role">${Object.entries(roles).map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</select>
         <select name="org_id"><option value="">不挂机构</option>${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
         <button>开通</button>
       </form><p class="msg" id="user-msg"></p>`)}
@@ -90,15 +93,19 @@ async function renderUsers() {
         <input name="new_password" type="password" placeholder="新密码（≥6位）" required minlength="6">
         <button>修改</button>
       </form><p class="msg" id="pwd-msg"></p>`)}
-    ${panel("", table(["ID", "用户名", "姓名", "角色", "所属机构", "操作"], usersList, (u) =>
+    ${panel("", table(["ID", "用户名", "姓名", "角色", "所属机构", "状态", "操作"], usersList, (u) =>
       `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td>${esc(u.full_name) || "—"}</td>
-       <td><span class="tag">${ROLE_NAMES[u.role] || esc(u.role)}</span></td>
+       <td><span class="tag">${esc(roles[u.role] || u.role)}</span></td>
        <td>${u.org_id ? esc(orgNames[u.org_id] || u.org_id) : "—"}</td>
-       <td><button class="btn secondary" data-chrole="${u.id}">调角色</button></td></tr>`))}
+       <td>${u.status === "disabled" ? '<span class="tag red">已停用</span>' : '<span class="tag green">在用</span>'}</td>
+       <td><button class="btn secondary" data-chrole="${u.id}">调角色</button>
+           <button class="btn secondary" data-ustatus="${u.id}" data-to="${u.status === "disabled" ? "active" : "disabled"}">${u.status === "disabled" ? "启用" : "停用"}</button>
+           <button class="btn secondary" data-resetpw="${u.id}" data-name="${esc(u.username)}">重置口令</button>
+           <button class="btn secondary" data-resettotp="${u.id}" data-name="${esc(u.username)}">重置动态口令</button></td></tr>`))}
     ${panel("角色变更记录（留痕，变更即吊销旧令牌）",
       table(["用户ID", "原角色", "新角色", "操作人", "时间"], roleChanges, (r) =>
-        `<tr><td>${r.user_id}</td><td><span class="tag">${ROLE_NAMES[r.old_role] || esc(r.old_role)}</span></td>
-         <td><span class="tag green">${ROLE_NAMES[r.new_role] || esc(r.new_role)}</span></td>
+        `<tr><td>${r.user_id}</td><td><span class="tag">${esc(roles[r.old_role] || r.old_role)}</span></td>
+         <td><span class="tag green">${esc(roles[r.new_role] || r.new_role)}</span></td>
          <td>${r.changed_by}</td><td>${esc(r.at.slice(0, 16).replace("T", " "))}</td></tr>`))}
     ${panel("系统参数配置（键值集中管理）", `
       <form class="inline" id="param-form">
@@ -132,20 +139,53 @@ async function renderUsers() {
   };
   $("#param-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/params", formJson(e.target), "#param-msg"); };
   $("#page-body").onclick = async (e) => {
-    const id = e.target.dataset.chrole;
-    if (!id) return;
-    const keys = Object.keys(ROLE_NAMES);
-    const pick = prompt(`新角色（${keys.map((k, i) => `${i + 1}=${ROLE_NAMES[k]}`).join("，")}）输入序号`);
-    const role = keys[Number(pick) - 1]; if (!role) return;
-    try {
-      await api(`/api/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) });
-      route();
-    } catch (err) { setMsg("#user-msg", err.message, false); }
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const chrole = el("data-chrole"), ustatus = el("data-ustatus"), resetPw = el("data-resetpw"), resetTotp = el("data-resettotp");
+    if (chrole) {
+      // 原先是系统输入框输序号（P2-38 存量弹窗录入），改成下拉；角色字典同表格一致
+      const form = await spdModal("调整角色（变更即吊销旧令牌）", [
+        { name: "role", label: "新角色", type: "select",
+          options: Object.entries(roles).map(([k, v]) => ({ value: k, label: v })) },
+      ]);
+      if (!form || !form.role) return;
+      try {
+        await api(`/api/users/${chrole.dataset.chrole}/role`, { method: "PATCH", body: JSON.stringify({ role: form.role }) });
+        route();
+      } catch (err) { setMsg("#user-msg", err.message, false); }
+      return;
+    }
+    if (ustatus) {
+      const to = ustatus.dataset.to;
+      if (to === "disabled" && !confirm("停用后该账号的既有登录立即失效，重新启用也须重新登录。确认停用？")) return;
+      return postAction(`/api/users/${ustatus.dataset.ustatus}/status`, { status: to }, "#user-msg", "PATCH");
+    }
+    if (resetPw) {
+      const form = await spdModal(`重置口令 · ${resetPw.dataset.name}`, [
+        { name: "new_password", label: "临时口令（≥6 位；只能用一次，本人首次登录须改密，既有登录同时吊销）",
+          type: "password", required: true },
+      ]);
+      if (!form || !form.new_password) return;
+      try {
+        await api(`/api/users/${resetPw.dataset.resetpw}/reset-password`,
+          { method: "POST", body: JSON.stringify({ new_password: form.new_password }) });
+        setMsg("#user-msg", `已重置 ${resetPw.dataset.name} 的口令：既有登录已吊销，本人首次登录须改密`);
+      } catch (err) { setMsg("#user-msg", err.message, false); }
+      return;
+    }
+    if (resetTotp) {
+      if (!confirm(`确认重置 ${resetTotp.dataset.name} 的动态口令？其下次登录按未开通处理（换手机 / 令牌丢失时用）。`)) return;
+      try {
+        await api(`/api/users/${resetTotp.dataset.resettotp}/totp/reset`, { method: "POST" });
+        setMsg("#user-msg", `已重置 ${resetTotp.dataset.name} 的动态口令`);
+      } catch (err) { setMsg("#user-msg", err.message, false); }
+    }
   };
 }
 
+const LOGIN_CHANNEL_NAMES = { password: "员工口令", sms: "居民端短信", wechat: "居民端微信" };
+
 async function renderAudit() {
-  $("#page-desc").textContent = "全部写操作留痕（等保三级安全审计），仅管理员可查";
+  $("#page-desc").textContent = "全部写操作留痕（等保三级安全审计）、登录留痕、哈希链校验与归档导出，仅管理员可查";
   const draw = async (username = "") => {
     const logs = await api(`/api/audit?limit=200${username ? `&username=${encodeURIComponent(username)}` : ""}`);
     $("#audit-table").innerHTML = table(["时间", "用户", "操作", "接口", "结果"], logs, (l) =>
@@ -153,13 +193,50 @@ async function renderAudit() {
        <td><span class="tag">${esc(l.method)}</span></td><td>${esc(l.path)}</td>
        <td><span class="tag ${l.status_code < 400 ? "green" : "red"}">${l.status_code}</span></td></tr>`);
   };
+  const drawLogins = async (params = {}) => {
+    const q = Object.entries(params).filter(([, v]) => v !== "" && v != null)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+    const rows = await api(`/api/audit/logins?limit=100${q ? "&" + q : ""}`);
+    $("#login-table").innerHTML = table(["时间", "登录名", "用户ID", "IP", "通道", "结果", "失败原因"], rows, (l) =>
+      `<tr><td>${esc((l.created_at || "").replace("T", " ").slice(0, 19))}</td><td>${esc(l.username)}</td>
+       <td>${l.user_id ?? "—"}</td><td>${esc(l.ip)}</td><td>${esc(LOGIN_CHANNEL_NAMES[l.channel] || l.channel)}</td>
+       <td><span class="tag ${l.success ? "green" : "red"}">${l.success ? "成功" : "失败"}</span></td>
+       <td>${esc(l.fail_reason || "—")}</td></tr>`);
+  };
   $("#page-body").innerHTML = `
     ${panel("", `
-      <form class="inline" id="audit-search"><input name="username" placeholder="按用户名过滤"><button>查询</button></form>
-      <div id="audit-table"></div>`)}`;
+      <form class="inline" id="audit-search"><input name="username" placeholder="按用户名过滤"><button>查询</button>
+        <button type="button" class="secondary" id="audit-verify">校验哈希链</button>
+        <button type="button" class="secondary" id="audit-export">导出归档（NDJSON）</button></form>
+      <p class="msg" id="audit-msg"></p>
+      <div id="audit-verify-result"></div>
+      <div id="audit-table"></div>`)}
+    ${panel("登录留痕（成功与失败都记，等保 E1）", `
+      <form class="inline" id="login-search">
+        <input name="username" placeholder="登录名">
+        <select name="success"><option value="">全部结果</option><option value="true">成功</option><option value="false">失败</option></select>
+        <select name="channel"><option value="">全部通道</option>${Object.entries(LOGIN_CHANNEL_NAMES).map(([k, v]) =>
+          `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <button>查询</button>
+      </form>
+      <div id="login-table"></div>`)}`;
   $("#audit-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("username")); };
+  $("#login-search").onsubmit = async (e) => { e.preventDefault(); await drawLogins(formJson(e.target)); };
+  $("#audit-verify").onclick = async () => {
+    try {
+      const v = await api("/api/audit/verify?limit=5000");
+      // 能力边界后端写在 caliber 里，原样给人看：哈希链能发现改动，拦不住重算整条链的人
+      $("#audit-verify-result").innerHTML = `<p class="msg ${v.valid ? "ok" : "err"}">${v.valid ? "链完好"
+          : `链在 #${v.broken_at} 断开：${esc(v.reason || "")}`}；校验 ${v.checked} 条${v.legacy_unchained
+          ? `，未入链历史 ${v.legacy_unchained} 条` : ""}${v.partial_segment ? "（起点不是链首，只证明这一段自洽）" : ""}${v.note
+          ? `；${esc(v.note)}` : ""}</p>${v.caliber ? `<p class="desc">${esc(v.caliber)}</p>` : ""}`;
+    } catch (err) { setMsg("#audit-msg", err.message, false); }
+  };
+  $("#audit-export").onclick = () =>
+    downloadCsv("/api/audit/export", `audit-${new Date().toISOString().slice(0, 10)}.ndjson`, "#audit-msg");
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();
+  await drawLogins();
 }
 
 async function renderAccessLogs() {

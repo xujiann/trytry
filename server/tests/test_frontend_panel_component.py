@@ -296,7 +296,8 @@ MIGRATED_PAGES = {
     # 知情同意 / 院前急救 / 在线咨询 / 病理标本 / 行政项目 / 角色权限 / 公卫应急 /
     # 危急值 / 室内质控 / 绩效指标）。**至此四个页面文件的可迁外壳全部清零。**
     "renderArchive": 2,
-    "renderAudit": 1,               # 整页一个无标题裸面板；表格由末尾的 draw() 写进 #audit-table
+    "renderAudit": 2,               # 整页一个无标题裸面板；表格由末尾的 draw() 写进 #audit-table。
+                                    # 功能完善·users（2026-09-15）：+登录留痕面板（drawLogins() 写进 #login-table）
     "renderAccessLogs": 1,          # 同上，写进 #al-table
     "renderConsents": 2,            # drawConsents() 不带参数调，走的是"没输入患者ID"那一支
     "renderEmergency": 2,

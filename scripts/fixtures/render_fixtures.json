@@ -4178,7 +4178,8 @@
       "（`<div class=\"panel\">${table(…)}</div>`，表格自带表头），迁它靠 panel(\"\", …)。",
       "用户第三条故意给一个不在 ROLE_NAMES 里的角色 + 一个不在 orgs 里的 org_id，",
       "把 `ROLE_NAMES[u.role] || esc(u.role)` 与 `orgNames[…] || u.org_id` 两条兜底都走到。",
-      "role-changes 与 params 的时间都要 ≥16 字符——页面直接 `.slice(0, 16)`。"
+      "role-changes 与 params 的时间都要 ≥16 字符——页面直接 `.slice(0, 16)`。",
+    "功能完善·users（2026-09-15）：用户补 status（active / disabled / 缺省三支）；角色字典改从 /api/users/roles 取，多给一个带载荷的自定义角色，钉住下拉与标签都 esc()。"
     ],
     "fn": "renderUsers",
     "api": {
@@ -4186,6 +4187,7 @@
         {
           "id": 1,
           "username": "admin<b>",
+          "status": "active",
           "full_name": "张三 & 平台管理员",
           "role": "admin",
           "org_id": 3
@@ -4193,6 +4195,7 @@
         {
           "id": 2,
           "username": "doc01",
+          "status": "disabled",
           "full_name": "",
           "role": "doctor",
           "org_id": null
@@ -4244,7 +4247,16 @@
           "description": "",
           "updated_at": "2026-09-01T08:00:00"
         }
-      ]
+      ],
+      "/api/users/roles": {
+        "admin": "平台管理员",
+        "director": "管理层",
+        "doctor": "医师",
+        "pharmacist": "药师",
+        "public_health": "公卫人员",
+        "operator": "经办人员",
+        "auditor<b>": "自定义·审计员<img src=x onerror=alert(1)>"
+      }
     }
   },
   "eldercare": {
@@ -6651,7 +6663,8 @@
     "_why": [
       "第十七批（2026-09-06）：写操作审计。整页一个无标题裸面板；",
       "表格由末尾的 `await draw()` 写进 #audit-table（P2-31 之后取数放最后）。",
-      "两条分别走 status_code<400（绿）与 >=400（红）；at 直接 slice(0,19)，要给够长度。"
+      "两条分别走 status_code<400（绿）与 >=400（红）；at 直接 slice(0,19)，要给够长度。",
+    "功能完善·users（2026-09-15）：新增登录留痕面板（/api/audit/logins，由末尾 drawLogins() 写进 #login-table）：一条成功、一条失败（登录名 / 失败原因 / 通道各带载荷，通道不在字典里走 `|| l.channel` 兜底）。"
     ],
     "fn": "renderAudit",
     "api": {
@@ -6669,6 +6682,28 @@
           "method": "DELETE",
           "path": "/api/rbac/roles/9",
           "status_code": 403
+        }
+      ],
+      "/api/audit/logins": [
+        {
+          "id": 501,
+          "username": "admin",
+          "user_id": 1,
+          "ip": "10.0.0.8",
+          "success": true,
+          "fail_reason": "",
+          "channel": "password",
+          "created_at": "2026-09-15T08:01:02"
+        },
+        {
+          "id": 500,
+          "username": "root'<img src=x onerror=alert(1)>",
+          "user_id": null,
+          "ip": "203.0.113.9",
+          "success": false,
+          "fail_reason": "用户不存在<b>",
+          "channel": "legacy_channel<b>",
+          "created_at": "2026-09-15T07:59:59"
         }
       ]
     }

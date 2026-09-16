@@ -93,7 +93,8 @@ ROOT_FIXED_RENDERERS = [
      ["kb.onsubmit", '$("#kb-search").onsubmit', '$("#page-body").onclick'],
      "\n  await draw();"),
     ("pages-clinical.js", "renderAudit",
-     ['$("#audit-search").onsubmit'],
+     ['$("#audit-search").onsubmit', '$("#login-search").onsubmit',   # 功能完善·users（2026-09-15）：登录留痕筛选
+      '$("#audit-verify").onclick', '$("#audit-export").onclick'],
      "\n  await draw();"),
     ("pages-clinical.js", "renderAccessLogs",
      ['$("#al-search").onsubmit'],

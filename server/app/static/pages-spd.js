@@ -87,7 +87,7 @@ function spdModal(title, fields) {
         return `<textarea name="${esc(f.name)}" rows="3" style="width:100%"
           placeholder="${esc(f.placeholder || "")}">${esc(val)}</textarea>`;
       }
-      return `<input name="${esc(f.name)}" type="${f.type === "number" ? "number" : "text"}"
+      return `<input name="${esc(f.name)}" type="${f.type === "number" ? "number" : f.type === "password" ? "password" : "text"}"
         value="${esc(val)}" placeholder="${esc(f.placeholder || "")}"${f.required ? " required" : ""}>`;
     };
     overlay.innerHTML = `<form class="panel" style="min-width:320px;max-width:440px;margin:0">

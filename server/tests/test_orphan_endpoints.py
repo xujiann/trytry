@@ -285,14 +285,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/tcm/constitution/spec",
     # tcm_heritage（1）
     "/api/tcm-heritage/simulations/{case_id}/attempts",
-    # users（7）
-    "/api/audit/export",
-    "/api/audit/logins",
-    "/api/audit/verify",
-    "/api/users/roles",
-    "/api/users/{user_id}/reset-password",
-    "/api/users/{user_id}/status",
-    "/api/users/{user_id}/totp/reset",
     # vaccine_supply（2）
     "/api/vaccine-supply/aefi/{report_id}/outcome",
     "/api/vaccine-supply/expiring",
