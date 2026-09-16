@@ -255,7 +255,7 @@ MIGRATED_PAGES = {
                                     # 功能完善·cssd（2026-09-16）：+基层物品申领与中心响应面板
     "renderMedwaste": 5,            # 滞留预警是条件面板
                                     # 功能完善·medwaste（2026-09-16）：+点位台账、+转运人员工作量两个面板
-    "renderOrgs": 2,
+    "renderOrgs": 3,
     "renderPatients": 3,            # 患者表由末尾的 draw() 写进 #patient-table（不在本页计数内）
     # 第十三批 2026-09-06：core.js 收尾六页（会诊 / 签约 / 字典 / 转诊 / 药房 / 慢病），9 处。
     # **core.js 至此没有可迁的手写外壳了**——剩的 5 处是 2 处非债（文档注释示例、组件自身

@@ -1055,6 +1055,38 @@ async function renderOrgs() {
   $("#page-desc").textContent = "县—乡—村三级医共体成员单位";
   const orgs = await api("/api/organizations");
   const options = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
+  // 机构树体检是 require_admin：非管理员拿到 403，照驾驶舱绩效那处的先例**不阻塞本页**
+  let healthHtml = "";
+  try {
+    const h = await api("/api/organizations/tree-health");
+    healthHtml = panel(`机构树体检（${h.referral_ready ? "分级转诊口径已满足" : "有缺陷，会卡住分级审核"}）`, `
+      <div class="cards">
+        <div class="card"><div class="label">机构总数</div><div class="value">${h.total}</div></div>
+        <div class="card"><div class="label">合法树根</div><div class="value">${h.roots}</div></div>
+        <div class="card"><div class="label">最深链路</div><div class="value">${h.max_depth} 层</div></div>
+        <div class="card"><div class="label">缺上级机构</div>
+          <div class="value${h.orphans.length ? " warn" : ""}">${h.orphans.length}</div></div>
+        <div class="card"><div class="label">层级错位</div>
+          <div class="value${h.broken_chains.length ? " warn" : ""}">${h.broken_chains.length}</div></div>
+      </div>
+      <p class="desc">ADR-0004 起，转诊分级审核按 <code>parent_id</code> 逐级上收。
+        <b>非顶层机构缺上级，它经手的转诊单就只有全域角色推得动，其余账号一律 403</b>——
+        这张表的用处是在越权校验"咬人"之前先把树建好，而不是等基层报障。
+        「最深链路」是纯信息项，不参与判定。</p>
+      ${h.orphans.length ? `<h3 style="margin-top:12px">缺上级机构（会被 403）</h3>${
+        table(["ID", "名称", "层级", "类型"], h.orphans, (o) =>
+          `<tr><td>${o.id}</td><td>${esc(o.name)}</td><td>${esc(LEVELS[o.level] || o.level)}</td>
+           <td>${esc(ORG_TYPES[o.org_type] || o.org_type)}</td></tr>`)}` : ""}
+      ${h.broken_chains.length ? `<h3 style="margin-top:12px">层级错位</h3>${
+        table(["ID", "名称", "层级", "实际上级层级", "应为", "链路"], h.broken_chains, (c) =>
+          `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(LEVELS[c.level] || c.level)}</td>
+           <td>${esc(LEVELS[c.parent_level] || c.parent_level)}</td>
+           <td>${esc(c.expected_parent_levels.map((x) => LEVELS[x] || x).join(" / "))}</td>
+           <td style="font-size:12px">${esc(c.chain.join(" → "))}</td></tr>`)}
+        <p class="desc">判据是<b>层级相邻</b>而不是链路长度：市→县→乡→村四层是合法的市级牵头架构，
+          而县→村室→村室 只有三层却已经错位——那张单子的「卫生院审核」会由一家村卫生室完成，
+          环节名与实际处理机构对不上，闭环统计跟着失真。</p>` : ""}`);
+  } catch (err) { /* 非管理员看不到体检，本页其余部分照常 */ }
   $("#page-body").innerHTML = `
     ${panel("新增机构", `
       <form class="inline" id="org-form">
@@ -1064,6 +1096,7 @@ async function renderOrgs() {
         <select name="parent_id"><option value="">无上级机构</option>${options}</select>
         <button>新增</button>
       </form><p class="msg" id="org-msg"></p>`)}
+    ${healthHtml}
     ${panel("", table(["ID", "名称", "类型", "层级", "上级机构ID"], orgs, (o) =>
       `<tr><td>${o.id}</td><td>${esc(o.name)}</td><td>${ORG_TYPES[o.org_type] || esc(o.org_type)}</td>
        <td><span class="tag">${LEVELS[o.level] || esc(o.level)}</span></td><td>${o.parent_id ?? "—"}</td></tr>`))}`;

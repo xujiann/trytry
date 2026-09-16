@@ -5387,6 +5387,32 @@
     ],
     "fn": "renderOrgs",
     "api": {
+      "/api/organizations/tree-health": {
+        "total": 12,
+        "roots": 1,
+        "max_depth": 3,
+        "referral_ready": false,
+        "orphans": [
+          {
+            "id": 7,
+            "name": "ZZ社区卫生服务中心 &",
+            "level": "township",
+            "org_type": "community<b>",
+            "parent_id": null
+          }
+        ],
+        "broken_chains": [
+          {
+            "id": 9,
+            "name": "AA村卫生室<img src=x onerror=alert(1)>",
+            "level": "village",
+            "parent_id": 8,
+            "parent_level": "village",
+            "expected_parent_levels": ["township"],
+            "chain": ["县人民医院 &", "BB村卫生室<b>", "AA村卫生室"]
+          }
+        ]
+      },
       "/api/organizations": [
         {
           "id": 3,
