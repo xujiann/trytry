@@ -223,12 +223,16 @@ async function renderCerts() {
     api("/api/certs/stats"), api("/api/checkups"), api("/api/checkups/abnormal")]);
   // 总检后端是 require_roles("doctor")（admin 全通）；公卫岗只录入，摆了只会点出 403
   const canReview = ["doctor", "admin"].includes(currentRole());
+  // 死因报告卡与导出后端是 require_roles("director")——法定上报口径，与总检不是同一把钥匙
+  const canDeathCard = ["director", "admin"].includes(currentRole());
   const draw = async (certType = "") => {
     const certs = await api(`/api/certs${certType ? `?cert_type=${certType}` : ""}`);
     $("#cert-table").innerHTML = table(["编号", "类型", "姓名", "性别", "日期", "诊断/说明", "机构", "操作"], certs, (c) =>
       `<tr><td><span class="tag">${esc(c.cert_no)}</span></td><td>${CERT_TYPES[c.cert_type] || esc(c.cert_type)}</td>
        <td>${esc(c.name)}</td><td>${esc(c.gender)}</td><td>${esc(c.event_date)}</td><td>${esc(c.detail) || "—"}</td><td>${c.org_id}</td>
-       <td><button class="btn secondary" data-printcert="${c.id}">打印</button></td></tr>`);
+       <td><button class="btn secondary" data-printcert="${c.id}">打印</button>
+           ${canDeathCard && c.cert_type === "death"
+             ? `<button class="btn" data-deathcard="${c.id}">死因报告卡</button>` : ""}</td></tr>`);
   };
   $("#page-body").innerHTML = `
     <div class="cards">
@@ -250,6 +254,17 @@ async function renderCerts() {
         <select name="cert_type"><option value="">全部类型</option>${Object.entries(CERT_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <button>筛选</button></form>
       <div id="cert-table"></div>`)}
+    <div class="panel hidden" id="deathcard-panel"><h3>死因报告卡</h3><div id="deathcard-body"></div></div>
+    ${canDeathCard ? panel("死因报告卡批量导出（CSV，按死亡日期筛）", `
+      <form class="inline" id="death-export">
+        <input name="date_from" placeholder="死亡日期起 YYYY-MM-DD" pattern="\\d{4}-\\d{2}-\\d{2}">
+        <input name="date_to" placeholder="止 YYYY-MM-DD" pattern="\\d{4}-\\d{2}-\\d{2}">
+        <button>导出</button>
+      </form>
+      <p class="desc"><b>平台不直连人口死亡信息登记管理系统</b>：本导出供手工网报或县疾控
+        前置机对接使用。身份证号与电话<b>按调用者角色脱敏</b>（非 admin 一律掩码），
+        每张卡的患者档案调阅都落 AccessLog。单次最多导出 2000 条。</p>
+      <p class="msg" id="death-msg"></p>`) : ""}
     ${panel("成人健康体检登记（医师/公卫，异常项自动标记并入360档案）", `
       <form class="inline" id="chk-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
@@ -288,9 +303,39 @@ async function renderCerts() {
          <td>${esc(i.unit) || "—"}</td><td>${esc(i.ref_range) || "—"}</td>
          <td>${statusTag(CHK_ITEM, i.abnormal ? "bad" : "ok")}</td></tr>`)}`;
   };
+  const deathForm = $("#death-export");
+  if (deathForm) deathForm.onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const qs = [f.get("date_from") ? `date_from=${f.get("date_from")}` : "",
+                f.get("date_to") ? `date_to=${f.get("date_to")}` : ""].filter(Boolean).join("&");
+    downloadCsv(`/api/certs/death-report-cards/export.csv${qs ? `?${qs}` : ""}`,
+      "death_report_cards.csv", "#death-msg");
+  };
   $("#page-body").onclick = async (e) => {
-    const { printcert, printchk, chkitems, chkreview } = e.target.dataset;
+    const { printcert, printchk, chkitems, chkreview, deathcard } = e.target.dataset;
     try {
+      if (deathcard) {
+        const c = await api(`/api/certs/${deathcard}/death-report-card`);
+        $("#deathcard-panel").classList.remove("hidden");
+        // 身份证号与电话已由后端按角色脱敏，这里只转义、不再叠一层掩码（叠了看的人以为是两段号）
+        $("#deathcard-body").innerHTML = `<div class="cards">
+          <div class="card"><span class="k">证明编号</span><b>${esc(c.cert_no)}</b></div>
+          <div class="card"><span class="k">姓名</span><b>${esc(c.name)}</b></div>
+          <div class="card"><span class="k">性别</span><b>${esc(c.gender)}</b></div>
+          <div class="card"><span class="k">身份证号</span><b>${esc(c.id_card) || "—"}</b></div>
+          <div class="card"><span class="k">联系电话</span><b>${esc(c.phone) || "—"}</b></div>
+          <div class="card"><span class="k">出生日期</span><b>${esc(c.birth_date) || "—"}</b></div>
+          <div class="card"><span class="k">死亡日期</span><b>${esc(c.death_date)}</b></div>
+          <div class="card"><span class="k">死因诊断</span><b>${esc(c.cause_of_death) || "—"}</b></div>
+          <div class="card"><span class="k">签发机构</span><b>${esc(c.org_name) || c.org_id}</b></div>
+          <div class="card"><span class="k">签发人</span><b>${esc(c.issued_by) || "—"}</b></div>
+          <div class="card"><span class="k">签发时间</span><b>${
+            esc(c.issued_at.slice(0, 16).replace("T", " "))}</b></div></div>
+        <p class="desc">按人口死亡信息登记管理系统的字段集导出<b>平台已存字段</b>；
+          身份证号与电话按调用者角色脱敏，本次调阅已落 AccessLog。</p>`;
+        return;
+      }
       if (chkitems) return await showItems(chkitems, null);
       if (chkreview) {
         const picked = await spdModal(`体检 ${chkreview} 总检`, [

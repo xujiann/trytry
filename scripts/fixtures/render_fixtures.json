@@ -4493,11 +4493,16 @@
       "证明表格不是随 innerHTML 一起渲染的——`await draw()` 放在渲染函数**最后**",
       "（P2-31 的根修：先挂监听再取数），它会再拉一次 /api/certs 写进 #cert-table，",
       "夹具缺这个接口整页抛错。证明第二条给一个不在 CERT_TYPES 里的类型走兜底支。",
-      "体检两条分别走 has_abnormal 真/假，覆盖红标签与「正常」两支。"
+      "体检两条分别走 has_abnormal 真/假，覆盖红标签与「正常」两支。",
+      "第二十一批（2026-09-16）：体检行加「分项结果」与「总检」。",
+      "第二十四批（2026-09-16）：加死因报告卡与批量导出。角色固定 **admin**——",
+      "admin 同时满足总检（doctor|admin）与死因报告卡（director|admin）两条判据，一次把两支都渲染到；",
+      "证明表另补一条 cert_type=death 的行，否则「死因报告卡」那一支根本渲染不到",
+      "（原来两条是 birth 与一个目录外类型）。"
     ],
     "fn": "renderCerts",
     "localStorage": {
-      "medplat_role": "doctor"
+      "medplat_role": "admin"
     },
     "api": {
       "/api/certs/stats": {
@@ -4525,6 +4530,16 @@
           "event_date": "2026-03-05",
           "detail": "心源性猝死 & 待查",
           "org_id": 4
+        },
+        {
+          "id": 3,
+          "cert_no": "DC-2026-003",
+          "cert_type": "death",
+          "name": "王五 &",
+          "gender": "男",
+          "event_date": "2026-04-18",
+          "detail": "急性心肌梗死",
+          "org_id": 3
         }
       ],
       "/api/checkups": [

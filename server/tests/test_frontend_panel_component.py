@@ -241,7 +241,8 @@ MIGRATED_PAGES = {
     # 在此之前这类外壳一迁就是往 DOM 里加一个空元素（见 test_panel的空标题分支必须是严格等于空串）。
     "renderUsers": 5,               # 含一处无标题裸面板（用户表）
     "renderEldercare": 4,           # 含一处无标题裸面板；预警走 accent；这页是 innerHTML= 之后再 +=
-    "renderCerts": 4,               # 证明表格由末尾的 draw() 写进 #cert-table（不在本页计数内）
+    "renderCerts": 5,               # 证明表格由末尾的 draw() 写进 #cert-table（不在本页计数内）
+                                    # 功能完善·certs（2026-09-16）：+死因报告卡批量导出面板（限管理层）
     "renderOutpatientDocs": 4,      # 其中两个包在 `${encounterId ? … : ""}` 里
     "renderFund": 4,                # 其中三个包在 `${picked ? … : ""}` 里
     # 第十二批 2026-09-06：core.js 五页（绩效考核 / 消毒供应 / 医疗废物 / 成员机构 / 居民主索引）。
