@@ -680,12 +680,21 @@ async function renderCssd() {
   await drawCssdCosts();  // 块4⑥ 消毒供应成本核算
 }
 
+const WASTE_TRACE_STEPS = { "收集": "green", "暂存": "orange", "交接": "" };
+
 async function renderMedwaste() {
-  $("#page-desc").textContent = "收集→暂存→交接全过程监管，超2天未交接自动预警";
-  const [wastes, alerts] = await Promise.all([api("/api/medwaste"), api("/api/medwaste/alerts")]);
+  $("#page-desc").textContent =
+    "点位台账 → 收集 → 入暂存 → 交接全过程监管，超2天未交接自动预警；扫码追溯与转运工作量";
+  const [wastes, alerts, locations, stats] = await Promise.all([
+    api("/api/medwaste"), api("/api/medwaste/alerts"),
+    api("/api/medwaste/locations?include_inactive=true"), api("/api/medwaste/handler-stats"),
+  ]);
   const alertIds = new Set(alerts.map((w) => w.id));
   const WT = { infectious: "感染性", sharp: "损伤性", pathological: "病理性", pharmaceutical: "药物性", chemical: "化学性" };
   const WS = { collected: ["已收集", "orange"], stored: ["已暂存", "orange"], handed_over: ["已交接", "green"] };
+  // 暂存间按机构分组：入暂存只能选本机构的暂存间（后端 422 拦跨机构）
+  const storageOf = (orgId) => locations.filter((l) =>
+    l.active && l.location_type === "storage" && l.org_id === orgId);
   $("#page-body").innerHTML = `
     ${panel("收集登记", `
       <form class="inline" id="waste-form">
@@ -696,12 +705,40 @@ async function renderMedwaste() {
         <button>登记</button>
       </form><p class="msg" id="waste-msg"></p>`)}
     ${alerts.length ? panel(`⚠ 滞留预警（${alerts.length}）`, `<p class="desc">收集超过2天仍未交接</p>`) : ""}
-    ${panel("", table(["ID", "机构", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
-      return `<tr><td>${w.id}</td><td>${w.org_id}</td><td>${esc(WT[w.waste_type] || w.waste_type)}</td><td>${w.weight_kg}kg</td>
+    ${panel("", `
+      <form class="inline" id="trace-form">
+        <input name="trace_code" placeholder="追溯码 MW-YYYYMMDD-序号" required style="min-width:220px">
+        <button class="secondary">扫码追溯</button>
+      </form><p class="msg" id="trace-msg"></p>
+      <div id="trace-box"></div>
+      ${table(["ID", "机构", "追溯码", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
+      return `<tr><td>${w.id}</td><td>${w.org_id}</td><td><span class="tag">${esc(w.trace_code || "—")}</span></td>
+        <td>${esc(WT[w.waste_type] || w.waste_type)}</td><td>${w.weight_kg}kg</td>
         <td>${esc(w.collected_date)}${alertIds.has(w.id) ? ' <span class="tag red">滞留</span>' : ""}</td>
         <td>${esc(w.handler_name) || "—"}</td><td>${statusTag(WS, w.status)}</td>
-        <td>${w.status !== "handed_over" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : "—"}</td></tr>`;
-    }))}`;
+        <td>${w.status === "collected" ? `<button class="btn secondary" data-store="${w.id}" data-org="${w.org_id}">入暂存</button>` : ""}
+            ${w.status !== "handed_over" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : ""}
+            ${w.status === "handed_over" ? "—" : ""}</td></tr>`;
+    })}`)}
+    ${panel("点位台账（产生点 / 暂存间）", `
+      <p class="desc">停用不删行——科室撤并很常见，但历史医废的来源必须永远查得到</p>
+      <form class="inline" id="loc-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="name" placeholder="点位名称" required>
+        <select name="location_type"><option value="source">产生点</option><option value="storage">暂存间</option></select>
+        <input name="manager_name" placeholder="负责人">
+        <button>新建点位</button>
+      </form><p class="msg" id="loc-msg"></p>
+      ${table(["ID", "机构", "名称", "类型", "负责人", "状态", "操作"], locations, (l) =>
+        `<tr><td>${l.id}</td><td>${l.org_id}</td><td>${esc(l.name)}</td>
+         <td>${esc(l.location_type_name)}</td><td>${esc(l.manager_name) || "—"}</td>
+         <td>${l.active ? '<span class="tag green">在用</span>' : '<span class="tag">已停用</span>'}</td>
+         <td><button class="btn secondary" data-loc-toggle="${l.id}" data-on="${l.active ? 0 : 1}">${l.active ? "停用" : "启用"}</button></td></tr>`)}`)}
+    ${panel("转运人员工作量", `
+      ${table(["员工ID", "姓名", "交接批次", "重量(kg)"], stats.handlers, (h) =>
+        `<tr><td>${h.employee_id}</td><td>${esc(h.name)}</td><td>${h.count}</td><td>${h.weight_kg}</td></tr>`)}
+      <p class="desc">未挂员工档案的交接单列 ${stats.unlinked_records.count} 批 /
+        ${stats.unlinked_records.weight_kg} kg——只填了名字的历史记录不硬凑到某个人头上，名字重合就会张冠李戴</p>`)}`;
   $("#waste-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -712,14 +749,79 @@ async function renderMedwaste() {
       route();
     } catch (err) { setMsg("#waste-msg", err.message, false); }
   };
-  $("#page-body").onclick = async (e) => {
-    const id = e.target.dataset.hand;
-    if (!id) return;
-    const handler = prompt("转运人员姓名"); if (!handler) return;
+  $("#loc-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
     try {
-      await api(`/api/medwaste/${id}/handover`, { method: "POST", body: JSON.stringify({ handler_name: handler }) });
+      await api("/api/medwaste/locations", { method: "POST", body: JSON.stringify({
+        org_id: Number(f.get("org_id")), name: f.get("name"),
+        location_type: f.get("location_type"), manager_name: f.get("manager_name") || "" }) });
       route();
-    } catch (err) { setMsg("#waste-msg", err.message, false); }
+    } catch (err) { setMsg("#loc-msg", err.message, false); }
+  };
+  $("#trace-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const code = new FormData(e.target).get("trace_code");
+    try {
+      const t = await api(`/api/medwaste/trace/${encodeURIComponent(code)}`);
+      $("#trace-box").innerHTML = `<p class="desc">${esc(t.trace_code)} · ${esc(t.waste_type_name)} · ${t.weight_kg}kg · 机构 ${t.org_id}</p>
+        ${table(["环节", "时间", "地点 / 经手人"], t.timeline, (s) =>
+          `<tr><td><span class="tag ${WASTE_TRACE_STEPS[s.step] || ""}">${esc(s.step)}</span></td>
+           <td>${esc(s.at.replace("T", " ").slice(0, 19))}</td><td>${esc(s.location) || "—"}</td></tr>`)}`;
+      setMsg("#trace-msg", "");
+    } catch (err) { $("#trace-box").innerHTML = ""; setMsg("#trace-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const el = (attr) => e.target.closest(`[${attr}]`);
+    const hand = el("data-hand"), store = el("data-store"), locToggle = el("data-loc-toggle");
+    if (store) {
+      const options = storageOf(Number(store.dataset.org));
+      if (!options.length) return setMsg("#waste-msg", "该机构还没有在用的暂存间，请先在下方点位台账里建一个", false);
+      const form = await spdModal("入暂存间", [
+        { name: "storage_location_id", label: "暂存间", type: "select",
+          options: options.map((l) => ({ value: String(l.id), label: l.name })) },
+      ]);
+      if (!form) return;
+      try {
+        await api(`/api/medwaste/${store.dataset.store}/store`, { method: "POST",
+          body: JSON.stringify({ storage_location_id: Number(form.storage_location_id) }) });
+        route();
+      } catch (err) { setMsg("#waste-msg", err.message, false); }
+      return;
+    }
+    if (hand) {
+      // 原先是系统输入框收转运人姓名（P2-38 存量弹窗录入）：挂了员工档案的该按 id 收，
+      // 只填名字的那条路后端仍然留着（历史记录），所以两个字段都给、二选一
+      const form = await spdModal("医废交接", [
+        { name: "handler_employee_id", label: "转运人员工ID（优先，姓名由档案带出）", type: "number" },
+        { name: "handler_name", label: "转运人姓名（没有员工档案时填）" },
+      ]);
+      if (!form) return;
+      const body = form.handler_employee_id
+        ? { handler_name: form.handler_name || "", handler_employee_id: form.handler_employee_id }
+        : { handler_name: form.handler_name };
+      if (!form.handler_employee_id && !form.handler_name) {
+        return setMsg("#waste-msg", "请填员工ID或转运人姓名", false);
+      }
+      try {
+        await api(`/api/medwaste/${hand.dataset.hand}/handover`, { method: "POST", body: JSON.stringify(body) });
+        route();
+      } catch (err) { setMsg("#waste-msg", err.message, false); }
+      return;
+    }
+    if (locToggle) {
+      const id = locToggle.dataset.locToggle;
+      try {
+        // 两条路径分开写而不是拼后缀：孤儿闸门按字面匹配，拼出来的地址它看不见
+        // （全仓库字符串拼接 URL 为 0 处，判据据此收紧，别从这里开口子）
+        if (locToggle.dataset.on === "1") {
+          await api(`/api/medwaste/locations/${id}/reactivate`, { method: "POST" });
+        } else {
+          await api(`/api/medwaste/locations/${id}`, { method: "DELETE" });
+        }
+        route();
+      } catch (err) { setMsg("#loc-msg", err.message, false); }
+    }
   };
 }
 

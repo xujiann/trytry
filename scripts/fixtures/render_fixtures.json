@@ -4833,13 +4833,15 @@
       "第十二批（2026-09-06）：医疗废物监管。三个面板，滞留预警是条件面板、",
       "第三个是无标题裸面板。",
       "废物三条：一条在预警集合里（收集日期后带红色「滞留」标签）、一条已交接走「—」支、",
-      "一条转运人为空走 `esc(x) || \"—\"` 支。"
+      "一条转运人为空走 `esc(x) || \"—\"` 支。",
+    "功能完善·medwaste（2026-09-16）：三条废物补后端本就返回的 trace_code（第一条带载荷）；新增点位台账三条（在用产生点 / 在用暂存间 / 已停用，名称与负责人各带载荷，含 manager_name 空串走 `|| \"—\"` 支）与转运工作量（一名挂档员工 + 未挂档单列两批）。"
     ],
     "fn": "renderMedwaste",
     "api": {
       "/api/medwaste": [
         {
           "id": 21,
+          "trace_code": "MW-20260901-001<b>",
           "org_id": 3,
           "waste_type": "infectious",
           "weight_kg": 12.5,
@@ -4849,6 +4851,7 @@
         },
         {
           "id": 22,
+          "trace_code": "MW-20260903-002",
           "org_id": 3,
           "waste_type": "sharp",
           "weight_kg": 3.2,
@@ -4858,6 +4861,7 @@
         },
         {
           "id": 23,
+          "trace_code": "MW-20260905-003",
           "org_id": 4,
           "waste_type": "pathological",
           "weight_kg": 7.0,
@@ -4869,6 +4873,7 @@
       "/api/medwaste/alerts": [
         {
           "id": 21,
+          "trace_code": "MW-20260901-001<b>",
           "org_id": 3,
           "waste_type": "infectious",
           "weight_kg": 12.5,
@@ -4876,7 +4881,50 @@
           "handler_name": "",
           "status": "collected"
         }
-      ]
+      ],
+      "/api/medwaste/locations": [
+        {
+          "id": 1,
+          "org_id": 3,
+          "name": "口腔科产生点 & 二楼",
+          "location_type": "source",
+          "location_type_name": "产生点",
+          "manager_name": "王主任<img src=x onerror=alert(1)>",
+          "active": true
+        },
+        {
+          "id": 2,
+          "org_id": 3,
+          "name": "东楼暂存间",
+          "location_type": "storage",
+          "location_type_name": "暂存间",
+          "manager_name": "",
+          "active": true
+        },
+        {
+          "id": 3,
+          "org_id": 4,
+          "name": "已撤并科室点位<b>",
+          "location_type": "source",
+          "location_type_name": "产生点",
+          "manager_name": "李护士",
+          "active": false
+        }
+      ],
+      "/api/medwaste/handler-stats": {
+        "handlers": [
+          {
+            "employee_id": 12,
+            "name": "转运员甲<b>",
+            "count": 9,
+            "weight_kg": 41.5
+          }
+        ],
+        "unlinked_records": {
+          "count": 2,
+          "weight_kg": 7.3
+        }
+      }
     }
   },
   "orgs": {

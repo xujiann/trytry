@@ -234,13 +234,6 @@ KNOWN_ORPHANS: set[str] = {
     # medication（2）
     "/api/medication/shortages/stats",
     "/api/medication/shortages/{shortage_id}/close",
-    # medwaste（6）
-    "/api/medwaste/handler-stats",
-    "/api/medwaste/locations",
-    "/api/medwaste/locations/{location_id}",
-    "/api/medwaste/locations/{location_id}/reactivate",
-    "/api/medwaste/trace/{trace_code}",
-    "/api/medwaste/{waste_id}/store",
     # metrics（1）
     "/api/metrics/drilldown-metrics",
     # org_groups（1）
