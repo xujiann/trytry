@@ -345,7 +345,13 @@ async function renderDashboard() {
     // 周期这里**不再自己 esc()**：panel() 已经转义标题，套两层会把 `&` 变成 `&amp;amp;`。
     if (top.length) perfHtml = panel(`机构绩效评分（${perf.period} 年度，前8）`, barChart(top, { unit: " 分" }));
   } catch (e) { /* 绩效不可用不阻塞驾驶舱 */ }
-  const [alerts, trends] = await Promise.all([api("/api/metrics/alerts"), api("/api/metrics/trends?months=6")]);
+  const [alerts, trends, drillables] = await Promise.all([
+    api("/api/metrics/alerts"), api("/api/metrics/trends?months=6"),
+    api("/api/metrics/drilldown-metrics")]);
+  // 指标卡上绑了哪些下钻 key，从 cards 自己数——写死一个数字会随卡片增删悄悄过期
+  const cardBound = new Set(cards.map((c) => c[3]).filter(Boolean));
+  const alertBound = new Set(alerts.items.map((a) => a.type));
+  const unbound = drillables.filter((x) => !cardBound.has(x.metric) && !alertBound.has(x.metric));
   const alertBanner = alerts.total
     ? panel(`⚠ 风险预警（${alerts.total}）`, `
        <p style="font-size:13.5px">${alerts.items.map((a) =>
@@ -364,6 +370,20 @@ async function renderDashboard() {
      <div id="drill-panel" class="hidden"></div>
      ${panel("近6月业务量趋势", `<div style="margin-bottom:6px">${legend}</div>${lineChart(trends.months, trends.series, trendColors)}`)}
      ${chronicItems.length ? panel("慢病分级分组", barChart(chronicItems, { color: "#b26a00", unit: " 人" })) : ""}
+     ${panel(`可下钻指标目录（${drillables.length}）`, `
+       <p class="desc">这份目录由后端 <code>METRIC_QUERIES</code> 生成，是下钻口径的唯一真源。
+         上面的指标卡绑了 ${cardBound.size} 项，预警横幅此刻另外覆盖 ${alertBound.size} 项——
+         ${unbound.length
+           ? `剩下 <b>${unbound.length} 项在卡片与横幅上都没有入口</b>，只能从这里下钻。`
+           : "目录里的每一项此刻都能从卡片或横幅点到。"}
+         预警横幅那几项<b>只在有预警时才出现</b>，所以"此刻覆盖"不等于"一直覆盖"。</p>
+       ${table(["指标", "名称", "当前计数", "业务页", "卡片入口"], drillables, (x) =>
+         `<tr><td><span class="tag">${esc(x.metric)}</span></td><td>${esc(x.label)}</td>
+          <td>${x.count}</td><td>${esc(x.page)}</td>
+          <td>${cardBound.has(x.metric) ? "指标卡"
+            : alertBound.has(x.metric) ? "预警横幅（当前有预警）"
+            : '<span class="tag orange">无</span>'}
+            <button class="btn sm" data-drill="${esc(x.metric)}">下钻</button></td></tr>`)}`)}
      ${perfHtml}`;
   $("#page-body").onclick = async (e) => {
     const hit = e.target.closest("[data-drill],[data-drillgo],[data-drillpage],[data-drillclose]");

@@ -4445,6 +4445,14 @@
           }
         ]
       },
+      "/api/metrics/drilldown-metrics": [
+        { "metric": "critical_values", "label": "未闭环危急值", "page": "exams", "count": 2 },
+        { "metric": "stock_alerts", "label": "缺药预警<b>", "page": "pharmacy", "count": 4 },
+        { "metric": "chronic_overdue", "label": "慢病随访超期", "page": "chronic", "count": 17 },
+        { "metric": "medwaste_overdue", "label": "医废滞留 &", "page": "medwaste", "count": 3 },
+        { "metric": "referrals_completed", "label": "转诊结案", "page": "referrals", "count": 96 },
+        { "metric": "grassroots_encounters", "label": "基层诊疗人次", "page": "encounters", "count": 8412 }
+      ],
       "/api/metrics/alerts": {
         "total": 2,
         "items": [

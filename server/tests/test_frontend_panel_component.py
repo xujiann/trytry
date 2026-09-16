@@ -237,7 +237,7 @@ MIGRATED_PAGES = {
     "renderVaccineSupply": 4,       # 批次表是 innerHTML 之后再写进 #vb-list 的
     "renderRecognition": 3,         # 含一处条件渲染的按项目互认次数
     "renderMaternal": 5,            # 高危儿清单走 accent；另有一处 class="panel hidden" 的筛查史容器
-    "renderDashboard": 4,           # 风险预警走 accent；绩效标题里的期间不再 esc()：组件转义标题
+    "renderDashboard": 5,           # 风险预警走 accent；绩效标题里的期间不再 esc()：组件转义标题
     # 第十一批 2026-09-06：账号与参数 / 老年健康 / 证明与体检 / 门急诊文书 / 医保基金池。
     # 这批开始能迁**无标题的裸面板**了——组件加了 `title === ""` 不出 `<h3>` 的分支，
     # 在此之前这类外壳一迁就是往 DOM 里加一个空元素（见 test_panel的空标题分支必须是严格等于空串）。
