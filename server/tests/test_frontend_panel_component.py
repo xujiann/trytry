@@ -178,7 +178,8 @@ MIGRATED_PAGES = {
                                     # 及点「成员」后写进 #spd-team-detail 的成员面板（含空态两支）
     "renderSpdHealthCommission": 7,
     "renderOaQc": 4,
-    "renderInfectious": 3,
+    "renderInfectious": 4,
+                                    # 功能完善·infectious（2026-09-16）：+法定报告卡批量导出面板（限管理层）
     "renderBlood": 4,
     # 第五批 2026-09-02：接种（渲染时不调接口，夹具 api 为空）/ 名老中医医案 / DRGs / 科室成本
     "renderVaccination": 4,

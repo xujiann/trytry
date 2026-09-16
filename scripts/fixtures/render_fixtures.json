@@ -1382,6 +1382,9 @@
       "第四批（2026-09-02）：传染病病例与预警。预警面板是条件渲染，夹具给非空 alerts。"
     ],
     "fn": "renderInfectious",
+    "localStorage": {
+      "medplat_role": "director"
+    },
     "api": {
       "/api/infectious/cases": [
         {

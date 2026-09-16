@@ -1,8 +1,14 @@
 /* 管理端 · 页面（一）：驾驶舱、共享诊断、会诊转诊、预约、处方药事等。 */
 
+// 及时性是三态：目录外病种或发病日期非法时后端给 null，不能当成"及时"
+const CASE_TIMELY = { late: ["迟报", "red"], ontime: ["及时", "green"], unknown: ["无法定时限", ""] };
+
 async function renderInfectious() {
-  $("#page-desc").textContent = "病例报告 + 滑动窗口多点触发预警（多机构同报升级为高风险）";
+  $("#page-desc").textContent =
+    "病例报告 + 滑动窗口多点触发预警（多机构同报升级为高风险）；法定报告卡与批量导出";
   const [cases, alerts] = await Promise.all([api("/api/infectious/cases"), api("/api/infectious/alerts")]);
+  // 报告卡与导出后端都是 require_roles("director")（admin 全通）——不是管理层就别摆
+  const canReport = ["director", "admin"].includes(currentRole());
   // ADR-0009 第四批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
     ${panel("病例报告", `
@@ -17,8 +23,20 @@ async function renderInfectious() {
       table(["病种", "7日病例数", "报告机构数", "风险等级"], alerts, (a) =>
         `<tr><td>${esc(a.disease_name)}</td><td>${a.case_count}</td><td>${a.org_count}</td>
          <td><span class="tag ${a.severity === "high" ? "red" : "orange"}">${a.severity === "high" ? "高" : "中"}</span></td></tr>`)) : ""}
-    ${panel("病例列表", table(["ID", "机构", "病种", "发病日期"], cases, (c) =>
-      `<tr><td>${c.id}</td><td>${c.org_id}</td><td>${esc(c.disease_name)}</td><td>${esc(c.onset_date)}</td></tr>`))}`;
+    ${panel("病例列表", table(["ID", "机构", "病种", "发病日期", "操作"], cases, (c) =>
+      `<tr><td>${c.id}</td><td>${c.org_id}</td><td>${esc(c.disease_name)}</td><td>${esc(c.onset_date)}</td>
+       <td>${canReport ? `<button class="btn" data-card="${c.id}">报告卡</button>` : "—"}</td></tr>`))}
+    <div class="panel hidden" id="card-panel"><h3>法定传染病报告卡</h3><div id="card-body"></div></div>
+    ${canReport ? panel("法定报告卡批量导出（CSV）", `
+      <form class="inline" id="case-export">
+        <input name="disease_code" placeholder="病种编码（留空导全部）">
+        <label style="font-size:13px"><input type="checkbox" name="late_only" value="1"> 只导迟报清单</label>
+        <button>导出</button>
+      </form>
+      <p class="desc"><b>平台不直连国家传染病网络直报系统</b>：本导出供手工网报
+        （录入大疫情网）或县疾控前置机对接使用，及时性列与「未及时上报清单」同一口径。
+        单次最多导出 2000 条。</p>
+      <p class="msg" id="exp-msg"></p>`) : ""}`;
   $("#case-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -28,6 +46,39 @@ async function renderInfectious() {
         disease_name: f.get("disease_name"), onset_date: f.get("onset_date") }) });
       route();
     } catch (err) { setMsg("#case-msg", err.message, false); }
+  };
+  const expForm = $("#case-export");
+  if (expForm) expForm.onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const code = (f.get("disease_code") || "").trim();
+    const qs = [code ? `disease_code=${encodeURIComponent(code)}` : "", f.get("late_only") ? "late_only=true" : ""]
+      .filter(Boolean).join("&");
+    downloadCsv(`/api/infectious/cases/export.csv${qs ? `?${qs}` : ""}`,
+      `infectious_cases${f.get("late_only") ? "_late" : ""}.csv`, "#exp-msg");
+  };
+  $("#page-body").onclick = async (e) => {
+    const { card } = e.target.dataset;
+    if (!card) return;
+    try {
+      const c = await api(`/api/infectious/cases/${card}/report-card`);
+      // late 是 bool | null：null 表示目录外病种或发病日期非法，**不是"及时"**
+      const timely = c.late === null ? "unknown" : c.late ? "late" : "ontime";
+      $("#card-panel").classList.remove("hidden");
+      $("#card-body").innerHTML = `<div class="cards">
+        <div class="card"><span class="k">病例ID</span><b>${c.case_id}</b></div>
+        <div class="card"><span class="k">报告机构</span><b>${esc(c.org_name) || c.org_id}</b></div>
+        <div class="card"><span class="k">病种</span><b>${esc(c.disease_name)}（${esc(c.disease_code)}）</b></div>
+        <div class="card"><span class="k">分类</span><b>${esc(c.category_name)}</b></div>
+        <div class="card"><span class="k">发病日期</span><b>${esc(c.onset_date)}</b></div>
+        <div class="card"><span class="k">报告时间</span><b>${esc(c.reported_at.slice(0, 16).replace("T", " "))}</b></div>
+        <div class="card"><span class="k">法定时限</span><b>${
+          c.report_hours === null ? "—" : `${c.report_hours} 小时`}</b></div>
+        <div class="card"><span class="k">及时性</span><b>${statusTag(CASE_TIMELY, timely)}${
+          c.days_late ? `（迟 ${c.days_late} 天）` : ""}</b></div></div>
+      <p class="desc">这是<b>平台留存的法定字段集</b>——病例登记本身不含患者个体标识
+        （只记报告机构 / 病种 / 发病日期），卡片按此字段集导出，不虚构未存储的字段。</p>`;
+    } catch (err) { setMsg("#exp-msg", err.message, false); }
   };
 }
 
