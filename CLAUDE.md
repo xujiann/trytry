@@ -31,6 +31,7 @@ make typecheck         # mypy（渐进式，仅查已注解代码）
 make test-unit         # 进程内 SQLite 快速套件（无外部依赖）
 make test-integration  # 真 PostgreSQL + 真 Redis（需两个 *_TEST_URL，见下方一行起服务）
 make test-smoke        # 应用可启动 + 核心接口有响应
+make test-e2e          # 端到端：真拉起服务 + Playwright 驱动三端（改交互形态必跑）
 make verify            # build + lint + typecheck + test-unit（提交前自检）
 ```
 
@@ -160,7 +161,16 @@ server/app/
 make verify        # = build + lint + typecheck + test-unit（对应第14条）
 make test-smoke    # 若动了启动/核心链路
 make test-integration   # 若动了迁移/PG 方言相关（先 eval "$(server/scripts/dev_services.sh start)"）
+make test-e2e      # 若动了界面的**交互形态**（见下）
 ```
+
+- **改了交互形态就必须跑 `make test-e2e`**：`prompt`/`confirm` 换成页内模态框、
+  按钮换容器、动作挪进新面板——这类改动 `make verify` **一条都不会红**（e2e 被 `-m "not e2e"` 排除），
+  红的是 CI 上独立的 e2e job，而那要等推上去半小时后才知道。
+  失败现场还特别不像原因：模态框不触发 dialog 事件，它的全屏遮罩又拦住后续一切点击，
+  于是报的是"点不到左侧导航"（2026-09-16 CI run 581 实测）。
+  端到端档用 `_answers` 应答原生对话框、用 `_spd_modal` 驱动模态框，**两者互斥**，
+  改了哪一边就要同步改另一边。
 
 - 若改了迁移或**模型的列**：`make build` 校验迁移图；`test_migration_model_parity.py` 已把「空库跑通 `alembic upgrade heads` + 逐表逐列比对模型」做成 test-unit 里的硬门禁（约 7 秒，无豁免名单），`make verify` 会带上，不必再手跑。真 PG 的方言问题仍由 `make test-integration` 守（两者共用 `tests/schema_parity.py` 一份比对逻辑）。
 - 若改了 spd：`pytest tests/test_spd_boundary.py -q` 必须绿（边界未被破坏）。

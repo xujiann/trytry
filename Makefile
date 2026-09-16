@@ -48,6 +48,17 @@ test-integration:  ## 集成测试：真 PostgreSQL（需 MEDPLAT_PG_TEST_URL）
 test-smoke:  ## 冒烟测试：应用可启动 + 核心接口有响应 + 产出指标
 	cd $(SERVER) && $(PY) -m pytest tests/ -q -m smoke
 
+# 端到端档：`make verify` **不跑它**（-m "not e2e"），CI 有独立 job。
+# 改了界面的**交互形态**（prompt/confirm ↔ 页内模态框、按钮换容器）必须在本地跑一遍——
+# 这类改动单元档一条都不会红，红的是 e2e，而那要等推上去半小时后才知道
+# （2026-09-16 实测：出报告改模态框，CI run 581 红在"点不到左侧导航"）。
+# 容器镜像预装了 chromium 但版本目录与 pip 装的 playwright 对不上，
+# 所以指一下内核路径，不必再下一份（找不到时留空，由 playwright 自己找）。
+PW_CHROMIUM ?= $(firstword $(wildcard /opt/pw-browsers/chromium-*/chrome-linux/chrome))
+
+test-e2e:  ## 端到端测试：真拉起 uvicorn + Playwright 驱动三端（需 playwright 与 chromium）
+	cd $(SERVER) && PLAYWRIGHT_CHROMIUM_PATH=$(PW_CHROMIUM) $(PY) -m pytest tests/e2e -q --e2e
+
 # ---- 聚合 ----
 test: test-unit test-smoke  ## 无外部依赖的可跑测试（unit + smoke）
 

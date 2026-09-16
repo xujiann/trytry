@@ -13,7 +13,12 @@
 - 真实拉起 uvicorn 子进程 + 独立 SQLite 库（e2e_run.db），跑完即删，
   不污染开发库与单元测试库；
 - 端口由内核分配（避免与本机占用端口冲突）；
-- SPA 的出报告/处置反馈用 prompt/confirm 交互，统一注册 dialog 处理器应答。
+- SPA 里**还在用** prompt/confirm 的交互（排班、术中记录、处置反馈、随访办结），
+  统一注册 dialog 处理器应答，见 `_answers`；
+- 已经换成页内模态框（`spdModal`）的交互走 `_spd_modal`——两者驱动方式完全不同，
+  改一处 UI 会让另一种驱动**静默卡住**：模态框不触发 dialog 事件，它的全屏遮罩还会
+  拦住后续的一切点击，于是失败现场是"点不到左侧导航"而不是"这个按钮没反应"
+  （2026-09-16 实测：出报告改模态框后，红的是下一步的 `_open_page`）。
 """
 import os
 import socket
@@ -206,6 +211,25 @@ def _answers(page, values):
         page.remove_listener("dialog", handler)
 
 
+def _spd_modal(page, values):
+    """应答 `spdModal()` 弹出的页内模态框：按字段名填值 → 确定 → 等遮罩消失。
+
+    与 `_answers`（应答浏览器原生 prompt/confirm）互斥：同一个交互只会是其中一种。
+    结尾必须等表单消失——遮罩是 `position:fixed;inset:0`，留在页面上会让后续
+    任何点击都超时，而报错指向的是被拦住的那个元素，不是这里。
+    """
+    form = page.locator("form.panel:has(button[data-cancel])")
+    expect(form).to_be_visible()
+    for name, value in values.items():
+        field = form.locator(f'[name="{name}"]')
+        if field.evaluate("el => el.tagName") == "SELECT":
+            field.select_option(value)
+        else:
+            field.fill(value)
+    form.locator("button[type=submit]").click()
+    expect(form).to_have_count(0)
+
+
 def _open_page(page, page_id, title):
     """点击左侧导航进入指定页面（nav 链接带 data-page 标识）。"""
     page.click(f'#nav a[data-page="{page_id}"]')
@@ -276,16 +300,19 @@ def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     page.click("button[data-claim]")
     expect(page.locator("#page-body")).to_contain_text("诊断中")
 
-    # 3) 出报告并标记为危急值（prompt 填结论 + confirm 选“是”）
+    # 3) 出报告并标记为危急值（页内模态框：结论 + 所见 + 危急值下拉）
     #
-    # 这里原先注册了两个 `page.once`，以为一个接 prompt、一个接 confirm。
-    # 实际上 Playwright 会把**同一个** dialog 事件派发给当时注册着的全部监听器：
-    # 第一个 prompt 一弹，两个 once 同时被消耗掉，随后的 confirm 无人应答被自动
-    # 取消——于是"是否危急值"选了否，报告不是危急值，断言当然找不到"危急值"。
-    # 本文件开头的 `_answers` 就是为这个坑写的（见其 docstring），这里也用它。
-    with _answers(page, ["血钾 7.2mmol/L，危急", ""]):
-        page.click("button[data-report]")
-        expect(page.locator("#page-body")).to_contain_text("危急值")
+    # 2026-09-16 前这里是 prompt + confirm 两连问，用 `_answers` 按序喂值
+    # （当时的坑记在 `_answers` 的 docstring 里：两个 `page.once` 会被同一个
+    # dialog 同时消耗掉）。出报告改成 `spdModal` 之后原生对话框不再出现，
+    # `_answers` 喂不出去、遮罩也不会关——真正红的是下一步点不到导航。
+    page.click("button[data-report]")
+    _spd_modal(page, {
+        "conclusion": "血钾 7.2mmol/L，危急",
+        "finding": "电解质紊乱",       # 这个字段以前没有入口，报告的所见恒为空
+        "critical": "1",               # 下拉：1=是（进危急值闭环）
+    })
+    expect(page.locator("#page-body")).to_contain_text("危急值")
 
     # 4) 危急值操作台：确认接收
     _open_page(page, "critical", "危急值操作台")
