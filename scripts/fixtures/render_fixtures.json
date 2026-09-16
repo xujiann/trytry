@@ -2051,27 +2051,35 @@
       "/api/resources": [
         {
           "id": 1,
+          "org_id": 3,
+          "resource_type": "meeting_room",
+          "resource_type_name": "会议室",
           "code": "MR-01<b>",
           "name": "大会议室<img src=x onerror=alert(1)>",
-          "resource_type_name": "会议室",
           "capacity": 30,
           "unit": "人",
           "location": "3 楼",
+          "contact": "总务科 & 分机 8012",
           "status": "published",
           "status_name": "已发布",
-          "withdraw_reason": ""
+          "withdraw_reason": "",
+          "note": "投影仪已报修<b>"
         },
         {
           "id": 2,
+          "org_id": 4,
+          "resource_type": "equipment",
+          "resource_type_name": "通用设备<img src=x onerror=alert(1)>",
           "code": "EQ-02",
           "name": "移动 DR",
-          "resource_type_name": "通用设备<img src=x onerror=alert(1)>",
           "capacity": 1,
           "unit": "台",
-          "location": null,
+          "location": "",
+          "contact": "",
           "status": "draft",
           "status_name": "草稿<b>",
-          "withdraw_reason": "上次撤回：维修<img src=x onerror=alert(1)>"
+          "withdraw_reason": "上次撤回：维修<img src=x onerror=alert(1)>",
+          "note": ""
         }
       ],
       "/api/resources/catalog": {

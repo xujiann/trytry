@@ -167,8 +167,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/auth/totp/activate",
     "/api/auth/totp/disable",
     "/api/auth/totp/setup",
-    # resources（1）
-    "/api/resources/{resource_id}",
     # surveillance（1）
     "/api/surveillance/resources/{resource_id}",
     # tcm_heritage（1）
