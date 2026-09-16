@@ -321,6 +321,9 @@ async function renderAccessLogs() {
   await draw();
 }
 
+// active 是 bool，没有后端文案可取；映成状态码再走 statusTag，与本文件其余状态列同写法
+const TEXT_STATUS = { on: ["生效", "green"], off: ["已停用", "red"] };
+
 async function renderConsents() {
   // 个保法落地（阶段十四 E2）：知情同意台账 + 更正/注销申请审核。
   $("#page-desc").textContent = "知情同意登记与查询；居民更正/注销申请的受理与审核（审核限管理层）";
@@ -332,8 +335,21 @@ async function renderConsents() {
       `<tr><td>${esc((r.created_at || "").replace("T", " ").slice(0, 19))}</td>
        <td>${esc(r.scene)}</td><td>${esc(r.text_version)}</td><td>${esc(r.method)}</td>
        <td>${esc(r.evidence || "—")}</td>
-       <td>${r.revoked_at ? '<span class="tag">已撤回</span>' : '<span class="tag ok">有效</span>'}</td>
-       <td><button class="btn secondary" data-print-consent="${r.id}">打印</button></td></tr>`);
+       <td>${r.revoked_at
+         ? `<span class="tag">已撤回</span> <span class="desc">${
+             esc(r.revoked_at.replace("T", " ").slice(0, 19))}</span>`
+         : '<span class="tag ok">有效</span>'}</td>
+       <td><button class="btn secondary" data-print-consent="${r.id}">打印</button>
+           ${r.revoked_at ? "" : `<button class="btn danger" data-revoke-consent="${r.id}">撤回</button>`}</td></tr>`);
+  };
+  const drawTexts = async (scene, includeInactive) => {
+    const qs = [scene ? `scene=${encodeURIComponent(scene)}` : "",
+                includeInactive ? "active_only=false" : ""].filter(Boolean).join("&");
+    const rows = await api(`/api/consents/texts${qs ? `?${qs}` : ""}`);
+    $("#tx-table").innerHTML = table(["ID", "场景", "版本", "状态", "正文"], rows, (t) =>
+      `<tr><td>${t.id}</td><td>${esc(t.scene)}</td><td><span class="tag">${esc(t.version)}</span></td>
+       <td>${statusTag(TEXT_STATUS, t.active ? "on" : "off")}</td>
+       <td style="white-space:pre-wrap">${esc(t.content) || "—"}</td></tr>`);
   };
   const drawCorrections = async () => {
     const rows = await api("/api/consents/corrections?status=pending");
@@ -350,11 +366,37 @@ async function renderConsents() {
       <div id="ct-table"></div>`)}
     ${panel("更正 / 注销申请（待审核）", `
       <p class="desc">通过即按白名单字段执行变更并落审计；拒绝必须填写意见。</p>
-      <div id="cr-table"></div><p id="cr-msg"></p>`)}`;
+      <div id="cr-table"></div><p id="cr-msg"></p>`)}
+    ${panel("同意文本版本库（窗口/居民端展示的告知文本）", `
+      <form class="inline" id="tx-filter">
+        <input name="scene" placeholder="场景（留空列全部）">
+        <label style="font-size:13px"><input type="checkbox" name="inactive" value="1"> 含已停用版本</label>
+        <button>查询</button>
+      </form>
+      <p class="desc">默认只列<b>生效版本</b>。同意记录里的「文本版本」指向的就是这里的某一版——
+        停用旧版不会改动已登记的同意（那条记录仍指着它签署当时的版本），所以历史举证不受影响。</p>
+      <div id="tx-table"></div>`)}`;
   $("#ct-search").onsubmit = async (e) => { e.preventDefault(); await drawConsents(new FormData(e.target).get("patient_id")); };
+  $("#tx-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    await drawTexts((f.get("scene") || "").trim(), !!f.get("inactive"));
+  };
   $("#ct-table").onclick = async (e) => {
-    const id = e.target.dataset.printConsent; if (!id) return;
-    try { await openPrintPage(`/api/print/consents/${id}`); }
+    const { printConsent, revokeConsent } = e.target.dataset;
+    if (revokeConsent) {
+      // 撤回不删行（后端置 revoked_at，"撤回本身也要可举证"），但**没有反向端点**：
+      // 再撤一次 409。所以在点之前说清楚，而不是点完才发现回不去
+      if (!confirm(`撤回同意记录 ${revokeConsent}？记录会保留并标记撤回时刻，但无法再恢复为有效。`)) return;
+      try {
+        await api(`/api/consents/${revokeConsent}/revoke`, { method: "POST" });
+        await drawConsents($("#ct-search").patient_id.value.trim());
+        setMsg("#cr-msg", "已撤回", true);
+      } catch (err) { setMsg("#cr-msg", err.message, false); }
+      return;
+    }
+    if (!printConsent) return;
+    try { await openPrintPage(`/api/print/consents/${printConsent}`); }
     catch (err) { setMsg("#cr-msg", err.message, false); }
   };
   $("#cr-table").onclick = async (e) => {
@@ -369,7 +411,7 @@ async function renderConsents() {
     } catch (err) { setMsg("#cr-msg", err.message, false); }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
-  await drawConsents(); await drawCorrections();
+  await drawConsents(); await drawCorrections(); await drawTexts("", false);
 }
 
 /* ---------- 通用小工具：表单序列化 + 动作分派 ---------- */

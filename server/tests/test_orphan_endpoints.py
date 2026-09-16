@@ -173,9 +173,6 @@ KNOWN_ORPHANS: set[str] = {
     # chronic（2）
     "/api/chronic/disease-types/{type_id}",
     "/api/chronic/{chronic_id}/risk",
-    # consents（2）
-    "/api/consents/texts",
-    "/api/consents/{consent_id}/revoke",
     # dictionaries（1）
     "/api/dictionaries/{system_code}/import",
     # disease_programs（2）

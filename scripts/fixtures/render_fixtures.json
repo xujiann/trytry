@@ -7213,10 +7213,36 @@
       "第十七批（2026-09-06）：知情同意与更正申请。两个面板。",
       "注意 `await drawConsents()` 是**不带参数**调的——走的是「没输入患者ID」那一支，",
       "只往 #ct-table 写一段提示文字，根本不调 /api/consents。夹具因此只需要 corrections。",
-      "更正两条分别给 changes 有值/为空（走「—」）。"
+      "更正两条分别给 changes 有值/为空（走「—」）。",
+      "第二十八批（2026-09-16）：加「撤回」与同意文本版本库。drawTexts(\"\", false) 在渲染末尾调，",
+      "所以 /api/consents/texts 必须有夹具；三条走 生效有正文 / 生效正文为空（走「—」）/ 已停用 三支。",
+      "同意台账那一支仍走「没输入患者ID」，所以「撤回」按钮不在本页比对面内（它在 #ct-table，要查了才有）。"
     ],
     "fn": "renderConsents",
     "api": {
+      "/api/consents/texts": [
+        {
+          "id": 1,
+          "scene": "archive",
+          "version": "v2.1",
+          "content": "本机构将依法收集您的健康档案信息 & 用于基本公共卫生服务。",
+          "active": true
+        },
+        {
+          "id": 2,
+          "scene": "referral<b>",
+          "version": "v1.0",
+          "content": "",
+          "active": true
+        },
+        {
+          "id": 3,
+          "scene": "archive",
+          "version": "v1.9<img src=x onerror=alert(1)>",
+          "content": "（旧版）",
+          "active": false
+        }
+      ],
       "/api/consents/corrections": [
         {
           "id": 1,
