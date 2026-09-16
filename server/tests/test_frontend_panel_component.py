@@ -317,7 +317,7 @@ MIGRATED_PAGES = {
     "renderArchive": 2,
     "renderAudit": 2,               # 整页一个无标题裸面板；表格由末尾的 draw() 写进 #audit-table。
                                     # 功能完善·users（2026-09-15）：+登录留痕面板（drawLogins() 写进 #login-table）
-    "renderAccessLogs": 1,          # 同上，写进 #al-table
+    "renderAccessLogs": 2,          # 同上，写进 #al-table
     "renderConsents": 3,            # drawConsents() 不带参数调，走的是"没输入患者ID"那一支
                                     # 功能完善·consents（2026-09-16）：+同意文本版本库面板
     "renderEmergency": 2,

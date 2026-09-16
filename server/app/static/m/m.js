@@ -532,9 +532,13 @@ const CORRECTION_STATUS = { pending: ["待审核", "orange"], approved: ["已通
  * 同意记录按被查看人（本人或代管成员）取；更正/注销申请按账户归集。 */
 async function loadArchiveExtra(query) {
   const box = $("#archive-extra");
-  let consents = null, corrections = null;
+  let consents = null, corrections = null, views = null;
   try { consents = await authApi(`/api/portal/me/consents${query}`); } catch (err) { consents = null; }
   try { corrections = await authApi("/api/portal/me/corrections"); } catch (err) { corrections = null; }
+  // 《个保法》第 44 条知情权：谁、哪家机构、凭什么依据看过我的档案。
+  // 这条接口按**登录账户本人**绑定的档案取，不收 patient_id——代管家人时看到的
+  // 仍是本人的记录，所以下面要把这句话明说，不能让人以为在看家人的。
+  try { views = await authApi("/api/access-logs/mine?limit=50"); } catch (err) { views = null; }
   const changesText = (c) => {
     try {
       const o = JSON.parse(c.changes || "{}");
@@ -542,6 +546,17 @@ async function loadArchiveExtra(query) {
     } catch (err) { return esc(c.changes || "—"); }
   };
   box.innerHTML = `
+    <div class="sec-title">谁看过我的档案（${views ? views.length : "—"}）</div>
+    <p class="hint">《个人信息保护法》第 44 条：您有权知悉自己的档案被谁、凭什么依据调阅过。
+      ${query ? "这一段始终显示<b>您本人</b>的调阅记录，不随上面切换的家庭成员变化。" : ""}
+      最近 50 条。</p>
+    ${views === null ? '<p class="empty">调阅记录暂时无法加载</p>' : views.map((v) => `<div class="m-card">
+      ${kv("时间", esc((v.at || "").slice(0, 16).replace("T", " ") || "—"))}
+      ${kv("调阅人", esc(v.viewer || "—"))}
+      ${kv("所属机构", esc(v.viewer_org_name) || "—")}
+      ${kv("看了哪份", esc(v.resource_name || v.resource))}
+      ${kv("依据", `<span class="tag">${esc(v.basis_name || v.basis)}</span>`)}
+    </div>`).join("") || '<p class="empty">还没有人调阅过您的档案</p>'}
     <div class="sec-title">知情同意（${consents ? consents.length : "—"}）</div>
     ${consents === null ? '<p class="empty">同意记录暂时无法加载</p>' : consents.map((c) => `<div class="m-card">
       ${kv("场景", esc(CONSENT_SCENE_NAMES[c.scene] || c.scene))}

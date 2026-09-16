@@ -293,6 +293,26 @@ async function renderAudit() {
 async function renderAccessLogs() {
   // 敏感读留痕查询（第十轮）：写审计回答"谁改了什么"，这里回答"谁凭什么看了谁"。
   $("#page-desc").textContent = "档案调阅留痕：谁、什么时候、凭什么依据、看了谁（院长/管理员可查）";
+  const drawStats = async (patientId) => {
+    // 这条只认 patient_id：起止日期与调阅人两个筛选它**不吃**（后端没有这两个形参），
+    // 所以标题与说明都按"全量/该患者全量"写，不能顺着上面的筛选条件说成"本次筛选的构成"。
+    const q = patientId ? `?patient_id=${encodeURIComponent(patientId)}` : "";
+    const st = await api(`/api/access-logs/stats${q}`);
+    $("#al-stats").innerHTML = `
+      <p class="desc">口径：按<b>依据</b>汇总的调阅构成，${patientId
+        ? `只统计患者 ${esc(patientId)} 的记录——<b>聚焦到某个人本身也会留痕</b>（后端会把这次查询记进调阅日志）`
+        : "统计的是<b>全量</b>调阅记录"}。
+        起止日期与调阅人两个筛选对这一段<b>不生效</b>：这条接口只收 patient_id。
+        跨机构调阅（转诊/授权）占比异常，是这张表最该看的东西。</p>
+      <div class="cards"><div class="card"><div class="label">调阅总次数</div>
+        <div class="value">${st.total}</div></div>
+        ${st.by_basis.slice(0, 4).map((b) =>
+          `<div class="card"><div class="label">${esc(b.basis_name)}</div>
+           <div class="value">${b.count}</div></div>`).join("")}</div>
+      ${st.by_basis.length
+        ? barChart(st.by_basis.map((b) => [b.basis_name, b.count]))
+        : '<p class="empty">暂无调阅记录</p>'}`;
+  };
   const draw = async (params = {}) => {
     const q = Object.entries(params).filter(([, v]) => v).map(([k, v]) =>
       `${k}=${encodeURIComponent(v)}`).join("&");
@@ -303,6 +323,7 @@ async function renderAccessLogs() {
        <td>${esc(r.viewer)}</td><td>${esc(r.viewer_org_name)}</td>
        <td>${esc(r.patient_name)}</td><td>${esc(r.resource_name)}</td>
        <td><span class="tag">${esc(r.basis_name)}</span></td></tr>`);
+    await drawStats(params.patient_id);
   };
   $("#page-body").innerHTML = `
     ${panel("", `
@@ -313,7 +334,8 @@ async function renderAccessLogs() {
         <input name="start" placeholder="起 YYYY-MM-DD"><input name="end" placeholder="止 YYYY-MM-DD">
         <button>查询</button></form>
       <p class="desc">按患者查询会一并留痕——查"谁看过某人"本身也是在看这个人的隐私。</p>
-      <div id="al-table"></div>`)}`;
+      <div id="al-table"></div>`)}
+    ${panel("调阅构成", `<div id="al-stats"></div>`)}`;
   $("#al-search").onsubmit = async (e) => {
     e.preventDefault(); await draw(formJson(e.target));
   };

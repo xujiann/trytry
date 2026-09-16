@@ -152,9 +152,6 @@ def unexplained_orphans(corpus: str | None = None) -> set[str]:
 #: （不划掉 `test_登记的孤儿仍然是孤儿` 会红）。别把它当豁免用——按设计不需要
 #: 界面的走上面 `EXEMPT_*` 并写理由。
 KNOWN_ORPHANS: set[str] = {
-    # access_logs（2）
-    "/api/access-logs/mine",
-    "/api/access-logs/stats",
     # admin_mgmt（1）——两条物资的已接通（第十六批）；剩下这条不是"还没做界面"：
     # 它与 /api/staffing/secondments/{id}/end 写同一张 secondments 表，而后者更全
     # （不送日期默认今天、校验结束日不早于开始日、返回 18 键台账行）且**早有界面**

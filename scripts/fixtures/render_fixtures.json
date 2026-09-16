@@ -7310,28 +7310,53 @@
     "_why": [
       "第十七批（2026-09-06）：调阅留痕。整页一个无标题裸面板；",
       "表格由末尾的 `await draw()` 写进 #al-table。at 用 `(r.at || \"\")` 兜底，",
-      "夹具第二条给 null 走那一支。"
+      "夹具第二条给空串走那一支。",
+      "第三十六批（2026-09-16）：加「调阅构成」面板（GET /api/access-logs/stats）。",
+      "draw() 末尾调 drawStats(undefined)——不带 patient_id，所以夹具键就是裸路径。",
+      "**at 原先写的是 null**：AccessLogOut 的 docstring 明写「isoformat 或空串，不是 null」，",
+      "照后端契约改成空串（页面两种都兜得住，但夹具不该造后端不产生的取值）。",
+      "同时补齐 11 键里缺的 id / viewer_org_id / patient_id / resource / basis。"
     ],
     "fn": "renderAccessLogs",
     "api": {
       "/api/access-logs": [
         {
+          "id": 901,
           "at": "2026-09-01T10:00:00",
           "viewer": "doc01 &",
+          "viewer_org_id": 4,
           "viewer_org_name": "XX镇卫生院<b>",
+          "patient_id": 31,
           "patient_name": "张三",
+          "resource": "encounter",
           "resource_name": "就诊记录",
+          "basis": "encounter",
           "basis_name": "本次就诊"
         },
         {
-          "at": null,
+          "id": 902,
+          "at": "",
           "viewer": "director<img src=x onerror=alert(1)>",
+          "viewer_org_id": null,
           "viewer_org_name": "县人民医院",
+          "patient_id": 32,
           "patient_name": "李四 &",
+          "resource": "exam_report",
           "resource_name": "检查报告",
+          "basis": "referral",
           "basis_name": "转诊协同"
         }
-      ]
+      ],
+      "/api/access-logs/stats": {
+        "total": 1462,
+        "by_basis": [
+          { "basis": "encounter", "basis_name": "本次就诊", "count": 980 },
+          { "basis": "referral", "basis_name": "转诊协同<b>", "count": 305 },
+          { "basis": "global", "basis_name": "全域角色 &", "count": 112 },
+          { "basis": "consent", "basis_name": "本人授权", "count": 60 },
+          { "basis": "self", "basis_name": "本人", "count": 5 }
+        ]
+      }
     }
   },
   "consents": {
