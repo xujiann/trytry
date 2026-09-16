@@ -1395,12 +1395,18 @@ async function renderRx() {
 }
 
 async function renderPharmacy() {
-  $("#page-desc").textContent = "库存管理、批号效期、西药发药、县乡村余缺调拨、缺药预警";
-  const [stocks, alerts, expiring, dispenses] = await Promise.all([
+  $("#page-desc").textContent =
+    "库存管理、批号效期、西药发药、县乡村余缺调拨、缺药预警、批次召回与按批号反查、采购建议";
+  const [stocks, alerts, expiring, dispenses, batches, suggestions] = await Promise.all([
     api("/api/pharmacy/stocks"), api("/api/pharmacy/alerts"),
     api("/api/pharmacy/batches/expiring"), api("/api/dispense"),
+    api("/api/pharmacy/batches?limit=200"), api("/api/pharmacy/purchase-suggestions"),
   ]);
   const alertIds = new Set(alerts.map((a) => a.id));
+  // 取值真源是 models/pharmacy.py:DrugBatch.status——只有这两个值，
+  // 且它只表达"人决定召回"，过没过期是按效期现算的另一回事（见该列的注释）
+  const BATCH_STATUS = { normal: ["正常", "green"], recalled: ["已召回", "red"] };
+  const DISPENSE_STATUS = { dispensed: ["已发药", "green"], reversed: ["已冲销", "red"] };
   // 第二个面板的外壳**迁不了** `panel()`：它的标题里嵌着一个 `<span>`（缺药预警条数），
   // 而组件会把标题整段 `esc()` 掉，迁过去那个 span 会变成一段转义文本显示出来。
   // 同形状的还有慢病页与 openDrilldown，共 3 处，理由记在 docs/adr/0009 第十三批。
@@ -1456,7 +1462,24 @@ async function renderPharmacy() {
       ${table(["ID", "处方ID", "状态", "明细（批号×数量）"], dispenses, (d) =>
         `<tr><td>${d.id}</td><td>${d.prescription_id}</td>
          <td>${d.status === "reversed" ? '<span class="tag red">已冲销</span>' : '<span class="tag green">已发药</span>'}</td>
-         <td>${d.items.map((i) => `${esc(i.drug_name)} ${esc(i.batch_no)}×${i.quantity}`).join("，")}</td></tr>`)}</div>`;
+         <td>${d.items.map((i) => `${esc(i.drug_name)} ${esc(i.batch_no)}×${i.quantity}`).join("，")}</td></tr>`)}</div>
+    ${panel("批次台账（召回后不得再发药、不得再入库，余量同事务退出可用汇总）",
+      table(["ID", "机构", "药品", "批号", "效期", "总量/已用", "可用", "不可发", "状态", "操作"], batches, (b) =>
+        `<tr><td>${b.id}</td><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td>
+         <td>${esc(b.batch_no)}</td><td>${esc(b.expire_date)}</td><td>${b.quantity} / ${b.used_quantity}</td>
+         <td>${b.available}</td><td>${b.blocked_quantity}</td>
+         <td>${statusTag(BATCH_STATUS, b.status)}${b.recall_reason
+           ? `<br><span class="desc">${esc(b.recall_reason)}</span>` : ""}</td>
+         <td>${b.status === "normal" ? `<button class="btn danger" data-recall="${b.id}">召回</button>` : ""}
+             <button class="btn" data-trace="${b.id}">发给了谁</button></td></tr>`)
+      + `<p class="desc">「发给了谁」是召回时唯一有用的那个查询：按批号反查这一批的发药去向，
+         含已冲销的行（冲销的不计入"仍在外面"的量，但行还在）。</p>
+         <p class="msg" id="batch-msg"></p>`)}
+    <div class="panel hidden" id="trace-panel"><h3>按批号反查发药去向</h3><div id="trace-body"></div></div>
+    ${panel("采购建议（近 30 天处方用量 − 当前全网库存，只列差值为正的品种；退回处方不计入用量）",
+      table(["药品编码", "药品", "近 30 天用量", "当前库存", "建议采购量"], suggestions, (g) =>
+        `<tr><td>${esc(g.drug_code)}</td><td>${esc(g.drug_name)}</td><td>${g.usage_30d}</td>
+         <td>${g.current_stock}</td><td><b>${g.suggested_quantity}</b></td></tr>`))}`;
   $("#stock-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1504,6 +1527,36 @@ async function renderPharmacy() {
         to_org_id: Number(f.get("to_org_id")), quantity: Number(f.get("quantity")) }) });
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { recall, trace } = e.target.dataset;
+    try {
+      if (recall) {
+        const batch = batches.find((b) => b.id === Number(recall));
+        const picked = await spdModal(`召回批次 ${batch ? batch.batch_no : recall}`, [
+          { name: "reason", label: "召回原因（会随批次一起留存，后端必填）", type: "textarea" },
+        ]);
+        if (!picked || !picked.reason) return;
+        const done = await api(`/api/pharmacy/batches/${recall}/recall`, {
+          method: "POST", body: JSON.stringify({ reason: picked.reason }),
+        });
+        // 报出退出可用汇总的量：召回最要紧的后果是"账面上少了多少"，不是"状态翻了"
+        setMsg("#batch-msg", `已召回，退出可用汇总 ${done.available} → 0，不可发余量 ${done.blocked_quantity}`, true);
+      }
+      if (trace) {
+        const t = await api(`/api/pharmacy/batches/${trace}/dispenses`);
+        $("#trace-panel").classList.remove("hidden");
+        $("#trace-body").innerHTML = `
+          <p class="desc">${esc(t.drug_name)}（${esc(t.drug_code)}）批号 ${esc(t.batch_no)}，
+            效期 ${esc(t.expire_date)}，机构 ${t.org_id}，当前${statusTag(BATCH_STATUS, t.status)}；
+            仍在外面（不含冲销）共 <b>${t.total_dispensed}</b>。</p>
+          ${table(["发药ID", "处方ID", "患者", "数量", "状态", "发药时间"], t.dispenses, (r) =>
+            `<tr><td>${r.dispense_id}</td><td>${r.prescription_id}</td>
+             <td>${esc(r.patient_name) || "—"}（${r.patient_id}）</td><td>${r.quantity}</td>
+             <td>${statusTag(DISPENSE_STATUS, r.status)}</td>
+             <td>${esc(r.dispensed_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`;
+      }
+    } catch (err) { setMsg("#batch-msg", err.message, false); }
   };
 }
 

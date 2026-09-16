@@ -5342,7 +5342,12 @@
       "panel() 会把标题整段 esc()，迁过去那个 span 会变成一段转义文本显示出来。",
       "登记在 KNOWN_UNMIGRATED_SHELLS，理由同 openDrilldown。",
       "夹具照分支造：库存一条在预警集合里（红「缺药」）、一条正常；",
-      "近效期一条已过期（红标签）、一条给剩余天数；发药一条已冲销、一条已发药。"
+      "近效期一条已过期（红标签）、一条给剩余天数；发药一条已冲销、一条已发药。",
+      "第十七批（2026-09-16）：新增批次台账（召回 + 按批号反查）与采购建议两个面板。",
+      "**顺手改正了近效期那两条的形状**：后端 ExpiringBatchOut 继承 BatchOut，共 15 键；",
+      "夹具原先只写了 8 键，缺 id/status/available/blocked_quantity 等——那张表恰好没印这几列，",
+      "所以一直没暴露，但新面板要用同一批字段，照旧形状造会连'哪条能召回'都判错。",
+      "批次台账三条照分支造：normal 可召回 / recalled 带召回原因（不摆召回按钮）/ 有不可发余量的一条。"
     ],
     "fn": "renderPharmacy",
     "api": {
@@ -5376,24 +5381,106 @@
       ],
       "/api/pharmacy/batches/expiring": [
         {
+          "id": 91,
           "org_id": 4,
-          "drug_name": "阿司匹林 &",
           "drug_code": "B01AC06",
+          "drug_name": "阿司匹林 &",
           "batch_no": "P2026-03<img src=x onerror=alert(1)>",
           "expire_date": "2026-07-31",
+          "supplier": "甲供应商",
+          "quantity": 100,
+          "used_quantity": 60,
           "remaining": 40,
-          "expired": true,
-          "remaining_days": -37
+          "blocked_quantity": 0,
+          "available": 40,
+          "status": "normal",
+          "recall_reason": "",
+          "remaining_days": -37,
+          "expired": true
         },
         {
+          "id": 92,
           "org_id": 4,
-          "drug_name": "氨氯地平",
           "drug_code": "C08CA01",
+          "drug_name": "氨氯地平",
           "batch_no": "P2026-06",
           "expire_date": "2026-11-30",
+          "supplier": "",
+          "quantity": 200,
+          "used_quantity": 80,
           "remaining": 120,
-          "expired": false,
-          "remaining_days": 85
+          "blocked_quantity": 0,
+          "available": 120,
+          "status": "normal",
+          "recall_reason": "",
+          "remaining_days": 85,
+          "expired": false
+        }
+      ],
+      "/api/pharmacy/batches": [
+        {
+          "id": 91,
+          "org_id": 4,
+          "drug_code": "B01AC06",
+          "drug_name": "阿司匹林 &",
+          "batch_no": "P2026-03<img src=x onerror=alert(1)>",
+          "expire_date": "2026-07-31",
+          "supplier": "甲供应商",
+          "quantity": 100,
+          "used_quantity": 60,
+          "remaining": 40,
+          "blocked_quantity": 0,
+          "available": 40,
+          "status": "normal",
+          "recall_reason": ""
+        },
+        {
+          "id": 92,
+          "org_id": 4,
+          "drug_code": "C08CA01",
+          "drug_name": "氨氯地平",
+          "batch_no": "P2026-06",
+          "expire_date": "2026-11-30",
+          "supplier": "",
+          "quantity": 200,
+          "used_quantity": 80,
+          "remaining": 120,
+          "blocked_quantity": 0,
+          "available": 120,
+          "status": "normal",
+          "recall_reason": ""
+        },
+        {
+          "id": 93,
+          "org_id": 4,
+          "drug_code": "A10BA02<b>",
+          "drug_name": "二甲双胍 & 缓释片",
+          "batch_no": "P2026-01",
+          "expire_date": "2027-01-31",
+          "supplier": "乙供应商<b>",
+          "quantity": 300,
+          "used_quantity": 250,
+          "remaining": 50,
+          "blocked_quantity": 50,
+          "available": 0,
+          "status": "recalled",
+          "recall_reason": "厂家通报：同批号检出含量不合格 <script>"
+        }
+      ],
+      "/api/pharmacy/purchase-suggestions": [
+        {
+          "drug_code": "A10BA02<b>",
+          "drug_name": "二甲双胍 & 缓释片",
+          "usage_30d": 900.0,
+          "current_stock": 3,
+          "suggested_quantity": 897
+        },
+        {
+          "drug_code": "B01AC06",
+          "drug_name": "阿司匹林 &",
+          "usage_30d": 120.5,
+          "current_stock": 40,
+          "suggested_quantity": 80
         }
       ],
       "/api/dispense": [

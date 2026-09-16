@@ -258,7 +258,9 @@ MIGRATED_PAGES = {
     "renderContracts": 2,           # 含一处无标题裸面板；末尾还会 drawHomeVisits() 追加上门服务面板
     "renderDicts": 1,               # 整页就一个无标题裸面板；条目表由末尾的 draw("diagnosis") 写进 #dict-table
     "renderReferrals": 2,           # 含一处无标题裸面板
-    "renderPharmacy": 1,            # 第二个面板的标题里嵌着 <span>，迁不了，见下
+    "renderPharmacy": 3,            # 第二个面板的标题里嵌着 <span>，迁不了，见下
+                                    # 功能完善·pharmacy（2026-09-16）：+批次台账、+采购建议两个面板
+                                    # （按批号反查的结果容器是 `class="panel hidden" id=…`，本规则数不到）
     "renderChronic": 1,             # 同上
     # 第十四批 2026-09-06：pages-spd.js 五页 17 处（临床指导中枢 / 筛查建档 / 路径与任务 /
     # 转诊闭环 / 报告推送）。**pages-spd.js 至此没有可迁的手写外壳了**——剩的 3 处

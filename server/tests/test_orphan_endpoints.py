@@ -226,10 +226,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/outpatient/treatments",
     # patients（1）
     "/api/patients/{ehc_no}",
-    # pharmacy（3）
-    "/api/pharmacy/batches/{batch_id}/dispenses",
-    "/api/pharmacy/batches/{batch_id}/recall",
-    "/api/pharmacy/purchase-suggestions",
     # prescriptions（3）
     "/api/prescriptions/rules/import",
     "/api/prescriptions/rules/{drug_code}",
