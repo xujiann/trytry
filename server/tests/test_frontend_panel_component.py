@@ -219,7 +219,8 @@ MIGRATED_PAGES = {
     # 41 个夹具页全量重跑逐字符一致。
     "renderExams": 5,               # 含一处条件渲染的危急值面板
     "renderRx": 4,                  # 点评按钮按角色 + 是否已点评显示，条件仍留在调用点
-    "renderAppointments": 4,
+    "renderAppointments": 6,
+                                    # 功能完善·appointments（2026-09-16）：+便捷寻医、+服务黑名单两个面板
     "renderEducation": 7,           # 渲染末尾还会 drawEduGaps() 追加两个面板（不在本页计数内）
                                     # 功能完善·education（2026-09-16）：+健康宣教文章面板，
                                     # +点「培训统计」「看评价」后写进 #edu-detail / #live-detail 的两个 panel()

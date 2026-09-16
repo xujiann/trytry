@@ -159,11 +159,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/mgmt/assets/{asset_id}/scrap",
     "/api/mgmt/assets/{asset_id}/transfer",
     "/api/mgmt/secondments/{secondment_id}/end",
-    # appointments（4）
-    "/api/appointments/blacklist",
-    "/api/appointments/blacklist/{patient_id}",
-    "/api/appointments/doctors",
-    "/api/appointments/slots/batch",
     # auth（3）
     "/api/auth/totp/activate",
     "/api/auth/totp/disable",

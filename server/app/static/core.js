@@ -485,7 +485,8 @@ async function renderContracts() {
 
 async function renderAppointments() {
   $("#page-desc").textContent = "智能导诊 + 机构发布分时段号源，一站式预约挂号/检查/检验";
-  const [slots, appointments] = await Promise.all([api("/api/appointments/slots"), api("/api/appointments")]);
+  const [slots, appointments, blacklist] = await Promise.all([
+    api("/api/appointments/slots"), api("/api/appointments"), api("/api/appointments/blacklist")]);
   const RT = { outpatient: "门诊", exam: "检查", lab: "检验" };
   const AS = { booked: ["已预约", "green"], cancelled: ["已取消", "red"], fulfilled: ["已就诊", ""] };
   $("#page-body").innerHTML = `
@@ -506,6 +507,20 @@ async function renderAppointments() {
         <input name="capacity" type="number" value="5" min="1" style="min-width:70px">
         <button>发布</button>
       </form>
+      <p class="desc" style="margin-top:12px">批量排班：一条模板 × 一段日期，已有号源的日期自动跳过（幂等，补生成可重跑）</p>
+      <form class="inline" id="slot-batch-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="resource_type">${Object.entries(RT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="resource_name" placeholder="资源名称" required>
+        <input name="employee_id" type="number" placeholder="医师ID（可选）" style="width:130px">
+        <input name="slot_time" placeholder="时段 09:00-10:00" style="width:150px">
+        <input name="capacity" type="number" value="5" min="1" style="width:80px">
+        <input name="date_from" placeholder="起 YYYY-MM-DD" required>
+        <input name="date_to" placeholder="止 YYYY-MM-DD" required>
+        <input name="skip_dates" placeholder="跳过日期，逗号分隔" style="width:180px">
+        <label style="font-size:13px"><input type="checkbox" name="skip_weekends" value="true"> 跳过周末</label>
+        <button class="secondary">批量生成</button>
+      </form>
       <h3 style="margin-top:14px">预约</h3>
       <form class="inline" id="book-form">
         <input name="slot_id" type="number" placeholder="号源ID" required>
@@ -516,6 +531,26 @@ async function renderAppointments() {
       `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(RT[s.resource_type] || s.resource_type)}</td><td>${esc(s.resource_name)}</td>
        <td>${esc(s.slot_date)} ${esc(s.slot_time)}</td>
        <td><span class="tag ${s.booked >= s.capacity ? "red" : "green"}">${s.booked}/${s.capacity}</span></td></tr>`))}
+    ${panel("便捷寻医（指引⑨）", `
+      <p class="desc">按姓名 / 科室 / 职称找医师并带出近期可约号源。**没号的医师也在列**并标注——
+        只给有号的，居民会以为这位医师不存在。跨机构可查：这是面向居民的寻医目录，不是管理数据</p>
+      <form class="inline" id="doctor-form">
+        <input name="keyword" placeholder="姓名 / 科室 / 职称" style="min-width:200px">
+        <input name="org_id" type="number" placeholder="机构ID（可选）" style="width:140px">
+        <input name="from_date" placeholder="起始日期 YYYY-MM-DD（默认今天）" style="width:230px">
+        <button>寻医</button>
+      </form><p class="msg" id="doctor-msg"></p>
+      <div id="doctor-result"></div>`)}
+    ${panel("服务黑名单（⑫ 爽约 / 缺药不取）", `
+      <form class="inline" id="bl-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="domain"><option value="appointment">预约爽约</option><option value="shortage">缺药登记后不取药</option></select>
+        <input name="reason" placeholder="原因" style="min-width:200px">
+        <button>加入黑名单</button>
+      </form><p class="msg" id="bl-msg"></p>
+      ${table(["ID", "患者", "业务域", "原因", "操作"], blacklist, (b) =>
+        `<tr><td>${b.id}</td><td>${b.patient_id}</td><td>${esc(b.domain_name)}</td><td>${esc(b.reason) || "—"}</td>
+         <td><button class="btn secondary" data-blout="${b.patient_id}" data-domain="${esc(b.domain)}">移出</button></td></tr>`)}`)}
     ${panel("预约记录", table(["ID", "号源", "患者", "状态", "操作"], appointments, (a) => {
       return `<tr><td>${a.id}</td><td>${a.slot_id}</td><td>${a.patient_id}</td>
         <td>${statusTag(AS, a.status)}</td>
@@ -556,6 +591,49 @@ async function renderAppointments() {
       route();
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
+  $("#slot-batch-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const template = {
+      resource_type: f.get("resource_type"), resource_name: f.get("resource_name"),
+      slot_time: f.get("slot_time") || "",
+      // 与上面单条发布同一个写法：清空 capacity 会送 0，而后端是 ge=1
+      ...(f.get("capacity") ? { capacity: Number(f.get("capacity")) } : {}),
+      ...(f.get("employee_id") ? { employee_id: Number(f.get("employee_id")) } : {}),
+    };
+    try {
+      const r = await api("/api/appointments/slots/batch", { method: "POST", body: JSON.stringify({
+        org_id: Number(f.get("org_id")), templates: [template],
+        date_from: f.get("date_from"), date_to: f.get("date_to"),
+        skip_dates: String(f.get("skip_dates") || "").split(/[，,\s]+/).filter(Boolean),
+        skip_weekends: f.get("skip_weekends") === "true" }) });
+      // 跳过数要说出来：幂等跳过与"什么都没生成"看起来一样，不报出来没人知道是补生成生效了
+      setMsg("#apt-msg", `批量生成 ${r.created} 个号源，跳过已有 ${r.skipped} 个`);
+      route();
+    } catch (err) { setMsg("#apt-msg", err.message, false); }
+  };
+  $("#doctor-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams();
+    ["keyword", "org_id", "from_date"].forEach((k) => { if (f.get(k)) q.set(k, f.get(k)); });
+    try {
+      const rows = await api(`/api/appointments/doctors?${q.toString()}`);
+      $("#doctor-result").innerHTML = table(
+        ["医师", "职称", "岗位", "机构", "可约号源", "近期号源"], rows, (d) =>
+        `<tr><td>${esc(d.name)}</td><td>${esc(d.title) || "—"}</td><td>${esc(d.position) || "—"}</td>
+         <td>${esc(d.org_name) || d.org_id}</td>
+         <td>${d.bookable ? `<span class="tag green">${d.available_slots}</span>` : '<span class="tag">暂无号</span>'}</td>
+         <td>${(d.next_slots || []).map((s) =>
+            `${esc(s.slot_date)} ${esc(s.slot_time) || ""} ${esc(s.resource_name)}（余 ${s.remaining}，号源 ${s.slot_id}）`)
+            .join("<br>") || "—"}</td></tr>`);
+      setMsg("#doctor-msg", "");
+    } catch (err) { $("#doctor-result").innerHTML = ""; setMsg("#doctor-msg", err.message, false); }
+  };
+  $("#bl-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/appointments/blacklist", formJson(e.target, ["patient_id"]), "#bl-msg");
+  };
   $("#book-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -566,10 +644,16 @@ async function renderAppointments() {
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { cancel, fulfill } = e.target.dataset;
+    const { cancel, fulfill, blout, domain } = e.target.dataset;
     try {
       if (cancel) { await api(`/api/appointments/${cancel}/cancel`, { method: "POST" }); route(); }
       if (fulfill) { await api(`/api/appointments/${fulfill}/fulfill`, { method: "POST" }); route(); }
+      if (blout) {
+        // domain 必须带上：后端按 (domain, patient_id) 定位，缺省是 appointment，
+        // 移「缺药不取」那条时不带就会 404（或误删另一个业务域的那条）
+        await api(`/api/appointments/blacklist/${blout}?domain=${encodeURIComponent(domain)}`, { method: "DELETE" });
+        route();
+      }
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
 }

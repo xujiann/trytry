@@ -3462,7 +3462,8 @@
     "_why": [
       "第九批（2026-09-06）：预约与导诊。四个面板都无条件渲染；号源表里给一条约满、一条未满，",
       "钉住 booked>=capacity 那个红/绿 tag；预约记录里 booked / fulfilled 两态各一条，",
-      "把「核销/取消」与「—」两个分支都走到。导诊结果由点击后才渲染，本页比对不覆盖。"
+      "把「核销/取消」与「—」两个分支都走到。导诊结果由点击后才渲染，本页比对不覆盖。",
+      "功能完善·appointments（2026-09-16）：新增服务黑名单两条——两个 domain 各一条（域中文名由服务端折算，前端不再维护第二份映射），一条 reason 空串走 `|| \"—\"` 支、另一条带载荷。寻医结果由点击后才渲染，与导诊同样不在本页比对面内。"
     ],
     "fn": "renderAppointments",
     "api": {
@@ -3500,6 +3501,22 @@
           "slot_id": 10,
           "patient_id": 32,
           "status": "fulfilled"
+        }
+      ],
+      "/api/appointments/blacklist": [
+        {
+          "id": 3,
+          "domain": "appointment",
+          "domain_name": "预约爽约",
+          "patient_id": 77,
+          "reason": "连续三次未到 <script>"
+        },
+        {
+          "id": 4,
+          "domain": "shortage",
+          "domain_name": "缺药登记后不取药",
+          "patient_id": 78,
+          "reason": ""
         }
       ]
     }
