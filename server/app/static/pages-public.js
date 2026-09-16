@@ -419,6 +419,8 @@ async function renderCerts() {
 
 const ESB_SYSTEMS = { his: "医院信息系统", lis: "检验系统", pacs: "影像系统", insurance: "医保系统", provincial: "省级平台" };
 const ESB_MSG_STATUS = { queued: ["待处理", "orange"], processing: ["处理中", ""], succeeded: ["成功", "green"], failed: ["失败待重试", "orange"], dead: ["死信", "red"] };
+// 执行记录只有两种终态（esb.py 的 `status="failed" if error else "succeeded"`）——与消息状态不是一套
+const ESB_RUN_STATUS = { succeeded: ["成功", "green"], failed: ["失败", "red"] };
 const ESB_FLOW_SAMPLE = JSON.stringify([
   { type: "transform", config: { format: "fhir_patient", source_field: "resource" } },
   { type: "validate", config: { required: ["name", "id_card"] } },
@@ -485,7 +487,14 @@ async function renderEsb() {
         `<tr><td><span class="tag">${esc(f.code)}</span></td><td>${esc(f.name)}</td><td>${f.step_count}</td>
          <td style="max-width:320px;font-size:12px">${esc((f.steps || []).map((s) => s.type).join(" → "))}</td>
          <td>${f.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
-         <td><button class="btn secondary" data-esbrun="${esc(f.code)}">对消息执行</button></td></tr>`)}`)
+         <td>${f.active ? `<button class="btn secondary" data-esbrun="${esc(f.code)}">对消息执行</button>` : ""}
+             <button class="btn secondary" data-esbflowedit="${f.id}">编辑</button>
+             <button class="btn" data-esbruns="${f.id}">执行记录</button></td></tr>`)}
+      <p class="desc">编辑只改<b>此后</b>的执行——已经跑过的那些执行记录里存的是当时的步骤快照，
+        流程后来改了步骤，旧记录也不会跟着变。
+        停用的流程不摆「对消息执行」：后端仍按 code 找得到它，但会回 409「流程已停用」，
+        摆出来只会让人点一次看一句错。停用后要再用，先在这里「编辑」改回启用。</p>
+      <div id="esb-runs"></div>`)
     + panel("接入方统计",
       table(["接入方", "总量", "成功", "死信", "积压", "成功率", "失败率"], stats.by_endpoint, (r) =>
         `<tr><td><span class="tag">${esc(r.endpoint_code)}</span> ${esc(r.endpoint_name)}</td><td>${r.total}</td>
@@ -493,6 +502,21 @@ async function renderEsb() {
          <td>${r.dead ? `<span class="tag red">${r.dead}</span>` : 0}</td>
          <td>${r.backlog ? `<span class="tag orange">${r.backlog}</span>` : 0}</td>
          <td>${r.success_rate_pct}%</td><td>${r.failure_rate_pct}%</td></tr>`));
+  const drawRuns = async (flowId) => {
+    try {
+      const rows = await api(`/api/esb/flow-runs?flow_id=${encodeURIComponent(flowId)}&limit=50`);
+      $("#esb-runs").innerHTML = `<h3 style="margin-top:14px">流程 ${flowId} 的执行记录</h3>
+        ${table(["记录", "流程", "消息", "状态", "步骤结果", "错误", "时间"], rows, (r) =>
+          `<tr><td>${r.id}</td><td><span class="tag">${esc(r.flow_code)}</span></td><td>${r.message_id}</td>
+           <td>${statusTag(ESB_RUN_STATUS, r.status)}</td>
+           <td style="font-size:12px">${esc((r.step_results || []).map((x) =>
+             `${x.step}.${x.type}=${x.status}`).join("；")) || "—"}</td>
+           <td>${esc(r.error) || "—"}</td>
+           <td>${esc(r.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}
+        <p class="desc">步骤结果是<b>执行当时的快照</b>：流程后来改了步骤，这里也不会跟着变——
+          排查"那天为什么失败"靠的正是这一点。</p>`;
+    } catch (err) { $("#esb-runs").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
   $("#esb-msg-filter").onsubmit = async (e) => {
     e.preventDefault();
     try { await drawMessages(); } catch (err) { setMsg("#esb-msg", err.message, false); }
@@ -521,8 +545,30 @@ async function renderEsb() {
     } catch (err) { setMsg("#esb-flow-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { esbproc, esbpayload, esbtoggle, active, esbrotate, esbrun } = e.target.dataset;
+    const { esbproc, esbpayload, esbtoggle, active, esbrotate, esbrun,
+            esbflowedit, esbruns } = e.target.dataset;
     try {
+      if (esbruns) return await drawRuns(esbruns);
+      if (esbflowedit) {
+        const f = flows.find((x) => x.id === Number(esbflowedit));
+        const picked = await spdModal(`编辑流程 ${f ? f.code : esbflowedit}`, [
+          { name: "name", label: "流程名称（留空不改）", type: "text", value: f ? f.name : "" },
+          { name: "active", label: "启停", type: "select", value: f && f.active ? "1" : "0",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+          { name: "steps", label: "步骤 JSON 数组（留空不改；type 只认 transform/validate/route/persist）",
+            type: "textarea", value: f ? JSON.stringify(f.steps || []) : "" },
+        ]);
+        if (!picked) return;
+        // 后端 exclude_unset + `if value is not None`：留空的键不送
+        const body = { active: picked.active === "1" };
+        if (picked.name) body.name = picked.name;
+        if (picked.steps) {
+          try { body.steps = JSON.parse(picked.steps); }
+          catch (err) { return setMsg("#esb-flow-msg", `步骤 JSON 解析失败：${err.message}`, false); }
+        }
+        await api(`/api/esb/flows/${esbflowedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        return route();
+      }
       if (esbproc) {
         const res = await api(`/api/esb/messages/${esbproc}/process`, { method: "POST" });
         setMsg("#esb-msg", `消息 ${esbproc} → ${ESB_MSG_STATUS[res.status][0]}：${res.detail || res.last_error}`, res.status === "succeeded");

@@ -546,21 +546,41 @@
     "api": {
       "/api/esb/stats": {
         "totals": {
-          "endpoints": 3,
           "total": 1200,
-          "success_rate_pct": 98.2,
+          "succeeded": 1175,
+          "dead": 21,
           "backlog": 4,
-          "dead": 1
+          "success_rate_pct": 98.24,
+          "failure_rate_pct": 1.76,
+          "endpoints": 3,
+          "flows": 2
         },
         "by_endpoint": [
           {
-            "code": "his<b>",
-            "name": "HIS",
+            "endpoint_id": 1,
+            "endpoint_code": "his<b>",
+            "endpoint_name": "县医院 HIS",
             "total": 900,
             "succeeded": 890,
-            "failed": 6,
-            "dead": 1,
-            "success_rate_pct": 98.9
+            "dead": 6,
+            "queued": 3,
+            "failed": 1,
+            "backlog": 4,
+            "success_rate_pct": 99.33,
+            "failure_rate_pct": 0.67
+          },
+          {
+            "endpoint_id": 2,
+            "endpoint_code": "lis",
+            "endpoint_name": "检验 LIS'",
+            "total": 300,
+            "succeeded": 285,
+            "dead": 15,
+            "queued": 0,
+            "failed": 0,
+            "backlog": 0,
+            "success_rate_pct": 95.0,
+            "failure_rate_pct": 5.0
           }
         ]
       },
@@ -586,6 +606,7 @@
       ],
       "/api/esb/flows": [
         {
+          "id": 1,
           "code": "f1",
           "name": "检验回传<b>",
           "step_count": 2,
@@ -597,7 +618,21 @@
               "type": "persist"
             }
           ],
-          "active": true
+          "active": true,
+          "created_at": "2026-09-01T09:00:00"
+        },
+        {
+          "id": 2,
+          "code": "f2<img src=x onerror=alert(1)>",
+          "name": "影像归档（已停用）",
+          "step_count": 1,
+          "steps": [
+            {
+              "type": "route"
+            }
+          ],
+          "active": false,
+          "created_at": "2026-08-01T09:00:00"
         }
       ],
       "/api/esb/messages": [

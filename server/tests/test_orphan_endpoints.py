@@ -177,9 +177,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/disease-programs/{program_id}",
     # eldercare（1）
     "/api/eldercare/stats",
-    # esb（2）
-    "/api/esb/flow-runs",
-    "/api/esb/flows/{flow_id}",
     # inpatient（1）
     "/api/inpatient/orders/{order_id}/executions",
     # metrics（1）
