@@ -4631,19 +4631,37 @@
     ],
     "fn": "renderOutpatientDocs",
     "localStorage": {
-      "medplat_od_encounter": "7"
+      "medplat_od_encounter": "7",
+      "medplat_role": "admin"
     },
     "api": {
       "/api/outpatient/consent-templates": [
         {
           "id": 1,
+          "consent_type": "treatment",
+          "consent_type_name": "治疗处置",
           "title": "静脉输液知情同意书 &",
-          "version": "v2<b>"
+          "body": "输液过程中如出现皮疹、心慌等不适请立即告知护士。",
+          "version": "v2<b>",
+          "active": true
         },
         {
           "id": 2,
+          "consent_type": "exam",
+          "consent_type_name": "特殊检查",
           "title": "特殊检查知情同意书",
-          "version": "v1"
+          "body": "",
+          "version": "v1",
+          "active": true
+        },
+        {
+          "id": 3,
+          "consent_type": "surgery",
+          "consent_type_name": "手术",
+          "title": "门诊小手术知情同意书（旧版）",
+          "body": "（已由 v2 取代）",
+          "version": "v1<img src=x onerror=alert(1)>",
+          "active": false
         }
       ],
       "/api/outpatient/consents": [

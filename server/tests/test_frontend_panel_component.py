@@ -245,7 +245,8 @@ MIGRATED_PAGES = {
     "renderEldercare": 4,           # 含一处无标题裸面板；预警走 accent；这页是 innerHTML= 之后再 +=
     "renderCerts": 5,               # 证明表格由末尾的 draw() 写进 #cert-table（不在本页计数内）
                                     # 功能完善·certs（2026-09-16）：+死因报告卡批量导出面板（限管理层）
-    "renderOutpatientDocs": 4,      # 其中两个包在 `${encounterId ? … : ""}` 里
+    "renderOutpatientDocs": 6,      # 其中两个包在 `${encounterId ? … : ""}` 里
+                                    # 功能完善·outpatient_docs（2026-09-16）：+告知书模板、+按患者查处置史两个面板
     "renderFund": 4,                # 其中三个包在 `${picked ? … : ""}` 里
     # 第十二批 2026-09-06：core.js 五页（绩效考核 / 消毒供应 / 医疗废物 / 成员机构 / 居民主索引）。
     # 五页各带一处无标题裸面板——第十一批给组件加了空标题分支，这批第一次成批用上。

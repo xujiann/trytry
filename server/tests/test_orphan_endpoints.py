@@ -191,9 +191,6 @@ KNOWN_ORPHANS: set[str] = {
     "/api/org-groups/of-org/{org_id}",
     # organizations（1）
     "/api/organizations/tree-health",
-    # outpatient_docs（2）
-    "/api/outpatient/consent-templates/{template_id}",
-    "/api/outpatient/treatments",
     # patients（1）
     "/api/patients/{ehc_no}",
     # projects（2）

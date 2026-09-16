@@ -1176,6 +1176,9 @@ async function renderCredentials() {
 
 /* ---------------- 门急诊文书（浙#3） ---------------- */
 
+// active 是 bool，没有后端文案可取；映成状态码再走 statusTag（consent_type_name 是后端给的，不自己映）
+const TPL_STATUS = { on: ["现行", "green"], off: ["已停用", "red"] };
+
 const CONSENT_TYPES = {
   surgery: "手术", anesthesia: "麻醉", transfusion: "输血",
   exam: "特殊检查", treatment: "特殊治疗", other: "其他",
@@ -1186,9 +1189,13 @@ async function renderOutpatientDocs() {
     "知情告知书签署时冻结正文——模板日后修订不会改动已签的那一份；拒签是独立状态，不是「没签」";
   const encounterId = Number(localStorage.getItem("medplat_od_encounter") || 0);
   const [templates, consents] = await Promise.all([
-    api("/api/outpatient/consent-templates?active=true"),
+    // 取全部（不带 active）：停用的模板也要能看到并改回现行版，否则"停错了"就再也捞不回来。
+    // 开具那个下拉仍只列启用中的——后端对停用模板直接 409（"请选用现行版本"）。
+    api("/api/outpatient/consent-templates"),
     api("/api/outpatient/consents?limit=50"),
   ]);
+  const activeTemplates = templates.filter((t) => t.active);
+  const canTemplate = currentRole() === "admin";
   let scoped = { treatments: [], nursing: [], completeness: null };
   // 就诊 ID 是手输的，打错一次就 404（`/completeness` 还会因不可见 403）。
   // 这三条取数排在 `#page-body` 赋值之前，抛出去会被 route() 的 catch 换成
@@ -1263,7 +1270,7 @@ async function renderOutpatientDocs() {
         <select name="consent_type">${Object.entries(CONSENT_TYPES).map(([v, t]) =>
           `<option value="${v}">${t}</option>`).join("")}</select>
         <select name="template_id"><option value="">不用模板（自带正文）</option>
-          ${templates.map((t) => `<option value="${t.id}">${esc(t.title)} ${esc(t.version)}</option>`).join("")}</select>
+          ${activeTemplates.map((t) => `<option value="${t.id}">${esc(t.title)} ${esc(t.version)}</option>`).join("")}</select>
         <input name="title" placeholder="标题（不用模板时必填）">
         <input name="content" placeholder="正文（不用模板时必填）" style="min-width:260px">
         <button>生成待签</button>
@@ -1278,7 +1285,28 @@ async function renderOutpatientDocs() {
          <td>${esc((c.signed_at || c.created_at).slice(0, 16).replace("T", " "))}</td>
          <td>${c.status === "pending"
            ? `<button data-csign="${c.id}">签署</button><button data-crefuse="${c.id}">拒签</button>` : ""}</td></tr>`)}
-    `)}`;
+    `)}
+    ${panel("告知书模板（改模板只影响此后签署的，已签的正文是冻结快照）", `
+      ${table(["ID", "类型", "标题", "版本", "状态", "正文"].concat(canTemplate ? ["操作"] : []),
+        templates, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.consent_type_name)}</td><td>${esc(t.title)}</td>
+         <td><span class="tag">${esc(t.version)}</span></td>
+         <td>${statusTag(TPL_STATUS, t.active ? "on" : "off")}</td>
+         <td style="white-space:pre-wrap">${esc(t.body) || "—"}</td>
+         ${canTemplate ? `<td><button class="btn secondary" data-tpledit="${t.id}">编辑</button></td>` : ""}</tr>`)}
+      <p class="desc">停用的模板<b>不能再用来开具</b>（后端 409「请选用现行版本」），
+        但已经签过的那些一个字都不会变——签署时正文就冻结成了快照。
+        所以改模板是"从此往后"，不是"追溯修订"。开具处的下拉只列启用中的（当前 ${
+          activeTemplates.length} 个）。</p>
+      <p class="msg" id="od-tmsg"></p>`)}
+    ${panel("按患者查处置史（跨就诊看一条线）", `
+      <form class="inline" id="od-tr-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <button>查询</button>
+      </form>
+      <p class="desc">换药、雾化这类连续处置要跨就诊看才有意义——上面那张表只列当前选中的那一次就诊。
+        查询会按患者维度落调阅留痕。</p>
+      <div id="od-tr"></div>`)}`;
 
   $("#od-pick").onsubmit = (e) => { e.preventDefault();
     localStorage.setItem("medplat_od_encounter", e.target.encounter_id.value.trim()); route(); };
@@ -1296,8 +1324,41 @@ async function renderOutpatientDocs() {
     else body.template_id = Number(body.template_id);
     postAction("/api/outpatient/consents", body, "#od-cmsg");
   };
-  $("#page-body").onclick = (e) => {
-    const { csign, crefuse } = e.target.dataset;
+  $("#od-tr-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const pid = new FormData(e.target).get("patient_id");
+    try {
+      const rows = await api(`/api/outpatient/treatments?patient_id=${encodeURIComponent(pid)}`);
+      $("#od-tr").innerHTML = table(["就诊", "处置", "部位", "剂量", "执行人", "反应", "时间"], rows, (t) =>
+        `<tr><td>${t.encounter_id}</td><td>${esc(t.treatment_name)}</td><td>${esc(t.site) || "—"}</td>
+         <td>${esc(t.dose) || "—"}</td><td>${esc(t.executor_name) || "—"}</td>
+         <td>${t.reaction ? esc(t.reaction) : '<span class="tag orange">未记录</span>'}</td>
+         <td>${esc(t.created_at.slice(0, 16).replace("T", " "))}</td></tr>`);
+    } catch (err) { $("#od-tr").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { csign, crefuse, tpledit } = e.target.dataset;
+    if (tpledit) {
+      const t = templates.find((x) => x.id === Number(tpledit));
+      const picked = await spdModal(`编辑模板 ${t ? t.version : tpledit}`, [
+        { name: "title", label: "标题（留空不改）", type: "text", value: t ? t.title : "" },
+        { name: "version", label: "版本号（留空不改；改版本是为了让已签的那份认得出依据哪版）",
+          type: "text", value: t ? t.version : "" },
+        { name: "active", label: "启停", type: "select", value: t && t.active ? "1" : "0",
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
+        { name: "body", label: "正文（留空不改）", type: "textarea", value: t ? t.body : "" },
+      ]);
+      if (!picked) return;
+      // 后端 exclude_unset + `if value is not None`：留空的键不送，别拿空串把正文清了
+      const body = { active: picked.active === "1" };
+      if (picked.title) body.title = picked.title;
+      if (picked.version) body.version = picked.version;
+      if (picked.body) body.body = picked.body;
+      try {
+        await api(`/api/outpatient/consent-templates/${tpledit}`, { method: "PATCH", body: JSON.stringify(body) });
+        return route();
+      } catch (err) { return setMsg("#od-tmsg", err.message, false); }
+    }
     if (csign) {
       const signer_name = prompt("签署人姓名");
       if (!signer_name) return;
