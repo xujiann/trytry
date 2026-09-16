@@ -162,16 +162,17 @@ KNOWN_ORPHANS: set[str] = {
     # 有两条校验不同的路——所以不接，也不豁免（豁免是"按设计不需要界面"，这条不是）。
     # 该怎么收口是架构裁定，已登记 docs/待裁定事项清单.md「mgmt / staffing 派驻两套实现」。
     "/api/mgmt/secondments/{secondment_id}/end",
-    # auth（3）
+    # auth（3）——**按 CLAUDE.md §8 暂缓，不是漏做**：这三条是双因素（TOTP）的
+    # 开通/验证/关闭，属"涉及认证的改动，走 §9 的 ADR 并请人复核"。后端已完整
+    # （setup 生成 pending 密钥 → activate 验一次启用 → disable 须验当前码才能关），
+    # 缺的只是账号页上的入口；但接入口意味着把密钥与 otpauth URI 印到页面上，
+    # 这一步该由人确认，不该由一次自动批次顺手做掉。**清到这里请先找人复核。**
     "/api/auth/totp/activate",
     "/api/auth/totp/disable",
     "/api/auth/totp/setup",
     # certs（2）
     "/api/certs/death-report-cards/export.csv",
     "/api/certs/{cert_id}/death-report-card",
-    # checkups（2）
-    "/api/checkups/{checkup_id}/items",
-    "/api/checkups/{checkup_id}/review",
     # chronic（2）
     "/api/chronic/disease-types/{type_id}",
     "/api/chronic/{chronic_id}/risk",

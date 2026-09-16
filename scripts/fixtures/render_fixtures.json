@@ -4493,6 +4493,9 @@
       "体检两条分别走 has_abnormal 真/假，覆盖红标签与「正常」两支。"
     ],
     "fn": "renderCerts",
+    "localStorage": {
+      "medplat_role": "doctor"
+    },
     "api": {
       "/api/certs/stats": {
         "birth": 12,

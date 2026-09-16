@@ -214,11 +214,15 @@ async function renderProcure() {
 }
 
 const CERT_TYPES = { birth: "出生医学证明", death: "死亡医学证明", defect: "出生缺陷儿登记" };
+// abnormal 是 bool，没有后端文案可取；映成状态码再走 statusTag，与本页其余状态列同写法
+const CHK_ITEM = { ok: ["正常", "green"], bad: ["异常", "red"] };
 
 async function renderCerts() {
   $("#page-desc").textContent = "出生/死亡医学证明签发与出生缺陷登记（限医师/公卫）；成人健康体检记录与异常清单";
   const [stats, checkups, abnormal] = await Promise.all([
     api("/api/certs/stats"), api("/api/checkups"), api("/api/checkups/abnormal")]);
+  // 总检后端是 require_roles("doctor")（admin 全通）；公卫岗只录入，摆了只会点出 403
+  const canReview = ["doctor", "admin"].includes(currentRole());
   const draw = async (certType = "") => {
     const certs = await api(`/api/certs${certType ? `?cert_type=${certType}` : ""}`);
     $("#cert-table").innerHTML = table(["编号", "类型", "姓名", "性别", "日期", "诊断/说明", "机构", "操作"], certs, (c) =>
@@ -261,15 +265,47 @@ async function renderCerts() {
     ${panel("体检记录", table(["ID", "患者", "套餐", "日期", "结论", "异常", "操作"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
        <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td>
-       <td><button class="btn secondary" data-printchk="${c.id}">打印报告</button></td></tr>`))}`;
+       <td><button class="btn" data-chkitems="${c.id}">分项结果</button>
+           ${canReview ? `<button class="btn secondary" data-chkreview="${c.id}">总检</button>` : ""}
+           <button class="btn secondary" data-printchk="${c.id}">打印报告</button></td></tr>`)
+      + `<p class="desc">总检限医师（公卫岗只录入），重复总检按覆盖处理（复核改结论）。
+        <b>行上看不到"这次总检了没有"</b>——体检列表与分项接口的出参都不含 final_conclusion，
+        后端也没有单条详情端点；写完在下方回显一次，之后要看结论走同一行的<b>「打印报告」</b>
+        （打印件里有「总检结论」与总检医师署名）。</p>`)}
+    <div class="panel hidden" id="chk-detail"><h3>体检分项结果</h3><div id="chk-detail-body"></div></div>`;
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
   $("#cert-filter").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("cert_type")); };
   $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };
+  const showItems = async (id, review) => {
+    const items = await api(`/api/checkups/${id}/items`);
+    $("#chk-detail").classList.remove("hidden");
+    $("#chk-detail-body").innerHTML = `
+      <p class="desc">体检 ${id} 共 ${items.length} 个分项${items.length ? "" : "（该次体检还没有录入分项）"}。</p>
+      ${review ? `<p class="msg ok">总检结论已保存：${esc(review.final_conclusion)}（总检医师 ${
+        esc(review.final_doctor)}）。刷新后此处不再显示——之后查结论走「打印报告」。</p>` : ""}
+      ${table(["项目编码", "项目", "结果", "单位", "参考范围", "判定"], items, (i) =>
+        `<tr><td>${esc(i.item_code)}</td><td>${esc(i.item_name)}</td><td>${esc(i.result_value)}</td>
+         <td>${esc(i.unit) || "—"}</td><td>${esc(i.ref_range) || "—"}</td>
+         <td>${statusTag(CHK_ITEM, i.abnormal ? "bad" : "ok")}</td></tr>`)}`;
+  };
   $("#page-body").onclick = async (e) => {
-    const { printcert, printchk } = e.target.dataset;
-    if (!printcert && !printchk) return;
-    try { await openPrintPage(printcert ? `/api/print/certs/${printcert}` : `/api/print/checkups/${printchk}`); }
-    catch (err) { setMsg("#cert-msg", err.message, false); }
+    const { printcert, printchk, chkitems, chkreview } = e.target.dataset;
+    try {
+      if (chkitems) return await showItems(chkitems, null);
+      if (chkreview) {
+        const picked = await spdModal(`体检 ${chkreview} 总检`, [
+          { name: "final_conclusion", label: "总检结论（必填，后端上限 1024 字）", type: "textarea" },
+          { name: "final_doctor", label: "总检医师（留空则署当前登录医师）", type: "text" },
+        ]);
+        if (!picked || !picked.final_conclusion) return;
+        const r = await api(`/api/checkups/${chkreview}/review`, { method: "POST", body: JSON.stringify(picked) });
+        // 不走 route()：列表的出参里没有总检字段，整页重画什么都不会变；
+        // 把回执连同分项一起摆进详情容器，人才看得见自己刚写的结论落成了什么
+        return await showItems(chkreview, r);
+      }
+      if (!printcert && !printchk) return;
+      await openPrintPage(printcert ? `/api/print/certs/${printcert}` : `/api/print/checkups/${printchk}`);
+    } catch (err) { setMsg("#cert-msg", err.message, false); }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();
