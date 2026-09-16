@@ -18,14 +18,35 @@
   reason），与 inactive 的整行不同——别把两者建成同一个形状。
 - 本簇无 Money/Float 出参，数值全 int。
 """
+from datetime import date
+
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import reset_database
+from conftest import freeze_business_date, reset_database
 
 from app.database import SessionLocal
 from app.main import app
 from app.models import VaccineContraindication
+
+#: 本簇的三个日期是**一组**，围着"今天"排前后，必须一起看：
+#:
+#:   CONTRA_TODAY(9-01)  <  VALID_UNTIL(9-15)  <  AFTER_EXPIRY(12-01)
+#:   登记时的今天            暂时禁忌有效期末日     过期视角
+#:
+#: 登记回执的 `expired` 由**服务端的今天**现算（`add_contraindication` 走
+#: `clock.today()`），而清单/评估两端点可用 `today=` 覆盖。原先只有后者钉了日期，
+#: 前者跟着真实时钟跑——写下判据那天（9-15 之前）是绿的，**2026-09-16 起三条用例
+#: 集体转红**（实测）：`expired` 变 True、`blocking` 变 False，另两条拿
+#: `contras["temp"]` 当基准的断言跟着一起错。
+#:
+#: 这与 P1-53 修掉的「模块顶层 TODAY 快照」是同一类缺陷的另一面：那次是判据与
+#: 被判对象取自**两个时刻**，这次是判据取自一个**写死的过去**。修法也同源——
+#: 用 `freeze_business_date()` 把登记那一刻的业务日期钉在 CONTRA_TODAY，
+#: 判据与被判对象从此取自同一个值，几号跑都一样。
+CONTRA_TODAY = date(2026, 9, 1)
+CONTRA_VALID_UNTIL = "2026-09-15"
+CONTRA_AFTER_EXPIRY = "2026-12-01"
 
 CONTRA_KEYS = [
     "id", "patient_id", "vaccine_code", "reason", "contra_type", "status",
@@ -69,20 +90,22 @@ def base(client, admin):
 @pytest.fixture(scope="module")
 def contras(client, admin, base):
     pid = base["patient"]["id"]
-    temp = client.post(
-        "/api/vaccination/contraindications",
-        json={"patient_id": pid, "vaccine_code": "HPV9", "reason": "急性发热",
-              "contra_type": "temporary", "valid_until": "2026-09-15"},
-        headers=admin,
-    )
-    assert temp.status_code == 201, temp.text
-    perm = client.post(
-        "/api/vaccination/contraindications",
-        json={"patient_id": pid, "vaccine_code": "HPV9", "reason": "既往严重过敏",
-              "contra_type": "permanent"},
-        headers=admin,
-    )
-    assert perm.status_code == 201, perm.text
+    # 登记回执的 expired/blocking 走服务端的今天：钉住它，否则判据只在 9-15 之前成立
+    with freeze_business_date(CONTRA_TODAY):
+        temp = client.post(
+            "/api/vaccination/contraindications",
+            json={"patient_id": pid, "vaccine_code": "HPV9", "reason": "急性发热",
+                  "contra_type": "temporary", "valid_until": CONTRA_VALID_UNTIL},
+            headers=admin,
+        )
+        assert temp.status_code == 201, temp.text
+        perm = client.post(
+            "/api/vaccination/contraindications",
+            json={"patient_id": pid, "vaccine_code": "HPV9", "reason": "既往严重过敏",
+                  "contra_type": "permanent"},
+            headers=admin,
+        )
+        assert perm.status_code == 201, perm.text
     return {"temp": temp.json(), "perm": perm.json()}
 
 
@@ -97,7 +120,7 @@ def test_登记回执精确形状与键序(base, contras):
         "reason": "急性发热",
         "contra_type": "temporary",
         "status": "active",
-        "valid_until": "2026-09-15",
+        "valid_until": CONTRA_VALID_UNTIL,
         "expired": False,
         "blocking": True,
         "lift_reason": "",
@@ -120,10 +143,44 @@ def test_登记回执精确形状与键序(base, contras):
     assert type(body["id"]) is int and type(body["expired"]) is bool
 
 
+def test_登记回执的过期判定走可冻的业务日期而不是墙上时钟(client, admin):
+    """回归：登记回执的 `expired` 必须跟着 `clock.today()` 走，且可被冻结。
+
+    这条钉的是**上面那条用例为什么从此不会再随日历转红**。原先
+    `test_登记回执精确形状与键序` 的判据写死 `expired: False`，而回执是按服务端
+    真实的今天算的——有效期末日一过，判据就永远对不上（2026-09-16 实测三条集体红）。
+    现在 fixture 用 `freeze_business_date()` 把登记时刻钉住；这条用例反向证明冻结
+    确实管用：同一条暂时禁忌，把今天冻到有效期之后再登记，回执自己就翻成过期。
+
+    顺带也钉住了口径本身：`expired` 是**现算**的（不落库），所以同一行在不同的
+    "今天"下可以给出不同的答案——这正是清单端点 `today=` 覆盖参数存在的理由。
+    """
+    # 另建一名受种者：`base` 那位的禁忌清单被其他用例逐行精确断言，往里加一条会误伤
+    patient = client.post(
+        "/api/patients",
+        json={"name": "过期判定受种者", "id_card": "330281199304048874", "gender": "男",
+              "birth_date": "1993-04-04"},
+        headers=admin,
+    ).json()
+    after = date(2026, 12, 1)
+    assert after.isoformat() > CONTRA_VALID_UNTIL, "冻结日必须晚于有效期末日，否则这条什么都没证明"
+    with freeze_business_date(after):
+        resp = client.post(
+            "/api/vaccination/contraindications",
+            json={"patient_id": patient["id"], "vaccine_code": "RABIES", "reason": "回归用例·已过期",
+                  "contra_type": "temporary", "valid_until": CONTRA_VALID_UNTIL},
+            headers=admin,
+        )
+    assert resp.status_code == 201, resp.text
+    row = resp.json()
+    # 状态仍是 active（过期不改行），过期与拦截两键由日期现算
+    assert (row["status"], row["expired"], row["blocking"]) == ("active", True, False)
+
+
 def test_清单精确_过期按日期现算不改状态(client, admin, base, contras):
     pid = base["patient"]["id"]
     rows = client.get(
-        f"/api/vaccination/contraindications?patient_id={pid}&today=2026-12-01", headers=admin
+        f"/api/vaccination/contraindications?patient_id={pid}&today={CONTRA_AFTER_EXPIRY}", headers=admin
     ).json()
     assert [list(r.keys()) for r in rows] == [CONTRA_KEYS] * 2  # id 倒序
     # 暂时禁忌已过有效期：status 仍 active（不改行），expired/blocking 由日期现算翻转
@@ -133,7 +190,7 @@ def test_清单精确_过期按日期现算不改状态(client, admin, base, con
     ]
     # 未过期视角：与登记回执逐字节一致
     fresh = client.get(
-        f"/api/vaccination/contraindications?patient_id={pid}&today=2026-09-01", headers=admin
+        f"/api/vaccination/contraindications?patient_id={pid}&today={CONTRA_TODAY}", headers=admin
     ).json()
     assert fresh == [contras["perm"], contras["temp"]]
     assert client.get(
@@ -171,12 +228,12 @@ def test_解除回执精确_lifted_at字节格式回绑DB(base, contras, lifted)
 def test_清单_include_lifted开关(client, admin, base, contras, lifted):
     pid = base["patient"]["id"]
     only_active = client.get(
-        f"/api/vaccination/contraindications?patient_id={pid}&include_lifted=false&today=2026-09-01",
+        f"/api/vaccination/contraindications?patient_id={pid}&include_lifted=false&today={CONTRA_TODAY}",
         headers=admin,
     ).json()
     assert only_active == [contras["temp"]]
     assert client.get(
-        f"/api/vaccination/contraindications?patient_id={pid}&today=2026-09-01", headers=admin
+        f"/api/vaccination/contraindications?patient_id={pid}&today={CONTRA_TODAY}", headers=admin
     ).json() == [lifted, contras["temp"]]
 
 
@@ -184,7 +241,7 @@ def test_接种前评估_三分支精确(client, admin, base, contras, lifted):
     pid = base["patient"]["id"]
     # 干净分支：无禁忌无剂次（另一疫苗）
     clean = client.get(
-        f"/api/vaccination/pre-check?patient_id={pid}&vaccine_code=FLU&today=2026-09-01",
+        f"/api/vaccination/pre-check?patient_id={pid}&vaccine_code=FLU&today={CONTRA_TODAY}",
         headers=admin,
     ).json()
     assert list(clean.keys()) == PRECHECK_KEYS
@@ -197,7 +254,7 @@ def test_接种前评估_三分支精确(client, admin, base, contras, lifted):
     }
     # 拦截分支：暂时禁忌生效中；已解除的长期禁忌进 inactive（整行 _contra_out 形）
     blocked = client.get(
-        f"/api/vaccination/pre-check?patient_id={pid}&vaccine_code=HPV9&today=2026-09-01",
+        f"/api/vaccination/pre-check?patient_id={pid}&vaccine_code=HPV9&today={CONTRA_TODAY}",
         headers=admin,
     ).json()
     assert blocked == {
@@ -209,7 +266,7 @@ def test_接种前评估_三分支精确(client, admin, base, contras, lifted):
     }
     # 过期分支：有效期已过按日期现算放行，过期行进 inactive 且 expired 翻转
     expired = client.get(
-        f"/api/vaccination/pre-check?patient_id={pid}&vaccine_code=HPV9&today=2026-12-01",
+        f"/api/vaccination/pre-check?patient_id={pid}&vaccine_code=HPV9&today={CONTRA_AFTER_EXPIRY}",
         headers=admin,
     ).json()
     assert expired == {
@@ -231,7 +288,7 @@ def test_接种前评估_剂次联动(client, admin, base):
     )
     assert dose.status_code == 201, dose.text
     body = client.get(
-        f"/api/vaccination/pre-check?patient_id={pid}&vaccine_code=FLU&today=2026-09-01",
+        f"/api/vaccination/pre-check?patient_id={pid}&vaccine_code=FLU&today={CONTRA_TODAY}",
         headers=admin,
     ).json()
     assert body["previous_doses"] == 1 and body["next_dose_no"] == 2
