@@ -164,6 +164,12 @@ KNOWN_ORPHANS: set[str] = {
     # （setup 生成 pending 密钥 → activate 验一次启用 → disable 须验当前码才能关），
     # 缺的只是账号页上的入口；但接入口意味着把密钥与 otpauth URI 印到页面上，
     # 这一步该由人确认，不该由一次自动批次顺手做掉。**清到这里请先找人复核。**
+    #
+    # 2026-09-17 补：选项已写成 docs/adr/0023-TOTP双因素的界面接入.md（Proposed）。
+    # 逐条读代码时发现缺口比这三条大——`totp_code` 在三端前端出现 0 次，登录表单
+    # 根本没有验证码框（index.html:15-16 / app.js:118）。所以**只接这三条是危险的**：
+    # 开通成功的人下次登录必被 auth.py:153 的 401 拦下，且无处输码。
+    # 划掉这三条要等 ADR-0023 的方案 C 走完「登录侧先行」那一步，别提前划。
     "/api/auth/totp/activate",
     "/api/auth/totp/disable",
     "/api/auth/totp/setup",
