@@ -63,13 +63,15 @@ EXEMPT = {
 #: `admin_mgmt.py:create_payroll`（同批补了纵深防御）；
 #: `staffing.py:create_secondment`（同一张 secondments 表的另一条 create，
 #: ADR-0024 记过"两条 create 都没有归属校验"，实测 201，已补）。
+#:
+#: ✅ **钱那一族 5 条已清（2026-09-18，P1-60 第一批）**：`billing` 的计费明细 /
+#: 押金收 / 押金退 / 出院结算 / 收款。实测乙院 operator 对甲院的一次住院把
+#: **进账、出账、结算、收款整条资金链走完**，五条全部 201；五条的角色门都是
+#: `require_roles("operator")`，而 operator 不在 GLOBAL_ROLES 里，所以是实打实够得着的。
+#: 归属分别取自 `Admission.org_id` / `Encounter.org_id` / `Settlement.org_id`；
+#: 退费与结算那两句守在临界区之前（钱出去与冲抵押金都在里头）。
+#: 回归见 `tests/test_billing_org_guard.py`，变异后五条越权反例各自转红。
 KNOWN_BODY_ID_WRITES: set[str] = {
-    # —— 钱：金额直接进别家的账 ——
-    "billing.py:create_bill_detail",
-    "billing.py:create_deposit",
-    "billing.py:create_payment",
-    "billing.py:create_settlement",
-    "billing.py:refund_deposit",
     # —— 临床：写进别家的住院/医嘱/手术/交接班 ——
     "clinical_docs.py:create_handover",
     "inpatient.py:create_admission",

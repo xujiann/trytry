@@ -35,7 +35,12 @@ from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict, serialized_on
 from ..egress import egress_url_allowed, verify_signature
 from ..payments import HttpGatewayPaymentGateway, to_fen
-from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
+from ..visibility import (
+    assert_obj_org_writable,
+    assert_org_writable,
+    assert_patient_visible,
+    scope_patient_list,
+)
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -401,12 +406,16 @@ def create_bill_detail(
             raise HTTPException(status_code=422, detail="住院记录与患者不匹配")
         if admission.status != "admitted":
             raise HTTPException(status_code=409, detail="患者已出院，不可继续计费")
+        # 费用记在**哪家医院的账上**由住院记录决定，所以归属校验落在它身上。
+        # 实测未修前：乙院 operator 能往甲院这次住院里记一笔计费明细（201）。
+        assert_obj_org_writable(db, user, admission)
     else:
         encounter = db.get(Encounter, body.encounter_id)
         if encounter is None:
             raise HTTPException(status_code=404, detail="就诊记录不存在")
         if encounter.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="就诊记录与患者不匹配")
+        assert_obj_org_writable(db, user, encounter)
     item = db.query(ChargeItem).filter(ChargeItem.code == body.item_code).first()
     if item is None:
         raise HTTPException(status_code=404, detail="收费项目不存在")
@@ -589,6 +598,9 @@ def create_deposit(
         raise HTTPException(status_code=404, detail="住院记录不存在")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可预交押金")
+    # 押金收在哪家医院由住院记录决定。实测未修前：乙院 operator 能对甲院这次住院
+    # 收 5000 押金（201）——收进去的钱记在甲院账上，而经办人不是甲院的。
+    assert_obj_org_writable(db, user, admission)
     deposit = Deposit(
         admission_id=body.admission_id,
         amount=round(body.amount, 2),
@@ -612,8 +624,12 @@ def refund_deposit(
     body: DepositRefundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """押金退费：不得超余额（原子判定），出院后退余额也走这里。"""
-    if db.get(Admission, body.admission_id) is None:
+    admission = db.get(Admission, body.admission_id)
+    if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    # **钱出去的那一头**，归属校验必须在临界区之前——实测未修前：
+    # 乙院 operator 能把甲院这次住院的押金退走 4000（201）。
+    assert_obj_org_writable(db, user, admission)
     operator = user.full_name or user.username
     # 判定余额与落退费行必须在同一段临界区里，且提交也要在里头——
     # 锁一放，下一个退费请求读到的就必须是本笔已提交后的余额。
@@ -829,6 +845,12 @@ def create_settlement(
         gate_model = Encounter
         gate_id = body.encounter_id
         detail_filter = BillDetail.encounter_id == body.encounter_id
+
+    # 结算单落在 `org_id` 这家医院的账上（上面两支已从住院/就诊记录带出），
+    # 所以归属校验用这个值，且必须在进临界区、动押金之前。
+    # 实测未修前：乙院 operator 能给甲院这次住院出结算单（201，单子的 org_id 是甲院），
+    # 并在同一条路径里冲抵掉甲院的押金。
+    assert_org_writable(db, user, org_id)
 
     # 临界区按"这次住院/这次就诊"划分：同一笔的并发结算排队，不同笔互不阻塞。
     # 押金冲抵也在里头——它与 /deposits/refund 抢的是同一把住院登记行锁。
@@ -1248,6 +1270,8 @@ def create_payment(
     settlement = db.get(Settlement, body.settlement_id)
     if settlement is None:
         raise HTTPException(status_code=404, detail="结算单不存在")
+    # 收款收进结算单所属机构的账。实测未修前：乙院 operator 能对甲院的结算单收款（201）。
+    assert_obj_org_writable(db, user, settlement)
     if body.channel == "gateway" and "gateway" not in _GATEWAYS:
         # 未配置/未过出网校验时绝不能悄悄落回 Mock：Mock 会把单标成已支付，
         # 而现实中一分钱都没收到。
