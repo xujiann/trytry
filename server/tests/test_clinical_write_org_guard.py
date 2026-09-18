@@ -32,6 +32,8 @@
 **非全域角色连角色门都过不去，不是可越权入口**。把它们当洞去修，会写出四条
 触发不了的"漏洞修复"。本文件末尾有一条用例把这个判定钉住，免得下一轮又当成欠账。
 """
+import ast
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -199,25 +201,71 @@ def test_四条只有全域角色够得着的端点不该被当成洞(client):
     """
     import ast
     import pathlib
-    import re
 
     targets = {
         "routers/appointments.py": "create_slot",
         "routers/inpatient.py": "create_bed",
         "routers/cost.py": "upsert_department_cost",
+        "routers/cost.py:2": "create_allocation_rule",
     }
     app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
-    for rel, fn_name in targets.items():
+    for key, fn_name in targets.items():
+        rel = key.split(":")[0]
         tree = ast.parse((app_dir / rel).read_text(encoding="utf-8"))
+        consts = _module_role_consts(tree)
         found = False
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == fn_name:
-                decs = " ".join(ast.unparse(d) for d in node.decorator_list)
-                roles = re.findall(r"require_roles\(([^)]*)\)", decs)
-                names = set(re.findall(r"'([a-z_]+)'", roles[0])) if roles else set()
-                assert "require_admin" in decs or names <= {"admin", "director"}, (
-                    f"{rel}:{fn_name} 的角色门已经放宽到非全域角色 {names}，"
-                    "它现在**是**可越权入口了，请补归属校验并从这条用例里移走"
-                )
-                found = True
+            if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == fn_name):
+                continue
+            found = True
+            admin_only, names = _role_gate(node, consts)
+            assert admin_only or names <= {"admin", "director"}, (
+                f"{rel}:{fn_name} 的角色门已经放宽到非全域角色 {sorted(names)}，"
+                "它现在**是**可越权入口了，请补归属校验并从这条用例里移走"
+            )
         assert found, f"{rel} 里找不到 {fn_name}——判定的前提已经变了"
+
+
+def _module_role_consts(tree) -> dict[str, list[str]]:
+    """模块级的角色常量（如 `SERVICE_ROLES = ("doctor", "public_health", "director")`）。"""
+    out: dict[str, list[str]] = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, (ast.Tuple, ast.List, ast.Set))):
+            names = [e.value for e in node.value.elts
+                     if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            if names:
+                out[node.targets[0].id] = names
+    return out
+
+
+def _role_gate(fn, consts: dict[str, list[str]]) -> tuple[bool, set[str]]:
+    """(是不是 require_admin, 角色名集合)。
+
+    **必须认得 `require_roles(*SERVICE_ROLES)` 这种星号展开**——本文件初稿用的是
+    `re.findall(r"'([a-z_]+)'", ...)`，遇到星号参数会得到**空集合**，而空集合
+    `<= {"admin","director"}` 恒真，于是这条用例会**为错误的理由通过**。
+    2026-09-18 就是这么把 `spd/tasks.py:start_path_instance` 误判成"连角色门都没有"的
+    （它其实是 `require_roles(*SERVICE_ROLES)` = doctor/public_health/director）。
+    解析不出来的参数一律留成 `<未解析:…>` 字符串，它不在全域角色集合里，
+    会让断言红掉——**宁可误红，不可空转**。
+    """
+    admin_only, roles = False, set()
+    for dec in fn.decorator_list:
+        for sub in ast.walk(dec):
+            if isinstance(sub, ast.Name) and sub.id == "require_admin":
+                admin_only = True
+            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                    and sub.func.id == "require_roles"):
+                for arg in sub.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        roles.add(arg.value)
+                    elif isinstance(arg, ast.Starred) and isinstance(arg.value, ast.Name):
+                        resolved = consts.get(arg.value.id)
+                        roles.update(resolved if resolved
+                                     else [f"<未解析:{arg.value.id}>"])
+                    else:
+                        roles.add(f"<未解析:{ast.unparse(arg)}>")
+    return admin_only, roles

@@ -268,9 +268,19 @@ def _waste_out(w: MedicalWaste) -> dict:
     status_code=201,
     dependencies=[Depends(require_roles("operator"))],  # H2: 医废收集=经办
 )
-def collect(body: WasteCollect, db: Session = Depends(get_db)):
+def collect(
+    body: WasteCollect,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 医废收集是**受监管的转移联单起点**，追溯码按机构编号（MW-日期-序号）。
+    # 实测未修前：乙院 operator 能替甲院记一条收集（201，追溯码落在甲院头上）。
+    # 用 `assert_org_writable`（创建类、调用方自报 org_id）而不是经点位取：
+    # 这条的 `org_id` 就是**要写进去的那一家**，自报成自己家等于写自己家，没有绕过空间；
+    # 下面那句"点位必须属于该机构"管的是另一回事（别拿甲院的点位记乙院的单）。
+    assert_org_writable(db, user, body.org_id)
     if body.source_location_id is not None:
         loc = db.get(WasteLocation, body.source_location_id)
         if loc is None:

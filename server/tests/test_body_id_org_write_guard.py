@@ -95,10 +95,24 @@ GLOBAL_ROLE_ONLY = {
 #: **诊疗行为的归属**。归属取自 `Ward.org_id` / `Admission.org_id`。
 #: 转诊与会诊都有各自的入口，不是"直接写别家的医嘱单"。
 #: 回归见 `tests/test_clinical_write_org_guard.py`，变异后四条越权反例各自转红。
+#:
+#: ✅ **最后一批 2 条已清（2026-09-18，P1-60 第三批）**：`medwaste.collect`
+#: （乙院 operator 替甲院记医废收集 201，追溯码落在甲院头上——受监管的转移联单起点）
+#: 与 `spd/tasks.start_path_instance`（乙院 doctor 给甲院纳管档案启动路径 201，
+#: 连首节点任务一起生成；同文件其余六个流转端点 P0-12 那批早就有守卫，唯独"启动"没有）。
+#: 回归见 `tests/test_last_body_id_org_guard.py`。
+#:
+#: ⚠️ **更正**：上一批曾写"`start_path_instance` 连角色门都没有"——**错的**，
+#: 它是 `require_roles(*SERVICE_ROLES)`（doctor/public_health/director）。
+#: 错因是当时的角色门扫描用正则取引号里的角色名，**看不见星号展开的常量**。
+#: 结论不变（doctor/public_health 非全域，仍是真候选），但"够得着的人"比原先说的窄。
 KNOWN_BODY_ID_WRITES: set[str] = {
-    "spd/tasks.py:start_path_instance",   # 连角色门都没有：任何已登录账号都能调
-    "appointments.py:book",               # 多半按设计跨机构，待产品确认后移入 EXEMPT
-    "medwaste.py:collect",
+    # 仅剩这一条，而且**多半不是缺陷**：`book_slot` 的 docstring 明写它是
+    # "管理端代约与居民端自助预约共用"的核心，而便捷寻医、转诊预约本来就要能挂别家的号。
+    # 补守卫会把「乡镇替患者约县院专家号」这条正路堵死。倾向判为按设计并移入 EXEMPT，
+    # 但那是**产品口径**不是工程判断，所以留在候选里等确认——
+    # 宁可名单上多一条待确认，也不自作主张把一条功能标成漏洞或把一个洞标成功能。
+    "appointments.py:book",
 }
 
 _HTTP_VERBS = ("get", "post", "put", "patch", "delete")

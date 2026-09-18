@@ -269,6 +269,13 @@ def start_path_instance(
     enrollment = db.get(SpdEnrollment, body.enrollment_id)
     if enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
+    # 路径实例挂在**纳管机构**名下，启动还会生成首节点任务派给那家的执行人。
+    # 实测未修前：乙院 doctor 能给甲院的纳管档案启动路径（201，连首节点任务一起生成）。
+    # 同文件其余任务流转端点（claim/urge/escalate/submit/review/complete，P0-12 那批）
+    # 早就有归属校验，**只有"启动"这一条没有**——又一次"同一个文件两套口径"。
+    # 与同文件 :401 同一口径（`assert_org_writable(db, user, <对象>.org_id)`），
+    # 不在这个文件里另起一种写法（CLAUDE.md §13 §4：同一个文件一套口径）。
+    assert_org_writable(db, user, enrollment.org_id)
     if enrollment.status != "active":
         raise HTTPException(status_code=409, detail="非在管患者不能启动路径")
     template = db.get(SpdPathTemplate, body.template_id)

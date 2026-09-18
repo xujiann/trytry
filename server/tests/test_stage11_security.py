@@ -158,16 +158,25 @@ def test_自定义角色按权限点授权后生效(client, admin):
     assert role.status_code == 201, role.text
     role_id = role.json()["id"]
 
+    org = client.get("/api/organizations", headers=admin).json()[0]
+    # 2026-09-18 补上 org_id：本用例测的是"自定义角色按权限点授权后生效"，
+    # 用的样例端点 POST /api/medwaste 是**机构域写接口**，补上归属校验后
+    # （P1-60 第三批：乙院 operator 曾能替甲院记医废收集）需要调用方属于某家机构。
+    # 原先这个账号不带 org_id，于是授权之后仍被归属守卫以 403 拦下——
+    # **不是权限点没生效，是这个账号没有机构**。
+    # 这与平台既有口径一致：`admin_mgmt` 的建员工（:71）、记账（:232）早就是
+    # `assert_org_writable(db, user, body.org_id)`，无机构的非全域账号本来就写不了。
+    # 断言一字未动：授权前仍须 403（那是权限点拦的），授权后 201。
     client.post(
         "/api/users",
-        json={"username": "s11_clerk", "password": "passw0rd1", "role": "ward_clerk"},
+        json={"username": "s11_clerk", "password": "passw0rd1", "role": "ward_clerk",
+              "org_id": org["id"]},
         headers=admin,
     )
     clerk = {"Authorization": "Bearer " + client.post(
         "/api/auth/login", json={"username": "s11_clerk", "password": "passw0rd1"}
     ).json()["access_token"]}
 
-    org = client.get("/api/organizations", headers=admin).json()[0]
     body = {"org_id": org["id"], "waste_type": "infectious", "weight_kg": 1.0,
             "collected_date": "2026-08-12"}
     # 未授权：403
