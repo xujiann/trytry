@@ -1,4 +1,7 @@
-"""人财物 HR 写端点的机构归属校验（2026-09-18 实测取证后补，P1-59）。
+"""HR 写端点的机构归属校验（2026-09-18 实测取证后补，P1-59）。
+
+覆盖 `admin_mgmt` 与 `staffing` **两个路由**——派驻建档在两处各有一条，
+是 ADR-0024 记的"同一张 secondments 表两套端点"，两条 create 当初都没有归属校验。
 
 ## 实测取证（修之前，**乙院 operator** 对甲院的员工）
 
@@ -134,6 +137,51 @@ def test_薪酬非全域角色过不了角色门(client, hr_world):
                              "base_salary": 99999})
     assert resp.status_code == 403, resp.text
     assert "角色" in resp.json()["detail"]
+
+
+def test_别家operator不能经staffing建档把本院医师派驻出去(client, hr_world):
+    """另一条 create：同一张 secondments 表、同一个动作，此前同样没有归属校验。
+
+    ADR-0024 当时就记了"两条 `create` 都没有归属校验，是两套**共有**的缺口"，
+    P1-59 那一批只修了 `admin_mgmt` 那条；这条是另一半。
+    实测未修前：乙院 operator 调它 201 落库，台账里同样是"甲院 → 乙院"。
+    """
+    resp = client.post("/api/staffing/secondments", headers=hr_world["op_b"],
+                       json={"employee_id": hr_world["emp_a"],
+                             "from_org_id": hr_world["a"]["id"],
+                             "to_org_id": hr_world["b"]["id"],
+                             "start_date": "2026-05-01", "assignment_type": "long_term"})
+    assert resp.status_code == 403, resp.text
+    assert resp.json() == {"detail": "无权以该机构名义写入数据"}
+
+
+def test_本院operator经staffing建档照常放行(client, hr_world):
+    """反向证据：用自己建的员工，不蹭上面越权用例的数据。"""
+    emp = client.post("/api/mgmt/employees", headers=hr_world["admin"],
+                      json={"org_id": hr_world["a"]["id"], "name": "甲院staffing医师",
+                            "title": "主治医师"}).json()["id"]
+    resp = client.post("/api/staffing/secondments", headers=hr_world["op_a"],
+                       json={"employee_id": emp, "from_org_id": hr_world["a"]["id"],
+                             "to_org_id": hr_world["b"]["id"],
+                             "start_date": "2026-05-01", "assignment_type": "long_term"})
+    assert resp.status_code == 201, resp.text
+
+
+def test_守卫校验的是员工现属机构_不是body自报的from_org_id(client, hr_world):
+    """自报的 `from_org_id` 挡不住"报成自己家"——所以校验的是员工的真实归属。
+
+    乙院 operator 把 `from_org_id` 填成乙院、`employee_id` 仍填甲院的医师：
+    若守卫用的是 body 自报值就会放行，用员工真实归属才拦得住。
+    """
+    resp = client.post("/api/staffing/secondments", headers=hr_world["op_b"],
+                       json={"employee_id": hr_world["emp_a"],
+                             "from_org_id": hr_world["b"]["id"],   # 自报成自己家
+                             "to_org_id": hr_world["a"]["id"],     # 收方填甲院，避开"派出=接收"那条 422
+                             "start_date": "2026-06-01", "assignment_type": "long_term"})
+    # 必须**恰好**是归属守卫拦下的：初稿把 to_org_id 也填成乙院，于是撤掉守卫后
+    # 仍被"派出与接收机构不能相同"以 422 拦下，用例**为错误的理由通过**了变异验证。
+    assert resp.status_code == 403, resp.text
+    assert resp.json() == {"detail": "无权以该机构名义写入数据"}
 
 
 def test_薪酬的归属校验是纵深防御_今天不改变任何行为(client, hr_world):

@@ -158,11 +158,20 @@ def _out(row: Secondment, emp: Employee | None, names: dict, today: date) -> dic
 
 @router.post("/secondments", response_model=SecondmentOut, status_code=201,
              dependencies=[Depends(require_roles("director", "operator"))])
-def create_secondment(body: SecondmentIn, db: Session = Depends(get_db)):
+def create_secondment(
+    body: SecondmentIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """建立派驻记录。同一员工不得有两条未结束的派驻记录——人不能同时在两处在派。"""
     employee = db.get(Employee, body.employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    # 与 `admin_mgmt.second_employee` 同一口径：派驻由**派出方**发起，所以校验的是
+    # 员工现属机构，不是 body 里自报的 `from_org_id`（自报的挡不住"报成自己家"）。
+    # 实测未修前：乙院 operator 能把甲院的医师派驻出去（201，台账里是"甲院 → 乙院"）。
+    # ADR-0024 记过"两条 create 都没有归属校验"，mgmt 那条已修，这是另一条。
+    assert_obj_org_writable(db, user, employee)
     for org_id in (body.from_org_id, body.to_org_id):
         if db.get(Organization, org_id) is None:
             raise HTTPException(status_code=404, detail="机构不存在")

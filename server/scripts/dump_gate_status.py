@@ -39,6 +39,7 @@ sys.path.insert(0, str(SERVER / "tests"))
 def _rows() -> list[tuple[str, str, str, str]]:
     """(分组, 指标, 值, 判据出处)。**只读常量，不重跑扫描**（理由见模块 docstring）。"""
     import test_api_contract_governance as contract
+    import test_body_id_org_write_guard as bodyid
     import test_clock as clock
     import test_list_pagination_ratchet as pagination
     import test_orphan_endpoints as orphan
@@ -83,6 +84,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_clock.py"),
         ("时间口径", "app/ 顶层时间快照的豁免", len(clock.APP_IMPORT_TIME_OK),
          "tests/test_clock.py"),
+        ("横向越权（写侧）", "body 收 id 的无守卫写端点（候选，未逐条判定）",
+         len(bodyid.KNOWN_BODY_ID_WRITES), "tests/test_body_id_org_write_guard.py"),
+        ("横向越权（写侧）", "按设计无调用方身份的豁免（body 收 id 那一族）",
+         len(bodyid.EXEMPT), "tests/test_body_id_org_write_guard.py"),
         ("日期入参", "未经 require_date 的日期查询参数", len(datequery.KNOWN_BARE_DATE_PARAMS),
          "tests/test_secondment_end_date_guard.py"),
         ("功能完善", "该有界面却没有的端点（孤儿）", len(orphan.KNOWN_ORPHANS),

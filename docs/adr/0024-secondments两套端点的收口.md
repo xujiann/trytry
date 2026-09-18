@@ -53,7 +53,9 @@
 >
 > 另有两处**共有**的缺口，不该记在任何一套头上，但应另行登记：
 > **两条 `create` 都没有归属校验**——`mgmt:second_employee`（`:137`）与
-> `staffing:create_secondment`（`:161`）都不收 `user` 参数。`admin_mgmt.py` 里
+> `staffing:create_secondment`（`:161`）都不收 `user` 参数。
+> ✅ **两条均已于 2026-09-18 修复**（P1-59 与其后一批），实测乙院 operator 调用时
+> 由 201 变 403；守卫校验的是员工现属机构，不是 body 自报的 `from_org_id`。`admin_mgmt.py` 里
 > 其余写端点有 6 处 `assert_obj_org_writable` + 5 处 `assert_org_writable`，
 > `staffing` 的另两个写端点（`:236`/`:258`）也都有。
 >
