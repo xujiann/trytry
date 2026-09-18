@@ -45,7 +45,14 @@
 > **两条 `create` 都没有归属校验**——`mgmt:second_employee`（`:137`）与
 > `staffing:create_secondment`（`:161`）都不收 `user` 参数。`admin_mgmt.py` 里
 > 其余写端点有 6 处 `assert_obj_org_writable` + 5 处 `assert_org_writable`，
-> `staffing` 的另两个写端点（`:236`/`:258`）也都有——**两个文件各自跟自己不一致**。
+> `staffing` 的另两个写端点（`:236`/`:258`）也都有。
+>
+> ⚠️ **本 ADR 初稿在这里写过"两个文件各自跟自己不一致"，那是过头了**：
+> `admin_mgmt.py` 里同样不收 `user`、同样不做归属校验的 HR 写端点至少还有两条——
+> `create_staff_contract`（`:720`）与 `create_payroll`（`:815`），两条都只校验"员工存在"
+> 就落库，于是 A 院的 `director` 可以给 B 院的员工建劳动合同、发薪酬。
+> 所以派驻建档**不是该文件里孤零零的一个例外**，它属于一片更大的欠账。
+> 这片欠账与"两套端点怎么收口"无关，**已单独登记为 P1-59**，不在本 ADR 的范围内。
 >
 > 读侧也有一处顺带记下（不属本 ADR 要裁的范围，但收口时会一并碰到）：
 > `GET /api/mgmt/secondments/stats`（`:185-190`）**既没有 `require_roles` 也没有机构过滤**，
