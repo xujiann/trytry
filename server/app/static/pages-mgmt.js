@@ -1704,9 +1704,6 @@ function renderSettlement(s, vars) {
 /* ---------------- 人员下沉调度（阶段八） ---------------- */
 
 const ASSIGN_TYPES = { long_term: "长期派驻", support: "短期支援", rounds: "巡诊", other: "其他" };
-const TITLE_LEVELS = {
-  none: "未填", junior: "初级", intermediate: "中级", deputy_senior: "副高", senior: "正高",
-};
 
 async function renderStaffing() {
   $("#page-desc").textContent =
