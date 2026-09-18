@@ -7,6 +7,16 @@
   ADR-0006（"只搬不改"重构与零漂移守卫）、D-3（日期入参治理，`app/datetypes.py`）、
   `tests/test_orphan_endpoints.py::KNOWN_ORPHANS`、`tests/test_refactor_drift_guards.py`
 
+> **落地情况（2026-09-18）：Recommendation 的「第一步」已交付，第二步仍待裁定。**
+> 已做：`datetypes.check_date` + `deps.require_date`（补上日期治理缺的查询参数那一半）、
+> 两条 `end` 端点都改用它、`mgmt:end` 的状态回写加上 `seconded` 前置条件、
+> `mgmt:end` 补上"结束日不早于开始日"、`dispatch-stats` 的两句口径说明改成实情
+> （含此前一个字没提的计数器盲区）、删掉 `TITLE_LEVELS` 死代码。
+> 回归 `tests/test_secondment_end_date_guard.py` 18 条，四处变异各自转红；
+> 末尾棘轮把 P1-58 钉住（25 条，只许变少），并登记进 `docs/闸门现状.md`。
+> **未做（等裁定）**：两套端点怎么收口（方案 A–E），以及第五处分叉「判重真源不同」
+> ——改它属行为变更，ADR 里已写明不放进第一步。
+
 ## Problem（问题）
 
 ### 形状：同一张表，两套端点，两个页面各调一套
