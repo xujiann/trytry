@@ -218,7 +218,8 @@ def test_下沉统计精确形状与键序(client, admin, base, seeded):
         "invalid_date_records": 0,
         "caliber": {
             "long_term_6m": "派驻类型为长期派驻且当年在派满 183 天的人次"
-                            "（跨年派驻只计落在本年度内的天数）",
+                            "（跨年派驻只计落在本年度内的天数；天数按起止日期相减计，"
+                            "故满 183 天对应 184 个自然日）",
             "senior": "职称等级为中级/副高/正高；等级未填的不计入，单独报 unknown_title_level",
         },
     }
