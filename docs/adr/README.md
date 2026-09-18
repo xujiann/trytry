@@ -55,3 +55,4 @@ migration cost / risk / recommendation**。
 | [0021](0021-病历质控写入补就诊机构归属校验.md) | 结构化病历写入补「就诊所属机构」归属校验 | **Proposed** |
 | [0022](0022-会写库的GET.md) | 会写库的 GET：是平台模式还是待改的欠账 | **Proposed** |
 | [0023](0023-TOTP双因素的界面接入.md) | TOTP 双因素的界面接入（三条自助端点 + 登录侧缺口） | **Proposed** |
+| [0024](0024-secondments两套端点的收口.md) | `secondments` 一张表两套端点的收口（附五处取证缺陷，三处实测） | **Proposed** |
