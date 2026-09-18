@@ -157,10 +157,22 @@ def test_surgery_schedule_notifies_resident(client, admin, setup, resident):
         "/api/surgery/rooms", json={"org_id": setup["county"]["id"], "name": "消息手术间"},
         headers=admin,
     ).json()
+    # 用**县院**的医师（`other_doctor`）而不是乡镇的 `doctor`：这次住院、这个手术间、
+    # 这张手术申请都在县院，申请自然由县院的医师提。
+    #
+    # 2026-09-18 改：此前这里用的是乡镇医师，而 `surgery.create_request` 当时没有
+    # 归属校验，于是"乡镇医师给县院的住院病人申请手术"照样 201——补上守卫后这里 403。
+    # **这不是为了让 CI 变绿而改用例**：本用例断言的是"排班后患者收到通知"
+    # （下面三条 assert 全是消息内容），机构对不对得上与它要测的东西无关，
+    # 当初大概只是顺手取了 fixture 里的第一个医师。而且 `SurgeryRequest` 模型
+    # 只有一个 `org_id`（从住院记录带出，`models/inpatient.py:250`），
+    # **压根没有"申请机构"这个概念**——所以"乡镇申请、县院做"在这套模型里
+    # 不是一种可表达的形态，不存在被这次改动堵掉的合法场景。
+    # 跨机构的手术协同走会诊/转诊，各有各的入口。
     req = client.post(
         "/api/surgery/requests",
         json={"admission_id": adm["id"], "surgery_name": "腹腔镜胆囊切除术"},
-        headers=setup["doctor"],
+        headers=setup["other_doctor"],
     ).json()
     client.post(
         f"/api/surgery/requests/{req['id']}/approve", json={"approved": True},

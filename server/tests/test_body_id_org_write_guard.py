@@ -55,6 +55,22 @@ EXEMPT = {
     "billing.py:payment_callback",
 }
 
+#: **角色门只允许全域角色**（`visibility.GLOBAL_ROLES = {"admin", "director"}`）的写端点。
+#: 与 `EXEMPT` 分开列，因为理由不同：那些是"按设计没有调用方身份"，这些是
+#: "有身份，但能调它的角色本来就跨机构"。
+#:
+#: **不是可越权入口**：非全域角色连角色门都过不去。给它们补归属校验只是纵深防御，
+#: 当成洞去修会写出触发不了的"漏洞修复"——本轮差点就这么干了
+#: （`admin_mgmt.create_payroll` 那次已经踩过一回，见 P1-59 的更正）。
+#: 角色门若哪天放宽到非全域角色，`tests/test_clinical_write_org_guard.py` 末尾
+#: 那条用例会红，提醒把它挪回候选。
+GLOBAL_ROLE_ONLY = {
+    "appointments.py:create_slot",       # require_admin
+    "inpatient.py:create_bed",           # require_admin
+    "cost.py:upsert_department_cost",    # require_roles("director")
+    "cost.py:create_allocation_rule",    # require_roles("director")
+}
+
 #: 候选清单（**不是缺陷清单**，见模块 docstring）。只许变少。
 #: 划掉的正当方式：① 补守卫；② 逐条取证判为按设计后移入 `EXEMPT` 并写明理由。
 #:
@@ -71,19 +87,17 @@ EXEMPT = {
 #: 归属分别取自 `Admission.org_id` / `Encounter.org_id` / `Settlement.org_id`；
 #: 退费与结算那两句守在临界区之前（钱出去与冲抵押金都在里头）。
 #: 回归见 `tests/test_billing_org_guard.py`，变异后五条越权反例各自转红。
+#:
+#: ✅ **临床那一族 4 条已清（2026-09-18，P1-60 第二批）**：入院登记 / 医嘱开立 /
+#: 手术申请 / 交接班。实测乙院 doctor 能把患者**收进甲院病区并占掉床**、
+#: 给甲院的住院病人**开长期医嘱**与**申请手术**、给甲院病区写交接班（且回执里的
+#: `patient_count` 是按甲院在院数现算的）。钱那一族丢的是账，这一族丢的是
+#: **诊疗行为的归属**。归属取自 `Ward.org_id` / `Admission.org_id`。
+#: 转诊与会诊都有各自的入口，不是"直接写别家的医嘱单"。
+#: 回归见 `tests/test_clinical_write_org_guard.py`，变异后四条越权反例各自转红。
 KNOWN_BODY_ID_WRITES: set[str] = {
-    # —— 临床：写进别家的住院/医嘱/手术/交接班 ——
-    "clinical_docs.py:create_handover",
-    "inpatient.py:create_admission",
-    "inpatient.py:create_order",
-    "surgery.py:create_request",
-    "spd/tasks.py:start_path_instance",
-    # —— 配置/主数据：往别家建号源、床位、成本与分摊规则、医废收集 ——
-    "appointments.py:create_slot",
-    "appointments.py:book",          # 多半按设计跨机构，待产品确认后移入 EXEMPT
-    "cost.py:create_allocation_rule",
-    "cost.py:upsert_department_cost",
-    "inpatient.py:create_bed",
+    "spd/tasks.py:start_path_instance",   # 连角色门都没有：任何已登录账号都能调
+    "appointments.py:book",               # 多半按设计跨机构，待产品确认后移入 EXEMPT
     "medwaste.py:collect",
 }
 
@@ -139,7 +153,8 @@ def test_覆盖面自证():
     print(
         f"\n[body 收 id 的写侧越权候选] 扫描 {len(files)} 个路由文件、"
         f"{len(models)} 个带 org_id 的模型；候选 {len(cands)} 处"
-        f"（其中豁免 {len(EXEMPT)}、登记 {len(KNOWN_BODY_ID_WRITES)}）"
+        f"（豁免 {len(EXEMPT)}、只有全域角色够得着 {len(GLOBAL_ROLE_ONLY)}、"
+        f"登记 {len(KNOWN_BODY_ID_WRITES)}）"
     )
     assert len(files) >= 60, f"只扫到 {len(files)} 个路由文件"
     assert len(models) >= 50, f"只认出 {len(models)} 个带 org_id 的模型"
@@ -157,7 +172,7 @@ def test_守卫名单与上游判据保持一致():
 
 
 def test_不得新增body收id的无守卫写端点():
-    new = sorted(_candidates() - KNOWN_BODY_ID_WRITES - EXEMPT)
+    new = sorted(_candidates() - KNOWN_BODY_ID_WRITES - EXEMPT - GLOBAL_ROLE_ONLY)
     assert new == [], (
         "以下写端点从 body 收 id 取到带 org_id 的对象，却没有任何机构归属守卫——\n"
         "角色守卫只回答'谁能做'，回答不了'能对谁做'：\n  " + "\n  ".join(new)
@@ -167,21 +182,33 @@ def test_不得新增body收id的无守卫写端点():
 
 
 def test_名单只许变少():
-    stale = sorted((KNOWN_BODY_ID_WRITES | EXEMPT) - _candidates())
+    stale = sorted((KNOWN_BODY_ID_WRITES | EXEMPT | GLOBAL_ROLE_ONLY) - _candidates())
     assert stale == [], (
         "这些已经补上守卫（或已不存在）了，请从名单里划掉，"
         "否则名单会永远停在今天的数字：\n  " + "\n  ".join(stale)
     )
 
 
-def test_本轮修掉的四条确实已脱离候选():
-    """P1-59 与本批修的那几条**必须**不在候选里，否则这份用例在空转。"""
+def test_已修各批确实已脱离候选():
+    """已修的那几批**必须**不在候选里，否则这份用例在空转。"""
     cands = _candidates()
     for entry in (
+        # P1-59 + 盲区棘轮那一批
         "admin_mgmt.py:second_employee",
         "admin_mgmt.py:create_staff_contract",
         "admin_mgmt.py:create_payroll",
         "staffing.py:create_secondment",
+        # P1-60 第一批：钱
+        "billing.py:create_bill_detail",
+        "billing.py:create_deposit",
+        "billing.py:refund_deposit",
+        "billing.py:create_settlement",
+        "billing.py:create_payment",
+        # P1-60 第二批：临床
+        "inpatient.py:create_admission",
+        "inpatient.py:create_order",
+        "surgery.py:create_request",
+        "clinical_docs.py:create_handover",
     ):
         assert entry not in cands, entry
         assert entry not in KNOWN_BODY_ID_WRITES, entry

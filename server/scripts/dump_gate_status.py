@@ -88,6 +88,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(bodyid.KNOWN_BODY_ID_WRITES), "tests/test_body_id_org_write_guard.py"),
         ("横向越权（写侧）", "按设计无调用方身份的豁免（body 收 id 那一族）",
          len(bodyid.EXEMPT), "tests/test_body_id_org_write_guard.py"),
+        ("横向越权（写侧）", "角色门只允许全域角色（非可越权入口）",
+         len(bodyid.GLOBAL_ROLE_ONLY), "tests/test_body_id_org_write_guard.py"),
         ("日期入参", "未经 require_date 的日期查询参数", len(datequery.KNOWN_BARE_DATE_PARAMS),
          "tests/test_secondment_end_date_guard.py"),
         ("功能完善", "该有界面却没有的端点（孤儿）", len(orphan.KNOWN_ORPHANS),

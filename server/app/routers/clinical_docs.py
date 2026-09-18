@@ -24,7 +24,7 @@ from ..models import (
     VitalSignRecord,
     Ward,
 )
-from ..visibility import assert_patient_visible
+from ..visibility import assert_obj_org_writable, assert_patient_visible
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], dependencies=[Depends(get_current_user)])
 
@@ -454,8 +454,13 @@ def create_handover(
     body: HandoverIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """交接班：在院人数由系统按当前住院数据快照，不让人工填——这个数填错就没意义了。"""
-    if db.get(Ward, body.ward_id) is None:
+    ward = db.get(Ward, body.ward_id)
+    if ward is None:
         raise HTTPException(status_code=404, detail="病区不存在")
+    # 交接班是**本病区**的班内交接。实测未修前：乙院 doctor 能给甲院病区写一条交接班
+    # （201），而且回执里的 `patient_count` 是按甲院当前在院数现算的——
+    # 等于顺带把别家的在院人数读了出来。
+    assert_obj_org_writable(db, user, ward)
     patient_count = (
         db.query(Admission)
         .filter(Admission.ward_id == body.ward_id, Admission.status == "admitted")

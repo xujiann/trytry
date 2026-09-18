@@ -224,6 +224,10 @@ def create_request(
         raise HTTPException(status_code=404, detail="住院记录不存在")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可申请手术")
+    # 手术排在这次住院所属医院。docstring 说"患者与机构从住院记录带出，不让客户端
+    # 自报，避免张冠李戴"——带出来了，但没校验调用方是不是那家。
+    # 实测未修前：乙院 doctor 能给甲院的住院病人申请手术（201，org_id 是甲院）。
+    assert_obj_org_writable(db, user, admission)
     request = SurgeryRequest(
         patient_id=admission.patient_id,
         org_id=admission.org_id,

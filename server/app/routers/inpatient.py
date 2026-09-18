@@ -229,6 +229,11 @@ def create_admission(
     ward = db.get(Ward, body.ward_id)
     if ward is None:
         raise HTTPException(status_code=404, detail="病区不存在")
+    # 收进哪家的病区就是哪家的住院（下面 org_id=ward.org_id 也是这么取的），
+    # 而且这一步会**占掉那家医院的床**。实测未修前：乙院 doctor 能把患者收进
+    # 甲院病区并占用 C-02 床（201，回执里 org_id 就是甲院）。
+    # 转诊不是这条路——转诊由接收方自己办入院，`referrals` 那套负责交接。
+    assert_obj_org_writable(db, user, ward)
     in_hospital = (
         db.query(Admission)
         .filter(Admission.patient_id == body.patient_id, Admission.status == "admitted")
@@ -600,6 +605,10 @@ def create_order(
         raise HTTPException(status_code=404, detail="住院记录不存在")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可开立医嘱")
+    # 医嘱写进的是**这次住院所属医院**的医嘱单，由管床医院开立。
+    # 实测未修前：乙院 doctor 能给甲院的住院病人开一条长期医嘱（201）。
+    # 跨机构的临床协同有专门的入口（远程会诊 / 会诊申请），不是直接写别家的医嘱单。
+    assert_obj_org_writable(db, user, admission)
     # 长期医嘱按"一条一直执行"开立，同一次住院里内容一模一样的在执行长期医嘱只该有一条：
     # 两条就是两行医嘱单、两笔执行登记，最后要主管医师回头人工仲裁停掉一条。
     # 临时医嘱按次开立（同内容多条合法）、停用后重开也合法，故只查 long+active。
