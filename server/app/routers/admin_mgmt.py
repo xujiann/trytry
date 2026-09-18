@@ -135,11 +135,20 @@ class SecondmentStatsOut(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # H2: 人员下派
 )
-def second_employee(body: SecondmentCreate, db: Session = Depends(get_db)):
+def second_employee(
+    body: SecondmentCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """人员派驻下沉：状态改为派驻中，支撑监测指标4（医师派驻人数）。"""
     employee = db.get(Employee, body.employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    # 派驻由**派出方**发起，所以校验的是员工现属机构（= from_org），不是接收机构——
+    # 接收机构本来就是别家，那正是下沉的含义。与同表的 `end_secondment`
+    # （`org_attr="from_org_id"`）同一口径。实测未修前：乙院 director 能把甲院的医师
+    # 派驻出去（201 落库，台账里显示"取证甲院 → 取证乙院"）。
+    assert_obj_org_writable(db, user, employee)
     if employee.status == "seconded":
         raise HTTPException(status_code=409, detail="该员工已在派驻中")
     if db.get(Organization, body.to_org_id) is None:
@@ -728,9 +737,17 @@ class ContractRowOut(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],  # 合同管理
 )
-def create_staff_contract(body: ContractCreate, db: Session = Depends(get_db)):
-    if db.get(Employee, body.employee_id) is None:
+def create_staff_contract(
+    body: ContractCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    employee = db.get(Employee, body.employee_id)
+    if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    # 劳动合同是**用人单位**与员工签的，只有员工所属机构签得了。
+    # 实测未修前：乙院 director 能给甲院的医师签一份合同（201 落库）。
+    assert_obj_org_writable(db, user, employee)
     if body.end_date <= body.start_date:
         raise HTTPException(status_code=422, detail="合同止期须晚于起期")
     if db.query(StaffContract).filter(StaffContract.contract_no == body.contract_no).first():
@@ -823,9 +840,18 @@ class PayrollListOut(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("director"))],  # 薪酬发放=管理层
 )
-def create_payroll(body: PayrollCreate, db: Session = Depends(get_db)):
-    if db.get(Employee, body.employee_id) is None:
+def create_payroll(
+    body: PayrollCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    employee = db.get(Employee, body.employee_id)
+    if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    # 薪酬由**员工所属机构**发放。实测未修前：乙院 director 能给甲院的医师
+    # 录一笔 99999 的薪酬（201 落库，甲院的薪酬汇总里就多了这笔）——
+    # 这与 `assert_org_writable` docstring 里"替别家做账"是同一件事。
+    assert_obj_org_writable(db, user, employee)
     if (
         db.query(PayrollRecord)
         .filter(
