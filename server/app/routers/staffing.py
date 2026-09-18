@@ -23,7 +23,7 @@ from .. import clock
 from ..datetypes import DateStr, OptionalDateStr
 from ..visibility import assert_obj_org_writable
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles, resolve_org_scope
+from ..deps import get_current_user, paginate, require_date, require_roles, resolve_org_scope
 from ..models import Employee, Organization, Secondment, User
 
 router = APIRouter(prefix="/api/staffing", tags=["人员调度"],
@@ -236,6 +236,11 @@ def end_secondment(
     assert_obj_org_writable(db, user, row, org_attr="from_org_id")
     if row.end_date:
         raise HTTPException(status_code=409, detail="该派驻已结束")
+    # ADR-0024：这里原先只有下面那句字典序比较，**它不是日期校验**——`完全不是日期`
+    # / `2026-13-99` / `abc` / `2026-02-31` 的字典序都大于开始日，一律 200 落库
+    # （实测复现）。挡下来的只是排在开始日之前的那一类。留空仍取业务日期，行为不变。
+    if end_date:
+        end_date = require_date(end_date, field="end_date")
     finish = end_date or clock.today().isoformat()
     if finish < row.start_date:
         raise HTTPException(status_code=422, detail="结束日期不得早于开始日期")

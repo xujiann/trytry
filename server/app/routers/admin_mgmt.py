@@ -18,6 +18,7 @@ from ..deps import (
     get_current_user,
     paginate,
     require_admin,
+    require_date,
     require_roles,
     resolve_business_date,
 )
@@ -174,9 +175,19 @@ def end_secondment(
     assert_obj_org_writable(db, user, record, org_attr="from_org_id")
     if record.end_date:
         raise HTTPException(status_code=409, detail="派驻已结束")
+    # ADR-0024：`end_date` 是查询参数，D-3 那一轮只换了 body 字段，这里一直是裸 `str`。
+    # 不挡的后果不是"多一条脏数据"：`dispatch_stats` 对日期解析失败的记录整条跳过，
+    # 一名真派满半年的中级医师会就此从国家监测指标里消失（实测复现）。
+    end_date = require_date(end_date, field="end_date")
+    if end_date < record.start_date:
+        raise HTTPException(status_code=422, detail="结束日期不得早于开始日期")
     record.end_date = end_date
     employee = db.get(Employee, record.employee_id)
-    if employee:
+    # **只在"在派"时才回写在岗**：无条件回写会把已登记离职的员工（change_type=leave
+    # 写入的 `status = "left"`）改回 `active`，而 `analytics` 的在岗医师数正按
+    # `status == "active"` 计数——一个离职的人会重新算进在岗医师数（ADR-0024）。
+    # 与 `staffing.end_secondment` 同一条件，两条路不再有两套状态机。
+    if employee is not None and employee.status == "seconded":
         employee.status = "active"
     db.commit()
     return {"id": secondment_id, "end_date": end_date}

@@ -305,6 +305,25 @@ def require_month(period: str) -> str:
         ) from None
 
 
+def require_date(value: str, *, field: str = "date") -> str:
+    """查询参数形态的 `YYYY-MM-DD` 严格校验，原样返回；非法一律 422。
+
+    body 字段请直接用 `datetypes.DateStr` / `OptionalDateStr`，这条只服务查询参数
+    （FastAPI 对查询参数走不了同一套人话报错）。与 `require_month` 对称——
+    **月度那头一直有这个对称物，日期这头一直没有**，缺口就活在两条「结束派驻」端点上：
+    `admin_mgmt.end_secondment` 与 `staffing.end_secondment` 的 `end_date` 都是裸
+    `str` 查询参数，`?end_date=完全不是日期` 直接 200 落库，那条派驻在台账上显示
+    「已结束」而天数还在涨，并被 `staffing.dispatch_stats` 整条跳过——一名真派满半年
+    的中级医师就此从国家监测指标里消失（ADR-0024 实测复现）。
+
+    `field` 进报错文案，让调用方知道是哪个参数错了（一个端点可能有起止两个日期）。
+    """
+    try:
+        return datetypes.check_date(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{field}：{exc}") from None
+
+
 def month_bounds(period: str) -> tuple[date, date]:
     """月度期间 `YYYY-MM` → 左闭右开的 `[首日, 次月首日)`。
 

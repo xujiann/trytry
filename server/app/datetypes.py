@@ -25,15 +25,18 @@ from pydantic import BeforeValidator
 _SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _check(value: object, *, allow_blank: bool) -> object:
-    if isinstance(value, date):
-        return value.isoformat()
-    if not isinstance(value, str):
-        return value  # 交给 pydantic 报类型错
-    if value == "":
-        if allow_blank:
-            return value
-        raise ValueError("日期不能为空，格式须为 YYYY-MM-DD")
+def check_date(value: str) -> str:
+    """校验 `YYYY-MM-DD`：先卡形状，再用日历确认这一天存在。非法时抛 ValueError（带人话）。
+
+    这是**完整日期的唯一校验实现**：`DateStr`/`OptionalDateStr`（body 字段）与
+    `deps.require_date`（查询参数）都走这一条。与月度那头的 `check_month` 对称。
+
+    单独抽出来的由来（ADR-0024）：本模块开头举的反面例子就是派驻，而 D-3 那一轮只把
+    **body 字段**换成了 `DateStr`，**查询参数不在射程内**——两条「结束派驻」端点的
+    `end_date` 都是查询参数，都留在裸 `str`，于是 `?end_date=完全不是日期` 照样 200
+    落库，那条派驻随后被 `staffing.dispatch_stats` 整条跳过。月度那头一直有
+    `deps.require_month` 这个查询参数形态的对称物，日期这头没有，缺口就活了下来。
+    """
     # fullmatch 而不是 match：`$` 允许末尾一个换行，"2026-02-28\n" 会先过形状、
     # 再在日历校验里以"日期不存在"被拒，文案对不上真正的毛病。
     if not _SHAPE.fullmatch(value):
@@ -43,6 +46,18 @@ def _check(value: object, *, allow_blank: bool) -> object:
     except ValueError:
         raise ValueError(f"日期 {value} 不存在（请检查月份天数）") from None
     return value
+
+
+def _check(value: object, *, allow_blank: bool) -> object:
+    if isinstance(value, date):
+        return value.isoformat()
+    if not isinstance(value, str):
+        return value  # 交给 pydantic 报类型错
+    if value == "":
+        if allow_blank:
+            return value
+        raise ValueError("日期不能为空，格式须为 YYYY-MM-DD")
+    return check_date(value)
 
 
 def _required(value: object) -> object:
