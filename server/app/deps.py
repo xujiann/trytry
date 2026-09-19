@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from .clock import now_naive
 from .config import settings
 from .database import get_db
+from .datetypes import PERIOD_SHAPE
 from .models import OrgGroup, OrgGroupMember, User
 from .security import (
     AUTH_COOKIE,
@@ -231,7 +232,10 @@ def resolve_org_scope(
 #: 只认半角数字。`str.isdigit()` 与 `\\d` 都会放行全角（"２０２６"），
 #: 那种值能通过校验却又不是合法年份，最后原样回显给前端。
 _ASCII_YEAR = re.compile(r"[0-9]{4}")
-_ASCII_MONTH = re.compile(r"[0-9]{4}-[0-9]{2}")
+#: 月份形状不在这里再拼一遍——真源是 `datetypes.PERIOD_SHAPE`（P1-34：同一条
+#: 形状判定只许有一份实现）。本函数受理的年份区间**仍比 `PeriodStr` 宽**：
+#: 绩效考核接口现在就接受 2000 年以前的周期，收紧它属于改既有响应字节，要改先走 ADR。
+_ASCII_MONTH = PERIOD_SHAPE
 
 
 def period_bounds(period: str | None) -> tuple[str, date, date]:
