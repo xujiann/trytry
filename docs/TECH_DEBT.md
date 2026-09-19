@@ -118,7 +118,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 
 | 编号 | 问题 | 位置 |
 |---|---|---|
-| P1-33 | **出口脱敏无守卫**：`privacy.py` 明写"新增返回身份证号/电话的接口必须复用本模块"，实际只有 2 处引用、无任何闸门。改造路径已验证可行：从响应模型含 `id_card`/`phone` 的端点推导集合，再要求函数体走 `desensitize`/`mask_*`，例外按好清单形态逐条写理由（`integration.fhir_patient_resource` 是按设计的明文导出，需保留例外） | `app/privacy.py:7` |
+| ~~P1-33~~ | ✅ **已关账**：出口脱敏闸门 `tests/test_pii_output_masking_guard.py` 已建（分母两条路径并集——运行期 `app.routes` 的 response_model 展开 ∪ AST 推导的响应构造闭包；PII 列名取自 `EncryptedPII` 列类型、脱敏函数取自 `privacy.py` 里**定义**的公开函数，两份清单都不手写）。顺带修掉 7 处明文出网，其中 `POST /api/patients` 最重：它直接 `return patient`，而 EMPI 是**幂等**的——提交一个已存在的身份证号就能拿回那个人的档案，等于一个明文查询口子，两个 GET 兄弟端点一直是脱敏的。例外 10 条各带理由（呼救回拨号码、外呼工单号码、村医通讯录等按设计需要真值），违规基线清零 | 已关账 |
 | P1-34 | **月份口径正则不校验日历**：`\d{4}-\d{2}` 放行 `2026-13`，5 处（fund/admin_mgmt×2/quality/reports）。与 D-3 假日期同族，需新建 `PeriodStr` 类型 | `app/routers/fund.py:224` 等 |
 | P1-35 | **23 张带 `patient_id` 却无机构列的表**永远当不了可见性依据——补机构列还是确认无需依据，需逐表业务判断（现已可量化打印，见 `test_visibility_relation_derivation.py`） | `app/visibility.py` 推导面 |
 | P1-36 | **登出时"从请求取令牌"的双模回落各写了一份**（Header / Cookie），与唯一实现 `deps.token_from_request` 并行。今天不会漂：两个 logout 都由 `get_current_user`/`current_resident` 前置把过 CSRF 与准入，body 里只是重取同一枚令牌。收敛要先想清 `verify_csrf` 的语义边界 | `app/routers/auth.py:207`、`app/routers/portal.py:487-492` |
@@ -131,6 +131,16 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P1-43 | **TOTP 没有读接口**：无 `GET /api/auth/totp` 一类端点，前端无法显示「已启用/未启用」，也无法提示「你的角色被要求双因素但还没绑」。补一个只回 `{enabled: bool}` 的读端点即可，不涉及密钥外泄 | `app/routers/auth.py` |
 | P1-44 | **`GET /api/access-logs/stats` 的 docstring 与签名对不上**：docstring 说「一段时间内各类调阅的构成」，签名却只有 `patient_id`、没有 `start`/`end`（同模块列表端点有）。「上个月的跨机构调阅占比」这类排查做不了 | `app/routers/access_logs.py` |
 | P1-45 | **`tests/test_spd_config_scales_teams_contract.py::test_量表的键集合与未发布时的空令牌` 是随机序 flake**：模块级 `seeded` 夹具被同文件「发布量表」的用例改了状态，顺序一乱就先发布再断言「未发布时 qr_token 为空」（seed 7/42 红，seed 13 与 `-p no:randomly` 绿） | `server/tests/test_spd_config_scales_teams_contract.py` |
+
+**关于 P1-33 原文里那条例外的更正**：原文要求为 `integration.fhir_patient_resource`
+保留「按设计的明文导出」例外。执行包报称「该符号在仓库里不存在」——**这句是错的**，
+它在 `app/routers/integration.py:988`，docstring 明写「明文导出」，正是原文说的那个东西。
+但**不登记为例外这个动作是对的**，理由不同：它写的是落 `upload_dir` 的 ndjson **文件**
+（省平台前置机全量对接件，由运维管控），不进 HTTP 响应体，因此根本不在「响应出口」
+这道闸门的射程内。真正走接口面的出站导出是 `export_fhir_patient`，它早在 H1 整改时
+就已按角色脱敏。
+**记下这条是因为它的形状值得记**：结论对、依据错。若照单全收，`docs/` 里会留下一句
+「那个符号不存在」的假话，而下一个人 grep 一下就能发现它在，进而怀疑整条记录。
 
 **本轮一条环境陷阱（非仓库缺陷，但会让人追幻影）**：容器里装着 `pytest-randomly 5.0.0`，
 而 `requirements*.txt` 与 CI 都没有它。它默认打乱用例顺序，本仓库的套件却是顺序相关的
