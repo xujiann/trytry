@@ -59,6 +59,15 @@ def seeded(client):
                            items=[{"key": "q1", "type": "single",
                                    "options": [{"label": "是", "score": 1}]}],
                            scoring={"ranges": []}, qr_token="")
+        # `draft` 会被「发布后才出二维码」那条用例**发布掉**（改共享状态），所以
+        # 「未发布时的空令牌」不能跟它共用一份——顺序一乱就先发布再断言未发布，
+        # 随机序下必红（P1-45）。给它一份专属的、没人会动的草稿。
+        pristine = S.SpdScale(code="ST-D0", name="纯草稿量表", category="risk",
+                              program_code="HTN", version="v1", status="draft",
+                              items=[{"key": "q1", "type": "single",
+                                      "options": [{"label": "是", "score": 1}]}],
+                              scoring={"ranges": []}, qr_token="")
+        db.add(pristine)
         pub = S.SpdScale(code="ST-P", name="已发布量表", category="screen", version="v1",
                          status="published", items=[{"key": "a"}], scoring={},
                          qr_token="FIXEDTOKEN12")
@@ -88,7 +97,8 @@ def seeded(client):
                                 bind_token="VDFIXEDTOKEN")
         db.add(vd)
         db.commit()
-        return {"draft": draft.id, "pub": pub.id, "org": org.id, "team": team.id,
+        return {"draft": draft.id, "pristine": pristine.id, "pub": pub.id,
+                "org": org.id, "team": team.id,
                 "member": member.id, "vd": vd.id, "doc": doc.id, "admin": admin.id,
                 "edu": edu.id, "pkg": pkg.id}
 
@@ -174,7 +184,8 @@ SCALE_KEYS = {"id", "code", "name", "category", "program_code", "version", "stat
 
 
 def test_量表的键集合与未发布时的空令牌(client, auth, seeded):
-    body = client.get(f"{B}/scales/{seeded['draft']}", headers=auth).json()
+    """用专属草稿，不与「发布」那条共用——它会把共享的 draft 发布掉（P1-45）。"""
+    body = client.get(f"{B}/scales/{seeded['pristine']}", headers=auth).json()
     assert set(body) == SCALE_KEYS
     assert body["qr_token"] == ""          # 未发布：空串，不是 null
     assert body["owner_team_id"] is None

@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, paginate, require_roles
 from ..models import AccessLog, Organization, Patient, User
 from .portal import current_resident_patient
@@ -189,14 +190,26 @@ def my_access_logs(
 @router.get("/stats", dependencies=[Depends(require_roles("director"))])
 def access_log_stats(
     patient_id: int | None = None,
+    start: OptionalDateStr = "",
+    end: OptionalDateStr = "",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """按依据汇总：一段时间内各类调阅的构成，看跨机构调阅（转诊/授权）占比
-    是否异常。可选按患者聚焦某一个人——聚焦即指向可识别的个人，同样自我留痕。"""
+    是否异常。可选按患者聚焦某一个人——聚焦即指向可识别的个人，同样自我留痕。
+
+    **`start`/`end` 与本模块的清单端点同一口径**（闭区间、按自然日、含当天）。
+    此前这段 docstring 写着"一段时间内"，签名里却没有时间参数（P1-44）——
+    于是"上个月的跨机构调阅占比"这类合规排查根本做不了，只能拿全量总数看个
+    大概。返回里回显取数窗口，免得看数的人不知道这组数字是哪一段的。
+    """
     from sqlalchemy import func
 
     query = db.query(AccessLog.basis, func.count(AccessLog.id))
+    if start:
+        query = query.filter(AccessLog.created_at >= f"{start} 00:00:00")
+    if end:
+        query = query.filter(AccessLog.created_at <= f"{end} 23:59:59")
     if patient_id is not None:
         if db.get(Patient, patient_id) is None:
             raise HTTPException(status_code=404, detail="患者不存在")
@@ -209,4 +222,7 @@ def access_log_stats(
     return {
         "total": sum(n for _, n in rows),
         "by_basis": sorted(by_basis, key=lambda x: -x["count"]),
+        # 回显取数窗口：空串表示该侧不设限（与清单端点同义）
+        "start": start,
+        "end": end,
     }

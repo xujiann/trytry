@@ -15,7 +15,7 @@
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -143,6 +143,16 @@ class LocationIn(BaseModel):
     manager_name: str = Field(default="", max_length=64)
 
 
+class LocationPatch(BaseModel):
+    """点位改档。**只改名字与负责人**——`org_id` 与 `location_type` 不在其列：
+    点位归属换家、产生点改成暂存间，都会让**历史医废记录的语义发生变化**
+    （那批医废当时是从哪个科室产生、存进哪个暂存间的，不能被事后改写）。
+    真要换类型就停用旧点位、另建一个。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    manager_name: str | None = Field(default=None, max_length=64)
+
+
 def _location_out(loc: WasteLocation) -> dict:
     return {
         "id": loc.id,
@@ -198,6 +208,35 @@ def deactivate_location(
     loc.active = False
     db.commit()
     return {"id": location_id, "active": False}
+
+
+@router.patch("/locations/{location_id}", response_model=WasteLocationOut,
+              dependencies=[Depends(require_roles("operator", "director"))])
+def update_location(
+    location_id: int,
+    body: LocationPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """改点位的名字/负责人（P1-42）。
+
+    此前只有 create / list / deactivate / reactivate：点位名写错、负责人换人
+    都改不了，界面上只能「停用旧的再建一个」——而那会把历史医废记录指向一个
+    标着「已停用」的点位，查追溯链的人看到的是一条断掉的线索。
+    """
+    loc = db.get(WasteLocation, location_id)
+    if loc is None:
+        raise HTTPException(status_code=404, detail="点位不存在")
+    assert_obj_org_writable(db, user, loc)
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=422, detail="没有要修改的字段")
+    for k, v in fields.items():
+        if v is not None:
+            setattr(loc, k, v)
+    db.commit()
+    db.refresh(loc)
+    return _location_out(loc)
 
 
 @router.post("/locations/{location_id}/reactivate", response_model=LocationActiveOut,
@@ -348,7 +387,24 @@ def store(
 
 
 class WasteHandoverIn(WasteHandover):
+    """交接入参：转运人**要么挂档案、要么写名字**，二选一即可（P1-47）。
+
+    基类的 `handler_name` 是 `min_length=1` 必填，可 handler 里挂了
+    `handler_employee_id` 时又会用 `employee.name` 把它覆盖掉——调用方必须
+    递一个**注定被丢弃**的值，否则 422。前端只好"先问姓名、再问档案 ID"。
+
+    这里把它放宽成可选，并补一条二选一校验。只放宽受理面：既有的
+    "两个都传"请求照样合法，响应体一字不变。
+    """
+
+    handler_name: str = Field(default="", max_length=64)
     handler_employee_id: int | None = None
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "WasteHandoverIn":
+        if self.handler_employee_id is None and not self.handler_name.strip():
+            raise ValueError("转运人须二选一：挂 handler_employee_id 或填 handler_name")
+        return self
 
 
 @router.post(

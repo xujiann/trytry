@@ -1825,7 +1825,24 @@ function wfCanvasDraw() {
  */
 async function renderAccountSecurity() {
   $("#page-desc").textContent = "本人账号的动态口令（TOTP）：生成密钥 → 验证一次启用；解绑同样要验当前验证码";
+  // 状态来自 GET /api/auth/totp（P1-43）。这一页刚建时刻意**不显示**启用状态，
+  // 因为后端当时只有写没有读——显示一个猜出来的状态比不显示更糟。读接口补上了，
+  // 这里就按真值显示，并把「你的角色被要求双因素却还没绑」这句提示落实。
+  let st = { enabled: false, pending: false, required: false, action_needed: false };
+  try { st = await api("/api/auth/totp"); } catch (e) { /* 读不到就按未知渲染，不猜 */ }
+  const stateTag = st.enabled
+    ? `<span class="tag green">已启用</span>`
+    : st.pending
+      ? `<span class="tag orange">已生成密钥，尚未验证启用</span>`
+      : `<span class="tag">未启用</span>`;
+  const warn = st.action_needed
+    ? `<p class="msg" style="color:#c00">你的角色被要求使用动态口令，但当前尚未启用——请按下面两步完成绑定。</p>`
+    : "";
   $("#page-body").innerHTML = `
+    <div class="panel"><h3>当前状态</h3>
+      <p>动态口令：${stateTag}${st.required ? ' <span class="tag">本角色要求双因素</span>' : ""}</p>
+      ${warn}
+      <p class="desc">密钥只在生成那一次返回，本页不会再次显示它——读接口只回状态、不回密钥。</p></div>
     <div class="panel"><h3>第一步 · 生成密钥</h3>
       <p class="desc">用令牌App（Google Authenticator / FreeOTP 等，算法 SHA1/6位/30秒）录入下面的密钥或
         otpauth 链接。重复生成会覆盖尚未验证的旧密钥；<b>已启用的账号要换绑，须先在下方解绑</b>。</p>

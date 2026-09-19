@@ -239,6 +239,36 @@ class TotpStatusOut(BaseModel):
     enabled: bool
 
 
+class TotpStateOut(BaseModel):
+    enabled: bool
+    pending: bool
+    required: bool
+    #: 被要求双因素却还没启用 —— 前端据此在首页给一句提示
+    action_needed: bool
+
+
+@router.get("/totp", response_model=TotpStateOut)
+def totp_state(user: User = Depends(get_current_user)):
+    """本人的动态口令状态（P1-43）。
+
+    此前 TOTP **只有写没有读**：三个端点能开通、能启用、能解绑，却没有任何
+    接口回答"我到底绑没绑"。于是界面只能给动作不给回执，也无法提示
+    "你的角色被要求双因素但还没绑"——而那正是这个读接口最有用的一句。
+
+    **只回状态，不回密钥**：密钥仅在 `/totp/setup` 那一次返回，读接口再吐一遍
+    等于把它变成一个随时可取的口令，违背双因素的前提。
+    """
+    secret = user.totp_secret or ""
+    enabled = _totp_enabled(user)
+    required = user.role in _totp_required_roles()
+    return TotpStateOut(
+        enabled=enabled,
+        pending=bool(secret) and secret.startswith(TOTP_PENDING_PREFIX),
+        required=required,
+        action_needed=required and not enabled,
+    )
+
+
 @router.post("/totp/setup", response_model=TotpSetupOut)
 def totp_setup(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """本人开通第一步：生成密钥（pending 态）并返回 otpauth URI 供令牌 App 扫码。

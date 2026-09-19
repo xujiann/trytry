@@ -187,10 +187,20 @@ async function renderAccessLogs() {
   /* 按依据的构成比：跨机构调阅（转诊/授权）占比异常是排查的起点。
      不填患者ID = 全局巡检（后端不留痕，也没有 patient_id 可留）；
      填了就是"聚焦某个可识别的人"，后端会自我留痕——这是设计，不是副作用。 */
-  const drawStats = async (patientId) => {
-    const s = await api(`/api/access-logs/stats${patientId ? `?patient_id=${encodeURIComponent(patientId)}` : ""}`);
+  const drawStats = async (patientId, start, end) => {
+    // 时间窗与上面的清单用**同一组表单字段**（P1-44）：此前统计不收 start/end，
+    // 于是清单筛到了上个月、下面的构成比还是全量——同一页给出两个口径的数字，
+    // 比少一个统计更容易让人看错。
+    const q = Object.entries({ patient_id: patientId, start, end })
+      .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+    const s = await api(`/api/access-logs/stats${q ? "?" + q : ""}`);
+    // 取数窗口回显。刻意**不**先拼成一个变量再插值：`const x = a || b` 之后裸插
+    // 正是转义棘轮盯的第三种形状，就算这里两支都转义了，也别给那条判据留例外。
+    const winFrom = esc(s.start || "不限");
+    const winTo = esc(s.end || "不限");
     $("#al-stats").innerHTML = `
-      <p style="font-size:13px">${patientId ? `患者 ${esc(patientId)}` : "全域"}调阅合计 <b>${esc(s.total)}</b> 次</p>
+      <p style="font-size:13px">${patientId ? `患者 ${esc(patientId)}` : "全域"}调阅合计 <b>${esc(s.total)}</b> 次
+        ${s.start || s.end ? `（${winFrom} 至 ${winTo}）` : "（全部时间）"}</p>
       ${table(["依据", "次数"], s.by_basis, (b) =>
         `<tr><td><span class="tag">${esc(b.basis_name)}</span></td><td>${esc(b.count)}</td></tr>`)}`;
   };
@@ -205,15 +215,15 @@ async function renderAccessLogs() {
       <p class="desc">按患者查询会一并留痕——查"谁看过某人"本身也是在看这个人的隐私。</p>
       <div id="al-table"></div></div>
     <div class="panel"><h3>调阅构成（按依据）</h3>
-      <p class="desc">不填患者ID为全域统计；填了则聚焦到该患者，并同样留痕。</p>
+      <p class="desc">口径跟随上方查询条件（患者与起止日期）；不填患者ID为全域统计，填了则聚焦到该患者并同样留痕。</p>
       <div id="al-stats"></div></div>`;
   await draw();
-  await drawStats("");
+  await drawStats("", "", "");
   $("#al-search").onsubmit = async (e) => {
     e.preventDefault();
     const params = formJson(e.target);
     await draw(params);
-    await drawStats(params.patient_id || "");
+    await drawStats(params.patient_id || "", params.start || "", params.end || "");
   };
 }
 

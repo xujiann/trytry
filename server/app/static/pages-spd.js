@@ -542,7 +542,9 @@ async function renderSpdTeamConfig() {
   const [catalog, orgs, teams] = await Promise.all([
     spdCatalog(),
     api("/api/organizations"),
-    api("/api/spd/teams?limit=100"),
+    // include_inactive：停用的团队也要看得见，否则点一次「停用」它就从界面上消失，
+    // 再没有任何入口能把它启用回来（P1-41）。
+    api("/api/spd/teams?limit=100&include_inactive=true"),
   ]);
   const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
   const orgOptions = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
@@ -561,7 +563,7 @@ async function renderSpdTeamConfig() {
   ])
     + panel("服务团队", `
       <p class="desc">团队是任务分派与数据可见范围的载体：成员的"患者范围"按团队算，
-        没有团队就没有分派对象。列表只显示启用中的团队（后端按 active 过滤）。</p>
+        没有团队就没有分派对象。列表含停用项，停用的可以再启用。</p>
       <form class="inline" id="spd-team-form">
         <input name="name" placeholder="团队名称" required>
         <select name="org_id">${orgOptions}</select>
@@ -588,7 +590,9 @@ async function renderSpdTeamConfig() {
          <td><button class="btn secondary" data-team-view="${t.id}">成员</button>
              <button class="btn secondary" data-team-add="${t.id}">加成员</button>
              <button class="btn secondary" data-team-edit="${t.id}">改配置</button>
-             <button class="btn secondary" data-team-off="${t.id}">停用</button></td></tr>`)}`)
+             ${t.active
+               ? `<button class="btn secondary" data-team-off="${t.id}">停用</button>`
+               : `<button class="btn secondary" data-team-on="${t.id}">启用</button>`}</td></tr>`)}`)
     + panel("团队成员与权限", '<div id="spd-team-members"></div>')
     + panel("村医档案", `
       <p class="desc">村医先有平台账号（用户管理里开通），这里补建村医档案：
@@ -703,7 +707,7 @@ async function renderSpdTeamConfig() {
   $("#page-body").onclick = async (e) => {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const view = el("data-team-view"), add = el("data-team-add");
-    const edit = el("data-team-edit"), off = el("data-team-off");
+    const edit = el("data-team-edit"), off = el("data-team-off"), on = el("data-team-on");
     const memEdit = el("data-mem-edit"), memDel = el("data-mem-del");
     const vdEdit = el("data-vd-edit"), vdOff = el("data-vd-off"), vdQr = el("data-vd-qr");
     if (view) {
@@ -752,11 +756,14 @@ async function renderSpdTeamConfig() {
       }, "#spd-team-msg", "PATCH");
     }
     if (off) {
-      // 列表按 active 过滤，停用后这一行就不再出现——说清楚再停，
-      // 不然点完人会以为团队被删了。
-      if (!confirm("停用后该团队不再出现在列表里（列表只查启用中的团队），确定停用？")) return;
+      // 停用只改状态、不删行；列表带 include_inactive，停用后仍看得见、可再启用。
+      if (!confirm("停用后该团队不再接收分派（列表里仍可见，可随时启用），确定停用？")) return;
       return postAction(`/api/spd/teams/${off.dataset.teamOff}`,
         { active: false }, "#spd-team-msg", "PATCH");
+    }
+    if (on) {
+      return postAction(`/api/spd/teams/${on.dataset.teamOn}`,
+        { active: true }, "#spd-team-msg", "PATCH");
     }
     if (memEdit) {
       const member = members.find((m) => String(m.id) === memEdit.dataset.memEdit) || {};

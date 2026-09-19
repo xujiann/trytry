@@ -126,16 +126,16 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P1-38 | **居民端转诊状态另有一套措辞**（待接收/已接收/已完成 vs 业务端 待接诊/已接诊/已结案）。这是对外分叉、不是拷贝，但两套文案会各自演化；是否统一属另案（`tests/test_portal_referral_frontend.py:41` 记着这条）。业务端与打印件之间那份逐字拷贝已在本轮合掉 | `app/routers/portal.py:1229` |
 | ~~P1-39~~ | ✅ **已关账，且盲区里藏着 9 处实测放行的真缺口**。新建 `tests/test_body_org_write_guard.py`：机构外键列名从模型元数据推导（14 个），分「以谁的名义写」与「写给谁」两类——判的是**列名**（稳定）而非逐个端点，新列名未分类则 fail-closed 按 acting 处理并当场变红；「仅 `require_admin` 可达」自动豁免（`require_roles` 不算，它会放行凭权限点的自定义角色，而自定义角色不是全域角色）。分母 77 个写端点 = 已校验 54 + 自动豁免 8 + **缺口 15**。15 处全部补上 `assert_org_writable`，行为回归 `tests/test_cross_org_body_writes.py` 覆盖其中 9 条实打复现过的：乙院医师可在甲院开就诊/开处方/报传染病卡/替甲院签家医/以甲院名义开检查单·上转·申请会诊，乙院经办可从甲院药房**调出药品**、把**甲院职工**派驻出去 | 已关账 |
 | P1-40 | **全平台孤儿端点 199 个**（945 个端点里前端找不到调用点，严格判据）。缺口最大的模块：`spd.population 16`、`portal 12`、`spd.assess 12`、`spd.config.scales 11`、`spd.tasks 10`、`spd.followup 9`、`spd.portal 9`、`billing 7`、`users 7`、`spd.config.devices 7`。已有棘轮 `tests/test_frontend_endpoint_coverage.py` 钉住只减不增并打印缺口分布 | `server/tests/test_frontend_endpoint_coverage.py` |
-| P1-41 | **`GET /api/spd/teams` 只返回 `active=True`**：界面上点「停用」后团队从列表消失，**没有任何入口能再启用**（只能知道 id 直接 PATCH）。修法是加 `include_inactive` 查询参数，与 `medwaste` 的点位清单同口径 | `app/spd/routers/config/teams.py::list_teams` |
-| P1-42 | **`medwaste` 点位没有更新端点**：只有 create / list / deactivate / reactivate，点位名写错、负责人换人都改不了，界面因此做不出「改」 | `app/routers/medwaste.py` |
-| P1-43 | **TOTP 没有读接口**：无 `GET /api/auth/totp` 一类端点，前端无法显示「已启用/未启用」，也无法提示「你的角色被要求双因素但还没绑」。补一个只回 `{enabled: bool}` 的读端点即可，不涉及密钥外泄 | `app/routers/auth.py` |
-| P1-44 | **`GET /api/access-logs/stats` 的 docstring 与签名对不上**：docstring 说「一段时间内各类调阅的构成」，签名却只有 `patient_id`、没有 `start`/`end`（同模块列表端点有）。「上个月的跨机构调阅占比」这类排查做不了 | `app/routers/access_logs.py` |
-| P1-45 | **`tests/test_spd_config_scales_teams_contract.py::test_量表的键集合与未发布时的空令牌` 是随机序 flake**：模块级 `seeded` 夹具被同文件「发布量表」的用例改了状态，顺序一乱就先发布再断言「未发布时 qr_token 为空」（seed 7/42 红，seed 13 与 `-p no:randomly` 绿） | `server/tests/test_spd_config_scales_teams_contract.py` |
+| ~~P1-41~~ | ✅ **已关账**：`GET /api/spd/teams` 加 `include_inactive`（与 `medwaste` 点位清单同口径），前端团队配置页改拉全量并给停用项加「启用」按钮。缺省清单行为不变 | 已关账 |
+| ~~P1-42~~ | ✅ **已关账**：新增 `PATCH /api/medwaste/locations/{id}`，**只改名称与负责人**——归属与类型刻意不可改，改了会让历史医废记录的语义被事后改写（那批医废当时从哪个科室产生、存进哪个暂存间，不能变）。真要换类型就停用旧点位另建 | 已关账 |
+| ~~P1-43~~ | ✅ **已关账**：新增 `GET /api/auth/totp`，回 `enabled/pending/required/action_needed`，**只回状态不回密钥**（密钥仅 setup 那一次返回，读接口再吐一遍等于把它变成随时可取的口令）。前端账号安全页据此显示真状态，并落实「你的角色被要求双因素却还没绑」那句提示 | 已关账 |
+| ~~P1-44~~ | ✅ **已关账**：`GET /api/access-logs/stats` 加 `start`/`end`（与本模块清单端点同一口径，闭区间按自然日），返回里回显取数窗口；前端统计面板改为跟随上方查询表单的同一组时间字段——此前清单筛到上个月、下面的构成比还是全量，同一页两个口径更容易看错 | 已关账 |
+| ~~P1-45~~ | ✅ **已关账**：`test_量表的键集合与未发布时的空令牌` 改用专属草稿。根因是「发布后才出二维码」那条会把共享夹具里的 draft **发布掉**，顺序一乱就先发布再断言未发布。四个种子（7/13/42/99）复验全绿 | 已关账 |
 
 | P1-46 | **`spd/routers/assess.py::_period_range` 的季度/年度两支仍无跨模块守卫**：月份支已复用 `datetypes.is_period`，季度与年度是就近校验（平台侧没有对应类型）。`test_datestr_single_source.py` 认的是正则字面量，这两支没有字面量特征，它看不见——再出现同形状的第三处不会变红 | `app/spd/routers/assess.py:198`（缺陷本身已修，见 `tests/test_spd_assess_period_validation.py`） |
-| P1-47 | **`POST /api/medwaste/{id}/handover` 入参自相矛盾**：`handler_name` 是 `min_length=1` 必填，但挂了 `handler_employee_id` 时后端又用 `employee.name` 覆盖它——调用方必须递一个注定被丢弃的值，否则 422 | `app/schemas.py::WasteHandover` |
+| ~~P1-47~~ | ✅ **已关账**：`WasteHandoverIn` 把 `handler_name` 放宽为可选并补二选一校验（挂档案或填姓名）。**只放宽受理面**，既有的「两个都传」请求照样合法、响应体一字不变 | 已关账 |
 | P1-48 | **`GET /api/access-logs/mine` 不支持代管成员**：只回账户绑定的 patient_id，居民端家庭成员视角看不到「谁看过 TA 的档案」。要支持须后端加 `patient_id` 参数并走代管授权校验——属产品决定，前端不该替它选 | `app/routers/access_logs.py:164` |
-| P1-49 | **若干用例存在模块内顺序依赖**：`test_stage4_quality.py::test_adverse_event_anonymous_and_stats` 依赖同模块前一条先建好不良事件；同类还有 `test_analytics` / `test_medical_record_qc` / `test_clinical_indicators` 的若干条，以及 `test_service_extras_split_contract.py::test_满意度统计的字段顺序照handler实际出键排`（后者在随机序下 HEAD 上就是红的）。与 P1-45 同族，值得一并清理 | `server/tests/` 多处 |
+| P1-49 | **若干用例存在模块内顺序依赖**（只减不增）。已清：`test_stage4_quality::test_adverse_event_anonymous_and_stats`（统计断言改成相对量——取基线再断言「自己造的那条进了统计」，断言一条没减，7 个种子里原本 4 个红，现全绿）。**仍在账**：`test_analytics` / `test_medical_record_qc` / `test_clinical_indicators` 的若干条，以及 `test_service_extras_split_contract::test_满意度统计的字段顺序照handler实际出键排`（后者在随机序下 HEAD 上就是红的） | `server/tests/` 多处 |
 
 **关于 P1-33 原文里那条例外的更正**：原文要求为 `integration.fhir_patient_resource`
 保留「按设计的明文导出」例外。执行包报称「该符号在仓库里不存在」——**这句是错的**，

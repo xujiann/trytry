@@ -614,10 +614,11 @@ async function renderMedwaste() {
         `<tr><td>${l.id}</td><td>${l.org_id}</td><td>${esc(l.name)}</td>
          <td>${esc(l.location_type_name)}</td><td>${esc(l.manager_name) || "—"}</td>
          <td><span class="tag ${l.active ? "green" : "red"}">${l.active ? "启用" : "停用"}</span></td>
-         <td>${l.active
+         <td><button class="btn secondary" data-locedit="${l.id}">改档</button>
+         ${l.active
             ? `<button class="btn danger" data-locoff="${l.id}">停用</button>`
             : `<button class="btn secondary" data-locon="${l.id}">启用</button>`}</td></tr>`)}
-      <p class="desc">停用只改状态、不删行：点位会撤并，但“这包医废当年从哪个科室出来”必须永远查得到。</p></div>
+      <p class="desc">改档只改名称与负责人（归属与类型不可改，改了会让历史医废的语义变掉）；停用只改状态、不删行：点位会撤并，但“这包医废当年从哪个科室出来”必须永远查得到。</p></div>
     <div class="panel"><h3>收集登记</h3>
       <form class="inline" id="waste-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
@@ -687,8 +688,19 @@ async function renderMedwaste() {
     } catch (err) { $("#trace-result").innerHTML = ""; setMsg("#trace-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { hand, store, locoff, locon } = e.target.dataset;
+    const { hand, store, locoff, locon, locedit } = e.target.dataset;
     try {
+      if (locedit) {
+        // 只改名字与负责人：点位归属与类型不可改，改了会让历史医废记录的语义变掉
+        const cur = locations.find((l) => String(l.id) === locedit) || {};
+        const name = prompt("点位名称", cur.name || "");
+        if (name === null) return;
+        const manager = prompt("负责人（可留空）", cur.manager_name || "");
+        if (manager === null) return;
+        await api(`/api/medwaste/locations/${locedit}`, { method: "PATCH",
+          body: JSON.stringify({ name, manager_name: manager }) });
+        return route();
+      }
       if (locoff) { await api(`/api/medwaste/locations/${locoff}`, { method: "DELETE" }); return route(); }
       if (locon) { await api(`/api/medwaste/locations/${locon}/reactivate`, { method: "POST" }); return route(); }
       if (store) {

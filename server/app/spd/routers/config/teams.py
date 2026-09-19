@@ -176,11 +176,20 @@ def list_teams(
     org_id: int | None = None,
     level: str | None = None,
     program_code: str | None = None,
+    include_inactive: bool = False,
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
-    query = db.query(SpdTeam).filter(SpdTeam.active.is_(True))
+    """服务团队清单。
+
+    `include_inactive` 与 `medwaste` 的点位清单同口径：停用不删行，但停用之后
+    必须还能被看见——否则点一次「停用」团队就从界面上消失，**没有任何入口能再
+    启用它**，只能知道 id 直接 PATCH（P1-41）。
+    """
+    query = db.query(SpdTeam)
+    if not include_inactive:
+        query = query.filter(SpdTeam.active.is_(True))
     if org_id is not None:
         query = query.filter(SpdTeam.org_id == org_id)
     if level:

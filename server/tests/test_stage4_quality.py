@@ -107,6 +107,8 @@ def test_adverse_event_closed_loop(client, admin, setup):
 
 
 def test_adverse_event_anonymous_and_stats(client, admin, setup):
+    # 先取基线：本用例只保证"自己造的那条进了统计"，不假设别的用例跑没跑过
+    stats_before = client.get("/api/quality/adverse-events-stats", headers=admin).json()
     anon = client.post(
         "/api/quality/adverse-events",
         json={
@@ -121,12 +123,21 @@ def test_adverse_event_anonymous_and_stats(client, admin, setup):
     assert anon["anonymous"] is True
     assert anon["reporter_name"] == ""
 
+    # 统计口径断言改成**相对量**：原先写死 total==2 / closed_loop_pct==50，
+    # 是在赌同模块前一条用例先跑过（它建了那条 medication 事件并整改闭环）。
+    # 随机序下顺序一乱就红（P1-49 点名的那条，7 个种子里 4 个复现）。
+    # 断言一条没减——仍然验「匿名上报计入总数」「闭环率按 rectified/total 算」
+    # 「按类型/等级分桶」，只是不再依赖别的用例先跑。
+    before = stats_before
     stats = client.get("/api/quality/adverse-events-stats", headers=admin).json()
-    assert stats["total"] == 2
-    assert stats["rectified"] == 1
-    assert stats["closed_loop_pct"] == 50.0
-    assert stats["by_type"]["medication"] == 1
-    assert stats["by_level"]["III"] == 1
+    assert stats["total"] == before["total"] + 1, "匿名上报没计入总数"
+    assert stats["rectified"] == before["rectified"], "本用例没做整改，闭环数不该变"
+    assert stats["by_level"]["III"] == before["by_level"].get("III", 0) + 1
+    assert stats["by_type"]["fall"] == before["by_type"].get("fall", 0) + 1
+    # 闭环率就是 rectified/total，不是一个独立的数——口径漂了这条会红
+    assert stats["closed_loop_pct"] == pytest.approx(
+        round(stats["rectified"] * 100 / stats["total"], 2), abs=0.01
+    )
 
 
 def test_record_qc_scoring_and_grades(client, admin, setup):
