@@ -4,7 +4,14 @@
 前的入口环节，不隶属门诊/急诊/预约中的任何一个。
 
 知识库 `_TRIAGE_KB` 是硬编码的六组症状——这是**现状不是设计**，做成可配置属于
-另一件事（届时应落表并配管理端，别在这里悄悄加分支）。
+另一件事（届时应落表并配管理端，别在这里悄悄加分支）。相应地，handler **不接
+`db` 参数**：原先那个 `db: Session = Depends(get_db)` 一行库都不读，是个死参数。
+
+顺带把它的代价说准，免得下一个人照着错的理由再加回来：它**并没有**多借一条
+连接。FastAPI 的依赖默认 `use_cache=True`，而路由级的 `get_current_user` 本身
+就依赖 `get_db`，同一请求里只解析一次——实测带与不带那个参数，一次请求都只开
+1 条 Session。所以去掉它是**清死参数**，不是省连接。等知识库真落表时，连
+`Depends` 带查询一起加，那时它才对应一次真实读库。
 
 路径一字未改：`POST /api/triage/suggest`。
 """
@@ -12,9 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
-from ..database import get_db
 from ..deps import get_current_user
 
 router = APIRouter(
@@ -48,7 +53,7 @@ _TRIAGE_KB = [
 
 
 @router.post("/suggest", response_model=TriageSuggestOut)
-def triage_suggest(symptoms: list[str], db: Session = Depends(get_db)):
+def triage_suggest(symptoms: list[str]):
     """智能导诊：症状匹配推荐科室，急症症状提示急诊。"""
     given = set(symptoms)
     candidates: list[dict[str, Any]] = [
