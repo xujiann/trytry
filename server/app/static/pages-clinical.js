@@ -93,7 +93,8 @@ async function renderUsers() {
       `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td>${esc(u.full_name) || "—"}</td>
        <td><span class="tag">${ROLE_NAMES[u.role] || esc(u.role)}</span></td>
        <td>${u.org_id ? esc(orgNames[u.org_id] || u.org_id) : "—"}</td>
-       <td><button class="btn secondary" data-chrole="${u.id}">调角色</button></td></tr>`)}</div>
+       <td><button class="btn secondary" data-chrole="${u.id}">调角色</button>
+           <button class="btn danger" data-totpreset="${u.id}">重置双因素</button></td></tr>`)}</div>
     <div class="panel"><h3>角色变更记录（留痕，变更即吊销旧令牌）</h3>${
       table(["用户ID", "原角色", "新角色", "操作人", "时间"], roleChanges, (r) =>
         `<tr><td>${r.user_id}</td><td><span class="tag">${ROLE_NAMES[r.old_role] || esc(r.old_role)}</span></td>
@@ -131,7 +132,16 @@ async function renderUsers() {
   };
   $("#param-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/params", formJson(e.target), "#param-msg"); };
   $("#page-body").onclick = async (e) => {
-    const id = e.target.dataset.chrole;
+    const { chrole, totpreset } = e.target.dataset;
+    if (totpreset) {
+      // 换手机/令牌丢失时的解困通道：清空密钥，该用户下次登录按"未开通"处理，
+      // 再自己去「账号安全」重新绑定。清空双因素是降安全等级的动作，故先确认。
+      if (!confirm(`确认重置用户 #${totpreset} 的动态口令？重置后该账号将暂时失去第二因素保护。`)) return;
+      try { await api(`/api/users/${totpreset}/totp/reset`, { method: "POST" }); setMsg("#user-msg", "已重置，请通知本人重新绑定", true); }
+      catch (err) { setMsg("#user-msg", err.message, false); }
+      return;
+    }
+    const id = chrole;
     if (!id) return;
     const keys = Object.keys(ROLE_NAMES);
     const pick = prompt(`新角色（${keys.map((k, i) => `${i + 1}=${ROLE_NAMES[k]}`).join("，")}）输入序号`);
@@ -174,6 +184,16 @@ async function renderAccessLogs() {
        <td>${esc(r.patient_name)}</td><td>${esc(r.resource_name)}</td>
        <td><span class="tag">${esc(r.basis_name)}</span></td></tr>`);
   };
+  /* 按依据的构成比：跨机构调阅（转诊/授权）占比异常是排查的起点。
+     不填患者ID = 全局巡检（后端不留痕，也没有 patient_id 可留）；
+     填了就是"聚焦某个可识别的人"，后端会自我留痕——这是设计，不是副作用。 */
+  const drawStats = async (patientId) => {
+    const s = await api(`/api/access-logs/stats${patientId ? `?patient_id=${encodeURIComponent(patientId)}` : ""}`);
+    $("#al-stats").innerHTML = `
+      <p style="font-size:13px">${patientId ? `患者 ${esc(patientId)}` : "全域"}调阅合计 <b>${esc(s.total)}</b> 次</p>
+      ${table(["依据", "次数"], s.by_basis, (b) =>
+        `<tr><td><span class="tag">${esc(b.basis_name)}</span></td><td>${esc(b.count)}</td></tr>`)}`;
+  };
   $("#page-body").innerHTML = `
     <div class="panel">
       <form class="inline" id="al-search">
@@ -183,10 +203,17 @@ async function renderAccessLogs() {
         <input name="start" placeholder="起 YYYY-MM-DD"><input name="end" placeholder="止 YYYY-MM-DD">
         <button>查询</button></form>
       <p class="desc">按患者查询会一并留痕——查"谁看过某人"本身也是在看这个人的隐私。</p>
-      <div id="al-table"></div></div>`;
+      <div id="al-table"></div></div>
+    <div class="panel"><h3>调阅构成（按依据）</h3>
+      <p class="desc">不填患者ID为全域统计；填了则聚焦到该患者，并同样留痕。</p>
+      <div id="al-stats"></div></div>`;
   await draw();
+  await drawStats("");
   $("#al-search").onsubmit = async (e) => {
-    e.preventDefault(); await draw(formJson(e.target));
+    e.preventDefault();
+    const params = formJson(e.target);
+    await draw(params);
+    await drawStats(params.patient_id || "");
   };
 }
 
@@ -197,11 +224,12 @@ async function renderConsents() {
     if (!patientId) { $("#ct-table").innerHTML = '<p class="desc">输入患者ID查询其同意记录（查询会落调阅留痕）。</p>'; return; }
     const rows = await api(`/api/consents?patient_id=${encodeURIComponent(patientId)}`);
     $("#ct-table").innerHTML = table(
-      ["时间", "场景", "文本版本", "方式", "凭证", "状态"], rows, (r) =>
+      ["时间", "场景", "文本版本", "方式", "凭证", "状态", "操作"], rows, (r) =>
       `<tr><td>${esc((r.created_at || "").replace("T", " ").slice(0, 19))}</td>
        <td>${esc(r.scene)}</td><td>${esc(r.text_version)}</td><td>${esc(r.method)}</td>
        <td>${esc(r.evidence || "—")}</td>
-       <td>${r.revoked_at ? '<span class="tag">已撤回</span>' : '<span class="tag ok">有效</span>'}</td></tr>`);
+       <td>${r.revoked_at ? '<span class="tag">已撤回</span>' : '<span class="tag ok">有效</span>'}</td>
+       <td><button class="btn secondary" data-printconsent="${r.id}">打印同意书</button></td></tr>`);
   };
   const drawCorrections = async () => {
     const rows = await api("/api/consents/corrections?status=pending");
@@ -221,6 +249,13 @@ async function renderConsents() {
       <div id="cr-table"></div><p id="cr-msg"></p></div>`;
   await drawConsents(); await drawCorrections();
   $("#ct-search").onsubmit = async (e) => { e.preventDefault(); await drawConsents(new FormData(e.target).get("patient_id")); };
+  $("#ct-table").onclick = async (e) => {
+    // 同意书打印：告知文本按记录里的 text_version 取，版本对不上时服务端退到当前
+    // active 版并在文中标注——举证以记录里的版本号为准，前端不参与选版
+    const id = e.target.dataset.printconsent; if (!id) return;
+    try { await openPrintPage(`/api/print/consents/${id}`); }
+    catch (err) { setMsg("#cr-msg", err.message, false); }
+  };
   $("#cr-table").onclick = async (e) => {
     const id = e.target.dataset.review; if (!id) return;
     const verdict = e.target.dataset.verdict;
@@ -734,8 +769,16 @@ async function renderVaccination() {
   $("#vac-hist").onsubmit = async (e) => {
     e.preventDefault();
     const records = await api(`/api/vaccination/records?patient_id=${new FormData(e.target).get("patient_id")}`);
-    $("#vac-hist-result").innerHTML = table(["疫苗", "剂次", "日期", "机构"], records, (r) =>
-      `<tr><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td><td>${r.org_id}</td></tr>`);
+    $("#vac-hist-result").innerHTML = table(["疫苗", "剂次", "日期", "机构", "操作"], records, (r) =>
+      `<tr><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td><td>${r.org_id}</td>
+       <td><button class="btn secondary" data-printvac="${r.id}">接种证明</button></td></tr>`);
+  };
+  $("#vac-hist-result").onclick = async (e) => {
+    // 接种证明按**单条接种记录**出证（剂次/批号/接种单位/接种者），所以入口挂在
+    // 接种史的每一行上，而不是按患者出一张——一针一证是后端的口径
+    const id = e.target.dataset.printvac; if (!id) return;
+    try { await openPrintPage(`/api/print/vaccinations/${id}`); }
+    catch (err) { setMsg("#vac-msg", err.message, false); }
   };
 }
 
@@ -1523,9 +1566,14 @@ async function renderInpatient() {
              <button class="btn secondary" data-summary="${a.id}">病案首页</button>
              <button class="btn danger" data-discharge="${a.id}">出院</button>`
           : "—";
+        // 三张住院单据都按 admission_id 出（服务端渲染 A4 版式）。出院小结只在已出院时给
+        // 入口：在院打印的"出院小结"没有出院时间，后端也会 409 挡回——不给按钮更诚实。
+        const prints = `<button class="btn" data-printbill="${a.id}">费用清单</button>
+           <button class="btn" data-printcase="${a.id}">病案首页</button>
+           ${a.status === "discharged" ? `<button class="btn" data-printdis="${a.id}">出院小结</button>` : ""}`;
         return `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(wardName[a.ward_id] || a.ward_id)} / ${a.bed_id}</td>
           <td>${esc(a.diagnosis_name)}</td><td>${statusTag(AS, a.status)}</td>
-          <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button></td></tr>`;
+          <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button> ${prints}</td></tr>`;
       })}</div>
     <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div></div>`;
   $("#ward-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/wards", formJson(e.target, ["org_id"]), "#inp-msg"); };
@@ -1534,6 +1582,11 @@ async function renderInpatient() {
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
+      // 打印三件套走与报告/处方同一条链路：openPrintPage 带令牌取回服务端渲染的
+      // HTML 再唤起打印（可见性与脱敏在服务端判，前端不碰患者字段）
+      if (d.printbill) return await openPrintPage(`/api/print/inpatient-bills/${d.printbill}`);
+      if (d.printcase) return await openPrintPage(`/api/print/case-summaries/${d.printcase}`);
+      if (d.printdis) return await openPrintPage(`/api/print/discharge-summaries/${d.printdis}`);
       if (d.transfer) {
         const wardId = prompt("目标病区ID"), bedId = prompt("目标床位ID");
         if (!wardId || !bedId) return;
@@ -1611,9 +1664,10 @@ async function renderBilling() {
         <input name="admission_id" type="number" placeholder="住院单ID"><input name="encounter_id" type="number" placeholder="就诊ID">
         <input name="insurance_pay" type="number" step="any" placeholder="医保支付(元)" value="0"><button>结算</button></form>
       <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p></div>
-    <div class="panel"><h3>结算单</h3>${table(["ID", "患者", "类型", "总额", "医保", "自付", "时间"], settlements, (s) =>
+    <div class="panel"><h3>结算单</h3>${table(["ID", "患者", "类型", "总额", "医保", "自付", "时间", "操作"], settlements, (s) =>
       `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${BT[s.bill_type]}</td><td>${s.total_amount}</td>
-       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>
+       <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td>
+       <td><button class="btn secondary" data-printsettle="${s.id}">打印结算单</button></td></tr>`)}</div>
     <div class="panel"><h3>统一支付（经办）</h3>
       <form class="inline" id="pay-form">
         <input name="settlement_id" type="number" placeholder="结算单ID" required>
@@ -1667,8 +1721,10 @@ async function renderBilling() {
     } catch (err) { setMsg("#recon-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { reprice, history, refund } = e.target.dataset;
+    const { reprice, history, refund, printsettle } = e.target.dataset;
     try {
+      // 结算单打印：服务端按 Settlement 一行渲染（总额/医保/自付 + 关联住院或就诊）
+      if (printsettle) return await openPrintPage(`/api/print/settlements/${printsettle}`);
       if (reprice) {
         const price = prompt("新单价（元）");
         if (!price) return;

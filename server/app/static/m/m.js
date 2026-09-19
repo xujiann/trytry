@@ -411,7 +411,39 @@ async function loadArchive() {
       <div class="sec-title">就诊记录（${data.encounters.length}）</div>
       ${encounters || '<p class="empty">无就诊记录</p>'}
       <div class="sec-title">检查检验报告（${data.exam_reports.length}）</div>
-      ${reports || '<p class="empty">无报告</p>'}`;
+      ${reports || '<p class="empty">无报告</p>'}
+      ${viewingPatientId === null
+        ? '<div class="sec-title">谁看过我的档案</div><div id="access-log-list"><p class="empty">加载中…</p></div>'
+        : ""}`;
+    if (viewingPatientId === null) await loadMyAccessLogs();
+  } catch (err) {
+    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+  }
+}
+
+/** 《个保法》第 44 条的知情权落到界面：谁、哪家机构、什么时候、凭什么看过我的档案。
+ *
+ * 后端 `/api/access-logs/mine` 只回**本人**的记录（按账户绑定的 patient_id 过滤，
+ * 绕不开），所以这一段只在"本人视角"渲染：切到家庭成员时它返回的仍是本人的记录，
+ * 挂在成员的档案下面就是张冠李戴。成员视角要看同样的东西，得后端先支持
+ * patient_id 参数并走代管授权校验——那不是前端能替它决定的。
+ *
+ * 失败不冒泡：调阅记录拉不回来不该把整张健康档案连坐成一句错误。
+ */
+async function loadMyAccessLogs() {
+  const box = $("#access-log-list");
+  if (!box) return;
+  try {
+    const rows = await authApi("/api/access-logs/mine?limit=20");
+    box.innerHTML = rows.length
+      ? rows.map((r) => `<div class="m-card">
+          ${kv("调阅人", esc(r.viewer))}
+          ${kv("机构", esc(r.viewer_org_name || "—"))}
+          ${kv("看了什么", esc(r.resource_name))}
+          ${kv("依据", `<span class="tag">${esc(r.basis_name)}</span>`)}
+          ${kv("时间", esc((r.at || "").replace("T", " ").slice(0, 19)))}
+        </div>`).join("")
+      : '<p class="empty">最近没有机构调阅过你的档案</p>';
   } catch (err) {
     box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
   }

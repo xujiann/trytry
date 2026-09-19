@@ -1805,3 +1805,70 @@ function wfCanvasDraw() {
     };
   });
 }
+
+/* ---------------- 账号安全：TOTP 动态口令的绑定与解绑（等保 E1） ----------------
+ *
+ * 后端三个端点（setup / activate / disable）早就做完了，但**没有任何界面**——
+ * 被要求双因素的角色登录时只会收到一句 `totp_setup_required`，然后无处可去。
+ *
+ * 这一页**不挂 roles**：TOTP 是"本人给自己账号加第二把锁"，三个端点也只认
+ * `get_current_user`（不限角色）。挂在仅管理员可见的「用户管理」里，等于把
+ * director/医师/药师全挡在门外，而 `MEDPLAT_TOTP_REQUIRED_ROLES` 里最常填的
+ * 恰恰是 director。
+ *
+ * **不画二维码**：画它要引二维码库，而本仓库前端免构建、零依赖（CLAUDE.md 第12条）。
+ * 后端返回的 `otpauth_uri` 是标准 otpauth:// 串，令牌 App 支持手工粘贴/录入密钥；
+ * 想要扫码版属于"引一个依赖"的决定，不在本轮顺手做。
+ *
+ * **没有"查询当前是否已启用"的端点**（后端只有写没有读），所以本页不显示状态、
+ * 只给动作与结果回执：显示一个猜出来的状态，比不显示更糟。
+ */
+async function renderAccountSecurity() {
+  $("#page-desc").textContent = "本人账号的动态口令（TOTP）：生成密钥 → 验证一次启用；解绑同样要验当前验证码";
+  $("#page-body").innerHTML = `
+    <div class="panel"><h3>第一步 · 生成密钥</h3>
+      <p class="desc">用令牌App（Google Authenticator / FreeOTP 等，算法 SHA1/6位/30秒）录入下面的密钥或
+        otpauth 链接。重复生成会覆盖尚未验证的旧密钥；<b>已启用的账号要换绑，须先在下方解绑</b>。</p>
+      <button class="btn" id="totp-setup">生成密钥</button>
+      <p class="msg" id="totp-msg"></p>
+      <div id="totp-secret"></div></div>
+    <div class="panel"><h3>第二步 · 验证一次以启用</h3>
+      <form class="inline" id="totp-activate-form">
+        <input name="code" placeholder="令牌App上的6位验证码" required pattern="\\d{6}" maxlength="6">
+        <button>启用</button></form>
+      <p class="msg" id="totp-act-msg"></p></div>
+    <div class="panel"><h3>解绑（停用动态口令）</h3>
+      <p class="desc">拿到会话令牌不等于拿到手机——解绑也要过第二因素。令牌丢失时请找管理员在「用户管理」里重置。</p>
+      <form class="inline" id="totp-disable-form">
+        <input name="code" placeholder="当前6位验证码" required pattern="\\d{6}" maxlength="6">
+        <button class="btn danger">解绑</button></form>
+      <p class="msg" id="totp-dis-msg"></p></div>`;
+  $("#totp-setup").onclick = async () => {
+    try {
+      const d = await api("/api/auth/totp/setup", { method: "POST" });
+      $("#totp-secret").innerHTML = `
+        <p style="font-size:13px">密钥（手工录入）：<span class="tag">${esc(d.secret)}</span></p>
+        <p style="font-size:12.5px;word-break:break-all">otpauth 链接：${esc(d.otpauth_uri)}</p>
+        <p class="desc">${esc(d.note)}</p>`;
+      setMsg("#totp-msg", "密钥已生成，请录入令牌App后完成第二步", true);
+    } catch (err) { $("#totp-secret").innerHTML = ""; setMsg("#totp-msg", err.message, false); }
+  };
+  $("#totp-activate-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const d = await api("/api/auth/totp/activate", { method: "POST",
+        body: JSON.stringify({ code: new FormData(e.target).get("code") }) });
+      setMsg("#totp-act-msg", d.enabled ? "动态口令已启用，下次登录需同时输入验证码" : "未启用", d.enabled);
+      e.target.reset();
+    } catch (err) { setMsg("#totp-act-msg", err.message, false); }
+  };
+  $("#totp-disable-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const d = await api("/api/auth/totp/disable", { method: "POST",
+        body: JSON.stringify({ code: new FormData(e.target).get("code") }) });
+      setMsg("#totp-dis-msg", d.enabled ? "仍处于启用状态" : "动态口令已解绑", !d.enabled);
+      e.target.reset();
+    } catch (err) { setMsg("#totp-dis-msg", err.message, false); }
+  };
+}

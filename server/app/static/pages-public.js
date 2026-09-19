@@ -254,18 +254,22 @@ async function renderCerts() {
     ${abnormal.length ? `<div class="panel"><h3>⚠ 体检异常清单（${abnormal.length}，供慢病筛查建档衔接）</h3>${
       table(["体检ID", "患者", "日期", "异常项"], abnormal, (a) =>
         `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_items)}</span></td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>体检记录</h3>${table(["ID", "患者", "套餐", "日期", "结论", "异常"], checkups, (c) =>
+    <div class="panel"><h3>体检记录</h3>${table(["ID", "患者", "套餐", "日期", "结论", "异常", "操作"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
-       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
+       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td>
+       <td><button class="btn secondary" data-printchk="${c.id}">打印报告</button></td></tr>`)}</div>`;
   await draw();
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
   $("#cert-filter").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("cert_type")); };
   $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };
   $("#page-body").onclick = async (e) => {
-    const { printcert } = e.target.dataset;
-    if (!printcert) return;
-    try { await openPrintPage(`/api/print/certs/${printcert}`); }
-    catch (err) { setMsg("#cert-msg", err.message, false); }
+    const { printcert, printchk } = e.target.dataset;
+    try {
+      // 体检报告：服务端把分项结果（CheckupItem，异常标注）与总检结论一起渲染，
+      // 页面这张表只有汇总——打印走单据端点，别在前端拼第二份报告版式
+      if (printchk) return await openPrintPage(`/api/print/checkups/${printchk}`);
+      if (printcert) return await openPrintPage(`/api/print/certs/${printcert}`);
+    } catch (err) { setMsg("#cert-msg", err.message, false); }
   };
 }
 

@@ -105,6 +105,10 @@ const PAGES = [
   { id: "audit", title: "审计日志", render: renderAudit, roles: ["admin"] },
   { id: "access-logs", title: "调阅留痕", render: renderAccessLogs, roles: ["admin", "director"] },
   { id: "consents", title: "知情同意与行权", render: renderConsents, roles: ["admin", "director", "operator"] },
+  // 账号安全（TOTP 绑定/解绑）**刻意不挂 roles**：给自己账号加第二把锁是每个
+  // 工作人员本人的事，后端三个端点也只认 get_current_user。挂进仅管理员可见的
+  // 「用户管理」会把 director/医师/药师全挡在门外，而被要求双因素的常是 director。
+  { id: "account", title: "账号安全（动态口令）", render: renderAccountSecurity },
 ];
 
 

@@ -586,44 +586,130 @@ async function renderCssd() {
 }
 
 async function renderMedwaste() {
-  $("#page-desc").textContent = "收集→暂存→交接全过程监管，超2天未交接自动预警";
-  const [wastes, alerts] = await Promise.all([api("/api/medwaste"), api("/api/medwaste/alerts")]);
+  $("#page-desc").textContent = "点位建档→收集→暂存→交接全过程监管，扫码追溯与转运人工作量，超2天未交接自动预警";
+  const [wastes, alerts, locations, hstats] = await Promise.all([
+    api("/api/medwaste"), api("/api/medwaste/alerts"),
+    api("/api/medwaste/locations?include_inactive=true"), api("/api/medwaste/handler-stats")]);
   const alertIds = new Set(alerts.map((w) => w.id));
   const WT = { infectious: "感染性", sharp: "损伤性", pathological: "病理性", pharmaceutical: "药物性", chemical: "化学性" };
   const WS = { collected: ["已收集", "orange"], stored: ["已暂存", "orange"], handed_over: ["已交接", "green"] };
+  // 点位类型的中文名，**展示一律用服务端折算好的 `location_type_name`**
+  // （后端 docstring 明写"前端不该自己维护第二份 source→产生点 的映射"）。
+  // 下面这张表只给**录入下拉**用——它回答的是"能选哪些值"，与展示口径不是一回事。
+  const LOC_TYPE_OPTIONS = { source: "产生点", storage: "暂存间" };
+  const locName = Object.fromEntries(locations.map((l) => [l.id, l.name]));
+  const sources = locations.filter((l) => l.active && l.location_type === "source");
+  const storages = locations.filter((l) => l.active && l.location_type === "storage");
+  const locLabel = (id) => (id ? esc(locName[id] || id) : "—");
   $("#page-body").innerHTML = `
+    <div class="panel"><h3>点位建档（产生点 / 暂存间）</h3>
+      <form class="inline" id="loc-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <input name="name" placeholder="点位名称（如 内科病区 / 一号暂存间）" required>
+        <select name="location_type">${Object.entries(LOC_TYPE_OPTIONS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="manager_name" placeholder="负责人">
+        <button>建档</button>
+      </form><p class="msg" id="loc-msg"></p>
+      ${table(["ID", "机构", "名称", "类型", "负责人", "状态", "操作"], locations, (l) =>
+        `<tr><td>${l.id}</td><td>${l.org_id}</td><td>${esc(l.name)}</td>
+         <td>${esc(l.location_type_name)}</td><td>${esc(l.manager_name) || "—"}</td>
+         <td><span class="tag ${l.active ? "green" : "red"}">${l.active ? "启用" : "停用"}</span></td>
+         <td>${l.active
+            ? `<button class="btn danger" data-locoff="${l.id}">停用</button>`
+            : `<button class="btn secondary" data-locon="${l.id}">启用</button>`}</td></tr>`)}
+      <p class="desc">停用只改状态、不删行：点位会撤并，但“这包医废当年从哪个科室出来”必须永远查得到。</p></div>
     <div class="panel"><h3>收集登记</h3>
       <form class="inline" id="waste-form">
         <input name="org_id" type="number" placeholder="机构ID" required>
         <select name="waste_type">${Object.entries(WT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="weight_kg" type="number" step="any" placeholder="重量(kg)" required>
         <input name="collected_date" placeholder="收集日期 YYYY-MM-DD" required>
+        <select name="source_location_id"><option value="">不指定产生点</option>${
+          sources.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("")}</select>
         <button>登记</button>
-      </form><p class="msg" id="waste-msg"></p></div>
+      </form><p class="msg" id="waste-msg"></p>
+      <p class="desc">追溯码按 MW-日期-序号 由平台生成，不接受人工填写——两包医废共用一个码，追溯就全废了。</p></div>
+    <div class="panel"><h3>扫码追溯</h3>
+      <form class="inline" id="trace-form">
+        <input name="trace_code" placeholder="追溯码，如 MW-20260101-0001" required style="min-width:220px">
+        <button>查询</button></form>
+      <p class="msg" id="trace-msg"></p><div id="trace-result"></div></div>
     ${alerts.length ? `<div class="panel"><h3>⚠ 滞留预警（${alerts.length}）</h3><p class="desc">收集超过2天仍未交接</p></div>` : ""}
-    <div class="panel">${table(["ID", "机构", "类别", "重量", "收集日期", "转运人", "状态", "操作"], wastes, (w) => {
-      return `<tr><td>${w.id}</td><td>${w.org_id}</td><td>${WT[w.waste_type]}</td><td>${w.weight_kg}kg</td>
+    <div class="panel">${table(["ID", "机构", "追溯码", "类别", "重量", "收集日期", "产生点", "暂存间", "转运人", "状态", "操作"], wastes, (w) => {
+      const actions = w.status === "collected"
+        ? `<button class="btn secondary" data-store="${w.id}">入暂存</button>
+           <button class="btn secondary" data-hand="${w.id}">交接</button>`
+        : w.status === "stored" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : "—";
+      return `<tr><td>${w.id}</td><td>${w.org_id}</td><td><span class="tag">${esc(w.trace_code)}</span></td>
+        <td>${WT[w.waste_type]}</td><td>${w.weight_kg}kg</td>
         <td>${esc(w.collected_date)}${alertIds.has(w.id) ? ' <span class="tag red">滞留</span>' : ""}</td>
+        <td>${locLabel(w.source_location_id)}</td><td>${locLabel(w.storage_location_id)}</td>
         <td>${esc(w.handler_name) || "—"}</td><td>${statusTag(WS, w.status)}</td>
-        <td>${w.status !== "handed_over" ? `<button class="btn secondary" data-hand="${w.id}">交接</button>` : "—"}</td></tr>`;
-    })}</div>`;
-  $("#waste-form").onsubmit = async (e) => {
+        <td>${actions}</td></tr>`;
+    })}</div>
+    <div class="panel"><h3>转运人员工作量</h3>
+      ${table(["员工ID", "姓名", "交接次数", "重量合计"], hstats.handlers, (h) =>
+        `<tr><td>${h.employee_id}</td><td>${esc(h.name)}</td><td>${h.count}</td><td>${h.weight_kg}kg</td></tr>`)}
+      <p class="desc">未挂员工档案的交接单列：${hstats.unlinked_records.count} 次 / ${hstats.unlinked_records.weight_kg}kg，
+        不摊到任何人头上——只填了名字的历史记录，重名就会张冠李戴。</p></div>`;
+  $("#loc-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
-      await api("/api/medwaste", { method: "POST", body: JSON.stringify({
-        org_id: Number(f.get("org_id")), waste_type: f.get("waste_type"),
-        weight_kg: Number(f.get("weight_kg")), collected_date: f.get("collected_date") }) });
+      await api("/api/medwaste/locations", { method: "POST", body: JSON.stringify({
+        org_id: Number(f.get("org_id")), name: f.get("name"),
+        location_type: f.get("location_type"), manager_name: f.get("manager_name") || "" }) });
+      route();
+    } catch (err) { setMsg("#loc-msg", err.message, false); }
+  };
+  $("#waste-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const body = { org_id: Number(f.get("org_id")), waste_type: f.get("waste_type"),
+      weight_kg: Number(f.get("weight_kg")), collected_date: f.get("collected_date") };
+    if (f.get("source_location_id")) body.source_location_id = Number(f.get("source_location_id"));
+    try {
+      await api("/api/medwaste", { method: "POST", body: JSON.stringify(body) });
       route();
     } catch (err) { setMsg("#waste-msg", err.message, false); }
   };
-  $("#page-body").onclick = async (e) => {
-    const id = e.target.dataset.hand;
-    if (!id) return;
-    const handler = prompt("转运人员姓名"); if (!handler) return;
+  $("#trace-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const code = new FormData(e.target).get("trace_code");
     try {
-      await api(`/api/medwaste/${id}/handover`, { method: "POST", body: JSON.stringify({ handler_name: handler }) });
-      route();
+      const w = await api(`/api/medwaste/trace/${encodeURIComponent(code)}`);
+      $("#trace-result").innerHTML = `
+        <p style="font-size:13px">追溯码 <span class="tag">${esc(w.trace_code)}</span>
+          ${esc(w.waste_type_name)} ${esc(w.weight_kg)}kg · 机构 ${w.org_id} · ${statusTag(WS, w.status)}</p>
+        ${table(["环节", "时间", "地点 / 经手人"], w.timeline, (s) =>
+          `<tr><td>${esc(s.step)}</td><td>${esc(s.at)}</td><td>${esc(s.location) || "—"}</td></tr>`)}`;
+      setMsg("#trace-msg", "", true);
+    } catch (err) { $("#trace-result").innerHTML = ""; setMsg("#trace-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { hand, store, locoff, locon } = e.target.dataset;
+    try {
+      if (locoff) { await api(`/api/medwaste/locations/${locoff}`, { method: "DELETE" }); return route(); }
+      if (locon) { await api(`/api/medwaste/locations/${locon}/reactivate`, { method: "POST" }); return route(); }
+      if (store) {
+        const hint = storages.map((l) => `${l.id}=${l.name}`).join("，") || "本机构尚未建暂存间";
+        const locId = prompt(`暂存间点位ID（${hint}）`);
+        if (!locId) return;
+        await api(`/api/medwaste/${store}/store`, { method: "POST",
+          body: JSON.stringify({ storage_location_id: Number(locId) }) });
+        return route();
+      }
+      if (hand) {
+        // handler_name 是后端必填（schemas.WasteHandover 的 min_length=1），即便挂了
+        // 员工档案也得给——所以先问姓名再问档案ID，别做成"二选一"让人撞 422。
+        // 挂上档案才进得了工作量统计（挂档案时姓名以档案为准，由后端覆盖）。
+        const handler = prompt("转运人员姓名"); if (!handler) return;
+        const employeeId = prompt("转运人员的员工档案ID（可留空；填了才计入工作量统计）");
+        const body = { handler_name: handler };
+        if (employeeId) body.handler_employee_id = Number(employeeId);
+        await api(`/api/medwaste/${hand}/handover`, { method: "POST", body: JSON.stringify(body) });
+        return route();
+      }
     } catch (err) { setMsg("#waste-msg", err.message, false); }
   };
 }
@@ -899,7 +985,8 @@ async function renderReferrals() {
         ? `<button class="btn secondary" data-status="completed" data-id="${r.id}">结案</button>` : "—";
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${r.direction === "up" ? "上转" : "下转"}</td>
         <td>${r.from_org_id} → ${r.to_org_id}</td><td>${esc(r.reason)}</td>
-        <td><span class="tag ${color}">${text}</span></td><td>${actions}</td></tr>`;
+        <td><span class="tag ${esc(color)}">${esc(text)}</span></td>
+        <td>${actions} <button class="btn" data-printref="${r.id}">打印转诊单</button></td></tr>`;
     })}</div>`;
   $("#ref-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -912,10 +999,15 @@ async function renderReferrals() {
     } catch (err) { setMsg("#ref-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { status, id } = e.target.dataset;
-    if (!status || !id) return;
-    try { await api(`/api/referrals/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }); route(); }
-    catch (err) { setMsg("#ref-msg", err.message, false); }
+    const { status, id, printref } = e.target.dataset;
+    try {
+      // 转诊单：服务端渲染的 A4 版式（转出/转入机构、方向、事由、状态），
+      // 与报告/处方同一条打印链路（openPrintPage 带令牌取回再唤起打印）
+      if (printref) return await openPrintPage(`/api/print/referrals/${printref}`);
+      if (!status || !id) return;
+      await api(`/api/referrals/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+      route();
+    } catch (err) { setMsg("#ref-msg", err.message, false); }
   };
 }
 
