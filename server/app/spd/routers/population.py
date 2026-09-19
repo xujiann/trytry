@@ -24,7 +24,7 @@ from ...config import settings
 from ...database import get_db
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, row_dict
-from ..platform import Organization, Patient, User, pii_filter
+from ..platform import Organization, Patient, User, pii_filter, visible_phone
 from ..models import (
     SpdAssessment,
     SpdCandidate,
@@ -59,13 +59,19 @@ router = APIRouter(
 SERVICE_ROLES = ("doctor", "public_health", "director")
 
 
-def _patient_brief(db: Session, patient_ids: list[int]) -> dict[int, dict]:
+def _patient_brief(db: Session, patient_ids: list[int], user: User) -> dict[int, dict]:
+    """患者摘要（列表/详情共用）。电话按平台口径脱敏：admin 明文、其余掩码。
+
+    脱敏放在**产出摘要的这一处**，而不是每个调用方各自记得——
+    `_candidate_out` / `_enroll_out` / `_task_out` 只是把 brief 里的值搬进响应，
+    它们看不出手里的号码是不是已经处理过。
+    """
     if not patient_ids:
         return {}
     rows = db.query(Patient).filter(Patient.id.in_(patient_ids)).all()
     return {
         p.id: {"name": p.name, "gender": p.gender, "birth_date": p.birth_date,
-               "ehc_no": p.ehc_no, "phone": p.phone}
+               "ehc_no": p.ehc_no, "phone": visible_phone(p.phone, user)}
         for p in rows
     }
 
@@ -233,7 +239,7 @@ def list_screenings(
     if reviewed is not None:
         query = query.filter(SpdScreening.reviewed.is_(reviewed))
     rows = paginate(query.order_by(SpdScreening.id.desc()), response, offset, limit)
-    briefs = _patient_brief(db, [r.patient_id for r in rows])
+    briefs = _patient_brief(db, [r.patient_id for r in rows], user)
     return [_screening_out(r, briefs.get(r.patient_id)) for r in rows]
 
 
@@ -391,7 +397,7 @@ def list_candidates(
         ids = [p.id for p in db.query(Patient).filter(Patient.name.contains(keyword)).limit(500)]
         query = query.filter(SpdCandidate.patient_id.in_(ids or [0]))
     rows = paginate(query.order_by(SpdCandidate.id.desc()), response, offset, limit)
-    briefs = _patient_brief(db, [r.patient_id for r in rows])
+    briefs = _patient_brief(db, [r.patient_id for r in rows], user)
     return [_candidate_out(r, briefs.get(r.patient_id)) for r in rows]
 
 
@@ -637,7 +643,7 @@ def list_enrollments(
         ]
         query = query.filter(SpdEnrollment.patient_id.in_(ids or [0]))
     rows = paginate(query.order_by(SpdEnrollment.id.desc()), response, offset, limit)
-    briefs = _patient_brief(db, [r.patient_id for r in rows])
+    briefs = _patient_brief(db, [r.patient_id for r in rows], user)
     return [_enroll_out(r, briefs.get(r.patient_id)) for r in rows]
 
 
@@ -649,7 +655,7 @@ def get_enrollment(
     if enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
     assert_patient_visible(db, user, enrollment.patient_id, resource="spd_enrollment")
-    briefs = _patient_brief(db, [enrollment.patient_id])
+    briefs = _patient_brief(db, [enrollment.patient_id], user)
     out = _enroll_out(enrollment, briefs.get(enrollment.patient_id))
     out["packages"] = [
         _binding_out(db, b)
@@ -865,6 +871,7 @@ def list_lifecycle_events(
     offset: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(SpdLifecycleEvent)
     if event:
@@ -878,7 +885,7 @@ def list_lifecycle_events(
         .filter(SpdEnrollment.id.in_([r.enrollment_id for r in rows] or [0]))
         .all()
     }
-    briefs = _patient_brief(db, [e.patient_id for e in enrollments.values()])
+    briefs = _patient_brief(db, [e.patient_id for e in enrollments.values()], user)
     out = []
     for row in rows:
         enrollment = enrollments.get(row.enrollment_id)
@@ -1056,11 +1063,11 @@ def add_group_members(
 @router.get("/groups/{group_id}/members")
 def list_group_members(
     group_id: int, response: Response, offset: int = 0, limit: int = 100,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(SpdGroupMember).filter(SpdGroupMember.group_id == group_id)
     rows = paginate(query.order_by(SpdGroupMember.id.desc()), response, offset, limit)
-    briefs = _patient_brief(db, [r.patient_id for r in rows])
+    briefs = _patient_brief(db, [r.patient_id for r in rows], user)
     return [
         {"id": r.id, "patient_id": r.patient_id, "added_at": r.added_at.isoformat(),
          **(briefs.get(r.patient_id) or {})}
@@ -1229,13 +1236,13 @@ def list_usages(binding_id: int, response: Response, offset: int = 0, limit: int
 @router.get("/service-applies")
 def list_service_applies(
     response: Response, status: str | None = "pending", offset: int = 0, limit: int = 100,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     query = db.query(SpdServiceApply)
     if status:
         query = query.filter(SpdServiceApply.status == status)
     rows = paginate(query.order_by(SpdServiceApply.id.desc()), response, offset, limit)
-    briefs = _patient_brief(db, [r.patient_id for r in rows])
+    briefs = _patient_brief(db, [r.patient_id for r in rows], user)
     return [
         {"id": r.id, "patient_id": r.patient_id, "program_code": r.program_code,
          "note": r.note, "status": r.status, "handle_note": r.handle_note,
@@ -1386,7 +1393,7 @@ def patient_profile(
         "patient": {
             "id": patient.id, "name": patient.name, "gender": patient.gender,
             "birth_date": patient.birth_date, "ehc_no": patient.ehc_no,
-            "phone": patient.phone,
+            "phone": visible_phone(patient.phone, user),
         },
         "programs": programs,
         "measurements": [

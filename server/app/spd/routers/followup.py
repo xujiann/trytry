@@ -19,7 +19,7 @@ from ...clock import now_naive
 from ...database import get_db
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
-from ..platform import Admission, Encounter, Patient, User
+from ..platform import Admission, Encounter, Patient, User, visible_phone
 from ..models import (
     SpdCallTask,
     SpdEnrollment,
@@ -451,7 +451,8 @@ def followup_context(
         "record": _record_out(record, patient.name if patient else ""),
         "patient": {
             "id": patient.id, "name": patient.name, "gender": patient.gender,
-            "birth_date": patient.birth_date, "phone": patient.phone,
+            "birth_date": patient.birth_date,
+            "phone": visible_phone(patient.phone, user),
         } if patient else None,
         "encounters": [
             {"id": e.id, "encounter_type": e.encounter_type,

@@ -32,6 +32,10 @@ PLATFORM_ALLOWLIST = {
     "concurrency",   # 原子累加/扣减、唯一约束冲突助手
     "pii",           # 加密态等值检索（pii_filter）：证件号筛选在开态走索引列，
                      # 否则密文列 contains 恒空，spd 检索静默失明（P1-25，经 platform.py 再导出）
+    "privacy",       # 仅 platform.py 可用：PII 出口脱敏（visible_phone/visible_id_card/
+                     # mask_phone）。慢专病的档案/任务/随访聚合视图会夹带居民电话，
+                     # 出口口径必须与平台 desensitize 同一套（admin 明文、其余掩码），
+                     # 不许子系统自己写一份掩码规则（P1-33，经 platform.py 再导出）
     "formula",       # AST 白名单表达式求值（考核公式）
     "events",        # 领域事件总线（子系统订阅平台事件）
     "scheduler",     # 定时任务注册（任务体在子系统内）
