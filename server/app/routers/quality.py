@@ -16,6 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import ensure_present, insert_if_absent
+from ..datetypes import is_period
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope, row_dict
@@ -602,7 +603,7 @@ def record_qc_summary(
     user: User = Depends(get_current_user),
 ):
     """全量环节质控统计：按机构/医师的甲乙丙分布与平均分（period=YYYY-MM 过滤）。"""
-    if period is not None and not re.fullmatch(r"\d{4}-\d{2}", period):
+    if period is not None and not is_period(period):
         raise HTTPException(status_code=422, detail="period 格式须为 YYYY-MM")
     q = db.query(MedicalRecord)
     # 质控统计是管理口径：牵头医院要看得到片区的病历质量分布

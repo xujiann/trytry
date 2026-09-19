@@ -26,7 +26,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..datetypes import OptionalDateStr
+from ..datetypes import OptionalDateStr, PeriodStr
 from ..concurrency import insert_or_conflict, upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_org_scope
@@ -338,7 +338,7 @@ def list_prepayments(pool_id: int, db: Session = Depends(get_db)):
 
 
 class PeriodIn(BaseModel):
-    period: str = Field(pattern=r"^\d{4}-\d{2}$")
+    period: PeriodStr
     # 留空即由系统按结算单归集；给值则视为人工核定，覆盖系统数
     actual_amount: float | None = Field(default=None, ge=0)
     note: str = Field(default="", max_length=256)
