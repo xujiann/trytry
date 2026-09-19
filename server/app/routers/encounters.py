@@ -18,7 +18,7 @@ from ..models import (
     Settlement,
     User,
 )
-from ..visibility import assert_patient_visible, visible_org_ids
+from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 from ..schemas import EncounterCreate, EncounterOut
 
 router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[Depends(get_current_user)])
@@ -30,11 +30,17 @@ router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 就诊记录=医疗岗
 )
-def create_encounter(body: EncounterCreate, db: Session = Depends(get_db)):
+def create_encounter(
+    body: EncounterCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.org_id)
     encounter = Encounter(**body.model_dump())
     db.add(encounter)
     db.flush()

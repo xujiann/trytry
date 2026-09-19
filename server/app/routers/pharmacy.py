@@ -188,6 +188,8 @@ def transfer_stock(
     都是发不出去的，搬过去只是把幽灵库存换个地方放。因此这里可能出现
     "汇总够、可发批次不够"而拒绝的情况——那说明调出方账上的量本就发不出。
     """
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.from_org_id)
     if body.from_org_id == body.to_org_id:
         raise HTTPException(status_code=422, detail="调出与调入机构不能相同")
     source = (

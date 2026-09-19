@@ -350,6 +350,8 @@ def _task_out(t: SpdTask, brief: dict | None = None) -> dict:
 def create_task(
     body: TaskIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.org_id)
     assert_patient_visible(db, user, body.patient_id, resource="spd_task")
     enrollment = (
         db.get(SpdEnrollment, body.enrollment_id) if body.enrollment_id is not None else None

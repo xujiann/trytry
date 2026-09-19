@@ -230,6 +230,8 @@ def generate_followup_plan(
     基准日缺省取今天；出院随访应当传出院日，术后随访传手术日——
     接口不去猜是哪一天，因为猜错的后果是整条随访计划全部错位。
     """
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.org_id)
     assert_patient_visible(db, user, body.patient_id, resource="spd_followup")
     rule = db.get(SpdFollowupRule, body.rule_id)
     if rule is None or not rule.active:
@@ -268,6 +270,8 @@ def auto_match_plans(
     匹配靠诊断关键词命中：方案没配任何关键词就是**不匹配任何人**（与纳入规则
     同一口径），否则一个空方案会给全院每个出院患者都排上随访。
     """
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.org_id)
     org_id = body.org_id if body.org_id is not None else user.org_id
     rules = (
         db.query(SpdFollowupRule)
@@ -1004,6 +1008,8 @@ def generate_report(
     另存一份统计结果，而是**同一批数字的另一种排版**；指标段落（key=indicator）
     直接复用考核指标库的取数与公式，从结构上保证报表与考核同源。
     """
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.org_id)
     task = db.get(SpdReportTask, body.task_id) if body.task_id is not None else None
     if body.task_id is not None and task is None:
         raise HTTPException(status_code=404, detail="报告推送任务不存在")

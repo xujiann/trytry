@@ -413,6 +413,8 @@ def distribute_candidates(
     body: DistributeIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """按辖区/病种/风险把目标池患者分发给服务团队（全程管理中心端 #3）。"""
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.org_id)
     if body.team_id is not None and db.get(SpdTeam, body.team_id) is None:
         raise HTTPException(status_code=404, detail="团队不存在")
     rows = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids)).all()

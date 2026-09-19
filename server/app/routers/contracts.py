@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
+from ..visibility import assert_org_writable, assert_obj_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import ContractService, FamilyDoctorContract, Organization, Patient, User
@@ -18,11 +18,17 @@ router = APIRouter(prefix="/api/contracts", tags=["家庭医生签约"], depende
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 家医签约
 )
-def sign(body: ContractCreate, db: Session = Depends(get_db)):
+def sign(
+    body: ContractCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.org_id)
     existing = (
         db.query(FamilyDoctorContract)
         .filter(

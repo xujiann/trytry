@@ -7,8 +7,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..visibility import assert_org_writable
 from ..deps import get_current_user, require_roles, resolve_business_date
-from ..models import InfectiousCase, InfectiousDisease, Organization
+from ..models import InfectiousCase, InfectiousDisease, Organization, User
 from ..schemas import InfectiousCaseCreate, InfectiousCaseOut, InfectiousDiseaseOut
 from .reports import _csv_response
 
@@ -71,9 +72,15 @@ def list_diseases(category: str | None = None, db: Session = Depends(get_db)):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 传染病报告
 )
-def report_case(body: InfectiousCaseCreate, db: Session = Depends(get_db)):
+def report_case(
+    body: InfectiousCaseCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="报告机构不存在")
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.org_id)
     case = InfectiousCase(**body.model_dump())
     # 目录内病种自动回填甲/乙/丙分类
     disease = (

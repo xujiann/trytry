@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..datetypes import DateStr, OptionalDateStr
-from ..visibility import assert_obj_org_writable
+from ..visibility import assert_org_writable, assert_obj_org_writable
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, resolve_org_scope
 from ..models import Employee, Organization, Secondment, User
@@ -96,11 +96,17 @@ def _out(row: Secondment, emp: Employee | None, names: dict, today: date) -> dic
 
 @router.post("/secondments", status_code=201,
              dependencies=[Depends(require_roles("director", "operator"))])
-def create_secondment(body: SecondmentIn, db: Session = Depends(get_db)):
+def create_secondment(
+    body: SecondmentIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """建立派驻记录。同一员工不得有两条未结束的派驻记录——人不能同时在两处在派。"""
     employee = db.get(Employee, body.employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    assert_org_writable(db, user, body.from_org_id)
     for org_id in (body.from_org_id, body.to_org_id):
         if db.get(Organization, org_id) is None:
             raise HTTPException(status_code=404, detail="机构不存在")
