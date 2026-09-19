@@ -1,27 +1,30 @@
-"""打印单据 / 医废追溯 / 双因素 / 调阅留痕：每个端点都必须有前端调用点。
+"""打印单据 / 医废追溯 / 双因素 / 调阅留痕：入口**挂在哪、怎么挂**。
 
-**这是补齐四处"后端交付了、界面缺失"之后立的桩**，形状与
-`test_spd_care_frontend_coverage.py`（2026-08-27 补 spd/care 31 个孤儿端点时立的）
-完全一致——同一个毛病在平台侧还有四处：
+本文件原本还守着"这四个模块的端点必须有前端调用点"。那条判定已经整条
+让给了 `tests/test_frontend_endpoint_coverage.py`——它守的是同一件事，
+但分母是全平台 92 个路由模块、945 个端点，而本文件只有四个模块；判据也更紧
+（参数段不吃掉兄弟路径、子路径不算父路径的调用点）。**同一条判定留两份守卫，
+正是这个仓库上一轮花整轮消灭的形状**，所以留强的那份，删这份。
+那四个模块现已登记在对方的 `FULLY_COVERED` 里，掉一个调用点会单独变红。
 
-* `printing`：八类单据（住院费用清单、结算单、病案首页、体检报告、知情同意书、
-  疫苗接种证明、转诊单、出院小结）服务端版式都渲染好了，没有一个页面点得到；
-* `medwaste`：点位管理（增/查/停用/启用）、入暂存、扫码追溯、转运人工作量，
-  整整七条路径没有界面——而"医废点位管理/转运人员管理/医废追溯"正是需求点名的三项；
-* `auth`：TOTP 三个端点做完了，工作人员没有任何绑定入口，被要求双因素的角色
-  登录时只收到一句 `totp_setup_required`，然后无处可去；
-* `access_logs`：`/mine`（居民自己看"谁看过我"，《个保法》第 44 条）与 `/stats`
-  （按依据的构成比）只有后端。
+本文件留下的五条是对方**看不见**的判定——它只回答"有没有人调用过这条路径"，
+不回答下面这些：
 
-孤儿端点的坏处有两面：使用者以为功能不存在（有的还被需求对照表算作已实现），
-攻击者拿到的却是一片没人走过的接口面。
-
-**分母从路由对象现算**，不抄清单：四个路由每加一个端点，本用例自动把它计入，
-新端点要么带着界面来、要么进 `EXEMPT` 并写明为什么不需要界面。豁免只许变少。
+* **挂在哪**：单据要挂在办这件事的页面上，不是堆一个"打印中心"。住院费用清单
+  落到费用结算页、接种证明落到住院页，都属于点得到但没人找得到——全平台棘轮
+  照样算命中。
+* **怎么挂**：打印一律走 `openPrintPage()`（带令牌取回再唤起打印）。裸
+  `window.open` 同样是一个"调用点"，但它会把需要鉴权的单据打成一个 401 页面。
+* **给谁挂**：账号安全页**刻意不限角色**。三个 TOTP 端点只认 `get_current_user`，
+  把页面挂进仅管理员可见的"用户管理"，会把 director / 医师 / 药师全挡在门外——
+  而 `MEDPLAT_TOTP_REQUIRED_ROLES` 里最常填的就是 director。
+* **挂在哪一端**：`/api/access-logs/mine` 依赖居民令牌（`current_resident_patient`），
+  管理端调它必被拒；它只能落在居民端，且只在**本人视角**下渲染——按账户绑定的
+  patient_id 过滤，挂到家庭成员档案下就是张冠李戴。
 
 匹配的是**源码里的调用形态**（模板字符串 `/api/print/settlements/${s.id}`），
-不是运行时行为——免构建前端没有 jest，这里守"入口存在"，行为由后端测试守，
-"渲染出来非空且转义"由 `scripts/render_diff.js --dump` 取证（见 PR 说明）。
+不是运行时行为——免构建前端没有 jest，这里守"入口的位置与形态"，行为由后端
+测试守，"渲染出来非空且转义"由 `scripts/render_diff.js --dump` 取证。
 """
 import re
 from pathlib import Path
@@ -61,21 +64,6 @@ def _pattern_for(path: str) -> re.Pattern:
 
 def _route_paths(router) -> list[str]:
     return sorted({route.path for route in router.routes if hasattr(route, "methods")})
-
-
-def test_四个模块的端点都有前端调用点或书面豁免():
-    js = _all_js()
-    orphans = []
-    for module, router in ROUTERS.items():
-        for path in _route_paths(router):
-            if path in EXEMPT:
-                continue
-            if not _pattern_for(path).search(js):
-                orphans.append(f"{module}: {path}")
-    assert not orphans, (
-        "以下端点没有任何前端调用点（新端点要么带界面、要么进 EXEMPT 并写明理由）：\n  "
-        + "\n  ".join(orphans)
-    )
 
 
 def _js(name: str) -> str:
@@ -179,18 +167,3 @@ def test_调阅留痕两个视角都接上了():
     assert ungated == [], (
         "「谁看过我的档案」这一段没有锁在本人视角（viewingPatientId === null）里：\n  "
         + "\n  ".join(ungated))
-
-
-def test_豁免只许变少():
-    assert len(EXEMPT) == 0, (
-        f"本轮补齐后四个模块零豁免（现 {len(EXEMPT)} 项）；"
-        "新增豁免须写明为什么该端点不需要界面，且总数只许变少")
-
-
-def test_分母确实来自路由对象():
-    """反空转自检：路径数对不上说明路由结构变了（拆包/改前缀），上面的推导可能
-    整个失效——先修推导再动豁免。数字随端点增删同步更新即可。"""
-    actual = {name: len(_route_paths(r)) for name, r in ROUTERS.items()}
-    assert actual == {"printing": 13, "medwaste": 9, "auth": 5, "access_logs": 3}, (
-        f"四个路由的不同路径数变成了 {actual}；若有意增删端点，同步这里的数字，"
-        "并确认新端点带了界面入口")
