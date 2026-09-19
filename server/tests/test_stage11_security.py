@@ -168,7 +168,15 @@ def test_内置角色齐备且不可删不可停(client, admin):
 
 
 def test_自定义角色按权限点授权后生效(client, admin):
-    """这是本阶段真正要给的能力：内置六角色之外能配出新角色。"""
+    """这是本阶段真正要给的能力：内置六角色之外能配出新角色。
+
+    **权限点与机构归属是两个独立的门，两道都得过。** 本用例原先把文员建成
+    「不属于任何机构」，却要以机构 1 的名义写医废——那时 `POST /api/medwaste`
+    恰好是同模块唯一没有校验归属的写接口（其余三个都校验），于是这条用例
+    实际上是**靠着那个缺陷**才走通的。补上归属校验后它当场变红，正好说明
+    缺陷是真的。现在给文员一个明确的机构，用例回到它本来要测的那件事：
+    权限点授予前后的差别。末尾另加一条把两个维度的关系钉死。
+    """
     role = client.post(
         "/api/rbac/roles",
         json={"key": "ward_clerk", "name": "病区文员", "description": "只做医废收集"},
@@ -177,16 +185,22 @@ def test_自定义角色按权限点授权后生效(client, admin):
     assert role.status_code == 201, role.text
     role_id = role.json()["id"]
 
+    # 本用例自己建机构，不依赖同模块前面的用例先建好（单跑时那个列表是空的）
+    org = client.post(
+        "/api/organizations",
+        json={"name": "阶段十一文员机构", "org_type": "township", "level": "township"},
+        headers=admin,
+    ).json()
+
     client.post(
         "/api/users",
-        json={"username": "s11_clerk", "password": "passw0rd1", "role": "ward_clerk"},
+        json={"username": "s11_clerk", "password": "passw0rd1", "role": "ward_clerk",
+              "org_id": org["id"]},
         headers=admin,
     )
     clerk = {"Authorization": "Bearer " + client.post(
         "/api/auth/login", json={"username": "s11_clerk", "password": "passw0rd1"}
     ).json()["access_token"]}
-
-    org = client.get("/api/organizations", headers=admin).json()[0]
     body = {"org_id": org["id"], "waste_type": "infectious", "weight_kg": 1.0,
             "collected_date": "2026-08-12"}
     # 未授权：403
@@ -210,6 +224,19 @@ def test_自定义角色按权限点授权后生效(client, admin):
         json={"org_id": org["id"], "name": "点位", "location_type": "source"},
         headers=clerk,
     ).status_code == 403
+
+    # 拿到权限点也不能替别家写：两道门各管各的，过了一道不等于过了另一道
+    other = client.post(
+        "/api/organizations",
+        json={"name": "阶段十一别家", "org_type": "township", "level": "township"},
+        headers=admin,
+    ).json()
+    cross = client.post(
+        "/api/medwaste",
+        json={**body, "org_id": other["id"]},
+        headers=clerk,
+    )
+    assert cross.status_code == 403, f"文员替别家记了医废：{cross.status_code} {cross.text}"
 
 
 def test_按模块批量授权与撤销(client, admin):
