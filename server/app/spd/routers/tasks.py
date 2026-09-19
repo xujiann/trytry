@@ -19,7 +19,14 @@ from ...clock import now_naive
 from ...concurrency import add_amount
 from ...database import get_db
 from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
-from ..platform import Patient, User, evidence_urls, notify_user, valid_task_evidence
+from ..platform import (
+    Patient,
+    User,
+    evidence_urls,
+    notify_user,
+    valid_task_evidence,
+    visible_phone,
+)
 from ..models import (
     SpdEnrollment,
     SpdPathInstance,
@@ -419,7 +426,7 @@ def list_tasks(
         response, offset, limit,
     )
     briefs = {
-        p.id: {"name": p.name, "phone": p.phone}
+        p.id: {"name": p.name, "phone": visible_phone(p.phone, user)}
         for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows] or [0]))
     }
     return [_task_out(r, briefs.get(r.patient_id)) for r in rows]
@@ -484,7 +491,10 @@ def get_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(g
         raise HTTPException(status_code=404, detail="任务不存在")
     assert_patient_visible(db, user, task.patient_id, resource="spd_task")
     patient = db.get(Patient, task.patient_id)
-    return _task_out(task, {"name": patient.name, "phone": patient.phone} if patient else None)
+    return _task_out(
+        task,
+        {"name": patient.name, "phone": visible_phone(patient.phone, user)} if patient else None,
+    )
 
 
 def _load_task(db: Session, task_id: int) -> SpdTask:

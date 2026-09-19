@@ -63,10 +63,21 @@ def _generate_ehc_no(db: Session) -> str:
     # L-10 整改：建档纳入角色矩阵（经办/医师/公卫），药师/管理层不建档
     dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
 )
-def register_patient(body: PatientCreate, db: Session = Depends(get_db)):
-    # 主索引幂等：同一身份证号返回既有档案，不重复建档（并发竞态由唯一约束+重查兜底）
+def register_patient(
+    body: PatientCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """建档（EMPI 幂等）：同一身份证号返回既有档案，不重复建档。
+
+    并发竞态由唯一约束 + 重查兜底。返回体与 `GET /api/patients/{ehc_no}` 同口径
+    走 `desensitize`——**这里原先直接返回 ORM 对象**，于是 `response_model=PatientOut`
+    把身份证号与电话明文序列化出去；而幂等语义意味着提交一个已存在的身份证号
+    就能拿回那个人的档案，等于一个明文查询口子。两个 GET 兄弟端点一直是脱敏的，
+    唯独建档这条漏了（P1-33）。
+    """
     patient, _created = create_patient_idempotent(db, body.model_dump())
-    return patient
+    return desensitize(patient, user)
 
 
 @router.get("", response_model=list[PatientOut])
@@ -211,3 +222,4 @@ def check_authorization(
     grants = active_authorization_grants(db, patient_id, org_id, today=current)
     allowed = any(g.scope == "all" or g.scope == scope for g in grants)
     return {"patient_id": patient_id, "org_id": org_id, "scope": scope, "allowed": allowed}
+

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ...clock import now_naive
 from ...database import get_db
 from ...deps import paginate
-from ..platform import Encounter, Patient, ResidentAccount
+from ..platform import Encounter, Patient, ResidentAccount, mask_phone
 from ..models import (
     SpdAssessment,
     SpdConsult,
@@ -298,7 +298,8 @@ def archive(
     timeline.sort(key=lambda item: item["at"], reverse=True)
     return {
         "patient": {"id": patient.id, "name": patient.name, "gender": patient.gender,
-                    "birth_date": patient.birth_date, "phone": patient.phone,
+                    "birth_date": patient.birth_date,
+                    "phone": mask_phone(patient.phone or ""),
                     "ehc_no": patient.ehc_no},
         "profiles": [
             {"program_code": e.program_code, "program_name": names.get(e.program_code, ""),
