@@ -1564,5 +1564,155 @@
         "note": "请用令牌App扫码或录入密钥<img src=x onerror=alert(1)>"
       }
     }
+  },
+  "spdteamcfg": {
+    "fn": "renderSpdTeamConfig",
+    "api": {
+      "/api/spd/catalog": {
+        "programs": [
+          {
+            "code": "hyp<img src=x onerror=alert(1)>",
+            "name": "高血压<img src=x onerror=alert(1)>",
+            "category": "chronic",
+            "stages": [],
+            "active": true
+          },
+          {
+            "code": "dm",
+            "name": "2型糖尿病<b>",
+            "category": "chronic",
+            "stages": [],
+            "active": true
+          }
+        ],
+        "teams": [],
+        "scales": [],
+        "centers": [],
+        "path_templates": []
+      },
+      "/api/organizations": [
+        {
+          "id": 2,
+          "name": "城关镇卫生院<img src=x onerror=alert(1)>",
+          "org_type": "township",
+          "level": "township",
+          "parent_id": 1
+        },
+        {
+          "id": 3,
+          "name": "东村卫生室<b>",
+          "org_type": "village",
+          "level": "village",
+          "parent_id": 2
+        }
+      ],
+      "/api/spd/teams": [
+        {
+          "id": 1,
+          "name": "高血压管理团队<img src=x onerror=alert(1)>",
+          "org_id": 2,
+          "level": "township",
+          "program_codes": [
+            "hyp<img src=x onerror=alert(1)>"
+          ],
+          "leader_user_id": 7,
+          "dept": "全科<img src=x onerror=alert(1)>",
+          "service_area": "城关镇 3 个村<img src=x onerror=alert(1)>",
+          "data_scope": "org",
+          "active": true,
+          "member_count": 2
+        },
+        {
+          "id": 2,
+          "name": "村级随访组<b>",
+          "org_id": 3,
+          "level": "village",
+          "program_codes": [],
+          "leader_user_id": null,
+          "dept": "",
+          "service_area": "",
+          "data_scope": "group",
+          "active": true,
+          "member_count": 0
+        }
+      ],
+      "/api/spd/teams/1": {
+        "id": 1,
+        "name": "高血压管理团队<img src=x onerror=alert(1)>",
+        "org_id": 2,
+        "level": "township",
+        "program_codes": [
+          "hyp<img src=x onerror=alert(1)>"
+        ],
+        "leader_user_id": 7,
+        "dept": "全科<img src=x onerror=alert(1)>",
+        "service_area": "城关镇 3 个村<img src=x onerror=alert(1)>",
+        "data_scope": "org",
+        "active": true,
+        "member_count": 2,
+        "members": [
+          {
+            "id": 11,
+            "user_id": 7,
+            "user_name": "王医生<img src=x onerror=alert(1)>",
+            "member_role": "doctor",
+            "program_codes": [
+              "hyp"
+            ],
+            "stage_scope": "随访期<img src=x onerror=alert(1)>",
+            "patient_scope": "team",
+            "can_view": true,
+            "can_followup": true,
+            "can_referral": true,
+            "can_audit": false,
+            "can_assess": true,
+            "active": true
+          },
+          {
+            "id": 12,
+            "user_id": 8,
+            "user_name": "李村医<b>",
+            "member_role": "village_doctor",
+            "program_codes": [],
+            "stage_scope": "",
+            "patient_scope": "self",
+            "can_view": true,
+            "can_followup": true,
+            "can_referral": false,
+            "can_audit": false,
+            "can_assess": false,
+            "active": false
+          }
+        ]
+      },
+      "/api/spd/village-doctors": [
+        {
+          "id": 5,
+          "user_id": 8,
+          "user_name": "李村医<img src=x onerror=alert(1)>",
+          "org_id": 3,
+          "township": "城关镇<img src=x onerror=alert(1)>",
+          "village": "东村<b>",
+          "license_no": "1101<img src=x onerror=alert(1)>",
+          "license_valid_to": "2027-12-31",
+          "phone": "13800000000",
+          "bind_token": "tok<img src=x onerror=alert(1)>",
+          "active": true
+        },
+        {
+          "id": 6,
+          "user_id": 9,
+          "user_name": "赵村医<b>",
+          "org_id": 3,
+          "township": "",
+          "village": "",
+          "license_no": "",
+          "license_valid_to": "",
+          "phone": "",
+          "bind_token": "tok2",
+          "active": false
+        }
+      ]
+    }
   }
 }
