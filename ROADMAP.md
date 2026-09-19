@@ -84,10 +84,13 @@
   **待卫健批复后恢复**：`performance.py` 端点 docstring 写明恢复点（一行 + 两条用例翻转）。
 
 ### 一行/小修（童子军级，碰到即修）
-- ☐ `routers/triage.py` 的 `triage_suggest` 注入了 `db: Session = Depends(get_db)`
-  却**一次都没用**——每次调用白白从连接池借还一次连接。看着像是「知识库将来落表」
-  的占位（模块 docstring 明写硬编码 KB 是现状不是设计），但占位不该真开会话。
-  本轮没动它：不在改动范围内，登记在这里等碰到时顺手修。
+- ✅ `routers/triage.py` 的 `triage_suggest` 去掉了一次都没用的 `db: Session = Depends(get_db)`
+  （回归 `tests/test_triage.py`，含一条反向用例确认判定写歪时不会恒绿）。
+  **顺带更正本条原来的理由**：原文说它"白白从连接池借还一次连接"，实测**不成立**——
+  FastAPI 依赖默认 `use_cache=True`，而路由级的 `get_current_user` 本身就依赖 `get_db`，
+  同一请求只解析一次；带与不带那个参数都是 1 条 Session（按 `SessionLocal` 实例化计数实测）。
+  该改仍然该改（死参数误导读者，且它是"知识库将来落表"的占位而占位不该出现在签名里），
+  但理由是**清死参数**，不是省连接。又一条"读代码读出来的结论没跑就写进了账本"。
 - ☐ `routers/printing.py:214` 打印件的验真二维码是一个写着「（验真占位）」的方框。
   **不建议顺手补**：`spd/routers/config/_base.py` 里虽有 `_qr_svg`，但 spd 的单向依赖
   边界不允许平台侧直接 import；更要紧的是二维码要指向一个**验真端点**，而按单据号

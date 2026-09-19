@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from ...clock import now_naive
 from ...concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ...database import get_db
+from ...datetypes import PERIOD_MAX_YEAR, PERIOD_MIN_YEAR, is_period
 from ...deps import get_current_user, paginate, require_roles
 from ...formula import FormulaError, evaluate as eval_formula
 from ..platform import Organization, User
@@ -196,15 +197,44 @@ def _metric_names(data_source: str) -> tuple[str, ...]:
 
 
 def _period_range(period: str) -> tuple[str, str]:
-    """把 `2026-08` / `2026-Q3` / `2026` 展开成 [起, 止] 日期字符串。"""
+    """把 `2026-08` / `2026-Q3` / `2026` 展开成 [起, 止] 日期字符串。
+
+    **三种周期形状都要先校验，不能算完再说。** 原先月份分支直接
+    `int(month) % 12 + 1` 往下算，`2026-13` 于是得到 `["2026-13-01", "2026-01-31"]`
+    ——左端大于右端，后面每个 `between(start, end)` 都恒空：考核取数一条不剩、
+    全员 0 分，而接口返回 200，**不报错**。这比少一个人更难查，与 D-3
+    （存量假日期让派驻记录从监测指标里静默消失）完全同族。
+
+    月份形状复用 `datetypes` 的唯一真源（`is_period`，真过日历），季度与年度
+    各自就近校验——这两种形状平台侧没有对应类型，但判定同样要在算之前做。
+    """
     if len(period) == 4 and period.isdigit():
+        if not PERIOD_MIN_YEAR <= int(period) <= PERIOD_MAX_YEAR:
+            raise HTTPException(
+                status_code=422,
+                detail=f"统计周期 {period} 的年份超出受理范围 "
+                       f"{PERIOD_MIN_YEAR}–{PERIOD_MAX_YEAR}",
+            )
         return f"{period}-01-01", f"{period}-12-31"
     if "-Q" in period:
-        year, quarter = period.split("-Q")
+        year, _, quarter = period.partition("-Q")
+        if not (year.isdigit() and quarter.isdigit()) or not 1 <= int(quarter) <= 4:
+            raise HTTPException(status_code=422, detail=f"统计周期 {period} 不是合法季度（YYYY-Q1..Q4）")
+        if not PERIOD_MIN_YEAR <= int(year) <= PERIOD_MAX_YEAR:
+            raise HTTPException(
+                status_code=422,
+                detail=f"统计周期 {period} 的年份超出受理范围 "
+                       f"{PERIOD_MIN_YEAR}–{PERIOD_MAX_YEAR}",
+            )
         start_month = (int(quarter) - 1) * 3 + 1
         end_month = start_month + 2
         last_day = 31 if end_month in (1, 3, 5, 7, 8, 10, 12) else 30
         return f"{year}-{start_month:02d}-01", f"{year}-{end_month:02d}-{last_day}"
+    if not is_period(period):
+        raise HTTPException(
+            status_code=422,
+            detail=f"统计周期 {period} 格式须为 YYYY-MM / YYYY-Qn / YYYY",
+        )
     year, month = period.split("-")[:2]
     nxt = date(int(year) + (int(month) == 12), (int(month) % 12) + 1, 1)
     return f"{year}-{month}-01", (nxt - timedelta(days=1)).isoformat()

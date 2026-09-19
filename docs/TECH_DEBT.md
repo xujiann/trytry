@@ -119,7 +119,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | 编号 | 问题 | 位置 |
 |---|---|---|
 | ~~P1-33~~ | ✅ **已关账**：出口脱敏闸门 `tests/test_pii_output_masking_guard.py` 已建（分母两条路径并集——运行期 `app.routes` 的 response_model 展开 ∪ AST 推导的响应构造闭包；PII 列名取自 `EncryptedPII` 列类型、脱敏函数取自 `privacy.py` 里**定义**的公开函数，两份清单都不手写）。顺带修掉 7 处明文出网，其中 `POST /api/patients` 最重：它直接 `return patient`，而 EMPI 是**幂等**的——提交一个已存在的身份证号就能拿回那个人的档案，等于一个明文查询口子，两个 GET 兄弟端点一直是脱敏的。例外 10 条各带理由（呼救回拨号码、外呼工单号码、村医通讯录等按设计需要真值），违规基线清零 | 已关账 |
-| P1-34 | **月份口径正则不校验日历**：`\d{4}-\d{2}` 放行 `2026-13`，5 处（fund/admin_mgmt×2/quality/reports）。与 D-3 假日期同族，需新建 `PeriodStr` 类型 | `app/routers/fund.py:224` 等 |
+| ~~P1-34~~ | ✅ **已关账**：新建 `datetypes.PeriodStr` / `OptionalPeriodStr` / `is_period`（真过日历，形状用 `[0-9]` 而非 `\d` 以挡住全角），5 处裸正则改走真源，`deps._ASCII_MONTH` 复用同一个对象。守卫**扩展**既有的 `test_datestr_single_source.py` 而非新建（同一条判定不留两份）。年份 1900–2100：上界照抄 `fund.PoolIn.year` 的既有口径并顺带挡住 `9999-12` 下游算次月首日溢出 `datetime.max`；下界取 1900 而非 2000，是因为 `qc-summary?period=1999-01` 今天返回 200 且有用例钉着，跟着收紧会改合法月份的响应字节 | 已关账 |
 | P1-35 | **23 张带 `patient_id` 却无机构列的表**永远当不了可见性依据——补机构列还是确认无需依据，需逐表业务判断（现已可量化打印，见 `test_visibility_relation_derivation.py`） | `app/visibility.py` 推导面 |
 | P1-36 | **登出时"从请求取令牌"的双模回落各写了一份**（Header / Cookie），与唯一实现 `deps.token_from_request` 并行。今天不会漂：两个 logout 都由 `get_current_user`/`current_resident` 前置把过 CSRF 与准入，body 里只是重取同一枚令牌。收敛要先想清 `verify_csrf` 的语义边界 | `app/routers/auth.py:207`、`app/routers/portal.py:487-492` |
 | P1-37 | **`ws.py` 自读会话 Cookie**，不走 `deps.token_from_request`——后者吃 `Request`，而 WS 握手没有 `Request`。要收敛得先把"取令牌"与"校验 CSRF"两件事拆开（这两件事今天绑在一个函数里，本身就是下一步该拆的形状） | `app/ws.py:261` |
@@ -131,6 +131,11 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P1-43 | **TOTP 没有读接口**：无 `GET /api/auth/totp` 一类端点，前端无法显示「已启用/未启用」，也无法提示「你的角色被要求双因素但还没绑」。补一个只回 `{enabled: bool}` 的读端点即可，不涉及密钥外泄 | `app/routers/auth.py` |
 | P1-44 | **`GET /api/access-logs/stats` 的 docstring 与签名对不上**：docstring 说「一段时间内各类调阅的构成」，签名却只有 `patient_id`、没有 `start`/`end`（同模块列表端点有）。「上个月的跨机构调阅占比」这类排查做不了 | `app/routers/access_logs.py` |
 | P1-45 | **`tests/test_spd_config_scales_teams_contract.py::test_量表的键集合与未发布时的空令牌` 是随机序 flake**：模块级 `seeded` 夹具被同文件「发布量表」的用例改了状态，顺序一乱就先发布再断言「未发布时 qr_token 为空」（seed 7/42 红，seed 13 与 `-p no:randomly` 绿） | `server/tests/test_spd_config_scales_teams_contract.py` |
+
+| P1-46 | **`spd/routers/assess.py::_period_range` 的季度/年度两支仍无跨模块守卫**：月份支已复用 `datetypes.is_period`，季度与年度是就近校验（平台侧没有对应类型）。`test_datestr_single_source.py` 认的是正则字面量，这两支没有字面量特征，它看不见——再出现同形状的第三处不会变红 | `app/spd/routers/assess.py:198`（缺陷本身已修，见 `tests/test_spd_assess_period_validation.py`） |
+| P1-47 | **`POST /api/medwaste/{id}/handover` 入参自相矛盾**：`handler_name` 是 `min_length=1` 必填，但挂了 `handler_employee_id` 时后端又用 `employee.name` 覆盖它——调用方必须递一个注定被丢弃的值，否则 422 | `app/schemas.py::WasteHandover` |
+| P1-48 | **`GET /api/access-logs/mine` 不支持代管成员**：只回账户绑定的 patient_id，居民端家庭成员视角看不到「谁看过 TA 的档案」。要支持须后端加 `patient_id` 参数并走代管授权校验——属产品决定，前端不该替它选 | `app/routers/access_logs.py:164` |
+| P1-49 | **若干用例存在模块内顺序依赖**：`test_stage4_quality.py::test_adverse_event_anonymous_and_stats` 依赖同模块前一条先建好不良事件；同类还有 `test_analytics` / `test_medical_record_qc` / `test_clinical_indicators` 的若干条，以及 `test_service_extras_split_contract.py::test_满意度统计的字段顺序照handler实际出键排`（后者在随机序下 HEAD 上就是红的）。与 P1-45 同族，值得一并清理 | `server/tests/` 多处 |
 
 **关于 P1-33 原文里那条例外的更正**：原文要求为 `integration.fhir_patient_resource`
 保留「按设计的明文导出」例外。执行包报称「该符号在仓库里不存在」——**这句是错的**，
