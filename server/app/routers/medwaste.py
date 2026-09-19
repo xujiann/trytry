@@ -262,7 +262,15 @@ def _waste_out(w: MedicalWaste) -> dict:
     status_code=201,
     dependencies=[Depends(require_roles("operator"))],  # H2: 医废收集=经办
 )
-def collect(body: WasteCollect, db: Session = Depends(get_db)):
+def collect(body: WasteCollect, db: Session = Depends(get_db),
+            user: User = Depends(get_current_user)):
+    # 同模块的 create_location / store / handover 都校验了归属，只有收集登记漏了：
+    # 它只查机构**存在**，不查经办人能不能往这家机构写。于是乙院经办可以拿甲院的
+    # org_id 登记医废——记到别家账上，且医废台账是要对监管报数的。
+    #
+    # 这一处没被横向越权矩阵抓到，是因为那道闸门的判据是「/{id} 型直取患者资源」，
+    # 而这里的机构标识走 body。判据看不见的形状，不等于安全（见 P1-39）。
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     if body.source_location_id is not None:

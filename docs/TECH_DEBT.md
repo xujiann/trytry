@@ -124,6 +124,18 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P1-36 | **登出时"从请求取令牌"的双模回落各写了一份**（Header / Cookie），与唯一实现 `deps.token_from_request` 并行。今天不会漂：两个 logout 都由 `get_current_user`/`current_resident` 前置把过 CSRF 与准入，body 里只是重取同一枚令牌。收敛要先想清 `verify_csrf` 的语义边界 | `app/routers/auth.py:207`、`app/routers/portal.py:487-492` |
 | P1-37 | **`ws.py` 自读会话 Cookie**，不走 `deps.token_from_request`——后者吃 `Request`，而 WS 握手没有 `Request`。要收敛得先把"取令牌"与"校验 CSRF"两件事拆开（这两件事今天绑在一个函数里，本身就是下一步该拆的形状） | `app/ws.py:261` |
 | P1-38 | **居民端转诊状态另有一套措辞**（待接收/已接收/已完成 vs 业务端 待接诊/已接诊/已结案）。这是对外分叉、不是拷贝，但两套文案会各自演化；是否统一属另案（`tests/test_portal_referral_frontend.py:41` 记着这条）。业务端与打印件之间那份逐字拷贝已在本轮合掉 | `app/routers/portal.py:1229` |
+| P1-39 | **两道横向越权闸门都看不见「机构标识走 body」的写接口**：`test_stage15_horizontal.py` 的判据是「入参含患者标识」或「按 id 直取患者资源」，`test_cross_org_write_guards.py` 的判据是 `/{id}` 型直取。`POST /api/medwaste`（收集登记）正好两者都不是——只查机构存在、不查能不能往这家机构写，乙院经办可把医废记到甲院账上（已修，回归见 `tests/test_medwaste_cross_org_collect.py`）。**该端点已修，闸门的盲区没修**：需要一条按「body 里带 org_id / from_org_id 的写端点必须校验归属」推导的扫描，否则下一个同形状端点照样静默 | `tests/test_stage15_horizontal.py` 判据面 |
+| P1-40 | **全平台孤儿端点 199 个**（945 个端点里前端找不到调用点，严格判据）。缺口最大的模块：`spd.population 16`、`portal 12`、`spd.assess 12`、`spd.config.scales 11`、`spd.tasks 10`、`spd.followup 9`、`spd.portal 9`、`billing 7`、`users 7`、`spd.config.devices 7`。已有棘轮 `tests/test_frontend_endpoint_coverage.py` 钉住只减不增并打印缺口分布 | `server/tests/test_frontend_endpoint_coverage.py` |
+| P1-41 | **`GET /api/spd/teams` 只返回 `active=True`**：界面上点「停用」后团队从列表消失，**没有任何入口能再启用**（只能知道 id 直接 PATCH）。修法是加 `include_inactive` 查询参数，与 `medwaste` 的点位清单同口径 | `app/spd/routers/config/teams.py::list_teams` |
+| P1-42 | **`medwaste` 点位没有更新端点**：只有 create / list / deactivate / reactivate，点位名写错、负责人换人都改不了，界面因此做不出「改」 | `app/routers/medwaste.py` |
+| P1-43 | **TOTP 没有读接口**：无 `GET /api/auth/totp` 一类端点，前端无法显示「已启用/未启用」，也无法提示「你的角色被要求双因素但还没绑」。补一个只回 `{enabled: bool}` 的读端点即可，不涉及密钥外泄 | `app/routers/auth.py` |
+| P1-44 | **`GET /api/access-logs/stats` 的 docstring 与签名对不上**：docstring 说「一段时间内各类调阅的构成」，签名却只有 `patient_id`、没有 `start`/`end`（同模块列表端点有）。「上个月的跨机构调阅占比」这类排查做不了 | `app/routers/access_logs.py` |
+| P1-45 | **`tests/test_spd_config_scales_teams_contract.py::test_量表的键集合与未发布时的空令牌` 是随机序 flake**：模块级 `seeded` 夹具被同文件「发布量表」的用例改了状态，顺序一乱就先发布再断言「未发布时 qr_token 为空」（seed 7/42 红，seed 13 与 `-p no:randomly` 绿） | `server/tests/test_spd_config_scales_teams_contract.py` |
+
+**本轮一条环境陷阱（非仓库缺陷，但会让人追幻影）**：容器里装着 `pytest-randomly 5.0.0`，
+而 `requirements*.txt` 与 CI 都没有它。它默认打乱用例顺序，本仓库的套件却是顺序相关的
+（模块级 `reset_database()` + 单一共享 `test_run.db`）。跑全量回归请加 `-p no:randomly`，
+否则会看到几十条与改动无关的失败。P1-45 是它照出来的一条**真** flake，值得单独修。
 
 **本轮验证不成立、不予登记的一条**：J1 报"`integration.fhir_observation` 无任何鉴权依赖，只认 `X-Source-System` 头"。
 实测不成立——该端点无令牌访问返回 **401**，同文件另两个入站端点同样 401。原因是鉴权挂在

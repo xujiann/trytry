@@ -50,7 +50,7 @@
   `measurements/batch` 一条按需求语义豁免（设备/HIS 接入路径，不需要界面）。
   取证：`render_diff.js` 实渲三页（新页非空无假绿、中心页差异恰好只从新面板
   起始字符开始）、`--dump` 证 24 处 XSS 载荷全部转义；棘轮
-  `tests/test_spd_care_frontend_coverage.py` 把"每个 care 端点必须有前端调用点
+  `tests/test_frontend_endpoint_coverage.py` 把"每个 care 端点必须有前端调用点
   或书面豁免"钉死（分母从路由对象现算，变异验证：删一个调用点即红）。
 
 **本容器内做不完（需要外部资源，不是代码问题）**
