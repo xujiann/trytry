@@ -65,6 +65,16 @@ def setup(client, admin):
         )
         assert resp.status_code == 201, resp.text
         roles[role] = login(client, username, "pass123456")
+    # 乡镇院的经办：上转的发起方按业务就在乡镇，而上面那批用户都建在县院。
+    # 原先用县院的 operator 以乡镇院名义开转诊单，是靠着"写接口不查归属"
+    # 这个缺陷才走通的（P1-39）——补上真实归属，而不是放宽守卫。
+    client.post(
+        "/api/users",
+        json={"username": "p0_op_town", "password": "pass123456",
+              "role": "operator", "org_id": township["id"]},
+        headers=admin,
+    )
+    roles["operator_township"] = login(client, "p0_op_town", "pass123456")
     return {"org": org, "township": township, "patient": patient, **roles}
 
 
@@ -153,7 +163,7 @@ def test_operator_cannot_do_clinical_operations(client, admin, setup):
             "direction": "up",
             "reason": "上转",
         },
-        headers=setup["operator"],
+        headers=setup["operator_township"],   # 发起方是乡镇院，用乡镇院的经办
     )
     assert referral.status_code == 201
     rid = referral.json()["id"]
@@ -499,7 +509,7 @@ def test_recognition_window_enforced_at_creation(client, admin, setup):
         "/api/exams",
         json={
             "patient_id": setup["patient"]["id"],
-            "from_org_id": setup["township"]["id"],
+            "from_org_id": setup["org"]["id"],   # 铺垫：开单机构须是执行者自己的机构
             "center_type": "lab",
             "item_code": "P0LAB",
             "item_name": "血常规",

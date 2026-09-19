@@ -887,7 +887,10 @@ class FhirEncounterInboundOut(BaseModel):
 
 @router.post("/fhir/Encounter", status_code=201, response_model=FhirEncounterInboundOut)
 def fhir_encounter(
-    resource: dict, db: Session = Depends(get_db), x_source_system: str = Header(default="")
+    resource: dict,
+    db: Session = Depends(get_db),
+    x_source_system: str = Header(default=""),
+    user: User = Depends(get_current_user),
 ):
     """FHIR R4 Encounter 入站 → 就诊记录入档（映射表：Encounter+Condition）。
 
@@ -899,11 +902,15 @@ def fhir_encounter(
     复用就诊登记路由逻辑（患者/机构校验 + 领域事件发布），入站落 ExchangeLog。
     """
     return _run_inbound(
-        "fhir_encounter", x_source_system, lambda: _do_fhir_encounter(resource, db)
+        "fhir_encounter", x_source_system, lambda: _do_fhir_encounter(resource, db, user)
     )
 
 
-def _do_fhir_encounter(resource: dict, db: Session):
+def _do_fhir_encounter(resource: dict, db: Session, user: User):
+    # 入站同步**复用就诊登记的路由函数**，因此也复用它的归属校验（P1-39）：
+    # 对接账号只能同步自己机构的就诊。需要跨机构同步的对接方（县级集成平台）
+    # 用全域角色的账号——那正是本平台表达"这个账号跨机构办事"的既有方式，
+    # 不为对接另开一条绕过校验的路。
     if resource.get("resourceType") != "Encounter":
         raise HTTPException(status_code=422, detail="resourceType 必须为 Encounter")
     reference = (resource.get("subject") or {}).get("reference", "")
@@ -944,6 +951,7 @@ def _do_fhir_encounter(resource: dict, db: Session):
             summary="FHIR Encounter 入站同步",
         ),
         db,
+        user,
     )
     return {
         "encounter_id": encounter.id,

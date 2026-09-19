@@ -59,7 +59,9 @@ def setup(client, admin):
         client.post(
             "/api/encounters",
             json={"patient_id": patient["id"], "org_id": org["id"], "diagnosis_name": "上呼吸道感染"},
-            headers=users["doctor"],
+            # P1-39：本循环往县级与乡镇各造一条（口径就是要区分两级），
+            # 而 doctor 只属于县院。用 admin（全域）造，两级的数据形状都保住。
+            headers=admin,
         )
     client.post(
         "/api/referrals",
@@ -70,7 +72,9 @@ def setup(client, admin):
             "direction": "up",
             "reason": "报表测试",
         },
-        headers=users["doctor"],
+        # P1-39：上转的发起方按业务是乡镇院，而 doctor 建在县院。
+        # 用 admin（全域）造，from/to 机构形状一字不变。
+        headers=admin,
     )
     client.post(
         "/api/insurance/settlements",

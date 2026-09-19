@@ -151,7 +151,9 @@ def world(client):
         "/api/referrals",
         json={"patient_id": patient["id"], "from_org_id": township["id"],
               "to_org_id": org["id"], "direction": "up", "reason": "肺炎加重，请上级收治"},
-        headers=doc,
+        # P1-39：打印件要同时印出两个机构的名字，跨机构形状必须保留；
+        # 而 doc 建在县院，以乡镇院名义开单已被归属校验拦下。用 admin（全域）造。
+        headers=admin,
     ).json()
 
     return {

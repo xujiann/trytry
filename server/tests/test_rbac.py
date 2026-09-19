@@ -74,7 +74,9 @@ def test_exam_diagnosis_requires_doctor(client, admin, setup):
         "/api/exams",
         json={
             "patient_id": setup["patient"]["id"],
-            "from_org_id": setup["township"]["id"],
+            # 用执行者自己的机构：这张单只是铺垫，测的是「谁能领取诊断任务」。
+            # 原先写乡镇院，而 operator 建在县院——那是"以别家名义开单"，已被归属校验拦住。
+            "from_org_id": setup["org"]["id"],
             "center_type": "imaging",
             "item_code": "CT-HEAD",
             "item_name": "头颅CT",
@@ -107,7 +109,7 @@ def test_prescription_review_requires_pharmacist(client, admin, setup):
         "/api/prescriptions",
         json={
             "patient_id": setup["patient"]["id"],
-            "org_id": setup["township"]["id"],
+            "org_id": setup["org"]["id"],  # 同上：铺垫用自己机构
             "diagnosis_name": "冠心病",
             "items": [{"drug_code": "ASPIRIN", "drug_name": "阿司匹林", "daily_dose": 600, "days": 7}],
         },

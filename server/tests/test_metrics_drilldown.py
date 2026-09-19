@@ -73,7 +73,10 @@ def seeded(client, admin):
                     "diagnosis_name": "上呼吸道感染",
                     "diagnosis_code": "J06.900",
                 },
-                headers=doctor,
+                # P1-39：本循环刻意往两个机构各造数据（基层 2 条、县级 1 条，
+                # 口径就是"县级不计入"），而 doctor 只属于县院。用 admin 造，
+                # 两个机构的数据形状都保住。
+                headers=admin,
             )
     # 危急值报告 2 条（其中 1 条处置闭环后不计入未闭环口径）
     report_ids = []
@@ -87,7 +90,7 @@ def seeded(client, admin):
                 "item_code": f"CT-{i}",
                 "item_name": f"下钻检查{i}",
             },
-            headers=doctor,
+            headers=admin,  # P1-39：造数据用 admin（全域），保留跨机构的数据形状
         ).json()
         client.post(f"/api/exams/{req['id']}/claim", headers=doctor)
         rep = client.post(
@@ -114,7 +117,10 @@ def seeded(client, admin):
                     "direction": direction,
                     "reason": "下钻测试",
                 },
-                headers=doctor,
+                # P1-39：造数据用 admin（全域）。上转的发起方按业务就是乡镇院，
+                # 而 doctor 建在县院——以乡镇院名义开转诊单已被归属校验拦下。
+                # 用 admin 造，数据形状（from/to 机构）一字不变。
+                headers=admin,
             )
     # 缺药预警：库存低于阈值
     client.post(

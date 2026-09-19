@@ -26,10 +26,17 @@ def admin_headers(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
 
 
-def _make_user(client, admin_headers, username, role):
+def _make_user(client, admin_headers, username, role, org_id=None):
+    """建测试用户。
+
+    **必须给机构**：不属于任何机构的账号无法以任何机构的名义写（P1-39 的归属
+    校验），而真实部署里医师/药师/经办都是有归属的——原先不传 org_id，是靠着
+    "写接口不查归属"这个缺陷才走通的。
+    """
     client.post(
         "/api/users",
-        json={"username": username, "password": f"{role}pass123", "role": role},
+        json={"username": username, "password": f"{role}pass123", "role": role,
+              **({"org_id": org_id} if org_id else {})},
         headers=admin_headers,
     )
     resp = client.post(
@@ -59,9 +66,9 @@ def setup(client, admin_headers):
         "org": org,
         "org2": org2,
         "patient": patient,
-        "doctor": _make_user(client, admin_headers, "doc_rt", "doctor"),
-        "pharmacist": _make_user(client, admin_headers, "pharm_rt", "pharmacist"),
-        "operator": _make_user(client, admin_headers, "op_rt", "operator"),
+        "doctor": _make_user(client, admin_headers, "doc_rt", "doctor", org["id"]),
+        "pharmacist": _make_user(client, admin_headers, "pharm_rt", "pharmacist", org["id"]),
+        "operator": _make_user(client, admin_headers, "op_rt", "operator", org["id"]),
     }
 
 

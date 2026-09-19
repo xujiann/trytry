@@ -75,7 +75,9 @@ def _make_critical_report(client, admin, setup, from_org_id, item_code="M1K"):
             "item_code": item_code,
             "item_name": "血钾",
         },
-        headers=headers(setup["tokens"]["m1_doc1"]),
+        # 造数据改用 admin（全域角色）：本助手被多个机构调用，而 m1_doc1 只属于 org1，
+        # 以 org2 的名义开单已被归属校验拦下（P1-39）。数据形状不变，断言不变。
+        headers=admin,
     ).json()
     report = client.post(
         f"/api/exams/{req['id']}/report",

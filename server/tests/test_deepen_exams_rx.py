@@ -98,7 +98,7 @@ def test_recognition_directory_admin_only(client, setup):
 
 def test_recognition_directory_gating(client, admin, setup):
     doc = setup["doctor"]
-    pid, org = setup["adult"]["id"], setup["township"]["id"]
+    pid, org = setup["adult"]["id"], setup["org"]["id"]  # P1-39：开单机构须是执行者自己的机构
 
     # 管理员维护目录：CT01 在目录且启用；LAB99 在目录但停用
     ct = client.post(
@@ -191,7 +191,7 @@ def test_recognition_stats(client, admin, setup):
 
 def test_critical_closed_loop(client, admin, setup):
     doc = setup["doctor"]
-    pid, org = setup["adult"]["id"], setup["township"]["id"]
+    pid, org = setup["adult"]["id"], setup["org"]["id"]  # P1-39：开单机构须是执行者自己的机构
 
     req = _order_exam(client, doc, pid, org, "K-CRIT", "血钾", "lab").json()
     report = client.post(
@@ -238,7 +238,7 @@ def test_critical_closed_loop(client, admin, setup):
 def test_non_critical_report_needs_no_loop(client, admin, setup):
     doc = setup["doctor"]
     req = _order_exam(
-        client, doc, setup["adult"]["id"], setup["township"]["id"], "ECG01", "常规心电图", "ecg"
+        client, doc, setup["adult"]["id"], setup["org"]["id"], "ECG01", "常规心电图", "ecg"
     ).json()
     report = client.post(
         f"/api/exams/{req['id']}/report", json={"conclusion": "窦性心律"}, headers=doc

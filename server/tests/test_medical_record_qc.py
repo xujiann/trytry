@@ -243,7 +243,8 @@ def test_qc_summary_by_org_and_doctor(client, admin, base):
     encounter = client.post(
         "/api/encounters",
         json={"patient_id": patient["id"], "org_id": org2["id"], "diagnosis_name": "上呼吸道感染"},
-        headers=base["doctor2"],
+        # P1-39：本处刻意往第二个机构造数据（测按机构汇总），改用 admin（全域）
+        headers=admin,
     ).json()
     client.post(
         "/api/quality/records",
