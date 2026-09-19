@@ -587,6 +587,7 @@ SNAPSHOT_ENDPOINTS = {
     # E1 等保账户安全：TOTP 本人开通/关闭
     "POST /api/auth/totp/activate",
     "POST /api/auth/totp/disable",
+    "GET /api/auth/totp",                      # P1-43：TOTP 此前只有写没有读
     "POST /api/auth/totp/setup",
     "POST /api/billing/charge-items",
     "POST /api/billing/charge-items/{item_id}/reprice",
@@ -749,6 +750,7 @@ SNAPSHOT_ENDPOINTS = {
     "POST /api/medication/shortages/{shortage_id}/close",
     "POST /api/medwaste",
     "POST /api/medwaste/locations",
+    "PATCH /api/medwaste/locations/{location_id}",   # P1-42：点位改名/换负责人
     "POST /api/medwaste/locations/{location_id}/reactivate",
     "POST /api/medwaste/{waste_id}/handover",
     "POST /api/medwaste/{waste_id}/store",
