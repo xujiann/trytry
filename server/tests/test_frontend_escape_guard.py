@@ -53,6 +53,22 @@ DESTRUCTURED_FALLBACK = re.compile(
     r"const \[(\w+),[^\]\n]*\] *= *[A-Za-z_$][\w$]*\[[^\]\n]+\]\s*\|\|\s*\[([^\]\n]*?)(?:,[^\]\n]*)?\]"
 )
 
+#: const NAME = a.b || …  —— **第三种**兜底形状：不是"映射查不到"，是"字段缺失"。
+#:
+#: 上面两条盯的都是 `MAP[key]` 查表未命中时的兜底；这一条的左边根本没有表，
+#: 是服务端字段之间互相兜底（`r.status_label || r.status`）。实例是本轮补打印
+#: 入口时在 `core.js` 的转诊列表里撞见的：`const text = r.status_label || r.status`
+#: 之后 `${text}` 裸插进 innerHTML——两条既有正则**一条都抓不到**，因为它既不是
+#: `MAP[x] || x`，也不是解构兜底。
+#:
+#: 这是本阶段第三次遇到同一件事：**判据看不见的形状，不等于安全**。
+#: （另两次：body 带 org_id 的写端点躲过两道越权闸门 P1-39；PII 出口守卫把
+#: docstring 里的 `desensitize` 一词当成了真的调用。）
+SCALAR_FIELD_FALLBACK = re.compile(
+    r"(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+    r"([A-Za-z_$][\w$]*(?:\.[\w$]+)+\s*\|\|\s*[^;\n]+);"
+)
+
 
 def _strip_comments(src: str) -> str:
     """去掉块注释与整行注释——注释里的字不是代码。
@@ -141,6 +157,70 @@ def test_解构出来的映射兜底不得裸插值():
         "以下变量是从 `MAP[x] || [x, \"\"]` 解构出来的——映射未命中时它就是"
         "后端原始值，必须写成 ${esc(变量)}：\n  " + "\n  ".join(offenders)
     )
+
+
+def _scalar_fallback_sites(files):
+    """返回 (落脚点总数, 裸插值的违规列表)。
+
+    **落脚点数要一起报**：只报违规数为 0 说不清是"真没有"还是"判据失灵"。
+    本仓库上一轮就抓到过一条永远不会响的扫描——它盯的写法在收敛后的代码里
+    一处都不存在，于是 0 违规 + 100% 覆盖率，其实是空转。
+    """
+    sites, offenders = 0, []
+    for path in files:
+        src = _strip_comments(path.read_text(encoding="utf-8"))
+        for hit in SCALAR_FIELD_FALLBACK.finditer(src):
+            var, expr = hit.group(1), hit.group(2).strip()
+            sites += 1
+            block = _enclosing_block(src, hit.end())
+            for bare in re.finditer(r"\$\{\s*" + re.escape(var) + r"\s*\}", block):
+                lineno = src[: hit.end() + bare.start()].count("\n") + 1
+                offenders.append(
+                    f"{path.name}:{lineno}: ${{{var}}} 未转义（来自 {expr[:60]}）"
+                )
+    return sites, offenders
+
+
+def test_字段之间的兜底不得裸插值():
+    """第三种写法：`const text = r.status_label || r.status` 之后 `${text}` 裸插。
+
+    与上面两条的区别是左边没有映射表——服务端两个字段互相兜底。后果一样：
+    兜底那一侧是服务端数据，未转义就是存储型 XSS。实例见 `core.js` 转诊列表。
+    """
+    sites, offenders = _scalar_fallback_sites(sorted(STATIC.rglob("*.js")))
+    assert sites > 0, (
+        "一处这种形状的赋值都没扫到 —— 判据失灵了（空转的扫描永远 0 违规）。"
+        "先修判据，再谈零违规。"
+    )
+    assert offenders == [], (
+        "以下变量取自「服务端字段互相兜底」又被裸插进模板——兜底那一侧是服务端"
+        "数据，未转义即存储型 XSS，应改为 ${esc(...)}：\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_字段兜底守卫本身没瞎(tmp_path):
+    """合成一份带缺陷的源码，确认判据真的会报——不然"零违规"毫无意义。"""
+    bad = tmp_path / "bad.js"
+    bad.write_text(
+        "function render(r) {\n"
+        "  const text = r.status_label || r.status;\n"
+        '  return `<span>${text}</span>`;\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    sites, offenders = _scalar_fallback_sites([bad])
+    assert sites == 1 and len(offenders) == 1, (sites, offenders)
+
+    good = tmp_path / "good.js"
+    good.write_text(
+        "function render(r) {\n"
+        "  const text = r.status_label || r.status;\n"
+        '  return `<span>${esc(text)}</span>`;\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    sites, offenders = _scalar_fallback_sites([good])
+    assert sites == 1 and offenders == [], (sites, offenders)
 
 
 def test_守卫本身没瞎(tmp_path):
