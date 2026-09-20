@@ -2084,10 +2084,11 @@ async function renderLabQc() {
 
 async function renderQuality() {
   $("#page-desc").textContent = "不良事件上报（可匿名）→ 审核 → 整改；结构化病历实时环节质控；病历抽检评分；院感上报核实";
-  const [events, estats, qstats, infections, mrSummary, mrRecords] = await Promise.all([
+  const [events, estats, qstats, infections, mrSummary, mrRecords, infStats, qcRules] = await Promise.all([
     api("/api/quality/adverse-events"), api("/api/quality/adverse-events-stats"),
     api("/api/quality/record-qc-stats"), api("/api/quality/infection-reports"),
-    api("/api/quality/records/qc-summary"), api("/api/quality/records")]);
+    api("/api/quality/records/qc-summary"), api("/api/quality/records"),
+    api("/api/quality/infection-stats"), api("/api/quality/record-qc-rules")]);
   const AES = { reported: ["已上报", "orange"], reviewed: ["已审核", ""], rectified: ["已整改", "green"] };
   const AET = { medication: "用药", device: "器械", fall: "跌倒", pressure_sore: "压疮", transfusion: "输血", identification: "查对", other: "其他" };
   const SITE = { respiratory: "呼吸道", surgical_site: "手术部位", urinary: "泌尿道", bloodstream: "血流", gastrointestinal: "消化道", other: "其他" };
@@ -2146,13 +2147,33 @@ async function renderQuality() {
         `<tr><td>${r.id}</td><td>${r.encounter_id}</td><td>${esc(r.doctor_name)}</td>
          <td>${esc(r.chief_complaint) || "（未填）"}</td><td>${r.qc_score}</td>
          <td><span class="tag ${MR_GRADE_COLOR[r.qc_grade] || ""}">${r.qc_grade}级</span></td>
-         <td><button class="btn secondary" data-mrqc="${r.id}">复评并看缺陷</button></td></tr>`)}</div>
+         <td><button class="btn secondary" data-mrqc="${r.id}">复评并看缺陷</button>
+             <button class="btn secondary" data-mrview="${r.id}">看病历原文</button></td></tr>`)}</div>
+    <div class="panel"><h3>环节质控规则库</h3>
+      <p style="margin-bottom:8px">规则改了不会自动重算既有病历——改完要对某份病历生效，
+        得去上面那份清单点「复评并看缺陷」（<code>/records/{id}/qc</code> 按当前规则重算并回写）。</p>
+      <p class="msg" id="qcr-msg"></p>
+      ${table(["编码", "规则名", "检查字段", "判据", "扣分", "状态", "操作"], qcRules, (r) =>
+        `<tr><td><span class="tag">${esc(r.code)}</span></td><td>${esc(r.name)}</td>
+         <td>${esc(r.field_name)}</td><td>${esc(r.rule_name)}</td>
+         <td>${r.deduct_points}</td>
+         <td><span class="tag ${r.active ? "green" : "red"}">${r.active ? "启用" : "停用"}</span></td>
+         <td><button class="btn secondary" data-qcrdeduct="${r.id}" data-cur="${r.deduct_points}">改扣分</button>
+             <button class="btn ${r.active ? "danger" : "secondary"}" data-qcrtoggle="${r.id}" data-to="${r.active ? "false" : "true"}">${r.active ? "停用" : "启用"}</button></td></tr>`)}</div>
     <div class="panel"><h3>病历质控抽检（人工评分）</h3>
       <form class="inline" id="qc-rec-form">
         <select name="target_type"><option value="encounter">门急诊病历</option><option value="case_summary">病案首页</option></select>
         <input name="target_id" type="number" placeholder="对象ID" required>
         <input name="score" type="number" min="0" max="100" placeholder="评分0-100" required>
         <input name="defects" placeholder="缺陷项（分号分隔）" style="min-width:200px"><button>评分</button></form></div>
+    <div class="panel"><h3>院感统计（区域安全提醒数据源）</h3>
+      <p>已确认 <span class="tag red">${infStats.confirmed}</span> 例，
+        待核实 <span class="tag orange">${infStats.pending_verify}</span> 例。
+        待核实的既不算确认也不算排除——挂着不处理，区域提醒就一直缺这部分。</p>
+      ${Object.keys(infStats.by_site).length
+        ? table(["感染部位", "确认例数"], Object.entries(infStats.by_site), ([site, n]) =>
+            `<tr><td>${esc(SITE[site] || site)}</td><td><span class="tag red">${n}</span></td></tr>`)
+        : "<p>暂无确认病例</p>"}</div>
     <div class="panel"><h3>院感上报</h3>
       <form class="inline" id="inf-form"><input name="org_id" type="number" placeholder="机构ID" required>
         <input name="patient_id" type="number" placeholder="患者ID" required>
@@ -2232,6 +2253,41 @@ async function renderQuality() {
         const qc = await api(`/api/quality/records/${d.mrqc}/qc`);
         drawQcResult(qc, `病历 #${d.mrqc} 复评`);
         $("#mr-result").scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      if (d.mrview) {
+        // 看的是**快照里的**缺陷（record.qc_defects），不是重算——这条与
+        // /qc 的分工就在这里：这条回答"上次评的是什么"，那条回答"按现在的
+        // 规则该是多少"。两条混成一个按钮，规则改过之后就说不清看到的是哪个。
+        const detail = await api(`/api/quality/records/${d.mrview}`);
+        const r = detail.record;
+        $("#mr-result").innerHTML = `
+          <p style="font-size:13px">病历 #${r.id}（就诊 ${r.encounter_id}，${esc(r.doctor_name) || "未署名"}）
+            上次评分 <b>${r.qc_score}</b> 分
+            <span class="tag ${MR_GRADE_COLOR[r.qc_grade] || ""}">${esc(r.qc_grade)}级</span>
+            ，更新于 ${esc(r.updated_at.replace("T", " ").slice(0, 19))}</p>
+          ${MR_FIELDS.map(([key, label]) =>
+            `<div style="margin-top:6px"><b>${label}</b>：${esc(r[key]) || "（未填）"}</div>`).join("")}
+          <h4 style="margin-top:10px">评分时的缺陷快照（${detail.defects.length} 条）</h4>
+          ${detail.defects.length
+            ? table(["规则", "环节", "缺陷描述", "扣分"], detail.defects, (x) =>
+                `<tr style="color:#b23c3c"><td>${esc(x.rule_code)} ${esc(x.rule_name)}</td><td>${esc(x.field_name)}</td>
+                 <td>${esc(x.message)}</td><td>-${x.deduct_points}</td></tr>`)
+            : '<p class="msg ok">评分时无缺陷项</p>'}`;
+        $("#mr-result").scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      if (d.qcrtoggle) {
+        await api(`/api/quality/record-qc-rules/${d.qcrtoggle}`, { method: "PATCH",
+          body: JSON.stringify({ active: d.to === "true" }) });
+        setMsg("#qcr-msg", "已保存。既有病历不会自动重算，需逐份复评", true);
+        route();
+      }
+      if (d.qcrdeduct) {
+        const v = prompt(`扣分（0-100，当前 ${d.cur}）`, d.cur);
+        if (v === null || v === "") return;
+        await api(`/api/quality/record-qc-rules/${d.qcrdeduct}`, { method: "PATCH",
+          body: JSON.stringify({ deduct_points: Number(v) }) });
+        setMsg("#qcr-msg", "已保存。既有病历不会自动重算，需逐份复评", true);
+        route();
       }
     } catch (err) { setMsg("#qa-msg", err.message, false); }
   };

@@ -1490,6 +1490,8 @@ async function renderSpdPatients() {
     const el = (k) => e.target.closest(`[${k}]`);
     const claim = el("data-cand-claim"), cstat = el("data-cand-status");
     const enrView = el("data-enr-view"), enrEdit = el("data-enr-edit");
+    const pkgBind = el("data-pkg-bind"), pkgUnbind = el("data-pkg-unbind");
+    const pkgUse = el("data-pkg-use"), pkgUsages = el("data-pkg-usages");
     const recall = el("data-recall"), aOk = el("data-apply-ok"), aNo = el("data-apply-no");
     const gView = el("data-group-view"), gAdd = el("data-group-add"), gDel = el("data-gm-del");
     try {
@@ -1524,9 +1526,66 @@ async function renderSpdPatients() {
             ["知情同意", d.consent_signed ? `已签 ${d.consent_no || ""}` : "未签"],
             ["服务起始", d.service_start || "—"], ["状态", d.status],
             ["档案在管病种数", prof ? (prof.enrollments || []).length : "—"],
-          ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`) + "</div>");
+          ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`)
+          + `<h4 style="margin-top:10px">服务包（${(d.packages || []).length} 个）</h4>`
+          + table(["ID", "服务包", "项目明细", "剩余", "消费率", "状态", "操作"], (d.packages || []), (b) =>
+            `<tr><td>${b.id}</td><td>${esc(b.package_name)}</td>
+             <td>${(b.items || []).map((i) => `${esc(i.name || i.code)} ${i.used || 0}/${i.total || 0}`).join("；") || "—"}</td>
+             <td>${b.remaining}</td><td>${b.usage_rate}%</td>
+             <td><span class="tag ${b.status === "bound" ? "green" : ""}">${b.status === "bound" ? "在用" : "已解绑"}</span></td>
+             <td>${b.status === "bound"
+               ? `<button class="btn secondary" data-pkg-use="${b.id}" data-enr="${id}">扣减登记</button>
+                  <button class="btn secondary" data-pkg-usages="${b.id}">扣减流水</button>
+                  <button class="btn danger" data-pkg-unbind="${b.id}" data-enr="${id}">解绑</button>`
+               : `<button class="btn secondary" data-pkg-usages="${b.id}">扣减流水</button>`}</td></tr>`)
+          + `<p style="margin-top:6px"><button class="btn secondary" data-pkg-bind="${esc(id)}">绑定服务包</button></p>
+             <div id="spd-pkg-usages"></div>`
+          + "</div>");
         const dup = document.querySelectorAll("#spd-enr-detail");
         if (dup.length > 1) dup[0].remove();   // 只留最新一份，不越点越长
+        return;
+      }
+      if (pkgBind) {
+        const enrId = pkgBind.dataset.pkgBind;
+        const list = await api("/api/spd/service-packages?limit=100");
+        const form = await spdModal("绑定服务包", [
+          { name: "package_id", label: "服务包", type: "select",
+            // spdModal 的 select 吃的是 {value,label} 对象，不是 [v,l] 数组
+            options: list.map((x) => ({ value: String(x.id), label: `${x.name}（${x.code}）` })) },
+        ]);
+        if (!form || !form.package_id) return;
+        await api(`/api/spd/enrollments/${enrId}/packages`, { method: "POST",
+          body: JSON.stringify({ package_id: Number(form.package_id) }) });
+        setMsg("#spd-enroll-msg", "服务包已绑定", true);
+        return;
+      }
+      if (pkgUnbind) {
+        // 解绑只改状态、不删流水：已经发生的服务不能因为解绑就从账上消失。
+        if (!confirm(`解绑服务包绑定 ${pkgUnbind.dataset.pkgUnbind}？解绑后不能再扣减，已发生的扣减流水保留。`)) return;
+        await api(`/api/spd/package-bindings/${pkgUnbind.dataset.pkgUnbind}/unbind`, { method: "POST" });
+        setMsg("#spd-enroll-msg", "已解绑", true);
+        return;
+      }
+      if (pkgUse) {
+        const form = await spdModal("服务项目扣减登记", [
+          { name: "item_code", label: "项目编码（服务包里的 code）", required: true },
+          { name: "qty", label: "次数", type: "number", value: 1 },
+          { name: "note", label: "说明" },
+        ]);
+        if (!form || !form.item_code) return;
+        // 剩余次数不足后端拒绝（不扣成负数）；错误照原样显示，别吞。
+        await api(`/api/spd/package-bindings/${pkgUse.dataset.pkgUse}/usages`, { method: "POST",
+          body: JSON.stringify({ item_code: form.item_code, qty: Number(form.qty) || 1, note: form.note || "" }) });
+        setMsg("#spd-enroll-msg", "已登记扣减", true);
+        return;
+      }
+      if (pkgUsages) {
+        const rows = await api(`/api/spd/package-bindings/${pkgUsages.dataset.pkgUsages}/usages`);
+        $("#spd-pkg-usages").innerHTML = `<h4>绑定 ${esc(pkgUsages.dataset.pkgUsages)} 的扣减流水（${rows.length} 条）</h4>` +
+          table(["时间", "项目", "次数", "单价", "说明"], rows, (r) =>
+            `<tr><td>${esc(r.used_at.replace("T", " ").slice(0, 19))}</td>
+             <td>${esc(r.item_name || r.item_code)}</td><td>${r.qty}</td><td>${r.price}</td>
+             <td>${esc(r.note) || "—"}</td></tr>`);
         return;
       }
       if (enrEdit) {
@@ -1711,9 +1770,12 @@ async function renderSpdPath() {
          <td>${t.status === "published" ? '<span class="tag green">已发布</span>'
             : t.status === "draft" ? '<span class="tag orange">草稿</span>'
             : '<span class="tag">已停用</span>'}</td>
-         <td><button class="btn secondary" data-tpl-node="${t.id}">加节点</button>
+         <td><button class="btn secondary" data-tpl-view="${t.id}">看节点</button>
+             <button class="btn secondary" data-tpl-node="${t.id}">加节点</button>
              <button class="btn secondary" data-tpl-pub="${t.id}">发布</button>
-             <button class="btn secondary" data-tpl-copy="${t.id}">复制</button></td></tr>`)}</div>
+             <button class="btn secondary" data-tpl-copy="${t.id}">复制</button>
+             <button class="btn danger" data-tpl-del="${t.id}">删除</button></td></tr>`)}</div>
+      <div id="spd-tpl-nodes"></div>
     <div class="panel"><h3>启动患者路径</h3>
       <form class="inline" id="spd-inst-form">
         <input name="enrollment_id" type="number" placeholder="纳管档案ID" required>
@@ -1804,6 +1866,62 @@ async function renderSpdPath() {
   $("#page-body").onclick = async (e) => {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const node = el("data-tpl-node"), pub = el("data-tpl-pub"), copy = el("data-tpl-copy");
+    const tplView = el("data-tpl-view"), tplDel = el("data-tpl-del");
+    const nodeEdit = el("data-node-edit"), nodeDel = el("data-node-del");
+    // 节点明细里的「改/删」要能在操作后自己刷新，所以把绘制提出来复用
+    const drawTplNodes = async (templateId) => {
+      const d = await api(`/api/spd/path-templates/${templateId}`);
+      const editable = d.status !== "published";
+      $("#spd-tpl-nodes").innerHTML = `
+        <h4>路径 ${esc(d.code)} ${esc(d.name)} v${esc(d.version)} 的节点（${(d.nodes || []).length} 个）</h4>
+        ${editable ? "" : '<p class="msg">已发布的路径不可直接改节点——在跑的实例会突然多出一个没人知道的任务。要改请先「复制」出新版本。</p>'}
+        ${table(["序", "key", "名称", "阶段", "科室", "执行角色", "时限(天)", "下一节点", "操作"],
+          (d.nodes || []), (n) =>
+          `<tr><td>${n.seq}</td><td><span class="tag">${esc(n.key)}</span></td><td>${esc(n.name)}</td>
+           <td>${esc(n.stage) || "—"}</td><td>${esc(n.dept) || "—"}</td><td>${esc(n.exec_role) || "—"}</td>
+           <td>${n.due_days}</td><td>${esc(n.next_key) || "—"}</td>
+           <td>${editable
+             ? `<button class="btn secondary" data-node-edit="${n.id}" data-tpl="${d.id}">改</button>
+                <button class="btn danger" data-node-del="${n.id}" data-tpl="${d.id}">删</button>`
+             : "—"}</td></tr>`)}`;
+    };
+    if (tplView) return drawTplNodes(tplView.dataset.tplView);
+    if (tplDel) {
+      // 删除按钮对所有模板都给出：能不能删的真正判据是"有没有患者实例引用"，
+      // 列表里没有这个字段，后端会以 409 作答。按 status 猜着禁用，会把
+      // "已发布但没人用过"这种可以删的挡在外面。
+      if (!confirm(`删除路径模板 ${tplDel.dataset.tplDel}？节点一并删除，不可恢复。\n已被患者实例引用的路径删不掉，只能停用。`)) return;
+      await api(`/api/spd/path-templates/${tplDel.dataset.tplDel}`, { method: "DELETE" });
+      setMsg("#spd-tpl-msg", "路径模板已删除", true);
+      return route();
+    }
+    if (nodeEdit) {
+      const form = await spdModal("修改路径节点", [
+        { name: "name", label: "节点名称" },
+        { name: "stage", label: "所属阶段" },
+        { name: "seq", label: "排序号", type: "number" },
+        { name: "dept", label: "科室" },
+        { name: "exec_role", label: "执行角色" },
+        { name: "due_days", label: "时限（天）", type: "number" },
+        { name: "next_key", label: "下一节点 key" },
+      ]);
+      if (!form) return;
+      // 只把填了的字段发上去：PATCH 收的是裸 dict，把空串一并发过去会把
+      // 原来有值的字段清空——改一个时限顺手抹掉科室，事后没人查得出。
+      const body = {};
+      for (const [k, v] of Object.entries(form)) if (v !== "" && v !== undefined) body[k] = v;
+      for (const k of ["seq", "due_days"]) if (k in body) body[k] = Number(body[k]);
+      if (!Object.keys(body).length) return;
+      await api(`/api/spd/path-nodes/${nodeEdit.dataset.nodeEdit}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMsg("#spd-tpl-msg", "节点已修改", true);
+      return drawTplNodes(nodeEdit.dataset.tpl);
+    }
+    if (nodeDel) {
+      if (!confirm(`删除节点 ${nodeDel.dataset.nodeDel}？在跑的实例走到这里会少一环。`)) return;
+      await api(`/api/spd/path-nodes/${nodeDel.dataset.nodeDel}`, { method: "DELETE" });
+      setMsg("#spd-tpl-msg", "节点已删除", true);
+      return drawTplNodes(nodeDel.dataset.tpl);
+    }
     const adv = el("data-adv");
     const claim = el("data-task-claim"), urge = el("data-task-urge"), done = el("data-task-done");
     if (node) {
@@ -2020,13 +2138,24 @@ async function renderSpdReferral() {
          <td>${esc({ village: "村医", station: "服务站", township: "卫生院", county: "县级" }[c.current_level] || c.current_level)}</td>
          <td>${spdTag(SPD_REF_STATUS, c.status)}</td>
          <td>${c.effective_visit ? '<span class="tag green">是</span>' : "—"}</td>
-         <td><button class="btn secondary" data-ref-pass="${c.id}">通过</button>
+         <td><button class="btn secondary" data-ref-detail="${c.id}">详情轨迹</button>
+             <button class="btn secondary" data-ref-pass="${c.id}">通过</button>
              <button class="btn secondary" data-ref-reject="${c.id}">退回</button>
              <button class="btn secondary" data-ref-arrive="${c.id}">到院</button>
              <button class="btn secondary" data-ref-down="${c.id}">下转</button>
-             <button class="btn secondary" data-ref-recv="${c.id}">随访接收</button></td></tr>`)}</div>
+             <button class="btn secondary" data-ref-recv="${c.id}">随访接收</button>
+             ${["submitted", "station_reviewed"].includes(c.status)
+               ? `<button class="btn danger" data-ref-withdraw="${c.id}">撤回</button>` : ""}</td></tr>`)}</div>
+      <div id="spd-ref-detail"></div>
     <div class="panel"><h3>转诊触发规则</h3>
       <p class="desc">命中规则默认只提示不自动开单——批量随访录入时自动开单会瞬间产生几十张单子</p>
+      <form class="inline" id="spd-refcheck-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="program_code" placeholder="病种编码（可空）">
+        <label style="font-size:13px"><input type="checkbox" name="auto_create"> 命中就直接开单</label>
+        <button class="secondary">按规则试算</button>
+      </form>
+      <div id="spd-refcheck-result"></div>
       <form class="inline" id="spd-refrule-form">
         <input name="code" placeholder="规则编码" required>
         <input name="name" placeholder="规则名称" required>
@@ -2040,11 +2169,14 @@ async function renderSpdReferral() {
       <p class="desc">触发条件（任一满足即触发）</p>
       <div id="spd-refrule-rules"></div>
       <p class="msg" id="spd-refrule-msg"></p>
-      ${table(["编码", "名称", "病种", "处理层级", "条件数", "自动建任务", "状态"], rules, (r) =>
+      ${table(["编码", "名称", "病种", "处理层级", "条件数", "自动建任务", "状态", "操作"], rules, (r) =>
         `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.program_code || "全部")}</td>
          <td>${esc(r.handle_level)}</td><td>${(r.conditions || []).length}</td>
          <td>${r.auto_task ? "是" : "否"}</td>
-         <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}</div>
+         <td>${r.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-refrule-edit="${r.id}">改</button>
+             <button class="btn ${r.active ? "danger" : "secondary"}" data-refrule-toggle="${r.id}"
+                     data-to="${r.active ? "false" : "true"}">${r.active ? "停用" : "启用"}</button></td></tr>`)}</div>
     ${alerts.count ? `<div class="panel" style="border-left:4px solid #c62828">
       <h3>⚠ 超过 ${alerts.threshold_hours} 小时未推进（${alerts.count}）</h3>
       ${table(["ID", "患者", "状态", "发起时间"], alerts.items, (c) =>
@@ -2055,10 +2187,85 @@ async function renderSpdReferral() {
     return postAction("/api/spd/referrals",
       formJson(e.target, ["patient_id", "target_org_id"]), "#spd-ref-msg");
   };
+  $("#spd-refcheck-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const autoCreate = f.get("auto_create") === "on";
+    // auto_create 默认关，勾上等于"命中即开单"：一次批量随访录入能开出几十张。
+    // 所以勾了要再问一次，不给它做成顺手一点就过去的开关。
+    if (autoCreate && !confirm("勾了「命中就直接开单」：规则一命中就生成上转单，不再经医生确认。继续？")) return;
+    try {
+      const r = await api("/api/spd/referral-rules/check", { method: "POST", body: JSON.stringify({
+        patient_id: Number(f.get("patient_id")),
+        program_code: f.get("program_code") || "", auto_create: autoCreate }) });
+      $("#spd-refcheck-result").innerHTML = `
+        <p>${r.triggered
+          ? `<span class="tag red">命中 ${r.hits.length} 条规则</span>`
+          : '<span class="tag green">未命中任何规则</span>'}
+          ${r.case ? ` —— 已生成转诊单 #${r.case.id}` : (r.triggered ? "（未开单，按规则只提示）" : "")}</p>
+        ${r.hits.length ? table(["规则", "名称", "处理层级", "命中的条件"], r.hits, (h) =>
+          `<tr><td><span class="tag">${esc(h.rule.code)}</span></td><td>${esc(h.rule.name)}</td>
+           <td>${esc(h.rule.handle_level)}</td>
+           <td>${(h.matched || []).map((m) => esc(JSON.stringify(m))).join("；") || "—"}</td></tr>`) : ""}`;
+      if (autoCreate) route();
+    } catch (err) { setMsg("#spd-refrule-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const pass = e.target.closest("[data-ref-pass]"), reject = e.target.closest("[data-ref-reject]");
     const arrive = e.target.closest("[data-ref-arrive]"), down = e.target.closest("[data-ref-down]");
     const recv = e.target.closest("[data-ref-recv]");
+    const detail = e.target.closest("[data-ref-detail]"), withdraw = e.target.closest("[data-ref-withdraw]");
+    const ruleEdit = e.target.closest("[data-refrule-edit]"), ruleToggle = e.target.closest("[data-refrule-toggle]");
+    if (detail) {
+      const c = await api(`/api/spd/referrals/${detail.dataset.refDetail}`);
+      const LV = { village: "村医", station: "服务站", township: "卫生院", county: "县级" };
+      $("#spd-ref-detail").innerHTML = `
+        <h4>转诊单 #${c.id}｜${esc(c.patient_name)}｜${c.direction === "up" ? "上转" : "下转"}</h4>
+        <p>理由：${esc(c.reason) || "—"}；触发规则：${esc(c.trigger_rule_code) || "（人工发起）"}；
+          当前层级 ${esc(LV[c.current_level] || c.current_level)}；
+          有效就诊 ${c.effective_visit ? "是" : "否"}</p>
+        <p>触发依据：${esc(JSON.stringify(c.trigger_evidence)) || "—"}</p>
+        <p>提交资料：${(c.materials || []).map((m) => esc(typeof m === "string" ? m : JSON.stringify(m))).join("；") || "—"}</p>
+        ${table(["环节", "动作", "经办人", "机构", "处理意见", "时间"], (c.steps || []), (st) =>
+          `<tr><td>${esc(st.step)}</td><td>${esc(st.action)}</td><td>${st.actor_id}</td><td>${st.org_id ?? "—"}</td>
+           <td>${esc(st.opinion) || "—"}</td><td>${esc(st.created_at.replace("T", " ").slice(0, 19))}</td></tr>`)}`;
+      return;
+    }
+    if (withdraw) {
+      // 只有发起人本人、且尚未被上级接收时可撤（后端否则 403/409）
+      if (!confirm(`撤回转诊单 ${withdraw.dataset.refWithdraw}？只有发起人本人、且还没被上级接收时撤得掉。`)) return;
+      try {
+        await api(`/api/spd/referrals/${withdraw.dataset.refWithdraw}/withdraw`, { method: "POST" });
+        setMsg("#spd-ref-msg", "已撤回", true);
+        return route();
+      } catch (err) { return setMsg("#spd-ref-msg", err.message, false); }
+    }
+    if (ruleToggle) {
+      await api(`/api/spd/referral-rules/${ruleToggle.dataset.refruleToggle}`, { method: "PATCH",
+        body: JSON.stringify({ active: ruleToggle.dataset.to === "true" }) });
+      setMsg("#spd-refrule-msg", "已保存", true);
+      return route();
+    }
+    if (ruleEdit) {
+      const cur = rules.find((r) => String(r.id) === ruleEdit.dataset.refruleEdit) || {};
+      const form = await spdModal("改转诊触发规则", [
+        { name: "name", label: "规则名称", value: cur.name || "" },
+        { name: "handle_level", label: "处理层级", type: "select",
+          options: spdOptions({ village: "村医处置", station: "服务站处置", township: "卫生院处置", county: "县级处置" }),
+          value: cur.handle_level || "township" },
+        { name: "notify_role", label: "通知角色", value: cur.notify_role || "" },
+        { name: "target_org_id", label: "目标机构ID（可空）", type: "number", value: cur.target_org_id ?? "" },
+      ]);
+      if (!form) return;
+      // PATCH 收裸 dict 且只认出现过的键：空串一并发上去会把原值抹成空
+      const body = {};
+      for (const [k, v] of Object.entries(form)) if (v !== "" && v !== undefined) body[k] = v;
+      if ("target_org_id" in body) body.target_org_id = Number(body.target_org_id);
+      if (!Object.keys(body).length) return;
+      await api(`/api/spd/referral-rules/${ruleEdit.dataset.refruleEdit}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMsg("#spd-refrule-msg", "规则已修改", true);
+      return route();
+    }
     if (pass) {
       const form = await spdModal("审核通过", [{ name: "opinion", label: "审核意见", type: "textarea" }]);
       if (!form) return;

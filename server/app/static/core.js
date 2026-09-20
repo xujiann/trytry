@@ -316,8 +316,10 @@ async function renderDashboard() {
 
 async function renderConsultations() {
   $("#page-desc").textContent = "申请 → 受理 → 出具意见 → 评价";
-  const consultations = await api("/api/consultations");
+  const [consultations, experts, stats] = await Promise.all([
+    api("/api/consultations"), api("/api/consultations/experts"), api("/api/consultations/stats")]);
   const CS = { applied: ["已申请", "orange"], accepted: ["已受理", ""], completed: ["已完成", "green"], declined: ["已拒绝", "red"] };
+  const availableExperts = experts.filter((x) => x.available);
   $("#page-body").innerHTML = `
     <div class="panel"><h3>会诊申请</h3>
       <form class="inline" id="cons-form">
@@ -333,12 +335,37 @@ async function renderConsultations() {
            <button class="btn danger" data-act="decline" data-id="${c.id}">拒绝</button>`
         : c.status === "accepted"
         ? `<button class="btn secondary" data-act="complete" data-id="${c.id}">出意见</button>`
-        : c.status === "completed" && !c.rating
-        ? `<button class="btn secondary" data-act="rate" data-id="${c.id}">评价</button>` : "—";
+        : c.status === "completed"
+        // 已完成的会诊，评价与计费是两件独立的事：没评价就给评价按钮，
+        // 没计费就给计费按钮，两个都缺就两个都给。
+        ? `${c.rating ? "" : `<button class="btn secondary" data-act="rate" data-id="${c.id}">评价</button>`}
+           ${c.fee_settled ? "" : `<button class="btn secondary" data-act="fee" data-id="${c.id}">计费</button>`}` || "—"
+        : "—";
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.from_org_id} → ${c.to_org_id}</td>
         <td>${esc(c.question)}</td><td>${esc(c.expert_name) || "—"}</td><td>${esc(c.opinion) || "—"}</td>
-        <td>${c.rating ? "★".repeat(c.rating) : "—"}</td><td>${statusTag(CS, c.status)}</td><td>${actions}</td></tr>`;
-    })}</div>`;
+        <td>${c.rating ? "★".repeat(c.rating) : "—"}</td>
+        <td>${c.fee_settled ? `${c.fee} 元${c.fee_note ? `（${esc(c.fee_note)}）` : ""}` : "未计费"}</td>
+        <td>${statusTag(CS, c.status)}</td><td>${actions}</td></tr>`;
+    })}</div>
+    <div class="panel"><h3>会诊统计</h3>
+      <p>累计 ${stats.total} 例，完成率 ${stats.completion_rate_pct === null ? "—" : `${stats.completion_rate_pct}%`}；
+        各状态：${Object.entries(stats.by_status).map(([k, v]) => `${esc(CS[k] ? CS[k][0] : k)} ${v}`).join("，") || "—"}</p>
+      <p>评价：已评 ${stats.rating.rated_count} 例，均分 ${stats.rating.avg === null ? "暂无" : stats.rating.avg}，
+        <b>未评价 ${stats.rating.unrated_count} 例（单列，不当 0 分并入均值）</b></p>
+      <p>费用：已计费 ${stats.fee.settled_count} 例，合计 ${stats.fee.total_amount} 元，
+        <b>已完成但未计费 ${stats.fee.unsettled_count} 例</b>（可能是院内会诊不计费，也可能是漏计）</p>
+      <p style="color:#888">${esc(stats.caliber)}</p></div>
+    <div class="panel"><h3>会诊专家库</h3>
+      <form class="inline" id="expert-form">
+        <input name="name" placeholder="专家姓名" required>
+        <input name="org_id" type="number" placeholder="所属机构ID" required>
+        <input name="specialty" placeholder="专长" style="min-width:180px">
+        <label><input type="checkbox" name="available" checked> 可受理</label>
+        <button>入库</button></form>
+      <p class="msg" id="expert-msg"></p>
+      ${table(["ID", "姓名", "机构", "专长", "状态"], experts, (x) =>
+        `<tr><td>${x.id}</td><td>${esc(x.name)}</td><td>${x.org_id}</td><td>${esc(x.specialty) || "—"}</td>
+         <td><span class="tag ${x.available ? "green" : "red"}">${x.available ? "可受理" : "暂不可约"}</span></td></tr>`)}</div>`;
   $("#cons-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -349,12 +376,32 @@ async function renderConsultations() {
       route();
     } catch (err) { setMsg("#cons-msg", err.message, false); }
   };
+  $("#expert-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/consultations/experts", { method: "POST", body: JSON.stringify({
+        name: f.get("name"), org_id: Number(f.get("org_id")),
+        specialty: f.get("specialty") || "", available: f.get("available") === "on" }) });
+      route();
+    } catch (err) { setMsg("#expert-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const { act, id } = e.target.dataset;
     if (!act || !id) return;
     try {
-      if (act === "accept") {
-        const expert = prompt("受理专家姓名"); if (!expert) return;
+      if (act === "fee") {
+        // 计费只对已完成的会诊（后端对其余一律 409）。fee=0 是一次真实的
+        // "本次不计费"记录，不是"没填"——所以空串取消、"0" 照样提交。
+        const fee = prompt("会诊费用（元，院内会诊可填 0，会记为已计费）");
+        if (fee === null || fee === "") return;
+        await api(`/api/consultations/${id}/fee`, { method: "POST", body: JSON.stringify({
+          fee: Number(fee), fee_note: prompt("计费说明（可空）") || "" }) });
+      } else if (act === "accept") {
+        const roster = availableExperts.length
+          ? `\n可受理专家：${availableExperts.map((x) => `${x.name}${x.specialty ? `（${x.specialty}）` : ""}`).join("、")}`
+          : "\n（专家库里还没有可受理的专家，可先在下方入库）";
+        const expert = prompt(`受理专家姓名${roster}`); if (!expert) return;
         await api(`/api/consultations/${id}/accept`, { method: "POST", body: JSON.stringify({ expert_name: expert }) });
       } else if (act === "decline") {
         await api(`/api/consultations/${id}/decline`, { method: "POST" });

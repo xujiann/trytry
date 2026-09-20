@@ -118,7 +118,7 @@ EXEMPT: dict[str, str] = {
 #: 当前没有前端调用点、也没豁免的端点数。**只允许调小。**
 #: 轨迹：241（本闸门建成时的实测）→ 232（扣掉 9 条机器对机器豁免）
 #: → 220（补上 spd/config/teams 的服务团队与村医配置界面，12 个端点）。
-BASELINE_ORPHANS = 82
+BASELINE_ORPHANS = 62
 
 #: 路径由变量拼出来、扫描看不见的调用点。**只允许调小。**
 #: 这不是欠账，是闸门的视野边界——如实登记，不假装看得见。
@@ -136,6 +136,7 @@ FULLY_COVERED = frozenset({
     "routers.billing",
     "routers.blood",
     "routers.clinical_docs",
+    "routers.consultations",
     "routers.contracts",
     "routers.cost",
     "routers.dataquality",
@@ -159,6 +160,7 @@ FULLY_COVERED = frozenset({
     "routers.portal",
     "routers.printing",
     "routers.publichealth",
+    "routers.quality",
     "routers.referrals",
     "routers.reports",
     "routers.rules",
@@ -174,10 +176,13 @@ FULLY_COVERED = frozenset({
     "spd.routers.care",
     "spd.routers.config.catalog",
     "spd.routers.config.devices",
+    "spd.routers.config.paths",
     "spd.routers.config.scales",
     "spd.routers.config.teams",
     "spd.routers.followup",
+    "spd.routers.population",
     "spd.routers.portal",
+    "spd.routers.referral",
     "spd.routers.tasks",
     "spd.routers.workbench",
     # care 是上一轮补齐的（31 个端点从零到全覆盖，豁免只剩批量回传那一条）；

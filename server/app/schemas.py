@@ -324,6 +324,13 @@ class ConsultationOut(ConsultationCreate):
     expert_name: str
     opinion: str
     rating: int
+    # 计费状态随列表一起出（新增字段，向后兼容）。统计接口只回"已完成但未计费
+    # N 例"，说得出有几例、说不出是哪几例——经办拿着那个数字没法动手。
+    # `fee=0` 与"未计费"是两回事（院内会诊常不计费），所以三个字段都要，
+    # 不能拿 fee 是否为 0 当哨兵。
+    fee: float = 0
+    fee_settled: bool = False
+    fee_note: str = ""
 
     model_config = {"from_attributes": True}
 
