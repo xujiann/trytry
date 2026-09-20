@@ -86,6 +86,13 @@ EXEMPT: dict[str, str] = {
     "/api/integration/fhir/Observation": "FHIR R4 Observation 入站，机器对机器",
     "/api/integration/fhir/DiagnosticReport": "FHIR R4 DiagnosticReport 入站，机器对机器",
     "/api/integration/fhir/Encounter": "FHIR R4 Encounter 入站，机器对机器",
+    "/api/portal/me/referrals": (
+        "被 /api/portal/me/referrals/all 取代：ADR-0003 方案 B 把平台转诊与慢专病转诊"
+        "并成一份列表，居民端入口定的就是那个聚合接口（m.js 两处都调它）。"
+        "本条只回平台侧那一半，给它加入口等于让居民自己猜该点哪个。"
+        "**保留接口但不给界面**——它没标 deprecated，对接方可能在用；"
+        "该不该正式废弃另案（见 docs/TECH_DEBT.md P1-50）"
+    ),
     "/api/integration/fhir/Patient/{ehc_no}": (
         "FHIR R4 患者档案导出，供省平台前置机拉取（与 jobs.fhir_batch_export 同一出口），"
         "机器对机器"
@@ -95,7 +102,7 @@ EXEMPT: dict[str, str] = {
 #: 当前没有前端调用点、也没豁免的端点数。**只允许调小。**
 #: 轨迹：241（本闸门建成时的实测）→ 232（扣掉 9 条机器对机器豁免）
 #: → 220（补上 spd/config/teams 的服务团队与村医配置界面，12 个端点）。
-BASELINE_ORPHANS = 176
+BASELINE_ORPHANS = 164
 
 #: 路径由变量拼出来、扫描看不见的调用点。**只允许调小。**
 #: 这不是欠账，是闸门的视野边界——如实登记，不假装看得见。
@@ -129,6 +136,7 @@ FULLY_COVERED = frozenset({
     "routers.notifications",
     "routers.pathology",
     "routers.performance",
+    "routers.portal",
     "routers.printing",
     "routers.publichealth",
     "routers.referrals",
@@ -224,11 +232,30 @@ def _has_call_site(path: str) -> bool:
     return bool(_pattern_for(path).search(SOURCE))
 
 
+def _deprecated_paths() -> set[str]:
+    """标了 `deprecated=True` 的路径——**自动豁免，不写进手写豁免清单**。
+
+    给废弃端点补界面是反向的：`GET /api/portal/my-archive` 的 docstring 写着
+    「身份证号入 query 有日志泄露面，请改用登录态 `/me/archive`」，给它加个入口
+    等于把流量引向那条正要废掉的路。它们也都由 `_require_legacy_enabled()` 把着
+    开关，默认走不通。
+
+    豁免从路由对象的 `deprecated` 标记推导，不手写：哪天有人去掉那个标记
+    （= 这条又要正经用了），它自动回到分母里，不需要有人记得来删豁免条目。
+    与「仅 require_admin 可达自动豁免」是同一手法（见
+    `tests/test_body_org_write_guard.py`）。
+    """
+    return {r.path for r in ROUTES if getattr(r, "deprecated", False)}
+
+
+DEPRECATED = _deprecated_paths()
+
+
 def _orphans() -> list[tuple[str, str, str]]:
-    """(模块, 方法, 路径)——没有调用点、也没豁免的端点。"""
+    """(模块, 方法, 路径)——没有调用点、也没豁免、也不是废弃端点的。"""
     out = []
     for route in ROUTES:
-        if route.path in EXEMPT or _has_call_site(route.path):
+        if route.path in EXEMPT or route.path in DEPRECATED or _has_call_site(route.path):
             continue
         method = sorted(route.methods - {"HEAD", "OPTIONS"})[0]
         out.append((_owner(route), method, route.path))
@@ -241,7 +268,8 @@ def _per_module() -> dict[str, list[int]]:
     for route in ROUTES:
         row = stats.setdefault(_owner(route), [0, 0])
         row[0] += 1
-        if route.path not in EXEMPT and not _has_call_site(route.path):
+        if (route.path not in EXEMPT and route.path not in DEPRECATED
+                and not _has_call_site(route.path)):
             row[1] += 1
     return stats
 
@@ -300,6 +328,7 @@ def test_覆盖面自证():
         f"  命中：{total - len(orphans) - len(exempt_hits)}"
         f"    豁免：{len(exempt_hits)}（{len(EXEMPT)} 条理由）"
         f"    孤儿：{len(orphans)}（基线 {BASELINE_ORPHANS}）",
+        f"    废弃端点自动豁免：{len(DEPRECATED)}（从路由的 deprecated 标记推导，非手写）",
         f"  零缺口模块：{len(_fully_covered_in_reality())} / {len(stats)}",
         "  —— 以下是这道闸门**看不见**的部分，如实计数 ——",
         f"  盲区①按路径判命中：{multi_verb} 个端点与别的端点共用路径，"
@@ -379,9 +408,30 @@ def test_零缺口模块清单不许落后现实():
     )
 
 
+def test_自动豁免的确实标了deprecated():
+    """自动豁免是推导来的，不是写死的——推导错了会把真缺口放过去。
+
+    反向核一遍：被算进 DEPRECATED 的路径，路由对象上必须真的有 `deprecated=True`；
+    且它们不该同时出现在手写豁免清单里（两份记账会让数字对不上）。
+    """
+    assert DEPRECATED, "一个废弃端点都没认出来——推导失效了（仓库里确有 deprecated=True 的路由）"
+    flagged = {r.path for r in ROUTES if getattr(r, "deprecated", False)}
+    assert DEPRECATED == flagged, f"DEPRECATED 与路由标记对不上：{DEPRECATED ^ flagged}"
+    overlap = DEPRECATED & set(EXEMPT)
+    assert overlap == set(), (
+        f"这些路径既自动豁免又写进了手写豁免，两份记账：{sorted(overlap)}"
+    )
+
+
+#: 手写豁免的上限。**抬它是一次有记录的决定，不是顺手改个数字**：
+#: 9 → 10 是为了 `/api/portal/me/referrals`（被 /all 取代，理由写在 EXEMPT 里）。
+#: 这条上限的价值就在于：新增豁免时闸门会先红一次，逼着人说清为什么。
+EXEMPT_CEILING = 10
+
+
 def test_豁免只许变少且不许指向不存在的端点():
-    assert len(EXEMPT) <= 9, (
-        f"孤儿端点豁免应保持 ≤9 项（现 {len(EXEMPT)}）；"
+    assert len(EXEMPT) <= EXEMPT_CEILING, (
+        f"孤儿端点豁免应保持 ≤{EXEMPT_CEILING} 项（现 {len(EXEMPT)}）；"
         "新增豁免须写明为什么该端点不需要界面，且总数只许变少"
     )
     live = {route.path for route in ROUTES}

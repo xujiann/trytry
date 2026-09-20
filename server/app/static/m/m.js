@@ -295,6 +295,186 @@ async function renderArchiveTab() {
     <span class="sub">健康卡号 ${esc(me.ehc_no)}${me.phone ? " · " + esc(me.phone) : ""}</span>`;
   await renderFamily();
   await loadArchive();
+  // 下面四块只在**本人视角**渲染（P1-40）：
+  // 疾病管理档案与知情同意支持代管成员（后端收 patient_id），更正申请与账号
+  // 绑定按**账户**归集、代管成员没有自己的账户，挂在成员档案下就是张冠李戴
+  // ——与「谁看过我的档案」同一条判断。
+  await Promise.all([renderMyEnrollments(), renderMyConsents()]);
+  if (viewingPatientId === null) {
+    await Promise.all([renderMyCorrections(), renderBindings(me)]);
+  } else {
+    $("#archive-corrections").innerHTML = "";
+    $("#archive-bindings").innerHTML = "";
+  }
+}
+
+/* ---------------- 我的疾病管理档案（平台慢病 + 慢专病并成一份，ADR-0003 方案 B） ---------------- */
+
+async function renderMyEnrollments() {
+  const box = $("#archive-enrollments");
+  const query = viewingPatientId === null ? "" : `?patient_id=${viewingPatientId}`;
+  try {
+    const rows = await authApi(`/api/portal/me/enrollments/all${query}`);
+    box.innerHTML = `<h3 class="sec">疾病管理档案</h3>` + (rows.length
+      ? rows.map((r) => `<div class="m-card">
+          ${kv("病种", esc(r.program_name || r.program_code))}
+          ${kv("来源", esc(r.source_label || r.source || ""))}
+          ${kv("状态", esc(r.status_label || r.status || ""))}
+          ${r.org_name ? kv("管理机构", esc(r.org_name)) : ""}
+          ${r.next_followup_at ? kv("下次随访", esc(r.next_followup_at)) : ""}
+        </div>`).join("")
+      : '<p class="empty">暂无在管病种</p>');
+  } catch (err) { box.innerHTML = `<p class="empty">${esc(err.message)}</p>`; }
+}
+
+/* ---------------- 知情同意（查看 + 本人自签） ---------------- */
+
+const CONSENT_SCOPES = {
+  archive: "健康档案调阅", referral: "转诊信息共享",
+  research: "科研使用", share: "跨机构共享",
+};
+
+async function renderMyConsents() {
+  const box = $("#archive-consents");
+  const query = viewingPatientId === null ? "" : `?patient_id=${viewingPatientId}`;
+  try {
+    const rows = await authApi(`/api/portal/me/consents${query}`);
+    box.innerHTML = `<h3 class="sec">知情同意</h3>`
+      + (rows.length
+        ? rows.map((c) => `<div class="m-card">
+            ${kv("事项", esc(c.scope_label || CONSENT_SCOPES[c.scope] || c.scope))}
+            ${kv("状态", c.granted
+              ? '<span class="tag green">已同意</span>'
+              : '<span class="tag">未同意</span>')}
+            ${c.signed_at ? kv("签署时间", esc(String(c.signed_at).replace("T", " ").slice(0, 16))) : ""}
+          </div>`).join("")
+        : '<p class="empty">暂无同意记录</p>')
+      + `<form class="m-card" id="consent-form">
+          <select name="scope">${Object.entries(CONSENT_SCOPES).map(([v, t]) =>
+            `<option value="${v}">${esc(t)}</option>`).join("")}</select>
+          <label class="chk"><input type="checkbox" name="granted" checked> 我已阅读并同意</label>
+          <button type="submit">提交签署</button>
+          <p id="consent-msg" class="msg"></p>
+        </form>`;
+    $("#consent-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await authApi("/api/portal/me/consents", { method: "POST", body: JSON.stringify({
+          scope: fd.get("scope"), granted: fd.get("granted") === "on",
+          ...(viewingPatientId === null ? {} : { patient_id: viewingPatientId }),
+        }) });
+        await renderMyConsents();
+      } catch (err) { setMsg("#consent-msg", err.message, false); }
+    };
+  } catch (err) { box.innerHTML = `<p class="empty">${esc(err.message)}</p>`; }
+}
+
+/* ---------------- 更正 / 注销申请（个保法更正权与删除权） ---------------- */
+
+const CORRECTION_STATUS = {
+  pending: ["待受理", "orange"], approved: ["已通过", "green"], rejected: ["已驳回", "red"],
+};
+
+async function renderMyCorrections() {
+  const box = $("#archive-corrections");
+  try {
+    const rows = await authApi("/api/portal/me/corrections");
+    const st = (v) => {
+      const [label, color] = CORRECTION_STATUS[v] || [v, ""];
+      return `<span class="tag ${color}">${esc(label)}</span>`;
+    };
+    box.innerHTML = `<h3 class="sec">更正 / 注销申请</h3>`
+      + (rows.length
+        ? rows.map((c) => `<div class="m-card">
+            ${kv("类型", c.kind === "deactivate" ? "注销档案" : "更正信息")}
+            ${kv("说明", esc(c.detail || c.reason || ""))}
+            ${kv("进度", st(c.status))}
+            ${c.review_note ? kv("审核意见", esc(c.review_note)) : ""}
+          </div>`).join("")
+        : '<p class="empty">暂无申请</p>')
+      + `<form class="m-card" id="correction-form">
+          <select name="kind">
+            <option value="correct">更正信息</option>
+            <option value="deactivate">注销档案</option>
+          </select>
+          <textarea name="detail" rows="2" placeholder="说明要更正什么、或为什么申请注销" required></textarea>
+          <button type="submit">提交申请</button>
+          <p id="correction-msg" class="msg"></p>
+        </form>`;
+    $("#correction-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await authApi("/api/portal/me/corrections", { method: "POST", body: JSON.stringify({
+          kind: fd.get("kind"), detail: fd.get("detail"),
+        }) });
+        await renderMyCorrections();
+      } catch (err) { setMsg("#correction-msg", err.message, false); }
+    };
+  } catch (err) { box.innerHTML = `<p class="empty">${esc(err.message)}</p>`; }
+}
+
+/* ---------------- 账号绑定（手机 ↔ 微信 互补绑） ---------------- */
+
+async function renderBindings(me) {
+  const box = $("#archive-bindings");
+  const hasPhone = !!me.phone;
+  box.innerHTML = `<h3 class="sec">账号绑定</h3>
+    <div class="m-card">
+      ${kv("手机号", hasPhone ? esc(me.phone) : '<span class="tag orange">未绑定</span>')}
+      ${kv("微信", me.wechat_bound
+        ? '<span class="tag green">已绑定</span>'
+        : '<span class="tag orange">未绑定</span>')}
+      <p class="hint">两种方式绑定后登入的是同一个账户；换手机或换微信时不会丢档案。</p>
+      ${hasPhone ? "" : `<form id="bindphone-form">
+          <input name="phone" placeholder="手机号" required>
+          <div class="code-row">
+            <input name="code" maxlength="6" placeholder="验证码">
+            <button type="button" id="bindphone-send" class="ghost-btn">获取验证码</button>
+          </div>
+          <button type="submit">绑定手机号</button>
+        </form>`}
+      ${me.wechat_bound ? "" : `<form id="bindwx-form">
+          <input name="code" placeholder="微信授权 code" required>
+          <button type="submit">绑定微信</button>
+        </form>`}
+      <p id="binding-msg" class="msg"></p>
+    </div>`;
+  const phoneForm = $("#bindphone-form");
+  if (phoneForm) {
+    $("#bindphone-send").onclick = async () => {
+      const phone = phoneForm.phone.value.trim();
+      if (!phone) return setMsg("#binding-msg", "请先填手机号", false);
+      try {
+        // purpose=bind：与登录验证码分开，登录码不能拿来改绑
+        await api("/api/portal/auth/sms/code", { method: "POST",
+          body: JSON.stringify({ phone, purpose: "bind" }) });
+        setMsg("#binding-msg", "验证码已发送", true);
+      } catch (err) { setMsg("#binding-msg", err.message, false); }
+    };
+    phoneForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await authApi("/api/portal/auth/bind-phone", { method: "POST", body: JSON.stringify({
+          phone: fd.get("phone"), code: fd.get("code"),
+        }) });
+        await renderArchiveTab();
+      } catch (err) { setMsg("#binding-msg", err.message, false); }
+    };
+  }
+  const wxForm = $("#bindwx-form");
+  if (wxForm) {
+    wxForm.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await authApi("/api/portal/auth/bind-wechat", { method: "POST",
+          body: JSON.stringify({ code: new FormData(e.target).get("code") }) });
+        await renderArchiveTab();
+      } catch (err) { setMsg("#binding-msg", err.message, false); }
+    };
+  }
 }
 
 /* ---------------- 家庭成员代管 ---------------- */
@@ -601,7 +781,26 @@ async function renderInpatient(box) {
       ? '<span class="tag green">已结清</span>'
       : '<span class="tag orange">有未结清费用</span>')}
     <button class="bill-detail" data-adm="${a.id}">查看费用清单</button>
-  </div>`).join("") + '<div id="adm-bill"></div>';
+  </div>`).join("") + '<div id="adm-bill"></div><div id="adm-deposits"></div>';
+  // 押金流水按**账户**取（P1-40）：住院押金是预交的钱，居民最常问的是
+  // 「我交了多少、还剩多少」，此前只有后端。
+  try {
+    const dep = await authApi("/api/portal/me/deposits");
+    const rows = dep.items || dep.rows || [];
+    $("#adm-deposits").innerHTML = `<h3 class="sec">住院押金</h3>
+      <div class="m-card">
+        ${kv("当前余额", esc(dep.balance ?? "—") + " 元")}
+        ${rows.length ? "" : '<p class="empty">暂无押金流水</p>'}
+      </div>`
+      + rows.map((d) => `<div class="m-card">
+          ${kv("类型", esc(d.kind_label || d.kind || ""))}
+          ${kv("金额", esc(d.amount) + " 元")}
+          ${kv("时间", esc(String(d.created_at || "").replace("T", " ").slice(0, 16)))}
+          ${d.note ? kv("备注", esc(d.note)) : ""}
+        </div>`).join("");
+  } catch (err) {
+    $("#adm-deposits").innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+  }
   box.querySelectorAll(".bill-detail").forEach((btn) => {
     btn.addEventListener("click", async () => {
       try {
