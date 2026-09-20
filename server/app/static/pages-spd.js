@@ -1492,7 +1492,8 @@ async function renderSpdPath() {
         </select>
         <button>启动路径</button>
       </form><p class="msg" id="spd-inst-msg"></p>
-      <div id="spd-inst-list"></div></div>
+      <div id="spd-inst-list"></div>
+      <div id="spd-inst-detail"></div></div>
     <div class="panel"><h3>任务中心</h3>
       <form class="inline" id="spd-task-filter">
         <select name="task_type"><option value="">全部类型</option>
@@ -1501,8 +1502,23 @@ async function renderSpdPath() {
           ${Object.entries(SPD_TASK_STATUS).map(([k, v]) => `<option value="${k}">${esc(v[0])}</option>`).join("")}</select>
         <label style="font-size:13px"><input type="checkbox" name="mine" value="true"> 只看我的</label>
         <button class="secondary">查询</button>
-      </form><p class="msg" id="spd-task-msg"></p>
-      <div id="spd-task-list"></div></div>`;
+      </form>
+      <form class="inline" id="spd-task-batch">
+        <select name="action">
+          <option value="claim">批量接收</option>
+          <option value="urge">批量催办</option>
+          <option value="escalate">批量升级</option>
+          <option value="assign">批量分派</option>
+          <option value="cancel">批量取消</option>
+        </select>
+        <input name="assignee_id" type="number" placeholder="受派人用户ID（分派时填）">
+        <input name="note" placeholder="备注">
+        <button class="btn secondary">对勾选的任务执行</button>
+        <button type="button" class="btn secondary" id="spd-task-export">导出CSV</button>
+      </form>
+      <p class="msg" id="spd-task-msg"></p>
+      <div id="spd-task-list"></div>
+      <div id="spd-task-detail"></div></div>`;
 
   const drawInstances = async () => {
     const rows = await api("/api/spd/path-instances?limit=20");
@@ -1514,8 +1530,10 @@ async function renderSpdPath() {
        <td>${i.status === "running" ? '<span class="tag orange">执行中</span>'
           : i.status === "completed" ? '<span class="tag green">已完成</span>'
           : '<span class="tag">' + esc(i.status) + "</span>"}</td>
-       <td>${i.status === "running"
-          ? `<button class="btn secondary" data-adv="${i.id}">推进节点</button>` : "—"}</td></tr>`);
+       <td><button class="btn secondary" data-inst-view="${i.id}">明细</button>
+       ${i.status === "running"
+          ? `<button class="btn secondary" data-adv="${i.id}">推进节点</button>
+             <button class="btn secondary" data-inst-adj="${i.id}">调整</button>` : ""}</td></tr>`);
   };
   const drawTasks = async (query) => {
     const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
@@ -1527,8 +1545,15 @@ async function renderSpdPath() {
        <td>${spdTag(SPD_TASK_STATUS, t.status)}${t.escalated ? ' <span class="tag red">升级</span>' : ""}</td>
        <td>${t.priority === 3 ? "特急" : t.priority === 2 ? "紧急" : "普通"}</td>
        <td>${esc(t.due_date || "—")}</td><td>${t.urged_count}</td>
-       <td><button class="btn secondary" data-task-claim="${t.id}">接收</button>
+       <td><input type="checkbox" class="task-pick" data-pick="${t.id}">
+           <button class="btn secondary" data-task-view="${t.id}">明细</button>
+           <button class="btn secondary" data-task-claim="${t.id}">接收</button>
+           <button class="btn secondary" data-task-assign="${t.id}">分派</button>
            <button class="btn secondary" data-task-urge="${t.id}">催办</button>
+           <button class="btn secondary" data-task-submit="${t.id}">提交</button>
+           ${t.status === "submitted"
+             ? `<button class="btn" data-task-review="${t.id}">审核</button>` : ""}
+           ${t.escalated ? "" : `<button class="btn danger" data-task-esc="${t.id}">升级</button>`}
            <button class="btn secondary" data-task-done="${t.id}">办结</button></td></tr>`);
   };
   await Promise.all([drawInstances(), drawTasks()]);
@@ -1582,6 +1607,146 @@ async function renderSpdPath() {
       return postAction(`/api/spd/tasks/${done.dataset.taskDone}/complete`,
         { result: { note: form.note } }, "#spd-task-msg");
     }
+    const el2 = (k) => e.target.closest(`[${k}]`);
+    const tView = el2("data-task-view"), tAssign = el2("data-task-assign");
+    const tSubmit = el2("data-task-submit"), tReview = el2("data-task-review");
+    const tEsc = el2("data-task-esc");
+    const iView = el2("data-inst-view"), iAdj = el2("data-inst-adj");
+    try {
+      if (tView) {
+        const d = await api(`/api/spd/tasks/${tView.dataset.taskView}`);
+        $("#spd-task-detail").innerHTML =
+          `<p class="desc">任务 #${esc(d.id)} 明细</p>`
+          + table(["项", "值"], [
+            ["标题", d.title], ["类型", SPD_TASK_TYPES[d.task_type] || d.task_type],
+            ["患者", d.patient_name || d.patient_id],
+            ["状态", (SPD_TASK_STATUS[d.status] || [])[0] || d.status],
+            ["责任人", d.assignee_id ?? "—"],
+            ["转派自", d.transferred_from ?? "—"],
+            ["截止", d.due_date || "—"], ["催办次数", d.urged_count ?? 0],
+            ["已升级", d.escalated ? "是" : "否"],
+            ["办理结果", JSON.stringify(d.result || {})],
+          ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`);
+        return;
+      }
+      if (tAssign) {
+        const form = await spdModal("分派/转派任务", [
+          { name: "assignee_id", label: "受派人用户ID", type: "number", required: true },
+          { name: "note", label: "说明" },
+        ]);
+        if (!form || !form.assignee_id) return;
+        // 转派会记 transferred_from，事后查得出"这活是从谁那儿转来的"
+        return postAction(`/api/spd/tasks/${tAssign.dataset.taskAssign}/assign`,
+          { assignee_id: Number(form.assignee_id), note: form.note || "" }, "#spd-task-msg");
+      }
+      if (tSubmit) {
+        const form = await spdModal("提交任务", [
+          { name: "note", label: "办理说明", type: "textarea" },
+          { name: "evidence", label: "附件ID（逗号分隔，按需留痕）" },
+          { name: "draft", label: "只存草稿不提交审核", type: "select",
+            options: [{ value: "0", label: "否，提交审核" }, { value: "1", label: "是，存草稿" }],
+            value: "0" },
+        ]);
+        if (!form) return;
+        // evidence 后端收的是附件 id 列表——曾是自由字符串，那能让 require_evidence
+        // 被一串乱码糊弄过去，所以这里只递数字
+        const ev = (form.evidence || "").split(",").map((x) => Number(x.trim()))
+          .filter((x) => x > 0);
+        return postAction(`/api/spd/tasks/${tSubmit.dataset.taskSubmit}/submit`, {
+          result: { note: form.note || "" }, evidence: ev,
+          draft: form.draft === "1", note: form.note || "",
+        }, "#spd-task-msg");
+      }
+      if (tReview) {
+        const form = await spdModal("审核任务", [
+          { name: "approved", label: "结论", type: "select",
+            options: [{ value: "1", label: "通过（完成并推进路径）" },
+                      { value: "0", label: "退回（回到办理中）" }], value: "1" },
+          { name: "note", label: "审核意见" },
+        ]);
+        if (!form) return;
+        if (form.approved === "0" && !(form.note || "").trim()) {
+          return setMsg("#spd-task-msg", "退回必须写明意见——办理人要知道退回的理由", false);
+        }
+        return postAction(`/api/spd/tasks/${tReview.dataset.taskReview}/review`,
+          { approved: form.approved === "1", note: form.note || "" }, "#spd-task-msg");
+      }
+      if (tEsc) {
+        if (!confirm("升级会置为紧急并交由上级机构督办，确定？")) return;
+        return postAction(`/api/spd/tasks/${tEsc.dataset.taskEsc}/escalate`,
+          null, "#spd-task-msg");
+      }
+      if (iView) {
+        const d = await api(`/api/spd/path-instances/${iView.dataset.instView}`);
+        const nodes = d.nodes || [];
+        $("#spd-inst-detail").innerHTML =
+          `<p class="desc">路径实例 #${esc(d.id)}：${esc(d.template_name || "")}
+            （进度 ${esc(d.progress ?? 0)}%）</p>`
+          + table(["节点", "名称", "阶段", "任务状态", "责任人", "准入"], nodes, (n) =>
+            `<tr><td>${esc(n.key)}</td><td>${esc(n.name || "")}</td>
+             <td>${esc(n.stage || "—")}</td>
+             <td>${esc((SPD_TASK_STATUS[n.task_status] || [])[0] || n.task_status || "—")}</td>
+             <td>${n.assignee_id ?? "—"}</td>
+             <td><button class="btn secondary" data-node-check="${n.id}"
+                  data-inst="${d.id}">查准入</button></td></tr>`);
+        return;
+      }
+      if (iAdj) {
+        const form = await spdModal("调整路径实例", [
+          { name: "status", label: "状态", type: "select",
+            options: [{ value: "running", label: "执行中" }, { value: "paused", label: "暂停" },
+                      { value: "cancelled", label: "取消" }], value: "running" },
+          { name: "owner_user_id", label: "负责人用户ID", type: "number" },
+        ]);
+        if (!form) return;
+        // 改的是**实例**不是模板：个性化调整不该让同模板的其他患者跟着变
+        const body = { status: form.status };
+        if (form.owner_user_id) body.owner_user_id = Number(form.owner_user_id);
+        return postAction(`/api/spd/path-instances/${iAdj.dataset.instAdj}`,
+          body, "#spd-inst-msg", "PATCH");
+      }
+      const nCheck = el2("data-node-check");
+      if (nCheck) {
+        // 路径**不折行拼接**：折成两段字符串，孤儿端点棘轮就看不见这个调用点了
+        // （它按路径字面量扫源码）。折行是排版偏好，让闸门失明不是。
+        const inst = nCheck.dataset.inst;
+        const r = await api(
+          `/api/spd/path-nodes/${nCheck.dataset.nodeCheck}/enter-check?instance_id=${inst}`);
+        setMsg("#spd-inst-msg",
+          r.allowed ? "准入条件已满足，可以推进" : `不可推进：${r.reason || "准入条件未满足"}`,
+          !!r.allowed);
+        return;
+      }
+    } catch (err) { setMsg("#spd-task-msg", err.message, false); }
+  };
+
+  $("#spd-task-batch").onsubmit = async (e) => {
+    e.preventDefault();
+    const picked = [...document.querySelectorAll(".task-pick:checked")]
+      .map((c) => Number(c.dataset.pick));
+    if (!picked.length) return setMsg("#spd-task-msg", "先勾选要处理的任务", false);
+    const f = formJson(e.target);
+    if (f.action === "assign" && !f.assignee_id) {
+      return setMsg("#spd-task-msg", "批量分派必须填受派人用户ID", false);
+    }
+    const body = { task_ids: picked, action: f.action, note: f.note || "" };
+    if (f.assignee_id) body.assignee_id = Number(f.assignee_id);
+    return postAction("/api/spd/tasks/batch", body, "#spd-task-msg");
+  };
+  $("#spd-task-export").onclick = async () => {
+    try {
+      // 后端回「行数据 + 表头」，CSV 由前端拼——导出口径与列表筛选保持一致
+      const q = new URLSearchParams(formJson($("#spd-task-filter"))).toString();
+      const d = await api(`/api/spd/tasks-export?${q}`);
+      const esc2 = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const csv = [d.headers.map(esc2).join(","),
+        ...d.rows.map((r) => r.map(esc2).join(","))].join("\n");
+      const url = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = "spd-tasks.csv"; a.click();
+      URL.revokeObjectURL(url);
+      setMsg("#spd-task-msg", `已导出 ${d.rows.length} 行`, true);
+    } catch (err) { setMsg("#spd-task-msg", err.message, false); }
   };
 }
 
