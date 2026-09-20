@@ -86,6 +86,10 @@ EXEMPT: dict[str, str] = {
     "/api/integration/fhir/Observation": "FHIR R4 Observation 入站，机器对机器",
     "/api/integration/fhir/DiagnosticReport": "FHIR R4 DiagnosticReport 入站，机器对机器",
     "/api/integration/fhir/Encounter": "FHIR R4 Encounter 入站，机器对机器",
+    "/api/billing/payments/callback": (
+        "支付网关回调：网关验签后 POST 进来，把 pending 单置为终态（paid/failed）。"
+        "机器对机器——给它做界面等于让人手工伪造一次支付结果"
+    ),
     "/api/portal/spd/referrals": (
         "与 /api/portal/me/referrals 同因：居民端转诊列表统一走聚合接口 "
         "/me/referrals/all（带 source=spd 收窄，m.js:1329），本条只回慢专病那一半。"
@@ -114,7 +118,7 @@ EXEMPT: dict[str, str] = {
 #: 当前没有前端调用点、也没豁免的端点数。**只允许调小。**
 #: 轨迹：241（本闸门建成时的实测）→ 232（扣掉 9 条机器对机器豁免）
 #: → 220（补上 spd/config/teams 的服务团队与村医配置界面，12 个端点）。
-BASELINE_ORPHANS = 124
+BASELINE_ORPHANS = 104
 
 #: 路径由变量拼出来、扫描看不见的调用点。**只允许调小。**
 #: 这不是欠账，是闸门的视野边界——如实登记，不假装看得见。
@@ -128,6 +132,7 @@ FULLY_COVERED = frozenset({
     "routers.analytics",
     "routers.attachments",
     "routers.auth",
+    "routers.billing",
     "routers.blood",
     "routers.clinical_docs",
     "routers.contracts",
@@ -163,6 +168,8 @@ FULLY_COVERED = frozenset({
     "routers.workflows",
     "spd.routers.assess",
     "spd.routers.care",
+    "spd.routers.config.catalog",
+    "spd.routers.config.devices",
     "spd.routers.config.scales",
     "spd.routers.config.teams",
     "spd.routers.followup",
@@ -442,9 +449,10 @@ def test_自动豁免的确实标了deprecated():
 #: 手写豁免的上限。**抬它是一次有记录的决定，不是顺手改个数字**：
 #: 9 → 10 是为了 `/api/portal/me/referrals`（被 /all 取代）；
 #: 10 → 12 是为了慢专病侧同因的两条（列表被 /all 取代；详情**已经在用**，
-#: 只是路径由服务端下发、本闸门的字面量扫描看不见——见盲区②）。
+#: 只是路径由服务端下发、本闸门的字面量扫描看不见——见盲区②）；
+#: 12 → 13 是为了支付网关回调（机器对机器，做界面等于让人手工伪造支付结果）。
 #: 这条上限的价值就在于：新增豁免时闸门会先红一次，逼着人说清为什么。
-EXEMPT_CEILING = 12
+EXEMPT_CEILING = 13
 
 
 def test_豁免只许变少且不许指向不存在的端点():

@@ -223,27 +223,51 @@ async function renderSpdAdmin() {
           <div id="spd-exclude-rules"></div></div>
       </div>
       <p class="msg" id="spd-program-msg"></p>
-      ${table(["编码", "名称", "口径", "版本", "阶段数", "纳入规则", "状态"],
+      ${table(["编码", "名称", "口径", "版本", "阶段数", "纳入规则", "状态", "操作"],
         catalog.programs, (p) =>
         `<tr><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
          <td>${p.category === "chronic" ? "慢病" : "专病"}</td>
          <td>${esc(p.version || "")}</td><td>${(p.stages || []).length}</td>
          <td>${(cfg.programs_without_rules || []).includes(p.code)
             ? '<span class="tag red">未配置</span>' : '<span class="tag green">已配置</span>'}</td>
-         <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}</div>
+         <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-pg-view="${p.id}">明细</button>
+             <button class="btn secondary" data-pg-edit="${p.id}">改档</button>
+             <button class="btn secondary" data-pg-target="${p.id}">控制目标</button>
+             <button class="btn secondary" data-pg-ver="${p.id}">版本</button></td></tr>`)}
+      <p class="msg" id="spd-pg-msg"></p>
+      <div id="spd-pg-detail"></div></div>
     <div class="panel"><h3>数据源接入与运行监控</h3>
       <p class="desc">成功率按最近 100 次同步计算；超过 24 小时未同步计入陈旧</p>
       ${spdCards([["数据源", ds.total], ["异常", ds.failed, ds.failed > 0],
                   ["延迟", ds.delayed, ds.delayed > 0], ["24h未同步", ds.stale_over_24h, ds.stale_over_24h > 0],
                   ["平均成功率", ds.avg_success_rate + "%"]])}
-      ${table(["编码", "名称", "类型", "频率(分)", "最近同步", "行数", "延迟(ms)", "成功率", "状态"],
+      ${table(["编码", "名称", "类型", "频率(分)", "最近同步", "行数", "延迟(ms)", "成功率", "状态", "操作"],
         sources, (s) =>
         `<tr><td>${esc(s.code)}</td><td>${esc(s.name)}</td><td>${esc(s.source_type)}</td>
          <td>${s.freq_minutes}</td><td>${esc(s.last_sync_at ? s.last_sync_at.replace("T", " ").slice(0, 16) : "—")}</td>
          <td>${s.last_rows}</td><td>${s.last_latency_ms}</td><td>${s.success_rate}%</td>
          <td>${s.status === "running" ? '<span class="tag green">正常</span>'
             : s.status === "delayed" ? '<span class="tag orange">延迟</span>'
-            : '<span class="tag red">异常</span>'}</td></tr>`)}</div>`;
+            : '<span class="tag red">异常</span>'}</td>
+         <td><button class="btn secondary" data-ds-edit="${s.id}">改配置</button>
+             <button class="btn secondary" data-ds-logs="${s.id}">同步日志</button>
+             <button class="btn secondary" data-ds-log-add="${s.id}">补记一次</button></td></tr>`)}
+      <button class="btn secondary" id="spd-ds-monitor">刷新接入监控</button>
+      <p class="msg" id="spd-ds-msg"></p>
+      <div id="spd-ds-detail"></div></div>
+    <div class="panel"><h3>监测设备</h3>
+      <p class="desc">设备按 SN 建档后绑给患者，测量数据才知道该记到谁头上；
+        <b>一台设备同时只能绑一个患者</b>——共用设备要先解绑再绑下一个。</p>
+      <form class="inline" id="spd-dev-form">
+        <input name="sn" placeholder="设备SN" required>
+        <select name="device_type">${Object.entries(SPD_DEVICE_TYPES).map(([v, t]) =>
+          `<option value="${v}">${esc(t)}</option>`).join("")}</select>
+        <input name="model" placeholder="型号">
+        <input name="org_id" type="number" placeholder="归属机构ID（留空=本机构）">
+        <button>建档</button>
+      </form><p class="msg" id="spd-dev-msg"></p>
+      <div id="spd-dev-list"></div></div>`;
   const meta = await spdMeta();
   const includeEditor = spdRuleEditor($("#spd-include-rules"), meta, []);
   const excludeEditor = spdRuleEditor($("#spd-exclude-rules"), meta, []);
@@ -254,6 +278,195 @@ async function renderSpdAdmin() {
       include_rules: includeEditor.value(),
       exclude_rules: excludeEditor.value(),
     }, "#spd-program-msg");
+  };
+
+  const drawDevices = async () => {
+    const rows = await api("/api/spd/devices?limit=50");
+    $("#spd-dev-list").innerHTML = table(
+      ["ID", "SN", "类型", "型号", "归属机构", "绑定患者", "操作"], rows, (d) =>
+      `<tr><td>${d.id}</td><td>${esc(d.sn)}</td>
+       <td>${esc(SPD_DEVICE_TYPES[d.device_type] || d.device_type)}</td>
+       <td>${esc(d.model || "—")}</td><td>${d.org_id ?? "—"}</td>
+       <td>${d.patient_id ?? '<span class="tag orange">未绑定</span>'}</td>
+       <td><button class="btn secondary" data-dev-bind="${d.id}"
+            data-bound="${d.patient_id ? 1 : 0}">${d.patient_id ? "换绑/解绑" : "绑定患者"}</button></td></tr>`);
+  };
+  await drawDevices();
+  $("#spd-dev-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["org_id"]);
+    if (!body.org_id) delete body.org_id;
+    return postAction("/api/spd/devices", body, "#spd-dev-msg");
+  };
+  $("#spd-ds-monitor").onclick = async () => {
+    try {
+      const d = await api("/api/spd/data-sources-monitor");
+      const rows = d.items || d.sources || [];
+      $("#spd-ds-detail").innerHTML =
+        `<p class="desc">接入监控：共 ${rows.length} 个数据源</p>`
+        + table(["编码", "状态", "最近同步", "近 24h 成功/总次", "平均延迟(ms)"], rows, (x) =>
+          `<tr><td>${esc(x.code || x.source_code || "")}</td><td>${esc(x.status || "—")}</td>
+           <td>${esc(String(x.last_sync_at || "").replace("T", " ").slice(0, 16) || "—")}</td>
+           <td>${esc(x.success_24h ?? "—")}/${esc(x.total_24h ?? "—")}</td>
+           <td>${esc(x.avg_latency_ms ?? "—")}</td></tr>`);
+      setMsg("#spd-ds-msg", "", true);
+    } catch (err) { setMsg("#spd-ds-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const el5 = (k) => e.target.closest(`[${k}]`);
+    const dsEdit = el5("data-ds-edit"), dsLogs = el5("data-ds-logs");
+    const dsAdd = el5("data-ds-log-add"), devBind = el5("data-dev-bind");
+    const pgView = el5("data-pg-view"), pgEdit = el5("data-pg-edit");
+    const pgTarget = el5("data-pg-target"), pgVer = el5("data-pg-ver");
+    try {
+      if (pgView) {
+        const d = await api(`/api/spd/programs/${pgView.dataset.pgView}`);
+        $("#spd-pg-detail").innerHTML =
+          `<p class="desc">病种 ${esc(d.code)}｜${esc(d.name)} 明细</p>`
+          + table(["项", "值"], [
+            ["口径", d.category === "chronic" ? "慢病" : "专病"],
+            ["版本", d.version || "—"], ["牵头机构", d.lead_org_id ?? "—"],
+            ["阶段", (d.stages || []).map((x) => x.name || x).join(" → ") || "—"],
+            ["纳入规则", (d.include_rules || []).length + " 条"],
+            ["排除规则", (d.exclude_rules || []).length + " 条"],
+            ["状态", d.active ? "启用" : "停用"],
+          ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`);
+        return;
+      }
+      if (pgEdit) {
+        const form = await spdModal("改病种档案", [
+          { name: "name", label: "名称" },
+          { name: "lead_org_id", label: "牵头机构ID", type: "number" },
+          { name: "active", label: "状态", type: "select",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }], value: "1" },
+        ]);
+        if (!form) return;
+        const body = { active: form.active === "1" };
+        if (form.name) body.name = form.name;
+        if (form.lead_org_id) body.lead_org_id = Number(form.lead_org_id);
+        return postAction(`/api/spd/programs/${pgEdit.dataset.pgEdit}`,
+          body, "#spd-pg-msg", "PATCH");
+      }
+      if (pgTarget) {
+        const pid = pgTarget.dataset.pgTarget;
+        const rows = await api(`/api/spd/programs/${pid}/targets`);
+        $("#spd-pg-detail").innerHTML =
+          `<p class="desc">病种 #${esc(pid)} 的控制目标（分期设定，达标判定按这里的区间）</p>`
+          + table(["分期", "指标", "类型", "下限", "上限", "单位", "操作"], rows, (t) =>
+            `<tr><td>${esc(t.stage || "通用")}</td>
+             <td>${esc(t.metric_name || t.metric)}</td>
+             <td>${t.kind === "qualitative" ? "定性" : "定量"}</td>
+             <td>${t.target_low ?? "—"}</td><td>${t.target_high ?? "—"}</td>
+             <td>${esc(t.unit || "—")}</td>
+             <td><button class="btn secondary" data-tg-edit="${t.id}">改</button></td></tr>`)
+          + `<form class="inline" id="spd-tg-form" data-pid="${esc(pid)}">
+              <input name="stage" placeholder="分期（留空=通用）">
+              <input name="metric" placeholder="指标编码" required>
+              <input name="metric_name" placeholder="指标名称">
+              <select name="kind"><option value="quantitative">定量</option>
+                <option value="qualitative">定性</option></select>
+              <input name="target_low" type="number" step="any" placeholder="下限">
+              <input name="target_high" type="number" step="any" placeholder="上限">
+              <input name="unit" placeholder="单位">
+              <button>新增目标</button></form>`;
+        $("#spd-tg-form").onsubmit = (ev) => {
+          ev.preventDefault();
+          const body = formJson(ev.target, ["target_low", "target_high"]);
+          // 定量目标至少要给一侧区间，否则"达标"没有判据
+          if (body.kind === "quantitative"
+              && body.target_low == null && body.target_high == null) {
+            return setMsg("#spd-pg-msg", "定量目标至少要填上限或下限——否则达标判不出来", false);
+          }
+          return postAction(`/api/spd/programs/${ev.target.dataset.pid}/targets`,
+            body, "#spd-pg-msg");
+        };
+        return;
+      }
+      if (pgVer) {
+        const rows = await api(`/api/spd/programs/${pgVer.dataset.pgVer}/versions`);
+        // 版本是给"这条规则当时长什么样"留证的：改了纳入规则，历史入组依据不该跟着变
+        $("#spd-pg-detail").innerHTML =
+          `<p class="desc">病种 #${esc(pgVer.dataset.pgVer)} 的版本历史
+            —— 改纳入/排除规则会留一版，历史入组的判定依据按当时那一版看</p>`
+          + table(["版本", "变更时间", "变更人", "说明"], rows, (v) =>
+            `<tr><td>${esc(v.version || "")}</td>
+             <td>${esc(String(v.created_at || "").replace("T", " ").slice(0, 16))}</td>
+             <td>${esc(v.created_by || "—")}</td><td>${esc(v.note || "—")}</td></tr>`);
+        return;
+      }
+      const tgEdit = el5("data-tg-edit");
+      if (tgEdit) {
+        const form = await spdModal("改控制目标", [
+          { name: "target_low", label: "下限", type: "number" },
+          { name: "target_high", label: "上限", type: "number" },
+          { name: "unit", label: "单位" },
+        ]);
+        if (!form) return;
+        const body = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
+        ["target_low", "target_high"].forEach((k) => {
+          if (body[k] !== undefined) body[k] = Number(body[k]);
+        });
+        if (!Object.keys(body).length) return setMsg("#spd-pg-msg", "没有要修改的字段", false);
+        return postAction(`/api/spd/targets/${tgEdit.dataset.tgEdit}`,
+          body, "#spd-pg-msg", "PATCH");
+      }
+      if (dsEdit) {
+        const form = await spdModal("改数据源配置", [
+          { name: "name", label: "名称" },
+          { name: "endpoint", label: "接入地址" },
+          { name: "freq_minutes", label: "同步频率（分钟，1–1440）", type: "number" },
+          { name: "scope", label: "同步范围说明" },
+        ]);
+        if (!form) return;
+        // 空串不提交：这些字段都是可选，空串会被当成"要改成空"
+        const body = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
+        if (body.freq_minutes) body.freq_minutes = Number(body.freq_minutes);
+        if (!Object.keys(body).length) return setMsg("#spd-ds-msg", "没有要修改的字段", false);
+        return postAction(`/api/spd/data-sources/${dsEdit.dataset.dsEdit}`,
+          body, "#spd-ds-msg", "PATCH");
+      }
+      if (dsLogs) {
+        const rows = await api(`/api/spd/data-sources/${dsLogs.dataset.dsLogs}/sync-logs?limit=30`);
+        $("#spd-ds-detail").innerHTML =
+          `<p class="desc">数据源 #${esc(dsLogs.dataset.dsLogs)} 的同步日志（近 30 次）</p>`
+          + table(["时间", "结果", "行数", "延迟(ms)", "说明"], rows, (l) =>
+            `<tr><td>${esc(String(l.created_at || "").replace("T", " ").slice(0, 19))}</td>
+             <td>${l.success
+                ? '<span class="tag green">成功</span>' : '<span class="tag red">失败</span>'}</td>
+             <td>${esc(l.rows ?? 0)}</td><td>${esc(l.latency_ms ?? 0)}</td>
+             <td>${esc(l.message || "—")}</td></tr>`);
+        return;
+      }
+      if (dsAdd) {
+        // 人工补记：对接方跑完批量同步后回填一次结果，用于把成功率算对
+        const form = await spdModal("补记一次同步结果", [
+          { name: "success", label: "结果", type: "select",
+            options: [{ value: "1", label: "成功" }, { value: "0", label: "失败" }], value: "1" },
+          { name: "rows", label: "同步行数", type: "number", value: 0 },
+          { name: "latency_ms", label: "耗时（毫秒）", type: "number", value: 0 },
+          { name: "message", label: "说明（失败务必写清）" },
+        ]);
+        if (!form) return;
+        if (form.success === "0" && !(form.message || "").trim()) {
+          return setMsg("#spd-ds-msg", "补记失败必须写明原因——否则成功率掉了查不出为什么", false);
+        }
+        return postAction(`/api/spd/data-sources/${dsAdd.dataset.dsLogAdd}/sync-logs`, {
+          success: form.success === "1", rows: Number(form.rows || 0),
+          latency_ms: Number(form.latency_ms || 0), message: form.message || "",
+        }, "#spd-ds-msg");
+      }
+      if (devBind) {
+        const bound = devBind.dataset.bound === "1";
+        const pid = prompt(bound
+          ? "换绑到哪个患者ID？（留空=解绑）"
+          : "绑定到哪个患者ID？", "");
+        if (pid === null) return;
+        // 一台设备同时只绑一个患者：留空即解绑，后端按 patient_id=null 处理
+        const body = pid ? { patient_id: Number(pid) } : { patient_id: null };
+        return postAction(`/api/spd/devices/${devBind.dataset.devBind}/bind`,
+          body, "#spd-dev-msg");
+      }
+    } catch (err) { setMsg("#spd-ds-msg", err.message, false); }
   };
 }
 
@@ -548,6 +761,11 @@ function spdOptions(map) {
  * 整块没有入口。与 2026-08-27 的 spd/care、本轮的服务团队配置同一形状：
  * 后端交付了、界面缺失，而需求对照表把它们算作已实现。
  * ==========================================================*/
+
+const SPD_DEVICE_TYPES = {
+  bp: "血压计", glucose: "血糖仪", band: "手环", scale: "体重秤",
+  poct: "POCT", ecg: "心电",
+};
 
 const SPD_QC_RESULTS = {
   pass: ["通过", "green"], warn: ["存疑", "orange"], fail: ["不通过", "red"],

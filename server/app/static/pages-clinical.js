@@ -1664,7 +1664,31 @@ async function renderBilling() {
         `<tr><td>${esc(i.code)}</td><td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.price}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
          <td><button class="btn secondary" data-reprice="${i.id}">调价</button>
-             <button class="btn secondary" data-history="${i.id}">调价历史</button></td></tr>`)}</div>
+             <button class="btn secondary" data-history="${i.id}">调价历史</button>
+             <button class="btn secondary" data-ci-edit="${i.id}">改档</button></td></tr>`)}
+      <p class="desc">「调价」走 reprice（留调价历史，价格是要留痕的）；
+        「改档」改名称/类别/启停，<b>不改价格</b>——两条路分开，免得改个名字把价格也悄悄动了。</p></div>
+    <div class="panel"><h3>住院押金</h3>
+      <p class="desc">押金是预交的钱，不是收入：<b>余额 = 已交 − 已退 − 已抵扣</b>。
+        退款走押金专用通道（`/deposits/refund`），不与支付退款混用——那两笔钱的账本不是同一本。</p>
+      <form class="inline" id="dep-form">
+        <input name="admission_id" type="number" placeholder="住院单ID" required>
+        <input name="amount" type="number" step="0.01" min="0.01" placeholder="金额(元)" required>
+        <select name="method"><option value="cash">现金</option><option value="card">刷卡</option>
+          <option value="online">线上</option></select>
+        <button>收取押金</button></form>
+      <form class="inline" id="dep-refund-form" style="margin-top:8px">
+        <input name="admission_id" type="number" placeholder="住院单ID" required>
+        <input name="amount" type="number" step="0.01" min="0.01" placeholder="退款金额(元)" required>
+        <select name="method"><option value="cash">现金</option><option value="card">刷卡</option>
+          <option value="online">线上</option></select>
+        <button class="btn danger">退押金</button></form>
+      <form class="inline" id="dep-query-form" style="margin-top:8px">
+        <input name="admission_id" type="number" placeholder="住院单ID（查余额）">
+        <button class="btn secondary">查余额与流水</button>
+        <button type="button" class="btn secondary" id="dep-alerts-btn">查余额预警</button></form>
+      <p class="msg" id="dep-msg"></p>
+      <div id="dep-result"></div></div>
     <div class="panel"><h3>计费与结算</h3>
       <form class="inline" id="bd-form"><input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="admission_id" type="number" placeholder="住院单ID(住院)"><input name="encounter_id" type="number" placeholder="就诊ID(门诊)">
@@ -1709,6 +1733,53 @@ async function renderBilling() {
   $("#ci-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/charge-items", formJson(e.target, ["price"]), "#bill-msg"); };
   $("#bd-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/details", formJson(e.target, ["patient_id", "admission_id", "encounter_id", "quantity"]), "#bill-msg"); };
   $("#settle-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/settlements", formJson(e.target, ["admission_id", "encounter_id", "insurance_pay"]), "#bill-msg"); };
+  $("#dep-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/billing/deposits",
+      formJson(e.target, ["admission_id", "amount"]), "#dep-msg");
+  };
+  $("#dep-refund-form").onsubmit = async (e) => {
+    e.preventDefault();
+    // 退押金走押金专用通道，与支付退款不是同一本账
+    if (!confirm("退还押金？该笔会计入押金流水并抵减余额。")) return;
+    postAction("/api/billing/deposits/refund",
+      formJson(e.target, ["admission_id", "amount"]), "#dep-msg");
+  };
+  const drawDeposits = async (admissionId) => {
+    const q = admissionId ? `?admission_id=${encodeURIComponent(admissionId)}` : "";
+    const [bal, rows] = await Promise.all([
+      admissionId ? api(`/api/billing/deposits/balance${q}`) : Promise.resolve(null),
+      api(`/api/billing/deposits${q}`),
+    ]);
+    $("#dep-result").innerHTML =
+      (bal ? `<p class="desc">住院单 ${esc(admissionId)} 押金余额
+        <b>${esc(bal.balance)}</b> 元（已交 ${esc(bal.paid ?? "—")} ·
+        已退 ${esc(bal.refunded ?? "—")} · 已抵扣 ${esc(bal.used ?? "—")}）</p>` : "")
+      + table(["ID", "住院单", "类型", "金额", "方式", "时间"], rows, (d) =>
+        `<tr><td>${d.id}</td><td>${d.admission_id}</td>
+         <td>${d.amount < 0 || d.kind === "refund"
+            ? '<span class="tag orange">退款</span>' : '<span class="tag green">收取</span>'}</td>
+         <td>${esc(d.amount)}</td><td>${esc(d.method || "—")}</td>
+         <td>${esc(String(d.created_at || "").replace("T", " ").slice(0, 16))}</td></tr>`);
+  };
+  $("#dep-query-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawDeposits(formJson(e.target).admission_id || ""); }
+    catch (err) { setMsg("#dep-msg", err.message, false); }
+  };
+  $("#dep-alerts-btn").onclick = async () => {
+    try {
+      const rows = await api("/api/billing/deposits/alerts");
+      // 预警是"押金快用完了"，不是"欠费了"——催在欠费之前，不是之后
+      $("#dep-result").innerHTML =
+        `<p class="desc">押金余额预警（${rows.length} 条）：余额低于阈值，需提醒续交</p>`
+        + table(["住院单", "患者", "余额", "已发生费用", "建议续交"], rows, (a) =>
+          `<tr><td>${a.admission_id}</td><td>${esc(a.patient_name || a.patient_id || "—")}</td>
+           <td>${esc(a.balance)}</td><td>${esc(a.charged ?? "—")}</td>
+           <td>${esc(a.suggest ?? "—")}</td></tr>`);
+      setMsg("#dep-msg", "", true);
+    } catch (err) { setMsg("#dep-msg", err.message, false); }
+  };
   $("#pay-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1731,8 +1802,24 @@ async function renderBilling() {
     } catch (err) { setMsg("#recon-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { reprice, history, refund, printsettle } = e.target.dataset;
+    const { reprice, history, refund, printsettle, ciEdit } = e.target.dataset;
     try {
+      if (ciEdit) {
+        // 与上面的 reprice 刻意分成两条路：价格要对外公示、调价依据与生效日期
+        // 必须留痕，所以走 reprice；改名字/类别/启停不涉及公示，走 PATCH。
+        // 合成一个入口的话，改个错别字也会在调价历史里留下一条无依据的记录。
+        const name = prompt("名称（留空=不改）") || "";
+        const category = prompt("类别 drug/exam/treatment/bed/other（留空=不改）") || "";
+        const active = prompt("状态 1=启用 0=停用（留空=不改）") || "";
+        const body = {};
+        if (name) body.name = name;
+        if (category) body.category = category;
+        if (active !== "") body.active = active === "1";
+        if (!Object.keys(body).length) return setMsg("#bill-msg", "没有要修改的字段", false);
+        await api(`/api/billing/charge-items/${ciEdit}`, {
+          method: "PATCH", body: JSON.stringify(body) });
+        return route();
+      }
       // 结算单打印：服务端按 Settlement 一行渲染（总额/医保/自付 + 关联住院或就诊）
       if (printsettle) return await openPrintPage(`/api/print/settlements/${printsettle}`);
       if (reprice) {
