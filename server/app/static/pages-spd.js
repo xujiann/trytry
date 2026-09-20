@@ -533,7 +533,11 @@ function spdCodeList(raw) {
 }
 
 function spdOptions(map) {
-  return Object.entries(map).map(([value, label]) => ({ value, label }));
+  // 两种词表都吃：扁平的 {code: "文案"}，以及带配色的 {code: ["文案", "tag类名"]}
+  // （后者供 spdTag 用）。不分辨的话，下拉里会出现「疑似,orange」这种东西。
+  return Object.entries(map).map(([value, label]) => ({
+    value, label: Array.isArray(label) ? label[0] : label,
+  }));
 }
 
 /* ============================================================
@@ -544,6 +548,17 @@ function spdOptions(map) {
  * 整块没有入口。与 2026-08-27 的 spd/care、本轮的服务团队配置同一形状：
  * 后端交付了、界面缺失，而需求对照表把它们算作已实现。
  * ==========================================================*/
+
+const SPD_CAND_STATUS = {
+  suspect: ["疑似", "orange"], target: ["目标", "green"], excluded: ["已排除", ""],
+};
+const SPD_RECALL_STATUS = {
+  pending: ["待联系", "orange"], contacted: ["已联系", ""],
+  returned: ["已回归", "green"], failed: ["召回失败", "red"],
+};
+const SPD_APPLY_STATUS = {
+  pending: ["待受理", "orange"], accepted: ["已受理", "green"], rejected: ["已拒绝", "red"],
+};
 
 const SPD_SCALE_CATEGORIES = { risk: "风险评估", stage: "分期评定", rehab: "康复评定", screen: "筛查" };
 const SPD_SCALE_STATUS = { draft: ["草稿", "orange"], published: ["已发布", "green"], disabled: ["已停用", "red"] };
@@ -1124,7 +1139,39 @@ async function renderSpdPatients() {
       <p class="desc">自动纳入规则（全部满足才吸入）</p>
       <div id="spd-group-rules"></div>
       <p class="msg" id="spd-group-msg"></p>
-      <div id="spd-group-list"></div></div>`;
+      <div id="spd-group-list"></div>
+      <div id="spd-group-members"></div></div>
+    <div class="panel"><h3>目标池（候选）</h3>
+      <p class="desc">筛查命中的疑似患者落在这里等认领：认领是"我来跟"，
+        改状态是"这个人到底算不算目标"。<b>已被他人认领的再认领返回 409</b>——
+        不静默改人，两个团队同时跟一个患者比谁都不跟更糟。</p>
+      <form class="inline" id="spd-cand-filter">
+        <select name="program_code">${spdProgramOptions(catalog, true)}</select>
+        <select name="status"><option value="">全部状态</option>
+          ${Object.entries(SPD_CAND_STATUS).map(([v, t]) =>
+            `<option value="${v}">${esc(t[0])}</option>`).join("")}</select>
+        <button class="btn secondary">查询</button>
+      </form>
+      <p class="msg" id="spd-cand-msg"></p>
+      <div id="spd-cand-list"></div></div>
+    <div class="panel"><h3>召回台账</h3>
+      <p class="desc">失访患者的召回过程要留痕：联系一次记一次，
+        <b>召回成功（returned）会自动把档案恢复为在管</b>，不需要再手工恢复。</p>
+      <p class="msg" id="spd-recall-msg"></p>
+      <div id="spd-recall-list"></div></div>
+    <div class="panel"><h3>居民服务申请</h3>
+      <p class="desc">居民端发起的专病服务申请：<b>受理即把居民放进目标池</b>，
+        等待签约建档；拒绝要写明理由，居民端看得到。</p>
+      <form class="inline" id="spd-apply-filter">
+        <select name="status">
+          <option value="pending">待受理</option>
+          <option value="accepted">已受理</option>
+          <option value="rejected">已拒绝</option>
+          <option value="">全部</option></select>
+        <button class="btn secondary">查询</button>
+      </form>
+      <p class="msg" id="spd-apply-msg"></p>
+      <div id="spd-apply-list"></div></div>`;
 
   const drawScreenings = async () => {
     const rows = await api("/api/spd/screenings?limit=30");
@@ -1145,7 +1192,7 @@ async function renderSpdPatients() {
     const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
     const rows = await api(`/api/spd/enrollments?${qs}`);
     $("#spd-enroll-list").innerHTML = table(
-      ["ID", "患者", "病种", "阶段", "风险", "机构", "团队", "建档", "下次随访", "状态"],
+      ["ID", "患者", "病种", "阶段", "风险", "机构", "团队", "建档", "下次随访", "状态", "操作"],
       rows, (e) =>
       `<tr><td>${e.id}</td><td>${esc(e.patient_name || e.patient_id)}</td>
        <td>${esc(e.program_code)}</td><td>${esc(e.stage || "—")}</td>
@@ -1154,7 +1201,9 @@ async function renderSpdPatients() {
        <td>${e.archived ? '<span class="tag green">已建档</span>' : '<span class="tag orange">待完善</span>'}</td>
        <td>${esc(e.next_followup_at || "—")}</td>
        <td>${e.status === "active" ? '<span class="tag green">在管</span>'
-          : '<span class="tag">' + esc(e.status) + "</span>"}</td></tr>`);
+          : '<span class="tag">' + esc(e.status) + "</span>"}</td>
+       <td><button class="btn secondary" data-enr-view="${e.id}">明细</button>
+           <button class="btn secondary" data-enr-edit="${e.id}">改档</button></td></tr>`);
   };
   const drawLifecycle = async () => {
     const rows = await api("/api/spd/lifecycle-events?limit=20");
@@ -1208,16 +1257,185 @@ async function renderSpdPatients() {
       return postAction(`/api/spd/lifecycle-events/${confirm.dataset.confirm}/confirm`,
         null, "#spd-life-msg");
     }
+    const el = (k) => e.target.closest(`[${k}]`);
+    const claim = el("data-cand-claim"), cstat = el("data-cand-status");
+    const enrView = el("data-enr-view"), enrEdit = el("data-enr-edit");
+    const recall = el("data-recall"), aOk = el("data-apply-ok"), aNo = el("data-apply-no");
+    const gView = el("data-group-view"), gAdd = el("data-group-add"), gDel = el("data-gm-del");
+    try {
+      if (claim) {
+        // 已被他人认领后端回 409，照实把那句话显示出来，不吞掉
+        return postAction(`/api/spd/candidates/${claim.dataset.candClaim}/claim`,
+          null, "#spd-cand-msg");
+      }
+      if (cstat) {
+        const form = await spdModal("改目标池状态", [
+          { name: "status", label: "状态", type: "select",
+            options: spdOptions(SPD_CAND_STATUS), value: "target" },
+          { name: "reason", label: "理由", placeholder: "排除时务必写明" },
+        ]);
+        if (!form) return;
+        return postAction(`/api/spd/candidates/${cstat.dataset.candStatus}/status`,
+          form, "#spd-cand-msg");
+      }
+      if (enrView) {
+        const id = enrView.dataset.enrView;
+        const d = await api(`/api/spd/enrollments/${id}`);
+        const prof = d.patient_id
+          ? await api(`/api/spd/patients/${d.patient_id}/profile`).catch(() => null)
+          : null;
+        $("#spd-enroll-list").insertAdjacentHTML("afterend",
+          `<div id="spd-enr-detail"><p class="desc">档案 #${esc(id)} 明细</p>`
+          + table(["项", "值"], [
+            ["患者", d.patient_name || d.patient_id], ["病种", d.program_code],
+            ["阶段", d.stage || "—"], ["风险", (SPD_RISK[d.risk_level] || [])[0] || d.risk_level],
+            ["纳管机构", d.org_id], ["团队", d.team_id ?? "—"],
+            ["主管医生", d.doctor_user_id ?? "—"], ["个案管理师", d.manager_user_id ?? "—"],
+            ["知情同意", d.consent_signed ? `已签 ${d.consent_no || ""}` : "未签"],
+            ["服务起始", d.service_start || "—"], ["状态", d.status],
+            ["档案在管病种数", prof ? (prof.enrollments || []).length : "—"],
+          ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`) + "</div>");
+        const dup = document.querySelectorAll("#spd-enr-detail");
+        if (dup.length > 1) dup[0].remove();   // 只留最新一份，不越点越长
+        return;
+      }
+      if (enrEdit) {
+        const id = enrEdit.dataset.enrEdit;
+        const cur = await api(`/api/spd/enrollments/${id}`);
+        const form = await spdModal("改纳管档案", [
+          { name: "team_id", label: "服务团队ID", type: "number", value: cur.team_id ?? "" },
+          { name: "doctor_user_id", label: "主管医生ID", type: "number", value: cur.doctor_user_id ?? "" },
+          { name: "manager_user_id", label: "个案管理师ID", type: "number", value: cur.manager_user_id ?? "" },
+          { name: "risk_level", label: "风险等级", type: "select",
+            options: spdOptions(SPD_RISK), value: cur.risk_level || "low" },
+          { name: "stage", label: "分期", value: cur.stage || "" },
+          { name: "consent_no", label: "知情同意书号", value: cur.consent_no || "" },
+          { name: "service_start", label: "服务起始 YYYY-MM-DD", value: cur.service_start || "" },
+        ]);
+        if (!form) return;
+        // 空串不提交：EnrollUpdate 的字段都是可选，传空串会把它当成"要改成空"
+        const body = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
+        ["team_id", "doctor_user_id", "manager_user_id"].forEach((k) => {
+          if (body[k] !== undefined) body[k] = Number(body[k]);
+        });
+        return postAction(`/api/spd/enrollments/${id}`, body, "#spd-enroll-msg", "PATCH");
+      }
+      if (recall) {
+        const form = await spdModal("记录召回进展", [
+          { name: "status", label: "进展", type: "select",
+            options: spdOptions(SPD_RECALL_STATUS), value: "contacted" },
+          { name: "contact_note", label: "联系情况" },
+          { name: "result", label: "结果说明" },
+        ]);
+        if (!form) return;
+        return postAction(`/api/spd/recalls/${recall.dataset.recall}/progress`,
+          form, "#spd-recall-msg");
+      }
+      if (aOk || aNo) {
+        const id = (aOk || aNo).dataset[aOk ? "applyOk" : "applyNo"];
+        const note = prompt(aOk ? "受理意见（可留空）" : "拒绝理由（居民端看得到）", "");
+        if (note === null) return;
+        if (!aOk && !note.trim()) return setMsg("#spd-apply-msg", "拒绝必须写明理由", false);
+        return postAction(`/api/spd/service-applies/${id}/handle`,
+          { status: aOk ? "accepted" : "rejected", handle_note: note }, "#spd-apply-msg");
+      }
+      if (gView) {
+        try { await drawGroupMembers(gView.dataset.groupView); }
+        catch (err) { setMsg("#spd-group-msg", err.message, false); }
+        return;
+      }
+      if (gAdd) {
+        const form = await spdModal("加入分组成员", [
+          { name: "patient_ids", label: "患者ID（逗号分隔）", placeholder: "101,102" },
+          { name: "use_auto_rule", label: "按分组自动规则筛", type: "select",
+            options: [{ value: "0", label: "否" }, { value: "1", label: "是" }], value: "0" },
+          { name: "program_code", label: "限定病种（自动规则时可填）" },
+        ]);
+        if (!form) return;
+        const ids = (form.patient_ids || "").split(",").map((x) => Number(x.trim()))
+          .filter((x) => x > 0);
+        return postAction(`/api/spd/groups/${gAdd.dataset.groupAdd}/members`, {
+          patient_ids: ids, use_auto_rule: form.use_auto_rule === "1",
+          program_code: form.program_code || "",
+        }, "#spd-group-msg");
+      }
+      if (gDel) {
+        const [gid, pid] = gDel.dataset.gmDel.split(":");
+        if (!confirm("把该患者移出分组？手工加入的成员移出后不会被规则再吸回来。")) return;
+        await api(`/api/spd/groups/${gid}/members/${pid}`, { method: "DELETE" });
+        return drawGroupMembers(gid);
+      }
+    } catch (err) { setMsg("#spd-cand-msg", err.message, false); }
   };
   const drawGroups = async () => {
     const groups = await api("/api/spd/groups");
     $("#spd-group-list").innerHTML = table(
-      ["ID", "名称", "范围", "科室", "自动规则", "成员数"], groups, (g) =>
+      ["ID", "名称", "范围", "科室", "自动规则", "成员数", "操作"], groups, (g) =>
       `<tr><td>${g.id}</td><td>${esc(g.name)}</td><td>${esc(g.scope)}</td>
        <td>${esc(g.dept || "—")}</td><td>${(g.auto_rule || []).length} 条</td>
-       <td>${g.member_count ?? "—"}</td></tr>`);
+       <td>${g.member_count ?? "—"}</td>
+       <td><button class="btn secondary" data-group-view="${g.id}">成员</button>
+           <button class="btn secondary" data-group-add="${g.id}">加成员</button></td></tr>`);
   };
-  await drawGroups();
+  const drawCandidates = async (query) => {
+    const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
+    const rows = await api(`/api/spd/candidates?${qs}`);
+    $("#spd-cand-list").innerHTML = table(
+      ["ID", "患者", "病种", "风险", "状态", "认领团队", "纳入依据", "操作"], rows, (c) =>
+      `<tr><td>${c.id}</td><td>${esc(c.patient_name || c.patient_id)}</td>
+       <td>${esc(c.program_code)}</td><td>${spdTag(SPD_RISK, c.risk_level)}</td>
+       <td>${spdTag(SPD_CAND_STATUS, c.status)}</td>
+       <td>${c.claimed_team_id ?? "—"}</td><td>${esc(c.source || "—")}</td>
+       <td>${c.claimed_team_id ? "" : `<button class="btn" data-cand-claim="${c.id}">认领</button>`}
+           <button class="btn secondary" data-cand-status="${c.id}">改状态</button></td></tr>`);
+  };
+  const drawRecalls = async () => {
+    const rows = await api("/api/spd/recalls?limit=30");
+    $("#spd-recall-list").innerHTML = table(
+      ["ID", "档案", "原因", "状态", "联系次数", "结果", "发起时间", "操作"], rows, (r) =>
+      `<tr><td>${r.id}</td><td>${r.enrollment_id}</td><td>${esc(r.reason || "—")}</td>
+       <td>${spdTag(SPD_RECALL_STATUS, r.status)}</td>
+       <td>${(r.contacts || []).length}</td><td>${esc(r.result || "—")}</td>
+       <td>${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</td>
+       <td><button class="btn secondary" data-recall="${r.id}">记录进展</button></td></tr>`);
+  };
+  const drawApplies = async (query) => {
+    const qs = new URLSearchParams(query && query.status !== undefined
+      ? { limit: "30", status: query.status } : { limit: "30", status: "pending" }).toString();
+    const rows = await api(`/api/spd/service-applies?${qs}`);
+    $("#spd-apply-list").innerHTML = table(
+      ["ID", "患者", "病种", "申请说明", "状态", "处理意见", "申请时间", "操作"], rows, (a) =>
+      `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.program_code)}</td>
+       <td>${esc(a.note || "—")}</td><td>${spdTag(SPD_APPLY_STATUS, a.status)}</td>
+       <td>${esc(a.handle_note || "—")}</td>
+       <td>${esc((a.created_at || "").replace("T", " ").slice(0, 16))}</td>
+       <td>${a.status === "pending"
+          ? `<button class="btn" data-apply-ok="${a.id}">受理</button>
+             <button class="btn danger" data-apply-no="${a.id}">拒绝</button>`
+          : "—"}</td></tr>`);
+  };
+  const drawGroupMembers = async (groupId) => {
+    const rows = await api(`/api/spd/groups/${groupId}/members`);
+    $("#spd-group-members").innerHTML =
+      `<p class="desc">分组 #${esc(groupId)} 的成员（${rows.length} 人）</p>`
+      + table(["患者", "病种", "风险", "操作"], rows, (m) =>
+        `<tr><td>${esc(m.patient_name || m.patient_id)}</td>
+         <td>${esc(m.program_code || "—")}</td><td>${spdTag(SPD_RISK, m.risk_level)}</td>
+         <td><button class="btn danger" data-gm-del="${groupId}:${m.patient_id}">移出</button></td></tr>`);
+  };
+
+  await Promise.all([drawGroups(), drawCandidates(), drawRecalls(), drawApplies()]);
+  $("#spd-cand-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    const q = Object.fromEntries(Object.entries(formJson(e.target)).filter(([, v]) => v));
+    try { await drawCandidates(q); } catch (err) { setMsg("#spd-cand-msg", err.message, false); }
+  };
+  $("#spd-apply-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawApplies(formJson(e.target)); }
+    catch (err) { setMsg("#spd-apply-msg", err.message, false); }
+  };
+
   const meta = await spdMeta();
   const groupEditor = spdRuleEditor($("#spd-group-rules"), meta, []);
   $("#spd-group-form").onsubmit = (e) => {

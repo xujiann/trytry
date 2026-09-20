@@ -1852,5 +1852,149 @@
         }
       ]
     }
+  },
+  "spdpatients": {
+    "fn": "renderSpdPatients",
+    "api": {
+      "/api/spd/catalog": {
+        "programs": [
+          {
+            "code": "hyp<img src=x onerror=alert(1)>",
+            "name": "高血压<img src=x onerror=alert(1)>",
+            "category": "chronic",
+            "stages": [],
+            "active": true
+          },
+          {
+            "code": "dm",
+            "name": "2型糖尿病<b>",
+            "category": "chronic",
+            "stages": [],
+            "active": true
+          }
+        ],
+        "teams": [
+          {
+            "id": 1,
+            "name": "城关团队<img src=x onerror=alert(1)>"
+          }
+        ],
+        "scales": [
+          {
+            "code": "SCR1",
+            "name": "筛查量表<img src=x onerror=alert(1)>",
+            "category": "screen"
+          }
+        ],
+        "centers": [],
+        "path_templates": []
+      },
+      "/api/spd/meta": {
+        "fields": [],
+        "operators": []
+      },
+      "/api/spd/screenings": [
+        {
+          "id": 1,
+          "patient_id": 7,
+          "patient_name": "张三<img src=x onerror=alert(1)>",
+          "program_code": "hyp<img src=x onerror=alert(1)>",
+          "source": "opportunistic",
+          "score": 12,
+          "risk_level": "high",
+          "result": "suspect",
+          "reviewed": false,
+          "review_result": ""
+        }
+      ],
+      "/api/spd/enrollments": [
+        {
+          "id": 11,
+          "patient_id": 7,
+          "patient_name": "张三<img src=x onerror=alert(1)>",
+          "program_code": "hyp<img src=x onerror=alert(1)>",
+          "stage": "II期<b>",
+          "risk_level": "high",
+          "org_id": 2,
+          "team_id": 1,
+          "archived": true,
+          "next_followup_at": "2026-10-01",
+          "status": "active"
+        }
+      ],
+      "/api/spd/lifecycle-events": [
+        {
+          "id": 21,
+          "enrollment_id": 11,
+          "patient_name": "张三<img src=x onerror=alert(1)>",
+          "event": "migrate",
+          "reason": "迁出<img src=x onerror=alert(1)>",
+          "occurred_at": "2026-09-01",
+          "confirmed": false
+        }
+      ],
+      "/api/spd/groups": [
+        {
+          "id": 31,
+          "name": "高危组<img src=x onerror=alert(1)>",
+          "scope": "team",
+          "dept": "心内科<img src=x onerror=alert(1)>",
+          "auto_rule": [
+            {
+              "field": "risk"
+            }
+          ],
+          "member_count": 3
+        }
+      ],
+      "/api/spd/candidates": [
+        {
+          "id": 41,
+          "patient_id": 7,
+          "patient_name": "张三<img src=x onerror=alert(1)>",
+          "program_code": "hyp<img src=x onerror=alert(1)>",
+          "risk_level": "high",
+          "status": "suspect",
+          "claimed_team_id": null,
+          "source": "筛查<img src=x onerror=alert(1)>"
+        },
+        {
+          "id": 42,
+          "patient_id": 8,
+          "patient_name": "李四<b>",
+          "program_code": "dm",
+          "risk_level": "mid",
+          "status": "target",
+          "claimed_team_id": 1,
+          "source": "数据比对"
+        }
+      ],
+      "/api/spd/recalls": [
+        {
+          "id": 51,
+          "enrollment_id": 11,
+          "reason": "连续失访<img src=x onerror=alert(1)>",
+          "status": "pending",
+          "result": "",
+          "contacts": [
+            {
+              "at": "2026-09-01"
+            }
+          ],
+          "created_at": "2026-09-01T10:00:00"
+        }
+      ],
+      "/api/spd/service-applies": [
+        {
+          "id": 61,
+          "patient_id": 7,
+          "program_code": "hyp<img src=x onerror=alert(1)>",
+          "note": "想加入管理<img src=x onerror=alert(1)>",
+          "status": "pending",
+          "handle_note": "",
+          "created_at": "2026-09-10T09:00:00"
+        }
+      ]
+    }
   }
 }
