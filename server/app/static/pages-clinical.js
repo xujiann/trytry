@@ -70,16 +70,26 @@ async function renderArchive() {
 
 async function renderUsers() {
   $("#page-desc").textContent = "账号开通、角色分配与变更留痕、系统参数配置（仅管理员）";
-  const [usersList, orgs, roleChanges, params] = await Promise.all([
-    api("/api/users"), api("/api/organizations"), api("/api/users/role-changes"), api("/api/mgmt/params")]);
+  const [usersList, orgs, roleChanges, params, builtinRoles, allRoles] = await Promise.all([
+    api("/api/users"), api("/api/organizations"), api("/api/users/role-changes"), api("/api/mgmt/params"),
+    api("/api/users/roles"), api("/api/rbac/roles")]);
   const orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name]));
+  // 角色名的真源在服务端（/api/users/roles 是内置角色的中文名），core.js 里那份
+  // ROLE_NAMES 只是离线兜底。**可分配的角色**另取 /api/rbac/roles——建号与调角色
+  // 后端都对 roles 表现查（users.py:_check_role_exists），下拉只列内置六个的话，
+  // 角色管理页刚建的自定义角色在这里根本选不到，建完没处用。
+  const assignable = allRoles.filter((r) => r.active);
+  const roleNames = { ...ROLE_NAMES, ...builtinRoles, ...Object.fromEntries(allRoles.map((r) => [r.key, r.name])) };
+  const roleLabel = (key) => esc(roleNames[key] || key);
+  const roleOptions = assignable.map((r) =>
+    `<option value="${esc(r.key)}">${esc(r.name)}${r.builtin ? "" : "（自定义）"}</option>`).join("");
   $("#page-body").innerHTML = `
     <div class="panel"><h3>开通账号</h3>
       <form class="inline" id="user-form">
         <input name="username" placeholder="用户名（≥3位）" required minlength="3">
         <input name="password" type="password" placeholder="初始密码（≥6位）" required minlength="6">
         <input name="full_name" placeholder="姓名">
-        <select name="role">${Object.entries(ROLE_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <select name="role">${roleOptions}</select>
         <select name="org_id"><option value="">不挂机构</option>${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
         <button>开通</button>
       </form><p class="msg" id="user-msg"></p></div>
@@ -89,16 +99,20 @@ async function renderUsers() {
         <input name="new_password" type="password" placeholder="新密码（≥6位）" required minlength="6">
         <button>修改</button>
       </form><p class="msg" id="pwd-msg"></p></div>
-    <div class="panel">${table(["ID", "用户名", "姓名", "角色", "所属机构", "操作"], usersList, (u) =>
+    <div class="panel">${table(["ID", "用户名", "姓名", "角色", "所属机构", "状态", "操作"], usersList, (u) =>
       `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td>${esc(u.full_name) || "—"}</td>
-       <td><span class="tag">${ROLE_NAMES[u.role] || esc(u.role)}</span></td>
+       <td><span class="tag">${roleLabel(u.role)}</span></td>
        <td>${u.org_id ? esc(orgNames[u.org_id] || u.org_id) : "—"}</td>
+       <td><span class="tag ${u.status === "disabled" ? "red" : "green"}">${u.status === "disabled" ? "已停用" : "在用"}</span></td>
        <td><button class="btn secondary" data-chrole="${u.id}">调角色</button>
+           <button class="btn ${u.status === "disabled" ? "secondary" : "danger"}" data-setstatus="${u.id}"
+                   data-to="${u.status === "disabled" ? "active" : "disabled"}">${u.status === "disabled" ? "启用" : "停用"}</button>
+           <button class="btn danger" data-pwdreset="${u.id}">重置口令</button>
            <button class="btn danger" data-totpreset="${u.id}">重置双因素</button></td></tr>`)}</div>
     <div class="panel"><h3>角色变更记录（留痕，变更即吊销旧令牌）</h3>${
       table(["用户ID", "原角色", "新角色", "操作人", "时间"], roleChanges, (r) =>
-        `<tr><td>${r.user_id}</td><td><span class="tag">${ROLE_NAMES[r.old_role] || esc(r.old_role)}</span></td>
-         <td><span class="tag green">${ROLE_NAMES[r.new_role] || esc(r.new_role)}</span></td>
+        `<tr><td>${r.user_id}</td><td><span class="tag">${roleLabel(r.old_role)}</span></td>
+         <td><span class="tag green">${roleLabel(r.new_role)}</span></td>
          <td>${r.changed_by}</td><td>${esc(r.at.slice(0, 16).replace("T", " "))}</td></tr>`)}</div>
     <div class="panel"><h3>系统参数配置（键值集中管理）</h3>
       <form class="inline" id="param-form">
@@ -132,7 +146,27 @@ async function renderUsers() {
   };
   $("#param-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/params", formJson(e.target), "#param-msg"); };
   $("#page-body").onclick = async (e) => {
-    const { chrole, totpreset } = e.target.dataset;
+    const { chrole, totpreset, setstatus, to, pwdreset } = e.target.dataset;
+    if (setstatus) {
+      // 停用即时生效并吊销既有令牌（deps 每请求校验 status）——本人正在用的会话
+      // 下一次请求就断，这不是"下次登录才生效"，先说清楚再问。
+      const verb = to === "disabled" ? "停用" : "启用";
+      if (!confirm(`确认${verb}用户 #${setstatus}？${to === "disabled"
+        ? "停用即时生效，该账号现有会话下一次请求即被拒。" : "启用后本人需重新登录（旧令牌不复活）。"}`)) return;
+      try {
+        await api(`/api/users/${setstatus}/status`, { method: "PATCH", body: JSON.stringify({ status: to }) });
+        route();
+      } catch (err) { setMsg("#user-msg", err.message, false); }
+      return;
+    }
+    if (pwdreset) {
+      const pwd = prompt("临时口令（≥6位）。重置后该账号必须先改密才能做别的事"); if (!pwd) return;
+      try {
+        const r = await api(`/api/users/${pwdreset}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: pwd }) });
+        setMsg("#user-msg", `已重置${r.must_change_password ? "，该账号下次登录须先改密" : ""}；既有令牌已吊销`, true);
+      } catch (err) { setMsg("#user-msg", err.message, false); }
+      return;
+    }
     if (totpreset) {
       // 换手机/令牌丢失时的解困通道：清空密钥，该用户下次登录按"未开通"处理，
       // 再自己去「账号安全」重新绑定。清空双因素是降安全等级的动作，故先确认。
@@ -143,8 +177,8 @@ async function renderUsers() {
     }
     const id = chrole;
     if (!id) return;
-    const keys = Object.keys(ROLE_NAMES);
-    const pick = prompt(`新角色（${keys.map((k, i) => `${i + 1}=${ROLE_NAMES[k]}`).join("，")}）输入序号`);
+    const keys = assignable.map((r) => r.key);
+    const pick = prompt(`新角色（${assignable.map((r, i) => `${i + 1}=${r.name}`).join("，")}）输入序号`);
     const role = keys[Number(pick) - 1]; if (!role) return;
     try {
       await api(`/api/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) });
@@ -162,12 +196,78 @@ async function renderAudit() {
        <td><span class="tag">${esc(l.method)}</span></td><td>${esc(l.path)}</td>
        <td><span class="tag ${l.status_code < 400 ? "green" : "red"}">${l.status_code}</span></td></tr>`);
   };
+  const drawLogins = async (params = "") => {
+    const logs = await api(`/api/audit/logins?limit=100${params}`);
+    $("#login-table").innerHTML = table(["时间", "用户名", "来源IP", "通道", "结果", "失败原因"], logs, (l) =>
+      `<tr><td>${esc(l.created_at.replace("T", " ").slice(0, 19))}</td><td>${esc(l.username)}</td>
+       <td>${esc(l.ip) || "—"}</td><td><span class="tag">${esc(l.channel)}</span></td>
+       <td><span class="tag ${l.success ? "green" : "red"}">${l.success ? "成功" : "失败"}</span></td>
+       <td>${esc(l.fail_reason) || "—"}</td></tr>`);
+  };
   $("#page-body").innerHTML = `
     <div class="panel">
       <form class="inline" id="audit-search"><input name="username" placeholder="按用户名过滤"><button>查询</button></form>
-      <div id="audit-table"></div></div>`;
+      <div id="audit-table"></div></div>
+    <div class="panel"><h3>审计链完整性校验</h3>
+      <p style="margin-bottom:8px">哈希链能发现历史记录被改过，<b>拦不住</b>有库权限且知道平台密钥的人重算整条链——
+        真正的不可抵赖靠外部存证或只追加存储。校验结果里的 caliber 字段就是这句话，别把它当"审计不可篡改"的证明。</p>
+      <form class="inline" id="verify-form">
+        <input name="start_id" type="number" placeholder="起始ID（默认0=链首）" style="min-width:150px">
+        <input name="anchor_id" type="number" placeholder="锚点ID（可空）" style="min-width:130px">
+        <input name="anchor_hash" placeholder="锚点 entry_hash（可空，与锚点ID成对）" style="min-width:280px">
+        <button>校验</button></form>
+      <p class="msg" id="audit-msg"></p><div id="verify-result"></div></div>
+    <div class="panel"><h3>归档导出（NDJSON，按 id 游标增量）</h3>
+      <form class="inline" id="export-form">
+        <input name="since_id" type="number" value="0" placeholder="上次导到哪个ID" style="min-width:160px">
+        <input name="until" placeholder="导出该日之前 YYYY-MM-DD（可空）" pattern="\\d{4}-\\d{2}-\\d{2}" style="min-width:230px">
+        <button>导出</button></form>
+      <p style="margin-top:6px">首行是 meta 行（含本次导出的起止 id），归档端据此校验连续性；
+        下次从 meta 里的末尾 id 续导即可。</p></div>
+    <div class="panel"><h3>登录留痕（等保 E1）</h3>
+      <form class="inline" id="login-search">
+        <input name="username" placeholder="按用户名过滤">
+        <select name="success"><option value="">全部</option><option value="false">只看失败</option><option value="true">只看成功</option></select>
+        <button>查询</button></form>
+      <div id="login-table"></div></div>`;
   await draw();
+  await drawLogins();
   $("#audit-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("username")); };
+  $("#login-search").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const u = f.get("username"), ok = f.get("success");
+    await drawLogins(`${u ? `&username=${encodeURIComponent(u)}` : ""}${ok ? `&success=${ok}` : ""}`);
+  };
+  $("#verify-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams();
+    if (f.get("start_id")) q.set("start_id", f.get("start_id"));
+    // 锚点两个参数后端要求成对，缺一报 422——界面先拦一道，免得人对着 422 猜哪个没填
+    const aid = f.get("anchor_id"), ah = f.get("anchor_hash");
+    if (!!aid !== !!ah) return setMsg("#audit-msg", "锚点ID与锚点哈希须成对填写（只填一个无法对账）", false);
+    if (aid) { q.set("anchor_id", aid); q.set("anchor_hash", ah); }
+    try {
+      const r = await api(`/api/audit/verify?${q.toString()}`);
+      $("#verify-result").innerHTML = `
+        <p>已校验 ${r.checked} 条（${r.from_id ?? "—"} → ${r.to_id ?? "—"}），
+          未入链的历史记录 ${r.legacy_unchained} 条：
+          <span class="tag ${r.valid ? "green" : "red"}">${r.valid ? "链自洽" : "链已断"}</span>
+          ${r.broken_at ? `<span class="tag red">断点 #${r.broken_at}</span>` : ""}
+          ${r.partial_segment ? '<span class="tag orange">抽查片段，非全量结论</span>' : ""}
+          ${r.anchor_match === undefined ? "" : `<span class="tag ${r.anchor_match ? "green" : "red"}">锚点${r.anchor_match ? "一致" : "对不上（疑似末尾截断）"}</span>`}</p>
+        <p>${esc(r.reason) || ""}</p><p style="color:#888">${esc(r.caliber)}</p>`;
+      setMsg("#audit-msg", "校验完成", true);
+    } catch (err) { setMsg("#audit-msg", err.message, false); }
+  };
+  $("#export-form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams({ since_id: f.get("since_id") || "0" });
+    if (f.get("until")) q.set("until", f.get("until"));
+    downloadCsv(`/api/audit/export?${q.toString()}`, `audit-${f.get("since_id") || 0}.ndjson`, "#audit-msg");
+  };
 }
 
 async function renderAccessLogs() {
@@ -576,7 +676,9 @@ async function renderEducation() {
       </form><p class="msg" id="edu-msg"></p></div>
     <div class="panel"><h3>课程列表</h3>${table(["ID", "课程", "形式", "类别", "讲者", "操作"], courses, (c) =>
       `<tr><td>${c.id}</td><td>${esc(c.title)}</td><td>${c.course_type === "live" ? "直播" : "点播"}</td><td>${esc(c.category)}</td><td>${esc(c.speaker)}</td>
-       <td><button class="btn secondary" data-exam="${c.id}">提交考核</button></td></tr>`)}</div>
+       <td><button class="btn secondary" data-exam="${c.id}">提交考核</button>
+           <button class="btn secondary" data-custats="${c.id}">考核统计</button></td></tr>`)}</div>
+    <div id="edu-stats"></div>
     <div class="panel"><h3>我的学习记录</h3>${table(["课程", "成绩", "结果"], mine, (r) =>
       `<tr><td>${esc(r.title)}</td><td>${r.score}</td><td><span class="tag ${r.passed ? "green" : "red"}">${r.passed ? "合格" : "未合格"}</span></td></tr>`)}</div>
     <div class="panel"><h3>直播管理（申请 → 管理层排期审核 → 结束；音视频通道为对接项）</h3>
@@ -585,28 +687,67 @@ async function renderEducation() {
         <input name="speaker" placeholder="主讲人">
         <input name="planned_at" placeholder="计划时间（如 2026-09-01 19:00）">
         <button>申请直播</button></form>
-      ${table(["ID", "主题", "主讲", "计划时间", "状态", "审核意见", "操作"], lives, (s) => {
+      ${table(["ID", "主题", "主讲", "计划时间", "状态", "审核意见", "回放", "操作"], lives, (s) => {
+        // 回放与反馈都只在「已结束」出现：后端对排期中的直播一律 409
+        // （挂上回放学员点进去是空的，比没有回放更糟），界面别给出会被拒的按钮。
+        const done = s.status === "finished";
         const actions = s.status === "pending" && ["director", "admin"].includes(role)
           ? `<button class="btn secondary" data-liveok="${s.id}">排期</button>
              <button class="btn danger" data-liveno="${s.id}">驳回</button>`
           : s.status === "approved" && ["director", "operator", "admin"].includes(role)
-          ? `<button class="btn secondary" data-livefin="${s.id}">结束</button>` : "—";
+          ? `<button class="btn secondary" data-livefin="${s.id}">结束</button>`
+          : done
+          ? `${["director", "operator", "admin"].includes(role)
+               ? `<button class="btn secondary" data-liverec="${s.id}">挂回放</button>` : ""}
+             <button class="btn secondary" data-livefb="${s.id}">我要评价</button>
+             <button class="btn secondary" data-livefblist="${s.id}">看评价</button>` : "—";
+        const rec = s.recording_url
+          ? `<a href="${esc(s.recording_url)}" target="_blank" rel="noopener">回放</a>` : "—";
         return `<tr><td>${s.id}</td><td>${esc(s.title)}</td><td>${esc(s.speaker) || "—"}</td><td>${esc(s.planned_at) || "—"}</td>
-          <td>${statusTag(LS, s.status)}</td><td>${esc(s.review_comment) || "—"}</td><td>${actions}</td></tr>`;
+          <td>${statusTag(LS, s.status)}</td><td>${esc(s.review_comment) || "—"}</td><td>${rec}</td><td>${actions}</td></tr>`;
       })}</div>`;
   $("#course-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/courses", formJson(e.target), "#edu-msg"); };
   $("#live-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/education/live-sessions", formJson(e.target), "#edu-msg"); };
-  $("#page-body").onclick = (e) => {
+  $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     if (d.liveok) return postAction(`/api/education/live-sessions/${d.liveok}/review?approve=true&comment=${encodeURIComponent(prompt("审核意见") || "同意排期")}`, null, "#edu-msg");
     if (d.liveno) return postAction(`/api/education/live-sessions/${d.liveno}/review?approve=false&comment=${encodeURIComponent(prompt("驳回理由") || "")}`, null, "#edu-msg");
     if (d.livefin) return postAction(`/api/education/live-sessions/${d.livefin}/finish`, null, "#edu-msg");
+    if (d.liverec) {
+      const url = prompt("回放地址（http/https 链接）"); if (!url) return;
+      return postAction(`/api/education/live-sessions/${d.liverec}/recording`, { recording_url: url }, "#edu-msg");
+    }
+    if (d.livefb) {
+      const rating = prompt("满意度评分（1-5）"); if (rating === null) return;
+      // 一人一场一条，后端按覆盖处理——界面照直说，免得有人以为自己投了两票。
+      return postAction(`/api/education/live-sessions/${d.livefb}/feedback`,
+        { rating: Number(rating), comment: prompt("评价（可空）") || "" }, "#edu-msg");
+    }
+    if (d.livefblist) {
+      try {
+        const fb = await api(`/api/education/live-sessions/${d.livefblist}/feedback`);
+        $("#edu-stats").innerHTML = `<div class="panel"><h3>直播 ${esc(d.livefblist)} 评价（${fb.count} 条，均分 ${fb.avg_rating === null ? "暂无" : fb.avg_rating}）</h3>` +
+          table(["用户ID", "评分", "评价"], fb.feedbacks, (f) =>
+            `<tr><td>${f.user_id}</td><td><span class="tag">${f.rating}</span></td><td>${esc(f.comment) || "—"}</td></tr>`) + "</div>";
+      } catch (err) { setMsg("#edu-msg", err.message, false); }
+      return;
+    }
+    if (d.custats) {
+      try {
+        const st = await api(`/api/education/courses/${d.custats}/stats`);
+        $("#edu-stats").innerHTML = `<div class="panel"><h3>课程 ${st.course_id} 考核统计</h3>
+          <p>参训 ${st.trainees} 人，合格 ${st.passed} 人，合格率
+          <span class="tag ${st.pass_rate_pct >= 60 ? "green" : "red"}">${st.pass_rate_pct}%</span></p></div>`;
+      } catch (err) { setMsg("#edu-msg", err.message, false); }
+      return;
+    }
     const id = d.exam;
     if (!id) return;
     const score = prompt("考核得分（0-100）"); if (score === null) return;
     postAction(`/api/education/courses/${id}/exam`, { score: Number(score) }, "#edu-msg");
   };
   await drawEduGaps();  // 块4⑳㉑ 课件资源与适宜技术实训
+  await drawHealthArticles();  // 块4⑨⑩ 健康宣教编制与发布
 }
 
 async function renderEldercare() {

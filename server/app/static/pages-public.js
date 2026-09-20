@@ -663,6 +663,42 @@ async function drawCssdCosts() {
 /* ⑳ 课件资源 + ㉑ 适宜技术实训（挂远程医学教育页） */
 const MATERIAL_TYPES = { slide: "课件", video: "视频", doc: "文档", link: "外链" };
 
+/* ⑨⑩ 健康宣教：编制 → 发布 →（居民端 /m 免登录可读）。挂继续教育页 */
+const ARTICLE_CATEGORIES = { general: "综合", chronic: "慢病防治", maternal: "妇幼保健", tcm: "中医养生", infectious: "传染病防控" };
+
+async function drawHealthArticles() {
+  // 这块长期缺的不是某个按钮，是整条编制侧入口：居民端 H5 一直在读
+  // /api/portal/health-articles，而发布侧一个界面都没有——真环境里那个
+  // 宣教板块只能永远空着，除非有人手写 curl。
+  let articles = [];
+  try { articles = await api("/api/education/articles"); }
+  catch { return; }  // 无宣教编制权限的角色不显示这块，不是错误
+  const holder = appendSection(`
+    <div class="panel"><h3>⑨⑩ 健康宣教（发布后居民端 /m 免登录可读）</h3>
+      <form class="inline" id="ha-form">
+        <input name="title" placeholder="标题" required style="min-width:220px">
+        <select name="category">${Object.entries(ARTICLE_CATEGORIES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="content" placeholder="正文" style="min-width:280px">
+        <button>存稿</button></form>
+      <p class="msg" id="ha-msg"></p>
+      ${table(["ID", "标题", "分类", "状态", "正文摘要", "操作"], articles, (a) =>
+        `<tr><td>${a.id}</td><td>${esc(a.title)}</td><td>${esc(ARTICLE_CATEGORIES[a.category] || a.category)}</td>
+         <td><span class="tag ${a.status === "published" ? "green" : "orange"}">${a.status === "published" ? "已发布" : "草稿"}</span></td>
+         <td>${esc((a.content || "").slice(0, 40))}</td>
+         <td>${a.status === "published" ? "—" : `<button class="btn secondary" data-hapub="${a.id}">发布</button>`}</td></tr>`)}</div>`);
+  holder.querySelector("#ha-form").onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/education/articles", formJson(e.target), "#ha-msg");
+  };
+  holder.onclick = (e) => {
+    const { hapub } = e.target.dataset;
+    if (!hapub) return;
+    // 发布是对不特定公众的一次投放，撤不回来（居民端已经能读到了）——问一次。
+    if (!confirm(`发布文章 ${hapub}？发布后居民端免登录即可读到。`)) return;
+    postAction(`/api/education/articles/${hapub}/publish`, null, "#ha-msg");
+  };
+}
+
 async function drawEduGaps() {
   const [mstats, plans] = await Promise.all([
     api("/api/education/material-stats"), api("/api/education/training-plans")]);

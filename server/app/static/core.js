@@ -417,6 +417,10 @@ async function renderContracts() {
   await drawHomeVisits();  // 块4⑨ 上门服务调度
 }
 
+// 与后端 appointments.BLACKLIST_DOMAINS 同口径（路径保留 /appointments/blacklist
+// 不改——已有对接方在用，为泛化去破坏外部契约不值当）
+const BLACKLIST_DOMAINS = { appointment: "预约爽约", shortage: "缺药登记后不取药" };
+
 async function renderAppointments() {
   $("#page-desc").textContent = "机构发布分时段号源，一站式预约挂号/检查/检验";
   const [slots, appointments] = await Promise.all([api("/api/appointments/slots"), api("/api/appointments")]);
@@ -433,12 +437,46 @@ async function renderAppointments() {
         <input name="capacity" type="number" value="5" min="1" style="min-width:70px">
         <button>发布</button>
       </form>
+      <h3 style="margin-top:14px">批量排班（模板 × 日期区间）</h3>
+      <form class="inline" id="batch-form">
+        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="resource_type">${Object.entries(RT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="resource_name" placeholder="资源名称" required>
+        <input name="employee_id" type="number" placeholder="医师ID（可空）" style="min-width:130px">
+        <input name="slot_time" placeholder="时段（如09:00-10:00）">
+        <input name="capacity" type="number" value="5" min="1" style="min-width:70px">
+        <input name="date_from" placeholder="起 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <input name="date_to" placeholder="止 YYYY-MM-DD" required pattern="\\d{4}-\\d{2}-\\d{2}">
+        <input name="skip_dates" placeholder="跳过日期，逗号分隔（节假日/停诊）" style="min-width:230px">
+        <label><input type="checkbox" name="skip_weekends"> 跳周末</label>
+        <button>批量生成</button>
+      </form>
       <h3 style="margin-top:14px">预约</h3>
       <form class="inline" id="book-form">
         <input name="slot_id" type="number" placeholder="号源ID" required>
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <button>预约</button>
       </form><p class="msg" id="apt-msg"></p></div>
+    <div class="panel"><h3>便捷寻医</h3>
+      <p style="margin-bottom:8px">按姓名/科室/职称找医师并带出可约号源。<b>跨机构不设限</b>——
+        在卫生院帮患者约县医院的号正是它的用途；没号的医师也一并列出并标注，
+        只给有号的会让居民以为这位医师不存在。</p>
+      <form class="inline" id="doc-form">
+        <input name="keyword" placeholder="姓名/科室/职称">
+        <input name="org_id" type="number" placeholder="限定机构ID（可空）" style="min-width:160px">
+        <input name="from_date" placeholder="起始日期 YYYY-MM-DD（可空）" style="min-width:200px">
+        <button>查找</button></form>
+      <div id="doc-list"></div></div>
+    <div class="panel"><h3>服务黑名单</h3>
+      <form class="inline" id="bl-form">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <select name="domain">${Object.entries(BLACKLIST_DOMAINS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="reason" placeholder="事由" style="min-width:200px">
+        <button>加入</button></form>
+      <form class="inline" id="bl-query">
+        <select name="domain"><option value="">全部业务域</option>${Object.entries(BLACKLIST_DOMAINS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <button>刷新</button></form>
+      <div id="bl-list"></div></div>
     <div class="panel"><h3>号源</h3>${table(["ID", "机构", "类型", "资源", "日期/时段", "已约/容量"], slots, (s) =>
       `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${RT[s.resource_type]}</td><td>${esc(s.resource_name)}</td>
        <td>${esc(s.slot_date)} ${esc(s.slot_time)}</td>
@@ -470,11 +508,77 @@ async function renderAppointments() {
       route();
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
+  $("#batch-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const tpl = {
+      resource_type: f.get("resource_type"), resource_name: f.get("resource_name"),
+      slot_time: f.get("slot_time") || "", capacity: Number(f.get("capacity")),
+      employee_id: f.get("employee_id") ? Number(f.get("employee_id")) : null,
+    };
+    try {
+      const r = await api("/api/appointments/slots/batch", { method: "POST", body: JSON.stringify({
+        org_id: Number(f.get("org_id")), templates: [tpl],
+        date_from: f.get("date_from"), date_to: f.get("date_to"),
+        skip_dates: (f.get("skip_dates") || "").split(",").map((d) => d.trim()).filter(Boolean),
+        skip_weekends: f.get("skip_weekends") === "on" }) });
+      // 后端幂等：已有号源的日期跳过而不是报错（开办期常要补生成某几天），
+      // 所以 skipped 不是失败数——照实说明，免得有人以为生成漏了。
+      setMsg("#apt-msg", `已生成 ${r.created} 个号源，跳过 ${r.skipped} 个（已存在或在跳过日期内）`, true);
+      route();
+    } catch (err) { setMsg("#apt-msg", err.message, false); }
+  };
+  const drawDoctors = async (qs) => {
+    const docs = await api(`/api/appointments/doctors${qs}`);
+    $("#doc-list").innerHTML = table(["医师", "职称", "科室/岗位", "所属机构", "可约号", "最近号源"], docs, (d) =>
+      `<tr><td>${esc(d.name)}</td><td>${esc(d.title) || "—"}</td><td>${esc(d.position) || "—"}</td>
+       <td>${esc(d.org_name) || d.org_id}</td>
+       <td><span class="tag ${d.bookable ? "green" : "red"}">${d.bookable ? `${d.available_slots} 个` : "暂无号"}</span></td>
+       <td>${d.next_slots.map((s) => `${esc(s.slot_date)} ${esc(s.slot_time)}（${esc(s.resource_name)}，余${s.remaining}，号源#${s.slot_id}）`).join("<br>") || "—"}</td></tr>`);
+  };
+  $("#doc-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams();
+    for (const k of ["keyword", "org_id", "from_date"]) if (f.get(k)) q.set(k, f.get(k));
+    try { await drawDoctors(q.toString() ? `?${q}` : ""); }
+    catch (err) { setMsg("#apt-msg", err.message, false); }
+  };
+  const drawBlacklist = async (domain = "") => {
+    const rows = await api(`/api/appointments/blacklist${domain ? `?domain=${domain}` : ""}`);
+    $("#bl-list").innerHTML = table(["ID", "业务域", "患者ID", "事由", "操作"], rows, (b) =>
+      `<tr><td>${b.id}</td><td><span class="tag">${esc(b.domain_name)}</span></td><td>${b.patient_id}</td>
+       <td>${esc(b.reason) || "—"}</td>
+       <td><button class="btn secondary" data-blrm="${b.patient_id}" data-bldomain="${esc(b.domain)}">移出</button></td></tr>`);
+  };
+  $("#bl-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/appointments/blacklist", { method: "POST", body: JSON.stringify({
+        patient_id: Number(f.get("patient_id")), domain: f.get("domain"), reason: f.get("reason") || "" }) });
+      setMsg("#apt-msg", "已加入黑名单", true);
+      await drawBlacklist();
+    } catch (err) { setMsg("#apt-msg", err.message, false); }
+  };
+  $("#bl-query").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawBlacklist(new FormData(e.target).get("domain")); }
+    catch (err) { setMsg("#apt-msg", err.message, false); }
+  };
+  await drawBlacklist();
   $("#page-body").onclick = async (e) => {
-    const { cancel, fulfill } = e.target.dataset;
+    const { cancel, fulfill, blrm, bldomain } = e.target.dataset;
     try {
       if (cancel) { await api(`/api/appointments/${cancel}/cancel`, { method: "POST" }); route(); }
       if (fulfill) { await api(`/api/appointments/${fulfill}/fulfill`, { method: "POST" }); route(); }
+      if (blrm) {
+        // 删除按 patient_id + domain 定位，两个都得带：同一个患者可能同时在
+        // 「预约爽约」和「缺药不取」两个域里，漏掉 domain 会删错那条。
+        await api(`/api/appointments/blacklist/${blrm}?domain=${bldomain}`, { method: "DELETE" });
+        setMsg("#apt-msg", "已移出黑名单", true);
+        await drawBlacklist();
+      }
     } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
 }
@@ -875,6 +979,10 @@ async function renderDicts() {
   };
 }
 
+// 样本物流：与后端 exams._SAMPLE_FLOW 同口径（""→采样→冷链转运→中心核收）
+const SAMPLE_FLOW = { "": "collected", collected: "in_transit", in_transit: "received" };
+const SAMPLE_STATUS = { collected: "已采样", in_transit: "冷链转运中", received: "中心已核收" };
+
 async function renderExams() {
   $("#page-desc").textContent = "影像/心电/检验/病理：基层检查、上级诊断、结果互认、危急值管理";
   const [requests, critical] = await Promise.all([api("/api/exams"), api("/api/exams/critical")]);
@@ -893,15 +1001,44 @@ async function renderExams() {
       table(["报告ID", "申请单", "结论", "操作"], critical, (r) =>
         `<tr><td>${r.id}</td><td>${r.request_id}</td><td><span class="tag red">${esc(r.conclusion)}</span></td>
          <td><button class="btn secondary" data-printreport="${r.id}">打印报告</button></td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>申请单</h3>${table(["ID", "患者", "中心", "项目", "状态", "操作"], requests, (r) => {
+    <div class="panel"><h3>申请单</h3>${table(["ID", "患者", "中心", "项目", "状态", "样本", "操作"], requests, (r) => {
       let actions = r.status === "pending"
         ? `<button class="btn secondary" data-claim="${r.id}">领取</button>`
         : r.status === "diagnosing"
         ? `<button class="btn secondary" data-report="${r.id}">出报告</button>` : "";
+      // 样本物流只在检验类申请上有环节（后端对非 lab 一律 422），且出报告后不再推进
+      const nextSample = SAMPLE_FLOW[r.sample_status || ""];
+      if (r.center_type === "lab" && nextSample && ["pending", "diagnosing"].includes(r.status)) {
+        actions += ` <button class="btn secondary" data-sample="${r.id}">${SAMPLE_STATUS[nextSample]}</button>`;
+      }
       actions += ` <button class="btn secondary" data-printreq="${r.id}">打印申请单</button>`;
       return `<tr><td>${r.id}</td><td>${r.patient_id}</td><td>${CENTER_NAMES[r.center_type]}</td>
-        <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td><td>${actions}</td></tr>`;
+        <td>${esc(r.item_name)}</td><td>${statusTag(EXAM_STATUS, r.status)}</td>
+        <td>${r.center_type === "lab" ? (SAMPLE_STATUS[r.sample_status] || "未采样") : "—"}</td>
+        <td>${actions}</td></tr>`;
     })}</div>
+    <div class="panel"><h3>报告修订（限医师，前值留痕）</h3>
+      <p style="margin-bottom:8px">修订会把<b>前结论/前所见/前危急标记</b>写进修订历史；
+        危急值联动：改后仍为危急值则闭环状态复位为"已通知"须重新确认，解除危急标记则闭环状态清空——两种变化都留痕。</p>
+      <form class="inline" id="amend-form">
+        <input name="report_id" type="number" placeholder="报告ID" required style="min-width:110px">
+        <input name="conclusion" placeholder="新结论" required style="min-width:220px">
+        <input name="finding" placeholder="新所见（可空）" style="min-width:200px">
+        <select name="critical"><option value="">危急标记不变</option><option value="true">置为危急值</option><option value="false">解除危急标记</option></select>
+        <input name="reason" placeholder="修订理由" style="min-width:180px">
+        <button>提交修订</button></form>
+      <form class="inline" id="rev-query"><input name="report_id" type="number" placeholder="报告ID" required><button>查修订历史</button></form>
+      <p class="msg" id="amend-msg"></p><div id="rev-list"></div></div>
+    <div class="panel"><h3>报告模板</h3>
+      <form class="inline" id="tpl-form">
+        <select name="center_type">${Object.entries(CENTER_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="name" placeholder="模板名" required>
+        <input name="content" placeholder="模板正文" style="min-width:300px">
+        <button>新建模板</button></form>
+      <form class="inline" id="tpl-query">
+        <select name="center_type"><option value="">全部中心</option>${Object.entries(CENTER_NAMES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <button>刷新</button></form>
+      <p class="msg" id="tpl-msg"></p><div id="tpl-list"></div></div>
     <div class="panel"><h3>报告打印</h3>
       <form class="inline" id="exam-print-form">
         <input name="report_id" type="number" placeholder="报告ID" required>
@@ -955,12 +1092,67 @@ async function renderExams() {
     try { await openPrintPage(`/api/print/exam-reports/${new FormData(e.target).get("report_id")}`); }
     catch (err) { setMsg("#exam-print-msg", err.message, false); }
   };
+  const drawTemplates = async (centerType = "") => {
+    const list = await api(`/api/exams/templates${centerType ? `?center_type=${centerType}` : ""}`);
+    $("#tpl-list").innerHTML = table(["ID", "中心", "模板名", "正文"], list, (t) =>
+      `<tr><td>${t.id}</td><td>${CENTER_NAMES[t.center_type] || esc(t.center_type)}</td>
+       <td>${esc(t.name)}</td><td>${esc(t.content) || "—"}</td></tr>`);
+  };
+  $("#tpl-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api("/api/exams/templates", { method: "POST", body: JSON.stringify({
+        center_type: f.get("center_type"), name: f.get("name"), content: f.get("content") || "" }) });
+      setMsg("#tpl-msg", "模板已创建", true);
+      await drawTemplates();
+    } catch (err) { setMsg("#tpl-msg", err.message, false); }
+  };
+  $("#tpl-query").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawTemplates(new FormData(e.target).get("center_type")); }
+    catch (err) { setMsg("#tpl-msg", err.message, false); }
+  };
+  await drawTemplates();
+  const drawRevisions = async (reportId) => {
+    const revs = await api(`/api/exams/reports/${reportId}/revisions`);
+    $("#rev-list").innerHTML = `<h4>报告 ${esc(String(reportId))} 修订历史（${revs.length} 次）</h4>` +
+      table(["时间", "修订人", "前结论", "前所见", "前危急", "理由"], revs, (r) =>
+        `<tr><td>${esc(r.at.replace("T", " ").slice(0, 19))}</td><td>${r.revised_by}</td>
+         <td>${esc(r.prev_conclusion) || "—"}</td><td>${esc(r.prev_finding) || "—"}</td>
+         <td>${r.prev_critical ? '<span class="tag red">是</span>' : "否"}</td>
+         <td>${esc(r.reason) || "—"}</td></tr>`);
+  };
+  $("#amend-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const body = { conclusion: f.get("conclusion"), reason: f.get("reason") || "" };
+    if (f.get("finding")) body.finding = f.get("finding");
+    // 三态：不选＝不动危急标记（null），选了才带值——传 false 与不传是两回事，
+    // 前者会解除危急标记并清空闭环状态，后者保持原样。
+    if (f.get("critical")) body.critical = f.get("critical") === "true";
+    try {
+      const r = await api(`/api/exams/reports/${f.get("report_id")}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMsg("#amend-msg", `已修订：${r.critical ? `危急值，闭环状态 ${r.critical_status || "待确认"}` : "非危急值"}`, true);
+      await drawRevisions(f.get("report_id"));
+    } catch (err) { setMsg("#amend-msg", err.message, false); }
+  };
+  $("#rev-query").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawRevisions(new FormData(e.target).get("report_id")); }
+    catch (err) { setMsg("#amend-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const claim = e.target.dataset.claim, report = e.target.dataset.report;
-    const { printreq, printreport } = e.target.dataset;
+    const { printreq, printreport, sample } = e.target.dataset;
     try {
       if (printreq) return await openPrintPage(`/api/print/exam-requests/${printreq}`);
       if (printreport) return await openPrintPage(`/api/print/exam-reports/${printreport}`);
+      if (sample) {
+        const r = await api(`/api/exams/${sample}/sample/advance`, { method: "POST" });
+        setMsg("#exam-msg", `样本状态：${esc(SAMPLE_STATUS[r.sample_status] || r.sample_status)}`, true);
+        return route();
+      }
       if (claim) { await api(`/api/exams/${claim}/claim`, { method: "POST" }); route(); }
       if (report) {
         const conclusion = prompt("诊断结论");

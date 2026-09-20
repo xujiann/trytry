@@ -64,10 +64,50 @@ def test_expert_blacklist_survey_triage(client, h, base):
     assert triage["emergency_hint"] is True
 
 
+def test_health_articles_editorial_list(client, h):
+    """编制侧清单要能看见草稿——居民端那条只出 published，看不见草稿就没法发布。
+
+    并且**不能**靠给居民端那条加参数来实现：它免登录，多一个 status 参数
+    就等于把未发布的稿子挂到公网上。
+    """
+    draft = client.post(
+        "/api/education/articles",
+        json={"title": "流感季防护", "category": "infectious", "content": "戴口罩"},
+        headers=h,
+    ).json()
+    rows = client.get("/api/education/articles", headers=h).json()
+    mine = [r for r in rows if r["id"] == draft["id"]]
+    assert mine and mine[0]["status"] == "draft", "草稿在编制侧清单里看不见"
+    assert mine[0]["title"] == "流感季防护"
+
+    # 免登录那条仍然只出已发布的
+    assert all(a["id"] != draft["id"] for a in client.get("/api/portal/health-articles").json())
+
+    client.post(f"/api/education/articles/{draft['id']}/publish", headers=h)
+    published = client.get("/api/education/articles?status=published", headers=h).json()
+    assert any(r["id"] == draft["id"] for r in published)
+    assert all(r["status"] == "published" for r in published)
+
+    # 无宣教编制权限的角色拿不到（含草稿的清单不是谁都能看）
+    client.post(
+        "/api/users",
+        json={"username": "edu_outsider", "password": "pw123456", "role": "pharmacist"},
+        headers=h,
+    )
+    tok = client.post(
+        "/api/auth/login", json={"username": "edu_outsider", "password": "pw123456"}
+    ).json()["access_token"]
+    denied = client.get("/api/education/articles", headers={"Authorization": f"Bearer {tok}"})
+    assert denied.status_code == 403
+
+
 def test_health_articles_portal(client, h):
     a = client.post("/api/education/articles", json={"title": "高血压饮食指南", "category": "chronic", "content": "限盐限油"}, headers=h).json()
-    # 未发布不可见
-    assert client.get("/api/portal/health-articles").json() == []
+    # 未发布不可见。判的是"这一篇不在里面"而不是"整个列表是空的"：
+    # 后者的前提是同模块里在它之前没人发布过任何文章，靠的是测试执行顺序——
+    # 这个仓库装着 pytest-randomly，换个顺序它就红，而红的原因与它要守的
+    # 「草稿不外露」毫无关系。
+    assert all(x["id"] != a["id"] for x in client.get("/api/portal/health-articles").json())
     client.post(f"/api/education/articles/{a['id']}/publish", headers=h)
     articles = client.get("/api/portal/health-articles?category=chronic").json()
     assert articles[0]["title"] == "高血压饮食指南"

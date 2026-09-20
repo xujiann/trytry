@@ -632,6 +632,48 @@ def create_article(body: ArticleCreate, db: Session = Depends(get_db)):
     return {"id": a.id, "status": a.status}
 
 
+class ArticleListOut(BaseModel):
+    """编制侧的文章清单——比居民端那份多一个 `status`。
+
+    居民端 `/api/portal/health-articles` 只出 `published`，**不能**给它加个
+    `status=draft` 参数复用：那条接口免登录，多一个参数就等于把未发布的稿子
+    挂到公网上。编制侧是另一条鉴权接口，不是同一条接口的另一种用法。
+    """
+
+    id: int
+    title: str
+    category: str
+    status: str
+    content: str
+
+
+@router.get(
+    "/articles",
+    response_model=list[ArticleListOut],
+    dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教编制
+)
+def list_articles(status: str | None = None, db: Session = Depends(get_db)):
+    """建稿与已发布一起列。
+
+    没有这条时，发布流程是"建稿拿到 id → 记住它 → 手填 id 去发布"——草稿
+    在界面上不可见，谁也说不出"还有几篇没发"。居民端那块宣教区长期空着，
+    根因就是编制侧压根没有能看见草稿的地方。
+    """
+    q = db.query(HealthArticle)
+    if status:
+        q = q.filter(HealthArticle.status == status)
+    return [
+        {
+            "id": a.id,
+            "title": a.title,
+            "category": a.category,
+            "status": a.status,
+            "content": a.content,
+        }
+        for a in q.order_by(HealthArticle.id.desc()).limit(200).all()
+    ]
+
+
 @router.post(
     "/articles/{article_id}/publish",
     response_model=HealthArticleOut,
