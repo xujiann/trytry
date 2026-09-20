@@ -134,6 +134,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/drgs/groups",
     "GET /api/drgs/in-stay-alerts",
     "GET /api/drgs/stats",
+    "GET /api/education/articles",
     "GET /api/education/courses",
     "GET /api/education/courses/{course_id}/materials",
     "GET /api/education/courses/{course_id}/stats",
