@@ -549,6 +549,13 @@ function spdOptions(map) {
  * 后端交付了、界面缺失，而需求对照表把它们算作已实现。
  * ==========================================================*/
 
+const SPD_QC_RESULTS = {
+  pass: ["通过", "green"], warn: ["存疑", "orange"], fail: ["不通过", "red"],
+};
+const SPD_CALL_RESULTS = {
+  connected: "已接通", failed: "未接通", cancelled: "已取消",
+};
+
 const SPD_POINT_EVENTS = {
   sign: "签约", referral_up: "上转", referral_down: "下转",
   followup: "随访", abnormal_report: "异常上报", signin: "每日签到",
@@ -2180,12 +2187,13 @@ async function renderSpdFollowup() {
     ])}
     <div class="panel"><h3>随访方案（诊断/手术/医嘱关键词命中）</h3>
       <p class="desc">没配关键词的方案不匹配任何人——否则一个空方案会给全院出院患者都排上随访</p>
-      ${table(["编码", "名称", "场景", "科室", "时间点(天)", "问卷", "执行角色", "预置"],
+      ${table(["编码", "名称", "场景", "科室", "时间点(天)", "问卷", "执行角色", "预置", "操作"],
         rules, (r) =>
         `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.scene)}</td>
          <td>${esc(r.dept || "—")}</td><td>${(r.points || []).join("、")}</td>
          <td>${esc(r.questionnaire_code || "—")}</td><td>${esc(r.executor_role)}</td>
-         <td>${r.preset ? "是" : "否"}</td></tr>`)}
+         <td>${r.preset ? "是" : "否"}</td>
+         <td><button class="btn secondary" data-rule-edit="${r.id}">改档</button></td></tr>`)}
       <form class="inline" id="spd-fuplan-form" style="margin-top:10px">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="rule_id">${rules.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("")}</select>
@@ -2201,11 +2209,12 @@ async function renderSpdFollowup() {
         <button class="secondary">按患者特征自动匹配</button>
       </form><p class="msg" id="spd-fu-msg"></p></div>
     <div class="panel"><h3>随访问卷与异常分级</h3>
-      ${table(["编码", "名称", "场景", "题目数", "异常规则", "跟踪科室", "处置角色"],
+      ${table(["编码", "名称", "场景", "题目数", "异常规则", "跟踪科室", "处置角色", "操作"],
         questionnaires, (q) =>
         `<tr><td>${esc(q.code)}</td><td>${esc(q.name)}</td><td>${esc(q.scene)}</td>
          <td>${(q.items || []).length}</td><td>${(q.abnormal_rules || []).length}</td>
-         <td>${esc(q.track_dept || "—")}</td><td>${esc(q.handle_role)}</td></tr>`)}
+         <td>${esc(q.track_dept || "—")}</td><td>${esc(q.handle_role)}</td>
+         <td><button class="btn secondary" data-quest-edit="${q.id}">改档</button></td></tr>`)}
       <form class="inline" id="spd-quest-form" style="margin-top:10px">
         <input name="code" placeholder="问卷编码" required>
         <input name="name" placeholder="问卷名称" required>
@@ -2252,7 +2261,23 @@ async function renderSpdFollowup() {
             : c.status === "failed" ? '<span class="tag red">未接通</span>'
             : '<span class="tag orange">待呼叫</span>'}</td>
          <td>${c.duration_s}</td><td>${c.record_url ? "有" : "—"}</td>
-         <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td></tr>`)}</div>`;
+         <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td>
+         <td>${c.status === "pending" || c.status === "dispatched"
+            ? `<button class="btn secondary" data-call-res="${c.id}">记结果</button>` : "—"}</td></tr>`)}</div>
+    <div class="panel"><h3>抽查样本与复核结论</h3>
+      <p class="desc">上面「生成抽查计划」只负责抽样，样本抽出来之后要有人复核——
+        此前只写不读，抽完就没有下文了。<b>复核结论只有通过/存疑/不通过三档</b>，
+        自由文本填在备注里：按结论分桶统计才有管理价值。</p>
+      <form class="inline" id="spd-qc-filter">
+        <input name="batch" placeholder="批次号">
+        <select name="result"><option value="">全部结论</option>
+          ${Object.entries(SPD_QC_RESULTS).map(([v, t]) =>
+            `<option value="${v}">${esc(t[0])}</option>`).join("")}</select>
+        <button class="btn secondary">查询</button>
+      </form><p class="msg" id="spd-qc2-msg"></p>
+      <div id="spd-qc-list"></div></div>
+    <div class="panel"><h3>随访前置资料 / 健康日历</h3>
+      <div id="spd-fu-ctx"></div></div>`;
 
   const drawRecords = async (query) => {
     const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
@@ -2269,10 +2294,13 @@ async function renderSpdFollowup() {
        <td>${r.status === "done" ? '<span class="tag green">已完成</span>'
           : r.status === "planned" ? '<span class="tag orange">待随访</span>'
           : '<span class="tag">' + esc(r.status) + "</span>"}</td>
-       <td>${r.status === "planned"
+       <td><button class="btn secondary" data-fu-ctx="${r.id}">前置资料</button>
+           <button class="btn secondary" data-fu-edit="${r.id}">改档</button>
+           <button class="btn secondary" data-fu-cal="${r.patient_id}">日历</button>
+       ${r.status === "planned"
           ? `<button class="btn secondary" data-fu-exec="${r.id}">执行</button>
              <button class="btn secondary" data-fu-call="${r.id}" data-pid="${r.patient_id}">转呼叫</button>`
-          : "—"}</td></tr>`);
+          : ""}</td></tr>`);
   };
   await drawRecords();
 
@@ -2318,6 +2346,134 @@ async function renderSpdFollowup() {
         ref_id: Number(call.dataset.fuCall),
       }, "#spd-fu-msg");
     }
+    const el4 = (k) => e.target.closest(`[${k}]`);
+    const ctx = el4("data-fu-ctx"), fuEdit = el4("data-fu-edit"), cal = el4("data-fu-cal");
+    const callRes = el4("data-call-res"), qcRes = el4("data-qc-res");
+    const rEdit = el4("data-rule-edit"), qEdit = el4("data-quest-edit");
+    try {
+      if (ctx) {
+        const d = await api(`/api/spd/followup-records/${ctx.dataset.fuCtx}/context`);
+        const pt = d.patient || {};
+        // 随访前置资料：打电话之前把该知道的一屏看全，省得边问边翻
+        $("#spd-fu-ctx").innerHTML =
+          `<p class="desc">随访 #${esc(ctx.dataset.fuCtx)} 的前置资料</p>`
+          + table(["项", "值"], [
+            ["患者", pt.name || ""], ["年龄", pt.age ?? "—"], ["性别", pt.gender || "—"],
+            ["近期就诊", (d.encounters || []).length + " 次"],
+            ["住院", (d.admissions || []).length + " 次"],
+            ["历史随访", (d.history || []).length + " 次"],
+          ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`)
+          + ((d.history || []).length
+            ? table(["日期", "场景", "结果"], d.history, (h) =>
+              `<tr><td>${esc(h.executed_at || h.planned_at || "")}</td>
+               <td>${esc(h.scene || "")}</td><td>${esc(h.result || "—")}</td></tr>`)
+            : "");
+        return;
+      }
+      if (cal) {
+        const day = prompt("查看哪一天的健康日历（YYYY-MM-DD，留空=今天）", "");
+        if (day === null) return;
+        const q = new URLSearchParams({ patient_id: cal.dataset.fuCal });
+        if (day) q.set("day", day);
+        const d = await api(`/api/spd/health-calendar?${q.toString()}`);
+        const items = d.items || [];
+        $("#spd-fu-ctx").innerHTML =
+          `<p class="desc">患者 #${esc(cal.dataset.fuCal)} ${esc(d.day || day || "今天")} 的安排</p>`
+          + (items.length
+            ? table(["类型", "内容", "时间"], items, (x) =>
+              `<tr><td>${esc(x.kind || "")}</td><td>${esc(x.title || "")}</td>
+               <td>${esc(x.at || "—")}</td></tr>`)
+            : '<p class="desc">这一天没有安排</p>');
+        return;
+      }
+      if (fuEdit) {
+        const form = await spdModal("改随访记录", [
+          { name: "planned_at", label: "计划日期 YYYY-MM-DD" },
+          { name: "channel", label: "渠道", type: "select", value: "phone",
+            options: [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
+                      { value: "sms", label: "短信" }, { value: "visit", label: "面访" }] },
+          { name: "result", label: "随访结果", type: "textarea" },
+        ]);
+        if (!form) return;
+        // 空串不提交：这些字段都是可选，空串会被当成"要改成空"
+        const body = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
+        return postAction(`/api/spd/followup-records/${fuEdit.dataset.fuEdit}`,
+          body, "#spd-fu-msg", "PATCH");
+      }
+      if (callRes) {
+        const form = await spdModal("记录呼叫结果", [
+          { name: "status", label: "结果", type: "select",
+            options: spdOptions(SPD_CALL_RESULTS), value: "connected" },
+          { name: "duration_s", label: "通话时长（秒）", type: "number", value: 0 },
+          { name: "record_url", label: "录音地址" },
+          { name: "result", label: "通话要点", type: "textarea" },
+        ]);
+        if (!form) return;
+        return postAction(`/api/spd/call-tasks/${callRes.dataset.callRes}/result`, {
+          status: form.status, duration_s: Number(form.duration_s || 0),
+          record_url: form.record_url || "", result: form.result || "",
+        }, "#spd-fu-msg");
+      }
+      if (qcRes) {
+        const form = await spdModal("复核结论", [
+          { name: "result", label: "结论", type: "select",
+            options: spdOptions(SPD_QC_RESULTS), value: "pass" },
+          { name: "method", label: "复核方式", type: "select", value: "record",
+            options: [{ value: "record", label: "查记录" }, { value: "phone", label: "电话回访" },
+                      { value: "wechat", label: "微信核实" }] },
+          { name: "note", label: "备注（存疑/不通过务必写清）" },
+        ]);
+        if (!form) return;
+        if (form.result !== "pass" && !(form.note || "").trim()) {
+          return setMsg("#spd-qc2-msg", "存疑或不通过必须写明理由——否则这条结论没法复查", false);
+        }
+        return postAction(`/api/spd/qc-samples/${qcRes.dataset.qcRes}/result`, {
+          result: form.result, method: form.method, note: form.note || "",
+        }, "#spd-qc2-msg");
+      }
+      if (rEdit) {
+        const form = await spdModal("改随访方案", [
+          { name: "name", label: "名称" },
+          { name: "active", label: "状态", type: "select",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }], value: "1" },
+        ]);
+        if (!form) return;
+        const body = { active: form.active === "1" };
+        if (form.name) body.name = form.name;
+        return postAction(`/api/spd/followup-rules/${rEdit.dataset.ruleEdit}`,
+          body, "#spd-fu-msg", "PATCH");
+      }
+      if (qEdit) {
+        const form = await spdModal("改问卷", [
+          { name: "name", label: "名称" },
+          { name: "active", label: "状态", type: "select",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }], value: "1" },
+        ]);
+        if (!form) return;
+        const body = { active: form.active === "1" };
+        if (form.name) body.name = form.name;
+        return postAction(`/api/spd/questionnaires/${qEdit.dataset.questEdit}`,
+          body, "#spd-fu-msg", "PATCH");
+      }
+    } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
+  };
+
+  const drawQcSamples = async (query) => {
+    const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
+    const rows = await api(`/api/spd/qc-samples?${qs}`);
+    $("#spd-qc-list").innerHTML = table(
+      ["ID", "批次", "随访", "患者", "结论", "方式", "备注", "操作"], rows, (q) =>
+      `<tr><td>${q.id}</td><td>${esc(q.batch || "—")}</td>
+       <td>${q.record_id ?? "—"}</td><td>${esc(q.patient_name || q.patient_id || "—")}</td>
+       <td>${q.result ? spdTag(SPD_QC_RESULTS, q.result) : '<span class="tag orange">待复核</span>'}</td>
+       <td>${esc(q.method || "—")}</td><td>${esc(q.note || "—")}</td>
+       <td>${q.result ? "—" : `<button class="btn" data-qc-res="${q.id}">记结论</button>`}</td></tr>`);
+  };
+  await drawQcSamples();
+  $("#spd-qc-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    const q = Object.fromEntries(Object.entries(formJson(e.target)).filter(([, v]) => v));
+    try { await drawQcSamples(q); } catch (err) { setMsg("#spd-qc2-msg", err.message, false); }
   };
   const meta = await spdMeta();
   const abnormalEditor = spdRuleEditor($("#spd-quest-rules"), meta, []);
@@ -2344,12 +2500,13 @@ async function renderSpdReport() {
   $("#page-body").innerHTML = `
     <div class="panel"><h3>报告模板</h3>
       <p class="desc">段落取数与工作台同源——报告是同一批数字的另一种排版，不是另存一份统计</p>
-      ${table(["编码", "名称", "周期", "层级", "段落", "状态"], templates, (t) =>
+      ${table(["编码", "名称", "周期", "层级", "段落", "状态", "操作"], templates, (t) =>
         `<tr><td>${esc(t.code)}</td><td>${esc(t.name)}</td>
          <td>${esc({ daily: "日报", weekly: "周报", monthly: "月报", custom: "自定义" }[t.period] || t.period)}</td>
          <td>${esc(scopeNames[t.scope_level] || t.scope_level)}</td>
          <td>${(t.sections || []).map((s) => esc(s.title)).join("、")}</td>
-         <td>${t.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}
+         <td>${t.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-tpl-edit="${t.id}">改档</button></td></tr>`)}
       <form class="inline" id="spd-rpt-gen" style="margin-top:10px">
         <select name="template_code">${templates.map((t) => `<option value="${esc(t.code)}">${esc(t.name)}</option>`).join("")}</select>
         <input name="org_id" type="number" placeholder="机构ID（留空取本机构）">
@@ -2397,6 +2554,20 @@ async function renderSpdReport() {
     const run = e.target.closest("[data-rpt-run]");
     const toggle = e.target.closest("[data-rpt-toggle]");
     const view = e.target.closest("[data-rpt-view]");
+    const tplEdit = e.target.closest("[data-tpl-edit]");
+    if (tplEdit) {
+      const form = await spdModal("改报表模板", [
+        { name: "name", label: "名称" },
+        { name: "active", label: "状态", type: "select",
+          options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }], value: "1" },
+      ]);
+      if (!form) return;
+      // 空串不提交：name 留空表示"不改名字"，不是"改成空名字"
+      const body = { active: form.active === "1" };
+      if (form.name) body.name = form.name;
+      return postAction(`/api/spd/report-templates/${tplEdit.dataset.tplEdit}`,
+        body, "#spd-rpt-msg", "PATCH");
+    }
     if (run) return postAction("/api/spd/report-instances",
       { task_id: Number(run.dataset.rptRun) }, "#spd-rpttask-msg");
     if (toggle) return postAction(`/api/spd/report-tasks/${toggle.dataset.rptToggle}`,
