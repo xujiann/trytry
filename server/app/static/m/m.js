@@ -33,7 +33,14 @@ function clearAuth() {
 }
 
 async function api(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  // FormData 不能带 Content-Type：multipart 的 boundary 由浏览器生成并写进头里，
+  // 自己写死 application/json 会让后端按 JSON 解析一段 multipart 正文，
+  // 报的还是一个看不懂的 422。显式传了 Content-Type 的调用方仍然说了算。
+  const isForm = options.body instanceof FormData;
+  const headers = {
+    ...(isForm ? {} : { "Content-Type": "application/json" }),
+    ...(options.headers || {}),
+  };
   const resp = await fetch(path, { ...options, credentials: "same-origin", headers });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.detail || `请求失败(${resp.status})`);
@@ -1164,10 +1171,118 @@ async function loadSpd() {
     if (activeSpd === "plan") return await renderSpdPlans(box);
     if (activeSpd === "referral") return await renderSpdReferrals(box);
     if (activeSpd === "consult") return await renderSpdConsults(box);
+    if (activeSpd === "archive") return await renderSpdArchive(box);
+    if (activeSpd === "journey") return await renderSpdJourney(box);
+    if (activeSpd === "more") return await renderSpdMore(box);
     return await renderSpdScreen(box);
   } catch (err) {
     box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
   }
+}
+
+/* ---------------- 专病档案 / 健康历程 / 评估·宣教·复诊（P1-40） ---------------- */
+
+async function renderSpdArchive(box) {
+  const d = await authApi(`/api/portal/spd/archive${spdQuery()}`);
+  const p = d.patient || {};
+  box.innerHTML = `<div class="m-card">
+      ${kv("姓名", esc(p.name || ""))}
+      ${p.gender ? kv("性别", esc(p.gender)) : ""}
+      ${p.birth_date ? kv("出生日期", esc(p.birth_date)) : ""}
+    </div>`
+    + (d.profiles || []).map((pr) => `<div class="m-card">
+        ${kv("病种", esc(pr.program_name || pr.program_code || ""))}
+        ${kv("阶段", esc(pr.stage || "—"))}
+        ${kv("风险", spdRiskTag(pr.risk_level))}
+        ${kv("危险因素", esc((pr.risk_factors || []).join("、") || "—"))}
+        ${kv("并发症", esc((pr.complications || []).join("、") || "—"))}
+      </div>`).join("")
+    + `<h3 class="sec">就诊与随访时间轴</h3>`
+    + ((d.timeline || []).length
+      ? d.timeline.map((t) => `<div class="m-card">
+          ${kv(String(t.at || "").slice(0, 10), esc(t.title || ""))}
+          ${t.detail ? `<p class="hint">${esc(t.detail)}</p>` : ""}
+        </div>`).join("")
+      : '<p class="empty">暂无记录</p>');
+}
+
+async function renderSpdJourney(box) {
+  const d = await authApi(`/api/portal/spd/journey${spdQuery()}`);
+  const progs = d.programs || [];
+  box.innerHTML = progs.length
+    ? progs.map((g) => `<div class="m-card">
+        ${kv("病种", esc(g.program_name || g.program_code))}
+        ${kv("阶段", esc(g.stage || "—"))}
+        ${kv("风险", spdRiskTag(g.risk_level))}
+        ${kv("状态", esc(g.status || ""))}
+        ${(g.paths || []).length ? `<p class="hint">路径进度：${
+          g.paths.map((x) => `${esc(x.template_name || "")} ${esc(x.progress ?? 0)}%`).join("；")
+        }</p>` : ""}
+        ${(g.tasks || []).length ? `<p class="hint">待办 ${g.tasks.length} 项</p>` : ""}
+        ${(g.referrals || []).length ? `<p class="hint">转诊 ${g.referrals.length} 单</p>` : ""}
+      </div>`).join("")
+    : '<p class="empty">暂无在管病种</p>';
+}
+
+function spdRiskTag(level) {
+  const [label, color] = SPD_RISK_TAGS[level] || ["未分级", ""];
+  return `<span class="tag ${color}">${esc(label)}</span>`;
+}
+
+const SPD_REVISIT_STATUS = {
+  planned: ["待复诊", "orange"], done: ["已完成", "green"], missed: ["已错过", "red"],
+};
+
+async function renderSpdMore(box) {
+  const [assessments, edus, revisits] = await Promise.all([
+    authApi(`/api/portal/spd/assessments${spdQuery()}`),
+    authApi(`/api/portal/spd/edu${spdQuery()}`),
+    authApi(`/api/portal/spd/revisits${spdQuery()}`),
+  ]);
+  box.innerHTML = `<h3 class="sec">我的评估</h3>`
+    + (assessments.length
+      ? assessments.map((a) => `<div class="m-card">
+          ${kv("量表", esc(a.scale_name || a.scale_code))}
+          ${kv("得分", esc(a.score))}
+          ${kv("风险", spdRiskTag(a.risk_level))}
+          ${a.advice ? `<p class="hint">${esc(a.advice)}</p>` : ""}
+        </div>`).join("")
+      : '<p class="empty">暂无评估记录</p>')
+    + `<h3 class="sec">健康宣教</h3>`
+    + (edus.length
+      ? edus.map((e) => `<div class="m-card">
+          ${kv("标题", esc(e.title))}
+          ${e.content ? `<p class="hint">${esc(e.content)}</p>` : ""}
+          ${e.media_url ? `<p class="hint">${esc(e.media_url)}</p>` : ""}
+          ${e.status === "read"
+            ? '<span class="tag green">已读</span>'
+            : `<button type="button" class="ghost-btn" data-edu-read="${e.id}">标为已读</button>`}
+        </div>`).join("")
+      : '<p class="empty">暂无推送</p>')
+    + `<h3 class="sec">复诊计划</h3>`
+    + (revisits.length
+      ? revisits.map((r) => {
+          const [label, color] = SPD_REVISIT_STATUS[r.status] || [r.status, ""];
+          return `<div class="m-card">
+            ${kv("计划日期", esc(r.plan_date))}
+            ${kv("科室", esc(r.dept || "—"))}
+            ${kv("项目", esc(r.items || "—"))}
+            ${kv("状态", `<span class="tag ${color}">${esc(label)}</span>`)}
+            ${r.actual_date ? kv("实际就诊", esc(r.actual_date)) : ""}
+          </div>`;
+        }).join("")
+      : '<p class="empty">暂无复诊计划</p>');
+
+  box.querySelectorAll("[data-edu-read]").forEach((btn) => {
+    // 单独 catch：列表渲染之后才触发的异步，不在 loadSpd 的 try 覆盖范围内，
+    // 不接住的话 404/断网只会是一个"点了没反应"的死按钮（与 bindReferralDetails 同理）
+    btn.addEventListener("click", async () => {
+      try {
+        await authApi(`/api/portal/spd/edu/${btn.dataset.eduRead}/read`, { method: "POST" });
+        await loadSpd();
+      } catch (err) { alert(err.message); }
+    });
+  });
 }
 
 async function renderSpdHome(box) {
@@ -1254,8 +1369,26 @@ async function renderSpdTasks(box) {
       submitted: "已提交待审核", done: "已完成", overdue: "已超期" }[t.status] || t.status))}
     ${t.review_note ? kv("审核意见", esc(t.review_note)) : ""}
     ${["pending", "claimed", "doing", "overdue"].includes(t.status)
-      ? `<button type="button" class="ghost-btn" data-spd-task="${t.id}">填报并提交</button>` : ""}
+      ? `<button type="button" class="ghost-btn" data-spd-task="${t.id}">填报并提交</button>
+         <label class="ghost-btn">上传凭证
+           <input type="file" data-spd-evi="${t.id}" accept="image/*,.pdf" hidden></label>` : ""}
     </div>`).join("") || '<p class="empty">暂无健康任务</p>';
+  box.querySelectorAll("[data-spd-evi]").forEach((inp) => {
+    // 患者端 #15 的"上传照片或报告等凭证"。单独 catch，理由同上面的提交按钮。
+    inp.addEventListener("change", async () => {
+      const file = inp.files && inp.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      if (viewingPatientId !== null) fd.append("patient_id", String(viewingPatientId));
+      try {
+        await authApi(`/api/portal/spd/tasks/${inp.dataset.spdEvi}/attachments`,
+          { method: "POST", body: fd });
+        alert("凭证已上传");
+        await loadSpd();
+      } catch (err) { alert(err.message); } finally { inp.value = ""; }
+    });
+  });
   box.querySelectorAll("[data-spd-task]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const note = prompt("填写完成情况（如：已服药、已测量血压）") || "";

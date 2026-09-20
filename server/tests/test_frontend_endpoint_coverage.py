@@ -86,6 +86,18 @@ EXEMPT: dict[str, str] = {
     "/api/integration/fhir/Observation": "FHIR R4 Observation 入站，机器对机器",
     "/api/integration/fhir/DiagnosticReport": "FHIR R4 DiagnosticReport 入站，机器对机器",
     "/api/integration/fhir/Encounter": "FHIR R4 Encounter 入站，机器对机器",
+    "/api/portal/spd/referrals": (
+        "与 /api/portal/me/referrals 同因：居民端转诊列表统一走聚合接口 "
+        "/me/referrals/all（带 source=spd 收窄，m.js:1329），本条只回慢专病那一半。"
+        "收窄刻意交给服务端——条数上限是合并之后才截的，客户端自己 filter 会在"
+        "平台转诊足够多时把慢专病的单子整段挤掉，页面显示「暂无」而其实有在办的"
+    ),
+    "/api/portal/spd/referrals/{case_id}": (
+        "**已经在用，只是这道闸门按路径字面量扫源码、看不见它**：详情路径由服务端"
+        "下发（spd/service.py:570 的 detail_path），前端按数据取（m.js:893 的 "
+        "`authApi(btn.dataset.refDetail)`）——正是本闸门自证里声明的盲区②。"
+        "给它补一个静态调用点等于造出第二条路，那才是错的"
+    ),
     "/api/portal/me/referrals": (
         "被 /api/portal/me/referrals/all 取代：ADR-0003 方案 B 把平台转诊与慢专病转诊"
         "并成一份列表，居民端入口定的就是那个聚合接口（m.js 两处都调它）。"
@@ -102,7 +114,7 @@ EXEMPT: dict[str, str] = {
 #: 当前没有前端调用点、也没豁免的端点数。**只允许调小。**
 #: 轨迹：241（本闸门建成时的实测）→ 232（扣掉 9 条机器对机器豁免）
 #: → 220（补上 spd/config/teams 的服务团队与村医配置界面，12 个端点）。
-BASELINE_ORPHANS = 154
+BASELINE_ORPHANS = 145
 
 #: 路径由变量拼出来、扫描看不见的调用点。**只允许调小。**
 #: 这不是欠账，是闸门的视野边界——如实登记，不假装看得见。
@@ -152,6 +164,7 @@ FULLY_COVERED = frozenset({
     "spd.routers.care",
     "spd.routers.config.scales",
     "spd.routers.config.teams",
+    "spd.routers.portal",
     "spd.routers.tasks",
     "spd.routers.workbench",
     # care 是上一轮补齐的（31 个端点从零到全覆盖，豁免只剩批量回传那一条）；
@@ -425,9 +438,11 @@ def test_自动豁免的确实标了deprecated():
 
 
 #: 手写豁免的上限。**抬它是一次有记录的决定，不是顺手改个数字**：
-#: 9 → 10 是为了 `/api/portal/me/referrals`（被 /all 取代，理由写在 EXEMPT 里）。
+#: 9 → 10 是为了 `/api/portal/me/referrals`（被 /all 取代）；
+#: 10 → 12 是为了慢专病侧同因的两条（列表被 /all 取代；详情**已经在用**，
+#: 只是路径由服务端下发、本闸门的字面量扫描看不见——见盲区②）。
 #: 这条上限的价值就在于：新增豁免时闸门会先红一次，逼着人说清为什么。
-EXEMPT_CEILING = 10
+EXEMPT_CEILING = 12
 
 
 def test_豁免只许变少且不许指向不存在的端点():
