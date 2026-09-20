@@ -220,7 +220,8 @@ async function renderCerts() {
     $("#cert-table").innerHTML = table(["编号", "类型", "姓名", "性别", "日期", "诊断/说明", "机构", "操作"], certs, (c) =>
       `<tr><td><span class="tag">${esc(c.cert_no)}</span></td><td>${CERT_TYPES[c.cert_type] || esc(c.cert_type)}</td>
        <td>${esc(c.name)}</td><td>${esc(c.gender)}</td><td>${esc(c.event_date)}</td><td>${esc(c.detail) || "—"}</td><td>${c.org_id}</td>
-       <td><button class="btn secondary" data-printcert="${c.id}">打印</button></td></tr>`);
+       <td><button class="btn secondary" data-printcert="${c.id}">打印</button>
+           ${c.cert_type === "death" ? `<button class="btn secondary" data-deathcard="${c.id}">死因报告卡</button>` : ""}</td></tr>`);
   };
   $("#page-body").innerHTML = `
     <div class="cards">
@@ -241,7 +242,16 @@ async function renderCerts() {
       <form class="inline" id="cert-filter">
         <select name="cert_type"><option value="">全部类型</option>${Object.entries(CERT_TYPES).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <button>筛选</button></form>
-      <div id="cert-table"></div></div>
+      <div id="cert-table"></div>
+      <h3 style="margin-top:14px">死因报告卡批量导出（CSV，按死亡日期过滤）</h3>
+      <p style="margin-bottom:8px">平台与县疾控/人口死亡登记系统<b>无直连专线</b>：本导出供手工网报
+        或交换前置机对接。身份证号/电话按调用者角色脱敏（非管理员掩码），
+        每张卡的档案调阅都落 AccessLog。</p>
+      <form class="inline" id="death-export-form">
+        <input name="date_from" placeholder="死亡日期起 YYYY-MM-DD" pattern="\\d{4}-\\d{2}-\\d{2}" style="min-width:210px">
+        <input name="date_to" placeholder="止 YYYY-MM-DD" pattern="\\d{4}-\\d{2}-\\d{2}" style="min-width:180px">
+        <button>导出CSV</button></form>
+      <div id="death-card"></div></div>
     <div class="panel"><h3>成人健康体检登记（医师/公卫，异常项自动标记并入360档案）</h3>
       <form class="inline" id="chk-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
@@ -257,18 +267,59 @@ async function renderCerts() {
     <div class="panel"><h3>体检记录</h3>${table(["ID", "患者", "套餐", "日期", "结论", "异常", "操作"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
        <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td>
-       <td><button class="btn secondary" data-printchk="${c.id}">打印报告</button></td></tr>`)}</div>`;
+       <td><button class="btn secondary" data-printchk="${c.id}">打印报告</button>
+           <button class="btn secondary" data-chkitems="${c.id}">分项结果</button>
+           <button class="btn secondary" data-chkreview="${c.id}">总检出结论</button></td></tr>`)}
+      <div id="chk-detail"></div></div>`;
   await draw();
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
   $("#cert-filter").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("cert_type")); };
   $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };
+  $("#death-export-form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams();
+    for (const k of ["date_from", "date_to"]) if (f.get(k)) q.set(k, f.get(k));
+    downloadCsv(`/api/certs/death-report-cards/export.csv?${q.toString()}`,
+      `death_report_cards${f.get("date_from") ? `_${f.get("date_from")}` : ""}.csv`, "#cert-msg");
+  };
   $("#page-body").onclick = async (e) => {
-    const { printcert, printchk } = e.target.dataset;
+    const { printcert, printchk, deathcard, chkitems, chkreview } = e.target.dataset;
     try {
       // 体检报告：服务端把分项结果（CheckupItem，异常标注）与总检结论一起渲染，
       // 页面这张表只有汇总——打印走单据端点，别在前端拼第二份报告版式
       if (printchk) return await openPrintPage(`/api/print/checkups/${printchk}`);
       if (printcert) return await openPrintPage(`/api/print/certs/${printcert}`);
+      if (deathcard) {
+        const c = await api(`/api/certs/${deathcard}/death-report-card`);
+        $("#death-card").innerHTML = `<h4>死因报告卡（证明 ${esc(c.cert_no)}）</h4>`
+          + table(["项", "值"], [
+            ["姓名", c.name], ["性别", c.gender], ["身份证号", c.id_card], ["联系电话", c.phone],
+            ["出生日期", c.birth_date], ["死亡日期", c.death_date], ["死亡原因", c.cause_of_death],
+            ["签发机构", c.org_name || c.org_id], ["签发人", c.issued_by], ["签发时间", c.issued_at],
+          ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1]) || "—"}</td></tr>`)
+          + '<p style="color:#888">身份证号/电话已按角色脱敏；本次调阅已留痕。供手工网报或前置机对接，平台不直连人口死亡登记系统。</p>';
+        return;
+      }
+      if (chkitems) {
+        const items = await api(`/api/checkups/${chkitems}/items`);
+        $("#chk-detail").innerHTML = `<h4>体检 #${esc(chkitems)} 分项结果（${items.length} 项）</h4>`
+          + table(["项目", "结果", "单位", "参考范围", "判定"], items, (i) =>
+            `<tr><td>${esc(i.item_name)}（${esc(i.item_code)}）</td><td>${esc(i.result_value)}</td><td>${esc(i.unit) || "—"}</td>
+             <td>${esc(i.ref_range) || "—"}</td>
+             <td>${i.abnormal ? '<span class="tag red">异常</span>' : '<span class="tag green">正常</span>'}</td></tr>`);
+        return;
+      }
+      if (chkreview) {
+        // 总检是医师职责（公卫岗只录入）；重复总检按覆盖——复核改结论是正常动作，
+        // 不是错误，所以不拦第二次，但要让人知道自己在覆盖。
+        const conclusion = prompt("总检结论（重复总检按覆盖）");
+        if (!conclusion) return;
+        const r = await api(`/api/checkups/${chkreview}/review`, { method: "POST",
+          body: JSON.stringify({ final_conclusion: conclusion, final_doctor: prompt("总检医师署名（留空＝当前登录医师）") || "" }) });
+        setMsg("#cert-msg", `已出总检结论，署名 ${r.final_doctor}`, true);
+        return;
+      }
     } catch (err) { setMsg("#cert-msg", err.message, false); }
   };
 }

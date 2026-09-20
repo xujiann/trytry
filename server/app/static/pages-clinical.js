@@ -1486,8 +1486,13 @@ async function renderHrFinance() {
     <div class="panel"><h3>物资（出入库全程留痕）</h3>${table(["ID", "编码", "名称", "机构", "数量", "状态", "操作"], assets, (a) =>
       `<tr><td>${a.id}</td><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td>${a.org_id}</td><td>${a.quantity}</td>
        <td><span class="tag ${a.status === "scrapped" ? "red" : ""}">${a.status === "scrapped" ? "已报废" : a.status}</span></td>
-       <td>${a.status !== "scrapped" ? `<button class="btn secondary" data-assetmv="${a.id}">出入库</button>` : ""}
-           <button class="btn" data-assethist="${a.id}">记录</button></td></tr>`)}</div>
+       <td>${a.status !== "scrapped"
+         ? `<button class="btn secondary" data-assetmv="${a.id}">出入库</button>
+            <button class="btn secondary" data-assetxfer="${a.id}">调拨</button>
+            <button class="btn danger" data-assetscrap="${a.id}">报废</button>` : ""}
+           <button class="btn" data-assethist="${a.id}">记录</button></td></tr>`)}
+      <p style="margin-top:6px;color:#888">调拨只改归属机构，<b>出入库留痕不受影响</b>；已报废的物资不可再调拨。
+        调出方必须是本机构——不能把别家的东西划走。</p></div>
     <div class="panel hidden" id="assetmv-panel"><h3>物资出入库记录</h3><div id="assetmv-list"></div></div>`;
   $("#emp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/employees", formJson(e.target, ["org_id"]), "#hrf-msg"); };
   $("#sec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/secondments", formJson(e.target, ["employee_id", "to_org_id"]), "#hrf-msg"); };
@@ -1550,6 +1555,21 @@ async function renderHrFinance() {
         const qty = prompt("数量"); if (!qty) return;
         return postAction(`/api/mgmt/assets/${d.assetmv}/movements`,
           { movement_type: type, quantity: Number(qty), note: prompt("备注") || "" }, "#hrf-msg");
+      }
+      if (d.assetxfer) {
+        const to = prompt("调入机构ID"); if (!to) return;
+        // to_org_id 走 query 而不是请求体：后端签名就是这么收的
+        await api(`/api/mgmt/assets/${d.assetxfer}/transfer?to_org_id=${Number(to)}`, { method: "POST" });
+        setMsg("#hrf-msg", "已调拨", true);
+        return route();
+      }
+      if (d.assetscrap) {
+        // 报废只翻状态、不删行：这台设备什么时候进的、怎么用的、什么时候报废的，
+        // 资产盘点与审计都要回溯得到。
+        if (!confirm(`报废物资 ${d.assetscrap}？报废后不可再调拨、不可再出入库，记录保留。`)) return;
+        await api(`/api/mgmt/assets/${d.assetscrap}/scrap`, { method: "POST" });
+        setMsg("#hrf-msg", "已报废", true);
+        return route();
       }
       if (d.assethist) {
         const moves = await api(`/api/mgmt/assets/${d.assethist}/movements`);

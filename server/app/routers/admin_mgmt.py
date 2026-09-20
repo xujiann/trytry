@@ -113,6 +113,7 @@ def second_employee(body: SecondmentCreate, db: Session = Depends(get_db)):
 @router.post(
     "/secondments/{secondment_id}/end",
     dependencies=[Depends(require_roles("director", "operator"))],  # H2
+    deprecated=True,
 )
 def end_secondment(
     secondment_id: int,
@@ -120,6 +121,22 @@ def end_secondment(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """**已废弃：请用 `POST /api/staffing/secondments/{id}/end`。**
+
+    同一张 `secondments` 表上有两条"结束派驻"，这条是劣化的那一条：
+
+    | | 本条 | `staffing` 那条 |
+    |---|---|---|
+    | `end_date` | 必填 | 可空，默认今天 |
+    | 早于开始日期 | **不校验**（能把派驻结束在开始之前） | 422 |
+    | 员工状态 | 无条件置 `active` | 只在当前是 `seconded` 时才置回 |
+    | 返回 | `{id, end_date}` 残形 | 完整台账行 |
+
+    派驻台账的列表也只有 `staffing` 那边有（本模块只出 `/secondments/stats`），
+    界面拿不到 id 就点不动这条——补界面等于把上面三条缺陷一起接出去。
+    故标 `deprecated`（行为不变，向后兼容），由孤儿端点闸门自动豁免；
+    正式下线另案（见 docs/TECH_DEBT.md）。
+    """
     record = db.get(Secondment, secondment_id)
     if record is None:
         raise HTTPException(status_code=404, detail="派驻记录不存在")

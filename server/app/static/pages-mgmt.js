@@ -1047,6 +1047,28 @@ async function renderCredentials() {
       </form>
       <div id="cred-result"></div>
     </div>
+    <div class="panel"><h3>多卡（码）协同：一个入口认全部身份标识</h3>
+      <p style="margin-bottom:8px">窗口拿到的可能是实体卡号、健康卡号或身份证号。
+        这里按<b>从具体到一般</b>依次尝试，并注明命中的是哪一类——不注明的话，
+        同一个人从不同介质进来看不出差别。</p>
+      <form id="cred-any" class="inline">
+        <input name="identifier" placeholder="卡号 / 健康卡号 / 身份证号" required style="min-width:240px">
+        <button>识别</button></form>
+      <div id="cred-any-result"></div>
+    </div>
+    <div class="panel"><h3>一码通（动态码）</h3>
+      <p style="margin-bottom:8px">码<b>不落库</b>：它是「健康卡号.过期时刻.签名」的自包含串。
+        默认 60 秒失效——一码通靠短时效防截屏盗用，给得太长等于回到静态码。
+        换平台密钥即全部作废。</p>
+      <form id="onecode-issue" class="inline">
+        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="ttl_seconds" type="number" value="60" min="10" max="600" style="min-width:120px">
+        <button>出码</button></form>
+      <form id="onecode-resolve" class="inline">
+        <input name="code" placeholder="粘贴待核验的码" required style="min-width:320px">
+        <button class="secondary">核验</button></form>
+      <p class="msg" id="onecode-msg"></p><div id="onecode-result"></div>
+    </div>
     <div class="panel"><h3>凭据台账</h3>
       ${table(["凭据号", "患者ID", "类型", "状态", "发放时间", "结束原因", "操作"], rows, (c) =>
         `<tr><td>${esc(c.credential_no)}</td><td>${c.patient_id}</td>
@@ -1075,6 +1097,47 @@ async function renderCredentials() {
     } catch (err) {
       // 查无此卡与卡已作废是两回事，前者才是 404
       $("#cred-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+    }
+  };
+  $("#cred-any").onsubmit = async (e) => {
+    e.preventDefault();
+    const id = e.target.identifier.value.trim();
+    const KIND = { credential_no: "实体/电子凭据号", ehc_no: "电子健康卡号", id_card: "身份证号" };
+    try {
+      const r = await api(`/api/credentials/resolve?identifier=${encodeURIComponent(id)}`);
+      $("#cred-any-result").innerHTML = `<div class="cards">
+        <div class="card"><span class="k">命中类型</span><b>${esc(KIND[r.matched_by] || r.matched_by)}</b></div>
+        <div class="card"><span class="k">持有人</span><b>${esc(r.patient?.name || "—")}</b></div>
+        <div class="card"><span class="k">健康卡号</span><b>${esc(r.patient?.ehc_no || "—")}</b></div>
+        <div class="card"><span class="k">是否可用</span><b><span class="tag ${r.valid ? "green" : "red"}">${
+          r.valid ? "有效" : esc(r.credential_status || "失效")}</span></b></div></div>`;
+    } catch (err) { $("#cred-any-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
+  $("#onecode-issue").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api("/api/credentials/one-code", { method: "POST", body: JSON.stringify({
+        patient_id: Number(f.get("patient_id")), ttl_seconds: Number(f.get("ttl_seconds")) || 60 }) });
+      $("#onecode-result").innerHTML = `<p>健康卡号 <b>${esc(r.ehc_no)}</b>，${r.expires_in} 秒后失效</p>
+        <p style="word-break:break-all"><code>${esc(r.code)}</code></p>
+        <p style="color:#888">${esc(r.note)}</p>`;
+      setMsg("#onecode-msg", "已出码", true);
+    } catch (err) { setMsg("#onecode-msg", err.message, false); }
+  };
+  $("#onecode-resolve").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/credentials/one-code/resolve", { method: "POST",
+        body: JSON.stringify({ code: new FormData(e.target).get("code").trim() }) });
+      $("#onecode-result").innerHTML = `<p><span class="tag green">核验通过</span>
+        ${esc(r.name)}（健康卡号 ${esc(r.ehc_no)}，患者 #${r.patient_id}），剩余 ${r.remaining_seconds} 秒</p>`;
+      setMsg("#onecode-msg", "核验通过", true);
+    } catch (err) {
+      // 过期（410）与签名错误（403）是两回事：前者让人重新出码，后者是伪造，
+      // 处置完全不同。照后端的话原样显示，别统一成"核验失败"。
+      setMsg("#onecode-msg", err.message, false);
+      $("#onecode-result").innerHTML = "";
     }
   };
   $("#page-body").onclick = (e) => {

@@ -692,7 +692,8 @@ async function renderPerformance() {
 
 async function renderCssd() {
   $("#page-desc").textContent = "器械批次：灭菌中 → 已灭菌 → 已发放 → 已回收，全程追溯";
-  const batches = await api("/api/cssd/batches");
+  const [batches, requests] = await Promise.all([
+    api("/api/cssd/batches"), api("/api/cssd/requests")]);
   const BS = { sterilizing: ["灭菌中", "orange"], sterile: ["已灭菌", ""], dispatched: ["已发放", "green"], recycled: ["已回收", "green"] };
   $("#page-body").innerHTML = `
     <div class="panel"><h3>新建批次</h3>
@@ -709,7 +710,22 @@ async function renderCssd() {
         <td>${b.quantity}</td><td>${b.dispatched_to_org_id ?? "—"}</td>
         <td>${statusTag(BS, b.status)}</td>
         <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${b.status}">${next}</button>` : "—"}</td></tr>`;
-    })}</div>`;
+    })}</div>
+    <div class="panel"><h3>科室物品申领</h3>
+      <form class="inline" id="cssd-req-form">
+        <input name="org_id" type="number" placeholder="申领机构ID" required>
+        <input name="item_name" placeholder="器械名称" required>
+        <input name="quantity" type="number" value="1" min="1" style="min-width:80px">
+        <button>提交申领</button></form>
+      <p class="msg" id="cssd-req-msg"></p>
+      ${table(["ID", "申领机构", "器械", "数量", "状态", "响应批次", "操作"], requests, (r) =>
+        `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${esc(r.item_name)}</td><td>${r.quantity}</td>
+         <td><span class="tag ${r.status === "fulfilled" ? "green" : "orange"}">${r.status === "fulfilled" ? "已响应" : "待响应"}</span></td>
+         <td>${r.batch_id ?? "—"}</td>
+         <td>${r.status === "requested"
+           ? `<button class="btn secondary" data-cssdfill="${r.id}">以已灭菌批次响应</button>` : "—"}</td></tr>`)}
+      <p style="margin-top:6px;color:#888">只有<b>已灭菌或已发放</b>的批次能用来响应申领——拿灭菌中的批次去响应，
+        等于把还没灭完菌的器械算成已经给出去了。</p></div>`;
   $("#batch-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -720,8 +736,22 @@ async function renderCssd() {
       route();
     } catch (err) { setMsg("#cssd-msg", err.message, false); }
   };
+  $("#cssd-req-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/cssd/requests", formJson(e.target, ["org_id", "quantity"]), "#cssd-req-msg");
+  };
   $("#page-body").onclick = async (e) => {
-    const { adv, next } = e.target.dataset;
+    const { adv, next, cssdfill } = e.target.dataset;
+    if (cssdfill) {
+      const batchId = prompt("用哪个批次响应？填批次ID（须为已灭菌或已发放）");
+      if (!batchId) return;
+      try {
+        // batch_id 走 query 而不是请求体：后端签名就是这么收的
+        await api(`/api/cssd/requests/${cssdfill}/fulfill?batch_id=${Number(batchId)}`, { method: "POST" });
+        setMsg("#cssd-req-msg", "申领已响应", true);
+        return route();
+      } catch (err) { return setMsg("#cssd-req-msg", err.message, false); }
+    }
     if (!adv) return;
     try {
       let qs = "";
@@ -1265,7 +1295,7 @@ async function renderReferrals() {
 async function renderRx() {
   $("#page-desc").textContent = "“系统+药师”双重审方，每方必审；事后处方点评（药师）与合理率监管";
   const [prescriptions, rules, cstats, creviews] = await Promise.all([
-    api("/api/prescriptions"), api("/api/prescriptions/rules"),
+    api("/api/prescriptions"), api("/api/prescriptions/rules?include_inactive=true"),
     api("/api/prescriptions/comment-stats"), api("/api/prescriptions/comment-reviews")]);
   const canComment = ["pharmacist", "admin"].includes(currentRole());
   const commented = new Set(creviews.map((c) => c.prescription_id));
@@ -1288,10 +1318,21 @@ async function renderRx() {
         <input name="dose_unit" placeholder="单位" value="mg" style="min-width:70px">
         <button>新增规则</button>
       </form>
-      ${table(["药品编码", "日剂量上限", "相互作用", "禁忌诊断", "特殊人群", "肝肾功能提示"], rules, (r) =>
+      <form class="inline" id="rule-import-form">
+        <textarea name="rows" rows="3" style="width:100%" placeholder='批量导入（每行一条：药品编码,日剂量上限,单位  例：D001,2000,mg）'></textarea>
+        <button class="secondary">批量导入</button></form>
+      <p style="margin-bottom:8px">导入按 <b>drug_code 已存在则整条更新、不存在则新建</b>；
+        一条撞车整批回滚，返回里分开报「新建 / 更新」两个数。</p>
+      <p class="msg" id="rule-msg"></p>
+      ${table(["药品编码", "日剂量上限", "相互作用", "禁忌诊断", "特殊人群", "肝肾功能提示", "状态", "操作"], rules, (r) =>
         `<tr><td>${esc(r.drug_code)}</td><td>${r.max_daily_dose}${esc(r.dose_unit)}</td>
          <td>${esc(r.interactions) || "—"}</td><td>${esc(r.contraindicated_diagnoses) || "—"}</td>
-         <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td></tr>`)}</div>
+         <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td>
+         <td><span class="tag ${r.active ? "green" : "red"}">${r.active ? "生效中" : "已停用"}</span></td>
+         <td>${r.active
+           ? `<button class="btn danger" data-ruleoff="${esc(r.drug_code)}">停用</button>`
+           : `<button class="btn secondary" data-ruleon="${esc(r.drug_code)}">重新启用</button>`}</td></tr>`)}
+      <p style="margin-top:6px;color:#888">停用<b>不删行</b>：规则改过什么、什么时候不再生效，处方点评复核时要回溯得到。</p></div>
     <div class="panel"><h3>处方队列</h3>${table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
       let actions = p.status === "pending_review"
         ? `<button class="btn secondary" data-approve="1" data-id="${p.id}">通过</button>
@@ -1335,8 +1376,42 @@ async function renderRx() {
       route();
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
+  $("#rule-import-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const rows = (new FormData(e.target).get("rows") || "").split("\n")
+      .map((l) => l.trim()).filter(Boolean)
+      .map((l) => {
+        const [drug_code, dose, unit] = l.split(",").map((x) => (x || "").trim());
+        return { drug_code, max_daily_dose: Number(dose), dose_unit: unit || "mg" };
+      });
+    const bad = rows.filter((r) => !r.drug_code || !(r.max_daily_dose > 0));
+    // 后端一条撞车整批回滚，返回是 500 与"一条都没进"。格式错在前端就拦下来，
+    // 别让人把一批 200 行提上去再从 500 里倒推是哪一行写错了。
+    if (bad.length) return setMsg("#rule-msg", `有 ${bad.length} 行格式不对（编码为空或剂量上限非正数），整批未提交`, false);
+    if (!rows.length) return setMsg("#rule-msg", "没有可导入的行", false);
+    try {
+      const r = await api("/api/prescriptions/rules/import", { method: "POST", body: JSON.stringify(rows) });
+      setMsg("#rule-msg", `导入完成：新建 ${r.imported} 条，更新 ${r.updated} 条`, true);
+      route();
+    } catch (err) { setMsg("#rule-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
-    const { approve, id, rxcomment, printrx } = e.target.dataset;
+    const { approve, id, rxcomment, printrx, ruleoff, ruleon } = e.target.dataset;
+    if (ruleoff) {
+      if (!confirm(`停用 ${ruleoff} 的审方规则？停用后开这个药不再受该规则拦截。规则行保留，可随时重新启用。`)) return;
+      try {
+        await api(`/api/prescriptions/rules/${encodeURIComponent(ruleoff)}`, { method: "DELETE" });
+        setMsg("#rule-msg", "规则已停用（行保留）", true);
+        return route();
+      } catch (err) { return setMsg("#rule-msg", err.message, false); }
+    }
+    if (ruleon) {
+      try {
+        await api(`/api/prescriptions/rules/${encodeURIComponent(ruleon)}/reactivate`, { method: "POST" });
+        setMsg("#rule-msg", "规则已重新启用", true);
+        return route();
+      } catch (err) { return setMsg("#rule-msg", err.message, false); }
+    }
     if (printrx) {
       try { return await openPrintPage(`/api/print/prescriptions/${printrx}`); }
       catch (err) { return setMsg("#rx-msg", err.message, false); }
@@ -1368,9 +1443,10 @@ async function renderRx() {
 
 async function renderPharmacy() {
   $("#page-desc").textContent = "库存管理、批号效期、西药发药、县乡村余缺调拨、缺药预警";
-  const [stocks, alerts, expiring, dispenses] = await Promise.all([
+  const [stocks, alerts, expiring, dispenses, purchase] = await Promise.all([
     api("/api/pharmacy/stocks"), api("/api/pharmacy/alerts"),
     api("/api/pharmacy/batches/expiring"), api("/api/dispense"),
+    api("/api/pharmacy/purchase-suggestions"),
   ]);
   const alertIds = new Set(alerts.map((a) => a.id));
   $("#page-body").innerHTML = `
@@ -1417,10 +1493,25 @@ async function renderPharmacy() {
         `<tr><td>${s.org_id}</td><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${s.quantity}</td><td>${s.threshold}</td>
          <td>${alertIds.has(s.id) ? '<span class="tag red">缺药</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}
       <h3 style="margin-top:14px">近效期批次（90 天）</h3>
-      ${table(["机构ID", "药品", "批号", "效期", "余量", "剩余天数"], expiring, (b) =>
+      ${table(["机构ID", "药品", "批号", "效期", "余量", "剩余天数", "操作"], expiring, (b) =>
         `<tr><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td><td>${esc(b.batch_no)}</td>
          <td>${esc(b.expire_date)}</td><td>${b.remaining}</td>
-         <td>${b.expired ? '<span class="tag red">已过期</span>' : `${b.remaining_days} 天`}</td></tr>`)}
+         <td>${b.expired ? '<span class="tag red">已过期</span>' : `${b.remaining_days} 天`}</td>
+         <td><button class="btn secondary" data-btrace="${b.id}">流向反查</button>
+             <button class="btn danger" data-brecall="${b.id}">召回</button></td></tr>`)}
+      <h3 style="margin-top:14px">批次召回与流向反查</h3>
+      <p style="margin-bottom:8px">召回后该批次不得再发药、不得再入库，<b>余量同事务退出可用汇总</b>
+        （记到批次的 blocked_quantity 上——药还在库房，只是发不出去）。
+        只翻状态不动汇总的话，召回的药会一直被算成有货，缺药预警与采购建议长期少报。</p>
+      <form class="inline" id="batch-op-form">
+        <input name="batch_id" type="number" placeholder="批次ID" required>
+        <button class="secondary">按批次ID反查流向</button></form>
+      <p class="msg" id="recall-msg"></p><div id="batch-trace"></div>
+      <h3 style="margin-top:14px">采购建议（近30天用量 − 全网当前库存，缺口为正的品种）</h3>
+      <p style="margin-bottom:8px">用量按处方明细「日剂量 × 天数」汇总，退回的处方不计入。</p>
+      ${table(["药品", "近30天用量", "当前库存", "建议采购量"], purchase, (s) =>
+        `<tr><td>${esc(s.drug_name)}（${esc(s.drug_code)}）</td><td>${s.usage_30d}</td>
+         <td>${s.current_stock}</td><td><span class="tag red">${s.suggested_quantity}</span></td></tr>`)}
       <h3 style="margin-top:14px">发药记录</h3>
       ${table(["ID", "处方ID", "状态", "明细（批号×数量）"], dispenses, (d) =>
         `<tr><td>${d.id}</td><td>${d.prescription_id}</td>
@@ -1473,6 +1564,40 @@ async function renderPharmacy() {
         to_org_id: Number(f.get("to_org_id")), quantity: Number(f.get("quantity")) }) });
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
+  };
+  const drawTrace = async (batchId) => {
+    const t = await api(`/api/pharmacy/batches/${batchId}/dispenses`);
+    $("#batch-trace").innerHTML = `
+      <h4>批次 #${t.batch_id}｜${esc(t.drug_name)}（${esc(t.drug_code)}）批号 ${esc(t.batch_no)}，效期 ${esc(t.expire_date)}
+        <span class="tag ${t.status === "recalled" ? "red" : "green"}">${t.status === "recalled" ? "已召回" : esc(t.status)}</span></h4>
+      <p>仍在外面的量（不含已冲销）：<b>${t.total_dispensed}</b></p>
+      ${table(["发药记录", "处方", "患者", "数量", "状态", "发药时间"], t.dispenses, (d) =>
+        `<tr><td>${d.dispense_id}</td><td>${d.prescription_id}</td>
+         <td>${esc(d.patient_name) || d.patient_id}</td><td>${d.quantity}</td>
+         <td>${d.status === "reversed" ? '<span class="tag">已冲销</span>' : '<span class="tag red">在患者手上</span>'}</td>
+         <td>${esc(d.dispensed_at.replace("T", " ").slice(0, 19))}</td></tr>`)}`;
+  };
+  $("#batch-op-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawTrace(new FormData(e.target).get("batch_id")); }
+    catch (err) { setMsg("#recall-msg", err.message, false); }
+  };
+  $("#page-body").onclick = async (e) => {
+    const { btrace, brecall } = e.target.dataset;
+    try {
+      if (btrace) return await drawTrace(btrace);
+      if (brecall) {
+        // 召回前先把流向摆出来：召回本身只是不让它再发出去，已经在患者手上的
+        // 那部分要靠这张名单去联系。先召回再想起来查，名单还在，但人已经晚了一步。
+        await drawTrace(brecall);
+        const reason = prompt("召回原因（必填，会写进批次台账）");
+        if (!reason) return;
+        if (!confirm(`召回批次 ${brecall}？召回后不可再发药、不可再入库，余量立即退出可用汇总。\n上方已列出该批次的流向名单，需要另行联系已发出的患者。`)) return;
+        await api(`/api/pharmacy/batches/${brecall}/recall`, { method: "POST", body: JSON.stringify({ reason }) });
+        setMsg("#recall-msg", "批次已召回，余量已退出可用汇总", true);
+        route();
+      }
+    } catch (err) { setMsg("#recall-msg", err.message, false); }
   };
 }
 
