@@ -549,6 +549,11 @@ function spdOptions(map) {
  * 后端交付了、界面缺失，而需求对照表把它们算作已实现。
  * ==========================================================*/
 
+const SPD_POINT_EVENTS = {
+  sign: "签约", referral_up: "上转", referral_down: "下转",
+  followup: "随访", abnormal_report: "异常上报", signin: "每日签到",
+};
+
 const SPD_CAND_STATUS = {
   suspect: ["疑似", "orange"], target: ["目标", "green"], excluded: ["已排除", ""],
 };
@@ -1875,22 +1880,27 @@ async function renderSpdReferral() {
 async function renderSpdAssess() {
   $("#page-desc").textContent =
     "指标库 → 分级考核方案 → 自动取数计分 → 扣分下钻；村医积分与商品兑换核销";
-  const [indicators, plans, scores, goods, accounts] = await Promise.all([
+  const [indicators, plans, scores, goods, accounts, pointRules, redeems] =
+    await Promise.all([
     api("/api/spd/indicators?limit=50"), api("/api/spd/assess-plans"),
     api("/api/spd/scores?limit=30"), api("/api/spd/goods"),
     api("/api/spd/point-accounts?limit=20"),
+    api("/api/spd/point-rules"), api("/api/spd/redeems?limit=30"),
   ]);
   const objectNames = { org: "机构", doctor: "医生", village_doctor: "村医", team: "团队" };
   $("#page-body").innerHTML = `
     <div class="panel"><h3>考核指标库</h3>
       <p class="desc">取数口径 + 公式（AST 白名单求值）+ 评分规则三段式，各县只需调权重与目标值</p>
-      ${table(["编码", "名称", "对象", "取数口径", "公式", "权重", "目标值", "版本", "状态"],
+      ${table(["编码", "名称", "对象", "取数口径", "公式", "权重", "目标值", "版本", "状态", "操作"],
         indicators, (i) =>
         `<tr><td>${esc(i.code)}</td><td>${esc(i.name)}</td>
          <td>${esc(objectNames[i.object_type] || i.object_type)}</td>
          <td>${esc(i.data_source)}</td><td><code>${esc(i.formula || "—")}</code></td>
          <td>${i.weight}</td><td>${i.target_value ?? "—"}</td><td>${esc(i.version)}</td>
-         <td>${i.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td></tr>`)}</div>
+         <td>${i.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
+         <td><button class="btn secondary" data-ind-edit="${i.id}">改档</button>
+             <button class="btn secondary" data-ind-use="${i.id}">看引用</button></td></tr>`)}
+      <div id="spd-ind-usage"></div></div>
     <div class="panel"><h3>分级考核方案</h3>
       <form class="inline" id="spd-plan-form">
         <input name="code" placeholder="方案编码" required>
@@ -1911,7 +1921,8 @@ async function renderSpdAssess() {
         `<tr><td>${p.id}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
          <td>${esc(p.level)}</td><td>${esc(objectNames[p.object_type] || p.object_type)}</td>
          <td>${esc(p.period_type)}</td><td>${(p.items || []).length}</td>
-         <td><button class="btn secondary" data-run="${p.id}">跑分</button></td></tr>`)}</div>
+         <td><button class="btn secondary" data-run="${p.id}">跑分</button>
+             <button class="btn secondary" data-plan-edit="${p.id}">改档</button></td></tr>`)}</div>
     <div class="panel"><h3>考核结果</h3>
       ${table(["排名", "对象", "周期", "综合得分", "操作"], scores, (s) =>
         `<tr><td>${s.rank}</td><td>${esc(s.object_name)}</td><td>${esc(s.period)}</td>
@@ -1934,9 +1945,54 @@ async function renderSpdAssess() {
         <input name="verify_code" placeholder="核销码" required>
         <button class="secondary">核销</button>
       </form><p class="msg" id="spd-goods-msg"></p>
-      ${table(["编码", "名称", "所需积分", "库存"], goods, (g) =>
+      ${table(["编码", "名称", "所需积分", "库存", "操作"], goods, (g) =>
         `<tr><td>${esc(g.code)}</td><td>${esc(g.name)}</td><td>${g.points}</td>
-         <td>${g.stock}</td></tr>`)}</div>`;
+         <td>${g.stock}</td>
+         <td><button class="btn secondary" data-goods-edit="${g.id}">改档</button>
+             ${g.stock > 0
+               ? `<button class="btn" data-goods-redeem="${g.id}">兑换</button>`
+               : '<span class="tag">已无库存</span>'}</td></tr>`)}
+      <p class="desc">兑换记录（核销码给村医，凭码到指定点领取）</p>
+      ${table(["ID", "商品", "积分", "核销码", "状态", "时间"], redeems, (r) =>
+        `<tr><td>${r.id}</td><td>${esc(r.goods_name || r.goods_id)}</td>
+         <td>${esc(r.points ?? "—")}</td><td><code>${esc(r.verify_code || "—")}</code></td>
+         <td>${r.verified
+            ? '<span class="tag green">已核销</span>'
+            : '<span class="tag orange">待核销</span>'}</td>
+         <td>${esc(String(r.created_at || "").replace("T", " ").slice(0, 16))}</td></tr>`)}</div>
+    <div class="panel"><h3>积分规则</h3>
+      <p class="desc">按事件给分；<b>日上限 0 表示不限</b>。规则改了只影响之后发生的事件，
+        不会回算历史积分——积分是发出去的，回算等于事后改账。</p>
+      <form class="inline" id="spd-prule-form">
+        <input name="code" placeholder="规则编码" required>
+        <input name="name" placeholder="规则名称" required>
+        <select name="event">${Object.entries(SPD_POINT_EVENTS).map(([v, t]) =>
+          `<option value="${v}">${esc(t)}</option>`).join("")}</select>
+        <input name="points" type="number" min="0" max="1000" placeholder="分值" required>
+        <input name="daily_limit" type="number" min="0" placeholder="日上限(0=不限)">
+        <button>新建规则</button>
+      </form><p class="msg" id="spd-prule-msg"></p>
+      ${table(["编码", "名称", "事件", "分值", "日上限", "状态", "操作"], pointRules, (r) =>
+        `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td>
+         <td>${esc(SPD_POINT_EVENTS[r.event] || r.event)}</td>
+         <td>${r.points}</td><td>${r.daily_limit || "不限"}</td>
+         <td>${r.active === false ? '<span class="tag">停用</span>' : '<span class="tag green">启用</span>'}</td>
+         <td><button class="btn secondary" data-prule-edit="${r.id}">改档</button></td></tr>`)}
+      <form class="inline" id="spd-signin-form" style="margin-top:10px">
+        <button class="btn secondary">我今天签到</button>
+      </form></div>
+    <div class="panel"><h3>得分分析与工作量</h3>
+      <form class="inline" id="spd-ana-form">
+        <input name="plan_id" type="number" placeholder="方案ID（分析用）">
+        <input name="period" placeholder="周期 2026-08 / 2026-Q3 / 2026"
+               value="${esc(new Date().toISOString().slice(0, 7))}" required>
+        <select name="object_type"><option value="doctor">医生</option>
+          <option value="org">机构</option><option value="village_doctor">村医</option>
+          <option value="team">团队</option></select>
+        <button class="btn secondary">查得分分析</button>
+        <button type="button" class="btn secondary" id="spd-workload-btn">查工作量</button>
+      </form><p class="msg" id="spd-ana-msg"></p>
+      <div id="spd-ana-result"></div></div>`;
   $("#spd-plan-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target);
@@ -1954,8 +2010,133 @@ async function renderSpdAssess() {
     e.preventDefault();
     return postAction("/api/spd/redeems/verify", formJson(e.target), "#spd-goods-msg");
   };
+  $("#spd-prule-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/point-rules",
+      formJson(e.target, ["points", "daily_limit"]), "#spd-prule-msg");
+  };
+  $("#spd-signin-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/point-accounts/signin", null, "#spd-prule-msg");
+  };
+  $("#spd-ana-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = formJson(e.target);
+    if (!f.plan_id) return setMsg("#spd-ana-msg", "得分分析要指定方案ID", false);
+    try {
+      const q = new URLSearchParams({ plan_id: f.plan_id, period: f.period }).toString();
+      const d = await api(`/api/spd/scores-analysis?${q}`);
+      const rows = d.items || d.rows || [];
+      $("#spd-ana-result").innerHTML =
+        `<p class="desc">${esc(f.period)} 得分分析（${rows.length} 条）</p>`
+        + table(["对象", "得分", "排名", "薄弱指标"], rows, (x) =>
+          `<tr><td>${esc(x.object_name || x.object_id)}</td>
+           <td>${esc(x.total_score ?? "—")}</td><td>${esc(x.rank ?? "—")}</td>
+           <td>${esc((x.weak_indicators || []).join("、") || "—")}</td></tr>`);
+      setMsg("#spd-ana-msg", "", true);
+    } catch (err) { setMsg("#spd-ana-msg", err.message, false); }
+  };
+  $("#spd-workload-btn").onclick = async () => {
+    const f = formJson($("#spd-ana-form"));
+    try {
+      const q = new URLSearchParams({
+        period: f.period, object_type: f.object_type }).toString();
+      const d = await api(`/api/spd/workload?${q}`);
+      const rows = d.items || d.rows || [];
+      $("#spd-ana-result").innerHTML =
+        `<p class="desc">${esc(f.period)} 工作量（${rows.length} 条）</p>`
+        + table(["对象", "随访", "任务", "转诊", "评估", "合计"], rows, (x) =>
+          `<tr><td>${esc(x.object_name || x.object_id)}</td>
+           <td>${esc(x.followups ?? "—")}</td><td>${esc(x.tasks ?? "—")}</td>
+           <td>${esc(x.referrals ?? "—")}</td><td>${esc(x.assessments ?? "—")}</td>
+           <td>${esc(x.total ?? "—")}</td></tr>`);
+      setMsg("#spd-ana-msg", "", true);
+    } catch (err) { setMsg("#spd-ana-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const run = e.target.closest("[data-run]"), score = e.target.closest("[data-score]");
+    const el3 = (k) => e.target.closest(`[${k}]`);
+    const indEdit = el3("data-ind-edit"), indUse = el3("data-ind-use");
+    const planEdit = el3("data-plan-edit"), gEdit = el3("data-goods-edit");
+    const gRedeem = el3("data-goods-redeem"), pEdit = el3("data-prule-edit");
+    try {
+      if (indEdit) {
+        const cur = indicators.find((x) => String(x.id) === indEdit.dataset.indEdit) || {};
+        const form = await spdModal("改考核指标", [
+          { name: "name", label: "名称", value: cur.name || "" },
+          { name: "weight", label: "权重", type: "number", value: cur.weight ?? 0 },
+          { name: "target_value", label: "目标值", type: "number", value: cur.target_value ?? "" },
+          { name: "formula", label: "公式（AST 白名单求值）", value: cur.formula || "" },
+          { name: "active", label: "状态", type: "select",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }],
+            value: cur.active === false ? "0" : "1" },
+        ]);
+        if (!form) return;
+        const body = { name: form.name, formula: form.formula,
+          weight: Number(form.weight), active: form.active === "1" };
+        if (form.target_value !== "") body.target_value = Number(form.target_value);
+        return postAction(`/api/spd/indicators/${indEdit.dataset.indEdit}`,
+          body, "#spd-plan-msg", "PATCH");
+      }
+      if (indUse) {
+        const d = await api(`/api/spd/indicators/${indUse.dataset.indUse}/usage`);
+        const rows = d.plans || d.items || [];
+        // 改指标前先看谁在引它：权重一改，所有引用它的方案得分跟着变
+        $("#spd-ind-usage").innerHTML =
+          `<p class="desc">指标 #${esc(indUse.dataset.indUse)} 被 ${rows.length} 个方案引用
+            —— 改它的权重/公式，这些方案的历史与后续得分口径都会变</p>`
+          + table(["方案", "层级", "权重"], rows, (x) =>
+            `<tr><td>${esc(x.plan_name || x.name || x.plan_code)}</td>
+             <td>${esc(x.level || "—")}</td><td>${esc(x.weight ?? "—")}</td></tr>`);
+        return;
+      }
+      if (planEdit) {
+        const cur = plans.find((x) => String(x.id) === planEdit.dataset.planEdit) || {};
+        const form = await spdModal("改考核方案", [
+          { name: "name", label: "名称", value: cur.name || "" },
+          { name: "active", label: "状态", type: "select",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }],
+            value: cur.active === false ? "0" : "1" },
+        ]);
+        if (!form) return;
+        return postAction(`/api/spd/assess-plans/${planEdit.dataset.planEdit}`,
+          { name: form.name, active: form.active === "1" }, "#spd-plan-msg", "PATCH");
+      }
+      if (gEdit) {
+        const cur = goods.find((x) => String(x.id) === gEdit.dataset.goodsEdit) || {};
+        const form = await spdModal("改商品", [
+          { name: "name", label: "名称", value: cur.name || "" },
+          { name: "points", label: "所需积分", type: "number", value: cur.points ?? 0 },
+          { name: "stock", label: "库存", type: "number", value: cur.stock ?? 0 },
+        ]);
+        if (!form) return;
+        return postAction(`/api/spd/goods/${gEdit.dataset.goodsEdit}`, {
+          name: form.name, points: Number(form.points), stock: Number(form.stock),
+        }, "#spd-goods-msg", "PATCH");
+      }
+      if (gRedeem) {
+        if (!confirm("用当前登录账号的积分兑换这件商品？兑换后会生成核销码。")) return;
+        return postAction("/api/spd/redeems",
+          { goods_id: Number(gRedeem.dataset.goodsRedeem) }, "#spd-goods-msg");
+      }
+      if (pEdit) {
+        const cur = pointRules.find((x) => String(x.id) === pEdit.dataset.pruleEdit) || {};
+        const form = await spdModal("改积分规则", [
+          { name: "name", label: "名称", value: cur.name || "" },
+          { name: "points", label: "分值", type: "number", value: cur.points ?? 1 },
+          { name: "daily_limit", label: "日上限(0=不限)", type: "number",
+            value: cur.daily_limit ?? 0 },
+          { name: "active", label: "状态", type: "select",
+            options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }],
+            value: cur.active === false ? "0" : "1" },
+        ]);
+        if (!form) return;
+        return postAction(`/api/spd/point-rules/${pEdit.dataset.pruleEdit}`, {
+          name: form.name, points: Number(form.points),
+          daily_limit: Number(form.daily_limit), active: form.active === "1",
+        }, "#spd-prule-msg", "PATCH");
+      }
+    } catch (err) { setMsg("#spd-plan-msg", err.message, false); }
     if (run) {
       const form = await spdModal("跑一次考核计分", [
         { name: "period", label: "考核周期（如 2026-08 / 2026-Q3 / 2026）",
