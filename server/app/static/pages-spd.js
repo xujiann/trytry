@@ -553,10 +553,15 @@ async function renderSpdExpert() {
          <td>${p.published_paths ? `<span class="tag green">${p.published_paths}</span>`
             : '<span class="tag red">0</span>'}</td>
          <td>${p.scales}</td><td>${p.enrolled}</td></tr>`)}</div>
+    <div class="panel"><h3>机构树（县—乡—村三级，带团队数与在管人数）</h3>
+      <p class="desc">这棵树不只是机构名称：患者归属、任务派发、逐级转诊、团队授权、考核都按它走，
+        所以要带上团队数与在管人数——不然改动一个节点，配置的人判断不出会影响到谁。</p>
+      <div id="spd-org-tree"></div></div>
     <div class="panel"><h3>重点慢专病中心</h3>
-      ${table(["名称", "病种", "牵头科室", "版本", "状态"], wb.centers, (c) =>
-        `<tr><td>${esc(c.name)}</td><td>${esc(c.program_code)}</td><td>${esc(c.lead_dept)}</td>
-         <td>${esc(c.version)}</td><td>${esc(c.status)}</td></tr>`)}
+      ${table(["ID", "名称", "病种", "牵头科室", "版本", "状态", "操作"], wb.centers, (c) =>
+        `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.program_code)}</td><td>${esc(c.lead_dept)}</td>
+         <td>${esc(c.version)}</td><td>${esc(c.status)}</td>
+         <td><button class="btn secondary" data-center-edit="${c.id}">改</button></td></tr>`)}
       <form class="inline" id="spd-center-form" style="margin-top:10px">
         <input name="code" placeholder="中心编码" required>
         <input name="name" placeholder="中心名称" required>
@@ -571,6 +576,37 @@ async function renderSpdExpert() {
   $("#spd-center-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/centers", formJson(e.target), "#spd-center-msg");
+  };
+  const tree = await api("/api/spd/org-tree");
+  const renderNode = (n, depth) =>
+    `<tr><td style="padding-left:${depth * 18}px">${depth ? "└ " : ""}${esc(n.name)}</td>
+     <td>${esc(n.level)}</td><td>${esc(n.org_type)}</td><td>${n.team_count}</td><td>${n.enrolled}</td></tr>`
+    + (n.children || []).map((c) => renderNode(c, depth + 1)).join("");
+  $("#spd-org-tree").innerHTML =
+    `<table><thead><tr><th>机构</th><th>层级</th><th>类型</th><th>团队数</th><th>在管人数</th></tr></thead>
+     <tbody>${tree.map((n) => renderNode(n, 0)).join("")}</tbody></table>`;
+  $("#page-body").onclick = async (e) => {
+    const el = e.target.closest("[data-center-edit]");
+    if (!el) return;
+    const cur = (wb.centers || []).find((c) => String(c.id) === el.dataset.centerEdit) || {};
+    const form = await spdModal("改专病中心", [
+      { name: "name", label: "中心名称", value: cur.name || "" },
+      { name: "lead_dept", label: "牵头科室", value: cur.lead_dept || "" },
+      { name: "lead_org_id", label: "牵头机构ID", type: "number", value: cur.lead_org_id ?? "" },
+      { name: "leader_user_id", label: "负责人用户ID", type: "number", value: cur.leader_user_id ?? "" },
+      { name: "status", label: "状态", value: cur.status || "" },
+    ]);
+    if (!form) return;
+    // PATCH 收裸 dict 且只认出现过的键：空串一并发上去会把原值抹成空
+    const body = {};
+    for (const [k, v] of Object.entries(form)) if (v !== "" && v !== undefined) body[k] = v;
+    for (const k of ["lead_org_id", "leader_user_id"]) if (k in body) body[k] = Number(body[k]);
+    if (!Object.keys(body).length) return;
+    try {
+      await api(`/api/spd/centers/${el.dataset.centerEdit}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMsg("#spd-center-msg", "已保存", true);
+      return route();
+    } catch (err) { setMsg("#spd-center-msg", err.message, false); }
   };
 }
 

@@ -382,6 +382,7 @@ async function renderEsb() {
   $("#page-desc").textContent = "轻量服务总线：接入方注册与限流、消息队列重试与死信、编排流程逐步执行、成功率与积压监控";
   const [stats, endpoints, flows] = await Promise.all([
     api("/api/esb/stats"), api("/api/esb/endpoints"), api("/api/esb/flows")]);
+  const RUN_STATUS = { succeeded: ["成功", "green"], failed: ["失败", "red"], running: ["执行中", "orange"] };
   const drawMessages = async () => {
     const f = new FormData($("#esb-msg-filter"));
     const params = new URLSearchParams({ limit: "50" });
@@ -436,7 +437,20 @@ async function renderEsb() {
         `<tr><td><span class="tag">${esc(f.code)}</span></td><td>${esc(f.name)}</td><td>${f.step_count}</td>
          <td style="max-width:320px;font-size:12px">${esc((f.steps || []).map((s) => s.type).join(" → "))}</td>
          <td>${f.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
-         <td><button class="btn secondary" data-esbrun="${esc(f.code)}">对消息执行</button></td></tr>`)}</div>
+         <td><button class="btn secondary" data-esbrun="${esc(f.code)}">对消息执行</button>
+             <button class="btn ${f.active ? "danger" : "secondary"}" data-esbflowtoggle="${f.id}"
+                     data-to="${f.active ? "false" : "true"}">${f.active ? "停用" : "启用"}</button>
+             <button class="btn secondary" data-esbruns="${f.id}">执行记录</button></td></tr>`)}
+      <div id="esb-runs"></div></div>
+    <div class="panel"><h3>交换日志监控（HL7/FHIR 入站）</h3>
+      <p class="hint">与上面的 ESB 消息队列是两条线：那边是平台自己的总线，
+        这里是 HL7/FHIR 等对接报文的收发留痕。失败率按全量算，不受下面明细的条数限制影响。</p>
+      <form class="inline" id="xlog-form">
+        <input name="message_type" placeholder="报文类型（可空）">
+        <input name="source_system" placeholder="来源系统（可空）">
+        <select name="success"><option value="">全部</option><option value="false">只看失败</option><option value="true">只看成功</option></select>
+        <button>查询</button></form>
+      <div id="xlog-result"></div></div>
     <div class="panel"><h3>接入方统计</h3>
       ${table(["接入方", "总量", "成功", "死信", "积压", "成功率", "失败率"], stats.by_endpoint, (r) =>
         `<tr><td><span class="tag">${esc(r.endpoint_code)}</span> ${esc(r.endpoint_name)}</td><td>${r.total}</td>
@@ -472,8 +486,34 @@ async function renderEsb() {
     } catch (err) { setMsg("#esb-flow-msg", err.message, false); }
   };
   await drawMessages();
+  const drawXlogs = async (qs) => {
+    const r = await api(`/api/integration/exchange-logs${qs}`);
+    $("#xlog-result").innerHTML = `
+      <p>全量 ${r.total} 条，失败 ${r.failed} 条，失败率
+        <span class="tag ${r.failure_rate_pct > 0 ? "red" : "green"}">${r.failure_rate_pct}%</span></p>
+      ${table(["报文类型", "条数", "失败", "失败率"], r.by_type, (t) =>
+        `<tr><td>${esc(t.message_type)}</td><td>${t.count}</td><td>${t.failed}</td>
+         <td>${t.failure_rate_pct}%</td></tr>`)}
+      <h4 style="margin-top:8px">明细（最近 ${r.logs.length} 条）</h4>
+      ${table(["ID", "来源系统", "类型", "方向", "结果", "错误", "时间"], r.logs, (lx) =>
+        `<tr><td>${lx.id}</td><td>${esc(lx.source_system)}</td><td>${esc(lx.message_type)}</td>
+         <td>${esc(lx.direction)}</td>
+         <td><span class="tag ${lx.success ? "green" : "red"}">${lx.success ? "成功" : "失败"}</span></td>
+         <td>${esc(lx.error_detail) || "—"}</td>
+         <td>${esc(lx.at.replace("T", " ").slice(0, 19))}</td></tr>`)}`;
+  };
+  await drawXlogs("");
+  $("#xlog-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams();
+    for (const k of ["message_type", "source_system", "success"]) if (f.get(k)) q.set(k, f.get(k));
+    try { await drawXlogs(q.toString() ? `?${q}` : ""); }
+    catch (err) { setMsg("#esb-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
-    const { esbproc, esbpayload, esbtoggle, active, esbrotate, esbrun } = e.target.dataset;
+    const { esbproc, esbpayload, esbtoggle, active, esbrotate, esbrun,
+            esbflowtoggle, esbruns, to } = e.target.dataset;
     try {
       if (esbproc) {
         const res = await api(`/api/esb/messages/${esbproc}/process`, { method: "POST" });
@@ -489,6 +529,20 @@ async function renderEsb() {
       } else if (esbrotate) {
         const res = await api(`/api/esb/endpoints/${esbrotate}/rotate-token`, { method: "POST" });
         alert(`新令牌（旧令牌已失效）：\n${res.auth_token}`);
+      } else if (esbflowtoggle) {
+        // 与上面的「接入方启停」是两件事：那个停的是谁能投消息进来，
+        // 这个停的是某条编排还跑不跑。撞成同一个 dataset 名会互相吃掉。
+        await api(`/api/esb/flows/${esbflowtoggle}`, { method: "PATCH", body: JSON.stringify({ active: to === "true" }) });
+        setMsg("#esb-flow-msg", "已保存", true);
+        route();
+      } else if (esbruns) {
+        const runs = await api(`/api/esb/flow-runs?flow_id=${esbruns}&limit=50`);
+        $("#esb-runs").innerHTML = `<h4>流程 ${esc(esbruns)} 的执行记录（${runs.length} 条）</h4>`
+          + table(["ID", "编排", "消息", "结果", "步骤数", "错误", "时间"], runs, (r) =>
+            `<tr><td>${r.id}</td><td>${esc(r.flow_code)}</td><td>${r.message_id}</td>
+             <td>${statusTag(RUN_STATUS, r.status)}</td><td>${(r.step_results || []).length}</td>
+             <td>${esc(r.error) || "—"}</td>
+             <td>${esc(r.created_at.replace("T", " ").slice(0, 19))}</td></tr>`);
       } else if (esbrun) {
         const messageId = prompt("对哪条消息执行该编排？填写消息ID");
         if (!messageId) return;

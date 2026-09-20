@@ -256,7 +256,8 @@ async function openDrilldown(metric, offset = 0) {
 
 async function renderDashboard() {
   $("#page-desc").textContent = "指标口径对齐《紧密型县域医共体监测指标体系（2024版）》；指标卡与预警可点击下钻明细";
-  const m = await api("/api/metrics/overview");
+  const [m, drilldowns] = await Promise.all([
+    api("/api/metrics/overview"), api("/api/metrics/drilldown-metrics")]);
   // 第4项为下钻指标 key（与 /api/metrics/drilldown 的 metric 同名，口径服务端统一）
   const cards = [
     ["成员单位数", m.resources.organizations],
@@ -298,6 +299,15 @@ async function renderDashboard() {
       `<div class="card"${metric ? ` data-drill="${esc(metric)}" style="cursor:pointer" title="点击查看明细"` : ""}>
         <div class="label">${esc(label)}${metric ? " ▸" : ""}</div><div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}</div>
      <div id="drill-panel" class="hidden"></div>
+     <div class="panel"><h3>可下钻指标目录</h3>
+       <p style="margin-bottom:8px">上面的指标卡带 ▸ 的可以点开明细。这份目录是<b>服务端给的</b>——
+         口径与计数都由服务端统一算，前端不另维护一份"哪些能下钻"的清单，
+         否则新增一个可下钻指标而前端忘了加，它就永远点不开。</p>
+       ${table(["指标", "键", "所属页", "当前计数"], drilldowns, (dm) =>
+         `<tr><td><span data-drill="${esc(dm.metric)}" style="cursor:pointer;color:#0a4d78">${esc(dm.label)} ▸</span></td>
+          <td><code>${esc(dm.metric)}</code></td>
+          <td><span data-drillgo="${esc(dm.page)}" style="cursor:pointer;color:#0a4d78">${esc(dm.page)}</span></td>
+          <td>${dm.count}</td></tr>`)}</div>
      <div class="panel"><h3>近6月业务量趋势</h3><div style="margin-bottom:6px">${legend}</div>${lineChart(trends.months, trends.series, trendColors)}</div>
      ${chronicItems.length ? `<div class="panel"><h3>慢病分级分组</h3>${barChart(chronicItems, { color: "#b26a00", unit: " 人" })}</div>` : ""}
      ${perfHtml}`;
@@ -504,6 +514,13 @@ async function renderAppointments() {
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <button>预约</button>
       </form><p class="msg" id="apt-msg"></p></div>
+    <div class="panel"><h3>智能导诊</h3>
+      <p style="margin-bottom:8px">按症状推荐科室。一条都没匹配上时<b>不回空列表</b>，而是回落到
+        「全科门诊」——让居民永远拿得到一个可去的地方，比诚实地回一个空数组有用。</p>
+      <form class="inline" id="triage-form">
+        <input name="symptoms" placeholder="症状，逗号分隔（如：胸痛,心悸）" required style="min-width:280px">
+        <button>导诊</button></form>
+      <div id="triage-result"></div></div>
     <div class="panel"><h3>便捷寻医</h3>
       <p style="margin-bottom:8px">按姓名/科室/职称找医师并带出可约号源。<b>跨机构不设限</b>——
         在卫生院帮患者约县医院的号正是它的用途；没号的医师也一并列出并标注，
@@ -582,6 +599,21 @@ async function renderAppointments() {
        <td>${esc(d.org_name) || d.org_id}</td>
        <td><span class="tag ${d.bookable ? "green" : "red"}">${d.bookable ? `${d.available_slots} 个` : "暂无号"}</span></td>
        <td>${d.next_slots.map((s) => `${esc(s.slot_date)} ${esc(s.slot_time)}（${esc(s.resource_name)}，余${s.remaining}，号源#${s.slot_id}）`).join("<br>") || "—"}</td></tr>`);
+  };
+  $("#triage-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const symptoms = new FormData(e.target).get("symptoms")
+      .split(/[,，、]/).map((x) => x.trim()).filter(Boolean);
+    if (!symptoms.length) return setMsg("#apt-msg", "至少填一个症状", false);
+    try {
+      // 端点收的是**裸数组**（triage_suggest(symptoms: list[str])），不是 {symptoms: [...]}
+      const r = await api("/api/triage/suggest", { method: "POST", body: JSON.stringify(symptoms) });
+      $("#triage-result").innerHTML =
+        (r.emergency_hint ? '<p class="msg err">⚠ 首选科室含急症症状，建议直接走急诊</p>' : "")
+        + table(["建议科室", "命中症状", "急症"], r.recommendations, (x) =>
+          `<tr><td>${esc(x.department)}</td><td>${x.matched.map((m) => esc(m)).join("、") || "（无精确命中，兜底建议）"}</td>
+           <td>${x.urgent ? '<span class="tag red">是</span>' : "否"}</td></tr>`);
+    } catch (err) { setMsg("#apt-msg", err.message, false); }
   };
   $("#doc-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -909,7 +941,8 @@ async function renderMedwaste() {
 
 async function renderOrgs() {
   $("#page-desc").textContent = "县—乡—村三级医共体成员单位";
-  const orgs = await api("/api/organizations");
+  const [orgs, health] = await Promise.all([
+    api("/api/organizations"), api("/api/organizations/tree-health").catch(() => null)]);
   const options = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("");
   $("#page-body").innerHTML = `
     <div class="panel"><h3>新增机构</h3>
@@ -922,7 +955,28 @@ async function renderOrgs() {
       </form><p class="msg" id="org-msg"></p></div>
     <div class="panel">${table(["ID", "名称", "类型", "层级", "上级机构ID"], orgs, (o) =>
       `<tr><td>${o.id}</td><td>${esc(o.name)}</td><td>${ORG_TYPES[o.org_type] || esc(o.org_type)}</td>
-       <td><span class="tag">${LEVELS[o.level] || esc(o.level)}</span></td><td>${o.parent_id ?? "—"}</td></tr>`)}</div>`;
+       <td><span class="tag">${LEVELS[o.level] || esc(o.level)}</span></td><td>${o.parent_id ?? "—"}</td></tr>`)}</div>
+    ${health ? `<div class="panel"><h3>机构树体检（运维）</h3>
+      <p style="margin-bottom:8px">转诊分级审核按机构树 parent_id 逐级上收：非顶层机构<b>缺 parent_id</b> 时，
+        它经手的转诊单只有全域角色推得动，非全域账号一律 403。这里把这类机构先列清楚，
+        免得等越权校验"咬人"了才回头找原因。</p>
+      <p>共 ${health.total} 家，树根 ${health.roots} 个，最大深度 ${health.max_depth}；
+        转诊就绪 <span class="tag ${health.referral_ready ? "green" : "red"}">${
+          health.referral_ready ? "是" : "否"}</span></p>
+      ${health.orphans.length ? `<h4>缺上级机构（会被 403 的那批，${health.orphans.length}）</h4>`
+        + table(["ID", "名称", "层级", "类型"], health.orphans, (o) =>
+          `<tr><td>${o.id}</td><td>${esc(o.name)}</td><td>${esc(LEVELS[o.level] || o.level)}</td>
+           <td>${esc(ORG_TYPES[o.org_type] || o.org_type)}</td></tr>`) : "<p>无缺上级机构</p>"}
+      ${health.broken_chains.length ? `<h4 style="margin-top:10px">转诊链层级错位（${health.broken_chains.length}）</h4>
+        <p style="margin-bottom:6px">判据是<b>层级相邻</b>而非链路长度：县→村室→村室 只有三层却已经错位——
+          那张单子的"卫生院审核"会由一家村卫生室完成、县级医院从未经手，环节名与实际处理机构对不上，
+          闭环统计跟着失真。</p>`
+        + table(["ID", "名称", "本级", "上级ID", "上级层级", "应为", "链路"], health.broken_chains, (c) =>
+          `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(LEVELS[c.level] || c.level)}</td>
+           <td>${c.parent_id}</td><td>${esc(LEVELS[c.parent_level] || c.parent_level)}</td>
+           <td>${c.expected_parent_levels.map((x) => esc(LEVELS[x] || x)).join(" / ")}</td>
+           <td>${c.chain.map((x) => esc(x)).join(" → ")}</td></tr>`) : "<p>转诊链层级无错位</p>"}
+    </div>` : ""}`;
   $("#org-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1039,7 +1093,14 @@ async function renderDicts() {
         <input name="code" placeholder="编码" required>
         <input name="name" placeholder="名称" required>
         <button>新增条目</button>
-      </form><p class="msg" id="dict-msg"></p>
+      </form>
+      <form class="inline" id="dict-import">
+        <textarea name="rows" rows="3" style="width:100%"
+          placeholder="批量导入，每行一条：编码,名称&#10;例：I10,原发性高血压"></textarea>
+        <button class="secondary">导入到当前字典</button></form>
+      <p style="margin-bottom:8px">导入按<b>已存在的编码跳过</b>（不覆盖已有名称），返回分开报「新增 / 跳过」两个数。
+        要改已有条目的名称，用上面的单条新增会撞编码——改名另走条目编辑。</p>
+      <p class="msg" id="dict-msg"></p>
       <div id="dict-table"></div></div>`;
   await draw("diagnosis");
   $("#dict-system").onchange = (e) => draw(e.target.value);
@@ -1051,6 +1112,22 @@ async function renderDicts() {
       await api(`/api/dictionaries/${system}/entries`, { method: "POST",
         body: JSON.stringify({ code: f.get("code"), name: f.get("name") }) });
       setMsg("#dict-msg", "已新增");
+      await draw(system);
+    } catch (err) { setMsg("#dict-msg", err.message, false); }
+  };
+  $("#dict-import").onsubmit = async (e) => {
+    e.preventDefault();
+    const system = $("#dict-system").value;
+    const entries = [];
+    for (const line of (new FormData(e.target).get("rows") || "").split("\n").map((x) => x.trim()).filter(Boolean)) {
+      const idx = line.indexOf(",");
+      if (idx <= 0) return setMsg("#dict-msg", `这一行读不出「编码,名称」：${line}`, false);
+      entries.push({ code: line.slice(0, idx).trim(), name: line.slice(idx + 1).trim() });
+    }
+    if (!entries.length) return setMsg("#dict-msg", "没有可导入的行", false);
+    try {
+      const r = await api(`/api/dictionaries/${system}/import`, { method: "POST", body: JSON.stringify(entries) });
+      setMsg("#dict-msg", `导入完成：新增 ${r.imported} 条，已存在跳过 ${r.skipped} 条`, true);
       await draw(system);
     } catch (err) { setMsg("#dict-msg", err.message, false); }
   };

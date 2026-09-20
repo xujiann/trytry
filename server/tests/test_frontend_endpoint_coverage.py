@@ -115,10 +115,17 @@ EXEMPT: dict[str, str] = {
     ),
 }
 
-#: 当前没有前端调用点、也没豁免的端点数。**只允许调小。**
-#: 轨迹：241（本闸门建成时的实测）→ 232（扣掉 9 条机器对机器豁免）
-#: → 220（补上 spd/config/teams 的服务团队与村医配置界面，12 个端点）。
-BASELINE_ORPHANS = 29
+#: 当前没有前端调用点、也没豁免的端点数。**只允许调小，现在是 0。**
+#:
+#: 轨迹：241（本闸门建成时的实测）→ 232（扣掉机器对机器豁免）→ 220 → 199
+#: → 188 → 176 → 164 → 154 → 145 → 133 → 124 → 104 → 82 → 62 → 43 → 29 → **0**。
+#:
+#: 归零**不等于**这道闸门可以撤：它判的是"这条路径有没有人调用过"，
+#: 判据与三条盲区一字未改（见模块 docstring 与 `test_覆盖面自证` 的打印）。
+#: 归零之后它的作用从"清欠账"变成"守住零"——新加一个端点要么带着界面来，
+#: 要么写明为什么不需要界面。基线为 0 时任何一条新孤儿都当场变红，
+#: 这正是它现在最有用的形态。
+BASELINE_ORPHANS = 0
 
 #: 路径由变量拼出来、扫描看不见的调用点。**只允许调小。**
 #: 这不是欠账，是闸门的视野边界——如实登记，不假装看得见。
@@ -147,18 +154,23 @@ FULLY_COVERED = frozenset({
     "routers.credentials",
     "routers.cssd",
     "routers.dataquality",
+    "routers.dictionaries",
+    "routers.disease_programs",
     "routers.dispense",
     "routers.drgs",
     "routers.education",
     "routers.eldercare",
     "routers.emergency",
     "routers.encounters",
+    "routers.esb",
     "routers.exams",
     "routers.followups",
+    "routers.fund",
     "routers.homevisits",
     "routers.infectious",
     "routers.inpatient",
     "routers.insurance",
+    "routers.integration",
     "routers.jobs",
     "routers.knowledge",
     "routers.labqc",
@@ -166,30 +178,44 @@ FULLY_COVERED = frozenset({
     "routers.maternal",
     "routers.medication",
     "routers.medwaste",
+    "routers.metrics",
     "routers.monitor",
     "routers.notifications",
+    "routers.org_groups",
+    "routers.organizations",
+    "routers.outpatient_docs",
     "routers.pathology",
+    "routers.patients",
     "routers.performance",
     "routers.pharmacy",
     "routers.portal",
     "routers.prescriptions",
     "routers.printing",
+    "routers.projects",
     "routers.publichealth",
     "routers.quality",
+    "routers.rbac",
     "routers.referrals",
     "routers.reports",
+    "routers.resources",
     "routers.rules",
     "routers.staffing",
     "routers.surgery",
+    "routers.surveillance",
     "routers.surveys",
+    "routers.tcm",
+    "routers.tcm_heritage",
     "routers.telemedicine",
     "routers.todos",
+    "routers.triage",
     "routers.users",
     "routers.vaccination",
+    "routers.vaccine_supply",
     "routers.workflows",
     "spd.routers.assess",
     "spd.routers.care",
     "spd.routers.config.catalog",
+    "spd.routers.config.centers",
     "spd.routers.config.devices",
     "spd.routers.config.paths",
     "spd.routers.config.scales",

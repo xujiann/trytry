@@ -1162,9 +1162,12 @@ async function renderOutpatientDocs() {
   $("#page-desc").textContent =
     "知情告知书签署时冻结正文——模板日后修订不会改动已签的那一份；拒签是独立状态，不是「没签」";
   const encounterId = Number(localStorage.getItem("medplat_od_encounter") || 0);
-  const [templates, consents] = await Promise.all([
+  const [templates, consents, allTemplates] = await Promise.all([
     api("/api/outpatient/consent-templates?active=true"),
     api("/api/outpatient/consents?limit=50"),
+    // 维护清单要含停用的：停用只是不再给新告知书用，已签的那些仍引用着它，
+    // 只列启用的话，翻已签告知书的模板出处会翻不到。
+    api("/api/outpatient/consent-templates"),
   ]);
   let scoped = { treatments: [], nursing: [], completeness: null };
   if (encounterId) {
@@ -1245,8 +1248,64 @@ async function renderOutpatientDocs() {
          <td>${esc((c.signed_at || c.created_at).slice(0, 16).replace("T", " "))}</td>
          <td>${c.status === "pending"
            ? `<button data-csign="${c.id}">签署</button><button data-crefuse="${c.id}">拒签</button>` : ""}</td></tr>`)}
-    </div>`;
+    </div>
+    <div class="panel"><h3>告知书模板维护</h3>
+      <p class="hint">改模板只影响<b>之后</b>签署的告知书：已签的正文在签署时已冻结成快照，不受影响。</p>
+      ${table(["ID", "类型", "标题", "版本", "状态", "操作"], allTemplates, (t) =>
+        `<tr><td>${t.id}</td><td>${esc(t.consent_type_name)}</td><td>${esc(t.title)}</td>
+         <td><span class="tag">${esc(t.version)}</span></td>
+         <td><span class="tag ${t.active ? "green" : "red"}">${t.active ? "启用" : "停用"}</span></td>
+         <td><button class="btn sm secondary" data-tpledit="${t.id}">改</button>
+             <button class="btn sm ${t.active ? "danger" : "secondary"}" data-tpltoggle="${t.id}"
+                     data-to="${t.active ? "false" : "true"}">${t.active ? "停用" : "启用"}</button></td></tr>`)}
+      <p class="msg" id="od-tmsg"></p></div>
+    <div class="panel"><h3>按患者查处置史</h3>
+      <p class="hint">换药、雾化这类连续处置要跨就诊看一条线——只按单次就诊看，看不出"这个伤口换了几次药"。</p>
+      <form class="inline" id="od-treat">
+        <input name="patient_id" type="number" placeholder="患者ID" required><button>查处置史</button></form>
+      <div id="od-treat-list"></div></div>`;
 
+  $("#od-treat").onsubmit = async (e) => {
+    e.preventDefault();
+    const pid = new FormData(e.target).get("patient_id");
+    try {
+      const rows = await api(`/api/outpatient/treatments?patient_id=${pid}&limit=50`);
+      $("#od-treat-list").innerHTML = table(
+        ["就诊", "处置", "部位", "剂量", "执行人", "执行时间", "反应"], rows, (t) =>
+        `<tr><td>${t.encounter_id}</td><td>${esc(t.treatment_name)}（${esc(t.treatment_code)}）</td>
+         <td>${esc(t.site) || "—"}</td><td>${esc(t.dose) || "—"}</td>
+         <td>${esc(t.executor_name) || "—"}</td>
+         <td>${esc(t.performed_at.replace("T", " ").slice(0, 19))}</td>
+         <td>${esc(t.reaction) || "—"}</td></tr>`);
+    } catch (err) { setMsg("#od-cmsg", err.message, false); }
+  };
+  $("#page-body").addEventListener("click", async (e) => {
+    const { tpledit, tpltoggle, to } = e.target.dataset;
+    if (tpltoggle) {
+      try {
+        await api(`/api/outpatient/consent-templates/${tpltoggle}`, { method: "PATCH",
+          body: JSON.stringify({ active: to === "true" }) });
+        setMsg("#od-tmsg", "已保存。已签的告知书不受影响（正文已冻结）", true);
+        return route();
+      } catch (err) { return setMsg("#od-tmsg", err.message, false); }
+    }
+    if (tpledit) {
+      const cur = allTemplates.find((t) => String(t.id) === tpledit) || {};
+      const body = {};
+      // 各字段 None 表示"不改"：空串不提交，免得改个标题顺手把正文清空
+      for (const [key, label] of [["title", "标题"], ["version", "版本号"], ["body", "正文"]]) {
+        const v = prompt(`${label}（留空＝不改）`, cur[key] ?? "");
+        if (v === null) return;
+        if (v !== "") body[key] = v;
+      }
+      if (!Object.keys(body).length) return;
+      try {
+        await api(`/api/outpatient/consent-templates/${tpledit}`, { method: "PATCH", body: JSON.stringify(body) });
+        setMsg("#od-tmsg", "已保存。只影响之后签署的告知书", true);
+        return route();
+      } catch (err) { return setMsg("#od-tmsg", err.message, false); }
+    }
+  });
   $("#od-pick").onsubmit = (e) => { e.preventDefault();
     localStorage.setItem("medplat_od_encounter", e.target.encounter_id.value.trim()); route(); };
   if (encounterId) {
@@ -1331,6 +1390,13 @@ async function renderOrgGroups() {
          <td><button data-ogdrop="${m.org_id}">移出</button></td></tr>`)}
     </div>` : ""}
 
+    <div class="panel"><h3>某机构归属的全部分组</h3>
+      <p class="hint">一家机构可以既在某片区、又在某专科联盟——分组归属是组织架构拓扑，
+        转诊、调拨、统计口径都要引用它。横向隔离<b>不设限</b>：这里不含任何经营或诊疗数据。</p>
+      <form class="inline" id="og-of">
+        <select name="org_id">${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
+        <button>查归属</button></form>
+      <div id="og-of-list"></div></div>
     <div class="panel"><h3>覆盖情况（${esc(coverage.group_type_name)}）</h3>
       <form class="inline"><select id="og-type">${Object.entries(GROUP_TYPES).map(([v, t]) =>
         `<option value="${v}"${v === typeFilter ? " selected" : ""}>${t}</option>`).join("")}</select></form>
@@ -1350,6 +1416,19 @@ async function renderOrgGroups() {
         : '<p class="desc">全部机构均已入组，按分组统计之和等于全域总数。</p>'}
     </div>`;
 
+  $("#og-of").onsubmit = async (e) => {
+    e.preventDefault();
+    const orgId = new FormData(e.target).get("org_id");
+    try {
+      const rows = await api(`/api/org-groups/of-org/${orgId}`);
+      $("#og-of-list").innerHTML = rows.length
+        ? table(["分组", "类型", "牵头机构", "状态"], rows, (g) =>
+            `<tr><td>${esc(g.name)}</td><td>${esc(g.group_type_name)}</td>
+             <td>${esc(orgName[g.lead_org_id] || "—")}</td>
+             <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td></tr>`)
+        : "<p>该机构尚未加入任何分组</p>";
+    } catch (err) { setMsg("#og-msg", err.message, false); }
+  };
   $("#og-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target);
@@ -1427,7 +1506,13 @@ async function renderFund() {
          <td>${p.book_balance < 0
            ? `<span class="tag red">${p.book_balance}</span>` : p.book_balance}</td>
          <td><span class="tag ${p.status === "settled" ? "green" : ""}">${esc(p.status)}</span></td>
-         <td><button data-fdpick="${p.id}">打开</button></td></tr>`)}
+         <td><button data-fdpick="${p.id}">打开</button>
+             ${p.status === "settled"
+               ? `<button data-fddist="${p.id}">分配明细</button>`
+               : `<button data-fdedit="${p.id}">改要素</button>`}</td></tr>`)}
+      <div id="fd-dist"></div>
+      <p class="hint">已清算的池不可再改要素（后端 409）：改了之后清算结果与分配明细就对不上账了，
+        所以清算后这里只给「分配明细」。</p>
     </div>
 
     ${picked ? `
@@ -1493,10 +1578,41 @@ async function renderFund() {
       postAction(`/api/fund/pools/${picked}/settle`, body, "#fd-msg");
     };
   }
-  $("#page-body").onclick = (e) => {
+  $("#page-body").onclick = async (e) => {
     if (e.target.dataset.fdpick) {
       localStorage.setItem("medplat_fund_pool", e.target.dataset.fdpick);
       return route();
+    }
+    if (e.target.dataset.fdedit) {
+      const body = {};
+      // PoolUpdate 各字段 None＝不改：空串不提交
+      for (const [key, label, num] of [["total_amount", "筹资总额", true],
+                                       ["prepay_ratio_pct", "预付比例%", true],
+                                       ["note", "备注", false]]) {
+        const v = prompt(`${label}（留空＝不改）`);
+        if (v === null) return;
+        if (v !== "") body[key] = num ? Number(v) : v;
+      }
+      if (!Object.keys(body).length) return;
+      try {
+        // 已清算的池不可改（后端 409）：改了之后清算结果与分配明细就对不上账了
+        await api(`/api/fund/pools/${e.target.dataset.fdedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        setMsg("#fd-msg", "已保存", true);
+        return route();
+      } catch (err) { return setMsg("#fd-msg", err.message, false); }
+    }
+    if (e.target.dataset.fddist) {
+      try {
+        const rows = await api(`/api/fund/pools/${e.target.dataset.fddist}/distributions`);
+        $("#fd-dist").innerHTML = `<h4>分配明细（${rows.length} 家）</h4>`
+          + table(["机构", "绩效得分", "权重", "占比", "金额", "得分明细"], rows, (d) =>
+            `<tr><td>${esc(d.org_name)}</td><td>${d.score}</td><td>${d.weight}</td>
+             <td>${d.share_pct}%</td><td><b>${d.amount}</b></td>
+             <td style="font-size:12px">${esc(JSON.stringify(d.score_detail))}</td></tr>`)
+          + '<p style="color:#888">得分明细是清算当时的<b>快照</b>：指标构成随考核方案变，'
+          + '拿今天的方案去重算历史分配，对不上账的是账不是方案。</p>';
+      } catch (err) { setMsg("#fd-msg", err.message, false); }
+      return;
     }
     if (e.target.id === "fd-distribute") {
       const formula_expr = $("#fd-formula").value.trim() || "score";
@@ -1637,7 +1753,10 @@ async function renderDiseasePrograms() {
          <td>${(p.path_nodes || []).map((n) =>
            `${esc(n.name)}${n.required === false ? "（选做）" : ""}`).join(" → ") || "—"}</td>
          <td><span class="tag ${p.active ? "green" : "red"}">${p.active ? "启用" : "停用"}</span></td>
-         <td><button data-dppick="${p.id}">打开</button></td></tr>`)}
+         <td><button data-dppick="${p.id}">打开</button>
+             <button data-dpedit="${p.id}">改</button>
+             <button data-dptoggle="${p.id}" data-to="${p.active ? "false" : "true"}">${
+               p.active ? "停用" : "启用"}</button></td></tr>`)}
     </div>
 
     ${picked && current ? `
@@ -1668,9 +1787,11 @@ async function renderDiseasePrograms() {
              （${e.completion.required_done_pct}%）</td>
          <td>${esc(e.completion.pending_required.join("、") || "—")}</td>
          <td>${esc(e.outcome_name)}</td>
-         <td>${e.status === "enrolled"
-           ? `<button data-dpnode="${e.id}">记录节点</button><button data-dpexit="${e.id}">出组</button>`
-           : ""}</td></tr>`)}
+         <td><button data-dpview="${e.id}">节点明细</button>
+             ${e.status === "enrolled"
+               ? `<button data-dpnode="${e.id}">记录节点</button><button data-dpexit="${e.id}">出组</button>`
+               : ""}</td></tr>`)}
+      <div id="dp-detail"></div>
     </div>` : ""}`;
 
   $("#dp-form").onsubmit = (e) => {
@@ -1690,8 +1811,43 @@ async function renderDiseasePrograms() {
       postAction(`/api/disease-programs/${picked}/enrollments`,
         formJson(e.target, ["patient_id", "org_id"]), "#dp-msg"); };
   }
-  $("#page-body").onclick = (e) => {
-    const { dppick, dpnode, dpexit } = e.target.dataset;
+  $("#page-body").onclick = async (e) => {
+    const { dppick, dpnode, dpexit, dpview, dpedit, dptoggle, to } = e.target.dataset;
+    if (dpview) {
+      const d = await api(`/api/disease-programs/enrollments/${dpview}`);
+      $("#dp-detail").innerHTML = `
+        <h4>入组 #${d.id}（患者 ${d.patient_id}，${esc(d.status_name)}）</h4>
+        <p>路径完成度 ${d.completion.required_done}/${d.completion.required_total}
+          （${d.completion.required_done_pct}%）；未做的必需节点：
+          ${esc(d.completion.pending_required.join("、")) || "无"}</p>
+        <p>疗效评价：${esc(d.outcome_name)}${d.outcome_note ? `（${esc(d.outcome_note)}）` : ""}
+          ${d.exited_at ? `；出组 ${esc(d.exited_at)}，理由 ${esc(d.exit_reason) || "—"}` : ""}</p>
+        ${table(["节点", "执行时间", "执行人", "结果", "备注"], d.records, (r) =>
+          `<tr><td>${esc(r.node_key)}</td><td>${esc(r.performed_at) || "—"}</td>
+           <td>${esc(r.operator_name) || "—"}</td><td>${esc(r.result) || "—"}</td>
+           <td>${esc(r.note) || "—"}</td></tr>`)}`;
+      return;
+    }
+    if (dptoggle) {
+      await api(`/api/disease-programs/${dptoggle}`, { method: "PATCH",
+        body: JSON.stringify({ active: to === "true" }) });
+      setMsg("#dp-msg", "已保存。停用只是不再给新患者入组，已入组的照旧", true);
+      return route();
+    }
+    if (dpedit) {
+      const body = {};
+      for (const [key, label] of [["name", "目录名称"], ["description", "说明"]]) {
+        const v = prompt(`${label}（留空＝不改）`);
+        if (v === null) return;
+        if (v !== "") body[key] = v;
+      }
+      if (!Object.keys(body).length) return;
+      // 改路径只影响**此后**的执行判定，已记录的节点不会被删——所以改名/改说明
+      // 安全，改 path_nodes 要慎重，这里只开前两项。
+      await api(`/api/disease-programs/${dpedit}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMsg("#dp-msg", "已保存", true);
+      return route();
+    }
     if (dppick) { localStorage.setItem("medplat_program", dppick); return route(); }
     if (dpnode) {
       const keys = (current.path_nodes || []).map((n) => `${n.key}(${n.name})`).join(" ");

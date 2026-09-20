@@ -93,9 +93,18 @@ async function renderArchive() {
     e.preventDefault();
     const ehcNo = new FormData(e.target).get("ehc_no");
     try {
+      // 先按健康卡号取患者本身（脱敏按角色），再取 360 档案：卡号打错时
+      // 这一步就 404，错误指向"卡号不存在"而不是一坨空档案。
+      const pat = await api(`/api/patients/${encodeURIComponent(ehcNo)}`);
       const archive = await api(`/api/archive/${encodeURIComponent(ehcNo)}`);
       const more = Object.entries(archive.has_more || {}).filter(([, v]) => v).map(([k]) => k);
       $("#archive-result").innerHTML = `
+        <div class="cards">
+          <div class="card"><div class="label">姓名</div><div class="value">${esc(pat.name)}</div></div>
+          <div class="card"><div class="label">性别/出生</div><div class="value">${esc(pat.gender)} ${esc(pat.birth_date) || "—"}</div></div>
+          <div class="card"><div class="label">证件号</div><div class="value">${esc(pat.id_card) || "—"}</div></div>
+          <div class="card"><div class="label">联系电话</div><div class="value">${esc(pat.phone) || "—"}</div></div></div>
+        <p class="desc">证件号与电话按登录角色脱敏（非管理员掩码）；本次调阅已落留痕。</p>
         ${more.length ? `<p class="msg">以下分段超过 ${archive.section_limit} 条已截断：${more.join("、")}，
           完整清单请到对应业务页查询。</p>` : ""}
         <pre class="json">${esc(JSON.stringify(archive, null, 2))}</pre>`;
@@ -608,7 +617,8 @@ async function renderTelemedicine() {
 
 async function renderTcm() {
   $("#page-desc").textContent = "智能辅诊（辨证推荐）、共享中药房追溯、适宜技术库";
-  const [orders, techniques] = await Promise.all([api("/api/tcm/dispense-orders"), api("/api/tcm/techniques")]);
+  const [orders, techniques, spec] = await Promise.all([
+    api("/api/tcm/dispense-orders"), api("/api/tcm/techniques"), api("/api/tcm/constitution/spec")]);
   const DS = { ordered: "已下单", dispensed: "已调配", decocted: "已煎煮", delivering: "配送中", delivered: "已送达" };
   $("#page-body").innerHTML = `
     <div class="panel"><h3>智能辨证</h3>
@@ -626,12 +636,49 @@ async function renderTcm() {
          <td>${o.status !== "delivered" ? `<button class="btn secondary" data-adv="${o.id}">流转</button>` : "—"}</td></tr>`)}</div>
     <div class="panel"><h3>适宜技术库</h3>
       ${table(["名称", "分类", "适应症"], techniques, (t) =>
-        `<tr><td>${esc(t.name)}</td><td>${esc(t.category)}</td><td>${esc(t.indication)}</td></tr>`)}</div>`;
+        `<tr><td>${esc(t.name)}</td><td>${esc(t.category)}</td><td>${esc(t.indication)}</td></tr>`)}</div>
+    <div class="panel"><h3>中医体质辨识（标准化简表）</h3>
+      <p style="margin-bottom:8px">${esc(spec.method)}。${esc(spec.item_scoring)}；
+        ${esc(spec.transformed_score)}。判定：${esc(spec.judge.positive)}；${esc(spec.judge.tendency)}；${esc(spec.judge.balanced)}。</p>
+      <form class="inline" id="tcm-const">
+        <textarea name="answers" rows="3" style="width:100%"
+          placeholder="每行一个维度：维度key 条目分,条目分,…（每条 1-5）&#10;例：qi_deficiency 4,5,3,4&#10;也可改填转化分：勾上下面那个框，每行写「维度key 转化分」"></textarea>
+        <label style="font-size:13px"><input type="checkbox" name="direct"> 直接填转化分（0-100）</label>
+        <button>辨识</button></form>
+      <p class="desc">可用维度：${spec.constitutions.map((c) => `<code>${esc(c.key)}</code> ${esc(c.name)}`).join("、")}</p>
+      <p class="msg" id="tcm-const-msg"></p><div id="tcm-const-result"></div></div>`;
   $("#tcm-diag").onsubmit = async (e) => {
     e.preventDefault();
     const symptoms = new FormData(e.target).get("symptoms").split(/[,，]/).map((s) => s.trim()).filter(Boolean);
     const result = await api("/api/tcm/assist-diagnosis", { method: "POST", body: JSON.stringify({ symptoms }) });
     $("#tcm-diag-result").innerHTML = `<pre class="json">${esc(JSON.stringify(result.recommendations, null, 2))}</pre>`;
+  };
+  $("#tcm-const").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const direct = f.get("direct") === "on";
+    const parsed = {};
+    for (const line of (f.get("answers") || "").split("\n").map((x) => x.trim()).filter(Boolean)) {
+      const [key, nums] = line.split(/\s+/);
+      const vals = (nums || "").split(",").map((x) => Number(x.trim())).filter((x) => !Number.isNaN(x));
+      if (!key || !vals.length) return setMsg("#tcm-const-msg", `这一行读不出来：${line}`, false);
+      parsed[key] = direct ? vals[0] : vals;
+    }
+    if (!Object.keys(parsed).length) return setMsg("#tcm-const-msg", "没有可辨识的维度", false);
+    try {
+      // 两种入法走的是同一个端点的两个字段：scores 是已换算好的转化分，
+      // answers 是简表原始条目分由平台按公式换算。混着传后端只认前者，
+      // 所以界面上必须二选一，不能"都填了就都发过去"。
+      const r = await api("/api/tcm/constitution", { method: "POST",
+        body: JSON.stringify(direct ? { scores: parsed } : { answers: parsed }) });
+      $("#tcm-const-result").innerHTML = `
+        <p>判定体质：<b>${esc(r.constitution)}</b>（转化分 ${r.score}）
+          ${r.tendencies.length ? `；倾向：${r.tendencies.map((t) => esc(t)).join("、")}` : ""}</p>
+        <p>调养要点：${esc(r.advice || "—")}</p>
+        ${table(["维度", "转化分"], Object.entries(r.transformed_scores), ([k, v]) =>
+          `<tr><td>${esc(k)}</td><td>${v}</td></tr>`)}`;
+      setMsg("#tcm-const-msg", "已辨识", true);
+    } catch (err) { setMsg("#tcm-const-msg", err.message, false); }
   };
   $("#tcm-order").onsubmit = (e) => {
     e.preventDefault();
@@ -1104,11 +1151,22 @@ async function renderVaccineSupply() {
         <input name="symptom" placeholder="症状" required><input name="onset_date" placeholder="发生日期" required>
         <input name="org_id" type="number" placeholder="机构ID" required><button class="btn danger">上报</button></form>
       <p class="msg" id="aefi-msg"></p>
-      ${table(["患者", "疫苗", "批号", "类型", "症状", "发生日期", "转归"], aefi, (r) =>
+      <p class="hint">转归随访：上报时多为"未知"，好转与痊愈是后续随访才知道的——
+        所以"未知"不是漏填，是还没随访到。</p>
+      ${table(["患者", "疫苗", "批号", "类型", "症状", "发生日期", "转归", "操作"], aefi, (r) =>
         `<tr><td>${r.patient_id}</td><td>${esc(r.vaccine_code)}</td><td>${esc(r.batch_no || "—")}</td>` +
         `<td>${r.reaction_type === "severe" ? '<span class="tag danger">' + esc(r.reaction_type_name) + "</span>" : esc(r.reaction_type_name)}</td>` +
-        `<td>${esc(r.symptom)}</td><td>${esc(r.onset_date)}</td><td>${esc(r.outcome_name)}</td></tr>`)}
-    </div>`;
+        `<td>${esc(r.symptom)}</td><td>${esc(r.onset_date)}</td>` +
+        `<td>${r.outcome === "unknown" ? '<span class="tag orange">' + esc(r.outcome_name) + "</span>" : esc(r.outcome_name)}</td>` +
+        `<td><button class="btn sm secondary" data-aefiout="${r.id}">记转归</button></td></tr>`)}
+    </div>
+    <div class="panel"><h3>临期与过期批次</h3>
+      <p class="hint">过期的也一并列出并标注——不是列出来催人用掉，而是提示尽快按报废流程处理，
+        别让它躺在冰箱里被误用。只列<b>还有余量</b>的批次（用完的不必再提醒）。</p>
+      <form class="inline" id="vexp-form">
+        <input name="days" type="number" value="30" min="1" max="365" style="min-width:110px">
+        <button>查临期（天内）</button></form>
+      <div id="vexp-list"></div></div>`;
   $("#vb-list").innerHTML = table(["疫苗", "批号", "厂家", "效期", "在库", "状态", "操作"], batches, (r) =>
     `<tr><td>${esc(r.vaccine_name)}</td><td>${esc(r.batch_no)}</td><td>${esc(r.manufacturer || "—")}</td>` +
     `<td>${esc(r.expire_date)}${r.expired ? ' <span class="tag danger">已过期</span>' : ""}</td>` +
@@ -1120,8 +1178,35 @@ async function renderVaccineSupply() {
   $("#vb-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/batches", formJson(e.target, ["org_id", "quantity"]), "#vb-msg"); };
   $("#cc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/cold-chain", formJson(e.target, ["org_id", "temperature", "min_allowed", "max_allowed"]), "#cc-msg"); };
   $("#aefi-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccine-supply/aefi", formJson(e.target, ["patient_id", "record_id", "org_id"]), "#aefi-msg"); };
+  const drawExpiring = async (days) => {
+    const r = await api(`/api/vaccine-supply/expiring?days=${days}`);
+    $("#vexp-list").innerHTML = `<p>基准日 ${esc(r.today)}，${r.within_days} 天内到期或已过期且仍有余量的批次 ${r.batches.length} 个</p>`
+      + table(["疫苗", "批号", "厂家", "效期", "余量", "状态"], r.batches, (b) =>
+        `<tr><td>${esc(b.vaccine_name)}</td><td>${esc(b.batch_no)}</td><td>${esc(b.manufacturer) || "—"}</td>
+         <td>${esc(b.expire_date)}</td><td>${b.remaining}</td>
+         <td>${b.expired ? '<span class="tag red">已过期，走报废流程</span>'
+           : '<span class="tag orange">临期</span>'}</td></tr>`);
+  };
+  await drawExpiring(30);
+  $("#vexp-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawExpiring(Number(new FormData(e.target).get("days")) || 30); }
+    catch (err) { setMsg("#vb-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
+    if (d.aefiout) {
+      const OUTCOMES = { "1": "recovered", "2": "improving", "3": "sequelae", "4": "death", "5": "unknown" };
+      const pick = prompt("转归：1＝痊愈，2＝好转，3＝留有后遗症，4＝死亡，5＝仍未知");
+      const outcome = OUTCOMES[(pick || "").trim()];
+      if (!outcome) return;
+      try {
+        await api(`/api/vaccine-supply/aefi/${d.aefiout}/outcome`, { method: "PATCH",
+          body: JSON.stringify({ outcome }) });
+        setMsg("#aefi-msg", "转归已记录", true);
+        return route();
+      } catch (err) { return setMsg("#aefi-msg", err.message, false); }
+    }
     if (d.freeze) {
       const reason = prompt("封存原因"); if (!reason) return;
       return postAction(`/api/vaccine-supply/batches/${d.freeze}/freeze`, { frozen_reason: reason }, "#vb-msg");
@@ -1141,9 +1226,10 @@ async function renderVaccineSupply() {
 
 async function renderSurveillance() {
   $("#page-desc").textContent = "症候群监测、病原监测、多点触发预警与应急资源保障";
-  const [syndromes, pathogens, alerts, ready] = await Promise.all([
+  const [syndromes, pathogens, alerts, ready, emResources] = await Promise.all([
     api("/api/surveillance/syndromes"), api("/api/surveillance/pathogens"),
     api("/api/surveillance/alerts"), api("/api/surveillance/resources/readiness"),
+    api("/api/surveillance/resources"),
   ]);
   const SYN = { fever: "发热", respiratory: "呼吸道", diarrhea: "腹泻", rash: "皮疹", jaundice: "黄疸", neuro: "脑炎脑膜炎" };
   $("#page-body").innerHTML = `
@@ -1195,10 +1281,40 @@ async function renderSurveillance() {
         `<tr><td>${esc(o.org_name || o.org_id)}</td><td>${o.total}</td>` +
         `<td>${o.below_min.length ? '<span class="tag danger">' + o.below_min.map((x) => esc(x.name) + `(${x.quantity}/${x.min_quantity})`).join("、") + "</span>" : "—"}</td>` +
         `<td>${o.expired.length ? '<span class="tag warn">' + o.expired.map((x) => esc(x.name) + `(${esc(x.expire_date)})`).join("、") + "</span>" : "—"}</td></tr>`)}
+      <h4 style="margin-top:10px">资源明细（可改数量/下限/效期）</h4>
+      <p class="hint">缺口是补货问题，过期是报废问题——两件事处置的人不同，所以分列显示。
+        改数量不等于报废：报废要按报废流程走，这里只是把账对上。</p>
+      ${table(["ID", "机构", "类别", "名称", "数量/下限", "效期", "状态", "操作"], emResources, (r) =>
+        `<tr><td>${r.id}</td><td>${r.org_id}</td><td>${esc(r.resource_type_name)}</td><td>${esc(r.name)}</td>
+         <td>${r.quantity}${esc(r.unit)} / ${r.min_quantity}</td><td>${esc(r.expire_date) || "—"}</td>
+         <td>${r.expired ? '<span class="tag red">已过期</span>' : ""}${
+            r.below_min ? '<span class="tag orange">低于下限</span>' : ""}${
+            !r.expired && !r.below_min ? '<span class="tag green">正常</span>' : ""}</td>
+         <td><button class="btn secondary" data-emres="${r.id}">改要素</button></td></tr>`)}
     </div>`;
   $("#syn-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/syndromes", formJson(e.target, ["org_id", "case_count", "threshold"]), "#syn-msg"); };
   $("#pat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/pathogens", formJson(e.target, ["org_id", "tested_count", "positive_count"]), "#pat-msg"); };
   $("#res-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/surveillance/resources", formJson(e.target, ["org_id", "quantity", "min_quantity"]), "#res-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const { emres } = e.target.dataset;
+    if (!emres) return;
+    const cur = emResources.find((r) => String(r.id) === emres) || {};
+    const body = {};
+    // 各字段都可选、None 表示"不改"：空串不提交，否则改个数量顺手把效期抹成空
+    for (const [key, label, num] of [["quantity", "数量", true], ["min_quantity", "储备下限", true],
+                                     ["expire_date", "效期 YYYY-MM-DD（队伍类留空）", false],
+                                     ["contact", "联系方式", false], ["location", "存放位置", false]]) {
+      const v = prompt(`${label}（留空＝不改，当前 ${cur[key] ?? ""}）`, cur[key] ?? "");
+      if (v === null) return;
+      if (v !== "") body[key] = num ? Number(v) : v;
+    }
+    if (!Object.keys(body).length) return;
+    try {
+      await api(`/api/surveillance/resources/${emres}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMsg("#res-msg", "已保存", true);
+      return route();
+    } catch (err) { setMsg("#res-msg", err.message, false); }
+  };
 }
 
 
@@ -1290,11 +1406,47 @@ async function renderProjects() {
         `<td>${p.milestone_done}/${p.milestone_total}` +
         `${p.milestone_overdue ? ' <span class="tag warn">' + p.milestone_overdue + " 逾期</span>" : ""}</td>` +
         `<td><button class="btn sm" data-progress="${p.id}">报进度</button>` +
-        `<button class="btn sm" data-ms="${p.id}">加里程碑</button></td></tr>`)}
+        `<button class="btn sm" data-ms="${p.id}">加里程碑</button>` +
+        `<button class="btn sm secondary" data-mslist="${p.id}">里程碑清单</button></td></tr>`)}
+      <div id="pj-ms"></div>
     </div>`;
   $("#pj-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/projects", formJson(e.target, ["org_id", "budget_amount"]), "#pj-msg"); };
-  $("#page-body").onclick = (e) => {
+  const drawMilestones = (projectId) => {
+    const proj = projects.find((x) => String(x.id) === String(projectId));
+    if (!proj) return;
+    $("#pj-ms").innerHTML = `<h4>${esc(proj.name)} 的里程碑（${proj.milestone_done}/${proj.milestone_total}）</h4>`
+      + table(["ID", "名称", "计划完成", "完成日", "状态", "操作"], proj.milestones, (m) =>
+        `<tr><td>${m.id}</td><td>${esc(m.name)}</td><td>${esc(m.due_date) || "—"}</td>
+         <td>${esc(m.done_date) || "—"}</td>
+         <td>${m.done ? '<span class="tag green">已完成</span>'
+           : m.overdue ? '<span class="tag red">逾期</span>' : '<span class="tag orange">在办</span>'}</td>
+         <td>${m.done
+           ? `<button class="btn sm secondary" data-msreopen="${m.id}" data-pj="${proj.id}">重开</button>`
+           : `<button class="btn sm" data-msdone="${m.id}" data-pj="${proj.id}">标完成</button>`}</td></tr>`);
+  };
+  $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
+    if (d.mslist) return drawMilestones(d.mslist);
+    if (d.msdone) {
+      // done_date 留空＝按业务日期取今天；补记历史完成日才需要显式填。
+      const when = prompt("完成日期 YYYY-MM-DD（留空＝今天）", "");
+      if (when === null) return;
+      const qs = when ? `?done_date=${encodeURIComponent(when)}` : "";
+      try {
+        await api(`/api/projects/milestones/${d.msdone}/done${qs}`, { method: "POST" });
+        setMsg("#pj-msg", "里程碑已完成", true);
+        return route();
+      } catch (err) { return setMsg("#pj-msg", err.message, false); }
+    }
+    if (d.msreopen) {
+      // 重开是把"完成"这个判断收回来——项目进度与逾期统计都跟着变，所以问一次。
+      if (!confirm(`重开里程碑 ${d.msreopen}？完成日期会被清空，项目进度与逾期统计随之变化。`)) return;
+      try {
+        await api(`/api/projects/milestones/${d.msreopen}/reopen`, { method: "POST" });
+        setMsg("#pj-msg", "里程碑已重开", true);
+        return route();
+      } catch (err) { return setMsg("#pj-msg", err.message, false); }
+    }
     if (d.progress) {
       const pct = prompt("当前进度（0-100）"); if (pct === null) return;
       const status = prompt("状态：planning / ongoing / done / suspended", "ongoing"); if (!status) return;
@@ -1337,11 +1489,55 @@ async function renderTcmHeritage() {
       <form class="inline" id="mc-search"><input name="keyword" placeholder="搜方药/按语/标题"><button>检索</button></form>
       <div id="mc-list">${renderCaseTable(cases)}</div></div>
     <div class="panel"><h3>模拟诊疗病例</h3>
-      ${table(["标题", "类别", "决策点", "满分", "及格分"], sims, (s) =>
+      ${table(["标题", "类别", "决策点", "满分", "及格分", "操作"], sims, (s) =>
         `<tr><td>${esc(s.title)}</td><td>${esc(s.category)}</td><td>${s.decision_points.length}</td>` +
-        `<td>${s.total_score}</td><td>${s.pass_score}</td></tr>`)}
-      <p class="hint">模拟诊疗的作答与评分在医师端 H5 完成；此处仅维护病例。列表刻意不含正确答案。</p></div>`;
+        `<td>${s.total_score}</td><td>${s.pass_score}</td>` +
+        `<td><button class="btn sm" data-simdo="${s.id}">作答</button>` +
+        `<button class="btn sm secondary" data-simlog="${s.id}">作答记录</button></td></tr>`)}
+      <p class="hint">列表刻意不含正确答案（with_answers 只在提交后随解析返回）。
+        原先这里写着"作答与评分在医师端 H5 完成"——医师端 H5 里其实没有这块代码，
+        两边都没建，病例维护得再全也没人练得成。作答先落在这一页。</p>
+      <div id="sim-panel"></div></div>`;
   $("#mc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/tcm-heritage/master-cases", formJson(e.target, []), "#mc-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const { simdo, simlog } = e.target.dataset;
+    if (simdo) {
+      const sim = sims.find((x) => String(x.id) === simdo);
+      if (!sim) return;
+      const answers = {};
+      for (const pt of sim.decision_points) {
+        const pick = prompt(`${pt.question}\n${pt.options.map((o, i) => `${i + 1}. ${o}`).join("\n")}\n（输入序号，取消＝放弃本次作答）`);
+        if (pick === null) return;
+        const opt = pt.options[Number(pick) - 1];
+        if (!opt) return setMsg("#mc-msg", `决策点「${pt.key}」的序号不对，本次未提交`, false);
+        answers[pt.key] = opt;
+      }
+      try {
+        const r = await api(`/api/tcm-heritage/simulations/${simdo}/attempts`, { method: "POST",
+          body: JSON.stringify({ answers }) });
+        $("#sim-panel").innerHTML = `
+          <p>得分 <b>${r.score}</b> / ${r.total_score}（及格 ${r.pass_score}）
+            <span class="tag ${r.passed ? "green" : "red"}">${r.passed ? "通过" : "未通过"}</span></p>
+          ${table(["决策点", "你的选择", "正确答案", "解析"], r.detail, (x) =>
+            `<tr style="${x.correct ? "" : "color:#b23c3c"}"><td>${esc(x.key)}</td><td>${esc(x.chosen) || "—"}</td>
+             <td>${esc(x.answer)}</td><td>${esc(x.explain) || "—"}</td></tr>`)}
+          <p style="color:#888">答错的给出解析——不给解析的练习只是筛人，不是教学。</p>`;
+      } catch (err) { setMsg("#mc-msg", err.message, false); }
+      return;
+    }
+    if (simlog) {
+      try {
+        const r = await api(`/api/tcm-heritage/simulations/${simlog}/attempts`);
+        $("#sim-panel").innerHTML = `<h4>病例 ${esc(simlog)} 作答记录（${r.attempts.length} 次）</h4>`
+          + table(["用户", "第几次", "得分", "结果"], r.attempts, (a) =>
+            `<tr><td>${a.user_id}</td><td>${a.attempt_no}</td><td>${a.score}</td>
+             <td>${a.passed ? '<span class="tag green">通过</span>' : '<span class="tag red">未通过</span>'}</td></tr>`)
+          + `<h4 style="margin-top:8px">各人最高分（参与考核的就是这个）</h4>`
+          + table(["用户", "最高分"], r.best_by_user, (b) => `<tr><td>${b.user_id}</td><td>${b.best_score}</td></tr>`)
+          + `<p style="color:#888">${esc(r.caliber)}</p>`;
+      } catch (err) { setMsg("#mc-msg", err.message, false); }
+    }
+  };
   $("#mc-search").onsubmit = async (e) => {
     e.preventDefault();
     const kw = new FormData(e.target).get("keyword") || "";
@@ -1392,7 +1588,8 @@ async function renderResources() {
         `<td>${r.capacity}${esc(r.unit)}</td><td>${esc(r.location || "—")}</td>` +
         `<td>${esc(r.status_name)}${r.withdraw_reason ? "<br><small>" + esc(r.withdraw_reason) + "</small>" : ""}</td>` +
         `<td>${r.status === "published" ? `<button class="btn sm danger" data-withdraw="${r.id}">撤回</button>`
-                                        : `<button class="btn sm" data-publish="${r.id}">发布</button>`}</td></tr>`)}
+                                        : `<button class="btn sm" data-publish="${r.id}">发布</button>`}` +
+        `<button class="btn sm secondary" data-rsedit="${r.id}">改要素</button></td></tr>`)}
     </div>
     <div class="panel"><h3>统一资源视图</h3>
       <p class="hint">${esc(catalog.caliber)}</p>
@@ -1426,12 +1623,30 @@ async function renderResources() {
       `<td>${x.conflicts.map((c) => esc(`${c.start_time}-${c.end_time}`)).join("、") || "—"}</td>` +
       `<td>${x.gaps.map((g) => esc(`${g.start_time}-${g.end_time}`)).join("、") || "无"}</td></tr>`);
   };
-  $("#page-body").onclick = (e) => {
+  $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     if (d.publish) return postAction(`/api/resources/${d.publish}/publish`, {}, "#rs-msg");
     if (d.withdraw) {
       const reason = prompt("撤回理由"); if (!reason) return;
       return postAction(`/api/resources/${d.withdraw}/withdraw`, { reason }, "#rs-msg");
+    }
+    if (d.rsedit) {
+      const cur = resources.find((r) => String(r.id) === d.rsedit) || {};
+      const body = {};
+      // ResourceUpdate 各字段都可选且 None 表示"不改"：空串不提交，
+      // 否则改个位置顺手把联系人抹成空，事后没人查得出。
+      for (const [key, label] of [["name", "名称"], ["capacity", "容量"],
+                                  ["location", "位置"], ["contact", "联系人"], ["note", "备注"]]) {
+        const v = prompt(`${label}（留空＝不改，当前 ${cur[key] ?? ""}）`, cur[key] ?? "");
+        if (v === null) return;
+        if (v !== "") body[key] = key === "capacity" ? Number(v) : v;
+      }
+      if (!Object.keys(body).length) return;
+      try {
+        await api(`/api/resources/${d.rsedit}`, { method: "PATCH", body: JSON.stringify(body) });
+        setMsg("#rs-msg", "已保存", true);
+        return route();
+      } catch (err) { return setMsg("#rs-msg", err.message, false); }
     }
   };
 }
@@ -1462,6 +1677,13 @@ async function renderRbac() {
       ${table(["模块", "权限点数"], modules, (m) =>
         `<tr><td>${esc(m.module)}</td><td>${m.permission_count}</td></tr>`)}
     </div>
+    <div class="panel"><h3>权限点检索</h3>
+      <p class="hint">按模块或路径关键词查具体是哪些写接口——授权是按模块整块给的，
+        给之前总得看得见这一块里到底有什么。</p>
+      <form class="inline" id="perm-search">
+        <input name="module" placeholder="模块（可空）"><input name="keyword" placeholder="路径关键词（可空）" style="min-width:200px">
+        <button>检索</button></form>
+      <div id="perm-list"></div></div>
     <div class="panel"><h3>角色权限明细</h3><div id="rbac-detail"><p class="empty">点上方「查看」</p></div></div>`;
   $("#role-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/rbac/roles", formJson(e.target, []), "#role-msg"); };
   $("#page-body").onclick = async (e) => {
@@ -1479,9 +1701,35 @@ async function renderRbac() {
     if (d.view) {
       const r = await api(`/api/rbac/roles/${d.view}/permissions`);
       $("#rbac-detail").innerHTML = `<p>${esc(r.role.name)}（${esc(r.role.key)}）共 ${r.permissions.length} 个权限点</p>` +
-        table(["模块", "方法", "路径"], r.permissions, (p) =>
-          `<tr><td>${esc(p.module)}</td><td>${esc(p.method)}</td><td>${esc(p.path)}</td></tr>`);
+        table(["模块", "方法", "路径", "操作"], r.permissions, (p) =>
+          `<tr><td>${esc(p.module)}</td><td>${esc(p.method)}</td><td>${esc(p.path)}</td>
+           <td><button class="btn sm danger" data-revoke="${p.id}" data-role="${d.view}">撤销</button></td></tr>`);
+      return;
     }
+    if (d.revoke) {
+      // 授权是按模块整块给的，撤销必须能撤到单条——不然"多给了一个接口"
+      // 只能把整块收回来再重给，中间那段时间这个角色什么都做不了。
+      if (!confirm(`撤销角色 ${d.role} 的权限点 ${d.revoke}？其余权限点不受影响。`)) return;
+      try {
+        await api(`/api/rbac/roles/${d.role}/permissions/${d.revoke}`, { method: "DELETE" });
+        setMsg("#role-msg", "已撤销该权限点", true);
+        return route();
+      } catch (err) { return setMsg("#role-msg", err.message, false); }
+    }
+  };
+  $("#perm-search").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams();
+    for (const k of ["module", "keyword"]) if (f.get(k)) q.set(k, f.get(k));
+    try {
+      const rows = await api(`/api/rbac/permissions?${q.toString()}`);
+      $("#perm-list").innerHTML = `<p>命中 ${rows.length} 个权限点</p>` +
+        table(["编码", "模块", "方法", "路径", "内置角色"], rows, (pm) =>
+          `<tr><td><span class="tag">${esc(pm.code)}</span></td><td>${esc(pm.module)}</td>
+           <td>${esc(pm.method)}</td><td>${esc(pm.path)}</td>
+           <td>${esc(pm.builtin_roles) || "—"}</td></tr>`);
+    } catch (err) { setMsg("#role-msg", err.message, false); }
   };
 }
 
