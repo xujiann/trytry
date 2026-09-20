@@ -1714,5 +1714,143 @@
         }
       ]
     }
+  },
+  "spdcontentcfg": {
+    "fn": "renderSpdContentConfig",
+    "api": {
+      "/api/spd/catalog": {
+        "programs": [
+          {
+            "code": "hyp<img src=x onerror=alert(1)>",
+            "name": "高血压<img src=x onerror=alert(1)>",
+            "category": "chronic",
+            "stages": [],
+            "active": true
+          },
+          {
+            "code": "dm",
+            "name": "2型糖尿病<b>",
+            "category": "chronic",
+            "stages": [],
+            "active": true
+          }
+        ],
+        "teams": [],
+        "scales": [],
+        "centers": [],
+        "path_templates": []
+      },
+      "/api/spd/scales": [
+        {
+          "id": 1,
+          "code": "GAD7<img src=x onerror=alert(1)>",
+          "name": "焦虑自评量表<img src=x onerror=alert(1)>",
+          "category": "risk",
+          "program_code": "hyp<img src=x onerror=alert(1)>",
+          "version": "v1",
+          "status": "draft",
+          "items": [
+            {
+              "key": "q1"
+            }
+          ],
+          "scoring": {
+            "ranges": []
+          },
+          "qr_token": "",
+          "owner_team_id": null
+        },
+        {
+          "id": 2,
+          "code": "PHQ9",
+          "name": "抑郁筛查<b>",
+          "category": "screen",
+          "program_code": "",
+          "version": "v2",
+          "status": "published",
+          "items": [
+            {
+              "key": "a"
+            },
+            {
+              "key": "b"
+            }
+          ],
+          "scoring": {
+            "ranges": [
+              {
+                "min": 0,
+                "max": 4
+              }
+            ]
+          },
+          "qr_token": "TOKEN123",
+          "owner_team_id": null
+        }
+      ],
+      "/api/spd/edu-materials": [
+        {
+          "id": 1,
+          "code": "EDU1<img src=x onerror=alert(1)>",
+          "title": "低盐饮食<img src=x onerror=alert(1)>",
+          "program_code": "hyp<img src=x onerror=alert(1)>",
+          "media_type": "text",
+          "content": "少放盐<b>",
+          "media_url": "",
+          "dept": "心内科<img src=x onerror=alert(1)>"
+        },
+        {
+          "id": 2,
+          "code": "EDU2",
+          "title": "运动处方<b>",
+          "program_code": "",
+          "media_type": "video",
+          "content": "",
+          "media_url": "https://x/y.mp4",
+          "dept": ""
+        }
+      ],
+      "/api/spd/service-packages": [
+        {
+          "id": 1,
+          "code": "PKG1<img src=x onerror=alert(1)>",
+          "name": "高血压基础包<img src=x onerror=alert(1)>",
+          "program_code": "hyp<img src=x onerror=alert(1)>",
+          "price": 200,
+          "period_days": 365,
+          "items": [
+            {
+              "code": "fu",
+              "times": 4
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "code": "PKG2",
+          "name": "糖尿病强化包<b>",
+          "program_code": "",
+          "price": 88.5,
+          "period_days": 180,
+          "items": []
+        }
+      ],
+      "/api/spd/tags": [
+        {
+          "id": 1,
+          "code": "HIGH<img src=x onerror=alert(1)>",
+          "name": "高危<img src=x onerror=alert(1)>",
+          "category": "patient<img src=x onerror=alert(1)>",
+          "color": "#f00"
+        },
+        {
+          "id": 2,
+          "code": "OLD",
+          "name": "老年<b>",
+          "category": "patient",
+          "color": ""
+        }
+      ]
+    }
   }
 }

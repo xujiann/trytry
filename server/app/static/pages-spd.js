@@ -536,6 +536,214 @@ function spdOptions(map) {
   return Object.entries(map).map(([value, label]) => ({ value, label }));
 }
 
+/* ============================================================
+ * 慢专病配置域：量表 / 宣教材料 / 服务包 / 患者标签（P1-40）
+ *
+ * 这四类都是**运营配置**：后端十五个端点齐全，界面此前只接通了四个——
+ * 量表建不出来、发布不了、二维码取不到，宣教材料改不了，服务包与标签
+ * 整块没有入口。与 2026-08-27 的 spd/care、本轮的服务团队配置同一形状：
+ * 后端交付了、界面缺失，而需求对照表把它们算作已实现。
+ * ==========================================================*/
+
+const SPD_SCALE_CATEGORIES = { risk: "风险评估", stage: "分期评定", rehab: "康复评定", screen: "筛查" };
+const SPD_SCALE_STATUS = { draft: ["草稿", "orange"], published: ["已发布", "green"], disabled: ["已停用", "red"] };
+const SPD_MEDIA_TYPES = { text: "图文", audio: "音频", video: "视频" };
+
+async function renderSpdContentConfig() {
+  $("#page-desc").textContent =
+    "慢专病配置：评估量表（建→发布→二维码）、宣教材料、服务包、患者标签";
+  const [catalog, scales, edus, packages, tags] = await Promise.all([
+    spdCatalog(),
+    api("/api/spd/scales?limit=100"),
+    api("/api/spd/edu-materials?limit=100"),
+    api("/api/spd/service-packages?limit=100"),
+    api("/api/spd/tags"),
+  ]);
+  const programNames = Object.fromEntries(catalog.programs.map((p) => [p.code, p.name]));
+  const progText = (code) => (code ? (programNames[code] || code) : "通用");
+
+  $("#page-body").innerHTML =
+    panel("评估量表", `
+      <p class="desc">量表要<b>先发布</b>才能被评估引用，发布时生成二维码令牌；
+        没有题目的量表发布会被挡回（422）。停用不删行——历史评估记录仍要查得到用的是哪一版。</p>
+      <form class="inline" id="spd-scale-form">
+        <input name="code" placeholder="编码" required>
+        <input name="name" placeholder="量表名称" required>
+        <select name="category">${Object.entries(SPD_SCALE_CATEGORIES).map(([v, t]) =>
+          `<option value="${v}">${esc(t)}</option>`).join("")}</select>
+        <select name="program_code">${spdProgramOptions(catalog, true)}</select>
+        <input name="version" placeholder="版本（默认 v1）">
+        <button>新建量表</button>
+      </form>
+      <p class="desc">题目与计分区间在建好后用「改题目」维护（JSON：items / scoring）。</p>
+      <p class="msg" id="spd-scale-msg"></p>
+      <form class="inline" id="spd-scale-filter">
+        <select name="category"><option value="">全部分类</option>${Object.entries(SPD_SCALE_CATEGORIES).map(([v, t]) =>
+          `<option value="${v}">${esc(t)}</option>`).join("")}</select>
+        <select name="status"><option value="">全部状态</option>${Object.entries(SPD_SCALE_STATUS).map(([v, t]) =>
+          `<option value="${v}">${esc(t[0])}</option>`).join("")}</select>
+        <button class="btn secondary">筛选</button>
+      </form>
+      ${table(["ID", "编码", "名称", "分类", "病种", "版本", "题数", "状态", "操作"], scales, (x) => {
+        const st = SPD_SCALE_STATUS[x.status] || [x.status, ""];
+        return `<tr><td>${x.id}</td><td>${esc(x.code)}</td><td>${esc(x.name)}</td>
+         <td>${esc(SPD_SCALE_CATEGORIES[x.category] || x.category)}</td>
+         <td>${esc(progText(x.program_code))}</td><td>${esc(x.version)}</td>
+         <td>${(x.items || []).length}</td>
+         <td><span class="tag ${st[1]}">${esc(st[0])}</span></td>
+         <td><button class="btn secondary" data-scale-edit="${x.id}">改题目</button>
+         ${x.status === "published"
+            ? `<button class="btn secondary" data-scale-qr="${x.id}">二维码</button>
+               <button class="btn danger" data-scale-off="${x.id}">停用</button>`
+            : `<button class="btn" data-scale-pub="${x.id}">发布</button>`}</td></tr>`;
+      })}
+      <div id="spd-scale-qr"></div>`)
+    + panel("宣教材料", `
+      <form class="inline" id="spd-edu-form">
+        <input name="code" placeholder="编码" required>
+        <input name="title" placeholder="标题" required>
+        <select name="media_type">${Object.entries(SPD_MEDIA_TYPES).map(([v, t]) =>
+          `<option value="${v}">${esc(t)}</option>`).join("")}</select>
+        <select name="program_code">${spdProgramOptions(catalog, true)}</select>
+        <input name="dept" placeholder="归口科室">
+        <input name="media_url" placeholder="音视频地址（图文留空）">
+        <button>新建材料</button>
+      </form>
+      <p class="msg" id="spd-edu-msg"></p>
+      ${table(["ID", "编码", "标题", "形式", "病种", "科室", "操作"], edus, (x) =>
+        `<tr><td>${x.id}</td><td>${esc(x.code)}</td><td>${esc(x.title)}</td>
+         <td>${esc(SPD_MEDIA_TYPES[x.media_type] || x.media_type)}</td>
+         <td>${esc(progText(x.program_code))}</td><td>${esc(x.dept) || "—"}</td>
+         <td><button class="btn secondary" data-edu-edit="${x.id}">改内容</button></td></tr>`)}`)
+    + panel("服务包", `
+      <p class="desc">服务包是签约与计费的载体：`+"`items`"+`列出包内项目与次数（JSON），
+        价格用两位小数，周期按天。</p>
+      <form class="inline" id="spd-pkg-form">
+        <input name="code" placeholder="编码" required>
+        <input name="name" placeholder="包名" required>
+        <select name="program_code">${spdProgramOptions(catalog, true)}</select>
+        <input name="price" type="number" step="0.01" min="0" placeholder="价格(元)">
+        <input name="period_days" type="number" min="1" max="3650" placeholder="周期(天，默认365)">
+        <button>新建服务包</button>
+      </form>
+      <p class="msg" id="spd-pkg-msg"></p>
+      ${table(["ID", "编码", "包名", "病种", "价格", "周期(天)", "项目数", "操作"], packages, (x) =>
+        `<tr><td>${x.id}</td><td>${esc(x.code)}</td><td>${esc(x.name)}</td>
+         <td>${esc(progText(x.program_code))}</td><td>${esc(x.price)}</td>
+         <td>${esc(x.period_days)}</td><td>${(x.items || []).length}</td>
+         <td><button class="btn secondary" data-pkg-edit="${x.id}">改配置</button></td></tr>`)}`)
+    + panel("患者标签", `
+      <form class="inline" id="spd-tag-form">
+        <input name="code" placeholder="编码" required>
+        <input name="name" placeholder="标签名" required>
+        <input name="category" placeholder="分类（默认 patient）">
+        <input name="color" placeholder="颜色（如 #f00）">
+        <button>新建标签</button>
+      </form>
+      <p class="msg" id="spd-tag-msg"></p>
+      ${table(["ID", "编码", "名称", "分类", "颜色"], tags, (x) =>
+        `<tr><td>${x.id}</td><td>${esc(x.code)}</td><td>${esc(x.name)}</td>
+         <td>${esc(x.category)}</td><td>${esc(x.color) || "—"}</td></tr>`)}`);
+
+  $("#spd-scale-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target);
+    if (!body.version) delete body.version;
+    return postAction("/api/spd/scales", body, "#spd-scale-msg");
+  };
+  $("#spd-scale-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    const q = Object.entries(formJson(e.target)).filter(([, v]) => v)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+    const rows = await api(`/api/spd/scales?limit=100${q ? "&" + q : ""}`);
+    setMsg("#spd-scale-msg", `筛出 ${rows.length} 份量表（刷新页面回到全部）`, true);
+  };
+  $("#spd-edu-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/edu-materials", formJson(e.target), "#spd-edu-msg");
+  };
+  $("#spd-pkg-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["price", "period_days"]);
+    if (!body.period_days) delete body.period_days;
+    if (!body.price) delete body.price;
+    return postAction("/api/spd/service-packages", body, "#spd-pkg-msg");
+  };
+  $("#spd-tag-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target);
+    if (!body.category) delete body.category;
+    return postAction("/api/spd/tags", body, "#spd-tag-msg");
+  };
+
+  $("#page-body").onclick = async (e) => {
+    const el = (k) => e.target.closest(`[${k}]`);
+    const pub = el("data-scale-pub"), off = el("data-scale-off"), qr = el("data-scale-qr");
+    const sEdit = el("data-scale-edit"), eEdit = el("data-edu-edit"), pEdit = el("data-pkg-edit");
+    try {
+      if (pub) {
+        return postAction(`/api/spd/scales/${pub.dataset.scalePub}/publish`, null, "#spd-scale-msg");
+      }
+      if (off) {
+        if (!confirm("停用后该量表不再可被新评估引用（历史记录不受影响），确定停用？")) return;
+        return postAction(`/api/spd/scales/${off.dataset.scaleOff}/disable`, null, "#spd-scale-msg");
+      }
+      if (qr) {
+        // 照抄村医绑定码的既有做法：qr.svg 直接挂 <img src>，不另造取文本的助手。
+        // 未发布的量表取码是 409，所以这个按钮只在已发布行上出现。
+        const id = qr.dataset.scaleQr;
+        $("#spd-scale-qr").innerHTML =
+          `<p class="desc">量表 #${esc(id)} 的评估二维码：扫码直达居民端自查页并预选该量表。</p>
+           <img src="/api/spd/scales/${esc(id)}/qr.svg" alt="量表评估二维码" width="200" height="200">`;
+        return;
+      }
+      if (sEdit) {
+        const cur = scales.find((x) => String(x.id) === sEdit.dataset.scaleEdit) || {};
+        const form = await spdModal("改量表题目与计分", [
+          { name: "items", label: "题目 items（JSON 数组）", type: "textarea",
+            value: JSON.stringify(cur.items || [], null, 0) },
+          { name: "scoring", label: "计分 scoring（JSON 对象）", type: "textarea",
+            value: JSON.stringify(cur.scoring || {}, null, 0) },
+        ]);
+        if (!form) return;
+        let body;
+        try {
+          body = { items: JSON.parse(form.items || "[]"), scoring: JSON.parse(form.scoring || "{}") };
+        } catch (err) { return setMsg("#spd-scale-msg", `JSON 格式有误：${err.message}`, false); }
+        return postAction(`/api/spd/scales/${sEdit.dataset.scaleEdit}`, body, "#spd-scale-msg", "PATCH");
+      }
+      if (eEdit) {
+        const cur = edus.find((x) => String(x.id) === eEdit.dataset.eduEdit) || {};
+        const form = await spdModal("改宣教材料", [
+          { name: "title", label: "标题", value: cur.title || "" },
+          { name: "content", label: "图文内容", type: "textarea", value: cur.content || "" },
+          { name: "media_url", label: "音视频地址", value: cur.media_url || "" },
+          { name: "dept", label: "归口科室", value: cur.dept || "" },
+        ]);
+        if (!form) return;
+        return postAction(`/api/spd/edu-materials/${eEdit.dataset.eduEdit}`, form, "#spd-edu-msg", "PATCH");
+      }
+      if (pEdit) {
+        const cur = packages.find((x) => String(x.id) === pEdit.dataset.pkgEdit) || {};
+        const form = await spdModal("改服务包", [
+          { name: "name", label: "包名", value: cur.name || "" },
+          { name: "price", label: "价格(元)", type: "number", value: cur.price ?? 0 },
+          { name: "period_days", label: "周期(天)", type: "number", value: cur.period_days ?? 365 },
+          { name: "items", label: "包内项目 items（JSON 数组）", type: "textarea",
+            value: JSON.stringify(cur.items || [], null, 0) },
+        ]);
+        if (!form) return;
+        let items;
+        try { items = JSON.parse(form.items || "[]"); }
+        catch (err) { return setMsg("#spd-pkg-msg", `JSON 格式有误：${err.message}`, false); }
+        return postAction(`/api/spd/service-packages/${pEdit.dataset.pkgEdit}`,
+          { name: form.name, price: Number(form.price), period_days: Number(form.period_days), items },
+          "#spd-pkg-msg", "PATCH");
+      }
+    } catch (err) { setMsg("#spd-scale-msg", err.message, false); }
+  };
+}
+
 async function renderSpdTeamConfig() {
   $("#page-desc").textContent =
     "服务团队与村医档案：建团队、配成员与权限范围、开通村医账号并出绑定二维码";
