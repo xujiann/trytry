@@ -1611,7 +1611,12 @@ async function renderChronic() {
   // 各病种分级指标：随访录入时提示该病种应采集的指标与周期
   const metricHint = types.map((t) => {
     const keys = ((t.level_rules || {}).metrics || []).map((m) => `${m.name}(${m.key})`).join("、");
-    return `<tr><td>${esc(t.name)}</td><td>${esc(t.code)}</td><td>${esc(keys) || "—"}</td><td>${t.followup_interval_days} 天</td></tr>`;
+    return `<tr><td>${esc(t.name)}</td><td>${esc(t.code)}</td><td>${esc(keys) || "—"}</td>
+      <td>${t.followup_interval_days} 天</td>
+      <td><span class="tag ${t.active ? "green" : "red"}">${t.active ? "启用" : "停用"}</span></td>
+      <td><button class="btn secondary" data-dtcycle="${t.id}" data-cur="${t.followup_interval_days}">改周期</button>
+          <button class="btn ${t.active ? "danger" : "secondary"}" data-dttoggle="${t.id}"
+                  data-to="${t.active ? "false" : "true"}">${t.active ? "停用" : "启用"}</button></td></tr>`;
   }).join("");
   $("#page-body").innerHTML = `
     <div class="panel"><h3>慢病建档</h3>
@@ -1632,13 +1637,18 @@ async function renderChronic() {
         <button>提交随访</button>
       </form><p class="msg" id="chronic-msg"></p>
       <h3 style="margin-top:14px">病种目录</h3>
-      <table><thead><tr><th>病种</th><th>编码</th><th>分级指标</th><th>随访周期</th></tr></thead><tbody>${metricHint}</tbody></table></div>
+      <table><thead><tr><th>病种</th><th>编码</th><th>分级指标</th><th>随访周期</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>${metricHint}</tbody></table>
+      <p class="desc">病种目录是前端病种下拉与分级规则展示的<b>唯一数据源</b>：停用一个病种，
+        下拉里就不再出现它，但已建的档案照旧——不删行。</p></div>
     <div class="panel"><h3>在管名单${overdue.length ? `（<span style="color:#c62828">${overdue.length} 人随访超期</span>）` : ""}</h3>
-      ${table(["档案ID", "患者", "病种", "分级", "下次随访", "随访状态"], chronicList, (c) =>
+      ${table(["档案ID", "患者", "病种", "分级", "下次随访", "随访状态", "操作"], chronicList, (c) =>
         `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(DISEASES[c.disease] || c.disease)}</td>
          <td><span class="tag ${c.level === 3 ? "red" : c.level === 2 ? "orange" : "green"}">${c.level} 级</span></td>
          <td>${esc(c.next_due) || "—"}</td>
-         <td>${overdueIds.has(c.id) ? '<span class="tag red">超期</span>' : '<span class="tag green">正常</span>'}</td></tr>`)}</div>`;
+         <td>${overdueIds.has(c.id) ? '<span class="tag red">超期</span>' : '<span class="tag green">正常</span>'}</td>
+         <td><button class="btn secondary" data-crisk="${c.id}">风险评分</button></td></tr>`)}
+      <div id="chronic-risk"></div></div>`;
   $("#chronic-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1664,6 +1674,41 @@ async function renderChronic() {
         body: JSON.stringify({ sbp: num("sbp"), dbp: num("dbp"), glucose: num("glucose"), metrics, next_due: f.get("next_due") }) });
       alert(`分级：${result.level} 级${result.refer_up_suggested ? "（建议上转！）" : ""}\n下次随访：${result.next_due}${result.next_due_suggested ? "（按病种周期自动建议）" : ""}\n指导要点：${result.guidance_points}`);
       route();
+    } catch (err) { setMsg("#chronic-msg", err.message, false); }
+  };
+  const TREND = { rising: "上升", falling: "下降", stable: "平稳", insufficient_data: "数据不足" };
+  $("#page-body").onclick = async (e) => {
+    const { crisk, dtcycle, dttoggle, to, cur } = e.target.dataset;
+    try {
+      if (crisk) {
+        const r = await api(`/api/chronic/${crisk}/risk`);
+        $("#chronic-risk").innerHTML = `
+          <h4>档案 #${r.chronic_id} 风险评分</h4>
+          <p>病种 ${esc(DISEASES[r.disease] || r.disease)}，当前分级 ${r.level} 级，
+            评分 <b>${r.score}</b>
+            <span class="tag ${r.risk_level === "high" ? "red" : r.risk_level === "medium" ? "orange" : "green"}">${
+              r.risk_level === "high" ? "高危" : r.risk_level === "medium" ? "中危" : "低危"}</span>
+            ${r.refer_up_suggested ? '<span class="tag red">建议上转</span>' : ""}</p>
+          <p>趋势指标 ${esc(r.metric) || "（该病种未配置分级指标）"}：
+            ${TREND[r.trend]}${r.recent_values.length ? `（最近 ${r.recent_values.join(" → ")}）` : ""}</p>
+          <p style="color:#888">评分 = 分级基础分（1级20 / 2级50 / 3级80）+ 趋势修正（上升 +15，下降 −10，平稳 0）；
+            少于 2 次有效随访记为"数据不足"，不当作平稳——没数据和没变化是两回事。</p>`;
+        return;
+      }
+      if (dtcycle) {
+        const v = prompt(`随访周期（天，>0，当前 ${cur}）`, cur);
+        if (v === null || v === "") return;
+        await api(`/api/chronic/disease-types/${dtcycle}`, { method: "PATCH",
+          body: JSON.stringify({ followup_interval_days: Number(v) }) });
+        setMsg("#chronic-msg", "已保存。周期只影响此后新算的下次随访日，已排好的不回溯", true);
+        return route();
+      }
+      if (dttoggle) {
+        await api(`/api/chronic/disease-types/${dttoggle}`, { method: "PATCH",
+          body: JSON.stringify({ active: to === "true" }) });
+        setMsg("#chronic-msg", "已保存。停用只是从下拉里拿掉，已建档案照旧", true);
+        return route();
+      }
     } catch (err) { setMsg("#chronic-msg", err.message, false); }
   };
 }

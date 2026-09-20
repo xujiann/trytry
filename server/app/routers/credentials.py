@@ -218,8 +218,19 @@ def _signature_valid(payload: str, signature: str) -> bool:
     )
 
 
+class OneCodeIssueOut(BaseModel):
+    """出码响应。字段与 handler 现在的返回**一一对应**，不增不减
+    （CLAUDE.md §11：补契约不得改响应字节）。"""
+
+    code: str
+    ehc_no: str
+    expires_in: int
+    note: str
+
+
 @router.post(
     "/one-code",
+    response_model=OneCodeIssueOut,
     dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
 )
 def issue_one_code(body: OneCodeIssue, db: Session = Depends(get_db)):

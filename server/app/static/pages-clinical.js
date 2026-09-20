@@ -16,8 +16,17 @@ async function renderInfectious() {
       table(["病种", "7日病例数", "报告机构数", "风险等级"], alerts, (a) =>
         `<tr><td>${esc(a.disease_name)}</td><td>${a.case_count}</td><td>${a.org_count}</td>
          <td><span class="tag ${a.severity === "high" ? "red" : "orange"}">${a.severity === "high" ? "高" : "中"}</span></td></tr>`)}</div>` : ""}
-    <div class="panel"><h3>病例列表</h3>${table(["ID", "机构", "病种", "发病日期"], cases, (c) =>
-      `<tr><td>${c.id}</td><td>${c.org_id}</td><td>${esc(c.disease_name)}</td><td>${esc(c.onset_date)}</td></tr>`)}</div>`;
+    <div class="panel"><h3>病例列表</h3>${table(["ID", "机构", "病种", "发病日期", "操作"], cases, (c) =>
+      `<tr><td>${c.id}</td><td>${c.org_id}</td><td>${esc(c.disease_name)}</td><td>${esc(c.onset_date)}</td>
+       <td><button class="btn secondary" data-infcard="${c.id}">报告卡</button></td></tr>`)}</div>
+    <div class="panel"><h3>传染病报告卡批量导出（CSV）</h3>
+      <p style="margin-bottom:8px">平台与县疾控<b>无网络直报专线</b>：本导出供手工网报（大疫情网）
+        或交换前置机对接。及时性列与「未及时上报清单」同口径，勾"只导迟报"即只出迟报的那些。</p>
+      <form class="inline" id="inf-export-form">
+        <input name="disease_code" placeholder="病种编码（可空＝全部）" style="min-width:200px">
+        <label style="font-size:13px"><input type="checkbox" name="late_only"> 只导迟报清单</label>
+        <button>导出CSV</button></form>
+      <p class="msg" id="inf-msg"></p><div id="inf-card"></div></div>`;
   $("#case-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -27,6 +36,32 @@ async function renderInfectious() {
         disease_name: f.get("disease_name"), onset_date: f.get("onset_date") }) });
       route();
     } catch (err) { setMsg("#case-msg", err.message, false); }
+  };
+  $("#inf-export-form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams();
+    if (f.get("disease_code")) q.set("disease_code", f.get("disease_code"));
+    if (f.get("late_only") === "on") q.set("late_only", "true");
+    downloadCsv(`/api/infectious/cases/export.csv?${q.toString()}`, "infectious_report_cards.csv", "#inf-msg");
+  };
+  $("#page-body").onclick = async (e) => {
+    const { infcard } = e.target.dataset;
+    if (!infcard) return;
+    try {
+      const card = await api(`/api/infectious/cases/${infcard}/report-card`);
+      $("#inf-card").innerHTML = `<h4>传染病报告卡（病例 #${card.case_id}）</h4>`
+        + table(["项", "值"], [
+          ["报告机构", card.org_name || card.org_id], ["病种", `${card.disease_name}（${card.disease_code}）`],
+          ["类别", card.category_name || card.category], ["发病日期", card.onset_date],
+          ["报告时间", card.reported_at.replace("T", " ").slice(0, 19)],
+          // 目录外病种/发病日期非法时三个及时性字段都是 null——照实显示"无法判定"，
+          // 别把 null 渲染成"及时"，那等于替上报人做了一个没根据的结论。
+          ["报告时长", card.report_hours === null ? "无法判定（病种不在目录或发病日期非法）" : `${card.report_hours} 小时`],
+          ["是否迟报", card.late === null ? "无法判定" : (card.late ? `迟 ${card.days_late} 天` : "及时")],
+        ], (r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`)
+        + '<p style="color:#888">病例登记不含患者个体标识（仅报告机构/病种/发病日期），卡片按此字段集导出，不虚构未存储的字段。</p>';
+    } catch (err) { setMsg("#inf-msg", err.message, false); }
   };
 }
 
@@ -198,11 +233,11 @@ async function renderAudit() {
   };
   const drawLogins = async (params = "") => {
     const logs = await api(`/api/audit/logins?limit=100${params}`);
-    $("#login-table").innerHTML = table(["时间", "用户名", "来源IP", "通道", "结果", "失败原因"], logs, (l) =>
-      `<tr><td>${esc(l.created_at.replace("T", " ").slice(0, 19))}</td><td>${esc(l.username)}</td>
-       <td>${esc(l.ip) || "—"}</td><td><span class="tag">${esc(l.channel)}</span></td>
-       <td><span class="tag ${l.success ? "green" : "red"}">${l.success ? "成功" : "失败"}</span></td>
-       <td>${esc(l.fail_reason) || "—"}</td></tr>`);
+    $("#login-table").innerHTML = table(["时间", "用户名", "来源IP", "通道", "结果", "失败原因"], logs, (lg) =>
+      `<tr><td>${esc(lg.created_at.replace("T", " ").slice(0, 19))}</td><td>${esc(lg.username)}</td>
+       <td>${esc(lg.ip) || "—"}</td><td><span class="tag">${esc(lg.channel)}</span></td>
+       <td><span class="tag ${lg.success ? "green" : "red"}">${lg.success ? "成功" : "失败"}</span></td>
+       <td>${esc(lg.fail_reason) || "—"}</td></tr>`);
   };
   $("#page-body").innerHTML = `
     <div class="panel">
@@ -339,7 +374,8 @@ async function renderConsents() {
        <td>${esc(r.scene)}</td><td>${esc(r.text_version)}</td><td>${esc(r.method)}</td>
        <td>${esc(r.evidence || "—")}</td>
        <td>${r.revoked_at ? '<span class="tag">已撤回</span>' : '<span class="tag ok">有效</span>'}</td>
-       <td><button class="btn secondary" data-printconsent="${r.id}">打印同意书</button></td></tr>`);
+       <td><button class="btn secondary" data-printconsent="${r.id}">打印同意书</button>
+           ${r.revoked_at ? "" : `<button class="btn danger" data-revoke="${r.id}">撤回同意</button>`}</td></tr>`);
   };
   const drawCorrections = async () => {
     const rows = await api("/api/consents/corrections?status=pending");
@@ -350,16 +386,51 @@ async function renderConsents() {
        <td><button data-review="${esc(String(r.id))}" data-verdict="approved">通过</button>
            <button data-review="${esc(String(r.id))}" data-verdict="rejected" class="danger">拒绝</button></td></tr>`);
   };
+  const drawTexts = async (scene, activeOnly) => {
+    const q = new URLSearchParams();
+    if (scene) q.set("scene", scene);
+    if (!activeOnly) q.set("active_only", "false");
+    const rows = await api(`/api/consents/texts?${q.toString()}`);
+    $("#ctext-table").innerHTML = table(["ID", "场景", "版本", "告知文本", "状态"], rows, (t) =>
+      `<tr><td>${t.id}</td><td>${esc(t.scene)}</td><td><span class="tag">${esc(t.version)}</span></td>
+       <td>${esc(t.content)}</td>
+       <td><span class="tag ${t.active ? "green" : ""}">${t.active ? "生效中" : "历史版本"}</span></td></tr>`);
+  };
   $("#page-body").innerHTML = `
     <div class="panel"><h3>知情同意台账</h3>
       <form class="inline" id="ct-search"><input name="patient_id" placeholder="患者ID"><button>查询</button></form>
-      <div id="ct-table"></div></div>
+      <div id="ct-table"></div>
+      <p class="desc">撤回<b>不删行</b>，只置 revoked_at——撤回本身也要可举证。</p></div>
+    <div class="panel"><h3>同意文本版本库</h3>
+      <p class="desc">窗口/居民端展示告知文本用。举证以每条同意记录里的 text_version 为准，
+        所以历史版本也要看得见——只留生效版的话，拿旧版本签的同意就核对不回去了。</p>
+      <form class="inline" id="ctext-filter">
+        <input name="scene" placeholder="场景（可空＝全部）">
+        <label style="font-size:13px"><input type="checkbox" name="all_versions"> 含历史版本</label>
+        <button>查询</button></form>
+      <div id="ctext-table"></div></div>
     <div class="panel"><h3>更正 / 注销申请（待审核）</h3>
       <p class="desc">通过即按白名单字段执行变更并落审计；拒绝必须填写意见。</p>
       <div id="cr-table"></div><p id="cr-msg"></p></div>`;
-  await drawConsents(); await drawCorrections();
+  await drawConsents(); await drawCorrections(); await drawTexts("", true);
   $("#ct-search").onsubmit = async (e) => { e.preventDefault(); await drawConsents(new FormData(e.target).get("patient_id")); };
+  $("#ctext-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try { await drawTexts(f.get("scene"), f.get("all_versions") !== "on"); }
+    catch (err) { setMsg("#cr-msg", err.message, false); }
+  };
   $("#ct-table").onclick = async (e) => {
+    const { revoke } = e.target.dataset;
+    if (revoke) {
+      if (!confirm(`撤回同意记录 ${revoke}？记录保留（只置撤回时刻），撤回本身也会留痕。`)) return;
+      try {
+        await api(`/api/consents/${revoke}/revoke`, { method: "POST" });
+        setMsg("#cr-msg", "已撤回", true);
+        await drawConsents($("#ct-search").patient_id.value);
+      } catch (err) { setMsg("#cr-msg", err.message, false); }
+      return;
+    }
     // 同意书打印：告知文本按记录里的 text_version 取，版本对不上时服务端退到当前
     // active 版并在文中标注——举证以记录里的版本号为准，前端不参与选版
     const id = e.target.dataset.printconsent; if (!id) return;
@@ -473,15 +544,30 @@ async function renderEmergency() {
         <input name="ambulance_no" placeholder="车牌"><input name="dest_org_id" type="number" placeholder="目标医院ID">
         <input name="patient_id" type="number" placeholder="患者ID(可空)"><button>调度</button>
       </form><p class="msg" id="em-msg"></p></div>
-    <div class="panel">${table(["ID", "地点", "主诉", "车辆", "状态", "操作"], cases, (c) => {
+    <div class="panel">${table(["ID", "地点", "主诉", "车辆", "状态", "抢救转归", "操作"], cases, (c) => {
       return `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td><td>${esc(c.ambulance_no)}</td>
         <td>${statusTag(ES, c.status)}</td>
+        <td>${["success", "failed"].includes(c.rescue_outcome)
+          ? `<span class="tag ${c.rescue_outcome === "success" ? "green" : "red"}">${
+              c.rescue_outcome === "success" ? "抢救成功" : "抢救无效"}</span>`
+          : '<span class="tag">未判定</span>'}</td>
         <td>${c.status !== "admitted" ? `<button class="btn secondary" data-adv="${c.id}">流转</button>
-          <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "—"}</td></tr>`;
-    })}</div>`;
+          <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "—"}
+          ${["arrived", "admitted"].includes(c.status)
+            ? `<button class="btn secondary" data-rescue="${c.id}">判定抢救转归</button>` : ""}</td></tr>`;
+    })}</div>
+    <p class="desc">抢救转归是抢救成功率的唯一数据来源，只对<b>已到院</b>的病例判定——
+      车还在路上就写"抢救成功"，这个指标就没有可信度了。"没救过来"与"还没下结论"必须分开：
+      后者留空，写进来会把成功率算低。判定后可更正。</p>`;
   $("#em-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/emergency/cases", formJson(e.target, ["dest_org_id", "patient_id"]), "#em-msg"); };
   $("#page-body").onclick = async (e) => {
-    const { adv, vital } = e.target.dataset;
+    const { adv, vital, rescue } = e.target.dataset;
+    if (rescue) {
+      const pick = prompt("抢救转归：1＝成功，2＝无效。还没下结论就直接取消——留空不是一种结论");
+      const outcome = pick === "1" ? "success" : pick === "2" ? "failed" : null;
+      if (!outcome) return;
+      return postAction(`/api/emergency/cases/${rescue}/rescue-outcome`, { rescue_outcome: outcome }, "#em-msg");
+    }
     if (adv) return postAction(`/api/emergency/cases/${adv}/advance`, null, "#em-msg");
     if (vital) {
       const hr = prompt("心率"); if (hr === null) return;
@@ -559,9 +645,13 @@ async function renderTcm() {
 
 async function renderMedication() {
   $("#page-desc").textContent = "缺药登记流转、供应风险研判、全县用药地图、居民用药画像";
-  const [shortages, stats, risk] = await Promise.all([
-    api("/api/medication/shortages"), api("/api/medication/usage-stats"), api("/api/medication/supply-risk")]);
-  const SS = { registered: ["已登记", "orange"], purchasing: ["采购中", "orange"], delivered: ["已配送", "green"] };
+  const [shortages, stats, risk, sstats] = await Promise.all([
+    api("/api/medication/shortages"), api("/api/medication/usage-stats"),
+    api("/api/medication/supply-risk"), api("/api/medication/shortages/stats")]);
+  // 与后端 medication._SHORTAGE_CLOSED 同口径：三个终态也要有文案，
+  // 否则 statusTag 对结案的行解构 undefined，整页白屏（见下方注释）。
+  const SS = { registered: ["已登记", "orange"], purchasing: ["采购中", "orange"], delivered: ["已配送", "green"],
+    collected: ["已取药", "green"], no_show: ["未取药", "red"], cancelled: ["已取消", ""] };
   $("#page-body").innerHTML = `
     ${risk.total ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 药品供应风险评估（${risk.total}）</h3>${
       table(["药品编码", "药品", "库存告警机构数", "未结案缺药登记", "风险等级"], risk.risks, (r) =>
@@ -586,8 +676,20 @@ async function renderMedication() {
         const canAdvance = s.status === "registered" || s.status === "purchasing";
         return `<tr><td>${s.id}</td><td>${s.org_id}</td><td>${esc(s.drug_name)}</td><td>${s.quantity}</td>
           <td>${statusTag(SS, s.status)}</td>
-          <td>${canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : "—"}</td></tr>`;
+          <td>${canAdvance ? `<button class="btn secondary" data-adv="${s.id}">流转</button>` : ""}
+              ${s.status === "delivered"
+                ? `<button class="btn secondary" data-shclose="${s.id}" data-r="collected">已取药</button>
+                   <button class="btn danger" data-shclose="${s.id}" data-r="no_show">未取药</button>` : ""}
+              ${["registered", "purchasing", "delivered"].includes(s.status)
+                ? `<button class="btn secondary" data-shclose="${s.id}" data-r="cancelled">取消</button>` : ""}
+              ${["collected", "no_show", "cancelled"].includes(s.status) ? "—" : ""}</td></tr>`;
       })}</div>
+    <div class="panel"><h3>缺药履约统计</h3>
+      <p>履约率 <b>${sstats.fulfillment_rate_pct === null ? "暂无可判定登记" : `${sstats.fulfillment_rate_pct}%`}</b>
+        （已取药 ${sstats.collected} / 已判定 ${sstats.collected + sstats.no_show}）；
+        在途 <span class="tag orange">${sstats.in_transit}</span>（已登记＋采购中＋已配送待判定）</p>
+      <p>各状态：${Object.entries(sstats.by_status).map(([k, v]) => `${esc((SS[k] || [k])[0])} ${v}`).join("，") || "—"}</p>
+      <p style="color:#888">${esc(sstats.caliber)}</p></div>
     <div class="panel"><h3>用药画像查询</h3>
       <form class="inline" id="prof-form"><input name="patient_id" type="number" placeholder="患者ID" required><button>查询</button></form>
       <div id="prof-result"></div></div>
@@ -599,7 +701,16 @@ async function renderMedication() {
     const profile = await api(`/api/medication/profile/${new FormData(e.target).get("patient_id")}`);
     $("#prof-result").innerHTML = `${profile.polypharmacy_warning ? '<p class="msg err">⚠ 多重用药风险</p>' : ""}<pre class="json">${esc(JSON.stringify(profile, null, 2))}</pre>`;
   };
-  $("#page-body").onclick = (e) => { if (e.target.dataset.adv) postAction(`/api/medication/shortages/${e.target.dataset.adv}/advance`, null, "#short-msg"); };
+  $("#page-body").onclick = async (e) => {
+    const { adv, shclose, r } = e.target.dataset;
+    if (adv) return postAction(`/api/medication/shortages/${adv}/advance`, null, "#short-msg");
+    if (!shclose) return;
+    // 取药/未取药只能在配送到位之后判定——药还没到就说"未取药"是冤枉人，
+    // 后端对此一律 409；取消则任何阶段都可以（患者转院、药源已解决）。
+    const reason = r === "cancelled" ? (prompt("取消原因（可空）") || "")
+      : r === "no_show" ? prompt("未取药说明（可空）") || "" : "";
+    return postAction(`/api/medication/shortages/${shclose}/close`, { result: r, reason }, "#short-msg");
+  };
 }
 
 async function renderInsurance() {
@@ -752,8 +863,9 @@ async function renderEducation() {
 
 async function renderEldercare() {
   $("#page-desc").textContent = "自理能力评估（Barthel自动分级）、失能老人清单、健康预警（重度失能专案+年度复评到期）";
-  const [assessments, disabled, alerts] = await Promise.all([
-    api("/api/eldercare/assessments"), api("/api/eldercare/disabled"), api("/api/eldercare/alerts")]);
+  const [assessments, disabled, alerts, stats] = await Promise.all([
+    api("/api/eldercare/assessments"), api("/api/eldercare/disabled"),
+    api("/api/eldercare/alerts"), api("/api/eldercare/stats")]);
   $("#page-body").innerHTML = `
     ${alerts.total ? `<div class="panel" style="border-left:4px solid #c62828"><h3>⚠ 老年健康预警（${alerts.total}）</h3>${
       table(["患者", "预警类型", "提示", "末次评估"], alerts.alerts, (a) =>
@@ -771,7 +883,17 @@ async function renderEldercare() {
       `<tr><td>${d.patient_id}</td><td><span class="tag red">${esc(d.care_level)}</span></td><td>${d.adl_score}</td></tr>`)}</div>` : ""}
     <div class="panel">${table(["ID", "患者", "ADL", "认知", "分级", "日期"], assessments, (a) =>
       `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${a.adl_score}</td><td>${a.cognitive_score}</td>
-       <td><span class="tag ${a.care_level === "能力完好" ? "green" : "red"}">${esc(a.care_level)}</span></td><td>${esc(a.assessed_date)}</td></tr>`)}</div>`;
+       <td><span class="tag ${a.care_level === "能力完好" ? "green" : "red"}">${esc(a.care_level)}</span></td><td>${esc(a.assessed_date)}</td></tr>`)}</div>
+    <div class="panel"><h3>老年健康统计</h3>
+      <p>已评估 <b>${stats.assessed_people}</b> 人（评估记录 ${stats.assessment_records} 条）；
+        失能 ${stats.disabled_count} 人，失能率
+        ${stats.disabled_rate_pct === null ? "—" : `${stats.disabled_rate_pct}%`}</p>
+      <p>自理能力构成：${Object.entries(stats.by_care_level).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "—"}</p>
+      <p>认知筛查：已筛 ${stats.cognitive.screened} 人，均分
+        ${stats.cognitive.avg_score === null ? "暂无" : stats.cognitive.avg_score}，
+        <b>未筛 ${stats.cognitive.unscreened} 人（单列，不按 0 分并入）</b></p>
+      <p>体质辨识：已做 ${stats.tcm_constitution.done} 人，未做 ${stats.tcm_constitution.not_done} 人</p>
+      <p style="color:#888">${esc(stats.caliber)}</p></div>`;
   $("#eld-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/eldercare/assessments", formJson(e.target, ["patient_id", "adl_score", "cognitive_score"]), "#eld-msg"); };
 }
 
@@ -1746,7 +1868,8 @@ async function renderInpatient() {
           <td>${esc(a.diagnosis_name)}</td><td>${statusTag(AS, a.status)}</td>
           <td>${actions} <button class="btn" data-orders="${a.id}">医嘱单</button> ${prints}</td></tr>`;
       })}</div>
-    <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div></div>`;
+    <div class="panel hidden" id="inp-orders-panel"><h3>医嘱单</h3><div id="inp-orders"></div>
+      <div id="inp-exec"></div></div>`;
   $("#ward-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/wards", formJson(e.target, ["org_id"]), "#inp-msg"); };
   $("#bed-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/beds", formJson(e.target, ["ward_id"]), "#inp-msg"); };
   $("#adm-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/inpatient/admissions", formJson(e.target, ["patient_id", "ward_id", "bed_id"]), "#inp-msg"); };
@@ -1791,7 +1914,34 @@ async function renderInpatient() {
           `<tr><td>${o.id}</td><td>${o.order_type === "long" ? "长期" : "临时"}</td><td>${esc(o.content)}</td>
            <td><span class="tag ${o.status === "active" ? "orange" : "green"}">${o.status === "active" ? "执行中" : "已停止"}</span></td>
            <td>${esc(o.created_by_name)}</td>
-           <td>${o.status === "active" ? `<button class="btn danger" data-stop-order="${o.id}">停止</button>` : "—"}</td></tr>`);
+           <td>${o.status === "active" ? `<button class="btn danger" data-stop-order="${o.id}">停止</button>` : "—"}
+               <button class="btn secondary" data-ordexec="${o.id}">执行登记</button>
+               <button class="btn secondary" data-ordexecs="${o.id}">执行记录</button></td></tr>`);
+      }
+      if (d.ordexecs) {
+        const rows = await api(`/api/inpatient/orders/${d.ordexecs}/executions`);
+        $("#inp-orders-panel").classList.remove("hidden");
+        $("#inp-exec").innerHTML = `<h4>医嘱 #${esc(d.ordexecs)} 执行记录（${rows.length} 次${
+          rows.length ? `，关联护理记录 ${rows[0].nursing_record_count} 条` : ""}）</h4>`
+          + table(["ID", "执行人", "时间", "皮试", "备注"], rows, (x) =>
+            `<tr><td>${x.id}</td><td>${esc(x.executed_by_name) || x.executed_by}</td>
+             <td>${esc(x.executed_at.replace("T", " ").slice(0, 19))}</td>
+             <td>${x.skin_test_result === null ? "—"
+               : `<span class="tag ${x.skin_test_result === "positive" ? "red" : "green"}">${
+                   x.skin_test_result === "positive" ? "阳性" : "阴性"}</span>`}</td>
+             <td>${esc(x.note) || "—"}</td></tr>`);
+      }
+      if (d.ordexec) {
+        // 皮试结果是三态：不传＝这条医嘱不需要皮试，negative/positive 是做过了。
+        // 做成两态（勾/不勾）会把"没做皮试"记成"阴性"——这是要出人命的那类默认值。
+        const skin = prompt("皮试结果：留空＝本医嘱不需要皮试，输入 1＝阴性，2＝阳性", "");
+        const body = { note: prompt("执行备注（可空）") || "" };
+        if (skin === null) return;
+        if (skin.trim() === "1") body.skin_test_result = "negative";
+        else if (skin.trim() === "2") body.skin_test_result = "positive";
+        else if (skin.trim() !== "") return setMsg("#inp-msg", "皮试结果只能留空 / 1 / 2", false);
+        await api(`/api/inpatient/orders/${d.ordexec}/executions`, { method: "POST", body: JSON.stringify(body) });
+        setMsg("#inp-msg", "执行已登记", true);
       }
     } catch (err) { setMsg("#inp-msg", err.message, false); }
   };

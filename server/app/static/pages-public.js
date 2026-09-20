@@ -69,7 +69,8 @@ async function renderEmTimeline() {
 
 async function renderDrgs() {
   $("#page-desc").textContent = "DRGs 分析：62 组目录（多关键词 + 主手术入组，未匹配落 QY）、机构 CMI、MDC 汇总";
-  const [groups, stats] = await Promise.all([api("/api/drgs/groups"), api("/api/drgs/stats")]);
+  const [groups, stats, inStay] = await Promise.all([
+    api("/api/drgs/groups"), api("/api/drgs/stats"), api("/api/drgs/in-stay-alerts")]);
   $("#page-body").innerHTML = `
     ${stats.orgs.length ? `<div class="panel"><h3>机构 CMI 对比（病例组合指数 = Σ权重 / 正式入组例数，QY 兜底组不计入）</h3>${
       table(["机构", "出院病例", "正式入组", "入组率", "QY兜底", "兜底率", "CMI", "均次费用"], stats.orgs, (o) =>
@@ -89,7 +90,49 @@ async function renderDrgs() {
          <td>${esc(g.keywords) || "—"}</td>
          <td>${esc(g.procedure_keywords) || "—"}${g.require_procedure ? ' <span class="tag orange">必须</span>' : ""}</td>
          <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td>
-         <td><button class="btn secondary" data-drg-weight="${g.id}">调权</button></td></tr>`)}</div>`;
+         <td><button class="btn secondary" data-drg-weight="${g.id}">调权</button></td></tr>`)}</div>
+    <div class="panel"><h3>事前入组提示（入院登记时按拟诊断预判）</h3>
+      <p style="margin-bottom:8px">给出的是<b>"可能入哪几组"而不是一个结论</b>：入院时诊断本就未定，
+        报一个确定的组会让人照着组去写诊断——那是把 DRG 用反了。未命中也如实说"未匹配"，
+        不落兜底组（兜底组是出院入组时保证每个病例都有归属用的）。</p>
+      <form class="inline" id="drg-pre-form">
+        <input name="diagnosis" placeholder="拟诊断" required style="min-width:220px">
+        <input name="operation" placeholder="拟手术（可空）" style="min-width:200px">
+        <button>预判</button></form>
+      <div id="drg-pre-result"></div></div>
+    <div class="panel"><h3>事中超长住院预警（${inStay.today}，阈值 ${inStay.los_multiplier}×组均）</h3>
+      ${inStay.alerts.length
+        ? table(["住院号", "分组", "已住天数", "组均（基线例数）", "超出倍数"], inStay.alerts, (a) =>
+            `<tr><td>${a.admission_id}</td><td>${esc(a.drg_code)}</td><td><b>${a.stayed_days}</b></td>
+             <td>${a.baseline_avg_days}（${a.baseline_cases} 例）</td>
+             <td><span class="tag red">${a.over_ratio}×</span></td></tr>`)
+        : "<p>当前无超长住院预警</p>"}
+      ${inStay.insufficient_baseline.length
+        ? `<h4 style="margin-top:10px">样本不足，未予预警（${inStay.insufficient_baseline.length}）</h4>
+           <p style="margin-bottom:6px">3 个病例算出来的"均值"，预警的是噪声不是问题；
+             但不提的话，看的人会以为这些病例没问题。</p>
+           ${table(["住院号", "分组", "历史例数", "已住天数"], inStay.insufficient_baseline, (a) =>
+             `<tr><td>${a.admission_id}</td><td>${esc(a.drg_code)}</td><td>${a.history_cases}</td>
+              <td>${a.stayed_days}</td></tr>`)}` : ""}
+      <p>尚未填病案首页的在院病例：<b>${inStay.ungrouped_in_stay}</b> 例（事中无从比对）</p>
+      <p style="color:#888">${esc(inStay.caliber)}</p></div>`;
+  $("#drg-pre-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api("/api/drgs/pre-check", { method: "POST", body: JSON.stringify({
+        diagnosis: f.get("diagnosis"), operation: f.get("operation") || "" }) });
+      $("#drg-pre-result").innerHTML = r.matched
+        ? `<p>候选组（按匹配度排序，<b>这是提示不是结论</b>）；权重区间
+             ${r.weight_range.min} ~ ${r.weight_range.max}</p>`
+          + table(["编码", "名称", "基准权重", "诊断命中", "手术命中"], r.candidates, (c) =>
+            `<tr><td>${esc(c.code)}</td><td>${esc(c.name)}</td><td>${c.base_weight}</td>
+             <td>${c.match_score.diagnosis_hits}</td><td>${c.match_score.procedure_hits}</td></tr>`)
+          + `<p style="color:#888">${esc(r.caliber)}</p>`
+        : `<p class="msg">未匹配到任何分组——<b>不落兜底组</b>，兜底组在事前没有信息量。</p>
+           <p style="color:#888">${esc(r.caliber)}</p>`;
+    } catch (err) { setMsg("#drg-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const id = e.target.dataset.drgWeight;
     if (!id) return;

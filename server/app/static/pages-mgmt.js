@@ -1117,11 +1117,11 @@ async function renderCredentials() {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
-      const r = await api("/api/credentials/one-code", { method: "POST", body: JSON.stringify({
+      const oc = await api("/api/credentials/one-code", { method: "POST", body: JSON.stringify({
         patient_id: Number(f.get("patient_id")), ttl_seconds: Number(f.get("ttl_seconds")) || 60 }) });
-      $("#onecode-result").innerHTML = `<p>健康卡号 <b>${esc(r.ehc_no)}</b>，${r.expires_in} 秒后失效</p>
-        <p style="word-break:break-all"><code>${esc(r.code)}</code></p>
-        <p style="color:#888">${esc(r.note)}</p>`;
+      $("#onecode-result").innerHTML = `<p>健康卡号 <b>${esc(oc.ehc_no)}</b>，${oc.expires_in} 秒后失效</p>
+        <p style="word-break:break-all"><code>${esc(oc.code)}</code></p>
+        <p style="color:#888">${esc(oc.note)}</p>`;
       setMsg("#onecode-msg", "已出码", true);
     } catch (err) { setMsg("#onecode-msg", err.message, false); }
   };
