@@ -17,6 +17,7 @@ verify/stats 四个读接口，读留痕一个都没有。
 不带患者定位的全表浏览与全局聚合不记（也没有 patient_id 可记）。
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -26,6 +27,38 @@ from ..models import AccessLog, Organization, Patient, User
 from .portal import current_resident_patient
 
 router = APIRouter(prefix="/api/access-logs", tags=["敏感读留痕"])
+
+
+class AccessLogOut(BaseModel):
+    id: int
+    # 留痕存的是**用户名快照**，不是外键——用户改名/注销后这条记录仍要读得懂
+    viewer: str
+    # 系统账号（无机构）时为 null
+    viewer_org_id: int | None
+    viewer_org_name: str
+    patient_id: int
+    patient_name: str
+    resource: str
+    # 中文名现查常量表，查不到回落成原值
+    resource_name: str
+    basis: str
+    basis_name: str
+    # 键名是 `at`，值取的是 `created_at`；列为空时是空串
+    at: str
+
+
+class BasisTallyOut(BaseModel):
+    basis: str
+    basis_name: str
+    count: int
+
+
+class AccessLogStatsOut(BaseModel):
+    total: int
+    by_basis: list[BasisTallyOut]
+    # 回显取数窗口：空串表示该侧不设限（与清单端点同义）
+    start: str
+    end: str
 
 # basis 的可读名——事后翻日志的人未必记得每个英文词的含义
 BASIS_NAMES = {
@@ -92,7 +125,8 @@ def _decorate(db: Session, rows: list[AccessLog]) -> list[dict]:
     return [_row_out(r, orgs.get(r.org_id, ""), patients.get(r.patient_id, "")) for r in rows]
 
 
-@router.get("", dependencies=[Depends(require_roles("director"))])
+@router.get("", response_model=list[AccessLogOut],
+            dependencies=[Depends(require_roles("director"))])
 def list_access_logs(
     response: Response,
     patient_id: int | None = None,
@@ -162,7 +196,7 @@ def _log_view(db: Session, user: User, patient_id: int) -> None:
         s.close()
 
 
-@router.get("/mine")
+@router.get("/mine", response_model=list[AccessLogOut])
 def my_access_logs(
     response: Response,
     offset: int = 0,
@@ -187,7 +221,8 @@ def my_access_logs(
     return _decorate(db, rows)
 
 
-@router.get("/stats", dependencies=[Depends(require_roles("director"))])
+@router.get("/stats", response_model=AccessLogStatsOut,
+            dependencies=[Depends(require_roles("director"))])
 def access_log_stats(
     patient_id: int | None = None,
     start: OptionalDateStr = "",

@@ -179,7 +179,19 @@ import app.spd.routers as spd_routers
 #   后者是 `test_billing_deposits` 抓出来的，静态看不出。
 #   `inpatient` 的时间戳未发生时给的是 **null**，与 spd 侧给空串的口径不同，
 #   照现状声明，别顺手统一。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 104
+# → 104（"整模块清零"最后一批：`spd/workbench` 8 / `drgs` 6 / `followups` 6 /
+#   `homevisits` 6 / `cost` 5 / `staffing` 5 / `jobs` 4 / `access_logs` 3 /
+#   `attachments` 3 / `monitor` 3 / `todos` 1 = 50 个端点。
+#   三处值得记的判断：
+#   ① `GET /api/attachments/{id}` 是**文件下载**，它的契约不是某个 JSON 模型而是
+#      "我回字节流"——媒体类型由附件自己的 content_type 决定，所以在 `responses`
+#      里写通用的 application/octet-stream，并同步登记进
+#      `test_放宽媒体类型口径没有白送任何端点` 的清单。
+#   ② `monitor` 的三条全是**条件形状**（探活成/败、配没配 Redis），字段顺序按
+#      各分支的字面量排，才能让 `exclude_unset` 逐字对上每一种。
+#   ③ `spd/workbench` 的团队端按角色追加不同的键（个案管理师 / 专家 / 成员各一组，
+#      都在末尾且互不同时出现），声明顺序按这三组依次排。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 54
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -190,6 +202,17 @@ FULLY_GOVERNED = {
     "spd/population",
     "spd/tasks",
     "spd/referral",
+    "spd/workbench",
+    "access_logs",
+    "attachments",
+    "cost",
+    "drgs",
+    "followups",
+    "homevisits",
+    "jobs",
+    "monitor",
+    "staffing",
+    "todos",
     "admin_mgmt",
     "billing",
     "inpatient",
@@ -370,6 +393,9 @@ def test_放宽媒体类型口径没有白送任何端点():
         if route.response_model is None and _declares_non_json_media(route)
     )
     assert by_media == [
+        # 附件下载：媒体类型由附件自己的 content_type 决定，声明的是通用的
+        # application/octet-stream——契约是"我回文件字节流"，不是某个 JSON 模型
+        "attachments GET /api/attachments/{attachment_id}",
         "reports GET /api/reports/monitoring/export",
         "reports GET /api/reports/operations/export",
         # 两个二维码：`_base.SvgResponse` 同时是 response_class 与实际返回的类

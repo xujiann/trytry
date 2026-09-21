@@ -8,6 +8,7 @@ M-5 整改：危急值口径随闭环状态更新——仅 notified/acknowledged
 计入待办与预警，已处置(resolved)不再累积；医师待办补"待确认危急值"。
 """
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -15,6 +16,22 @@ from ..deps import get_current_user
 from ..models import DrugStock, ExamReport, ExamRequest, Prescription, User
 
 router = APIRouter(prefix="/api/todos", tags=["待办中心"])
+
+
+class TodoGroupOut(BaseModel):
+    type: str
+    title: str
+    count: int
+    # 五组待办的行形状各不相同（待审处方 / 待诊断申请 / 缺药 / 危急值两种），
+    # 所以这里只能是宽字典——真要写实得拆五个模型再做联合，键序反而更难守。
+    # 字段名就叫 `list`：它是现有响应里的键名，改名是破坏性变更。
+    list: list[dict]
+
+
+class TodosOut(BaseModel):
+    role: str
+    total: int
+    items: list[TodoGroupOut]
 
 
 def _pending_prescriptions(db: Session) -> dict:
@@ -121,7 +138,7 @@ def _unacknowledged_critical(db: Session) -> dict:
     }
 
 
-@router.get("")
+@router.get("", response_model=TodosOut)
 def my_todos(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if user.role == "pharmacist":
         items = [_pending_prescriptions(db)]

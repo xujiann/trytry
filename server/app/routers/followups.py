@@ -77,6 +77,43 @@ class FollowupIn(BaseModel):
     assigned_to: str = ""
 
 
+
+class FollowupTaskOut(BaseModel):
+    id: int
+    patient_id: int
+    # 患者/机构档案取不到时退化成空串
+    patient_name: str
+    org_id: int
+    org_name: str
+    category: str
+    # 中文名现查常量表，查不到回落成原值
+    category_name: str
+    source_id: int
+    title: str
+    due_date: str
+    assigned_to: str
+    status: str
+    result: str
+    # 未完成时是空串（`completed_at` 列可空，但出口已折成空串）
+    completed_at: str
+
+
+class FollowupStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+class FollowupCategoryStatOut(BaseModel):
+    category: str
+    category_name: str
+    pending: int
+    done: int
+    cancelled: int
+    overdue: int
+    # 完成率分母排除已取消：取消的任务不该拉低随访绩效。它是最后补算的，排末尾。
+    completion_rate_pct: float
+
+
 def _out(t: FollowupTask, patient_names: dict, org_names: dict) -> dict:
     return {
         "id": t.id,
@@ -107,7 +144,8 @@ def _name_maps(db: Session, tasks: list[FollowupTask]) -> tuple[dict, dict]:
     return patients, orgs
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_roles("doctor", "public_health"))])
+@router.post("", status_code=201, response_model=FollowupTaskOut,
+             dependencies=[Depends(require_roles("doctor", "public_health"))])
 def create_followup(body: FollowupIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
     """人工补建随访任务（随访计划外的临时安排）。"""
@@ -125,7 +163,7 @@ def create_followup(body: FollowupIn, db: Session = Depends(get_db), user: User 
     return _out(task, names, orgs)
 
 
-@router.get("")
+@router.get("", response_model=list[FollowupTaskOut])
 def list_followups(
     response: Response,
     category: str | None = None,
@@ -149,7 +187,7 @@ def list_followups(
     return [_out(t, names, orgs) for t in rows]
 
 
-@router.get("/overdue")
+@router.get("/overdue", response_model=list[FollowupTaskOut])
 def overdue_followups(today: str | None = None, db: Session = Depends(get_db)):
     """超期未随访清单。today 覆盖参数仅供测试/排查（与其他预警接口同一约定）。"""
     cutoff = resolve_business_date(today).isoformat()
@@ -169,7 +207,8 @@ class CompleteIn(BaseModel):
 
 
 @router.post(
-    "/{task_id}/complete", dependencies=[Depends(require_roles("doctor", "public_health"))]
+    "/{task_id}/complete", response_model=FollowupStatusOut,
+    dependencies=[Depends(require_roles("doctor", "public_health"))]
 )
 def complete_followup(task_id: int, body: CompleteIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     task = db.get(FollowupTask, task_id)
@@ -186,7 +225,8 @@ def complete_followup(task_id: int, body: CompleteIn, db: Session = Depends(get_
 
 
 @router.post(
-    "/{task_id}/cancel", dependencies=[Depends(require_roles("doctor", "public_health"))]
+    "/{task_id}/cancel", response_model=FollowupStatusOut,
+    dependencies=[Depends(require_roles("doctor", "public_health"))]
 )
 def cancel_followup(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     task = db.get(FollowupTask, task_id)
@@ -200,7 +240,7 @@ def cancel_followup(task_id: int, db: Session = Depends(get_db), user: User = De
     return {"id": task.id, "status": task.status}
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=list[FollowupCategoryStatOut])
 def followup_stats(today: str | None = None, db: Session = Depends(get_db)):
     """随访完成情况：按类别统计待随访/已完成/超期与完成率。"""
     cutoff = resolve_business_date(today).isoformat()

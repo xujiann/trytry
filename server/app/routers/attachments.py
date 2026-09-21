@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 # 导入即注册附件补扫任务 attachment_av_scan（附件域的旁路能力，随本路由装载）
@@ -39,6 +40,21 @@ from ..storage import get_storage
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_patient_visible
 
 router = APIRouter(prefix="/api/attachments", tags=["附件"], dependencies=[Depends(get_current_user)])
+
+
+class AttachmentOut(BaseModel):
+    id: int
+    filename: str
+    # 上传方给的 MIME，可能是空串（浏览器没填）
+    content_type: str
+    size: int
+    # 内容寻址：同一份文件只存一份，sha256 就是存储键
+    sha256: str
+    owner_type: str
+    owner_id: int
+    # 系统生成的附件（导入/派生）没有上传人
+    uploaded_by: int | None
+    created_at: str
 
 MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"}
@@ -294,7 +310,7 @@ def _out(a: Attachment) -> dict:
     }
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, response_model=AttachmentOut)
 async def upload_attachment(
     file: UploadFile = File(...),
     owner_type: str = Form(...),
@@ -323,7 +339,7 @@ async def upload_attachment(
     return _out(attachment)
 
 
-@router.get("")
+@router.get("", response_model=list[AttachmentOut])
 def list_attachments(
     owner_type: str,
     owner_id: int,
@@ -345,7 +361,16 @@ def list_attachments(
     ]
 
 
-@router.get("/{attachment_id}")
+@router.get(
+    "/{attachment_id}",
+    # 下载端点的契约是「我回的是文件字节流」，不是某个 JSON 模型：
+    # 媒体类型由附件自己的 `content_type` 决定，所以这里写通用的
+    # `application/octet-stream`。`response_model` 对 FileResponse /
+    # StreamingResponse 没有意义（函数不返回可序列化对象，FastAPI 也会跳过模型），
+    # 把媒体类型写进 `responses` 才是真的把这句话声明进 OpenAPI。
+    responses={200: {"content": {"application/octet-stream": {}},
+                     "description": "附件原始字节流"}},
+)
 def download_attachment(
     attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):

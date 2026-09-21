@@ -41,6 +41,68 @@ SENIOR_LEVELS = ("intermediate", "deputy_senior", "senior")
 LONG_TERM_DAYS = 183
 
 
+
+# ============================================================ 响应契约
+
+
+class SecondmentOut(BaseModel):
+    id: int
+    employee_id: int
+    # 员工档案被删时这几项退化成空串 / "none"
+    employee_name: str
+    title: str
+    title_level: str
+    title_level_name: str
+    from_org_id: int
+    from_org_name: str
+    to_org_id: int
+    to_org_name: str
+    start_date: str
+    # 在派中时是空串（列非空），不是 null
+    end_date: str
+    ongoing: bool
+    assignment_type: str
+    assignment_type_name: str
+    position: str
+    # 在派天数现算（未结束按今天算），不是列
+    days: int
+    note: str
+
+
+class TitleLevelOut(BaseModel):
+    id: int
+    name: str
+    title: str
+    title_level: str
+    title_level_name: str
+
+
+class DispatchOrgStatOut(BaseModel):
+    org_id: int
+    org_name: str
+    ongoing: int
+    total: int
+    long_term_6m: int
+    long_term_6m_senior: int
+
+
+class DispatchCaliberOut(BaseModel):
+    long_term_6m: str
+    senior: str
+
+
+class DispatchStatsOut(BaseModel):
+    year: int
+    # 不按分组筛时为 null
+    group_id: int | None
+    orgs: list[DispatchOrgStatOut]
+    # 未填职称等级的派驻单独报出来：不默认算入"中级及以上"，也不悄悄丢掉
+    unknown_title_level: int
+    # 存量数据里日期非法的条数（新数据已在入口拦下）。同样是单列而不丢弃。
+    invalid_date_records: int
+    caliber: DispatchCaliberOut
+
+
 class SecondmentIn(BaseModel):
     employee_id: int
     from_org_id: int
@@ -94,7 +156,7 @@ def _out(row: Secondment, emp: Employee | None, names: dict, today: date) -> dic
     }
 
 
-@router.post("/secondments", status_code=201,
+@router.post("/secondments", status_code=201, response_model=SecondmentOut,
              dependencies=[Depends(require_roles("director", "operator"))])
 def create_secondment(
     body: SecondmentIn,
@@ -137,7 +199,7 @@ def create_secondment(
     return _out(row, employee, names, date.today())
 
 
-@router.get("/secondments")
+@router.get("/secondments", response_model=list[SecondmentOut])
 def list_secondments(
     response: Response,
     to_org_id: int | None = None,
@@ -166,7 +228,7 @@ def list_secondments(
     return [_out(r, employees.get(r.employee_id), names, today) for r in rows]
 
 
-@router.post("/secondments/{secondment_id}/end",
+@router.post("/secondments/{secondment_id}/end", response_model=SecondmentOut,
              dependencies=[Depends(require_roles("director", "operator"))])
 def end_secondment(
     secondment_id: int,
@@ -192,7 +254,7 @@ def end_secondment(
     return _out(row, employee, names, date.today())
 
 
-@router.patch("/employees/{employee_id}/title-level",
+@router.patch("/employees/{employee_id}/title-level", response_model=TitleLevelOut,
               dependencies=[Depends(require_roles("director", "operator"))])
 def set_title_level(employee_id: int, body: TitleLevelIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """维护职称等级。**不从职称文本推断**，必须显式选。"""
@@ -211,7 +273,7 @@ def set_title_level(employee_id: int, body: TitleLevelIn, db: Session = Depends(
     }
 
 
-@router.get("/dispatch-stats")
+@router.get("/dispatch-stats", response_model=DispatchStatsOut)
 def dispatch_stats(
     year: int | None = None, group_id: int | None = None, db: Session = Depends(get_db)
 ):

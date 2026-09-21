@@ -13,6 +13,7 @@ from typing import Any
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -56,6 +57,480 @@ router = APIRouter(
 )
 
 OPEN_STATUSES = ("pending", "claimed", "doing", "submitted", "overdue")
+
+
+
+# ============================================================ 响应契约
+#
+# 八个工作台都是**聚合面板**：一层嵌套的计数字典，键由 handler 的字面量固定，
+# 值几乎全是计数（int）与比率（真除法，恒为 float）。
+# 几个跨工作台复用的小块（纳管/任务/随访/转诊/路径统计）各抽一个模型，
+# 与 `_enroll_stats` / `_task_stats` / `_followup_stats` / `_referral_stats` /
+# `_path_stats` 一一对应。
+
+
+class SweptOut(BaseModel):
+    """`sweep_overdue()` 的返回：三类超期各扫出几条 + 升级几条。"""
+
+    overdue: int
+    escalated: int
+    revisits: int
+    followups: int
+
+
+class EnrollStatsOut(BaseModel):
+    enrolled: int
+    high_risk: int
+    new_this_month: int
+    archived: int
+    # 三个宽键：取值由数据决定（风险等级/病种编码/档案状态）
+    by_risk: dict[str, int]
+    by_program: dict[str, int]
+    by_status: dict[str, int]
+
+
+class TaskStatsOut(BaseModel):
+    open: int
+    overdue: int
+    due_today: int
+    escalated: int
+    done_total: int
+    by_type: dict[str, int]
+
+
+class FollowupStatsOut(BaseModel):
+    total: int
+    done: int
+    completion_rate: float
+    overdue: int
+    abnormal: int
+
+
+class ReferralStatsOut(BaseModel):
+    total: int
+    open: int
+    closed: int
+    # 分母扣掉撤回与驳回
+    closure_rate: float
+    effective_visits: int
+    by_status: dict[str, int]
+
+
+class PathStatsOut(BaseModel):
+    total: int
+    running: int
+    completed: int
+    completion_rate: float
+
+
+# ---------------------------------------------------------------- 平台管理端
+
+
+class AdminAlertsOut(BaseModel):
+    overdue_tasks: int
+    overdue_followups: int
+    pending_review_screenings: int
+    pending_applies: int
+    pending_migrations: int
+    swept: SweptOut
+
+
+class TrackOut(BaseModel):
+    programs: int
+    enrolled: int
+
+
+class ParallelTracksOut(BaseModel):
+    chronic: TrackOut
+    specialty: TrackOut
+
+
+class ConfigHealthOut(BaseModel):
+    programs: int
+    active_programs: int
+    # 没配纳入规则的病种编码清单——报出来而不是只报个数，好直接去补
+    programs_without_rules: list[str]
+    published_paths: int
+    draft_paths: int
+    published_scales: int
+    teams: int
+    village_doctors: int
+
+
+class DataSourcesOut(BaseModel):
+    total: int
+    failed: int
+    delayed: int
+    stale_over_24h: int
+    avg_success_rate: float
+
+
+class AdminWorkbenchOut(BaseModel):
+    alerts: AdminAlertsOut
+    parallel_tracks: ParallelTracksOut
+    config_health: ConfigHealthOut
+    data_sources: DataSourcesOut
+    enrollment: EnrollStatsOut
+    tasks: TaskStatsOut
+
+
+# ---------------------------------------------------------------- 卫健管理端
+
+
+class HealthCommissionCoreOut(BaseModel):
+    registered_patients: int
+    screened: int
+    suspect: int
+    candidates: int
+    enrolled: int
+    self_managed: int
+    service_persons: int
+    service_times: int
+    screening_conversion_rate: float
+    updated_at: str
+
+
+class LevelTallyOut(BaseModel):
+    orgs: int
+    enrolled: int
+    teams: int
+
+
+class CenterBriefOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    program_code: str
+    status: str
+    # 这两个是**关联数量**（org_ids / team_ids 两个 JSON 列的长度），不是清单
+    orgs: int
+    teams: int
+
+
+class ScoreBriefOut(BaseModel):
+    object_name: str
+    period: str
+    total_score: float
+    rank: int
+
+
+class HealthCommissionWorkbenchOut(BaseModel):
+    core: HealthCommissionCoreOut
+    enrollment: EnrollStatsOut
+    tasks: TaskStatsOut
+    followups: FollowupStatsOut
+    referrals: ReferralStatsOut
+    paths: PathStatsOut
+    # 键是**中文层级名**（县级/乡级/村级），不是 county/township/village
+    by_level: dict[str, LevelTallyOut]
+    centers: list[CenterBriefOut]
+    scores: list[ScoreBriefOut]
+
+
+# ---------------------------------------------------------------- 区域结构分析
+
+
+class MeasurementTallyOut(BaseModel):
+    total: int
+    normal: int
+
+
+class RegionStatsOut(BaseModel):
+    total: int
+    by_program: dict[str, int]
+    by_risk: dict[str, int]
+    by_stage: dict[str, int]
+    # 键是机构 id（JSON 里会变成字符串键，与现状一致）
+    by_org: dict[int, int]
+    age_distribution: dict[str, int]
+    gender_distribution: dict[str, int]
+    referrals: ReferralStatsOut
+    paths: PathStatsOut
+    followups: FollowupStatsOut
+    measurements: MeasurementTallyOut
+
+
+# ---------------------------------------------------------------- 专病专家端
+
+
+class ProgramCoverageOut(BaseModel):
+    program_code: str
+    program_name: str
+    category: str
+    version: str
+    has_include_rules: bool
+    # 这三个也是**数量**（阶段数、模板数、已发布模板数）
+    stages: int
+    path_templates: int
+    published_paths: int
+    scales: int
+    enrolled: int
+
+
+class ExpertCenterOut(BaseModel):
+    id: int
+    name: str
+    program_code: str
+    lead_dept: str
+    status: str
+    version: str
+
+
+class AssessmentTallyOut(BaseModel):
+    total: int
+    by_risk: dict[str, int]
+
+
+class ExpertWorkbenchOut(BaseModel):
+    programs: list[ProgramCoverageOut]
+    centers: list[ExpertCenterOut]
+    enrollment: EnrollStatsOut
+    paths: PathStatsOut
+    referrals: ReferralStatsOut
+    assessments: AssessmentTallyOut
+    # 有在管档案的机构数（去重计数）
+    org_coverage: int
+
+
+# ---------------------------------------------------------------- 全程管理中心端
+
+
+class CenterTodoOut(BaseModel):
+    mine: TaskStatsOut
+    all: TaskStatsOut
+    unassigned: int
+    swept: SweptOut
+
+
+class CenterPoolOut(BaseModel):
+    suspect: int
+    target: int
+    unassigned: int
+    excluded: int
+    pending_review: int
+
+
+class CenterMonthlyOut(BaseModel):
+    new_enrollments: int
+    done_tasks: int
+
+
+class CenterLifecycleOut(BaseModel):
+    dead: int
+    migrated: int
+    excluded: int
+    pending_migrations: int
+    recalling: int
+
+
+class CenterCaseReportsOut(BaseModel):
+    pending: int
+
+
+class CenterWorkbenchOut(BaseModel):
+    todo: CenterTodoOut
+    pool: CenterPoolOut
+    enrollment: EnrollStatsOut
+    monthly: CenterMonthlyOut
+    referrals: ReferralStatsOut
+    lifecycle: CenterLifecycleOut
+    case_reports: CenterCaseReportsOut
+    # 在用团队数
+    teams: int
+
+
+# ---------------------------------------------------------------- 服务团队端
+
+
+class TeamBriefOut(BaseModel):
+    id: int
+    name: str
+    level: str
+    org_id: int
+    program_codes: list[str]
+
+
+class TeamPatientsOut(BaseModel):
+    managed: int
+    new_this_month: int
+    high_risk: int
+    by_risk: dict[str, int]
+
+
+class TeamPlansOut(BaseModel):
+    pending_assess: int
+    pending_target: int
+    pending_path: int
+    due_followups: int
+    due_revisits: int
+
+
+class TeamAlertsOut(BaseModel):
+    abnormal_measure: int
+    referrals: int
+    recall: int
+    dead: int
+
+
+class TeamPackagesOut(BaseModel):
+    bound: int
+    total_items: int
+    used_items: int
+    usage_rate: float
+
+
+class TeamWorkbenchOut(BaseModel):
+    """三种团队角色各自追加自己的那几个键，**都在末尾**、互不同时出现：
+
+    | 角色 | 追加 |
+    |---|---|
+    | `case_manager` | `packages`, `consults` |
+    | `expert` | `team_patients`, `paths` |
+    | `member` | `interventions` |
+
+    所以它们一律可选 + `response_model_exclude_unset`；声明顺序按上表排，
+    每个角色各取其中连续的一段，键序与 handler 的赋值顺序一致。
+    """
+
+    role: str
+    teams: list[TeamBriefOut]
+    patients: TeamPatientsOut
+    tasks: TaskStatsOut
+    plans: TeamPlansOut
+    alerts: TeamAlertsOut
+    packages: TeamPackagesOut | None = None
+    consults: int | None = None
+    # 键是团队 id
+    team_patients: dict[int, int] | None = None
+    paths: PathStatsOut | None = None
+    interventions: int | None = None
+
+
+# ---------------------------------------------------------------- 医生移动端
+
+
+class MobileTeamOut(BaseModel):
+    id: int
+    name: str
+    level: str
+
+
+class MobileUserOut(BaseModel):
+    id: int
+    name: str
+    role: str
+    # 未挂机构的账号为 null
+    org_id: int | None
+    member_roles: list[str]
+    teams: list[MobileTeamOut]
+    is_village_doctor: bool
+    # 非村医时是空串
+    village: str
+    township: str
+
+
+class MobileCalendarOut(BaseModel):
+    today: str
+    followups: int
+    revisits: int
+    tasks: int
+
+
+class MobileReferralsOut(BaseModel):
+    pending_review: int
+    pending_accept: int
+    pending_receive: int
+    mine: int
+    overdue: int
+
+
+class MobilePatientsOut(BaseModel):
+    mine: int
+    # 非村医恒为 0
+    village: int
+    org: int
+
+
+class MobileAlertsOut(BaseModel):
+    escalated_tasks: int
+    case_reports: int
+    high_risk_screenings: int
+
+
+class MobilePointsOut(BaseModel):
+    balance: int
+    earned: int
+
+
+class MobilePerformanceOut(BaseModel):
+    period: str
+    total_score: float
+    rank: int
+    # 逐项得分明细（JSON 列），形状随考核方案而变
+    detail: list[dict]
+
+
+class DoctorMobileWorkbenchOut(BaseModel):
+    user: MobileUserOut
+    todo: TaskStatsOut
+    calendar: MobileCalendarOut
+    referrals: MobileReferralsOut
+    patients: MobilePatientsOut
+    alerts: MobileAlertsOut
+    points: MobilePointsOut
+    # 还没有考核记录时为 null
+    performance: MobilePerformanceOut | None
+
+
+# ---------------------------------------------------------------- 下拉目录
+
+
+class CatalogProgramOut(BaseModel):
+    code: str
+    name: str
+    category: str
+    # 阶段定义原样带出（JSON 列），形状随病种而变
+    stages: list[dict]
+    active: bool
+
+
+class CatalogTeamOut(BaseModel):
+    id: int
+    name: str
+    level: str
+    org_id: int
+
+
+class CatalogScaleOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    program_code: str
+
+
+class CatalogCenterOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    program_code: str
+
+
+class CatalogPathTemplateOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    program_id: int
+    scene: str
+    status: str
+
+
+class CatalogOut(BaseModel):
+    programs: list[CatalogProgramOut]
+    teams: list[CatalogTeamOut]
+    scales: list[CatalogScaleOut]
+    centers: list[CatalogCenterOut]
+    path_templates: list[CatalogPathTemplateOut]
 
 
 def _scope(db: Session, user: User, org_id: int | None, stats: bool = True) -> list[int] | None:
@@ -193,7 +668,8 @@ def _path_stats(db: Session, orgs: list[int] | None) -> dict:
 # ============================================================ 平台管理端
 
 
-@router.get("/workbench/admin", dependencies=[Depends(require_roles("director"))])
+@router.get("/workbench/admin", response_model=AdminWorkbenchOut,
+            dependencies=[Depends(require_roles("director"))])
 def admin_workbench(
     today: str | None = None, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -298,7 +774,7 @@ def admin_workbench(
 # ============================================================ 卫健管理端
 
 
-@router.get("/workbench/health-commission",
+@router.get("/workbench/health-commission", response_model=HealthCommissionWorkbenchOut,
             dependencies=[Depends(require_roles("director"))])
 def health_commission_workbench(
     program_code: str = "",
@@ -389,7 +865,7 @@ def health_commission_workbench(
     }
 
 
-@router.get("/stats/region")
+@router.get("/stats/region", response_model=RegionStatsOut)
 def region_stats(
     program_code: str = "",
     org_id: int | None = None,
@@ -476,7 +952,8 @@ def region_stats(
 # ============================================================ 专病专家端
 
 
-@router.get("/workbench/expert", dependencies=[Depends(require_roles("doctor", "director"))])
+@router.get("/workbench/expert", response_model=ExpertWorkbenchOut,
+            dependencies=[Depends(require_roles("doctor", "director"))])
 def expert_workbench(
     program_code: str = "",
     db: Session = Depends(get_db),
@@ -543,7 +1020,7 @@ def expert_workbench(
 # ============================================================ 全程管理中心端
 
 
-@router.get("/workbench/center")
+@router.get("/workbench/center", response_model=CenterWorkbenchOut)
 def center_workbench(
     program_code: str = "",
     today: str | None = None,
@@ -640,7 +1117,8 @@ def _my_team_ids(db: Session, user: User) -> list[int]:
     ]
 
 
-@router.get("/workbench/team")
+@router.get("/workbench/team", response_model=TeamWorkbenchOut,
+            response_model_exclude_unset=True)
 def team_workbench(
     role: str = Query(default="member", pattern="^(expert|member|case_manager)$"),
     program_code: str = "",
@@ -786,7 +1264,7 @@ def team_workbench(
 # ============================================================ 医生移动端
 
 
-@router.get("/workbench/doctor-mobile")
+@router.get("/workbench/doctor-mobile", response_model=DoctorMobileWorkbenchOut)
 def doctor_mobile_workbench(
     today: str | None = None,
     db: Session = Depends(get_db),
@@ -921,7 +1399,7 @@ def doctor_mobile_workbench(
 # ============================================================ 病种与目录（各端共用的下拉数据）
 
 
-@router.get("/catalog")
+@router.get("/catalog", response_model=CatalogOut)
 def catalog(db: Session = Depends(get_db)):
     """各端下拉框共用的目录数据：病种、团队、量表、服务包、专病中心。
 

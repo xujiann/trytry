@@ -9,6 +9,7 @@
 import time
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,102 @@ from ..models import JobRun, ScheduledJob
 from ..state_store import _redis_client
 
 router = APIRouter(prefix="/api/monitor", tags=["运行监控"], dependencies=[Depends(require_admin)])
+
+
+# ============================================================ 响应契约
+#
+# 本模块的响应多为**条件形状**（探活成功/失败、配没配 Redis），
+# 一律「可选字段 + response_model_exclude_unset」，字段顺序按各分支的
+# 字面量排，使 `exclude_unset`（按**声明顺序**输出）逐字对上每一种。
+
+
+class DatabaseProbeOut(BaseModel):
+    """探活成功出 `{connected, latency_ms, dialect}`，失败出
+    `{connected, error, dialect}`——`dialect` 两边都在且都在末尾，
+    所以 `latency_ms`/`error` 夹在中间这个顺序能同时满足两条。
+    """
+
+    connected: bool
+    latency_ms: float | None = None
+    # 只回错误**类型**不回原文：连接串常带主机名与账号，不该进监控页
+    error: str | None = None
+    dialect: str
+
+
+class RedisProbeOut(BaseModel):
+    """三种分支：没配（note）、连上（latency_ms）、连不上（error）。"""
+
+    configured: bool
+    connected: bool
+    note: str | None = None
+    latency_ms: float | None = None
+    error: str | None = None
+
+
+class JobFailureOut(BaseModel):
+    name: str
+    at: str
+    status: str
+    message: str
+
+
+class SchedulerOut(BaseModel):
+    jobs_total: int
+    jobs_enabled: int
+    # 到点未跑：可能是调度线程死了，也可能是这一轮刚好还没轮到，只报事实
+    overdue_jobs: list[str]
+    recent_failures: list[JobFailureOut]
+
+
+class OverviewOut(BaseModel):
+    scope: str
+    instance_id: str
+    uptime_seconds: int
+    environment: str
+    database: DatabaseProbeOut
+    redis: RedisProbeOut
+    scheduler: SchedulerOut
+
+
+class ModuleStatOut(BaseModel):
+    module: str
+    count: int
+    avg_duration_ms: float
+
+
+class ApiStatsOut(BaseModel):
+    """`metrics.snapshot()` 的键 + 四个后补的键。
+
+    配了 Redis 时 `snapshot.update(cluster)` **只覆盖同名键**（不改键序），
+    随后多插一个 `counter_scope`；未配时没有这个键。所以它排在 `scope` 之后、
+    `instance_id` 之前——正是两条分支各自的字面顺序。
+    """
+
+    total_requests: int
+    avg_duration_ms: float
+    # 三个宽键：状态类/状态码/慢请求与错误样本，取值都由流量决定
+    by_status_class: dict[str, int]
+    by_status_code: dict[int, int]
+    top_modules: list[ModuleStatOut]
+    # 明细样本仍为**本实例**（合并会抹掉"哪台机器慢"）
+    slow_samples: list[dict]
+    error_samples: list[dict]
+    scope: str
+    counter_scope: str | None = None
+    instance_id: str
+    slow_threshold_ms: float
+
+
+class NodesOut(BaseModel):
+    """未配 Redis 时出 `{scope, instance_id, instances(null), note}`，
+    配了则只出 `{scope, instances}`——后者缺的两个键夹在中间，
+    按这个声明顺序两条分支都对得上。
+    """
+
+    scope: str
+    instance_id: str | None = None
+    instances: list[dict] | None
+    note: str | None = None
 
 
 def _probe_database(db: Session) -> dict:
@@ -63,7 +160,8 @@ def _probe_redis() -> dict:
         return {"configured": True, "connected": False, "error": type(exc).__name__}
 
 
-@router.get("/overview")
+@router.get("/overview", response_model=OverviewOut,
+            response_model_exclude_unset=True)
 def overview(db: Session = Depends(get_db)):
     """运行环境概览：版本、实例、启动时长、依赖连通性、调度器状态。"""
     monitor_heartbeat()
@@ -103,7 +201,8 @@ def overview(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/api-stats")
+@router.get("/api-stats", response_model=ApiStatsOut,
+            response_model_exclude_unset=True)
 def api_stats():
     """接口调用统计：总量、状态分布、模块 TOP、慢请求与错误样本。
 
@@ -125,7 +224,8 @@ def api_stats():
     return snapshot
 
 
-@router.get("/nodes")
+@router.get("/nodes", response_model=NodesOut,
+            response_model_exclude_unset=True)
 def nodes():
     """集群节点状态。
 

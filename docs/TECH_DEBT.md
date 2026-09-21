@@ -175,7 +175,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 ### 契约 / 响应
 | # | 问题 |
 |---|---|
-| P2-5 | `response_model=` 覆盖率 14% → **89.0%**（欠账 757 → 104，61 个模块整模块清零，棘轮 `tests/test_api_contract_governance.py` 只许调小）。剩余 104 笔散在 26 个模块、单模块最多 8 笔，其中 1 笔（`GET /api/spd/scores-analysis`）**加不了契约**——两种形状键序互不相容，要收得先改响应字节，已在 handler 与治理文档里写明 |
+| P2-5 | `response_model=` 覆盖率 14% → **94.3%**（欠账 757 → 54，72 个模块整模块清零，棘轮 `tests/test_api_contract_governance.py` 只许调小）。剩余 54 笔散在 15 个模块、单模块最多 7 笔，且全是局部缺口，其中 1 笔（`GET /api/spd/scores-analysis`）**加不了契约**——两种形状键序互不相容，要收得先改响应字节，已在 handler 与治理文档里写明 |
 | P2-6 | 无统一响应信封；动作响应键各自发明；`X-Total-Count` 三种来源 |
 | P2-7 | 状态流转 3 种风格；RPC 动词 80 个；PUT 仅 1 次（孤例） |
 | P2-8 | paginate 仅 32/89 文件；210 处直接 `.limit()` 会随数据量静默截断 |

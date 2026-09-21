@@ -117,6 +117,123 @@ class DrgGroupUpdate(BaseModel):
     active: bool | None = None
 
 
+
+# ============================================================ 响应契约
+#
+# 权重、CMI、平均费用都是算出来的比率/均值（真除法），恒为 float；
+# `base_weight` 是 Float 列（权重不是钱，不走 Money）。
+
+
+class DrgGroupOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    base_weight: float
+    keywords: str
+    mdc: str
+    mdc_name: str
+    procedure_keywords: str
+    require_procedure: bool
+    # 兜底组（QY）：没匹配上任何组时落到它，统计里单列不计入 CMI
+    is_fallback: bool
+    active: bool
+
+
+class DrgOrgStatOut(BaseModel):
+    org_id: int
+    org_name: str
+    cases: int
+    grouped: int
+    fallback: int
+    grouped_pct: float
+    fallback_pct: float
+    # CMI = Σ权重 / 正式入组例数（QY 兜底组不计入）
+    cmi: float
+    avg_cost: float
+
+
+class DrgGroupStatOut(BaseModel):
+    drg_code: str
+    # 目录里查不到该编码时回落成编码本身
+    drg_name: str
+    mdc: str
+    fallback: bool
+    cases: int
+    avg_cost: float
+
+
+class DrgMdcStatOut(BaseModel):
+    mdc: str
+    mdc_name: str
+    groups: int
+    cases: int
+    cmi: float
+    avg_cost: float
+    fallback: bool
+
+
+class DrgStatsOut(BaseModel):
+    orgs: list[DrgOrgStatOut]
+    groups: list[DrgGroupStatOut]
+    mdcs: list[DrgMdcStatOut]
+
+
+class MatchScoreOut(BaseModel):
+    diagnosis_hits: int
+    procedure_hits: int
+
+
+class DrgCandidateOut(DrgGroupOut):
+    """候选组 = 分组本身 + 命中打分，`match_score` 在**末尾**
+    （`{**_group_out(g), "match_score": ...}`），用继承正合顺序。
+    """
+
+    match_score: MatchScoreOut
+
+
+class WeightRangeOut(BaseModel):
+    min: float
+    max: float
+
+
+class DrgPreCheckOut(BaseModel):
+    diagnosis: str
+    operation: str
+    matched: bool
+    candidates: list[DrgCandidateOut]
+    # 一个候选都没有时为 null
+    weight_range: WeightRangeOut | None
+    caliber: str
+
+
+class InStayAlertOut(BaseModel):
+    admission_id: int
+    patient_id: int
+    org_id: int
+    drg_code: str
+    stayed_days: int
+    baseline_avg_days: float
+    baseline_cases: int
+    over_ratio: float
+
+
+class InsufficientBaselineOut(BaseModel):
+    admission_id: int
+    drg_code: str
+    history_cases: int
+    stayed_days: int
+
+
+class InStayAlertsOut(BaseModel):
+    today: str
+    los_multiplier: float
+    alerts: list[InStayAlertOut]
+    # 样本不足与尚未入组的都单列，不混进"无预警"
+    insufficient_baseline: list[InsufficientBaselineOut]
+    ungrouped_in_stay: int
+    caliber: str
+
+
 def _group_out(g: DrgGroup) -> dict:
     return {
         "id": g.id,
@@ -133,7 +250,7 @@ def _group_out(g: DrgGroup) -> dict:
     }
 
 
-@router.get("/groups")
+@router.get("/groups", response_model=list[DrgGroupOut])
 def list_groups(mdc: str | None = None, db: Session = Depends(get_db)):
     query = db.query(DrgGroup)
     if mdc:
@@ -141,7 +258,8 @@ def list_groups(mdc: str | None = None, db: Session = Depends(get_db)):
     return [_group_out(g) for g in query.order_by(DrgGroup.code).limit(500).all()]
 
 
-@router.post("/groups", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/groups", status_code=201, response_model=DrgGroupOut,
+             dependencies=[Depends(require_admin)])
 def create_group(body: DrgGroupCreate, db: Session = Depends(get_db)):
     if db.query(DrgGroup).filter(DrgGroup.code == body.code).first():
         raise HTTPException(status_code=409, detail="分组编码已存在")
@@ -149,7 +267,8 @@ def create_group(body: DrgGroupCreate, db: Session = Depends(get_db)):
     return _group_out(group)
 
 
-@router.patch("/groups/{group_id}", dependencies=[Depends(require_admin)])
+@router.patch("/groups/{group_id}", response_model=DrgGroupOut,
+              dependencies=[Depends(require_admin)])
 def update_group(group_id: int, body: DrgGroupUpdate, db: Session = Depends(get_db)):
     group = db.get(DrgGroup, group_id)
     if group is None:
@@ -164,7 +283,8 @@ def update_group(group_id: int, body: DrgGroupUpdate, db: Session = Depends(get_
 # ---------- CMI 与组均费用分析 ----------
 
 
-@router.get("/stats", dependencies=[Depends(require_roles("director"))])
+@router.get("/stats", response_model=DrgStatsOut,
+            dependencies=[Depends(require_roles("director"))])
 def drg_stats(db: Session = Depends(get_db)):
     # 第十轮 P2：管理聚合限 director/admin。这是给管理者看的账（各机构 CMI、
     # 例数、均费），不是给一线的预警——与多点触发监测那类刻意保持宽的区分开。
@@ -275,7 +395,7 @@ class PreCheckIn(BaseModel):
     operation: str = Field(default="", max_length=256)
 
 
-@router.post("/pre-check")
+@router.post("/pre-check", response_model=DrgPreCheckOut)
 def drg_pre_check(body: PreCheckIn, db: Session = Depends(get_db)):
     """事前提示：入院登记时按拟诊断预判入组与权重。
 
@@ -315,7 +435,7 @@ def drg_pre_check(body: PreCheckIn, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/in-stay-alerts")
+@router.get("/in-stay-alerts", response_model=InStayAlertsOut)
 def in_stay_alerts(
     org_id: int | None = None,
     los_multiplier: float = Query(default=1.5, ge=1.0, le=5.0),

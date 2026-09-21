@@ -34,6 +34,68 @@ from ..models import (
 router = APIRouter(prefix="/api/cost", tags=["成本核算"], dependencies=[Depends(get_current_user)])
 
 COST_TYPES = ("labor", "drug", "consumable", "depreciation", "overhead")
+
+
+# ============================================================ 响应契约
+#
+# 金额是 `Money` 列（`Numeric(14,2, asdecimal=False)`）：整数金额读回来是
+# Python int，一律 `int | float`。算出来的比率/单位成本是真除法，恒为 float。
+
+
+class DepartmentCostUpsertOut(BaseModel):
+    id: int
+    # True = 覆盖了同科室同期间同成本项的既有记录（月末成本要反复调整）
+    updated: bool
+    amount: int | float
+
+
+class AllocationRuleCreatedOut(BaseModel):
+    id: int
+    from_dept_id: int
+    to_dept_id: int
+    # 分摊比例是真 Float 列，不是金额
+    ratio_pct: float
+
+
+class AllocationRuleOut(BaseModel):
+    """清单行比新建回执多一个 `org_id`，且它排在 `id` 之后（不在末尾）——
+    所以是两个模型，不能继承。
+    """
+
+    id: int
+    org_id: int
+    from_dept_id: int
+    to_dept_id: int
+    ratio_pct: float
+
+
+class DepartmentCostSummaryOut(BaseModel):
+    dept_id: int
+    # 科室/机构被删时退化成空串
+    dept_name: str
+    dept_category: str
+    org_name: str
+    direct_cost: int | float
+    # 键是 COST_TYPES 的五项（人力/药品/耗材/折旧/管理费）
+    by_type: dict[str, int | float]
+    allocated_in: int | float
+    allocated_out: int | float
+    total_cost: int | float
+    # 分摊比例之和不足 100 时的剩余部分，提示规则没配全
+    unallocated_ratio_amount: int | float
+
+
+class UnitCostOut(BaseModel):
+    period: str
+    org_id: int
+    total_cost: int | float
+    outpatient_visits: int
+    occupied_bed_days: int
+    outpatient_cost: int | float
+    inpatient_cost: int | float
+    # 两个单位成本是除出来的，恒为 float
+    cost_per_visit: float
+    cost_per_bed_day: float
 COST_TYPE_NAMES = {
     "labor": "人员经费",
     "drug": "药品",
@@ -55,7 +117,8 @@ class CostIn(BaseModel):
     amount: float = Field(ge=0)
 
 
-@router.post("/departments", status_code=201, dependencies=[Depends(require_roles("director"))])
+@router.post("/departments", status_code=201, response_model=DepartmentCostUpsertOut,
+             dependencies=[Depends(require_roles("director"))])
 def upsert_department_cost(body: CostIn, db: Session = Depends(get_db)):
     """归集科室直接成本。同科室同期间同成本项重复提交按覆盖处理——
     月末成本数据往往要反复调整，报错逼人先删再建没有意义。"""
@@ -77,7 +140,8 @@ class AllocationIn(BaseModel):
     ratio_pct: float = Field(gt=0, le=100)
 
 
-@router.post("/allocation-rules", status_code=201, dependencies=[Depends(require_roles("director"))])
+@router.post("/allocation-rules", status_code=201, response_model=AllocationRuleCreatedOut,
+             dependencies=[Depends(require_roles("director"))])
 def create_allocation_rule(body: AllocationIn, db: Session = Depends(get_db)):
     """建立分摊规则（来源科室 → 目标科室 × 比例）。"""
     source = db.get(Department, body.from_dept_id)
@@ -100,7 +164,7 @@ def create_allocation_rule(body: AllocationIn, db: Session = Depends(get_db)):
             "ratio_pct": rule.ratio_pct}
 
 
-@router.get("/allocation-rules")
+@router.get("/allocation-rules", response_model=list[AllocationRuleOut])
 def list_allocation_rules(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(CostAllocationRule)
     query = scope_org_list(db, user, query, CostAllocationRule, org_id)
@@ -114,7 +178,7 @@ def list_allocation_rules(org_id: int | None = None, db: Session = Depends(get_d
 # ---------------------------------------------------------------- 科室成本汇总
 
 
-@router.get("/departments")
+@router.get("/departments", response_model=list[DepartmentCostSummaryOut])
 def department_cost_summary(
     period: str,
     org_id: int | None = None,
@@ -214,7 +278,7 @@ def _occupied_bed_days(db: Session, org_id: int, start: date, end: date) -> int:
     return total
 
 
-@router.get("/unit-cost")
+@router.get("/unit-cost", response_model=UnitCostOut)
 def unit_cost(
     period: str,
     org_id: int,
