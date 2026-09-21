@@ -190,11 +190,21 @@ class MedicalRecordDetailOut(BaseModel):
     defects: list[RecordDefectOut]
 
 
-class RecordRescoreOut(RecordQcResultOut):
+class RecordRescoreOut(BaseModel):
     """复评＝按当前规则重算并回写，比 `evaluate_record` 多一个 `record_id`。
-    字段顺序照 handler：`{"record_id": ..., **result}`，record_id 在最前。"""
+
+    **不能用继承**：handler 出的是 `{"record_id": ..., **result}`，record_id
+    在**最前**；而继承会把父类字段排在子类新增字段之前，输出成
+    `{score, grade, ..., record_id}`——键序变了。字节比对实测到的。
+    逐字段重列，顺序照 handler。
+    """
 
     record_id: int
+    score: int
+    grade: str
+    deducted: int
+    rules_checked: int
+    defects: list[RecordDefectOut]
 
 
 class GradeBucketOut(BaseModel):

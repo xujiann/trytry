@@ -54,7 +54,9 @@ class CourseOut(CourseCreate):
 # 响应契约集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）
 class ExamResultOut(BaseModel):
     course_id: int
-    score: int
+    # `training_records.score` 是 FLOAT 列——声明成 int 会把 55.0 输出成 55。
+    # 字节比对实测到的（与 spd 的量表得分同一形状：分数听起来像整数，列不是）。
+    score: float
     passed: bool
 
 
@@ -69,7 +71,7 @@ class CourseStatsOut(BaseModel):
 class MyRecordOut(BaseModel):
     course_id: int
     title: str
-    score: int
+    score: float
     passed: bool
 
 
@@ -179,7 +181,8 @@ class AssessmentOut(BaseModel):
     id: int
     plan_id: int
     user_id: int
-    score: int
+    # `training_assessments.score` 同样是 FLOAT
+    score: float
     passed: bool
     assessor: str
 
@@ -187,7 +190,7 @@ class AssessmentOut(BaseModel):
 class AssessmentRowOut(BaseModel):
     id: int
     user_id: int
-    score: int
+    score: float
     passed: bool
     comment: str
     assessor: str
