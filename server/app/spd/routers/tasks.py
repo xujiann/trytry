@@ -47,6 +47,201 @@ SERVICE_ROLES = ("doctor", "public_health", "director")
 OPEN_STATUSES = ("pending", "claimed", "doing", "submitted", "overdue")
 
 
+
+# ============================================================ 响应契约
+#
+# 集中放在所有端点之前：`response_model=` 是装饰器参数，导入时就求值。
+
+
+class PathInstanceOut(BaseModel):
+    id: int
+    enrollment_id: int
+    template_id: int
+    template_code: str
+    # 模板/档案被删时退化成空串或 null，不是异常路径
+    template_name: str
+    scene: str
+    program_code: str
+    patient_id: int | None
+    patient_name: str
+    current_node_key: str
+    current_stage: str
+    status: str
+    progress: int
+    # 启动时对模板的逐节点覆盖，形状随模板而变
+    overrides: dict
+    owner_user_id: int
+    started_at: str
+    # 未结束时是空串，不是 null
+    finished_at: str
+
+
+class NodeTaskBriefOut(BaseModel):
+    id: int
+    status: str
+    assignee_id: int | None
+    due_date: str
+    finished_at: str
+
+
+class PathNodeDetailOut(BaseModel):
+    key: str
+    name: str
+    stage: str
+    seq: int
+    dept: str
+    exec_role: str
+    service_type: str
+    due_days: int
+    timeout_action: str
+    require_form: bool
+    require_evidence: bool
+    is_current: bool
+    tasks: list[NodeTaskBriefOut]
+
+
+class PathInstanceDetailOut(PathInstanceOut):
+    """执行明细 = 实例 + 节点清单，`nodes` 在**末尾**追加
+    （`out = _instance_out(...)` 再 `out["nodes"] = ...`），用继承正合顺序。
+    """
+
+    nodes: list[PathNodeDetailOut]
+
+
+class AdvanceResultOut(BaseModel):
+    """`advance_path()` 的返回，五条分支合起来的字段集。
+
+    `next_node` 在"已到末节点"（`{"status": "completed", "current_node_key": ""}`）
+    那条上不出现，`paused_reason` 只在因进入条件未满足而暂停时出现。
+    """
+
+    status: str
+    current_node_key: str
+    next_node: str | None = None
+    paused_reason: str | None = None
+
+
+class InstanceAdvancedOut(BaseModel):
+    """推进接口的两种形状，字段顺序按"恢复暂停"那条排，`exclude_unset` 按
+    **声明顺序**发，两边各自与 handler 的字面量逐字对上——
+
+    * 恢复暂停：`{instance, status, resumed, matched}`；
+    * 正常推进：`{instance, **advance_path 结果}`，即
+      `{instance, status, current_node_key[, next_node][, paused_reason]}`。
+
+    `status` 是两条共有的第二个键，所以它必须排在 `resumed` 之前、
+    `current_node_key` 之前——这正是下面这个顺序唯一能同时满足两边的原因。
+    """
+
+    instance: PathInstanceOut
+    status: str
+    resumed: bool | None = None
+    # 命中的进入条件，形状随规则而变
+    matched: list | None = None
+    current_node_key: str | None = None
+    next_node: str | None = None
+    paused_reason: str | None = None
+
+
+class NodeEnterCheckOut(BaseModel):
+    allowed: bool
+    matched: list
+    conditions: list
+
+
+class TaskOut(BaseModel):
+    id: int
+    program_code: str
+    patient_id: int
+    enrollment_id: int | None
+    instance_id: int | None
+    node_key: str
+    task_type: str
+    title: str
+    org_id: int | None
+    team_id: int | None
+    assignee_id: int | None
+    exec_role: str
+    status: str
+    priority: int
+    due_date: str
+    form_code: str
+    require_evidence: bool
+    # 表单定义与填报结果（JSON 列），形状随 form_code 而变
+    form: dict
+    result: dict
+    # 佐证是**附件 id 的清单**（`SubmitIn.evidence` 是 `list[int | str]`），
+    # 不是 URL 串；下载地址由 `evidence_urls` 另给，一项一个
+    # `{attachment_id, url}`。两个都声明成 `list[str]` 会当场 500。
+    evidence: list[int | str]
+    evidence_urls: list[dict]
+    urged_count: int
+    escalated: bool
+    review_note: str
+    source: str
+    created_at: str
+    # 未结束时是空串，不是 null
+    finished_at: str
+
+
+class TaskRowOut(TaskOut):
+    """列表行/详情 = 任务 + 患者摘要（姓名与**脱敏后**的电话）。
+
+    摘要字段只在这个子类上：接收 / 分配 / 催办 / 升级 / 提交那几条
+    `return _task_out(task)` 不带 brief，它们的响应里没有这两个键。
+    契约声明了却不出的 `phone` 会让 `test_pii_output_masking_guard` 去找一条
+    不存在的脱敏调用——`spd/population` 那一轮踩过，见同批提交。
+    """
+
+    patient_name: str | None = None
+    phone: str | None = None
+
+
+class TaskFinishedOut(TaskOut):
+    """办结的返回比任务本身多一个 `advanced`（顺手推进了路径时才有），
+    它在**末尾**（`out = _task_out(task)` 再 `out["advanced"] = advanced`）。
+    只有 `advanced` 为真才赋值，所以是可选 + `exclude_unset`。
+    """
+
+    advanced: AdvanceResultOut | None = None
+
+
+class TaskSummaryOut(BaseModel):
+    # 三个宽键：取值由数据决定
+    by_status: dict[str, int]
+    open_by_type: dict[str, int]
+    open_total: int
+    overdue: int
+    escalated: int
+    due_today: int
+    # `sweep_overdue()` 的返回：本次顺手扫出来的超期条数，**按三类分开**
+    # （任务/复诊/随访 + 升级），不是一个总数
+    swept: dict[str, int]
+
+
+class BatchSkippedOut(BaseModel):
+    id: int
+    reason: str
+
+
+class BatchTaskOut(BaseModel):
+    processed: int
+    skipped: list[BatchSkippedOut]
+
+
+class TaskExportOut(BaseModel):
+    """导出：表头 + 行数据，前端拼 CSV。
+
+    `rows` 的元素是**混合类型的定长数组**（任务 ID 是 int、责任人 ID 可能是
+    `""`、优先级是 int）。声明成 `list[list[int | str]]` 会让 pydantic 在联合里
+    做一次选择，这里不需要——用裸 `list` 原样放行，字节与现在完全一致。
+    """
+
+    columns: list[str]
+    rows: list[list]
+    total: int
+
+
 # ============================================================ 路径实例
 
 
@@ -77,6 +272,7 @@ def _instance_out(db: Session, i: SpdPathInstance) -> dict:
 
 
 @router.post("/path-instances", status_code=201,
+             response_model=PathInstanceOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def start_path_instance(
     body: StartPathIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -116,7 +312,7 @@ def start_path_instance(
     return _instance_out(db, instance)
 
 
-@router.get("/path-instances")
+@router.get("/path-instances", response_model=list[PathInstanceOut])
 def list_path_instances(
     response: Response,
     enrollment_id: int | None = None,
@@ -156,7 +352,7 @@ def list_path_instances(
     return [_instance_out(db, i) for i in rows]
 
 
-@router.get("/path-instances/{instance_id}")
+@router.get("/path-instances/{instance_id}", response_model=PathInstanceDetailOut)
 def get_path_instance(instance_id: int, db: Session = Depends(get_db)):
     """路径执行明细：节点清单 + 每个节点的任务状态与责任人。"""
     instance = db.get(SpdPathInstance, instance_id)
@@ -199,6 +395,7 @@ class InstanceAdjustIn(BaseModel):
 
 
 @router.patch("/path-instances/{instance_id}",
+             response_model=PathInstanceOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def adjust_path_instance(
     instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db)
@@ -226,6 +423,7 @@ def adjust_path_instance(
 
 
 @router.post("/path-instances/{instance_id}/advance",
+             response_model=InstanceAdvancedOut, response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def advance_instance(
     instance_id: int, db: Session = Depends(get_db),
@@ -293,7 +491,7 @@ def advance_instance(
     return {"instance": _instance_out(db, instance), **result}
 
 
-@router.get("/path-nodes/{node_id}/enter-check")
+@router.get("/path-nodes/{node_id}/enter-check", response_model=NodeEnterCheckOut)
 def check_node_enter(node_id: int, instance_id: int, db: Session = Depends(get_db)):
     """校验患者是否满足节点进入条件，供前端在办理前给出提示。"""
     node = db.get(SpdPathNode, node_id)
@@ -346,7 +544,8 @@ def _task_out(t: SpdTask, brief: dict | None = None) -> dict:
     return out
 
 
-@router.post("/tasks", status_code=201, dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks", status_code=201, response_model=TaskOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def create_task(
     body: TaskIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -378,7 +577,7 @@ def create_task(
     return _task_out(task)
 
 
-@router.get("/tasks")
+@router.get("/tasks", response_model=list[TaskRowOut], response_model_exclude_unset=True)
 def list_tasks(
     response: Response,
     task_type: str | None = None,
@@ -434,7 +633,7 @@ def list_tasks(
     return [_task_out(r, briefs.get(r.patient_id)) for r in rows]
 
 
-@router.get("/tasks/summary")
+@router.get("/tasks/summary", response_model=TaskSummaryOut)
 def task_summary(
     program_code: str | None = None,
     org_id: int | None = None,
@@ -486,7 +685,7 @@ def task_summary(
     }
 
 
-@router.get("/tasks/{task_id}")
+@router.get("/tasks/{task_id}", response_model=TaskRowOut, response_model_exclude_unset=True)
 def get_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     task = db.get(SpdTask, task_id)
     if task is None:
@@ -506,7 +705,8 @@ def _load_task(db: Session, task_id: int) -> SpdTask:
     return task
 
 
-@router.post("/tasks/{task_id}/claim", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/claim", response_model=TaskOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def claim_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """接收任务。已被别人接收的返回 409——静默改责任人会让原责任人白干一场。"""
     task = _load_task(db, task_id)
@@ -525,7 +725,8 @@ class AssignIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.post("/tasks/{task_id}/assign", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/assign", response_model=TaskOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def assign_task(
     task_id: int,
     body: AssignIn,
@@ -550,7 +751,8 @@ def assign_task(
     return _task_out(task)
 
 
-@router.post("/tasks/{task_id}/urge", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/urge", response_model=TaskOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def urge_task(task_id: int, db: Session = Depends(get_db)):
     """催办：计数 +1 并给责任人发站内消息。催办不改状态——催过还是待办。
 
@@ -574,7 +776,8 @@ def urge_task(task_id: int, db: Session = Depends(get_db)):
     return _task_out(task)
 
 
-@router.post("/tasks/{task_id}/escalate", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/escalate", response_model=TaskOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def escalate_task(task_id: int, db: Session = Depends(get_db)):
     """超时升级：置紧急并标记升级，由上级机构接手督办。"""
     task = _load_task(db, task_id)
@@ -594,7 +797,8 @@ class SubmitIn(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
-@router.post("/tasks/{task_id}/submit", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/submit", response_model=TaskOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def submit_task(
     task_id: int, body: SubmitIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -632,7 +836,9 @@ class ReviewTaskIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.post("/tasks/{task_id}/review", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/review", response_model=TaskFinishedOut,
+             response_model_exclude_unset=True,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def review_task(
     task_id: int, body: ReviewTaskIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -650,7 +856,9 @@ def review_task(
     return _finish_task(db, task, user)
 
 
-@router.post("/tasks/{task_id}/complete", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/{task_id}/complete", response_model=TaskFinishedOut,
+             response_model_exclude_unset=True,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def complete_task(
     task_id: int, body: SubmitIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -735,7 +943,8 @@ class BatchTaskIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
-@router.post("/tasks/batch", dependencies=[Depends(require_roles(*SERVICE_ROLES))])
+@router.post("/tasks/batch", response_model=BatchTaskOut,
+             dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def batch_tasks(
     body: BatchTaskIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -776,7 +985,7 @@ def batch_tasks(
     return {"processed": done, "skipped": skipped}
 
 
-@router.get("/tasks-export")
+@router.get("/tasks-export", response_model=TaskExportOut)
 def export_tasks(
     program_code: str | None = None,
     status: str | None = None,

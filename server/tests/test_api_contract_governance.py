@@ -158,7 +158,17 @@ import app.spd.routers as spd_routers
 #   另外两处是被测试抓出来的类型：`SpdProgram.version` 是字符串 "v1" 不是整数；
 #   服务包与用量的 `price` 是 Money 列（`int | float`），量表/监测的 score/value
 #   是 Float 列。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 216
+# → 216（`spd/tasks` + `spd/referral`：33 个端点整模块补齐。三处被测试抓出来的
+#   类型都属"名字像什么、列不是什么"：任务的 `evidence` 是**附件 id 的清单**
+#   （`list[int | str]`）不是 URL 串、`evidence_urls` 是 `{attachment_id, url}`
+#   的清单；`tasks/summary` 的 `swept` 是 `sweep_overdue()` 的**分类计数字典**
+#   不是一个总数。
+#   `_task_out` 的患者摘要照 `spd/population` 的办法拆成 `TaskOut` + `TaskRowOut`
+#   ——不带摘要的那几条（接收/分配/催办/升级/提交）不该声明 `phone`。
+#   推进路径那条 `InstanceAdvancedOut` 的字段顺序值得一看：两种形状共有的
+#   `status` 必须排在两边各自的第三个键之前，否则 `exclude_unset` 发不出
+#   与 handler 一致的键序。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 183
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -167,6 +177,8 @@ FULLY_GOVERNED = {
     "spd/care",
     "spd/followup",
     "spd/population",
+    "spd/tasks",
+    "spd/referral",
     "quality",
     "education",
     "blood",
