@@ -25,6 +25,28 @@
 
 治理配方见 docs/接口标准与治理.md：先给端点写特征化网钉住当前 JSON，再加
 `response_model`（字段与现输出一一对应，保持字节不变），跑绿后回来把基线下调。
+
+## 基线到 2 之后，这道闸门的作用变了
+
+2026-09-21 起欠账降到 **2**，且这两条都**加不了契约**（不是没做）——
+
+| 端点 | 为什么加不了 |
+|---|---|
+| `GET /api/spd/scores-analysis` | 两条分支的键序互不相容：`average` 在无数据时是最后一个键、有数据时是第二个 |
+| `GET /api/audit/verify` | 同一形状：`valid` 在空区间时排第二、有记录时排第六 |
+
+`response_model_exclude_unset` 按**声明顺序**输出，一份声明只能给出一种顺序。
+要收掉这两笔账，得先让 handler 两个分支的键序一致——**那是改响应字节的行为
+变更**，需要单独立项，不能夹带在"补契约"里。两处都在 handler 的 docstring 里
+写明了原因。
+
+所以基线不会再降到 0，而 2 是它现在最有用的形态：**任何一个新端点漏契约都会
+当场把它顶到 3**。这道闸门的作用从"清欠账"变成"守住线"——新写端点要么带契约，
+要么像这两条一样，写清楚为什么给不出一种键序。
+
+判据一字未改：仍是"有 `response_model` **或**显式声明了非 JSON 媒体类型
+**或** status_code=204"，后两条各有一条守卫钉住它们没被拿来刷数
+（`test_放宽媒体类型口径没有白送任何端点` / `test_204口径没有白送别的端点`）。
 """
 from __future__ import annotations
 
@@ -191,7 +213,28 @@ import app.spd.routers as spd_routers
 #      各分支的字面量排，才能让 `exclude_unset` 逐字对上每一种。
 #   ③ `spd/workbench` 的团队端按角色追加不同的键（个案管理师 / 专家 / 成员各一组，
 #      都在末尾且互不同时出现），声明顺序按这三组依次排。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 54
+# → 54（不再按模块凑，改按端点数排：`prescriptions` 7 / `users` 6（审计那一组）
+#   = 13 个端点。
+#   `GET /api/audit/export` 与附件下载同理，是 NDJSON **字节流**，契约写在
+#   `responses` 的媒体类型里而不是 response_model。
+#   `GET /api/audit/verify` 是全仓库**第二条加不了契约**的端点：区间为空与
+#   有记录两条分支的键序互不相容（`valid` 一个排第二、一个排第六），
+#   `exclude_unset` 按声明顺序输出，一份声明给不出两种顺序。
+#   与 `GET /api/spd/scores-analysis` 同一形状，都在 handler 上写明了原因。）
+# → 42（六个局部缺口模块：`chronic` 5 / `insurance` 5 / `integration` 5 /
+#   `medication` 4 / `patients` 4 / `vaccination` 4 = 27 个端点。
+#   两处形状值得记：
+#   ① `VaccineContraindication.lifted_at` 这一项 handler 给的是**裸 datetime
+#      对象**（不像别处先 `.isoformat()`），声明成 `str` 会 500；声明成
+#      `datetime` 序列化结果同为 ISO 串，字节不变。
+#   ② 出站 `GET /api/integration/fhir/Patient/{ehc_no}` 把身份证号放在
+#      `identifier[].value`、电话放在 `telecom[].value`——PII 挂在**非 PII 名**
+#      的键下，正是 PII 出口闸门声明的第 5 类盲区。脱敏确实做了，只是那道闸门
+#      按字段名认不出来；已在模型 docstring 里写明，免得日后有人以为它被守着。）
+# → 15（最后一批局部缺口：`eldercare` 3 / `exams` 3 / `publichealth` 3 /
+#   `consultations` 2 / `appointments` 1 / `emergency` 1 = 13 个端点。
+#   到此**只剩 2 笔，且都加不了契约**——见模块 docstring 顶部那张表。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 2
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -203,6 +246,19 @@ FULLY_GOVERNED = {
     "spd/tasks",
     "spd/referral",
     "spd/workbench",
+    "prescriptions",
+    "chronic",
+    "insurance",
+    "integration",
+    "medication",
+    "patients",
+    "vaccination",
+    "appointments",
+    "consultations",
+    "eldercare",
+    "emergency",
+    "exams",
+    "publichealth",
     "access_logs",
     "attachments",
     "cost",
@@ -401,6 +457,8 @@ def test_放宽媒体类型口径没有白送任何端点():
         # 两个二维码：`_base.SvgResponse` 同时是 response_class 与实际返回的类
         "spd/config GET /api/spd/scales/{scale_id}/qr.svg",
         "spd/config GET /api/spd/village-doctors/{vd_id}/qr.svg",
+        # 审计归档：每行一条记录的 NDJSON 流，末行是 meta（便于归档端校验连续性）
+        "users GET /api/audit/export",
     ], (
         f"靠媒体类型算作已治理的端点清单变了：{by_media}。"
         "新增这类端点是可以的，但必须是真的返回非 JSON 的下载/单据类接口，"

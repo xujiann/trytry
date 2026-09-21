@@ -128,9 +128,38 @@ class AuthorizationCreate(BaseModel):
     expire_date: DateStr
 
 
+class AuthorizationGrantedOut(BaseModel):
+    id: int
+    patient_id: int
+    scope: str
+    status: str
+
+
+class AuthorizationRevokedOut(BaseModel):
+    id: int
+    status: str
+
+
+class AuthorizationOut(BaseModel):
+    id: int
+    grantee_org_id: int
+    scope: str
+    # `String(10) default=""` 的非空列：**空串 = 不设到期日、按长期有效算**
+    expire_date: str
+    status: str
+
+
+class AuthorizationCheckOut(BaseModel):
+    patient_id: int
+    org_id: int
+    scope: str
+    allowed: bool
+
+
 @router.post(
     "/{patient_id}/authorizations",
     status_code=201,
+    response_model=AuthorizationGrantedOut,
     dependencies=[Depends(require_roles("doctor", "operator"))],  # 授权代录（患者知情）
 )
 def grant_authorization(
@@ -151,6 +180,7 @@ def grant_authorization(
 
 @router.post(
     "/{patient_id}/authorizations/{auth_id}/revoke",
+    response_model=AuthorizationRevokedOut,
     dependencies=[Depends(require_roles("doctor", "operator"))],
 )
 def revoke_authorization(patient_id: int, auth_id: int, db: Session = Depends(get_db)):
@@ -162,7 +192,7 @@ def revoke_authorization(patient_id: int, auth_id: int, db: Session = Depends(ge
     return {"id": auth.id, "status": "revoked"}
 
 
-@router.get("/{patient_id}/authorizations")
+@router.get("/{patient_id}/authorizations", response_model=list[AuthorizationOut])
 def list_authorizations(
     patient_id: int,
     db: Session = Depends(get_db),
@@ -192,7 +222,7 @@ def list_authorizations(
     ]
 
 
-@router.get("/{patient_id}/authorizations/check")
+@router.get("/{patient_id}/authorizations/check", response_model=AuthorizationCheckOut)
 def check_authorization(
     patient_id: int,
     org_id: int,

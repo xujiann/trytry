@@ -73,6 +73,94 @@ ID_CARD_SYSTEM = "urn:oid:2.16.156.10011.1.3"  # 中国居民身份证号 OID
 EHC_SYSTEM = "urn:medplat:ehc"
 
 
+
+# ============================================================ 响应契约
+#
+# 入站三条的 `patient` 是 `desensitize(patient, user)`——**已按角色脱敏**
+# （非 admin 掩码身份证号与电话）。契约照搬 `PatientOut`，脱敏在产出那一处。
+
+
+class Hl7PatientInboundOut(BaseModel):
+    created: bool
+    # HL7 v2 ACK 应答原文（MSA|AA|原消息控制ID），浙#21 消息传输确认回执
+    ack: str
+    patient: PatientOut
+
+
+class FhirPatientInboundOut(BaseModel):
+    created: bool
+    patient: PatientOut
+
+
+class FhirObservationInboundOut(BaseModel):
+    followup_id: int
+    chronic_id: int
+    disease: str
+    # 按 LOINC 映射拼出来的指标字典，键名在类型上不可知
+    values: dict[str, float]
+    level: int
+
+
+class FhirIdentifierOut(BaseModel):
+    system: str
+    value: str
+
+
+class FhirNameOut(BaseModel):
+    text: str
+
+
+class FhirTelecomOut(BaseModel):
+    system: str
+    value: str
+
+
+class FhirPatientResourceOut(BaseModel):
+    """出站 FHIR R4 Patient。
+
+    身份证号在 `identifier[].value`、电话在 `telecom[].value`——PII 挂在
+    **非 PII 名**的键下，这正是 `test_pii_output_masking_guard` 声明的第 5 类
+    盲区。脱敏确实做了（非 admin 走 `mask_id_card` / `mask_phone`），只是那道
+    闸门按字段名认不出来；这里写明，免得日后有人以为它被守着。
+    """
+
+    resourceType: str
+    # 电子健康卡号
+    id: str
+    identifier: list[FhirIdentifierOut]
+    name: list[FhirNameOut]
+    gender: str
+    birthDate: str
+    # 没有电话时是空数组，不是 null
+    telecom: list[FhirTelecomOut]
+
+
+class ExchangeTypeStatOut(BaseModel):
+    message_type: str
+    count: int
+    failed: int
+    failure_rate_pct: float
+
+
+class ExchangeLogRowOut(BaseModel):
+    id: int
+    source_system: str
+    message_type: str
+    direction: str
+    success: bool
+    error_detail: str
+    # 键名是 `at`，值取的是 `created_at`
+    at: str
+
+
+class ExchangeLogsOut(BaseModel):
+    total: int
+    failed: int
+    failure_rate_pct: float
+    by_type: list[ExchangeTypeStatOut]
+    logs: list[ExchangeLogRowOut]
+
+
 class Hl7Message(BaseModel):
     message: str = Field(min_length=1, description="HL7 v2 ADT 消息原文（管道分隔）")
 
@@ -116,7 +204,7 @@ def _upsert_patient(db: Session, data: dict) -> tuple[Patient, bool]:
     return create_patient_idempotent(db, data)
 
 
-@router.post("/hl7v2/patient", status_code=201)
+@router.post("/hl7v2/patient", status_code=201, response_model=Hl7PatientInboundOut)
 def hl7v2_patient(
     body: Hl7Message,
     db: Session = Depends(get_db),
@@ -195,7 +283,7 @@ def _build_ack(control_id: str, code: str = "AA") -> str:
     return f"MSH|^~\\&|MEDPLAT|COUNTY|||{ts}||ACK|{control_id}|P|2.4\rMSA|{code}|{control_id}"
 
 
-@router.post("/fhir/Patient", status_code=201)
+@router.post("/fhir/Patient", status_code=201, response_model=FhirPatientInboundOut)
 def fhir_patient(
     resource: dict,
     db: Session = Depends(get_db),
@@ -258,7 +346,8 @@ _LOINC_FIELDS = {"8480-6": "sbp", "8462-4": "dbp", "2339-0": "glucose"}
 _FIELD_DISEASE = {"sbp": "hypertension", "dbp": "hypertension", "glucose": "diabetes"}
 
 
-@router.post("/fhir/Observation", status_code=201)
+@router.post("/fhir/Observation", status_code=201,
+             response_model=FhirObservationInboundOut)
 def fhir_observation(
     resource: dict, db: Session = Depends(get_db), x_source_system: str = Header(default="")
 ):
@@ -331,7 +420,7 @@ def _do_fhir_observation(resource: dict, db: Session):
     }
 
 
-@router.get("/fhir/Patient/{ehc_no}")
+@router.get("/fhir/Patient/{ehc_no}", response_model=FhirPatientResourceOut)
 def export_fhir_patient(
     ehc_no: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -372,7 +461,7 @@ def export_fhir_patient(
 # ---------- M11 交换监控 ----------
 
 
-@router.get("/exchange-logs")
+@router.get("/exchange-logs", response_model=ExchangeLogsOut)
 def exchange_logs(
     message_type: str | None = None,
     success: bool | None = None,

@@ -244,7 +244,31 @@ def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(
     )
 
 
-@router.get("/cases/{case_id}/timeline")
+class TimelineNodeOut(BaseModel):
+    """时间轴上的一个节点。
+
+    与上面的 `MilestoneOut`（登记回执，是 ORM 行）**不是一回事**：那个有
+    id/case_id，这个只有"这个节点叫什么、记没记、什么时候记的"。
+    名字也刻意分开——曾经两个都叫 MilestoneOut，后写的把先写的盖掉了。
+    """
+
+    milestone: str
+    name: str
+    # 未记录的节点是 null（列本身是 String，但这里给的是"有没有这条记录"）
+    occurred_at: str | None
+    recorded: bool
+
+
+class CaseTimelineOut(BaseModel):
+    case_id: int
+    channel_type: str
+    status: str
+    # 按**固定节点序列**返回，缺的节点也在（recorded=False），不是只给已记录的
+    timeline: list[TimelineNodeOut]
+    recorded_count: int
+
+
+@router.get("/cases/{case_id}/timeline", response_model=CaseTimelineOut)
 def case_timeline(
     case_id: int,
     db: Session = Depends(get_db),

@@ -146,7 +146,48 @@ def _find_recognizable(db: Session, patient_id: int, item_code: str) -> ExamRequ
     )
 
 
-@router.get("/recognition-check")
+class RecognitionCheckOut(BaseModel):
+    """三种形状，按这个顺序声明各自都对得上：
+
+    * 该项目不在互认目录/被禁：`{recognizable: False, reason}`
+    * 目录内但查不到可互认的既往结果：`{recognizable: False}`
+    * 可互认：`{recognizable: True, request_id, item_name, conclusion}`
+    """
+
+    recognizable: bool
+    reason: str | None = None
+    request_id: int | None = None
+    item_name: str | None = None
+    conclusion: str | None = None
+
+
+class UnacknowledgedCriticalOut(BaseModel):
+    report_id: int
+    request_id: int
+    conclusion: str
+    reported_by: str
+    reported_at: str
+    critical_status: str
+
+
+class RecognitionItemStatOut(BaseModel):
+    item_code: str
+    item_name: str
+    recognized_count: int
+
+
+class RecognitionStatsOut(BaseModel):
+    recognized_total: int
+    reported_total: int
+    # 互认率 = 互认单数 / (已报告 + 互认)
+    recognition_ratio_pct: float
+    # 每一次互认即节约一次重复检查
+    saved_exams: int
+    by_item: list[RecognitionItemStatOut]
+
+
+@router.get("/recognition-check", response_model=RecognitionCheckOut,
+            response_model_exclude_unset=True)
 def recognition_check(
     patient_id: int,
     item_code: str,
@@ -475,7 +516,7 @@ def list_critical_actions(report_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/critical/unacknowledged")
+@router.get("/critical/unacknowledged", response_model=list[UnacknowledgedCriticalOut])
 def list_unacknowledged_critical(
     today: str | None = None, timeout_minutes: int = 30, db: Session = Depends(get_db)
 ):
@@ -511,7 +552,7 @@ def list_unacknowledged_critical(
 # ---------- 互认统计 ----------
 
 
-@router.get("/recognition-stats")
+@router.get("/recognition-stats", response_model=RecognitionStatsOut)
 def recognition_stats(db: Session = Depends(get_db)):
     """互认统计：互认率、按项目统计、节约检查次数。"""
     reported = (

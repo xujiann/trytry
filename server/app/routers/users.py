@@ -40,6 +40,62 @@ from ..security import (
 router = APIRouter(prefix="/api", tags=["用户与审计"])
 
 
+# ============================================================ 审计相关的响应契约
+#
+# `GET /api/audit/verify` **刻意不加契约**，理由写在它自己的 docstring 里。
+
+
+class AuditLogOut(BaseModel):
+    id: int
+    username: str
+    method: str
+    path: str
+    status_code: int
+    # 键名是 `at`，值取的是 `created_at`
+    at: str
+
+
+class DailyAuditOut(BaseModel):
+    date: str
+    ok: int
+    failed: int
+
+
+class StatusTallyOut(BaseModel):
+    status: int
+    count: int
+
+
+class KeyTallyOut(BaseModel):
+    # 值为空时是「(空)」三个字，不是空串
+    key: str
+    count: int
+
+
+class AuditStatsOut(BaseModel):
+    days: int
+    # 与 /api/monitor/api-stats 的分工写在 handler 的 docstring 里
+    scope: str
+    total: int
+    failed: int
+    failed_ratio_pct: float
+    daily: list[DailyAuditOut]
+    failed_status_codes: list[StatusTallyOut]
+    top_users: list[KeyTallyOut]
+    top_paths: list[KeyTallyOut]
+    top_failed_paths: list[KeyTallyOut]
+
+
+class RoleChangeOut(BaseModel):
+    id: int
+    user_id: int
+    old_role: str
+    new_role: str
+    changed_by: int
+    at: str
+
+
+
 def _check_password(value: str) -> str:
     reason = validate_password_strength(value)
     if reason:
@@ -127,7 +183,8 @@ def list_users(db: Session = Depends(get_db)):
     return db.query(User).order_by(User.id).all()
 
 
-@router.get("/users/roles", dependencies=[Depends(get_current_user)])
+@router.get("/users/roles", response_model=dict[str, str],
+            dependencies=[Depends(get_current_user)])
 def list_roles():
     return ROLE_NAMES
 
@@ -201,7 +258,15 @@ def change_password(
 AUDIT_EXPORT_BATCH = 1000
 
 
-@router.get("/audit/export", dependencies=[Depends(require_admin)])
+@router.get(
+    "/audit/export",
+    # 归档导出回的是 NDJSON 字节流（每行一条记录 + 末行 meta），不是某个 JSON
+    # 模型——`response_model` 对 StreamingResponse 没有意义。把媒体类型写进
+    # `responses` 才是把"我回 x-ndjson"这句话声明进 OpenAPI。
+    responses={200: {"content": {"application/x-ndjson": {}},
+                     "description": "每行一条审计记录的 NDJSON 流，末行为 meta"}},
+    dependencies=[Depends(require_admin)],
+)
 def export_audit_logs(
     since_id: int = 0,
     until: str | None = None,
@@ -261,7 +326,8 @@ def export_audit_logs(
     )
 
 
-@router.get("/audit", dependencies=[Depends(require_admin)])
+@router.get("/audit", response_model=list[AuditLogOut],
+            dependencies=[Depends(require_admin)])
 def list_audit_logs(
     response: Response,
     limit: int = 100,
@@ -310,6 +376,16 @@ def verify_audit_chain(
     且其后链连续"——这是唯一能抓住"末尾截断"的口径：锚点所指行不在库里，
     即疑似最新 N 条被删（或该段已归档，以归档 manifest 续查）。
     不带锚点入参时响应字节与既有完全一致（新增字段仅在对账时出现）。
+
+    **本条刻意不加 `response_model`**——加不了而不改字节：两条分支的键序
+    互不相容。区间为空时出 `{checked, valid, note, ...}`，`valid` 是第二个键；
+    有记录时出 `{checked, legacy_unchained, from_id, to_id, partial_segment,
+    valid, broken_at, reason, caliber, ...}`，`valid` 排在第六。
+    `response_model_exclude_unset` 按**声明顺序**输出，一份声明只能给出一种
+    顺序，两边不可能同时对上。要收掉这笔账得先让两个分支的键序一致——那是改
+    响应字节的行为变更，需要单独立项，不能夹带在"补契约"里。
+    与 `GET /api/spd/scores-analysis` 同一形状，一并登记在
+    docs/接口标准与治理.md。
     """
     if (anchor_id is None) != (anchor_hash is None):
         raise HTTPException(status_code=422, detail="anchor_id 与 anchor_hash 须成对提供")
@@ -366,7 +442,8 @@ def verify_audit_chain(
     return body
 
 
-@router.get("/audit/stats", dependencies=[Depends(require_admin)])
+@router.get("/audit/stats", response_model=AuditStatsOut,
+            dependencies=[Depends(require_admin)])
 def audit_stats(days: int = 30, db: Session = Depends(get_db)):
     """审计统计（浙#46 日志图形化）：按日趋势、失败码分布、高频操作与用户 TOP。
 
@@ -619,7 +696,8 @@ def list_login_logs(
     return paginate(query.order_by(LoginLog.id.desc()), response, offset, limit)
 
 
-@router.get("/users/role-changes", dependencies=[Depends(require_admin)])
+@router.get("/users/role-changes", response_model=list[RoleChangeOut],
+            dependencies=[Depends(require_admin)])
 def list_role_changes(user_id: int | None = None, db: Session = Depends(get_db)):
     q = db.query(RoleChangeLog)
     if user_id is not None:

@@ -11,6 +11,53 @@ from ..models import ElderlyAssessment, Patient, User
 router = APIRouter(prefix="/api/eldercare", tags=["老年健康"], dependencies=[Depends(get_current_user)])
 
 
+# ============================================================ 响应契约
+
+
+class DisabledElderOut(BaseModel):
+    patient_id: int
+    care_level: str
+    adl_score: int
+
+
+class ElderAlertOut(BaseModel):
+    patient_id: int
+    alert_type: str
+    message: str
+    assessed_date: str
+
+
+class ElderAlertsOut(BaseModel):
+    total: int
+    alerts: list[ElderAlertOut]
+
+
+class CognitiveStatOut(BaseModel):
+    screened: int
+    # 未筛查单列，不按 0 分并入
+    unscreened: int
+    # 一个都没筛时是 null 而非 0
+    avg_score: float | None
+
+
+class TcmConstitutionStatOut(BaseModel):
+    done: int
+    not_done: int
+
+
+class EldercareStatsOut(BaseModel):
+    assessed_people: int
+    assessment_records: int
+    by_care_level: dict[str, int]
+    disabled_count: int
+    # 一位老人都没评估过时是 null 而非 0
+    disabled_rate_pct: float | None
+    cognitive: CognitiveStatOut
+    tcm_constitution: TcmConstitutionStatOut
+    caliber: str
+
+
+
 def grade_adl(score: int) -> str:
     """Barthel 指数分级。"""
     if score >= 95:
@@ -68,7 +115,7 @@ def list_assessments(patient_id: int | None = None, care_level: str | None = Non
     return query.order_by(ElderlyAssessment.id.desc()).limit(200).all()
 
 
-@router.get("/disabled")
+@router.get("/disabled", response_model=list[DisabledElderOut])
 def disabled_elderly(db: Session = Depends(get_db)):
     """失能老人清单（每人取最新一次评估），供上门服务与家庭病床对接。"""
     latest: dict[int, ElderlyAssessment] = {}
@@ -81,7 +128,7 @@ def disabled_elderly(db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=ElderAlertsOut)
 def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
     """㉓老年健康预警/智能提醒：重度失能专案提示 + 年度评估到期复评提醒。"""
     from datetime import timedelta
@@ -116,7 +163,7 @@ def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
     return {"total": len(alerts), "alerts": alerts}
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=EldercareStatsOut)
 def eldercare_stats(db: Session = Depends(get_db)):
     """老年健康统计（指引㉓"统计分析"）。
 

@@ -59,6 +59,29 @@ def list_events(status: str | None = None, db: Session = Depends(get_db)):
     return query.order_by(PublicHealthEvent.id.desc()).limit(100).all()
 
 
+
+class ActionCreatedOut(BaseModel):
+    id: int
+
+
+class EventActionOut(BaseModel):
+    id: int
+    action: str
+    actor: str
+    # 键名是 `at`，值取的是 `created_at`
+    at: str
+
+
+class ClinicReminderOut(BaseModel):
+    type: str
+    detail: str
+
+
+class ClinicRemindersOut(BaseModel):
+    patient_id: int
+    reminders: list[ClinicReminderOut]
+
+
 class ActionCreate(BaseModel):
     action: str = Field(min_length=1)
     actor: str = ""
@@ -67,6 +90,7 @@ class ActionCreate(BaseModel):
 @router.post(
     "/events/{event_id}/actions",
     status_code=201,
+    response_model=ActionCreatedOut,
     dependencies=[Depends(require_roles("public_health", "doctor"))],  # H2/L5: 事件处置
 )
 def add_action(event_id: int, body: ActionCreate, db: Session = Depends(get_db)):
@@ -82,7 +106,7 @@ def add_action(event_id: int, body: ActionCreate, db: Session = Depends(get_db))
     return {"id": action.id}
 
 
-@router.get("/events/{event_id}/actions")
+@router.get("/events/{event_id}/actions", response_model=list[EventActionOut])
 def list_actions(event_id: int, db: Session = Depends(get_db)):
     if db.get(PublicHealthEvent, event_id) is None:
         raise HTTPException(status_code=404, detail="事件不存在")
@@ -112,7 +136,7 @@ def close_event(event_id: int, db: Session = Depends(get_db)):
 # ---------- ㉗ 医防协同提醒（诊间提醒） ----------
 
 
-@router.get("/reminders/{patient_id}")
+@router.get("/reminders/{patient_id}", response_model=ClinicRemindersOut)
 def clinic_reminders(
     patient_id: int,
     today: str | None = None,

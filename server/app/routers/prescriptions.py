@@ -38,6 +38,67 @@ ELDERLY_AGE_LIMIT = 65
 GROUP_NAMES = {"pregnant": "孕产妇", "child": "儿童", "elderly": "老年人"}
 
 
+# ============================================================ 响应契约
+#
+# 剂量列（`max_daily_dose` / `daily_dose`）是真 Float——剂量不是金额，不走 Money。
+
+
+class RuleImportOut(BaseModel):
+    imported: int
+    updated: int
+
+
+class RuleToggleOut(BaseModel):
+    drug_code: str
+    active: bool
+
+
+class ReviewPointOut(BaseModel):
+    drug_code: str
+    drug_name: str
+    daily_dose: float
+    # 规则库里没有该药时这三项退化成 null / 空串，`no_rule` 为 True
+    max_daily_dose: float | None
+    dose_unit: str
+    dose_exceeded: bool
+    review_points: str
+    renal_hepatic_note: str
+    no_rule: bool
+
+
+class PrescriptionReviewPointsOut(BaseModel):
+    prescription_id: int
+    diagnosis_name: str
+    status: str
+    # 系统审的意见（与药师点评分开）
+    system_review_comment: str
+    items: list[ReviewPointOut]
+    rule_coverage_pct: float
+
+
+class CommentCreatedOut(BaseModel):
+    id: int
+    prescription_id: int
+    grade: str
+
+
+class CommentReviewOut(BaseModel):
+    id: int
+    prescription_id: int
+    grade: str
+    issues: str
+    comment: str
+    # 键名是 `at`，值取的是 `created_at`
+    at: str
+
+
+class CommentStatsOut(BaseModel):
+    commented: int
+    unreasonable: int
+    reasonable_rate_pct: float
+
+
+
 def _age_of(birth_date: str, today: date | None = None) -> int | None:
     """按出生日期（YYYY-MM-DD）计算周岁；无法解析返回 None。"""
     try:
@@ -85,7 +146,8 @@ def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db)):
     return rule
 
 
-@router.post("/rules/import", dependencies=[Depends(require_admin)])
+@router.post("/rules/import", response_model=RuleImportOut,
+             dependencies=[Depends(require_admin)])
 def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db)):
     """审方规则批量导入：drug_code 已存在则整条更新，不存在则新建。"""
     imported, updated = 0, 0
@@ -116,7 +178,8 @@ def list_rules(include_inactive: bool = False, db: Session = Depends(get_db)):
     return query.order_by(DrugRule.drug_code).all()
 
 
-@router.delete("/rules/{drug_code}", dependencies=[Depends(require_admin)])
+@router.delete("/rules/{drug_code}", response_model=RuleToggleOut,
+               dependencies=[Depends(require_admin)])
 def deactivate_rule(drug_code: str, db: Session = Depends(get_db)):
     """停用规则（不删行）。
 
@@ -134,7 +197,8 @@ def deactivate_rule(drug_code: str, db: Session = Depends(get_db)):
     return {"drug_code": drug_code, "active": False}
 
 
-@router.post("/rules/{drug_code}/reactivate", dependencies=[Depends(require_admin)])
+@router.post("/rules/{drug_code}/reactivate", response_model=RuleToggleOut,
+             dependencies=[Depends(require_admin)])
 def reactivate_rule(drug_code: str, db: Session = Depends(get_db)):
     rule = db.query(DrugRule).filter(DrugRule.drug_code == drug_code).first()
     if rule is None:
@@ -281,7 +345,8 @@ class RxCommentCreate(BaseModel):
     comment: str = ""
 
 
-@router.get("/{prescription_id}/review-points", dependencies=[Depends(get_current_user)])
+@router.get("/{prescription_id}/review-points", response_model=PrescriptionReviewPointsOut,
+            dependencies=[Depends(get_current_user)])
 def prescription_review_points(prescription_id: int, db: Session = Depends(get_db)):
     """块2：处方点评规则化——按处方内药品汇总规则库点评要点与肝肾功能提示。
 
@@ -326,6 +391,7 @@ def prescription_review_points(prescription_id: int, db: Session = Depends(get_d
 @router.post(
     "/{prescription_id}/comment-review",
     status_code=201,
+    response_model=CommentCreatedOut,
     dependencies=[Depends(require_roles("pharmacist"))],  # 处方点评=药师
 )
 def comment_prescription(
@@ -349,7 +415,8 @@ def comment_prescription(
     return {"id": record.id, "prescription_id": prescription_id, "grade": record.grade}
 
 
-@router.get("/comment-reviews", dependencies=[Depends(get_current_user)])
+@router.get("/comment-reviews", response_model=list[CommentReviewOut],
+            dependencies=[Depends(get_current_user)])
 def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)):
     q = db.query(PrescriptionComment)
     if grade:
@@ -367,7 +434,8 @@ def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)
     ]
 
 
-@router.get("/comment-stats", dependencies=[Depends(get_current_user)])
+@router.get("/comment-stats", response_model=CommentStatsOut,
+            dependencies=[Depends(get_current_user)])
 def comment_stats(db: Session = Depends(get_db)):
     """点评统计：点评覆盖数、合理率（事后监管口径）。"""
     total = db.query(func.count(PrescriptionComment.id)).scalar() or 0

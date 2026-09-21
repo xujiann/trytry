@@ -19,6 +19,41 @@ from ..schemas import (
 router = APIRouter(prefix="/api/consultations", tags=["远程会诊"], dependencies=[Depends(get_current_user)])
 
 
+class ConsultationFeeOut(BaseModel):
+    id: int
+    # 会诊费是 Money 列（`Numeric(14,2, asdecimal=False)`）：整数金额读回来是
+    # Python int，声明成 float 会把「200 元」输出成「200.0 元」
+    fee: int | float
+    fee_settled: bool
+    fee_note: str
+
+
+class ConsultationRatingStatOut(BaseModel):
+    rated_count: int
+    # 未评价单列，不并进均值也不当 0 分
+    unrated_count: int
+    # 一条都没评价时是 null 而非 0——"没人评"与"评了零分"不是一回事
+    avg: float | None
+
+
+class ConsultationFeeStatOut(BaseModel):
+    settled_count: int
+    # 已完成但未计费的单列——可能是内部会诊不计费，也可能是漏计
+    unsettled_count: int
+    total_amount: int | float
+
+
+class ConsultationStatsOut(BaseModel):
+    total: int
+    by_status: dict[str, int]
+    # 没有申请时是 null 而非 0，同上
+    completion_rate_pct: float | None
+    rating: ConsultationRatingStatOut
+    fee: ConsultationFeeStatOut
+    caliber: str
+
+
+
 @router.post(
     "",
     response_model=ConsultationOut,
@@ -111,6 +146,7 @@ class ConsultationFee(BaseModel):
 
 @router.post(
     "/{consultation_id}/fee",
+    response_model=ConsultationFeeOut,
     dependencies=[Depends(require_roles("operator", "director"))],  # H2: 计费=经办/管理层
 )
 def settle_fee(consultation_id: int, body: ConsultationFee, db: Session = Depends(get_db)):
@@ -136,7 +172,7 @@ def settle_fee(consultation_id: int, body: ConsultationFee, db: Session = Depend
     }
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=ConsultationStatsOut)
 def consultation_stats(db: Session = Depends(get_db)):
     """会诊统计（指引⑤"统计分析"）：量、时效、评价与费用。
 

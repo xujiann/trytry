@@ -26,6 +26,57 @@ router = APIRouter(prefix="/api/medication", tags=["药事监测"], dependencies
 # 同时在用药品达到该数即提示多重用药风险
 POLYPHARMACY_THRESHOLD = 5
 
+
+# ============================================================ 响应契约
+
+
+class ShortageStatsOut(BaseModel):
+    by_status: dict[str, int]
+    in_transit: int
+    collected: int
+    no_show: int
+    # 无可判定登记时是 **null 而非 0**——"没有数据"与"履约率为零"不是一回事
+    fulfillment_rate_pct: float | None
+    caliber: str
+
+
+class ProfileDrugOut(BaseModel):
+    drug_code: str
+    drug_name: str
+    times: int
+    # 日剂量是真 Float 列（剂量不是钱）
+    max_daily_dose: float
+
+
+class MedicationProfileOut(BaseModel):
+    patient_id: int
+    distinct_drugs: int
+    polypharmacy_warning: bool
+    drugs: list[ProfileDrugOut]
+
+
+class UsageStatOut(BaseModel):
+    drug_code: str
+    drug_name: str
+    rx_count: int
+    patient_count: int
+
+
+class SupplyRiskItemOut(BaseModel):
+    drug_code: str
+    # 只有缺药登记、没有库存记录时取不到药名，是空串
+    drug_name: str
+    low_stock_orgs: int
+    open_shortages: int
+    # 最后补算的，排末尾
+    risk_level: str
+
+
+class SupplyRiskOut(BaseModel):
+    total: int
+    risks: list[SupplyRiskItemOut]
+
+
 _SHORTAGE_FLOW = {"registered": "purchasing", "purchasing": "delivered"}
 # 末态：collected 与 no_show 都"结束了"，但一个是药拿走了，一个是药白调了。
 # 混成一个 closed，缺药登记的履约率就永远算不出来。
@@ -144,7 +195,7 @@ def close_shortage(shortage_id: int, body: ShortageClose, db: Session = Depends(
     return shortage
 
 
-@router.get("/shortages/stats")
+@router.get("/shortages/stats", response_model=ShortageStatsOut)
 def shortage_stats(db: Session = Depends(get_db)):
     """缺药登记统计：履约率与在途量。
 
@@ -172,7 +223,7 @@ def shortage_stats(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/profile/{patient_id}")
+@router.get("/profile/{patient_id}", response_model=MedicationProfileOut)
 def medication_profile(
     patient_id: int,
     db: Session = Depends(get_db),
@@ -207,7 +258,7 @@ def medication_profile(
     }
 
 
-@router.get("/usage-stats")
+@router.get("/usage-stats", response_model=list[UsageStatOut])
 def usage_stats(db: Session = Depends(get_db)):
     """全县用药地图：品种使用排名，支撑药品需求预测与供应保障。"""
     rows = (
@@ -230,7 +281,7 @@ def usage_stats(db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/supply-risk")
+@router.get("/supply-risk", response_model=SupplyRiskOut)
 def supply_risk(db: Session = Depends(get_db)):
     """⑯药品供应风险评估：库存低于阈值 + 未结案缺药登记数 → 分级风险。"""
     low_stocks = (

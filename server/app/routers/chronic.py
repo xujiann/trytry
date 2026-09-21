@@ -133,6 +133,44 @@ class DiseaseTypeUpdate(BaseModel):
     active: bool | None = None
 
 
+
+class DiseaseTypeOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    # 分级规则（JSON 列）：形状随病种而变（指标清单 + 各级阈值）
+    level_rules: dict
+    guidance: str
+    followup_interval_days: int
+    active: bool
+
+
+class FollowupAddedOut(BaseModel):
+    """新增随访的回执：随访行本身 + 本次随访带来的分级/指导/下次到期。"""
+
+    followup: FollowUpOut
+    level: int
+    guidance_points: str
+    next_due: str
+    # True = `next_due` 是按病种随访周期推出来的，不是调用方指定的
+    next_due_suggested: bool
+    refer_up_suggested: bool
+
+
+class RiskScoreOut(BaseModel):
+    chronic_id: int
+    disease: str
+    level: int
+    # 目录与兜底表都没有该病种的趋势指标时是空串
+    metric: str
+    # 最近三次有效值：列指标优先、其次通用 metrics JSON——后者可能是整数
+    recent_values: list[int | float]
+    trend: str
+    score: int
+    risk_level: str
+    refer_up_suggested: bool
+
+
 def _disease_type_out(dt: ChronicDiseaseType) -> dict:
     return {
         "id": dt.id,
@@ -145,7 +183,7 @@ def _disease_type_out(dt: ChronicDiseaseType) -> dict:
     }
 
 
-@router.get("/disease-types")
+@router.get("/disease-types", response_model=list[DiseaseTypeOut])
 def list_disease_types(active: bool | None = None, db: Session = Depends(get_db)):
     """慢病病种目录：前端病种下拉与分级规则展示的唯一数据源。"""
     query = db.query(ChronicDiseaseType)
@@ -154,7 +192,8 @@ def list_disease_types(active: bool | None = None, db: Session = Depends(get_db)
     return [_disease_type_out(dt) for dt in query.order_by(ChronicDiseaseType.id).all()]
 
 
-@router.post("/disease-types", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/disease-types", status_code=201, response_model=DiseaseTypeOut,
+             dependencies=[Depends(require_admin)])
 def create_disease_type(body: DiseaseTypeCreate, db: Session = Depends(get_db)):
     if get_disease_type(db, body.code) is not None:
         raise HTTPException(status_code=409, detail="病种编码已存在")
@@ -164,7 +203,8 @@ def create_disease_type(body: DiseaseTypeCreate, db: Session = Depends(get_db)):
     return _disease_type_out(disease_type)
 
 
-@router.patch("/disease-types/{type_id}", dependencies=[Depends(require_admin)])
+@router.patch("/disease-types/{type_id}", response_model=DiseaseTypeOut,
+              dependencies=[Depends(require_admin)])
 def update_disease_type(type_id: int, body: DiseaseTypeUpdate, db: Session = Depends(get_db)):
     disease_type = db.get(ChronicDiseaseType, type_id)
     if disease_type is None:
@@ -260,6 +300,7 @@ def list_overdue(today: str | None = None, db: Session = Depends(get_db)):
 @router.post(
     "/{chronic_id}/followups",
     status_code=201,
+    response_model=FollowupAddedOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 随访属诊疗/公卫岗
 )
 def add_followup(chronic_id: int, body: FollowUpCreate, db: Session = Depends(get_db)):
@@ -303,7 +344,7 @@ def _risk_metric(db: Session, disease: str) -> str:
     return _RISK_METRICS.get(disease, "")
 
 
-@router.get("/{chronic_id}/risk")
+@router.get("/{chronic_id}/risk", response_model=RiskScoreOut)
 def risk_score(
     chronic_id: int,
     db: Session = Depends(get_db),

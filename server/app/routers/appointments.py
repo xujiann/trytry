@@ -24,7 +24,31 @@ from ..schemas import AppointmentCreate, AppointmentOut, SlotCreate, SlotOut
 router = APIRouter(prefix="/api/appointments", tags=["预约诊疗"], dependencies=[Depends(get_current_user)])
 
 
-@router.get("/doctors")
+class DoctorSlotBriefOut(BaseModel):
+    slot_id: int
+    slot_date: str
+    slot_time: str
+    remaining: int
+    resource_name: str
+
+
+class DoctorSearchOut(BaseModel):
+    employee_id: int
+    name: str
+    title: str
+    title_level: str
+    position: str
+    org_id: int
+    # 机构档案取不到时是空串
+    org_name: str
+    available_slots: int
+    # 最近五个有余号的号源
+    next_slots: list[DoctorSlotBriefOut]
+    # 没号的医师也返回并标注（只给有号的会让居民以为这位医师不存在）
+    bookable: bool
+
+
+@router.get("/doctors", response_model=list[DoctorSearchOut])
 def find_doctors(
     keyword: str | None = None,
     org_id: int | None = None,

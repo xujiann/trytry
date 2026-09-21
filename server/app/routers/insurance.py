@@ -24,6 +24,44 @@ from ..models import (
 router = APIRouter(prefix="/api/insurance", tags=["医保协同"], dependencies=[Depends(get_current_user)])
 
 
+# ============================================================ 响应契约
+
+
+class ReferralCertOut(BaseModel):
+    cert_no: str
+    referral_id: int
+
+
+class FundStatsOut(BaseModel):
+    # 医保支付额是 Money 列（`Numeric(14,2, asdecimal=False)`）：整数金额读回来
+    # 是 Python int，声明成 float 会改字节
+    insurance_pay_total: int | float
+    # 两个占比是除出来的，恒为 float
+    local_ratio_pct: float
+    grassroots_ratio_pct: float
+
+
+class DualChannelCreatedOut(BaseModel):
+    id: int
+    status: str
+    drug_name: str
+
+
+class DualChannelReviewedOut(BaseModel):
+    id: int
+    status: str
+
+
+class DualChannelOut(BaseModel):
+    id: int
+    patient_id: int
+    drug_name: str
+    reason: str
+    status: str
+    review_comment: str
+
+
+
 class SettlementCreate(BaseModel):
     patient_id: int
     org_id: int
@@ -76,6 +114,7 @@ def list_settlements(
 
 @router.post(
     "/referral-certs/{referral_id}",
+    response_model=ReferralCertOut,
     dependencies=[Depends(require_roles("operator"))],  # H2: 转诊证明签发=经办
 )
 def issue_referral_cert(referral_id: int, db: Session = Depends(get_db)):
@@ -159,7 +198,8 @@ def review_special_disease(app_id: int, approve: bool, db: Session = Depends(get
     return app_
 
 
-@router.get("/fund-stats", dependencies=[Depends(require_roles("director"))])
+@router.get("/fund-stats", response_model=FundStatsOut,
+            dependencies=[Depends(require_roles("director"))])
 def fund_stats(db: Session = Depends(get_db)):
     # 第十轮 P2：基金结余是最敏感的县域管理数据，限 director/admin，
     # 乡镇经办、普通医生看不到全县各机构医保支出构成。
@@ -199,6 +239,7 @@ class DualChannelCreate(BaseModel):
 @router.post(
     "/dual-channel",
     status_code=201,
+    response_model=DualChannelCreatedOut,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # 双通道申报
 )
 def apply_dual_channel(
@@ -214,6 +255,7 @@ def apply_dual_channel(
 
 @router.post(
     "/dual-channel/{app_id}/review",
+    response_model=DualChannelReviewedOut,
     dependencies=[Depends(require_roles("director"))],  # 申报/审核职责分离
 )
 def review_dual_channel(
@@ -235,7 +277,7 @@ def review_dual_channel(
     return {"id": app_.id, "status": app_.status}
 
 
-@router.get("/dual-channel")
+@router.get("/dual-channel", response_model=list[DualChannelOut])
 def list_dual_channel(status: str | None = None, db: Session = Depends(get_db)):
     q = db.query(DualChannelApp)
     if status:
