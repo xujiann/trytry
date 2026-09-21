@@ -62,6 +62,59 @@ def _project(db: Session, project_id: int) -> AdminProject:
     return project
 
 
+class MilestoneOut(BaseModel):
+    id: int
+    name: str
+    due_date: str
+    done: bool
+    done_date: str
+    # 逾期现算：已完成的不算逾期，无到期日的也不算
+    overdue: bool
+    note: str
+
+
+class ProjectOut(BaseModel):
+    id: int
+    org_id: int
+    name: str
+    category: str
+    owner_name: str
+    start_date: str
+    due_date: str
+    status: str
+    status_name: str
+    # 负责人报的进度，不是平台按里程碑推算的
+    progress_pct: int
+    # `round(Money, 2)`：Money 是 Numeric(14,2, asdecimal=False)，整数值读回来
+    # 就是 int，round 对整数入参同样返回 int。声明成 float 会把 100 变 100.0
+    # ——那是改字节（analytics 那轮实测到过这一差别）
+    budget_amount: int | float
+    description: str
+    milestones: list[MilestoneOut]
+    milestone_done: int
+    milestone_total: int
+    milestone_overdue: int
+    overdue: bool
+
+
+class StatusCountOut(BaseModel):
+    count: int
+    name: str
+
+
+class ProjectStatsOut(BaseModel):
+    total: int
+    # 宽键：键是项目状态码，由数据决定
+    by_status: dict[str, StatusCountOut]
+    active: int
+    overdue: int
+    # 无在办项目时是 null，不是 0——"没有在办项目"与"在办项目平均进度为 0"
+    # 是两回事（handler 原本就这么返回）
+    avg_progress_pct_active: float | None
+    total_budget: int | float
+    caliber: str
+
+
 def _milestone_out(m: ProjectMilestone, today: str) -> dict:
     return {
         "id": m.id,
@@ -99,7 +152,8 @@ def _project_out(p: AdminProject, today: str, milestones: list[ProjectMilestone]
     }
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_roles("director", "operator"))])
+@router.post("", response_model=ProjectOut, status_code=201,
+             dependencies=[Depends(require_roles("director", "operator"))])
 def create_project(
     body: ProjectIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -115,7 +169,7 @@ def create_project(
     return _project_out(project, resolve_business_date(None).isoformat(), [])
 
 
-@router.get("")
+@router.get("", response_model=list[ProjectOut])
 def list_projects(
     org_id: int | None = None,
     status: str | None = None,
@@ -145,7 +199,7 @@ def list_projects(
     return [r for r in rows if r["overdue"]] if overdue_only else rows
 
 
-@router.get("/{project_id}")
+@router.get("/{project_id}", response_model=ProjectOut)
 def get_project(project_id: int, today: str | None = None, db: Session = Depends(get_db)):
     project = _project(db, project_id)
     milestones = (
@@ -157,7 +211,8 @@ def get_project(project_id: int, today: str | None = None, db: Session = Depends
     return _project_out(project, resolve_business_date(today).isoformat(), milestones)
 
 
-@router.patch("/{project_id}", dependencies=[Depends(require_roles("director", "operator"))])
+@router.patch("/{project_id}", response_model=ProjectOut,
+              dependencies=[Depends(require_roles("director", "operator"))])
 def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(get_db)):
     """更新进度与状态。
 
@@ -183,6 +238,7 @@ def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(g
 
 @router.post(
     "/{project_id}/milestones",
+    response_model=MilestoneOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
@@ -197,6 +253,7 @@ def add_milestone(project_id: int, body: MilestoneIn, db: Session = Depends(get_
 
 @router.post(
     "/milestones/{milestone_id}/done",
+    response_model=MilestoneOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def complete_milestone(
@@ -216,6 +273,7 @@ def complete_milestone(
 
 @router.post(
     "/milestones/{milestone_id}/reopen",
+    response_model=MilestoneOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def reopen_milestone(milestone_id: int, db: Session = Depends(get_db)):
@@ -230,7 +288,7 @@ def reopen_milestone(milestone_id: int, db: Session = Depends(get_db)):
     return _milestone_out(milestone, resolve_business_date(None).isoformat())
 
 
-@router.get("/stats/overview")
+@router.get("/stats/overview", response_model=ProjectStatsOut)
 def project_stats(
     group_id: int | None = None, today: str | None = None, db: Session = Depends(get_db)
 ):

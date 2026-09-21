@@ -41,6 +41,60 @@ class MemberIn(BaseModel):
     org_id: int
 
 
+class GroupOut(BaseModel):
+    """分组。`_group_out` 出**两种形状**，靠 `member_count` 在不在区分：
+
+    - 建组 / 列表：基础字段 + `member_count`；
+    - 改组 / 按机构反查：只有基础字段。
+
+    声明成带默认值的可选字段会给后两条注入 `"member_count": null`，
+    故带 `response_model_exclude_unset=True`（同 `spd/config/paths.PathTemplateOut`）。
+    """
+
+    id: int
+    name: str
+    group_type: str
+    group_type_name: str
+    # 可空：网格化管理常常没有"牵头单位"这一说
+    lead_org_id: int | None
+    note: str
+    active: bool
+    member_count: int | None = None
+
+
+class MemberOut(BaseModel):
+    org_id: int
+    # 机构被删时按空串出（`_group_out` 的兄弟逻辑同款兜底），不是 null
+    org_name: str
+    level: str
+    joined_at: str
+
+
+class MemberAddedOut(BaseModel):
+    group_id: int
+    org_id: int
+
+
+class MemberRemovedOut(BaseModel):
+    removed: bool
+
+
+class UngroupedOrgOut(BaseModel):
+    org_id: int
+    org_name: str
+    level: str
+
+
+class CoverageOut(BaseModel):
+    group_type: str
+    group_type_name: str
+    groups: int
+    orgs_total: int
+    orgs_grouped: int
+    ungrouped: list[UngroupedOrgOut]
+    note: str
+
+
 def _group_out(g: OrgGroup, member_count: int | None = None) -> dict:
     out = {
         "id": g.id,
@@ -56,7 +110,8 @@ def _group_out(g: OrgGroup, member_count: int | None = None) -> dict:
     return out
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("", response_model=GroupOut, response_model_exclude_unset=True,
+             status_code=201, dependencies=[Depends(require_admin)])
 def create_group(body: GroupIn, db: Session = Depends(get_db)):
     if body.lead_org_id is not None and db.get(Organization, body.lead_org_id) is None:
         raise HTTPException(status_code=404, detail="牵头机构不存在")
@@ -70,7 +125,7 @@ def create_group(body: GroupIn, db: Session = Depends(get_db)):
     return _group_out(group, 0)
 
 
-@router.get("")
+@router.get("", response_model=list[GroupOut], response_model_exclude_unset=True)
 def list_groups(
     group_type: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
 ):
@@ -87,7 +142,8 @@ def list_groups(
     return [_group_out(g, counts.get(g.id, 0)) for g in groups]
 
 
-@router.patch("/{group_id}", dependencies=[Depends(require_admin)])
+@router.patch("/{group_id}", response_model=GroupOut, response_model_exclude_unset=True,
+              dependencies=[Depends(require_admin)])
 def update_group(group_id: int, body: GroupUpdate, db: Session = Depends(get_db)):
     group = _get(db, group_id)
     changes = body.model_dump(exclude_unset=True)
@@ -105,7 +161,7 @@ def update_group(group_id: int, body: GroupUpdate, db: Session = Depends(get_db)
     return _group_out(group)
 
 
-@router.get("/{group_id}/members")
+@router.get("/{group_id}/members", response_model=list[MemberOut])
 def list_members(group_id: int, db: Session = Depends(get_db)):
     _get(db, group_id)
     rows = db.query(OrgGroupMember).filter(OrgGroupMember.group_id == group_id).all()
@@ -121,7 +177,8 @@ def list_members(group_id: int, db: Session = Depends(get_db)):
     ]
 
 
-@router.post("/{group_id}/members", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("/{group_id}/members", response_model=MemberAddedOut,
+             status_code=201, dependencies=[Depends(require_admin)])
 def add_member(group_id: int, body: MemberIn, db: Session = Depends(get_db)):
     """把机构加入分组。同一机构可属于多个分组，故这里不排斥它已在别的分组里。"""
     _get(db, group_id)
@@ -136,7 +193,8 @@ def add_member(group_id: int, body: MemberIn, db: Session = Depends(get_db)):
     return {"group_id": group_id, "org_id": body.org_id}
 
 
-@router.delete("/{group_id}/members/{org_id}", dependencies=[Depends(require_admin)])
+@router.delete("/{group_id}/members/{org_id}", response_model=MemberRemovedOut,
+               dependencies=[Depends(require_admin)])
 def remove_member(group_id: int, org_id: int, db: Session = Depends(get_db)):
     member = (
         db.query(OrgGroupMember)
@@ -150,7 +208,8 @@ def remove_member(group_id: int, org_id: int, db: Session = Depends(get_db)):
     return {"removed": True}
 
 
-@router.get("/of-org/{org_id}")
+@router.get("/of-org/{org_id}", response_model=list[GroupOut],
+            response_model_exclude_unset=True)
 def groups_of_org(org_id: int, db: Session = Depends(get_db)):
     """某机构归属的全部分组。一家机构可以既在某片区，又在某专科联盟。
 
@@ -169,7 +228,7 @@ def groups_of_org(org_id: int, db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/coverage")
+@router.get("/coverage", response_model=CoverageOut)
 def coverage(group_type: str = "zone", db: Session = Depends(get_db)):
     """分组覆盖情况：哪些机构还没被任何该类型的分组收进去。
 

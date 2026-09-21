@@ -10,6 +10,8 @@
   不必再改代码加分支；
 - 既有规则继续按原路运行，迁移是后续可选动作，不是本轮前提。
 """
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -61,7 +63,78 @@ DOMAIN_VARIABLES: dict[str, dict] = {
 }
 
 
-@router.get("/domains")
+class DomainVariableOut(BaseModel):
+    name: str
+    # 样例值是各域字典里的真值：数、串、布尔都有，真多态
+    sample: Any
+    type: str
+
+
+class DomainOut(BaseModel):
+    domain: str
+    variables: list[DomainVariableOut]
+
+
+class RuleOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    domain: str
+    condition: str
+    message: str
+    severity: str
+    deduct_points: int
+    active: bool
+
+
+class RuleDeactivatedOut(BaseModel):
+    key: str
+    active: bool
+
+
+class RuleHitOut(BaseModel):
+    key: str
+    name: str
+    severity: str
+    message: str
+    deduct_points: int
+
+
+class RuleErrorOut(BaseModel):
+    key: str
+    error: str
+
+
+class EvaluateOut(BaseModel):
+    domain: str
+    evaluated: int
+    hits: list[RuleHitOut]
+    # 单条规则求值失败记这里并跳过——一条写坏的规则不能让整个审方/质控停摆
+    errors: list[RuleErrorOut]
+    total_deduction: int
+    blocked: bool
+
+
+class CatalogEntryOut(BaseModel):
+    source: str
+    # unified=统一引擎求值，legacy=既有模块内部实现。目录是统一的，
+    # 执行路径暂时不是——这里如实标出来，不含糊其辞
+    engine: str
+    domain: str
+    key: str
+    name: str
+    detail: str
+    active: bool
+
+
+class RuleCatalogOut(BaseModel):
+    total: int
+    # 宽键：键是规则来源，随并入的模块增减
+    by_source: dict[str, int]
+    entries: list[CatalogEntryOut]
+
+
+@router.get("/domains", response_model=list[DomainOut])
 def list_domains():
     """规则域与可用变量清单：管理员写条件时的字段字典。"""
     return [
@@ -100,7 +173,7 @@ def _rule_out(r: RuleDefinition) -> dict:
     }
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_admin)])
+@router.post("", response_model=RuleOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_rule(body: RuleIn, db: Session = Depends(get_db)):
     """录入统一规则。条件在录入时就用样例值试算，非法直接 422。"""
     if body.domain not in DOMAIN_VARIABLES:
@@ -122,7 +195,7 @@ def create_rule(body: RuleIn, db: Session = Depends(get_db)):
     return _rule_out(rule)
 
 
-@router.get("")
+@router.get("", response_model=list[RuleOut])
 def list_rules(domain: str | None = None, db: Session = Depends(get_db)):
     query = db.query(RuleDefinition)
     if domain:
@@ -130,7 +203,7 @@ def list_rules(domain: str | None = None, db: Session = Depends(get_db)):
     return [_rule_out(r) for r in query.order_by(RuleDefinition.key).all()]
 
 
-@router.delete("/{key}", dependencies=[Depends(require_admin)])
+@router.delete("/{key}", response_model=RuleDeactivatedOut, dependencies=[Depends(require_admin)])
 def deactivate_rule(key: str, db: Session = Depends(get_db)):
     """停用规则（不物理删除：历史判定结果要能解释当时的口径）。"""
     rule = db.query(RuleDefinition).filter(RuleDefinition.key == key).first()
@@ -146,7 +219,7 @@ class EvaluateIn(BaseModel):
     variables: dict
 
 
-@router.post("/evaluate")
+@router.post("/evaluate", response_model=EvaluateOut)
 def evaluate_rules(body: EvaluateIn, db: Session = Depends(get_db)):
     """按域求值：返回命中的规则、总扣分与是否存在拦截级命中。
 
@@ -188,7 +261,7 @@ def evaluate_rules(body: EvaluateIn, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/catalog")
+@router.get("/catalog", response_model=RuleCatalogOut)
 def rule_catalog(db: Session = Depends(get_db)):
     """全平台规则总目录。
 

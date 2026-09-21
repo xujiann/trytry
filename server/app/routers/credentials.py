@@ -48,6 +48,54 @@ class CredentialClose(BaseModel):
     reason: str = Field(default="", max_length=128)
 
 
+class PatientBriefOut(BaseModel):
+    id: int
+    name: str
+    ehc_no: str
+
+
+class CredentialOut(BaseModel):
+    id: int
+    patient_id: int
+    credential_no: str
+    credential_type: str
+    credential_type_name: str
+    status: str
+    status_name: str
+    issued_at: str
+    # 未结束的凭据没有结束时刻
+    closed_at: str | None
+    close_reason: str
+
+
+class CredentialLookupOut(CredentialOut):
+    """核验多两个字段。失效凭据也走这条（附状态），不按 404——窗口人员需要
+    知道"这张卡作废了"，而不是"查无此卡"，两者的处置完全不同。"""
+
+    valid: bool
+    # 患者档案被删时为 null
+    patient: PatientBriefOut | None
+
+
+class ResolveOut(BaseModel):
+    """多卡协同出**两种形状**：命中实体凭据时多一个 `credential_status`，
+    命中健康卡号/身份证号时没有这个键。声明成带默认值的可选字段会给后两条
+    注入 null，故带 `response_model_exclude_unset=True`。
+    """
+
+    matched_by: str
+    valid: bool
+    patient: PatientBriefOut | None
+    credential_status: str | None = None
+
+
+class OneCodeResolveOut(BaseModel):
+    patient_id: int
+    name: str
+    ehc_no: str
+    remaining_seconds: int
+
+
 def _credential_out(c: VisitCredential) -> dict:
     return {
         "id": c.id,
@@ -73,7 +121,8 @@ def _generate_no(db: Session, patient: Patient, credential_type: str) -> str:
     return f"{patient.ehc_no}-{credential_type[:1].upper()}{seq:02d}"
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_roles("operator", "doctor"))])
+@router.post("", response_model=CredentialOut, status_code=201,
+             dependencies=[Depends(require_roles("operator", "doctor"))])
 def issue_credential(
     body: CredentialIssue, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -113,7 +162,7 @@ def issue_credential(
     return result
 
 
-@router.get("")
+@router.get("", response_model=list[CredentialOut])
 def list_credentials(
     response: Response,
     patient_id: int | None = None,
@@ -130,7 +179,7 @@ def list_credentials(
     return [_credential_out(c) for c in rows]
 
 
-@router.get("/lookup/{credential_no}")
+@router.get("/lookup/{credential_no}", response_model=CredentialLookupOut)
 def lookup(credential_no: str, db: Session = Depends(get_db)):
     """凭据核验：刷卡/扫码时用，返回持有人与是否有效。
 
@@ -153,14 +202,16 @@ def lookup(credential_no: str, db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/{credential_id}/recycle", dependencies=[Depends(require_roles("operator"))])
+@router.post("/{credential_id}/recycle", response_model=CredentialOut,
+             dependencies=[Depends(require_roles("operator"))])
 def recycle(credential_id: int, body: CredentialClose, db: Session = Depends(get_db)):
     """回收：患者主动交回实体卡。与作废分开记——回收是正常结束，作废是异常终止，
     统计报损率时必须区分。"""
     return _close(db, credential_id, "recycled", body.reason or "患者交回")
 
 
-@router.post("/{credential_id}/void", dependencies=[Depends(require_roles("operator", "doctor"))])
+@router.post("/{credential_id}/void", response_model=CredentialOut,
+             dependencies=[Depends(require_roles("operator", "doctor"))])
 def void(credential_id: int, body: CredentialClose, db: Session = Depends(get_db)):
     """作废：挂失、损坏、盗用嫌疑。作废后该凭据立即不可用于核验。"""
     if not body.reason:
@@ -256,7 +307,7 @@ def issue_one_code(body: OneCodeIssue, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/one-code/resolve")
+@router.post("/one-code/resolve", response_model=OneCodeResolveOut)
 def resolve_one_code(body: OneCodeResolve, db: Session = Depends(get_db)):
     """核验一码通动态码。过期与签名错误分别报出——前者让人重新出码，
     后者是伪造，处置完全不同。"""
@@ -284,7 +335,8 @@ def resolve_one_code(body: OneCodeResolve, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/resolve")
+@router.get("/resolve", response_model=ResolveOut,
+            response_model_exclude_unset=True)
 def resolve_any(identifier: str, db: Session = Depends(get_db)):
     """多卡（码）协同：一个入口认全部身份标识（指引⑧"多卡(码)协同应用"）。
 

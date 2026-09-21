@@ -72,6 +72,111 @@ class ResourceUpdate(BaseModel):
     note: str | None = None
 
 
+class ResourceOut(BaseModel):
+    id: int
+    org_id: int
+    resource_type: str
+    resource_type_name: str
+    code: str
+    name: str
+    capacity: int
+    unit: str
+    location: str
+    contact: str
+    status: str
+    status_name: str
+    withdraw_reason: str
+    note: str
+
+
+class CatalogItemOut(BaseModel):
+    """五类资源的统一行。`available` 与 `org_id` 都**可为 null**，而且是有意义的：
+
+    - `available=None`：检查资源与手术间没有"余量"这个概念（看启停），
+      填 0 会被读成"没有了"；
+    - `org_id=None`：血库是全县一本账（`blood_stocks` 没有 org_id）。
+    """
+
+    kind: str
+    kind_name: str
+    id: int
+    org_id: int | None
+    name: str
+    detail: str
+    available: int | None
+    unit: str
+    usable: bool
+
+
+class KindTallyOut(BaseModel):
+    total: int
+    usable: int
+
+
+class CatalogOut(BaseModel):
+    total: int
+    # 宽键：键是资源类别，由 `resource_kind` 筛选与数据共同决定
+    by_kind: dict[str, KindTallyOut]
+    items: list[CatalogItemOut]
+    caliber: str
+
+
+class SlotBriefOut(BaseModel):
+    slot_id: int
+    resource_name: str
+    slot_date: str
+    slot_time: str
+    remaining: int
+
+
+class SlotCandidateOut(BaseModel):
+    org_id: int
+    org_name: str
+    earliest: str
+    remaining_total: int
+    slots: list[SlotBriefOut]
+
+
+class DateWindowOut(BaseModel):
+    start: str
+    end: str
+
+
+class SlotMatchOut(BaseModel):
+    window: DateWindowOut
+    candidates: list[SlotCandidateOut]
+    caliber: str
+
+
+class TimeRangeOut(BaseModel):
+    start_time: str
+    end_time: str
+
+
+class RoomMatchRowOut(BaseModel):
+    room_id: int
+    room_name: str
+    available: bool
+    conflicts: list[TimeRangeOut]
+    gaps: list[TimeRangeOut]
+
+
+class RoomMatchOut(BaseModel):
+    """手术间撮合出**两种形状**：机构没有启用中的手术间时是
+    `{scheduled_date, rooms: [], hint}`，正常时是
+    `{scheduled_date, window, rooms, caliber}` —— 键集合不同，不是同一份多两个字段。
+
+    声明成带默认值的可选字段会给两边各注入一个 null，故带
+    `response_model_exclude_unset=True`。
+    """
+
+    scheduled_date: str
+    rooms: list[RoomMatchRowOut]
+    hint: str | None = None
+    window: TimeRangeOut | None = None
+    caliber: str | None = None
+
+
 def _resource_out(r: Resource) -> dict:
     return {
         "id": r.id,
@@ -91,7 +196,8 @@ def _resource_out(r: Resource) -> dict:
     }
 
 
-@router.post("", status_code=201, dependencies=[Depends(require_roles("operator", "director"))])
+@router.post("", response_model=ResourceOut, status_code=201,
+             dependencies=[Depends(require_roles("operator", "director"))])
 def register_resource(body: ResourceIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """登记通用资源。**新登记的一律是草稿**——直接发布意味着还没核对完
     就已经能被申请到，而资源信息填错的代价是有人白跑一趟。"""
@@ -109,7 +215,7 @@ def register_resource(body: ResourceIn, db: Session = Depends(get_db), user: Use
     return _resource_out(resource)
 
 
-@router.get("")
+@router.get("", response_model=list[ResourceOut])
 def list_resources(
     org_id: int | None = None,
     resource_type: str | None = None,
@@ -128,7 +234,8 @@ def list_resources(
     return [_resource_out(r) for r in query.order_by(Resource.id.desc()).limit(500).all()]
 
 
-@router.patch("/{resource_id}", dependencies=[Depends(require_roles("operator", "director"))])
+@router.patch("/{resource_id}", response_model=ResourceOut,
+              dependencies=[Depends(require_roles("operator", "director"))])
 def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db)):
     resource = _resource(db, resource_id)
     for field, value in body.model_dump(exclude_unset=True).items():
@@ -140,7 +247,8 @@ def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depend
 
 
 @router.post(
-    "/{resource_id}/publish", dependencies=[Depends(require_roles("operator", "director"))]
+    "/{resource_id}/publish", response_model=ResourceOut,
+    dependencies=[Depends(require_roles("operator", "director"))]
 )
 def publish_resource(resource_id: int, db: Session = Depends(get_db)):
     resource = _resource(db, resource_id)
@@ -158,7 +266,8 @@ class WithdrawIn(BaseModel):
 
 
 @router.post(
-    "/{resource_id}/withdraw", dependencies=[Depends(require_roles("operator", "director"))]
+    "/{resource_id}/withdraw", response_model=ResourceOut,
+    dependencies=[Depends(require_roles("operator", "director"))]
 )
 def withdraw_resource(resource_id: int, body: WithdrawIn, db: Session = Depends(get_db)):
     """撤回（不删行）。撤回理由必填——"这台设备为什么不能约了"是使用方
@@ -183,7 +292,7 @@ def _resource(db: Session, resource_id: int) -> Resource:
 # ============================================================ 统一资源视图
 
 
-@router.get("/catalog")
+@router.get("/catalog", response_model=CatalogOut)
 def resource_catalog(
     org_id: int | None = None,
     group_id: int | None = None,
@@ -268,7 +377,7 @@ def resource_catalog(
 # ============================================================ 排程撮合
 
 
-@router.get("/match/slots")
+@router.get("/match/slots", response_model=SlotMatchOut)
 def match_slots(
     resource_type: str = Query(default="outpatient", pattern="^(outpatient|exam|lab)$"),
     keyword: str | None = None,
@@ -329,7 +438,8 @@ def match_slots(
     }
 
 
-@router.get("/match/or-rooms")
+@router.get("/match/or-rooms", response_model=RoomMatchOut,
+            response_model_exclude_unset=True)
 def match_operating_rooms(
     org_id: int,
     scheduled_date: OptionalDateStr = Query(default=""),
