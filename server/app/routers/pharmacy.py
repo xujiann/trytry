@@ -311,7 +311,76 @@ def transfer_stock(
     return dest
 
 
-@router.get("/purchase-suggestions", dependencies=[Depends(get_current_user)])
+
+# ============================================================ 采购与盘点的响应契约
+#
+# 放在第一个用到它们的端点之前：`response_model=` 是装饰器参数，导入时就求值。
+
+
+class PurchaseSuggestionOut(BaseModel):
+    drug_code: str
+    drug_name: str
+    # 近 30 天用量按「日剂量×天数」汇总，是浮点；库存与建议量都是整数
+    usage_30d: float
+    current_stock: int
+    suggested_quantity: int
+
+
+class SupplierCreatedOut(BaseModel):
+    id: int
+    name: str
+    active: bool
+
+
+class SupplierOut(BaseModel):
+    id: int
+    name: str
+    contact: str
+    license_no: str
+    active: bool
+
+
+class PurchaseOrderStatusOut(BaseModel):
+    id: int
+    status: str
+
+
+class PurchaseReceivedOut(PurchaseOrderStatusOut):
+    """验收回执比申请/审批多一个入库后的汇总库存量，且在末尾。"""
+
+    stock_quantity: int
+
+
+class PurchaseOrderOut(BaseModel):
+    id: int
+    org_id: int
+    supplier_id: int
+    item_type: str
+    item_code: str
+    item_name: str
+    quantity: int
+    status: str
+
+
+class StockTakeCreatedOut(BaseModel):
+    id: int
+    book_qty: int
+    actual_qty: int
+    diff: int
+
+
+class StockTakeOut(BaseModel):
+    id: int
+    org_id: int
+    drug_code: str
+    book_qty: int
+    actual_qty: int
+    diff: int
+    note: str
+
+
+@router.get("/purchase-suggestions", response_model=list[PurchaseSuggestionOut],
+            dependencies=[Depends(get_current_user)])
 def purchase_suggestions(db: Session = Depends(get_db)):
     """采购建议：近30天处方用药量与全网当前库存差值为正的品种清单。
 
@@ -719,6 +788,7 @@ class SupplierCreate(BaseModel):
 @router.post(
     "/suppliers",
     status_code=201,
+    response_model=SupplierCreatedOut,
     dependencies=[Depends(require_roles("director", "operator"))],  # 供应商建档
 )
 def create_supplier(body: SupplierCreate, db: Session = Depends(get_db)):
@@ -728,7 +798,8 @@ def create_supplier(body: SupplierCreate, db: Session = Depends(get_db)):
     return {"id": supplier.id, "name": supplier.name, "active": supplier.active}
 
 
-@router.get("/suppliers", dependencies=[Depends(get_current_user)])
+@router.get("/suppliers", response_model=list[SupplierOut],
+            dependencies=[Depends(get_current_user)])
 def list_suppliers(db: Session = Depends(get_db)):
     return [
         {
@@ -755,6 +826,7 @@ class PurchaseCreate(BaseModel):
 @router.post(
     "/purchase-orders",
     status_code=201,
+    response_model=PurchaseOrderStatusOut,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 采购申请
 )
 def create_purchase(
@@ -774,6 +846,7 @@ def create_purchase(
 
 @router.post(
     "/purchase-orders/{order_id}/approve",
+    response_model=PurchaseOrderStatusOut,
     dependencies=[Depends(require_roles("director"))],  # 采购审批=管理层
 )
 def approve_purchase(
@@ -796,6 +869,7 @@ def approve_purchase(
 
 @router.post(
     "/purchase-orders/{order_id}/receive",
+    response_model=PurchaseReceivedOut,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 到货验收
 )
 def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -859,7 +933,8 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = 
     return {"id": order.id, "status": order.status, "stock_quantity": stock_qty}
 
 
-@router.get("/purchase-orders", dependencies=[Depends(get_current_user)])
+@router.get("/purchase-orders", response_model=list[PurchaseOrderOut],
+            dependencies=[Depends(get_current_user)])
 def list_purchases(
     status: str | None = None,
     org_id: int | None = None,
@@ -895,6 +970,7 @@ class StockTakeCreate(BaseModel):
 @router.post(
     "/stock-takes",
     status_code=201,
+    response_model=StockTakeCreatedOut,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # 盘点
 )
 def create_stock_take(
@@ -955,7 +1031,8 @@ def create_stock_take(
     }
 
 
-@router.get("/stock-takes", dependencies=[Depends(get_current_user)])
+@router.get("/stock-takes", response_model=list[StockTakeOut],
+            dependencies=[Depends(get_current_user)])
 def list_stock_takes(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     q = db.query(StockTake)
     q = scope_org_list(db, user, q, StockTake, org_id)

@@ -26,6 +26,105 @@ from sqlalchemy import func
 router = APIRouter(prefix="/api/maternal", tags=["妇幼保健"], dependencies=[Depends(get_current_user)])
 
 
+
+# ============================================================ 响应契约
+#
+# 集中放在所有端点之前：`response_model=` 是装饰器参数，导入时就求值。
+
+
+class VisitCreatedOut(BaseModel):
+    id: int
+    record_id: int
+    # 本次访视后档案的高危标记与状态（收缩压≥140 会当场置高危）
+    high_risk: bool
+    status: str
+
+
+class RecordClosedOut(BaseModel):
+    id: int
+    status: str
+
+
+class ChildVisitCreatedOut(BaseModel):
+    id: int
+    child_id: int
+
+
+class DeliveryCreatedOut(BaseModel):
+    id: int
+    record_id: int
+    delivery_mode: str
+    status: str
+
+
+class DeliveryOut(BaseModel):
+    id: int
+    record_id: int
+    org_id: int
+    delivery_date: str
+    delivery_mode: str
+    newborn_count: int
+    outcome: str
+
+
+class NewbornScreeningCreatedOut(BaseModel):
+    id: int
+    child_id: int
+    item: str
+    result: str
+    # 阳性/可疑会自动把儿童纳入高危，回执直接把结果给出来
+    child_high_risk: bool
+
+
+class NewbornScreeningOut(BaseModel):
+    id: int
+    item: str
+    result: str
+    screen_date: str
+    note: str
+
+
+class HighRiskSetOut(BaseModel):
+    id: int
+    high_risk: bool
+    risk_note: str
+
+
+class HighRiskChildOut(BaseModel):
+    id: int
+    name: str
+    birth_date: str
+    risk_note: str
+
+
+class PrenatalScreeningOut(BaseModel):
+    id: int
+    record_id: int
+    screen_type: str
+    # 中文名现查常量表，查不到回落成原值
+    screen_type_name: str
+    screen_date: str
+    # 未填孕周时为 null
+    gest_week: int | None
+    result: str
+    indicator: str
+    conclusion: str
+    flagged_high_risk: bool
+
+
+class ScreenTypeTallyOut(BaseModel):
+    count: int
+    name: str
+
+
+class ScreeningStatsOut(BaseModel):
+    total: int
+    # 键是筛查类型，值是 {count, name}
+    by_type: dict[str, ScreenTypeTallyOut]
+    by_result: dict[str, int]
+    high_risk_detect_rate_pct: float
+
+
 class MaternalCreate(BaseModel):
     patient_id: int
     lmp: str = ""
@@ -92,6 +191,7 @@ class VisitCreate(BaseModel):
 @router.post(
     "/records/{record_id}/visits",
     status_code=201,
+    response_model=VisitCreatedOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 产检随访
 )
 def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
@@ -117,6 +217,7 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
 
 @router.post(
     "/records/{record_id}/close",
+    response_model=RecordClosedOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5
 )
 def close_record(record_id: int, db: Session = Depends(get_db)):
@@ -173,6 +274,7 @@ class ChildVisitCreate(BaseModel):
 @router.post(
     "/children/{child_id}/visits",
     status_code=201,
+    response_model=ChildVisitCreatedOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 儿童随访
 )
 def add_child_visit(child_id: int, body: ChildVisitCreate, db: Session = Depends(get_db)):
@@ -198,6 +300,7 @@ class DeliveryCreate(BaseModel):
 @router.post(
     "/records/{record_id}/delivery",
     status_code=201,
+    response_model=DeliveryCreatedOut,
     dependencies=[Depends(require_roles("doctor"))],  # 分娩记录=医师
 )
 def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -223,7 +326,7 @@ def add_delivery(record_id: int, body: DeliveryCreate, db: Session = Depends(get
     }
 
 
-@router.get("/records/{record_id}/delivery")
+@router.get("/records/{record_id}/delivery", response_model=DeliveryOut)
 def get_delivery(record_id: int, db: Session = Depends(get_db)):
     delivery = db.query(DeliveryRecord).filter(DeliveryRecord.record_id == record_id).first()
     if delivery is None:
@@ -255,6 +358,7 @@ _SCREEN_ITEM_NAMES = {"metabolic": "遗传代谢病筛查", "hearing": "听力�
 @router.post(
     "/children/{child_id}/screenings",
     status_code=201,
+    response_model=NewbornScreeningCreatedOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 新筛
 )
 def add_screening(child_id: int, body: ScreeningCreate, db: Session = Depends(get_db)):
@@ -277,7 +381,7 @@ def add_screening(child_id: int, body: ScreeningCreate, db: Session = Depends(ge
     }
 
 
-@router.get("/children/{child_id}/screenings")
+@router.get("/children/{child_id}/screenings", response_model=list[NewbornScreeningOut])
 def list_screenings(child_id: int, db: Session = Depends(get_db)):
     if db.get(ChildRecord, child_id) is None:
         raise HTTPException(status_code=404, detail="儿童档案不存在")
@@ -306,6 +410,7 @@ class HighRiskUpdate(BaseModel):
 
 @router.post(
     "/children/{child_id}/high-risk",
+    response_model=HighRiskSetOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 高危儿标记/解除
 )
 def set_high_risk(child_id: int, body: HighRiskUpdate, db: Session = Depends(get_db)):
@@ -318,7 +423,7 @@ def set_high_risk(child_id: int, body: HighRiskUpdate, db: Session = Depends(get
     return {"id": child_id, "high_risk": child.high_risk, "risk_note": child.risk_note}
 
 
-@router.get("/children/high-risk")
+@router.get("/children/high-risk", response_model=list[HighRiskChildOut])
 def list_high_risk_children(db: Session = Depends(get_db)):
     """高危儿清单：新筛异常自动纳入 + 人工标记，供专案随访。"""
     return [
@@ -428,6 +533,7 @@ def _screening_out(s: PrenatalScreening) -> dict:
 @router.post(
     "/screenings",
     status_code=201,
+    response_model=PrenatalScreeningOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],
 )
 def create_screening(
@@ -451,7 +557,7 @@ def create_screening(
     return _screening_out(screening)
 
 
-@router.get("/screenings")
+@router.get("/screenings", response_model=list[PrenatalScreeningOut])
 def list_prenatal_screenings(
     record_id: int | None = None, result: str | None = None, db: Session = Depends(get_db)
 ):
@@ -465,7 +571,7 @@ def list_prenatal_screenings(
     ]
 
 
-@router.get("/screening-stats")
+@router.get("/screening-stats", response_model=ScreeningStatsOut)
 def screening_stats(db: Session = Depends(get_db)):
     """筛查统计：按筛查类型与结论分布，高危检出率。"""
     by_type = row_dict(

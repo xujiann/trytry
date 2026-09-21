@@ -78,7 +78,90 @@ def _transformed_scores(answers: dict[str, list[int]]) -> dict[str, int]:
     return scores
 
 
-@router.get("/constitution/spec")
+
+# ============================================================ 响应契约
+
+
+class ConstitutionItemOut(BaseModel):
+    key: str
+    name: str
+
+
+class ConstitutionJudgeOut(BaseModel):
+    positive: str
+    tendency: str
+    balanced: str
+
+
+class ConstitutionSpecOut(BaseModel):
+    method: str
+    item_scoring: str
+    raw_score: str
+    transformed_score: str
+    judge: ConstitutionJudgeOut
+    constitutions: list[ConstitutionItemOut]
+
+
+class ConstitutionResultOut(BaseModel):
+    """辨识结果 = 结论 + 得分 + `**CONSTITUTIONS[key]`（展开在**末尾**）。
+
+    展开带进来的 `name` 与第一个键 `constitution` **是同一个值**（都是体质名），
+    重复但确实两个键都在响应里——照现状声明，别合并。
+    `score` 可能是 int（转化分直报）也可能是 float（简表算出来的转化分）。
+    """
+
+    constitution: str
+    score: int | float
+    # 各偏颇体质的转化分，键是体质 key
+    transformed_scores: dict[str, int | float]
+    tendencies: list[str]
+    name: str
+    advice: str
+    formula: str
+
+
+class SyndromeHitOut(BaseModel):
+    syndrome: str
+    matched: list[str]
+    match_count: int
+    formula: str
+    techniques: list[str]
+
+
+class AssistDiagnosisOut(BaseModel):
+    recommendations: list[SyndromeHitOut]
+    note: str
+
+
+class TcmFormulaOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    dosage_form: str
+    # 剂型中文名现查常量表，查不到回落成原值
+    dosage_form_name: str
+    composition: str
+    process: str
+    indication: str
+    shelf_life_months: int
+    active: bool
+
+
+class TcmBatchOut(BaseModel):
+    id: int
+    formula_id: int
+    batch_no: str
+    org_id: int
+    quantity: int
+    unit: str
+    produced_date: str
+    expire_date: str
+    status: str
+    # 与**业务日期**比出来的，不是列
+    expired: bool
+
+
+@router.get("/constitution/spec", response_model=ConstitutionSpecOut)
 def constitution_spec():
     """标准化简表计分说明（转化分算法与判定阈值）。"""
     return {
@@ -97,7 +180,7 @@ def constitution_spec():
     }
 
 
-@router.post("/constitution")
+@router.post("/constitution", response_model=ConstitutionResultOut)
 def identify_constitution(body: ConstitutionBody):
     """体质辨识：支持转化分直报（scores）或标准化简表逐条计分（answers）。"""
     if body.answers:
@@ -132,7 +215,7 @@ class DiagnoseBody(BaseModel):
     symptoms: list[str] = Field(min_length=1)
 
 
-@router.post("/assist-diagnosis")
+@router.post("/assist-diagnosis", response_model=AssistDiagnosisOut)
 def assist_diagnosis(body: DiagnoseBody):
     """智能辨证：按症状匹配度推荐证型、方剂与适宜技术。"""
     given = set(body.symptoms)
@@ -298,6 +381,7 @@ def _formula_out(f: TcmFormula) -> dict:
 @router.post(
     "/formulas",
     status_code=201,
+    response_model=TcmFormulaOut,
     dependencies=[Depends(require_roles("pharmacist", "doctor"))],  # 制剂配方由药师/中医师维护
 )
 def create_formula(body: FormulaCreate, db: Session = Depends(get_db)):
@@ -308,7 +392,7 @@ def create_formula(body: FormulaCreate, db: Session = Depends(get_db)):
     return _formula_out(formula)
 
 
-@router.get("/formulas")
+@router.get("/formulas", response_model=list[TcmFormulaOut])
 def list_formulas(active: bool | None = None, db: Session = Depends(get_db)):
     query = db.query(TcmFormula)
     if active is not None:
@@ -345,6 +429,7 @@ def _batch_out(b: TcmPreparationBatch, today: str) -> dict:
 @router.post(
     "/preparation-batches",
     status_code=201,
+    response_model=TcmBatchOut,
     dependencies=[Depends(require_roles("pharmacist", "operator"))],
 )
 def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -371,7 +456,7 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = 
     return _batch_out(batch, date.today().isoformat())
 
 
-@router.get("/preparation-batches")
+@router.get("/preparation-batches", response_model=list[TcmBatchOut])
 def list_batches(
     formula_id: int | None = None,
     status: str | None = None,
@@ -390,7 +475,7 @@ def list_batches(
     ]
 
 
-@router.get("/preparation-batches/expiring")
+@router.get("/preparation-batches/expiring", response_model=list[TcmBatchOut])
 def expiring_batches(days: int = 30, today: str | None = None, db: Session = Depends(get_db)):
     """效期预警：N 天内到期或已过期的未召回批次。"""
     business_date = resolve_business_date(today)
@@ -410,6 +495,7 @@ def expiring_batches(days: int = 30, today: str | None = None, db: Session = Dep
 
 @router.post(
     "/preparation-batches/{batch_id}/release",
+    response_model=TcmBatchOut,
     dependencies=[Depends(require_roles("pharmacist", "operator"))],
 )
 def release_batch(batch_id: int, today: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):

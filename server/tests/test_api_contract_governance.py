@@ -168,7 +168,18 @@ import app.spd.routers as spd_routers
 #   推进路径那条 `InstanceAdvancedOut` 的字段顺序值得一看：两种形状共有的
 #   `status` 必须排在两边各自的第三个键之前，否则 `exclude_unset` 发不出
 #   与 handler 一致的键序。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 183
+# → 183（平台侧五个模块 + 中医：`admin_mgmt` 20 / `billing` 15 / `inpatient` 14 /
+#   `maternal` 12 / `pharmacy` 9 / `tcm` 9 = 79 个端点。
+#   这批的共性是**金额**：涉及的金额列全是 `Money`（`Numeric(14,2, asdecimal=False)`），
+#   整数金额读回来是 Python int，一律 `int | float`；真 Float 的只有
+#   `perf_coefficient`（绩效系数）、`drg_weight`（DRG 权重）、
+#   `ChildVisit.height_cm/weight_kg`。
+#   两处分支形状：住院结算比门诊结算多押金冲抵三键（`SettlementCreatedOut`），
+#   异步支付比同步支付多 `pay_url`/`qr_code`（`PaymentPendingOut`）——
+#   后者是 `test_billing_deposits` 抓出来的，静态看不出。
+#   `inpatient` 的时间戳未发生时给的是 **null**，与 spd 侧给空串的口径不同，
+#   照现状声明，别顺手统一。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 104
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
@@ -179,6 +190,12 @@ FULLY_GOVERNED = {
     "spd/population",
     "spd/tasks",
     "spd/referral",
+    "admin_mgmt",
+    "billing",
+    "inpatient",
+    "maternal",
+    "pharmacy",
+    "tcm",
     "quality",
     "education",
     "blood",
