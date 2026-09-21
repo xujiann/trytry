@@ -140,13 +140,33 @@ import app.spd.routers as spd_routers
 #   出键排——它 `pop("count")` 之后又重新赋值，`count` 因此被挪到 `distribution`
 #   与 `negative` 之后，照读起来顺眼的顺序排就是改字节。
 #   见 test_service_extras_split_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 273
+# → 273（`spd/followup`：29 个端点整模块补齐。三处建模判断都是被测试抓出来的，
+#   不是静态看出来的——①`SpdFollowupRule.points` 是 JSON 列，但存的是
+#   `[1, 7, 30]` 这种**天数偏移量**，不是对象（`list[dict]` 当场 500）；
+#   ②执行随访的 `action` **只在接通那条分支上有**，失访分支直接
+#   `return _record_out(record)`，所以它是可选字段 + `exclude_unset`；
+#   ③`FollowupExecutedOut` 可以用继承，因为 `action` 恰好在末尾——
+#   继承把父类字段排在前面，与 handler 的 `out["action"] = ...` 同序。
+#   见 test_spd_flow.py::test_unreachable_followup_is_distinct。）
+# → 244（`spd/population`：28 个端点整模块补齐。这批的教训是**契约本身也是一份
+#   声明，声明多了同样有代价**：`_screening_out`/`_candidate_out`/`_enroll_out`
+#   都有"带患者摘要"与"不带"两种形状，图省事合成一个带可选摘要字段的模型后，
+#   建档/认领/改状态那几条"不带摘要"的端点就凭空声明了一个 `phone`——
+#   `test_pii_output_masking_guard` 正是按 `response_model` 判"这个端点会不会吐
+#   PII"的，于是它去找一条根本不存在的脱敏调用，报了 7 条假泄漏。
+#   拆成父类（无摘要）+ `*RowOut` 子类（有摘要）后归零。
+#   另外两处是被测试抓出来的类型：`SpdProgram.version` 是字符串 "v1" 不是整数；
+#   服务包与用量的 `price` 是 Money 列（`int | float`），量表/监测的 score/value
+#   是 Float 列。）
+BASELINE_WITHOUT_RESPONSE_MODEL = 216
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
     "contracts",
     # 2026-09-21 本轮：十个模块整模块补齐契约（见同轮提交）
     "spd/care",
+    "spd/followup",
+    "spd/population",
     "quality",
     "education",
     "blood",

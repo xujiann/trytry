@@ -78,7 +78,288 @@ def _rule_out(r: SpdFollowupRule) -> dict:
     }
 
 
-@router.post("/followup-rules", status_code=201,
+# 响应契约集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）
+
+
+class FollowupRuleOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    scene: str
+    dept: str
+    program_code: str
+    diagnosis_keywords: list[str]
+    surgery_keywords: list[str]
+    order_keywords: list[str]
+    # 随访时点（JSON 列）：出院/术后第几天，一串天数偏移量，不是对象
+    # （`FollowupRuleIn.points` 是 `list[int]`，校验区间 0~3650）。
+    points: list[int]
+    questionnaire_code: str
+    executor_role: str
+    allow_depts: list[str]
+    allow_roles: list[str]
+    preset: bool
+    active: bool
+
+
+class QuestionnaireOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    scene: str
+    # 题目与异常判据（JSON 列），各自形状随题型/规则变
+    items: list[dict]
+    abnormal_rules: list[dict]
+    track_dept: str
+    handle_role: str
+    preset: bool
+    active: bool
+
+
+class FollowupRecordOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    program_code: str
+    # 三个可空列照 ORM 的 nullable 来（建模前用 precheck 列过）
+    rule_id: int | None
+    questionnaire_code: str
+    scene: str
+    org_id: int | None
+    dept: str
+    planned_at: str
+    executed_at: str
+    channel: str
+    executor_id: int | None
+    # 逐题作答：值随题型变（单选串/多选数组/数值），真多态
+    answers: dict
+    abnormal_level: str
+    result: str
+    evidence: list[str]
+    status: str
+    created_at: str
+
+
+class FollowupExecutedOut(FollowupRecordOut):
+    """执行随访比记录本身多一个 `action`（重度异常时自动派了什么任务）。
+    它在**末尾**（handler 是 `out = _record_out(...)` 再 `out["action"] = ...`），
+    所以这里可以安全地用继承——继承把父类字段排在前面，正合这个顺序。
+
+    但 `action` **只在接通那条分支上有**：失访（`unreachable=true`）直接
+    `return _record_out(record)`，没有这个键。所以它是可选的，端点配
+    `response_model_exclude_unset=True`——声成必填会让失访当场 500
+    （`test_unreachable_followup_is_distinct` 抓到过），声成 `= ""` 又会给
+    失访的响应凭空多一个键。
+    """
+
+    action: str | None = None
+
+
+class PatientBriefOut(BaseModel):
+    id: int
+    name: str
+    gender: str
+    birth_date: str
+    # 按角色脱敏后的电话
+    phone: str
+
+
+class EncounterBriefOut(BaseModel):
+    id: int
+    encounter_type: str
+    diagnosis_name: str
+    doctor_name: str
+    created_at: str
+
+
+class AdmissionBriefOut(BaseModel):
+    id: int
+    admitted_at: str
+    # 未出院时是空串，不是 null
+    discharged_at: str
+    diagnosis_name: str
+    doctor_name: str
+    status: str
+
+
+class FollowupContextOut(BaseModel):
+    record: FollowupRecordOut
+    # 患者档案取不到时为 null
+    patient: PatientBriefOut | None
+    encounters: list[EncounterBriefOut]
+    admissions: list[AdmissionBriefOut]
+    history: list[FollowupRecordOut]
+    questionnaire: QuestionnaireOut | None
+
+
+class PlanGeneratedOut(BaseModel):
+    created: int
+    items: list[FollowupRecordOut]
+
+
+class AutoMatchOut(BaseModel):
+    scanned: int
+    matched: int
+    created: int
+
+
+class ExecutorTallyOut(BaseModel):
+    executor_id: int
+    executor_name: str
+    done: int
+
+
+class FollowupStatsOut(BaseModel):
+    total: int
+    done: int
+    # 失访计入分母不计入分子——两者混在一起会把完成率算高
+    completion_rate: float
+    overdue: int
+    # 三个宽键：状态 / 异常分级 / 渠道，取值都由数据决定
+    by_status: dict[str, int]
+    by_abnormal: dict[str, int]
+    by_channel: dict[str, int]
+    by_executor: list[ExecutorTallyOut]
+
+
+class CallDispatchOut(BaseModel):
+    accepted: bool
+    note: str
+
+
+class CallTaskCreatedOut(BaseModel):
+    id: int
+    phone: str
+    status: str
+    dispatch: CallDispatchOut
+
+
+class CallResultOut(BaseModel):
+    id: int
+    status: str
+    duration_s: int
+
+
+class CallTaskOut(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    phone: str
+    ref_type: str
+    ref_id: int | None
+    status: str
+    duration_s: int
+    record_url: str
+    result: str
+    created_at: str
+
+
+class QcPlannedOut(BaseModel):
+    batch: str
+    pool: int
+    planned: int
+    created: int
+
+
+class QcResultOut(BaseModel):
+    id: int
+    result: str
+
+
+class QcSampleOut(BaseModel):
+    id: int
+    record_id: int
+    batch: str
+    dept: str
+    result: str
+    method: str
+    note: str
+    # 抽中的随访记录被删时为 null
+    record: FollowupRecordOut | None
+    created_at: str
+
+
+class ReportTemplateOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    period: str
+    scope_level: str
+    # 报告段落与变量（JSON 列），形状随模板设计而变
+    sections: list[dict]
+    variables: dict
+    active: bool
+
+
+class ReportTaskOut(BaseModel):
+    id: int
+    template_id: int
+    name: str
+    frequency: str
+    push_time: str
+    subscriber_ids: list[int]
+    org_ids: list[int]
+    valid_from: str
+    valid_to: str
+    priority: int
+    status: str
+    # 从未执行过时是空串，不是 null
+    last_run_at: str
+
+
+class ReportGeneratedOut(BaseModel):
+    id: int
+    title: str
+    period_label: str
+    # 报告正文按段落组织，段落形状随模板变
+    content: dict
+
+
+class ReportInstanceRowOut(BaseModel):
+    id: int
+    title: str
+    template_code: str
+    period_label: str
+    scope_level: str
+    org_id: int | None
+    created_at: str
+
+
+class ReportInstanceOut(BaseModel):
+    id: int
+    title: str
+    template_code: str
+    period_label: str
+    scope_level: str
+    org_id: int | None
+    content: dict
+    subscriber_ids: list[int]
+    created_at: str
+
+
+class RevisitBriefOut(BaseModel):
+    id: int
+    plan_date: str
+    dept: str
+    items: str
+    status: str
+
+
+class TaskBriefOut(BaseModel):
+    id: int
+    title: str
+    task_type: str
+    status: str
+
+
+class HealthCalendarOut(BaseModel):
+    day: str
+    followups: list[FollowupRecordOut]
+    revisits: list[RevisitBriefOut]
+    tasks: list[TaskBriefOut]
+
+
+@router.post("/followup-rules", response_model=FollowupRuleOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def create_followup_rule(body: FollowupRuleIn, db: Session = Depends(get_db)):
     if not body.points:
@@ -95,7 +376,7 @@ def create_followup_rule(body: FollowupRuleIn, db: Session = Depends(get_db)):
     return _rule_out(rule)
 
 
-@router.get("/followup-rules")
+@router.get("/followup-rules", response_model=list[FollowupRuleOut])
 def list_followup_rules(
     scene: str | None = None, dept: str | None = None, active: bool | None = None,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
@@ -117,7 +398,7 @@ def list_followup_rules(
     return [_rule_out(r) for r in rows]
 
 
-@router.patch("/followup-rules/{rule_id}",
+@router.patch("/followup-rules/{rule_id}", response_model=FollowupRuleOut,
               dependencies=[Depends(require_roles("director", "doctor"))])
 def update_followup_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
     rule = db.get(SpdFollowupRule, rule_id)
@@ -154,7 +435,7 @@ def _q_out(q: SpdQuestionnaire) -> dict:
     }
 
 
-@router.post("/questionnaires", status_code=201,
+@router.post("/questionnaires", response_model=QuestionnaireOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def create_questionnaire(body: QuestionnaireIn, db: Session = Depends(get_db)):
     for rule in body.abnormal_rules:
@@ -172,7 +453,7 @@ def create_questionnaire(body: QuestionnaireIn, db: Session = Depends(get_db)):
     return _q_out(questionnaire)
 
 
-@router.get("/questionnaires")
+@router.get("/questionnaires", response_model=list[QuestionnaireOut])
 def list_questionnaires(scene: str | None = None, db: Session = Depends(get_db)):
     query = db.query(SpdQuestionnaire).filter(SpdQuestionnaire.active.is_(True))
     if scene:
@@ -180,7 +461,7 @@ def list_questionnaires(scene: str | None = None, db: Session = Depends(get_db))
     return [_q_out(q) for q in query.order_by(SpdQuestionnaire.id).limit(200).all()]
 
 
-@router.patch("/questionnaires/{q_id}",
+@router.patch("/questionnaires/{q_id}", response_model=QuestionnaireOut,
               dependencies=[Depends(require_roles("director", "doctor"))])
 def update_questionnaire(q_id: int, body: dict, db: Session = Depends(get_db)):
     questionnaire = db.get(SpdQuestionnaire, q_id)
@@ -220,7 +501,7 @@ def _record_out(r: SpdFollowupRecord, patient_name: str = "") -> dict:
     }
 
 
-@router.post("/followup-plans", status_code=201,
+@router.post("/followup-plans", response_model=PlanGeneratedOut, status_code=201,
              dependencies=[Depends(require_roles(*FOLLOWUP_ROLES))])
 def generate_followup_plan(
     body: GeneratePlanIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -260,7 +541,7 @@ class AutoMatchIn(BaseModel):
     limit: int = Field(default=200, ge=1, le=1000)
 
 
-@router.post("/followup-plans/auto-match",
+@router.post("/followup-plans/auto-match", response_model=AutoMatchOut,
              dependencies=[Depends(require_roles(*FOLLOWUP_ROLES))])
 def auto_match_plans(
     body: AutoMatchIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -350,7 +631,7 @@ def auto_match_plans(
     return {"scanned": len(candidates), "matched": matched, "created": created}
 
 
-@router.get("/followup-records")
+@router.get("/followup-records", response_model=list[FollowupRecordOut])
 def list_followup_records(
     response: Response,
     patient_id: int | None = None,
@@ -412,7 +693,7 @@ def list_followup_records(
     return [_record_out(r, names.get(r.patient_id, "")) for r in rows]
 
 
-@router.get("/followup-records/{record_id}/context")
+@router.get("/followup-records/{record_id}/context", response_model=FollowupContextOut)
 def followup_context(
     record_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -484,7 +765,8 @@ class ExecuteIn(BaseModel):
     unreachable: bool = False
 
 
-@router.post("/followup-records/{record_id}/execute",
+@router.post("/followup-records/{record_id}/execute", response_model=FollowupExecutedOut,
+             response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*FOLLOWUP_ROLES))])
 def execute_followup(
     record_id: int, body: ExecuteIn, db: Session = Depends(get_db),
@@ -558,7 +840,7 @@ class RecordPatchIn(BaseModel):
     channel: str | None = None
 
 
-@router.patch("/followup-records/{record_id}",
+@router.patch("/followup-records/{record_id}", response_model=FollowupRecordOut,
               dependencies=[Depends(require_roles(*FOLLOWUP_ROLES))])
 def update_followup_record(
     record_id: int,
@@ -579,7 +861,7 @@ def update_followup_record(
     return _record_out(record)
 
 
-@router.get("/followup-stats")
+@router.get("/followup-stats", response_model=FollowupStatsOut)
 def followup_stats(
     dept: str | None = None,
     scene: str | None = None,
@@ -665,7 +947,7 @@ class CallTaskIn(BaseModel):
     ref_id: int | None = None
 
 
-@router.post("/call-tasks", status_code=201,
+@router.post("/call-tasks", response_model=CallTaskCreatedOut, status_code=201,
              dependencies=[Depends(require_roles(*FOLLOWUP_ROLES))])
 def create_call_task(
     body: CallTaskIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -702,7 +984,7 @@ class CallResultIn(BaseModel):
     result: str = Field(default="", max_length=512)
 
 
-@router.post("/call-tasks/{task_id}/result",
+@router.post("/call-tasks/{task_id}/result", response_model=CallResultOut,
              dependencies=[Depends(require_roles(*FOLLOWUP_ROLES))])
 def record_call_result(
     task_id: int, body: CallResultIn, db: Session = Depends(get_db),
@@ -731,7 +1013,7 @@ def record_call_result(
     return {"id": task.id, "status": task.status, "duration_s": task.duration_s}
 
 
-@router.get("/call-tasks")
+@router.get("/call-tasks", response_model=list[CallTaskOut])
 def list_call_tasks(
     response: Response,
     status: str | None = None,
@@ -781,7 +1063,8 @@ class QcPlanIn(BaseModel):
     batch: str = Field(default="", max_length=32)
 
 
-@router.post("/qc-samples/plan", dependencies=[Depends(require_roles("director", "doctor"))])
+@router.post("/qc-samples/plan", response_model=QcPlannedOut,
+             dependencies=[Depends(require_roles("director", "doctor"))])
 def plan_qc(
     body: QcPlanIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
@@ -827,7 +1110,7 @@ class QcResultIn(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
-@router.post("/qc-samples/{sample_id}/result",
+@router.post("/qc-samples/{sample_id}/result", response_model=QcResultOut,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def record_qc_result(sample_id: int, body: QcResultIn, db: Session = Depends(get_db)):
     sample = db.get(SpdQcSample, sample_id)
@@ -840,7 +1123,7 @@ def record_qc_result(sample_id: int, body: QcResultIn, db: Session = Depends(get
     return {"id": sample.id, "result": sample.result}
 
 
-@router.get("/qc-samples")
+@router.get("/qc-samples", response_model=list[QcSampleOut])
 def list_qc_samples(
     response: Response, batch: str = "", result: str | None = None,
     offset: int = 0, limit: int = 100, db: Session = Depends(get_db),
@@ -885,7 +1168,7 @@ def _template_out(t: SpdReportTemplate) -> dict:
     }
 
 
-@router.post("/report-templates", status_code=201,
+@router.post("/report-templates", response_model=ReportTemplateOut, status_code=201,
              dependencies=[Depends(require_roles("director"))])
 def create_report_template(body: ReportTemplateIn, db: Session = Depends(get_db)):
     if not body.sections:
@@ -900,7 +1183,7 @@ def create_report_template(body: ReportTemplateIn, db: Session = Depends(get_db)
     return _template_out(template)
 
 
-@router.get("/report-templates")
+@router.get("/report-templates", response_model=list[ReportTemplateOut])
 def list_report_templates(period: str | None = None, db: Session = Depends(get_db)):
     query = db.query(SpdReportTemplate)
     if period:
@@ -908,7 +1191,7 @@ def list_report_templates(period: str | None = None, db: Session = Depends(get_d
     return [_template_out(t) for t in query.order_by(SpdReportTemplate.id).limit(100).all()]
 
 
-@router.patch("/report-templates/{template_id}",
+@router.patch("/report-templates/{template_id}", response_model=ReportTemplateOut,
               dependencies=[Depends(require_roles("director"))])
 def update_report_template(template_id: int, body: dict, db: Session = Depends(get_db)):
     template = db.get(SpdReportTemplate, template_id)
@@ -944,7 +1227,8 @@ def _task_out(t: SpdReportTask) -> dict:
     }
 
 
-@router.post("/report-tasks", status_code=201, dependencies=[Depends(require_roles("director"))])
+@router.post("/report-tasks", response_model=ReportTaskOut, status_code=201,
+             dependencies=[Depends(require_roles("director"))])
 def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     if db.get(SpdReportTemplate, body.template_id) is None:
         raise HTTPException(status_code=404, detail="报告模板不存在")
@@ -954,7 +1238,7 @@ def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     return _task_out(task)
 
 
-@router.get("/report-tasks")
+@router.get("/report-tasks", response_model=list[ReportTaskOut])
 def list_report_tasks(status: str | None = None, db: Session = Depends(get_db)):
     query = db.query(SpdReportTask)
     if status:
@@ -965,7 +1249,8 @@ def list_report_tasks(status: str | None = None, db: Session = Depends(get_db)):
     ]
 
 
-@router.patch("/report-tasks/{task_id}", dependencies=[Depends(require_roles("director"))])
+@router.patch("/report-tasks/{task_id}", response_model=ReportTaskOut,
+              dependencies=[Depends(require_roles("director"))])
 def update_report_task(task_id: int, body: dict, db: Session = Depends(get_db)):
     """启用 / 暂停 / 改频率 / 调优先级。删除也走这里（status=deleted 由前端不再展示）。"""
     task = db.get(SpdReportTask, task_id)
@@ -997,7 +1282,7 @@ class GenerateReportIn(BaseModel):
     period_label: str = Field(default="", max_length=32)
 
 
-@router.post("/report-instances", status_code=201,
+@router.post("/report-instances", response_model=ReportGeneratedOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def generate_report(
     body: GenerateReportIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -1046,7 +1331,7 @@ def generate_report(
     }
 
 
-@router.get("/report-instances")
+@router.get("/report-instances", response_model=list[ReportInstanceRowOut])
 def list_report_instances(
     response: Response,
     template_code: str | None = None,
@@ -1073,7 +1358,7 @@ def list_report_instances(
     ]
 
 
-@router.get("/report-instances/{instance_id}")
+@router.get("/report-instances/{instance_id}", response_model=ReportInstanceOut)
 def get_report_instance(instance_id: int, db: Session = Depends(get_db)):
     instance = db.get(SpdReportInstance, instance_id)
     if instance is None:
@@ -1088,7 +1373,7 @@ def get_report_instance(instance_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/health-calendar")
+@router.get("/health-calendar", response_model=HealthCalendarOut)
 def health_calendar(
     patient_id: int, day: str = "", db: Session = Depends(get_db),
     user: User = Depends(get_current_user),

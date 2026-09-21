@@ -29,6 +29,12 @@
    递归展开出**响应构造函数集合**，其中任何**带 PII 键的 dict 字面量**都是一个
    出口点。新写一个 `return {"id_card": p.id_card}` 的裸 dict 端点，一样被看见。
 
+   "会流进响应"**跟多跳**：`briefs = ...` → `out = f(..., briefs.get(...))` →
+   `return out`。只跟一跳会漏看隔了一跳的脱敏点，把
+   `GET /api/spd/enrollments/{id}` 误判成"声明了 phone 却没脱敏"
+   （脱敏在 `_patient_brief` 里）。多跳复用同一套父链规则，见
+   `_flows_to_response`；**元组解包处止步**，理由写在那里。
+
 PII 列名本身也不手写：取自 `EncryptedPII` 列类型（与检索闸门同一个真源），
 实测为 `id_card` / `phone`；响应字段名**包含**这两个词即算（于是
 `guardian_id_card` / `caller_phone` 自动纳入）。
@@ -270,6 +276,18 @@ def _returned_names(fn) -> set[str]:
     return out
 
 
+def _name_uses(fn) -> dict[str, list[ast.Name]]:
+    """局部名字 -> 它被**读**的那些节点（Store 的赋值目标不算）。
+
+    用来把"值流进响应"的判定从一跳扩到多跳，见 `_flows_to_response`。
+    """
+    out: dict[str, list[ast.Name]] = {}
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            out.setdefault(node.id, []).append(node)
+    return out
+
+
 def _pii_dicts(fn) -> list[tuple[ast.Dict, str, ast.AST]]:
     """函数体内所有"带 PII 字面量键"的 dict：``(dict 节点, 键名, 值表达式)``。"""
     out = []
@@ -288,6 +306,7 @@ def _param_rooted_pii_params(key: str) -> set[str]:
     用来判断"一个 dict 字面量作为实参传进去，是喂给它（入参）还是经它出网（出口）"：
     `create_patient_idempotent(db, {"id_card": ...})` 的那个 dict 是入参
     （该函数不把它搬进返回结构），`_task_out(task, {"phone": ...})` 的则是出口。
+
     """
     fn = FUNCS.get(key)
     if fn is None:
@@ -369,6 +388,7 @@ def constructors(entry: str) -> list[str]:
         module = key.split(":")[0]
         parents = _parents(fn)
         returned = _returned_names(fn)
+        uses = _name_uses(fn)
         for node in ast.walk(fn):
             if not isinstance(node, ast.Call):
                 continue
@@ -378,32 +398,71 @@ def constructors(entry: str) -> list[str]:
             target = resolve_call(module, name)
             if target is None or target in out:
                 continue
-            if _flows_to_response(node, parents, returned, module):
+            if _flows_to_response(node, parents, returned, module, uses):
                 out.append(target)
                 stack.append(target)
     return out
 
 
 def _flows_to_response(
-    node: ast.AST, parents: dict[int, ast.AST], returned: set[str], module: str
+    node: ast.AST,
+    parents: dict[int, ast.AST],
+    returned: set[str],
+    module: str,
+    uses: dict[str, list[ast.Name]] | None = None,
+    seen: set[str] | None = None,
 ) -> bool:
     """这个表达式的值会不会流进响应体。
 
-    沿父链往上走，三种终止：`return` → 会；赋值 → 看被赋的名字是否出现在某条
-    `return` 里；函数边界 → 不会。**中途遇到外层调用要停**：那说明本表达式的值
+    沿父链往上走，三种终止：`return` → 会；赋值 → 看被赋的名字能不能走到某条
+    `return`；函数边界 → 不会。**中途遇到外层调用要停**：那说明本表达式的值
     是喂给别人的**实参**，不是自己往外走——`_upsert_patient(db, parse_fhir_patient(x))`
     里的 `parse_fhir_patient` 解析的是入站报文，它的明文 dict 最终进的是数据库，
     不是响应体（真正的响应体那一段走 `desensitize`）。只有当外层函数确实把这个
     形参里的 PII 搬进自己的返回结构时，才继续往上跟。
+
+    赋值那一支**要跟多跳**：被赋的名字不直接出现在 `return` 里时，接着看它后面
+    被读的每一处能不能走到 `return`——
+
+        briefs = _patient_brief(db, [e.patient_id], user)   # ① 不在 return 里
+        out = _enroll_out(enrollment, briefs.get("..."))    # ② briefs 的读点
+        return out                                          # ③ out 在 return 里
+
+    只跟一跳会把 `_patient_brief` 挡在响应构造闭包外，于是
+    `GET /api/spd/enrollments/{id}` 看起来"声明了 phone 却全程没脱敏"——
+    脱敏就在 `_patient_brief` 里（`visible_phone`），只是隔了一跳。
+    这是本闸门的一处**漏跟**（少看见一个脱敏点 → 误报违规）。
+
+    多跳**必须复用同一套父链规则**，不能简单地"赋值就传递"：②里 `briefs` 是
+    喂给 `_enroll_out` 的实参，能继续往上全靠 `_enroll_out` 确实把它的 PII 搬进
+    了返回结构；`data = parse_hl7v2_patient(raw)` 后面那些 `data` 的读点
+    （喂给入库函数）在同一条规则下照样停住。递归而不是放宽，差别就在这里。
     """
     cur: ast.AST | None = parents.get(id(node))
     thunk = False
+    seen = seen if seen is not None else set()
     while cur is not None:
         if isinstance(cur, ast.Return):
             return True
         if isinstance(cur, ast.Assign):
             names = {n.id for t in cur.targets for n in ast.walk(t) if isinstance(n, ast.Name)}
-            return bool(names & returned)
+            if names & returned:
+                return True
+            if uses is None or not all(isinstance(t, ast.Name) for t in cur.targets):
+                # 元组解包（`data, control_id = parse_hl7v2_patient(...)`）在这里止步：
+                # 调用的值是整个元组，AST 上看不出是哪一个元素流向了响应——
+                # 实际上 `data` 是进库的、`control_id` 才进响应。跟下去会把
+                # `parse_hl7v2_patient` 里那个明文 dict 算成 `hl7v2_adt` 的出口，
+                # 报一条不存在的泄漏。宁可退回原来的一跳，不假装知道是哪一路。
+                return False
+            for name in sorted(names - seen):
+                seen.add(name)
+                if any(
+                    _flows_to_response(use, parents, returned, module, uses, seen)
+                    for use in uses.get(name, [])
+                ):
+                    return True
+            return False
         if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
             return False
         if isinstance(cur, ast.Lambda):
@@ -413,6 +472,11 @@ def _flows_to_response(
         elif isinstance(cur, ast.Call):
             if thunk:
                 thunk = False
+            elif node is cur.func:
+                # `briefs.get("phone")`：调用长在**自己身上**，结果是自己的一部分，
+                # 不是"被喂给别人当实参"。在这儿停会把 `briefs` 的去向判成
+                # 「没流进响应」，而它恰恰是经 `_enroll_out` 进响应的那一支。
+                pass
             elif not _param_echoes_pii(cur, node, module):
                 return False
         node, cur = cur, parents.get(id(cur))
