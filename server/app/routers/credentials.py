@@ -95,10 +95,13 @@ class ResolveOut(BaseModel):
     注入 null，故带 `response_model_exclude_unset=True`。
     """
 
+    # 声明顺序＝输出顺序（exclude_unset 按声明序发）。handler 里命中实体凭据
+    # 那条的键序是 matched_by, credential_status, valid, patient，所以
+    # `credential_status` 必须排在 valid 之前——排到末尾就把键序改了。
     matched_by: str
+    credential_status: str | None = None
     valid: bool
     patient: PatientBriefOut | None
-    credential_status: str | None = None
 
 
 class OneCodeResolveOut(BaseModel):

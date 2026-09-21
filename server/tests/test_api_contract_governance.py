@@ -140,12 +140,14 @@ import app.spd.routers as spd_routers
 #   出键排——它 `pop("count")` 之后又重新赋值，`count` 因此被挪到 `distribution`
 #   与 `negative` 之后，照读起来顺眼的顺序排就是改字节。
 #   见 test_service_extras_split_contract.py。）
-BASELINE_WITHOUT_RESPONSE_MODEL = 368
+BASELINE_WITHOUT_RESPONSE_MODEL = 327
 
 # 已完成治理（全部端点声明契约）的模块——这些不许回退。治理新模块后加进来。
 FULLY_GOVERNED = {
     "contracts",
     # 2026-09-21 本轮：十个模块整模块补齐契约（见同轮提交）
+    "quality",
+    "education",
     "blood",
     "credentials",
     "dataquality",

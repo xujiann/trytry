@@ -74,8 +74,210 @@ def _adverse_out(e: AdverseEvent) -> dict:
     }
 
 
+# 响应契约集中放在所有端点之前（`response_model=` 是装饰器参数，导入时求值）
+
+
+class AdverseEventOut(BaseModel):
+    id: int
+    org_id: int
+    event_type: str
+    level: str
+    anonymous: bool
+    reporter_name: str
+    description: str
+    status: str
+    review_note: str
+    reviewed_by: str
+    rectify_note: str
+    rectified_by: str
+    created_at: str
+
+
+class AdverseStatsOut(BaseModel):
+    total: int
+    rectified: int
+    closed_loop_pct: float
+    # 两个维度都是宽键：事件类型与级别由数据决定
+    by_type: dict[str, int]
+    by_level: dict[str, int]
+
+
+class RecordQcOut(BaseModel):
+    id: int
+    target_type: str
+    target_id: int
+    score: int
+    grade: str
+    defects: str
+    qc_by: str
+
+
+class RecordQcStatsOut(BaseModel):
+    total: int
+    avg_score: float
+    grade_a_pct: float
+    with_defects: int
+
+
+class InfectionReportOut(BaseModel):
+    id: int
+    org_id: int
+    patient_id: int
+    infection_site: str
+    pathogen: str
+    note: str
+    status: str
+    reported_by: str
+    report_date: str
+
+
+class InfectionStatsOut(BaseModel):
+    confirmed: int
+    pending_verify: int
+    # 宽键：感染部位由数据决定
+    by_site: dict[str, int]
+
+
+class RecordDefectOut(BaseModel):
+    rule_code: str
+    rule_name: str
+    field: str
+    field_name: str
+    rule_type: str
+    rule_type_name: str
+    message: str
+    deduct_points: int
+
+
+class RecordQcResultOut(BaseModel):
+    score: int
+    grade: str
+    deducted: int
+    rules_checked: int
+    defects: list[RecordDefectOut]
+
+
+class MedicalRecordOut(BaseModel):
+    """`_record_out` 里六个病历正文字段是 `**{name: getattr(...) for name in
+    RECORD_FIELDS}` 展开的——键集合固定（RECORD_FIELDS 是模块常量），
+    故逐个声明，顺序照 RECORD_FIELDS 的定义序。"""
+
+    id: int
+    encounter_id: int
+    org_id: int
+    doctor_name: str
+    chief_complaint: str
+    present_illness: str
+    past_history: str
+    physical_exam: str
+    diagnosis_basis: str
+    treatment_plan: str
+    qc_score: int
+    qc_grade: str
+    created_at: str
+    updated_at: str
+
+
+class MedicalRecordUpsertOut(BaseModel):
+    created: bool
+    record: MedicalRecordOut
+    qc: RecordQcResultOut
+
+
+class MedicalRecordDetailOut(BaseModel):
+    record: MedicalRecordOut
+    # 评分时的缺陷快照（JSON 列），未评分时是空列表
+    defects: list[RecordDefectOut]
+
+
+class RecordRescoreOut(RecordQcResultOut):
+    """复评＝按当前规则重算并回写，比 `evaluate_record` 多一个 `record_id`。
+    字段顺序照 handler：`{"record_id": ..., **result}`，record_id 在最前。"""
+
+    record_id: int
+
+
+class GradeBucketOut(BaseModel):
+    """三个等级的键是中文字面量（`_grade_bucket()` 造的就是这三个）。"""
+
+    甲: int
+    乙: int
+    丙: int
+
+
+class QcGroupRowOut(BaseModel):
+    # 按机构分组时 key 是 org_id（int），按医师分组时是姓名（str）——同一个
+    # `group()` 出两种，真多态
+    key: int | str
+    name: str
+    total: int
+    avg_score: float
+    grade_a: int
+    grade_b: int
+    grade_c: int
+    grade_a_pct: float
+
+
+class RecordQcSummaryOut(BaseModel):
+    # 未指定月份时是字面量"累计"，不是 null
+    period: str
+    total: int
+    avg_score: float
+    grade_distribution: GradeBucketOut
+    grade_a_pct: float
+    by_org: list[QcGroupRowOut]
+    by_doctor: list[QcGroupRowOut]
+
+
+class RecordQcRuleOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    check_field: str
+    field_name: str
+    rule: str
+    rule_name: str
+    # 规则参数随 rule 变（字数下限的阈值、关键词清单……），真多态
+    config: dict
+    deduct_points: int
+    active: bool
+
+
+class ClinicalIndicatorOut(BaseModel):
+    """指标行是**条件形状**：`preop_postop_match` 这一项多一个 `uncollected`
+    （两项诊断没填全、因而不进分母的台次），其余各项没有这个键。
+
+    `uncollected` 排在 `rate_pct` 与 `caliber` 之间——声明顺序即输出顺序，
+    放到末尾会把那一行的键序改掉。整条加 `response_model_exclude_unset=True`，
+    其余各项才不会被注入 `"uncollected": null`。
+
+    这是本轮第四处实测到的「键被契约吃掉」：未采集的台次不进分母，但**必须
+    单独报出来**——不报的话，分母小就看不出是样本少还是没采集，
+    而这两件事的处置完全不同。
+    """
+
+    key: str
+    name: str
+    dimension: str
+    numerator: int
+    denominator: int
+    rate_pct: float
+    uncollected: int | None = None
+    # 每项都带口径：只给一个百分比没法核对，也没法判断样本量小到不该看
+    caliber: str
+
+
+class ClinicalIndicatorsOut(BaseModel):
+    # 未指定月份时是字面量"全期"，不是 null
+    period: str
+    org_id: int | None
+    group_id: int | None
+    indicators: list[ClinicalIndicatorOut]
+
+
 @router.post(
     "/adverse-events",
+    response_model=AdverseEventOut,
     status_code=201,
     # 病人安全：全部临床与经办角色均可上报（无惩罚上报文化）
     dependencies=[Depends(require_roles("doctor", "pharmacist", "public_health", "operator", "director"))],
@@ -98,7 +300,7 @@ def report_adverse_event(
     return _adverse_out(event)
 
 
-@router.get("/adverse-events")
+@router.get("/adverse-events", response_model=list[AdverseEventOut])
 def list_adverse_events(
     status: str | None = None, event_type: str | None = None, db: Session = Depends(get_db)
 ):
@@ -116,6 +318,7 @@ class NoteBody(BaseModel):
 
 @router.post(
     "/adverse-events/{event_id}/review",
+    response_model=AdverseEventOut,
     dependencies=[Depends(require_roles("director"))],  # 审核=管理层
 )
 def review_adverse_event(
@@ -140,6 +343,7 @@ def review_adverse_event(
 
 @router.post(
     "/adverse-events/{event_id}/rectify",
+    response_model=AdverseEventOut,
     dependencies=[Depends(require_roles("director", "operator"))],  # 整改登记=管理层/经办
 )
 def rectify_adverse_event(
@@ -162,7 +366,7 @@ def rectify_adverse_event(
     return _adverse_out(event)
 
 
-@router.get("/adverse-events-stats")
+@router.get("/adverse-events-stats", response_model=AdverseStatsOut)
 def adverse_event_stats(db: Session = Depends(get_db)):
     """不良事件统计：按类型/等级分布与整改闭环率。"""
     total = db.query(func.count(AdverseEvent.id)).scalar() or 0
@@ -203,6 +407,7 @@ def _grade(score: int) -> str:
 
 @router.post(
     "/record-qc",
+    response_model=RecordQcOut,
     status_code=201,
     dependencies=[Depends(require_roles("director", "doctor"))],  # 病历质控=管理层/医师质控员
 )
@@ -228,7 +433,7 @@ def create_record_qc(
     }
 
 
-@router.get("/record-qc")
+@router.get("/record-qc", response_model=list[RecordQcOut])
 def list_record_qc(
     target_type: str | None = None, grade: str | None = None, db: Session = Depends(get_db)
 ):
@@ -251,7 +456,7 @@ def list_record_qc(
     ]
 
 
-@router.get("/record-qc-stats")
+@router.get("/record-qc-stats", response_model=RecordQcStatsOut)
 def record_qc_stats(db: Session = Depends(get_db)):
     """病历质控统计：抽检量、均分、甲级率、缺陷病历数。"""
     total = db.query(func.count(RecordQc.id)).scalar() or 0
@@ -298,6 +503,7 @@ def _infection_out(r: InfectionReport) -> dict:
 
 @router.post(
     "/infection-reports",
+    response_model=InfectionReportOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # 院感上报=医师/公卫
 )
@@ -319,7 +525,7 @@ def create_infection_report(
     return _infection_out(report)
 
 
-@router.get("/infection-reports")
+@router.get("/infection-reports", response_model=list[InfectionReportOut])
 def list_infection_reports(
     status: str | None = None, org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
@@ -332,6 +538,7 @@ def list_infection_reports(
 
 @router.post(
     "/infection-reports/{report_id}/verify",
+    response_model=InfectionReportOut,
     dependencies=[Depends(require_roles("public_health", "director"))],  # 核实=院感/公卫管理
 )
 def verify_infection_report(report_id: int, confirmed: bool, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -346,7 +553,7 @@ def verify_infection_report(report_id: int, confirmed: bool, db: Session = Depen
     return _infection_out(report)
 
 
-@router.get("/infection-stats")
+@router.get("/infection-stats", response_model=InfectionStatsOut)
 def infection_stats(db: Session = Depends(get_db)):
     """院感统计：确认例数、按部位分布（区域安全提醒数据源，#70）。"""
     confirmed = (
@@ -530,6 +737,7 @@ def _record_out(r: MedicalRecord) -> dict:
 
 @router.post(
     "/records",
+    response_model=MedicalRecordUpsertOut,
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],  # 病历书写=医师
 )
@@ -572,7 +780,7 @@ def upsert_medical_record(
     return {"created": created, "record": _record_out(record), "qc": result}
 
 
-@router.get("/records")
+@router.get("/records", response_model=list[MedicalRecordOut])
 def list_medical_records(
     encounter_id: int | None = None,
     org_id: int | None = None,
@@ -595,7 +803,7 @@ def _grade_bucket() -> dict:
     return {"甲": 0, "乙": 0, "丙": 0}
 
 
-@router.get("/records/qc-summary")
+@router.get("/records/qc-summary", response_model=RecordQcSummaryOut)
 def record_qc_summary(
     period: str | None = None,
     org_id: int | None = None,
@@ -654,7 +862,7 @@ def record_qc_summary(
     }
 
 
-@router.get("/records/{record_id}")
+@router.get("/records/{record_id}", response_model=MedicalRecordDetailOut)
 def get_medical_record(record_id: int, db: Session = Depends(get_db)):
     record = db.get(MedicalRecord, record_id)
     if record is None:
@@ -662,7 +870,7 @@ def get_medical_record(record_id: int, db: Session = Depends(get_db)):
     return {"record": _record_out(record), "defects": record.qc_defects or []}
 
 
-@router.get("/records/{record_id}/qc")
+@router.get("/records/{record_id}/qc", response_model=RecordRescoreOut)
 def rescore_medical_record(record_id: int, db: Session = Depends(get_db)):
     """按当前规则库重新评分（规则调整或病历修正后复评），结果回写快照。"""
     record = db.get(MedicalRecord, record_id)
@@ -697,7 +905,7 @@ def _record_rule_out(r: RecordQcRule) -> dict:
     }
 
 
-@router.get("/record-qc-rules")
+@router.get("/record-qc-rules", response_model=list[RecordQcRuleOut])
 def list_record_qc_rules(active: bool | None = None, db: Session = Depends(get_db)):
     q = db.query(RecordQcRule)
     if active is not None:
@@ -705,7 +913,8 @@ def list_record_qc_rules(active: bool | None = None, db: Session = Depends(get_d
     return [_record_rule_out(r) for r in q.order_by(RecordQcRule.code).all()]
 
 
-@router.patch("/record-qc-rules/{rule_id}", dependencies=[Depends(require_admin)])
+@router.patch("/record-qc-rules/{rule_id}", response_model=RecordQcRuleOut,
+              dependencies=[Depends(require_admin)])
 def update_record_qc_rule(rule_id: int, body: RecordQcRuleUpdate, db: Session = Depends(get_db)):
     rule = db.get(RecordQcRule, rule_id)
     if rule is None:
@@ -746,7 +955,8 @@ def _rate(numerator: int, denominator: int) -> float:
     return round(numerator / denominator * 100, 2) if denominator else 0.0
 
 
-@router.get("/clinical-indicators")
+@router.get("/clinical-indicators", response_model=ClinicalIndicatorsOut,
+            response_model_exclude_unset=True)
 def clinical_indicators(
     period: str | None = None,
     org_id: int | None = None,
