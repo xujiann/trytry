@@ -342,8 +342,13 @@ class RunOut(BaseModel):
 
 
 class RuleSummaryOut(BaseModel):
+    """字段顺序照 handler 排。`rule_type` 与 `rule_type_name` **都在**——
+    前者是机读的类型码，后者是中文名。加契约时漏了 `rule_type`，套件级字节
+    比对当场报出来（没有任何用例断言过这个键，只有字节比对看得见）。"""
+
     rule_code: str
     rule_name: str
+    rule_type: str
     rule_type_name: str
     table: str
     severity: str

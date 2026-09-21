@@ -68,6 +68,18 @@ class CredentialOut(BaseModel):
     close_reason: str
 
 
+class CredentialIssuedOut(CredentialOut):
+    """发放**总是**多一个 `superseded`（本次被换发作废的旧凭据号清单，
+    没有旧卡时是空列表 `[]`，不是缺这个键）。清单与回收/作废不带它。
+
+    这是加契约时实测抓到的第二处：起初让发放与清单共用 `CredentialOut`，
+    模型把 `superseded` 吃掉了，`test_发放凭据自动作废旧卡` 当场 KeyError。
+    与冷链 `hint` 同一形状的问题——契约漏一个键不会报错，只会让它消失。
+    """
+
+    superseded: list[str]
+
+
 class CredentialLookupOut(CredentialOut):
     """核验多两个字段。失效凭据也走这条（附状态），不按 404——窗口人员需要
     知道"这张卡作废了"，而不是"查无此卡"，两者的处置完全不同。"""
@@ -121,7 +133,7 @@ def _generate_no(db: Session, patient: Patient, credential_type: str) -> str:
     return f"{patient.ehc_no}-{credential_type[:1].upper()}{seq:02d}"
 
 
-@router.post("", response_model=CredentialOut, status_code=201,
+@router.post("", response_model=CredentialIssuedOut, status_code=201,
              dependencies=[Depends(require_roles("operator", "doctor"))])
 def issue_credential(
     body: CredentialIssue, db: Session = Depends(get_db), user: User = Depends(get_current_user)

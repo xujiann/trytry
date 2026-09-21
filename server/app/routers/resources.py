@@ -170,10 +170,15 @@ class RoomMatchOut(BaseModel):
     `response_model_exclude_unset=True`。
     """
 
+    # 字段顺序决定输出顺序（exclude_unset 按**声明顺序**发，不按输入顺序）。
+    # 这个排法让两种形状各自与 handler 的 dict 字面量顺序逐字对上：
+    # 无手术间 → scheduled_date, rooms, hint；正常 → scheduled_date, window,
+    # rooms, caliber。起初按前一种顺序声明，正常那条的 window 就被挪到了 rooms
+    # 后面——键序变化同样是改字节，套件级比对把它报了出来。
     scheduled_date: str
+    window: TimeRangeOut | None = None
     rooms: list[RoomMatchRowOut]
     hint: str | None = None
-    window: TimeRangeOut | None = None
     caliber: str | None = None
 
 
