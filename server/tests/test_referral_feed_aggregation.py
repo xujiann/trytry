@@ -351,3 +351,75 @@ def test_聚合源注册是幂等的():
     register_referral_source("platform", loader)
     register_referral_source("platform", loader)
     assert len(_REFERRAL_SOURCES) == before
+
+
+def _spd_reachable_statuses() -> set[str]:
+    """慢专病转诊单**真的可能出现**的状态码，从代码现算。
+
+    三个来源合起来：模型默认值（起始格）、`_NEXT` 状态机表的键与目标
+    （键里含 `station_reviewed` 这类只进不出的存量格——存量单据仍停在那儿，
+    标签不能少），以及 `referral.py` 里所有 `case.status = "<字面量>"` 赋值
+    （到院/下转/闭环/退回/撤回这几格不走 `_NEXT`，是直接写的）。
+    """
+    import ast
+    import pathlib
+
+    from app.spd.models import SpdReferralCase
+    from app.spd.routers.referral import _NEXT
+
+    src = pathlib.Path(__file__).resolve().parent.parent / "app" / "spd" / "routers" / "referral.py"
+    assigned = set()
+    for node in ast.walk(ast.parse(src.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+            continue
+        for target in node.targets:
+            if (isinstance(target, ast.Attribute) and target.attr == "status"
+                    and isinstance(node.value.value, str)):
+                assigned.add(node.value.value)
+    assert assigned, "一个 `case.status = \"...\"` 都没扫到，判据已失效（不是真没有）"
+    return (
+        {SpdReferralCase.__table__.c.status.default.arg}
+        | set(_NEXT)
+        | {target for target, *_ in _NEXT.values()}
+        | assigned
+    )
+
+
+def test_慢专病转诊文案表没有状态机产生不了的格():
+    """多一格不报错，但它是**假信息**：读代码的人会以为流程里真有这一步。
+
+    实测过一次：`followup_received`（"下转随访已接收"）在文案表与模型列注释里
+    都写着，像是 `down_referred` 与 `closed` 之间的一格——而随访接收那一步
+    `case.status = "closed"` 是直接闭环的，全仓库没有任何一处写过这个码。
+    前端 `SPD_REF_STATUS` 因此也没有它（前端是对的），于是这一格既无人写入、
+    也无人显示，只在两处注释里误导读者。
+    """
+    from app.spd.service import _STATUS_LABELS
+
+    reachable = _spd_reachable_statuses()
+    assert set(_STATUS_LABELS) == reachable, (
+        f"状态机产生不了、却有文案的：{set(_STATUS_LABELS) - reachable}；"
+        f"能产生、却没文案（界面会露出英文码）：{reachable - set(_STATUS_LABELS)}"
+    )
+
+
+def test_慢专病转诊前端标签表与后端同码集():
+    """前端措辞**刻意更短**（表格里一格放不下"卫生院已审核，待县级医院接收"），
+
+    但**码集必须一致**：少一个码，那张单子在列表里显示的就是英文原始码
+    （`statusTag` 查不到时回落成 key 本身）。所以只比键、不比词。
+    """
+    import pathlib
+    import re
+
+    from app.spd.service import _STATUS_LABELS
+
+    js = (pathlib.Path(__file__).resolve().parent.parent
+          / "app" / "static" / "pages-spd.js").read_text(encoding="utf-8")
+    block = re.search(r"const SPD_REF_STATUS = \{(.*?)\n\};", js, re.S)
+    assert block, "前端 SPD_REF_STATUS 表没找到（改名了就把这条一起改）"
+    front = set(re.findall(r"(\w+):\s*\[", block.group(1)))
+    assert front == set(_STATUS_LABELS), (
+        f"前端缺（会显示英文码）：{set(_STATUS_LABELS) - front}；"
+        f"前端多（后端已经产生不了）：{front - set(_STATUS_LABELS)}"
+    )

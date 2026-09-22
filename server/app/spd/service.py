@@ -529,7 +529,6 @@ _STATUS_LABELS = {
     "accepted": "县级医院已接收",
     "arrived": "已到院就诊",
     "down_referred": "已下转基层",
-    "followup_received": "下转随访已接收",
     "closed": "已完成闭环",
     "rejected": "已退回",
     "withdrawn": "已撤回",

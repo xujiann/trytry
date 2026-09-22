@@ -1040,7 +1040,8 @@ class SpdReferralCase(Base):
     target_org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
     # submitted=待审核, station_reviewed=服务站已复核(存量兼容,新单不产生), township_reviewed=卫生院已审核,
     # accepted=县级已接收, arrived=已到院, down_referred=已下转,
-    # followup_received=下转随访已接收, closed=已闭环, rejected=已退回, withdrawn=已撤回
+    # closed=已闭环（下转随访接收后**直接**到这一格，中间没有"随访已接收"一档），
+    # rejected=已退回, withdrawn=已撤回
     status: Mapped[str] = mapped_column(String(24), default="submitted", index=True)
     reason: Mapped[str] = mapped_column(String(512), default="")
     trigger_rule_code: Mapped[str] = mapped_column(String(32), default="")
