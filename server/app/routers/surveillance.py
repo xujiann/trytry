@@ -15,7 +15,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
@@ -425,11 +425,14 @@ def create_resource(body: ResourceIn, db: Session = Depends(get_db), user: User 
 
 @router.get("/resources", response_model=list[EmergencyResourceOut])
 def list_resources(
+    response: Response,
     org_id: int | None = None,
     resource_type: str | None = None,
     shortage_only: bool = False,
     today: str | None = None,
     group_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
 ):
     today_str = resolve_business_date(today).isoformat()
@@ -439,19 +442,24 @@ def list_resources(
         query = query.filter(EmergencyResource.org_id.in_(scope))
     if resource_type:
         query = query.filter(EmergencyResource.resource_type == resource_type)
-    # ⚠️ **截断在筛选之前**：`.limit(500)` 限的是扫描范围，下面才按 `shortage_only（below_min / expired）` 筛。
-    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
-    # "扫描的第 501~1000 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
-    # ②**这本身是个漏报缺陷**：第 500 条之后的匹配项根本没被看过，
-    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
-    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
-    rows = [
-        _resource_out(r, today_str)
-        for r in query.order_by(EmergencyResource.id.desc()).limit(500).all()
-    ]
     if shortage_only:
-        return [r for r in rows if r["below_min"] or r["expired"]]
-    return rows
+        # 短缺判定下推到 SQL（原先是取前 500 条再在 Python 里筛，第 500 条之后的
+        # 短缺/过期物资根本没被看过——应急物资预警页少报的恰是最该看见的那几条，
+        # 见 P1-54）。两个条件与 `_resource_out` 的 `below_min` / `expired` 逐字对应：
+        # `min_quantity` 为 0 表示"没设下限"，不算短缺；`expire_date` 空串表示
+        # "不设有效期"，不算过期。
+        query = query.filter(
+            or_(
+                and_(EmergencyResource.min_quantity != 0,
+                     EmergencyResource.quantity < EmergencyResource.min_quantity),
+                and_(EmergencyResource.expire_date != "",
+                     EmergencyResource.expire_date < today_str),
+            )
+        )
+    return [
+        _resource_out(r, today_str)
+        for r in paginate(query.order_by(EmergencyResource.id.desc()), response, offset, limit)
+    ]
 
 
 @router.patch(

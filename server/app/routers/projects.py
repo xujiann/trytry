@@ -8,14 +8,20 @@
    不一，平台算一个没人认的百分比，只会让人把精力花在争论算法上。
 2. **逾期按日期现算**，不设定时任务改状态——与接种禁忌、疫苗效期同一条。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import OptionalDateStr
-from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_roles,
+    resolve_business_date,
+    resolve_org_scope,
+)
 from ..models import AdminProject, Organization, ProjectMilestone, User
 
 router = APIRouter(
@@ -171,11 +177,14 @@ def create_project(
 
 @router.get("", response_model=list[ProjectOut])
 def list_projects(
+    response: Response,
     org_id: int | None = None,
     status: str | None = None,
     group_id: int | None = None,
     overdue_only: bool = False,
     today: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
 ):
     today_str = resolve_business_date(today).isoformat()
@@ -185,13 +194,19 @@ def list_projects(
         query = query.filter(AdminProject.org_id.in_(scope))
     if status:
         query = query.filter(AdminProject.status == status)
-    # ⚠️ **截断在筛选之前**：`.limit(200)` 限的是扫描范围，下面才按 `overdue_only` 筛。
-    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
-    # "扫描的第 201~400 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
-    # ②**这本身是个漏报缺陷**：第 200 条之后的匹配项根本没被看过，
-    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
-    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
-    projects = query.order_by(AdminProject.id.desc()).limit(200).all()
+    if overdue_only:
+        # 逾期判定下推到 SQL（原先是取前 200 条再在 Python 里筛，第 200 条之后的
+        # 逾期项目根本没被看过——超期清单静默少报，见 P1-54）。三个条件与
+        # `_project_out` 的 `overdue` 逐字对应：已完成/已暂停的不算逾期，
+        # `due_date` 空串表示"没定完成日期"，同样不算。
+        # 里程碑只用于展示（`milestone_*` 几个计数），不参与这条判定，
+        # 所以下推**不涉及跨表**。
+        query = query.filter(
+            AdminProject.status.notin_(("done", "suspended")),
+            AdminProject.due_date != "",
+            AdminProject.due_date < today_str,
+        )
+    projects = paginate(query.order_by(AdminProject.id.desc()), response, offset, limit)
     # 一次取回全部里程碑按 project_id 分组，不在循环里逐条查（P0-1 的教训）
     by_project: dict[int, list[ProjectMilestone]] = {}
     if projects:
@@ -201,8 +216,7 @@ def list_projects(
             .all()
         ):
             by_project.setdefault(m.project_id, []).append(m)
-    rows = [_project_out(p, today_str, by_project.get(p.id, [])) for p in projects]
-    return [r for r in rows if r["overdue"]] if overdue_only else rows
+    return [_project_out(p, today_str, by_project.get(p.id, [])) for p in projects]
 
 
 @router.get("/{project_id}", response_model=ProjectOut)

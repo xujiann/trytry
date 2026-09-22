@@ -254,10 +254,13 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db), user: User = Depe
 
 @router.get("/batches", response_model=list[VaccineBatchOut])
 def list_batches(
+    response: Response,
     vaccine_code: str | None = None,
     org_id: int | None = None,
     usable_only: bool = False,
     today: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     today_str = resolve_business_date(today).isoformat()
@@ -265,14 +268,19 @@ def list_batches(
     if vaccine_code:
         query = query.filter(VaccineBatch.vaccine_code == vaccine_code)
     query = scope_org_list(db, user, query, VaccineBatch, org_id)
-    # ⚠️ **截断在筛选之前**：`.limit(500)` 限的是扫描范围，下面才按 `usable_only` 筛。
-    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
-    # "扫描的第 501~1000 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
-    # ②**这本身是个漏报缺陷**：第 500 条之后的匹配项根本没被看过，
-    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
-    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
-    rows = [_batch_out(b, today_str) for b in query.order_by(VaccineBatch.id.desc()).limit(500).all()]
-    return [r for r in rows if r["usable"]] if usable_only else rows
+    if usable_only:
+        # 可用判定下推到 SQL（原先是取前 500 条再在 Python 里筛，第 500 条之后的
+        # 可用批次根本没被看过——接种点会以为"没苗了"，见 P1-54）。三个条件与
+        # `_batch_out` 里的 `usable` 逐字对应：没过效期、未封存、还有余量。
+        query = query.filter(
+            VaccineBatch.expire_date >= today_str,
+            VaccineBatch.status == "normal",
+            VaccineBatch.quantity - VaccineBatch.used_quantity > 0,
+        )
+    return [
+        _batch_out(b, today_str)
+        for b in paginate(query.order_by(VaccineBatch.id.desc()), response, offset, limit)
+    ]
 
 
 @router.post(

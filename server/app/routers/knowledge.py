@@ -3,12 +3,13 @@
 - 分类条目维护（管理层/公卫可发布，质管制度含有效期管理）
 - 检索：分类 + 标题关键字；过期条目默认过滤、可显式包含并标记
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import KnowledgeEntry, User
 
 router = APIRouter(prefix="/api/knowledge", tags=["统一知识库"], dependencies=[Depends(get_current_user)])
@@ -97,10 +98,13 @@ def update_entry(entry_id: int, body: EntryUpdate, db: Session = Depends(get_db)
 
 @router.get("", response_model=list[EntrySearchOut])
 def search_entries(
+    response: Response,
     category: str | None = None,
     q: str | None = None,
     include_expired: bool = False,
     today: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
 ):
     """知识检索：过期条目（有效期管理）默认不返回，include_expired=true 时返回并标记。"""
@@ -110,29 +114,25 @@ def search_entries(
         query = query.filter(KnowledgeEntry.category == category)
     if q:
         query = query.filter(KnowledgeEntry.title.contains(q))
-    # ⚠️ **截断在筛选之前**：`.limit(200)` 限的是扫描范围，下面才按 `expire_date 是否过期` 筛。
-    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
-    # "扫描的第 201~400 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
-    # ②**这本身是个漏报缺陷**：第 200 条之后的匹配项根本没被看过，
-    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
-    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
-    results = []
-    for e in query.order_by(KnowledgeEntry.id.desc()).limit(200).all():
-        expired = bool(e.expire_date) and e.expire_date < current
-        if expired and not include_expired:
-            continue
-        results.append(
-            {
-                "id": e.id,
-                "category": e.category,
-                "category_name": CATEGORIES.get(e.category, e.category),
-                "title": e.title,
-                "body": e.body,
-                "expire_date": e.expire_date,
-                "expired": expired,
-            }
+    if not include_expired:
+        # 过期判定下推到 SQL（原先是取前 200 条再在 Python 里跳过过期的，于是
+        # 第 200 条之后的在用条目根本没被看过——检索结果静默少条，见 P1-54）。
+        # `expire_date` 是 NOT NULL、空串表示"不设有效期"，对应原来的 `bool(...)`。
+        query = query.filter(
+            or_(KnowledgeEntry.expire_date == "", KnowledgeEntry.expire_date >= current)
         )
-    return results
+    return [
+        {
+            "id": e.id,
+            "category": e.category,
+            "category_name": CATEGORIES.get(e.category, e.category),
+            "title": e.title,
+            "body": e.body,
+            "expire_date": e.expire_date,
+            "expired": bool(e.expire_date) and e.expire_date < current,
+        }
+        for e in paginate(query.order_by(KnowledgeEntry.id.desc()), response, offset, limit)
+    ]
 
 
 @router.get("/expiring", response_model=list[EntryExpiringOut])

@@ -649,9 +649,12 @@ def list_batches(
     dependencies=[Depends(get_current_user)],
 )
 def expiring_drug_batches(
+    response: Response,
     days: int = Query(default=90, ge=1, le=3650),
     org_id: int | None = None,
     today: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -665,17 +668,13 @@ def expiring_drug_batches(
     limit_date = (today_d + timedelta(days=days)).isoformat()
     q = db.query(DrugBatch).filter(DrugBatch.expire_date <= limit_date)
     q = scope_org_list(db, user, q, DrugBatch, org_id)
-    # ⚠️ **截断在筛选之前**：`.limit(500)` 限的是扫描范围，下面才按 `quantity - used_quantity > 0（这一条其实可以下推到 SQL）` 筛。
-    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
-    # "扫描的第 501~1000 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
-    # ②**这本身是个漏报缺陷**：第 500 条之后的匹配项根本没被看过，
-    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
-    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
-    rows = [
-        b
-        for b in q.order_by(DrugBatch.expire_date, DrugBatch.id).limit(500).all()
-        if b.quantity - b.used_quantity > 0
-    ]
+    # 余量判定下推到 SQL（原先是取前 500 条再在 Python 里筛，第 500 条之后的
+    # 近效期批次根本没被看过——预警页少报的恰是最该看见的那几条，见 P1-54）。
+    # 判定照搬原来的 Python 条件：`quantity - used_quantity` 是**还在库房里的量**，
+    # 含退回的死货（`blocked_quantity`），与可发余量刻意不同——本页要提示的是
+    # "这些药还在架上、快到期了，按报废流程处理"，发不发得出去是另一回事。
+    q = q.filter(DrugBatch.quantity - DrugBatch.used_quantity > 0)
+    rows = paginate(q.order_by(DrugBatch.expire_date, DrugBatch.id), response, offset, limit)
     names = _stock_names(db, rows)
     return [
         {
