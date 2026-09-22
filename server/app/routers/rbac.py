@@ -297,7 +297,9 @@ def list_permissions(
         query = query.filter(Permission.module == module)
     if keyword:
         query = query.filter(Permission.path.like(f"%{keyword}%"))
-    rows = paginate(query.order_by(Permission.module, Permission.path), response, offset, limit)
+    rows = paginate(
+        query.order_by(Permission.module, Permission.path), response, offset, limit, max_limit=1000
+    )
     return [
         {"id": p.id, "code": p.code, "method": p.method, "path": p.path,
          "module": p.module, "builtin_roles": p.builtin_roles}

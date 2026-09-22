@@ -229,3 +229,78 @@ def test_路由遍历与契约棘轮同源():
     assert _iter_endpoints.__module__ == "test_api_contract_governance"
     assert APIRouter is not None and APIRoute is not None
     assert platform_routers is not None and spd_routers is not None
+
+
+def _paginate_calls() -> list[tuple[str, int, int]]:
+    """每处 `paginate(...)` 调用的 `(端点, limit 默认值, 实际生效的上限)`。
+
+    `deps.paginate` 的 `max_limit` 缺省是 **500**，而它是**后判的**：
+    `min(max(limit, 1), max_limit)`。所以 `limit` 的默认值比 `max_limit` 大时，
+    默认值根本到不了——不传参的调用方拿到的是 `max_limit` 条。
+    """
+    out: list[tuple[str, int, int]] = []
+    for mod, route in _iter_endpoints():
+        try:
+            src = inspect.getsource(route.endpoint)
+            tree = ast.parse(src.lstrip())
+        except (OSError, TypeError, SyntaxError):
+            continue
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
+        if fn is None:
+            continue
+        defaults = {
+            a.arg: d
+            for a, d in zip(fn.args.args[len(fn.args.args) - len(fn.args.defaults):],
+                            fn.args.defaults)
+        }
+        defaults.update({a.arg: d for a, d in zip(fn.args.kwonlyargs, fn.args.kw_defaults)
+                         if d is not None})
+        limit = defaults.get("limit")
+        if not isinstance(limit, ast.Constant) or not isinstance(limit.value, int):
+            continue
+        for call in ast.walk(fn):
+            if not (isinstance(call, ast.Call) and getattr(call.func, "id", None) == "paginate"):
+                continue
+            ceiling = 500  # deps.paginate 的 max_limit 缺省
+            if len(call.args) >= 5 and isinstance(call.args[4], ast.Constant):
+                ceiling = call.args[4].value
+            for kw in call.keywords:
+                if kw.arg == "max_limit" and isinstance(kw.value, ast.Constant):
+                    ceiling = kw.value.value
+            out.append((_key(mod, route), limit.value, ceiling))
+    return out
+
+
+def test_分页默认值不得被上限悄悄砍掉():
+    """`limit` 默认值 > `max_limit` = **默认行为被砍半而没人知道**。
+
+    这不是假想：本仓库把 `.limit(1000)` 改写成 `paginate(..., offset, limit)`
+    时，`limit` 默认值照原样取了 1000，却没同步把 `max_limit` 也抬到 1000——
+    于是三个端点（`rbac:list_permissions`、`surveillance` 的两条监测清单）
+    的实际返回从 1000 条变成 500 条。
+
+    **测试数据永远发现不了这个**：套件里这些表只有几行，1000 和 500 同解；
+    字节回归也照样全绿。要等县域平台的权限表或监测记录过了 500 行那天才出现，
+    表现又是「界面少了记录且没有任何提示」——正是这条闸门要防的那种缺陷。
+    所以判定只能是静态的：默认值必须真的拿得到。
+    """
+    clipped = sorted(
+        f"{key}（limit 默认 {limit} > 上限 {ceiling}，实际只给 {ceiling} 条）"
+        for key, limit, ceiling in _paginate_calls() if limit > ceiling
+    )
+    assert clipped == [], (
+        "这些端点的 limit 默认值被 max_limit 砍掉了——"
+        "要么把 max_limit 抬到原硬上限，要么把默认值降下来：\n  "
+        + "\n  ".join(clipped)
+    )
+
+
+def test_分页默认值闸门自证覆盖面(capsys):
+    calls = _paginate_calls()
+    with capsys.disabled():
+        print(f"\n  带 `limit` 默认值的 paginate 调用 {len(calls)} 处"
+              f"，其中默认值高于 deps.paginate 缺省上限(500) 的 "
+              f"{sum(1 for _, limit, _ in calls if limit > 500)} 处"
+              "（须各自显式抬 max_limit）")
+    assert calls, "一处都没扫到，说明 AST 判据失效了（而不是真没有分页端点）"

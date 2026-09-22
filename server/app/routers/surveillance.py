@@ -233,7 +233,7 @@ def list_syndromes(
     if end_date:
         query = query.filter(SyndromeMonitor.record_date <= end_date)
     rows = query.order_by(SyndromeMonitor.record_date.desc(), SyndromeMonitor.id.desc())
-    return [_syndrome_out(r) for r in paginate(rows, response, offset, limit)]
+    return [_syndrome_out(r) for r in paginate(rows, response, offset, limit, max_limit=1000)]
 
 
 # ============================================================ 病原监测
@@ -304,7 +304,7 @@ def list_pathogens(
     if end_date:
         query = query.filter(PathogenMonitor.record_date <= end_date)
     rows = query.order_by(PathogenMonitor.record_date.desc(), PathogenMonitor.id.desc())
-    return [_pathogen_out(r) for r in paginate(rows, response, offset, limit)]
+    return [_pathogen_out(r) for r in paginate(rows, response, offset, limit, max_limit=1000)]
 
 
 # ============================================================ 多点触发汇总
