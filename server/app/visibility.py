@@ -96,6 +96,117 @@ _NOT_A_RELATION = {
 }
 
 
+# ---------------------------------------------------------------------------
+# 带 patient_id 却**没有机构列**的表：为什么它们当不了依据（P1-35 的逐表判断）
+# ---------------------------------------------------------------------------
+#
+# `_relation_tables()` 的判据是"同时带 patient_id 与机构外键"。带了 patient_id
+# 却没有机构列的表因此**永远**进不了推导面——这不自动是缺陷，但必须逐张说清是
+# 哪一种情况，否则这批表就成了一片没人看的盲区：真正该当依据的那张混在里面，
+# 表现是医生在诊室里打不开本该看的档案，而**任何用例都不会因此变红**。
+#
+# 四类，判据各不相同（`tests/test_visibility_relation_derivation.py` 逐条校验，
+# 且**未分类即 fail-closed 变红**——新建一张这样的表必须当场表态）：
+#
+# ① `_NOT_A_SERVICE_NO_ORG`：补了机构列也不该当依据；
+# ② `_PARENT_IS_THE_RELATION`：明细/子表，父行已经是依据（父表须真在推导面里）；
+# ③ `_WRITER_ALREADY_NEEDED_BASIS`：写入接口在写之前就要求调用方**已有**依据，
+#    所以这张表不可能是某机构与该患者的"唯一联系"；
+# ④ `_ORG_VIA_PARENT`：机构**在父行上**（号源属于哪家、群组属于哪家），
+#    一跳即得——这一类是真缺口，已接上（见下方 `_org_via_parent_tables`）。
+#
+# 剩下的既不属于以上任何一类、机构也只能从"经办人此刻挂在哪家机构"倒推——
+# 那不是事实而是猜测（平台有派驻/调动，`users.org_id` 会变，历史记录的归属
+# 会跟着飘）。这批的正解是**给行补机构列并在写入时落库**，属带迁移的独立任务，
+# 逐张登记在 `_ORG_COLUMN_MISSING` 里，只减不增。
+
+#: ① 补了机构列也不该当依据。
+_NOT_A_SERVICE_NO_ORG = {
+    # 居民自己的账号（注册/登录路径写入），`patient_id` 是它绑定的档案。
+    # 账号与机构无关——拿它当依据等于"注册过就有人能看你的档案"。
+    "resident_accounts",
+    # 居民给自己添加家庭成员：居民侧的代管授权，不是机构在提供服务。
+    "resident_family_members",
+    # 失约黑名单按 `domain` **全域**生效，本就没有机构维度。
+    "service_blacklists",
+    # 对服务的**评价**。评价不产生服务关系（被评的那次服务另有带机构的表），
+    # 而且方向是反的：被差评的机构会因此获得调阅权。
+    "satisfaction_surveys",
+    # 居民申请更正自己的档案：数据治理流程，受理人是审核者不是服务者。
+    "correction_requests",
+    # 知情同意是**伴随**某次服务留下的凭据，那次服务本身各有带机构的表；
+    # 居民自助签署（`portal_sign_consent`）更是根本不属于任何机构。
+    "consent_records",
+}
+
+#: ② 明细/子表：父行已经是依据。值是父表名，`tests` 会校验父表真在推导面里
+#: ——父表哪天被排除或改名，这条理由就不成立了，不能只写在注释里。
+_PARENT_IS_THE_RELATION = {
+    # 每条费用明细必挂住院或就诊（写入接口二选一必填），两张父表都是依据。
+    "bill_details": ("admissions", "encounters"),
+}
+
+#: ③ 写入接口先要 `assert_patient_visible` 才写得进来——调用方写这一行的时候
+#: 就**已经**有依据了，所以这张表不会是"唯一联系"。值是写入点，便于复核。
+_WRITER_ALREADY_NEEDED_BASIS = {
+    "spd_assessments": "spd/routers/care.py:create_assessment",
+    "spd_call_tasks": "spd/routers/followup.py:create_call_task",
+    "spd_health_prescriptions": "spd/routers/care.py:create_health_prescription",
+    # 另有一条系统自动路径（`_auto_intervene`），它按**入组**生成，
+    # 而入组表自带机构、本就是依据——两条路径各自成立。
+    "spd_interventions": "spd/routers/care.py:create_interventions / _auto_intervene",
+    "spd_revisits": "spd/routers/care.py:create_revisit / _auto_intervene",
+}
+
+#: ④ 真缺口，但机构在父行上，一跳即得：(外键列, 父表, 父机构列)。
+#: 这几条**已接进判定**（见 `_org_via_parent_tables`），不再是欠账。
+_ORG_VIA_PARENT = {
+    # 预约：号源属于哪家机构，这次预约就是哪家在服务他。
+    # 不接上的后果很具体：居民在 X 院挂了号、还没就诊（没有 Encounter），
+    # 医生叫号时想先看既往档案——打不开。
+    "appointments": ("slot_id", "appointment_slots", "org_id"),
+    # 慢专病群组：群组属于哪家机构，把他拉进群就是哪家在管他。
+    "spd_group_members": ("group_id", "spd_groups", "org_id"),
+}
+
+#: 剩下的：确实应当构成依据，但行上取不到机构，只能从经办人**此刻**挂在哪家
+#: 机构倒推——那是猜测不是事实（派驻/调动会让 `users.org_id` 变，历史归属跟着飘）。
+#: 正解是补机构列并在写入时落库，带迁移，属独立任务。**只减不增。**
+_ORG_COLUMN_MISSING = {
+    "dual_channel_apps": "双通道用药申请：只有 created_by（申请医师）",
+    "maternal_records": "孕产档案：连经办人都没有，建档机构完全不可考",
+    "outbound_visits": "外院就诊补录：external_org_name 是**外部**机构名，不是本平台机构",
+    "special_disease_apps": "特殊病种申请：无机构、无经办人",
+    "vaccine_contraindications": "接种禁忌登记：只有解除人 lifted_by，登记时无线索",
+    "spd_consults": "在线咨询：居民侧发起，机构只在应答医师 doctor_id 身上",
+    "spd_edu_pushes": "宣教推送：只有 operator_id",
+    "spd_measurements": "体征测量：居民自测/设备上传/机构代录三条路径，只有 operator_id",
+    "spd_service_applies": "服务申请：居民侧发起，只有受理人 handled_by",
+}
+
+
+def _org_via_parent_tables():
+    """`_ORG_VIA_PARENT` 的运行期形态：(子模型, 外键列, 父模型, 父机构列)。
+
+    按**表名**解析而不是直接 import：`app/spd` 是可装卸子系统，平台侧不得 import
+    它的模型（`tests/test_spd_boundary.py` 的单向依赖）。这与 `_NOT_A_RELATION`
+    同一条理由，也同一个代价——表改名条目会静默失效，所以
+    `tests/test_visibility_relation_derivation.py` 逐条校验表与列都还在。
+    """
+    by_name = {
+        cls.__tablename__: cls
+        for cls in Base.registry._class_registry.values()
+        if hasattr(cls, "__tablename__")
+    }
+    out = []
+    for table, (fk_col, parent_table, parent_org) in _ORG_VIA_PARENT.items():
+        child, parent = by_name.get(table), by_name.get(parent_table)
+        if child is None or parent is None:
+            continue
+        out.append((child, fk_col, parent, parent_org))
+    return out
+
+
 def _relation_tables():
     """从模型元数据推导"患者↔机构"关系表：(模型, 机构列名列表)。
 
@@ -363,6 +474,20 @@ def _patient_basis_uncached(db: Session, user: User, patient_id: int) -> str | N
             # 事后审计要一眼分得出"这次调阅是因为转诊"。
             return "referral" if model is Referral else "service"
 
+    # 机构在**父行**上的那几张（`_ORG_VIA_PARENT`）：号源属于哪家、群组属于哪家。
+    # 这些行自己没有机构列，进不了上面的推导面，但父行的机构就是服务机构，
+    # 一跳即得——不接上的后果很具体：居民在 X 院挂了号、还没就诊（没有 Encounter），
+    # 医生叫号时想先看既往档案，打不开。
+    for model, fk_col, parent, parent_org in _org_via_parent_tables():
+        if (
+            db.query(model.id)
+            .join(parent, getattr(model, fk_col) == parent.id)
+            .filter(model.patient_id == patient_id, getattr(parent, parent_org) == org_id)
+            .first()
+            is not None
+        ):
+            return "service"
+
     # 患者授权：过期与撤销都当作无效，判定见 `active_authorization_grants`
     # （与 patients.check_authorization 共用同一份，不再两处各判一遍有效期）。
     if active_authorization_grants(db, patient_id, org_id):
@@ -468,6 +593,15 @@ def visible_patient_ids(db: Session, user: User):
         # 用 sa.or_(*conds) 而不是循环里累积 None，省掉一个"必不为 None"的推理。
         conds = [getattr(model, col) == user.org_id for col in org_cols]
         parts.append(select(model.patient_id).where(sa.or_(*conds)))
+    # 与 `_patient_basis_uncached` 同步：机构在父行上的那几张也要算进来。
+    # 两处不同步的后果是**自相矛盾**——档案打得开，患者却不在清单里
+    # （或反过来），而两边各自都"看着正常"。
+    for model, fk_col, parent, parent_org in _org_via_parent_tables():
+        parts.append(
+            select(model.patient_id)
+            .join(parent, getattr(model, fk_col) == parent.id)
+            .where(getattr(parent, parent_org) == user.org_id)
+        )
     return parts[0].union_all(*parts[1:]) if len(parts) > 1 else parts[0]
 
 

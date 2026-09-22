@@ -24,7 +24,16 @@ import warnings
 
 from app.main import app  # noqa: F401  触发全部模型 import（含 spd）
 from app.database import Base
-from app.visibility import _NOT_A_RELATION, _relation_tables
+from app.visibility import (
+    _NOT_A_SERVICE_NO_ORG,
+    _NOT_A_RELATION,
+    _ORG_COLUMN_MISSING,
+    _ORG_VIA_PARENT,
+    _PARENT_IS_THE_RELATION,
+    _WRITER_ALREADY_NEEDED_BASIS,
+    _org_via_parent_tables,
+    _relation_tables,
+)
 
 
 def _mapped_classes() -> list[type]:
@@ -121,3 +130,114 @@ def test_推导出的每张表都真的能用于判定():
         if missing or not org_cols:
             broken.append(f"{cls.__tablename__}: {missing or '机构列为空'}")
     assert broken == [], f"推导结果里这些表的机构列有问题：{broken}"
+
+
+# ---------------------------------------------------------------------------
+# P1-35：带 patient_id 却没有机构列的表，逐张说清是哪一种情况
+# ---------------------------------------------------------------------------
+#
+# 这批表**永远**进不了 `_relation_tables()` 的推导面。此前它们只是被打印成一行
+# 名字——数得清，却没人判断过。一片没人判断的盲区里如果真混着一张该当依据的表，
+# 表现是医生在诊室里打不开本该看的档案，而**任何用例都不会因此变红**。
+#
+# 下面几条把四类分类逐条校验，并且**未分类即变红**（fail-closed）：新建一张
+# 带 patient_id 而没有机构列的表，必须当场表态属于哪一类。
+
+_JUDGED = {
+    "不构成服务": _NOT_A_SERVICE_NO_ORG,
+    "父行即依据": set(_PARENT_IS_THE_RELATION),
+    "写入前已需依据": set(_WRITER_ALREADY_NEEDED_BASIS),
+    "机构在父行(已接上)": set(_ORG_VIA_PARENT),
+    "缺机构列(待补)": set(_ORG_COLUMN_MISSING),
+}
+
+
+def _no_org_tables() -> set[str]:
+    return {c.__tablename__ for c in _patient_tables() if not _org_columns(c)}
+
+
+def test_每张无机构列的表都已逐张判过():
+    """未分类即变红——盲区不许再长回来。"""
+    judged = set().union(*_JUDGED.values())
+    unjudged = sorted(_no_org_tables() - judged)
+    assert unjudged == [], (
+        f"这些表带 patient_id 却没有机构列，且一类都没归：{unjudged}。"
+        " 必须当场表态（见 `visibility` 里四份清单的说明）：它要么本就不构成服务关系、"
+        " 要么父行已是依据、要么写入前就已需要依据、要么机构在父行上可一跳接进来、"
+        " 要么就是真缺口（补机构列，登记进 `_ORG_COLUMN_MISSING`）。"
+        " 不表态的后果不是报错，是医生打不开本该看的档案而没有任何提示。"
+    )
+
+
+def test_分类清单里没有陈旧条目():
+    """表改名/删表后条目会静默失效——四份清单都按表名匹配。"""
+    no_org = _no_org_tables()
+    stale = {
+        name: sorted(tables - no_org)
+        for name, tables in _JUDGED.items()
+        if tables - no_org
+    }
+    assert stale == {}, (
+        f"这些条目已经对不上真实的表（改名、删表，或那张表现在已经有机构列了）：{stale}"
+    )
+
+
+def test_每张表只归一类():
+    """归两类等于没归——两条理由里哪条失效了都看不出来。"""
+    counts: dict[str, list[str]] = {}
+    for label, tables in _JUDGED.items():
+        for t in tables:
+            counts.setdefault(t, []).append(label)
+    dup = {t: labels for t, labels in counts.items() if len(labels) > 1}
+    assert dup == {}, f"这些表归了不止一类：{dup}"
+
+
+def test_父行即依据这一类的父表真在推导面里():
+    """`bill_details` 说"父行已经是依据"——那父表就必须真的推导得进来。
+
+    父表哪天被排除、改名或丢了机构列，这条理由当场不成立，而子表这边
+    不会有任何迹象。所以理由要**可校验**，不能只写在注释里。
+    """
+    broken = {
+        child: sorted(set(parents) - RELATION_NAMES)
+        for child, parents in _PARENT_IS_THE_RELATION.items()
+        if set(parents) - RELATION_NAMES
+    }
+    assert broken == {}, (
+        f"这些子表的理由是「父行即依据」，但父表并不在推导面里：{broken}。"
+        " 理由不成立了，这张子表要重新判。"
+    )
+
+
+def test_一跳机构的外键与父列都还在():
+    """`_ORG_VIA_PARENT` 按表名与列名字符串写，改名会静默失效——失效方向是**收紧**
+    （少一条依据），不会有任何用例变红，只会让医生打不开档案。"""
+    resolved = {child.__tablename__ for child, *_ in _org_via_parent_tables()}
+    assert resolved == set(_ORG_VIA_PARENT), (
+        f"这些条目解析不出模型（表改名或已删除）：{sorted(set(_ORG_VIA_PARENT) - resolved)}"
+    )
+    broken = []
+    for child, fk_col, parent, parent_org in _org_via_parent_tables():
+        if fk_col not in child.__table__.columns:
+            broken.append(f"{child.__tablename__}.{fk_col} 不存在")
+        if parent_org not in parent.__table__.columns:
+            broken.append(f"{parent.__tablename__}.{parent_org} 不存在")
+        if "id" not in parent.__table__.columns:
+            broken.append(f"{parent.__tablename__} 没有 id 主键，一跳接不上")
+    assert broken == [], f"一跳配置对不上真实的列：{broken}"
+
+
+def test_待补机构列的每条都写了理由():
+    reasonless = sorted(t for t, why in _ORG_COLUMN_MISSING.items() if len(why.strip()) < 8)
+    assert reasonless == [], f"这些缺口没写理由（或太短）：{reasonless}"
+
+
+def test_逐表判断自证(capsys):
+    """把四类的规模打印出来——闸门要自己说清楚这 23 张表各被判成了什么。"""
+    with capsys.disabled():
+        print(f"\n  [P1-35] 带 patient_id 而无机构列的表 {len(_no_org_tables())} 张，逐张判过：")
+        for label, tables in _JUDGED.items():
+            print(f"    {len(tables):3}  {label}")
+        print(f"  其中 {len(_ORG_VIA_PARENT)} 张的机构在父行上，已接进判定；"
+              f"{len(_ORG_COLUMN_MISSING)} 张是待补机构列的真缺口（只减不增）")
+    assert _no_org_tables()
