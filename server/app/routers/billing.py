@@ -26,7 +26,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta
 from typing import Protocol, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, insert, literal, select, update
 from sqlalchemy.engine import CursorResult
@@ -40,7 +40,7 @@ from ..egress import egress_url_allowed, verify_signature
 from ..payments import HttpGatewayPaymentGateway, to_fen
 from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
     Admission,
     BillDetail,
@@ -310,14 +310,22 @@ def create_charge_item(body: ChargeItemCreate, db: Session = Depends(get_db)):
 
 @router.get("/charge-items", response_model=list[ChargeItemOut])
 def list_charge_items(
-    active: bool | None = None, category: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    active: bool | None = None,
+    category: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
 ):
     q = db.query(ChargeItem)
     if active is not None:
         q = q.filter(ChargeItem.active.is_(active))
     if category:
         q = q.filter(ChargeItem.category == category)
-    return [_charge_item_out(i) for i in q.order_by(ChargeItem.code).limit(500).all()]
+    return [
+        _charge_item_out(i)
+        for i in paginate(q.order_by(ChargeItem.code), response, offset, limit)
+    ]
 
 
 class RepriceIn(BaseModel):
@@ -385,15 +393,22 @@ def reprice_charge_item(
 @router.get("/charge-items/{item_id}/price-history",
             response_model=list[ChargePriceChangeOut],
             dependencies=[Depends(require_admin)])
-def charge_price_history(item_id: int, db: Session = Depends(get_db)):
+def charge_price_history(
+    item_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     if db.get(ChargeItem, item_id) is None:
         raise HTTPException(status_code=404, detail="收费项目不存在")
-    rows = (
+    rows = paginate(
         db.query(ChargePriceChange)
         .filter(ChargePriceChange.item_id == item_id)
-        .order_by(ChargePriceChange.id.desc())
-        .limit(200)
-        .all()
+        .order_by(ChargePriceChange.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {
@@ -487,10 +502,13 @@ def create_bill_detail(
 
 @router.get("/details", response_model=list[BillDetailOut])
 def list_bill_details(
+    response: Response,
     patient_id: int | None = None,
     admission_id: int | None = None,
     encounter_id: int | None = None,
     settled: bool | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     q = db.query(BillDetail)
@@ -503,7 +521,10 @@ def list_bill_details(
         q = q.filter(
             BillDetail.settlement_id.isnot(None) if settled else BillDetail.settlement_id.is_(None)
         )
-    return [_bill_detail_out(d) for d in q.order_by(BillDetail.id.desc()).limit(500).all()]
+    return [
+        _bill_detail_out(d)
+        for d in paginate(q.order_by(BillDetail.id.desc()), response, offset, limit)
+    ]
 
 
 # ---------- 住院押金（工程包 B1） ----------
@@ -697,7 +718,12 @@ def refund_deposit(
 
 @router.get("/deposits", response_model=list[DepositOut])
 def list_deposits(
-    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    admission_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     admission = db.get(Admission, admission_id)
     if admission is None:
@@ -705,12 +731,13 @@ def list_deposits(
     # 押金流水挂在住院记录上，等同患者维度数据：按可见性判定并留痕
     assert_patient_visible(db, user, admission.patient_id, resource="deposit")
     balance = deposit_balance(db, admission_id)
-    rows = (
+    rows = paginate(
         db.query(Deposit)
         .filter(Deposit.admission_id == admission_id)
-        .order_by(Deposit.id.desc())
-        .limit(200)
-        .all()
+        .order_by(Deposit.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [_deposit_out(d, balance) for d in rows]
 
@@ -754,6 +781,12 @@ def deposit_alerts(
     q = db.query(Admission).filter(Admission.status == "admitted")
     q = scope_patient_list(db, user, q, Admission, None, "billing")
     alerts = []
+    # 这个 `.limit(500)` 限的是**扫描范围**而不是输出条数：下面按 gap 逐条筛，
+    # 输出是筛完的子集。所以它**不能照本模块其它清单那样改走 `paginate`**——
+    # offset 会去翻"扫描的第 501~1000 个在院患者"，而 `X-Total-Count` 会报成
+    # 在院人数而不是预警条数，两个都是错的答案。真要分页得先把 gap 判定下推到
+    # SQL（余额与未结费用都是聚合），那是行为与性能都要重测的改动，另案。
+    # 登记在 P2-8 的欠账里，不当豁免。
     for admission in q.order_by(Admission.id).limit(500).all():
         balance = deposit_balance(db, admission.id)
         unsettled = unsettled_amount(db, admission.id)
@@ -952,13 +985,22 @@ def create_settlement(
 
 @router.get("/settlements", response_model=list[SettlementOut])
 def list_settlements(
-    patient_id: int | None = None, bill_type: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    patient_id: int | None = None,
+    bill_type: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     q = db.query(Settlement)
     q = scope_patient_list(db, user, q, Settlement, patient_id, "billing")
     if bill_type:
         q = q.filter(Settlement.bill_type == bill_type)
-    return [_settlement_out(s) for s in q.order_by(Settlement.id.desc()).limit(200).all()]
+    return [
+        _settlement_out(s)
+        for s in paginate(q.order_by(Settlement.id.desc()), response, offset, limit)
+    ]
 
 
 @router.get("/stats", response_model=list[BillingStatOut])
@@ -1293,9 +1335,12 @@ def create_payment(
 
 @router.get("/payments", response_model=list[PaymentOut])
 def list_payments(
+    response: Response,
     settlement_id: int | None = None,
     status: str | None = None,
     channel: str | None = None,
+    offset: int = 0,
+    limit: int = 300,
     db: Session = Depends(get_db),
 ):
     q = db.query(PaymentOrder)
@@ -1305,7 +1350,10 @@ def list_payments(
         q = q.filter(PaymentOrder.status == status)
     if channel:
         q = q.filter(PaymentOrder.channel == channel)
-    return [_payment_out(o) for o in q.order_by(PaymentOrder.id.desc()).limit(300).all()]
+    return [
+        _payment_out(o)
+        for o in paginate(q.order_by(PaymentOrder.id.desc()), response, offset, limit)
+    ]
 
 
 class PaymentCallbackOut(BaseModel):
@@ -1600,12 +1648,27 @@ def run_reconciliation(
 
 
 @router.get("/reconciliation", response_model=list[ReconciliationBatchOut])
-def list_reconciliation(date: str | None = None, db: Session = Depends(get_db)):
-    """对账单列表与差异明细（date 缺省返回最近 30 个批次）。"""
+def list_reconciliation(
+    response: Response,
+    date: str | None = None,
+    offset: int = 0,
+    limit: int = 30,
+    db: Session = Depends(get_db),
+):
+    """对账单列表与差异明细（`limit` 缺省 30，即"最近 30 个批次"）。
+
+    `limit` 的默认值就是原先写死的 30——不传参的调用方拿到的批次一字不差；
+    要往前翻历史批次给 `offset`，总批次数见 `X-Total-Count`。
+    """
     q = db.query(ReconciliationBatch)
     if date:
         q = q.filter(ReconciliationBatch.date == date)
-    batches = q.order_by(ReconciliationBatch.date.desc(), ReconciliationBatch.id.desc()).limit(30).all()
+    batches = paginate(
+        q.order_by(ReconciliationBatch.date.desc(), ReconciliationBatch.id.desc()),
+        response,
+        offset,
+        limit,
+    )
     result = []
     for batch in batches:
         diffs = (

@@ -416,7 +416,13 @@ class SpdScaleOut(BaseModel):
 
 
 @router.get("/scales", response_model=list[SpdScaleOut])
-def list_screen_scales(program_code: str = "", db: Session = Depends(get_db)):
+def list_screen_scales(
+    response: Response,
+    program_code: str = "",
+    offset: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
     """可自查的筛查量表清单（#11/#13）。只暴露已发布的筛查类量表。"""
     query = db.query(SpdScale).filter(
         SpdScale.status == "published", SpdScale.category == "screen"
@@ -426,7 +432,7 @@ def list_screen_scales(program_code: str = "", db: Session = Depends(get_db)):
     return [
         {"id": s.id, "code": s.code, "name": s.name, "program_code": s.program_code,
          "items": s.items or []}
-        for s in query.order_by(SpdScale.id).limit(50).all()
+        for s in paginate(query.order_by(SpdScale.id), response, offset, limit)
     ]
 
 
@@ -591,17 +597,21 @@ class SpdServiceApplyOut(BaseModel):
 
 @router.get("/service-applies", response_model=list[SpdServiceApplyOut])
 def my_applies(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SpdServiceApply)
         .filter(SpdServiceApply.patient_id == patient.id)
-        .order_by(SpdServiceApply.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdServiceApply.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "program_code": r.program_code, "status": r.status,
@@ -742,8 +752,11 @@ class SpdTaskStatusOut(BaseModel):
 
 @router.get("/tasks", response_model=list[SpdTaskOut])
 def my_tasks(
+    response: Response,
     patient_id: int | None = None,
     status: str = "",
+    offset: int = 0,
+    limit: int = 100,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -752,7 +765,7 @@ def my_tasks(
     query = db.query(SpdTask).filter(SpdTask.patient_id == patient.id)
     if status:
         query = query.filter(SpdTask.status == status)
-    rows = query.order_by(SpdTask.due_date).limit(100).all()
+    rows = paginate(query.order_by(SpdTask.due_date), response, offset, limit)
     return [
         {"id": r.id, "title": r.title, "task_type": r.task_type, "status": r.status,
          "due_date": r.due_date, "form_code": r.form_code,
@@ -849,18 +862,22 @@ class SpdFollowupOut(BaseModel):
 
 @router.get("/followups", response_model=list[SpdFollowupOut])
 def my_followups(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 100,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """随访计划与历史记录（#9/#12）。"""
     patient = _patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SpdFollowupRecord)
         .filter(SpdFollowupRecord.patient_id == patient.id)
-        .order_by(SpdFollowupRecord.planned_at.desc())
-        .limit(100)
-        .all()
+        .order_by(SpdFollowupRecord.planned_at.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "scene": r.scene, "planned_at": r.planned_at,
@@ -943,18 +960,22 @@ class SpdInterventionOut(BaseModel):
 
 @router.get("/interventions", response_model=list[SpdInterventionOut])
 def my_interventions(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """医生推送的干预方案（#10）。"""
     patient = _patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SpdIntervention)
         .filter(SpdIntervention.patient_id == patient.id)
-        .order_by(SpdIntervention.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdIntervention.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "goal": r.goal, "content": r.content, "measures": r.measures,
@@ -1015,17 +1036,21 @@ class SpdEduPushOut(BaseModel):
 
 @router.get("/edu", response_model=list[SpdEduPushOut])
 def my_education(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SpdEduPush)
         .filter(SpdEduPush.patient_id == patient.id)
-        .order_by(SpdEduPush.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdEduPush.id.desc()),
+        response,
+        offset,
+        limit,
     )
     materials = {
         m.id: m
@@ -1077,17 +1102,21 @@ class SpdRevisitOut(BaseModel):
 
 @router.get("/revisits", response_model=list[SpdRevisitOut])
 def my_revisits(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SpdRevisit)
         .filter(SpdRevisit.patient_id == patient.id)
-        .order_by(SpdRevisit.plan_date.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdRevisit.plan_date.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "plan_date": r.plan_date, "dept": r.dept, "items": r.items,
@@ -1108,17 +1137,21 @@ class SpdAssessmentOut(BaseModel):
 
 @router.get("/assessments", response_model=list[SpdAssessmentOut])
 def my_assessments(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SpdAssessment)
         .filter(SpdAssessment.patient_id == patient.id)
-        .order_by(SpdAssessment.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdAssessment.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "scale_code": r.scale_code, "score": r.score,
@@ -1144,18 +1177,22 @@ class SpdReferralOut(BaseModel):
 
 @router.get("/referrals", response_model=list[SpdReferralOut])
 def my_referrals(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """转诊记录与进度（#16/#17）。"""
     patient = _patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SpdReferralCase)
         .filter(SpdReferralCase.patient_id == patient.id)
-        .order_by(SpdReferralCase.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SpdReferralCase.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "direction": r.direction, "status": r.status,
@@ -1282,17 +1319,21 @@ class SpdConsultOut(BaseModel):
 
 @router.get("/consults", response_model=list[SpdConsultOut])
 def my_consults(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 30,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     patient = _patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SpdConsult)
         .filter(SpdConsult.patient_id == patient.id)
-        .order_by(SpdConsult.id.desc())
-        .limit(30)
-        .all()
+        .order_by(SpdConsult.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": r.id, "program_code": r.program_code, "doctor_id": r.doctor_id,
@@ -1312,7 +1353,10 @@ class SpdConsultMessageOut(BaseModel):
             response_model=list[SpdConsultMessageOut])
 def my_consult_messages(
     consult_id: int,
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -1320,12 +1364,13 @@ def my_consult_messages(
     consult = db.get(SpdConsult, consult_id)
     if consult is None or consult.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="咨询会话不存在")
-    rows = (
+    rows = paginate(
         db.query(SpdConsultMessage)
         .filter(SpdConsultMessage.consult_id == consult_id)
-        .order_by(SpdConsultMessage.id)
-        .limit(500)
-        .all()
+        .order_by(SpdConsultMessage.id),
+        response,
+        offset,
+        limit,
     )
     return [
         {"id": m.id, "sender": m.sender, "content": m.content,

@@ -869,11 +869,20 @@ def health_commission_workbench(
 def region_stats(
     program_code: str = "",
     org_id: int | None = None,
-    period: str = "",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """区域慢专病结构分析（卫健端 #2）：患者结构、分级诊疗、路径执行、服务包。
+
+    **删掉了一个受理即丢的 `period` 参数**（P2-12）：它声明在签名里、
+    函数体一次都没读，于是调用方传 `period=2026-09` 会**静默拿到全量**——
+    比死代码坏，是一个会骗人的入参：没有报错，看起来筛了。
+    删而不实现，是因为本接口出的是**当期结构快照**（各病种/风险/阶段/机构的
+    在管人数、年龄性别构成），没有一项是按周期聚合的，`period` 在这里没有
+    自洽的语义。删除对响应字节零影响：FastAPI 默认忽略未声明的查询参数，
+    老调用方继续传它拿到的结果与今天一模一样；变的只是 OpenAPI 不再声明
+    一个不存在的能力。前端没有在传（`pages-spd.js` 只调裸路径）。
+    由 `tests/test_query_param_honesty.py` 钉住不再出现同形状的第二处。
 
     与工作台分开是因为这是**可下钻的分析页**，参数组合多、返回体大，
     塞进工作台会让首屏变慢。

@@ -1,5 +1,5 @@
 """综合管理补齐：㉚人力资源、㉛财务、㉜物资、㉞行政公文，及①-④排班/质控。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -14,7 +14,7 @@ from ..visibility import (
     scope_org_list,
     stats_org_ids,
 )
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import (
     Asset,
     AssetMovement,
@@ -256,10 +256,17 @@ def create_employee(body: EmployeeCreate, db: Session = Depends(get_db), user: U
 
 
 @router.get("/employees", response_model=list[EmployeeOut])
-def list_employees(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_employees(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Employee)
     query = scope_org_list(db, user, query, Employee, org_id)
-    return query.order_by(Employee.id).limit(500).all()
+    return paginate(query.order_by(Employee.id), response, offset, limit)
 
 
 class SecondmentCreate(BaseModel):
@@ -460,10 +467,17 @@ def create_asset(body: AssetCreate, db: Session = Depends(get_db), user: User = 
 
 
 @router.get("/assets", response_model=list[AssetOut])
-def list_assets(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_assets(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Asset)
     query = scope_org_list(db, user, query, Asset, org_id)
-    return query.order_by(Asset.id).limit(500).all()
+    return paginate(query.order_by(Asset.id), response, offset, limit)
 
 
 @router.post(
@@ -551,11 +565,17 @@ def publish_doc(doc_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/docs", response_model=list[DocOut])
-def list_docs(status: str | None = None, db: Session = Depends(get_db)):
+def list_docs(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(OfficialDoc)
     if status:
         query = query.filter(OfficialDoc.status == status)
-    return query.order_by(OfficialDoc.id.desc()).limit(200).all()
+    return paginate(query.order_by(OfficialDoc.id.desc()), response, offset, limit)
 
 
 # ---------- ①-④ 共享中心排班与质控 ----------
@@ -588,13 +608,22 @@ def create_roster(body: RosterCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/rosters", response_model=list[RosterOut])
-def list_rosters(center_type: str | None = None, duty_date: str | None = None, db: Session = Depends(get_db)):
+def list_rosters(
+    response: Response,
+    center_type: str | None = None,
+    duty_date: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(DutyRoster)
     if center_type:
         query = query.filter(DutyRoster.center_type == center_type)
     if duty_date:
         query = query.filter(DutyRoster.duty_date == duty_date)
-    return query.order_by(DutyRoster.duty_date, DutyRoster.id).limit(200).all()
+    return paginate(
+        query.order_by(DutyRoster.duty_date, DutyRoster.id), response, offset, limit
+    )
 
 
 class QcCreate(BaseModel):
@@ -628,13 +657,20 @@ def add_qc(body: QcCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/qc", response_model=list[QcOut])
-def list_qc(center_type: str | None = None, result: str | None = None, db: Session = Depends(get_db)):
+def list_qc(
+    response: Response,
+    center_type: str | None = None,
+    result: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(QcRecord)
     if center_type:
         query = query.filter(QcRecord.center_type == center_type)
     if result:
         query = query.filter(QcRecord.result == result)
-    return query.order_by(QcRecord.id.desc()).limit(200).all()
+    return paginate(query.order_by(QcRecord.id.desc()), response, offset, limit)
 
 
 # ---------- 终审轮：科室信息基础库（浙#9） ----------
@@ -814,7 +850,13 @@ def expiring_contracts(days: int = 60, today: str | None = None, db: Session = D
 
 
 @router.get("/staff-contracts", response_model=list[StaffContractOut])
-def list_staff_contracts(employee_id: int | None = None, db: Session = Depends(get_db)):
+def list_staff_contracts(
+    response: Response,
+    employee_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     q = db.query(StaffContract)
     if employee_id is not None:
         q = q.filter(StaffContract.employee_id == employee_id)
@@ -827,7 +869,7 @@ def list_staff_contracts(employee_id: int | None = None, db: Session = Depends(g
             "end_date": c.end_date,
             "status": c.status,
         }
-        for c in q.order_by(StaffContract.id.desc()).limit(200).all()
+        for c in paginate(q.order_by(StaffContract.id.desc()), response, offset, limit)
     ]
 
 

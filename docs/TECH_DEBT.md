@@ -178,7 +178,7 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 | P2-5 | `response_model=` 覆盖率 14% → **99.8%**（欠账 757 → **2**，85 个模块**全部**零欠账，棘轮 `tests/test_api_contract_governance.py` 只许调小）。剩下的 2 笔**加不了契约**（`GET /api/spd/scores-analysis` 与 `GET /api/audit/verify`）：两条分支的键序互不相容，`exclude_unset` 按声明顺序输出，一份声明给不出两种顺序；要收得先改响应字节，已在两处 handler 与治理文档里写明。基线停在 2 而不是 0——新端点漏契约会当场顶到 3 |
 | P2-6 | 无统一响应信封；动作响应键各自发明；`X-Total-Count` 三种来源 |
 | P2-7 | 状态流转 3 种风格；RPC 动词 80 个；PUT 仅 1 次（孤例） |
-| P2-8 | paginate 仅 32/89 文件；210 处直接 `.limit()` 会随数据量静默截断 |
+| P2-8 | **已建闸门**（`tests/test_pagination_governance.py`，此前这条债完全没人看着）。分母从路由推导：`response_model` 为 `list[...]` 的 GET 端点 285 个，四桶实测 71 已分页 / 1 半分页 / 139 静默截断 / 74 无上限 → 欠账基线 **214**，只许调小。首轮清掉 **42 个纯输出上限**（billing/admin_mgmt/inpatient/appointments/portal/spd/portal），**214 → 172**：`limit` 入参默认值取原硬上限，老调用方拿到的行一字不差，只多一个 `X-Total-Count` 响应头。刻意没动两类并写明理由：**扫描上限**（`.limit()` 限扫描范围、输出还要再筛或重排，改 paginate 会翻错页且总数报错，2 处已就地注明）与**无上限那 74 个**（加默认上限会真的截断，属行为变更；按单患者收敛的清单加上限反而漏记录，全域清单才是真危险）|
 
 ### 超大文件
 | 文件 | 行数 | 问题 |
@@ -194,10 +194,10 @@ AST 闸门判据只覆盖 19.9% 的写入点（本轮 4 个新 check-then-act �
 ### 死代码
 | # | 项 | 位置 |
 |---|---|---|
-| P2-9 | `PLATFORM_MODELS`（零引用） | `spd/platform.py:56` |
-| P2-10 | `register_collector` / `set_call_provider`（从未调用） | `spd/collectors.py:117`；`callcenter.py:81` |
-| P2-11 | `collect_internal` 只 count 不写库却注册给 HIS/EMR 真实源类型 | `spd/collectors.py:47` |
-| P2-12 | `region_stats` 的 `period` 参数、`distribute_candidates` 的 `user` 参数未用（后者导致缺机构校验） | `workbench.py:394`；`population.py:405` |
+| ~~P2-9~~ | ✅ **已不存在**：全仓库零匹配（`grep PLATFORM_MODELS` 在 app/ 与 tests/ 下都没有命中），该符号早已删除。登记表落后于现实 | 已关账 |
+| ~~P2-10~~ | ⚠️ **这条登记错了**：两者都**是活的注入口**，且各有用例证明它真能用（`test_spd_p0p1.py:243` 用 `set_call_provider` 注入一个会抛的 provider、`:649` 用 `register_collector` 注册一个假 LIS）。「生产代码里没有调用」不等于「死代码」——实施期接真实院内系统就是从这两个口进来的，把它们当死代码删掉会把接入通道一起删掉。假的死代码条目比没有条目更坏：它会引来一次错误的清理 | 已订正 |
+| ~~P2-11~~ | ✅ **已修**：函数改名为 `collect_encounter_probe` 并**不再注册给 HIS/EMR**，那两个源类型现在如实显示「未注册采集器」（进实施待办、监控页告警）。docstring 里写明了为什么：**「看起来是好的」比「明摆着没接」更危险**——没接会有人去接，看起来好的没人会去查 | 已关账 |
+| P2-12 | **一半已修、一半仍在**：`distribute_candidates` 的 `user` 现在用上了（`assert_org_writable(db, user, body.org_id)`，P1-39 那轮补的），缺机构校验的问题已消除。`region_stats` 的 `period` **仍是受理即丢**：声明了这个查询参数但函数体一次都没读它，于是调用方传 `period=2026-09` 会**静默拿到全量**——比死代码更坏，是一个会骗人的入参。要么实现要么删掉（前端没在传，删掉对响应字节零影响）| `app/spd/routers/workbench.py` |
 | P2-13 | 多处未使用 import；`emergency.py:12`/`telemedicine.py:10` 死 import | |
 
 ### 已确认功能 Bug（非风格）

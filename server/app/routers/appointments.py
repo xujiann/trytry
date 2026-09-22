@@ -1,7 +1,7 @@
 """预约诊疗：机构发布分时段号源，居民一站式预约（挂号/检查/检验）。"""
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 from ..visibility import scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_roles,
+    resolve_business_date,
+)
 from ..models import (
     Appointment,
     AppointmentSlot,
@@ -76,6 +82,12 @@ def find_doctors(
         query = query.filter(
             (Employee.name.like(like)) | (Employee.title.like(like)) | (Employee.position.like(like))
         )
+    # 这个 `.limit(200)` 限的是**员工扫描范围**而不是输出条数：下面按余号把
+    # 有号的排前面并重排整份清单，输出顺序与扫描顺序不同。改走 `paginate` 会
+    # 变成"翻第 201~400 个员工再各自排序"，翻页结果彼此不连续；`X-Total-Count`
+    # 也会报成员工总数而不是寻医结果数。真要分页得先把余号数下推到 SQL
+    # （现在是逐医师在 Python 里数号源），那是行为与性能都要重测的改动，另案。
+    # 登记在 P2-8 的欠账里，不当豁免。
     employees = query.order_by(Employee.id).limit(200).all()
     if not employees:
         return []
@@ -249,12 +261,25 @@ def batch_create_slots(body: SlotBatchCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/slots", response_model=list[SlotOut])
-def list_slots(org_id: int | None = None, slot_date: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_slots(
+    response: Response,
+    org_id: int | None = None,
+    slot_date: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(AppointmentSlot)
     query = scope_org_list(db, user, query, AppointmentSlot, org_id)
     if slot_date:
         query = query.filter(AppointmentSlot.slot_date == slot_date)
-    return query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(500).all()
+    return paginate(
+        query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time),
+        response,
+        offset,
+        limit,
+    )
 
 
 def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
@@ -348,10 +373,17 @@ def book(body: AppointmentCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[AppointmentOut])
-def list_appointments(patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_appointments(
+    response: Response,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Appointment)
     query = scope_patient_list(db, user, query, Appointment, patient_id, "appointment")
-    return query.order_by(Appointment.id.desc()).limit(500).all()
+    return paginate(query.order_by(Appointment.id.desc()), response, offset, limit)
 
 
 @router.post(
@@ -452,14 +484,20 @@ def add_blacklist(body: BlacklistCreate, db: Session = Depends(get_db)):
 
 @router.get("/blacklist", response_model=list[BlacklistOut],
             dependencies=[Depends(get_current_user)])
-def list_blacklist(domain: str | None = None, db: Session = Depends(get_db)):
+def list_blacklist(
+    response: Response,
+    domain: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
     query = db.query(ServiceBlacklist)
     if domain:
         query = query.filter(ServiceBlacklist.domain == domain)
     return [
         {"id": b.id, "domain": b.domain, "domain_name": BLACKLIST_DOMAINS.get(b.domain, b.domain),
          "patient_id": b.patient_id, "reason": b.reason}
-        for b in query.order_by(ServiceBlacklist.id.desc()).limit(500).all()
+        for b in paginate(query.order_by(ServiceBlacklist.id.desc()), response, offset, limit)
     ]
 
 

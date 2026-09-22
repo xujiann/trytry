@@ -71,7 +71,13 @@ from ..models import (
     Ward,
     utcnow,
 )
-from ..deps import clear_auth_cookies, set_auth_cookies, token_from_request, wants_cookie_auth
+from ..deps import (
+    clear_auth_cookies,
+    paginate,
+    set_auth_cookies,
+    token_from_request,
+    wants_cookie_auth,
+)
 from ..security import (
     PORTAL_AUTH_COOKIE,
     PORTAL_CSRF_COOKIE,
@@ -1093,18 +1099,22 @@ def portal_sign_consent(
 
 @router.get("/me/consents", response_model=list[ConsentOut])
 def portal_my_consents(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 100,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我的同意记录：默认本人，传 patient_id 可切换到已代管的家庭成员。"""
     patient = accessible_patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(ConsentRecord)
         .filter(ConsentRecord.patient_id == patient.id)
-        .order_by(ConsentRecord.id.desc())
-        .limit(100)
-        .all()
+        .order_by(ConsentRecord.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [consent_out(r) for r in rows]
 
@@ -1146,16 +1156,20 @@ def portal_submit_correction(
 
 @router.get("/me/corrections", response_model=list[CorrectionOut])
 def portal_my_corrections(
+    response: Response,
+    offset: int = 0,
+    limit: int = 100,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我提交过的更正/注销申请及其审核进度（按账户归集）。"""
-    rows = (
+    rows = paginate(
         db.query(CorrectionRequest)
         .filter(CorrectionRequest.applicant_account_id == account.id)
-        .order_by(CorrectionRequest.id.desc())
-        .limit(100)
-        .all()
+        .order_by(CorrectionRequest.id.desc()),
+        response,
+        offset,
+        limit,
     )
     return [correction_out(r) for r in rows]
 
@@ -1178,8 +1192,11 @@ class PortalSlotOut(BaseModel):
 
 @router.get("/me/slots", response_model=list[PortalSlotOut])
 def portal_slots(
+    response: Response,
     org_id: int | None = None,
     slot_date: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -1189,7 +1206,12 @@ def portal_slots(
         query = query.filter(AppointmentSlot.org_id == org_id)
     if slot_date:
         query = query.filter(AppointmentSlot.slot_date == slot_date)
-    rows = query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(200).all()
+    rows = paginate(
+        query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time),
+        response,
+        offset,
+        limit,
+    )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
         {
@@ -1255,20 +1277,25 @@ class PortalAppointmentOut(BaseModel):
 
 @router.get("/me/appointments", response_model=list[PortalAppointmentOut])
 def portal_my_appointments(
-    account: ResidentAccount = Depends(current_resident), db: Session = Depends(get_db)
+    response: Response,
+    offset: int = 0,
+    limit: int = 100,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
 ):
     """我的预约：含代管家庭成员的预约。"""
     ids = _my_patient_ids(db, account)
     if not ids:
         return []
-    rows = (
+    rows = paginate(
         db.query(Appointment, AppointmentSlot, Patient)
         .join(AppointmentSlot, Appointment.slot_id == AppointmentSlot.id)
         .join(Patient, Appointment.patient_id == Patient.id)
         .filter(Appointment.patient_id.in_(ids))
-        .order_by(Appointment.id.desc())
-        .limit(100)
-        .all()
+        .order_by(Appointment.id.desc()),
+        response,
+        offset,
+        limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
@@ -1380,18 +1407,22 @@ class PortalBillOut(BaseModel):
 
 @router.get("/me/bills", response_model=list[PortalBillOut])
 def portal_my_bills(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我的账单：结算单与对应支付单状态。"""
     patient = accessible_patient(db, account, patient_id)
-    settlements = (
+    settlements = paginate(
         db.query(Settlement)
         .filter(Settlement.patient_id == patient.id)
-        .order_by(Settlement.id.desc())
-        .limit(50)
-        .all()
+        .order_by(Settlement.id.desc()),
+        response,
+        offset,
+        limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     paid_ids = {
@@ -1726,18 +1757,22 @@ class PortalReferralOut(BaseModel):
 
 @router.get("/me/referrals", response_model=list[PortalReferralOut])
 def portal_my_referrals(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
     """我的转诊进度。"""
     patient = accessible_patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(Referral)
         .filter(Referral.patient_id == patient.id)
-        .order_by(Referral.id.desc())
-        .limit(50)
-        .all()
+        .order_by(Referral.id.desc()),
+        response,
+        offset,
+        limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
@@ -1771,7 +1806,10 @@ class PortalAdmissionOut(BaseModel):
 
 @router.get("/me/admissions", response_model=list[PortalAdmissionOut])
 def portal_my_admissions(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -1781,12 +1819,13 @@ def portal_my_admissions(
     免得同一次住院在三个地方显示三个天数。
     """
     patient = accessible_patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(Admission)
         .filter(Admission.patient_id == patient.id)
-        .order_by(Admission.id.desc())
-        .limit(50)
-        .all()
+        .order_by(Admission.id.desc()),
+        response,
+        offset,
+        limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     wards = {w.id: w.name for w in db.query(Ward).all()}
@@ -2000,7 +2039,10 @@ class PortalSurgeryOut(BaseModel):
 
 @router.get("/me/surgeries", response_model=list[PortalSurgeryOut])
 def portal_my_surgeries(
+    response: Response,
     patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
@@ -2011,12 +2053,13 @@ def portal_my_surgeries(
     患者容易造成误读，需要时由医生当面解释。
     """
     patient = accessible_patient(db, account, patient_id)
-    rows = (
+    rows = paginate(
         db.query(SurgeryRequest)
         .filter(SurgeryRequest.patient_id == patient.id)
-        .order_by(SurgeryRequest.id.desc())
-        .limit(50)
-        .all()
+        .order_by(SurgeryRequest.id.desc()),
+        response,
+        offset,
+        limit,
     )
     schedules = {
         s.request_id: s
@@ -2221,20 +2264,31 @@ CHARGE_CATEGORY_NAMES = {
 
 
 @router.get("/health-articles", response_model=list[HealthArticleOut])
-def published_articles(category: str | None = None, db: Session = Depends(get_db)):
+def published_articles(
+    response: Response,
+    category: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
     """健康宣教：居民端展示已发布文章（无需登录）。"""
     q = db.query(HealthArticle).filter(HealthArticle.status == "published")
     if category:
         q = q.filter(HealthArticle.category == category)
     return [
         {"id": a.id, "title": a.title, "category": a.category, "content": a.content}
-        for a in q.order_by(HealthArticle.id.desc()).limit(50).all()
+        for a in paginate(q.order_by(HealthArticle.id.desc()), response, offset, limit)
     ]
 
 
 @router.get("/price-list", response_model=list[PriceListItemOut])
 def public_price_list(
-    category: str | None = None, keyword: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    category: str | None = None,
+    keyword: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
 ):
     """医疗服务价格公示（浙#55，无需登录）。
 
@@ -2249,7 +2303,9 @@ def public_price_list(
         query = query.filter(ChargeItem.category == category)
     if keyword:
         query = query.filter(ChargeItem.name.contains(keyword))
-    items = query.order_by(ChargeItem.category, ChargeItem.code).limit(500).all()
+    items = paginate(
+        query.order_by(ChargeItem.category, ChargeItem.code), response, offset, limit
+    )
 
     # 最近一次调价：一次查询取回全部相关记录，按项目取最新的那条
     latest: dict[int, ChargePriceChange] = {}

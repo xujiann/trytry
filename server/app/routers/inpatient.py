@@ -5,7 +5,7 @@
 - 出院前置：病案首页已填写（M8 计费上线后另加"费用已结清"校验）；
 - 病案首页含出院诊断/手术/费用汇总/转归（WS 445 最小集），为 DRGs（M12）数据底座。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -14,7 +14,14 @@ from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from .. import events
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope, row_dict
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_roles,
+    resolve_org_scope,
+    row_dict,
+)
 from ..models import (
     Admission,
     Bed,
@@ -149,10 +156,20 @@ def create_ward(body: WardCreate, db: Session = Depends(get_db), user: User = De
 
 
 @router.get("/wards", response_model=list[WardOut])
-def list_wards(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_wards(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     q = db.query(Ward)
     q = scope_org_list(db, user, q, Ward, org_id)
-    return [{"id": w.id, "org_id": w.org_id, "name": w.name} for w in q.order_by(Ward.id).limit(200).all()]
+    return [
+        {"id": w.id, "org_id": w.org_id, "name": w.name}
+        for w in paginate(q.order_by(Ward.id), response, offset, limit)
+    ]
 
 
 class BedCreate(BaseModel):
@@ -172,7 +189,14 @@ def create_bed(body: BedCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/beds", response_model=list[BedOut])
-def list_beds(ward_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)):
+def list_beds(
+    response: Response,
+    ward_id: int | None = None,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
     q = db.query(Bed)
     if ward_id is not None:
         q = q.filter(Bed.ward_id == ward_id)
@@ -180,7 +204,7 @@ def list_beds(ward_id: int | None = None, status: str | None = None, db: Session
         q = q.filter(Bed.status == status)
     return [
         {"id": b.id, "ward_id": b.ward_id, "bed_no": b.bed_no, "status": b.status}
-        for b in q.order_by(Bed.id).limit(500).all()
+        for b in paginate(q.order_by(Bed.id), response, offset, limit)
     ]
 
 
@@ -274,13 +298,22 @@ def create_admission(
 
 @router.get("/admissions", response_model=list[AdmissionOut])
 def list_admissions(
-    status: str | None = None, patient_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    status: str | None = None,
+    patient_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     q = db.query(Admission)
     if status:
         q = q.filter(Admission.status == status)
     q = scope_patient_list(db, user, q, Admission, patient_id, "admission")
-    return [_admission_out(a) for a in q.order_by(Admission.id.desc()).limit(200).all()]
+    return [
+        _admission_out(a)
+        for a in paginate(q.order_by(Admission.id.desc()), response, offset, limit)
+    ]
 
 
 class TransferBody(BaseModel):
@@ -538,14 +571,22 @@ def _order_out(o: InpatientOrder) -> dict:
 
 @router.get("/orders", response_model=list[InpatientOrderOut])
 def list_orders(
-    admission_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    admission_id: int | None = None,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
     q = db.query(InpatientOrder)
     if admission_id is not None:
         q = q.filter(InpatientOrder.admission_id == admission_id)
     if status:
         q = q.filter(InpatientOrder.status == status)
-    return [_order_out(o) for o in q.order_by(InpatientOrder.id.desc()).limit(200).all()]
+    return [
+        _order_out(o)
+        for o in paginate(q.order_by(InpatientOrder.id.desc()), response, offset, limit)
+    ]
 
 
 @router.post(
@@ -657,16 +698,23 @@ def record_order_execution(
 
 
 @router.get("/orders/{order_id}/executions", response_model=list[ExecutionOut])
-def list_order_executions(order_id: int, db: Session = Depends(get_db)):
+def list_order_executions(
+    order_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     if db.get(InpatientOrder, order_id) is None:
         raise HTTPException(status_code=404, detail="医嘱不存在")
-    rows = (
+    rows = paginate(
         db.query(OrderExecution, User.full_name, User.username)
         .outerjoin(User, User.id == OrderExecution.executed_by)
         .filter(OrderExecution.inpatient_order_id == order_id)
-        .order_by(OrderExecution.id.desc())
-        .limit(200)
-        .all()
+        .order_by(OrderExecution.id.desc()),
+        response,
+        offset,
+        limit,
     )
     nursing_count = _order_nursing_count(db, order_id)
     return [
