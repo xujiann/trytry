@@ -768,7 +768,10 @@ def get_deposit_balance(
 
 @router.get("/deposits/alerts", response_model=list[DepositAlertOut])
 def deposit_alerts(
+    response: Response,
     threshold: float = 0,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -777,34 +780,83 @@ def deposit_alerts(
     口径：gap = 余额 - 未结费用。阈值缺省 0，即"押金已不够抵未结费用"；
     调大阈值可提前预警（如 gap < 500 就该催缴）。按 gap 从小到大排序——
     预警页要按紧要程度排，最缺钱的排最前。
+
+    **判定下推到 SQL（P1-54）。** 这里原先是「取前 500 个在院患者，再逐个算
+    gap 筛」——`.limit(500)` 限的是扫描范围而不是输出条数，于是第 500 个之后
+    欠费的患者**根本没被算过**，催缴清单静默少人。两笔金额本就各是一句聚合
+    （`deposit_balance` / `unsettled_amount`），把它们写成分组子查询外连到
+    在院患者上，判定就能进 WHERE，上限随之变成输出上限、也才谈得上分页。
+    顺带把原来的 N+1 收掉：改前每个在院患者两次聚合查询（500 人 = 1000 次）。
+
+    **SQL 只决定「谁进这一页」，显示的三个数仍由 `deposit_balance` /
+    `unsettled_amount` 出**，因此响应字节对既有告警行一字不变。两处口径一致
+    不靠"看着一样"——`tests/test_billing_deposit_alert_pushdown.py` 拿改写前的
+    算法（逐个患者算 gap 再排序）在同一份数据上跑一遍，断言两边**集合与顺序
+    都相同**，并另有一条把欠费患者放在第 500 个之后。
+
+    取整必须跟着一起下推：Python 侧是 `round(round(b,2) - round(u,2), 2)`，
+    SQL 侧少一层 round 就会在**恰好等于阈值**的边界上分叉（0.3 - 0.1 在浮点上
+    是 0.19999999999999998，阈值 0.2 时两边会给出相反的答案）。
     """
     q = db.query(Admission).filter(Admission.status == "admitted")
     q = scope_patient_list(db, user, q, Admission, None, "billing")
+
+    # 押金余额：预交为正、退费与冲抵为负——与 `deposit_balance` 同一句聚合
+    deposits = (
+        db.query(
+            Deposit.admission_id.label("admission_id"),
+            func.sum(
+                case((Deposit.deposit_type == "prepay", Deposit.amount), else_=-Deposit.amount)
+            ).label("balance"),
+        )
+        .group_by(Deposit.admission_id)
+        .subquery()
+    )
+    # 未结费用：未挂结算单的明细合计——与 `unsettled_amount` 同一句聚合
+    unsettled_sq = (
+        db.query(
+            BillDetail.admission_id.label("admission_id"),
+            func.sum(BillDetail.amount).label("unsettled"),
+        )
+        .filter(BillDetail.settlement_id.is_(None))
+        .group_by(BillDetail.admission_id)
+        .subquery()
+    )
+    # 外连而非内连：一分钱没交、也没产生费用的在院患者，余额与未结都算 0——
+    # 内连会把他们整行丢掉，而 gap=0 在阈值大于 0 时**本该进预警**。
+    gap_expr = func.round(
+        func.round(func.coalesce(deposits.c.balance, 0.0), 2)
+        - func.round(func.coalesce(unsettled_sq.c.unsettled, 0.0), 2),
+        2,
+    )
+    q = (
+        q.outerjoin(deposits, deposits.c.admission_id == Admission.id)
+        .outerjoin(unsettled_sq, unsettled_sq.c.admission_id == Admission.id)
+        .filter(gap_expr < threshold)
+        .order_by(gap_expr, Admission.id)
+    )
+    rows = paginate(q, response, offset, limit)
+    names = {
+        p.id: p.name
+        for p in db.query(Patient).filter(
+            Patient.id.in_([a.patient_id for a in rows] or [0])
+        )
+    }
     alerts = []
-    # 这个 `.limit(500)` 限的是**扫描范围**而不是输出条数：下面按 gap 逐条筛，
-    # 输出是筛完的子集。所以它**不能照本模块其它清单那样改走 `paginate`**——
-    # offset 会去翻"扫描的第 501~1000 个在院患者"，而 `X-Total-Count` 会报成
-    # 在院人数而不是预警条数，两个都是错的答案。真要分页得先把 gap 判定下推到
-    # SQL（余额与未结费用都是聚合），那是行为与性能都要重测的改动，另案。
-    # 登记在 P2-8 的欠账里，不当豁免。
-    for admission in q.order_by(Admission.id).limit(500).all():
+    for admission in rows:
         balance = deposit_balance(db, admission.id)
         unsettled = unsettled_amount(db, admission.id)
-        gap = round(balance - unsettled, 2)
-        if gap < threshold:
-            patient = db.get(Patient, admission.patient_id)
-            alerts.append(
-                {
-                    "admission_id": admission.id,
-                    "patient_id": admission.patient_id,
-                    "patient_name": patient.name if patient else "",
-                    "org_id": admission.org_id,
-                    "balance": balance,
-                    "unsettled": unsettled,
-                    "gap": gap,
-                }
-            )
-    alerts.sort(key=lambda a: a["gap"])
+        alerts.append(
+            {
+                "admission_id": admission.id,
+                "patient_id": admission.patient_id,
+                "patient_name": names.get(admission.patient_id, ""),
+                "org_id": admission.org_id,
+                "balance": balance,
+                "unsettled": unsettled,
+                "gap": round(balance - unsettled, 2),
+            }
+        )
     return alerts
 
 
