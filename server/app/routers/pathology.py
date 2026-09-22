@@ -11,14 +11,14 @@
 **拒收是核心业务而非异常分支**。标本量不足、未加固定液、标识不清都要当场
 拒收并说明理由——不拒收，后面做出来的片子是废的，而报告已经发出去了。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_with_retry
 from ..database import get_db
-from ..deps import get_current_user, require_roles, row_dict
+from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..models import ExamRequest, PathologySpecimen
 
 router = APIRouter(
@@ -179,14 +179,19 @@ def submit_specimen(body: SpecimenIn, db: Session = Depends(get_db)):
 
 @router.get("/specimens", response_model=list[SpecimenOut])
 def list_specimens(
-    request_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    request_id: int | None = None,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
 ):
     query = db.query(PathologySpecimen)
     if request_id is not None:
         query = query.filter(PathologySpecimen.request_id == request_id)
     if status:
         query = query.filter(PathologySpecimen.status == status)
-    return [_out(s) for s in query.order_by(PathologySpecimen.id.desc()).limit(500).all()]
+    return [_out(s) for s in paginate(query.order_by(PathologySpecimen.id.desc()), response, offset, limit)]
 
 
 @router.post(

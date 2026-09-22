@@ -171,14 +171,19 @@ def create_template(body: TemplateIn, db: Session = Depends(get_db)):
 
 @router.get("/consent-templates", response_model=list[ConsentTemplateOut])
 def list_templates(
-    consent_type: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
+    response: Response,
+    consent_type: str | None = None,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
     query = db.query(ConsentTemplate)
     if consent_type:
         query = query.filter(ConsentTemplate.consent_type == consent_type)
     if active is not None:
         query = query.filter(ConsentTemplate.active.is_(active))
-    return [_template_out(t) for t in query.order_by(ConsentTemplate.id.desc()).limit(200).all()]
+    return [_template_out(t) for t in paginate(query.order_by(ConsentTemplate.id.desc()), response, offset, limit)]
 
 
 @router.patch("/consent-templates/{template_id}", response_model=ConsentTemplateOut,
@@ -409,13 +414,22 @@ def create_treatment(
 
 @router.get("/encounters/{encounter_id}/treatments",
             response_model=list[TreatmentRecordOut])
-def list_treatments(encounter_id: int, db: Session = Depends(get_db)):
+def list_treatments(
+    encounter_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     rows = (
-        db.query(TreatmentRecord)
-        .filter(TreatmentRecord.encounter_id == encounter_id)
-        .order_by(TreatmentRecord.id.desc())
-        .limit(200)
-        .all()
+        paginate(
+            db.query(TreatmentRecord)
+            .filter(TreatmentRecord.encounter_id == encounter_id)
+            .order_by(TreatmentRecord.id.desc()),
+            response,
+            offset,
+            limit,
+        )
     )
     return [_treatment_out(t) for t in rows]
 
@@ -488,13 +502,22 @@ def create_outpatient_nursing(
 
 @router.get("/encounters/{encounter_id}/nursing-records",
             response_model=list[OutpatientNursingOut])
-def list_outpatient_nursing(encounter_id: int, db: Session = Depends(get_db)):
+def list_outpatient_nursing(
+    encounter_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     rows = (
-        db.query(NursingRecord)
-        .filter(NursingRecord.encounter_id == encounter_id)
-        .order_by(NursingRecord.id.desc())
-        .limit(200)
-        .all()
+        paginate(
+            db.query(NursingRecord)
+            .filter(NursingRecord.encounter_id == encounter_id)
+            .order_by(NursingRecord.id.desc()),
+            response,
+            offset,
+            limit,
+        )
     )
     return [
         {

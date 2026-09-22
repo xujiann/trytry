@@ -1,14 +1,14 @@
 """⑮基层缺药登记 + ⑯居民用药监测。"""
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
 from ..database import get_db
-from ..deps import get_current_user, require_roles, row_dict
+from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..clock import now_naive
 from ..models import (
     DrugShortage,
@@ -142,11 +142,17 @@ def register_shortage(body: ShortageCreate, db: Session = Depends(get_db), user:
 
 
 @router.get("/shortages", response_model=list[ShortageOut])
-def list_shortages(status: str | None = None, db: Session = Depends(get_db)):
+def list_shortages(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(DrugShortage)
     if status:
         query = query.filter(DrugShortage.status == status)
-    return query.order_by(DrugShortage.id.desc()).limit(200).all()
+    return paginate(query.order_by(DrugShortage.id.desc()), response, offset, limit)
 
 
 @router.post(
@@ -259,21 +265,29 @@ def medication_profile(
 
 
 @router.get("/usage-stats", response_model=list[UsageStatOut])
-def usage_stats(db: Session = Depends(get_db)):
+def usage_stats(
+    response: Response,
+    offset: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
     """全县用药地图：品种使用排名，支撑药品需求预测与供应保障。"""
     rows = (
-        db.query(
-            PrescriptionItem.drug_code,
-            PrescriptionItem.drug_name,
-            func.count(PrescriptionItem.id).label("rx_count"),
-            func.count(func.distinct(Prescription.patient_id)).label("patient_count"),
+        paginate(
+            db.query(
+                PrescriptionItem.drug_code,
+                PrescriptionItem.drug_name,
+                func.count(PrescriptionItem.id).label("rx_count"),
+                func.count(func.distinct(Prescription.patient_id)).label("patient_count"),
+            )
+            .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
+            .filter(Prescription.status.in_(["auto_passed", "approved"]))
+            .group_by(PrescriptionItem.drug_code, PrescriptionItem.drug_name)
+            .order_by(func.count(PrescriptionItem.id).desc()),
+            response,
+            offset,
+            limit,
         )
-        .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
-        .filter(Prescription.status.in_(["auto_passed", "approved"]))
-        .group_by(PrescriptionItem.drug_code, PrescriptionItem.drug_name)
-        .order_by(func.count(PrescriptionItem.id).desc())
-        .limit(50)
-        .all()
     )
     return [
         {"drug_code": r.drug_code, "drug_name": r.drug_name, "rx_count": r.rx_count, "patient_count": r.patient_count}

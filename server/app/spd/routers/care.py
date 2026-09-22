@@ -716,7 +716,12 @@ def create_intervention_template(
 
 @router.get("/intervention-templates", response_model=list[InterventionTemplateOut])
 def list_intervention_templates(
-    program_code: str | None = None, category: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    program_code: str | None = None,
+    category: str | None = None,
+    offset: int = 0,
+    limit: int = 300,
+    db: Session = Depends(get_db),
 ):
     query = db.query(SpdInterventionTemplate).filter(SpdInterventionTemplate.active.is_(True))
     if program_code:
@@ -728,7 +733,7 @@ def list_intervention_templates(
          "category": t.category, "content": t.content, "measures": t.measures,
          "frequency": t.frequency, "cycle_days": t.cycle_days,
          "auto_risk_level": t.auto_risk_level}
-        for t in query.order_by(SpdInterventionTemplate.id).limit(300).all()
+        for t in paginate(query.order_by(SpdInterventionTemplate.id), response, offset, limit)
     ]
 
 
@@ -1146,7 +1151,13 @@ def create_case_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
 
 
 @router.get("/case-report-tasks", response_model=list[CaseReportTaskOut])
-def list_case_report_tasks(active: bool | None = None, db: Session = Depends(get_db)):
+def list_case_report_tasks(
+    response: Response,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdCaseReportTask)
     if active is not None:
         query = query.filter(SpdCaseReportTask.active.is_(active))
@@ -1154,7 +1165,7 @@ def list_case_report_tasks(active: bool | None = None, db: Session = Depends(get
         {"id": t.id, "code": t.code, "name": t.name, "program_code": t.program_code,
          "dept": t.dept, "manager_user_id": t.manager_user_id,
          "assignee_ids": t.assignee_ids or [], "org_ids": t.org_ids or [], "active": t.active}
-        for t in query.order_by(SpdCaseReportTask.id).limit(200).all()
+        for t in paginate(query.order_by(SpdCaseReportTask.id), response, offset, limit)
     ]
 
 
@@ -1384,18 +1395,26 @@ def list_consults(
 
 @router.get("/consults/{consult_id}/messages", response_model=list[ConsultMessageOut])
 def consult_messages(
-    consult_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    consult_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     consult = db.get(SpdConsult, consult_id)
     if consult is None:
         raise HTTPException(status_code=404, detail="咨询会话不存在")
     assert_patient_visible(db, user, consult.patient_id, resource="spd_consult")
     rows = (
-        db.query(SpdConsultMessage)
-        .filter(SpdConsultMessage.consult_id == consult_id)
-        .order_by(SpdConsultMessage.id)
-        .limit(500)
-        .all()
+        paginate(
+            db.query(SpdConsultMessage)
+            .filter(SpdConsultMessage.consult_id == consult_id)
+            .order_by(SpdConsultMessage.id),
+            response,
+            offset,
+            limit,
+        )
     )
     return [
         {"id": m.id, "sender": m.sender, "sender_id": m.sender_id, "content": m.content,

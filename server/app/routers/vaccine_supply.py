@@ -14,7 +14,7 @@
 3. **AEFI 关联到剂次**而不只是患者：同一人打过多种疫苗，不落到剂次上
    就归不了因。
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -24,7 +24,7 @@ from ..clock import now_naive
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
-from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date, resolve_org_scope
 from ..models import (
     AefiReport,
     ColdChainRecord,
@@ -265,6 +265,12 @@ def list_batches(
     if vaccine_code:
         query = query.filter(VaccineBatch.vaccine_code == vaccine_code)
     query = scope_org_list(db, user, query, VaccineBatch, org_id)
+    # ⚠️ **截断在筛选之前**：`.limit(500)` 限的是扫描范围，下面才按 `usable_only` 筛。
+    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
+    # "扫描的第 501~1000 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
+    # ②**这本身是个漏报缺陷**：第 500 条之后的匹配项根本没被看过，
+    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
+    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
     rows = [_batch_out(b, today_str) for b in query.order_by(VaccineBatch.id.desc()).limit(500).all()]
     return [r for r in rows if r["usable"]] if usable_only else rows
 
@@ -396,9 +402,12 @@ def record_temperature(body: ColdChainIn, db: Session = Depends(get_db), user: U
 
 @router.get("/cold-chain", response_model=list[ColdChainOut])
 def list_temperatures(
+    response: Response,
     org_id: int | None = None,
     exceeded_only: bool = False,
     unhandled_only: bool = False,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -410,7 +419,7 @@ def list_temperatures(
         query = query.filter(ColdChainRecord.exceeded.is_(True))
     if unhandled_only:
         query = query.filter(ColdChainRecord.exceeded.is_(True), ColdChainRecord.handled.is_(False))
-    return [_cold_out(r) for r in query.order_by(ColdChainRecord.id.desc()).limit(500).all()]
+    return [_cold_out(r) for r in paginate(query.order_by(ColdChainRecord.id.desc()), response, offset, limit)]
 
 
 @router.post(
@@ -502,11 +511,15 @@ def report_aefi(
 
 @router.get("/aefi", response_model=list[AefiOut])
 def list_aefi(
+    response: Response,
     patient_id: int | None = None,
     vaccine_code: str | None = None,
     batch_no: str | None = None,
     severe_only: bool = False,
-    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(AefiReport)
     query = scope_patient_list(db, user, query, AefiReport, patient_id, "aefi")
@@ -516,7 +529,7 @@ def list_aefi(
         query = query.filter(AefiReport.batch_no == batch_no)
     if severe_only:
         query = query.filter(AefiReport.reaction_type == "severe")
-    return [_aefi_out(r) for r in query.order_by(AefiReport.id.desc()).limit(500).all()]
+    return [_aefi_out(r) for r in paginate(query.order_by(AefiReport.id.desc()), response, offset, limit)]
 
 
 @router.patch(

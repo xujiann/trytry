@@ -1,13 +1,13 @@
 """⑦县域智慧医疗急救：呼救调度→转运（生命体征实时回传）→到院→收治，"上车即入院"。"""
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, User
 from ..visibility import assert_patient_visible
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
@@ -107,11 +107,17 @@ def dispatch(body: CaseCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/cases", response_model=list[CaseOut])
-def list_cases(status: str | None = None, db: Session = Depends(get_db)):
+def list_cases(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(EmergencyCase)
     if status:
         query = query.filter(EmergencyCase.status == status)
-    return query.order_by(EmergencyCase.id.desc()).limit(200).all()
+    return paginate(query.order_by(EmergencyCase.id.desc()), response, offset, limit)
 
 
 @router.post(

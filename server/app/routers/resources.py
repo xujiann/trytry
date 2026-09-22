@@ -16,7 +16,7 @@
 发布/撤回状态只对通用资源生效——号源有 capacity、手术间有 active、
 血制品有库存量，各自已经表达了"能不能用"，再压一层发布状态只会打架。
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import OptionalDateStr
-from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date, resolve_org_scope
 from ..models import (
     AppointmentSlot,
     BloodStock,
@@ -222,10 +222,13 @@ def register_resource(body: ResourceIn, db: Session = Depends(get_db), user: Use
 
 @router.get("", response_model=list[ResourceOut])
 def list_resources(
+    response: Response,
     org_id: int | None = None,
     resource_type: str | None = None,
     status: str | None = None,
     group_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
 ):
     query = db.query(Resource)
@@ -236,7 +239,7 @@ def list_resources(
         query = query.filter(Resource.resource_type == resource_type)
     if status:
         query = query.filter(Resource.status == status)
-    return [_resource_out(r) for r in query.order_by(Resource.id.desc()).limit(500).all()]
+    return [_resource_out(r) for r in paginate(query.order_by(Resource.id.desc()), response, offset, limit)]
 
 
 @router.patch("/{resource_id}", response_model=ResourceOut,

@@ -6,13 +6,13 @@
 from typing import Any
 
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ....database import get_db
-from ....deps import require_roles
+from ....deps import paginate, require_roles
 from ...platform import Organization
 from ...models import (
     SpdCenter,
@@ -100,11 +100,17 @@ def create_center(body: CenterIn, db: Session = Depends(get_db)):
 
 
 @router.get("/centers", response_model=list[CenterOut])
-def list_centers(program_code: str | None = None, db: Session = Depends(get_db)):
+def list_centers(
+    response: Response,
+    program_code: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdCenter)
     if program_code:
         query = query.filter(SpdCenter.program_code == program_code)
-    return [_center_out(c) for c in query.order_by(SpdCenter.id).limit(200).all()]
+    return [_center_out(c) for c in paginate(query.order_by(SpdCenter.id), response, offset, limit)]
 
 
 @router.patch("/centers/{center_id}", response_model=CenterOut,

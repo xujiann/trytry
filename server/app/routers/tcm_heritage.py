@@ -11,13 +11,13 @@
    该下的结论。
 3. **模拟诊疗取最高分**，作答全部留痕——"第几次才做对"本身就是教学反馈。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..datetypes import OptionalDateStr
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import SimulationAttempt, SimulationCase, TcmMasterCase, User
 
 router = APIRouter(
@@ -180,11 +180,14 @@ def create_master_case(
 
 @router.get("/master-cases", response_model=list[MasterCaseOut])
 def list_master_cases(
+    response: Response,
     master_name: str | None = None,
     disease: str | None = None,
     syndrome: str | None = None,
     keyword: str | None = None,
     include_draft: bool = False,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
 ):
     """按老师、病、证、方药检索。
@@ -208,7 +211,7 @@ def list_master_cases(
             | (TcmMasterCase.commentary.like(like))
             | (TcmMasterCase.title.like(like))
         )
-    return [_case_out(c) for c in query.order_by(TcmMasterCase.id.desc()).limit(200).all()]
+    return [_case_out(c) for c in paginate(query.order_by(TcmMasterCase.id.desc()), response, offset, limit)]
 
 
 @router.post(
@@ -347,12 +350,18 @@ def create_simulation(
 
 @router.get("/simulations", response_model=list[SimulationCaseOut],
             response_model_exclude_unset=True)
-def list_simulations(category: str | None = None, db: Session = Depends(get_db)):
+def list_simulations(
+    response: Response,
+    category: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     """列表**不带答案**——带上答案，练习就没有意义了。"""
     query = db.query(SimulationCase).filter(SimulationCase.active.is_(True))
     if category:
         query = query.filter(SimulationCase.category == category)
-    return [_sim_out(c) for c in query.order_by(SimulationCase.id.desc()).limit(200).all()]
+    return [_sim_out(c) for c in paginate(query.order_by(SimulationCase.id.desc()), response, offset, limit)]
 
 
 @router.post("/simulations/{case_id}/attempts", response_model=SimulationResultOut,

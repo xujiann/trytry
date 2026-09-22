@@ -12,7 +12,7 @@
 import inspect
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent
 from ..database import get_db
-from ..deps import ROLE_NAMES, get_current_user, require_admin, row_dict
+from ..deps import ROLE_NAMES, get_current_user, paginate, require_admin, row_dict
 from ..models import Permission, Role, RolePermission, User
 
 router = APIRouter(
@@ -285,14 +285,19 @@ def _role(db: Session, role_id: int) -> Role:
 
 @router.get("/permissions", response_model=list[PermissionOut])
 def list_permissions(
-    module: str | None = None, keyword: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    module: str | None = None,
+    keyword: str | None = None,
+    offset: int = 0,
+    limit: int = 1000,
+    db: Session = Depends(get_db),
 ):
     query = db.query(Permission)
     if module:
         query = query.filter(Permission.module == module)
     if keyword:
         query = query.filter(Permission.path.like(f"%{keyword}%"))
-    rows = query.order_by(Permission.module, Permission.path).limit(1000).all()
+    rows = paginate(query.order_by(Permission.module, Permission.path), response, offset, limit)
     return [
         {"id": p.id, "code": p.code, "method": p.method, "path": p.path,
          "module": p.module, "builtin_roles": p.builtin_roles}

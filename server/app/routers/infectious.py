@@ -1,14 +1,14 @@
 """传染病病例报告与多点触发监测预警。"""
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..visibility import assert_org_writable
-from ..deps import get_current_user, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import InfectiousCase, InfectiousDisease, Organization, User
 from ..schemas import InfectiousCaseCreate, InfectiousCaseOut, InfectiousDiseaseOut
 from .reports import _csv_response
@@ -95,11 +95,17 @@ def report_case(
 
 
 @router.get("/cases", response_model=list[InfectiousCaseOut])
-def list_cases(disease_code: str | None = None, db: Session = Depends(get_db)):
+def list_cases(
+    response: Response,
+    disease_code: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
     query = db.query(InfectiousCase)
     if disease_code:
         query = query.filter(InfectiousCase.disease_code == disease_code)
-    return query.order_by(InfectiousCase.id.desc()).limit(500).all()
+    return paginate(query.order_by(InfectiousCase.id.desc()), response, offset, limit)
 
 
 @router.get("/alerts", response_model=list[AlertOut])

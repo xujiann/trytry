@@ -310,8 +310,11 @@ def revoke_consent(consent_id: int, db: Session = Depends(get_db)):
 
 @router.get("/texts", response_model=list[ConsentTextOut])
 def list_consent_texts(
+    response: Response,
     scene: str | None = None,
     active_only: bool = True,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
 ):
     """同意文本版本库：窗口/居民端展示告知文本用。默认只列生效版本。"""
@@ -320,7 +323,7 @@ def list_consent_texts(
         query = query.filter(ConsentText.scene == scene)
     if active_only:
         query = query.filter(ConsentText.active.is_(True))
-    return query.order_by(ConsentText.scene, ConsentText.id).limit(200).all()
+    return paginate(query.order_by(ConsentText.scene, ConsentText.id), response, offset, limit)
 
 
 # ============================================================================

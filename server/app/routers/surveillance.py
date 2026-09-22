@@ -13,7 +13,7 @@
 3. **预警只提示不定性**。超阈值给出的是"值得看一眼"，不是"发生疫情"——
    平台不替疾控下判断。
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -22,7 +22,7 @@ from ..concurrency import upsert_unique
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
-from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope, row_dict
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date, resolve_org_scope, row_dict
 from ..models import EmergencyResource, Organization, PathogenMonitor, SyndromeMonitor, User
 
 router = APIRouter(
@@ -212,11 +212,14 @@ def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User 
 
 @router.get("/syndromes", response_model=list[SyndromeOut])
 def list_syndromes(
+    response: Response,
     org_id: int | None = None,
     syndrome: str | None = None,
     start_date: OptionalDateStr = Query(default=""),
     end_date: OptionalDateStr = Query(default=""),
     group_id: int | None = None,
+    offset: int = 0,
+    limit: int = 1000,
     db: Session = Depends(get_db),
 ):
     query = db.query(SyndromeMonitor)
@@ -230,7 +233,7 @@ def list_syndromes(
     if end_date:
         query = query.filter(SyndromeMonitor.record_date <= end_date)
     rows = query.order_by(SyndromeMonitor.record_date.desc(), SyndromeMonitor.id.desc())
-    return [_syndrome_out(r) for r in rows.limit(1000).all()]
+    return [_syndrome_out(r) for r in paginate(rows, response, offset, limit)]
 
 
 # ============================================================ 病原监测
@@ -282,11 +285,15 @@ def report_pathogen(body: PathogenIn, db: Session = Depends(get_db), user: User 
 
 @router.get("/pathogens", response_model=list[PathogenOut])
 def list_pathogens(
+    response: Response,
     org_id: int | None = None,
     pathogen_name: str | None = None,
     start_date: OptionalDateStr = Query(default=""),
     end_date: OptionalDateStr = Query(default=""),
-    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    offset: int = 0,
+    limit: int = 1000,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(PathogenMonitor)
     query = scope_org_list(db, user, query, PathogenMonitor, org_id)
@@ -297,7 +304,7 @@ def list_pathogens(
     if end_date:
         query = query.filter(PathogenMonitor.record_date <= end_date)
     rows = query.order_by(PathogenMonitor.record_date.desc(), PathogenMonitor.id.desc())
-    return [_pathogen_out(r) for r in rows.limit(1000).all()]
+    return [_pathogen_out(r) for r in paginate(rows, response, offset, limit)]
 
 
 # ============================================================ 多点触发汇总
@@ -432,6 +439,12 @@ def list_resources(
         query = query.filter(EmergencyResource.org_id.in_(scope))
     if resource_type:
         query = query.filter(EmergencyResource.resource_type == resource_type)
+    # ⚠️ **截断在筛选之前**：`.limit(500)` 限的是扫描范围，下面才按 `shortage_only（below_min / expired）` 筛。
+    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
+    # "扫描的第 501~1000 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
+    # ②**这本身是个漏报缺陷**：第 500 条之后的匹配项根本没被看过，
+    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
+    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
     rows = [
         _resource_out(r, today_str)
         for r in query.order_by(EmergencyResource.id.desc()).limit(500).all()

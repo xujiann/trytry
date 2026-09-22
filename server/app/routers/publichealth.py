@@ -1,11 +1,11 @@
 """公卫协同：㉖应急处置指挥、㉗医防协同提醒、㉘其他卫生业务监测。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     ChronicPatient,
     HealthMonitorRecord,
@@ -52,11 +52,17 @@ def create_event(body: EventCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/events", response_model=list[EventOut])
-def list_events(status: str | None = None, db: Session = Depends(get_db)):
+def list_events(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
     query = db.query(PublicHealthEvent)
     if status:
         query = query.filter(PublicHealthEvent.status == status)
-    return query.order_by(PublicHealthEvent.id.desc()).limit(100).all()
+    return paginate(query.order_by(PublicHealthEvent.id.desc()), response, offset, limit)
 
 
 
@@ -211,10 +217,17 @@ def add_monitor(body: MonitorCreate, db: Session = Depends(get_db), user: User =
 
 
 @router.get("/monitors", response_model=list[MonitorOut])
-def list_monitors(domain: str | None = None, exceeded: bool | None = None, db: Session = Depends(get_db)):
+def list_monitors(
+    response: Response,
+    domain: str | None = None,
+    exceeded: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(HealthMonitorRecord)
     if domain:
         query = query.filter(HealthMonitorRecord.domain == domain)
     if exceeded is not None:
         query = query.filter(HealthMonitorRecord.exceeded.is_(exceeded))
-    return query.order_by(HealthMonitorRecord.id.desc()).limit(200).all()
+    return paginate(query.order_by(HealthMonitorRecord.id.desc()), response, offset, limit)

@@ -1,12 +1,12 @@
 """远程会诊中心：申请→受理→出具意见→评价，全过程管理。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import ConsultExpert, Consultation, Organization, Patient, User
 from ..schemas import (
     ConsultationAccept,
@@ -78,11 +78,17 @@ def apply(body: ConsultationCreate, db: Session = Depends(get_db), user: User = 
 
 
 @router.get("", response_model=list[ConsultationOut])
-def list_consultations(status: str | None = None, db: Session = Depends(get_db)):
+def list_consultations(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(Consultation)
     if status:
         query = query.filter(Consultation.status == status)
-    return query.order_by(Consultation.id.desc()).limit(200).all()
+    return paginate(query.order_by(Consultation.id.desc()), response, offset, limit)
 
 
 def _get(db: Session, consultation_id: int) -> Consultation:

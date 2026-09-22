@@ -270,13 +270,22 @@ def update_program(
 
 
 @router.get("/programs/{program_id}/versions", response_model=list[ProgramVersionOut])
-def program_versions(program_id: int, db: Session = Depends(get_db)):
+def program_versions(
+    program_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
     rows = (
-        db.query(SpdProgramVersion)
-        .filter(SpdProgramVersion.program_id == program_id)
-        .order_by(SpdProgramVersion.id.desc())
-        .limit(50)
-        .all()
+        paginate(
+            db.query(SpdProgramVersion)
+            .filter(SpdProgramVersion.program_id == program_id)
+            .order_by(SpdProgramVersion.id.desc()),
+            response,
+            offset,
+            limit,
+        )
     )
     return [
         {"id": v.id, "version": v.version, "changed_by": v.changed_by, "note": v.note,

@@ -1,11 +1,11 @@
 """⑨互联网+诊疗：在线咨询、复诊续方（医师回复，续方联动集中审方）。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import OnlineConsult, Organization, Patient, Prescription, User
 from ..schemas import PrescriptionOut  # noqa: F401
 
@@ -56,11 +56,17 @@ def create_consult(body: ConsultCreate, db: Session = Depends(get_db), user: Use
 
 
 @router.get("/consults", response_model=list[ConsultOut])
-def list_consults(status: str | None = None, db: Session = Depends(get_db)):
+def list_consults(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(OnlineConsult)
     if status:
         query = query.filter(OnlineConsult.status == status)
-    return query.order_by(OnlineConsult.id.desc()).limit(200).all()
+    return paginate(query.order_by(OnlineConsult.id.desc()), response, offset, limit)
 
 
 @router.post("/consults/{consult_id}/reply", response_model=ConsultOut, dependencies=[Depends(require_roles("doctor"))])

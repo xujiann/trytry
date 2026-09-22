@@ -101,14 +101,19 @@ def create_recognition_item(body: RecognitionItemCreate, db: Session = Depends(g
 
 @router.get("/recognition-items", response_model=list[RecognitionItemOut])
 def list_recognition_items(
-    center_type: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
+    response: Response,
+    center_type: str | None = None,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
 ):
     query = db.query(RecognitionItem)
     if center_type:
         query = query.filter(RecognitionItem.center_type == center_type)
     if active is not None:
         query = query.filter(RecognitionItem.active.is_(active))
-    return query.order_by(RecognitionItem.item_code).limit(500).all()
+    return paginate(query.order_by(RecognitionItem.item_code), response, offset, limit)
 
 
 @router.patch(
@@ -427,14 +432,22 @@ def advance_sample(request_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/critical", response_model=list[ExamReportOut])
-def list_critical_reports(db: Session = Depends(get_db)):
+def list_critical_reports(
+    response: Response,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
     """危急值清单：需立即通知申请机构处置。"""
     return (
-        db.query(ExamReport)
-        .filter(ExamReport.critical.is_(True))
-        .order_by(ExamReport.id.desc())
-        .limit(100)
-        .all()
+        paginate(
+            db.query(ExamReport)
+            .filter(ExamReport.critical.is_(True))
+            .order_by(ExamReport.id.desc()),
+            response,
+            offset,
+            limit,
+        )
     )
 
 

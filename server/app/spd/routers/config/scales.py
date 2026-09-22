@@ -372,11 +372,17 @@ def create_tag(body: TagIn, db: Session = Depends(get_db)):
 
 
 @router.get("/tags", response_model=list[TagBriefOut])
-def list_tags(category: str | None = None, db: Session = Depends(get_db)):
+def list_tags(
+    response: Response,
+    category: str | None = None,
+    offset: int = 0,
+    limit: int = 300,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdTag).filter(SpdTag.active.is_(True))
     if category:
         query = query.filter(SpdTag.category == category)
     return [
         {"id": t.id, "code": t.code, "name": t.name, "category": t.category, "color": t.color}
-        for t in query.order_by(SpdTag.id).limit(300).all()
+        for t in paginate(query.order_by(SpdTag.id), response, offset, limit)
     ]

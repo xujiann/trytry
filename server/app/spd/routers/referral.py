@@ -208,14 +208,19 @@ def create_referral_rule(body: ReferralRuleIn, db: Session = Depends(get_db)):
 
 @router.get("/referral-rules", response_model=list[ReferralRuleOut])
 def list_referral_rules(
-    program_code: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
+    response: Response,
+    program_code: str | None = None,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
     query = db.query(SpdReferralRule)
     if program_code:
         query = query.filter(SpdReferralRule.program_code == program_code)
     if active is not None:
         query = query.filter(SpdReferralRule.active.is_(active))
-    return [_rule_out(r) for r in query.order_by(SpdReferralRule.id).limit(200).all()]
+    return [_rule_out(r) for r in paginate(query.order_by(SpdReferralRule.id), response, offset, limit)]
 
 
 @router.patch("/referral-rules/{rule_id}",

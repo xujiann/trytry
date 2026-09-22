@@ -1,10 +1,10 @@
 """消毒供应中心：复用器械批次灭菌→发放→回收全流程追溯。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import CssdCostItem, CssdRequest, Organization, SterilizationBatch, User
 from ..schemas import BatchCreate, BatchOut
 from typing import Any
@@ -32,13 +32,20 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/batches", response_model=list[BatchOut])
-def list_batches(status: str | None = None, batch_no: str | None = None, db: Session = Depends(get_db)):
+def list_batches(
+    response: Response,
+    status: str | None = None,
+    batch_no: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SterilizationBatch)
     if status:
         query = query.filter(SterilizationBatch.status == status)
     if batch_no:
         query = query.filter(SterilizationBatch.batch_no == batch_no)
-    return query.order_by(SterilizationBatch.id.desc()).limit(200).all()
+    return paginate(query.order_by(SterilizationBatch.id.desc()), response, offset, limit)
 
 
 @router.post(
@@ -149,7 +156,13 @@ def create_cost_item(
 
 
 @router.get("/cost-items", response_model=list[CostItemOut])
-def list_cost_items(batch_id: int | None = None, db: Session = Depends(get_db)):
+def list_cost_items(
+    response: Response,
+    batch_id: int | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
     query = db.query(CssdCostItem)
     if batch_id is not None:
         query = query.filter(CssdCostItem.batch_id == batch_id)
@@ -162,7 +175,7 @@ def list_cost_items(batch_id: int | None = None, db: Session = Depends(get_db)):
             "amount": i.amount,
             "note": i.note,
         }
-        for i in query.order_by(CssdCostItem.id.desc()).limit(500).all()
+        for i in paginate(query.order_by(CssdCostItem.id.desc()), response, offset, limit)
     ]
 
 
@@ -267,8 +280,11 @@ def create_cssd_request(body: CssdReqCreate, db: Session = Depends(get_db), user
 
 @router.get("/requests", response_model=list[CssdRequestOut])
 def list_cssd_requests(
+    response: Response,
     status: str | None = None,
     org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -278,7 +294,7 @@ def list_cssd_requests(
         q = q.filter(CssdRequest.status == status)
     return [
         {"id": r.id, "org_id": r.org_id, "item_name": r.item_name, "quantity": r.quantity, "status": r.status, "batch_id": r.batch_id}
-        for r in q.order_by(CssdRequest.id.desc()).limit(200).all()
+        for r in paginate(q.order_by(CssdRequest.id.desc()), response, offset, limit)
     ]
 
 

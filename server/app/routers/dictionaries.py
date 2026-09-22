@@ -1,12 +1,12 @@
 """统一编码字典：诊断、药品、耗材、收费"四统一"，结果互认与业务联动的数据基础。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, paginate, require_admin
 from ..models import CodeEntry, CodeSystem
 from ..schemas import CodeEntryCreate
 
@@ -123,7 +123,14 @@ def bulk_import(system_code: str, entries: list[CodeEntryUpsert], db: Session = 
     response_model=list[CodeEntryDetailOut],
     dependencies=[Depends(get_current_user)],
 )
-def list_entries(system_code: str, keyword: str = "", db: Session = Depends(get_db)):
+def list_entries(
+    system_code: str,
+    response: Response,
+    keyword: str = "",
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     system = _get_system_readonly(db, system_code)
     if system is None:
         # 种子缺失（存量库未经启动初始化）：读路径保持只读，返回空清单
@@ -132,4 +139,4 @@ def list_entries(system_code: str, keyword: str = "", db: Session = Depends(get_
     if keyword:
         like = f"%{keyword}%"
         query = query.filter((CodeEntry.code.like(like)) | (CodeEntry.name.like(like)))
-    return query.order_by(CodeEntry.code).limit(200).all()
+    return paginate(query.order_by(CodeEntry.code), response, offset, limit)

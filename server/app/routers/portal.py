@@ -1366,6 +1366,10 @@ def portal_my_contract(
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     result = []
     for c in contracts:
+        # 这个 `.limit(20)` 是**每份签约的履约记录**上限（嵌套清单），
+        # 不是本端点的输出上限——外层 contracts 查询反而一个上限都没有。
+        # 两件事都还没解：嵌套清单要分页得给子资源单独开端点，
+        # 外层无上限属 P2-8 里"无上限"那一类，见 docs/TECH_DEBT.md。
         services = (
             db.query(ContractService)
             .filter(ContractService.contract_id == c.id)

@@ -1,5 +1,5 @@
 """⑳远程医学教育（含㉑适宜技术培训考核）：课程、学习/考核记录。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -13,7 +13,7 @@ from ..concurrency import (
     upsert_unique,
 )
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, row_dict
+from ..deps import get_current_user, paginate, require_admin, require_roles, row_dict
 from ..models import (
     Attachment,
     Course,
@@ -213,11 +213,17 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/courses", response_model=list[CourseOut])
-def list_courses(category: str | None = None, db: Session = Depends(get_db)):
+def list_courses(
+    response: Response,
+    category: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(Course)
     if category:
         query = query.filter(Course.category == category)
-    return query.order_by(Course.id.desc()).limit(200).all()
+    return paginate(query.order_by(Course.id.desc()), response, offset, limit)
 
 
 class ExamSubmit(BaseModel):
@@ -421,7 +427,13 @@ def list_live_feedback(session_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/live-sessions", response_model=list[LiveSessionOut])
-def list_live_sessions(status: str | None = None, db: Session = Depends(get_db)):
+def list_live_sessions(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     q = db.query(LiveSession)
     if status:
         q = q.filter(LiveSession.status == status)
@@ -435,7 +447,7 @@ def list_live_sessions(status: str | None = None, db: Session = Depends(get_db))
             "review_comment": s.review_comment,
             "recording_url": s.recording_url,
         }
-        for s in q.order_by(LiveSession.id.desc()).limit(200).all()
+        for s in paginate(q.order_by(LiveSession.id.desc()), response, offset, limit)
     ]
 
 
@@ -581,11 +593,17 @@ def create_plan(body: PlanCreate, db: Session = Depends(get_db), user: User = De
 
 
 @router.get("/training-plans", response_model=list[PlanOut])
-def list_plans(status: str | None = None, db: Session = Depends(get_db)):
+def list_plans(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(TrainingPlan)
     if status:
         query = query.filter(TrainingPlan.status == status)
-    plans = query.order_by(TrainingPlan.id.desc()).limit(200).all()
+    plans = paginate(query.order_by(TrainingPlan.id.desc()), response, offset, limit)
     return [_plan_out(p, p.enrolled_count) for p in plans]
 
 
@@ -812,7 +830,13 @@ class ArticleListOut(BaseModel):
     response_model=list[ArticleListOut],
     dependencies=[Depends(require_roles("public_health", "operator"))],  # H2: 宣教编制
 )
-def list_articles(status: str | None = None, db: Session = Depends(get_db)):
+def list_articles(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     """建稿与已发布一起列。
 
     没有这条时，发布流程是"建稿拿到 id → 记住它 → 手填 id 去发布"——草稿
@@ -830,7 +854,7 @@ def list_articles(status: str | None = None, db: Session = Depends(get_db)):
             "status": a.status,
             "content": a.content,
         }
-        for a in q.order_by(HealthArticle.id.desc()).limit(200).all()
+        for a in paginate(q.order_by(HealthArticle.id.desc()), response, offset, limit)
     ]
 
 

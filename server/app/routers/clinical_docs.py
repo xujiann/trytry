@@ -366,15 +366,24 @@ def create_vital(
 
 
 @router.get("/admissions/{admission_id}/vitals", response_model=list[VitalSignOut])
-def list_vitals(admission_id: int, db: Session = Depends(get_db)):
+def list_vitals(
+    admission_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
     """体温单数据：按测量时刻升序，供前端画趋势曲线。"""
     _admission_or_404(db, admission_id)
     rows = (
-        db.query(VitalSignRecord)
-        .filter(VitalSignRecord.admission_id == admission_id)
-        .order_by(VitalSignRecord.measured_at, VitalSignRecord.id)
-        .limit(500)
-        .all()
+        paginate(
+            db.query(VitalSignRecord)
+            .filter(VitalSignRecord.admission_id == admission_id)
+            .order_by(VitalSignRecord.measured_at, VitalSignRecord.id),
+            response,
+            offset,
+            limit,
+        )
     )
     return [
         {

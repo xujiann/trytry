@@ -173,11 +173,17 @@ def apply_special_disease(body: SpecialDiseaseCreate, db: Session = Depends(get_
 
 
 @router.get("/special-diseases", response_model=list[SpecialDiseaseOut])
-def list_special_diseases(status: str | None = None, db: Session = Depends(get_db)):
+def list_special_diseases(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpecialDiseaseApp)
     if status:
         query = query.filter(SpecialDiseaseApp.status == status)
-    return query.order_by(SpecialDiseaseApp.id.desc()).limit(200).all()
+    return paginate(query.order_by(SpecialDiseaseApp.id.desc()), response, offset, limit)
 
 
 @router.post(
@@ -278,7 +284,13 @@ def review_dual_channel(
 
 
 @router.get("/dual-channel", response_model=list[DualChannelOut])
-def list_dual_channel(status: str | None = None, db: Session = Depends(get_db)):
+def list_dual_channel(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     q = db.query(DualChannelApp)
     if status:
         q = q.filter(DualChannelApp.status == status)
@@ -291,5 +303,5 @@ def list_dual_channel(status: str | None = None, db: Session = Depends(get_db)):
             "status": a.status,
             "review_comment": a.review_comment,
         }
-        for a in q.order_by(DualChannelApp.id.desc()).limit(200).all()
+        for a in paginate(q.order_by(DualChannelApp.id.desc()), response, offset, limit)
     ]

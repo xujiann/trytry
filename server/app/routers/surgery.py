@@ -163,12 +163,19 @@ def create_room(body: RoomIn, db: Session = Depends(get_db), user: User = Depend
 
 
 @router.get("/rooms", response_model=list[OperatingRoomOut])
-def list_rooms(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_rooms(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(OperatingRoom)
     query = scope_org_list(db, user, query, OperatingRoom, org_id)
     return [
         {"id": r.id, "org_id": r.org_id, "name": r.name, "active": r.active}
-        for r in query.order_by(OperatingRoom.id).limit(200).all()
+        for r in paginate(query.order_by(OperatingRoom.id), response, offset, limit)
     ]
 
 
@@ -373,7 +380,12 @@ def schedule_surgery(
 
 @router.get("/schedules", response_model=list[SurgeryScheduleOut])
 def list_schedules(
-    scheduled_date: str | None = None, room_id: int | None = None, db: Session = Depends(get_db)
+    response: Response,
+    scheduled_date: str | None = None,
+    room_id: int | None = None,
+    offset: int = 0,
+    limit: int = 300,
+    db: Session = Depends(get_db),
 ):
     """手术排班表：按手术间与时段排序，就是手术室墙上那张表。"""
     query = db.query(SurgerySchedule, SurgeryRequest, OperatingRoom).join(
@@ -383,9 +395,14 @@ def list_schedules(
         query = query.filter(SurgerySchedule.scheduled_date == scheduled_date)
     if room_id is not None:
         query = query.filter(SurgerySchedule.room_id == room_id)
-    rows = query.order_by(
-        SurgerySchedule.scheduled_date, SurgerySchedule.room_id, SurgerySchedule.start_time
-    ).limit(300).all()
+    rows = paginate(
+        query.order_by(
+     SurgerySchedule.scheduled_date, SurgerySchedule.room_id, SurgerySchedule.start_time
+ ),
+        response,
+        offset,
+        limit,
+    )
     return [
         {
             "id": s.id,

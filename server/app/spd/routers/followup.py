@@ -378,8 +378,14 @@ def create_followup_rule(body: FollowupRuleIn, db: Session = Depends(get_db)):
 
 @router.get("/followup-rules", response_model=list[FollowupRuleOut])
 def list_followup_rules(
-    scene: str | None = None, dept: str | None = None, active: bool | None = None,
-    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    scene: str | None = None,
+    dept: str | None = None,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 300,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """方案清单。带 `allow_depts` / `allow_roles` 的方案只对被授权的科室与角色可见。"""
     query = db.query(SpdFollowupRule)
@@ -389,7 +395,7 @@ def list_followup_rules(
         query = query.filter(SpdFollowupRule.dept == dept)
     if active is not None:
         query = query.filter(SpdFollowupRule.active.is_(active))
-    rows = query.order_by(SpdFollowupRule.id).limit(300).all()
+    rows = paginate(query.order_by(SpdFollowupRule.id), response, offset, limit)
     if user.role not in ("admin", "director"):
         rows = [
             r for r in rows
@@ -454,11 +460,17 @@ def create_questionnaire(body: QuestionnaireIn, db: Session = Depends(get_db)):
 
 
 @router.get("/questionnaires", response_model=list[QuestionnaireOut])
-def list_questionnaires(scene: str | None = None, db: Session = Depends(get_db)):
+def list_questionnaires(
+    response: Response,
+    scene: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdQuestionnaire).filter(SpdQuestionnaire.active.is_(True))
     if scene:
         query = query.filter(SpdQuestionnaire.scene == scene)
-    return [_q_out(q) for q in query.order_by(SpdQuestionnaire.id).limit(200).all()]
+    return [_q_out(q) for q in paginate(query.order_by(SpdQuestionnaire.id), response, offset, limit)]
 
 
 @router.patch("/questionnaires/{q_id}", response_model=QuestionnaireOut,
@@ -1184,11 +1196,17 @@ def create_report_template(body: ReportTemplateIn, db: Session = Depends(get_db)
 
 
 @router.get("/report-templates", response_model=list[ReportTemplateOut])
-def list_report_templates(period: str | None = None, db: Session = Depends(get_db)):
+def list_report_templates(
+    response: Response,
+    period: str | None = None,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdReportTemplate)
     if period:
         query = query.filter(SpdReportTemplate.period == period)
-    return [_template_out(t) for t in query.order_by(SpdReportTemplate.id).limit(100).all()]
+    return [_template_out(t) for t in paginate(query.order_by(SpdReportTemplate.id), response, offset, limit)]
 
 
 @router.patch("/report-templates/{template_id}", response_model=ReportTemplateOut,
@@ -1239,13 +1257,19 @@ def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
 
 
 @router.get("/report-tasks", response_model=list[ReportTaskOut])
-def list_report_tasks(status: str | None = None, db: Session = Depends(get_db)):
+def list_report_tasks(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdReportTask)
     if status:
         query = query.filter(SpdReportTask.status == status)
     return [
         _task_out(t)
-        for t in query.order_by(SpdReportTask.priority, SpdReportTask.id).limit(200).all()
+        for t in paginate(query.order_by(SpdReportTask.priority, SpdReportTask.id), response, offset, limit)
     ]
 
 

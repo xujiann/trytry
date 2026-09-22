@@ -14,7 +14,7 @@
 """
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -23,7 +23,7 @@ from ..clock import now_naive
 from ..concurrency import insert_with_retry
 from ..database import get_db
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
-from ..deps import get_current_user, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date
 from ..models import Employee, MedicalWaste, Organization, User, WasteLocation
 from ..schemas import WasteCreate, WasteHandover
 
@@ -180,10 +180,14 @@ def create_location(body: LocationIn, db: Session = Depends(get_db), user: User 
 
 @router.get("/locations", response_model=list[WasteLocationOut])
 def list_locations(
+    response: Response,
     org_id: int | None = None,
     location_type: str | None = None,
     include_inactive: bool = False,
-    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(WasteLocation)
     query = scope_org_list(db, user, query, WasteLocation, org_id)
@@ -191,7 +195,7 @@ def list_locations(
         query = query.filter(WasteLocation.location_type == location_type)
     if not include_inactive:
         query = query.filter(WasteLocation.active.is_(True))
-    return [_location_out(r) for r in query.order_by(WasteLocation.id).limit(500).all()]
+    return [_location_out(r) for r in paginate(query.order_by(WasteLocation.id), response, offset, limit)]
 
 
 @router.delete("/locations/{location_id}", response_model=LocationActiveOut,
@@ -334,7 +338,15 @@ def collect(body: WasteCollect, db: Session = Depends(get_db),
 
 
 @router.get("", response_model=list[MedicalWasteOut])
-def list_wastes(org_id: int | None = None, status: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_wastes(
+    response: Response,
+    org_id: int | None = None,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """医废清单。
 
     D-8：这里原先套 `WasteOut`，而那个 schema 是阶段五写的，字段停在
@@ -347,7 +359,7 @@ def list_wastes(org_id: int | None = None, status: str | None = None, db: Sessio
     query = scope_org_list(db, user, query, MedicalWaste, org_id)
     if status:
         query = query.filter(MedicalWaste.status == status)
-    return [_waste_out(w) for w in query.order_by(MedicalWaste.id.desc()).limit(500).all()]
+    return [_waste_out(w) for w in paginate(query.order_by(MedicalWaste.id.desc()), response, offset, limit)]
 
 
 class WasteStore(BaseModel):

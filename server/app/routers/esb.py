@@ -145,14 +145,19 @@ def create_endpoint(body: EndpointCreate, db: Session = Depends(get_db)):
 @router.get("/endpoints", response_model=list[EndpointOut],
             dependencies=[Depends(get_current_user)])
 def list_endpoints(
-    system_type: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
+    response: Response,
+    system_type: str | None = None,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
 ):
     q = db.query(EsbEndpoint)
     if system_type:
         q = q.filter(EsbEndpoint.system_type == system_type)
     if active is not None:
         q = q.filter(EsbEndpoint.active.is_(active))
-    return [_endpoint_out(e) for e in q.order_by(EsbEndpoint.code).limit(500).all()]
+    return [_endpoint_out(e) for e in paginate(q.order_by(EsbEndpoint.code), response, offset, limit)]
 
 
 @router.patch("/endpoints/{endpoint_id}", response_model=EndpointOut,
@@ -717,11 +722,17 @@ def create_flow(body: FlowCreate, db: Session = Depends(get_db)):
 
 @router.get("/flows", response_model=list[FlowOut],
             dependencies=[Depends(get_current_user)])
-def list_flows(active: bool | None = None, db: Session = Depends(get_db)):
+def list_flows(
+    response: Response,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     q = db.query(EsbFlow)
     if active is not None:
         q = q.filter(EsbFlow.active.is_(active))
-    return [_flow_out(f) for f in q.order_by(EsbFlow.code).limit(200).all()]
+    return [_flow_out(f) for f in paginate(q.order_by(EsbFlow.code), response, offset, limit)]
 
 
 @router.patch("/flows/{flow_id}", response_model=FlowOut,

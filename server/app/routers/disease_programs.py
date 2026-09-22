@@ -184,11 +184,17 @@ def create_program(body: ProgramIn, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[DiseaseProgramOut])
-def list_programs(active: bool | None = None, db: Session = Depends(get_db)):
+def list_programs(
+    response: Response,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(DiseaseProgram)
     if active is not None:
         query = query.filter(DiseaseProgram.active.is_(active))
-    return [_program_out(p) for p in query.order_by(DiseaseProgram.id).limit(200).all()]
+    return [_program_out(p) for p in paginate(query.order_by(DiseaseProgram.id), response, offset, limit)]
 
 
 @router.patch("/{program_id}", response_model=DiseaseProgramOut,

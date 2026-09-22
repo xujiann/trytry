@@ -1,11 +1,11 @@
 """中医药服务：⑬智能辅诊（体质辨识+辨证推荐）、⑭共享中药房、㉑适宜技术库。"""
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import (
     Organization,
     Patient,
@@ -280,11 +280,17 @@ def create_order(
 
 
 @router.get("/dispense-orders", response_model=list[DispenseOut])
-def list_orders(status: str | None = None, db: Session = Depends(get_db)):
+def list_orders(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(TcmDispenseOrder)
     if status:
         query = query.filter(TcmDispenseOrder.status == status)
-    return query.order_by(TcmDispenseOrder.id.desc()).limit(200).all()
+    return paginate(query.order_by(TcmDispenseOrder.id.desc()), response, offset, limit)
 
 
 @router.post(
@@ -331,12 +337,18 @@ def create_technique(body: TechniqueCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/techniques", response_model=list[TechniqueOut])
-def list_techniques(keyword: str = "", db: Session = Depends(get_db)):
+def list_techniques(
+    response: Response,
+    keyword: str = "",
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(TcmTechnique)
     if keyword:
         like = f"%{keyword}%"
         query = query.filter((TcmTechnique.name.like(like)) | (TcmTechnique.indication.like(like)))
-    return query.order_by(TcmTechnique.id).limit(200).all()
+    return paginate(query.order_by(TcmTechnique.id), response, offset, limit)
 
 
 # ===========================================================================
@@ -393,11 +405,17 @@ def create_formula(body: FormulaCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/formulas", response_model=list[TcmFormulaOut])
-def list_formulas(active: bool | None = None, db: Session = Depends(get_db)):
+def list_formulas(
+    response: Response,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(TcmFormula)
     if active is not None:
         query = query.filter(TcmFormula.active.is_(active))
-    return [_formula_out(f) for f in query.order_by(TcmFormula.id.desc()).limit(200).all()]
+    return [_formula_out(f) for f in paginate(query.order_by(TcmFormula.id.desc()), response, offset, limit)]
 
 
 class BatchCreate(BaseModel):
@@ -458,9 +476,12 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = 
 
 @router.get("/preparation-batches", response_model=list[TcmBatchOut])
 def list_batches(
+    response: Response,
     formula_id: int | None = None,
     status: str | None = None,
     today: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
 ):
     business_date = resolve_business_date(today).isoformat()
@@ -471,7 +492,7 @@ def list_batches(
         query = query.filter(TcmPreparationBatch.status == status)
     return [
         _batch_out(b, business_date)
-        for b in query.order_by(TcmPreparationBatch.id.desc()).limit(200).all()
+        for b in paginate(query.order_by(TcmPreparationBatch.id.desc()), response, offset, limit)
     ]
 
 

@@ -1,13 +1,13 @@
 """㉔妇幼保健业务协同：孕产妇建册/高危管理/产检/产后访视/分娩记录，
 儿童保健档案与访视、新生儿疾病筛查、高危儿管理，婚前/孕前/妇女保健与避孕节育记录。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from ..datetypes import DateStr
 from ..concurrency import insert_if_absent
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles, row_dict
+from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..models import (
     ChildRecord,
     ChildVisit,
@@ -173,11 +173,17 @@ def register(body: MaternalCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/records", response_model=list[MaternalOut])
-def list_records(high_risk: bool | None = None, db: Session = Depends(get_db)):
+def list_records(
+    response: Response,
+    high_risk: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(MaternalRecord)
     if high_risk is not None:
         query = query.filter(MaternalRecord.high_risk.is_(high_risk))
-    return query.order_by(MaternalRecord.high_risk.desc(), MaternalRecord.id.desc()).limit(200).all()
+    return paginate(query.order_by(MaternalRecord.high_risk.desc(), MaternalRecord.id.desc()), response, offset, limit)
 
 
 class VisitCreate(BaseModel):
@@ -259,8 +265,13 @@ def register_child(body: ChildCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/children", response_model=list[ChildOut])
-def list_children(db: Session = Depends(get_db)):
-    return db.query(ChildRecord).order_by(ChildRecord.id.desc()).limit(200).all()
+def list_children(
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    return paginate(db.query(ChildRecord).order_by(ChildRecord.id.desc()), response, offset, limit)
 
 
 class ChildVisitCreate(BaseModel):
@@ -424,7 +435,12 @@ def set_high_risk(child_id: int, body: HighRiskUpdate, db: Session = Depends(get
 
 
 @router.get("/children/high-risk", response_model=list[HighRiskChildOut])
-def list_high_risk_children(db: Session = Depends(get_db)):
+def list_high_risk_children(
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     """高危儿清单：新筛异常自动纳入 + 人工标记，供专案随访。"""
     return [
         {
@@ -433,11 +449,14 @@ def list_high_risk_children(db: Session = Depends(get_db)):
             "birth_date": c.birth_date,
             "risk_note": c.risk_note,
         }
-        for c in db.query(ChildRecord)
-        .filter(ChildRecord.high_risk.is_(True))
-        .order_by(ChildRecord.id.desc())
-        .limit(200)
-        .all()
+        for c in paginate(
+            db.query(ChildRecord)
+            .filter(ChildRecord.high_risk.is_(True))
+            .order_by(ChildRecord.id.desc()),
+            response,
+            offset,
+            limit,
+        )
     ]
 
 
@@ -481,13 +500,19 @@ def add_women_health(
 
 @router.get("/women-health", response_model=list[WomenHealthOut])
 def list_women_health(
-    patient_id: int | None = None, record_type: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    patient_id: int | None = None,
+    record_type: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(WomenHealthRecord)
     query = scope_patient_list(db, user, query, WomenHealthRecord, patient_id, "maternal")
     if record_type:
         query = query.filter(WomenHealthRecord.record_type == record_type)
-    return query.order_by(WomenHealthRecord.id.desc()).limit(200).all()
+    return paginate(query.order_by(WomenHealthRecord.id.desc()), response, offset, limit)
 
 
 # ===========================================================================
@@ -559,7 +584,12 @@ def create_screening(
 
 @router.get("/screenings", response_model=list[PrenatalScreeningOut])
 def list_prenatal_screenings(
-    record_id: int | None = None, result: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    record_id: int | None = None,
+    result: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
     query = db.query(PrenatalScreening)
     if record_id is not None:
@@ -567,7 +597,7 @@ def list_prenatal_screenings(
     if result:
         query = query.filter(PrenatalScreening.result == result)
     return [
-        _screening_out(s) for s in query.order_by(PrenatalScreening.id.desc()).limit(200).all()
+        _screening_out(s) for s in paginate(query.order_by(PrenatalScreening.id.desc()), response, offset, limit)
     ]
 
 

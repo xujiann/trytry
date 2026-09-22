@@ -698,7 +698,13 @@ def list_login_logs(
 
 @router.get("/users/role-changes", response_model=list[RoleChangeOut],
             dependencies=[Depends(require_admin)])
-def list_role_changes(user_id: int | None = None, db: Session = Depends(get_db)):
+def list_role_changes(
+    response: Response,
+    user_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     q = db.query(RoleChangeLog)
     if user_id is not None:
         q = q.filter(RoleChangeLog.user_id == user_id)
@@ -711,5 +717,5 @@ def list_role_changes(user_id: int | None = None, db: Session = Depends(get_db))
             "changed_by": r.changed_by,
             "at": r.created_at.isoformat(),
         }
-        for r in q.order_by(RoleChangeLog.id.desc()).limit(200).all()
+        for r in paginate(q.order_by(RoleChangeLog.id.desc()), response, offset, limit)
     ]

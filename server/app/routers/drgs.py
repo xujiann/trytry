@@ -8,7 +8,7 @@
 - GET /api/drgs/stats：各机构 CMI（Σ权重/正式入组例数，兜底组不计入）、
   各组例数/均费、按 MDC 汇总。
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -17,7 +17,7 @@ from ..data.drg_groups_seed import FALLBACK_DRG_GROUP, SEED_DRG_GROUPS
 from ..concurrency import insert_or_conflict
 from ..visibility import scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from ..models import Admission, CaseSummary, DrgGroup, Organization, User
 
 # 同组历史病例少于该数不做事中预警——3 个病例算出来的"均值"，预警的是噪声。
@@ -251,11 +251,17 @@ def _group_out(g: DrgGroup) -> dict:
 
 
 @router.get("/groups", response_model=list[DrgGroupOut])
-def list_groups(mdc: str | None = None, db: Session = Depends(get_db)):
+def list_groups(
+    response: Response,
+    mdc: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
     query = db.query(DrgGroup)
     if mdc:
         query = query.filter(DrgGroup.mdc == mdc)
-    return [_group_out(g) for g in query.order_by(DrgGroup.code).limit(500).all()]
+    return [_group_out(g) for g in paginate(query.order_by(DrgGroup.code), response, offset, limit)]
 
 
 @router.post("/groups", status_code=201, response_model=DrgGroupOut,

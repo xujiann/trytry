@@ -188,15 +188,24 @@ def list_followups(
 
 
 @router.get("/overdue", response_model=list[FollowupTaskOut])
-def overdue_followups(today: str | None = None, db: Session = Depends(get_db)):
+def overdue_followups(
+    response: Response,
+    today: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
     """超期未随访清单。today 覆盖参数仅供测试/排查（与其他预警接口同一约定）。"""
     cutoff = resolve_business_date(today).isoformat()
     rows = (
-        db.query(FollowupTask)
-        .filter(FollowupTask.status == "pending", FollowupTask.due_date < cutoff)
-        .order_by(FollowupTask.due_date)
-        .limit(500)
-        .all()
+        paginate(
+            db.query(FollowupTask)
+            .filter(FollowupTask.status == "pending", FollowupTask.due_date < cutoff)
+            .order_by(FollowupTask.due_date),
+            response,
+            offset,
+            limit,
+        )
     )
     names, orgs = _name_maps(db, rows)
     return [_out(t, names, orgs) for t in rows]

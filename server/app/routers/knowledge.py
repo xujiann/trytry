@@ -110,6 +110,12 @@ def search_entries(
         query = query.filter(KnowledgeEntry.category == category)
     if q:
         query = query.filter(KnowledgeEntry.title.contains(q))
+    # ⚠️ **截断在筛选之前**：`.limit(200)` 限的是扫描范围，下面才按 `expire_date 是否过期` 筛。
+    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
+    # "扫描的第 201~400 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
+    # ②**这本身是个漏报缺陷**：第 200 条之后的匹配项根本没被看过，
+    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
+    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
     results = []
     for e in query.order_by(KnowledgeEntry.id.desc()).limit(200).all():
         expired = bool(e.expire_date) and e.expire_date < current

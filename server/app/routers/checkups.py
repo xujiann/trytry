@@ -5,13 +5,13 @@ B2 扩展：登记接口新增可选 `items` 分项列表（逐项测值/参考�
 分项录完后由总检医师出总检结论（`/checkups/{id}/review`）。
 既有列表/异常清单响应字节不变（特征化测试钉住）。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..datetypes import DateStr
 from ..models import CheckupItem, Organization, Patient, PhysicalExam, User
 
@@ -92,17 +92,28 @@ def create_checkup(body: CheckupCreate, db: Session = Depends(get_db), user: Use
 
 @router.get("", response_model=list[CheckupOut])
 def list_checkups(
-    patient_id: int | None = None, has_abnormal: bool | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    patient_id: int | None = None,
+    has_abnormal: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(PhysicalExam)
     query = scope_patient_list(db, user, query, PhysicalExam, patient_id, "checkup")
     if has_abnormal is not None:
         query = query.filter(PhysicalExam.has_abnormal.is_(has_abnormal))
-    return query.order_by(PhysicalExam.id.desc()).limit(200).all()
+    return paginate(query.order_by(PhysicalExam.id.desc()), response, offset, limit)
 
 
 @router.get("/abnormal", response_model=list[AbnormalCheckupOut])
-def abnormal_checkups(db: Session = Depends(get_db)):
+def abnormal_checkups(
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     """异常项清单：供慢病筛查建档与随访干预衔接（医防协同）。"""
     return [
         {
@@ -111,11 +122,14 @@ def abnormal_checkups(db: Session = Depends(get_db)):
             "exam_date": e.exam_date,
             "abnormal_items": e.abnormal_items,
         }
-        for e in db.query(PhysicalExam)
-        .filter(PhysicalExam.has_abnormal.is_(True))
-        .order_by(PhysicalExam.id.desc())
-        .limit(200)
-        .all()
+        for e in paginate(
+            db.query(PhysicalExam)
+            .filter(PhysicalExam.has_abnormal.is_(True))
+            .order_by(PhysicalExam.id.desc()),
+            response,
+            offset,
+            limit,
+        )
     ]
 
 

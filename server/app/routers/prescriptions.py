@@ -417,7 +417,13 @@ def comment_prescription(
 
 @router.get("/comment-reviews", response_model=list[CommentReviewOut],
             dependencies=[Depends(get_current_user)])
-def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)):
+def list_comment_reviews(
+    response: Response,
+    grade: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     q = db.query(PrescriptionComment)
     if grade:
         q = q.filter(PrescriptionComment.grade == grade)
@@ -430,7 +436,7 @@ def list_comment_reviews(grade: str | None = None, db: Session = Depends(get_db)
             "comment": c.comment,
             "at": c.created_at.isoformat(),
         }
-        for c in q.order_by(PrescriptionComment.id.desc()).limit(200).all()
+        for c in paginate(q.order_by(PrescriptionComment.id.desc()), response, offset, limit)
     ]
 
 

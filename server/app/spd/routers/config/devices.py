@@ -204,11 +204,17 @@ def create_data_source(body: DataSourceIn, db: Session = Depends(get_db)):
 
 
 @router.get("/data-sources", response_model=list[DataSourceOut])
-def list_data_sources(source_type: str | None = None, db: Session = Depends(get_db)):
+def list_data_sources(
+    response: Response,
+    source_type: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdDataSource)
     if source_type:
         query = query.filter(SpdDataSource.source_type == source_type)
-    return [_source_out(s) for s in query.order_by(SpdDataSource.id).limit(200).all()]
+    return [_source_out(s) for s in paginate(query.order_by(SpdDataSource.id), response, offset, limit)]
 
 
 @router.patch("/data-sources/{source_id}", response_model=DataSourceOut,

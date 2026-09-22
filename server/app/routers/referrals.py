@@ -1,9 +1,9 @@
 """双向转诊：医共体内上转/下转申请、接诊、结案、退回的状态流转。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, paginate, require_roles
 from ..models import Organization, Patient, Referral, User
 from ..schemas import ReferralCreate, ReferralOut, ReferralStatusUpdate
 from ..visibility import assert_org_writable, GLOBAL_ROLES
@@ -86,11 +86,17 @@ def create_referral(
 
 
 @router.get("", response_model=list[ReferralOut])
-def list_referrals(status: str | None = None, db: Session = Depends(get_db)):
+def list_referrals(
+    response: Response,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(Referral)
     if status:
         query = query.filter(Referral.status == status)
-    return [_with_label(r) for r in query.order_by(Referral.id.desc()).limit(200).all()]
+    return [_with_label(r) for r in paginate(query.order_by(Referral.id.desc()), response, offset, limit)]
 
 
 @router.patch(

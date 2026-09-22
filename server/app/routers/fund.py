@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from ..datetypes import OptionalDateStr, PeriodStr
 from ..concurrency import insert_or_conflict, upsert_unique
 from ..database import get_db
-from ..deps import get_current_user, require_roles, resolve_org_scope
+from ..deps import get_current_user, paginate, require_roles, resolve_org_scope
 from ..formula import FormulaError, evaluate, validate
 from ..models import (
     FundDistribution,
@@ -256,14 +256,19 @@ def create_pool(
 
 @router.get("/pools", response_model=list[FundPoolOut])
 def list_pools(
-    year: int | None = None, status: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    year: int | None = None,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
     query = db.query(FundPool)
     if year is not None:
         query = query.filter(FundPool.year == year)
     if status:
         query = query.filter(FundPool.status == status)
-    return [_pool_out(p, db) for p in query.order_by(FundPool.id.desc()).limit(200).all()]
+    return [_pool_out(p, db) for p in paginate(query.order_by(FundPool.id.desc()), response, offset, limit)]
 
 
 @router.patch("/pools/{pool_id}", response_model=FundPoolOut,

@@ -780,14 +780,20 @@ def create_plan(body: PlanIn, db: Session = Depends(get_db)):
 
 
 @router.get("/assess-plans", response_model=list[PlanOut])
-def list_plans(level: str | None = None, active: bool | None = None,
-               db: Session = Depends(get_db)):
+def list_plans(
+    response: Response,
+    level: str | None = None,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     query = db.query(SpdAssessPlan)
     if level:
         query = query.filter(SpdAssessPlan.level == level)
     if active is not None:
         query = query.filter(SpdAssessPlan.active.is_(active))
-    return [_plan_out(p) for p in query.order_by(SpdAssessPlan.id).limit(200).all()]
+    return [_plan_out(p) for p in paginate(query.order_by(SpdAssessPlan.id), response, offset, limit)]
 
 
 @router.patch("/assess-plans/{plan_id}", response_model=PlanOut,
@@ -1139,11 +1145,16 @@ def create_point_rule(body: PointRuleIn, db: Session = Depends(get_db)):
 
 
 @router.get("/point-rules", response_model=list[PointRuleOut])
-def list_point_rules(db: Session = Depends(get_db)):
+def list_point_rules(
+    response: Response,
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
     return [
         {"id": r.id, "code": r.code, "name": r.name, "event": r.event,
          "points": r.points, "daily_limit": r.daily_limit, "active": r.active}
-        for r in db.query(SpdPointRule).order_by(SpdPointRule.id).limit(100).all()
+        for r in paginate(db.query(SpdPointRule).order_by(SpdPointRule.id), response, offset, limit)
     ]
 
 
@@ -1265,12 +1276,22 @@ def create_goods(body: GoodsIn, db: Session = Depends(get_db)):
 
 
 @router.get("/goods", response_model=list[GoodsOut])
-def list_goods(db: Session = Depends(get_db)):
+def list_goods(
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
     return [
         {"id": g.id, "code": g.code, "name": g.name, "points": g.points,
          "stock": g.stock, "image_url": g.image_url, "active": g.active}
-        for g in db.query(SpdGoods).filter(SpdGoods.active.is_(True))
-        .order_by(SpdGoods.id).limit(200).all()
+        for g in paginate(
+            db.query(SpdGoods).filter(SpdGoods.active.is_(True))
+            .order_by(SpdGoods.id),
+            response,
+            offset,
+            limit,
+        )
     ]
 
 

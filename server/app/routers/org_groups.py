@@ -6,13 +6,13 @@
 统计侧的接入方式是 `deps.resolve_org_scope()`——统计接口加一个 `group_id`
 可选参数即可，不必各自实现分组展开。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, paginate, require_admin
 from ..models import Organization, OrgGroup, OrgGroupMember
 
 router = APIRouter(
@@ -127,14 +127,19 @@ def create_group(body: GroupIn, db: Session = Depends(get_db)):
 
 @router.get("", response_model=list[GroupOut], response_model_exclude_unset=True)
 def list_groups(
-    group_type: str | None = None, active: bool | None = None, db: Session = Depends(get_db)
+    response: Response,
+    group_type: str | None = None,
+    active: bool | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
     query = db.query(OrgGroup)
     if group_type:
         query = query.filter(OrgGroup.group_type == group_type)
     if active is not None:
         query = query.filter(OrgGroup.active.is_(active))
-    groups = query.order_by(OrgGroup.id).limit(200).all()
+    groups = paginate(query.order_by(OrgGroup.id), response, offset, limit)
     # 成员数一次查回来，避免 N+1
     counts: dict[int, int] = {}
     for m in db.query(OrgGroupMember).all():

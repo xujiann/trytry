@@ -16,7 +16,7 @@
 from datetime import date, timedelta
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -33,7 +33,7 @@ from ..concurrency import (
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_business_date
 from pydantic import BaseModel, Field
 
 from ..models import (
@@ -623,9 +623,12 @@ def receive_batch(
     "/batches", response_model=list[BatchOut], dependencies=[Depends(get_current_user)]
 )
 def list_batches(
+    response: Response,
     org_id: int | None = None,
     drug_code: str | None = None,
     batch_no: str | None = None,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -635,7 +638,7 @@ def list_batches(
         q = q.filter(DrugBatch.drug_code == drug_code)
     if batch_no:
         q = q.filter(DrugBatch.batch_no == batch_no)
-    rows = q.order_by(DrugBatch.org_id, DrugBatch.drug_code, DrugBatch.expire_date).limit(500).all()
+    rows = paginate(q.order_by(DrugBatch.org_id, DrugBatch.drug_code, DrugBatch.expire_date), response, offset, limit)
     names = _stock_names(db, rows)
     return [_batch_out(b, names.get((b.org_id, b.drug_code), "")) for b in rows]
 
@@ -662,6 +665,12 @@ def expiring_drug_batches(
     limit_date = (today_d + timedelta(days=days)).isoformat()
     q = db.query(DrugBatch).filter(DrugBatch.expire_date <= limit_date)
     q = scope_org_list(db, user, q, DrugBatch, org_id)
+    # ⚠️ **截断在筛选之前**：`.limit(500)` 限的是扫描范围，下面才按 `quantity - used_quantity > 0（这一条其实可以下推到 SQL）` 筛。
+    # 两个后果：①分页不能照本仓库其它清单那样加 `paginate`——offset 会去翻
+    # "扫描的第 501~1000 条"，`X-Total-Count` 也会报成扫描池大小而不是结果数；
+    # ②**这本身是个漏报缺陷**：第 500 条之后的匹配项根本没被看过，
+    # 筛选页会静默少报。正解是把判定下推到 SQL 让上限变成输出上限，
+    # 那会改响应字节（多出原本漏掉的行），属独立的缺陷修复，见 docs/TECH_DEBT.md。
     rows = [
         b
         for b in q.order_by(DrugBatch.expire_date, DrugBatch.id).limit(500).all()
@@ -936,8 +945,11 @@ def receive_purchase(order_id: int, db: Session = Depends(get_db), user: User = 
 @router.get("/purchase-orders", response_model=list[PurchaseOrderOut],
             dependencies=[Depends(get_current_user)])
 def list_purchases(
+    response: Response,
     status: str | None = None,
     org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -956,7 +968,7 @@ def list_purchases(
             "quantity": o.quantity,
             "status": o.status,
         }
-        for o in q.order_by(PurchaseOrder.id.desc()).limit(200).all()
+        for o in paginate(q.order_by(PurchaseOrder.id.desc()), response, offset, limit)
     ]
 
 
@@ -1033,7 +1045,14 @@ def create_stock_take(
 
 @router.get("/stock-takes", response_model=list[StockTakeOut],
             dependencies=[Depends(get_current_user)])
-def list_stock_takes(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
+def list_stock_takes(
+    response: Response,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     q = db.query(StockTake)
     q = scope_org_list(db, user, q, StockTake, org_id)
     return [
@@ -1046,5 +1065,5 @@ def list_stock_takes(org_id: int | None = None, db: Session = Depends(get_db), u
             "diff": t.diff,
             "note": t.note,
         }
-        for t in q.order_by(StockTake.id.desc()).limit(200).all()
+        for t in paginate(q.order_by(StockTake.id.desc()), response, offset, limit)
     ]

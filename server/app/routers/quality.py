@@ -10,7 +10,7 @@
 import re
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -19,7 +19,7 @@ from ..concurrency import ensure_present, insert_if_absent
 from ..datetypes import is_period
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_org_scope, row_dict
+from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope, row_dict
 from ..models import (
     Admission,
     AdverseEvent,
@@ -312,14 +312,19 @@ def report_adverse_event(
 
 @router.get("/adverse-events", response_model=list[AdverseEventOut])
 def list_adverse_events(
-    status: str | None = None, event_type: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    status: str | None = None,
+    event_type: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
     q = db.query(AdverseEvent)
     if status:
         q = q.filter(AdverseEvent.status == status)
     if event_type:
         q = q.filter(AdverseEvent.event_type == event_type)
-    return [_adverse_out(e) for e in q.order_by(AdverseEvent.id.desc()).limit(200).all()]
+    return [_adverse_out(e) for e in paginate(q.order_by(AdverseEvent.id.desc()), response, offset, limit)]
 
 
 class NoteBody(BaseModel):
@@ -445,7 +450,12 @@ def create_record_qc(
 
 @router.get("/record-qc", response_model=list[RecordQcOut])
 def list_record_qc(
-    target_type: str | None = None, grade: str | None = None, db: Session = Depends(get_db)
+    response: Response,
+    target_type: str | None = None,
+    grade: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
 ):
     q = db.query(RecordQc)
     if target_type:
@@ -462,7 +472,7 @@ def list_record_qc(
             "defects": r.defects,
             "qc_by": r.qc_by,
         }
-        for r in q.order_by(RecordQc.id.desc()).limit(200).all()
+        for r in paginate(q.order_by(RecordQc.id.desc()), response, offset, limit)
     ]
 
 
@@ -537,13 +547,19 @@ def create_infection_report(
 
 @router.get("/infection-reports", response_model=list[InfectionReportOut])
 def list_infection_reports(
-    status: str | None = None, org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    response: Response,
+    status: str | None = None,
+    org_id: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     q = db.query(InfectionReport)
     if status:
         q = q.filter(InfectionReport.status == status)
     q = scope_org_list(db, user, q, InfectionReport, org_id)
-    return [_infection_out(r) for r in q.order_by(InfectionReport.id.desc()).limit(200).all()]
+    return [_infection_out(r) for r in paginate(q.order_by(InfectionReport.id.desc()), response, offset, limit)]
 
 
 @router.post(
@@ -792,11 +808,15 @@ def upsert_medical_record(
 
 @router.get("/records", response_model=list[MedicalRecordOut])
 def list_medical_records(
+    response: Response,
     encounter_id: int | None = None,
     org_id: int | None = None,
     grade: str | None = None,
     doctor_name: str | None = None,
-    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     q = db.query(MedicalRecord)
     if encounter_id is not None:
@@ -806,7 +826,7 @@ def list_medical_records(
         q = q.filter(MedicalRecord.qc_grade == grade)
     if doctor_name:
         q = q.filter(MedicalRecord.doctor_name == doctor_name)
-    return [_record_out(r) for r in q.order_by(MedicalRecord.id.desc()).limit(200).all()]
+    return [_record_out(r) for r in paginate(q.order_by(MedicalRecord.id.desc()), response, offset, limit)]
 
 
 def _grade_bucket() -> dict:
