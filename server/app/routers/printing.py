@@ -101,8 +101,8 @@ EXAM_STATUS_NAMES = {
 BILL_TYPE_NAMES = {"outpatient": "门诊", "inpatient": "住院"}
 REFERRAL_DIRECTION_NAMES = {"up": "上转", "down": "下转"}
 # 转诊状态文案与业务端逐字相同，不再抄一份：打印件与列表页读起来必须是同一句话。
-# 居民端另有一套措辞（待接收/已接收/已完成，见 portal._PLATFORM_REFERRAL_STATUS），
-# 那是刻意的对外分叉、不是第三份拷贝，收敛与否属另案（ROADMAP）。
+# 居民端另有一套措辞（待接收/已接收/已完成），那是刻意的对外分叉、不是第三份拷贝——
+# 两套措辞现在并排长在 `referrals.STATUS_WORDING` 的同一张表里（原 P1-38）。
 from .referrals import STATUS_LABELS as REFERRAL_STATUS_NAMES  # noqa: E402
 CONSENT_SCENE_NAMES = {
     "archive": "居民健康建档",

@@ -12,17 +12,37 @@ router = APIRouter(
     prefix="/api/referrals", tags=["双向转诊"], dependencies=[Depends(get_current_user)]
 )
 
-#: 业务端转诊状态文案。**与居民端刻意不同**：居民端说的是"待接收/已接收/已完成"
-#: （见 `routers/portal._PLATFORM_REFERRAL_STATUS`），面向患者；这里是
-#: "待接诊/已接诊/已结案"，面向医师。同一个状态、两个读者、两套措辞是对的；
-#: 不对的是**同一套措辞在前后端各存一份**——那种复制迟早改一处漏一处。
-#: 前端 `static/core.js` 现在只负责配色，文案取自这里。
-STATUS_LABELS = {
-    "pending": "待接诊",
-    "accepted": "已接诊",
-    "completed": "已结案",
-    "rejected": "已退回",
+#: 转诊状态的唯一真源：状态码 → (业务端文案, 居民端文案)。
+#:
+#: **两套措辞是刻意的，不是拷贝走样**：医师看的是自己要做的动作
+#: （"待接诊"——这单等我接），居民看的是自己这张单子的处境
+#: （"待接收"——医院还没接下）。把它们统一成一句话，要么让居民端读起来像
+#: 医师的工作台，要么让医师的工作台变含糊。同一个状态、两个读者、两套措辞是对的。
+#:
+#: 不对的是**两套措辞各存一处、各自演化**（原 P1-38）：居民端那份原先长在
+#: `routers/portal` 里，新增一个状态码时没有任何东西提醒你居民端也要给一句话，
+#: 而那边的兜底是 `.get(status, status)`——漏了不报错，居民看到的是英文状态码。
+#: 所以这里一行一个状态、两列并排：**加状态时必须当场决定两个读者各看到什么**，
+#: 想漏也漏不掉。键集与状态机是否对得上，由
+#: `tests/test_referral_status_label.py` 按 `_ALLOWED_TRANSITIONS` 与模型默认值
+#: 现算比对，连 `schemas.ReferralStatusUpdate` 的 pattern 也一并对上。
+#:
+#: 前端只负责配色（`static/core.js` 的 `REF_STATUS_COLOR`），文案一律取自后端
+#: 的 `status_label`——同一套措辞在前后端各存一份，迟早改一处漏一处。
+STATUS_WORDING = {
+    #  状态码          业务端（医师）  居民端（患者）
+    "pending":      ("待接诊",      "待接收"),
+    "accepted":     ("已接诊",      "已接收"),
+    "completed":    ("已结案",      "已完成"),
+    # 退回对两边是同一句话：这一条本来就没有"医师视角/患者视角"之分
+    "rejected":     ("已退回",      "已退回"),
 }
+
+#: 业务端（医师）文案。打印件也直接用这一份（见 `routers/printing`）。
+STATUS_LABELS = {code: business for code, (business, _) in STATUS_WORDING.items()}
+
+#: 居民端（患者）文案。`routers/portal` 的转诊聚合取这一份。
+RESIDENT_STATUS_LABELS = {code: resident for code, (_, resident) in STATUS_WORDING.items()}
 
 
 def _with_label(referral: Referral) -> Referral:

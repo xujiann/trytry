@@ -108,6 +108,7 @@ from .consents import (
     validate_correction_changes,
 )
 from .notifications import NotificationOut, UnreadCountOut, notification_out
+from .referrals import RESIDENT_STATUS_LABELS
 from .chronic import guidance_for
 
 router = APIRouter(prefix="/api/portal", tags=["居民端"])
@@ -1479,17 +1480,17 @@ _REFERRAL_SOURCES: dict[str, Callable[[Session, int], list[dict]]] = {}
 #: 聚合列表的返回条数上限，与两个单源接口各自的 limit 保持一致。
 REFERRAL_FEED_LIMIT = 50
 
-#: 平台 `referrals` 的状态码 → 中文。两套状态码有**同名不同义**的（平台
-#: `accepted` 是"已接诊"，spd `accepted` 是"县级已接收"），所以标签必须分源映射，
-#: 且响应里始终带 `source`——这正是 ADR-0003 所说的口径分叉，聚合层只能如实呈现，
-#: 不能假装它们是一回事。
-#: 措辞与居民端 `static/m/m.js` 的 `REFERRAL_STATUS` **逐字一致**：本次聚合的目的
-#: 就是口径统一，后端再造一套说法只会让同一个状态在两个页面读起来不一样。
-#: 后端自此是这套措辞的权威来源，前端切过来时直接用 `status_label` 即可。
-_PLATFORM_REFERRAL_STATUS = {
-    "pending": "待接收", "accepted": "已接收",
-    "completed": "已完成", "rejected": "已退回",
-}
+#: 平台 `referrals` 的状态码 → 居民端中文。**文案不在这里定义**，取自
+#: `routers/referrals.STATUS_WORDING` 的居民端那一列（原 P1-38：两套措辞各存一处、
+#: 各自演化，新增状态码时没有任何东西提醒你居民端也要给一句话，而下面的兜底
+#: `.get(status, status)` 漏了不报错——居民看到的是英文状态码）。
+#:
+#: 仍然**分源映射**：两套状态码有同名不同义的（平台 `accepted` 是"已接诊/已接收"，
+#: spd `accepted` 是"县级医院已接收"），且响应里始终带 `source`——这正是 ADR-0003
+#: 所说的口径分叉，聚合层只能如实呈现，不能假装它们是一回事。
+#: 前端不再自带文案表，直接用 `status_label`（`tests/test_portal_referral_frontend.py`
+#: 盯着这一条）。
+_PLATFORM_REFERRAL_STATUS = RESIDENT_STATUS_LABELS
 
 
 class ReferralFeedItem(BaseModel):
