@@ -23,12 +23,21 @@
 
 ## 承认的边界（都在 test_覆盖面自证 里打印）
 
-1. **只覆盖声明了 `response_model` 的端点**。本仓库 948 个端点里近半数直接
-   返回裸 dict（契约欠账 P1-38），那些没有可比对的字段集，本闸门看不见。
-2. **三元组是手写的**，不是从 JS 推的——免构建前端没有解析器，靠正则做
-   "哪个变量来自哪个接口"的数据流分析不可靠。手写清单在这里是可接受的：
-   漏登记一条不会让错的东西静默通过，只会让覆盖数字变小，而那个数字会打印
-   出来。`BASELINE_UNCHECKED` 钉住"未覆盖的渲染点"只许变少。
+1. **只覆盖声明了 `response_model` 的端点**。这条盲区原先很大（近半数端点直接
+   返回裸 dict，契约欠账 **P2-5**——此处原先误写成 P1-38，那是居民端转诊措辞、
+   与契约无关）。P2-5 已清到 99.8%（946/948），所以这条盲区如今几乎不剩什么。
+2. ~~三元组是手写的~~ —— **本轮改成推导为主、手写为辅**（P1-52）。原先的理由是
+   "免构建前端没有解析器，数据流分析不可靠"。这话对了一半：**任意**变量的来源
+   确实推不出来，但有一条链是**窄到可以推准**的——
+
+       const 列表 = await api("<路径>")   →   table(列表, (行) => ...) / 列表.map((行) => ...)
+
+   赋值与使用挨在一起、中间没有别的赋值，路径又能反查到 `response_model`。
+   按这条链推出 243 处渲染点（覆盖 90 个 render 函数、443 个字段名），
+   比手写的 9 条三元组多两个数量级，
+   而且**前端改了会自己跟着变**，不需要谁记得回来加一行。
+   推不准的一律**放弃而不是猜**（见下方四条收紧），放弃的部分计入盲区打印。
+   手写三元组保留：它们覆盖的是推导链之外的形状（详情对象、嵌套行），只许增。
 3. **只判字段名存在，不判类型与语义**：`${a.stayed_days}` 写成
    `${a.baseline_cases}` 两个都存在，本闸门判不出来。
 
@@ -42,6 +51,8 @@ import warnings
 from pathlib import Path
 
 import pytest
+from typing import get_args, get_origin
+
 from pydantic import BaseModel
 
 from app.routers.checkups import CheckupItemOut
@@ -138,9 +149,289 @@ def test_覆盖面自证():
             f"    静态资源里的 `${{变量.字段}}` 插值点：{total_sites} 处（5 个 .js 全量）",
             f"    本闸门覆盖的字段名：{covered} 个，来自 {len(CHECKED)} 条 (页面, 变量, 契约) 三元组",
             "    —— 以下是这道闸门**看不见**的部分 ——",
-            "    盲区①只覆盖声明了 response_model 的端点；裸 dict 返回的端点没有可比对的字段集（P1-38）",
-            "    盲区②三元组手写，不是从 JS 推的——漏登记只让覆盖变小，不会让错的静默通过",
+            "    盲区①只覆盖声明了 response_model 的端点（契约欠账 P2-5 已清到 99.8%，此路几乎不剩）",
+            f"    盲区②推导只认「赋值→紧接着的行回调」这一条链，认不准的放弃而不猜"
+            f"（另见 test_推导覆盖面自证 打印的 {len(DERIVED)} 条链）",
             "    盲区③只判字段名存在，不判类型与语义：两个都存在的字段写串了，判不出来",
         ]),
         stacklevel=1,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 从 JS 推导渲染点（P1-52）：手写三元组改成推导为主
+# ---------------------------------------------------------------------------
+#
+# 能推准的只有这一条链，**别的形状一律放弃**：
+#
+#     const 列表 = await api("<路径>")   →   table(列表, (行) => …) / 列表.map((行) => …)
+#
+# 赋值与使用挨在一起，路径能反查到 `response_model`，回调体又天然是"这个行变量
+# 只可能是这一种契约"的作用域。三条收紧全是被**真实误报**逼出来的，不是预防性的：
+#
+# ① **同名变量在同一个 render 块里被赋过两次就整条放弃**。`renderBilling` 里
+#    `rows` 先是押金流水、后是调价历史，两个不同接口；不放弃就会拿押金的契约去
+#    判调价历史的字段，报出一个根本不存在的"缺陷"。歧义要放弃，不要猜。
+#    记歧义时**不管那次赋值解析得出解析不出**——只记解析得出的，会让"另一次赋的
+#    是个没有契约的接口"这种情况悄悄漏过去。
+# ② **`Promise.all` 解构必须元素与变量名一一对得上，且每个元素都是裸 `api(...)`**。
+#    `admissionId ? api(…) : Promise.resolve(null)` 这种条件元素会让 zip 错位，
+#    把 A 接口的契约安到 B 变量头上。
+# ③ **`.map` 的接收者不能是属性访问**。`stats.groups.map((g) => …)` 里的 `g` 是
+#    `stats.groups` 的行，不是 `groups` 变量的行——少了这条收紧就会拿
+#    `/api/drgs/groups` 的契约去判 `stats.groups` 的字段。
+# ④ **行变量的括号要配平**。写成 `\(?…\)?` 会把**箭头形参表**也吃进去：
+#    `(qc, title) =>` 里 `qc,` 后面跟着 `title)` 再跟 `=>`，于是第二个形参
+#    被当成了行变量。
+#
+# 推导目前认出 243 条链，覆盖 90 个 render 函数、443 个字段名。这个数**只许多不许少**：
+# 掉下去说明判据被哪次改动悄悄打断了，而闸门不会因此变红——它只会安静地少看几处。
+BASELINE_DERIVED_CHAINS = 243
+
+#: `api()` 路径 → 契约字段集。路径反查复用孤儿棘轮那份正则（同一个"前端怎么写
+#: 这个调用"的问题不留两份答案）。
+_ROUTE_FIELDS: list[tuple[str, re.Pattern, set[str]]] = []
+
+_ASSIGN = re.compile(r"const\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+api\(\s*[`\"']([^`\"'?]+)")
+_MULTI = re.compile(r"const\s*\[([^\]]+)\]\s*=\s*await\s+Promise\.all\(\s*\[(.*?)\]\s*\)", re.S)
+_BARE_API = re.compile(r"\s*api\(\s*[`\"']([^`\"'?]+)[^)]*\)\s*", re.S)
+_BLOCK_HEAD = re.compile(r"^(?:async )?function (?:render|draw)\w*\(", re.M)
+
+
+def _route_fields() -> list[tuple[str, re.Pattern, set[str]]]:
+    if not _ROUTE_FIELDS:
+        from test_frontend_endpoint_coverage import _iter_routes, _pattern_for
+
+        for route in _iter_routes():
+            if "GET" not in route.methods:
+                continue
+            model = route.response_model
+            if get_origin(model) in (list, set, tuple):
+                args = get_args(model)
+                model = args[0] if args else None
+            if isinstance(model, type) and issubclass(model, BaseModel):
+                _ROUTE_FIELDS.append((route.path, _pattern_for(route.path), set(model.model_fields)))
+    return _ROUTE_FIELDS
+
+
+def _resolve(path: str) -> tuple[str, set[str]] | None:
+    for route_path, pattern, fields in _route_fields():
+        if pattern.match(path):
+            return route_path, fields
+    return None
+
+
+def _split_top(text: str) -> list[str]:
+    """按**顶层逗号**切数组元素——`api(\\`…${x}\\`)` 里的逗号不算。"""
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+def _callback_body(block: str, start: int) -> str:
+    """从 `=>` 之后起取到括号配平为止——回调体就是行变量的作用域。"""
+    depth, i = 0, start
+    while i < len(block):
+        if block[i] in "({[":
+            depth += 1
+        elif block[i] in ")}]":
+            depth -= 1
+            if depth <= 0:
+                return block[start:i + 1]
+        i += 1
+    return block[start:]
+
+
+def _all_blocks() -> list[tuple[str, str, str]]:
+    """(文件, 函数名, 源码块)——按 `function render*/draw*` 切。"""
+    out = []
+    for file, src in SRC.items():
+        starts = [m.start() for m in _BLOCK_HEAD.finditer(src)]
+        for i, start in enumerate(starts):
+            end = starts[i + 1] if i + 1 < len(starts) else len(src)
+            name = src[start:src.index("(", start)].split()[-1]
+            out.append((file, name, src[start:end]))
+    return out
+
+
+def _chains_in_block(block: str) -> list[tuple[str, str, set[str], str]]:
+    """一个 render 块里推得出的 (路径, 行变量, 契约字段集, 回调体)。"""
+    assigned: dict[str, set[str]] = {}
+    for m in _ASSIGN.finditer(block):
+        assigned.setdefault(m.group(1), set()).add(m.group(2))
+    multi: list[tuple[str, str]] = []
+    for m in _MULTI.finditer(block):
+        names = [n.strip() for n in m.group(1).split(",") if n.strip()]
+        elems = _split_top(m.group(2))
+        if len(names) != len(elems):  # 收紧②：对不齐就整条放弃
+            continue
+        for name, elem in zip(names, elems):
+            bare = _BARE_API.fullmatch(elem)
+            if bare:
+                assigned.setdefault(name, set()).add(bare.group(1))
+                multi.append((name, bare.group(1)))
+
+    binding: dict[str, tuple[str, set[str]]] = {}
+    for name, paths in assigned.items():
+        if len(paths) != 1:  # 收紧①：同名两次赋值 = 歧义，放弃
+            continue
+        resolved = _resolve(next(iter(paths)))
+        if resolved:
+            binding[name] = resolved
+
+    chains = []
+    for var, (route_path, fields) in binding.items():
+        # 收紧③：`(?<![.\w$])` —— `stats.groups.map` 里的 `groups` 不是本变量
+        # `table(表头, 列表, (行) => …)` 与 `列表.map((行) => …)` 两种写法。
+        # 表头那个参数不去解析——只认"列表变量紧跟着一个箭头回调"这个形状。
+        # 括号要**配平**：`\(?…\)?` 会把 `(qc, title) =>` 这种**箭头形参表**也吃进去
+        # （`qc,` 后面跟着 `title)` 再跟 `=>`），于是把第二个形参当成了行变量。
+        use = re.compile(
+            rf"(?<![.\w$]){re.escape(var)}\s*(?:,\s*|\.map\(\s*)"
+            rf"(?:\(\s*([A-Za-z_$][\w$]*)\s*\)|([A-Za-z_$][\w$]*))\s*=>"
+        )
+        for m in use.finditer(block):
+            row_var = m.group(1) or m.group(2)
+            chains.append((route_path, row_var, fields, _callback_body(block, m.end())))
+    return chains
+
+
+def _derived() -> list[tuple[str, str, str, str, set[str], str]]:
+    """(文件, 函数, 路径, 行变量, 契约字段集, 回调体)。"""
+    out = []
+    for file, fn, block in _all_blocks():
+        for route_path, var, fields, body in _chains_in_block(block):
+            out.append((file, fn, route_path, var, fields, body))
+    return out
+
+
+DERIVED = _derived()
+
+
+@pytest.mark.parametrize(
+    ("fn", "route_path", "var", "fields", "body"),
+    [(fn, rp, v, f, b) for _file, fn, rp, v, f, b in DERIVED],
+    ids=[f"{fn}:{rp}:{v}" for _file, fn, rp, v, _f, _b in DERIVED],
+)
+def test_推导出的渲染点字段名都在契约里(fn, route_path, var, fields, body):
+    hits = _field_hits(body, var)
+    unknown = sorted(hits - fields)
+    assert unknown == [], (
+        f"{fn} 用 {route_path} 的行渲染了契约上没有的字段：{unknown}\n"
+        f"  契约字段：{sorted(fields)}\n"
+        "  这类错孤儿棘轮看不见（路径调用点照样在），界面上的表现是一列 undefined。"
+    )
+
+
+def test_推导链只许多不许少():
+    """判据被哪次改动悄悄打断时，闸门不会变红——它只会安静地少看几处。"""
+    assert len(DERIVED) >= BASELINE_DERIVED_CHAINS, (
+        f"推导出的渲染点从 {BASELINE_DERIVED_CHAINS} 掉到 {len(DERIVED)}。"
+        " 要么前端把某几处清单渲染改成了推不出来的写法（那就调低基线并说明），"
+        " 要么推导判据被打断了（那是这道闸门在悄悄失明）。"
+    )
+
+
+# —— 判据不空转：三条收紧各自都要能被证明确实在起作用 ——
+
+_FAKE_ROUTE = "/api/organizations"  # 真实存在、带 response_model 的清单端点
+
+
+def test_推导不空转_合成块里的错字段必须报出来():
+    block = (
+        'async function renderFake() {\n'
+        f'  const rows = await api("{_FAKE_ROUTE}");\n'
+        '  $("#x").innerHTML = table(["名"], rows, (o) => `<tr><td>${o.definitely_not_a_field}</td></tr>`);\n'
+        '}\n'
+    )
+    chains = _chains_in_block(block)
+    assert len(chains) == 1, "这条最基本的链都推不出来，说明推导整个失效了"
+    route_path, var, fields, body = chains[0]
+    assert (route_path, var) == (_FAKE_ROUTE, "o")
+    assert sorted(_field_hits(body, var) - fields) == ["definitely_not_a_field"]
+
+
+def test_收紧一_同名变量赋过两次就放弃而不是猜():
+    """`renderBilling` 真踩过：`rows` 先是押金流水、后是调价历史。"""
+    block = (
+        'async function renderFake() {\n'
+        f'  const rows = await api("{_FAKE_ROUTE}");\n'
+        '  const rows = await api("/api/users");\n'
+        '  $("#x").innerHTML = table(["名"], rows, (o) => `${o.name}`);\n'
+        '}\n'
+    )
+    assert _chains_in_block(block) == [], "同名两次赋值仍然推出了链——那是在猜"
+
+
+def test_收紧二_PromiseAll里有条件元素时不许错位():
+    """`admissionId ? api(…) : Promise.resolve(null)` 会让 zip 错位。"""
+    block = (
+        'async function renderFake() {\n'
+        '  const [bal, rows] = await Promise.all([\n'
+        '    cond ? api("/api/users") : Promise.resolve(null),\n'
+        f'    api("{_FAKE_ROUTE}"),\n'
+        '  ]);\n'
+        '  $("#x").innerHTML = table(["名"], rows, (o) => `${o.name}`);\n'
+        '}\n'
+    )
+    chains = _chains_in_block(block)
+    assert [(rp, v) for rp, v, _f, _b in chains] == [(_FAKE_ROUTE, "o")], (
+        f"条件元素把契约安到了错的变量上：{[(rp, v) for rp, v, _f, _b in chains]}"
+    )
+
+
+def test_收紧三_属性访问不算本变量():
+    """`stats.groups.map((g) => …)` 里的 `g` 是 `stats.groups` 的行，不是 `groups` 的。"""
+    block = (
+        'async function renderFake() {\n'
+        f'  const groups = await api("{_FAKE_ROUTE}");\n'
+        '  $("#x").innerHTML = barChart(stats.groups.map((g) => [g.drg_code, g.avg_cost]));\n'
+        '}\n'
+    )
+    assert _chains_in_block(block) == [], "把 `stats.groups` 的行当成了 `groups` 的行"
+
+
+def test_推导覆盖面自证(capsys):
+    fns = {fn for _f, fn, _rp, _v, _fl, _b in DERIVED}
+    field_names = sum(len(_field_hits(b, v)) for _f, _fn, _rp, v, _fl, b in DERIVED)
+    blocks = _all_blocks()
+    no_api = [fn for _f, fn, block in blocks if not _ASSIGN.search(block) and not _MULTI.search(block)]
+    with capsys.disabled():
+        print(f"\n  [渲染字段名闸门 · 推导部分] render/draw 块 {len(blocks)} 个")
+        print(f"    推导出的 (清单接口 → 行变量) 链：{len(DERIVED)} 条，"
+              f"覆盖 {len(fns)} 个函数、{field_names} 个字段名（基线 {BASELINE_DERIVED_CHAINS}）")
+        print(f"    手写三元组另覆盖 {len(CHECKED)} 处（推导链之外的形状：详情对象、嵌套行）")
+        print(f"    没有任何 `const x = await api(...)` 的块：{len(no_api)} 个（多是纯表单/纯图表）")
+        print("    放弃而不猜的四类：同名变量重复赋值、Promise.all 元素对不齐、"
+              "属性访问式接收者、括号不配平的箭头形参表")
+    assert DERIVED
+
+
+#: 回调体里一个字段都没取的链（回调只是转调另一个函数，字段在那边访问）。
+#: 这类链**不是错**，但它什么也没断言——数量要可见，免得哪天回调体提取坏掉、
+#: 243 条链全变成空转而闸门照样全绿。
+MAX_EMPTY_CHAINS = 3
+
+
+def test_空转的推导链要少而可见():
+    empty = [
+        f"{fn} {route_path} ({var})"
+        for _file, fn, route_path, var, _fields, body in DERIVED
+        if not _field_hits(body, var)
+    ]
+    assert len(empty) <= MAX_EMPTY_CHAINS, (
+        f"回调体里取不到任何字段的链涨到 {len(empty)} 条：{empty}\n"
+        "  少量是正常的（回调只转调另一个函数），成片出现说明回调体提取坏了——"
+        "那时这道闸门会安静地全绿，什么也没判。"
     )
