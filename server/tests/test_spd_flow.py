@@ -1415,3 +1415,29 @@ def test_migration_covers_every_spd_table():
         if name.startswith("spd_") and f'"{name}"' not in all_migrations
     ]
     assert missing == [], f"以下慢专病表没有写进迁移：{missing}"
+
+
+def test_无负责人的路径实例不致500(client, h, base):
+    """`owner_user_id` 列可空；契约曾写成 `int`，于是这样一条实例在返回它的
+    每个接口上都是 500（ResponseValidationError）。唯一的建实例入口会填 user.id，
+    平时碰不到——存量/导入的行才会有 NULL，所以直接落库造一条。
+    自己造数据，不依赖本模块前面的剧本（P1-55）。"""
+    from app.database import SessionLocal
+    from app.spd.models import SpdEnrollment, SpdPathInstance, SpdPathTemplate, SpdProgram
+
+    pt = client.post("/api/patients", json={
+        "name": "无负责人实例患者", "id_card": "330102199505051234"}, headers=h).json()["id"]
+    with SessionLocal() as db:
+        prog = SpdProgram(code="noowner", name="无负责人探针")
+        db.add(prog); db.flush()
+        tpl = SpdPathTemplate(program_id=prog.id, code="noowner", name="探针路径", status="published")
+        enr = SpdEnrollment(patient_id=pt, program_code="noowner", org_id=base["county"]["id"])
+        db.add_all([tpl, enr]); db.flush()
+        inst = SpdPathInstance(enrollment_id=enr.id, template_id=tpl.id, owner_user_id=None)
+        db.add(inst); db.commit()
+        iid = inst.id
+    got = client.get(f"/api/spd/path-instances/{iid}", headers=h)
+    assert got.status_code == 200, got.text
+    assert got.json()["owner_user_id"] is None
+    patched = client.patch(f"/api/spd/path-instances/{iid}", json={}, headers=h)
+    assert patched.status_code == 200, patched.text

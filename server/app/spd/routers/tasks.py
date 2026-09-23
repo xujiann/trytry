@@ -70,7 +70,11 @@ class PathInstanceOut(BaseModel):
     progress: int
     # 启动时对模板的逐节点覆盖，形状随模板而变
     overrides: dict
-    owner_user_id: int
+    # 列可空（`spd_path_instances.owner_user_id`），原样透出——没有负责人就是 null。
+    # 补契约时写成了 `int`，于是任何一条无负责人的实例在所有返回它的接口上都 500
+    # （ResponseValidationError）。唯一的建实例入口会填 `user.id`，所以要存量/导入的
+    # 行才碰得到——正因为平时碰不到，才更不能让契约比列更严。
+    owner_user_id: int | None
     started_at: str
     # 未结束时是空串，不是 null
     finished_at: str
