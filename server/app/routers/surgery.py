@@ -222,6 +222,7 @@ def create_request(
     admission = db.get(Admission, body.admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_org_writable(db, user, admission.org_id)  # P1-56：按实体自己的机构判归属
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可申请手术")
     request = SurgeryRequest(
@@ -326,6 +327,7 @@ def schedule_surgery(
     room = db.get(OperatingRoom, body.room_id)
     if room is None or not room.active:
         raise HTTPException(status_code=404, detail="手术间不存在或已停用")
+    assert_org_writable(db, user, room.org_id)  # P1-56：按实体自己的机构判归属
     if body.end_time <= body.start_time:
         raise HTTPException(status_code=422, detail="结束时间须晚于开始时间")
 

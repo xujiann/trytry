@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
+from ..visibility import assert_org_writable
 from ..models import (
     Admission,
     InpatientOrder,
@@ -156,6 +157,10 @@ def create_progress_note(
     两条规则：出院后不得再补录（病历应在住院期间形成）；首次病程每次住院唯一。
     """
     admission = _admission_or_404(db, admission_id)
+    # P1-56 同族：原先本文件没有任何归属校验，乙院能往甲院住院患者的病历里
+    # 写病程/护理/体征（实测 201）。按住院记录自己的机构判，不在 `_admission_or_404`
+    # 里判——同一个 helper 也给读接口用，读的口径是可见性不是可写性。
+    assert_org_writable(db, user, admission.org_id)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写病程记录")
     if body.note_type == "first":
@@ -272,6 +277,10 @@ def create_nursing_record(
     user: User = Depends(get_current_user),
 ):
     admission = _admission_or_404(db, admission_id)
+    # P1-56 同族：原先本文件没有任何归属校验，乙院能往甲院住院患者的病历里
+    # 写病程/护理/体征（实测 201）。按住院记录自己的机构判，不在 `_admission_or_404`
+    # 里判——同一个 helper 也给读接口用，读的口径是可见性不是可写性。
+    assert_org_writable(db, user, admission.org_id)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写护理记录")
     if body.inpatient_order_id is not None:
@@ -353,6 +362,10 @@ def create_vital(
     user: User = Depends(get_current_user),
 ):
     admission = _admission_or_404(db, admission_id)
+    # P1-56 同族：原先本文件没有任何归属校验，乙院能往甲院住院患者的病历里
+    # 写病程/护理/体征（实测 201）。按住院记录自己的机构判，不在 `_admission_or_404`
+    # 里判——同一个 helper 也给读接口用，读的口径是可见性不是可写性。
+    assert_org_writable(db, user, admission.org_id)
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再记录体征")
     record = VitalSignRecord(
@@ -424,8 +437,10 @@ def create_handover(
     body: HandoverIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """交接班：在院人数由系统按当前住院数据快照，不让人工填——这个数填错就没意义了。"""
-    if db.get(Ward, body.ward_id) is None:
+    ward = db.get(Ward, body.ward_id)
+    if ward is None:
         raise HTTPException(status_code=404, detail="病区不存在")
+    assert_org_writable(db, user, ward.org_id)  # P1-56：按实体自己的机构判归属
     patient_count = (
         db.query(Admission)
         .filter(Admission.ward_id == body.ward_id, Admission.status == "admitted")

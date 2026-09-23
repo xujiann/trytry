@@ -287,6 +287,8 @@ def start_path_instance(
     enrollment = db.get(SpdEnrollment, body.enrollment_id)
     if enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
+    # P1-56：在别家的纳管档案上起路径，首节点任务会落进那家的队列
+    assert_org_writable(db, user, enrollment.org_id)
     if enrollment.status != "active":
         raise HTTPException(status_code=409, detail="非在管患者不能启动路径")
     template = db.get(SpdPathTemplate, body.template_id)
@@ -557,6 +559,14 @@ def create_task(
     )
     if body.enrollment_id is not None and enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
+    if enrollment is not None:
+        # P1-56：原先对档案什么都不查。两个后果都实测过（201）：
+        # ① 档案可以是**另一个患者**的——任务挂在张三名下、却关联李四的纳管档案；
+        # ② `spawn_task` 在没给 team/assignee 时**从档案继承**，于是乙院医生建的
+        #    任务落进甲院团队的队列、派给甲院的医生。
+        if enrollment.patient_id != body.patient_id:
+            raise HTTPException(status_code=422, detail="纳管档案不属于该患者")
+        assert_org_writable(db, user, enrollment.org_id)
     task = spawn_task(
         db,
         patient_id=body.patient_id,
@@ -698,10 +708,19 @@ def get_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(g
     )
 
 
-def _load_task(db: Session, task_id: int) -> SpdTask:
+def _load_task(db: Session, task_id: int, user: User) -> SpdTask:
+    """取一条**要改的**任务：存在性 + 归属一并判。
+
+    归属写在这里而不是各调用方：本函数的调用方**全是写接口**（认领/催办/上报/
+    提交/审核/完成/转派），原先只有 `assign_task` 自己补了一行校验，其余六个按 id
+    取来就改——乙院医生单条认领甲院的任务 200。P1-56 刚让 `/tasks/batch` 跳过
+    别家的任务，单条接口却照样放行，等于批量那道门一绕就过（实测）。
+    收在 helper 里，新加一个写接口也忘不掉。若将来有读接口要用它，另写一个。
+    """
     task = db.get(SpdTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
+    assert_org_writable(db, user, task.org_id)
     return task
 
 
@@ -709,7 +728,7 @@ def _load_task(db: Session, task_id: int) -> SpdTask:
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def claim_task(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """接收任务。已被别人接收的返回 409——静默改责任人会让原责任人白干一场。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status not in ("pending", "overdue"):
         raise HTTPException(status_code=409, detail="该任务不处于可接收状态")
     if task.assignee_id not in (None, user.id):
@@ -734,8 +753,7 @@ def assign_task(
     user: User = Depends(get_current_user),
 ):
     """分配/转派任务。转派保留 `transferred_from`，方便追"这活是从谁那儿转来的"。"""
-    task = _load_task(db, task_id)
-    assert_org_writable(db, user, task.org_id)
+    task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="已结束的任务不可再分配")
     if db.get(User, body.assignee_id) is None:
@@ -753,13 +771,17 @@ def assign_task(
 
 @router.post("/tasks/{task_id}/urge", response_model=TaskOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def urge_task(task_id: int, db: Session = Depends(get_db)):
+def urge_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """催办：计数 +1 并给责任人发站内消息。催办不改状态——催过还是待办。
 
     走适配层的 `notify_user` 而不是平台的 `notify.notify_staff`：后者按机构+角色
     群发，发不到**具体某个人**（任务的责任人）。
     """
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需催办")
     # 催办计数走原子 UPDATE：两个人同时点催办，读-改-写只会记成一次
@@ -778,9 +800,13 @@ def urge_task(task_id: int, db: Session = Depends(get_db)):
 
 @router.post("/tasks/{task_id}/escalate", response_model=TaskOut,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def escalate_task(task_id: int, db: Session = Depends(get_db)):
+def escalate_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """超时升级：置紧急并标记升级，由上级机构接手督办。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需升级")
     task.escalated = True
@@ -808,7 +834,7 @@ def submit_task(
     `require_evidence` 的任务没传佐证材料时拒绝提交——这是节点配置里
     勾选过的硬要求，提交时不校验等于配置形同虚设。
     """
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
     task.result = body.result
@@ -844,7 +870,7 @@ def review_task(
     user: User = Depends(get_current_user),
 ):
     """审核任务：通过即完成并推进路径，退回则回到办理中。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status != "submitted":
         raise HTTPException(status_code=409, detail="只有待审核的任务可以审核")
     task.reviewer_id = user.id
@@ -864,7 +890,7 @@ def complete_task(
     user: User = Depends(get_current_user),
 ):
     """直接办结（不走审核的任务类型）。表单与佐证要求同 submit。"""
-    task = _load_task(db, task_id)
+    task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
     if body.result:
@@ -955,7 +981,16 @@ def batch_tasks(
     """
     tasks = db.query(SpdTask).filter(SpdTask.id.in_(body.task_ids)).all()
     done, skipped = 0, []
+    # P1-56：原先按 id 取来就办，不看任务属于哪家——乙院医生能批量取消甲院的任务
+    # （实测 200、processed=1）。沿用本接口"逐条判定、不满足的跳过并说明"的口径，
+    # 不整批 403：一次勾 200 条里混进 3 条别家的，不该让本院那 197 条也办不成。
+    # 口径与 `assert_org_writable` 逐条一致：全域角色放行；无机构的任务不在此列
+    # （那条函数对 org_id=None 同样放行，别在这里另立一套更严或更松的规则）。
+    writable = visible_org_ids(db, user)  # None = 全域角色
     for task in tasks:
+        if writable is not None and task.org_id is not None and task.org_id not in writable:
+            skipped.append({"id": task.id, "reason": "无权处理其他机构的任务"})
+            continue
         if body.action in ("claim", "urge", "escalate", "cancel") and task.status not in OPEN_STATUSES:
             skipped.append({"id": task.id, "reason": "任务已结束"})
             continue

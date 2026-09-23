@@ -38,7 +38,12 @@ from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict
 from ..egress import egress_url_allowed, verify_signature
 from ..payments import HttpGatewayPaymentGateway, to_fen
-from ..visibility import assert_obj_org_writable, assert_patient_visible, scope_patient_list
+from ..visibility import (
+    assert_obj_org_writable,
+    assert_org_writable,
+    assert_patient_visible,
+    scope_patient_list,
+)
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
@@ -469,6 +474,7 @@ def create_bill_detail(
         admission = db.get(Admission, body.admission_id)
         if admission is None:
             raise HTTPException(status_code=404, detail="住院记录不存在")
+        assert_org_writable(db, user, admission.org_id)  # P1-56：按实体自己的机构判归属
         if admission.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="住院记录与患者不匹配")
         if admission.status != "admitted":
@@ -477,6 +483,7 @@ def create_bill_detail(
         encounter = db.get(Encounter, body.encounter_id)
         if encounter is None:
             raise HTTPException(status_code=404, detail="就诊记录不存在")
+        assert_org_writable(db, user, encounter.org_id)  # P1-56：按实体自己的机构判归属
         if encounter.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="就诊记录与患者不匹配")
     item = db.query(ChargeItem).filter(ChargeItem.code == body.item_code).first()
@@ -662,6 +669,7 @@ def create_deposit(
     admission = db.get(Admission, body.admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_org_writable(db, user, admission.org_id)  # P1-56：按实体自己的机构判归属
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可预交押金")
     deposit = Deposit(
@@ -687,8 +695,10 @@ def refund_deposit(
     body: DepositRefundIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """押金退费：不得超余额（原子判定），出院后退余额也走这里。"""
-    if db.get(Admission, body.admission_id) is None:
+    admission = db.get(Admission, body.admission_id)
+    if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_org_writable(db, user, admission.org_id)  # P1-56：按实体自己的机构判归属
     operator = user.full_name or user.username
     # 判定余额与落退费行必须在同一段临界区里，且提交也要在里头——
     # 锁一放，下一个退费请求读到的就必须是本笔已提交后的余额。
@@ -917,6 +927,7 @@ def create_settlement(
         admission = db.get(Admission, body.admission_id)
         if admission is None:
             raise HTTPException(status_code=404, detail="住院记录不存在")
+        assert_org_writable(db, user, admission.org_id)  # P1-56：按实体自己的机构判归属
         patient_id, org_id = admission.patient_id, admission.org_id
         gate_model: type = Admission
         gate_id = body.admission_id
@@ -927,6 +938,7 @@ def create_settlement(
         encounter = db.get(Encounter, body.encounter_id)
         if encounter is None:
             raise HTTPException(status_code=404, detail="就诊记录不存在")
+        assert_org_writable(db, user, encounter.org_id)  # P1-56：按实体自己的机构判归属
         patient_id, org_id = encounter.patient_id, encounter.org_id
         gate_model = Encounter
         gate_id = body.encounter_id
@@ -1320,6 +1332,7 @@ def create_payment(
     settlement = db.get(Settlement, body.settlement_id)
     if settlement is None:
         raise HTTPException(status_code=404, detail="结算单不存在")
+    assert_org_writable(db, user, settlement.org_id)  # P1-56：按实体自己的机构判归属
     if body.channel == "gateway" and "gateway" not in _GATEWAYS:
         # 未配置/未过出网校验时绝不能悄悄落回 Mock：Mock 会把单标成已支付，
         # 而现实中一分钱都没收到。

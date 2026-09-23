@@ -174,10 +174,12 @@ def test_surgery_schedule_notifies_resident(client, admin, setup, resident):
         "/api/surgery/rooms", json={"org_id": setup["county"]["id"], "name": "消息手术间"},
         headers=admin,
     ).json()
+    # 手术申请由**收治这家**的医生开：住院单在县医院，开单的是县院李医生。
+    # 原先用的是乡镇张医生——那是往别家的住院单上挂手术申请，P1-56 起 403。
     req = client.post(
         "/api/surgery/requests",
         json={"admission_id": adm["id"], "surgery_name": "腹腔镜胆囊切除术"},
-        headers=setup["doctor"],
+        headers=setup["other_doctor"],
     ).json()
     client.post(
         f"/api/surgery/requests/{req['id']}/approve", json={"approved": True},

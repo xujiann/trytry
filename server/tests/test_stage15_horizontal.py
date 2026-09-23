@@ -511,6 +511,14 @@ def _byid_org_write_endpoints():
         if name in ("portal.py", "spd/portal.py"):
             continue
         tree = ast.parse(open(path, encoding="utf-8").read())
+        # 同文件里**自己带守卫**的 helper（如 `spd/tasks._load_task`：取任务 + 判归属）。
+        # 调了它的 handler 算已防护——否则把校验收进 helper（让新调用方忘不掉）
+        # 反而会被这里判成"没防护"，逼人回到逐个调用方各写一行的老路，
+        # 而正是那条老路漏了六个单条任务接口（P1-56/P1-57）。只跟一层、只认同文件。
+        guarded_helpers = {
+            n.name for n in tree.body
+            if isinstance(n, ast.FunctionDef) and any(g in ast.unparse(n) for g in guards)
+        }
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             decs = [ast.unparse(d) for d in fn.decorator_list]
             if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
@@ -519,6 +527,10 @@ def _byid_org_write_endpoints():
                 continue
             u = ast.unparse(fn)
             if any(g in u for g in guards):
+                continue
+            called = {c.func.id for c in ast.walk(fn)
+                      if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+            if called & guarded_helpers:
                 continue
             if any(f"db.get({m}," in u for m in direct):
                 unguarded.add(f"{name}:{fn.name}")

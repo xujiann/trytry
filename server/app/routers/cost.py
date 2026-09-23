@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
-from ..visibility import assert_org_visible, scope_org_list
+from ..visibility import assert_org_visible, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, month_bounds, require_roles
 from ..models import (
@@ -119,12 +119,17 @@ class CostIn(BaseModel):
 
 @router.post("/departments", status_code=201, response_model=DepartmentCostUpsertOut,
              dependencies=[Depends(require_roles("director"))])
-def upsert_department_cost(body: CostIn, db: Session = Depends(get_db)):
+def upsert_department_cost(
+    body: CostIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """归集科室直接成本。同科室同期间同成本项重复提交按覆盖处理——
     月末成本数据往往要反复调整，报错逼人先删再建没有意义。"""
     dept = db.get(Department, body.dept_id)
     if dept is None:
         raise HTTPException(status_code=404, detail="科室不存在")
+    assert_org_writable(db, user, dept.org_id)  # P1-56：按实体自己的机构判归属
     record, updated = upsert_unique(
         db,
         DepartmentCost,

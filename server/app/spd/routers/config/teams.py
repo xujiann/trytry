@@ -331,8 +331,13 @@ def create_village_doctor(
     body: VillageDoctorIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     assert_org_writable(db, user, body.org_id)
-    if db.get(User, body.user_id) is None:
+    target = db.get(User, body.user_id)
+    if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # P1-56：被建档的用户须是调用方能写的机构的人。原先只查"用户存在"，
+    # 乙院就能把甲院的用户建成乙院村医（实测 201）；且村医档案按 user_id 唯一，
+    # 这一条建下去，甲院再想给自己的人建档只会得到 409。
+    assert_org_writable(db, user, target.org_id)
     record = SpdVillageDoctor(**body.model_dump(), bind_token=token_urlsafe(12))
     db.add(record)
     try:
@@ -358,9 +363,12 @@ def batch_village_doctors(
     created, skipped = [], []
     for item in body.items:
         assert_org_writable(db, user, item.org_id)
-        if db.get(User, item.user_id) is None:
+        target = db.get(User, item.user_id)
+        if target is None:
             skipped.append({"user_id": item.user_id, "reason": "用户不存在"})
             continue
+        # 与单条建档同一口径（P1-56）：别家机构的用户不许进本院村医名册
+        assert_org_writable(db, user, target.org_id)
         exists = (
             db.query(SpdVillageDoctor.id)
             .filter(SpdVillageDoctor.user_id == item.user_id)

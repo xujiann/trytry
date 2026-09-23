@@ -848,9 +848,15 @@ class ContractCreate(BaseModel):
     response_model=StaffContractCreatedOut,
     dependencies=[Depends(require_roles("director", "operator"))],  # 合同管理
 )
-def create_staff_contract(body: ContractCreate, db: Session = Depends(get_db)):
-    if db.get(Employee, body.employee_id) is None:
+def create_staff_contract(
+    body: ContractCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    employee = db.get(Employee, body.employee_id)
+    if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    assert_org_writable(db, user, employee.org_id)  # P1-56：按实体自己的机构判归属
     if body.end_date <= body.start_date:
         raise HTTPException(status_code=422, detail="合同止期须晚于起期")
     if db.query(StaffContract).filter(StaffContract.contract_no == body.contract_no).first():
@@ -921,9 +927,15 @@ class PayrollCreate(BaseModel):
     response_model=PayrollCreatedOut,
     dependencies=[Depends(require_roles("director"))],  # 薪酬发放=管理层
 )
-def create_payroll(body: PayrollCreate, db: Session = Depends(get_db)):
-    if db.get(Employee, body.employee_id) is None:
+def create_payroll(
+    body: PayrollCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    employee = db.get(Employee, body.employee_id)
+    if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    assert_org_writable(db, user, employee.org_id)  # P1-56：按实体自己的机构判归属
     if (
         db.query(PayrollRecord)
         .filter(

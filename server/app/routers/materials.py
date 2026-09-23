@@ -139,8 +139,14 @@ def create_purchase(
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    if body.dept_id is not None and db.get(Department, body.dept_id) is None:
-        raise HTTPException(status_code=404, detail="科室不存在")
+    if body.dept_id is not None:
+        dept = db.get(Department, body.dept_id)
+        if dept is None:
+            raise HTTPException(status_code=404, detail="科室不存在")
+        # 科室须属于采购机构（P1-56）：原先只查"科室存在"，乙院经办能把采购单
+        # 挂到甲院的科室上（实测 201），按科室归集的成本就算到了别家头上。
+        if dept.org_id != body.org_id:
+            raise HTTPException(status_code=422, detail="科室不属于该机构")
     purchase = MaterialPurchase(**body.model_dump(), requested_by=user.id)
     db.add(purchase)
     db.commit()
@@ -368,6 +374,7 @@ def use_consumable(
         surgery = db.get(SurgeryRequest, body.surgery_id)
         if surgery is None:
             raise HTTPException(status_code=404, detail="手术申请不存在")
+        assert_org_writable(db, user, surgery.org_id)  # P1-56：按实体自己的机构判归属
         if surgery.patient_id != body.patient_id:
             # 耗材记到别人的手术上，追溯链就断了，这里必须拦
             raise HTTPException(status_code=422, detail="该手术不属于此患者")

@@ -57,20 +57,8 @@ def base(client, admin):
         },
         headers=admin,
     )
-    client.post(
-        "/api/users",
-        json={
-            "username": "mr_doc2",
-            "password": "pass123456",
-            "full_name": "赵医生",
-            "role": "doctor",
-            "org_id": org["id"],
-        },
-        headers=admin,
-    )
     doctor = login(client, "mr_doc", "pass123456")
-    doctor2 = login(client, "mr_doc2", "pass123456")
-    return {"org": org, "doctor": doctor, "doctor2": doctor2}
+    return {"org": org, "doctor": doctor}
 
 
 def new_encounter(client, headers, base, id_card, name):
@@ -246,10 +234,20 @@ def test_qc_summary_by_org_and_doctor(client, admin, base):
         # P1-39：本处刻意往第二个机构造数据（测按机构汇总），改用 admin（全域）
         headers=admin,
     ).json()
+    # 病历由**第二个机构自己的**医生写。原先赵医生挂在第一个机构、却往第二个机构的
+    # 就诊上写病历——P1-39 那次只把"建就诊"改成了 admin，写病历这一步仍是跨机构写，
+    # P1-56 起 403（实测过：乙院能往甲院的就诊病历里写）。按机构/按医生汇总要测的
+    # 是"两个维度的合计对得上"，不需要、也不该靠跨机构写入。
+    client.post(
+        "/api/users",
+        json={"username": "mr_doc2", "password": "pass123456", "full_name": "赵医生",
+              "role": "doctor", "org_id": org2["id"]},
+        headers=admin,
+    )
     client.post(
         "/api/quality/records",
         json={"encounter_id": encounter["id"], "chief_complaint": "咽痛1天"},
-        headers=base["doctor2"],
+        headers=login(client, "mr_doc2", "pass123456"),
     )
     summary = client.get("/api/quality/records/qc-summary", headers=admin).json()
     assert summary["total"] >= 6 and summary["period"] == "累计"

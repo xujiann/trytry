@@ -91,6 +91,13 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
             raise HTTPException(status_code=404, detail="疫苗批次不存在")
         if batch.vaccine_code != body.vaccine_code:
             raise HTTPException(status_code=422, detail="批次与所填疫苗编码不一致")
+        # 批次必须是**接种机构自己的**（P1-56）。上面的 `assert_org_writable` 校的是
+        # 请求体里自报的 `org_id`；不比对批次归属，乙院医生填 `org_id=乙院`、
+        # `batch_id=甲院的批次` 就能 201——扣的是甲院的库存，接种记录上的批号指向
+        # 乙院从未持有过的批次，冷链追溯断在一条假记录上。实测复现过。
+        # 疫苗跨机构流转走调拨，不走"用别家的批次直接打"。
+        if batch.org_id != body.org_id:
+            raise HTTPException(status_code=422, detail="该批次不属于接种机构")
         today = body.vaccinated_date or date.today().isoformat()
         if batch.expire_date < today:
             raise HTTPException(status_code=409, detail=f"该批次已于 {batch.expire_date} 过期")

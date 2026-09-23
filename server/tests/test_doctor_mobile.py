@@ -189,12 +189,14 @@ def test_doctor_mobile_tabs_registered_in_js(client):
 
 
 def test_round_tab_backend_flow(client, admin, setup):
-    """查房页用到的三个接口串起来：写病程 → 录体征 → 完整性自查反映变化。"""
-    org = client.post(
-        "/api/organizations",
-        json={"name": "查房演示院", "org_type": "lead_hospital", "level": "county"},
-        headers=admin,
-    ).json()
+    """查房页用到的三个接口串起来：写病程 → 录体征 → 完整性自查反映变化。
+
+    病区建在**医生自己的机构**里。原先另建了一家"查房演示院"，于是这条用例实际是
+    乡镇医生往县医院的住院病历里写病程——那是 P1-56 堵掉的跨机构写（实测乙院能往
+    甲院住院患者病历里写病程/护理/体征）。用例要测的是查房三件套能串起来，
+    不需要、也不该靠跨机构写入。
+    """
+    org = setup["org"]
     ward = client.post(
         "/api/inpatient/wards", json={"org_id": org["id"], "name": "查房病区"}, headers=admin
     ).json()

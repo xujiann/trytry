@@ -270,6 +270,7 @@ def create_admission(
     ward = db.get(Ward, body.ward_id)
     if ward is None:
         raise HTTPException(status_code=404, detail="病区不存在")
+    assert_org_writable(db, user, ward.org_id)  # P1-56：按实体自己的机构判归属
     in_hospital = (
         db.query(Admission)
         .filter(Admission.patient_id == body.patient_id, Admission.status == "admitted")
@@ -544,6 +545,7 @@ def create_order(
     admission = db.get(Admission, body.admission_id)
     if admission is None:
         raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_org_writable(db, user, admission.org_id)  # P1-56：按实体自己的机构判归属
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可开立医嘱")
     order = InpatientOrder(

@@ -774,6 +774,7 @@ def upsert_medical_record(
     encounter = db.get(Encounter, body.encounter_id)
     if encounter is None:
         raise HTTPException(status_code=404, detail="就诊记录不存在")
+    assert_org_writable(db, user, encounter.org_id)  # P1-56：按实体自己的机构判归属
     record = (
         db.query(MedicalRecord).filter(MedicalRecord.encounter_id == body.encounter_id).first()
     )

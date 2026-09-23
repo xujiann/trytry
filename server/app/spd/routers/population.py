@@ -805,11 +805,23 @@ def distribute_candidates(
     body: DistributeIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """按辖区/病种/风险把目标池患者分发给服务团队（全程管理中心端 #3）。"""
-    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
+    # 归属校验（P1-56）。原先只有 `assert_org_writable(db, user, body.org_id)`，两个洞：
+    # ① `org_id` 是可选的，不给就是 None——而 `assert_org_writable(None)` 直接放行，
+    #    于是**一道校验都没有**，按 id 就能改任何机构的候选人（实测 200）；
+    # ② 给了 `org_id=本院`，校验通过，然后下面 `candidate.org_id = body.org_id`
+    #    把**别家目标池里的患者划进本院**（实测甲院候选的 org_id 1→2）。
+    # 正确的口径就在同文件下面的 `claim_candidate`：按**候选人自己的机构**判。
+    # 先整批校验、再改——校验在循环里边改边判，前几条已经改掉了才 403。
     assert_org_writable(db, user, body.org_id)
-    if body.team_id is not None and db.get(SpdTeam, body.team_id) is None:
-        raise HTTPException(status_code=404, detail="团队不存在")
+    if body.team_id is not None:
+        team = db.get(SpdTeam, body.team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="团队不存在")
+        # 分给哪个团队，就是在往那家机构的工作队列里派活
+        assert_org_writable(db, user, team.org_id)
     rows = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids)).all()
+    for candidate in rows:
+        assert_org_writable(db, user, candidate.org_id)
     for candidate in rows:
         if body.team_id is not None:
             candidate.team_id = body.team_id
