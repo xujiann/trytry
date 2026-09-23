@@ -37,6 +37,11 @@ def env(client):
         "name": "越权甲县医院", "org_type": "lead_hospital", "level": "county"}, headers=adm).json()
     b = client.post("/api/organizations", json={
         "name": "越权乙卫生院", "org_type": "township", "level": "township"}, headers=adm).json()
+    # 第三家：派驻"谎报派出方"那条要一个既非甲院、也非乙院的接收方——
+    # 若接收方就是乙院，旧代码会先以"派出与接收机构不能相同"422 掉，
+    # 探针在变异验证时红得不对（它根本没复现那个洞）。实测踩过。
+    c = client.post("/api/organizations", json={
+        "name": "越权丙卫生站", "org_type": "township", "level": "township"}, headers=adm).json()
     pt = client.post("/api/patients", json={
         "name": "越权探针患者", "id_card": "330102199202021234"}, headers=adm).json()
     client.post("/api/dictionaries", json={
@@ -46,6 +51,13 @@ def env(client):
         "quantity": 500}, headers=adm)
     emp = client.post("/api/mgmt/employees", json={
         "org_id": a["id"], "name": "甲院职工", "title": "主治医师"}, headers=adm)
+    # P1-51 的两个探针各用一个甲院职工：若某条放行，员工被翻成 seconded，
+    # 共用同一人会让下一条变成 409 而不是 403，报错指向错的原因。
+    emp_legacy, emp_forged = (
+        client.post("/api/mgmt/employees", json={
+            "org_id": a["id"], "name": name, "title": "主治医师"}, headers=adm).json()
+        for name in ("甲院职工-旧入口探针", "甲院职工-谎报派出方探针")
+    )
 
     def user(name, role, org):
         client.post("/api/users", json={
@@ -56,10 +68,12 @@ def env(client):
         ).json()["access_token"]}
 
     return {
-        "adm": adm, "A": a, "B": b, "pt": pt,
+        "adm": adm, "A": a, "B": b, "C": c, "pt": pt,
         "emp": emp.json() if emp.status_code in (200, 201) else {},
+        "emp_legacy": emp_legacy, "emp_forged": emp_forged,
         "doctor_b": user("xq_doc_b", "doctor", b),
         "operator_b": user("xq_op_b", "operator", b),
+        "operator_a": user("xq_op_a", "operator", a),
     }
 
 
@@ -96,6 +110,21 @@ def _cases(env):
         rows.append(("派驻：把甲院的职工派出去", "/api/staffing/secondments", "operator_b",
                      {"employee_id": env["emp"]["id"], "from_org_id": A["id"],
                       "to_org_id": env["B"]["id"], "start_date": "2026-09-19"}))
+    # P1-51：上面那条只证明了"照实填 from_org=甲院会被拦"。下面两条是 P1-39 漏掉的：
+    rows += [
+        # ① 同一张表上的**第二个**建派驻入口：原先一道归属校验都没有，实测 201
+        ("派驻（旧入口 /api/mgmt）：把甲院的职工派出去", "/api/mgmt/secondments",
+         "operator_b",
+         {"employee_id": env["emp_legacy"]["id"], "to_org_id": env["B"]["id"],
+          "start_date": "2026-09-19"}),
+        # ② 新入口，但把 from_org_id **谎报成自己院**：原先校验的是这个自报字段，
+        #    于是照样 201，甲院的人被派走、台账上还记着一个假的派出机构
+        ("派驻（谎报派出方=乙院）：把甲院的职工派出去", "/api/staffing/secondments",
+         "operator_b",
+         {"employee_id": env["emp_forged"]["id"], "from_org_id": env["B"]["id"],
+          "to_org_id": env["C"]["id"], "start_date": "2026-09-19",
+          "assignment_type": "support"}),
+    ]
     return rows
 
 
@@ -136,3 +165,35 @@ def test_全域角色跨机构照常(client, env):
         "visit_type": "outpatient", "visit_date": "2026-09-19"},
         headers=env["adm"])
     assert ok.status_code == 201, ok.text
+
+
+def test_派出机构必须是员工所在机构(client, env):
+    """本院经办填错派出方（写成别的院）→ 422，不许把假派出方记进台账。
+
+    这是和越权分开的一件事：甲院经办派甲院的人，有权；但 `from_org_id` 若不是
+    该员工所在机构，台账就记了一条假的派出记录——监测指标按派出机构统计，
+    会平白算到别家头上。原先只要调用方对自报的那个机构有写权限就放行。
+    """
+    emp = client.post("/api/mgmt/employees", json={
+        "org_id": env["A"]["id"], "name": "甲院职工-填错派出方", "title": "主治医师"},
+        headers=env["adm"]).json()
+    r = client.post("/api/staffing/secondments", json={
+        "employee_id": emp["id"], "from_org_id": env["B"]["id"],
+        "to_org_id": env["C"]["id"], "start_date": "2026-09-19",
+        "assignment_type": "support"}, headers=env["adm"])
+    assert r.status_code == 422, r.text
+    assert "派出机构须是该员工所在机构" in r.json()["detail"]
+
+
+def test_本院经办照常派本院的人(client, env):
+    """守卫不能误伤本职：甲院经办照实派甲院职工，照常 201 且派出方记对。"""
+    emp = client.post("/api/mgmt/employees", json={
+        "org_id": env["A"]["id"], "name": "甲院职工-正常派驻", "title": "主治医师"},
+        headers=env["adm"]).json()
+    r = client.post("/api/staffing/secondments", json={
+        "employee_id": emp["id"], "from_org_id": env["A"]["id"],
+        "to_org_id": env["B"]["id"], "start_date": "2026-09-19",
+        "assignment_type": "support"}, headers=env["operator_a"])
+    assert r.status_code == 201, r.text
+    assert r.json()["from_org_id"] == env["A"]["id"]
+    assert r.json()["assignment_type"] == "support"

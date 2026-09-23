@@ -167,8 +167,18 @@ def create_secondment(
     employee = db.get(Employee, body.employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
-    # 归属校验：不得以别家机构的名义写（P1-39——两道既有越权闸门都不看请求体）
-    assert_org_writable(db, user, body.from_org_id)
+    # 归属校验看**员工实际所在机构**，不看请求体里自报的 `from_org_id`（P1-51）。
+    #
+    # P1-39 在这里补的是 `assert_org_writable(db, user, body.from_org_id)`——校验的
+    # 是一个**调用方自己填的字段**。于是乙院经办照实填 `from_org_id=甲院` 会被 403，
+    # 而把它**谎报成乙院**就 201：甲院的职工照样被派走，台账上还记着一个假的派出
+    # 机构（监测指标按派出机构统计，这一条会算到乙院头上）。实测复现过。
+    # 员工归属是 `employees.org_id`（非空列），那才是"以谁的名义派"的事实。
+    assert_org_writable(db, user, employee.org_id)
+    if body.from_org_id != employee.org_id:
+        raise HTTPException(
+            status_code=422, detail="派出机构须是该员工所在机构（派驻由原单位发起）"
+        )
     for org_id in (body.from_org_id, body.to_org_id):
         if db.get(Organization, org_id) is None:
             raise HTTPException(status_code=404, detail="机构不存在")

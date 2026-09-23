@@ -280,12 +280,43 @@ class SecondmentCreate(BaseModel):
     status_code=201,
     response_model=SecondmentCreatedOut,
     dependencies=[Depends(require_roles("director", "operator"))],  # H2: 人员下派
+    deprecated=True,
 )
-def second_employee(body: SecondmentCreate, db: Session = Depends(get_db)):
-    """人员派驻下沉：状态改为派驻中，支撑监测指标4（医师派驻人数）。"""
+def second_employee(
+    body: SecondmentCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """**已废弃：请用 `POST /api/staffing/secondments`。**（P1-51）
+
+    同一张 `secondments` 表上有两条"建派驻"，这条是劣化的那一条，
+    与同模块已废弃的 `/secondments/{id}/end` 同一个处境：
+
+    | | 本条 | `staffing` 那条 |
+    |---|---|---|
+    | 派驻类型 | **不收，落库一律是列默认值 `long_term`** | 必须显式选 |
+    | 派出≠接收 | 不校验 | 422 |
+    | 结束日期 | 不收 | 可预填，且须不早于开始 |
+    | 返回 | `{id, employee_id, status}` 残形 | 完整台账行 |
+
+    第一行是要害：`staffing` 模块的口径写明"派驻类型必须显式选——巡诊与短期支援
+    不是下沉，混在一起统计会把指标做虚"，而本条恰好把每一次派驻都记成长期派驻。
+    界面（人力资源页）原先就挂在这条上，于是**绝大多数派驻记录走的是劣化那条**。
+    界面已改为指向"人员下沉调度"页（那里建、查、结束三件事齐全）。
+
+    **越权已补（不是行为变更，是缺陷修复）**：这条原本**一道归属校验都没有**——
+    乙院经办能把甲院的职工派走，实测 201；员工被翻成 `seconded`，派出机构还按
+    该员工所在机构记成甲院，看上去完全像甲院自己派的。P1-39 修这一类时只修了
+    `staffing` 那份拷贝（而那份还能靠谎报 `from_org_id` 绕过，同在 P1-51 补上），
+    这一份被漏掉了——**两份实现，安全修复只落在一份上**，正是并行实现最贵的代价。
+    归属按员工实际所在机构判，与 `staffing` 那条同一口径。
+
+    行为除越权外不变（向后兼容），正式下线另案（见 docs/TECH_DEBT.md）。
+    """
     employee = db.get(Employee, body.employee_id)
     if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    assert_org_writable(db, user, employee.org_id)
     if employee.status == "seconded":
         raise HTTPException(status_code=409, detail="该员工已在派驻中")
     if db.get(Organization, body.to_org_id) is None:

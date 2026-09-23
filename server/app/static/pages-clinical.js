@@ -1799,8 +1799,8 @@ async function renderHrFinance() {
     <div class="panel"><h3>员工 / 派驻 / 财务 / 物资录入</h3>
       <form class="inline" id="emp-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="name" placeholder="姓名" required>
         <input name="title" placeholder="职称"><input name="position" placeholder="岗位"><button>登记员工</button></form>
-      <form class="inline" id="sec-form"><input name="employee_id" type="number" placeholder="员工ID" required>
-        <input name="to_org_id" type="number" placeholder="派驻机构ID" required><input name="start_date" placeholder="开始日期 YYYY-MM-DD" required><button>派驻下沉</button></form>
+      <p class="desc">派驻下沉的登记、台账与结束都在 <a href="#staffing">人员下沉调度</a> 页——
+        那里要求显式选派驻类型（巡诊与短期支援不算下沉，混记会把监测指标做虚）。</p>
       <form class="inline" id="fin-form"><input name="org_id" type="number" placeholder="机构ID" required><input name="period" placeholder="期间 YYYY-MM" required>
         <select name="category"><option value="income">收入</option><option value="expense">支出</option></select>
         <input name="item" placeholder="科目"><input name="amount" type="number" step="any" placeholder="金额" required><button>记账</button></form>
@@ -1865,7 +1865,6 @@ async function renderHrFinance() {
         调出方必须是本机构——不能把别家的东西划走。</p></div>
     <div class="panel hidden" id="assetmv-panel"><h3>物资出入库记录</h3><div id="assetmv-list"></div></div>`;
   $("#emp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/employees", formJson(e.target, ["org_id"]), "#hrf-msg"); };
-  $("#sec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/secondments", formJson(e.target, ["employee_id", "to_org_id"]), "#hrf-msg"); };
   $("#fin-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/finance", formJson(e.target, ["org_id", "amount"]), "#hrf-msg"); };
   $("#asset-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/assets", formJson(e.target, ["org_id", "quantity"]), "#hrf-msg"); };
   $("#dept-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/mgmt/departments", formJson(e.target, ["org_id"]), "#hrf-msg"); };
