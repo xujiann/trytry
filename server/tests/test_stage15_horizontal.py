@@ -487,24 +487,16 @@ BYID_CROSS_ORG_OK = {
     # 与"审核权限"判了——`_assert_holds_case` / `_assert_review_authority`；P1-57 起闸门
     # 认得 `_assert` 开头的同文件 helper，这三条随之从豁免转为已防护，删去。）
     # ---- P1-57 闸门放宽视野（`*org_id` 列 + 经 helper 取数）后逐条研判的按设计跨机构 ----
-    # 院前急救：推进、车载体征回传、绿道节点都是 120 与车组在做。事件上只有
-    # `dest_org_id`（**接收医院**），没记调度方/车组的机构——按接收医院判会把院前
-    # 链路整条关掉，按什么别的判又无列可判（数据模型缺口，已登记）。
-    # 到院后的「抢救转归」则按接收医院判了，不在此列。
-    "emergency.py:advance",
-    "emergency.py:report_vitals",
-    "emergency.py:record_milestone",
+    # （院前急救三步、共享中药房流转、慢专病转诊规则原在此列，P1-58 补了处理方机构列 /
+    # 按病种牵头机构判之后转为已防护，删去。）
     # 共享诊断中心：领取就是中心把别家的申请单接过来，领取前单子上没有中心机构
     # （`claimed_org_id` 正是领取时才写上）；样本物流是申请方采样、中心核收的多方链路，
     # 同样多发生在领取之前。领取之后出报告已按 `claimed_org_id` 判
     "exams.py:claim_request",
     "exams.py:advance_sample",
-    # 共享中药房：调配→煎煮→配送由中药房推进，订单上只有下单机构 `from_org_id`，
-    # 没记是哪家中药房（数据模型缺口，已登记）；按下单机构判等于只许下单方自己煎药
-    "tcm.py:advance_order",
-    # 慢专病转诊规则是全县配置，`target_org_id` 是**转诊去向**不是归属，
-    # 规则本身没有归属机构；谁能改配置由角色（director/doctor）决定
-    "spd/referral.py:update_referral_rule",
+    # 取消预约：代约方常是另一家机构（乡镇替患者约县医院的号），而代约方没有落库，
+    # 按号源机构判会让代约的乡镇取消不了自己约的号。到诊核销已按号源机构判
+    "appointments.py:cancel",
 }
 
 # 按 id 写、**不按机构判而按更严的口径判**的接口——闸门只认机构守卫，这里逐条写明。
@@ -515,6 +507,18 @@ BYID_GUARDED_OTHERWISE = {
 }
 
 
+def _only_global_roles(decorator_src: str) -> bool:
+    """装饰器里的 `require_roles(...)` 是否只列了全域角色（如 `require_roles('director')`）。"""
+    from app.visibility import GLOBAL_ROLES
+    tree = ast.parse(decorator_src)
+    for call in ast.walk(tree):
+        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id == "require_roles" and call.args
+                and all(isinstance(a, ast.Constant) for a in call.args)):
+            return {a.value for a in call.args} <= GLOBAL_ROLES
+    return False
+
+
 def _byid_org_write_endpoints():
     """按 id 直取带 org_id 主对象的写接口。"""
     import sys
@@ -523,11 +527,29 @@ def _byid_org_write_endpoints():
     # 带机构归属的模型：任一列名以 `org_id` 结尾（P1-57）。原先只认字面上的 `org_id`，
     # 于是 `Consultation`（`from_org_id`/`to_org_id`）这类跨机构单据整族不在视野里——
     # 第三家机构受理、拒绝别人的会诊都是 200，而这里一直是绿的。
+    import app.spd.models  # noqa: F401  注册 spd 模型，别让它们因导入顺序缺席
+    classes = [c for c in models.Base.registry._class_registry.values()
+               if hasattr(c, "__tablename__")]
     direct = {
-        c.__name__ for c in models.Base.registry._class_registry.values()
-        if hasattr(c, "__tablename__")
-        and any(col.name.endswith("org_id") for col in c.__table__.columns)
+        c.__name__ for c in classes
+        if any(col.name.endswith("org_id") for col in c.__table__.columns)
     }
+    # 一跳归属（P1-58）：自己没有机构列、但外键指向一张带机构列的表——里程碑之于项目、
+    # 服务包绑定之于纳管档案、危急值报告之于申请单。原先这一族整个不在视野里：
+    # 按 id 取出的模型"不带 org_id"，扫描器就不认为这里有别家的东西。
+    # 指向主数据（机构/用户/患者）的外键不算：那是"谁经手/关于谁"，不是归属。
+    by_table = {c.__tablename__: c for c in classes}
+    master = {"organizations", "users", "patients"}
+    one_hop = {
+        c.__name__ for c in classes
+        if c.__name__ not in direct
+        and any(
+            fk.column.table.name not in master
+            and getattr(by_table.get(fk.column.table.name), "__name__", None) in direct
+            for col in c.__table__.columns for fk in col.foreign_keys
+        )
+    }
+    direct = direct | one_hop
     guards = {"assert_obj_org_writable", "assert_org_writable", "assert_any_org_writable",
               "assert_org_visible",
               "assert_patient_visible", "scope_org_list", "scope_patient_list",
@@ -567,9 +589,12 @@ def _byid_org_write_endpoints():
                 continue
             if not any("{" in d for d in decs):
                 continue
-            # 仅 admin 可调的接口：admin 是全域角色，任何机构守卫对它都恒放行，
-            # 加了也只是装饰——不算欠账（P1-57 研判：`org_groups` 两处、专病目录改路径）
-            if any("require_admin" in d for d in decs):
+            # 仅全域角色可调的接口：任何机构守卫对 admin/director 都恒放行，
+            # 加了也只是装饰——不算欠账（P1-57/58 研判：`org_groups` 两处、专病目录改路径、
+            # 医保基金池四处 director-only）
+            if any("require_admin" in d for d in decs) or any(
+                _only_global_roles(d) for d in decs
+            ):
                 continue
             u = ast.unparse(fn)
             if any(g in u for g in guards):

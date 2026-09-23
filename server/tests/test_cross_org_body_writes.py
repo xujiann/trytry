@@ -664,3 +664,222 @@ def test_撤销档案授权不拦但留痕(client, env, p57b):
             AccessLog.patient_id == p57b["pt"], AccessLog.resource == "authorization").all()
     assert len(rows) == before + 1, "撤销授权没有留痕"
     assert rows[-1].username == "xq_op_b" and rows[-1].basis == "consent_admin"
+
+
+# ---- P1-58：归属在一跳之外，或单据上原本就缺处理方那一方 ----
+#
+# ① 一跳归属：里程碑之于项目、危急值报告之于申请单、服务包绑定之于纳管档案……
+#    这些表自己没有机构列，闸门按"模型带不带 org_id"找，整族不在视野里；
+# ② 缺处理方：急救事件没记调度方、中药订单没记承接药房、病理标本一个机构列都没有，
+#    P1-57 只能按设计豁免——补列之后才判得了。
+# 甲院是各实体的主人，乙院/丙院是来动它的人；每条探针先把实体推到业务允许该动作的状态。
+
+
+def _login(client, env, username, role, org_id):
+    client.post("/api/users", json={"username": username, "password": "Xquan#2026x",
+                                    "role": role, "org_id": org_id}, headers=env["adm"])
+    return {"Authorization": "Bearer " + client.post(
+        "/api/auth/login", json={"username": username, "password": "Xquan#2026x"}
+    ).json()["access_token"]}
+
+
+@pytest.fixture(scope="module")
+def p58(client, env, third_party):
+    from app.database import SessionLocal
+    from app.models import (
+        AdminProject, Appointment, AppointmentSlot, ExamReport, ExamRequest, PathologySpecimen,
+        ProjectMilestone,
+    )
+    from app.spd.models import (
+        SpdEnrollment, SpdFollowupRecord, SpdIntervention, SpdPackageBinding, SpdProgram,
+        SpdQcSample, SpdReferralRule, SpdServicePackage, SpdTarget, SpdTeam, SpdTeamMember,
+    )
+
+    A, B = env["A"]["id"], env["B"]["id"]
+    doc_a = _login(client, env, "xq_doc_a58", "doctor", A)
+    pt = client.post("/api/patients", json={
+        "name": "P1-58 探针患者", "id_card": "330102199808081234"}, headers=env["adm"]).json()["id"]
+    # 病理申请另用一位患者：乙院给谁开了单，就与谁有了服务关系——若共用 `pt`，
+    # "乙院办结甲院患者的干预"会因这层真实关系放行，探针红得不对（实测踩过）
+    pt_path = client.post("/api/patients", json={
+        "name": "P1-58 病理探针患者", "id_card": "330102199809091234"}, headers=env["adm"]).json()["id"]
+    with SessionLocal() as db:
+        # 一张申请单只有一份报告：确认接收、处置反馈两条探针各用一张
+        reqs = [ExamRequest(patient_id=pt, from_org_id=A, center_type="imaging", item_code="CT01",
+                            item_name="头颅CT", created_by=1, status="reported") for _ in range(2)]
+        proj = AdminProject(org_id=A, name="P1-58 甲院项目")
+        slot = AppointmentSlot(org_id=A, resource_type="doctor", resource_name="甲院专家",
+                               slot_date="2026-10-01", capacity=5, booked=1)
+        prog = SpdProgram(code="p158", name="P1-58 病种", lead_org_id=A)
+        team = SpdTeam(name="甲院团队", org_id=A)
+        enr = SpdEnrollment(patient_id=pt, program_code="p158", org_id=A)
+        fu = SpdFollowupRecord(patient_id=pt, org_id=A, status="done")
+        pkg = SpdServicePackage(code="p158", name="甲院服务包", program_code="p158",
+                                items=[{"code": "bp", "times": 5}])
+        rule = SpdReferralRule(code="p158", name="甲院病种规则", program_code="p158",
+                               conditions=[{"field": "bp_sys", "op": ">=", "value": 180}])
+        # 乙院开单、甲院（病理中心）领取的病理申请
+        path_req = ExamRequest(patient_id=pt_path, from_org_id=B, center_type="pathology",
+                               item_code="BL01", item_name="活检", created_by=1,
+                               status="diagnosing", claimed_org_id=A, claimed_by="甲院病理")
+        db.add_all([*reqs, proj, slot, prog, team, enr, fu, pkg, rule, path_req]); db.flush()
+        reports = [ExamReport(request_id=r.id, conclusion="危急", critical=True,
+                              critical_status=st) for r, st in zip(reqs, ("notified", "acknowledged"))]
+        ms = [ProjectMilestone(project_id=proj.id, name=f"里程碑{i}", done=done)
+              for i, done in enumerate((False, True))]
+        appt = Appointment(slot_id=slot.id, patient_id=pt)
+        target = SpdTarget(program_id=prog.id, metric="sbp", target_high=140)
+        from app.models import User
+        a_users = [u.id for u in db.query(User).filter(User.username.in_(("xq_doc_a58", "xq_op_a")))]
+        members = [SpdTeamMember(team_id=team.id, user_id=uid) for uid in a_users]
+        qc = SpdQcSample(record_id=fu.id)
+        interv = SpdIntervention(patient_id=pt, enrollment_id=enr.id, program_code="p158",
+                                 content="探针干预")
+        bindings = [SpdPackageBinding(enrollment_id=enr.id, package_id=pkg.id,
+                                      items=[{"code": "bp", "total": 5, "used": 0}])
+                    for _ in range(2)]
+        specimens = [PathologySpecimen(request_id=path_req.id, specimen_no=f"P158-{i}")
+                     for i in range(3)]
+        db.add_all([*reports, *ms, appt, target, *members, qc, interv, *bindings, *specimens])
+        db.commit()
+        out = {
+            "pt": pt, "reports": [r.id for r in reports], "ms": [m.id for m in ms],
+            "appt": appt.id, "target": target.id, "members": [m.id for m in members],
+            "qc": qc.id, "interv": interv.id, "bindings": [b.id for b in bindings],
+            "rule": rule.id, "pkg": pkg.id, "path_req": path_req.id,
+            "specimens": [s.id for s in specimens], "doc_a": doc_a,
+        }
+    # 走接口建的那几样：落库值由服务端从操作人身上取，探针才测得到它
+    # 急救：丙院调度、送往甲院
+    out["case"] = client.post("/api/emergency/cases", json={
+        "location": "P1-58 探针路口", "dest_org_id": A}, headers=third_party["operator"]).json()["id"]
+    # 中药：甲院下单、丙院药房领取（推进一步即领取）
+    out["tcm"] = client.post("/api/tcm/dispense-orders", json={
+        "patient_id": pt, "from_org_id": A, "herbs": "黄芪 30g"}, headers=doc_a).json()["id"]
+    assert client.post(f"/api/tcm/dispense-orders/{out['tcm']}/advance",
+                       headers=third_party["operator"]).status_code == 200
+    # 病理：甲院中心核收第 3 份，供"推进"探针用
+    assert client.post(f"/api/pathology/specimens/{out['specimens'][2]}/receive",
+                       json={"received_by": "甲院病理"}, headers=doc_a).status_code == 200
+    return out
+
+
+def _p58_cases(env, t, x):
+    B_doc, B_op = env["doctor_b"], env["operator_b"]
+    return [
+        ("危急值：替申请机构确认接收", B_doc, "post",
+         f"/api/exams/reports/{x['reports'][0]}/acknowledge", None),
+        ("危急值：替申请机构处置反馈", B_doc, "post",
+         f"/api/exams/reports/{x['reports'][1]}/resolve", {"note": "探针"}),
+        ("项目：把甲院项目的里程碑标完成", B_op, "post",
+         f"/api/projects/milestones/{x['ms'][0]}/done", None),
+        ("项目：撤销甲院项目里程碑的完成", B_op, "post",
+         f"/api/projects/milestones/{x['ms'][1]}/reopen", None),
+        ("预约：核销甲院号源上的预约", B_op, "post", f"/api/appointments/{x['appt']}/fulfill", None),
+        ("慢专病：办结甲院患者的干预", B_doc, "patch", f"/api/spd/interventions/{x['interv']}",
+         {"status": "done"}),
+        ("慢专病：改甲院牵头病种的管理目标", B_doc, "patch", f"/api/spd/targets/{x['target']}",
+         {"target_high": 200}),
+        ("慢专病：关掉甲院团队成员的随访权限", B_doc, "patch",
+         f"/api/spd/team-members/{x['members'][0]}", {"can_followup": False}),
+        ("慢专病：把甲院团队成员移出", B_doc, "delete",
+         f"/api/spd/team-members/{x['members'][1]}", None),
+        ("慢专病：给甲院的随访判质控不合格", B_doc, "post",
+         f"/api/spd/qc-samples/{x['qc']}/result", {"result": "fail"}),
+        ("慢专病：扣减甲院患者的服务包次数", B_op, "post",
+         f"/api/spd/package-bindings/{x['bindings'][0]}/usages", {"item_code": "bp"}),
+        ("慢专病：解绑甲院患者的服务包", B_doc, "post",
+         f"/api/spd/package-bindings/{x['bindings'][1]}/unbind", None),
+        ("慢专病：在甲院牵头病种下建转诊规则", B_doc, "post", "/api/spd/referral-rules",
+         {"code": "p158-forged", "name": "冒名规则", "program_code": "p158",
+          "conditions": [{"field": "bp_sys", "op": ">=", "value": 100}]}),
+        ("慢专病：改甲院牵头病种的转诊规则", B_doc, "patch",
+         f"/api/spd/referral-rules/{x['rule']}", {"active": False}),
+        ("慢专病：在甲院牵头病种下建服务包", B_doc, "post", "/api/spd/service-packages",
+         {"code": "p158-forged", "name": "冒名服务包", "program_code": "p158"}),
+        ("慢专病：给甲院牵头病种的服务包改价", B_doc, "patch",
+         f"/api/spd/service-packages/{x['pkg']}", {"price": 9999}),
+        ("急救：推进别家调度的急救事件", B_op, "post", f"/api/emergency/cases/{x['case']}/advance",
+         None),
+        ("急救：往别家的急救事件回传体征", B_op, "post", f"/api/emergency/cases/{x['case']}/vitals",
+         {"heart_rate": 30}),
+        ("急救：给别家的急救事件记绿道节点", B_op, "post",
+         f"/api/emergency/cases/{x['case']}/milestones",
+         {"milestone": "call", "occurred_at": "2026-09-23T08:00:00"}),
+        ("中药：推进别家药房已承接的订单", B_op, "post",
+         f"/api/tcm/dispense-orders/{x['tcm']}/advance", None),
+        ("病理：往别家之间的病理申请登记送检", t["doctor"], "post", "/api/pathology/specimens",
+         {"request_id": x["path_req"]}),
+        ("病理：核收别家中心的标本", t["doctor"], "post",
+         f"/api/pathology/specimens/{x['specimens'][0]}/receive", {"received_by": "丙院"}),
+        ("病理：拒收别家中心的标本", t["doctor"], "post",
+         f"/api/pathology/specimens/{x['specimens'][1]}/reject", {"reject_reason": "标识不清"}),
+        ("病理：推进别家中心已核收的标本", t["doctor"], "post",
+         f"/api/pathology/specimens/{x['specimens'][2]}/advance", {}),
+    ]
+
+
+def test_一跳归属与缺处理方的别家实体写入被拦(client, env, p58, third_party):
+    """建闸门时这 24 条逐条实打全部放行；删掉对应那一行校验，对应那条必红。"""
+    passed_through = []
+    for label, who, method, path, body in _p58_cases(env, third_party, p58):
+        kw = {"json": body} if method != "delete" else {}
+        r = getattr(client, method)(path, headers=who, **kw)
+        if r.status_code in (200, 201, 204):
+            passed_through.append(f"{label} → {r.status_code}")
+        else:
+            assert r.status_code == 403, f"{label} 期望 403，实际 {r.status_code}：{r.text[:160]}"
+    assert passed_through == [], "以下写入动到了别家的实体：\n  " + "\n  ".join(passed_through)
+
+
+def test_补了处理方之后各方照常(client, env, p58, third_party):
+    """补列不能把单据上**本来就该**动它的那几方关掉。"""
+    # 急救：调度方（丙院）推进、接收医院（甲院）回传体征都照常
+    r = client.post(f"/api/emergency/cases/{p58['case']}/vitals", json={"heart_rate": 88},
+                    headers=p58["doc_a"])
+    assert r.status_code == 201, f"接收医院回传体征应照常：{r.text[:160]}"
+    r = client.post(f"/api/emergency/cases/{p58['case']}/advance", headers=third_party["operator"])
+    assert r.status_code == 200, f"调度方推进应照常：{r.text[:160]}"
+    # 中药：承接的药房（丙院）与下单方（甲院）都能推进
+    r = client.post(f"/api/tcm/dispense-orders/{p58['tcm']}/advance",
+                    headers=third_party["operator"])
+    assert r.status_code == 200, f"承接药房推进应照常：{r.text[:160]}"
+    r = client.post(f"/api/tcm/dispense-orders/{p58['tcm']}/advance", headers=env["operator_a"])
+    assert r.status_code == 200, f"下单方推进应照常：{r.text[:160]}"
+    # 病理：核收它的中心（甲院）推进照常
+    r = client.post(f"/api/pathology/specimens/{p58['specimens'][2]}/advance", json={},
+                    headers=p58["doc_a"])
+    assert r.status_code == 200, f"核收中心推进应照常：{r.text[:160]}"
+
+
+def test_存量急救事件没有调度方照旧不判(client, env):
+    """补列前建的事件调度方不可考：只判接收医院会把它的调度方关在门外，所以照旧不判。"""
+    from app.database import SessionLocal
+    from app.models import EmergencyCase
+
+    with SessionLocal() as db:
+        legacy = EmergencyCase(location="存量事件", dest_org_id=env["A"]["id"])
+        db.add(legacy); db.commit()
+        legacy_id = legacy.id
+    r = client.post(f"/api/emergency/cases/{legacy_id}/advance", headers=env["operator_b"])
+    assert r.status_code == 200, f"存量事件行为应不变：{r.text[:160]}"
+
+
+def test_中药订单只能被一家药房承接(client, env, p58, third_party):
+    """第一个推进它的非下单机构领取；别家药房再来推进是 403，而下单方推进不领取。"""
+    from app.database import SessionLocal
+    from app.models import TcmDispenseOrder
+
+    oid = client.post("/api/tcm/dispense-orders", json={
+        "patient_id": p58["pt"], "from_org_id": env["A"]["id"], "herbs": "当归 10g"},
+        headers=p58["doc_a"]).json()["id"]
+    assert client.post(f"/api/tcm/dispense-orders/{oid}/advance",
+                       headers=env["operator_a"]).status_code == 200
+    with SessionLocal() as db:
+        assert db.get(TcmDispenseOrder, oid).pharmacy_org_id is None, "下单方推进不该领取"
+    assert client.post(f"/api/tcm/dispense-orders/{oid}/advance",
+                       headers=env["operator_b"]).status_code == 200, "首个非下单方应能领取"
+    with SessionLocal() as db:
+        assert db.get(TcmDispenseOrder, oid).pharmacy_org_id == env["B"]["id"]
+    assert client.post(f"/api/tcm/dispense-orders/{oid}/advance",
+                       headers=third_party["operator"]).status_code == 403

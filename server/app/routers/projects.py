@@ -68,6 +68,18 @@ def _project(db: Session, project_id: int) -> AdminProject:
     return project
 
 
+def _milestone(db: Session, milestone_id: int, user: User) -> ProjectMilestone:
+    """取里程碑并按**所属项目的机构**判归属（P1-58：里程碑表自己没有机构列，
+    归属在一跳之外，乙院曾能把甲院项目的里程碑标完成/撤销完成）。调用方全是写接口。"""
+    milestone = db.get(ProjectMilestone, milestone_id)
+    if milestone is None:
+        raise HTTPException(status_code=404, detail="里程碑不存在")
+    project = db.get(AdminProject, milestone.project_id)
+    if project is not None:
+        assert_org_writable(db, user, project.org_id)
+    return milestone
+
+
 class MilestoneOut(BaseModel):
     id: int
     name: str
@@ -287,11 +299,10 @@ def add_milestone(
     dependencies=[Depends(require_roles("director", "operator"))],
 )
 def complete_milestone(
-    milestone_id: int, done_date: OptionalDateStr = "", db: Session = Depends(get_db)
+    milestone_id: int, done_date: OptionalDateStr = "", db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    milestone = db.get(ProjectMilestone, milestone_id)
-    if milestone is None:
-        raise HTTPException(status_code=404, detail="里程碑不存在")
+    milestone = _milestone(db, milestone_id, user)
     if milestone.done:
         raise HTTPException(status_code=409, detail="该里程碑已完成")
     milestone.done = True
@@ -306,11 +317,11 @@ def complete_milestone(
     response_model=MilestoneOut,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
-def reopen_milestone(milestone_id: int, db: Session = Depends(get_db)):
+def reopen_milestone(
+    milestone_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
     """撤销完成。误点了要能改回来——凡是拦得住的都要放得开。"""
-    milestone = db.get(ProjectMilestone, milestone_id)
-    if milestone is None:
-        raise HTTPException(status_code=404, detail="里程碑不存在")
+    milestone = _milestone(db, milestone_id, user)
     milestone.done = False
     milestone.done_date = ""
     db.commit()

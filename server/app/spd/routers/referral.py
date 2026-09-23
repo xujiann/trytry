@@ -38,8 +38,10 @@ from ..models import (
     SpdReferralStep,
 )
 from ..rules import RuleError, evaluate, validate_conditions
-from ..service import award_points, build_facts, spawn_task
-from ...visibility import GLOBAL_ROLES, assert_patient_visible, visible_org_ids
+from ..service import award_points, build_facts, program_lead_org, spawn_task
+from ...visibility import (
+    GLOBAL_ROLES, assert_org_writable, assert_patient_visible, visible_org_ids,
+)
 
 router = APIRouter(
     prefix="/api/spd",
@@ -189,7 +191,11 @@ def _rule_out(r: SpdReferralRule) -> dict:
 @router.post("/referral-rules", status_code=201,
              response_model=ReferralRuleOut,
              dependencies=[Depends(require_roles("director", "doctor"))])
-def create_referral_rule(body: ReferralRuleIn, db: Session = Depends(get_db)):
+def create_referral_rule(
+    body: ReferralRuleIn, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    # 挂在某病种下的规则归该病种的牵头机构定（P1-58）；全县通用规则（不挂病种）不限
+    assert_org_writable(db, user, program_lead_org(db, body.program_code))
     try:
         conditions = validate_conditions(body.conditions)
     except RuleError as exc:
@@ -226,10 +232,15 @@ def list_referral_rules(
 @router.patch("/referral-rules/{rule_id}",
              response_model=ReferralRuleOut,
               dependencies=[Depends(require_roles("director", "doctor"))])
-def update_referral_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
+def update_referral_rule(
+    rule_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     rule = db.get(SpdReferralRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="转诊规则不存在")
+    # 与新建同一口径。`target_org_id` 是转诊去向不是归属，不拿它判（P1-58）
+    assert_org_writable(db, user, program_lead_org(db, rule.program_code))
     if "conditions" in body:
         try:
             rule.conditions = validate_conditions(body["conditions"])

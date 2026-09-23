@@ -274,12 +274,25 @@ def add_team_member(
             "member_role": member.member_role}
 
 
-@router.patch("/team-members/{member_id}", response_model=TeamMemberUpdatedOut,
-              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)):
+def _member_writable(db: Session, member_id: int, user: User) -> SpdTeamMember:
+    """取团队成员并按**团队的机构**判归属，与加成员同一口径（P1-58：加人要判，
+    改权限、移出却谁都能做——别家能把甲院团队成员的随访/审核权限关掉）。"""
     member = db.get(SpdTeamMember, member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="团队成员不存在")
+    team = db.get(SpdTeam, member.team_id)
+    if team is not None:
+        assert_org_writable(db, user, team.org_id)
+    return member
+
+
+@router.patch("/team-members/{member_id}", response_model=TeamMemberUpdatedOut,
+              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
+def update_team_member(
+    member_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    member = _member_writable(db, member_id, user)
     for key in ("member_role", "program_codes", "stage_scope", "patient_scope", "can_view",
                 "can_followup", "can_referral", "can_audit", "can_assess", "active"):
         if key in body:
@@ -290,10 +303,10 @@ def update_team_member(member_id: int, body: dict, db: Session = Depends(get_db)
 
 @router.delete("/team-members/{member_id}", status_code=204,
                dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def remove_team_member(member_id: int, db: Session = Depends(get_db)):
-    member = db.get(SpdTeamMember, member_id)
-    if member is None:
-        raise HTTPException(status_code=404, detail="团队成员不存在")
+def remove_team_member(
+    member_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    member = _member_writable(db, member_id, user)
     db.delete(member)
     db.commit()
     return Response(status_code=204)

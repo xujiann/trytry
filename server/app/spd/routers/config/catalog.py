@@ -365,10 +365,17 @@ def list_targets(program_id: int, stage: str | None = None, db: Session = Depend
 
 @router.patch("/targets/{target_id}", response_model=TargetOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_target(target_id: int, body: dict, db: Session = Depends(get_db)):
+def update_target(
+    target_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     target = db.get(SpdTarget, target_id)
     if target is None:
         raise HTTPException(status_code=404, detail="管理目标不存在")
+    # 与新增管理目标同一口径：病种设了牵头机构，就由牵头机构定（P1-58）
+    program = db.get(SpdProgram, target.program_id)
+    if program is not None:
+        assert_org_writable(db, user, program.lead_org_id)
     allowed = {
         "metric_name", "target_low", "target_high", "unit", "qualitative", "risk_level",
         "followup_interval_days", "form_code", "edu_code", "active",

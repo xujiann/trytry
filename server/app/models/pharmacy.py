@@ -138,6 +138,12 @@ class TcmDispenseOrder(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     from_org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    # 承接调配煎煮配送的**共享中药房**机构：首个推进它的非下单机构领取时落库
+    # （与诊断中心 `exam_requests.claimed_org_id` 同一形状）。此前订单上只有下单方，
+    # 哪家药房都能推进别家的订单（P1-58）。为空＝尚无药房领取或存量行
+    pharmacy_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
     herbs: Mapped[str] = mapped_column(String(1024))
     doses: Mapped[int] = mapped_column(Integer, default=1)
     decoct: Mapped[bool] = mapped_column(Boolean, default=True)

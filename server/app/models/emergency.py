@@ -32,6 +32,12 @@ class EmergencyCase(Base):
     symptom: Mapped[str] = mapped_column(String(512), default="")
     ambulance_no: Mapped[str] = mapped_column(String(32), default="")
     dest_org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    # 调度机构：建事件的人**当时**所在机构，由服务端落库（不收请求体，免得谎报）。
+    # 院前推进、体征回传、绿道节点由调度方或接收医院做，此前事件上没有这一方，
+    # 任何机构都能写（P1-58）。存量行为空＝归属未定，照旧不判；全域账号建的也为空
+    dispatch_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
     # 急救绿色通道类型：""=普通, chest_pain=胸痛, stroke=卒中, trauma=创伤
     channel_type: Mapped[str] = mapped_column(String(16), default="", index=True)
     # dispatched=已调度, en_route=转运中, arrived=已到院, admitted=已收治

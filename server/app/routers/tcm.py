@@ -17,7 +17,9 @@ from ..models import (
 )
 from datetime import date, timedelta
 from ..datetypes import DateStr
-from ..visibility import assert_obj_org_writable, assert_org_writable
+from ..visibility import (
+    GLOBAL_ROLES, assert_any_org_writable, assert_obj_org_writable, assert_org_writable,
+)
 
 router = APIRouter(prefix="/api/tcm", tags=["中医药服务"], dependencies=[Depends(get_current_user)])
 
@@ -293,15 +295,44 @@ def list_orders(
     return paginate(query.order_by(TcmDispenseOrder.id.desc()), response, offset, limit)
 
 
+def _claim_or_assert_pharmacy(db: Session, user: User, order: TcmDispenseOrder) -> None:
+    """推进权：下单机构本身，或**领取了这张单的共享中药房**（P1-58）。
+
+    订单上原先只有下单方，没记是哪家药房在调配煎煮——于是哪家机构都能推进别家的
+    订单（P1-57 研判时按设计豁免，缺的正是这一列）。现在与共享诊断中心领取申请单
+    同一形状：第一个推进它的**非下单机构**即领取，用条件 UPDATE 落库，并发两家
+    同时领只有一家成功；领取之后只认下单方与这家药房。
+
+    下单机构推进不领取：本院药房自己调配是常态，若让下单方领取，真正承接的共享
+    药房反倒会被关在门外。全域账号与没挂机构的账号同样不领取。
+    """
+    if (
+        order.pharmacy_org_id is None
+        and user.org_id is not None
+        and user.org_id != order.from_org_id
+        and user.role not in GLOBAL_ROLES
+    ):
+        db.query(TcmDispenseOrder).filter(
+            TcmDispenseOrder.id == order.id, TcmDispenseOrder.pharmacy_org_id.is_(None)
+        ).update({TcmDispenseOrder.pharmacy_org_id: user.org_id}, synchronize_session=False)
+        db.flush()
+        db.refresh(order)
+    assert_any_org_writable(db, user, (order.from_org_id, order.pharmacy_org_id),
+                            "该订单已由其他中药房承接")
+
+
 @router.post(
     "/dispense-orders/{order_id}/advance",
     response_model=DispenseOut,
     dependencies=[Depends(require_roles("operator", "pharmacist"))],  # H2: 煎药/配送流转
 )
-def advance_order(order_id: int, db: Session = Depends(get_db)):
+def advance_order(
+    order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
     order = db.get(TcmDispenseOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="中药订单不存在")
+    _claim_or_assert_pharmacy(db, user, order)
     flow = _DISPENSE_FLOW if order.decoct else _NO_DECOCT_FLOW
     next_status = flow.get(order.status)
     if next_status is None:

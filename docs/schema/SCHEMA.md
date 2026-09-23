@@ -858,11 +858,13 @@
 - `symptom` · VARCHAR(512) · NOT NULL
 - `ambulance_no` · VARCHAR(32) · NOT NULL
 - `dest_org_id` · INTEGER · → organizations.id
+- `dispatch_org_id` · INTEGER · index · → organizations.id
 - `channel_type` · VARCHAR(16) · NOT NULL · index
 - `status` · VARCHAR(16) · NOT NULL · index
 - `rescue_outcome` · VARCHAR(16) · NOT NULL · index
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_emergency_cases_channel_type(channel_type)
+- _index_ ix_emergency_cases_dispatch_org_id(dispatch_org_id)
 - _index_ ix_emergency_cases_rescue_outcome(rescue_outcome)
 - _index_ ix_emergency_cases_status(status)
 
@@ -1772,6 +1774,7 @@
 
 - `id` · INTEGER · PK · NOT NULL
 - `request_id` · INTEGER · NOT NULL · index · → exam_requests.id
+- `center_org_id` · INTEGER · index · → organizations.id
 - `specimen_no` · VARCHAR(32) · NOT NULL · index
 - `site` · VARCHAR(128) · NOT NULL
 - `excised_at` · VARCHAR(19) · NOT NULL
@@ -1785,6 +1788,7 @@
 - `note` · VARCHAR(512) · NOT NULL
 - `created_at` · DATETIME · NOT NULL
 - _unique_ (specimen_no) uq_pathology_specimen_no
+- _index_ ix_pathology_specimens_center_org_id(center_org_id)
 - _index_ ix_pathology_specimens_request_id(request_id)
 - _index_ ix_pathology_specimens_specimen_no(specimen_no)
 - _index_ ix_pathology_specimens_status(status)
@@ -3764,6 +3768,7 @@
 - `id` · INTEGER · PK · NOT NULL
 - `patient_id` · INTEGER · NOT NULL · index · → patients.id
 - `from_org_id` · INTEGER · NOT NULL · → organizations.id
+- `pharmacy_org_id` · INTEGER · index · → organizations.id
 - `herbs` · VARCHAR(1024) · NOT NULL
 - `doses` · INTEGER · NOT NULL
 - `decoct` · BOOLEAN · NOT NULL
@@ -3771,6 +3776,7 @@
 - `created_at` · DATETIME · NOT NULL
 - `updated_at` · DATETIME · NOT NULL
 - _index_ ix_tcm_dispense_orders_patient_id(patient_id)
+- _index_ ix_tcm_dispense_orders_pharmacy_org_id(pharmacy_org_id)
 - _index_ ix_tcm_dispense_orders_status(status)
 
 ## tcm_formulas

@@ -415,6 +415,19 @@ def submit_report(
 _SAMPLE_FLOW = {"": "collected", "collected": "in_transit", "in_transit": "received"}
 
 
+def _assert_critical_receiver(db: Session, user: User, report: ExamReport) -> None:
+    """危急值的确认接收与处置反馈只能由**申请机构**做（P1-58）。
+
+    危急值是推给申请机构的（见 `submit_report` 的定向通知与广播），接收、处置的
+    也只能是那边管这个病人的医师。原先不判，第三家机构的医师能替申请机构
+    "确认接收""处置完毕"——危急值闭环率是质控指标，一个谁都能闭环的环等于没有环，
+    更要紧的是申请机构那头会以为已经有人处置了。
+    """
+    request = db.get(ExamRequest, report.request_id)
+    if request is not None:
+        assert_org_writable(db, user, request.from_org_id)
+
+
 @router.post(
     "/{request_id}/sample/advance",
     response_model=ExamRequestOut,
@@ -473,6 +486,7 @@ def acknowledge_critical(
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    _assert_critical_receiver(db, user, report)
     if not report.critical:
         raise HTTPException(status_code=422, detail="非危急值报告，无需确认")
     # M-1 整改：存量危急报告（迁移前 critical_status=''）等同"已通知"，可正常进入闭环
@@ -506,6 +520,7 @@ def resolve_critical(
     report = db.get(ExamReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    _assert_critical_receiver(db, user, report)
     if not report.critical:
         raise HTTPException(status_code=422, detail="非危急值报告，无需处置反馈")
     if report.critical_status != "acknowledged":

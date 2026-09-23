@@ -92,6 +92,19 @@ def match_program(db: Session, patient_id: int, program: SpdProgram, extra: dict
     return result
 
 
+def program_lead_org(db: Session, program_code: str) -> int | None:
+    """按病种编码取牵头机构；没挂病种（全县通用）或病种没设牵头机构都是 `None`。
+
+    病种配置（纳管规则、管理目标、转诊规则、服务包）的归属都落在病种的牵头机构上
+    （P1-57/P1-58）：转诊规则和服务包自己没有机构列，只挂着 `program_code`。
+    返回 `None` 交给 `assert_org_writable` 按"归属未定"放行，与病种本身同一口径。
+    """
+    if not program_code:
+        return None
+    program = db.query(SpdProgram).filter(SpdProgram.code == program_code).first()
+    return program.lead_org_id if program is not None else None
+
+
 def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTarget | None:
     """取某病种某指标的管理目标，三级回落：本阶段 → 不分阶段 → 该病种任一阶段。
 

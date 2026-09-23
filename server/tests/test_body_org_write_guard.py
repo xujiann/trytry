@@ -60,7 +60,11 @@ WRITE = {"POST", "PUT", "PATCH", "DELETE"}
 GUARDS = ("assert_org_writable", "assert_obj_org_writable")
 
 #: 「以谁的名义写」——必须校验归属
-ACTING = {"org_id", "from_org_id", "initiator_org_id", "current_org_id"}
+ACTING = {"org_id", "from_org_id", "initiator_org_id", "current_org_id",
+          # P1-58 新增的两列：急救的调度方、承接的中药房。二者都由服务端从操作人身上取、
+          # 不收请求体；归进 acting 是 fail-closed——哪天有人把它们开放成入参，
+          # 那就是调用方自报"我以哪家的名义在做"，必须校验
+          "dispatch_org_id", "pharmacy_org_id"}
 #: 「写给谁」——跨机构是业务本身，不能校验
 COUNTERPARTY = {
     "to_org_id": "转诊/会诊/调拨的接收方，跨机构正是这些业务的全部意义",

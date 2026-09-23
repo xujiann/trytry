@@ -204,6 +204,12 @@ class PathologySpecimen(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     request_id: Mapped[int] = mapped_column(ForeignKey("exam_requests.id"), index=True)
+    # 核收（或拒收）这份标本的**病理中心**机构，核收时由服务端落库。取材、制片、阅片
+    # 只能由它推进（P1-58：此前标本表没有任何机构列，谁都能推进别家的标本）。
+    # 为空＝尚未核收或存量行，此时退回看申请单的 `claimed_org_id`
+    center_org_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
     # 标本号由平台生成（同追溯码的理由：唯一性是全部价值所在）
     specimen_no: Mapped[str] = mapped_column(String(32), index=True)
     site: Mapped[str] = mapped_column(String(128), default="")

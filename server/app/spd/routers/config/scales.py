@@ -12,7 +12,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ....database import get_db
-from ....deps import paginate, require_roles
+from ....deps import get_current_user, paginate, require_roles
+from ....visibility import assert_org_writable
+from ...platform import User
+from ...service import program_lead_org
 from ...models import (
     SpdEduMaterial,
     SpdScale,
@@ -305,7 +308,12 @@ def _package_out(p: SpdServicePackage) -> dict:
 
 @router.post("/service-packages", response_model=ServicePackageOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def create_package(body: PackageIn, db: Session = Depends(get_db)):
+def create_package(
+    body: PackageIn, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    # 服务包自己没有机构列，挂在病种下就归病种的牵头机构定（P1-58）；
+    # 价格与次数上限直接决定扣减，谁都能改等于谁都能给别家的患者改价
+    assert_org_writable(db, user, program_lead_org(db, body.program_code))
     for item in body.items:
         if not item.get("code") or int(item.get("times", 0)) <= 0:
             raise HTTPException(status_code=422, detail="服务包项目须有编码且次数大于0")
@@ -336,10 +344,14 @@ def list_packages(
 
 @router.patch("/service-packages/{package_id}", response_model=ServicePackageOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_package(package_id: int, body: dict, db: Session = Depends(get_db)):
+def update_package(
+    package_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     package = db.get(SpdServicePackage, package_id)
     if package is None:
         raise HTTPException(status_code=404, detail="服务包不存在")
+    assert_org_writable(db, user, program_lead_org(db, package.program_code))
     for key in ("name", "price", "period_days", "items", "active"):
         if key in body:
             setattr(package, key, body[key])

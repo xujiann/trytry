@@ -1124,10 +1124,18 @@ class QcResultIn(BaseModel):
 
 @router.post("/qc-samples/{sample_id}/result", response_model=QcResultOut,
              dependencies=[Depends(require_roles("director", "doctor"))])
-def record_qc_result(sample_id: int, body: QcResultIn, db: Session = Depends(get_db)):
+def record_qc_result(
+    sample_id: int, body: QcResultIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     sample = db.get(SpdQcSample, sample_id)
     if sample is None:
         raise HTTPException(status_code=404, detail="抽查记录不存在")
+    # 抽样只抽得到可见机构的随访（`plan_qc`），录结果按被抽那条随访的机构判——
+    # 同一口径（P1-58：别家曾能给甲院的随访判"不合格"，质控结果进考核）
+    record = db.get(SpdFollowupRecord, sample.record_id)
+    if record is not None:
+        assert_org_writable(db, user, record.org_id)
     sample.result = body.result
     sample.method = body.method
     sample.note = body.note

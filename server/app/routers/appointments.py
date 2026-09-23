@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import scope_org_list, scope_patient_list
+from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr
 from ..deps import (
@@ -403,10 +403,18 @@ def cancel(appointment_id: int, db: Session = Depends(get_db)):
     response_model=AppointmentOut,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 到诊核销
 )
-def fulfill(appointment_id: int, db: Session = Depends(get_db)):
+def fulfill(
+    appointment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
     appointment = db.get(Appointment, appointment_id)
     if appointment is None:
         raise HTTPException(status_code=404, detail="预约不存在")
+    # 到诊核销发生在**号源所属机构**：人到了那家医院才谈得上核销（P1-58：别家经办
+    # 曾能把甲院的预约核销成"已就诊"，爽约率就此失真）。取消不在此列——代约方
+    # 常是另一家机构（乡镇替患者约县医院的号），而代约方没有落库，无从判定
+    slot = db.get(AppointmentSlot, appointment.slot_id)
+    if slot is not None:
+        assert_org_writable(db, user, slot.org_id)
     if appointment.status != "booked":
         raise HTTPException(status_code=409, detail=f"当前状态 {appointment.status} 不可核销")
     appointment.status = "fulfilled"

@@ -9,7 +9,7 @@ from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, User
-from ..visibility import assert_org_writable, assert_patient_visible
+from ..visibility import assert_any_org_writable, assert_org_writable, assert_patient_visible
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
 
 router = APIRouter(prefix="/api/emergency", tags=["智慧急救"], dependencies=[Depends(get_current_user)])
@@ -96,14 +96,28 @@ class VitalOut(VitalCreate):
     status_code=201,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 急救调度
 )
-def dispatch(body: CaseCreate, db: Session = Depends(get_db)):
+def dispatch(body: CaseCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if body.dest_org_id is not None and db.get(Organization, body.dest_org_id) is None:
         raise HTTPException(status_code=404, detail="目标医院不存在")
-    case = EmergencyCase(**body.model_dump())
+    case = EmergencyCase(**body.model_dump(), dispatch_org_id=user.org_id)
     db.add(case)
     db.commit()
     db.refresh(case)
     return case
+
+
+def _assert_case_party(db: Session, user: User, case: EmergencyCase) -> None:
+    """院前各步（推进、体征回传、绿道节点）由**调度方或接收医院**做（P1-58）。
+
+    原先事件上只有接收医院，按它判会把 120 调度与车组整条关掉，于是一道都不判——
+    与这起急救毫不相干的机构也能把它推成"已收治"。补了调度机构列之后按双方任一判。
+    存量事件没有调度方（`dispatch_org_id` 为空，建单人不可考），照旧不判：
+    只拦得住一方的判定，会把存量在途事件的调度方关在门外。
+    """
+    if case.dispatch_org_id is None:
+        return
+    assert_any_org_writable(db, user, (case.dispatch_org_id, case.dest_org_id),
+                            "仅调度机构与接收医院可操作该急救事件")
 
 
 @router.get("/cases", response_model=list[CaseOut])
@@ -138,7 +152,7 @@ def set_rescue_outcome(
     if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
     # 到院之后才能判定，判定的是**接收医院**的医师（P1-57）。院前那几步（推进、体征、
-    # 绿道节点）由 120 与车组做，事件上没有记他们的机构，那几处按设计不判归属
+    # 绿道节点）按调度方或接收医院任一判，见 `_assert_case_party`
     assert_org_writable(db, user, case.dest_org_id)
     if case.status not in ("arrived", "admitted"):
         raise HTTPException(status_code=409, detail="患者尚未到院，不可判定抢救转归")
@@ -153,10 +167,11 @@ def set_rescue_outcome(
     response_model=CaseOut,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 急救流程推进
 )
-def advance(case_id: int, db: Session = Depends(get_db)):
+def advance(case_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     case = db.get(EmergencyCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
+    _assert_case_party(db, user, case)
     next_status = _FLOW.get(case.status)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {case.status} 已是终态")
@@ -172,11 +187,15 @@ def advance(case_id: int, db: Session = Depends(get_db)):
     status_code=201,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 体征回传
 )
-def report_vitals(case_id: int, body: VitalCreate, db: Session = Depends(get_db)):
+def report_vitals(
+    case_id: int, body: VitalCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """车载终端回传生命体征——院内可实时调阅，实现院前院内无缝对接。"""
     case = db.get(EmergencyCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
+    _assert_case_party(db, user, case)
     if case.status == "admitted":
         raise HTTPException(status_code=409, detail="已收治，转由院内记录")
     vital = EmergencyVital(case_id=case_id, **body.model_dump())
@@ -210,11 +229,15 @@ def list_vitals(
     status_code=201,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 急救绿道记录
 )
-def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(get_db)):
+def record_milestone(
+    case_id: int, body: MilestoneCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """记录绿道时间节点（每个节点每例仅记录一次）。"""
     case = db.get(EmergencyCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
+    _assert_case_party(db, user, case)
     existing = (
         db.query(EmergencyMilestone)
         .filter(

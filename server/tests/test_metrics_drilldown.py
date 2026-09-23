@@ -99,11 +99,14 @@ def seeded(client, admin):
             headers=doctor,
         ).json()
         report_ids.append(rep["id"])
-    client.post(f"/api/exams/reports/{report_ids[0]}/acknowledge", headers=doctor)
+    # P1-58：危急值的确认接收与处置反馈归**申请机构**（乡镇院），而 doctor 建在县院
+    # （出报告的诊断中心）——替申请机构闭环已被归属校验拦下。与上面同理用 admin 造，
+    # 闭环 1 条的数据形状一字不变
+    client.post(f"/api/exams/reports/{report_ids[0]}/acknowledge", headers=admin)
     client.post(
         f"/api/exams/reports/{report_ids[0]}/resolve",
         json={"note": "已处置"},
-        headers=doctor,
+        headers=admin,
     )
     # 转诊：上转 2 下转 1
     for direction, count in [("up", 2), ("down", 1)]:

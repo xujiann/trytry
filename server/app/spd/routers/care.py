@@ -848,12 +848,17 @@ class InterventionUpdate(BaseModel):
 @router.patch("/interventions/{intervention_id}", response_model=InterventionOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def update_intervention(
-    intervention_id: int, body: InterventionUpdate, db: Session = Depends(get_db)
+    intervention_id: int, body: InterventionUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """办理 / 移除 / 恢复干预任务，并可记录患者反馈。"""
     record = db.get(SpdIntervention, intervention_id)
     if record is None:
         raise HTTPException(status_code=404, detail="干预记录不存在")
+    # 与新增干预同一口径（P1-58：原先新增要判、办理/移除却谁都能动）。
+    # 不按纳管档案的机构判：新增本就允许与患者有服务关系的机构开干预，
+    # 改比建更严，建干预的人反倒改不了自己建的那条
+    assert_patient_visible(db, user, record.patient_id, resource="spd_intervention")
     for key, value in body.model_dump(exclude_unset=True).items():
         if key == "feedback" and not value:
             continue

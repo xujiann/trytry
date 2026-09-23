@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_with_retry
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, row_dict
-from ..models import ExamRequest, PathologySpecimen
+from ..models import ExamRequest, PathologySpecimen, User
+from ..visibility import GLOBAL_ROLES, assert_any_org_writable, assert_org_writable
 
 router = APIRouter(
     prefix="/api/pathology", tags=["病理标本"], dependencies=[Depends(get_current_user)]
@@ -157,15 +158,48 @@ def _specimen(db: Session, specimen_id: int) -> PathologySpecimen:
     return specimen
 
 
+def _center_of(db: Session, specimen: PathologySpecimen) -> int | None:
+    """这份标本归哪家病理中心：核收时落的 `center_org_id`；没有（未核收或存量行）
+    就看申请单被哪家诊断中心领取了（`exam_requests.claimed_org_id`）。"""
+    if specimen.center_org_id is not None:
+        return specimen.center_org_id
+    request = db.get(ExamRequest, specimen.request_id)
+    return request.claimed_org_id if request is not None else None
+
+
+def _assert_center(db: Session, user: User, specimen: PathologySpecimen) -> None:
+    """核收、拒收、取材制片阅片都是**病理中心**的动作（P1-58）。
+
+    标本表原先一个机构列都没有，谁都能推进别家的标本——而阅片是出诊断的前一步。
+    归属未定（申请单没人领、标本也没人核收）时不判，与诊断中心"领取前谁都能领"
+    同一口径；核收即落库，此后只认这家中心。
+    """
+    assert_org_writable(db, user, _center_of(db, specimen))
+
+
+def _take_receipt(db: Session, user: User, specimen: PathologySpecimen) -> None:
+    """核收/拒收时落下病理中心。全域账号代录不落（它不代表任何一家中心）。"""
+    if specimen.center_org_id is None:
+        center = _center_of(db, specimen)
+        if center is None and user.role not in GLOBAL_ROLES:
+            center = user.org_id
+        specimen.center_org_id = center
+
+
 @router.post(
     "/specimens", response_model=SpecimenOut, status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator"))]
 )
-def submit_specimen(body: SpecimenIn, db: Session = Depends(get_db)):
+def submit_specimen(
+    body: SpecimenIn, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
     """送检登记。一张病理申请单可对应多个标本（多部位取材），故不做一对一约束。"""
     request = db.get(ExamRequest, body.request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="检查申请不存在")
+    # 送检的是开单机构；中心收到实物后代为登记也常见——两方任一（P1-58）
+    assert_any_org_writable(db, user, (request.from_org_id, request.claimed_org_id),
+                            "仅开单机构与承接的诊断中心可登记送检标本")
     if request.center_type != "pathology":
         raise HTTPException(status_code=422, detail="仅病理申请有标本流转环节")
     # 与医废追溯码同理：标本号由服务端顺序生成，冲突该由服务端重试。
@@ -198,13 +232,18 @@ def list_specimens(
     "/specimens/{specimen_id}/receive", response_model=SpecimenOut,
     dependencies=[Depends(require_roles("doctor", "operator"))]
 )
-def receive_specimen(specimen_id: int, body: SpecimenReceive, db: Session = Depends(get_db)):
+def receive_specimen(
+    specimen_id: int, body: SpecimenReceive, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """核收。核收人必填——标本出了问题，要找得到当时是谁签的收。"""
     specimen = _specimen(db, specimen_id)
+    _assert_center(db, user, specimen)
     if specimen.status != "pending":
         raise HTTPException(status_code=409, detail=f"当前状态 {specimen.status} 不可核收")
     specimen.status = "received"
     specimen.received_by = body.received_by
+    _take_receipt(db, user, specimen)
     db.commit()
     db.refresh(specimen)
     return _out(specimen)
@@ -214,9 +253,13 @@ def receive_specimen(specimen_id: int, body: SpecimenReceive, db: Session = Depe
     "/specimens/{specimen_id}/reject", response_model=SpecimenOut,
     dependencies=[Depends(require_roles("doctor", "operator"))]
 )
-def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depends(get_db)):
+def reject_specimen(
+    specimen_id: int, body: SpecimenReject, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """拒收。只能在核收环节拒——已经开始取材制片了才说标本不合格，晚了。"""
     specimen = _specimen(db, specimen_id)
+    _assert_center(db, user, specimen)
     if specimen.status != "pending":
         raise HTTPException(
             status_code=409, detail=f"当前状态 {specimen.status} 不可拒收（拒收只能发生在核收环节）"
@@ -228,6 +271,7 @@ def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depend
         )
     specimen.status = "rejected"
     specimen.reject_reason = body.reject_reason
+    _take_receipt(db, user, specimen)
     db.commit()
     db.refresh(specimen)
     return _out(specimen)
@@ -237,9 +281,13 @@ def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depend
     "/specimens/{specimen_id}/advance", response_model=SpecimenOut,
     dependencies=[Depends(require_roles("doctor", "operator"))]
 )
-def advance_specimen(specimen_id: int, body: SpecimenAdvance, db: Session = Depends(get_db)):
+def advance_specimen(
+    specimen_id: int, body: SpecimenAdvance, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """推进：核收→取材→制片→阅片。蜡块数与切片数在对应环节记录。"""
     specimen = _specimen(db, specimen_id)
+    _assert_center(db, user, specimen)
     if specimen.status == "rejected":
         raise HTTPException(status_code=409, detail="已拒收的标本不可推进")
     next_status = SPECIMEN_FLOW.get(specimen.status)
