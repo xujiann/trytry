@@ -141,9 +141,25 @@ def test_consultation_rating_requires_completed(client, admin, base):
     ).status_code == 409
 
 
-def test_consultation_filter_and_missing(client, admin):
+def test_consultation_filter_and_missing(client, admin, base):
+    """自己造一条 declined 再筛，不指望上一条用例先跑过。
+
+    原先直接筛 `status=declined` 并断言非空——那条 declined 是
+    `test_consultation_decline_and_state_machine` 留下的，单独跑这一条会
+    `assert []` 失败，而报的错与"筛选分支"毫无关系。
+    """
+    cons = client.post(
+        "/api/consultations",
+        json={"patient_id": base["patient"]["id"], "from_org_id": base["town"]["id"],
+              "to_org_id": base["county"]["id"], "question": "筛选分支用"},
+        headers=admin,
+    ).json()
+    assert client.post(
+        f"/api/consultations/{cons['id']}/decline", headers=admin
+    ).status_code == 200
     rows = client.get("/api/consultations?status=declined", headers=admin).json()
     assert rows and all(r["status"] == "declined" for r in rows)
+    assert any(r["id"] == cons["id"] for r in rows)
     assert client.post(
         f"/api/consultations/{MISSING_ID}/accept", json={"expert_name": "x"}, headers=admin
     ).status_code == 404
@@ -180,9 +196,26 @@ def test_contract_validation_and_filters(client, admin, base):
 
 
 def test_contract_terminate_twice_rejected(client, admin, base):
-    contract = client.get(
-        f"/api/contracts?patient_id={base['patient']['id']}", headers=admin
-    ).json()[0]
+    """自己签一份再解约，不去捡上一条用例签出来的那份。
+
+    原先是 `client.get("/api/contracts?patient_id=…").json()[0]`——单独跑这一条
+    会 IndexError，报的错与"解约两次该 409"毫无关系。
+    """
+    # 另起一个患者：同一患者在同一机构已有生效签约时再签会 409，
+    # 而本条要的是"一份自己的、能解约两次的签约"。
+    patient = client.post(
+        "/api/patients", json={"name": "解约分支患者", "id_card": "331582199001011250"},
+        headers=admin,
+    ).json()
+    contract = client.post(
+        "/api/contracts",
+        json={"patient_id": patient["id"], "org_id": base["town"]["id"],
+              "doctor_name": "解约测试医生", "package": "standard",
+              "signed_date": "2026-01-01"},
+        headers=admin,
+    )
+    assert contract.status_code == 201, contract.text
+    contract = contract.json()
     assert client.post(f"/api/contracts/{contract['id']}/terminate", headers=admin).status_code == 200
     assert client.post(f"/api/contracts/{contract['id']}/terminate", headers=admin).status_code == 409
     assert client.post(f"/api/contracts/{MISSING_ID}/terminate", headers=admin).status_code == 404

@@ -82,13 +82,20 @@ def seeded(client, admin):
 
 
 def _reference(threshold: float) -> list[int]:
-    """改写前那段算法的原样复刻：逐个在院患者算 gap、筛、按 gap 排序。"""
+    """改写前那段算法的原样复刻：逐个在院患者算 gap、筛、按 gap 排序。
+
+    **唯独不照抄那个 `.limit(500)`**：扫描上限正是本次要修的缺陷，参照系里留着它，
+    参照系自己就会漏报。少了这一句，这几条用例还会**依赖执行顺序**——同模块里
+    「第 501 位欠费」那条会铺 520 个在院患者，它先跑，参照系就只看得见前 500 个，
+    与接口对不上（实测在打乱顺序时 5 条全红）。参照系要证的是**判定**
+    （gap 怎么算、怎么取整、怎么排序）与改写前一致，不是把缺陷也一起复刻。
+    """
     db = SessionLocal()
     try:
         alerts = []
         for adm in db.query(Admission).filter(Admission.status == "admitted").order_by(
             Admission.id
-        ).limit(500).all():
+        ).all():
             gap = round(deposit_balance(db, adm.id) - unsettled_amount(db, adm.id), 2)
             if gap < threshold:
                 alerts.append({"admission_id": adm.id, "gap": gap})

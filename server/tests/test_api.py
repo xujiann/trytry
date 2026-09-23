@@ -70,7 +70,12 @@ def test_organization_hierarchy(client, auth_headers):
     assert dup.status_code == 409
 
     listed = client.get("/api/organizations?level=township", headers=auth_headers)
-    assert [o["name"] for o in listed.json()] == ["城东镇卫生院"]
+    # 断言"筛出来的都是乡镇级、且刚建的这家在里面"，而不是"整个库里只有这一家"
+    # ——后者要求本条用例必须第一个跑（别的用例也会建卫生院），单独跑或换个顺序
+    # 就会红，而报的错与"按层级筛"毫无关系。
+    names = [o["name"] for o in listed.json()]
+    assert "城东镇卫生院" in names
+    assert all(o["level"] == "township" for o in listed.json())
 
 
 def test_empi_registration_is_idempotent(client, auth_headers):

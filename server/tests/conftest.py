@@ -70,7 +70,25 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """未传 --e2e / --watchdog 时，跳过对应标记的用例（保持默认套件离线快速跑完）。"""
+    """未传 --e2e / --watchdog 时跳过对应标记的用例；`MEDPLAT_TEST_REVERSE=1` 时倒序执行。
+
+    **倒序**（P1-55）用来查"用例之间靠执行顺序互相喂数据"：
+    `scripts/check_test_order.py` 逐模块倒序跑一遍，红了就说明这个模块里有用例在
+    依赖前面那条先跑过。代价很具体——**这种模块里的单条用例没法单独跑**，
+    `pytest 文件::某条用例` 直接报一个与被测对象毫无关系的 IndexError，
+    而调试时第一件想做的事就是把那条单独拎出来跑。
+
+    刻意用倒序而不是随机打乱：倒序**确定可复现**，不必记种子；而且
+    `pytest-randomly` 不在 `requirements-dev.txt` 里，工具不该依赖一个本仓库
+    并不安装的插件（本机碰巧装了那是本机的事）。
+
+    ⚠️ 倒序这几行**必须并进本函数，不能另写一个同名 hook**：同一个模块里第二个
+    `def pytest_collection_modifyitems` 只会把第一个**顶掉**（Python 重新绑定名字，
+    pytest 收集到的是后者），于是上面那几行 skip 全部失效。踩过一次——
+    e2e 从"默认跳过"变成真去拉浏览器，11 个用例当场 error。
+    """
+    if os.environ.get("MEDPLAT_TEST_REVERSE") == "1":
+        items.reverse()
     if not config.getoption("--watchdog"):
         skip_watchdog = pytest.mark.skip(
             reason="看门狗自证用例默认跳过（自身要卡满阈值），使用 --watchdog 开启"

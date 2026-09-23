@@ -31,6 +31,7 @@ make typecheck         # mypy（渐进式，仅查已注解代码）
 make test-unit         # 进程内 SQLite 快速套件（无外部依赖）
 make test-integration  # 真 PostgreSQL（需 MEDPLAT_PG_TEST_URL）
 make test-smoke        # 应用可启动 + 核心接口有响应
+make test-order        # 用例顺序依赖检查：逐模块倒序跑（约 5 分钟，不进 verify）
 make verify            # build + lint + typecheck + test-unit（提交前自检）
 ```
 
@@ -155,6 +156,9 @@ make test-integration   # 若动了迁移/PG 方言相关（需 MEDPLAT_PG_TEST_
 
 - 若改了迁移或**模型的列**：`make build` 校验迁移图；`test_migration_model_parity.py` 已把「空库跑通 `alembic upgrade heads` + 逐表逐列比对模型」做成 test-unit 里的硬门禁（约 7 秒，无豁免名单），`make verify` 会带上，不必再手跑。真 PG 的方言问题仍由 `make test-integration` 守（两者共用 `tests/schema_parity.py` 一份比对逻辑）。
 - 若改了 spd：`pytest tests/test_spd_boundary.py -q` 必须绿（边界未被破坏）。
+- **新写的用例要能单独跑**：`pytest 文件::某条用例` 必须通得过，不许靠"前面那条先跑过"
+  喂数据（P1-55）。批量检查用 `make test-order`（逐模块倒序跑，基线只许变少）；
+  它约 5 分钟，**不在 `verify` 里**，动了测试再跑。
 - **lint 存量已清零并转为阻断**（`ruff` 起步规则集 0 项）：新增 lint 报错会拦下 CI。
 - **typecheck 存量已清零并转为阻断**（`mypy` 只查已注解代码，0 处）：新增类型报错会拦下 CI。范围仍是渐进式的（不开 `--check-untyped-defs`），扩大范围属单独任务。
 - ⚠️ **跑 mypy 前先确认环境**：`pyproject.toml` 开了 `ignore_missing_imports=true`，所以当 mypy 解析不到某个库时它**不报错、而是把整个库当成 `Any`**——依赖它的代码全部「通过」。隔离安装（`uv tool install mypy` / `pipx`）尤其容易踩：那个环境里没有 SQLAlchemy，同一份代码本地报 41 处、CI 报 187 处。`make typecheck` 会先跑 `scripts/check_mypy_env.py` 探针拦住这种假绿；**别拿隔离环境里的数字下结论**。

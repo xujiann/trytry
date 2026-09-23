@@ -33,7 +33,7 @@ def base(client, h):
             json={"name": f"慢病患者{i}", "id_card": f"32098119900101{i:04d}", "gender": "男"},
             headers=h,
         ).json()
-        for i in range(8)
+        for i in range(9)
     ]
     return {"org": org, "patients": patients}
 
@@ -197,8 +197,13 @@ def test_disease_type_admin_maintenance(client, h, base):
 
 
 def test_legacy_hypertension_leveling_unchanged(client, h, base):
-    """存量三病种阈值行为不变：sbp≥160 或 dbp≥100 → 3级。"""
-    chronic = client.get("/api/chronic?disease=hypertension", headers=h).json()[0]
+    """存量三病种阈值行为不变：sbp≥160 或 dbp≥100 → 3级。
+
+    自己建档，不去捡别的用例建出来的那一条（原先是
+    `client.get("/api/chronic?disease=hypertension").json()[0]`）——那样这条用例
+    就只有在别人先跑过时才通得过，单独跑它会报一个与阈值毫无关系的 IndexError。
+    """
+    chronic = _register(client, h, base, 8, "hypertension").json()
     assert client.post(
         f"/api/chronic/{chronic['id']}/followups", json={"sbp": 165, "dbp": 95}, headers=h
     ).json()["level"] == 3

@@ -7,7 +7,7 @@ PY := python
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install build lint typecheck test-unit test-integration test-smoke test verify docker-build
+.PHONY: help install build lint typecheck test-unit test-integration test-smoke test-order test verify docker-build
 
 help:  ## 列出可用命令
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -47,6 +47,9 @@ test-integration:  ## 集成测试：真 PostgreSQL（需 MEDPLAT_PG_TEST_URL）
 
 test-smoke:  ## 冒烟测试：应用可启动 + 核心接口有响应 + 产出指标
 	cd $(SERVER) && $(PY) -m pytest tests/ -q -m smoke
+
+test-order:  ## 用例顺序依赖检查：逐模块倒序跑一遍（约 5 分钟，不进 verify）
+	cd $(SERVER) && $(PY) scripts/check_test_order.py
 
 # ---- 聚合 ----
 test: test-unit test-smoke  ## 无外部依赖的可跑测试（unit + smoke）
