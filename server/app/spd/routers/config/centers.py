@@ -12,8 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ....database import get_db
-from ....deps import paginate, require_roles
-from ...platform import Organization
+from ....deps import get_current_user, paginate, require_roles
+from ....visibility import assert_org_writable
+from ...platform import Organization, User
 from ...models import (
     SpdCenter,
     SpdProgram,
@@ -86,7 +87,11 @@ def _center_out(c: SpdCenter) -> dict:
 
 @router.post("/centers", response_model=CenterOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def create_center(body: CenterIn, db: Session = Depends(get_db)):
+def create_center(
+    body: CenterIn, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    # 不得替别家挂牌牵头（P1-57：旧的请求体闸门只认字面上的 `org_id`，`lead_org_id` 不在眼里）
+    assert_org_writable(db, user, body.lead_org_id)
     if db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first() is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
     center = SpdCenter(**body.model_dump())
@@ -115,10 +120,16 @@ def list_centers(
 
 @router.patch("/centers/{center_id}", response_model=CenterOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_center(center_id: int, body: dict, db: Session = Depends(get_db)):
+def update_center(
+    center_id: int, body: dict, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     center = db.get(SpdCenter, center_id)
     if center is None:
         raise HTTPException(status_code=404, detail="专病中心不存在")
+    # 中心归牵头机构管（P1-57：别家医师曾能改名、停运，甚至把牵头机构改成自己）。
+    # 只判**现任**牵头机构：牵头方把中心移交给别家是正当操作，不拦新值
+    assert_org_writable(db, user, center.lead_org_id)
     for key in ("name", "lead_org_id", "lead_dept", "leader_user_id", "org_ids", "team_ids",
                 "status", "version"):
         if key in body:

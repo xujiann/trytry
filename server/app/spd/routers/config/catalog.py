@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from ....database import get_db
 from ....datetypes import OptionalDateStr
 from ....deps import get_current_user, paginate, require_admin, require_roles
+from ....visibility import assert_org_writable
 from ...platform import Organization, User
 from ...models import (
     SpdProgram,
@@ -247,6 +248,9 @@ def update_program(
     program = db.get(SpdProgram, program_id)
     if program is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
+    # 设了牵头机构的病种，纳管规则由牵头机构定；没设的（全县共用）不限（P1-57：
+    # 卫生院医师曾能改县医院牵头病种的纳入规则，改完全县的纳管口径跟着变）
+    assert_org_writable(db, user, program.lead_org_id)
     data = body.model_dump(exclude_unset=True, exclude={"note"})
     rules_changed = any(
         key in data for key in ("include_rules", "exclude_rules", "stages", "milestones")
@@ -324,9 +328,15 @@ def _target_out(t: SpdTarget) -> dict:
 
 @router.post("/programs/{program_id}/targets", response_model=TargetOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def create_target(program_id: int, body: TargetIn, db: Session = Depends(get_db)):
-    if db.get(SpdProgram, program_id) is None:
+def create_target(
+    program_id: int, body: TargetIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    program = db.get(SpdProgram, program_id)
+    if program is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
+    # 管理目标是病种配置的一部分，与改纳管规则同一口径
+    assert_org_writable(db, user, program.lead_org_id)
     if body.kind == "quantitative" and body.target_low is None and body.target_high is None:
         raise HTTPException(status_code=422, detail="量化目标须至少给出上限或下限")
     if (

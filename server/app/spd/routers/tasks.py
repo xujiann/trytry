@@ -404,12 +404,19 @@ class InstanceAdjustIn(BaseModel):
              response_model=PathInstanceOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def adjust_path_instance(
-    instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db)
+    instance_id: int, body: InstanceAdjustIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """个性化调整：改的是**实例**不是模板（服务团队专家端 #2）。"""
     instance = db.get(SpdPathInstance, instance_id)
     if instance is None:
         raise HTTPException(status_code=404, detail="路径实例不存在")
+    # P1-57：实例表自己没有机构列，归属在一跳之外的纳管档案上。原先不判，
+    # 乙院能暂停/取消/改派甲院患者的路径——两道横向闸门都看不见它：
+    # 按 id 取出的模型不带 org_id 列，扫描器不认为这里有"别家的东西"。
+    enrollment = db.get(SpdEnrollment, instance.enrollment_id)
+    if enrollment is not None:
+        assert_org_writable(db, user, enrollment.org_id)
     if instance.status == "completed":
         raise HTTPException(status_code=409, detail="已完成的路径不可调整")
     data = body.model_dump(exclude_unset=True)

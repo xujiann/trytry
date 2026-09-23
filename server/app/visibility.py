@@ -282,6 +282,24 @@ def assert_org_writable(db: Session, user: User, org_id: int | None) -> None:
     raise HTTPException(status_code=403, detail="无权以该机构名义写入数据")
 
 
+def assert_any_org_writable(
+    db: Session, user: User, org_ids, detail: str = "仅单据相关机构可操作"
+) -> None:
+    """跨机构单据（会诊、转诊……）的写：调用者须是**其中任一方**机构，不行就 403。
+
+    这类单据本就跨两家，套 `assert_org_writable` 只能二选一、另一方的正当动作会被拦；
+    不校验则与单据毫不相干的**第三家**也能动它（P1-57 实测：丙院给甲乙两院之间的
+    会诊计费、给别家的转诊签发医保转诊证明，都是 200）。`None` 的一方不算数；
+    一方都没有（归属未定）时与 `assert_org_writable(None)` 同口径放行，由各接口自己定语义。
+    """
+    parties = {o for o in org_ids if o is not None}
+    if not parties or user.role in GLOBAL_ROLES:
+        return
+    if user.org_id in parties:
+        return
+    raise HTTPException(status_code=403, detail=detail)
+
+
 def assert_obj_org_writable(db: Session, user: User, obj, org_attr: str = "org_id") -> None:
     """对**已取出的对象**校验机构归属，用于 `/{id}` 型写接口。
 

@@ -53,11 +53,18 @@ def list_batches(
     response_model=BatchOut,
     dependencies=[Depends(require_roles("operator"))],  # H2: 批次流转=经办
 )
-def advance(batch_id: int, dispatched_to_org_id: int | None = None, db: Session = Depends(get_db)):
-    """流转到下一状态：灭菌中→已灭菌→已发放（需指定接收机构）→已回收。"""
+def advance(
+    batch_id: int, dispatched_to_org_id: int | None = None, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """流转到下一状态：灭菌中→已灭菌→已发放（需指定接收机构）→已回收。
+
+    四步都是消毒供应中心自己的操作（回收也是中心去收），按 `center_org_id` 判归属。
+    """
     batch = db.get(SterilizationBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="批次不存在")
+    assert_org_writable(db, user, batch.center_org_id)
     next_status = _FLOW.get(batch.status)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {batch.status} 已是终态")

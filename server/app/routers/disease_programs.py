@@ -300,6 +300,9 @@ def record_node(
     """记录路径节点执行。节点 key 必须在目录里——写个不存在的节点，
     完成度就永远算不对。"""
     enrollment = _enrollment(db, enrollment_id)
+    # P1-57：乙院能给甲院的专病入组记节点、办出组（实测 200）。`_enrollment` 也给读接口用，
+    # 读的口径是可见性不是可写性，所以校验放在写接口里、不放进 helper。
+    assert_org_writable(db, user, enrollment.org_id)
     if enrollment.status != "enrolled":
         raise HTTPException(status_code=409, detail="该病例已出组，不可再记录路径节点")
     program = _program(db, enrollment.program_id)
@@ -323,13 +326,19 @@ def record_node(
 
 @router.post("/enrollments/{enrollment_id}/exit", response_model=DiseaseEnrollmentOut,
              dependencies=[Depends(require_roles("doctor", "public_health"))])
-def exit_enrollment(enrollment_id: int, body: ExitIn, db: Session = Depends(get_db)):
+def exit_enrollment(
+    enrollment_id: int, body: ExitIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """出组并做疗效评价。
 
     **必需节点未做完也允许出组**——患者转院、拒绝继续治疗都是现实，硬拦只会
     逼人补假记录。未完成的节点会留在完成度里如实呈现。
     """
     enrollment = _enrollment(db, enrollment_id)
+    # P1-57：乙院能给甲院的专病入组记节点、办出组（实测 200）。`_enrollment` 也给读接口用，
+    # 读的口径是可见性不是可写性，所以校验放在写接口里、不放进 helper。
+    assert_org_writable(db, user, enrollment.org_id)
     if enrollment.status != "enrolled":
         raise HTTPException(status_code=409, detail="该病例已出组")
     if body.status == "exited" and not body.exit_reason:

@@ -483,12 +483,35 @@ BYID_CROSS_ORG_OK = {
     "prescriptions.py:comment_prescription",
     "telemedicine.py:reply",
     "telemedicine.py:close",
-    # 慢专病逐级转诊（ADR-0005 三级链）：村医发起→卫生院审核→县级接收→下转承接，
-    # 每一格都由**下一家机构**推进，加本机构写守卫等于把逐级链路关掉。
-    # 单据可见性仍按"发起方/当前处理方/目标方任一在可见范围内"过滤。
-    "spd/referral.py:review_referral",
-    "spd/referral.py:arrive_referral",
-    "spd/referral.py:down_referral",
+    # （原先还有慢专病逐级转诊的审核/到院/下转三条。它们其实早按"本单当前持有机构"
+    # 与"审核权限"判了——`_assert_holds_case` / `_assert_review_authority`；P1-57 起闸门
+    # 认得 `_assert` 开头的同文件 helper，这三条随之从豁免转为已防护，删去。）
+    # ---- P1-57 闸门放宽视野（`*org_id` 列 + 经 helper 取数）后逐条研判的按设计跨机构 ----
+    # 院前急救：推进、车载体征回传、绿道节点都是 120 与车组在做。事件上只有
+    # `dest_org_id`（**接收医院**），没记调度方/车组的机构——按接收医院判会把院前
+    # 链路整条关掉，按什么别的判又无列可判（数据模型缺口，已登记）。
+    # 到院后的「抢救转归」则按接收医院判了，不在此列。
+    "emergency.py:advance",
+    "emergency.py:report_vitals",
+    "emergency.py:record_milestone",
+    # 共享诊断中心：领取就是中心把别家的申请单接过来，领取前单子上没有中心机构
+    # （`claimed_org_id` 正是领取时才写上）；样本物流是申请方采样、中心核收的多方链路，
+    # 同样多发生在领取之前。领取之后出报告已按 `claimed_org_id` 判
+    "exams.py:claim_request",
+    "exams.py:advance_sample",
+    # 共享中药房：调配→煎煮→配送由中药房推进，订单上只有下单机构 `from_org_id`，
+    # 没记是哪家中药房（数据模型缺口，已登记）；按下单机构判等于只许下单方自己煎药
+    "tcm.py:advance_order",
+    # 慢专病转诊规则是全县配置，`target_org_id` 是**转诊去向**不是归属，
+    # 规则本身没有归属机构；谁能改配置由角色（director/doctor）决定
+    "spd/referral.py:update_referral_rule",
+}
+
+# 按 id 写、**不按机构判而按更严的口径判**的接口——闸门只认机构守卫，这里逐条写明。
+BYID_GUARDED_OTHERWISE = {
+    # 只许**发起人本人**撤回（`initiator_id == user.id`，全域角色除外）：
+    # 比"本机构任一人"更窄，再加机构守卫是冗余
+    "spd/referral.py:withdraw_referral",
 }
 
 
@@ -497,11 +520,16 @@ def _byid_org_write_endpoints():
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from app import models
+    # 带机构归属的模型：任一列名以 `org_id` 结尾（P1-57）。原先只认字面上的 `org_id`，
+    # 于是 `Consultation`（`from_org_id`/`to_org_id`）这类跨机构单据整族不在视野里——
+    # 第三家机构受理、拒绝别人的会诊都是 200，而这里一直是绿的。
     direct = {
         c.__name__ for c in models.Base.registry._class_registry.values()
-        if hasattr(c, "__tablename__") and "org_id" in c.__table__.columns
+        if hasattr(c, "__tablename__")
+        and any(col.name.endswith("org_id") for col in c.__table__.columns)
     }
-    guards = {"assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
+    guards = {"assert_obj_org_writable", "assert_org_writable", "assert_any_org_writable",
+              "assert_org_visible",
               "assert_patient_visible", "scope_org_list", "scope_patient_list",
               "log_patient_access"}
     unguarded = set()
@@ -517,13 +545,31 @@ def _byid_org_write_endpoints():
         # 而正是那条老路漏了六个单条任务接口（P1-56/P1-57）。只跟一层、只认同文件。
         guarded_helpers = {
             n.name for n in tree.body
-            if isinstance(n, ast.FunctionDef) and any(g in ast.unparse(n) for g in guards)
+            if isinstance(n, ast.FunctionDef)
+            and (any(g in ast.unparse(n) for g in guards)
+                 # 本仓库的惯例：同文件里专门判归属的 helper 一律以 `_assert` 开头
+                 # （`referrals._assert_receiving_org`、`spd/referral._assert_holds_case`、
+                 # `consultations._assert_invited`……），它们按单据自己的双方/当前处理方判，
+                 # 不一定调上面那几个通用守卫
+                 or n.name.startswith("_assert"))
+        }
+        # 同文件里**替 handler 取数**的 helper（P1-57）：`_get` / `_close` / `_pending` 这类。
+        # 原先只在 handler 源码里找 `db.get(M,`，取数挪进 helper 就看不见了——
+        # 于是这一族两道闸门都漏了（乙院替甲院的知情同意书登记签字 200）。只跟一层。
+        fetching_helpers = {
+            n.name for n in tree.body
+            if isinstance(n, ast.FunctionDef)
+            and any(f"db.get({m}," in ast.unparse(n) for m in direct)
         }
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             decs = [ast.unparse(d) for d in fn.decorator_list]
             if not any(m in d for d in decs for m in (".post(", ".put(", ".patch(", ".delete(")):
                 continue
             if not any("{" in d for d in decs):
+                continue
+            # 仅 admin 可调的接口：admin 是全域角色，任何机构守卫对它都恒放行，
+            # 加了也只是装饰——不算欠账（P1-57 研判：`org_groups` 两处、专病目录改路径）
+            if any("require_admin" in d for d in decs):
                 continue
             u = ast.unparse(fn)
             if any(g in u for g in guards):
@@ -532,7 +578,7 @@ def _byid_org_write_endpoints():
                       if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
             if called & guarded_helpers:
                 continue
-            if any(f"db.get({m}," in u for m in direct):
+            if any(f"db.get({m}," in u for m in direct) or called & fetching_helpers:
                 unguarded.add(f"{name}:{fn.name}")
     return unguarded
 
@@ -557,12 +603,12 @@ def test_按id写接口机构归属欠账不许变长():
     print(summary)
     warnings.warn(summary, UserWarning, stacklevel=2)
     unguarded = _byid_org_write_endpoints()
-    unexpected = unguarded - BYID_CROSS_ORG_OK
+    unexpected = unguarded - BYID_CROSS_ORG_OK - BYID_GUARDED_OTHERWISE
     assert unexpected == set(), (
         "以下按 id 写接口能操作别家机构记录，且不属于已声明的跨机构协同：\n  "
         + "\n  ".join(sorted(unexpected))
     )
-    stale = BYID_CROSS_ORG_OK - unguarded
+    stale = (BYID_CROSS_ORG_OK | BYID_GUARDED_OTHERWISE) - unguarded
     assert stale == set(), f"这些豁免接口已加了守卫或不存在，应从清单删除：{sorted(stale)}"
 
 

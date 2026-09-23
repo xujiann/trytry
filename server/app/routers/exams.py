@@ -335,10 +335,17 @@ def claim_request(
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],
 )
-def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends(get_db)):
+def submit_report(
+    request_id: int, body: ExamReportCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     request = db.get(ExamRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="申请单不存在")
+    # 已被某个诊断中心领取的单子，只有那家中心能出报告（P1-57：第三家机构的医师
+    # 曾能给别家已领走的申请单出报告，201——危急值还会以它的结论推给申请机构）。
+    # 未领取的单子照旧不判：领取本身就是"哪家中心来诊断"的唯一落点，此前谁都没领
+    assert_org_writable(db, user, request.claimed_org_id)
     if request.status not in ("pending", "diagnosing"):
         raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可出报告")
     report = ExamReport(request_id=request_id, **body.model_dump())

@@ -9,7 +9,7 @@ from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, User
-from ..visibility import assert_patient_visible
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
 
 router = APIRouter(prefix="/api/emergency", tags=["智慧急救"], dependencies=[Depends(get_current_user)])
@@ -125,7 +125,10 @@ def list_cases(
     response_model=CaseOut,
     dependencies=[Depends(require_roles("doctor"))],
 )
-def set_rescue_outcome(case_id: int, body: RescueOutcomeIn, db: Session = Depends(get_db)):
+def set_rescue_outcome(
+    case_id: int, body: RescueOutcomeIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """判定抢救转归（限医师）：抢救成功率的唯一数据来源。
 
     只允许对已到院的病例判定——车还在路上就写"抢救成功"，这个指标就没有
@@ -134,6 +137,9 @@ def set_rescue_outcome(case_id: int, body: RescueOutcomeIn, db: Session = Depend
     case = db.get(EmergencyCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
+    # 到院之后才能判定，判定的是**接收医院**的医师（P1-57）。院前那几步（推进、体征、
+    # 绿道节点）由 120 与车组做，事件上没有记他们的机构，那几处按设计不判归属
+    assert_org_writable(db, user, case.dest_org_id)
     if case.status not in ("arrived", "admitted"):
         raise HTTPException(status_code=409, detail="患者尚未到院，不可判定抢救转归")
     case.rescue_outcome = body.rescue_outcome

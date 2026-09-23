@@ -244,8 +244,11 @@ def list_resources(
 
 @router.patch("/{resource_id}", response_model=ResourceOut,
               dependencies=[Depends(require_roles("operator", "director"))])
-def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db)):
-    resource = _resource(db, resource_id)
+def update_resource(
+    resource_id: int, body: ResourceUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    resource = _resource(db, resource_id, user)
     for field, value in body.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(resource, field, value)
@@ -258,8 +261,11 @@ def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depend
     "/{resource_id}/publish", response_model=ResourceOut,
     dependencies=[Depends(require_roles("operator", "director"))]
 )
-def publish_resource(resource_id: int, db: Session = Depends(get_db)):
-    resource = _resource(db, resource_id)
+def publish_resource(
+    resource_id: int, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    resource = _resource(db, resource_id, user)
     if resource.status == "published":
         raise HTTPException(status_code=409, detail="该资源已发布")
     resource.status = "published"
@@ -277,10 +283,13 @@ class WithdrawIn(BaseModel):
     "/{resource_id}/withdraw", response_model=ResourceOut,
     dependencies=[Depends(require_roles("operator", "director"))]
 )
-def withdraw_resource(resource_id: int, body: WithdrawIn, db: Session = Depends(get_db)):
+def withdraw_resource(
+    resource_id: int, body: WithdrawIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """撤回（不删行）。撤回理由必填——"这台设备为什么不能约了"是使用方
     一定会问的，答不上来就会被反复问。"""
-    resource = _resource(db, resource_id)
+    resource = _resource(db, resource_id, user)
     if resource.status == "withdrawn":
         raise HTTPException(status_code=409, detail="该资源已撤回")
     resource.status = "withdrawn"
@@ -290,10 +299,13 @@ def withdraw_resource(resource_id: int, body: WithdrawIn, db: Session = Depends(
     return _resource_out(resource)
 
 
-def _resource(db: Session, resource_id: int) -> Resource:
+def _resource(db: Session, resource_id: int, user: User) -> Resource:
     resource = db.get(Resource, resource_id)
     if resource is None:
         raise HTTPException(status_code=404, detail="资源不存在")
+    # P1-57：共享资源的改、发布、撤下只能由资源所属机构做——乙院能把甲院的 CT
+    # 发布进共享池、也能撤下（实测 200）。本函数只给写接口用，校验收在这里。
+    assert_org_writable(db, user, resource.org_id)
     return resource
 
 

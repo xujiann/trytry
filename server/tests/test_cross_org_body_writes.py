@@ -382,3 +382,285 @@ def test_甲院押金与候选人没被动过(client, env, a_side):
     assert refunds == 0, "甲院住院单上出现了退押金流水"
     assert cand.org_id == env["A"]["id"], "甲院的候选人被划到了别家"
     assert cand.team_id is None and cand.assigned_user_id is None
+
+
+# ---------------------------------------------------------------------------
+# P1-57：按**路径** id 经 helper 取实体——两道横向闸门都看不见的那一形
+# ---------------------------------------------------------------------------
+#
+# 按 id 写闸门（test_stage15_horizontal）认的是 handler 源码里出现
+# `db.get(带 org_id 的模型,`；取数写进 `_get` / `_close` / `_pending` 之类的 helper，
+# 它就看不见。P1-56 的新判据只管请求体里的 id。于是这一批两边都漏了，
+# 逐条实打全部放行——包括替别家的**知情同意书**登记签字，以及与一张会诊单毫不相干
+# 的**第三家**机构受理、拒绝它。
+#
+# 每条探针都先把实体推到"业务上允许这个动作"的状态，确保它是被**归属校验**拦下的，
+# 而不是被前面某道业务校验先拒了（P1-56 那条"路径启动"探针两次红得不对，就是这么来的）。
+
+
+@pytest.fixture(scope="module")
+def p57(client, env):
+    from app.database import SessionLocal
+    from app.models import (
+        AdminProject, Consultation, DiseaseEnrollment, DiseaseProgram, InformedConsent,
+        Resource, VisitCredential,
+    )
+    from app.spd.models import SpdEnrollment, SpdPathInstance, SpdPathTemplate, SpdProgram
+
+    A, B = env["A"]["id"], env["B"]["id"]
+    pt = client.post("/api/patients", json={
+        "name": "P1-57 探针患者", "id_card": "330102199606061234"}, headers=env["adm"]).json()["id"]
+    with SessionLocal() as db:
+        # 甲院向乙院申请的会诊，分别停在各动作允许的状态
+        def cons(status):
+            return Consultation(patient_id=pt, from_org_id=A, to_org_id=B, question="探针",
+                                created_by=1, status=status)
+        c_applied, c_applied2, c_accepted, c_done, c_done2 = (
+            cons("applied"), cons("applied"), cons("accepted"), cons("completed"), cons("completed"))
+        creds = [VisitCredential(patient_id=pt, credential_no=f"P157-{i}", org_id=A) for i in range(2)]
+        dp = DiseaseProgram(code="p157", name="P1-57 专病", org_id=A,
+                            path_nodes=[{"key": "n1", "name": "首诊"}])
+        db.add(dp); db.flush()
+        denr = [DiseaseEnrollment(program_id=dp.id, patient_id=pt, org_id=A) for _ in range(2)]
+        consents = [InformedConsent(patient_id=pt, org_id=A, consent_type="surgery",
+                                    title=f"同意书{i}", created_by=1) for i in range(2)]
+        proj = AdminProject(org_id=A, name="甲院项目")
+        res = [Resource(org_id=A, resource_type="ct", code=f"P157CT{i}", name=f"甲院CT{i}",
+                        status=st) for i, st in enumerate(("draft", "draft", "published"))]
+        prog = SpdProgram(code="p157", name="P1-57 病种")
+        db.add(prog); db.flush()
+        tpl = SpdPathTemplate(program_id=prog.id, code="p157", name="路径", status="published")
+        senr = SpdEnrollment(patient_id=pt, program_code="p157", org_id=A)
+        db.add_all([c_applied, c_applied2, c_accepted, c_done, c_done2, *creds, *denr, *consents,
+                    proj, *res, tpl, senr]); db.flush()
+        inst = SpdPathInstance(enrollment_id=senr.id, template_id=tpl.id, owner_user_id=1)
+        db.add(inst); db.commit()
+        return {
+            "c_applied": c_applied.id, "c_applied2": c_applied2.id, "c_accepted": c_accepted.id,
+            "c_done": c_done.id, "c_done2": c_done2.id,
+            "creds": [x.id for x in creds], "denr": [x.id for x in denr],
+            "consents": [x.id for x in consents], "proj": proj.id,
+            "res": [x.id for x in res], "inst": inst.id,
+        }
+
+
+@pytest.fixture(scope="module")
+def third_party(client, env):
+    """丙院的医师与经办：与这些会诊单毫不相干的第三家。"""
+    out = {}
+    for name, role in (("xq_doc_c", "doctor"), ("xq_op_c", "operator")):
+        client.post("/api/users", json={"username": name, "password": "Xquan#2026x",
+                                        "role": role, "org_id": env["C"]["id"]}, headers=env["adm"])
+        out[role] = {"Authorization": "Bearer " + client.post(
+            "/api/auth/login", json={"username": name, "password": "Xquan#2026x"}
+        ).json()["access_token"]}
+    return out
+
+
+def _p57_cases(env, t, x):
+    return [
+        ("会诊：第三家受理", t["doctor"], "post", f"/api/consultations/{x['c_applied']}/accept",
+         {"expert_name": "丙院张"}),
+        ("会诊：第三家拒绝", t["doctor"], "post", f"/api/consultations/{x['c_applied2']}/decline", None),
+        ("会诊：第三家出具意见", t["doctor"], "post", f"/api/consultations/{x['c_accepted']}/complete",
+         {"opinion": "探针"}),
+        ("会诊：第三家计费", t["operator"], "post", f"/api/consultations/{x['c_done']}/fee", {"fee": 100}),
+        ("会诊：第三家评价", t["doctor"], "post", f"/api/consultations/{x['c_done2']}/rate", {"rating": 1}),
+        ("凭据：回收甲院的就诊凭据", env["operator_b"], "post",
+         f"/api/credentials/{x['creds'][0]}/recycle", {}),
+        ("凭据：作废甲院的就诊凭据", env["operator_b"], "post",
+         f"/api/credentials/{x['creds'][1]}/void", {"reason": "探针"}),
+        ("专病：给甲院的入组记节点", env["doctor_b"], "post",
+         f"/api/disease-programs/enrollments/{x['denr'][0]}/records", {"node_key": "n1"}),
+        ("专病：让甲院的入组出组", env["doctor_b"], "post",
+         f"/api/disease-programs/enrollments/{x['denr'][1]}/exit", {}),
+        ("同意书：替甲院的同意书登记签字", env["doctor_b"], "post",
+         f"/api/outpatient/consents/{x['consents'][0]}/sign", {"signer_name": "探针"}),
+        ("同意书：替甲院的同意书登记拒签", env["doctor_b"], "post",
+         f"/api/outpatient/consents/{x['consents'][1]}/refuse",
+         {"signer_name": "探针", "refuse_reason": "探针"}),
+        ("项目：改甲院的项目", env["operator_b"], "patch", f"/api/projects/{x['proj']}",
+         {"progress_pct": 99}),
+        ("项目：给甲院的项目加里程碑", env["operator_b"], "post",
+         f"/api/projects/{x['proj']}/milestones", {"name": "探针"}),
+        ("资源：改甲院的共享资源", env["operator_b"], "patch", f"/api/resources/{x['res'][0]}",
+         {"name": "被改了"}),
+        ("资源：把甲院的资源发布进共享池", env["operator_b"], "post",
+         f"/api/resources/{x['res'][1]}/publish", None),
+        ("资源：撤下甲院已发布的资源", env["operator_b"], "post",
+         f"/api/resources/{x['res'][2]}/withdraw", {"reason": "探针"}),
+        ("路径：调整甲院患者的路径实例", env["doctor_b"], "patch",
+         f"/api/spd/path-instances/{x['inst']}", {"status": "paused"}),
+    ]
+
+
+def test_经helper按路径id取的别家实体写入被拦(client, env, p57, third_party):
+    """建闸门时这 17 条逐条实打全部放行；删掉对应那一行校验，对应那条必红。"""
+    passed_through = []
+    for label, who, method, path, body in _p57_cases(env, third_party, p57):
+        r = getattr(client, method)(path, json=body, headers=who)
+        if r.status_code in (200, 201):
+            passed_through.append(f"{label} → {r.status_code}")
+        else:
+            assert r.status_code == 403, f"{label} 期望 403，实际 {r.status_code}：{r.text[:160]}"
+    assert passed_through == [], "以下写入动到了别家的实体：\n  " + "\n  ".join(passed_through)
+
+
+def test_会诊双方各做各的动作(client, env, p57):
+    """跨机构是会诊本身——拦第三方不能顺手把**双方**的正当动作也拦了。
+
+    受邀方（乙院）受理 → 200；申请方（甲院）不能替对方受理 → 403；
+    申请方评价 → 200，受邀方给自己评分 → 403。
+    """
+    from app.database import SessionLocal
+    from app.models import Consultation
+
+    A, B = env["A"]["id"], env["B"]["id"]
+    with SessionLocal() as db:
+        fresh = Consultation(patient_id=1, from_org_id=A, to_org_id=B, question="双方",
+                             created_by=1, status="applied")
+        rated = Consultation(patient_id=1, from_org_id=A, to_org_id=B, question="评价",
+                             created_by=1, status="completed")
+        db.add_all([fresh, rated]); db.commit()
+        fresh_id, rated_id = fresh.id, rated.id
+    # 甲院医师（申请方）
+    client.post("/api/users", json={"username": "xq_doc_a57", "password": "Xquan#2026x",
+                                    "role": "doctor", "org_id": A}, headers=env["adm"])
+    doc_a = {"Authorization": "Bearer " + client.post(
+        "/api/auth/login", json={"username": "xq_doc_a57", "password": "Xquan#2026x"}
+    ).json()["access_token"]}
+
+    assert client.post(f"/api/consultations/{fresh_id}/accept", json={"expert_name": "甲"},
+                       headers=doc_a).status_code == 403, "申请方不能替受邀方受理"
+    assert client.post(f"/api/consultations/{fresh_id}/accept", json={"expert_name": "乙院王"},
+                       headers=env["doctor_b"]).status_code == 200, "受邀方受理应照常"
+    assert client.post(f"/api/consultations/{rated_id}/rate", json={"rating": 5},
+                       headers=env["doctor_b"]).status_code == 403, "受邀方不能给自己评分"
+    assert client.post(f"/api/consultations/{rated_id}/rate", json={"rating": 5},
+                       headers=doc_a).status_code == 200, "申请方评价应照常"
+
+
+# ---- P1-57 第二批：闸门认 `*org_id` 列之后才看见的 ----
+#
+# 这些实体的机构列都不叫 `org_id`（`managed_by_org_id` / `center_org_id` / `dest_org_id` /
+# `claimed_org_id` / `lead_org_id`，或 `from_org_id`+`to_org_id` 双方），原闸门按字面
+# `org_id` 找模型，整族不在视野里。同样每条先把实体推到"业务上允许这个动作"的状态。
+
+
+@pytest.fixture(scope="module")
+def p57b(client, env):
+    from app.database import SessionLocal
+    from app.models import (
+        ArchiveAuthorization, ChronicPatient, EmergencyCase, ExamRequest, Referral,
+        SterilizationBatch,
+    )
+    from app.spd.models import SpdCenter, SpdProgram
+
+    A, B = env["A"]["id"], env["B"]["id"]
+    pt = client.post("/api/patients", json={
+        "name": "P1-57 第二批探针患者", "id_card": "330102199707071234"}, headers=env["adm"]).json()["id"]
+    with SessionLocal() as db:
+        chronic = ChronicPatient(patient_id=pt, disease="hypertension", managed_by_org_id=A)
+        batch = SterilizationBatch(batch_no="P157B-1", center_org_id=A, item_name="探针器械",
+                                   quantity=1)
+        case = EmergencyCase(location="探针路口", dest_org_id=A, status="arrived")
+        # 乙院申请、已被甲院（诊断中心）领取的单子；另一张没人领的
+        def exam(**kw):
+            return ExamRequest(patient_id=pt, from_org_id=B, center_type="imaging",
+                               item_code="CT01", item_name="头颅CT", created_by=1, **kw)
+        claimed = exam(status="diagnosing", claimed_org_id=A, claimed_by="甲院中心")
+        unclaimed = exam(status="pending")
+        claimed_ok = exam(status="diagnosing", claimed_org_id=A, claimed_by="甲院中心")
+        referrals = [Referral(patient_id=pt, from_org_id=A, to_org_id=B, direction="up",
+                              status="accepted", created_by=1) for _ in range(2)]
+        prog = SpdProgram(code="p157b", name="P1-57 第二批病种", lead_org_id=A)
+        center = SpdCenter(code="p157b", name="甲院牵头中心", program_code="p157b", lead_org_id=A)
+        auth = ArchiveAuthorization(patient_id=pt, grantee_org_id=A, created_by=1)
+        db.add_all([chronic, batch, case, claimed, unclaimed, claimed_ok, *referrals, prog, center,
+                    auth])
+        db.commit()
+        return {
+            "pt": pt, "chronic": chronic.id, "batch": batch.id, "case": case.id,
+            "claimed": claimed.id, "unclaimed": unclaimed.id, "claimed_ok": claimed_ok.id,
+            "referrals": [r.id for r in referrals], "prog": prog.id, "center": center.id,
+            "auth": auth.id,
+        }
+
+
+def _p57b_cases(env, t, x):
+    return [
+        ("慢病：给甲院管理的慢病患者录随访", env["doctor_b"], "post",
+         f"/api/chronic/{x['chronic']}/followups", {"sbp": 190, "dbp": 120}),
+        ("消毒供应：推进甲院中心的灭菌批次", env["operator_b"], "post",
+         f"/api/cssd/batches/{x['batch']}/advance", None),
+        ("急救：替接收医院判定抢救转归", env["doctor_b"], "post",
+         f"/api/emergency/cases/{x['case']}/rescue-outcome", {"rescue_outcome": "failed"}),
+        ("诊断中心：给别家已领取的申请单出报告", t["doctor"], "post",
+         f"/api/exams/{x['claimed']}/report", {"conclusion": "探针", "critical": True}),
+        ("医保：给别家之间的转诊签发转诊证明", t["operator"], "post",
+         f"/api/insurance/referral-certs/{x['referrals'][0]}", None),
+        ("慢专病：改甲院牵头病种的纳管规则", env["doctor_b"], "patch",
+         f"/api/spd/programs/{x['prog']}", {"description": "被改了"}),
+        ("慢专病：给甲院牵头病种加管理目标", env["doctor_b"], "post",
+         f"/api/spd/programs/{x['prog']}/targets", {"metric": "sbp", "target_high": 140}),
+        ("慢专病：改甲院牵头的专病中心", env["doctor_b"], "patch",
+         f"/api/spd/centers/{x['center']}", {"status": "stopped"}),
+        ("慢专病：以甲院名义挂牌专病中心", env["doctor_b"], "post", "/api/spd/centers",
+         {"code": "p157b-forged", "name": "冒名中心", "program_code": "p157b",
+          "lead_org_id": env["A"]["id"]}),
+    ]
+
+
+def test_机构列不叫org_id的别家实体写入被拦(client, env, p57b, third_party):
+    """建闸门时这 9 条逐条实打全部放行；删掉对应那一行校验，对应那条必红。"""
+    passed_through = []
+    for label, who, method, path, body in _p57b_cases(env, third_party, p57b):
+        r = getattr(client, method)(path, json=body, headers=who)
+        if r.status_code in (200, 201):
+            passed_through.append(f"{label} → {r.status_code}")
+        else:
+            assert r.status_code == 403, f"{label} 期望 403，实际 {r.status_code}：{r.text[:160]}"
+    assert passed_through == [], "以下写入动到了别家的实体：\n  " + "\n  ".join(passed_through)
+
+
+def test_机构列不叫org_id的正当动作照常(client, env, p57b, third_party):
+    """拦第三方不能顺手把正当的一方也拦了，也不能把"按设计不判"的那半边关掉。"""
+    A = env["A"]["id"]
+    client.post("/api/users", json={"username": "xq_doc_a57b", "password": "Xquan#2026x",
+                                    "role": "doctor", "org_id": A}, headers=env["adm"])
+    doc_a = {"Authorization": "Bearer " + client.post(
+        "/api/auth/login", json={"username": "xq_doc_a57b", "password": "Xquan#2026x"}
+    ).json()["access_token"]}
+
+    r = client.post(f"/api/exams/{p57b['claimed_ok']}/report", json={"conclusion": "正常"},
+                    headers=doc_a)
+    assert r.status_code == 201, f"领取了单子的中心出报告应照常：{r.text[:160]}"
+    # 没人领过的单子不判归属：领取才是"哪家中心来诊断"的唯一落点
+    r = client.post(f"/api/exams/{p57b['unclaimed']}/report", json={"conclusion": "正常"},
+                    headers=third_party["doctor"])
+    assert r.status_code == 201, f"未领取的单子行为不变：{r.text[:160]}"
+    # 转诊双方任一可签（接收方乙院）
+    r = client.post(f"/api/insurance/referral-certs/{p57b['referrals'][1]}",
+                    headers=env["operator_b"])
+    assert r.status_code == 200, f"转诊接收方签发应照常：{r.text[:160]}"
+    r = client.post(f"/api/chronic/{p57b['chronic']}/followups", json={"sbp": 130, "dbp": 80},
+                    headers=doc_a)
+    assert r.status_code == 201, f"管理机构录随访应照常：{r.text[:160]}"
+
+
+def test_撤销档案授权不拦但留痕(client, env, p57b):
+    """撤销是患者的权利，在哪个窗口提出都得办得成——但谁替他撤的要查得到。"""
+    from app.database import SessionLocal
+    from app.models import AccessLog
+
+    with SessionLocal() as db:
+        before = db.query(AccessLog).filter(
+            AccessLog.patient_id == p57b["pt"], AccessLog.resource == "authorization").count()
+    r = client.post(f"/api/patients/{p57b['pt']}/authorizations/{p57b['auth']}/revoke",
+                    headers=env["operator_b"])
+    assert r.status_code == 200, "非被授权机构的窗口也得撤得成"
+    with SessionLocal() as db:
+        rows = db.query(AccessLog).filter(
+            AccessLog.patient_id == p57b["pt"], AccessLog.resource == "authorization").all()
+    assert len(rows) == before + 1, "撤销授权没有留痕"
+    assert rows[-1].username == "xq_op_b" and rows[-1].basis == "consent_admin"

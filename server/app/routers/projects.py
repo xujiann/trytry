@@ -233,13 +233,19 @@ def get_project(project_id: int, today: str | None = None, db: Session = Depends
 
 @router.patch("/{project_id}", response_model=ProjectOut,
               dependencies=[Depends(require_roles("director", "operator"))])
-def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(get_db)):
+def update_project(
+    project_id: int, body: ProjectUpdate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """更新进度与状态。
 
     结项要求进度报到 100：允许"已完成但进度 60%"，那份进度数就再也没人信了。
     确实做不完的项目走 suspended（中止），那是另一回事，不要求进度满格。
     """
     project = _project(db, project_id)
+    # P1-57：乙院能改甲院的项目进度、给它加里程碑（实测 200/201）。`_project` 也给
+    # 读接口用，所以校验放在写接口里。
+    assert_org_writable(db, user, project.org_id)
     data = body.model_dump(exclude_unset=True)
     if data.get("status") == "done":
         target = data.get("progress_pct", project.progress_pct)
@@ -262,8 +268,12 @@ def update_project(project_id: int, body: ProjectUpdate, db: Session = Depends(g
     status_code=201,
     dependencies=[Depends(require_roles("director", "operator"))],
 )
-def add_milestone(project_id: int, body: MilestoneIn, db: Session = Depends(get_db)):
-    _project(db, project_id)
+def add_milestone(
+    project_id: int, body: MilestoneIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    project = _project(db, project_id)
+    assert_org_writable(db, user, project.org_id)  # P1-57，同上
     milestone = ProjectMilestone(project_id=project_id, **body.model_dump())
     db.add(milestone)
     db.commit()

@@ -321,9 +321,12 @@ def list_consents(
 
 @router.post("/consents/{consent_id}/sign", response_model=InformedConsentOut,
              dependencies=[Depends(require_roles("doctor"))])
-def sign_consent(consent_id: int, body: SignIn, db: Session = Depends(get_db)):
+def sign_consent(
+    consent_id: int, body: SignIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """记录患方签署。已有结论的不可改写——告知书是证据，不是可编辑的表单。"""
-    consent = _pending(db, consent_id)
+    consent = _pending(db, consent_id, user)
     consent.status = "signed"
     consent.signer_name = body.signer_name
     consent.signer_relation = body.signer_relation
@@ -334,9 +337,12 @@ def sign_consent(consent_id: int, body: SignIn, db: Session = Depends(get_db)):
 
 @router.post("/consents/{consent_id}/refuse", response_model=InformedConsentOut,
              dependencies=[Depends(require_roles("doctor"))])
-def refuse_consent(consent_id: int, body: RefuseIn, db: Session = Depends(get_db)):
+def refuse_consent(
+    consent_id: int, body: RefuseIn, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """记录拒绝签署。这是一等状态，机构据此证明"告知过、对方拒绝了"。"""
-    consent = _pending(db, consent_id)
+    consent = _pending(db, consent_id, user)
     consent.status = "refused"
     consent.signer_name = body.signer_name
     consent.signer_relation = body.signer_relation
@@ -346,10 +352,13 @@ def refuse_consent(consent_id: int, body: RefuseIn, db: Session = Depends(get_db
     return _consent_out(consent)
 
 
-def _pending(db: Session, consent_id: int) -> InformedConsent:
+def _pending(db: Session, consent_id: int, user: User) -> InformedConsent:
     consent = db.get(InformedConsent, consent_id)
     if consent is None:
         raise HTTPException(status_code=404, detail="告知书不存在")
+    # P1-57：知情同意书只能由出具它的机构办理签字/拒签——乙院替甲院的同意书
+    # 登记签字、登记拒签实测都 200，而这是一份有法律效力的文书。
+    assert_org_writable(db, user, consent.org_id)
     if consent.status != "pending":
         raise HTTPException(
             status_code=409,

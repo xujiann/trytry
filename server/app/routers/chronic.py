@@ -24,7 +24,7 @@ from ..deps import (
     resolve_business_date,
 )
 from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient, User
-from ..visibility import assert_patient_visible
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
 
 router = APIRouter(prefix="/api/chronic", tags=["慢病管理"], dependencies=[Depends(get_current_user)])
@@ -303,10 +303,16 @@ def list_overdue(today: str | None = None, db: Session = Depends(get_db)):
     response_model=FollowupAddedOut,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 随访属诊疗/公卫岗
 )
-def add_followup(chronic_id: int, body: FollowUpCreate, db: Session = Depends(get_db)):
+def add_followup(
+    chronic_id: int, body: FollowUpCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     chronic = db.get(ChronicPatient, chronic_id)
     if chronic is None:
         raise HTTPException(status_code=404, detail="慢病档案不存在")
+    # 随访会改档案的分级与下次到期日——那是管理机构的台账（P1-57：乙院曾能给
+    # 甲院管的慢病患者录随访、把分级改成高危，201）
+    assert_org_writable(db, user, chronic.managed_by_org_id)
     payload = body.model_dump()
     # 未填下次到期日时按病种随访周期自动建议
     suggested = "" if body.next_due else _suggest_next_due(db, chronic.disease)

@@ -7,7 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable, scope_patient_list
+from ..visibility import assert_any_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -117,11 +117,19 @@ def list_settlements(
     response_model=ReferralCertOut,
     dependencies=[Depends(require_roles("operator"))],  # H2: 转诊证明签发=经办
 )
-def issue_referral_cert(referral_id: int, db: Session = Depends(get_db)):
-    """转诊证明：仅对已接诊/已结案的转诊签发，幂等返回既有证明。"""
+def issue_referral_cert(
+    referral_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    """转诊证明：仅对已接诊/已结案的转诊签发，幂等返回既有证明。
+
+    由转出方还是接收方签发，代码与文档里都看不出，不替业务猜——转诊双方任一可签，
+    拦住与这张转诊无关的第三家（P1-57：丙院经办曾能给甲转乙的转诊签发医保证明，200）。
+    """
     referral = db.get(Referral, referral_id)
     if referral is None:
         raise HTTPException(status_code=404, detail="转诊记录不存在")
+    assert_any_org_writable(db, user, (referral.from_org_id, referral.to_org_id),
+                            "仅转诊双方机构可签发转诊证明")
     if referral.status not in ("accepted", "completed"):
         raise HTTPException(status_code=409, detail="转诊尚未接诊，不可签发证明")
     existing = db.query(ReferralCert).filter(ReferralCert.referral_id == referral_id).first()
