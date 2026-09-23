@@ -20,7 +20,13 @@ from sqlalchemy.orm import Session
 from .. import totp
 from ..config import settings
 from ..database import get_db
-from ..deps import clear_auth_cookies, get_current_user, set_auth_cookies, wants_cookie_auth
+from ..deps import (
+    clear_auth_cookies,
+    get_current_user,
+    set_auth_cookies,
+    token_from_credentials_or_cookies,
+    wants_cookie_auth,
+)
 from ..models import LoginLog, User
 from ..schemas import LoginRequest, TokenResponse
 from ..security import (
@@ -208,7 +214,12 @@ def logout(
     G3：Cookie 会话的令牌从 Cookie 里取（与 get_current_user 同一优先级：
     header 优先），并顺带清掉两个会话 Cookie。
     """
-    token = credentials.credentials if credentials is not None else request.cookies.get(AUTH_COOKIE, "")
+    # 取令牌走 deps 那一份（header 优先、其次会话 Cookie），不再在这里自己写一遍
+    # ——这条规则原先在四处各有一份拷贝（P1-36）。**刻意用"纯取值"那半**：
+    # CSRF 与准入已由前置的 `get_current_user` 判过，这里只是重取同一枚令牌去拉黑。
+    token = token_from_credentials_or_cookies(
+        request.cookies, credentials, cookie_name=AUTH_COOKIE
+    ) or ""
     if token:
         claims = decode_token(token)
         key = revocation_key(claims, token)

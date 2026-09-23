@@ -187,6 +187,33 @@ def test_cookie登出_清Cookie并吊销令牌(client):
     assert client.get("/api/organizations").status_code == 401
 
 
+def test_登出自己也受CSRF双提交约束(client):
+    """登出是写请求，Cookie 模式下同样要带 X-CSRF-Token（P1-36 收敛的回归锚）。
+
+    两个 logout 的 handler 里原先各自写了一份"header 优先、否则读 Cookie"的取令牌
+    逻辑；收敛成 `deps.token_from_credentials_or_cookies`（**纯取值、不校验**）之后，
+    唯一还在把 CSRF 门的，是前置依赖 `get_current_user` / `current_resident`。
+    这条用例就钉这件事：**把那道前置依赖去掉或换成不校验的取值，本条当场变红**，
+    而不是等到某天有人发现登出可以被跨站触发（跨站登出＝拒绝服务级的骚扰）。
+    """
+    _admin_cookie_login(client)
+    assert client.post("/api/auth/logout").status_code == 403
+    assert client.post("/api/auth/logout", headers={CSRF_HEADER: "wrong"}).status_code == 403
+    # 会话没被这两次失败请求弄坏：带对的 CSRF 仍然能正常登出
+    csrf = client.cookies.get(CSRF_COOKIE)
+    assert client.post("/api/auth/logout", headers={CSRF_HEADER: csrf}).status_code == 200
+
+
+def test_portal_登出自己也受CSRF双提交约束(client):
+    """居民端同上：收敛后把门的是 `current_resident`，不是 handler 自己。"""
+    _portal_cookie_login(client)
+    assert client.post("/api/portal/auth/logout").status_code == 403
+    csrf = client.cookies.get(PORTAL_CSRF_COOKIE)
+    assert client.post(
+        "/api/portal/auth/logout", headers={CSRF_HEADER: csrf}
+    ).status_code == 200
+
+
 def test_生产环境_SetCookie带Secure(client, monkeypatch):
     monkeypatch.setattr(settings, "environment", "prod")
     resp = _admin_cookie_login(client)

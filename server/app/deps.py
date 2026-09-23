@@ -2,7 +2,7 @@ import hmac
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Iterable, TypeVar
+from typing import Iterable, Mapping, TypeVar
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -88,6 +88,50 @@ def clear_auth_cookies(response: Response, *, cookie_name: str, csrf_cookie_name
     response.delete_cookie(csrf_cookie_name, path="/")
 
 
+def token_from_credentials_or_cookies(
+    cookies: Mapping[str, str],
+    credentials: HTTPAuthorizationCredentials | None,
+    *,
+    cookie_name: str,
+) -> str | None:
+    """**纯取值**：Authorization header 优先，缺失时读会话 Cookie。不校验、不抛异常。
+
+    从 `token_from_request` 里拆出来的那一半（P1-36 / P1-37）。拆的理由是有三处
+    调用方只要"取这枚令牌"、要不到"顺带校验 CSRF"：
+
+    - 两个 logout：CSRF 与准入已由前置依赖（`get_current_user` /
+      `current_resident`）判过，handler 里只是**重取同一枚令牌**去拉黑；
+    - `ws.py` 的握手：WebSocket 没有 `Request` 对象（只有 `websocket.cookies`），
+      而且握手是 GET、不做双提交（理由见该函数 docstring）。
+
+    于是这条"header 优先、其次 Cookie"的规则此前在四处各写了一份。规则本身不会
+    自己漂，漂的是**改的时候只改一处**：比如哪天要改 Cookie 名、或要支持第二个
+    header，四份里漏掉一份，表现是某条路径悄悄取不到令牌——而它多半只在
+    Cookie 模式下、只在某一个端点上出错。
+
+    形参收 `Mapping` 而不是 `Request`：`Request.cookies` 与 `WebSocket.cookies`
+    都是普通映射，收窄到 `Request` 只会把 WS 那条路径挡在外面——那正是当初
+    `ws.py` 自己抄一份的原因。
+    """
+    if credentials is not None:
+        return credentials.credentials
+    return cookies.get(cookie_name) or None
+
+
+def assert_csrf_double_submit(request: Request, *, csrf_cookie_name: str) -> None:
+    """Cookie 模式写请求的 CSRF 双提交校验：X-CSRF-Token 头须与 CSRF Cookie 一致。
+
+    比较用 `hmac.compare_digest`，防时序侧信道。校验不过直接 403。
+    """
+    provided = request.headers.get(CSRF_HEADER) or ""
+    expected = request.cookies.get(csrf_cookie_name) or ""
+    if not provided or not expected or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CSRF 校验失败：Cookie 会话的写请求必须携带与 CSRF Cookie 一致的 X-CSRF-Token 头",
+        )
+
+
 def token_from_request(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None,
@@ -96,31 +140,28 @@ def token_from_request(
     csrf_cookie_name: str,
     verify_csrf: bool = True,
 ) -> str | None:
-    """双模取令牌：Authorization header 优先，缺失时读会话 Cookie。
+    """双模取令牌 + Cookie 模式的 CSRF 校验：上面两半的组合，鉴权路径走这个。
 
     - **Header 模式完全不做 CSRF 校验**：令牌由脚本显式放进请求头，浏览器
       不会跨站自动携带，没有 CSRF 攻击面——既有对接方行为逐字节不变；
     - **Cookie 模式的写请求**（POST/PUT/PATCH/DELETE）必须带 X-CSRF-Token 头
-      且与随请求回带的 CSRF Cookie 一致（双提交），否则 403。比较用
-      hmac.compare_digest，防时序侧信道。
+      且与随请求回带的 CSRF Cookie 一致（双提交），否则 403。
 
     `verify_csrf=False` 只给**不做任何准入判定的旁路**用（见 token_for_audit）：
     留痕要回答的是"这次尝试是谁发的"，鉴权结论仍由默认口径的调用点给出。
     鉴权路径一律走默认值，别在准入判定上关掉它。
+
+    **只想取令牌、不要这层校验的，用 `token_from_credentials_or_cookies`，
+    不要把 `verify_csrf` 关掉**——那个参数是给旁路留痕的，在准入路径上关掉它
+    就是把双提交这道门关掉，而代码读起来还像走了鉴权口径。
     """
     if credentials is not None:
         return credentials.credentials
-    token = request.cookies.get(cookie_name) or ""
-    if not token:
+    token = token_from_credentials_or_cookies(request.cookies, None, cookie_name=cookie_name)
+    if token is None:
         return None
     if verify_csrf and request.method.upper() in _UNSAFE_METHODS:
-        provided = request.headers.get(CSRF_HEADER) or ""
-        expected = request.cookies.get(csrf_cookie_name) or ""
-        if not provided or not expected or not hmac.compare_digest(provided, expected):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="CSRF 校验失败：Cookie 会话的写请求必须携带与 CSRF Cookie 一致的 X-CSRF-Token 头",
-            )
+        assert_csrf_double_submit(request, csrf_cookie_name=csrf_cookie_name)
     return token
 
 

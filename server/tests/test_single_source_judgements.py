@@ -25,6 +25,7 @@ WS 侧不会跟着补，谁也不会发现。
 | 5 | PII 列（证件号/手机号）如何进查询 | `pii.pii_filter` / `pii.pii_index_match`（判定本身由 `tests/test_pii_query_point_guard.py` 守，本文件只把它计入覆盖面）|
 | 6 | 一个批次还能发多少 | `dispense.batch_available` |
 | 7 | 押金余额是多少 | `billing.deposit_balance` |
+| 8 | 一次请求的令牌从哪儿取（header 优先、其次会话 Cookie） | `deps.token_from_credentials_or_cookies` |
 
 ## 豁免清单只减不增
 
@@ -129,6 +130,15 @@ EXEMPTIONS = {
     "app/routers/access_logs.py::_log_view": (
         "留痕而非判定。记的是'谁查了某患者的调阅记录'这个动作本身，"
         "接口已限 director/admin（全域角色），不含任何可见性判定分支。"
+    ),
+}
+
+#: 扫描 8 的豁免：读的是会话 Cookie，但问的不是"令牌是多少"。
+#: 与 `EXEMPTIONS` 同规矩——每条带理由，只减不增。
+TOKEN_READ_EXEMPTIONS = {
+    "app/routers/users.py:213": (
+        "问的是'本次请求是不是 Cookie 会话'（决定改密后要不要重下发 Cookie），"
+        "不是要那枚令牌的值——真取了值反而会诱导有人拿它去做判定。"
     ),
 }
 
@@ -439,7 +449,7 @@ def _scan_census() -> dict[str, tuple[int, str]]:
     也报出来——点数掉到 0 就说明扫描器空转了，下面的断言会拦住。
     """
     admission = blacklist = authorization = access_log = 0
-    dispensable = deposit = 0
+    dispensable = deposit = token_reads = 0
     # PII 一类的落脚点由 tests/test_pii_query_point_guard.py 数（清单从模型元数据推导）
     pii = len(_PII_SCAN.sites)
     for module, tree in MODULES.items():
@@ -452,6 +462,8 @@ def _scan_census() -> dict[str, tuple[int, str]]:
                     if {"used_quantity", "blocked_quantity"} <= attrs:
                         dispensable += 1
         blacklist += len(_blacklist_key_sites(tree))
+        if module != "app/deps.py":
+            token_reads += len(_session_cookie_reads(tree))
         authorization += len(
             _model_attr_compares(tree, {"ArchiveAuthorization"}, {"status", "expire_date"})
         )
@@ -480,6 +492,10 @@ def _scan_census() -> dict[str, tuple[int, str]]:
         ),
         "批次可发量": (dispensable, "dispense.batch_available"),
         "押金余额": (deposit, "billing.deposit_balance"),
+        # 收敛后这一类的"落脚点"应当是 0：规则收进 deps 之后，别处不该再有
+        # `xxx.cookies.get(AUTH_COOKIE)`。所以这里报的是**剩余拷贝数**，
+        # 空转风险由 `test_取令牌扫描不空转` 的合成片段单独钉住。
+        "取令牌口径（剩余拷贝）": (token_reads, "deps.token_from_credentials_or_cookies"),
     }
 
 
@@ -492,8 +508,84 @@ SCANS = tuple(
         "PII 列检索",
         "批次可发量",
         "押金余额",
+        "取令牌口径（剩余拷贝）",
     )
 )
+
+
+# ---------------------------------------------------------------- 扫描 8
+
+
+#: 会话令牌 Cookie 的名字（`security` 里定义）。读这两个之一 = 在取令牌。
+_SESSION_COOKIE_NAMES = {"AUTH_COOKIE", "PORTAL_AUTH_COOKIE"}
+
+
+def _session_cookie_reads(tree) -> list[int]:
+    """`<任意>.cookies.get(AUTH_COOKIE|PORTAL_AUTH_COOKIE, ...)` 的行号。
+
+    `request.cookies` 与 `websocket.cookies` 都算——WS 那条路径当初正是靠
+    "不是 Request" 绕开了唯一实现。
+    """
+    out = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "get" or not isinstance(node.func.value, ast.Attribute):
+            continue
+        if node.func.value.attr != "cookies" or not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Name) and first.id in _SESSION_COOKIE_NAMES:
+            out.append(node.lineno)
+    return out
+
+
+def test_取令牌只有一份口径():
+    """"header 优先、缺失时读会话 Cookie"这条规则只许 `deps` 写一遍。
+
+    收敛前它在**四处**各有一份：`deps.token_from_request`、业务端 logout、
+    居民端 logout、`ws.py` 握手。规则本身不会自己漂，漂的是**改的时候只改一处**
+    ——换 Cookie 名、加第二个 header、改成空串也算有值，漏掉任一处的表现是
+    某条路径悄悄取不到令牌，而它多半只在 Cookie 模式下、只在一个端点上出错。
+
+    `ws.py` 那份还有个额外的教训：它绕开唯一实现的理由是"`token_from_request`
+    只吃 `Request`，而 WS 握手没有 `Request`"——**签名收得太窄**把调用方推去
+    自己抄一份。现在纯取值那半收 `Mapping`，两边都能用。
+    """
+    bad = []
+    for module, tree in MODULES.items():
+        if module == "app/deps.py":  # 唯一实现自己
+            continue
+        for lineno in _session_cookie_reads(tree):
+            key = f"{module}:{lineno}"
+            if key in TOKEN_READ_EXEMPTIONS:
+                continue
+            bad.append(f"{key} 直接读会话 Cookie 取令牌，没走 deps 那一份")
+    _check(bad, "取令牌口径")
+
+
+def test_取令牌扫描不空转():
+    """把收敛前的那三份写法喂回扫描器，必须逐个被认出来。
+
+    这条不能拿"唯一实现自己"当探针：收敛之后 `deps` 里是
+    `cookies.get(cookie_name)`——Cookie 名是**形参**，本来就不该命中按常量名
+    匹配的扫描。所以用合成片段证明形状匹配没写歪（否则上面那条永远不会响，
+    而报表上照样是 0 违规）。
+    """
+    before = ast.parse(
+        "def logout(request, credentials):\n"
+        "    token = credentials.credentials if credentials else request.cookies.get(AUTH_COOKIE, '')\n"
+        "def portal_logout(request):\n"
+        "    token = request.cookies.get(PORTAL_AUTH_COOKIE, '')\n"
+        "async def ws(websocket):\n"
+        "    cookie_token = websocket.cookies.get(AUTH_COOKIE, '')\n"
+    )
+    assert len(_session_cookie_reads(before)) == 3, (
+        "收敛前的三份写法没被全部认出来——扫描器形状写歪了"
+    )
+    # 反向：读的不是会话令牌 Cookie 的，不该误报
+    other = ast.parse("def f(request):\n    x = request.cookies.get(CSRF_COOKIE)\n")
+    assert _session_cookie_reads(other) == []
 
 
 def test_守卫自证覆盖面():

@@ -37,7 +37,7 @@ import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .database import SessionLocal
-from .deps import check_token_admission
+from .deps import check_token_admission, token_from_credentials_or_cookies
 from .security import AUTH_COOKIE, decode_token
 from .state_store import _redis_client
 
@@ -262,7 +262,12 @@ async def notifications_ws(websocket: WebSocket, token: str = ""):
     await websocket.accept()
     ok, org_id, role = False, None, ""
     if not token:
-        cookie_token = websocket.cookies.get(AUTH_COOKIE, "")
+        # 与 HTTP 侧同一份取值口径（P1-37）：`websocket.cookies` 与
+        # `request.cookies` 都是普通映射，所以这半能共用——当初自己抄一份，
+        # 是因为旧的 `token_from_request` 只吃 `Request`、且捆着 CSRF 校验。
+        cookie_token = token_from_credentials_or_cookies(
+            websocket.cookies, None, cookie_name=AUTH_COOKIE
+        ) or ""
         if cookie_token:
             ok, org_id, role = _authorize(cookie_token)
             if ok:

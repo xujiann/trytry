@@ -196,6 +196,28 @@
   还留了一条看着多余、其实拦的是别的东西的断言：**把两边的词写死**。
   键集相同现在由表的形状保证、推不翻；真要拦的是"有人图省事把居民端也改成待接诊"
   ——那在结构上毫无破绽。
+- ✅ **P1-36 + P1-37 一并关账：把「取令牌」与「校验 CSRF」拆成两半。**
+  两条债其实是同一刀的两面。`deps.token_from_request` 把两件事捆在一个函数里，
+  于是**四处**各写了一份"header 优先、其次会话 Cookie"：deps 自己、业务端 logout、
+  居民端 logout、`ws.py` 握手。
+  规则本身不会自己漂，漂的是**改的时候只改一处**——换 Cookie 名、加第二个 header，
+  漏掉任一份的表现是某条路径悄悄取不到令牌，而它多半只在 Cookie 模式下、
+  只在一个端点上出错。
+  拆法：`token_from_credentials_or_cookies`（纯取值、收 `Mapping`、不校验不抛异常）
+  + `assert_csrf_double_submit`（纯校验），`token_from_request` 保持原签名与行为、
+  由这两半组合。三处调用方改用纯取值那半。
+  **`ws.py` 那份还有个额外的教训**：它绕开唯一实现的理由是"`token_from_request` 只吃
+  `Request`，而 WS 握手没有 `Request`"——**签名收得太窄，把调用方推去自己抄一份**。
+  而 `Request.cookies` 与 `WebSocket.cookies` 都是普通映射，收 `Mapping` 就两边通用。
+  ⚠️ 收敛后把 CSRF 门的**只剩前置依赖**（`get_current_user` / `current_resident`），
+  所以补了两条回归锚：把 logout 的 `dependencies=[Depends(get_current_user)]` 去掉，
+  当场 `200 != 403` 报红（实测过）。跨站登出是拒绝服务级的骚扰，这道门不能靠"记得"。
+  防复发闸门进 `test_single_source_judgements.py` 成为第 8 类判定：
+  除 `deps` 外任何地方 `xxx.cookies.get(AUTH_COOKIE|PORTAL_AUTH_COOKIE)` 都报红，
+  `users.py` 那处带书面理由豁免（它问的是"本次是不是 Cookie 会话"，不是要令牌的值）。
+  空转探针用**合成片段**而不是"唯一实现自己"——收敛后 deps 里 Cookie 名是形参，
+  本来就不该命中按常量名匹配的扫描，拿它当探针会把闸门钉在一个错的锚上。
+  两处变异（auth / ws 各退回自己读 Cookie）各自报红并指名行号。
 - ◐ **P1-55 建闸门并订正根因：`make test-order` 逐模块倒序跑，欠账 66 → 63。**
   ⚠️ **先说我上一轮把根因写错了**：当时登记的是「共享 `test_run.db` + 70 个模块靠继承
   上一个模块的残留数据跑」。这次逐模块实测，**不成立**——那 70 个里 63 个压根不碰库

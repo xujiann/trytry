@@ -75,6 +75,7 @@ from ..deps import (
     clear_auth_cookies,
     paginate,
     set_auth_cookies,
+    token_from_credentials_or_cookies,
     token_from_request,
     wants_cookie_auth,
 )
@@ -600,11 +601,11 @@ def portal_logout(
     G3：Cookie 会话的令牌从 Cookie 里取（与 current_resident 同一优先级），
     并顺带清掉两个会话 Cookie。
     """
-    token = (
-        credentials.credentials
-        if credentials is not None
-        else request.cookies.get(PORTAL_AUTH_COOKIE, "")
-    )
+    # 与业务端登出同一份取值口径（P1-36）：CSRF 与准入已由前置的 `current_resident`
+    # 判过，这里只是重取同一枚令牌去拉黑，所以用"纯取值"那半。
+    token = token_from_credentials_or_cookies(
+        request.cookies, credentials, cookie_name=PORTAL_AUTH_COOKIE
+    ) or ""
     if not token:  # pragma: no cover - current_resident 先行 401，走不到这里
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
     claims = decode_token(token) or {}
