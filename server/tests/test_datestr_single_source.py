@@ -289,7 +289,7 @@ STAMP_BY_DESIGN: dict[str, str] = {
 def _field_validated(cls: ast.ClassDef, field: str) -> bool:
     """类里有 `@field_validator("field", …)` 管着这个字段。"""
     for stmt in cls.body:
-        if not isinstance(stmt, ast.FunctionDef):
+        if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for deco in stmt.decorator_list:
             if (isinstance(deco, ast.Call) and ast.unparse(deco.func).split(".")[-1] == "field_validator"
