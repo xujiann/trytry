@@ -41,6 +41,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_api_contract_governance as contract
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
+    import test_byid_org_read_guard as byidread
     import test_body_id_org_write_guard as bodyid
     import test_clock as clock
     import test_date_query_params as datequery
@@ -118,6 +119,12 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(orgread.BY_DESIGN), "tests/test_org_param_read_guard.py"),
         ("横向越权（读侧）", "查询参数收机构号、只拿 resolve_org_scope 当范围 × 口径待裁定",
          len(orgread.AWAITING), "tests/test_org_param_read_guard.py"),
+        ("横向越权（读侧）", "按 id 读机构归属表、无读侧判定 × 按设计（逐条写明理由）",
+         len(byidread.BY_DESIGN), "tests/test_byid_org_read_guard.py"),
+        ("横向越权（读侧）", "按 id 读机构归属表、无读侧判定 × 患者数据已在别的欠账名单",
+         len(byidread.ELSEWHERE), "tests/test_byid_org_read_guard.py"),
+        ("横向越权（读侧）", "按 id 读机构归属表、无读侧判定 × 口径待裁定",
+         len(byidread.AWAITING), "tests/test_byid_org_read_guard.py"),
         ("日期入参", "未经 require_date / resolve_business_date 的日期查询参数",
          len(datequery.KNOWN_BARE_DATE_PARAMS), "tests/test_date_query_params.py"),
         ("日期入参", "请求体里注解为裸 str 的日期字段", len(datestr.KNOWN_BARE_BODY_DATE_FIELDS),
