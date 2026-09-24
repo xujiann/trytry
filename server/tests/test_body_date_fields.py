@@ -25,6 +25,10 @@ CASES = [
      {"room_id": 999999, "start_time": "09:00", "end_time": "10:00"}, "scheduled_date", False),
     ("/api/surgery/requests",
      {"admission_id": 999999, "surgery_name": "阑尾切除术"}, "planned_date", True),
+    # 中心类型填不存在的：合法日期越过这一道后在业务校验上 422（字符串 detail），不落库
+    ("/api/mgmt/qc", {"center_type": "no-such-center", "item": "质控项", "result": "pass"},
+     "record_date", True),
+    ("/api/mgmt/employees/999999/changes", {"change_type": "hire"}, "effective_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。

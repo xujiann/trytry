@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
 from ..database import get_db
-from ..datetypes import DateStr, PeriodStr
+from ..datetypes import DateStr, OptionalDateStr, PeriodStr
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_visible,
@@ -507,11 +507,13 @@ class QcCreate(BaseModel):
     item: str = Field(min_length=1)
     result: str = Field(pattern="^(pass|fail)$")
     note: str = ""
-    record_date: str = ""
+    record_date: OptionalDateStr = ""
 
 
 class QcOut(QcCreate):
     id: int
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    record_date: str = ""
 
     model_config = {"from_attributes": True}
 
@@ -627,7 +629,7 @@ class ChangeCreate(BaseModel):
     change_type: str = Field(pattern="^(hire|regularize|transfer|leave)$")
     to_org_id: int | None = None
     detail: str = ""
-    effective_date: str = ""
+    effective_date: OptionalDateStr = ""
 
 
 class EmployeeChangeReceiptOut(BaseModel):
