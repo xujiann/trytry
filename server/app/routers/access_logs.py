@@ -39,8 +39,14 @@ BASIS_NAMES = {
     "recognition": "结果互认查询",
     "consent_admin": "授权办理",
     "export": "出站导出",
+    "delegate": "家庭代管",
 }
 
+# resource 的可读名。居民在"谁看过我的档案"里读到的就是这一列，词表缺一个，
+# 居民看到的就是 `inpatient_order` 这样的英文码（P2-42：曾只有 14 个词，源码里
+# 实际写入的有 80 多个）。**每个写进 AccessLog 的词都得在这里有名字**——由
+# `tests/test_access_log_resource_names.py` 从源码推导全部写入点来盯，新增留痕点
+# 漏配名字即红。词表只增不删：库里的存量行还带着旧词（如 `exam`）。
 RESOURCE_NAMES = {
     "archive": "健康档案",
     "archive_360": "患者360全景",
@@ -56,7 +62,105 @@ RESOURCE_NAMES = {
     "consumable": "耗材使用",
     "unified_requests": "统一待办",
     "access_log_view": "调阅记录查询",
+    # —— 以下为 P2-42 补齐 ——
+    # 门急诊与住院
+    "appointment": "预约记录",
+    "credential": "就诊凭据",
+    "consent": "知情同意",
+    "doc_completeness": "门急诊文书完整性",
+    "outpatient_nursing": "门急诊护理记录",
+    "admission": "住院记录",
+    "inpatient_order": "住院医嘱",
+    "progress_note": "病程记录",
+    "nursing_record": "住院护理记录",
+    "vital_sign": "体征记录",
+    "document_completeness": "住院文书完整性",
+    "case_summary": "病案首页",
+    "surgery": "手术安排",
+    "surgery_record": "术中记录",
+    "emergency": "急救记录",
+    "exam_report_revision": "报告修订记录",
+    "exam_critical_action": "危急值处置记录",
+    "checkup": "健康体检",
+    "checkup:items": "体检分项结果",
+    "cert": "医学证明",
+    "death_report_card": "死因报告卡",
+    "referral": "转诊记录",
+    # 费用
+    "bill": "费用账单",
+    "billing": "费用明细与结算",
+    "admission_bill": "住院费用清单",
+    "deposit": "住院押金",
+    "insurance": "医保结算",
+    # 公卫与慢病
+    "contract": "家医签约",
+    "followup": "随访记录",
+    "chronic": "慢病管理",
+    "disease_program": "专病管理",
+    "enrollment": "疾病管理档案",
+    "home_visit": "上门服务",
+    "eldercare": "老年人能力评估",
+    "maternal": "妇女保健",
+    "aefi": "疑似预防接种异常反应",
+    # 打印（打印件出了系统就收不回来，单列一类）
+    "print:case_summary": "打印病案首页",
+    "print:cert": "打印医学证明",
+    "print:checkup": "打印体检报告",
+    "print:consent": "打印知情同意书",
+    "print:discharge": "打印出院小结",
+    "print:exam_report": "打印检查检验报告",
+    "print:exam_request": "打印检查检验申请单",
+    "print:inp_bill": "打印住院费用清单",
+    "print:prescription": "打印处方",
+    "print:referral": "打印转诊单",
+    "print:settlement": "打印结算单",
+    "print:vaccine_cert": "打印接种证明",
+    # 慢专病子系统（spd_ 前缀沿用 spd 路由的既有词表）
+    "spd_home": "慢专病首页",
+    "spd_archive": "慢专病全周期档案",
+    "spd_profile": "慢专病360档案",
+    "spd_journey": "慢专病全流程视图",
+    "spd_enrollment": "慢专病纳管档案",
+    "spd_screening": "慢专病筛查",
+    "spd_assessment": "慢专病评估",
+    "spd_measurement": "慢专病监测指标",
+    "spd_followup": "慢专病随访",
+    "spd_calendar": "慢专病健康日历",
+    "spd_call": "慢专病随访呼叫",
+    "spd_revisit": "慢专病复诊计划",
+    "spd_intervention": "慢专病干预方案",
+    "spd_health_rx": "慢专病健康处方",
+    "spd_edu": "慢专病健康宣教",
+    "spd_task": "慢专病健康任务",
+    "spd_case_report": "慢专病异常上报",
+    "spd_consult": "慢专病在线咨询",
+    "spd_referral": "慢专病转诊",
+    "spd_apply": "慢专病服务申请",
 }
+
+# 附件留痕的 resource 由 `attachments._resource()` 拼成 `att:{owner_type}:{action}`，
+# 不是定值，按两段分别取名。只有 scope="patient" 的业务域会写 AccessLog，
+# 守卫逐个核对它们都在这里有名字（含子系统装载时注册进来的 `spd_task`）。
+# 子系统的词也放在平台这里、而不是随注册带进来：留痕行比子系统的装卸活得久——
+# spd 关掉以后，居民的历史调阅记录照样要显示人话。
+ATTACHMENT_OWNER_NAMES = {
+    "exam_report": "检查报告",
+    "consultation": "会诊",
+    "referral": "转诊",
+    "spd_task": "慢专病任务",
+}
+ATTACHMENT_ACTION_NAMES = {"download": "下载", "upload": "上传", "list": "清单"}
+
+
+def resource_name(resource: str) -> str:
+    """resource 的可读名；认不出的原样返回（旧行、以后新增的词都不会因此报错）。"""
+    if resource in RESOURCE_NAMES:
+        return RESOURCE_NAMES[resource]
+    prefix, _, rest = resource.partition(":")
+    owner, _, action = rest.partition(":")
+    if prefix == "att" and owner in ATTACHMENT_OWNER_NAMES and action in ATTACHMENT_ACTION_NAMES:
+        return f"{ATTACHMENT_OWNER_NAMES[owner]}附件{ATTACHMENT_ACTION_NAMES[action]}"
+    return resource
 
 
 class AccessLogOut(BaseModel):
@@ -99,7 +203,7 @@ def _row_out(log: AccessLog, org_name: str = "", patient_name: str = "") -> dict
         "patient_id": log.patient_id,
         "patient_name": patient_name,
         "resource": log.resource,
-        "resource_name": RESOURCE_NAMES.get(log.resource, log.resource),
+        "resource_name": resource_name(log.resource),
         "basis": log.basis,
         "basis_name": BASIS_NAMES.get(log.basis, log.basis),
         "at": log.created_at.isoformat() if log.created_at else "",
