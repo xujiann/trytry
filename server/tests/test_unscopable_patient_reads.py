@@ -298,14 +298,12 @@ def test_两份清单不重叠且都不为空():
 # 的会从扫描结果里消失，名单不跟着删就红（两个方向都钉）。
 
 #: 【欠账，只减不增】无调用方身份 × 只触达一跳 / 两跳患者维度表（2026-09-24 量出 24 个；
-#: 同日 P0-20 修掉术中记录 → 23）
+#: 同日 P0-20 修掉术中记录 → 23，P0-21 修掉报告修订史与危急值轨迹 → 21）
 ONEHOP_UNSCOPABLE_READS = {
     "billing.py:list_payments",
     "billing.py:list_reconciliation",
     "drgs.py:drg_stats",
-    "exams.py:list_critical_actions",
     "exams.py:list_critical_reports",
-    "exams.py:list_report_revisions",
     "exams.py:list_unacknowledged_critical",
     "maternal.py:get_delivery",
     "maternal.py:list_prenatal_screenings",

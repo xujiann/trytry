@@ -506,11 +506,28 @@ def resolve_critical(
     return report
 
 
-@router.get("/reports/{report_id}/critical-actions", response_model=list[CriticalActionOut])
-def list_critical_actions(report_id: int, db: Session = Depends(get_db)):
-    """危急值处置留痕轨迹。"""
-    if db.get(ExamReport, report_id) is None:
+def _report_visible_or_404(db: Session, report_id: int, user: User, resource: str) -> ExamReport:
+    """取报告，并隔一跳按 `exam_requests.patient_id` 判定可见性、留痕（P0-21）。
+
+    与 `revise_report` 同一口径：`ExamReport` 自己不带患者列。修订史与危急值轨迹两个读接口
+    原先连调用方都不收，乙院医生按报告号就能读甲院报告的历次前结论与处置轨迹（实测 200）——
+    写侧早就收了，读侧没跟。
+    """
+    report = db.get(ExamReport, report_id)
+    if report is None:
         raise HTTPException(status_code=404, detail="报告不存在")
+    req = db.get(ExamRequest, report.request_id)
+    if req is not None:
+        assert_patient_visible(db, user, req.patient_id, resource=resource)
+    return report
+
+
+@router.get("/reports/{report_id}/critical-actions", response_model=list[CriticalActionOut])
+def list_critical_actions(
+    report_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """危急值处置留痕轨迹。"""
+    _report_visible_or_404(db, report_id, user, resource="exam_critical_action")
     return (
         db.query(CriticalAction)
         .filter(CriticalAction.report_id == report_id)
@@ -775,10 +792,11 @@ def amend_report(
 
 
 @router.get("/reports/{report_id}/revisions", response_model=list[ReportRevisionOut])
-def list_report_revisions(report_id: int, db: Session = Depends(get_db)):
+def list_report_revisions(
+    report_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """报告修订历史（前值留痕轨迹）。"""
-    if db.get(ExamReport, report_id) is None:
-        raise HTTPException(status_code=404, detail="报告不存在")
+    _report_visible_or_404(db, report_id, user, resource="exam_report_revision")
     rows = (
         db.query(ReportRevision)
         .filter(ReportRevision.report_id == report_id)
