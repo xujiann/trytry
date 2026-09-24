@@ -190,8 +190,8 @@ class AdmissionCreate(BaseModel):
     patient_id: int
     ward_id: int
     bed_id: int
-    doctor_name: str = ""
-    diagnosis_name: str = ""
+    doctor_name: str = Field(default="", max_length=64)
+    diagnosis_name: str = Field(default="", max_length=256)
 
 
 class AdmissionOut(BaseModel):

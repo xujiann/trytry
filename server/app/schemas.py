@@ -69,7 +69,7 @@ class ReferralCreate(BaseModel):
     from_org_id: int
     to_org_id: int
     direction: str = Field(pattern="^(up|down)$")
-    reason: str = ""
+    reason: str = Field(default="", max_length=512)
 
 
 class ReferralOut(ReferralCreate):
@@ -90,11 +90,11 @@ class ReferralStatusUpdate(BaseModel):
 class EncounterCreate(BaseModel):
     patient_id: int
     org_id: int
-    doctor_name: str = ""
+    doctor_name: str = Field(default="", max_length=64)
     encounter_type: str = Field(default="outpatient", pattern="^(outpatient|inpatient)$")
-    diagnosis_code: str = ""
-    diagnosis_name: str = ""
-    summary: str = ""
+    diagnosis_code: str = Field(default="", max_length=64)
+    diagnosis_name: str = Field(default="", max_length=256)
+    summary: str = Field(default="", max_length=1024)
 
 
 class EncounterOut(EncounterCreate):
@@ -298,8 +298,8 @@ class FollowUpOut(FollowUpCreate):
 
 class InfectiousCaseCreate(BaseModel):
     org_id: int
-    disease_code: str
-    disease_name: str
+    disease_code: str = Field(max_length=64)
+    disease_name: str = Field(max_length=128)
     onset_date: DateStr
 
 

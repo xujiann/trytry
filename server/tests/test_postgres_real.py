@@ -767,3 +767,25 @@ def test_请求体外键不存在在真PG上是404而不是500或编码已存在
         + result.stderr[-2000:]
     )
 
+
+def test_请求体字符串超长在真PG上是422而不是500(pg_engine):
+    """把 `test_body_str_length.py` 换到 PG 上再跑一遍（P1-91）。
+
+    SQLite 不管 VARCHAR 长度，超长照存；PG 抛 `StringDataRightTruncation`，没人接即 500——
+    就诊摘要、转诊理由这类自由文本最容易撞。修过的端点在两个库上都该是 422，只有这里测得出
+    PG 那一半。接法与上几条相同（子进程 + 导入前顶掉连接串），同样放在文件末尾。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_body_str_length.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_STRLEN_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "请求体字符串长度用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )
+

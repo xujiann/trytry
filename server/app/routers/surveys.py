@@ -61,11 +61,11 @@ class SurveyOut(BaseModel):
 
 
 class SurveyCreate(BaseModel):
-    target_type: str
+    target_type: str = Field(max_length=16)
     target_id: int
     patient_id: int
     score: int = Field(ge=1, le=5)
-    comment: str = ""
+    comment: str = Field(default="", max_length=512)
 
 
 @router.post(

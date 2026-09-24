@@ -46,8 +46,8 @@ def _effective_contraindications(
 
 class RecordCreate(BaseModel):
     patient_id: int
-    vaccine_code: str = Field(min_length=1)
-    vaccine_name: str = Field(min_length=1)
+    vaccine_code: str = Field(min_length=1, max_length=64)
+    vaccine_name: str = Field(min_length=1, max_length=128)
     dose_no: int = Field(default=1, ge=1)
     vaccinated_date: OptionalDateStr = ""
     org_id: int
