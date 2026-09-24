@@ -897,6 +897,49 @@ def test_职称等级在页内下拉里选_不再手打英文代码(page, base_u
     expect(page.locator("tr", has_text="E2E下沉医师")).to_contain_text("副高")
 
 
+@pytest.fixture(scope="session")
+def contraindication_seed(base_url, seed):
+    """接种禁忌解除的前置：给 seed 患者登记一条长期禁忌（拦截中）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload, token):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode(),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"}, "")["access_token"]
+    contra = call("/api/vaccination/contraindications", {
+        "patient_id": seed["patient"]["id"], "vaccine_code": "E2E-FLU", "reason": "E2E发热待查"}, doctor)
+    return {"contra": contra}
+
+
+def test_接种禁忌解除在页内表单里填_取消即不解(page, base_url, seed, contraindication_seed, admin_read):
+    """P2-38：「解除」禁忌原先弹单行输入框；换成页内表单，上方写明解除的后果，取消就是不解
+    （按接口核对仍在拦截），填了原因才解并读回。"""
+    pid, cid = seed["patient"]["id"], contraindication_seed["contra"]["id"]
+
+    def contra():
+        (row,) = [c for c in admin_read(f"/api/vaccination/contraindications?patient_id={pid}") if c["id"] == cid]
+        return row
+
+    _login(page, base_url)
+    _open_page(page, "vaccination", "疫苗接种")
+    page.fill("#contra-list input[name=patient_id]", str(pid))
+    page.click("#contra-list button")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(f'button[data-lift="{cid}"]')
+    expect(modal).to_contain_text("不再因这一条拦截")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert contra()["status"] != "lifted", "点了取消却照样解除了"
+    page.click(f'button[data-lift="{cid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"lift_reason": "复测体温已正常"}))
+    row = contra()
+    assert (row["status"], row["lift_reason"]) == ("lifted", "复测体温已正常"), row
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

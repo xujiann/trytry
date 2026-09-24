@@ -1242,8 +1242,12 @@ async function renderVaccination() {
   $("#contra-list").onsubmit = (e) => { e.preventDefault(); drawContras(new FormData(e.target).get("patient_id")); };
   $("#contra-result").onclick = async (e) => {
     const id = e.target.dataset.lift; if (!id) return;
-    const reason = prompt("解除原因（如：体温已恢复正常）"); if (!reason) return;
-    await postAction(`/api/vaccination/contraindications/${id}/lift`, { lift_reason: reason }, "#vac-msg");
+    // P2-38：弹窗换成页内表单（与本页其余录入一致）；解除后接种前评估不再拦截这一条
+    const form = await spdModal("解除接种禁忌", [
+      { name: "lift_reason", label: "解除原因", required: true, placeholder: "如：体温已恢复正常" },
+    ], { intro: "解除后，接种前评估不再因这一条拦截。" });
+    if (!form) return;
+    await postAction(`/api/vaccination/contraindications/${id}/lift`, { lift_reason: form.lift_reason }, "#vac-msg");
     drawContras(e.target.dataset.pid);
   };
   $("#vac-hist").onsubmit = async (e) => {
