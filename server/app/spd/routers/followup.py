@@ -1478,6 +1478,10 @@ def delete_report_task(task_id: int, db: Session = Depends(get_db)):
     task = db.get(SpdReportTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="报告推送任务不存在")
+    # 生成过报告的任务不删（P2-59）：报告实例按 task_id 挂在它上面。真 PG 上撞外键即 500；开发库照删，
+    # 实例留着悬空的 task_id，下一个新建的任务还会复用这个编号，把旧报告认成自己的
+    if db.query(SpdReportInstance.id).filter(SpdReportInstance.task_id == task_id).first() is not None:
+        raise HTTPException(status_code=409, detail="该任务已生成过报告，不能删除；不再推送请改为暂停")
     db.delete(task)
     db.commit()
     return Response(status_code=204)

@@ -43,6 +43,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_ascii_digit_parsing as asciiparse
     import test_body_fk_exists as bodyfk
     import test_closed_parent_writes as closedparent
+    import test_spd_report_task_delete as guardeddelete
     import test_body_finite_numbers as bodyfinite
     import test_body_numeric_capacity as bodynumcap
     import test_body_raw_dict as bodyraw
@@ -131,6 +132,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          closedparent.BASELINE, "tests/test_closed_parent_writes.py"),
         ("引用完整性", "按设计在已结束父对象下挂子行的豁免（事后补录 / 结算先于出院 / 留痕行…，逐条写明理由）",
          len(closedparent.BY_DESIGN), "tests/test_closed_parent_writes.py"),
+        ("引用完整性", "删被外键引用着的行、既不看引用方也不接 IntegrityError（真 PG 上 500；1 → 0 已清零）",
+         guardeddelete.BASELINE, "tests/test_spd_report_task_delete.py"),
         ("引用完整性", "请求体字符串无长度上限写进定长列（PG 上超长即 500；197 → 0，第二层循环写库 +4、第三层显式赋值 +10、第四层查出对象 / 字面量构造 / 原样取值 +16、第五层转一手再写 +37 → 0）", bodystr.BASELINE,
          "tests/test_body_str_length.py"),
         ("数值入参", "浮点入参收得下 NaN / Infinity（超标判定对 NaN 恒为假、金额列 500；66 → 0 已清零）",
