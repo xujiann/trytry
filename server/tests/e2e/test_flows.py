@@ -851,6 +851,52 @@ def test_实训考核在页内表单里录_学员从报名名单里选_取消即
     assert (item["score"], item["passed"]) == (86.5, True), item
 
 
+@pytest.fixture(scope="session")
+def staffing_seed(base_url, seed):
+    """人员下沉调度的前置：一名员工、一条派驻记录（台账里才有「维护」职称等级的按钮）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload, token):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode(),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"}, "")["access_token"]
+    emp = call("/api/mgmt/employees", {"org_id": seed["org"]["id"], "name": "E2E下沉医师",
+                                       "title": "主治医师"}, admin)
+    other = call("/api/organizations", {"name": "E2E下沉接收卫生院", "org_type": "township",
+                                        "level": "township"}, admin)
+    call("/api/staffing/secondments", {"employee_id": emp["id"], "from_org_id": seed["org"]["id"],
+                                       "to_org_id": other["id"], "start_date": "2026-01-05",
+                                       "assignment_type": "long_term"}, admin)
+    return {"employee": emp}
+
+
+def test_职称等级在页内下拉里选_不再手打英文代码(page, base_url, staffing_seed, admin_read):
+    """P2-38：「维护」职称等级原先要手打 junior/intermediate/…，打错被后端 422 拒回；
+    换成下拉，取消就是不改（按接口核对仍"未填"），选了读回等级名。"""
+    eid = staffing_seed["employee"]["id"]
+
+    def level():
+        (row,) = [r for r in admin_read("/api/staffing/secondments?limit=500") if r["employee_id"] == eid]
+        return row["title_level"]
+
+    _login(page, base_url)
+    _open_page(page, "staffing", "人员下沉调度")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(f'button[data-stlevel="{eid}"]')
+    expect(modal.locator('[name="title_level"] option')).to_have_count(5)
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert level() == "none", "点了取消却照样改了等级"
+    page.click(f'button[data-stlevel="{eid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"title_level": "deputy_senior"}))
+    assert level() == "deputy_senior"
+    expect(page.locator("tr", has_text="E2E下沉医师")).to_contain_text("副高")
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

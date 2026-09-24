@@ -1812,6 +1812,8 @@ function renderSettlement(s, vars) {
 /* ---------------- 人员下沉调度（阶段八） ---------------- */
 
 const ASSIGN_TYPES = { long_term: "长期派驻", support: "短期支援", rounds: "巡诊", other: "其他" };
+// 与后端 staffing.TITLE_LEVELS 同一张表（键与名由 tests/test_staffing_title_level_options.py 钉住）
+const TITLE_LEVELS = { none: "未填", junior: "初级", intermediate: "中级", deputy_senior: "副高", senior: "正高" };
 
 async function renderStaffing() {
   $("#page-desc").textContent =
@@ -1867,11 +1869,16 @@ async function renderStaffing() {
     const { stend, stlevel } = e.target.dataset;
     if (stend) return postAction(`/api/staffing/secondments/${stend}/end`, null, "#st-msg");
     if (stlevel) {
-      const level = prompt("职称等级：junior/intermediate/deputy_senior/senior", "intermediate");
-      if (!level) return;
+      // P2-38：原先要手打英文代码（junior/intermediate/…），打错被后端 422 拒回；而"中级及以上"
+      // 正是下沉指标的判据。换成下拉，默认中级（与原先弹窗的预填一致）。
+      const form = await spdModal("维护职称等级", [
+        { name: "title_level", label: "职称等级", type: "select", value: "intermediate",
+          options: Object.entries(TITLE_LEVELS).map(([value, label]) => ({ value, label })) },
+      ], { intro: "下沉监测只认中级及以上（中级 / 副高 / 正高）。" });
+      if (!form) return;
       try {
         await api(`/api/staffing/employees/${stlevel}/title-level`,
-          { method: "PATCH", body: JSON.stringify({ title_level: level }) });
+          { method: "PATCH", body: JSON.stringify({ title_level: form.title_level }) });
         route();
       } catch (err) { setMsg("#st-msg", err.message, false); }
     }
