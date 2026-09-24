@@ -570,12 +570,22 @@ async function renderContracts() {
     const { svc, term } = e.target.dataset;
     try {
       if (svc) {
-        const type = prompt("履约类型：visit/consult/followup/referral", "followup"); if (!type) return;
-        const note = prompt("备注") || "";
-        await api(`/api/contracts/${svc}/services`, { method: "POST", body: JSON.stringify({ service_type: type, note }) });
-        alert("履约已记录");
+        // P2-38：原先两连问——履约类型要手打英文代码（打错被后端 422 拒回），备注框点取消照样记。
+        // 合成一个表单：类型从下拉里选，取消就是不记。
+        const form = await spdModal("记录履约", [
+          { name: "service_type", label: "履约类型", type: "select", value: "followup",
+            options: Object.entries(SVC).map(([value, label]) => ({ value, label })) },
+          { name: "note", label: "备注", type: "textarea" },
+        ]);
+        if (!form) return;
+        await api(`/api/contracts/${svc}/services`, { method: "POST", body: JSON.stringify(form) });
+        setMsg("#ct-msg", "履约已记录", true);
       }
-      if (term) { await api(`/api/contracts/${term}/terminate`, { method: "POST" }); route(); }
+      if (term) {
+        // 解约原先点一下就生效、没有任何确认：一次误点就把一户的家医签约解掉了，页面上也没有恢复入口。
+        if (!await spdModal("解约", [], { intro: "解约后该签约不再记录履约；如需恢复，须重新签约。" })) return;
+        await api(`/api/contracts/${term}/terminate`, { method: "POST" }); route();
+      }
     } catch (err) { setMsg("#ct-msg", err.message, false); }
   };
   await drawHomeVisits();  // 块4⑨ 上门服务调度

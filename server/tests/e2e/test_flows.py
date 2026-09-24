@@ -632,6 +632,62 @@ def test_室内质控失控处理在页内表单里填_取消即放弃(page, bas
         True, "质控品复溶后放置过久", "更换质控品复测在控"), row
 
 
+@pytest.fixture(scope="session")
+def contract_seed(base_url, seed):
+    """家医签约页的前置：一份履约中的签约。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    contract = call("/api/contracts", {"patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"],
+                                       "doctor_name": "E2E家庭医生", "package": "standard"}, doctor)
+    return {"contract": contract, "read": lambda path: call(path, None, admin)}
+
+
+def test_家医签约的履约与解约都在页内表单里_取消即不动(page, base_url, contract_seed):
+    """P2-38：「记录履约」原先两连问，类型要手打英文代码、备注框点取消照样记；「解约」点一下就生效，
+    没有任何确认。换成页内表单：类型从下拉里选，取消就是不记 / 不解（按接口核对），再走完并读回。"""
+    read = contract_seed["read"]
+    cid = contract_seed["contract"]["id"]
+
+    def status():
+        (row,) = [c for c in read("/api/contracts?limit=500") if c["id"] == cid]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "contracts", "家医签约")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(f'button[data-svc="{cid}"]')
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert read(f"/api/contracts/{cid}/services") == [], "点了取消却照样记了履约"
+    page.click(f'button[data-svc="{cid}"]')
+    _spd_modal(page, {"service_type": "visit", "note": "上门测血压，嘱低盐饮食"})
+    expect(page.locator("#ct-msg")).to_contain_text("履约已记录")
+    assert [(x["service_type"], x["note"]) for x in read(f"/api/contracts/{cid}/services")] \
+        == [("visit", "上门测血压，嘱低盐饮食")]
+
+    page.click(f'button[data-term="{cid}"]')
+    expect(modal).to_contain_text("须重新签约")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert status() == "active", "点了取消却照样解约了"
+    page.click(f'button[data-term="{cid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    assert status() == "terminated"
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)
