@@ -147,8 +147,10 @@ def create_purchase(
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    if body.dept_id is not None and db.get(Department, body.dept_id) is None:
-        raise HTTPException(status_code=404, detail="科室不存在")
+    if body.dept_id is not None:
+        dept = db.get(Department, body.dept_id)
+        if dept is None or not dept.active:  # 撤销的科室不再新申请采购（同 admin_mgmt.assign_department）
+            raise HTTPException(status_code=404, detail="科室不存在或已停用")
     purchase = MaterialPurchase(**body.model_dump(), requested_by=user.id)
     db.add(purchase)
     db.commit()
@@ -343,8 +345,12 @@ def register_consumable(body: ConsumableIn, db: Session = Depends(get_db), user:
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
-    if body.supplier_id is not None and db.get(Supplier, body.supplier_id) is None:
-        raise HTTPException(status_code=404, detail="供应商不存在")
+    if body.supplier_id is not None:
+        supplier = db.get(Supplier, body.supplier_id)
+        # 与本文件签合同、药房建采购单同一句：停用的供应商（资质过期 / 停止合作）不再入库高值耗材——
+        # 一物一码追溯到的是一家已经不该供货的供应商
+        if supplier is None or not supplier.active:
+            raise HTTPException(status_code=404, detail="供应商不存在或已停用")
     item = HighValueConsumable(**body.model_dump())
     db.add(item)
     try:

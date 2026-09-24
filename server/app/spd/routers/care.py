@@ -857,8 +857,10 @@ def create_interventions(
         db.get(SpdInterventionTemplate, body.template_id)
         if body.template_id is not None else None
     )
-    if body.template_id is not None and template is None:
-        raise HTTPException(status_code=404, detail="干预模板不存在")
+    # 停用的模板不再引用：模板清单与按风险自动匹配都只给启用的（见 list_intervention_templates /
+    # _auto_intervene），手填一个停用模板的编号却照样能按它的内容和周期派出干预与定时任务
+    if body.template_id is not None and (template is None or not template.active):
+        raise HTTPException(status_code=404, detail="干预模板不存在或已停用")
     content = body.content or (template.content if template else "")
     if not content:
         raise HTTPException(status_code=422, detail="干预内容不能为空")
@@ -1363,8 +1365,10 @@ def create_case_report(
     不会出现上报单堆着、任务中心却什么都没有。
     """
     assert_patient_visible(db, user, body.patient_id, resource="spd_case_report")
-    if body.task_id is not None and db.get(SpdCaseReportTask, body.task_id) is None:  # P1-90
-        raise HTTPException(status_code=404, detail=f"上报任务不存在（task_id={body.task_id}）")
+    if body.task_id is not None:  # P1-90 查存在；停用的上报任务不再收新上报（上报页只列启用的任务）
+        task = db.get(SpdCaseReportTask, body.task_id)
+        if task is None or not task.active:
+            raise HTTPException(status_code=404, detail=f"上报任务不存在或已停用（task_id={body.task_id}）")
     report = SpdCaseReport(
         **body.model_dump(), reporter_id=user.id, org_id=user.org_id, status="pending",
     )

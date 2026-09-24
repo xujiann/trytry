@@ -1418,8 +1418,12 @@ def _check_valid_window(valid_from: str, valid_to: str) -> None:
 @router.post("/report-tasks", response_model=ReportTaskOut, status_code=201,
              dependencies=[Depends(require_roles("director"))])
 def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
-    if db.get(SpdReportTemplate, body.template_id) is None:
-        raise HTTPException(status_code=404, detail="报告模板不存在")
+    # 停用的模板不收：调度见模板停用就跳过（jobs.spd_report_push），建在它上面的任务显示「启用」、
+    # 一份报告也不出——与有效期倒置同一种「照样 201、之后天天被跳过」（2026-09-24 实测修前 201，
+    # 到点调度生成 0 份、last_run_at 一直是空的）。手动「生成报告」不在此列：当场出结果，看得见。
+    template = db.get(SpdReportTemplate, body.template_id)
+    if template is None or not template.active:
+        raise HTTPException(status_code=404, detail="报告模板不存在或已停用")
     _check_valid_window(body.valid_from, body.valid_to)
     task = SpdReportTask(**body.model_dump())
     db.add(task)

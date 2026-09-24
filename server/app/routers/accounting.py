@@ -237,14 +237,17 @@ class VoucherIn(BaseModel):
 
 
 def _validate_entries(db: Session, entries: list[EntryIn]) -> tuple[float, float]:
-    """校验分录：科目存在、单边填列、借贷平衡。返回 (借方合计, 贷方合计)。"""
+    """校验分录：科目存在且启用、单边填列、借贷平衡。返回 (借方合计, 贷方合计)。
+
+    停用的科目按不存在算，与科目清单（凭证页的科目下拉取自它）只列启用的同一口径。"""
     codes = {e.subject_code for e in entries}
     known = {
-        c for (c,) in db.query(AccountSubject.code).filter(AccountSubject.code.in_(codes)).all()
+        c for (c,) in db.query(AccountSubject.code)
+        .filter(AccountSubject.code.in_(codes), AccountSubject.active.is_(True)).all()
     }
     missing = codes - known
     if missing:
-        raise HTTPException(status_code=422, detail=f"科目不存在：{'、'.join(sorted(missing))}")
+        raise HTTPException(status_code=422, detail=f"科目不存在或已停用：{'、'.join(sorted(missing))}")
     for entry in entries:
         if (entry.debit > 0) == (entry.credit > 0):
             raise HTTPException(

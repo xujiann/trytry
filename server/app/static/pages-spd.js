@@ -2771,7 +2771,7 @@ async function renderSpdReport() {
       </form><p class="msg" id="spd-rpt-msg"></p>`)}
     ${panel("推送任务", `
       <form class="inline" id="spd-rpttask-form">
-        <select name="template_id">${templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
+        <select name="template_id">${templates.filter((t) => t.active).map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
         <input name="name" placeholder="任务名称" required>
         <select name="frequency">
           <option value="daily">每日</option><option value="weekly">每周</option>

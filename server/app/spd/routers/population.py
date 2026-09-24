@@ -764,8 +764,12 @@ def distribute_candidates(
     **先全量校验再落笔**：`candidate_ids` 上限 500，一批里混进一条别家的记录就整批 403，
     不留半成品。这与下面"跳过不满足条件的"不是一回事——那是业务判定，这是越权。
     """
-    if body.team_id is not None and db.get(SpdTeam, body.team_id) is None:
-        raise HTTPException(status_code=404, detail="团队不存在")
+    if body.team_id is not None:
+        team = db.get(SpdTeam, body.team_id)
+        # 停用的团队不再分发：团队清单（分发页的团队下拉取自它）、考核对象、驾驶舱的团队数都只认
+        # 启用的团队——分过去的目标患者挂在一个下拉里选不到、考核里不计的团队名下
+        if team is None or not team.active:
+            raise HTTPException(status_code=404, detail="团队不存在或已停用")
     assert_org_writable(db, user, body.org_id)
     rows = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids)).all()
     for candidate in rows:
@@ -872,14 +876,21 @@ def _check_service_window(service_start: str, service_end: str) -> None:
         raise HTTPException(status_code=422, detail="服务结束日期不得早于开始日期")
 
 
-def _check_enroll_refs(db: Session, values: dict) -> None:
+def _check_enroll_refs(db: Session, values: dict, current: SpdEnrollment | None = None) -> None:
     """不查的后果：开发库（SQLite 不开外键约束）存成悬空 id；生产库撞外键——建档那条的
     `except IntegrityError` 本是为「同一患者同一病种」写的，于是报成「该患者已纳管此病种」，
-    改档那条没有接住，直接 500。"""
+    改档那条没有接住，直接 500。
+
+    带启用标志的（服务团队）停用了也不收，与分发目标患者同一句。改档传 `current`：与现值相同的不再查——
+    团队后来停用了，整份回传档案、实际只改风险分层的调用不该被它挡住。"""
     for field, (model, label) in _ENROLL_REFS.items():
         value = values.get(field)
-        if value is not None and db.get(model, value) is None:
-            raise HTTPException(status_code=404, detail=f"{label}不存在（{field}={value}）")
+        if value is None or (current is not None and getattr(current, field) == value):
+            continue
+        row = db.get(model, value)
+        if row is None or not getattr(row, "active", True):
+            state = "不存在" if row is None else "已停用"
+            raise HTTPException(status_code=404, detail=f"{label}{state}（{field}={value}）")
 
 
 def _enroll_out(e: SpdEnrollment, brief: dict | None = None) -> dict:
@@ -924,8 +935,8 @@ def create_enrollment(
     program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
     if program is None or not program.active:
         raise HTTPException(status_code=404, detail="专病档案不存在或已停用")
-    if body.package_id is not None and db.get(SpdServicePackage, body.package_id) is None:
-        raise HTTPException(status_code=404, detail="服务包不存在")
+    if body.package_id is not None:
+        _usable_package(db, body.package_id)
     _check_enroll_refs(db, body.model_dump())
     _check_service_window(body.service_start, body.service_end)
 
@@ -1095,7 +1106,7 @@ def update_enrollment(
         raise HTTPException(status_code=409, detail="非在管状态的档案不可修改，请先恢复管理")
     assert_org_writable(db, user, enrollment.org_id)
     changes = body.model_dump(exclude_unset=True)
-    _check_enroll_refs(db, changes)
+    _check_enroll_refs(db, changes, current=enrollment)
     # 起止与建档同一句，与存量合并后再比（只改一头也可能改倒置）
     if {"service_start", "service_end"} & changes.keys():
         _check_service_window(changes.get("service_start", enrollment.service_start),
@@ -1498,10 +1509,17 @@ def remove_group_member(group_id: int, patient_id: int, db: Session = Depends(ge
 # ============================================================ 服务包绑定与扣减
 
 
-def _bind_package(db: Session, enrollment: SpdEnrollment, package_id: int) -> SpdPackageBinding:
+def _usable_package(db: Session, package_id: int) -> SpdServicePackage:
+    """可以新签的服务包：存在且启用。停用的包（价目 / 项目已换代）不再绑给新的居民——
+    绑包页的下拉本就只列启用的，按编号直接调接口却照样绑得上，居民端从此多一张旧价目的卡片。"""
     package = db.get(SpdServicePackage, package_id)
-    if package is None:
-        raise HTTPException(status_code=404, detail="服务包不存在")
+    if package is None or not package.active:
+        raise HTTPException(status_code=404, detail="服务包不存在或已停用")
+    return package
+
+
+def _bind_package(db: Session, enrollment: SpdEnrollment, package_id: int) -> SpdPackageBinding:
+    package = _usable_package(db, package_id)
     items = [
         {"code": i.get("code"), "name": i.get("name", ""), "total": int(i.get("times", 0)),
          "used": 0, "price": i.get("price", 0)}

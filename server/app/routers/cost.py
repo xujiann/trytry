@@ -123,11 +123,15 @@ class AllocationRuleOut(BaseModel):
     dependencies=[Depends(require_roles("director"))],
 )
 def create_allocation_rule(body: AllocationIn, db: Session = Depends(get_db)):
-    """建立分摊规则（来源科室 → 目标科室 × 比例）。"""
+    """建立分摊规则（来源科室 → 目标科室 × 比例）。
+
+    停用的科室不收（与员工挂科室 `admin_mgmt.assign_department` 同一句）：规则不分期间，建一条就对以后
+    每一期都生效——往撤销的科室里分摊，成本从此流进一个科室下拉里再也选不到的地方。
+    """
     source = db.get(Department, body.from_dept_id)
     target = db.get(Department, body.to_dept_id)
-    if source is None or target is None:
-        raise HTTPException(status_code=404, detail="科室不存在")
+    if source is None or target is None or not source.active or not target.active:
+        raise HTTPException(status_code=404, detail="科室不存在或已停用")
     if source.id == target.id:
         raise HTTPException(status_code=422, detail="不可向本科室分摊")
     if source.org_id != target.org_id:
