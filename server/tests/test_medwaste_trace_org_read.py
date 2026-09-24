@@ -12,6 +12,11 @@
 
 修法：追溯按医废的所属机构判 `assert_org_visible`（本机构；全域角色看全县），码不存在照旧 404；
 工作量按 `stats_org_ids` 过滤。
+
+**续（同日，机构维度动态探针发现）**：滞留预警（`GET /api/medwaste/alerts`）是逐包明细（追溯码、暂存间、
+超期天数），同样不收任何范围——孤岛卫生院的四个角色都拿到全县的滞留医废。预警的下一步动作是去把那几包
+找出来交接，而交接只能本机构做（`assert_obj_org_writable`）：别家的预警看得见、办不了，与 P0-38 那条
+「我的待办」同一个病。按清单口径收到本机构（`scope_org_list`；全域角色看全县）。
 """
 import pytest
 
@@ -58,7 +63,13 @@ def waste_world(client):
                          json={"handler_name": "医废追溯转运员", "handler_employee_id": employee.json()["id"]},
                          headers=h["operator_a"])
     assert handed.status_code == 200, handed.text
-    return {"admin": admin, "h": h, "code": waste.json()["trace_code"], "employee_id": employee.json()["id"]}
+    stale = client.post("/api/medwaste",
+                        json={"org_id": orgs["a"], "waste_type": "sharp", "weight_kg": 1.2,
+                              "collected_date": "2026-09-01"},
+                        headers=h["operator_a"])
+    assert stale.status_code == 201, stale.text
+    return {"admin": admin, "h": h, "code": waste.json()["trace_code"], "employee_id": employee.json()["id"],
+            "stale_id": stale.json()["id"]}
 
 
 @pytest.mark.parametrize("who", ["operator_b", "doctor_b", "operator_c"])
@@ -104,3 +115,24 @@ def test_本机构与同片区照常看得到转运工作量(client, waste_world
 
 def test_全域角色照常看全县转运工作量(client, waste_world):
     assert waste_world["employee_id"] in _handlers(client, waste_world["admin"])
+
+
+def _alert_ids(client, headers) -> set[int]:
+    r = client.get("/api/medwaste/alerts?today=2026-09-10", headers=headers)
+    assert r.status_code == 200, r.text
+    return {row["id"] for row in r.json()}
+
+
+@pytest.mark.parametrize("who", ["operator_b", "doctor_b", "operator_c"])
+def test_滞留预警里没有别家的医废(client, waste_world, who):
+    """预警是逐包明细、下一步是去交接——同片区的丙院也办不了甲院的包，看不到。"""
+    assert waste_world["stale_id"] not in _alert_ids(client, waste_world["h"][who])
+
+
+@pytest.mark.parametrize("who", ["operator_a", "doctor_a"])
+def test_本机构照常收到滞留预警(client, waste_world, who):
+    assert waste_world["stale_id"] in _alert_ids(client, waste_world["h"][who])
+
+
+def test_全域角色照常看全县滞留预警(client, waste_world):
+    assert waste_world["stale_id"] in _alert_ids(client, waste_world["admin"])

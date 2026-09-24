@@ -488,22 +488,24 @@ def handler_stats(
 
 
 @router.get("/alerts", response_model=list[WasteOverdueOut])
-def overdue_alerts(today: str | None = None, db: Session = Depends(get_db)):
+def overdue_alerts(
+    today: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """滞留预警：收集超过 2 天仍未交接的医废。
 
     L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
 
     D-8：同样带上追溯码与暂存点位。预警的下一步动作是去把那几包找出来，
     只报"某机构有 3 包超期"而不报是哪几包、在哪间暂存间，等于没报。
+
+    与医废清单同一口径收到本机构（P0-39 续）：交接只能本机构做，别家的包看得见也办不了。
     """
     end = resolve_business_date(today)
     cutoff = (end - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
-    rows = (
-        db.query(MedicalWaste)
-        .filter(MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= cutoff)
-        .order_by(MedicalWaste.collected_date)
-        .all()
+    query = db.query(MedicalWaste).filter(
+        MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= cutoff
     )
+    rows = scope_org_list(db, user, query, MedicalWaste, None).order_by(MedicalWaste.collected_date).all()
     overdue_from = (end - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
     return [
         {
