@@ -882,7 +882,12 @@ def drug_use(
                 DrugRule.active.is_(True),
             ),
         )
-        .filter(Prescription.created_at >= start_dt, Prescription.created_at < end_dt)
+        .filter(
+            Prescription.created_at >= start_dt, Prescription.created_at < end_dt,
+            # 药师退回的处方没有用上（P2-60）：退回后医生多半重开一张，两张都算，同一疗程的 DDDs 翻倍，
+            # 使用强度——写进考核的那个数——虚高。待审的照算：统计是现算的，之后被退回自然就掉出去
+            Prescription.status != "rejected",
+        )
         .group_by(Prescription.org_id)
         .all()
     )
