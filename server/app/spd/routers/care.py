@@ -46,7 +46,7 @@ from ..models import (
 )
 from ..rules import score_scale
 from ..service import award_points, judge_measurement, spawn_task
-from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
+from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -1490,7 +1490,9 @@ def list_consults(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = db.query(SpdConsult)
+    # P0-23：原先收了调用方却不按它收口——任一职员账号都能列出全域全部会话（带患者姓名与病种）。
+    # 与同组 reply / messages 同一口径：只见本机构服务过的患者的会话，全域角色不过滤。
+    query = scope_patient_list(db, user, db.query(SpdConsult), SpdConsult, None, "spd_consult")
     if status:
         query = query.filter(SpdConsult.status == status)
     if mine:
@@ -1568,10 +1570,15 @@ def reply_consult(
 
 @router.post("/consults/{consult_id}/close", response_model=ConsultClosedOut,
              dependencies=[Depends(require_roles("doctor", "director"))])
-def close_consult(consult_id: int, db: Session = Depends(get_db)):
+def close_consult(
+    consult_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
     consult = db.get(SpdConsult, consult_id)
     if consult is None:
         raise HTTPException(status_code=404, detail="咨询会话不存在")
+    # P0-23：原先连调用方身份都不收，乙院医生按会话号就能关掉甲院患者的咨询（实测 200）。
+    # 与同组 reply_consult 同一口径：按会话所属患者判可见性并留痕。
+    assert_patient_visible(db, user, consult.patient_id, resource="spd_consult")
     consult.status = "closed"
     consult.closed_at = now_naive()
     db.commit()
@@ -1594,6 +1601,8 @@ def consult_to_followup(
     consult = db.get(SpdConsult, consult_id)
     if consult is None:
         raise HTTPException(status_code=404, detail="咨询会话不存在")
+    # P0-23：原先不看会话属于谁，乙院账号能给甲院患者派随访任务（实测 201）
+    assert_patient_visible(db, user, consult.patient_id, resource="spd_consult")
     enrollment = _enrollment_of(
         db, consult.patient_id, body.program_code or consult.program_code
     )
