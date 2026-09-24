@@ -119,6 +119,8 @@ def test_县域就诊率的分子分母用同一个日期窗口(client, admin):
 #: (路径, 参数)。都用 admin 调：这里验的是入参校验，不是角色门。
 FILTER_PARAMS = [
     ("/api/billing/reconciliation", "date"),
+    ("/api/spd/revisits", "date_from"),
+    ("/api/spd/revisits", "date_to"),
 ]
 
 #: 形状错、日历上不存在、不补零、ISO 基本格式——前两类此前多是 200 空集，
@@ -178,11 +180,6 @@ KNOWN_BARE_DATE_PARAMS: set[str] = {
     "routers/medwaste.py::handler_stats::start_date",
     "routers/portal.py::portal_slots::slot_date",
     "routers/surgery.py::list_schedules::scheduled_date",
-    "spd/routers/care.py::list_case_reports::date_from",
-    "spd/routers/care.py::list_case_reports::date_to",
-    "spd/routers/care.py::list_measurements::since",
-    "spd/routers/care.py::list_revisits::date_from",
-    "spd/routers/care.py::list_revisits::date_to",
     "spd/routers/followup.py::followup_stats::date_from",
     "spd/routers/followup.py::followup_stats::date_to",
     "spd/routers/followup.py::health_calendar::day",

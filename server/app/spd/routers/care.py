@@ -18,7 +18,14 @@ from ...concurrency import serialized_on
 from ...config import settings
 from ...database import get_db
 from ...datetypes import DateStr, OptionalDateStr
-from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
+from ...deps import (
+    get_current_user,
+    paginate,
+    require_date,
+    require_roles,
+    resolve_business_date,
+    row_dict,
+)
 from ..platform import Patient, User, pii_filter
 from ..models import (
     SpdAssessment,
@@ -463,6 +470,8 @@ def list_measurements(
         if value:
             query = query.filter(column == value)
     if since:
+        # 先校验再拼串：非法值拼成的时间戳在真 PG 上转换失败是 500（P1-58）
+        since = require_date(since, field="since")
         query = query.filter(SpdMeasurement.measured_at >= f"{since} 00:00:00")
     rows = paginate(
         query.order_by(SpdMeasurement.measured_at.desc(), SpdMeasurement.id.desc()),
@@ -1189,8 +1198,10 @@ def list_revisits(
         if value is not None and value != "":
             query = query.filter(column == value)
     if date_from:
+        date_from = require_date(date_from, field="date_from")
         query = query.filter(SpdRevisit.plan_date >= date_from)
     if date_to:
+        date_to = require_date(date_to, field="date_to")
         query = query.filter(SpdRevisit.plan_date <= date_to)
     if overdue:
         query = query.filter(SpdRevisit.status == "overdue")
@@ -1369,9 +1380,12 @@ def list_case_reports(
             match = Patient.id_card.contains(id_card)
         ids = [p.id for p in db.query(Patient).filter(match).limit(200)]
         query = query.filter(SpdCaseReport.patient_id.in_(ids or [0]))
+    # 先校验再拼串：非法值拼成的时间戳在真 PG 上转换失败是 500（P1-58）
     if date_from:
+        date_from = require_date(date_from, field="date_from")
         query = query.filter(SpdCaseReport.created_at >= f"{date_from} 00:00:00")
     if date_to:
+        date_to = require_date(date_to, field="date_to")
         query = query.filter(SpdCaseReport.created_at <= f"{date_to} 23:59:59")
     rows = paginate(query.order_by(SpdCaseReport.id.desc()), response, offset, limit)
     names = {

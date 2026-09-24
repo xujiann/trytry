@@ -35,9 +35,14 @@ if _PG_URL:
     )
 
 #: (路径, 参数, 必带的其他查询参数)。逐模块接一批、加一批。
+#: 值写成 `PATIENT` 的，用例里换成本模块建的那个患者的 id。
+PATIENT = "<patient>"
 DATETIME_FILTERS = [
     ("/api/access-logs", "start", {}),
     ("/api/access-logs", "end", {}),
+    ("/api/spd/case-reports", "date_from", {}),
+    ("/api/spd/case-reports", "date_to", {}),
+    ("/api/spd/measurements", "since", {"patient_id": PATIENT}),
 ]
 
 #: 形状错、日历上不存在、不补零。前两类修复前在 PG 上是 500；
@@ -60,8 +65,21 @@ def client():
         yield c
 
 
+@pytest.fixture(scope="module")
+def patient_id(client, admin):
+    return client.post(
+        "/api/patients", json={"name": "日期筛选探针", "id_card": "330782198701015555"},
+        headers=admin,
+    ).json()["id"]
+
+
+def _fill(extra: dict, patient_id: int) -> dict:
+    return {k: (patient_id if v == PATIENT else v) for k, v in extra.items()}
+
+
 @pytest.mark.parametrize("path, param, extra", DATETIME_FILTERS)
-def test_非法日期是422不是500(client, admin, path, param, extra):
+def test_非法日期是422不是500(client, admin, patient_id, path, param, extra):
+    extra = _fill(extra, patient_id)
     for bad in BAD_VALUES:
         resp = client.get(path, params={**extra, param: bad}, headers=admin)
         assert resp.status_code == 422, (engine.dialect.name, bad, resp.status_code, resp.text[:200])
@@ -69,7 +87,8 @@ def test_非法日期是422不是500(client, admin, path, param, extra):
 
 
 @pytest.mark.parametrize("path, param, extra", DATETIME_FILTERS)
-def test_留空等于不筛_合法日期照常(client, admin, path, param, extra):
+def test_留空等于不筛_合法日期照常(client, admin, patient_id, path, param, extra):
+    extra = _fill(extra, patient_id)
     base = client.get(path, params=extra, headers=admin)
     blank = client.get(path, params={**extra, param: ""}, headers=admin)
     assert base.status_code == 200, base.text
