@@ -2868,12 +2868,15 @@ async function renderLabQc() {
     panel.onclick = async (e) => {
       const { handle } = e.target.dataset;
       if (!handle) return;
-      const reason = prompt("失控原因（如：质控品失效、仪器漂移）");
-      if (!reason) return;
-      const action = prompt("纠正措施（如：更换质控品复测、重新定标）") || "";
+      // P2-38：原先两连问（失控原因 → 纠正措施）。第二问点取消就交上一个空措施、被后端 422 拒回——
+      // 想放弃的人看到的是一句报错。合成一个表单，两项都必填，取消就是放弃。
+      const form = await spdModal("失控处理登记", [
+        { name: "reason", label: "失控原因", required: true, placeholder: "如：质控品失效、仪器漂移" },
+        { name: "corrective_action", label: "纠正措施", required: true, placeholder: "如：更换质控品复测、重新定标" },
+      ]);
+      if (!form) return;
       try {
-        await api(`/api/labqc/measurements/${handle}/handle`, {
-          method: "POST", body: JSON.stringify({ reason, corrective_action: action }) });
+        await api(`/api/labqc/measurements/${handle}/handle`, { method: "POST", body: JSON.stringify(form) });
         drawLot(lotId);
       } catch (err) { setMsg("#meas-msg", err.message, false); }
     };

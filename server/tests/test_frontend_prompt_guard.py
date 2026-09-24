@@ -23,8 +23,8 @@ STATIC = pathlib.Path(__file__).resolve().parents[1] / "app" / "static"
 #: → 43（同日集中审方）→ 40（同日互联网+诊疗）→ 37（同日病理标本）
 #: → 32（同日危急值处置反馈 + 医生移动端，移动端清零）→ 31（同日开单前互认）
 #: → 29（同日流程引擎推进 / 终止）→ 28（同日更正 / 注销申请审核）→ 26（同日双通道申报审核）
-#: → 24（同日公卫事件处置记录）。
-BASELINE = 24
+#: → 24（同日公卫事件处置记录）→ 22（同日室内质控失控处理）。
+BASELINE = 22
 
 
 def prompt_lines(root: pathlib.Path = STATIC) -> list[str]:

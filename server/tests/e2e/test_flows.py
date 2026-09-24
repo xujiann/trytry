@@ -581,6 +581,57 @@ def test_公卫事件处置记录在页内表单里填_取消即不记(page, bas
     assert [(a["action"], a["actor"]) for a in actions()] == [("现场流调", "E2E疾控张三")]
 
 
+@pytest.fixture(scope="session")
+def labqc_seed(base_url, seed):
+    """室内质控失控处理的前置：一个质控批号，录一个 z=+5 的点（1-3s 失控）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    lot = call("/api/labqc/lots", {"org_id": seed["org"]["id"], "item_code": "E2E-QC-K",
+                                   "item_name": "E2E质控血钾", "lot_no": "E2E-LOT-1",
+                                   "target_value": 4.0, "sd": 0.1}, doctor)
+    point = call(f"/api/labqc/lots/{lot['id']}/measurements", {"value": 4.5}, doctor)
+    assert point["out_of_control"], point
+    return {"lot": lot, "point": point, "read": lambda path: call(path, None, admin)}
+
+
+def test_室内质控失控处理在页内表单里填_取消即放弃(page, base_url, labqc_seed):
+    """P2-38：失控处理原先两连问，第二问点取消就交上一个空措施、被后端 422 拒回。
+    换成一个表单，两项必填，取消就是放弃（按接口核对仍未处理），再登记并读回。"""
+    lot_id, mid = labqc_seed["lot"]["id"], labqc_seed["point"]["id"]
+
+    def point():
+        (row,) = [m for m in labqc_seed["read"](f"/api/labqc/lots/{lot_id}/measurements") if m["id"] == mid]
+        return row
+
+    _login(page, base_url)
+    _open_page(page, "labqc", "检验室内质控")
+    page.click(f'button[data-lot="{lot_id}"]')
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(f'button[data-handle="{mid}"]')
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert point()["handled"] is False
+    page.click(f'button[data-handle="{mid}"]')
+    _spd_modal(page, {"reason": "质控品复溶后放置过久", "corrective_action": "更换质控品复测在控"})
+    expect(page.locator("#lot-detail")).to_contain_text("已处理")
+    row = point()
+    assert (row["handled"], row["handle_reason"], row["corrective_action"]) == (
+        True, "质控品复溶后放置过久", "更换质控品复测在控"), row
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)
