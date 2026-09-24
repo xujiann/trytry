@@ -1379,11 +1379,16 @@ def update_report_template(template_id: int, body: ReportTemplatePatch, db: Sess
     return _template_out(template)
 
 
+#: 推送时点 HH:MM，零补齐（P2-53）。调度按字符串比 `现在 HH:MM < push_time`：写成「8:00」「24:00」一天里
+#: 任何时刻都比它小，任务永远跳过、也不报错。只收 ASCII 数字（全角「０８:００」同理比不对）。
+PUSH_TIME_PATTERN = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
+
+
 class ReportTaskIn(BaseModel):
     template_id: int
     name: str = Field(min_length=1, max_length=64)
     frequency: str = Field(default="daily", pattern="^(daily|weekly|monthly|custom)$")
-    push_time: str = Field(default="08:00", max_length=5)
+    push_time: str = Field(default="08:00", pattern=PUSH_TIME_PATTERN)
     subscriber_ids: list[int] = Field(default_factory=list)
     org_ids: list[int] = Field(default_factory=list)
     valid_from: OptionalDateStr = ""
@@ -1429,7 +1434,7 @@ class ReportTaskPatch(BaseModel):
 
     name: str = Field(default=UNSET, min_length=1, max_length=64)
     frequency: str = Field(default=UNSET, pattern="^(daily|weekly|monthly|custom)$")
-    push_time: str = Field(default=UNSET, max_length=5)
+    push_time: str = Field(default=UNSET, pattern=PUSH_TIME_PATTERN)
     subscriber_ids: list[int] = Field(default=UNSET)
     org_ids: list[int] = Field(default=UNSET)
     valid_from: OptionalDateStr = Field(default=UNSET)
