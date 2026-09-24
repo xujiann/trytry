@@ -1353,7 +1353,6 @@ PATIENT_OWNED_UNGUARDED_WRITES = {
     "pathology.py:advance_specimen",
     "pathology.py:receive_specimen",
     "pathology.py:reject_specimen",
-    "patients.py:revoke_authorization",
     "spd/population.py:handle_service_apply",
     "tcm.py:advance_order",
 }

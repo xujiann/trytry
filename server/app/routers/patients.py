@@ -171,6 +171,10 @@ def grant_authorization(
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.grantee_org_id) is None:
         raise HTTPException(status_code=404, detail="被授权机构不存在")
+    # 与同文件清单、校验同一口径：可问责而非可阻断（见 visibility.log_patient_access）。
+    # 原先发授权、撤授权两处都不留痕——恰恰是改变"谁能调阅这个人"的两个动作，居民在
+    # 「谁看过我的档案」里却看不到是谁办的。
+    log_patient_access(db, user, patient_id, "authorization", "consent_admin")
     auth = ArchiveAuthorization(patient_id=patient_id, created_by=user.id, **body.model_dump())
     db.add(auth)
     db.commit()
@@ -182,10 +186,16 @@ def grant_authorization(
     response_model=AuthorizationRevokedOut,
     dependencies=[Depends(require_roles("doctor", "operator"))],
 )
-def revoke_authorization(patient_id: int, auth_id: int, db: Session = Depends(get_db)):
+def revoke_authorization(
+    patient_id: int,
+    auth_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     auth = db.get(ArchiveAuthorization, auth_id)
     if auth is None or auth.patient_id != patient_id:
         raise HTTPException(status_code=404, detail="授权记录不存在")
+    log_patient_access(db, user, patient_id, "authorization", "consent_admin")  # 同上：只留痕不阻断
     auth.status = "revoked"
     db.commit()
     return {"id": auth.id, "status": "revoked"}
