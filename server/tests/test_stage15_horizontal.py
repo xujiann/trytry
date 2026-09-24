@@ -797,6 +797,10 @@ DOMAIN_ORG_GUARDS = {
     "spd/referral.py:withdraw_referral":
         "端点内联：只有发起人本人可撤（initiator_id == user.id），个体级判定，"
         "比机构级更严——本院别人也撤不了。",
+    "referrals.py:_assert_receiving_org":
+        "平台侧转诊：推进状态（接诊／退回／结案）只有接收方机构（to_org_id）能做，全域角色放行；"
+        "先判归属再判状态机，403 与 409 的先后不泄露单据状态。与 _assert_holds_case 同一形状，"
+        "P1-71 按患者维度重扫时才第一次被数到（Referral 没有 org_id 列，此前哪条棘轮的分母都不含它）。",
 }
 
 
@@ -1326,8 +1330,6 @@ def test_县域监测预警对一线保持开放(client, world, stranger_op):
 # 里面混着按设计跨机构的（远程会诊、共享诊断中心、转诊、急救调度、医保审核）与
 # 确属越权的，逐条判定后：按设计跨机构的写明理由移进豁免，越权的照 P0-10 / P0-19 先例补守卫。
 PATIENT_OWNED_UNGUARDED_WRITES = {
-    "consents.py:review_correction",
-    "consents.py:revoke_consent",
     "consultations.py:accept",
     "consultations.py:complete",
     "consultations.py:decline",
@@ -1341,15 +1343,30 @@ PATIENT_OWNED_UNGUARDED_WRITES = {
     "exams.py:claim_request",
     "exams.py:submit_report",
     "insurance.py:issue_referral_cert",
-    "insurance.py:review_dual_channel",
-    "insurance.py:review_special_disease",
     "maternal.py:add_visit",
     "maternal.py:close_record",
     "patients.py:revoke_authorization",
-    "referrals.py:update_status",
     "spd/population.py:handle_service_apply",
     "tcm.py:advance_order",
 }
+
+#: 按 id 写挂在患者上的表、却**按设计**不做患者可见性阻断的——逐条写明理由，只减不增
+#: （与 `BYID_CROSS_ORG_OK` 同一纪律：每一条都要答得出"为什么不守"）。2026-09-24 逐条实测后判定。
+PATIENT_OWNED_BY_DESIGN = {
+    "consents.py:revoke_consent":
+        "窗口业务按设计不做可见性阻断：模块 docstring「设计口径」写明——患者本人就在柜台前，而本机构此刻"
+        "往往还没有他的任何记录，要求先有业务关系会把这项业务办不成（与登记同一口径）；写操作经审计中间件落 AuditLog。",
+    "consents.py:review_correction":
+        "只有全域角色够得着（require_roles(\"director\")，admin 恒放行；自定义角色须管理员逐点授权）："
+        "更正 / 注销改的是全县主索引，审核本就是全县口径。前提由 test_挂在患者上的豁免_审核端点只收全域角色 钉住。",
+    "insurance.py:review_special_disease":
+        "同上：特殊病种申报（经办 / 医生）与审核（director）职责分离（L-11），审核是全县口径。",
+    "insurance.py:review_dual_channel":
+        "同上：双通道申报与审核职责分离，审核限 director。",
+}
+_GLOBAL_ONLY_BY_DESIGN = (
+    "consents.py:review_correction", "insurance.py:review_special_disease", "insurance.py:review_dual_channel",
+)
 
 _PATIENT_WRITE_GUARDS = {
     "assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
@@ -1398,13 +1415,39 @@ def _byid_patient_owned_write_endpoints(sources=None) -> set[str]:
 
 def test_按id写挂在患者上的表不许新增无守卫端点():
     unguarded = _byid_patient_owned_write_endpoints()
-    new = unguarded - PATIENT_OWNED_UNGUARDED_WRITES
+    by_design = set(PATIENT_OWNED_BY_DESIGN)
+    assert not (PATIENT_OWNED_UNGUARDED_WRITES & by_design), "同一条不能既是欠账又是按设计豁免"
+    new = unguarded - PATIENT_OWNED_UNGUARDED_WRITES - by_design
     assert new == set(), (
         "以下写接口按 id 取了挂在患者上的记录，却没有任何归属判定——按记录所属患者 "
         "assert_patient_visible（留痕）；若按设计跨机构，写明理由再登记：\n  " + "\n  ".join(sorted(new))
     )
-    stale = PATIENT_OWNED_UNGUARDED_WRITES - unguarded
+    stale = (PATIENT_OWNED_UNGUARDED_WRITES | by_design) - unguarded
     assert stale == set(), f"这些登记项已加了守卫或不存在，应从清单删除（只减不增）：{sorted(stale)}"
+
+
+def test_挂在患者上的豁免_审核端点只收全域角色():
+    """三条审核端点判为豁免的**前提**：`require_roles` 里只有全域角色。
+
+    哪天有人把申报角色（operator / doctor）也加进审核端点，可见性判定就不再是"永远放行"，
+    豁免的理由随之作废——这条用例在那一刻变红，逼着重新判。理由会过期，前提得有人守着。
+    """
+    from app.visibility import GLOBAL_ROLES
+
+    files = dict(_router_files())
+    for key in _GLOBAL_ONLY_BY_DESIGN:
+        assert key in PATIENT_OWNED_BY_DESIGN
+        name, fn_name = key.split(":")
+        tree = ast.parse(open(files[name], encoding="utf-8").read())
+        (fn,) = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name]
+        roles = {
+            arg.value
+            for call in ast.walk(fn)
+            if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "require_roles"
+            for arg in call.args if isinstance(arg, ast.Constant)
+        }
+        assert roles and roles <= GLOBAL_ROLES, f"{key} 的角色放宽到了 {sorted(roles)}，豁免前提不再成立"
 
 
 def test_挂在患者上的写接口判据自证():

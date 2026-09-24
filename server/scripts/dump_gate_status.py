@@ -58,6 +58,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
         ("横向越权（写侧）", "归属隔一跳的无守卫写端点", len(horizontal.ONEHOP_UNGUARDED_WRITES), H),
         ("横向越权（写侧）", "挂在患者上的表 × 按 id 写无守卫（待逐条判定）",
          len(horizontal.PATIENT_OWNED_UNGUARDED_WRITES), H),
+        ("横向越权（写侧）", "挂在患者上的表 × 按设计不阻断（逐条写明理由）",
+         len(horizontal.PATIENT_OWNED_BY_DESIGN), H),
         ("横向越权（写侧）", "按设计跨机构的豁免（逐条写明理由）", len(horizontal.BYID_CROSS_ORG_OK), H),
         ("横向越权（写侧）", "已登记的领域守卫", len(horizontal.DOMAIN_ORG_GUARDS), H),
         ("横向越权（读侧）", "按 id 读患者资源的豁免", len(horizontal.BYID_PATIENT_READ_OK), H),
