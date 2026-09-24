@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 #: (路径, 其余字段, 日期字段, 是否可空)。其余字段只求过得了请求体校验，id 一律填不存在的。
+#: 路径可带方法前缀（`PATCH /api/...`），不带即 POST。
 CASES = [
     ("/api/analytics/outbound-visits",
      {"patient_id": 999999, "external_org_name": "市一院"}, "visit_date", False),
@@ -32,10 +33,22 @@ CASES = [
     ("/api/eldercare/assessments", {"patient_id": 999999, "adl_score": 100}, "assessed_date", True),
     ("/api/homevisits", {"patient_id": 999999, "org_id": 999999, "service_type": "nursing"},
      "expect_date", True),
+    ("/api/knowledge", {"category": "regulation", "title": "日期回归条目"}, "expire_date", True),
+    ("PATCH /api/knowledge/999999", {}, "expire_date", True),  # 空串 = 改为长期有效
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。
 BAD = ["2026/09/24", "2026-02-31", "abcdefghij"]
+
+
+def _send(client, admin, path, body):
+    method, _, url = path.rpartition(" ")
+    return client.request(method or "POST", url, json=body, headers=admin)
+
+
+def _case_id(case):
+    method, _, url = case[0].rpartition(" ")
+    return f"{method.lower() + '-' if method else ''}{url.split('/')[2]}.{case[2]}"
 
 
 def _field_errors(resp, field):
@@ -44,17 +57,17 @@ def _field_errors(resp, field):
     return [e for e in resp.json()["detail"] if e.get("loc") == ["body", field]]
 
 
-@pytest.mark.parametrize("path, body, field, optional", CASES, ids=[c[2] for c in CASES])
+@pytest.mark.parametrize("path, body, field, optional", CASES, ids=[_case_id(c) for c in CASES])
 def test_写错的日期在请求体校验层就被挡下(client, admin, path, body, field, optional):
     for bad in BAD:
-        resp = client.post(path, json={**body, field: bad}, headers=admin)
+        resp = _send(client, admin, path, {**body, field: bad})
         assert _field_errors(resp, field), (path, bad, resp.status_code, resp.text[:200])
 
 
-@pytest.mark.parametrize("path, body, field, optional", CASES, ids=[c[2] for c in CASES])
+@pytest.mark.parametrize("path, body, field, optional", CASES, ids=[_case_id(c) for c in CASES])
 def test_合法日期越过这一道校验(client, admin, path, body, field, optional):
-    resp = client.post(path, json={**body, field: "2026-09-24"}, headers=admin)
+    resp = _send(client, admin, path, {**body, field: "2026-09-24"})
     assert not _field_errors(resp, field), (path, resp.text[:200])
     if optional:
-        blank = client.post(path, json={**body, field: ""}, headers=admin)
+        blank = _send(client, admin, path, {**body, field: ""})
         assert not _field_errors(blank, field), ("可空字段留空不该被拒", path, blank.text[:200])

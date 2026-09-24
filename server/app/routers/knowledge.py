@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import KnowledgeEntry, User
 
@@ -26,7 +27,9 @@ class EntryCreate(BaseModel):
     category: str = Field(pattern="^(drug_policy|clinical_guideline|referral|regulation|tcm_health)$")
     title: str = Field(min_length=1)
     body: str = ""
-    expire_date: str = ""
+    # 是否过期按字符串比 `expire_date < 今天`：`2026/01/01`、`20260101` 在同一年份里比出来是反的，
+    # 过期九个月的药品政策照样当"有效"检索出来（P1-61，实测）
+    expire_date: OptionalDateStr = ""
 
 
 # 响应契约：字段与原手拼 dict 一一对应，保持响应向后兼容。
@@ -76,7 +79,8 @@ def create_entry(
 
 class EntryUpdate(BaseModel):
     body: str | None = None
-    expire_date: str | None = None
+    # None = 不改；空串 = 改为长期有效；非空走同一个日历校验（续期那个 prompt 是自由文本）
+    expire_date: OptionalDateStr | None = None
     active: bool | None = None
 
 
