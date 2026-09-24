@@ -148,7 +148,8 @@ def test_真源本身仍在做日历校验():
 #: 新增一个裸 `str` 的请求体日期字段即红。
 KNOWN_BARE_BODY_DATE_FIELDS: set[str] = set()
 
-_DATE_TOKEN = re.compile(r"(^|_)date($|_)")
+#: 词元 `date` 之外还认 `due`（P2-55）：「下次随访日」叫 next_due，原先整个不在视野里，裸 str 照收「2026/10/1」
+_DATE_TOKEN = re.compile(r"(^|_)(date|due)($|_)")
 _ROUTE_DIRS = (APP_DIR / "routers", APP_DIR / "spd" / "routers")
 _HTTP_VERBS = ("get", "post", "put", "patch", "delete")
 
@@ -243,6 +244,7 @@ def test_请求体日期字段判据自证():
     # 词元匹配：不误伤 update / candidate 这类恰好含 date 字母的名字
     assert not _DATE_TOKEN.search("last_update") and not _DATE_TOKEN.search("candidate_ids")
     assert _DATE_TOKEN.search("date") and _DATE_TOKEN.search("visit_date")
+    assert _DATE_TOKEN.search("next_due") and not _DATE_TOKEN.search("overdue_count")
 
 
 def test_不得新增裸str的请求体日期字段():

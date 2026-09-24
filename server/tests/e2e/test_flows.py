@@ -1461,6 +1461,57 @@ def test_followup_center_flow(page, base_url, seed, admin_read):
     assert status() == "done"
 
 
+@pytest.fixture(scope="session")
+def chronic_seed(seed, admin_call):
+    """慢病随访两端表单的前置：E2E 患者的一份高血压档案。"""
+    return admin_call("POST", "/api/chronic", {"patient_id": seed["patient"]["id"], "disease": "hypertension",
+                                               "managed_by_org_id": seed["org"]["id"]})
+
+
+def test_下次随访日两端都用日期控件填_选的那一天真的落库(page, base_url, chronic_seed, admin_read):
+    """P2-55：两端随访表单的「下次随访日」原先是自由文本框，「2026/10/1」「10月1日」照存，按字符串比较的
+    超期名单对它失效（「10月1日」没到期就超期、「2026/10/1」超期了却不在名单里）。换成日期控件后送出的
+    一定是 YYYY-MM-DD：桌面端录一次、医生移动端再录一次，每次按接口读回档案的下次随访日。"""
+    cid = chronic_seed["id"]
+
+    def next_due():
+        (row,) = [c for c in admin_read("/api/chronic?limit=500") if c["id"] == cid]
+        return row["next_due"]
+
+    _login(page, base_url)
+    _open_page(page, "chronic", "慢病管理")
+    form = page.locator("#fu-form")
+    expect(form.locator("input[name=next_due]")).to_have_attribute("type", "date")
+    form.locator("input[name=chronic_id]").fill(str(cid))
+    form.locator("input[name=sbp]").fill("128")
+    form.locator("input[name=dbp]").fill("82")
+    form.locator("input[name=next_due]").fill("2026-12-01")
+    seen = []
+
+    def on_dialog(dialog):
+        seen.append(dialog.message)
+        dialog.accept()
+
+    page.once("dialog", on_dialog)
+    _submit(page, "#fu-form button")
+    assert seen and "下次随访：2026-12-01" in seen[0], seen
+    assert next_due() == "2026-12-01"
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "admin")
+    page.fill("#lg-pass", "admin123")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('a.tab-btn[data-tab="chronic"]')
+    expect(page.locator("#fu-next")).to_have_attribute("type", "date")
+    page.locator("#fu-chronic").select_option(str(cid))
+    page.locator("#fu-next").fill("2027-01-15")
+    page.click("#fu-form button[type=submit]")
+    expect(page.locator("#fu-msg")).to_contain_text("下次随访 2027-01-15")
+    assert next_due() == "2027-01-15"
+
+
 def test_doctor_mobile_workbench_loads(page, base_url, seed):
     """医生移动工作台（块4）：登录后进入待办页签。"""
     page.set_viewport_size({"width": 390, "height": 844})

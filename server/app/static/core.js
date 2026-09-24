@@ -1935,7 +1935,7 @@ async function renderChronic() {
         <input name="dbp" type="number" placeholder="舒张压">
         <input name="glucose" type="number" step="any" placeholder="空腹血糖">
         <input name="metrics" placeholder="其他指标 如 cat_score=22">
-        <input name="next_due" placeholder="下次随访(留空按周期自动建议)">
+        <input name="next_due" type="date" title="下次随访（留空按病种周期自动建议）">
         <button>提交随访</button>
       </form><p class="msg" id="chronic-msg"></p>
       <h3 style="margin-top:14px">病种目录（分级规则与随访周期的唯一数据源）</h3>

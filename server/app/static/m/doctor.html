@@ -52,7 +52,8 @@
         <p class="hint">选择在管档案录入随访，系统按病种目录规则即时分级</p>
         <select id="fu-chronic"></select>
         <div id="fu-metrics"></div>
-        <input id="fu-next" placeholder="下次随访日期（留空按病种周期自动建议）">
+        <!-- 日期框不显示 placeholder，提示挪到框上方（P2-55：原先是自由文本框，「2026/10/1」照存、逾期判定对它失效） -->
+        <label class="fu-next">下次随访日期（留空按病种周期自动建议）<input id="fu-next" type="date"></label>
         <button type="submit">提交随访</button>
         <p id="fu-msg" class="msg"></p>
       </form>

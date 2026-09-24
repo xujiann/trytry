@@ -289,13 +289,16 @@ class ChronicCreate(BaseModel):
     # 块1：病种取值改由 ChronicDiseaseType 目录校验（不再硬编码枚举）
     disease: str = Field(min_length=1, max_length=32)
     managed_by_org_id: int
-    # 列长（P1-91 第五层：`payload` 转手写库）。随访表单是自由文本框，日期口径另见 TECH_DEBT P2-55
-    next_due: str = Field(default="", max_length=10)
+    # 日期真源（P2-55）：原先裸 str，「2026/10/1」「10月1日」照存，之后按字符串比较的逾期判定对它失效；
+    # 日期闸门原先只按名字认 `date`，这一格名叫 next_due，一直不在视野里（闸门已补认 `due`）
+    next_due: OptionalDateStr = ""
 
 
 class ChronicOut(ChronicCreate):
     id: int
     level: int
+    # 出参不带入参的日历校验（P1-63）：换成日期真源之前存进去的「2026/10/1」要原样读出来，而不是让响应 500
+    next_due: str = ""
 
     model_config = {"from_attributes": True}
 
@@ -307,13 +310,13 @@ class FollowUpCreate(BaseModel):
     # 块1：通用指标（非血压血糖类），如 {"adherence_score": 4, "cat_score": 22}
     metrics: dict[str, FiniteFloat] = Field(default_factory=dict)
     guidance: str = Field(default="", max_length=1024)
-    # 列长（P1-91 第五层：`payload` 转手写库）。随访表单是自由文本框，日期口径另见 TECH_DEBT P2-55
-    next_due: str = Field(default="", max_length=10)
+    next_due: OptionalDateStr = ""  # 日期真源（P2-55），同 ChronicCreate.next_due
 
 
 class FollowUpOut(FollowUpCreate):
     id: int
     chronic_id: int
+    next_due: str = ""  # 出参不带入参的日历校验（P1-63），同 ChronicOut.next_due
     # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
     sbp: float | None = None
     dbp: float | None = None
