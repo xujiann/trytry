@@ -3124,9 +3124,11 @@ async function renderPerfIndicators() {
     const d = e.target.dataset;
     try {
       if (d.weight) {
-        const w = prompt("新权重（≥0，自动按比例归一化）");
-        if (w === null || w === "") return;
-        await api(`/api/performance/indicators/${d.weight}`, { method: "PATCH", body: JSON.stringify({ weight: Number(w) }) });
+        // P2-38：弹窗换成页内表单（数字框可带小数）；负数由后端报人话
+        const form = await spdModal(`调权重：${d.weight}`, [
+          { name: "weight", label: "新权重（≥0，自动按比例归一化）", type: "number", required: true }]);
+        if (!form) return;
+        await api(`/api/performance/indicators/${d.weight}`, { method: "PATCH", body: JSON.stringify({ weight: form.weight }) });
         route();
       }
       if (d.toggleInd) {

@@ -773,7 +773,12 @@ async function downloadCsv(path, filename, msgSel) {
       credentials: "same-origin",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    if (!resp.ok) throw new Error(`导出失败(${resp.status})`);
+    if (!resp.ok) {
+      // 失败时后端回的是 JSON detail（如导出月份写错的 422）：照 api() 的口径报人话，别只给状态码
+      let detail = null;
+      try { detail = (await resp.json()).detail; } catch (e) { detail = null; }
+      throw new Error(errorText(detail, `导出失败(${resp.status})`));
+    }
     const url = URL.createObjectURL(await resp.blob());
     const a = document.createElement("a");
     a.href = url;
@@ -818,10 +823,13 @@ async function renderPerformance() {
       }))}`;
   $("#exp-monitor").onclick = () => downloadCsv("/api/reports/monitoring/export", "monitoring_indicators.csv", "#rpt-msg");
   $("#exp-ops").onclick = () => downloadCsv("/api/reports/operations/export", "operations_report_all.csv", "#rpt-msg");
-  $("#exp-ops-period").onclick = () => {
-    const period = prompt("导出月份 YYYY-MM（如 2026-07）");
-    if (!period) return;
-    downloadCsv(`/api/reports/operations/export?period=${encodeURIComponent(period)}`, `operations_report_${period}.csv`, "#rpt-msg");
+  $("#exp-ops-period").onclick = async () => {
+    // P2-38：弹窗换成页内表单；月份的形状与日历由后端 require_month 判，写错报人话（downloadCsv 取 detail）
+    const form = await spdModal("按月导出运营报表", [
+      { name: "period", label: "导出月份", required: true, placeholder: "YYYY-MM，如 2026-07" }]);
+    if (!form) return;
+    downloadCsv(`/api/reports/operations/export?period=${encodeURIComponent(form.period)}`,
+      `operations_report_${form.period}.csv`, "#rpt-msg");
   };
   await drawImprovementTasks();  // 块4㉟ 绩效自评改进
 }

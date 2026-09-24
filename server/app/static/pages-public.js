@@ -587,9 +587,11 @@ async function renderEsb() {
         const res = await api(`/api/esb/endpoints/${esbrotate}/rotate-token`, { method: "POST" });
         alert(`新令牌（旧令牌已失效）：\n${res.auth_token}`);
       } else if (esbrun) {
-        const messageId = prompt("对哪条消息执行该编排？填写消息ID");
-        if (!messageId) return;
-        const res = await api(`/api/esb/flows/${encodeURIComponent(esbrun)}/run?message_id=${encodeURIComponent(messageId)}`, { method: "POST" });
+        // P2-38：弹窗换成页内表单（消息 ID 见上方消息列表）
+        const form = await spdModal(`执行编排：${esbrun}`, [
+          { name: "message_id", label: "对哪条消息执行（消息 ID，见上方消息列表）", type: "number", required: true }]);
+        if (!form) return;
+        const res = await api(`/api/esb/flows/${encodeURIComponent(esbrun)}/run?message_id=${encodeURIComponent(form.message_id)}`, { method: "POST" });
         setMsg("#esb-flow-msg", `编排 ${esbrun} → ${res.status === "succeeded" ? "全部步骤成功" : `第 ${res.step_results.length} 步失败：${res.error}`}`, res.status === "succeeded");
         await drawMessages();
       }
@@ -746,11 +748,16 @@ async function renderKnowledge() {
     const d = e.target.dataset;
     try {
       if (d.renew) {
-        const dateStr = prompt("新有效期 YYYY-MM-DD"); if (!dateStr) return;
-        await api(`/api/knowledge/${d.renew}`, { method: "PATCH", body: JSON.stringify({ expire_date: dateStr }) });
+        // P2-38：弹窗换成页内表单；日期写错由后端 OptionalDateStr 报人话
+        const form = await spdModal("续期", [
+          { name: "expire_date", label: "新有效期", required: true, placeholder: "YYYY-MM-DD" }]);
+        if (!form) return;
+        await api(`/api/knowledge/${d.renew}`, { method: "PATCH", body: JSON.stringify({ expire_date: form.expire_date }) });
         route();
       }
       if (d.deact) {
+        // 停用原先点一下就生效、没有任何确认；停用后条目从检索里消失，页面上没有恢复入口
+        if (!await spdModal("停用知识条目", [], { intro: "停用后该条目不再出现在检索与临期提醒里，页面上不能恢复。" })) return;
         await api(`/api/knowledge/${d.deact}`, { method: "PATCH", body: JSON.stringify({ active: false }) });
         route();
       }

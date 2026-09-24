@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 
 STATIC = pathlib.Path(__file__).resolve().parents[1] / "app" / "static"
 
@@ -25,8 +26,10 @@ STATIC = pathlib.Path(__file__).resolve().parents[1] / "app" / "static"
 #: → 29（同日流程引擎推进 / 终止）→ 28（同日更正 / 注销申请审核）→ 26（同日双通道申报审核）
 #: → 24（同日公卫事件处置记录）→ 22（同日室内质控失控处理）→ 20（同日家医签约履约）
 #: → 18（同日急救绿道录节点）→ 16（同日上门服务派单 / 完成）→ 13（同日适宜技术实训考核）
-#: → 12（同日随访中心完成随访）→ 11（同日人员下沉职称等级）→ 10（同日接种禁忌解除）。
-BASELINE = 10
+#: → 12（同日随访中心完成随访）→ 11（同日人员下沉职称等级）→ 10（同日接种禁忌解除）
+#: → 0（同日：流程画布 / 定时任务 / 凭据作废 / 按月导出 / 知识库续期 / 指标权重 / 集成编排七处收尾，
+#:   spdModal 自己注释里那一行换了说法）。**清零后即为禁令**：新代码出现一行即红。
+BASELINE = 0
 
 
 def prompt_lines(root: pathlib.Path = STATIC) -> list[str]:
@@ -65,3 +68,56 @@ def test_prompt录入只许变少():
         f"含 prompt( 的行降到了 {len(lines)}，请把 BASELINE 从 {BASELINE} 改小到 {len(lines)}"
         "（棘轮只进不退），并同步 docs/闸门现状.md（跑 scripts/dump_gate_status.py）"
     )
+
+
+# ---------------------------------------------------------------------------
+# confirm() 当二选一用：「确定=X，取消=Y」
+#
+# P2-38 逐页替换时反复撞见同一个坑：把 confirm() 当成二选一的选择框——
+# 「确定=合理，取消=不合理」（处方点评）、「确定=是危急值」（移动端出报告）、
+# 「确定=互认」（开单前互认）、「确定=长期，取消=临时」（住院开医嘱）。
+# 想放弃的人点"取消"，得到的不是"放弃"而是另一个选项：不合理的点评、非危急值的报告、
+# 一张重复检查、一条临时医嘱。这一形状 2026-09-24 已清零（剩下的 confirm 都是
+# "确认要做吗"——取消即放弃），这里钉住：确认框的文案里出现「确定=」「取消=」即红。
+# 二选一请用表单里的下拉（spdModal 的 select），取消留给"放弃"。
+
+CHOICE_CONFIRM = re.compile(r"confirm\([^;\n]*(?:确定|取消)\s*[=＝]")
+
+
+def choice_confirm_lines(root: pathlib.Path = STATIC) -> list[str]:
+    out = []
+    for path in sorted(root.rglob("*.js")):
+        for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if CHOICE_CONFIRM.search(line):
+                out.append(f"{path.relative_to(root).as_posix()}:{no}")
+    return out
+
+
+def test_confirm不得当二选一用():
+    lines = choice_confirm_lines()
+    assert lines == [], (
+        "确认框的文案里出现了「确定=…」「取消=…」：想放弃的人点取消，得到的是另一个选项。"
+        "二选一请用 spdModal 的下拉，取消留给放弃：\n  " + "\n  ".join(lines)
+    )
+
+
+def test_二选一判据自证(tmp_path):
+    """植回历史上的四种原样写法必须全抓到；正常的"确认要做吗"不能误报。"""
+    bad = tmp_path / "bad.js"
+    bad.write_text(
+        'const ok = confirm("点评结论：确定=合理，取消=不合理");\n'
+        'const critical = confirm("是否为危急值？（确定=是，将进入危急值闭环）");\n'
+        "if (confirm(`已有同项目报告。确定=互认`)) {}\n"
+        'const longTerm = confirm("确定 = 长期医嘱，取消 = 临时医嘱");\n',
+        encoding="utf-8",
+    )
+    assert len(choice_confirm_lines(tmp_path)) == 4
+    good = tmp_path / "good.js"
+    bad.unlink()
+    good.write_text(
+        'if (!confirm("撤回后该转诊单即关闭。确认撤回？")) return;\n'
+        'if (!confirm(`确认重置 ${name} 的动态口令？`)) return;\n',
+        encoding="utf-8",
+    )
+    assert choice_confirm_lines(tmp_path) == []
+

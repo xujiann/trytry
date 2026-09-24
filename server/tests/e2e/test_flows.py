@@ -940,6 +940,186 @@ def test_接种禁忌解除在页内表单里填_取消即不解(page, base_url,
     assert (row["status"], row["lift_reason"]) == ("lifted", "复测体温已正常"), row
 
 
+@pytest.fixture(scope="session")
+def admin_call(base_url):
+    """以 admin 身份调写接口（造前置数据 / 用例结束时复原共享配置）。"""
+    import json
+    from urllib.request import Request
+
+    def call(method, path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+            method=method,
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("POST", "/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    return lambda method, path, payload=None: call(method, path, payload, admin)
+
+
+def _modal(page):
+    return page.locator("form.panel:has(button[data-cancel])")
+
+
+def _cancel_modal(page):
+    _modal(page).locator("button[data-cancel]").click()
+    expect(_modal(page)).to_have_count(0)
+
+
+def test_流程画布加节点在页内表单里填_角色从字典里选(page, base_url):
+    """P2-38：画布「加节点」原先三连问，角色要手打英文码——后端不校验角色名，打错就得到一个
+    除管理员外谁也推不动的节点。换成一个表单，角色从字典里选；取消不加。"""
+    _login(page, base_url)
+    _open_page(page, "workflows", "流程引擎")
+    page.click("#wfc-add")
+    expect(_modal(page).locator('[name="role"]')).to_contain_text("医师（doctor）")
+    _modal(page).locator('[name="key"]').fill("e2e_canvas_apply")
+    _cancel_modal(page)
+    expect(page.locator("#wfc-json")).not_to_contain_text("e2e_canvas_apply")
+    page.click("#wfc-add")
+    _spd_modal(page, {"key": "e2e_canvas_apply", "name": "E2E画布申请", "role": "doctor"})
+    expect(page.locator("#wfc-json")).to_contain_text('"key": "e2e_canvas_apply"')
+    expect(page.locator("#wfc-json")).to_contain_text('"role": "doctor"')
+
+
+def test_定时任务改间隔在页内表单里填_取消即不改(page, base_url, admin_read, admin_call):
+    """P2-38：「改间隔」原先弹窗输分钟；换成数字框（可带小数，折成整秒），取消即不改。"""
+    job = admin_read("/api/jobs")[0]
+    name, before = job["name"], job["interval_seconds"]
+
+    def interval():
+        (row,) = [j for j in admin_read("/api/jobs") if j["name"] == name]
+        return row["interval_seconds"]
+
+    _login(page, base_url)
+    _open_page(page, "jobs", "定时任务")
+    page.click(f'button[data-interval="{name}"]')
+    _cancel_modal(page)
+    assert interval() == before, "点了取消却照样改了间隔"
+    page.click(f'button[data-interval="{name}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"minutes": "1.5"}))
+    try:
+        assert interval() == 90
+    finally:
+        admin_call("PATCH", f"/api/jobs/{name}", {"interval_seconds": before})  # 共享调度配置复原
+
+
+def test_就诊凭据作废在页内表单里填_写明后果(page, base_url, seed, admin_read):
+    """P2-38：「作废」原先弹窗要原因；换成表单，上方写明作废不能恢复，取消即不作废。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload, token):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode(),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"}, "")["access_token"]
+    cred = call("/api/credentials", {"patient_id": seed["patient"]["id"], "credential_type": "temp"}, doctor)
+
+    def status():
+        (row,) = [c for c in admin_read("/api/credentials?limit=500") if c["id"] == cred["id"]]
+        return row["status"], row["close_reason"]
+
+    _login(page, base_url)
+    _open_page(page, "credentials", "就诊凭据")
+    page.click(f'button[data-cvoid="{cred["id"]}"]')
+    expect(_modal(page)).to_contain_text("不能恢复")
+    _cancel_modal(page)
+    assert status()[0] == "active", "点了取消却照样作废了"
+    page.click(f'button[data-cvoid="{cred["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"reason": "患者挂失"}))
+    assert status() == ("void", "患者挂失"), status()
+
+
+def test_按月导出运营月报在页内表单里填_月份写错报人话(page, base_url):
+    """P2-38：按月导出原先弹窗输月份；换成表单。月份写错时导出失败原先只报状态码，
+    现在带后端给的原因；写对了照常下载。"""
+    _login(page, base_url)
+    _open_page(page, "performance", "绩效考核")
+    page.click("#exp-ops-period")
+    _cancel_modal(page)
+    page.click("#exp-ops-period")
+    _spd_modal(page, {"period": "2026-13"})
+    expect(page.locator("#rpt-msg")).to_contain_text("2026-13 不存在")  # 原先只有"导出失败(422)"
+    page.click("#exp-ops-period")
+    with page.expect_download() as download:
+        _spd_modal(page, {"period": "2026-07"})
+    assert download.value.suggested_filename == "operations_report_2026-07.csv"
+
+
+def test_知识库续期与停用在页内表单里_停用先确认(page, base_url, admin_read, admin_call):
+    """P2-38：「续期」原先弹窗输日期；「停用」点一下就生效、没有任何确认，停用后条目从检索里
+    消失、页面上恢复不了。换成表单：日期写错由后端报人话；停用先确认，取消即不停。"""
+    entry = admin_call("POST", "/api/knowledge", {"category": "regulation", "title": "E2E知识条目续期",
+                                                  "expire_date": "2026-12-31"})
+
+    def row():
+        rows = [k for k in admin_read("/api/knowledge?include_expired=true") if k["id"] == entry["id"]]
+        return rows[0] if rows else None
+
+    _login(page, base_url)
+    _open_page(page, "knowledge", "知识库")
+    page.click(f'button[data-renew="{entry["id"]}"]')
+    _cancel_modal(page)
+    page.click(f'button[data-renew="{entry["id"]}"]')
+    _spd_modal(page, {"expire_date": "2027-02-30"})
+    expect(page.locator("#kb-msg")).to_contain_text("expire_date")
+    assert row()["expire_date"] == "2026-12-31"
+    page.click(f'button[data-renew="{entry["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"expire_date": "2027-12-31"}))
+    assert row()["expire_date"] == "2027-12-31"
+
+    page.click(f'button[data-deact="{entry["id"]}"]')
+    expect(_modal(page)).to_contain_text("不能恢复")
+    _cancel_modal(page)
+    assert row() is not None, "点了取消却照样停用了"
+    page.click(f'button[data-deact="{entry["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    assert row() is None
+
+
+def test_绩效指标调权重在页内表单里填_取消即不改(page, base_url, admin_read, admin_call):
+    """P2-38：「调权重」原先弹窗输数字；换成数字框（可带小数），取消即不改。"""
+    ind = admin_read("/api/performance/indicators")[0]
+    key, before = ind["key"], ind["weight"]
+
+    def weight():
+        (row,) = [i for i in admin_read("/api/performance/indicators") if i["key"] == key]
+        return row["weight"]
+
+    _login(page, base_url)
+    _open_page(page, "perfind", "绩效指标调权")
+    page.click(f'button[data-weight="{key}"]')
+    _cancel_modal(page)
+    assert weight() == before
+    page.click(f'button[data-weight="{key}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"weight": "1.5"}))
+    try:
+        assert weight() == 1.5
+    finally:
+        admin_call("PATCH", f"/api/performance/indicators/{key}", {"weight": before})  # 复原共享配置
+
+
+def test_集成平台对消息执行编排在页内表单里填消息号(page, base_url, admin_call):
+    """P2-38：「对消息执行」原先弹窗输消息 ID；换成数字框，取消即不执行；消息号不存在由后端报人话。"""
+    admin_call("POST", "/api/esb/flows", {"code": "e2e_flow_run", "name": "E2E编排",
+                                          "steps": [{"type": "validate"}]})
+    _login(page, base_url)
+    _open_page(page, "esb", "集成平台")
+    page.click('button[data-esbrun="e2e_flow_run"]')
+    _cancel_modal(page)
+    expect(page.locator("#esb-flow-msg")).to_have_text("")
+    page.click('button[data-esbrun="e2e_flow_run"]')
+    _spd_modal(page, {"message_id": "987654"})
+    expect(page.locator("#esb-msg")).to_contain_text("消息不存在")
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

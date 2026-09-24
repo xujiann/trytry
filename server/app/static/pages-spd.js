@@ -67,7 +67,7 @@ function spdProgramOptions(catalog, blank) {
  * build-free 约束不变——纯 DOM，无任何组件库。
  * ==========================================================*/
 
-/* prompt() 的替代：Promise 化的浮层表单，一次拿齐多个字段。
+/* 系统输入框（window.prompt）的替代：Promise 化的浮层表单，一次拿齐多个字段。
  * fields: [{name, label, type: text|number|textarea|select, options, value, placeholder, required}]
  * 确定 resolve(值对象)；取消 / Esc / 点遮罩 resolve(null)——调用方判 null 直接返回，
  * 与 prompt 返回 null 的习惯一致，改造调用点时不用改控制流。

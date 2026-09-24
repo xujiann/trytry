@@ -900,9 +900,12 @@ async function renderJobs() {
       else if (d.toggle) await api(`/api/jobs/${d.toggle}`, { method: "PATCH",
         body: JSON.stringify({ enabled: d.enabled !== "true" }) });
       else if (d.interval) {
-        const minutes = prompt("执行间隔（分钟，最小 1）"); if (!minutes) return;
+        // P2-38：弹窗换成页内表单；分钟数必填，写成小数、负数由后端报人话
+        const form = await spdModal("改执行间隔", [
+          { name: "minutes", label: "执行间隔（分钟，最小 1）", type: "number", required: true }]);
+        if (!form) return;
         await api(`/api/jobs/${d.interval}`, { method: "PATCH",
-          body: JSON.stringify({ interval_seconds: Number(minutes) * 60 }) });
+          body: JSON.stringify({ interval_seconds: Math.round(form.minutes * 60) }) });
       } else return;
       route();
     } catch (err) { setMsg("#job-msg", err.message, false); }
@@ -1268,9 +1271,11 @@ async function renderCredentials() {
     const { crec, cvoid } = e.target.dataset;
     if (crec) return postAction(`/api/credentials/${crec}/recycle`, {}, "#cred-msg");
     if (cvoid) {
-      const reason = prompt("作废原因（必填，如挂失/损坏）");
-      if (!reason) return;
-      return postAction(`/api/credentials/${cvoid}/void`, { reason }, "#cred-msg");
+      // P2-38：弹窗换成页内表单，写明作废的后果（作废后不能再用于挂号，需另行发放）
+      return spdModal("作废就诊凭据", [
+        { name: "reason", label: "作废原因", required: true, placeholder: "如：挂失、损坏" },
+      ], { intro: "作废后该凭据不能再用于就诊识别，不能恢复；如需继续就诊请另行发放。" }).then((form) =>
+        form && postAction(`/api/credentials/${cvoid}/void`, { reason: form.reason }, "#cred-msg"));
     }
   };
 }
@@ -2107,13 +2112,25 @@ function wfCanvasInit(definitions) {
     wfCanvasDraw();
   };
 
-  $("#wfc-add").onclick = (e) => {
+  $("#wfc-add").onclick = async (e) => {
     e.preventDefault();
-    const key = (prompt("节点编码（英文，如 approve）") || "").trim();
-    if (!key) return;
+    // P2-38：原先三连问，角色要手打英文码——后端不校验角色名，打错一个字母就得到一个除管理员外
+    // 谁也推不动的节点，发起之后才发现卡死。合成一个表单，角色从角色字典里选
+    // （字典以后端为准，自定义角色也在；取不到时退回内置六个）。
+    let roleMap = {};
+    try { roleMap = await api("/api/users/roles"); } catch (err) { roleMap = {}; }
+    const roles = { ...ROLE_NAMES, ...(roleMap || {}) };
+    const form = await spdModal("加节点", [
+      { name: "key", label: "节点编码（英文，如 approve）", required: true },
+      { name: "name", label: "节点名称（如 审批；留空同编码）" },
+      { name: "role", label: "可推进该节点的角色", type: "select", value: "", options: [
+        { value: "", label: "任何登录用户" },
+        ...Object.entries(roles).map(([value, label]) => ({ value, label: `${label}（${value}）` }))] },
+    ]);
+    if (!form) return;
+    const { key, role } = form;
     if (WF_NODES.some((n) => n.key === key)) { setMsg("#wfc-msg", `节点 ${key} 已存在`, false); return; }
-    const name = (prompt("节点名称（如 审批）") || key).trim();
-    const role = (prompt("可推进该节点的角色，留空=任何登录用户", "") || "").trim();
+    const name = form.name || key;
     WF_NODES.push({ key, name, role, next: "" });
     WF_SELECTED = key;
     wfCanvasDraw();
