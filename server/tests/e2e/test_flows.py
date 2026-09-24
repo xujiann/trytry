@@ -537,6 +537,50 @@ def test_双通道申报审核在页内表单里填_取消即不审(page, base_u
         assert (row["status"], row["review_comment"]) == (status, comment), row
 
 
+@pytest.fixture(scope="session")
+def ph_event_seed(base_url, seed):
+    """公卫事件处置的前置：一起进行中的突发公卫事件。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    event = call("/api/publichealth/events", {"title": "E2E聚集性发热事件", "level": "IV",
+                                              "disease_name": "流感样病例"}, doctor)
+    return {"event": event, "read": lambda path: call(path, None, admin)}
+
+
+def test_公卫事件处置记录在页内表单里填_取消即不记(page, base_url, ph_event_seed):
+    """P2-38：「处置记录」原先两连问，第二问「执行人」点取消照样提交（执行人记空）。
+    换成一个表单：取消就是不记（按接口核对一条都没落），填了才记，并读回动作与执行人。"""
+    eid = ph_event_seed["event"]["id"]
+
+    def actions():
+        return ph_event_seed["read"](f"/api/publichealth/events/{eid}/actions")
+
+    _login(page, base_url)
+    _open_page(page, "publichealth", "公卫协同")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(f'button[data-act="{eid}"]')
+    modal.locator('[name="action"]').fill("现场流调")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert actions() == [], "点了取消却照样记了一条"
+    page.click(f'button[data-act="{eid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"action": "现场流调", "actor": "E2E疾控张三"}))
+    assert [(a["action"], a["actor"]) for a in actions()] == [("现场流调", "E2E疾控张三")]
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

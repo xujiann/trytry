@@ -2082,11 +2082,17 @@ async function renderPublicHealth() {
       ? `<ul style="margin:8px 0 0 18px;font-size:13px">${r.reminders.map((x) => `<li>${esc(x.detail)}</li>`).join("")}</ul>`
       : '<p class="msg ok">无待办提醒</p>';
   };
-  $("#page-body").onclick = (e) => {
+  $("#page-body").onclick = async (e) => {
     const { act, close } = e.target.dataset;
     if (act) {
-      const action = prompt("处置动作"); if (!action) return;
-      return postAction(`/api/publichealth/events/${act}/actions`, { action, actor: prompt("执行人") || "" }, "#ph-msg");
+      // P2-38：原先两连问，第二问「执行人」点取消照样提交（执行人记空）。合成一个表单，取消就是不记。
+      // 执行人是自填的（后端不取登录账号，同 P2-41 的口径问题），这里只换形态、不改口径。
+      const form = await spdModal("登记处置记录", [
+        { name: "action", label: "处置动作", required: true, placeholder: "如：流调、隔离、消杀、样本送检" },
+        { name: "actor", label: "执行人" },
+      ]);
+      if (!form) return;
+      return postAction(`/api/publichealth/events/${act}/actions`, { action: form.action, actor: form.actor }, "#ph-msg");
     }
     if (close) return postAction(`/api/publichealth/events/${close}/close`, null, "#ph-msg");
   };
