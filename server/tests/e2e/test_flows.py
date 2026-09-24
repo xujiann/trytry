@@ -438,6 +438,24 @@ def test_校验失败的报错是人话而不是object_Object(page, base_url):
         assert page.evaluate("() => typeof errorText") == "function", path
 
 
+def test_会计页存下的期间被拒时回落本月_切换框先验再存(page, base_url):
+    """P1-62：三个报表口径的 `period` 收严之后，localStorage 里早先存下的坏值
+    （切换框是自由文本）会让整页那个 Promise.all 失败——而切换框画在它之后，
+    不兜底就是一张连改正入口都没有的白页。只对 422 回落本月并清掉坏值；
+    切换时先让后端判合不合法，坏值不存、报人话。"""
+    _login(page, base_url)
+    page.evaluate("() => localStorage.setItem('medplat_acc_period', '2026-9')")
+    _open_page(page, "accounting", "会计核算")
+    this_month = page.evaluate("() => new Date().toISOString().slice(0, 7)")
+    expect(page.locator('#acc-period input[name="period"]')).to_have_value(this_month)
+    assert page.evaluate("() => localStorage.getItem('medplat_acc_period')") is None
+
+    page.fill('#acc-period input[name="period"]', "2026/09")
+    page.click("#acc-period button")
+    expect(page.locator("#acc-period-msg")).to_contain_text("period")
+    assert page.evaluate("() => localStorage.getItem('medplat_acc_period')") is None
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 

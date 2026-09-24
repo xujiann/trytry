@@ -242,16 +242,32 @@ async function renderFollowups() {
 
 async function renderAccounting() {
   $("#page-desc").textContent = "会计科目 + 记账凭证（借贷必平强校验）→ 过账锁定 → 试算平衡表；作废而不删除";
-  const period = localStorage.getItem("medplat_acc_period") || new Date().toISOString().slice(0, 7);
-  const [subjects, vouchers, balance, consolidated] = await Promise.all([
-    api("/api/accounting/subjects"), api(`/api/accounting/vouchers?period=${period}`),
-    api(`/api/accounting/trial-balance?period=${period}`),
-    api(`/api/accounting/consolidated-statements?period=${period}`)]);
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const load = (p) => Promise.all([
+    api("/api/accounting/subjects"),
+    api(`/api/accounting/vouchers?period=${encodeURIComponent(p)}`),
+    api(`/api/accounting/trial-balance?period=${encodeURIComponent(p)}`),
+    api(`/api/accounting/consolidated-statements?period=${encodeURIComponent(p)}`)]);
+  let period = localStorage.getItem("medplat_acc_period") || thisMonth;
+  let loaded;
+  try {
+    loaded = await load(period);
+  } catch (err) {
+    // 存下的期间被后端拒了（P1-62：切换框是自由文本，收严之前存进去的 `2026-9` 之类）。
+    // 整页的数据都在这一个 Promise.all 里、切换框也画在它之后——不兜底就是一张
+    // 连改正入口都没有的白页。只对 422 回落本月并清掉坏值，别的失败照常抛。
+    if (err.status !== 422 || period === thisMonth) throw err;
+    localStorage.removeItem("medplat_acc_period");
+    period = thisMonth;
+    loaded = await load(period);
+  }
+  const [subjects, vouchers, balance, consolidated] = loaded;
   const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
   const options = subjects.map((s) => `<option value="${esc(s.code)}">${esc(s.code)} ${esc(s.name)}</option>`).join("");
   $("#page-body").innerHTML = `
     ${panel("会计期间", `
-      <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>`)}
+      <form class="inline" id="acc-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>
+      <p class="msg" id="acc-period-msg"></p>`)}
     ${panel("录入凭证", `
       <form id="voucher-form">
         <div class="inline"><input name="org_id" type="number" placeholder="机构ID" required>
@@ -327,8 +343,16 @@ async function renderAccounting() {
   };
   addEntryRow(); addEntryRow(); refreshTotal();
   $("#add-entry").onclick = addEntryRow;
-  $("#acc-period").onsubmit = (e) => { e.preventDefault();
-    localStorage.setItem("medplat_acc_period", new FormData(e.target).get("period")); route(); };
+  $("#acc-period").onsubmit = async (e) => {
+    e.preventDefault();
+    const value = String(new FormData(e.target).get("period") || "").trim();
+    // 先让后端判这个期间合不合法，合法才记住：校验只有后端一份（require_month），
+    // 前端不另抄一遍规则；坏值存进去，下次进页面就要走上面那条回落。
+    try {
+      await api(`/api/accounting/trial-balance?period=${encodeURIComponent(value)}`);
+    } catch (err) { setMsg("#acc-period-msg", err.message, false); return; }
+    localStorage.setItem("medplat_acc_period", value); route();
+  };
   $("#voucher-form").onsubmit = async (e) => {
     e.preventDefault();
     const head = formJson(e.target, ["org_id"]);

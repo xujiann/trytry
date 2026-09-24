@@ -17,7 +17,14 @@ from sqlalchemy.orm import Session
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalPeriodStr
-from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
+from ..deps import (
+    get_current_user,
+    paginate,
+    require_admin,
+    require_month,
+    require_roles,
+    resolve_org_scope,
+)
 from ..models import AccountSubject, Organization, User, Voucher, VoucherEntry, utcnow
 
 router = APIRouter(prefix="/api/accounting", tags=["会计核算"], dependencies=[Depends(get_current_user)])
@@ -326,7 +333,7 @@ def list_vouchers(
     query = db.query(Voucher)
     query = scope_org_list(db, user, query, Voucher, org_id)
     if period:
-        query = query.filter(Voucher.period == period)
+        query = query.filter(Voucher.period == require_month(period))
     if status:
         query = query.filter(Voucher.status == status)
     return [
@@ -386,7 +393,11 @@ def trial_balance(
     """试算平衡表：按科目汇总已过账凭证的借贷发生额。
 
     只统计 posted——草稿未生效、作废已撤销，计进去就不是账了。
+
+    `period` 过 `require_month`（P1-62）：此前是裸 `str`，凭证页的"切换期间"又是
+    自由文本框，`2026-9` 会得到一张 200 的**空表**——看起来像"这个月没记账"。
     """
+    period = require_month(period)
     assert_org_visible(db, user, org_id)
     query = (
         db.query(
@@ -491,7 +502,10 @@ def consolidated_statements(
        统一用一个方向算，负债会变成负数，报表直接不能看。
     3. **不平的期间照样出表，但标出来**。出不了表的时候恰恰最需要看表——
        把差额报出来比拒绝返回有用。
+
+    `period` 过 `require_month`（P1-62），理由同试算平衡表。
     """
+    period = require_month(period)
     scope = resolve_org_scope(db, group_id, org_id)
     rows = _balances(db, period, scope)
     subjects = {s.code: s for s in db.query(AccountSubject).all()}

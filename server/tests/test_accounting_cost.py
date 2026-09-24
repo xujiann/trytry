@@ -217,6 +217,29 @@ def test_凭证期间留空仍按凭证日期推_行为未变(client, roles, org
     assert resp.json()["voucher_date"] == "2026-09-24"
 
 
+
+@pytest.mark.parametrize(
+    "path", ["/api/accounting/trial-balance", "/api/accounting/consolidated-statements"]
+)
+@pytest.mark.parametrize("bad", ["2026-9", "2026/09", "2026-13", "abc"])
+def test_报表期间写错一律422而不是空表(client, admin, path, bad):
+    """P1-62：两个报表的 `period` 原是裸 `str`，写错得到的是 200 的**空表**——
+    看起来像"这个月没记账"。凭证页的"切换期间"是自由文本框，`2026-9` 再自然不过。"""
+    resp = client.get(path, params={"period": bad}, headers=admin)
+    assert resp.status_code == 422, (bad, resp.text)
+    assert resp.json()["detail"].startswith("period"), resp.json()
+
+
+def test_凭证列表的期间筛选_写错422_留空照旧(client, admin, org):
+    bad = client.get("/api/accounting/vouchers", params={"period": "2026-9"}, headers=admin)
+    assert bad.status_code == 422, bad.text
+    base = client.get("/api/accounting/vouchers", params={"org_id": org["id"]}, headers=admin)
+    blank = client.get("/api/accounting/vouchers", params={"org_id": org["id"], "period": ""},
+                       headers=admin)
+    assert base.status_code == blank.status_code == 200
+    assert base.json() == blank.json()
+
+
 # ---------------------------------------------------------------- 成本核算
 
 
