@@ -295,6 +295,9 @@ def collect(
             raise HTTPException(status_code=422, detail="该点位不是产生点")
         if loc.org_id != body.org_id:
             raise HTTPException(status_code=422, detail="点位不属于该机构")
+        if not loc.active:
+            # 停用 = 科室撤并（见 deactivate_location）：撤掉的科室不再产生新医废（P2-49）
+            raise HTTPException(status_code=422, detail="该产生点已停用")
     # 追溯码是服务端算出来的顺序号，并发下两个请求会算出同一个。
     # **重试放在服务端**：调用方重试的是整个收集动作，而且压力下它会撞进下一次
     # 冲突；真正该重试的只是"取下一个号"这一步。
@@ -363,6 +366,8 @@ def store(
         raise HTTPException(status_code=422, detail="暂存点位不属于该医废的所属机构")
     if loc.location_type != "storage":
         raise HTTPException(status_code=422, detail="该点位不是暂存间")
+    if not loc.active:
+        raise HTTPException(status_code=422, detail="该暂存间已停用")  # 同上（P2-49）
     waste.status = "stored"
     waste.storage_location_id = loc.id
     waste.stored_at = now_naive()
