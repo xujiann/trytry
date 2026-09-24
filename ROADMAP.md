@@ -847,12 +847,23 @@
   已补 `datetypes.check_date` + `deps.require_date`（与 `require_month` 对称），两条端点都接上；
   同批修掉 `mgmt:end` 无条件把离职员工改回在岗（污染 analytics 在岗医师数）、
   补上"结束日不早于开始日"。回归 18 条、四处变异各自转红；棘轮把余下 25 处钉住（P1-58）。
-- ◐ **P1-58 余下 25 处日期查询参数逐模块接上 `require_date`**（ADR-0024 第一步留下的棘轮，
-  `tests/test_secondment_end_date_guard.py::KNOWN_BARE_DATE_PARAMS`）。这 25 处**未逐条判定过**，
-  开工前先逐条取证三件事：后端怎么用这个值（字符串比较 / 解析 / 落库）、三端前端实际发什么
-  （留空时发不发空串、有没有发月份或时间戳的）、非法输入现在是什么结果（200 空集 / 200 错集 / 500）。
-  **留空语义一律保持**；按模块一批一个提交：接 `require_date` + 回归（非法 422、合法与留空行为不变）
-  + 从棘轮划掉 + 重生成 `docs/闸门现状.md`。
+- ◐ **P1-58 余下的日期查询参数逐模块接上 `require_date`**（ADR-0024 第一步留下的棘轮，
+  现在 `tests/test_date_query_params.py::KNOWN_BARE_DATE_PARAMS`）。开工前逐条取证了三件事：
+  后端怎么用这个值、三端前端实际发什么、非法输入现在是什么结果——**SQLite 与真 PG 各跑一遍**。
+  取证结论（2026-09-24）：
+  - **对账是写入口，且界面可达**：`POST /billing/reconciliation/run?date=2026-9-1` 201，
+    与 `2026-09-01` 并排出现**同一天的第二个对账批次**（`strptime` 不要求补零，唯一约束按字符串判重）；
+    对账页那个输入框是自由文本，手敲 `2026-9-1` 再自然不过。
+  - **三个 spd 端点 6 个参数在真 PG 上是 500**（`case-reports` / `call-tasks` / `referrals-stats/closure`
+    把参数拼成 `f"{x} 00:00:00"` 去比 DateTime 列，`abc` / `2026-02-31` → `InvalidDatetimeFormat` /
+    `DatetimeFieldOverflow`）；**SQLite 上同样的请求是 200 空集**——正是"别把 SQLite 绿了当成 PG 也对"。
+  - 其余多是只读筛选，非法值 200 返回空集或错集；三端前端只有对账日期、死亡卡导出起止、寻医起始日三处会发，
+    且都只在非空时发——**留空语义一律保持**。
+  - 顺带量出**第三套日期校验** `resolve_business_date`（41 个参数经它），其 `fromisoformat` 随 Python 3.11
+    放宽，`?start=20260901` 让县域就诊率的县外一侧整段落空（实测）——✅ 已收口到 `check_date`（f702eaf）。
+  - 棘轮判据补全：承认 `resolve_business_date` 是守卫（剔 2 条误报）、数进不带 `date` 字样的
+    `start`/`end`/`since`/`day`（补 4 条漏数），**25 → 27**。
+  按模块一批一个提交：接 `require_date` + 回归（非法 422、合法与留空行为不变）+ 从棘轮划掉 + 重生成 `docs/闸门现状.md`。
 
 ### 🚀 正式上线前（收口中）
 

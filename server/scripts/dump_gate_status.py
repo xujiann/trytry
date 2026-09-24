@@ -41,9 +41,9 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_api_contract_governance as contract
     import test_body_id_org_write_guard as bodyid
     import test_clock as clock
+    import test_date_query_params as datequery
     import test_list_pagination_ratchet as pagination
     import test_orphan_endpoints as orphan
-    import test_secondment_end_date_guard as datequery
     import test_stage14_concurrency as concurrency
     import test_stage15_horizontal as horizontal
     import test_unscopable_patient_reads as unscopable
@@ -90,8 +90,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(bodyid.EXEMPT), "tests/test_body_id_org_write_guard.py"),
         ("横向越权（写侧）", "角色门只允许全域角色（非可越权入口）",
          len(bodyid.GLOBAL_ROLE_ONLY), "tests/test_body_id_org_write_guard.py"),
-        ("日期入参", "未经 require_date 的日期查询参数", len(datequery.KNOWN_BARE_DATE_PARAMS),
-         "tests/test_secondment_end_date_guard.py"),
+        ("日期入参", "未经 require_date / resolve_business_date 的日期查询参数",
+         len(datequery.KNOWN_BARE_DATE_PARAMS), "tests/test_date_query_params.py"),
         ("功能完善", "该有界面却没有的端点（孤儿）", len(orphan.KNOWN_ORPHANS),
          "tests/test_orphan_endpoints.py"),
         ("功能完善", "按设计不需要界面的豁免路径", len(orphan.EXEMPT_PATHS),

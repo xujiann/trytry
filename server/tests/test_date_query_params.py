@@ -19,6 +19,8 @@ body 字段走 `DateStr` / `OptionalDateStr`，查询参数走 `deps.require_dat
 """
 from __future__ import annotations
 
+import ast
+import pathlib
 from datetime import date
 
 import pytest
@@ -104,3 +106,187 @@ def test_县域就诊率的分子分母用同一个日期窗口(client, admin):
     assert client.get(
         "/api/analytics/patient-flow", params={"start": "20260901"}, headers=admin
     ).status_code == 422
+
+
+# ---------------------------------------------------------------- 三、棘轮：日期查询参数只许走真源
+#
+# 自 `test_secondment_end_date_guard.py` 迁来（ADR-0024 第一步立的那条），并把判据
+# 补全两处——迁移当天两处都量过：
+#
+# 1. **承认 `resolve_business_date` 是守卫**。它落到同一个 `check_date`（本文件第一节），
+#    原判据只认 `require_date`，于是 `appointments.find_doctors` / `resources.match_slots`
+#    的 `from_date` 被算成"裸 str"——它们其实一直有校验（误报 2 条）。
+# 2. **不带 `date` 字样的日期参数也数进来**。原判据只看名字里有没有 `date`，
+#    `access_logs.list_access_logs` 的 `start`/`end`、`spd.care.list_measurements`
+#    的 `since`、`spd.followup.health_calendar` 的 `day` 都在分母之外（漏数 4 条）。
+#    其中 `start`/`end` 与 `since` 拼成 `f"{x} 00:00:00"` 去比 DateTime 列——
+#    与 spd 那三个端点同形状，真 PG 上非法值是 500。
+#
+# 净变化 25 → 27：不是新增欠账，是把原来没数到的数进来、把数错的剔出去。
+
+#: 判据认的日期参数：名字含 `date`，或是下面这些约定俗成的日期参数名。
+#: **按名字推导有盲区**——叫 `at` / `when` 的日期参数看不见；这里宁可写明，不假装全覆盖。
+DATE_PARAM_NAMES = frozenset({"today", "start", "end", "since", "until", "day"})
+
+#: 两个都落到 `datetypes.check_date`，参数经过其一即算守住。
+GUARDS = frozenset({"require_date", "resolve_business_date"})
+
+#: 还留在裸 `str`、未经上面守卫的日期查询参数（P1-58）。**只许变少。**
+KNOWN_BARE_DATE_PARAMS: set[str] = {
+    "routers/access_logs.py::list_access_logs::end",
+    "routers/access_logs.py::list_access_logs::start",
+    "routers/admin_mgmt.py::list_rosters::duty_date",
+    "routers/appointments.py::list_slots::slot_date",
+    "routers/billing.py::list_reconciliation::date",
+    "routers/billing.py::run_reconciliation::date",
+    "routers/certs.py::export_death_report_cards_csv::date_from",
+    "routers/certs.py::export_death_report_cards_csv::date_to",
+    "routers/clinical_docs.py::list_handovers::handover_date",
+    "routers/medwaste.py::handler_stats::end_date",
+    "routers/medwaste.py::handler_stats::start_date",
+    "routers/portal.py::portal_slots::slot_date",
+    "routers/surgery.py::list_schedules::scheduled_date",
+    "spd/routers/care.py::list_case_reports::date_from",
+    "spd/routers/care.py::list_case_reports::date_to",
+    "spd/routers/care.py::list_measurements::since",
+    "spd/routers/care.py::list_revisits::date_from",
+    "spd/routers/care.py::list_revisits::date_to",
+    "spd/routers/followup.py::followup_stats::date_from",
+    "spd/routers/followup.py::followup_stats::date_to",
+    "spd/routers/followup.py::health_calendar::day",
+    "spd/routers/followup.py::list_call_tasks::date_from",
+    "spd/routers/followup.py::list_call_tasks::date_to",
+    "spd/routers/followup.py::list_followup_records::date_from",
+    "spd/routers/followup.py::list_followup_records::date_to",
+    "spd/routers/referral.py::closure_rate::date_from",
+    "spd/routers/referral.py::closure_rate::date_to",
+}
+
+SERVER_DIR = pathlib.Path(__file__).resolve().parents[1]
+APP_DIR = SERVER_DIR / "app"
+_HTTP_VERBS = ("get", "post", "put", "patch", "delete")
+
+
+def _route_functions():
+    for base in (APP_DIR / "routers", APP_DIR / "spd" / "routers"):
+        for path in sorted(base.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if any(
+                    isinstance(d, ast.Call)
+                    and isinstance(d.func, ast.Attribute)
+                    and d.func.attr in _HTTP_VERBS
+                    for d in node.decorator_list
+                ):
+                    yield path, node
+
+
+def _guarded_names(func) -> set[str]:
+    """函数体里经 `require_date(<名字>, ...)` / `resolve_business_date(<名字>, ...)` 的参数名。"""
+    names = set()
+    for sub in ast.walk(func):
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in GUARDS:
+            names.update(a.id for a in sub.args if isinstance(a, ast.Name))
+    return names
+
+
+def _plain_annotation(annotation) -> str:
+    """`Annotated[str | None, Query()]` 取出 `str | None`——FastAPI 的常见写法，别让它绕过判据。"""
+    if (
+        isinstance(annotation, ast.Subscript)
+        and ast.unparse(annotation.value) in ("Annotated", "typing.Annotated")
+        and isinstance(annotation.slice, ast.Tuple)
+    ):
+        annotation = annotation.slice.elts[0]
+    return ast.unparse(annotation)
+
+
+def _date_params(func):
+    for arg in list(func.args.args) + list(func.args.kwonlyargs):
+        if arg.annotation is None:
+            continue
+        if _plain_annotation(arg.annotation) not in ("str", "str | None"):
+            continue
+        if "date" in arg.arg or arg.arg in DATE_PARAM_NAMES:
+            yield arg.arg
+
+
+def _scan() -> tuple[set[str], set[str]]:
+    """(全部日期查询参数, 其中未经守卫的)。"""
+    every, bare = set(), set()
+    for path, func in _route_functions():
+        guarded = _guarded_names(func)
+        rel = path.relative_to(APP_DIR).as_posix()
+        for name in _date_params(func):
+            key = f"{rel}::{func.name}::{name}"
+            every.add(key)
+            if name not in guarded:
+                bare.add(key)
+    return every, bare
+
+
+def _unguarded_date_params() -> set[str]:
+    return _scan()[1]
+
+
+def test_覆盖面自证():
+    funcs = list(_route_functions())
+    every, bare = _scan()
+    print(
+        f"\n[日期查询参数棘轮] 扫描 {len(funcs)} 个路由函数；日期查询参数 {len(every)} 处，"
+        f"其中未经 require_date / resolve_business_date 的 {len(bare)} 处"
+    )
+    assert len(funcs) >= 500, f"只数到 {len(funcs)} 个路由函数，扫描面可能不对"
+    # 补全的两处各自真的生效：不带 date 字样的参数数到了、经 resolve_business_date 的算守住了
+    for entry in (
+        "routers/users.py::export_audit_logs::until",
+        "routers/analytics.py::patient_flow::start",
+        "routers/appointments.py::find_doctors::from_date",
+    ):
+        assert entry in every, f"判据没数到 {entry}"
+        assert entry not in bare, f"{entry} 经 resolve_business_date 校验，不该算裸 str"
+    assert sum(1 for e in every if e.endswith("::today")) >= 30, "today 参数应被数进分母"
+
+
+def test_判据看得穿Annotated写法():
+    tree = ast.parse(
+        "def f(a: Annotated[str | None, Query()] = None, b: Annotated[int, Query()] = 0,"
+        " c_date: Annotated[str, Query()] = ''): pass"
+    )
+    assert list(_date_params(tree.body[0])) == ["c_date"]
+
+
+def test_不得新增裸日期查询参数():
+    new = sorted(_unguarded_date_params() - KNOWN_BARE_DATE_PARAMS)
+    assert new == [], (
+        "以下日期查询参数没走 deps.require_date——裸 `str` 只是个字符串，"
+        "`2026-02-31` / `完全不是日期` 会原样入库或进入筛选条件"
+        "（拼成时间戳去比 DateTime 列时，真 PG 上就是 500）：\n  "
+        + "\n  ".join(new)
+        + "\n\nbody 字段用 datetypes.DateStr / OptionalDateStr，查询参数用 deps.require_date"
+        "（留空表示不筛选的，写成 `if x: x = require_date(x, field=\"x\")`）。"
+    )
+
+
+def test_名单只许变少():
+    """接通一个就从名单里划掉；不划掉也红（否则名单会永远停在今天的数字）。"""
+    stale = sorted(KNOWN_BARE_DATE_PARAMS - _unguarded_date_params())
+    assert stale == [], (
+        "这些已经走上 require_date（或已不存在）了，请从 KNOWN_BARE_DATE_PARAMS 划掉：\n  "
+        + "\n  ".join(stale)
+    )
+
+
+def test_两条派驻结束端点已经不在名单里():
+    """ADR-0024 第一步修的就是这两条——它们**必须**已经脱离欠账，否则那批用例在空转。"""
+    unguarded = _unguarded_date_params()
+    for entry in (
+        "routers/admin_mgmt.py::end_secondment::end_date",
+        "routers/staffing.py::end_secondment::end_date",
+    ):
+        assert entry not in unguarded, entry
+        assert entry not in KNOWN_BARE_DATE_PARAMS, entry

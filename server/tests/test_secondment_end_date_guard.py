@@ -21,18 +21,13 @@
 
 月度那头有 `datetypes.PeriodStr`（body）+ `deps.require_month`（查询参数）一对，
 并有 `test_periodstr_single_source.py` 盯着；日期这头一直**只有 body 那一半**。
-现在补上了 `deps.require_date`，本文件末尾那条棘轮按「日期查询参数是否经过
-`require_date`」推导欠账，名单只许变少（P1-58）。
+现在补上了 `deps.require_date`，并立了一条按「日期查询参数是否经过守卫」推导欠账的
+棘轮，名单只许变少（P1-58）。那条棘轮起初写在本文件末尾，P1-58 开工时迁到了
+`test_date_query_params.py`——它管的是全平台的日期查询参数，不只是派驻。
 """
 from __future__ import annotations
 
-import ast
-import pathlib
-
 import pytest
-
-SERVER_DIR = pathlib.Path(__file__).resolve().parents[1]
-APP_DIR = SERVER_DIR / "app"
 
 
 @pytest.fixture(scope="module")
@@ -176,127 +171,3 @@ def test_非法日期再也进不了下沉指标(client, admin, sec_base):
     after = client.get("/api/staffing/dispatch-stats", headers=admin).json()["invalid_date_records"]
     assert after == before
 
-
-# ---------------------------------------------------------------- 四、棘轮：只许变少
-
-
-#: 还留在裸 `str`、未经 `require_date` 的日期查询参数（P1-58）。**只许变少。**
-#: 判据是推导出来的（下面 `_unguarded_date_params` 扫路由函数签名），不是手工清单：
-#: 新增一个不走 `require_date` 的日期查询参数会让 `test_不得新增裸日期查询参数` 变红。
-#: 这 25 处未逐条判定过——多数是只读筛选（危害远小于本案那两条**写进日期列**的），
-#: `billing.run_reconciliation` 则是就地 `strptime` + 422 的第三种写法。
-KNOWN_BARE_DATE_PARAMS: set[str] = {
-    "routers/admin_mgmt.py::list_rosters::duty_date",
-    "routers/appointments.py::find_doctors::from_date",
-    "routers/appointments.py::list_slots::slot_date",
-    "routers/billing.py::list_reconciliation::date",
-    "routers/billing.py::run_reconciliation::date",
-    "routers/certs.py::export_death_report_cards_csv::date_from",
-    "routers/certs.py::export_death_report_cards_csv::date_to",
-    "routers/clinical_docs.py::list_handovers::handover_date",
-    "routers/medwaste.py::handler_stats::end_date",
-    "routers/medwaste.py::handler_stats::start_date",
-    "routers/portal.py::portal_slots::slot_date",
-    "routers/resources.py::match_slots::from_date",
-    "routers/surgery.py::list_schedules::scheduled_date",
-    "spd/routers/care.py::list_case_reports::date_from",
-    "spd/routers/care.py::list_case_reports::date_to",
-    "spd/routers/care.py::list_revisits::date_from",
-    "spd/routers/care.py::list_revisits::date_to",
-    "spd/routers/followup.py::followup_stats::date_from",
-    "spd/routers/followup.py::followup_stats::date_to",
-    "spd/routers/followup.py::list_call_tasks::date_from",
-    "spd/routers/followup.py::list_call_tasks::date_to",
-    "spd/routers/followup.py::list_followup_records::date_from",
-    "spd/routers/followup.py::list_followup_records::date_to",
-    "spd/routers/referral.py::closure_rate::date_from",
-    "spd/routers/referral.py::closure_rate::date_to",
-}
-
-_HTTP_VERBS = ("get", "post", "put", "patch", "delete")
-
-
-def _route_functions():
-    for base in (APP_DIR / "routers", APP_DIR / "spd" / "routers"):
-        for path in sorted(base.rglob("*.py")):
-            if "__pycache__" in path.parts:
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                if any(
-                    isinstance(d, ast.Call)
-                    and isinstance(d.func, ast.Attribute)
-                    and d.func.attr in _HTTP_VERBS
-                    for d in node.decorator_list
-                ):
-                    yield path, node
-
-
-def _guarded_names(func) -> set[str]:
-    """函数体里 `require_date(<名字>, ...)` 保护过的参数名。"""
-    names = set()
-    for sub in ast.walk(func):
-        if (
-            isinstance(sub, ast.Call)
-            and isinstance(sub.func, ast.Name)
-            and sub.func.id == "require_date"
-        ):
-            names.update(a.id for a in sub.args if isinstance(a, ast.Name))
-    return names
-
-
-def _unguarded_date_params() -> set[str]:
-    out = set()
-    for path, func in _route_functions():
-        guarded = _guarded_names(func)
-        for arg in list(func.args.args) + list(func.args.kwonlyargs):
-            if "date" not in arg.arg or arg.annotation is None:
-                continue
-            if ast.unparse(arg.annotation) not in ("str", "str | None"):
-                continue
-            if arg.arg in guarded:
-                continue
-            rel = path.relative_to(APP_DIR).as_posix()
-            out.add(f"{rel}::{func.name}::{arg.arg}")
-    return out
-
-
-def test_覆盖面自证():
-    funcs = list(_route_functions())
-    print(
-        f"\n[日期查询参数棘轮] 扫描 {len(funcs)} 个路由函数；"
-        f"未经 require_date 的日期参数 {len(_unguarded_date_params())} 处"
-    )
-    assert len(funcs) >= 500, f"只数到 {len(funcs)} 个路由函数，扫描面可能不对"
-
-
-def test_不得新增裸日期查询参数():
-    new = sorted(_unguarded_date_params() - KNOWN_BARE_DATE_PARAMS)
-    assert new == [], (
-        "以下日期查询参数没走 deps.require_date——裸 `str` 只是个字符串，"
-        "`2026-02-31` / `完全不是日期` 会原样入库或进入筛选条件：\n  "
-        + "\n  ".join(new)
-        + "\n\nbody 字段用 datetypes.DateStr / OptionalDateStr，查询参数用 deps.require_date。"
-    )
-
-
-def test_名单只许变少():
-    """接通一个就从名单里划掉；不划掉也红（否则名单会永远停在今天的数字）。"""
-    stale = sorted(KNOWN_BARE_DATE_PARAMS - _unguarded_date_params())
-    assert stale == [], (
-        "这些已经走上 require_date（或已不存在）了，请从 KNOWN_BARE_DATE_PARAMS 划掉：\n  "
-        + "\n  ".join(stale)
-    )
-
-
-def test_两条派驻结束端点已经不在名单里():
-    """本批修的就是这两条——它们**必须**已经脱离欠账，否则这份用例在空转。"""
-    unguarded = _unguarded_date_params()
-    for entry in (
-        "routers/admin_mgmt.py::end_secondment::end_date",
-        "routers/staffing.py::end_secondment::end_date",
-    ):
-        assert entry not in unguarded, entry
-        assert entry not in KNOWN_BARE_DATE_PARAMS, entry
