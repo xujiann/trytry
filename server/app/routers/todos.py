@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import DrugStock, ExamReport, ExamRequest, Prescription, User
+from ..visibility import visible_org_ids
 
 router = APIRouter(prefix="/api/todos", tags=["待办中心"])
 
@@ -124,17 +125,24 @@ def _critical_reports(db: Session) -> dict:
     }
 
 
-def _unacknowledged_critical(db: Session) -> dict:
-    """医师待办：待确认接收的危急值（notified，含存量空串）。"""
-    rows = (
+def _unacknowledged_critical(db: Session, user: User) -> dict:
+    """医师待办：待确认接收的危急值（notified，含存量空串）。
+
+    只列**本机构申请单**上的（P0-40）：危急值只通知申请机构的医生（`exams.submit_report` 的
+    `notify_staff(org_id=申请机构)`），确认接收也按申请单的患者判可见性（P0-27）——
+    别家的危急值确认不了，列进待办只会把别家患者的检验结论推到每个医生的铃铛里。
+    """
+    query = (
         db.query(ExamReport)
+        .join(ExamRequest, ExamRequest.id == ExamReport.request_id)
         .filter(
             ExamReport.critical.is_(True), ExamReport.critical_status.in_(["notified", ""])
         )
-        .order_by(ExamReport.id.desc())
-        .limit(100)
-        .all()
     )
+    orgs = visible_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(ExamRequest.from_org_id.in_(orgs))
+    rows = query.order_by(ExamReport.id.desc()).limit(100).all()
     return {
         "type": "critical_ack",
         "title": "待确认危急值",
@@ -148,7 +156,7 @@ def my_todos(db: Session = Depends(get_db), user: User = Depends(get_current_use
     if user.role == "pharmacist":
         items = [_pending_prescriptions(db)]
     elif user.role == "doctor":
-        items = [_pending_exams(db), _unacknowledged_critical(db)]
+        items = [_pending_exams(db), _unacknowledged_critical(db, user)]
     elif user.role in ("admin", "director"):
         items = [
             _pending_prescriptions(db),
