@@ -8,7 +8,7 @@
 （提交即评分，缺陷清单实时返回；qc-summary 按机构/医师统计甲乙丙分布）。
 """
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -1069,12 +1069,11 @@ def clinical_indicators(
     """
     start_dt = end_dt = None
     if period:
-        try:
-            start = datetime.strptime(period + "-01", "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(status_code=422, detail="period 须为 YYYY-MM 格式") from None
-        start_dt = start
-        end_dt = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        # 走 `deps.month_bounds`（P1-62）：此前这里是它的第五份逐字副本，且右端点算在
+        # `try` 外面——`period=9999-12` 溢出到一万年，500。文案与宽松处（`2026-1`）不变。
+        start, end = month_bounds(period)
+        start_dt = datetime.combine(start, datetime.min.time())
+        end_dt = datetime.combine(end, datetime.min.time())
 
     # ---- 入出院诊断符合率 + 治愈好转率 + 死亡率（数据源：病案首页）----
     summaries = db.query(CaseSummary, Admission).join(

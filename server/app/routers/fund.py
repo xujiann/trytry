@@ -16,7 +16,7 @@
 
 整个模块可不启用：不建池子的县完全感觉不到它存在，既有结算流程不受影响。
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from typing import Any
 
@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from ..datetypes import OptionalDateStr, PeriodStr
 from ..concurrency import insert_or_conflict, upsert_unique
 from ..database import get_db
-from ..deps import get_current_user, require_roles, resolve_org_scope
+from ..deps import get_current_user, month_bounds, require_roles, resolve_org_scope
 from ..formula import FormulaError, evaluate, validate
 from ..models import (
     FundDistribution,
@@ -349,8 +349,11 @@ def _collect_expense(db: Session, pool: FundPool, period: str) -> float:
 
     范围跟着池子走：绑了分组的池子只算该分组内机构，没绑的算全域。
     """
-    start = datetime.strptime(period + "-01", "%Y-%m-%d")
-    end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    # 走 `deps.month_bounds`（P1-62）：此前是它的第六份副本，`9999-12` 能过 PeriodStr
+    # （这个月存在），右端点却溢出到一万年——预结 500。
+    first, after = month_bounds(period)
+    start = datetime.combine(first, datetime.min.time())
+    end = datetime.combine(after, datetime.min.time())
     query = db.query(func.coalesce(func.sum(Settlement.insurance_pay), 0.0)).filter(
         Settlement.created_at >= start, Settlement.created_at < end
     )

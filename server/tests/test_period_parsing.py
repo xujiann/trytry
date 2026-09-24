@@ -94,3 +94,62 @@ def test_两个解析器分工不同_月度那个不认年度():
     with pytest.raises(HTTPException):
         month_bounds("2026")
     assert period_bounds("2026")[0] == "2026"
+
+
+
+# ------------------------------------------------------------ 副本不许再长出来（P1-62）
+def _month_range_copies() -> list[str]:
+    """`<期间> + "-01"` 这种拼法就是在手写月度解析——只许出现在两个真源里。
+
+    模块头说"四份副本合成两份"，2026-09-24 又找出第五、第六份：`quality` 的医疗质量
+    指标与 `fund` 的周期预结，**逐字抄的是修之前那一版**，右端点照样算在 `try` 外面，
+    `9999-12` 两处都是 500（实测）。收回 `month_bounds` 之后，这条守着别再有第七份。
+    """
+    import ast
+    import pathlib
+
+    app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
+    sources = {app_dir / "deps.py", app_dir / "datetypes.py"}
+    out = []
+    for path in sorted(app_dir.rglob("*.py")):
+        if "__pycache__" in path.parts or path in sources:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.BinOp)
+                and isinstance(node.op, ast.Add)
+                and isinstance(node.right, ast.Constant)
+                and node.right.value == "-01"
+            ):
+                out.append(f"{path.relative_to(app_dir)}:{node.lineno}")
+    return out
+
+
+def test_月度区间没有第七份副本():
+    assert _month_range_copies() == [], (
+        "这些位置又在手写月度区间（`period + \"-01\"`）——请用 deps.month_bounds"
+        "（区间）或 datetypes.check_month / deps.require_month（只校验）：\n  "
+        + "\n  ".join(_month_range_copies())
+    )
+
+
+def test_两个收回来的端点_上溢是422不是500(client, admin):
+    rejected = client.get("/api/quality/clinical-indicators", params={"period": "9999-12"},
+                          headers=admin)
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json() == {"detail": "period 须为 YYYY-MM 格式"}
+    # 特征化：原实现宽松的地方不变（`2026-9` 照收）
+    assert client.get("/api/quality/clinical-indicators", params={"period": "2026-9"},
+                      headers=admin).status_code == 200
+
+    pool = client.post("/api/fund/pools", json={"year": 2026, "total_amount": 1000000},
+                       headers=admin)
+    assert pool.status_code == 201, pool.text
+    closed = client.post(f"/api/fund/pools/{pool.json()['id']}/periods",
+                         json={"period": "9999-12"}, headers=admin)
+    assert closed.status_code == 422, closed.text
+    listed = client.get(f"/api/fund/pools/{pool.json()['id']}/periods", headers=admin).json()
+    assert not [p for p in listed if p["period"] == "9999-12"], "被拒之后不该留下预结记录"
+    ok = client.post(f"/api/fund/pools/{pool.json()['id']}/periods",
+                     json={"period": "2026-08"}, headers=admin)
+    assert ok.status_code == 201, ok.text
