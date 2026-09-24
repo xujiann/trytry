@@ -43,11 +43,13 @@ if _PG_URL:
 
 APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
 
-#: 棘轮基线：只许调小（`scripts/dump_gate_status.py` 把它列进闸门现状）。
+#: 基线：只许调小，已清零（`scripts/dump_gate_status.py` 把它列进闸门现状）。
 #: 2026-09-24 实测 197 处（量法见 `unbounded_body_strings`）→ 182（第一批核心诊疗：就诊、入院、转诊、
 #: 传染病报告、接种、满意度，15 个字段）→ 97（第二批诊疗与公卫：schemas 共用请求模型、孕产妇、临床文书、急救、
-#: 处方、检查、医保、证明、慢病、上门、用血、手术、老年、短缺药、会诊、预约、公卫、质控，85 个字段）。
-BASELINE = 97
+#: 处方、检查、医保、证明、慢病、上门、用血、手术、老年、短缺药、会诊、预约、公卫、质控，85 个字段）→ 0（第三批：
+#: 管理侧 20 个文件与慢专病 3 个文件 90 个字段；最后一处是列本身太窄——角色变更留痕的两列 16 装不下
+#: 32 位的自定义角色键，迁移 c3e4f5a6b7d9 扩到 32）。已清零，此后即零基线闸门。
+BASELINE = 0
 
 _FINITE_PATTERN = re.compile(r"\^[^*+{]*\$")
 
@@ -257,3 +259,19 @@ def test_第一批_恰好到上限照常收(client, admin, world, index):
         pytest.skip("入院会占床，恰好到上限那一遍由就诊诊断同一列长代表")
     r = client.post(path, json={**body, field: "长" * limit}, headers=admin)
     assert r.status_code in (200, 201), (path, field, r.status_code, r.text[:200])
+
+
+
+def test_改成长键自定义角色_留痕列装得下(client, admin):
+    """角色变更留痕的两列原先只有 16，自定义角色键最长 32：PG 上改成 / 改离长键角色即 500（迁移 c3e4f5a6b7d9）。"""
+    key = "p191_custom_role_ab"   # 19 位，合法的自定义角色键
+    r = client.post("/api/rbac/roles", json={"key": key, "name": "长键自定义角色"}, headers=admin)
+    assert r.status_code == 201, r.text
+    r = client.post("/api/users", json={"username": "p191_roleuser", "password": "passw0rd1",
+                                        "full_name": "长键角色用户", "role": "operator"}, headers=admin)
+    assert r.status_code == 201, r.text
+    uid = r.json()["id"]
+    r = client.patch(f"/api/users/{uid}/role", json={"role": key}, headers=admin)
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+    r = client.patch(f"/api/users/{uid}/role", json={"role": "operator"}, headers=admin)
+    assert r.status_code == 200, (r.status_code, r.text[:200])

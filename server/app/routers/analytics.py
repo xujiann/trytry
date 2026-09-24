@@ -264,7 +264,7 @@ class OutboundIn(BaseModel):
     external_org_name: str = Field(min_length=1, max_length=128)
     external_org_level: str = Field(default="city", pattern="^(city|province|other)$")
     visit_type: str = Field(default="outpatient", pattern="^(outpatient|inpatient)$")
-    diagnosis_name: str = ""
+    diagnosis_name: str = Field(default="", max_length=256)
     total_amount: float = Field(default=0, ge=0)
     insurance_pay: float = Field(default=0, ge=0)
     referral_id: int | None = None
@@ -651,7 +651,7 @@ class FormulaIn(BaseModel):
     key: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=64)
     expression: str = Field(min_length=1, max_length=512)
-    unit: str = ""
+    unit: str = Field(default="", max_length=16)
     higher_is_better: bool = True
     weight: float = Field(default=0, ge=0, le=100)
 

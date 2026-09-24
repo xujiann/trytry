@@ -895,7 +895,7 @@ class RecordPatchIn(BaseModel):
     status: str | None = Field(default=None, pattern="^(planned|removed)$")
     planned_at: OptionalDateStr | None = None
     executor_id: int | None = None
-    channel: str | None = None
+    channel: str | None = Field(default=None, max_length=16)
 
 
 @router.patch("/followup-records/{record_id}", response_model=FollowupRecordOut,

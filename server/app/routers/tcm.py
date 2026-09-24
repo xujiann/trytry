@@ -212,7 +212,7 @@ _NO_DECOCT_FLOW = {"ordered": "dispensed", "dispensed": "delivering", "deliverin
 class DispenseCreate(BaseModel):
     patient_id: int
     from_org_id: int
-    herbs: str = Field(min_length=1)
+    herbs: str = Field(min_length=1, max_length=1024)
     doses: int = Field(default=1, ge=1)
     decoct: bool = True
 
@@ -277,9 +277,9 @@ def advance_order(order_id: int, db: Session = Depends(get_db)):
 
 class TechniqueCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    category: str = ""
-    indication: str = ""
-    description: str = ""
+    category: str = Field(default="", max_length=64)
+    indication: str = Field(default="", max_length=512)
+    description: str = Field(default="", max_length=1024)
 
 
 class TechniqueOut(TechniqueCreate):
@@ -321,11 +321,11 @@ DOSAGE_FORMS = {
 
 class FormulaCreate(BaseModel):
     code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=128)
     dosage_form: str = Field(default="decoction", pattern="^(pill|powder|paste|granule|decoction)$")
-    composition: str = ""
-    process: str = ""
-    indication: str = ""
+    composition: str = Field(default="", max_length=1024)
+    process: str = Field(default="", max_length=1024)
+    indication: str = Field(default="", max_length=512)
     shelf_life_months: int = Field(default=12, ge=1, le=120)
 
 
@@ -388,7 +388,7 @@ class BatchCreate(BaseModel):
     batch_no: str = Field(min_length=1, max_length=32)
     org_id: int
     quantity: int = Field(ge=1)
-    unit: str = "剂"
+    unit: str = Field(default="剂", max_length=16)
     produced_date: DateStr
     # 不传则按配方有效期（月）自动推算。发放拦过期、效期预警都按字符串比它：
     # `2026/01/01`、`20260101` 在同一年份里比出来是反的，过期批次照样发得出去（P1-61，实测）

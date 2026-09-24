@@ -1056,11 +1056,11 @@ class EnrollUpdate(BaseModel):
     doctor_user_id: int | None = None
     manager_user_id: int | None = None
     village_doctor_id: int | None = None
-    stage: str | None = None
+    stage: str | None = Field(default=None, max_length=32)
     # 与建档同一个取值范围（P2-50）：下游统计按 high / very_high 数高危，写进别的码的人就从高危里消失
     risk_level: str | None = Field(default=None, pattern="^(low|mid|high|very_high)$")
     consent_signed: bool | None = None
-    consent_no: str | None = None
+    consent_no: str | None = Field(default=None, max_length=64)
     service_start: OptionalDateStr | None = None
     service_end: OptionalDateStr | None = None
     habits: dict | None = None

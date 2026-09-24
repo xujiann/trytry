@@ -94,7 +94,7 @@ class RuleIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     domain: str = Field(min_length=1, max_length=24)
     condition: str = Field(min_length=1, max_length=512)
-    message: str = ""
+    message: str = Field(default="", max_length=256)
     severity: str = Field(default="warning", pattern="^(info|warning|error)$")
     deduct_points: int = Field(default=0, ge=0, le=100)
 

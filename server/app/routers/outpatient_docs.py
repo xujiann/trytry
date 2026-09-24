@@ -55,9 +55,9 @@ class TemplateIn(BaseModel):
 
 
 class TemplateUpdate(BaseModel):
-    title: str | None = None
-    body: str | None = None
-    version: str | None = None
+    title: str | None = Field(default=None, max_length=128)
+    body: str | None = Field(default=None, max_length=8192)
+    version: str | None = Field(default=None, max_length=16)
     active: bool | None = None
 
 

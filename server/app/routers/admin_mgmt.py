@@ -49,9 +49,9 @@ router = APIRouter(prefix="/api/mgmt", tags=["综合管理"], dependencies=[Depe
 
 class EmployeeCreate(BaseModel):
     org_id: int
-    name: str = Field(min_length=1)
-    title: str = ""
-    position: str = ""
+    name: str = Field(min_length=1, max_length=64)
+    title: str = Field(default="", max_length=32)
+    position: str = Field(default="", max_length=64)
 
 
 class EmployeeOut(EmployeeCreate):
@@ -218,7 +218,7 @@ class FinanceCreate(BaseModel):
     org_id: int
     period: PeriodStr
     category: str = Field(pattern="^(income|expense)$")
-    item: str = ""
+    item: str = Field(default="", max_length=128)
     amount: float = Field(gt=0)
 
 
@@ -312,8 +312,8 @@ def finance_summary(
 
 class AssetCreate(BaseModel):
     org_id: int
-    code: str = Field(min_length=1)
-    name: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
     category: str = Field(default="office", pattern="^(equipment|office)$")
     quantity: int = Field(default=1, ge=1)
 
@@ -416,10 +416,10 @@ def scrap_asset(
 
 
 class DocCreate(BaseModel):
-    title: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=256)
     doc_type: str = Field(default="notice", pattern="^(notice|policy|minutes)$")
-    body: str = ""
-    issuer: str = ""
+    body: str = Field(default="", max_length=4096)
+    issuer: str = Field(default="", max_length=64)
 
 
 class DocOut(DocCreate):
@@ -465,10 +465,10 @@ _CENTERS = {"imaging", "ecg", "lab", "pathology"}
 
 
 class RosterCreate(BaseModel):
-    center_type: str
+    center_type: str = Field(max_length=16)
     duty_date: DateStr
-    shift: str = "全天"
-    doctor_name: str = Field(min_length=1)
+    shift: str = Field(default="全天", max_length=16)
+    doctor_name: str = Field(min_length=1, max_length=64)
 
 
 class RosterOut(RosterCreate):
@@ -503,10 +503,10 @@ def list_rosters(center_type: str | None = None, duty_date: str | None = None, d
 
 
 class QcCreate(BaseModel):
-    center_type: str
-    item: str = Field(min_length=1)
+    center_type: str = Field(max_length=16)
+    item: str = Field(min_length=1, max_length=128)
     result: str = Field(pattern="^(pass|fail)$")
-    note: str = ""
+    note: str = Field(default="", max_length=512)
     record_date: OptionalDateStr = ""
 
 
@@ -549,8 +549,8 @@ def list_qc(center_type: str | None = None, result: str | None = None, db: Sessi
 
 class DeptCreate(BaseModel):
     org_id: int
-    code: str = Field(min_length=1)
-    name: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=64)
     category: str = Field(default="clinical", pattern="^(clinical|medtech|admin)$")
 
 
@@ -628,7 +628,7 @@ def assign_department(employee_id: int, dept_id: int, db: Session = Depends(get_
 class ChangeCreate(BaseModel):
     change_type: str = Field(pattern="^(hire|regularize|transfer|leave)$")
     to_org_id: int | None = None
-    detail: str = ""
+    detail: str = Field(default="", max_length=256)
     effective_date: OptionalDateStr = ""
 
 
@@ -717,7 +717,7 @@ def list_employee_changes(
 
 class ContractCreate(BaseModel):
     employee_id: int
-    contract_no: str = Field(min_length=1)
+    contract_no: str = Field(min_length=1, max_length=64)
     start_date: DateStr
     end_date: DateStr
 
@@ -999,7 +999,7 @@ def budget_execution(
 class MovementCreate(BaseModel):
     movement_type: str = Field(pattern="^(inbound|issue|return|scrap)$")
     quantity: int = Field(gt=0)
-    note: str = ""
+    note: str = Field(default="", max_length=256)
 
 
 class MovementReceiptOut(BaseModel):

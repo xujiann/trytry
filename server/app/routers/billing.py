@@ -95,7 +95,7 @@ class ChargeItemCreate(BaseModel):
 
 
 class ChargeItemUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=128)
     category: str | None = Field(default=None, pattern="^(drug|exam|treatment|bed|other)$")
     price: float | None = Field(default=None, gt=0)
     active: bool | None = None

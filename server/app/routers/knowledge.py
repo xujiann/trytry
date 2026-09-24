@@ -25,8 +25,8 @@ CATEGORIES = {
 
 class EntryCreate(BaseModel):
     category: str = Field(pattern="^(drug_policy|clinical_guideline|referral|regulation|tcm_health)$")
-    title: str = Field(min_length=1)
-    body: str = ""
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=4096)
     # 是否过期按字符串比 `expire_date < 今天`：`2026/01/01`、`20260101` 在同一年份里比出来是反的，
     # 过期九个月的药品政策照样当"有效"检索出来（P1-61，实测）
     expire_date: OptionalDateStr = ""
@@ -78,7 +78,7 @@ def create_entry(
 
 
 class EntryUpdate(BaseModel):
-    body: str | None = None
+    body: str | None = Field(default=None, max_length=4096)
     # None = 不改；空串 = 改为长期有效；非空走同一个日历校验（续期那个 prompt 是自由文本）
     expire_date: OptionalDateStr | None = None
     active: bool | None = None

@@ -46,11 +46,11 @@ class PurchaseIn(BaseModel):
     org_id: int
     dept_id: int | None = None
     item_name: str = Field(min_length=1, max_length=128)
-    spec: str = ""
-    unit: str = "件"
+    spec: str = Field(default="", max_length=64)
+    unit: str = Field(default="件", max_length=16)
     quantity: int = Field(default=1, gt=0)
     estimated_price: float = Field(default=0, ge=0)
-    reason: str = ""
+    reason: str = Field(default="", max_length=512)
 
 
 def _purchase_out(p: MaterialPurchase) -> dict:
@@ -325,10 +325,10 @@ def receive_purchase(
 class ConsumableIn(BaseModel):
     barcode: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
-    spec: str = ""
+    spec: str = Field(default="", max_length=64)
     org_id: int
     supplier_id: int | None = None
-    batch_no: str = ""
+    batch_no: str = Field(default="", max_length=64)
     expire_date: OptionalDateStr = ""
     unit_price: float = Field(default=0, ge=0)
 

@@ -247,8 +247,9 @@ class RoleChangeLog(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    old_role: Mapped[str] = mapped_column(String(16))
-    new_role: Mapped[str] = mapped_column(String(16))
+    # 与 users.role / 自定义角色键同宽（P1-91）：16 装不下 17～32 的自定义角色键，PG 上改角色即 500
+    old_role: Mapped[str] = mapped_column(String(32))
+    new_role: Mapped[str] = mapped_column(String(32))
     changed_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

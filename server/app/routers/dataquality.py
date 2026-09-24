@@ -424,8 +424,8 @@ def summary(db: Session = Depends(get_db)):
 
 class RuleCreate(BaseModel):
     code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1)
-    target_table: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=128)
+    target_table: str = Field(min_length=1, max_length=64)
     rule_type: str = Field(pattern="^(required|range|enum|cross_ref|logic)$")
     config: dict = Field(default_factory=dict)
     severity: str = Field(default="error", pattern="^(error|warn)$")
@@ -433,7 +433,7 @@ class RuleCreate(BaseModel):
 
 
 class RuleUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=128)
     config: dict | None = None
     severity: str | None = Field(default=None, pattern="^(error|warn)$")
     active: bool | None = None

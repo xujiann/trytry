@@ -96,7 +96,7 @@ class CostItemCreate(BaseModel):
     batch_id: int
     cost_type: str = Field(pattern="^(labor|material|energy|equipment|other)$")
     amount: float = Field(gt=0)
-    note: str = ""
+    note: str = Field(default="", max_length=256)
 
 
 class CostItemOut(BaseModel):
@@ -259,7 +259,7 @@ class CssdRequestFulfilledOut(BaseModel):
 
 class CssdReqCreate(BaseModel):
     org_id: int
-    item_name: str = Field(min_length=1)
+    item_name: str = Field(min_length=1, max_length=128)
     quantity: int = Field(default=1, ge=1)
 
 

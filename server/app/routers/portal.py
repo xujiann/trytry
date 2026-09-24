@@ -2233,7 +2233,7 @@ class MySurveyIn(BaseModel):
     target_type: str = Field(pattern="^(contract|encounter|consultation)$")
     target_id: int = 0
     score: int = Field(ge=1, le=5)
-    comment: str = ""
+    comment: str = Field(default="", max_length=512)
 
 
 class SurveySubmittedOut(BaseModel):
@@ -2319,7 +2319,7 @@ class PortalSurveyCreate(BaseModel):
     target_type: str = Field(pattern="^(contract|encounter|consultation)$")
     target_id: int = 0
     score: int = Field(ge=1, le=5)
-    comment: str = ""
+    comment: str = Field(default="", max_length=512)
 
 
 @router.post("/surveys", response_model=SurveySubmittedOut, status_code=201,

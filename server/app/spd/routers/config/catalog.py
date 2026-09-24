@@ -162,10 +162,10 @@ class ProgramIn(BaseModel):
 
 
 class ProgramUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=64)
     lead_org_id: int | None = None
-    lead_dept: str | None = None
-    description: str | None = None
+    lead_dept: str | None = Field(default=None, max_length=64)
+    description: str | None = Field(default=None, max_length=512)
     include_rules: list[dict] | None = None
     exclude_rules: list[dict] | None = None
     stages: list[dict] | None = None

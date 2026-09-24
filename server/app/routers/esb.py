@@ -84,7 +84,7 @@ class EndpointCreate(BaseModel):
 
 
 class EndpointUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=128)
     active: bool | None = None
     rate_limit_per_min: int | None = Field(default=None, ge=1, le=100000)
     endpoint_url: str | None = Field(default=None, max_length=512)
@@ -625,7 +625,7 @@ class FlowCreate(BaseModel):
 
 
 class FlowUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=128)
     steps: list[dict] | None = None
     active: bool | None = None
 

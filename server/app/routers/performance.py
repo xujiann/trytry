@@ -437,11 +437,11 @@ TASK_STATUS = {
 
 class TaskCreate(BaseModel):
     org_id: int
-    problem: str = Field(min_length=1)
-    owner_name: str = Field(min_length=1)
+    problem: str = Field(min_length=1, max_length=512)
+    owner_name: str = Field(min_length=1, max_length=64)
     due_date: DateStr
-    indicator_key: str = ""
-    measures: str = ""
+    indicator_key: str = Field(default="", max_length=32)
+    measures: str = Field(default="", max_length=1024)
 
 
 def _task_out(t: ImprovementTask, today: str) -> dict:

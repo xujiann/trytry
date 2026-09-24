@@ -2287,8 +2287,8 @@
 
 - `id` · INTEGER · PK · NOT NULL
 - `user_id` · INTEGER · NOT NULL · index · → users.id
-- `old_role` · VARCHAR(16) · NOT NULL
-- `new_role` · VARCHAR(16) · NOT NULL
+- `old_role` · VARCHAR(32) · NOT NULL
+- `new_role` · VARCHAR(32) · NOT NULL
 - `changed_by` · INTEGER · NOT NULL · → users.id
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_role_change_logs_user_id(user_id)

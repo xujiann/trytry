@@ -231,7 +231,7 @@ class VoucherIn(BaseModel):
     voucher_no: str = Field(min_length=1, max_length=32)
     voucher_date: DateStr
     period: OptionalPeriodStr = ""
-    summary: str = ""
+    summary: str = Field(default="", max_length=256)
     entries: list[EntryIn] = Field(min_length=2)
 
 

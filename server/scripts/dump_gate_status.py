@@ -110,7 +110,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_stage14_concurrency.py"),
         ("引用完整性", "请求体外键原样写库、函数里一眼不看（撞外键被翻成 409 误报 / 500）", bodyfk.BASELINE,
          "tests/test_body_fk_exists.py"),
-        ("引用完整性", "请求体字符串无长度上限写进定长列（PG 上超长即 500，棘轮）", bodystr.BASELINE,
+        ("引用完整性", "请求体字符串无长度上限写进定长列（PG 上超长即 500；197 → 0 已清零）", bodystr.BASELINE,
          "tests/test_body_str_length.py"),
         ("时间口径", "app/ 里绕过 clock.today() 的 date.today()", clock.DATE_TODAY_BASELINE,
          "tests/test_clock.py"),

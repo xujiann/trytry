@@ -393,8 +393,8 @@ class ResourceUpdate(BaseModel):
     quantity: int | None = Field(default=None, ge=0)
     min_quantity: int | None = Field(default=None, ge=0)
     expire_date: OptionalDateStr | None = None
-    contact: str | None = None
-    location: str | None = None
+    contact: str | None = Field(default=None, max_length=64)
+    location: str | None = Field(default=None, max_length=256)
 
 
 def _resource_out(r: EmergencyResource, today: str) -> dict:

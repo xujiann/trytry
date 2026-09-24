@@ -216,7 +216,7 @@ class StartIn(BaseModel):
     definition_key: str
     business_type: str = Field(min_length=1, max_length=32)
     business_id: int = 0
-    title: str = ""
+    title: str = Field(default="", max_length=256)
     org_id: int | None = None
 
 
@@ -289,7 +289,7 @@ def start_instance(
 
 
 class AdvanceIn(BaseModel):
-    comment: str = ""
+    comment: str = Field(default="", max_length=512)
 
 
 def _move_instance(db: Session, instance_id: int, from_node: str, **values: Any) -> bool:

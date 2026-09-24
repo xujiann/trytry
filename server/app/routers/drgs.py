@@ -98,21 +98,21 @@ class DrgGroupCreate(BaseModel):
     code: str = Field(min_length=1, max_length=16)
     name: str = Field(min_length=1, max_length=128)
     base_weight: float = Field(gt=0)
-    keywords: str = ""
-    mdc: str = ""
-    mdc_name: str = ""
-    procedure_keywords: str = ""
+    keywords: str = Field(default="", max_length=256)
+    mdc: str = Field(default="", max_length=8)
+    mdc_name: str = Field(default="", max_length=64)
+    procedure_keywords: str = Field(default="", max_length=256)
     require_procedure: bool = False
     active: bool = True
 
 
 class DrgGroupUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=128)
     base_weight: float | None = Field(default=None, gt=0)
-    keywords: str | None = None
-    mdc: str | None = None
-    mdc_name: str | None = None
-    procedure_keywords: str | None = None
+    keywords: str | None = Field(default=None, max_length=256)
+    mdc: str | None = Field(default=None, max_length=8)
+    mdc_name: str | None = Field(default=None, max_length=64)
+    procedure_keywords: str | None = Field(default=None, max_length=256)
     require_procedure: bool | None = None
     active: bool | None = None
 

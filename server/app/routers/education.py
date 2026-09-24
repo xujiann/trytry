@@ -42,7 +42,7 @@ class CourseCreate(BaseModel):
     title: str = Field(min_length=1, max_length=256)
     course_type: str = Field(default="vod", pattern="^(live|vod)$")
     category: str = Field(default="clinical", pattern="^(clinical|tcm|public_health)$")
-    speaker: str = ""
+    speaker: str = Field(default="", max_length=64)
 
 
 class CourseOut(CourseCreate):
@@ -166,8 +166,8 @@ def my_records(db: Session = Depends(get_db), user: User = Depends(get_current_u
 
 class LiveCreate(BaseModel):
     title: str = Field(min_length=1, max_length=256)
-    speaker: str = ""
-    planned_at: str = ""
+    speaker: str = Field(default="", max_length=64)
+    planned_at: str = Field(default="", max_length=16)
     course_id: int | None = None
 
 
@@ -381,9 +381,9 @@ MATERIAL_TYPES = {"slide": "课件", "video": "视频", "doc": "文档", "link":
 
 
 class MaterialCreate(BaseModel):
-    title: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=256)
     material_type: str = Field(default="slide", pattern="^(slide|video|doc|link)$")
-    url: str = ""
+    url: str = Field(default="", max_length=512)
 
 
 def _material_out(m: CourseMaterial, attachments: int = 0) -> dict:
@@ -490,12 +490,12 @@ def material_stats(db: Session = Depends(get_db)):
 
 
 class PlanCreate(BaseModel):
-    title: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=256)
     org_id: int
     technique_id: int | None = None
     plan_date: DateStr
     capacity: int = Field(default=30, ge=1, le=1000)
-    trainer: str = ""
+    trainer: str = Field(default="", max_length=64)
 
 
 def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
@@ -806,9 +806,9 @@ class HealthArticleOut(BaseModel):
 
 
 class ArticleCreate(BaseModel):
-    title: str = Field(min_length=1)
-    category: str = "general"
-    content: str = ""
+    title: str = Field(min_length=1, max_length=256)
+    category: str = Field(default="general", max_length=32)
+    content: str = Field(default="", max_length=4096)
 
 
 @router.post(

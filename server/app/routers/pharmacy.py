@@ -773,9 +773,9 @@ def batch_dispense_trace(batch_id: int, db: Session = Depends(get_db)):
 
 
 class SupplierCreate(BaseModel):
-    name: str = Field(min_length=1)
-    contact: str = ""
-    license_no: str = ""
+    name: str = Field(min_length=1, max_length=128)
+    contact: str = Field(default="", max_length=64)
+    license_no: str = Field(default="", max_length=64)
 
 
 class SupplierCreatedOut(BaseModel):
@@ -827,10 +827,10 @@ class PurchaseCreate(BaseModel):
     org_id: int
     supplier_id: int
     item_type: str = Field(default="drug", pattern="^(drug|material)$")
-    item_code: str = Field(min_length=1)
-    item_name: str = Field(min_length=1)
+    item_code: str = Field(min_length=1, max_length=64)
+    item_name: str = Field(min_length=1, max_length=128)
     quantity: int = Field(gt=0)
-    note: str = ""
+    note: str = Field(default="", max_length=512)
 
 
 class PurchaseOrderActionOut(BaseModel):
@@ -1008,9 +1008,9 @@ def list_purchases(
 
 class StockTakeCreate(BaseModel):
     org_id: int
-    drug_code: str = Field(min_length=1)
+    drug_code: str = Field(min_length=1, max_length=64)
     actual_qty: int = Field(ge=0)
-    note: str = ""
+    note: str = Field(default="", max_length=256)
 
 
 class StockTakeCreatedOut(BaseModel):

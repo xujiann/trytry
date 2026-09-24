@@ -65,7 +65,7 @@ def _check_role_exists(db: Session, role: str) -> None:
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str
-    full_name: str = ""
+    full_name: str = Field(default="", max_length=64)
     # 阶段十一：角色不再写死正则——自定义角色也要能建号。
     # 合法性改为对 `roles` 表现查（见 _check_role_exists），非法角色仍 422。
     role: str = Field(default="operator", min_length=2, max_length=32)
