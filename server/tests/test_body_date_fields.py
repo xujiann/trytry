@@ -20,6 +20,7 @@ CASES = [
      {"patient_id": 999999, "external_org_name": "市一院"}, "visit_date", False),
     ("/api/followups",
      {"patient_id": 999999, "org_id": 999999, "category": "chronic"}, "due_date", False),
+    ("/api/inpatient/handovers", {"ward_id": 999999, "shift": "day"}, "handover_date", False),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。

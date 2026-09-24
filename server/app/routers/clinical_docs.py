@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..database import get_db
+from ..datetypes import DateStr
 from ..deps import get_current_user, paginate, require_date, require_roles
 from ..models import (
     Admission,
@@ -439,7 +440,7 @@ def list_vitals(
 class HandoverIn(BaseModel):
     ward_id: int
     shift: str = Field(pattern="^(day|evening|night)$")
-    handover_date: str = Field(min_length=10, max_length=10)
+    handover_date: DateStr
     from_staff: str = ""
     to_staff: str = ""
     critical_count: int = Field(default=0, ge=0)

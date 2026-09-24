@@ -148,7 +148,6 @@ def test_真源本身仍在做日历校验():
 KNOWN_BARE_BODY_DATE_FIELDS: set[str] = {
     "routers/admin_mgmt.py::ChangeCreate.effective_date",
     "routers/admin_mgmt.py::QcCreate.record_date",
-    "routers/clinical_docs.py::HandoverIn.handover_date",
     "routers/eldercare.py::AssessmentCreate.assessed_date",
     "routers/homevisits.py::VisitCreate.expect_date",
     "routers/knowledge.py::EntryCreate.expire_date",
