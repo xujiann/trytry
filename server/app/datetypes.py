@@ -118,3 +118,34 @@ def _month_optional(value: object) -> object:
 #: 非空则同样做日历校验。与 `OptionalDateStr` 对称（P1-61：凭证的 `period` 此前是
 #: `max_length=7` 的裸 `str`，对接方传 `"2026/09"` 照收，凭证落进一个没有报表会查的期间）。
 OptionalPeriodStr = Annotated[str, BeforeValidator(_month_optional)]
+
+
+# ---------------------------------------------------------------- 一天之内的时刻 HH:MM
+#
+# 同一个坑的时刻版（P2-46）：手术排班的起止与手术间撮合的时间窗写着 `^\d{2}:\d{2}$`，
+# 只管形状：`25:61` 照过；`\d` 还认全角数字，「０８:００」按字符串比较排在一切半角时刻之后，
+# 冲突判定（已排 start < 新 end 且 已排 end > 新 start）就永远判不出它与半角时段重叠——
+# 同一手术间同一时段排得进两台手术。列是 `String(5)`、全部按字符串比较，与日期同理：
+# 在入口挡住非法值，表结构不动。
+
+#: 时刻的形状（唯一真源）：只认半角数字
+TIME_SHAPE = re.compile(r"^[0-9]{2}:[0-9]{2}$")
+
+
+def check_time(value: str) -> str:
+    """校验 `HH:MM`（00:00–23:59）：先卡半角形状，再卡取值。非法时抛 ValueError（带人话）。"""
+    if not TIME_SHAPE.fullmatch(value):  # fullmatch：`$` 放过末尾换行
+        raise ValueError("时刻格式须为 HH:MM（半角数字）")
+    if int(value[:2]) > 23 or int(value[3:]) > 59:
+        raise ValueError(f"时刻 {value} 不存在（小时 00~23、分钟 00~59）")
+    return value
+
+
+def _time_required(value: object) -> object:
+    if not isinstance(value, str):
+        return value  # 交给 pydantic 报类型错
+    return check_time(value)
+
+
+#: 必填时刻，`HH:MM`（00:00–23:59，半角）。请求体与查询参数都能直接用（`Query(default=...)`）。
+TimeStr = Annotated[str, BeforeValidator(_time_required)]

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
-from ..datetypes import DateStr, OptionalDateStr
+from ..datetypes import DateStr, OptionalDateStr, TimeStr
 from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..notify import notify_patient
 from ..models import (
@@ -299,8 +299,10 @@ def approve_request(
 class ScheduleIn(BaseModel):
     room_id: int
     scheduled_date: DateStr
-    start_time: str = Field(pattern=r"^\d{2}:\d{2}$")
-    end_time: str = Field(pattern=r"^\d{2}:\d{2}$")
+    # 只认半角、且是一天里真有的时刻（P2-46）：全角「０８:００」按字符串比排在一切半角时刻之后，
+    # 冲突判定判不出它与半角时段重叠，同一手术间同一时段排得进两台
+    start_time: TimeStr
+    end_time: TimeStr
 
 
 @router.post(

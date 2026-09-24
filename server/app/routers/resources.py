@@ -16,6 +16,8 @@
 发布/撤回状态只对通用资源生效——号源有 capacity、手术间有 active、
 血制品有库存量，各自已经表达了"能不能用"，再压一层发布状态只会打架。
 """
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -23,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable
 from ..database import get_db
-from ..datetypes import OptionalDateStr
+from ..datetypes import OptionalDateStr, TimeStr
 from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
 from ..models import (
     AppointmentSlot,
@@ -465,8 +467,10 @@ class OrRoomMatchOut(BaseModel):
 def match_operating_rooms(
     org_id: int,
     scheduled_date: OptionalDateStr = Query(default=""),
-    start_time: str = Query(default="08:00", pattern=r"^\d{2}:\d{2}$"),
-    end_time: str = Query(default="18:00", pattern=r"^\d{2}:\d{2}$"),
+    # `Annotated[..., Query()] = 默认值` 的写法：`TimeStr = Query(default=...)` 那种写法下
+    # FastAPI 会把 TimeStr 里的校验器丢掉（实测，P1-88），校验形同虚设
+    start_time: Annotated[TimeStr, Query()] = "08:00",
+    end_time: Annotated[TimeStr, Query()] = "18:00",
     db: Session = Depends(get_db),
 ):
     """手术间撮合：给定日期与时间窗，列出**没有冲突**的手术间及其空档。
