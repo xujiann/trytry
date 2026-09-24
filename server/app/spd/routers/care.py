@@ -46,7 +46,7 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import award_points, judge_measurement, spawn_task
+from ..service import award_points, judge_measurement, measure_value_problem, spawn_task
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
@@ -376,6 +376,9 @@ def _measure_out(m: SpdMeasurement) -> dict:
 
 
 def _record_measurement(db: Session, body: MeasurementIn, user_id: int | None) -> SpdMeasurement:
+    problem = measure_value_problem(body.metric, body.value)  # 生理上不可能的值（P1-101）：批量里一条即整批 422
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     enrollment = _enrollment_of(db, body.patient_id, body.program_code)
     stage = enrollment.stage if enrollment else ""
     level = judge_measurement(db, body.program_code, stage, body.metric, body.value)

@@ -44,7 +44,7 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import close_followup_record, judge_measurement
+from ..service import close_followup_record, judge_measurement, measure_value_problem
 from fastapi import File, Form, UploadFile
 
 from ..platform import (
@@ -351,6 +351,9 @@ def add_measurement(
 ):
     """居家健康台账（#4）：手工记录或设备回传，落库即按管理目标判定等级。"""
     patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
+    problem = measure_value_problem(body.metric, body.value)  # 生理上不可能的值（P1-101）
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
     enrollment = (
         db.query(SpdEnrollment)
         .filter(

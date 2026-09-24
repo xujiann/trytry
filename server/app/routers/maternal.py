@@ -207,8 +207,9 @@ def list_children(db: Session = Depends(get_db)):
 
 class ChildVisitCreate(BaseModel):
     visit_type: str = Field(pattern="^(newborn|checkup)$")
-    height_cm: FiniteFloat | None = None
-    weight_kg: FiniteFloat | None = None
+    # 身长 / 体重不收非正数（P1-101）；体重上界与住院体征同口径
+    height_cm: FiniteFloat | None = Field(default=None, gt=0, le=300)
+    weight_kg: FiniteFloat | None = Field(default=None, gt=0, le=500)
     note: str = Field(default="", max_length=512)
     visit_date: OptionalDateStr = ""
 

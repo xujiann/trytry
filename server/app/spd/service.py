@@ -38,13 +38,33 @@ from .models import (
     SpdTarget,
     SpdTask,
 )
-from .rules import evaluate, judge_level
+from .rules import FIELD_SOURCES, evaluate, judge_level
 
 #: 监测指标在 facts 里的键就是 `SpdMeasurement.metric`，与 `spd/rules.py::FIELD_SOURCES` 对齐。
 MEASURE_FIELDS = (
     "bp_sys", "bp_dia", "glucose_fasting", "glucose_pp2h", "hba1c", "ua", "spo2",
     "bmi", "ldl", "creatinine", "egfr",
 )
+
+#: 百分数指标的上限（P1-101）
+_PERCENT_MEASURES = {"spo2": 100.0, "hba1c": 100.0}
+
+
+def measure_value_problem(metric: str, value: float) -> str | None:
+    """监测值的生理可能性（P1-101）：有问题返回一句人话（调用方报 422），没问题返回 None。
+
+    上面这些指标测出 0 / 负数只能是设备失败或录错；管理目标多数只设上限（收缩压 ≤ 140、糖化 ≤ 7），
+    按目标判级时 0 就判成「正常」，该有的异常提醒就此漏掉。不在指标目录里的键不管——那些指标的口径由配置决定。
+    """
+    if metric not in MEASURE_FIELDS:
+        return None
+    name = FIELD_SOURCES.get(metric, metric)
+    if value <= 0:
+        return f"{name}须为正数（收到 {value:g}）"
+    cap = _PERCENT_MEASURES.get(metric)
+    if cap is not None and value > cap:
+        return f"{name}不得超过 {cap:g}%（收到 {value:g}）"
+    return None
 
 
 def _age_of(birth_date: str) -> int | None:

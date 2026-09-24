@@ -76,10 +76,12 @@ class MilestoneOut(MilestoneCreate):
 
 
 class VitalCreate(BaseModel):
-    heart_rate: FiniteFloat | None = None
-    sbp: FiniteFloat | None = None
-    dbp: FiniteFloat | None = None
-    spo2: FiniteFloat | None = None
+    # 不收负数、不越过生理上限（P1-101，与住院体征 `clinical_docs.VitalIn` 同口径）；
+    # 0 照收——抢救现场心跳骤停、血压测不出，记 0 是真实的
+    heart_rate: FiniteFloat | None = Field(default=None, ge=0, le=300)
+    sbp: FiniteFloat | None = Field(default=None, ge=0, le=300)
+    dbp: FiniteFloat | None = Field(default=None, ge=0, le=200)
+    spo2: FiniteFloat | None = Field(default=None, ge=0, le=100)
     note: str = Field(default="", max_length=256)
 
 

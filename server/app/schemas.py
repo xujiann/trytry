@@ -304,9 +304,11 @@ class ChronicOut(ChronicCreate):
 
 
 class FollowUpCreate(BaseModel):
-    sbp: FiniteFloat | None = None
-    dbp: FiniteFloat | None = None
-    glucose: FiniteFloat | None = None
+    # 生理测量值不收非正数（P1-101）：原先 0 / 负数照收——一次测量失败（设备回 0）就把 3 级高危降成 1 级
+    # 「控制良好」、上转建议随之消失（分级按「越高越危」比阈值）。上界与住院体征 `clinical_docs.VitalIn` 同口径
+    sbp: FiniteFloat | None = Field(default=None, gt=0, le=300)
+    dbp: FiniteFloat | None = Field(default=None, gt=0, le=200)
+    glucose: FiniteFloat | None = Field(default=None, gt=0)
     # 块1：通用指标（非血压血糖类），如 {"adherence_score": 4, "cat_score": 22}
     metrics: dict[str, FiniteFloat] = Field(default_factory=dict)
     guidance: str = Field(default="", max_length=1024)

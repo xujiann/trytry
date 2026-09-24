@@ -69,6 +69,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_stage14_concurrency as concurrency
     import test_stage15_horizontal as horizontal
     import test_unscopable_patient_reads as unscopable
+    import test_vital_sign_bounds as vitalbounds
 
     H = "tests/test_stage15_horizontal.py"
     return [
@@ -144,6 +145,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          asciiparse.BASELINE, "tests/test_ascii_digit_parsing.py"),
         ("数值入参", "数字判断不配 isascii() 的豁免（字符类判断 / 待裁定 / 认证验签待复核，逐条写明理由）",
          len(asciiparse.BY_DESIGN), "tests/test_ascii_digit_parsing.py"),
+        ("数值入参", "体征入参（血压 / 血糖 / 心率 / 血氧 / 身长体重…）没有不小于 0 的下界（9 → 0 已清零）",
+         vitalbounds.BASELINE, "tests/test_vital_sign_bounds.py"),
+        ("数值入参", "名字像体征、按设计可为负的豁免（逐条写明理由）", len(vitalbounds.SIGNED_BY_DESIGN),
+         "tests/test_vital_sign_bounds.py"),
         ("请求体契约", "写同一列的入口比出参约束松（存得进去、读不出来，库里一行就让整个响应 500；1 → 0 已清零）",
          respwriters.BASELINE, "tests/test_response_constraint_writers.py"),
         ("请求体契约", "带校验器（field_validator / model_validator）的出参模型，逐个写明为什么读得出来",
