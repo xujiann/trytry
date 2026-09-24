@@ -314,10 +314,19 @@ def test_八路并发重新分配_不会把上一次的明细删空也不会叠�
     assert not errors, f"并发重新分配不该把异常漏给调用方：{errors}"
     wins = [r for r in results if r[0] == "ok"]
     losses = [r for r in results if r[0] != "ok"]
-    assert len(wins) == 1, f"重新分配也只该成一路，实际 {len(wins)} 路：{results}"
-    assert {detail for _, detail in losses} == {CONFLICT_DETAIL}, f"输家文案不对：{losses}"
 
+    # 先验钱：这才是这条用例守的不变式——输家若删空或叠加，明细会是 0 条或 6 条。
     after = sorted(_snapshot(pg_engine, scene["settlement_id"]))
-    assert len(after) == 3, f"重新分配后剩 {len(after)} 条明细：{after}"
+    assert len(after) == 3, f"重新分配后剩 {len(after)} 条明细：{after}（成功 {len(wins)} 路：{results}）"
     assert after == before, "同样的公式重分一次，明细应当逐条相同（覆盖，不是叠加也不是删空）"
     assert round(sum(amount for _, amount in after), 2) == round(BALANCE, 2)
+
+    # 再看分流：**不能断言"只有一路成功"**，理由与上一条用例的 docstring 同一句——重新分配
+    # 本就合法，排在赢家提交之后才开始 DELETE 的那一路会正常地删旧插新并返回 200。两道
+    # barrier 把八路对齐到写库段门口，却挡不住门口之后的调度：机器一忙，某一路被晚调度
+    # 过赢家的提交，就成了合法的第二次重新分配（2026-09-24 本地集成档在满载时实测
+    # 成 2 路，明细照旧恰好一整套）。要守的是"至少一路成、输家都是约定的 409、钱没变"。
+    assert wins, f"八路全被拒等于重新分配在并发下不可用：{results}"
+    assert {amount for _, amount in wins} == {round(BALANCE, 2)}, f"成功的每一路分出的总额都该等于结余：{wins}"
+    assert all(status == "409" for status, _ in losses), f"输家应当拿 409：{losses}"
+    assert {detail for _, detail in losses} <= {CONFLICT_DETAIL}, f"输家文案不对：{losses}"
