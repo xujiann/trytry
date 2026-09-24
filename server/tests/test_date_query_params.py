@@ -125,6 +125,8 @@ FILTER_PARAMS = [
     ("/api/spd/followup-stats", "date_to"),
     ("/api/spd/followup-records", "date_from"),
     ("/api/spd/followup-records", "date_to"),
+    ("/api/certs/death-report-cards/export.csv", "date_from"),
+    ("/api/certs/death-report-cards/export.csv", "date_to"),
 ]
 
 #: 形状错、日历上不存在、不补零、ISO 基本格式——前两类此前多是 200 空集，
@@ -177,8 +179,6 @@ GUARDS = frozenset({"require_date", "resolve_business_date"})
 KNOWN_BARE_DATE_PARAMS: set[str] = {
     "routers/admin_mgmt.py::list_rosters::duty_date",
     "routers/appointments.py::list_slots::slot_date",
-    "routers/certs.py::export_death_report_cards_csv::date_from",
-    "routers/certs.py::export_death_report_cards_csv::date_to",
     "routers/clinical_docs.py::list_handovers::handover_date",
     "routers/medwaste.py::handler_stats::end_date",
     "routers/medwaste.py::handler_stats::start_date",

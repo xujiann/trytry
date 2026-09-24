@@ -9,7 +9,7 @@ from .. import clock
 from ..concurrency import insert_with_retry
 from ..visibility import assert_org_writable, log_patient_access, scope_patient_list
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
+from ..deps import get_current_user, paginate, require_date, require_roles
 from ..models import ChildRecord, MedicalCert, Organization, Patient, User
 from ..datetypes import DateStr
 from ..privacy import mask_id_card, mask_phone
@@ -196,9 +196,14 @@ def export_death_report_cards_csv(
     调阅均落 AccessLog（可问责口径）。
     """
     query = db.query(MedicalCert).filter(MedicalCert.cert_type == "death")
+    # `event_date` 按字符串比较（P1-58）：页面上的 pattern 只卡形状，拦不住 `2026-02-31`；
+    # 对接方发来的不补零写法 `2026-9-1` 在字典序上比全年补零日期都大，`date_from` 会把
+    # 整年筛空。这份导出是拿去手工网报的法定数据，筛错了是漏报，不是"查不到"。
     if date_from:
+        date_from = require_date(date_from, field="date_from")
         query = query.filter(MedicalCert.event_date >= date_from)
     if date_to:
+        date_to = require_date(date_to, field="date_to")
         query = query.filter(MedicalCert.event_date <= date_to)
     certs = query.order_by(MedicalCert.id).limit(2000).all()
     org_names = {o.id: o.name for o in db.query(Organization).all()}
