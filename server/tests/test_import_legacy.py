@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from import_legacy import run_import  # noqa: E402
 
 from app.database import SessionLocal
-from app.models import ChronicPatient, Employee, Organization, Patient
+from app.models import ChronicPatient, Employee, Encounter, Organization, Patient
 
 SAMPLES = Path(__file__).resolve().parent.parent / "scripts" / "samples"
 
@@ -98,6 +98,40 @@ def test_chronic_and_employees_with_fk_resolution():
     assert emp.imported == 3 and emp.errors == []
     assert run_import("employees", SAMPLES / "employees.csv").skipped == 3
     assert _count(Employee) == 3
+
+
+def test_日期列与平台同一个真源_ISO变体既不原样落库也不再重导翻倍(tmp_path):
+    """P1-61：`_valid_date` 原先用 `date.fromisoformat`——Python 3.11 起它还接受 `19870101`、
+    `1987-W01-1`（ISO 周日期），脚本头注与报错文案却写着 YYYY-MM-DD。后果两种：字符串列
+    （出生日期）原样落库；时间戳列（就诊等）虽被解析，幂等键却拿原串去比库里 `YYYY-MM-DD`
+    形状的键——对不上，同一份文件每重导一次就多一份（实测 2 → 3 → 4）。"""
+    run_import("organizations", SAMPLES / "organizations.csv")  # 幂等：前面导过就全部跳过
+    run_import("patients", SAMPLES / "patients.csv")
+
+    people = tmp_path / "iso_variants.csv"
+    people.write_text(
+        "name,id_card,gender,birth_date,phone\n"
+        "己,320981198701014444,男,19870101,\n"
+        "庚,320981198701025555,男,1987-W01-1,\n"
+        "辛,320981198702286666,女,1987-02-28,\n",
+        encoding="utf-8",
+    )
+    rep = run_import("patients", people, dry_run=True)
+    assert rep.imported == 1 and [line for line, _ in rep.errors] == [2, 3]
+    assert all("birth_date 格式非法" in msg for _, msg in rep.errors), rep.errors
+
+    visits = tmp_path / "compact_visit.csv"
+    visits.write_text(
+        "id_card,ehc_no,org_name,visit_date,encounter_type,doctor_name,diagnosis_code,"
+        "diagnosis_name,summary\n"
+        "320981197203154322,,示例镇中心卫生院,20260603,outpatient,钱医生,E11,2型糖尿病,紧凑写法\n",
+        encoding="utf-8",
+    )
+    before = _count(Encounter)
+    for _ in range(2):
+        rep = run_import("encounters", visits)
+        assert rep.imported == 0 and len(rep.errors) == 1, rep.errors
+    assert _count(Encounter) == before, "紧凑写法的就诊不该落库，更不该每重导一次多一份"
 
 
 def test_error_rows_detail(tmp_path):

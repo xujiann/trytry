@@ -65,6 +65,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.datetypes import check_date  # noqa: E402
 from app.models import (  # noqa: E402
     Admission,
     Bed,
@@ -170,10 +171,14 @@ def _require(row: dict, line_no: int, report: ImportReport, *cols: str) -> bool:
 
 
 def _valid_date(value: str) -> bool:
-    from datetime import date
+    """`YYYY-MM-DD` 且日历上存在——与平台请求体走同一个真源 `datetypes.check_date`。
 
+    此前用 `date.fromisoformat`：Python 3.11 起它还接受 `19870101`、`1987-W01-1` 等 ISO
+    变体，这些写法照样过、原样落库（本脚本头注与报错文案写的都是 YYYY-MM-DD），进了按
+    字符串比较的日期筛选就错位。导入走 ORM 不走请求模型，换 `DateStr` 挡不住它（P1-61）。
+    """
     try:
-        date.fromisoformat(value)
+        check_date(value)
         return True
     except ValueError:
         return False
