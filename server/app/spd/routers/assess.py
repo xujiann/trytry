@@ -850,7 +850,11 @@ class RunScoreIn(BaseModel):
 
 
 def _objects_of(db: Session, plan: SpdAssessPlan, object_ids: list[int]) -> list[tuple[int, str]]:
-    """考核对象清单：给了 id 就按 id，没给就按方案层级全量展开。"""
+    """考核对象清单：给了 id 就按 id，没给就按方案层级全量展开。
+
+    全量就是全量（P1-84）：原先四个分支各有一个不带排序的 `.limit(500)`，村医 / 医生过 500 人的县，
+    多出来的没有分数、排名只在 500 人里排，重跑还可能换一批。按 id 排序展开，并列总分的名次也稳定。
+    """
     if plan.object_type == "org":
         query = db.query(Organization)
         if object_ids:
@@ -858,17 +862,17 @@ def _objects_of(db: Session, plan: SpdAssessPlan, object_ids: list[int]) -> list
         elif plan.level in ("hospital", "township", "village"):
             level_map = {"hospital": "county", "township": "township", "village": "village"}
             query = query.filter(Organization.level == level_map[plan.level])
-        return [(o.id, o.name) for o in query.limit(500).all()]
+        return [(o.id, o.name) for o in query.order_by(Organization.id).all()]
     if plan.object_type == "team":
         team_query = db.query(SpdTeam).filter(SpdTeam.active.is_(True))
         if object_ids:
             team_query = team_query.filter(SpdTeam.id.in_(object_ids))
-        return [(t.id, t.name) for t in team_query.limit(500).all()]
+        return [(t.id, t.name) for t in team_query.order_by(SpdTeam.id).all()]
     if plan.object_type == "village_doctor":
         doctor_query = db.query(SpdVillageDoctor).filter(SpdVillageDoctor.active.is_(True))
         if object_ids:
             doctor_query = doctor_query.filter(SpdVillageDoctor.user_id.in_(object_ids))
-        rows = doctor_query.limit(500).all()
+        rows = doctor_query.order_by(SpdVillageDoctor.id).all()
         names = {
             u.id: u.full_name or u.username
             for u in db.query(User).filter(User.id.in_([v.user_id for v in rows] or [0]))
@@ -877,7 +881,7 @@ def _objects_of(db: Session, plan: SpdAssessPlan, object_ids: list[int]) -> list
     user_query = db.query(User).filter(User.role.in_(["doctor", "public_health"]))
     if object_ids:
         user_query = user_query.filter(User.id.in_(object_ids))
-    return [(u.id, u.full_name or u.username) for u in user_query.limit(500).all()]
+    return [(u.id, u.full_name or u.username) for u in user_query.order_by(User.id).all()]
 
 
 @router.post("/scores/run", response_model=RunScoreOut,
