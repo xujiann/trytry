@@ -1587,3 +1587,97 @@ def test_新建挂在患者上的行判据自证():
     reverted = text[:start] + text[start:end].replace(guard, "", 1) + text[end:]
     assert "spd/care.py:push_education" in _patient_owned_create_endpoints([("spd/care.py", reverted)])
     assert "spd/care.py:push_education" not in _patient_owned_create_endpoints([("spd/care.py", text)])
+
+
+# ---------------------------------------------------------------- 按 id 写：归属列不叫 org_id 的表（P1-74）
+#
+# `_byid_org_write_endpoints` 的分母是「带 `org_id` 列的表」，P1-71 补了「挂在患者上的表」。两者之间漏着一族：
+# **归属写在别名机构列上**（`center_org_id` / `from_org_id` / `lead_org_id` …）、**又不挂患者**的表。
+# 消毒供应批次就在这里：按批次号流转、按批次号记成本，任何经办都能做（P0-35 实测 200 / 201，已修）——
+# 哪条棘轮的分母都数不到它。这里把这一族单独量住：按 id 取这类表、写库、无守卫即红。
+#
+# 角色门是 `require_admin` 的自动豁免（admin 属全域角色，补了也永不触发）；其余按设计的逐条写理由。
+
+#: 按 id 取「别名机构列、不挂患者」的表却不判归属、按设计成立的（逐条写明理由），只减不增。
+ALIAS_ORG_BYID_BY_DESIGN = {
+    "fund.py:create_pool":
+        "只 db.get(OrgGroup) 校验分组存在；基金池是全域 / 分组层面的对象、不属于哪家机构，角色门只放 director。",
+    "spd/config/catalog.py:update_program":
+        "病种目录是全县配置，`lead_org_id` 是一项指定而非归属（配置角色放行医师属纵向问题，另说）。",
+    "spd/config/catalog.py:create_target":
+        "在全县病种目录下挂管理目标，同上是配置。",
+    "spd/config/centers.py:update_center":
+        "专病中心是全县配置，`lead_org_id` 是指定的牵头机构，同上。",
+    "spd/referral.py:update_referral_rule":
+        "转诊规则是全县共用的配置，`target_org_id` 是命中后建议转往的机构，本来就是别家。",
+}
+
+
+def _alias_org_models() -> set[str]:
+    """有以 `org_id` 结尾、但不叫 `org_id` 的机构列，且没有 `org_id`、没有 `patient_id` 的表。"""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app import models
+    out = set()
+    for c in models.Base.registry._class_registry.values():
+        if not hasattr(c, "__tablename__"):
+            continue
+        cols = c.__table__.columns
+        if "org_id" in cols or "patient_id" in cols:
+            continue
+        if any(col.name.endswith("org_id") for col in cols):
+            out.add(c.__name__)
+    return out
+
+
+def _byid_alias_org_write_endpoints(sources=None) -> set[str]:
+    """按 id 取别名机构列的表、会写库、却没有任何归属守卫的端点（admin-only 的不计）。"""
+    owned = _alias_org_models()
+    if sources is None:
+        sources = [(name, open(path, encoding="utf-8").read()) for name, path in _router_files()]
+    found = set()
+    for name, text in sources:
+        if name in ("portal.py", "spd/portal.py"):
+            continue
+        tree = ast.parse(text)
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            decs = [ast.unparse(d) for d in fn.decorator_list]
+            if not any("router." in d for d in decs):
+                continue
+            body = _with_local_helpers(tree, fn)
+            if not _is_write_endpoint(decs, body):
+                continue
+            if not any(f"db.get({m}," in body for m in owned):
+                continue
+            if any(g in body for g in _PATIENT_WRITE_GUARDS) or _has_domain_guard(name, tree, fn):
+                continue
+            if "require_admin" in " ".join(decs) + ast.unparse(fn.args):
+                continue  # admin 属全域角色，assert_org_writable 对它恒放行
+            found.add(f"{name}:{fn.name}")
+    return found
+
+
+def test_按id写别名机构列的表不许新增无守卫端点():
+    unguarded = _byid_alias_org_write_endpoints()
+    new = unguarded - set(ALIAS_ORG_BYID_BY_DESIGN)
+    assert new == set(), (
+        "以下写接口按 id 取了归属写在别名机构列（center_org_id / from_org_id …）上的记录，却没有任何归属判定——"
+        "按那一列 assert_org_writable；若按设计成立，写明理由登记：\n  " + "\n  ".join(sorted(new))
+    )
+    stale = set(ALIAS_ORG_BYID_BY_DESIGN) - unguarded
+    assert stale == set(), f"这些登记项已加了守卫或不存在，应从名单删除（只减不增）：{sorted(stale)}"
+
+
+def test_按id写别名机构列判据自证():
+    """把 P0-35 的归属判定从消毒供应批次流转里拿掉，判据必须当场点名它。"""
+    assert {"SterilizationBatch", "StockTransfer", "Secondment"} <= _alias_org_models()
+    assert not {"ExamRequest", "Referral"} & _alias_org_models(), "挂患者的表归 P1-71 那条管"
+    path = dict(_router_files())["cssd.py"]
+    text = open(path, encoding="utf-8").read()
+    guard = "    assert_org_writable(db, user, batch.center_org_id)\n"
+    start = text.index("def advance(")
+    end = text.index("\n@router", start)
+    assert guard in text[start:end], "cssd.advance 里找不到 P0-35 的归属判定，自证前提变了"
+    reverted = text[:start] + text[start:end].replace(guard, "", 1) + text[end:]
+    assert "cssd.py:advance" in _byid_alias_org_write_endpoints([("cssd.py", reverted)])
+    assert "cssd.py:advance" not in _byid_alias_org_write_endpoints([("cssd.py", text)])

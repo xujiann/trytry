@@ -65,6 +65,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(horizontal.PATIENT_OWNED_CREATE_BY_DESIGN), H),
         ("横向越权（写侧）", "新建挂在患者上、无机构列的行 × 口径待裁定",
          len(horizontal.PATIENT_OWNED_CREATE_AWAITING), H),
+        ("横向越权（写侧）", "按 id 写别名机构列（center_org_id 等）的表 × 按设计不判（逐条写明理由）",
+         len(horizontal.ALIAS_ORG_BYID_BY_DESIGN), H),
         ("横向越权（写侧）", "按设计跨机构的豁免（逐条写明理由）", len(horizontal.BYID_CROSS_ORG_OK), H),
         ("横向越权（写侧）", "已登记的领域守卫", len(horizontal.DOMAIN_ORG_GUARDS), H),
         ("横向越权（读侧）", "按 id 读患者资源的豁免", len(horizontal.BYID_PATIENT_READ_OK), H),
