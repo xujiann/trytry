@@ -23,10 +23,11 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
-from ..datetypes import DateStr, OptionalDateStr
+from ..datetypes import DateStr
 from ..deps import (
     get_current_user,
     paginate,
+    require_date,
     require_roles,
     resolve_business_date,
     resolve_org_scope,
@@ -594,8 +595,8 @@ def update_outcome(report_id: int, body: AefiOutcome, db: Session = Depends(get_
 
 @router.get("/stats", response_model=VaccineStatsOut)
 def vaccination_stats(
-    start_date: OptionalDateStr = Query(default=""),
-    end_date: OptionalDateStr = Query(default=""),
+    start_date: str = "",
+    end_date: str = "",
     group_id: int | None = None,
     db: Session = Depends(get_db),
 ):
@@ -604,6 +605,10 @@ def vaccination_stats(
     **AEFI 发生率的分母是同期接种剂次**，不是人数——同一人打三剂就是三次
     暴露机会。分母为 0 时不报 0（那会被读成"零发生率"），而是明说无接种。
     """
+    # 查询参数照仓库约定 `str` + `require_date`：原先写成 `OptionalDateStr = Query(default="")`，
+    # FastAPI 会丢掉别名里的校验器，`2026/09/30` 原样进筛选条件（P1-88）
+    start_date = require_date(start_date, field="start_date") if start_date else ""
+    end_date = require_date(end_date, field="end_date") if end_date else ""
     scope = resolve_org_scope(db, group_id, None)
 
     def scoped(query, column):

@@ -25,8 +25,8 @@ from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable
 from ..database import get_db
-from ..datetypes import OptionalDateStr, TimeStr
-from ..deps import get_current_user, require_roles, resolve_business_date, resolve_org_scope
+from ..datetypes import TimeStr
+from ..deps import get_current_user, require_date, require_roles, resolve_business_date, resolve_org_scope
 from ..models import (
     AppointmentSlot,
     BloodStock,
@@ -466,7 +466,7 @@ class OrRoomMatchOut(BaseModel):
 @router.get("/match/or-rooms", response_model=OrRoomMatchOut, response_model_exclude_unset=True)
 def match_operating_rooms(
     org_id: int,
-    scheduled_date: OptionalDateStr = Query(default=""),
+    scheduled_date: str = "",
     # `Annotated[..., Query()] = 默认值` 的写法：`TimeStr = Query(default=...)` 那种写法下
     # FastAPI 会把 TimeStr 里的校验器丢掉（实测，P1-88），校验形同虚设
     start_time: Annotated[TimeStr, Query()] = "08:00",
@@ -483,7 +483,9 @@ def match_operating_rooms(
     """
     if end_time <= start_time:
         raise HTTPException(status_code=422, detail="结束时间须晚于开始时间")
-    day = scheduled_date or resolve_business_date(None).isoformat()
+    # 日期照仓库约定 `str` + `require_date`：原先 `OptionalDateStr = Query(default="")` 的写法校验器被丢掉，
+    # `2026-02-31` 原样回显、按它去查排班，撮合说「全部空闲」（P1-88）
+    day = require_date(scheduled_date, field="scheduled_date") if scheduled_date else resolve_business_date(None).isoformat()
     rooms = (
         db.query(OperatingRoom)
         .filter(OperatingRoom.org_id == org_id, OperatingRoom.active.is_(True))

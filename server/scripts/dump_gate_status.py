@@ -53,6 +53,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_list_pagination_ratchet as pagination
     import test_orphan_endpoints as orphan
     import test_periodstr_single_source as periodstr
+    import test_query_param_validators as queryvalidators
     import test_stage14_concurrency as concurrency
     import test_stage15_horizontal as horizontal
     import test_unscopable_patient_reads as unscopable
@@ -147,6 +148,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_periodstr_single_source.py"),
         ("日期入参", "名字像期间、按设计不是 YYYY-MM 的豁免", len(periodstr.NOT_A_MONTH),
          "tests/test_periodstr_single_source.py"),
+        ("日期入参", "带校验器的类型别名写成 `= Query(...)`（FastAPI 丢掉校验器）", queryvalidators.BASELINE,
+         "tests/test_query_param_validators.py"),
         ("功能完善", "该有界面却没有的端点（孤儿）", len(orphan.KNOWN_ORPHANS),
          "tests/test_orphan_endpoints.py"),
         ("功能完善", "按设计不需要界面的豁免路径", len(orphan.EXEMPT_PATHS),

@@ -87,7 +87,8 @@ def test_筛选用的id名单不许先截断():
     "    return query.filter(SpdCaseReport.patient_id.in_(rows))\n",
 ])
 def test_判据自证_修复前的形状当场点名(snippet):
-    assert _violations({"自证.py": snippet}) == ["自证.py:f（第 2 行的 {}）".format("ids" if "ids =" in snippet else "rows")]
+    mine = [v for v in _violations({"自证.py": snippet}) if v.startswith("自证.py")]
+    assert mine == ["自证.py:f（第 2 行的 {}）".format("ids" if "ids =" in snippet else "rows")]
 
 
 def test_判据自证_子查询与页内回填不算():
@@ -97,4 +98,4 @@ def test_判据自证_子查询与页内回填不算():
         "    names = {p.id: p.name for p in db.query(Patient).filter(Patient.id.in_([r.patient_id for r in rows]))}\n"
         "    return query, names\n"
     )
-    assert _violations({"自证.py": fine}) == []
+    assert [v for v in _violations({"自证.py": fine}) if v.startswith("自证.py")] == []

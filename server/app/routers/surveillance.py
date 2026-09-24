@@ -25,6 +25,7 @@ from ..datetypes import DateStr, OptionalDateStr
 from ..deps import (
     get_current_user,
     paginate,
+    require_date,
     require_roles,
     resolve_business_date,
     resolve_org_scope,
@@ -221,11 +222,15 @@ def report_syndrome(body: SyndromeIn, db: Session = Depends(get_db), user: User 
 def list_syndromes(
     org_id: int | None = None,
     syndrome: str | None = None,
-    start_date: OptionalDateStr = Query(default=""),
-    end_date: OptionalDateStr = Query(default=""),
+    start_date: str = "",
+    end_date: str = "",
     group_id: int | None = None,
     db: Session = Depends(get_db),
 ):
+    # 查询参数照仓库约定 `str` + `require_date`：原先写成 `OptionalDateStr = Query(default="")`，
+    # FastAPI 会丢掉别名里的校验器，`2026/09/30` 原样进筛选条件（P1-88）
+    start_date = require_date(start_date, field="start_date") if start_date else ""
+    end_date = require_date(end_date, field="end_date") if end_date else ""
     query = db.query(SyndromeMonitor)
     scope = resolve_org_scope(db, group_id, org_id)
     if scope is not None:
@@ -292,12 +297,14 @@ def list_pathogens(
     response: Response,
     org_id: int | None = None,
     pathogen_name: str | None = None,
-    start_date: OptionalDateStr = Query(default=""),
-    end_date: OptionalDateStr = Query(default=""),
+    start_date: str = "",
+    end_date: str = "",
     offset: int = 0,
     limit: int = 1000,
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
+    start_date = require_date(start_date, field="start_date") if start_date else ""  # 同上（P1-88）
+    end_date = require_date(end_date, field="end_date") if end_date else ""
     query = db.query(PathogenMonitor)
     query = scope_org_list(db, user, query, PathogenMonitor, org_id)
     if pathogen_name:
