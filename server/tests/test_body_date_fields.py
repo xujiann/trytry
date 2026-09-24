@@ -21,6 +21,10 @@ CASES = [
     ("/api/followups",
      {"patient_id": 999999, "org_id": 999999, "category": "chronic"}, "due_date", False),
     ("/api/inpatient/handovers", {"ward_id": 999999, "shift": "day"}, "handover_date", False),
+    ("/api/surgery/requests/999999/schedule",
+     {"room_id": 999999, "start_time": "09:00", "end_time": "10:00"}, "scheduled_date", False),
+    ("/api/surgery/requests",
+     {"admission_id": 999999, "surgery_name": "阑尾切除术"}, "planned_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。

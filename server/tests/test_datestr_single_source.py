@@ -159,8 +159,6 @@ KNOWN_BARE_BODY_DATE_FIELDS: set[str] = {
     "routers/maternal.py::WomenHealthCreate.exam_date",
     "routers/publichealth.py::MonitorCreate.record_date",
     "routers/quality.py::InfectionReportCreate.report_date",
-    "routers/surgery.py::ScheduleIn.scheduled_date",
-    "routers/surgery.py::SurgeryRequestIn.planned_date",
     "routers/tcm.py::BatchCreate.expire_date",
     "schemas.py::ContractCreate.signed_date",
     "schemas.py::PatientCreate.birth_date",

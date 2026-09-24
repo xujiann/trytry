@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
+from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..notify import notify_patient
 from ..models import (
@@ -193,7 +194,7 @@ class SurgeryRequestIn(BaseModel):
     # 非计划重返手术室：由医师在提出申请时显式标记。不做推断——分期手术、
     # 计划内二次探查都是正常的，"同一住院有第二台手术"这种规则只会冤枉人。
     unplanned_return: bool = False
-    planned_date: str = ""
+    planned_date: OptionalDateStr = ""
 
 
 def _request_out(r: SurgeryRequest) -> dict:
@@ -297,7 +298,7 @@ def approve_request(
 
 class ScheduleIn(BaseModel):
     room_id: int
-    scheduled_date: str = Field(min_length=10, max_length=10)
+    scheduled_date: DateStr
     start_time: str = Field(pattern=r"^\d{2}:\d{2}$")
     end_time: str = Field(pattern=r"^\d{2}:\d{2}$")
 
