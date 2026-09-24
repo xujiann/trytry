@@ -122,7 +122,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_body_str_length.py"),
         ("数值入参", "浮点入参收得下 NaN / Infinity（超标判定对 NaN 恒为假、金额列 500；66 → 0 已清零）",
          bodyfinite.BASELINE, "tests/test_body_finite_numbers.py"),
-        ("数值入参", "整数 / 金额入参越过列容量写进 Integer / Money 列（PG 上溢出即 500；65 → 0，第三层显式赋值 +1、第四层 +3 → 0）",
+        ("数值入参", "整数 / 金额入参越过列容量写进 Integer / Money 列（PG 上溢出即 500；65 → 0，第三层显式赋值 +1、第四层 +3、可空 Annotated 盲区 +1 → 0）",
          bodynumcap.BASELINE, "tests/test_body_numeric_capacity.py"),
         ("数值入参", "天数 / 分钟数入参没有上界就进 timedelta（传个大数即日期溢出、500；5 → 0 已清零）",
          datewin.BASELINE, "tests/test_date_window_bounds.py"),

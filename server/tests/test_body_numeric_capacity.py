@@ -42,6 +42,8 @@ if _PG_URL:
 #: 第三层（同日）：写库形状补上「取出来的对象上显式赋值」，又量出签合同金额 1 处，同批补齐，仍为 0。
 #: 第四层（同日）：写库形状再补三处盲区（见 `test_body_str_length.body_column_writes`），又量出 3 处——调度任务
 #: 周期、药品库存预警阈值、手术出血量；同批补齐（入库数量走原子累加 `add_amount`，判据看不见，一并补上），仍为 0。
+#: 判据盲区（同日）：`FiniteFloat | None` 这类 Union 里的 Annotated 原先不算数值（`_is_number`），又量出收费项目改价
+#: 1 处；同一端点族的调价 `RepriceIn.new_price` 经 `_change_price` 写库、判据看不见，一并补上，仍为 0。
 BASELINE = 0
 
 
@@ -75,8 +77,11 @@ def _column_caps() -> dict[str, dict[str, tuple[float, float, str]]]:
 
 def _is_number(field) -> bool:
     ann = field.annotation
-    variants = (ann, *typing.get_args(ann))
-    return bool({int, float} & set(variants)) and bool not in variants
+    # `FiniteFloat | None` 这类：顶层的 Annotated 会被 pydantic 拆进 metadata，Union 里的不会——得自己剥一层，
+    # 否则可空的有限浮点整个不算数值（收费项目改价 `ChargeItemUpdate.price` 曾因此漏在判据之外）
+    variants = {typing.get_args(a)[0] if typing.get_origin(a) is typing.Annotated else a
+                for a in (ann, *typing.get_args(ann))}
+    return bool({int, float} & variants) and bool not in variants
 
 
 def _bounds(field) -> tuple[float | None, float | None]:
@@ -123,7 +128,7 @@ def test_修完请把基线调小():
 def test_判据自证_只有下界_没有界_挡得住的不报():
     import types
 
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field, FiniteFloat
 
     snippet = '''
 class LineIn(BaseModel):
@@ -135,11 +140,20 @@ class NoteIn(BaseModel):
     bounded: int = Field(ge=1, le=100)
     lines: list[LineIn] = []
 
+class PricePatch(BaseModel):
+    price: FiniteFloat | None = Field(default=None, gt=0)
+
 @router.post("/n")
 def create(body: NoteIn, db=None):
     db.add(SatisfactionSurvey(target_id=body.score, score=body.bounded, patient_id=body.patient_id))
     for line in body.lines:
         db.add(PrescriptionItem(**line.model_dump()))
+
+@router.patch("/p")
+def patch(i: int, body: PricePatch, db=None):
+    item = db.get(ChargeItem, i)
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(item, field, value)
 '''
 
     class _Router:
@@ -147,12 +161,13 @@ def create(body: NoteIn, db=None):
             return lambda *a, **k: (lambda fn: fn)
 
     mod = types.ModuleType("自证")
-    mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "router": _Router()})
+    mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "FiniteFloat": FiniteFloat, "router": _Router()})
     exec(compile(snippet, "自证", "exec"), mod.__dict__)
     got = uncapped_body_numbers([("自证", mod, snippet)])
-    # patient_id 是外键列（归 P1-90 管），bounded 上下界都在列容量里：都不报
+    # patient_id 是外键列（归 P1-90 管），bounded 上下界都在列容量里：都不报；可空的有限浮点照样算数值
     assert got == ["自证:LineIn.days→PrescriptionItem.days[Integer]",
-                   "自证:NoteIn.score→SatisfactionSurvey.target_id[Integer]"], got
+                   "自证:NoteIn.score→SatisfactionSurvey.target_id[Integer]",
+                   "自证:PricePatch.price→ChargeItem.price[Numeric(14,2)]"], got
 
 
 # ================================================================ 回归：超出列容量 422，恰好到上限照常收
@@ -186,6 +201,23 @@ def test_收费项目单价越过Money_422_恰好到上限照常收(client, admi
     r = client.post("/api/billing/charge-items", json={"code": "P193MAX", "name": "列容量", "price": MONEY_MAX},
                     headers=admin)
     assert r.status_code == 201 and r.json()["price"] == MONEY_MAX, (r.status_code, r.text[:200])
+
+
+def test_判据盲区_收费项目改价与调价越过Money_422_恰好到上限照常收(client, admin):
+    """`ChargeItemUpdate.price` 是 `FiniteFloat | None`，判据原先不认它是数值；调价 `RepriceIn.new_price` 经
+    `_change_price` 写库，判据看不见 helper 里的写入——两处都只有下界，修前 SQLite 照收、PG 上 500。"""
+    item = client.post("/api/billing/charge-items", json={"code": "P193FIX", "name": "改价容量", "price": 10},
+                       headers=admin)
+    assert item.status_code == 201, item.text
+    url = f"/api/billing/charge-items/{item.json()['id']}"
+    r = client.patch(url, json={"price": 1e13}, headers=admin)
+    assert r.status_code == 422 and "price" in r.text, (r.status_code, r.text[:200])
+    r = client.post(f"{url}/reprice", json={"new_price": 1e13, "reason": "越界"}, headers=admin)
+    assert r.status_code == 422 and "new_price" in r.text, (r.status_code, r.text[:200])
+    r = client.patch(url, json={"price": MONEY_MAX}, headers=admin)
+    assert r.status_code == 200 and r.json()["price"] == MONEY_MAX, (r.status_code, r.text[:200])
+    r = client.post(f"{url}/reprice", json={"new_price": 12.5, "reason": "恰好在界内"}, headers=admin)
+    assert r.status_code == 200 and r.json()["price"] == 12.5, (r.status_code, r.text[:200])
 
 
 def test_处方明细天数越过integer_422(client, admin, world):

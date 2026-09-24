@@ -98,7 +98,8 @@ class ChargeItemCreate(BaseModel):
 class ChargeItemUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=128)
     category: str | None = Field(default=None, pattern="^(drug|exam|treatment|bed|other)$")
-    price: FiniteFloat | None = Field(default=None, gt=0)
+    # 列容量与建档同口径（P1-93 判据盲区：`FiniteFloat | None` 原先不被判据认作数值）
+    price: FiniteFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
     active: bool | None = None
 
 
@@ -186,7 +187,8 @@ def list_charge_items(
 
 
 class RepriceIn(BaseModel):
-    new_price: FiniteFloat = Field(gt=0)
+    # 列容量（P1-93 判据盲区）：经 `_change_price` 写库，判据看不见 helper 里的写入，原先只有下界
+    new_price: FiniteFloat = Field(gt=0, le=MONEY_MAX)
     reason: str = Field(default="", max_length=256)
     effective_date: OptionalDateStr = ""
 
