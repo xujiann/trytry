@@ -1693,6 +1693,10 @@ def handle_service_apply(
                 ),
             )
         elif candidate.status not in ("enrolled",):
+            # 目标池里已有这位居民（别家筛出来 / 认领的）：与「认领」同一口径，只有本机构能动它。
+            # 原先直接把别家的候选改派给调用方——乙院受理一条居民申请，就把甲院认领的人
+            # 挪进了自己名下（实测 200，而同样的事走「认领」是 403）。
+            assert_org_writable(db, user, candidate.org_id)
             candidate.status = "target"
             candidate.assigned_user_id = user.id
     db.commit()
