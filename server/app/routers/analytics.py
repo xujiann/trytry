@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..datetypes import DateStr
 from ..deps import (
     get_current_user,
     month_bounds,
@@ -258,7 +259,7 @@ class FormulaDeactivateOut(BaseModel):
 
 class OutboundIn(BaseModel):
     patient_id: int
-    visit_date: str = Field(min_length=10, max_length=10)
+    visit_date: DateStr
     external_org_name: str = Field(min_length=1, max_length=128)
     external_org_level: str = Field(default="city", pattern="^(city|province|other)$")
     visit_type: str = Field(default="outpatient", pattern="^(outpatient|inpatient)$")
