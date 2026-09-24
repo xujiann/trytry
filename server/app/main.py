@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import sys
 import threading
 import time
@@ -20,7 +21,9 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import FastAPI, Response, status
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -685,6 +688,32 @@ async def _unhandled_exception_handler(request, exc):
         status_code=500,
         headers={"X-Request-ID": getattr(request.state, "request_id", "")},
     )
+
+
+def _finite_json(value):
+    """把错误详情里的非有限浮点换成它在 JSON 里本来的写法（`"NaN"` / `"Infinity"` / `"-Infinity"`），其余原样。"""
+    if isinstance(value, float) and not math.isfinite(value):
+        return "NaN" if math.isnan(value) else ("Infinity" if value > 0 else "-Infinity")
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_finite_json(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_handler(request, exc):
+    """422：与 FastAPI 默认处理器逐字节一致，只多一步——错误详情里的非有限值换成字符串（P1-92）。
+
+    请求体里的 `NaN` / `Infinity` 记号（标准库 `json.loads` 照收）被校验拦下之后，错误详情的 `input`
+    里就是一个 NaN；默认处理器用 `json.dumps(allow_nan=False)` 编码，**编码失败，422 变成 500**——
+    校验明明拦住了，调用方却只看到「Internal Server Error」，连哪个字段错了都不知道。缺必填字段时
+    `input` 是整个请求体，别的字段里的 NaN 一样会炸，所以要顺着 dict / list 换到底。
+
+    有限值的错误详情经过 `_finite_json` 原样返回，响应字节不变（`tests/test_body_finite_numbers.py`
+    拿 FastAPI 默认处理器逐字节比对钉住）。
+    """
+    return JSONResponse(status_code=422, content={"detail": _finite_json(jsonable_encoder(exc.errors()))})
 
 
 _AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}

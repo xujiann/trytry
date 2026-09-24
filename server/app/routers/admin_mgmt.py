@@ -1,6 +1,6 @@
 """综合管理补齐：㉚人力资源、㉛财务、㉜物资、㉞行政公文，及①-④排班/质控。"""
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -219,11 +219,13 @@ class FinanceCreate(BaseModel):
     period: PeriodStr
     category: str = Field(pattern="^(income|expense)$")
     item: str = Field(default="", max_length=128)
-    amount: float = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0)
 
 
 class FinanceOut(FinanceCreate):
     id: int
+    # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
+    amount: float
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     period: str
 
@@ -816,8 +818,8 @@ def list_staff_contracts(employee_id: int | None = None, db: Session = Depends(g
 class PayrollCreate(BaseModel):
     employee_id: int
     period: PeriodStr
-    base_salary: float = Field(ge=0)
-    perf_bonus: float = Field(default=0, ge=0)
+    base_salary: FiniteFloat = Field(ge=0)
+    perf_bonus: FiniteFloat = Field(default=0, ge=0)
     perf_coefficient: float = Field(default=1.0, ge=0, le=2)
 
 
@@ -912,7 +914,7 @@ class BudgetCreate(BaseModel):
     org_id: int
     year: str = Field(pattern=r"^[0-9]{4}$")  # 只认半角：`\d` 认全角「２０２６」（P2-47）
     category: str = Field(pattern="^(income|expense)$")
-    amount: float = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0)
 
 
 class BudgetReceiptOut(BaseModel):

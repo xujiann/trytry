@@ -2,7 +2,7 @@
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -29,13 +29,17 @@ class SettlementCreate(BaseModel):
     patient_id: int
     org_id: int
     settle_type: str = Field(default="local", pattern="^(local|remote)$")
-    total_amount: float = Field(gt=0)
-    insurance_pay: float = Field(ge=0)
-    self_pay: float = Field(ge=0)
+    total_amount: FiniteFloat = Field(gt=0)
+    insurance_pay: FiniteFloat = Field(ge=0)
+    self_pay: FiniteFloat = Field(ge=0)
 
 
 class SettlementOut(SettlementCreate):
     id: int
+    # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
+    total_amount: float
+    insurance_pay: float
+    self_pay: float
 
     model_config = {"from_attributes": True}
 

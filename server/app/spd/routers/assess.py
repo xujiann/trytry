@@ -23,7 +23,7 @@ from typing import Any
 from secrets import randbelow
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -343,7 +343,7 @@ class IndicatorIn(BaseModel):
     formula: str = Field(default="", max_length=256)
     score_rule: dict = Field(default_factory=dict)
     weight: float = Field(default=1.0, ge=0, le=1000)
-    target_value: float | None = None
+    target_value: FiniteFloat | None = None
     abnormal_rule: str = Field(default="", max_length=256)
     version: str = Field(default="v1", max_length=16)
     effective_from: str = Field(default="", max_length=10)

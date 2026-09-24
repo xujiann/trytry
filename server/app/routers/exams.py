@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -825,7 +825,7 @@ class ExamResourceCreate(BaseModel):
     center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
     item_name: str = Field(min_length=1, max_length=128)
     device: str = Field(default="", max_length=128)
-    price: float = Field(default=0, ge=0)
+    price: FiniteFloat = Field(default=0, ge=0)
     duration_min: int = Field(default=15, gt=0)
     notes: str = Field(default="", max_length=512)
 

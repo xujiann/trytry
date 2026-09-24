@@ -9,7 +9,7 @@
   各组例数/均费、按 MDC 汇总。
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
@@ -97,7 +97,7 @@ def assign_drg_group(db: Session, summary: CaseSummary) -> dict | None:
 class DrgGroupCreate(BaseModel):
     code: str = Field(min_length=1, max_length=16)
     name: str = Field(min_length=1, max_length=128)
-    base_weight: float = Field(gt=0)
+    base_weight: FiniteFloat = Field(gt=0)
     keywords: str = Field(default="", max_length=256)
     mdc: str = Field(default="", max_length=8)
     mdc_name: str = Field(default="", max_length=64)
@@ -108,7 +108,7 @@ class DrgGroupCreate(BaseModel):
 
 class DrgGroupUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=128)
-    base_weight: float | None = Field(default=None, gt=0)
+    base_weight: FiniteFloat | None = Field(default=None, gt=0)
     keywords: str | None = Field(default=None, max_length=256)
     mdc: str | None = Field(default=None, max_length=8)
     mdc_name: str | None = Field(default=None, max_length=64)

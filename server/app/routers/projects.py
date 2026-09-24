@@ -9,7 +9,7 @@
 2. **逾期按日期现算**，不设定时任务改状态——与接种禁忌、疫苗效期同一条。
 """
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable
@@ -37,7 +37,7 @@ class ProjectIn(BaseModel):
     owner_name: str = Field(default="", max_length=64)
     start_date: OptionalDateStr = ""
     due_date: OptionalDateStr = ""
-    budget_amount: float = Field(default=0, ge=0)
+    budget_amount: FiniteFloat = Field(default=0, ge=0)
     description: str = Field(default="", max_length=1024)
 
 

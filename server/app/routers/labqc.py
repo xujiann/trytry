@@ -13,7 +13,7 @@
 （人工登记合格/不合格），本模块是检验科室内质控的数值体系，互不替代。
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
@@ -58,13 +58,16 @@ class LotCreate(BaseModel):
     item_code: str = Field(min_length=1, max_length=64)
     item_name: str = Field(min_length=1, max_length=128)
     lot_no: str = Field(min_length=1, max_length=64)
-    target_value: float
-    sd: float = Field(gt=0)  # SD=0 时 z 分数除零，且质控品不可能无离散度
+    target_value: FiniteFloat
+    sd: FiniteFloat = Field(gt=0)  # SD=0 时 z 分数除零，且质控品不可能无离散度
 
 
 class LotOut(LotCreate):
     id: int
     active: bool
+    # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
+    target_value: float
+    sd: float
 
     model_config = {"from_attributes": True}
 
@@ -129,7 +132,7 @@ def set_lot_active(lot_id: int, body: LotPatch, db: Session = Depends(get_db), u
 
 
 class MeasurementCreate(BaseModel):
-    value: float
+    value: FiniteFloat
     # 测定时刻（补录时与录入时刻不同）；空串=以录入时刻为准
     measured_at: str = Field(default="", max_length=16)
     operator: str = Field(default="", max_length=64)

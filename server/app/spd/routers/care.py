@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -352,7 +352,7 @@ class ConsultToFollowupOut(BaseModel):
 class MeasurementIn(BaseModel):
     patient_id: int
     metric: str = Field(min_length=1, max_length=32)
-    value: float
+    value: FiniteFloat
     unit: str = Field(default="", max_length=16)
     program_code: str = Field(default="", max_length=32)
     source: str = Field(default="manual", pattern="^(manual|device|his|poct)$")

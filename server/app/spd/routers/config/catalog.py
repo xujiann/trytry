@@ -6,7 +6,7 @@
 from typing import Any
 
 from fastapi import Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -309,8 +309,8 @@ class TargetIn(BaseModel):
     metric: str = Field(min_length=1, max_length=32)
     metric_name: str = Field(default="", max_length=64)
     kind: str = Field(default="quantitative", pattern="^(quantitative|qualitative)$")
-    target_low: float | None = None
-    target_high: float | None = None
+    target_low: FiniteFloat | None = None
+    target_high: FiniteFloat | None = None
     unit: str = Field(default="", max_length=16)
     qualitative: str = Field(default="", max_length=128)
     risk_level: str = Field(default="", max_length=16)

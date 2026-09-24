@@ -7,7 +7,7 @@ from typing import Any
 from secrets import token_urlsafe
 
 from fastapi import Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -290,7 +290,7 @@ class PackageIn(BaseModel):
     code: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=64)
     program_code: str = Field(default="", max_length=32)
-    price: float = Field(default=0, ge=0)
+    price: FiniteFloat = Field(default=0, ge=0)
     period_days: int = Field(default=365, ge=1, le=3650)
     items: list[dict] = Field(default_factory=list)
 

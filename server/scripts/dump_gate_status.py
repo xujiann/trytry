@@ -41,6 +41,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_api_contract_governance as contract
     import test_ascii_digit_patterns as asciidigits
     import test_body_fk_exists as bodyfk
+    import test_body_finite_numbers as bodyfinite
     import test_body_str_length as bodystr
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
@@ -112,6 +113,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_body_fk_exists.py"),
         ("引用完整性", "请求体字符串无长度上限写进定长列（PG 上超长即 500；197 → 0 已清零）", bodystr.BASELINE,
          "tests/test_body_str_length.py"),
+        ("数值入参", "浮点入参收得下 NaN / Infinity（超标判定对 NaN 恒为假、金额列 500；66 → 0 已清零）",
+         bodyfinite.BASELINE, "tests/test_body_finite_numbers.py"),
         ("时间口径", "app/ 里绕过 clock.today() 的 date.today()", clock.DATE_TODAY_BASELINE,
          "tests/test_clock.py"),
         ("时间口径", "app/ 顶层时间快照的豁免", len(clock.APP_IMPORT_TIME_OK),

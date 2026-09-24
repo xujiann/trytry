@@ -8,7 +8,7 @@ from ..deps import get_current_user, paginate, require_roles
 from ..models import CssdCostItem, CssdRequest, Organization, SterilizationBatch, User
 from ..schemas import BatchCreate, BatchOut
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import func
 
 router = APIRouter(prefix="/api/cssd", tags=["消毒供应"], dependencies=[Depends(get_current_user)])
@@ -95,7 +95,7 @@ COST_TYPES = {
 class CostItemCreate(BaseModel):
     batch_id: int
     cost_type: str = Field(pattern="^(labor|material|energy|equipment|other)$")
-    amount: float = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0)
     note: str = Field(default="", max_length=256)
 
 

@@ -789,3 +789,26 @@ def test_请求体字符串超长在真PG上是422而不是500(pg_engine):
         + result.stderr[-2000:]
     )
 
+
+
+def test_请求体非有限浮点在真PG上是422而不是照存或500(pg_engine):
+    """把 `test_body_finite_numbers.py` 换到 PG 上再跑一遍（P1-92）。
+
+    PG 的 float 列存得下 NaN：修前冷链录温 `NaN` → 201、记成「未超温」，质控测定 `NaN` → 201、判「在控」；
+    `Numeric(14,2)` 装不下无穷，金额 `Infinity` → 500。SQLite 把 NaN 存成 NULL（非空列直接拒），两种
+    后果都测不出来。修完之后两个库上都该是 422；存量 NaN（只有 PG 存得下）读出来是 null 而不是让列表 500，
+    也只有这里测得出。接法与上几条相同（子进程 + 导入前顶掉连接串），同样放在文件末尾。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_body_finite_numbers.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_FINITE_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "请求体非有限浮点用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )

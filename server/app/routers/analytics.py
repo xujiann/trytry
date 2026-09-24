@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy import func
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -265,8 +265,8 @@ class OutboundIn(BaseModel):
     external_org_level: str = Field(default="city", pattern="^(city|province|other)$")
     visit_type: str = Field(default="outpatient", pattern="^(outpatient|inpatient)$")
     diagnosis_name: str = Field(default="", max_length=256)
-    total_amount: float = Field(default=0, ge=0)
-    insurance_pay: float = Field(default=0, ge=0)
+    total_amount: FiniteFloat = Field(default=0, ge=0)
+    insurance_pay: FiniteFloat = Field(default=0, ge=0)
     referral_id: int | None = None
     source: str = Field(default="manual", pattern="^(manual|insurance_import)$")
 

@@ -2,7 +2,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, FiniteFloat, field_validator
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
@@ -76,16 +76,21 @@ class MilestoneOut(MilestoneCreate):
 
 
 class VitalCreate(BaseModel):
-    heart_rate: float | None = None
-    sbp: float | None = None
-    dbp: float | None = None
-    spo2: float | None = None
+    heart_rate: FiniteFloat | None = None
+    sbp: FiniteFloat | None = None
+    dbp: FiniteFloat | None = None
+    spo2: FiniteFloat | None = None
     note: str = Field(default="", max_length=256)
 
 
 class VitalOut(VitalCreate):
     id: int
     case_id: int
+    # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
+    heart_rate: float | None = None
+    sbp: float | None = None
+    dbp: float | None = None
+    spo2: float | None = None
 
     model_config = {"from_attributes": True}
 

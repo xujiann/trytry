@@ -1,6 +1,6 @@
 """公卫协同：㉖应急处置指挥、㉗医防协同提醒、㉘其他卫生业务监测。"""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable, assert_patient_visible
@@ -185,14 +185,17 @@ class MonitorCreate(BaseModel):
     domain: str = Field(max_length=16)
     org_id: int
     indicator: str = Field(min_length=1, max_length=128)
-    value: float
-    threshold: float
+    value: FiniteFloat
+    threshold: FiniteFloat
     record_date: OptionalDateStr = ""
 
 
 class MonitorOut(MonitorCreate):
     id: int
     exceeded: bool
+    # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
+    value: float
+    threshold: float
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     record_date: str = ""
 

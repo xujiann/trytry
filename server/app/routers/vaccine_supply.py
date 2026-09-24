@@ -15,7 +15,7 @@
    就归不了因。
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -390,9 +390,9 @@ def batch_recipients(batch_id: int, db: Session = Depends(get_db)):
 class ColdChainIn(BaseModel):
     org_id: int
     device_name: str = Field(min_length=1, max_length=128)
-    temperature: float
-    min_allowed: float = 2.0
-    max_allowed: float = 8.0
+    temperature: FiniteFloat
+    min_allowed: FiniteFloat = 2.0
+    max_allowed: FiniteFloat = 8.0
     recorded_at: str = Field(min_length=16, max_length=19)
 
 

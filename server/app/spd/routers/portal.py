@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
 from ... import clock
@@ -328,7 +328,7 @@ def archive(
 class SelfMeasureIn(BaseModel):
     patient_id: int | None = None
     metric: str = Field(min_length=1, max_length=32)
-    value: float
+    value: FiniteFloat
     unit: str = Field(default="", max_length=16)
     program_code: str = Field(default="", max_length=32)
     source: str = Field(default="manual", pattern="^(manual|device)$")

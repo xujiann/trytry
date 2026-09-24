@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -84,7 +84,7 @@ def _normalized_weights(db: Session) -> dict[str, float]:
 
 
 class IndicatorPatch(BaseModel):
-    weight: float | None = Field(default=None, ge=0)
+    weight: FiniteFloat | None = Field(default=None, ge=0)
     name: str | None = None
     active: bool | None = None
 

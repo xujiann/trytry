@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from .datetypes import DateStr, OptionalDateStr
 
 
@@ -183,7 +183,7 @@ class CriticalResolveBody(BaseModel):
 
 class DrugRuleCreate(BaseModel):
     drug_code: str = Field(max_length=64)
-    max_daily_dose: float = Field(gt=0)
+    max_daily_dose: FiniteFloat = Field(gt=0)
     dose_unit: str = Field(default="mg", max_length=16)
     note: str = Field(default="", max_length=256)
     # 相互作用冲突药品编码，逗号分隔（如 "D002,D003"）
@@ -199,11 +199,14 @@ class DrugRuleCreate(BaseModel):
     # 抗菌药物标记与 DDD（限定日剂量，单位同 dose_unit）。
     # ddd 留 0 表示未维护，使用强度统计会把它计入"未覆盖"而不是按 0 参与计算。
     antibiotic: bool = False
-    ddd: float = Field(default=0, ge=0)
+    ddd: FiniteFloat = Field(default=0, ge=0)
 
 
 class DrugRuleOut(DrugRuleCreate):
     id: int
+    # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
+    max_daily_dose: float
+    ddd: float = 0
     # 停用标记：停用的规则不参与审方与点评，但保留在库里可回溯
     active: bool = True
 
@@ -213,8 +216,13 @@ class DrugRuleOut(DrugRuleCreate):
 class PrescriptionItemIn(BaseModel):
     drug_code: str
     drug_name: str
-    daily_dose: float = Field(gt=0)
+    daily_dose: FiniteFloat = Field(gt=0)
     days: int = Field(default=1, ge=1)
+
+
+class PrescriptionItemOut(PrescriptionItemIn):
+    # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
+    daily_dose: float
 
 
 class PrescriptionCreate(BaseModel):
@@ -231,7 +239,7 @@ class PrescriptionOut(BaseModel):
     diagnosis_name: str
     status: str
     review_comment: str
-    items: list[PrescriptionItemIn]
+    items: list[PrescriptionItemOut]
     # 块2：非拦截性提示（肝肾功能剂量调整等），不影响审方状态
     advisories: list[str] = []
 
@@ -280,11 +288,11 @@ class ChronicOut(ChronicCreate):
 
 
 class FollowUpCreate(BaseModel):
-    sbp: float | None = None
-    dbp: float | None = None
-    glucose: float | None = None
+    sbp: FiniteFloat | None = None
+    dbp: FiniteFloat | None = None
+    glucose: FiniteFloat | None = None
     # 块1：通用指标（非血压血糖类），如 {"adherence_score": 4, "cat_score": 22}
-    metrics: dict[str, float] = Field(default_factory=dict)
+    metrics: dict[str, FiniteFloat] = Field(default_factory=dict)
     guidance: str = ""
     next_due: str = ""
 
@@ -292,6 +300,11 @@ class FollowUpCreate(BaseModel):
 class FollowUpOut(FollowUpCreate):
     id: int
     chronic_id: int
+    # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
+    sbp: float | None = None
+    dbp: float | None = None
+    glucose: float | None = None
+    metrics: dict[str, float] = Field(default_factory=dict)
 
     model_config = {"from_attributes": True}
 
@@ -430,7 +443,7 @@ class BatchOut(BatchCreate):
 class WasteCreate(BaseModel):
     org_id: int
     waste_type: str = Field(pattern="^(infectious|sharp|pathological|pharmaceutical|chemical)$")
-    weight_kg: float = Field(gt=0)
+    weight_kg: FiniteFloat = Field(gt=0)
     collected_date: DateStr
 
 

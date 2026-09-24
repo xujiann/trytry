@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -68,13 +68,13 @@ class PoolIn(BaseModel):
     year: int = Field(ge=2000, le=2100)
     insurance_type: str = Field(default="resident", pattern="^(resident|employee)$")
     org_group_id: int | None = None
-    total_amount: float = Field(ge=0)
+    total_amount: FiniteFloat = Field(ge=0)
     prepay_ratio_pct: float = Field(default=0, ge=0, le=100)
     note: str = Field(default="", max_length=256)
 
 
 class PoolUpdate(BaseModel):
-    total_amount: float | None = Field(default=None, ge=0)
+    total_amount: FiniteFloat | None = Field(default=None, ge=0)
     prepay_ratio_pct: float | None = Field(default=None, ge=0, le=100)
     note: str | None = None
     status: str | None = Field(default=None, pattern="^(active|closed)$")
@@ -284,7 +284,7 @@ def update_pool(pool_id: int, body: PoolUpdate, db: Session = Depends(get_db)):
 
 class PrepaymentIn(BaseModel):
     batch_no: str = Field(default="", max_length=32)
-    amount: float = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0)
     paid_date: OptionalDateStr = ""
     note: str = Field(default="", max_length=256)
 
@@ -340,7 +340,7 @@ def list_prepayments(pool_id: int, db: Session = Depends(get_db)):
 class PeriodIn(BaseModel):
     period: PeriodStr
     # 留空即由系统按结算单归集；给值则视为人工核定，覆盖系统数
-    actual_amount: float | None = Field(default=None, ge=0)
+    actual_amount: FiniteFloat | None = Field(default=None, ge=0)
     note: str = Field(default="", max_length=256)
 
 
@@ -420,7 +420,7 @@ def list_periods(pool_id: int, db: Session = Depends(get_db)):
 
 class SettleIn(BaseModel):
     # 留空即取各期预结之和；给值则以人工核定为准
-    total_expense: float | None = Field(default=None, ge=0)
+    total_expense: FiniteFloat | None = Field(default=None, ge=0)
     overrun_action: str = Field(default="none", pattern="^(none|share|carry)$")
     note: str = Field(default="", max_length=256)
 

@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import case, func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -376,8 +376,8 @@ def _admission_visible_or_404(db: Session, admission_id: int, user: User, resour
 class CaseSummaryCreate(BaseModel):
     discharge_diagnosis: str = Field(min_length=1, max_length=256)
     operation: str = ""
-    total_cost: float = Field(default=0, ge=0)
-    drug_cost: float = Field(default=0, ge=0)
+    total_cost: FiniteFloat = Field(default=0, ge=0)
+    drug_cost: FiniteFloat = Field(default=0, ge=0)
     outcome: str = Field(default="好转", pattern="^(治愈|好转|未愈|死亡|其他)$")
     note: str = ""
 

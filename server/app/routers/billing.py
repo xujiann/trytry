@@ -23,8 +23,8 @@ import secrets
 from datetime import timedelta
 from typing import Protocol, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import case, func, insert, literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError, InvalidRequestError
@@ -90,14 +90,14 @@ class ChargeItemCreate(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
     category: str = Field(default="other", pattern="^(drug|exam|treatment|bed|other)$")
-    price: float = Field(gt=0)
+    price: FiniteFloat = Field(gt=0)
     active: bool = True
 
 
 class ChargeItemUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=128)
     category: str | None = Field(default=None, pattern="^(drug|exam|treatment|bed|other)$")
-    price: float | None = Field(default=None, gt=0)
+    price: FiniteFloat | None = Field(default=None, gt=0)
     active: bool | None = None
 
 
@@ -185,7 +185,7 @@ def list_charge_items(
 
 
 class RepriceIn(BaseModel):
-    new_price: float = Field(gt=0)
+    new_price: FiniteFloat = Field(gt=0)
     reason: str = Field(default="", max_length=256)
     effective_date: OptionalDateStr = ""
 
@@ -473,13 +473,13 @@ DEPOSIT_TYPES = {"prepay": "预交", "refund": "退费", "offset": "结算冲抵
 
 class DepositCreate(BaseModel):
     admission_id: int
-    amount: float = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0)
     method: str = Field(default="cash", pattern="^(cash|card|online)$")
 
 
 class DepositRefundIn(BaseModel):
     admission_id: int
-    amount: float = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0)
     method: str = Field(default="cash", pattern="^(cash|card|online)$")
 
 
@@ -704,7 +704,7 @@ def get_deposit_balance(
 @router.get("/deposits/alerts", response_model=list[DepositAlertOut])
 def deposit_alerts(
     response: Response,
-    threshold: float = 0,
+    threshold: float = Query(default=0, allow_inf_nan=False),
     offset: int = 0, limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -746,7 +746,7 @@ class SettlementCreate(BaseModel):
     bill_type: str = Field(pattern="^(outpatient|inpatient)$")
     admission_id: int | None = None
     encounter_id: int | None = None
-    insurance_pay: float = Field(default=0, ge=0)
+    insurance_pay: FiniteFloat = Field(default=0, ge=0)
 
 
 class SettlementOut(BaseModel):
@@ -1249,7 +1249,7 @@ class PaymentCreate(BaseModel):
     settlement_id: int
     channel: str = Field(pattern="^(cash|card|insurance|online|gateway)$")
     # 缺省按结算单个人自付金额（医保渠道按医保支付金额）
-    amount: float | None = Field(default=None, gt=0)
+    amount: FiniteFloat | None = Field(default=None, gt=0)
 
 
 @router.post(
@@ -1474,7 +1474,7 @@ router.dependencies = _authed_dependencies
 
 class RefundIn(BaseModel):
     # 缺省全额退款；部分退款须小于等于剩余可退金额
-    amount: float | None = Field(default=None, gt=0)
+    amount: FiniteFloat | None = Field(default=None, gt=0)
     reason: str = Field(default="", max_length=256)
 
 

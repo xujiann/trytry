@@ -10,7 +10,7 @@ from datetime import date
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -49,7 +49,7 @@ class PurchaseIn(BaseModel):
     spec: str = Field(default="", max_length=64)
     unit: str = Field(default="件", max_length=16)
     quantity: int = Field(default=1, gt=0)
-    estimated_price: float = Field(default=0, ge=0)
+    estimated_price: FiniteFloat = Field(default=0, ge=0)
     reason: str = Field(default="", max_length=512)
 
 
@@ -204,7 +204,7 @@ def approve_purchase(
 class ContractIn(BaseModel):
     supplier_id: int
     contract_no: str = Field(min_length=1, max_length=64)
-    contract_amount: float = Field(ge=0)
+    contract_amount: FiniteFloat = Field(ge=0)
 
 
 @router.post(
@@ -330,7 +330,7 @@ class ConsumableIn(BaseModel):
     supplier_id: int | None = None
     batch_no: str = Field(default="", max_length=64)
     expire_date: OptionalDateStr = ""
-    unit_price: float = Field(default=0, ge=0)
+    unit_price: FiniteFloat = Field(default=0, ge=0)
 
 
 @router.post(

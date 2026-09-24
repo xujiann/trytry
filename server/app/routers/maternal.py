@@ -3,7 +3,7 @@
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from ..datetypes import DateStr, OptionalDateStr
@@ -206,8 +206,8 @@ def list_children(db: Session = Depends(get_db)):
 
 class ChildVisitCreate(BaseModel):
     visit_type: str = Field(pattern="^(newborn|checkup)$")
-    height_cm: float | None = None
-    weight_kg: float | None = None
+    height_cm: FiniteFloat | None = None
+    weight_kg: FiniteFloat | None = None
     note: str = Field(default="", max_length=512)
     visit_date: OptionalDateStr = ""
 
