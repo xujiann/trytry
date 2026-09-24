@@ -40,18 +40,19 @@ class TodosOut(BaseModel):
     items: list[TodoSectionOut]
 
 
+#: 每节预览的行数上限。网页铃铛每节只显示前 5 条、医生移动端前 20 条，预览就是预览；
+#: 可 `count` 必须是全部（P1-85）——原先 `count = len(预览)`，积压过 100 条就显示 100，
+#: 积压越严重显示得越像「还好」。`total` 是各节计数之和，跟着对。
+PREVIEW = 100
+
+
 def _pending_prescriptions(db: Session) -> dict:
-    rows = (
-        db.query(Prescription)
-        .filter(Prescription.status == "pending_review")
-        .order_by(Prescription.id.desc())
-        .limit(100)
-        .all()
-    )
+    query = db.query(Prescription).filter(Prescription.status == "pending_review")
+    rows = query.order_by(Prescription.id.desc()).limit(PREVIEW).all()
     return {
         "type": "prescription_review",
         "title": "待药师审处方",
-        "count": len(rows),
+        "count": query.count(),
         "list": [
             {"id": p.id, "diagnosis_name": p.diagnosis_name, "review_comment": p.review_comment}
             for p in rows
@@ -60,17 +61,12 @@ def _pending_prescriptions(db: Session) -> dict:
 
 
 def _pending_exams(db: Session) -> dict:
-    rows = (
-        db.query(ExamRequest)
-        .filter(ExamRequest.status.in_(["pending", "diagnosing"]))
-        .order_by(ExamRequest.id.desc())
-        .limit(100)
-        .all()
-    )
+    query = db.query(ExamRequest).filter(ExamRequest.status.in_(["pending", "diagnosing"]))
+    rows = query.order_by(ExamRequest.id.desc()).limit(PREVIEW).all()
     return {
         "type": "exam_diagnosis",
         "title": "待诊断申请",
-        "count": len(rows),
+        "count": query.count(),
         "list": [
             {"id": r.id, "center_type": r.center_type, "item_name": r.item_name, "status": r.status}
             for r in rows
@@ -79,17 +75,12 @@ def _pending_exams(db: Session) -> dict:
 
 
 def _stock_alerts(db: Session) -> dict:
-    rows = (
-        db.query(DrugStock)
-        .filter(DrugStock.quantity < DrugStock.threshold)
-        .order_by(DrugStock.org_id)
-        .limit(100)
-        .all()
-    )
+    query = db.query(DrugStock).filter(DrugStock.quantity < DrugStock.threshold)
+    rows = query.order_by(DrugStock.org_id).limit(PREVIEW).all()
     return {
         "type": "stock_shortage",
         "title": "缺药预警",
-        "count": len(rows),
+        "count": query.count(),
         "list": [
             {"org_id": s.org_id, "drug_name": s.drug_name, "quantity": s.quantity, "threshold": s.threshold}
             for s in rows
@@ -99,20 +90,15 @@ def _stock_alerts(db: Session) -> dict:
 
 def _critical_reports(db: Session) -> dict:
     # 未闭环危急值：notified/acknowledged（含存量迁移前空串），resolved 不再计入
-    rows = (
-        db.query(ExamReport)
-        .filter(
-            ExamReport.critical.is_(True),
-            ExamReport.critical_status.in_(["notified", "acknowledged", ""]),
-        )
-        .order_by(ExamReport.id.desc())
-        .limit(100)
-        .all()
+    query = db.query(ExamReport).filter(
+        ExamReport.critical.is_(True),
+        ExamReport.critical_status.in_(["notified", "acknowledged", ""]),
     )
+    rows = query.order_by(ExamReport.id.desc()).limit(PREVIEW).all()
     return {
         "type": "critical_report",
         "title": "未闭环危急值",
-        "count": len(rows),
+        "count": query.count(),
         "list": [
             {
                 "id": r.id,
@@ -142,11 +128,11 @@ def _unacknowledged_critical(db: Session, user: User) -> dict:
     orgs = visible_org_ids(db, user)
     if orgs is not None:
         query = query.filter(ExamRequest.from_org_id.in_(orgs))
-    rows = query.order_by(ExamReport.id.desc()).limit(100).all()
+    rows = query.order_by(ExamReport.id.desc()).limit(PREVIEW).all()
     return {
         "type": "critical_ack",
         "title": "待确认危急值",
-        "count": len(rows),
+        "count": query.count(),
         "list": [{"id": r.id, "request_id": r.request_id, "conclusion": r.conclusion} for r in rows],
     }
 
