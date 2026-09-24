@@ -912,15 +912,55 @@ def test_surgery_full_flow(page, base_url, seed):
     expect(page.locator("#surg-detail-body")).to_contain_text("治愈")
 
 
-def test_followup_center_flow(page, base_url, seed):
-    """随访中心（T2.4）：术后随访任务自动派生，可在页面完成并计入统计。"""
+@pytest.fixture(scope="session")
+def admin_read(base_url):
+    """以 admin 身份按接口读回（核对"点了取消确实没动"用）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    return lambda path: call(path, None, admin)
+
+
+def test_followup_center_flow(page, base_url, seed, admin_read):
+    """随访中心（T2.4）：术后随访任务自动派生，可在页面完成并计入统计。
+
+    P2-38：「完成」的随访结果改在页内表单里填（多行）；「取消」任务原先点一下就生效、没有任何确认，
+    现在先确认。先点完成再取消、点取消任务再保留，按接口核对任务仍待随访，最后完成。"""
     _login(page, base_url)
     _open_page(page, "followups", "随访中心")
     expect(page.locator("#page-body")).to_contain_text("术后随访")
 
-    page.once("dialog", lambda d: d.accept("切口愈合良好，无发热"))
-    page.click("button[data-done]")
+    tid = page.locator("button[data-done]").first.get_attribute("data-done")
+
+    def status():
+        (row,) = [t for t in admin_read("/api/followups?limit=500") if str(t["id"]) == tid]
+        return row["status"]
+
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(f'button[data-done="{tid}"]')
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    page.click(f'#page-body button[data-cancel="{tid}"]')
+    expect(modal).to_contain_text("不能恢复")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert status() == "pending", "点了取消 / 保留却照样动了任务"
+
+    page.click(f'button[data-done="{tid}"]')
+    _spd_modal(page, {"result": "切口愈合良好，无发热\n嘱两周后门诊复查"})
     expect(page.locator("#page-body")).to_contain_text("已完成")
+    assert status() == "done"
 
 
 def test_doctor_mobile_workbench_loads(page, base_url, seed):

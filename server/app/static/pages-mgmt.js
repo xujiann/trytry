@@ -250,10 +250,15 @@ async function renderFollowups() {
     const d = e.target.dataset;
     try {
       if (d.done) {
-        const result = prompt("随访结果"); if (!result) return;
-        await api(`/api/followups/${d.done}/complete`, { method: "POST", body: JSON.stringify({ result }) });
-      } else if (d.cancel) await api(`/api/followups/${d.cancel}/cancel`, { method: "POST" });
-      else return;
+        // P2-38：随访结果是一段话（症状、用药、下次安排），单行弹窗写不下也换不了行；留空由后端报人话。
+        const form = await spdModal("完成随访", [{ name: "result", label: "随访结果", type: "textarea" }]);
+        if (!form) return;
+        await api(`/api/followups/${d.done}/complete`, { method: "POST", body: JSON.stringify({ result: form.result }) });
+      } else if (d.cancel) {
+        // 取消原先点一下就生效、没有任何确认：误点一下，该随访的患者就从待随访清单里消失了。
+        if (!await spdModal("取消随访任务", [], { intro: "取消后该任务不再出现在待随访清单里，不能恢复。" })) return;
+        await api(`/api/followups/${d.cancel}/cancel`, { method: "POST" });
+      } else return;
       route();
     } catch (err) { setMsg("#fu-msg", err.message, false); }
   };
