@@ -731,10 +731,9 @@ NEWLY_VISIBLE_UNGUARDED_WRITES: set[str] = set()
 #: `db.get(带 org_id 的模型,` 就点了名。P1-94 把这两个改档端点从裸 dict 换成模型、补上存在性检查后现形。
 #: 与 `test_body_id_org_write_guard.NO_SINGLE_ORG_OWNER` 同一理由（建档那一侧早已登记）；「医师能改全县配置」
 #: 是纵向权限问题，不在本闸门。前提（主对象表上确实没有 org_id）由用例钉住。
-BYID_PRIMARY_WITHOUT_ORG = {
-    "spd/care.py:update_case_report_task": "SpdCaseReportTask",
-    "spd/config/centers.py:update_center": "SpdCenter",
-}
+#: ✅ 清零（2026-09-24，P1-106）：上报任务与专病中心改档的负责人改经 `platform.unusable_user` 查
+#: （存在且未停用），源码里不再有 `db.get(User,`，这两条误命中随之消失。
+BYID_PRIMARY_WITHOUT_ORG: dict[str, str] = {}
 
 #: 同上，读侧。
 NEWLY_VISIBLE_UNGUARDED_READS = {

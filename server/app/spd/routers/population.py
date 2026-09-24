@@ -27,7 +27,7 @@ from ...database import get_db
 from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
-from ..platform import Organization, Patient, User, pii_filter
+from ..platform import Organization, Patient, User, pii_filter, unusable_user
 from ..models import (
     SpdAssessment,
     SpdCandidate,
@@ -774,6 +774,12 @@ def distribute_candidates(
     rows = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids)).all()
     for candidate in rows:
         assert_org_writable(db, user, candidate.org_id)
+    if body.assigned_user_id is not None:
+        # 指派人原先一眼不看：填错编号开发库存成悬空 id、生产库撞外键 500；停用的账号也不收（P1-106）。
+        # 排在归属判定之后：先 403，免得无权的人拿它探账号在不在、停没停用
+        state = unusable_user(db, body.assigned_user_id)
+        if state:
+            raise HTTPException(status_code=404, detail=f"指派人{state}")
     for candidate in rows:
         if body.team_id is not None:
             candidate.team_id = body.team_id
@@ -861,12 +867,15 @@ class EnrollIn(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-#: 纳管档案里引用别的表的四个字段：建档与改档都在写库之前逐个查存在（P1-90）
+#: 纳管档案里引用别的表的四个字段：建档与改档都在写库之前逐个查存在（P1-90）。
+#: 服务团队看启用标志（P1-103），三个账号看停用（P1-106，经 `unusable_user`）
 _ENROLL_REFS = {
     "team_id": (SpdTeam, "服务团队"),
-    "doctor_user_id": (User, "主管医生"),
-    "manager_user_id": (User, "个案管理师"),
-    "village_doctor_id": (User, "村医"),
+}
+_ENROLL_USER_REFS = {
+    "doctor_user_id": "主管医生",
+    "manager_user_id": "个案管理师",
+    "village_doctor_id": "村医",
 }
 
 
@@ -881,8 +890,9 @@ def _check_enroll_refs(db: Session, values: dict, current: SpdEnrollment | None 
     `except IntegrityError` 本是为「同一患者同一病种」写的，于是报成「该患者已纳管此病种」，
     改档那条没有接住，直接 500。
 
-    带启用标志的（服务团队）停用了也不收，与分发目标患者同一句。改档传 `current`：与现值相同的不再查——
-    团队后来停用了，整份回传档案、实际只改风险分层的调用不该被它挡住。"""
+    带启用标志的（服务团队）停用了也不收，与分发目标患者同一句；停用的账号同样不收——登录不了的人挂成
+    主管医生 / 个案管理师，这个患者就没人管了（P1-106）。改档传 `current`：与现值相同的不再查——
+    团队或医生后来停用了，整份回传档案、实际只改风险分层的调用不该被它挡住。"""
     for field, (model, label) in _ENROLL_REFS.items():
         value = values.get(field)
         if value is None or (current is not None and getattr(current, field) == value):
@@ -890,6 +900,13 @@ def _check_enroll_refs(db: Session, values: dict, current: SpdEnrollment | None 
         row = db.get(model, value)
         if row is None or not getattr(row, "active", True):
             state = "不存在" if row is None else "已停用"
+            raise HTTPException(status_code=404, detail=f"{label}{state}（{field}={value}）")
+    for field, label in _ENROLL_USER_REFS.items():
+        value = values.get(field)
+        if value is None or (current is not None and getattr(current, field) == value):
+            continue
+        state = unusable_user(db, value)
+        if state:
             raise HTTPException(status_code=404, detail=f"{label}{state}（{field}={value}）")
 
 

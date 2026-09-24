@@ -49,6 +49,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_body_raw_dict as bodyraw
     import test_date_window_bounds as datewin
     import test_disabled_catalog_refs as disabledrefs
+    import test_disabled_user_refs as disabledusers
     import test_query_limit_params as limitparams
     import test_response_constraint_writers as respwriters
     import test_body_str_length as bodystr
@@ -90,7 +91,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
         ("横向越权（写侧）", "按 id 写别名机构列（center_org_id 等）的表 × 按设计不判（逐条写明理由）",
          len(horizontal.ALIAS_ORG_BYID_BY_DESIGN), H),
         ("横向越权（写侧）", "按设计跨机构的豁免（逐条写明理由）", len(horizontal.BYID_CROSS_ORG_OK), H),
-        ("横向越权（写侧）", "按 id 取的主对象没有机构列、命中的只是外键存在性检查（跨机构配置）",
+        ("横向越权（写侧）", "按 id 取的主对象没有机构列、命中的只是外键存在性检查（跨机构配置；2 → 0：P1-106 改经 unusable_user 后误命中消失）",
          len(horizontal.BYID_PRIMARY_WITHOUT_ORG), H),
         ("横向越权（写侧）", "已登记的领域守卫", len(horizontal.DOMAIN_ORG_GUARDS), H),
         ("横向越权（读侧）", "按 id 读患者资源的豁免", len(horizontal.BYID_PATIENT_READ_OK), H),
@@ -133,6 +134,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          disabledrefs.BASELINE, "tests/test_disabled_catalog_refs.py"),
         ("引用完整性", "按设计引用停用目录对象的豁免（往期补录 / 配置先于启用 / 手动出报告，逐条写明理由）",
          len(disabledrefs.BY_DESIGN), "tests/test_disabled_catalog_refs.py"),
+        ("引用完整性", "写接口请求体里指向账号的字段不经 unusable_user（停用账号照样挂上新任务 / 随访 / 患者，四处连存在都不查、PG 上 500；23 → 0 已清零）",
+         disabledusers.BASELINE, "tests/test_disabled_user_refs.py"),
+        ("引用完整性", "按设计不查在用的账号字段（给已发生的事补录，逐条写明理由）",
+         len(disabledusers.BY_DESIGN), "tests/test_disabled_user_refs.py"),
         ("引用完整性", "在已结束的父对象下新建子行却不看父对象状态（离职医师放号 / 已出报告收标本 / 死亡档案绑包…；6 → 0 已清零）",
          closedparent.BASELINE, "tests/test_closed_parent_writes.py"),
         ("引用完整性", "按设计在已结束父对象下挂子行的豁免（事后补录 / 结算先于出院 / 留痕行…，逐条写明理由）",
@@ -181,7 +186,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(bodyid.EXEMPT), "tests/test_body_id_org_write_guard.py"),
         ("横向越权（写侧）", "角色门只允许全域角色（非可越权入口）",
          len(bodyid.GLOBAL_ROLE_ONLY), "tests/test_body_id_org_write_guard.py"),
-        ("横向越权（写侧）", "被写对象没有单一机构归属（跨机构配置，表上无 org_id）",
+        ("横向越权（写侧）", "被写对象没有单一机构归属（跨机构配置，表上无 org_id；2 → 0：P1-106 改经 unusable_user 后误命中消失）",
          len(bodyid.NO_SINGLE_ORG_OWNER), "tests/test_body_id_org_write_guard.py"),
         ("横向越权（写侧）", "请求声明机构、却无归属判定的写端点（候选，只减不增）",
          len(declared.KNOWN_UNGUARDED), "tests/test_body_declared_org_write_guard.py"),

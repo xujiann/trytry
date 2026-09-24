@@ -27,7 +27,7 @@ from ...deps import (
     resolve_business_date,
     row_dict,
 )
-from ..platform import Patient, User, pii_filter
+from ..platform import Patient, User, pii_filter, unusable_user
 from ..models import (
     SpdAssessment,
     SpdCaseReport,
@@ -1168,9 +1168,11 @@ def create_revisit(
     body: RevisitIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     assert_patient_visible(db, user, body.patient_id, resource="spd_revisit")
-    # 引用的人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500
-    if body.doctor_user_id is not None and db.get(User, body.doctor_user_id) is None:
-        raise HTTPException(status_code=404, detail=f"复诊医生不存在（doctor_user_id={body.doctor_user_id}）")
+    # 引用的人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500；停用的账号也不收（P1-106）
+    if body.doctor_user_id is not None:
+        state = unusable_user(db, body.doctor_user_id)
+        if state:
+            raise HTTPException(status_code=404, detail=f"复诊医生{state}（doctor_user_id={body.doctor_user_id}）")
     record = SpdRevisit(**body.model_dump(), status="planned")
     db.add(record)
     db.commit()
@@ -1291,9 +1293,11 @@ def create_case_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     from sqlalchemy.exc import IntegrityError
 
     # 先查负责人存在（P1-90）：下面的 `except IntegrityError` 是为编码唯一写的，生产库上
-    # 负责人编号填错会撞外键、被翻成「该上报任务编码已存在」
-    if body.manager_user_id is not None and db.get(User, body.manager_user_id) is None:
-        raise HTTPException(status_code=404, detail=f"负责人不存在（manager_user_id={body.manager_user_id}）")
+    # 负责人编号填错会撞外键、被翻成「该上报任务编码已存在」。停用的账号也不收（P1-106）
+    if body.manager_user_id is not None:
+        state = unusable_user(db, body.manager_user_id)
+        if state:
+            raise HTTPException(status_code=404, detail=f"负责人{state}（manager_user_id={body.manager_user_id}）")
     task = SpdCaseReportTask(**body.model_dump())
     db.add(task)
     try:
@@ -1336,9 +1340,12 @@ def update_case_report_task(task_id: int, body: CaseReportTaskPatch, db: Session
     if task is None:
         raise HTTPException(status_code=404, detail="上报任务不存在")
     changes = body.model_dump(exclude_unset=True)
-    # 与建任务同一句（P1-90）：负责人先查存在，否则生产库撞外键 500
-    if changes.get("manager_user_id") is not None and db.get(User, changes["manager_user_id"]) is None:
-        raise HTTPException(status_code=404, detail=f"负责人不存在（manager_user_id={changes['manager_user_id']}）")
+    # 与建任务同一句（P1-90 / P1-106）：负责人先查存在且在用；与现值相同的不再查
+    if changes.get("manager_user_id") is not None and changes["manager_user_id"] != task.manager_user_id:
+        state = unusable_user(db, changes["manager_user_id"])
+        if state:
+            raise HTTPException(status_code=404,
+                                detail=f"负责人{state}（manager_user_id={changes['manager_user_id']}）")
     for key, value in changes.items():
         setattr(task, key, value)
     db.commit()

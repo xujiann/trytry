@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ....database import get_db
 from ....patchtypes import UNSET
 from ....deps import require_roles
-from ...platform import Organization, User
+from ...platform import Organization, unusable_user
 from ...models import (
     SpdCenter,
     SpdProgram,
@@ -94,8 +94,10 @@ def create_center(body: CenterIn, db: Session = Depends(get_db)):
     # 生产库上这两个编号填错会撞外键、被翻成「该中心编码已存在」
     if body.lead_org_id is not None and db.get(Organization, body.lead_org_id) is None:
         raise HTTPException(status_code=404, detail=f"牵头机构不存在（lead_org_id={body.lead_org_id}）")
-    if body.leader_user_id is not None and db.get(User, body.leader_user_id) is None:
-        raise HTTPException(status_code=404, detail=f"负责人不存在（leader_user_id={body.leader_user_id}）")
+    if body.leader_user_id is not None:
+        state = unusable_user(db, body.leader_user_id)  # 停用的账号也不收（P1-106）
+        if state:
+            raise HTTPException(status_code=404, detail=f"负责人{state}（leader_user_id={body.leader_user_id}）")
     center = SpdCenter(**body.model_dump())
     db.add(center)
     try:
@@ -139,8 +141,11 @@ def update_center(center_id: int, body: CenterPatch, db: Session = Depends(get_d
     # 与建中心同两句（P1-90）：牵头机构与负责人先查存在，否则生产库撞外键 500
     if changes.get("lead_org_id") is not None and db.get(Organization, changes["lead_org_id"]) is None:
         raise HTTPException(status_code=404, detail=f"牵头机构不存在（lead_org_id={changes['lead_org_id']}）")
-    if changes.get("leader_user_id") is not None and db.get(User, changes["leader_user_id"]) is None:
-        raise HTTPException(status_code=404, detail=f"负责人不存在（leader_user_id={changes['leader_user_id']}）")
+    if changes.get("leader_user_id") is not None and changes["leader_user_id"] != center.leader_user_id:
+        state = unusable_user(db, changes["leader_user_id"])  # 停用的账号也不收；与现值相同的不再查（P1-106）
+        if state:
+            raise HTTPException(status_code=404,
+                                detail=f"负责人{state}（leader_user_id={changes['leader_user_id']}）")
     for key, value in changes.items():
         setattr(center, key, value)
     db.commit()

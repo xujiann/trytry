@@ -23,13 +23,14 @@ from ...concurrency import add_amount
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...deps import get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict
-from ..platform import Patient, User, evidence_urls, notify_user, valid_task_evidence
+from ..platform import Patient, User, evidence_urls, notify_user, unusable_user, valid_task_evidence
 from ..models import (
     SpdEnrollment,
     SpdPathInstance,
     SpdPathNode,
     SpdPathTemplate,
     SpdTask,
+    SpdTeam,
 )
 from ..service import advance_path, award_points, node_enter_allowed, spawn_task, sweep_overdue
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -405,9 +406,13 @@ def adjust_path_instance(
     if instance.status == "completed":
         raise HTTPException(status_code=409, detail="已完成的路径不可调整")
     data = body.model_dump(exclude_unset=True)
-    # 改负责人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500
-    if data.get("owner_user_id") is not None and db.get(User, data["owner_user_id"]) is None:
-        raise HTTPException(status_code=404, detail=f"路径负责人不存在（owner_user_id={data['owner_user_id']}）")
+    # 改负责人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500；停用的账号也不收，
+    # 与现值相同的不再查（P1-106）
+    if data.get("owner_user_id") is not None and data["owner_user_id"] != instance.owner_user_id:
+        state = unusable_user(db, data["owner_user_id"])
+        if state:
+            raise HTTPException(status_code=404,
+                                detail=f"路径负责人{state}（owner_user_id={data['owner_user_id']}）")
     for key, value in data.items():
         setattr(instance, key, value)
     if data.get("status") == "cancelled":
@@ -561,6 +566,16 @@ def create_task(
     )
     if body.enrollment_id is not None and enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
+    # 责任人与服务团队原先一眼不看：交给 spawn_task 写库，填错编号开发库存成悬空 id、生产库撞外键 500；
+    # 停用的账号 / 团队也不收——任务进了没人办的待办箱（P1-106 / P1-103）
+    if body.assignee_id is not None:
+        state = unusable_user(db, body.assignee_id)
+        if state:
+            raise HTTPException(status_code=404, detail=f"责任人{state}")
+    if body.team_id is not None:
+        team = db.get(SpdTeam, body.team_id)
+        if team is None or not team.active:
+            raise HTTPException(status_code=404, detail="服务团队不存在或已停用")
     task = spawn_task(
         db,
         patient_id=body.patient_id,
@@ -786,8 +801,9 @@ def assign_task(
     task = _load_task(db, task_id, user)   # 机构校验已在 _load_task 里做
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="已结束的任务不可再分配")
-    if db.get(User, body.assignee_id) is None:
-        raise HTTPException(status_code=404, detail="责任人不存在")
+    state = unusable_user(db, body.assignee_id)  # 停用的账号登录不了，转过去就没人办（P1-106）
+    if state:
+        raise HTTPException(status_code=404, detail=f"责任人{state}")
     if task.assignee_id is not None and task.assignee_id != body.assignee_id:
         task.transferred_from = task.assignee_id
     task.assignee_id = body.assignee_id
@@ -1035,6 +1051,11 @@ def batch_tasks(
     # **单条版对、批量版漏**。实测过：甲院 doctor 一次请求把乙院的待办任务取消掉，返回 200。
     for task in tasks:
         assert_org_writable(db, user, task.org_id)
+    if body.action == "assign" and body.assignee_id is not None:
+        # 与单条转派同一句（P1-106）：原先连存在都不查——属性赋值写库，请求体外键闸门看不见
+        state = unusable_user(db, body.assignee_id)
+        if state:
+            raise HTTPException(status_code=404, detail=f"责任人{state}")
     done, skipped = 0, []
     for task in tasks:
         if body.action in ("claim", "urge", "escalate", "cancel") and task.status not in OPEN_STATUSES:

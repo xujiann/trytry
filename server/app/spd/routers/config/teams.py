@@ -16,7 +16,7 @@ from ....database import get_db
 from ....patchtypes import UNSET
 from ....datetypes import OptionalDateStr
 from ....deps import get_current_user, paginate, require_roles
-from ...platform import Organization, User
+from ...platform import Organization, User, unusable_user
 from ...models import (
     SpdTeam,
     SpdTeamMember,
@@ -165,9 +165,12 @@ def create_team(
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     assert_org_writable(db, user, body.org_id)
-    # 负责人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500
-    if body.leader_user_id is not None and db.get(User, body.leader_user_id) is None:
-        raise HTTPException(status_code=404, detail=f"团队负责人不存在（leader_user_id={body.leader_user_id}）")
+    # 负责人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500；停用的账号也不收（P1-106）
+    if body.leader_user_id is not None:
+        state = unusable_user(db, body.leader_user_id)
+        if state:
+            raise HTTPException(status_code=404,
+                                detail=f"团队负责人{state}（leader_user_id={body.leader_user_id}）")
     team = SpdTeam(**body.model_dump())
     db.add(team)
     db.commit()
@@ -250,9 +253,13 @@ def update_team(
         raise HTTPException(status_code=404, detail="团队不存在")
     assert_org_writable(db, user, team.org_id)
     changes = body.model_dump(exclude_unset=True)
-    # 与建团队同一句（P1-90）：负责人先查存在，否则生产库撞外键 500
-    if changes.get("leader_user_id") is not None and db.get(User, changes["leader_user_id"]) is None:
-        raise HTTPException(status_code=404, detail=f"团队负责人不存在（leader_user_id={changes['leader_user_id']}）")
+    # 与建团队同一句（P1-90 / P1-106）：负责人先查存在且在用；与现值相同的不再查——负责人后来停用了，
+    # 只改团队名的调用不该被它挡住
+    if changes.get("leader_user_id") is not None and changes["leader_user_id"] != team.leader_user_id:
+        state = unusable_user(db, changes["leader_user_id"])
+        if state:
+            raise HTTPException(status_code=404,
+                                detail=f"团队负责人{state}（leader_user_id={changes['leader_user_id']}）")
     for key, value in changes.items():
         setattr(team, key, value)
     db.commit()
@@ -271,8 +278,9 @@ def add_team_member(
     if team is None:
         raise HTTPException(status_code=404, detail="团队不存在")
     assert_org_writable(db, user, team.org_id)
-    if db.get(User, body.user_id) is None:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    state = unusable_user(db, body.user_id)  # 停用的账号不进成员名单：进了也永远不接活（P1-106）
+    if state:
+        raise HTTPException(status_code=404, detail=f"用户{state}")
     member = SpdTeamMember(team_id=team_id, **body.model_dump())
     db.add(member)
     try:
@@ -371,8 +379,9 @@ def create_village_doctor(
     body: VillageDoctorIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     assert_org_writable(db, user, body.org_id)
-    if db.get(User, body.user_id) is None:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    state = unusable_user(db, body.user_id)  # 停用的账号不开通村医（P1-106）
+    if state:
+        raise HTTPException(status_code=404, detail=f"用户{state}")
     record = SpdVillageDoctor(**body.model_dump(), bind_token=token_urlsafe(12))
     db.add(record)
     try:
@@ -398,8 +407,9 @@ def batch_village_doctors(
     created, skipped = [], []
     for item in body.items:
         assert_org_writable(db, user, item.org_id)
-        if db.get(User, item.user_id) is None:
-            skipped.append({"user_id": item.user_id, "reason": "用户不存在"})
+        state = unusable_user(db, item.user_id)  # 与单条开通同一句（P1-106）
+        if state:
+            skipped.append({"user_id": item.user_id, "reason": f"用户{state}"})
             continue
         exists = (
             db.query(SpdVillageDoctor.id)

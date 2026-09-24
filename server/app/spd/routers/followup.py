@@ -30,7 +30,7 @@ from ...deps import (
     resolve_business_date,
     row_dict,
 )
-from ..platform import Admission, Encounter, Patient, User
+from ..platform import Admission, Encounter, Patient, User, unusable_user
 from ..models import (
     SpdCallTask,
     SpdEnrollment,
@@ -605,9 +605,12 @@ def generate_followup_plan(
     rule = db.get(SpdFollowupRule, body.rule_id)
     if rule is None or not rule.active:
         raise HTTPException(status_code=404, detail="随访方案不存在或已停用")
-    # 执行人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500
-    if body.executor_id is not None and db.get(User, body.executor_id) is None:
-        raise HTTPException(status_code=404, detail=f"随访执行人不存在（executor_id={body.executor_id}）")
+    # 执行人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500；停用的账号也不收——
+    # 一整条随访计划派给登录不了的人，到点没人做（P1-106）
+    if body.executor_id is not None:
+        state = unusable_user(db, body.executor_id)
+        if state:
+            raise HTTPException(status_code=404, detail=f"随访执行人{state}（executor_id={body.executor_id}）")
     base = date.fromisoformat(body.base_date) if body.base_date else clock.today()
     created = []
     for offset in rule.points or []:
@@ -963,8 +966,11 @@ def update_followup_record(
     if record.status == "done":
         raise HTTPException(status_code=409, detail="已完成的随访不可修改")
     changes = body.model_dump(exclude_unset=True)
-    if changes.get("executor_id") is not None and db.get(User, changes["executor_id"]) is None:  # 同上（P1-90）
-        raise HTTPException(status_code=404, detail=f"随访执行人不存在（executor_id={changes['executor_id']}）")
+    if changes.get("executor_id") is not None and changes["executor_id"] != record.executor_id:  # 同上，与现值相同的不再查
+        state = unusable_user(db, changes["executor_id"])
+        if state:
+            raise HTTPException(status_code=404,
+                                detail=f"随访执行人{state}（executor_id={changes['executor_id']}）")
     for key, value in changes.items():
         setattr(record, key, value)
     db.commit()

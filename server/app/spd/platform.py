@@ -73,6 +73,21 @@ def patient_of(db: Session, patient_id: int) -> Patient | None:
     return db.get(Patient, patient_id)
 
 
+def unusable_user(db: Session, user_id: int) -> str:
+    """这个账号能不能承接新业务：能就返回空串，不能返回「不存在」或「已停用」，供调用处拼进报错。
+
+    停用（`status = disabled`）即时生效——`deps.get_current_user` 每请求校验，停用的人登录不了。
+    把新任务、随访、纳管患者、团队职务挂到这样的账号名下，就没有人办了（P1-106）。已经挂在它
+    名下的存量不归这里管：停用可能是暂时的，存量怎么转交由业务决定。
+
+    返回原因而不是布尔：「不存在」沿用各处原有的报错文案（P1-90），「已停用」是新增的一种。
+    """
+    user = db.get(User, user_id)
+    if user is None:
+        return "不存在"
+    return "已停用" if user.status == "disabled" else ""
+
+
 def diagnosis_codes(db: Session, patient_id: int) -> list[str]:
     """患者**全部历史就诊**的诊断编码（含 ICD-10 父目）。
 

@@ -80,10 +80,9 @@ GLOBAL_ROLE_ONLY = {
 #: 引入了新的口子**。与 `EXEMPT`（按设计没有调用方身份）、`GLOBAL_ROLE_ONLY`（只有全域角色
 #: 够得着）理由都不同，故单列。**表上哪天加了 `org_id`，前提就不成立了**：
 #: `test_无单一归属的豁免_表上确实没有org_id` 会红，到时挪回候选。
-NO_SINGLE_ORG_OWNER: dict[str, str] = {
-    "spd/care.py:create_case_report_task": "SpdCaseReportTask",   # org_ids + manager_user_id
-    "spd/config/centers.py:create_center": "SpdCenter",           # lead_org_id + org_ids + leader_user_id
-}
+#: ✅ 清零（2026-09-24，P1-106）：两处负责人改经 `platform.unusable_user` 查（存在且未停用），函数里
+#: 不再有 `db.get(User, …)`，判据的误命中随之消失；「跨机构是本意」的判断不变。
+NO_SINGLE_ORG_OWNER: dict[str, str] = {}
 
 #: 候选清单（**不是缺陷清单**，见模块 docstring）。只许变少。
 #: 划掉的正当方式：① 补守卫；② 逐条取证判为按设计后移入 `EXEMPT` 并写明理由。
