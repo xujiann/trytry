@@ -183,3 +183,22 @@ def test_magic_bytes_真实文件头照常放行(client, setup):
             filename, content, content_type,
         )
         assert resp.status_code == 201, f"{filename} 被误拦：{resp.status_code} {resp.text[:80]}"
+
+
+def test_文件名超过列长_422_不再在真PG上500(client, setup):
+    """P2-62：multipart 的文件名不经请求模型，P1-91 的长度闸门看不见它，原样写进 `attachments.filename`
+    （String(256)）。真 PG 实测（修前代码）：256 个字 201，257 个字 500（StringDataRightTruncation）；
+    SQLite 不查列长，修前在这里是 201。浏览器传不出这么长的名字，撞上的是对接方——按 422 拒，不替人截断。
+    居民端上传经 `platform.store_attachment` 复用同一个 `store_upload`，同一道判定。"""
+    from app.models import Attachment
+    from app.routers.attachments import FILENAME_MAX
+
+    assert FILENAME_MAX == Attachment.__table__.c.filename.type.length   # 与列长同源，列改了这里跟着红
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 16
+    ok = _upload(client, setup["doctor"], "exam_report", setup["report"]["id"],
+                 "报" * (FILENAME_MAX - 4) + ".png", png, "image/png")
+    assert ok.status_code == 201, ok.text
+    too_long = _upload(client, setup["doctor"], "exam_report", setup["report"]["id"],
+                       "报" * (FILENAME_MAX - 3) + ".png", png, "image/png")
+    assert too_long.status_code == 422, too_long.text
+    assert str(FILENAME_MAX) in too_long.json()["detail"]

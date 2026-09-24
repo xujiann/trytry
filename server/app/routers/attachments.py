@@ -42,6 +42,9 @@ from ..visibility import assert_obj_org_writable, assert_org_visible, assert_pat
 router = APIRouter(prefix="/api/attachments", tags=["附件"], dependencies=[Depends(get_current_user)])
 
 MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
+#: 文件名写进 `attachments.filename`（String(256)）。multipart 的文件名不经请求模型，P1-91 的长度闸门看不见它，
+#: 原先原样写库：真 PG 上 257 个字即 500（P2-62，实测）。与列长的一致性由 test_attachments 断言
+FILENAME_MAX = 256
 ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"}
 
 #: 文件头（magic bytes）校验：声明的 content_type 必须与实际内容一致。
@@ -261,6 +264,12 @@ def store_upload(
     if not _MAGIC_CHECKS[normalized](data[:16]):
         raise HTTPException(
             status_code=415, detail="附件内容与声明的类型不一致（文件头校验未通过）"
+        )
+    # 放在存盘之前：拒掉的上传不该在存储里留下没有元数据行认领的文件。超长按 422 拒、不替人截断——
+    # 浏览器传不出这么长的名字，撞上的是对接方，截断会让对方以为存进去的就是原名
+    if len(filename) > FILENAME_MAX:
+        raise HTTPException(
+            status_code=422, detail=f"附件文件名超过 {FILENAME_MAX} 个字符，请改短后再上传"
         )
     sha256 = hashlib.sha256(data).hexdigest()
     get_storage().save(sha256, data)  # 内容寻址、幂等：同 sha256 已存在则跳过
