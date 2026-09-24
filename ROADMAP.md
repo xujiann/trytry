@@ -868,7 +868,7 @@
   → appointments → portal → admin_mgmt → clinical_docs → surgery。每批撤掉修复后对应用例各自转红；
   真 PG 上的那一族另有 `test_date_filter_pg_dialect.py`，并由 `test_postgres_real.py` 整份换到 PG 上再跑。
   清单清成空集合后照样是棘轮。**body 侧另有一批 D-3 没数到的裸 `str` 日期字段，见下一条 P1-61。**
-- ◐ **P1-61 请求体里 22 个裸 `str` 日期字段逐模块换成 `DateStr`**（2026-09-24 清 P1-58 时量出，棘轮已立：
+- ✅ **P1-61 请求体里 22 个裸 `str` 日期字段逐模块换成 `DateStr`**（2026-09-24 清零；HL7/FHIR 入站出生日期待裁定）（2026-09-24 清 P1-58 时量出，棘轮已立：
   `tests/test_datestr_single_source.py::KNOWN_BARE_BODY_DATE_FIELDS`）。D-3 收敛的是写了日期正则的 22 处，
   没写过正则的这 22 处从来不在分母里。最要紧的一处实测：**对接方不带 `period` 建凭证时，
   `voucher_date="2026/09/24"` 201，`period` 推成 `"2026/09"`，过账后不在 2026-09 的试算平衡里**
@@ -891,6 +891,7 @@
   - ✅ patients（1 → 0，**清零**）：`2016/03/05` 建档的 10 岁孩子登记知情同意不要监护人（实测）→ 建档与档案更正都走
     `check_date`（更正的待审存量在审核时 409）；HL7 PID-7 不查日历、FHIR 部分日期原样收，是对接口径，**交待裁定**。
   - ✅ 导入脚本：`_valid_date` 改走 `check_date`——`20260603` 这类写法的就诊此前每重导一次多一份（实测 2 → 3 → 4）。
+  - ✅ cost：成本归集期间 → `PeriodStr`（`2026/09` 归集"成功"却不进任何报表）；成本页补上与会计页一样的坏期间兜底。
 - ✅ **P1-62 月度期间查询参数：P1-58 的月度版**（2026-09-24 量出并收口，余 `region_stats` 1 条待裁定）。
   真 `YYYY-MM` 且未校验 5 处（accounting 三个报表口径，凭证页"切换期间"是自由文本，`2026-9` → 试算平衡**空表**；
   admin_mgmt 财务汇总与薪资列表）；**`spd/assess.workload` 在 SQLite 上就会 500**（手写的 `_period_range`，

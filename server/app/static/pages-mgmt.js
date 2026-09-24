@@ -387,19 +387,34 @@ async function renderAccounting() {
 
 async function renderCost() {
   $("#page-desc").textContent = "科室直接成本归集 → 分摊（行政/医技→临床）→ 诊次成本与床日成本（分母为实际占用床日）";
-  const period = localStorage.getItem("medplat_cost_period") || new Date().toISOString().slice(0, 7);
+  const thisMonth = new Date().toISOString().slice(0, 7);
   const orgId = Number(localStorage.getItem("medplat_cost_org") || 0);
-  const [depts, costs, rules] = await Promise.all([
-    api("/api/mgmt/departments"), api(`/api/cost/departments?period=${period}`),
+  const load = (p) => Promise.all([
+    api("/api/mgmt/departments"), api(`/api/cost/departments?period=${encodeURIComponent(p)}`),
     api("/api/cost/allocation-rules")]);
-  const unit = orgId ? await api(`/api/cost/unit-cost?period=${period}&org_id=${orgId}`).catch(() => null) : null;
+  let period = localStorage.getItem("medplat_cost_period") || thisMonth;
+  let loaded;
+  try {
+    loaded = await load(period);
+  } catch (err) {
+    // 与会计页同一个坑（P1-62）：切换框是自由文本、存进 localStorage 不校验，存下 `2026/09`
+    // 之后整页那个 Promise.all 422，切换框又画在它之后——一张连改正入口都没有的白页。
+    // 只对 422 回落本月并清掉坏值，别的失败照常抛。
+    if (err.status !== 422 || period === thisMonth) throw err;
+    localStorage.removeItem("medplat_cost_period");
+    period = thisMonth;
+    loaded = await load(period);
+  }
+  const [depts, costs, rules] = loaded;
+  const unit = orgId ? await api(`/api/cost/unit-cost?period=${encodeURIComponent(period)}&org_id=${orgId}`).catch(() => null) : null;
   const deptName = Object.fromEntries(depts.map((d) => [d.id, d.name]));
   // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 单位成本面板按有无 unit 条件渲染；"期间"进标题时不再自己 esc()——组件转义标题。
   $("#page-body").innerHTML = `
     ${panel("期间与机构", `
       <form class="inline" id="cost-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM">
-        <input name="org_id" type="number" value="${orgId || ""}" placeholder="机构ID（算单位成本）"><button>切换</button></form>`)}
+        <input name="org_id" type="number" value="${orgId || ""}" placeholder="机构ID（算单位成本）"><button>切换</button></form>
+      <p class="msg" id="cost-period-msg"></p>`)}
     ${unit ? panel("单位成本", `${
       table(["总成本", "门诊人次", "占用床日", "门诊成本", "住院成本", "诊次成本", "床日成本"], [unit], (u) =>
         `<tr><td>${u.total_cost.toFixed(2)}</td><td>${u.outpatient_visits}</td><td>${u.occupied_bed_days}</td>
@@ -429,11 +444,18 @@ async function renderCost() {
          <td><b>${c.total_cost.toFixed(2)}</b></td>
          <td>${c.unallocated_ratio_amount ? `<span class="tag orange">${c.unallocated_ratio_amount.toFixed(2)}</span>` : "—"}</td></tr>`)}
       ${costs.length ? barChart(costs.map((c) => [c.dept_name, c.total_cost])) : ""}`)}`;
-  $("#cost-period").onsubmit = (e) => { e.preventDefault();
+  $("#cost-period").onsubmit = async (e) => {
+    e.preventDefault();
     const f = new FormData(e.target);
-    localStorage.setItem("medplat_cost_period", f.get("period"));
+    const value = String(f.get("period") || "").trim();
+    // 先让后端判这个期间合不合法，合法才记住（校验只有后端一份，前端不另抄规则）
+    try {
+      await api(`/api/cost/departments?period=${encodeURIComponent(value)}`);
+    } catch (err) { setMsg("#cost-period-msg", err.message, false); return; }
+    localStorage.setItem("medplat_cost_period", value);
     localStorage.setItem("medplat_cost_org", f.get("org_id") || "");
-    route(); };
+    route();
+  };
   $("#cost-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/cost/departments", formJson(e.target, ["dept_id", "amount"]), "#cost-msg"); };
   $("#alloc-form").onsubmit = (e) => { e.preventDefault();

@@ -405,6 +405,20 @@ def test_unit_cost_uses_occupied_bed_days(client, admin, roles, org):
     assert result["cost_per_visit"] > 0 and result["cost_per_bed_day"] > 0
 
 
+def test_成本归集的期间写错_请求体校验层422(client, admin, roles):
+    """P1-61：`CostIn.period` 此前只卡长度 7——`2026/09`、`2026-13` 照样 201 入库，而汇总按
+    `month_bounds` 认期间，这些行永远查不到：归集"成功"了，钱却不在任何一张报表里。"""
+    dept_id = client.get("/api/mgmt/departments", headers=admin).json()[0]["id"]
+    for bad in ("2026/09", "2026-13", "abcdefg"):
+        resp = client.post(
+            "/api/cost/departments",
+            json={"dept_id": dept_id, "period": bad, "cost_type": "labor", "amount": 1},
+            headers=roles["director"],
+        )
+        assert resp.status_code == 422, (bad, resp.text)
+        assert any(e["loc"] == ["body", "period"] for e in resp.json()["detail"]), resp.json()
+
+
 def test_unit_cost_rejects_bad_period(client, admin, org):
     resp = client.get(f"/api/cost/unit-cost?period=2026&org_id={org['id']}", headers=admin)
     assert resp.status_code == 422

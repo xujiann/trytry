@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import upsert_unique
 from ..visibility import assert_org_visible, scope_org_list
 from ..database import get_db
+from ..datetypes import PeriodStr
 from ..deps import get_current_user, month_bounds, require_roles
 from ..models import (
     Admission,
@@ -50,7 +51,9 @@ COST_TYPE_NAMES = {
 
 class CostIn(BaseModel):
     dept_id: int
-    period: str = Field(min_length=7, max_length=7)
+    # 此前只卡长度 7：`2026/09`、`2026-13` 照样 201 入库，而科室成本汇总按 `month_bounds`
+    # 认期间，这些行**永远查不到**——归集"成功"了，钱却不在任何一张报表里（P1-61）
+    period: PeriodStr
     cost_type: str = Field(pattern="^(labor|drug|consumable|depreciation|overhead)$")
     amount: float = Field(ge=0)
 

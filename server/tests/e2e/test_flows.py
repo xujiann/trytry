@@ -456,6 +456,23 @@ def test_会计页存下的期间被拒时回落本月_切换框先验再存(pag
     assert page.evaluate("() => localStorage.getItem('medplat_acc_period')") is None
 
 
+def test_成本页存下的期间被拒时回落本月_切换框先验再存(page, base_url):
+    """与会计页同一个坑（P1-62 修了会计页，成本页是 P1-61 收 `CostIn.period` 时查出来的）：
+    切换框是自由文本、存进 localStorage 不校验，存下 `2026/09` 之后整页那个 Promise.all 422，
+    切换框又画在它之后——一张连改正入口都没有的白页。"""
+    _login(page, base_url)
+    page.evaluate("() => localStorage.setItem('medplat_cost_period', '2026/09')")
+    _open_page(page, "cost", "成本核算")
+    this_month = page.evaluate("() => new Date().toISOString().slice(0, 7)")
+    expect(page.locator('#cost-period input[name="period"]')).to_have_value(this_month)
+    assert page.evaluate("() => localStorage.getItem('medplat_cost_period')") is None
+
+    page.fill('#cost-period input[name="period"]', "2026/09")
+    page.click("#cost-period button")
+    expect(page.locator("#cost-period-msg")).to_contain_text("period")
+    assert page.evaluate("() => localStorage.getItem('medplat_cost_period')") is None
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 
