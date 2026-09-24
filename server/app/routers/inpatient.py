@@ -21,6 +21,7 @@ from ..visibility import (
     assert_patient_visible,
     scope_org_list,
     scope_patient_list,
+    scope_stats_orgs,
 )
 from .. import events
 from ..database import get_db
@@ -847,12 +848,14 @@ def inpatient_stats(
     org_id: int | None = None,
     group_id: int | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """床位利用与在院情况：按机构统计总床位/占用/使用率、在院与累计出院人次。
 
     `group_id` 按机构协作分组筛选（片区/联盟/网格），与 `org_id` 同时给出时取交集。
     """
-    scope = resolve_org_scope(db, group_id, org_id)
+    # P0-37：resolve_org_scope 只解析范围不授权，收进调用方的统计可见范围（本机构 + 同医共体）
+    scope = scope_stats_orgs(db, user, resolve_org_scope(db, group_id, org_id))
     rows_q = (
         db.query(
             Ward.org_id,

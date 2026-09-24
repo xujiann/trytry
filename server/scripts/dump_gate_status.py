@@ -40,6 +40,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     """(分组, 指标, 值, 判据出处)。**只读常量，不重跑扫描**（理由见模块 docstring）。"""
     import test_api_contract_governance as contract
     import test_body_declared_org_write_guard as declared
+    import test_org_param_read_guard as orgread
     import test_body_id_org_write_guard as bodyid
     import test_clock as clock
     import test_date_query_params as datequery
@@ -113,6 +114,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(declared.BY_DESIGN), "tests/test_body_declared_org_write_guard.py"),
         ("横向越权（写侧）", "请求声明机构 × 早已登记待业务裁定、故意未修",
          len(declared.AWAITING_DECISION), "tests/test_body_declared_org_write_guard.py"),
+        ("横向越权（读侧）", "查询参数收机构号、只拿 resolve_org_scope 当范围 × 按设计（逐条写明理由）",
+         len(orgread.BY_DESIGN), "tests/test_org_param_read_guard.py"),
+        ("横向越权（读侧）", "查询参数收机构号、只拿 resolve_org_scope 当范围 × 口径待裁定",
+         len(orgread.AWAITING), "tests/test_org_param_read_guard.py"),
         ("日期入参", "未经 require_date / resolve_business_date 的日期查询参数",
          len(datequery.KNOWN_BARE_DATE_PARAMS), "tests/test_date_query_params.py"),
         ("日期入参", "请求体里注解为裸 str 的日期字段", len(datestr.KNOWN_BARE_BODY_DATE_FIELDS),

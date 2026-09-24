@@ -30,6 +30,7 @@ from ..deps import (
     resolve_business_date,
     resolve_org_scope,
 )
+from ..visibility import scope_stats_orgs
 from ..formula import FormulaError, evaluate, validate
 from ..models import (
     Admission,
@@ -409,6 +410,7 @@ def efficiency(
     org_id: int | None = None,
     group_id: int | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """运行效率：按机构给出平均住院日、床位周转次数、床位使用率、医师担负。
 
@@ -418,13 +420,23 @@ def efficiency(
     - 床位使用率 = 实际占用床日 ÷（实际开放床位数 × 期间天数）
     - 医师日均担负诊疗人次 = 期间诊疗人次 ÷ 医师数 ÷ 期间天数
     """
+    # P0-37：resolve_org_scope 只解析范围不授权，收进调用方的统计可见范围（本机构 + 同医共体）
+    return _efficiency_rows(db, period, scope_stats_orgs(db, user, resolve_org_scope(db, group_id, org_id)))
+
+
+def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[dict]:
+    """运行效率的计算本体；`scope=None` 为全部机构。
+
+    从端点里拆出来是 P0-37 逼的：端点要按调用方收口，而 `build_variable_index`
+    （绩效公式变量）要的是全部机构——它原先直接调端点函数，端点加了 `user` 参数后
+    拿到的是 `Depends` 占位对象。收口留在端点，这里只管算。
+    """
     start, end = month_bounds(period)
     days = (end - start).days
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.min.time())
 
     org_names = {o.id: o.name for o in db.query(Organization).all()}
-    scope = resolve_org_scope(db, group_id, org_id)
     if scope is not None:
         org_names = {oid: name for oid, name in org_names.items() if oid in set(scope)}
     bed_counts = row_dict(
@@ -572,9 +584,8 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
         .group_by(ChronicPatient.managed_by_org_id)
         .all()
     )
-    # 显式传 db=：efficiency 的签名里 period 之后是 org_id/group_id，
-    # 位置传参会把 db 塞进 org_id。
-    efficiency_index = {row["org_id"]: row for row in efficiency(period, db=db)}
+    # 全部机构的运行效率：走计算本体，不走端点（端点按调用方收口，P0-37）
+    efficiency_index = {row["org_id"]: row for row in _efficiency_rows(db, period, None)}
 
     org_ids = (
         set(encounters) | set(referrals_up) | set(referrals_down) | set(exams)
@@ -770,6 +781,7 @@ def drug_use(
     org_id: int | None = None,
     group_id: int | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """药占比与抗菌药物使用强度。
 
@@ -787,7 +799,8 @@ def drug_use(
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.min.time())
     org_names = {o.id: o.name for o in db.query(Organization).all()}
-    scope = resolve_org_scope(db, group_id, org_id)
+    # P0-37：resolve_org_scope 只解析范围不授权，收进调用方的统计可见范围（本机构 + 同医共体）
+    scope = scope_stats_orgs(db, user, resolve_org_scope(db, group_id, org_id))
     org_ids = sorted(org_names) if scope is None else sorted(scope)
 
     # ---- 住院药占比（病案首页）----

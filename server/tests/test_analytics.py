@@ -388,15 +388,15 @@ def test_performance_report_computes_efficiency_once(client, admin, monkeypatch)
     from app.routers import analytics as analytics_module
 
     calls = []
-    original = analytics_module.efficiency
+    # P0-37 起报表走计算本体 `_efficiency_rows`（端点按调用方收口，报表要全部机构），数它的调用次数
+    original = analytics_module._efficiency_rows
 
-    def counting_efficiency(period, *args, **kwargs):
-        # 用 *args/**kwargs 转发：efficiency 的签名后来加了 org_id/group_id，
-        # 打桩函数写死形参会随签名变动而失效
+    def counting_efficiency(db, period, *args, **kwargs):
+        # 用 *args/**kwargs 转发，打桩函数写死形参会随签名变动而失效
         calls.append(period)
-        return original(period, *args, **kwargs)
+        return original(db, period, *args, **kwargs)
 
-    monkeypatch.setattr(analytics_module, "efficiency", counting_efficiency)
+    monkeypatch.setattr(analytics_module, "_efficiency_rows", counting_efficiency)
     period = date.today().strftime("%Y-%m")
     resp = client.get(f"/api/analytics/performance-report?period={period}", headers=admin)
     assert resp.status_code == 200

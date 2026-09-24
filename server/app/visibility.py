@@ -79,6 +79,7 @@ __all__ = [
     "assert_org_writable",
     "assert_obj_org_writable",
     "stats_org_ids",
+    "scope_stats_orgs",
     "patient_basis",
     "clear_visibility_cache",
     "assert_patient_visible",
@@ -221,6 +222,26 @@ def stats_org_ids(db: Session, user: User) -> list[int] | None:
     }
     peers.add(user.org_id)
     return sorted(peers)
+
+
+def scope_stats_orgs(db: Session, user: User, orgs: list[int] | None) -> list[int] | None:
+    """把 `deps.resolve_org_scope` 解析出的机构范围收进调用方的**统计可见范围**。
+
+    `resolve_org_scope` 是筛选器不是授权器（见本模块 docstring 第一段）：`?org_id=X` 原样变成
+    `[X]`，不给就是全域。统计 / 报表接口若只用它，任一账号带上别家的机构号——或者干脆不带——
+    就看到别家的合并报表、运行效率（P0-37 实测）。这里是它缺的另一半：
+
+    - 全域角色：原样返回；
+    - 没给范围（`None`）：收到 `stats_org_ids`（本机构 + 同医共体成员）；
+    - 给了范围：只留可见的那部分，全不可见就是空列表——统计结果是 0 而不是全量，
+      与 `resolve_org_scope`「筛出 0 家」同一语义，也与 spd 工作台 `_scope` 同一口径。
+    """
+    allowed = stats_org_ids(db, user)
+    if allowed is None:
+        return orgs
+    if orgs is None:
+        return allowed
+    return [o for o in orgs if o in allowed]
 
 
 # ---------------------------------------------------------------- 患者维度

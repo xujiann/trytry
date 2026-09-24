@@ -14,7 +14,13 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
+from ..visibility import (
+    assert_obj_org_writable,
+    assert_org_visible,
+    assert_org_writable,
+    scope_org_list,
+    scope_stats_orgs,
+)
 from ..database import get_db
 from ..datetypes import DateStr, OptionalPeriodStr
 from ..deps import (
@@ -479,6 +485,7 @@ def consolidated_statements(
     org_id: int | None = None,
     group_id: int | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """合并报表：资产负债表与收入费用表口径的多院合并（指引㉛"财务报表叠加汇总"）。
 
@@ -506,7 +513,8 @@ def consolidated_statements(
     `period` 过 `require_month`（P1-62），理由同试算平衡表。
     """
     period = require_month(period)
-    scope = resolve_org_scope(db, group_id, org_id)
+    # P0-37：resolve_org_scope 只解析范围不授权，收进调用方的统计可见范围（本机构 + 同医共体）
+    scope = scope_stats_orgs(db, user, resolve_org_scope(db, group_id, org_id))
     rows = _balances(db, period, scope)
     subjects = {s.code: s for s in db.query(AccountSubject).all()}
 
