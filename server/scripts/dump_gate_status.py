@@ -63,6 +63,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(unscopable.UNSCOPABLE_PATIENT_READS), "tests/test_unscopable_patient_reads.py"),
         ("横向越权（读侧）", "仅聚合无身份（信息项，非欠账）",
          len(unscopable.AGGREGATE_ONLY_READS), "tests/test_unscopable_patient_reads.py"),
+        ("横向越权（读侧）", "无调用方身份 × 隔一跳/两跳的患者维度表（待逐条判定）",
+         len(unscopable.ONEHOP_UNSCOPABLE_READS), "tests/test_unscopable_patient_reads.py"),
         ("接口契约", "缺 response_model 的端点", contract.BASELINE_WITHOUT_RESPONSE_MODEL,
          "tests/test_api_contract_governance.py"),
         ("接口契约", "已完全治理的模块", len(contract.FULLY_GOVERNED),

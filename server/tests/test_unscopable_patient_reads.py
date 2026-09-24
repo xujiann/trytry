@@ -276,3 +276,114 @@ def test_两份清单不重叠且都不为空():
     assert AGGREGATE_ONLY_READS, "对照清单空了——分母没了参照，数字会被误读"
     overlap = UNSCOPABLE_PATIENT_READS & AGGREGATE_ONLY_READS
     assert overlap == set(), f"同一端点同时进了两份清单，分类逻辑坏了：{sorted(overlap)}"
+
+
+# ---------------------------------------------------------------------------
+# 第二层：归属**隔一跳 / 两跳**挂在患者上的表（P1-69）
+#
+# 上面的分母只认「直接带 `*patient_id` 列的表」。医嘱、病案首页、分娩记录、病理标本、
+# 术中记录……这些表的患者归属在外键那头（`admission_id` → `admissions.patient_id`，
+# 执行记录再隔一层 `inpatient_order_id`），响应里通常也只有住院号 / 医嘱号，没有身份字段。
+# 于是 P0-19 那三个读接口（乙院按住院号读甲院医嘱与出院诊断，实测 200）从未进过分母，
+# 上面两条都报绿。**病历内容本身不是身份字段，可它是病历。**
+#
+# 判据按外键推导（不手写表名）：一跳 = 有外键指向「直接带 patient_id 的表」的表；
+# 两跳 = 有外键指向一跳表的表。与第一层同样只问"有没有绑调用方身份"，
+# **不按响应分类**——这一层的响应本就不带身份字段，按字段分类会把整层都判成"仅聚合"。
+#
+# 名单里混着三种东西，**尚未逐条判定**（与 P1-49 同一性质，交待裁定）：
+# 按设计不出个体的统计（`*_stats` 一类）、按设计跨机构的（质控抽查、互认一类）、
+# 与 P0-10 / P0-19 同形状的按 id 读病历（如 `quality:get_medical_record`、
+# `surgery:get_record`、`maternal:get_delivery`）。判定一条划一条：补了身份依赖与收口
+# 的会从扫描结果里消失，名单不跟着删就红（两个方向都钉）。
+
+#: 【欠账，只减不增】无调用方身份 × 只触达一跳 / 两跳患者维度表（2026-09-24 量出 24 个）
+ONEHOP_UNSCOPABLE_READS = {
+    "billing.py:list_payments",
+    "billing.py:list_reconciliation",
+    "drgs.py:drg_stats",
+    "exams.py:list_critical_actions",
+    "exams.py:list_critical_reports",
+    "exams.py:list_report_revisions",
+    "exams.py:list_unacknowledged_critical",
+    "maternal.py:get_delivery",
+    "maternal.py:list_prenatal_screenings",
+    "maternal.py:screening_stats",
+    "medication.py:usage_stats",
+    "outpatient_docs.py:list_outpatient_nursing",
+    "pathology.py:list_specimens",
+    "pathology.py:specimen_stats",
+    "pharmacy.py:batch_dispense_trace",
+    "pharmacy.py:purchase_suggestions",
+    "prescriptions.py:list_comment_reviews",
+    "quality.py:get_medical_record",
+    "resources.py:match_operating_rooms",
+    "spd/population.py:list_recalls",
+    "spd/population.py:list_usages",
+    "spd/tasks.py:check_node_enter",
+    "surgery.py:get_record",
+    "surgery.py:list_schedules",
+}
+
+
+def _hop_models() -> tuple[set[str], set[str], set[str]]:
+    """（直接带 patient_id 的, 一跳, 两跳）模型类名，全部由外键推导。"""
+    from app import models
+    from app.main import app  # noqa: F401  触发全部模型注册（含 spd）
+
+    classes = [c for c in models.Base.registry._class_registry.values() if hasattr(c, "__tablename__")]
+    direct = {c.__name__ for c in classes
+              if any(col.endswith("patient_id") for col in c.__table__.columns.keys())} | {"Patient"}
+
+    def pointing_at(names: set[str]) -> set[str]:
+        tables = {c.__tablename__ for c in classes if c.__name__ in names}
+        return {c.__name__ for c in classes
+                for col in c.__table__.columns for fk in col.foreign_keys
+                if fk.column.table.name in tables}
+
+    one = pointing_at(direct) - direct
+    two = pointing_at(direct | one) - direct - one
+    return direct, one, two
+
+
+def _scan_onehop() -> set[str]:
+    direct, one, two = _hop_models()
+    hits = set()
+    for name, path in _router_files():
+        if name in ("portal.py", "spd/portal.py"):   # 居民端另一套鉴权，与第一层同一理由
+            continue
+        for fn in ast.walk(ast.parse(open(path, encoding="utf-8").read())):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
+            if ".get(" not in decs or _binds_identity(fn):
+                continue
+            body = astcode.code(fn)
+            if any(f"db.query({m})" in body or f"db.get({m}," in body for m in direct):
+                continue    # 第一层的地盘
+            if any(f"db.query({m}" in body or f"db.get({m}," in body for m in one | two):
+                hits.add(f"{name}:{fn.name}")
+    return hits
+
+
+def test_判据自证_外键推导得到P0_19的三张表():
+    """P0-19 的三张表必须在推导结果里：医嘱与病案首页隔一跳，执行记录隔两跳。
+    推不出来就说明判据空转——那三个端点当初正是这样从分母里漏掉的。"""
+    direct, one, two = _hop_models()
+    assert {"Admission", "Encounter"} <= direct
+    assert {"InpatientOrder", "CaseSummary"} <= one, sorted(one)
+    assert "OrderExecution" in two, sorted(two)
+
+
+def test_隔跳患者读接口只减不增():
+    hits = _scan_onehop()
+    print(f"\n[无身份 × 隔跳患者维度表] {len(hits)} 个（基线 {len(ONEHOP_UNSCOPABLE_READS)}）")
+    new = sorted(hits - ONEHOP_UNSCOPABLE_READS)
+    assert new == [], (
+        "以下 GET 端点没有任何调用方身份依赖，却读了归属隔一跳/两跳挂在患者上的表"
+        "（病历内容本身不是身份字段，可它是病历——P0-19）：\n  " + "\n  ".join(new)
+        + "\n请补 `user: User = Depends(get_current_user)` 并按住院/就诊记录的患者接 visibility；"
+        "\n按设计不出个体或按设计跨机构的，登记进 ONEHOP_UNSCOPABLE_READS 并写明理由。"
+    )
+    stale = sorted(ONEHOP_UNSCOPABLE_READS - hits)
+    assert stale == [], f"这些登记项已不再命中（补了收口、改名或删除），应从名单删掉：{stale}"
