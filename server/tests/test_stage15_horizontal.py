@@ -1326,7 +1326,6 @@ def test_县域监测预警对一线保持开放(client, world, stranger_op):
 # 里面混着按设计跨机构的（远程会诊、共享诊断中心、转诊、急救调度、医保审核）与
 # 确属越权的，逐条判定后：按设计跨机构的写明理由移进豁免，越权的照 P0-10 / P0-19 先例补守卫。
 PATIENT_OWNED_UNGUARDED_WRITES = {
-    "chronic.py:add_followup",
     "consents.py:review_correction",
     "consents.py:revoke_consent",
     "consultations.py:accept",

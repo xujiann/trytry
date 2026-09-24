@@ -301,10 +301,18 @@ class FollowupResultOut(BaseModel):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 随访属诊疗/公卫岗
 )
-def add_followup(chronic_id: int, body: FollowUpCreate, db: Session = Depends(get_db)):
+def add_followup(
+    chronic_id: int,
+    body: FollowUpCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     chronic = db.get(ChronicPatient, chronic_id)
     if chronic is None:
         raise HTTPException(status_code=404, detail="慢病档案不存在")
+    # P0-26：原先只看角色——乙院按档案号就能给甲院管着的患者记随访，还顺带改掉分级与
+    # 下次随访日。同文件风险评分与随访记录早就按患者可见性守着，写侧照同一口径。
+    assert_patient_visible(db, user, chronic.patient_id, resource="chronic")
     payload = body.model_dump()
     # 未填下次到期日时按病种随访周期自动建议
     suggested = "" if body.next_due else _suggest_next_due(db, chronic.disease)
