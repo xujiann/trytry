@@ -7,7 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable, scope_patient_list
+from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
@@ -87,11 +87,16 @@ class ReferralCertOut(BaseModel):
     response_model=ReferralCertOut,
     dependencies=[Depends(require_roles("operator"))],  # H2: 转诊证明签发=经办
 )
-def issue_referral_cert(referral_id: int, db: Session = Depends(get_db)):
+def issue_referral_cert(
+    referral_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """转诊证明：仅对已接诊/已结案的转诊签发，幂等返回既有证明。"""
     referral = db.get(Referral, referral_id)
     if referral is None:
         raise HTTPException(status_code=404, detail="转诊记录不存在")
+    # P0-29：原先任一机构的经办都能给别家的转诊签证明。先把与患者毫无关系的第三方挡在外面——
+    # 转出、转入两方本身就有转诊关系，照常能签；"到底该哪一方签"另在待裁定清单里。
+    assert_patient_visible(db, user, referral.patient_id, resource="referral_cert")
     if referral.status not in ("accepted", "completed"):
         raise HTTPException(status_code=409, detail="转诊尚未接诊，不可签发证明")
     existing = db.query(ReferralCert).filter(ReferralCert.referral_id == referral_id).first()
@@ -157,10 +162,15 @@ def list_special_diseases(status: str | None = None, db: Session = Depends(get_d
     # L-11 整改：申报（operator/doctor）与审核（director）职责分离，杜绝自报自批
     dependencies=[Depends(require_roles("director"))],
 )
-def review_special_disease(app_id: int, approve: bool, db: Session = Depends(get_db)):
+def review_special_disease(
+    app_id: int, approve: bool, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     app_ = db.get(SpecialDiseaseApp, app_id)
     if app_ is None:
         raise HTTPException(status_code=404, detail="申报不存在")
+    # P0-29：director / admin 只多一条留痕；挡的是整包复制了 director 权限的自定义角色——
+    # 那类账号不是全域角色，看不到这个患者，却批得了他的特病申报（与 P0-28 同一个洞）
+    assert_patient_visible(db, user, app_.patient_id, resource="special_disease")
     if app_.status != "applied":
         raise HTTPException(status_code=409, detail="该申报已处理")
     app_.status = "approved" if approve else "rejected"
@@ -281,6 +291,7 @@ def review_dual_channel(
     app_ = db.get(DualChannelApp, app_id)
     if app_ is None:
         raise HTTPException(status_code=404, detail="申报不存在")
+    assert_patient_visible(db, user, app_.patient_id, resource="dual_channel")  # P0-29，同上
     if app_.status != "pending":
         raise HTTPException(status_code=409, detail="该申报已处理")
     app_.status = "approved" if approve else "rejected"

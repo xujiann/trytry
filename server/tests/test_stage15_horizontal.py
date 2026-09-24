@@ -1347,7 +1347,6 @@ PATIENT_OWNED_UNGUARDED_WRITES = {
     "exams.py:advance_sample",
     "exams.py:claim_request",
     "exams.py:submit_report",
-    "insurance.py:issue_referral_cert",
     "maternal.py:add_visit",
     "maternal.py:close_record",
     # 隔一跳（标本挂在申请单上）：病理中心是哪一家在模型里没有表达，与读侧同一个待裁问题
@@ -1362,16 +1361,10 @@ PATIENT_OWNED_UNGUARDED_WRITES = {
 #: 按 id 写挂在患者上的表、却**按设计**不做患者可见性阻断的——逐条写明理由，只减不增
 #: （与 `BYID_CROSS_ORG_OK` 同一纪律：每一条都要答得出"为什么不守"）。2026-09-24 逐条实测后判定。
 PATIENT_OWNED_BY_DESIGN = {
-    "insurance.py:review_special_disease":
-        "只有全域角色够得着（require_roles(\"director\")，admin 恒放行）：特殊病种申报（经办 / 医生）与审核"
-        "（director）职责分离（L-11），审核是全县口径。前提由 test_挂在患者上的豁免_审核端点只收全域角色 钉住。",
-    "insurance.py:review_dual_channel":
-        "同上：双通道申报与审核职责分离，审核限 director。",
     "notifications.py:mark_read":
         "个体级判定，比机构级更严：只有收件人本人能标已读（`notification.user_id != user.id` 即 404，"
         "不暴露消息存在）。是 404 不是 403，登记不进领域守卫表；前提由 test_挂在患者上的豁免_消息只认收件人 钉住。",
 }
-_GLOBAL_ONLY_BY_DESIGN = ("insurance.py:review_special_disease", "insurance.py:review_dual_channel")
 
 _PATIENT_WRITE_GUARDS = {
     "assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
@@ -1448,30 +1441,6 @@ def test_按id写挂在患者上的表不许新增无守卫端点():
     )
     stale = (PATIENT_OWNED_UNGUARDED_WRITES | by_design) - unguarded
     assert stale == set(), f"这些登记项已加了守卫或不存在，应从清单删除（只减不增）：{sorted(stale)}"
-
-
-def test_挂在患者上的豁免_审核端点只收全域角色():
-    """三条审核端点判为豁免的**前提**：`require_roles` 里只有全域角色。
-
-    哪天有人把申报角色（operator / doctor）也加进审核端点，可见性判定就不再是"永远放行"，
-    豁免的理由随之作废——这条用例在那一刻变红，逼着重新判。理由会过期，前提得有人守着。
-    """
-    from app.visibility import GLOBAL_ROLES
-
-    files = dict(_router_files())
-    for key in _GLOBAL_ONLY_BY_DESIGN:
-        assert key in PATIENT_OWNED_BY_DESIGN
-        name, fn_name = key.split(":")
-        tree = ast.parse(open(files[name], encoding="utf-8").read())
-        (fn,) = [n for n in ast.walk(tree)
-                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name]
-        roles = {
-            arg.value
-            for call in ast.walk(fn)
-            if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "require_roles"
-            for arg in call.args if isinstance(arg, ast.Constant)
-        }
-        assert roles and roles <= GLOBAL_ROLES, f"{key} 的角色放宽到了 {sorted(roles)}，豁免前提不再成立"
 
 
 def test_挂在患者上的豁免_消息只认收件人():

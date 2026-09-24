@@ -93,6 +93,9 @@ RESOURCE_NAMES = {
     "admission_bill": "住院费用清单",
     "deposit": "住院押金",
     "insurance": "医保结算",
+    "referral_cert": "转诊证明",
+    "special_disease": "特殊病种申报",
+    "dual_channel": "双通道用药申报",
     # 公卫与慢病
     "contract": "家医签约",
     "followup": "随访记录",
