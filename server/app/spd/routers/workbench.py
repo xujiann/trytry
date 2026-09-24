@@ -14,8 +14,8 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, func, select
+from sqlalchemy.orm import Session, aliased
 
 from ... import clock
 from ...clock import now_naive
@@ -1131,22 +1131,23 @@ def team_workbench(
         mine_query = mine_query.filter(SpdEnrollment.program_code == program_code)
 
     month_start = clock.today().replace(day=1).isoformat()
-    my_patients = [e.patient_id for e in mine_query.limit(5000).all()]
-
-    # 待评估 / 待入径都用一条 IN 查询取"已有的"，再在内存里做差集。
-    # 之前是逐患者 first()——在管 5000 人时进一次工作台要打一万条 SQL
-    assessed = {
-        pid for (pid,) in db.query(SpdAssessment.patient_id)
-        .filter(SpdAssessment.patient_id.in_(my_patients or [0]))
-        .distinct().all()
-    }
-    pending_assess = [pid for pid in my_patients if pid not in assessed]
-    pathed = {
-        pid for (pid,) in db.query(SpdEnrollment.patient_id)
-        .join(SpdPathInstance, SpdPathInstance.enrollment_id == SpdEnrollment.id)
-        .filter(SpdEnrollment.patient_id.in_(my_patients or [0]))
-        .distinct().all()
-    }
+    # P1-51（同形状）：原先先 `mine_query.limit(5000)` 物化患者号，待评估 / 待入径 / 到期随访 / 到期复诊 /
+    # 异常体征 / 在途转诊 / 死亡七个数都算在这 5000 人上，而同一张卡上的「在管」用的是 count()——数对不上。
+    # 患者号改成子查询不物化；两个差集改成「在管纳管行里，患者没有对应记录的」计数，与原先
+    # 逐元素判断同一口径（同一患者多条在管纳管各算一次，原先的列表推导也是这么数的）。
+    # 派生表而不是直接拿 Query 当 IN 的子查询：「死亡」那一项外层也查 spd_enrollments，
+    # 直接嵌会被自动关联掉内层的 FROM
+    my_patients = select(mine_query.with_entities(SpdEnrollment.patient_id).subquery().c.patient_id)
+    pending_assess = mine_query.filter(
+        ~exists().where(SpdAssessment.patient_id == SpdEnrollment.patient_id)
+    ).count()
+    pathed_enrollment = aliased(SpdEnrollment)
+    pending_path = mine_query.filter(
+        ~exists().where(
+            pathed_enrollment.patient_id == SpdEnrollment.patient_id,
+            SpdPathInstance.enrollment_id == pathed_enrollment.id,
+        )
+    ).count()
 
     out: dict[str, Any] = {
         "role": role,
@@ -1172,33 +1173,33 @@ def team_workbench(
         "tasks": _task_stats(db, orgs, assignee_id=user.id, program_code=program_code,
                              today=business_day),
         "plans": {
-            "pending_assess": len(pending_assess),
+            "pending_assess": pending_assess,
             "pending_target": mine_query.filter(SpdEnrollment.stage == "").count(),
-            "pending_path": sum(1 for pid in my_patients if pid not in pathed),
+            "pending_path": pending_path,
             "due_followups": db.query(SpdFollowupRecord).filter(
-                SpdFollowupRecord.patient_id.in_(my_patients or [0]),
+                SpdFollowupRecord.patient_id.in_(my_patients),
                 SpdFollowupRecord.status == "planned",
                 SpdFollowupRecord.planned_at <= business_day.isoformat(),
             ).count(),
             "due_revisits": db.query(SpdRevisit).filter(
-                SpdRevisit.patient_id.in_(my_patients or [0]),
+                SpdRevisit.patient_id.in_(my_patients),
                 SpdRevisit.status == "planned",
                 SpdRevisit.plan_date <= business_day.isoformat(),
             ).count(),
         },
         "alerts": {
             "abnormal_measure": db.query(SpdMeasurement).filter(
-                SpdMeasurement.patient_id.in_(my_patients or [0]),
+                SpdMeasurement.patient_id.in_(my_patients),
                 SpdMeasurement.level.in_(["high", "low"]),
                 SpdMeasurement.measured_at >= f"{month_start} 00:00:00",
             ).count(),
             "referrals": db.query(SpdReferralCase).filter(
-                SpdReferralCase.patient_id.in_(my_patients or [0]),
+                SpdReferralCase.patient_id.in_(my_patients),
                 SpdReferralCase.status.notin_(["closed", "rejected", "withdrawn"]),
             ).count(),
             "recall": mine_query.filter(SpdEnrollment.status == "recalled").count(),
             "dead": db.query(SpdEnrollment).filter(
-                SpdEnrollment.patient_id.in_(my_patients or [0]),
+                SpdEnrollment.patient_id.in_(my_patients),
                 SpdEnrollment.status == "dead",
             ).count(),
         },

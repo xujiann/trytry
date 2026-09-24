@@ -122,3 +122,41 @@ def test_不再被上限截断_总数与人口结构(client, admin, bulk):
     assert s["gender_distribution"]["女"] == bulk["n"]
     assert s["age_distribution"]["75+"] == bulk["n"]
     assert sum(s["age_distribution"].values()) == bulk["n"]
+
+
+# ---------------------------------------------------------------- 同形状：团队工作台（limit 5000）
+TEAM_CAP = 5000  # team_workbench 原硬编码上限
+
+
+@pytest.fixture(scope="module")
+def team_bulk(client, admin, small):
+    """一位医生名下 `TEAM_CAP + 100` 条在管纳管，都没做过评估、都没入径。"""
+    r = client.post("/api/users", json={"username": "p151_member", "password": "pw123456", "full_name": "p151_member",
+                                        "role": "doctor", "org_id": small["orgs"]["a"]}, headers=admin)
+    assert r.status_code == 201, r.text
+    doctor_id = r.json()["id"]
+    with SessionLocal() as db:
+        db.execute(insert(Patient), [
+            {"ehc_no": f"EHC-RST-{i}", "name": f"团队灌量{i}", "id_card": f"RST{i:015d}",
+             "gender": "男", "birth_date": "1960-06-06"}
+            for i in range(TEAM_CAP + 100)
+        ])
+        ids = [pid for (pid,) in db.query(Patient.id).filter(Patient.ehc_no.like("EHC-RST-%")).all()]
+        db.execute(insert(SpdEnrollment), [
+            {"patient_id": pid, "program_code": "rs_team", "org_id": small["orgs"]["a"], "status": "active",
+             "doctor_user_id": doctor_id}
+            for pid in ids
+        ])
+        db.commit()
+    return {"n": TEAM_CAP + 100, "h": _login(client, "p151_member")}
+
+
+def test_不再被上限截断_团队工作台的待办计数(client, team_bulk):
+    """「在管」原先就用 count()，另外七个数算在前 5000 人上——同一张卡上的数对不上。"""
+    r = client.get("/api/spd/workbench/team", params={"role": "member", "program_code": "rs_team"},
+                   headers=team_bulk["h"])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["patients"]["managed"] == team_bulk["n"]
+    assert body["plans"]["pending_assess"] == team_bulk["n"], "待评估被截断在上限上了"
+    assert body["plans"]["pending_path"] == team_bulk["n"], "待入径被截断在上限上了"
