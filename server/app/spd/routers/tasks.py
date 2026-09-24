@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -329,9 +329,8 @@ def list_path_instances(
             enroll_query = enroll_query.filter(SpdEnrollment.org_id.in_(orgs))
         if program_code:
             enroll_query = enroll_query.filter(SpdEnrollment.program_code == program_code)
-        query = query.filter(
-            SpdPathInstance.enrollment_id.in_([eid for (eid,) in enroll_query.all()] or [0])
-        )
+        # 子查询而不是先把纳管号全取出来再拼 IN（P2-44 同形状）：按病种筛时全域视角就是这个病种的全部纳管
+        query = query.filter(SpdPathInstance.enrollment_id.in_(select(enroll_query.subquery().c.id)))
     if scene:
         template_ids = [
             t.id for t in db.query(SpdPathTemplate).filter(SpdPathTemplate.scene == scene).all()

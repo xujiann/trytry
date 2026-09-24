@@ -76,3 +76,33 @@ def test_不再把纳管号逐个绑定进一条语句(client, admin, world):
         event.remove(engine, "before_cursor_execute", capture)
     n, statement = max(widest)
     assert n < 50, f"有一条语句带了 {n} 个参数，随纳管量增长：{statement}"
+
+
+# ---------------------------------------------------------------- 同形状第二处：路径实例清单按病种筛
+def _instances(client, admin, **params):
+    r = client.get("/api/spd/path-instances", params=params, headers=admin)
+    assert r.status_code == 200, r.text
+    return r
+
+
+def test_特征化_路径实例清单按病种筛(client, admin, world):
+    r = _instances(client, admin, program_code="ps_prog")
+    assert r.headers["X-Total-Count"] == "3"
+    assert sorted(x["status"] for x in r.json()) == ["completed", "running", "running"]
+    assert _instances(client, admin, program_code="没有这个病种").json() == []
+
+
+def test_路径实例清单按病种筛也不再逐个绑定纳管号(client, admin, world):
+    widest = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if not executemany and parameters:
+            widest.append((len(parameters), statement[:120]))
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        _instances(client, admin, program_code="ps_prog")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    n, statement = max(widest)
+    assert n < 50, f"有一条语句带了 {n} 个参数，随纳管量增长：{statement}"
