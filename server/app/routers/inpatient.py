@@ -15,7 +15,13 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
+from ..visibility import (
+    assert_obj_org_writable,
+    assert_org_writable,
+    assert_patient_visible,
+    scope_org_list,
+    scope_patient_list,
+)
 from .. import events
 from ..database import get_db
 from ..deps import (
@@ -349,6 +355,20 @@ def transfer_admission(admission_id: int, body: TransferBody, db: Session = Depe
     return _admission_out(admission)
 
 
+def _admission_visible_or_404(db: Session, admission_id: int, user: User, resource: str) -> Admission:
+    """取住院记录，并在同一次调用里完成患者可见性判定与留痕（P0-19）。
+
+    医嘱、执行记录、病案首页这三张表都不带 `patient_id`，归属隔一跳在 `admissions` 上；
+    读接口原先连调用方都不收，乙院医生按住院号就能读甲院的医嘱与出院诊断（实测 200）。
+    形状照抄 `clinical_docs._admission_or_404`（P0-10）：判定与留痕绑在一起。
+    """
+    admission = db.get(Admission, admission_id)
+    if admission is None:
+        raise HTTPException(status_code=404, detail="住院记录不存在")
+    assert_patient_visible(db, user, admission.patient_id, resource=resource)
+    return admission
+
+
 # ---------- 病案首页 ----------
 
 
@@ -470,7 +490,10 @@ def create_case_summary(
 
 
 @router.get("/admissions/{admission_id}/case-summary", response_model=CaseSummaryOut)
-def get_case_summary(admission_id: int, db: Session = Depends(get_db)):
+def get_case_summary(
+    admission_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    _admission_visible_or_404(db, admission_id, user, resource="case_summary")
     summary = db.query(CaseSummary).filter(CaseSummary.admission_id == admission_id).first()
     if summary is None:
         raise HTTPException(status_code=404, detail="病案首页未填写")
@@ -651,11 +674,25 @@ def _order_out(o: InpatientOrder) -> dict:
 
 @router.get("/orders", response_model=list[OrderOut])
 def list_orders(
-    admission_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)
+    admission_id: int | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    """医嘱清单。带住院号：按该患者可见性判定并留痕（住院号不存在照旧回空清单）；
+    不带：与住院清单同口径，只列可见患者的（P0-19——原先两种都不看调用方是谁）。"""
     q = db.query(InpatientOrder)
     if admission_id is not None:
+        admission = db.get(Admission, admission_id)
+        if admission is None:
+            return []
+        assert_patient_visible(db, user, admission.patient_id, resource="inpatient_order")
         q = q.filter(InpatientOrder.admission_id == admission_id)
+    else:
+        q = scope_patient_list(
+            db, user, q.join(Admission, InpatientOrder.admission_id == Admission.id),
+            Admission, None, "inpatient_order",
+        )
     if status:
         q = q.filter(InpatientOrder.status == status)
     return [_order_out(o) for o in q.order_by(InpatientOrder.id.desc()).limit(200).all()]
@@ -770,9 +807,13 @@ def record_order_execution(
 
 
 @router.get("/orders/{order_id}/executions", response_model=list[ExecutionOut])
-def list_order_executions(order_id: int, db: Session = Depends(get_db)):
-    if db.get(InpatientOrder, order_id) is None:
+def list_order_executions(
+    order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    order = db.get(InpatientOrder, order_id)
+    if order is None:
         raise HTTPException(status_code=404, detail="医嘱不存在")
+    _admission_visible_or_404(db, order.admission_id, user, resource="inpatient_order")
     rows = (
         db.query(OrderExecution, User.full_name, User.username)
         .outerjoin(User, User.id == OrderExecution.executed_by)
