@@ -868,6 +868,14 @@
   → appointments → portal → admin_mgmt → clinical_docs → surgery。每批撤掉修复后对应用例各自转红；
   真 PG 上的那一族另有 `test_date_filter_pg_dialect.py`，并由 `test_postgres_real.py` 整份换到 PG 上再跑。
   清单清成空集合后照样是棘轮。**body 侧另有一批 D-3 没数到的裸 `str` 日期字段，见下一条 P1-61。**
+- ☐ **P1-61 请求体里 22 个裸 `str` 日期字段逐模块换成 `DateStr`**（2026-09-24 清 P1-58 时量出，棘轮已立：
+  `tests/test_datestr_single_source.py::KNOWN_BARE_BODY_DATE_FIELDS`）。D-3 收敛的是写了日期正则的 22 处，
+  没写过正则的这 22 处从来不在分母里。最要紧的一处实测：**对接方不带 `period` 建凭证时，
+  `voucher_date="2026/09/24"` 201，`period` 推成 `"2026/09"`，过账后不在 2026-09 的试算平衡里**
+  （凭证页会带上当前期间，走页面不落假期间，但日期串照样原样入库）。月度同形的 `VoucherIn.period` /
+  `CostIn.period` 两处随各自模块一起收（该用 `PeriodStr`）。
+  **修之前逐个查写入方**（三端前端 / HL7·FHIR 适配器 / 导入脚本 / 种子），别把对接方的现有写法直接变成 422；
+  一个模块一个提交，凭证先行。
 
 ### 🚀 正式上线前（收口中）
 

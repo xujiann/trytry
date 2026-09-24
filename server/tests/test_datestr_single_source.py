@@ -121,3 +121,164 @@ def test_真源本身仍在做日历校验():
     # 末尾换行是形状问题不是日历问题：`$` 放过换行、`fullmatch` 不放（/review 指出）
     with pytest.raises(ValueError, match="格式"):
         datetypes._check("2026-02-28\n", allow_blank=False)
+
+
+# ---------------------------------------------------------------- 请求体里的裸 str 日期字段（P1-61）
+#
+# 上面那条守卫盯的是"别处又写了一遍日期正则"。可 D-3 当年收敛的是**写了日期正则的
+# 22 处**——从来没写过正则、只有 `str`（或 `min_length=10, max_length=10`）的请求体
+# 日期字段，不在它的分母里，**也不在这条守卫的视野里**。2026-09-24 实测：
+#
+#   凭证 voucher_date="2026/09/24"、对接方不带 period → 201，period 由 voucher_date[:7] 推出成
+#       "2026/09"，过账后**不在 2026-09 的试算平衡里**（独占一个不存在的会计期间；凭证页会带上
+#       当前期间，走页面不落假期间，但日期串照样原样入库）；
+#   凭证 voucher_date="2026-02-31" → 201；
+#   患者 birth_date="1987/01/01" → 201 原样入库；
+#   县外就诊 visit_date="abcdefghij" → 201（长度恰好 10）；
+#   随访 due_date="2026-02-31" → 201。
+#
+# 判据是推导的：先找出所有 pydantic 模型（BaseModel 的子孙），再找**路由函数参数里出现的**
+# 模型（请求体）及其嵌套/继承的模型——响应模型只出现在 `response_model=` 里，不会被数进来。
+# 字段名按词元匹配 `date`（`date` / `xxx_date` / `date_xxx`），不误伤 `update`、`candidate`。
+
+
+#: 请求体里注解为裸 `str` 的日期字段（P1-61）。**只许变少**：改成 `DateStr` /
+#: `OptionalDateStr` 一个划掉一个。改之前逐个查写入方（三端前端、HL7/FHIR 适配器、
+#: 导入脚本、种子）实际发什么——`PatientCreate.birth_date` 这类字段可能有外部系统在写。
+KNOWN_BARE_BODY_DATE_FIELDS: set[str] = {
+    "routers/accounting.py::VoucherIn.voucher_date",
+    "routers/admin_mgmt.py::ChangeCreate.effective_date",
+    "routers/admin_mgmt.py::QcCreate.record_date",
+    "routers/analytics.py::OutboundIn.visit_date",
+    "routers/clinical_docs.py::HandoverIn.handover_date",
+    "routers/eldercare.py::AssessmentCreate.assessed_date",
+    "routers/followups.py::FollowupIn.due_date",
+    "routers/homevisits.py::VisitCreate.expect_date",
+    "routers/knowledge.py::EntryCreate.expire_date",
+    "routers/knowledge.py::EntryUpdate.expire_date",
+    "routers/materials.py::ConsumableIn.expire_date",
+    "routers/maternal.py::ChildVisitCreate.visit_date",
+    "routers/maternal.py::ScreeningCreate.screen_date",
+    "routers/maternal.py::VisitCreate.visit_date",
+    "routers/maternal.py::WomenHealthCreate.exam_date",
+    "routers/publichealth.py::MonitorCreate.record_date",
+    "routers/quality.py::InfectionReportCreate.report_date",
+    "routers/surgery.py::ScheduleIn.scheduled_date",
+    "routers/surgery.py::SurgeryRequestIn.planned_date",
+    "routers/tcm.py::BatchCreate.expire_date",
+    "schemas.py::ContractCreate.signed_date",
+    "schemas.py::PatientCreate.birth_date",
+}
+
+_DATE_TOKEN = re.compile(r"(^|_)date($|_)")
+_ROUTE_DIRS = (APP_DIR / "routers", APP_DIR / "spd" / "routers")
+_HTTP_VERBS = ("get", "post", "put", "patch", "delete")
+
+
+def _names_in(node) -> set[str]:
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def _model_classes() -> dict[str, list[tuple[pathlib.Path, ast.ClassDef]]]:
+    """app/ 里 BaseModel 的全部子孙，按类名归组（同名类在不同模块各算一个）。"""
+    classes: dict[str, list] = {}
+    bases: dict[str, set[str]] = {}
+    for path in sorted(APP_DIR.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ClassDef):
+                classes.setdefault(node.name, []).append((path, node))
+                bases.setdefault(node.name, set()).update(
+                    ast.unparse(b).split(".")[-1] for b in node.bases
+                )
+    models = {"BaseModel"}
+    grew = True
+    while grew:
+        grew = False
+        for name, parents in bases.items():
+            if name not in models and parents & models:
+                models.add(name)
+                grew = True
+    models.discard("BaseModel")
+    return {name: classes[name] for name in models}
+
+
+def _request_models(models) -> set[str]:
+    """路由函数参数里出现的模型，加上它们字段里嵌套的、以及它们继承的模型（传递闭包）。"""
+    roots: set[str] = set()
+    for base in _ROUTE_DIRS:
+        for path in sorted(base.rglob("*.py")):
+            for func in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if not any(
+                    isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                    and d.func.attr in _HTTP_VERBS
+                    for d in func.decorator_list
+                ):
+                    continue
+                for arg in list(func.args.args) + list(func.args.kwonlyargs):
+                    if arg.annotation is not None:
+                        roots |= _names_in(arg.annotation) & models.keys()
+    seen: set[str] = set()
+    stack = list(roots)
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for _path, cls in models[name]:
+            stack.extend({ast.unparse(b).split(".")[-1] for b in cls.bases} & models.keys())
+            for stmt in cls.body:
+                if isinstance(stmt, ast.AnnAssign):
+                    stack.extend(_names_in(stmt.annotation) & models.keys())
+    return seen
+
+
+def _bare_body_date_fields() -> set[str]:
+    models = _model_classes()
+    out = set()
+    for name in _request_models(models):
+        for path, cls in models[name]:
+            for stmt in cls.body:
+                if (
+                    isinstance(stmt, ast.AnnAssign)
+                    and isinstance(stmt.target, ast.Name)
+                    and _DATE_TOKEN.search(stmt.target.id)
+                    and ast.unparse(stmt.annotation) in ("str", "str | None", "Optional[str]")
+                ):
+                    out.add(f"{path.relative_to(APP_DIR).as_posix()}::{name}.{stmt.target.id}")
+    return out
+
+
+def test_请求体日期字段判据自证():
+    models = _model_classes()
+    requests = _request_models(models)
+    print(f"\n[请求体日期字段] pydantic 模型 {len(models)} 个，其中作请求体（含嵌套/继承）"
+          f" {len(requests)} 个；裸 str 日期字段 {len(_bare_body_date_fields())} 处")
+    assert len(requests) >= 200, "请求模型数得太少，扫描面可能不对"
+    # 请求体：嵌套进来的也要数到（凭证分录是凭证请求体里的 list[EntryIn]）
+    assert {"VoucherIn", "EntryIn", "PatientCreate"} <= requests
+    # 响应模型不算：它们只出现在 response_model= 里（这几个名字里带 date 字段、又是裸 str）
+    assert not {"ArchivePatient", "ArchivePhysicalExam", "ReferralFeedItem"} & requests
+    # 词元匹配：不误伤 update / candidate 这类恰好含 date 字母的名字
+    assert not _DATE_TOKEN.search("last_update") and not _DATE_TOKEN.search("candidate_ids")
+    assert _DATE_TOKEN.search("date") and _DATE_TOKEN.search("visit_date")
+
+
+def test_不得新增裸str的请求体日期字段():
+    new = sorted(_bare_body_date_fields() - KNOWN_BARE_BODY_DATE_FIELDS)
+    assert new == [], (
+        "以下请求体日期字段是裸 `str`——`2026/09/24`、`2026-02-31`、`abcdefghij`（恰好 10 个字符）"
+        "都会原样入库：\n  " + "\n  ".join(new)
+        + "\n\n请改用 datetypes.DateStr（必填）/ OptionalDateStr（可空）。"
+    )
+
+
+def test_请求体日期字段名单只许变少():
+    stale = sorted(KNOWN_BARE_BODY_DATE_FIELDS - _bare_body_date_fields())
+    assert stale == [], (
+        "这些已经改成 DateStr（或已不存在）了，请从 KNOWN_BARE_BODY_DATE_FIELDS 划掉：\n  "
+        + "\n  ".join(stale)
+    )
