@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..database import get_db
+from ..datetypes import OptionalDateTimeStr
 from ..deps import get_current_user, paginate, require_roles
 from ..models import Organization, QcLot, QcMeasurement, User, utcnow
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
@@ -134,7 +135,7 @@ def set_lot_active(lot_id: int, body: LotPatch, db: Session = Depends(get_db), u
 class MeasurementCreate(BaseModel):
     value: FiniteFloat
     # 测定时刻（补录时与录入时刻不同）；空串=以录入时刻为准
-    measured_at: str = Field(default="", max_length=16)
+    measured_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
     operator: str = Field(default="", max_length=64)
 
 

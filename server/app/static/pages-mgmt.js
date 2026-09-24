@@ -64,7 +64,7 @@ async function renderClinicalDocs() {
          <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}`)}
     ${panel(`体温单（${vitals.length}）`, `
       <form class="inline" id="vital-form">
-        <input name="measured_at" placeholder="YYYY-MM-DD HH:MM" required>
+        <label style="font-size:13px">测量时刻 <input name="measured_at" type="datetime-local" required></label>
         <input name="temperature" type="number" step="0.1" placeholder="体温℃">
         <input name="pulse" type="number" placeholder="脉搏"><input name="respiration" type="number" placeholder="呼吸">
         <input name="sbp" type="number" placeholder="收缩压"><input name="dbp" type="number" placeholder="舒张压">

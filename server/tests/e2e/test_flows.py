@@ -1365,7 +1365,8 @@ def test_clinical_documents_flow(page, base_url, seed):
     page.fill("#nursing-form input[name=content]", "一级护理，持续心电监护")
     _submit(page, "#nursing-form button")
 
-    page.fill("#vital-form input[name=measured_at]", "2026-08-12 08:00")
+    # 日期时间控件（P1-100）：填的是 `T` 写法，界面换成空格再送（formJson）
+    page.fill("#vital-form input[name=measured_at]", "2026-08-12T08:00")
     page.fill("#vital-form input[name=temperature]", "37.4")
     page.fill("#vital-form input[name=pulse]", "86")
     _submit(page, "#vital-form button")
@@ -1510,6 +1511,48 @@ def test_下次随访日两端都用日期控件填_选的那一天真的落库(
     page.click("#fu-form button[type=submit]")
     expect(page.locator("#fu-msg")).to_contain_text("下次随访 2027-01-15")
     assert next_due() == "2027-01-15"
+
+
+@pytest.fixture(scope="session")
+def edu_material(admin_call):
+    """慢专病定时宣教的前置：一份启用中的宣教素材。"""
+    return admin_call("POST", "/api/spd/edu-materials",
+                      {"code": "e2e_p1100", "title": "E2E限盐宣教", "content": "每日盐不超过5克"})
+
+
+def test_时间戳两端都用日期时间控件填_落库是空格写法(page, base_url, seed, edu_material, admin_read):
+    """P1-100：定时宣教的推送时间、体征测量时刻原先是自由文本框——「2026-10-1 8:00」照存，定时派发按字符串比较
+    晚 9 天才发，体温单按字符串排序把「8:00」排到「14:00」之后。换成日期时间控件后控件给的是 `T` 写法，界面换成
+    空格再送：桌面端定一次宣教推送、医生移动端查房录一次体征，每次按接口读回。"""
+    _login(page, base_url)
+    _open_page(page, "spdmember", "服务团队成员端·日常服务")
+    form = page.locator("#spd-edu-form")
+    expect(form.locator("input[name=send_at]")).to_have_attribute("type", "datetime-local")
+    form.locator("select[name=material_id]").select_option(str(edu_material["id"]))
+    form.locator("input[name=patient_ids]").fill(str(seed["patient"]["id"]))
+    form.locator("select[name=channel]").select_option("app")
+    form.locator("input[name=send_at]").fill("2030-10-01T08:00")
+    _submit(page, "#spd-edu-form button")
+    pushes = admin_read(f"/api/spd/edu-pushes?material_id={edu_material['id']}")
+    assert [(p["send_at"], p["status"]) for p in pushes] == [("2030-10-01 08:00", "pending")], pushes
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "admin")
+    page.fill("#lg-pass", "admin123")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('a.tab-btn[data-tab="round"]')
+    adm = seed["admission"]["id"]
+    page.locator("#round-adm").select_option(str(adm))
+    page.click("#round-pick button[type=submit]")
+    expect(page.locator("#rv-at")).to_have_attribute("type", "datetime-local")
+    page.locator("#rv-at").fill("2026-08-12T09:30")
+    page.locator("#rv-temp").fill("37.2")
+    page.click("#round-vital button[type=submit]")
+    expect(page.locator("#round-msg")).to_contain_text("体征已录入")
+    vitals = admin_read(f"/api/inpatient/admissions/{adm}/vitals")
+    assert ("2026-08-12 09:30", 37.2) in [(v["measured_at"], v["temperature"]) for v in vitals], vitals
 
 
 def test_doctor_mobile_workbench_loads(page, base_url, seed):

@@ -752,7 +752,8 @@ $("#round-note").addEventListener("submit", async (e) => {
 $("#round-vital").addEventListener("submit", async (e) => {
   e.preventDefault();
   // 未测项留空 → 不进 body，落库为 null；填 0 会污染趋势曲线
-  const body = { measured_at: $("#rv-at").value.trim() };
+  // 日期时间控件送 `T` 分隔，换成空格再送：与桌面端、服务端默认的写法一致（P1-100）
+  const body = { measured_at: $("#rv-at").value.trim().replace("T", " ") };
   for (const [field, sel] of [["temperature", "#rv-temp"], ["pulse", "#rv-pulse"],
                               ["respiration", "#rv-resp"], ["sbp", "#rv-sbp"], ["dbp", "#rv-dbp"]]) {
     const raw = $(sel).value.trim();

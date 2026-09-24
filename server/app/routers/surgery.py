@@ -18,7 +18,7 @@ from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..numtypes import INT4_MAX
-from ..datetypes import DateStr, OptionalDateStr, TimeStr
+from ..datetypes import DateStr, OptionalDateStr, OptionalDateTimeStr, TimeStr
 from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..notify import notify_patient
 from ..models import (
@@ -433,8 +433,8 @@ class SurgeryRecordIn(BaseModel):
     anesthetist_name: str = Field(default="", max_length=64)
     anesthesia_type: str = Field(default="general", pattern="^(general|spinal|local|nerve_block)$")
     incision_level: str = Field(default="II", pattern="^(I|II|III|IV)$")
-    start_at: str = Field(default="", max_length=16)
-    end_at: str = Field(default="", max_length=16)
+    start_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
+    end_at: OptionalDateTimeStr = ""
     blood_loss_ml: int = Field(default=0, ge=0, le=INT4_MAX)
     findings: str = Field(default="", max_length=2048)
     procedure: str = Field(default="", max_length=4096)

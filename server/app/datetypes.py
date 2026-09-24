@@ -151,3 +151,87 @@ def _time_required(value: object) -> object:
 
 #: 必填时刻，`HH:MM`（00:00–23:59，半角）。请求体与查询参数都能直接用（`Query(default=...)`）。
 TimeStr = Annotated[str, BeforeValidator(_time_required)]
+
+
+# ---------------------------------------------------------------- 时间戳 YYYY-MM-DD[ HH:MM[:SS]]
+#
+# 同一个坑的时间戳版（P1-100）：请求体里 13 个「某时某分」字段（体征测量时刻、定时推送时间、
+# 标本离体 / 固定时间……）原先是 `max_length=16/19` 的裸 `str`，界面上是自由文本框。形状不一的值
+# 照存，之后：
+#
+# - **按字符串比较的**失效：定时宣教按 `send_at <= 现在` 派发，「2026-10-1 8:00」晚 9 天才发、
+#   「10月1日」当场就发、「2026/10/01 08:00」当年不发；
+# - **按字符串排序的**乱序：体温单按测量时刻排，「8:00」排在「14:00」之后，发热那次画到了退热之后；
+# - **解析的**静默丢：冷缺血时间解析不了就当「未采集」，超 60 分钟的标本从质控指标里消失。
+#
+# 与日期同理：列不动（`String(16)` / `String(19)`），在入口挡住非法值。收的是按字符串比较时序正确的
+# ISO 子集：`YYYY-MM-DD`，其后可跟 `HH:MM`（空格或 `T` 分隔，浏览器 `datetime-local` 控件送 `T`），
+# 秒按列宽决定收不收。**原样落库、不改写分隔符**：对接方送 `T`、读回也按 `T` 解析（严格的 ISO 解析器
+# 不认空格），改写就动了出参字节（病理送检回执的契约用例钉着）；只有日期、没有时刻的写法原先也收
+# （直播计划时间的契约用例钉着），照收——它按字符串比较排在当天一切时刻之前，时序不乱。
+#
+# 同一天里 `T`（0x54）排在空格（0x20）之后，所以**按字符串比较 / 排序的消费方**自己把 `T` 换成空格再比
+# （`func.replace(列, "T", " ")`：定时宣教派发、体温单排序），顺带把换真源之前存进去的 `T` 写法也救了。
+#
+# 两种列宽：`DateTimeStr` 到分钟（`String(16)`，秒不收——原先 `max_length=16` 本来就不收），
+# `DateTimeSecStr` 秒可有可无（`String(19)`）。
+#
+# 另一处实现：急诊绿道节点 `MilestoneCreate.occurred_at` 用 `datetime.fromisoformat` 自己校验（L-12）——
+# 它落库后只做时间差运算、不按字符串比较，且收时区偏移等完整 ISO 写法，口径不同，留着。
+
+#: 时间戳的形状（唯一真源）：半角数字；日期后可跟时刻（空格或 `T` 分隔），秒可选
+DATETIME_SHAPE = re.compile(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})(?:[ T]([0-9]{2}:[0-9]{2})(:[0-9]{2})?)?$")
+
+
+def check_datetime(value: str, *, seconds: bool = True) -> str:
+    """校验时间戳：`YYYY-MM-DD`，或其后跟 `HH:MM`（空格或 `T` 分隔）；`seconds=True` 时还可带 `:SS`。
+
+    日期走 `check_date`、时分走 `check_time`（同一份日历与取值校验），非法时抛 ValueError（带人话）。
+    合法值**原样返回**，不改写分隔符（理由见本节开头）。
+    """
+    match = DATETIME_SHAPE.fullmatch(value)  # fullmatch：`$` 放过末尾换行
+    if match is None or (match.group(3) and not seconds):
+        raise ValueError("时间格式须为 YYYY-MM-DD HH:MM" + ("（可带 :SS）" if seconds else "") + "，半角数字")
+    day, hour_minute, second = match.groups()
+    check_date(day)
+    if hour_minute:
+        check_time(hour_minute)
+    if second and int(second[1:]) > 59:
+        raise ValueError(f"时间 {value} 不存在（秒 00~59）")
+    return value
+
+
+def _datetime_check(value: object, *, allow_blank: bool, seconds: bool) -> object:
+    if not isinstance(value, str):
+        return value  # 交给 pydantic 报类型错
+    if value == "":
+        if allow_blank:
+            return value
+        raise ValueError("时间不能为空，格式须为 YYYY-MM-DD HH:MM")
+    return check_datetime(value, seconds=seconds)
+
+
+def _datetime_required(value: object) -> object:
+    return _datetime_check(value, allow_blank=False, seconds=False)
+
+
+def _datetime_optional(value: object) -> object:
+    return _datetime_check(value, allow_blank=True, seconds=False)
+
+
+def _datetime_sec_required(value: object) -> object:
+    return _datetime_check(value, allow_blank=False, seconds=True)
+
+
+def _datetime_sec_optional(value: object) -> object:
+    return _datetime_check(value, allow_blank=True, seconds=True)
+
+
+#: 必填时间戳，`YYYY-MM-DD[ HH:MM]`（16 位的列）；`T` 分隔也收，原样落库
+DateTimeStr = Annotated[str, BeforeValidator(_datetime_required)]
+#: 可空时间戳，空串表示未填；非空同 `DateTimeStr`
+OptionalDateTimeStr = Annotated[str, BeforeValidator(_datetime_optional)]
+#: 必填时间戳，秒可有可无：`YYYY-MM-DD[ HH:MM[:SS]]`（19 位的列）
+DateTimeSecStr = Annotated[str, BeforeValidator(_datetime_sec_required)]
+#: 可空时间戳，秒可有可无；空串表示未填
+OptionalDateTimeSecStr = Annotated[str, BeforeValidator(_datetime_sec_optional)]

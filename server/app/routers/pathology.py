@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_with_retry
 from ..database import get_db
+from ..datetypes import OptionalDateTimeSecStr
 from ..deps import get_current_user, require_roles, row_dict
 from ..models import ExamRequest, PathologySpecimen
 from ..numtypes import INT4_MAX
@@ -42,8 +43,10 @@ REJECT_REASONS = ["标本量不足", "未加固定液", "标识不清", "标本�
 class SpecimenIn(BaseModel):
     request_id: int
     site: str = Field(default="", max_length=128)
-    excised_at: str = Field(default="", max_length=19)
-    fixed_at: str = Field(default="", max_length=19)
+    # 时间戳真源（P1-100）：冷缺血时间＝固定 − 离体，原先自由文本「2026/09/24 08:00:00」解析不了就当「未采集」，
+    # 超 60 分钟的标本从质控指标里消失；现在形状不对 422，秒可有可无
+    excised_at: OptionalDateTimeSecStr = ""
+    fixed_at: OptionalDateTimeSecStr = ""
     fixative: str = Field(default="", max_length=64)
     note: str = Field(default="", max_length=512)
 

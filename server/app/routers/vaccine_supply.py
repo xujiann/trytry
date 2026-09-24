@@ -24,7 +24,7 @@ from ..clock import now_naive
 from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
-from ..datetypes import DateStr
+from ..datetypes import DateStr, DateTimeSecStr
 from ..deps import (
     get_current_user,
     paginate,
@@ -394,7 +394,7 @@ class ColdChainIn(BaseModel):
     temperature: FiniteFloat
     min_allowed: FiniteFloat = 2.0
     max_allowed: FiniteFloat = 8.0
-    recorded_at: str = Field(min_length=16, max_length=19)
+    recorded_at: DateTimeSecStr  # 时间戳真源（P1-100），秒可有可无
 
 
 class ColdChainHandle(BaseModel):

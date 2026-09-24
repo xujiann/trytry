@@ -18,7 +18,7 @@ from ...concurrency import serialized_on
 from ...config import settings
 from ...database import get_db
 from ...patchtypes import UNSET
-from ...datetypes import DateStr, OptionalDateStr
+from ...datetypes import DateStr, OptionalDateStr, OptionalDateTimeSecStr
 from ...deps import (
     get_current_user,
     paginate,
@@ -962,7 +962,9 @@ class EduPushIn(BaseModel):
     material_id: int
     patient_ids: list[int] = Field(min_length=1, max_length=1000)
     channel: str = Field(default="sms", pattern="^(sms|wechat|app)$")
-    send_at: str = Field(default="", max_length=19)
+    # 时间戳真源（P1-100）：定时派发按 `send_at <= 现在`（字符串）比，原先自由文本「2026-10-1 8:00」晚 9 天才发、
+    # 「10月1日」当场就发；现在形状不对 422。`T` 写法照收，派发时换成空格再比（spd/jobs.py）
+    send_at: OptionalDateTimeSecStr = ""
     frequency: str = Field(default="once", max_length=32)
 
 

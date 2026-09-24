@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_local
+from ..datetypes import OptionalDateTimeStr
 from ..numtypes import INT4_MAX, INT4_MIN
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
@@ -397,7 +398,7 @@ class TreatmentIn(BaseModel):
     site: str = Field(default="", max_length=64)
     dose: str = Field(default="", max_length=64)
     executor_name: str = Field(default="", max_length=64)
-    performed_at: str = Field(default="", max_length=16)
+    performed_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
     # 留空表示"未记录"，不等于"无不适"——两者在纠纷里的分量完全不同
     reaction: str = Field(default="", max_length=256)
     note: str = Field(default="", max_length=512)
@@ -503,7 +504,7 @@ class OutpatientNursingIn(BaseModel):
     nursing_level: str = Field(default="level3", pattern="^(special|level1|level2|level3)$")
     content: str = Field(min_length=1, max_length=2048)
     nurse_name: str = Field(default="", max_length=64)
-    recorded_at: str = Field(default="", max_length=16)
+    recorded_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
 
 
 @router.post(

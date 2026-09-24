@@ -9,11 +9,12 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..datetypes import DateStr
+from ..datetypes import DateStr, DateTimeStr, OptionalDateTimeStr
 from ..deps import get_current_user, paginate, require_date, require_roles
 from ..models import (
     Admission,
@@ -166,7 +167,7 @@ class ProgressNoteIn(BaseModel):
     note_type: str = Field(pattern="^(first|daily|ward_round|rescue|consultation|discharge)$")
     content: str = Field(min_length=1, max_length=4096)
     doctor_name: str = Field(default="", max_length=64)   # 列长（P1-91 第四层：`doctor_name=body.doctor_name or …`）
-    recorded_at: str = Field(default="", max_length=16)
+    recorded_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
 
 
 @router.post(
@@ -289,7 +290,7 @@ class NursingIn(BaseModel):
     nursing_level: str = Field(default="level2", pattern="^(special|level1|level2|level3)$")
     content: str = Field(default="", max_length=2048)
     nurse_name: str = Field(default="", max_length=64)   # 列长（P1-91 第四层：`nurse_name=body.nurse_name or …`）
-    recorded_at: str = Field(default="", max_length=16)
+    recorded_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
     # 护理执行联动（P1-24a）：本条护理记录若由执行某条医嘱产生，传该医嘱 id。
     # 医嘱必须存在且属于同一次住院——挂错住院的联动比不联动更糟（质控会拿它下结论）。
     inpatient_order_id: int | None = None
@@ -364,7 +365,9 @@ def list_nursing_records(
 
 
 class VitalIn(BaseModel):
-    measured_at: str = Field(min_length=1, max_length=16)
+    # 时间戳真源（P1-100）：体温单按测量时刻（字符串）排序，原先自由文本「8:00」排在「14:00」之后，
+    # 发热那次画到了退热之后；现在形状不对 422，排序时把 `T` 换成空格再比（见 list_vitals）
+    measured_at: DateTimeStr
     # 全部可空：一次测量未必测全，用 0 冒充"未测"会污染趋势曲线
     temperature: float | None = Field(default=None, ge=30, le=45)
     pulse: int | None = Field(default=None, ge=0, le=300)
@@ -421,7 +424,8 @@ def list_vitals(
     newest_first = paginate(
         db.query(VitalSignRecord)
         .filter(VitalSignRecord.admission_id == admission_id)
-        .order_by(VitalSignRecord.measured_at.desc(), VitalSignRecord.id.desc()),
+        # 按字符串排序：`T` 写法（日期时间控件、对接方）先换成空格再比，同一天里 `T` 排在空格之后（P1-100）
+        .order_by(func.replace(VitalSignRecord.measured_at, "T", " ").desc(), VitalSignRecord.id.desc()),
         response, offset, limit,
     )
     rows = list(reversed(newest_first))

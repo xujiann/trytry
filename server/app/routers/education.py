@@ -30,7 +30,7 @@ from ..models import (
     User,
 )
 from sqlalchemy.exc import IntegrityError
-from ..datetypes import DateStr
+from ..datetypes import DateStr, OptionalDateTimeStr
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable
 
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
@@ -167,7 +167,7 @@ def my_records(db: Session = Depends(get_db), user: User = Depends(get_current_u
 class LiveCreate(BaseModel):
     title: str = Field(min_length=1, max_length=256)
     speaker: str = Field(default="", max_length=64)
-    planned_at: str = Field(default="", max_length=16)
+    planned_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
     course_id: int | None = None
 
 

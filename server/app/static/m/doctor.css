@@ -43,9 +43,10 @@
 }
 .metric-row input { margin: 0; }
 
-/* 下次随访日：日期框不显示 placeholder，提示放在框上方；min-height 防 iOS 空日期框塌高 */
-.fu-next { display: block; font-size: 12.5px; color: #6b7480; }
-.fu-next input { margin-top: 4px; min-height: 46px; }
+/* 日期 / 日期时间控件（下次随访日、体征测量时刻）：控件不显示 placeholder，提示放在框上方；
+   min-height 防 iOS 空日期框塌高 */
+.m-picker { display: block; font-size: 12.5px; color: #6b7480; }
+.m-picker input { margin-top: 4px; min-height: 46px; }
 
 #login-page { padding-top: 40px; }
 

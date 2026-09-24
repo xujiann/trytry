@@ -2974,7 +2974,7 @@ async function renderSpdMember() {
         <input name="patient_ids" placeholder="患者ID，逗号分隔" required style="min-width:180px">
         <select name="channel">${Object.entries(SPD_EDU_CHANNEL).map(([k, v]) =>
           `<option value="${k}">${esc(v)}</option>`).join("")}</select>
-        <input name="send_at" placeholder="定时（YYYY-MM-DD HH:MM:SS，留空立即）" style="min-width:230px">
+        <label style="font-size:13px">定时推送（留空立即） <input name="send_at" type="datetime-local"></label>
         <button>推送</button>
       </form><p class="msg" id="spd-edu-msg"></p>
       ${spdCards([["覆盖人数", eduStats.covered_patients], ["推送人次", eduStats.push_times],

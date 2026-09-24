@@ -53,7 +53,7 @@
         <select id="fu-chronic"></select>
         <div id="fu-metrics"></div>
         <!-- 日期框不显示 placeholder，提示挪到框上方（P2-55：原先是自由文本框，「2026/10/1」照存、逾期判定对它失效） -->
-        <label class="fu-next">下次随访日期（留空按病种周期自动建议）<input id="fu-next" type="date"></label>
+        <label class="m-picker">下次随访日期（留空按病种周期自动建议）<input id="fu-next" type="date"></label>
         <button type="submit">提交随访</button>
         <p id="fu-msg" class="msg"></p>
       </form>
@@ -83,7 +83,8 @@
       </form>
       <form id="round-vital" class="m-card hidden">
         <p class="hint">录入体征（未测项留空即可，不要填 0）</p>
-        <input id="rv-at" placeholder="测量时刻 YYYY-MM-DD HH:MM" required>
+        <!-- 日期时间控件（P1-100）：原先是自由文本框，「8:00」照存，体温单按字符串排序把它排到「14:00」之后 -->
+        <label class="m-picker">测量时刻<input id="rv-at" type="datetime-local" required></label>
         <div class="grid2">
           <input id="rv-temp" type="number" step="0.1" placeholder="体温 ℃">
           <input id="rv-pulse" type="number" placeholder="脉搏 次/分">

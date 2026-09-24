@@ -454,6 +454,11 @@ function formJson(form, numFields = []) {
     if (v === "") continue;
     out[k] = numFields.includes(k) ? Number(v) : v;
   }
+  // 日期时间控件送的是 `T` 分隔（2026-10-01T08:00）；平台里的时间戳是空格写法（服务端默认值同此），
+  // 换成空格再送，界面录的与服务端补的两种写法不混在同一列里（P1-100）
+  form.querySelectorAll('input[type="datetime-local"]').forEach((el) => {
+    if (out[el.name]) out[el.name] = out[el.name].replace("T", " ");
+  });
   return out;
 }
 
@@ -895,7 +900,7 @@ async function renderEducation() {
       <form class="inline" id="live-form">
         <input name="title" placeholder="直播主题" required style="min-width:220px">
         <input name="speaker" placeholder="主讲人">
-        <input name="planned_at" placeholder="计划时间（如 2026-09-01 19:00）">
+        <label style="font-size:13px">计划时间 <input name="planned_at" type="datetime-local"></label>
         <button>申请直播</button></form>
       ${table(["ID", "主题", "主讲", "计划时间", "状态", "审核意见", "回放", "操作"], lives, (s) => {
         const actions = s.status === "pending" && ["director", "admin"].includes(role)
@@ -1337,7 +1342,7 @@ async function renderVaccineSupply() {
         <input name="org_id" type="number" placeholder="机构ID" required><input name="device_name" placeholder="设备名称" required>
         <input name="temperature" type="number" step="0.1" placeholder="温度℃" required>
         <input name="min_allowed" type="number" step="0.1" value="2" style="min-width:70px"><input name="max_allowed" type="number" step="0.1" value="8" style="min-width:70px">
-        <input name="recorded_at" placeholder="YYYY-MM-DD HH:MM:SS" required><button>录入</button></form>
+        <label style="font-size:13px">记录时间 <input name="recorded_at" type="datetime-local" required></label><button>录入</button></form>
       <p class="msg" id="cc-msg"></p>
       ${table(["机构", "设备", "温度", "区间", "状态", "处置"], cold, (r) =>
         `<tr><td>${r.org_id}</td><td>${esc(r.device_name)}</td><td>${r.temperature}</td><td>${esc(r.range)}</td>` +
@@ -1568,8 +1573,8 @@ async function renderPathology() {
       <form class="inline" id="sp-form">
         <input name="request_id" type="number" placeholder="病理申请单ID" required>
         <input name="site" placeholder="送检部位">
-        <input name="excised_at" placeholder="离体时间 YYYY-MM-DDTHH:MM:SS">
-        <input name="fixed_at" placeholder="固定时间 YYYY-MM-DDTHH:MM:SS">
+        <label style="font-size:13px">离体时间 <input name="excised_at" type="datetime-local"></label>
+        <label style="font-size:13px">固定时间 <input name="fixed_at" type="datetime-local"></label>
         <input name="fixative" placeholder="固定液"><button>登记</button></form>
       <p class="msg" id="sp-msg"></p>
       <p class="hint">${esc(stats.caliber)}</p>`)}
@@ -2862,7 +2867,7 @@ async function renderLabQc() {
         ｜ ±2SD [${lj.lines.sd2_lower}, ${lj.lines.sd2_upper}] ｜ ±3SD [${lj.lines.sd3_lower}, ${lj.lines.sd3_upper}]</p>
       <form class="inline" id="meas-form">
         <input name="value" placeholder="测得值" required style="width:100px">
-        <input name="measured_at" placeholder="测定时间 YYYY-MM-DD HH:MM（可空）" style="min-width:220px">
+        <label style="font-size:13px">测定时间（留空按录入时刻） <input name="measured_at" type="datetime-local"></label>
         <input name="operator" placeholder="操作者（可空）">
         <button>录入测定值</button></form>
       <p class="msg" id="meas-msg"></p>

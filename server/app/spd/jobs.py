@@ -7,6 +7,7 @@
 与平台既有任务同一约定：`def job(db) -> (处理对象数, 结果摘要)`，
 查询口径复用业务侧的实现，不在这里另写一套判定。
 """
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -134,7 +135,8 @@ def spd_edu_push_dispatch(db: Session) -> tuple[int, str]:
     cutoff = now_naive().strftime("%Y-%m-%d %H:%M:%S")
     due = (
         db.query(SpdEduPush)
-        .filter(SpdEduPush.status == "pending", SpdEduPush.send_at <= cutoff)
+        # 按字符串比较到点：`T` 写法先换成空格再比——同一天里 `T` 排在空格之后，原先晚到第二天零点（P1-100）
+        .filter(SpdEduPush.status == "pending", func.replace(SpdEduPush.send_at, "T", " ") <= cutoff)
         .limit(500)
         .all()
     )

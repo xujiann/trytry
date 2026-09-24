@@ -262,3 +262,94 @@ def test_请求体日期字段名单只许变少():
         "这些已经改成 DateStr（或已不存在）了，请从 KNOWN_BARE_BODY_DATE_FIELDS 划掉：\n  "
         + "\n  ".join(stale)
     )
+
+
+# ---------------------------------------------------------------- 请求体时间戳字段（P1-100）
+#
+# 同一个坑的时间戳版：17 个「某时某分」的请求体字段原先是 `max_length=16/19` 的裸 `str`，界面上是自由文本框。
+# 形状不一的值照存之后，按字符串比较的定时宣教派发晚 9 天 / 当场就发 / 当年不发，按字符串排序的体温单把
+# 「8:00」排到「14:00」之后，解析不了的冷缺血时间从质控指标里消失（修前实测，见 TECH_DEBT P1-100）。
+# 判据按名字认（词元 at / time / datetime / ts / timestamp），裸 `str` 且既没有 `pattern` 也没有
+# `field_validator` 即算；零基线。
+
+_STAMP_TOKEN = re.compile(r"(^|_)(at|time|datetime|ts|timestamp)($|_)")
+
+#: 欠账名单（只减不增）：2026-09-24 实测 13 处 → 0（同批换 `DateTimeStr` / `DateTimeSecStr` 及可空版）
+KNOWN_BARE_BODY_STAMP_FIELDS: set[str] = set()
+
+#: 名字像时间戳、按设计不走 `DateTimeStr` 的字段 → 理由（只减不增，过期即红）
+STAMP_BY_DESIGN: dict[str, str] = {
+    "spd/routers/care.py::MeasurementIn.measured_at":
+        "处理函数里 `datetime.fromisoformat` 解析、失败 422，落 `DateTime` 列——不是按字符串比较的字符串列",
+    "schemas.py::SlotCreate.slot_time": "号源时段标签（「09:00-10:00」），不是时间戳",
+    "appointments.py::SlotTemplate.slot_time": "号源时段标签（「09:00-10:00」），不是时间戳",
+}
+
+
+def _field_validated(cls: ast.ClassDef, field: str) -> bool:
+    """类里有 `@field_validator("field", …)` 管着这个字段。"""
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.FunctionDef):
+            continue
+        for deco in stmt.decorator_list:
+            if (isinstance(deco, ast.Call) and ast.unparse(deco.func).split(".")[-1] == "field_validator"
+                    and any(isinstance(a, ast.Constant) and a.value == field for a in deco.args)):
+                return True
+    return False
+
+
+def _bare_body_stamp_fields() -> set[str]:
+    models = _model_classes()
+    out = set()
+    for name in _request_models(models):
+        for path, cls in models[name]:
+            for stmt in cls.body:
+                if not (isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+                        and _STAMP_TOKEN.search(stmt.target.id)
+                        and ast.unparse(stmt.annotation) in ("str", "str | None", "Optional[str]")):
+                    continue
+                call = stmt.value if isinstance(stmt.value, ast.Call) else None
+                if call is not None and any(k.arg == "pattern" for k in call.keywords):
+                    continue
+                if _field_validated(cls, stmt.target.id):
+                    continue
+                rel = path.relative_to(APP_DIR).as_posix().removeprefix("routers/")
+                out.add(f"{rel}::{name}.{stmt.target.id}")
+    return out
+
+
+def test_请求体时间戳字段不得是裸str():
+    bad = sorted(_bare_body_stamp_fields() - STAMP_BY_DESIGN.keys() - KNOWN_BARE_BODY_STAMP_FIELDS)
+    assert bad == [], (
+        "以下请求体时间戳字段是裸 `str`——「2026-10-1 8:00」「10月1日」「2026/10/01 08:00」都会原样入库，"
+        "按字符串比较 / 排序的消费方对它失效：\n  " + "\n  ".join(bad)
+        + "\n\n请改用 datetypes.DateTimeStr / OptionalDateTimeStr（`String(16)` 列）或 "
+        "DateTimeSecStr / OptionalDateTimeSecStr（`String(19)` 列）；按设计不走的写进 STAMP_BY_DESIGN 并写明理由。"
+    )
+
+
+def test_时间戳名单只许变少():
+    stale = sorted((STAMP_BY_DESIGN.keys() | KNOWN_BARE_BODY_STAMP_FIELDS) - _bare_body_stamp_fields())
+    assert stale == [], (
+        "这些已经不是裸 str（或已不存在）了，请从 STAMP_BY_DESIGN / KNOWN_BARE_BODY_STAMP_FIELDS 划掉：\n  "
+        + "\n  ".join(stale)
+    )
+
+
+def test_时间戳判据自证():
+    # 词元匹配：认得出 recorded_at / slot_time / send_at，不误伤 category / status / latest
+    assert all(_STAMP_TOKEN.search(n) for n in ("recorded_at", "slot_time", "send_at", "push_time", "at"))
+    assert not any(_STAMP_TOKEN.search(n) for n in ("category", "status", "latest", "format", "stats"))
+    # pattern / field_validator 管着的不报：推送时点（P2-53 的 pattern）、急诊绿道节点（L-12 的校验器）
+    found = _bare_body_stamp_fields() | STAMP_BY_DESIGN.keys()
+    assert "spd/routers/followup.py::ReportTaskIn.push_time" not in found
+    assert "emergency.py::MilestoneCreate.occurred_at" not in found
+    # 真源本身：合法值原样返回（不改写分隔符）、只到日期也收、秒按精度收、非法值带人话
+    assert datetypes.check_datetime("2026-10-01T08:00", seconds=False) == "2026-10-01T08:00"
+    assert datetypes.check_datetime("2026-10-01", seconds=False) == "2026-10-01"
+    assert datetypes.check_datetime("2026-10-01 08:00:59") == "2026-10-01 08:00:59"
+    for bad, seconds in (("2026-10-01 08:00:00", False), ("2026-10-1 8:00", True), ("２０２６-10-01 08:00", True),
+                         ("2026-02-30 08:00", True), ("2026-10-01 24:00", True), ("2026-10-01 08:00:60", True),
+                         ("2026-10-01T", True), ("2026-10-01 08", True)):
+        with pytest.raises(ValueError):
+            datetypes.check_datetime(bad, seconds=seconds)
