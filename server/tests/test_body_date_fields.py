@@ -30,6 +30,8 @@ CASES = [
      "record_date", True),
     ("/api/mgmt/employees/999999/changes", {"change_type": "hire"}, "effective_date", True),
     ("/api/eldercare/assessments", {"patient_id": 999999, "adl_score": 100}, "assessed_date", True),
+    ("/api/homevisits", {"patient_id": 999999, "org_id": 999999, "service_type": "nursing"},
+     "expect_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。

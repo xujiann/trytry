@@ -880,6 +880,7 @@
   - ✅ 第二组 analytics / followups / clinical_docs / surgery（21 → 16），逐端点回归统一在 `tests/test_body_date_fields.py`。
   - ✅ admin_mgmt（16 → 14）：质控登记日期、人员变动生效日 → `OptionalDateStr`；继承来的 `QcOut` 同批覆盖回 `str`（P1-63）。
   - ✅ eldercare（14 → 13）：评估日期写成 `2025/01/15` 的老人永远不进年度复评提醒（实测）→ `OptionalDateStr`，`AssessmentOut` 同批覆盖。
+  - ✅ homevisits（13 → 12）：上门服务期望日期 → `OptionalDateStr`。
 - ✅ **P1-62 月度期间查询参数：P1-58 的月度版**（2026-09-24 量出并收口，余 `region_stats` 1 条待裁定）。
   真 `YYYY-MM` 且未校验 5 处（accounting 三个报表口径，凭证页"切换期间"是自由文本，`2026-9` → 试算平衡**空表**；
   admin_mgmt 财务汇总与薪资列表）；**`spd/assess.workload` 在 SQLite 上就会 500**（手写的 `_period_range`，

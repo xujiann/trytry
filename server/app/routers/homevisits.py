@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
+from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..models import (
     FamilyDoctorContract,
@@ -46,7 +47,7 @@ class VisitCreate(BaseModel):
     service_type: str = Field(pattern="^(nursing|doctor|rehab|sampling)$")
     demand: str = ""
     address: str = ""
-    expect_date: str = ""
+    expect_date: OptionalDateStr = ""
     # 不传则自动关联该患者在该机构的履约中家医签约
     contract_id: int | None = None
 
