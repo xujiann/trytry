@@ -330,9 +330,15 @@ def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     page.click("button[data-ack]")
     expect(page.locator("#page-body")).to_contain_text("已确认")
 
-    # 5) 处置反馈闭环
-    page.once("dialog", lambda d: d.accept("已联系患者急诊复查并降钾治疗"))
+    # 5) 处置反馈闭环（页内表单）。先点取消：原先弹窗输入框点取消照样提交，危急值就此"闭环"、
+    #    处置说明一个字没有。重进一次页面按后端真值核对——取消之后仍是"已确认"。
     page.click("button[data-resolve]")
+    page.locator("form.panel button[data-cancel]").click()
+    expect(page.locator("form.panel:has(button[data-cancel])")).to_have_count(0)
+    _open_page(page, "critical", "危急值操作台")
+    expect(page.locator("tr", has_text="血钾 7.2mmol/L")).to_contain_text("已确认")
+    page.click("button[data-resolve]")
+    _spd_modal(page, {"note": "已联系患者急诊复查并降钾治疗"})
     expect(page.locator("#page-body")).to_contain_text("已处置")
 
     # 6) 处置留痕轨迹可查（确认接收 + 处置反馈两条）
@@ -478,6 +484,76 @@ def test_医生移动端术中记录在卡片内表单里填_转归可选(page, 
     request_id = surgery_mobile_seed["request"]["id"]
     record = surgery_mobile_seed["read"](f"/api/surgery/requests/{request_id}/record")
     assert record["outcome"] == "未愈" and record["postop_diagnosis"] == "腹股沟斜疝", record
+
+
+@pytest.fixture(scope="session")
+def critical_mobile_seed(base_url, seed):
+    """医生移动端出报告 / 危急值处置的前置：一张待出报告的检验申请单。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    req = call("/api/exams", {"patient_id": seed["patient"]["id"], "from_org_id": seed["org"]["id"],
+                              "center_type": "lab", "item_code": "E2E-M-K",
+                              "item_name": "E2E移动端血钾测定"}, doctor)
+    return {"request": req, "read": lambda path: call(path, None, admin)}
+
+
+def test_医生移动端出报告与危急值处置都在卡片内表单里填_取消即放弃(page, base_url, critical_mobile_seed):
+    """P2-38：移动端出报告原先是"结论输入框 + confirm「确定=危急值」"——想放弃时点取消，报告照样出、
+    还被记成**非危急值**；危急值"处置反馈"原先点取消照样提交，危急值就此闭环、处置措施为空。
+    换成卡片内表单后取消就是放弃（按接口核对状态没动），危急值是显式选择。"""
+    read = critical_mobile_seed["read"]
+    request_id = critical_mobile_seed["request"]["id"]
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "admin")
+    page.fill("#lg-pass", "admin123")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+
+    page.click('a.tab-btn[data-tab="exam"]')
+    card = page.locator(".m-card", has_text="E2E移动端血钾测定")
+    card.locator("button[data-report]").first.click()
+    form = card.locator("form.exam-report-form")
+    form.locator("button[data-cancel]").click()
+    expect(form).to_have_count(0)
+    pending = [r["id"] for r in read("/api/exams?status=pending")]
+    assert request_id in pending, "取消之后申请单却不在待出报告里了"
+    card.locator("button[data-report]").first.click()
+    form.locator("textarea[name=conclusion]").fill("E2E移动端血钾 6.9mmol/L")
+    form.locator("textarea[name=finding]").fill("已排除溶血")
+    form.locator("select[name=critical]").select_option("1")
+    form.locator("button[type=submit]").click()
+    expect(page.locator("#exam-msg")).to_contain_text("危急值已通知申请机构")
+
+    page.click('a.tab-btn[data-tab="critical"]')
+    crit = page.locator(".m-card", has_text="E2E移动端血钾 6.9mmol/L")
+    crit.locator("button[data-ack]").click()
+    expect(page.locator("#critical-msg")).to_contain_text("已确认接收")
+    crit.locator("button[data-resolve]").click()
+    resolve_form = crit.locator("form.crit-resolve-form")
+    resolve_form.locator("button[data-cancel]").click()
+    expect(resolve_form).to_have_count(0)
+    (report,) = [r for r in read("/api/exams/critical") if r["conclusion"] == "E2E移动端血钾 6.9mmol/L"]
+    assert report["critical_status"] == "acknowledged", report
+    crit.locator("button[data-resolve]").click()
+    resolve_form.locator("textarea[name=note]").fill("已电话通知患者返院复查")
+    resolve_form.locator("button[type=submit]").click()
+    expect(page.locator("#critical-msg")).to_contain_text("危急值闭环完成")
+    actions = [a["action"] for a in read(f"/api/exams/reports/{report['id']}/critical-actions")]
+    assert "处置反馈：已电话通知患者返院复查" in actions, actions
 
 
 def test_校验失败的报错是人话而不是object_Object(page, base_url):
@@ -1215,7 +1291,8 @@ def spd_seed(base_url):
         "reason": "E2E演示转诊", "target_org_id": org["id"]},
         village_login["access_token"])
     return {"org": org, "village": village, "patient": patient, "template": template,
-            "task": task, "referral": referral, "doctor_id": doctor_id}
+            "task": task, "referral": referral, "doctor_id": doctor_id,
+            "read": lambda path: call(path, None, token, method="GET")}
 
 
 def test_spd_admin_screen_enroll_path_task(page, base_url, spd_seed):
@@ -1354,9 +1431,25 @@ def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
     # spdPost 成功后整块重画——等新状态出现（显式等待，替代固定 sleep）
     expect(page.locator("#spd-list")).to_contain_text("已接收")
 
-    with _answers(page, ["同意上转"]):
-        page.click('[data-dspd="referral"]')
-        expect(page.locator("#spd-list")).to_contain_text("待卫生院审核")
-        page.click("[data-spd-pass]")
-        # 通过即推进一格：待卫生院审核 → 待县级接收（重画完成的确定信号）
-        expect(page.locator("#spd-list")).to_contain_text("待县级接收")
+    page.click('[data-dspd="referral"]')
+    expect(page.locator("#spd-list")).to_contain_text("待卫生院审核")
+    # 意见在卡片内表单里填（P2-38）。原先弹窗点"取消"照样提交——想反悔的人反而把单子退了回去。
+    # 先点「退回」再取消，按接口核对单子没动；再点「退回」后改点「通过」，表单要跟着换成通过的。
+    page.click("[data-spd-reject]")
+    form = page.locator("form.spd-review-form")
+    expect(form.locator("textarea[name=opinion]")).to_have_attribute("placeholder", "退回理由")
+    form.locator("button[data-cancel]").click()
+    expect(form).to_have_count(0)
+    referral_path = f"/api/spd/referrals/{spd_seed['referral']['id']}"
+    assert spd_seed["read"](referral_path)["status"] == "submitted"
+    page.click("[data-spd-reject]")
+    page.click("[data-spd-pass]")
+    expect(form).to_have_count(1)
+    expect(form.locator("button[type=submit]")).to_have_text("确认通过")
+    form.locator("textarea[name=opinion]").fill("同意上转")
+    form.locator("button[type=submit]").click()
+    # 通过即推进一格：待卫生院审核 → 待县级接收（重画完成的确定信号）
+    expect(page.locator("#spd-list")).to_contain_text("待县级接收")
+    steps = spd_seed["read"](referral_path)["steps"]
+    assert [(x["action"], x["opinion"]) for x in steps if x["action"] in ("pass", "reject")] \
+        == [("pass", "同意上转")], steps

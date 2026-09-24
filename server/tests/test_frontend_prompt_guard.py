@@ -20,24 +20,35 @@ STATIC = pathlib.Path(__file__).resolve().parents[1] / "app" / "static"
 #: 只许调小：换掉一批就同步改小，降了不改也红——不改小，就给了下一次偷偷加回来的余地。
 #: 97 → 87（2026-09-24 孕产妇页）→ 77（同日人财物页）→ 66（同日手术页 + 医生移动端手术页签）
 #: → 59（同日物资页）→ 54（同日住院页）→ 50（同日门急诊文书页）→ 46（同日绩效改进任务）
-#: → 43（同日集中审方）→ 40（同日互联网+诊疗）→ 37（同日病理标本）。
-BASELINE = 37
+#: → 43（同日集中审方）→ 40（同日互联网+诊疗）→ 37（同日病理标本）
+#: → 32（同日危急值处置反馈 + 医生移动端，移动端清零）。
+BASELINE = 32
 
 
-def prompt_lines() -> list[str]:
+def prompt_lines(root: pathlib.Path = STATIC) -> list[str]:
     """含 `prompt(` 的行，`相对路径:行号`。"""
     out = []
-    for path in sorted(STATIC.rglob("*.js")):
+    for path in sorted(root.rglob("*.js")):
         for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "prompt(" in line:
-                out.append(f"{path.relative_to(STATIC).as_posix()}:{no}")
+                out.append(f"{path.relative_to(root).as_posix()}:{no}")
     return out
 
 
-def test_判据自证_扫得到管理端与移动端两处目录():
-    files = {line.split(":")[0] for line in prompt_lines()}
-    assert any("/" not in f for f in files), "管理端 app/static/*.js 一处都没扫到，扫描面不对"
-    assert any(f.startswith("m/") for f in files), "移动端 app/static/m/*.js 一处都没扫到，扫描面不对"
+def test_判据自证_扫得到管理端与移动端两处目录(tmp_path):
+    """扫描面要真的覆盖管理端与移动端两处目录。
+
+    原先的自证是"现存的 `prompt(` 行里两处目录都有"——移动端 2026-09-24 清零以后这就不成立了，
+    而清零恰恰是这把棘轮要的结果。改成按真实布局在临时目录里各植一行、两处都得扫到，
+    再确认真实目录下两处都有被扫的 `.js`（扫描面没有因为改路径之类的事悄悄缩小）。
+    """
+    (tmp_path / "m").mkdir()
+    (tmp_path / "a.js").write_text('const x = prompt("管理端");\n', encoding="utf-8")
+    (tmp_path / "m" / "b.js").write_text('const y = prompt("移动端");\n', encoding="utf-8")
+    assert prompt_lines(tmp_path) == ["a.js:1", "m/b.js:1"], "植进去的两行没有都扫到，判据空转"
+    scanned = {p.relative_to(STATIC).parts[0] for p in STATIC.rglob("*.js")}
+    assert "m" in scanned, "移动端 app/static/m/*.js 不在扫描面里"
+    assert any(part.endswith(".js") for part in scanned), "管理端 app/static/*.js 不在扫描面里"
 
 
 def test_prompt录入只许变少():

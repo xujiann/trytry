@@ -47,6 +47,31 @@ function card(inner, ops = "") {
   return `<div class="m-card">${inner}${ops ? `<div class="ops">${ops}</div>` : ""}</div>`;
 }
 
+/* 卡片内表单：系统输入框（window.prompt）的替代（P2-38）。原先的写法是「输入框返回值 || 空串」，
+ * 在弹窗上点"取消"照样提交——危急值照样"闭环"、转诊照样退回；这里点"取消"就是放弃，
+ * 提交才调 onSubmit(表单元素)。
+ * 表单留到提交成功、列表重画时才随卡片消失：后端报错时填过的字还在，改了再交。
+ * 再点一次同一个按钮不重复插表单；同一张卡换了个动作（先点"退回"又点"通过"），
+ * 换成新动作的表单——否则开着的"确认退回"会让人以为点的是通过。 */
+function cardForm(card, className, fieldsHtml, submitLabel, onSubmit) {
+  if (!card) return;
+  const open = card.querySelector(`.${className}`);
+  if (open) {
+    if (open.dataset.submitLabel === submitLabel) return;
+    open.remove();
+  }
+  const form = document.createElement("form");
+  form.className = className;
+  form.dataset.submitLabel = submitLabel;
+  form.innerHTML = `${fieldsHtml}
+    <button type="submit" class="ghost-btn">${esc(submitLabel)}</button>
+    <button type="button" class="ghost-btn" data-cancel>取消</button>`;
+  form.onsubmit = (e) => { e.preventDefault(); onSubmit(form.elements); };
+  form.querySelector("[data-cancel]").onclick = () => form.remove();
+  card.appendChild(form);
+  form.querySelector("textarea, input, select").focus();
+}
+
 /* ---------------- 登录 / 登出 ---------------- */
 
 function showWorkbench(show) {
@@ -216,10 +241,16 @@ async function loadSpdReferral(box) {
   </div>`).join("") || '<p class="empty">暂无在途转诊</p>';
   const bind = (attr, path, body) => box.querySelectorAll(`[${attr}]`).forEach((b) =>
     b.addEventListener("click", () => spdPost(path(b), body ? body() : null)));
-  bind("data-spd-pass", (b) => `/api/spd/referrals/${b.dataset.spdPass}/review`,
-    () => ({ action: "pass", opinion: prompt("审核意见") || "" }));
-  bind("data-spd-reject", (b) => `/api/spd/referrals/${b.dataset.spdReject}/review`,
-    () => ({ action: "reject", opinion: prompt("退回理由") || "" }));
+  // 通过 / 退回的意见在卡片里填（与管理端同一口径：意见可空）。原先 prompt 点"取消"照样通过、
+  // 照样退回——想反悔的人反而把单子退了回去，还没有理由。
+  const review = (attr, action, placeholder, submitLabel) =>
+    box.querySelectorAll(`[${attr}]`).forEach((b) => b.addEventListener("click", () =>
+      cardForm(b.closest(".m-card"), "spd-review-form",
+        `<textarea name="opinion" rows="2" placeholder="${placeholder}"></textarea>`, submitLabel,
+        (f) => spdPost(`/api/spd/referrals/${b.getAttribute(attr)}/review`,
+          { action, opinion: f.opinion.value.trim() }))));
+  review("data-spd-pass", "pass", "审核意见（可空）", "确认通过");
+  review("data-spd-reject", "reject", "退回理由", "确认退回");
   bind("data-spd-arrive", (b) => `/api/spd/referrals/${b.dataset.spdArrive}/arrive`,
     () => ({ effective_visit: true }));
   bind("data-spd-recv", (b) => `/api/spd/referrals/${b.dataset.spdRecv}/receive-followup`,
@@ -433,10 +464,17 @@ $("#critical-list").addEventListener("click", async (e) => {
       return loadCritical();
     }
     if (resolve) {
-      const note = prompt("处置措施（如：已联系患者并调整治疗方案）") || "";
-      await api(`/api/exams/reports/${resolve}/resolve`, { method: "POST", body: JSON.stringify({ note }) });
-      setMsg("#critical-msg", "处置已反馈，危急值闭环完成", true);
-      return loadCritical();
+      // 原先 prompt 点"取消"照样提交：危急值就此"闭环完成"，处置措施一个字没有。
+      return cardForm(e.target.closest(".m-card"), "crit-resolve-form",
+        '<textarea name="note" rows="2" placeholder="处置措施（如：已联系患者并调整治疗方案）"></textarea>',
+        "提交处置反馈", async (f) => {
+          try {
+            await api(`/api/exams/reports/${resolve}/resolve`, { method: "POST",
+              body: JSON.stringify({ note: f.note.value.trim() }) });
+            setMsg("#critical-msg", "处置已反馈，危急值闭环完成", true);
+            await loadCritical();
+          } catch (err) { setMsg("#critical-msg", err.message, false); }
+        });
     }
     if (trace) {
       const actions = await api(`/api/exams/reports/${trace}/critical-actions`);
@@ -489,14 +527,22 @@ $("#exam-list").addEventListener("click", async (e) => {
       return loadExams();
     }
     if (report) {
-      const conclusion = prompt("报告结论");
-      if (!conclusion) return;
-      const critical = confirm("是否为危急值？（确定=是，将进入危急值闭环）");
-      await api(`/api/exams/${report}/report`, {
-        method: "POST", body: JSON.stringify({ conclusion, critical }),
-      });
-      setMsg("#exam-msg", critical ? "报告已出具，危急值已通知申请机构" : "报告已出具", true);
-      loadExams();
+      // 与管理端「出报告」同一套字段（结论 + 所见 + 危急值）。原先结论之后跟一个
+      // confirm「确定=是危急值」：想放弃时点"取消"，报告照样出具、还被记成**非危急值**。
+      return cardForm(e.target.closest(".m-card"), "exam-report-form",
+        `<textarea name="conclusion" rows="2" placeholder="诊断结论" required></textarea>
+         <textarea name="finding" rows="2" placeholder="影像所见 / 检查所见（可空）"></textarea>
+         <select name="critical"><option value="0">非危急值</option>
+           <option value="1">危急值（进危急值闭环，通知申请机构）</option></select>`,
+        "出具报告", async (f) => {
+          const critical = f.critical.value === "1";
+          try {
+            await api(`/api/exams/${report}/report`, { method: "POST", body: JSON.stringify({
+              conclusion: f.conclusion.value.trim(), finding: f.finding.value.trim(), critical }) });
+            setMsg("#exam-msg", critical ? "报告已出具，危急值已通知申请机构" : "报告已出具", true);
+            await loadExams();
+          } catch (err) { setMsg("#exam-msg", err.message, false); }
+        });
     }
   } catch (err) {
     setMsg("#exam-msg", err.message, false);
