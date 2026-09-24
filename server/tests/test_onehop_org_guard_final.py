@@ -106,7 +106,7 @@ def _seed(world):
 def test_别家机构改不了团队成员(client, world):
     ids = _seed(world)
     resp = client.patch(f"/api/spd/team-members/{ids['member']}",
-                        json={"member_role": "乙院改的", "active": False},
+                        json={"member_role": "expert", "active": False},
                         headers=world["doc_b"])
     assert resp.status_code == 403, resp.text
 
@@ -144,7 +144,7 @@ def test_别家机构核销不了到诊(client, world):
 def test_本机构照常(client, world):
     ids = _seed(world)
     assert client.patch(f"/api/spd/team-members/{ids['member']}",
-                        json={"member_role": "组长"}, headers=world["doc_a"]).status_code == 200
+                        json={"member_role": "case_manager"}, headers=world["doc_a"]).status_code == 200
     assert client.post(f"/api/spd/qc-samples/{ids['sample']}/result",
                        json={"result": "pass", "method": "record"},
                        headers=world["doc_a"]).status_code == 200

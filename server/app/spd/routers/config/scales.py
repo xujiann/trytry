@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ....database import get_db
+from ....patchtypes import UNSET
 from ....deps import paginate, require_roles
 from ....numtypes import INT4_MAX, INT4_MIN, MONEY_MAX
 from ...models import (
@@ -113,12 +114,17 @@ def _scale_out(s: SpdScale) -> dict:
     }
 
 
+def _check_item_keys(items: list[dict]) -> None:
+    """建量表与改量表同一句（P1-94：改量表原先不查）：题目 key 重复，评分时后一题会盖掉前一题。"""
+    keys = [i.get("key") for i in items]
+    if len(keys) != len(set(keys)):
+        raise HTTPException(status_code=422, detail="量表题目 key 不得重复")
+
+
 @router.post("/scales", response_model=ScaleOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_scale(body: ScaleIn, db: Session = Depends(get_db)):
-    keys = [i.get("key") for i in body.items]
-    if len(keys) != len(set(keys)):
-        raise HTTPException(status_code=422, detail="量表题目 key 不得重复")
+    _check_item_keys(body.items)
     scale = SpdScale(**body.model_dump(), status="draft")
     db.add(scale)
     try:
@@ -157,17 +163,29 @@ def get_scale(scale_id: int, db: Session = Depends(get_db)):
     return _scale_out(scale)
 
 
+class ScalePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    items: list[dict] = Field(default=UNSET)
+    scoring: dict = Field(default=UNSET)
+    category: str = Field(default=UNSET, pattern="^(risk|stage|rehab|screen)$")
+    owner_team_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
+
+
 @router.patch("/scales/{scale_id}", response_model=ScaleOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_scale(scale_id: int, body: dict, db: Session = Depends(get_db)):
+def update_scale(scale_id: int, body: ScalePatch, db: Session = Depends(get_db)):
     scale = db.get(SpdScale, scale_id)
     if scale is None:
         raise HTTPException(status_code=404, detail="量表不存在")
-    if scale.status == "published" and ("items" in body or "scoring" in body):
+    changes = body.model_dump(exclude_unset=True)
+    if scale.status == "published" and ("items" in changes or "scoring" in changes):
         raise HTTPException(status_code=409, detail="已发布量表不可改题目或评分，请新建版本")
-    for key in ("name", "items", "scoring", "category", "owner_team_id"):
-        if key in body:
-            setattr(scale, key, body[key])
+    if "items" in changes:
+        _check_item_keys(changes["items"])
+    for key, value in changes.items():
+        setattr(scale, key, value)
     db.commit()
     return _scale_out(scale)
 
@@ -271,15 +289,26 @@ def list_edu(
     return [_edu_out(m) for m in rows]
 
 
+class EduPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    title: str = Field(default=UNSET, min_length=1, max_length=128)
+    content: str = Field(default=UNSET, max_length=8192)
+    media_url: str = Field(default=UNSET, max_length=256)
+    media_type: str = Field(default=UNSET, pattern="^(text|audio|video)$")
+    dept: str = Field(default=UNSET, max_length=64)
+    active: bool = Field(default=UNSET)
+    program_code: str = Field(default=UNSET, max_length=32)
+
+
 @router.patch("/edu-materials/{material_id}", response_model=EduMaterialOut,
               dependencies=[Depends(require_roles("director", "doctor", "public_health"))])
-def update_edu(material_id: int, body: dict, db: Session = Depends(get_db)):
+def update_edu(material_id: int, body: EduPatch, db: Session = Depends(get_db)):
     material = db.get(SpdEduMaterial, material_id)
     if material is None:
         raise HTTPException(status_code=404, detail="宣教素材不存在")
-    for key in ("title", "content", "media_url", "media_type", "dept", "active", "program_code"):
-        if key in body:
-            setattr(material, key, body[key])
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(material, key, value)
     db.commit()
     return _edu_out(material)
 
@@ -335,15 +364,24 @@ def list_packages(
     return [_package_out(p) for p in rows]
 
 
+class PackagePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    price: FiniteFloat = Field(default=UNSET, ge=0, le=MONEY_MAX)
+    period_days: int = Field(default=UNSET, ge=1, le=3650)
+    items: list[dict] = Field(default=UNSET)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/service-packages/{package_id}", response_model=ServicePackageOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_package(package_id: int, body: dict, db: Session = Depends(get_db)):
+def update_package(package_id: int, body: PackagePatch, db: Session = Depends(get_db)):
     package = db.get(SpdServicePackage, package_id)
     if package is None:
         raise HTTPException(status_code=404, detail="服务包不存在")
-    for key in ("name", "price", "period_days", "items", "active"):
-        if key in body:
-            setattr(package, key, body[key])
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(package, key, value)
     db.commit()
     return _package_out(package)
 

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ....clock import now_naive
 from ....database import get_db
+from ....patchtypes import UNSET
 from ....deps import get_current_user, paginate, require_admin, require_roles
 from ...platform import Organization, User
 from ...models import (
@@ -215,19 +216,30 @@ def list_data_sources(source_type: str | None = None, db: Session = Depends(get_
     return [_source_out(s) for s in query.order_by(SpdDataSource.id).limit(200).all()]
 
 
+class DataSourcePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    endpoint: str = Field(default=UNSET, max_length=256)
+    freq_minutes: int = Field(default=UNSET, ge=1, le=1440)
+    scope: str = Field(default=UNSET, max_length=256)
+    active: bool = Field(default=UNSET)
+    # running=正常, delayed=延迟, failed=异常, stopped=停用（见模型注释）
+    status: str = Field(default=UNSET, pattern="^(running|delayed|failed|stopped)$")
+
+
 @router.patch("/data-sources/{source_id}", response_model=DataSourceOut,
               dependencies=[Depends(require_admin)])
 def update_data_source(
-    source_id: int, body: dict, db: Session = Depends(get_db),
+    source_id: int, body: DataSourcePatch, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     source = db.get(SpdDataSource, source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     assert_org_writable(db, user, source.org_id)
-    for key in ("name", "endpoint", "freq_minutes", "scope", "active", "status"):
-        if key in body:
-            setattr(source, key, body[key])
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(source, key, value)
     db.commit()
     return _source_out(source)
 

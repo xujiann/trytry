@@ -43,6 +43,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_body_fk_exists as bodyfk
     import test_body_finite_numbers as bodyfinite
     import test_body_numeric_capacity as bodynumcap
+    import test_body_raw_dict as bodyraw
     import test_body_str_length as bodystr
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
@@ -118,6 +119,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          bodyfinite.BASELINE, "tests/test_body_finite_numbers.py"),
         ("数值入参", "整数 / 金额入参越过列容量写进 Integer / Money 列（PG 上溢出即 500；65 → 0，第三层显式赋值 +1 → 0）",
          bodynumcap.BASELINE, "tests/test_body_numeric_capacity.py"),
+        ("请求体契约", "写接口收裸 dict 请求体（改档绕过建档的一切校验，坏值落库后整张列表 500；20 → 0 已清零）",
+         bodyraw.BASELINE, "tests/test_body_raw_dict.py"),
+        ("请求体契约", "按设计收原样资源的入站端点（FHIR R4 资源，逐条写明理由）",
+         len(bodyraw.BY_DESIGN), "tests/test_body_raw_dict.py"),
         ("时间口径", "app/ 里绕过 clock.today() 的 date.today()", clock.DATE_TODAY_BASELINE,
          "tests/test_clock.py"),
         ("时间口径", "app/ 顶层时间快照的豁免", len(clock.APP_IMPORT_TIME_OK),

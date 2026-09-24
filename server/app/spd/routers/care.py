@@ -17,6 +17,7 @@ from ...clock import now_naive
 from ...concurrency import serialized_on
 from ...config import settings
 from ...database import get_db
+from ...patchtypes import UNSET
 from ...datetypes import DateStr, OptionalDateStr
 from ...deps import (
     get_current_user,
@@ -1307,16 +1308,30 @@ def list_case_report_tasks(active: bool | None = None, db: Session = Depends(get
     ]
 
 
+class CaseReportTaskPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    program_code: str = Field(default=UNSET, max_length=32)
+    dept: str = Field(default=UNSET, max_length=64)
+    manager_user_id: int | None = None
+    assignee_ids: list[int] = Field(default=UNSET)
+    org_ids: list[int] = Field(default=UNSET)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/case-report-tasks/{task_id}", response_model=CaseReportTaskUpdatedOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def update_case_report_task(task_id: int, body: dict, db: Session = Depends(get_db)):
+def update_case_report_task(task_id: int, body: CaseReportTaskPatch, db: Session = Depends(get_db)):
     task = db.get(SpdCaseReportTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="上报任务不存在")
-    for key in ("name", "program_code", "dept", "manager_user_id", "assignee_ids",
-                "org_ids", "active"):
-        if key in body:
-            setattr(task, key, body[key])
+    changes = body.model_dump(exclude_unset=True)
+    # 与建任务同一句（P1-90）：负责人先查存在，否则生产库撞外键 500
+    if changes.get("manager_user_id") is not None and db.get(User, changes["manager_user_id"]) is None:
+        raise HTTPException(status_code=404, detail=f"负责人不存在（manager_user_id={changes['manager_user_id']}）")
+    for key, value in changes.items():
+        setattr(task, key, value)
     db.commit()
     return {"id": task.id, "name": task.name, "active": task.active}
 

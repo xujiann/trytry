@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ....concurrency import insert_if_absent
 from ....database import get_db
+from ....patchtypes import UNSET
 from ....datetypes import OptionalDateStr
 from ....deps import get_current_user, paginate, require_roles
 from ...platform import Organization, User
@@ -225,20 +226,35 @@ def get_team(team_id: int, db: Session = Depends(get_db)):
     return out
 
 
+class TeamPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    level: str = Field(default=UNSET, pattern="^(county|township|village|center)$")
+    program_codes: list[str] = Field(default=UNSET)
+    leader_user_id: int | None = None
+    dept: str = Field(default=UNSET, max_length=64)
+    service_area: str = Field(default=UNSET, max_length=256)
+    data_scope: str = Field(default=UNSET, pattern="^(org|group|region)$")
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/teams/{team_id}", response_model=TeamOut,
               response_model_exclude_unset=True,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_team(
-    team_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    team_id: int, body: TeamPatch, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     team = db.get(SpdTeam, team_id)
     if team is None:
         raise HTTPException(status_code=404, detail="团队不存在")
     assert_org_writable(db, user, team.org_id)
-    for key in ("name", "level", "program_codes", "leader_user_id", "dept", "service_area",
-                "data_scope", "active"):
-        if key in body:
-            setattr(team, key, body[key])
+    changes = body.model_dump(exclude_unset=True)
+    # 与建团队同一句（P1-90）：负责人先查存在，否则生产库撞外键 500
+    if changes.get("leader_user_id") is not None and db.get(User, changes["leader_user_id"]) is None:
+        raise HTTPException(status_code=404, detail=f"团队负责人不存在（leader_user_id={changes['leader_user_id']}）")
+    for key, value in changes.items():
+        setattr(team, key, value)
     db.commit()
     return _team_out(team)
 
@@ -268,10 +284,25 @@ def add_team_member(
             "member_role": member.member_role}
 
 
+class MemberPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    member_role: str = Field(default=UNSET, pattern="^(doctor|nurse|rehab|case_manager|village_doctor|expert)$")
+    program_codes: list[str] = Field(default=UNSET)
+    stage_scope: str = Field(default=UNSET, max_length=64)
+    patient_scope: str = Field(default=UNSET, pattern="^(self|team|org|region)$")
+    can_view: bool = Field(default=UNSET)
+    can_followup: bool = Field(default=UNSET)
+    can_referral: bool = Field(default=UNSET)
+    can_audit: bool = Field(default=UNSET)
+    can_assess: bool = Field(default=UNSET)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/team-members/{member_id}", response_model=TeamMemberUpdatedOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_team_member(
-    member_id: int, body: dict, db: Session = Depends(get_db),
+    member_id: int, body: MemberPatch, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """改团队成员的角色与权限位。
@@ -285,10 +316,8 @@ def update_team_member(
         raise HTTPException(status_code=404, detail="团队成员不存在")
     team = db.get(SpdTeam, member.team_id)
     assert_org_writable(db, user, team.org_id if team else None)
-    for key in ("member_role", "program_codes", "stage_scope", "patient_scope", "can_view",
-                "can_followup", "can_referral", "can_audit", "can_assess", "active"):
-        if key in body:
-            setattr(member, key, body[key])
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(member, key, value)
     db.commit()
     return {"id": member.id, "member_role": member.member_role, "active": member.active}
 
@@ -415,19 +444,29 @@ def list_village_doctors(
     return [_vd_out(v, names.get(v.user_id, "")) for v in rows]
 
 
+class VillageDoctorPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    township: str = Field(default=UNSET, max_length=64)
+    village: str = Field(default=UNSET, max_length=64)
+    license_no: str = Field(default=UNSET, max_length=64)
+    license_valid_to: OptionalDateStr = Field(default=UNSET)
+    phone: str = Field(default=UNSET, max_length=20)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/village-doctors/{vd_id}", response_model=VillageDoctorOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_village_doctor(
-    vd_id: int, body: dict, db: Session = Depends(get_db),
+    vd_id: int, body: VillageDoctorPatch, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     record = db.get(SpdVillageDoctor, vd_id)
     if record is None:
         raise HTTPException(status_code=404, detail="村医档案不存在")
     assert_org_writable(db, user, record.org_id)
-    for key in ("township", "village", "license_no", "license_valid_to", "phone", "active"):
-        if key in body:
-            setattr(record, key, body[key])
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(record, key, value)
     db.commit()
     return _vd_out(record)
 

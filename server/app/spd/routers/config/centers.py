@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ....database import get_db
+from ....patchtypes import UNSET
 from ....deps import require_roles
 from ...platform import Organization, User
 from ...models import (
@@ -113,16 +114,35 @@ def list_centers(program_code: str | None = None, db: Session = Depends(get_db))
     return [_center_out(c) for c in query.order_by(SpdCenter.id).limit(200).all()]
 
 
+class CenterPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    lead_org_id: int | None = None
+    lead_dept: str = Field(default=UNSET, max_length=64)
+    leader_user_id: int | None = None
+    org_ids: list[int] = Field(default=UNSET)
+    team_ids: list[int] = Field(default=UNSET)
+    # 建中心不收 status，没有建档一侧的枚举可照抄；界面给 draft / running / paused，既有用例拿 disabled
+    # 表示停用——这里只限列宽 String(16)，不替业务定枚举
+    status: str = Field(default=UNSET, max_length=16)
+    version: str = Field(default=UNSET, max_length=16)
+
+
 @router.patch("/centers/{center_id}", response_model=CenterOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_center(center_id: int, body: dict, db: Session = Depends(get_db)):
+def update_center(center_id: int, body: CenterPatch, db: Session = Depends(get_db)):
     center = db.get(SpdCenter, center_id)
     if center is None:
         raise HTTPException(status_code=404, detail="专病中心不存在")
-    for key in ("name", "lead_org_id", "lead_dept", "leader_user_id", "org_ids", "team_ids",
-                "status", "version"):
-        if key in body:
-            setattr(center, key, body[key])
+    changes = body.model_dump(exclude_unset=True)
+    # 与建中心同两句（P1-90）：牵头机构与负责人先查存在，否则生产库撞外键 500
+    if changes.get("lead_org_id") is not None and db.get(Organization, changes["lead_org_id"]) is None:
+        raise HTTPException(status_code=404, detail=f"牵头机构不存在（lead_org_id={changes['lead_org_id']}）")
+    if changes.get("leader_user_id") is not None and db.get(User, changes["leader_user_id"]) is None:
+        raise HTTPException(status_code=404, detail=f"负责人不存在（leader_user_id={changes['leader_user_id']}）")
+    for key, value in changes.items():
+        setattr(center, key, value)
     db.commit()
     return _center_out(center)
 

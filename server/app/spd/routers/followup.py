@@ -20,6 +20,7 @@ from ... import clock
 from ...clock import now_naive
 from ...concurrency import insert_if_absent, insert_or_conflict, serialized_on
 from ...database import get_db
+from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
 from ...deps import (
     get_current_user,
@@ -381,6 +382,15 @@ class FollowupRuleIn(BaseModel):
     allow_roles: list[str] = Field(default_factory=list)
 
 
+def _check_points(points: list[int]) -> None:
+    """建方案与改方案同一句。时间点是按方案生成随访时加在基准日上的天数，
+    越界的值让「按方案生成随访」与出院自动匹配在日期运算上 500（P1-94：改方案原先不查）。"""
+    if not points:
+        raise HTTPException(status_code=422, detail="随访方案至少要有一个随访时间点")
+    if any(p < 0 or p > 3650 for p in points):
+        raise HTTPException(status_code=422, detail="随访时间点须在 0~3650 天之间")
+
+
 def _rule_out(r: SpdFollowupRule) -> dict:
     return {
         "id": r.id, "code": r.code, "name": r.name, "scene": r.scene, "dept": r.dept,
@@ -397,10 +407,7 @@ def _rule_out(r: SpdFollowupRule) -> dict:
 @router.post("/followup-rules", response_model=FollowupRuleOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def create_followup_rule(body: FollowupRuleIn, db: Session = Depends(get_db)):
-    if not body.points:
-        raise HTTPException(status_code=422, detail="随访方案至少要有一个随访时间点")
-    if any(p < 0 or p > 3650 for p in body.points):
-        raise HTTPException(status_code=422, detail="随访时间点须在 0~3650 天之间")
+    _check_points(body.points)
     rule = SpdFollowupRule(**body.model_dump())
     db.add(rule)
     try:
@@ -433,17 +440,34 @@ def list_followup_rules(
     return [_rule_out(r) for r in rows]
 
 
+class FollowupRulePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    dept: str = Field(default=UNSET, max_length=64)
+    program_code: str = Field(default=UNSET, max_length=32)
+    diagnosis_keywords: list[str] = Field(default=UNSET)
+    surgery_keywords: list[str] = Field(default=UNSET)
+    order_keywords: list[str] = Field(default=UNSET)
+    points: list[int] = Field(default=UNSET)
+    questionnaire_code: str = Field(default=UNSET, max_length=32)
+    executor_role: str = Field(default=UNSET, max_length=32)
+    allow_depts: list[str] = Field(default=UNSET)
+    allow_roles: list[str] = Field(default=UNSET)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/followup-rules/{rule_id}", response_model=FollowupRuleOut,
               dependencies=[Depends(require_roles("director", "doctor"))])
-def update_followup_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
+def update_followup_rule(rule_id: int, body: FollowupRulePatch, db: Session = Depends(get_db)):
     rule = db.get(SpdFollowupRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="随访方案不存在")
-    for key in ("name", "dept", "program_code", "diagnosis_keywords", "surgery_keywords",
-                "order_keywords", "points", "questionnaire_code", "executor_role",
-                "allow_depts", "allow_roles", "active"):
-        if key in body:
-            setattr(rule, key, body[key])
+    changes = body.model_dump(exclude_unset=True)
+    if "points" in changes:
+        _check_points(changes["points"])
+    for key, value in changes.items():
+        setattr(rule, key, value)
     db.commit()
     return _rule_out(rule)
 
@@ -461,6 +485,15 @@ class QuestionnaireIn(BaseModel):
     handle_role: str = Field(default="doctor", max_length=32)
 
 
+def _check_abnormal_rules(rules: list[dict]) -> None:
+    """建问卷与改问卷同一句：异常分级规则在随访结案时逐条求值，写坏的规则让结案 500（P1-94：改问卷原先不查）。"""
+    for rule in rules:
+        try:
+            validate_conditions([rule.get("when", {})])
+        except RuleError as exc:
+            raise HTTPException(status_code=422, detail=f"异常分级规则非法：{exc}") from None
+
+
 def _q_out(q: SpdQuestionnaire) -> dict:
     return {
         "id": q.id, "code": q.code, "name": q.name, "scene": q.scene,
@@ -473,11 +506,7 @@ def _q_out(q: SpdQuestionnaire) -> dict:
 @router.post("/questionnaires", response_model=QuestionnaireOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def create_questionnaire(body: QuestionnaireIn, db: Session = Depends(get_db)):
-    for rule in body.abnormal_rules:
-        try:
-            validate_conditions([rule.get("when", {})])
-        except RuleError as exc:
-            raise HTTPException(status_code=422, detail=f"异常分级规则非法：{exc}") from None
+    _check_abnormal_rules(body.abnormal_rules)
     questionnaire = SpdQuestionnaire(**body.model_dump())
     db.add(questionnaire)
     try:
@@ -505,15 +534,28 @@ def list_questionnaires(
     ]
 
 
+class QuestionnairePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    items: list[dict] = Field(default=UNSET)
+    abnormal_rules: list[dict] = Field(default=UNSET)
+    track_dept: str = Field(default=UNSET, max_length=64)
+    handle_role: str = Field(default=UNSET, max_length=32)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/questionnaires/{q_id}", response_model=QuestionnaireOut,
               dependencies=[Depends(require_roles("director", "doctor"))])
-def update_questionnaire(q_id: int, body: dict, db: Session = Depends(get_db)):
+def update_questionnaire(q_id: int, body: QuestionnairePatch, db: Session = Depends(get_db)):
     questionnaire = db.get(SpdQuestionnaire, q_id)
     if questionnaire is None:
         raise HTTPException(status_code=404, detail="问卷不存在")
-    for key in ("name", "items", "abnormal_rules", "track_dept", "handle_role", "active"):
-        if key in body:
-            setattr(questionnaire, key, body[key])
+    changes = body.model_dump(exclude_unset=True)
+    if "abnormal_rules" in changes:
+        _check_abnormal_rules(changes["abnormal_rules"])
+    for key, value in changes.items():
+        setattr(questionnaire, key, value)
     db.commit()
     return _q_out(questionnaire)
 
@@ -1310,15 +1352,28 @@ def list_report_templates(
     ]
 
 
+class ReportTemplatePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    period: str = Field(default=UNSET, pattern="^(daily|weekly|monthly|custom)$")
+    scope_level: str = Field(default=UNSET, pattern="^(center|dept|grassroots|personal)$")
+    sections: list[dict] = Field(default=UNSET)
+    variables: dict = Field(default=UNSET)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/report-templates/{template_id}", response_model=SpdReportTemplateOut,
               dependencies=[Depends(require_roles("director"))])
-def update_report_template(template_id: int, body: dict, db: Session = Depends(get_db)):
+def update_report_template(template_id: int, body: ReportTemplatePatch, db: Session = Depends(get_db)):
     template = db.get(SpdReportTemplate, template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="报告模板不存在")
-    for key in ("name", "period", "scope_level", "sections", "variables", "active"):
-        if key in body:
-            setattr(template, key, body[key])
+    changes = body.model_dump(exclude_unset=True)
+    if "sections" in changes and not changes["sections"]:
+        raise HTTPException(status_code=422, detail="报告模板至少要有一个内容段落")
+    for key, value in changes.items():
+        setattr(template, key, value)
     db.commit()
     return _template_out(template)
 
@@ -1368,16 +1423,28 @@ def list_report_tasks(status: str | None = None, db: Session = Depends(get_db)):
     ]
 
 
+class ReportTaskPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    frequency: str = Field(default=UNSET, pattern="^(daily|weekly|monthly|custom)$")
+    push_time: str = Field(default=UNSET, max_length=5)
+    subscriber_ids: list[int] = Field(default=UNSET)
+    org_ids: list[int] = Field(default=UNSET)
+    valid_from: OptionalDateStr = Field(default=UNSET)
+    valid_to: OptionalDateStr = Field(default=UNSET)
+    priority: int = Field(default=UNSET, ge=1, le=9)
+    status: str = Field(default=UNSET, pattern="^(active|paused|deleted)$")
+
+
 @router.patch("/report-tasks/{task_id}", response_model=ReportTaskOut, dependencies=[Depends(require_roles("director"))])
-def update_report_task(task_id: int, body: dict, db: Session = Depends(get_db)):
+def update_report_task(task_id: int, body: ReportTaskPatch, db: Session = Depends(get_db)):
     """启用 / 暂停 / 改频率 / 调优先级。删除也走这里（status=deleted 由前端不再展示）。"""
     task = db.get(SpdReportTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="报告推送任务不存在")
-    for key in ("name", "frequency", "push_time", "subscriber_ids", "org_ids",
-                "valid_from", "valid_to", "priority", "status"):
-        if key in body:
-            setattr(task, key, body[key])
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(task, key, value)
     db.commit()
     return _task_out(task)
 

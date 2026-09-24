@@ -32,6 +32,7 @@ from ... import clock, datetypes
 from ...clock import now_naive
 from ...concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ...database import get_db
+from ...patchtypes import UNSET
 from ...deps import get_current_user, paginate, require_roles
 from ...formula import FormulaError, evaluate as eval_formula
 from ..platform import Organization, User
@@ -404,25 +405,43 @@ def list_indicators(
     return [_indicator_out(i) for i in rows]
 
 
+class IndicatorPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    program_codes: list[str] = Field(default=UNSET)
+    data_source: str = Field(
+        default=UNSET,
+        pattern="^(task|enrollment|path|referral|measurement|assessment|archive|case_report)$",
+    )
+    scope_expr: str = Field(default=UNSET, max_length=256)
+    formula: str = Field(default=UNSET, max_length=256)
+    score_rule: dict = Field(default=UNSET)
+    weight: float = Field(default=UNSET, ge=0, le=1000)
+    target_value: FiniteFloat | None = None
+    abnormal_rule: str = Field(default=UNSET, max_length=256)
+    effective_from: str = Field(default=UNSET, max_length=10)
+    effective_scope: str = Field(default=UNSET, max_length=64)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/indicators/{indicator_id}", response_model=IndicatorOut,
               dependencies=[Depends(require_roles("director"))])
-def update_indicator(indicator_id: int, body: dict, db: Session = Depends(get_db)):
+def update_indicator(indicator_id: int, body: IndicatorPatch, db: Session = Depends(get_db)):
     indicator = db.get(SpdIndicator, indicator_id)
     if indicator is None:
         raise HTTPException(status_code=404, detail="指标不存在")
-    if "formula" in body and body["formula"]:
+    changes = body.model_dump(exclude_unset=True)
+    if changes.get("formula"):
         try:
             eval_formula(
-                body["formula"],
-                dict.fromkeys(_metric_names(body.get("data_source", indicator.data_source)), 1.0),
+                changes["formula"],
+                dict.fromkeys(_metric_names(changes.get("data_source", indicator.data_source)), 1.0),
             )
         except FormulaError as exc:
             raise HTTPException(status_code=422, detail=f"公式非法：{exc}") from None
-    for key in ("name", "program_codes", "data_source", "scope_expr", "formula",
-                "score_rule", "weight", "target_value", "abnormal_rule",
-                "effective_from", "effective_scope", "active"):
-        if key in body:
-            setattr(indicator, key, body[key])
+    for key, value in changes.items():
+        setattr(indicator, key, value)
     db.commit()
     return _indicator_out(indicator)
 
@@ -779,6 +798,23 @@ class PlanIn(BaseModel):
     items: list[dict] = Field(default_factory=list)
 
 
+def _check_plan_items(db: Session, items: list[dict]) -> None:
+    """建方案与改方案同一句（P1-94：改方案原先不查）：至少一个指标，指标编码得有、得存在。
+
+    编码缺失或不是字符串的条目先挡掉——原先拼「以下指标不存在」时 `'、'.join` 撞上 None / 整数，422 成了 500。"""
+    if not items:
+        raise HTTPException(status_code=422, detail="考核方案至少要有一个指标")
+    codes: list[Any] = [i.get("indicator_code") for i in items]
+    if not all(isinstance(c, str) and c for c in codes):
+        raise HTTPException(status_code=422, detail="考核方案的每一项都要给出指标编码 indicator_code")
+    known = {
+        code for (code,) in db.query(SpdIndicator.code).filter(SpdIndicator.code.in_(codes)).all()
+    }
+    missing = [c for c in codes if c not in known]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"以下指标不存在：{'、'.join(missing)}")
+
+
 def _plan_out(p: SpdAssessPlan) -> dict:
     return {
         "id": p.id, "code": p.code, "name": p.name, "level": p.level,
@@ -790,15 +826,7 @@ def _plan_out(p: SpdAssessPlan) -> dict:
 @router.post("/assess-plans", response_model=PlanOut, status_code=201,
              dependencies=[Depends(require_roles("director"))])
 def create_plan(body: PlanIn, db: Session = Depends(get_db)):
-    codes: list[Any] = [i.get("indicator_code") for i in body.items]
-    if not codes:
-        raise HTTPException(status_code=422, detail="考核方案至少要有一个指标")
-    known = {
-        code for (code,) in db.query(SpdIndicator.code).filter(SpdIndicator.code.in_(codes)).all()
-    }
-    missing = [c for c in codes if c not in known]
-    if missing:
-        raise HTTPException(status_code=422, detail=f"以下指标不存在：{'、'.join(missing)}")
+    _check_plan_items(db, body.items)
     plan = SpdAssessPlan(**body.model_dump())
     db.add(plan)
     try:
@@ -820,16 +848,29 @@ def list_plans(level: str | None = None, active: bool | None = None,
     return [_plan_out(p) for p in query.order_by(SpdAssessPlan.id).limit(200).all()]
 
 
+class PlanPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    level: str = Field(default=UNSET, pattern="^(hospital|township|station|village|team)$")
+    program_codes: list[str] = Field(default=UNSET)
+    object_type: str = Field(default=UNSET, pattern="^(org|doctor|village_doctor|team)$")
+    period_type: str = Field(default=UNSET, pattern="^(month|quarter|year)$")
+    items: list[dict] = Field(default=UNSET)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/assess-plans/{plan_id}", response_model=PlanOut,
               dependencies=[Depends(require_roles("director"))])
-def update_plan(plan_id: int, body: dict, db: Session = Depends(get_db)):
+def update_plan(plan_id: int, body: PlanPatch, db: Session = Depends(get_db)):
     plan = db.get(SpdAssessPlan, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="考核方案不存在")
-    for key in ("name", "level", "program_codes", "object_type", "period_type",
-                "items", "active"):
-        if key in body:
-            setattr(plan, key, body[key])
+    changes = body.model_dump(exclude_unset=True)
+    if "items" in changes:
+        _check_plan_items(db, changes["items"])
+    for key, value in changes.items():
+        setattr(plan, key, value)
     db.commit()
     return _plan_out(plan)
 
@@ -1181,15 +1222,24 @@ def list_point_rules(db: Session = Depends(get_db)):
     ]
 
 
+class PointRulePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    points: int = Field(default=UNSET, ge=0, le=1000)
+    daily_limit: int = Field(default=UNSET, ge=0, le=100000)
+    condition: str = Field(default=UNSET, max_length=256)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/point-rules/{rule_id}", response_model=PointRuleUpdatedOut,
               dependencies=[Depends(require_roles("director"))])
-def update_point_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
+def update_point_rule(rule_id: int, body: PointRulePatch, db: Session = Depends(get_db)):
     rule = db.get(SpdPointRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="积分规则不存在")
-    for key in ("name", "points", "daily_limit", "condition", "active"):
-        if key in body:
-            setattr(rule, key, body[key])
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(rule, key, value)
     db.commit()
     return {"id": rule.id, "points": rule.points, "active": rule.active}
 
@@ -1316,15 +1366,24 @@ def list_goods(db: Session = Depends(get_db)):
     ]
 
 
+class GoodsPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    points: int = Field(default=UNSET, ge=1, le=100000)
+    stock: int = Field(default=UNSET, ge=0, le=100000)
+    image_url: str = Field(default=UNSET, max_length=256)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/goods/{goods_id}", response_model=GoodsUpdatedOut,
               dependencies=[Depends(require_roles("director"))])
-def update_goods(goods_id: int, body: dict, db: Session = Depends(get_db)):
+def update_goods(goods_id: int, body: GoodsPatch, db: Session = Depends(get_db)):
     goods = db.get(SpdGoods, goods_id)
     if goods is None:
         raise HTTPException(status_code=404, detail="商品不存在")
-    for key in ("name", "points", "stock", "image_url", "active"):
-        if key in body:
-            setattr(goods, key, body[key])
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(goods, key, value)
     db.commit()
     return {"id": goods.id, "stock": goods.stock, "active": goods.active}
 

@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ....database import get_db
+from ....patchtypes import UNSET
 from ....deps import get_current_user, paginate, require_roles
 from ...platform import User
 from ...models import (
@@ -242,11 +243,33 @@ def add_path_node(
     return _node_out(node)
 
 
+class PathNodePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    stage: str = Field(default=UNSET, max_length=32)
+    seq: int = Field(default=UNSET, ge=INT4_MIN, le=INT4_MAX)
+    dept: str = Field(default=UNSET, max_length=64)
+    exec_role: str = Field(default=UNSET, max_length=32)
+    service_type: str = Field(
+        default=UNSET, pattern="^(followup|revisit|edu|scale|exam|intervention|referral|monitor)$",
+    )
+    next_key: str = Field(default=UNSET, max_length=32)
+    due_days: int = Field(default=UNSET, ge=0, le=3650)
+    timeout_action: str = Field(default=UNSET, pattern="^(remind|escalate|auto_complete)$")
+    require_form: bool = Field(default=UNSET)
+    require_evidence: bool = Field(default=UNSET)
+    form_code: str = Field(default=UNSET, max_length=32)
+    note: str = Field(default=UNSET, max_length=256)
+    enter_condition: list[dict] = Field(default=UNSET)
+    complete_condition: list[dict] = Field(default=UNSET)
+
+
 @router.patch("/path-nodes/{node_id}", response_model=PathNodeOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def update_path_node(
     node_id: int,
-    body: dict,
+    body: PathNodePatch,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -257,16 +280,12 @@ def update_path_node(
     assert_org_writable(db, user, template.org_id if template else None)
     if template is not None and template.status == "published":
         raise HTTPException(status_code=409, detail="已发布路径不可直接改节点，请复制新版本后修改")
-    allowed = {
-        "name", "stage", "seq", "dept", "exec_role", "service_type", "next_key",
-        "due_days", "timeout_action", "require_form", "require_evidence", "form_code", "note",
-    }
-    for key, value in body.items():
-        if key in allowed:
-            setattr(node, key, value)
+    changes = body.model_dump(exclude_unset=True)
     for key in ("enter_condition", "complete_condition"):
-        if key in body:
-            setattr(node, key, _conditions(body[key]))
+        if key in changes:
+            changes[key] = _conditions(changes[key])
+    for key, value in changes.items():
+        setattr(node, key, value)
     db.commit()
     return _node_out(node)
 

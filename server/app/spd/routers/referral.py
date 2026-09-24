@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from ...clock import now_naive
 from ...database import get_db
+from ...patchtypes import UNSET
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
 from ..platform import Organization, Patient, User, org_level
 from ..models import (
@@ -227,21 +228,40 @@ def list_referral_rules(
     return [_rule_out(r) for r in query.order_by(SpdReferralRule.id).limit(200).all()]
 
 
+class ReferralRulePatch(BaseModel):
+    """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。
+
+    规则编码与所属病种不在可改之列（原先的键清单里就没有它们），传了照旧忽略。"""
+
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    scene: str = Field(default=UNSET, max_length=16)
+    conditions: list[dict] = Field(default=UNSET)
+    notify_role: str = Field(default=UNSET, max_length=32)
+    handle_level: str = Field(default=UNSET, pattern="^(village|station|township|county)$")
+    target_org_id: int | None = None
+    auto_task: bool = Field(default=UNSET)
+    active: bool = Field(default=UNSET)
+
+
 @router.patch("/referral-rules/{rule_id}", response_model=ReferralRuleOut,
               dependencies=[Depends(require_roles("director", "doctor"))])
-def update_referral_rule(rule_id: int, body: dict, db: Session = Depends(get_db)):
+def update_referral_rule(rule_id: int, body: ReferralRulePatch, db: Session = Depends(get_db)):
     rule = db.get(SpdReferralRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="转诊规则不存在")
-    if "conditions" in body:
+    changes = body.model_dump(exclude_unset=True)
+    if "conditions" in changes:
         try:
-            rule.conditions = validate_conditions(body["conditions"])
+            changes["conditions"] = validate_conditions(changes["conditions"])
         except RuleError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-    for key in ("name", "scene", "notify_role", "handle_level", "target_org_id",
-                "auto_task", "active"):
-        if key in body:
-            setattr(rule, key, body[key])
+        if not changes["conditions"]:
+            raise HTTPException(status_code=422, detail="转诊规则至少要有一个触发条件")
+    # 与建规则同一句（P1-90）：目标机构先查存在，否则生产库撞外键 500
+    if changes.get("target_org_id") is not None and db.get(Organization, changes["target_org_id"]) is None:
+        raise HTTPException(status_code=404, detail=f"目标机构不存在（target_org_id={changes['target_org_id']}）")
+    for key, value in changes.items():
+        setattr(rule, key, value)
     db.commit()
     return _rule_out(rule)
 

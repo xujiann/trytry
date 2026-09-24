@@ -50,6 +50,12 @@ BY_DESIGN = {
         "（同上：配置角色含医师属纵向问题。）",
     "spd/config/centers.py:create_center":
         "`lead_org_id` 是专病中心的牵头机构，同上，是全县配置里的一项指定。",
+    # 下面两条不是新端点：P1-94 之前改档收裸 dict，本闸门看不见请求里的机构字段；换成 `*Patch` 模型后
+    # 才现形。理由与各自的建档端点相同。
+    "spd/config/centers.py:update_center":
+        "改专病中心的 `lead_org_id`，与 `create_center` 同一理由：全县配置里的一项指定。",
+    "spd/referral.py:update_referral_rule":
+        "改转诊规则的 `target_org_id`，与 `create_referral_rule` 同一理由：规则命中后建议转往的机构本来就是别家。",
 }
 
 #: 同一形状、但早已登记为「已实测越权但故意未修，等业务裁定」的——在这里补守卫等于替业务方做了决定。

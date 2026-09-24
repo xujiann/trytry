@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ....concurrency import insert_or_conflict
 from ....database import get_db
+from ....patchtypes import UNSET
 from ....datetypes import OptionalDateStr
 from ....deps import get_current_user, paginate, require_admin, require_roles
 from ...platform import Organization, User
@@ -319,6 +320,22 @@ class TargetIn(BaseModel):
     edu_code: str = Field(default="", max_length=32)
 
 
+class TargetPatch(BaseModel):
+    """改档与建档同一套约束（P1-94）。原先收裸 dict、照单全收：随访周期改成 99999999 照存，
+    此后该病种阶段每完成一次随访任务都 500（算下次随访日溢出）。不传即不改；不可空的列显式传 null 是 422。"""
+
+    metric_name: str = Field(default=UNSET, max_length=64)
+    target_low: FiniteFloat | None = None
+    target_high: FiniteFloat | None = None
+    unit: str = Field(default=UNSET, max_length=16)
+    qualitative: str = Field(default=UNSET, max_length=128)
+    risk_level: str = Field(default=UNSET, max_length=16)
+    followup_interval_days: int = Field(default=UNSET, ge=1, le=3650)
+    form_code: str = Field(default=UNSET, max_length=32)
+    edu_code: str = Field(default=UNSET, max_length=32)
+    active: bool = Field(default=UNSET)
+
+
 def _target_out(t: SpdTarget) -> dict:
     return {
         "id": t.id, "program_id": t.program_id, "stage": t.stage, "metric": t.metric,
@@ -362,16 +379,20 @@ def list_targets(program_id: int, stage: str | None = None, db: Session = Depend
 
 @router.patch("/targets/{target_id}", response_model=TargetOut,
               dependencies=[Depends(require_roles(*CONFIG_ROLES))])
-def update_target(target_id: int, body: dict, db: Session = Depends(get_db)):
+def update_target(target_id: int, body: TargetPatch, db: Session = Depends(get_db)):
     target = db.get(SpdTarget, target_id)
     if target is None:
         raise HTTPException(status_code=404, detail="管理目标不存在")
-    allowed = {
-        "metric_name", "target_low", "target_high", "unit", "qualitative", "risk_level",
-        "followup_interval_days", "form_code", "edu_code", "active",
-    }
-    for key, value in body.items():
-        if key in allowed:
-            setattr(target, key, value)
+    changes = body.model_dump(exclude_unset=True)
+    # 上下限与建档同两句；只在这次改了上下限时查——存量里已是坏值的目标，停用它不该被拦
+    if {"target_low", "target_high"} & changes.keys():
+        low = changes.get("target_low", target.target_low)
+        high = changes.get("target_high", target.target_high)
+        if target.kind == "quantitative" and low is None and high is None:
+            raise HTTPException(status_code=422, detail="量化目标须至少给出上限或下限")
+        if low is not None and high is not None and low > high:
+            raise HTTPException(status_code=422, detail="目标下限不得大于上限")
+    for key, value in changes.items():
+        setattr(target, key, value)
     db.commit()
     return _target_out(target)
