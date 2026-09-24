@@ -46,6 +46,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_body_raw_dict as bodyraw
     import test_date_window_bounds as datewin
     import test_query_limit_params as limitparams
+    import test_response_constraint_writers as respwriters
     import test_body_str_length as bodystr
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
@@ -133,6 +134,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(bodyraw.BY_DESIGN), "tests/test_body_raw_dict.py"),
         ("请求体契约", "可空入参写进不可空列、处理函数也不挡 None（显式传 null 即 500；30 → 0 已清零）",
          bodyraw.NULLABLE_BASELINE, "tests/test_body_raw_dict.py"),
+        ("请求体契约", "写同一列的入口比出参约束松（存得进去、读不出来，库里一行就让整个响应 500；1 → 0 已清零）",
+         respwriters.BASELINE, "tests/test_response_constraint_writers.py"),
         ("时间口径", "app/ 里绕过 clock.today() 的 date.today()", clock.DATE_TODAY_BASELINE,
          "tests/test_clock.py"),
         ("时间口径", "app/ 顶层时间快照的豁免", len(clock.APP_IMPORT_TIME_OK),

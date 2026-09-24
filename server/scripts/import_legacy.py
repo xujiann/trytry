@@ -80,8 +80,19 @@ from app.models import (  # noqa: E402
     User,
     Ward,
 )
+from app.schemas import OrganizationCreate  # noqa: E402
+
+
+def _field_len(model, field: str) -> tuple[int, int]:
+    """请求模型字段的 `(min_length, max_length)`：导入与建档同一个真源，不手抄数字。"""
+    metas = model.model_fields[field].metadata
+    low = max((m.min_length for m in metas if getattr(m, "min_length", None) is not None), default=0)
+    high = min(m.max_length for m in metas if getattr(m, "max_length", None) is not None)
+    return low, high
+
 
 ORG_TYPES = {"lead_hospital", "township", "village", "public_health"}
+ORG_NAME_LEN = _field_len(OrganizationCreate, "name")
 ORG_LEVELS = {"city", "county", "township", "village"}
 DISEASES = {"hypertension", "diabetes", "copd", "obesity", "hyperlipidemia"}
 ENCOUNTER_TYPES = {"outpatient", "inpatient"}
@@ -257,6 +268,11 @@ def import_organizations(db, rows, report: ImportReport, ctx: ImportContext) -> 
             continue
         name = row["name"].strip()
         org_type, level = row["org_type"].strip(), row["level"].strip()
+        low, high = ORG_NAME_LEN
+        if not low <= len(name) <= high:
+            # 与建档同口径（P2-40）：单字机构名让机构清单的出参校验失败、对所有人 500；超长的在 PG 上写库即失败
+            report.error(line_no, f"name 长度非法: {len(name)} 字（须为 {low}～{high} 字）", row)
+            continue
         if org_type not in ORG_TYPES:
             report.error(line_no, f"org_type 非法: {org_type}（须为 {'/'.join(sorted(ORG_TYPES))}）", row)
             continue

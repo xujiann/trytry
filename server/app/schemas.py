@@ -25,6 +25,10 @@ class OrganizationCreate(BaseModel):
 
 class OrganizationOut(OrganizationCreate):
     id: int
+    # 机构名 2–128 字是**建档入口**的约束。存量导入（scripts/import_legacy.py）原先只查非空，
+    # 导进一个单字机构名，继承来的约束就让机构清单对所有人 500（P2-40，实测）；入口已同口径，
+    # 出参照 P1-65 覆盖回 str——修之前导进来的坏值要在清单里看得见才谈得上改
+    name: str
 
     model_config = {"from_attributes": True}
 
@@ -157,7 +161,8 @@ class RecognitionItemCreate(BaseModel):
 
 
 class RecognitionItemUpdate(BaseModel):
-    item_name: str | None = Field(default=None, max_length=128)
+    # 改名与建档同口径（P2-40）：原先不带 min_length，改名为空串照收，出参校验在 commit 之后才失败
+    item_name: str | None = Field(default=None, min_length=1, max_length=128)
     center_type: str | None = Field(default=None, pattern="^(imaging|ecg|lab|pathology)$")
     mutual_scope: str | None = Field(default=None, pattern="^(county|city)$")
     active: bool | None = None
@@ -165,6 +170,9 @@ class RecognitionItemUpdate(BaseModel):
 
 class RecognitionItemOut(RecognitionItemCreate):
     id: int
+    # 改档原先收得下空串（P2-40）：一条空名目录项就让整张互认目录 500、页面整页打不开（实测）。
+    # 入口已同口径，出参照 P1-65 覆盖回 str，修之前存进去的空名要在目录里看得见才谈得上改
+    item_name: str
 
     model_config = {"from_attributes": True}
 

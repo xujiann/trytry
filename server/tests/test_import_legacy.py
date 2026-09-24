@@ -163,3 +163,21 @@ def test_error_rows_detail(tmp_path):
     )
     rep2 = run_import("chronic", orphan)
     assert rep2.imported == 0 and len(rep2.errors) == 1
+
+
+def test_机构名与建档同口径_单字与超长都进错误行(tmp_path):
+    """P2-40：导入原先只查机构名非空，建档（`OrganizationCreate`）要 2～128 字。导进一个单字机构名，
+    机构清单的出参按建档约束校验，`GET /api/organizations` 对所有人 500（修前实测）；超长的在 PG 上
+    写库即失败，整批导入中断。两种都该进错误行，别的行照导。"""
+    names = tmp_path / "org_names.csv"
+    names.write_text(
+        "name,org_type,level,parent_name,address\n"
+        "院,village,village,,\n"
+        f"{'长' * 129},village,village,,\n"
+        "示例村卫生室二,village,village,,\n"
+        f"{'满' * 128},village,village,,\n",
+        encoding="utf-8",
+    )
+    rep = run_import("organizations", names, dry_run=True)
+    assert rep.imported == 2 and [line for line, _ in rep.errors] == [2, 3], rep.errors
+    assert all("name 长度非法" in msg for _, msg in rep.errors), rep.errors
