@@ -177,11 +177,11 @@ def _referral_stats(db: Session, orgs: list[int] | None) -> dict:
 
 
 def _path_stats(db: Session, orgs: list[int] | None) -> dict:
-    enroll_ids = [
-        e.id for e in _apply_scope(db.query(SpdEnrollment), SpdEnrollment.org_id, orgs).all()
-    ]
+    # 子查询而不是先把统计范围内的纳管整行读进内存再拼 IN（P2-44）：全域视角就是整张纳管表，
+    # 县域纳管量上来之后四个工作台每刷一次都要读十几万行、拼十几万个参数。范围条件一字不改。
+    scoped = _apply_scope(db.query(SpdEnrollment.id), SpdEnrollment.org_id, orgs)
     query = db.query(SpdPathInstance).filter(
-        SpdPathInstance.enrollment_id.in_(enroll_ids or [0])
+        SpdPathInstance.enrollment_id.in_(select(scoped.subquery().c.id))
     )
     total = query.count()
     completed = query.filter(SpdPathInstance.status == "completed").count()
