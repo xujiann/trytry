@@ -512,7 +512,9 @@ if not c.get(f"/api/surgery/requests?admission_id={adm_id}").json():
     # 高值耗材绑定到这台手术，构成可追溯链
     c.post("/api/materials/consumables", json={
         "barcode": "HV-DEMO-0001", "name": "一次性腹腔镜穿刺器", "spec": "10mm",
-        "org_id": county["id"], "batch_no": "B2026DEMO", "expire_date": "2028-06-30",
+        "org_id": county["id"], "batch_no": "B2026DEMO",
+        # 相对效期：使用登记会查效期（P1-64），写死的日子一过，下面那次使用登记就被拒
+        "expire_date": (date.today() + timedelta(days=730)).isoformat(),
         "unit_price": 480})
     c.post("/api/materials/consumables/HV-DEMO-0001/use", json={
         "patient_id": patients[0]["id"], "surgery_id": _req["id"]})

@@ -1,5 +1,9 @@
 """阶段三：会计凭证（复式记账）、成本核算、物资采购、高值耗材追溯。"""
+from datetime import date, timedelta
+
 import pytest
+
+from conftest import business_today, freeze_business_date
 
 
 def _login(client, username, password="passw0rd1"):
@@ -484,7 +488,9 @@ def test_consumable_trace_chain(client, admin, roles, org, supplier):
     item = client.post(
         "/api/materials/consumables",
         json={"barcode": "HV-0001", "name": "冠脉支架", "spec": "3.0x18mm", "org_id": org["id"],
-              "supplier_id": supplier["id"], "batch_no": "B2026A", "expire_date": "2028-01-01",
+              "supplier_id": supplier["id"], "batch_no": "B2026A",
+              # 效期取相对值：使用登记会查效期（P1-64），写死的年份到期那天本条就红
+              "expire_date": (business_today() + timedelta(days=730)).isoformat(),
               "unit_price": 5800},
         headers=roles["operator"],
     )
@@ -569,6 +575,50 @@ def test_consumable_surgery_must_belong_to_patient(client, admin, roles, org):
     )
     assert ok.status_code == 200
     assert ok.json()["used_surgery_name"] == "切开复位内固定术"
+
+
+def test_过期耗材不得登记使用_效期当天与未采集的照常(client, admin, roles, org):
+    """P1-64：使用登记此前不看效期——效期 2020-01-31 的耗材照样 200 挂到患者名下。"""
+    patient = client.post(
+        "/api/patients", json={"name": "效期患者", "id_card": "331282199505055678"}, headers=admin
+    ).json()
+    with freeze_business_date(date(2026, 9, 24)):
+        for barcode, expire in (("HV-EXP", "2026-09-23"), ("HV-DUE", "2026-09-24"), ("HV-NOEXP", "")):
+            assert client.post(
+                "/api/materials/consumables",
+                json={"barcode": barcode, "name": "一次性穿刺器", "org_id": org["id"], "expire_date": expire},
+                headers=roles["operator"],
+            ).status_code == 201
+
+        expired = client.post("/api/materials/consumables/HV-EXP/use",
+                              json={"patient_id": patient["id"]}, headers=roles["doctor"])
+        assert expired.status_code == 409, expired.text
+        assert expired.json()["detail"] == "耗材已过效期（2026-09-23），不可使用"
+        trace = client.get("/api/materials/consumables/trace/HV-EXP", headers=admin).json()
+        assert trace["status"] == "in_stock" and trace["used_patient_name"] == "", "被拒的使用不该留下追溯链"
+
+        for barcode in ("HV-DUE", "HV-NOEXP"):  # 效期当天仍可用；效期未采集照旧放行
+            used = client.post(f"/api/materials/consumables/{barcode}/use",
+                               json={"patient_id": patient["id"]}, headers=roles["doctor"])
+            assert used.status_code == 200 and used.json()["status"] == "used", (barcode, used.text)
+
+
+def test_存量里认不出的效期照旧放行_不猜(client, admin, roles, org):
+    """P1-61 收口前入库的效期可能是 `2020/01/31` 这类写法。台账没有更正效期的入口，
+    认不出就拦，这件耗材就永远用不了——放行，并在 TECH_DEBT P1-64 里如实登记。"""
+    from app.database import SessionLocal
+    from app.models import HighValueConsumable
+
+    with SessionLocal() as db:
+        db.add(HighValueConsumable(barcode="HV-LEGACY", name="存量耗材", org_id=org["id"],
+                                   expire_date="2020/01/31"))
+        db.commit()
+    patient = client.post(
+        "/api/patients", json={"name": "存量效期患者", "id_card": "331282199606066789"}, headers=admin
+    ).json()
+    used = client.post("/api/materials/consumables/HV-LEGACY/use",
+                       json={"patient_id": patient["id"]}, headers=roles["doctor"])
+    assert used.status_code == 200, used.text
 
 
 def test_consumable_unknown_barcode_404(client, admin):

@@ -6,6 +6,7 @@
 - **高值耗材追溯**：一物一码，使用时绑定患者与手术，形成"这枚支架用在谁身上、
   哪台手术、哪个批次、哪家供应商"的完整链条。这是耗材召回时唯一有用的东西。
 """
+from datetime import date
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -15,10 +16,11 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..concurrency import add_amount, ensure_present, insert_if_absent
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
-from ..datetypes import OptionalDateStr
+from ..datetypes import OptionalDateStr, check_date
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     Asset,
@@ -380,6 +382,19 @@ class UseIn(BaseModel):
     surgery_id: int | None = None
 
 
+def _expired(expire_date: str, today: date) -> bool:
+    """效期早于业务日期即过期（效期当天仍可用）。
+
+    留空（效期未采集）不算过期，照旧放行。存量里写坏、认不出的效期（P1-61 收口前
+    入库的 `2026/09/24` 之类）同样放行：台账没有更正效期的入口，认不出就拦，
+    这件耗材就永远用不了——这类记录要人工核对，不能靠这里猜（P1-64）。
+    """
+    try:
+        return date.fromisoformat(check_date(expire_date)) < today
+    except ValueError:
+        return False
+
+
 @router.post("/consumables/{barcode}/use", response_model=ConsumableOut,
              dependencies=[Depends(require_roles("doctor", "operator"))])
 def use_consumable(
@@ -395,6 +410,9 @@ def use_consumable(
     assert_obj_org_writable(db, user, item)
     if item.status != "in_stock":
         raise HTTPException(status_code=409, detail=f"当前状态 {item.status} 不可使用")
+    if _expired(item.expire_date, clock.today()):
+        # 医疗器械使用单位不得使用过期医疗器械；此前这里不看效期，过期耗材照样 200（P1-64）
+        raise HTTPException(status_code=409, detail=f"耗材已过效期（{item.expire_date}），不可使用")
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if body.surgery_id is not None:
