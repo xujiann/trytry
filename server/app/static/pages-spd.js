@@ -70,8 +70,10 @@ function spdProgramOptions(catalog, blank) {
 /* prompt() 的替代：Promise 化的浮层表单，一次拿齐多个字段。
  * fields: [{name, label, type: text|number|textarea|select, options, value, placeholder, required}]
  * 确定 resolve(值对象)；取消 / Esc / 点遮罩 resolve(null)——调用方判 null 直接返回，
- * 与 prompt 返回 null 的习惯一致，改造调用点时不用改控制流。 */
-function spdModal(title, fields) {
+ * 与 prompt 返回 null 的习惯一致，改造调用点时不用改控制流。
+ * opts.intro：表单上方的只读说明（多行纯文本，转义后原样换行）——填之前要先看的参考信息
+ * （如处方点评要点）放这里，不必先弹一个 alert 再开表单。 */
+function spdModal(title, fields, opts = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,32,39,.45);"
@@ -97,6 +99,7 @@ function spdModal(title, fields) {
     // "确定"按钮就够不着了——表单自己限高并可滚动
     overlay.innerHTML = `<form class="panel" style="min-width:320px;max-width:440px;margin:0;max-height:90vh;overflow-y:auto">
       <h3>${esc(title)}</h3>
+      ${opts.intro ? `<div class="desc" style="white-space:pre-wrap;font-size:12px">${esc(opts.intro)}</div>` : ""}
       ${fields.map((f) => `<label style="display:block;margin:8px 0;font-size:13px">
         ${esc(f.label)}<br>${control(f)}</label>`).join("")}
       <div style="margin-top:12px;text-align:right">

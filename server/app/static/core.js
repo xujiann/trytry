@@ -1660,26 +1660,33 @@ async function renderRx() {
       try { return await openPrintPage(`/api/print/prescriptions/${printrx}`); }
       catch (err) { return setMsg("#rx-msg", err.message, false); }
     }
+    // P2-38：点评原先是 alert 看要点 → confirm「确定=合理，取消=不合理」→ 两连问——点"取消"想放弃，
+    // 记下的却是"不合理"，这一路根本没有放弃的出口；审方的"药师意见"点取消照样提交通过/驳回。
+    // 换成页内表单：要点放在表单上方照着填，取消就是放弃。
     if (rxcomment) {
       // 块2：点评规则化——先调阅该方药品的点评要点与肝肾提示，再作结论
+      let intro;
       try {
         const rp = await api(`/api/prescriptions/${rxcomment}/review-points`);
         const lines = rp.items.map((i) => `${i.drug_name}（${i.drug_code}）${i.dose_exceeded ? "【日剂量超限】" : ""}\n  要点：${i.review_points || "规则库未维护"}\n  肝肾：${i.renal_hepatic_note || "—"}`);
-        alert(`处方 ${rp.prescription_id} 点评要点（规则覆盖 ${rp.rule_coverage_pct}%）：\n\n${lines.join("\n")}`);
-      } catch (err) { setMsg("#rx-msg", err.message, false); }
-      const reasonable = confirm("点评结论：该处方是否合理？（确定=合理，取消=不合理）");
-      const body = { grade: reasonable ? "reasonable" : "unreasonable" };
-      if (!reasonable) {
-        body.issues = prompt("问题类型（如：用法用量不适宜）") || "";
-        body.comment = prompt("点评意见") || "";
-      }
-      return postAction(`/api/prescriptions/${rxcomment}/comment-review`, body, "#rx-msg");
+        intro = `点评要点（规则覆盖 ${rp.rule_coverage_pct}%）：\n${lines.join("\n")}`;
+      } catch (err) { intro = `点评要点取不到：${err.message}`; }
+      const v = await spdModal(`处方点评（处方 ${rxcomment}）`, [
+        { name: "grade", label: "结论", type: "select",
+          options: [{ value: "reasonable", label: "合理" }, { value: "unreasonable", label: "不合理" }] },
+        { name: "issues", label: "问题类型（不合理时与点评意见至少填一项，如：用法用量不适宜）" },
+        { name: "comment", label: "点评意见", type: "textarea" },
+      ], { intro });
+      if (!v) return;
+      return postAction(`/api/prescriptions/${rxcomment}/comment-review`, v, "#rx-msg");
     }
     if (approve === undefined || !id) return;
-    const comment = prompt("药师意见") || "";
+    const v = await spdModal(approve === "1" ? `审方通过（处方 ${id}）` : `审方驳回（处方 ${id}）`, [
+      { name: "comment", label: approve === "1" ? "药师意见（可空）" : "驳回理由", type: "textarea" }]);
+    if (!v) return;
     try {
       await api(`/api/prescriptions/${id}/review`, { method: "POST",
-        body: JSON.stringify({ approve: approve === "1", comment }) });
+        body: JSON.stringify({ approve: approve === "1", comment: v.comment }) });
       route();
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };

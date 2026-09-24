@@ -934,6 +934,60 @@ def test_绩效改进任务的进展_完成_退回都在页内表单里录入_�
     assert (after["status"], after["measures"]) == ("in_progress", "E2E已组织专项培训"), after
 
 
+@pytest.fixture(scope="session")
+def rx_seed(base_url, seed):
+    """两张转药师审的处方（同方重复药品编码即转人工审）：一张用来审方，一张用来点评。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    body = {"patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"], "diagnosis_name": "E2E上呼吸道感染",
+            "items": [{"drug_code": "E2E-AMX", "drug_name": "E2E阿莫西林", "daily_dose": 1.5},
+                      {"drug_code": "E2E-AMX", "drug_name": "E2E阿莫西林胶囊", "daily_dose": 1.5}]}
+    return [post("/api/prescriptions", body, token) for _ in range(2)]
+
+
+def test_集中审方的审方与点评都在页内表单里录入_取消即放弃(page, base_url, rx_seed):
+    """P2-38：审方的"药师意见"原生弹窗点取消照样提交通过/退回；点评是 alert 看要点 → confirm
+    「确定=合理，取消=不合理」→ 两连问，想放弃时点取消记下的却是"不合理"，这一路没有放弃的出口。
+    换成页内表单：点评要点放在表单上方照着填，取消就是放弃；不合理却什么都没写由后端报人话。"""
+    to_review, to_comment = (p["id"] for p in rx_seed)
+
+    def status(pid):
+        return page.evaluate(
+            "async (id) => (await api('/api/prescriptions?limit=200')).find((p) => p.id === id).status", pid)
+
+    _login(page, base_url)
+    _open_page(page, "rx", "集中审方")
+    page.click(f'button[data-approve="0"][data-id="{to_review}"]')
+    page.locator("form.panel button[data-cancel]").click()
+    expect(page.locator("form.panel:has(button[data-cancel])")).to_have_count(0)
+    assert status(to_review) == "pending_review"  # 取消就是放弃，没有退回
+    page.click(f'button[data-approve="1"][data-id="{to_review}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"comment": "E2E同意，已电话确认医师用意"}))
+    assert status(to_review) == "approved"
+
+    page.click(f'button[data-rxcomment="{to_comment}"]')
+    expect(page.locator("form.panel:has(button[data-cancel])")).to_contain_text("点评要点")
+    _spd_modal(page, {"grade": "unreasonable"})  # 不合理却什么都没写
+    expect(page.locator("#rx-msg")).to_contain_text("不合理处方须注明问题类型或点评意见")
+    page.click(f'button[data-rxcomment="{to_comment}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"grade": "unreasonable", "issues": "E2E重复用药"}))
+    reviews = page.evaluate("async () => await api('/api/prescriptions/comment-reviews')")
+    mine = [r for r in reviews if r["prescription_id"] == to_comment]
+    assert [(r["grade"], r["issues"]) for r in mine] == [("unreasonable", "E2E重复用药")], mine
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 
