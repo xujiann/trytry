@@ -165,6 +165,67 @@ def test_守卫看得见写入方_号源出参对上建档与批量模板两个�
             ("SlotOut", field))
 
 
+# ================================================================ 守卫：出参带校验器（上面那道看不见的一半）
+#
+# 上面的守卫只看声明式约束（pattern / 长度 / 数值界）。`class XxxOut(XxxCreate)` 同样会把请求模型的
+# `@field_validator` / `@model_validator` 带到出参上——库里一行过不了，整个响应照样 500。2026-09-24 补查：
+# 全部 response_model（顺嵌套）里带校验器的只有 1 个，写明为什么读得出来；新增即红，名单只减不增。
+# （`datetypes` 那类 Annotated 校验器不在这里，由 `test_response_date_types.py` 盯着。）
+
+#: 带校验器的出参模型（`模块:类名`）→ 为什么读得出来
+OUTPUT_VALIDATORS_OK = {
+    "app.routers.emergency:MilestoneOut":
+        "只作建节点那一次的回执：回显的就是刚过同一道 ISO 校验的值；时间轴读取走 TimelineNodeOut（str | None）",
+}
+
+
+def _has_validators(cls: type) -> bool:
+    decorators = cls.__pydantic_decorators__
+    return bool(decorators.field_validators or decorators.model_validators)
+
+
+def output_models_with_validators() -> set[str]:
+    seen: set = set()
+    found = set()
+    for _name, route in contract._iter_endpoints():
+        if route.response_model is None:
+            continue
+        found |= {f"{cls.__module__}:{cls.__qualname__}"
+                  for cls in _models_in(route.response_model, seen) if _has_validators(cls)}
+    return found
+
+
+def test_出参模型带校验器_须写明为什么读得出来():
+    got = output_models_with_validators()
+    new = sorted(got - OUTPUT_VALIDATORS_OK.keys())
+    assert not new, (
+        f"这些出参模型带着校验器（多半是从请求模型继承来的）：{new}\n库里一行过不了校验，整个响应 500。"
+        "出参覆盖掉继承来的字段（P1-63 的写法），或写进 OUTPUT_VALIDATORS_OK 说明为什么读得出来。"
+    )
+    stale = sorted(OUTPUT_VALIDATORS_OK.keys() - got)
+    assert not stale, f"这些已经不带校验器（或不再是出参）了，请从 OUTPUT_VALIDATORS_OK 划掉：{stale}"
+
+
+def test_判据自证_继承来的校验器也认得出():
+    from pydantic import field_validator
+
+    class In(BaseModel):
+        at: str
+
+        @field_validator("at")
+        @classmethod
+        def _iso(cls, value: str) -> str:
+            return value
+
+    class Out(In):
+        id: int
+
+    class Plain(BaseModel):
+        at: str
+
+    assert _has_validators(Out) and not _has_validators(Plain)
+
+
 def test_判据自证_松的点名_一样严或更严的不报():
     class Out(BaseModel):
         name: str = Field(min_length=1, max_length=64)

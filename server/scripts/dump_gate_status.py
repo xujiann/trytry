@@ -146,6 +146,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(asciiparse.BY_DESIGN), "tests/test_ascii_digit_parsing.py"),
         ("请求体契约", "写同一列的入口比出参约束松（存得进去、读不出来，库里一行就让整个响应 500；1 → 0 已清零）",
          respwriters.BASELINE, "tests/test_response_constraint_writers.py"),
+        ("请求体契约", "带校验器（field_validator / model_validator）的出参模型，逐个写明为什么读得出来",
+         len(respwriters.OUTPUT_VALIDATORS_OK), "tests/test_response_constraint_writers.py"),
         ("时间口径", "app/ 里绕过 clock.today() 的 date.today()", clock.DATE_TODAY_BASELINE,
          "tests/test_clock.py"),
         ("时间口径", "app/ 顶层时间快照的豁免", len(clock.APP_IMPORT_TIME_OK),
