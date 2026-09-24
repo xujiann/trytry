@@ -13,15 +13,16 @@ from ..visibility import assert_obj_org_writable, assert_org_writable, assert_pa
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..datetypes import DateStr
+from ..texttypes import NON_BLANK
 from ..models import CheckupItem, Organization, Patient, PhysicalExam, User
 
 router = APIRouter(prefix="/api/checkups", tags=["健康体检"], dependencies=[Depends(get_current_user)])
 
 
 class CheckupItemIn(BaseModel):
-    item_code: str = Field(min_length=1, max_length=64)
-    item_name: str = Field(min_length=1, max_length=128)
-    result_value: str = Field(min_length=1, max_length=64)
+    item_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
+    result_value: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     unit: str = Field(default="", max_length=16)
     ref_range: str = Field(default="", max_length=64)
     abnormal: bool = False
@@ -30,6 +31,10 @@ class CheckupItemIn(BaseModel):
 class CheckupItemOut(CheckupItemIn):
     id: int
     checkup_id: int
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    item_code: str = Field(min_length=1, max_length=64)
+    item_name: str = Field(min_length=1, max_length=128)
+    result_value: str = Field(min_length=1, max_length=64)
 
     model_config = {"from_attributes": True}
 
@@ -151,7 +156,7 @@ def list_checkup_items(checkup_id: int, db: Session = Depends(get_db), user: Use
 
 
 class CheckupReviewIn(BaseModel):
-    final_conclusion: str = Field(min_length=1, max_length=1024)
+    final_conclusion: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
     # 空串 = 以当前登录医师署名
     final_doctor: str = Field(default="", max_length=64)
 

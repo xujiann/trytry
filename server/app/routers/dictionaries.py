@@ -36,6 +36,9 @@ class CodeEntryDetailOut(CodeEntryUpsert):
 
     id: int
     system_id: int
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=256)
 
     model_config = {"from_attributes": True}
 

@@ -22,6 +22,7 @@ from ..concurrency import insert_if_absent
 from ..database import get_db
 from ..deps import ROLE_NAMES, get_current_user, require_admin, row_dict
 from ..models import Permission, Role, RolePermission, User
+from ..texttypes import NON_BLANK
 
 router = APIRouter(
     prefix="/api/rbac", tags=["角色与权限"], dependencies=[Depends(get_current_user)]
@@ -116,13 +117,13 @@ def seed_builtin_roles(db: Session) -> int:
 
 class RoleIn(BaseModel):
     key: str = Field(min_length=2, max_length=32, pattern="^[a-z][a-z0-9_]*$")
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     description: str = Field(default="", max_length=256)
 
 
 class RoleUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
-    name: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=NON_BLANK)
     description: str | None = Field(default=None, max_length=256)
     active: bool | None = None
 

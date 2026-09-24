@@ -31,6 +31,7 @@ from ..deps import (
     resolve_org_scope,
 )
 from ..numtypes import MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import scope_stats_orgs
 from ..formula import FormulaError, evaluate, validate
 from ..models import (
@@ -262,7 +263,7 @@ class FormulaDeactivateOut(BaseModel):
 class OutboundIn(BaseModel):
     patient_id: int
     visit_date: DateStr
-    external_org_name: str = Field(min_length=1, max_length=128)
+    external_org_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     external_org_level: str = Field(default="city", pattern="^(city|province|other)$")
     visit_type: str = Field(default="outpatient", pattern="^(outpatient|inpatient)$")
     diagnosis_name: str = Field(default="", max_length=256)
@@ -652,9 +653,9 @@ def list_formula_variables():
 
 
 class FormulaIn(BaseModel):
-    key: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
-    expression: str = Field(min_length=1, max_length=512)
+    key: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    expression: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
     unit: str = Field(default="", max_length=16)
     higher_is_better: bool = True
     weight: float = Field(default=0, ge=0, le=100)

@@ -1718,6 +1718,18 @@ def test_校验失败的报错是人话而不是object_Object(page, base_url):
     assert "[object Object]" not in message, message
     assert message.startswith("due_date："), message
 
+    # P1-109：必填文本只填了空格，pydantic 原话是 "String should match pattern '\S'"——认出来换成人话
+    blank = page.evaluate(
+        """async () => {
+          try {
+            await api('/api/organizations', {method: 'POST', body: JSON.stringify(
+              {name: '\\u3000\\u3000', org_type: 'township', level: 'township'})});
+            return 'no error';
+          } catch (e) { return e.message; }
+        }"""
+    )
+    assert blank == "name：不能只填空格", blank
+
     # 居民端与医生端各自的 api() 也改成了走它：页面上确实加载到了这个函数
     for path in ("/m/", "/m/doctor"):
         page.goto(f"{base_url}{path}")

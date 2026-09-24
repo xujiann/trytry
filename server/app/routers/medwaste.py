@@ -32,6 +32,7 @@ from ..visibility import (
 from ..deps import get_current_user, paginate, require_date, require_roles, resolve_business_date
 from ..models import Employee, MedicalWaste, Organization, User, WasteLocation
 from ..schemas import WasteCreate, WasteHandover
+from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/medwaste", tags=["医废追溯"], dependencies=[Depends(get_current_user)])
 
@@ -144,7 +145,7 @@ class HandlerStatsOut(BaseModel):
 
 class LocationIn(BaseModel):
     org_id: int
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     location_type: str = Field(default="source", pattern="^(source|storage)$")
     manager_name: str = Field(default="", max_length=64)
 

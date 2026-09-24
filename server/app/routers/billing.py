@@ -35,6 +35,7 @@ from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict, serialized_on
 from ..egress import egress_url_allowed, verify_signature
 from ..numtypes import INT4_MAX, MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..payments import HttpGatewayPaymentGateway, to_fen
 from ..visibility import (
     assert_obj_org_writable,
@@ -88,8 +89,8 @@ def unsettled_amount(db: Session, admission_id: int) -> float:
 
 
 class ChargeItemCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     category: str = Field(default="other", pattern="^(drug|exam|treatment|bed|other)$")
     price: FiniteFloat = Field(gt=0, le=MONEY_MAX)
     active: bool = True
@@ -97,7 +98,7 @@ class ChargeItemCreate(BaseModel):
 
 class ChargeItemUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
-    name: str | None = Field(default=None, min_length=1, max_length=128)
+    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
     category: str | None = Field(default=None, pattern="^(drug|exam|treatment|bed|other)$")
     # 列容量与建档同口径（P1-93 判据盲区：`FiniteFloat | None` 原先不被判据认作数值）
     price: FiniteFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
@@ -352,7 +353,7 @@ class BillDetailCreate(BaseModel):
     patient_id: int
     admission_id: int | None = None
     encounter_id: int | None = None
-    item_code: str = Field(min_length=1)
+    item_code: str = Field(min_length=1, pattern=NON_BLANK)
     quantity: int = Field(default=1, ge=1, le=INT4_MAX)
 
 

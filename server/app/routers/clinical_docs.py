@@ -27,6 +27,7 @@ from ..models import (
     Ward,
 )
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_patient_visible
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], dependencies=[Depends(get_current_user)])
@@ -165,7 +166,7 @@ def _admission_or_404(
 
 class ProgressNoteIn(BaseModel):
     note_type: str = Field(pattern="^(first|daily|ward_round|rescue|consultation|discharge)$")
-    content: str = Field(min_length=1, max_length=4096)
+    content: str = Field(min_length=1, max_length=4096, pattern=NON_BLANK)
     doctor_name: str = Field(default="", max_length=64)   # 列长（P1-91 第四层：`doctor_name=body.doctor_name or …`）
     recorded_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
 

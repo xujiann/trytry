@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
 from ..numtypes import INT4_MAX, MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
@@ -260,7 +261,7 @@ class CssdRequestFulfilledOut(BaseModel):
 
 class CssdReqCreate(BaseModel):
     org_id: int
-    item_name: str = Field(min_length=1, max_length=128)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     quantity: int = Field(default=1, ge=1, le=INT4_MAX)
 
 

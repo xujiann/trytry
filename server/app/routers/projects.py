@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
 from ..numtypes import MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import OptionalDateStr
@@ -33,7 +34,7 @@ PROJECT_STATUS = {
 
 class ProjectIn(BaseModel):
     org_id: int
-    name: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     category: str = Field(default="general", max_length=32)
     owner_name: str = Field(default="", max_length=64)
     start_date: OptionalDateStr = ""
@@ -51,7 +52,7 @@ class ProjectUpdate(BaseModel):
 
 
 class MilestoneIn(BaseModel):
-    name: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     due_date: OptionalDateStr = ""
     note: str = Field(default="", max_length=512)
 

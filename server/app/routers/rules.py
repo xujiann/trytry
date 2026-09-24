@@ -19,6 +19,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import DrugRule, PerformanceIndicator, QcRule, RecordQcRule, RuleDefinition
 from ..rules import RuleError, evaluate_condition, validate_condition
+from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/rules", tags=["统一规则引擎"], dependencies=[Depends(get_current_user)])
 
@@ -90,10 +91,10 @@ def list_domains():
 
 
 class RuleIn(BaseModel):
-    key: str = Field(min_length=1, max_length=48)
-    name: str = Field(min_length=1, max_length=128)
-    domain: str = Field(min_length=1, max_length=24)
-    condition: str = Field(min_length=1, max_length=512)
+    key: str = Field(min_length=1, max_length=48, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
+    domain: str = Field(min_length=1, max_length=24, pattern=NON_BLANK)
+    condition: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
     message: str = Field(default="", max_length=256)
     severity: str = Field(default="warning", pattern="^(info|warning|error)$")
     deduct_points: int = Field(default=0, ge=0, le=100)

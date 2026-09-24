@@ -19,6 +19,7 @@ from ...config import settings
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...datetypes import DateStr, OptionalDateStr, OptionalDateTimeSecStr
+from ...texttypes import NON_BLANK
 from ...deps import (
     get_current_user,
     paginate,
@@ -352,7 +353,7 @@ class ConsultToFollowupOut(BaseModel):
 
 class MeasurementIn(BaseModel):
     patient_id: int
-    metric: str = Field(min_length=1, max_length=32)
+    metric: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     value: FiniteFloat
     unit: str = Field(default="", max_length=16)
     program_code: str = Field(default="", max_length=32)
@@ -543,7 +544,7 @@ def measurement_trend(
 
 class AssessIn(BaseModel):
     patient_id: int
-    scale_code: str = Field(min_length=1, max_length=32)
+    scale_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     answers: dict = Field(default_factory=dict)
     program_code: str = Field(default="", max_length=32)
     channel: str = Field(default="doctor", pattern="^(doctor|self)$")
@@ -769,8 +770,8 @@ def assessment_stats(
 
 
 class InterventionTemplateIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     program_code: str = Field(default="", max_length=32)
     category: str = Field(default="diet", pattern="^(diet|exercise|drug|psych|other)$")
     content: str = Field(default="", max_length=2048)
@@ -1278,8 +1279,8 @@ def update_revisit(
 
 
 class ReportTaskIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     program_code: str = Field(default="", max_length=32)
     dept: str = Field(default="", max_length=64)
     manager_user_id: int | None = None
@@ -1324,7 +1325,7 @@ def list_case_report_tasks(active: bool | None = None, db: Session = Depends(get
 class CaseReportTaskPatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     program_code: str = Field(default=UNSET, max_length=32)
     dept: str = Field(default=UNSET, max_length=64)
     manager_user_id: int | None = None
@@ -1530,7 +1531,7 @@ def list_health_prescriptions(
 
 
 class ConsultReplyIn(BaseModel):
-    content: str = Field(min_length=1, max_length=2048)
+    content: str = Field(min_length=1, max_length=2048, pattern=NON_BLANK)
 
 
 @router.get("/consults", response_model=list[CareConsultOut])

@@ -31,6 +31,7 @@ from ..concurrency import (
     take_amount,
 )
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr
@@ -405,9 +406,9 @@ def stock_alerts(
 
 class BatchReceiveIn(BaseModel):
     org_id: int
-    drug_code: str = Field(min_length=1, max_length=64)
-    drug_name: str = Field(min_length=1, max_length=128)
-    batch_no: str = Field(min_length=1, max_length=64)
+    drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    drug_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
+    batch_no: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     expire_date: DateStr
     supplier: str = Field(default="", max_length=128)
     quantity: int = Field(gt=0, le=INT4_MAX)
@@ -440,7 +441,7 @@ class ExpiringBatchOut(BatchOut):
 
 
 class BatchRecallIn(BaseModel):
-    reason: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 class BatchDispenseRow(BaseModel):
@@ -774,7 +775,7 @@ def batch_dispense_trace(batch_id: int, db: Session = Depends(get_db)):
 
 
 class SupplierCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     contact: str = Field(default="", max_length=64)
     license_no: str = Field(default="", max_length=64)
 
@@ -828,8 +829,8 @@ class PurchaseCreate(BaseModel):
     org_id: int
     supplier_id: int
     item_type: str = Field(default="drug", pattern="^(drug|material)$")
-    item_code: str = Field(min_length=1, max_length=64)
-    item_name: str = Field(min_length=1, max_length=128)
+    item_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     quantity: int = Field(gt=0, le=INT4_MAX)
     note: str = Field(default="", max_length=512)
 
@@ -1009,7 +1010,7 @@ def list_purchases(
 
 class StockTakeCreate(BaseModel):
     org_id: int
-    drug_code: str = Field(min_length=1, max_length=64)
+    drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     actual_qty: int = Field(ge=0, le=INT4_MAX)
     note: str = Field(default="", max_length=256)
 

@@ -31,6 +31,7 @@ from ..models import (
 )
 from sqlalchemy.exc import IntegrityError
 from ..datetypes import DateStr, OptionalDateTimeStr
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable
 
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
@@ -39,7 +40,7 @@ PASS_SCORE = 60
 
 
 class CourseCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     course_type: str = Field(default="vod", pattern="^(live|vod)$")
     category: str = Field(default="clinical", pattern="^(clinical|tcm|public_health)$")
     speaker: str = Field(default="", max_length=64)
@@ -47,6 +48,8 @@ class CourseCreate(BaseModel):
 
 class CourseOut(CourseCreate):
     id: int
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    title: str = Field(min_length=1, max_length=256)
 
     model_config = {"from_attributes": True}
 
@@ -165,7 +168,7 @@ def my_records(db: Session = Depends(get_db), user: User = Depends(get_current_u
 
 
 class LiveCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     speaker: str = Field(default="", max_length=64)
     planned_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
     course_id: int | None = None
@@ -238,7 +241,7 @@ def finish_live(session_id: int, db: Session = Depends(get_db)):
 
 
 class LiveRecording(BaseModel):
-    recording_url: str = Field(min_length=1, max_length=512)
+    recording_url: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
 
 
 class LiveRecordingOut(BaseModel):
@@ -381,7 +384,7 @@ MATERIAL_TYPES = {"slide": "课件", "video": "视频", "doc": "文档", "link":
 
 
 class MaterialCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     material_type: str = Field(default="slide", pattern="^(slide|video|doc|link)$")
     url: str = Field(default="", max_length=512)
 
@@ -490,7 +493,7 @@ def material_stats(db: Session = Depends(get_db)):
 
 
 class PlanCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     org_id: int
     technique_id: int | None = None
     plan_date: DateStr
@@ -806,7 +809,7 @@ class HealthArticleOut(BaseModel):
 
 
 class ArticleCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     category: str = Field(default="general", max_length=32)
     content: str = Field(default="", max_length=4096)
 

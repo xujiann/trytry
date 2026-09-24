@@ -35,6 +35,7 @@ from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present
 from ..database import get_db
 from ..numtypes import INT4_MAX, INT4_MIN
+from ..texttypes import NON_BLANK
 from ..pii import pii_filter
 from ..privacy import mask_phone
 from ..models import (
@@ -1147,7 +1148,7 @@ def portal_my_consents(
 class PortalCorrectionIn(BaseModel):
     request_type: str = Field(default="correction", pattern="^(correction|deactivate)$")
     changes: dict[str, str] = {}
-    reason: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     # 不传即本人；传则须是已代管的家庭成员
     patient_id: int | None = None
 

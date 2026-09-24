@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
@@ -38,8 +39,8 @@ class ShortageCreate(BaseModel):
     # 可空：按机构报缺（补库存）与按患者登记（延伸处方）共用一张表。
     # 只有按患者登记的才谈得上"登记后不来取药"，也才进得了黑名单。
     patient_id: int | None = None
-    drug_code: str = Field(min_length=1, max_length=64)
-    drug_name: str = Field(min_length=1, max_length=128)
+    drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    drug_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     quantity: int = Field(default=1, ge=1, le=INT4_MAX)
 
 
@@ -47,6 +48,9 @@ class ShortageOut(ShortageCreate):
     id: int
     status: str
     close_reason: str = ""
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    drug_code: str = Field(min_length=1, max_length=64)
+    drug_name: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 

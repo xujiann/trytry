@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..concurrency import add_amount, ensure_present, insert_if_absent
 from ..numtypes import INT4_MAX, MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
 from ..datetypes import OptionalDateStr, check_date
@@ -46,7 +47,7 @@ router = APIRouter(prefix="/api/materials", tags=["物资采购与耗材追溯"]
 class PurchaseIn(BaseModel):
     org_id: int
     dept_id: int | None = None
-    item_name: str = Field(min_length=1, max_length=128)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     spec: str = Field(default="", max_length=64)
     unit: str = Field(default="件", max_length=16)
     quantity: int = Field(default=1, gt=0, le=INT4_MAX)
@@ -208,7 +209,7 @@ def approve_purchase(
 
 class ContractIn(BaseModel):
     supplier_id: int
-    contract_no: str = Field(min_length=1, max_length=64)
+    contract_no: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     contract_amount: FiniteFloat = Field(ge=0, le=MONEY_MAX)
 
 
@@ -328,8 +329,8 @@ def receive_purchase(
 
 
 class ConsumableIn(BaseModel):
-    barcode: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=128)
+    barcode: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     spec: str = Field(default="", max_length=64)
     org_id: int
     supplier_id: int | None = None

@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..datetypes import check_date
+from ..texttypes import NON_BLANK
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     ConsentRecord,
@@ -381,7 +382,7 @@ class CorrectionSubmitIn(BaseModel):
     patient_id: int
     request_type: str = Field(default="correction", pattern="^(correction|deactivate)$")
     changes: dict[str, str] = {}
-    reason: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 @router.post(

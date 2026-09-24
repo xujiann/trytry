@@ -15,6 +15,7 @@ from ....concurrency import insert_if_absent
 from ....database import get_db
 from ....patchtypes import UNSET
 from ....datetypes import OptionalDateStr
+from ....texttypes import NON_BLANK
 from ....deps import get_current_user, paginate, require_roles
 from ...platform import Organization, User, unusable_user
 from ...models import (
@@ -119,7 +120,7 @@ class VillageDoctorBatchOut(BaseModel):
 
 
 class TeamIn(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     org_id: int
     level: str = Field(default="township", pattern="^(county|township|village|center)$")
     program_codes: list[str] = Field(default_factory=list)
@@ -232,7 +233,7 @@ def get_team(team_id: int, db: Session = Depends(get_db)):
 class TeamPatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     level: str = Field(default=UNSET, pattern="^(county|township|village|center)$")
     program_codes: list[str] = Field(default=UNSET)
     leader_user_id: int | None = None

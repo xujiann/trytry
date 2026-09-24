@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import ensure_present, insert_if_absent
 from ..numtypes import INT4_MAX, INT4_MIN
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..datetypes import OptionalDateStr
@@ -63,7 +64,7 @@ class AdverseEventCreate(BaseModel):
     org_id: int
     event_type: str = Field(max_length=16)
     level: str = Field(pattern="^(I|II|III|IV)$")
-    description: str = Field(min_length=1, max_length=2048)
+    description: str = Field(min_length=1, max_length=2048, pattern=NON_BLANK)
     anonymous: bool = False
 
 
@@ -141,7 +142,7 @@ def list_adverse_events(
 
 
 class NoteBody(BaseModel):
-    note: str = Field(min_length=1, max_length=1024)
+    note: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
 
 
 @router.post(

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..datetypes import OptionalDateStr
+from ..texttypes import NON_BLANK
 from ..deps import get_current_user, require_roles
 from ..models import (
     ChronicPatient,
@@ -25,7 +26,7 @@ router = APIRouter(prefix="/api/publichealth", tags=["公卫协同"], dependenci
 
 
 class EventCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     level: str = Field(default="IV", pattern="^(I|II|III|IV)$")
     disease_name: str = Field(default="", max_length=128)
     description: str = Field(default="", max_length=1024)
@@ -34,6 +35,8 @@ class EventCreate(BaseModel):
 class EventOut(EventCreate):
     id: int
     status: str
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    title: str = Field(min_length=1, max_length=256)
 
     model_config = {"from_attributes": True}
 
@@ -61,7 +64,7 @@ def list_events(status: str | None = None, db: Session = Depends(get_db)):
 
 
 class ActionCreate(BaseModel):
-    action: str = Field(min_length=1, max_length=512)
+    action: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
     actor: str = Field(default="", max_length=64)
 
 
@@ -184,7 +187,7 @@ _DOMAINS = {"nutrition", "environment", "occupational", "radiation", "school"}
 class MonitorCreate(BaseModel):
     domain: str = Field(max_length=16)
     org_id: int
-    indicator: str = Field(min_length=1, max_length=128)
+    indicator: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     value: FiniteFloat
     threshold: FiniteFloat
     record_date: OptionalDateStr = ""
@@ -198,6 +201,8 @@ class MonitorOut(MonitorCreate):
     threshold: float
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     record_date: str = ""
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    indicator: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 

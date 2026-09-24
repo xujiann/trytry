@@ -11,6 +11,7 @@ from ..deps import get_current_user, require_roles
 from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, Patient, User
 from ..visibility import assert_patient_visible
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
+from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/emergency", tags=["智慧急救"], dependencies=[Depends(get_current_user)])
 
@@ -30,7 +31,7 @@ MILESTONE_NAMES = {
 
 class CaseCreate(BaseModel):
     caller_phone: str = Field(default="", max_length=20)
-    location: str = Field(min_length=1, max_length=256)
+    location: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     symptom: str = Field(default="", max_length=512)
     ambulance_no: str = Field(default="", max_length=32)
     dest_org_id: int | None = None
@@ -43,6 +44,8 @@ class CaseOut(CaseCreate):
     id: int
     status: str
     rescue_outcome: str = ""
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    location: str = Field(min_length=1, max_length=256)
 
     model_config = {"from_attributes": True}
 
@@ -55,7 +58,7 @@ class RescueOutcomeIn(BaseModel):
 
 class MilestoneCreate(BaseModel):
     milestone: str = Field(pattern="^(onset|call|depart|arrive_scene|arrive_hospital|treatment)$")
-    occurred_at: str = Field(min_length=1, max_length=32)
+    occurred_at: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
 
     @field_validator("occurred_at")
     @classmethod
@@ -71,6 +74,8 @@ class MilestoneCreate(BaseModel):
 class MilestoneOut(MilestoneCreate):
     id: int
     case_id: int
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    occurred_at: str = Field(min_length=1, max_length=32)
 
     model_config = {"from_attributes": True}
 

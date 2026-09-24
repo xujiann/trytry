@@ -33,6 +33,7 @@ from ...clock import now_naive
 from ...concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ...database import get_db
 from ...patchtypes import UNSET
+from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_roles
 from ...formula import FormulaError, evaluate as eval_formula
 from ..platform import Organization, User
@@ -332,8 +333,8 @@ class RedeemVerifiedOut(BaseModel):
 
 
 class IndicatorIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     program_codes: list[str] = Field(default_factory=list)
     object_type: str = Field(default="org", pattern="^(org|doctor|village_doctor|team)$")
     data_source: str = Field(
@@ -408,7 +409,7 @@ def list_indicators(
 class IndicatorPatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     program_codes: list[str] = Field(default=UNSET)
     data_source: str = Field(
         default=UNSET,
@@ -789,8 +790,8 @@ def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
 
 
 class PlanIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     level: str = Field(default="township", pattern="^(hospital|township|station|village|team)$")
     program_codes: list[str] = Field(default_factory=list)
     object_type: str = Field(default="org", pattern="^(org|doctor|village_doctor|team)$")
@@ -851,7 +852,7 @@ def list_plans(level: str | None = None, active: bool | None = None,
 class PlanPatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     level: str = Field(default=UNSET, pattern="^(hospital|township|station|village|team)$")
     program_codes: list[str] = Field(default=UNSET)
     object_type: str = Field(default=UNSET, pattern="^(org|doctor|village_doctor|team)$")
@@ -880,7 +881,7 @@ def update_plan(plan_id: int, body: PlanPatch, db: Session = Depends(get_db)):
 
 class RunScoreIn(BaseModel):
     plan_id: int
-    period: str = Field(min_length=4, max_length=16)
+    period: str = Field(min_length=4, max_length=16, pattern=NON_BLANK)
     program_code: str = Field(default="", max_length=32)
     object_ids: list[int] = Field(default_factory=list)
 
@@ -1190,8 +1191,8 @@ def workload(
 
 
 class PointRuleIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     event: str = Field(
         pattern="^(sign|referral_up|referral_down|followup|abnormal_report|signin)$"
     )
@@ -1225,7 +1226,7 @@ def list_point_rules(db: Session = Depends(get_db)):
 class PointRulePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     points: int = Field(default=UNSET, ge=0, le=1000)
     daily_limit: int = Field(default=UNSET, ge=0, le=100000)
     condition: str = Field(default=UNSET, max_length=256)
@@ -1336,8 +1337,8 @@ def signin(db: Session = Depends(get_db), user: User = Depends(get_current_user)
 
 
 class GoodsIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     points: int = Field(default=100, ge=1, le=100000)
     stock: int = Field(default=0, ge=0, le=100000)
     image_url: str = Field(default="", max_length=256)
@@ -1369,7 +1370,7 @@ def list_goods(db: Session = Depends(get_db)):
 class GoodsPatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     points: int = Field(default=UNSET, ge=1, le=100000)
     stock: int = Field(default=UNSET, ge=0, le=100000)
     image_url: str = Field(default=UNSET, max_length=256)
@@ -1465,7 +1466,7 @@ def list_redeems(
 
 
 class VerifyIn(BaseModel):
-    verify_code: str = Field(min_length=4, max_length=16)
+    verify_code: str = Field(min_length=4, max_length=16, pattern=NON_BLANK)
 
 
 @router.post("/redeems/verify", response_model=RedeemVerifiedOut,

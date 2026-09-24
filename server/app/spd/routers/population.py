@@ -26,6 +26,7 @@ from ...config import settings
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
+from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
 from ..platform import Organization, Patient, User, pii_filter, unusable_user
 from ..models import (
@@ -415,7 +416,7 @@ class PatientProfileOut(BaseModel):
 
 class ScreeningIn(BaseModel):
     patient_id: int
-    program_code: str = Field(min_length=1, max_length=32)
+    program_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     source: str = Field(default="opportunistic", pattern="^(opportunistic|active|self|import)$")
     org_id: int | None = None
     scale_code: str = Field(default="", max_length=32)
@@ -622,7 +623,7 @@ def review_screening(
 
 
 class AutoScreenIn(BaseModel):
-    program_code: str = Field(min_length=1, max_length=32)
+    program_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     org_id: int | None = None
     limit: int = Field(default=500, ge=1, le=5000)
 
@@ -846,7 +847,7 @@ def set_candidate_status(
 
 class EnrollIn(BaseModel):
     patient_id: int
-    program_code: str = Field(min_length=1, max_length=32)
+    program_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     org_id: int | None = None
     team_id: int | None = None
     doctor_user_id: int | None = None
@@ -1385,7 +1386,7 @@ def list_recalls(
 
 
 class GroupIn(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     scope: str = Field(default="personal", pattern="^(personal|dept|team)$")
     dept: str = Field(default="", max_length=64)
     auto_rule: list[dict] = Field(default_factory=list)
@@ -1647,7 +1648,7 @@ def unbind_package(
 
 
 class UsageIn(BaseModel):
-    item_code: str = Field(min_length=1, max_length=32)
+    item_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     qty: int = Field(default=1, ge=1, le=100)
     note: str = Field(default="", max_length=256)
 

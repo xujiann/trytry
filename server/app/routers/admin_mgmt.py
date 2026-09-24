@@ -8,6 +8,7 @@ from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_un
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr, PeriodStr
 from ..numtypes import INT4_MAX, MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_visible,
@@ -50,7 +51,7 @@ router = APIRouter(prefix="/api/mgmt", tags=["综合管理"], dependencies=[Depe
 
 class EmployeeCreate(BaseModel):
     org_id: int
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     title: str = Field(default="", max_length=32)
     position: str = Field(default="", max_length=64)
 
@@ -59,6 +60,8 @@ class EmployeeOut(EmployeeCreate):
     id: int
     status: str
     dept_id: int | None = None
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    name: str = Field(min_length=1, max_length=64)
 
     model_config = {"from_attributes": True}
 
@@ -319,8 +322,8 @@ def finance_summary(
 
 class AssetCreate(BaseModel):
     org_id: int
-    code: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     category: str = Field(default="office", pattern="^(equipment|office)$")
     quantity: int = Field(default=1, ge=1, le=INT4_MAX)
 
@@ -340,6 +343,9 @@ class AssetOut(AssetCreate):
     id: int
     status: str
     quantity: int = Field(ge=0)
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 
@@ -423,7 +429,7 @@ def scrap_asset(
 
 
 class DocCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     doc_type: str = Field(default="notice", pattern="^(notice|policy|minutes)$")
     body: str = Field(default="", max_length=4096)
     issuer: str = Field(default="", max_length=64)
@@ -432,6 +438,8 @@ class DocCreate(BaseModel):
 class DocOut(DocCreate):
     id: int
     status: str
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    title: str = Field(min_length=1, max_length=256)
 
     model_config = {"from_attributes": True}
 
@@ -475,13 +483,15 @@ class RosterCreate(BaseModel):
     center_type: str = Field(max_length=16)
     duty_date: DateStr
     shift: str = Field(default="全天", max_length=16)
-    doctor_name: str = Field(min_length=1, max_length=64)
+    doctor_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
 
 
 class RosterOut(RosterCreate):
     id: int
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     duty_date: str
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    doctor_name: str = Field(min_length=1, max_length=64)
 
     model_config = {"from_attributes": True}
 
@@ -511,7 +521,7 @@ def list_rosters(center_type: str | None = None, duty_date: str | None = None, d
 
 class QcCreate(BaseModel):
     center_type: str = Field(max_length=16)
-    item: str = Field(min_length=1, max_length=128)
+    item: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     result: str = Field(pattern="^(pass|fail)$")
     note: str = Field(default="", max_length=512)
     record_date: OptionalDateStr = ""
@@ -521,6 +531,8 @@ class QcOut(QcCreate):
     id: int
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     record_date: str = ""
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    item: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 
@@ -556,8 +568,8 @@ def list_qc(center_type: str | None = None, result: str | None = None, db: Sessi
 
 class DeptCreate(BaseModel):
     org_id: int
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     category: str = Field(default="clinical", pattern="^(clinical|medtech|admin)$")
 
 
@@ -724,7 +736,7 @@ def list_employee_changes(
 
 class ContractCreate(BaseModel):
     employee_id: int
-    contract_no: str = Field(min_length=1, max_length=64)
+    contract_no: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     start_date: DateStr
     end_date: DateStr
 
@@ -1104,7 +1116,7 @@ def list_asset_movements(
 
 
 class ParamUpsert(BaseModel):
-    key: str = Field(min_length=1, max_length=64)
+    key: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     value: str = Field(max_length=256)
     description: str = ""
 

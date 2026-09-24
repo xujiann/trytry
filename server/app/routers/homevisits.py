@@ -13,6 +13,7 @@ from ..clock import now_naive
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..datetypes import OptionalDateStr
+from ..texttypes import NON_BLANK
 from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..models import (
     FamilyDoctorContract,
@@ -172,7 +173,7 @@ def list_visits(
 
 
 class VisitDispatch(BaseModel):
-    assignee_name: str = Field(min_length=1, max_length=64)
+    assignee_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
 
 
 @router.post(
@@ -197,7 +198,7 @@ def dispatch_visit(order_id: int, body: VisitDispatch, db: Session = Depends(get
 
 
 class VisitComplete(BaseModel):
-    service_note: str = Field(min_length=1, max_length=512)
+    service_note: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
 
 
 @router.post(

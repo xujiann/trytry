@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..datetypes import OptionalDateStr
+from ..texttypes import NON_BLANK
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import KnowledgeEntry, User
 
@@ -25,7 +26,7 @@ CATEGORIES = {
 
 class EntryCreate(BaseModel):
     category: str = Field(pattern="^(drug_policy|clinical_guideline|referral|regulation|tcm_health)$")
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     body: str = Field(default="", max_length=4096)
     # 是否过期按字符串比 `expire_date < 今天`：`2026/01/01`、`20260101` 在同一年份里比出来是反的，
     # 过期九个月的药品政策照样当"有效"检索出来（P1-61，实测）

@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
@@ -251,7 +252,7 @@ def list_syndromes(
 
 class PathogenIn(BaseModel):
     org_id: int
-    pathogen_name: str = Field(min_length=1, max_length=128)
+    pathogen_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     specimen_type: str = Field(default="", max_length=64)
     tested_count: int = Field(ge=0, le=INT4_MAX)
     positive_count: int = Field(ge=0, le=INT4_MAX)
@@ -381,7 +382,7 @@ def multi_point_alerts(
 class ResourceIn(BaseModel):
     org_id: int
     resource_type: str = Field(default="material", pattern="^(material|team|equipment)$")
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     quantity: int = Field(default=0, ge=0, le=INT4_MAX)
     unit: str = Field(default="", max_length=16)
     min_quantity: int = Field(default=0, ge=0, le=INT4_MAX)

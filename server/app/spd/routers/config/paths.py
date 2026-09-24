@@ -20,6 +20,7 @@ from ...models import (
     SpdProgram,
 )
 from ....numtypes import INT4_MAX, INT4_MIN
+from ....texttypes import NON_BLANK
 from ....visibility import assert_org_writable
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
 
@@ -88,8 +89,8 @@ class PathTemplateOut(BaseModel):
 
 class PathTemplateIn(BaseModel):
     program_id: int
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     scene: str = Field(default="outpatient", pattern="^(outpatient|inpatient|home|followup)$")
     risk_level: str = Field(default="", max_length=16)
     version: str = Field(default="v1", max_length=16)
@@ -100,8 +101,8 @@ class PathTemplateIn(BaseModel):
 
 
 class PathNodeIn(BaseModel):
-    key: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    key: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     stage: str = Field(default="", max_length=32)
     seq: int = Field(default=0, ge=INT4_MIN, le=INT4_MAX)
     dept: str = Field(default="", max_length=64)
@@ -246,7 +247,7 @@ def add_path_node(
 class PathNodePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     stage: str = Field(default=UNSET, max_length=32)
     seq: int = Field(default=UNSET, ge=INT4_MIN, le=INT4_MAX)
     dept: str = Field(default=UNSET, max_length=64)

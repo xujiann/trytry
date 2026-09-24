@@ -19,6 +19,7 @@ from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import Admission, CaseSummary, DrgGroup, Organization, User
+from ..texttypes import NON_BLANK
 
 # 同组历史病例少于该数不做事中预警——3 个病例算出来的"均值"，预警的是噪声。
 MIN_BASELINE_CASES = 5
@@ -95,8 +96,8 @@ def assign_drg_group(db: Session, summary: CaseSummary) -> dict | None:
 
 
 class DrgGroupCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=16)
-    name: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=16, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     base_weight: FiniteFloat = Field(gt=0)
     keywords: str = Field(default="", max_length=256)
     mdc: str = Field(default="", max_length=8)
@@ -108,7 +109,7 @@ class DrgGroupCreate(BaseModel):
 
 class DrgGroupUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
-    name: str | None = Field(default=None, min_length=1, max_length=128)
+    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
     base_weight: FiniteFloat | None = Field(default=None, gt=0)
     keywords: str | None = Field(default=None, max_length=256)
     mdc: str | None = Field(default=None, max_length=8)
@@ -388,7 +389,7 @@ def drg_stats(db: Session = Depends(get_db)):
 
 
 class PreCheckIn(BaseModel):
-    diagnosis: str = Field(min_length=1, max_length=256)
+    diagnosis: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     operation: str = Field(default="", max_length=256)
 
 

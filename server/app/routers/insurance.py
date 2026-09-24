@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..numtypes import MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
 from ..concurrency import insert_or_conflict
 from ..database import get_db
@@ -125,13 +126,15 @@ def issue_referral_cert(
 
 class SpecialDiseaseCreate(BaseModel):
     patient_id: int
-    disease_name: str = Field(min_length=1, max_length=128)
+    disease_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     reason: str = Field(default="", max_length=512)
 
 
 class SpecialDiseaseOut(SpecialDiseaseCreate):
     id: int
     status: str
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    disease_name: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 
@@ -233,7 +236,7 @@ def fund_stats(db: Session = Depends(get_db)):
 
 class DualChannelCreate(BaseModel):
     patient_id: int
-    drug_name: str = Field(min_length=1, max_length=128)
+    drug_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     reason: str = Field(default="", max_length=512)
 
 

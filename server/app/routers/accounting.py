@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..numtypes import MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_visible,
@@ -44,8 +45,8 @@ BALANCE_TOLERANCE = 0.005
 
 
 class SubjectIn(BaseModel):
-    code: str = Field(min_length=1, max_length=16)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=16, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     category: str = Field(pattern="^(asset|liability|net_asset|income|expense)$")
     direction: str = Field(default="debit", pattern="^(debit|credit)$")
 
@@ -213,7 +214,7 @@ def list_subjects(category: str | None = None, db: Session = Depends(get_db)):
 
 
 class EntryIn(BaseModel):
-    subject_code: str = Field(min_length=1, max_length=16)
+    subject_code: str = Field(min_length=1, max_length=16, pattern=NON_BLANK)
     summary: str = Field(default="", max_length=256)
     debit: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     credit: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
@@ -229,7 +230,7 @@ class VoucherIn(BaseModel):
     """
 
     org_id: int
-    voucher_no: str = Field(min_length=1, max_length=32)
+    voucher_no: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     voucher_date: DateStr
     period: OptionalPeriodStr = ""
     summary: str = Field(default="", max_length=256)

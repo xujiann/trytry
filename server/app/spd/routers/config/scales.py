@@ -15,6 +15,7 @@ from ....database import get_db
 from ....patchtypes import UNSET
 from ....deps import paginate, require_roles
 from ....numtypes import INT4_MAX, INT4_MIN, MONEY_MAX
+from ....texttypes import NON_BLANK
 from ...models import (
     SpdEduMaterial,
     SpdScale,
@@ -95,8 +96,8 @@ class TagBriefOut(BaseModel):
 
 
 class ScaleIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     category: str = Field(default="risk", pattern="^(risk|stage|rehab|screen)$")
     program_code: str = Field(default="", max_length=32)
     version: str = Field(default="v1", max_length=16)
@@ -166,7 +167,7 @@ def get_scale(scale_id: int, db: Session = Depends(get_db)):
 class ScalePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     items: list[dict] = Field(default=UNSET)
     scoring: dict = Field(default=UNSET)
     category: str = Field(default=UNSET, pattern="^(risk|stage|rehab|screen)$")
@@ -238,8 +239,8 @@ def disable_scale(scale_id: int, db: Session = Depends(get_db)):
 
 
 class EduIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    title: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    title: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     program_code: str = Field(default="", max_length=32)
     media_type: str = Field(default="text", pattern="^(text|audio|video)$")
     content: str = Field(default="", max_length=8192)
@@ -292,7 +293,7 @@ def list_edu(
 class EduPatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    title: str = Field(default=UNSET, min_length=1, max_length=128)
+    title: str = Field(default=UNSET, min_length=1, max_length=128, pattern=NON_BLANK)
     content: str = Field(default=UNSET, max_length=8192)
     media_url: str = Field(default=UNSET, max_length=256)
     media_type: str = Field(default=UNSET, pattern="^(text|audio|video)$")
@@ -317,8 +318,8 @@ def update_edu(material_id: int, body: EduPatch, db: Session = Depends(get_db)):
 
 
 class PackageIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     program_code: str = Field(default="", max_length=32)
     price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     period_days: int = Field(default=365, ge=1, le=3650)
@@ -367,7 +368,7 @@ def list_packages(
 class PackagePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     price: FiniteFloat = Field(default=UNSET, ge=0, le=MONEY_MAX)
     period_days: int = Field(default=UNSET, ge=1, le=3650)
     items: list[dict] = Field(default=UNSET)
@@ -390,8 +391,8 @@ def update_package(package_id: int, body: PackagePatch, db: Session = Depends(ge
 
 
 class TagIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     category: str = Field(default="patient", max_length=32)
     color: str = Field(default="", max_length=16)
 

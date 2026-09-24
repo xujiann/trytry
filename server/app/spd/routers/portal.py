@@ -19,6 +19,7 @@ from ...concurrency import ensure_present, insert_if_absent, insert_or_conflict
 from ...database import get_db
 from ...deps import paginate
 from ...numtypes import INT4_MAX, INT4_MIN
+from ...texttypes import NON_BLANK
 from ..platform import Encounter, Patient, ResidentAccount
 from ..models import (
     SpdAssessment,
@@ -328,7 +329,7 @@ def archive(
 
 class SelfMeasureIn(BaseModel):
     patient_id: int | None = None
-    metric: str = Field(min_length=1, max_length=32)
+    metric: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     value: FiniteFloat
     unit: str = Field(default="", max_length=16)
     program_code: str = Field(default="", max_length=32)
@@ -485,7 +486,7 @@ def scale_by_token(qr_token: str, db: Session = Depends(get_db)):
 
 class SelfScreenIn(BaseModel):
     patient_id: int | None = None
-    program_code: str = Field(min_length=1, max_length=32)
+    program_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     scale_code: str = Field(default="", max_length=32)
     answers: dict = Field(default_factory=dict)
     draft: bool = False
@@ -573,7 +574,7 @@ def self_screening(
 
 class ApplyIn(BaseModel):
     patient_id: int | None = None
-    program_code: str = Field(min_length=1, max_length=32)
+    program_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     screening_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
     note: str = Field(default="", max_length=512)
 
@@ -1312,7 +1313,7 @@ def my_referral_detail(
 class ConsultIn(BaseModel):
     patient_id: int | None = None
     program_code: str = Field(default="", max_length=32)
-    content: str = Field(min_length=1, max_length=2048)
+    content: str = Field(min_length=1, max_length=2048, pattern=NON_BLANK)
 
 
 class SpdConsultStartedOut(BaseModel):

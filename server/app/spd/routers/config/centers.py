@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ....database import get_db
 from ....patchtypes import UNSET
+from ....texttypes import NON_BLANK
 from ....deps import require_roles
 from ...platform import Organization, unusable_user
 from ...models import (
@@ -66,9 +67,9 @@ class OrgTreeNodeOut(BaseModel):
 
 
 class CenterIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
-    program_code: str = Field(min_length=1, max_length=32)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    program_code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     lead_org_id: int | None = None
     lead_dept: str = Field(default="", max_length=64)
     leader_user_id: int | None = None
@@ -119,7 +120,7 @@ def list_centers(program_code: str | None = None, db: Session = Depends(get_db))
 class CenterPatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     lead_org_id: int | None = None
     lead_dept: str = Field(default=UNSET, max_length=64)
     leader_user_id: int | None = None

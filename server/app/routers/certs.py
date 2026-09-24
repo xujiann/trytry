@@ -12,6 +12,7 @@ from ..database import get_db
 from ..deps import get_current_user, paginate, require_date, require_roles
 from ..models import ChildRecord, MedicalCert, Organization, Patient, User
 from ..datetypes import DateStr
+from ..texttypes import NON_BLANK
 from ..privacy import mask_id_card, mask_phone
 from .reports import _csv_response
 
@@ -23,7 +24,7 @@ _TYPE_NAMES = {"birth": "出生医学证明", "death": "死亡医学证明", "de
 
 class CertCreate(BaseModel):
     cert_type: str = Field(pattern="^(birth|death|defect)$")
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     gender: str = Field(default="未知", max_length=8)
     event_date: DateStr
     detail: str = Field(default="", max_length=512)

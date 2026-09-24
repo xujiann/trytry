@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..datetypes import DateStr, OptionalDateStr
 from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, row_dict
@@ -169,7 +170,7 @@ def close_record(record_id: int, db: Session = Depends(get_db)):
 
 
 class ChildCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     gender: str = Field(default="未知", max_length=8)
     birth_date: DateStr
     guardian_patient_id: int | None = None
@@ -179,6 +180,8 @@ class ChildOut(ChildCreate):
     id: int
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     birth_date: str
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    name: str = Field(min_length=1, max_length=64)
 
     model_config = {"from_attributes": True}
 

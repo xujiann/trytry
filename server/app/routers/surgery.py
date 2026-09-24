@@ -18,6 +18,7 @@ from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..datetypes import DateStr, OptionalDateStr, OptionalDateTimeStr, TimeStr
 from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..notify import notify_patient
@@ -44,7 +45,7 @@ SURGERY_FOLLOWUP_DAYS = 14
 
 class RoomIn(BaseModel):
     org_id: int
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
 
 
 # ---------------------------------------------------------------- 响应契约
@@ -186,7 +187,7 @@ def list_rooms(
 
 class SurgeryRequestIn(BaseModel):
     admission_id: int
-    surgery_name: str = Field(min_length=1, max_length=256)
+    surgery_name: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     surgery_code: str = Field(default="", max_length=32)
     incision_level: str = Field(default="II", pattern="^(I|II|III|IV)$")
     anesthesia_type: str = Field(default="general", pattern="^(general|spinal|local|nerve_block)$")
@@ -425,7 +426,7 @@ def list_schedules(
 
 
 class SurgeryRecordIn(BaseModel):
-    actual_surgery_name: str = Field(min_length=1, max_length=256)
+    actual_surgery_name: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     # 以下补列长 / 列容量（P1-91 / P1-93 第四层）：`SurgeryRecord(**{**body.model_dump(), …})` 这种字典字面量写法
     # 原先判据认不出来，PG 上超长即 500
     surgeon_name: str = Field(default="", max_length=64)

@@ -41,6 +41,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_api_contract_governance as contract
     import test_ascii_digit_patterns as asciidigits
     import test_ascii_digit_parsing as asciiparse
+    import test_blank_required_text as blanktext
     import test_body_fk_exists as bodyfk
     import test_closed_parent_writes as closedparent
     import test_spd_report_task_delete as guardeddelete
@@ -158,6 +159,12 @@ def _rows() -> list[tuple[str, str, str, str]]:
          bodyraw.BASELINE, "tests/test_body_raw_dict.py"),
         ("请求体契约", "按设计收原样资源的入站端点（FHIR R4 资源，逐条写明理由）",
          len(bodyraw.BY_DESIGN), "tests/test_body_raw_dict.py"),
+        ("请求体契约", "要求必填的文本字段收得下纯空白（机构名 / 病种编码 / 用户名填一串空格照样落库；282 → 0：修 268、按设计 14）",
+         blanktext.BASELINE, "tests/test_blank_required_text.py"),
+        ("请求体契约", "按设计不挡纯空白的认证 / 核验入参（§8 复核范围，逐条写明理由）",
+         len(blanktext.BY_DESIGN), "tests/test_blank_required_text.py"),
+        ("请求体契约", "出参字段带 NON_BLANK（修之前存进去的纯空白行让整个清单 500；继承到它的 37 个已在出参覆盖）",
+         blanktext.OUTPUT_BASELINE, "tests/test_blank_required_text.py"),
         ("请求体契约", "可空入参写进不可空列、处理函数也不挡 None（显式传 null 即 500；30 → 0 已清零）",
          bodyraw.NULLABLE_BASELINE, "tests/test_body_raw_dict.py"),
         ("请求体契约", "写同一列的入口非空 / 枚举口径不一致（改档比建档松：改名为空串、改出枚举外的值；17 → 0 已清零）",

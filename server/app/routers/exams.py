@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..concurrency import insert_or_conflict
 from ..numtypes import INT4_MAX, MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import (
     assert_org_writable,
     assert_patient_visible,
@@ -692,7 +693,7 @@ class ExamResourceOut(BaseModel):
 
 class TemplateCreate(BaseModel):
     center_type: str = Field(max_length=16)
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     content: str = Field(default="", max_length=2048)
 
 
@@ -716,7 +717,7 @@ def list_templates(center_type: str | None = None, db: Session = Depends(get_db)
 
 
 class ReportAmend(BaseModel):
-    conclusion: str = Field(min_length=1, max_length=1024)
+    conclusion: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
     finding: str | None = Field(default=None, max_length=2048)
     # 允许修订危急值标记：置 True/False 均联动闭环状态
     critical: bool | None = None
@@ -826,7 +827,7 @@ def list_report_revisions(
 class ExamResourceCreate(BaseModel):
     org_id: int
     center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
-    item_name: str = Field(min_length=1, max_length=128)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     device: str = Field(default="", max_length=128)
     price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     duration_min: int = Field(default=15, gt=0, le=INT4_MAX)

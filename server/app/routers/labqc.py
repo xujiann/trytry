@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..datetypes import OptionalDateTimeStr
+from ..texttypes import NON_BLANK
 from ..deps import get_current_user, paginate, require_roles
 from ..models import Organization, QcLot, QcMeasurement, User, utcnow
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
@@ -56,9 +57,9 @@ def _westgard(z: float, prev_z: float | None) -> tuple[bool, bool, list[str]]:
 
 class LotCreate(BaseModel):
     org_id: int
-    item_code: str = Field(min_length=1, max_length=64)
-    item_name: str = Field(min_length=1, max_length=128)
-    lot_no: str = Field(min_length=1, max_length=64)
+    item_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
+    lot_no: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     target_value: FiniteFloat
     sd: FiniteFloat = Field(gt=0)  # SD=0 时 z 分数除零，且质控品不可能无离散度
 
@@ -69,6 +70,10 @@ class LotOut(LotCreate):
     # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
     target_value: float
     sd: float
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    item_code: str = Field(min_length=1, max_length=64)
+    item_name: str = Field(min_length=1, max_length=128)
+    lot_no: str = Field(min_length=1, max_length=64)
 
     model_config = {"from_attributes": True}
 
@@ -243,8 +248,8 @@ def list_measurements(lot_id: int, db: Session = Depends(get_db), user: User = D
 
 
 class HandleIn(BaseModel):
-    reason: str = Field(min_length=1, max_length=512)
-    corrective_action: str = Field(min_length=1, max_length=512)
+    reason: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
+    corrective_action: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
 
 
 @router.post(

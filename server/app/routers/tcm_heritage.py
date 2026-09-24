@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..datetypes import OptionalDateStr
+from ..texttypes import NON_BLANK
 from ..deps import get_current_user, require_roles
 from ..models import SimulationAttempt, SimulationCase, TcmMasterCase, User
 
@@ -31,9 +32,9 @@ router = APIRouter(
 
 
 class MasterCaseIn(BaseModel):
-    master_name: str = Field(min_length=1, max_length=64)
+    master_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     successor_name: str = Field(default="", max_length=64)
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     disease: str = Field(default="", max_length=128)
     syndrome: str = Field(default="", max_length=128)
     four_exams: str = Field(default="", max_length=2048)
@@ -274,16 +275,16 @@ def master_case_stats(db: Session = Depends(get_db)):
 
 
 class DecisionPoint(BaseModel):
-    key: str = Field(min_length=1, max_length=32)
-    question: str = Field(min_length=1, max_length=512)
+    key: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    question: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
     options: list[str] = Field(min_length=2)
-    answer: str = Field(min_length=1, max_length=256)
+    answer: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     score: int = Field(default=10, ge=1, le=100)
     explain: str = Field(default="", max_length=1024)
 
 
 class SimulationIn(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     category: str = Field(default="clinical", pattern="^(tcm|clinical|emergency)$")
     scenario: str = Field(default="", max_length=4096)
     decision_points: list[DecisionPoint] = Field(min_length=1)

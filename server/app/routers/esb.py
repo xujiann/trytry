@@ -33,6 +33,7 @@ from ..deps import get_current_user, paginate, require_admin, require_roles, row
 from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, utcnow
 from ..security import hash_password, verify_password
 from ..state_store import SlidingWindowRateLimiter
+from ..texttypes import NON_BLANK
 from .integration import parse_fhir_patient, parse_hl7v2_patient
 from .patients import create_patient_idempotent
 
@@ -72,8 +73,8 @@ OUTBOUND_BATCH_SIZE = 50
 
 
 class EndpointCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     system_type: str = Field(pattern="^(his|lis|pacs|insurance|provincial)$")
     direction: str = Field(default="inbound", pattern="^(inbound|outbound)$")
     rate_limit_per_min: int = Field(default=60, ge=1, le=100000)
@@ -85,7 +86,7 @@ class EndpointCreate(BaseModel):
 
 class EndpointUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
-    name: str | None = Field(default=None, min_length=1, max_length=128)
+    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
     active: bool | None = None
     rate_limit_per_min: int | None = Field(default=None, ge=1, le=100000)
     endpoint_url: str | None = Field(default=None, max_length=512)
@@ -235,7 +236,7 @@ def _authenticate_endpoint(db: Session, code: str, token: str) -> EsbEndpoint:
 
 
 class MessageIn(BaseModel):
-    msg_type: str = Field(min_length=1, max_length=32)
+    msg_type: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     payload: dict = Field(default_factory=dict)
     max_retries: int = Field(default=3, ge=0, le=10)
 
@@ -619,15 +620,15 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
 
 
 class FlowCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     steps: list[dict] = Field(min_length=1)
     active: bool = True
 
 
 class FlowUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串、把步骤改成空数组照收——零步骤的流程跑起来什么也不做
-    name: str | None = Field(default=None, min_length=1, max_length=128)
+    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
     steps: list[dict] | None = Field(default=None, min_length=1)
     active: bool | None = None
 

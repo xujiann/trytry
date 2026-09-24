@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr, DateTimeSecStr
@@ -205,9 +206,9 @@ class ExpiringBatchesOut(BaseModel):
 
 
 class BatchIn(BaseModel):
-    vaccine_code: str = Field(min_length=1, max_length=64)
-    vaccine_name: str = Field(min_length=1, max_length=128)
-    batch_no: str = Field(min_length=1, max_length=64)
+    vaccine_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    vaccine_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
+    batch_no: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     manufacturer: str = Field(default="", max_length=128)
     expire_date: DateStr
     org_id: int
@@ -215,7 +216,7 @@ class BatchIn(BaseModel):
 
 
 class BatchFreeze(BaseModel):
-    frozen_reason: str = Field(min_length=1, max_length=256)
+    frozen_reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 def _batch_out(batch: VaccineBatch, today: str) -> dict:
@@ -390,7 +391,7 @@ def batch_recipients(batch_id: int, db: Session = Depends(get_db)):
 
 class ColdChainIn(BaseModel):
     org_id: int
-    device_name: str = Field(min_length=1, max_length=128)
+    device_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     temperature: FiniteFloat
     min_allowed: FiniteFloat = 2.0
     max_allowed: FiniteFloat = 8.0
@@ -398,7 +399,7 @@ class ColdChainIn(BaseModel):
 
 
 class ColdChainHandle(BaseModel):
-    handle_note: str = Field(min_length=1, max_length=512)
+    handle_note: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
 
 
 def _cold_out(r: ColdChainRecord) -> dict:
@@ -489,7 +490,7 @@ class AefiIn(BaseModel):
     record_id: int | None = None
     vaccine_code: str = Field(default="", max_length=64)
     reaction_type: str = Field(default="general", pattern="^(general|severe|psychogenic|coincidental)$")
-    symptom: str = Field(min_length=1, max_length=512)
+    symptom: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
     onset_date: DateStr
     outcome: str = Field(default="unknown", pattern="^(recovered|improving|sequelae|death|unknown)$")
     org_id: int

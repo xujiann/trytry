@@ -53,6 +53,7 @@ from ..models import (
 from ..pii import pii_filter
 from ..privacy import desensitize, mask_id_card, mask_phone
 from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, PatientOut
+from ..texttypes import NON_BLANK
 from .chronic import _evaluate_level
 from .encounters import create_encounter
 from .exams import submit_report
@@ -74,7 +75,7 @@ EHC_SYSTEM = "urn:medplat:ehc"
 
 
 class Hl7Message(BaseModel):
-    message: str = Field(min_length=1, description="HL7 v2 ADT 消息原文（管道分隔）")
+    message: str = Field(min_length=1, description="HL7 v2 ADT 消息原文（管道分隔）", pattern=NON_BLANK)
 
 
 def _log_exchange(

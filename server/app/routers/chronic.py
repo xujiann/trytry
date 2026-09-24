@@ -26,6 +26,7 @@ from ..deps import (
 from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient, User
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
+from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/chronic", tags=["慢病管理"], dependencies=[Depends(get_current_user)])
 
@@ -117,8 +118,8 @@ def _suggest_next_due(db: Session, disease: str, today: str | None = None) -> st
 
 
 class DiseaseTypeCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     level_rules: dict = Field(default_factory=dict)
     guidance: str = Field(default="", max_length=512)
     # 业务上限 10 年，与慢专病管理目标的随访周期同一口径（P1-96）：原先只到列容量 INT4_MAX，写成 99999999
@@ -129,7 +130,7 @@ class DiseaseTypeCreate(BaseModel):
 
 class DiseaseTypeUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
-    name: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=NON_BLANK)
     level_rules: dict | None = None
     guidance: str | None = Field(default=None, max_length=512)
     followup_interval_days: int | None = Field(default=None, gt=0, le=3650)  # 同建档（P1-96）

@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from ...clock import now_naive
 from ...database import get_db
 from ...patchtypes import UNSET
+from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
 from ..platform import Organization, Patient, User, org_level
 from ..models import (
@@ -173,8 +174,8 @@ class ReferralAlertsOut(BaseModel):
 
 
 class ReferralRuleIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     program_code: str = Field(default="", max_length=32)
     scene: str = Field(default="followup", max_length=16)
     conditions: list[dict] = Field(default_factory=list)
@@ -233,7 +234,7 @@ class ReferralRulePatch(BaseModel):
 
     规则编码与所属病种不在可改之列（原先的键清单里就没有它们），传了照旧忽略。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     scene: str = Field(default=UNSET, max_length=16)
     conditions: list[dict] = Field(default=UNSET)
     notify_role: str = Field(default=UNSET, max_length=32)

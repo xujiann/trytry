@@ -14,6 +14,7 @@ from ....concurrency import insert_or_conflict
 from ....database import get_db
 from ....patchtypes import UNSET
 from ....datetypes import OptionalDateStr
+from ....texttypes import NON_BLANK
 from ....deps import get_current_user, paginate, require_admin, require_roles
 from ...platform import Organization, User
 from ...models import (
@@ -149,8 +150,8 @@ def rule_meta():
 
 
 class ProgramIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     category: str = Field(default="chronic", pattern="^(chronic|specialty)$")
     lead_org_id: int | None = None
     lead_dept: str = Field(default="", max_length=64)
@@ -164,7 +165,7 @@ class ProgramIn(BaseModel):
 
 class ProgramUpdate(BaseModel):
     # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     lead_org_id: int | None = None
     lead_dept: str = Field(default=UNSET, max_length=64)
     description: str = Field(default=UNSET, max_length=512)
@@ -308,7 +309,7 @@ def program_versions(program_id: int, db: Session = Depends(get_db)):
 
 class TargetIn(BaseModel):
     stage: str = Field(default="", max_length=32)
-    metric: str = Field(min_length=1, max_length=32)
+    metric: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     metric_name: str = Field(default="", max_length=64)
     kind: str = Field(default="quantitative", pattern="^(quantitative|qualitative)$")
     target_low: FiniteFloat | None = None

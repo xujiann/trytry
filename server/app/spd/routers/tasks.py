@@ -22,6 +22,7 @@ from ...clock import now_naive
 from ...concurrency import add_amount
 from ...database import get_db
 from ...patchtypes import UNSET
+from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict
 from ..platform import Patient, User, evidence_urls, notify_user, unusable_user, valid_task_evidence
 from ..models import (
@@ -513,7 +514,7 @@ def check_node_enter(node_id: int, instance_id: int, db: Session = Depends(get_d
 
 class TaskIn(BaseModel):
     patient_id: int
-    title: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     task_type: str = Field(
         default="followup",
         pattern="^(path|followup|intervention|assess|revisit|referral|report|recall|edu|screen)$",

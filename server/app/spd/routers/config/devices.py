@@ -22,6 +22,7 @@ from ...models import (
     SpdSyncLog,
 )
 from ....numtypes import INT4_MAX
+from ....texttypes import NON_BLANK
 from ....visibility import assert_org_writable
 from ._base import router
 
@@ -93,7 +94,7 @@ class DataSourceMonitorOut(BaseModel):
 
 
 class DeviceIn(BaseModel):
-    sn: str = Field(min_length=1, max_length=64)
+    sn: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     device_type: str = Field(pattern="^(bp|glucose|band|scale|poct|ecg)$")
     model: str = Field(default="", max_length=64)
     org_id: int | None = None
@@ -172,8 +173,8 @@ def bind_device(
 
 
 class DataSourceIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     source_type: str = Field(pattern="^(HIS|EMR|LIS|PACS|checkup|publichealth|device)$")
     org_id: int | None = None
     endpoint: str = Field(default="", max_length=256)
@@ -219,7 +220,7 @@ def list_data_sources(source_type: str | None = None, db: Session = Depends(get_
 class DataSourcePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     endpoint: str = Field(default=UNSET, max_length=256)
     freq_minutes: int = Field(default=UNSET, ge=1, le=1440)
     scope: str = Field(default=UNSET, max_length=256)

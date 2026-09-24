@@ -19,6 +19,7 @@ from ..models import (
 from datetime import date, timedelta
 from ..datetypes import DateStr, OptionalDateStr
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable
 
 router = APIRouter(prefix="/api/tcm", tags=["中医药服务"], dependencies=[Depends(get_current_user)])
@@ -213,7 +214,7 @@ _NO_DECOCT_FLOW = {"ordered": "dispensed", "dispensed": "delivering", "deliverin
 class DispenseCreate(BaseModel):
     patient_id: int
     from_org_id: int
-    herbs: str = Field(min_length=1, max_length=1024)
+    herbs: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
     doses: int = Field(default=1, ge=1, le=INT4_MAX)
     decoct: bool = True
 
@@ -221,6 +222,8 @@ class DispenseCreate(BaseModel):
 class DispenseOut(DispenseCreate):
     id: int
     status: str
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    herbs: str = Field(min_length=1, max_length=1024)
 
     model_config = {"from_attributes": True}
 
@@ -277,7 +280,7 @@ def advance_order(order_id: int, db: Session = Depends(get_db)):
 
 
 class TechniqueCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     category: str = Field(default="", max_length=64)
     indication: str = Field(default="", max_length=512)
     description: str = Field(default="", max_length=1024)
@@ -285,6 +288,8 @@ class TechniqueCreate(BaseModel):
 
 class TechniqueOut(TechniqueCreate):
     id: int
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    name: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 
@@ -321,8 +326,8 @@ DOSAGE_FORMS = {
 
 
 class FormulaCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     dosage_form: str = Field(default="decoction", pattern="^(pill|powder|paste|granule|decoction)$")
     composition: str = Field(default="", max_length=1024)
     process: str = Field(default="", max_length=1024)
@@ -386,7 +391,7 @@ def list_formulas(active: bool | None = None, db: Session = Depends(get_db)):
 
 class BatchCreate(BaseModel):
     formula_id: int
-    batch_no: str = Field(min_length=1, max_length=32)
+    batch_no: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     org_id: int
     quantity: int = Field(ge=1, le=INT4_MAX)
     unit: str = Field(default="剂", max_length=16)

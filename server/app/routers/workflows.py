@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..numtypes import INT4_MAX, INT4_MIN
+from ..texttypes import NON_BLANK
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_visible,
@@ -60,8 +61,8 @@ router = APIRouter(prefix="/api/workflows", tags=["流程引擎"], dependencies=
 
 
 class NodeIn(BaseModel):
-    key: str = Field(min_length=1, max_length=48)
-    name: str = Field(min_length=1, max_length=64)
+    key: str = Field(min_length=1, max_length=48, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     # 可推进该节点的角色；空串表示任何已登录用户
     role: str = ""
     # 下一节点 key；空串表示终态
@@ -69,8 +70,8 @@ class NodeIn(BaseModel):
 
 
 class DefinitionIn(BaseModel):
-    key: str = Field(min_length=1, max_length=48)
-    name: str = Field(min_length=1, max_length=128)
+    key: str = Field(min_length=1, max_length=48, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     nodes: list[NodeIn] = Field(min_length=1)
 
 
@@ -215,7 +216,7 @@ def list_definitions(db: Session = Depends(get_db)):
 
 class StartIn(BaseModel):
     definition_key: str
-    business_type: str = Field(min_length=1, max_length=32)
+    business_type: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     business_id: int = Field(default=0, ge=INT4_MIN, le=INT4_MAX)
     title: str = Field(default="", max_length=256)
     org_id: int | None = None

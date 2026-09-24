@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
 from ..concurrency import insert_or_conflict
 from ..database import get_db
@@ -165,7 +166,7 @@ class SlotTemplate(BaseModel):
     """时段模板：与 SlotCreate 相同的号源属性，唯独日期由区间展开。"""
 
     resource_type: str = Field(pattern="^(outpatient|exam|lab)$")
-    resource_name: str = Field(min_length=1, max_length=128)
+    resource_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     employee_id: int | None = None
     slot_time: str = Field(default="", max_length=16)
     capacity: int = Field(default=1, ge=1, le=INT4_MAX)

@@ -8,6 +8,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import OnlineConsult, Organization, Patient, Prescription, User
 from ..schemas import PrescriptionOut  # noqa: F401
+from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/telemedicine", tags=["互联网+诊疗"], dependencies=[Depends(get_current_user)])
 
@@ -16,7 +17,7 @@ class ConsultCreate(BaseModel):
     patient_id: int
     org_id: int
     consult_type: str = Field(default="consult", pattern="^(consult|repeat_rx)$")
-    question: str = Field(min_length=1, max_length=1024)
+    question: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
 
 
 class ConsultOut(ConsultCreate):
@@ -25,13 +26,15 @@ class ConsultOut(ConsultCreate):
     doctor_name: str
     status: str
     prescription_id: int | None
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    question: str = Field(min_length=1, max_length=1024)
 
     model_config = {"from_attributes": True}
 
 
 class ReplyBody(BaseModel):
-    reply: str = Field(min_length=1, max_length=2048)
-    doctor_name: str = Field(min_length=1, max_length=64)
+    reply: str = Field(min_length=1, max_length=2048, pattern=NON_BLANK)
+    doctor_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     # 复诊续方：医师回复时可关联已开具处方（须先经集中审方）
     prescription_id: int | None = None
 

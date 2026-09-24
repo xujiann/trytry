@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
 from ..numtypes import MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..concurrency import insert_or_conflict
 from ..database import get_db
@@ -284,7 +285,7 @@ class ConsultExpertOut(BaseModel):
 
 
 class ExpertCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     org_id: int
     specialty: str = Field(default="", max_length=64)
     available: bool = True

@@ -10,6 +10,7 @@ from ..clock import now_naive
 from ..concurrency import claim_quota
 from ..datetypes import OptionalDateStr
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
@@ -47,8 +48,8 @@ def _effective_contraindications(
 
 class RecordCreate(BaseModel):
     patient_id: int
-    vaccine_code: str = Field(min_length=1, max_length=64)
-    vaccine_name: str = Field(min_length=1, max_length=128)
+    vaccine_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    vaccine_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     dose_no: int = Field(default=1, ge=1, le=INT4_MAX)
     vaccinated_date: OptionalDateStr = ""
     org_id: int
@@ -63,6 +64,9 @@ class RecordOut(RecordCreate):
     batch_no: str = ""
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     vaccinated_date: str = ""
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    vaccine_code: str = Field(min_length=1, max_length=64)
+    vaccine_name: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 
@@ -139,14 +143,14 @@ def vaccination_history(
 
 class ContraCreate(BaseModel):
     patient_id: int
-    vaccine_code: str = Field(min_length=1, max_length=64)
-    reason: str = Field(min_length=1, max_length=256)
+    vaccine_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     contra_type: str = Field(default="permanent", pattern="^(permanent|temporary)$")
     valid_until: date | None = None
 
 
 class ContraLift(BaseModel):
-    lift_reason: str = Field(min_length=1, max_length=256)
+    lift_reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 def _contra_out(c: VaccineContraindication, today: str) -> dict:

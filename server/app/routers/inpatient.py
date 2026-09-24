@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..numtypes import MONEY_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_writable,
@@ -61,7 +62,7 @@ router = APIRouter(prefix="/api/inpatient", tags=["住院与床位"], dependenci
 
 class WardCreate(BaseModel):
     org_id: int
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
 
 
 class WardOut(BaseModel):
@@ -100,7 +101,7 @@ def list_wards(
 
 class BedCreate(BaseModel):
     ward_id: int
-    bed_no: str = Field(min_length=1, max_length=16)
+    bed_no: str = Field(min_length=1, max_length=16, pattern=NON_BLANK)
 
 
 class BedOut(BaseModel):
@@ -375,7 +376,7 @@ def _admission_visible_or_404(db: Session, admission_id: int, user: User, resour
 
 
 class CaseSummaryCreate(BaseModel):
-    discharge_diagnosis: str = Field(min_length=1, max_length=256)
+    discharge_diagnosis: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
     operation: str = Field(default="", max_length=256)
     total_cost: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     drug_cost: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
@@ -595,7 +596,7 @@ def _assert_billing_settled(db: Session, admission: Admission) -> None:
 class OrderCreate(BaseModel):
     admission_id: int
     order_type: str = Field(pattern="^(long|temp)$")
-    content: str = Field(min_length=1, max_length=512)
+    content: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
 
 
 #: 预检与库兜底共用同一句文案：两处分头写，早晚会分叉，

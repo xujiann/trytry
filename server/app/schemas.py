@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, FiniteFloat
 from .datetypes import DateStr, OptionalDateStr
 from .numtypes import INT4_MAX
+from .texttypes import NON_BLANK
 
 
 class LoginRequest(BaseModel):
@@ -16,7 +17,7 @@ class TokenResponse(BaseModel):
 
 
 class OrganizationCreate(BaseModel):
-    name: str = Field(min_length=2, max_length=128)
+    name: str = Field(min_length=2, max_length=128, pattern=NON_BLANK)
     org_type: str = Field(pattern="^(lead_hospital|township|village|public_health)$")
     # L-4：city=市级协作医院（市级互认项目适用），county/township/village=县域层级
     level: str = Field(pattern="^(city|county|township|village)$")
@@ -35,8 +36,8 @@ class OrganizationOut(OrganizationCreate):
 
 
 class PatientCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
-    id_card: str = Field(min_length=15, max_length=18)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    id_card: str = Field(min_length=15, max_length=18, pattern=NON_BLANK)
     gender: str = "未知"
     # 年龄全靠它现算（审方的儿童/老年规则、未满 14 周岁须监护人、慢专病的年龄纳入规则），
     # 算不出的一律当"不知道"放过：`2016/03/05` 建档的 10 岁孩子登记知情同意不要监护人（P1-61，实测）
@@ -59,8 +60,8 @@ class PatientOut(PatientCreate):
 
 
 class CodeEntryCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=256)
+    code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 class CodeEntryOut(CodeEntryCreate):
@@ -154,8 +155,8 @@ class ExamReportOut(ExamReportCreate):
 
 
 class RecognitionItemCreate(BaseModel):
-    item_code: str = Field(min_length=1, max_length=64)
-    item_name: str = Field(min_length=1, max_length=128)
+    item_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
     mutual_scope: str = Field(default="county", pattern="^(county|city)$")
     active: bool = True
@@ -163,7 +164,7 @@ class RecognitionItemCreate(BaseModel):
 
 class RecognitionItemUpdate(BaseModel):
     # 改名与建档同口径（P2-40）：原先不带 min_length，改名为空串照收，出参校验在 commit 之后才失败
-    item_name: str | None = Field(default=None, min_length=1, max_length=128)
+    item_name: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
     center_type: str | None = Field(default=None, pattern="^(imaging|ecg|lab|pathology)$")
     mutual_scope: str | None = Field(default=None, pattern="^(county|city)$")
     active: bool | None = None
@@ -174,6 +175,8 @@ class RecognitionItemOut(RecognitionItemCreate):
     # 改档原先收得下空串（P2-40）：一条空名目录项就让整张互认目录 500、页面整页打不开（实测）。
     # 入口已同口径，出参照 P1-65 覆盖回 str，修之前存进去的空名要在目录里看得见才谈得上改
     item_name: str
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    item_code: str = Field(min_length=1, max_length=64)
 
     model_config = {"from_attributes": True}
 
@@ -265,20 +268,23 @@ class StockUpsert(BaseModel):
     org_id: int
     # 列长 / 列容量（P1-91 / P1-93 第四层）：入库按业务键查出已有库存再累加、改阈值、改药名，原先判据看不见
     # 与批次入库同口径（P1-98）：原先空药品编码照建库存行、空药名把已有库存的药名改空
-    drug_code: str = Field(min_length=1, max_length=64)
-    drug_name: str = Field(min_length=1, max_length=128)
+    drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    drug_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     quantity: int = Field(ge=0, le=INT4_MAX)
     threshold: int = Field(default=0, ge=0, le=INT4_MAX)
 
 
 class StockOut(StockUpsert):
     id: int
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    drug_code: str = Field(min_length=1, max_length=64)
+    drug_name: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 
 
 class TransferCreate(BaseModel):
-    drug_code: str = Field(min_length=1, max_length=64)
+    drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     from_org_id: int
     to_org_id: int
     quantity: int = Field(gt=0, le=INT4_MAX)
@@ -287,7 +293,7 @@ class TransferCreate(BaseModel):
 class ChronicCreate(BaseModel):
     patient_id: int
     # 块1：病种取值改由 ChronicDiseaseType 目录校验（不再硬编码枚举）
-    disease: str = Field(min_length=1, max_length=32)
+    disease: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     managed_by_org_id: int
     # 日期真源（P2-55）：原先裸 str，「2026/10/1」「10月1日」照存，之后按字符串比较的逾期判定对它失效；
     # 日期闸门原先只按名字认 `date`，这一格名叫 next_due，一直不在视野里（闸门已补认 `due`）
@@ -299,6 +305,8 @@ class ChronicOut(ChronicCreate):
     level: int
     # 出参不带入参的日历校验（P1-63）：换成日期真源之前存进去的「2026/10/1」要原样读出来，而不是让响应 500
     next_due: str = ""
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    disease: str = Field(min_length=1, max_length=32)
 
     model_config = {"from_attributes": True}
 
@@ -358,7 +366,7 @@ class ConsultationCreate(BaseModel):
     patient_id: int
     from_org_id: int
     to_org_id: int
-    question: str = Field(min_length=1, max_length=1024)
+    question: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
 
 
 class ConsultationOut(ConsultationCreate):
@@ -367,16 +375,18 @@ class ConsultationOut(ConsultationCreate):
     expert_name: str
     opinion: str
     rating: int
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    question: str = Field(min_length=1, max_length=1024)
 
     model_config = {"from_attributes": True}
 
 
 class ConsultationAccept(BaseModel):
-    expert_name: str = Field(min_length=1, max_length=64)
+    expert_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
 
 
 class ConsultationComplete(BaseModel):
-    opinion: str = Field(min_length=1, max_length=2048)
+    opinion: str = Field(min_length=1, max_length=2048, pattern=NON_BLANK)
 
 
 class ConsultationRate(BaseModel):
@@ -386,7 +396,7 @@ class ConsultationRate(BaseModel):
 class ContractCreate(BaseModel):
     patient_id: int
     org_id: int
-    doctor_name: str = Field(min_length=1, max_length=64)
+    doctor_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     package: str = Field(default="basic", pattern="^(basic|standard|premium)$")
     signed_date: OptionalDateStr = ""
 
@@ -396,6 +406,8 @@ class ContractOut(ContractCreate):
     status: str
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     signed_date: str = ""
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    doctor_name: str = Field(min_length=1, max_length=64)
 
     model_config = {"from_attributes": True}
 
@@ -415,7 +427,7 @@ class ContractServiceOut(ContractServiceCreate):
 class SlotCreate(BaseModel):
     org_id: int
     resource_type: str = Field(pattern="^(outpatient|exam|lab)$")
-    resource_name: str = Field(min_length=1, max_length=128)
+    resource_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     # ⑨便捷寻医：门诊号源挂医师档案。检查/检验号源不对应某位医师，故可空。
     employee_id: int | None = None
     slot_date: DateStr
@@ -428,6 +440,8 @@ class SlotOut(SlotCreate):
     booked: int
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     slot_date: str
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    resource_name: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 
@@ -445,9 +459,9 @@ class AppointmentOut(AppointmentCreate):
 
 
 class BatchCreate(BaseModel):
-    batch_no: str = Field(min_length=1, max_length=32)
+    batch_no: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     center_org_id: int
-    item_name: str = Field(min_length=1, max_length=128)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     quantity: int = Field(gt=0, le=INT4_MAX)
 
 
@@ -455,6 +469,9 @@ class BatchOut(BatchCreate):
     id: int
     status: str
     dispatched_to_org_id: int | None
+    # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
+    batch_no: str = Field(min_length=1, max_length=32)
+    item_name: str = Field(min_length=1, max_length=128)
 
     model_config = {"from_attributes": True}
 
@@ -475,4 +492,4 @@ class WasteOut(WasteCreate):
 
 
 class WasteHandover(BaseModel):
-    handler_name: str = Field(min_length=1, max_length=64)
+    handler_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)

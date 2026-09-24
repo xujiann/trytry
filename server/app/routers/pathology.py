@@ -22,6 +22,7 @@ from ..datetypes import OptionalDateTimeSecStr
 from ..deps import get_current_user, require_roles, row_dict
 from ..models import ExamRequest, PathologySpecimen
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 
 router = APIRouter(
     prefix="/api/pathology", tags=["病理标本"], dependencies=[Depends(get_current_user)]
@@ -52,11 +53,11 @@ class SpecimenIn(BaseModel):
 
 
 class SpecimenReceive(BaseModel):
-    received_by: str = Field(min_length=1, max_length=64)
+    received_by: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
 
 
 class SpecimenReject(BaseModel):
-    reject_reason: str = Field(min_length=1, max_length=256)
+    reject_reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 class SpecimenAdvance(BaseModel):

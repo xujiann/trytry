@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..numtypes import INT4_MAX, INT4_MIN
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr
@@ -220,7 +221,7 @@ def overdue_followups(today: str | None = None, db: Session = Depends(get_db)):
 
 
 class CompleteIn(BaseModel):
-    result: str = Field(min_length=1, max_length=1024)
+    result: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
 
 
 @router.post(

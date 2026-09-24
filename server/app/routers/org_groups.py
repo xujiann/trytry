@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import Organization, OrgGroup, OrgGroupMember
+from ..texttypes import NON_BLANK
 
 router = APIRouter(
     prefix="/api/org-groups", tags=["机构协作分组"], dependencies=[Depends(get_current_user)]
@@ -23,7 +24,7 @@ GROUP_TYPE_NAMES = {"zone": "片区/分片", "alliance": "专科联盟", "grid":
 
 
 class GroupIn(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     group_type: str = Field(default="zone", pattern="^(zone|alliance|grid|other)$")
     # 可空：网格化管理常常没有"牵头单位"这一说
     lead_org_id: int | None = None
@@ -32,7 +33,7 @@ class GroupIn(BaseModel):
 
 class GroupUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
-    name: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=NON_BLANK)
     lead_org_id: int | None = None
     note: str | None = Field(default=None, max_length=256)
     active: bool | None = None

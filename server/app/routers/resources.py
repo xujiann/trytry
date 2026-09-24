@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import TimeStr
@@ -58,8 +59,8 @@ RESOURCE_STATUS = {"draft": "草稿", "published": "已发布", "withdrawn": "�
 class ResourceIn(BaseModel):
     org_id: int
     resource_type: str = Field(pattern="^(logistics|facility|equipment|meeting_room)$")
-    code: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     capacity: int = Field(default=1, ge=1, le=INT4_MAX)
     unit: str = Field(default="", max_length=16)
     location: str = Field(default="", max_length=256)
@@ -69,7 +70,7 @@ class ResourceIn(BaseModel):
 
 class ResourceUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
-    name: str | None = Field(default=None, min_length=1, max_length=128)
+    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
     capacity: int | None = Field(default=None, ge=1, le=INT4_MAX)
     location: str | None = Field(default=None, max_length=256)
     contact: str | None = Field(default=None, max_length=64)
@@ -190,7 +191,7 @@ def publish_resource(
 
 
 class WithdrawIn(BaseModel):
-    reason: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 @router.post(

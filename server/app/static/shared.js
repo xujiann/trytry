@@ -101,12 +101,16 @@ function readCookie(name) {
  * 数组逐条取 `msg`，去掉 pydantic 给自定义校验加的 "Value error, " 前缀，前面标上
  * 字段名（`loc` 去掉 body/query/path 这一层来源），多条用"；"连接。字符串原样返回；
  * 空的或认不出的形状回落到调用方给的兜底文案——宁可笼统，也不要 `[object Object]`。
+ *
+ * 必填文本只填了空格（P1-109，后端 `texttypes.NON_BLANK`）pydantic 的原话是
+ * "String should match pattern '\S'"，按错误类型与 pattern 认出来换成人话。
  */
 function errorText(detail, fallback) {
   if (Array.isArray(detail)) {
     const origins = ["body", "query", "path", "header", "cookie"];
     const parts = detail.map((e) => {
-      const msg = String((e && e.msg) || "").replace(/^Value error, /, "");
+      const blank = e && e.type === "string_pattern_mismatch" && e.ctx && e.ctx.pattern === "\\S";
+      const msg = blank ? "不能只填空格" : String((e && e.msg) || "").replace(/^Value error, /, "");
       const field = Array.isArray(e && e.loc)
         ? e.loc.filter((x) => !origins.includes(x)).join(".") : "";
       return field && msg ? `${field}：${msg}` : msg;

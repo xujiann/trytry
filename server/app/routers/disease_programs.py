@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..concurrency import insert_or_conflict
 from ..datetypes import OptionalDateStr
+from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
@@ -39,14 +40,14 @@ OUTCOMES = {"cured": "治愈", "improved": "好转", "stable": "稳定", "worsen
 
 
 class PathNode(BaseModel):
-    key: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    key: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     required: bool = True
 
 
 class ProgramIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     description: str = Field(default="", max_length=512)
     org_id: int | None = None
     path_nodes: list[PathNode] = Field(default_factory=list)
@@ -54,7 +55,7 @@ class ProgramIn(BaseModel):
 
 class ProgramUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
-    name: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=NON_BLANK)
     description: str | None = Field(default=None, max_length=512)
     path_nodes: list[PathNode] | None = None
     active: bool | None = None
@@ -67,7 +68,7 @@ class EnrollIn(BaseModel):
 
 
 class NodeRecordIn(BaseModel):
-    node_key: str = Field(min_length=1, max_length=32)
+    node_key: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     performed_at: OptionalDateStr = ""
     operator_name: str = Field(default="", max_length=64)
     result: str = Field(default="", max_length=256)

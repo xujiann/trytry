@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..database import get_db
 from ..datetypes import DateStr
+from ..texttypes import NON_BLANK
 from ..deps import (
     get_current_user,
     paginate,
@@ -437,8 +438,8 @@ TASK_STATUS = {
 
 class TaskCreate(BaseModel):
     org_id: int
-    problem: str = Field(min_length=1, max_length=512)
-    owner_name: str = Field(min_length=1, max_length=64)
+    problem: str = Field(min_length=1, max_length=512, pattern=NON_BLANK)
+    owner_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     due_date: DateStr
     indicator_key: str = Field(default="", max_length=32)
     measures: str = Field(default="", max_length=1024)

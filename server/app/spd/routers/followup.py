@@ -48,6 +48,7 @@ from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
 from ..service import close_followup_record
 from ...numtypes import INT4_MAX, INT4_MIN
+from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -367,8 +368,8 @@ class HealthCalendarOut(BaseModel):
 
 
 class FollowupRuleIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     scene: str = Field(default="inpatient", pattern="^(inpatient|outpatient|surgery|checkup)$")
     dept: str = Field(default="", max_length=64)
     program_code: str = Field(default="", max_length=32)
@@ -443,7 +444,7 @@ def list_followup_rules(
 class FollowupRulePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     dept: str = Field(default=UNSET, max_length=64)
     program_code: str = Field(default=UNSET, max_length=32)
     diagnosis_keywords: list[str] = Field(default=UNSET)
@@ -476,8 +477,8 @@ def update_followup_rule(rule_id: int, body: FollowupRulePatch, db: Session = De
 
 
 class QuestionnaireIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     scene: str = Field(default="inpatient", max_length=16)
     items: list[dict] = Field(default_factory=list)
     abnormal_rules: list[dict] = Field(default_factory=list)
@@ -537,7 +538,7 @@ def list_questionnaires(
 class QuestionnairePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     items: list[dict] = Field(default=UNSET)
     abnormal_rules: list[dict] = Field(default=UNSET)
     track_dept: str = Field(default=UNSET, max_length=64)
@@ -1312,8 +1313,8 @@ def list_qc_samples(
 
 
 class ReportTemplateIn(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
-    name: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     period: str = Field(default="daily", pattern="^(daily|weekly|monthly|custom)$")
     scope_level: str = Field(default="center", pattern="^(center|dept|grassroots|personal)$")
     sections: list[dict] = Field(default_factory=list)
@@ -1363,7 +1364,7 @@ def list_report_templates(
 class ReportTemplatePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     period: str = Field(default=UNSET, pattern="^(daily|weekly|monthly|custom)$")
     scope_level: str = Field(default=UNSET, pattern="^(center|dept|grassroots|personal)$")
     sections: list[dict] = Field(default=UNSET)
@@ -1393,7 +1394,7 @@ PUSH_TIME_PATTERN = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
 
 class ReportTaskIn(BaseModel):
     template_id: int
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     frequency: str = Field(default="daily", pattern="^(daily|weekly|monthly|custom)$")
     push_time: str = Field(default="08:00", pattern=PUSH_TIME_PATTERN)
     subscriber_ids: list[int] = Field(default_factory=list)
@@ -1451,7 +1452,7 @@ def list_report_tasks(status: str | None = None, db: Session = Depends(get_db)):
 class ReportTaskPatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
-    name: str = Field(default=UNSET, min_length=1, max_length=64)
+    name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
     frequency: str = Field(default=UNSET, pattern="^(daily|weekly|monthly|custom)$")
     push_time: str = Field(default=UNSET, pattern=PUSH_TIME_PATTERN)
     subscriber_ids: list[int] = Field(default=UNSET)

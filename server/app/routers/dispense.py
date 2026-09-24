@@ -38,6 +38,7 @@ from ..models import (
     utcnow,
 )
 from ..visibility import assert_org_writable, scope_org_list
+from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/dispense", tags=["西药发药"], dependencies=[Depends(get_current_user)])
 
@@ -52,7 +53,7 @@ class DispenseCreate(BaseModel):
 
 
 class ReverseIn(BaseModel):
-    reason: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 class DispenseItemOut(BaseModel):

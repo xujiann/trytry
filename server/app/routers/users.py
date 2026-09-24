@@ -15,6 +15,7 @@ from ..config import settings
 from ..visibility import assert_obj_org_writable
 from ..database import get_db
 from ..numtypes import INT4_MAX
+from ..texttypes import NON_BLANK
 from ..deps import (
     ROLE_NAMES,
     get_current_user,
@@ -64,12 +65,12 @@ def _check_role_exists(db: Session, role: str) -> None:
 
 
 class UserCreate(BaseModel):
-    username: str = Field(min_length=3, max_length=64)
+    username: str = Field(min_length=3, max_length=64, pattern=NON_BLANK)
     password: str
     full_name: str = Field(default="", max_length=64)
     # 阶段十一：角色不再写死正则——自定义角色也要能建号。
     # 合法性改为对 `roles` 表现查（见 _check_role_exists），非法角色仍 422。
-    role: str = Field(default="operator", min_length=2, max_length=32)
+    role: str = Field(default="operator", min_length=2, max_length=32, pattern=NON_BLANK)
     org_id: int | None = None
     # 等保 E1：建号即要求首登改密（初始口令是管理员代设的临时口令时置 true）。
     # 默认 false 而非 true——大量既有对接/测试以"建号即用"为前提，强制默认 true
@@ -517,7 +518,7 @@ def audit_stats(days: int = 30, db: Session = Depends(get_db)):
 
 
 class RoleUpdate(BaseModel):
-    role: str = Field(min_length=2, max_length=32)
+    role: str = Field(min_length=2, max_length=32, pattern=NON_BLANK)
 
 
 # 同上：守卫放 dependencies=[]，保证非管理员拿到的是 403 而不是一份字段清单。

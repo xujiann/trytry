@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_local
 from ..datetypes import OptionalDateTimeStr
 from ..numtypes import INT4_MAX, INT4_MIN
+from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
@@ -51,15 +52,15 @@ RELATION_NAMES = {
 
 class TemplateIn(BaseModel):
     consent_type: str = Field(pattern="^(surgery|anesthesia|transfusion|exam|treatment|other)$")
-    title: str = Field(min_length=1, max_length=128)
-    body: str = Field(min_length=1, max_length=8192)
+    title: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
+    body: str = Field(min_length=1, max_length=8192, pattern=NON_BLANK)
     version: str = Field(default="v1", max_length=16)
 
 
 class TemplateUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先标题 / 正文改成空串照收，患者签的是一份空白同意书
-    title: str | None = Field(default=None, min_length=1, max_length=128)
-    body: str | None = Field(default=None, min_length=1, max_length=8192)
+    title: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
+    body: str | None = Field(default=None, min_length=1, max_length=8192, pattern=NON_BLANK)
     version: str | None = Field(default=None, max_length=16)
     active: bool | None = None
 
@@ -215,14 +216,14 @@ class ConsentIn(BaseModel):
 
 
 class SignIn(BaseModel):
-    signer_name: str = Field(min_length=1, max_length=64)
+    signer_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     signer_relation: str = Field(default="self", pattern="^(self|spouse|parent|child|other)$")
 
 
 class RefuseIn(BaseModel):
-    signer_name: str = Field(min_length=1, max_length=64)
+    signer_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     signer_relation: str = Field(default="self", pattern="^(self|spouse|parent|child|other)$")
-    refuse_reason: str = Field(min_length=1, max_length=256)
+    refuse_reason: str = Field(min_length=1, max_length=256, pattern=NON_BLANK)
 
 
 def _consent_out(c: InformedConsent) -> dict:
@@ -393,7 +394,7 @@ def _pending(db: Session, consent_id: int, user: User) -> InformedConsent:
 
 
 class TreatmentIn(BaseModel):
-    treatment_name: str = Field(min_length=1, max_length=128)
+    treatment_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     treatment_code: str = Field(default="", max_length=64)
     site: str = Field(default="", max_length=64)
     dose: str = Field(default="", max_length=64)
@@ -502,7 +503,7 @@ def list_treatments_by_patient(
 
 class OutpatientNursingIn(BaseModel):
     nursing_level: str = Field(default="level3", pattern="^(special|level1|level2|level3)$")
-    content: str = Field(min_length=1, max_length=2048)
+    content: str = Field(min_length=1, max_length=2048, pattern=NON_BLANK)
     nurse_name: str = Field(default="", max_length=64)
     recorded_at: OptionalDateTimeStr = ""  # 时间戳真源（P1-100）：形状不对 422，合法值原样落库
 
