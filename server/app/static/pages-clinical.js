@@ -1555,21 +1555,30 @@ async function renderPathology() {
           : (s.status === "rejected" || s.status === "read" ? "—" : `<button class="btn sm" data-advance="${s.id}">推进</button>`)}</td></tr>`)}
     `)}`;
   $("#sp-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/pathology/specimens", formJson(e.target, ["request_id"]), "#sp-msg"); };
-  $("#page-body").onclick = (e) => {
+  // P2-38：核收 / 拒收 / 推进三处原生弹窗换成页内表单。拒收原因后端只收五个标准项之一（否则 422），
+  // 弹窗却让人手打——差一个字就被拒；现在从后端给的标准项里选。推进原先一律问"蜡块数或切片数"、
+  // 点取消照样推进；现在按当前环节只问该环节的数（取材问蜡块、制片问切片、阅片不问），取消就是放弃。
+  $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     if (d.receive) {
-      const who = prompt("核收人姓名"); if (!who) return;
-      return postAction(`/api/pathology/specimens/${d.receive}/receive`, { received_by: who }, "#sp-msg");
+      const v = await spdModal("标本核收", [{ name: "received_by", label: "核收人姓名", required: true }]);
+      if (!v) return;
+      return postAction(`/api/pathology/specimens/${d.receive}/receive`, v, "#sp-msg");
     }
     if (d.reject) {
-      const reason = prompt("拒收理由（标本量不足/未加固定液/标识不清/标本破损/申请单信息不符）");
-      if (!reason) return;
-      return postAction(`/api/pathology/specimens/${d.reject}/reject`, { reject_reason: reason }, "#sp-msg");
+      const v = await spdModal("标本拒收", [{ name: "reject_reason", label: "拒收原因", type: "select",
+        options: stats.reject_reason_options.map((r) => ({ value: r, label: r })) }]);
+      if (!v) return;
+      return postAction(`/api/pathology/specimens/${d.reject}/reject`, v, "#sp-msg");
     }
     if (d.advance) {
-      const n = prompt("蜡块数或切片数（该环节不适用可留空）") || "0";
-      return postAction(`/api/pathology/specimens/${d.advance}/advance`,
-        { block_count: Number(n), slide_count: Number(n) }, "#sp-msg");
+      const s = specimens.find((x) => x.id === Number(d.advance));
+      const field = s && s.status === "received" ? { name: "block_count", label: "蜡块数（取材）" }
+        : s && s.status === "embedded" ? { name: "slide_count", label: "切片数（制片）" } : null;
+      const v = await spdModal(`推进标本 ${s ? s.specimen_no : d.advance}（当前：${s ? s.status_name : "—"}）`,
+        field ? [{ ...field, type: "number", value: 0 }] : []);
+      if (!v) return;
+      return postAction(`/api/pathology/specimens/${d.advance}/advance`, v, "#sp-msg");
     }
   };
 }

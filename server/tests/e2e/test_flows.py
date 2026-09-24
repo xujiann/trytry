@@ -1035,6 +1035,57 @@ def test_互联网诊疗回复在页内表单里录入_医师必填_处方号写
     assert (got["status"], got["doctor_name"], got["prescription_id"]) == ("replied", "E2E全科医生", rx_id), got
 
 
+@pytest.fixture(scope="session")
+def pathology_seed(base_url, seed):
+    """一张病理申请单下两份待核收的标本：一份走完核收 → 取材 → 制片，一份拒收。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    req = post("/api/exams", {"patient_id": seed["patient"]["id"], "from_org_id": seed["org"]["id"],
+                              "center_type": "pathology", "item_code": "E2E-BL", "item_name": "E2E活检"}, token)
+    return [post("/api/pathology/specimens", {"request_id": req["id"], "site": site}, token)
+            for site in ("E2E胃窦", "E2E结肠")]
+
+
+def test_病理标本核收_拒收_推进都在页内表单里录入(page, base_url, pathology_seed):
+    """P2-38：拒收原因后端只收五个标准项之一，原生弹窗却让人手打——差一个字就 422；推进一律问
+    "蜡块数或切片数"、点取消照样推进。现在拒收从后端给的标准项里选，推进按环节只问该环节的数。"""
+    keep, drop = (s["id"] for s in pathology_seed)
+
+    def specimen(sid):
+        return page.evaluate(
+            "async (id) => (await api('/api/pathology/specimens')).find((s) => s.id === id)", sid)
+
+    _login(page, base_url)
+    _open_page(page, "pathology", "病理标本")
+    page.click(f'button[data-reject="{drop}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"reject_reason": "未加固定液"}))
+    assert (specimen(drop)["status"], specimen(drop)["reject_reason"]) == ("rejected", "未加固定液")
+
+    page.click(f'button[data-receive="{keep}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"received_by": "E2E病理技师"}))
+    page.click(f'button[data-advance="{keep}"]')
+    expect(page.locator("form.panel:has(button[data-cancel])")).to_contain_text("蜡块数")
+    _redrawn(page, lambda: _spd_modal(page, {"block_count": "3"}))
+    page.click(f'button[data-advance="{keep}"]')
+    expect(page.locator("form.panel:has(button[data-cancel])")).to_contain_text("切片数")
+    _redrawn(page, lambda: _spd_modal(page, {"slide_count": "6"}))
+    got = specimen(keep)
+    assert (got["status"], got["received_by"], got["block_count"], got["slide_count"]) == (
+        "slided", "E2E病理技师", 3, 6), got
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 
