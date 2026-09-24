@@ -851,6 +851,9 @@ def region_stats(
 
     与工作台分开是因为这是**可下钻的分析页**，参数组合多、返回体大，
     塞进工作台会让首屏变慢。
+
+    ⚠️ `period` **目前不生效**：这里算的是当前在管（`active`）档案的结构快照，
+    "按期间看"先要回答按哪个期间——口径待裁定（P1-62，见 docs/待裁定事项清单.md）。
     """
     orgs = _scope(db, user, org_id)
     enroll_query = _apply_scope(db.query(SpdEnrollment), SpdEnrollment.org_id, orgs).filter(

@@ -45,6 +45,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_datestr_single_source as datestr
     import test_list_pagination_ratchet as pagination
     import test_orphan_endpoints as orphan
+    import test_periodstr_single_source as periodstr
     import test_stage14_concurrency as concurrency
     import test_stage15_horizontal as horizontal
     import test_unscopable_patient_reads as unscopable
@@ -95,6 +96,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(datequery.KNOWN_BARE_DATE_PARAMS), "tests/test_date_query_params.py"),
         ("日期入参", "请求体里注解为裸 str 的日期字段", len(datestr.KNOWN_BARE_BODY_DATE_FIELDS),
          "tests/test_datestr_single_source.py"),
+        ("日期入参", "未经校验的月度期间查询参数", len(periodstr.KNOWN_BARE_MONTH_PARAMS),
+         "tests/test_periodstr_single_source.py"),
+        ("日期入参", "名字像期间、按设计不是 YYYY-MM 的豁免", len(periodstr.NOT_A_MONTH),
+         "tests/test_periodstr_single_source.py"),
         ("功能完善", "该有界面却没有的端点（孤儿）", len(orphan.KNOWN_ORPHANS),
          "tests/test_orphan_endpoints.py"),
         ("功能完善", "按设计不需要界面的豁免路径", len(orphan.EXEMPT_PATHS),

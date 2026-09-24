@@ -212,3 +212,128 @@ def test_月度正则不得在别处重写():
         "变成一份全空的报表：\n  " + "\n  ".join(offenders)
         + "\n\nbody 字段请改用 datetypes.PeriodStr，查询参数请用 deps.require_month。"
     )
+
+
+# ------------------------------------------------------------ ④ 棘轮：月度期间查询参数（P1-62）
+#
+# ③ 盯的是"别处不许再写月度正则"——从来没写过正则、只是裸 `str` 的 `period` 查询参数
+# 不在它的视野里（P1-58 在日期那头遇到的是同一个盲区）。2026-09-24 扫出 12 处，逐个核过、
+# 实测、收口；这条守着别再长出来。
+#
+# 判据推导：路由函数里名为 period / month（或以 _period / _month 结尾）的裸 `str` 参数，
+# 看它有没有交给守卫——**跟进一层本模块 helper**：`analytics.performance_report` 把
+# `period` 交给 `build_variable_index`，后者再交给 `month_bounds`；只看函数体会把它误报。
+
+MONTH_GUARDS = frozenset(
+    {"require_month", "month_bounds", "period_bounds", "check_assess_period", "_period_range"}
+)
+
+#: 名字像期间、按设计却不是 `YYYY-MM` 的查询参数。**只许变少**，每条写理由。
+NOT_A_MONTH: dict[str, str] = {
+    "spd/routers/assess.py::list_scores::period":
+        "按考核期标签等值筛；修复前写进库的垃圾期（如 2026-8）要能按原标签查出来处置",
+    "spd/routers/assess.py::score_analysis::period": "同上：考核期标签，不是查询窗口",
+    "spd/routers/followup.py::list_report_templates::period":
+        "报表模板的推送周期枚举（daily/weekly/monthly/custom），不是期间",
+    "spd/routers/workbench.py::region_stats::period":
+        "声明了却从不读，口径待裁定（docs/待裁定事项清单.md 的 P1-62 那条）",
+}
+
+#: 未经校验的 `YYYY-MM` 查询参数（P1-62）。2026-09-24 清零；空集合照样是棘轮。
+KNOWN_BARE_MONTH_PARAMS: set[str] = set()
+
+_HTTP_VERBS = ("get", "post", "put", "patch", "delete")
+
+
+def _is_month_name(name: str) -> bool:
+    return name in ("period", "month") or name.endswith(("_period", "_month"))
+
+
+def _directly_guarded(func) -> set[str]:
+    names = set()
+    for sub in ast.walk(func):
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in MONTH_GUARDS:
+            names.update(a.id for a in sub.args if isinstance(a, ast.Name))
+    return names
+
+
+def _guarding_helpers(tree) -> dict[str, set[int]]:
+    """本模块里"把自己的某个形参交给守卫"的函数：{函数名: {形参下标}}。"""
+    helpers: dict[str, set[int]] = {}
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            guarded = _directly_guarded(fn)
+            idx = {i for i, a in enumerate(fn.args.args) if a.arg in guarded}
+            if idx:
+                helpers[fn.name] = idx
+    return helpers
+
+
+def _month_params() -> tuple[set[str], set[str]]:
+    """(全部像期间的查询参数, 其中未经守卫的)。"""
+    every, bare = set(), set()
+    for base in (APP_DIR / "routers", APP_DIR / "spd" / "routers"):
+        for path in sorted(base.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            helpers = _guarding_helpers(tree)
+            rel = path.relative_to(APP_DIR).as_posix()
+            for func in ast.walk(tree):
+                if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if not any(
+                    isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                    and d.func.attr in _HTTP_VERBS
+                    for d in func.decorator_list
+                ):
+                    continue
+                guarded = _directly_guarded(func)
+                for sub in ast.walk(func):
+                    if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) \
+                            and sub.func.id in helpers:
+                        guarded.update(
+                            sub.args[i].id for i in helpers[sub.func.id]
+                            if i < len(sub.args) and isinstance(sub.args[i], ast.Name)
+                        )
+                for arg in list(func.args.args) + list(func.args.kwonlyargs):
+                    if arg.annotation is None or not _is_month_name(arg.arg):
+                        continue
+                    if ast.unparse(arg.annotation) not in ("str", "str | None"):
+                        continue
+                    key = f"{rel}::{func.name}::{arg.arg}"
+                    every.add(key)
+                    if arg.arg not in guarded:
+                        bare.add(key)
+    return every, bare
+
+
+def test_月度查询参数判据自证():
+    every, bare = _month_params()
+    print(f"\n[月度期间查询参数] 共 {len(every)} 处，未经守卫 {len(bare)} 处"
+          f"（其中按设计不是 YYYY-MM 的豁免 {len(NOT_A_MONTH)} 处）")
+    assert len(every) >= 15, "数到的期间参数太少，扫描面可能不对"
+    # 跟进一层 helper 真的生效：performance_report 经 build_variable_index → month_bounds
+    assert "routers/analytics.py::performance_report::period" in every
+    assert "routers/analytics.py::performance_report::period" not in bare
+
+
+def test_不得新增未经校验的月度查询参数():
+    new = sorted(_month_params()[1] - NOT_A_MONTH.keys() - KNOWN_BARE_MONTH_PARAMS)
+    assert new == [], (
+        "以下月度期间查询参数是裸 `str`、没经过任何月度校验——`2026-9`、`abc` 会得到 200 的空表：\n  "
+        + "\n  ".join(new)
+        + "\n\n用 deps.require_month（只校验）或 deps.month_bounds（要区间）；"
+        "若它按设计就不是 YYYY-MM（标签/枚举），进 NOT_A_MONTH 并写明理由。"
+    )
+
+
+def test_月度查询参数名单与豁免都只许变少():
+    every, bare = _month_params()
+    stale = sorted(KNOWN_BARE_MONTH_PARAMS - bare)
+    assert stale == [], "这些已经接上校验了，请从 KNOWN_BARE_MONTH_PARAMS 划掉：\n  " + "\n  ".join(stale)
+    gone = sorted(k for k in NOT_A_MONTH if k not in bare)
+    assert gone == [], (
+        "这些豁免已经不成立（参数没了，或已经接上校验）——请从 NOT_A_MONTH 划掉：\n  "
+        + "\n  ".join(gone)
+    )
