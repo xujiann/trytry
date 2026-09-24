@@ -453,9 +453,9 @@ def acknowledge_critical(
     report_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """医师确认接收危急值通知（notified → acknowledged）。"""
-    report = db.get(ExamReport, report_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail="报告不存在")
+    # P0-27：原先只看角色——乙院医生按报告号就能替甲院「确认接收」危急值，而处置轨迹它读不到
+    # （P0-21 已收口）。与读侧同一个判定：隔一跳按申请单的患者判可见性并留痕；先判归属再判状态。
+    report = _report_visible_or_404(db, report_id, user, resource="exam_critical_action")
     if not report.critical:
         raise HTTPException(status_code=422, detail="非危急值报告，无需确认")
     # M-1 整改：存量危急报告（迁移前 critical_status=''）等同"已通知"，可正常进入闭环
@@ -486,9 +486,8 @@ def resolve_critical(
     user: User = Depends(get_current_user),
 ):
     """处置反馈（acknowledged → resolved）：须先确认接收后方可反馈处置结果。"""
-    report = db.get(ExamReport, report_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail="报告不存在")
+    # P0-27：同上。「处置反馈」一落库危急值就算闭环——无关机构写一句就能把别家的危急值关掉。
+    report = _report_visible_or_404(db, report_id, user, resource="exam_critical_action")
     if not report.critical:
         raise HTTPException(status_code=422, detail="非危急值报告，无需处置反馈")
     if report.critical_status != "acknowledged":

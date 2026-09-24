@@ -168,8 +168,24 @@ def test_recognition_stats(client, admin, setup):
 # ---------------------------------------------------------------- 2 危急值闭环
 
 
+def _requesting_doctor(client, admin, setup):
+    """申请机构（卫生院）的医师：危急值站内消息发给的就是他们，确认接收与处置反馈也由他们做。
+
+    P0-27 之前这里一直由县医院那位出报告的医师自己确认、自己反馈——他与患者没有任何关系
+    （申请单挂在卫生院名下、报告又没走领取），闭环两步现在要判患者可见性，他过不去。
+    """
+    client.post(
+        "/api/users",
+        json={"username": "dp_town_doc", "password": "pass123456", "role": "doctor",
+              "org_id": setup["township"]["id"]},
+        headers=admin,
+    )  # 第二次调用撞 409 无妨，登录拿的是同一个人
+    return login(client, "dp_town_doc", "pass123456")
+
+
 def test_critical_closed_loop(client, admin, setup):
     doc = setup["doctor"]
+    town_doc = _requesting_doctor(client, admin, setup)
     pid, org = setup["adult"]["id"], setup["township"]["id"]
 
     req = _order_exam(client, doc, pid, org, "K-CRIT", "血钾", "lab").json()
@@ -190,18 +206,21 @@ def test_critical_closed_loop(client, admin, setup):
     assert client.get("/api/exams/critical/unacknowledged", headers=admin).json() == []
 
     # 未确认前不可处置反馈
-    assert client.post(f"/api/exams/reports/{rid}/resolve", json={"note": "补钾"}, headers=doc).status_code == 409
+    assert client.post(f"/api/exams/reports/{rid}/resolve", json={"note": "补钾"}, headers=town_doc).status_code == 409
     # 经办人员无权确认（诊疗性质操作限医师）
     assert client.post(f"/api/exams/reports/{rid}/acknowledge", headers=setup["operator"]).status_code == 403
+    # 与患者无关的医师（县医院这位出报告时没走领取）确认不了，也反馈不了（P0-27）
+    assert client.post(f"/api/exams/reports/{rid}/acknowledge", headers=doc).status_code == 403
 
-    acked = client.post(f"/api/exams/reports/{rid}/acknowledge", headers=doc)
+    acked = client.post(f"/api/exams/reports/{rid}/acknowledge", headers=town_doc)
     assert acked.status_code == 200 and acked.json()["critical_status"] == "acknowledged"
     # 重复确认 → 409；确认后不再出现在超时清单
-    assert client.post(f"/api/exams/reports/{rid}/acknowledge", headers=doc).status_code == 409
+    assert client.post(f"/api/exams/reports/{rid}/acknowledge", headers=town_doc).status_code == 409
     assert client.get(f"/api/exams/critical/unacknowledged?today={tomorrow}", headers=admin).json() == []
 
+    assert client.post(f"/api/exams/reports/{rid}/resolve", json={"note": "x"}, headers=doc).status_code == 403
     resolved = client.post(
-        f"/api/exams/reports/{rid}/resolve", json={"note": "已静脉补液并复查"}, headers=doc
+        f"/api/exams/reports/{rid}/resolve", json={"note": "已静脉补液并复查"}, headers=town_doc
     )
     assert resolved.status_code == 200 and resolved.json()["critical_status"] == "resolved"
 
@@ -223,7 +242,8 @@ def test_non_critical_report_needs_no_loop(client, admin, setup):
         f"/api/exams/{req['id']}/report", json={"conclusion": "窦性心律"}, headers=doc
     ).json()
     assert report["critical_status"] == ""
-    assert client.post(f"/api/exams/reports/{report['id']}/acknowledge", headers=doc).status_code == 422
+    town_doc = _requesting_doctor(client, admin, setup)
+    assert client.post(f"/api/exams/reports/{report['id']}/acknowledge", headers=town_doc).status_code == 422
 
 
 # ---------------------------------------------------------------- 3 审方规则深化
