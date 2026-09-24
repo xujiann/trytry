@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
+from ..deps import get_current_user, paginate, require_date, require_roles
 from ..models import (
     Admission,
     InpatientOrder,
@@ -495,6 +495,8 @@ def list_handovers(
     if ward_id is not None:
         query = query.filter(ShiftHandover.ward_id == ward_id)
     if handover_date:
+        # 等值匹配：`2026-9-1` 会让"这天没有交接记录"，不报错（P1-58）
+        handover_date = require_date(handover_date, field="handover_date")
         query = query.filter(ShiftHandover.handover_date == handover_date)
     return [
         {

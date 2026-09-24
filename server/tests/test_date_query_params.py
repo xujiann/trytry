@@ -131,6 +131,7 @@ FILTER_PARAMS = [
     ("/api/medwaste/handler-stats", "end_date"),
     ("/api/appointments/slots", "slot_date"),
     ("/api/mgmt/rosters", "duty_date"),
+    ("/api/inpatient/handovers", "handover_date"),
 ]
 
 #: 形状错、日历上不存在、不补零、ISO 基本格式——前两类此前多是 200 空集，
@@ -181,7 +182,6 @@ GUARDS = frozenset({"require_date", "resolve_business_date"})
 
 #: 还留在裸 `str`、未经上面守卫的日期查询参数（P1-58）。**只许变少。**
 KNOWN_BARE_DATE_PARAMS: set[str] = {
-    "routers/clinical_docs.py::list_handovers::handover_date",
     "routers/surgery.py::list_schedules::scheduled_date",
 }
 
