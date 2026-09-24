@@ -49,6 +49,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_frontend_prompt_guard as promptguard
     import test_datestr_single_source as datestr
     import test_frontend_destructive_confirm_guard as destructive
+    import test_filter_ids_not_truncated as truncids
     import test_list_pagination_ratchet as pagination
     import test_orphan_endpoints as orphan
     import test_periodstr_single_source as periodstr
@@ -90,6 +91,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_list_pagination_ratchet.py"),
         ("列表分页", "等机构/患者收口裁定后才能切", len(pagination.HELD_PENDING_SCOPE_DECISION),
          "tests/test_list_pagination_ratchet.py"),
+        ("列表分页", "筛选用的 id 名单先截断再用（搜索名单静默少一截）", truncids.BASELINE,
+         "tests/test_filter_ids_not_truncated.py"),
         ("并发冲突", "写唯一约束表却未处理冲突", len(concurrency.KNOWN_UNGUARDED_UNIQUE_WRITES),
          "tests/test_stage14_concurrency.py"),
         ("并发冲突", "已审计的写入点", concurrency.BASELINE_COVERED_WRITE_SITES,

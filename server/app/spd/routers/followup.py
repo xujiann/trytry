@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1103,10 +1103,8 @@ def list_call_tasks(
     if phone:
         query = query.filter(SpdCallTask.phone.contains(phone))
     if patient_name:
-        ids = [
-            p.id for p in db.query(Patient).filter(Patient.name.contains(patient_name)).limit(200)
-        ]
-        query = query.filter(SpdCallTask.patient_id.in_(ids or [0]))
+        # 子查询而不是先取患者号：原先 `.limit(200)` 取任意 200 个同名患者再筛，常见姓氏一搜名单少一截（P1-83）
+        query = query.filter(SpdCallTask.patient_id.in_(select(Patient.id).where(Patient.name.contains(patient_name))))
     # 先校验再拼串：非法值拼成的时间戳在真 PG 上转换失败是 500（P1-58）
     if date_from:
         date_from = require_date(date_from, field="date_from")

@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -732,8 +732,8 @@ def list_candidates(
         if value is not None and value != "":
             query = query.filter(column == value)
     if keyword:
-        ids = [p.id for p in db.query(Patient).filter(Patient.name.contains(keyword)).limit(500)]
-        query = query.filter(SpdCandidate.patient_id.in_(ids or [0]))
+        # 子查询而不是先取患者号：原先 `.limit(500)` 取任意 500 个同名患者再筛，常见姓氏一搜名单少一截（P1-83）
+        query = query.filter(SpdCandidate.patient_id.in_(select(Patient.id).where(Patient.name.contains(keyword))))
     rows = paginate(query.order_by(SpdCandidate.id.desc()), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     return [_candidate_out(r, briefs.get(r.patient_id)) for r in rows]
@@ -990,13 +990,10 @@ def list_enrollments(
             id_card_match = pii_filter(Patient.id_card_idx, Patient.id_card, keyword)
         else:
             id_card_match = Patient.id_card.contains(keyword)
-        ids = [
-            p.id
-            for p in db.query(Patient)
-            .filter(Patient.name.contains(keyword) | id_card_match)
-            .limit(500)
-        ]
-        query = query.filter(SpdEnrollment.patient_id.in_(ids or [0]))
+        # 子查询而不是先取患者号：原先 `.limit(500)` 取任意 500 个匹配的患者再筛，
+        # 常见姓氏或证件号地区前缀一搜，名单少一截且无从察觉（P1-83）
+        query = query.filter(SpdEnrollment.patient_id.in_(
+            select(Patient.id).where(Patient.name.contains(keyword) | id_card_match)))
     rows = paginate(query.order_by(SpdEnrollment.id.desc()), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     return [_enroll_out(r, briefs.get(r.patient_id)) for r in rows]
