@@ -404,18 +404,26 @@ def create_vital(
 @router.get("/admissions/{admission_id}/vitals", response_model=list[VitalSignOut])
 def list_vitals(
     admission_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 500,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """体温单数据：按测量时刻升序，供前端画趋势曲线。"""
+    """体温单数据：每页按测量时刻升序，供前端画趋势曲线；从最近一次往前翻页（P1-81）。
+
+    `offset=0` 是最近 `limit` 次测量。原先升序取前 500 条，一次住院记满 500 次之后截掉的恰好是
+    最新的那一端：体温单停在第 500 次，移动端查房的「最近 8 次」其实是几周前的。
+    不超过一页时与原先逐字节相同。
+    """
     _admission_or_404(db, admission_id, user, resource="vital_sign")
-    rows = (
+    newest_first = paginate(
         db.query(VitalSignRecord)
         .filter(VitalSignRecord.admission_id == admission_id)
-        .order_by(VitalSignRecord.measured_at, VitalSignRecord.id)
-        .limit(500)
-        .all()
+        .order_by(VitalSignRecord.measured_at.desc(), VitalSignRecord.id.desc()),
+        response, offset, limit,
     )
+    rows = list(reversed(newest_first))
     return [
         {
             "id": r.id,

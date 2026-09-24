@@ -74,7 +74,9 @@ import warnings
 #: → 118（同日切完第四批里 8 个有收口或按设计全域可见的端点）
 #: → 117（同日修 drgs:in_stay_alerts，预警的输入不该有上限）
 #: → 102（同日切完第五批 A 类里 15 个纯分页的端点）
-BASELINE_SILENT_TRUNCATION = 102
+#: → 99（2026-09-24 死因报告卡导出 / 区域结构分析 / 团队工作台三处去掉上限，P1-50 / P1-51；当时没随手降基线，这里补记）
+#: → 98（同日体温单改从最近一次往前翻页，P1-81）
+BASELINE_SILENT_TRUNCATION = 98
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
