@@ -594,12 +594,21 @@ async function renderTelemedicine() {
           : c.status === "replied" ? `<button class="btn secondary" data-close="${c.id}">结束</button>` : "—"}</td></tr>`;
     }))}`;
   $("#tm-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/telemedicine/consults", formJson(e.target, ["patient_id", "org_id"]), "#tm-msg"); };
-  $("#page-body").onclick = (e) => {
+  // P2-38：回复三连问换成页内表单。医师姓名原先留空就记成"医师"——这条回复是谁答的，
+  // 事后查不出来；现在必填。处方号写成认不出的样子原样交给后端报人话，不再悄悄变成"不关联"。
+  $("#page-body").onclick = async (e) => {
     const { reply, close } = e.target.dataset;
     if (reply) {
-      const text = prompt("回复内容"); if (!text) return;
-      const rxid = prompt("关联处方ID（续方时填写，可空）");
-      return postAction(`/api/telemedicine/consults/${reply}/reply`, { reply: text, doctor_name: prompt("医师姓名") || "医师", prescription_id: rxid ? Number(rxid) : null }, "#tm-msg");
+      const v = await spdModal(`回复咨询 ${reply}`, [
+        { name: "reply", label: "回复内容（必填）", type: "textarea" },
+        { name: "doctor_name", label: "回复医师姓名", required: true },
+        { name: "prescription_id", label: "关联处方ID（续方时填写，须是该患者已通过审方的处方；可空）" },
+      ]);
+      if (!v) return;
+      const rx = v.prescription_id;
+      return postAction(`/api/telemedicine/consults/${reply}/reply`, {
+        reply: v.reply, doctor_name: v.doctor_name,
+        prescription_id: rx === "" ? null : (Number.isNaN(Number(rx)) ? rx : Number(rx)) }, "#tm-msg");
     }
     if (close) return postAction(`/api/telemedicine/consults/${close}/close`, null, "#tm-msg");
   };

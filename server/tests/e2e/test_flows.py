@@ -988,6 +988,53 @@ def test_集中审方的审方与点评都在页内表单里录入_取消即放�
     assert [(r["grade"], r["issues"]) for r in mine] == [("unreasonable", "E2E重复用药")], mine
 
 
+@pytest.fixture(scope="session")
+def consult_seed(base_url, seed):
+    """一条待回复的续方咨询，以及同一患者一张已自动通过审方的处方（续方要关联它）。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    pid, oid = seed["patient"]["id"], seed["org"]["id"]
+    rx = post("/api/prescriptions", {"patient_id": pid, "org_id": oid, "diagnosis_name": "E2E高血压",
+                                     "items": [{"drug_code": "E2E-AML", "drug_name": "E2E氨氯地平", "daily_dose": 5}]},
+              token)
+    consult = post("/api/telemedicine/consults",
+                   {"patient_id": pid, "org_id": oid, "consult_type": "repeat_rx", "question": "E2E降压药吃完了，想续方"},
+                   token)
+    return {"rx": rx, "consult": consult}
+
+
+def test_互联网诊疗回复在页内表单里录入_医师必填_处方号写错报人话(page, base_url, consult_seed):
+    """P2-38：回复原先三连问，医师姓名留空就记成"医师"（事后查不出是谁答的），处方号写成认不出的
+    样子会被 Number() 变成 NaN、序列化成 null——悄悄变成"不关联"。现在医师必填，处方号原样交后端判。"""
+    cid, rx_id = consult_seed["consult"]["id"], consult_seed["rx"]["id"]
+    assert consult_seed["rx"]["status"] == "auto_passed", consult_seed["rx"]  # 续方只收已通过审方的
+    _login(page, base_url)
+    _open_page(page, "telemedicine", "互联网+诊疗")
+
+    page.click(f'button[data-reply="{cid}"]')
+    _spd_modal(page, {"reply": "E2E可续方", "doctor_name": "E2E全科医生", "prescription_id": "三十一"})
+    expect(page.locator("#tm-msg")).to_contain_text("prescription_id")
+
+    page.click(f'button[data-reply="{cid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"reply": "E2E可续方，按原剂量", "doctor_name": "E2E全科医生",
+                                             "prescription_id": str(rx_id)}))
+    consults = page.evaluate("async () => await api('/api/telemedicine/consults')")
+    got = next(c for c in consults if c["id"] == cid)
+    assert (got["status"], got["doctor_name"], got["prescription_id"]) == ("replied", "E2E全科医生", rx_id), got
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 
