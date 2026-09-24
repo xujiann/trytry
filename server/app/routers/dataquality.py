@@ -88,7 +88,8 @@ def id_card_invalid_reason(value: str) -> str:
     value = value.strip().upper()
     if len(value) != 18:
         return f"身份证号长度应为18位，实际 {len(value)} 位"
-    if not value[:17].isdigit():
+    # 只认 ASCII（P1-97）：全角数字原先能转 int、被判为合法；上标 / 圈码数字让整条规则抛异常
+    if not (value[:17].isascii() and value[:17].isdigit()):
         return "身份证号前17位应全为数字"
     total = sum(int(value[i]) * _ID_CARD_WEIGHTS[i] for i in range(17))
     expected = _ID_CARD_CHECK_CODES[total % 11]

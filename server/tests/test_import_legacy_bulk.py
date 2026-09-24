@@ -199,3 +199,33 @@ def test_error_rows_written_to_errors_csv_and_run_continues(tmp_path):
     assert len(rows) == 3
     assert rows[0]["line_no"] == "2" and "患者不存在" in rows[0]["error"]
     assert rows[0]["id_card"] == "999999999999999999"  # 原始列保留，便于修正后重导
+
+
+def test_数值格写成NaN_Infinity_上标数字_进错误行而不是中断整批(tmp_path):
+    """P1-97：金额「NaN」「Infinity」「sNaN」原先让 `_parse_money` 在比较 / quantize 时抛 `InvalidOperation`，
+    整个导入中断、错误行明细也不落盘；剂量「nan」「inf」过得了 float()、NaN 与 0 比较恒为假，照存进处方明细；
+    天数「①」过了 isdigit、int() 抛异常，同样整批中断；天数越过 integer 在生产库上写库即失败。都该进错误行，别的行照导。"""
+    money = tmp_path / "nan_money.csv"
+    money.write_text(
+        "id_card,ehc_no,org_name,bill_type,settle_date,total_amount,insurance_pay,self_pay\n"
+        "320981196501012341,,示例镇中心卫生院,outpatient,2026-07-05,NaN,,\n"
+        "320981196501012341,,示例镇中心卫生院,outpatient,2026-07-06,Infinity,,\n"
+        "320981196501012341,,示例镇中心卫生院,outpatient,2026-07-07,100.00,sNaN,\n"
+        "320981196501012341,,示例镇中心卫生院,outpatient,2026-07-08,88.00,,\n",
+        encoding="utf-8",
+    )
+    rep = run_import("settlements", money, dry_run=True)
+    assert rep.imported == 1 and [line for line, _ in rep.errors] == [2, 3, 4], rep.errors
+
+    rx = tmp_path / "odd_rx.csv"
+    rx.write_text(
+        "rx_no,id_card,ehc_no,org_name,rx_date,drug_code,drug_name,daily_dose,days\n"
+        "RXP197A,320981196501012341,,示例镇中心卫生院,2026-07-01,X01,甲药,nan,7\n"
+        "RXP197B,320981196501012341,,示例镇中心卫生院,2026-07-01,X02,乙药,inf,7\n"
+        "RXP197C,320981196501012341,,示例镇中心卫生院,2026-07-01,X03,丙药,10,①\n"
+        "RXP197D,320981196501012341,,示例镇中心卫生院,2026-07-01,X04,丁药,10,99999999999\n"
+        "RXP197E,320981196501012341,,示例镇中心卫生院,2026-07-01,X05,戊药,10,7\n",
+        encoding="utf-8",
+    )
+    rep = run_import("prescriptions", rx, dry_run=True)
+    assert rep.imported == 1 and [line for line, _ in rep.errors] == [2, 3, 4, 5], rep.errors

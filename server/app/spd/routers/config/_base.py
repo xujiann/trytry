@@ -31,7 +31,8 @@ def _conditions(raw: list[dict] | None) -> list[dict]:
 
 def _bump_version(version: str) -> str:
     """v1 → v2。非 v 开头的自定义版本号原样保留并追加 -r2，不猜用户的编号规则。"""
-    if version.startswith("v") and version[1:].isdigit():
+    # 只认 ASCII（P1-97）：「v²」过了 isdigit，下一行 int() 抛异常，复制这份模板即 500
+    if version.startswith("v") and version[1:].isascii() and version[1:].isdigit():
         return f"v{int(version[1:]) + 1}"
     return f"{version}-r2"
 

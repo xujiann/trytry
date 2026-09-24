@@ -40,6 +40,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     """(分组, 指标, 值, 判据出处)。**只读常量，不重跑扫描**（理由见模块 docstring）。"""
     import test_api_contract_governance as contract
     import test_ascii_digit_patterns as asciidigits
+    import test_ascii_digit_parsing as asciiparse
     import test_body_fk_exists as bodyfk
     import test_body_finite_numbers as bodyfinite
     import test_body_numeric_capacity as bodynumcap
@@ -138,6 +139,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          bodyraw.SAME_COLUMN_BASELINE, "tests/test_body_raw_dict.py"),
         ("请求体契约", "写同一列而口径按设计不同的列（逐条写明理由）",
          len(bodyraw.SAME_COLUMN_BY_DESIGN), "tests/test_body_raw_dict.py"),
+        ("数值入参", "isdigit() / isdecimal() / isnumeric() 不配 isascii()（放行全角 / 上标 / 圈码，下一步转换即炸；实测 10 处：改完 8、认证验签 2 处待复核列豁免 → 0）",
+         asciiparse.BASELINE, "tests/test_ascii_digit_parsing.py"),
+        ("数值入参", "数字判断不配 isascii() 的豁免（字符类判断 / 待裁定 / 认证验签待复核，逐条写明理由）",
+         len(asciiparse.BY_DESIGN), "tests/test_ascii_digit_parsing.py"),
         ("请求体契约", "写同一列的入口比出参约束松（存得进去、读不出来，库里一行就让整个响应 500；1 → 0 已清零）",
          respwriters.BASELINE, "tests/test_response_constraint_writers.py"),
         ("时间口径", "app/ 里绕过 clock.today() 的 date.today()", clock.DATE_TODAY_BASELINE,

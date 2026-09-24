@@ -311,7 +311,7 @@ class Settings(BaseSettings):
         if not os.environ.get("MEDPLAT_REDIS_URL", ""):
             workers = os.environ.get("MEDPLAT_WORKERS", "").strip()
             multi_signals = []
-            if workers.isdigit() and int(workers) > 1:
+            if workers.isascii() and workers.isdigit() and int(workers) > 1:
                 multi_signals.append(f"MEDPLAT_WORKERS={workers}")
             if os.environ.get("MEDPLAT_MIGRATE_ON_START", "").strip() == "0":
                 multi_signals.append("MEDPLAT_MIGRATE_ON_START=0")

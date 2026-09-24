@@ -784,7 +784,9 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
     if obr is None:
         raise HTTPException(status_code=422, detail="缺少 OBR 申请信息段")
     order_no = (_hl7_field(obr, 2) or _hl7_field(obr, 3)).split("^")[0].strip()
-    if not order_no.isdigit():
+    # 只认 ASCII（P1-97）：`isdigit()` 放行上标「²」、圈码「①」，下一行 int() 抛异常，被入站兜底成笼统的
+    # 「消息解析失败」——对方系统看不出是单号不对
+    if not (order_no.isascii() and order_no.isdigit()):
         raise HTTPException(status_code=422, detail="OBR-2/OBR-3 申请单号缺失或非平台单号")
     request = db.get(ExamRequest, int(order_no))
     if request is None:
@@ -901,7 +903,7 @@ def _do_fhir_diagnostic_report(resource: dict, db: Session, source_system: str):
             status_code=422, detail="basedOn[0].reference 必须为 ServiceRequest/{申请单id}"
         )
     request_id = reference.split("/", 1)[1]
-    if not request_id.isdigit():
+    if not (request_id.isascii() and request_id.isdigit()):  # 只认 ASCII（P1-97）
         raise HTTPException(status_code=422, detail="ServiceRequest 引用的申请单号须为数字")
     request = db.get(ExamRequest, int(request_id))
     if request is None:
@@ -984,7 +986,7 @@ def _do_fhir_encounter(resource: dict, db: Session, user: User):
         raise HTTPException(status_code=404, detail="患者不存在")
     provider = (resource.get("serviceProvider") or {}).get("reference", "")
     org_part = provider.split("/", 1)[1] if provider.startswith("Organization/") else ""
-    if not org_part.isdigit():
+    if not (org_part.isascii() and org_part.isdigit()):  # 只认 ASCII（P1-97）
         raise HTTPException(
             status_code=422, detail="serviceProvider.reference 必须为 Organization/{机构id}"
         )
@@ -1044,7 +1046,8 @@ def _fhir_out_dir() -> Path:
 
 def _wm_get(db: Session, key: str) -> int:
     row = db.query(SystemParam).filter(SystemParam.key == key).first()
-    return int(row.value) if row is not None and str(row.value).isdigit() else 0
+    raw = str(row.value) if row is not None else ""
+    return int(raw) if raw.isascii() and raw.isdigit() else 0  # 只认 ASCII（P1-97）
 
 
 def _wm_set(db: Session, key: str, value: int) -> None:

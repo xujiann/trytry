@@ -55,6 +55,7 @@
 """
 import argparse
 import csv
+import math
 import secrets
 import sys
 from dataclasses import dataclass, field
@@ -66,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.datetypes import check_date  # noqa: E402
+from app.numtypes import INT4_MAX  # noqa: E402
 from app.models import (  # noqa: E402
     Admission,
     Bed,
@@ -200,6 +202,10 @@ def _parse_money(raw: str) -> float | None:
     try:
         value = Decimal(raw)
     except InvalidOperation:
+        return None
+    # 「NaN」「Infinity」能解析成 Decimal，下一行比较 / quantize 就抛 InvalidOperation——原先没接住，
+    # 一格「NaN」让整个导入中断、错误行明细也不落盘（P1-97）
+    if not value.is_finite():
         return None
     if value < 0 or value != value.quantize(Decimal("0.01")):
         return None
@@ -583,11 +589,14 @@ def import_prescriptions(db, rows, report: ImportReport, ctx: ImportContext) -> 
             daily_dose = float(daily_dose_raw)
         except ValueError:
             daily_dose = -1.0
-        if daily_dose <= 0:
+        # 「nan」「inf」「1e400」过得了 float()，NaN 与 0 比较恒为假，原先照存进处方明细（P1-97）
+        if not math.isfinite(daily_dose) or daily_dose <= 0:
             report.error(line_no, f"daily_dose 非法: {daily_dose_raw}（须为正数）", row)
             group["tainted"] = True
             continue
-        if not days_raw.isdigit() or int(days_raw) < 1:
+        # 只认 ASCII 数字、不越过 integer（P1-97）：上标「²」圈码「①」过得了 isdigit，int() 抛异常让整个导入中断；
+        # 超过 integer 的在生产库上写库即失败
+        if not (days_raw.isascii() and days_raw.isdigit()) or not 1 <= int(days_raw) <= INT4_MAX:
             report.error(line_no, f"days 非法: {days_raw}（须为正整数）", row)
             group["tainted"] = True
             continue
