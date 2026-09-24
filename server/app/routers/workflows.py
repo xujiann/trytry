@@ -24,7 +24,12 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
+from ..visibility import (
+    assert_obj_org_writable,
+    assert_org_writable,
+    assert_patient_visible,
+    visible_patient_ids,
+)
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, row_dict
 from ..models import (
@@ -550,14 +555,27 @@ def unified_requests(
     # 聚合视图更要守：它一次把五类单据端出来，是最省事的一个越权入口
     if patient_id is not None:
         assert_patient_visible(db, user, patient_id, resource="unified_requests")
+        visible = None
+    else:
+        # P0-33：上面那句守卫原先只包在 `if patient_id` 里——不带患者号（页面默认就不带）时，
+        # 五类单据按全域吐出来，连患者姓名。与各单据自己的清单同一口径（如预约清单的
+        # scope_patient_list）：只见本机构服务过的患者；全域角色为 None，不过滤。
+        # 本机构经手的单据（申请方 / 受邀方 / 领取方 / 执行机构）本身就构成服务关系，不会被滤掉。
+        visible = visible_patient_ids(db, user)
+
+    def scoped(query, model):
+        if patient_id is not None:
+            return query.filter(model.patient_id == patient_id)
+        if visible is not None:
+            return query.filter(model.patient_id.in_(visible))
+        return query
 
     items: list[dict] = []
 
     appt_q = db.query(Appointment, AppointmentSlot).join(
         AppointmentSlot, Appointment.slot_id == AppointmentSlot.id
     )
-    if patient_id is not None:
-        appt_q = appt_q.filter(Appointment.patient_id == patient_id)
+    appt_q = scoped(appt_q, Appointment)
     for appt, slot in appt_q.order_by(Appointment.id.desc()).limit(limit).all():
         items.append(
             _unified("appointment", appt.id, appt.patient_id, slot.org_id,
@@ -566,8 +584,7 @@ def unified_requests(
         )
 
     exam_q = db.query(ExamRequest)
-    if patient_id is not None:
-        exam_q = exam_q.filter(ExamRequest.patient_id == patient_id)
+    exam_q = scoped(exam_q, ExamRequest)
     for exam in exam_q.order_by(ExamRequest.id.desc()).limit(limit).all():
         items.append(
             _unified("exam", exam.id, exam.patient_id, exam.from_org_id,
@@ -575,8 +592,7 @@ def unified_requests(
         )
 
     cons_q = db.query(Consultation)
-    if patient_id is not None:
-        cons_q = cons_q.filter(Consultation.patient_id == patient_id)
+    cons_q = scoped(cons_q, Consultation)
     for cons in cons_q.order_by(Consultation.id.desc()).limit(limit).all():
         items.append(
             _unified("consultation", cons.id, cons.patient_id, cons.from_org_id,
@@ -584,8 +600,7 @@ def unified_requests(
         )
 
     blood_q = db.query(TransfusionRequest)
-    if patient_id is not None:
-        blood_q = blood_q.filter(TransfusionRequest.patient_id == patient_id)
+    blood_q = scoped(blood_q, TransfusionRequest)
     for req in blood_q.order_by(TransfusionRequest.id.desc()).limit(limit).all():
         items.append(
             _unified("blood", req.id, req.patient_id, req.org_id,
@@ -593,8 +608,7 @@ def unified_requests(
         )
 
     surg_q = db.query(SurgeryRequest)
-    if patient_id is not None:
-        surg_q = surg_q.filter(SurgeryRequest.patient_id == patient_id)
+    surg_q = scoped(surg_q, SurgeryRequest)
     for surgery in surg_q.order_by(SurgeryRequest.id.desc()).limit(limit).all():
         items.append(
             _unified("surgery", surgery.id, surgery.patient_id, surgery.org_id,
