@@ -974,12 +974,19 @@ def push_education(
     立即推送（`send_at` 留空）当场走通道：sms 经平台短信通道、app 落居民收件箱；
     定时推送落 pending，由定时任务 `spd_edu_push_dispatch` 到点派发。
     **发送失败置 failed 并记原因，不静默置 sent**——已读率的分母只该算真发出去的。
+
+    P0-34：原先只看角色，任一机构都能让平台给全县任意患者发短信。照同文件批量干预的口径
+    逐个判可见性并留痕，但**先全部判完再发**：立即推送在下面的循环里就把短信发出去了，
+    边判边发时判到第二个才 403，第一条短信已经送达、库里却回滚得一条不剩。
     """
     material = db.get(SpdEduMaterial, body.material_id)
     if material is None or not material.active:
         raise HTTPException(status_code=404, detail="宣教素材不存在或已停用")
+    patient_ids = list(dict.fromkeys(body.patient_ids))
+    for patient_id in patient_ids:
+        assert_patient_visible(db, user, patient_id, resource="spd_edu")
     created, sent, failed = 0, 0, 0
-    for patient_id in dict.fromkeys(body.patient_ids):
+    for patient_id in patient_ids:
         push = SpdEduPush(
             material_id=body.material_id, patient_id=patient_id, channel=body.channel,
             send_at=body.send_at or now_naive().strftime("%Y-%m-%d %H:%M:%S"),
