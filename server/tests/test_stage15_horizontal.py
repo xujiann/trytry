@@ -1329,6 +1329,11 @@ def test_县域监测预警对一线保持开放(client, world, stranger_op):
 # 剥 docstring、同一组守卫名 + 登记的领域守卫）。量出 26 条，**一条都没擅改**——
 # 里面混着按设计跨机构的（远程会诊、共享诊断中心、转诊、急救调度、医保审核）与
 # 确属越权的，逐条判定后：按设计跨机构的写明理由移进豁免，越权的照 P0-10 / P0-19 先例补守卫。
+#
+# 2026-09-24 逐条实测后：修三条（P0-24 复诊计划、P0-25 接种禁忌解除、P0-26 慢病随访）、判据误报
+# 一条（平台转诊，登记进 DOMAIN_ORG_GUARDS）、按设计四条（PATIENT_OWNED_BY_DESIGN）；分母推一跳后
+# 又出病理三条与站内消息一条。**下面剩的都要人定口径**（谁受理会诊、急救各环节由哪家记、谁算
+# 诊断 / 病理中心、妇幼档案归谁……），事实与问题写在 docs/待裁定事项清单.md 的 P1-71 一节。
 PATIENT_OWNED_UNGUARDED_WRITES = {
     "consultations.py:accept",
     "consultations.py:complete",
@@ -1345,6 +1350,10 @@ PATIENT_OWNED_UNGUARDED_WRITES = {
     "insurance.py:issue_referral_cert",
     "maternal.py:add_visit",
     "maternal.py:close_record",
+    # 隔一跳（标本挂在申请单上）：病理中心是哪一家在模型里没有表达，与读侧同一个待裁问题
+    "pathology.py:advance_specimen",
+    "pathology.py:receive_specimen",
+    "pathology.py:reject_specimen",
     "patients.py:revoke_authorization",
     "spd/population.py:handle_service_apply",
     "tcm.py:advance_order",
@@ -1363,6 +1372,9 @@ PATIENT_OWNED_BY_DESIGN = {
         "同上：特殊病种申报（经办 / 医生）与审核（director）职责分离（L-11），审核是全县口径。",
     "insurance.py:review_dual_channel":
         "同上：双通道申报与审核职责分离，审核限 director。",
+    "notifications.py:mark_read":
+        "个体级判定，比机构级更严：只有收件人本人能标已读（`notification.user_id != user.id` 即 404，"
+        "不暴露消息存在）。是 404 不是 403，登记不进领域守卫表；前提由 test_挂在患者上的豁免_消息只认收件人 钉住。",
 }
 _GLOBAL_ONLY_BY_DESIGN = (
     "consents.py:review_correction", "insurance.py:review_special_disease", "insurance.py:review_dual_channel",
@@ -1375,14 +1387,33 @@ _PATIENT_WRITE_GUARDS = {
 
 
 def _patient_owned_models() -> set[str]:
+    """挂在患者上的表：有 `patient_id`、没有 `org_id` 的，**再加隔一跳的**——本表两样都没有、
+    外键（`users` 除外）指向前者的。
+
+    第二半是 P0-27 逼出来的：危急值报告（`exam_reports`）挂在申请单上，申请单才挂在患者上，
+    「确认接收」「处置反馈」按报告号就能替别家做，而只数直挂的表时它不在分母里。
+    """
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from app import models
-    return {
-        c.__name__ for c in models.Base.registry._class_registry.values()
-        if hasattr(c, "__tablename__")
-        and "patient_id" in c.__table__.columns and "org_id" not in c.__table__.columns
+    registered = [
+        c for c in models.Base.registry._class_registry.values() if hasattr(c, "__tablename__")
+    ]
+    direct = {
+        c.__name__ for c in registered
+        if "patient_id" in c.__table__.columns and "org_id" not in c.__table__.columns
     }
+    by_table = {c.__table__.name: c for c in registered}
+    onehop = {
+        c.__name__ for c in registered
+        if "patient_id" not in c.__table__.columns and "org_id" not in c.__table__.columns
+        and any(
+            fk.column.table.name != "users"
+            and getattr(by_table.get(fk.column.table.name), "__name__", None) in direct
+            for col in c.__table__.columns for fk in col.foreign_keys
+        )
+    }
+    return direct | onehop
 
 
 def _byid_patient_owned_write_endpoints(sources=None) -> set[str]:
@@ -1448,6 +1479,28 @@ def test_挂在患者上的豁免_审核端点只收全域角色():
             for arg in call.args if isinstance(arg, ast.Constant)
         }
         assert roles and roles <= GLOBAL_ROLES, f"{key} 的角色放宽到了 {sorted(roles)}，豁免前提不再成立"
+
+
+def test_挂在患者上的豁免_消息只认收件人():
+    """`mark_read` 豁免的前提：收件人判定今天还在。删掉它，这条豁免就在替一个不存在的守卫报绿。"""
+    path = dict(_router_files())["notifications.py"]
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    (fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "mark_read"]
+    assert "notification.user_id != user.id" in astcode.code(fn), "标已读不再只认收件人，豁免要重判"
+
+
+def test_挂在患者上的写接口判据自证_隔一跳():
+    """把 P0-27 的修复从 `acknowledge_critical` 里拿掉，隔一跳那一半必须当场点名它。"""
+    assert {"ExamReport", "PathologySpecimen", "FollowUp"} <= _patient_owned_models()
+    path = dict(_router_files())["exams.py"]
+    text = open(path, encoding="utf-8").read()
+    fixed = '    report = _report_visible_or_404(db, report_id, user, resource="exam_critical_action")\n'
+    start = text.index("def acknowledge_critical(")
+    end = text.index("\n@router", start)
+    assert fixed in text[start:end], "acknowledge_critical 里找不到 P0-27 的守卫行，自证前提变了"
+    reverted = text[:start] + text[start:end].replace(fixed, "    report = db.get(ExamReport, report_id)\n", 1) + text[end:]
+    assert "exams.py:acknowledge_critical" in _byid_patient_owned_write_endpoints([("exams.py", reverted)])
+    assert "exams.py:acknowledge_critical" not in _byid_patient_owned_write_endpoints([("exams.py", text)])
 
 
 def test_挂在患者上的写接口判据自证():
