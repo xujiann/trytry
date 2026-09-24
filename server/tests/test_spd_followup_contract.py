@@ -660,6 +660,29 @@ def test_健康日历两天两种填充(client, auth, world):
                                     "task_type": "report", "status": "pending"}
 
 
+
+def test_健康日历的日期写成别的样子_报错而不是显示这天没安排(client, auth, world):
+    """P1-58：`day` 按字符串等值匹配，页面上那个输入框是自由文本（占位符"留空 = 今天"）。
+
+    修复前 `2026/09/24`、`20260924` 这类写法 200 返回三个空列表——医生看到的是
+    "这天什么安排都没有"，而这天其实有随访、有复诊。现在 422 并点名是 `day` 写错了。
+    """
+    pid = world["patient"]["id"]
+
+    def calendar(**params):
+        return client.get(f"{B}/health-calendar", params={"patient_id": pid, **params},
+                          headers=auth)
+
+    ok = calendar(day=world["d_today"]).json()
+    assert ok["followups"] and ok["revisits"], "前提：这一天确有安排"
+    for variant in (world["d_today"].replace("-", "/"), world["d_today"].replace("-", "")):
+        resp = calendar(day=variant)
+        assert resp.status_code == 422, (variant, resp.text)
+        assert resp.json()["detail"].startswith("day："), resp.json()
+    # 留空仍取业务今天，与不带这个参数一致
+    assert calendar(day="").json()["day"] == calendar().json()["day"]
+
+
 # ============================================================ 错误体
 
 

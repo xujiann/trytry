@@ -21,7 +21,14 @@ from ...clock import now_naive
 from ...concurrency import insert_if_absent, insert_or_conflict, serialized_on
 from ...database import get_db
 from ...datetypes import OptionalDateStr
-from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
+from ...deps import (
+    get_current_user,
+    paginate,
+    require_date,
+    require_roles,
+    resolve_business_date,
+    row_dict,
+)
 from ..platform import Admission, Encounter, Patient, User
 from ..models import (
     SpdCallTask,
@@ -713,8 +720,10 @@ def list_followup_records(
         if value is not None and value != "":
             query = query.filter(column == value)
     if date_from:
+        date_from = require_date(date_from, field="date_from")
         query = query.filter(SpdFollowupRecord.planned_at >= date_from)
     if date_to:
+        date_to = require_date(date_to, field="date_to")
         query = query.filter(SpdFollowupRecord.planned_at <= date_to)
     if overdue:
         query = query.filter(SpdFollowupRecord.status == "overdue")
@@ -929,8 +938,10 @@ def followup_stats(
     if executor_id is not None:
         query = query.filter(SpdFollowupRecord.executor_id == executor_id)
     if date_from:
+        date_from = require_date(date_from, field="date_from")
         query = query.filter(SpdFollowupRecord.planned_at >= date_from)
     if date_to:
+        date_to = require_date(date_to, field="date_to")
         query = query.filter(SpdFollowupRecord.planned_at <= date_to)
 
     by_status = row_dict(
@@ -1094,9 +1105,12 @@ def list_call_tasks(
             p.id for p in db.query(Patient).filter(Patient.name.contains(patient_name)).limit(200)
         ]
         query = query.filter(SpdCallTask.patient_id.in_(ids or [0]))
+    # 先校验再拼串：非法值拼成的时间戳在真 PG 上转换失败是 500（P1-58）
     if date_from:
+        date_from = require_date(date_from, field="date_from")
         query = query.filter(SpdCallTask.created_at >= f"{date_from} 00:00:00")
     if date_to:
+        date_to = require_date(date_to, field="date_to")
         query = query.filter(SpdCallTask.created_at <= f"{date_to} 23:59:59")
     rows = paginate(query.order_by(SpdCallTask.id.desc()), response, offset, limit)
     names = {
@@ -1471,7 +1485,9 @@ def health_calendar(
 ):
     """患者健康日历（智能随访端 #12）：某天的随访、宣教与复诊安排。"""
     assert_patient_visible(db, user, patient_id, resource="spd_calendar")
-    target = day or clock.today().isoformat()
+    # `day` 是按字符串等值匹配的：`2026-9-24` 会让这一天"什么安排都没有"，
+    # 而页面上那个输入框是自由文本（P1-58）。
+    target = require_date(day, field="day") if day else clock.today().isoformat()
     followups = (
         db.query(SpdFollowupRecord)
         .filter(

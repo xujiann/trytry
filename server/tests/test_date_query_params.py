@@ -121,6 +121,10 @@ FILTER_PARAMS = [
     ("/api/billing/reconciliation", "date"),
     ("/api/spd/revisits", "date_from"),
     ("/api/spd/revisits", "date_to"),
+    ("/api/spd/followup-stats", "date_from"),
+    ("/api/spd/followup-stats", "date_to"),
+    ("/api/spd/followup-records", "date_from"),
+    ("/api/spd/followup-records", "date_to"),
 ]
 
 #: 形状错、日历上不存在、不补零、ISO 基本格式——前两类此前多是 200 空集，
@@ -180,13 +184,6 @@ KNOWN_BARE_DATE_PARAMS: set[str] = {
     "routers/medwaste.py::handler_stats::start_date",
     "routers/portal.py::portal_slots::slot_date",
     "routers/surgery.py::list_schedules::scheduled_date",
-    "spd/routers/followup.py::followup_stats::date_from",
-    "spd/routers/followup.py::followup_stats::date_to",
-    "spd/routers/followup.py::health_calendar::day",
-    "spd/routers/followup.py::list_call_tasks::date_from",
-    "spd/routers/followup.py::list_call_tasks::date_to",
-    "spd/routers/followup.py::list_followup_records::date_from",
-    "spd/routers/followup.py::list_followup_records::date_to",
     "spd/routers/referral.py::closure_rate::date_from",
     "spd/routers/referral.py::closure_rate::date_to",
 }
