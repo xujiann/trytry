@@ -34,6 +34,11 @@ if _PG_URL:
 import pytest  # noqa: E402
 
 from app.database import SessionLocal, engine  # noqa: E402
+# 先 `app.models` 再 `app.spd.models`：`app/models/__init__.py` 末尾星号导入 spd 模型，而 `app/spd/models.py`
+# 又从 `app.models` 取列类型——谁先被导入决定结果。本文件若是进程里第一个碰 spd 模型的，循环里那句星号导入
+# 只拿到半个 `app.spd.models`，`app.models` 从此缺全部 `Spd*` 名字（实测：本文件与
+# `test_refactor_drift_guards.py` 一起跑即红，P2-51）。
+import app.models  # noqa: E402,F401
 from app.spd.models import SpdEnrollment  # noqa: E402
 
 if _PG_URL:
