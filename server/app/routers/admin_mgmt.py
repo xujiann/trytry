@@ -775,7 +775,10 @@ def create_staff_contract(
 
 
 @router.get("/staff-contracts/expiring", response_model=list[ContractExpiringRowOut])
-def expiring_contracts(days: int = 60, today: str | None = None, db: Session = Depends(get_db)):
+def expiring_contracts(
+    days: int = Query(default=60, ge=0, le=3650),  # 加天数的上界（P1-96）：原先无界，传个大数 date + timedelta 溢出，整个请求 500
+    today: str | None = None, db: Session = Depends(get_db),
+):
     """合同到期提醒：end_date 距今 ≤days 的履行中合同（续签管理）。"""
     from datetime import timedelta
 

@@ -1,6 +1,6 @@
 """中医药服务：⑬智能辅诊（体质辨识+辨证推荐）、⑭共享中药房、㉑适宜技术库。"""
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from .. import clock
@@ -478,7 +478,11 @@ def list_batches(
 
 
 @router.get("/preparation-batches/expiring", response_model=list[TcmPreparationBatchOut])
-def expiring_batches(days: int = 30, today: str | None = None, db: Session = Depends(get_db)):
+def expiring_batches(
+    # 负数照旧按 0 算（下面的 max）；只补上界（P1-96）：原先传个大数 date + timedelta 溢出，整个请求 500
+    days: int = Query(default=30, le=3650),
+    today: str | None = None, db: Session = Depends(get_db),
+):
     """效期预警：N 天内到期或已过期的未召回批次。"""
     business_date = resolve_business_date(today)
     cutoff = (business_date + timedelta(days=max(days, 0))).isoformat()

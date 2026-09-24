@@ -3,7 +3,7 @@
 - 分类条目维护（管理层/公卫可发布，质管制度含有效期管理）
 - 检索：分类 + 标题关键字；过期条目默认过滤、可显式包含并标记
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -135,7 +135,8 @@ def search_entries(
 
 @router.get("/expiring", response_model=list[EntryExpiringOut])
 def expiring_entries(
-    days: int = 30, today: str | None = None, db: Session = Depends(get_db)
+    days: int = Query(default=30, ge=0, le=3650),  # 加天数的上界（P1-96）：原先无界，传个大数 date + timedelta 溢出，整个请求 500
+    today: str | None = None, db: Session = Depends(get_db),
 ):
     """临近过期资料提醒（浙#38 有效期管理）：expire_date 距今 ≤days 的在用条目。"""
     from datetime import timedelta

@@ -1,7 +1,7 @@
 """传染病病例报告与多点触发监测预警。"""
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -103,7 +103,7 @@ def list_cases(disease_code: str | None = None, db: Session = Depends(get_db)):
 
 @router.get("/alerts", response_model=list[AlertOut])
 def multi_point_alerts(
-    window_days: int = DEFAULT_WINDOW_DAYS,
+    window_days: int = Query(default=DEFAULT_WINDOW_DAYS, ge=0, le=3650),  # 加天数的上界（P1-96）：原先无界，传个大数 date - timedelta 溢出，整个请求 500
     threshold: int = DEFAULT_THRESHOLD,
     today: str | None = None,
     db: Session = Depends(get_db),

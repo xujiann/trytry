@@ -1,7 +1,7 @@
 """共享诊断中心（影像/心电/检验/病理）：基层检查、上级诊断、结果互认、危急值管理。"""
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -540,7 +540,9 @@ def list_critical_actions(
 
 @router.get("/critical/unacknowledged", response_model=list[UnackedCriticalOut])
 def list_unacknowledged_critical(
-    today: str | None = None, timeout_minutes: int = 30, db: Session = Depends(get_db)
+    today: str | None = None,
+    timeout_minutes: int = Query(default=30, ge=0, le=3650 * 24 * 60),  # 加分钟数的上界（P1-96）：原先无界，传个大数 now - timedelta 溢出，整个请求 500
+    db: Session = Depends(get_db),
 ):
     """超时未确认危急值清单：报告发布后医师超时未确认接收的（催办用）。
 
