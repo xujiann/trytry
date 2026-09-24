@@ -238,6 +238,21 @@ def test_portal_slots_only_lists_available(client, me, slot, admin, org):
     assert next(r for r in rows if r["resource_name"] == "全科门诊")["org_name"] == "服务演示卫生院"
 
 
+def test_portal_slots_日期筛选写错是422_留空照旧(client, me, slot):
+    """P1-58：`slot_date` 按等值匹配。修复前 `2026-9-1` / `2026/09/01` 200 返回空表——
+    居民看到"这天没有可约号源"，而号源其实就在那天。业务端孪生 `/api/appointments/slots`
+    同批收口（见 test_date_query_params.py）。"""
+    ok = client.get("/api/portal/me/slots", params={"slot_date": "2026-09-01"},
+                    headers=me["headers"])
+    assert ok.status_code == 200 and any(r["id"] == slot["id"] for r in ok.json())
+    for bad in ("2026-9-1", "2026/09/01", "2026-02-31"):
+        resp = client.get("/api/portal/me/slots", params={"slot_date": bad}, headers=me["headers"])
+        assert resp.status_code == 422, (bad, resp.text)
+        assert resp.json()["detail"].startswith("slot_date："), resp.json()
+    blank = client.get("/api/portal/me/slots", params={"slot_date": ""}, headers=me["headers"])
+    assert blank.json() == client.get("/api/portal/me/slots", headers=me["headers"]).json()
+
+
 def test_portal_book_for_self_and_child(client, me, child, slot):
     mine = client.post(
         "/api/portal/me/appointments", json={"slot_id": slot["id"]}, headers=me["headers"]

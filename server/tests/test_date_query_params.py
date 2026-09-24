@@ -182,7 +182,6 @@ GUARDS = frozenset({"require_date", "resolve_business_date"})
 KNOWN_BARE_DATE_PARAMS: set[str] = {
     "routers/admin_mgmt.py::list_rosters::duty_date",
     "routers/clinical_docs.py::list_handovers::handover_date",
-    "routers/portal.py::portal_slots::slot_date",
     "routers/surgery.py::list_schedules::scheduled_date",
 }
 

@@ -74,6 +74,7 @@ from ..models import (
 from ..deps import (
     clear_auth_cookies,
     paginate,
+    require_date,
     set_auth_cookies,
     token_from_request,
     wants_cookie_auth,
@@ -1236,6 +1237,8 @@ def portal_slots(
     if org_id is not None:
         query = query.filter(AppointmentSlot.org_id == org_id)
     if slot_date:
+        # 等值匹配：`2026-9-1` 会让居民看到"这天没有可约号源"，不报错（P1-58）
+        slot_date = require_date(slot_date, field="slot_date")
         query = query.filter(AppointmentSlot.slot_date == slot_date)
     rows = paginate(
         query.order_by(
