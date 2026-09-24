@@ -881,6 +881,59 @@ def test_门诊告知书的签署与拒签都在页内表单里录入_关系可�
         "refused", "parent", "E2E家属要求转上级医院再议"), refused
 
 
+@pytest.fixture(scope="session")
+def improvement_seed(base_url, seed):
+    """一条待整改的绩效改进任务。"""
+    import json
+    from datetime import date, timedelta
+    from urllib.request import Request
+
+    req = Request(f"{base_url}/api/auth/login", data=json.dumps({"username": "admin", "password": "admin123"}).encode(),
+                  headers={"Content-Type": "application/json"})
+    with urlopen(req, timeout=10) as resp:
+        token = json.loads(resp.read())["access_token"]
+    body = {"org_id": seed["org"]["id"], "problem": "E2E门诊处方合格率低于 90%", "owner_name": "E2E质控科",
+            "due_date": (date.today() + timedelta(days=30)).isoformat()}
+    req = Request(f"{base_url}/api/performance/improvements", data=json.dumps(body).encode(),
+                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+    with urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read())
+
+
+def test_绩效改进任务的进展_完成_退回都在页内表单里录入_取消即放弃(page, base_url, improvement_seed):
+    """P2-38：四处原生弹窗原先点"取消"照样提交——"确认关闭"点了取消任务照样关、"退回"点了取消照样
+    退回且没有理由。换成页内表单后取消就是放弃；主链路：登记进展 → 提交完成 → 退回（带理由）。"""
+    tid = improvement_seed["id"]
+
+    def task():
+        return page.evaluate(
+            "async (id) => (await api('/api/performance/improvements')).find((t) => t.id === id)", tid)
+
+    _login(page, base_url)
+    _open_page(page, "performance", "绩效考核")
+
+    page.click(f'button[data-impprog="{tid}"]')
+    page.locator("form.panel button[data-cancel]").click()
+    expect(page.locator("form.panel:has(button[data-cancel])")).to_have_count(0)
+    assert task()["status"] == "open"  # 取消就是放弃，没有落任何东西
+
+    page.click(f'button[data-impprog="{tid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"measures": "E2E已组织专项培训"}))
+    page.click(f'button[data-impdone="{tid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"completion_note": "E2E整改完成，抽查复核达标"}))
+    assert task()["status"] == "completed"
+
+    page.click(f'button[data-impno="{tid}"]')
+    page.locator("form.panel button[data-cancel]").click()
+    expect(page.locator("form.panel:has(button[data-cancel])")).to_have_count(0)
+    assert task()["status"] == "completed"  # 原先点取消照样退回
+
+    page.click(f'button[data-impno="{tid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"comment": "E2E抽查样本不足，补充后再报"}))
+    after = task()
+    assert (after["status"], after["measures"]) == ("in_progress", "E2E已组织专项培训"), after
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 

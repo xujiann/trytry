@@ -1020,16 +1020,30 @@ async function drawImprovementTasks() {
     e.preventDefault();
     postAction("/api/performance/improvements", formJson(e.target, ["org_id"]), "#imp-msg");
   };
+  // P2-38：四处原生弹窗换成页内表单。原先在弹窗上点"取消"照样提交——"确认关闭"点了取消，
+  // 任务照样关了；"退回"点了取消，照样退回且没有理由；"登记进展"点了取消，落一条空措施。
+  // 表单里取消就是放弃。
   holder.onclick = async (e) => {
     const { impprog, impdone, impok, impno } = e.target.dataset;
     try {
-      if (impprog) return postAction(`/api/performance/improvements/${impprog}/progress`, { measures: prompt("整改措施") || "" }, "#imp-msg");
-      if (impdone) {
-        const note = prompt("整改结果说明（必填）"); if (!note) return;
-        return postAction(`/api/performance/improvements/${impdone}/progress`, { complete: true, completion_note: note }, "#imp-msg");
+      if (impprog) {
+        const v = await spdModal("登记整改进展", [{ name: "measures", label: "整改措施", type: "textarea" }]);
+        if (!v) return;
+        return postAction(`/api/performance/improvements/${impprog}/progress`, v, "#imp-msg");
       }
-      if (impok) return postAction(`/api/performance/improvements/${impok}/verify`, { approve: true, comment: prompt("确认意见") || "" }, "#imp-msg");
-      if (impno) return postAction(`/api/performance/improvements/${impno}/verify`, { approve: false, comment: prompt("退回理由") || "" }, "#imp-msg");
+      if (impdone) {
+        const v = await spdModal("提交整改完成", [
+          { name: "completion_note", label: "整改结果说明（必填）", required: true }]);
+        if (!v) return;
+        return postAction(`/api/performance/improvements/${impdone}/progress`, { complete: true, ...v }, "#imp-msg");
+      }
+      if (impok || impno) {
+        const v = await spdModal(impok ? "确认关闭整改任务" : "退回整改", [
+          { name: "comment", label: impok ? "确认意见（可空）" : "退回理由", type: "textarea" }]);
+        if (!v) return;
+        return postAction(`/api/performance/improvements/${impok || impno}/verify`,
+          { approve: Boolean(impok), comment: v.comment }, "#imp-msg");
+      }
     } catch (err) { setMsg("#imp-msg", err.message, false); }
   };
 }
