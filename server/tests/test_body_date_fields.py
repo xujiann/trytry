@@ -41,6 +41,9 @@ CASES = [
     ("/api/maternal/children/999999/visits", {"visit_type": "checkup"}, "visit_date", True),
     ("/api/maternal/children/999999/screenings", {"item": "hearing"}, "screen_date", True),
     ("/api/maternal/women-health", {"patient_id": 999999, "record_type": "premarital"}, "exam_date", True),
+    # 监测领域填不存在的：合法日期越过这一道后在业务校验上 422（字符串 detail），不落库
+    ("/api/publichealth/monitors", {"domain": "no-such-domain", "org_id": 999999, "indicator": "CO2",
+                                    "value": 1, "threshold": 2}, "record_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。

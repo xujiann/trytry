@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
+from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, require_roles
 from ..models import (
     ChronicPatient,
@@ -186,12 +187,14 @@ class MonitorCreate(BaseModel):
     indicator: str = Field(min_length=1)
     value: float
     threshold: float
-    record_date: str = ""
+    record_date: OptionalDateStr = ""
 
 
 class MonitorOut(MonitorCreate):
     id: int
     exceeded: bool
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    record_date: str = ""
 
     model_config = {"from_attributes": True}
 
