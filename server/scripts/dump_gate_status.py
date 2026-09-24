@@ -42,6 +42,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
     import test_byid_org_read_guard as byidread
+    import test_secondary_body_id_guard as secondary
     import test_body_id_org_write_guard as bodyid
     import test_clock as clock
     import test_date_query_params as datequery
@@ -115,6 +116,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(declared.BY_DESIGN), "tests/test_body_declared_org_write_guard.py"),
         ("横向越权（写侧）", "请求声明机构 × 早已登记待业务裁定、故意未修",
          len(declared.AWAITING_DECISION), "tests/test_body_declared_org_write_guard.py"),
+        ("横向越权（写侧）", "请求体捎带的机构归属对象未判 × 按设计（逐条写明理由）",
+         len(secondary.BY_DESIGN), "tests/test_secondary_body_id_guard.py"),
+        ("横向越权（写侧）", "请求体捎带的机构归属对象未判 × 口径待裁定",
+         len(secondary.AWAITING), "tests/test_secondary_body_id_guard.py"),
         ("横向越权（读侧）", "查询参数收机构号、只拿 resolve_org_scope 当范围 × 按设计（逐条写明理由）",
          len(orgread.BY_DESIGN), "tests/test_org_param_read_guard.py"),
         ("横向越权（读侧）", "查询参数收机构号、只拿 resolve_org_scope 当范围 × 口径待裁定",
