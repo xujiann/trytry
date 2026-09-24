@@ -475,7 +475,7 @@ class BlacklistRemovedOut(BaseModel):
 
 class BlacklistCreate(BaseModel):
     patient_id: int
-    reason: str = ""
+    reason: str = Field(default="", max_length=256)
     domain: str = Field(default="appointment", pattern="^(appointment|shortage)$")
 
 

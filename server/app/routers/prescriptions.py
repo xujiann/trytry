@@ -313,8 +313,8 @@ def _apply_review(db: Session, prescription_id: int, status: str, comment: str) 
 
 class RxCommentCreate(BaseModel):
     grade: str = Field(pattern="^(reasonable|unreasonable)$")
-    issues: str = ""
-    comment: str = ""
+    issues: str = Field(default="", max_length=256)
+    comment: str = Field(default="", max_length=1024)
 
 
 class ReviewPointItemOut(BaseModel):

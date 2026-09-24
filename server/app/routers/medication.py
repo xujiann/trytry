@@ -37,8 +37,8 @@ class ShortageCreate(BaseModel):
     # 可空：按机构报缺（补库存）与按患者登记（延伸处方）共用一张表。
     # 只有按患者登记的才谈得上"登记后不来取药"，也才进得了黑名单。
     patient_id: int | None = None
-    drug_code: str = Field(min_length=1)
-    drug_name: str = Field(min_length=1)
+    drug_code: str = Field(min_length=1, max_length=64)
+    drug_name: str = Field(min_length=1, max_length=128)
     quantity: int = Field(default=1, ge=1)
 
 

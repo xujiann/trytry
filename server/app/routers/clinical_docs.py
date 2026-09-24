@@ -165,7 +165,7 @@ class ProgressNoteIn(BaseModel):
     note_type: str = Field(pattern="^(first|daily|ward_round|rescue|consultation|discharge)$")
     content: str = Field(min_length=1, max_length=4096)
     doctor_name: str = ""
-    recorded_at: str = ""
+    recorded_at: str = Field(default="", max_length=16)
 
 
 @router.post(
@@ -288,7 +288,7 @@ class NursingIn(BaseModel):
     nursing_level: str = Field(default="level2", pattern="^(special|level1|level2|level3)$")
     content: str = Field(default="", max_length=2048)
     nurse_name: str = ""
-    recorded_at: str = ""
+    recorded_at: str = Field(default="", max_length=16)
     # 护理执行联动（P1-24a）：本条护理记录若由执行某条医嘱产生，传该医嘱 id。
     # 医嘱必须存在且属于同一次住院——挂错住院的联动比不联动更糟（质控会拿它下结论）。
     inpatient_order_id: int | None = None
@@ -449,8 +449,8 @@ class HandoverIn(BaseModel):
     ward_id: int
     shift: str = Field(pattern="^(day|evening|night)$")
     handover_date: DateStr
-    from_staff: str = ""
-    to_staff: str = ""
+    from_staff: str = Field(default="", max_length=64)
+    to_staff: str = Field(default="", max_length=64)
     critical_count: int = Field(default=0, ge=0)
     content: str = Field(default="", max_length=2048)
 

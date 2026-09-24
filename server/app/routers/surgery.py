@@ -186,7 +186,7 @@ def list_rooms(
 class SurgeryRequestIn(BaseModel):
     admission_id: int
     surgery_name: str = Field(min_length=1, max_length=256)
-    surgery_code: str = ""
+    surgery_code: str = Field(default="", max_length=32)
     incision_level: str = Field(default="II", pattern="^(I|II|III|IV)$")
     anesthesia_type: str = Field(default="general", pattern="^(general|spinal|local|nerve_block)$")
     surgeon_name: str = ""

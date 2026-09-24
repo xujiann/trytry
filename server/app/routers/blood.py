@@ -98,7 +98,7 @@ class TransfusionCreate(BaseModel):
     blood_type: str = Field(pattern=_BLOOD_TYPE)
     component: str = Field(pattern=_COMPONENT)
     quantity_ml: int = Field(gt=0)
-    reason: str = ""
+    reason: str = Field(default="", max_length=512)
 
 
 @router.post(

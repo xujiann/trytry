@@ -688,9 +688,9 @@ class ExamResourceOut(BaseModel):
 
 
 class TemplateCreate(BaseModel):
-    center_type: str
-    name: str = Field(min_length=1)
-    content: str = ""
+    center_type: str = Field(max_length=16)
+    name: str = Field(min_length=1, max_length=128)
+    content: str = Field(default="", max_length=2048)
 
 
 @router.post("/templates", response_model=ReportTemplateCreatedOut, status_code=201,
@@ -823,11 +823,11 @@ def list_report_revisions(
 class ExamResourceCreate(BaseModel):
     org_id: int
     center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
-    item_name: str = Field(min_length=1)
-    device: str = ""
+    item_name: str = Field(min_length=1, max_length=128)
+    device: str = Field(default="", max_length=128)
     price: float = Field(default=0, ge=0)
     duration_min: int = Field(default=15, gt=0)
-    notes: str = ""
+    notes: str = Field(default="", max_length=512)
 
 
 @router.post("/resources", response_model=ExamResourceCreatedOut, status_code=201,

@@ -48,12 +48,12 @@ def _mark_high_risk(db: Session, model, obj_id: int, col: str, factor: str) -> b
 
 class MaternalCreate(BaseModel):
     patient_id: int
-    lmp: str = ""
-    edc: str = ""
+    lmp: str = Field(default="", max_length=10)
+    edc: str = Field(default="", max_length=10)
     gravidity: int = Field(default=1, ge=1)
     parity: int = Field(default=0, ge=0)
     high_risk: bool = False
-    risk_factors: str = ""
+    risk_factors: str = Field(default="", max_length=512)
 
 
 class MaternalOut(MaternalCreate):
@@ -104,8 +104,8 @@ def list_records(high_risk: bool | None = None, db: Session = Depends(get_db)):
 class VisitCreate(BaseModel):
     visit_type: str = Field(pattern="^(prenatal|postpartum)$")
     gest_week: int | None = Field(default=None, ge=4, le=45)
-    bp: str = ""
-    note: str = ""
+    bp: str = Field(default="", max_length=16)
+    note: str = Field(default="", max_length=512)
     visit_date: OptionalDateStr = ""
 
 
@@ -168,8 +168,8 @@ def close_record(record_id: int, db: Session = Depends(get_db)):
 
 
 class ChildCreate(BaseModel):
-    name: str = Field(min_length=1)
-    gender: str = "未知"
+    name: str = Field(min_length=1, max_length=64)
+    gender: str = Field(default="未知", max_length=8)
     birth_date: DateStr
     guardian_patient_id: int | None = None
 
@@ -208,7 +208,7 @@ class ChildVisitCreate(BaseModel):
     visit_type: str = Field(pattern="^(newborn|checkup)$")
     height_cm: float | None = None
     weight_kg: float | None = None
-    note: str = ""
+    note: str = Field(default="", max_length=512)
     visit_date: OptionalDateStr = ""
 
 
@@ -240,7 +240,7 @@ class DeliveryCreate(BaseModel):
     delivery_date: DateStr
     delivery_mode: str = Field(default="natural", pattern="^(natural|cesarean)$")
     newborn_count: int = Field(default=1, ge=1, le=5)
-    outcome: str = ""
+    outcome: str = Field(default="", max_length=256)
 
 
 class DeliveryReceiptOut(BaseModel):
@@ -318,7 +318,7 @@ class ScreeningCreate(BaseModel):
     item: str = Field(pattern="^(metabolic|hearing|chd)$")
     result: str = Field(default="normal", pattern="^(normal|abnormal)$")
     screen_date: OptionalDateStr = ""
-    note: str = ""
+    note: str = Field(default="", max_length=512)
 
 
 _SCREEN_ITEM_NAMES = {"metabolic": "遗传代谢病筛查", "hearing": "听力筛查", "chd": "先心病筛查"}
@@ -446,8 +446,8 @@ class WomenHealthCreate(BaseModel):
     patient_id: int
     record_type: str = Field(pattern="^(premarital|preconception|gynecology|contraception)$")
     exam_date: OptionalDateStr = ""
-    result: str = ""
-    advice: str = ""
+    result: str = Field(default="", max_length=512)
+    advice: str = Field(default="", max_length=512)
 
 
 class WomenHealthOut(WomenHealthCreate):
@@ -519,8 +519,8 @@ class PrenatalScreeningCreate(BaseModel):
     screen_date: DateStr
     gest_week: int | None = Field(default=None, ge=1, le=45)
     result: str = Field(default="low_risk", pattern="^(low_risk|high_risk|critical)$")
-    indicator: str = ""
-    conclusion: str = ""
+    indicator: str = Field(default="", max_length=256)
+    conclusion: str = Field(default="", max_length=512)
 
 
 class PrenatalScreeningOut(BaseModel):

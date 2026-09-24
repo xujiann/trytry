@@ -283,9 +283,9 @@ class ConsultExpertOut(BaseModel):
 
 
 class ExpertCreate(BaseModel):
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=64)
     org_id: int
-    specialty: str = ""
+    specialty: str = Field(default="", max_length=64)
     available: bool = True
 
 

@@ -29,10 +29,10 @@ MILESTONE_NAMES = {
 
 
 class CaseCreate(BaseModel):
-    caller_phone: str = ""
-    location: str = Field(min_length=1)
-    symptom: str = ""
-    ambulance_no: str = ""
+    caller_phone: str = Field(default="", max_length=20)
+    location: str = Field(min_length=1, max_length=256)
+    symptom: str = Field(default="", max_length=512)
+    ambulance_no: str = Field(default="", max_length=32)
     dest_org_id: int | None = None
     patient_id: int | None = None
     # 急救绿色通道：""=普通, chest_pain=胸痛, stroke=卒中, trauma=创伤
@@ -80,7 +80,7 @@ class VitalCreate(BaseModel):
     sbp: float | None = None
     dbp: float | None = None
     spo2: float | None = None
-    note: str = ""
+    note: str = Field(default="", max_length=256)
 
 
 class VitalOut(VitalCreate):

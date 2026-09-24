@@ -60,7 +60,7 @@ _EVENT_TYPES = {"medication", "device", "fall", "pressure_sore", "transfusion", 
 
 class AdverseEventCreate(BaseModel):
     org_id: int
-    event_type: str
+    event_type: str = Field(max_length=16)
     level: str = Field(pattern="^(I|II|III|IV)$")
     description: str = Field(min_length=1, max_length=2048)
     anonymous: bool = False
@@ -235,7 +235,7 @@ class RecordQcCreate(BaseModel):
     target_type: str = Field(pattern="^(encounter|case_summary)$")
     target_id: int
     score: int = Field(ge=0, le=100)
-    defects: str = ""
+    defects: str = Field(default="", max_length=1024)
 
 
 def _grade(score: int) -> str:
@@ -338,9 +338,9 @@ _INFECTION_SITES = {"respiratory", "surgical_site", "urinary", "bloodstream", "g
 class InfectionReportCreate(BaseModel):
     org_id: int
     patient_id: int
-    infection_site: str
-    pathogen: str = ""
-    note: str = ""
+    infection_site: str = Field(max_length=16)
+    pathogen: str = Field(default="", max_length=128)
+    note: str = Field(default="", max_length=1024)
     report_date: OptionalDateStr = ""
 
 

@@ -19,7 +19,7 @@ class OrganizationCreate(BaseModel):
     # L-4：city=市级协作医院（市级互认项目适用），county/township/village=县域层级
     level: str = Field(pattern="^(city|county|township|village)$")
     parent_id: int | None = None
-    address: str = ""
+    address: str = Field(default="", max_length=256)
 
 
 class OrganizationOut(OrganizationCreate):
@@ -133,10 +133,10 @@ class ExamRequestOut(BaseModel):
 
 
 class ExamReportCreate(BaseModel):
-    finding: str = ""
-    conclusion: str
+    finding: str = Field(default="", max_length=2048)
+    conclusion: str = Field(max_length=1024)
     critical: bool = False
-    reported_by: str = ""
+    reported_by: str = Field(default="", max_length=64)
 
 
 class ExamReportOut(ExamReportCreate):
@@ -156,7 +156,7 @@ class RecognitionItemCreate(BaseModel):
 
 
 class RecognitionItemUpdate(BaseModel):
-    item_name: str | None = None
+    item_name: str | None = Field(default=None, max_length=128)
     center_type: str | None = Field(default=None, pattern="^(imaging|ecg|lab|pathology)$")
     mutual_scope: str | None = Field(default=None, pattern="^(county|city)$")
     active: bool | None = None
@@ -182,20 +182,20 @@ class CriticalResolveBody(BaseModel):
 
 
 class DrugRuleCreate(BaseModel):
-    drug_code: str
+    drug_code: str = Field(max_length=64)
     max_daily_dose: float = Field(gt=0)
-    dose_unit: str = "mg"
-    note: str = ""
+    dose_unit: str = Field(default="mg", max_length=16)
+    note: str = Field(default="", max_length=256)
     # 相互作用冲突药品编码，逗号分隔（如 "D002,D003"）
-    interactions: str = ""
+    interactions: str = Field(default="", max_length=512)
     # 禁忌诊断关键词，逗号分隔（如 "消化性溃疡,出血"）
-    contraindicated_diagnoses: str = ""
+    contraindicated_diagnoses: str = Field(default="", max_length=512)
     # 特殊人群，逗号分隔，取值 pregnant/child/elderly
-    special_groups: str = ""
+    special_groups: str = Field(default="", max_length=64)
     # 肝肾功能提示（不拦截，随处方返回供剂量调整参考）
-    renal_hepatic_note: str = ""
+    renal_hepatic_note: str = Field(default="", max_length=512)
     # 处方点评要点（事后点评规则化依据）
-    review_points: str = ""
+    review_points: str = Field(default="", max_length=512)
     # 抗菌药物标记与 DDD（限定日剂量，单位同 dose_unit）。
     # ddd 留 0 表示未维护，使用强度统计会把它计入"未覆盖"而不是按 0 参与计算。
     antibiotic: bool = False
@@ -220,7 +220,7 @@ class PrescriptionItemIn(BaseModel):
 class PrescriptionCreate(BaseModel):
     patient_id: int
     org_id: int
-    diagnosis_name: str = ""
+    diagnosis_name: str = Field(default="", max_length=256)
     items: list[PrescriptionItemIn] = Field(min_length=1)
 
 
@@ -258,7 +258,7 @@ class StockOut(StockUpsert):
 
 
 class TransferCreate(BaseModel):
-    drug_code: str
+    drug_code: str = Field(max_length=64)
     from_org_id: int
     to_org_id: int
     quantity: int = Field(gt=0)
@@ -354,7 +354,7 @@ class ConsultationRate(BaseModel):
 class ContractCreate(BaseModel):
     patient_id: int
     org_id: int
-    doctor_name: str = Field(min_length=1)
+    doctor_name: str = Field(min_length=1, max_length=64)
     package: str = Field(default="basic", pattern="^(basic|standard|premium)$")
     signed_date: OptionalDateStr = ""
 
@@ -370,7 +370,7 @@ class ContractOut(ContractCreate):
 
 class ContractServiceCreate(BaseModel):
     service_type: str = Field(pattern="^(visit|consult|followup|referral)$")
-    note: str = ""
+    note: str = Field(default="", max_length=512)
 
 
 class ContractServiceOut(ContractServiceCreate):
@@ -383,11 +383,11 @@ class ContractServiceOut(ContractServiceCreate):
 class SlotCreate(BaseModel):
     org_id: int
     resource_type: str = Field(pattern="^(outpatient|exam|lab)$")
-    resource_name: str = Field(min_length=1)
+    resource_name: str = Field(min_length=1, max_length=128)
     # ⑨便捷寻医：门诊号源挂医师档案。检查/检验号源不对应某位医师，故可空。
     employee_id: int | None = None
     slot_date: DateStr
-    slot_time: str = ""
+    slot_time: str = Field(default="", max_length=16)
     capacity: int = Field(default=1, ge=1)
 
 
@@ -415,7 +415,7 @@ class AppointmentOut(AppointmentCreate):
 class BatchCreate(BaseModel):
     batch_no: str = Field(min_length=1, max_length=32)
     center_org_id: int
-    item_name: str = Field(min_length=1)
+    item_name: str = Field(min_length=1, max_length=128)
     quantity: int = Field(gt=0)
 
 

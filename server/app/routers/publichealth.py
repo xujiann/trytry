@@ -25,10 +25,10 @@ router = APIRouter(prefix="/api/publichealth", tags=["公卫协同"], dependenci
 
 
 class EventCreate(BaseModel):
-    title: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=256)
     level: str = Field(default="IV", pattern="^(I|II|III|IV)$")
-    disease_name: str = ""
-    description: str = ""
+    disease_name: str = Field(default="", max_length=128)
+    description: str = Field(default="", max_length=1024)
 
 
 class EventOut(EventCreate):
@@ -61,8 +61,8 @@ def list_events(status: str | None = None, db: Session = Depends(get_db)):
 
 
 class ActionCreate(BaseModel):
-    action: str = Field(min_length=1)
-    actor: str = ""
+    action: str = Field(min_length=1, max_length=512)
+    actor: str = Field(default="", max_length=64)
 
 
 class EventActionCreatedOut(BaseModel):
@@ -182,9 +182,9 @@ _DOMAINS = {"nutrition", "environment", "occupational", "radiation", "school"}
 
 
 class MonitorCreate(BaseModel):
-    domain: str
+    domain: str = Field(max_length=16)
     org_id: int
-    indicator: str = Field(min_length=1)
+    indicator: str = Field(min_length=1, max_length=128)
     value: float
     threshold: float
     record_date: OptionalDateStr = ""

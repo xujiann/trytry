@@ -23,10 +23,10 @@ _TYPE_NAMES = {"birth": "出生医学证明", "death": "死亡医学证明", "de
 
 class CertCreate(BaseModel):
     cert_type: str = Field(pattern="^(birth|death|defect)$")
-    name: str = Field(min_length=1)
-    gender: str = "未知"
+    name: str = Field(min_length=1, max_length=64)
+    gender: str = Field(default="未知", max_length=8)
     event_date: DateStr
-    detail: str = ""
+    detail: str = Field(default="", max_length=512)
     org_id: int
     patient_id: int | None = None
     child_id: int | None = None

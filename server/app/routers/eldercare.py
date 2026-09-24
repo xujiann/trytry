@@ -27,7 +27,7 @@ class AssessmentCreate(BaseModel):
     patient_id: int
     adl_score: int = Field(ge=0, le=100)
     cognitive_score: int = Field(default=0, ge=0, le=30)
-    tcm_constitution: str = ""
+    tcm_constitution: str = Field(default="", max_length=32)
     # 复评提醒按字符串比 `assessed_date <= 一年前`：`2025/01/15`、`20250115` 这类写法
     # 在同一年份里比出来是反的，这个人就永远不进年度复评提醒（P1-61，实测）
     assessed_date: OptionalDateStr = ""

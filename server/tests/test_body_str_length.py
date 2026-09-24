@@ -45,8 +45,9 @@ APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
 
 #: 棘轮基线：只许调小（`scripts/dump_gate_status.py` 把它列进闸门现状）。
 #: 2026-09-24 实测 197 处（量法见 `unbounded_body_strings`）→ 182（第一批核心诊疗：就诊、入院、转诊、
-#: 传染病报告、接种、满意度，15 个字段）。
-BASELINE = 182
+#: 传染病报告、接种、满意度，15 个字段）→ 97（第二批诊疗与公卫：schemas 共用请求模型、孕产妇、临床文书、急救、
+#: 处方、检查、医保、证明、慢病、上门、用血、手术、老年、短缺药、会诊、预约、公卫、质控，85 个字段）。
+BASELINE = 97
 
 _FINITE_PATTERN = re.compile(r"\^[^*+{]*\$")
 

@@ -45,8 +45,8 @@ class VisitCreate(BaseModel):
     patient_id: int
     org_id: int
     service_type: str = Field(pattern="^(nursing|doctor|rehab|sampling)$")
-    demand: str = ""
-    address: str = ""
+    demand: str = Field(default="", max_length=512)
+    address: str = Field(default="", max_length=256)
     expect_date: OptionalDateStr = ""
     # 不传则自动关联该患者在该机构的履约中家医签约
     contract_id: int | None = None

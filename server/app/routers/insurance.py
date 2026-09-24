@@ -120,8 +120,8 @@ def issue_referral_cert(
 
 class SpecialDiseaseCreate(BaseModel):
     patient_id: int
-    disease_name: str = Field(min_length=1)
-    reason: str = ""
+    disease_name: str = Field(min_length=1, max_length=128)
+    reason: str = Field(default="", max_length=512)
 
 
 class SpecialDiseaseOut(SpecialDiseaseCreate):
@@ -228,8 +228,8 @@ def fund_stats(db: Session = Depends(get_db)):
 
 class DualChannelCreate(BaseModel):
     patient_id: int
-    drug_name: str = Field(min_length=1)
-    reason: str = ""
+    drug_name: str = Field(min_length=1, max_length=128)
+    reason: str = Field(default="", max_length=512)
 
 
 class DualChannelCreatedOut(BaseModel):
