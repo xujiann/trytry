@@ -87,8 +87,11 @@ function spdModal(title, fields) {
         return `<textarea name="${esc(f.name)}" rows="3" style="width:100%"
           placeholder="${esc(f.placeholder || "")}">${esc(val)}</textarea>`;
       }
+      // 数字框必须带 step="any"：不带时浏览器按默认步长 1 校验，1.25、12.80、6.1 一律提交不了，
+      // 只弹一句"两个最接近的有效值分别为 1 和 2"——用户只能取整了再填（P1-67）。
+      // 整数字段填了小数由后端 422 报人话，校验只有后端一份；移动端的数字框一直是这么写的。
       return `<input name="${esc(f.name)}" type="${f.type === "number" ? "number" : f.type === "password" ? "password" : "text"}"
-        value="${esc(val)}" placeholder="${esc(f.placeholder || "")}"${f.required ? " required" : ""}>`;
+        value="${esc(val)}" placeholder="${esc(f.placeholder || "")}"${f.type === "number" ? ' step="any"' : ""}${f.required ? " required" : ""}>`;
     };
     // 字段多的表单（如术中记录）会比视口高：遮罩是 fixed 的，页面滚不动，超出的部分连同
     // "确定"按钮就够不着了——表单自己限高并可滚动

@@ -502,6 +502,22 @@ def test_校验失败的报错是人话而不是object_Object(page, base_url):
         assert page.evaluate("() => typeof errorText") == "function", path
 
 
+def test_页内表单的数字框收得了小数_以DRG调权为例(page, base_url):
+    """P1-67：`spdModal` 的数字框此前不带 `step`，浏览器按默认步长 1 校验——1.25、12.80、6.1
+    一律提交不了，只弹一句"两个最接近的有效值分别为 1 和 2"。后端收小数的十个字段（DRG 基准
+    权重、收费调价、会诊计费、基金池总额与预付比例、慢专病管理目标上下限、服务包价格、考核指标
+    权重、课程考核得分）从界面都只能填整数。以调权为例：种子里的基准权重本身全是小数
+    （BR23 是 1.35），调成 1.25 要能提交、目录里要看得见。"""
+    _login(page, base_url)
+    _open_page(page, "drgs", "DRGs分析")
+    row = page.locator("tr:has(button[data-drg-weight])", has_text="BR23")
+    row.locator("button[data-drg-weight]").click()
+    # 判据自证：确实是数字框——换成文本框这条用例照样会绿，却什么也没验
+    expect(page.locator('form.panel input[name="base_weight"]')).to_have_attribute("type", "number")
+    _spd_modal(page, {"base_weight": "1.25"})  # 修复前：浏览器拦下提交，遮罩不走，这里超时
+    expect(page.locator("tr:has(button[data-drg-weight])", has_text="BR23")).to_contain_text("1.25")
+
+
 def test_会计页存下的期间被拒时回落本月_切换框先验再存(page, base_url):
     """P1-62：三个报表口径的 `period` 收严之后，localStorage 里早先存下的坏值
     （切换框是自由文本）会让整页那个 Promise.all 失败——而切换框画在它之后，
