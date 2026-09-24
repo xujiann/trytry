@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_local
+from ..numtypes import INT4_MAX, INT4_MIN
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
@@ -207,7 +208,7 @@ class ConsentIn(BaseModel):
     title: str = Field(default="", max_length=128)
     content: str = Field(default="", max_length=8192)
     related_type: str = Field(default="", max_length=32)
-    related_id: int = 0
+    related_id: int = Field(default=0, ge=INT4_MIN, le=INT4_MAX)
     doctor_name: str = Field(default="", max_length=64)
 
 

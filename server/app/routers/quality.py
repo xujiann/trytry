@@ -17,6 +17,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import ensure_present, insert_if_absent
+from ..numtypes import INT4_MAX, INT4_MIN
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..datetypes import OptionalDateStr
@@ -233,7 +234,7 @@ def adverse_event_stats(db: Session = Depends(get_db)):
 
 class RecordQcCreate(BaseModel):
     target_type: str = Field(pattern="^(encounter|case_summary)$")
-    target_id: int
+    target_id: int = Field(ge=INT4_MIN, le=INT4_MAX)
     score: int = Field(ge=0, le=100)
     defects: str = Field(default="", max_length=1024)
 

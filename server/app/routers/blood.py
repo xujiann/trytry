@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, ensure_present, insert_if_absent, take_amount
+from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
@@ -97,7 +98,7 @@ class TransfusionCreate(BaseModel):
     org_id: int
     blood_type: str = Field(pattern=_BLOOD_TYPE)
     component: str = Field(pattern=_COMPONENT)
-    quantity_ml: int = Field(gt=0)
+    quantity_ml: int = Field(gt=0, le=INT4_MAX)
     reason: str = Field(default="", max_length=512)
 
 

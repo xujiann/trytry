@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr, PeriodStr
+from ..numtypes import INT4_MAX, MONEY_MAX
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_visible,
@@ -219,7 +220,7 @@ class FinanceCreate(BaseModel):
     period: PeriodStr
     category: str = Field(pattern="^(income|expense)$")
     item: str = Field(default="", max_length=128)
-    amount: FiniteFloat = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
 
 
 class FinanceOut(FinanceCreate):
@@ -317,7 +318,7 @@ class AssetCreate(BaseModel):
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
     category: str = Field(default="office", pattern="^(equipment|office)$")
-    quantity: int = Field(default=1, ge=1)
+    quantity: int = Field(default=1, ge=1, le=INT4_MAX)
 
 
 class AssetOut(AssetCreate):
@@ -818,8 +819,8 @@ def list_staff_contracts(employee_id: int | None = None, db: Session = Depends(g
 class PayrollCreate(BaseModel):
     employee_id: int
     period: PeriodStr
-    base_salary: FiniteFloat = Field(ge=0)
-    perf_bonus: FiniteFloat = Field(default=0, ge=0)
+    base_salary: FiniteFloat = Field(ge=0, le=MONEY_MAX)
+    perf_bonus: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     perf_coefficient: float = Field(default=1.0, ge=0, le=2)
 
 
@@ -1000,7 +1001,7 @@ def budget_execution(
 
 class MovementCreate(BaseModel):
     movement_type: str = Field(pattern="^(inbound|issue|return|scrap)$")
-    quantity: int = Field(gt=0)
+    quantity: int = Field(gt=0, le=INT4_MAX)
     note: str = Field(default="", max_length=256)
 
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..clock import now_naive
 from ..concurrency import insert_or_conflict
+from ..numtypes import INT4_MAX, MONEY_MAX
 from ..visibility import (
     assert_org_writable,
     assert_patient_visible,
@@ -825,8 +826,8 @@ class ExamResourceCreate(BaseModel):
     center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
     item_name: str = Field(min_length=1, max_length=128)
     device: str = Field(default="", max_length=128)
-    price: FiniteFloat = Field(default=0, ge=0)
-    duration_min: int = Field(default=15, gt=0)
+    price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    duration_min: int = Field(default=15, gt=0, le=INT4_MAX)
     notes: str = Field(default="", max_length=512)
 
 

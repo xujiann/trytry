@@ -20,6 +20,7 @@ from ...models import (
     SpdDevice,
     SpdSyncLog,
 )
+from ....numtypes import INT4_MAX
 from ....visibility import assert_org_writable
 from ._base import router
 
@@ -232,8 +233,8 @@ def update_data_source(
 
 
 class SyncLogIn(BaseModel):
-    rows: int = Field(default=0, ge=0)
-    latency_ms: int = Field(default=0, ge=0)
+    rows: int = Field(default=0, ge=0, le=INT4_MAX)
+    latency_ms: int = Field(default=0, ge=0, le=INT4_MAX)
     success: bool = True
     message: str = Field(default="", max_length=256)
 

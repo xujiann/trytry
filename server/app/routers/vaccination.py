@@ -9,6 +9,7 @@ from .. import clock
 from ..clock import now_naive
 from ..concurrency import claim_quota
 from ..datetypes import OptionalDateStr
+from ..numtypes import INT4_MAX
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
@@ -48,7 +49,7 @@ class RecordCreate(BaseModel):
     patient_id: int
     vaccine_code: str = Field(min_length=1, max_length=64)
     vaccine_name: str = Field(min_length=1, max_length=128)
-    dose_no: int = Field(default=1, ge=1)
+    dose_no: int = Field(default=1, ge=1, le=INT4_MAX)
     vaccinated_date: OptionalDateStr = ""
     org_id: int
     # 批次可空（存量记录没有批号），给了就三查：过期 / 封存 / 库存

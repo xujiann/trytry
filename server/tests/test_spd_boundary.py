@@ -27,6 +27,7 @@ PLATFORM_ALLOWLIST = {
     "clock",         # 统一的 naive UTC 时间源
     "database",      # 会话与 Base
     "datetypes",     # 日期入参类型（真日历校验）
+    "numtypes",      # 数值入参的列容量上限（整数 / 金额写进定长数值列之前先挡住装不下的值，P1-93）
     "deps",          # 鉴权、分页、角色守卫、业务日期
     "visibility",    # 横向数据隔离（机构可见性、患者可见性与留痕）
     "concurrency",   # 原子累加/扣减、唯一约束冲突助手

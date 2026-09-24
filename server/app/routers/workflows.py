@@ -24,6 +24,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..numtypes import INT4_MAX, INT4_MIN
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_visible,
@@ -215,7 +216,7 @@ def list_definitions(db: Session = Depends(get_db)):
 class StartIn(BaseModel):
     definition_key: str
     business_type: str = Field(min_length=1, max_length=32)
-    business_id: int = 0
+    business_id: int = Field(default=0, ge=INT4_MIN, le=INT4_MAX)
     title: str = Field(default="", max_length=256)
     org_id: int | None = None
 

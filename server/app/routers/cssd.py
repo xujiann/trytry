@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
+from ..numtypes import INT4_MAX, MONEY_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
@@ -95,7 +96,7 @@ COST_TYPES = {
 class CostItemCreate(BaseModel):
     batch_id: int
     cost_type: str = Field(pattern="^(labor|material|energy|equipment|other)$")
-    amount: FiniteFloat = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
     note: str = Field(default="", max_length=256)
 
 
@@ -260,7 +261,7 @@ class CssdRequestFulfilledOut(BaseModel):
 class CssdReqCreate(BaseModel):
     org_id: int
     item_name: str = Field(min_length=1, max_length=128)
-    quantity: int = Field(default=1, ge=1)
+    quantity: int = Field(default=1, ge=1, le=INT4_MAX)
 
 
 @router.post(

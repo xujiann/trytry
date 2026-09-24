@@ -18,6 +18,7 @@ from ..models import (
 )
 from datetime import date, timedelta
 from ..datetypes import DateStr, OptionalDateStr
+from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable
 
 router = APIRouter(prefix="/api/tcm", tags=["中医药服务"], dependencies=[Depends(get_current_user)])
@@ -213,7 +214,7 @@ class DispenseCreate(BaseModel):
     patient_id: int
     from_org_id: int
     herbs: str = Field(min_length=1, max_length=1024)
-    doses: int = Field(default=1, ge=1)
+    doses: int = Field(default=1, ge=1, le=INT4_MAX)
     decoct: bool = True
 
 
@@ -387,7 +388,7 @@ class BatchCreate(BaseModel):
     formula_id: int
     batch_no: str = Field(min_length=1, max_length=32)
     org_id: int
-    quantity: int = Field(ge=1)
+    quantity: int = Field(ge=1, le=INT4_MAX)
     unit: str = Field(default="剂", max_length=16)
     produced_date: DateStr
     # 不传则按配方有效期（月）自动推算。发放拦过期、效期预警都按字符串比它：

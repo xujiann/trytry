@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr
@@ -210,7 +211,7 @@ class BatchIn(BaseModel):
     manufacturer: str = Field(default="", max_length=128)
     expire_date: DateStr
     org_id: int
-    quantity: int = Field(default=0, ge=0)
+    quantity: int = Field(default=0, ge=0, le=INT4_MAX)
 
 
 class BatchFreeze(BaseModel):

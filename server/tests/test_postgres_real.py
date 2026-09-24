@@ -812,3 +812,25 @@ def test_请求体非有限浮点在真PG上是422而不是照存或500(pg_engin
         + "\n"
         + result.stderr[-2000:]
     )
+
+
+def test_数值入参越过列容量在真PG上是422而不是500(pg_engine):
+    """把 `test_body_numeric_capacity.py` 换到 PG 上再跑一遍（P1-93）。
+
+    SQLite 的整数是 8 字节、NUMERIC 不限精度，越过 `integer` / `Numeric(14,2)` 容量照存；PG 抛
+    `NumericValueOutOfRange`，没人接即 500——满意度评价的对象号、收费项目单价、处方天数、号源容量都撞得上。
+    修过的端点在两个库上都该是 422，只有这里测得出 PG 那一半。接法与上几条相同，同样放在文件末尾。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_body_numeric_capacity.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_NUMCAP_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "数值入参列容量用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )

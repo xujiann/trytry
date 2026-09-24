@@ -24,6 +24,7 @@ from ..deps import (
     resolve_business_date,
 )
 from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient, User
+from ..numtypes import INT4_MAX
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
 
@@ -121,7 +122,7 @@ class DiseaseTypeCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     level_rules: dict = Field(default_factory=dict)
     guidance: str = Field(default="", max_length=512)
-    followup_interval_days: int = Field(default=90, gt=0)
+    followup_interval_days: int = Field(default=90, gt=0, le=INT4_MAX)
     active: bool = True
 
 
@@ -129,7 +130,7 @@ class DiseaseTypeUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=64)
     level_rules: dict | None = None
     guidance: str | None = Field(default=None, max_length=512)
-    followup_interval_days: int | None = Field(default=None, gt=0)
+    followup_interval_days: int | None = Field(default=None, gt=0, le=INT4_MAX)
     active: bool | None = None
 
 

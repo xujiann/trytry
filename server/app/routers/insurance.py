@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..numtypes import MONEY_MAX
 from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
 from ..concurrency import insert_or_conflict
 from ..database import get_db
@@ -29,9 +30,9 @@ class SettlementCreate(BaseModel):
     patient_id: int
     org_id: int
     settle_type: str = Field(default="local", pattern="^(local|remote)$")
-    total_amount: FiniteFloat = Field(gt=0)
-    insurance_pay: FiniteFloat = Field(ge=0)
-    self_pay: FiniteFloat = Field(ge=0)
+    total_amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
+    insurance_pay: FiniteFloat = Field(ge=0, le=MONEY_MAX)
+    self_pay: FiniteFloat = Field(ge=0, le=MONEY_MAX)
 
 
 class SettlementOut(SettlementCreate):

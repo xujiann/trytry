@@ -18,6 +18,7 @@ from ...clock import now_naive
 from ...concurrency import ensure_present, insert_if_absent, insert_or_conflict
 from ...database import get_db
 from ...deps import paginate
+from ...numtypes import INT4_MAX, INT4_MIN
 from ..platform import Encounter, Patient, ResidentAccount
 from ..models import (
     SpdAssessment,
@@ -570,7 +571,7 @@ def self_screening(
 class ApplyIn(BaseModel):
     patient_id: int | None = None
     program_code: str = Field(min_length=1, max_length=32)
-    screening_id: int | None = None
+    screening_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
     note: str = Field(default="", max_length=512)
 
 

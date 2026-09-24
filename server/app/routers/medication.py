@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
@@ -39,7 +40,7 @@ class ShortageCreate(BaseModel):
     patient_id: int | None = None
     drug_code: str = Field(min_length=1, max_length=64)
     drug_name: str = Field(min_length=1, max_length=128)
-    quantity: int = Field(default=1, ge=1)
+    quantity: int = Field(default=1, ge=1, le=INT4_MAX)
 
 
 class ShortageOut(ShortageCreate):

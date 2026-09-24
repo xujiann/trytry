@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, FiniteFloat
 from .datetypes import DateStr, OptionalDateStr
+from .numtypes import INT4_MAX
 
 
 class LoginRequest(BaseModel):
@@ -217,7 +218,7 @@ class PrescriptionItemIn(BaseModel):
     drug_code: str = Field(max_length=64)
     drug_name: str = Field(max_length=128)
     daily_dose: FiniteFloat = Field(gt=0)
-    days: int = Field(default=1, ge=1)
+    days: int = Field(default=1, ge=1, le=INT4_MAX)
 
 
 class PrescriptionItemOut(PrescriptionItemIn):
@@ -269,7 +270,7 @@ class TransferCreate(BaseModel):
     drug_code: str = Field(max_length=64)
     from_org_id: int
     to_org_id: int
-    quantity: int = Field(gt=0)
+    quantity: int = Field(gt=0, le=INT4_MAX)
 
 
 class ChronicCreate(BaseModel):
@@ -401,7 +402,7 @@ class SlotCreate(BaseModel):
     employee_id: int | None = None
     slot_date: DateStr
     slot_time: str = Field(default="", max_length=16)
-    capacity: int = Field(default=1, ge=1)
+    capacity: int = Field(default=1, ge=1, le=INT4_MAX)
 
 
 class SlotOut(SlotCreate):
@@ -429,7 +430,7 @@ class BatchCreate(BaseModel):
     batch_no: str = Field(min_length=1, max_length=32)
     center_org_id: int
     item_name: str = Field(min_length=1, max_length=128)
-    quantity: int = Field(gt=0)
+    quantity: int = Field(gt=0, le=INT4_MAX)
 
 
 class BatchOut(BatchCreate):

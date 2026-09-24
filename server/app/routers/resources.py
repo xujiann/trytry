@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..numtypes import INT4_MAX
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import TimeStr
@@ -59,7 +60,7 @@ class ResourceIn(BaseModel):
     resource_type: str = Field(pattern="^(logistics|facility|equipment|meeting_room)$")
     code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
-    capacity: int = Field(default=1, ge=1)
+    capacity: int = Field(default=1, ge=1, le=INT4_MAX)
     unit: str = Field(default="", max_length=16)
     location: str = Field(default="", max_length=256)
     contact: str = Field(default="", max_length=64)

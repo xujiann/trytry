@@ -30,6 +30,7 @@ from ..concurrency import (
     insert_or_conflict,
     take_amount,
 )
+from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr
@@ -829,7 +830,7 @@ class PurchaseCreate(BaseModel):
     item_type: str = Field(default="drug", pattern="^(drug|material)$")
     item_code: str = Field(min_length=1, max_length=64)
     item_name: str = Field(min_length=1, max_length=128)
-    quantity: int = Field(gt=0)
+    quantity: int = Field(gt=0, le=INT4_MAX)
     note: str = Field(default="", max_length=512)
 
 
@@ -1009,7 +1010,7 @@ def list_purchases(
 class StockTakeCreate(BaseModel):
     org_id: int
     drug_code: str = Field(min_length=1, max_length=64)
-    actual_qty: int = Field(ge=0)
+    actual_qty: int = Field(ge=0, le=INT4_MAX)
     note: str = Field(default="", max_length=256)
 
 

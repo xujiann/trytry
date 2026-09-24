@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ....database import get_db
 from ....deps import paginate, require_roles
+from ....numtypes import INT4_MAX, INT4_MIN, MONEY_MAX
 from ...models import (
     SpdEduMaterial,
     SpdScale,
@@ -100,7 +101,7 @@ class ScaleIn(BaseModel):
     version: str = Field(default="v1", max_length=16)
     items: list[dict] = Field(default_factory=list)
     scoring: dict = Field(default_factory=dict)
-    owner_team_id: int | None = None
+    owner_team_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
 
 
 def _scale_out(s: SpdScale) -> dict:
@@ -290,7 +291,7 @@ class PackageIn(BaseModel):
     code: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=64)
     program_code: str = Field(default="", max_length=32)
-    price: FiniteFloat = Field(default=0, ge=0)
+    price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     period_days: int = Field(default=365, ge=1, le=3650)
     items: list[dict] = Field(default_factory=list)
 

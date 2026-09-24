@@ -30,6 +30,7 @@ from ..deps import (
     resolve_business_date,
     resolve_org_scope,
 )
+from ..numtypes import MONEY_MAX
 from ..visibility import scope_stats_orgs
 from ..formula import FormulaError, evaluate, validate
 from ..models import (
@@ -265,8 +266,8 @@ class OutboundIn(BaseModel):
     external_org_level: str = Field(default="city", pattern="^(city|province|other)$")
     visit_type: str = Field(default="outpatient", pattern="^(outpatient|inpatient)$")
     diagnosis_name: str = Field(default="", max_length=256)
-    total_amount: FiniteFloat = Field(default=0, ge=0)
-    insurance_pay: FiniteFloat = Field(default=0, ge=0)
+    total_amount: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    insurance_pay: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     referral_id: int | None = None
     source: str = Field(default="manual", pattern="^(manual|insurance_import)$")
 

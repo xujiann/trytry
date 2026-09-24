@@ -43,6 +43,7 @@ from ..models import (
     User,
     utcnow,
 )
+from ..numtypes import MONEY_MAX
 from .performance import org_scorecards
 
 router = APIRouter(
@@ -68,7 +69,7 @@ class PoolIn(BaseModel):
     year: int = Field(ge=2000, le=2100)
     insurance_type: str = Field(default="resident", pattern="^(resident|employee)$")
     org_group_id: int | None = None
-    total_amount: FiniteFloat = Field(ge=0)
+    total_amount: FiniteFloat = Field(ge=0, le=MONEY_MAX)
     prepay_ratio_pct: float = Field(default=0, ge=0, le=100)
     note: str = Field(default="", max_length=256)
 
@@ -284,7 +285,7 @@ def update_pool(pool_id: int, body: PoolUpdate, db: Session = Depends(get_db)):
 
 class PrepaymentIn(BaseModel):
     batch_no: str = Field(default="", max_length=32)
-    amount: FiniteFloat = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
     paid_date: OptionalDateStr = ""
     note: str = Field(default="", max_length=256)
 

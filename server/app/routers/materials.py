@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..concurrency import add_amount, ensure_present, insert_if_absent
+from ..numtypes import INT4_MAX, MONEY_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
 from ..datetypes import OptionalDateStr, check_date
@@ -48,8 +49,8 @@ class PurchaseIn(BaseModel):
     item_name: str = Field(min_length=1, max_length=128)
     spec: str = Field(default="", max_length=64)
     unit: str = Field(default="件", max_length=16)
-    quantity: int = Field(default=1, gt=0)
-    estimated_price: FiniteFloat = Field(default=0, ge=0)
+    quantity: int = Field(default=1, gt=0, le=INT4_MAX)
+    estimated_price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     reason: str = Field(default="", max_length=512)
 
 
@@ -230,7 +231,7 @@ def sign_contract(purchase_id: int, body: ContractIn, db: Session = Depends(get_
 
 
 class ReceiveIn(BaseModel):
-    received_quantity: int = Field(gt=0)
+    received_quantity: int = Field(gt=0, le=INT4_MAX)
     note: str = ""
 
 
@@ -330,7 +331,7 @@ class ConsumableIn(BaseModel):
     supplier_id: int | None = None
     batch_no: str = Field(default="", max_length=64)
     expire_date: OptionalDateStr = ""
-    unit_price: FiniteFloat = Field(default=0, ge=0)
+    unit_price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
 
 
 @router.post(

@@ -46,6 +46,7 @@ from ..models import (
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
 from ..service import close_followup_record
+from ...numtypes import INT4_MAX, INT4_MIN
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -1011,7 +1012,7 @@ class CallTaskIn(BaseModel):
     patient_id: int
     phone: str = Field(default="", max_length=20)
     ref_type: str = Field(default="followup", max_length=24)
-    ref_id: int | None = None
+    ref_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
 
 
 @router.post("/call-tasks", response_model=CallTaskCreatedOut, status_code=201,

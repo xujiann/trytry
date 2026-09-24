@@ -18,6 +18,7 @@ from ...models import (
     SpdPathTemplate,
     SpdProgram,
 )
+from ....numtypes import INT4_MAX, INT4_MIN
 from ....visibility import assert_org_writable
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
 
@@ -93,7 +94,7 @@ class PathTemplateIn(BaseModel):
     version: str = Field(default="v1", max_length=16)
     scope: str = Field(default="region", pattern="^(region|org|team)$")
     org_id: int | None = None
-    team_id: int | None = None
+    team_id: int | None = Field(default=None, ge=INT4_MIN, le=INT4_MAX)
     description: str = Field(default="", max_length=512)
 
 
@@ -101,7 +102,7 @@ class PathNodeIn(BaseModel):
     key: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=64)
     stage: str = Field(default="", max_length=32)
-    seq: int = 0
+    seq: int = Field(default=0, ge=INT4_MIN, le=INT4_MAX)
     dept: str = Field(default="", max_length=64)
     exec_role: str = Field(default="doctor", max_length=32)
     service_type: str = Field(

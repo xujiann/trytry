@@ -25,6 +25,7 @@ from ..models import (
     VitalSignRecord,
     Ward,
 )
+from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_patient_visible
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], dependencies=[Depends(get_current_user)])
@@ -370,8 +371,8 @@ class VitalIn(BaseModel):
     respiration: int | None = Field(default=None, ge=0, le=100)
     sbp: int | None = Field(default=None, ge=0, le=300)
     dbp: int | None = Field(default=None, ge=0, le=200)
-    intake_ml: int | None = Field(default=None, ge=0)
-    output_ml: int | None = Field(default=None, ge=0)
+    intake_ml: int | None = Field(default=None, ge=0, le=INT4_MAX)
+    output_ml: int | None = Field(default=None, ge=0, le=INT4_MAX)
     weight_kg: float | None = Field(default=None, ge=0, le=500)
     recorder: str = ""
 
@@ -451,7 +452,7 @@ class HandoverIn(BaseModel):
     handover_date: DateStr
     from_staff: str = Field(default="", max_length=64)
     to_staff: str = Field(default="", max_length=64)
-    critical_count: int = Field(default=0, ge=0)
+    critical_count: int = Field(default=0, ge=0, le=INT4_MAX)
     content: str = Field(default="", max_length=2048)
 
 

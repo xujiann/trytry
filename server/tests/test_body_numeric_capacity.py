@@ -1,0 +1,201 @@
+"""整数 / 金额入参没有上限就写进 `Integer` / `Money` 列：开发库照存，生产库溢出即 500（P1-93）。
+
+写接口把请求体的整数写进 `Integer` 列（PostgreSQL `integer`，±2147483647）、把金额写进 `Money`
+（`Numeric(14, 2)`，12 位整数），入参却只有下界（`ge=0` / `gt=0`）或干脆没有界：
+
+- **开发库（SQLite）**：整数是 8 字节、NUMERIC 不限精度，照存——开发、测试一律绿；
+- **生产库（PostgreSQL）**：`integer out of range` / `numeric field overflow`，没人接，整个请求 **500**。
+
+真 PG 实测（修前代码）：满意度评价 `target_id=99999999999` → 500；收费项目 `price=1e13` → 500。
+
+**本文件**：①棘轮——这种「入参挡不住越过列容量 → 定长数值列」只减不增（写库形状与字符串那一族共用
+`test_body_str_length.body_column_writes`，含请求体列表子项逐个写库）；②修过的端点的回归：超出列容量 422，
+恰好到上限照常收。修法：字段补 `le=INT4_MAX` / `le=MONEY_MAX`（`app/numtypes.py`），没有下界的补对称的下界。
+**外键列不在此列**——引用存在性由 P1-90 管（PG 上按主键查一个超大 id 只是查不到，404）。
+
+**生产库那一半要在真 PG 上跑才算数**：`tests/test_postgres_real.py` 末条用 `MEDPLAT_NUMCAP_PG_URL`
+把本文件换到 PG 上再跑一遍。
+"""
+import os
+import typing
+
+# 引擎是模块级的，`app.database` 一旦导入就定型——切库必须赶在导入之前。
+_PG_URL = os.environ.get("MEDPLAT_NUMCAP_PG_URL", "")
+if _PG_URL:
+    os.environ["MEDPLAT_DATABASE_URL"] = _PG_URL
+
+import pytest  # noqa: E402
+import test_body_str_length as strlen  # noqa: E402
+
+from app.database import engine  # noqa: E402
+from app.numtypes import INT4_MAX, INT4_MIN, MONEY_MAX  # noqa: E402
+
+if _PG_URL:
+    assert engine.dialect.name == "postgresql", (
+        "MEDPLAT_NUMCAP_PG_URL 已给出，引擎却不是 PostgreSQL——"
+        f"实际 {engine.dialect.name}，多半是 app.database 在本模块之前就被导入了"
+    )
+
+#: 基线：已清零，此后即零基线闸门（`scripts/dump_gate_status.py` 把它列进闸门现状）。
+#: 2026-09-24 实测 65 处（非外键 `Integer` 48、`Money` 17；两个列同名的字段写进两张表算两处）→ 0（同批补齐：
+#: 64 个字段补 `le=INT4_MAX` / `le=MONEY_MAX`，一个界都没有的 8 个多态 id / 序号补对称的 `ge=INT4_MIN`）。
+BASELINE = 0
+
+
+def _column_caps() -> dict[str, dict[str, tuple[float, float, str]]]:
+    """ORM 模型 → {列: (下限, 上限, 类型)}：非主键、非外键的 Integer 与 Numeric 列。"""
+    import app.models  # noqa: F401  先平台再 spd，见 P2-51
+    import app.spd.models  # noqa: F401
+    from sqlalchemy import BigInteger, Float, Integer, Numeric, SmallInteger
+
+    from app.database import Base
+
+    caps: dict[str, dict[str, tuple[float, float, str]]] = {}
+    for mapper in Base.registry.mappers:
+        cols = {}
+        for c in mapper.columns:
+            t = c.type
+            if c.primary_key or c.foreign_keys or isinstance(t, Float):
+                continue
+            if isinstance(t, SmallInteger):
+                cols[c.name] = (-32_768, 32_767, "SmallInteger")
+            elif isinstance(t, BigInteger):
+                cols[c.name] = (-(2 ** 63), 2 ** 63 - 1, "BigInteger")
+            elif isinstance(t, Integer):
+                cols[c.name] = (INT4_MIN, INT4_MAX, "Integer")
+            elif isinstance(t, Numeric) and t.precision:
+                top = 10 ** (t.precision - (t.scale or 0)) - 10 ** -(t.scale or 0)
+                cols[c.name] = (-top, top, f"Numeric({t.precision},{t.scale or 0})")
+        caps[mapper.class_.__name__] = cols
+    return caps
+
+
+def _is_number(field) -> bool:
+    ann = field.annotation
+    variants = (ann, *typing.get_args(ann))
+    return bool({int, float} & set(variants)) and bool not in variants
+
+
+def _bounds(field) -> tuple[float | None, float | None]:
+    """字段自己挡得住的 (下界, 上界)；`gt` / `lt` 按开区间算，没有就是 None。"""
+    ann = field.annotation
+    metas = list(field.metadata) + [m for a in (ann, *typing.get_args(ann)) for m in getattr(a, "__metadata__", ())]
+    lows = [getattr(m, k) for m in metas for k in ("ge", "gt") if getattr(m, k, None) is not None]
+    highs = [getattr(m, k) for m in metas for k in ("le", "lt") if getattr(m, k, None) is not None]
+    return (max(lows) if lows else None), (min(highs) if highs else None)
+
+
+def uncapped_body_numbers(modules=None) -> list[str]:
+    """`模块:请求模型.字段→ORM模型.列[类型]`：写接口把这个数值字段写进定长数值列，入参却挡不住越过列容量。"""
+    caps = _column_caps()
+    found = set()
+    for modname, cls, field_name, model, column in strlen.body_column_writes(modules):
+        cap = caps.get(model, {}).get(column)
+        field = cls.model_fields[field_name]
+        if cap is None or not _is_number(field):
+            continue
+        low, high = _bounds(field)
+        if low is not None and high is not None and low >= cap[0] and high <= cap[1]:
+            continue
+        found.add(f"{modname.removeprefix('app.')}:{cls.__name__}.{field_name}→{model}.{column}[{cap[2]}]")
+    return sorted(found)
+
+
+def test_数值入参无容量上限写进定长列_只减不增():
+    bad = uncapped_body_numbers()
+    assert len(bad) <= BASELINE, (
+        f"入参挡不住越过列容量、却写进定长数值列的字段 {len(bad)} 处，超过基线 {BASELINE}：\n  "
+        + "\n  ".join(bad)
+        + "\n\n生产库（PG）上溢出即 500。给字段补 `le=INT4_MAX` / `le=MONEY_MAX`（`app/numtypes.py`），"
+        "没有下界的补对称的下界。"
+    )
+
+
+def test_修完请把基线调小():
+    assert len(uncapped_body_numbers()) >= BASELINE, (
+        f"实测 {len(uncapped_body_numbers())} 处，比基线 {BASELINE} 少——把 BASELINE 调小并写上是哪一批"
+    )
+
+
+def test_判据自证_只有下界_没有界_挡得住的不报():
+    import types
+
+    from pydantic import BaseModel, Field
+
+    snippet = '''
+class LineIn(BaseModel):
+    days: int = Field(default=1, ge=1)
+
+class NoteIn(BaseModel):
+    patient_id: int
+    score: int = Field(ge=1)
+    bounded: int = Field(ge=1, le=100)
+    lines: list[LineIn] = []
+
+@router.post("/n")
+def create(body: NoteIn, db=None):
+    db.add(SatisfactionSurvey(target_id=body.score, score=body.bounded, patient_id=body.patient_id))
+    for line in body.lines:
+        db.add(PrescriptionItem(**line.model_dump()))
+'''
+
+    class _Router:
+        def __getattr__(self, _name):
+            return lambda *a, **k: (lambda fn: fn)
+
+    mod = types.ModuleType("自证")
+    mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "router": _Router()})
+    exec(compile(snippet, "自证", "exec"), mod.__dict__)
+    got = uncapped_body_numbers([("自证", mod, snippet)])
+    # patient_id 是外键列（归 P1-90 管），bounded 上下界都在列容量里：都不报
+    assert got == ["自证:LineIn.days→PrescriptionItem.days[Integer]",
+                   "自证:NoteIn.score→SatisfactionSurvey.target_id[Integer]"], got
+
+
+# ================================================================ 回归：超出列容量 422，恰好到上限照常收
+@pytest.fixture(scope="module")
+def world(client, admin):
+    org = client.post("/api/organizations", json={"name": "列容量卫生院", "org_type": "township",
+                                                  "level": "township"}, headers=admin).json()["id"]
+    pid = client.post("/api/patients", json={"name": "列容量患者", "id_card": "330191198001010193",
+                                             "gender": "男", "birth_date": "1980-01-01"}, headers=admin).json()["id"]
+    return {"org": org, "patient": pid}
+
+
+@pytest.mark.parametrize("target_id", [INT4_MAX + 1, INT4_MIN - 1, 99999999999])
+def test_满意度评价对象号越过integer_422而不是生产库500(client, admin, world, target_id):
+    r = client.post("/api/surveys", json={"target_type": "encounter", "target_id": target_id,
+                                          "patient_id": world["patient"], "score": 5}, headers=admin)
+    assert r.status_code == 422 and "target_id" in r.text, (target_id, r.status_code, r.text[:200])
+
+
+@pytest.mark.parametrize("target_id", [INT4_MAX, INT4_MIN])
+def test_满意度评价对象号恰好到integer边界照常收(client, admin, world, target_id):
+    r = client.post("/api/surveys", json={"target_type": "encounter", "target_id": target_id,
+                                          "patient_id": world["patient"], "score": 5}, headers=admin)
+    assert r.status_code == 201, (target_id, r.status_code, r.text[:200])
+
+
+def test_收费项目单价越过Money_422_恰好到上限照常收(client, admin):
+    r = client.post("/api/billing/charge-items", json={"code": "P193BIG", "name": "列容量", "price": 1e13},
+                    headers=admin)
+    assert r.status_code == 422 and "price" in r.text, (r.status_code, r.text[:200])
+    r = client.post("/api/billing/charge-items", json={"code": "P193MAX", "name": "列容量", "price": MONEY_MAX},
+                    headers=admin)
+    assert r.status_code == 201 and r.json()["price"] == MONEY_MAX, (r.status_code, r.text[:200])
+
+
+def test_处方明细天数越过integer_422(client, admin, world):
+    """请求体列表子项逐个写库（`body_column_writes` 的第四种形状）同样要挡住。"""
+    item = {"drug_code": "P193RX", "drug_name": "列容量药", "daily_dose": 1, "days": INT4_MAX + 1}
+    r = client.post("/api/prescriptions", json={"patient_id": world["patient"], "org_id": world["org"],
+                                                "items": [item]}, headers=admin)
+    assert r.status_code == 422 and "days" in r.text, (r.status_code, r.text[:200])
+
+
+def test_批量号源模板容量越过integer_422(client, admin, world):
+    template = {"resource_type": "outpatient", "resource_name": "列容量门诊", "capacity": INT4_MAX + 1}
+    r = client.post("/api/appointments/slots/batch",
+                    json={"org_id": world["org"], "date_from": "2031-04-04", "date_to": "2031-04-04",
+                          "templates": [template]}, headers=admin)
+    assert r.status_code == 422 and "capacity" in r.text, (r.status_code, r.text[:200])

@@ -34,6 +34,7 @@ from ..config import settings
 from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present
 from ..database import get_db
+from ..numtypes import INT4_MAX, INT4_MIN
 from ..pii import pii_filter
 from ..privacy import mask_phone
 from ..models import (
@@ -2231,7 +2232,7 @@ def portal_mark_read(
 
 class MySurveyIn(BaseModel):
     target_type: str = Field(pattern="^(contract|encounter|consultation)$")
-    target_id: int = 0
+    target_id: int = Field(default=0, ge=INT4_MIN, le=INT4_MAX)
     score: int = Field(ge=1, le=5)
     comment: str = Field(default="", max_length=512)
 
@@ -2317,7 +2318,7 @@ class PortalSurveyCreate(BaseModel):
     ehc_no: str
     id_card: str
     target_type: str = Field(pattern="^(contract|encounter|consultation)$")
-    target_id: int = 0
+    target_id: int = Field(default=0, ge=INT4_MIN, le=INT4_MAX)
     score: int = Field(ge=1, le=5)
     comment: str = Field(default="", max_length=512)
 

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
+from ..numtypes import MONEY_MAX
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import OptionalDateStr
@@ -37,7 +38,7 @@ class ProjectIn(BaseModel):
     owner_name: str = Field(default="", max_length=64)
     start_date: OptionalDateStr = ""
     due_date: OptionalDateStr = ""
-    budget_amount: FiniteFloat = Field(default=0, ge=0)
+    budget_amount: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     description: str = Field(default="", max_length=1024)
 
 

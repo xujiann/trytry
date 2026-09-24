@@ -19,6 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
+from ..numtypes import INT4_MAX
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
@@ -252,8 +253,8 @@ class PathogenIn(BaseModel):
     org_id: int
     pathogen_name: str = Field(min_length=1, max_length=128)
     specimen_type: str = Field(default="", max_length=64)
-    tested_count: int = Field(ge=0)
-    positive_count: int = Field(ge=0)
+    tested_count: int = Field(ge=0, le=INT4_MAX)
+    positive_count: int = Field(ge=0, le=INT4_MAX)
     record_date: DateStr
     note: str = Field(default="", max_length=256)
 
@@ -381,17 +382,17 @@ class ResourceIn(BaseModel):
     org_id: int
     resource_type: str = Field(default="material", pattern="^(material|team|equipment)$")
     name: str = Field(min_length=1, max_length=128)
-    quantity: int = Field(default=0, ge=0)
+    quantity: int = Field(default=0, ge=0, le=INT4_MAX)
     unit: str = Field(default="", max_length=16)
-    min_quantity: int = Field(default=0, ge=0)
+    min_quantity: int = Field(default=0, ge=0, le=INT4_MAX)
     expire_date: OptionalDateStr = ""
     contact: str = Field(default="", max_length=64)
     location: str = Field(default="", max_length=256)
 
 
 class ResourceUpdate(BaseModel):
-    quantity: int | None = Field(default=None, ge=0)
-    min_quantity: int | None = Field(default=None, ge=0)
+    quantity: int | None = Field(default=None, ge=0, le=INT4_MAX)
+    min_quantity: int | None = Field(default=None, ge=0, le=INT4_MAX)
     expire_date: OptionalDateStr | None = None
     contact: str | None = Field(default=None, max_length=64)
     location: str | None = Field(default=None, max_length=256)

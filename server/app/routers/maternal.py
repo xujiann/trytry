@@ -8,6 +8,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from ..datetypes import DateStr, OptionalDateStr
 from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
+from ..numtypes import INT4_MAX
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, row_dict
@@ -50,8 +51,8 @@ class MaternalCreate(BaseModel):
     patient_id: int
     lmp: str = Field(default="", max_length=10)
     edc: str = Field(default="", max_length=10)
-    gravidity: int = Field(default=1, ge=1)
-    parity: int = Field(default=0, ge=0)
+    gravidity: int = Field(default=1, ge=1, le=INT4_MAX)
+    parity: int = Field(default=0, ge=0, le=INT4_MAX)
     high_risk: bool = False
     risk_factors: str = Field(default="", max_length=512)
 

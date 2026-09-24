@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles, row_dict
 from ..models import Patient, SatisfactionSurvey
+from ..numtypes import INT4_MAX, INT4_MIN
 
 router = APIRouter(
     prefix="/api/surveys", tags=["满意度调查"], dependencies=[Depends(get_current_user)]
@@ -62,7 +63,7 @@ class SurveyOut(BaseModel):
 
 class SurveyCreate(BaseModel):
     target_type: str = Field(max_length=16)
-    target_id: int
+    target_id: int = Field(ge=INT4_MIN, le=INT4_MAX)
     patient_id: int
     score: int = Field(ge=1, le=5)
     comment: str = Field(default="", max_length=512)
