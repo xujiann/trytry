@@ -14,6 +14,7 @@ from ..deps import (
     get_current_user,
     paginate,
     require_admin,
+    require_date,
     require_roles,
     resolve_business_date,
 )
@@ -271,6 +272,8 @@ def list_slots(
     query = db.query(AppointmentSlot)
     query = scope_org_list(db, user, query, AppointmentSlot, org_id)
     if slot_date:
+        # 等值匹配：`2026-9-1` 会让"这天没有号源"，不报错（P1-58）
+        slot_date = require_date(slot_date, field="slot_date")
         query = query.filter(AppointmentSlot.slot_date == slot_date)
     # 补 id 尾键：`(slot_date, slot_time)` 不是全序——号源表的唯一索引是
     # (org_id, employee_id, resource_type, resource_name, slot_date, slot_time)，
