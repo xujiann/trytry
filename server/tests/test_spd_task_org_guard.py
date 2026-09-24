@@ -135,3 +135,40 @@ def test_无机构归属的任务不受本条收口影响(client, task_world):
     tid = _new_task(task_world, org_id=None)
     r = client.post(f"/api/spd/tasks/{tid}/urge", json={}, headers=task_world["doc_b"])
     assert r.status_code == 200, f"无机构归属的任务被误拦：{r.status_code} {r.text[:200]}"
+
+
+# ---------------------------------------------------------------- 手工建任务（P0-43）
+def test_建任务不得以别家机构名义进行(client, task_world):
+    """P0-43（P0-35 判据第二层）：手工建任务照单全收请求里的 `org_id`——守着它的只有「患者看不看得见」。
+
+    乙院医生只要接诊过这个患者，就能把任务建进甲院的任务池：实测 201，甲院医生的任务列表里多出一条
+    「乙院替甲院建的任务」。P0-35 的判据「函数里出现任一守卫名即算守住」把 `assert_patient_visible`
+    当成了机构守卫，所以当时没量到它。与同文件其余写端点同一口径：只能以本机构名义建。
+    """
+    w = task_world
+    enc = client.post("/api/encounters", json={"patient_id": w["patient"]["id"], "org_id": w["b"]["id"]},
+                      headers=w["doc_b"])
+    assert enc.status_code == 201, enc.text   # 乙院接诊过：患者对乙院可见，越权的前提成立
+    body = {"patient_id": w["patient"]["id"], "title": "乙院替甲院建的任务", "org_id": w["a"]["id"]}
+    r = client.post("/api/spd/tasks", json=body, headers=w["doc_b"])
+    assert r.status_code == 403, f"乙院医生以甲院名义建了任务：{r.status_code} {r.text[:200]}"
+    listed = client.get(f"/api/spd/tasks?org_id={w['a']['id']}", headers=w["doc_a"]).json()
+    assert "乙院替甲院建的任务" not in {t["title"] for t in listed}
+
+
+def test_建任务不给机构落本机构_给本机构照常(client, task_world):
+    w = task_world
+    r = client.post("/api/spd/tasks", json={"patient_id": w["patient"]["id"], "title": "乙院自己的任务"},
+                    headers=w["doc_b"])
+    assert r.status_code == 201 and r.json()["org_id"] == w["b"]["id"], r.text
+    r = client.post("/api/spd/tasks", json={"patient_id": w["patient"]["id"], "title": "乙院自己的任务2",
+                                            "org_id": w["b"]["id"]}, headers=w["doc_b"])
+    assert r.status_code == 201 and r.json()["org_id"] == w["b"]["id"], r.text
+
+
+def test_建任务全域角色跨机构照常(client, task_world):
+    """县级中心给乡镇派任务是设计如此（`director` 属全域角色）。"""
+    w = task_world
+    r = client.post("/api/spd/tasks", json={"patient_id": w["patient"]["id"], "title": "县级派给甲院的任务",
+                                            "org_id": w["a"]["id"]}, headers=w["dir_b"])
+    assert r.status_code == 201 and r.json()["org_id"] == w["a"]["id"], r.text

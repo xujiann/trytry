@@ -555,6 +555,10 @@ def generate_followup_plan(
     接口不去猜是哪一天，因为猜错的后果是整条随访计划全部错位。
     """
     assert_patient_visible(db, user, body.patient_id, resource="spd_followup")
+    # P0-43（P0-35 判据第二层）：随访任务归哪家机构由请求声明，原先守着它的只有上面这句「患者看不看得见」——
+    # 乙院医生接诊过的患者，就能把随访派进甲院的随访队列（实测 201）。与下面的自动匹配同一口径。
+    org_id = body.org_id if body.org_id is not None else user.org_id
+    assert_org_writable(db, user, org_id)
     rule = db.get(SpdFollowupRule, body.rule_id)
     if rule is None or not rule.active:
         raise HTTPException(status_code=404, detail="随访方案不存在或已停用")
@@ -567,7 +571,7 @@ def generate_followup_plan(
         record = SpdFollowupRecord(
             patient_id=body.patient_id, program_code=rule.program_code, rule_id=rule.id,
             questionnaire_code=rule.questionnaire_code, scene=rule.scene,
-            org_id=body.org_id if body.org_id is not None else user.org_id,
+            org_id=org_id,
             dept=body.dept or rule.dept,
             planned_at=(base + timedelta(days=int(offset))).isoformat(),
             channel=body.channel, executor_id=body.executor_id, status="planned",

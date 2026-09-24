@@ -549,6 +549,11 @@ def create_task(
     body: TaskIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     assert_patient_visible(db, user, body.patient_id, resource="spd_task")
+    # P0-43（P0-35 判据第二层）：任务归哪家机构由请求声明，原先守着它的只有上面这句「患者看不看得见」——
+    # 乙院医生接诊过的患者，就能把任务建进甲院的任务池（实测 201）。与同文件其余写端点同一口径：
+    # 只能以本机构名义建；全域角色（县级中心派任务）照常。
+    org_id = body.org_id if body.org_id is not None else user.org_id
+    assert_org_writable(db, user, org_id)
     enrollment = (
         db.get(SpdEnrollment, body.enrollment_id) if body.enrollment_id is not None else None
     )
@@ -562,7 +567,7 @@ def create_task(
         program_code=body.program_code,
         enrollment=enrollment,
         assignee_id=body.assignee_id,
-        org_id=body.org_id if body.org_id is not None else user.org_id,
+        org_id=org_id,
         team_id=body.team_id,
         due_days=body.due_days,
         priority=body.priority,

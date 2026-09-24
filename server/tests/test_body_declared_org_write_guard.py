@@ -71,6 +71,38 @@ AWAITING_DECISION = {
 #: `tests/test_spd_followup_org_guard.py`。**候选清零，此后本名单即禁令**：新增一条就红。
 KNOWN_UNGUARDED: set[str] = set()
 
+#: ---- 字段级（P0-43，P0-35 判据第二层）：端点里有守卫还不够，守卫得**看着这个机构字段**。
+#: 原判据「函数里出现任一守卫名即算守住」——于是 `assert_patient_visible`（患者看不看得见）让手工建任务、
+#: 按方案生成随访两条的 `body.org_id` 从没被机构守卫看过，实测乙院医生以甲院名义各 201（已修，回归见
+#: `tests/test_spd_task_org_guard.py`、`tests/test_spd_followup_org_guard.py`）。字段级判据：请求里每个以
+#: `org_id` 结尾的字段，都得出现在某个机构守卫（`ORG_FIELD_GUARDS`）调用的实参里——直接写，或经由它赋值
+#: 的局部变量。下面两张名单只收字段级的例外，只减不增。
+ORG_FIELD_GUARDS = ("assert_org_writable", "assert_org_visible", "scope_org_list")
+
+#: 请求里的这个机构**本来就是对方**（接收方 / 受邀方 / 被授权方）：发起方另有守卫看着，逐条写理由。
+COUNTERPART_FIELDS: dict[str, str] = {
+    "admin_mgmt.py:create_employee_change:to_org_id": "调动的调入机构；调出方是员工现属机构，由 assert_obj_org_writable 看着",
+    "admin_mgmt.py:second_employee:to_org_id": "派驻的接收机构；派出方取员工现属机构并由 assert_obj_org_writable 看着",
+    "admin_mgmt.py:transfer_asset:to_org_id": "资产调拨的调入机构；调出方是资产现属机构，由 assert_obj_org_writable 看着",
+    "consultations.py:apply:to_org_id": "会诊的受邀机构；申请方 from_org_id 由 assert_org_writable 看着",
+    "cssd.py:advance:dispatched_to_org_id": "消毒包发往的机构；供应中心一侧（batch.center_org_id）由 assert_org_writable 看着",
+    "patients.py:grant_authorization:grantee_org_id": "被授权调阅的机构——授权本来就是给别家看；授权动作按同文件口径可问责（log_patient_access）",
+    "pharmacy.py:transfer_stock:to_org_id": "药品调拨的调入机构（收货不减少谁的库存）；调出方 from_org_id 由 assert_org_writable 看着",
+    "referrals.py:create_referral:to_org_id": "转诊的接收机构；转出方 from_org_id 由 assert_org_writable 看着",
+    "spd/population.py:lifecycle_event:target_org_id": "跨机构迁出的目标机构，目标机构确认后才生效；纳管档案所属机构由 assert_org_writable 看着",
+    "spd/referral.py:create_referral:target_org_id": "慢专病转诊的接收机构；发起一侧由患者可见性看着",
+    "spd/referral.py:down_referral:target_org_id": "下转的接收机构；持有转诊单的一方（_assert_holds_case）才能下转",
+    "spd/referral.py:review_referral:target_org_id": "审核时改派的接收机构；审核权（_assert_review_authority）看着",
+    "staffing.py:create_secondment:to_org_id": "派驻的接收机构；派出一侧由员工现属机构（assert_obj_org_writable）看着",
+}
+
+#: 字段级、但早已登记待裁定（写明出处）的：只减不增。
+FIELD_AWAITING_DECISION: dict[str, str] = {
+    "staffing.py:create_secondment:from_org_id":
+        "P1-56（docs/待裁定事项清单.md）：staffing 建派驻收自报的派出机构（mgmt 那套取员工现属机构），守卫看的是"
+        "员工现属机构、不是这个字段；两套并到哪一套待裁定，并之前不单改这一套。",
+}
+
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _PORTAL = {"portal.py", "spd/portal.py"}  # 居民端走门户令牌 + accessible_patient，与上游同一理由豁免
 
@@ -158,6 +190,39 @@ def _classify(sources: dict[str, str] | None = None) -> tuple[set[str], set[str]
     return unguarded, admin_only
 
 
+def _unwatched_org_fields(sources: dict[str, str] | None = None) -> set[str]:
+    """`文件:函数:字段`：端点算作有守卫（或是 admin-only），可请求里声明的这个机构字段没被任何机构守卫看过。
+
+    「看过」= 出现在 `ORG_FIELD_GUARDS` 某个调用的实参里（连同端点调到的本模块 helper，剥 docstring），
+    直接写 `body.org_id`，或写由它赋值的局部变量（`org_id = body.org_id if … else user.org_id`）。
+    整个端点已登记 `BY_DESIGN` / `AWAITING_DECISION` 的、与 admin-only 自动豁免的（同一前提：admin 属全域
+    角色，机构守卫对它恒放行），不再逐字段看。
+    """
+    import re
+
+    import test_stage15_horizontal as H
+
+    files = dict(H._router_files())
+    sources = sources or {}
+    unguarded, admin_only = _classify(sources)
+    out: set[str] = set()
+    for key, (file_name, fn_name, declared) in _org_declaring_writes().items():
+        if key in unguarded or key in admin_only or key in BY_DESIGN or key in AWAITING_DECISION:
+            continue
+        text = sources.get(file_name) or pathlib.Path(files[file_name]).read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        fn = _endpoint_node(tree, fn_name)
+        body = H._with_local_helpers(tree, fn)
+        calls = [m.group(0) for g in ORG_FIELD_GUARDS for m in re.finditer(rf"\b{g}\((?:[^()]|\([^()]*\))*\)", body)]
+        for field in declared:
+            names = {field} | {t.id for node in ast.walk(fn) if isinstance(node, ast.Assign)
+                               and re.search(rf"\b{field}\b", ast.unparse(node.value))
+                               for t in node.targets if isinstance(t, ast.Name)}
+            if not any(re.search(rf"\b{re.escape(n)}\b", c) for c in calls for n in names):
+                out.add(f"{key}:{field}")
+    return out
+
+
 def test_覆盖面自证():
     """防空转：路由表里收机构号的写端点不能是空的，判据也得真能认出守卫。"""
     declaring = _org_declaring_writes()
@@ -220,3 +285,38 @@ def test_判据自证_拿掉接种登记的守卫当场点名():
     reverted = text[:start] + text[start:end].replace(guard, "", 1) + text[end:]
     assert "vaccination.py:vaccinate" in _classify({"vaccination.py": reverted})[0]
     assert "vaccination.py:vaccinate" not in _classify()[0]
+
+
+def test_声明的机构字段得有机构守卫看着():
+    """字段级（P0-43）：端点有守卫不够，守卫得看着请求里声明的这个机构——否则「患者看得见」就能冒充「能以这家名义写」。"""
+    registers = (set(COUNTERPART_FIELDS), set(FIELD_AWAITING_DECISION))
+    assert not (registers[0] & registers[1]), "同一个字段只能登记在一张名单里"
+    new = sorted(_unwatched_org_fields() - set(COUNTERPART_FIELDS) - set(FIELD_AWAITING_DECISION))
+    assert new == [], (
+        "以下写端点里有守卫，却没有一个机构守卫看着请求声明的这个机构字段（`文件:函数:字段`）：\n  "
+        + "\n  ".join(new)
+        + "\n\n补 assert_org_writable(db, user, <这个字段或由它算出的机构>)；"
+        "若这个机构按设计就是对方（接收方 / 受邀方），写明发起方由谁看着，登记进 COUNTERPART_FIELDS。"
+    )
+
+
+def test_字段级名单只许变少():
+    stale = sorted((set(COUNTERPART_FIELDS) | set(FIELD_AWAITING_DECISION)) - _unwatched_org_fields())
+    assert stale == [], "这些字段已有机构守卫看着（或端点已不存在），请从名单里划掉：\n  " + "\n  ".join(stale)
+
+
+def test_判据自证_字段级_拿掉建任务的机构守卫当场点名():
+    """把手工建任务那句 `assert_org_writable(db, user, org_id)` 删掉——端点里还有 `assert_patient_visible`，
+    旧判据照样算它守住；字段级判据必须点名 `org_id`。"""
+    import test_stage15_horizontal as H
+
+    path = dict(H._router_files())["spd/tasks.py"]
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    guard = "    assert_org_writable(db, user, org_id)\n"
+    start = text.index("def create_task(")
+    end = text.index("\n@router", start)
+    assert guard in text[start:end], "create_task 里找不到机构守卫行，自证前提变了"
+    reverted = text[:start] + text[start:end].replace(guard, "", 1) + text[end:]
+    assert "spd/tasks.py:create_task" not in _classify({"spd/tasks.py": reverted})[0], "旧判据本就看不出，这是本条要补的盲区"
+    assert "spd/tasks.py:create_task:org_id" in _unwatched_org_fields({"spd/tasks.py": reverted})
+    assert "spd/tasks.py:create_task:org_id" not in _unwatched_org_fields()

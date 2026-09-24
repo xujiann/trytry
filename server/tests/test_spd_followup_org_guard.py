@@ -123,3 +123,39 @@ def test_报告本机构照常(client, fu_world):
                     headers=fu_world["h"]["a"])
     assert r.status_code == 201, r.text
     assert _reports(a) == before + 1
+
+
+# ---------------------------------------------------------------- 按方案生成随访（P0-43）
+def _rule_id(code: str) -> int:
+    db = SessionLocal()
+    try:
+        return db.query(SpdFollowupRule).filter(SpdFollowupRule.code == code).one().id
+    finally:
+        db.close()
+
+
+def test_按方案生成随访不得以别家机构名义进行(client, fu_world):
+    """P0-43（P0-35 判据第二层）：按方案生成随访照单全收请求里的 `org_id`——守着它的只有「患者看不看得见」。
+
+    乙院医生只要接诊过这个患者，就能把随访任务派进甲院的随访队列：实测 201，两条计划随访都落在甲院名下。
+    同文件的自动匹配（P0-35 第四批）早已收口，这一条当时漏掉，是因为判据「函数里出现任一守卫名即算守住」
+    把 `assert_patient_visible` 当成了机构守卫。
+    """
+    a, b, pid = fu_world["orgs"]["a"], fu_world["orgs"]["b"], fu_world["patient_id"]
+    enc = client.post("/api/encounters", json={"patient_id": pid, "org_id": b, "encounter_type": "outpatient"},
+                      headers=fu_world["h"]["b"])
+    assert enc.status_code == 201, enc.text   # 乙院接诊过：患者对乙院可见，越权的前提成立
+    before = _planned(a, pid)
+    r = client.post("/api/spd/followup-plans", json={"patient_id": pid, "rule_id": _rule_id("p035e_rule"),
+                                                     "org_id": a}, headers=fu_world["h"]["b"])
+    assert r.status_code == 403, r.text
+    assert "机构名义" in r.json()["detail"], r.text
+    assert _planned(a, pid) == before, "被拒却给甲院生成了随访"
+
+
+def test_按方案生成随访不给机构落本机构(client, fu_world):
+    b, pid = fu_world["orgs"]["b"], fu_world["patient_id"]
+    r = client.post("/api/spd/followup-plans", json={"patient_id": pid, "rule_id": _rule_id("p035e_rule")},
+                    headers=fu_world["h"]["b"])
+    assert r.status_code == 201, r.text
+    assert {item["org_id"] for item in r.json()["items"]} == {b}
