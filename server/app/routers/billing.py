@@ -20,7 +20,7 @@ Mock 同步语义，既有测试与演示不受影响。
 import json
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -42,7 +42,7 @@ from ..visibility import (
     scope_patient_list,
 )
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..models import (
     Admission,
     BillDetail,
@@ -1610,11 +1610,14 @@ def run_reconciliation(
     """日终对账：比对当日本地支付单与通道流水，三类差异落明细。
 
     同一日期重跑覆盖上一批次（对账单以最后一次结果为准）。
+
+    日期必须是补零的 `YYYY-MM-DD`（P1-58）。此前这里是 `strptime("%Y-%m-%d")`，
+    它**不要求补零**：`2026-9-1` 过了校验、原样落进 `date` 列，唯一索引按字符串判重，
+    与 `2026-09-01` 并排成了**同一天的第二张对账单**；`_orders_of_day` 又按
+    `strftime(...) == date` 取本地单，非补零写法永远取到 0 笔，前端显示绿色的
+    "对账完成：0 笔，差异 0 笔"——一张假的"对平了"。对账页的输入框是自由文本。
     """
-    try:
-        datetime.strptime(date, "%Y-%m-%d")
-    except ValueError:
-        raise HTTPException(status_code=422, detail="date 参数须为 YYYY-MM-DD 格式") from None
+    date = require_date(date, field="date")
 
     local_orders = _orders_of_day(db, date)
     # 通道流水：注册了 HTTP 网关时拉真通道流水（GET /transactions?date=），
@@ -1741,6 +1744,7 @@ def list_reconciliation(
     """对账单列表与差异明细（date 缺省返回最近 30 个批次）。"""
     q = db.query(ReconciliationBatch)
     if date:
+        date = require_date(date, field="date")
         q = q.filter(ReconciliationBatch.date == date)
     batches = paginate(
         q.order_by(ReconciliationBatch.date.desc(), ReconciliationBatch.id.desc()),

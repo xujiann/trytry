@@ -108,7 +108,41 @@ def test_县域就诊率的分子分母用同一个日期窗口(client, admin):
     ).status_code == 422
 
 
-# ---------------------------------------------------------------- 三、棘轮：日期查询参数只许走真源
+# ---------------------------------------------------------------- 三、已接上 require_date 的筛选参数
+#
+# 逐模块接一批、加一批行。只读筛选的非法值此前多是 200 空集/错集（用户看到"没有数据"
+# 而不是"日期写错了"），拼成时间戳去比 DateTime 列的在真 PG 上是 500。
+# **留空一律等于不筛**——三端前端只在非空时发这些参数，但对接方可能发空串。
+
+#: (路径, 参数)。都用 admin 调：这里验的是入参校验，不是角色门。
+FILTER_PARAMS = [
+    ("/api/billing/reconciliation", "date"),
+]
+
+#: 形状错、日历上不存在、不补零、ISO 基本格式——前两类此前多是 200 空集，
+#: 后两类在字符串比较下是**错集**（`"2026-9-1"` 比 2026 年所有补零日期都大）。
+BAD_FILTER_VALUES = ["abc", "2026-02-31", "2026-9-1", "20260901"]
+
+
+@pytest.mark.parametrize("path, param", FILTER_PARAMS)
+def test_筛选日期非法值一律422且点名参数(client, admin, path, param):
+    for bad in BAD_FILTER_VALUES:
+        resp = client.get(path, params={param: bad}, headers=admin)
+        assert resp.status_code == 422, (bad, resp.text)
+        assert resp.json()["detail"].startswith(f"{param}："), (bad, resp.json())
+
+
+@pytest.mark.parametrize("path, param", FILTER_PARAMS)
+def test_筛选日期留空等于不筛_合法值照常(client, admin, path, param):
+    base = client.get(path, headers=admin)
+    blank = client.get(path, params={param: ""}, headers=admin)
+    assert base.status_code == 200, base.text
+    assert blank.status_code == 200, blank.text
+    assert blank.content == base.content, "留空应与不带这个参数完全一致"
+    assert client.get(path, params={param: "2026-09-01"}, headers=admin).status_code == 200
+
+
+# ---------------------------------------------------------------- 四、棘轮：日期查询参数只许走真源
 #
 # 自 `test_secondment_end_date_guard.py` 迁来（ADR-0024 第一步立的那条），并把判据
 # 补全两处——迁移当天两处都量过：
@@ -137,8 +171,6 @@ KNOWN_BARE_DATE_PARAMS: set[str] = {
     "routers/access_logs.py::list_access_logs::start",
     "routers/admin_mgmt.py::list_rosters::duty_date",
     "routers/appointments.py::list_slots::slot_date",
-    "routers/billing.py::list_reconciliation::date",
-    "routers/billing.py::run_reconciliation::date",
     "routers/certs.py::export_death_report_cards_csv::date_from",
     "routers/certs.py::export_death_report_cards_csv::date_to",
     "routers/clinical_docs.py::list_handovers::handover_date",

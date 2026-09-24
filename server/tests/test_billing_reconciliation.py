@@ -279,3 +279,40 @@ def test_绕开接口层直插时库里真的拦得住(client, operator):
         db.commit()
     finally:
         db.close()
+
+
+# ================================================================ 日期写法（P1-58）
+
+
+PAD_DATE = "2031-01-07"
+
+
+@pytest.mark.parametrize("variant", ["2031-1-7", "2031-01-7", "2031-1-07"])
+def test_不补零的日期不得另起同一天的第二张对账单(client, operator, variant):
+    """第三种让"一天一张单"失守的路（前两种是并发与绕开接口层直插，见上）。
+
+    此前的校验是 `strptime("%Y-%m-%d")`，它**不要求补零**：`2031-1-7` 过了校验、
+    原样落进 `date` 列，唯一索引按字符串判重，拦不住它与 `2031-01-07` 并排。
+    `_orders_of_day` 又按 `paid_at.strftime("%Y-%m-%d") == date` 取本地单、Mock 通道
+    也镜像同一个函数——非补零写法两侧都取到 0 笔。修复前实测（当天有一笔 100 元
+    已支付单）：补零写法 1 笔 100 元，非补零写法 **201、0 笔、差异 0、合计 0**，
+    前端 `#recon-msg` 按 `unmatched === 0` 显示成绿色的"对账完成"——一张假的"对平了"，
+    且与真的那张并排留在库里。对账页的日期输入框是自由文本，手敲 `2031-1-7` 再自然不过。
+    """
+    first = client.post(f"/api/billing/reconciliation/run?date={PAD_DATE}", headers=operator)
+    assert first.status_code == 201, first.text
+
+    resp = client.post(f"/api/billing/reconciliation/run?date={variant}", headers=operator)
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": "date：日期格式须为 YYYY-MM-DD"}
+
+    listed = client.get("/api/billing/reconciliation?limit=200", headers=operator).json()
+    assert variant not in {b["date"] for b in listed}, "非补零写法落成了一张对账单"
+    assert len(_batches(client, operator, PAD_DATE)) == 1
+
+
+def test_日历上不存在的日期照样拒(client, operator):
+    """`strptime` 本来就拒这一类；换成 `require_date` 后不得放松，文案点名是哪天不存在。"""
+    resp = client.post("/api/billing/reconciliation/run?date=2031-02-29", headers=operator)
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": "date：日期 2031-02-29 不存在（请检查月份天数）"}
