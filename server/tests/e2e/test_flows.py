@@ -688,6 +688,56 @@ def test_家医签约的履约与解约都在页内表单里_取消即不动(pag
     assert status() == "terminated"
 
 
+@pytest.fixture(scope="session")
+def green_channel_seed(base_url, seed):
+    """急救绿道的前置：一起胸痛通道的急救事件。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    case = call("/api/emergency/cases", {"location": "E2E绿道事发地", "symptom": "持续胸痛",
+                                         "channel_type": "chest_pain", "dest_org_id": seed["org"]["id"]}, doctor)
+    return {"case": case, "read": lambda path: call(path, None, admin)}
+
+
+def test_绿道节点在页内表单里录_节点下拉_取消即不录(page, base_url, green_channel_seed):
+    """P2-38：「录节点」原先要按"1=发病，2=呼救…"输序号、再手打时刻。换成页内表单：节点下拉，
+    取消就是不录（按接口核对该节点仍缺失）；时刻写错由后端报人话；写对了读回时间轴。"""
+    cid = green_channel_seed["case"]["id"]
+
+    def recorded():
+        tl = green_channel_seed["read"](f"/api/emergency/cases/{cid}/timeline")
+        return {m["milestone"]: m["occurred_at"] for m in tl["timeline"] if m["recorded"]}
+
+    _login(page, base_url)
+    _open_page(page, "emtimeline", "急救绿道时间轴")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(f'button[data-mile="{cid}"]')
+    modal.locator('[name="milestone"]').select_option("call")
+    modal.locator('[name="occurred_at"]').fill("2026-09-20 08:05")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert recorded() == {}, "点了取消却照样录了节点"
+    page.click(f'button[data-mile="{cid}"]')
+    _spd_modal(page, {"milestone": "call", "occurred_at": "昨天早上八点"})
+    expect(page.locator("#gc-msg")).to_contain_text("occurred_at")
+    assert recorded() == {}
+    page.click(f'button[data-mile="{cid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"milestone": "call", "occurred_at": "2026-09-20 08:05"}))
+    assert list(recorded()) == ["call"] and recorded()["call"].startswith("2026-09-20"), recorded()
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

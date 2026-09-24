@@ -44,14 +44,17 @@ async function renderEmTimeline() {
     const d = e.target.dataset;
     try {
       if (d.mile) {
-        const keys = Object.keys(MILESTONES);
-        const pick = prompt(`节点（${keys.map((k, i) => `${i + 1}=${MILESTONES[k]}`).join("，")}）输入序号`);
-        const key = keys[Number(pick) - 1];
-        if (!key) return;
-        const at = prompt("发生时刻（如 2026-08-11 14:30）");
-        if (!at) return;
+        // P2-38：原先两连问——节点要按"1=发病，2=呼救…"输序号（输错一位就录成了别的节点），
+        // 发生时刻再手打。换成表单：节点下拉、时刻必填；格式不对、时序矛盾、重复录入都由后端报人话。
+        // 时刻刻意不预填"现在"：绿道时效（到院-救治等）取的正是它，顺手一点确定就会把补录的节点记成此刻。
+        const form = await spdModal("录入绿道节点", [
+          { name: "milestone", label: "节点", type: "select",
+            options: Object.entries(MILESTONES).map(([value, label]) => ({ value, label })) },
+          { name: "occurred_at", label: "发生时刻", required: true, placeholder: "如 2026-08-11 14:30" },
+        ]);
+        if (!form) return;
         await api(`/api/emergency/cases/${d.mile}/milestones`, { method: "POST",
-          body: JSON.stringify({ milestone: key, occurred_at: at }) });
+          body: JSON.stringify({ milestone: form.milestone, occurred_at: form.occurred_at }) });
         route();
       }
       if (d.timeline) {
