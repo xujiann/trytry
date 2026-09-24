@@ -160,7 +160,7 @@ async function renderUsers() {
          <td>${r.changed_by}</td><td>${esc(r.at.slice(0, 16).replace("T", " "))}</td></tr>`))}
     ${panel("系统参数配置（键值集中管理）", `
       <form class="inline" id="param-form">
-        <input name="key" placeholder="参数键（如 portal.verify_lock_seconds）" required style="min-width:240px">
+        <input name="key" placeholder="参数键（如 wechat_template_exam_report：检查报告的公众号模板 id）" required style="min-width:240px">
         <input name="value" placeholder="参数值" required>
         <input name="description" placeholder="说明" style="min-width:180px">
         <button>保存</button></form>
