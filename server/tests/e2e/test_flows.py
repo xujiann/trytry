@@ -473,6 +473,65 @@ def test_成本页存下的期间被拒时回落本月_切换框先验再存(pag
     assert page.evaluate("() => localStorage.getItem('medplat_cost_period')") is None
 
 
+@pytest.fixture(scope="session")
+def maternal_seed(base_url):
+    """妇幼页用例的前置数据：一位孕妇（UI 只驱动建册之后的动作，与本文件约定一致）。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    return post("/api/patients",
+                {"name": "E2E孕妇", "id_card": "320981199505052226", "gender": "女"}, token)
+
+
+def test_妇幼页的访视分娩新筛都在页内表单里录入(page, base_url, seed, maternal_seed):
+    """P2-38：孕产妇页原先靠浏览器原生弹窗连问录入（访视三连、分娩四连、新筛输序号再加
+    确认框），录不了多字段、输错没有提示。换成页内表单后顺带补上了孕周、新生儿数、儿童
+    身高体重等一直没入口的字段。主链路：建册 → 产检（收缩压 150 自动标高危）→ 分娩登记
+    （机构从下拉里选）→ 儿童建档 → 儿童访视（体重写错报人话、写对照收）→ 新筛异常进高危儿清单。"""
+    _login(page, base_url)
+    _open_page(page, "maternal", "妇幼保健")
+    page.fill("#mat-form input[name=patient_id]", str(maternal_seed["id"]))
+    _submit(page, "#mat-form button")
+
+    page.click("button[data-visit]")
+    _spd_modal(page, {"visit_type": "prenatal", "gest_week": "30", "bp": "150/95",
+                      "visit_date": "2026-09-20"})
+    expect(page.locator("#page-body")).to_contain_text("妊娠期高血压可能")
+
+    page.click("button[data-delivery]")
+    _spd_modal(page, {"org_id": str(seed["org"]["id"]), "delivery_date": "2026-09-22",
+                      "delivery_mode": "cesarean", "newborn_count": "2"})
+    expect(page.locator("#page-body")).to_contain_text("已分娩")
+
+    page.fill("#child-form input[name=name]", "E2E新生儿")
+    page.fill("#child-form input[name=birth_date]", "2026-09-22")
+    _submit(page, "#child-form button")
+
+    # 体重写成中文：此前 Number() 得到 NaN、序列化成 null，值被悄悄丢掉也不报错
+    page.click("button[data-cvisit]")
+    _spd_modal(page, {"visit_type": "newborn", "weight_kg": "三点五"})
+    expect(page.locator("#mat-msg")).to_contain_text("weight_kg")
+    page.click("button[data-cvisit]")
+    _spd_modal(page, {"visit_type": "newborn", "height_cm": "50.5", "weight_kg": "3.4"})
+    expect(page.locator("#mat-msg")).to_have_text("")  # 成功即整页重画，报错行清空
+
+    page.click("button[data-screen]")
+    _spd_modal(page, {"item": "hearing", "result": "abnormal", "screen_date": "2026-09-23"})
+    expect(page.locator("#page-body")).to_contain_text("高危儿专案清单")
+    expect(page.locator("#page-body")).to_contain_text("听力筛查阳性/可疑")
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 

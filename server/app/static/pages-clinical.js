@@ -1032,9 +1032,10 @@ async function renderEldercare() {
 
 async function renderMaternal() {
   $("#page-desc").textContent = "孕产妇建册、产检、分娩登记、产后结案；儿童保健、新筛与高危儿；妇女保健四类记录";
-  const [records, children, highRisk, womenHealth] = await Promise.all([
+  const [records, children, highRisk, womenHealth, orgs] = await Promise.all([
     api("/api/maternal/records"), api("/api/maternal/children"),
-    api("/api/maternal/children/high-risk"), api("/api/maternal/women-health")]);
+    api("/api/maternal/children/high-risk"), api("/api/maternal/women-health"),
+    api("/api/organizations")]);
   const MS = { registered: "孕期管理", delivered: "已分娩", closed: "已结案" };
   const WH_TYPES = { premarital: "婚前保健", preconception: "孕前保健", gynecology: "妇女病检查", contraception: "避孕节育" };
   const SCREEN_ITEMS = { metabolic: "遗传代谢病", hearing: "听力", chd: "先心病" };
@@ -1083,26 +1084,65 @@ async function renderMaternal() {
   $("#wh-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/women-health", formJson(e.target, ["patient_id"]), "#mat-msg"); };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
+    // P2-38：原先是浏览器原生弹窗连问（访视三连、分娩四连、新筛输序号再加确认框），录不了多字段、
+    // 输错也没有提示。换成页内表单，顺带把后端早就收、页面一直没入口的字段补上：
+    // 产检孕周、新生儿数、儿童身高体重、各处备注。日期写错时 422 的人话经 errorText 落到 #mat-msg。
+    // 留空发 null；认不出的原样发给后端，让它 422 出人话——Number() 得到 NaN、
+    // JSON.stringify 又会把 NaN 变成 null，值就被悄悄丢掉了
+    const numOrNull = (v) => (v === "" || v == null ? null : Number.isNaN(Number(v)) ? v : Number(v));
     if (d.visit) {
-      const type = prompt("访视类型：prenatal(产检)/postpartum(产后)", "prenatal"); if (!type) return;
-      return postAction(`/api/maternal/records/${d.visit}/visits`, { visit_type: type, bp: prompt("血压(如120/80，可空)") || "", visit_date: prompt("日期 YYYY-MM-DD") || "" }, "#mat-msg");
+      const v = await spdModal("记录访视", [
+        { name: "visit_type", label: "访视类型", type: "select", options: [
+          { value: "prenatal", label: "产检" }, { value: "postpartum", label: "产后访视" }] },
+        { name: "gest_week", label: "孕周（产检填，4–45）", placeholder: "如 28" },
+        { name: "bp", label: "血压（收缩压 ≥140 自动标记高危）", placeholder: "如 120/80" },
+        { name: "visit_date", label: "访视日期（可空）", placeholder: "YYYY-MM-DD" },
+        { name: "note", label: "备注", type: "textarea" },
+      ]);
+      if (!v) return;
+      return postAction(`/api/maternal/records/${d.visit}/visits`,
+        { ...v, gest_week: numOrNull(v.gest_week) }, "#mat-msg");
     }
     if (d.delivery) {
-      const orgId = prompt("分娩机构ID"); if (!orgId) return;
-      const deliveryDate = prompt("分娩日期 YYYY-MM-DD"); if (!deliveryDate) return;
-      const mode = prompt("分娩方式：natural(顺产)/cesarean(剖宫产)", "natural") || "natural";
+      const v = await spdModal("分娩登记", [
+        { name: "org_id", label: "分娩机构", type: "select",
+          options: orgs.map((o) => ({ value: o.id, label: o.name })) },
+        { name: "delivery_date", label: "分娩日期", placeholder: "YYYY-MM-DD", required: true },
+        { name: "delivery_mode", label: "分娩方式", type: "select", options: [
+          { value: "natural", label: "顺产" }, { value: "cesarean", label: "剖宫产" }] },
+        { name: "newborn_count", label: "新生儿数", type: "number", value: 1 },
+        { name: "outcome", label: "分娩结局", type: "textarea" },
+      ]);
+      if (!v) return;
       return postAction(`/api/maternal/records/${d.delivery}/delivery`,
-        { org_id: Number(orgId), delivery_date: deliveryDate, delivery_mode: mode, outcome: prompt("分娩结局") || "" }, "#mat-msg");
+        { ...v, org_id: Number(v.org_id), newborn_count: v.newborn_count || 1 }, "#mat-msg");
     }
     if (d.close) return postAction(`/api/maternal/records/${d.close}/close`, null, "#mat-msg");
-    if (d.cvisit) return postAction(`/api/maternal/children/${d.cvisit}/visits`, { visit_type: "checkup", visit_date: prompt("日期 YYYY-MM-DD") || "" }, "#mat-msg");
+    if (d.cvisit) {
+      const v = await spdModal("儿童访视", [
+        { name: "visit_type", label: "访视类型", type: "select", options: [
+          { value: "checkup", label: "健康检查" }, { value: "newborn", label: "新生儿访视" }] },
+        // 身长体重带小数：用文本框收（number 框默认步长 1，3.5 kg 会被浏览器拦下）
+        { name: "height_cm", label: "身长/身高（cm）", placeholder: "如 50.5" },
+        { name: "weight_kg", label: "体重（kg）", placeholder: "如 3.5" },
+        { name: "visit_date", label: "访视日期（可空）", placeholder: "YYYY-MM-DD" },
+        { name: "note", label: "备注", type: "textarea" },
+      ]);
+      if (!v) return;
+      return postAction(`/api/maternal/children/${d.cvisit}/visits`,
+        { ...v, height_cm: numOrNull(v.height_cm), weight_kg: numOrNull(v.weight_kg) }, "#mat-msg");
+    }
     if (d.screen) {
-      const keys = Object.keys(SCREEN_ITEMS);
-      const pick = prompt(`筛查项目（${keys.map((k, i) => `${i + 1}=${SCREEN_ITEMS[k]}`).join("，")}）输入序号`);
-      const item = keys[Number(pick) - 1]; if (!item) return;
-      const abnormal = confirm("结果是否异常？（确定=异常，将自动纳入高危儿）");
-      return postAction(`/api/maternal/children/${d.screen}/screenings`,
-        { item, result: abnormal ? "abnormal" : "normal", screen_date: prompt("筛查日期 YYYY-MM-DD") || "" }, "#mat-msg");
+      const v = await spdModal("新生儿筛查登记", [
+        { name: "item", label: "筛查项目", type: "select",
+          options: Object.entries(SCREEN_ITEMS).map(([value, label]) => ({ value, label })) },
+        { name: "result", label: "结果（异常/可疑将自动纳入高危儿）", type: "select", options: [
+          { value: "normal", label: "正常" }, { value: "abnormal", label: "异常/可疑" }] },
+        { name: "screen_date", label: "筛查日期（可空）", placeholder: "YYYY-MM-DD" },
+        { name: "note", label: "备注", type: "textarea" },
+      ]);
+      if (!v) return;
+      return postAction(`/api/maternal/children/${d.screen}/screenings`, v, "#mat-msg");
     }
     if (d.shist) {
       try {
@@ -1117,7 +1157,12 @@ async function renderMaternal() {
     }
     if (d.hrtoggle) {
       const toHigh = d.cur !== "true";
-      const note = toHigh ? (prompt("高危原因") || "人工标记") : "";
+      let note = "";
+      if (toHigh) {
+        const v = await spdModal("标记高危儿", [{ name: "risk_note", label: "高危原因", type: "textarea" }]);
+        if (!v) return;
+        note = v.risk_note || "人工标记";
+      }
       return postAction(`/api/maternal/children/${d.hrtoggle}/high-risk`, { high_risk: toHigh, risk_note: note }, "#mat-msg");
     }
   };

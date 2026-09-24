@@ -42,6 +42,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_body_id_org_write_guard as bodyid
     import test_clock as clock
     import test_date_query_params as datequery
+    import test_frontend_prompt_guard as promptguard
     import test_datestr_single_source as datestr
     import test_list_pagination_ratchet as pagination
     import test_orphan_endpoints as orphan
@@ -104,6 +105,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_orphan_endpoints.py"),
         ("功能完善", "按设计不需要界面的豁免路径", len(orphan.EXEMPT_PATHS),
          "tests/test_orphan_endpoints.py"),
+        ("功能完善", "前端含 prompt( 的行（录入不靠弹窗）", promptguard.BASELINE,
+         "tests/test_frontend_prompt_guard.py"),
     ]
 
 
