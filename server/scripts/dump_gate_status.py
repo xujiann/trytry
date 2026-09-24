@@ -122,6 +122,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(bodyid.EXEMPT), "tests/test_body_id_org_write_guard.py"),
         ("横向越权（写侧）", "角色门只允许全域角色（非可越权入口）",
          len(bodyid.GLOBAL_ROLE_ONLY), "tests/test_body_id_org_write_guard.py"),
+        ("横向越权（写侧）", "被写对象没有单一机构归属（跨机构配置，表上无 org_id）",
+         len(bodyid.NO_SINGLE_ORG_OWNER), "tests/test_body_id_org_write_guard.py"),
         ("横向越权（写侧）", "请求声明机构、却无归属判定的写端点（候选，只减不增）",
          len(declared.KNOWN_UNGUARDED), "tests/test_body_declared_org_write_guard.py"),
         ("横向越权（写侧）", "请求里的机构按设计就是别家（逐条写明理由）",

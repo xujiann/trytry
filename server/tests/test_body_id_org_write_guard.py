@@ -71,6 +71,20 @@ GLOBAL_ROLE_ONLY = {
     "cost.py:create_allocation_rule",    # require_roles("director")
 }
 
+#: **被写的对象没有单一机构归属**的写端点（值是被写的那张表）：表上没有 `org_id`，覆盖范围是一张
+#: 机构列表（`org_ids`）外加一个牵头机构。判据认出它们，是因为函数里 `db.get(User, …)` 取到了带
+#: org_id 的对象——那是 P1-90 补的「负责人先查存在」：只查在不在、不写这个人，而县域中心 / 个案
+#: 上报任务的负责人本来就该是牵头机构的人，跨机构是本意。「能对谁做」在这里无从判起（没有
+#: "谁家的中心"可比），「谁能做」由角色门回答（`CONFIG_ROLES` / `SERVICE_ROLES`）。P1-90 之前
+#: 这两个端点一样没有归属判定，只是函数里没有 `db.get`，判据看不见——**不是补存在性检查
+#: 引入了新的口子**。与 `EXEMPT`（按设计没有调用方身份）、`GLOBAL_ROLE_ONLY`（只有全域角色
+#: 够得着）理由都不同，故单列。**表上哪天加了 `org_id`，前提就不成立了**：
+#: `test_无单一归属的豁免_表上确实没有org_id` 会红，到时挪回候选。
+NO_SINGLE_ORG_OWNER: dict[str, str] = {
+    "spd/care.py:create_case_report_task": "SpdCaseReportTask",   # org_ids + manager_user_id
+    "spd/config/centers.py:create_center": "SpdCenter",           # lead_org_id + org_ids + leader_user_id
+}
+
 #: 候选清单（**不是缺陷清单**，见模块 docstring）。只许变少。
 #: 划掉的正当方式：① 补守卫；② 逐条取证判为按设计后移入 `EXEMPT` 并写明理由。
 #:
@@ -168,7 +182,7 @@ def test_覆盖面自证():
         f"\n[body 收 id 的写侧越权候选] 扫描 {len(files)} 个路由文件、"
         f"{len(models)} 个带 org_id 的模型；候选 {len(cands)} 处"
         f"（豁免 {len(EXEMPT)}、只有全域角色够得着 {len(GLOBAL_ROLE_ONLY)}、"
-        f"登记 {len(KNOWN_BODY_ID_WRITES)}）"
+        f"被写对象无单一归属 {len(NO_SINGLE_ORG_OWNER)}、登记 {len(KNOWN_BODY_ID_WRITES)}）"
     )
     assert len(files) >= 60, f"只扫到 {len(files)} 个路由文件"
     assert len(models) >= 50, f"只认出 {len(models)} 个带 org_id 的模型"
@@ -186,7 +200,7 @@ def test_守卫名单与上游判据保持一致():
 
 
 def test_不得新增body收id的无守卫写端点():
-    new = sorted(_candidates() - KNOWN_BODY_ID_WRITES - EXEMPT - GLOBAL_ROLE_ONLY)
+    new = sorted(_candidates() - KNOWN_BODY_ID_WRITES - EXEMPT - GLOBAL_ROLE_ONLY - set(NO_SINGLE_ORG_OWNER))
     assert new == [], (
         "以下写端点从 body 收 id 取到带 org_id 的对象，却没有任何机构归属守卫——\n"
         "角色守卫只回答'谁能做'，回答不了'能对谁做'：\n  " + "\n  ".join(new)
@@ -195,8 +209,21 @@ def test_不得新增body收id的无守卫写端点():
     )
 
 
+def test_无单一归属的豁免_表上确实没有org_id():
+    """豁免的前提是「被写的表没有单一机构归属」——哪天加了 org_id，这条豁免就得挪回候选。"""
+    from app import models
+
+    registry = {c.__name__: c for c in models.Base.registry._class_registry.values()
+                if hasattr(c, "__tablename__")}
+    for endpoint, model in NO_SINGLE_ORG_OWNER.items():
+        assert model in registry, (endpoint, model)
+        assert "org_id" not in registry[model].__table__.columns, (
+            f"{endpoint} 写的 {model} 有了 org_id——「无单一机构归属」不成立了，挪回候选并补归属判定"
+        )
+
+
 def test_名单只许变少():
-    stale = sorted((KNOWN_BODY_ID_WRITES | EXEMPT | GLOBAL_ROLE_ONLY) - _candidates())
+    stale = sorted((KNOWN_BODY_ID_WRITES | EXEMPT | GLOBAL_ROLE_ONLY | set(NO_SINGLE_ORG_OWNER)) - _candidates())
     assert stale == [], (
         "这些已经补上守卫（或已不存在）了，请从名单里划掉，"
         "否则名单会永远停在今天的数字：\n  " + "\n  ".join(stale)
