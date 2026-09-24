@@ -509,8 +509,9 @@ def readiness(today: str | None = None, group_id: int | None = None, db: Session
             )
         if out["expired"]:
             entry["expired"].append({"name": r.name, "expire_date": r.expire_date})
+    # 按类型计数与按机构的缺口 / 过期同一个片区范围（P2-61）：原先另起一条查询，选了片区也数全县。
     by_type = row_dict(
-        db.query(EmergencyResource.resource_type, func.count(EmergencyResource.id))
+        query.with_entities(EmergencyResource.resource_type, func.count(EmergencyResource.id))
         .group_by(EmergencyResource.resource_type)
         .all()
     )

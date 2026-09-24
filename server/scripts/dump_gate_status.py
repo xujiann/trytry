@@ -71,6 +71,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_range_order as rangeorder
     import test_stage14_concurrency as concurrency
     import test_stage15_horizontal as horizontal
+    import test_stats_scope_consistency as statscope
     import test_unscopable_patient_reads as unscopable
     import test_vital_sign_bounds as vitalbounds
 
@@ -112,6 +113,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_list_pagination_ratchet.py"),
         ("列表分页", "筛选用的 id 名单先截断再用（搜索名单静默少一截）", truncids.BASELINE,
          "tests/test_filter_ids_not_truncated.py"),
+        ("统计口径", "有机构范围的统计里另起一条计数 / 求和却不套范围（待确认迁入数全县 / 片区筛选下按类型计数全县…；3 → 0 已清零）",
+         statscope.BASELINE, "tests/test_stats_scope_consistency.py"),
+        ("统计口径", "按设计不套范围的计数（先按机构分组再按范围取行 / 平台管理端 / 按本人收口，逐条写明理由）",
+         len(statscope.BY_DESIGN), "tests/test_stats_scope_consistency.py"),
         ("并发冲突", "写唯一约束表却未处理冲突", len(concurrency.KNOWN_UNGUARDED_UNIQUE_WRITES),
          "tests/test_stage14_concurrency.py"),
         ("并发冲突", "已审计的写入点", concurrency.BASELINE_COVERED_WRITE_SITES,

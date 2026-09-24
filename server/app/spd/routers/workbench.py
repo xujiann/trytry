@@ -773,8 +773,11 @@ def health_commission_workbench(
         key: {"orgs": 0, "enrolled": 0, "teams": 0} for key in level_names
     }
     org_level = {o.id: o.level for o in org_rows}
+    # 机构数、团队数与在管患者同一个范围（P2-61）：原先指定 `org_id` 时只有在管患者收口，
+    # 同一行的机构数与团队数还是全县的。
+    in_scope = None if orgs is None else set(orgs)
     for org in org_rows:
-        if org.level in by_level:
+        if org.level in by_level and (in_scope is None or org.id in in_scope):
             by_level[org.level]["orgs"] += 1
     for org_key, count in (
         _apply_scope(db.query(SpdEnrollment), SpdEnrollment.org_id, orgs)
@@ -786,7 +789,7 @@ def health_commission_workbench(
         if level in by_level:
             by_level[level]["enrolled"] += count
     for org_key, count in (
-        db.query(SpdTeam.org_id, func.count(SpdTeam.id))
+        _apply_scope(db.query(SpdTeam.org_id, func.count(SpdTeam.id)), SpdTeam.org_id, orgs)
         .filter(SpdTeam.active.is_(True)).group_by(SpdTeam.org_id).all()
     ):
         level = org_level.get(org_key)
@@ -812,10 +815,13 @@ def health_commission_workbench(
             ).filter(
                 SpdEnrollment.status == "active", SpdEnrollment.risk_level == "low"
             ).count(),
-            "service_persons": db.query(SpdTask.patient_id).filter(
-                SpdTask.status == "done"
-            ).distinct().count(),
-            "service_times": db.query(SpdTask).filter(SpdTask.status == "done").count(),
+            # 服务人数 / 人次按同一个机构范围收口（P2-61）；建档居民不收：患者主索引没有机构列，全县一份。
+            "service_persons": _apply_scope(
+                db.query(SpdTask.patient_id), SpdTask.org_id, orgs
+            ).filter(SpdTask.status == "done").distinct().count(),
+            "service_times": _apply_scope(
+                db.query(SpdTask), SpdTask.org_id, orgs
+            ).filter(SpdTask.status == "done").count(),
             "screening_conversion_rate": round(suspect / screened * 100, 1) if screened else 0.0,
             "updated_at": now_naive().isoformat(),
         },
@@ -1072,7 +1078,11 @@ def center_workbench(
             "excluded": _apply_scope(
                 db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
             ).filter(SpdEnrollment.status == "excluded").count(),
-            "pending_migrations": db.query(SpdLifecycleEvent).filter(
+            # 「待确认迁入」只数迁到本范围的（P2-61）：确认由迁入机构做（`confirm_migration` 判
+            # `target_org_id`），原先数的是全县，乡镇看到的待办一条都不归自己确认。
+            "pending_migrations": _apply_scope(
+                db.query(SpdLifecycleEvent), SpdLifecycleEvent.target_org_id, orgs
+            ).filter(
                 SpdLifecycleEvent.event == "migrate",
                 SpdLifecycleEvent.confirmed.is_(False),
             ).count(),
