@@ -19,6 +19,7 @@ from ..deps import (
     paginate,
     require_admin,
     require_date,
+    require_month,
     require_roles,
     resolve_business_date,
 )
@@ -285,6 +286,8 @@ def finance_summary(
     if allowed is not None:
         query = query.filter(FinanceEntry.org_id.in_(allowed))
     if period:
+        # 此前 `period=abc` 也 200，回执原样写着 "period": "abc" 且合计为零（P1-62）
+        period = require_month(period)
         query = query.filter(FinanceEntry.period == period)
     rows = query.group_by(FinanceEntry.org_id, FinanceEntry.category).all()
     orgs: dict[int, dict] = {}
@@ -871,7 +874,7 @@ def create_payroll(
 def list_payroll(period: str | None = None, employee_id: int | None = None, db: Session = Depends(get_db)):
     q = db.query(PayrollRecord)
     if period:
-        q = q.filter(PayrollRecord.period == period)
+        q = q.filter(PayrollRecord.period == require_month(period))  # P1-62
     if employee_id is not None:
         q = q.filter(PayrollRecord.employee_id == employee_id)
     records = q.order_by(PayrollRecord.id.desc()).limit(500).all()

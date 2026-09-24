@@ -887,6 +887,7 @@
     三种写法（年/季/月）收成一个 `check_assess_period`，月度交给 `datetypes.check_month`；先写用例在未修代码上跑出 11 条红。
   - ✅ accounting 三个报表口径接 `require_month`，**前端同批加兜底**：存下的坏期间会让凭证页整页画不出来、
     连切换框都没有——只对 422 回落本月；切换时先让后端判再存。只撤前端兜底，e2e 以"切换框找不到"转红。
+  - ✅ admin_mgmt 财务汇总与薪资列表的 `period` 接 `require_month`（纯对接方入口）。
 
 ### 🚀 正式上线前（收口中）
 

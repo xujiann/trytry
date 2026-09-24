@@ -171,6 +171,27 @@ def test_五个端点都拒绝不存在的月份(client, admin):
         assert passed.status_code == 200, (path, passed.text)
 
 
+
+@pytest.mark.parametrize("path", ["/api/mgmt/finance/summary", "/api/mgmt/payroll"])
+def test_月度查询参数写错一律422_留空照旧(client, admin, path):
+    """P1-62：这两个 `period` 原是裸 `str`，从来不在上面那五个端点的名单里——
+    `period=abc` 200，财务汇总的回执原样写着 `"period": "abc"`、合计为零。
+    页面调它们不带期间，纯对接方入口；留空仍等于不筛。"""
+    for bad, detail in (
+        ("2026-13", "period 2026-13 不存在（月份须为 01~12）"),
+        ("abc", "period 格式须为 YYYY-MM"),
+        ("2026-9", "period 格式须为 YYYY-MM"),
+    ):
+        resp = client.get(path, params={"period": bad}, headers=admin)
+        assert resp.status_code == 422, (path, bad, resp.text)
+        assert resp.json() == {"detail": detail}, (path, bad)
+    base = client.get(path, headers=admin)
+    blank = client.get(path, params={"period": ""}, headers=admin)
+    assert base.status_code == blank.status_code == 200, (base.text, blank.text)
+    assert base.json() == blank.json()
+    assert client.get(path, params={"period": "2026-12"}, headers=admin).status_code == 200
+
+
 # ------------------------------------------------------------ ③ 单一真源
 
 
