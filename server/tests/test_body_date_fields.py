@@ -35,6 +35,8 @@ CASES = [
      "expect_date", True),
     ("/api/knowledge", {"category": "regulation", "title": "日期回归条目"}, "expire_date", True),
     ("PATCH /api/knowledge/999999", {}, "expire_date", True),  # 空串 = 改为长期有效
+    ("/api/materials/consumables", {"barcode": "DATE-REG-1", "name": "穿刺器", "org_id": 999999},
+     "expire_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。

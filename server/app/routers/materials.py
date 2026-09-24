@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import add_amount, ensure_present, insert_if_absent
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
+from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     Asset,
@@ -326,7 +327,7 @@ class ConsumableIn(BaseModel):
     org_id: int
     supplier_id: int | None = None
     batch_no: str = ""
-    expire_date: str = ""
+    expire_date: OptionalDateStr = ""
     unit_price: float = Field(default=0, ge=0)
 
 
