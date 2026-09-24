@@ -15,7 +15,15 @@
 4. 响应里出现演示患者的 id（键名以 `patient_id` 结尾）、姓名或健康卡号，就算"看见了"；
 5. 与已登记的名单交叉：无身份读接口两层（待裁定）、按设计全县可见的主索引检索。
 
-用法：`python scripts/probe_list_exposure.py`。有**未登记**的暴露时退出码 1。
+机构维度（2026-09-24 补）
+------------------------
+同一批调用顺带再问一句：**拿回了哪些别家机构的行**——响应里键名以 `org_id` 结尾、值是演示数据里
+已有机构（孤岛卫生院是后建的，不在其中）的，就算看见了别家。首跑 23 条，其中滞留预警是真漏（P0-39 续，
+已修），其余与已登记的名单交叉：患者读侧名单、P1-49 待裁定的清单、P0-37 读侧棘轮的两张名单，
+再加本文件的 `ORG_BY_DESIGN` / `ORG_AWAITING`。**看不见的**：响应里不带 `*org_id` 键的（例如只带员工号的
+统计），这一维按键名认机构，不认名称。
+
+用法：`python scripts/probe_list_exposure.py`。任一维度有**未登记**的暴露时退出码 1。
 """
 from __future__ import annotations
 
@@ -39,6 +47,28 @@ BY_DESIGN = {
     "patients.py:search_patients":
         "患者主索引检索：Patient 是全县主索引、一人一份档案，检索是新业务（建档、挂号、开单）的入口；"
         "出口经 desensitize 脱敏（非 admin 掩码证件号与电话）。",
+}
+
+
+#: 机构维度：别家机构的行出现在孤岛卫生院的清单里，按设计就是这样的（目录、拓扑、县域监测）。
+ORG_BY_DESIGN = {
+    "disease_programs.py:list_programs":
+        "专病目录（单病种路径定义）：管理员建、全县共用，`org_id` 是主办机构（专病中心所在）而不是归属。",
+    "infectious.py:list_cases":
+        "传染病病例登记：不含患者个体标识（只记报告机构 / 病种 / 发病日期），县域疫情监测的底数，"
+        "与多点触发预警同一口径（一线要看得到辖区疫情）。",
+    "infectious.py:late_reports":
+        "迟报清单：同一份病例登记的时效视图（无个体），迟报通报本就面向辖区各报告单位。",
+    "org_groups.py:list_groups":
+        "机构分组是组织拓扑：`groups_of_org` 的 docstring 写明第九轮「明确不设限」，`lead_org_id` 是牵头单位。",
+    "spd/workbench.py:catalog":
+        "各端下拉框共用的目录（病种、团队、量表、服务包、专病中心、已发布路径）：与逐个目录接口同一口径。",
+}
+
+#: 机构维度：该按什么范围给看要人定（写明出处），答之前不改。
+ORG_AWAITING = {
+    "cssd.py:list_batches":
+        "消毒供应批次清单：「谁算中心」没有建模，批次对申领方可不可见随共享中心那一问一起答（待裁定清单 P1-71 问题 2、P1-75）。",
 }
 
 
@@ -90,7 +120,22 @@ def _scan(obj, pids, names, ehcs, found):
     return found
 
 
-def probe() -> dict[str, dict[str, list[str]]]:
+def _scan_orgs(obj, other_orgs, found):
+    """键名以 `org_id` 结尾、值落在别家机构里的键。"""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k.endswith("org_id") and isinstance(v, int) and v in other_orgs:
+                found.add(k)
+            else:
+                _scan_orgs(v, other_orgs, found)
+    elif isinstance(obj, list):
+        for x in obj:
+            _scan_orgs(x, other_orgs, found)
+    return found
+
+
+def probe() -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]]]:
+    """(患者维度命中, 机构维度命中)：路径 → 角色 → 命中的键。"""
     with tempfile.TemporaryDirectory() as tmp:
         port = _free_port()
         env = {**os.environ, "MEDPLAT_DATABASE_URL": f"sqlite:///{tmp}/probe.db",
@@ -113,6 +158,7 @@ def probe() -> dict[str, dict[str, list[str]]]:
             c = httpx.Client(base_url=base, timeout=30)
             admin = c.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()
             ah = {"Authorization": f"Bearer {admin['access_token']}"}
+            other_orgs = {o["id"] for o in c.get("/api/organizations?limit=500", headers=ah).json()}
             org = c.post("/api/organizations", json={"name": "探针孤岛卫生院", "org_type": "township",
                                                       "level": "township"}, headers=ah).json()
             heads = {}
@@ -128,6 +174,7 @@ def probe() -> dict[str, dict[str, list[str]]]:
             ehcs = {p["ehc_no"] for p in patients if p.get("ehc_no")}
             spec = c.get("/openapi.json").json()
             hits: dict[str, dict[str, list[str]]] = {}
+            org_hits: dict[str, dict[str, list[str]]] = {}
             for path, ops in sorted(spec["paths"].items()):
                 if "get" not in ops or "{" in path or not path.startswith("/api/") or path.startswith("/api/portal"):
                     continue
@@ -135,32 +182,50 @@ def probe() -> dict[str, dict[str, list[str]]]:
                     r = c.get(path, headers=h)
                     if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
                         continue
-                    found = _scan(r.json(), pids, names, ehcs, set())
+                    body = r.json()
+                    found = _scan(body, pids, names, ehcs, set())
                     if found:
                         hits.setdefault(path, {})[role] = sorted(found)
-            return hits
+                    found_orgs = _scan_orgs(body, other_orgs, set())
+                    if found_orgs:
+                        org_hits.setdefault(path, {})[role] = sorted(found_orgs)
+            return hits, org_hits
         finally:
             proc.terminate()
             proc.wait(timeout=10)
 
 
-def main() -> int:
-    import test_unscopable_patient_reads as reads
-
-    registered = (set(reads.UNSCOPABLE_PATIENT_READS) | set(reads.AGGREGATE_ONLY_READS)
-                  | set(reads.ONEHOP_UNSCOPABLE_READS))
-    keys = _route_keys()
-    hits = probe()
+def _report(title: str, hits, keys, by_design, registered) -> list[str]:
+    print(f"== {title}")
     unregistered = []
     for path, roles in sorted(hits.items()):
         key = keys.get(path, f"?{path}")
-        tag = "按设计" if key in BY_DESIGN else "待裁定（已登记）" if key in registered else "未登记"
+        tag = "按设计" if key in by_design else "待裁定（已登记）" if key in registered else "未登记"
         fields = sorted({f for fs in roles.values() for f in fs})
         print(f"{tag:10s} {key:48s} {path}  角色={','.join(sorted(roles))}  字段={','.join(fields)}")
         if tag == "未登记":
             unregistered.append(key)
-    print(json.dumps({"exposed": len(hits), "unregistered": unregistered}, ensure_ascii=False))
-    return 1 if unregistered else 0
+    return unregistered
+
+
+def main() -> int:
+    import test_list_pagination_ratchet as pagination
+    import test_org_param_read_guard as orgread
+    import test_unscopable_patient_reads as reads
+
+    registered = (set(reads.UNSCOPABLE_PATIENT_READS) | set(reads.AGGREGATE_ONLY_READS)
+                  | set(reads.ONEHOP_UNSCOPABLE_READS))
+    org_by_design = set(ORG_BY_DESIGN) | set(orgread.BY_DESIGN)
+    # 机构维度的「已登记」：患者读侧名单（真正要守的是患者）、P1-49 待裁定的清单、P0-37 待裁定、本文件待裁定
+    org_registered = (registered | set(pagination.HELD_PENDING_SCOPE_DECISION)
+                      | set(orgread.AWAITING) | set(ORG_AWAITING))
+    keys = _route_keys()
+    hits, org_hits = probe()
+    unregistered = _report("患者维度：拿回了谁的患者", hits, keys, BY_DESIGN, registered)
+    org_unregistered = _report("机构维度：拿回了哪些别家机构的行", org_hits, keys, org_by_design, org_registered)
+    print(json.dumps({"exposed": len(hits), "unregistered": unregistered,
+                      "org_exposed": len(org_hits), "org_unregistered": org_unregistered}, ensure_ascii=False))
+    return 1 if unregistered or org_unregistered else 0
 
 
 if __name__ == "__main__":
