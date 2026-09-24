@@ -205,18 +205,18 @@ def export_death_report_cards_csv(
     if date_to:
         date_to = require_date(date_to, field="date_to")
         query = query.filter(MedicalCert.event_date <= date_to)
-    certs = query.order_by(MedicalCert.id).limit(2000).all()
+    # P1-50：原先 `.limit(2000)` 再拿证明上的患者号去 `Patient.id.in_([...])`——区间内死亡数过 2000，
+    # 法定上报的导出静默少一截。改成外连接患者一次取回：没有上限，也没有那句参数个数有上限的 IN。
+    pairs = (
+        query.outerjoin(Patient, Patient.id == MedicalCert.patient_id)
+        .add_entity(Patient)
+        .order_by(MedicalCert.id)
+        .all()
+    )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     usernames = {u.id: u.username for u in db.query(User).all()}
-    patients = {
-        p.id: p
-        for p in db.query(Patient)
-        .filter(Patient.id.in_([c.patient_id for c in certs if c.patient_id]))
-        .all()
-    }
     rows = []
-    for cert in certs:
-        patient = patients.get(cert.patient_id) if cert.patient_id else None
+    for cert, patient in pairs:
         if cert.patient_id:
             log_patient_access(db, user, cert.patient_id, "death_report_card", "export")
         card = _death_card(
