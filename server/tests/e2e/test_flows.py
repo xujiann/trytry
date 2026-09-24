@@ -1729,6 +1729,11 @@ def test_校验失败的报错是人话而不是object_Object(page, base_url):
         }"""
     )
     assert blank == "name：不能只填空格", blank
+    empty = page.evaluate(
+        "() => errorText([{type: 'string_too_short', loc: ['body', 'items', 0, 'drug_code'],"
+        " msg: 'String should have at least 1 character', ctx: {min_length: 1}}], '兜底')"
+    )
+    assert empty == "items.0.drug_code：不能为空", empty  # P1-110：必填留空
 
     # 居民端与医生端各自的 api() 也改成了走它：页面上确实加载到了这个函数
     for path in ("/m/", "/m/doctor"):

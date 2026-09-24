@@ -114,8 +114,9 @@ class ExamRequestCreate(BaseModel):
     patient_id: int
     from_org_id: int
     center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
-    item_code: str = Field(max_length=64)
-    item_name: str = Field(max_length=128)
+    # 检查项目必填（P1-110）：原先只卡长度，项目编码 / 名称为空串照样建单，检查中心收到一张不知道查什么的申请
+    item_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    item_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     clinical_info: str = Field(default="", max_length=512)
     # 互认：引用既往已报告申请的 id 即互认其结果；填写理由则记录不互认原因
     accept_recognition_of: int | None = None
@@ -195,7 +196,8 @@ class CriticalResolveBody(BaseModel):
 
 
 class DrugRuleCreate(BaseModel):
-    drug_code: str = Field(max_length=64)
+    # 药品编码必填（P1-110）：原先空串照收，建出一条只管「没有编码的药」的规则
+    drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     max_daily_dose: FiniteFloat = Field(gt=0)
     dose_unit: str = Field(default="mg", max_length=16)
     note: str = Field(default="", max_length=256)
@@ -217,6 +219,8 @@ class DrugRuleCreate(BaseModel):
 
 class DrugRuleOut(DrugRuleCreate):
     id: int
+    # 出参不带必填校验（P1-110）：修之前存进去的空串行要原样读出来，而不是让整个清单 500
+    drug_code: str = Field(max_length=64)
     # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
     max_daily_dose: float
     ddd: float = 0
@@ -227,8 +231,9 @@ class DrugRuleOut(DrugRuleCreate):
 
 
 class PrescriptionItemIn(BaseModel):
-    drug_code: str = Field(max_length=64)
-    drug_name: str = Field(max_length=128)
+    # 药品必填（P1-110）：原先编码为空串照收，没有规则对得上，这张处方自动审核通过（修前实测 auto_passed）
+    drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    drug_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     daily_dose: FiniteFloat = Field(gt=0)
     days: int = Field(default=1, ge=1, le=INT4_MAX)
 
@@ -236,6 +241,9 @@ class PrescriptionItemIn(BaseModel):
 class PrescriptionItemOut(PrescriptionItemIn):
     # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
     daily_dose: float
+    # 出参不带必填校验（P1-110）：修之前存进去的空串行要原样读出来，而不是让整个清单 500
+    drug_code: str = Field(max_length=64)
+    drug_name: str = Field(max_length=128)
 
 
 class PrescriptionCreate(BaseModel):
@@ -338,8 +346,9 @@ class FollowUpOut(FollowUpCreate):
 
 class InfectiousCaseCreate(BaseModel):
     org_id: int
-    disease_code: str = Field(max_length=64)
-    disease_name: str = Field(max_length=128)
+    # 病种必填（P1-110）：原先编码与名称为空串照收，一例不知道是什么病的法定传染病报告照样进多点预警的分组
+    disease_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
+    disease_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     onset_date: DateStr
 
 
@@ -348,6 +357,9 @@ class InfectiousCaseOut(InfectiousCaseCreate):
     category: str = ""
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     onset_date: str
+    # 出参不带必填校验（P1-110）：修之前存进去的空串行要原样读出来，而不是让整个清单 500
+    disease_code: str = Field(max_length=64)
+    disease_name: str = Field(max_length=128)
 
     model_config = {"from_attributes": True}
 

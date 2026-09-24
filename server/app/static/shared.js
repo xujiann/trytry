@@ -103,14 +103,18 @@ function readCookie(name) {
  * 空的或认不出的形状回落到调用方给的兜底文案——宁可笼统，也不要 `[object Object]`。
  *
  * 必填文本只填了空格（P1-109，后端 `texttypes.NON_BLANK`）pydantic 的原话是
- * "String should match pattern '\S'"，按错误类型与 pattern 认出来换成人话。
+ * "String should match pattern '\S'"，必填文本留空（`min_length=1`，P1-110）的原话是
+ * "String should have at least 1 character"——按错误类型与约束认出来换成人话。
  */
 function errorText(detail, fallback) {
   if (Array.isArray(detail)) {
     const origins = ["body", "query", "path", "header", "cookie"];
     const parts = detail.map((e) => {
-      const blank = e && e.type === "string_pattern_mismatch" && e.ctx && e.ctx.pattern === "\\S";
-      const msg = blank ? "不能只填空格" : String((e && e.msg) || "").replace(/^Value error, /, "");
+      const ctx = (e && e.ctx) || {};
+      const blank = e && e.type === "string_pattern_mismatch" && ctx.pattern === "\\S";
+      const empty = e && e.type === "string_too_short" && ctx.min_length === 1;
+      const msg = blank ? "不能只填空格" : empty ? "不能为空"
+        : String((e && e.msg) || "").replace(/^Value error, /, "");
       const field = Array.isArray(e && e.loc)
         ? e.loc.filter((x) => !origins.includes(x)).join(".") : "";
       return field && msg ? `${field}：${msg}` : msg;
