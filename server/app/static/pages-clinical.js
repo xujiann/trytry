@@ -2169,20 +2169,32 @@ async function renderHrFinance() {
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
+      // P2-38：挂科室手输科室 ID、变动输序号再三连问、签合同三连问、出入库输序号再两连问——
+      // 全换成页内表单。科室只列员工所在机构的（后端本就只收同机构科室，列别家的只会换来 422）。
       if (d.empdept) {
-        const deptId = prompt("科室ID（须与员工同机构）"); if (!deptId) return;
-        await api(`/api/mgmt/employees/${d.empdept}/department?dept_id=${Number(deptId)}`, { method: "POST" });
+        const emp = employees.find((x) => x.id === Number(d.empdept));
+        const options = departments.filter((dp) => !emp || dp.org_id === emp.org_id)
+          .map((dp) => ({ value: dp.id, label: `${dp.name}（${dp.code}）` }));
+        if (!options.length) return setMsg("#hrf-msg", "该员工所在机构还没有科室，请先在科室库里建", false);
+        const v = await spdModal(`挂科室：${emp ? emp.name : d.empdept}`, [
+          { name: "dept_id", label: "科室（只列员工所在机构的）", type: "select", options }]);
+        if (!v) return;
+        await api(`/api/mgmt/employees/${d.empdept}/department?dept_id=${Number(v.dept_id)}`, { method: "POST" });
         route();
       }
       if (d.empchg) {
-        const keys = Object.keys(CHG_TYPES);
-        const pick = prompt(`变动类型（${keys.map((k, i) => `${i + 1}=${CHG_TYPES[k]}`).join("，")}）输入序号`);
-        const type = keys[Number(pick) - 1]; if (!type) return;
-        const body = { change_type: type, detail: prompt("变动说明") || "", effective_date: prompt("生效日期 YYYY-MM-DD") || "" };
-        if (type === "transfer") {
-          const toOrg = prompt("调入机构ID"); if (!toOrg) return;
-          body.to_org_id = Number(toOrg);
-        }
+        const v = await spdModal("登记人员变动", [
+          { name: "change_type", label: "变动类型", type: "select",
+            options: Object.entries(CHG_TYPES).map(([value, label]) => ({ value, label })) },
+          { name: "to_org_id", label: "调入机构（仅调动时选）", type: "select",
+            options: [{ value: "", label: "—" }, ...orgs.map((o) => ({ value: o.id, label: o.name }))] },
+          { name: "effective_date", label: "生效日期（可空）", placeholder: "YYYY-MM-DD" },
+          { name: "detail", label: "变动说明", type: "textarea" },
+        ]);
+        if (!v) return;
+        const body = { change_type: v.change_type, detail: v.detail, effective_date: v.effective_date };
+        // 调动没选机构就发 null：让后端报"调动须指定调入机构"，别在前端另抄一份规则
+        if (v.change_type === "transfer") body.to_org_id = v.to_org_id ? Number(v.to_org_id) : null;
         return postAction(`/api/mgmt/employees/${d.empchg}/changes`, body, "#hrf-msg");
       }
       if (d.emphist) {
@@ -2193,19 +2205,25 @@ async function renderHrFinance() {
            <td>${c.to_org_id ?? "—"}</td><td>${esc(c.detail) || "—"}</td><td>${esc(c.effective_date) || "—"}</td></tr>`);
       }
       if (d.empct) {
-        const no = prompt("合同编号"); if (!no) return;
-        const start = prompt("起期 YYYY-MM-DD"); if (!start) return;
-        const end = prompt("止期 YYYY-MM-DD"); if (!end) return;
-        return postAction("/api/mgmt/staff-contracts",
-          { employee_id: Number(d.empct), contract_no: no, start_date: start, end_date: end }, "#hrf-msg");
+        const emp = employees.find((x) => x.id === Number(d.empct));
+        const v = await spdModal(`签劳动合同：${emp ? emp.name : d.empct}`, [
+          { name: "contract_no", label: "合同编号", required: true },
+          { name: "start_date", label: "起期", placeholder: "YYYY-MM-DD", required: true },
+          { name: "end_date", label: "止期", placeholder: "YYYY-MM-DD", required: true },
+        ]);
+        if (!v) return;
+        return postAction("/api/mgmt/staff-contracts", { employee_id: Number(d.empct), ...v }, "#hrf-msg");
       }
       if (d.assetmv) {
-        const keys = Object.keys(MV_TYPES);
-        const pick = prompt(`动作（${keys.map((k, i) => `${i + 1}=${MV_TYPES[k]}`).join("，")}）输入序号`);
-        const type = keys[Number(pick) - 1]; if (!type) return;
-        const qty = prompt("数量"); if (!qty) return;
-        return postAction(`/api/mgmt/assets/${d.assetmv}/movements`,
-          { movement_type: type, quantity: Number(qty), note: prompt("备注") || "" }, "#hrf-msg");
+        const asset = assets.find((a) => a.id === Number(d.assetmv));
+        const v = await spdModal(`物资出入库：${asset ? asset.name : d.assetmv}`, [
+          { name: "movement_type", label: "动作", type: "select",
+            options: Object.entries(MV_TYPES).map(([value, label]) => ({ value, label })) },
+          { name: "quantity", label: "数量", type: "number", required: true },
+          { name: "note", label: "备注", type: "textarea" },
+        ]);
+        if (!v) return;
+        return postAction(`/api/mgmt/assets/${d.assetmv}/movements`, v, "#hrf-msg");
       }
       if (d.assetxfer) {
         const asset = assets.find((a) => a.id === Number(d.assetxfer));

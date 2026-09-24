@@ -532,6 +532,58 @@ def test_妇幼页的访视分娩新筛都在页内表单里录入(page, base_ur
     expect(page.locator("#page-body")).to_contain_text("听力筛查阳性/可疑")
 
 
+def test_人财物页的挂科室_变动_合同_出入库都在页内表单里录入(page, base_url, seed):
+    """P2-38：人财物页原先手输科室 ID、变动输序号再三连问、签合同三连问、出入库输序号再两连问。
+    换成页内表单后，科室只列员工所在机构的（后端本就只收同机构科室）、调入机构从下拉里选；
+    规则不在前端另抄——调动没选机构、合同止期写错，都由后端报人话。"""
+    from datetime import date, timedelta
+
+    org_id = str(seed["org"]["id"])
+    _login(page, base_url)
+    _open_page(page, "hrfinance", "人财物管理")
+    page.fill("#dept-form input[name=org_id]", org_id)
+    page.fill("#dept-form input[name=code]", "E2E-NK")
+    page.fill("#dept-form input[name=name]", "E2E内科")
+    _submit(page, "#dept-form button")
+    page.fill("#emp-form input[name=org_id]", org_id)
+    page.fill("#emp-form input[name=name]", "E2E员工甲")
+    _submit(page, "#emp-form button")
+    row = page.locator("tr", has_text="E2E员工甲")
+
+    row.locator("button[data-empdept]").click()
+    _spd_modal(page, {})  # 下拉只列本机构科室，只有一个，默认即选中
+    expect(page.locator("tr", has_text="E2E员工甲")).to_contain_text("E2E内科")
+
+    page.locator("tr", has_text="E2E员工甲").locator("button[data-empchg]").click()
+    _spd_modal(page, {"change_type": "transfer"})  # 调动却没选调入机构
+    expect(page.locator("#hrf-msg")).to_contain_text("调动须指定调入机构")
+    page.locator("tr", has_text="E2E员工甲").locator("button[data-empchg]").click()
+    _spd_modal(page, {"change_type": "regularize", "effective_date": "2026-09-24", "detail": "试用期满"})
+    expect(page.locator("#hrf-msg")).to_have_text("")
+    page.locator("tr", has_text="E2E员工甲").locator("button[data-emphist]").click()
+    expect(page.locator("#empchg-list")).to_contain_text("转正")
+    expect(page.locator("#empchg-list")).to_contain_text("2026-09-24")
+
+    page.locator("tr", has_text="E2E员工甲").locator("button[data-empct]").click()
+    _spd_modal(page, {"contract_no": "E2E-HT-1", "start_date": "2026-01-01", "end_date": "2026-02-31"})
+    expect(page.locator("#hrf-msg")).to_contain_text("end_date")
+    end = (date.today() + timedelta(days=30)).isoformat()  # 落进 60 天到期提醒，才看得见落了库
+    page.locator("tr", has_text="E2E员工甲").locator("button[data-empct]").click()
+    _spd_modal(page, {"contract_no": "E2E-HT-1", "start_date": "2026-01-01", "end_date": end})
+    expect(page.locator("#page-body")).to_contain_text("E2E-HT-1")
+
+    page.fill("#asset-form input[name=org_id]", org_id)
+    page.fill("#asset-form input[name=code]", "E2E-ZC-1")
+    page.fill("#asset-form input[name=name]", "E2E打印机")
+    page.fill("#asset-form input[name=quantity]", "3")
+    _submit(page, "#asset-form button")
+    page.locator("tr", has_text="E2E打印机").locator("button[data-assetmv]").click()
+    _spd_modal(page, {"movement_type": "issue", "quantity": "2", "note": "门诊领用"})
+    expect(page.locator("#hrf-msg")).to_have_text("")
+    page.locator("tr", has_text="E2E打印机").locator("button[data-assethist]").click()
+    expect(page.locator("#assetmv-list")).to_contain_text("门诊领用")
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 
