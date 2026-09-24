@@ -456,15 +456,21 @@ def _encounter_visible(db: Session, encounter_id: int, user: User, resource: str
 
 @router.get("/encounters/{encounter_id}/treatments",
             response_model=list[TreatmentRecordOut])
-def list_treatments(encounter_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_treatments(
+    encounter_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if not _encounter_visible(db, encounter_id, user, resource="treatment"):
         return []
-    rows = (
+    rows = paginate(
         db.query(TreatmentRecord)
         .filter(TreatmentRecord.encounter_id == encounter_id)
-        .order_by(TreatmentRecord.id.desc())
-        .limit(200)
-        .all()
+        .order_by(TreatmentRecord.id.desc()),
+        response, offset, limit,
     )
     return [_treatment_out(t) for t in rows]
 
@@ -537,15 +543,21 @@ def create_outpatient_nursing(
 
 @router.get("/encounters/{encounter_id}/nursing-records",
             response_model=list[OutpatientNursingOut])
-def list_outpatient_nursing(encounter_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_outpatient_nursing(
+    encounter_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if not _encounter_visible(db, encounter_id, user, resource="outpatient_nursing"):
         return []
-    rows = (
+    rows = paginate(
         db.query(NursingRecord)
         .filter(NursingRecord.encounter_id == encounter_id)
-        .order_by(NursingRecord.id.desc())
-        .limit(200)
-        .all()
+        .order_by(NursingRecord.id.desc()),
+        response, offset, limit,
     )
     return [
         {

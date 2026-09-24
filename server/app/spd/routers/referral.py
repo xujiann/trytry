@@ -851,7 +851,12 @@ def closure_rate(
 
 @router.get("/referrals-alerts", response_model=ReferralAlertsOut)
 def referral_alerts(
-    hours: int = 48, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    response: Response,
+    hours: int = 48,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """转诊审核超时预警（医生移动端 #19）：超过 N 小时未推进的在途单。"""
     cutoff = now_naive() - timedelta(hours=max(min(hours, 720), 1))
@@ -865,16 +870,16 @@ def referral_alerts(
             SpdReferralCase.initiator_org_id.in_(orgs)
             | SpdReferralCase.current_org_id.in_(orgs)
         )
-    rows = query.order_by(SpdReferralCase.created_at).limit(200).all()
     # `count` 必须是**超时在途单的总数**，不是「这次取回了几条」。
     # 原实现是 `len(rows)`，而 rows 被 `.limit(200)` 截断——积压 500 单时
     # 预警页显示「超时 200 单」，**与真的只有 200 单长得一模一样**，
     # 而这正是拿来判断"积压有多严重"的那个数。
-    # 列表本身保留 200 条上限：排序是 `created_at` **升序**，留下的正是
-    # 最久未推进的那些（与临期预警那两处相反，那边升序 + 只有上界才砍错了端）。
-    total = query.count()
+    # 列表按 `created_at` **升序**分页（id 作尾键保全序），第一页留下的正是
+    # 最久未推进的那些（与临期预警那两处相反，那边升序 + 只有上界才砍错了端）；
+    # 其余的往后翻（P2-8 第六批）。`count` 与 `X-Total-Count` 是同一次计数。
+    rows = paginate(query.order_by(SpdReferralCase.created_at, SpdReferralCase.id), response, offset, limit)
     return {
         "threshold_hours": hours,
-        "count": total,
+        "count": int(response.headers["X-Total-Count"]),
         "items": [_case_out(db, r) for r in rows],
     }

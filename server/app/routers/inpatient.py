@@ -675,8 +675,11 @@ def _order_out(o: InpatientOrder) -> dict:
 
 @router.get("/orders", response_model=list[OrderOut])
 def list_orders(
+    response: Response,
     admission_id: int | None = None,
     status: str | None = None,
+    offset: int = 0,
+    limit: int = 200,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -696,7 +699,7 @@ def list_orders(
         )
     if status:
         q = q.filter(InpatientOrder.status == status)
-    return [_order_out(o) for o in q.order_by(InpatientOrder.id.desc()).limit(200).all()]
+    return [_order_out(o) for o in paginate(q.order_by(InpatientOrder.id.desc()), response, offset, limit)]
 
 
 @router.post(
@@ -809,19 +812,23 @@ def record_order_execution(
 
 @router.get("/orders/{order_id}/executions", response_model=list[ExecutionOut])
 def list_order_executions(
-    order_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    order_id: int,
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     order = db.get(InpatientOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="医嘱不存在")
     _admission_visible_or_404(db, order.admission_id, user, resource="inpatient_order")
-    rows = (
+    rows = paginate(
         db.query(OrderExecution, User.full_name, User.username)
         .outerjoin(User, User.id == OrderExecution.executed_by)
         .filter(OrderExecution.inpatient_order_id == order_id)
-        .order_by(OrderExecution.id.desc())
-        .limit(200)
-        .all()
+        .order_by(OrderExecution.id.desc()),
+        response, offset, limit,
     )
     nursing_count = _order_nursing_count(db, order_id)
     return [

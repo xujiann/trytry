@@ -77,7 +77,8 @@ import warnings
 #: → 99（2026-09-24 死因报告卡导出 / 区域结构分析 / 团队工作台三处去掉上限，P1-50 / P1-51；当时没随手降基线，这里补记）
 #: → 98（同日体温单改从最近一次往前翻页，P1-81）
 #: → 97（同日流程待办的角色筛挪进查询，P1-82）
-BASELINE_SILENT_TRUNCATION = 97
+#: → 92（同日第六批切完 5 个纯分页：住院医嘱 / 执行记录、门诊处置 / 护理、慢专病转诊超时预警）
+BASELINE_SILENT_TRUNCATION = 92
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
@@ -191,6 +192,7 @@ PAGINATED_ENDPOINTS = {
     "clinical_docs.py:list_handovers",
     "clinical_docs.py:list_nursing_records",
     "clinical_docs.py:list_progress_notes",
+    "clinical_docs.py:list_vitals",
     "consents.py:list_consents",
     "consents.py:list_corrections",
     "contracts.py:list_contracts",
@@ -206,6 +208,8 @@ PAGINATED_ENDPOINTS = {
     "followups.py:list_followups",
     "homevisits.py:list_visits",
     "inpatient.py:list_admissions",
+    "inpatient.py:list_order_executions",
+    "inpatient.py:list_orders",
     "inpatient.py:list_wards",
     "insurance.py:list_settlements",
     "jobs.py:list_runs",
@@ -217,6 +221,8 @@ PAGINATED_ENDPOINTS = {
     "medwaste.py:list_wastes",
     "notifications.py:list_notifications",
     "outpatient_docs.py:list_consents",
+    "outpatient_docs.py:list_outpatient_nursing",
+    "outpatient_docs.py:list_treatments",
     "outpatient_docs.py:list_treatments_by_patient",
     "patients.py:search_patients",
     "performance.py:list_tasks",
@@ -290,6 +296,7 @@ PAGINATED_ENDPOINTS = {
     "spd/portal.py:my_revisits",
     "spd/portal.py:my_tasks",
     "spd/referral.py:list_referrals",
+    "spd/referral.py:referral_alerts",
     "spd/tasks.py:list_path_instances",
     "spd/tasks.py:list_tasks",
     "staffing.py:list_secondments",
@@ -303,6 +310,7 @@ PAGINATED_ENDPOINTS = {
     "vaccine_supply.py:list_batches",
     "vaccine_supply.py:list_temperatures",
     "workflows.py:list_instances",
+    "workflows.py:my_tasks",
 }
 
 
@@ -396,6 +404,10 @@ def test_billing模块已经切完():
 #: 第三批**故意没切**的 11 个端点：没有机构/患者收口，切分页等于把可枚举面
 #: 从「最多 200 行」放大成「整表可翻」+ 精确总数头。是暴露面决策不是分页决策，
 #: 待裁定（P1-49）。列在这里是为了让「为什么这个数不再往下降」有据可查。
+#:
+#: 原有 11 个。住院医嘱与执行记录两条（`inpatient.py:list_orders` / `list_order_executions`）
+#: 2026-09-24 由 P0-19 按患者可见性收了口——暴露面那一问由既有的可见性口径答了，不再是待裁定，
+#: 同日第六批切了分页。收口在先、切分页在后，这张表的前提（「没有收口」）没被绕过。
 HELD_PENDING_SCOPE_DECISION = {
     "admin_mgmt.py:list_docs",
     "admin_mgmt.py:list_payroll",
@@ -403,8 +415,6 @@ HELD_PENDING_SCOPE_DECISION = {
     "admin_mgmt.py:list_rosters",
     "admin_mgmt.py:list_staff_contracts",
     "inpatient.py:list_beds",
-    "inpatient.py:list_order_executions",
-    "inpatient.py:list_orders",
     "pharmacy.py:batch_dispense_trace",
     "quality.py:list_adverse_events",
     "quality.py:list_record_qc",
@@ -420,6 +430,9 @@ NESTED_CAP_FALSE_POSITIVES = {
     "chronic.py:risk_score",            # `.limit(3)` = 「最近 3 次随访」的评分口径
     "spd/followup.py:followup_context",  # 随访时给医生看的上下文，各取最近几条
     "spd/population.py:patient_profile",  # 患者画像：各维度各附最近 N 条
+    # 第六批人工核出的同类：卫健工作台是一屏指标，`.limit(20)` 在「考核结果排名」那一栏上，
+    # 是前 20 名的展示上限，不是列表分页（排名全表另有 `/api/spd/scores` 分页可翻）
+    "spd/workbench.py:health_commission_workbench",
 }
 
 
@@ -445,7 +458,8 @@ def test_portal两个模块只剩三处误报():
 
 
 def test_第三批只剩待裁定的那些():
-    """四个模块里有机构收口的都切完了，剩下的必须**恰好**是那 11 处待裁定 + qc-summary。
+    """四个模块里有机构收口的都切完了，剩下的必须**恰好**是那几处待裁定（原 11 处，
+    P0-19 收了口的住院医嘱两条已切，余 9 处）。
 
     钉成"恰好等于"而不是"包含于"：
     - 多出来 → 有端点退回了硬编码 `.limit()`；
