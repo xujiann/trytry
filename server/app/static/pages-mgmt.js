@@ -657,6 +657,8 @@ async function renderAnalytics() {
     postAction("/api/analytics/formulas", formJson(e.target, ["weight"]), "#ana-msg"); };
   $("#page-body").onclick = async (e) => {
     if (!e.target.dataset.off) return;
+    // P2-43：原先点一下就停用；停用的公式页面上没有启用入口，考核口径随之改变
+    if (!await spdModal("停用考核公式", [], { intro: "停用后该公式不再参与计分，页面上不能重新启用。" })) return;
     try { await api(`/api/analytics/formulas/${encodeURIComponent(e.target.dataset.off)}`, { method: "DELETE" }); route(); }
     catch (err) { setMsg("#ana-msg", err.message, false); }
   };
@@ -725,6 +727,8 @@ async function renderRules() {
   };
   $("#page-body").onclick = async (e) => {
     if (!e.target.dataset.off) return;
+    // P2-43：原先点一下就停用；停用的规则页面上没有启用入口，依赖它的判定随之失效
+    if (!await spdModal("停用规则", [], { intro: "停用后该规则不再参与求值，页面上不能重新启用。" })) return;
     try { await api(`/api/rules/${encodeURIComponent(e.target.dataset.off)}`, { method: "DELETE" }); route(); }
     catch (err) { setMsg("#rule-msg", err.message, false); }
   };
@@ -1872,7 +1876,16 @@ async function renderStaffing() {
       formJson(e.target, ["employee_id", "from_org_id", "to_org_id"]), "#st-msg"); };
   $("#page-body").onclick = async (e) => {
     const { stend, stlevel } = e.target.dataset;
-    if (stend) return postAction(`/api/staffing/secondments/${stend}/end`, null, "#st-msg");
+    if (stend) {
+      // P2-43：原先点一下就结束、结束日一律记今天。"长期派驻满半年"按起止日期算，记错了这一人次
+      // 就进不了下沉指标，且不能撤回。后端早就收可选的结束日期（补录用），这里一并给出。
+      const form = await spdModal("结束派驻", [
+        { name: "end_date", label: "结束日期", placeholder: "YYYY-MM-DD，留空为今天" },
+      ], { intro: "结束后不能撤回；下沉指标里的「长期派驻满半年」按起止日期计算。" });
+      if (!form) return;
+      const q = form.end_date ? `?end_date=${encodeURIComponent(form.end_date)}` : "";
+      return postAction(`/api/staffing/secondments/${stend}/end${q}`, null, "#st-msg");
+    }
     if (stlevel) {
       // P2-38：原先要手打英文代码（junior/intermediate/…），打错被后端 422 拒回；而"中级及以上"
       // 正是下沉指标的判据。换成下拉，默认中级（与原先弹窗的预填一致）。

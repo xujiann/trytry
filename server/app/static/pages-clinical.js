@@ -621,7 +621,11 @@ async function renderTelemedicine() {
         reply: v.reply, doctor_name: v.doctor_name,
         prescription_id: rx === "" ? null : (Number.isNaN(Number(rx)) ? rx : Number(rx)) }, "#tm-msg");
     }
-    if (close) return postAction(`/api/telemedicine/consults/${close}/close`, null, "#tm-msg");
+    if (close) {
+      // P2-43：原先点一下就结束；「已回复 → 已结束」页面上没有撤回入口
+      if (!await spdModal("结束问诊", [], { intro: "结束后这次问诊标记为「已结束」，不能撤回。" })) return;
+      return postAction(`/api/telemedicine/consults/${close}/close`, null, "#tm-msg");
+    }
   };
 }
 
@@ -1144,7 +1148,11 @@ async function renderMaternal() {
       return postAction(`/api/maternal/records/${d.delivery}/delivery`,
         { ...v, org_id: Number(v.org_id), newborn_count: v.newborn_count || 1 }, "#mat-msg");
     }
-    if (d.close) return postAction(`/api/maternal/records/${d.close}/close`, null, "#mat-msg");
+    if (d.close) {
+      // P2-43：原先点一下就结案；页面上没有重开入口
+      if (!await spdModal("孕产妇保健结案", [], { intro: "结案后档案标记为「已结案」，页面上不能重开。" })) return;
+      return postAction(`/api/maternal/records/${d.close}/close`, null, "#mat-msg");
+    }
     if (d.cvisit) {
       const v = await spdModal("儿童访视", [
         { name: "visit_type", label: "访视类型", type: "select", options: [
@@ -2098,7 +2106,11 @@ async function renderPublicHealth() {
       if (!form) return;
       return postAction(`/api/publichealth/events/${act}/actions`, { action: form.action, actor: form.actor }, "#ph-msg");
     }
-    if (close) return postAction(`/api/publichealth/events/${close}/close`, null, "#ph-msg");
+    if (close) {
+      // P2-43：原先点一下就结案；结案后不能再登记处置记录，页面上没有重开入口
+      if (!await spdModal("公卫事件结案", [], { intro: "结案后该事件不能再登记处置记录，页面上不能重开。" })) return;
+      return postAction(`/api/publichealth/events/${close}/close`, null, "#ph-msg");
+    }
   };
 }
 

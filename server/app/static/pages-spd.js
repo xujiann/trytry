@@ -1808,6 +1808,8 @@ async function renderSpdPath() {
       return;
     }
     if (nodeDel) {
+      // P2-43：原先点一下就删；节点的时限、角色、表单配置一并没了，不能恢复
+      if (!await spdModal("删除路径节点", [], { intro: "删除后该节点的时限、角色与表单配置一并删除，不能恢复。" })) return;
       try {
         await api(`/api/spd/path-nodes/${nodeDel.dataset.nodeDel}`, { method: "DELETE" });
         await showNodes(nodeDel.dataset.tpl);
@@ -3226,8 +3228,13 @@ async function renderSpdManager() {
     const followup = e.target.closest("[data-consult-fu]");
     const revisit = e.target.closest("[data-revisit]");
     if (open) return spdShowConsultThread(Number(open.dataset.consult));
-    if (close) return postAction(`/api/spd/consults/${close.dataset.consultClose}/close`,
-      null, "#spd-consult-msg");
+    if (close) {
+      // P2-43：原先点一下就结束；结束后医生端不能再回复这次会话
+      if (!await spdModal("结束咨询", [], {
+        intro: "结束后这次会话关闭、不能再回复；患者端显示「已结束」，患者再发消息会开启新会话。" })) return;
+      return postAction(`/api/spd/consults/${close.dataset.consultClose}/close`,
+        null, "#spd-consult-msg");
+    }
     if (followup) {
       const form = await spdModal("依据咨询发起随访", [
         { name: "title", label: "随访标题", value: "咨询转随访", required: true },

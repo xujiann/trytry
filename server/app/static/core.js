@@ -754,7 +754,11 @@ async function renderAppointments() {
   $("#page-body").onclick = async (e) => {
     const { cancel, fulfill, blout, domain } = e.target.dataset;
     try {
-      if (cancel) { await api(`/api/appointments/${cancel}/cancel`, { method: "POST" }); route(); }
+      if (cancel) {
+        // P2-43：原先点一下就生效——号源随即释放，居民那边的预约就没了
+        if (!await spdModal("取消预约", [], { intro: "点「确定」作废这次预约，号源立即释放给他人，不能恢复；点「取消」保留。" })) return;
+        await api(`/api/appointments/${cancel}/cancel`, { method: "POST" }); route();
+      }
       if (fulfill) { await api(`/api/appointments/${fulfill}/fulfill`, { method: "POST" }); route(); }
       if (blout) {
         // domain 必须带上：后端按 (domain, patient_id) 定位，缺省是 appointment，
@@ -1233,6 +1237,9 @@ async function renderPatients() {
   $("#page-body").onclick = async (e) => {
     const { revoke, pid } = e.target.dataset;
     if (!revoke) return;
+    // P2-43：原先点一下就生效；撤销后要恢复，得患者本人再来办一次授权
+    if (!await spdModal("撤销调阅授权", [], {
+      intro: "撤销后该机构不能再凭此授权调阅患者档案；如需恢复，须患者本人重新办理授权。" })) return;
     try {
       await api(`/api/patients/${pid}/authorizations/${revoke}/revoke`, { method: "POST" });
       await drawAuths(pid);

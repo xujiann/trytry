@@ -1120,6 +1120,72 @@ def test_集成平台对消息执行编排在页内表单里填消息号(page, b
     expect(page.locator("#esb-msg")).to_contain_text("消息不存在")
 
 
+def _confirm_then(page, click, intro, before, after):
+    """P2-43 的共同步骤：点按钮 → 确认表单上写着后果 → 先取消（before() 仍成立）→ 再点并确定（after() 成立）。"""
+    click()
+    expect(_modal(page)).to_contain_text(intro)
+    _cancel_modal(page)
+    assert before(), "点了取消却照样生效了"
+    click()
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    assert after()
+
+
+def test_互联网诊疗结束先确认(page, base_url, seed, admin_read, admin_call):
+    """P2-43：「结束」原先点一下就结束（已回复 → 已结束），页面上没有撤回入口。"""
+    consult = admin_call("POST", "/api/telemedicine/consults", {
+        "patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"], "question": "E2E结束前确认"})
+    admin_call("POST", f"/api/telemedicine/consults/{consult['id']}/reply",
+               {"reply": "按时服药", "doctor_name": "E2E医师"})
+
+    def status():
+        (row,) = [c for c in admin_read("/api/telemedicine/consults") if c["id"] == consult["id"]]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "telemedicine", "互联网+诊疗")
+    _confirm_then(page, lambda: page.click(f'button[data-close="{consult["id"]}"]'), "不能撤回",
+                  lambda: status() == "replied", lambda: status() == "closed")
+
+
+def test_公卫事件结案先确认(page, base_url, admin_read, admin_call):
+    """P2-43：「结案」原先点一下就结案，结案后不能再登记处置记录。"""
+    event = admin_call("POST", "/api/publichealth/events", {"title": "E2E结案前确认事件", "level": "IV"})
+
+    def status():
+        (row,) = [e for e in admin_read("/api/publichealth/events") if e["id"] == event["id"]]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "publichealth", "公卫协同")
+    _confirm_then(page, lambda: page.click(f'button[data-close="{event["id"]}"]'), "不能重开",
+                  lambda: status() == "active", lambda: status() == "closed")
+
+
+def test_结束派驻先确认_可填实际结束日期(page, base_url, seed, admin_read, admin_call):
+    """P2-43：「结束派驻」原先点一下就结束、结束日一律记今天；现在先确认，并能填实际结束日期补录。"""
+    emp = admin_call("POST", "/api/mgmt/employees", {"org_id": seed["org"]["id"], "name": "E2E结束派驻医师"})
+    other = admin_call("POST", "/api/organizations", {"name": "E2E派驻接收站", "org_type": "township",
+                                                      "level": "township"})
+    row = admin_call("POST", "/api/staffing/secondments", {
+        "employee_id": emp["id"], "from_org_id": seed["org"]["id"], "to_org_id": other["id"],
+        "start_date": "2026-01-05", "assignment_type": "long_term"})
+
+    def end_date():
+        (r,) = [x for x in admin_read("/api/staffing/secondments?limit=500") if x["id"] == row["id"]]
+        return r["end_date"]
+
+    _login(page, base_url)
+    _open_page(page, "staffing", "人员下沉调度")
+    page.click(f'button[data-stend="{row["id"]}"]')
+    expect(_modal(page)).to_contain_text("不能撤回")
+    _cancel_modal(page)
+    assert not end_date(), "点了取消却照样结束了"
+    page.click(f'button[data-stend="{row["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"end_date": "2026-08-31"}))
+    assert end_date() == "2026-08-31"
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)
