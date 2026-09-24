@@ -406,6 +406,38 @@ def test_doctor_mobile_workbench_loads(page, base_url, seed):
     expect(page.locator("#who")).to_contain_text("待办")
 
 
+def test_校验失败的报错是人话而不是object_Object(page, base_url):
+    """P2-39：请求体校验失败的 422，`detail` 是数组；三端请求帮手原先直接
+    `new Error(data.detail)`，页面上显示的是 "[object Object]"。
+
+    在真浏览器里验：共用的 `errorText` 在三端页面上都在、格式对；管理端的 `api()`
+    打一个真请求（随访的 `due_date` 只写了 8 个字符，过不了长度校验），
+    抛出来的错误是一句带字段名的话。
+    """
+    _login(page, base_url)
+    text = page.evaluate(
+        "() => errorText([{loc: ['body', 'voucher_date'],"
+        " msg: 'Value error, 日期 2026-02-31 不存在（请检查月份天数）'}], '兜底')"
+    )
+    assert text == "voucher_date：日期 2026-02-31 不存在（请检查月份天数）"
+    message = page.evaluate(
+        """async () => {
+          try {
+            await api('/api/followups', {method: 'POST', body: JSON.stringify(
+              {patient_id: 1, org_id: 1, category: 'chronic', due_date: '2026-9-1'})});
+            return 'no error';
+          } catch (e) { return e.message; }
+        }"""
+    )
+    assert "[object Object]" not in message, message
+    assert message.startswith("due_date："), message
+
+    # 居民端与医生端各自的 api() 也改成了走它：页面上确实加载到了这个函数
+    for path in ("/m/", "/m/doctor"):
+        page.goto(f"{base_url}{path}")
+        assert page.evaluate("() => typeof errorText") == "function", path
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 

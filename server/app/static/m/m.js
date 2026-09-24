@@ -40,7 +40,7 @@ async function api(path, options = {}) {
     // 把状态码挂在错误上。原先只抛 `data.detail`，**状态码就地丢了**，
     // 于是 authApi 只能拿中文文案去反推「是不是掉线了」——后端改一句话，
     // 居民端的掉线处理就静默失效（见 authApi 的说明）。
-    const err = new Error(data.detail || `请求失败(${resp.status})`);
+    const err = new Error(errorText(data.detail, `请求失败(${resp.status})`));
     err.status = resp.status;
     throw err;
   }
@@ -1332,7 +1332,7 @@ async function spdUploadEvidence(taskId, file) {
   const resp = await fetch(`/api/portal/spd/tasks/${taskId}/attachments`, {
     method: "POST", credentials: "same-origin", headers, body: fd });
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.detail || `上传失败(${resp.status})`);
+  if (!resp.ok) throw new Error(errorText(data.detail, `上传失败(${resp.status})`));
   return data;
 }
 

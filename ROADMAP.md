@@ -957,6 +957,10 @@
   **待卫健批复后恢复**：`performance.py` 端点 docstring 写明恢复点（一行 + 两条用例翻转）。
 
 ### 一行/小修（童子军级，碰到即修）
+- ✅ **P2-39 三端前端把请求体校验失败显示成 `[object Object]`（2026-09-24 已修）**：422 的 `detail` 是数组，
+  6 处请求帮手都 `new Error(data.detail)`，`datetypes` 写好的人话一个字都到不了用户眼前——所有表单都是。
+  `shared.js` 加 `errorText`、6 处改走它；后端 422 形状没动（标准契约，改了是破坏性变更）。
+  静态守卫 + 真浏览器 e2e 各一道，撤掉修复 e2e 以 `[object Object]` 转红。
 - ✅ `routers/triage.py` 的 `triage_suggest` 注入了 `db: Session = Depends(get_db)`
   却**一次都没用**——每次调用白白从连接池借还一次连接。看着像是「知识库将来落表」
   的占位（模块 docstring 明写硬编码 KB 是现状不是设计），但占位不该真开会话。

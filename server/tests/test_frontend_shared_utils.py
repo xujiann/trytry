@@ -135,3 +135,42 @@ def test_慢专病的标签助手必须委托而不是再抄一遍(path, helper)
         f"{helper} 里又出现了 <span> 标记——它应该只委托，不再自己拼 HTML"
     )
     assert "esc(" not in body, f"{helper} 不该再自己转义，那是 statusTag 的事"
+
+
+# ---------------------------------------------------------------- 错误文案（P2-39）
+
+#: 抛错时把后端 `detail` 直接塞进 `new Error(...)` 的写法。请求体/参数校验失败的 422
+#: `detail` 是数组，直接塞进去 message 就是 "[object Object]"——必须先过 shared.js 的
+#: `errorText`。按行判：`new Error(` 之后、分号之前出现了 `detail` 却没经过 `errorText(`。
+_RAW_DETAIL_ERROR = re.compile(r"new Error\((?![^;]*errorText\()[^;]*\bdetail\b")
+
+
+def test_shared_js_定义了错误文案格式化():
+    source = SHARED.read_text(encoding="utf-8")
+    assert re.search(r"^function errorText\(", source, re.M), "shared.js 应定义 errorText"
+
+
+def test_错误文案判据自证():
+    """判据先自证再用：旧写法抓得到、新写法放得过、与 detail 无关的 Error 不误伤。"""
+    assert _RAW_DETAIL_ERROR.search("throw new Error(data.detail || `请求失败(${resp.status})`);")
+    assert _RAW_DETAIL_ERROR.search("const err = new Error(data.detail);")
+    assert not _RAW_DETAIL_ERROR.search(
+        "throw new Error(errorText(data.detail, `请求失败(${resp.status})`));"
+    )
+    assert not _RAW_DETAIL_ERROR.search('throw new Error("请先登录");')
+
+
+@pytest.mark.parametrize("path", CONSUMERS, ids=lambda p: p.name)
+def test_抛错不得把后端detail原样塞进Error(path):
+    if not path.exists():
+        pytest.skip(f"{path.name} 不存在")
+    hits = [
+        f"{path.name}:{no}: {line.strip()}"
+        for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if _RAW_DETAIL_ERROR.search(line)
+    ]
+    assert hits == [], (
+        "这些位置把后端 detail 原样塞进了 new Error——422 校验失败时 detail 是数组，"
+        "页面上显示的会是 \"[object Object]\"。请改成 errorText(data.detail, 兜底文案)：\n  "
+        + "\n  ".join(hits)
+    )

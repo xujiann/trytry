@@ -466,7 +466,7 @@ async function uploadAttachment(ownerType, ownerId, fileInput) {
     headers: token ? { Authorization: `Bearer ${token}` } : { "X-CSRF-Token": csrfToken() },
     body: fd });
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.detail || `上传失败(${resp.status})`);
+  if (!resp.ok) throw new Error(errorText(data.detail, `上传失败(${resp.status})`));
   return data;
 }
 
@@ -478,7 +478,7 @@ async function openPrintPage(path) {
   });
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
-    throw new Error(data.detail || `打印页加载失败(${resp.status})`);
+    throw new Error(errorText(data.detail, `打印页加载失败(${resp.status})`));
   }
   const html = await resp.text();
   const win = window.open("", "_blank");

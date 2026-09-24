@@ -85,6 +85,37 @@ function readCookie(name) {
   return "";
 }
 
+/**
+ * 把后端错误体里的 `detail` 变成一句给人看的话（P2-39）。
+ *
+ * 三套前端的请求帮手都写着 `throw new Error(data.detail || ...)`。`HTTPException`
+ * 的 `detail` 是字符串，这么写没问题；可**请求体/参数校验失败**时 FastAPI 回的 422，
+ * `detail` 是**数组**（`[{loc, msg, type}, ...]`），`new Error(数组)` 的 message 是
+ * `"[object Object]"`——`datetypes` 里写好的"日期 2026-02-31 不存在（请检查月份天数）"
+ * 一个字都到不了用户眼前。全仓库没有 RequestValidationError 处理器，所以这是
+ * **所有表单**的校验报错，不只是日期。
+ *
+ * 修在前端而不是给后端加处理器把 detail 改成字符串：422 的数组形状是 FastAPI 的
+ * 标准契约，对接方可能按 `loc` 定位字段——改它是破坏性变更（CLAUDE.md §1.7）。
+ *
+ * 数组逐条取 `msg`，去掉 pydantic 给自定义校验加的 "Value error, " 前缀，前面标上
+ * 字段名（`loc` 去掉 body/query/path 这一层来源），多条用"；"连接。字符串原样返回；
+ * 空的或认不出的形状回落到调用方给的兜底文案——宁可笼统，也不要 `[object Object]`。
+ */
+function errorText(detail, fallback) {
+  if (Array.isArray(detail)) {
+    const origins = ["body", "query", "path", "header", "cookie"];
+    const parts = detail.map((e) => {
+      const msg = String((e && e.msg) || "").replace(/^Value error, /, "");
+      const field = Array.isArray(e && e.loc)
+        ? e.loc.filter((x) => !origins.includes(x)).join(".") : "";
+      return field && msg ? `${field}：${msg}` : msg;
+    }).filter(Boolean);
+    return parts.length ? parts.join("；") : fallback;
+  }
+  return typeof detail === "string" && detail ? detail : fallback;
+}
+
 /* 原生表单提交兜底（CI 实锤的一类竞态，2026-08-31）。
  *
  * 三套前端的表单**全部**由 JS 的 submit 监听接管（全仓库没有一个 <form action=...>），

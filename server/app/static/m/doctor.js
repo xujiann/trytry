@@ -28,7 +28,7 @@ async function api(path, options = {}) {
   const resp = await fetch(path, { ...options, credentials: "same-origin", headers });
   const data = await resp.json().catch(() => ({}));
   if (resp.status === 401) { logout(); throw new Error("登录已失效，请重新登录"); }
-  if (!resp.ok) throw new Error(data.detail || `请求失败(${resp.status})`);
+  if (!resp.ok) throw new Error(errorText(data.detail, `请求失败(${resp.status})`));
   return data;
 }
 
