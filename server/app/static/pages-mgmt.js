@@ -523,7 +523,7 @@ async function renderMaterials() {
         return `<tr><td>${esc(c.barcode)}</td><td>${esc(c.name)}</td><td>${esc(c.batch_no)}</td>
           <td>${esc(c.expire_date)}</td><td>${statusTag(CONSUMABLE_STATUS, c.status)}</td>
           <td>${esc(c.used_patient_name || "—")}</td><td>${esc(c.used_surgery_name || "—")}</td>
-          <td>${c.status === "in_stock" ? `<button class="btn secondary" data-use="${c.barcode}">使用登记</button>` : "—"}</td></tr>`;
+          <td>${c.status === "in_stock" ? `<button class="btn secondary" data-use="${esc(c.barcode)}">使用登记</button>` : "—"}</td></tr>`;
       }))}`;
   $("#mp-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/materials/purchases", formJson(e.target, ["org_id", "dept_id", "quantity", "estimated_price"]), "#mat-msg"); };
@@ -532,7 +532,7 @@ async function renderMaterials() {
   $("#trace-form").onsubmit = async (e) => {
     e.preventDefault();
     try {
-      const c = await api(`/api/materials/consumables/trace/${new FormData(e.target).get("barcode")}`);
+      const c = await api(`/api/materials/consumables/trace/${encodeURIComponent(new FormData(e.target).get("barcode"))}`);
       $("#trace-result").innerHTML = table(["项", "值"],
         [["条码", c.barcode], ["名称", c.name], ["规格", c.spec], ["供应商", c.supplier_name],
          ["批号", c.batch_no], ["效期", c.expire_date], ["状态", CONSUMABLE_STATUS[c.status][0]],
@@ -557,7 +557,7 @@ async function renderMaterials() {
       } else if (d.use) {
         const pid = prompt("使用患者ID"); if (!pid) return;
         const sid = prompt("关联手术申请ID（可留空）");
-        await api(`/api/materials/consumables/${d.use}/use`, { method: "POST",
+        await api(`/api/materials/consumables/${encodeURIComponent(d.use)}/use`, { method: "POST",
           body: JSON.stringify({ patient_id: Number(pid), surgery_id: sid ? Number(sid) : null }) });
       } else return;
       route();
@@ -612,7 +612,7 @@ async function renderAnalytics() {
         `<tr><td>${esc(f.key)}</td><td>${esc(f.name)}</td><td><code>${esc(f.expression)}</code></td>
          <td>${esc(f.unit)}</td><td>${f.weight}</td>
          <td><span class="tag ${f.active ? "green" : ""}">${f.active ? "启用" : "停用"}</span></td>
-         <td>${f.active ? `<button class="btn danger" data-off="${f.key}">停用</button>` : "—"}</td></tr>`)}`)}
+         <td>${f.active ? `<button class="btn danger" data-off="${esc(f.key)}">停用</button>` : "—"}</td></tr>`)}`)}
     ${report ? panel(`期末综合绩效报告（${period}）`, `
       <p class="desc">⚠️ 口径提示：本表的「加权得分」由上面的<b>自定义公式</b>算出，
         公式与权重管理员可随时增删改，同一机构换套公式就是另一个分数。
@@ -632,7 +632,7 @@ async function renderAnalytics() {
     postAction("/api/analytics/formulas", formJson(e.target, ["weight"]), "#ana-msg"); };
   $("#page-body").onclick = async (e) => {
     if (!e.target.dataset.off) return;
-    try { await api(`/api/analytics/formulas/${e.target.dataset.off}`, { method: "DELETE" }); route(); }
+    try { await api(`/api/analytics/formulas/${encodeURIComponent(e.target.dataset.off)}`, { method: "DELETE" }); route(); }
     catch (err) { setMsg("#ana-msg", err.message, false); }
   };
 }
@@ -669,7 +669,7 @@ async function renderRules() {
         return `<tr><td>${esc(r.key)}</td><td>${esc(r.name)}</td><td>${esc(r.domain)}</td>
           <td><code>${esc(r.condition)}</code></td><td>${statusTag(SEVERITY, r.severity)}</td>
           <td>${r.deduct_points}</td><td>${r.active ? "启用" : "停用"}</td>
-          <td>${r.active ? `<button class="btn danger" data-off="${r.key}">停用</button>` : "—"}</td></tr>`;
+          <td>${r.active ? `<button class="btn danger" data-off="${esc(r.key)}">停用</button>` : "—"}</td></tr>`;
       })}`)}
     ${panel("在线试算", `
       <form id="eval-form"><div class="inline">
@@ -700,7 +700,7 @@ async function renderRules() {
   };
   $("#page-body").onclick = async (e) => {
     if (!e.target.dataset.off) return;
-    try { await api(`/api/rules/${e.target.dataset.off}`, { method: "DELETE" }); route(); }
+    try { await api(`/api/rules/${encodeURIComponent(e.target.dataset.off)}`, { method: "DELETE" }); route(); }
     catch (err) { setMsg("#rule-msg", err.message, false); }
   };
 }

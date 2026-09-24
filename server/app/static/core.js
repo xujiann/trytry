@@ -842,7 +842,7 @@ async function renderCssd() {
       return `<tr><td>${b.id}</td><td><span class="tag">${esc(b.batch_no)}</span></td><td>${esc(b.item_name)}</td>
         <td>${b.quantity}</td><td>${b.dispatched_to_org_id ?? "—"}</td>
         <td>${statusTag(BS, b.status)}</td>
-        <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${b.status}">${next}</button>` : "—"}</td></tr>`;
+        <td>${next ? `<button class="btn secondary" data-adv="${b.id}" data-next="${esc(b.status)}">${next}</button>` : "—"}</td></tr>`;
     }))}
     ${panel("基层物品申领与中心响应", `
       <form class="inline" id="creq-form">

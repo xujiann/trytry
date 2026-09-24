@@ -76,7 +76,9 @@ def _strip_comments(src: str) -> str:
     这是安全守卫，过度剥离会**藏起真缺陷**（比如把含 `://` 的模板字符串截断，
     后面真正的裸插值就扫不到了）。宁可少剥一点。
     """
-    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    # 块注释换成等量换行而不是删掉：删掉会让其后每一行的行号往前错（报错里的
+    # `core.js:763` 实为 845 行，2026-09-24 加属性值那条守卫时撞见）
+    src = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), src, flags=re.S)
     return "\n".join(
         "" if line.lstrip().startswith(("//", "*")) else line
         for line in src.splitlines()
@@ -327,3 +329,87 @@ def test_无兜底判据不得被无关的拼写差异绕开(tmp_path, label, sr
     f = tmp_path / "bypass.js"
     f.write_text(src, encoding="utf-8")
     assert _no_fallback_offenders([f]), f"「{label}」这种写法绕过了判据"
+
+
+# ---------------------------------------------------------------------------
+# 第四种：服务端字符串进了**属性值**（P0-13）
+#
+# 上面三条都盯"映射兜底"那一族。2026-09-24 做 P2-38 物资页时撞见的是另一个形状——
+# 行对象上的字符串字段直接插进属性值：
+#
+#     `<button data-use="${c.barcode}">`        // 条码是经办在入库登记里自由填写的
+#
+# 条码写成 `x"><img src=x onerror=…>` 就越出引号往页面里塞标签，打开这一页的院长、
+# 管理员都会执行它（e2e 实测 `window.__xss` 被置 1）。同一形状全仓扫出 3 处真缺陷
+# （耗材条码、绩效公式编码、统一规则编码）+ 2 处碰巧安全的（状态机取值、按正则收的
+# 单据类型），五处一并 `esc()`，本条零豁免。
+#
+# ⚠️ 2026-09-07 那次核查（TECH_DEBT「核查记录」）的结论是"§8 守住了，这条红线不该用
+# 静态守卫补"——理由是**汇点判不出来**（`${x.name}` 可能进 textContent / alert / URL），
+# 按「自由文本字段名」扫，误报率 26/26。条码与编码不在那份字段名单里，于是漏了。
+# 属性值位置不一样：`attr="${…}"` 只会出现在 HTML 标记里，**汇点是确定的**，
+# 剩下要判的只有"插进去的是不是字符串"——按属性链末段的名字判（封闭名单，见下）。
+#
+# 看不见的（如实写明）：①裸局部变量 `${pid}`、`${k}`——本仓库里全是数或常量映射的键，
+# 但判据不追数据流；②查表 `${MAP[x]}`（前三条的地盘）；③三元里带双引号的属性值
+# （`class="${c ? "a" : x.y}"`，同一行内的双引号把属性值截断了）；④跨行的属性值。
+
+#: 同一行内、双引号包着的属性值
+ATTR_VALUE = re.compile(r'[\w-]+="([^"\n]*)"')
+INTERP = re.compile(r"\$\{([^{}]*)\}")
+#: 裸属性链：`c.barcode`、`r.role.id`——本仓库往属性值里插服务端数据的主形状
+PROP_CHAIN = re.compile(r"^\s*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\s*$")
+
+#: 末段名字在这里的，后端出参模型里是 int / float / bool（2026-09-24 逐个核过：
+#: 路由与 schemas 里没有一个同名字段声明成 str），插进属性值越不出引号。
+#: **封闭名单**：新名字先红——确认后端类型再加进来，或者干脆包 `esc()`（永远安全）。
+#: 刻意不按 `*_id` 后缀放行：`monitor.py` 的 `instance_id` 就是 str。
+NON_STRING_PROPS = frozenset({
+    "id", "patient_id", "org_id", "member_id", "attachment_id", "employee_id",
+    "active", "enabled", "is_self", "length", "x", "y",
+    "seq", "price", "weight", "stock", "points", "deduct_points",
+    "period_days", "due_days", "freq_minutes", "daily_limit",
+})
+
+
+def _attr_string_offenders(files):
+    offenders = []
+    for path in files:
+        label = path.relative_to(STATIC).as_posix() if path.is_relative_to(STATIC) else path.name
+        for lineno, line in enumerate(_strip_comments(path.read_text(encoding="utf-8")).splitlines(), 1):
+            for attr in ATTR_VALUE.finditer(line):
+                for expr in INTERP.findall(attr.group(1)):
+                    if PROP_CHAIN.match(expr) and expr.strip().rsplit(".", 1)[-1] not in NON_STRING_PROPS:
+                        offenders.append(f"{label}:{lineno}: ${{{expr.strip()}}}")
+    return offenders
+
+
+def test_属性值里的服务端字符串必须转义():
+    offenders = _attr_string_offenders(sorted(STATIC.rglob("*.js")))
+    assert offenders == [], (
+        "以下服务端字段裸插进了属性值——带一个双引号就能越出属性、往页面里塞标签（P0-13），"
+        "改成 ${esc(…)}；若它其实是数/布尔，确认后端类型后加进 NON_STRING_PROPS：\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_属性值判据自证(tmp_path):
+    """植回缺陷必须抓到，写对的必须放过；扫描面必须真的覆盖管理端与移动端。"""
+    bad = tmp_path / "bad.js"
+    bad.write_text('x = `<button class="btn" data-use="${c.barcode}">使用登记</button>`;\n', encoding="utf-8")
+    assert _attr_string_offenders([bad]), "植回 P0-13 的原样缺陷却没抓到，扫描是空转的"
+    good = tmp_path / "good.js"
+    good.write_text(
+        'x = `<button data-use="${esc(c.barcode)}" data-id="${c.id}" data-on="${l.active ? 0 : 1}">'
+        '<option value="${k}">`;\n',
+        encoding="utf-8",
+    )
+    assert _attr_string_offenders([good]) == [], "写对的（已转义 / 数字 id / 三元 / 局部变量）被误报了"
+    scanned = {p.relative_to(STATIC).parts[0] for p in STATIC.rglob("*.js")}
+    assert "m" in scanned and any(s.endswith(".js") for s in scanned), f"扫描面不对：{sorted(scanned)}"
+    chains = sum(
+        1 for p in STATIC.rglob("*.js")
+        for attr in ATTR_VALUE.finditer(_strip_comments(p.read_text(encoding="utf-8")))
+        for expr in INTERP.findall(attr.group(1)) if PROP_CHAIN.match(expr)
+    )
+    assert chains > 300, f"属性值里的属性链插值只扫到 {chains} 处（2026-09-24 实数约 400），判据可能失灵"

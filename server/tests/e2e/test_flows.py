@@ -518,6 +518,52 @@ def test_页内表单的数字框收得了小数_以DRG调权为例(page, base_u
     expect(page.locator("tr:has(button[data-drg-weight])", has_text="BR23")).to_contain_text("1.25")
 
 
+#: 经办在入库登记里自由填写的条码：带一个双引号就能越出属性、往页面里塞标签
+XSS_BARCODE = 'XSS"><img src=x onerror="window.__xss=1">'
+
+
+@pytest.fixture(scope="session")
+def xss_seed(base_url, seed):
+    """两件在库耗材：一件条码是注入探针，一件条码带 `#`（进 URL 路径不编码就被当成片段截掉）。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    org_id = seed["org"]["id"]
+    post("/api/materials/consumables", {"barcode": XSS_BARCODE, "name": "E2E转义探针", "org_id": org_id}, token)
+    post("/api/materials/consumables", {"barcode": "E2E#HV-2", "name": "E2E井号条码", "org_id": org_id}, token)
+
+
+def test_耗材条码原样回到按钮上_不再被当成标记(page, base_url, xss_seed):
+    """P0-13：物资页「使用登记」按钮把条码裸插进 `data-use` 属性——条码是经办在入库登记里
+    自由填写的，打开这一页的院长、管理员都会执行它塞进来的东西。转义之后：页面里没有被注入的
+    元素，按钮上读回的条码与登记时一字不差（转义只作用于标记层，dataset 取到的仍是原值）。
+    条码进 URL 路径同样要编码：`E2E#HV-2` 不编码，`#` 之后被当成片段截掉，按半截条码查成 404。"""
+    _login(page, base_url)
+    _open_page(page, "materials", "物资采购与耗材")
+    expect(page.locator("#page-body")).to_contain_text("E2E转义探针")
+    expect(page.locator("#page-body img")).to_have_count(0)  # 修复前：按钮里多出一个 <img>
+    assert page.evaluate("() => window.__xss") is None
+    assert page.evaluate(
+        "(bc) => [...document.querySelectorAll('button[data-use]')].some((b) => b.dataset.use === bc)",
+        XSS_BARCODE,
+    )
+
+    page.fill("#trace-form input[name=barcode]", "E2E#HV-2")
+    page.click("#trace-form button")
+    expect(page.locator("#trace-result")).to_contain_text("E2E井号条码")
+
+
 def test_会计页存下的期间被拒时回落本月_切换框先验再存(page, base_url):
     """P1-62：三个报表口径的 `period` 收严之后，localStorage 里早先存下的坏值
     （切换框是自由文本）会让整页那个 Promise.all 失败——而切换框画在它之后，

@@ -674,7 +674,7 @@ async function renderPrintTemplates() {
          <td>${esc(t.footer_note) || "（默认页脚）"}</td>
          <td>${t.show_qr ? '<span class="tag green">显示</span>' : '<span class="tag">隐藏</span>'}</td></tr>`)}
       <form class="inline" id="tpl-form">
-        <select name="doc_type">${templates.map((t) => `<option value="${t.doc_type}">${esc(t.doc_type_name)}</option>`).join("")}</select>
+        <select name="doc_type">${templates.map((t) => `<option value="${esc(t.doc_type)}">${esc(t.doc_type_name)}</option>`).join("")}</select>
         <input name="header_org_name" placeholder="抬头机构名（可空）" style="min-width:200px">
         <input name="footer_note" placeholder="页脚说明（可空）" style="min-width:220px">
         <label style="font-size:13px"><input type="checkbox" name="show_qr" checked> 显示验真二维码</label>
