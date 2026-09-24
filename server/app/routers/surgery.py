@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..notify import notify_patient
 from ..models import (
     Admission,
@@ -391,6 +391,8 @@ def list_schedules(
         SurgeryRequest, SurgerySchedule.request_id == SurgeryRequest.id
     ).join(OperatingRoom, SurgerySchedule.room_id == OperatingRoom.id)
     if scheduled_date:
+        # 等值匹配：`2026-9-1` 会让"这天没有手术排班"，不报错（P1-58）
+        scheduled_date = require_date(scheduled_date, field="scheduled_date")
         query = query.filter(SurgerySchedule.scheduled_date == scheduled_date)
     if room_id is not None:
         query = query.filter(SurgerySchedule.room_id == room_id)

@@ -132,6 +132,7 @@ FILTER_PARAMS = [
     ("/api/appointments/slots", "slot_date"),
     ("/api/mgmt/rosters", "duty_date"),
     ("/api/inpatient/handovers", "handover_date"),
+    ("/api/surgery/schedules", "scheduled_date"),
 ]
 
 #: 形状错、日历上不存在、不补零、ISO 基本格式——前两类此前多是 200 空集，
@@ -181,9 +182,9 @@ DATE_PARAM_NAMES = frozenset({"today", "start", "end", "since", "until", "day"})
 GUARDS = frozenset({"require_date", "resolve_business_date"})
 
 #: 还留在裸 `str`、未经上面守卫的日期查询参数（P1-58）。**只许变少。**
-KNOWN_BARE_DATE_PARAMS: set[str] = {
-    "routers/surgery.py::list_schedules::scheduled_date",
-}
+#: 2026-09-24 清零（27 → 0，逐模块一批一个提交）。空集合照样是棘轮：
+#: 新增一个裸日期查询参数，`test_不得新增裸日期查询参数` 立刻变红。
+KNOWN_BARE_DATE_PARAMS: set[str] = set()
 
 SERVER_DIR = pathlib.Path(__file__).resolve().parents[1]
 APP_DIR = SERVER_DIR / "app"
