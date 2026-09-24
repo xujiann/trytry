@@ -5,10 +5,11 @@
 `scope_org_list`，可统计 / 报表类接口一直只用它：2026-09-24 实测，一家与谁都没有关系的新卫生院，
 医生 / 经办读到县医院的合并报表、运行效率、药占比、床位统计（已修，见 `test_stats_org_scope_guard.py`）。
 
-判据：FastAPI 路由表里的 GET（居民端两个文件除外），查询参数里有名字以 `org_id` 结尾的，而端点（连同它
-传递调用的本模块 helper，剥 docstring）里没有任何授权判定——**`resolve_org_scope` 不算**。
-`require_admin` 的角色门自动豁免（admin 属全域角色）。量出 72 个收机构号的 GET，修掉四个统计之后
-余下 16 个无授权判定，逐条判过，分两张名单，只减不增：
+判据：FastAPI 路由表里的 GET（居民端两个文件除外），查询参数里有名字以 `org_id` 结尾的，**或者**端点
+（连同它传递调用的本模块 helper，剥 docstring）拿 `resolve_org_scope` 取范围的，而里面没有任何授权判定——
+**`resolve_org_scope` 不算**。`require_admin` 的角色门自动豁免（admin 属全域角色）。量出 72 个收机构号的 GET，
+修掉四个统计之后余下 16 个无授权判定；后一半判据是同日补的：只收片区号（`group_id`）、不收机构号的统计接口
+一样把 `resolve_org_scope` 当范围，只认参数名时 6 个掉在分母外（P0-37 第二层）。逐条判过，分两张名单，只减不增：
 
 - `BY_DESIGN`：跨机构可见就是用途（便捷寻医、号源 / 手术间撮合、资源目录、县域监测……），逐条写理由；
 - `AWAITING`：该按什么范围给看要人定（写明出处），答之前不改。
@@ -52,6 +53,13 @@ BY_DESIGN = {
     "spd/config/devices.py:list_devices":
         "设备台账（设备号、型号、绑定的患者号，无身份字段），已登记在无身份读接口的「仅聚合」一层"
         "（test_unscopable_patient_reads.AGGREGATE_ONLY_READS）。",
+    # ---- 第二层（只收 group_id）----
+    "surveillance.py:multi_point_alerts":
+        "多点触发预警：给一线的暴发信号，`test_stage15_horizontal.py::test_县域监测预警对一线保持开放` 钉着不许收紧。",
+    "surveillance.py:readiness":
+        "应急资源保障（缺口与过期）：与应急物资储备清单（本名单的 `surveillance.py:list_resources`）同一口径，突发事件调度要看全县。",
+    "vaccine_supply.py:vaccination_stats":
+        "接种剂次与 AEFI 发生率、冷链异常：县域公卫监测指标，只有聚合数、无个体，与症候群监测日报同一口径。",
 }
 
 AWAITING = {
@@ -65,6 +73,13 @@ AWAITING = {
     "staffing.py:list_secondments":
         "派驻台账（人员姓名、职称、派出 / 接收机构）：人员下沉监测按片区还是全县看；与 mgmt 那套派驻两套实现"
         "同在待裁定（P1-56），见待裁定清单 P0-37 一节。",
+    # ---- 第二层（只收 group_id）----
+    "disease_programs.py:program_stats":
+        "专病项目统计：已在无身份患者读接口第一层名单里待裁定（test_unscopable_patient_reads.UNSCOPABLE_PATIENT_READS）。",
+    "projects.py:project_stats":
+        "项目总览（按状态、逾期、平均进度的聚合数）：与项目台账同一个问题——按本机构、片区还是全县看，见待裁定清单 P0-37 一节。",
+    "staffing.py:dispatch_stats":
+        "下沉调度统计（按接收机构的在派与满 6 个月人数）：正是派驻台账那一问里的「县级监测指标」，同在待裁定清单 P0-37 一节。",
 }
 
 _PORTAL = {"portal.py", "spd/portal.py"}
@@ -93,9 +108,14 @@ def _admin_only(dependant) -> bool:
 
 @functools.lru_cache(maxsize=1)
 def _org_param_reads() -> dict[str, tuple[str, str, bool]]:
-    """`文件:函数` → (文件名, 函数名, 是否 admin-only)。只收查询参数里有 *org_id 的 GET。"""
+    """`文件:函数` → (文件名, 函数名, 是否 admin-only)。
+
+    收两种 GET：查询参数里有 *org_id 的；函数体（连同本模块 helper）拿 `resolve_org_scope` 取范围的——
+    后者只收 `group_id` 也算（第二层，见模块 docstring）。
+    """
     from fastapi.routing import APIRoute
 
+    import test_stage15_horizontal as H
     from app.main import app
 
     def walk(routes):
@@ -106,6 +126,8 @@ def _org_param_reads() -> dict[str, tuple[str, str, bool]]:
             if orig is not None:
                 yield from walk(orig.routes)
 
+    files = dict(H._router_files())
+    trees: dict[str, ast.AST] = {}
     out = {}
     for r in walk(app.routes):
         if "GET" not in r.methods:
@@ -113,8 +135,18 @@ def _org_param_reads() -> dict[str, tuple[str, str, bool]]:
         file_name = _route_file(r.endpoint.__module__)
         if file_name in _PORTAL:
             continue
-        if any(n.endswith("org_id") for n in _query_params(r.dependant)):
-            out[f"{file_name}:{r.endpoint.__name__}"] = (file_name, r.endpoint.__name__, _admin_only(r.dependant))
+        key = f"{file_name}:{r.endpoint.__name__}"
+        if not any(n.endswith("org_id") for n in _query_params(r.dependant)):
+            if file_name not in files:  # 路由不在 app/routers 与 app/spd/routers 里（如 main.py 的健康检查）
+                continue
+            if file_name not in trees:
+                trees[file_name] = ast.parse(pathlib.Path(files[file_name]).read_text(encoding="utf-8"))
+            fn = next(n for n in ast.walk(trees[file_name])
+                      if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and n.name == r.endpoint.__name__ and n.decorator_list)
+            if "resolve_org_scope" not in H._with_local_helpers(trees[file_name], fn):
+                continue
+        out[key] = (file_name, r.endpoint.__name__, _admin_only(r.dependant))
     return out
 
 
@@ -144,7 +176,7 @@ def _unguarded(sources: dict[str, str] | None = None) -> set[str]:
 def test_覆盖面自证():
     reads = _org_param_reads()
     unguarded = _unguarded()
-    print(f"\n[收机构号的 GET] {len(reads)} 个；无授权判定 {len(unguarded)}（按设计 {len(BY_DESIGN)}、待裁定 {len(AWAITING)}）")
+    print(f"\n[收机构号或拿 resolve_org_scope 取范围的 GET] {len(reads)} 个；无授权判定 {len(unguarded)}（按设计 {len(BY_DESIGN)}、待裁定 {len(AWAITING)}）")
     assert len(reads) >= 60, f"只认出 {len(reads)} 个收机构号的 GET，路由表遍历多半坏了"
     assert "mgmt.py:list_employees" in reads or any(k.endswith(":list_employees") for k in reads), \
         "职工名册（第九轮修过的那批）应当在分母里"
