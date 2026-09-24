@@ -255,13 +255,17 @@ def update_project(
     """
     project = _project(db, project_id, user)
     data = body.model_dump(exclude_unset=True)
-    if data.get("status") == "done":
-        target = data.get("progress_pct", project.progress_pct)
-        if target != 100:
-            raise HTTPException(
-                status_code=422,
-                detail="结项须同时把进度报到 100%；确实做不完请用「中止」而非「完成」",
-            )
+    # 与存量合并后再判（P2-58）：原先只在本次请求带 status=done 时才查，已结项的项目单独把进度改成 60
+    # 照收——正是上面说的「已完成但进度 60%」。只在状态或进度这次真要改时才判，改负责人不受存量脏数据牵连
+    changing = {k for k, v in data.items() if v is not None} & {"status", "progress_pct"}
+    status = data.get("status") or project.status
+    progress = data["progress_pct"] if data.get("progress_pct") is not None else project.progress_pct
+    if changing and status == "done" and progress != 100:
+        raise HTTPException(
+            status_code=422,
+            detail="结项须同时把进度报到 100%；确实做不完请用「中止」而非「完成」" if "status" in changing
+            else "项目已完成，进度须为 100%；要改进度请先把状态改回「进行中」",
+        )
     for field, value in data.items():
         if value is not None:
             setattr(project, field, value)
