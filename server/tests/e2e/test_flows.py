@@ -373,15 +373,23 @@ def test_surgery_full_flow(page, base_url, seed):
     page.click("button[data-approve]")
     expect(page.locator("#page-body")).to_contain_text("已审批")
 
-    # 排班与术中记录都用连续多个 prompt 收集参数，用一个按序应答的处理器统一喂值
-    with _answers(page, [str(seed["room"]["id"]), "2026-09-01", "09:00", "11:00"]):
-        page.click("button[data-schedule]")
-        expect(page.locator("#page-body")).to_contain_text("已排班")
+    # 2026-09-24 前排班与术中记录都是连续多个原生弹窗、用 `_answers` 按序喂值；
+    # 换成 `spdModal` 之后改用 `_spd_modal`（两者互斥，见 CLAUDE.md §7）。
+    page.click("button[data-schedule]")
+    _spd_modal(page, {"room_id": str(seed["room"]["id"]), "scheduled_date": "2026-09-01",
+                      "start_time": "09:00", "end_time": "11:00"})
+    expect(page.locator("#page-body")).to_contain_text("已排班")
     expect(page.locator("#page-body")).to_contain_text("E2E一号手术间")
 
-    with _answers(page, ["腹腔镜阑尾切除术", "麻醉科周医生", "阑尾化脓", "20"]):
-        page.click("button[data-record]")
-        expect(page.locator("#page-body")).to_contain_text("已完成")
+    # 术中记录：转归此前被写死成"好转"（P1-66），这里选"治愈"并填术前/术后诊断，
+    # 然后在记录详情里读回来——证明选的值真的落了库
+    page.click("button[data-record]")
+    _spd_modal(page, {"actual_surgery_name": "腹腔镜阑尾切除术", "anesthetist_name": "麻醉科周医生",
+                      "findings": "阑尾化脓", "blood_loss_ml": "20", "outcome": "治愈",
+                      "preop_diagnosis": "急性阑尾炎", "postop_diagnosis": "急性化脓性阑尾炎"})
+    expect(page.locator("#page-body")).to_contain_text("已完成")
+    page.click("button[data-view]")
+    expect(page.locator("#surg-detail-body")).to_contain_text("治愈")
 
 
 def test_followup_center_flow(page, base_url, seed):
@@ -404,6 +412,62 @@ def test_doctor_mobile_workbench_loads(page, base_url, seed):
     page.click("#login-form button[type=submit]")
     expect(page.locator("#workbench")).to_be_visible()
     expect(page.locator("#who")).to_contain_text("待办")
+
+
+@pytest.fixture(scope="session")
+def surgery_mobile_seed(base_url, seed):
+    """医生移动端"填写术中记录"的前置：再排一台已排班的手术（seed 那台由管理端用例做完）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    req = call("/api/surgery/requests",
+               {"admission_id": seed["admission"]["id"], "surgery_name": "E2E移动端疝修补术"}, doctor)
+    call(f"/api/surgery/requests/{req['id']}/approve", {"approved": True}, admin)
+    call(f"/api/surgery/requests/{req['id']}/schedule",
+         {"room_id": seed["room"]["id"], "scheduled_date": "2026-09-02",
+          "start_time": "13:00", "end_time": "14:00"}, admin)
+    return {"request": req, "read": lambda path: call(path, None, admin)}
+
+
+def test_医生移动端术中记录在卡片内表单里填_转归可选(page, base_url, surgery_mobile_seed):
+    """P2-38 / P1-66：移动端"填写术中记录"原先四连问、**转归写死"好转"**。换成卡片内表单后
+    转归可选、术式预填；出血量写错由后端报人话。最后经接口读回，证明选的转归真的落了库。"""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "admin")
+    page.fill("#lg-pass", "admin123")
+    page.click("#login-form button[type=submit]")
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('a.tab-btn[data-tab="surgery"]')
+
+    card = page.locator(".m-card", has_text="E2E移动端疝修补术")
+    card.locator("button[data-record]").click()
+    form = card.locator("form.surg-record-form")
+    expect(form.locator("input[name=actual_surgery_name]")).to_have_value("E2E移动端疝修补术")
+    form.locator("select[name=outcome]").select_option("未愈")
+    form.locator("input[name=postop_diagnosis]").fill("腹股沟斜疝")
+    form.locator("input[name=blood_loss_ml]").fill("五十")
+    form.locator("button[type=submit]").click()
+    expect(page.locator("#surgery-msg")).to_contain_text("blood_loss_ml")
+    form.locator("input[name=blood_loss_ml]").fill("50")
+    form.locator("button[type=submit]").click()
+    expect(page.locator("#surgery-msg")).to_contain_text("术中记录已提交")
+
+    request_id = surgery_mobile_seed["request"]["id"]
+    record = surgery_mobile_seed["read"](f"/api/surgery/requests/{request_id}/record")
+    assert record["outcome"] == "未愈" and record["postop_diagnosis"] == "腹股沟斜疝", record
 
 
 def test_校验失败的报错是人话而不是object_Object(page, base_url):

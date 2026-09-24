@@ -748,30 +748,55 @@ async function loadSurgery() {
           return card(
             `${kv("术式", esc(r.surgery_name))}${kv("住院号", String(r.admission_id))}
              ${kv("状态", statusTag(SURGERY_STATUS_NAMES, r.status))}`,
-            `<button class="op" data-record="${r.id}">填写术中记录</button>`);
+            `<button class="op" data-record="${r.id}" data-name="${esc(r.surgery_name)}">填写术中记录</button>`);
         }).join("")
       : '<p class="empty">没有待填写的术中记录</p>');
 }
 
-$("#tab-surgery").addEventListener("click", async (e) => {
+$("#tab-surgery").addEventListener("click", (e) => {
   const id = e.target.dataset.record;
   if (!id) return;
-  const name = prompt("实际术式");
-  if (!name) return;
-  try {
-    await api(`/api/surgery/requests/${id}/record`, {
-      method: "POST",
-      body: JSON.stringify({
-        actual_surgery_name: name,
-        anesthetist_name: prompt("麻醉医师") || "",
-        findings: prompt("术中所见") || "",
-        blood_loss_ml: Number(prompt("出血量 ml") || 0),
-        outcome: "好转",
-      }),
-    });
-    setMsg("#surgery-msg", "术中记录已提交，术后随访任务已自动派生", true);
-    await loadSurgery();
-  } catch (err) { setMsg("#surgery-msg", err.message, false); }
+  // P2-38 / P1-66：原先四连问、转归写死"好转"（质量指标的治愈率与死亡数取的正是它）。
+  // 改成卡片内表单：转归可选，术前/术后诊断（诊断符合率的数据源）也能填。再点一次不重复插表单。
+  const card = e.target.closest(".m-card");
+  if (!card || card.querySelector(".surg-record-form")) return;
+  const form = document.createElement("form");
+  form.className = "surg-record-form";
+  form.innerHTML = `<input name="actual_surgery_name" placeholder="实际术式" required
+      value="${esc(e.target.dataset.name || "")}">
+    <input name="anesthetist_name" placeholder="麻醉医师">
+    <textarea name="findings" rows="2" placeholder="术中所见"></textarea>
+    <input name="blood_loss_ml" inputmode="numeric" placeholder="出血量 ml（可空）">
+    <select name="outcome">${["治愈", "好转", "未愈", "死亡"].map((x) =>
+      `<option${x === "好转" ? " selected" : ""}>${x}</option>`).join("")}</select>
+    <input name="preop_diagnosis" placeholder="术前诊断（可空）">
+    <input name="postop_diagnosis" placeholder="术后诊断（可空）">
+    <button type="submit" class="ghost-btn">提交术中记录</button>
+    <button type="button" class="ghost-btn" data-cancel>取消</button>`;
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = form.elements;
+    const blood = f.blood_loss_ml.value.trim();
+    try {
+      await api(`/api/surgery/requests/${id}/record`, {
+        method: "POST",
+        body: JSON.stringify({
+          actual_surgery_name: f.actual_surgery_name.value.trim(),
+          anesthetist_name: f.anesthetist_name.value.trim(),
+          findings: f.findings.value.trim(),
+          // 留空记 0；写错的原样交给后端报人话，别让 Number() 把它悄悄变成 NaN → null
+          blood_loss_ml: blood === "" ? 0 : (Number.isNaN(Number(blood)) ? blood : Number(blood)),
+          outcome: f.outcome.value,
+          preop_diagnosis: f.preop_diagnosis.value.trim(),
+          postop_diagnosis: f.postop_diagnosis.value.trim(),
+        }),
+      });
+      setMsg("#surgery-msg", "术中记录已提交，术后随访任务已自动派生", true);
+      await loadSurgery();
+    } catch (err) { setMsg("#surgery-msg", err.message, false); }
+  };
+  form.querySelector("[data-cancel]").onclick = () => form.remove();
+  card.appendChild(form);
 });
 
 /* ---------------- 启动 ----------------

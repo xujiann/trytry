@@ -90,7 +90,9 @@ function spdModal(title, fields) {
       return `<input name="${esc(f.name)}" type="${f.type === "number" ? "number" : f.type === "password" ? "password" : "text"}"
         value="${esc(val)}" placeholder="${esc(f.placeholder || "")}"${f.required ? " required" : ""}>`;
     };
-    overlay.innerHTML = `<form class="panel" style="min-width:320px;max-width:440px;margin:0">
+    // 字段多的表单（如术中记录）会比视口高：遮罩是 fixed 的，页面滚不动，超出的部分连同
+    // "确定"按钮就够不着了——表单自己限高并可滚动
+    overlay.innerHTML = `<form class="panel" style="min-width:320px;max-width:440px;margin:0;max-height:90vh;overflow-y:auto">
       <h3>${esc(title)}</h3>
       ${fields.map((f) => `<label style="display:block;margin:8px 0;font-size:13px">
         ${esc(f.label)}<br>${control(f)}</label>`).join("")}

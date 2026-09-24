@@ -162,19 +162,40 @@ async function renderSurgery() {
         { method: "POST", body: JSON.stringify({ approved: true }) });
       else if (d.reject) await api(`/api/surgery/requests/${d.reject}/approve`,
         { method: "POST", body: JSON.stringify({ approved: false }) });
+      // P2-38 / P1-66：排班四连问、术中记录四连问换成页内表单。术中记录原先只问四项、
+      // **转归写死成"好转"**——质量指标的治愈率与死亡数取的正是它；术前/术后诊断（诊断
+      // 符合率的数据源）从界面根本录不进去。现在后端收的这些都能填。
       else if (d.schedule) {
-        const room = prompt("手术间ID"); if (!room) return;
-        const date = prompt("手术日期 YYYY-MM-DD"); if (!date) return;
-        const start = prompt("开始时间 HH:MM"); if (!start) return;
-        const end = prompt("结束时间 HH:MM"); if (!end) return;
+        if (!rooms.length) return setMsg("#surg-msg", "还没有手术间，请先在上方新增", false);
+        const v = await spdModal("手术排班", [
+          { name: "room_id", label: "手术间", type: "select",
+            options: rooms.map((r) => ({ value: r.id, label: r.name })) },
+          { name: "scheduled_date", label: "手术日期", placeholder: "YYYY-MM-DD", required: true },
+          { name: "start_time", label: "开始时间", placeholder: "HH:MM", required: true },
+          { name: "end_time", label: "结束时间", placeholder: "HH:MM", required: true },
+        ]);
+        if (!v) return;
         await api(`/api/surgery/requests/${d.schedule}/schedule`, { method: "POST",
-          body: JSON.stringify({ room_id: Number(room), scheduled_date: date, start_time: start, end_time: end }) });
+          body: JSON.stringify({ ...v, room_id: Number(v.room_id) }) });
       } else if (d.record) {
-        const name = prompt("实际术式"); if (!name) return;
-        await api(`/api/surgery/requests/${d.record}/record`, { method: "POST",
-          body: JSON.stringify({ actual_surgery_name: name,
-            anesthetist_name: prompt("麻醉医师") || "", findings: prompt("术中所见") || "",
-            blood_loss_ml: Number(prompt("出血量 ml") || 0), outcome: "好转" }) });
+        const req = requests.find((r) => r.id === Number(d.record));
+        const v = await spdModal("术中记录", [
+          { name: "actual_surgery_name", label: "实际术式", value: req ? req.surgery_name : "", required: true },
+          { name: "anesthetist_name", label: "麻醉医师" },
+          { name: "anesthesia_type", label: "麻醉方式", type: "select",
+            options: Object.entries(ANESTHESIA).map(([value, label]) => ({ value, label })) },
+          { name: "incision_level", label: "切口等级", type: "select", value: "II",
+            options: ["I", "II", "III", "IV"].map((x) => ({ value: x, label: `${x} 类` })) },
+          { name: "blood_loss_ml", label: "出血量（ml）", type: "number" },
+          { name: "findings", label: "术中所见", type: "textarea" },
+          { name: "complications", label: "并发症（无则留空）" },
+          { name: "outcome", label: "转归", type: "select", value: "好转",
+            options: ["治愈", "好转", "未愈", "死亡"].map((x) => ({ value: x, label: x })) },
+          { name: "preop_diagnosis", label: "术前诊断（诊断符合率的数据源，可空）" },
+          { name: "postop_diagnosis", label: "术后诊断（可空）" },
+        ]);
+        if (!v) return;
+        await api(`/api/surgery/requests/${d.record}/record`, { method: "POST", body: JSON.stringify(v) });
       } else if (d.view) {
         const rec = await api(`/api/surgery/requests/${d.view}/record`);
         $("#surg-detail").classList.remove("hidden");
