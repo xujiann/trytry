@@ -388,9 +388,8 @@ def test_unit_cost_uses_occupied_bed_days(client, admin, roles, org):
               "diagnosis_name": "感冒"},
         headers=admin,
     )
-    from datetime import date
-
-    period = date.today().strftime("%Y-%m")
+    # 取业务日期入口：本档用了 freeze_business_date，判据与被判对象须同源（test_clock 的守卫）
+    period = business_today().strftime("%Y-%m")
     client.post(
         "/api/cost/departments",
         json={"dept_id": client.get("/api/mgmt/departments", headers=admin).json()[0]["id"],
