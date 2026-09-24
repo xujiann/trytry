@@ -877,6 +877,12 @@
   **修之前逐个查写入方**（三端前端 / HL7·FHIR 适配器 / 导入脚本 / 种子），别把对接方的现有写法直接变成 422；
   一个模块一个提交，凭证先行。
   - ✅ 第一批 accounting（22 → 21）：`voucher_date` → `DateStr`，`period` → 新增的 `OptionalPeriodStr`（留空仍按日期推）。
+- ☐ **P1-62 月度期间查询参数：P1-58 的月度版**（2026-09-24 量出，12 处裸 `str` 逐个核过）。
+  真 `YYYY-MM` 且未校验 5 处（accounting 三个报表口径，凭证页"切换期间"是自由文本，`2026-9` → 试算平衡**空表**；
+  admin_mgmt 财务汇总与薪资列表）；**`spd/assess.workload` 在 SQLite 上就会 500**（手写的 `_period_range`，
+  `2026/09`、`abc`、`2026-Qx` 都炸）；`quality.clinical_indicators` 是第四种写法（`strptime`，`2026-9` 照过）；
+  `spd/workbench.region_stats` 的 `period` 声明了却从不读。其余 4 处不是 `YYYY-MM`（间接校验 / 考核期标签 / 枚举）。
+  **workload 的 500 先修**；棘轮随第一批一起立，判据要跟进一层 helper。
 
 ### 🚀 正式上线前（收口中）
 
