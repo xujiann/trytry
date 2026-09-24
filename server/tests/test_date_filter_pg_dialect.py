@@ -45,6 +45,8 @@ DATETIME_FILTERS = [
     ("/api/spd/measurements", "since", {"patient_id": PATIENT}),
     ("/api/spd/call-tasks", "date_from", {}),
     ("/api/spd/call-tasks", "date_to", {}),
+    ("/api/spd/referrals-stats/closure", "date_from", {}),
+    ("/api/spd/referrals-stats/closure", "date_to", {}),
 ]
 
 #: 形状错、日历上不存在、不补零。前两类修复前在 PG 上是 500；

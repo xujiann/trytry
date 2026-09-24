@@ -184,8 +184,6 @@ KNOWN_BARE_DATE_PARAMS: set[str] = {
     "routers/medwaste.py::handler_stats::start_date",
     "routers/portal.py::portal_slots::slot_date",
     "routers/surgery.py::list_schedules::scheduled_date",
-    "spd/routers/referral.py::closure_rate::date_from",
-    "spd/routers/referral.py::closure_rate::date_to",
 }
 
 SERVER_DIR = pathlib.Path(__file__).resolve().parents[1]

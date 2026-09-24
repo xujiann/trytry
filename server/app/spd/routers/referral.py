@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from ...clock import now_naive
 from ...database import get_db
-from ...deps import get_current_user, paginate, require_roles, row_dict
+from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
 from ..platform import Organization, Patient, User, org_level
 from ..models import (
     SpdEnrollment,
@@ -817,9 +817,12 @@ def closure_rate(
         query = query.filter(SpdReferralCase.program_code == program_code)
     if org_id is not None:
         query = query.filter(SpdReferralCase.initiator_org_id == org_id)
+    # 先校验再拼串：非法值拼成的时间戳在真 PG 上转换失败是 500（P1-58）
     if date_from:
+        date_from = require_date(date_from, field="date_from")
         query = query.filter(SpdReferralCase.created_at >= f"{date_from} 00:00:00")
     if date_to:
+        date_to = require_date(date_to, field="date_to")
         query = query.filter(SpdReferralCase.created_at <= f"{date_to} 23:59:59")
 
     by_status = row_dict(
