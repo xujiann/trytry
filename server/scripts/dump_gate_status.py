@@ -39,6 +39,7 @@ sys.path.insert(0, str(SERVER / "tests"))
 def _rows() -> list[tuple[str, str, str, str]]:
     """(分组, 指标, 值, 判据出处)。**只读常量，不重跑扫描**（理由见模块 docstring）。"""
     import test_api_contract_governance as contract
+    import test_body_declared_org_write_guard as declared
     import test_body_id_org_write_guard as bodyid
     import test_clock as clock
     import test_date_query_params as datequery
@@ -100,6 +101,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(bodyid.EXEMPT), "tests/test_body_id_org_write_guard.py"),
         ("横向越权（写侧）", "角色门只允许全域角色（非可越权入口）",
          len(bodyid.GLOBAL_ROLE_ONLY), "tests/test_body_id_org_write_guard.py"),
+        ("横向越权（写侧）", "请求声明机构、却无归属判定的写端点（候选，只减不增）",
+         len(declared.KNOWN_UNGUARDED), "tests/test_body_declared_org_write_guard.py"),
+        ("横向越权（写侧）", "请求里的机构按设计就是别家（逐条写明理由）",
+         len(declared.BY_DESIGN), "tests/test_body_declared_org_write_guard.py"),
         ("日期入参", "未经 require_date / resolve_business_date 的日期查询参数",
          len(datequery.KNOWN_BARE_DATE_PARAMS), "tests/test_date_query_params.py"),
         ("日期入参", "请求体里注解为裸 str 的日期字段", len(datestr.KNOWN_BARE_BODY_DATE_FIELDS),
