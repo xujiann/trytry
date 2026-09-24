@@ -1156,6 +1156,40 @@ _EVENT_STATUS = {
 }
 
 
+def _active_elsewhere_detail(db: Session, enrollment: SpdEnrollment) -> str:
+    """同一患者同一病种已有另一份在管档案时的 409 文案；没有返回空串。
+
+    部分唯一索引 `uq_spd_enroll_active_patient_program` 只许一份在管。原先恢复在管 / 召回成功直接把状态改回
+    active，撞上别家（常见是跨机构迁入后目标机构那份）就在 commit 时 IntegrityError、整个请求 500（P1-111，实测）。
+    """
+    other = (
+        db.query(SpdEnrollment)
+        .filter(SpdEnrollment.patient_id == enrollment.patient_id,
+                SpdEnrollment.program_code == enrollment.program_code,
+                SpdEnrollment.status == "active", SpdEnrollment.id != enrollment.id)
+        .first()
+    )
+    if other is None:
+        return ""
+    org = db.get(Organization, other.org_id)
+    return (f"该患者此病种已在「{org.name if org else other.org_id}」在管（档案 #{other.id}），"
+            "不能再把这份档案恢复在管")
+
+
+def _reactivate(db: Session, enrollment: SpdEnrollment) -> None:
+    """把档案恢复在管；已有另一份在管档案就 409（预检 + 并发下撞索引兜底，两处同一句）。**不 commit**。"""
+    detail = _active_elsewhere_detail(db, enrollment)
+    if detail:
+        raise HTTPException(status_code=409, detail=detail)
+    enrollment.status = "active"
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=_active_elsewhere_detail(db, enrollment)
+                            or "该患者此病种已有在管档案，不能再把这份档案恢复在管") from None
+
+
 @router.post("/enrollments/{enrollment_id}/lifecycle", response_model=LifecycleResultOut,
              response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
@@ -1179,7 +1213,7 @@ def lifecycle_event(
     if body.event == "resume":
         if enrollment.status == "dead":
             raise HTTPException(status_code=409, detail="已登记死亡的档案不可恢复管理")
-        enrollment.status = "active"
+        _reactivate(db, enrollment)
         db.add(
             SpdLifecycleEvent(
                 enrollment_id=enrollment_id, event="resume", reason=body.reason,
@@ -1189,6 +1223,11 @@ def lifecycle_event(
         )
         db.commit()
         return {"enrollment": _enroll_out(enrollment), "closed": {}}
+
+    # 死亡是终态（P1-111）。原先只有上面的恢复管理看了一眼死亡，排除 / 召回 / 迁出 / 再登记一次死亡照收、
+    # 直接改写状态——「死亡 → 排除 → 恢复」就把死亡档案恢复成在管，上面那条规则整个被绕过（实测 200）
+    if enrollment.status == "dead":
+        raise HTTPException(status_code=409, detail="已登记死亡的档案不可再登记生命周期事件")
 
     cross_org = body.event == "migrate" and body.target_org_id is not None
     if cross_org and db.get(Organization, body.target_org_id) is None:
@@ -1246,6 +1285,10 @@ def confirm_migration(
     enrollment = db.get(SpdEnrollment, event.enrollment_id)
     if enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
+    # 迁出登记之后、确认之前患者离世：迁出不再生效（P1-111）。原先照样确认——原档案从「死亡」改成「已迁出」，
+    # 目标机构给已故患者新建一份在管档案，之后的随访、宣教照常派给他（实测 200）
+    if enrollment.status == "dead":
+        raise HTTPException(status_code=409, detail="该患者已登记死亡，这次迁出不再生效")
     event.confirmed = True
     event.confirmed_by = user.id
     enrollment.status = "migrated"
@@ -1360,7 +1403,7 @@ def update_recall(
             recall.closed_at = now_naive()
         if body.status == "returned":
             if enrollment is not None and enrollment.status == "recalled":
-                enrollment.status = "active"
+                _reactivate(db, enrollment)
         db.commit()
     return {"id": recall.id, "status": recall.status, "result": recall.result}
 

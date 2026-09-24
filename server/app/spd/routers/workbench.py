@@ -683,9 +683,13 @@ def admin_workbench(
             "pending_applies": db.query(SpdServiceApply).filter(
                 SpdServiceApply.status == "pending"
             ).count(),
-            "pending_migrations": db.query(SpdLifecycleEvent).filter(
+            # 迁出待确认期间患者离世的，目标机构已确认不了（P1-111），不算进待办
+            "pending_migrations": db.query(SpdLifecycleEvent).join(
+                SpdEnrollment, SpdEnrollment.id == SpdLifecycleEvent.enrollment_id
+            ).filter(
                 SpdLifecycleEvent.event == "migrate",
                 SpdLifecycleEvent.confirmed.is_(False),
+                SpdEnrollment.status != "dead",
             ).count(),
             "swept": swept,
         },
@@ -1080,11 +1084,13 @@ def center_workbench(
             ).filter(SpdEnrollment.status == "excluded").count(),
             # 「待确认迁入」只数迁到本范围的（P2-61）：确认由迁入机构做（`confirm_migration` 判
             # `target_org_id`），原先数的是全县，乡镇看到的待办一条都不归自己确认。
+            # 迁出待确认期间患者离世的确认不了了（P1-111），同样不算
             "pending_migrations": _apply_scope(
                 db.query(SpdLifecycleEvent), SpdLifecycleEvent.target_org_id, orgs
-            ).filter(
+            ).join(SpdEnrollment, SpdEnrollment.id == SpdLifecycleEvent.enrollment_id).filter(
                 SpdLifecycleEvent.event == "migrate",
                 SpdLifecycleEvent.confirmed.is_(False),
+                SpdEnrollment.status != "dead",
             ).count(),
             "recalling": _apply_scope(
                 db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
