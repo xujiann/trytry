@@ -19,7 +19,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, update
+from sqlalchemy import and_, or_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -486,30 +486,47 @@ def instance_history(instance_id: int, db: Session = Depends(get_db), user: User
 
 
 @router.get("/my-tasks", response_model=MyTasksOut)
-def my_tasks(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def my_tasks(
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """待办联动：当前用户角色可推进的流转中实例。
 
     admin 看全部——管理员本来就是兜底处理卡单的人。
 
     「可推进」两个条件缺一不可：节点角色对得上，**且**实例的机构办得了（P0-38）。
     原先只按角色筛，别家机构的单子也算进待办，点「推进」才吃 403。
+
+    角色这一筛在库里做（P1-82）：原先先取最新 200 条在办实例、再在 Python 里按角色筛，
+    `count` 数的是筛剩的——最新 200 条都是别的角色的单子时，医生的待办是空的、计数是 0，
+    而他名下的单子一张没少。判定照旧：节点要求别的角色的不算；定义或节点对不上号的
+    （定义被改过、节点已不在）照旧算，那是要有人来终止的卡单。
     """
     definitions = {d.key: d for d in db.query(WorkflowDefinition).all()}
-    rows = (
-        _scope_instances(db, user, db.query(WorkflowInstance))
-        .filter(WorkflowInstance.status == "running")
-        .order_by(WorkflowInstance.id.desc())
-        .limit(200)
-        .all()
-    )
+    query = _scope_instances(db, user, db.query(WorkflowInstance)).filter(WorkflowInstance.status == "running")
+    if user.role != "admin":
+        others_nodes = []
+        for key, definition in definitions.items():
+            nodes = []
+            for n in definition.nodes:
+                required_role = (_node(definition, n["key"]) or {}).get("role", "")
+                if required_role and required_role != user.role:
+                    nodes.append(n["key"])
+            if nodes:
+                others_nodes.append(and_(WorkflowInstance.definition_key == key,
+                                         WorkflowInstance.current_node.in_(nodes)))
+        if others_nodes:
+            query = query.filter(~or_(*others_nodes))
+    rows = paginate(query.order_by(WorkflowInstance.id.desc()), response, offset, limit)
     tasks = []
     for instance in rows:
         definition = definitions.get(instance.definition_key)
-        node = _node(definition, instance.current_node) if definition else None
-        required_role = (node or {}).get("role", "")
-        if user.role == "admin" or not required_role or required_role == user.role:
-            tasks.append(_instance_out(instance, node))
-    return {"count": len(tasks), "tasks": tasks}
+        tasks.append(_instance_out(instance, _node(definition, instance.current_node) if definition else None))
+    # 计数与响应头同一个数：paginate 刚按同一个查询数过
+    return {"count": int(response.headers["X-Total-Count"]), "tasks": tasks}
 
 
 # ============================================================================
