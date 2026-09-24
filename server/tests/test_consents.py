@@ -5,12 +5,14 @@
 （患者字段真的变了、AuditLog/AccessLog 真的有记录、撤回行还在），
 而不是只看状态码。
 """
+import json
+
 import pytest
 
 from conftest import business_today
 
 from app.database import SessionLocal
-from app.models import AccessLog, AuditLog, ConsentRecord, Patient, SmsCode
+from app.models import AccessLog, AuditLog, ConsentRecord, CorrectionRequest, Patient, SmsCode
 from app.routers.portal import _reset_portal_failures
 from app.sms import set_sms_provider
 
@@ -311,6 +313,51 @@ def test_身份证号不在更正白名单(client, world, me):
     )
     assert resp.status_code == 422
     assert "id_card" in resp.json()["detail"]
+
+
+def test_更正出生日期写错_提交即422_修复前的待审申请执行时拦下(client, world, me):
+    """P1-61：更正内容是 `dict[str, str]`，请求体日期字段的棘轮看不见字典里的值。
+    出生日期决定年龄——写坏了，未满 14 周岁须监护人、审方的儿童/老年规则都会当"不知道"
+    放过（实测：`2016/03/05` 建档的 10 岁孩子登记知情同意不要监护人）。"""
+    for bad in ("2016/03/05", "2016-02-30", "20160305"):
+        resp = client.post(
+            "/api/portal/me/corrections",
+            json={"changes": {"birth_date": bad}, "reason": "出生日期登记有误"},
+            headers=me["headers"],
+        )
+        assert resp.status_code == 422, (bad, resp.text)
+        assert resp.json()["detail"].startswith("更正字段 birth_date："), resp.json()
+    ok = client.post(
+        "/api/portal/me/corrections",
+        json={"changes": {"birth_date": _adult_birth()}, "reason": "出生日期登记有误"},
+        headers=me["headers"],
+    )
+    assert ok.status_code == 201, ok.text
+
+    # 修复前提交、还在待审的坏值：审核通过时再拦一次——档案不被写坏，申请保持待审、可驳回
+    with SessionLocal() as db:
+        legacy = CorrectionRequest(
+            patient_id=me["patient"]["id"], request_type="correction",
+            changes=json.dumps({"birth_date": "2016/03/05"}), reason="修复前提交的申请",
+            source="portal",
+        )
+        db.add(legacy)
+        db.commit()
+        legacy_id = legacy.id
+        before = db.get(Patient, me["patient"]["id"]).birth_date
+    approve = client.post(
+        f"/api/consents/corrections/{legacy_id}/review",
+        json={"approve": True, "comment": ""}, headers=world["director"],
+    )
+    assert approve.status_code == 409, approve.text
+    with SessionLocal() as db:
+        assert db.get(Patient, me["patient"]["id"]).birth_date == before
+        assert db.get(CorrectionRequest, legacy_id).status == "pending"
+    rejected = client.post(
+        f"/api/consents/corrections/{legacy_id}/review",
+        json={"approve": False, "comment": "出生日期不合法，请重新提交"}, headers=world["director"],
+    )
+    assert rejected.status_code == 200, rejected.text
 
 
 # ================================================================ 删除权（注销）

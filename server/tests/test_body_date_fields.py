@@ -49,6 +49,8 @@ CASES = [
     ("/api/tcm/preparation-batches", {"formula_id": 999999, "batch_no": "DATE-REG", "org_id": 999999,
                                       "quantity": 1, "produced_date": "2026-01-01"}, "expire_date", True),
     ("/api/contracts", {"patient_id": 999999, "org_id": 999999, "doctor_name": "李家医"}, "signed_date", True),
+    # 没有父级 id 可填：合法日期就真建一份档案（同证件号幂等，留空那次返回同一份）
+    ("/api/patients", {"name": "出生日期回归", "id_card": "330281199001011234"}, "birth_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。

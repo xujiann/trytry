@@ -32,13 +32,17 @@ class PatientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     id_card: str = Field(min_length=15, max_length=18)
     gender: str = "未知"
-    birth_date: str = ""
+    # 年龄全靠它现算（审方的儿童/老年规则、未满 14 周岁须监护人、慢专病的年龄纳入规则），
+    # 算不出的一律当"不知道"放过：`2016/03/05` 建档的 10 岁孩子登记知情同意不要监护人（P1-61，实测）
+    birth_date: OptionalDateStr = ""
     phone: str = ""
 
 
 class PatientOut(PatientCreate):
     id: int
     ehc_no: str
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    birth_date: str = ""
 
     model_config = {"from_attributes": True}
 

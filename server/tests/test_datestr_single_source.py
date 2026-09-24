@@ -144,10 +144,9 @@ def test_真源本身仍在做日历校验():
 
 #: 请求体里注解为裸 `str` 的日期字段（P1-61）。**只许变少**：改成 `DateStr` /
 #: `OptionalDateStr` 一个划掉一个。改之前逐个查写入方（三端前端、HL7/FHIR 适配器、
-#: 导入脚本、种子）实际发什么——`PatientCreate.birth_date` 这类字段可能有外部系统在写。
-KNOWN_BARE_BODY_DATE_FIELDS: set[str] = {
-    "schemas.py::PatientCreate.birth_date",
-}
+#: 导入脚本、种子）实际发什么。2026-09-24 清零（22 → 0）；空集合照样是棘轮，
+#: 新增一个裸 `str` 的请求体日期字段即红。
+KNOWN_BARE_BODY_DATE_FIELDS: set[str] = set()
 
 _DATE_TOKEN = re.compile(r"(^|_)date($|_)")
 _ROUTE_DIRS = (APP_DIR / "routers", APP_DIR / "spd" / "routers")

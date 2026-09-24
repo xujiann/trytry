@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..datetypes import check_date
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
     ConsentRecord,
@@ -328,6 +329,17 @@ def list_consent_texts(
 # ============================================================================
 
 
+def _check_correction_value(field: str, value: str) -> None:
+    """更正新值的格式校验；不合法抛 ValueError（带人话）。
+
+    目前只有出生日期要管：年龄全靠它现算，写坏了（`2016/03/05`），未满 14 周岁须监护人、
+    审方的儿童/老年规则都会当"不知道"放过。更正内容是 `dict[str, str]`，请求体日期字段的
+    棘轮看不见字典里的值，所以在这里单独卡（P1-61）。
+    """
+    if field == "birth_date":
+        check_date(value)
+
+
 def validate_correction_changes(request_type: str, changes: dict[str, str]) -> str:
     """校验更正内容并归一化为 JSON 串（居民端与窗口共用，口径一处定义）。"""
     if request_type == "deactivate":
@@ -349,6 +361,10 @@ def validate_correction_changes(request_type: str, changes: dict[str, str]) -> s
     for field, value in changes.items():
         if not str(value).strip():
             raise HTTPException(status_code=422, detail=f"更正字段 {field} 的新值不能为空")
+        try:
+            _check_correction_value(field, str(value).strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"更正字段 {field}：{exc}") from None
     return json.dumps(changes, ensure_ascii=False)
 
 
@@ -445,7 +461,18 @@ def review_correction(
         if req.request_type == "deactivate":
             patient.deactivated_at = utcnow()
         else:
-            for field, value in json.loads(req.changes).items():
+            changes = json.loads(req.changes)
+            for field, value in changes.items():
+                try:
+                    _check_correction_value(field, str(value).strip())
+                except ValueError as exc:
+                    # 提交时的格式校验是后加的（P1-61）：之前提交、还在待审的申请没经过它。
+                    # 宁可不执行也不把档案写坏；申请保持待审，驳回后由申请人重新提交
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"该申请的更正字段 {field} 不合法（{exc}），请驳回后由申请人重新提交",
+                    ) from None
+            for field, value in changes.items():
                 if field in CORRECTABLE_FIELDS:  # 双保险：入库前校验过，执行时再筛一遍
                     setattr(patient, field, str(value).strip())
         req.status = "approved"
