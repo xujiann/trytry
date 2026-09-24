@@ -1454,7 +1454,9 @@ def test_followup_center_flow(page, base_url, seed, admin_read):
     assert status() == "pending", "点了取消 / 保留却照样动了任务"
 
     page.click(f'button[data-done="{tid}"]')
-    _spd_modal(page, {"result": "切口愈合良好，无发热\n嘱两周后门诊复查"})
+    # 等整页重画完再按接口读回（`_redrawn` 的 docstring 说的就是这个）：原先只等页面上出现「已完成」，
+    # 可别的行本来就可能带这三个字，于是写请求还在路上就读回、读到 pending（CI run 689 实测红一次）
+    _redrawn(page, lambda: _spd_modal(page, {"result": "切口愈合良好，无发热\n嘱两周后门诊复查"}))
     expect(page.locator("#page-body")).to_contain_text("已完成")
     assert status() == "done"
 
