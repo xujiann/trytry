@@ -88,7 +88,7 @@ RAW_UNPARSE_OK = {
     # `record_qc_summary` 的 docstring 里确实还留着那句 `.limit(5000)`
     # （否则用例是空转），再证明 `_code(fn)` 把它剥掉了。两句一正一反，
     # 正好是本模块要守的那件事的活样本。
-    "test_list_pagination_ratchet.py:484  ast.unparse(fn)",
+    "test_list_pagination_ratchet.py:501  ast.unparse(fn)",
 }
 
 
