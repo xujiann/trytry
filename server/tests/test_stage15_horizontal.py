@@ -726,6 +726,16 @@ def test_批量按id写接口必须有机构守卫():
 #:     大概率是**写明理由的豁免**而不是补守卫，但要逐条取证再判。
 NEWLY_VISIBLE_UNGUARDED_WRITES: set[str] = set()
 
+#: 按 id 取的**主对象没有机构列**（跨机构配置），命中判据的只是改档里对外键做的存在性检查
+#: `db.get(User, …) is None`（P1-90：先查存在，否则生产库撞外键 500）——`users` 带 org_id，判据按源码认
+#: `db.get(带 org_id 的模型,` 就点了名。P1-94 把这两个改档端点从裸 dict 换成模型、补上存在性检查后现形。
+#: 与 `test_body_id_org_write_guard.NO_SINGLE_ORG_OWNER` 同一理由（建档那一侧早已登记）；「医师能改全县配置」
+#: 是纵向权限问题，不在本闸门。前提（主对象表上确实没有 org_id）由用例钉住。
+BYID_PRIMARY_WITHOUT_ORG = {
+    "spd/care.py:update_case_report_task": "SpdCaseReportTask",
+    "spd/config/centers.py:update_center": "SpdCenter",
+}
+
 #: 同上，读侧。
 NEWLY_VISIBLE_UNGUARDED_READS = {
     "disease_programs.py:get_enrollment",
@@ -754,7 +764,7 @@ def test_按id写接口机构归属欠账不许变长():
     print(summary)
     warnings.warn(summary, UserWarning, stacklevel=2)
     unguarded = _byid_org_write_endpoints()
-    unexpected = unguarded - BYID_CROSS_ORG_OK - NEWLY_VISIBLE_UNGUARDED_WRITES
+    unexpected = unguarded - BYID_CROSS_ORG_OK - NEWLY_VISIBLE_UNGUARDED_WRITES - set(BYID_PRIMARY_WITHOUT_ORG)
     assert unexpected == set(), (
         "以下按 id 写接口能操作别家机构记录，且不属于已声明的跨机构协同：\n  "
         + "\n  ".join(sorted(unexpected))
@@ -763,10 +773,19 @@ def test_按id写接口机构归属欠账不许变长():
     # 这一条是自审时用变异试出来的——只查豁免清单的那一版，把已修好的
     # `sign_consent` 塞回欠账清单，闸门照样绿：**一份不会腐烂的欠账清单，
     # 修完了也不会变短，那它就不再表示"还欠多少"了。**
-    stale = (BYID_CROSS_ORG_OK | NEWLY_VISIBLE_UNGUARDED_WRITES) - unguarded
+    stale = (BYID_CROSS_ORG_OK | NEWLY_VISIBLE_UNGUARDED_WRITES | set(BYID_PRIMARY_WITHOUT_ORG)) - unguarded
     assert stale == set(), (
         f"这些登记项已加了守卫或不存在，应从清单删除（欠账只减不增，修完就要减）：{sorted(stale)}"
     )
+
+
+def test_主对象无机构列的豁免_表上确实没有org_id():
+    """豁免的前提：按 id 取的主对象没有机构列。哪天给它加了 org_id，这条豁免就得撤、改成补守卫。"""
+    from app import models
+    registry = {c.__name__: c for c in models.Base.registry._class_registry.values() if hasattr(c, "__tablename__")}
+    has_org = sorted(name for name in BYID_PRIMARY_WITHOUT_ORG.values()
+                     if "org_id" in registry[name].__table__.columns)
+    assert has_org == [], f"这些主对象已有 org_id，豁免不再成立：{has_org}"
 
 
 #: 【登记制】本模块自己的**领域守卫**——不是 `visibility` 的通用助手，
