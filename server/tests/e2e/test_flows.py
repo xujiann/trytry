@@ -837,6 +837,50 @@ def test_住院页的转床_开医嘱_病案首页都在页内表单里录入(pa
     assert (summary["outcome"], summary["total_cost"], summary["note"]) == ("死亡", 8888.5, "E2E抢救无效"), summary
 
 
+@pytest.fixture(scope="session")
+def consent_seed(base_url, seed):
+    """两份待签的门诊告知书：一份用来记签署，一份用来记拒签。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    common = {"patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"], "consent_type": "surgery",
+              "content": "E2E手术风险告知正文", "doctor_name": "E2E外科医生"}
+    return [post("/api/outpatient/consents", {**common, "title": f"E2E告知书{i}"}, token) for i in (1, 2)]
+
+
+def test_门诊告知书的签署与拒签都在页内表单里录入_关系可选(page, base_url, consent_seed):
+    """P2-38 / P1-70：签署原先要手打关系代码（self/spouse/…，打错就 422），拒签则把关系
+    **写死成"本人"**——家属或委托人代为拒签的，证据上记成了患者本人拒签。现在两处都从
+    本人/配偶/父母/子女/委托人里选，按接口读回核对。"""
+    to_sign, to_refuse = (c["id"] for c in consent_seed)
+    _login(page, base_url)
+    _open_page(page, "outpatientdocs", "门急诊文书")
+
+    page.click(f'button[data-csign="{to_sign}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"signer_name": "E2E配偶甲", "signer_relation": "spouse"}))
+    page.click(f'button[data-crefuse="{to_refuse}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"signer_name": "E2E父亲乙", "signer_relation": "parent",
+                                             "refuse_reason": "E2E家属要求转上级医院再议"}))
+
+    rows = page.evaluate("async () => await api('/api/outpatient/consents?limit=50')")
+    by_id = {r["id"]: r for r in rows}
+    assert (by_id[to_sign]["status"], by_id[to_sign]["signer_relation"]) == ("signed", "spouse"), by_id[to_sign]
+    refused = by_id[to_refuse]
+    assert (refused["status"], refused["signer_relation"], refused["refuse_reason"]) == (
+        "refused", "parent", "E2E家属要求转上级医院再议"), refused
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 

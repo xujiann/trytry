@@ -1270,6 +1270,8 @@ const CONSENT_TYPES = {
   surgery: "手术", anesthesia: "麻醉", transfusion: "输血",
   exam: "特殊检查", treatment: "特殊治疗", other: "其他",
 };
+// 与后端 outpatient_docs.RELATION_NAMES 同一份取值（入参 pattern 只认这五个）
+const CONSENT_RELATIONS = { self: "本人", spouse: "配偶", parent: "父母", child: "子女", other: "委托人" };
 
 async function renderOutpatientDocs() {
   $("#page-desc").textContent =
@@ -1446,20 +1448,25 @@ async function renderOutpatientDocs() {
         return route();
       } catch (err) { return setMsg("#od-tmsg", err.message, false); }
     }
+    // P2-38 / P1-70：签署两连问（关系要手打 self/spouse/…）、拒签两连问换成页内表单。
+    // 拒签原先把关系**写死成"本人"**——家属或委托人代为拒签的，证据上记成了患者本人拒签。
+    const relationOptions = Object.entries(CONSENT_RELATIONS).map(([value, label]) => ({ value, label }));
     if (csign) {
-      const signer_name = prompt("签署人姓名");
-      if (!signer_name) return;
-      const signer_relation = prompt("与患者关系：self/spouse/parent/child/other", "self") || "self";
-      return postAction(`/api/outpatient/consents/${csign}/sign`,
-        { signer_name, signer_relation }, "#od-cmsg");
+      const v = await spdModal("记录患方签署", [
+        { name: "signer_name", label: "签署人姓名", required: true },
+        { name: "signer_relation", label: "与患者关系", type: "select", value: "self", options: relationOptions },
+      ]);
+      if (!v) return;
+      return postAction(`/api/outpatient/consents/${csign}/sign`, v, "#od-cmsg");
     }
     if (crefuse) {
-      const signer_name = prompt("拒签人姓名");
-      if (!signer_name) return;
-      const refuse_reason = prompt("拒签原因（必填，这是机构「已告知」的证据）");
-      if (!refuse_reason) return;
-      return postAction(`/api/outpatient/consents/${crefuse}/refuse`,
-        { signer_name, signer_relation: "self", refuse_reason }, "#od-cmsg");
+      const v = await spdModal("记录拒签（这是机构「已告知」的证据）", [
+        { name: "signer_name", label: "拒签人姓名", required: true },
+        { name: "signer_relation", label: "与患者关系", type: "select", value: "self", options: relationOptions },
+        { name: "refuse_reason", label: "拒签原因（必填）", required: true },
+      ]);
+      if (!v) return;
+      return postAction(`/api/outpatient/consents/${crefuse}/refuse`, v, "#od-cmsg");
     }
   };
 }
