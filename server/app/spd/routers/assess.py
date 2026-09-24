@@ -16,18 +16,19 @@
 分三段而不是让人直接写 SQL：SQL 口径一旦开放，各县会写出各自的取数逻辑，
 数字对不上时无从对账；而这三段里唯一可自由填写的公式是受限表达式。
 """
+import calendar
+import re
 from typing import Any
 
-from datetime import date, timedelta
 from secrets import randbelow
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ... import clock
+from ... import clock, datetypes
 from ...clock import now_naive
 from ...concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ...database import get_db
@@ -461,19 +462,45 @@ def _metric_names(data_source: str) -> tuple[str, ...]:
     }.get(data_source, ("total",))
 
 
+#: 考核期的三种写法（跑分弹窗与工作量筛选框的占位符都这么写）。形状用 `[0-9]`
+#: 不用 `\d`：`\d` 认全角数字（同 datetypes.MONTH_SHAPE 的理由）。月度那种不在这里
+#: 另写一遍——交给月度期间的唯一真源 `datetypes.check_month`。
+_YEAR_PERIOD = re.compile(r"[0-9]{4}")
+_QUARTER_PERIOD = re.compile(r"([0-9]{4})-Q([1-4])")
+PERIOD_HINT = "考核期须为 YYYY（年度）、YYYY-Qn（季度，n=1~4）或 YYYY-MM（月度）"
+
+
+def check_assess_period(period: str) -> str:
+    """考核期的唯一校验，非法抛 ValueError（带人话）（P1-62）。
+
+    此前 `_period_range` 手写解析、不做校验：`2026/08`、`abc`、`2026-Qx` 炸成 500；
+    `2026-13`、`2026-Q5` 解析出 `2026-13-01` 这类区间；`2026-8` 的起点 `2026-8-01`
+    在字典序上大于整个 8 月——后三种都**照常出分并写库**，一套以垃圾期为名的
+    考核结果就此存在（修复前实测）。
+    """
+    if _YEAR_PERIOD.fullmatch(period) or _QUARTER_PERIOD.fullmatch(period):
+        return period
+    if datetypes.MONTH_SHAPE.fullmatch(period):
+        return datetypes.check_month(period)  # 形状对、月份不存在：给日历那句
+    raise ValueError(PERIOD_HINT)
+
+
 def _period_range(period: str) -> tuple[str, str]:
-    """把 `2026-08` / `2026-Q3` / `2026` 展开成 [起, 止] 日期字符串。"""
-    if len(period) == 4 and period.isdigit():
+    """把 `2026-08` / `2026-Q3` / `2026` 展开成 [起, 止] 日期字符串；非法抛 ValueError。"""
+    period = check_assess_period(period)
+    if _YEAR_PERIOD.fullmatch(period):
         return f"{period}-01-01", f"{period}-12-31"
-    if "-Q" in period:
-        year, quarter = period.split("-Q")
-        start_month = (int(quarter) - 1) * 3 + 1
+    quarter = _QUARTER_PERIOD.fullmatch(period)
+    if quarter:
+        year, q = quarter.groups()
+        start_month = (int(q) - 1) * 3 + 1
         end_month = start_month + 2
         last_day = 31 if end_month in (1, 3, 5, 7, 8, 10, 12) else 30
         return f"{year}-{start_month:02d}-01", f"{year}-{end_month:02d}-{last_day}"
-    year, month = period.split("-")[:2]
-    nxt = date(int(year) + (int(month) == 12), (int(month) % 12) + 1, 1)
-    return f"{year}-{month}-01", (nxt - timedelta(days=1)).isoformat()
+    year, month = period.split("-")
+    # monthrange 而不是"次月一号减一天"：后者在 9999-12 上溢出到一万年
+    last = calendar.monthrange(int(year), int(month))[1]
+    return f"{year}-{month}-01", f"{year}-{month}-{last:02d}"
 
 
 def _object_column(model, object_type: str):
@@ -816,6 +843,11 @@ class RunScoreIn(BaseModel):
     program_code: str = Field(default="", max_length=32)
     object_ids: list[int] = Field(default_factory=list)
 
+    @field_validator("period")
+    @classmethod
+    def _period_shape(cls, value: str) -> str:
+        return check_assess_period(value)
+
 
 def _objects_of(db: Session, plan: SpdAssessPlan, object_ids: list[int]) -> list[tuple[int, str]]:
     """考核对象清单：给了 id 就按 id，没给就按方案层级全量展开。"""
@@ -1058,7 +1090,10 @@ def workload(
     共用同一批表——工作量报表和考核得分对不上，是这类系统最常见的投诉。
     """
     period = period or clock.today().strftime("%Y-%m")
-    start, end = _period_range(period)
+    try:
+        start, end = _period_range(period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"period：{exc}") from None
     task_query = db.query(SpdTask).filter(
         SpdTask.created_at >= f"{start} 00:00:00", SpdTask.created_at <= f"{end} 23:59:59"
     )
