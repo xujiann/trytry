@@ -18,10 +18,12 @@
   并有一条用例核对出处名单里确实还有它（出处划掉了，这里也得划）；
 - `AWAITING`：该按什么范围给看要人定（写明出处），答之前不改。
 
-⚠️ **判据看不见的**：不 `db.get` 父对象、直接按路径参数查子表的读接口（修第二批时撞上的
-`education:list_assessments` 就是这样漏掉的——它连计划在不在都不查）。同形状在 2026-09-24
-（`c5a7fcc` 之上）量过：带路径参数、无任何判定、也不 `db.get` 机构 / 患者表的 GET 有 27 条，
-其中挂在患者上的已在 P1-69 名单里，其余登记为 P1-77，逐条判之前不扩这条判据。
+**第二层：上面那条判据的盲区（P1-77）。** 不 `db.get` 父对象、直接按路径参数查子表的读接口，
+或者取的是既无机构列也无患者列的表的，上面的判据与患者那一族都不算——修第二批时撞上的
+`education:list_assessments` 就是这样漏掉的（它连计划在不在都不查），`medwaste:trace` 也是
+（按 `MW-日期-序号` 就能逐包翻遍全县的医废，P0-39）。于是再立一层：带路径参数、没有任何读侧判定、
+也不 `db.get` 机构 / 患者表的 GET，**逐条判过、只减不增**（`BLINDSPOT_*` 三张名单，口径同上）。
+这一层大半是配置与目录，登记的意义是**新写的同形状读接口必须过一次人眼**。
 """
 from __future__ import annotations
 
@@ -72,6 +74,52 @@ AWAITING = {
         "还是订阅人另开一道，全域报告（不挂机构）谁能看——见待裁定清单 P0-38 一节。",
 }
 
+# ---------------------------------------------------------------- 第二层：盲区（P1-77）
+
+BLINDSPOT_BY_DESIGN = {
+    "dictionaries.py:list_entries": "字典条目是全平台共用的编码表（下拉选项的来源），不含业务数据。",
+    "education.py:course_stats": "课程由管理员建、全县共用（`create_course` 只放 admin），统计是学习人次与通过数。",
+    "education.py:list_materials": "课件是课程内容，课程全县共用（同上）。",
+    "education.py:list_live_feedback":
+        "远程直播全县开放：任一账号可对结束的直播反馈，直播清单同样不设限；反馈是对讲座的评分与评语。",
+    "org_groups.py:groups_of_org": "机构所属分组是组织拓扑：docstring 写明第九轮「明确不设限」（同文件的分组成员见上层）。",
+    "publichealth.py:list_actions":
+        "突发公卫事件是县级应急指挥：事件表没有机构列、全县协同处置，事件清单同样不设限；处置动作是指挥记录。",
+    "rbac.py:role_permissions":
+        "角色与权限点是全县统一的授权配置（角色表没有机构列），角色清单与权限点目录同样不设限。",
+    "spd/assess.py:indicator_usage": "考核指标被哪些方案引用：配置元数据。",
+    "spd/assess.py:score_detail":
+        "考核结果：排名本身就是跨机构比较（`/scores` 清单不设限）；下钻是逐项指标得分与扣分依据（聚合数），无患者身份。",
+    "spd/config/catalog.py:list_targets": "病种管理目标：与专病档案详情同一口径（见上层 `get_program`）。",
+    "spd/config/catalog.py:program_versions": "病种配置的版本史：同上。",
+    "spd/config/devices.py:list_sync_logs":
+        "数据源接入的运维日志（行数、耗时、成败），不含业务数据；接入总览（`data-sources-monitor`）同样不设限。",
+    "spd/config/scales.py:get_scale": "量表（题目与计分规则）是全县共用的评估工具，居民扫码自评也读它。",
+    "spd/config/scales.py:scale_qr": "量表二维码是给居民扫码自查的入口，码里是已发布量表的公开令牌。",
+    "tcm_heritage.py:list_attempts":
+        "模拟病例是全县共用的带教题（表没有机构列，作答不判机构）；作答榜只有账号 id 与得分。",
+}
+
+#: 挂在患者上、已在患者读侧欠账名单里（口径同上层 `ELSEWHERE`）。
+BLINDSPOT_ELSEWHERE = {
+    "credentials.py:lookup": "test_unscopable_patient_reads.UNSCOPABLE_PATIENT_READS",
+    "maternal.py:get_delivery": "test_unscopable_patient_reads.ONEHOP_UNSCOPABLE_READS",
+    "maternal.py:list_screenings": "test_unscopable_patient_reads.AGGREGATE_ONLY_READS",
+    "patients.py:get_patient": "test_stage15_horizontal.UNGUARDED",
+    "spd/population.py:list_group_members": "test_unscopable_patient_reads.UNSCOPABLE_PATIENT_READS",
+    "spd/population.py:list_usages": "test_unscopable_patient_reads.ONEHOP_UNSCOPABLE_READS",
+    "spd/tasks.py:check_node_enter": "test_unscopable_patient_reads.ONEHOP_UNSCOPABLE_READS",
+}
+
+_FUND = ("医保基金池的账（池子清单、预付、分期到账、清算、逐机构分配）整个模块的读接口都不收口；"
+         "池子绑在片区或全域——谁能看见待裁定清单 P1-77 一节。")
+BLINDSPOT_AWAITING = {
+    "fund.py:get_settlement": _FUND,
+    "fund.py:list_distributions": _FUND,
+    "fund.py:list_periods": _FUND,
+    "fund.py:list_prepayments": _FUND,
+}
+
 
 @functools.lru_cache(maxsize=1)
 def _org_owned_models() -> frozenset[str]:
@@ -113,17 +161,27 @@ def _byid_reads() -> dict[str, tuple[str, str, bool]]:
     return out
 
 
-def _scan(sources: dict[str, str] | None = None) -> tuple[set[str], set[str]]:
-    """(按 id 取机构归属表的 GET 全集, 其中无读侧判定的)。"""
+@functools.lru_cache(maxsize=1)
+def _patient_owned_models() -> frozenset[str]:
+    """带 `patient_id` 列的模型类名——按 id 读它们的一族归 `test_stage15_horizontal` 管。"""
+    from app import models
+
+    return frozenset(m.class_.__name__ for m in models.Base.registry.mappers
+                     if "patient_id" in {c.name for c in m.class_.__table__.columns})
+
+
+def _scan(sources: dict[str, str] | None = None) -> tuple[set[str], set[str], set[str]]:
+    """(按 id 取机构归属表的 GET 全集, 其中无读侧判定的, 第二层盲区里无读侧判定的)。"""
     import test_org_param_read_guard as R
     import test_stage15_horizontal as H
 
     files = dict(H._router_files())
     sources = sources or {}
-    org_models = _org_owned_models()
+    org_models, patient_models = _org_owned_models(), _patient_owned_models()
     trees: dict[str, ast.AST] = {}
     reads: set[str] = set()
     unguarded: set[str] = set()
+    blind: set[str] = set()
     for key, (file_name, fn_name, admin_only) in _byid_reads().items():
         if admin_only:
             continue
@@ -134,17 +192,19 @@ def _scan(sources: dict[str, str] | None = None) -> tuple[set[str], set[str]]:
         fn = next(n for n in ast.walk(tree)
                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name and n.decorator_list)
         body = H._with_local_helpers(tree, fn)
-        if not set(re.findall(r"db\.get\((\w+),", body)) & org_models:
-            continue
-        reads.add(key)
-        if any(g in body for g in R.READ_GUARDS) or H._has_domain_guard(file_name, tree, fn):
-            continue
-        unguarded.add(key)
-    return reads, unguarded
+        gets = set(re.findall(r"db\.get\((\w+),", body))
+        guarded = any(g in body for g in R.READ_GUARDS) or H._has_domain_guard(file_name, tree, fn)
+        if gets & org_models:
+            reads.add(key)
+            if not guarded:
+                unguarded.add(key)
+        elif not gets & patient_models and not guarded:
+            blind.add(key)
+    return reads, unguarded, blind
 
 
 def test_覆盖面自证():
-    reads, unguarded = _scan()
+    reads, unguarded, _ = _scan()
     listed = len(BY_DESIGN) + len(ELSEWHERE) + len(AWAITING)
     print(f"\n[按 id 读机构归属表的 GET] {len(reads)} 个；无读侧判定 {len(unguarded)}"
           f"（按设计 {len(BY_DESIGN)}、别处在盯 {len(ELSEWHERE)}、待裁定 {len(AWAITING)}，共 {listed}）")
@@ -158,7 +218,7 @@ def test_覆盖面自证():
 def test_不得新增按id读机构归属表而不判可见的接口():
     names = [set(BY_DESIGN), set(ELSEWHERE), set(AWAITING)]
     assert not (names[0] & names[1] or names[0] & names[2] or names[1] & names[2]), "同一条只能登记在一张名单里"
-    _, unguarded = _scan()
+    _, unguarded, _ = _scan()
     new = sorted(unguarded - set(BY_DESIGN) - set(ELSEWHERE) - set(AWAITING))
     assert new == [], (
         "以下 GET 按 id 取了有机构列的表，却没有任何读侧判定：\n  " + "\n  ".join(new)
@@ -168,19 +228,24 @@ def test_不得新增按id读机构归属表而不判可见的接口():
 
 
 def test_名单只许变少():
-    _, unguarded = _scan()
+    _, unguarded, _ = _scan()
     stale = sorted((set(BY_DESIGN) | set(ELSEWHERE) | set(AWAITING)) - unguarded)
     assert stale == [], "这些已补上判定（或已不存在），请从名单里划掉：\n  " + "\n  ".join(stale)
 
 
-def test_别处在盯的出处名单里确实还有它():
+def _missing_from_origin(entries: dict[str, str]) -> list[str]:
     import importlib
 
     missing = []
-    for key, where in ELSEWHERE.items():
+    for key, where in entries.items():
         module, attr = where.split(".")
         if key not in getattr(importlib.import_module(module), attr):
             missing.append(f"{key}（{where}）")
+    return missing
+
+
+def test_别处在盯的出处名单里确实还有它():
+    missing = _missing_from_origin(ELSEWHERE) + _missing_from_origin(BLINDSPOT_ELSEWHERE)
     assert missing == [], "出处名单里已经划掉了，这里也要重判：\n  " + "\n  ".join(missing)
 
 
@@ -196,3 +261,48 @@ def test_判据自证_拿掉凭证明细的判定当场点名():
     reverted = text[:start] + text[start:end].replace(fixed, "", 1) + text[end:]
     assert "accounting.py:get_voucher" in _scan({"accounting.py": reverted})[1]
     assert "accounting.py:get_voucher" not in _scan()[1]
+
+
+# ---------------------------------------------------------------- 第二层：盲区（P1-77）
+
+
+def test_盲区覆盖面自证():
+    _, _, blind = _scan()
+    listed = len(BLINDSPOT_BY_DESIGN) + len(BLINDSPOT_ELSEWHERE) + len(BLINDSPOT_AWAITING)
+    print(f"\n[带路径参数、不 db.get 机构/患者表、无读侧判定的 GET] {len(blind)} 个"
+          f"（按设计 {len(BLINDSPOT_BY_DESIGN)}、别处在盯 {len(BLINDSPOT_ELSEWHERE)}、"
+          f"待裁定 {len(BLINDSPOT_AWAITING)}，共 {listed}）")
+    assert "fund.py:list_periods" in blind, "基金池那几条应当在盲区里（按路径参数查子表、无判定）"
+
+
+def test_盲区不得新增无判定的按路径参数读():
+    names = [set(BLINDSPOT_BY_DESIGN), set(BLINDSPOT_ELSEWHERE), set(BLINDSPOT_AWAITING)]
+    assert not (names[0] & names[1] or names[0] & names[2] or names[1] & names[2]), "同一条只能登记在一张名单里"
+    _, _, blind = _scan()
+    new = sorted(blind - names[0] - names[1] - names[2])
+    assert new == [], (
+        "以下 GET 按路径参数读数据，既没有读侧判定、也不经机构 / 患者表判归属：\n  " + "\n  ".join(new)
+        + "\n\n先取出父对象、按它的机构判 assert_org_visible（或患者可见性）；"
+        "跨机构可见就是用途的（配置、目录、县级协同），写明理由登记进 BLINDSPOT_BY_DESIGN。"
+    )
+
+
+def test_盲区名单只许变少():
+    _, _, blind = _scan()
+    listed = set(BLINDSPOT_BY_DESIGN) | set(BLINDSPOT_ELSEWHERE) | set(BLINDSPOT_AWAITING)
+    stale = sorted(listed - blind)
+    assert stale == [], "这些已补上判定（或已不存在），请从名单里划掉：\n  " + "\n  ".join(stale)
+
+
+def test_盲区判据自证_拿掉医废追溯的判定当场点名():
+    import test_stage15_horizontal as H
+
+    path = dict(H._router_files())["medwaste.py"]
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    fixed = "    assert_org_visible(db, user, waste.org_id)\n"
+    start = text.index("def trace(")
+    end = text.index("\n@router", start)
+    assert fixed in text[start:end], "医废追溯里找不到 P0-39 的判定行，自证前提变了"
+    reverted = text[:start] + text[start:end].replace(fixed, "", 1) + text[end:]
+    assert "medwaste.py:trace" in _scan({"medwaste.py": reverted})[2]
+    assert "medwaste.py:trace" not in _scan()[2]
