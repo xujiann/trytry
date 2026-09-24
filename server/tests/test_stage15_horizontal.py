@@ -1441,7 +1441,8 @@ def test_挂在患者上的豁免_消息只认收件人():
     """`mark_read` 豁免的前提：收件人判定今天还在。删掉它，这条豁免就在替一个不存在的守卫报绿。"""
     path = dict(_router_files())["notifications.py"]
     tree = ast.parse(open(path, encoding="utf-8").read())
-    (fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "mark_read"]
+    (fn,) = [n for n in ast.walk(tree)
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "mark_read"]
     assert "notification.user_id != user.id" in astcode.code(fn), "标已读不再只认收件人，豁免要重判"
 
 
