@@ -164,6 +164,9 @@ def create_team(
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
     assert_org_writable(db, user, body.org_id)
+    # 负责人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500
+    if body.leader_user_id is not None and db.get(User, body.leader_user_id) is None:
+        raise HTTPException(status_code=404, detail=f"团队负责人不存在（leader_user_id={body.leader_user_id}）")
     team = SpdTeam(**body.model_dump())
     db.add(team)
     db.commit()

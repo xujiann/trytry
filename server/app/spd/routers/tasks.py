@@ -403,6 +403,9 @@ def adjust_path_instance(
     if instance.status == "completed":
         raise HTTPException(status_code=409, detail="已完成的路径不可调整")
     data = body.model_dump(exclude_unset=True)
+    # 改负责人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500
+    if data.get("owner_user_id") is not None and db.get(User, data["owner_user_id"]) is None:
+        raise HTTPException(status_code=404, detail=f"路径负责人不存在（owner_user_id={data['owner_user_id']}）")
     for key, value in data.items():
         setattr(instance, key, value)
     if data.get("status") == "cancelled":

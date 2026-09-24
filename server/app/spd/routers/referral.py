@@ -201,6 +201,10 @@ def create_referral_rule(body: ReferralRuleIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail=str(exc)) from None
     if not conditions:
         raise HTTPException(status_code=422, detail="转诊规则至少要有一个触发条件")
+    # 目标机构先查存在（P1-90）：下面的 `except IntegrityError` 是为规则编码写的，生产库上
+    # 机构编号填错会撞外键、被翻成「该转诊规则编码已存在」
+    if body.target_org_id is not None and db.get(Organization, body.target_org_id) is None:
+        raise HTTPException(status_code=404, detail=f"目标机构不存在（target_org_id={body.target_org_id}）")
     rule = SpdReferralRule(**body.model_dump(exclude={"conditions"}), conditions=conditions)
     db.add(rule)
     try:

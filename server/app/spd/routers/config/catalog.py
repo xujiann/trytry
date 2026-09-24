@@ -256,6 +256,9 @@ def update_program(
     if program is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
     data = body.model_dump(exclude_unset=True, exclude={"note"})
+    # 与 create_program 同一句（P1-90）：改牵头机构同样先查存在，否则生产库撞外键 500
+    if data.get("lead_org_id") is not None and db.get(Organization, data["lead_org_id"]) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
     rules_changed = any(
         key in data for key in ("include_rules", "exclude_rules", "stages", "milestones")
     )

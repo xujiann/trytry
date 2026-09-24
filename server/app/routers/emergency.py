@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_roles
-from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, User
+from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, Patient, User
 from ..visibility import assert_patient_visible
 from ..schemas import PatientOut  # noqa: F401  (保持 schemas 导入路径一致性)
 
@@ -99,6 +99,10 @@ class VitalOut(VitalCreate):
 def dispatch(body: CaseCreate, db: Session = Depends(get_db)):
     if body.dest_org_id is not None and db.get(Organization, body.dest_org_id) is None:
         raise HTTPException(status_code=404, detail="目标医院不存在")
+    # 与上面的目标医院同一个查法（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500。
+    # 只查存在——调度台按设计不按机构收口（呼救人往往不是本院患者）
+    if body.patient_id is not None and db.get(Patient, body.patient_id) is None:
+        raise HTTPException(status_code=404, detail="患者档案不存在")
     case = EmergencyCase(**body.model_dump())
     db.add(case)
     db.commit()

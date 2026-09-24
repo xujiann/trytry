@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ....database import get_db
 from ....deps import require_roles
-from ...platform import Organization
+from ...platform import Organization, User
 from ...models import (
     SpdCenter,
     SpdProgram,
@@ -89,6 +89,12 @@ def _center_out(c: SpdCenter) -> dict:
 def create_center(body: CenterIn, db: Session = Depends(get_db)):
     if db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first() is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
+    # 牵头机构与负责人先查存在（P1-90）：下面的 `except IntegrityError` 是为中心编码写的，
+    # 生产库上这两个编号填错会撞外键、被翻成「该中心编码已存在」
+    if body.lead_org_id is not None and db.get(Organization, body.lead_org_id) is None:
+        raise HTTPException(status_code=404, detail=f"牵头机构不存在（lead_org_id={body.lead_org_id}）")
+    if body.leader_user_id is not None and db.get(User, body.leader_user_id) is None:
+        raise HTTPException(status_code=404, detail=f"负责人不存在（leader_user_id={body.leader_user_id}）")
     center = SpdCenter(**body.model_dump())
     db.add(center)
     try:

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ....clock import now_naive
 from ....database import get_db
 from ....deps import get_current_user, paginate, require_admin, require_roles
-from ...platform import User
+from ...platform import Organization, User
 from ...models import (
     SpdDataSource,
     SpdDevice,
@@ -193,6 +193,9 @@ def _source_out(s: SpdDataSource) -> dict:
 @router.post("/data-sources", response_model=DataSourceOut, status_code=201,
              dependencies=[Depends(require_admin)])
 def create_data_source(body: DataSourceIn, db: Session = Depends(get_db)):
+    # 同上（P1-90）：机构编号填错，生产库上会被报成「该数据源编码已存在」
+    if body.org_id is not None and db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail=f"所属机构不存在（org_id={body.org_id}）")
     source = SpdDataSource(**body.model_dump())
     db.add(source)
     try:

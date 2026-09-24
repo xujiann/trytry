@@ -189,6 +189,9 @@ class ChildOut(ChildCreate):
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2/L5: 儿童建档
 )
 def register_child(body: ChildCreate, db: Session = Depends(get_db)):
+    # 监护人档案先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500
+    if body.guardian_patient_id is not None and db.get(Patient, body.guardian_patient_id) is None:
+        raise HTTPException(status_code=404, detail="监护人档案不存在")
     child = ChildRecord(**body.model_dump())
     db.add(child)
     db.commit()

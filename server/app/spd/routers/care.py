@@ -1159,6 +1159,9 @@ def create_revisit(
     body: RevisitIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     assert_patient_visible(db, user, body.patient_id, resource="spd_revisit")
+    # 引用的人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500
+    if body.doctor_user_id is not None and db.get(User, body.doctor_user_id) is None:
+        raise HTTPException(status_code=404, detail=f"复诊医生不存在（doctor_user_id={body.doctor_user_id}）")
     record = SpdRevisit(**body.model_dump(), status="planned")
     db.add(record)
     db.commit()
@@ -1277,6 +1280,10 @@ class ReportTaskIn(BaseModel):
 def create_case_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     from sqlalchemy.exc import IntegrityError
 
+    # 先查负责人存在（P1-90）：下面的 `except IntegrityError` 是为编码唯一写的，生产库上
+    # 负责人编号填错会撞外键、被翻成「该上报任务编码已存在」
+    if body.manager_user_id is not None and db.get(User, body.manager_user_id) is None:
+        raise HTTPException(status_code=404, detail=f"负责人不存在（manager_user_id={body.manager_user_id}）")
     task = SpdCaseReportTask(**body.model_dump())
     db.add(task)
     try:
@@ -1334,6 +1341,8 @@ def create_case_report(
     不会出现上报单堆着、任务中心却什么都没有。
     """
     assert_patient_visible(db, user, body.patient_id, resource="spd_case_report")
+    if body.task_id is not None and db.get(SpdCaseReportTask, body.task_id) is None:  # P1-90
+        raise HTTPException(status_code=404, detail=f"上报任务不存在（task_id={body.task_id}）")
     report = SpdCaseReport(
         **body.model_dump(), reporter_id=user.id, org_id=user.org_id, status="pending",
     )

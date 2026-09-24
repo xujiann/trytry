@@ -40,6 +40,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     """(分组, 指标, 值, 判据出处)。**只读常量，不重跑扫描**（理由见模块 docstring）。"""
     import test_api_contract_governance as contract
     import test_ascii_digit_patterns as asciidigits
+    import test_body_fk_exists as bodyfk
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
     import test_byid_org_read_guard as byidread
@@ -106,6 +107,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_stage14_concurrency.py"),
         ("并发冲突", "读-改-写欠账", len(concurrency.KNOWN_READ_MODIFY_WRITE),
          "tests/test_stage14_concurrency.py"),
+        ("引用完整性", "请求体外键原样写库、函数里一眼不看（撞外键被翻成 409 误报 / 500）", bodyfk.BASELINE,
+         "tests/test_body_fk_exists.py"),
         ("时间口径", "app/ 里绕过 clock.today() 的 date.today()", clock.DATE_TODAY_BASELINE,
          "tests/test_clock.py"),
         ("时间口径", "app/ 顶层时间快照的豁免", len(clock.APP_IMPORT_TIME_OK),

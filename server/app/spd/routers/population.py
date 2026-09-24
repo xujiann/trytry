@@ -856,6 +856,25 @@ class EnrollIn(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+#: 纳管档案里引用别的表的四个字段：建档与改档都在写库之前逐个查存在（P1-90）
+_ENROLL_REFS = {
+    "team_id": (SpdTeam, "服务团队"),
+    "doctor_user_id": (User, "主管医生"),
+    "manager_user_id": (User, "个案管理师"),
+    "village_doctor_id": (User, "村医"),
+}
+
+
+def _check_enroll_refs(db: Session, values: dict) -> None:
+    """不查的后果：开发库（SQLite 不开外键约束）存成悬空 id；生产库撞外键——建档那条的
+    `except IntegrityError` 本是为「同一患者同一病种」写的，于是报成「该患者已纳管此病种」，
+    改档那条没有接住，直接 500。"""
+    for field, (model, label) in _ENROLL_REFS.items():
+        value = values.get(field)
+        if value is not None and db.get(model, value) is None:
+            raise HTTPException(status_code=404, detail=f"{label}不存在（{field}={value}）")
+
+
 def _enroll_out(e: SpdEnrollment, brief: dict | None = None) -> dict:
     out = {
         "id": e.id, "patient_id": e.patient_id, "program_code": e.program_code,
@@ -900,6 +919,7 @@ def create_enrollment(
         raise HTTPException(status_code=404, detail="专病档案不存在或已停用")
     if body.package_id is not None and db.get(SpdServicePackage, body.package_id) is None:
         raise HTTPException(status_code=404, detail="服务包不存在")
+    _check_enroll_refs(db, body.model_dump())
 
     stage = body.stage or ((program.stages or [{}])[0].get("key", "") if program.stages else "")
     enrollment = SpdEnrollment(
@@ -1064,7 +1084,9 @@ def update_enrollment(
     if enrollment.status != "active":
         raise HTTPException(status_code=409, detail="非在管状态的档案不可修改，请先恢复管理")
     assert_org_writable(db, user, enrollment.org_id)
-    for key, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    _check_enroll_refs(db, changes)
+    for key, value in changes.items():
         setattr(enrollment, key, value)
     # 建档完整性：三项关键信息任一有值即视为已建档（成员端 #20 的"建档纳管衔接"）
     enrollment.archived = bool(

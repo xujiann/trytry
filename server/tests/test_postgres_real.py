@@ -743,3 +743,27 @@ def test_拼时间戳比DateTime列的日期筛选在真PG上不是500(pg_engine
         + "\n"
         + result.stderr[-2000:]
     )
+
+
+def test_请求体外键不存在在真PG上是404而不是500或编码已存在(pg_engine):
+    """把 `test_body_fk_exists.py` 换到 PG 上再跑一遍（P1-90）。
+
+    SQLite 不开外键约束，填错的外键 id 照写成悬空引用；PG 上撞外键抛 `IntegrityError`——
+    没接住的端点 500，接住了的被 `except IntegrityError`（本为唯一约束而写）翻成
+    「该患者已纳管此病种」「该中心编码已存在」这类 409 误报。修完之后两个库上都该是 404，
+    只有这里测得出 PG 那一半。接法与上两条相同（子进程 + 导入前顶掉连接串），同样放在文件末尾。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_body_fk_exists.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_BODYFK_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "请求体外键用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )
+
