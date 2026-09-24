@@ -696,10 +696,9 @@ def list_assessments(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = db.query(SpdAssessment)
-    if patient_id is not None:
-        assert_patient_visible(db, user, patient_id, resource="spd_assessment")
-        query = query.filter(SpdAssessment.patient_id == patient_id)
+    # P0-32：原先只在带 patient_id 时判可见性，不带就列出全域全部评估（带患者姓名、量表得分与
+    # 风险分级）——与 P0-23 咨询清单、P0-24 复诊看板同一个形状。只见本机构服务过的患者，全域角色不过滤。
+    query = scope_patient_list(db, user, db.query(SpdAssessment), SpdAssessment, patient_id, "spd_assessment")
     for column, value in (
         (SpdAssessment.scale_code, scale_code), (SpdAssessment.risk_level, risk_level),
         (SpdAssessment.program_code, program_code),
@@ -904,10 +903,9 @@ def list_interventions(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = db.query(SpdIntervention)
-    if patient_id is not None:
-        assert_patient_visible(db, user, patient_id, resource="spd_intervention")
-        query = query.filter(SpdIntervention.patient_id == patient_id)
+    # P0-32：同上——不带 patient_id 时原先列出全域全部干预（带患者姓名与干预内容）
+    query = scope_patient_list(db, user, db.query(SpdIntervention), SpdIntervention, patient_id,
+                               "spd_intervention")
     for column, value in (
         (SpdIntervention.program_code, program_code), (SpdIntervention.status, status),
         (SpdIntervention.owner_id, owner_id),
