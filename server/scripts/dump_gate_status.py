@@ -65,6 +65,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_orphan_endpoints as orphan
     import test_periodstr_single_source as periodstr
     import test_query_param_validators as queryvalidators
+    import test_range_order as rangeorder
     import test_stage14_concurrency as concurrency
     import test_stage15_horizontal as horizontal
     import test_unscopable_patient_reads as unscopable
@@ -195,6 +196,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(datestr.KNOWN_BARE_BODY_STAMP_FIELDS), "tests/test_datestr_single_source.py"),
         ("日期入参", "名字像时间戳、按设计不走时间戳真源的豁免（逐条写明理由）", len(datestr.STAMP_BY_DESIGN),
          "tests/test_datestr_single_source.py"),
+        ("日期入参", "收区间入参（起 / 止、下限 / 上限）却不查起止顺序的处理函数（5 → 0 已清零）", rangeorder.BASELINE,
+         "tests/test_range_order.py"),
         ("日期入参", "未经校验的月度期间查询参数", len(periodstr.KNOWN_BARE_MONTH_PARAMS),
          "tests/test_periodstr_single_source.py"),
         ("日期入参", "名字像期间、按设计不是 YYYY-MM 的豁免", len(periodstr.NOT_A_MONTH),

@@ -1408,11 +1408,19 @@ def _task_out(t: SpdReportTask) -> dict:
     }
 
 
+def _check_valid_window(valid_from: str, valid_to: str) -> None:
+    """有效期止不得早于起（区间起止顺序）：调度按 `今天 < 起` 或 `今天 > 止` 跳过，倒置的有效期让它天天跳过——
+    任务照样显示「启用中」，一份报告也不生成（2026-09-24 实测修前 201，冻结在三个日期各跑一轮都是 0 份）。"""
+    if valid_from and valid_to and valid_to < valid_from:
+        raise HTTPException(status_code=422, detail="有效期止不得早于有效期起")
+
+
 @router.post("/report-tasks", response_model=ReportTaskOut, status_code=201,
              dependencies=[Depends(require_roles("director"))])
 def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     if db.get(SpdReportTemplate, body.template_id) is None:
         raise HTTPException(status_code=404, detail="报告模板不存在")
+    _check_valid_window(body.valid_from, body.valid_to)
     task = SpdReportTask(**body.model_dump())
     db.add(task)
     db.commit()
@@ -1450,7 +1458,11 @@ def update_report_task(task_id: int, body: ReportTaskPatch, db: Session = Depend
     task = db.get(SpdReportTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="报告推送任务不存在")
-    for key, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    # 起止与建档同一句，与存量合并后再比；只在这次改了起止时查——存量里已倒置的任务，暂停 / 删除它不该被拦
+    if {"valid_from", "valid_to"} & changes.keys():
+        _check_valid_window(changes.get("valid_from", task.valid_from), changes.get("valid_to", task.valid_to))
+    for key, value in changes.items():
         setattr(task, key, value)
     db.commit()
     return _task_out(task)

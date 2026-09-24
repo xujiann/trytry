@@ -866,6 +866,12 @@ _ENROLL_REFS = {
 }
 
 
+def _check_service_window(service_start: str, service_end: str) -> None:
+    """服务结束不得早于开始（区间起止顺序）：倒置的服务期是一条自相矛盾的纳管记录。"""
+    if service_start and service_end and service_end < service_start:
+        raise HTTPException(status_code=422, detail="服务结束日期不得早于开始日期")
+
+
 def _check_enroll_refs(db: Session, values: dict) -> None:
     """不查的后果：开发库（SQLite 不开外键约束）存成悬空 id；生产库撞外键——建档那条的
     `except IntegrityError` 本是为「同一患者同一病种」写的，于是报成「该患者已纳管此病种」，
@@ -921,6 +927,7 @@ def create_enrollment(
     if body.package_id is not None and db.get(SpdServicePackage, body.package_id) is None:
         raise HTTPException(status_code=404, detail="服务包不存在")
     _check_enroll_refs(db, body.model_dump())
+    _check_service_window(body.service_start, body.service_end)
 
     stage = body.stage or ((program.stages or [{}])[0].get("key", "") if program.stages else "")
     enrollment = SpdEnrollment(
@@ -1089,6 +1096,10 @@ def update_enrollment(
     assert_org_writable(db, user, enrollment.org_id)
     changes = body.model_dump(exclude_unset=True)
     _check_enroll_refs(db, changes)
+    # 起止与建档同一句，与存量合并后再比（只改一头也可能改倒置）
+    if {"service_start", "service_end"} & changes.keys():
+        _check_service_window(changes.get("service_start", enrollment.service_start),
+                              changes.get("service_end", enrollment.service_end))
     for key, value in changes.items():
         setattr(enrollment, key, value)
     # 建档完整性：三项关键信息任一有值即视为已建档（成员端 #20 的"建档纳管衔接"）

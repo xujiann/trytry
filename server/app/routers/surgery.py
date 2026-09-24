@@ -456,6 +456,9 @@ def create_record(
     user: User = Depends(get_current_user),
 ):
     """填写术中记录并结案；同时自动生成术后随访任务。"""
+    # 起止顺序（区间起止顺序）：`T` 写法与空格写法先换成同一种再比——时间戳原样落库（P1-100）
+    if body.start_at and body.end_at and body.end_at.replace("T", " ") < body.start_at.replace("T", " "):
+        raise HTTPException(status_code=422, detail="手术结束时间不得早于开始时间")
     request = db.get(SurgeryRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="手术申请不存在")
