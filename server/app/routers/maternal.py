@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
-from ..datetypes import DateStr
+from ..datetypes import DateStr, OptionalDateStr
 from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
 from ..visibility import assert_org_writable, scope_patient_list
 from ..database import get_db
@@ -106,7 +106,7 @@ class VisitCreate(BaseModel):
     gest_week: int | None = Field(default=None, ge=4, le=45)
     bp: str = ""
     note: str = ""
-    visit_date: str = ""
+    visit_date: OptionalDateStr = ""
 
 
 class VisitReceiptOut(BaseModel):
@@ -206,7 +206,7 @@ class ChildVisitCreate(BaseModel):
     height_cm: float | None = None
     weight_kg: float | None = None
     note: str = ""
-    visit_date: str = ""
+    visit_date: OptionalDateStr = ""
 
 
 class ChildVisitReceiptOut(BaseModel):
@@ -314,7 +314,7 @@ def get_delivery(record_id: int, db: Session = Depends(get_db)):
 class ScreeningCreate(BaseModel):
     item: str = Field(pattern="^(metabolic|hearing|chd)$")
     result: str = Field(default="normal", pattern="^(normal|abnormal)$")
-    screen_date: str = ""
+    screen_date: OptionalDateStr = ""
     note: str = ""
 
 
@@ -442,13 +442,15 @@ def list_high_risk_children(db: Session = Depends(get_db)):
 class WomenHealthCreate(BaseModel):
     patient_id: int
     record_type: str = Field(pattern="^(premarital|preconception|gynecology|contraception)$")
-    exam_date: str = ""
+    exam_date: OptionalDateStr = ""
     result: str = ""
     advice: str = ""
 
 
 class WomenHealthOut(WomenHealthCreate):
     id: int
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    exam_date: str = ""
 
     model_config = {"from_attributes": True}
 

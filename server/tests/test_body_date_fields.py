@@ -37,6 +37,10 @@ CASES = [
     ("PATCH /api/knowledge/999999", {}, "expire_date", True),  # 空串 = 改为长期有效
     ("/api/materials/consumables", {"barcode": "DATE-REG-1", "name": "穿刺器", "org_id": 999999},
      "expire_date", True),
+    ("/api/maternal/records/999999/visits", {"visit_type": "prenatal"}, "visit_date", True),
+    ("/api/maternal/children/999999/visits", {"visit_type": "checkup"}, "visit_date", True),
+    ("/api/maternal/children/999999/screenings", {"item": "hearing"}, "screen_date", True),
+    ("/api/maternal/women-health", {"patient_id": 999999, "record_type": "premarital"}, "exam_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。
@@ -49,8 +53,10 @@ def _send(client, admin, path, body):
 
 
 def _case_id(case):
+    """`maternal/children/visits.visit_date`：带上资源路径，同名字段不撞车。"""
     method, _, url = case[0].rpartition(" ")
-    return f"{method.lower() + '-' if method else ''}{url.split('/')[2]}.{case[2]}"
+    resource = "/".join(seg for seg in url.split("/")[2:] if not seg.isdigit())
+    return f"{method + ':' if method else ''}{resource}.{case[2]}"
 
 
 def _field_errors(resp, field):

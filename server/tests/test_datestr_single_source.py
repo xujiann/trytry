@@ -146,10 +146,6 @@ def test_真源本身仍在做日历校验():
 #: `OptionalDateStr` 一个划掉一个。改之前逐个查写入方（三端前端、HL7/FHIR 适配器、
 #: 导入脚本、种子）实际发什么——`PatientCreate.birth_date` 这类字段可能有外部系统在写。
 KNOWN_BARE_BODY_DATE_FIELDS: set[str] = {
-    "routers/maternal.py::ChildVisitCreate.visit_date",
-    "routers/maternal.py::ScreeningCreate.screen_date",
-    "routers/maternal.py::VisitCreate.visit_date",
-    "routers/maternal.py::WomenHealthCreate.exam_date",
     "routers/publichealth.py::MonitorCreate.record_date",
     "routers/quality.py::InfectionReportCreate.report_date",
     "routers/tcm.py::BatchCreate.expire_date",
