@@ -793,11 +793,20 @@ async function renderWorkflows() {
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
-      if (d.advance) await api(`/api/workflows/instances/${d.advance}/advance`, { method: "POST",
-        body: JSON.stringify({ comment: prompt("处理意见") || "" }) });
-      else if (d.cancel) { if (!confirm("终止该流程？")) return;
+      // P2-38：原先弹窗输入框点"取消"照样提交——推进照样推到下一节点（意见记空）；终止在确认框
+      // 之后再问原因，原因框点取消照样终止。表单里取消就是不推进 / 不终止。
+      if (d.advance) {
+        const form = await spdModal("推进流程", [{ name: "comment", label: "处理意见", type: "textarea" }]);
+        if (!form) return;
+        await api(`/api/workflows/instances/${d.advance}/advance`, { method: "POST",
+          body: JSON.stringify({ comment: form.comment }) });
+      } else if (d.cancel) {
+        const form = await spdModal("终止流程", [{ name: "comment", label: "终止原因", type: "textarea" }],
+          { intro: "终止后该事项不再流转，不能恢复。" });
+        if (!form) return;
         await api(`/api/workflows/instances/${d.cancel}/cancel`, { method: "POST",
-          body: JSON.stringify({ comment: prompt("终止原因") || "" }) }); }
+          body: JSON.stringify({ comment: form.comment }) });
+      }
       else if (d.history) {
         const rows = await api(`/api/workflows/instances/${d.history}/history`);
         $("#wf-history").classList.remove("hidden");

@@ -1233,6 +1233,70 @@ def test_病理标本核收_拒收_推进都在页内表单里录入(page, base_
 # ---------------------------------------------------------------- 阶段十二
 
 
+@pytest.fixture(scope="session")
+def workflow_seed(base_url):
+    """流程引擎页的前置：一条两节点的流程定义，发起两个实例（一个用来推进、一个用来终止）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    call("/api/workflows/definitions", {"key": "e2e_wf", "name": "E2E两级审批", "nodes": [
+        {"key": "apply", "name": "E2E申请", "next": "approve"},
+        {"key": "approve", "name": "E2E审批", "next": ""}]}, admin)
+    advance = call("/api/workflows/instances", {"definition_key": "e2e_wf", "business_type": "e2e",
+                                                "title": "E2E待推进事项"}, admin)
+    cancel = call("/api/workflows/instances", {"definition_key": "e2e_wf", "business_type": "e2e",
+                                               "title": "E2E待终止事项"}, admin)
+    return {"advance": advance, "cancel": cancel, "read": lambda path: call(path, None, admin)}
+
+
+def test_流程推进与终止都在页内表单里填_取消即不动(page, base_url, workflow_seed):
+    """P2-38：流程引擎"推进"原先点意见框的取消照样推到下一节点；"终止"在确认框之后再问原因，
+    原因框点取消照样终止。换成页内表单后取消就是不动——按接口核对节点与状态，再走完并读回意见。"""
+    read = workflow_seed["read"]
+    adv_id, cancel_id = workflow_seed["advance"]["id"], workflow_seed["cancel"]["id"]
+
+    def instance(iid):
+        (row,) = [i for i in read("/api/workflows/instances?limit=500") if i["id"] == iid]
+        return row
+
+    _login(page, base_url)
+    _open_page(page, "workflows", "流程引擎")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    adv_row = page.locator("tr", has_text="E2E待推进事项").first
+    adv_row.locator("button[data-advance]").click()
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert instance(adv_id)["current_node"] == "apply", "点了取消却照样推进了"
+    adv_row.locator("button[data-advance]").click()
+    _redrawn(page, lambda: _spd_modal(page, {"comment": "材料齐全，同意"}))
+    assert instance(adv_id)["current_node"] == "approve"
+    history = read(f"/api/workflows/instances/{adv_id}/history")
+    assert [h["comment"] for h in history if h["from_node"] == "apply"] == ["材料齐全，同意"], history
+
+    cancel_row = page.locator("tr", has_text="E2E待终止事项").first
+    cancel_row.locator("button[data-cancel]").click()
+    expect(modal).to_contain_text("不能恢复")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert instance(cancel_id)["status"] == "running", "点了取消却照样终止了"
+    cancel_row.locator("button[data-cancel]").click()
+    _redrawn(page, lambda: _spd_modal(page, {"comment": "重复发起"}))
+    assert instance(cancel_id)["status"] == "cancelled"
+    history = read(f"/api/workflows/instances/{cancel_id}/history")
+    assert "重复发起" in [h["comment"] for h in history], history
+
+
 @pytest.mark.e2e
 def test_拆分脚本后每一页都还渲染得出来(page, base_url):
     """app.js 按业务域拆成 5 个文件之后的回归。
