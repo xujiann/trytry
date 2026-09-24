@@ -31,7 +31,7 @@ from ..models import (
 )
 from sqlalchemy.exc import IntegrityError
 from ..datetypes import DateStr
-from ..visibility import assert_obj_org_writable, assert_org_writable
+from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable
 
 router = APIRouter(prefix="/api/education", tags=["远程医学教育"], dependencies=[Depends(get_current_user)])
 
@@ -646,9 +646,12 @@ class EnrollmentRowOut(BaseModel):
 
 
 @router.get("/training-plans/{plan_id}/enrollments", response_model=list[EnrollmentRowOut])
-def list_enrollments(plan_id: int, db: Session = Depends(get_db)):
-    if db.get(TrainingPlan, plan_id) is None:
+def list_enrollments(plan_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
         raise HTTPException(status_code=404, detail="实训计划不存在")
+    # P0-38：名单是主办机构职工的账号与姓名，与职工名册同一口径——只给看本机构
+    assert_org_visible(db, user, plan.org_id)
     rows = (
         db.query(TrainingEnrollment, User.username, User.full_name)
         .join(User, TrainingEnrollment.user_id == User.id)
@@ -754,7 +757,11 @@ class AssessmentBoardOut(BaseModel):
 
 
 @router.get("/training-plans/{plan_id}/assessments", response_model=AssessmentBoardOut)
-def list_assessments(plan_id: int, db: Session = Depends(get_db)):
+def list_assessments(plan_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is not None:  # 查不到计划照旧回空榜（既有行为，不借机改成 404）
+        # P0-38：逐人成绩是人事考核数据，按主办机构判——与录入同一口径
+        assert_org_visible(db, user, plan.org_id)
     rows = (
         db.query(TrainingAssessment)
         .filter(TrainingAssessment.plan_id == plan_id)
