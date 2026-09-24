@@ -932,10 +932,20 @@ async function drawEduGaps() {
       if (enroll) { await api(`/api/education/training-plans/${enroll}/enroll`, { method: "POST" }); return route(); }
       if (unenroll) { await api(`/api/education/training-plans/${unenroll}/cancel-enroll`, { method: "POST" }); return route(); }
       if (assess) {
-        const userId = prompt("学员用户ID"); if (!userId) return;
-        const score = prompt("考核得分（0-100）"); if (score === null) return;
+        // P2-38：原先三连问——学员要手打用户 ID（后端只收本计划已报名的，打错就是 409），
+        // 评语框点取消照样提交。改成表单：学员从本计划的报名名单里选，取消就是不录。
+        const enrolled = (await api(`/api/education/training-plans/${assess}/enrollments`))
+          .filter((r) => r.status === "enrolled");
+        if (!enrolled.length) { setMsg("#tplan-msg", "该计划还没有在报名的学员，无人可录考核", false); return; }
+        const form = await spdModal("录考核（60 分及格；同一学员重录即更新成绩）", [
+          { name: "user_id", label: "学员", type: "select", options: enrolled.map((r) =>
+            ({ value: r.user_id, label: `${r.full_name || r.username}（${r.username}）` })) },
+          { name: "score", label: "考核得分（0-100）", type: "number", required: true },
+          { name: "comment", label: "评语", type: "textarea" },
+        ]);
+        if (!form) return;
         return postAction(`/api/education/training-plans/${assess}/assessments`, {
-          user_id: Number(userId), score: Number(score), comment: prompt("评语") || "" }, "#tplan-msg");
+          user_id: Number(form.user_id), score: form.score, comment: form.comment }, "#tplan-msg");
       }
       if (roster) {
         const [list, scores] = await Promise.all([

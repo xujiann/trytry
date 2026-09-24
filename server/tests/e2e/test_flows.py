@@ -803,6 +803,54 @@ def test_上门服务派单完成与取消都在页内表单里_取消即不动(
     assert order(cancel_id)["status"] == "cancelled"
 
 
+@pytest.fixture(scope="session")
+def training_seed(base_url, seed):
+    """适宜技术实训考核的前置：一个实训计划，e2e_doctor 已报名。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None, method=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+            method=method,
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    plan = call("/api/education/training-plans", {"title": "E2E适宜技术实训：针刺", "org_id": seed["org"]["id"],
+                                                  "plan_date": "2026-09-30", "capacity": 10}, admin)
+    call(f"/api/education/training-plans/{plan['id']}/enroll", None, doctor, method="POST")
+    return {"plan": plan, "read": lambda path: call(path, None, admin)}
+
+
+def test_实训考核在页内表单里录_学员从报名名单里选_取消即不录(page, base_url, training_seed):
+    """P2-38：「录考核」原先三连问——学员要手打用户 ID（只收本计划已报名的，打错就是 409），
+    评语框点取消照样提交。换成页内表单：学员从报名名单里选，取消就是不录（按接口核对），再录并读回。"""
+    pid = training_seed["plan"]["id"]
+
+    def board():
+        return training_seed["read"](f"/api/education/training-plans/{pid}/assessments")
+
+    _login(page, base_url)
+    _open_page(page, "education", "远程医学教育")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(f'button[data-assess="{pid}"]')
+    expect(modal.locator('[name="user_id"] option')).to_have_count(1)
+    expect(modal.locator('[name="user_id"]')).to_contain_text("e2e_doctor")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert board()["total"] == 0, "点了取消却照样录了考核"
+    page.click(f'button[data-assess="{pid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"score": "86.5", "comment": "进针角度规范"}))
+    (item,) = board()["items"]
+    assert (item["score"], item["passed"]) == (86.5, True), item
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)
