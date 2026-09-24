@@ -1383,14 +1383,18 @@ def list_redeems(
     query = db.query(SpdRedeem)
     if status:
         query = query.filter(SpdRedeem.status == status)
+    account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user.id).first()
+    my_account_id = account.id if account else 0
     if mine:
-        account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user.id).first()
-        query = query.filter(SpdRedeem.account_id == (account.id if account else 0))
+        query = query.filter(SpdRedeem.account_id == my_account_id)
     rows = paginate(query.order_by(SpdRedeem.id.desc()), response, offset, limit)
     goods = {g.id: g.name for g in db.query(SpdGoods).all()}
+    # P0-41：核销码是线下领奖的凭证，核销只认码不认人——只给兑换人本人看，别人（含经办与管理员）一律打码。
     return [
         {"id": r.id, "goods_id": r.goods_id, "goods_name": goods.get(r.goods_id, ""),
-         "points": r.points, "verify_code": r.verify_code, "status": r.status,
+         "points": r.points,
+         "verify_code": r.verify_code if r.account_id == my_account_id else "******",
+         "status": r.status,
          "created_at": r.created_at.isoformat(),
          "verified_at": r.verified_at.isoformat() if r.verified_at else ""}
         for r in rows
