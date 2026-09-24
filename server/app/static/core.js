@@ -1391,11 +1391,20 @@ async function renderExams() {
     try {
       const check = await api(`/api/exams/recognition-check?patient_id=${patientId}&item_code=${encodeURIComponent(itemCode)}`);
       let extra = {};
-      if (check.recognizable &&
-          confirm(`30天内已有同项目报告（结论：${check.conclusion}）。互认该结果、不再重复检查？`)) {
-        extra = { accept_recognition_of: check.request_id };
-      } else if (check.recognizable) {
-        extra = { recognition_declined_reason: prompt("请填写不互认理由（监管留痕）") || "未填写" };
+      if (check.recognizable) {
+        // P2-38：原先是 confirm「确定=互认」——取消就是"不互认"，接着弹理由框，理由框再点取消
+        // 照样开单（理由记"未填写"）：想放弃开单的人连点两次取消，反而开出一张重复检查。
+        // 表单里互认与否是显式选择，取消就是不开单。
+        const form = await spdModal("可互认：30 天内已有同项目报告", [
+          { name: "decision", label: "处理方式", type: "select", value: "accept", options: [
+            { value: "accept", label: "互认该结果，不再重复检查" },
+            { value: "decline", label: "不互认，仍开新检查" }] },
+          { name: "reason", label: "不互认理由（选「不互认」时填写，监管留痕）", type: "textarea" },
+        ], { intro: `已有报告结论：${check.conclusion || "—"}` });
+        if (!form) return;
+        extra = form.decision === "accept"
+          ? { accept_recognition_of: check.request_id }
+          : { recognition_declined_reason: form.reason || "未填写" };
       }
       await api("/api/exams", { method: "POST", body: JSON.stringify({
         patient_id: patientId, from_org_id: Number(f.get("from_org_id")),

@@ -347,6 +347,73 @@ def test_exam_order_report_and_critical_closed_loop(page, base_url, seed):
     expect(page.locator("#crit-trail")).to_contain_text("处置反馈")
 
 
+@pytest.fixture(scope="session")
+def recognition_seed(base_url, seed):
+    """开单前互认的前置：同一患者同一项目 30 天内已有一份报告（互认目录未配置 = 不管控）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    source = call("/api/exams", {"patient_id": seed["patient"]["id"], "from_org_id": seed["org"]["id"],
+                                 "center_type": "lab", "item_code": "E2E-RC-1",
+                                 "item_name": "E2E互认血常规"}, doctor)
+    call(f"/api/exams/{source['id']}/report", {"conclusion": "E2E互认源报告：血常规未见异常"}, doctor)
+    return {"source": source, "read": lambda path: call(path, None, admin)}
+
+
+def test_开单前互认在页内表单里选_取消即不开单(page, base_url, seed, recognition_seed):
+    """P2-38：开单前命中可互认，原先是 confirm「确定=互认」——取消就是"不互认"，接着弹理由框，
+    理由框再点取消照样开单（理由记"未填写"）：想放弃开单的人连点两次取消，反而开出一张重复检查。
+    换成页内表单：互认与否显式选，取消就是不开单（按接口核对单数没变）；不互认的理由落库；
+    选互认则新单直接是"已互认"、指向原报告。"""
+    source_id = recognition_seed["source"]["id"]
+
+    def orders():
+        rows = recognition_seed["read"]("/api/exams?limit=500")
+        return sorted((r for r in rows if r["item_code"] == "E2E-RC-1"), key=lambda r: r["id"])
+
+    def fill_and_submit():
+        page.fill("#exam-form input[name=patient_id]", str(seed["patient"]["id"]))
+        page.fill("#exam-form input[name=from_org_id]", str(seed["org"]["id"]))
+        page.select_option("#exam-form select[name=center_type]", "lab")
+        page.fill("#exam-form input[name=item_code]", "E2E-RC-1")
+        page.fill("#exam-form input[name=item_name]", "E2E互认血常规")
+        page.click("#exam-form button")
+
+    assert [r["id"] for r in orders()] == [source_id]
+    _login(page, base_url)
+    _open_page(page, "exams", "共享诊断中心")
+    fill_and_submit()
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    expect(modal).to_contain_text("E2E互认源报告：血常规未见异常")
+    modal.locator("select[name=decision]").select_option("decline")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert [r["id"] for r in orders()] == [source_id], "点了取消却照样开了单"
+
+    page.click("#exam-form button")  # 取消不清表：原样再交一次
+    _redrawn(page, lambda: _spd_modal(page, {"decision": "decline", "reason": "患者要求本院复查"}))
+    declined = orders()[-1]
+    assert declined["id"] != source_id and declined["status"] == "pending", declined
+    assert declined["recognition_declined_reason"] == "患者要求本院复查", declined
+
+    fill_and_submit()
+    _redrawn(page, lambda: _spd_modal(page, {"decision": "accept"}))
+    accepted = orders()[-1]
+    assert accepted["status"] == "recognized" and accepted["recognized_from_id"] == source_id, accepted
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)
