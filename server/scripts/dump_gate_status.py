@@ -105,6 +105,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(declared.KNOWN_UNGUARDED), "tests/test_body_declared_org_write_guard.py"),
         ("横向越权（写侧）", "请求里的机构按设计就是别家（逐条写明理由）",
          len(declared.BY_DESIGN), "tests/test_body_declared_org_write_guard.py"),
+        ("横向越权（写侧）", "请求声明机构 × 早已登记待业务裁定、故意未修",
+         len(declared.AWAITING_DECISION), "tests/test_body_declared_org_write_guard.py"),
         ("日期入参", "未经 require_date / resolve_business_date 的日期查询参数",
          len(datequery.KNOWN_BARE_DATE_PARAMS), "tests/test_date_query_params.py"),
         ("日期入参", "请求体里注解为裸 str 的日期字段", len(datestr.KNOWN_BARE_BODY_DATE_FIELDS),

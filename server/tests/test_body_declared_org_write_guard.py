@@ -20,6 +20,7 @@ body 带 id 去取**带 `org_id` 的对象**（`test_body_id_org_write_guard.py`
   补上也是一句永不触发的守卫；从装饰器与参数里算出来，不手抄（前提由用例钉住）。
   `require_roles("director")` **不在此列**：自定义角色可整包复制 director 的权限点却不是全域角色（P0-28）；
 - `BY_DESIGN`：请求里的机构**本来就是别家**（急救调度的目的医院、配置里的牵头机构），逐条写理由；
+- `AWAITING_DECISION`：同一形状、但**早已登记为待业务裁定、故意未修**的（写明出处），只减不增；
 - `KNOWN_UNGUARDED`：候选，只减不增；补上守卫就划掉（没划掉也红）。
 """
 from __future__ import annotations
@@ -51,11 +52,17 @@ BY_DESIGN = {
         "`lead_org_id` 是专病中心的牵头机构，同上，是全县配置里的一项指定。",
 }
 
+#: 同一形状、但早已登记为「已实测越权但故意未修，等业务裁定」的——在这里补守卫等于替业务方做了决定。
+AWAITING_DECISION = {
+    "contracts.py:sign":
+        "P1-45（docs/待裁定事项清单.md）：家医签约的签约机构由请求声明；县医院经办代乡镇院登记签约可能是"
+        "正在用的合法流程，一刀切加 assert_org_writable 会掐掉它，要先答「跨机构代登记是否合法、走哪种授权」。",
+}
+
 #: 候选（2026-09-24 量）：请求声明机构、却没有任何归属判定。只减不增——补上守卫就从这里划掉。
 KNOWN_UNGUARDED = {
     "chronic.py:register_chronic",
     "consultations.py:apply",
-    "contracts.py:sign",
     "cssd.py:advance",
     "cssd.py:create_batch",
     "encounters.py:create_encounter",
@@ -161,7 +168,8 @@ def test_覆盖面自证():
     unguarded, admin_only = _classify()
     print(
         f"\n[请求声明机构的写端点] {len(declaring)} 个；无守卫 {len(unguarded) + len(admin_only)}"
-        f"（admin-only 自动豁免 {len(admin_only)}、按设计 {len(BY_DESIGN)}、候选 {len(KNOWN_UNGUARDED)}）"
+        f"（admin-only 自动豁免 {len(admin_only)}、按设计 {len(BY_DESIGN)}、待裁定 {len(AWAITING_DECISION)}、"
+        f"候选 {len(KNOWN_UNGUARDED)}）"
     )
     assert len(declaring) >= 80, f"只认出 {len(declaring)} 个收机构号的写端点，路由表遍历多半坏了"
     assert "vaccination.py:vaccinate" in declaring and "vaccination.py:vaccinate" not in unguarded, \
@@ -186,8 +194,9 @@ def test_admin_only豁免的前提():
 
 def test_不得新增请求声明机构的无守卫写端点():
     unguarded, _ = _classify()
-    assert not (KNOWN_UNGUARDED & set(BY_DESIGN)), "同一条不能既是候选又是按设计"
-    new = sorted(unguarded - KNOWN_UNGUARDED - set(BY_DESIGN))
+    registers = (KNOWN_UNGUARDED, set(BY_DESIGN), set(AWAITING_DECISION))
+    assert sum(len(r) for r in registers) == len(set().union(*registers)), "同一条只能登记在一张名单里"
+    new = sorted(unguarded - KNOWN_UNGUARDED - set(BY_DESIGN) - set(AWAITING_DECISION))
     assert new == [], (
         "以下写端点由请求声明新记录归哪家机构，却没有任何归属判定——`db.get(Organization, …)` "
         "只查存在不查归属：\n  " + "\n  ".join(new)
@@ -198,7 +207,7 @@ def test_不得新增请求声明机构的无守卫写端点():
 
 def test_名单只许变少():
     unguarded, _ = _classify()
-    stale = sorted((KNOWN_UNGUARDED | set(BY_DESIGN)) - unguarded)
+    stale = sorted((KNOWN_UNGUARDED | set(BY_DESIGN) | set(AWAITING_DECISION)) - unguarded)
     assert stale == [], "这些已补上守卫（或已不存在），请从名单里划掉：\n  " + "\n  ".join(stale)
 
 
