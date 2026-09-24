@@ -65,6 +65,7 @@ IDENTITY_FIELDS = {
 #:
 #: 【欠账，只减不增】无调用方身份 × 响应带个体身份。
 #: 给某个端点补上身份依赖与归属收口之后，把它从这里删掉。
+#: 2026-09-24：P0-22 补上 `outpatient_docs:list_treatments`（同文件按患者查处置史早就守着），36 → 35。
 #:
 #: ⚠️ 其中三个吐的是**联系方式与证件号**，不只是 patient_id——
 #: `spd/followup.py:list_call_tasks`（phone）、
@@ -93,7 +94,6 @@ UNSCOPABLE_PATIENT_READS = {
     "maternal.py:list_high_risk_children",
     "maternal.py:list_records",
     "medication.py:list_shortages",
-    "outpatient_docs.py:list_treatments",
     "prescriptions.py:list_prescriptions",
     "quality.py:clinical_indicators",
     "referrals.py:list_referrals",
@@ -298,7 +298,7 @@ def test_两份清单不重叠且都不为空():
 # 的会从扫描结果里消失，名单不跟着删就红（两个方向都钉）。
 
 #: 【欠账，只减不增】无调用方身份 × 只触达一跳 / 两跳患者维度表（2026-09-24 量出 24 个；
-#: 同日 P0-20 修掉术中记录 → 23，P0-21 修掉报告修订史与危急值轨迹 → 21）
+#: 同日 P0-20 修掉术中记录 → 23，P0-21 修掉报告修订史与危急值轨迹 → 21，P0-22 修掉门诊护理 → 20）
 ONEHOP_UNSCOPABLE_READS = {
     "billing.py:list_payments",
     "billing.py:list_reconciliation",
@@ -309,7 +309,6 @@ ONEHOP_UNSCOPABLE_READS = {
     "maternal.py:list_prenatal_screenings",
     "maternal.py:screening_stats",
     "medication.py:usage_stats",
-    "outpatient_docs.py:list_outpatient_nursing",
     "pathology.py:list_specimens",
     "pathology.py:specimen_stats",
     "pharmacy.py:batch_dispense_trace",

@@ -440,9 +440,25 @@ def create_treatment(
     return _treatment_out(record)
 
 
+def _encounter_visible(db: Session, encounter_id: int, user: User, resource: str) -> bool:
+    """按就诊号读处置 / 护理前，按该次就诊的患者判定可见性并留痕（P0-22）；就诊号不存在返回 False。
+
+    这两个读接口原先连调用方都不收，乙院医生按就诊号就能读甲院的处置与护理记录（实测 200）。
+    同文件的按患者查处置史与完整性自查早就按患者可见性守着，口径照抄。就诊号不存在照旧回空清单，
+    不改响应（空清单什么也不泄露）。
+    """
+    encounter = db.get(Encounter, encounter_id)
+    if encounter is None:
+        return False
+    assert_patient_visible(db, user, encounter.patient_id, resource=resource)
+    return True
+
+
 @router.get("/encounters/{encounter_id}/treatments",
             response_model=list[TreatmentRecordOut])
-def list_treatments(encounter_id: int, db: Session = Depends(get_db)):
+def list_treatments(encounter_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if not _encounter_visible(db, encounter_id, user, resource="treatment"):
+        return []
     rows = (
         db.query(TreatmentRecord)
         .filter(TreatmentRecord.encounter_id == encounter_id)
@@ -521,7 +537,9 @@ def create_outpatient_nursing(
 
 @router.get("/encounters/{encounter_id}/nursing-records",
             response_model=list[OutpatientNursingOut])
-def list_outpatient_nursing(encounter_id: int, db: Session = Depends(get_db)):
+def list_outpatient_nursing(encounter_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if not _encounter_visible(db, encounter_id, user, resource="outpatient_nursing"):
+        return []
     rows = (
         db.query(NursingRecord)
         .filter(NursingRecord.encounter_id == encounter_id)
