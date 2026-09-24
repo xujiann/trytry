@@ -690,9 +690,13 @@ def create_employee_change(
 
 
 @router.get("/employees/{employee_id}/changes", response_model=list[EmployeeChangeRowOut])
-def list_employee_changes(employee_id: int, db: Session = Depends(get_db)):
-    if db.get(Employee, employee_id) is None:
+def list_employee_changes(
+    employee_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    employee = db.get(Employee, employee_id)
+    if employee is None:
         raise HTTPException(status_code=404, detail="员工不存在")
+    assert_org_visible(db, user, employee.org_id)  # P0-38：职工名册只给看本机构，变动史同一口径
     return [
         {
             "id": c.id,
@@ -1058,9 +1062,13 @@ def create_asset_movement(
 
 
 @router.get("/assets/{asset_id}/movements", response_model=list[MovementRowOut])
-def list_asset_movements(asset_id: int, db: Session = Depends(get_db)):
-    if db.get(Asset, asset_id) is None:
+def list_asset_movements(
+    asset_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    asset = db.get(Asset, asset_id)
+    if asset is None:
         raise HTTPException(status_code=404, detail="物资不存在")
+    assert_org_visible(db, user, asset.org_id)  # P0-38：物资清单只给看本机构，出入库流水同一口径
     return [
         {
             "id": m.id,

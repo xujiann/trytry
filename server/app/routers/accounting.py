@@ -349,10 +349,11 @@ def list_vouchers(
 
 @router.get("/vouchers/{voucher_id}", response_model=VoucherOut,
             response_model_exclude_unset=True)
-def get_voucher(voucher_id: int, db: Session = Depends(get_db)):
+def get_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     voucher = db.get(Voucher, voucher_id)
     if voucher is None:
         raise HTTPException(status_code=404, detail="凭证不存在")
+    assert_org_visible(db, user, voucher.org_id)  # P0-38：凭证清单只给看本机构，明细同一口径
     entries = db.query(VoucherEntry).filter(VoucherEntry.voucher_id == voucher_id).all()
     return _voucher_out(voucher, entries)
 
