@@ -57,9 +57,12 @@ function spdPairs(obj, names) {
   return Object.entries(obj || {}).map(([k, v]) => [(names || {})[k] || k || "未填", v]);
 }
 
-function spdProgramOptions(catalog, blank) {
+// activeOnly：筛查 / 自动识别 / 建档这类「开新业务」的表单只列启用的病种——停用的病种
+// 后端一概拒（P1-89）；筛选栏仍列全部，看历史要用
+function spdProgramOptions(catalog, blank, activeOnly) {
   return (blank ? '<option value="">全部病种</option>' : "")
-    + catalog.programs.map((p) => `<option value="${esc(p.code)}">${esc(p.name)}</option>`).join("");
+    + catalog.programs.filter((p) => !activeOnly || p.active)
+      .map((p) => `<option value="${esc(p.code)}">${esc(p.name)}</option>`).join("");
 }
 
 /* ============================================================
@@ -1158,7 +1161,7 @@ async function renderSpdPatients() {
       <p class="desc">量表评分与病种规则双通道判定，任一命中即入目标池；排除规则优先于纳入</p>
       <form class="inline" id="spd-screen-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <select name="program_code">${spdProgramOptions(catalog)}</select>
+        <select name="program_code">${spdProgramOptions(catalog, false, true)}</select>
         <select name="source">
           <option value="opportunistic">机会性筛查</option>
           <option value="active">主动筛查</option>
@@ -1170,7 +1173,7 @@ async function renderSpdPatients() {
         <button>登记筛查</button>
       </form>
       <form class="inline" id="spd-autoscreen-form" style="margin-top:10px">
-        <select name="program_code">${spdProgramOptions(catalog)}</select>
+        <select name="program_code">${spdProgramOptions(catalog, false, true)}</select>
         <input name="org_id" type="number" placeholder="机构ID(留空取本机构)">
         <button class="secondary">按规则自动识别</button>
       </form><p class="msg" id="spd-screen-msg"></p>
@@ -1178,7 +1181,7 @@ async function renderSpdPatients() {
     ${panel("签约建档纳管", `
       <form class="inline" id="spd-enroll-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <select name="program_code">${spdProgramOptions(catalog)}</select>
+        <select name="program_code">${spdProgramOptions(catalog, false, true)}</select>
         <input name="org_id" type="number" placeholder="纳管机构ID">
         <select name="team_id"><option value="">服务团队</option>
           ${catalog.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>

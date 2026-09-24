@@ -451,8 +451,10 @@ def create_screening(
     org_id = body.org_id if body.org_id is not None else user.org_id
     assert_org_writable(db, user, org_id)
     program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
-    if program is None:
-        raise HTTPException(status_code=404, detail="专病档案不存在")
+    # 与下面 create_enrollment 同一口径（P1-89）：停用的病种不收新筛查——筛出来的疑似
+    # 建不了档（建档拒停用病种），就诊登记触发的自动识别也只看启用的病种
+    if program is None or not program.active:
+        raise HTTPException(status_code=404, detail="专病档案不存在或已停用")
 
     score, risk, advice = 0.0, "low", ""
     if body.scale_code:
@@ -636,8 +638,8 @@ def auto_screen(
     需要全域跑批时由 admin 走定时任务，那里可以慢慢跑。
     """
     program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
-    if program is None:
-        raise HTTPException(status_code=404, detail="专病档案不存在")
+    if program is None or not program.active:  # 同上（P1-89）：一次最多扫 5000 人，入池的全是走不通的疑似
+        raise HTTPException(status_code=404, detail="专病档案不存在或已停用")
     if not program.include_rules:
         raise HTTPException(status_code=422, detail="该病种未配置纳入规则，无法自动识别")
     org_id = body.org_id if body.org_id is not None else user.org_id
