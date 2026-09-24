@@ -23,6 +23,14 @@
 再加本文件的 `ORG_BY_DESIGN` / `ORG_AWAITING`。**看不见的**：响应里不带 `*org_id` 键的（例如只带员工号的
 统计），这一维按键名认机构，不认名称。
 
+按 id 维度（2026-09-24 补）
+--------------------------
+清单之外，再按 id 调一遍：全部**路径参数都是整数**的 GET，把参数依次填 1、2、3（演示种子里这些 id 多半
+都有行），四个账号各调一遍，按上面两维同一套判法认「看见了」。静态的按 id 读棘轮
+（`test_byid_org_read_guard.py` 两层、`test_stage15_horizontal.py` 的患者按 id 读）只认函数体里有没有判定，
+**判定包在条件里就看不出**——这一维拿实际响应对一遍。登记名单就是那几道静态棘轮的名单，不另立一份；
+首跑 8 条，全在静态名单里。
+
 用法：`python scripts/probe_list_exposure.py`。任一维度有**未登记**的暴露时退出码 1。
 """
 from __future__ import annotations
@@ -134,8 +142,9 @@ def _scan_orgs(obj, other_orgs, found):
     return found
 
 
-def probe() -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]]]:
-    """(患者维度命中, 机构维度命中)：路径 → 角色 → 命中的键。"""
+def probe() -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]],
+                     dict[str, dict[str, list[str]]]]:
+    """(患者维度命中, 机构维度命中, 按 id 命中)：路径 → 角色 → 命中的键。"""
     with tempfile.TemporaryDirectory() as tmp:
         port = _free_port()
         env = {**os.environ, "MEDPLAT_DATABASE_URL": f"sqlite:///{tmp}/probe.db",
@@ -189,7 +198,27 @@ def probe() -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[s
                     found_orgs = _scan_orgs(body, other_orgs, set())
                     if found_orgs:
                         org_hits.setdefault(path, {})[role] = sorted(found_orgs)
-            return hits, org_hits
+            byid_hits: dict[str, dict[str, list[str]]] = {}
+            for path, ops in sorted(spec["paths"].items()):
+                if "get" not in ops or "{" not in path or not path.startswith("/api/") or path.startswith("/api/portal"):
+                    continue
+                params = [p for p in ops["get"].get("parameters", []) if p.get("in") == "path"]
+                if not params or any((p.get("schema") or {}).get("type") != "integer" for p in params):
+                    continue
+                for i in (1, 2, 3):
+                    url = path
+                    for param in params:
+                        url = url.replace("{" + param["name"] + "}", str(i))
+                    for role, h in heads.items():
+                        r = c.get(url, headers=h)
+                        if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
+                            continue
+                        body = r.json()
+                        found = _scan(body, pids, names, ehcs, set()) | _scan_orgs(body, other_orgs, set())
+                        if found:
+                            seen = byid_hits.setdefault(path, {}).setdefault(role, [])
+                            byid_hits[path][role] = sorted(set(seen) | found)
+            return hits, org_hits, byid_hits
         finally:
             proc.terminate()
             proc.wait(timeout=10)
@@ -219,13 +248,26 @@ def main() -> int:
     # 机构维度的「已登记」：患者读侧名单（真正要守的是患者）、P1-49 待裁定的清单、P0-37 待裁定、本文件待裁定
     org_registered = (registered | set(pagination.HELD_PENDING_SCOPE_DECISION)
                       | set(orgread.AWAITING) | set(ORG_AWAITING))
+    import test_byid_org_read_guard as byidread
+    import test_stage15_horizontal as horizontal
+
+    # 按 id 维度的登记名单 = 几道静态按 id 读棘轮的名单（按设计的与待裁定 / 别处在盯的分开认）
+    byid_by_design = (set(byidread.BY_DESIGN) | set(byidread.BLINDSPOT_BY_DESIGN)
+                      | set(horizontal.BYID_PATIENT_READ_OK) | set(horizontal.UNGUARDED))
+    byid_registered = (set(byidread.ELSEWHERE) | set(byidread.AWAITING) | set(byidread.BLINDSPOT_ELSEWHERE)
+                       | set(byidread.BLINDSPOT_AWAITING) | set(horizontal.NEWLY_VISIBLE_UNGUARDED_READS)
+                       | registered)
     keys = _route_keys()
-    hits, org_hits = probe()
+    hits, org_hits, byid_hits = probe()
     unregistered = _report("患者维度：拿回了谁的患者", hits, keys, BY_DESIGN, registered)
     org_unregistered = _report("机构维度：拿回了哪些别家机构的行", org_hits, keys, org_by_design, org_registered)
+    byid_unregistered = _report("按 id：填 1/2/3 拿回了别家的患者或机构行", byid_hits, keys, byid_by_design,
+                                byid_registered)
     print(json.dumps({"exposed": len(hits), "unregistered": unregistered,
-                      "org_exposed": len(org_hits), "org_unregistered": org_unregistered}, ensure_ascii=False))
-    return 1 if unregistered or org_unregistered else 0
+                      "org_exposed": len(org_hits), "org_unregistered": org_unregistered,
+                      "byid_exposed": len(byid_hits), "byid_unregistered": byid_unregistered},
+                     ensure_ascii=False))
+    return 1 if unregistered or org_unregistered or byid_unregistered else 0
 
 
 if __name__ == "__main__":
