@@ -523,8 +523,8 @@ def my_tasks(
     rows = paginate(query.order_by(WorkflowInstance.id.desc()), response, offset, limit)
     tasks = []
     for instance in rows:
-        definition = definitions.get(instance.definition_key)
-        tasks.append(_instance_out(instance, _node(definition, instance.current_node) if definition else None))
+        found = definitions.get(instance.definition_key)
+        tasks.append(_instance_out(instance, _node(found, instance.current_node) if found else None))
     # 计数与响应头同一个数：paginate 刚按同一个查询数过
     return {"count": int(response.headers["X-Total-Count"]), "tasks": tasks}
 
