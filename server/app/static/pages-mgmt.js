@@ -540,25 +540,45 @@ async function renderMaterials() {
         ([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`);
     } catch (err) { setMsg("#mat-msg", err.message, false); }
   };
+  // P2-38：签合同三连问（手输供应商 ID）、验收两连问、使用登记两连问换成页内表单。
+  // 供应商从在用清单里选——后端只认在用的，停用的摆出来只会点出一次 404。
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
       if (d.approve) await api(`/api/materials/purchases/${d.approve}/approve`,
         { method: "POST", body: JSON.stringify({ approved: true }) });
       else if (d.contract) {
-        const supplier = prompt("供应商ID"); if (!supplier) return;
+        const p = purchases.find((x) => x.id === Number(d.contract));
+        const suppliers = (await api("/api/pharmacy/suppliers")).filter((s) => s.active);
+        if (!suppliers.length) return setMsg("#mat-msg", "还没有在用的供应商，请先到「采购与盘点」页建档", false);
+        const v = await spdModal(`签合同：${p ? `${p.item_name}（${p.quantity}${p.unit}）` : d.contract}`, [
+          { name: "supplier_id", label: "供应商", type: "select",
+            options: suppliers.map((s) => ({ value: s.id, label: s.name })) },
+          { name: "contract_no", label: "合同号", required: true },
+          { name: "contract_amount", label: "合同金额（元）", type: "number", required: true },
+        ]);
+        if (!v) return;
         await api(`/api/materials/purchases/${d.contract}/contract`, { method: "POST",
-          body: JSON.stringify({ supplier_id: Number(supplier), contract_no: prompt("合同号") || "",
-            contract_amount: Number(prompt("合同金额") || 0) }) });
+          body: JSON.stringify({ ...v, supplier_id: Number(v.supplier_id) }) });
       } else if (d.receive) {
-        const qty = prompt("验收数量"); if (!qty) return;
-        await api(`/api/materials/purchases/${d.receive}/receive`, { method: "POST",
-          body: JSON.stringify({ received_quantity: Number(qty), note: prompt("验收备注") || "" }) });
+        const p = purchases.find((x) => x.id === Number(d.receive));
+        const v = await spdModal(`到货验收：${p ? p.item_name : d.receive}`, [
+          { name: "received_quantity", label: `验收数量（不得超过采购数量${p ? ` ${p.quantity}` : ""}）`,
+            type: "number", value: p ? p.quantity : "", required: true },
+          { name: "note", label: "验收备注", type: "textarea" },
+        ]);
+        if (!v) return;
+        await api(`/api/materials/purchases/${d.receive}/receive`, { method: "POST", body: JSON.stringify(v) });
       } else if (d.use) {
-        const pid = prompt("使用患者ID"); if (!pid) return;
-        const sid = prompt("关联手术申请ID（可留空）");
+        const c = consumables.find((x) => x.barcode === d.use);
+        const v = await spdModal(
+          `使用登记：${c ? `${c.name}（条码 ${c.barcode}，效期 ${c.expire_date || "未采集"}）` : d.use}`, [
+            { name: "patient_id", label: "患者ID", type: "number", required: true },
+            { name: "surgery_id", label: "关联手术申请ID（可空；须是该患者的手术）", type: "number" },
+          ]);
+        if (!v) return;
         await api(`/api/materials/consumables/${encodeURIComponent(d.use)}/use`, { method: "POST",
-          body: JSON.stringify({ patient_id: Number(pid), surgery_id: sid ? Number(sid) : null }) });
+          body: JSON.stringify({ patient_id: v.patient_id, surgery_id: v.surgery_id || null }) });
       } else return;
       route();
     } catch (err) { setMsg("#mat-msg", err.message, false); }

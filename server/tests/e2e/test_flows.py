@@ -710,6 +710,67 @@ def test_人财物页的挂科室_变动_合同_出入库都在页内表单里�
     expect(page.locator("#assetmv-list")).to_contain_text("门诊领用")
 
 
+@pytest.fixture(scope="session")
+def materials_seed(base_url, seed):
+    """物资页用例的前置数据：在用供应商、经办提出的采购申请（审批人不能是申请人）、一件在库耗材。"""
+    import json
+    from datetime import date, timedelta
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    org_id = seed["org"]["id"]
+    supplier = post("/api/pharmacy/suppliers", {"name": "E2E医疗器械公司"}, token)
+    post("/api/users", {"username": "e2e_mat_op", "password": "passw0rd1", "role": "operator",
+                        "full_name": "E2E物资经办", "org_id": org_id}, token)
+    op_token = post("/api/auth/login", {"username": "e2e_mat_op", "password": "passw0rd1"})["access_token"]
+    purchase = post("/api/materials/purchases",
+                    {"org_id": org_id, "item_name": "E2E一次性手术衣", "quantity": 10, "estimated_price": 12.5},
+                    op_token)
+    expire = (date.today() + timedelta(days=365)).isoformat()
+    post("/api/materials/consumables",
+         {"barcode": "E2E-HV-1", "name": "E2E冠脉支架", "org_id": org_id, "expire_date": expire}, token)
+    return {"supplier": supplier, "purchase": purchase}
+
+
+def test_物资页的签合同_验收_使用登记都在页内表单里录入(page, base_url, seed, materials_seed):
+    """P2-38：物资页原先签合同三连问（手输供应商 ID）、验收两连问、使用登记两连问。换成页内表单后
+    供应商从在用清单里选；验收数量默认按采购量、超量由后端报人话；合同金额是带分的小数
+    （P1-67 修之前的数字框提交不了）。主链路：审批 → 签合同 → 验收（先超量被拒）→ 耗材使用登记。"""
+    pid = materials_seed["purchase"]["id"]
+    _login(page, base_url)
+    _open_page(page, "materials", "物资采购与耗材")
+
+    page.click(f'button[data-approve="{pid}"]')
+    page.click(f'button[data-contract="{pid}"]')
+    _spd_modal(page, {"supplier_id": str(materials_seed["supplier"]["id"]),
+                      "contract_no": "E2E-CG-001", "contract_amount": "12345.67"})
+    expect(page.locator("tr", has_text="E2E一次性手术衣")).to_contain_text("E2E-CG-001")
+    amount = page.evaluate(
+        "async (id) => (await api('/api/materials/purchases')).find((p) => p.id === id).contract_amount", pid)
+    assert amount == 12345.67, amount
+
+    page.click(f'button[data-receive="{pid}"]')
+    _spd_modal(page, {"received_quantity": "11"})
+    expect(page.locator("#mat-msg")).to_contain_text("验收数量不得超过采购数量")
+    page.click(f'button[data-receive="{pid}"]')
+    _spd_modal(page, {"note": "E2E到货验收"})  # 数量默认就是采购量 10
+    expect(page.locator("tr", has_text="E2E一次性手术衣")).to_contain_text("已验收")
+
+    page.click('button[data-use="E2E-HV-1"]')
+    _spd_modal(page, {"patient_id": str(seed["patient"]["id"])})  # 手术可空
+    expect(page.locator("tr", has_text="E2E冠脉支架")).to_contain_text("E2E患者")
+
+
 
 # ---------------------------------------------------------------- 阶段十二
 
