@@ -489,6 +489,8 @@ def list_rosters(center_type: str | None = None, duty_date: str | None = None, d
     if center_type:
         query = query.filter(DutyRoster.center_type == center_type)
     if duty_date:
+        # 等值匹配：`2026-9-1` 会让"这天没人值班"，不报错（P1-58）
+        duty_date = require_date(duty_date, field="duty_date")
         query = query.filter(DutyRoster.duty_date == duty_date)
     return query.order_by(DutyRoster.duty_date, DutyRoster.id).limit(200).all()
 
