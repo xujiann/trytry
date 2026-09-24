@@ -332,7 +332,7 @@ def test_无兜底判据不得被无关的拼写差异绕开(tmp_path, label, sr
 
 
 # ---------------------------------------------------------------------------
-# 第四种：服务端字符串进了**属性值**（P0-13）
+# 第四种：服务端字符串进了**属性值**（P0-18）
 #
 # 上面三条都盯"映射兜底"那一族。2026-09-24 做 P2-38 物资页时撞见的是另一个形状——
 # 行对象上的字符串字段直接插进属性值：
@@ -387,7 +387,7 @@ def _attr_string_offenders(files):
 def test_属性值里的服务端字符串必须转义():
     offenders = _attr_string_offenders(sorted(STATIC.rglob("*.js")))
     assert offenders == [], (
-        "以下服务端字段裸插进了属性值——带一个双引号就能越出属性、往页面里塞标签（P0-13），"
+        "以下服务端字段裸插进了属性值——带一个双引号就能越出属性、往页面里塞标签（P0-18），"
         "改成 ${esc(…)}；若它其实是数/布尔，确认后端类型后加进 NON_STRING_PROPS：\n  "
         + "\n  ".join(offenders)
     )
@@ -397,7 +397,7 @@ def test_属性值判据自证(tmp_path):
     """植回缺陷必须抓到，写对的必须放过；扫描面必须真的覆盖管理端与移动端。"""
     bad = tmp_path / "bad.js"
     bad.write_text('x = `<button class="btn" data-use="${c.barcode}">使用登记</button>`;\n', encoding="utf-8")
-    assert _attr_string_offenders([bad]), "植回 P0-13 的原样缺陷却没抓到，扫描是空转的"
+    assert _attr_string_offenders([bad]), "植回 P0-18 的原样缺陷却没抓到，扫描是空转的"
     good = tmp_path / "good.js"
     good.write_text(
         'x = `<button data-use="${esc(c.barcode)}" data-id="${c.id}" data-on="${l.active ? 0 : 1}">'
