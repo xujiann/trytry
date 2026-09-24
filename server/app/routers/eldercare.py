@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..visibility import scope_patient_list
 from ..database import get_db
+from ..datetypes import OptionalDateStr
 from ..deps import get_current_user, paginate, require_roles
 from ..models import ElderlyAssessment, Patient, User
 
@@ -27,12 +28,16 @@ class AssessmentCreate(BaseModel):
     adl_score: int = Field(ge=0, le=100)
     cognitive_score: int = Field(default=0, ge=0, le=30)
     tcm_constitution: str = ""
-    assessed_date: str = ""
+    # 复评提醒按字符串比 `assessed_date <= 一年前`：`2025/01/15`、`20250115` 这类写法
+    # 在同一年份里比出来是反的，这个人就永远不进年度复评提醒（P1-61，实测）
+    assessed_date: OptionalDateStr = ""
 
 
 class AssessmentOut(AssessmentCreate):
     id: int
     care_level: str
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    assessed_date: str = ""
 
     model_config = {"from_attributes": True}
 
