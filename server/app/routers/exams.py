@@ -714,8 +714,8 @@ def list_templates(center_type: str | None = None, db: Session = Depends(get_db)
 
 
 class ReportAmend(BaseModel):
-    conclusion: str = Field(min_length=1)
-    finding: str | None = None
+    conclusion: str = Field(min_length=1, max_length=1024)
+    finding: str | None = Field(default=None, max_length=2048)
     # 允许修订危急值标记：置 True/False 均联动闭环状态
     critical: bool | None = None
     reason: str = Field(default="", max_length=512)

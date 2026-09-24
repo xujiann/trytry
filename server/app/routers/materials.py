@@ -205,7 +205,7 @@ def approve_purchase(
 class ContractIn(BaseModel):
     supplier_id: int
     contract_no: str = Field(min_length=1, max_length=64)
-    contract_amount: FiniteFloat = Field(ge=0)
+    contract_amount: FiniteFloat = Field(ge=0, le=MONEY_MAX)
 
 
 @router.post(

@@ -51,6 +51,8 @@ APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
 #: 32 位的自定义角色键，迁移 c3e4f5a6b7d9 扩到 32）。已清零，此后即零基线闸门。
 #: 第二层（同日）：判据补上「请求体列表里的子项逐个写库」的形状（`for item in body.items:`），又量出 4 处——
 #: 处方明细的药品编码 / 名称、批量号源模板的资源名 / 时段，真 PG 上超长即 500；同批补齐，仍为 0。
+#: 第三层（同日）：再补「取出来的对象上显式赋值」`x.列 = body.字段`，又量出 10 处——检查报告修订的结论 / 所见、
+#: 上门派单人与服务记录、医废交接人、整改措施 / 完成说明 / 验证意见、远程咨询回复与医师名；同批补齐，仍为 0。
 BASELINE = 0
 
 _FINITE_PATTERN = re.compile(r"\^[^*+{]*\$")
@@ -113,10 +115,12 @@ def _list_element_model(cls, field_name: str):
 def body_column_writes(modules=None) -> list[tuple]:
     """写接口把请求体的哪个字段写进了哪张表的哪一列：`[(模块, 请求模型, 字段, ORM 模型, 列)]`。
 
-    写库形状四种：构造 `Model(**body.model_dump(...))`、构造里显式 `列=body.字段`、`x = db.get(Model, …)`
-    之后 `setattr(x, …)` 的改档循环，以及**请求体里的列表字段逐项写库**——`for item in body.items:` 之后
+    写库形状五种：构造 `Model(**body.model_dump(...))`、构造里显式 `列=body.字段`、`x = db.get(Model, …)`
+    之后 `setattr(x, …)` 的改档循环、**请求体里的列表字段逐项写库**——`for item in body.items:` 之后
     对 `item` 用前两种写法（P1-91 第二层：处方明细、批量号源曾因此整个漏在判据之外；setattr 那一种不认
-    循环变量，改档循环写的是取出来的对象）。数值那一族（`test_body_numeric_capacity.py`）共用这一份。
+    循环变量，改档循环写的是取出来的对象），以及**取出来的对象上显式赋值** `x.列 = body.字段`（第三层：
+    检查报告修订、上门派单、远程咨询回复这类流转端点都是这么写的）。取对象只认 `db.get`——经 helper 或
+    查询取出来的对象仍看不见。数值那一族（`test_body_numeric_capacity.py`）共用这一份。
     """
     lengths = _column_lengths()
     out = []
@@ -164,6 +168,14 @@ def body_column_writes(modules=None) -> list[tuple]:
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr" \
                         and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id in fetched:
                     writes += [(cls, f, fetched[node.args[0].id]) for cls in params.values() for f in cls.model_fields]
+                # 第五种：取出来的对象上显式赋值 `report.conclusion = body.conclusion`（改档、流转里最常见）
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                        and isinstance(node.targets[0], ast.Attribute) and isinstance(node.targets[0].value, ast.Name) \
+                        and node.targets[0].value.id in fetched and isinstance(node.value, ast.Attribute) \
+                        and isinstance(node.value.value, ast.Name) and node.value.value.id in items \
+                        and node.value.attr in items[node.value.value.id].model_fields:
+                    writes.append((items[node.value.value.id], node.value.attr,
+                                   fetched[node.targets[0].value.id], node.targets[0].attr))
             for w in writes:
                 out.append((modname, w[0], w[1], w[2], w[3] if len(w) == 4 else w[1]))
     return out
@@ -201,7 +213,7 @@ def test_修完请把基线调小():
     )
 
 
-def test_判据自证_四种写库形状都点名_挡得住的不报():
+def test_判据自证_五种写库形状都点名_挡得住的不报():
     import types
 
     from pydantic import Field
@@ -240,6 +252,11 @@ def patch(i: int, body: NotePatch, db=None):
 def batch(body: BatchIn, db=None):
     for line in body.lines:
         db.add(Encounter(**line.model_dump()))
+
+@router.post("/n/{i}/amend")
+def amend(i: int, body: NotePatch, db=None):
+    e = db.get(Encounter, i)
+    e.diagnosis_name = body.note
 '''
 
     class _Router:
@@ -251,9 +268,10 @@ def batch(body: BatchIn, db=None):
     exec(compile(snippet, "自证", "exec"), mod.__dict__)
     got = unbounded_body_strings([("自证", mod, snippet)])
     # Encounter 上没有 note 列：只有显式 `summary=body.note` 那一处写进了定长列；
-    # 请求体列表里的子项逐个写库（第四种形状）同样点名
+    # 请求体列表里的子项逐个写库（第四种）、取出来的对象上显式赋值（第五种）同样点名
     assert got == ["自证:LineIn.diagnosis_name→Encounter.diagnosis_name(256)",
-                   "自证:NoteIn.note→Encounter.summary(1024)"], got
+                   "自证:NoteIn.note→Encounter.summary(1024)",
+                   "自证:NotePatch.note→Encounter.diagnosis_name(256)"], got
 
 
 # ================================================================ 第一批：核心诊疗
@@ -335,6 +353,25 @@ def test_第二层_批量号源模板超长_422而不是生产库500(client, adm
     r = client.post("/api/appointments/slots/batch",
                     json={**body, "templates": [{**template, field: "长" * limit}]}, headers=admin)
     assert r.status_code == 201 and r.json()["created"] == 1, (field, r.status_code, r.text[:200])
+
+
+# ================================================================ 第三层：取出来的对象上显式赋值
+# `waste.handler_name = body.handler_name` 这种流转端点的写法，判据原先只认 setattr 循环——检查报告修订、
+# 上门派单与完成、医废交接、整改进度与验证、远程咨询回复共 10 个字段整个在视野之外（`body_column_writes`
+# 的第五种形状）。
+def test_第三层_医废交接人超长_422而不是生产库500(client, admin, world):
+    loc = client.post("/api/medwaste/locations", json={"org_id": world["county"], "name": "长度校验产生点",
+                                                       "location_type": "source"}, headers=admin)
+    assert loc.status_code == 201, loc.text
+    waste = client.post("/api/medwaste", json={"org_id": world["county"], "waste_type": "infectious", "weight_kg": 1,
+                                               "collected_date": "2031-05-05", "source_location_id": loc.json()["id"]},
+                        headers=admin)
+    assert waste.status_code == 201, waste.text
+    wid = waste.json()["id"]
+    r = client.post(f"/api/medwaste/{wid}/handover", json={"handler_name": "长" * 65}, headers=admin)
+    assert r.status_code == 422 and "handler_name" in r.text, (r.status_code, r.text[:200])
+    r = client.post(f"/api/medwaste/{wid}/handover", json={"handler_name": "长" * 64}, headers=admin)
+    assert r.status_code == 200, (r.status_code, r.text[:200])
 
 
 def test_改成长键自定义角色_留痕列装得下(client, admin):

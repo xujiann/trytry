@@ -30,8 +30,8 @@ class ConsultOut(ConsultCreate):
 
 
 class ReplyBody(BaseModel):
-    reply: str = Field(min_length=1)
-    doctor_name: str = Field(min_length=1)
+    reply: str = Field(min_length=1, max_length=2048)
+    doctor_name: str = Field(min_length=1, max_length=64)
     # 复诊续方：医师回复时可关联已开具处方（须先经集中审方）
     prescription_id: int | None = None
 

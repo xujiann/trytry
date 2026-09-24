@@ -457,4 +457,4 @@ class WasteOut(WasteCreate):
 
 
 class WasteHandover(BaseModel):
-    handler_name: str = Field(min_length=1)
+    handler_name: str = Field(min_length=1, max_length=64)

@@ -544,8 +544,8 @@ def list_tasks(
 
 
 class TaskProgress(BaseModel):
-    measures: str = ""
-    completion_note: str = ""
+    measures: str = Field(default="", max_length=1024)
+    completion_note: str = Field(default="", max_length=512)
     # 置为 True 表示整改完成、提交确认
     complete: bool = False
 
@@ -580,7 +580,7 @@ def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db
 
 class TaskVerify(BaseModel):
     approve: bool
-    comment: str = ""
+    comment: str = Field(default="", max_length=512)
 
 
 @improvement_router.post(

@@ -39,6 +39,7 @@ if _PG_URL:
 #: 基线：已清零，此后即零基线闸门（`scripts/dump_gate_status.py` 把它列进闸门现状）。
 #: 2026-09-24 实测 65 处（非外键 `Integer` 48、`Money` 17；两个列同名的字段写进两张表算两处）→ 0（同批补齐：
 #: 64 个字段补 `le=INT4_MAX` / `le=MONEY_MAX`，一个界都没有的 8 个多态 id / 序号补对称的 `ge=INT4_MIN`）。
+#: 第三层（同日）：写库形状补上「取出来的对象上显式赋值」，又量出签合同金额 1 处，同批补齐，仍为 0。
 BASELINE = 0
 
 
@@ -199,3 +200,28 @@ def test_批量号源模板容量越过integer_422(client, admin, world):
                     json={"org_id": world["org"], "date_from": "2031-04-04", "date_to": "2031-04-04",
                           "templates": [template]}, headers=admin)
     assert r.status_code == 422 and "capacity" in r.text, (r.status_code, r.text[:200])
+
+
+def test_第三层_签合同金额越过Money_422(client, admin, world):
+    """`purchase.contract_amount = body.contract_amount`——取出来的对象上显式赋值（第五种形状）同样要挡住。"""
+    from conftest import login
+
+    # 申请人不得自批：申请由本院经办提、admin 审批
+    r = client.post("/api/users", json={"username": "p193_op", "password": "passw0rd1", "full_name": "列容量经办",
+                                        "role": "operator", "org_id": world["org"]}, headers=admin)
+    assert r.status_code == 201, r.text
+    op = login(client, "p193_op", "passw0rd1")
+    r = client.post("/api/materials/purchases", json={"org_id": world["org"], "item_name": "列容量设备"},
+                    headers=op)
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    assert client.post(f"/api/materials/purchases/{pid}/approve", json={"approved": True},
+                       headers=admin).status_code == 200
+    supplier = client.post("/api/pharmacy/suppliers", json={"name": "列容量供应商"}, headers=admin)
+    assert supplier.status_code == 201, supplier.text
+    body = {"supplier_id": supplier.json()["id"], "contract_no": "P193-C1", "contract_amount": 1e13}
+    r = client.post(f"/api/materials/purchases/{pid}/contract", json=body, headers=admin)
+    assert r.status_code == 422 and "contract_amount" in r.text, (r.status_code, r.text[:200])
+    r = client.post(f"/api/materials/purchases/{pid}/contract", json={**body, "contract_amount": MONEY_MAX},
+                    headers=admin)
+    assert r.status_code == 200, (r.status_code, r.text[:200])

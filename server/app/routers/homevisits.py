@@ -172,7 +172,7 @@ def list_visits(
 
 
 class VisitDispatch(BaseModel):
-    assignee_name: str = Field(min_length=1)
+    assignee_name: str = Field(min_length=1, max_length=64)
 
 
 @router.post(
@@ -197,7 +197,7 @@ def dispatch_visit(order_id: int, body: VisitDispatch, db: Session = Depends(get
 
 
 class VisitComplete(BaseModel):
-    service_note: str = Field(min_length=1)
+    service_note: str = Field(min_length=1, max_length=512)
 
 
 @router.post(
