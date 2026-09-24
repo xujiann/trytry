@@ -1362,23 +1362,16 @@ PATIENT_OWNED_UNGUARDED_WRITES = {
 #: 按 id 写挂在患者上的表、却**按设计**不做患者可见性阻断的——逐条写明理由，只减不增
 #: （与 `BYID_CROSS_ORG_OK` 同一纪律：每一条都要答得出"为什么不守"）。2026-09-24 逐条实测后判定。
 PATIENT_OWNED_BY_DESIGN = {
-    "consents.py:revoke_consent":
-        "窗口业务按设计不做可见性阻断：模块 docstring「设计口径」写明——患者本人就在柜台前，而本机构此刻"
-        "往往还没有他的任何记录，要求先有业务关系会把这项业务办不成（与登记同一口径）；写操作经审计中间件落 AuditLog。",
-    "consents.py:review_correction":
-        "只有全域角色够得着（require_roles(\"director\")，admin 恒放行；自定义角色须管理员逐点授权）："
-        "更正 / 注销改的是全县主索引，审核本就是全县口径。前提由 test_挂在患者上的豁免_审核端点只收全域角色 钉住。",
     "insurance.py:review_special_disease":
-        "同上：特殊病种申报（经办 / 医生）与审核（director）职责分离（L-11），审核是全县口径。",
+        "只有全域角色够得着（require_roles(\"director\")，admin 恒放行）：特殊病种申报（经办 / 医生）与审核"
+        "（director）职责分离（L-11），审核是全县口径。前提由 test_挂在患者上的豁免_审核端点只收全域角色 钉住。",
     "insurance.py:review_dual_channel":
         "同上：双通道申报与审核职责分离，审核限 director。",
     "notifications.py:mark_read":
         "个体级判定，比机构级更严：只有收件人本人能标已读（`notification.user_id != user.id` 即 404，"
         "不暴露消息存在）。是 404 不是 403，登记不进领域守卫表；前提由 test_挂在患者上的豁免_消息只认收件人 钉住。",
 }
-_GLOBAL_ONLY_BY_DESIGN = (
-    "consents.py:review_correction", "insurance.py:review_special_disease", "insurance.py:review_dual_channel",
-)
+_GLOBAL_ONLY_BY_DESIGN = ("insurance.py:review_special_disease", "insurance.py:review_dual_channel")
 
 _PATIENT_WRITE_GUARDS = {
     "assert_obj_org_writable", "assert_org_writable", "assert_org_visible",

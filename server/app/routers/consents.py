@@ -16,6 +16,11 @@
   grant_authorization）同一口径：患者本人就在柜台前，而此刻本机构往往还没有
   他的任何记录，要求先有业务关系会把这项业务办不成。写操作有 AuditLog 兜底。
 - 按患者**查询**同意记录走 assert_patient_visible（判定 + AccessLog 留痕）。
+- **撤回与审核按记录所属患者判可见性并留痕**（P0-28）。上面那条不阻断只说登记 / 代提：
+  界面上要先按患者查到同意记录（过可见性）才撤得了，撤回不在"本机构还没有他的记录"
+  那个场景里；原先按编号直撤，乙院能撤掉甲院患者的同意（家属代办同意一撤，居民端
+  的家庭绑定就少了一道核验）。审核只收全域角色，判定对它们只多一条留痕；它挡的是被
+  整包授了审核权的自定义角色——那类账号不是全域角色，看不到这个患者，却改得了他的主索引。
 """
 import json
 
@@ -297,11 +302,15 @@ def list_consents(
     response_model=ConsentOut,
     dependencies=[Depends(require_roles("operator", "doctor", "public_health"))],
 )
-def revoke_consent(consent_id: int, db: Session = Depends(get_db)):
+def revoke_consent(
+    consent_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """撤回同意：置 revoked_at，不删行——撤回本身也要可举证。"""
     record = db.get(ConsentRecord, consent_id)
     if record is None:
         raise HTTPException(status_code=404, detail="同意记录不存在")
+    # P0-28：先判归属再判状态（否则无关机构拿到 409 就知道了"这条已撤回"）
+    assert_patient_visible(db, user, record.patient_id, resource="consent")
     if record.revoked_at is not None:
         raise HTTPException(status_code=409, detail="该同意已撤回")
     record.revoked_at = utcnow()
@@ -449,6 +458,8 @@ def review_correction(
     req = db.get(CorrectionRequest, request_id)
     if req is None:
         raise HTTPException(status_code=404, detail="申请不存在")
+    # P0-28：全域角色只多一条留痕；被整包授了审核权的自定义角色看不到这个患者就改不了他
+    assert_patient_visible(db, user, req.patient_id, resource="correction")
     if req.status != "pending":
         raise HTTPException(status_code=409, detail=f"该申请已处理（{req.status}），不能重复审核")
     if not body.approve and not body.comment.strip():

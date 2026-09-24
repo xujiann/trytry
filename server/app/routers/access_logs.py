@@ -67,6 +67,7 @@ RESOURCE_NAMES = {
     "appointment": "预约记录",
     "credential": "就诊凭据",
     "consent": "知情同意",
+    "correction": "档案更正 / 注销申请",
     "doc_completeness": "门急诊文书完整性",
     "outpatient_nursing": "门急诊护理记录",
     "admission": "住院记录",
