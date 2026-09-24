@@ -39,6 +39,7 @@ sys.path.insert(0, str(SERVER / "tests"))
 def _rows() -> list[tuple[str, str, str, str]]:
     """(分组, 指标, 值, 判据出处)。**只读常量，不重跑扫描**（理由见模块 docstring）。"""
     import test_api_contract_governance as contract
+    import test_ascii_digit_patterns as asciidigits
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
     import test_byid_org_read_guard as byidread
@@ -150,6 +151,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_periodstr_single_source.py"),
         ("日期入参", "带校验器的类型别名写成 `= Query(...)`（FastAPI 丢掉校验器）", queryvalidators.BASELINE,
          "tests/test_query_param_validators.py"),
+        ("日期入参", "`pattern=` 里用 `\\d`（认全角 / 阿拉伯-印度数字）", asciidigits.BASELINE,
+         "tests/test_ascii_digit_patterns.py"),
         ("功能完善", "该有界面却没有的端点（孤儿）", len(orphan.KNOWN_ORPHANS),
          "tests/test_orphan_endpoints.py"),
         ("功能完善", "按设计不需要界面的豁免路径", len(orphan.EXEMPT_PATHS),

@@ -1,5 +1,5 @@
 """综合管理补齐：㉚人力资源、㉛财务、㉜物资、㉞行政公文，及①-④排班/质控。"""
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -910,7 +910,7 @@ def list_payroll(period: str | None = None, employee_id: int | None = None, db: 
 
 class BudgetCreate(BaseModel):
     org_id: int
-    year: str = Field(pattern=r"^\d{4}$")
+    year: str = Field(pattern=r"^[0-9]{4}$")  # 只认半角：`\d` 认全角「２０２６」（P2-47）
     category: str = Field(pattern="^(income|expense)$")
     amount: float = Field(gt=0)
 
@@ -961,7 +961,9 @@ def create_budget(body: BudgetCreate, db: Session = Depends(get_db), user: User 
 @router.get("/budgets/execution", response_model=BudgetExecutionOut)
 def budget_execution(
     org_id: int,
-    year: str,
+    # 只认半角四位年度：原先裸 `str` 直接拼进 `period LIKE '{year}-%'`，`year=%` 把所有年份的收支
+    # 加在一起报成「实际数」（P2-47）
+    year: str = Query(pattern=r"^[0-9]{4}$"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):

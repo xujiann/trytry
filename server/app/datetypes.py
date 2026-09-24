@@ -22,7 +22,9 @@ from typing import Annotated
 
 from pydantic import BeforeValidator
 
-_SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# 形状用 `[0-9]` 而不是 `\d`（理由见下面月度那一节）：`\d` 认全角数字，「２０２６-０９-２４」原先
+# 先过形状、再在日历校验里以「日期不存在（请检查月份天数）」被拒，文案对不上真正的毛病（P2-47）
+_SHAPE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 
 def check_date(value: str) -> str:
