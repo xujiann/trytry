@@ -1310,3 +1310,115 @@ def test_县域监测预警对一线保持开放(client, world, stranger_op):
     for url in ["/api/infectious/alerts", "/api/surveillance/alerts"]:
         code = client.get(url, headers=stranger_op).status_code
         assert code != 403, f"县域监测 {url} 被误当管理聚合收紧了：{code}"
+
+
+# ---------------------------------------------------------------------------
+# 挂在患者上的表：按 id 写（P1-71，2026-09-24 量）
+#
+# `_byid_org_write_endpoints` 的分母是「带 `org_id` 列的表」。P0-23 撞出它的盲区：
+# `SpdConsult` 只有 `patient_id`、没有机构列，`close_consult` 连调用方身份都不收，
+# 乙院医生按会话号就能关掉甲院患者的咨询（实测 200）——写侧没有任何东西盯着这一形状，
+# 读侧两层棘轮又只看 GET。**"这张表没有机构列"不等于"这个对象没有归属"**：它的归属在
+# 患者身上，守卫应当是患者可见性。
+#
+# 分母：有 `patient_id`、没有 `org_id` 的表；判据与上面同一套（跟到底的本模块 helper、
+# 剥 docstring、同一组守卫名 + 登记的领域守卫）。量出 26 条，**一条都没擅改**——
+# 里面混着按设计跨机构的（远程会诊、共享诊断中心、转诊、急救调度、医保审核）与
+# 确属越权的，逐条判定后：按设计跨机构的写明理由移进豁免，越权的照 P0-10 / P0-19 先例补守卫。
+PATIENT_OWNED_UNGUARDED_WRITES = {
+    "chronic.py:add_followup",
+    "consents.py:review_correction",
+    "consents.py:revoke_consent",
+    "consultations.py:accept",
+    "consultations.py:complete",
+    "consultations.py:decline",
+    "consultations.py:rate",
+    "consultations.py:settle_fee",
+    "emergency.py:advance",
+    "emergency.py:record_milestone",
+    "emergency.py:report_vitals",
+    "emergency.py:set_rescue_outcome",
+    "exams.py:advance_sample",
+    "exams.py:claim_request",
+    "exams.py:submit_report",
+    "insurance.py:issue_referral_cert",
+    "insurance.py:review_dual_channel",
+    "insurance.py:review_special_disease",
+    "maternal.py:add_visit",
+    "maternal.py:close_record",
+    "patients.py:revoke_authorization",
+    "referrals.py:update_status",
+    "spd/care.py:update_revisit",
+    "spd/population.py:handle_service_apply",
+    "tcm.py:advance_order",
+    "vaccination.py:lift_contraindication",
+}
+
+_PATIENT_WRITE_GUARDS = {
+    "assert_obj_org_writable", "assert_org_writable", "assert_org_visible",
+    "assert_patient_visible", "scope_org_list", "scope_patient_list", "log_patient_access",
+}
+
+
+def _patient_owned_models() -> set[str]:
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app import models
+    return {
+        c.__name__ for c in models.Base.registry._class_registry.values()
+        if hasattr(c, "__tablename__")
+        and "patient_id" in c.__table__.columns and "org_id" not in c.__table__.columns
+    }
+
+
+def _byid_patient_owned_write_endpoints(sources=None) -> set[str]:
+    """按 id 直取「挂在患者上的表」的写接口里，没有任何归属守卫的。
+
+    `sources`：[(显示名, 源码)]，缺省扫全部路由文件（自证用例会塞进改过的源码）。
+    """
+    owned = _patient_owned_models()
+    if sources is None:
+        sources = [(name, open(path, encoding="utf-8").read()) for name, path in _router_files()]
+    found = set()
+    for name, text in sources:
+        if name in ("portal.py", "spd/portal.py"):
+            continue  # 居民端走 portal 令牌 + accessible_patient，同上面那条的豁免理由
+        tree = ast.parse(text)
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            decs = [ast.unparse(d) for d in fn.decorator_list]
+            if not any("{" in d for d in decs):
+                continue
+            body = _with_local_helpers(tree, fn)
+            if not _is_write_endpoint(decs, body):
+                continue
+            if not any(f"db.get({m}," in body for m in owned):
+                continue
+            if any(g in body for g in _PATIENT_WRITE_GUARDS) or _has_domain_guard(name, tree, fn):
+                continue
+            found.add(f"{name}:{fn.name}")
+    return found
+
+
+def test_按id写挂在患者上的表不许新增无守卫端点():
+    unguarded = _byid_patient_owned_write_endpoints()
+    new = unguarded - PATIENT_OWNED_UNGUARDED_WRITES
+    assert new == set(), (
+        "以下写接口按 id 取了挂在患者上的记录，却没有任何归属判定——按记录所属患者 "
+        "assert_patient_visible（留痕）；若按设计跨机构，写明理由再登记：\n  " + "\n  ".join(sorted(new))
+    )
+    stale = PATIENT_OWNED_UNGUARDED_WRITES - unguarded
+    assert stale == set(), f"这些登记项已加了守卫或不存在，应从清单删除（只减不增）：{sorted(stale)}"
+
+
+def test_挂在患者上的写接口判据自证():
+    """把 P0-23 的修复从 `close_consult` 里拿掉，判据必须当场点名它；分母里必须有 SpdConsult。"""
+    assert "SpdConsult" in _patient_owned_models()
+    path = dict(_router_files())["spd/care.py"]
+    text = open(path, encoding="utf-8").read()
+    guard = '    assert_patient_visible(db, user, consult.patient_id, resource="spd_consult")\n'
+    start = text.index("def close_consult(")
+    end = text.index("\n@router", start)
+    assert guard in text[start:end], "close_consult 里找不到 P0-23 的守卫行，自证前提变了"
+    reverted = text[:start] + text[start:end].replace(guard, "", 1) + text[end:]
+    assert "spd/care.py:close_consult" in _byid_patient_owned_write_endpoints([("spd/care.py", reverted)])
+    assert "spd/care.py:close_consult" not in _byid_patient_owned_write_endpoints([("spd/care.py", text)])
