@@ -185,6 +185,12 @@ jobs:
               print("::error title=E2E gate not running::端到端档一条都没执行（多半是 playwright/浏览器内核没装上，或 --e2e 开关没生效），这一步的绿灯没有意义")
               sys.exit(1)
           PY
+      - name: List exposure probe (新机构调全部清单不得看到别家患者, blocking)
+        working-directory: server
+        # P1-73：守卫被包在 `if patient_id` 里的清单（P0-24 / P0-32 / P0-33），静态闸门一概
+        # 看不出；这里起独立服务、灌演示种子，让一家与任何患者都没有关系的新机构把全部清单调
+        # 一遍，出现未登记的别家患者即红。与 e2e 同一个 job：都要真起服务，不必再装一遍依赖。
+        run: python scripts/probe_list_exposure.py
       - name: Upload E2E report
         if: always()
         uses: actions/upload-artifact@v4

@@ -7,7 +7,7 @@ PY := python
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install build lint typecheck test-unit test-integration test-smoke test verify docker-build
+.PHONY: help install build lint typecheck test-unit test-integration test-smoke test verify docker-build probe-lists
 
 help:  ## 列出可用命令
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -58,6 +58,9 @@ PW_CHROMIUM ?= $(firstword $(wildcard /opt/pw-browsers/chromium-*/chrome-linux/c
 
 test-e2e:  ## 端到端测试：真拉起 uvicorn + Playwright 驱动三端（需 playwright 与 chromium）
 	cd $(SERVER) && PLAYWRIGHT_CHROMIUM_PATH=$(PW_CHROMIUM) $(PY) -m pytest tests/e2e -q --e2e
+
+probe-lists:  ## 清单越权探针：新机构调全部清单接口，不得看到别家患者（未登记的暴露退出码 1，P1-73）
+	cd $(SERVER) && $(PY) scripts/probe_list_exposure.py
 
 # ---- 聚合 ----
 test: test-unit test-smoke  ## 无外部依赖的可跑测试（unit + smoke）

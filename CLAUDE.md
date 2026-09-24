@@ -32,6 +32,7 @@ make test-unit         # 进程内 SQLite 快速套件（无外部依赖）
 make test-integration  # 真 PostgreSQL + 真 Redis（需两个 *_TEST_URL，见下方一行起服务）
 make test-smoke        # 应用可启动 + 核心接口有响应
 make test-e2e          # 端到端：真拉起服务 + Playwright 驱动三端（改交互形态必跑）
+make probe-lists       # 清单越权探针：新机构调全部清单接口，不得看到别家患者（改了清单接口必跑）
 make verify            # build + lint + typecheck + test-unit（提交前自检）
 ```
 
@@ -162,6 +163,7 @@ make verify        # = build + lint + typecheck + test-unit（对应第14条）
 make test-smoke    # 若动了启动/核心链路
 make test-integration   # 若动了迁移/PG 方言相关（先 eval "$(server/scripts/dev_services.sh start)"）
 make test-e2e      # 若动了界面的**交互形态**（见下）
+make probe-lists   # 若动了清单（列表 GET）接口：守卫包在 `if patient_id` 里这类形状静态闸门看不出（P1-73）
 ```
 
 - **改了交互形态就必须跑 `make test-e2e`**：`prompt`/`confirm` 换成页内模态框、
