@@ -1186,6 +1186,167 @@ def test_结束派驻先确认_可填实际结束日期(page, base_url, seed, ad
     assert end_date() == "2026-08-31"
 
 
+def test_管理端取消预约先确认(page, base_url, seed, admin_read, admin_call):
+    """P2-43：替居民「取消」预约原先点一下就生效——号源随即释放给他人，居民那边的预约就没了。"""
+    patient = admin_call("POST", "/api/patients",
+                         {"name": "E2E取消预约患者", "id_card": "320981198811112221", "gender": "男"})
+    slot = admin_call("POST", "/api/appointments/slots", {
+        "org_id": seed["org"]["id"], "resource_type": "outpatient", "resource_name": "E2E取消预约门诊",
+        "slot_date": "2026-12-01", "slot_time": "09:00", "capacity": 1})
+    apt = admin_call("POST", "/api/appointments", {"slot_id": slot["id"], "patient_id": patient["id"]})
+
+    def status():
+        (row,) = [a for a in admin_read(f"/api/appointments?patient_id={patient['id']}") if a["id"] == apt["id"]]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "appointments", "预约诊疗")
+    # 行内按钮与模态框的取消键同名 data-cancel：限定在页面里点，别点到模态框上
+    _confirm_then(page, lambda: page.click(f'#page-body button[data-cancel="{apt["id"]}"]'), "号源立即释放",
+                  lambda: status() == "booked", lambda: status() == "cancelled")
+
+
+def test_撤销调阅授权先确认(page, base_url, seed, admin_read, admin_call):
+    """P2-43：「撤销」调阅授权原先点一下就生效；要恢复，得患者本人再来办一次授权。"""
+    pid = seed["patient"]["id"]
+    grantee = admin_call("POST", "/api/organizations",
+                         {"name": "E2E被授权卫生院", "org_type": "township", "level": "township"})
+    auth = admin_call("POST", f"/api/patients/{pid}/authorizations",
+                      {"grantee_org_id": grantee["id"], "scope": "all", "expire_date": "2027-12-31"})
+
+    def status():
+        (row,) = [a for a in admin_read(f"/api/patients/{pid}/authorizations") if a["id"] == auth["id"]]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "patients", "患者主索引")
+    page.fill('#auth-list-form [name="patient_id"]', str(pid))
+    page.click("#auth-list-form button")
+    revoke = page.locator(f'#auth-table button[data-revoke="{auth["id"]}"]')
+    revoke.click()
+    expect(_modal(page)).to_contain_text("须患者本人重新办理授权")
+    _cancel_modal(page)
+    assert status() == "active", "点了取消却照样撤销了"
+    # 这一页撤销后只重画授权表（不整页 route）：等这条的撤销按钮消失
+    revoke.click()
+    _spd_modal(page, {})
+    expect(revoke).to_have_count(0)
+    assert status() == "revoked"
+
+
+def test_孕产妇保健结案先确认(page, base_url, admin_read, admin_call):
+    """P2-43：「结案」原先点一下就结案，页面上没有重开入口。"""
+    patient = admin_call("POST", "/api/patients",
+                         {"name": "E2E结案孕妇", "id_card": "320981199203032224", "gender": "女"})
+    record = admin_call("POST", "/api/maternal/records", {"patient_id": patient["id"]})
+    admin_call("POST", f"/api/maternal/records/{record['id']}/visits", {"visit_type": "postpartum"})
+
+    def status():
+        (row,) = [r for r in admin_read("/api/maternal/records") if r["id"] == record["id"]]
+        return row["status"]
+
+    assert status() == "delivered"  # 产后访视把档案推到「已分娩」，结案按钮才出现
+    _login(page, base_url)
+    _open_page(page, "maternal", "妇幼保健")
+    _confirm_then(page, lambda: page.click(f'button[data-close="{record["id"]}"]'), "页面上不能重开",
+                  lambda: status() == "delivered", lambda: status() == "closed")
+
+
+def test_停用考核公式先确认(page, base_url, admin_read, admin_call):
+    """P2-43：「停用」考核公式原先点一下就停用，停用的公式页面上没有启用入口。"""
+    key = "e2e_p243_formula"
+    admin_call("POST", "/api/analytics/formulas", {"key": key, "name": "E2E停用前确认", "expression": "encounters"})
+
+    def active():
+        (row,) = [f for f in admin_read("/api/analytics/formulas") if f["key"] == key]
+        return row["active"]
+
+    _login(page, base_url)
+    _open_page(page, "analytics", "决策指标扩展")
+    _confirm_then(page, lambda: page.click(f'button[data-off="{key}"]'), "不能重新启用",
+                  lambda: active() is True, lambda: active() is False)
+
+
+def test_停用规则先确认(page, base_url, admin_read, admin_call):
+    """P2-43：「停用」规则原先点一下就停用，停用的规则页面上没有启用入口。"""
+    key = "e2e_p243_rule"
+    admin_call("POST", "/api/rules", {"key": key, "name": "E2E停用前确认", "domain": "prescription",
+                                      "condition": "age >= 65"})
+
+    def active():
+        (row,) = [r for r in admin_read("/api/rules") if r["key"] == key]
+        return row["active"]
+
+    _login(page, base_url)
+    _open_page(page, "rules", "统一规则引擎")
+    _confirm_then(page, lambda: page.click(f'button[data-off="{key}"]'), "不能重新启用",
+                  lambda: active() is True, lambda: active() is False)
+
+
+def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
+    """P2-43：「删除」路径节点原先点一下就删，节点的时限、角色与表单配置一并没了。"""
+    hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")
+    tpl = admin_call("POST", "/api/spd/path-templates",
+                     {"program_id": hyp["id"], "code": "e2e_p243_path", "name": "E2E删节点前确认"})
+    node = admin_call("POST", f"/api/spd/path-templates/{tpl['id']}/nodes",
+                      {"key": "p243", "name": "E2E待删节点", "seq": 1, "due_days": 7})
+
+    def node_ids():
+        return [n["id"] for n in admin_read(f"/api/spd/path-templates/{tpl['id']}")["nodes"]]
+
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.click(f'button[data-tpl-nodes="{tpl["id"]}"]')
+    delete = page.locator(f'button[data-node-del="{node["id"]}"]')
+    delete.click()
+    expect(_modal(page)).to_contain_text("不能恢复")
+    _cancel_modal(page)
+    assert node_ids() == [node["id"]], "点了取消却照样删了"
+    # 删除后只重画节点表并给提示（不整页 route）
+    delete.click()
+    _spd_modal(page, {})
+    expect(page.locator("#spd-tpl-msg")).to_contain_text("节点已删除")
+    assert node_ids() == []
+
+
+@pytest.fixture(scope="session")
+def spd_open_consult(base_url, admin_call):
+    """一条还开着的慢专病在线咨询。会话只能由居民端发起，造数也走居民端：开户 → 实名 → 发消息。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    name, id_card = "E2E咨询结束患者", "320981198507072227"
+    admin_call("POST", "/api/patients", {"name": name, "id_card": id_card, "gender": "男"})
+    resident = post("/api/portal/auth/wechat/login", {"code": "mock-e2e-p243", "state": ""})["access_token"]
+    post("/api/portal/auth/realname", {"name": name, "id_card": id_card}, resident)
+    return post("/api/portal/spd/consults", {"content": "E2E结束前确认", "program_code": "hypertension"},
+                resident)["consult_id"]
+
+
+def test_结束慢专病咨询先确认(page, base_url, admin_read, spd_open_consult):
+    """P2-43：慢专病咨询「结束」原先点一下就结束，结束后医生端不能再回复这次会话。"""
+    cid = spd_open_consult
+
+    def status():
+        (row,) = [c for c in admin_read("/api/spd/consults?limit=500") if c["id"] == cid]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "spdmanager", "个案管理师端·专属衔接")
+    _confirm_then(page, lambda: page.click(f'button[data-consult-close="{cid}"]'), "不能再回复",
+                  lambda: status() == "open", lambda: status() == "closed")
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)
