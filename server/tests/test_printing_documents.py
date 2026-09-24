@@ -130,12 +130,18 @@ def world(client):
         headers=ph,
     ).json()
 
-    # —— 转诊 ——
+    # —— 转诊：卫生院上转甲院，由卫生院的医师发起（P0-35：发起方只能是本机构）——
+    client.post(
+        "/api/users",
+        json={"username": "pd_doc_t", "password": "pass123456", "role": "doctor",
+              "org_id": township["id"]},
+        headers=admin,
+    )
     referral = client.post(
         "/api/referrals",
         json={"patient_id": patient["id"], "from_org_id": township["id"],
               "to_org_id": org["id"], "direction": "up", "reason": "肺炎加重，请上级收治"},
-        headers=doc,
+        headers=login(client, "pd_doc_t", "pass123456"),
     ).json()
 
     return {

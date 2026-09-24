@@ -6,7 +6,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import Organization, Patient, Referral, User
 from ..schemas import ReferralCreate, ReferralOut, ReferralStatusUpdate
-from ..visibility import GLOBAL_ROLES
+from ..visibility import GLOBAL_ROLES, assert_org_writable
 
 router = APIRouter(
     prefix="/api/referrals", tags=["双向转诊"], dependencies=[Depends(get_current_user)]
@@ -69,6 +69,9 @@ def create_referral(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # P0-35：转出方由请求声明，原先只查存在——任一机构都能以别家名义把患者转出去，而转诊单两方
+    # 机构列都算服务关系。转入方按设计就是别家，不在此列。
+    assert_org_writable(db, user, body.from_org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     for org_id, label in ((body.from_org_id, "转出"), (body.to_org_id, "转入")):

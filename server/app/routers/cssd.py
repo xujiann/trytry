@@ -22,7 +22,8 @@ _FLOW = {"sterilizing": "sterile", "sterile": "dispatched", "dispatched": "recyc
     status_code=201,
     dependencies=[Depends(require_roles("operator"))],  # H2: 消毒批次=经办
 )
-def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
+def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.center_org_id)  # P0-35：中心由请求声明，只能是本机构
     if db.get(Organization, body.center_org_id) is None:
         raise HTTPException(status_code=404, detail="消毒供应中心机构不存在")
     if db.query(SterilizationBatch).filter(SterilizationBatch.batch_no == body.batch_no).first():
@@ -46,11 +47,22 @@ def list_batches(status: str | None = None, batch_no: str | None = None, db: Ses
     response_model=BatchOut,
     dependencies=[Depends(require_roles("operator"))],  # H2: 批次流转=经办
 )
-def advance(batch_id: int, dispatched_to_org_id: int | None = None, db: Session = Depends(get_db)):
-    """流转到下一状态：灭菌中→已灭菌→已发放（需指定接收机构）→已回收。"""
+def advance(
+    batch_id: int,
+    dispatched_to_org_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """流转到下一状态：灭菌中→已灭菌→已发放（需指定接收机构）→已回收。
+
+    只有批次所属中心能推（P0-35 / P1-74：`SterilizationBatch` 的归属列叫 `center_org_id`，
+    按 id 写的棘轮数不到它，原先任何经办都能推）；先判归属再判状态，免得 409 泄露别家批次走到了哪一步。
+    发放给哪家（`dispatched_to_org_id`）按设计就是别家。
+    """
     batch = db.get(SterilizationBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="批次不存在")
+    assert_org_writable(db, user, batch.center_org_id)
     next_status = _FLOW.get(batch.status)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {batch.status} 已是终态")
@@ -131,9 +143,11 @@ class CostStatsOut(BaseModel):
 def create_cost_item(
     body: CostItemCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """登记灭菌批次成本项（人工/耗材/能耗/设备折旧）。"""
-    if db.get(SterilizationBatch, body.batch_id) is None:
+    """登记灭菌批次成本项（人工/耗材/能耗/设备折旧）。只有批次所属中心能记（P0-35 / P1-74）。"""
+    batch = db.get(SterilizationBatch, body.batch_id)
+    if batch is None:
         raise HTTPException(status_code=404, detail="灭菌批次不存在")
+    assert_org_writable(db, user, batch.center_org_id)
     item = CssdCostItem(**body.model_dump(), created_by=user.id)
     db.add(item)
     db.commit()

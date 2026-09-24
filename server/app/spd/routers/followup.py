@@ -594,6 +594,8 @@ def auto_match_plans(
     同一口径），否则一个空方案会给全院每个出院患者都排上随访。
     """
     org_id = body.org_id if body.org_id is not None else user.org_id
+    # P0-35：给了 org_id 就照单全收——乙院能以甲院名义按甲院的出院 / 门诊患者批量生成随访。
+    assert_org_writable(db, user, org_id)
     rules = (
         db.query(SpdFollowupRule)
         .filter(SpdFollowupRule.scene == body.scene, SpdFollowupRule.active.is_(True))
@@ -1412,6 +1414,7 @@ def generate_report(
         raise HTTPException(status_code=404, detail="报告模板不存在")
 
     org_id = body.org_id if body.org_id is not None else user.org_id
+    assert_org_writable(db, user, org_id)  # P0-35：报告实例挂在这家机构名下，只能以本机构名义生成
     period_label = body.period_label or default_period_label(template.period)
     content = {
         "period_label": period_label,

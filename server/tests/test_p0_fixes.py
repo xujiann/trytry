@@ -127,7 +127,14 @@ def test_fhir_export_masked_for_non_admin(client, admin, setup):
 def test_operator_cannot_do_clinical_operations(client, admin, setup):
     p_id, org, township = setup["patient"]["id"], setup["org"], setup["township"]
 
-    # 转诊：operator 可申请，不可接诊流转
+    # 转诊：operator 可申请，不可接诊流转。转出方是卫生院，申请就得由卫生院的经办提（P0-35：
+    # 发起方只能是本机构）；接诊的是县医院这边。
+    client.post(
+        "/api/users",
+        json={"username": "p0_town_op", "password": "pass123456", "role": "operator",
+              "org_id": township["id"]},
+        headers=admin,
+    )
     referral = client.post(
         "/api/referrals",
         json={
@@ -137,7 +144,7 @@ def test_operator_cannot_do_clinical_operations(client, admin, setup):
             "direction": "up",
             "reason": "上转",
         },
-        headers=setup["operator"],
+        headers=login(client, "p0_town_op", "pass123456"),
     )
     assert referral.status_code == 201
     rid = referral.json()["id"]

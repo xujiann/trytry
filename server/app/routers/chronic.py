@@ -24,7 +24,7 @@ from ..deps import (
     resolve_business_date,
 )
 from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient, User
-from ..visibility import assert_patient_visible
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
 
 router = APIRouter(prefix="/api/chronic", tags=["慢病管理"], dependencies=[Depends(get_current_user)])
@@ -213,7 +213,11 @@ def update_disease_type(type_id: int, body: DiseaseTypeUpdate, db: Session = Dep
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 慢病建档
 )
-def register_chronic(body: ChronicCreate, db: Session = Depends(get_db)):
+def register_chronic(
+    body: ChronicCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    # P0-35：管理机构由请求声明——以别家名义建的档进别家的管理人数与随访任务。
+    assert_org_writable(db, user, body.managed_by_org_id)
     disease_type = get_disease_type(db, body.disease)
     if disease_type is None or not disease_type.active:
         raise HTTPException(status_code=422, detail="病种编码不在慢病病种目录内")

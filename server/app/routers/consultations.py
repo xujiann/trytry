@@ -26,6 +26,7 @@ router = APIRouter(prefix="/api/consultations", tags=["远程会诊"], dependenc
     dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 会诊申请
 )
 def apply(body: ConsultationCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    assert_org_writable(db, user, body.from_org_id)  # P0-35：申请方只能是本机构；受邀方按设计是别家
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     for org_id, label in ((body.from_org_id, "申请"), (body.to_org_id, "受邀")):

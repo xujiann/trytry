@@ -64,16 +64,12 @@ AWAITING_DECISION = {
 #: ✅ 第一批「诊疗行为」4 条已清（同日）：建就诊 / 开处方 / 检查申请 / 代煎单，实测乙院医生以甲院名义
 #: 四条全 201（处方还在甲院名下自动过了审方）；补 `assert_org_writable`，回归见
 #: `tests/test_clinical_create_declared_org.py`。
-KNOWN_UNGUARDED = {
-    "chronic.py:register_chronic",
-    "consultations.py:apply",
-    "cssd.py:advance",
-    "cssd.py:create_batch",
-    "infectious.py:report_case",
-    "referrals.py:create_referral",
-    "spd/followup.py:auto_match_plans",
-    "spd/followup.py:generate_report",
-}
+#: ✅ 第二～四批 8 条已清（同日），实测乙院账号以甲院名义各 200 / 201：转诊与会诊申请（发起方；接收方按设计
+#: 是别家）、传染病报告与慢病建档、消毒供应批次的建立 / 流转 / 记成本（归属取 `center_org_id`）、智能随访的
+#: 自动匹配与报告生成（给了 `org_id` 就照单全收）。回归见 `tests/test_referral_consult_apply_org_guard.py`、
+#: `tests/test_publichealth_declared_org_guard.py`、`tests/test_cssd_org_guard.py`、
+#: `tests/test_spd_followup_org_guard.py`。**候选清零，此后本名单即禁令**：新增一条就红。
+KNOWN_UNGUARDED: set[str] = set()
 
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _PORTAL = {"portal.py", "spd/portal.py"}  # 居民端走门户令牌 + accessible_patient，与上游同一理由豁免

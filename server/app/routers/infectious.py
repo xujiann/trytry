@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
-from ..models import InfectiousCase, InfectiousDisease, Organization
+from ..models import InfectiousCase, InfectiousDisease, Organization, User
+from ..visibility import assert_org_writable
 from ..schemas import InfectiousCaseCreate, InfectiousCaseOut, InfectiousDiseaseOut
 from .reports import _csv_response
 
@@ -71,7 +72,12 @@ def list_diseases(category: str | None = None, db: Session = Depends(get_db)):
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "public_health"))],  # H2: 传染病报告
 )
-def report_case(body: InfectiousCaseCreate, db: Session = Depends(get_db)):
+def report_case(
+    body: InfectiousCaseCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    # P0-35：报告机构由请求声明。多点预警按「几家机构报了同一病种」计——一个人以几家机构的名义各报
+    # 一例就能凭空触发预警；同一件事在症候群上报上早就守住了。
+    assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="报告机构不存在")
     case = InfectiousCase(**body.model_dump())
