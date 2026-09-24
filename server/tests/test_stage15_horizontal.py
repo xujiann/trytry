@@ -17,6 +17,7 @@ import functools
 
 import astcode
 import os
+import re
 import warnings
 
 import pytest
@@ -1472,3 +1473,117 @@ def test_挂在患者上的写接口判据自证():
     reverted = text[:start] + text[start:end].replace(guard, "", 1) + text[end:]
     assert "spd/care.py:close_consult" in _byid_patient_owned_write_endpoints([("spd/care.py", reverted)])
     assert "spd/care.py:close_consult" not in _byid_patient_owned_write_endpoints([("spd/care.py", text)])
+
+
+# ---------------------------------------------------------------- 按请求体里的患者号新建挂在患者上的行（P1-76）
+#
+# 上面那族问的是「能不能动**已有的**记录」。**新建**一条关于某位患者、又不带任何机构列的记录，另是一个口子：
+# 它不构成服务关系（`_relation_tables` 只认带机构列的表），于是建的人往往连自己建的这条都看不到——
+# P0-34 就是这个形状：慢专病宣教推送只看角色，任一机构能让平台给全县任意居民发短信。
+#
+# 分母：写端点里构造了「有 `patient_id`、没有任何以 `org_id` 结尾的列」的表的行；有机构列的表由
+# `tests/test_body_declared_org_write_guard.py` 管（新建时请求声明机构）。判据与上面同一套守卫名与领域守卫。
+# 2026-09-24 量出 11 条，逐条判定：修 1（P0-34），其余分两张名单，只减不增。
+
+#: 按设计不判患者可见性的新建（逐条写明理由）。
+PATIENT_OWNED_CREATE_BY_DESIGN = {
+    "appointments.py:add_blacklist":
+        "角色门是 require_admin：admin 属全域角色，判可见性是一句永不触发的守卫。",
+    "consents.py:register_consent":
+        "窗口代录知情同意：docstring 写明不做可见性阻断（患者本人在柜台前，本机构此刻往往还没有他的记录），"
+        "须附佐证、写操作落 AuditLog；与 patients.grant_authorization 同一口径。",
+    "consents.py:submit_correction_window":
+        "窗口代提更正 / 注销申请：只是一张待审申请，改主索引的是审核那一步，审核已按患者判定并留痕（P0-28）。",
+    "insurance.py:apply_dual_channel":
+        "双通道用药申报：只是申请，审核已按患者判定并留痕（P0-29）。副作用：一条待审申报占住部分唯一索引，"
+        "第三方的假申报会挡住正主再报，由审核驳回解开。",
+    "insurance.py:apply_special_disease":
+        "特病申报：同上（审核 P0-29 已按患者判定；待审申报占部分唯一索引，驳回即解开）。",
+    "surveys.py:submit_survey":
+        "满意度代录（居民本人走 portal）：患者可见性不是这里该守的东西——真正的问题是不校验评价对象存在、"
+        "也不校验它属于这位患者，统计按类型全县汇总，已另记（TECH_DEBT P1-76）。",
+}
+
+#: 同一形状、口径要人定的（写明出处），只减不增。
+PATIENT_OWNED_CREATE_AWAITING = {
+    "analytics.py:create_outbound_visit":
+        "县外就诊登记：与读侧 list_outbound_visits（无身份读接口第一层，待裁定）同一个「全县统计口径谁能写」的问题。",
+    "appointments.py:book":
+        "挂号：跨机构约号是医共体本意，body 收 id 那一族早已登记待产品确认（test_body_id_org_write_guard.KNOWN_BODY_ID_WRITES）。",
+    "maternal.py:register":
+        "孕产妇建册：档案表没有机构列，建册幂等、查到既有档案就原样返回（等于一个读口子）；档案清单本就全县可见，"
+        "归属随待裁定清单 P1-71「妇幼档案归谁」一问一起定。",
+    "vaccination.py:add_contraindication":
+        "接种禁忌登记：同文件清单 / 评估 / 解除都按患者判定，唯独登记不判；但错拦一条真禁忌是临床不安全的方向，"
+        "拦还是只留痕见待裁定清单 P1-76。",
+}
+
+
+def _patient_owned_orgless_models() -> set[str]:
+    """有 `patient_id`、没有任何以 `org_id` 结尾的列的表——新建它的行不构成服务关系。"""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app import models
+    return {
+        c.__name__ for c in models.Base.registry._class_registry.values()
+        if hasattr(c, "__tablename__") and "patient_id" in c.__table__.columns
+        and not any(col.name.endswith("org_id") for col in c.__table__.columns)
+    }
+
+
+def _patient_owned_create_endpoints(sources=None) -> set[str]:
+    """写端点里构造了挂在患者上、又无机构列的表的行，却没有任何归属守卫的。
+
+    `sources`：[(显示名, 源码)]，缺省扫全部路由文件（自证用例会塞进改过的源码）。
+    """
+    owned = _patient_owned_orgless_models()
+    if sources is None:
+        sources = [(name, open(path, encoding="utf-8").read()) for name, path in _router_files()]
+    found = set()
+    for name, text in sources:
+        if name in ("portal.py", "spd/portal.py"):
+            continue  # 居民端走 portal 令牌 + accessible_patient，同上
+        tree = ast.parse(text)
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            decs = [ast.unparse(d) for d in fn.decorator_list]
+            if not any("router." in d for d in decs):
+                continue
+            body = _with_local_helpers(tree, fn)
+            if not _is_write_endpoint(decs, body):
+                continue
+            if not any(re.search(rf"(?<![\w.]){m}\(", body) for m in owned):
+                continue
+            if any(g in body for g in _PATIENT_WRITE_GUARDS) or _has_domain_guard(name, tree, fn):
+                continue
+            found.add(f"{name}:{fn.name}")
+    return found
+
+
+def test_新建挂在患者上的行不许新增无守卫端点():
+    unguarded = _patient_owned_create_endpoints()
+    by_design, awaiting = set(PATIENT_OWNED_CREATE_BY_DESIGN), set(PATIENT_OWNED_CREATE_AWAITING)
+    assert not (by_design & awaiting), "同一条不能既按设计又待裁定"
+    new = unguarded - by_design - awaiting
+    assert new == set(), (
+        "以下写接口新建了挂在患者上、又没有机构列的行（不构成服务关系，建的人往往自己都看不到），"
+        "却没有任何归属判定——按患者 assert_patient_visible（留痕）；按设计不判的写明理由再登记：\n  "
+        + "\n  ".join(sorted(new))
+    )
+    stale = (by_design | awaiting) - unguarded
+    assert stale == set(), f"这些登记项已加了守卫或不存在，应从名单删除（只减不增）：{sorted(stale)}"
+
+
+def test_新建挂在患者上的行判据自证():
+    """把 P0-34 的判定从宣教推送里拿掉，判据必须当场点名它；分母里必须有宣教推送表。"""
+    assert {"SpdEduPush", "VaccineContraindication", "MaternalRecord"} <= _patient_owned_orgless_models()
+    assert "Referral" not in _patient_owned_orgless_models(), "带机构列的表归请求声明机构那条棘轮管"
+    path = dict(_router_files())["spd/care.py"]
+    text = open(path, encoding="utf-8").read()
+    guard = ('    for patient_id in patient_ids:\n'
+             '        assert_patient_visible(db, user, patient_id, resource="spd_edu")\n')
+    start = text.index("def push_education(")
+    end = text.index("\n@router", start)
+    assert guard in text[start:end], "push_education 里找不到 P0-34 的判定，自证前提变了"
+    reverted = text[:start] + text[start:end].replace(guard, "", 1) + text[end:]
+    assert "spd/care.py:push_education" in _patient_owned_create_endpoints([("spd/care.py", reverted)])
+    assert "spd/care.py:push_education" not in _patient_owned_create_endpoints([("spd/care.py", text)])
