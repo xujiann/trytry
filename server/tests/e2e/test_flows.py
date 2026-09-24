@@ -414,6 +414,80 @@ def test_开单前互认在页内表单里选_取消即不开单(page, base_url,
     assert accepted["status"] == "recognized" and accepted["recognized_from_id"] == source_id, accepted
 
 
+@pytest.fixture(scope="session")
+def correction_seed(base_url, seed):
+    """更正 / 注销申请审核的前置：一名患者，窗口代提一条改姓名的更正申请、一条注销申请。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    patient = call("/api/patients", {"name": "E2E更正患者", "id_card": "320000198808086673"}, admin)
+    fix = call("/api/consents/corrections", {
+        "patient_id": patient["id"], "request_type": "correction",
+        "changes": {"name": "E2E更正后姓名"}, "reason": "登记时姓名录错"}, doctor)
+    deact = call("/api/consents/corrections", {
+        "patient_id": patient["id"], "request_type": "deactivate", "reason": "疑似重复建档"}, doctor)
+    return {"patient": patient, "fix": fix, "deactivate": deact,
+            "read": lambda path: call(path, None, admin)}
+
+
+def test_更正注销申请的审核在页内表单里填_取消即不审(page, base_url, correction_seed):
+    """P2-38：「通过」原先弹审核意见框，点取消照样通过——**通过即改写患者主索引，注销申请则直接注销
+    档案**。换成页内表单：取消就是不审（按接口核对申请仍待审、档案没动），通过前表单上方写明这一下
+    会改什么；拒绝不填意见由后端报人话，填了才拒。"""
+    read = correction_seed["read"]
+    fix_id, deact_id = correction_seed["fix"]["id"], correction_seed["deactivate"]["id"]
+    ehc_no = correction_seed["patient"]["ehc_no"]
+
+    def status(rid):
+        (row,) = [r for r in read("/api/consents/corrections?limit=500") if r["id"] == rid]
+        return row["status"]
+
+    def button(rid, verdict):
+        return f'#cr-table button[data-review="{rid}"][data-verdict="{verdict}"]'
+
+    _login(page, base_url)
+    _open_page(page, "consents", "知情同意与行权")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    page.click(button(fix_id, "approved"))
+    expect(modal).to_contain_text("E2E更正后姓名")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert status(fix_id) == "pending", "点了取消却照样通过了"
+    assert read(f"/api/patients/{ehc_no}")["name"] == "E2E更正患者"
+    page.click(button(fix_id, "approved"))
+    _spd_modal(page, {"comment": "已核对身份证原件"})
+    expect(page.locator("#cr-msg")).to_contain_text("已处理")
+    assert status(fix_id) == "approved"
+    assert read(f"/api/patients/{ehc_no}")["name"] == "E2E更正后姓名"
+
+    page.click(button(deact_id, "approved"))
+    expect(modal).to_contain_text("注销")
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+    assert status(deact_id) == "pending", "点了取消却照样注销了"
+    page.click(button(deact_id, "rejected"))
+    _spd_modal(page, {"comment": ""})
+    expect(page.locator("#cr-msg")).to_contain_text("拒绝申请必须填写审核意见")
+    assert status(deact_id) == "pending"
+    page.click(button(deact_id, "rejected"))
+    _spd_modal(page, {"comment": "核实非重复建档，不予注销"})
+    expect(page.locator("#cr-msg")).to_contain_text("已处理")
+    assert status(deact_id) == "rejected"
+    assert read(f"/api/patients/{ehc_no}")["name"] == "E2E更正后姓名"
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

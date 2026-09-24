@@ -373,8 +373,10 @@ async function renderConsents() {
        <td>${statusTag(TEXT_STATUS, t.active ? "on" : "off")}</td>
        <td style="white-space:pre-wrap">${esc(t.content) || "—"}</td></tr>`);
   };
+  let correctionRows = {};
   const drawCorrections = async () => {
     const rows = await api("/api/consents/corrections?status=pending");
+    correctionRows = Object.fromEntries(rows.map((r) => [String(r.id), r]));
     $("#cr-table").innerHTML = table(
       ["ID", "患者", "类型", "内容", "理由", "操作"], rows, (r) =>
       `<tr><td>${esc(String(r.id))}</td><td>${esc(String(r.patient_id))}</td>
@@ -423,12 +425,21 @@ async function renderConsents() {
   };
   $("#cr-table").onclick = async (e) => {
     const id = e.target.dataset.review; if (!id) return;
-    const verdict = e.target.dataset.verdict;
-    const comment = verdict === "rejected" ? prompt("拒绝意见（必填）") : (prompt("审核意见（可空）") || "");
-    if (verdict === "rejected" && !comment) return;
+    const approve = e.target.dataset.verdict === "approved";
+    // P2-38：原先"通过"弹审核意见框，点取消照样通过——**通过即改写患者主索引，注销申请则直接
+    // 注销档案**。表单里取消就是不审；通过前把这一下会改什么写在表单上方。拒绝不填意见由后端报人话。
+    const r = correctionRows[id] || {};
+    const form = await spdModal(approve ? "通过申请" : "拒绝申请", [
+      { name: "comment", label: approve ? "审核意见（可空）" : "拒绝意见（必填）", type: "textarea" },
+    ], { intro: approve
+      ? (r.request_type === "deactivate"
+        ? "通过后该档案即注销：患者检索与居民端绑定入口不再出现（医疗记录照常保留）。"
+        : `通过后按申请改写患者档案：${r.changes || "—"}`)
+      : "" });
+    if (!form) return;
     try {
       await api(`/api/consents/corrections/${id}/review`, { method: "POST",
-        body: JSON.stringify({ approve: verdict === "approved", comment }) });
+        body: JSON.stringify({ approve, comment: form.comment }) });
       await drawCorrections(); setMsg("#cr-msg", "已处理", true);
     } catch (err) { setMsg("#cr-msg", err.message, false); }
   };
