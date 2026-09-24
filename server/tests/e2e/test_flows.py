@@ -256,9 +256,19 @@ def _submit(page, selector):
     DOM；这个坑在改用标记之前实测踩到过：填完读回来是空串，而表单类型明明是
     text、单独填又没问题。
     """
+    _redrawn(page, lambda: page.click(selector))
+
+
+def _redrawn(page, action):
+    """执行 `action`，并等整页重画完再返回（判据见 `_submit`）。
+
+    模态框同样需要：`_spd_modal` 在表单关掉时就返回了，写请求还在路上——紧接着按接口
+    读回会读到旧值、紧接着点下一个按钮会被随后的重画抹掉（2026-09-24 住院页用例实测，
+    第一次跑碰巧绿、第二次读回 404「病案首页未填写」）。
+    """
     marker = "e2e-stale"
     page.eval_on_selector("#page-body", f"el => el.dataset.stamp = '{marker}'")
-    page.click(selector)
+    action()
     page.wait_for_function(
         f"() => {{ const el = document.querySelector('#page-body');"
         f" return el && el.dataset.stamp !== '{marker}'; }}"
@@ -769,6 +779,62 @@ def test_物资页的签合同_验收_使用登记都在页内表单里录入(pa
     page.click('button[data-use="E2E-HV-1"]')
     _spd_modal(page, {"patient_id": str(seed["patient"]["id"])})  # 手术可空
     expect(page.locator("tr", has_text="E2E冠脉支架")).to_contain_text("E2E患者")
+
+
+@pytest.fixture(scope="session")
+def inpatient_seed(base_url, seed):
+    """住院页用例的前置数据：一个病区两张床、一位住在第一张床上的患者（第二张空着，供转床）。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    org_id = seed["org"]["id"]
+    patient = post("/api/patients", {"name": "E2E住院患者", "id_card": "320981198003033338", "gender": "男"}, token)
+    ward = post("/api/inpatient/wards", {"org_id": org_id, "name": "E2E内科病区"}, token)
+    bed1 = post("/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "N-01"}, token)
+    bed2 = post("/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "N-02"}, token)
+    admission = post("/api/inpatient/admissions",
+                     {"patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed1["id"],
+                      "doctor_name": "E2E内科医生", "diagnosis_name": "慢性心力衰竭急性加重"}, token)
+    return {"admission": admission, "bed2": bed2}
+
+
+def test_住院页的转床_开医嘱_病案首页都在页内表单里录入(page, base_url, inpatient_seed):
+    """P2-38 / P1-68：转床原先手输病区与床位 ID；开医嘱问完内容再弹「确定=长期，取消=临时」——
+    想放弃时点取消反而开出一条临时医嘱；病案首页四连问、**从不送转归**，后端默认"好转"，
+    质量指标的住院治愈好转率与死亡率取的正是它。现在转床从本机构空闲床位里选、医嘱类型下拉、
+    首页转归可选，费用带分（P1-67）。"""
+    adm_id = inpatient_seed["admission"]["id"]
+    _login(page, base_url)
+    _open_page(page, "inpatient", "住院管理")
+
+    bed2 = inpatient_seed["bed2"]["id"]
+    page.click(f'button[data-transfer="{adm_id}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"bed_id": str(bed2)}))
+    row = page.locator("tr", has=page.locator(f'button[data-transfer="{adm_id}"]'))
+    expect(row).to_contain_text(f"E2E内科病区 / {bed2}")
+
+    page.click(f'button[data-order="{adm_id}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"order_type": "temp", "content": "E2E呋塞米 20mg iv st"}))
+    page.click(f'button[data-orders="{adm_id}"]')
+    expect(page.locator("#inp-orders tr", has_text="E2E呋塞米 20mg iv st")).to_contain_text("临时")
+
+    page.click(f'button[data-summary="{adm_id}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"discharge_diagnosis": "E2E慢性心力衰竭", "total_cost": "8888.5",
+                                             "drug_cost": "3000.25", "outcome": "死亡", "note": "E2E抢救无效"}))
+    summary = page.evaluate(
+        "async (id) => await api(`/api/inpatient/admissions/${id}/case-summary`)", adm_id)
+    assert (summary["outcome"], summary["total_cost"], summary["note"]) == ("死亡", 8888.5, "E2E抢救无效"), summary
 
 
 

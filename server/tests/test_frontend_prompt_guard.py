@@ -19,8 +19,8 @@ STATIC = pathlib.Path(__file__).resolve().parents[1] / "app" / "static"
 
 #: 只许调小：换掉一批就同步改小，降了不改也红——不改小，就给了下一次偷偷加回来的余地。
 #: 97 → 87（2026-09-24 孕产妇页）→ 77（同日人财物页）→ 66（同日手术页 + 医生移动端手术页签）
-#: → 59（同日物资页）。
-BASELINE = 59
+#: → 59（同日物资页）→ 54（同日住院页）。
+BASELINE = 54
 
 
 def prompt_lines() -> list[str]:

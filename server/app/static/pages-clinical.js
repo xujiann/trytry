@@ -2445,28 +2445,51 @@ async function renderInpatient() {
       if (d.printBill) return await openPrintPage(`/api/print/inpatient-bills/${d.printBill}`);
       if (d.printCase) return await openPrintPage(`/api/print/case-summaries/${d.printCase}`);
       if (d.printDischarge) return await openPrintPage(`/api/print/discharge-summaries/${d.printDischarge}`);
+      // P2-38 / P1-68：转床两连问（手输病区与床位 ID）、开医嘱的内容 +「确定=长期，取消=临时」
+      // 确认框（想放弃时点"取消"反而开出一条临时医嘱）、病案首页四连问，换成页内表单。
+      // 病案首页原先**不送转归**，后端默认"好转"——质量指标的住院治愈好转率与死亡率取的正是它，
+      // 经界面填的首页全算"好转"，死亡病例进不了死亡率。现在可选，备注也能填。
       if (d.transfer) {
-        const wardId = prompt("目标病区ID"), bedId = prompt("目标床位ID");
-        if (!wardId || !bedId) return;
+        const a = admissions.find((x) => x.id === Number(d.transfer));
+        const wardOrg = Object.fromEntries(wards.map((w) => [w.id, w.org_id]));
+        // 后端只收同机构病区里的空闲床位（跨机构走双向转诊）；病区由床位带出，不再分开手输
+        const free = beds.filter((b) => b.status === "free" && (!a || wardOrg[b.ward_id] === a.org_id));
+        if (!free.length) return setMsg("#inp-msg", "本机构暂无空闲床位", false);
+        const v = await spdModal(`转床（住院 ${d.transfer}）`, [
+          // label 由 spdModal 自己 esc()，这里再转义就成了双重转义——所以不写成模板插值
+          { name: "bed_id", label: "目标床位（本机构的空闲床位）", type: "select",
+            options: free.map((b) => ({ value: b.id, label: (wardName[b.ward_id] || String(b.ward_id)) + " " + b.bed_no })) },
+        ]);
+        if (!v) return;
+        const bed = free.find((b) => b.id === Number(v.bed_id));
         await api(`/api/inpatient/admissions/${d.transfer}/transfer`, { method: "POST",
-          body: JSON.stringify({ ward_id: Number(wardId), bed_id: Number(bedId) }) });
+          body: JSON.stringify({ ward_id: bed.ward_id, bed_id: bed.id }) });
         route();
       }
       if (d.order) {
-        const content = prompt("医嘱内容");
-        if (!content) return;
-        const isLong = confirm("长期医嘱？（确定=长期，取消=临时）");
+        const v = await spdModal(`开医嘱（住院 ${d.order}）`, [
+          { name: "order_type", label: "类型", type: "select",
+            options: [{ value: "long", label: "长期医嘱" }, { value: "temp", label: "临时医嘱" }] },
+          { name: "content", label: "医嘱内容", required: true },
+        ]);
+        if (!v) return;
         await api("/api/inpatient/orders", { method: "POST",
-          body: JSON.stringify({ admission_id: Number(d.order), order_type: isLong ? "long" : "temp", content }) });
+          body: JSON.stringify({ admission_id: Number(d.order), ...v }) });
         route();
       }
       if (d.summary) {
-        const diagnosis = prompt("出院诊断");
-        if (!diagnosis) return;
-        await api(`/api/inpatient/admissions/${d.summary}/case-summary`, { method: "POST",
-          body: JSON.stringify({
-            discharge_diagnosis: diagnosis, operation: prompt("手术名称（无则留空）") || "",
-            total_cost: Number(prompt("总费用（元）") || 0), drug_cost: Number(prompt("其中药费（元）") || 0) }) });
+        // 出院诊断不预填入院诊断：入出院诊断符合率比的就是这两个，照抄过来它就只剩 100%
+        const v = await spdModal(`病案首页（住院 ${d.summary}）`, [
+          { name: "discharge_diagnosis", label: "出院诊断", required: true },
+          { name: "operation", label: "手术名称（留空则从本次住院的术中记录带出）" },
+          { name: "total_cost", label: "总费用（元）", type: "number" },
+          { name: "drug_cost", label: "其中药费（元）", type: "number" },
+          { name: "outcome", label: "转归", type: "select", value: "好转",
+            options: ["治愈", "好转", "未愈", "死亡", "其他"].map((x) => ({ value: x, label: x })) },
+          { name: "note", label: "备注", type: "textarea" },
+        ]);
+        if (!v) return;
+        await api(`/api/inpatient/admissions/${d.summary}/case-summary`, { method: "POST", body: JSON.stringify(v) });
         route();
       }
       if (d.discharge) { await api(`/api/inpatient/admissions/${d.discharge}/discharge`, { method: "POST" }); route(); }
