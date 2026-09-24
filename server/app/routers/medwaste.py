@@ -22,7 +22,13 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..concurrency import insert_with_retry
 from ..database import get_db
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
+from ..visibility import (
+    assert_obj_org_writable,
+    assert_org_visible,
+    assert_org_writable,
+    scope_org_list,
+    stats_org_ids,
+)
 from ..deps import get_current_user, paginate, require_date, require_roles, resolve_business_date
 from ..models import Employee, MedicalWaste, Organization, User, WasteLocation
 from ..schemas import WasteCreate, WasteHandover
@@ -403,11 +409,16 @@ def handover(
 
 
 @router.get("/trace/{trace_code}", response_model=WasteTraceOut)
-def trace(trace_code: str, db: Session = Depends(get_db)):
-    """扫码追溯：一包医废从哪来、经过哪里、谁交接的、现在到哪一步。"""
+def trace(trace_code: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """扫码追溯：一包医废从哪来、经过哪里、谁交接的、现在到哪一步。
+
+    按所属机构判可见（P0-39）：追溯码是「MW-日期-序号」，顺着就能逐包翻遍全县，
+    与医废清单同一口径——本机构；全域角色看全县。
+    """
     waste = db.query(MedicalWaste).filter(MedicalWaste.trace_code == trace_code).first()
     if waste is None:
         raise HTTPException(status_code=404, detail="追溯码不存在")
+    assert_org_visible(db, user, waste.org_id)
     locations: dict[int | None, dict] = {
         loc.id: _location_out(loc)
         for loc in db.query(WasteLocation)
@@ -431,11 +442,19 @@ def trace(trace_code: str, db: Session = Depends(get_db)):
 
 @router.get("/handler-stats", response_model=HandlerStatsOut)
 def handler_stats(
-    start_date: str | None = None, end_date: str | None = None, db: Session = Depends(get_db)
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """转运人员工作量。挂了员工档案的按人汇总；只填了名字的历史记录单列报出，
-    不硬凑进某个人头上——名字重合就会张冠李戴。"""
+    不硬凑进某个人头上——名字重合就会张冠李戴。
+
+    统计按调用方的统计可见范围收口（P0-39，第九轮 A 案：本机构 + 同医共体；全域角色看全县）。"""
     query = db.query(MedicalWaste).filter(MedicalWaste.status == "handed_over")
+    orgs = stats_org_ids(db, user)
+    if orgs is not None:
+        query = query.filter(MedicalWaste.org_id.in_(orgs))
     # 按字符串比 `collected_date`：非法值不报错、只把工作量算少（P1-58）
     if start_date:
         start_date = require_date(start_date, field="start_date")
