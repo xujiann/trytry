@@ -92,6 +92,10 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
         batch = db.get(VaccineBatch, body.batch_id)
         if batch is None:
             raise HTTPException(status_code=404, detail="疫苗批次不存在")
+        if batch.org_id != body.org_id:
+            # P0-42：批次由持有机构自己入库、平台没有跨机构调拨——用别家的批次会扣别家的库存，
+            # 这一针还会在追溯链上挂到别人的批号上（按批号召回时找错机构）
+            raise HTTPException(status_code=422, detail="该疫苗批次不属于接种机构")
         if batch.vaccine_code != body.vaccine_code:
             raise HTTPException(status_code=422, detail="批次与所填疫苗编码不一致")
         today = body.vaccinated_date or clock.today().isoformat()
