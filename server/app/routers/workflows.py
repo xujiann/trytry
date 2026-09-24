@@ -19,15 +19,17 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..visibility import (
     assert_obj_org_writable,
+    assert_org_visible,
     assert_org_writable,
     assert_patient_visible,
+    visible_org_ids,
     visible_patient_ids,
 )
 from ..database import get_db
@@ -233,6 +235,18 @@ def _node(definition: WorkflowDefinition, key: str) -> dict | None:
     return next((n for n in definition.nodes if n["key"] == key), None)
 
 
+def _scope_instances(db: Session, user: User, query):
+    """实例读侧与写侧同一口径（P0-38）：非全域角色只看本机构的与不挂机构的（全县流程）。
+
+    推进 / 终止按 `assert_obj_org_writable(instance)` 判——别家的实例办不了，
+    清单与待办里也就不该出现；不挂机构的实例谁都办得了，照旧人人可见。
+    """
+    allowed = visible_org_ids(db, user)
+    if allowed is None:
+        return query
+    return query.filter(or_(WorkflowInstance.org_id.in_(allowed), WorkflowInstance.org_id.is_(None)))
+
+
 def _instance_out(i: WorkflowInstance, node: dict | None = None) -> dict:
     return {
         "id": i.id,
@@ -423,8 +437,9 @@ def list_instances(
     offset: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    query = db.query(WorkflowInstance)
+    query = _scope_instances(db, user, db.query(WorkflowInstance))
     if definition_key:
         query = query.filter(WorkflowInstance.definition_key == definition_key)
     if status:
@@ -444,9 +459,11 @@ def list_instances(
 
 @router.get("/instances/{instance_id}/history",
             response_model=list[WorkflowTransitionOut])
-def instance_history(instance_id: int, db: Session = Depends(get_db)):
-    if db.get(WorkflowInstance, instance_id) is None:
+def instance_history(instance_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    instance = db.get(WorkflowInstance, instance_id)
+    if instance is None:
         raise HTTPException(status_code=404, detail="流程实例不存在")
+    assert_org_visible(db, user, instance.org_id)  # 不挂机构的全县流程照旧放行
     rows = (
         db.query(WorkflowTransition)
         .filter(WorkflowTransition.instance_id == instance_id)
@@ -473,10 +490,13 @@ def my_tasks(db: Session = Depends(get_db), user: User = Depends(get_current_use
     """待办联动：当前用户角色可推进的流转中实例。
 
     admin 看全部——管理员本来就是兜底处理卡单的人。
+
+    「可推进」两个条件缺一不可：节点角色对得上，**且**实例的机构办得了（P0-38）。
+    原先只按角色筛，别家机构的单子也算进待办，点「推进」才吃 403。
     """
     definitions = {d.key: d for d in db.query(WorkflowDefinition).all()}
     rows = (
-        db.query(WorkflowInstance)
+        _scope_instances(db, user, db.query(WorkflowInstance))
         .filter(WorkflowInstance.status == "running")
         .order_by(WorkflowInstance.id.desc())
         .limit(200)
