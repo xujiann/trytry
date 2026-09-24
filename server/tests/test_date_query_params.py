@@ -113,6 +113,8 @@ def test_县域就诊率的分子分母用同一个日期窗口(client, admin):
 # 逐模块接一批、加一批行。只读筛选的非法值此前多是 200 空集/错集（用户看到"没有数据"
 # 而不是"日期写错了"），拼成时间戳去比 DateTime 列的在真 PG 上是 500。
 # **留空一律等于不筛**——三端前端只在非空时发这些参数，但对接方可能发空串。
+# 拼成时间戳去比 DateTime 列的那一族另列在 `test_date_filter_pg_dialect.py`：
+# 它们的毛病只在真 PG 上现形（500），那份文件能被整份换到 PG 上再跑一遍。
 
 #: (路径, 参数)。都用 admin 调：这里验的是入参校验，不是角色门。
 FILTER_PARAMS = [
@@ -167,8 +169,6 @@ GUARDS = frozenset({"require_date", "resolve_business_date"})
 
 #: 还留在裸 `str`、未经上面守卫的日期查询参数（P1-58）。**只许变少。**
 KNOWN_BARE_DATE_PARAMS: set[str] = {
-    "routers/access_logs.py::list_access_logs::end",
-    "routers/access_logs.py::list_access_logs::start",
     "routers/admin_mgmt.py::list_rosters::duty_date",
     "routers/appointments.py::list_slots::slot_date",
     "routers/certs.py::export_death_report_cards_csv::date_from",

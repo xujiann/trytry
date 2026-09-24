@@ -703,9 +703,9 @@ def test_金额并发闸门在真PG上成立(pg_engine):
     按 SQLite 导入定型，改环境变量已经晚了。子进程里 `MEDPLAT_BILLING_PG_URL`
     会在导入 app 之前把连接串顶掉（那个模块头部有断言兜底）。
 
-    **本条要放在文件末尾**：子进程用 `reset_database()`（drop_all + create_all）
+    **本条与下一条要放在文件末尾**：子进程用 `reset_database()`（drop_all + create_all）
     重建表，会把上面几条用例依赖的"迁移建出来的库"换成模型建出来的库。
-    往后加 PG 用例请加在这一条之前。
+    往后加用迁移库的 PG 用例请加在这一条之前。
     """
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/test_billing_money_concurrency.py", "-q"],
@@ -716,6 +716,29 @@ def test_金额并发闸门在真PG上成立(pg_engine):
     )
     assert result.returncode == 0, (
         "金额并发用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )
+
+
+def test_拼时间戳比DateTime列的日期筛选在真PG上不是500(pg_engine):
+    """把 `test_date_filter_pg_dialect.py` 换到 PG 上再跑一遍（P1-58）。
+
+    那一族筛选把日期参数拼成 `f"{x} 00:00:00"` 去比 DateTime 列：非法值在 SQLite 上
+    按字符串比较、200 空集，在 PG 上转 timestamp 失败、**500**——只有这里测得出来。
+    接法与上一条相同（子进程 + `MEDPLAT_DATEQ_PG_URL` 在导入 app 之前顶掉连接串），
+    同样会用 `reset_database()` 重建表，所以同样放在文件末尾。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_date_filter_pg_dialect.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_DATEQ_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "日期筛选用例在真 PG 上没过：\n"
         + result.stdout[-4000:]
         + "\n"
         + result.stderr[-2000:]

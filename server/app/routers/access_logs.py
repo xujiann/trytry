@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles
+from ..deps import get_current_user, paginate, require_date, require_roles
 from ..models import AccessLog, Organization, Patient, User
 from .portal import current_resident_patient
 
@@ -153,10 +153,14 @@ def list_access_logs(
         query = query.filter(AccessLog.org_id == org_id)
     if basis:
         query = query.filter(AccessLog.basis == basis)
-    # 日期段按 created_at 的日界过滤；留痕存的是 naive datetime
+    # 日期段按 created_at 的日界过滤；留痕存的是 naive datetime。
+    # 拼时间戳之前先校验（P1-58）：`2026-02-30` 拼成的串在真 PG 上转 timestamp 失败，
+    # 此前是 500——稽核员在自由文本框里敲错一位，看到的是"服务器内部错误"。
     if start:
+        start = require_date(start, field="start")
         query = query.filter(AccessLog.created_at >= f"{start} 00:00:00")
     if end:
+        end = require_date(end, field="end")
         query = query.filter(AccessLog.created_at <= f"{end} 23:59:59")
 
     rows = paginate(query.order_by(AccessLog.id.desc()), response, offset, limit)
