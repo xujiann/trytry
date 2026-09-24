@@ -21,7 +21,7 @@ from ... import clock
 from ...clock import now_naive
 from ...concurrency import add_amount
 from ...database import get_db
-from ...deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
+from ...deps import get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict
 from ..platform import Patient, User, evidence_urls, notify_user, valid_task_evidence
 from ..models import (
     SpdEnrollment,
@@ -616,6 +616,8 @@ def list_tasks(
     if escalated is not None:
         query = query.filter(SpdTask.escalated.is_(escalated))
     if due_before:
+        # 先校验再比：`2026/09/30` 这种写法按字符串去比 YYYY-MM-DD 列，筛出来的是错的而不报错（P1-87）
+        due_before = require_date(due_before, field="due_before")
         query = query.filter(SpdTask.due_date != "", SpdTask.due_date <= due_before)
     rows = paginate(
         query.order_by(SpdTask.priority.desc(), SpdTask.due_date, SpdTask.id.desc()),

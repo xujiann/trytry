@@ -174,9 +174,12 @@ def test_筛选日期留空等于不筛_合法值照常(client, admin, path, par
 #
 # 净变化 25 → 27：不是新增欠账，是把原来没数到的数进来、把数错的剔出去。
 
-#: 判据认的日期参数：名字含 `date`，或是下面这些约定俗成的日期参数名。
+#: 判据认的日期参数：名字含 `date`，或是下面这些约定俗成的日期参数名，或以 `_before` / `_after` 结尾。
 #: **按名字推导有盲区**——叫 `at` / `when` 的日期参数看不见；这里宁可写明，不假装全覆盖。
+#: 后缀那一条是 2026-09-24 补的（P1-87）：`due_before`（纳管清单、任务清单的「到期不晚于」）两处
+#: 就落在这个盲区里，`2026/09/30` 这种写法按字符串去比 `YYYY-MM-DD` 列，筛出来的是错的而不报错。
 DATE_PARAM_NAMES = frozenset({"today", "start", "end", "since", "until", "day"})
+DATE_PARAM_SUFFIXES = ("_before", "_after")
 
 #: 两个都落到 `datetypes.check_date`，参数经过其一即算守住。
 GUARDS = frozenset({"require_date", "resolve_business_date"})
@@ -235,7 +238,7 @@ def _date_params(func):
             continue
         if _plain_annotation(arg.annotation) not in ("str", "str | None"):
             continue
-        if "date" in arg.arg or arg.arg in DATE_PARAM_NAMES:
+        if "date" in arg.arg or arg.arg in DATE_PARAM_NAMES or arg.arg.endswith(DATE_PARAM_SUFFIXES):
             yield arg.arg
 
 
@@ -270,6 +273,8 @@ def test_覆盖面自证():
         "routers/users.py::export_audit_logs::until",
         "routers/analytics.py::patient_flow::start",
         "routers/appointments.py::find_doctors::from_date",
+        "spd/routers/population.py::list_enrollments::due_before",
+        "spd/routers/tasks.py::list_tasks::due_before",
     ):
         assert entry in every, f"判据没数到 {entry}"
         assert entry not in bare, f"{entry} 经 resolve_business_date 校验，不该算裸 str"

@@ -25,7 +25,7 @@ from ...concurrency import ensure_present, insert_if_absent, serialized_on
 from ...config import settings
 from ...database import get_db
 from ...datetypes import OptionalDateStr
-from ...deps import get_current_user, paginate, require_roles, row_dict
+from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
 from ..platform import Organization, Patient, User, pii_filter
 from ..models import (
     SpdAssessment,
@@ -977,6 +977,8 @@ def list_enrollments(
     if archived is not None:
         query = query.filter(SpdEnrollment.archived.is_(archived))
     if due_before:
+        # 先校验再比：`2026/09/30` 这种写法按字符串去比 YYYY-MM-DD 列，筛出来的是错的而不报错（P1-87）
+        due_before = require_date(due_before, field="due_before")
         query = query.filter(
             SpdEnrollment.next_followup_at != "",
             SpdEnrollment.next_followup_at <= due_before,
