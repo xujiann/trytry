@@ -1088,15 +1088,24 @@ async function drawHomeVisits() {
   holder.onclick = async (e) => {
     const { hvdis, hvdone, hvcancel } = e.target.dataset;
     try {
+      // P2-38：派单 / 完成换成页内表单——服务记录是一整段文字（做了什么、患者情况），
+      // 弹窗只有一行、粘不了长文本；留空由后端报人话。
       if (hvdis) {
-        const name = prompt("上门人员姓名"); if (!name) return;
-        return postAction(`/api/homevisits/${hvdis}/dispatch`, { assignee_name: name }, "#hv-msg");
+        const form = await spdModal("派单", [{ name: "assignee_name", label: "上门人员姓名", required: true }]);
+        if (!form) return;
+        return postAction(`/api/homevisits/${hvdis}/dispatch`, { assignee_name: form.assignee_name }, "#hv-msg");
       }
       if (hvdone) {
-        const note = prompt("服务记录（必填）"); if (!note) return;
-        return postAction(`/api/homevisits/${hvdone}/complete`, { service_note: note }, "#hv-msg");
+        const form = await spdModal("完成上门服务", [
+          { name: "service_note", label: "服务记录（必填）", type: "textarea" }]);
+        if (!form) return;
+        return postAction(`/api/homevisits/${hvdone}/complete`, { service_note: form.service_note }, "#hv-msg");
       }
-      if (hvcancel) return postAction(`/api/homevisits/${hvcancel}/cancel`, null, "#hv-msg");
+      if (hvcancel) {
+        // 取消工单原先点一下就生效、没有任何确认：居民提的上门申请一次误点就作废了，页面上也恢复不了。
+        if (!await spdModal("取消上门工单", [], { intro: "点「确定」作废该工单，不能恢复；点「取消」保留。" })) return;
+        return postAction(`/api/homevisits/${hvcancel}/cancel`, null, "#hv-msg");
+      }
     } catch (err) { setMsg("#hv-msg", err.message, false); }
   };
 }
