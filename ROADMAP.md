@@ -847,7 +847,7 @@
   已补 `datetypes.check_date` + `deps.require_date`（与 `require_month` 对称），两条端点都接上；
   同批修掉 `mgmt:end` 无条件把离职员工改回在岗（污染 analytics 在岗医师数）、
   补上"结束日不早于开始日"。回归 18 条、四处变异各自转红；棘轮把余下 25 处钉住（P1-58）。
-- ◐ **P1-58 余下的日期查询参数逐模块接上 `require_date`**（ADR-0024 第一步留下的棘轮，
+- ✅ **P1-58 日期查询参数逐模块接上 `require_date`：27 → 0**（2026-09-24；ADR-0024 第一步留下的棘轮，
   现在 `tests/test_date_query_params.py::KNOWN_BARE_DATE_PARAMS`）。开工前逐条取证了三件事：
   后端怎么用这个值、三端前端实际发什么、非法输入现在是什么结果——**SQLite 与真 PG 各跑一遍**。
   取证结论（2026-09-24）：
@@ -864,6 +864,10 @@
   - 棘轮判据补全：承认 `resolve_business_date` 是守卫（剔 2 条误报）、数进不带 `date` 字样的
     `start`/`end`/`since`/`day`（补 4 条漏数），**25 → 27**。
   按模块一批一个提交：接 `require_date` + 回归（非法 422、合法与留空行为不变）+ 从棘轮划掉 + 重生成 `docs/闸门现状.md`。
+  清账 12 批、一个模块一个提交：billing → access_logs → spd/care → spd/followup → spd/referral → certs → medwaste
+  → appointments → portal → admin_mgmt → clinical_docs → surgery。每批撤掉修复后对应用例各自转红；
+  真 PG 上的那一族另有 `test_date_filter_pg_dialect.py`，并由 `test_postgres_real.py` 整份换到 PG 上再跑。
+  清单清成空集合后照样是棘轮。**body 侧另有一批 D-3 没数到的裸 `str` 日期字段，见下一条 P1-61。**
 
 ### 🚀 正式上线前（收口中）
 
