@@ -163,15 +163,16 @@ class ProgramIn(BaseModel):
 
 
 class ProgramUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=64)
+    # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
+    name: str = Field(default=UNSET, min_length=1, max_length=64)
     lead_org_id: int | None = None
-    lead_dept: str | None = Field(default=None, max_length=64)
-    description: str | None = Field(default=None, max_length=512)
-    include_rules: list[dict] | None = None
-    exclude_rules: list[dict] | None = None
-    stages: list[dict] | None = None
-    milestones: list[dict] | None = None
-    active: bool | None = None
+    lead_dept: str = Field(default=UNSET, max_length=64)
+    description: str = Field(default=UNSET, max_length=512)
+    include_rules: list[dict] = Field(default=UNSET)
+    exclude_rules: list[dict] = Field(default=UNSET)
+    stages: list[dict] = Field(default=UNSET)
+    milestones: list[dict] = Field(default=UNSET)
+    active: bool = Field(default=UNSET)
     note: str = Field(default="", max_length=256)
 
 

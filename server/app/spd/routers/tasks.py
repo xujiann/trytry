@@ -21,6 +21,7 @@ from ... import clock
 from ...clock import now_naive
 from ...concurrency import add_amount
 from ...database import get_db
+from ...patchtypes import UNSET
 from ...deps import get_current_user, paginate, require_date, require_roles, resolve_business_date, row_dict
 from ..platform import Patient, User, evidence_urls, notify_user, valid_task_evidence
 from ..models import (
@@ -377,8 +378,9 @@ def get_path_instance(instance_id: int, db: Session = Depends(get_db)):
 
 
 class InstanceAdjustIn(BaseModel):
-    overrides: dict | None = None
-    status: str | None = Field(default=None, pattern="^(running|paused|cancelled)$")
+    # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
+    overrides: dict = Field(default=UNSET)
+    status: str = Field(default=UNSET, pattern="^(running|paused|cancelled)$")
     owner_user_id: int | None = None
 
 

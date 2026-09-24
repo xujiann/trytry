@@ -24,6 +24,7 @@ from ...clock import now_naive
 from ...concurrency import ensure_present, insert_if_absent, serialized_on
 from ...config import settings
 from ...database import get_db
+from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
 from ..platform import Organization, Patient, User, pii_filter
@@ -1056,18 +1057,19 @@ class EnrollUpdate(BaseModel):
     doctor_user_id: int | None = None
     manager_user_id: int | None = None
     village_doctor_id: int | None = None
-    stage: str | None = Field(default=None, max_length=32)
+    # 以下不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
+    stage: str = Field(default=UNSET, max_length=32)
     # 与建档同一个取值范围（P2-50）：下游统计按 high / very_high 数高危，写进别的码的人就从高危里消失
-    risk_level: str | None = Field(default=None, pattern="^(low|mid|high|very_high)$")
-    consent_signed: bool | None = None
-    consent_no: str | None = Field(default=None, max_length=64)
-    service_start: OptionalDateStr | None = None
-    service_end: OptionalDateStr | None = None
-    habits: dict | None = None
-    risk_factors: list[str] | None = None
-    complications: list[str] | None = None
-    tags: list[str] | None = None
-    next_followup_at: OptionalDateStr | None = None
+    risk_level: str = Field(default=UNSET, pattern="^(low|mid|high|very_high)$")
+    consent_signed: bool = Field(default=UNSET)
+    consent_no: str = Field(default=UNSET, max_length=64)
+    service_start: OptionalDateStr = Field(default=UNSET)
+    service_end: OptionalDateStr = Field(default=UNSET)
+    habits: dict = Field(default=UNSET)
+    risk_factors: list[str] = Field(default=UNSET)
+    complications: list[str] = Field(default=UNSET)
+    tags: list[str] = Field(default=UNSET)
+    next_followup_at: OptionalDateStr = Field(default=UNSET)
 
 
 @router.patch("/enrollments/{enrollment_id}", response_model=EnrollmentOut,

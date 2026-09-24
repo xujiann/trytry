@@ -939,10 +939,11 @@ def execute_followup(
 
 
 class RecordPatchIn(BaseModel):
-    status: str | None = Field(default=None, pattern="^(planned|removed)$")
-    planned_at: OptionalDateStr | None = None
+    # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
+    status: str = Field(default=UNSET, pattern="^(planned|removed)$")
+    planned_at: OptionalDateStr = Field(default=UNSET)
     executor_id: int | None = None
-    channel: str | None = Field(default=None, max_length=16)
+    channel: str = Field(default=UNSET, max_length=16)
 
 
 @router.patch("/followup-records/{record_id}", response_model=FollowupRecordOut,

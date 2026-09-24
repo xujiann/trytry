@@ -123,6 +123,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          bodyraw.BASELINE, "tests/test_body_raw_dict.py"),
         ("请求体契约", "按设计收原样资源的入站端点（FHIR R4 资源，逐条写明理由）",
          len(bodyraw.BY_DESIGN), "tests/test_body_raw_dict.py"),
+        ("请求体契约", "可空入参写进不可空列、处理函数也不挡 None（显式传 null 即 500；30 → 0 已清零）",
+         bodyraw.NULLABLE_BASELINE, "tests/test_body_raw_dict.py"),
         ("时间口径", "app/ 里绕过 clock.today() 的 date.today()", clock.DATE_TODAY_BASELINE,
          "tests/test_clock.py"),
         ("时间口径", "app/ 顶层时间快照的豁免", len(clock.APP_IMPORT_TIME_OK),

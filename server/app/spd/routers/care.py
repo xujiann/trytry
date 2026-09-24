@@ -922,9 +922,10 @@ def list_interventions(
 
 
 class InterventionUpdate(BaseModel):
-    status: str | None = Field(default=None, pattern="^(planned|doing|done|removed)$")
+    # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
+    status: str = Field(default=UNSET, pattern="^(planned|doing|done|removed)$")
     feedback: str = Field(default="", max_length=512)
-    next_at: OptionalDateStr | None = None
+    next_at: OptionalDateStr = Field(default=UNSET)
 
 
 @router.patch("/interventions/{intervention_id}", response_model=InterventionOut,
@@ -1224,10 +1225,11 @@ def list_revisits(
 
 
 class RevisitUpdate(BaseModel):
-    status: str | None = Field(default=None, pattern="^(planned|done|overdue|removed)$")
-    plan_date: OptionalDateStr | None = None
-    actual_date: OptionalDateStr | None = None
-    remind_status: str | None = Field(default=None, pattern="^(none|sent|contacted)$")
+    # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
+    status: str = Field(default=UNSET, pattern="^(planned|done|overdue|removed)$")
+    plan_date: OptionalDateStr = Field(default=UNSET)
+    actual_date: OptionalDateStr = Field(default=UNSET)
+    remind_status: str = Field(default=UNSET, pattern="^(none|sent|contacted)$")
     note: str = Field(default="", max_length=256)
 
 

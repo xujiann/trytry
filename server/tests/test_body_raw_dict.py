@@ -21,14 +21,18 @@
 `Any`、`list[dict]` 算裸；`list[某模型]`、`list[str]` 不算（元素有类型）。上传文件 / 表单字段不是 JSON
 请求体，类型也不是裸的，自然不在此列。
 """
+import ast
 import types
 import typing
 from collections.abc import Mapping
 
 import pytest
 import test_api_contract_governance as contract
+import test_body_str_length as bodystr
 from fastapi import APIRouter, Body, UploadFile
 from pydantic import BaseModel
+
+from app.database import Base
 
 #: 基线：已清零，此后即零基线闸门（`scripts/dump_gate_status.py` 把它列进闸门现状）。
 #: 2026-09-24 实测 24 处裸 dict 请求体：慢专病配置改档 20 个（本批全部换成 `*Patch` 模型）+ 下面 4 个按设计。
@@ -296,3 +300,214 @@ def test_改量表_题目key重复是422_与建量表同一句(client, admin):
     resp = client.patch(f"{B}/scales/{scale.json()['id']}", headers=admin,
                         json={"items": [{"key": "a"}, {"key": "a"}]})
     assert resp.status_code == 422 and "key 不得重复" in resp.json()["detail"], resp.text
+
+
+# ================================================================ 第二层（P1-95）：可空入参写进不可空列
+#: 基线：已清零。2026-09-24 实测「请求体字段收得下 null × 写进的列 NOT NULL」78 处：平台侧 13 个处理函数本就把
+#: None 挡掉（`model_dump(exclude_none=True)` / 循环里 `if value is not None` / 先 `if body.x is None: raise`），
+#: 慢专病 6 个改档端点 30 个字段照写——显式传 null 即 `NOT NULL` 约束失败、500（病种档案、随访记录、纳管档案、
+#: 复诊、干预、路径实例，开发库实测）。同批改成 `app/patchtypes.UNSET` 的写法，显式 null 是 422。
+NULLABLE_BASELINE = 0
+
+
+def _nullable(tp) -> bool:
+    if typing.get_origin(tp) is typing.Annotated:
+        return _nullable(typing.get_args(tp)[0])
+    if tp is type(None) or tp is typing.Any:
+        return True
+    if typing.get_origin(tp) in _UNION:
+        return any(_nullable(a) for a in typing.get_args(tp))
+    return False
+
+
+def _none_skipped(fn, field: str) -> bool:
+    """处理函数自己把 None 挡掉了：`model_dump(exclude_none=True)`、改档循环里 `if value is not None:` 包着
+    `setattr`、显式赋值包在 `if body.字段 is not None:` 里，或先 `if body.字段 is None: raise`。"""
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "model_dump" \
+                and any(k.arg == "exclude_none" and isinstance(k.value, ast.Constant) and k.value.value is True
+                        for k in node.keywords):
+            return True
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1 \
+                and isinstance(node.test.ops[0], ast.IsNot) and isinstance(node.test.comparators[0], ast.Constant) \
+                and node.test.comparators[0].value is None:
+            left = node.test.left
+            if isinstance(left, ast.Name) and any(
+                    isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "setattr"
+                    for n in ast.walk(node)):
+                return True
+            if isinstance(left, ast.Attribute) and left.attr == field:
+                return True
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1 \
+                and isinstance(node.test.ops[0], ast.Is) and isinstance(node.test.comparators[0], ast.Constant) \
+                and node.test.comparators[0].value is None and isinstance(node.test.left, ast.Attribute) \
+                and node.test.left.attr == field and any(isinstance(n, ast.Raise) for n in node.body):
+            return True
+    return False
+
+
+def nullable_into_not_null(modules=None) -> list[str]:
+    """`模块:请求模型.字段→表.列`：请求体字段收得下 null，写进的却是不可空列，处理函数也没把 None 挡掉。
+
+    写库形状与长度 / 数值两族共用（`test_body_str_length.body_column_writes`）。"""
+    modules = list(bodystr._router_modules()) if modules is None else list(modules)
+    # 映射表放在路由模块全部导入之后建：单独跑本文件时，模型是随路由模块一起注册进 Base 的
+    orm = {m.class_.__name__: m.class_ for m in Base.registry.mappers}
+    texts = {name: text for name, _, text in modules}
+    out = set()
+    for modname, cls, field, model_name, column in bodystr.body_column_writes(modules):
+        info, model = cls.model_fields.get(field), orm.get(model_name)
+        if info is None or model is None or not _nullable(info.annotation):
+            continue
+        col = model.__table__.columns.get(column)
+        if col is None or col.nullable or col.primary_key:
+            continue
+        fns = [fn for fn in ast.parse(texts[modname]).body
+               if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and any(a.annotation is not None and ast.unparse(a.annotation) == cls.__name__ for a in fn.args.args)]
+        if any(not _none_skipped(fn, field) for fn in fns):
+            short = modname.removeprefix("app.").removeprefix("routers.").replace("spd.routers.", "spd/")
+            out.add(f"{short}:{cls.__name__}.{field}→{model.__tablename__}.{column}")
+    return sorted(out)
+
+
+def test_第二层_可空入参不得写进不可空列():
+    offenders = nullable_into_not_null()
+    assert len(offenders) <= NULLABLE_BASELINE, (
+        "请求体字段收得下 null，写进的却是 NOT NULL 列——显式传 null 即 500。不可空的列声明成 `T`、"
+        f"默认值取 `app/patchtypes.UNSET`（显式 null 是 422），或在处理函数里把 None 挡掉：{offenders}"
+    )
+
+
+def test_判据自证_第二层_照写的点名_挡掉的不报():
+    from pydantic import Field
+
+    snippet = '''
+class LoosePatch(BaseModel):
+    diagnosis_name: str | None = None
+
+class GuardedPatch(BaseModel):
+    diagnosis_name: str | None = None
+
+class DroppedPatch(BaseModel):
+    diagnosis_name: str | None = None
+
+class StrictPatch(BaseModel):
+    diagnosis_name: str = Field(default=None)
+
+class AmendIn(BaseModel):
+    summary: str | None = None
+
+class AmendLooseIn(BaseModel):
+    summary: str | None = None
+
+class TransferIn(BaseModel):
+    summary: str | None = None
+
+@router.patch("/l/{i}")
+def loose(i: int, body: LoosePatch, db=None):
+    e = db.get(Encounter, i)
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(e, k, v)
+
+@router.patch("/g/{i}")
+def guarded(i: int, body: GuardedPatch, db=None):
+    e = db.get(Encounter, i)
+    for k, v in body.model_dump(exclude_unset=True).items():
+        if v is not None:
+            setattr(e, k, v)
+
+@router.patch("/d/{i}")
+def dropped(i: int, body: DroppedPatch, db=None):
+    e = db.get(Encounter, i)
+    for k, v in body.model_dump(exclude_none=True).items():
+        setattr(e, k, v)
+
+@router.patch("/s/{i}")
+def strict(i: int, body: StrictPatch, db=None):
+    e = db.get(Encounter, i)
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(e, k, v)
+
+@router.post("/a/{i}")
+def amend(i: int, body: AmendIn, db=None):
+    e = db.get(Encounter, i)
+    if body.summary is not None:
+        e.summary = body.summary
+
+@router.post("/b/{i}")
+def amend_loose(i: int, body: AmendLooseIn, db=None):
+    e = db.get(Encounter, i)
+    e.summary = body.summary
+
+@router.post("/t/{i}")
+def transfer(i: int, body: TransferIn, db=None):
+    e = db.get(Encounter, i)
+    if body.summary is None:
+        raise HTTPException(status_code=422, detail="必填")
+    e.summary = body.summary
+'''
+
+    class _Router:
+        def __getattr__(self, _name):
+            return lambda *a, **k: (lambda fn: fn)
+
+    mod = types.ModuleType("自证")
+    mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "router": _Router()})
+    exec(compile(snippet, "自证", "exec"), mod.__dict__)
+    assert nullable_into_not_null([("自证", mod, snippet)]) == [
+        "自证:AmendLooseIn.summary→encounters.summary",
+        "自证:LoosePatch.diagnosis_name→encounters.diagnosis_name",
+    ]
+
+
+@pytest.mark.parametrize("path_fmt, field", [
+    ("/programs/{program}", "name"),
+    ("/programs/{program}", "active"),
+    ("/followup-records/{record}", "status"),
+    ("/followup-records/{record}", "planned_at"),
+    ("/enrollments/{enrollment}", "stage"),
+    ("/enrollments/{enrollment}", "next_followup_at"),
+    ("/revisits/{revisit}", "plan_date"),
+    ("/interventions/{intervention}", "status"),
+    ("/path-instances/{instance}", "status"),
+])
+def test_第二层_不可空的列显式传null是422而不是500(client, admin, p195_world, path_fmt, field):
+    resp = client.patch(B + path_fmt.format(**p195_world), headers=admin, json={field: None})
+    assert resp.status_code == 422, (path_fmt, field, resp.text)
+
+
+@pytest.fixture(scope="module")
+def p195_world(client, admin):
+    from app.database import SessionLocal
+    from app.models import User
+    from app.spd import models as S
+
+    program = client.get(f"{B}/programs", headers=admin).json()[0]
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "空值回归", "id_card": "110101199001016395", "gender": "男",
+        "birth_date": "1990-01-01", "phone": "13800006395"}).json()["id"]
+    template = client.post(f"{B}/path-templates", headers=admin, json={
+        "program_id": program["id"], "code": "P195-T", "name": "空值回归路径"})
+    assert template.status_code == 201, template.text
+    with SessionLocal() as db:
+        org_id = db.query(User).filter(User.username == "admin").one().org_id or 1
+        enrollment = S.SpdEnrollment(patient_id=patient, program_code=program["code"], org_id=org_id,
+                                     stage="", status="active")
+        db.add(enrollment)
+        db.flush()
+        instance = S.SpdPathInstance(enrollment_id=enrollment.id, template_id=template.json()["id"])
+        db.add(instance)
+        db.commit()
+        enrollment_id, instance_id = enrollment.id, instance.id
+    rule = client.post(f"{B}/followup-rules", headers=admin,
+                       json={"code": "P195-R", "name": "空值回归方案", "points": [7]}).json()
+    plan = client.post(f"{B}/followup-plans", headers=admin, json={"patient_id": patient, "rule_id": rule["id"]})
+    assert plan.status_code == 201, plan.text
+    revisit = client.post(f"{B}/revisits", headers=admin, json={"patient_id": patient, "plan_date": "2026-10-10"})
+    assert revisit.status_code == 201, revisit.text
+    intervention = client.post(f"{B}/interventions", headers=admin, json={
+        "patient_ids": [patient], "goal": "控压", "content": "低盐饮食", "program_code": program["code"]})
+    assert intervention.status_code == 201, intervention.text
+    return {"program": program["id"], "record": plan.json()["items"][0]["id"], "enrollment": enrollment_id,
+            "revisit": revisit.json()["id"], "intervention": intervention.json()["ids"][0], "instance": instance_id}
