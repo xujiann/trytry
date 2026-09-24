@@ -347,18 +347,28 @@ def month_bounds(period: str) -> tuple[date, date]:
     return start, end
 
 
-def resolve_business_date(today: str | None) -> date:
+def resolve_business_date(today: str | None, *, field: str = "today") -> date:
     """L-2（上轮 L3）整改：预警/超期类接口统一由服务端注入当前日期为默认。
 
     `today` 覆盖参数仅供**测试与管理排查**使用（见 docs/接口对接规范.md），
     生产对接方不应传入；格式非法返回 422，不再直接信任客户端字符串比较。
+
+    校验走 `datetypes.check_date`，与 `require_date` 同一个真源（P1-58）。此前这里
+    自己用 `date.fromisoformat` 校验，而它从 Python 3.11 起放宽成接受 ISO 8601 的
+    各种变体——`20260901`、`2026-W36-2` 都照过，接口规范写的却是 `YYYY-MM-DD`：
+    **校验随解释器升级悄悄变松了，没有任何一行代码改动**。后果不止是口径不一：
+    `analytics.patient_flow` 拿解析后的日期筛县内就诊、拿**原串**筛县外就诊，
+    `?start=20260901` 时县外那一侧按字符串比较整段落空，县域就诊率虚高（实测）。
+
+    `field` 进报错文案：`from_date` / `until` / `start` / `end` 也借这条校验，
+    此前报的一律是"today 参数…"，调用方看不出错的是哪个参数。文案句式不变。
     """
     if today is None:
         return clock.today()
     try:
-        return date.fromisoformat(today)
+        return date.fromisoformat(datetypes.check_date(today))
     except ValueError:
-        raise HTTPException(status_code=422, detail="today 参数须为 YYYY-MM-DD 格式") from None
+        raise HTTPException(status_code=422, detail=f"{field} 参数须为 YYYY-MM-DD 格式") from None
 
 
 def token_issued_before_baseline(claims: dict, user: User) -> bool:

@@ -354,11 +354,11 @@ def patient_flow(start: str | None = None, end: str | None = None, db: Session =
     outside_q = db.query(OutboundVisit)
     if start:
         inside_q = inside_q.filter(Encounter.created_at >= datetime.combine(
-            resolve_business_date(start), datetime.min.time()))
+            resolve_business_date(start, field="start"), datetime.min.time()))
         outside_q = outside_q.filter(OutboundVisit.visit_date >= start)
     if end:
         inside_q = inside_q.filter(Encounter.created_at < datetime.combine(
-            resolve_business_date(end), datetime.min.time()))
+            resolve_business_date(end, field="end"), datetime.min.time()))
         outside_q = outside_q.filter(OutboundVisit.visit_date < end)
 
     inside = inside_q.count()

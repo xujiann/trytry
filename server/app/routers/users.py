@@ -232,7 +232,7 @@ def export_audit_logs(
     - 首行是 meta 行（含本次导出的起止 id），便于归档端校验连续性。
     """
     if until:
-        resolve_business_date(until)  # 复用统一的日期格式校验（非法 422）
+        resolve_business_date(until, field="until")  # 复用统一的日期格式校验（非法 422）
 
     def rows():
         cursor = since_id

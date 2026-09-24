@@ -76,7 +76,7 @@ def find_doctors(
     号源与医师靠 `employee_id` 关联，不靠姓名字符串匹配：同名与写法不一
     都会漏，而漏掉的表现是"这位医师查不到号"，几乎无法自查。
     """
-    today = resolve_business_date(from_date).isoformat()
+    today = resolve_business_date(from_date, field="from_date").isoformat()
     query = db.query(Employee)
     if org_id is not None:
         query = query.filter(Employee.org_id == org_id)

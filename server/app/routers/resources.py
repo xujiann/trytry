@@ -386,7 +386,7 @@ def match_slots(
     """
     from datetime import timedelta
 
-    start = resolve_business_date(from_date)
+    start = resolve_business_date(from_date, field="from_date")
     end = (start + timedelta(days=days - 1)).isoformat()
     query = db.query(AppointmentSlot).filter(
         AppointmentSlot.resource_type == resource_type,
