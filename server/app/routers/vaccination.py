@@ -266,6 +266,10 @@ def lift_contraindication(
     contra = db.get(VaccineContraindication, contra_id)
     if contra is None:
         raise HTTPException(status_code=404, detail="禁忌记录不存在")
+    # P0-25：原先只看角色——乙院医生按禁忌号就能解除甲院患者的接种禁忌，接种前评估从此
+    # 不再拦这一条。同文件禁忌清单与接种前评估早就按患者可见性守着；先判归属再判状态，
+    # 免得 403 与 409 的先后泄露"这条禁忌现在解没解"。
+    assert_patient_visible(db, user, contra.patient_id, resource="vaccination")
     if contra.status == "lifted":
         raise HTTPException(status_code=409, detail="该禁忌已解除")
     contra.status = "lifted"

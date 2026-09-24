@@ -1350,7 +1350,6 @@ PATIENT_OWNED_UNGUARDED_WRITES = {
     "referrals.py:update_status",
     "spd/population.py:handle_service_apply",
     "tcm.py:advance_order",
-    "vaccination.py:lift_contraindication",
 }
 
 _PATIENT_WRITE_GUARDS = {
