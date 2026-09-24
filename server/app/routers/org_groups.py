@@ -31,7 +31,8 @@ class GroupIn(BaseModel):
 
 
 class GroupUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=64)
+    # 改档与建档同口径（P1-98）：原先改名为空串照收
+    name: str | None = Field(default=None, min_length=1, max_length=64)
     lead_org_id: int | None = None
     note: str | None = Field(default=None, max_length=256)
     active: bool | None = None

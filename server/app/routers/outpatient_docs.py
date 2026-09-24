@@ -56,8 +56,9 @@ class TemplateIn(BaseModel):
 
 
 class TemplateUpdate(BaseModel):
-    title: str | None = Field(default=None, max_length=128)
-    body: str | None = Field(default=None, max_length=8192)
+    # 改档与建档同口径（P1-98）：原先标题 / 正文改成空串照收，患者签的是一份空白同意书
+    title: str | None = Field(default=None, min_length=1, max_length=128)
+    body: str | None = Field(default=None, min_length=1, max_length=8192)
     version: str | None = Field(default=None, max_length=16)
     active: bool | None = None
 

@@ -84,7 +84,8 @@ class EndpointCreate(BaseModel):
 
 
 class EndpointUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=128)
+    # 改档与建档同口径（P1-98）：原先改名为空串照收
+    name: str | None = Field(default=None, min_length=1, max_length=128)
     active: bool | None = None
     rate_limit_per_min: int | None = Field(default=None, ge=1, le=100000)
     endpoint_url: str | None = Field(default=None, max_length=512)
@@ -625,8 +626,9 @@ class FlowCreate(BaseModel):
 
 
 class FlowUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=128)
-    steps: list[dict] | None = None
+    # 改档与建档同口径（P1-98）：原先改名为空串、把步骤改成空数组照收——零步骤的流程跑起来什么也不做
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    steps: list[dict] | None = Field(default=None, min_length=1)
     active: bool | None = None
 
 

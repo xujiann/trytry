@@ -264,8 +264,9 @@ class PrescriptionReview(BaseModel):
 class StockUpsert(BaseModel):
     org_id: int
     # 列长 / 列容量（P1-91 / P1-93 第四层）：入库按业务键查出已有库存再累加、改阈值、改药名，原先判据看不见
-    drug_code: str = Field(max_length=64)
-    drug_name: str = Field(max_length=128)
+    # 与批次入库同口径（P1-98）：原先空药品编码照建库存行、空药名把已有库存的药名改空
+    drug_code: str = Field(min_length=1, max_length=64)
+    drug_name: str = Field(min_length=1, max_length=128)
     quantity: int = Field(ge=0, le=INT4_MAX)
     threshold: int = Field(default=0, ge=0, le=INT4_MAX)
 
@@ -277,7 +278,7 @@ class StockOut(StockUpsert):
 
 
 class TransferCreate(BaseModel):
-    drug_code: str = Field(max_length=64)
+    drug_code: str = Field(min_length=1, max_length=64)
     from_org_id: int
     to_org_id: int
     quantity: int = Field(gt=0, le=INT4_MAX)

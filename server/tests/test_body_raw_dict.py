@@ -22,6 +22,7 @@
 请求体，类型也不是裸的，自然不在此列。
 """
 import ast
+import re
 import types
 import typing
 from collections.abc import Mapping
@@ -522,3 +523,182 @@ def p195_world(client, admin):
     assert intervention.status_code == 201, intervention.text
     return {"program": program["id"], "record": plan.json()["items"][0]["id"], "enrollment": enrollment_id,
             "revisit": revisit.json()["id"], "intervention": intervention.json()["ids"][0], "instance": instance_id}
+
+
+# ================================================================ 第三层（P1-98）：写同一列的入口，非空与枚举口径一致
+#: 基线：已清零。2026-09-24 实测「写同一列的请求模型字段，有的要求非空 / 限定枚举、有的不要求」23 列（字符串 /
+#: 列表 / Literal；整数类另算、折算开闭区间后都一致）：17 列是改档比建档松——改名为空串（收费项目、慢病病种、
+#: 知情同意模板标题 / 正文、病种项目、DRG 分组、ESB 端点 / 流程、机构分组、质控规则、资源、角色）、ESB 流程改成零步骤、
+#: 库存入库 / 调拨收下空药品编码（批次与库存两张表）与把药名改空、慢专病随访记录改档丢了渠道枚举——同批补齐；
+#: 其余 6 列逐条判为按设计（`SAME_COLUMN_BY_DESIGN`，写明理由）。
+SAME_COLUMN_BASELINE = 0
+
+#: 写同一列、口径却不同，是业务上本来就不同的操作——逐条写明理由，只减不增。
+SAME_COLUMN_BY_DESIGN = {
+    ("ExamReport", "conclusion"): "出报告要求带上这一键、允许空串（只有所见的报告），修订则必须写出新结论——两种操作本来不同口径",
+    ("NursingRecord", "content"): "住院护理记录可只记护理级别 / 联动执行的医嘱、正文留空；门诊护理记录只有正文，必填",
+    ("SpdMeasurement", "source"): "居民自测只能报 manual / device；医护录入还能记 his / poct",
+    ("SpdPathTemplate", "code"): "复制路径模板时留空即沿用原编码（`body.code or src.code`），空串写不进库",
+    ("SpdPathTemplate", "name"): "复制路径模板时留空即用「原名(副本)」（`body.name or …`），空串写不进库",
+    ("SatisfactionSurvey", "target_type"): "经办代录在处理函数里按 `_SURVEY_TARGETS` 校验（与门户的 pattern 同一集合），填错是 422",
+}
+
+_ENUM = re.compile(r"\^\(([^()|]+(?:\|[^()|]+)*)\)\$")
+
+
+def _string_rule(info) -> tuple[int, frozenset | str | None]:
+    """字段在「非空 / 取值范围」上挡得住什么：`(min_length, 取值)`——取值是枚举集合（`^(a|b)$` 或 Literal）、
+    不认得的 pattern 原串，或 None（不限）。长度上限不在此列（那是 P1-91 按列长管的）。"""
+    ann = info.annotation
+    members = (ann, *typing.get_args(ann))
+    metas = list(info.metadata) + [m for a in members for m in getattr(a, "__metadata__", ())]
+    min_len = max((m.min_length for m in metas if getattr(m, "min_length", None) is not None), default=0)
+    literals = [v for a in members if typing.get_origin(a) is typing.Literal for v in typing.get_args(a)]
+    if literals:
+        return min_len, frozenset(literals)
+    pattern = next((m.pattern for m in metas if getattr(m, "pattern", None)), None)
+    if pattern is None:
+        return min_len, None
+    enum = _ENUM.fullmatch(pattern)
+    return min_len, (frozenset(enum.group(1).split("|")) if enum else pattern)
+
+
+def _rule_looser(a, b) -> bool:
+    """写入方 a 比 b 松：非空要求更低，或 b 限定了取值而 a 收得下 b 不收的值。"""
+    (min_a, val_a), (min_b, val_b) = a, b
+    if min_a < min_b:
+        return True
+    if val_b is None:
+        return False
+    if isinstance(val_b, frozenset):
+        return not (isinstance(val_a, frozenset) and val_a <= val_b)
+    return val_a != val_b
+
+
+def inconsistent_column_writers(modules=None) -> list[str]:
+    """`ORM 模型.列：松的写入方 ← 严的写入方`：写同一列的请求模型字段，非空 / 枚举口径不一致。"""
+    writers: dict[tuple, dict] = {}
+    for modname, cls, field, model, column in bodystr.body_column_writes(modules):
+        info = cls.model_fields.get(field)
+        if info is None or not any(t is str or typing.get_origin(t) in (list, set, tuple, typing.Literal)
+                                   for t in (info.annotation, *typing.get_args(info.annotation))):
+            continue
+        short = modname.removeprefix("app.").removeprefix("routers.").replace("spd.routers.", "spd/")
+        writers.setdefault((model, column), {})[f"{short}:{cls.__name__}.{field}"] = _string_rule(info)
+    out = []
+    for (model, column), rules in sorted(writers.items()):
+        if (model, column) in SAME_COLUMN_BY_DESIGN:
+            continue
+        loose = sorted(w for w, r in rules.items() if any(_rule_looser(r, other) for other in rules.values()))
+        if loose:
+            strict = sorted(w for w in rules if w not in loose)
+            out.append(f"{model}.{column}：{', '.join(loose)} ← {', '.join(strict)}")
+    return out
+
+
+def test_第三层_写同一列的入口_非空与枚举口径一致():
+    offenders = inconsistent_column_writers()
+    assert len(offenders) <= SAME_COLUMN_BASELINE, (
+        "写同一列的请求模型，有的要求非空 / 限定枚举，有的不要求——改档比建档松，改名为空串、改出枚举外的值照收。"
+        f"把松的收紧到与严的同口径；业务上确实不同的写进 SAME_COLUMN_BY_DESIGN 并写明理由：{offenders}"
+    )
+
+
+def test_第三层_按设计名单都还在_且确有口径差异():
+    """名单只减不增：列不再有多个写入方、或口径已经一致了，就把它划掉。"""
+    writers: dict[tuple, list] = {}
+    for _m, cls, field, model, column in bodystr.body_column_writes():
+        if (model, column) in SAME_COLUMN_BY_DESIGN and field in cls.model_fields:
+            writers.setdefault((model, column), []).append(_string_rule(cls.model_fields[field]))
+    stale = [k for k in SAME_COLUMN_BY_DESIGN
+             if not any(_rule_looser(a, b) for a in writers.get(k, []) for b in writers.get(k, []))]
+    assert stale == [], f"这些列已经没有口径差异（或没有多个写入方了），请从 SAME_COLUMN_BY_DESIGN 划掉：{stale}"
+
+
+def test_判据自证_第三层_松的点名_一样严的与按设计的不报():
+    snippet = '''
+class NameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=256)
+    channel: str = Field(pattern="^(phone|sms)$")
+
+class NamePatch(BaseModel):
+    name: str | None = Field(default=None, max_length=256)
+    channel: str | None = Field(default=None, max_length=16)
+
+class SamePatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=256)
+    channel: typing.Literal["phone", "sms"] | None = None
+
+@router.post("/n")
+def create(body: NameIn, db=None):
+    db.add(Encounter(diagnosis_name=body.name, doctor_name=body.channel))
+
+@router.patch("/n/{i}")
+def patch(i: int, body: NamePatch, db=None):
+    e = db.get(Encounter, i)
+    e.diagnosis_name = body.name
+    e.doctor_name = body.channel
+
+@router.patch("/s/{i}")
+def same(i: int, body: SamePatch, db=None):
+    e = db.get(Encounter, i)
+    e.diagnosis_name = body.name
+    e.doctor_name = body.channel
+'''
+    from pydantic import Field
+
+    class _Router:
+        def __getattr__(self, _name):
+            return lambda *a, **k: (lambda fn: fn)
+
+    mod = types.ModuleType("自证")
+    mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "typing": typing, "router": _Router()})
+    exec(compile(snippet, "自证", "exec"), mod.__dict__)
+    assert inconsistent_column_writers([("自证", mod, snippet)]) == [
+        "Encounter.diagnosis_name：自证:NamePatch.name ← 自证:NameIn.name, 自证:SamePatch.name",
+        "Encounter.doctor_name：自证:NamePatch.channel ← 自证:NameIn.channel, 自证:SamePatch.channel",
+    ]
+
+
+# ---- 第三层回归（P1-98 修前开发库实测：改名为空串 200、零步骤流程 200、空药名把库存药名改空 201、渠道改成枚举外 200）
+def test_第三层_收费项目改名为空串_422_照常改名照收(client, admin):
+    item = client.post("/api/billing/charge-items", headers=admin,
+                       json={"code": "P198-CI", "name": "改名口径", "price": 10})
+    assert item.status_code == 201, item.text
+    url = f"/api/billing/charge-items/{item.json()['id']}"
+    assert client.patch(url, headers=admin, json={"name": ""}).status_code == 422
+    ok = client.patch(url, headers=admin, json={"name": "改名口径二"})
+    assert ok.status_code == 200 and ok.json()["name"] == "改名口径二", ok.text
+
+
+def test_第三层_ESB流程改成零步骤或空名_422(client, admin):
+    flow = client.post("/api/esb/flows", headers=admin,
+                       json={"code": "P198-F", "name": "口径流程", "steps": [{"type": "persist"}]})
+    assert flow.status_code == 201, flow.text
+    url = f"/api/esb/flows/{flow.json()['id']}"
+    assert client.patch(url, headers=admin, json={"steps": []}).status_code == 422
+    assert client.patch(url, headers=admin, json={"name": ""}).status_code == 422
+    assert client.get("/api/esb/flows", headers=admin).json()  # 流程清单照常可读
+
+
+def test_第三层_库存入库空药名不再把药名改空(client, admin):
+    org = client.post("/api/organizations", headers=admin,
+                      json={"name": "口径药房院", "org_type": "township", "level": "township"}).json()["id"]
+    first = client.post("/api/pharmacy/stocks", headers=admin,
+                        json={"org_id": org, "drug_code": "P198-D", "drug_name": "阿莫西林", "quantity": 10})
+    assert first.status_code == 200, first.text
+    blank = client.post("/api/pharmacy/stocks", headers=admin,
+                        json={"org_id": org, "drug_code": "P198-D", "drug_name": "", "quantity": 5})
+    assert blank.status_code == 422, blank.text
+    nocode = client.post("/api/pharmacy/stocks", headers=admin,
+                         json={"org_id": org, "drug_code": "", "drug_name": "无编码药", "quantity": 5})
+    assert nocode.status_code == 422, nocode.text
+    rows = client.get(f"/api/pharmacy/stocks?org_id={org}", headers=admin).json()
+    assert [(r["drug_code"], r["drug_name"], r["quantity"]) for r in rows] == [("P198-D", "阿莫西林", 10)]
+
+
+def test_第三层_随访记录改档渠道只收枚举(client, admin, p195_world):
+    url = f"{B}/followup-records/{p195_world['record']}"
+    assert client.patch(url, headers=admin, json={"channel": "email"}).status_code == 422
+    ok = client.patch(url, headers=admin, json={"channel": "wechat"})
+    assert ok.status_code == 200, ok.text

@@ -128,7 +128,8 @@ class DiseaseTypeCreate(BaseModel):
 
 
 class DiseaseTypeUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=64)
+    # 改档与建档同口径（P1-98）：原先改名为空串照收
+    name: str | None = Field(default=None, min_length=1, max_length=64)
     level_rules: dict | None = None
     guidance: str | None = Field(default=None, max_length=512)
     followup_interval_days: int | None = Field(default=None, gt=0, le=3650)  # 同建档（P1-96）

@@ -68,7 +68,8 @@ class ResourceIn(BaseModel):
 
 
 class ResourceUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=128)
+    # 改档与建档同口径（P1-98）：原先改名为空串照收
+    name: str | None = Field(default=None, min_length=1, max_length=128)
     capacity: int | None = Field(default=None, ge=1, le=INT4_MAX)
     location: str | None = Field(default=None, max_length=256)
     contact: str | None = Field(default=None, max_length=64)

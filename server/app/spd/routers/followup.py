@@ -943,7 +943,8 @@ class RecordPatchIn(BaseModel):
     status: str = Field(default=UNSET, pattern="^(planned|removed)$")
     planned_at: OptionalDateStr = Field(default=UNSET)
     executor_id: int | None = None
-    channel: str = Field(default=UNSET, max_length=16)
+    # 与执行随访、生成计划同一条枚举（P1-98）：原先改档可把渠道改成枚举外的任意串，按渠道统计对不上
+    channel: str = Field(default=UNSET, pattern="^(phone|wechat|sms|self|visit)$")
 
 
 @router.patch("/followup-records/{record_id}", response_model=FollowupRecordOut,

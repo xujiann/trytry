@@ -96,7 +96,8 @@ class ChargeItemCreate(BaseModel):
 
 
 class ChargeItemUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=128)
+    # 改档与建档同口径（P1-98）：原先改名为空串照收
+    name: str | None = Field(default=None, min_length=1, max_length=128)
     category: str | None = Field(default=None, pattern="^(drug|exam|treatment|bed|other)$")
     # 列容量与建档同口径（P1-93 判据盲区：`FiniteFloat | None` 原先不被判据认作数值）
     price: FiniteFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
