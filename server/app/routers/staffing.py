@@ -187,6 +187,10 @@ def create_secondment(
         )
         .first()
     )
+    # 离职员工不能新建**在派**的派驻（P1-102）：原先照收并把状态改成 seconded，派驻结束时回写成 active，
+    # 离职的人就回到了在岗医师数里。补录已经结束的历史派驻（带结束日期、不动员工状态）照收
+    if employee.status == "left" and not body.end_date:
+        raise HTTPException(status_code=409, detail="该员工已离职，不能新建在派的派驻")
     if ongoing is not None and not body.end_date:
         raise HTTPException(
             status_code=409,

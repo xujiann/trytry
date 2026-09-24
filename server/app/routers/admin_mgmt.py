@@ -153,6 +153,10 @@ def second_employee(
     assert_obj_org_writable(db, user, employee)
     if employee.status == "seconded":
         raise HTTPException(status_code=409, detail="该员工已在派驻中")
+    # 离职员工不能派驻（P1-102）：原先照收，派驻结束时「在派 → 在岗」一改，离职的人就回到了在岗医师数里——
+    # 结束那头早按 ADR-0024 只在「在派」时回写，入口这头还开着
+    if employee.status == "left":
+        raise HTTPException(status_code=409, detail="该员工已离职，不能派驻")
     if db.get(Organization, body.to_org_id) is None:
         raise HTTPException(status_code=404, detail="派驻机构不存在")
     record = Secondment(
