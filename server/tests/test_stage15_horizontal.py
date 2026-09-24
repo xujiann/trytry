@@ -1335,11 +1335,6 @@ def test_县域监测预警对一线保持开放(client, world, stranger_op):
 # 又出病理三条与站内消息一条。**下面剩的都要人定口径**（谁受理会诊、急救各环节由哪家记、谁算
 # 诊断 / 病理中心、妇幼档案归谁……），事实与问题写在 docs/待裁定事项清单.md 的 P1-71 一节。
 PATIENT_OWNED_UNGUARDED_WRITES = {
-    "consultations.py:accept",
-    "consultations.py:complete",
-    "consultations.py:decline",
-    "consultations.py:rate",
-    "consultations.py:settle_fee",
     "emergency.py:advance",
     "emergency.py:record_milestone",
     "emergency.py:report_vitals",

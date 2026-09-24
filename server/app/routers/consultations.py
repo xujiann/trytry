@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..visibility import assert_org_writable
+from ..visibility import assert_org_writable, assert_patient_visible
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
@@ -48,10 +48,19 @@ def list_consultations(status: str | None = None, db: Session = Depends(get_db))
     return query.order_by(Consultation.id.desc()).limit(200).all()
 
 
-def _get(db: Session, consultation_id: int) -> Consultation:
+def _get(db: Session, consultation_id: int, user: User) -> Consultation:
+    """取会诊单，并按所属患者判可见性、留痕（P0-31）。
+
+    原先五个流转端点都只看角色：与这张单子毫无关系的第三家机构能受理、拒绝、出具会诊
+    意见（写进申请方读到的那份意见里）、评价、计费（实测各 200）。单子带申请方与受邀方
+    两个机构列，两方本身就有服务关系，照常能做；这里只挡第三方。**哪一步该由哪一方做**
+    （模型注释写的是「基层申请、上级接受、出具意见、申请方评价」，但从没校验）另在待裁定清单。
+    先判归属再判状态，403 不泄露单据当前状态。
+    """
     consultation = db.get(Consultation, consultation_id)
     if consultation is None:
         raise HTTPException(status_code=404, detail="会诊申请不存在")
+    assert_patient_visible(db, user, consultation.patient_id, resource="consultation")
     return consultation
 
 
@@ -60,8 +69,13 @@ def _get(db: Session, consultation_id: int) -> Consultation:
     response_model=ConsultationOut,
     dependencies=[Depends(require_roles("doctor"))],  # H2: 受理属诊疗行为
 )
-def accept(consultation_id: int, body: ConsultationAccept, db: Session = Depends(get_db)):
-    consultation = _get(db, consultation_id)
+def accept(
+    consultation_id: int,
+    body: ConsultationAccept,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    consultation = _get(db, consultation_id, user)
     if consultation.status != "applied":
         raise HTTPException(status_code=409, detail=f"当前状态 {consultation.status} 不可受理")
     consultation.status = "accepted"
@@ -76,8 +90,8 @@ def accept(consultation_id: int, body: ConsultationAccept, db: Session = Depends
     response_model=ConsultationOut,
     dependencies=[Depends(require_roles("doctor"))],  # H2
 )
-def decline(consultation_id: int, db: Session = Depends(get_db)):
-    consultation = _get(db, consultation_id)
+def decline(consultation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    consultation = _get(db, consultation_id, user)
     if consultation.status != "applied":
         raise HTTPException(status_code=409, detail=f"当前状态 {consultation.status} 不可拒绝")
     consultation.status = "declined"
@@ -91,8 +105,13 @@ def decline(consultation_id: int, db: Session = Depends(get_db)):
     response_model=ConsultationOut,
     dependencies=[Depends(require_roles("doctor"))],  # H2: 出具会诊意见限医师
 )
-def complete(consultation_id: int, body: ConsultationComplete, db: Session = Depends(get_db)):
-    consultation = _get(db, consultation_id)
+def complete(
+    consultation_id: int,
+    body: ConsultationComplete,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    consultation = _get(db, consultation_id, user)
     if consultation.status != "accepted":
         raise HTTPException(status_code=409, detail=f"当前状态 {consultation.status} 不可出具意见")
     consultation.status = "completed"
@@ -152,14 +171,19 @@ class ConsultationStatsOut(BaseModel):
     response_model=ConsultationFeeOut,
     dependencies=[Depends(require_roles("operator", "director"))],  # H2: 计费=经办/管理层
 )
-def settle_fee(consultation_id: int, body: ConsultationFee, db: Session = Depends(get_db)):
+def settle_fee(
+    consultation_id: int,
+    body: ConsultationFee,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """会诊计费（指引⑤"费用管理"）。
 
     只有已完成的会诊可计费——拒绝与未受理的会诊没有发生服务。
     `fee=0` 与"未计费"是两回事（本院内部会诊常不计费），故用 `fee_settled`
     区分而不是拿 0 当哨兵。
     """
-    consultation = _get(db, consultation_id)
+    consultation = _get(db, consultation_id, user)
     if consultation.status != "completed":
         raise HTTPException(status_code=409, detail="仅已完成的会诊可计费")
     consultation.fee = body.fee
@@ -218,8 +242,13 @@ def consultation_stats(db: Session = Depends(get_db)):
     response_model=ConsultationOut,
     dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 评价代录
 )
-def rate(consultation_id: int, body: ConsultationRate, db: Session = Depends(get_db)):
-    consultation = _get(db, consultation_id)
+def rate(
+    consultation_id: int,
+    body: ConsultationRate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    consultation = _get(db, consultation_id, user)
     if consultation.status != "completed":
         raise HTTPException(status_code=409, detail="仅已完成的会诊可评价")
     consultation.rating = body.rating

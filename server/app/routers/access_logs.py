@@ -66,6 +66,7 @@ RESOURCE_NAMES = {
     # 门急诊与住院
     "appointment": "预约记录",
     "credential": "就诊凭据",
+    "consultation": "远程会诊",
     "consent": "知情同意",
     "correction": "档案更正 / 注销申请",
     "doc_completeness": "门急诊文书完整性",
