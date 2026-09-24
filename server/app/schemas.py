@@ -297,6 +297,8 @@ class InfectiousCaseCreate(BaseModel):
 class InfectiousCaseOut(InfectiousCaseCreate):
     id: int
     category: str = ""
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    onset_date: str
 
     model_config = {"from_attributes": True}
 
@@ -381,6 +383,8 @@ class SlotCreate(BaseModel):
 class SlotOut(SlotCreate):
     id: int
     booked: int
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    slot_date: str
 
     model_config = {"from_attributes": True}
 

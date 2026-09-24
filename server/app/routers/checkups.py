@@ -53,6 +53,8 @@ class CheckupOut(CheckupBase):
 
     id: int
     has_abnormal: bool
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    exam_date: str
 
     model_config = {"from_attributes": True}
 
