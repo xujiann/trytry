@@ -861,25 +861,27 @@ def region_stats(
     )
     if program_code:
         enroll_query = enroll_query.filter(SpdEnrollment.program_code == program_code)
-    enrollments = enroll_query.limit(20000).all()
 
-    patients = {
-        p.id: p
-        for p in db.query(Patient).filter(
-            Patient.id.in_([e.patient_id for e in enrollments] or [0])
-        )
-    }
+    # P1-51：原先 `enroll_query.limit(20000).all()` 后在 Python 里数，纳管过两万人总数与人口结构就全错，
+    # 且与「就这么多」长得一样。总数走 count()；年龄 / 性别按纳管 × 患者的外连接流式逐行数——
+    # 分桶与「未知」的判法一字不改，也不再有 `Patient.id.in_([...两万个参数])`。
+    total = enroll_query.count()
+    rows = (
+        enroll_query.outerjoin(Patient, Patient.id == SpdEnrollment.patient_id)
+        .with_entities(Patient.id, Patient.gender, Patient.birth_date)
+        .order_by(None)
+        .execution_options(yield_per=2000)
+    )
     age_buckets = {"0-17": 0, "18-44": 0, "45-59": 0, "60-74": 0, "75+": 0, "未知": 0}
     gender = {"男": 0, "女": 0, "未知": 0}
     today = clock.today()
-    for enrollment in enrollments:
-        patient = patients.get(enrollment.patient_id)
-        if patient is None:
+    for patient_id, patient_gender, birth_date in rows:
+        if patient_id is None:
             age_buckets["未知"] += 1
             continue
-        gender[patient.gender if patient.gender in gender else "未知"] += 1
+        gender[patient_gender if patient_gender in gender else "未知"] += 1
         try:
-            born = date.fromisoformat(patient.birth_date)
+            born = date.fromisoformat(birth_date)
             age = today.year - born.year - (
                 (today.month, today.day) < (born.month, born.day)
             )
@@ -890,8 +892,15 @@ def region_stats(
                else "60-74" if age < 75 else "75+")
         age_buckets[key] += 1
 
+    # 体征计数：收了范围（非全域或指定病种）时只数在管患者的——原先不带任何范围，
+    # 在一个已按统计范围收口的端点里返回全县计数（P1-51）。全域且不指定病种照旧数全表。
+    measure_query = db.query(SpdMeasurement)
+    if orgs is not None or program_code:
+        measure_query = measure_query.filter(
+            SpdMeasurement.patient_id.in_(enroll_query.with_entities(SpdEnrollment.patient_id))
+        )
     return {
-        "total": len(enrollments),
+        "total": total,
         "by_program": dict(
             enroll_query.with_entities(
                 SpdEnrollment.program_code, func.count(SpdEnrollment.id)
@@ -918,10 +927,8 @@ def region_stats(
         "paths": _path_stats(db, orgs),
         "followups": _followup_stats(db, orgs),
         "measurements": {
-            "total": db.query(SpdMeasurement).count(),
-            "normal": db.query(SpdMeasurement).filter(
-                SpdMeasurement.level == "normal"
-            ).count(),
+            "total": measure_query.count(),
+            "normal": measure_query.filter(SpdMeasurement.level == "normal").count(),
         },
     }
 
