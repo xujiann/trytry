@@ -17,7 +17,7 @@ from ..models import (
     User,
 )
 from datetime import date, timedelta
-from ..datetypes import DateStr
+from ..datetypes import DateStr, OptionalDateStr
 from ..visibility import assert_obj_org_writable, assert_org_writable
 
 router = APIRouter(prefix="/api/tcm", tags=["中医药服务"], dependencies=[Depends(get_current_user)])
@@ -387,8 +387,9 @@ class BatchCreate(BaseModel):
     quantity: int = Field(ge=1)
     unit: str = "剂"
     produced_date: DateStr
-    # 不传则按配方有效期（月）自动推算
-    expire_date: str = ""
+    # 不传则按配方有效期（月）自动推算。发放拦过期、效期预警都按字符串比它：
+    # `2026/01/01`、`20260101` 在同一年份里比出来是反的，过期批次照样发得出去（P1-61，实测）
+    expire_date: OptionalDateStr = ""
 
 
 class TcmPreparationBatchOut(BaseModel):

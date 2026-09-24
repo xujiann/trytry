@@ -46,6 +46,8 @@ CASES = [
                                     "value": 1, "threshold": 2}, "record_date", True),
     ("/api/quality/infection-reports",
      {"org_id": 999999, "patient_id": 999999, "infection_site": "no-such-site"}, "report_date", True),
+    ("/api/tcm/preparation-batches", {"formula_id": 999999, "batch_no": "DATE-REG", "org_id": 999999,
+                                      "quantity": 1, "produced_date": "2026-01-01"}, "expire_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。
