@@ -17,7 +17,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import ensure_present, insert_if_absent
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..datetypes import OptionalDateStr
 from ..deps import (
@@ -892,10 +892,22 @@ class MedicalRecordDetailOut(BaseModel):
 
 
 @router.get("/records/{record_id}", response_model=MedicalRecordDetailOut)
-def get_medical_record(record_id: int, db: Session = Depends(get_db)):
+def get_medical_record(
+    record_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """病历详情（主诉、现病史、既往史、体格检查、诊断依据、治疗方案）。
+
+    P0-36：原先连调用方都不收，任一账号按病历号就能读别家患者的病历原文，且不留痕——与 P0-19 /
+    P0-20 同一形状。同文件的清单早就按机构收口、复评早按病历所属机构判归属；详情照 P0-19 口径
+    按所属就诊的患者判可见性并留痕。
+    """
     record = db.get(MedicalRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="病历不存在")
+    encounter = db.get(Encounter, record.encounter_id)
+    assert_patient_visible(
+        db, user, encounter.patient_id if encounter else 0, resource="medical_record"
+    )
     return {"record": _record_out(record), "defects": record.qc_defects or []}
 
 

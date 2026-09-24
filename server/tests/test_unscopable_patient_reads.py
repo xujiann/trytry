@@ -293,12 +293,13 @@ def test_两份清单不重叠且都不为空():
 #
 # 名单里混着三种东西，**尚未逐条判定**（与 P1-49 同一性质，交待裁定）：
 # 按设计不出个体的统计（`*_stats` 一类）、按设计跨机构的（质控抽查、互认一类）、
-# 与 P0-10 / P0-19 同形状的按 id 读病历（如 `quality:get_medical_record`、
-# `surgery:get_record`、`maternal:get_delivery`）。判定一条划一条：补了身份依赖与收口
+# 与 P0-10 / P0-19 同形状的按 id 读病历（如 `maternal:get_delivery`；`quality:get_medical_record` 已由 P0-36、
+# `surgery:get_record` 已由 P0-20 修掉）。判定一条划一条：补了身份依赖与收口
 # 的会从扫描结果里消失，名单不跟着删就红（两个方向都钉）。
 
 #: 【欠账，只减不增】无调用方身份 × 只触达一跳 / 两跳患者维度表（2026-09-24 量出 24 个；
-#: 同日 P0-20 修掉术中记录 → 23，P0-21 修掉报告修订史与危急值轨迹 → 21，P0-22 修掉门诊护理 → 20）
+#: 同日 P0-20 修掉术中记录 → 23，P0-21 修掉报告修订史与危急值轨迹 → 21，P0-22 修掉门诊护理 → 20，
+#: P0-36 修掉按病历号读就诊病历 → 19）
 ONEHOP_UNSCOPABLE_READS = {
     "billing.py:list_payments",
     "billing.py:list_reconciliation",
@@ -314,7 +315,6 @@ ONEHOP_UNSCOPABLE_READS = {
     "pharmacy.py:batch_dispense_trace",
     "pharmacy.py:purchase_suggestions",
     "prescriptions.py:list_comment_reviews",
-    "quality.py:get_medical_record",
     "resources.py:match_operating_rooms",
     "spd/population.py:list_recalls",
     "spd/population.py:list_usages",
