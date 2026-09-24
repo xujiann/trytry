@@ -45,6 +45,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_body_numeric_capacity as bodynumcap
     import test_body_raw_dict as bodyraw
     import test_date_window_bounds as datewin
+    import test_query_limit_params as limitparams
     import test_body_str_length as bodystr
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
@@ -124,6 +125,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          bodynumcap.BASELINE, "tests/test_body_numeric_capacity.py"),
         ("数值入参", "天数 / 分钟数入参没有上界就进 timedelta（传个大数即日期溢出、500；5 → 0 已清零）",
          datewin.BASELINE, "tests/test_date_window_bounds.py"),
+        ("数值入参", "条数 / 偏移量入参没有上下界就进 .limit() / .offset()（PG 上负数即 500；2 → 0 已清零）",
+         limitparams.BASELINE, "tests/test_query_limit_params.py"),
         ("请求体契约", "写接口收裸 dict 请求体（改档绕过建档的一切校验，坏值落库后整张列表 500；20 → 0 已清零）",
          bodyraw.BASELINE, "tests/test_body_raw_dict.py"),
         ("请求体契约", "按设计收原样资源的入站端点（FHIR R4 资源，逐条写明理由）",

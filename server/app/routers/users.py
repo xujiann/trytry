@@ -4,7 +4,7 @@ import json
 import time
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
@@ -14,6 +14,7 @@ from ..concurrency import insert_or_conflict
 from ..config import settings
 from ..visibility import assert_obj_org_writable
 from ..database import get_db
+from ..numtypes import INT4_MAX
 from ..deps import (
     ROLE_NAMES,
     get_current_user,
@@ -346,7 +347,7 @@ class AuditVerifyOut(BaseModel):
 )
 def verify_audit_chain(
     start_id: int = 0,
-    limit: int = 5000,
+    limit: int = Query(default=5000, ge=0, le=INT4_MAX),  # 下界 0、上界只到列容量（P2-54）：原先负数在 PG 上 LIMIT 报错、整个请求 500
     anchor_id: int | None = None,
     anchor_hash: str | None = None,
     db: Session = Depends(get_db),

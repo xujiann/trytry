@@ -17,7 +17,7 @@
 """
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_, update
 from sqlalchemy.engine import CursorResult
@@ -581,7 +581,7 @@ def unified_requests(
     patient_id: int | None = None,
     status: str | None = None,
     request_type: str | None = None,
-    limit: int = 200,
+    limit: int = Query(default=200, ge=0, le=INT4_MAX),  # 下界 0、上界只到列容量（P2-54）：原先负数在 PG 上 LIMIT 报错、SQLite 上回出 returned=-1、整个请求 500
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
