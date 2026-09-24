@@ -488,6 +488,55 @@ def test_更正注销申请的审核在页内表单里填_取消即不审(page, 
     assert read(f"/api/patients/{ehc_no}")["name"] == "E2E更正后姓名"
 
 
+@pytest.fixture(scope="session")
+def dual_channel_seed(base_url, seed):
+    """双通道审核的前置：同一患者两条待审核的双通道申报（一条用来批准、一条用来驳回）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
+    apps = [call("/api/insurance/dual-channel", {"patient_id": seed["patient"]["id"], "drug_name": name,
+                                                 "reason": "院内无药"}, doctor)
+            for name in ("E2E双通道药甲", "E2E双通道药乙")]
+    return {"apps": apps, "read": lambda path: call(path, None, admin)}
+
+
+def test_双通道申报审核在页内表单里填_取消即不审(page, base_url, dual_channel_seed):
+    """P2-38：双通道申报的「批准」「驳回」原先弹意见框，点取消照样批准 / 驳回（意见记空）。
+    换成页内表单：取消就是不审（按接口核对仍待审核），再走完并读回审核意见。"""
+    read = dual_channel_seed["read"]
+    ok_id, no_id = (a["id"] for a in dual_channel_seed["apps"])
+
+    def app(aid):
+        (row,) = [a for a in read("/api/insurance/dual-channel") if a["id"] == aid]
+        return row
+
+    _login(page, base_url)
+    _open_page(page, "insurance", "医保协同")
+    modal = page.locator("form.panel:has(button[data-cancel])")
+    for aid, attr, comment, status in ((ok_id, "dualok", "符合双通道药品目录", "approved"),
+                                       (no_id, "dualno", "院内已有同通用名药品", "rejected")):
+        page.click(f'button[data-{attr}="{aid}"]')
+        modal.locator("button[data-cancel]").click()
+        expect(modal).to_have_count(0)
+        assert app(aid)["status"] == "pending", f"{attr}：点了取消却照样审了"
+        page.click(f'button[data-{attr}="{aid}"]')
+        _redrawn(page, lambda: _spd_modal(page, {"comment": comment}))
+        row = app(aid)
+        assert (row["status"], row["review_comment"]) == (status, comment), row
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

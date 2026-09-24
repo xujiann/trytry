@@ -850,12 +850,19 @@ async function renderInsurance() {
   };
   $("#spec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/special-diseases", formJson(e.target, ["patient_id"]), "#ins-msg"); };
   $("#dual-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/dual-channel", formJson(e.target, ["patient_id"]), "#ins-msg"); };
-  $("#page-body").onclick = (e) => {
+  $("#page-body").onclick = async (e) => {
     const { ok, no, dualok, dualno } = e.target.dataset;
     if (ok) postAction(`/api/insurance/special-diseases/${ok}/review?approve=true`, null, "#ins-msg");
     if (no) postAction(`/api/insurance/special-diseases/${no}/review?approve=false`, null, "#ins-msg");
-    if (dualok) postAction(`/api/insurance/dual-channel/${dualok}/review?approve=true&comment=${encodeURIComponent(prompt("审核意见") || "")}`, null, "#ins-msg");
-    if (dualno) postAction(`/api/insurance/dual-channel/${dualno}/review?approve=false&comment=${encodeURIComponent(prompt("驳回理由") || "")}`, null, "#ins-msg");
+    if (dualok || dualno) {
+      // P2-38：原先意见框点"取消"照样批准 / 驳回（意见记空）。表单里取消就是不审。
+      const approve = Boolean(dualok);
+      const form = await spdModal(approve ? "批准双通道申报" : "驳回双通道申报",
+        [{ name: "comment", label: approve ? "审核意见" : "驳回理由", type: "textarea" }]);
+      if (!form) return;
+      postAction(`/api/insurance/dual-channel/${dualok || dualno}/review?approve=${approve}`
+        + `&comment=${encodeURIComponent(form.comment)}`, null, "#ins-msg");
+    }
   };
 }
 
