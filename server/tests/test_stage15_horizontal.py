@@ -1348,7 +1348,6 @@ PATIENT_OWNED_UNGUARDED_WRITES = {
     "maternal.py:close_record",
     "patients.py:revoke_authorization",
     "referrals.py:update_status",
-    "spd/care.py:update_revisit",
     "spd/population.py:handle_service_apply",
     "tcm.py:advance_order",
     "vaccination.py:lift_contraindication",

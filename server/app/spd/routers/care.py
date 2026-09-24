@@ -1187,10 +1187,9 @@ def list_revisits(
 
         sweep_overdue(db, business_day)
         db.commit()
-    query = db.query(SpdRevisit)
-    if patient_id is not None:
-        assert_patient_visible(db, user, patient_id, resource="spd_revisit")
-        query = query.filter(SpdRevisit.patient_id == patient_id)
+    # P0-24：原先只在带 patient_id 时判可见性，不带就列出全域全部复诊计划（带患者姓名）。
+    # 与 P0-23 的咨询清单同一口径：只见本机构服务过的患者的计划，全域角色不过滤。
+    query = scope_patient_list(db, user, db.query(SpdRevisit), SpdRevisit, patient_id, "spd_revisit")
     for column, value in (
         (SpdRevisit.status, status), (SpdRevisit.dept, dept),
         (SpdRevisit.doctor_user_id, doctor_user_id),
@@ -1225,11 +1224,19 @@ class RevisitUpdate(BaseModel):
 
 @router.patch("/revisits/{revisit_id}", response_model=RevisitOut,
               dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def update_revisit(revisit_id: int, body: RevisitUpdate, db: Session = Depends(get_db)):
+def update_revisit(
+    revisit_id: int,
+    body: RevisitUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """编辑 / 移除 / 恢复复诊计划，并留日志（医生移动端 #12 要求日志记录能力）。"""
     record = db.get(SpdRevisit, revisit_id)
     if record is None:
         raise HTTPException(status_code=404, detail="复诊计划不存在")
+    # P0-24：原先连调用方身份都不收——乙院按计划号就能改期、办结、移除甲院患者的复诊计划。
+    # 同组建计划与看板早就按患者可见性守着，这里照同一口径判定并留痕。
+    assert_patient_visible(db, user, record.patient_id, resource="spd_revisit")
     data = body.model_dump(exclude_unset=True)
     note = data.pop("note", "")
     # 日志是 JSON 列整体覆写（读旧列表 + 本条再写回）：两路并发改期/办结，后写的把
