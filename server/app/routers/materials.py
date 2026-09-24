@@ -151,6 +151,8 @@ def create_purchase(
         dept = db.get(Department, body.dept_id)
         if dept is None or not dept.active:  # 撤销的科室不再新申请采购（同 admin_mgmt.assign_department）
             raise HTTPException(status_code=404, detail="科室不存在或已停用")
+        if dept.org_id != body.org_id:  # 甲院的采购单挂乙院的科室：按科室归集的成本从此算错机构（P1-80 判据）
+            raise HTTPException(status_code=422, detail="科室不属于该机构")
     purchase = MaterialPurchase(**body.model_dump(), requested_by=user.id)
     db.add(purchase)
     db.commit()

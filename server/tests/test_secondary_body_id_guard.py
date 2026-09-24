@@ -26,6 +26,10 @@ BY_DESIGN = {
     "spd/tasks.py:start_path_instance":
         "路径模板是全县共用的诊疗规范配置（读侧按设计全县可见，见 `test_byid_org_read_guard.BY_DESIGN`），"
         "按别家机构建的模板启动路径是复用规范，不是写别家的数据；主对象（纳管档案）已按机构判归属。",
+    "spd/population.py:distribute_candidates":
+        "服务团队按设计跨机构：医共体里县级专家团队下沉服务乡镇的目标患者，把目标患者分给别家机构的团队正是分发的用途；"
+        "团队停用已拦（P1-103）。主对象（目标池记录）来源与去向两处 assert_org_writable 已判归属。"
+        "（P1-103 把取团队的写法从「只查存在」改成取出变量，本判据才看得见它。）",
     "surgery.py:schedule_surgery":
         "手术间撮合按设计跨机构：`resources.match_operating_rooms` 的 docstring 写明「基层把手术病人转上来，"
         "要先看得到县医院哪天有空台」，排进别家的空台正是撮合的下一步；冲突判定与撮合共用一套。"

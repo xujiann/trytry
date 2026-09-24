@@ -218,6 +218,19 @@ def test_分摊规则与物资采购不收停用科室(client, admin, world, dep
                        headers=admin).status_code == 201
 
 
+def test_物资采购的科室须属于申请机构(client, admin, world):
+    """P1-103 把取科室改成取出变量后，P1-80 的捎带对象判据看见了它：甲院的采购单挂乙院的科室照收，
+    按科室归集的成本从此算错机构。"""
+    other = client.post("/api/organizations", json={"name": "停用目录·别家卫生院", "org_type": "township",
+                                                    "level": "township"}, headers=admin).json()["id"]
+    dept = client.post("/api/mgmt/departments", json={"org_id": other, "code": "P1103X", "name": "别家科室"},
+                       headers=admin)
+    assert dept.status_code == 201, dept.text
+    r = client.post("/api/materials/purchases", headers=admin,
+                    json={"org_id": world["org"], "dept_id": dept.json()["id"], "item_name": "输液泵"})
+    assert r.status_code == 422 and "不属于该机构" in r.json()["detail"], r.text
+
+
 def test_高值耗材不从停用供应商入库(client, admin, world):
     def supplier(name):
         r = client.post("/api/pharmacy/suppliers", json={"name": name}, headers=admin)
