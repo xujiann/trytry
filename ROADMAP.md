@@ -885,6 +885,7 @@
   - ✅ materials（10 → 9）：高值耗材入库效期 → `OptionalDateStr`（顺带发现使用登记不看效期，另立 P1-64）。
   - ✅ maternal（9 → 5）：产检访视、儿童随访、新生儿筛查、妇女保健四个日期 → `OptionalDateStr`，`WomenHealthOut` 同批覆盖。
   - ✅ publichealth（5 → 4）：卫生监测上报日期 → `OptionalDateStr`，`MonitorOut` 同批覆盖。
+  - ✅ quality（4 → 3）：院感上报日期 → `OptionalDateStr`。
 - ✅ **P1-62 月度期间查询参数：P1-58 的月度版**（2026-09-24 量出并收口，余 `region_stats` 1 条待裁定）。
   真 `YYYY-MM` 且未校验 5 处（accounting 三个报表口径，凭证页"切换期间"是自由文本，`2026-9` → 试算平衡**空表**；
   admin_mgmt 财务汇总与薪资列表）；**`spd/assess.workload` 在 SQLite 上就会 500**（手写的 `_period_range`，

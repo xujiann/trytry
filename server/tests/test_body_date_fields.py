@@ -44,6 +44,8 @@ CASES = [
     # 监测领域填不存在的：合法日期越过这一道后在业务校验上 422（字符串 detail），不落库
     ("/api/publichealth/monitors", {"domain": "no-such-domain", "org_id": 999999, "indicator": "CO2",
                                     "value": 1, "threshold": 2}, "record_date", True),
+    ("/api/quality/infection-reports",
+     {"org_id": 999999, "patient_id": 999999, "infection_site": "no-such-site"}, "report_date", True),
 ]
 
 #: 三个都恰好 10 个字符——原先的长度卡全部放行。

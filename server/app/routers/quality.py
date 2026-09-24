@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import ensure_present, insert_if_absent
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
 from ..database import get_db
+from ..datetypes import OptionalDateStr
 from ..deps import (
     get_current_user,
     month_bounds,
@@ -340,7 +341,7 @@ class InfectionReportCreate(BaseModel):
     infection_site: str
     pathogen: str = ""
     note: str = ""
-    report_date: str = ""
+    report_date: OptionalDateStr = ""
 
 
 def _infection_out(r: InfectionReport) -> dict:
