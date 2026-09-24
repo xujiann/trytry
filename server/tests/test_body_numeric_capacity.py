@@ -40,6 +40,8 @@ if _PG_URL:
 #: 2026-09-24 实测 65 处（非外键 `Integer` 48、`Money` 17；两个列同名的字段写进两张表算两处）→ 0（同批补齐：
 #: 64 个字段补 `le=INT4_MAX` / `le=MONEY_MAX`，一个界都没有的 8 个多态 id / 序号补对称的 `ge=INT4_MIN`）。
 #: 第三层（同日）：写库形状补上「取出来的对象上显式赋值」，又量出签合同金额 1 处，同批补齐，仍为 0。
+#: 第四层（同日）：写库形状再补三处盲区（见 `test_body_str_length.body_column_writes`），又量出 3 处——调度任务
+#: 周期、药品库存预警阈值、手术出血量；同批补齐（入库数量走原子累加 `add_amount`，判据看不见，一并补上），仍为 0。
 BASELINE = 0
 
 
@@ -225,3 +227,14 @@ def test_第三层_签合同金额越过Money_422(client, admin, world):
     r = client.post(f"/api/materials/purchases/{pid}/contract", json={**body, "contract_amount": MONEY_MAX},
                     headers=admin)
     assert r.status_code == 200, (r.status_code, r.text[:200])
+
+
+def test_第四层_调度周期与库存阈值数量越过integer_422(client, admin, world):
+    """按任务名 / 业务键查出来再改的对象，原先判据看不见；入库数量走原子累加 `add_amount`，同样补上界。"""
+    name = client.get("/api/jobs", headers=admin).json()[0]["name"]
+    r = client.patch(f"/api/jobs/{name}", json={"interval_seconds": INT4_MAX + 1}, headers=admin)
+    assert r.status_code == 422 and "interval_seconds" in r.text, (r.status_code, r.text[:200])
+    base = {"org_id": world["org"], "drug_code": "P193-4", "drug_name": "第四层药", "quantity": 1}
+    for field in ("threshold", "quantity"):
+        r = client.post("/api/pharmacy/stocks", json={**base, field: INT4_MAX + 1}, headers=admin)
+        assert r.status_code == 422 and field in r.text, (field, r.status_code, r.text[:200])

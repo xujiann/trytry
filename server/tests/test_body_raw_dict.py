@@ -343,6 +343,10 @@ def _none_skipped(fn, field: str) -> bool:
                 and node.test.comparators[0].value is None and isinstance(node.test.left, ast.Attribute) \
                 and node.test.left.attr == field and any(isinstance(n, ast.Raise) for n in node.body):
             return True
+        # `列=body.字段 or 默认`：None 落到默认值上，写不进 null
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or) \
+                and isinstance(node.values[0], ast.Attribute) and node.values[0].attr == field:
+            return True
     return False
 
 

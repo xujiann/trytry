@@ -165,7 +165,7 @@ def _admission_or_404(
 class ProgressNoteIn(BaseModel):
     note_type: str = Field(pattern="^(first|daily|ward_round|rescue|consultation|discharge)$")
     content: str = Field(min_length=1, max_length=4096)
-    doctor_name: str = ""
+    doctor_name: str = Field(default="", max_length=64)   # 列长（P1-91 第四层：`doctor_name=body.doctor_name or …`）
     recorded_at: str = Field(default="", max_length=16)
 
 
@@ -288,7 +288,7 @@ def document_completeness(
 class NursingIn(BaseModel):
     nursing_level: str = Field(default="level2", pattern="^(special|level1|level2|level3)$")
     content: str = Field(default="", max_length=2048)
-    nurse_name: str = ""
+    nurse_name: str = Field(default="", max_length=64)   # 列长（P1-91 第四层：`nurse_name=body.nurse_name or …`）
     recorded_at: str = Field(default="", max_length=16)
     # 护理执行联动（P1-24a）：本条护理记录若由执行某条医嘱产生，传该医嘱 id。
     # 医嘱必须存在且属于同一次住院——挂错住院的联动比不联动更糟（质控会拿它下结论）。
@@ -374,7 +374,7 @@ class VitalIn(BaseModel):
     intake_ml: int | None = Field(default=None, ge=0, le=INT4_MAX)
     output_ml: int | None = Field(default=None, ge=0, le=INT4_MAX)
     weight_kg: float | None = Field(default=None, ge=0, le=500)
-    recorder: str = ""
+    recorder: str = Field(default="", max_length=64)   # 列长（P1-91 第四层：`recorder=body.recorder or …`）
 
 
 @router.post(

@@ -85,7 +85,7 @@ def _normalized_weights(db: Session) -> dict[str, float]:
 
 class IndicatorPatch(BaseModel):
     weight: FiniteFloat | None = Field(default=None, ge=0)
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=64)   # 列长（P1-91 第四层：按指标键查出来再改，原先判据看不见）
     active: bool | None = None
 
 

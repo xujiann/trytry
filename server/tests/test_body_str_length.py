@@ -53,6 +53,9 @@ APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
 #: 处方明细的药品编码 / 名称、批量号源模板的资源名 / 时段，真 PG 上超长即 500；同批补齐，仍为 0。
 #: 第三层（同日）：再补「取出来的对象上显式赋值」`x.列 = body.字段`，又量出 10 处——检查报告修订的结论 / 所见、
 #: 上门派单人与服务记录、医废交接人、整改措施 / 完成说明 / 验证意见、远程咨询回复与医师名；同批补齐，仍为 0。
+#: 第四层（同日）：再补三处盲区（按业务键 `db.query(...).first()` 取出的对象、字典字面量构造、`body.x or 默认`
+#: 一类原样取自入参的值），又量出 16 处——药品入库的编码 / 药名、绩效指标名、手术记录 8 个文本字段与手术申请的
+#: 主刀名、护理 / 病程 / 体征记录人、儿童高危备注；同批补齐，仍为 0。
 BASELINE = 0
 
 _FINITE_PATTERN = re.compile(r"\^[^*+{]*\$")
@@ -112,6 +115,41 @@ def _list_element_model(cls, field_name: str):
     return None
 
 
+_SAME_OR_SHORTER = ("strip", "lstrip", "rstrip", "lower", "upper")
+
+
+def _passthrough_attrs(value) -> list:
+    """值可能原样就是入参字段的写法：`body.x`、`body.x or 默认`（`and` 同理）、`a if … else body.x`、
+    `body.x.strip()` 这类不会变长的调用。算术、拼接、函数加工过的不算——那写进去的已不是入参本身。"""
+    if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
+        return [value]
+    if isinstance(value, ast.BoolOp):
+        return [a for v in value.values for a in _passthrough_attrs(v)]
+    if isinstance(value, ast.IfExp):
+        return _passthrough_attrs(value.body) + _passthrough_attrs(value.orelse)
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and not value.args \
+            and value.func.attr in _SAME_OR_SHORTER:
+        return _passthrough_attrs(value.func.value)
+    return []
+
+
+def _fetched_model(value) -> str | None:
+    """`x = …` 取出来的是哪张表的一行：`db.get(Model, …)`，或 `db.query(Model)….first()` / `.one()` /
+    `.one_or_none()`（第四层：按业务键查出来再改的端点——定时任务、按编码改配置——原先整个看不见）。"""
+    if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)):
+        return None
+    if value.func.attr == "get":
+        return value.args[0].id if value.args and isinstance(value.args[0], ast.Name) else None
+    if value.func.attr not in ("first", "one", "one_or_none"):
+        return None
+    cur = value.func.value
+    while isinstance(cur, ast.Call) and isinstance(cur.func, ast.Attribute):
+        if cur.func.attr == "query":
+            return cur.args[0].id if len(cur.args) == 1 and isinstance(cur.args[0], ast.Name) else None
+        cur = cur.func.value
+    return None
+
+
 def body_column_writes(modules=None) -> list[tuple]:
     """写接口把请求体的哪个字段写进了哪张表的哪一列：`[(模块, 请求模型, 字段, ORM 模型, 列)]`。
 
@@ -119,8 +157,13 @@ def body_column_writes(modules=None) -> list[tuple]:
     之后 `setattr(x, …)` 的改档循环、**请求体里的列表字段逐项写库**——`for item in body.items:` 之后
     对 `item` 用前两种写法（P1-91 第二层：处方明细、批量号源曾因此整个漏在判据之外；setattr 那一种不认
     循环变量，改档循环写的是取出来的对象），以及**取出来的对象上显式赋值** `x.列 = body.字段`（第三层：
-    检查报告修订、上门派单、远程咨询回复这类流转端点都是这么写的）。取对象只认 `db.get`——经 helper 或
-    查询取出来的对象仍看不见。数值那一族（`test_body_numeric_capacity.py`）共用这一份。
+    检查报告修订、上门派单、远程咨询回复这类流转端点都是这么写的）。
+    第四层补了三处盲区：取对象除 `db.get` 外也认 `db.query(Model)….first()` / `.one()` / `.one_or_none()`
+    （按业务键查出来再改：入库累加、按指标键改名、按任务名改周期）；构造里的字典字面量
+    `Model(**{**body.model_dump(), "列": …})`（显式写出的键覆盖入参，覆盖值仍取自入参的照算）；值不必是裸的
+    `body.字段`——`body.x or 默认`、`a if … else body.x`、`body.x.strip()` 这类原样取自入参的写法都算
+    （见 `_passthrough_attrs`）。经 helper 取出来的对象仍看不见。数值、可空两族（`test_body_numeric_capacity.py`、
+    `test_body_raw_dict.py` 第二层）共用这一份。
     """
     lengths = _column_lengths()
     out = []
@@ -145,37 +188,48 @@ def body_column_writes(modules=None) -> list[tuple]:
                     elem = _list_element_model(params[node.iter.value.id], node.iter.attr)
                     if elem is not None:
                         items[node.target.id] = elem
-            fetched = {t.id: node.value.args[0].id for node in ast.walk(fn)
-                       if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
-                       and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "get"
-                       and node.value.args and isinstance(node.value.args[0], ast.Name)
+            fetched = {t.id: model for node in ast.walk(fn)
+                       if isinstance(node, ast.Assign) and (model := _fetched_model(node.value)) is not None
                        for t in node.targets if isinstance(t, ast.Name)}
             writes = []   # (请求模型, 字段, ORM 模型[, 列])
             for node in ast.walk(fn):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in lengths:
                     for kw in node.keywords:
                         v = kw.value
+                        # `Model(**{**body.model_dump(), "quantity": 0})`：字典字面量里展开，显式写出的键覆盖入参；
+                        # 覆盖的值若仍取自入参（`"surgeon_name": body.surgeon_name or …`），照样算那个字段写进这一列
+                        overridden: set = set()
+                        if kw.arg is None and isinstance(v, ast.Dict):
+                            for k, val in zip(v.keys, v.values):
+                                if not isinstance(k, ast.Constant):
+                                    continue
+                                overridden.add(k.value)
+                                writes += [(items[a.value.id], a.attr, node.func.id, k.value) for a in ast.walk(val)
+                                           if isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name)
+                                           and a.value.id in items and a.attr in items[a.value.id].model_fields]
+                            v = next((val for k, val in zip(v.keys, v.values) if k is None), None)
                         if kw.arg is None and isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) \
                                 and v.func.attr == "model_dump" and isinstance(v.func.value, ast.Name) \
                                 and v.func.value.id in items:
                             excluded = {c.value for k2 in v.keywords if k2.arg == "exclude"
                                         for c in ast.walk(k2.value) if isinstance(c, ast.Constant)}
                             cls = items[v.func.value.id]
-                            writes += [(cls, f, node.func.id) for f in cls.model_fields if f not in excluded]
-                        elif kw.arg and isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) \
-                                and v.value.id in items and v.attr in items[v.value.id].model_fields:
-                            writes.append((items[v.value.id], v.attr, node.func.id, kw.arg))
+                            writes += [(cls, f, node.func.id) for f in cls.model_fields
+                                       if f not in excluded and f not in overridden]
+                        elif kw.arg:
+                            writes += [(items[a.value.id], a.attr, node.func.id, kw.arg)
+                                       for a in _passthrough_attrs(v)
+                                       if a.value.id in items and a.attr in items[a.value.id].model_fields]
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr" \
                         and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id in fetched:
                     writes += [(cls, f, fetched[node.args[0].id]) for cls in params.values() for f in cls.model_fields]
                 # 第五种：取出来的对象上显式赋值 `report.conclusion = body.conclusion`（改档、流转里最常见）
                 if isinstance(node, ast.Assign) and len(node.targets) == 1 \
                         and isinstance(node.targets[0], ast.Attribute) and isinstance(node.targets[0].value, ast.Name) \
-                        and node.targets[0].value.id in fetched and isinstance(node.value, ast.Attribute) \
-                        and isinstance(node.value.value, ast.Name) and node.value.value.id in items \
-                        and node.value.attr in items[node.value.value.id].model_fields:
-                    writes.append((items[node.value.value.id], node.value.attr,
-                                   fetched[node.targets[0].value.id], node.targets[0].attr))
+                        and node.targets[0].value.id in fetched:
+                    writes += [(items[a.value.id], a.attr, fetched[node.targets[0].value.id], node.targets[0].attr)
+                               for a in _passthrough_attrs(node.value)
+                               if a.value.id in items and a.attr in items[a.value.id].model_fields]
             for w in writes:
                 out.append((modname, w[0], w[1], w[2], w[3] if len(w) == 4 else w[1]))
     return out
@@ -272,6 +326,53 @@ def amend(i: int, body: NotePatch, db=None):
     assert got == ["自证:LineIn.diagnosis_name→Encounter.diagnosis_name(256)",
                    "自证:NoteIn.note→Encounter.summary(1024)",
                    "自证:NotePatch.note→Encounter.diagnosis_name(256)"], got
+
+
+def test_判据自证_第四层_查出来的对象_字典字面量_原样取值都点名():
+    import types
+
+    from pydantic import Field
+
+    snippet = '''
+class FourIn(BaseModel):
+    diagnosis_name: str = ""
+    summary: str = ""
+    note: str = ""
+
+class ConstIn(BaseModel):
+    summary: str = ""
+
+@router.patch("/q/{code}")
+def by_key(code: str, body: FourIn, db=None):
+    e = db.query(Encounter).filter(Encounter.id == 1).first()
+    e.diagnosis_name = body.diagnosis_name
+
+@router.post("/lit")
+def literal(body: FourIn, db=None):
+    db.add(Encounter(**{**body.model_dump(exclude={"note"}), "summary": body.summary or "无"}))
+
+@router.post("/strip")
+def stripped(body: FourIn, db=None):
+    db.add(Encounter(diagnosis_name=body.note.strip()))
+
+@router.post("/const")
+def const(body: ConstIn, db=None):
+    db.add(Encounter(**{**body.model_dump(), "summary": ""}))
+'''
+
+    class _Router:
+        def __getattr__(self, _name):
+            return lambda *a, **k: (lambda fn: fn)
+
+    mod = types.ModuleType("自证")
+    mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "router": _Router()})
+    exec(compile(snippet, "自证", "exec"), mod.__dict__)
+    # 被常量覆盖的键（ConstIn.summary → ""）不算入参写库
+    assert unbounded_body_strings([("自证", mod, snippet)]) == [
+        "自证:FourIn.diagnosis_name→Encounter.diagnosis_name(256)",
+        "自证:FourIn.note→Encounter.diagnosis_name(256)",
+        "自证:FourIn.summary→Encounter.summary(1024)",
+    ]
 
 
 # ================================================================ 第一批：核心诊疗
@@ -387,3 +488,39 @@ def test_改成长键自定义角色_留痕列装得下(client, admin):
     assert r.status_code == 200, (r.status_code, r.text[:200])
     r = client.patch(f"/api/users/{uid}/role", json={"role": "operator"}, headers=admin)
     assert r.status_code == 200, (r.status_code, r.text[:200])
+
+
+# ================================================================ 第四层：按业务键查出来的对象 / 字典字面量 / 原样取值
+def test_第四层_药品入库编码药名超长_422而不是生产库500(client, admin, world):
+    """入库按 (机构, 药品编码) 查出已有库存再改药名，建档走 `DrugStock(**{**body.model_dump(), …})`——两处原先都看不见。"""
+    base = {"org_id": world["county"], "drug_code": "P191-4", "drug_name": "第四层药", "quantity": 1}
+    for field, limit in (("drug_code", 64), ("drug_name", 128)):
+        r = client.post("/api/pharmacy/stocks", json={**base, field: "长" * (limit + 1)}, headers=admin)
+        assert r.status_code == 422 and field in r.text, (field, r.status_code, r.text[:200])
+    r = client.post("/api/pharmacy/stocks", json={**base, "drug_code": "码" * 64, "drug_name": "药" * 128},
+                    headers=admin)
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+
+
+def test_第四层_绩效指标改名超长_422(client, admin):
+    key = client.get("/api/performance/indicators", headers=admin).json()[0]["key"]
+    r = client.patch(f"/api/performance/indicators/{key}", json={"name": "长" * 65}, headers=admin)
+    assert r.status_code == 422 and "name" in r.text, (r.status_code, r.text[:200])
+
+
+def test_第四层_住院护理记录人超长_422(client, admin, world):
+    """`nurse_name=body.nurse_name or user.full_name`：值不是裸的 `body.字段`，原先判据认不出来。"""
+    bed = client.post("/api/inpatient/beds", json={"ward_id": world["ward"], "bed_no": "L4-01"}, headers=admin)
+    assert bed.status_code == 201, bed.text
+    patient = client.post("/api/patients", json={"name": "第四层护理患者", "id_card": "330191198001010491",
+                                                 "gender": "女", "birth_date": "1980-01-01"}, headers=admin)
+    assert patient.status_code == 201, patient.text
+    adm = client.post("/api/inpatient/admissions",
+                      json={"patient_id": patient.json()["id"], "ward_id": world["ward"], "bed_id": bed.json()["id"]},
+                      headers=admin)
+    assert adm.status_code == 201, adm.text
+    url = f"/api/inpatient/admissions/{adm.json()['id']}/nursing-records"
+    r = client.post(url, json={"content": "第四层护理", "nurse_name": "长" * 65}, headers=admin)
+    assert r.status_code == 422 and "nurse_name" in r.text, (r.status_code, r.text[:200])
+    r = client.post(url, json={"content": "第四层护理", "nurse_name": "长" * 64}, headers=admin)
+    assert r.status_code == 201, (r.status_code, r.text[:200])

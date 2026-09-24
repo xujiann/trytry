@@ -391,7 +391,7 @@ def list_screenings(child_id: int, db: Session = Depends(get_db)):
 
 class HighRiskUpdate(BaseModel):
     high_risk: bool
-    risk_note: str = ""
+    risk_note: str = Field(default="", max_length=256)   # 列长（P1-91 第四层：改档写法原先判据认不出来）
 
 
 class ChildHighRiskOut(BaseModel):

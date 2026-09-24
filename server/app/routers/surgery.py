@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
+from ..numtypes import INT4_MAX
 from ..datetypes import DateStr, OptionalDateStr, TimeStr
 from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..notify import notify_patient
@@ -189,7 +190,7 @@ class SurgeryRequestIn(BaseModel):
     surgery_code: str = Field(default="", max_length=32)
     incision_level: str = Field(default="II", pattern="^(I|II|III|IV)$")
     anesthesia_type: str = Field(default="general", pattern="^(general|spinal|local|nerve_block)$")
-    surgeon_name: str = ""
+    surgeon_name: str = Field(default="", max_length=64)   # `surgeon_name=body.surgeon_name or …` 原先判据认不出来
     urgency: str = Field(default="elective", pattern="^(elective|urgent|emergency)$")
     # 非计划重返手术室：由医师在提出申请时显式标记。不做推断——分期手术、
     # 计划内二次探查都是正常的，"同一住院有第二台手术"这种规则只会冤枉人。
@@ -425,17 +426,19 @@ def list_schedules(
 
 class SurgeryRecordIn(BaseModel):
     actual_surgery_name: str = Field(min_length=1, max_length=256)
-    surgeon_name: str = ""
-    assistants: str = ""
-    anesthetist_name: str = ""
+    # 以下补列长 / 列容量（P1-91 / P1-93 第四层）：`SurgeryRecord(**{**body.model_dump(), …})` 这种字典字面量写法
+    # 原先判据认不出来，PG 上超长即 500
+    surgeon_name: str = Field(default="", max_length=64)
+    assistants: str = Field(default="", max_length=256)
+    anesthetist_name: str = Field(default="", max_length=64)
     anesthesia_type: str = Field(default="general", pattern="^(general|spinal|local|nerve_block)$")
     incision_level: str = Field(default="II", pattern="^(I|II|III|IV)$")
-    start_at: str = ""
-    end_at: str = ""
-    blood_loss_ml: int = Field(default=0, ge=0)
-    findings: str = ""
-    procedure: str = ""
-    complications: str = ""
+    start_at: str = Field(default="", max_length=16)
+    end_at: str = Field(default="", max_length=16)
+    blood_loss_ml: int = Field(default=0, ge=0, le=INT4_MAX)
+    findings: str = Field(default="", max_length=2048)
+    procedure: str = Field(default="", max_length=4096)
+    complications: str = Field(default="", max_length=1024)
     outcome: str = Field(default="好转", pattern="^(治愈|好转|未愈|死亡)$")
     # 术前/术后诊断：留空即"未采集"，不进诊断符合率的分母（见 quality 模块口径）
     preop_diagnosis: str = Field(default="", max_length=256)

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..numtypes import INT4_MAX
 from ..deps import paginate, require_admin, require_roles
 from ..models import JobRun, ScheduledJob
 from ..scheduler import REGISTRY, job_lock, run_job
@@ -57,7 +58,8 @@ def list_jobs(db: Session = Depends(get_db)):
 
 
 class JobUpdate(BaseModel):
-    interval_seconds: int | None = Field(default=None, ge=60)
+    # 列容量（P1-93 第四层：按任务名查出来再改，原先判据看不见；PG 上超 integer 即 500）
+    interval_seconds: int | None = Field(default=None, ge=60, le=INT4_MAX)
     enabled: bool | None = None
 
 
