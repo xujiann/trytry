@@ -772,6 +772,10 @@ def create_staff_contract(
     assert_obj_org_writable(db, user, employee)
     if body.end_date <= body.start_date:
         raise HTTPException(status_code=422, detail="合同止期须晚于起期")
+    # 与派驻同一口径（P1-102）：离职的人不再签在期合同——签上了，到期提醒（只看合同状态）照样提醒续签一个
+    # 已经走了的人；补录已经到期的历史合同照收
+    if employee.status == "left" and body.end_date >= resolve_business_date(None).isoformat():
+        raise HTTPException(status_code=409, detail="该员工已离职，不能签订在期合同（已到期的历史合同可以补录）")
     if db.query(StaffContract).filter(StaffContract.contract_no == body.contract_no).first():
         raise HTTPException(status_code=409, detail="合同编号已存在")
     contract = insert_or_conflict(db, StaffContract(**body.model_dump()), "合同编号已存在")

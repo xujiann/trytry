@@ -293,6 +293,9 @@ def create_outbound_visit(
         if referral.patient_id != body.patient_id:
             # 挂到别人的转诊单上会把"有序转诊率"算高，必须拦
             raise HTTPException(status_code=422, detail="该转诊单不属于此患者")
+        if referral.status == "rejected":
+            # 同一个理由：被退回的转诊单没有转成，患者是自行外出——挂上去就算成了有序转诊
+            raise HTTPException(status_code=422, detail="该转诊单已退回，不能作为有序转诊依据")
     visit = OutboundVisit(**body.model_dump(), created_by=user.id)
     db.add(visit)
     db.commit()

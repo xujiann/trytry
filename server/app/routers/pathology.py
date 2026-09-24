@@ -182,6 +182,10 @@ def submit_specimen(body: SpecimenIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="检查申请不存在")
     if request.center_type != "pathology":
         raise HTTPException(status_code=422, detail="仅病理申请有标本流转环节")
+    # 出报告只收待诊断 / 诊断中的申请（exams.submit_report）：已出报告、互认了既往结果的申请再送检，
+    # 标本照样走核收→取材→阅片，报告却再也出不了（修前实测 201，之后出报告 409）
+    if request.status not in ("pending", "diagnosing"):
+        raise HTTPException(status_code=409, detail=f"该申请当前状态 {request.status}，不能再送检标本")
     # 与医废追溯码同理：标本号由服务端顺序生成，冲突该由服务端重试。
     # 原先返回 409"标本号冲突，请重试"——把服务端的分配问题推给了送检的人。
     specimen = insert_with_retry(

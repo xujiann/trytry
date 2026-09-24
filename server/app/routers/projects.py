@@ -280,7 +280,11 @@ def add_milestone(
     project_id: int, body: MilestoneIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    _project(db, project_id, user)
+    project = _project(db, project_id, user)
+    # 已完成 / 已中止的项目不再加里程碑：项目本身的逾期判断早把这两态排除在外，新加的里程碑却照样
+    # 按到期日算逾期，一个结了项的项目挂着「逾期里程碑 1」
+    if project.status in ("done", "suspended"):
+        raise HTTPException(status_code=409, detail="项目已完成或已中止，不能再加里程碑")
     milestone = ProjectMilestone(project_id=project_id, **body.model_dump())
     db.add(milestone)
     db.commit()

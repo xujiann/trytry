@@ -42,6 +42,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_ascii_digit_patterns as asciidigits
     import test_ascii_digit_parsing as asciiparse
     import test_body_fk_exists as bodyfk
+    import test_closed_parent_writes as closedparent
     import test_body_finite_numbers as bodyfinite
     import test_body_numeric_capacity as bodynumcap
     import test_body_raw_dict as bodyraw
@@ -126,6 +127,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          disabledrefs.BASELINE, "tests/test_disabled_catalog_refs.py"),
         ("引用完整性", "按设计引用停用目录对象的豁免（往期补录 / 配置先于启用 / 手动出报告，逐条写明理由）",
          len(disabledrefs.BY_DESIGN), "tests/test_disabled_catalog_refs.py"),
+        ("引用完整性", "在已结束的父对象下新建子行却不看父对象状态（离职医师放号 / 已出报告收标本 / 死亡档案绑包…；6 → 0 已清零）",
+         closedparent.BASELINE, "tests/test_closed_parent_writes.py"),
+        ("引用完整性", "按设计在已结束父对象下挂子行的豁免（事后补录 / 结算先于出院 / 留痕行…，逐条写明理由）",
+         len(closedparent.BY_DESIGN), "tests/test_closed_parent_writes.py"),
         ("引用完整性", "请求体字符串无长度上限写进定长列（PG 上超长即 500；197 → 0，第二层循环写库 +4、第三层显式赋值 +10、第四层查出对象 / 字面量构造 / 原样取值 +16、第五层转一手再写 +37 → 0）", bodystr.BASELINE,
          "tests/test_body_str_length.py"),
         ("数值入参", "浮点入参收得下 NaN / Infinity（超标判定对 NaN 恒为假、金额列 500；66 → 0 已清零）",

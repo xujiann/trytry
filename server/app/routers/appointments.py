@@ -143,6 +143,8 @@ def create_slot(body: SlotCreate, db: Session = Depends(get_db)):
             raise HTTPException(status_code=404, detail="医师不存在")
         if employee.org_id != body.org_id:
             raise HTTPException(status_code=422, detail="医师不属于该机构")
+        if employee.status == "left":  # 离职的医师不再放号（挂上了也没人坐诊），同批量生成、预约同一句
+            raise HTTPException(status_code=409, detail="该医师已离职，不能放号")
     slot = AppointmentSlot(**body.model_dump())
     # 同机构+医师+资源+日期+时段唯一（uq_slot_with_employee /
     # uq_slot_without_employee 两条部分索引，NULL != NULL 故拆两条）：
@@ -209,6 +211,8 @@ def batch_create_slots(body: SlotBatchCreate, db: Session = Depends(get_db)):
                 raise HTTPException(status_code=404, detail=f"医师不存在: {employee_id}")
             if employee.org_id != body.org_id:
                 raise HTTPException(status_code=422, detail=f"医师不属于该机构: {employee_id}")
+            if employee.status == "left":
+                raise HTTPException(status_code=409, detail=f"该医师已离职，不能放号: {employee_id}")
     start, end = date.fromisoformat(body.date_from), date.fromisoformat(body.date_to)
     if start > end:
         raise HTTPException(status_code=422, detail="date_from 不得晚于 date_to")
@@ -296,6 +300,11 @@ def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
     slot = db.get(AppointmentSlot, slot_id)
     if slot is None:
         raise HTTPException(status_code=404, detail="号源不存在")
+    if slot.employee_id is not None:
+        # 医师离职前放出的号源还挂在清单上：登记离职不会回收号源，照样约得上就是约了一个没人坐诊的号
+        doctor = db.get(Employee, slot.employee_id)
+        if doctor is not None and doctor.status == "left":
+            raise HTTPException(status_code=409, detail="该医师已离职，此号源不再接受预约")
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     banned = (

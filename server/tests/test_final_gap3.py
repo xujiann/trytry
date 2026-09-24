@@ -107,7 +107,13 @@ def test_employee_change_flow(client, setup):
 
 def test_staff_contract_expiring(client, setup):
     dir_h = setup["director"]
-    emp_id = setup["employee"]["id"]
+    # 夹具里那位员工已被上一条用例（test_employee_change_flow）登记离职，而离职员工不签在期合同（P1-104）；
+    # 本用例测的是合同编号唯一与到期提醒，另建一位在岗员工，断言一条不改
+    emp_id = client.post(
+        "/api/mgmt/employees",
+        json={"org_id": setup["lead"]["id"], "name": "终审合同员工", "title": "中级", "position": "内科医师"},
+        headers=dir_h,
+    ).json()["id"]
     contract = client.post(
         "/api/mgmt/staff-contracts",
         json={

@@ -1586,6 +1586,9 @@ def bind_package(
     if enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
     assert_org_writable(db, user, enrollment.org_id)
+    # 与改档同一句：排除 / 迁出 / 死亡 / 召回的档案不再新签服务包（修前实测死亡档案绑包 201，改档 409）
+    if enrollment.status != "active":
+        raise HTTPException(status_code=409, detail="非在管状态的档案不可绑定服务包，请先恢复管理")
     # 快路径预检：顺序重复绑定在这里就被挡下。并发抢输者查不到这条，
     # 由 _bind_package 里 uq_spd_pkg_binding_enroll_pkg_bound 的兜底给出同一句 409。
     exists = (
