@@ -14,10 +14,10 @@ def admin_headers(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
 
 
-def _make_user(client, admin_headers, username, role):
+def _make_user(client, admin_headers, username, role, org_id=None):
     client.post(
         "/api/users",
-        json={"username": username, "password": f"{role}pass123", "role": role},
+        json={"username": username, "password": f"{role}pass123", "role": role, "org_id": org_id},
         headers=admin_headers,
     )
     resp = client.post(
@@ -47,7 +47,8 @@ def setup(client, admin_headers):
         "org": org,
         "org2": org2,
         "patient": patient,
-        "doctor": _make_user(client, admin_headers, "doc_rt", "doctor"),
+        # 开处方要以本机构名义（P0-35）：没挂机构的业务账号哪家的名义都用不了
+        "doctor": _make_user(client, admin_headers, "doc_rt", "doctor", org["id"]),
         "pharmacist": _make_user(client, admin_headers, "pharm_rt", "pharmacist"),
         "operator": _make_user(client, admin_headers, "op_rt", "operator"),
     }

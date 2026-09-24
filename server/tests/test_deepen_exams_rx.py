@@ -77,6 +77,8 @@ def test_recognition_directory_admin_only(client, setup):
 
 def test_recognition_directory_gating(client, admin, setup):
     doc = setup["doctor"]
+    # 申请单挂在卫生院名下，开单就得是卫生院的医师（P0-35：不得以别家机构名义开检查）
+    town_doc = _requesting_doctor(client, admin, setup)
     pid, org = setup["adult"]["id"], setup["township"]["id"]
 
     # 管理员维护目录：CT01 在目录且启用；LAB99 在目录但停用
@@ -109,7 +111,7 @@ def test_recognition_directory_gating(client, admin, setup):
         ("LAB99", "停用检验", "lab"),
         ("XR01", "目录外X光", "imaging"),
     ]:
-        req = _order_exam(client, doc, pid, org, code, name, ctype).json()
+        req = _order_exam(client, town_doc, pid, org, code, name, ctype).json()
         resp = client.post(f"/api/exams/{req['id']}/report", json={"conclusion": "未见异常"}, headers=doc)
         assert resp.status_code == 201
         reports[code] = req
@@ -128,14 +130,14 @@ def test_recognition_directory_gating(client, admin, setup):
 
     # 建单侧同样管控：目录外项目互认建单 → 422
     blocked = _order_exam(
-        client, doc, pid, org, "XR01", "目录外X光", "imaging",
+        client, town_doc, pid, org, "XR01", "目录外X光", "imaging",
         accept_recognition_of=reports["XR01"]["id"],
     )
     assert blocked.status_code == 422 and "不在互认目录" in blocked.json()["detail"]
 
     # 目录内项目互认建单成功
     recognized = _order_exam(
-        client, doc, pid, org, "CT01", "胸部CT", "imaging",
+        client, town_doc, pid, org, "CT01", "胸部CT", "imaging",
         accept_recognition_of=reports["CT01"]["id"],
     )
     assert recognized.status_code == 201
@@ -173,6 +175,7 @@ def _requesting_doctor(client, admin, setup):
 
     P0-27 之前这里一直由县医院那位出报告的医师自己确认、自己反馈——他与患者没有任何关系
     （申请单挂在卫生院名下、报告又没走领取），闭环两步现在要判患者可见性，他过不去。
+    P0-35 之后开单也由他们开：申请机构由请求声明，县医院的医师不能以卫生院的名义开检查。
     """
     client.post(
         "/api/users",
@@ -188,7 +191,7 @@ def test_critical_closed_loop(client, admin, setup):
     town_doc = _requesting_doctor(client, admin, setup)
     pid, org = setup["adult"]["id"], setup["township"]["id"]
 
-    req = _order_exam(client, doc, pid, org, "K-CRIT", "血钾", "lab").json()
+    req = _order_exam(client, town_doc, pid, org, "K-CRIT", "血钾", "lab").json()
     report = client.post(
         f"/api/exams/{req['id']}/report",
         json={"conclusion": "血钾 7.1 mmol/L 危急", "critical": True, "reported_by": "检验科张主任"},
@@ -235,14 +238,14 @@ def test_critical_closed_loop(client, admin, setup):
 
 def test_non_critical_report_needs_no_loop(client, admin, setup):
     doc = setup["doctor"]
+    town_doc = _requesting_doctor(client, admin, setup)
     req = _order_exam(
-        client, doc, setup["adult"]["id"], setup["township"]["id"], "ECG01", "常规心电图", "ecg"
+        client, town_doc, setup["adult"]["id"], setup["township"]["id"], "ECG01", "常规心电图", "ecg"
     ).json()
     report = client.post(
         f"/api/exams/{req['id']}/report", json={"conclusion": "窦性心律"}, headers=doc
     ).json()
     assert report["critical_status"] == ""
-    town_doc = _requesting_doctor(client, admin, setup)
     assert client.post(f"/api/exams/reports/{report['id']}/acknowledge", headers=town_doc).status_code == 422
 
 

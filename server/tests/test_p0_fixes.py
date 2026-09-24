@@ -486,6 +486,13 @@ def test_recognition_window_enforced_at_creation(client, admin, setup):
     from app.database import SessionLocal
     from app.models import ExamReport
 
+    # 被互认的那张在卫生院开，就得由卫生院的医师开（P0-35：申请机构只能是本机构）
+    client.post(
+        "/api/users",
+        json={"username": "p0_town_doc", "password": "pass123456", "role": "doctor",
+              "org_id": setup["township"]["id"]},
+        headers=admin,
+    )
     req = client.post(
         "/api/exams",
         json={
@@ -495,7 +502,7 @@ def test_recognition_window_enforced_at_creation(client, admin, setup):
             "item_code": "P0LAB",
             "item_name": "血常规",
         },
-        headers=setup["doctor"],
+        headers=login(client, "p0_town_doc", "pass123456"),
     ).json()
     report = client.post(
         f"/api/exams/{req['id']}/report",

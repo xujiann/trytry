@@ -53,7 +53,7 @@ def test_exam_diagnosis_requires_doctor(client, admin, setup):
         "/api/exams",
         json={
             "patient_id": setup["patient"]["id"],
-            "from_org_id": setup["township"]["id"],
+            "from_org_id": setup["org"]["id"],  # 经办挂在县医院，只能以本机构名义开（P0-35）
             "center_type": "imaging",
             "item_code": "CT-HEAD",
             "item_name": "头颅CT",
@@ -82,6 +82,13 @@ def test_prescription_review_requires_pharmacist(client, admin, setup):
         json={"drug_code": "ASPIRIN", "max_daily_dose": 300, "dose_unit": "mg"},
         headers=admin,
     )
+    # 卫生院的处方由卫生院的医师开（P0-35），县医院的药师集中审
+    client.post(
+        "/api/users",
+        json={"username": "dr_town", "password": "pass123456", "role": "doctor",
+              "org_id": setup["township"]["id"]},
+        headers=admin,
+    )
     over = client.post(
         "/api/prescriptions",
         json={
@@ -90,7 +97,7 @@ def test_prescription_review_requires_pharmacist(client, admin, setup):
             "diagnosis_name": "冠心病",
             "items": [{"drug_code": "ASPIRIN", "drug_name": "阿司匹林", "daily_dose": 600, "days": 7}],
         },
-        headers=setup["doctor"],
+        headers=login(client, "dr_town", "pass123456"),
     ).json()
     assert over["status"] == "pending_review"
 

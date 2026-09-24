@@ -234,6 +234,8 @@ def create_request(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # P0-35：申请机构由请求声明，原先只查存在——乙院医生以甲院名义开检查 201，进甲院的待办与费用。
+    assert_org_writable(db, user, body.from_org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     from_org = db.get(Organization, body.from_org_id)

@@ -66,6 +66,8 @@ def setup(client, admin):
 
 
 def _make_critical_report(client, admin, setup, from_org_id, item_code="M1K"):
+    # 申请机构只能是开单医师自己的机构（P0-35）：org2 的单子由 org2 的医师开
+    orderer = "m1_doc2" if from_org_id == setup["org2"]["id"] else "m1_doc1"
     req = client.post(
         "/api/exams",
         json={
@@ -75,7 +77,7 @@ def _make_critical_report(client, admin, setup, from_org_id, item_code="M1K"):
             "item_code": item_code,
             "item_name": "血钾",
         },
-        headers=headers(setup["tokens"]["m1_doc1"]),
+        headers=headers(setup["tokens"][orderer]),
     ).json()
     report = client.post(
         f"/api/exams/{req['id']}/report",

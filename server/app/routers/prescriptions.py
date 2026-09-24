@@ -23,6 +23,7 @@ from ..models import (
     PrescriptionItem,
     User,
 )
+from ..visibility import assert_org_writable
 from ..schemas import (
     DrugRuleCreate,
     DrugRuleOut,
@@ -175,6 +176,8 @@ def create_prescription(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # P0-35：开方机构由请求声明——乙院医生以甲院名义开的处方照样进甲院审方、自动通过（实测 201）。
+    assert_org_writable(db, user, body.org_id)
     patient = db.get(Patient, body.patient_id)
     if patient is None:
         raise HTTPException(status_code=404, detail="患者不存在")

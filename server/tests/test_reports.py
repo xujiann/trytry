@@ -34,12 +34,19 @@ def setup(client, admin):
             headers=admin,
         )
         users[role] = login(client, username, "pass123456")
+    # 基层那一半由卫生院自己的医师写：请求里声明的机构只能是本机构（P0-35）
+    client.post(
+        "/api/users",
+        json={"username": "rp_doc_t", "password": "pass123456", "role": "doctor", "org_id": township["id"]},
+        headers=admin,
+    )
+    town_doctor = login(client, "rp_doc_t", "pass123456")
     # 业务数据：基层1次+县级1次就诊、1次上转、本地医保结算、两笔财务
-    for org in (county, township):
+    for org, doctor in ((county, users["doctor"]), (township, town_doctor)):
         client.post(
             "/api/encounters",
             json={"patient_id": patient["id"], "org_id": org["id"], "diagnosis_name": "上呼吸道感染"},
-            headers=users["doctor"],
+            headers=doctor,
         )
     client.post(
         "/api/referrals",
@@ -50,7 +57,7 @@ def setup(client, admin):
             "direction": "up",
             "reason": "报表测试",
         },
-        headers=users["doctor"],
+        headers=town_doctor,
     )
     client.post(
         "/api/insurance/settlements",

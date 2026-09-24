@@ -33,6 +33,16 @@ def seeded(client, admin):
         )
         accounts[role] = login(client, username, "pass123456")
     doctor, operator, public_health = accounts["doctor"], accounts["operator"], accounts["public_health"]
+    # 乡级的数据由乡卫生院自己的账号写：请求里声明的机构只能是本机构（P0-35），县医院的账号
+    # 不能以卫生院的名义建就诊、开检查、发起转诊、建慢病档。
+    for username, role in [("dd_doc_t", "doctor"), ("dd_ph_t", "public_health")]:
+        client.post(
+            "/api/users",
+            json={"username": username, "password": "pass123456", "role": role, "org_id": township["id"]},
+            headers=admin,
+        )
+    town_doctor = login(client, "dd_doc_t", "pass123456")
+    town_public_health = login(client, "dd_ph_t", "pass123456")
     patients = [
         client.post(
             "/api/patients",
@@ -52,7 +62,7 @@ def seeded(client, admin):
                     "diagnosis_name": "上呼吸道感染",
                     "diagnosis_code": "J06.900",
                 },
-                headers=doctor,
+                headers=town_doctor if org_id == township["id"] else doctor,
             )
     # 危急值报告 2 条（其中 1 条处置闭环后不计入未闭环口径）
     report_ids = []
@@ -66,7 +76,7 @@ def seeded(client, admin):
                 "item_code": f"CT-{i}",
                 "item_name": f"下钻检查{i}",
             },
-            headers=doctor,
+            headers=town_doctor,
         ).json()
         client.post(f"/api/exams/{req['id']}/claim", headers=doctor)
         rep = client.post(
@@ -93,7 +103,7 @@ def seeded(client, admin):
                     "direction": direction,
                     "reason": "下钻测试",
                 },
-                headers=doctor,
+                headers=town_doctor,
             )
     # 缺药预警：库存低于阈值
     client.post(
@@ -127,7 +137,7 @@ def seeded(client, admin):
             "level": 3,
             "managed_by_org_id": township["id"],
         },
-        headers=public_health,
+        headers=town_public_health,
     )
     assert chronic.status_code in (200, 201), chronic.text
     # 医废滞留：收集日期早于 2 天前且未交接

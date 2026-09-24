@@ -952,7 +952,10 @@ class FhirEncounterInboundOut(BaseModel):
 
 @router.post("/fhir/Encounter", status_code=201, response_model=FhirEncounterInboundOut)
 def fhir_encounter(
-    resource: dict, db: Session = Depends(get_db), x_source_system: str = Header(default="")
+    resource: dict,
+    db: Session = Depends(get_db),
+    x_source_system: str = Header(default=""),
+    user: User = Depends(get_current_user),
 ):
     """FHIR R4 Encounter 入站 → 就诊记录入档（映射表：Encounter+Condition）。
 
@@ -962,13 +965,15 @@ def fhir_encounter(
     - reasonCode[0]：coding[0].code→diagnosis_code（ICD-10）、text→diagnosis_name；
     - participant[0].individual.display→doctor_name。
     复用就诊登记路由逻辑（患者/机构校验 + 领域事件发布），入站落 ExchangeLog。
+    就诊机构（`serviceProvider`）同样只能是对接账号自己的机构（P0-35，与 ADT 入站把
+    `user` 传给 `create_admission` 同一口径）；跨机构批量同步用全域账号。
     """
     return _run_inbound(
-        "fhir_encounter", x_source_system, lambda: _do_fhir_encounter(resource, db)
+        "fhir_encounter", x_source_system, lambda: _do_fhir_encounter(resource, db, user)
     )
 
 
-def _do_fhir_encounter(resource: dict, db: Session):
+def _do_fhir_encounter(resource: dict, db: Session, user: User):
     if resource.get("resourceType") != "Encounter":
         raise HTTPException(status_code=422, detail="resourceType 必须为 Encounter")
     reference = (resource.get("subject") or {}).get("reference", "")
@@ -1009,6 +1014,7 @@ def _do_fhir_encounter(resource: dict, db: Session):
             summary="FHIR Encounter 入站同步",
         ),
         db,
+        user,
     )
     return {
         "encounter_id": encounter.id,

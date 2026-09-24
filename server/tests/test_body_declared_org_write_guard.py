@@ -60,19 +60,19 @@ AWAITING_DECISION = {
 }
 
 #: 候选（2026-09-24 量）：请求声明机构、却没有任何归属判定。只减不增——补上守卫就从这里划掉。
+#:
+#: ✅ 第一批「诊疗行为」4 条已清（同日）：建就诊 / 开处方 / 检查申请 / 代煎单，实测乙院医生以甲院名义
+#: 四条全 201（处方还在甲院名下自动过了审方）；补 `assert_org_writable`，回归见
+#: `tests/test_clinical_create_declared_org.py`。
 KNOWN_UNGUARDED = {
     "chronic.py:register_chronic",
     "consultations.py:apply",
     "cssd.py:advance",
     "cssd.py:create_batch",
-    "encounters.py:create_encounter",
-    "exams.py:create_request",
     "infectious.py:report_case",
-    "prescriptions.py:create_prescription",
     "referrals.py:create_referral",
     "spd/followup.py:auto_match_plans",
     "spd/followup.py:generate_report",
-    "tcm.py:create_order",
 }
 
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}

@@ -18,7 +18,7 @@ from ..models import (
     Settlement,
     User,
 )
-from ..visibility import assert_patient_visible, visible_org_ids
+from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 from ..schemas import EncounterCreate, EncounterOut
 
 router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[Depends(get_current_user)])
@@ -30,7 +30,12 @@ router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[
     status_code=201,
     dependencies=[Depends(require_roles("doctor", "operator"))],  # H2: 就诊记录=医疗岗
 )
-def create_encounter(body: EncounterCreate, db: Session = Depends(get_db)):
+def create_encounter(
+    body: EncounterCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    # P0-35：机构由请求声明，原先只查它存不存在——乙院医生以甲院名义建就诊 201，进甲院门诊量，
+    # 还凭空给甲院造出一条「就诊过」的服务关系（可见性判定首先看它）。
+    assert_org_writable(db, user, body.org_id)
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
