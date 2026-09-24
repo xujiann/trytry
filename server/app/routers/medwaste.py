@@ -23,7 +23,7 @@ from ..clock import now_naive
 from ..concurrency import insert_with_retry
 from ..database import get_db
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_date, require_roles, resolve_business_date
 from ..models import Employee, MedicalWaste, Organization, User, WasteLocation
 from ..schemas import WasteCreate, WasteHandover
 
@@ -436,9 +436,12 @@ def handler_stats(
     """转运人员工作量。挂了员工档案的按人汇总；只填了名字的历史记录单列报出，
     不硬凑进某个人头上——名字重合就会张冠李戴。"""
     query = db.query(MedicalWaste).filter(MedicalWaste.status == "handed_over")
+    # 按字符串比 `collected_date`：非法值不报错、只把工作量算少（P1-58）
     if start_date:
+        start_date = require_date(start_date, field="start_date")
         query = query.filter(MedicalWaste.collected_date >= start_date)
     if end_date:
+        end_date = require_date(end_date, field="end_date")
         query = query.filter(MedicalWaste.collected_date <= end_date)
     rows = query.all()
     by_employee: dict[int, dict] = {}
