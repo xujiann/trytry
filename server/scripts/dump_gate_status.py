@@ -50,6 +50,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_frontend_prompt_guard as promptguard
     import test_datestr_single_source as datestr
     import test_frontend_destructive_confirm_guard as destructive
+    import test_frontend_api_calls_resolve as apicalls
     import test_filter_ids_not_truncated as truncids
     import test_list_pagination_ratchet as pagination
     import test_orphan_endpoints as orphan
@@ -157,6 +158,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_orphan_endpoints.py"),
         ("功能完善", "按设计不需要界面的豁免路径", len(orphan.EXEMPT_PATHS),
          "tests/test_orphan_endpoints.py"),
+        ("功能完善", "前端写出来的 `/api` 地址没有路由 / 动词后端不接 / 判不了（反方向）", apicalls.BASELINE,
+         "tests/test_frontend_api_calls_resolve.py"),
         ("功能完善", "前端含 prompt( 的行（录入不靠弹窗）", promptguard.BASELINE,
          "tests/test_frontend_prompt_guard.py"),
         ("功能完善", "免确认的破坏性操作（可逆，逐条写明怎么恢复）", len(destructive.EXEMPT),
