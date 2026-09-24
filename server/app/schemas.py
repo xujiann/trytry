@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from .datetypes import DateStr
+from .datetypes import DateStr, OptionalDateStr
 
 
 class LoginRequest(BaseModel):
@@ -347,12 +347,14 @@ class ContractCreate(BaseModel):
     org_id: int
     doctor_name: str = Field(min_length=1)
     package: str = Field(default="basic", pattern="^(basic|standard|premium)$")
-    signed_date: str = ""
+    signed_date: OptionalDateStr = ""
 
 
 class ContractOut(ContractCreate):
     id: int
     status: str
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    signed_date: str = ""
 
     model_config = {"from_attributes": True}
 
