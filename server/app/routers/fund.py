@@ -75,9 +75,9 @@ class PoolIn(BaseModel):
 
 
 class PoolUpdate(BaseModel):
-    total_amount: FiniteFloat | None = Field(default=None, ge=0)
+    total_amount: FiniteFloat | None = Field(default=None, ge=0, le=MONEY_MAX)
     prepay_ratio_pct: float | None = Field(default=None, ge=0, le=100)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=256)
     status: str | None = Field(default=None, pattern="^(active|closed)$")
 
 
@@ -341,7 +341,7 @@ def list_prepayments(pool_id: int, db: Session = Depends(get_db)):
 class PeriodIn(BaseModel):
     period: PeriodStr
     # 留空即由系统按结算单归集；给值则视为人工核定，覆盖系统数
-    actual_amount: FiniteFloat | None = Field(default=None, ge=0)
+    actual_amount: FiniteFloat | None = Field(default=None, ge=0, le=MONEY_MAX)
     note: str = Field(default="", max_length=256)
 
 
@@ -421,7 +421,7 @@ def list_periods(pool_id: int, db: Session = Depends(get_db)):
 
 class SettleIn(BaseModel):
     # 留空即取各期预结之和；给值则以人工核定为准
-    total_expense: FiniteFloat | None = Field(default=None, ge=0)
+    total_expense: FiniteFloat | None = Field(default=None, ge=0, le=MONEY_MAX)
     overrun_action: str = Field(default="none", pattern="^(none|share|carry)$")
     note: str = Field(default="", max_length=256)
 

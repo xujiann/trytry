@@ -37,10 +37,10 @@ class CheckupItemOut(CheckupItemIn):
 class CheckupBase(BaseModel):
     patient_id: int
     org_id: int
-    package_name: str = "常规体检"
+    package_name: str = Field(default="常规体检", max_length=128)
     exam_date: DateStr
-    summary: str = ""
-    abnormal_items: str = ""
+    summary: str = Field(default="", max_length=1024)
+    abnormal_items: str = Field(default="", max_length=512)
 
 
 class CheckupCreate(CheckupBase):

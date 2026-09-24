@@ -918,7 +918,7 @@ class BudgetCreate(BaseModel):
     org_id: int
     year: str = Field(pattern=r"^[0-9]{4}$")  # 只认半角：`\d` 认全角「２０２６」（P2-47）
     category: str = Field(pattern="^(income|expense)$")
-    amount: FiniteFloat = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
 
 
 class BudgetReceiptOut(BaseModel):

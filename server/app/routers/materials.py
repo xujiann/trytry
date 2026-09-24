@@ -232,7 +232,7 @@ def sign_contract(purchase_id: int, body: ContractIn, db: Session = Depends(get_
 
 class ReceiveIn(BaseModel):
     received_quantity: int = Field(gt=0, le=INT4_MAX)
-    note: str = ""
+    note: str = Field(default="", max_length=512)
 
 
 def _mark_received(db: Session, purchase_id: int, received_quantity: int, note: str) -> bool:

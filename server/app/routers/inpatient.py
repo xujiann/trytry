@@ -15,6 +15,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..concurrency import insert_or_conflict
+from ..numtypes import MONEY_MAX
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_writable,
@@ -375,11 +376,11 @@ def _admission_visible_or_404(db: Session, admission_id: int, user: User, resour
 
 class CaseSummaryCreate(BaseModel):
     discharge_diagnosis: str = Field(min_length=1, max_length=256)
-    operation: str = ""
-    total_cost: FiniteFloat = Field(default=0, ge=0)
-    drug_cost: FiniteFloat = Field(default=0, ge=0)
+    operation: str = Field(default="", max_length=256)
+    total_cost: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    drug_cost: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
     outcome: str = Field(default="好转", pattern="^(治愈|好转|未愈|死亡|其他)$")
-    note: str = ""
+    note: str = Field(default="", max_length=1024)
 
 
 class CaseSummaryOut(BaseModel):

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
+from ..numtypes import MONEY_MAX
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..concurrency import insert_or_conflict
 from ..database import get_db
@@ -123,7 +124,7 @@ def complete(
 
 
 class ConsultationFee(BaseModel):
-    fee: FiniteFloat = Field(ge=0)
+    fee: FiniteFloat = Field(ge=0, le=MONEY_MAX)
     fee_note: str = Field(default="", max_length=256)
 
 

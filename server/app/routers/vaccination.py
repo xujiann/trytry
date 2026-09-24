@@ -139,8 +139,8 @@ def vaccination_history(
 
 class ContraCreate(BaseModel):
     patient_id: int
-    vaccine_code: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    vaccine_code: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=256)
     contra_type: str = Field(default="permanent", pattern="^(permanent|temporary)$")
     valid_until: date | None = None
 

@@ -19,7 +19,7 @@ _COMPONENT = "^(rbc|plasma|platelet)$"
 class BloodStockUpsert(BaseModel):
     blood_type: str = Field(pattern=_BLOOD_TYPE)
     component: str = Field(pattern=_COMPONENT)
-    quantity_ml: int = Field(gt=0)
+    quantity_ml: int = Field(gt=0, le=INT4_MAX)
 
 
 # ---- 响应契约（字段精确镜像现输出，勿改字节）----

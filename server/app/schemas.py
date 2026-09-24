@@ -4,7 +4,8 @@ from .numtypes import INT4_MAX
 
 
 class LoginRequest(BaseModel):
-    username: str
+    # 列长（P1-91 第五层）：登录不论成败都写登录留痕 `login_logs.username`(64)，超长用户名原先在生产库上 500
+    username: str = Field(max_length=64)
     password: str
 
 
@@ -112,12 +113,12 @@ class ExamRequestCreate(BaseModel):
     patient_id: int
     from_org_id: int
     center_type: str = Field(pattern="^(imaging|ecg|lab|pathology)$")
-    item_code: str
-    item_name: str
-    clinical_info: str = ""
+    item_code: str = Field(max_length=64)
+    item_name: str = Field(max_length=128)
+    clinical_info: str = Field(default="", max_length=512)
     # 互认：引用既往已报告申请的 id 即互认其结果；填写理由则记录不互认原因
     accept_recognition_of: int | None = None
-    recognition_declined_reason: str = ""
+    recognition_declined_reason: str = Field(default="", max_length=256)
 
 
 class ExamRequestOut(BaseModel):
@@ -287,7 +288,8 @@ class ChronicCreate(BaseModel):
     # 块1：病种取值改由 ChronicDiseaseType 目录校验（不再硬编码枚举）
     disease: str = Field(min_length=1, max_length=32)
     managed_by_org_id: int
-    next_due: str = ""
+    # 列长（P1-91 第五层：`payload` 转手写库）。随访表单是自由文本框，日期口径另见 TECH_DEBT P2-55
+    next_due: str = Field(default="", max_length=10)
 
 
 class ChronicOut(ChronicCreate):
@@ -303,8 +305,9 @@ class FollowUpCreate(BaseModel):
     glucose: FiniteFloat | None = None
     # 块1：通用指标（非血压血糖类），如 {"adherence_score": 4, "cat_score": 22}
     metrics: dict[str, FiniteFloat] = Field(default_factory=dict)
-    guidance: str = ""
-    next_due: str = ""
+    guidance: str = Field(default="", max_length=1024)
+    # 列长（P1-91 第五层：`payload` 转手写库）。随访表单是自由文本框，日期口径另见 TECH_DEBT P2-55
+    next_due: str = Field(default="", max_length=10)
 
 
 class FollowUpOut(FollowUpCreate):
@@ -363,7 +366,7 @@ class ConsultationOut(ConsultationCreate):
 
 
 class ConsultationAccept(BaseModel):
-    expert_name: str = Field(min_length=1)
+    expert_name: str = Field(min_length=1, max_length=64)
 
 
 class ConsultationComplete(BaseModel):

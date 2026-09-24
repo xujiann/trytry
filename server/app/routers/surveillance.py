@@ -57,9 +57,9 @@ RESOURCE_TYPES = {"material": "应急物资", "team": "应急队伍", "equipment
 class SyndromeIn(BaseModel):
     org_id: int
     syndrome: str = Field(pattern="^(fever|respiratory|diarrhea|rash|jaundice|neuro)$")
-    case_count: int = Field(ge=0)
+    case_count: int = Field(ge=0, le=INT4_MAX)
     # 0 表示该机构该症候群不设阈值（不参与预警，但仍进趋势）
-    threshold: int = Field(default=0, ge=0)
+    threshold: int = Field(default=0, ge=0, le=INT4_MAX)
     record_date: DateStr
     note: str = Field(default="", max_length=256)
 

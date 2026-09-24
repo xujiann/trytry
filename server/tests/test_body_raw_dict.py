@@ -347,6 +347,13 @@ def _none_skipped(fn, field: str) -> bool:
         if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or) \
                 and isinstance(node.values[0], ast.Attribute) and node.values[0].attr == field:
             return True
+        # `x = body.字段 if body.字段 is not None else 默认`（`is None` 反过来写同理）：None 落到默认值上——
+        # 写库形状第五层认了局部变量转手，这种先兜底再转手的写法随之进了视野
+        if isinstance(node, ast.IfExp) and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1 \
+                and isinstance(node.test.ops[0], (ast.Is, ast.IsNot)) and isinstance(node.test.left, ast.Attribute) \
+                and node.test.left.attr == field and isinstance(node.test.comparators[0], ast.Constant) \
+                and node.test.comparators[0].value is None:
+            return True
     return False
 
 

@@ -869,8 +869,8 @@ def print_discharge_summary(
 
 class TemplateUpsert(BaseModel):
     doc_type: str = Field(pattern=_DOC_TYPE_PATTERN)
-    header_org_name: str = ""
-    footer_note: str = ""
+    header_org_name: str = Field(default="", max_length=128)
+    footer_note: str = Field(default="", max_length=256)
     show_qr: bool = True
 
 

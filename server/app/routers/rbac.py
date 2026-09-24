@@ -121,8 +121,8 @@ class RoleIn(BaseModel):
 
 
 class RoleUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(default=None, max_length=64)
+    description: str | None = Field(default=None, max_length=256)
     active: bool | None = None
 
 

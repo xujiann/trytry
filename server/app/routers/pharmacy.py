@@ -410,7 +410,7 @@ class BatchReceiveIn(BaseModel):
     batch_no: str = Field(min_length=1, max_length=64)
     expire_date: DateStr
     supplier: str = Field(default="", max_length=128)
-    quantity: int = Field(gt=0)
+    quantity: int = Field(gt=0, le=INT4_MAX)
 
 
 class BatchOut(BaseModel):

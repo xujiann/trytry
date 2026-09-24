@@ -31,9 +31,9 @@ class GroupIn(BaseModel):
 
 
 class GroupUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=64)
     lead_org_id: int | None = None
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=256)
     active: bool | None = None
 
 

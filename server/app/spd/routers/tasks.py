@@ -850,7 +850,8 @@ class SubmitIn(BaseModel):
     # 附件 id 列表。曾是自由字符串——那能让 require_evidence 被一串乱码糊弄过去
     evidence: list[int | str] = Field(default_factory=list)
     draft: bool = False
-    note: str = Field(default="", max_length=512)
+    # 写进 `spd_tasks.review_note`(256)——原先放到 512，257～512 字的审核意见在生产库上 500（P1-91 第五层）
+    note: str = Field(default="", max_length=256)
 
 
 @router.post("/tasks/{task_id}/submit", response_model=TaskOut,

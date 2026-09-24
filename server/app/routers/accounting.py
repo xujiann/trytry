@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..numtypes import MONEY_MAX
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_visible,
@@ -213,9 +214,9 @@ def list_subjects(category: str | None = None, db: Session = Depends(get_db)):
 
 class EntryIn(BaseModel):
     subject_code: str = Field(min_length=1, max_length=16)
-    summary: str = ""
-    debit: FiniteFloat = Field(default=0, ge=0)
-    credit: FiniteFloat = Field(default=0, ge=0)
+    summary: str = Field(default="", max_length=256)
+    debit: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    credit: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
 
 
 class VoucherIn(BaseModel):

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import clock
+from ..numtypes import INT4_MAX, INT4_MIN
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..datetypes import DateStr
@@ -73,10 +74,11 @@ class FollowupIn(BaseModel):
     patient_id: int
     org_id: int
     category: str = Field(pattern="^(chronic|discharge|surgery|maternal)$")
-    source_id: int = 0
-    title: str = ""
+    # 多态来源号，不是外键：与 P1-93 同批的多态 id 一样补对称的整数容量界
+    source_id: int = Field(default=0, ge=INT4_MIN, le=INT4_MAX)
+    title: str = Field(default="", max_length=128)
     due_date: DateStr
-    assigned_to: str = ""
+    assigned_to: str = Field(default="", max_length=64)
 
 
 def _out(t: FollowupTask, patient_names: dict, org_names: dict) -> dict:

@@ -476,13 +476,13 @@ DEPOSIT_TYPES = {"prepay": "预交", "refund": "退费", "offset": "结算冲抵
 
 class DepositCreate(BaseModel):
     admission_id: int
-    amount: FiniteFloat = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
     method: str = Field(default="cash", pattern="^(cash|card|online)$")
 
 
 class DepositRefundIn(BaseModel):
     admission_id: int
-    amount: FiniteFloat = Field(gt=0)
+    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
     method: str = Field(default="cash", pattern="^(cash|card|online)$")
 
 
@@ -749,7 +749,7 @@ class SettlementCreate(BaseModel):
     bill_type: str = Field(pattern="^(outpatient|inpatient)$")
     admission_id: int | None = None
     encounter_id: int | None = None
-    insurance_pay: FiniteFloat = Field(default=0, ge=0)
+    insurance_pay: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
 
 
 class SettlementOut(BaseModel):
@@ -1252,7 +1252,7 @@ class PaymentCreate(BaseModel):
     settlement_id: int
     channel: str = Field(pattern="^(cash|card|insurance|online|gateway)$")
     # 缺省按结算单个人自付金额（医保渠道按医保支付金额）
-    amount: FiniteFloat | None = Field(default=None, gt=0)
+    amount: FiniteFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
 
 
 @router.post(
@@ -1477,7 +1477,7 @@ router.dependencies = _authed_dependencies
 
 class RefundIn(BaseModel):
     # 缺省全额退款；部分退款须小于等于剩余可退金额
-    amount: FiniteFloat | None = Field(default=None, gt=0)
+    amount: FiniteFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
     reason: str = Field(default="", max_length=256)
 
 

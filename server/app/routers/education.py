@@ -674,7 +674,7 @@ def list_enrollments(plan_id: int, db: Session = Depends(get_db), user: User = D
 class AssessmentCreate(BaseModel):
     user_id: int
     score: float = Field(ge=0, le=100)
-    comment: str = ""
+    comment: str = Field(default="", max_length=512)
 
 
 class AssessmentReceiptOut(BaseModel):

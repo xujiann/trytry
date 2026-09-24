@@ -44,6 +44,10 @@ if _PG_URL:
 #: 周期、药品库存预警阈值、手术出血量；同批补齐（入库数量走原子累加 `add_amount`，判据看不见，一并补上），仍为 0。
 #: 判据盲区（同日）：`FiniteFloat | None` 这类 Union 里的 Annotated 原先不算数值（`_is_number`），又量出收费项目改价
 #: 1 处；同一端点族的调价 `RepriceIn.new_price` 经 `_change_price` 写库、判据看不见，一并补上，仍为 0。
+#: 第五层（同日）：写库形状补上「转一手再写」（见 `test_body_str_length.body_column_writes`）与 `round(body.x, 2)`，
+#: 又量出 23 处——押金预交 / 退还、支付与退款、医保支付、会诊费、科室成本、预算、凭证借贷、病案首页费用、基金池
+#: 总额与分期 / 清算核定额（Money）；血液入库、药品批次入库（经 `add_amount` 累加）、症候群例数 / 阈值、病理蜡块 /
+#: 切片数、资源容量（Integer），随访任务来源号补对称界；同批补齐，仍为 0。
 BASELINE = 0
 
 
@@ -170,6 +174,40 @@ def patch(i: int, body: PricePatch, db=None):
                    "自证:PricePatch.price→ChargeItem.price[Numeric(14,2)]"], got
 
 
+def test_判据自证_第五层_累加与round转手都点名():
+    """`round(body.x, 2)` 写进去的仍是入参那个数；`add_amount(db, M, id, "列", body.x)` 的增量越过列容量，
+    累加即溢出——两种都要点名，有上界的不报。"""
+    import types
+
+    from pydantic import BaseModel, Field, FiniteFloat
+
+    snippet = '''
+class AmountIn(BaseModel):
+    amount: FiniteFloat = Field(gt=0)
+    step: int = Field(gt=0)
+    capped: int = Field(gt=0, le=100)
+
+@router.post("/d")
+def deposit(body: AmountIn, db=None):
+    price = round(body.amount, 2)
+    db.add(ChargeItem(price=price))
+    add_amount(db, SatisfactionSurvey, 1, "score", body.step)
+    add_amount(db, SatisfactionSurvey, 1, "score", body.capped)
+'''
+
+    class _Router:
+        def __getattr__(self, _name):
+            return lambda *a, **k: (lambda fn: fn)
+
+    mod = types.ModuleType("自证")
+    mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "FiniteFloat": FiniteFloat, "router": _Router()})
+    exec(compile(snippet, "自证", "exec"), mod.__dict__)
+    assert uncapped_body_numbers([("自证", mod, snippet)]) == [
+        "自证:AmountIn.amount→ChargeItem.price[Numeric(14,2)]",
+        "自证:AmountIn.step→SatisfactionSurvey.score[Integer]",
+    ]
+
+
 # ================================================================ 回归：超出列容量 422，恰好到上限照常收
 @pytest.fixture(scope="module")
 def world(client, admin):
@@ -270,3 +308,17 @@ def test_第四层_调度周期与库存阈值数量越过integer_422(client, ad
     for field in ("threshold", "quantity"):
         r = client.post("/api/pharmacy/stocks", json={**base, field: INT4_MAX + 1}, headers=admin)
         assert r.status_code == 422 and field in r.text, (field, r.status_code, r.text[:200])
+
+
+def test_第五层_预算金额与症候群例数越过列容量_422_恰好到上限照常收(client, admin, world):
+    """预算经 `upsert_unique(values=…)`、症候群上报经 `upsert_unique` 的两个字典写库，判据原先看不见。"""
+    budget = {"org_id": world["org"], "year": "2026", "category": "income"}
+    r = client.post("/api/mgmt/budgets", headers=admin, json={**budget, "amount": 1e13})
+    assert r.status_code == 422 and "amount" in r.text, (r.status_code, r.text[:200])
+    r = client.post("/api/mgmt/budgets", headers=admin, json={**budget, "amount": MONEY_MAX})
+    assert r.status_code == 201, (r.status_code, r.text[:200])
+    syndrome = {"org_id": world["org"], "syndrome": "fever", "record_date": "2026-09-01"}
+    r = client.post("/api/surveillance/syndromes", headers=admin, json={**syndrome, "case_count": INT4_MAX + 1})
+    assert r.status_code == 422 and "case_count" in r.text, (r.status_code, r.text[:200])
+    r = client.post("/api/surveillance/syndromes", headers=admin, json={**syndrome, "case_count": INT4_MAX})
+    assert r.status_code == 201, (r.status_code, r.text[:200])

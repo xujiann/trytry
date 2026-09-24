@@ -45,9 +45,9 @@ class ProjectIn(BaseModel):
 class ProjectUpdate(BaseModel):
     status: str | None = Field(default=None, pattern="^(planning|ongoing|done|suspended)$")
     progress_pct: int | None = Field(default=None, ge=0, le=100)
-    owner_name: str | None = None
+    owner_name: str | None = Field(default=None, max_length=64)
     due_date: OptionalDateStr | None = None
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=1024)
 
 
 class MilestoneIn(BaseModel):

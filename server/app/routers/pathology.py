@@ -20,6 +20,7 @@ from ..concurrency import insert_with_retry
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
 from ..models import ExamRequest, PathologySpecimen
+from ..numtypes import INT4_MAX
 
 router = APIRouter(
     prefix="/api/pathology", tags=["病理标本"], dependencies=[Depends(get_current_user)]
@@ -56,8 +57,8 @@ class SpecimenReject(BaseModel):
 
 
 class SpecimenAdvance(BaseModel):
-    block_count: int = Field(default=0, ge=0)
-    slide_count: int = Field(default=0, ge=0)
+    block_count: int = Field(default=0, ge=0, le=INT4_MAX)
+    slide_count: int = Field(default=0, ge=0, le=INT4_MAX)
 
 
 # ---- 响应契约（字段精确镜像 `_out`/`specimen_stats` 的现输出，勿改字节）----
