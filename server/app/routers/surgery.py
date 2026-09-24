@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import clock
-from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
+from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr
 from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
@@ -493,7 +493,17 @@ def create_record(
 
 
 @router.get("/requests/{request_id}/record", response_model=SurgeryRecordOut)
-def get_record(request_id: int, db: Session = Depends(get_db)):
+def get_record(request_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """术中记录。按申请所属患者做可见性判定并留痕（P0-20）。
+
+    原先连调用方都不收：乙院医生按申请号就能读甲院的术式、术中所见、转归与术前术后诊断
+    （实测 200）。本文件的申请清单按机构收口、写接口都校验归属，唯独这条读接口什么都不问——
+    与 P0-10 / P0-19 同一个形状，判定照抄 `assert_patient_visible`（判定与留痕绑在一起）。
+    """
+    request = db.get(SurgeryRequest, request_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="术中记录不存在")
+    assert_patient_visible(db, user, request.patient_id, resource="surgery_record")
     record = db.query(SurgeryRecord).filter(SurgeryRecord.request_id == request_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="术中记录不存在")

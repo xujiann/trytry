@@ -297,7 +297,8 @@ def test_两份清单不重叠且都不为空():
 # `surgery:get_record`、`maternal:get_delivery`）。判定一条划一条：补了身份依赖与收口
 # 的会从扫描结果里消失，名单不跟着删就红（两个方向都钉）。
 
-#: 【欠账，只减不增】无调用方身份 × 只触达一跳 / 两跳患者维度表（2026-09-24 量出 24 个）
+#: 【欠账，只减不增】无调用方身份 × 只触达一跳 / 两跳患者维度表（2026-09-24 量出 24 个；
+#: 同日 P0-20 修掉术中记录 → 23）
 ONEHOP_UNSCOPABLE_READS = {
     "billing.py:list_payments",
     "billing.py:list_reconciliation",
@@ -321,7 +322,6 @@ ONEHOP_UNSCOPABLE_READS = {
     "spd/population.py:list_recalls",
     "spd/population.py:list_usages",
     "spd/tasks.py:check_node_enter",
-    "surgery.py:get_record",
     "surgery.py:list_schedules",
 }
 
