@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
+from ..datetypes import DateStr
 from ..deps import get_current_user, paginate, require_roles, resolve_business_date, row_dict
 from ..models import FollowupTask, Organization, Patient, User, utcnow
 
@@ -74,7 +75,7 @@ class FollowupIn(BaseModel):
     category: str = Field(pattern="^(chronic|discharge|surgery|maternal)$")
     source_id: int = 0
     title: str = ""
-    due_date: str = Field(min_length=10, max_length=10)
+    due_date: DateStr
     assigned_to: str = ""
 
 
