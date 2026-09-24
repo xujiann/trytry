@@ -106,3 +106,15 @@ def _month_required(value: object) -> object:
 #: 必填月度期间，`YYYY-MM`，做真实日历校验（`2026-13` 不放行）。
 #: 查询参数形态请用 `deps.require_month`（同一校验，报 422）。
 PeriodStr = Annotated[str, BeforeValidator(_month_required)]
+
+
+def _month_optional(value: object) -> object:
+    if value == "":
+        return value
+    return _month_required(value)
+
+
+#: 可空月度期间：空串表示"没给"，由调用方按自己的口径补（如凭证按凭证日期推）；
+#: 非空则同样做日历校验。与 `OptionalDateStr` 对称（P1-61：凭证的 `period` 此前是
+#: `max_length=7` 的裸 `str`，对接方传 `"2026/09"` 照收，凭证落进一个没有报表会查的期间）。
+OptionalPeriodStr = Annotated[str, BeforeValidator(_month_optional)]

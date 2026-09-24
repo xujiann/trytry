@@ -74,6 +74,21 @@ def test_真源拒绝非法或不存在的月份(period):
         _Probe(period=period)
 
 
+class _OptionalProbe(BaseModel):
+    period: datetypes.OptionalPeriodStr = ""
+
+
+def test_可空月度期间_空串放行_非空同样过真源():
+    """`OptionalPeriodStr`（P1-61 为凭证的 `period` 加的）：空串表示"没给"、原样放行；
+    非空走的是同一个 `check_month`——与 `OptionalDateStr` 对称，别让"可空"变成"不校验"。"""
+    assert _OptionalProbe().period == ""
+    assert _OptionalProbe(period="").period == ""
+    assert _OptionalProbe(period="2026-09").period == "2026-09"
+    for bad in ("2026-13", "2026/09", "2026-9", "abc", " 2026-09"):
+        with pytest.raises(ValidationError):
+            _OptionalProbe(period=bad)
+
+
 def test_末尾换行按形状错报_不是按月份不存在报():
     """`$` 会放过末尾一个换行，`match` 就先过了形状、再被日历以"月份不存在"拒掉——
     文案对不上真正的毛病（/review 指出）。真源与查询参数形态都要 `fullmatch`。"""

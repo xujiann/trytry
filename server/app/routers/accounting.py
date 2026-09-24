@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
 from ..database import get_db
+from ..datetypes import DateStr, OptionalPeriodStr
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import AccountSubject, Organization, User, Voucher, VoucherEntry, utcnow
 
@@ -205,10 +206,18 @@ class EntryIn(BaseModel):
 
 
 class VoucherIn(BaseModel):
+    """记账凭证。
+
+    `voucher_date` / `period` 此前是长度卡 10 / 7 的裸 `str`（P1-61）：对接方不带
+    `period` 时它由 `voucher_date[:7]` 推出，`2026/09/24` 推成 `"2026/09"`，过账后
+    不在 2026-09 的试算平衡里——独占一个不存在的会计期间；`2026-02-31` 照收。
+    `period` 留空仍按凭证日期推（凭证页会带上当前期间，那条路不变）。
+    """
+
     org_id: int
     voucher_no: str = Field(min_length=1, max_length=32)
-    voucher_date: str = Field(min_length=10, max_length=10)
-    period: str = Field(default="", max_length=7)
+    voucher_date: DateStr
+    period: OptionalPeriodStr = ""
     summary: str = ""
     entries: list[EntryIn] = Field(min_length=2)
 

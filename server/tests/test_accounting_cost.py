@@ -174,6 +174,49 @@ def test_voucher_requires_director(client, roles, org):
     assert resp.status_code == 403
 
 
+
+def _voucher(client, roles, org, no, **fields):
+    return client.post(
+        "/api/accounting/vouchers",
+        json={"org_id": org["id"], "voucher_no": no, "summary": "日期校验",
+              "entries": [{"subject_code": "1002", "debit": 100},
+                          {"subject_code": "4001", "credit": 100}], **fields},
+        headers=roles["director"],
+    )
+
+
+#: 四个都恰好 10 个字符——原先 `min_length=10, max_length=10` 的长度卡全部放行。
+BAD_VOUCHER_DATES = ["2026/09/24", "2026-02-31", "2026.09.24", "abcdefghij"]
+
+
+@pytest.mark.parametrize("bad", BAD_VOUCHER_DATES)
+def test_凭证日期写错一律422_不落库(client, admin, roles, org, bad):
+    """P1-61：对接方不带 period 时，period 由 voucher_date[:7] 推出——`2026/09/24`
+    推成 `"2026/09"`，过账后不在 2026-09 的试算平衡里（修复前实测）。"""
+    no = f"JZ-BAD-{BAD_VOUCHER_DATES.index(bad)}"
+    resp = _voucher(client, roles, org, no, voucher_date=bad)
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"][0]["loc"] == ["body", "voucher_date"]
+    rows = client.get("/api/accounting/vouchers", params={"org_id": org["id"], "limit": 200},
+                      headers=admin).json()
+    assert not [v for v in rows if v["voucher_no"] == no], "被拒之后不该落库"
+
+
+@pytest.mark.parametrize("bad", ["2026/09", "2026-13", "abc"])
+def test_凭证期间非空时须是真实月份(client, roles, org, bad):
+    """原先 `max_length=7` 的裸 str：对接方直接传 `2026/09` 也照收。"""
+    resp = _voucher(client, roles, org, f"JZ-PRD-{bad}", voucher_date="2026-09-24", period=bad)
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"][0]["loc"] == ["body", "period"]
+
+
+def test_凭证期间留空仍按凭证日期推_行为未变(client, roles, org):
+    resp = _voucher(client, roles, org, "JZ-PRD-AUTO", voucher_date="2026-09-24", period="")
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["period"] == "2026-09"
+    assert resp.json()["voucher_date"] == "2026-09-24"
+
+
 # ---------------------------------------------------------------- 成本核算
 
 
