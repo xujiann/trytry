@@ -162,9 +162,9 @@ class SlotTemplate(BaseModel):
     """时段模板：与 SlotCreate 相同的号源属性，唯独日期由区间展开。"""
 
     resource_type: str = Field(pattern="^(outpatient|exam|lab)$")
-    resource_name: str = Field(min_length=1)
+    resource_name: str = Field(min_length=1, max_length=128)
     employee_id: int | None = None
-    slot_time: str = ""
+    slot_time: str = Field(default="", max_length=16)
     capacity: int = Field(default=1, ge=1)
 
 

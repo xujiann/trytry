@@ -49,6 +49,8 @@ APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
 #: 处方、检查、医保、证明、慢病、上门、用血、手术、老年、短缺药、会诊、预约、公卫、质控，85 个字段）→ 0（第三批：
 #: 管理侧 20 个文件与慢专病 3 个文件 90 个字段；最后一处是列本身太窄——角色变更留痕的两列 16 装不下
 #: 32 位的自定义角色键，迁移 c3e4f5a6b7d9 扩到 32）。已清零，此后即零基线闸门。
+#: 第二层（同日）：判据补上「请求体列表里的子项逐个写库」的形状（`for item in body.items:`），又量出 4 处——
+#: 处方明细的药品编码 / 名称、批量号源模板的资源名 / 时段，真 PG 上超长即 500；同批补齐，仍为 0。
 BASELINE = 0
 
 _FINITE_PATTERN = re.compile(r"\^[^*+{]*\$")
@@ -95,15 +97,29 @@ def _router_modules():
             yield name, importlib.import_module(name), p.read_text(encoding="utf-8")
 
 
-def unbounded_body_strings(modules=None) -> list[str]:
-    """`模块:请求模型.字段→ORM模型.列(N)`：写接口把这个字符串字段写进定长列，入参却挡不住超长。
+def _list_element_model(cls, field_name: str):
+    """请求模型里 `list[子模型]` 字段的子模型；不是这种字段返回 None。"""
+    info = cls.model_fields.get(field_name)
+    if info is None:
+        return None
+    for tp in (info.annotation, *typing.get_args(info.annotation)):
+        if typing.get_origin(tp) in (list, tuple, set):
+            for arg in typing.get_args(tp):
+                if inspect.isclass(arg) and issubclass(arg, BaseModel):
+                    return arg
+    return None
 
-    写库形状三种：构造 `Model(**body.model_dump(...))`、构造里显式 `列=body.字段`、以及
-    `x = db.get(Model, …)` 之后 `setattr(x, …)` 的改档循环。同一个请求模型字段被几个端点写进同一列，
-    只算一处（修一次就全好了）。
+
+def body_column_writes(modules=None) -> list[tuple]:
+    """写接口把请求体的哪个字段写进了哪张表的哪一列：`[(模块, 请求模型, 字段, ORM 模型, 列)]`。
+
+    写库形状四种：构造 `Model(**body.model_dump(...))`、构造里显式 `列=body.字段`、`x = db.get(Model, …)`
+    之后 `setattr(x, …)` 的改档循环，以及**请求体里的列表字段逐项写库**——`for item in body.items:` 之后
+    对 `item` 用前两种写法（P1-91 第二层：处方明细、批量号源曾因此整个漏在判据之外；setattr 那一种不认
+    循环变量，改档循环写的是取出来的对象）。数值那一族（`test_body_numeric_capacity.py`）共用这一份。
     """
     lengths = _column_lengths()
-    found = set()
+    out = []
     for modname, mod, text in (modules if modules is not None else _router_modules()):
         tree = ast.parse(text)
         for fn in [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
@@ -117,37 +133,55 @@ def unbounded_body_strings(modules=None) -> list[str]:
                     params[a.arg] = cls
             if not params:
                 continue
+            items = dict(params)    # 构造的两种写法还认循环变量：for item in body.items
+            for node in ast.walk(fn):
+                if isinstance(node, ast.For) and isinstance(node.target, ast.Name) \
+                        and isinstance(node.iter, ast.Attribute) and isinstance(node.iter.value, ast.Name) \
+                        and node.iter.value.id in params:
+                    elem = _list_element_model(params[node.iter.value.id], node.iter.attr)
+                    if elem is not None:
+                        items[node.target.id] = elem
             fetched = {t.id: node.value.args[0].id for node in ast.walk(fn)
                        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
                        and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "get"
                        and node.value.args and isinstance(node.value.args[0], ast.Name)
                        for t in node.targets if isinstance(t, ast.Name)}
-            writes = []   # (请求模型, 字段, ORM 模型)
+            writes = []   # (请求模型, 字段, ORM 模型[, 列])
             for node in ast.walk(fn):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in lengths:
                     for kw in node.keywords:
                         v = kw.value
                         if kw.arg is None and isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) \
                                 and v.func.attr == "model_dump" and isinstance(v.func.value, ast.Name) \
-                                and v.func.value.id in params:
+                                and v.func.value.id in items:
                             excluded = {c.value for k2 in v.keywords if k2.arg == "exclude"
                                         for c in ast.walk(k2.value) if isinstance(c, ast.Constant)}
-                            cls = params[v.func.value.id]
+                            cls = items[v.func.value.id]
                             writes += [(cls, f, node.func.id) for f in cls.model_fields if f not in excluded]
                         elif kw.arg and isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) \
-                                and v.value.id in params and v.attr in params[v.value.id].model_fields:
-                            writes.append((params[v.value.id], v.attr, node.func.id, kw.arg))
+                                and v.value.id in items and v.attr in items[v.value.id].model_fields:
+                            writes.append((items[v.value.id], v.attr, node.func.id, kw.arg))
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr" \
                         and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id in fetched:
                     writes += [(cls, f, fetched[node.args[0].id]) for cls in params.values() for f in cls.model_fields]
             for w in writes:
-                cls, field_name, model = w[:3]
-                column = w[3] if len(w) == 4 else field_name
-                limit = lengths.get(model, {}).get(column)
-                field = cls.model_fields[field_name]
-                if limit is None or not _is_str(field) or _bounded(field, limit):
-                    continue
-                found.add(f"{modname.removeprefix('app.')}:{cls.__name__}.{field_name}→{model}.{column}({limit})")
+                out.append((modname, w[0], w[1], w[2], w[3] if len(w) == 4 else w[1]))
+    return out
+
+
+def unbounded_body_strings(modules=None) -> list[str]:
+    """`模块:请求模型.字段→ORM模型.列(N)`：写接口把这个字符串字段写进定长列，入参却挡不住超长。
+
+    写库形状见 `body_column_writes`。同一个请求模型字段被几个端点写进同一列，只算一处（修一次就全好了）。
+    """
+    lengths = _column_lengths()
+    found = set()
+    for modname, cls, field_name, model, column in body_column_writes(modules):
+        limit = lengths.get(model, {}).get(column)
+        field = cls.model_fields[field_name]
+        if limit is None or not _is_str(field) or _bounded(field, limit):
+            continue
+        found.add(f"{modname.removeprefix('app.')}:{cls.__name__}.{field_name}→{model}.{column}({limit})")
     return sorted(found)
 
 
@@ -167,7 +201,7 @@ def test_修完请把基线调小():
     )
 
 
-def test_判据自证_三种写库形状都点名_挡得住的不报():
+def test_判据自证_四种写库形状都点名_挡得住的不报():
     import types
 
     from pydantic import Field
@@ -182,6 +216,12 @@ class NoteIn(BaseModel):
 class NotePatch(BaseModel):
     note: str | None = None
 
+class LineIn(BaseModel):
+    diagnosis_name: str = ""
+
+class BatchIn(BaseModel):
+    lines: list[LineIn] = []
+
 @router.post("/n")
 def create(body: NoteIn, db=None):
     db.add(Encounter(**body.model_dump(exclude={"code", "kind"})))
@@ -195,6 +235,11 @@ def patch(i: int, body: NotePatch, db=None):
     e = db.get(Encounter, i)
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(e, k, v)
+
+@router.post("/b")
+def batch(body: BatchIn, db=None):
+    for line in body.lines:
+        db.add(Encounter(**line.model_dump()))
 '''
 
     class _Router:
@@ -205,8 +250,10 @@ def patch(i: int, body: NotePatch, db=None):
     mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "router": _Router()})
     exec(compile(snippet, "自证", "exec"), mod.__dict__)
     got = unbounded_body_strings([("自证", mod, snippet)])
-    # Encounter 上没有 note 列：只有显式 `summary=body.note` 那一处写进了定长列
-    assert got == ["自证:NoteIn.note→Encounter.summary(1024)"], got
+    # Encounter 上没有 note 列：只有显式 `summary=body.note` 那一处写进了定长列；
+    # 请求体列表里的子项逐个写库（第四种形状）同样点名
+    assert got == ["自证:LineIn.diagnosis_name→Encounter.diagnosis_name(256)",
+                   "自证:NoteIn.note→Encounter.summary(1024)"], got
 
 
 # ================================================================ 第一批：核心诊疗
@@ -260,6 +307,34 @@ def test_第一批_恰好到上限照常收(client, admin, world, index):
     r = client.post(path, json={**body, field: "长" * limit}, headers=admin)
     assert r.status_code in (200, 201), (path, field, r.status_code, r.text[:200])
 
+
+
+# ================================================================ 第二层：请求体列表里的子项逐个写库
+# 判据原先只认「请求体参数本身」写库，`for item in body.items: Model(**item.model_dump())` 整个在它视野之外——
+# 处方明细与批量号源模板四个字段因此漏过了三批（`body_column_writes` 的第四种形状）。
+@pytest.mark.parametrize("field,limit", [("drug_code", 64), ("drug_name", 128)])
+def test_第二层_处方明细超长_422而不是生产库500(client, admin, world, field, limit):
+    item = {"drug_code": "P191RX", "drug_name": "长度校验药", "daily_dose": 1, "days": 1}
+    body = {"patient_id": world["patient"], "org_id": world["county"]}
+    r = client.post("/api/prescriptions", json={**body, "items": [{**item, field: "长" * (limit + 1)}]},
+                    headers=admin)
+    assert r.status_code == 422, (field, r.status_code, r.text[:200])
+    assert field in r.text
+    r = client.post("/api/prescriptions", json={**body, "items": [{**item, field: "长" * limit}]}, headers=admin)
+    assert r.status_code == 201, (field, r.status_code, r.text[:200])
+
+
+@pytest.mark.parametrize("field,limit", [("resource_name", 128), ("slot_time", 16)])
+def test_第二层_批量号源模板超长_422而不是生产库500(client, admin, world, field, limit):
+    template = {"resource_type": "outpatient", "resource_name": "长度校验门诊", "slot_time": "08:00"}
+    body = {"org_id": world["township"], "date_from": "2031-03-03", "date_to": "2031-03-03"}
+    r = client.post("/api/appointments/slots/batch",
+                    json={**body, "templates": [{**template, field: "长" * (limit + 1)}]}, headers=admin)
+    assert r.status_code == 422, (field, r.status_code, r.text[:200])
+    assert field in r.text
+    r = client.post("/api/appointments/slots/batch",
+                    json={**body, "templates": [{**template, field: "长" * limit}]}, headers=admin)
+    assert r.status_code == 201 and r.json()["created"] == 1, (field, r.status_code, r.text[:200])
 
 
 def test_改成长键自定义角色_留痕列装得下(client, admin):

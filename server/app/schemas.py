@@ -214,8 +214,8 @@ class DrugRuleOut(DrugRuleCreate):
 
 
 class PrescriptionItemIn(BaseModel):
-    drug_code: str
-    drug_name: str
+    drug_code: str = Field(max_length=64)
+    drug_name: str = Field(max_length=128)
     daily_dose: FiniteFloat = Field(gt=0)
     days: int = Field(default=1, ge=1)
 
