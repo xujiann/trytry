@@ -61,6 +61,29 @@ def test_hl7v2_adt_creates_patient(client, operator_headers):
     assert again.json()["patient"]["ehc_no"] == patient["ehc_no"]
 
 
+def test_入站超长证件号_不再让患者列表整个500(client, operator_headers, admin_headers):
+    """P1-65：`PatientOut` 继承了 `PatientCreate.id_card` 的 15–18 位约束，而 HL7/FHIR 入站只查
+    "至少 15 位"、列能存 256 位。修复前：20 位证件号的患者**已经建进库**，接口却回 422
+    "消息解析失败"（交换日志记成失败）；此后 `GET /api/patients` 对所有人 500。
+    证件号该不该收非 15/18 位是对接口径（见 docs/待裁定事项清单.md），这里只管不 500。"""
+    msg = (
+        "MSH|^~\\&|HIS|XZYY|MEDPLAT|COUNTY|20260924120000||ADT^A04|MSG-P165|P|2.4\n"
+        "PID|1||33028119900101123456^^^^ID||超长证件号患者||19900101|M\n"
+    )
+    hl7 = client.post("/api/integration/hl7v2/patient", json={"message": msg}, headers=operator_headers)
+    assert hl7.status_code == 201, hl7.text
+    fhir = client.post(
+        "/api/integration/fhir/Patient",
+        json={"resourceType": "Patient", "identifier": [{"value": "3302811990010112345678"}],
+              "name": [{"text": "FHIR超长证件号"}]},
+        headers=operator_headers,
+    )
+    assert fhir.status_code == 201, fhir.text
+    listed = client.get("/api/patients", headers=admin_headers)
+    assert listed.status_code == 200, listed.text[:200]
+    assert {"超长证件号患者", "FHIR超长证件号"} <= {p["name"] for p in listed.json()}
+
+
 def test_hl7v2_rejects_malformed_message(client, operator_headers):
     no_pid = "MSH|^~\\&|HIS|XZYY|MEDPLAT|COUNTY|20260810||ADT^A01|M2|P|2.4"
     resp = client.post(

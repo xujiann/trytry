@@ -43,6 +43,11 @@ class PatientOut(PatientCreate):
     ehc_no: str
     # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
     birth_date: str = ""
+    # 证件号 15–18 位、姓名 1–64 字是**建档入口**的约束。HL7/FHIR/ESB 入站不走请求模型，
+    # 只查"证件号至少 15 位"，而列能存 256 位：超长证件号的患者一入库，继承来的约束就让
+    # 患者列表对所有人 500，入站接口自己也回 422 却已建档（P1-65，实测）
+    name: str
+    id_card: str
 
     model_config = {"from_attributes": True}
 
