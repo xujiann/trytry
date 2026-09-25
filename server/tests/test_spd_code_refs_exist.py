@@ -374,7 +374,17 @@ def _write_endpoints(sources: dict[str, str] | None = None):
     files.update(sources or {})
     for name, text in files.items():
         tree = ast.parse(text)
-        body_fields = {n.name: _code_fields(n) for n in tree.body if isinstance(n, ast.ClassDef)}
+        classes = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+        # 请求体里一层子模型（`list[子模型]` / 子模型）的编码字段也算（P2-85：设备批量上传的编码在 `items` 里，原先看不见）
+        body_fields = {
+            cname: _code_fields(cls) | {
+                field for s in cls.body if isinstance(s, ast.AnnAssign)
+                for sub, sub_cls in classes.items()
+                if ast.unparse(s.annotation) in (sub, f"list[{sub}]", f"{sub} | None", f"list[{sub}] | None")
+                for field in _code_fields(sub_cls)
+            }
+            for cname, cls in classes.items()
+        }
         funcs = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
         def closure(fn, depth=2, seen=None) -> str:
@@ -447,6 +457,11 @@ def test_判据自证_没查的点名_查过的与不带编码的不报():
         "@router.patch('/c')\ndef half_checked(body: AIn, db=None):\n"
         "    problem = unknown_program(db, body.program_code)\n"
         "@router.post('/d')\ndef no_codes(body: BIn, db=None):\n    db.add(X(**body.model_dump()))\n"
+        # 编码在一层子模型里（P2-85 的形状）：批量体 `items: list[AIn]` 同样要查
+        "class BatchIn(BaseModel):\n    items: list[AIn]\n"
+        "@router.post('/e')\ndef batch(body: BatchIn, db=None):\n    for item in body.items:\n"
+        "        unknown_code(db, SpdQuestionnaire, item.questionnaire_code, '随访问卷')\n"
     )
     assert [f for f in unchecked_code_refs({"probe.py": snippet}) if f.startswith("probe.py")] == [
-        "probe.py:bare:program_code", "probe.py:bare:questionnaire_code", "probe.py:half_checked:questionnaire_code"]
+        "probe.py:bare:program_code", "probe.py:bare:questionnaire_code", "probe.py:batch:program_code",
+        "probe.py:half_checked:questionnaire_code"]

@@ -165,7 +165,8 @@ def _rows() -> list[tuple[str, str, str, str]]:
         ("引用完整性", "按设计不查在用的账号字段（给已发生的事补录，逐条写明理由）",
          len(disabledusers.BY_DESIGN), "tests/test_disabled_user_refs.py"),
         ("引用完整性", "慢专病写接口请求体里指向目录表的字符串编码写库前不查在不在（病种填错即挂到不存在的病种上、考核重跑把本期分数改写成零；"
-         "问卷填错则随访异常分级整段跳过；病种 25 + 病种列表 8 + 问卷 / 宣教素材 / 触发规则 5 → 0 已清零）",
+         "问卷填错则随访异常分级整段跳过；病种 25 + 病种列表 8 + 问卷 / 宣教素材 / 触发规则 5 → 0 已清零；"
+         "判据补看一层子模型后又查出设备批量上传 1 处，已修）",
          coderefs.BASELINE, "tests/test_spd_code_refs_exist.py"),
         ("引用完整性", "按设计不查的编码字段（只当筛选条件、不写进任何一行，逐条写明理由）",
          len(coderefs.BY_DESIGN), "tests/test_spd_code_refs_exist.py"),

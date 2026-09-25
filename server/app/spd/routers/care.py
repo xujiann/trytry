@@ -448,6 +448,12 @@ def batch_measurements(
     user: User = Depends(get_current_user)
 ):
     """设备批量上传（蓝牙/物联网一次回传多条）。"""
+    # 病种编码先查在不在，与单条录入同一句（P1-120）：编码在条目里一层，原先漏了这一句、填错照样落库（P2-85）。
+    # 点名填错的，整批不落——与生理上不可能的值整批 422 同一口径
+    for code in dict.fromkeys(item.program_code for item in body.items):
+        program_problem = unknown_program(db, code)
+        if program_problem:
+            raise HTTPException(status_code=404, detail=f"{program_problem}：{code}")
     created, abnormal = 0, 0
     for item in body.items:
         assert_patient_visible(db, user, item.patient_id, resource="spd_measurement")
