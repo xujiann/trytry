@@ -617,6 +617,12 @@ def create_task(
     )
     if body.enrollment_id is not None and enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
+    # 挂的档案得是这位患者、这个病种的（P2-89）：随访类任务办结要回写档案的随访日期、给档案上的村医计分，
+    # 原先只查在不在——办完甲的随访，乙的「下次随访」被推后一个月
+    if enrollment is not None and enrollment.patient_id != body.patient_id:
+        raise HTTPException(status_code=422, detail="纳管档案不是这位患者的")
+    if enrollment is not None and body.program_code and body.program_code != enrollment.program_code:
+        raise HTTPException(status_code=422, detail="纳管档案的病种与任务不一致")
     # 责任人与服务团队原先一眼不看：交给 spawn_task 写库，填错编号开发库存成悬空 id、生产库撞外键 500；
     # 停用的账号 / 团队也不收——任务进了没人办的待办箱（P1-106 / P1-103）
     if body.assignee_id is not None:
