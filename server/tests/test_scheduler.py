@@ -105,6 +105,35 @@ def test_failing_job_recorded_not_raised(client):
             db.commit()
 
 
+def test_任务的写到收尾提交才撞约束_照样记失败_不外抛(client):
+    """只 add 不 flush 的写（站内消息之类）原先要到 run_job 的收尾提交才撞约束——那一下在 try 之外：
+    不记 failed、不告警，`next_run_at` 不前移，整轮调度抛出、排在后面的任务跟着不跑（P1-124，报告推送的
+    订阅人填错一个编号即此形状）。现在任务自己的写在 try 里就落库检查。"""
+    from app.database import SessionLocal
+    from app.models import Notification
+    from app.scheduler import JobSpec
+
+    def dangling(db):
+        db.add(Notification(user_id=987654321, category="test", title="发给不存在的人", body=""))
+        return 1, "已投递"
+
+    REGISTRY["__test_dangling"] = JobSpec("__test_dangling", "测试收尾才失败的任务", 3600, dangling)
+    try:
+        with SessionLocal() as db:
+            db.add(ScheduledJob(name="__test_dangling", title="测试收尾才失败的任务", interval_seconds=3600))
+            db.commit()
+            run = run_job(db, "__test_dangling", trigger="manual")   # 修前在这里抛 IntegrityError
+            assert run.status == "failed" and "IntegrityError" in run.message
+            job = db.query(ScheduledJob).filter(ScheduledJob.name == "__test_dangling").first()
+            assert job.last_status == "failed" and job.next_run_at > _naive_now()
+            assert db.query(Notification).filter(Notification.user_id == 987654321).count() == 0
+    finally:
+        REGISTRY.pop("__test_dangling", None)
+        with SessionLocal() as db:
+            db.query(ScheduledJob).filter(ScheduledJob.name == "__test_dangling").delete()
+            db.commit()
+
+
 def test_tick_executes_due_jobs_only(client):
     from app.database import SessionLocal
 

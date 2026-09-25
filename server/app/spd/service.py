@@ -142,6 +142,19 @@ def unknown_programs(db: Session, codes: list[str] | None, *, already: list[str]
     return f"专病档案不存在：{'、'.join(missing)}" if missing else ""
 
 
+def unknown_ids(db: Session, model: Any, ids: list[int] | None, what: str, *, already: list[int] | None = None) -> str:
+    """列表形态的整数编号（报告推送的机构……）写库之前先查在不在（P1-124）：点名不存在的那几个，没问题返回空串。
+
+    这类列是 JSON 列表，库里没有外键；可它们到了用的时候往往要写进带外键的列（报告实例的机构），
+    填错一个，用的那一刻撞约束。`already`（改档前的值）里原有的不再查，与 `unknown_programs` 同一口径。"""
+    wanted = [i for i in dict.fromkeys(ids or []) if i not in (already or [])]
+    if not wanted:
+        return ""
+    known = {i for (i,) in db.query(model.id).filter(model.id.in_(wanted)).all()}
+    missing = [str(i) for i in wanted if i not in known]
+    return f"{what}不存在：{'、'.join(missing)}" if missing else ""
+
+
 def unknown_code(db: Session, model: Any, code: str, what: str, *, already: str = "") -> str:
     """请求体里指向目录表的字符串编码（随访问卷、宣教素材、转诊规则）写库之前先查在不在（P1-121）。
 

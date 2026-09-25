@@ -259,6 +259,9 @@ def run_job(db: Session, name: str, trigger: str = "scheduled") -> JobRun:
     affected, message, status = 0, "", "succeeded"
     try:
         affected, message = spec.func(db)
+        # 任务自己的写在这里就落库检查（P1-124）：只 add 不 flush 的写（如站内消息）原先要到下面的收尾提交才撞约束——
+        # 那一下在 try 之外，失败既不记 failed、不告警，`next_run_at` 也不前移，整轮调度抛出、排在后面的任务跟着不跑
+        db.flush()
     except Exception as exc:  # noqa: BLE001 - 单个任务失败不应拖垮调度器
         db.rollback()
         status, message = "failed", f"{type(exc).__name__}: {exc}"[:1000]

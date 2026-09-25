@@ -31,7 +31,7 @@ from ...deps import (
     row_dict,
     keyword_like,
 )
-from ..platform import Admission, Encounter, Patient, User, unusable_user
+from ..platform import Admission, Encounter, Organization, Patient, User, unusable_user
 from ..models import (
     SpdCallTask,
     SpdEnrollment,
@@ -47,7 +47,7 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
-from ..service import close_followup_record, unknown_code, unknown_program
+from ..service import close_followup_record, unknown_code, unknown_ids, unknown_program
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -1477,6 +1477,23 @@ class ReportTaskIn(BaseModel):
     priority: int = Field(default=1, ge=1, le=9)
 
 
+def _check_report_refs(db: Session, subscriber_ids: list[int], org_ids: list[int], *,
+                       old_subscribers: list[int] | None = None, old_orgs: list[int] | None = None) -> None:
+    """订阅人与推送机构写库之前先查（P1-124）：两者都是 JSON 列表、库里没有外键，可到点推送时要写进带外键的列——
+    报告实例的机构、站内消息的收件人。原先照单全收，填错一个编号，定时推送每一轮都撞约束、整轮回滚，所有任务的报告都
+    不出。订阅人与其余挂人的字段同一口径（P1-106）：不存在、已停用的都不收。改档时原有的编号不再查（已停用的订阅人
+    不该挡住改推送时点）。"""
+    for user_id in dict.fromkeys(subscriber_ids):
+        if user_id in (old_subscribers or []):
+            continue
+        state = unusable_user(db, user_id)
+        if state:
+            raise HTTPException(status_code=404, detail=f"订阅人{state}（user_id={user_id}）")
+    org_problem = unknown_ids(db, Organization, org_ids, "机构", already=old_orgs)
+    if org_problem:
+        raise HTTPException(status_code=404, detail=org_problem)
+
+
 def _task_out(t: SpdReportTask) -> dict:
     return {
         "id": t.id, "template_id": t.template_id, "name": t.name,
@@ -1505,6 +1522,7 @@ def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     if template is None or not template.active:
         raise HTTPException(status_code=404, detail="报告模板不存在或已停用")
     _check_valid_window(body.valid_from, body.valid_to)
+    _check_report_refs(db, body.subscriber_ids, body.org_ids)
     task = SpdReportTask(**body.model_dump())
     db.add(task)
     db.commit()
@@ -1546,6 +1564,8 @@ def update_report_task(task_id: int, body: ReportTaskPatch, db: Session = Depend
     # 起止与建档同一句，与存量合并后再比；只在这次改了起止时查——存量里已倒置的任务，暂停 / 删除它不该被拦
     if {"valid_from", "valid_to"} & changes.keys():
         _check_valid_window(changes.get("valid_from", task.valid_from), changes.get("valid_to", task.valid_to))
+    _check_report_refs(db, changes.get("subscriber_ids", []), changes.get("org_ids", []),
+                       old_subscribers=task.subscriber_ids, old_orgs=task.org_ids)
     for key, value in changes.items():
         setattr(task, key, value)
     db.commit()

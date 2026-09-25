@@ -56,7 +56,7 @@ def spd_report_push(db: Session) -> tuple[int, str]:
 
     from ..clock import now_naive
     from .models import SpdReportInstance, SpdReportTask, SpdReportTemplate
-    from .platform import notify_user
+    from .platform import Organization, User, notify_user
     from .reporting import compose_section, default_period_label
 
     now = now_naive()
@@ -80,8 +80,15 @@ def spd_report_push(db: Session) -> tuple[int, str]:
         if template is None or not template.active:
             continue
         period_label = default_period_label(template.period)
-        # 每个绑定机构一份；没绑机构就出一份全域的
-        org_ids = task.org_ids or [None]
+        # 每个绑定机构一份；没绑机构就出一份全域的。存量里悬空的机构与订阅人跳过（P1-124）：实例的机构、站内消息的
+        # 收件人都是外键，写进去就撞约束、整轮回滚，所有任务的报告都不出。全悬空的一份也不出——不退回全域
+        if task.org_ids:
+            live_orgs = {i for (i,) in db.query(Organization.id).filter(Organization.id.in_(task.org_ids))}
+            org_ids: list[int | None] = [o for o in task.org_ids if o in live_orgs]
+        else:
+            org_ids = [None]
+        subscribers = task.subscriber_ids or []
+        live_users = {i for (i,) in db.query(User.id).filter(User.id.in_(subscribers))} if subscribers else set()
         for org_id in org_ids:
             label = period_label if org_id is None else f"{period_label}·机构{org_id}"
             exists = (
@@ -109,7 +116,7 @@ def spd_report_push(db: Session) -> tuple[int, str]:
             )
             db.add(instance)
             db.flush()
-            for user_id in task.subscriber_ids or []:
+            for user_id in (u for u in subscribers if u in live_users):
                 notify_user(
                     db, user_id, category="spd_report",
                     title=f"报告已生成：{instance.title}",
