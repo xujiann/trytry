@@ -124,6 +124,7 @@ def multi_point_alerts(
         .filter(InfectiousCase.onset_date >= start, InfectiousCase.onset_date <= end.isoformat())
         .group_by(InfectiousCase.disease_code, InfectiousCase.disease_name)
         .having(func.count(InfectiousCase.id) >= threshold)
+        .order_by(InfectiousCase.disease_code, InfectiousCase.disease_name)
         .all()
     )
     return [

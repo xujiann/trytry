@@ -607,6 +607,7 @@ def overview(db: Session = Depends(get_db)):
     chronic_by_level = row_dict(
         db.query(ChronicPatient.level, func.count(ChronicPatient.id))
         .group_by(ChronicPatient.level)
+        .order_by(ChronicPatient.level)
         .all()
     )
 

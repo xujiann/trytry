@@ -246,6 +246,7 @@ def visit_stats(db: Session = Depends(get_db)):
     by_status = row_dict(
         db.query(HomeVisitOrder.status, func.count(HomeVisitOrder.id))
         .group_by(HomeVisitOrder.status)
+        .order_by(HomeVisitOrder.status)
         .all()
     )
     total = sum(by_status.values())

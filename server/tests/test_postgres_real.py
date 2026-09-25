@@ -877,3 +877,25 @@ def test_关键词检索在真PG上不分大小写(pg_engine):
         + "\n"
         + result.stderr[-2000:]
     )
+
+
+def test_分组查询在真PG上按分组键排成全序(pg_engine):
+    """把 `test_groupby_order.py` 换到 PG 上再跑一遍（P2-68）。
+
+    SQLite 做 GROUP BY 先按分组键排序，结果天然有序——开发、测试一律看着正常；PG 多半走 HashAggregate，
+    修前 DRG 统计的分组行按哈希值吐出（ES31、BR23、QY）。分组键进 ORDER BY 之后两库同一顺序，只有这里测得出
+    PG 那一半。接法与上几条相同。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_groupby_order.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_GBORDER_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "分组查询排序用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )

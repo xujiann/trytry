@@ -455,6 +455,7 @@ def list_materials(course_id: int, db: Session = Depends(get_db)):
             Attachment.owner_id.in_([m.id for m in materials] or [0]),
         )
         .group_by(Attachment.owner_id)
+        .order_by(Attachment.owner_id)
         .all()
     )
     return [_material_out(m, counts.get(m.id, 0)) for m in materials]

@@ -620,11 +620,13 @@ def screening_stats(db: Session = Depends(get_db)):
     by_type = row_dict(
         db.query(PrenatalScreening.screen_type, func.count(PrenatalScreening.id))
         .group_by(PrenatalScreening.screen_type)
+        .order_by(PrenatalScreening.screen_type)
         .all()
     )
     by_result = row_dict(
         db.query(PrenatalScreening.result, func.count(PrenatalScreening.id))
         .group_by(PrenatalScreening.result)
+        .order_by(PrenatalScreening.result)
         .all()
     )
     total = sum(by_result.values())

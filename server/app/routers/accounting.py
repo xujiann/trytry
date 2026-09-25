@@ -422,7 +422,7 @@ def trial_balance(
     )
     if org_id is not None:
         query = query.filter(Voucher.org_id == org_id)
-    rows = query.group_by(VoucherEntry.subject_code).all()
+    rows = query.group_by(VoucherEntry.subject_code).order_by(VoucherEntry.subject_code).all()
     subjects = {
         s.code: s for s in db.query(AccountSubject).all()
     }
@@ -482,7 +482,7 @@ def _balances(db: Session, period: str, org_ids: list[int] | None):
     )
     if org_ids is not None:
         query = query.filter(Voucher.org_id.in_(org_ids))
-    return query.group_by(Voucher.org_id, VoucherEntry.subject_code).all()
+    return query.group_by(Voucher.org_id, VoucherEntry.subject_code).order_by(Voucher.org_id, VoucherEntry.subject_code).all()
 
 
 @router.get("/consolidated-statements", response_model=ConsolidatedStatementsOut)

@@ -628,7 +628,7 @@ def vaccination_stats(
         aefi_q = aefi_q.filter(AefiReport.onset_date <= end_date)
 
     doses = dose_q.scalar() or 0
-    by_reaction = dict(aefi_q.group_by(AefiReport.reaction_type).all())
+    by_reaction = dict(aefi_q.group_by(AefiReport.reaction_type).order_by(AefiReport.reaction_type).all())
     aefi_total = sum(by_reaction.values())
     severe = by_reaction.get("severe", 0)
 

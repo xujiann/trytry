@@ -279,7 +279,7 @@ def org_scorecards(
         """
         if scope is not None:
             query = query.filter(org_col.in_(org_ids))
-        return {oid: n for oid, n in query.group_by(org_col).all() if oid is not None}
+        return {oid: n for oid, n in query.group_by(org_col).order_by(org_col).all() if oid is not None}
 
     window = (start_dt, end_dt)
     ref_total_by = by_org(
@@ -643,6 +643,7 @@ def improvement_stats(
             ImprovementTask, None, stats=True,
         )
         .group_by(ImprovementTask.status)
+        .order_by(ImprovementTask.status)
         .all()
     )
     overdue = (

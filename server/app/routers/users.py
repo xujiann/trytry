@@ -485,7 +485,7 @@ def audit_stats(days: int = 30, db: Session = Depends(get_db)):
         rows = (
             query.with_entities(column, func.count(AuditLog.id))
             .group_by(column)
-            .order_by(func.count(AuditLog.id).desc())
+            .order_by(func.count(AuditLog.id).desc(), column)
             .limit(limit)
             .all()
         )
@@ -495,7 +495,7 @@ def audit_stats(days: int = 30, db: Session = Depends(get_db)):
         base.filter(AuditLog.status_code >= 400)
         .with_entities(AuditLog.status_code, func.count(AuditLog.id))
         .group_by(AuditLog.status_code)
-        .order_by(func.count(AuditLog.id).desc())
+        .order_by(func.count(AuditLog.id).desc(), AuditLog.status_code)
         .all()
     )
     total = base.count()

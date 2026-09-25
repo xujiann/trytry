@@ -900,6 +900,7 @@ def esb_stats(db: Session = Depends(get_db)):
             func.sum(case((EsbMessage.status == "processing", 1), else_=0)).label("processing"),
         )
         .group_by(EsbMessage.endpoint_id)
+        .order_by(EsbMessage.endpoint_id)
         .all()
     )
     endpoints = {e.id: e for e in db.query(EsbEndpoint).all()}

@@ -515,6 +515,7 @@ def readiness(today: str | None = None, group_id: int | None = None, db: Session
     by_type = row_dict(
         query.with_entities(EmergencyResource.resource_type, func.count(EmergencyResource.id))
         .group_by(EmergencyResource.resource_type)
+        .order_by(EmergencyResource.resource_type)
         .all()
     )
     return {

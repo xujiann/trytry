@@ -175,7 +175,7 @@ def shortage_stats(db: Session = Depends(get_db)):
     """
     rows = db.query(DrugShortage.status, func.count(DrugShortage.id)).group_by(
         DrugShortage.status
-    ).all()
+    ).order_by(DrugShortage.status).all()
     by_status = row_dict(rows)
     collected = by_status.get("collected", 0)
     no_show = by_status.get("no_show", 0)
@@ -268,7 +268,7 @@ def usage_stats(db: Session = Depends(get_db)):
         .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
         .filter(Prescription.status.in_(["auto_passed", "approved"]))
         .group_by(PrescriptionItem.drug_code, PrescriptionItem.drug_name)
-        .order_by(func.count(PrescriptionItem.id).desc())
+        .order_by(func.count(PrescriptionItem.id).desc(), PrescriptionItem.drug_code, PrescriptionItem.drug_name)
         .limit(50)
         .all()
     )
@@ -306,6 +306,7 @@ def supply_risk(db: Session = Depends(get_db)):
         db.query(DrugShortage.drug_code, func.count(DrugShortage.id))
         .filter(DrugShortage.status != "delivered")
         .group_by(DrugShortage.drug_code)
+        .order_by(DrugShortage.drug_code)
         .all()
     )
     shortage_by_code = {code: n for code, n in open_shortage_rows}

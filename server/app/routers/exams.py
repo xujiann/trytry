@@ -596,7 +596,7 @@ def recognition_stats(db: Session = Depends(get_db)):
         )
         .filter(ExamRequest.status == "recognized")
         .group_by(ExamRequest.item_code, ExamRequest.item_name)
-        .order_by(func.count(ExamRequest.id).desc())
+        .order_by(func.count(ExamRequest.id).desc(), ExamRequest.item_code, ExamRequest.item_name)
         .all()
     )
     return {

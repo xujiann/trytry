@@ -121,7 +121,8 @@ def _workload(db, section, org_id, period):
     rows = (
         _task_query(db, org_id).filter(SpdTask.status == "done")
         .with_entities(SpdTask.task_type, func.count(SpdTask.id))
-        .group_by(SpdTask.task_type).all()
+        .group_by(SpdTask.task_type)
+        .order_by(SpdTask.task_type).all()
     )
     return {**_head(section, "table"), "columns": ["任务类型", "完成数"],
             "rows": [[t, c] for t, c in rows]}
@@ -236,7 +237,8 @@ def _referral(db, section, org_id, period):
         query = query.filter(SpdReferralCase.initiator_org_id == org_id)
     by_status = dict(
         query.with_entities(SpdReferralCase.status, func.count(SpdReferralCase.id))
-        .group_by(SpdReferralCase.status).all()
+        .group_by(SpdReferralCase.status)
+        .order_by(SpdReferralCase.status).all()
     )
     total = sum(by_status.values())
     denominator = total - by_status.get("withdrawn", 0) - by_status.get("rejected", 0)

@@ -197,6 +197,7 @@ def cost_stats(batch_id: int | None = None, db: Session = Depends(get_db)):
             db.query(CssdCostItem.batch_id, CssdCostItem.cost_type, func.sum(CssdCostItem.amount))
             .filter(CssdCostItem.batch_id.in_(ids))
             .group_by(CssdCostItem.batch_id, CssdCostItem.cost_type)
+            .order_by(CssdCostItem.batch_id, CssdCostItem.cost_type)
             .all()
         ):
             totals[bid] = round(totals.get(bid, 0) + float(amount), 2)

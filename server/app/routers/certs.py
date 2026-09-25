@@ -270,5 +270,5 @@ def death_report_card(
 @router.get("/stats", response_model=dict[str, int])
 def cert_stats(db: Session = Depends(get_db)):
     """签发统计：按证明类型计数（上报省平台为对接项）。"""
-    rows = db.query(MedicalCert.cert_type, func.count(MedicalCert.id)).group_by(MedicalCert.cert_type).all()
+    rows = db.query(MedicalCert.cert_type, func.count(MedicalCert.id)).group_by(MedicalCert.cert_type).order_by(MedicalCert.cert_type).all()
     return {t: n for t, n in rows}

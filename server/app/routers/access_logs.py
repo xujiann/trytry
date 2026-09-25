@@ -350,7 +350,7 @@ def access_log_stats(
             raise HTTPException(status_code=404, detail="患者不存在")
         _log_view(db, user, patient_id)
         query = query.filter(AccessLog.patient_id == patient_id)
-    rows = query.group_by(AccessLog.basis).all()
+    rows = query.group_by(AccessLog.basis).order_by(AccessLog.basis).all()
     by_basis = [
         {"basis": b, "basis_name": BASIS_NAMES.get(b, b), "count": n} for b, n in rows
     ]

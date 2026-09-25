@@ -357,11 +357,13 @@ def purchase_suggestions(db: Session = Depends(get_db)):
             Prescription.status != "rejected",
         )
         .group_by(PrescriptionItem.drug_code)
+        .order_by(PrescriptionItem.drug_code)
         .all()
     )
     stock_rows = (
         db.query(DrugStock.drug_code, func.sum(DrugStock.quantity).label("quantity"))
         .group_by(DrugStock.drug_code)
+        .order_by(DrugStock.drug_code)
         .all()
     )
     stock_by_code = {r.drug_code: int(r.quantity or 0) for r in stock_rows}

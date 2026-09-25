@@ -308,6 +308,7 @@ def drg_stats(db: Session = Depends(get_db)):
         .join(CaseSummary, CaseSummary.admission_id == Admission.id)
         .join(Organization, Organization.id == Admission.org_id)
         .group_by(Admission.org_id, Organization.name)
+        .order_by(Admission.org_id, Organization.name)
         .all()
     )
     group_rows = (
@@ -318,6 +319,7 @@ def drg_stats(db: Session = Depends(get_db)):
         )
         .filter(CaseSummary.drg_code != "")
         .group_by(CaseSummary.drg_code)
+        .order_by(CaseSummary.drg_code)
         .all()
     )
     catalog = {g.code: g for g in db.query(DrgGroup).all()}

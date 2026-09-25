@@ -460,6 +460,7 @@ def exchange_logs(
             func.sum(case((ExchangeLog.success.is_(False), 1), else_=0)).label("failed"),
         )
         .group_by(ExchangeLog.message_type)
+        .order_by(ExchangeLog.message_type)
         .all()
     )
     return {

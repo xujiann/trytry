@@ -262,7 +262,7 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
     finance: dict[int, dict[str, float]] = {}
     for org_id, category, amount in finance_query.group_by(
         FinanceEntry.org_id, FinanceEntry.category
-    ).all():
+    ).order_by(FinanceEntry.org_id, FinanceEntry.category).all():
         finance.setdefault(org_id, {})[category] = round(amount, 2)
 
     rows = []

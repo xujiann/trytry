@@ -1564,6 +1564,7 @@ def list_consults(
         db.query(SpdConsultMessage.consult_id, func.count(SpdConsultMessage.id))
         .filter(SpdConsultMessage.consult_id.in_([r.id for r in rows] or [0]))
         .group_by(SpdConsultMessage.consult_id)
+        .order_by(SpdConsultMessage.consult_id)
         .all()
     )
     return [

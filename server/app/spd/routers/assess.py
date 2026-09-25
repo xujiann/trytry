@@ -597,6 +597,7 @@ def collect_metrics_batch(
             query.filter(col.in_(ids))
             .with_entities(col, *columns.values())
             .group_by(col)
+            .order_by(col)
             .all()
         )
         found = {r[0]: {k: float(v or 0) for k, v in zip(columns, r[1:])} for r in rows}
@@ -665,7 +666,8 @@ def collect_metrics_batch(
             cand_rows = dict(
                 cand_query.filter(SpdCandidate.org_id.in_(ids))
                 .with_entities(SpdCandidate.org_id, func.count(SpdCandidate.id))
-                .group_by(SpdCandidate.org_id).all()
+                .group_by(SpdCandidate.org_id)
+                .order_by(SpdCandidate.org_id).all()
             )
             targets = {oid: cand_rows.get(oid, 0) for oid in ids}
         else:
@@ -1157,6 +1159,7 @@ def workload(
             group_col, SpdTask.task_type, SpdTask.status, func.count(SpdTask.id)
         )
         .group_by(group_col, SpdTask.task_type, SpdTask.status)
+        .order_by(group_col, SpdTask.task_type, SpdTask.status)
         .all()
     )
     agg: dict[int, dict] = {}

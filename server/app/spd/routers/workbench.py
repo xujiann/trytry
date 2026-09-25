@@ -93,15 +93,18 @@ def _enroll_stats(db: Session, orgs: list[int] | None, program_code: str = "") -
         "archived": active.filter(SpdEnrollment.archived.is_(True)).count(),
         "by_risk": dict(
             active.with_entities(SpdEnrollment.risk_level, func.count(SpdEnrollment.id))
-            .group_by(SpdEnrollment.risk_level).all()
+            .group_by(SpdEnrollment.risk_level)
+            .order_by(SpdEnrollment.risk_level).all()
         ),
         "by_program": dict(
             active.with_entities(SpdEnrollment.program_code, func.count(SpdEnrollment.id))
-            .group_by(SpdEnrollment.program_code).all()
+            .group_by(SpdEnrollment.program_code)
+            .order_by(SpdEnrollment.program_code).all()
         ),
         "by_status": dict(
             query.with_entities(SpdEnrollment.status, func.count(SpdEnrollment.id))
-            .group_by(SpdEnrollment.status).all()
+            .group_by(SpdEnrollment.status)
+            .order_by(SpdEnrollment.status).all()
         ),
     }
 
@@ -127,7 +130,8 @@ def _task_stats(
         "done_total": query.filter(SpdTask.status == "done").count(),
         "by_type": dict(
             open_query.with_entities(SpdTask.task_type, func.count(SpdTask.id))
-            .group_by(SpdTask.task_type).all()
+            .group_by(SpdTask.task_type)
+            .order_by(SpdTask.task_type).all()
         ),
     }
 
@@ -159,7 +163,8 @@ def _referral_stats(db: Session, orgs: list[int] | None) -> dict:
         )
     by_status = row_dict(
         query.with_entities(SpdReferralCase.status, func.count(SpdReferralCase.id))
-        .group_by(SpdReferralCase.status).all()
+        .group_by(SpdReferralCase.status)
+        .order_by(SpdReferralCase.status).all()
     )
     total = sum(by_status.values())
     denominator = total - by_status.get("withdrawn", 0) - by_status.get("rejected", 0)
@@ -787,14 +792,15 @@ def health_commission_workbench(
         _apply_scope(db.query(SpdEnrollment), SpdEnrollment.org_id, orgs)
         .filter(SpdEnrollment.status == "active")
         .with_entities(SpdEnrollment.org_id, func.count(SpdEnrollment.id))
-        .group_by(SpdEnrollment.org_id).all()
+        .group_by(SpdEnrollment.org_id)
+        .order_by(SpdEnrollment.org_id).all()
     ):
         level = org_level.get(org_key)
         if level in by_level:
             by_level[level]["enrolled"] += count
     for org_key, count in (
         _apply_scope(db.query(SpdTeam.org_id, func.count(SpdTeam.id)), SpdTeam.org_id, orgs)
-        .filter(SpdTeam.active.is_(True)).group_by(SpdTeam.org_id).all()
+        .filter(SpdTeam.active.is_(True)).group_by(SpdTeam.org_id).order_by(SpdTeam.org_id).all()
     ):
         level = org_level.get(org_key)
         if level in by_level:
@@ -914,22 +920,22 @@ def region_stats(
         "by_program": dict(
             enroll_query.with_entities(
                 SpdEnrollment.program_code, func.count(SpdEnrollment.id)
-            ).group_by(SpdEnrollment.program_code).all()
+            ).group_by(SpdEnrollment.program_code).order_by(SpdEnrollment.program_code).all()
         ),
         "by_risk": dict(
             enroll_query.with_entities(
                 SpdEnrollment.risk_level, func.count(SpdEnrollment.id)
-            ).group_by(SpdEnrollment.risk_level).all()
+            ).group_by(SpdEnrollment.risk_level).order_by(SpdEnrollment.risk_level).all()
         ),
         "by_stage": dict(
             enroll_query.with_entities(
                 SpdEnrollment.stage, func.count(SpdEnrollment.id)
-            ).group_by(SpdEnrollment.stage).all()
+            ).group_by(SpdEnrollment.stage).order_by(SpdEnrollment.stage).all()
         ),
         "by_org": dict(
             enroll_query.with_entities(
                 SpdEnrollment.org_id, func.count(SpdEnrollment.id)
-            ).group_by(SpdEnrollment.org_id).all()
+            ).group_by(SpdEnrollment.org_id).order_by(SpdEnrollment.org_id).all()
         ),
         "age_distribution": age_buckets,
         "gender_distribution": gender,
@@ -1002,7 +1008,8 @@ def expert_workbench(
             "total": db.query(SpdAssessment).count(),
             "by_risk": row_dict(
                 db.query(SpdAssessment.risk_level, func.count(SpdAssessment.id))
-                .group_by(SpdAssessment.risk_level).all()
+                .group_by(SpdAssessment.risk_level)
+                .order_by(SpdAssessment.risk_level).all()
             ),
         },
         "org_coverage": _apply_scope(
@@ -1183,7 +1190,7 @@ def team_workbench(
             "by_risk": row_dict(
                 mine_query.with_entities(
                     SpdEnrollment.risk_level, func.count(SpdEnrollment.id)
-                ).group_by(SpdEnrollment.risk_level).all()
+                ).group_by(SpdEnrollment.risk_level).order_by(SpdEnrollment.risk_level).all()
             ),
         },
         "tasks": _task_stats(db, orgs, assignee_id=user.id, program_code=program_code,
@@ -1251,7 +1258,8 @@ def team_workbench(
                 SpdEnrollment.team_id.in_(team_ids or [0]),
                 SpdEnrollment.status == "active",
             )
-            .group_by(SpdEnrollment.team_id).all()
+            .group_by(SpdEnrollment.team_id)
+            .order_by(SpdEnrollment.team_id).all()
         )
         out["paths"] = _path_stats(db, orgs)
     if role == "member":

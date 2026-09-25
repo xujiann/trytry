@@ -381,6 +381,7 @@ def patient_flow(start: str | None = None, end: str | None = None, db: Session =
             func.coalesce(func.sum(OutboundVisit.total_amount), 0.0),
         )
         .group_by(OutboundVisit.external_org_level)
+        .order_by(OutboundVisit.external_org_level)
         .all()
     )
     outside = sum(count for _, count, _, _ in grouped)
@@ -448,6 +449,7 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
         db.query(Ward.org_id, func.count(Bed.id))
         .join(Bed, Bed.ward_id == Ward.id)
         .group_by(Ward.org_id)
+        .order_by(Ward.org_id)
         .all()
     )
     # 医师数：关键词匹配下推为 LIKE（语义同 Python 的子串 in），按机构分组计数
@@ -458,6 +460,7 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
             sa.or_(*[Employee.position.like(f"%{k}%") for k in DOCTOR_POSITION_KEYWORDS]),
         )
         .group_by(Employee.org_id)
+        .order_by(Employee.org_id)
         .all()
     )
 
@@ -483,6 +486,7 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
             overlap >= 0,
         )
         .group_by(Admission.org_id)
+        .order_by(Admission.org_id)
         .all()
     )
     # 出院者：出院日落在期间内才计入本期出院人次与平均住院日
@@ -498,6 +502,7 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
             Admission.discharged_at < end_dt,
         )
         .group_by(Admission.org_id)
+        .order_by(Admission.org_id)
         .all()
     ):
         discharged_count[oid] = count
@@ -508,6 +513,7 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
         db.query(Encounter.org_id, func.count(Encounter.id))
         .filter(Encounter.created_at >= start_dt, Encounter.created_at < end_dt)
         .group_by(Encounter.org_id)
+        .order_by(Encounter.org_id)
         .all()
     ):
         visits[oid] = count
@@ -566,7 +572,7 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
 
     def grouped(model, org_column, *conditions) -> dict[int, int]:
         query = db.query(org_column, func.count(model.id)).filter(*conditions)
-        return dict(query.group_by(org_column).all())
+        return dict(query.group_by(org_column).order_by(org_column).all())
 
     in_period = lambda model: (  # noqa: E731 - 三处复用的时间窗谓词
         model.created_at >= start_dt,
@@ -587,6 +593,7 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
     chronic = row_dict(
         db.query(ChronicPatient.managed_by_org_id, func.count(ChronicPatient.id))
         .group_by(ChronicPatient.managed_by_org_id)
+        .order_by(ChronicPatient.managed_by_org_id)
         .all()
     )
     # 全部机构的运行效率：走计算本体，不走端点（端点按调用方收口，P0-37）
@@ -819,6 +826,7 @@ def drug_use(
         .join(Admission, CaseSummary.admission_id == Admission.id)
         .filter(CaseSummary.created_at >= start_dt, CaseSummary.created_at < end_dt)
         .group_by(Admission.org_id)
+        .order_by(Admission.org_id)
         .all()
     )
     for oid, total, drug in summary_rows:
@@ -843,6 +851,7 @@ def drug_use(
         .join(Encounter, BillDetail.encounter_id == Encounter.id)
         .filter(BillDetail.created_at >= start_dt, BillDetail.created_at < end_dt)
         .group_by(Encounter.org_id)
+        .order_by(Encounter.org_id)
         .all()
     )
     for oid, total, drug in detail_rows:
@@ -890,6 +899,7 @@ def drug_use(
             Prescription.status != "rejected",
         )
         .group_by(Prescription.org_id)
+        .order_by(Prescription.org_id)
         .all()
     )
     for oid, ddds, uncov in item_rows:
@@ -909,6 +919,7 @@ def drug_use(
             Admission.discharged_at < end_dt,
         )
         .group_by(Admission.org_id)
+        .order_by(Admission.org_id)
         .all()
     ):
         if oid in bed_days:

@@ -301,7 +301,7 @@ def finance_summary(
         # 此前 `period=abc` 也 200，回执原样写着 "period": "abc" 且合计为零（P1-62）
         period = require_month(period)
         query = query.filter(FinanceEntry.period == period)
-    rows = query.group_by(FinanceEntry.org_id, FinanceEntry.category).all()
+    rows = query.group_by(FinanceEntry.org_id, FinanceEntry.category).order_by(FinanceEntry.org_id, FinanceEntry.category).all()
     orgs: dict[int, dict] = {}
     for r in rows:
         entry = orgs.setdefault(r.org_id, {"org_id": r.org_id, "income": 0.0, "expense": 0.0})

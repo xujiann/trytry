@@ -1011,7 +1011,8 @@ def followup_stats(
 
     by_status = row_dict(
         query.with_entities(SpdFollowupRecord.status, func.count(SpdFollowupRecord.id))
-        .group_by(SpdFollowupRecord.status).all()
+        .group_by(SpdFollowupRecord.status)
+        .order_by(SpdFollowupRecord.status).all()
     )
     total = sum(by_status.values())
     done = by_status.get("done", 0)
@@ -1027,12 +1028,14 @@ def followup_stats(
     by_abnormal = row_dict(
         query.filter(SpdFollowupRecord.status == "done")
         .with_entities(SpdFollowupRecord.abnormal_level, func.count(SpdFollowupRecord.id))
-        .group_by(SpdFollowupRecord.abnormal_level).all()
+        .group_by(SpdFollowupRecord.abnormal_level)
+        .order_by(SpdFollowupRecord.abnormal_level).all()
     )
     by_executor = (
         query.filter(SpdFollowupRecord.status == "done")
         .with_entities(SpdFollowupRecord.executor_id, func.count(SpdFollowupRecord.id))
-        .group_by(SpdFollowupRecord.executor_id).all()
+        .group_by(SpdFollowupRecord.executor_id)
+        .order_by(SpdFollowupRecord.executor_id).all()
     )
     names = {
         u.id: u.full_name or u.username
@@ -1048,7 +1051,8 @@ def followup_stats(
         "by_channel": row_dict(
             query.filter(SpdFollowupRecord.status == "done")
             .with_entities(SpdFollowupRecord.channel, func.count(SpdFollowupRecord.id))
-            .group_by(SpdFollowupRecord.channel).all()
+            .group_by(SpdFollowupRecord.channel)
+            .order_by(SpdFollowupRecord.channel).all()
         ),
         "by_executor": [
             {"executor_id": eid, "executor_name": names.get(eid, ""), "done": count}

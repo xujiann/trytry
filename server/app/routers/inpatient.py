@@ -875,6 +875,7 @@ def inpatient_stats(
         .join(Bed, Bed.ward_id == Ward.id)
         .join(Organization, Organization.id == Ward.org_id)
         .group_by(Ward.org_id, Organization.name)
+        .order_by(Ward.org_id, Organization.name)
     )
     if scope is not None:
         rows_q = rows_q.filter(Ward.org_id.in_(scope))
@@ -883,12 +884,14 @@ def inpatient_stats(
         db.query(Admission.org_id, func.count(Admission.id))
         .filter(Admission.status == "admitted")
         .group_by(Admission.org_id)
+        .order_by(Admission.org_id)
         .all()
     )
     discharged = row_dict(
         db.query(Admission.org_id, func.count(Admission.id))
         .filter(Admission.status == "discharged")
         .group_by(Admission.org_id)
+        .order_by(Admission.org_id)
         .all()
     )
     return [

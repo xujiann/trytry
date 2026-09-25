@@ -687,12 +687,14 @@ def task_summary(
 
     by_status = row_dict(
         query.with_entities(SpdTask.status, func.count(SpdTask.id))
-        .group_by(SpdTask.status).all()
+        .group_by(SpdTask.status)
+        .order_by(SpdTask.status).all()
     )
     by_type = row_dict(
         query.filter(SpdTask.status.in_(OPEN_STATUSES))
         .with_entities(SpdTask.task_type, func.count(SpdTask.id))
-        .group_by(SpdTask.task_type).all()
+        .group_by(SpdTask.task_type)
+        .order_by(SpdTask.task_type).all()
     )
     today_str = business_day.isoformat()
     return {

@@ -852,7 +852,8 @@ def closure_rate(
 
     by_status = row_dict(
         query.with_entities(SpdReferralCase.status, func.count(SpdReferralCase.id))
-        .group_by(SpdReferralCase.status).all()
+        .group_by(SpdReferralCase.status)
+        .order_by(SpdReferralCase.status).all()
     )
     total = sum(by_status.values())
     denominator = total - by_status.get("withdrawn", 0) - by_status.get("rejected", 0)
@@ -869,7 +870,8 @@ def closure_rate(
         "pending_by_level": row_dict(
             query.filter(SpdReferralCase.status.notin_(_TERMINAL))
             .with_entities(SpdReferralCase.current_level, func.count(SpdReferralCase.id))
-            .group_by(SpdReferralCase.current_level).all()
+            .group_by(SpdReferralCase.current_level)
+            .order_by(SpdReferralCase.current_level).all()
         ),
     }
 

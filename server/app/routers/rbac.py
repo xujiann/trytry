@@ -219,6 +219,7 @@ def list_roles(db: Session = Depends(get_db)):
     counts = row_dict(
         db.query(RolePermission.role_id, sa.func.count(RolePermission.id))
         .group_by(RolePermission.role_id)
+        .order_by(RolePermission.role_id)
         .all()
     )
     return [_role_out(r, counts.get(r.id, 0)) for r in roles]

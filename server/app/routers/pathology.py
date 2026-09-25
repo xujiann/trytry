@@ -281,6 +281,7 @@ def specimen_stats(db: Session = Depends(get_db)):
     by_status = row_dict(
         db.query(PathologySpecimen.status, func.count(PathologySpecimen.id))
         .group_by(PathologySpecimen.status)
+        .order_by(PathologySpecimen.status)
         .all()
     )
     total = sum(by_status.values())

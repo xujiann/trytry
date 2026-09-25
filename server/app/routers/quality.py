@@ -216,10 +216,11 @@ def adverse_event_stats(db: Session = Depends(get_db)):
     by_type = row_dict(
         db.query(AdverseEvent.event_type, func.count(AdverseEvent.id))
         .group_by(AdverseEvent.event_type)
+        .order_by(AdverseEvent.event_type)
         .all()
     )
     by_level = row_dict(
-        db.query(AdverseEvent.level, func.count(AdverseEvent.id)).group_by(AdverseEvent.level).all()
+        db.query(AdverseEvent.level, func.count(AdverseEvent.id)).group_by(AdverseEvent.level).order_by(AdverseEvent.level).all()
     )
     return {
         "total": total,
@@ -455,6 +456,7 @@ def infection_stats(db: Session = Depends(get_db)):
         db.query(InfectionReport.infection_site, func.count(InfectionReport.id))
         .filter(InfectionReport.status == "confirmed")
         .group_by(InfectionReport.infection_site)
+        .order_by(InfectionReport.infection_site)
         .all()
     )
     pending = (
@@ -837,6 +839,7 @@ def record_qc_summary(
                 func.max(MedicalRecord.id),
             )
             .group_by(key_col, MedicalRecord.qc_grade)
+            .order_by(key_col, MedicalRecord.qc_grade)
             .all()
         )
         for key, grade, count, score_sum, max_id in rows:
@@ -872,6 +875,7 @@ def record_qc_summary(
             func.sum(MedicalRecord.qc_score),
         )
         .group_by(MedicalRecord.qc_grade)
+        .order_by(MedicalRecord.qc_grade)
         .all()
     ):
         grades[grade] = grades.get(grade, 0) + count

@@ -1471,6 +1471,7 @@ def list_groups(
         db.query(SpdGroupMember.group_id, func.count(SpdGroupMember.id))
         .filter(SpdGroupMember.group_id.in_([g.id for g in rows] or [0]))
         .group_by(SpdGroupMember.group_id)
+        .order_by(SpdGroupMember.group_id)
         .all()
     )
     return [

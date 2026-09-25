@@ -695,6 +695,7 @@ def get_deposit_balance(
         for row in db.query(Deposit.deposit_type, func.coalesce(func.sum(Deposit.amount), 0.0))
         .filter(Deposit.admission_id == admission_id)
         .group_by(Deposit.deposit_type)
+        .order_by(Deposit.deposit_type)
         .all()
     }
     return {
@@ -986,6 +987,7 @@ def billing_stats(db: Session = Depends(get_db)):
             func.coalesce(func.sum(Settlement.insurance_pay), 0.0).label("ins"),
         )
         .group_by(Settlement.bill_type)
+        .order_by(Settlement.bill_type)
         .all()
     )
     return [
