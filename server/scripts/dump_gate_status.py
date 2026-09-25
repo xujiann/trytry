@@ -52,6 +52,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_groupby_order as gborder
     import test_limit_order as limitorder
     import test_body_raw_dict as bodyraw
+    import test_config_dict_validated as cfgdict
     import test_date_window_bounds as datewin
     import test_disabled_catalog_refs as disabledrefs
     import test_disabled_user_refs as disabledusers
@@ -193,6 +194,11 @@ def _rows() -> list[tuple[str, str, str, str]]:
          bodyraw.BASELINE, "tests/test_body_raw_dict.py"),
         ("请求体契约", "按设计收原样资源的入站端点（FHIR R4 资源，逐条写明理由）",
          len(bodyraw.BY_DESIGN), "tests/test_body_raw_dict.py"),
+        ("请求体契约", "配置型宽字典（分组 / 评分 / 量表 / 分级 / 质控规则、服务包项目）写库前不查结构（写坏照样落库，"
+         "用时 500、常常整批一起；13 → 0 已清零）",
+         cfgdict.BASELINE, "tests/test_config_dict_validated.py"),
+        ("请求体契约", "按设计不查结构的宽字典数据字段（作答 / 材料 / 试算入参 / 只存只回显，逐条写明理由）",
+         len(cfgdict.DATA), "tests/test_config_dict_validated.py"),
         ("请求体契约", "要求必填的文本字段收得下纯空白（机构名 / 病种编码 / 用户名填一串空格照样落库；282 → 0：修 268、按设计 14）",
          blanktext.BASELINE, "tests/test_blank_required_text.py"),
         ("请求体契约", "按设计不挡纯空白的认证 / 核验入参（§8 复核范围，逐条写明理由）",
