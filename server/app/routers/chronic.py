@@ -56,6 +56,34 @@ def guidance_for(db: Session, code: str) -> str:
     return GUIDANCE_POINTS.get(code, "")
 
 
+def level_rules_problem(rules: dict) -> str:
+    """病种分级规则里会让随访定级抛错、或悄悄定错级的写法，没问题返回空串（P1-125）。
+
+    病种目录的分级规则在管理端是一个 JSON 文本框，原先照单全收：阈值写成 "160"（字符串）、`metrics` 写成对象、
+    指标写成一句话，存得进去，这个病种之后**每一次记随访都 500**——高血压这类预置病种一样改得坏。方向写成表外的值
+    （`up`）按「越高越危」算、`require_all` 写成 "false"（字符串为真）照样要求全齐，都是悄悄定错级。
+    只查这几样，其余键（单位、备注、自定义键）照旧原样透传。
+    """
+    if not rules:
+        return ""
+    metrics = rules.get("metrics", [])
+    if not isinstance(metrics, list) or not all(isinstance(metric, dict) for metric in metrics):
+        return "metrics 要写成 [{key, name, direction, level3, level2}] 这样的列表"
+    for metric in metrics:
+        key = metric.get("key")
+        if not isinstance(key, str) or not key.strip():
+            return "每个分级指标都要有 key"
+        if metric.get("direction", "high") not in ("high", "low"):
+            return f"指标 {key} 的 direction 只能是 high（越高越危）/ low（越低越危）"
+        for level in ("level3", "level2"):
+            value = metric.get(level)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+                return f"指标 {key} 的 {level} 阈值必须是数"
+    if not isinstance(rules.get("require_all", True), bool):
+        return "require_all 只能是 true / false"
+    return ""
+
+
 def _metric_value(body: FollowUpCreate, key: str) -> float | None:
     """指标取值：优先取 FollowUp 同名列（sbp/dbp/glucose），其次取通用 metrics JSON。"""
     value = getattr(body, key, None)
@@ -88,6 +116,10 @@ def _evaluate_level(db: Session, disease: str, body: FollowUpCreate) -> int | No
     """
     disease_type = get_disease_type(db, disease)
     rules = (disease_type.level_rules if disease_type else None) or {}
+    problem = level_rules_problem(rules)
+    if problem:   # 修前存进去的坏规则：说清楚、不 500（P1-125）；不悄悄跳过定级——该转诊的人就漏了
+        raise HTTPException(status_code=422,
+                            detail=f"病种「{disease}」的分级规则配置有误（{problem}），请在病种目录里修正后再记随访")
     metrics = rules.get("metrics") or []
     if not metrics:
         return None
@@ -183,6 +215,9 @@ def list_disease_types(active: bool | None = None, db: Session = Depends(get_db)
     dependencies=[Depends(require_admin)],
 )
 def create_disease_type(body: DiseaseTypeCreate, db: Session = Depends(get_db)):
+    problem = level_rules_problem(body.level_rules)
+    if problem:
+        raise HTTPException(status_code=422, detail=f"分级规则非法：{problem}")
     if get_disease_type(db, body.code) is not None:
         raise HTTPException(status_code=409, detail="病种编码已存在")
     disease_type = insert_or_conflict(
@@ -200,6 +235,10 @@ def update_disease_type(type_id: int, body: DiseaseTypeUpdate, db: Session = Dep
     disease_type = db.get(ChronicDiseaseType, type_id)
     if disease_type is None:
         raise HTTPException(status_code=404, detail="病种不存在")
+    if body.level_rules is not None:   # 与建病种同一句（P1-125）
+        problem = level_rules_problem(body.level_rules)
+        if problem:
+            raise HTTPException(status_code=422, detail=f"分级规则非法：{problem}")
     for field, value in body.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(disease_type, field, value)
@@ -352,7 +391,8 @@ _LEVEL_BASE = {1: 20, 2: 50, 3: 80}
 def _risk_metric(db: Session, disease: str) -> str:
     """风险趋势指标：取病种目录第一个分级指标，目录缺失时回落到兜底表。"""
     disease_type = get_disease_type(db, disease)
-    metrics = ((disease_type.level_rules if disease_type else None) or {}).get("metrics") or []
+    rules = (disease_type.level_rules if disease_type else None) or {}
+    metrics = [] if level_rules_problem(rules) else rules.get("metrics") or []   # 规则写坏了同目录缺失，回落兜底表（P1-125）
     if metrics and metrics[0].get("key"):
         return str(metrics[0]["key"])
     return _RISK_METRICS.get(disease, "")
