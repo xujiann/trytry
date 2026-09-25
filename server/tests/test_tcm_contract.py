@@ -30,7 +30,7 @@ from app.main import app
 
 SPEC_KEYS = ["method", "item_scoring", "raw_score", "transformed_score", "judge", "constitutions"]
 CONSTITUTION_KEYS = [
-    "constitution", "score", "transformed_scores", "tendencies", "name", "advice", "formula",
+    "constitution", "score", "transformed_scores", "tendencies", "also", "name", "advice", "formula",
 ]
 RECOMMENDATION_KEYS = ["syndrome", "matched", "match_count", "formula", "techniques"]
 FORMULA_KEYS = [
@@ -194,6 +194,7 @@ def test_体质辨识回执精确_偏颇与平和两分支(client, admin):
         "score": 70,
         "transformed_scores": {"damp_heat": 70, "blood_stasis": 35, "qi_deficiency": 10},
         "tendencies": ["血瘀质"],
+        "also": [],
         "name": "湿热质",
         "advice": "清热利湿，忌烟酒辛辣肥甘；食疗：绿豆、苦瓜、马齿苋",
         "formula": "甘露消毒丹",
@@ -211,6 +212,7 @@ def test_体质辨识回执精确_偏颇与平和两分支(client, admin):
         "score": 20,
         "transformed_scores": {"damp_heat": 20},
         "tendencies": [],
+        "also": [],
         "name": "平和质",
         "advice": "起居有常，饮食有节，坚持运动",
         "formula": "",
@@ -229,6 +231,7 @@ def test_体质辨识简表计分分支_未知维度被滤掉(client, admin):
         "score": 100,  # (20-4)/(4×4)×100，round 后是 int
         "transformed_scores": {"damp_heat": 100, "qi_deficiency": 0},
         "tendencies": [],
+        "also": [],
         "name": "湿热质",
         "advice": "清热利湿，忌烟酒辛辣肥甘；食疗：绿豆、苦瓜、马齿苋",
         "formula": "甘露消毒丹",
@@ -403,3 +406,17 @@ def test_本档的今天确实被冻住了():
     这条红，说明 autouse 夹具没生效、或夹具顺序让播种落在了冻结之外。
     """
     assert business_today() == date(2026, 6, 15)
+
+
+def test_兼夹体质_判定体质之外同样满四十的偏颇体质不再丢(client, admin):
+    """P2-117：「转化分 ≥ 40 判定为是」对每一种偏颇体质都成立，原先只取最高的那个；其余 ≥ 40 的既不是判定体质、也不进
+    「倾向」（那是 30-39），结果里哪儿都没有——气虚 55、阳虚 50，阳虚质就这么丢了，页面上它那一行显示「—」。"""
+    body = client.post(
+        "/api/tcm/constitution",
+        json={"scores": {"qi_deficiency": 55, "yang_deficiency": 50, "special": 40, "phlegm_damp": 35}},
+        headers=admin,
+    ).json()
+    assert body["constitution"] == "气虚质"
+    assert body["also"] == ["阳虚质", "特禀质"]   # 修前没有这个键；按分从高到低，恰为 40 也算「是」
+    assert body["tendencies"] == ["痰湿质"]
+    assert body["score"] == 55

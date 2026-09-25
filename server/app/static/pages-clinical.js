@@ -702,10 +702,14 @@ async function renderTcm() {
       const r = await api("/api/tcm/constitution", { method: "POST", body: JSON.stringify({ scores }) });
       // 判定一律取后端结果：是/倾向两条线由 CONSTITUTION_*_THRESHOLD 定，前端不再算一遍
       const isTendency = (name) => r.tendencies.includes(name);
+      // 兼夹体质（P2-117）：判定体质之外同样 ≥ 40 的偏颇体质，原先在下表里只显示「—」
+      const isPositive = (name) => name === r.constitution || r.also.includes(name);
       const nameOf = (key) => (BIASED.find((c) => c.key === key) || { name: key }).name;
       $("#tcm-const-result").innerHTML = `
         <div class="cards">
           <div class="card"><div class="label">判定体质</div><div class="value">${esc(r.constitution)}</div></div>
+          <div class="card"><div class="label">兼夹体质</div>
+            <div class="value">${esc(r.also.join("、")) || "无"}</div></div>
           <div class="card"><div class="label">最高转化分</div><div class="value">${r.score}</div></div>
           <div class="card"><div class="label">倾向体质</div>
             <div class="value">${esc(r.tendencies.join("、")) || "无"}</div></div></div>
@@ -713,7 +717,7 @@ async function renderTcm() {
         ${table(["体质", "转化分", "判定"],
           Object.entries(r.transformed_scores).sort((a, b) => b[1] - a[1]), ([key, v]) =>
           `<tr><td>${esc(nameOf(key))}</td><td>${v}</td>
-           <td>${nameOf(key) === r.constitution ? '<span class="tag red">是</span>'
+           <td>${isPositive(nameOf(key)) ? '<span class="tag red">是</span>'
              : isTendency(nameOf(key)) ? '<span class="tag orange">倾向是</span>' : "—"}</td></tr>`)}`;
       setMsg("#tcm-const-msg", "", true);
     } catch (err) { setMsg("#tcm-const-msg", err.message, false); }

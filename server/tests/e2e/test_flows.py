@@ -1945,6 +1945,19 @@ def test_中医适宜技术能在界面上入库(page, base_url, admin_read):
     expect(page.locator("#page-body")).to_contain_text("E2E 耳穴压豆")
 
 
+def test_体质辨识的兼夹体质在界面上标为是(page, base_url):
+    """P2-117：气虚 55、阳虚 50——阳虚质原先在结果表里只显示「—」（后端只取最高的一个，其余 ≥ 40 的哪儿都没有）。"""
+    _login(page, base_url)
+    _open_page(page, "tcm", "中医药服务")
+    form = page.locator("#tcm-const")
+    form.locator('[name="qi_deficiency"]').fill("55")
+    form.locator('[name="yang_deficiency"]').fill("50")
+    form.locator("button").click()
+    result = page.locator("#tcm-const-result")
+    expect(result).to_contain_text("兼夹体质")
+    expect(result.locator("tr", has_text="阳虚质").locator(".tag")).to_have_text("是")
+
+
 def test_模拟诊疗病例能在界面上新建_作答按新建的答案评分(page, base_url, admin_read):
     """P2-93（动词级孤儿）：模拟病例原先只能作答、不能新建——建病例的接口（医生 / 管理层）一直在，新装的平台上这张表
     一条都没有，「模拟诊疗」从界面上无从用起。正确答案从选项里挑（手填差一个字就是后端 422「正确答案不在选项里」）。"""

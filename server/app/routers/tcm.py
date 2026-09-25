@@ -105,7 +105,9 @@ class ConstitutionSpecOut(BaseModel):
 
 
 class ConstitutionResultOut(BaseModel):
-    """体质辨识结果：四个结果键 + `**CONSTITUTIONS[key]` 展开的三个知识库键。
+    """体质辨识结果：五个结果键 + `**CONSTITUTIONS[key]` 展开的三个知识库键。
+
+    `also` 是兼夹体质（P2-117）：判定体质之外、转化分同样 ≥ 40 的偏颇体质（按分从高到低）。
 
     九种体质的字典字面量键序一致（name/advice/formula），平和质只是 formula
     为空串——七键恒在，没有条件键。`score`/`transformed_scores` 两条产地
@@ -117,6 +119,7 @@ class ConstitutionResultOut(BaseModel):
     score: int
     transformed_scores: dict[str, int]
     tendencies: list[str]
+    also: list[str]
     name: str
     advice: str
     formula: str
@@ -163,11 +166,16 @@ def identify_constitution(body: ConstitutionBody):
         for k, v in valid.items()
         if CONSTITUTION_TENDENCY_THRESHOLD <= v < CONSTITUTION_JUDGE_THRESHOLD and k != key
     )
+    # 兼夹体质（P2-117）：「转化分 ≥ 40 判定为是」对每一种偏颇体质都成立（见 /constitution/spec），原先只取最高的那个，
+    # 其余 ≥ 40 的既不是判定体质、也不进「倾向」（那是 30-39），结果里哪儿都没有——气虚 55、阳虚 50，阳虚质就这么丢了
+    also = sorted((k for k, v in valid.items() if v >= CONSTITUTION_JUDGE_THRESHOLD and k != key),
+                  key=lambda k: (-valid[k], k))
     return {
         "constitution": CONSTITUTIONS[key]["name"],
         "score": top_score,
         "transformed_scores": valid,
         "tendencies": [CONSTITUTIONS[k]["name"] for k in tendencies],
+        "also": [CONSTITUTIONS[k]["name"] for k in also],
         **CONSTITUTIONS[key],
     }
 
