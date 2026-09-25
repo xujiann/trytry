@@ -1840,7 +1840,10 @@ def test_成本页存下的期间被拒时回落本月_切换框先验再存(pag
 
 @pytest.fixture(scope="session")
 def cost_rule_seed(base_url, seed):
-    """成本分摊规则改删的前置：后勤 + 内科两个科室，后勤分给内科 60%（P1-116）。"""
+    """成本分摊规则改删的前置：后勤 + 内科两个科室，后勤分给内科 60%（P1-116）。
+
+    科室建在**自己的机构**里、不挂共用的 seed 机构：人财物页的「挂科室」下拉只列员工所在机构的科室，
+    那条用例靠「本机构只有一个科室、默认即选中」——往 seed 机构里多塞两个科室，它就挂错科室（第三十轮实测）。"""
     import json
     from urllib.request import Request
 
@@ -1855,7 +1858,8 @@ def cost_rule_seed(base_url, seed):
             return json.loads(resp.read())
 
     admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
-    org_id = seed["org"]["id"]
+    org_id = call("/api/organizations", {"name": "E2E成本分摊院", "org_type": "lead_hospital", "level": "county"},
+                  admin)["id"]
     hq = call("/api/mgmt/departments", {"org_id": org_id, "code": "E2E-CST-HQ", "name": "E2E分摊后勤",
                                         "category": "admin"}, admin)
     nk = call("/api/mgmt/departments", {"org_id": org_id, "code": "E2E-CST-NK", "name": "E2E分摊内科"}, admin)
