@@ -47,7 +47,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, close_followup_record, judge_measurement,
-                       measure_value_problem, unknown_program)
+                       measure_value_problem, scale_unusable, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -556,6 +556,9 @@ def self_screening(
         )
         if scale is None:
             raise HTTPException(status_code=404, detail="量表不存在或未发布")
+        scale_problem = scale_unusable(scale)   # 修前存进去的坏量表：说清楚、不 500（P2-80）
+        if scale_problem:
+            raise HTTPException(status_code=422, detail=scale_problem)
     graded = (
         score_scale(scale.items or [], body.answers, scale.scoring or {})
         if scale else {"score": 0, "risk_level": "low", "advice": ""}

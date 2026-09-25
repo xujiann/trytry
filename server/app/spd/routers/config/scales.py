@@ -22,6 +22,7 @@ from ...models import (
     SpdServicePackage,
     SpdTag,
 )
+from ...rules import scale_problem
 from ...service import MEDIA_TYPE_NAMES, unknown_program
 from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
 
@@ -125,10 +126,18 @@ def _check_item_keys(items: list[dict]) -> None:
         raise HTTPException(status_code=422, detail="量表题目 key 不得重复")
 
 
+def _check_scale(items: list, scoring: dict) -> None:
+    """建 / 改 / 发布量表同一句（P2-80）：会让作答 500、或题目计不进分的配置，写库前拦下。"""
+    problem = scale_problem(items, scoring)
+    if problem:
+        raise HTTPException(status_code=422, detail=f"量表配置非法：{problem}")
+
+
 @router.post("/scales", response_model=ScaleOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_scale(body: ScaleIn, db: Session = Depends(get_db)):
     _check_item_keys(body.items)
+    _check_scale(body.items, body.scoring)
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
@@ -191,6 +200,8 @@ def update_scale(scale_id: int, body: ScalePatch, db: Session = Depends(get_db))
         raise HTTPException(status_code=409, detail="已发布量表不可改题目或评分，请新建版本")
     if "items" in changes:
         _check_item_keys(changes["items"])
+    if "items" in changes or "scoring" in changes:   # 题目与评分合起来查（P2-80）
+        _check_scale(changes.get("items", scale.items or []), changes.get("scoring", scale.scoring or {}))
     for key, value in changes.items():
         setattr(scale, key, value)
     db.commit()
@@ -206,6 +217,7 @@ def publish_scale(scale_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="量表不存在")
     if not scale.items:
         raise HTTPException(status_code=422, detail="量表没有题目，不能发布")
+    _check_scale(scale.items, scale.scoring or {})   # 修前存下的草稿：改好再发布（P2-80）
     scale.status = "published"
     if not scale.qr_token:
         scale.qr_token = token_urlsafe(12)

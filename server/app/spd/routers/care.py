@@ -47,8 +47,8 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import (MEASUREMENT_SOURCE_NAMES, award_points, judge_measurement, measure_value_problem, spawn_task,
-                       unknown_program)
+from ..service import (MEASUREMENT_SOURCE_NAMES, award_points, judge_measurement, measure_value_problem, scale_unusable,
+                       spawn_task, unknown_program)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
@@ -589,6 +589,9 @@ def create_assessment(
     )
     if scale is None:
         raise HTTPException(status_code=404, detail="量表不存在或未发布")
+    scale_problem = scale_unusable(scale)   # 修前存进去的坏量表：说清楚、不 500（P2-80）
+    if scale_problem:
+        raise HTTPException(status_code=422, detail=scale_problem)
     graded = score_scale(scale.items or [], body.answers, scale.scoring or {})
     record = SpdAssessment(
         patient_id=body.patient_id, scale_id=scale.id, scale_code=scale.code,

@@ -35,10 +35,11 @@ from .models import (
     SpdProgram,
     SpdReferralCase,
     SpdRevisit,
+    SpdScale,
     SpdTarget,
     SpdTask,
 )
-from .rules import FIELD_SOURCES, evaluate, judge_level
+from .rules import FIELD_SOURCES, evaluate, judge_level, scale_problem
 
 #: 监测指标在 facts 里的键就是 `SpdMeasurement.metric`，与 `spd/rules.py::FIELD_SOURCES` 对齐。
 MEASURE_FIELDS = (
@@ -152,6 +153,13 @@ def unknown_code(db: Session, model: Any, code: str, what: str, *, already: str 
         return ""
     found = db.query(model.id).filter(model.code == code).first()
     return "" if found is not None else f"{what}不存在：{code}"
+
+
+def scale_unusable(scale: SpdScale) -> str:
+    """作答前查量表配置（P2-80）：修前存进去的坏量表（选项写成字符串、分值写成文字……）作答即 500；
+    现在返回说清楚的文案，由路由报 422。没问题返回空串。"""
+    problem = scale_problem(scale.items or [], scale.scoring or {})
+    return f"量表配置有误（{problem}），暂不能作答，请联系管理员修正" if problem else ""
 
 
 def match_program(db: Session, patient_id: int, program: SpdProgram, extra: dict | None = None):

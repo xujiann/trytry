@@ -215,6 +215,31 @@ def judge_level(value: float | None, low: float | None, high: float | None) -> s
     return "normal"
 
 
+def scale_problem(items: list, scoring: dict) -> str:
+    """量表配置里会让 `score_scale` 抛错、或题目根本计不进分的写法，没问题返回空串（P2-80）。
+
+    建 / 改 / 发布量表时拦；作答时对存量里的坏量表说清楚、不 500。原先照单全收：选项写成字符串、分值写成文字、
+    选项或评分分段不是列表，建量表 201、发布 200，谁来作答都 500——居民扫码自查也一样；题目没写 key 的，作答
+    永远计不进分。分值只要能读成数就行（`score_scale` 本就按 `float()` 读，写成 "3" 的照常计分）。
+    """
+    for item in items or []:
+        key = item.get("key") if isinstance(item, dict) else None
+        if not isinstance(key, str) or not key.strip():
+            return "每道题都要有 key"
+        options = item.get("options", [])
+        if not isinstance(options, list) or not all(isinstance(option, dict) for option in options):
+            return f"题目 {key} 的选项要写成 [{{label, score}}] 这样的列表"
+        for option in options:
+            if _as_number(option.get("score") or 0) is None:
+                return f"题目 {key} 的选项分值必须是数：{option.get('score')!r}"
+    if not isinstance(scoring or {}, dict):
+        return "评分规则（scoring）要写成对象"
+    ranges = (scoring or {}).get("ranges", [])
+    if not isinstance(ranges, list) or not all(isinstance(rng, dict) for rng in ranges):
+        return "评分分段（scoring.ranges）要写成 [{min, max, risk, advice}] 这样的列表"
+    return ""
+
+
 def score_scale(items: list[dict], answers: dict, scoring: dict) -> dict:
     """量表评分：按题目选项分值累加，再落到 scoring.ranges 给出风险等级与建议。
 

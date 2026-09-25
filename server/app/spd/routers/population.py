@@ -51,7 +51,8 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import RuleError, evaluate, is_suspect_risk, score_scale, validate_conditions
-from ..service import MEASUREMENT_SOURCE_NAMES, award_points, build_facts, close_open_work, match_program
+from ..service import (MEASUREMENT_SOURCE_NAMES, award_points, build_facts, close_open_work, match_program,
+                       scale_unusable)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
@@ -477,6 +478,9 @@ def create_screening(
         )
         if scale is None:
             raise HTTPException(status_code=404, detail="量表不存在或未发布")
+        scale_problem = scale_unusable(scale)   # 修前存进去的坏量表：说清楚、不 500（P2-80）
+        if scale_problem:
+            raise HTTPException(status_code=422, detail=scale_problem)
         graded = score_scale(scale.items or [], body.answers, scale.scoring or {})
         score, risk, advice = graded["score"], graded["risk_level"] or "low", graded["advice"]
 
