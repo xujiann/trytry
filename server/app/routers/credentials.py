@@ -356,11 +356,13 @@ class IdentityResolveOut(BaseModel):
 
     `credential_status` 是**条件键**（docs/接口标准与治理.md 陷阱二）：只在命中
     实体凭据号那一支出现，健康卡号/身份证分支整个不出现（不是 null）——
-    端点带 `response_model_exclude_unset=True`。
+    端点带 `response_model_exclude_unset=True`。`credential_status_name` 跟着它走（同一支才有），
+    是后端给的状态文案（P2-72）：核验页原先把失效凭据显示成「失效（void）」。
     """
 
     matched_by: str
     credential_status: str | None = None
+    credential_status_name: str | None = None
     valid: bool
     patient: CredentialPatientBriefOut | None
 
@@ -383,6 +385,7 @@ def resolve_any(identifier: str, db: Session = Depends(get_db)):
         return {
             "matched_by": "credential_no",
             "credential_status": credential.status,
+            "credential_status_name": STATUS_NAMES.get(credential.status, credential.status),
             "valid": credential.status == "active",
             "patient": _patient_brief(patient),
         }

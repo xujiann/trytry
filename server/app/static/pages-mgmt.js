@@ -1268,7 +1268,7 @@ async function renderCredentials() {
         <div class="card"><span class="k">持有人</span><b>${esc(r.patient?.name || "—")}</b></div>
         <div class="card"><span class="k">健康卡号</span><b>${esc(r.patient?.ehc_no || "—")}</b></div>
         <div class="card"><span class="k">是否可用</span><b><span class="tag ${r.valid ? "green" : "red"}">${
-          r.valid ? "有效" : esc(`失效（${r.credential_status || "未知状态"}）`)}</span></b></div></div>`;
+          r.valid ? "有效" : esc(`失效（${r.credential_status_name || "未知状态"}）`)}</span></b></div></div>`;
     } catch (err) { $("#anyid-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   $("#page-body").onclick = (e) => {

@@ -244,10 +244,11 @@ def test_多卡协同三分支精确(client, admin, issued, patients):
         params={"identifier": issued["qrcode"]["credential_no"]},
         headers=admin,
     ).json()
-    assert list(by_no.keys()) == ["matched_by", "credential_status", "valid", "patient"]
+    assert list(by_no.keys()) == ["matched_by", "credential_status", "credential_status_name", "valid", "patient"]
     assert by_no == {
         "matched_by": "credential_no",
         "credential_status": "active",
+        "credential_status_name": "有效",  # P2-72：状态文案取自后端，跟着 credential_status 走
         "valid": True,
         "patient": brief_one,
     }
@@ -258,6 +259,7 @@ def test_多卡协同三分支精确(client, admin, issued, patients):
     assert by_void == {
         "matched_by": "credential_no",
         "credential_status": "void",
+        "credential_status_name": "已作废",  # 核验页原先显示「失效（void）」
         "valid": False,
         "patient": brief_one,
     }

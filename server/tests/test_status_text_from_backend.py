@@ -29,7 +29,8 @@ from test_frontend_escape_guard import _strip_comments  # 同一份注释剥离�
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
 
 #: 零基线（`scripts/dump_gate_status.py` 把它列进闸门现状）。
-#: 2026-09-25 实测（修前 377c0fe）：页面文字里原样的状态码插值 17 处，按设计 3 → 其余 14 处已改显示后端文案。
+#: 2026-09-25 实测（修前 377c0fe）：页面文字里原样的状态码插值 18 处，按设计 3 → 其余 15 处已改显示后端文案
+#: （初版判据漏了带兜底的写法，量出 17；补上后多认出凭证核验页那一处）。
 BASELINE = 0
 
 #: 按设计原样显示的（`(文件, 插值)` → 理由）。**只减不增**；每条只抵一处——同一文件再添一句同样的插值照样红。
@@ -43,11 +44,12 @@ BY_DESIGN = {
 }
 
 _FIELD = r"([A-Za-z_$][\w$]*)\.(?:[a-z_]*_)?status"
-#: 三种把状态码原样放进页面的写法：`esc(x.status)`（插值或字符串拼接里）、裸插值 `${x.status}`、裸拼接 `+ x.status +`。
-#: `status_name` / `status_code` 不命中（`status` 后面必须紧跟右括号、右花括号或加号）。
+#: 把状态码原样放进页面的写法：`esc(x.status)`（插值或字符串拼接里）、裸插值 `${x.status}`、两者带兜底
+#: （`${x.status || "未知"}` / `esc(x.status ?? "")`——有值时显示的照样是原码）、裸拼接 `+ x.status +`。
+#: `status_name` / `status_code` 不命中（`status` 后面必须紧跟右括号、右花括号、兜底运算符或加号）。
+#: 兜底那两种是后补的（初版漏了，凭证核验页「失效（void）」就是这个形状）。
 RAW_STATUS = re.compile(
-    rf"esc\(\s*{_FIELD}\s*\)"
-    rf"|\$\{{\s*{_FIELD}\s*\}}"
+    rf"(?:esc\(|\$\{{)\s*{_FIELD}\s*(?:\)|\}}|\|\||\?\?)"
     rf"|\+\s*{_FIELD}\s*\+"
 )
 #: 同一行内双引号包着的属性值（`data-status="${esc(t.status)}"`）：取值进属性、给脚本回读，不是页面文字
@@ -103,6 +105,7 @@ def test_判据自证_三种写法都认得出_写对的放过(tmp_path):
         "a = `<td>${esc(b.status)}</td>`;\n"
         "c = `<td>${d.critical_status}</td>`;\n"
         "e = '<span class=\"tag\">' + esc(f.status) + '</span>' + g.status + '';\n"
+        "s = `<b>${esc(t.status || \"—\")}</b><b>${u.credential_status ?? \"未知\"}</b>`;\n"
         # 应放过的：后端文案、查表组件、属性值、HTTP 状态码、别的字段、注释
         "h = `<td>${esc(i.status_name)}</td><td>${statusTag(MAP, j.status)}</td>`;\n"
         "k = `<button data-status=\"${esc(l.status)}\">改</button>`;\n"
@@ -113,7 +116,8 @@ def test_判据自证_三种写法都认得出_写对的放过(tmp_path):
     )
     hits = [(snippet, lineno) for _, snippet, lineno in raw_status_displays([probe])]
     assert hits == [("esc(b.status)", 1), ("${d.critical_status}", 2),
-                    ("esc(f.status)", 3), ("+ g.status +", 3)], hits
+                    ("esc(f.status)", 3), ("+ g.status +", 3),
+                    ("esc(t.status ||", 4), ("${u.credential_status ??", 4)], hits
 
 
 def test_判据自证_同一插值每条豁免只抵一处(tmp_path, monkeypatch):
@@ -143,8 +147,9 @@ def _column_codes(model, column: str) -> set[str]:
 
 def _label_tables():
     from app.models import (Admission, EmergencyCase, ExamReport, SpecialDiseaseApp, SpdCenter,
-                            SpdFollowupRecord, TcmPreparationBatch, TrainingEnrollment, TrainingPlan)
-    from app.routers import education, emergency, exams, insurance, tcm
+                            SpdFollowupRecord, TcmPreparationBatch, TrainingEnrollment, TrainingPlan,
+                            VisitCredential)
+    from app.routers import credentials, education, emergency, exams, insurance, tcm
     from app.spd.routers import followup, workbench
 
     # (文案表, 模型, 列, 按设计不进表的码)
@@ -162,14 +167,17 @@ def _label_tables():
         "followup.FOLLOWUP_STATUS_NAMES":
             (followup.FOLLOWUP_STATUS_NAMES, SpdFollowupRecord, "status", set()),
         "followup.ADMISSION_STATUS_NAMES": (followup.ADMISSION_STATUS_NAMES, Admission, "status", set()),
+        # 既有的表，本批起凭证核验回执也用它
+        "credentials.STATUS_NAMES": (credentials.STATUS_NAMES, VisitCredential, "status", set()),
     }
 
 
-#: 本批新建的文案表（`_label_tables` 的键）；参数化用静态名单，收集阶段不导入应用
+#: 本批新建或新用上的文案表（`_label_tables` 的键）；参数化用静态名单，收集阶段不导入应用
 LABEL_TABLE_NAMES = [
     "emergency.CASE_STATUS_NAMES", "tcm.BATCH_STATUS_NAMES", "education.PLAN_STATUS_NAMES",
     "education.ENROLLMENT_STATUS_NAMES", "insurance.SPECIAL_DISEASE_STATUS_NAMES", "exams.CRITICAL_STATUS_NAMES",
     "workbench.CENTER_STATUS_NAMES", "followup.FOLLOWUP_STATUS_NAMES", "followup.ADMISSION_STATUS_NAMES",
+    "credentials.STATUS_NAMES",
 ]
 
 
