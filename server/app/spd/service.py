@@ -351,10 +351,14 @@ def start_path(
 ) -> SpdPathInstance:
     """按模板为患者启动路径实例，并生成首节点任务。
 
-    只允许引用**已发布**的模板：草稿模板还在改，引用它等于让患者跟着草稿走。
+    只允许引用**已发布**的模板：草稿模板还在改，引用它等于让患者跟着草稿走。模板的病种须是档案的病种：原先不看，
+    高血压档案能跑上糖尿病的路径——任务挂在高血压档案上、内容是糖尿病的节点，阶段取自糖尿病的阶段定义（P2-95）。
     """
     if template.status != "published":
         raise ValueError("只能引用已发布的路径模板")
+    program = db.get(SpdProgram, template.program_id)
+    if program is None or program.code != enrollment.program_code:
+        raise ValueError("路径模板的病种与纳管档案不一致")
     nodes = (
         db.query(SpdPathNode)
         .filter(SpdPathNode.template_id == template.id)
