@@ -301,6 +301,30 @@ TASK_IN_HAND_STATUSES = ("pending", "claimed", "doing", "rejected")
 #: 批量一勾就被接收回「已接收」、拉出审核队列（P2-83）
 TASK_CLAIMABLE_STATUSES = ("pending", "overdue")
 
+
+def move_task(db: Session, task_id: int, to_status: Any, *, expect: tuple[str, ...] | str = TASK_OPEN_STATUSES,
+              **values: Any) -> bool:
+    """任务状态的条件翻转：`UPDATE … SET status = :to WHERE id = :id AND status IN (:expect)`，返回是否翻到（P2-114）。
+
+    原先各处「内存里判未结束 → `task.status = …` → commit」，flush 出来的 UPDATE 只有 `WHERE id = ?`：锁外读到「未结束」
+    的一路（超期扫描、结案、提交、转派、退回……）会把别人刚办结的任务改回未结束或改成取消。复活的任务再办一次，随访计分
+    再记一笔——积分流水没有唯一键，「只记一次」全靠办结那一下的条件翻转（`_finish_task`）兜着；被改成取消的，已办完的工作
+    从完成数里消失。要一并写的字段放进 `values`，与状态同一条 SQL；`to_status` 也可以是 SQL 表达式（按行上的现值改）。
+    `expect` 只收上面几个共享集合或单个状态（审核只从「待审核」翻），别在调用处手写清单（`test_spd_task_status_sets` 盯着）。
+    调用方别再往 `task.status` 上赋值：这里不同步会话里的对象，提交后按库里的值重读。"""
+    return _move_row(db, SpdTask, task_id, expect, status=to_status, **values)
+
+
+def _move_row(db: Session, model: Any, row_id: int, expect: tuple[str, ...] | str, **values: Any) -> bool:
+    """`UPDATE model SET … WHERE id = :id AND status IN (:expect)`（单个状态即 `=`），返回是否改到（`move_task` 的通用版）。"""
+    moved = db.execute(
+        update(model)
+        .where(model.id == row_id, model.status == expect if isinstance(expect, str) else model.status.in_(expect))
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    return bool(cast(CursorResult, moved).rowcount)
+
 #: 随访记录（`spd_followup_records.status`）与复诊（`spd_revisits.status`）的「未完成」：还没做、含已超期。超期扫描把过了
 #: 日期的 planned 置为 overdue，只认 planned 的查询一扫就漏掉它们——工作台的超期随访恒为 0、到期数只剩今天的、结案不收
 #: 逾期复诊（P1-128）
@@ -614,30 +638,33 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
     只收本机构（或没挂机构）的——迁入确认时目标机构自己的随访不能被原档案的结案带走；已完成、失访的是留痕，不动。
     """
     stats = {"tasks": 0, "instances": 0, "interventions": 0, "revisits": 0, "followups": 0}
+    # 每一条都是条件翻转、按编号取（P2-114）：原先查出一批、逐条改内存、由调用方提交时才发 UPDATE（只有 `WHERE id = ?`），
+    # 这期间别人办结的任务、走完的路径、居民标了完成的干预、做完的复诊与随访，都被改成取消 / 移除——办完的工作从完成数里
+    # 消失（任务还可能分记了、单子却是取消的）。先实例、后任务：与办结（锁实例、再翻任务）同一个加锁顺序，PG 上不互等
+    instances = (
+        db.query(SpdPathInstance)
+        .filter(SpdPathInstance.enrollment_id == enrollment.id,
+                SpdPathInstance.status.in_(PATH_OPEN_STATUSES))
+        .order_by(SpdPathInstance.id)
+        .all()
+    )
+    for instance in instances:
+        if _move_row(db, SpdPathInstance, instance.id, PATH_OPEN_STATUSES,
+                     status="cancelled", finished_at=now_naive()):
+            stats["instances"] += 1
+
     tasks = (
         db.query(SpdTask)
         .filter(
             SpdTask.enrollment_id == enrollment.id,
             SpdTask.status.in_(TASK_OPEN_STATUSES),
         )
+        .order_by(SpdTask.id)
         .all()
     )
     for task in tasks:
-        task.status = "cancelled"
-        task.review_note = reason
-        task.finished_at = now_naive()
-        stats["tasks"] += 1
-
-    instances = (
-        db.query(SpdPathInstance)
-        .filter(SpdPathInstance.enrollment_id == enrollment.id,
-                SpdPathInstance.status.in_(PATH_OPEN_STATUSES))
-        .all()
-    )
-    for instance in instances:
-        instance.status = "cancelled"
-        instance.finished_at = now_naive()
-        stats["instances"] += 1
+        if move_task(db, task.id, "cancelled", review_note=reason, finished_at=now_naive()):
+            stats["tasks"] += 1
 
     interventions = (
         db.query(SpdIntervention)
@@ -645,11 +672,12 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
             SpdIntervention.enrollment_id == enrollment.id,
             SpdIntervention.status.in_(["planned", "doing"]),
         )
+        .order_by(SpdIntervention.id)
         .all()
     )
     for item in interventions:
-        item.status = "removed"
-        stats["interventions"] += 1
+        if _move_row(db, SpdIntervention, item.id, ("planned", "doing"), status="removed"):
+            stats["interventions"] += 1
 
     revisits = (
         db.query(SpdRevisit)
@@ -658,12 +686,13 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
             SpdRevisit.program_code == enrollment.program_code,
             SpdRevisit.status.in_(REVISIT_OPEN_STATUSES),
         )
+        .order_by(SpdRevisit.id)
         .all()
     )
     for revisit in revisits:
-        revisit.status = "removed"
-        revisit.log = (revisit.log or []) + [{"at": clock.today().isoformat(), "note": reason}]
-        stats["revisits"] += 1
+        if _move_row(db, SpdRevisit, revisit.id, REVISIT_OPEN_STATUSES, status="removed",
+                     log=(revisit.log or []) + [{"at": clock.today().isoformat(), "note": reason}]):
+            stats["revisits"] += 1
 
     followups = (
         db.query(SpdFollowupRecord)
@@ -673,11 +702,13 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
             or_(SpdFollowupRecord.org_id == enrollment.org_id, SpdFollowupRecord.org_id.is_(None)),
             SpdFollowupRecord.status.in_(FOLLOWUP_OPEN_STATUSES),
         )
+        .order_by(SpdFollowupRecord.id)
         .all()
     )
     for record in followups:
-        record.status = "removed"   # 与手工「移除」同一个状态，错移了可以手工恢复
-        stats["followups"] += 1
+        # 与手工「移除」同一个状态，错移了可以手工恢复
+        if _move_row(db, SpdFollowupRecord, record.id, FOLLOWUP_OPEN_STATUSES, status="removed"):
+            stats["followups"] += 1
     return stats
 
 
@@ -704,11 +735,16 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
             SpdTask.due_date != "",
             SpdTask.due_date < cutoff,
         )
+        .order_by(SpdTask.id)   # 逐条条件翻转，按编号取：与别的整批写入同一个加锁顺序
         .all()
     )
-    escalated = 0
+    escalated = marked = 0
     for task in pending:
-        task.status = "overdue"
+        # 条件翻转（P2-114）：一趟扫描先载入整批、逐条改完才提交，窗口是整趟扫描。原先这期间办结的任务被改回「超期」——
+        # 重新进待办，再办一次随访计分再记一笔
+        if not move_task(db, task.id, "overdue", expect=TASK_IN_HAND_STATUSES):
+            continue
+        marked += 1
         node = None
         if task.instance_id and task.node_key:
             instance = db.get(SpdPathInstance, task.instance_id)
@@ -731,29 +767,35 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
         db.query(SpdRevisit)
         .filter(SpdRevisit.status == "planned", SpdRevisit.plan_date != "",
                 SpdRevisit.plan_date < cutoff)
+        .order_by(SpdRevisit.id)
         .all()
     )
+    revisits_marked = 0
     for revisit in overdue_revisits:
-        revisit.status = "overdue"
-        revisit.log = (revisit.log or []) + [
-            {"at": cutoff, "note": "超期扫描：计划日期已过，置为逾期"}
-        ]
+        # 条件翻转（P2-114 同一族）：扫描期间做完的复诊别被改回「逾期」
+        if _move_row(db, SpdRevisit, revisit.id, "planned", status="overdue",
+                     log=(revisit.log or []) + [{"at": cutoff, "note": "超期扫描：计划日期已过，置为逾期"}]):
+            revisits_marked += 1
 
     # 随访：只动 planned；unreachable / removed / done 一律不碰
     overdue_followups = (
         db.query(SpdFollowupRecord)
         .filter(SpdFollowupRecord.status == "planned", SpdFollowupRecord.planned_at != "",
                 SpdFollowupRecord.planned_at < cutoff)
+        .order_by(SpdFollowupRecord.id)
         .all()
     )
+    followups_marked = 0
     for record in overdue_followups:
-        record.status = "overdue"
+        # 条件翻转（P2-114 同一族）：扫描期间完成的随访别被改回「超期」——超期数与完成率都按 status 取数
+        if _move_row(db, SpdFollowupRecord, record.id, "planned", status="overdue"):
+            followups_marked += 1
 
     return {
-        "overdue": len(pending),
+        "overdue": marked,
         "escalated": escalated,
-        "revisits": len(overdue_revisits),
-        "followups": len(overdue_followups),
+        "revisits": revisits_marked,
+        "followups": followups_marked,
     }
 
 

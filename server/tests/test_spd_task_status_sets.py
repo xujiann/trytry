@@ -8,12 +8,16 @@
   全部状态、互不相交——加了新状态没归类即红；
 - 查询只认这几个名字：`app/spd` 里 `SpdTask.status.in_(…)` / `.notin_(…)` 的参数得是 `service.TASK_*`
   （或模块里直接取自它们的别名），手写的清单与自造的常量都点名；确属单个动作前置条件的写进 `ACCEPTED`、写明理由。
+  条件翻转的帮手（`move_task` / `_move_or_conflict`，P2-114）同一条规矩：`expect=` 只收共享集合或单个状态字符串——
+  清单藏进帮手的参数里，上面那条就看不见它了。
 """
 import ast
 import pathlib
 
 SPD = pathlib.Path(__file__).resolve().parents[1] / "app" / "spd"
 SHARED = {"TASK_OPEN_STATUSES", "TASK_CLOSED_STATUSES", "TASK_IN_HAND_STATUSES", "TASK_CLAIMABLE_STATUSES"}
+#: 任务状态的条件翻转帮手（P2-114）：`expect=` 参数与 `.in_()` 同一条规矩
+MOVERS = {"move_task", "_move_or_conflict"}
 
 #: 手写清单的正当用法：`文件:取值` → 理由（只减不增；接收的前置状态原在这里，P2-83 起单条与批量共用
 #: `TASK_CLAIMABLE_STATUSES`，已清空）
@@ -31,7 +35,20 @@ def handwritten_status_sets(sources: dict[str, str] | None = None) -> list[str]:
         aliases = {t.id for node in tree.body if isinstance(node, ast.Assign)
                    and isinstance(node.value, ast.Name) and node.value.id in SHARED
                    for t in node.targets if isinstance(t, ast.Name)}
+        # 帮手之间的转发（`_move_or_conflict` 把自己的 expect 交给 `move_task`）不查：它们的调用点各自受查
+        spans = [(f.lineno, f.end_lineno or f.lineno) for f in ast.walk(tree)
+                 if isinstance(f, ast.FunctionDef) and f.name in MOVERS]
         for node in ast.walk(tree):
+            callee = node.func.id if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) else ""
+            if callee in MOVERS:
+                if any(start <= node.lineno <= end for start, end in spans):
+                    continue
+                for kw in node.keywords:
+                    ok = (isinstance(kw.value, ast.Name) and kw.value.id in SHARED | aliases) or (
+                        isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str))
+                    if kw.arg == "expect" and not ok:
+                        bad.append((rel, node.lineno, f"{callee}(expect={ast.unparse(kw.value)})"))
+                continue
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr in ("in_", "notin_") and ast.unparse(node.func.value) == "SpdTask.status"
                     and node.args):
@@ -95,3 +112,16 @@ def test_判据自证_手写的与自造常量点名_共享集合与别名放过
     )
     assert [f for f in handwritten_status_sets({"probe.py": snippet}) if f.startswith("probe.py")] == [
         "probe.py:4: ['pending', 'claimed', 'doing', 'submitted', 'overdue']", "probe.py:5: MINE"]
+
+
+def test_判据自证_条件翻转帮手的期望态_共享集合与单个状态放过_手写清单点名():
+    snippet = (
+        "from ..service import TASK_IN_HAND_STATUSES\n"
+        "move_task(db, 1, 'overdue', expect=TASK_IN_HAND_STATUSES)\n"
+        "_move_or_conflict(db, t, 'rejected', expect='submitted')\n"
+        "move_task(db, 1, 'cancelled')\n"
+        "move_task(db, 1, 'overdue', expect=('pending', 'claimed', 'doing'))\n"
+        "_move_or_conflict(db, t, 'doing', expect=MINE)\n"
+    )
+    assert [f for f in handwritten_status_sets({"probe.py": snippet}) if f.startswith("probe.py")] == [
+        "probe.py:5: move_task(expect=('pending', 'claimed', 'doing'))", "probe.py:6: _move_or_conflict(expect=MINE)"]

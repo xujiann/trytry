@@ -47,8 +47,8 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
-                       close_followup_record, judge_measurement, measure_program_for, measure_value_problem, scale_program_mismatch,
-                       scale_unusable, unknown_program)
+                       close_followup_record, judge_measurement, measure_program_for, measure_value_problem, move_task,
+                       scale_program_mismatch, scale_unusable, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -859,7 +859,10 @@ def submit_task(
     if task.require_evidence and not (task.evidence or []):
         raise HTTPException(status_code=422, detail="该任务需要上传照片或报告等凭证")
     task.result = body.result
-    task.status = "submitted"
+    # 条件翻转（P2-114）：锁外读到「未结束」之后医护刚办结的，别改回「待审核」——复活的任务再审一次，随访计分再记一笔
+    if not move_task(db, task.id, "submitted"):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该任务已结束")
     db.commit()
     return {"id": task.id, "status": task.status}
 

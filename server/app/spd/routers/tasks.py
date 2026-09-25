@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -42,6 +42,7 @@ from ..service import (
     advance_path,
     award_points,
     enrollment_for,
+    move_task,
     node_enter_allowed,
     spawn_task,
     sweep_overdue,
@@ -448,13 +449,15 @@ def adjust_path_instance(
         setattr(instance, key, value)
     if data.get("status") == "cancelled":
         instance.finished_at = now_naive()
+        db.flush()   # 先落实例、再逐条翻任务：与办结（锁实例、再翻任务）同一个加锁顺序，PG 上不互等
         for task in (
             db.query(SpdTask)
             .filter(SpdTask.instance_id == instance_id, SpdTask.status.in_(OPEN_STATUSES))
+            .order_by(SpdTask.id)
             .all()
         ):
-            task.status = "cancelled"
-            task.review_note = "路径取消"
+            # 条件翻转（P2-114）：读到「未结束」之后别人刚办结的，别改成取消
+            move_task(db, task.id, "cancelled", review_note="路径取消")
     db.commit()
     return _instance_out(db, instance)
 
@@ -873,10 +876,13 @@ def assign_task(
     if task.assignee_id is not None and task.assignee_id != body.assignee_id:
         task.transferred_from = task.assignee_id
     task.assignee_id = body.assignee_id
-    if task.status == "pending":
-        task.status = "claimed"
     if body.note:
         task.review_note = body.note
+    # 状态闸门（P2-114）：判「未结束」与改状态同一条 SQL，待接收的转成已接收、其余照旧（按行上的现值判）。原先内存里判过
+    # 就无条件写回——锁外读到「待接收」的一路会把别人刚办结的任务改回「已接收」，再办一次随访计分再记一笔
+    if not move_task(db, task.id, case((SpdTask.status == "pending", "claimed"), else_=SpdTask.status)):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已结束的任务不可再分配")
     db.commit()
     return _task_out(task)
 
@@ -957,17 +963,25 @@ def submit_task(
             raise HTTPException(status_code=422, detail="；".join(problems))
         task.evidence = body.evidence
     if body.draft:
-        task.status = "doing"
+        _move_or_conflict(db, task, "doing")
         db.commit()
         return _task_out(task)
     if task.require_evidence and not (task.evidence or []):
         raise HTTPException(status_code=422, detail="该任务要求上传佐证材料后才能提交")
-    task.status = "submitted"
     task.assignee_id = task.assignee_id or user.id
     if body.note:
         task.review_note = body.note
+    _move_or_conflict(db, task, "submitted")
     db.commit()
     return _task_out(task)
+
+
+def _move_or_conflict(db: Session, task: SpdTask, to_status: str, *, expect: tuple[str, ...] | str = TASK_OPEN_STATUSES,
+                      detail: str = "该任务已结束", **values: Any) -> None:
+    """条件翻转，没翻到（并发里别人先办结 / 取消 / 审过了）即回滚、409（P2-114，见 `service.move_task`）。"""
+    if not move_task(db, task.id, to_status, expect=expect, **values):
+        db.rollback()
+        raise HTTPException(status_code=409, detail=detail)
 
 
 class ReviewTaskIn(BaseModel):
@@ -988,11 +1002,13 @@ def review_task(
         raise HTTPException(status_code=409, detail="只有待审核的任务可以审核")
     task.reviewer_id = user.id
     task.review_note = body.note
+    # 审核通过与退回都只从「待审核」翻（P2-114）：两个人同时审同一条，原先一路通过（办结、计分）、一路退回——退回无条件写回，
+    # 已办结的任务成了「已退回」，重新提交再审一次，随访计分再记一笔
     if not body.approved:
-        task.status = "rejected"
+        _move_or_conflict(db, task, "rejected", expect="submitted", detail="只有待审核的任务可以审核")
         db.commit()
         return _task_out(task)
-    return _finish_task(db, task, user)
+    return _finish_task(db, task, user, expect="submitted")
 
 
 @router.post("/tasks/{task_id}/complete", response_model=TaskFinishOut,
@@ -1018,7 +1034,7 @@ def complete_task(
     return _finish_task(db, task, user)
 
 
-def _finish_task(db: Session, task: SpdTask, user: User) -> dict:
+def _finish_task(db: Session, task: SpdTask, user: User, expect: str | None = None) -> dict:
     """任务办结的收尾动作：置完成、推进路径、村医计分、更新随访日期。
 
     终态翻转是一条**条件 UPDATE**（同 claim 的取舍）：并发的两次办结/审核
@@ -1034,7 +1050,8 @@ def _finish_task(db: Session, task: SpdTask, user: User) -> dict:
           else contextlib.nullcontext()):
         won = cast(CursorResult, db.execute(
             update(SpdTask)
-            .where(SpdTask.id == task.id, SpdTask.status.notin_(TASK_CLOSED_STATUSES))
+            .where(SpdTask.id == task.id,
+                   SpdTask.status == expect if expect else SpdTask.status.notin_(TASK_CLOSED_STATUSES))
             .values(
                 status="done",
                 finished_at=now_naive(),
@@ -1043,7 +1060,7 @@ def _finish_task(db: Session, task: SpdTask, user: User) -> dict:
         )).rowcount
         if not won:
             db.rollback()
-            raise HTTPException(status_code=409, detail="该任务已结束")
+            raise HTTPException(status_code=409, detail="该任务已结束" if expect is None else "只有待审核的任务可以审核")
         # 会话是 autoflush=False 的：先 flush 把调用方挂起的 result/evidence/审核
         # 字段落库，再 refresh 取回 done/finished_at/assignee 的落库值——下面数
         # "还有几条没办完"与出参序列化才不会拿着旧内存值。
@@ -1117,7 +1134,8 @@ def batch_tasks(
     整批要么全成要么全败在这里是错的口径：一次勾 200 条，有 3 条已经被别人接了，
     不该让另外 197 条也办不成。
     """
-    tasks = db.query(SpdTask).filter(SpdTask.id.in_(body.task_ids)).all()
+    # 按编号取：下面逐条条件翻转（claim / cancel），与超期扫描、结案收尾同一个加锁顺序（P2-114）
+    tasks = db.query(SpdTask).filter(SpdTask.id.in_(body.task_ids)).order_by(SpdTask.id).all()
     # **越权不进 skipped，整批 403。** 上面那段"逐条判定、不满足条件的跳过"说的是
     # **业务**条件（任务已结束、已被他人接收）——那些调用方看得到、也确实该继续办其余的。
     # 机构归属不是业务条件：静默跳过会让调用方拿着 200 以为整批都办了，
@@ -1159,8 +1177,10 @@ def batch_tasks(
         elif body.action == "escalate":
             task.escalated, task.priority = True, max(task.priority, 2)
         elif body.action == "cancel":
-            task.status, task.review_note = "cancelled", body.note or "批量取消"
-            task.finished_at = now_naive()
+            # 条件翻转（P2-114）：载入整批之后别人刚办结的，别改成取消
+            if not move_task(db, task.id, "cancelled", review_note=body.note or "批量取消", finished_at=now_naive()):
+                skipped.append({"id": task.id, "reason": "任务已结束"})
+                continue
         elif body.action == "assign":
             if body.assignee_id is None:
                 raise HTTPException(status_code=422, detail="批量分配须指定责任人")
