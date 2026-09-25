@@ -250,6 +250,7 @@ def enrollment_for(db: Session, patient_id: int, program_code: str) -> tuple[str
     active = (
         db.query(SpdEnrollment)
         .filter(SpdEnrollment.patient_id == patient_id, SpdEnrollment.status == "active")
+        .order_by(SpdEnrollment.id)   # 截断取数一律带排序（P2-69）：只数有几份，但取到的那一份要确定
         .limit(2)
         .all()
     )
