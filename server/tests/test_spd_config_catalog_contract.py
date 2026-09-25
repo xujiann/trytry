@@ -163,7 +163,8 @@ def test_历史快照按原样透出不被现在的形状改写(client, auth, se
 def test_规则元数据的四组选项(client, auth):
     body = client.get(f"{B}/meta", headers=auth).json()
     assert set(body) == {"fields", "operators", "risk_levels", "task_types",
-                         "member_roles", "indicator_sources"}   # 取数口径：P2-93 建指标的下拉与公式提示
+                         "member_roles", "indicator_sources",   # 取数口径：P2-93 建指标的下拉与公式提示
+                         "report_sections"}                     # 报告段落：P2-93 建报告模板的段落勾选
     assert all(set(f) == {"key", "name"} for f in body["fields"])
     assert all(set(f) == {"key", "name"} for f in body["operators"])
     # 风险等级多一个 color（前端拿它上色），故是 RuleOptionOut 的子类
@@ -172,6 +173,7 @@ def test_规则元数据的四组选项(client, auth):
     assert body["member_roles"]["village_doctor"] == "村医"
     assert all(set(x) == {"key", "name", "metrics"} for x in body["indicator_sources"])
     assert all(set(m) == {"key", "name"} for x in body["indicator_sources"] for m in x["metrics"])
+    assert all(set(x) == {"key", "name"} for x in body["report_sections"])
 
 
 def test_专病中心的键集合与id数组(client, auth, seeded):

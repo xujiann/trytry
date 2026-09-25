@@ -1626,6 +1626,29 @@ def test_路径模板与推送任务能在界面上删除_用过的删不掉改�
     assert all(t["id"] != task["id"] for t in admin_read("/api/spd/report-tasks"))
 
 
+def test_报告模板能在界面上新建_段落取自注册表(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：报告模板原先只能改名称 / 周期 / 层级 / 启停，新的报告版式只能靠接口调用方。段落勾选项取自段落
+    注册表（`/api/spd/meta` 的 `report_sections`），按注册顺序排、标题取段落名；考核指标段落按编码每个一段。"""
+    _login(page, base_url)
+    _open_page(page, "spdreport", "智能辅助报告端")
+    form = page.locator("#spd-rpttpl-form")
+    form.locator('[name="code"]').fill("E2E_RPT_TPL")
+    form.locator('[name="name"]').fill("E2E 基层月报")
+    form.locator('[name="period"]').select_option("monthly")
+    form.locator('[name="scope_level"]').select_option("grassroots")
+    form.locator('.rpt-sec[value="referral"]').check()   # 先勾后面的：段落顺序按注册顺序，不按勾选先后
+    form.locator('.rpt-sec[value="summary"]').check()
+    form.locator('[name="indicator_codes"]').fill("followup_rate， enroll_rate")   # 全角逗号、多余空格照认
+    _submit(page, "#spd-rpttpl-form button")
+    created = next(t for t in admin_read("/api/spd/report-templates") if t["code"] == "E2E_RPT_TPL")
+    assert (created["period"], created["scope_level"]) == ("monthly", "grassroots"), created
+    assert created["sections"] == [
+        {"key": "summary", "title": "总体概览"}, {"key": "referral", "title": "转诊闭环"},
+        {"key": "indicator", "indicator_code": "followup_rate", "title": "考核指标 followup_rate"},
+        {"key": "indicator", "indicator_code": "enroll_rate", "title": "考核指标 enroll_rate"}], created
+    expect(page.locator("tr", has_text="E2E_RPT_TPL")).to_contain_text("总体概览、转诊闭环")
+
+
 def test_慢病病种目录能在界面上新增(page, base_url, admin_read):
     """P2-93（动词级孤儿）：病种目录是分级规则与随访周期的唯一数据源，页面原先只有「编辑」——新增一个慢病病种只能靠接口
     调用方。"""

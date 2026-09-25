@@ -3009,14 +3009,31 @@ async function renderSpdFollowup() {
 async function renderSpdReport() {
   $("#page-desc").textContent =
     "通用AI辅助：分层报告模板、推送任务调度、多源聚合编排为文本/表格/图表";
-  const [templates, tasks, instances] = await Promise.all([
+  const [templates, tasks, instances, meta] = await Promise.all([
     api("/api/spd/report-templates"), api("/api/spd/report-tasks"),
-    api("/api/spd/report-instances?limit=20"),
+    api("/api/spd/report-instances?limit=20"), spdMeta(),
   ]);
   const scopeNames = { center: "专病中心", dept: "科室团队", grassroots: "基层机构", personal: "个人" };
+  // 段落可选项取自段落注册表（/api/spd/meta 的 report_sections），前端不另抄一份；「考核指标」段落要填指标编码，单列一栏
+  const sectionOpts = (meta.report_sections || []).filter((x) => x.key !== "indicator");
+  const withIndicator = (meta.report_sections || []).some((x) => x.key === "indicator");
   $("#page-body").innerHTML = `
     ${panel("报告模板", `
       <p class="desc">段落取数与工作台同源——报告是同一批数字的另一种排版，不是另存一份统计</p>
+      <form id="spd-rpttpl-form" style="margin-bottom:8px">
+        <div class="inline">
+          <input name="code" placeholder="模板编码" required style="width:120px">
+          <input name="name" placeholder="模板名称" required>
+          <select name="period">${Object.entries(SPD_REPORT_PERIODS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+          <select name="scope_level">${Object.entries(SPD_REPORT_SCOPES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        </div>
+        <div class="inline" style="font-size:13px">段落：${sectionOpts.map((x) =>
+          `<label><input type="checkbox" class="rpt-sec" value="${esc(x.key)}" data-name="${esc(x.name)}"> ${esc(x.name)}</label>`).join(" ")}</div>
+        <div class="inline">
+          ${withIndicator ? `<input name="indicator_codes" placeholder="考核指标段落：指标编码，逗号分隔，每个一段（可空）" style="min-width:330px">` : ""}
+          <button>新建模板</button>
+        </div>
+      </form>
       ${table(["ID", "编码", "名称", "周期", "层级", "段落", "状态", "操作"], templates, (t) =>
         `<tr><td>${t.id}</td><td>${esc(t.code)}</td><td>${esc(t.name)}</td>
          <td>${esc({ daily: "日报", weekly: "周报", monthly: "月报", custom: "自定义" }[t.period] || t.period)}</td>
@@ -3060,6 +3077,18 @@ async function renderSpdReport() {
          <td>${esc(r.created_at.replace("T", " ").slice(0, 16))}</td>
          <td><button class="btn secondary" data-rpt-view="${r.id}">查看</button></td></tr>`)}
       <div id="spd-rpt-view"></div>`)}`;
+  // 模板原先只能改名称 / 周期 / 层级 / 启停、不能建（P2-93 动词级孤儿）：新的报告版式只能靠接口调用方
+  $("#spd-rpttpl-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target);
+    const codes = (body.indicator_codes || "").split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+    delete body.indicator_codes;
+    // 段落顺序即勾选框的顺序（注册顺序）；一个都没选由后端 422「至少要有一个内容段落」
+    body.sections = [...e.target.querySelectorAll(".rpt-sec:checked")]
+      .map((c) => ({ key: c.value, title: c.dataset.name }))
+      .concat(codes.map((code) => ({ key: "indicator", indicator_code: code, title: `考核指标 ${code}` })));
+    return postAction("/api/spd/report-templates", body, "#spd-rpt-msg");
+  };
   $("#spd-rpt-gen").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/report-instances", formJson(e.target, ["org_id"]), "#spd-rpt-msg");

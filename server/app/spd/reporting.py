@@ -45,14 +45,22 @@ SectionRenderer = Callable[[Session, dict, "int | None", str], dict]
 REPORT_FREQUENCIES = ("daily", "weekly", "monthly", "custom")
 
 _SECTIONS: dict[str, SectionRenderer] = {}
+_SECTION_NAMES: dict[str, str] = {}
 
 
-def register_section(key: str, renderer: SectionRenderer) -> None:
+def register_section(key: str, renderer: SectionRenderer, name: str = "") -> None:
+    """`name` 是管理端建模板时这个段落的显示名（也作段落的默认标题）；不给就用 key。"""
     _SECTIONS[key] = renderer
+    _SECTION_NAMES[key] = name or key
 
 
 def registered_sections() -> list[str]:
     return sorted(_SECTIONS)
+
+
+def section_options() -> list[dict]:
+    """建报告模板可选的段落（码 + 名称，按注册顺序）：`GET /api/spd/meta` 的 `report_sections`，前端不另抄段落表。"""
+    return [{"key": key, "name": _SECTION_NAMES[key]} for key in _SECTIONS]
 
 
 def compose_section(db: Session, section: dict, org_id: int | None, period: str) -> dict:
@@ -315,10 +323,12 @@ def _indicator(db, section, org_id, period):
     }
 
 
-for _key, _fn in (
-    ("summary", _summary), ("todo", _todo), ("alert", _alert), ("workload", _workload),
-    ("quality", _followup_trend), ("trend", _followup_trend), ("score", _score),
-    ("screening", _screening), ("referral", _referral), ("points", _points),
-    ("indicator", _indicator),
+for _key, _fn, _name in (
+    ("summary", _summary, "总体概览"), ("todo", _todo, "待办任务"), ("alert", _alert, "超期预警"),
+    ("workload", _workload, "服务工作量"),
+    # 这两个是同一张随访完成趋势图：种子的周报叫「服务质量」、月报叫「运行趋势」，两个码都得留着
+    ("quality", _followup_trend, "服务质量"), ("trend", _followup_trend, "运行趋势"),
+    ("score", _score, "考核排名"), ("screening", _screening, "筛查情况"), ("referral", _referral, "转诊闭环"),
+    ("points", _points, "村医积分"), ("indicator", _indicator, "考核指标"),
 ):
-    register_section(_key, _fn)
+    register_section(_key, _fn, _name)

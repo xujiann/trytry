@@ -45,7 +45,6 @@ EXEMPT: dict[str, str] = {
 KNOWN: set[str] = {
     # 配置项只能改、不能建（需求对照表 7.5「全部可配置」）
     "POST /api/dataquality/rules",              # 数据质控规则
-    "POST /api/spd/report-templates",           # 报告模板
     "POST /api/spd/scales",                     # 评估量表（页面只有发布 / 停用）
     "PATCH /api/spd/scales/{scale_id}",
     "PATCH /api/rbac/roles/{role_id}",          # 角色改名 / 说明

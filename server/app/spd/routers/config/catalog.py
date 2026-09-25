@@ -23,6 +23,7 @@ from ...models import (
     SpdProgramVersion,
     SpdTarget,
 )
+from ...reporting import section_options
 from ...rules import FIELD_SOURCES, OPERATORS
 from ...service import INDICATOR_SOURCES, unknown_code
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
@@ -66,6 +67,8 @@ class RuleMetaOut(BaseModel):
     member_roles: dict[str, str]
     # 考核指标的取数口径与变量（P2-93：管理端建指标的下拉与公式提示，前端不另抄一份口径表）
     indicator_sources: list[IndicatorSourceOut]
+    # 报告模板可选的段落（P2-93：管理端建模板的段落勾选，取自段落注册表）
+    report_sections: list[RuleOptionOut]
 
 
 class TargetOut(BaseModel):
@@ -132,7 +135,8 @@ class ProgramVersionOut(BaseModel):
 
 @router.get("/meta", response_model=RuleMetaOut)
 def rule_meta():
-    """规则可用字段与比较符，供管理端渲染规则编辑器；考核指标的取数口径与变量，供建指标的下拉与公式提示。
+    """规则可用字段与比较符，供管理端渲染规则编辑器；考核指标的取数口径与变量，供建指标的下拉与公式提示；
+    报告模板可选的段落，供建模板的段落勾选。
 
     做成接口而不是前端写死：字段表将来会随采集项扩充，
     两处各维护一份的结果一定是前端能选、后端不认。
@@ -160,6 +164,7 @@ def rule_meta():
              "metrics": [{"key": metric, "name": label} for metric, label in metrics.items()]}
             for key, (name, metrics) in INDICATOR_SOURCES.items()
         ],
+        "report_sections": section_options(),
     }
 
 
