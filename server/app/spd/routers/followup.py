@@ -714,6 +714,9 @@ def auto_match_plans(
 
     匹配靠诊断关键词命中：方案没配任何关键词就是**不匹配任何人**（与纳入规则
     同一口径），否则一个空方案会给全院每个出院患者都排上随访。
+
+    回溯窗口 `days` 四个场景同一口径：出院场景按出院时间、其余按就诊时间取近 N 天。出院场景原先不看它，
+    取的是最近建档的已出院记录（两年前出院的也在内），随访日期加在出院日上，排出来就是一批早已超期的随访（P1-134）。
     """
     org_id = body.org_id if body.org_id is not None else user.org_id
     # P0-35：给了 org_id 就照单全收——乙院能以甲院名义按甲院的出院 / 门诊患者批量生成随访。
@@ -731,7 +734,8 @@ def auto_match_plans(
     if body.scene == "inpatient":
         rows = (
             db.query(Admission)
-            .filter(Admission.org_id == org_id, Admission.status == "discharged")
+            .filter(Admission.org_id == org_id, Admission.status == "discharged",
+                    func.coalesce(Admission.discharged_at, Admission.admitted_at) >= since)
             .order_by(Admission.id.desc())
             .limit(body.limit)
             .all()
@@ -759,6 +763,9 @@ def auto_match_plans(
         ]
 
     matched, created = 0, 0
+    # 本次扫描已经看过的（患者, 方案）：会话不自动 flush，同一位患者第二次命中时，下面的查库看不见刚 add 的
+    # 那份计划，会再排一整份（近几天两次就诊、一周内两次出院，P1-134）。候选按新到旧排，留下的是最近那一次。
+    seen: set[tuple[int, int]] = set()
     for patient_id, base_date, text in candidates:
         rule = next(
             (r for r in rules if any(k and k in text for k in r.diagnosis_keywords or [])), None
@@ -766,6 +773,9 @@ def auto_match_plans(
         if rule is None:
             continue
         matched += 1
+        if (patient_id, rule.id) in seen:
+            continue
+        seen.add((patient_id, rule.id))
         exists = (
             db.query(SpdFollowupRecord.id)
             .filter(
