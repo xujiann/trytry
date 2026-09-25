@@ -1939,6 +1939,14 @@ async function renderChronic() {
         <button>提交随访</button>
       </form><p class="msg" id="chronic-msg"></p>
       <h3 style="margin-top:14px">病种目录（分级规则与随访周期的唯一数据源）</h3>
+      ${canType ? `<form class="inline" id="chronic-type-form" style="margin-bottom:8px">
+        <input name="code" placeholder="病种编码（英文）" required style="width:130px">
+        <input name="name" placeholder="病种名称" required>
+        <input name="followup_interval_days" type="number" value="90" placeholder="随访周期(天)" style="width:110px">
+        <input name="guidance" placeholder="膳食运动指导要点" style="min-width:200px">
+        <input name="level_rules" placeholder="分级规则 JSON（可留空，建好后可编辑）" style="min-width:220px">
+        <button>新增病种</button>
+      </form>` : ""}
       ${typeRows}
       <p class="desc">停用一个病种后<b>不能再按它建档</b>（后端 422），
         但已建的档案不受影响、仍按原规则随访——所以停用是"不再新增"，不是"作废存量"。
@@ -1960,6 +1968,17 @@ async function renderChronic() {
         managed_by_org_id: Number(f.get("managed_by_org_id")) }) });
       route();
     } catch (err) { setMsg("#chronic-msg", err.message, false); }
+  };
+  // 病种目录原先只能改不能建（P2-93 动词级孤儿）：建的接口一直在，新增一个病种只能靠接口调用方
+  const typeForm = $("#chronic-type-form");
+  if (typeForm) typeForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["followup_interval_days"]);
+    if (body.level_rules) {
+      try { body.level_rules = JSON.parse(body.level_rules); }
+      catch (err) { return setMsg("#chronic-msg", `分级规则 JSON 解析失败：${err.message}`, false); }
+    }
+    return postAction("/api/chronic/disease-types", body, "#chronic-msg");
   };
   $("#fu-form").onsubmit = async (e) => {
     e.preventDefault();

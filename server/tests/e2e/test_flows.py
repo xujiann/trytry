@@ -1626,6 +1626,22 @@ def test_路径模板与推送任务能在界面上删除_用过的删不掉改�
     assert all(t["id"] != task["id"] for t in admin_read("/api/spd/report-tasks"))
 
 
+def test_慢病病种目录能在界面上新增(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：病种目录是分级规则与随访周期的唯一数据源，页面原先只有「编辑」——新增一个慢病病种只能靠接口
+    调用方。"""
+    _login(page, base_url)
+    _open_page(page, "chronic", "慢病管理")
+    form = page.locator("#chronic-type-form")
+    form.locator('[name="code"]').fill("e2e_ckd93")
+    form.locator('[name="name"]').fill("E2E慢性肾病")
+    form.locator('[name="followup_interval_days"]').fill("60")
+    form.locator('[name="guidance"]').fill("低盐优质低蛋白饮食")
+    _submit(page, "#chronic-type-form button")
+    created = next(t for t in admin_read("/api/chronic/disease-types") if t["code"] == "e2e_ckd93")
+    assert (created["name"], created["followup_interval_days"], created["active"]) == ("E2E慢性肾病", 60, True), created
+    expect(page.locator("#chronic-form select[name=disease] option[value=e2e_ckd93]")).to_have_count(1)   # 建档下拉里有了
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""
