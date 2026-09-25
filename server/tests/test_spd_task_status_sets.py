@@ -13,13 +13,11 @@ import ast
 import pathlib
 
 SPD = pathlib.Path(__file__).resolve().parents[1] / "app" / "spd"
-SHARED = {"TASK_OPEN_STATUSES", "TASK_CLOSED_STATUSES", "TASK_IN_HAND_STATUSES"}
+SHARED = {"TASK_OPEN_STATUSES", "TASK_CLOSED_STATUSES", "TASK_IN_HAND_STATUSES", "TASK_CLAIMABLE_STATUSES"}
 
-#: 手写清单的正当用法：`文件:取值` → 理由（只减不增）
-ACCEPTED = {
-    "routers/tasks.py:('pending', 'overdue')":
-        "接收（claim）这一个动作的前置状态：只有待接收与已超期的能接收，不是「未结束」这类分类",
-}
+#: 手写清单的正当用法：`文件:取值` → 理由（只减不增；接收的前置状态原在这里，P2-83 起单条与批量共用
+#: `TASK_CLAIMABLE_STATUSES`，已清空）
+ACCEPTED: dict[str, str] = {}
 
 
 def handwritten_status_sets(sources: dict[str, str] | None = None) -> list[str]:
@@ -51,7 +49,8 @@ def handwritten_status_sets(sources: dict[str, str] | None = None) -> list[str]:
 
 def test_状态集合对照列注释_每个状态都归了类():
     from app.spd.models import SpdTask
-    from app.spd.service import TASK_CLOSED_STATUSES, TASK_IN_HAND_STATUSES, TASK_OPEN_STATUSES
+    from app.spd.service import (TASK_CLAIMABLE_STATUSES, TASK_CLOSED_STATUSES, TASK_IN_HAND_STATUSES,
+                                 TASK_OPEN_STATUSES)
     from test_status_text_from_backend import _column_codes
 
     codes = _column_codes(SpdTask, "status")
@@ -61,6 +60,7 @@ def test_状态集合对照列注释_每个状态都归了类():
         f"归了类却不在列注释里：{sorted(set(TASK_OPEN_STATUSES) | set(TASK_CLOSED_STATUSES) - codes)}")
     assert not set(TASK_OPEN_STATUSES) & set(TASK_CLOSED_STATUSES)
     assert "rejected" in TASK_OPEN_STATUSES and "rejected" in TASK_IN_HAND_STATUSES   # 退回即回到办理人手里
+    assert set(TASK_CLAIMABLE_STATUSES) == {"pending", "overdue"}   # 单条与批量接收同一前置状态（P2-83）
     # 在办理人手里的：未结束里去掉等审核的与已超期的（超期扫描扫它们，报告的超期另列一表）
     assert set(TASK_IN_HAND_STATUSES) == set(TASK_OPEN_STATUSES) - {"submitted", "overdue"}
 

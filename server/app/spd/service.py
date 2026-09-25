@@ -242,6 +242,9 @@ TASK_CLOSED_STATUSES = ("done", "cancelled")
 TASK_OPEN_STATUSES = ("pending", "claimed", "doing", "submitted", "rejected", "overdue")
 #: 还在办理人手里、没提交也没超期的：超期扫描扫这些，报告的「待办」表列这些（超期的另列一表）
 TASK_IN_HAND_STATUSES = ("pending", "claimed", "doing", "rejected")
+#: 能「接收」（claim）的：待接收与已超期。单条与批量同一口径——批量原先按「未结束」放行，自己提交在等审核的任务
+#: 批量一勾就被接收回「已接收」、拉出审核队列（P2-83）
+TASK_CLAIMABLE_STATUSES = ("pending", "overdue")
 
 
 def spawn_task(

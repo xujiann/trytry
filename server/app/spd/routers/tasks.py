@@ -35,6 +35,7 @@ from ..models import (
     SpdTeam,
 )
 from ..service import (
+    TASK_CLAIMABLE_STATUSES,
     TASK_CLOSED_STATUSES,
     TASK_OPEN_STATUSES,
     advance_path,
@@ -791,7 +792,7 @@ def claim_task(task_id: int, db: Session = Depends(get_db), user: User = Depends
         update(SpdTask)
         .where(
             SpdTask.id == task_id,
-            SpdTask.status.in_(("pending", "overdue")),
+            SpdTask.status.in_(TASK_CLAIMABLE_STATUSES),
             or_(SpdTask.assignee_id.is_(None), SpdTask.assignee_id == user.id),
         )
         .values(assignee_id=user.id, status="claimed")
@@ -799,7 +800,7 @@ def claim_task(task_id: int, db: Session = Depends(get_db), user: User = Depends
     if not won:
         db.rollback()
         db.refresh(task)  # 按落库现状给出与旧实现同一优先序的 409 文案
-        if task.status not in ("pending", "overdue"):
+        if task.status not in TASK_CLAIMABLE_STATUSES:
             raise HTTPException(status_code=409, detail="该任务不处于可接收状态")
         raise HTTPException(status_code=409, detail="该任务已由其他人员接收")
     db.commit()
@@ -1094,20 +1095,22 @@ def batch_tasks(
             skipped.append({"id": task.id, "reason": "任务已结束"})
             continue
         if body.action == "claim":
-            # 与单条 claim 同一范式：判定与写同一条 UPDATE，抢输的进 skipped
+            # 与单条 claim 同一范式：判定与写同一条 UPDATE，抢输的进 skipped。前置状态也与单条同一口径（P2-83）：
+            # 原先按「未结束」放行，自己提交在等审核的任务批量一勾就回到「已接收」、拉出审核队列
             won = cast(CursorResult, db.execute(
                 update(SpdTask)
                 .where(
                     SpdTask.id == task.id,
-                    SpdTask.status.in_(OPEN_STATUSES),
+                    SpdTask.status.in_(TASK_CLAIMABLE_STATUSES),
                     or_(SpdTask.assignee_id.is_(None), SpdTask.assignee_id == user.id),
                 )
                 .values(assignee_id=user.id, status="claimed")
             )).rowcount
             if not won:
                 db.refresh(task)
-                skipped.append({"id": task.id, "reason": "任务已结束"
-                                if task.status not in OPEN_STATUSES else "已被他人接收"})
+                skipped.append({"id": task.id, "reason": "任务已结束" if task.status not in OPEN_STATUSES
+                                else "已被他人接收" if task.assignee_id not in (None, user.id)
+                                else "不处于可接收状态"})
                 continue
         elif body.action == "urge":
             add_amount(db, SpdTask, task.id, "urged_count", 1)
