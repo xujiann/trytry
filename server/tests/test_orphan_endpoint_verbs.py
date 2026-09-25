@@ -61,8 +61,6 @@ KNOWN: set[str] = {
     # 窗口代录（docstring：患者到柜台口头 / 书面提出，经办人代录）
     "POST /api/consents",
     "POST /api/consents/corrections",
-    # 手工派发慢专病任务（任务中心只有查、办、批量操作）
-    "POST /api/spd/tasks",
     # 删除只有接口（页面有启停，没有删）
     "DELETE /api/dataquality/rules/{rule_id}",
     "DELETE /api/spd/path-templates/{template_id}",

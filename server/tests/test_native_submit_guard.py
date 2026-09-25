@@ -68,6 +68,7 @@ ROOT_FIXED_RENDERERS = [
     ("pages-spd.js", "renderSpdPath",
      ['$("#spd-tpl-form").onsubmit', '$("#spd-inst-form").onsubmit',
       '$("#spd-task-filter").onsubmit', '$("#spd-task-batch").onsubmit',
+      '$("#spd-task-form").onsubmit',   # P2-93：手工派发任务
       '$("#page-body").onclick'],
      "await Promise.all([drawInstances(), drawTasks()])"),
     ("core.js", "renderPatients",

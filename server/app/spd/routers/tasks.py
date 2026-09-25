@@ -975,7 +975,7 @@ def review_task(
     task_id: int, body: ReviewTaskIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """审核任务：通过即完成并推进路径，退回则回到办理中。"""
+    """审核任务：通过即完成并推进路径；退回置「已退回」，回到办理人手里按审核意见重新提交（仍算未结束，P1-127）。"""
     task = _load_task(db, task_id, user)
     if task.status != "submitted":
         raise HTTPException(status_code=409, detail="只有待审核的任务可以审核")

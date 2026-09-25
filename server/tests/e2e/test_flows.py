@@ -1498,6 +1498,27 @@ def test_新建路径模板按病种号挂病种_病种号不连续也不挂错(
     assert template["program_id"] == second["id"], (template, first, second)   # 修前挂到甲（first + 1）
 
 
+def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
+    """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
+    （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    form = page.locator("#spd-task-form")
+    form.locator('[name="patient_id"]').fill(str(seed["patient"]["id"]))
+    form.locator('[name="title"]').fill("E2E 手工派发·补测血压")
+    form.locator('[name="task_type"]').select_option("followup")
+    form.locator('[name="org_id"]').fill(str(seed["org"]["id"]))
+    form.locator('[name="due_days"]').fill("3")
+    form.locator('[name="priority"]').select_option("2")
+    form.locator('[name="require_evidence"]').check()
+    expect(form.locator('[name="task_type"] option[value="path"]')).to_have_count(0)   # 路径节点任务由路径派生
+    _submit(page, "#spd-task-form button")
+    task = next(t for t in admin_read(f"/api/spd/tasks?patient_id={seed['patient']['id']}&limit=100")
+                if t["title"] == "E2E 手工派发·补测血压")
+    assert (task["task_type"], task["priority"], task["require_evidence"], task["org_id"], task["status"]) == (
+        "followup", 2, True, seed["org"]["id"], "pending"), task
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

@@ -1746,6 +1746,21 @@ async function renderSpdPath() {
         <input name="note" placeholder="备注（取消时作为原因）">
         <button class="secondary">对勾选任务执行</button>
       </form>
+      <form class="inline" id="spd-task-form">
+        <span style="font-size:13px">手工派发：</span>
+        <input name="patient_id" type="number" placeholder="患者ID" required style="width:90px">
+        <input name="title" placeholder="任务标题" required>
+        <select name="task_type">${Object.entries(SPD_TASK_TYPES).filter(([k]) => k !== "path")
+          .map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <select name="program_code"><option value="">不挂病种</option>${spdProgramOptions(catalog, false, true)}</select>
+        <input name="enrollment_id" type="number" placeholder="纳管档案ID（可留空）" style="width:150px">
+        <input name="assignee_id" type="number" placeholder="责任人用户ID（可留空）" style="width:150px">
+        <input name="org_id" type="number" placeholder="机构ID（留空 = 本机构）" style="width:150px">
+        <input name="due_days" type="number" value="7" placeholder="时限（天）" style="width:80px">
+        <select name="priority"><option value="1">普通</option><option value="2">紧急</option><option value="3">特急</option></select>
+        <label style="font-size:13px"><input type="checkbox" name="require_evidence" value="true"> 要佐证</label>
+        <button class="secondary">派发任务</button>
+      </form>
       <div id="spd-task-list"></div>
       <div id="spd-task-detail"></div>`)}`;
 
@@ -1833,6 +1848,12 @@ async function renderSpdPath() {
   $("#spd-task-filter").onsubmit = async (e) => {
     e.preventDefault();
     await drawTasks(formJson(e.target));
+  };
+  // 路径节点任务由路径派生，这里不给「路径节点」类型；挂档案时后端核对档案是这位患者、这个病种的（P2-89）
+  $("#spd-task-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/tasks", formJson(e.target,
+      ["patient_id", "enrollment_id", "assignee_id", "org_id", "due_days", "priority"]), "#spd-task-msg");
   };
   $("#spd-task-batch").onsubmit = async (e) => {
     e.preventDefault();
@@ -1963,7 +1984,7 @@ async function renderSpdPath() {
     if (review) {
       const form = await spdModal("审核任务", [
         { name: "approved", label: "结论", type: "select", value: "true", options: [
-          { value: "true", label: "通过（完成并推进路径）" }, { value: "false", label: "退回（回到办理中）" }] },
+          { value: "true", label: "通过（完成并推进路径）" }, { value: "false", label: "退回（已退回，办理人按意见重新提交）" }] },
         { name: "note", label: "审核意见", type: "textarea" },
       ]);
       if (!form) return;
