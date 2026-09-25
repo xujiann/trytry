@@ -23,6 +23,7 @@ from ..models import (
     PrescriptionItem,
     User,
 )
+from ..texttypes import split_list
 from ..visibility import assert_org_writable
 from ..schemas import (
     DrugRuleCreate,
@@ -210,7 +211,7 @@ def create_prescription(
                 f"{rule.max_daily_dose}{rule.dose_unit}"
             )
         # 相互作用审查：同一处方内出现冲突药对 → 转药师审并注明
-        conflict_codes = {c.strip() for c in rule.interactions.split(",") if c.strip()}
+        conflict_codes = set(split_list(rule.interactions))
         for other_code in conflict_codes & set(names_by_code) - {item.drug_code}:
             pair = frozenset((item.drug_code, other_code))
             if pair in seen_pairs:
@@ -220,14 +221,15 @@ def create_prescription(
                 f"药物相互作用：{item.drug_name} 与 {names_by_code[other_code]} 存在相互作用，需药师人工审核"
             )
         # 禁忌诊断审查：诊断名命中禁忌关键词 → 转药师审并注明
-        for keyword in (k.strip() for k in rule.contraindicated_diagnoses.split(",")):
-            if keyword and keyword in body.diagnosis_name:
+        # 清单按半角 / 全角逗号、顿号拆（P2-109）：导入 JSON 里写「妊娠，哺乳期」原先是一个词，这条禁忌从不触发
+        for keyword in split_list(rule.contraindicated_diagnoses):
+            if keyword in body.diagnosis_name:
                 violations.append(
                     f"禁忌诊断：{item.drug_name} 禁用于「{keyword}」相关诊断"
                     f"（本方诊断：{body.diagnosis_name}），需药师人工审核"
                 )
         # 特殊人群审查：患者命中规则特殊人群 → 转药师审并注明
-        rule_groups = {g.strip() for g in rule.special_groups.split(",") if g.strip()}
+        rule_groups = set(split_list(rule.special_groups))
         for group in sorted(rule_groups & patient_groups):
             violations.append(
                 f"特殊人群用药：{item.drug_name} 对{GROUP_NAMES.get(group, group)}需慎用，需药师人工审核"

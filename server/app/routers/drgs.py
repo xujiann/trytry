@@ -19,7 +19,7 @@ from ..visibility import scope_org_list
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
 from ..models import Admission, CaseSummary, DrgGroup, Organization, User
-from ..texttypes import NON_BLANK
+from ..texttypes import NON_BLANK, split_list
 
 # 同组历史病例少于该数不做事中预警——3 个病例算出来的"均值"，预警的是噪声。
 MIN_BASELINE_CASES = 5
@@ -33,7 +33,8 @@ __all__ = ["router", "assign_drg_group", "SEED_DRG_GROUPS", "FALLBACK_DRG_GROUP"
 
 
 def _split(value: str) -> list[str]:
-    return [k.strip() for k in (value or "").split(",") if k.strip()]
+    # 全角逗号、顿号也认（P2-109）：只按半角逗号拆，界面上用中文输入法填的「鼻息肉，鼻窦炎」是一个词、永远命中不了
+    return split_list(value)
 
 
 def _match_group(group: DrgGroup, diagnosis: str, operation: str) -> tuple[int, int] | None:
