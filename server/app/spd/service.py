@@ -233,6 +233,31 @@ def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTa
     )
 
 
+def enrollment_for(db: Session, patient_id: int, program_code: str) -> tuple[str, SpdEnrollment | None]:
+    """一条业务记录挂哪份纳管档案（P1-139）：写了病种的，取这个病种的档案（在管的优先）；没写的，患者只在管一个病种
+    的挂这份、病种取它的；在管几个病种的不替人猜，返回 ("", None)。
+
+    原先没写病种就不挂档案：管理端发起转诊、批量下发干预的病种都默认留空，于是有效上转的积分记给录单的人、干预与
+    它派的执行任务按档案看不到。"""
+    if program_code:
+        query = db.query(SpdEnrollment).filter(
+            SpdEnrollment.patient_id == patient_id, SpdEnrollment.program_code == program_code
+        )
+        return program_code, (
+            query.filter(SpdEnrollment.status == "active").first()
+            or query.order_by(SpdEnrollment.id.desc()).first()
+        )
+    active = (
+        db.query(SpdEnrollment)
+        .filter(SpdEnrollment.patient_id == patient_id, SpdEnrollment.status == "active")
+        .limit(2)
+        .all()
+    )
+    if len(active) == 1:
+        return active[0].program_code, active[0]
+    return "", None
+
+
 def measure_program_for(db: Session, patient_id: int, program_code: str, metric: str) -> str:
     """一次监测值挂哪个病种判级（P1-138）：写了病种的照写；没写的，取这位患者**在管档案**里给这个指标配了管理目标的
     病种（按建档先后取第一个）。都没有才留空——空串没有管理目标可比，一律判「正常」。

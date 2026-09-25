@@ -3408,7 +3408,7 @@ async function renderSpdMember() {
       </form>
       <form class="inline" id="spd-intv-form" style="margin-top:8px">
         <input name="patient_ids" placeholder="患者ID，逗号分隔批量" required style="min-width:180px">
-        <select name="program_code">${programOptions}</select>
+        <select name="program_code"><option value="">病种：随模板 / 只在管一个病种的按它</option>${spdProgramOptions(catalog)}</select>
         <select name="template_id"></select>
         <input name="goal" placeholder="干预目标">
         <input name="next_at" type="date" title="下次干预时间">

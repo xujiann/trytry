@@ -47,7 +47,7 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import (MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES, award_points, judge_measurement, measure_program_for,
+from ..service import (MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES, award_points, enrollment_for, judge_measurement, measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, spawn_task,
                        unknown_program)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
@@ -902,14 +902,17 @@ def create_interventions(
         clock.today() + timedelta(days=template.cycle_days if template else 30)
     ).isoformat()
 
+    # 没写病种的先随模板（与 P2-100 上报随上报任务同一口径）；再没有的，患者只在管一个病种的挂这份档案（P1-139）——
+    # 原先表单的病种默认留空，干预与它派的执行任务一律不挂档案、按档案看不到
+    base_program = body.program_code or (template.program_code if template else "")
     created = []
     for patient_id in dict.fromkeys(body.patient_ids):
         assert_patient_visible(db, user, patient_id, resource="spd_intervention")
-        enrollment = _enrollment_of(db, patient_id, body.program_code)
+        program_code, enrollment = enrollment_for(db, patient_id, base_program)
         record = SpdIntervention(
             patient_id=patient_id,
             enrollment_id=enrollment.id if enrollment else None,
-            program_code=body.program_code,
+            program_code=program_code,
             template_id=body.template_id,
             goal=body.goal or (template.name if template else ""),
             content=content,
@@ -923,7 +926,7 @@ def create_interventions(
         if body.create_task:
             spawn_task(
                 db, patient_id=patient_id, title=f"干预执行：{record.goal or '健康干预'}",
-                task_type="intervention", program_code=body.program_code,
+                task_type="intervention", program_code=program_code,
                 enrollment=enrollment, assignee_id=user.id, org_id=user.org_id,
                 due_days=7, source="manual",
             )
