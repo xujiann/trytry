@@ -1987,8 +1987,9 @@ async function renderChronic() {
     const num = (k) => (f.get(k) ? Number(f.get(k)) : null);
     // "cat_score=22, mrs_score=3" → {cat_score: 22, mrs_score: 3}
     const metrics = {};
-    (f.get("metrics") || "").split(",").forEach((pair) => {
-      const [k, v] = pair.split("=").map((s) => (s || "").trim());
+    // 全角逗号、顿号、全角等号也认（P1-137 前端同一族）：原先「cat_score=22，mrs_score=3」拆成一对、值是「22，mrs_score」，两项都被悄悄丢掉
+    (f.get("metrics") || "").split(/[,，、]/).forEach((pair) => {
+      const [k, v] = pair.split(/[=＝]/).map((s) => (s || "").trim());
       if (k && v !== undefined && v !== "" && !Number.isNaN(Number(v))) metrics[k] = Number(v);
     });
     try {

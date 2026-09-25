@@ -1840,6 +1840,24 @@ def test_会诊计费不填金额提交不了_明确填0照常计费(page, base_
     assert settled() == before + 1
 
 
+def test_专病目录的路径节点认全角冒号与逗号_拆不出的点名(page, base_url, admin_read):
+    """P1-137 前端同一族：「键:名称,键:名称」原先只按半角逗号、冒号拆——中文输入法填的「apply：申请，review：评估」一个节点都拆
+    不出，建出来是个没有节点的专病，不报错。现在全角逗号、顿号、全角冒号都认；拆不出「键:名称」的那一段点名报出来。"""
+    _login(page, base_url)
+    _open_page(page, "diseaseprograms", "专病管理")
+    form = page.locator("#dp-form")
+    form.locator('[name="code"]').fill("E2E_DP137")
+    form.locator('[name="name"]').fill("E2E 全角节点专病")
+    form.locator('[name="nodes"]').fill("apply：申请，review：评估、少了冒号")
+    form.locator("button").click()
+    expect(page.locator("#dp-msg")).to_contain_text("路径节点要写成「键:名称」：少了冒号")
+    form.locator('[name="nodes"]').fill("apply：申请，review：评估、discharge:出院")
+    _submit(page, "#dp-form button")
+    created = next(p for p in admin_read("/api/disease-programs") if p["code"] == "E2E_DP137")
+    assert [(n["key"], n["name"]) for n in created["path_nodes"]] == [
+        ("apply", "申请"), ("review", "评估"), ("discharge", "出院")], created   # 修前 []
+
+
 def test_慢病病种目录能在界面上新增(page, base_url, admin_read):
     """P2-93（动词级孤儿）：病种目录是分级规则与随访周期的唯一数据源，页面原先只有「编辑」——新增一个慢病病种只能靠接口
     调用方。"""

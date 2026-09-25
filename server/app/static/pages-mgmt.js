@@ -2048,10 +2048,15 @@ async function renderDiseasePrograms() {
     const body = { code: raw.code, name: raw.name, path_nodes: [] };
     if (raw.org_id) body.org_id = Number(raw.org_id);
     // "键:名称,键:名称" → 节点数组。缺省全部按必需处理，选做节点在目录里再改。
-    (raw.nodes || "").split(",").map((s) => s.trim()).filter(Boolean).forEach((pair) => {
-      const [key, name] = pair.split(":");
-      if (key && name) body.path_nodes.push({ key: key.trim(), name: name.trim(), required: true });
+    // 全角逗号、顿号、全角冒号也认（P1-137 前端同一族）：原先只认半角，中文输入法填的「a：申请，b：审批」一个节点都拆不出，
+    // 建出来是个没有节点的专病，不报错；拆不出「键:名称」的那一段点名报出来，不再悄悄丢
+    const bad = [];
+    (raw.nodes || "").split(/[,，、]/).map((s) => s.trim()).filter(Boolean).forEach((pair) => {
+      const [key, name] = pair.split(/[:：]/).map((x) => (x || "").trim());
+      if (key && name) body.path_nodes.push({ key, name, required: true });
+      else bad.push(pair);
     });
+    if (bad.length) return setMsg("#dp-msg", `路径节点要写成「键:名称」：${bad.join("、")}`, false);
     postAction("/api/disease-programs", body, "#dp-msg");
   };
   if (picked) {
