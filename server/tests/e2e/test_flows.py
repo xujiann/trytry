@@ -1802,6 +1802,28 @@ def test_数据质控规则能在界面上新增_配置写坏由后端说清楚(
     expect(page.locator("tr:has(button[data-qctoggle])", has_text="E2EQC1")).to_contain_text("必填项")
 
 
+def test_会诊计费不填金额提交不了_明确填0照常计费(page, base_url, seed, admin_call, admin_read):
+    """会诊计费的费用框原先能留空：spdModal 的数字框把空值读成 0，这单照样标成「已计费」、计 0 元——弹窗标签自己写着
+    「0 与未计费是两回事」（本院内部会诊常计 0 元，由 `fee_settled` 区分，不拿 0 当哨兵）。现在必填，要计 0 元就明确填 0。"""
+    other = admin_call("POST", "/api/organizations", {"name": "E2E会诊受邀院", "org_type": "township", "level": "township"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E会诊计费", "id_card": "320981199308080137"})
+    consult = admin_call("POST", "/api/consultations", {
+        "patient_id": patient["id"], "from_org_id": seed["org"]["id"], "to_org_id": other["id"], "question": "E2E 计费"})
+    admin_call("POST", f"/api/consultations/{consult['id']}/accept", {"expert_name": "E2E专家"})
+    admin_call("POST", f"/api/consultations/{consult['id']}/complete", {"opinion": "E2E 会诊意见"})
+    settled = lambda: admin_read("/api/consultations/stats")["fee"]["settled_count"]   # noqa: E731
+    before = settled()
+
+    _login(page, base_url)
+    _open_page(page, "consultations", "远程会诊")
+    page.click(f'button[data-act="fee"][data-id="{consult["id"]}"]')
+    _modal(page).locator("button[type=submit]").click()   # 空着点确定：浏览器按必填拦下，弹窗不走
+    expect(_modal(page)).to_be_visible()
+    assert settled() == before   # 修前：空值读成 0，这单已计费
+    _redrawn(page, lambda: _spd_modal(page, {"fee": "0"}))
+    assert settled() == before + 1
+
+
 def test_慢病病种目录能在界面上新增(page, base_url, admin_read):
     """P2-93（动词级孤儿）：病种目录是分级规则与随访周期的唯一数据源，页面原先只有「编辑」——新增一个慢病病种只能靠接口
     调用方。"""

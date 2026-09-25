@@ -521,7 +521,8 @@ async function renderConsultations() {
           body: JSON.stringify({ rating: Number(picked.rating) }) });
       } else if (act === "fee") {
         const picked = await spdModal("会诊计费", [
-          { name: "fee", label: "费用（元；0 与「未计费」是两回事，0 也会标成已计费）", type: "number" },
+          // 必填：数字框留空会被读成 0，照样标成「已计费」——标签自己说着 0 与未计费是两回事（本院内部会诊计 0 元就明确填 0）
+          { name: "fee", label: "费用（元；0 与「未计费」是两回事，0 也会标成已计费）", type: "number", required: true },
           { name: "fee_note", label: "计费说明", type: "text" }]);
         if (!picked) return;
         // 不在这里 setMsg：下面紧接着 route() 会整页重画，写了也当场被冲掉。
