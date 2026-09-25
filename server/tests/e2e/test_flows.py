@@ -1858,6 +1858,24 @@ def test_专病目录的路径节点认全角冒号与逗号_拆不出的点名(
         ("apply", "申请"), ("review", "评估"), ("discharge", "出院")], created   # 修前 []
 
 
+def test_发起转诊的病种改下拉_留空时只在管一个病种的挂上档案(page, base_url, seed, admin_call, admin_read):
+    """P1-139：发起转诊的病种原先是个「病种编码」文本框，不填就不挂纳管档案——有效上转的积分记给录单的人、下转的承接随访
+    任务不挂档案。现在是病种下拉；留空时患者只在管一个病种的，挂这份档案。"""
+    patient = admin_call("POST", "/api/patients", {"name": "E2E转诊挂档", "id_card": "320981199509090139"})
+    enrollment = admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    _login(page, base_url)
+    _open_page(page, "spdreferral", "逐级转诊闭环")
+    form = page.locator("#spd-ref-form")
+    expect(form.locator('select[name="program_code"] option[value="hypertension"]')).to_have_count(1)   # 下拉，不是编码框
+    form.locator('[name="patient_id"]').fill(str(patient["id"]))
+    form.locator('[name="target_org_id"]').fill(str(seed["org"]["id"]))
+    form.locator('[name="reason"]').fill("E2E 血压控制不佳")
+    _submit(page, "#spd-ref-form button")
+    case = next(c for c in admin_read(f"/api/spd/referrals?patient_id={patient['id']}") if c["reason"] == "E2E 血压控制不佳")
+    assert (case["program_code"], case["enrollment_id"]) == ("hypertension", enrollment["id"]), case
+
+
 def test_慢病病种目录能在界面上新增(page, base_url, admin_read):
     """P2-93（动词级孤儿）：病种目录是分级规则与随访周期的唯一数据源，页面原先只有「编辑」——新增一个慢病病种只能靠接口
     调用方。"""

@@ -551,17 +551,28 @@ def create_referral(
     if rule_problem:
         raise HTTPException(status_code=404, detail=rule_problem)
     enrollment = None
-    if body.program_code:
+    program_code = body.program_code
+    if program_code:
         enrollment = (
             db.query(SpdEnrollment)
             .filter(
                 SpdEnrollment.patient_id == body.patient_id,
-                SpdEnrollment.program_code == body.program_code,
+                SpdEnrollment.program_code == program_code,
             )
             .first()
         )
+    else:
+        # 没写病种、患者只在管一个病种的，就挂这份档案（P1-139）：原先转诊单不挂档案——有效上转的积分记给录单的人
+        # （中心代录时是经办，不是这位患者的村医），下转的承接随访任务不挂档案。在管几个病种的不替人猜，照旧不挂
+        active = (
+            db.query(SpdEnrollment)
+            .filter(SpdEnrollment.patient_id == body.patient_id, SpdEnrollment.status == "active")
+            .limit(2).all()
+        )
+        if len(active) == 1:
+            enrollment, program_code = active[0], active[0].program_code
     case = _create_case(
-        db, user, patient_id=body.patient_id, program_code=body.program_code,
+        db, user, patient_id=body.patient_id, program_code=program_code,
         enrollment=enrollment, reason=body.reason, target_org_id=body.target_org_id,
         trigger_rule_code=body.trigger_rule_code, trigger_evidence=body.trigger_evidence,
         materials=body.materials, direction=body.direction,

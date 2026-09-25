@@ -2255,11 +2255,12 @@ const SPD_HANDLE_LEVELS = { village: "村医处置", station: "服务站处置",
 async function renderSpdReferral() {
   $("#page-desc").textContent =
     "村医 → 乡镇卫生院 → 区市县医院三级转诊：分级审核、到院有效判定、下转随访接收闭环";
-  const [closure, cases, alerts, rules] = await Promise.all([
+  const [closure, cases, alerts, rules, catalog] = await Promise.all([
     api("/api/spd/referrals-stats/closure"),
     api("/api/spd/referrals?open_only=false&limit=30"),
     api("/api/spd/referrals-alerts?hours=48"),
     api("/api/spd/referral-rules"),
+    spdCatalog(),
   ]);
   $("#page-body").innerHTML = `
     ${spdCards([
@@ -2276,7 +2277,7 @@ async function renderSpdReferral() {
     ${panel("发起转诊", `
       <form class="inline" id="spd-ref-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <input name="program_code" placeholder="病种编码">
+        <select name="program_code"><option value="">病种：只在管一个病种的按它</option>${spdProgramOptions(catalog)}</select>
         <select name="direction"><option value="up">上转</option><option value="down">下转</option></select>
         <input name="target_org_id" type="number" placeholder="目标机构ID">
         <input name="reason" placeholder="转诊理由" style="min-width:200px">
