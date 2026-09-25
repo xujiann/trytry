@@ -894,6 +894,13 @@ async def upload_task_evidence(
         content_type=file.content_type or "", owner_type="spd_task",
         owner_id=task.id, uploaded_by=None,
     )
+    # 传上来的就是这个任务的佐证，上传即记进佐证清单（P1-126）：原先只存附件——手机页提交时只交填报内容、不带
+    # 附件编号，要凭证的任务提交永远 422；医护审核页的佐证材料也取自这份清单，居民传的文件看不到。
+    # store_attachment 不 flush，先落库拿到编号；每次上传都是新的一行附件，清单里已有的编号不重复记
+    db.flush()
+    evidence = list(task.evidence or [])
+    if str(attachment.id) not in {str(e) for e in evidence}:
+        task.evidence = [*evidence, attachment.id]
     db.commit()
     return {"attachment_id": attachment.id, "filename": attachment.filename,
             "size": attachment.size}
