@@ -150,7 +150,7 @@ def test_并发特病申报_恰一条待批其余全是同一句409(pg_engine, a
     def worker(i):
         with Session() as db:
             try:
-                obj = apply_special_disease(
+                receipt = apply_special_disease(
                     SpecialDiseaseCreate(
                         patient_id=pid, disease_name=disease, reason=f"并发{i}"
                     ),
@@ -158,7 +158,8 @@ def test_并发特病申报_恰一条待批其余全是同一句409(pg_engine, a
                 )
             except HTTPException as exc:
                 return ("409", exc.status_code, exc.detail)
-            return ("ok", obj.id, obj.status)
+            # 处理函数回的是出参字典（P2-72 起经 _special_disease_out，与双通道同形），不是 ORM 行
+            return ("ok", receipt["id"], receipt["status"])
 
     results, errors = _race_on_pg(worker, times=RACERS)
     assert not errors, f"约束冲突不该漏给调用方（那是 500 + 丢单）：{errors}"
@@ -208,7 +209,7 @@ def test_并发特病申报_不同病种互不阻塞(pg_engine, actors):
     def worker(i):
         with Session() as db:
             try:
-                obj = apply_special_disease(
+                receipt = apply_special_disease(
                     SpecialDiseaseCreate(
                         patient_id=pid, disease_name=f"并发病种-{i}", reason="互不阻塞"
                     ),
@@ -216,7 +217,7 @@ def test_并发特病申报_不同病种互不阻塞(pg_engine, actors):
                 )
             except HTTPException as exc:
                 return ("409", exc.status_code, exc.detail)
-            return ("ok", obj.id, obj.status)
+            return ("ok", receipt["id"], receipt["status"])
 
     results, errors = _race_on_pg(worker, times=RACERS)
     assert not errors, errors
