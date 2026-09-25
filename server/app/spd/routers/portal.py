@@ -46,8 +46,8 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import (MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, close_followup_record, judge_measurement,
-                       measure_value_problem, scale_unusable, unknown_program)
+from ..service import (MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES, close_followup_record,
+                       judge_measurement, measure_value_problem, scale_unusable, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -218,9 +218,10 @@ def home(
                 SpdFollowupRecord.patient_id == patient.id,
                 SpdFollowupRecord.status == "planned",
             ).count(),
+            # 居民要动手的：未结束、且不是提交了在等医护审核的（退回重做的算，P1-127）
             "tasks": db.query(SpdTask).filter(
                 SpdTask.patient_id == patient.id,
-                SpdTask.status.in_(["pending", "claimed", "doing", "overdue"]),
+                SpdTask.status.in_(TASK_OPEN_STATUSES), SpdTask.status != "submitted",
             ).count(),
             "revisits": db.query(SpdRevisit).filter(
                 SpdRevisit.patient_id == patient.id, SpdRevisit.status == "planned",

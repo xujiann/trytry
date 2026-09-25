@@ -37,6 +37,7 @@ from .models import (
     SpdVillageDoctor,
 )
 from .platform import User
+from .service import TASK_IN_HAND_STATUSES, TASK_OPEN_STATUSES
 
 SectionRenderer = Callable[[Session, dict, "int | None", str], dict]
 
@@ -90,9 +91,7 @@ def _summary(db, section, org_id, period):
     if org_id is not None:
         enroll_query = enroll_query.filter(SpdEnrollment.org_id == org_id)
     task_query = _task_query(db, org_id)
-    open_tasks = task_query.filter(
-        SpdTask.status.in_(["pending", "claimed", "doing", "submitted", "overdue"])
-    ).count()
+    open_tasks = task_query.filter(SpdTask.status.in_(TASK_OPEN_STATUSES)).count()
     overdue = task_query.filter(SpdTask.status == "overdue").count()
     enrolled = enroll_query.count()
     return {
@@ -104,7 +103,7 @@ def _summary(db, section, org_id, period):
 
 def _todo(db, section, org_id, period):
     rows = (
-        _task_query(db, org_id).filter(SpdTask.status.in_(["pending", "claimed", "doing"]))
+        _task_query(db, org_id).filter(SpdTask.status.in_(TASK_IN_HAND_STATUSES))
         .order_by(SpdTask.due_date).limit(20).all()
     )
     return {**_head(section, "table"), "columns": ["任务", "类型", "截止", "优先级"],

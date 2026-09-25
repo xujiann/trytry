@@ -2760,6 +2760,33 @@ def test_居民端线上自助随访按问卷逐题作答_判出异常(page, bas
     assert messages and "重度" in messages[-1], messages
 
 
+def test_居民端退回重做的任务_卡片上能重新填报提交(page, base_url, spd_seed, admin_call, admin_read):
+    """P1-127：医护审核「退回」的任务回到居民手里重做。修前居民端卡片上状态显示原码 rejected、只看得到审核意见，
+    「填报并提交」「上传凭证」两个按钮只给待办 / 办理中 / 超期的任务——退回的任务在手机上重做不了。
+
+    用自己的居民：验证码单号冷却 60 秒，与别的居民端用例共用一个手机号，紧挨着跑就收不到码。"""
+    person = {"name": "退回重做E2E居民", "id_card": "320981198003034125", "phone": "13788990033"}
+    resident = admin_call("POST", "/api/patients", {**person, "gender": "男", "birth_date": "1980-03-03"})
+    task = admin_call("POST", "/api/spd/tasks", {
+        "patient_id": resident["id"], "title": "E2E上传一周血压", "task_type": "report",
+        "org_id": spd_seed["org"]["id"]})
+    admin_call("POST", f"/api/spd/tasks/{task['id']}/submit", {"result": {"note": "只量了一天"}})
+    admin_call("POST", f"/api/spd/tasks/{task['id']}/review", {"approved": False, "note": "请补齐一周的血压"})
+
+    _resident_login(page, base_url, person)
+    page.click('[data-tab="spd"]')
+    page.click('[data-spd="task"]')
+    card = page.locator(".m-card", has_text="E2E上传一周血压")
+    expect(card).to_contain_text("已退回，请按审核意见重新提交")
+    expect(card).to_contain_text("请补齐一周的血压")
+    card.locator("[data-spd-task]").click()   # 修前退回的任务卡片上没有这个按钮
+    card.locator(".inline-input textarea").fill("已补齐 7 天血压")
+    card.locator('.inline-input button[type="submit"]').click()
+    expect(page.locator(".m-card", has_text="E2E上传一周血压")).to_contain_text("已提交待审核")
+    detail = admin_read(f"/api/spd/tasks/{task['id']}")
+    assert (detail["status"], detail["result"]) == ("submitted", {"note": "已补齐 7 天血压"}), detail
+
+
 def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
     """医生移动端：登录 → 慢专病待办接收 → 转诊复核通过（prompt 应答意见）。
 

@@ -1280,14 +1280,16 @@ async function renderSpdMeasure(box) {
 }
 
 async function renderSpdTasks(box) {
+  // 退回的任务回到居民手里重做（P1-127）：原先卡片上只看得到审核意见，没有重新填报 / 上传的按钮
   const rows = await authApi(`/api/portal/spd/tasks${spdQuery()}`);
   box.innerHTML = rows.map((t) => `<div class="m-card">
     ${kv("任务", esc(t.title))}
     ${kv("截止", esc(t.due_date || "—"))}
     ${kv("状态", esc({ pending: "待办", claimed: "待办", doing: "办理中",
-      submitted: "已提交待审核", done: "已完成", overdue: "已超期" }[t.status] || t.status))}
+      submitted: "已提交待审核", done: "已完成", rejected: "已退回，请按审核意见重新提交",
+      overdue: "已超期", cancelled: "已取消" }[t.status] || t.status))}
     ${t.review_note ? kv("审核意见", esc(t.review_note)) : ""}
-    ${["pending", "claimed", "doing", "overdue"].includes(t.status)
+    ${["pending", "claimed", "doing", "rejected", "overdue"].includes(t.status)
       ? `<button type="button" class="ghost-btn" data-spd-task="${t.id}">填报并提交</button>
          <button type="button" class="ghost-btn" data-spd-evidence="${t.id}">上传凭证</button>` : ""}
     </div>`).join("") || '<p class="empty">暂无健康任务</p>';

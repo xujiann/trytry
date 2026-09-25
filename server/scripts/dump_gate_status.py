@@ -82,6 +82,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_stage14_concurrency as concurrency
     import test_stage15_horizontal as horizontal
     import test_stats_scope_consistency as statscope
+    import test_spd_task_status_sets as taskstatus
     import test_unscopable_patient_reads as unscopable
     import test_vital_sign_bounds as vitalbounds
 
@@ -127,6 +128,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          statscope.BASELINE, "tests/test_stats_scope_consistency.py"),
         ("统计口径", "按设计不套范围的计数（先按机构分组再按范围取行 / 平台管理端 / 按本人收口，逐条写明理由）",
          len(statscope.BY_DESIGN), "tests/test_stats_scope_consistency.py"),
+        ("统计口径", "慢专病任务的查询手写状态清单（「未结束」七处各写一份、七份都漏了退回，路径越过退回的任务往下走；"
+         "17 → 0 已清零）", len(taskstatus.handwritten_status_sets()), "tests/test_spd_task_status_sets.py"),
+        ("统计口径", "按设计手写的任务状态清单（单个动作的前置条件，逐条写明理由）",
+         len(taskstatus.ACCEPTED), "tests/test_spd_task_status_sets.py"),
         ("并发冲突", "写唯一约束表却未处理冲突", len(concurrency.KNOWN_UNGUARDED_UNIQUE_WRITES),
          "tests/test_stage14_concurrency.py"),
         ("并发冲突", "已审计的写入点", concurrency.BASELINE_COVERED_WRITE_SITES,

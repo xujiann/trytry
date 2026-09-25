@@ -34,7 +34,16 @@ from ..models import (
     SpdTask,
     SpdTeam,
 )
-from ..service import advance_path, award_points, node_enter_allowed, spawn_task, sweep_overdue, unknown_program
+from ..service import (
+    TASK_CLOSED_STATUSES,
+    TASK_OPEN_STATUSES,
+    advance_path,
+    award_points,
+    node_enter_allowed,
+    spawn_task,
+    sweep_overdue,
+    unknown_program,
+)
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -44,7 +53,8 @@ router = APIRouter(
 )
 
 SERVICE_ROLES = ("doctor", "public_health", "director")
-OPEN_STATUSES = ("pending", "claimed", "doing", "submitted", "overdue")
+#: 「未结束」一处定义在 `service.TASK_OPEN_STATUSES`（含退回 rejected，P1-127）
+OPEN_STATUSES = TASK_OPEN_STATUSES
 
 
 # ============================================================ 响应契约
@@ -981,7 +991,7 @@ def _finish_task(db: Session, task: SpdTask, user: User) -> dict:
           else contextlib.nullcontext()):
         won = cast(CursorResult, db.execute(
             update(SpdTask)
-            .where(SpdTask.id == task.id, SpdTask.status.notin_(("done", "cancelled")))
+            .where(SpdTask.id == task.id, SpdTask.status.notin_(TASK_CLOSED_STATUSES))
             .values(
                 status="done",
                 finished_at=now_naive(),

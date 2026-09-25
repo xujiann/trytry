@@ -402,7 +402,8 @@ def test_手工推进分支与批量处理(client, auth, world):
 
 def test_待办汇总与清单对得上(client, auth, world):
     rows = client.get(f"{B}/tasks", params={"limit": 500}, headers=auth).json()
-    open_statuses = ("pending", "claimed", "doing", "submitted", "overdue")
+    # 未结束含退回（rejected）：退回即回到办理人手里重办（P1-127，原先这里与被测代码一起漏了它）
+    open_statuses = ("pending", "claimed", "doing", "submitted", "rejected", "overdue")
     by_status: dict = {}
     open_by_type: dict = {}
     for row in rows:

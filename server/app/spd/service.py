@@ -233,6 +233,17 @@ def judge_measurement(db: Session, program_code: str, stage: str, metric: str, v
     return judge_level(value, target.target_low, target.target_high)
 
 
+#: 慢专病任务（`spd_tasks.status`）的「已结束」：办结与取消。
+TASK_CLOSED_STATUSES = ("done", "cancelled")
+#: 「未结束」：除了办结与取消都算，**含退回（rejected）**——审核退回即回到办理人手里重办，提交 / 办结接口
+#: 照收它。原先七处各写一份这个清单、七份都漏了它：路径越过退回待重办的任务往下走、「我的待办」与各处待办数
+#: 里看不到它、结案与路径取消不收它、过期不超期、催办升级 409「已结束」（P1-127）。清单只在这里写，查询里别再
+#: 手写（`tests/test_spd_task_status_sets.py` 盯着）。
+TASK_OPEN_STATUSES = ("pending", "claimed", "doing", "submitted", "rejected", "overdue")
+#: 还在办理人手里、没提交也没超期的：超期扫描扫这些，报告的「待办」表列这些（超期的另列一表）
+TASK_IN_HAND_STATUSES = ("pending", "claimed", "doing", "rejected")
+
+
 def spawn_task(
     db: Session,
     *,
@@ -525,7 +536,7 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
         db.query(SpdTask)
         .filter(
             SpdTask.enrollment_id == enrollment.id,
-            SpdTask.status.in_(["pending", "claimed", "doing", "submitted", "overdue"]),
+            SpdTask.status.in_(TASK_OPEN_STATUSES),
         )
         .all()
     )
@@ -593,7 +604,7 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
     pending = (
         db.query(SpdTask)
         .filter(
-            SpdTask.status.in_(["pending", "claimed", "doing"]),
+            SpdTask.status.in_(TASK_IN_HAND_STATUSES),
             SpdTask.due_date != "",
             SpdTask.due_date < cutoff,
         )

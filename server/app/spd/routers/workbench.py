@@ -48,7 +48,7 @@ from ..models import (
     SpdTeamMember,
     SpdVillageDoctor,
 )
-from ..service import sweep_overdue
+from ..service import TASK_OPEN_STATUSES, sweep_overdue
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -60,7 +60,8 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
-OPEN_STATUSES = ("pending", "claimed", "doing", "submitted", "overdue")
+#: 任务的「未结束」一处定义在 `service.TASK_OPEN_STATUSES`（含退回 rejected，P1-127）
+OPEN_STATUSES = TASK_OPEN_STATUSES
 
 
 def _scope(db: Session, user: User, org_id: int | None, stats: bool = True) -> list[int] | None:
