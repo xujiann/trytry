@@ -197,6 +197,23 @@ def _reset_monitor_breaker():
     monitor._breaker_reset()
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _reset_portal_rate_limits():
+    """每个测试文件都从干净的居民端限流状态出发。
+
+    居民端的验证码下发限流（单来源 IP 10 分钟 20 条）与核验 / 登录 / 绑定失败计数是**进程级全局**、按真实时间
+    滑动的，而测试客户端全是同一个来源 IP：前面几个文件各登录一两个居民，额度就被悄悄吃掉，排在后面、一次要登录
+    六个居民的用例（`test_stage17_round12` 的并发实名绑定）拿到 429——红在「前面十分钟跑了什么」，不在它自己
+    （第三十六轮全量验证实测踩到：新加了两个登录居民的文件，它就红了）。
+    按文件复位而不是按用例：同一文件里的用例自己算清额度；要按用例复位的（`test_portal_auth`）自己复位。
+    """
+    from app.routers.portal import _reset_portal_failures
+
+    _reset_portal_failures()
+    yield
+    _reset_portal_failures()
+
+
 # ---------- 块5：E2E 开关（Playwright 浏览器全链路，默认跳过） ----------
 
 
