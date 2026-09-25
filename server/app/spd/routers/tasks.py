@@ -35,6 +35,7 @@ from ..models import (
     SpdTeam,
 )
 from ..service import (
+    PATH_OPEN_STATUSES,
     TASK_CLAIMABLE_STATUSES,
     TASK_CLOSED_STATUSES,
     TASK_OPEN_STATUSES,
@@ -296,17 +297,19 @@ def start_path_instance(
     template = db.get(SpdPathTemplate, body.template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
+    # 暂停的也算在途（P1-128）：原先只看执行中的，暂停着的时候能再启动一条，恢复后两条并行、各派一份任务
     running = (
         db.query(SpdPathInstance)
         .filter(
             SpdPathInstance.enrollment_id == body.enrollment_id,
             SpdPathInstance.template_id == body.template_id,
-            SpdPathInstance.status == "running",
+            SpdPathInstance.status.in_(PATH_OPEN_STATUSES),
         )
         .first()
     )
     if running is not None:
-        raise HTTPException(status_code=409, detail="该路径已在执行中")
+        raise HTTPException(status_code=409, detail="该路径已在执行中" if running.status == "running"
+                            else "该路径有一条暂停中的实例，请恢复或取消后再启动")
     try:
         instance = start_path(db, enrollment, template, user.id)
     except ValueError as exc:

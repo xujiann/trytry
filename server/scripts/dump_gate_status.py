@@ -83,6 +83,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_stage15_horizontal as horizontal
     import test_stats_scope_consistency as statscope
     import test_spd_task_status_sets as taskstatus
+    import test_spd_planned_only_queries as plannedonly
     import test_unscopable_patient_reads as unscopable
     import test_vital_sign_bounds as vitalbounds
 
@@ -132,6 +133,11 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "17 → 0 已清零）", len(taskstatus.handwritten_status_sets()), "tests/test_spd_task_status_sets.py"),
         ("统计口径", "按设计手写的任务状态清单（单个动作的前置条件，逐条写明理由）",
          len(taskstatus.ACCEPTED), "tests/test_spd_task_status_sets.py"),
+        ("统计口径", "随访 / 复诊只认 planned、路径实例只认 running 的查询（超期扫描之后漏掉超期的与暂停的：工作台超期随访恒为 0、"
+         "结案不收逾期复诊；10 → 0 已清零）",
+         len(set(plannedonly.planned_only()) - set(plannedonly.BY_DESIGN)), "tests/test_spd_planned_only_queries.py"),
+        ("统计口径", "按设计只认 planned / running 的查询（超期扫描本身 / 居民端日期未到的预约 / 按状态分列，逐条写明理由）",
+         len(plannedonly.BY_DESIGN), "tests/test_spd_planned_only_queries.py"),
         ("并发冲突", "写唯一约束表却未处理冲突", len(concurrency.KNOWN_UNGUARDED_UNIQUE_WRITES),
          "tests/test_stage14_concurrency.py"),
         ("并发冲突", "已审计的写入点", concurrency.BASELINE_COVERED_WRITE_SITES,

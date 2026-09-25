@@ -47,7 +47,7 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
-from ..service import close_followup_record, unknown_code, unknown_ids, unknown_program
+from ..service import close_followup_record, followup_overdue, unknown_code, unknown_ids, unknown_program
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -1084,15 +1084,8 @@ def followup_stats(
     )
     total = sum(by_status.values())
     done = by_status.get("done", 0)
-    # planned 且已过期的算上（扫描间隙里的）+ 已标 overdue 的，两者都是超期
-    overdue = query.filter(
-        (SpdFollowupRecord.status == "overdue")
-        | (
-            (SpdFollowupRecord.status == "planned")
-            & (SpdFollowupRecord.planned_at != "")
-            & (SpdFollowupRecord.planned_at < business_day.isoformat())
-        )
-    ).count()
+    # planned 且已过期的算上（扫描间隙里的）+ 已标 overdue 的，两者都是超期（判定与工作台共用一处，P1-128）
+    overdue = query.filter(followup_overdue(business_day.isoformat())).count()
     by_abnormal = row_dict(
         query.filter(SpdFollowupRecord.status == "done")
         .with_entities(SpdFollowupRecord.abnormal_level, func.count(SpdFollowupRecord.id))

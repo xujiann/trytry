@@ -48,7 +48,8 @@ from ..models import (
     SpdTeamMember,
     SpdVillageDoctor,
 )
-from ..service import TASK_OPEN_STATUSES, sweep_overdue
+from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_OPEN_STATUSES, followup_overdue,
+                       sweep_overdue)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -148,10 +149,8 @@ def _followup_stats(db: Session, orgs: list[int] | None, today: date | None = No
     return {
         "total": total, "done": done,
         "completion_rate": round(done / total * 100, 1) if total else 0.0,
-        "overdue": query.filter(
-            SpdFollowupRecord.status == "planned",
-            SpdFollowupRecord.planned_at < today.isoformat(),
-        ).count(),
+        # 已标超期的 + 扫描间隙里过了日期的（P1-128：原先只数后者，进过一次工作台就恒为 0）
+        "overdue": query.filter(followup_overdue(today.isoformat())).count(),
         "abnormal": query.filter(
             SpdFollowupRecord.abnormal_level.in_(["mid", "high"])
         ).count(),
@@ -687,12 +686,10 @@ def admin_workbench(
             "overdue_tasks": _apply_scope(
                 db.query(SpdTask), SpdTask.org_id, orgs
             ).filter(SpdTask.status == "overdue").count(),
+            # 本端点进来先扫描：只数「planned 且已过期」恒为 0（P1-128）
             "overdue_followups": _apply_scope(
                 db.query(SpdFollowupRecord), SpdFollowupRecord.org_id, orgs
-            ).filter(
-                SpdFollowupRecord.status == "planned",
-                SpdFollowupRecord.planned_at < business_day.isoformat(),
-            ).count(),
+            ).filter(followup_overdue(business_day.isoformat())).count(),
             "pending_review_screenings": _apply_scope(
                 db.query(SpdScreening), SpdScreening.org_id, orgs
             ).filter(
@@ -1215,14 +1212,15 @@ def team_workbench(
             "pending_assess": pending_assess,
             "pending_target": mine_query.filter(SpdEnrollment.stage == "").count(),
             "pending_path": pending_path,
+            # 到期 = 没做完且日期不晚于今天——过了日期的已被扫描置为超期，只认 planned 就只剩今天的（P1-128）
             "due_followups": db.query(SpdFollowupRecord).filter(
                 SpdFollowupRecord.patient_id.in_(my_patients),
-                SpdFollowupRecord.status == "planned",
+                SpdFollowupRecord.status.in_(FOLLOWUP_OPEN_STATUSES),
                 SpdFollowupRecord.planned_at <= business_day.isoformat(),
             ).count(),
             "due_revisits": db.query(SpdRevisit).filter(
                 SpdRevisit.patient_id.in_(my_patients),
-                SpdRevisit.status == "planned",
+                SpdRevisit.status.in_(REVISIT_OPEN_STATUSES),
                 SpdRevisit.plan_date <= business_day.isoformat(),
             ).count(),
         },

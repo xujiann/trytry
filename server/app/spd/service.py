@@ -13,7 +13,7 @@
 from datetime import date, timedelta
 from typing import Any, cast
 
-from sqlalchemy import update
+from sqlalchemy import and_, or_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -245,6 +245,23 @@ TASK_IN_HAND_STATUSES = ("pending", "claimed", "doing", "rejected")
 #: 能「接收」（claim）的：待接收与已超期。单条与批量同一口径——批量原先按「未结束」放行，自己提交在等审核的任务
 #: 批量一勾就被接收回「已接收」、拉出审核队列（P2-83）
 TASK_CLAIMABLE_STATUSES = ("pending", "overdue")
+
+#: 随访记录（`spd_followup_records.status`）与复诊（`spd_revisits.status`）的「未完成」：还没做、含已超期。超期扫描把过了
+#: 日期的 planned 置为 overdue，只认 planned 的查询一扫就漏掉它们——工作台的超期随访恒为 0、到期数只剩今天的、结案不收
+#: 逾期复诊（P1-128）
+FOLLOWUP_OPEN_STATUSES = ("planned", "overdue")
+REVISIT_OPEN_STATUSES = ("planned", "overdue")
+#: 路径实例（`spd_path_instances.status`）的「未结束」：执行中与暂停（暂停的能恢复）
+PATH_OPEN_STATUSES = ("running", "paused")
+
+
+def followup_overdue(today: str):
+    """「超期随访」的判定：已标超期的 + 扫描间隙里还是 planned、日期已过的（两者都是超期；各处计数共用）。"""
+    return or_(
+        SpdFollowupRecord.status == "overdue",
+        and_(SpdFollowupRecord.status == "planned", SpdFollowupRecord.planned_at != "",
+             SpdFollowupRecord.planned_at < today),
+    )
 
 
 def spawn_task(
@@ -552,7 +569,7 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
     instances = (
         db.query(SpdPathInstance)
         .filter(SpdPathInstance.enrollment_id == enrollment.id,
-                SpdPathInstance.status == "running")
+                SpdPathInstance.status.in_(PATH_OPEN_STATUSES))
         .all()
     )
     for instance in instances:
@@ -577,7 +594,7 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
         .filter(
             SpdRevisit.patient_id == enrollment.patient_id,
             SpdRevisit.program_code == enrollment.program_code,
-            SpdRevisit.status == "planned",
+            SpdRevisit.status.in_(REVISIT_OPEN_STATUSES),
         )
         .all()
     )

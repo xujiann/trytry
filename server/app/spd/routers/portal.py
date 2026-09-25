@@ -46,8 +46,9 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import (MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES, close_followup_record,
-                       judge_measurement, measure_value_problem, scale_unusable, unknown_program)
+from ..service import (FOLLOWUP_OPEN_STATUSES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
+                       close_followup_record, judge_measurement, measure_value_problem, scale_unusable,
+                       unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -214,9 +215,10 @@ def home(
         ],
         "latest_metrics": latest,
         "todo": {
+            # 已超期的照样能在手机上自助随访，也是待办（P1-128）
             "followups": db.query(SpdFollowupRecord).filter(
                 SpdFollowupRecord.patient_id == patient.id,
-                SpdFollowupRecord.status == "planned",
+                SpdFollowupRecord.status.in_(FOLLOWUP_OPEN_STATUSES),
             ).count(),
             # 居民要动手的：未结束、且不是提交了在等医护审核的（退回重做的算，P1-127）
             "tasks": db.query(SpdTask).filter(

@@ -47,8 +47,8 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import (MEASUREMENT_SOURCE_NAMES, award_points, judge_measurement, measure_value_problem, scale_unusable,
-                       spawn_task, unknown_program)
+from ..service import (MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES, award_points, judge_measurement,
+                       measure_value_problem, scale_unusable, spawn_task, unknown_program)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
@@ -685,7 +685,7 @@ def _auto_intervene(db: Session, enrollment: SpdEnrollment, risk_level: str) -> 
                 SpdRevisit.patient_id == enrollment.patient_id,
                 SpdRevisit.program_code == enrollment.program_code,
                 SpdRevisit.source == "high_risk",
-                SpdRevisit.status == "planned",
+                SpdRevisit.status.in_(REVISIT_OPEN_STATUSES),   # 超期没来的那条还在，不再开一条（P1-128）
             )
             .first()
         )
