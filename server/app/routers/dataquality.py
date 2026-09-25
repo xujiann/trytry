@@ -322,6 +322,91 @@ _EXECUTORS = {
 }
 
 
+def _is_field(model, name) -> bool:
+    return isinstance(name, str) and bool(name.strip()) and hasattr(model, name)
+
+
+def _column_type(model, name: str):
+    """列的 Python 类型；不是列、或类型报不出来时返回 None（不查）。"""
+    column = sa_inspect(model).columns.get(name)
+    if column is None:
+        return None
+    try:
+        return column.type.python_type
+    except NotImplementedError:  # pragma: no cover - 自定义类型没实现 python_type
+        return None
+
+
+def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
+    """规则配置里会让扫描抛错、或让规则悄悄失效的写法，没问题返回空串（P2-81）。
+
+    原先建 / 改规则只查被检表登记与类型枚举，配置照单全收：区间的界与列类型对不上、枚举取值不是列表、
+    引用列不存在、引用表未登记、逻辑校验未实现、`filter` 不是对象——**任何一条**都让「汇总」「运行检查」整体
+    500 / 422，整个质控看板打不开。字段名写错的不报错却悄悄失效（`datetime_order` 的起止列不在就一条也不判）。
+    建 / 改规则时 422；扫描时存量里的坏规则跳过，在出参 `skipped_rules` 里点名，其余规则照常扫。
+    """
+    model = _TABLE_MODELS.get(target_table)
+    if model is None:
+        return f"被检表 {target_table} 未登记"
+    config = config or {}
+    if not isinstance(config, dict):
+        return "配置要写成对象"
+    row_filter = config.get("filter")
+    if row_filter is not None:
+        if not isinstance(row_filter, dict):
+            return "filter 要写成 {字段: 取值} 这样的对象"
+        wrong = [key for key in row_filter if not _is_field(model, key)]
+        if wrong:
+            return f"filter 里的 {'、'.join(map(str, wrong))} 不是 {target_table} 的字段"
+    for flag in ("skip_empty", "exclusive_min", "exclusive_max"):
+        if flag in config and not isinstance(config[flag], bool):
+            return f"{flag} 只能是 true / false"
+    field = config.get("field", "")
+    if rule_type in ("required", "range", "enum", "cross_ref") and not _is_field(model, field):
+        return f"field（{field or '空'}）不是 {target_table} 的字段"
+    if rule_type == "range":
+        kind = _column_type(model, field)
+        for key in ("min", "max"):
+            bound = config.get(key)
+            if bound is None:
+                continue
+            if kind is str and not isinstance(bound, str):
+                return f"{field} 是文字列，区间的 {key} 也要写成文字"
+            if kind in (int, float) and (isinstance(bound, bool) or not isinstance(bound, (int, float))):
+                return f"{field} 是数值列，区间的 {key} 必须是数"
+            if kind not in (None, str, int, float):
+                return f"{field} 不是数值或文字列，不能按区间判定"
+    if rule_type == "enum" and not isinstance(config.get("values", []), list):
+        return "values 要写成取值列表"
+    if rule_type == "cross_ref":
+        if config.get("ref_code_system"):
+            if not isinstance(config["ref_code_system"], str):
+                return "ref_code_system 要写成字典编码"
+        else:
+            ref_model = _TABLE_MODELS.get(config.get("ref_table", ""))
+            if ref_model is None:
+                return f"引用表 {config.get('ref_table') or '空'} 未登记"
+            if not _is_field(ref_model, config.get("ref_field", "code")):
+                return f"ref_field（{config.get('ref_field', 'code')}）不是 {config['ref_table']} 的字段"
+    if rule_type == "logic":
+        check = config.get("check", "")
+        if check not in _LOGIC_CHECKS:
+            return f"逻辑校验 {check or '空'} 未实现（可选：{'、'.join(sorted(_LOGIC_CHECKS))}）"
+        if check in ("id_card_checksum", "date_not_future") and not _is_field(model, config.get(
+                "field", "id_card" if check == "id_card_checksum" else "")):
+            return f"field（{config.get('field') or '空'}）不是 {target_table} 的字段"
+        if check == "datetime_order":
+            wrong = [config.get(k) or "空" for k in ("start_field", "end_field") if not _is_field(model, config.get(k))]
+            if wrong:
+                return f"起止字段 {'、'.join(map(str, wrong))} 不是 {target_table} 的字段"
+        if check == "chronic_followup_indicator":
+            mapping = config.get("disease_indicators", {})
+            if not isinstance(mapping, dict) or not all(
+                    isinstance(fields, list) and all(isinstance(f, str) for f in fields) for fields in mapping.values()):
+                return "disease_indicators 要写成 {病种编码: [指标字段, …]} 这样的对象"
+    return ""
+
+
 def run_rule(db: Session, rule: QcRule) -> list[dict]:
     """执行单条规则，返回违规明细（规则/表/记录id/问题描述/严重度）。"""
     model = _TABLE_MODELS.get(rule.target_table)
@@ -367,6 +452,13 @@ class ViolationOut(BaseModel):
     message: str
 
 
+class SkippedRuleOut(BaseModel):
+    rule_code: str
+    rule_name: str
+    #: 配置哪里写坏了（`rule_config_problem` 的文案）
+    problem: str
+
+
 class RunChecksOut(BaseModel):
     total: int
     error_total: int
@@ -374,6 +466,20 @@ class RunChecksOut(BaseModel):
     offset: int
     limit: int
     items: list[ViolationOut]
+    #: 配置写坏、本次没扫的规则（P2-81，只加字段）：原先任何一条都让整次扫描 500
+    skipped_rules: list[SkippedRuleOut]
+
+
+def _usable_rules(rules: list[QcRule]) -> tuple[list[QcRule], list[dict]]:
+    """把配置写坏的规则（修前存进去的）拣出来：不让一条规则拖垮整次扫描（P2-81）。"""
+    usable, skipped = [], []
+    for rule in rules:
+        problem = rule_config_problem(rule.target_table, rule.rule_type, rule.config or {})
+        if problem:
+            skipped.append({"rule_code": rule.code, "rule_name": rule.name, "problem": problem})
+        else:
+            usable.append(rule)
+    return usable, skipped
 
 
 @router.get("/run", response_model=RunChecksOut)
@@ -388,7 +494,8 @@ def run_checks(
 ):
     """按启用规则扫描现有数据，返回违规明细（停用规则不参与扫描）。"""
     violations: list[dict] = []
-    for rule in _active_rules(db, rule_code, target_table):
+    rules, skipped = _usable_rules(_active_rules(db, rule_code, target_table))
+    for rule in rules:
         if severity and rule.severity != severity:
             continue
         violations.extend(run_rule(db, rule))
@@ -402,6 +509,7 @@ def run_checks(
         "offset": max(offset, 0),
         "limit": limit,
         "items": violations[max(offset, 0) : max(offset, 0) + limit],
+        "skipped_rules": skipped,
     }
 
 
@@ -423,6 +531,8 @@ class SummaryOut(BaseModel):
     #: 键是启用规则的被检表实际取值（数据决定）
     by_table: dict[str, int]
     by_rule: list[SummaryRuleOut]
+    #: 配置写坏、本次没扫的规则（P2-81，只加字段）
+    skipped_rules: list[SkippedRuleOut]
 
 
 @router.get("/summary", response_model=SummaryOut)
@@ -430,7 +540,8 @@ def summary(db: Session = Depends(get_db)):
     """违规汇总：按规则、按严重度、按被检表三个维度。"""
     by_rule, by_severity = [], {"error": 0, "warn": 0}
     by_table: dict[str, int] = {}
-    for rule in _active_rules(db):
+    rules, skipped = _usable_rules(_active_rules(db))
+    for rule in rules:
         hits = run_rule(db, rule)
         by_rule.append(
             {
@@ -451,6 +562,7 @@ def summary(db: Session = Depends(get_db)):
         "by_severity": by_severity,
         "by_table": by_table,
         "by_rule": by_rule,
+        "skipped_rules": skipped,
     }
 
 
@@ -525,6 +637,9 @@ def create_rule(body: RuleCreate, db: Session = Depends(get_db)):
             status_code=422,
             detail=f"被检表未登记（可选：{'、'.join(sorted(_TABLE_MODELS))}）",
         )
+    problem = rule_config_problem(body.target_table, body.rule_type, body.config)   # P2-81
+    if problem:
+        raise HTTPException(status_code=422, detail=f"规则配置非法：{problem}")
     rule = insert_or_conflict(db, QcRule(**body.model_dump()), "规则编码已存在")
     return _rule_out(rule)
 
@@ -536,6 +651,10 @@ def update_rule(rule_id: int, body: RuleUpdate, db: Session = Depends(get_db)):
     rule = db.get(QcRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="规则不存在")
+    if body.config is not None:   # 与建规则同一句（P2-81）
+        problem = rule_config_problem(rule.target_table, rule.rule_type, body.config)
+        if problem:
+            raise HTTPException(status_code=422, detail=f"规则配置非法：{problem}")
     for key, value in body.model_dump(exclude_none=True).items():
         setattr(rule, key, value)
     db.commit()

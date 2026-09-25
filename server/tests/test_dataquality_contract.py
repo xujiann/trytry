@@ -37,7 +37,8 @@ RULE_KEY_ORDER = [
     "id", "code", "name", "target_table", "rule_type", "rule_type_name",
     "config", "severity", "severity_name", "active",
 ]
-RUN_KEY_ORDER = ["total", "error_total", "warn_total", "offset", "limit", "items"]
+#: skipped_rules：配置写坏、本次没扫的规则（P2-81，只加字段）；种子规则都过得了校验，恒为空
+RUN_KEY_ORDER = ["total", "error_total", "warn_total", "offset", "limit", "items", "skipped_rules"]
 VIOLATION_KEY_ORDER = [
     "rule_code", "rule_name", "rule_type", "severity", "table", "record_id", "message",
 ]
@@ -104,6 +105,7 @@ def test_空库run全零精确(client, admin):
     assert list(resp.json().keys()) == RUN_KEY_ORDER
     assert resp.json() == {
         "total": 0, "error_total": 0, "warn_total": 0, "offset": 0, "limit": 200, "items": [],
+        "skipped_rules": [],
     }
     assert resp.headers["X-Total-Count"] == "0"
 
@@ -132,22 +134,23 @@ def test_违规检出_run精确(client, admin, flawed_patient):
     assert list(resp.json()["items"][0].keys()) == VIOLATION_KEY_ORDER
     assert resp.json() == {
         "total": 1, "error_total": 0, "warn_total": 1, "offset": 0, "limit": 200,
-        "items": [expected_item],
+        "items": [expected_item], "skipped_rules": [],
     }
     # 过滤与分页参数回显
     assert client.get("/api/dataquality/run?rule_code=QC003&limit=1", headers=admin).json() == {
         "total": 1, "error_total": 0, "warn_total": 1, "offset": 0, "limit": 1,
-        "items": [expected_item],
+        "items": [expected_item], "skipped_rules": [],
     }
     assert client.get("/api/dataquality/run?severity=error", headers=admin).json() == {
         "total": 0, "error_total": 0, "warn_total": 0, "offset": 0, "limit": 200, "items": [],
+        "skipped_rules": [],
     }
 
 
 def test_汇总精确形状与键序(client, admin, flawed_patient):
     resp = client.get("/api/dataquality/summary", headers=admin)
     body = resp.json()
-    assert list(body.keys()) == ["rules_checked", "total", "by_severity", "by_table", "by_rule"]
+    assert list(body.keys()) == ["rules_checked", "total", "by_severity", "by_table", "by_rule", "skipped_rules"]
     assert list(body["by_rule"][0].keys()) == [
         "rule_code", "rule_name", "rule_type", "rule_type_name", "table", "severity", "violations"
     ]
@@ -172,6 +175,7 @@ def test_汇总精确形状与键序(client, admin, flawed_patient):
             }
             for code, name, table, rule_type, severity in SEED_RULES
         ],
+        "skipped_rules": [],
     }
 
 

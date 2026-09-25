@@ -602,6 +602,11 @@ async function renderEsb() {
 }
 
 const QC_SEVERITY = { error: ["错误", "red"], warn: ["警告", "orange"] };
+// 配置写坏、本次没扫的规则（P2-81）：原先任何一条都让整次扫描 500，现在跳过并点名
+const qcSkippedNote = (skipped) => (skipped || []).length
+  ? `<p class="msg err">⚠ ${skipped.length} 条规则配置有误，本次没有参与扫描：${skipped.map((r) =>
+    `${esc(r.rule_code)} ${esc(r.rule_name)}（${esc(r.problem)}）`).join("；")}</p>`
+  : "";
 
 async function renderDataQuality() {
   $("#page-desc").textContent = "规则引擎按启用规则扫描存量数据：必填/区间/枚举/引用/逻辑五类校验，停用规则不参与扫描";
@@ -609,7 +614,7 @@ async function renderDataQuality() {
     api("/api/dataquality/summary"), api("/api/dataquality/rules")]);
   const drawViolations = async (params = "?limit=200") => {
     const data = await api(`/api/dataquality/run${params}`);
-    $("#qc-violations").innerHTML = `<p class="desc" style="font-size:12.5px">共 ${data.total} 条违规（错误 ${data.error_total} / 警告 ${data.warn_total}），本页展示 ${data.items.length} 条</p>` +
+    $("#qc-violations").innerHTML = qcSkippedNote(data.skipped_rules) + `<p class="desc" style="font-size:12.5px">共 ${data.total} 条违规（错误 ${data.error_total} / 警告 ${data.warn_total}），本页展示 ${data.items.length} 条</p>` +
       table(["规则", "规则名称", "表", "记录ID", "问题描述", "严重度"], data.items, (v) => {
         return `<tr><td><span class="tag">${esc(v.rule_code)}</span></td><td>${esc(v.rule_name)}</td>
           <td>${esc(v.table)}</td><td>${v.record_id}</td><td>${esc(v.message)}</td>
@@ -622,6 +627,7 @@ async function renderDataQuality() {
       <div class="card"><div class="label">违规总数</div><div class="value${summary.total ? " warn" : ""}">${summary.total}</div></div>
       <div class="card"><div class="label">错误级</div><div class="value${summary.by_severity.error ? " warn" : ""}">${summary.by_severity.error || 0}</div></div>
       <div class="card"><div class="label">警告级</div><div class="value">${summary.by_severity.warn || 0}</div></div></div>
+    ${qcSkippedNote(summary.skipped_rules)}
     ${panel("违规明细", `
       <form class="inline" id="qc-run-form">
         <select name="rule_code"><option value="">全部规则</option>${rules.map((r) =>
