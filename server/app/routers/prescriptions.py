@@ -221,7 +221,7 @@ def create_prescription(
                 f"药物相互作用：{item.drug_name} 与 {names_by_code[other_code]} 存在相互作用，需药师人工审核"
             )
         # 禁忌诊断审查：诊断名命中禁忌关键词 → 转药师审并注明
-        # 清单按半角 / 全角逗号、顿号拆（P2-109）：导入 JSON 里写「妊娠，哺乳期」原先是一个词，这条禁忌从不触发
+        # 清单按半角 / 全角逗号、顿号拆（P1-137）：导入 JSON 里写「妊娠，哺乳期」原先是一个词，这条禁忌从不触发
         for keyword in split_list(rule.contraindicated_diagnoses):
             if keyword in body.diagnosis_name:
                 violations.append(

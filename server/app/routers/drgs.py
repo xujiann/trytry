@@ -33,7 +33,7 @@ __all__ = ["router", "assign_drg_group", "SEED_DRG_GROUPS", "FALLBACK_DRG_GROUP"
 
 
 def _split(value: str) -> list[str]:
-    # 全角逗号、顿号也认（P2-109）：只按半角逗号拆，界面上用中文输入法填的「鼻息肉，鼻窦炎」是一个词、永远命中不了
+    # 全角逗号、顿号也认（P1-137）：只按半角逗号拆，界面上用中文输入法填的「鼻息肉，鼻窦炎」是一个词、永远命中不了
     return split_list(value)
 
 

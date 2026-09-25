@@ -22,11 +22,11 @@ import re
 #: 必填文本至少要有一个非空白字符：`Field(min_length=1, max_length=N, pattern=NON_BLANK)`
 NON_BLANK = r"\S"
 
-#: 「逗号分隔」清单的分隔符：半角逗号、全角逗号、顿号（P2-109）。中文输入法打出来的是「，」「、」，只按半角逗号拆，
+#: 「逗号分隔」清单的分隔符：半角逗号、全角逗号、顿号（P1-137）。中文输入法打出来的是「，」「、」，只按半角逗号拆，
 #: 整串会被当成**一个**词——DRG 分组的主诊断关键词、审方规则的禁忌诊断就此永远命中不了，不报错。
 _LIST_SEPARATORS = re.compile(r"[,，、]")
 
 
 def split_list(value: str | None) -> list[str]:
-    """把界面 / 导入里「逗号分隔」的清单拆成去空白、去空项的列表；半角逗号、全角逗号、顿号都认（P2-109）。"""
+    """把界面 / 导入里「逗号分隔」的清单拆成去空白、去空项的列表；半角逗号、全角逗号、顿号都认（P1-137）。"""
     return [part.strip() for part in _LIST_SEPARATORS.split(value or "") if part.strip()]
