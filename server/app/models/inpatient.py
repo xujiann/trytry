@@ -274,7 +274,8 @@ class SurgerySchedule(Base):
     """手术排班：手术间 + 日期 + 时段。
 
     (room_id, scheduled_date, start_time) 唯一只挡得住起点完全相同的重排，
-    真正的区间重叠由应用层比较 start/end 判定（见 routers/surgery.py）。
+    真正的区间重叠由应用层比较 start/end 判定（见 routers/surgery.py）；判定读的是别的排班行，
+    判定与写入须在手术间这一行的临界区里（`serialized_on`，P1-117），否则并发时重叠的全排进去。
     """
 
     __tablename__ = "surgery_schedules"

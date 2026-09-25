@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import clock
+from ..concurrency import serialized_on
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list
 from ..database import get_db
 from ..numtypes import INT4_MAX
@@ -323,8 +324,11 @@ def schedule_surgery(
 
     重叠判定：同手术间同日，`已排 start < 新 end` 且 `已排 end > 新 start` 即冲突。
     时间是 "HH:MM" 定长字符串，字典序与时序一致，可直接比较。
-    并发下两个请求可能同时通过检查，(room_id, date, start_time) 唯一约束兜住
-    起点相同的情形；起点不同的极窄竞态由排班人复核，不上悲观锁。
+    判定读的是别的排班行、写的是一条 INSERT——INSERT 不给任何既有行加锁，并发下两路都读到「没有重叠」
+    就都排进去；(room_id, date, start_time) 唯一约束只挡得住起点完全相同的那种。原先把起点不同的情形
+    记作「极窄竞态由排班人复核，不上悲观锁」，真 PG 实测八路同时排起点错开的重叠时段，八台全排进同一
+    手术间（P1-117）。故判定与写入圈在手术间这一行的临界区里（`serialized_on`，PG 上 `SELECT … FOR UPDATE`），
+    不同手术间之间互不阻塞。
     """
     request = db.get(SurgeryRequest, request_id)
     if request is None:
@@ -338,44 +342,46 @@ def schedule_surgery(
     if body.end_time <= body.start_time:
         raise HTTPException(status_code=422, detail="结束时间须晚于开始时间")
 
-    conflict = (
-        db.query(SurgerySchedule)
-        .filter(
-            SurgerySchedule.room_id == body.room_id,
-            SurgerySchedule.scheduled_date == body.scheduled_date,
-            SurgerySchedule.start_time < body.end_time,
-            SurgerySchedule.end_time > body.start_time,
+    with serialized_on(db, OperatingRoom, room.id):
+        conflict = (
+            db.query(SurgerySchedule)
+            .filter(
+                SurgerySchedule.room_id == body.room_id,
+                SurgerySchedule.scheduled_date == body.scheduled_date,
+                SurgerySchedule.start_time < body.end_time,
+                SurgerySchedule.end_time > body.start_time,
+            )
+            .first()
         )
-        .first()
-    )
-    if conflict is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"手术间在 {conflict.start_time}-{conflict.end_time} 已被占用",
-        )
+        if conflict is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"手术间在 {conflict.start_time}-{conflict.end_time} 已被占用",
+            )
 
-    # D-1：排班记录、申请状态、患者通知必须同进同出。此处原先分两次 commit，
-    # 第二次之前中断就会留下"排班已落库、申请仍是 approved"的死结——重排被唯一
-    # 约束挡回 409，填术中记录又要求 scheduled，只能改数据库才能救。
-    # `notify_*` 本就设计成只 add 不 commit，正是为了让业务事务统一决定提交时机。
-    schedule = SurgerySchedule(request_id=request_id, created_by=user.id, **body.model_dump())
-    db.add(schedule)
-    request.status = "scheduled"
-    notify_patient(
-        db,
-        request.patient_id,
-        category="surgery",
-        title=f"手术已安排：{request.surgery_name}",
-        body=f"{body.scheduled_date} {body.start_time}-{body.end_time}，{room.name}。"
-             "请遵医嘱做好术前准备。",
-        link_type="surgery_request",
-        link_id=request.id,
-    )
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="该手术已排班或时段被并发占用") from None
+        # D-1：排班记录、申请状态、患者通知必须同进同出。此处原先分两次 commit，
+        # 第二次之前中断就会留下"排班已落库、申请仍是 approved"的死结——重排被唯一
+        # 约束挡回 409，填术中记录又要求 scheduled，只能改数据库才能救。
+        # `notify_*` 本就设计成只 add 不 commit，正是为了让业务事务统一决定提交时机。
+        # commit 必须在临界区里：PG 上行锁随提交释放，提前出块就把窗口放回去了。
+        schedule = SurgerySchedule(request_id=request_id, created_by=user.id, **body.model_dump())
+        db.add(schedule)
+        request.status = "scheduled"
+        notify_patient(
+            db,
+            request.patient_id,
+            category="surgery",
+            title=f"手术已安排：{request.surgery_name}",
+            body=f"{body.scheduled_date} {body.start_time}-{body.end_time}，{room.name}。"
+                 "请遵医嘱做好术前准备。",
+            link_type="surgery_request",
+            link_id=request.id,
+        )
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该手术已排班或时段被并发占用") from None
     db.refresh(schedule)
     return {
         "id": schedule.id,

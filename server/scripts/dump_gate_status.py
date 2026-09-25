@@ -58,6 +58,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_query_limit_params as limitparams
     import test_response_constraint_writers as respwriters
     import test_body_str_length as bodystr
+    import test_check_then_write_critical_section as checkwrite
     import test_body_declared_org_write_guard as declared
     import test_org_param_read_guard as orgread
     import test_byid_org_read_guard as byidread
@@ -134,6 +135,12 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_stage14_concurrency.py"),
         ("并发冲突", "读-改-写欠账", len(concurrency.KNOWN_READ_MODIFY_WRITE),
          "tests/test_stage14_concurrency.py"),
+        ("并发冲突", "先查别的行（区间 / 合计 / 条数）再写、不在临界区：已扫出待修", len(checkwrite.KNOWN_UNFIXED),
+         "tests/test_check_then_write_critical_section.py"),
+        ("并发冲突", "先查别的行再写、不在临界区：认证 / 账号链路待复核", len(checkwrite.PENDING_REVIEW),
+         "tests/test_check_then_write_critical_section.py"),
+        ("并发冲突", "先查别的行再写、不在临界区：判为接受（逐条写明为什么穿过去也不出错）", len(checkwrite.ACCEPTED),
+         "tests/test_check_then_write_critical_section.py"),
         ("引用完整性", "请求体外键原样写库、函数里一眼不看（撞外键被翻成 409 误报 / 500）", bodyfk.BASELINE,
          "tests/test_body_fk_exists.py"),
         ("引用完整性", "写接口按入参取带启用标志的目录对象却不看标志（停用的模板 / 团队 / 服务包照样引用；12 → 0 已清零）",
