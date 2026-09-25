@@ -8,13 +8,12 @@
  * 页面间共享状态会让"从 A 页跳到 B 页看到的是 A 页的筛选条件"这类问题冒出来。
  */
 
-/* 各端共用的目录数据（病种/团队/量表/路径），首次访问任一慢专病页面时拉一次。
- * 缓存在内存而不是 localStorage：配置改了要能刷新页面就生效。 */
-let SPD_CATALOG = null;
-
-async function spdCatalog(force) {
-  if (!SPD_CATALOG || force) SPD_CATALOG = await api("/api/spd/catalog");
-  return SPD_CATALOG;
+/* 各端共用的目录数据（病种 / 团队 / 已发布的量表 / 中心 / 已发布的路径模板），每次进页面都重取（P2-107）。
+ * 原先首次访问任一慢专病页面时拉一次、存进全局变量，只有运行中枢强制重取——页面之间跳转不重载浏览器，于是路径页
+ * 刚发布的模板，同一页「启动患者路径」的下拉里没有；团队页刚建的团队，专病中心「目标池分发」的下拉里没有；停用的
+ * 路径模板照旧列着、选了才被后端拒——都要刷新整个浏览器才对。一页只调一次，重取的代价是一个轻接口。 */
+async function spdCatalog() {
+  return api("/api/spd/catalog");
 }
 
 const SPD_RISK = {
@@ -283,7 +282,7 @@ async function renderSpdAdmin() {
     "运行中枢：超期任务提醒、慢病与专病并行运行状态、配置完备度；病种/量表/服务包/宣教素材/标签/设备/数据源维护与机构树";
   const [wb, catalog, sources, programs, dsm, devices, tags, orgTree, scales, packages, materials] = await Promise.all([
     api("/api/spd/workbench/admin"),
-    spdCatalog(true),
+    spdCatalog(),
     api("/api/spd/data-sources"),
     api("/api/spd/programs?limit=100"),
     api("/api/spd/data-sources-monitor"),

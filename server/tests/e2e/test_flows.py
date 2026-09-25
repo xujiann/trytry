@@ -1650,6 +1650,22 @@ def test_运行中枢能新建宣教素材与接入数据源(page, base_url, adm
     assert (source["name"], source["source_type"], source["freq_minutes"]) == ("E2E 检验系统", "LIS", 30), source
 
 
+def test_路径页刚发布的模板_同一页启动路径的下拉里就有(page, base_url, admin_call, admin_read):
+    """P2-107：目录（病种 / 团队 / 已发布的量表 / 中心 / 已发布的路径模板）原先首次访问慢专病页面时拉一次、存进全局变量，
+    只有运行中枢强制重取——页面之间跳转不重载浏览器，路径页上发布了模板，同一页「启动患者路径」的下拉里没有，
+    要刷新整个浏览器才看得到。"""
+    hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")
+    tpl = admin_call("POST", "/api/spd/path-templates", {"program_id": hyp["id"], "code": "E2E_FRESH_TPL",
+                                                        "name": "E2E刚发布路径"})
+    admin_call("POST", f"/api/spd/path-templates/{tpl['id']}/nodes", {"key": "n1", "name": "首诊", "seq": 1})
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    option = page.locator(f'#spd-inst-form select[name="template_id"] option[value="{tpl["id"]}"]')
+    expect(option).to_have_count(0)   # 草稿不列
+    _redrawn(page, lambda: page.click(f'button[data-tpl-pub="{tpl["id"]}"]'))
+    expect(option).to_have_count(1)   # 修前 0：目录还是进页面时拉的那份
+
+
 def test_路径模板与推送任务能在界面上删除_用过的删不掉改停用(page, base_url, seed, admin_call, admin_read):
     """P2-93（动词级孤儿）：删路径模板、删报告推送任务原先只有接口——建错了的草稿在界面上删不掉。后端早就挡着用过的
     （有患者走过的路径、生成过报告的任务 409）；路径模板的 409 让人「停用」，页面上原先也没有停用按钮。"""
