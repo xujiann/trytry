@@ -105,6 +105,7 @@ class TrialBalanceLineOut(BaseModel):
     subject_code: str
     subject_name: str
     category: str
+    category_name: str
     debit: int | float
     credit: int | float
 
@@ -437,6 +438,7 @@ def trial_balance(
                 "subject_code": code,
                 "subject_name": subject.name if subject else "",
                 "category": subject.category if subject else "",
+                "category_name": CATEGORY_NAMES.get(subject.category, subject.category) if subject else "",
                 "debit": round(debit or 0, 2),
                 "credit": round(credit or 0, 2),
             }

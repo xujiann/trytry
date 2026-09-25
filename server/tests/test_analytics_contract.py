@@ -224,7 +224,7 @@ def test_performance_report_结构(client, admin, seeded):
     assert isinstance(body["formula_count"], int)
     assert body["orgs"], "至少一家机构"
     for org in body["orgs"]:
-        assert set(org) == {"org_id", "org_name", "level", "items", "weighted_score"}
+        assert set(org) == {"org_id", "org_name", "level", "level_name", "items", "weighted_score"}
         assert _num(org["weighted_score"])
         assert org["items"], "seeded 建了公式，items 不该为空"
 

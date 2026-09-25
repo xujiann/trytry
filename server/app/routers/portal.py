@@ -103,7 +103,7 @@ from .appointments import book_slot, release_appointment
 from .auth import record_login_event
 # 余额复用 billing 的流水现算口径（预交-退费-冲抵）——居民端另算一套
 # 只会造出第二个数字，对账时没人说得清哪个是对的（P1-24b）。
-from .billing import DEPOSIT_TYPES, deposit_balance
+from .billing import CHARGE_CATEGORY_NAMES, DEPOSIT_TYPES, deposit_balance
 from .consents import (
     SCENE_PATTERN,
     ConsentOut,
@@ -2346,11 +2346,6 @@ def portal_submit_survey(body: PortalSurveyCreate, db: Session = Depends(get_db)
     return {"id": survey.id, "submitted": True}
 
 
-# 收费类别的中文名：公示页给患者看，"drug"/"bed" 这种英文枚举不能直接抛出去
-CHARGE_CATEGORY_NAMES = {
-    "drug": "药品", "exam": "检查检验", "treatment": "治疗处置",
-    "bed": "床位", "other": "其他",
-}
 
 
 @router.get("/health-articles", response_model=list[HealthArticleOut])

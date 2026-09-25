@@ -34,6 +34,7 @@ from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import scope_stats_orgs
 from ..formula import FormulaError, evaluate, validate
+from .organizations import ORG_LEVEL_NAMES
 from ..models import (
     Admission,
     Bed,
@@ -212,6 +213,7 @@ class OrgReportOut(BaseModel):
     org_id: int
     org_name: str
     level: str
+    level_name: str
     #: **多态**：正常项是 `{key,name,unit,weight,value}`；公式求值失败时
     #: `value` 为 `None` 且**多出一个 `error` 键**。用 Pydantic 逐字段建模就得声明
     #: `error`，那会给成功项注入 `"error": null` —— 改字节。故与
@@ -771,6 +773,7 @@ def performance_report(period: str, db: Session = Depends(get_db)):
                 "org_id": org.id,
                 "org_name": org.name,
                 "level": org.level,
+                "level_name": ORG_LEVEL_NAMES.get(org.level, org.level),
                 "items": items,
                 "weighted_score": round(weighted / weight_sum, 2) if weight_sum else 0.0,
             }

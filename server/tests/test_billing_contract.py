@@ -36,7 +36,7 @@ from app.main import app
 from app.routers import billing as billing_router
 from app.routers.billing import MOCK_GATEWAY
 
-CHARGE_ITEM_KEYS = ["id", "code", "name", "category", "price", "active"]
+CHARGE_ITEM_KEYS = ["id", "code", "name", "category", "category_name", "price", "active"]
 PRICE_CHANGE_KEYS = ["id", "old_price", "new_price", "reason", "effective_date", "changed_at"]
 DETAIL_KEYS = [
     "id", "patient_id", "admission_id", "encounter_id", "item_code", "item_name",
@@ -240,7 +240,7 @@ def test_收费项目回执精确_键序与Money类型(seed):
     assert list(body.keys()) == CHARGE_ITEM_KEYS
     assert body == {
         "id": body["id"], "code": "CT-BED", "name": "床位费(契约)",
-        "category": "bed", "price": 100, "active": True,
+        "category": "bed", "category_name": "床位", "price": 100, "active": True,   # P2-74：类别文案
     }
     # Money 列：整数价读回来是 int（声明成 float 会变 100.0，即改字节）
     assert type(body["price"]) is int

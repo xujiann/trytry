@@ -146,14 +146,14 @@ def test_加成员回执精确形状与键序(zone_members, groups, orgs):
 
 def test_成员清单精确形状与键序(client, admin, groups, orgs, zone_members):
     rows = client.get(f"/api/org-groups/{groups['zone']['id']}/members", headers=admin).json()
-    assert list(rows[0].keys()) == ["org_id", "org_name", "level", "joined_at"]
+    assert list(rows[0].keys()) == ["org_id", "org_name", "level", "level_name", "joined_at"]
     # joined_at 是入组时刻的 isoformat 字符串，值不可预测——钉格式、其余全键钉值
     for row in rows:
         assert "T" in row["joined_at"] and row["joined_at"][:2] == "20"
     assert rows == [
-        {"org_id": orgs["lead"]["id"], "org_name": "分组契约牵头医院", "level": "county",
+        {"org_id": orgs["lead"]["id"], "org_name": "分组契约牵头医院", "level": "county", "level_name": "县级",
          "joined_at": rows[0]["joined_at"]},
-        {"org_id": orgs["member"]["id"], "org_name": "分组契约卫生院", "level": "township",
+        {"org_id": orgs["member"]["id"], "org_name": "分组契约卫生院", "level": "township", "level_name": "乡级",
          "joined_at": rows[1]["joined_at"]},
     ]
 
@@ -199,7 +199,7 @@ def test_覆盖情况精确形状与键序(client, admin, orgs, groups, zone_mem
         "orgs_total": 3,
         "orgs_grouped": 2,
         "ungrouped": [{"org_id": orgs["loner"]["id"], "org_name": "分组契约卫生室",
-                       "level": "village"}],
+                       "level": "village", "level_name": "村级"}],
         "note": COVERAGE_NOTE,
     }
     # 没有任何该类型分组：全部机构未入组（按机构 id 升序）
@@ -211,9 +211,9 @@ def test_覆盖情况精确形状与键序(client, admin, orgs, groups, zone_mem
         "orgs_total": 3,
         "orgs_grouped": 0,
         "ungrouped": [
-            {"org_id": orgs["lead"]["id"], "org_name": "分组契约牵头医院", "level": "county"},
-            {"org_id": orgs["member"]["id"], "org_name": "分组契约卫生院", "level": "township"},
-            {"org_id": orgs["loner"]["id"], "org_name": "分组契约卫生室", "level": "village"},
+            {"org_id": orgs["lead"]["id"], "org_name": "分组契约牵头医院", "level": "county", "level_name": "县级"},
+            {"org_id": orgs["member"]["id"], "org_name": "分组契约卫生院", "level": "township", "level_name": "乡级"},
+            {"org_id": orgs["loner"]["id"], "org_name": "分组契约卫生室", "level": "village", "level_name": "村级"},
         ],
         "note": COVERAGE_NOTE,
     }

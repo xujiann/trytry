@@ -341,7 +341,7 @@ async function renderAccounting() {
       <p class="msg ${balance.balanced ? "ok" : "err"}">借方合计 ${balance.total_debit.toFixed(2)}　贷方合计 ${
         balance.total_credit.toFixed(2)}　${balance.balanced ? "平衡" : "不平衡"}</p>
       ${table(["科目", "名称", "类别", "借方", "贷方"], balance.lines, (l) =>
-        `<tr><td>${esc(l.subject_code)}</td><td>${esc(l.subject_name)}</td><td>${esc(l.category)}</td>
+        `<tr><td>${esc(l.subject_code)}</td><td>${esc(l.subject_name)}</td><td>${esc(l.category_name)}</td>
          <td>${l.debit.toFixed(2)}</td><td>${l.credit.toFixed(2)}</td></tr>`)}`)}
     <div class="panel hidden" id="voucher-detail"><h3>凭证明细</h3><div id="voucher-detail-body"></div></div>`;
 
@@ -449,7 +449,7 @@ async function renderCost() {
       <p class="desc">床日成本分母是实际占用床日，不是床位数×天数——后者是可用床日，混用会把成本算低。</p>`) : ""}
     ${panel("归集科室直接成本", `
       <form class="inline" id="cost-form"><select name="dept_id">${
-        depts.map((d) => `<option value="${d.id}">${esc(d.name)}（${d.category}）</option>`).join("")}</select>
+        depts.map((d) => `<option value="${d.id}">${esc(d.name)}（${esc(d.category_name)}）</option>`).join("")}</select>
         <input name="period" value="${esc(period)}" placeholder="YYYY-MM" required>
         <select name="cost_type">${Object.entries(COST_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <input name="amount" type="number" step="0.01" placeholder="金额" required><button>归集</button></form>
@@ -667,7 +667,7 @@ async function renderAnalytics() {
         也不要相互印证。对上考核用「绩效考核」页。</p>${
       table(["排名", "机构", "层级", ...report.orgs[0] ? report.orgs[0].items.map((i) => i.name) : [], "加权得分"],
         report.orgs, (o, idx) =>
-        `<tr><td>${idx + 1}</td><td>${esc(o.org_name)}</td><td>${esc(o.level)}</td>
+        `<tr><td>${idx + 1}</td><td>${esc(o.org_name)}</td><td>${esc(o.level_name)}</td>
          ${o.items.map((i) => `<td>${i.value === null ? `<span class="tag red" title="${esc(i.error || "")}">错误</span>` : i.value}</td>`).join("")}
          <td><b>${o.weighted_score}</b></td></tr>`)}`) : ""}`;
   $("#ana-period").onsubmit = (e) => { e.preventDefault();
@@ -1561,7 +1561,7 @@ async function renderOrgGroups() {
         <button>加入分组</button>
       </form>
       ${table(["机构", "层级", "加入时间", "操作"], members, (m) =>
-        `<tr><td>${esc(m.org_name)}</td><td>${esc(m.level)}</td>
+        `<tr><td>${esc(m.org_name)}</td><td>${esc(m.level_name)}</td>
          <td>${esc(m.joined_at.slice(0, 10))}</td>
          <td><button data-ogdrop="${m.org_id}">移出</button></td></tr>`)}
     `) : ""}
@@ -1581,7 +1581,7 @@ async function renderOrgGroups() {
       ${coverage.ungrouped.length
         ? `<p class="msg err">${esc(coverage.note)}</p>${
             table(["机构", "层级"], coverage.ungrouped, (o) =>
-              `<tr><td>${esc(o.org_name)}</td><td>${esc(o.level)}</td></tr>`)}`
+              `<tr><td>${esc(o.org_name)}</td><td>${esc(o.level_name)}</td></tr>`)}`
         : '<p class="desc">全部机构均已入组，按分组统计之和等于全域总数。</p>'}
     `)}
 

@@ -119,6 +119,7 @@ class ChargeItemOut(BaseModel):
     code: str
     name: str
     category: str
+    category_name: str
     price: int | float
     active: bool
 
@@ -132,10 +133,19 @@ class ChargePriceChangeOut(BaseModel):
     changed_at: str
 
 
+# 收费类别的中文名：公示页给患者看、收费目录给窗口看，"drug"/"bed" 这种英文枚举不能直接抛出去
+# （原在 portal.py，P2-74 起一处定义，居民端公示与收费目录共用）
+CHARGE_CATEGORY_NAMES = {
+    "drug": "药品", "exam": "检查检验", "treatment": "治疗处置",
+    "bed": "床位", "other": "其他",
+}
+
+
 def _charge_item_out(i: ChargeItem) -> dict:
     return {
         "id": i.id, "code": i.code, "name": i.name,
-        "category": i.category, "price": i.price, "active": i.active,
+        "category": i.category, "category_name": CHARGE_CATEGORY_NAMES.get(i.category, i.category),
+        "price": i.price, "active": i.active,
     }
 
 

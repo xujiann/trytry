@@ -119,6 +119,7 @@ class SimulationCaseOut(BaseModel):
     id: int
     title: str
     category: str
+    category_name: str
     scenario: str
     decision_points: list[DecisionPointOut]
     total_score: int
@@ -295,6 +296,10 @@ class SimulationSubmit(BaseModel):
     answers: dict[str, str]
 
 
+# 模拟病例类别文案（措辞照抄 SimulationCase.category 列注释——P2-74）
+SIMULATION_CATEGORY_NAMES = {"tcm": "中医药适宜技术", "clinical": "临床", "emergency": "急救"}
+
+
 def _sim_out(case: SimulationCase, with_answers: bool = False) -> dict:
     points = []
     for p in case.decision_points or []:
@@ -308,6 +313,7 @@ def _sim_out(case: SimulationCase, with_answers: bool = False) -> dict:
         "id": case.id,
         "title": case.title,
         "category": case.category,
+        "category_name": SIMULATION_CATEGORY_NAMES.get(case.category, case.category),
         "scenario": case.scenario,
         "decision_points": points,
         "total_score": sum(p.get("score", 10) for p in (case.decision_points or [])),

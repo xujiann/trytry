@@ -15,6 +15,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..models import Organization, OrgGroup, OrgGroupMember
 from ..texttypes import NON_BLANK
+from .organizations import ORG_LEVEL_NAMES
 
 router = APIRouter(
     prefix="/api/org-groups", tags=["机构协作分组"], dependencies=[Depends(get_current_user)]
@@ -134,6 +135,7 @@ class OrgGroupMemberRowOut(BaseModel):
     org_id: int
     org_name: str
     level: str
+    level_name: str
     #: 入组时刻（DateTime 列的 isoformat 字符串）
     joined_at: str
 
@@ -148,6 +150,8 @@ def list_members(group_id: int, db: Session = Depends(get_db)):
             "org_id": m.org_id,
             "org_name": org_names[m.org_id].name if m.org_id in org_names else "",
             "level": org_names[m.org_id].level if m.org_id in org_names else "",
+            "level_name": ORG_LEVEL_NAMES.get(org_names[m.org_id].level, org_names[m.org_id].level)
+            if m.org_id in org_names else "",
             "joined_at": m.joined_at.isoformat(),
         }
         for m in rows
@@ -221,6 +225,7 @@ class OrgGroupCoverageOrgOut(BaseModel):
     org_id: int
     org_name: str
     level: str
+    level_name: str
 
 
 class OrgGroupCoverageOut(BaseModel):
@@ -251,7 +256,8 @@ def coverage(group_type: str = "zone", db: Session = Depends(get_db)):
             .all()
         }
     orgs = db.query(Organization).all()
-    ungrouped = [{"org_id": o.id, "org_name": o.name, "level": o.level}
+    ungrouped = [{"org_id": o.id, "org_name": o.name, "level": o.level,
+                  "level_name": ORG_LEVEL_NAMES.get(o.level, o.level)}
                  for o in orgs if o.id not in grouped]
     return {
         "group_type": group_type,

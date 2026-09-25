@@ -246,10 +246,10 @@ def test_科室建档回执与清单精确(client, admin, base, departments):
     assert list(body.keys()) == ["id", "org_id", "code", "name"]
     assert body == {"id": body["id"], "org_id": base["org1"]["id"], "code": "NK", "name": "内科"}
     rows = client.get("/api/mgmt/departments", headers=admin).json()
-    assert [list(r.keys()) for r in rows] == [["id", "org_id", "code", "name", "category"]] * 2
+    assert [list(r.keys()) for r in rows] == [["id", "org_id", "code", "name", "category", "category_name"]] * 2
     assert rows == [
-        {**departments["d1"], "category": "clinical"},
-        {**departments["d2"], "category": "medtech"},
+        {**departments["d1"], "category": "clinical", "category_name": "临床"},   # P2-74：页面原先显示 clinical
+        {**departments["d2"], "category": "medtech", "category_name": "医技"},
     ]  # 按 org_id、code 排序
     assert client.get(
         f"/api/mgmt/departments?org_id={base['org2']['id']}", headers=admin

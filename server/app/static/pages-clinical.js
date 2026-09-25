@@ -380,7 +380,7 @@ async function renderConsents() {
     $("#cr-table").innerHTML = table(
       ["ID", "患者", "类型", "内容", "理由", "操作"], rows, (r) =>
       `<tr><td>${esc(String(r.id))}</td><td>${esc(String(r.patient_id))}</td>
-       <td>${esc(r.request_type)}</td><td>${esc(r.changes || "—")}</td><td>${esc(r.reason || "")}</td>
+       <td>${esc(r.request_type_name)}</td><td>${esc(r.changes || "—")}</td><td>${esc(r.reason || "")}</td>
        <td><button data-review="${esc(String(r.id))}" data-verdict="approved">通过</button>
            <button data-review="${esc(String(r.id))}" data-verdict="rejected" class="danger">拒绝</button></td></tr>`);
   };
@@ -891,7 +891,7 @@ async function renderEducation() {
         <input name="speaker" placeholder="讲者"><button>创建</button>
       </form><p class="msg" id="edu-msg"></p>`)}
     ${panel("课程列表", table(["ID", "课程", "形式", "类别", "讲者", "操作"], courses, (c) =>
-      `<tr><td>${c.id}</td><td>${esc(c.title)}</td><td>${c.course_type === "live" ? "直播" : "点播"}</td><td>${esc(c.category)}</td><td>${esc(c.speaker)}</td>
+      `<tr><td>${c.id}</td><td>${esc(c.title)}</td><td>${c.course_type === "live" ? "直播" : "点播"}</td><td>${esc(c.category_name)}</td><td>${esc(c.speaker)}</td>
        <td><button class="btn secondary" data-exam="${c.id}">提交考核</button>
            <button class="btn secondary" data-cstats="${c.id}">培训统计</button></td></tr>`))}
       <div id="edu-detail"></div>
@@ -1747,7 +1747,7 @@ async function renderTcmHeritage() {
       <div id="mc-list">${renderCaseTable(cases)}</div>`)}
     ${panel("模拟诊疗病例", `
       ${table(["标题", "类别", "决策点", "满分", "及格分", "状态", "操作"], sims, (s) =>
-        `<tr><td>${esc(s.title)}</td><td>${esc(s.category)}</td><td>${s.decision_points.length}</td>` +
+        `<tr><td>${esc(s.title)}</td><td>${esc(s.category_name)}</td><td>${s.decision_points.length}</td>` +
         `<td>${s.total_score}</td><td>${s.pass_score}</td>` +
         `<td>${s.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>` +
         `<td>${s.active && s.decision_points.length
@@ -2162,7 +2162,7 @@ async function renderHrFinance() {
         <select name="category"><option value="clinical">临床</option><option value="medtech">医技</option><option value="admin">行政</option></select>
         <button>科室建档</button></form>
       ${table(["ID", "机构", "编码", "名称", "类别"], departments, (d) =>
-        `<tr><td>${d.id}</td><td>${d.org_id}</td><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td><td>${esc(d.category)}</td></tr>`)}`)}
+        `<tr><td>${d.id}</td><td>${d.org_id}</td><td><span class="tag">${esc(d.code)}</span></td><td>${esc(d.name)}</td><td>${esc(d.category_name)}</td></tr>`)}`)}
     ${panel("员工（变动留痕联动机构与状态）", table(["ID", "机构", "姓名", "职称", "科室", "状态", "操作"], employees, (em) => {
       return `<tr><td>${em.id}</td><td>${em.org_id}</td><td>${esc(em.name)}</td><td>${esc(em.title)}</td>
         <td>${em.dept_id ? esc(deptNames[em.dept_id] || em.dept_id) : "—"}</td><td>${statusTag(EST, em.status)}</td>
@@ -2335,7 +2335,7 @@ async function renderOaQc() {
         <input name="note" placeholder="备注"><input name="record_date" placeholder="日期"><button>登记质控</button></form>
       <p class="msg" id="oa-msg"></p>`)}
     ${panel("公文", table(["ID", "标题", "类型", "发文单位", "状态", "操作"], docs, (d) =>
-      `<tr><td>${d.id}</td><td>${esc(d.title)}</td><td>${esc(d.doc_type)}</td><td>${esc(d.issuer)}</td>
+      `<tr><td>${d.id}</td><td>${esc(d.title)}</td><td>${esc(d.doc_type_name)}</td><td>${esc(d.issuer)}</td>
        <td><span class="tag ${d.status === "published" ? "green" : "orange"}">${d.status === "published" ? "已发布" : "草稿"}</span></td>
        <td>${d.status === "draft" ? `<button class="btn secondary" data-pub="${d.id}">发布</button>` : "—"}</td></tr>`))}
     ${panel("排班", table(["中心", "日期", "班次", "医师"], rosters, (r) =>
@@ -2637,7 +2637,7 @@ async function renderBilling() {
         <input name="price" type="number" step="any" placeholder="单价(元)" required><button>加入目录</button></form>
       <p class="msg" id="bill-msg"></p>
       ${table(["编码", "名称", "类别", "单价", "状态", "操作"], items, (i) =>
-        `<tr><td>${esc(i.code)}</td><td>${esc(i.name)}</td><td>${esc(i.category)}</td><td>${i.price}</td>
+        `<tr><td>${esc(i.code)}</td><td>${esc(i.name)}</td><td>${esc(i.category_name)}</td><td>${i.price}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
          <td><button class="btn secondary" data-reprice="${i.id}">调价</button>
              <button class="btn secondary" data-history="${i.id}">调价历史</button>

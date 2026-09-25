@@ -213,6 +213,7 @@ class CorrectionOut(BaseModel):
     id: int
     patient_id: int
     request_type: str
+    request_type_name: str
     #: {"字段名": "新值"} 的 JSON 串；deactivate 类为空串
     changes: str
     reason: str
@@ -223,11 +224,16 @@ class CorrectionOut(BaseModel):
     created_at: str
 
 
+# 申请类型文案（措辞照抄 CorrectionRequest.request_type 列注释——P2-74）
+CORRECTION_TYPE_NAMES = {"correction": "字段更正", "deactivate": "档案注销"}
+
+
 def correction_out(req: CorrectionRequest) -> dict:
     return {
         "id": req.id,
         "patient_id": req.patient_id,
         "request_type": req.request_type,
+        "request_type_name": CORRECTION_TYPE_NAMES.get(req.request_type, req.request_type),
         "changes": req.changes,
         "reason": req.reason,
         "status": req.status,

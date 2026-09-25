@@ -440,8 +440,17 @@ class DocOut(DocCreate):
     status: str
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     title: str = Field(min_length=1, max_length=256)
+    doc_type_name: str
 
-    model_config = {"from_attributes": True}
+
+# 公文类型文案（措辞照抄 OfficialDoc.doc_type 列注释；公文表显示它，不再原样显示 minutes——P2-74）
+DOC_TYPE_NAMES = {"notice": "通知", "policy": "政策文件", "minutes": "会议纪要"}
+
+
+def _doc_out(doc: OfficialDoc) -> dict:
+    out = {name: getattr(doc, name) for name in DocOut.model_fields if name != "doc_type_name"}
+    out["doc_type_name"] = DOC_TYPE_NAMES.get(doc.doc_type, doc.doc_type)
+    return out
 
 
 @router.post("/docs", response_model=DocOut, status_code=201, dependencies=[Depends(require_roles("director", "operator"))])
@@ -450,7 +459,7 @@ def create_doc(body: DocCreate, db: Session = Depends(get_db)):
     db.add(doc)
     db.commit()
     db.refresh(doc)
-    return doc
+    return _doc_out(doc)
 
 
 @router.post("/docs/{doc_id}/publish", response_model=DocOut, dependencies=[Depends(require_roles("director"))])
@@ -463,7 +472,7 @@ def publish_doc(doc_id: int, db: Session = Depends(get_db)):
     doc.status = "published"
     db.commit()
     db.refresh(doc)
-    return doc
+    return _doc_out(doc)
 
 
 @router.get("/docs", response_model=list[DocOut])
@@ -471,7 +480,7 @@ def list_docs(status: str | None = None, db: Session = Depends(get_db)):
     query = db.query(OfficialDoc)
     if status:
         query = query.filter(OfficialDoc.status == status)
-    return query.order_by(OfficialDoc.id.desc()).limit(200).all()
+    return [_doc_out(d) for d in query.order_by(OfficialDoc.id.desc()).limit(200).all()]
 
 
 # ---------- ①-④ 共享中心排班与质控 ----------
@@ -581,9 +590,14 @@ class DeptReceiptOut(BaseModel):
 
 
 class DeptRowOut(DeptReceiptOut):
-    """清单行 = 建档回执四键 + category（前四键键序一致，故可继承）。"""
+    """清单行 = 建档回执四键 + category（前四键键序一致，故可继承）+ 类别文案（P2-74）。"""
 
     category: str
+    category_name: str
+
+
+# 科室类别文案（措辞照抄 Department.category 列注释；人财物页科室表、成本页科室下拉显示它——P2-74）
+DEPT_CATEGORY_NAMES = {"clinical": "临床", "medtech": "医技", "admin": "行政后勤"}
 
 
 class DeptAssignOut(BaseModel):
@@ -616,7 +630,8 @@ def list_departments(org_id: int | None = None, db: Session = Depends(get_db), u
     q = db.query(Department).filter(Department.active.is_(True))
     q = scope_org_list(db, user, q, Department, org_id)
     return [
-        {"id": d.id, "org_id": d.org_id, "code": d.code, "name": d.name, "category": d.category}
+        {"id": d.id, "org_id": d.org_id, "code": d.code, "name": d.name, "category": d.category,
+         "category_name": DEPT_CATEGORY_NAMES.get(d.category, d.category)}
         for d in q.order_by(Department.org_id, Department.code).all()
     ]
 

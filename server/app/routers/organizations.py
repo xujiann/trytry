@@ -10,6 +10,9 @@ from ..schemas import OrganizationCreate, OrganizationOut
 
 router = APIRouter(prefix="/api/organizations", tags=["机构管理"])
 
+# 机构层级文案（措辞照抄 Organization.level 列注释；报表、医共体分组等页面显示它，别把 county 原样给人看——P2-74）
+ORG_LEVEL_NAMES = {"city": "市级", "county": "县级", "township": "乡级", "village": "村级"}
+
 #: 顶层机构层级——parent_id 为空是正常的（机构树的根）。其余层级缺 parent_id 即"孤儿"。
 _ROOT_LEVELS = {"county", "city"}
 

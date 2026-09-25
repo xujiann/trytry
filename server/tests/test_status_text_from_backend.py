@@ -229,10 +229,11 @@ def _label_tables():
                             SpdFollowupRecord, SpdFollowupRule, SpdPathTemplate, SterilizationBatch, SurgeryRequest,
                             TcmDispenseOrder, TcmPreparationBatch, TrainingEnrollment, TrainingPlan, VisitCredential,
                             Voucher, WorkflowInstance)
-    from app.routers import (accounting, appointments, consents, consultations, credentials, cssd, education,
-                             emergency, esb, exams, followups, fund, homevisits, insurance, materials, medication,
-                             medwaste, pathology, prescriptions, quality, referrals, surgery, tcm, telemedicine,
-                             workflows)
+    from app.models import AccountSubject, ChargeItem, Course, Department, OfficialDoc, Organization, SimulationCase
+    from app.routers import (accounting, admin_mgmt, appointments, billing, consents, consultations, credentials, cssd,
+                             education, emergency, esb, exams, followups, fund, homevisits, insurance, materials,
+                             medication, medwaste, organizations, pathology, prescriptions, quality, referrals,
+                             surgery, tcm, tcm_heritage, telemedicine, workflows)
     from app.spd.routers import followup, workbench
     from app.spd.routers.config import paths
 
@@ -288,6 +289,17 @@ def _label_tables():
         "tcm.DISPENSE_ORDER_STATUS_NAMES": (tcm.DISPENSE_ORDER_STATUS_NAMES, TcmDispenseOrder, "status", set()),
         "telemedicine.CONSULT_STATUS_NAMES": (telemedicine.CONSULT_STATUS_NAMES, OnlineConsult, "status", set()),
         "workflows.INSTANCE_STATUS_NAMES": (workflows.INSTANCE_STATUS_NAMES, WorkflowInstance, "status", set()),
+        # P2-74 ② 平台侧：状态之外的封闭码表字段（accounting / billing 两张是既有的，本批起清单也用它）
+        "organizations.ORG_LEVEL_NAMES": (organizations.ORG_LEVEL_NAMES, Organization, "level", set()),
+        "accounting.CATEGORY_NAMES": (accounting.CATEGORY_NAMES, AccountSubject, "category", set()),
+        "education.COURSE_CATEGORY_NAMES": (education.COURSE_CATEGORY_NAMES, Course, "category", set()),
+        "tcm_heritage.SIMULATION_CATEGORY_NAMES":
+            (tcm_heritage.SIMULATION_CATEGORY_NAMES, SimulationCase, "category", set()),
+        "admin_mgmt.DEPT_CATEGORY_NAMES": (admin_mgmt.DEPT_CATEGORY_NAMES, Department, "category", set()),
+        "admin_mgmt.DOC_TYPE_NAMES": (admin_mgmt.DOC_TYPE_NAMES, OfficialDoc, "doc_type", set()),
+        "billing.CHARGE_CATEGORY_NAMES": (billing.CHARGE_CATEGORY_NAMES, ChargeItem, "category", set()),
+        "consents.CORRECTION_TYPE_NAMES":
+            (consents.CORRECTION_TYPE_NAMES, CorrectionRequest, "request_type", set()),
     }
 
 
@@ -307,6 +319,9 @@ LABEL_TABLE_NAMES = [
     "medwaste.WASTE_STATUS_NAMES", "pathology.SPECIMEN_STATUS", "quality.ADVERSE_EVENT_STATUS_NAMES",
     "referrals.STATUS_LABELS", "surgery.SURGERY_STATUS_NAMES", "tcm.DISPENSE_ORDER_STATUS_NAMES",
     "telemedicine.CONSULT_STATUS_NAMES", "workflows.INSTANCE_STATUS_NAMES",
+    "organizations.ORG_LEVEL_NAMES", "accounting.CATEGORY_NAMES", "education.COURSE_CATEGORY_NAMES",
+    "tcm_heritage.SIMULATION_CATEGORY_NAMES", "admin_mgmt.DEPT_CATEGORY_NAMES", "admin_mgmt.DOC_TYPE_NAMES",
+    "billing.CHARGE_CATEGORY_NAMES", "consents.CORRECTION_TYPE_NAMES",
 ]
 
 
@@ -361,3 +376,30 @@ def test_特病申报带状态文案_审核后随之而变(client, admin):
     row = next(a for a in client.get("/api/insurance/special-diseases", headers=admin).json()
                if a["id"] == applied["id"])
     assert row["status_name"] == "已批准"
+
+
+def test_课程_公文_更正申请带类别文案(client, admin):
+    """P2-74 ②：没有契约网钉着的三处（课程、公文、更正申请）走一遍——页面原先显示 public_health / minutes / deactivate。"""
+    course = client.post("/api/education/courses", headers=admin,
+                         json={"title": "P274 公卫课程", "category": "public_health"})
+    assert course.status_code == 201, course.text
+    assert course.json()["category_name"] == "公共卫生"
+    listed = client.get("/api/education/courses", headers=admin).json()
+    assert [c["category_name"] for c in listed if c["id"] == course.json()["id"]] == ["公共卫生"]
+
+    doc = client.post("/api/mgmt/docs", headers=admin, json={"title": "P274 纪要", "doc_type": "minutes"})
+    assert doc.status_code == 201, doc.text
+    assert doc.json()["doc_type_name"] == "会议纪要"
+    published = client.post(f"/api/mgmt/docs/{doc.json()['id']}/publish", headers=admin)
+    assert published.json()["doc_type_name"] == "会议纪要" and published.json()["status"] == "published"
+    docs = client.get("/api/mgmt/docs", headers=admin).json()
+    assert [d["doc_type_name"] for d in docs if d["id"] == doc.json()["id"]] == ["会议纪要"]
+
+    patient = client.post("/api/patients", headers=admin, json={"name": "P274 更正患者", "id_card": "330281199001014413"})
+    assert patient.status_code in (200, 201), patient.text
+    req = client.post("/api/consents/corrections", headers=admin,
+                      json={"patient_id": patient.json()["id"], "request_type": "deactivate", "reason": "本人申请注销"})
+    assert req.status_code == 201, req.text
+    assert req.json()["request_type_name"] == "档案注销"
+    pending = client.get("/api/consents/corrections", headers=admin, params={"status": "pending"}).json()
+    assert [r["request_type_name"] for r in pending if r["id"] == req.json()["id"]] == ["档案注销"]

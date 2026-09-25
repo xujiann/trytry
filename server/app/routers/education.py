@@ -50,8 +50,17 @@ class CourseOut(CourseCreate):
     id: int
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     title: str = Field(min_length=1, max_length=256)
+    category_name: str
 
-    model_config = {"from_attributes": True}
+
+# 课程类别文案（措辞照抄 Course.category 列注释；课程表显示它，不再原样显示 public_health——P2-74）
+COURSE_CATEGORY_NAMES = {"clinical": "临床医学", "tcm": "中医药适宜技术", "public_health": "公共卫生"}
+
+
+def _course_out(course: Course) -> dict:
+    return {"title": course.title, "course_type": course.course_type, "category": course.category,
+            "speaker": course.speaker, "id": course.id,
+            "category_name": COURSE_CATEGORY_NAMES.get(course.category, course.category)}
 
 
 @router.post("/courses", response_model=CourseOut, status_code=201, dependencies=[Depends(require_admin)])
@@ -60,7 +69,7 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db)):
     db.add(course)
     db.commit()
     db.refresh(course)
-    return course
+    return _course_out(course)
 
 
 @router.get("/courses", response_model=list[CourseOut])
@@ -68,7 +77,7 @@ def list_courses(category: str | None = None, db: Session = Depends(get_db)):
     query = db.query(Course)
     if category:
         query = query.filter(Course.category == category)
-    return query.order_by(Course.id.desc()).limit(200).all()
+    return [_course_out(c) for c in query.order_by(Course.id.desc()).limit(200).all()]
 
 
 class ExamSubmit(BaseModel):
