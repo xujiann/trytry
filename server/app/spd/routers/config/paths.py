@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ....database import get_db
 from ....patchtypes import UNSET
-from ....deps import get_current_user, paginate, require_roles
+from ....deps import get_current_user, paginate, require_roles, keyword_like
 from ...platform import User
 from ...models import (
     SpdPathNode,
@@ -188,7 +188,7 @@ def list_path_templates(
     if status:
         query = query.filter(SpdPathTemplate.status == status)
     if keyword:
-        query = query.filter(SpdPathTemplate.name.contains(keyword))
+        query = query.filter(keyword_like(SpdPathTemplate.name, keyword))
     rows = paginate(query.order_by(SpdPathTemplate.id.desc()), response, offset, limit)
     counts: dict[int, int] = {}
     if rows:

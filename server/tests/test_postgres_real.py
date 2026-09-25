@@ -856,3 +856,24 @@ def test_证件号末位X大小写两种写法在真PG上检索与查重都认(p
         + "\n"
         + result.stderr[-2000:]
     )
+
+
+def test_关键词检索在真PG上不分大小写(pg_engine):
+    """把 `test_keyword_search_case.py` 换到 PG 上再跑一遍（P2-66）。
+
+    SQLite 的 `LIKE` 对 ASCII 不分大小写，诊断字典搜 `i10` 照样命中 `I10`——开发、测试一律看着正常；PG 区分，
+    修前返回空。`keyword_like` 两边转小写之后两库同一口径，只有这里测得出 PG 那一半。接法与上几条相同。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_keyword_search_case.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_KWCASE_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "关键词检索大小写用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..datetypes import OptionalDateStr
 from ..texttypes import NON_BLANK
-from ..deps import get_current_user, require_roles, resolve_business_date
+from ..deps import get_current_user, require_roles, resolve_business_date, keyword_like
 from ..models import KnowledgeEntry, User
 
 router = APIRouter(prefix="/api/knowledge", tags=["统一知识库"], dependencies=[Depends(get_current_user)])
@@ -114,7 +114,7 @@ def search_entries(
     if category:
         query = query.filter(KnowledgeEntry.category == category)
     if q:
-        query = query.filter(KnowledgeEntry.title.contains(q))
+        query = query.filter(keyword_like(KnowledgeEntry.title, q))
     results = []
     for e in query.order_by(KnowledgeEntry.id.desc()).limit(200).all():
         expired = bool(e.expire_date) and e.expire_date < current

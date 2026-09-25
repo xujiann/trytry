@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..datetypes import OptionalDateStr
 from ..texttypes import NON_BLANK
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_roles, keyword_like
 from ..models import SimulationAttempt, SimulationCase, TcmMasterCase, User
 
 router = APIRouter(
@@ -197,17 +197,16 @@ def list_master_cases(
     if not include_draft:
         query = query.filter(TcmMasterCase.published.is_(True))
     if master_name:
-        query = query.filter(TcmMasterCase.master_name.like(f"%{master_name}%"))
+        query = query.filter(keyword_like(TcmMasterCase.master_name, master_name))
     if disease:
-        query = query.filter(TcmMasterCase.disease.like(f"%{disease}%"))
+        query = query.filter(keyword_like(TcmMasterCase.disease, disease))
     if syndrome:
-        query = query.filter(TcmMasterCase.syndrome.like(f"%{syndrome}%"))
+        query = query.filter(keyword_like(TcmMasterCase.syndrome, syndrome))
     if keyword:
-        like = f"%{keyword}%"
         query = query.filter(
-            (TcmMasterCase.prescription.like(like))
-            | (TcmMasterCase.commentary.like(like))
-            | (TcmMasterCase.title.like(like))
+            keyword_like(TcmMasterCase.prescription, keyword)
+            | keyword_like(TcmMasterCase.commentary, keyword)
+            | keyword_like(TcmMasterCase.title, keyword)
         )
     return [_case_out(c) for c in query.order_by(TcmMasterCase.id.desc()).limit(200).all()]
 

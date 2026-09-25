@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ....database import get_db
 from ....patchtypes import UNSET
-from ....deps import paginate, require_roles
+from ....deps import paginate, require_roles, keyword_like
 from ....numtypes import INT4_MAX, INT4_MIN, MONEY_MAX, MoneyFloat
 from ....texttypes import NON_BLANK
 from ...models import (
@@ -285,7 +285,7 @@ def list_edu(
     if media_type:
         query = query.filter(SpdEduMaterial.media_type == media_type)
     if keyword:
-        query = query.filter(SpdEduMaterial.title.contains(keyword))
+        query = query.filter(keyword_like(SpdEduMaterial.title, keyword))
     rows = paginate(query.order_by(SpdEduMaterial.id.desc()), response, offset, limit)
     return [_edu_out(m) for m in rows]
 

@@ -28,7 +28,7 @@ from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import TimeStr
-from ..deps import get_current_user, require_date, require_roles, resolve_business_date, resolve_org_scope
+from ..deps import get_current_user, require_date, require_roles, resolve_business_date, resolve_org_scope, keyword_like
 from ..models import (
     AppointmentSlot,
     BloodStock,
@@ -403,7 +403,7 @@ def match_slots(
     if scope is not None:
         query = query.filter(AppointmentSlot.org_id.in_(scope))
     if keyword:
-        query = query.filter(AppointmentSlot.resource_name.like(f"%{keyword}%"))
+        query = query.filter(keyword_like(AppointmentSlot.resource_name, keyword))
     slots = query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(500).all()
     org_names = {
         o.id: o.name

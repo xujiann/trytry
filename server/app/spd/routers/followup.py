@@ -29,6 +29,7 @@ from ...deps import (
     require_roles,
     resolve_business_date,
     row_dict,
+    keyword_like,
 )
 from ..platform import Admission, Encounter, Patient, User, unusable_user
 from ..models import (
@@ -1166,7 +1167,7 @@ def list_call_tasks(
         query = query.filter(SpdCallTask.phone.contains(phone))
     if patient_name:
         # 子查询而不是先取患者号：原先 `.limit(200)` 取任意 200 个同名患者再筛，常见姓氏一搜名单少一截（P1-83）
-        query = query.filter(SpdCallTask.patient_id.in_(select(Patient.id).where(Patient.name.contains(patient_name))))
+        query = query.filter(SpdCallTask.patient_id.in_(select(Patient.id).where(keyword_like(Patient.name, patient_name))))
     # 先校验再拼串：非法值拼成的时间戳在真 PG 上转换失败是 500（P1-58）
     if date_from:
         date_from = require_date(date_from, field="date_from")

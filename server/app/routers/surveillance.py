@@ -32,6 +32,7 @@ from ..deps import (
     resolve_business_date,
     resolve_org_scope,
     row_dict,
+    keyword_like,
 )
 from ..models import EmergencyResource, Organization, PathogenMonitor, SyndromeMonitor, User
 
@@ -310,7 +311,7 @@ def list_pathogens(
     query = db.query(PathogenMonitor)
     query = scope_org_list(db, user, query, PathogenMonitor, org_id)
     if pathogen_name:
-        query = query.filter(PathogenMonitor.pathogen_name.like(f"%{pathogen_name}%"))
+        query = query.filter(keyword_like(PathogenMonitor.pathogen_name, pathogen_name))
     if start_date:
         query = query.filter(PathogenMonitor.record_date >= start_date)
     if end_date:

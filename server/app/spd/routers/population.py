@@ -27,7 +27,7 @@ from ...database import get_db
 from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
 from ...texttypes import NON_BLANK
-from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
+from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, keyword_like
 from ..platform import Organization, Patient, User, id_card_variants, pii_filter, unusable_user
 from ..models import (
     SpdAssessment,
@@ -737,7 +737,7 @@ def list_candidates(
             query = query.filter(column == value)
     if keyword:
         # 子查询而不是先取患者号：原先 `.limit(500)` 取任意 500 个同名患者再筛，常见姓氏一搜名单少一截（P1-83）
-        query = query.filter(SpdCandidate.patient_id.in_(select(Patient.id).where(Patient.name.contains(keyword))))
+        query = query.filter(SpdCandidate.patient_id.in_(select(Patient.id).where(keyword_like(Patient.name, keyword))))
     rows = paginate(query.order_by(SpdCandidate.id.desc()), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     return [_candidate_out(r, briefs.get(r.patient_id)) for r in rows]
@@ -1055,7 +1055,7 @@ def list_enrollments(
         # 子查询而不是先取患者号：原先 `.limit(500)` 取任意 500 个匹配的患者再筛，
         # 常见姓氏或证件号地区前缀一搜，名单少一截且无从察觉（P1-83）
         query = query.filter(SpdEnrollment.patient_id.in_(
-            select(Patient.id).where(Patient.name.contains(keyword) | id_card_hit)))
+            select(Patient.id).where(keyword_like(Patient.name, keyword) | id_card_hit)))
     rows = paginate(query.order_by(SpdEnrollment.id.desc()), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     return [_enroll_out(r, briefs.get(r.patient_id)) for r in rows]

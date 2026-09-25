@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..visibility import active_authorization_grants, log_patient_access
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_roles, resolve_business_date
+from ..deps import get_current_user, paginate, require_roles, resolve_business_date, keyword_like
 from pydantic import BaseModel, Field
 
 from ..models import ArchiveAuthorization, Organization, Patient, User
@@ -108,16 +108,15 @@ def search_patients(
     """
     query = db.query(Patient).filter(Patient.deactivated_at.is_(None))
     if keyword:
-        like = f"%{keyword}%"
         # PII 加密开态的降级口径（工程包 E3，文档见 app/pii.py）：证件号模糊检索
         # 对密文行不可用，追加索引列等值让**全值**证件号仍可命中；前缀/中缀不支持。
         # 关态该等值分支是 like 的子集，结果集不变。
         # 证件号两种写法都认（P1-114）：真 PG 的 LIKE 区分大小写，按 x 搜原先查不到存成 X 的档案
         variants = id_card_variants(keyword)
         query = query.filter(
-            (Patient.name.like(like))
+            keyword_like(Patient.name, keyword)
             | or_(*(Patient.id_card.like(f"%{v}%") for v in variants))
-            | (Patient.ehc_no.like(like))
+            | keyword_like(Patient.ehc_no, keyword)
             | or_(*(pii_index_match(Patient.id_card_idx, v) for v in variants))
         )
     rows = paginate(query.order_by(Patient.id), response, offset, limit)

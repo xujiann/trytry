@@ -15,7 +15,7 @@ from ....database import get_db
 from ....patchtypes import UNSET
 from ....datetypes import OptionalDateStr
 from ....texttypes import NON_BLANK
-from ....deps import get_current_user, paginate, require_admin, require_roles
+from ....deps import get_current_user, paginate, require_admin, require_roles, keyword_like
 from ...platform import Organization, User
 from ...models import (
     SpdProgram,
@@ -223,7 +223,7 @@ def list_programs(
     if active is not None:
         query = query.filter(SpdProgram.active.is_(active))
     if keyword:
-        query = query.filter(SpdProgram.name.contains(keyword))
+        query = query.filter(keyword_like(SpdProgram.name, keyword))
     rows = paginate(query.order_by(SpdProgram.id), response, offset, limit)
     return [_program_out(p) for p in rows]
 

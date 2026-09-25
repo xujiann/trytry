@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..concurrency import insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_admin, require_roles, resolve_business_date
+from ..deps import get_current_user, require_admin, require_roles, resolve_business_date, keyword_like
 from ..models import (
     Organization,
     Patient,
@@ -306,8 +306,7 @@ def create_technique(body: TechniqueCreate, db: Session = Depends(get_db)):
 def list_techniques(keyword: str = "", db: Session = Depends(get_db)):
     query = db.query(TcmTechnique)
     if keyword:
-        like = f"%{keyword}%"
-        query = query.filter((TcmTechnique.name.like(like)) | (TcmTechnique.indication.like(like)))
+        query = query.filter(keyword_like(TcmTechnique.name, keyword) | keyword_like(TcmTechnique.indication, keyword))
     return query.order_by(TcmTechnique.id).limit(200).all()
 
 

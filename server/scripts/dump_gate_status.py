@@ -48,6 +48,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_body_finite_numbers as bodyfinite
     import test_body_numeric_capacity as bodynumcap
     import test_money_fen_precision as moneyfen
+    import test_keyword_search_case as kwcase
     import test_body_raw_dict as bodyraw
     import test_date_window_bounds as datewin
     import test_disabled_catalog_refs as disabledrefs
@@ -156,6 +157,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          moneyfen.BASELINE, "tests/test_money_fen_precision.py"),
         ("数值入参", "出参字段带 to_fen（修之前存进开发库的三位小数行会让整个响应 500）",
          moneyfen.OUTPUT_BASELINE, "tests/test_money_fen_precision.py"),
+        ("方言一致", "字符串列上的关键词模糊匹配不经 keyword_like（开发库 SQLite 不分大小写、PG 区分：诊断字典搜 i10 生产库为空；31 → 0：改 26、按设计 5）",
+         kwcase.BASELINE, "tests/test_keyword_search_case.py"),
+        ("方言一致", "按设计不转小写的模糊匹配（代码常量 / 系统前缀 / 纯数字，逐条写明理由）",
+         len(kwcase.BY_DESIGN), "tests/test_keyword_search_case.py"),
         ("数值入参", "天数 / 分钟数入参没有上界就进 timedelta（传个大数即日期溢出、500；5 → 0 已清零）",
          datewin.BASELINE, "tests/test_date_window_bounds.py"),
         ("数值入参", "条数 / 偏移量入参没有上下界就进 .limit() / .offset()（PG 上负数即 500；2 → 0 已清零）",

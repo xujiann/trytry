@@ -6,6 +6,7 @@ from typing import Iterable, TypeVar
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import func
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
@@ -193,6 +194,16 @@ def row_dict(rows: Iterable[Row[tuple[_K, _V]]]) -> dict[_K, _V]:
     返回类型由 K/V 推导，调用点不必再手写标注。
     """
     return {key: value for key, value in rows}
+
+
+def keyword_like(column, keyword: str):
+    """关键词模糊检索：两边都转小写再 LIKE（P2-66）。
+
+    开发库 SQLite 的 LIKE 对 ASCII 不分大小写，生产库 PostgreSQL 区分——诊断字典搜 `i10` 开发库命中 `I10`，
+    生产库什么都搜不到；「CT」「HbA1c」「COPD」这类夹在中文名里的缩写同病。统一在这里转小写，两库同一口径
+    （开发库结果一字不变）；汉字不受 lower 影响。`%` / `_` 照旧当通配符，与改之前一样。
+    """
+    return func.lower(column).like(f"%{keyword.lower()}%")
 
 
 def paginate(query, response: Response, offset: int = 0, limit: int = 100, max_limit: int = 500):

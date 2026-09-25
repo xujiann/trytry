@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent
 from ..database import get_db
-from ..deps import ROLE_NAMES, get_current_user, require_admin, row_dict
+from ..deps import ROLE_NAMES, get_current_user, require_admin, row_dict, keyword_like
 from ..models import Permission, Role, RolePermission, User
 from ..texttypes import NON_BLANK
 
@@ -293,7 +293,7 @@ def list_permissions(
     if module:
         query = query.filter(Permission.module == module)
     if keyword:
-        query = query.filter(Permission.path.like(f"%{keyword}%"))
+        query = query.filter(keyword_like(Permission.path, keyword))
     rows = query.order_by(Permission.module, Permission.path).limit(1000).all()
     return [
         {"id": p.id, "code": p.code, "method": p.method, "path": p.path,

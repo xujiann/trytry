@@ -20,6 +20,7 @@ from ..deps import (
     require_date,
     require_roles,
     resolve_business_date,
+    keyword_like,
 )
 from ..models import (
     Appointment,
@@ -85,9 +86,9 @@ def find_doctors(
     if org_id is not None:
         query = query.filter(Employee.org_id == org_id)
     if keyword:
-        like = f"%{keyword}%"
         query = query.filter(
-            (Employee.name.like(like)) | (Employee.title.like(like)) | (Employee.position.like(like))
+            keyword_like(Employee.name, keyword) | keyword_like(Employee.title, keyword)
+            | keyword_like(Employee.position, keyword)
         )
     employees = query.order_by(Employee.id).limit(200).all()
     if not employees:

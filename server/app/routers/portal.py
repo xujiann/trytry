@@ -81,6 +81,7 @@ from ..deps import (
     set_auth_cookies,
     token_from_request,
     wants_cookie_auth,
+    keyword_like,
 )
 # 居民端调阅留痕（TECH_DEBT P1-1）：与业务端同一张 AccessLog、同一套降级
 # （独立会话 + 失败吞掉不阻断读），主体口径 resident:{account_id}（同 AuditLog）。
@@ -2396,7 +2397,7 @@ def public_price_list(
     if category:
         query = query.filter(ChargeItem.category == category)
     if keyword:
-        query = query.filter(ChargeItem.name.contains(keyword))
+        query = query.filter(keyword_like(ChargeItem.name, keyword))
     # 排序键 (category, code) 里 code 唯一（charge_items.code 唯一约束），已是全序，
     # 不必再补尾键。原上限 500 == paginate 的 max_limit 默认值，第一页不变。
     items = paginate(

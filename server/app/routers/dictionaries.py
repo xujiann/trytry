@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import insert_if_absent, insert_or_conflict
 from ..database import get_db
-from ..deps import get_current_user, require_admin
+from ..deps import get_current_user, require_admin, keyword_like
 from ..models import CodeEntry, CodeSystem
 from ..schemas import CodeEntryCreate
 
@@ -133,6 +133,5 @@ def list_entries(system_code: str, keyword: str = "", db: Session = Depends(get_
         return []
     query = db.query(CodeEntry).filter(CodeEntry.system_id == system.id)
     if keyword:
-        like = f"%{keyword}%"
-        query = query.filter((CodeEntry.code.like(like)) | (CodeEntry.name.like(like)))
+        query = query.filter(keyword_like(CodeEntry.code, keyword) | keyword_like(CodeEntry.name, keyword))
     return query.order_by(CodeEntry.code).limit(200).all()
