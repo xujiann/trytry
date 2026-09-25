@@ -45,6 +45,7 @@ from ..models import (
     FollowUp,
     InpatientOrder,
     Patient,
+    ReportRevision,
     SystemParam,
     User,
     Ward,
@@ -1039,6 +1040,8 @@ FHIR_EXPORT_WM_KEYS = {
     "Patient": "fhir_export_wm_patient",
     "Encounter": "fhir_export_wm_encounter",
     "DiagnosticReport": "fhir_export_wm_exam_report",
+    # 报告修订史的水位（P2-102）：修订是原地改结论，主键水位看不见它
+    "DiagnosticReportAmended": "fhir_export_wm_report_revision",
 }
 
 
@@ -1119,13 +1122,15 @@ def fhir_encounter_resource(e: Encounter, ehc_no: str) -> dict:
     return resource
 
 
-def fhir_diagnostic_report_resource(report: ExamReport, request_id: int, ehc_no: str) -> dict:
+def fhir_diagnostic_report_resource(
+    report: ExamReport, request_id: int, ehc_no: str, status: str = "final"
+) -> dict:
     """ExamReport → FHIR R4 DiagnosticReport（conclusion→conclusion、finding→presentedForm、
-    critical→urn:medplat:critical 扩展，与入站承载对称）。"""
+    critical→urn:medplat:critical 扩展，与入站承载对称）。修订后再导的一份 `status="amended"`（P2-102）。"""
     return {
         "resourceType": "DiagnosticReport",
         "id": str(report.id),
-        "status": "final",
+        "status": status,
         "basedOn": [{"reference": f"ServiceRequest/{request_id}"}],
         "subject": {"reference": f"Patient/{ehc_no}"},
         "issued": report.reported_at.isoformat(),
@@ -1154,6 +1159,8 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
       只导 `id > 水位` 的增量，导完推进水位——重复执行幂等（无增量即不产文件）；
     - `manifest.jsonl` 每个产出文件追加一行（文件名/资源类型/行数/id 区间/时间），
       前置机按 manifest 拉取；
+    - 修订过的检查报告再导一次（P2-102）：`DiagnosticReport_amended_*.ndjson`，资源 `status="amended"`、内容是修订后
+      的当前版本，manifest 行带 `"kind": "amended"`、id 区间是修订史的主键，水位另记一个 key；
     - **待办（不假装）**：映射表其余资源（Prescription→MedicationRequest、
       Referral→ServiceRequest、Consultation、CarePlan、Appointment 等）尚未
       纳入批量导出，扩展时在本函数追加资源类型并配套新水位 key。
@@ -1163,11 +1170,12 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
     total = 0
     parts: list[str] = []
 
-    def _export(resource_type: str, rows: list[tuple[int, dict]]) -> None:
+    def _export(resource_type: str, rows: list[tuple[int, dict]], kind: str = "") -> None:
+        """`kind="amended"`：修订后的再导——文件名与 manifest 行带上它，行号是修订史的主键，水位记修订史那一个。"""
         nonlocal total
         if not rows:
             return
-        filename = f"{resource_type}_{stamp}_{rows[0][0]}.ndjson"
+        filename = f"{resource_type}_{kind + '_' if kind else ''}{stamp}_{rows[0][0]}.ndjson"
         with (out_dir / filename).open("w", encoding="utf-8") as f:
             for _row_id, resource in rows:
                 f.write(json.dumps(resource, ensure_ascii=False) + "\n")
@@ -1181,14 +1189,15 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
                         "from_id": rows[0][0],
                         "to_id": rows[-1][0],
                         "generated_at": now_aware().isoformat(),
+                        **({"kind": kind} if kind else {}),
                     },
                     ensure_ascii=False,
                 )
                 + "\n"
             )
-        _wm_set(db, FHIR_EXPORT_WM_KEYS[resource_type], rows[-1][0])
+        _wm_set(db, FHIR_EXPORT_WM_KEYS[resource_type + ("Amended" if kind == "amended" else "")], rows[-1][0])
         total += len(rows)
-        parts.append(f"{resource_type} {len(rows)} 条")
+        parts.append(f"{resource_type}{'（修订）' if kind else ''} {len(rows)} 条")
 
     patients = (
         db.query(Patient)
@@ -1227,6 +1236,36 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
             for r, req_id, ehc_no in reports
         ],
     )
+
+    # 修订过的报告再导一次（P2-102）：修订是原地改结论（修订前的记进修订史），主键水位看不见它——省平台留着的一直是
+    # 修订前的结论与危急值标记。按修订史自己的水位取；只导已经按新增导出过的报告（还没导的，到时导出的就是修订后的），
+    # 一份报告这一批里修订几次只导一次当前版本；修订史水位推到这一批的最后一条（跳过的也算看过）。
+    revisions = (
+        db.query(ReportRevision.id, ReportRevision.report_id)
+        .filter(ReportRevision.id > _wm_get(db, FHIR_EXPORT_WM_KEYS["DiagnosticReportAmended"]))
+        .order_by(ReportRevision.id)
+        .limit(FHIR_EXPORT_BATCH_LIMIT)
+        .all()
+    )
+    if revisions:
+        exported_upto = _wm_get(db, FHIR_EXPORT_WM_KEYS["DiagnosticReport"])
+        last_revision = {report_id: revision_id for revision_id, report_id in revisions}
+        amended = (
+            db.query(ExamReport, ExamRequest.id, Patient.ehc_no)
+            .join(ExamRequest, ExamRequest.id == ExamReport.request_id)
+            .join(Patient, Patient.id == ExamRequest.patient_id)
+            .filter(ExamReport.id.in_([rid for rid in last_revision if rid <= exported_upto]))
+            .all()
+        )
+        _export(
+            "DiagnosticReport",
+            sorted(
+                (last_revision[r.id], fhir_diagnostic_report_resource(r, req_id, ehc_no, status="amended"))
+                for r, req_id, ehc_no in amended
+            ),
+            kind="amended",
+        )
+        _wm_set(db, FHIR_EXPORT_WM_KEYS["DiagnosticReportAmended"], revisions[-1][0])
 
     if not total:
         return 0, "无增量数据（水位未推进，不产文件）"

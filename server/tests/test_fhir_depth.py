@@ -217,3 +217,27 @@ def test_batch_export_watermark_and_idempotency(client, admin, org, patient):
     assert len(new_entries) == len(entries) + 1
     delta = new_entries[-1]
     assert delta["resource_type"] == "Patient" and delta["rows"] == 1
+
+
+def test_修订过的报告再导一次_状态为amended_结论是修订后的(client, admin):
+    """P2-102：批量导出只按主键水位导「新增」，报告修订却是原地改结论（修订前的记进修订史）——修订过的报告一次也不再
+    导出，省平台留着的一直是修订前的结论（危急值标记同理）。修订按修订史自己的水位再导一次，FHIR 状态记 amended。"""
+    from app.models import ExamReport
+
+    with SessionLocal() as db:
+        report_id = db.query(ExamReport.id).filter(ExamReport.conclusion == "右肺上叶磨玻璃结节，建议随访").scalar()
+    assert report_id is not None, "前面的入站用例没建出这份报告，前提变了"
+    before = len(_manifest_entries())
+    resp = client.patch(f"/api/exams/reports/{report_id}", headers=admin, json={
+        "conclusion": "右肺上叶磨玻璃结节较前增大，建议 3 个月复查", "reason": "复核修订"})
+    assert resp.status_code == 200, resp.text
+    affected, summary = _run_export()
+    assert affected == 1, summary   # 修前 0：「无增量数据」，修订后的结论一次也不导
+    entries = _manifest_entries()
+    assert len(entries) == before + 1
+    entry = entries[-1]
+    assert (entry["resource_type"], entry["rows"]) == ("DiagnosticReport", 1)
+    resource = json.loads((FHIR_OUT / entry["file"]).read_text(encoding="utf-8").splitlines()[0])
+    assert (resource["status"], resource["conclusion"]) == ("amended", "右肺上叶磨玻璃结节较前增大，建议 3 个月复查")
+    # 幂等：修订史的水位推进了，再跑不重复导
+    assert _run_export()[0] == 0
