@@ -219,6 +219,24 @@ def _resident_account(session_factory, patient_id: int) -> int:
     return _retry_on_lock(create)
 
 
+@pytest.fixture(scope="module")
+def program_code(session_factory, tag) -> str:
+    """本档专用的病种（编码带 tag）：居民申请加入、发起咨询写库前先查病种在不在且在用（P1-120），
+    拿一个不存在的编码进去，八路都是 404「专病档案不存在」，测不到并发。"""
+    from app.spd.models import SpdProgram
+
+    code = f"pg_{tag}"
+
+    def create():
+        with session_factory() as db:
+            if db.query(SpdProgram.id).filter(SpdProgram.code == code).first() is None:
+                db.add(SpdProgram(code=code, name=f"PG并发病种{tag}", category="chronic", active=True))
+                db.commit()
+        return code
+
+    return _retry_on_lock(create)
+
+
 def _delete_where(session_factory, model, *criteria) -> None:
     with session_factory() as db:
         db.query(model).filter(*criteria).delete(synchronize_session=False)
@@ -229,7 +247,7 @@ def _delete_where(session_factory, model, *criteria) -> None:
 
 
 @pytest.mark.timeout(600)
-def test_并发提交服务申请_恰一条待受理其余同一句409(session_factory, tag):
+def test_并发提交服务申请_恰一条待受理其余同一句409(session_factory, tag, program_code):
     """`portal.apply_service` 的 PG 直测：八路同时提交同病种申请。
 
     修复前：八路的"有没有待受理"预检都在对方提交前跑完，八条 pending 全部落库，
@@ -243,7 +261,6 @@ def test_并发提交服务申请_恰一条待受理其余同一句409(session_f
 
     patient_id = _make_patient(session_factory, tag, 1)
     account_id = _resident_account(session_factory, patient_id)
-    program_code = f"pg_{tag}"
 
     def worker(_i):
         with session_factory() as db:
@@ -290,7 +307,7 @@ def test_并发提交服务申请_恰一条待受理其余同一句409(session_f
 
 
 @pytest.mark.timeout(600)
-def test_并发发起在线咨询_八路复用同一会话且八条消息都在(session_factory, tag):
+def test_并发发起在线咨询_八路复用同一会话且八条消息都在(session_factory, tag, program_code):
     """`portal.start_consult` 的 PG 直测：八路同时发起同病种咨询。
 
     这条的正确语义与别的表相反——顺序第二次请求本来就是"复用那条开放会话"，
@@ -304,7 +321,6 @@ def test_并发发起在线咨询_八路复用同一会话且八条消息都在(
 
     patient_id = _make_patient(session_factory, tag, 2)
     account_id = _resident_account(session_factory, patient_id)
-    program_code = f"pg_{tag}"
 
     def worker(i):
         with session_factory() as db:
