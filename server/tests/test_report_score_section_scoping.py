@@ -86,3 +86,25 @@ def test_机构名下没有考核对象时返回空而不是全域(world):
         db.commit()
         empty_id = empty.id
     assert _names(empty_id, "2026Q1") == set()
+
+
+def test_按模板频率出的报告_取本机构最近一期_不再恒为空(world):
+    """P2-103：真正的调用方（定时推送 `jobs.spd_report_push`、手工生成 `POST /report-instances`）传进来的是模板的
+    **频率关键字**（daily / weekly / monthly），不是考核周期值——原先拿它去和分数的周期（2026Q1 / 2026-08）等值比，
+    推送出去的每一份报告这一段都是空的（上面几条直接喂周期值调渲染器，看不出来）。按频率出的报告取本机构范围内
+    最近算出的一期：只出一期，不混周期。"""
+    from app.spd.reporting import compose_section
+
+    with SessionLocal() as db:
+        rows = compose_section(db, SECTION, world["甲"]["org_id"], "monthly")["rows"]
+        assert {r[0] for r in rows} == {"甲院-2026Q2", "甲团队-2026Q2", "甲医师-2026Q2"}   # 修前空
+        everywhere = {r[0] for r in compose_section(db, SECTION, None, "weekly")["rows"]}
+        assert everywhere == {"甲院-2026Q2", "甲团队-2026Q2", "甲医师-2026Q2", "乙院-2026Q2", "乙团队-2026Q2", "乙医师-2026Q2"}
+
+
+def test_段落写明周期的按段落的(world):
+    from app.spd.reporting import compose_section
+
+    with SessionLocal() as db:
+        rows = compose_section(db, {**SECTION, "period": "2026Q1"}, world["甲"]["org_id"], "monthly")["rows"]
+    assert {r[0] for r in rows} == {"甲院-2026Q1", "甲团队-2026Q1", "甲医师-2026Q1"}

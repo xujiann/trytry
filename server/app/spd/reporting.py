@@ -41,6 +41,9 @@ from .service import TASK_IN_HAND_STATUSES, TASK_OPEN_STATUSES
 
 SectionRenderer = Callable[[Session, dict, "int | None", str], dict]
 
+#: 报告模板的频率（`spd_report_templates.period`）：渲染器收到的 `period` 是它们之一，不是考核 / 统计的周期值
+REPORT_FREQUENCIES = ("daily", "weekly", "monthly", "custom")
+
 _SECTIONS: dict[str, SectionRenderer] = {}
 
 
@@ -183,13 +186,11 @@ def _score(db, section, org_id, period):
     于是任何机构、任何周期的报告，这一段都是同一份"最近 20 条"。
     机构报告里印着别家机构的排名，季度报告里印着上个月的分数。
 
-    - `period` 过滤没有歧义：报告是按周期出的。
+    - `period`：收到的多半是模板频率关键字（见下方 P2-103 的注释），取范围内最近一期；段落可写明周期。
     - `org_id` 过滤要按 `object_type` 分派（`spd_scores` 上没有 org_id 列，
       考核对象有机构/团队/村医/医师四类），见 `_SCORE_OBJECT_ORG`。
     """
     query = db.query(SpdScore)
-    if period:
-        query = query.filter(SpdScore.period == period)
     if org_id is not None:
         clauses = []
         for object_type, resolve in _SCORE_OBJECT_ORG.items():
@@ -206,6 +207,15 @@ def _score(db, section, org_id, period):
         for extra in clauses[1:]:
             condition = condition | extra
         query = query.filter(condition)
+    # 周期（P2-103）：真正的调用方（定时推送、手工生成）传进来的是模板的频率关键字，不是考核周期值——原先拿它去和
+    # 分数的周期（2026Q1 / 2026-08）等值比，推送出去的每一份报告这一段都是空的。段落写明了周期的按段落的；传进来的
+    # 就是周期值的照用；频率关键字则取范围内最近算出的一期——只出一期，不混周期
+    period_value = section.get("period") or ("" if period in REPORT_FREQUENCIES else period)
+    if not period_value:
+        latest = query.order_by(SpdScore.id.desc()).with_entities(SpdScore.period).first()
+        period_value = latest[0] if latest else ""
+    if period_value:
+        query = query.filter(SpdScore.period == period_value)
     rows = query.order_by(SpdScore.id.desc()).limit(20).all()
     return {**_head(section, "table"), "columns": ["对象", "周期", "得分", "排名"],
             "rows": [[r.object_name, r.period, r.total_score, r.rank] for r in rows]}
