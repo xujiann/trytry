@@ -375,6 +375,9 @@ def create_indicator(body: IndicatorIn, db: Session = Depends(get_db)):
             eval_formula(body.formula, dict.fromkeys(_metric_names(body.data_source), 1.0))
         except FormulaError as exc:
             raise HTTPException(status_code=422, detail=f"公式非法：{exc}") from None
+    rule_problem = score_rule_problem(body.score_rule)   # 评分规则写坏了计分时 500（P2-79）
+    if rule_problem:
+        raise HTTPException(status_code=422, detail=f"评分规则非法：{rule_problem}")
     program_problem = unknown_programs(db, body.program_codes)  # 病种列表先查在不在（P1-120 第二层）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
@@ -447,6 +450,10 @@ def update_indicator(indicator_id: int, body: IndicatorPatch, db: Session = Depe
             )
         except FormulaError as exc:
             raise HTTPException(status_code=422, detail=f"公式非法：{exc}") from None
+    if "score_rule" in changes:   # 与建指标同一句（P2-79）
+        rule_problem = score_rule_problem(changes["score_rule"])
+        if rule_problem:
+            raise HTTPException(status_code=422, detail=f"评分规则非法：{rule_problem}")
     # 病种列表同建档一句（P1-120 第二层）；原有的编码不再查
     program_problem = unknown_programs(db, changes.get("program_codes"), already=indicator.program_codes)
     if program_problem:
@@ -770,6 +777,43 @@ def collect_metrics_batch(
     return out
 
 
+#: 评分规则的两种类型，即 `score_of` 的两支；空规则 = 未配置，按指标值计分
+SCORE_RULE_TYPES = ("ratio", "step")
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
+    """评分规则里会让 `score_of` 抛错的写法，没问题返回空串（P2-79）。
+
+    原先照单全收：满分写成文字、分档不是列表、分档边界或分值不是数，建指标照样 201，整张考核方案一计分就 500。
+    建 / 改指标时拦（422）；计分时对存量里的坏规则逐指标记错、不 500，与公式求值失败同一个处理。
+    `known_type_only=False`（计分时）：存量里的未知类型照旧按「未配置」计分——修前就是这么算的，这里只拦会 500 的。
+    """
+    if not rule:
+        return ""
+    kind = rule.get("type", "")
+    if kind not in SCORE_RULE_TYPES:
+        return f"评分规则类型只能是 ratio（按比例）/ step（分档），收到 {kind!r}" if known_type_only else ""
+    if kind == "ratio":
+        if "full" in rule and not _is_number(rule["full"]):
+            return "按比例计分的满分（full）必须是数"
+        if rule.get("target") is not None and not _is_number(rule["target"]):
+            return "按比例计分的目标值（target）必须是数"
+        return ""
+    steps = rule.get("steps", [])
+    if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
+        return "分档计分的 steps 必须是分档列表"
+    for step in steps:
+        if any(step.get(key) is not None and not _is_number(step[key]) for key in ("min", "max")):
+            return "分档的上下限（min / max）必须是数，不设限留空"
+        if "score" in step and not _is_number(step["score"]):
+            return "分档的分值（score）必须是数"
+    return ""
+
+
 def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
     """把指标值折成得分，返回 (得分, 扣分理由)。
 
@@ -1003,6 +1047,11 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
                 )
             except FormulaError as exc:
                 detail.append({"indicator_code": code, "error": f"公式求值失败：{exc}"})
+                continue
+            # 修前存进去的坏评分规则：逐指标记错、不 500（P2-79），与公式求值失败同一个处理
+            rule_problem = score_rule_problem(indicator.score_rule or {}, known_type_only=False)
+            if rule_problem:
+                detail.append({"indicator_code": code, "error": f"评分规则非法：{rule_problem}"})
                 continue
             score, reason = score_of(indicator, value)
             weight = float(item.get("weight", indicator.weight) or 0)
