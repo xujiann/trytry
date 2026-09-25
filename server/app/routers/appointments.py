@@ -337,6 +337,18 @@ def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
     if existing and existing.status == "fulfilled":
         # M1 整改：已就诊记录不可静默回退复用，防止状态机回退与号源虚占
         raise HTTPException(status_code=409, detail="该预约已就诊，不可重复预约")
+    if existing:
+        # 仅 cancelled 记录允许复用重约。条件 UPDATE（`WHERE status = 'cancelled'`，P2-109）：原先读到 cancelled 就占号、
+        # 改 booked，两路并发重约都读到 cancelled、都占了号——一条预约，号源已约数加了两次，白白少放出一个号。
+        # 先转预约、再占号：与取消（先转预约、再放号）同一个加锁顺序，PG 上两路不会互等成死锁
+        revived = (
+            db.query(Appointment)
+            .filter(Appointment.id == existing.id, Appointment.status == "cancelled")
+            .update({Appointment.status: "booked"}, synchronize_session=False)
+        )
+        if not revived:   # 并发抢输：另一路已经把它重约上了
+            db.rollback()
+            raise HTTPException(status_code=409, detail="请勿重复预约")
 
     # H3 整改：条件 UPDATE 原子占号（WHERE booked < capacity），杜绝并发超卖
     claimed = (
@@ -351,12 +363,10 @@ def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
         )
     )
     if not claimed:
-        db.rollback()
+        db.rollback()   # 重约的那一步（转回 booked）一并退回
         raise HTTPException(status_code=409, detail="号源已约满")
 
     if existing:
-        # 仅 cancelled 记录允许复用重约
-        existing.status = "booked"
         db.commit()
         db.refresh(existing)
         return existing
@@ -372,12 +382,30 @@ def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
     return appointment
 
 
+def _leave_booked(db: Session, appointment: Appointment, to_status: str, action: str) -> None:
+    """把一条预约从 booked 转到 `to_status`：条件 UPDATE（`WHERE status = 'booked'`），影响 0 行即 409（P2-109）。
+
+    原先「读状态 → 判 booked → 改」：PG 的 READ COMMITTED 下两路并发都读到 booked、都往下走——取消连点两下，号源
+    已约数被多扣一次（之后能多约出一个号）；一路取消、一路核销，已就诊的人占着的号被放出去。号源一侧早是条件 UPDATE
+    （H3），状态这一侧补上同一个写法。先按内存里的状态判一次，给顺序重复的请求一句准确的话。"""
+    if appointment.status != "booked":
+        # 状态机：仅 booked 可取消 / 核销；fulfilled/cancelled 均拒绝（M1）
+        raise HTTPException(status_code=409, detail=f"当前状态 {APPOINTMENT_STATUS_NAMES.get(appointment.status, appointment.status)} 不可{action}")
+    moved = (
+        db.query(Appointment)
+        .filter(Appointment.id == appointment.id, Appointment.status == "booked")
+        .update({Appointment.status: to_status}, synchronize_session=False)
+    )
+    if not moved:   # 并发抢输：另一路已经把它转走了
+        db.rollback()
+        db.refresh(appointment)
+        raise HTTPException(status_code=409, detail=f"当前状态 {APPOINTMENT_STATUS_NAMES.get(appointment.status, appointment.status)} 不可{action}")
+    appointment.status = to_status
+
+
 def release_appointment(db: Session, appointment: Appointment) -> Appointment:
     """取消预约并释放号源：管理端与居民端共用。"""
-    if appointment.status != "booked":
-        # 状态机：仅 booked 可取消；fulfilled/cancelled 均拒绝（M1）
-        raise HTTPException(status_code=409, detail=f"当前状态 {APPOINTMENT_STATUS_NAMES.get(appointment.status, appointment.status)} 不可取消")
-    appointment.status = "cancelled"
+    _leave_booked(db, appointment, "cancelled", "取消")
     # H3 整改：条件 UPDATE 释放号源（WHERE booked > 0），防止并发释放扣成负数
     db.query(AppointmentSlot).filter(
         AppointmentSlot.id == appointment.slot_id, AppointmentSlot.booked > 0
@@ -456,9 +484,7 @@ def fulfill(
         raise HTTPException(status_code=404, detail="预约不存在")
     slot = db.get(AppointmentSlot, appointment.slot_id)
     assert_org_writable(db, user, slot.org_id if slot else None)
-    if appointment.status != "booked":
-        raise HTTPException(status_code=409, detail=f"当前状态 {APPOINTMENT_STATUS_NAMES.get(appointment.status, appointment.status)} 不可核销")
-    appointment.status = "fulfilled"
+    _leave_booked(db, appointment, "fulfilled", "核销")   # 与并发的取消互斥（P2-109）
     db.commit()
     db.refresh(appointment)
     return appointment
