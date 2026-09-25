@@ -3017,6 +3017,9 @@ def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
 
     page.click('[data-dspd="referral"]')
     expect(page.locator("#spd-list")).to_contain_text("待卫生院审核")
+    # 按钮按状态给（P2-101）：待审核的单子只有通过 / 退回，没有「登记到院」「承接随访」（原先四个一律摆着、点了 409）
+    expect(page.locator("[data-spd-arrive]")).to_have_count(0)
+    expect(page.locator("[data-spd-recv]")).to_have_count(0)
     # 意见在卡片内表单里填（P2-38）。原先弹窗点"取消"照样提交——想反悔的人反而把单子退了回去。
     # 先点「退回」再取消，按接口核对单子没动；再点「退回」后改点「通过」，表单要跟着换成通过的。
     page.click("[data-spd-reject]")

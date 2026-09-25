@@ -278,6 +278,19 @@ async function loadSpdTodo(box) {
   }));
 }
 
+/** 转诊卡片按状态给按钮（与后端的状态前置同一口径）：审核只对待审核的，登记到院只对已接收的，承接随访只对已下转的。
+ *  原先四个按钮一律摆着，点错一个就是 409「只有已接收的转诊单可登记到院」——与 P2-84 的待办卡片同一个毛病。 */
+function spdReferralOps(r) {
+  const ops = [];
+  if (["submitted", "station_reviewed", "township_reviewed"].includes(r.status)) {
+    ops.push(`<button type="button" class="ghost-btn" data-spd-pass="${r.id}">通过</button>`,
+      `<button type="button" class="ghost-btn" data-spd-reject="${r.id}">退回</button>`);
+  }
+  if (r.status === "accepted") ops.push(`<button type="button" class="ghost-btn" data-spd-arrive="${r.id}">登记到院</button>`);
+  if (r.status === "down_referred") ops.push(`<button type="button" class="ghost-btn" data-spd-recv="${r.id}">承接随访</button>`);
+  return ops.join("\n    ");
+}
+
 async function loadSpdReferral(box) {
   const rows = await api("/api/spd/referrals?open_only=true&limit=30");
   box.innerHTML = rows.map((r) => `<div class="m-card">
@@ -287,10 +300,7 @@ async function loadSpdReferral(box) {
       township_reviewed: "待县级接收", accepted: "已接收待到院",
       arrived: "已到院", down_referred: "待承接随访" }[r.status] || r.status))}
     ${kv("理由", esc(r.reason || "—"))}
-    <button type="button" class="ghost-btn" data-spd-pass="${r.id}">通过</button>
-    <button type="button" class="ghost-btn" data-spd-reject="${r.id}">退回</button>
-    <button type="button" class="ghost-btn" data-spd-arrive="${r.id}">登记到院</button>
-    <button type="button" class="ghost-btn" data-spd-recv="${r.id}">承接随访</button>
+    ${spdReferralOps(r)}
   </div>`).join("") || '<p class="empty">暂无在途转诊</p>';
   const bind = (attr, path, body) => box.querySelectorAll(`[${attr}]`).forEach((b) =>
     b.addEventListener("click", () => spdPost(path(b), body ? body() : null)));
