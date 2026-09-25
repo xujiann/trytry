@@ -139,9 +139,19 @@ def review_transfusion(
     assert_obj_org_writable(db, user, request)
     if request.status != "pending":
         raise HTTPException(status_code=409, detail="该申请已处理")
-    request.status = "approved" if approve else "rejected"
-    request.approved_by = user.id
+    # 状态闸门：判定与翻转同一条 SQL（P2-110）。原先判 pending 在内存里：审批与驳回同时到，两路都成功、后提交的盖掉
+    # 先提交的——审批人看到「已审批」，库里却是「已驳回」；锁外读到 pending 的那一路甚至能把已经发了血的申请改成驳回
+    reviewed = (
+        db.query(TransfusionRequest)
+        .filter(TransfusionRequest.id == request.id, TransfusionRequest.status == "pending")
+        .update({TransfusionRequest.status: "approved" if approve else "rejected",
+                 TransfusionRequest.approved_by: user.id}, synchronize_session=False)
+    )
+    if not reviewed:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该申请已处理")
     db.commit()
+    db.refresh(request)
     return {"id": request.id, "status": request.status}
 
 
@@ -165,12 +175,21 @@ def issue_blood(request_id: int, db: Session = Depends(get_db), user: User = Dep
         )
         .first()
     )
+    # 状态闸门：判定与翻转同一条 SQL，且放在扣库存之前（P2-110）。原先判 approved 在内存里：同一张申请并发点两次
+    # 发血，两路都判定已审批、各扣一次库存——发出去一袋，账上扣了两袋，与下面那条修过的缺陷反方向对不上账
+    issued = (
+        db.query(TransfusionRequest)
+        .filter(TransfusionRequest.id == request.id, TransfusionRequest.status == "approved")
+        .update({TransfusionRequest.status: "issued"}, synchronize_session=False)
+    )
+    if not issued:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="仅已审批申请可发血")
     # 判定与扣减同一条 SQL。原先并发两笔发血都判定够，实际库存只扣一笔——
     # 血是按毫升对账的东西，发出去的比账上扣的多，血库盘点必然对不上。
     if stock is None or not take_amount(db, BloodStock, stock.id, "quantity_ml", request.quantity_ml):
-        db.rollback()
+        db.rollback()   # 连同上面翻成 issued 的那一步一并退回
         raise HTTPException(status_code=409, detail="血液库存不足，请向血站调剂（对接项）")
-    request.status = "issued"
     db.commit()
     db.refresh(stock)
     return {"id": request.id, "status": "issued", "stock_remaining_ml": stock.quantity_ml}
