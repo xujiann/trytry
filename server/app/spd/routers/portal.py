@@ -988,6 +988,11 @@ def self_answer_followup(
     return {"id": record.id, "abnormal_level": record.abnormal_level, "action": action}
 
 
+#: 干预任务四个状态的中文——与医生端同一套（`pages-spd.js` 的干预状态、`spd_interventions.status` 列注释）。
+#: 居民端原先只回英文码、手机页一个都不显示：已移除、已完成的方案和在执行的长得一模一样（P2-67）。
+INTERVENTION_STATUS_NAMES = {"planned": "待执行", "doing": "执行中", "done": "已完成", "removed": "已移除"}
+
+
 class SpdInterventionOut(BaseModel):
     id: int
     goal: str
@@ -996,6 +1001,7 @@ class SpdInterventionOut(BaseModel):
     frequency: str
     next_at: str
     status: str
+    status_name: str
     feedback: str
     read: bool
     created_at: str
@@ -1023,6 +1029,7 @@ def my_interventions(
     return [
         {"id": r.id, "goal": r.goal, "content": r.content, "measures": r.measures,
          "frequency": r.frequency, "next_at": r.next_at, "status": r.status,
+         "status_name": INTERVENTION_STATUS_NAMES.get(r.status, r.status),
          "feedback": r.feedback, "read": r.read_at is not None,
          "created_at": r.created_at.isoformat()}
         for r in rows
@@ -1054,6 +1061,10 @@ def feedback_intervention(
     record = db.get(SpdIntervention, intervention_id)
     if record is None or record.patient_id != patient.id:
         raise HTTPException(status_code=404, detail="干预方案不存在")
+    # 已移除的方案（医生撤掉的、档案结束时一并收掉的）不作数了：居民不能再把它翻成「已完成」、重新算进完成数；
+    # 标记已读、留一句反馈照常（P2-67）
+    if body.done and record.status == "removed":
+        raise HTTPException(status_code=409, detail="该干预方案已被医生移除，不能再标记完成")
     record.read_at = record.read_at or now_naive()
     if body.feedback:
         record.feedback = body.feedback

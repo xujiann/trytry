@@ -1395,7 +1395,8 @@ async function renderSpdPlans(box) {
     ${p.measures ? kv("具体措施", esc(p.measures)) : ""}
     ${kv("执行频次", esc(p.frequency || "—"))}
     ${kv("下次执行", esc(p.next_at || "—"))}
-    ${p.read ? "" : `<button type="button" class="ghost-btn" data-spd-read="${p.id}">标记已读并反馈</button>`}
+    ${kv("状态", esc(p.status_name || p.status))}
+    ${p.read || p.status === "removed" ? "" : `<button type="button" class="ghost-btn" data-spd-read="${p.id}">标记已读并反馈</button>`}
     </div>`).join("") || '<p class="empty">暂无干预方案</p>';
   box.querySelectorAll("[data-spd-read]").forEach((btn) => {
     btn.addEventListener("click", async () => {
