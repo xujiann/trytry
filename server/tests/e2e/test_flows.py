@@ -1717,6 +1717,32 @@ def test_评估量表能在界面上新建_编辑草稿_发布后复制为新版
     assert copied["status"] == "draft" and copied["items"] == edited["items"] and copied["scoring"] == edited["scoring"]
 
 
+def test_数据质控规则能在界面上新增_配置写坏由后端说清楚(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：规则库原先只能启停、切严重度，新增规则的接口（管理员）没有入口——种子 docstring 写着「落地时应由
+    医共体质控办……经 /api/dataquality/rules 增删调整」。配置按类型给示例；写坏的由后端逐项说清楚（P2-81），不落库。"""
+    _login(page, base_url)
+    _open_page(page, "dataquality", "数据质控")
+    form = page.locator("#qc-rule-form")
+    form.locator('[name="code"]').fill("E2EQC1")
+    form.locator('[name="name"]').fill("E2E 患者联系电话宜填写")
+    form.locator('[name="target_table"]').fill("patients")
+    form.locator('[name="rule_type"]').select_option("range")
+    assert '"min"' in form.locator('[name="config"]').get_attribute("placeholder")   # 示例随类型换
+    form.locator('[name="rule_type"]').select_option("required")
+    form.locator('[name="config"]').fill('{"field": "mobile"}')   # 字段名写错
+    form.locator("button").click()
+    expect(page.locator("#qc-rule-msg")).to_contain_text("不是 patients 的字段")
+    assert all(r["code"] != "E2EQC1" for r in admin_read("/api/dataquality/rules"))
+    form.locator('[name="config"]').fill('{"field": "phone"}')
+    form.locator('[name="severity"]').select_option("warn")
+    _submit(page, "#qc-rule-form button")
+    created = next(r for r in admin_read("/api/dataquality/rules") if r["code"] == "E2EQC1")
+    assert (created["target_table"], created["rule_type"], created["config"], created["severity"]) == (
+        "patients", "required", {"field": "phone"}, "warn"), created
+    # 启用即参与扫描：规则汇总与规则库各一行，看规则库那行（带启停按钮）
+    expect(page.locator("tr:has(button[data-qctoggle])", has_text="E2EQC1")).to_contain_text("必填项")
+
+
 def test_慢病病种目录能在界面上新增(page, base_url, admin_read):
     """P2-93（动词级孤儿）：病种目录是分级规则与随访周期的唯一数据源，页面原先只有「编辑」——新增一个慢病病种只能靠接口
     调用方。"""

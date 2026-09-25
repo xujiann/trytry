@@ -96,7 +96,7 @@ ROOT_FIXED_RENDERERS = [
       '$("#esb-flow-form").onsubmit', '$("#page-body").onclick'],
      "\n  await drawMessages();"),
     ("pages-public.js", "renderDataQuality",
-     ['$("#qc-run-form").onsubmit', '$("#page-body").onclick'],
+     ['$("#qc-run-form").onsubmit', '$("#page-body").onclick', "ruleForm.onsubmit"],
      "await drawViolations();"),
     ("pages-public.js", "renderKnowledge",
      ["kb.onsubmit", '$("#kb-search").onsubmit', '$("#page-body").onclick'],

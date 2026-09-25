@@ -622,6 +622,16 @@ async function renderEsb() {
 }
 
 const QC_SEVERITY = { error: ["错误", "red"], warn: ["警告", "orange"] };
+// 规则类型（措辞照抄后端 dataquality.RULE_TYPES）与各类型的配置示例（结构见 app/data/qc_rules_seed.py 的 docstring，
+// 后端 rule_config_problem 逐项校验：字段不在被检表上、区间的界与列类型对不上都 422 并说清楚）
+const QC_RULE_TYPES = { required: "必填项", range: "数值区间", enum: "取值枚举", cross_ref: "引用校验", logic: "逻辑校验" };
+const QC_CONFIG_EXAMPLES = {
+  required: '{"field": "phone"}',
+  range: '{"field": "age", "min": 0, "max": 120}',
+  enum: '{"field": "gender", "values": ["男", "女"]}',
+  cross_ref: '{"field": "diagnosis_code", "ref_code_system": "diagnosis", "skip_empty": true}',
+  logic: '{"check": "date_not_future", "field": "birth_date"}',
+};
 // 配置写坏、本次没扫的规则（P2-81）：原先任何一条都让整次扫描 500，现在跳过并点名
 const qcSkippedNote = (skipped) => (skipped || []).length
   ? `<p class="msg err">⚠ ${skipped.length} 条规则配置有误，本次没有参与扫描：${skipped.map((r) =>
@@ -632,6 +642,7 @@ async function renderDataQuality() {
   $("#page-desc").textContent = "规则引擎按启用规则扫描存量数据：必填/区间/枚举/引用/逻辑五类校验，停用规则不参与扫描";
   const [summary, rules] = await Promise.all([
     api("/api/dataquality/summary"), api("/api/dataquality/rules")]);
+  const canRule = currentRole() === "admin";   // 建规则仅管理员（后端 require_admin）
   const drawViolations = async (params = "?limit=200") => {
     const data = await api(`/api/dataquality/run${params}`);
     $("#qc-violations").innerHTML = qcSkippedNote(data.skipped_rules) + `<p class="desc" style="font-size:12.5px">共 ${data.total} 条违规（错误 ${data.error_total} / 警告 ${data.warn_total}），本页展示 ${data.items.length} 条</p>` +
@@ -661,7 +672,18 @@ async function renderDataQuality() {
         <td>${esc(r.rule_type_name)}</td><td>${esc(r.table)}</td><td><span class="tag ${color}">${esc(text)}</span></td>
         <td>${r.violations ? `<span class="tag ${color}">${r.violations}</span>` : 0}</td></tr>`;
     })}`)}
-    ${panel("规则库（管理员可停用/启用与调整严重度）", `
+    ${panel("规则库（管理员可新增、停用/启用与调整严重度）", `
+      ${canRule ? `<form class="inline" id="qc-rule-form" style="margin-bottom:8px">
+        <input name="code" placeholder="规则编码" required style="width:100px">
+        <input name="name" placeholder="规则名称" required style="min-width:200px">
+        <input name="target_table" placeholder="被检表" list="qc-tables" required style="width:150px">
+        <datalist id="qc-tables">${[...new Set(rules.map((r) => r.target_table))].map((t) =>
+          `<option value="${esc(t)}">`).join("")}</datalist>
+        <select name="rule_type">${Object.entries(QC_RULE_TYPES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="config" placeholder="配置 JSON，如 ${esc(QC_CONFIG_EXAMPLES.required)}" style="min-width:320px">
+        <select name="severity"><option value="error">错误</option><option value="warn">警告</option></select>
+        <button>新增规则</button>
+      </form><p class="msg" id="qc-rule-msg"></p>` : ""}
       ${table(["编码", "名称", "类型", "被检表", "严重度", "状态", "操作"], rules, (r) => {
         return `<tr><td><span class="tag">${esc(r.code)}</span></td><td>${esc(r.name)}</td><td>${esc(r.rule_type_name)}</td>
           <td>${esc(r.target_table)}</td><td>${statusTag(QC_SEVERITY, r.severity)}</td>
@@ -669,6 +691,21 @@ async function renderDataQuality() {
           <td><button class="btn secondary" data-qctoggle="${r.id}" data-active="${r.active ? 1 : 0}">${r.active ? "停用" : "启用"}</button>
             <button class="btn secondary" data-qcsev="${r.id}" data-sev="${esc(r.severity)}">切换严重度</button></td></tr>`;
       })}`)}`;
+  // 规则库原先只能启停、切严重度，不能新增（P2-93 动词级孤儿）；种子 docstring 写着「落地时由质控办经接口增删调整」
+  const ruleForm = $("#qc-rule-form");
+  if (ruleForm) {
+    // placeholder 是 DOM 属性、不是 HTML：原样赋文本，不经 esc（经了反倒显示出 &quot;）
+    ruleForm.rule_type.onchange = (e) => {
+      ruleForm.config.placeholder = "配置 JSON，如 " + (QC_CONFIG_EXAMPLES[e.target.value] || "{}");
+    };
+    ruleForm.onsubmit = (e) => {
+      e.preventDefault();
+      const body = formJson(e.target);
+      try { body.config = body.config ? JSON.parse(body.config) : {}; }
+      catch (err) { return setMsg("#qc-rule-msg", `配置 JSON 解析失败：${err.message}`, false); }
+      return postAction("/api/dataquality/rules", body, "#qc-rule-msg");
+    };
+  }
   $("#qc-run-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
