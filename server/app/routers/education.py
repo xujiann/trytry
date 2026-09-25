@@ -604,14 +604,25 @@ def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depend
     )
     if existing and existing.status == "enrolled":
         raise HTTPException(status_code=409, detail="已报名该实训计划")
+    if existing:
+        # 退过报名的复用原记录重报。条件 UPDATE（`WHERE status = 'cancelled'`，P2-111）：原先读到 cancelled 就占额、
+        # 改 enrolled，同一个人连点两次「报名」两路都读到 cancelled、都占了额——一个人占两个名额，别人报不上。
+        # 先转报名、再占额：与退报名（先转报名、再放额）同一个加锁顺序，PG 上两路不会互等成死锁
+        revived = (
+            db.query(TrainingEnrollment)
+            .filter(TrainingEnrollment.id == existing.id, TrainingEnrollment.status == "cancelled")
+            .update({TrainingEnrollment.status: "enrolled"}, synchronize_session=False)
+        )
+        if not revived:   # 并发抢输：另一路已经把它重报上了
+            db.rollback()
+            raise HTTPException(status_code=409, detail="已报名该实训计划")
     # 原子占额：判满与占位同一条 SQL。原先 COUNT>=capacity 再插是 check-then-act，
     # 并发下多人同数到"还差一个"一起挤进来（实测容量 2 报上 3 人）。
     # 占额与写报名行同一个事务提交——commit 失败则一起回滚，名额不泄。
     if not claim_quota(db, TrainingPlan, plan_id, "enrolled_count", "capacity"):
-        db.rollback()
+        db.rollback()   # 重报的那一步（转回 enrolled）一并退回
         raise HTTPException(status_code=409, detail="实训名额已满")
     if existing:
-        existing.status = "enrolled"
         enrollment = existing
     else:
         enrollment = TrainingEnrollment(plan_id=plan_id, user_id=user.id)
@@ -649,7 +660,16 @@ def cancel_enroll(plan_id: int, db: Session = Depends(get_db), user: User = Depe
     )
     if enrollment is None or enrollment.status != "enrolled":
         raise HTTPException(status_code=404, detail="未报名该实训计划")
-    enrollment.status = "cancelled"
+    # 状态闸门：判定与翻转同一条 SQL，且放在释放名额之前（P2-111）。原先判 enrolled 在内存里：连点两次「退报名」
+    # 两路都判定已报名、各放一个名额——名额计数少了一个，容量满了还能再报进一个人
+    cancelled = (
+        db.query(TrainingEnrollment)
+        .filter(TrainingEnrollment.id == enrollment.id, TrainingEnrollment.status == "enrolled")
+        .update({TrainingEnrollment.status: "cancelled"}, synchronize_session=False)
+    )
+    if not cancelled:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="未报名该实训计划")
     # 退报名释放一个名额，与占额对称；take_amount 的 WHERE 挡住减成负数
     take_amount(db, TrainingPlan, plan_id, "enrolled_count", 1)
     db.commit()
