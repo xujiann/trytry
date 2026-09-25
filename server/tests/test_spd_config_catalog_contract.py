@@ -130,13 +130,15 @@ def test_定性目标的上下限是null量化目标的整数下限是float(clie
 # ------------------------------------------------- 递归树
 def test_机构树是三级递归且带团队数与在管数(client, auth, seeded):
     roots = client.get(f"{B}/org-tree", headers=auth).json()
-    node_keys = {"id", "name", "org_type", "level", "parent_id", "team_count",
+    node_keys = {"id", "name", "org_type", "level", "level_name", "parent_id", "team_count",
                  "enrolled", "children"}
     county = next(n for n in roots if n["id"] == seeded["county"])
     assert set(county) == node_keys
     assert county["parent_id"] is None          # 根节点无上级：null，不是 0
     town = next(c for c in county["children"] if c["id"] == seeded["town"])
     assert set(town) == node_keys and town["parent_id"] == seeded["county"]
+    # 层级文案（P2-74 ②）：码表内给中文，表外的 town 原样回显
+    assert county["level_name"] == "县级" and town["level_name"] == "town"
     assert town["team_count"] == 1 and town["enrolled"] == 1
     village = next(c for c in town["children"] if c["id"] == seeded["village"])
     # 第三层仍是同一形状，且叶子的 children 是空列表而不是缺失

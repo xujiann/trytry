@@ -45,7 +45,8 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import REFERRAL_STATUS_LABELS, close_followup_record, judge_measurement, measure_value_problem
+from ..service import (MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, close_followup_record, judge_measurement,
+                       measure_value_problem)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -1090,6 +1091,7 @@ class SpdEduPushOut(BaseModel):
     material_id: int
     title: str
     media_type: str
+    media_type_name: str
     content: str
     media_url: str
     status: str
@@ -1123,6 +1125,9 @@ def my_education(
         {"id": r.id, "material_id": r.material_id,
          "title": materials[r.material_id].title if r.material_id in materials else "",
          "media_type": materials[r.material_id].media_type if r.material_id in materials else "",
+         "media_type_name": MEDIA_TYPE_NAMES.get(materials[r.material_id].media_type,
+                                                 materials[r.material_id].media_type)
+         if r.material_id in materials else "",
          "content": materials[r.material_id].content if r.material_id in materials else "",
          "media_url": materials[r.material_id].media_url if r.material_id in materials else "",
          "status": r.status, "created_at": r.created_at.isoformat()}

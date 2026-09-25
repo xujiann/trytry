@@ -455,10 +455,10 @@ def test_随访前置资料聚合完整精确(client, auth, world):
         "patient": {"id": world["patient"]["id"], "name": "契约随访患者",
                     "gender": "男", "birth_date": "1990-06-15", "phone": "13900001111"},
         "encounters": [
-            {"id": encs[0]["id"], "encounter_type": "inpatient",
+            {"id": encs[0]["id"], "encounter_type": "inpatient", "encounter_type_name": "住院",
              "diagnosis_name": "阑尾炎术后", "doctor_name": "李医生",
              "created_at": _ts(encs[0]["created_at"])},
-            {"id": encs[1]["id"], "encounter_type": "outpatient",
+            {"id": encs[1]["id"], "encounter_type": "outpatient", "encounter_type_name": "门诊",
              "diagnosis_name": "上呼吸道感染", "doctor_name": "王医生",
              "created_at": _ts(encs[1]["created_at"])},
         ],

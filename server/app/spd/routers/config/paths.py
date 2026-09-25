@@ -40,6 +40,7 @@ class PathNodeOut(BaseModel):
     dept: str
     exec_role: str
     service_type: str
+    service_type_name: str
     # 两个 JSON 列，存的是规则条件数组（经 _conditions 校验过形状）
     enter_condition: list[dict[str, Any]]
     complete_condition: list[dict[str, Any]]
@@ -141,11 +142,18 @@ def _template_out(t: SpdPathTemplate, nodes: list[SpdPathNode] | None = None) ->
     return out
 
 
+# 路径节点服务类型文案（措辞照抄 SpdPathNode.service_type 列注释——P2-74）
+NODE_SERVICE_TYPE_NAMES = {"followup": "随访", "revisit": "复诊复查", "edu": "宣教", "scale": "量表",
+                           "exam": "检查检验", "intervention": "干预", "referral": "转诊", "monitor": "监测"}
+
+
 def _node_out(n: SpdPathNode) -> dict:
     return {
         "id": n.id, "template_id": n.template_id, "key": n.key, "name": n.name,
         "stage": n.stage, "seq": n.seq, "dept": n.dept, "exec_role": n.exec_role,
-        "service_type": n.service_type, "enter_condition": n.enter_condition or [],
+        "service_type": n.service_type,
+        "service_type_name": NODE_SERVICE_TYPE_NAMES.get(n.service_type, n.service_type),
+        "enter_condition": n.enter_condition or [],
         "complete_condition": n.complete_condition or [], "next_key": n.next_key,
         "due_days": n.due_days, "timeout_action": n.timeout_action,
         "require_form": n.require_form, "require_evidence": n.require_evidence,

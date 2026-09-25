@@ -592,6 +592,12 @@ _STATUS_LABELS = {
 #: 居民端看到的转诊状态文案：聚合列表与「我的慢专病」历程共用这一张（§13「状态文案取自后端」）
 REFERRAL_STATUS_LABELS = _STATUS_LABELS
 
+# 测量来源、宣教素材形式的文案（措辞照抄 SpdMeasurement.source / SpdEduMaterial.media_type 列注释；
+# 档案全景、测量记录、素材库与居民端宣教都用它，页面上别再原样显示 device / video——P2-74）
+MEASUREMENT_SOURCE_NAMES = {"manual": "手工", "device": "设备", "his": "院内系统", "poct": "POCT",
+                            "publichealth": "公卫随访同步"}
+MEDIA_TYPE_NAMES = {"text": "图文", "audio": "音频", "video": "视频"}
+
 
 def referral_feed(db: Session, patient_id: int) -> list[dict]:
     """把本子系统的转诊单产出成聚合列表的统一形状。

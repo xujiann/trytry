@@ -70,6 +70,8 @@ FOLLOWUP_STATUS_NAMES = {
 FOLLOWUP_SCENE_NAMES = {"inpatient": "出院随访", "outpatient": "门诊随访", "surgery": "术后随访", "checkup": "体检随访"}
 #: `spd_followup_records.abnormal_level` → 中文（P2-73）：措辞照抄列注释。看板把 high 原样放进红标签，居民自助作答后
 #: 手机上弹的是「系统判定为high异常」，没配处置措施时派出的任务标题是「随访异常处置：high」。
+# 就诊类型文案（措辞照抄 Encounter.encounter_type 列注释；随访前置资料「近期就诊」显示它——P2-74）
+ENCOUNTER_TYPE_NAMES = {"outpatient": "门诊", "inpatient": "住院"}
 ABNORMAL_LEVEL_NAMES = {"none": "无异常", "low": "轻度", "mid": "中度", "high": "重度"}
 #: 平台 `admissions.status` → 中文：措辞与平台住院页一致（该页的文案表还在前端，平台出参尚未带文案）。
 #: 随访前置资料的住院一栏原先把英文状态码原样显示。
@@ -195,6 +197,7 @@ class ContextPatientOut(BaseModel):
 class ContextEncounterOut(BaseModel):
     id: int
     encounter_type: str
+    encounter_type_name: str
     diagnosis_name: str
     doctor_name: str
     created_at: str
@@ -867,6 +870,7 @@ def followup_context(
         } if patient else None,
         "encounters": [
             {"id": e.id, "encounter_type": e.encounter_type,
+             "encounter_type_name": ENCOUNTER_TYPE_NAMES.get(e.encounter_type, e.encounter_type),
              "diagnosis_name": e.diagnosis_name, "doctor_name": e.doctor_name,
              "created_at": e.created_at.isoformat()}
             for e in encounters

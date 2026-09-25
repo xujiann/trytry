@@ -1444,7 +1444,7 @@ async function renderSpdEdu(box) {
   box.innerHTML = rows.map((p) => `<div class="m-card">
     ${kv("标题", esc(p.title || "（素材已删除）"))}
     ${p.content ? kv("内容", esc(p.content)) : ""}
-    ${p.media_url ? kv("资料", `<a href="${esc(p.media_url)}" target="_blank" rel="noopener">${esc(p.media_type || "查看")}</a>`) : ""}
+    ${p.media_url ? kv("资料", `<a href="${esc(p.media_url)}" target="_blank" rel="noopener">${esc(p.media_type_name || "查看")}</a>`) : ""}
     ${kv("推送时间", esc((p.created_at || "").slice(0, 16).replace("T", " ")))}
     ${kv("状态", p.status === "read" ? '<span class="tag green">已读</span>' : '<span class="tag orange">未读</span>')}
     ${p.status === "read" ? "" : `<button type="button" class="ghost-btn" data-spd-edu-read="${p.id}">标记已读</button>`}

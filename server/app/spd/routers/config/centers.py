@@ -15,7 +15,7 @@ from ....database import get_db
 from ....patchtypes import UNSET
 from ....texttypes import NON_BLANK
 from ....deps import require_roles
-from ...platform import Organization, unusable_user
+from ...platform import ORG_LEVEL_NAMES, Organization, unusable_user
 from ...models import (
     SpdCenter,
     SpdProgram,
@@ -56,6 +56,7 @@ class OrgTreeNodeOut(BaseModel):
     name: str
     org_type: str
     level: str
+    level_name: str
     # 根节点（县级/市级）没有上级
     parent_id: int | None
     team_count: int
@@ -182,6 +183,7 @@ def org_tree(db: Session = Depends(get_db)):
     nodes: dict[int, dict[str, Any]] = {
         o.id: {
             "id": o.id, "name": o.name, "org_type": o.org_type, "level": o.level,
+            "level_name": ORG_LEVEL_NAMES.get(o.level, o.level) if o.level else "",
             "parent_id": o.parent_id, "team_count": team_counts.get(o.id, 0),
             "enrolled": enroll_counts.get(o.id, 0), "children": [],
         }

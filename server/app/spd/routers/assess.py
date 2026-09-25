@@ -119,9 +119,11 @@ class PlanOut(BaseModel):
     code: str
     name: str
     level: str
+    level_name: str
     program_codes: list[str]
     object_type: str
     period_type: str
+    period_type_name: str
     # [{"indicator_code": ..., "weight": ...}] 原始 JSON，照存照出
     items: list[dict[str, Any]]
     active: bool
@@ -818,11 +820,18 @@ def _check_plan_items(db: Session, items: list[dict]) -> None:
         raise HTTPException(status_code=422, detail=f"以下指标不存在：{'、'.join(missing)}")
 
 
+# 考核方案层级、周期文案（措辞照抄 SpdAssessPlan.level / period_type 列注释——P2-74）
+ASSESS_LEVEL_NAMES = {"hospital": "县级医院", "township": "卫生院", "station": "服务站", "village": "村医", "team": "团队"}
+PERIOD_TYPE_NAMES = {"month": "月度", "quarter": "季度", "year": "年度"}
+
+
 def _plan_out(p: SpdAssessPlan) -> dict:
     return {
         "id": p.id, "code": p.code, "name": p.name, "level": p.level,
+        "level_name": ASSESS_LEVEL_NAMES.get(p.level, p.level),
         "program_codes": p.program_codes or [], "object_type": p.object_type,
-        "period_type": p.period_type, "items": p.items or [], "active": p.active,
+        "period_type": p.period_type, "period_type_name": PERIOD_TYPE_NAMES.get(p.period_type, p.period_type),
+        "items": p.items or [], "active": p.active,
     }
 
 

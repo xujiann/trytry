@@ -135,8 +135,8 @@ def world(client, auth):
 INDICATOR_KEYS = ["id", "code", "name", "program_codes", "object_type", "data_source",
                   "scope_expr", "formula", "score_rule", "weight", "target_value",
                   "abnormal_rule", "version", "effective_from", "effective_scope", "active"]
-PLAN_KEYS = ["id", "code", "name", "level", "program_codes", "object_type",
-             "period_type", "items", "active"]
+PLAN_KEYS = ["id", "code", "name", "level", "level_name", "program_codes", "object_type",
+             "period_type", "period_type_name", "items", "active"]
 RANK_ROW_KEYS = ["object_id", "object_name", "total_score", "rank"]
 
 
@@ -202,7 +202,8 @@ def test_方案新建列表修改(client, auth, world):
     assert world["plan_keys"] == PLAN_KEYS
     assert created == {
         "id": created["id"], "code": "ct_plan", "name": "契约考核", "level": "township",
-        "program_codes": [], "object_type": "org", "period_type": "month",
+        "level_name": "卫生院",   # P2-74 ②：页面显示它，不再原样显示 township / month
+        "program_codes": [], "object_type": "org", "period_type": "month", "period_type_name": "月度",
         "items": [{"indicator_code": "ct_done_rate", "weight": 100}], "active": True,
     }
     rows = client.get(f"{B}/assess-plans", headers=auth).json()

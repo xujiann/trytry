@@ -124,12 +124,12 @@ def _iso(value: str) -> str:
 
 
 MEASURE_KEYS = ["id", "patient_id", "program_code", "metric", "value", "unit", "level",
-                "source", "device_sn", "note", "measured_at"]
+                "source", "source_name", "device_sn", "note", "measured_at"]
 
 
 def _measure_row(mid, pid, value, level, measured_at, unit="mmHg", note=""):
     return {"id": mid, "patient_id": pid, "program_code": "ctc_htn", "metric": "bp_sys",
-            "value": value, "unit": unit, "level": level, "source": "manual",
+            "value": value, "unit": unit, "level": level, "source": "manual", "source_name": "手工",
             "device_sn": "", "note": note, "measured_at": measured_at}
 
 

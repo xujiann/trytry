@@ -230,12 +230,16 @@ def _label_tables():
                             TcmDispenseOrder, TcmPreparationBatch, TrainingEnrollment, TrainingPlan, VisitCredential,
                             Voucher, WorkflowInstance)
     from app.models import AccountSubject, ChargeItem, Course, Department, OfficialDoc, Organization, SimulationCase
+    from app.models import (Encounter, SpdAssessPlan, SpdEduMaterial, SpdGroup, SpdMeasurement, SpdPathNode,
+                            SpdScreening, SpdTag, SpdTeam)
+    from app.spd import service
+    from app.spd.routers import assess, population
     from app.routers import (accounting, admin_mgmt, appointments, billing, consents, consultations, credentials, cssd,
                              education, emergency, esb, exams, followups, fund, homevisits, insurance, materials,
                              medication, medwaste, organizations, pathology, prescriptions, quality, referrals,
                              surgery, tcm, tcm_heritage, telemedicine, workflows)
     from app.spd.routers import followup, workbench
-    from app.spd.routers.config import paths
+    from app.spd.routers.config import paths, scales
 
     # (文案表, 模型, 列, 按设计不进表的码)
     return {
@@ -300,6 +304,17 @@ def _label_tables():
         "billing.CHARGE_CATEGORY_NAMES": (billing.CHARGE_CATEGORY_NAMES, ChargeItem, "category", set()),
         "consents.CORRECTION_TYPE_NAMES":
             (consents.CORRECTION_TYPE_NAMES, CorrectionRequest, "request_type", set()),
+        # P2-74 ② 慢专病侧（纳管网络树的机构层级沿用上面的 organizations.ORG_LEVEL_NAMES）
+        "service.MEASUREMENT_SOURCE_NAMES": (service.MEASUREMENT_SOURCE_NAMES, SpdMeasurement, "source", set()),
+        "service.MEDIA_TYPE_NAMES": (service.MEDIA_TYPE_NAMES, SpdEduMaterial, "media_type", set()),
+        "scales.TAG_CATEGORY_NAMES": (scales.TAG_CATEGORY_NAMES, SpdTag, "category", set()),
+        "population.SCREENING_SOURCE_NAMES": (population.SCREENING_SOURCE_NAMES, SpdScreening, "source", set()),
+        "population.GROUP_SCOPE_NAMES": (population.GROUP_SCOPE_NAMES, SpdGroup, "scope", set()),
+        "workbench.TEAM_LEVEL_NAMES": (workbench.TEAM_LEVEL_NAMES, SpdTeam, "level", set()),
+        "paths.NODE_SERVICE_TYPE_NAMES": (paths.NODE_SERVICE_TYPE_NAMES, SpdPathNode, "service_type", set()),
+        "assess.ASSESS_LEVEL_NAMES": (assess.ASSESS_LEVEL_NAMES, SpdAssessPlan, "level", set()),
+        "assess.PERIOD_TYPE_NAMES": (assess.PERIOD_TYPE_NAMES, SpdAssessPlan, "period_type", set()),
+        "followup.ENCOUNTER_TYPE_NAMES": (followup.ENCOUNTER_TYPE_NAMES, Encounter, "encounter_type", set()),
     }
 
 
@@ -322,6 +337,10 @@ LABEL_TABLE_NAMES = [
     "organizations.ORG_LEVEL_NAMES", "accounting.CATEGORY_NAMES", "education.COURSE_CATEGORY_NAMES",
     "tcm_heritage.SIMULATION_CATEGORY_NAMES", "admin_mgmt.DEPT_CATEGORY_NAMES", "admin_mgmt.DOC_TYPE_NAMES",
     "billing.CHARGE_CATEGORY_NAMES", "consents.CORRECTION_TYPE_NAMES",
+    "service.MEASUREMENT_SOURCE_NAMES", "service.MEDIA_TYPE_NAMES", "scales.TAG_CATEGORY_NAMES",
+    "population.SCREENING_SOURCE_NAMES", "population.GROUP_SCOPE_NAMES", "workbench.TEAM_LEVEL_NAMES",
+    "paths.NODE_SERVICE_TYPE_NAMES", "assess.ASSESS_LEVEL_NAMES", "assess.PERIOD_TYPE_NAMES",
+    "followup.ENCOUNTER_TYPE_NAMES",
 ]
 
 

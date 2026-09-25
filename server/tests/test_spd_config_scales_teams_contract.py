@@ -123,7 +123,8 @@ def test_标签列表没有active字段而新建有(client, auth):
     assert created.status_code == 201
     assert set(created.json()) == {"id", "code", "name", "category", "color", "active"}
     listed = client.get(f"{B}/tags", headers=auth).json()
-    assert all(set(t) == {"id", "code", "name", "category", "color"} for t in listed)
+    assert all(set(t) == {"id", "code", "name", "category", "category_name", "color"} for t in listed)
+    assert next(t for t in listed if t["code"] == "ST-TAG2")["category_name"] == "患者标签"   # P2-74 ②
     assert all("active" not in t for t in listed)
 
 
@@ -222,7 +223,7 @@ def test_已发布量表不许改题目(client, auth, seeded):
 # ------------------------------------------------- 宣教与村医
 def test_宣教素材的键集合(client, auth, seeded):
     rows = client.get(f"{B}/edu-materials", headers=auth).json()
-    keys = {"id", "code", "title", "program_code", "media_type", "content", "media_url",
+    keys = {"id", "code", "title", "program_code", "media_type", "media_type_name", "content", "media_url",
             "dept", "active"}
     assert rows and set(rows[0]) == keys
     patched = client.patch(f"{B}/edu-materials/{seeded['edu']}", headers=auth,

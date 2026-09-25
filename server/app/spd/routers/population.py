@@ -51,7 +51,11 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import evaluate, is_suspect_risk, score_scale
-from ..service import award_points, build_facts, close_open_work, match_program
+from ..service import MEASUREMENT_SOURCE_NAMES, award_points, build_facts, close_open_work, match_program
+
+# 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
+SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
+GROUP_SCOPE_NAMES = {"personal": "本人分组", "dept": "科室分组", "team": "团队分组"}
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -97,6 +101,7 @@ class ScreeningOut(BaseModel):
     patient_id: int
     program_code: str
     source: str
+    source_name: str
     org_id: int | None
     scale_code: str
     score: float
@@ -271,6 +276,7 @@ class GroupCreatedOut(BaseModel):
     id: int
     name: str
     scope: str
+    scope_name: str
     member_count: int
 
 
@@ -278,6 +284,7 @@ class GroupOut(BaseModel):
     id: int
     name: str
     scope: str
+    scope_name: str
     dept: str
     owner_user_id: int
     auto_rule: list[dict[str, Any]]
@@ -383,6 +390,7 @@ class ProfileMeasurementOut(BaseModel):
     unit: str
     level: str
     source: str
+    source_name: str
     measured_at: str
 
 
@@ -426,7 +434,8 @@ class ScreeningIn(BaseModel):
 def _screening_out(s: SpdScreening, brief: dict | None = None) -> dict:
     out = {
         "id": s.id, "patient_id": s.patient_id, "program_code": s.program_code,
-        "source": s.source, "org_id": s.org_id, "scale_code": s.scale_code,
+        "source": s.source, "source_name": SCREENING_SOURCE_NAMES.get(s.source, s.source),
+        "org_id": s.org_id, "scale_code": s.scale_code,
         "score": s.score, "risk_level": s.risk_level, "result": s.result,
         "advice": s.advice, "reviewed": s.reviewed, "review_result": s.review_result,
         "review_note": s.review_note, "answers": s.answers or {},
@@ -1444,7 +1453,8 @@ def create_group(
     group = SpdGroup(**body.model_dump(), owner_user_id=user.id, org_id=user.org_id)
     db.add(group)
     db.commit()
-    return {"id": group.id, "name": group.name, "scope": group.scope, "member_count": 0}
+    return {"id": group.id, "name": group.name, "scope": group.scope,
+            "scope_name": GROUP_SCOPE_NAMES.get(group.scope, group.scope), "member_count": 0}
 
 
 @router.get("/groups", response_model=list[GroupOut])
@@ -1475,7 +1485,8 @@ def list_groups(
         .all()
     )
     return [
-        {"id": g.id, "name": g.name, "scope": g.scope, "dept": g.dept,
+        {"id": g.id, "name": g.name, "scope": g.scope,
+         "scope_name": GROUP_SCOPE_NAMES.get(g.scope, g.scope), "dept": g.dept,
          "owner_user_id": g.owner_user_id, "auto_rule": g.auto_rule or [],
          "member_count": counts.get(g.id, 0),
          "updated_at": g.updated_at.isoformat()}
@@ -1926,7 +1937,8 @@ def patient_profile(
         "programs": programs,
         "measurements": [
             {"metric": m.metric, "value": m.value, "unit": m.unit, "level": m.level,
-             "source": m.source, "measured_at": m.measured_at.isoformat()}
+             "source": m.source, "source_name": MEASUREMENT_SOURCE_NAMES.get(m.source, m.source),
+             "measured_at": m.measured_at.isoformat()}
             for m in measurements
         ],
         "assessments": [

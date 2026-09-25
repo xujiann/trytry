@@ -22,6 +22,7 @@ from ...models import (
     SpdServicePackage,
     SpdTag,
 )
+from ...service import MEDIA_TYPE_NAMES
 from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
 
 
@@ -52,6 +53,7 @@ class EduMaterialOut(BaseModel):
     title: str
     program_code: str
     media_type: str
+    media_type_name: str
     content: str
     media_url: str
     dept: str
@@ -89,6 +91,7 @@ class TagBriefOut(BaseModel):
     code: str
     name: str
     category: str
+    category_name: str
     color: str
 
 
@@ -264,7 +267,8 @@ def create_edu(body: EduIn, db: Session = Depends(get_db)):
 def _edu_out(m: SpdEduMaterial) -> dict:
     return {
         "id": m.id, "code": m.code, "title": m.title, "program_code": m.program_code,
-        "media_type": m.media_type, "content": m.content, "media_url": m.media_url,
+        "media_type": m.media_type, "media_type_name": MEDIA_TYPE_NAMES.get(m.media_type, m.media_type),
+        "content": m.content, "media_url": m.media_url,
         "dept": m.dept, "active": m.active,
     }
 
@@ -390,6 +394,11 @@ def update_package(package_id: int, body: PackagePatch, db: Session = Depends(ge
 # ============================================================ 标签
 
 
+# 标签类别的中文名（P2-74 ②）：界面新建时给这三项，接口不强制（`TagIn.category` 只限长度），
+# 表外的值原样回显，与其它码表同一口径。
+TAG_CATEGORY_NAMES = {"patient": "患者标签", "risk": "风险标签", "service": "服务标签"}
+
+
 class TagIn(BaseModel):
     code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
@@ -417,6 +426,7 @@ def list_tags(category: str | None = None, db: Session = Depends(get_db)):
     if category:
         query = query.filter(SpdTag.category == category)
     return [
-        {"id": t.id, "code": t.code, "name": t.name, "category": t.category, "color": t.color}
+        {"id": t.id, "code": t.code, "name": t.name, "category": t.category,
+         "category_name": TAG_CATEGORY_NAMES.get(t.category, t.category), "color": t.color}
         for t in query.order_by(SpdTag.id).limit(300).all()
     ]

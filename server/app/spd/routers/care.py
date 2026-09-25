@@ -47,7 +47,7 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import award_points, judge_measurement, measure_value_problem, spawn_task
+from ..service import MEASUREMENT_SOURCE_NAMES, award_points, judge_measurement, measure_value_problem, spawn_task
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
@@ -98,6 +98,7 @@ class CareMeasurementOut(BaseModel):
     unit: str
     level: str
     source: str
+    source_name: str
     device_sn: str
     note: str
     measured_at: str
@@ -371,7 +372,8 @@ def _measure_out(m: SpdMeasurement) -> dict:
     return {
         "id": m.id, "patient_id": m.patient_id, "program_code": m.program_code,
         "metric": m.metric, "value": m.value, "unit": m.unit, "level": m.level,
-        "source": m.source, "device_sn": m.device_sn, "note": m.note,
+        "source": m.source, "source_name": MEASUREMENT_SOURCE_NAMES.get(m.source, m.source),
+        "device_sn": m.device_sn, "note": m.note,
         "measured_at": m.measured_at.isoformat(),
     }
 

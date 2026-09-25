@@ -94,7 +94,7 @@ TEMPLATE_BASE = {"id", "program_id", "code", "name", "scene", "scene_name", "ris
                  "status", "scope", "org_id", "team_id", "description", "copied_from_id",
                  "created_by"}
 NODE_KEYS = {"id", "template_id", "key", "name", "stage", "seq", "dept", "exec_role",
-             "service_type", "enter_condition", "complete_condition", "next_key",
+             "service_type", "service_type_name", "enter_condition", "complete_condition", "next_key",
              "due_days", "timeout_action", "require_form", "require_evidence",
              "form_code", "note"}
 
@@ -141,6 +141,7 @@ def test_节点增改的形状与已发布路径的拒绝(client, auth, seeded):
                         json={"key": "n9", "name": "宣教", "service_type": "edu", "seq": 9})
     assert added.status_code == 201 and set(added.json()) == NODE_KEYS
     assert added.json()["enter_condition"] == [] and added.json()["complete_condition"] == []
+    assert added.json()["service_type_name"] == "宣教"   # P2-74 ②
 
     patched = client.patch(f"{B}/path-nodes/{seeded['node']}", headers=auth,
                            json={"name": "首诊(改)", "due_days": 14})

@@ -279,8 +279,9 @@ def test_任务清单与随访与干预与宣教与复诊的键集合(client, au
                                      "next_at", "status", "status_name", "feedback", "read",
                                      "created_at"}   # status_name：P2-67，与医生端同一套文案
     edu = client.get(f"{B}/edu", headers=auth).json()
-    assert set(edu[0]) == {"id", "material_id", "title", "media_type", "content",
+    assert set(edu[0]) == {"id", "material_id", "title", "media_type", "media_type_name", "content",
                            "media_url", "status", "created_at"}
+    assert edu[0]["media_type_name"] == "article"   # 表外的码原样回显（P2-74 ②）
     revisits = client.get(f"{B}/revisits", headers=auth).json()
     assert set(revisits[0]) == {"id", "plan_date", "dept", "items", "status",
                                 "actual_date"}

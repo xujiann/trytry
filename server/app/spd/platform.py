@@ -56,6 +56,7 @@ from ..pii import pii_filter
 # 证件号末位 X 大小写（P1-114）：同一个号两种写法，平台主索引一处定义，spd 的证件号检索照用，
 # 不在子系统里另写一份「怎么算同一个号」。
 from ..routers.patients import id_card_variants
+from ..routers.organizations import ORG_LEVEL_NAMES  # 机构层级文案（纳管网络树显示，P2-74）
 # 二维码 SVG：实现在平台侧 qrsvg（ADR-0015 打印件验真也要用），spd 经这里取。
 # 方向由此变顺：原实现长在 spd 内部时，平台侧想复用只能违反单向依赖。
 from ..qrsvg import qr_svg

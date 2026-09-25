@@ -49,6 +49,9 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..service import sweep_overdue
+
+# 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
+TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
 from ...visibility import stats_org_ids, visible_org_ids
 
 router = APIRouter(
@@ -476,6 +479,7 @@ class TeamBriefOut(BaseModel):
     id: int
     name: str
     level: str
+    level_name: str
     org_id: int
     program_codes: list[str]
 
@@ -1185,7 +1189,8 @@ def team_workbench(
     out: dict[str, Any] = {
         "role": role,
         "teams": [
-            {"id": t.id, "name": t.name, "level": t.level, "org_id": t.org_id,
+            {"id": t.id, "name": t.name, "level": t.level,
+             "level_name": TEAM_LEVEL_NAMES.get(t.level, t.level), "org_id": t.org_id,
              "program_codes": t.program_codes or []}
             for t in db.query(SpdTeam).filter(SpdTeam.id.in_(team_ids or [0])).all()
         ],

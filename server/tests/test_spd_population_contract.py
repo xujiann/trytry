@@ -64,7 +64,7 @@ def _age_of(birth_date: str) -> int:
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
 
-SCREENING_KEYS = ["id", "patient_id", "program_code", "source", "org_id", "scale_code",
+SCREENING_KEYS = ["id", "patient_id", "program_code", "source", "source_name", "org_id", "scale_code",
                   "score", "risk_level", "result", "advice", "reviewed", "review_result",
                   "review_note", "answers", "created_at"]
 CANDIDATE_KEYS = ["id", "patient_id", "program_code", "status", "source", "org_id",
@@ -175,7 +175,7 @@ def test_筛查登记复核与列表(client, h, base):
     assert list(body) == SCREENING_KEYS
     assert body == {
         "id": body["id"], "patient_id": pid, "program_code": "ctp_dm",
-        "source": "active", "org_id": org_id, "scale_code": "ctp_scale", "score": 3.0,
+        "source": "active", "source_name": "主动筛查", "org_id": org_id, "scale_code": "ctp_scale", "score": 3.0,
         "risk_level": "high", "result": "suspect", "advice": "尽快复核建档",
         "reviewed": False, "review_result": "", "review_note": "",
         "answers": {"q1": "是", "q2": "是"}, "created_at": _iso(body["created_at"]),
@@ -548,7 +548,7 @@ def test_患者分组(client, h, base):
     created = client.post(f"{B}/groups", json={"name": "契约重点组"}, headers=h)
     assert created.status_code == 201
     g1 = created.json()
-    assert g1 == {"id": g1["id"], "name": "契约重点组", "scope": "personal",
+    assert g1 == {"id": g1["id"], "name": "契约重点组", "scope": "personal", "scope_name": "本人分组",
                   "member_count": 0}
 
     rule = [{"field": "risk_level", "op": "==", "value": "low"}]
@@ -570,13 +570,13 @@ def test_患者分组(client, h, base):
     assert auto_added.json() == {"added": 2, "total": 2}
 
     rows = client.get(f"{B}/groups", headers=h).json()
-    assert [list(r) for r in rows] == [["id", "name", "scope", "dept", "owner_user_id",
+    assert [list(r) for r in rows] == [["id", "name", "scope", "scope_name", "dept", "owner_user_id",
                                         "auto_rule", "member_count", "updated_at"]] * 2
     assert rows == [
-        {"id": g2["id"], "name": "契约自动组", "scope": "dept", "dept": "公卫科",
+        {"id": g2["id"], "name": "契约自动组", "scope": "dept", "scope_name": "科室分组", "dept": "公卫科",
          "owner_user_id": base["admin_id"], "auto_rule": rule, "member_count": 2,
          "updated_at": _iso(rows[0]["updated_at"])},
-        {"id": g1["id"], "name": "契约重点组", "scope": "personal", "dept": "",
+        {"id": g1["id"], "name": "契约重点组", "scope": "personal", "scope_name": "本人分组", "dept": "",
          "owner_user_id": base["admin_id"], "auto_rule": [], "member_count": 2,
          "updated_at": _iso(rows[1]["updated_at"])},
     ]
@@ -695,7 +695,7 @@ def test_专病360档案(client, h, base):
                               "due_date": (business_today() + timedelta(days=7)).isoformat()}],
         }],
         "measurements": [{"metric": "bp_sys", "value": 160.0, "unit": "mmHg",
-                          "level": "normal", "source": "manual",
+                          "level": "normal", "source": "manual", "source_name": "手工",
                           "measured_at": measured_at}],
         "assessments": [{"id": assessed["id"], "scale_code": "ctp_scale", "score": 0.0,
                          "risk_level": "low", "created_at": assessed["created_at"]}],

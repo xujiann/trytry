@@ -194,7 +194,7 @@ async function renderSpdAdmin() {
   const a = wb.alerts, cfg = wb.config_health, ds = wb.data_sources;
   const orgTreeHtml = (nodes, depth) => (nodes || []).map((n) =>
     `<div style="padding-left:${depth * 18}px;font-size:13.5px">${esc(n.name)}
-       <span class="desc">${esc(n.level || n.org_type || "")} · 团队 ${n.team_count ?? 0} · 在管 ${n.enrolled ?? 0}</span></div>`
+       <span class="desc">${esc(n.level_name || ORG_TYPES[n.org_type] || n.org_type || "")} · 团队 ${n.team_count ?? 0} · 在管 ${n.enrolled ?? 0}</span></div>`
     + orgTreeHtml(n.children, depth + 1)).join("");
   // ADR-0009 第六批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 提醒面板的红色左边框走 `accent`，"有待处理才渲染"的条件仍留在调用点。
@@ -291,7 +291,7 @@ async function renderSpdAdmin() {
     ${panel("宣教素材", `
       ${table(["ID", "编码", "标题", "病种", "形式", "科室", "状态", "操作"], materials, (m) =>
         `<tr><td>${m.id}</td><td>${esc(m.code)}</td><td>${esc(m.title)}</td><td>${esc(m.program_code || "—")}</td>
-         <td>${esc(m.media_type)}</td><td>${esc(m.dept || "—")}</td>
+         <td>${esc(m.media_type_name)}</td><td>${esc(m.dept || "—")}</td>
          <td>${m.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
          <td><button class="btn secondary" data-edu-edit="${m.id}" data-title="${esc(m.title)}" data-dept="${esc(m.dept || "")}"
               data-url="${esc(m.media_url || "")}" data-active="${m.active ? 1 : 0}">编辑</button></td></tr>`)}
@@ -306,7 +306,7 @@ async function renderSpdAdmin() {
         <button>新建标签</button>
       </form><p class="msg" id="spd-tag-msg"></p>
       ${table(["ID", "编码", "名称", "类别", "颜色"], tags, (t) =>
-        `<tr><td>${t.id}</td><td>${esc(t.code)}</td><td>${esc(t.name)}</td><td>${esc(t.category)}</td>
+        `<tr><td>${t.id}</td><td>${esc(t.code)}</td><td>${esc(t.name)}</td><td>${esc(t.category_name)}</td>
          <td>${esc(t.color || "—")}</td></tr>`)}`)}
     ${panel("设备台账", `
       <form class="inline" id="spd-device-form">
@@ -699,7 +699,7 @@ function spdProfileHtml(p) {
   }).join("") || '<p class="desc">该患者没有签约专病</p>';
   const measurements = table(["指标", "值", "单位", "分级", "来源", "时间"], (p.measurements || []).slice(0, 10), (m) =>
     `<tr><td>${esc(m.metric)}</td><td>${esc(String(m.value ?? ""))}</td><td>${esc(m.unit || "")}</td>
-     <td>${esc(m.level || "—")}</td><td>${esc(m.source || "—")}</td><td>${esc(m.measured_at || "")}</td></tr>`);
+     <td>${spdTag(SPD_MEAS_LEVEL, m.level)}</td><td>${esc(m.source_name || "—")}</td><td>${esc(m.measured_at || "")}</td></tr>`);
   const assessments = table(["ID", "量表", "得分", "风险", "时间"], p.assessments || [], (a) =>
     `<tr><td>${a.id}</td><td>${esc(a.scale_code)}</td><td>${esc(String(a.score ?? ""))}</td>
      <td>${spdTag(SPD_RISK, a.risk_level)}</td><td>${esc(a.created_at || "")}</td></tr>`);
@@ -961,7 +961,7 @@ async function renderSpdTeam() {
       : ""}
     ${panel("所属团队",
       table(["ID", "团队", "层级", "机构", "服务病种"], wb.teams, (t) =>
-        `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(t.level)}</td>
+        `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td>${esc(t.level_name)}</td>
          <td>${t.org_id}</td><td>${esc((t.program_codes || []).join("、") || "—")}</td></tr>`))}
     ${panel("患者风险分层",
       barChart(spdPairs(wb.patients.by_risk,
@@ -1242,7 +1242,7 @@ async function renderSpdPatients() {
     $("#spd-screen-list").innerHTML = table(
       ["ID", "患者", "病种", "来源", "得分", "风险", "结论", "复核", "操作"], rows, (s) =>
       `<tr><td>${s.id}</td><td>${esc(s.patient_name || s.patient_id)}</td>
-       <td>${esc(s.program_code)}</td><td>${esc(s.source)}</td><td>${s.score}</td>
+       <td>${esc(s.program_code)}</td><td>${esc(s.source_name)}</td><td>${s.score}</td>
        <td>${spdTag(SPD_RISK, s.risk_level)}</td>
        <td>${s.result === "suspect" ? '<span class="tag orange">疑似</span>'
           : s.result === "excluded" ? '<span class="tag">排除</span>'
@@ -1450,7 +1450,7 @@ async function renderSpdPatients() {
     const groups = await api("/api/spd/groups");
     $("#spd-group-list").innerHTML = table(
       ["ID", "名称", "范围", "科室", "自动规则", "成员数", "操作"], groups, (g) =>
-      `<tr><td>${g.id}</td><td>${esc(g.name)}</td><td>${esc(g.scope)}</td>
+      `<tr><td>${g.id}</td><td>${esc(g.name)}</td><td>${esc(g.scope_name)}</td>
        <td>${esc(g.dept || "—")}</td><td>${(g.auto_rule || []).length} 条</td>
        <td>${g.member_count ?? "—"}</td>
        <td><button class="btn secondary" data-grp-members="${g.id}">成员</button></td></tr>`);
@@ -1695,7 +1695,7 @@ async function renderSpdPath() {
       box.innerHTML = panel(`节点 · ${tpl.name}（${tpl.status === "published" ? "已发布，只读；要改请复制新版本" : "可编辑"}）`,
         table(["ID", "序", "key", "名称", "阶段", "执行角色", "服务类型", "时限(天)", "操作"], tpl.nodes || [], (n) =>
           `<tr><td>${n.id}</td><td>${n.seq}</td><td>${esc(n.key)}</td><td>${esc(n.name)}</td><td>${esc(n.stage || "—")}</td>
-           <td>${esc(n.exec_role || "—")}</td><td>${esc(n.service_type || "—")}</td><td>${n.due_days}</td>
+           <td>${esc(n.exec_role || "—")}</td><td>${esc(n.service_type_name || "—")}</td><td>${n.due_days}</td>
            <td>${editable
              ? `<button class="btn secondary" data-node-edit="${n.id}" data-tpl="${templateId}" data-name="${esc(n.name)}"
                   data-stage="${esc(n.stage || "")}" data-seq="${n.seq}" data-days="${n.due_days}">编辑</button>
@@ -2203,8 +2203,8 @@ async function renderSpdAssess() {
       </form><p class="msg" id="spd-plan-msg"></p>
       ${table(["ID", "编码", "名称", "层级", "对象", "周期", "指标数", "状态", "操作"], plans, (p) =>
         `<tr><td>${p.id}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td>
-         <td>${esc(p.level)}</td><td>${esc(objectNames[p.object_type] || p.object_type)}</td>
-         <td>${esc(p.period_type)}</td><td>${(p.items || []).length}</td>
+         <td>${esc(p.level_name)}</td><td>${esc(objectNames[p.object_type] || p.object_type)}</td>
+         <td>${esc(p.period_type_name)}</td><td>${(p.items || []).length}</td>
          <td>${onOff(p.active !== false)}</td>
          <td><button class="btn secondary" data-run="${p.id}">跑分</button>
              <button class="btn secondary" data-plan-analysis="${p.id}" data-period-type="${esc(p.period_type || "")}">得分分析</button>
@@ -2644,7 +2644,7 @@ async function renderSpdFollowup() {
           ${c.questionnaire ? `<p class="desc">本次问卷：${esc(c.questionnaire.name)}（${(c.questionnaire.items || []).length} 题，${(c.questionnaire.abnormal_rules || []).length} 条异常规则）</p>` : ""}
           <h4>近期就诊</h4>
           ${table(["类型", "诊断", "医生", "时间"], c.encounters || [], (x) =>
-            `<tr><td>${esc(x.encounter_type)}</td><td>${esc(x.diagnosis_name || "—")}</td><td>${esc(x.doctor_name || "—")}</td>
+            `<tr><td>${esc(x.encounter_type_name)}</td><td>${esc(x.diagnosis_name || "—")}</td><td>${esc(x.doctor_name || "—")}</td>
              <td>${esc((x.created_at || "").replace("T", " ").slice(0, 16))}</td></tr>`)}
           <h4>住院</h4>
           ${table(["入院", "出院", "诊断", "医生", "状态"], c.admissions || [], (a) =>
@@ -3015,7 +3015,7 @@ async function renderSpdMember() {
       ["时间", "指标", "数值", "等级", "来源", "备注"], rows, (m) =>
       `<tr><td>${esc(m.measured_at.slice(0, 16))}</td><td>${esc(m.metric)}</td>
        <td>${m.value}${esc(m.unit)}</td><td>${spdTag(SPD_MEAS_LEVEL, m.level)}</td>
-       <td>${esc(m.source)}</td><td>${esc(m.note || "—")}</td></tr>`);
+       <td>${esc(m.source_name)}</td><td>${esc(m.note || "—")}</td></tr>`);
   };
   $("#spd-meas-query").onsubmit = (e) => { e.preventDefault(); return measQuery(); };
   $("#spd-meas-trend-btn").onclick = async () => {

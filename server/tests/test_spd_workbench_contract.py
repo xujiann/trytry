@@ -452,7 +452,7 @@ TEAM_BASE_KEYS = ["role", "teams", "patients", "tasks", "plans", "alerts"]
 def _team_common(wb):
     due_fu = sum(1 for p in wb["fu_points"] if p <= 0)
     return {
-        "teams": [{"id": wb["team"]["id"], "name": "契约团队", "level": "township",
+        "teams": [{"id": wb["team"]["id"], "name": "契约团队", "level": "township", "level_name": "乡镇团队",
                    "org_id": wb["township"]["id"], "program_codes": ["wbp_a"]}],
         "patients": {"managed": 1, "new_this_month": 1, "high_risk": 0,
                      "by_risk": {"mid": 1}},

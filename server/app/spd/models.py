@@ -276,6 +276,7 @@ class SpdTag(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(64))
+    # patient=患者标签, risk=风险标签, service=服务标签（界面给这三项；接口不强制，表外的值原样显示）
     category: Mapped[str] = mapped_column(String(32), default="patient")
     color: Mapped[str] = mapped_column(String(16), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
