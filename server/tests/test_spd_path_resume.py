@@ -122,3 +122,53 @@ def test_已取消的路径不可再调整_结束时间不动(client, admin, wor
         assert resp.status_code == 409 and resp.json() == {"detail": "已取消的路径不可调整"}, (status, resp.text)  # 修前 200
     detail = client.get(f"{B}/path-instances/{instance}", headers=admin).json()
     assert (detail["status"], detail["finished_at"]) == ("cancelled", finished_at)
+
+
+def test_回到走过的节点时因条件暂停_恢复照样重判条件并派任务(client, admin, world):
+    """路径可以按 next_key 回到走过的节点（复评不达标回干预）。第二次进同一个节点时条件不满足而暂停，节点上躺着的是上一趟
+    办完的任务——「节点上有没有任务」判不出这一趟进没进来，要看实例最近一条任务是不是这个节点的。"""
+    from app.database import SessionLocal
+    from app.spd.models import SpdPathNode, SpdPathTemplate, SpdProgram
+
+    with SessionLocal() as db:
+        program = db.query(SpdProgram).filter_by(code="hypertension").one()
+        template = SpdPathTemplate(program_id=program.id, code="P131_LOOP", name="P131 回环路径", status="published")
+        db.add(template)
+        db.flush()
+        db.add_all([
+            SpdPathNode(template_id=template.id, key="n1", name="首诊", seq=1),
+            SpdPathNode(template_id=template.id, key="n2", name="高危复诊", seq=2,
+                        enter_condition=[{"field": "risk_level", "op": "==", "value": "high"}]),
+            SpdPathNode(template_id=template.id, key="n3", name="复评", seq=3, next_key="n2"),
+        ])
+        db.commit()
+        loop_template = template.id
+    enrollment, instance, task = _instance_at_n1(client, admin, world)
+    with SessionLocal() as db:
+        from app.spd.models import SpdPathInstance
+
+        db.get(SpdPathInstance, instance).template_id = loop_template
+        db.commit()
+
+    def done(node_key):
+        from app.spd.models import SpdTask
+
+        with SessionLocal() as db:
+            task_id = db.query(SpdTask.id).filter_by(instance_id=instance, node_key=node_key, status="pending") \
+                .order_by(SpdTask.id.desc()).first()[0]
+        resp = client.post(f"{B}/tasks/{task_id}/complete", headers=admin, json={"result": {"note": node_key}})
+        assert resp.status_code == 200, resp.text
+        return resp.json().get("advanced", {})
+
+    client.patch(f"{B}/enrollments/{enrollment}", headers=admin, json={"risk_level": "high"})
+    assert done("n1")["current_node_key"] == "n2"          # 高危：第一趟直接进 n2
+    assert done("n2")["current_node_key"] == "n3"
+    client.patch(f"{B}/enrollments/{enrollment}", headers=admin, json={"risk_level": "low"})
+    assert done("n3")["status"] == "paused"                # 复评后回 n2，已不是高危：暂停在 n2
+    assert _tasks_on(instance, "n2") == 1                  # 只有上一趟办完的那条
+    resp = client.patch(f"{B}/path-instances/{instance}", headers=admin, json={"status": "running"})
+    assert resp.status_code == 409, resp.text              # 按「节点上有任务」判会当成手工暂停、直接改回执行中
+    client.patch(f"{B}/enrollments/{enrollment}", headers=admin, json={"risk_level": "high"})
+    resp = client.patch(f"{B}/path-instances/{instance}", headers=admin, json={"status": "running"})
+    assert resp.status_code == 200, resp.text
+    assert _tasks_on(instance, "n2") == 2                  # 这一趟的任务派出来了

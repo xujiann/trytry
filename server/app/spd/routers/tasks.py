@@ -461,10 +461,13 @@ def adjust_path_instance(
 def _resume_paused(db: Session, instance: SpdPathInstance, enrollment: SpdEnrollment | None) -> list:
     """恢复暂停的实例（推进与改档共用，调用方持实例行的锁）。返回命中的进入条件。
 
-    因进入条件暂停的实例停在一个**还没有任务**的节点上（`advance_path` 推到它、条件不满足就暂停，任务没派）：恢复时重判
-    这个节点的进入条件（不满足 409）并派本节点任务。手工暂停的节点上任务照旧在：只改回执行中，不再重复派。原先只有推进
+    因进入条件暂停的实例，这一趟还没进当前节点（`advance_path` 推到它、条件不满足就暂停，任务没派）：恢复时重判这个节点的
+    进入条件（不满足 409）并派本节点任务。手工暂停的，节点上这一趟的任务照旧在：只改回执行中，不再重复派。原先只有推进
     接口会重判、而且一律再派一条；改档接口（管理端「调整 → 执行中（恢复）」，暂停的实例页面上只有这一个入口）只改状态——
     路径停在没有任务的节点上，再点「推进」就把这个节点整个跳过，进入条件形同虚设（P1-131）。
+
+    「这一趟进没进来」看实例最近派的一条任务是不是这个节点的：路径任务只在进节点时派，因条件暂停时最近那条属于上一个节点。
+    不能看「节点上有没有任务」——路径可以按 next_key 回到走过的节点，上一趟办完的任务还躺在那里。
     """
     node = (
         db.query(SpdPathNode)
@@ -473,8 +476,9 @@ def _resume_paused(db: Session, instance: SpdPathInstance, enrollment: SpdEnroll
     )
     if node is None:
         raise HTTPException(status_code=409, detail="暂停节点已不存在，请调整路径实例")
-    entered = db.query(SpdTask.id).filter(
-        SpdTask.instance_id == instance.id, SpdTask.node_key == node.key).first() is not None
+    latest = (db.query(SpdTask.node_key).filter(SpdTask.instance_id == instance.id)
+              .order_by(SpdTask.id.desc()).first())
+    entered = latest is not None and latest[0] == node.key
     matched: list = []
     if not entered:
         allowed, matched = node_enter_allowed(db, instance, node)
