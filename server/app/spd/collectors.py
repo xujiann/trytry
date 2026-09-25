@@ -69,6 +69,16 @@ def collect_encounter_probe(db: Session, source: SpdDataSource) -> int:
     return query.count()
 
 
+#: 公卫随访 → 慢专病指标：（指标, 随访上的列, 单位, 判等级用的病种）
+_PUBLICHEALTH_METRICS = (
+    ("bp_sys", "sbp", "mmHg", "hypertension"),
+    ("bp_dia", "dbp", "mmHg", "hypertension"),
+    ("glucose_fasting", "glucose", "mmol/L", "diabetes"),
+)
+#: 公卫随访一页取多少条（判重的 IN 列表至多三倍于它）
+PUBLICHEALTH_PAGE = 500
+
+
 def collect_publichealth(db: Session, source: SpdDataSource) -> int:
     """公卫慢病随访 → 慢专病监测数据（P1-1 第一个真实采集器）。
 
@@ -82,37 +92,43 @@ def collect_publichealth(db: Session, source: SpdDataSource) -> int:
 
     回溯窗口取 `freq_minutes × 4`：比同步周期宽一倍以上，一次漏跑补得回来，
     幂等键保证补跑不重复。
+
+    窗口按 id 翻页**取完**（每页 `PUBLICHEALTH_PAGE` 条）。原先只取窗口里最早的一页：窗口里多于一页时，
+    每一轮取到的都是同一批最早的——头一轮落库、之后全被判重跳过——其余的一轮都轮不到，窗口移过去就永远
+    出了窗口，同步日志照写成功（P2-94）。判重只查这一页的来源键；原先每轮把全部监测值的来源键读进内存。
     """
     since = now_naive() - timedelta(minutes=max(source.freq_minutes, 1) * 4)
-    rows = iter_recent_chronic_followups(db, since)
-    existing = {
-        ref for (ref,) in db.query(SpdMeasurement.source_ref)
-        .filter(SpdMeasurement.source_ref != "").all()
-    }
-    written = 0
-    for followup, patient_id in rows:
-        for metric, value, unit, program in (
-            ("bp_sys", followup.sbp, "mmHg", "hypertension"),
-            ("bp_dia", followup.dbp, "mmHg", "hypertension"),
-            ("glucose_fasting", followup.glucose, "mmol/L", "diabetes"),
-        ):
-            if value is None:
-                continue
-            ref = f"chronic_fu:{followup.id}:{metric}"
-            if ref in existing:
-                continue
-            level = judge_measurement(db, program, "", metric, value)
-            db.add(
-                SpdMeasurement(
-                    patient_id=patient_id, program_code=program, metric=metric,
-                    value=float(value), unit=unit, level=level,
-                    source="publichealth", source_ref=ref,
-                    measured_at=followup.created_at,
+    written, after_id = 0, 0
+    while True:
+        rows = iter_recent_chronic_followups(db, since, limit=PUBLICHEALTH_PAGE, after_id=after_id)
+        if not rows:
+            return written
+        refs = [f"chronic_fu:{followup.id}:{metric}" for followup, _ in rows for metric, *_ in _PUBLICHEALTH_METRICS]
+        existing = {
+            ref for (ref,) in db.query(SpdMeasurement.source_ref).filter(SpdMeasurement.source_ref.in_(refs)).all()
+        }
+        for followup, patient_id in rows:
+            for metric, attr, unit, program in _PUBLICHEALTH_METRICS:
+                value = getattr(followup, attr)
+                if value is None:
+                    continue
+                ref = f"chronic_fu:{followup.id}:{metric}"
+                if ref in existing:
+                    continue
+                level = judge_measurement(db, program, "", metric, value)
+                db.add(
+                    SpdMeasurement(
+                        patient_id=patient_id, program_code=program, metric=metric,
+                        value=float(value), unit=unit, level=level,
+                        source="publichealth", source_ref=ref,
+                        measured_at=followup.created_at,
+                    )
                 )
-            )
-            existing.add(ref)
-            written += 1
-    return written
+                existing.add(ref)
+                written += 1
+        if len(rows) < PUBLICHEALTH_PAGE:
+            return written
+        after_id = rows[-1][0].id
 
 
 #: 已实现的采集器。**只登记真的会落库的实现**——把探针挂上来会让监控页
