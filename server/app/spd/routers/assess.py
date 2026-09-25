@@ -821,6 +821,10 @@ def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
     - `ratio`：达标即满分，未达标按比例给分（`full * value / target`）；
     - `step`：分档给分，取第一个命中的档。
 
+    `ratio` 的目标以指标的 `target_value` 为准，指标没设目标值才看规则里的 `target`，都没有按 100（P2-104）。
+    原先反过来先看规则里的：种子指标两处各写一份，界面（考核指标库的编辑弹窗、扣分理由、报告里的「目标」）
+    看到、改到的都是 `target_value`，改了之后计分照旧按规则里那份旧的。
+
     没配规则时按"值即得分"处理并截到 0~100——总比整张考核表算不出来强，
     但会在理由里写明"未配置评分规则"，让人知道这个数不是精心设计的。
     """
@@ -828,7 +832,8 @@ def score_of(indicator: SpdIndicator, value: float) -> tuple[float, str]:
     kind = rule.get("type", "")
     if kind == "ratio":
         full = float(rule.get("full", 100))
-        target = float(rule.get("target", indicator.target_value or 100) or 100)
+        preset = indicator.target_value if indicator.target_value is not None else rule.get("target")
+        target = float(preset or 100)
         if value >= target:
             return full, ""
         got = round(full * value / target, 2) if target else 0.0
