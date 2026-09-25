@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -28,7 +28,7 @@ from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
 from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
-from ..platform import Organization, Patient, User, pii_filter, unusable_user
+from ..platform import Organization, Patient, User, id_card_variants, pii_filter, unusable_user
 from ..models import (
     SpdAssessment,
     SpdCandidate,
@@ -1047,14 +1047,15 @@ def list_enrollments(
         # **仅全值命中**（pii_filter 走索引列等值），前缀/中缀不再命中——与平台
         # patients.py 的模糊降级同一口径；姓名模糊不受影响。关态保持 contains
         # 原行为，字节不变。
+        # 证件号两种写法都认（P1-114）：末位 X 大小写，真 PG 的 LIKE 区分大小写
         if settings.pii_encryption_enabled:
-            id_card_match = pii_filter(Patient.id_card_idx, Patient.id_card, keyword)
+            id_card_hit = or_(*(pii_filter(Patient.id_card_idx, Patient.id_card, v) for v in id_card_variants(keyword)))
         else:
-            id_card_match = Patient.id_card.contains(keyword)
+            id_card_hit = or_(*(Patient.id_card.contains(v) for v in id_card_variants(keyword)))
         # 子查询而不是先取患者号：原先 `.limit(500)` 取任意 500 个匹配的患者再筛，
         # 常见姓氏或证件号地区前缀一搜，名单少一截且无从察觉（P1-83）
         query = query.filter(SpdEnrollment.patient_id.in_(
-            select(Patient.id).where(Patient.name.contains(keyword) | id_card_match)))
+            select(Patient.id).where(Patient.name.contains(keyword) | id_card_hit)))
     rows = paginate(query.order_by(SpdEnrollment.id.desc()), response, offset, limit)
     briefs = _patient_brief(db, [r.patient_id for r in rows])
     return [_enroll_out(r, briefs.get(r.patient_id)) for r in rows]

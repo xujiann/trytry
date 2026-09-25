@@ -50,7 +50,6 @@ from ..models import (
     Ward,
     utcnow,
 )
-from ..pii import pii_filter
 from ..privacy import desensitize, mask_id_card, mask_phone
 from ..schemas import EncounterCreate, ExamReportCreate, FollowUpCreate, PatientOut
 from ..texttypes import NON_BLANK
@@ -58,7 +57,7 @@ from .chronic import _evaluate_level
 from .encounters import create_encounter
 from .exams import submit_report
 from .inpatient import AdmissionCreate, _mark_discharged, _release_bed, create_admission
-from .patients import create_patient_idempotent
+from .patients import create_patient_idempotent, id_card_match
 
 router = APIRouter(
     prefix="/api/integration",
@@ -598,7 +597,8 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
     if code == "A08":  # 信息更新：档案必须已存在，非空字段覆盖
         existing = (
             db.query(Patient)
-            .filter(pii_filter(Patient.id_card_idx, Patient.id_card, data["id_card"]))
+            .filter(id_card_match(data["id_card"]))   # 证件号两种写法都认（P1-114）
+            .order_by(Patient.id)
             .first()
         )
         if existing is None:
@@ -660,7 +660,8 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
     # A03 出院：镜像同步（不设病案首页/费用门禁，见端点 docstring）
     inpatient = (
         db.query(Patient)
-        .filter(pii_filter(Patient.id_card_idx, Patient.id_card, data["id_card"]))
+        .filter(id_card_match(data["id_card"]))   # 证件号两种写法都认（P1-114）
+        .order_by(Patient.id)
         .first()
     )
     if inpatient is None:
@@ -803,7 +804,8 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
         if id_card:
             patient = (
                 db.query(Patient)
-                .filter(pii_filter(Patient.id_card_idx, Patient.id_card, id_card))
+                .filter(id_card_match(id_card))   # 证件号两种写法都认（P1-114）
+                .order_by(Patient.id)
                 .first()
             )
             if patient is not None and patient.id != request.patient_id:

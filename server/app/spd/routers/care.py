@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
 import sqlalchemy as sa
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ... import clock
@@ -28,7 +28,7 @@ from ...deps import (
     resolve_business_date,
     row_dict,
 )
-from ..platform import Patient, User, pii_filter, unusable_user
+from ..platform import Patient, User, id_card_variants, pii_filter, unusable_user
 from ..models import (
     SpdAssessment,
     SpdCaseReport,
@@ -1429,10 +1429,11 @@ def list_case_reports(
         # PII 加密开态（P1-25）：密文列 contains 恒空，降级为**仅全值命中**
         # （pii_filter 走索引列等值），前缀/中缀不再命中——与平台 patients.py
         # 的模糊降级同一口径。关态保持 contains 原行为，字节不变。
+        # 证件号两种写法都认（P1-114）：末位 X 大小写，真 PG 的 LIKE 区分大小写
         if settings.pii_encryption_enabled:
-            match = pii_filter(Patient.id_card_idx, Patient.id_card, id_card)
+            match = or_(*(pii_filter(Patient.id_card_idx, Patient.id_card, v) for v in id_card_variants(id_card)))
         else:
-            match = Patient.id_card.contains(id_card)
+            match = or_(*(Patient.id_card.contains(v) for v in id_card_variants(id_card)))
         # 子查询而不是先取患者号：原先 `.limit(200)` 取任意 200 个匹配的患者再筛，按证件号地区前缀一搜名单少一截（P1-83）
         query = query.filter(SpdCaseReport.patient_id.in_(select(Patient.id).where(match)))
     # 先校验再拼串：非法值拼成的时间戳在真 PG 上转换失败是 500（P1-58）

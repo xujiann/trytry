@@ -2,6 +2,7 @@
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from sqlalchemy.exc import IntegrityError
@@ -22,8 +23,25 @@ router = APIRouter(
 )
 
 
+def id_card_variants(value: str) -> list[str]:
+    """同一个证件号的两种写法：末位校验码 X 的大小写（P1-114）。
+
+    GB 11643 的校验码是大写 X，手输（尤其手机键盘、对接方各自的录入习惯）常见小写 x；校验码由前 17 位
+    算出，两种写法必是同一个人。存量按录入原样存着、不改数据，所以**查**的时候两种写法都认。
+    """
+    if value[-1:] in ("x", "X"):
+        return [value, value[:-1] + value[-1].swapcase()]
+    return [value]
+
+
+def id_card_match(value: str):
+    """按证件号等值找患者的条件：两种写法都认，明文 / 加密（索引列）两态都走 `pii_filter`。"""
+    return or_(*(pii_filter(Patient.id_card_idx, Patient.id_card, v) for v in id_card_variants(value)))
+
+
 def _find_by_id_card(db: Session, id_card: str) -> Patient | None:
-    return db.query(Patient).filter(pii_filter(Patient.id_card_idx, Patient.id_card, id_card)).first()
+    # 按编号取最早那份：修之前两种写法各建过一份的，都返回同一份，不在两份之间摇摆
+    return db.query(Patient).filter(id_card_match(id_card)).order_by(Patient.id).first()
 
 
 def create_patient_idempotent(db: Session, data: dict) -> tuple[Patient, bool]:
@@ -94,11 +112,13 @@ def search_patients(
         # PII 加密开态的降级口径（工程包 E3，文档见 app/pii.py）：证件号模糊检索
         # 对密文行不可用，追加索引列等值让**全值**证件号仍可命中；前缀/中缀不支持。
         # 关态该等值分支是 like 的子集，结果集不变。
+        # 证件号两种写法都认（P1-114）：真 PG 的 LIKE 区分大小写，按 x 搜原先查不到存成 X 的档案
+        variants = id_card_variants(keyword)
         query = query.filter(
             (Patient.name.like(like))
-            | (Patient.id_card.like(like))
+            | or_(*(Patient.id_card.like(f"%{v}%") for v in variants))
             | (Patient.ehc_no.like(like))
-            | pii_index_match(Patient.id_card_idx, keyword)
+            | or_(*(pii_index_match(Patient.id_card_idx, v) for v in variants))
         )
     rows = paginate(query.order_by(Patient.id), response, offset, limit)
     return [desensitize(p, user) for p in rows]

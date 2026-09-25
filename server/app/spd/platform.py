@@ -26,6 +26,7 @@
 | 公卫数据 | `FollowUp`（慢病随访） | publichealth 采集器的数据源 |
 | 列类型 | `Money` / `utcnow` | 与平台其余表同一套金额与时间口径 |
 | PII 检索 | `pii_filter` | 加密态证件号等值检索：开态密文列 contains 恒空，必须走索引列（P1-25） |
+| 证件号写法 | `id_card_variants` | 末位校验码 X 大小写两种写法都认（P1-114）：主索引按录入原样存，检索不能只认一种 |
 
 清单之外的平台模块（处方、医保、库存……）**不在依赖范围内**。确有需要时，
 先在这里加一行并说明理由，让依赖面始终是可数的。
@@ -52,6 +53,9 @@ from ..notify import notify_patient as _notify_patient
 # 筛选必须与平台 patients.py 走同一条索引列等值路径。只再导出 pii_filter 这一个
 # 名字——加解密原语（encrypt/decrypt）不在依赖面里，子系统不该碰密文本身。
 from ..pii import pii_filter
+# 证件号末位 X 大小写（P1-114）：同一个号两种写法，平台主索引一处定义，spd 的证件号检索照用，
+# 不在子系统里另写一份「怎么算同一个号」。
+from ..routers.patients import id_card_variants
 # 二维码 SVG：实现在平台侧 qrsvg（ADR-0015 打印件验真也要用），spd 经这里取。
 # 方向由此变顺：原实现长在 spd 内部时，平台侧想复用只能违反单向依赖。
 from ..qrsvg import qr_svg

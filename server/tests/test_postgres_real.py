@@ -834,3 +834,25 @@ def test_数值入参越过列容量在真PG上是422而不是500(pg_engine):
         + "\n"
         + result.stderr[-2000:]
     )
+
+
+def test_证件号末位X大小写两种写法在真PG上检索与查重都认(pg_engine):
+    """把 `test_id_card_check_digit_case.py` 换到 PG 上再跑一遍（P1-114）。
+
+    SQLite 的 `LIKE` 对 ASCII 不分大小写，按 `…x` 检索照样找得到存成 `…X` 的档案——开发、测试一律看着正常；
+    PG 的 `LIKE` 区分大小写，修前按另一种写法检索（平台患者检索、慢专病纳管名单）查不到。建档查重与对接入站
+    两个库上同样漏，这里一并在 PG 上复核。接法与上几条相同，同样放在文件末尾。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_id_card_check_digit_case.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_IDCASE_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "证件号写法用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )
