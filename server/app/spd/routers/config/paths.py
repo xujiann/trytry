@@ -15,10 +15,12 @@ from ....patchtypes import UNSET
 from ....deps import get_current_user, paginate, require_roles, keyword_like
 from ...platform import User
 from ...models import (
+    SpdPathInstance,
     SpdPathNode,
     SpdPathTemplate,
     SpdProgram,
 )
+from ...service import PATH_OPEN_STATUSES
 from ....numtypes import INT4_MAX, INT4_MIN
 from ....texttypes import NON_BLANK
 from ....visibility import assert_org_writable
@@ -226,6 +228,23 @@ def get_path_template(template_id: int, db: Session = Depends(get_db)):
     return _template_out(template, nodes)
 
 
+def _refuse_if_in_use(db: Session, template: SpdPathTemplate | None) -> None:
+    """有患者正在走（执行中 / 暂停）的路径，节点不许增改删——不论模板此刻是什么状态（P2-97）。
+
+    原先只挡「已发布」：改状态的接口不看来路，已发布的改回草稿（或停用）200，节点随便动。在跑的实例每推进一步都按
+    **当前**的节点表取下一节点——删掉它正停着的节点，推进时找不到当前节点，路径直接记成「已完成」、进度 100%。
+    """
+    if template is None:
+        return
+    in_use = (
+        db.query(SpdPathInstance.id)
+        .filter(SpdPathInstance.template_id == template.id, SpdPathInstance.status.in_(PATH_OPEN_STATUSES))
+        .first()
+    )
+    if in_use is not None:
+        raise HTTPException(status_code=409, detail="有患者正在走这条路径（执行中或暂停），不可直接改节点，请复制新版本后修改")
+
+
 @router.post("/path-templates/{template_id}/nodes", response_model=PathNodeOut,
              status_code=201, dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def add_path_node(
@@ -242,6 +261,7 @@ def add_path_node(
         # 已发布的模板不允许直接加节点：在跑的实例会突然多出一个没人知道的任务。
         # 要改就复制一版新的，这也是"版本"存在的意义。
         raise HTTPException(status_code=409, detail="已发布路径不可直接改节点，请复制新版本后修改")
+    _refuse_if_in_use(db, template)
     node = SpdPathNode(
         template_id=template_id,
         **body.model_dump(exclude={"enter_condition", "complete_condition"}),
@@ -294,6 +314,7 @@ def update_path_node(
     assert_org_writable(db, user, template.org_id if template else None)
     if template is not None and template.status == "published":
         raise HTTPException(status_code=409, detail="已发布路径不可直接改节点，请复制新版本后修改")
+    _refuse_if_in_use(db, template)
     changes = body.model_dump(exclude_unset=True)
     for key in ("enter_condition", "complete_condition"):
         if key in changes:
@@ -316,6 +337,7 @@ def delete_path_node(
     assert_org_writable(db, user, template.org_id if template else None)
     if template is not None and template.status == "published":
         raise HTTPException(status_code=409, detail="已发布路径不可直接删节点，请复制新版本后修改")
+    _refuse_if_in_use(db, template)
     db.delete(node)
     db.commit()
     return Response(status_code=204)
@@ -411,9 +433,6 @@ def set_path_status(
 def delete_path_template(
     template_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    # 同 centers.org-tree：`config/` 是子包，少一级会解析成不存在的模块
-    from ...models import SpdPathInstance
-
     template = db.get(SpdPathTemplate, template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
