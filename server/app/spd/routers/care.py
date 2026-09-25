@@ -1414,23 +1414,30 @@ def create_case_report(
     不会出现上报单堆着、任务中心却什么都没有。
     """
     assert_patient_visible(db, user, body.patient_id, resource="spd_case_report")
+    task = None
     if body.task_id is not None:  # P1-90 查存在；停用的上报任务不再收新上报（上报页只列启用的任务）
         task = db.get(SpdCaseReportTask, body.task_id)
         if task is None or not task.active:
             raise HTTPException(status_code=404, detail=f"上报任务不存在或已停用（task_id={body.task_id}）")
-    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    # 没写病种的取上报任务的，写了的须与之一致（P2-100）：管理端上报表单原先不带病种，每条上报都取不到纳管档案——
+    # 村医的「异常上报」积分从界面上一分不入账、派生的处置任务不挂档案
+    if task is not None and task.program_code and body.program_code and task.program_code != body.program_code:
+        raise HTTPException(status_code=422, detail="上报任务的病种与上报病种不一致")
+    program_code = body.program_code or (task.program_code if task is not None else "")
+    program_problem = unknown_program(db, program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
     report = SpdCaseReport(
-        **body.model_dump(), reporter_id=user.id, org_id=user.org_id, status="pending",
+        **body.model_dump(exclude={"program_code"}), program_code=program_code,
+        reporter_id=user.id, org_id=user.org_id, status="pending",
     )
     db.add(report)
     db.flush()
-    enrollment = _enrollment_of(db, body.patient_id, body.program_code)
+    enrollment = _enrollment_of(db, body.patient_id, program_code)
     spawn_task(
         db, patient_id=body.patient_id,
         title=f"异常上报处置：{body.content[:40] or body.report_type}",
-        task_type="report", program_code=body.program_code, enrollment=enrollment,
+        task_type="report", program_code=program_code, enrollment=enrollment,
         org_id=user.org_id, due_days=3, priority=2, source="report",
     )
     if enrollment is not None:

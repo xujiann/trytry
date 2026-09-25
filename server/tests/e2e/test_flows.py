@@ -1546,6 +1546,26 @@ def test_干预模板与服务包的下拉按病种联动(page, base_url, seed, 
     _cancel_modal(page)
 
 
+def test_界面上报异常挂上纳管档案_病种取上报任务的(page, base_url, seed, admin_call, admin_read):
+    """P2-100：上报表单原先不带病种、接口也不看上报任务配的病种——从界面上报的每一条都取不到纳管档案，村医的「异常上报」
+    积分一分不入账、派生的处置任务不挂档案。"""
+    patient = admin_call("POST", "/api/patients", {"name": "E2E上报患者", "id_card": "320981199303030399"})
+    enrollment = admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    admin_call("POST", "/api/spd/case-report-tasks", {"code": "E2E_CRT100", "name": "E2E高血压异常上报",
+                                                       "program_code": "hypertension"})
+    _login(page, base_url)
+    _open_page(page, "spdmember", "服务团队成员端·日常服务")
+    form = page.locator("#spd-report-form")
+    form.locator('[name="patient_id"]').fill(str(patient["id"]))
+    form.locator('[name="task_id"]').select_option(label="E2E高血压异常上报")
+    form.locator('[name="content"]').fill("E2E 血压 188/112")
+    _submit(page, "#spd-report-form button")   # 病种留空：取上报任务的
+    tasks = admin_read(f"/api/spd/tasks?patient_id={patient['id']}&limit=50")
+    spawned = next(t for t in tasks if t["title"].startswith("异常上报处置：E2E 血压"))
+    assert (spawned["program_code"], spawned["enrollment_id"]) == ("hypertension", enrollment["id"]), spawned
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""

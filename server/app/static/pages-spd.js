@@ -3163,6 +3163,7 @@ async function renderSpdMember() {
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="task_id"><option value="">无对应上报任务</option>
           ${reportTasks.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
+        <select name="program_code"><option value="">病种（留空取上报任务的）</option>${spdProgramOptions(catalog, false, true)}</select>
         <select name="report_type">${Object.entries(SPD_REPORT_TYPE).map(([k, v]) =>
           `<option value="${k}">${esc(v)}</option>`).join("")}</select>
         <input name="content" placeholder="异常情况说明" required style="min-width:220px">
