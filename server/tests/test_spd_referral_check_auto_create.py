@@ -4,6 +4,10 @@
 机构。发起转诊（`POST /referrals`）两者都没有时 422「账号未绑定机构且患者未纳管，无法确定发起机构」。
 规则试算（`POST /referral-rules/check`）勾了自动开单直接调同一个建单帮手 `_create_case`，这句判定却只写在
 发起转诊里——发起机构为空撞 `initiator_org_id` 的非空约束，500。判定挪进 `_create_case`，两条路径共用一句。
+
+P1-139 之后「推不出纳管档案」的口径变了：病种留空、患者只在管一个病种的，两条路径都按这份档案挂（发起机构随之
+回落到档案机构），所以 422 这一条改用**没有纳管档案**的患者来触发（原先用的是在管一个病种的患者，那正是 P1-139
+要挂上档案的情形）；留空挂上档案的那一面另有一条。
 """
 import pytest
 
@@ -22,11 +26,13 @@ def world(client, admin):
     r = client.post(f"{B}/enrollments", headers=admin,
                     json={"patient_id": patient, "program_code": "P276_PG", "org_id": org})
     assert r.status_code == 201, r.text
+    unenrolled = client.post("/api/patients", headers=admin, json={
+        "name": "P276 未纳管患者", "id_card": "330106197001011549", "gender": "女", "birth_date": "1970-01-01"}).json()["id"]
     # 不限病种的规则，靠请求带的额外事实命中：病种编码留空也走到开单那一步
     r = client.post(f"{B}/referral-rules", headers=admin, json={
         "code": "P276_ANY", "name": "P276 通用规则", "conditions": [{"field": "p276_flag", "op": "==", "value": "yes"}]})
     assert r.status_code == 201, r.text
-    return {"org": org, "patient": patient}
+    return {"org": org, "patient": patient, "unenrolled": unenrolled}
 
 
 def _cases(patient_id):
@@ -37,22 +43,22 @@ def _cases(patient_id):
         return db.query(SpdReferralCase).filter(SpdReferralCase.patient_id == patient_id).count()
 
 
-def _check(client, admin, world, program_code, auto_create):
+def _check(client, admin, world, program_code, auto_create, patient_key="patient"):
     return client.post(f"{B}/referral-rules/check", headers=admin, json={
-        "patient_id": world["patient"], "program_code": program_code, "extra": {"p276_flag": "yes"},
+        "patient_id": world[patient_key], "program_code": program_code, "extra": {"p276_flag": "yes"},
         "auto_create": auto_create})
 
 
 def test_推不出发起机构_自动开单与发起转诊同一句422_不留半张单(client, admin, world):
-    """管理员不绑机构、病种编码留空（推不出纳管档案）：修前自动开单撞 initiator_org_id 非空约束 500。"""
-    before = _cases(world["patient"])
-    r = _check(client, admin, world, "", True)
+    """管理员不绑机构、患者没有纳管档案（推不出发起机构）：修前自动开单撞 initiator_org_id 非空约束 500。"""
+    before = _cases(world["unenrolled"])
+    r = _check(client, admin, world, "", True, patient_key="unenrolled")
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == NO_ORIGIN
-    r = client.post(f"{B}/referrals", headers=admin, json={"patient_id": world["patient"], "reason": "P276 手工"})
+    r = client.post(f"{B}/referrals", headers=admin, json={"patient_id": world["unenrolled"], "reason": "P276 手工"})
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == NO_ORIGIN
-    assert _cases(world["patient"]) == before
+    assert _cases(world["unenrolled"]) == before
 
 
 def test_只试算不开单_推不出发起机构也照常给出命中(client, admin, world):
@@ -68,3 +74,20 @@ def test_患者在该病种下纳管_回落到档案机构照常开单(client, a
     case = r.json()["case"]
     assert case is not None
     assert case["initiator_org_id"] == world["org"]
+
+
+def test_病种留空_只在管一个病种的_自动开单与发起转诊都挂这份档案(client, admin, world):
+    """P1-139 同一族：原先规则试算病种留空就不挂档案——管理员代录推不出发起机构 422，绑了机构的账号开出的上转单不挂档案。"""
+    from app.database import SessionLocal
+    from app.spd.models import SpdEnrollment
+
+    with SessionLocal() as db:
+        enrollment = db.query(SpdEnrollment).filter_by(patient_id=world["patient"], program_code="P276_PG").one()
+    r = _check(client, admin, world, "", True)
+    assert r.status_code == 200, r.text   # 修前 422「账号未绑定机构且患者未纳管」
+    case = r.json()["case"]
+    assert case["enrollment_id"] == enrollment.id and case["program_code"] == "P276_PG"
+    assert case["initiator_org_id"] == world["org"]   # 发起机构回落到档案机构
+    manual = client.post(f"{B}/referrals", headers=admin, json={"patient_id": world["patient"], "reason": "P276 手工"})
+    assert manual.status_code == 201, manual.text
+    assert manual.json()["enrollment_id"] == enrollment.id   # 两条路径同一个口径

@@ -292,16 +292,10 @@ def check_referral_rules(
     program_problem = unknown_program(db, body.program_code)
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
-    enrollment = None
-    if body.program_code:
-        enrollment = (
-            db.query(SpdEnrollment)
-            .filter(
-                SpdEnrollment.patient_id == body.patient_id,
-                SpdEnrollment.program_code == body.program_code,
-            )
-            .first()
-        )
+    # 与发起转诊同一个口径（P1-139）：写了病种的取这个病种的档案（在管的优先，原先不分在管与已结案、取到哪份算哪份）；
+    # 没写的，患者只在管一个病种的按这份档案——病种取它的，规则也只过这个病种的与通用的。原先没写就不挂档案：
+    # 界面上病种默认留空，勾了「命中即开上转单」开出的单子不挂档案，与发起转诊修前同一个缺口
+    program_code, enrollment = enrollment_for(db, body.patient_id, body.program_code)
     facts = build_facts(
         db, body.patient_id,
         {
@@ -311,9 +305,9 @@ def check_referral_rules(
         },
     )
     query = db.query(SpdReferralRule).filter(SpdReferralRule.active.is_(True))
-    if body.program_code:
+    if program_code:
         query = query.filter(
-            SpdReferralRule.program_code.in_([body.program_code, ""])
+            SpdReferralRule.program_code.in_([program_code, ""])
         )
     hits: list[dict[str, Any]] = []
     for rule in query.all():
@@ -327,7 +321,7 @@ def check_referral_rules(
         created = _create_case(
             db, user,
             patient_id=body.patient_id,
-            program_code=body.program_code,
+            program_code=program_code,
             enrollment=enrollment,
             reason=top["rule"]["name"],
             target_org_id=top["rule"]["target_org_id"],

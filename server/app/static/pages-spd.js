@@ -2327,7 +2327,7 @@ async function renderSpdReferral() {
         一次批量随访录入能开出几十张单子（后端 docstring 的原话）；要开单勾上下面那个框</p>
       <form class="inline" id="spd-refcheck-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <input name="program_code" placeholder="病种编码（可选）">
+        <select name="program_code"><option value="">病种：只在管一个病种的按它</option>${spdProgramOptions(catalog)}</select>
         <label style="font-size:13px"><input type="checkbox" name="auto_create" value="true"> 命中即开上转单</label>
         <button class="secondary">试算</button>
       </form><p class="msg" id="spd-refcheck-msg"></p>

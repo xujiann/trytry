@@ -1876,6 +1876,31 @@ def test_发起转诊的病种改下拉_留空时只在管一个病种的挂上�
     assert (case["program_code"], case["enrollment_id"]) == ("hypertension", enrollment["id"]), case
 
 
+def test_规则试算的病种改下拉_留空时命中即开的上转单也挂上档案(page, base_url, seed, admin_call, admin_read):
+    """P1-139 同一族：规则试算的病种原先是个「病种编码（可选）」文本框，留空时勾「命中即开上转单」开出的单子不挂纳管档案
+    （管理员代录连发起机构都推不出、422）。现在是病种下拉；留空时患者只在管一个病种的按这份档案。"""
+    patient = admin_call("POST", "/api/patients", {
+        "name": "E2E试算挂档", "id_card": "320981199509090147", "gender": "男", "birth_date": "1995-09-09"})
+    enrollment = admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    rule = admin_call("POST", "/api/spd/referral-rules", {
+        "code": "E2E_P139_CHECK", "name": "E2E 试算挂档规则", "program_code": "hypertension",
+        "conditions": [{"field": "age", "op": ">=", "value": 0}]})
+    try:
+        _login(page, base_url)
+        _open_page(page, "spdreferral", "逐级转诊闭环")
+        form = page.locator("#spd-refcheck-form")
+        expect(form.locator('select[name="program_code"] option[value="hypertension"]')).to_have_count(1)   # 下拉，不是编码框
+        form.locator('[name="patient_id"]').fill(str(patient["id"]))
+        form.locator('[name="auto_create"]').check()
+        _submit(page, "#spd-refcheck-form button")   # 开出单子后整页重画
+        cases = admin_read(f"/api/spd/referrals?patient_id={patient['id']}")
+        assert [(c["trigger_rule_code"], c["program_code"], c["enrollment_id"]) for c in cases] == [
+            ("E2E_P139_CHECK", "hypertension", enrollment["id"])], cases   # 修前：管理员代录 422、一张都开不出
+    finally:
+        admin_call("PATCH", f"/api/spd/referral-rules/{rule['id']}", {"active": False})   # 共享库：停用，免得别的试算命中
+
+
 def test_慢病病种目录能在界面上新增(page, base_url, admin_read):
     """P2-93（动词级孤儿）：病种目录是分级规则与随访周期的唯一数据源，页面原先只有「编辑」——新增一个慢病病种只能靠接口
     调用方。"""
