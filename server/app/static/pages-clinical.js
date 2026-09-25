@@ -671,6 +671,13 @@ async function renderTcm() {
          <td><span class="tag ${o.status === "delivered" ? "green" : "orange"}">${esc(DS[o.status] || o.status)}</span></td>
          <td>${o.status !== "delivered" ? `<button class="btn secondary" data-adv="${o.id}">流转</button>` : "—"}</td></tr>`)}`)}
     ${panel("适宜技术库", `
+      ${currentRole() === "admin" ? `<form class="inline" id="tcm-tech-form" style="margin-bottom:8px">
+        <input name="name" placeholder="技术名称" required>
+        <input name="category" placeholder="分类（如 针刺类）" style="width:130px">
+        <input name="indication" placeholder="适应症" style="min-width:200px">
+        <input name="description" placeholder="操作要点" style="min-width:200px">
+        <button>入库</button>
+      </form><p class="msg" id="tcm-tech-msg"></p>` : ""}
       ${table(["名称", "分类", "适应症"], techniques, (t) =>
         `<tr><td>${esc(t.name)}</td><td>${esc(t.category)}</td><td>${esc(t.indication)}</td></tr>`)}`)}`;
   $("#tcm-diag").onsubmit = async (e) => {
@@ -716,6 +723,12 @@ async function renderTcm() {
     const body = formJson(e.target, ["patient_id", "from_org_id", "doses"]);
     body.decoct = body.decoct === "true";
     postAction("/api/tcm/dispense-orders", body, "#tcm-msg");
+  };
+  // 适宜技术库原先只能看不能建（P2-93 动词级孤儿）：入库接口仅管理员，表单也只给管理员
+  const techForm = $("#tcm-tech-form");
+  if (techForm) techForm.onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/tcm/techniques", formJson(e.target), "#tcm-tech-msg");
   };
   $("#page-body").onclick = (e) => { if (e.target.dataset.adv) postAction(`/api/tcm/dispense-orders/${e.target.dataset.adv}/advance`, null, "#tcm-msg"); };
   await drawTcmPreparations();  // 块4⑭ 中药制剂管理

@@ -118,7 +118,8 @@ ROOT_FIXED_RENDERERS = [
      "await drawExpiring(30);"),
     ("pages-clinical.js", "renderTcm",   # 功能完善·tcm（2026-09-16）：体质辨识表单
      ['$("#tcm-diag").onsubmit', '$("#tcm-const").onsubmit',
-      '$("#tcm-order").onsubmit', '$("#page-body").onclick'],
+      '$("#tcm-order").onsubmit', 'techForm.onsubmit',   # P2-93：适宜技术入库（仅管理员）
+      '$("#page-body").onclick'],
      "await drawTcmPreparations();"),
     ("pages-clinical.js", "renderRbac",   # 功能完善·rbac（2026-09-16）：权限点清单筛选
      ['$("#role-form").onsubmit', '$("#perm-filter").onsubmit', '$("#page-body").onclick'],

@@ -1656,6 +1656,20 @@ def test_告知书模板能在界面上新增(page, base_url, admin_read):
     assert (created["consent_type"], created["version"], created["active"]) == ("transfusion", "v2", True), created
 
 
+def test_中医适宜技术能在界面上入库(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：适宜技术库原先只能看——入库接口（仅管理员）一直在，界面上没有入口。"""
+    _login(page, base_url)
+    _open_page(page, "tcm", "中医药服务")
+    form = page.locator("#tcm-tech-form")
+    form.locator('[name="name"]').fill("E2E 耳穴压豆")
+    form.locator('[name="category"]').fill("外治类")
+    form.locator('[name="indication"]').fill("失眠、便秘")
+    _submit(page, "#tcm-tech-form button")
+    created = next(t for t in admin_read("/api/tcm/techniques") if t["name"] == "E2E 耳穴压豆")
+    assert (created["category"], created["indication"]) == ("外治类", "失眠、便秘"), created
+    expect(page.locator("#page-body")).to_contain_text("E2E 耳穴压豆")
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""
