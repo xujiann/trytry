@@ -50,7 +50,7 @@ from ..models import (
     SpdTask,
     SpdTeam,
 )
-from ..rules import evaluate, is_suspect_risk, score_scale
+from ..rules import RuleError, evaluate, is_suspect_risk, score_scale, validate_conditions
 from ..service import MEASUREMENT_SOURCE_NAMES, award_points, build_facts, close_open_work, match_program
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
@@ -1450,6 +1450,13 @@ class GroupIn(BaseModel):
 def create_group(
     body: GroupIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    # 自动分组规则写库前查结构（P1-123），与病种纳入 / 转诊触发规则同一道：原先照单全收，写坏的规则
+    # （介于只填一个数、比较符写错……）按规则批量入组时 500，而分组没有改档接口，存进去就改不了。
+    # 只查不改写：存的仍是请求里的原样，出参字节不变
+    try:
+        validate_conditions(body.auto_rule)
+    except RuleError as exc:
+        raise HTTPException(status_code=422, detail=f"自动分组规则非法：{exc}") from None
     group = SpdGroup(**body.model_dump(), owner_user_id=user.id, org_id=user.org_id)
     db.add(group)
     db.commit()
@@ -1517,6 +1524,11 @@ def add_group_members(
     if body.use_auto_rule:
         if not group.auto_rule:
             raise HTTPException(status_code=422, detail="该分组未配置自动分组规则")
+        try:   # 修前存进去的坏规则：说清楚，不 500（P1-123）
+            validate_conditions(group.auto_rule)
+        except RuleError as exc:
+            raise HTTPException(status_code=422,
+                                detail=f"该分组的自动分组规则写坏了（{exc}），无法按规则入组，请新建分组重写规则") from None
         query = db.query(SpdEnrollment).filter(SpdEnrollment.status == "active")
         if body.program_code:
             query = query.filter(SpdEnrollment.program_code == body.program_code)
