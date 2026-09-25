@@ -1421,6 +1421,14 @@ async function renderOutpatientDocs() {
            ? `<button data-csign="${c.id}">签署</button><button data-crefuse="${c.id}">拒签</button>` : ""}</td></tr>`)}
     `)}
     ${panel("告知书模板（改模板只影响此后签署的，已签的正文是冻结快照）", `
+      ${canTemplate ? `<form class="inline" id="od-tpl-form" style="margin-bottom:8px">
+        <select name="consent_type">${Object.entries(CONSENT_TYPES).map(([k, v]) =>
+          `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="title" placeholder="标题" required>
+        <input name="version" value="v1" placeholder="版本" style="width:70px">
+        <textarea name="body" rows="2" placeholder="告知书正文" required style="min-width:320px"></textarea>
+        <button>新增模板</button>
+      </form>` : ""}
       ${table(["ID", "类型", "标题", "版本", "状态", "正文"].concat(canTemplate ? ["操作"] : []),
         templates, (t) =>
         `<tr><td>${t.id}</td><td>${esc(t.consent_type_name)}</td><td>${esc(t.title)}</td>
@@ -1457,6 +1465,12 @@ async function renderOutpatientDocs() {
     if (!body.template_id) delete body.template_id;
     else body.template_id = Number(body.template_id);
     postAction("/api/outpatient/consents", body, "#od-cmsg");
+  };
+  // 告知书模板原先只能改不能建（P2-93 动词级孤儿）：新的告知书类型、新版本只能靠接口调用方登记
+  const tplForm = $("#od-tpl-form");
+  if (tplForm) tplForm.onsubmit = (e) => {
+    e.preventDefault();
+    postAction("/api/outpatient/consent-templates", formJson(e.target), "#od-tmsg");
   };
   $("#od-tr-form").onsubmit = async (e) => {
     e.preventDefault();

@@ -47,7 +47,6 @@ KNOWN: set[str] = {
     "POST /api/accounting/subjects",            # 会计科目
     "POST /api/dataquality/rules",              # 数据质控规则
     "POST /api/drgs/groups",                    # DRG 分组（页面只调权重）
-    "POST /api/outpatient/consent-templates",   # 门诊知情同意模板
     "POST /api/tcm/techniques",                 # 中医适宜技术目录
     "POST /api/tcm-heritage/simulations",       # 模拟诊疗病例（情境化决策）
     "POST /api/spd/indicators",                 # 考核指标
