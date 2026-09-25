@@ -35,7 +35,7 @@ async function renderInfectious() {
       </form>
       <p class="desc"><b>平台不直连国家传染病网络直报系统</b>：本导出供手工网报
         （录入大疫情网）或县疾控前置机对接使用，及时性列与「未及时上报清单」同一口径。
-        单次最多导出 2000 条。</p>
+        按筛选条件全量导出，不设条数上限。</p>
       <p class="msg" id="exp-msg"></p>`) : ""}`;
   $("#case-form").onsubmit = async (e) => {
     e.preventDefault();

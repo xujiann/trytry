@@ -324,7 +324,7 @@ async function renderCerts() {
       </form>
       <p class="desc"><b>平台不直连人口死亡信息登记管理系统</b>：本导出供手工网报或县疾控
         前置机对接使用。身份证号与电话<b>按调用者角色脱敏</b>（非 admin 一律掩码），
-        每张卡的患者档案调阅都落 AccessLog。单次最多导出 2000 条。</p>
+        每张卡的患者档案调阅都落 AccessLog。按所选日期区间全量导出，不设条数上限。</p>
       <p class="msg" id="death-msg"></p>`) : ""}
     ${panel("成人健康体检登记（医师/公卫，异常项自动标记并入360档案）", `
       <form class="inline" id="chk-form">
