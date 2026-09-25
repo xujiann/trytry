@@ -52,7 +52,7 @@ from ..models import (
 )
 from ..rules import RuleError, evaluate, is_suspect_risk, score_scale, validate_conditions
 from ..service import (MEASUREMENT_SOURCE_NAMES, award_points, build_facts, close_open_work, match_program,
-                       scale_unusable)
+                       package_items_ok, scale_unusable)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
@@ -1605,6 +1605,9 @@ def _usable_package(db: Session, package_id: int) -> SpdServicePackage:
     package = db.get(SpdServicePackage, package_id)
     if package is None or not package.active:
         raise HTTPException(status_code=404, detail="服务包不存在或已停用")
+    if not package_items_ok(package.items):   # 修前改出来的坏项目：说清楚、不 500（P2-82）
+        raise HTTPException(status_code=422,
+                            detail="服务包的项目配置有误（须有编码且次数大于0），暂不能绑定，请先修正服务包")
     return package
 
 

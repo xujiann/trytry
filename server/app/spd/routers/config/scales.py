@@ -23,7 +23,7 @@ from ...models import (
     SpdTag,
 )
 from ...rules import scale_problem
-from ...service import MEDIA_TYPE_NAMES, unknown_program
+from ...service import MEDIA_TYPE_NAMES, package_items_ok, unknown_program
 from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
 
 
@@ -361,12 +361,17 @@ def _package_out(p: SpdServicePackage) -> dict:
     }
 
 
+def _check_package_items(items: list[dict]) -> None:
+    """建 / 改服务包同一句（P2-82）：原先改服务包不查项目，次数写成文字存得进去、之后每次绑定都 500；
+    建服务包时同样的文字次数在这一句里 `int()` 抛错，也是 500。报错文案沿用原文一字不改。"""
+    if not package_items_ok(items):
+        raise HTTPException(status_code=422, detail="服务包项目须有编码且次数大于0")
+
+
 @router.post("/service-packages", response_model=ServicePackageOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_package(body: PackageIn, db: Session = Depends(get_db)):
-    for item in body.items:
-        if not item.get("code") or int(item.get("times", 0)) <= 0:
-            raise HTTPException(status_code=422, detail="服务包项目须有编码且次数大于0")
+    _check_package_items(body.items)
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
@@ -411,7 +416,10 @@ def update_package(package_id: int, body: PackagePatch, db: Session = Depends(ge
     package = db.get(SpdServicePackage, package_id)
     if package is None:
         raise HTTPException(status_code=404, detail="服务包不存在")
-    for key, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    if "items" in changes:   # 与建服务包同一句（P2-82）
+        _check_package_items(changes["items"])
+    for key, value in changes.items():
         setattr(package, key, value)
     db.commit()
     return _package_out(package)

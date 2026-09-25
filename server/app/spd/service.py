@@ -168,6 +168,22 @@ def unknown_code(db: Session, model: Any, code: str, what: str, *, already: str 
     return "" if found is not None else f"{what}不存在：{code}"
 
 
+def package_items_ok(items: list | None) -> bool:
+    """服务包的项目都有编码、次数读得成正整数（P2-82）。
+
+    绑定服务包时按 `int(times)` 折成可用次数：次数写成文字，绑定即 `ValueError`、500。建服务包原先在校验这一句
+    里就 `int()` 抛错（500），改服务包干脆不查。读得成整数的照旧算数（"3"、2.5）。"""
+    for item in items or []:
+        if not isinstance(item, dict) or not item.get("code"):
+            return False
+        try:
+            if int(item.get("times", 0)) <= 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
 def scale_unusable(scale: SpdScale) -> str:
     """作答前查量表配置（P2-80）：修前存进去的坏量表（选项写成字符串、分值写成文字……）作答即 500；
     现在返回说清楚的文案，由路由报 422。没问题返回空串。"""
