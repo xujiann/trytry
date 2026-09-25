@@ -1513,6 +1513,39 @@ def test_筛查登记的量表随病种联动_不列别的病种的量表(page, 
     expect(scales.filter(has_text="高血压高危筛查问卷")).to_have_count(0)
 
 
+def test_干预模板与服务包的下拉按病种联动(page, base_url, seed, admin_call):
+    """P2-99：干预下发的模板下拉、绑服务包的弹窗原先列全部病种的——高血压患者下发到糖尿病的干预、绑上糖尿病的服务包。
+    现在只列这个病种的与通用的（后端对不上的 422）。"""
+    for program in ("hypertension", "diabetes"):
+        admin_call("POST", "/api/spd/intervention-templates", {
+            "code": f"E2E_T99_{program}", "name": f"E2E干预模板·{program}", "program_code": program})
+        admin_call("POST", "/api/spd/service-packages", {
+            "code": f"E2E_K99_{program}", "name": f"E2E服务包·{program}", "program_code": program,
+            "items": [{"code": "visit", "name": "上门", "times": 1}]})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E联动患者", "id_card": "320981199202020299"})
+    enrollment = admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+
+    _login(page, base_url)
+    _open_page(page, "spdmember", "服务团队成员端·日常服务")
+    form = page.locator("#spd-intv-form")
+    templates = form.locator('[name="template_id"] option')
+    form.locator('[name="program_code"]').select_option("hypertension")
+    expect(templates.filter(has_text="E2E干预模板·hypertension")).to_have_count(1)
+    expect(templates.filter(has_text="E2E干预模板·diabetes")).to_have_count(0)   # 修前列着
+
+    _open_page(page, "spdpatients", "筛查建档与纳管")
+    search = page.locator("#spd-enroll-filter")
+    search.locator('[name="keyword"]').fill("E2E联动患者")
+    search.locator("button").click()
+    page.click(f'button[data-enr-detail="{enrollment["id"]}"]')
+    page.click(f'button[data-enr-bind="{enrollment["id"]}"]')
+    packages = _modal(page).locator('[name="package_id"] option')
+    expect(packages.filter(has_text="E2E服务包·hypertension")).to_have_count(1)
+    expect(packages.filter(has_text="E2E服务包·diabetes")).to_have_count(0)   # 修前列着
+    _cancel_modal(page)
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""

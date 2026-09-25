@@ -969,7 +969,7 @@ def create_enrollment(
     if program is None or not program.active:
         raise HTTPException(status_code=404, detail="专病档案不存在或已停用")
     if body.package_id is not None:
-        _usable_package(db, body.package_id)
+        _usable_package(db, body.package_id, body.program_code)
     _check_enroll_refs(db, body.model_dump())
     _check_service_window(body.service_start, body.service_end)
 
@@ -1601,12 +1601,15 @@ def remove_group_member(group_id: int, patient_id: int, db: Session = Depends(ge
 # ============================================================ 服务包绑定与扣减
 
 
-def _usable_package(db: Session, package_id: int) -> SpdServicePackage:
+def _usable_package(db: Session, package_id: int, program_code: str) -> SpdServicePackage:
     """可以新签的服务包：存在且启用。停用的包（价目 / 项目已换代）不再绑给新的居民——
-    绑包页的下拉本就只列启用的，按编号直接调接口却照样绑得上，居民端从此多一张旧价目的卡片。"""
+    绑包页的下拉本就只列启用的，按编号直接调接口却照样绑得上，居民端从此多一张旧价目的卡片。
+    包须是档案这个病种的或通用的（P2-99）：原先高血压档案能绑上糖尿病的包，居民端多一张别的病种的项目与价目。"""
     package = db.get(SpdServicePackage, package_id)
     if package is None or not package.active:
         raise HTTPException(status_code=404, detail="服务包不存在或已停用")
+    if package.program_code and package.program_code != program_code:
+        raise HTTPException(status_code=422, detail="服务包的病种与纳管档案不一致")
     if not package_items_ok(package.items):   # 修前改出来的坏项目：说清楚、不 500（P2-82）
         raise HTTPException(status_code=422,
                             detail="服务包的项目配置有误（须有编码且次数大于0），暂不能绑定，请先修正服务包")
@@ -1614,7 +1617,7 @@ def _usable_package(db: Session, package_id: int) -> SpdServicePackage:
 
 
 def _bind_package(db: Session, enrollment: SpdEnrollment, package_id: int) -> SpdPackageBinding:
-    package = _usable_package(db, package_id)
+    package = _usable_package(db, package_id, enrollment.program_code)
     items = [
         {"code": i.get("code"), "name": i.get("name", ""), "total": int(i.get("times", 0)),
          "used": 0, "price": i.get("price", 0)}

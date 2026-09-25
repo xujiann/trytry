@@ -889,6 +889,10 @@ def create_interventions(
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
+    # 模板须是这个病种的或通用的（P2-99）：原先各选各的，高血压患者的干预内容、措施、频次全是糖尿病模板的
+    if template is not None and template.program_code and body.program_code \
+            and template.program_code != body.program_code:
+        raise HTTPException(status_code=422, detail="干预模板的病种与干预病种不一致")
     content = body.content or (template.content if template else "")
     if not content:
         raise HTTPException(status_code=422, detail="干预内容不能为空")

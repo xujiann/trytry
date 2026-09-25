@@ -837,7 +837,7 @@ function spdEnrollmentDetailHtml(e) {
       · 服务期 ${esc(e.service_start || "—")} ~ ${esc(e.service_end || "—")}</p>
     <p class="desc">危险因素：${esc((e.risk_factors || []).join("、") || "—")}；并发症：${esc((e.complications || []).join("、") || "—")}；
       标签：${esc((e.tags || []).join("、") || "—")}</p>
-    <h4>服务包 <button class="btn secondary" data-enr-bind="${e.id}">绑定服务包</button></h4>${packages}
+    <h4>服务包 <button class="btn secondary" data-enr-bind="${e.id}" data-program="${esc(e.program_code)}">绑定服务包</button></h4>${packages}
     <div id="spd-usage-list"></div>
     <h4>路径实例</h4>${paths}`);
 }
@@ -1474,8 +1474,10 @@ async function renderSpdPatients() {
       let packages = [];
       try { packages = await api("/api/spd/service-packages?limit=100"); }
       catch (err) { setMsg("#spd-enroll-msg", err.message, false); return; }
-      const active = packages.filter((k) => k.active !== false);
-      if (!active.length) { setMsg("#spd-enroll-msg", "没有可绑定的服务包，先在配置里建", false); return; }
+      // 只列这个病种的与通用的：别的病种的包后端 422（P2-99），原先弹窗里全列
+      const program = enrBind.dataset.program || "";
+      const active = packages.filter((k) => k.active !== false && (!k.program_code || k.program_code === program));
+      if (!active.length) { setMsg("#spd-enroll-msg", "没有可绑定到这个病种的服务包，先在配置里建", false); return; }
       const form = await spdModal("绑定服务包", [
         { name: "package_id", label: "服务包", type: "select", value: String(active[0].id),
           options: active.map((k) => ({ value: String(k.id), label: `${k.name}（${k.price} 元 / ${k.period_days} 天）` })) },
@@ -3121,8 +3123,7 @@ async function renderSpdMember() {
       <form class="inline" id="spd-intv-form" style="margin-top:8px">
         <input name="patient_ids" placeholder="患者ID，逗号分隔批量" required style="min-width:180px">
         <select name="program_code">${programOptions}</select>
-        <select name="template_id"><option value="">不引用模板</option>
-          ${templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>
+        <select name="template_id"></select>
         <input name="goal" placeholder="干预目标">
         <input name="next_at" type="date" title="下次干预时间">
         <label style="font-size:13px"><input type="checkbox" name="create_task" checked> 生成任务</label>
@@ -3248,6 +3249,15 @@ async function renderSpdMember() {
     return postAction("/api/spd/intervention-templates",
       formJson(e.target, ["cycle_days"]), "#spd-intv-msg");
   };
+  // 干预模板随病种联动：选了病种只列这个病种的与通用的（别的病种的模板后端 422，P2-99）；不选病种列全部
+  const syncIntvTemplates = () => {
+    const program = $("#spd-intv-form select[name=program_code]").value;
+    $("#spd-intv-form select[name=template_id]").innerHTML = '<option value="">不引用模板</option>'
+      + templates.filter((t) => !program || !t.program_code || t.program_code === program)
+        .map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
+  };
+  syncIntvTemplates();
+  $("#spd-intv-form select[name=program_code]").onchange = syncIntvTemplates;
   $("#spd-intv-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target, ["template_id"]);
