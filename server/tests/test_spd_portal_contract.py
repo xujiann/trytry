@@ -280,9 +280,11 @@ def test_任务清单与随访与干预与宣教与复诊的键集合(client, au
                                        "review_note"}
     followups = client.get(f"{B}/followups", headers=auth).json()
     assert set(followups[0]) == {"id", "scene", "planned_at", "executed_at", "channel",
-                                 "status", "result", "abnormal_level"}
+                                 "status", "result", "abnormal_level", "questions"}
     planned = next(f for f in followups if f["status"] == "planned")
     assert planned["executed_at"] == ""      # 未执行：空串，不是 null
+    # questions：待作答随访挂的问卷题目（P1-122 ②，只加字段）；契约问卷没有题目，已完成的随访恒为空
+    assert planned["questions"] == [] and all(f["questions"] == [] for f in followups if f["status"] == "done")
     interventions = client.get(f"{B}/interventions", headers=auth).json()
     assert set(interventions[0]) == {"id", "goal", "content", "measures", "frequency",
                                      "next_at", "status", "status_name", "feedback", "read",

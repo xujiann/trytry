@@ -1356,24 +1356,82 @@ function inlineInput(card, { placeholder = "", options = null, submitLabel = "�
   });
 }
 
+/* 线上自助随访逐题作答（P1-122 ②）：题目取这条随访挂的问卷（接口给的 `questions`），答案按题目 key 交，
+ * 与医护执行走同一套异常分级。没答的题不交（规则按「没有这个字段」处理）；数值题用文本框，空着不会被读成 0。
+ * 控件按题目序号标记，不拿题目 key 拼选择器。 */
+function inlineQuestions(card, questions, submitLabel) {
+  return new Promise((resolve) => {
+    if (!card || card.querySelector(".inline-input")) { resolve(null); return; }
+    const form = document.createElement("form");
+    form.className = "inline-input";
+    const control = (q, i) => {
+      if (q.type === "number")
+        return `<input data-q="${i}" type="text" inputmode="decimal" placeholder="填数值，不答留空">`;
+      if (q.type === "multi" && q.options.length)
+        return q.options.map((o) =>
+          `<label><input type="checkbox" data-q="${i}" value="${esc(o)}"> ${esc(o)}</label>`).join(" ");
+      if (q.options.length)
+        return `<select data-q="${i}"><option value="">（未答）</option>${q.options.map((o) =>
+          `<option value="${esc(o)}">${esc(o)}</option>`).join("")}</select>`;
+      return `<input data-q="${i}" type="text"${q.type === "multi" ? ' placeholder="多项用逗号分隔"' : ""}>`;
+    };
+    form.innerHTML = `${questions.map((q, i) =>
+      `<div class="q-item">${esc(q.title)}<br>${control(q, i)}</div>`).join("")}
+      <button type="submit" class="ghost-btn">${esc(submitLabel)}</button>
+      <button type="button" class="ghost-btn" data-cancel>取消</button>`;
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const answers = {};
+      questions.forEach((q, i) => {
+        const els = [...form.querySelectorAll(`[data-q="${i}"]`)];
+        if (q.type === "multi" && q.options.length) {
+          const picked = els.filter((el) => el.checked).map((el) => el.value);
+          if (picked.length) answers[q.key] = picked;
+          return;
+        }
+        const raw = (els[0] ? els[0].value : "").trim();
+        if (!raw) return;
+        if (q.type === "multi") answers[q.key] = raw.split(/[,，、]/).map((v) => v.trim()).filter(Boolean);
+        else if (q.type === "number" && !Number.isNaN(Number(raw))) answers[q.key] = Number(raw);
+        else answers[q.key] = raw;
+      });
+      form.remove();
+      resolve(answers);
+    };
+    form.querySelector("[data-cancel]").onclick = () => { form.remove(); resolve(null); };
+    card.appendChild(form);
+    const first = form.querySelector("[data-q]");
+    if (first) first.focus();
+  });
+}
+
 async function renderSpdFollowups(box) {
   const rows = await authApi(`/api/portal/spd/followups${spdQuery()}`);
+  // 已超期的与待随访的一样能自助作答（后端同一口径：超期的更该让居民补答）
   box.innerHTML = rows.map((f) => `<div class="m-card">
     ${kv("随访类型", esc({ inpatient: "出院随访", outpatient: "门诊随访",
       surgery: "术后随访", checkup: "体检随访" }[f.scene] || f.scene))}
     ${kv("计划时间", esc(f.planned_at))}
-    ${kv("状态", esc({ planned: "待随访", done: "已完成",
+    ${kv("状态", esc({ planned: "待随访", overdue: "已超期", done: "已完成",
       unreachable: "未联系上", removed: "已移除" }[f.status] || f.status))}
     ${f.result ? kv("医生反馈", esc(f.result)) : ""}
-    ${f.status === "planned"
+    ${f.status === "planned" || f.status === "overdue"
       ? `<button type="button" class="ghost-btn" data-spd-self="${f.id}">线上自助随访</button>` : ""}
     </div>`).join("") || '<p class="empty">暂无随访计划</p>';
   box.querySelectorAll("[data-spd-self]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const recovery = await inlineInput(btn.closest(".m-card"), {
-        options: ["良好", "一般", "较差"], submitLabel: "提交自助随访" });
-      if (recovery === null) return;
-      const body = { answers: { recovery } };
+      const card = btn.closest(".m-card");
+      const questions = (rows.find((f) => String(f.id) === btn.dataset.spdSelf) || {}).questions || [];
+      let answers;
+      if (questions.length) {
+        answers = await inlineQuestions(card, questions, "提交自助随访");
+        if (answers === null) return;
+      } else {   // 没挂问卷的随访：仍只问恢复情况
+        const recovery = await inlineInput(card, { options: ["良好", "一般", "较差"], submitLabel: "提交自助随访" });
+        if (recovery === null) return;
+        answers = { recovery };
+      }
+      const body = { answers };
       if (viewingPatientId !== null) body.patient_id = viewingPatientId;
       try {
         const r = await authApi(`/api/portal/spd/followups/${btn.dataset.spdSelf}/self-answer`, {

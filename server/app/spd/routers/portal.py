@@ -34,6 +34,7 @@ from ..models import (
     SpdPackageBinding,
     SpdPathInstance,
     SpdProgram,
+    SpdQuestionnaire,
     SpdReferralCase,
     SpdReferralStep,
     SpdRevisit,
@@ -895,6 +896,14 @@ async def upload_task_evidence(
             "size": attachment.size}
 
 
+class SpdFollowupQuestionOut(BaseModel):
+    key: str
+    title: str
+    # single / multi / number，与工作人员端问卷同一套题型
+    type: str
+    options: list[str]
+
+
 class SpdFollowupOut(BaseModel):
     id: int
     scene: str
@@ -905,6 +914,22 @@ class SpdFollowupOut(BaseModel):
     status: str
     result: str
     abnormal_level: str
+    # 待作答的题目（P1-122 ②）：取这条随访挂的问卷；已结束的随访、没挂问卷的为空列表
+    questions: list[SpdFollowupQuestionOut]
+
+
+def _followup_questions(items: list) -> list[dict]:
+    """问卷题目 → 居民端逐题作答要的形状（P1-122 ②）：只给题目、不给异常规则；选项统一成文字列表（预置问卷
+    写 `{label}`，也有直接写文字的）。没有 key 的题答了也对不上任何规则，不给。"""
+    out = []
+    for item in items or []:
+        key = str(item.get("key") or "").strip() if isinstance(item, dict) else ""
+        if not key:
+            continue
+        options = [o.get("label", "") if isinstance(o, dict) else str(o) for o in item.get("options") or []]
+        out.append({"key": key, "title": str(item.get("title") or item.get("label") or key),
+                    "type": str(item.get("type") or "single"), "options": [o for o in options if o]})
+    return out
 
 
 @router.get("/followups", response_model=list[SpdFollowupOut])
@@ -931,10 +956,19 @@ def my_followups(
         offset,
         limit,
     )
+    # 还能自助作答的（与 self-answer 同一口径：待随访 / 已超期）带上问卷题目。原先手机页只问一道「恢复情况」、
+    # 交 {recovery}，预置问卷的异常规则在疼痛 / 发热 / 服药上，居民自助作答永远判不出异常（P1-122 ②）
+    waiting = {r.questionnaire_code for r in rows if r.status in ("planned", "overdue") and r.questionnaire_code}
+    items_by_code = {
+        q.code: q.items or []
+        for q in db.query(SpdQuestionnaire).filter(SpdQuestionnaire.code.in_(waiting))
+    } if waiting else {}
     return [
         {"id": r.id, "scene": r.scene, "planned_at": r.planned_at,
          "executed_at": r.executed_at, "channel": r.channel, "status": r.status,
-         "result": r.result, "abnormal_level": r.abnormal_level}
+         "result": r.result, "abnormal_level": r.abnormal_level,
+         "questions": _followup_questions(items_by_code.get(r.questionnaire_code, []))
+         if r.status in ("planned", "overdue") else []}
         for r in rows
     ]
 
@@ -961,7 +995,6 @@ def self_answer_followup(
     db: Session = Depends(get_db),
 ):
     """线上自助随访作答。异常分级与派单逻辑与医护执行时完全一致。"""
-    from ..models import SpdQuestionnaire
     from ..rules import grade_abnormal
 
     patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog

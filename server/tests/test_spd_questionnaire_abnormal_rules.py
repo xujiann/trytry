@@ -6,6 +6,9 @@
 
 修法：建 / 改问卷把题目与规则合起来查——题目必须有 key 且不重复，规则字段必须是本问卷的题目，级别只能是
 low / mid / high；改问卷时题目与规则都没变不查（存量里已写坏的问卷，改名、停用不挡）。
+
+居民端（②）：随访清单原先不带题目，手机页只问一道「恢复情况」、交 {recovery}，自助作答碰不到任何一条规则；
+现在清单给还能作答的随访带上问卷题目，逐题作答。界面两端的走法由 e2e 覆盖。
 """
 import pytest
 
@@ -120,3 +123,61 @@ def test_种子问卷都过得了同一道校验():
     assert SEED_QUESTIONNAIRES
     for q in SEED_QUESTIONNAIRES:
         _check_abnormal_rules(q.get("abnormal_rules", []), q.get("items", []))
+
+
+def test_居民端随访清单带上待答的题目_自助逐题作答判出异常(client, admin):
+    """P1-122 ②：手机页原先只问一道「恢复情况」、交 {recovery}——随访清单里没有问卷题目，居民答不到规则所在的题，
+    自助作答永远判不出异常。清单给待作答的随访带上题目（只给题目、不给规则；选项统一成文字），答完的恒为空。"""
+    from app.config import settings
+    from app.database import SessionLocal
+    from app.models import Patient, ResidentAccount
+    from app.spd.models import SpdQuestionnaire
+
+    org = client.post("/api/organizations", headers=admin, json={
+        "name": "P122 居民随访院", "org_type": "township", "level": "township"}).json()["id"]
+    # 存量问卷直接落库：早先的题有写 label + 文字选项的，也有没写 key 的（现在建不进来，答了也对不上规则，不给）
+    with SessionLocal() as db:
+        db.add(SpdQuestionnaire(code="P122_SELF", name="P122 自助问卷", abnormal_rules=[_rule()], items=[
+            PAIN, FEVER, {"key": "q1", "label": "早先的写法", "options": ["甲", "乙"]}, {"title": "没有 key 的题"}]))
+        db.commit()
+    rule = client.post(f"{B}/followup-rules", headers=admin, json={
+        "code": "P122_SELF_R", "name": "P122 自助随访", "points": [0, 7], "questionnaire_code": "P122_SELF"})
+    assert rule.status_code == 201, rule.text
+
+    with SessionLocal() as db:
+        me = Patient(ehc_no="EHC-P122-ME", name="P122 居民", id_card="330106198001011578", gender="女",
+                     birth_date="1980-01-01", phone="13912201221")
+        db.add(me)
+        db.flush()
+        db.add(ResidentAccount(phone="13912201221", patient_id=me.id, nickname="P122", wechat_openid="",
+                               status="active"))
+        db.commit()
+        patient_id = me.id
+    old = settings.sms_debug_echo
+    settings.sms_debug_echo = True
+    try:
+        code = client.post("/api/portal/auth/sms/code",
+                           json={"phone": "13912201221", "purpose": "login"}).json()["debug_code"]
+        token = client.post("/api/portal/auth/sms/login",
+                            json={"phone": "13912201221", "code": code}).json()["access_token"]
+    finally:
+        settings.sms_debug_echo = old
+    resident = {"Authorization": f"Bearer {token}"}
+    plan = client.post(f"{B}/followup-plans", headers=admin, json={
+        "patient_id": patient_id, "rule_id": rule.json()["id"], "base_date": "2001-01-01", "org_id": org})
+    assert plan.status_code == 201, plan.text
+
+    rows = client.get("/api/portal/spd/followups", headers=resident).json()
+    assert len(rows) == 2 and all(r["status"] == "planned" for r in rows)
+    assert rows[0]["questions"] == [
+        {"key": "pain", "title": "疼痛评分", "type": "number", "options": []},
+        {"key": "fever", "title": "是否发热", "type": "single", "options": ["否", "是"]},
+        {"key": "q1", "title": "早先的写法", "type": "single", "options": ["甲", "乙"]},
+    ]
+    target = rows[-1]["id"]
+    done = client.post(f"/api/portal/spd/followups/{target}/self-answer", headers=resident,
+                       json={"answers": {"pain": 9, "fever": "否"}})
+    assert done.status_code == 200 and done.json()["abnormal_level"] == "high", done.text
+    after = {r["id"]: r for r in client.get("/api/portal/spd/followups", headers=resident).json()}
+    assert after[target]["status"] == "done" and after[target]["questions"] == []
+    assert [r["questions"] != [] for r in after.values() if r["id"] != target] == [True]

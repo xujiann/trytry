@@ -2671,11 +2671,11 @@ def test_spd_admin_screen_enroll_path_task(page, base_url, spd_seed):
     expect(page.locator("#page-body")).to_contain_text("已完成")
 
 
-def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
-    """居民端：验证码登录 → 实名绑定 → 高危自查（顺手申请服务）→ 自报监测数据。"""
+def _resident_login(page, base_url, patient):
+    """居民端：验证码登录 → 实名绑定，落到档案页。"""
     page.goto(f"{base_url}/m/")
     page.click('[data-tab="archive"]')
-    page.fill("#in-phone", spd_seed["patient"]["phone"])
+    page.fill("#in-phone", patient["phone"])
     page.click("#btn-send-code")  # console 短信通道：演示验证码自动回填
     expect(page.locator("#in-code")).not_to_have_value("")
     page.click('#sms-form button[type="submit"]')
@@ -2683,10 +2683,15 @@ def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
     # 直接进入档案页——两种落点都合法
     page.wait_for_selector("#pane-bind:not(.hidden), #pane-archive:not(.hidden)")
     if page.locator("#pane-bind").is_visible():
-        page.fill("#in-name", spd_seed["patient"]["name"])
-        page.fill("#in-idcard", spd_seed["patient"]["id_card"])
+        page.fill("#in-name", patient["name"])
+        page.fill("#in-idcard", patient["id_card"])
         page.click('#bind-form button[type="submit"]')
     expect(page.locator("#pane-archive")).to_be_visible()
+
+
+def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
+    """居民端：验证码登录 → 实名绑定 → 高危自查（顺手申请服务）→ 自报监测数据。"""
+    _resident_login(page, base_url, spd_seed["patient"])
 
     # 自查：高危答案 → 结果提示；确认弹窗即"申请专病管理服务"
     page.on("dialog", lambda d: d.accept())
@@ -2716,6 +2721,43 @@ def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
     page.click('#spd-measure-form button[type="submit"]')
     # 保存成功后分段重画、数值落进记录列表——重试断言等它出现（替代固定 sleep）
     expect(page.locator("#spd-result")).to_contain_text("165")
+
+
+def test_居民端线上自助随访按问卷逐题作答_判出异常(page, base_url, spd_seed, admin_call, admin_read):
+    """P1-122 ②：手机页的自助随访原先只问一道「恢复情况」、交 {recovery}，问卷的异常规则一条也碰不到。
+    现在按这条随访挂的问卷逐题作答，疼痛 9 分判重度。
+
+    用自己的居民：验证码单号冷却 60 秒，与别的居民端用例共用一个手机号，紧挨着跑就收不到码。"""
+    person = {"name": "自助随访E2E居民", "id_card": "320981197508084123", "phone": "13788990022"}
+    resident = admin_call("POST", "/api/patients", {**person, "gender": "女", "birth_date": "1975-08-08"})
+    admin_call("POST", "/api/spd/questionnaires", {
+        "code": "E2E_Q122M", "name": "E2E 居民自助问卷",
+        "items": [{"key": "pain", "title": "疼痛评分", "type": "number"},
+                  {"key": "fever", "title": "是否发热", "type": "single", "options": [{"label": "否"}, {"label": "是"}]}],
+        "abnormal_rules": [{"when": {"field": "pain", "op": ">=", "value": 7}, "level": "high", "action": "通知主管医师"}]})
+    rule = admin_call("POST", "/api/spd/followup-rules", {
+        "code": "E2E_R122M", "name": "E2E 居民自助随访", "points": [0], "questionnaire_code": "E2E_Q122M"})
+    plan = admin_call("POST", "/api/spd/followup-plans", {
+        "patient_id": resident["id"], "rule_id": rule["id"], "base_date": "2001-01-01",
+        "org_id": spd_seed["org"]["id"]})
+    record_id = plan["items"][0]["id"]
+
+    _resident_login(page, base_url, person)
+    messages = []
+    page.on("dialog", lambda d: (messages.append(d.message), d.accept()))
+    page.click('[data-tab="spd"]')
+    page.click('[data-spd="followup"]')
+    page.click(f'[data-spd-self="{record_id}"]')
+    form = page.locator(".m-card .inline-input")
+    expect(form).to_contain_text("疼痛评分")
+    expect(form).to_contain_text("是否发热")
+    form.locator('[data-q="0"]').fill("9")
+    form.locator('button[type="submit"]').click()
+    expect(page.locator(f'[data-spd-self="{record_id}"]')).to_have_count(0)   # 提交后分段重画，这条已完成
+    record = admin_read(f"/api/spd/followup-records/{record_id}/context")["record"]
+    assert (record["status"], record["channel"], record["abnormal_level"], record["answers"]) == (
+        "done", "self", "high", {"pain": 9})
+    assert messages and "重度" in messages[-1], messages
 
 
 def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
