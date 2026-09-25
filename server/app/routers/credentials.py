@@ -236,7 +236,7 @@ def _close(db: Session, credential_id: int, status: str, reason: str, user: User
     assert_org_writable(db, user, credential.org_id)
     if credential.status != "active":
         raise HTTPException(
-            status_code=409, detail=f"凭据当前状态为{STATUS_NAMES.get(credential.status)}，不可再操作"
+            status_code=409, detail=f"凭据当前状态为{STATUS_NAMES.get(credential.status, credential.status)}，不可再操作"
         )
     credential.status = status
     credential.closed_at = utcnow()

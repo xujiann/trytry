@@ -37,6 +37,9 @@ from ..models import (
 
 router = APIRouter(prefix="/api/surgery", tags=["手术麻醉"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+SURGERY_STATUS_NAMES = {"requested": "待审批", "approved": "已审批", "scheduled": "已排班", "completed": "已完成", "cancelled": "已取消"}
+
 # 术后随访默认间隔
 SURGERY_FOLLOWUP_DAYS = 14
 
@@ -286,7 +289,7 @@ def approve_request(
         raise HTTPException(status_code=404, detail="手术申请不存在")
     assert_obj_org_writable(db, user, request)
     if request.status != "requested":
-        raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可审批")
+        raise HTTPException(status_code=409, detail=f"当前状态 {SURGERY_STATUS_NAMES.get(request.status, request.status)} 不可审批")
     if request.created_by == user.id:
         raise HTTPException(status_code=403, detail="不得审批本人提出的手术申请")
     request.status = "approved" if body.approved else "cancelled"
@@ -335,7 +338,7 @@ def schedule_surgery(
         raise HTTPException(status_code=404, detail="手术申请不存在")
     assert_obj_org_writable(db, user, request)
     if request.status != "approved":
-        raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可排班")
+        raise HTTPException(status_code=409, detail=f"当前状态 {SURGERY_STATUS_NAMES.get(request.status, request.status)} 不可排班")
     room = db.get(OperatingRoom, body.room_id)
     if room is None or not room.active:
         raise HTTPException(status_code=404, detail="手术间不存在或已停用")
@@ -471,7 +474,7 @@ def create_record(
         raise HTTPException(status_code=404, detail="手术申请不存在")
     assert_obj_org_writable(db, user, request)
     if request.status != "scheduled":
-        raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可填写术中记录")
+        raise HTTPException(status_code=409, detail=f"当前状态 {SURGERY_STATUS_NAMES.get(request.status, request.status)} 不可填写术中记录")
     record = SurgeryRecord(
         request_id=request_id,
         created_by=user.id,

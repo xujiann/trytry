@@ -39,6 +39,7 @@ from ..models import (
 )
 from ..visibility import assert_org_writable, scope_org_list
 from ..texttypes import NON_BLANK
+from .prescriptions import PRESCRIPTION_STATUS_NAMES
 
 router = APIRouter(prefix="/api/dispense", tags=["西药发药"], dependencies=[Depends(get_current_user)])
 
@@ -192,7 +193,7 @@ def dispense_prescription(
     if prescription.status not in DISPENSABLE_STATUSES:
         raise HTTPException(
             status_code=409,
-            detail=f"处方当前状态 {prescription.status} 不可发药（须审方通过）",
+            detail=f"处方当前状态 {PRESCRIPTION_STATUS_NAMES.get(prescription.status, prescription.status)} 不可发药（须审方通过）",
         )
     org_id = body.org_id if body.org_id is not None else prescription.org_id
     assert_org_writable(db, user, org_id)

@@ -52,6 +52,9 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+POOL_STATUS_NAMES = {"active": "执行中", "settled": "已清算", "closed": "已归档"}
+
 # 分配公式可用变量。刻意保持极少——变量越多，各县越容易写出没人能复核的表达式。
 FORMULA_VARIABLES = {
     "score": "该机构绩效得分（0-100）",
@@ -307,7 +310,7 @@ def add_prepayment(
     平台不该因为一个比例参数就挡住真实发生的资金流。"""
     pool = _pool(db, pool_id)
     if pool.status != "active":
-        raise HTTPException(status_code=409, detail=f"基金池状态为 {pool.status}，不可再预付")
+        raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可再预付")
     db.add(FundPrepayment(pool_id=pool_id, created_by=user.id, **body.model_dump()))
     db.commit()
     out = _pool_out(pool, db)
@@ -376,7 +379,7 @@ def close_period(pool_id: int, body: PeriodIn, db: Session = Depends(get_db)):
     """
     pool = _pool(db, pool_id)
     if pool.status != "active":
-        raise HTTPException(status_code=409, detail=f"基金池状态为 {pool.status}，不可再预结")
+        raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可再预结")
     amount = (
         body.actual_amount
         if body.actual_amount is not None
@@ -462,7 +465,7 @@ def settle(
     """
     pool = _pool(db, pool_id)
     if pool.status != "active":
-        raise HTTPException(status_code=409, detail=f"基金池状态为 {pool.status}，不可清算")
+        raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可清算")
     expense = (
         body.total_expense
         if body.total_expense is not None

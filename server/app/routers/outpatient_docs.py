@@ -385,7 +385,7 @@ def _pending(db: Session, consent_id: int, user: User) -> InformedConsent:
     if consent.status != "pending":
         raise HTTPException(
             status_code=409,
-            detail=f"该告知书已{CONSENT_STATUS_NAMES.get(consent.status)}，不可重复处理",
+            detail=f"该告知书已{CONSENT_STATUS_NAMES.get(consent.status, consent.status)}，不可重复处理",
         )
     return consent
 

@@ -220,7 +220,7 @@ def test_处方审核_意见追加在系统意见后_再审409(client, world, pe
         headers=world["pharmacist"],
     )
     assert again.status_code == 409, again.text
-    assert again.json() == {"detail": "当前状态 approved 无需药师审核"}
+    assert again.json() == {"detail": "当前状态 药师审通过 无需药师审核"}
     # 抢输/后到的那一路什么都不该改：结论与意见串都还是第一位药师的
     listed = client.get("/api/prescriptions?status=approved", headers=world["pharmacist"]).json()
     final = next(p for p in listed if p["id"] == rx["id"])

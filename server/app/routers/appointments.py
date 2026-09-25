@@ -35,6 +35,9 @@ from ..schemas import AppointmentCreate, AppointmentOut, SlotCreate, SlotOut
 
 router = APIRouter(prefix="/api/appointments", tags=["预约诊疗"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+APPOINTMENT_STATUS_NAMES = {"booked": "已预约", "cancelled": "已取消", "fulfilled": "已就诊"}
+
 
 class DoctorNextSlotOut(BaseModel):
     """近期可约号源（最多 5 枚）。`remaining` = capacity - booked，恒 int。"""
@@ -373,7 +376,7 @@ def release_appointment(db: Session, appointment: Appointment) -> Appointment:
     """取消预约并释放号源：管理端与居民端共用。"""
     if appointment.status != "booked":
         # 状态机：仅 booked 可取消；fulfilled/cancelled 均拒绝（M1）
-        raise HTTPException(status_code=409, detail=f"当前状态 {appointment.status} 不可取消")
+        raise HTTPException(status_code=409, detail=f"当前状态 {APPOINTMENT_STATUS_NAMES.get(appointment.status, appointment.status)} 不可取消")
     appointment.status = "cancelled"
     # H3 整改：条件 UPDATE 释放号源（WHERE booked > 0），防止并发释放扣成负数
     db.query(AppointmentSlot).filter(
@@ -454,7 +457,7 @@ def fulfill(
     slot = db.get(AppointmentSlot, appointment.slot_id)
     assert_org_writable(db, user, slot.org_id if slot else None)
     if appointment.status != "booked":
-        raise HTTPException(status_code=409, detail=f"当前状态 {appointment.status} 不可核销")
+        raise HTTPException(status_code=409, detail=f"当前状态 {APPOINTMENT_STATUS_NAMES.get(appointment.status, appointment.status)} 不可核销")
     appointment.status = "fulfilled"
     db.commit()
     db.refresh(appointment)

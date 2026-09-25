@@ -23,6 +23,7 @@ from ..deps import get_current_user, require_roles, row_dict
 from ..models import ExamRequest, PathologySpecimen
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
+from .exams import EXAM_REQUEST_STATUS_NAMES
 
 router = APIRouter(
     prefix="/api/pathology", tags=["病理标本"], dependencies=[Depends(get_current_user)]
@@ -186,7 +187,7 @@ def submit_specimen(body: SpecimenIn, db: Session = Depends(get_db)):
     # 出报告只收待诊断 / 诊断中的申请（exams.submit_report）：已出报告、互认了既往结果的申请再送检，
     # 标本照样走核收→取材→阅片，报告却再也出不了（修前实测 201，之后出报告 409）
     if request.status not in ("pending", "diagnosing"):
-        raise HTTPException(status_code=409, detail=f"该申请当前状态 {request.status}，不能再送检标本")
+        raise HTTPException(status_code=409, detail=f"该申请当前状态 {EXAM_REQUEST_STATUS_NAMES.get(request.status, request.status)}，不能再送检标本")
     # 与医废追溯码同理：标本号由服务端顺序生成，冲突该由服务端重试。
     # 原先返回 409"标本号冲突，请重试"——把服务端的分配问题推给了送检的人。
     specimen = insert_with_retry(
@@ -217,7 +218,7 @@ def receive_specimen(specimen_id: int, body: SpecimenReceive, db: Session = Depe
     """核收。核收人必填——标本出了问题，要找得到当时是谁签的收。"""
     specimen = _specimen(db, specimen_id)
     if specimen.status != "pending":
-        raise HTTPException(status_code=409, detail=f"当前状态 {specimen.status} 不可核收")
+        raise HTTPException(status_code=409, detail=f"当前状态 {SPECIMEN_STATUS.get(specimen.status, specimen.status)} 不可核收")
     specimen.status = "received"
     specimen.received_by = body.received_by
     db.commit()
@@ -235,7 +236,7 @@ def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depend
     specimen = _specimen(db, specimen_id)
     if specimen.status != "pending":
         raise HTTPException(
-            status_code=409, detail=f"当前状态 {specimen.status} 不可拒收（拒收只能发生在核收环节）"
+            status_code=409, detail=f"当前状态 {SPECIMEN_STATUS.get(specimen.status, specimen.status)} 不可拒收（拒收只能发生在核收环节）"
         )
     if body.reject_reason not in REJECT_REASONS:
         # 自由文本的拒收原因无法按原因分解统计——拒收率恰恰要按原因看才有管理价值

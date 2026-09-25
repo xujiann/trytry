@@ -20,7 +20,7 @@ EvalPlanQual → rowcount 0）。改之前同一段程序在 PG 上是八路全 
     python -m pytest tests/test_material_receive_unique_races.py -q
 
 不变量：八路并发**恰一路 200**、其余七路拿到与顺序重复请求逐字相同的
-409 `当前状态 received 不可验收`、没有异常漏给调用方、库里那张单的
+409 `当前状态 已验收 不可验收`、没有异常漏给调用方、库里那张单的
 `assets` 恰一行且数量只加一次、`asset_movements` 上属于它的入库流水**恰一条**、
 `received_note` 是赢家那一条（不是拼接、也不是最后提交者盖上去的）。
 同时钉住反面：**手工出入库仍可多行**——闸门守的是父行的那次跃迁，不是这张台账。
@@ -50,7 +50,7 @@ pytestmark = [
 SERVER_DIR = Path(__file__).resolve().parents[1]
 
 #: 抢输者拿到的 409：与顺序第二次验收（materials.receive_purchase 的 Python 预检）逐字相同
-LOSER_DETAIL = "当前状态 received 不可验收"
+LOSER_DETAIL = "当前状态 已验收 不可验收"  # P2-74：状态码换成文案
 
 #: 撞上别的进程正在升级/写同一张表时的等待与重试（测试库共用，不独占）。
 _RETRY_TIMES = 5
@@ -157,18 +157,18 @@ def _receive(Session, purchase, note="验收合格"):
 
     from app.concurrency import add_amount, ensure_present, insert_if_absent
     from app.models import Asset, AssetMovement, MaterialPurchase
-    from app.routers.materials import _mark_received
+    from app.routers.materials import PURCHASE_STATUS_NAMES, _mark_received
 
     pid = purchase["purchase_id"]
     quantity = purchase["quantity"]
     with Session() as db:
         row = db.get(MaterialPurchase, pid)
         if row.status != "contracted":  # 接口层的 Python 预检（快路径）
-            return 409, f"当前状态 {row.status} 不可验收"
+            return 409, f"当前状态 {PURCHASE_STATUS_NAMES.get(row.status, row.status)} 不可验收"
         if not _mark_received(db, pid, quantity, note):
             db.rollback()
             db.refresh(row)  # 抢输了就按真实状态措辞，别拿锁外读到的旧值
-            return 409, f"当前状态 {row.status} 不可验收"
+            return 409, f"当前状态 {PURCHASE_STATUS_NAMES.get(row.status, row.status)} 不可验收"
         try:
             code = f"MP{pid:06d}"
             asset = db.query(Asset).filter(Asset.code == code).first()

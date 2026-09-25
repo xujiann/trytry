@@ -12,7 +12,7 @@ check-then-act：两笔验收同时到达都读到 contracted，库存按同一�
 写出两条一模一样的 `采购验收 {contract_no}` 流水，事后连哪条是真的都分不出来。
 
 本文件钉四件事：
-- **顺序语义一字不变**：第二次验收仍是 409 `当前状态 received 不可验收`，
+- **顺序语义一字不变**：第二次验收仍是 409 `当前状态 已验收 不可验收`，
   未签合同的快路径措辞照旧，超量验收仍是 422 **且不改状态**；
 - **并发下恰一路验到**：八路并发只有一路 200，库存与入库流水都只加一次；
 - **绕开接口层直调闸门也拦得住**：SQLite 的库级写锁让线程探针对拆卸不敏感，
@@ -127,7 +127,7 @@ def test_第二次验收仍是409且文案不变(client, admin, roles, org, supp
         json={"received_quantity": 20, "note": "重复验收"}, headers=roles["operator"],
     )
     assert again.status_code == 409
-    assert again.json()["detail"] == "当前状态 received 不可验收"
+    assert again.json()["detail"] == "当前状态 已验收 不可验收"
 
     # 重复的那一路一行也不许落：流水恰一条，库存恰加一次
     movements = client.get(f"/api/mgmt/assets/{body['asset_id']}/movements", headers=admin).json()
@@ -152,7 +152,7 @@ def test_未签合同不可验收_快路径措辞照旧(client, roles, org):
         headers=roles["operator"],
     )
     assert resp.status_code == 409
-    assert resp.json()["detail"] == "当前状态 requested 不可验收"
+    assert resp.json()["detail"] == "当前状态 待审批 不可验收"
 
     assert client.post(
         f"/api/materials/purchases/{pid}/approve", json={"approved": True},
@@ -163,7 +163,7 @@ def test_未签合同不可验收_快路径措辞照旧(client, roles, org):
         headers=roles["operator"],
     )
     assert resp.status_code == 409
-    assert resp.json()["detail"] == "当前状态 approved 不可验收"
+    assert resp.json()["detail"] == "当前状态 已审批 不可验收"
 
 
 def test_超量验收422且不改状态_随后仍可正常验收(client, roles, org, supplier):
@@ -219,7 +219,7 @@ def test_八路并发验收恰一路成功_库存与流水都只加一次(client
     assert codes.count(200) == 1, f"同一张采购单被验收 {codes.count(200)} 次：{results}"
     assert codes.count(409) == 7, f"抢输的七路都该拿 409：{results}"
     losers = [body for code, body in results if code == 409]
-    assert all(b["detail"] == "当前状态 received 不可验收" for b in losers), losers
+    assert all(b["detail"] == "当前状态 已验收 不可验收" for b in losers), losers
 
     asset_id = next(body for code, body in results if code == 200)["asset_id"]
     movements = client.get(f"/api/mgmt/assets/{asset_id}/movements", headers=admin).json()

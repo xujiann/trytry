@@ -40,6 +40,10 @@ from ..models import (
 
 router = APIRouter(prefix="/api/materials", tags=["物资采购与耗材追溯"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+PURCHASE_STATUS_NAMES = {"requested": "待审批", "approved": "已审批", "contracted": "已签合同", "received": "已验收", "cancelled": "已取消"}
+CONSUMABLE_STATUS_NAMES = {"in_stock": "在库", "used": "已使用", "returned": "已退回", "scrapped": "已报废"}
+
 
 # ---------------------------------------------------------------- 采购流程
 
@@ -198,7 +202,7 @@ def approve_purchase(
         raise HTTPException(status_code=404, detail="采购申请不存在")
     assert_obj_org_writable(db, user, purchase)
     if purchase.status != "requested":
-        raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可审批")
+        raise HTTPException(status_code=409, detail=f"当前状态 {PURCHASE_STATUS_NAMES.get(purchase.status, purchase.status)} 不可审批")
     if purchase.requested_by == user.id:
         raise HTTPException(status_code=403, detail="不得审批本人提出的采购申请")
     purchase.status = "approved" if body.approved else "cancelled"
@@ -223,7 +227,7 @@ def sign_contract(purchase_id: int, body: ContractIn, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="采购申请不存在")
     assert_obj_org_writable(db, user, purchase)
     if purchase.status != "approved":
-        raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可签合同")
+        raise HTTPException(status_code=409, detail=f"当前状态 {PURCHASE_STATUS_NAMES.get(purchase.status, purchase.status)} 不可签合同")
     supplier = db.get(Supplier, body.supplier_id)
     if supplier is None or not supplier.active:
         raise HTTPException(status_code=404, detail="供应商不存在或已停用")
@@ -282,14 +286,14 @@ def receive_purchase(
         raise HTTPException(status_code=404, detail="采购申请不存在")
     assert_obj_org_writable(db, user, purchase)
     if purchase.status != "contracted":
-        raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可验收")
+        raise HTTPException(status_code=409, detail=f"当前状态 {PURCHASE_STATUS_NAMES.get(purchase.status, purchase.status)} 不可验收")
     if body.received_quantity > purchase.quantity:
         raise HTTPException(status_code=422, detail="验收数量不得超过采购数量")
     # 闸门放在 422 之后：否则超量验收会先把单据翻成 received 再报 422，错误路径上悄悄改了状态。
     if not _mark_received(db, purchase_id, body.received_quantity, body.note):
         db.rollback()
         db.refresh(purchase)  # 抢输了就按真实状态措辞，别拿锁外读到的旧值
-        raise HTTPException(status_code=409, detail=f"当前状态 {purchase.status} 不可验收")
+        raise HTTPException(status_code=409, detail=f"当前状态 {PURCHASE_STATUS_NAMES.get(purchase.status, purchase.status)} 不可验收")
 
     code = f"MP{purchase.id:06d}"
     asset = db.query(Asset).filter(Asset.code == code).first()
@@ -419,7 +423,7 @@ def use_consumable(
         raise HTTPException(status_code=404, detail="耗材条码不存在")
     assert_obj_org_writable(db, user, item)
     if item.status != "in_stock":
-        raise HTTPException(status_code=409, detail=f"当前状态 {item.status} 不可使用")
+        raise HTTPException(status_code=409, detail=f"当前状态 {CONSUMABLE_STATUS_NAMES.get(item.status, item.status)} 不可使用")
     if _expired(item.expire_date, clock.today()):
         # 医疗器械使用单位不得使用过期医疗器械；此前这里不看效期，过期耗材照样 200（P1-64）
         raise HTTPException(status_code=409, detail=f"耗材已过效期（{item.expire_date}），不可使用")

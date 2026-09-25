@@ -20,6 +20,9 @@ from ..schemas import (
 
 router = APIRouter(prefix="/api/consultations", tags=["远程会诊"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+CONSULTATION_STATUS_NAMES = {"applied": "已申请", "accepted": "已受理", "completed": "已完成", "declined": "已拒绝"}
+
 
 @router.post(
     "",
@@ -80,7 +83,7 @@ def accept(
 ):
     consultation = _get(db, consultation_id, user)
     if consultation.status != "applied":
-        raise HTTPException(status_code=409, detail=f"当前状态 {consultation.status} 不可受理")
+        raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可受理")
     consultation.status = "accepted"
     consultation.expert_name = body.expert_name
     db.commit()
@@ -96,7 +99,7 @@ def accept(
 def decline(consultation_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     consultation = _get(db, consultation_id, user)
     if consultation.status != "applied":
-        raise HTTPException(status_code=409, detail=f"当前状态 {consultation.status} 不可拒绝")
+        raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可拒绝")
     consultation.status = "declined"
     db.commit()
     db.refresh(consultation)
@@ -116,7 +119,7 @@ def complete(
 ):
     consultation = _get(db, consultation_id, user)
     if consultation.status != "accepted":
-        raise HTTPException(status_code=409, detail=f"当前状态 {consultation.status} 不可出具意见")
+        raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可出具意见")
     consultation.status = "completed"
     consultation.opinion = body.opinion
     db.commit()

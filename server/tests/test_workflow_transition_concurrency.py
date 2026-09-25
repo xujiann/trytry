@@ -81,10 +81,10 @@ def test_顺序重复推进与重复终止的409逐字未变(client, admin, defi
         ).status_code == 200
     late = client.post(f"/api/workflows/instances/{iid}/advance", json={}, headers=admin)
     assert late.status_code == 409
-    assert late.json()["detail"] == "当前状态 completed 不可推进"
+    assert late.json()["detail"] == "当前状态 已完成 不可推进"
     late_cancel = client.post(f"/api/workflows/instances/{iid}/cancel", json={}, headers=admin)
     assert late_cancel.status_code == 409
-    assert late_cancel.json()["detail"] == "当前状态 completed 不可终止"
+    assert late_cancel.json()["detail"] == "当前状态 已完成 不可终止"
 
     other = _start(client, admin, definitions["linear"], "顺序终止")
     assert client.post(
@@ -92,10 +92,10 @@ def test_顺序重复推进与重复终止的409逐字未变(client, admin, defi
     ).json() == {"id": other, "status": "cancelled"}
     twice = client.post(f"/api/workflows/instances/{other}/cancel", json={}, headers=admin)
     assert twice.status_code == 409
-    assert twice.json()["detail"] == "当前状态 cancelled 不可终止"
+    assert twice.json()["detail"] == "当前状态 已终止 不可终止"
     after = client.post(f"/api/workflows/instances/{other}/advance", json={}, headers=admin)
     assert after.status_code == 409
-    assert after.json()["detail"] == "当前状态 cancelled 不可推进"
+    assert after.json()["detail"] == "当前状态 已终止 不可推进"
 
 
 def test_环形定义里的第二圈仍然照常留痕(client, admin, definitions):
@@ -164,13 +164,13 @@ def test_跃迁没命中时推进与终止各自给出自己的409(client, admin
     monkeypatch.setattr(workflows_router, "_move_instance", _lose("cancelled"))
     beaten = client.post(f"/api/workflows/instances/{iid}/advance", json={}, headers=admin)
     assert beaten.status_code == 409
-    assert beaten.json()["detail"] == "当前状态 cancelled 不可推进"
+    assert beaten.json()["detail"] == "当前状态 已终止 不可推进"
 
     finished = _start(client, admin, definitions["linear"], "抢输的终止")
     monkeypatch.setattr(workflows_router, "_move_instance", _lose("completed"))
     beaten_cancel = client.post(f"/api/workflows/instances/{finished}/cancel", json={}, headers=admin)
     assert beaten_cancel.status_code == 409
-    assert beaten_cancel.json()["detail"] == "当前状态 completed 不可终止"
+    assert beaten_cancel.json()["detail"] == "当前状态 已完成 不可终止"
 
     # 抢输的那几路一条留痕都不许留下（回滚把它们连同 UPDATE 一起退掉）
     assert client.get(f"/api/workflows/instances/{iid}/history", headers=admin).json() == []
@@ -208,8 +208,8 @@ def test_条件更新对过期读拦得住(client, admin, definitions):
         session_a.commit()
         assert _move_instance(session_b, iid, "pharmacy", current_node="approve") is False
         beaten = _stale_move_409(session_b, instance_b, "推进")
-        assert beaten.status_code == 409 and beaten.detail == "当前状态 cancelled 不可推进"
-        assert _stale_move_409(session_b, instance_b, "终止").detail == "当前状态 cancelled 不可终止"
+        assert beaten.status_code == 409 and beaten.detail == "当前状态 已终止 不可推进"
+        assert _stale_move_409(session_b, instance_b, "终止").detail == "当前状态 已终止 不可终止"
     finally:
         session_b.rollback()
         session_a.rollback()

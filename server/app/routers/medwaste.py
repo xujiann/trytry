@@ -36,6 +36,9 @@ from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/medwaste", tags=["医废追溯"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+WASTE_STATUS_NAMES = {"collected": "已收集", "stored": "已暂存", "handed_over": "已交接"}
+
 # 收集后超过该天数未交接即预警（《医疗废物管理条例》暂存不得超过2天）
 STORAGE_LIMIT_DAYS = 2
 
@@ -358,7 +361,7 @@ def store(
         raise HTTPException(status_code=404, detail="医废记录不存在")
     assert_obj_org_writable(db, user, waste)
     if waste.status != "collected":
-        raise HTTPException(status_code=409, detail=f"当前状态 {waste.status} 不可入暂存")
+        raise HTTPException(status_code=409, detail=f"当前状态 {WASTE_STATUS_NAMES.get(waste.status, waste.status)} 不可入暂存")
     loc = db.get(WasteLocation, body.storage_location_id)
     if loc is None:
         raise HTTPException(status_code=404, detail="暂存点位不存在")

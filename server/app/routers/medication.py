@@ -25,6 +25,9 @@ from ..models import (
 
 router = APIRouter(prefix="/api/medication", tags=["药事监测"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+SHORTAGE_STATUS_NAMES = {"registered": "已登记", "purchasing": "采购中", "delivered": "已配送", "collected": "已取药", "no_show": "未取药", "cancelled": "已取消"}
+
 # 同时在用药品达到该数即提示多重用药风险
 POLYPHARMACY_THRESHOLD = 5
 
@@ -115,7 +118,7 @@ def advance_shortage(shortage_id: int, db: Session = Depends(get_db), user: User
     assert_obj_org_writable(db, user, shortage)
     next_status = _SHORTAGE_FLOW.get(shortage.status)
     if next_status is None:
-        raise HTTPException(status_code=409, detail=f"状态 {shortage.status} 已是终态")
+        raise HTTPException(status_code=409, detail=f"状态 {SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)} 已是终态")
     shortage.status = next_status
     db.commit()
     db.refresh(shortage)
@@ -138,7 +141,7 @@ def close_shortage(shortage_id: int, body: ShortageClose, db: Session = Depends(
         raise HTTPException(status_code=404, detail="缺药登记不存在")
     assert_obj_org_writable(db, user, shortage)
     if shortage.status in _SHORTAGE_CLOSED:
-        raise HTTPException(status_code=409, detail=f"该登记已结案（{shortage.status}）")
+        raise HTTPException(status_code=409, detail=f"该登记已结案（{SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)}）")
     if body.result in ("collected", "no_show") and shortage.status != "delivered":
         raise HTTPException(status_code=409, detail="药品尚未配送到位，不可判定取药与否")
     shortage.status = body.result

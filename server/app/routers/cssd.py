@@ -15,6 +15,9 @@ from sqlalchemy import func
 
 router = APIRouter(prefix="/api/cssd", tags=["消毒供应"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+STERILIZATION_STATUS_NAMES = {"sterilizing": "灭菌中", "sterile": "已灭菌", "dispatched": "已发放", "recycled": "已回收"}
+
 _FLOW = {"sterilizing": "sterile", "sterile": "dispatched", "dispatched": "recycled"}
 
 
@@ -67,7 +70,7 @@ def advance(
     assert_org_writable(db, user, batch.center_org_id)
     next_status = _FLOW.get(batch.status)
     if next_status is None:
-        raise HTTPException(status_code=409, detail=f"状态 {batch.status} 已是终态")
+        raise HTTPException(status_code=409, detail=f"状态 {STERILIZATION_STATUS_NAMES.get(batch.status, batch.status)} 已是终态")
     if next_status == "dispatched":
         if dispatched_to_org_id is None:
             raise HTTPException(status_code=422, detail="发放需指定接收机构")

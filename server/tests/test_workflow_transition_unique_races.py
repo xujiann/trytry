@@ -149,12 +149,12 @@ def _advance(session_factory, instance_id: int, actor_id: int, barrier) -> tuple
     from fastapi import HTTPException
 
     from app.models import WorkflowInstance, WorkflowTransition
-    from app.routers.workflows import _move_instance, _stale_move_409
+    from app.routers.workflows import INSTANCE_STATUS_NAMES, _move_instance, _stale_move_409
 
     with session_factory() as db:
         instance = db.get(WorkflowInstance, instance_id)
         if instance.status != "running":
-            return 409, f"当前状态 {instance.status} 不可推进"
+            return 409, f"当前状态 {INSTANCE_STATUS_NAMES.get(instance.status, instance.status)} 不可推进"
         current = next(n for n in NODES if n["key"] == instance.current_node)
         from_node = instance.current_node
         next_key = current.get("next", "")
@@ -179,12 +179,12 @@ def _cancel(session_factory, instance_id: int, actor_id: int, barrier) -> tuple[
     from fastapi import HTTPException
 
     from app.models import WorkflowInstance, WorkflowTransition
-    from app.routers.workflows import _move_instance, _stale_move_409
+    from app.routers.workflows import INSTANCE_STATUS_NAMES, _move_instance, _stale_move_409
 
     with session_factory() as db:
         instance = db.get(WorkflowInstance, instance_id)
         if instance.status != "running":
-            return 409, f"当前状态 {instance.status} 不可终止"
+            return 409, f"当前状态 {INSTANCE_STATUS_NAMES.get(instance.status, instance.status)} 不可终止"
         from_node = instance.current_node
 
         barrier.wait(timeout=30)
@@ -282,7 +282,7 @@ def test_并发推进终态节点只完成一次且文案与顺序请求一致(s
     ])
     assert not errors, f"并发推进不该把异常漏给调用方：{errors}"
     assert sorted(code for code, _ in results) == [200] + [409] * 7, results
-    assert {detail for code, detail in results if code == 409} == {"当前状态 completed 不可推进"}, results
+    assert {detail for code, detail in results if code == 409} == {"当前状态 已完成 不可推进"}, results
     assert _transitions(session_factory, iid) == [("approve", "", "advance")]
     assert _instance_state(session_factory, iid) == ("approve", "completed")
 
@@ -314,5 +314,5 @@ def test_推进与终止并发只有一方成功(session_factory, definition_key
         assert details == {STALE_MOVE_DETAIL}, results
     else:
         assert (to_node, _instance_state(session_factory, iid)) == ("", ("apply", "cancelled"))
-        assert details <= {"当前状态 cancelled 不可推进", "当前状态 cancelled 不可终止"}, results
+        assert details <= {"当前状态 已终止 不可推进", "当前状态 已终止 不可终止"}, results
         assert details, results

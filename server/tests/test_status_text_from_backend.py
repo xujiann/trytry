@@ -9,16 +9,22 @@
 同日把字段从状态扩到场景（`scene`）与异常分级（`abnormal_level`）又扫出 11 处（P2-73）：随访各表显示 `inpatient`，
 居民自助随访后手机上弹「系统判定为high异常」，同意书管理页显示 `chronic_enroll` / `self`。
 
+报错文案同一个病（P2-74 ①）：平台侧 47 处 409 的 `detail=f"当前状态 {x.status} 不可…"`，窗口人员看到的是
+「当前状态 approved 不可审批」「基金池状态为 settled，不可再预付」；改成各路由文案表的 `NAMES.get(code, code)`
+（与 billing 早有的 `PAYMENT_STATUS.get(...)` 同一写法），并立报错文案这一侧的零基线闸门。
+
 修法：出参补后端给的 `status_name`（与既有 `MAP.get(code, code)` 惯例一致：表外的值原样回显，
 「后端加了新状态、表还没跟上」的现场看得见），页面改显示它；同一文件里已有同一套状态文案表的
 （慢专病复诊、任务）直接复用那张表，不另起一份措辞。
 
 本文件：
 - 前端闸门：页面文字里不许出现原样的状态码插值（派生零基线 + 按设计名单只减不增，每条写理由）；
+- 报错文案闸门：`HTTPException` 的 detail f-string 里不许直接插 `.status` / `.xxx_status`（派生零基线）；
 - 文案表对照列注释：每张新文案表的键与模型列注释里列出的状态码一一对应——加了新状态没补文案，
   这里先红（否则页面上又是一个英文码）；
 - 端点回归：没有契约网钉着的三处（急救事件、特病申报、报告修订回执）走一遍状态流转。
 """
+import ast
 import inspect
 import re
 import sys
@@ -143,6 +149,65 @@ def test_判据自证_扫描面覆盖三端():
     assert total >= 300, total
 
 
+# ================================================================ 报错文案不直接拼状态码（P2-74 ①）
+APP = STATIC.parent
+
+#: 零基线。2026-09-25 实测（修前 90a4afe）：`HTTPException` 的 detail f-string 里直接插 `.status` / `.xxx_status` 的
+#: 48 处（47 条报错、24 个路由文件；转诊那一条前后两个码）→ 0。
+DETAIL_BASELINE = 0
+
+
+def raw_status_in_details(sources) -> list[str]:
+    """`(标签, 源码)` 里 `HTTPException(...)` 的 detail（关键字或第二个位置参数）f-string 直接插状态列的位置。
+
+    `NAMES.get(x.status, x.status)` 不命中（插的是 Call 而不是 Attribute）；`status_code` / `status_name` 不命中。
+    """
+    hits = []
+    for label, source in sources:
+        for call in ast.walk(ast.parse(source)):
+            if not isinstance(call, ast.Call) or not ast.unparse(call.func).endswith("HTTPException"):
+                continue
+            details = [kw.value for kw in call.keywords if kw.arg == "detail"] + call.args[1:2]
+            for detail in details:
+                if not isinstance(detail, ast.JoinedStr):
+                    continue
+                for part in detail.values:
+                    if (isinstance(part, ast.FormattedValue) and isinstance(part.value, ast.Attribute)
+                            and re.fullmatch(r"(?:[a-z_]*_)?status", part.value.attr)):
+                        hits.append(f"{label}:{call.lineno}: {ast.unparse(part.value)}")
+    return hits
+
+
+def _app_sources():
+    for path in sorted(APP.rglob("*.py")):
+        if "__pycache__" not in path.parts:
+            yield path.relative_to(APP).as_posix(), path.read_text(encoding="utf-8")
+
+
+def test_报错文案不直接拼英文状态码():
+    hits = raw_status_in_details(_app_sources())
+    assert len(hits) == DETAIL_BASELINE, (
+        "409 / 422 的报错文案里直接拼了状态码——窗口人员看到的是「当前状态 approved 不可审批」。"
+        "用本路由的状态文案表 `NAMES.get(x.status, x.status)`（没有就照模型列注释建一张，并登记进下面的文案表名单）：\n"
+        + "\n".join(hits)
+    )
+
+
+def test_判据自证_报错文案():
+    probe = (
+        'raise HTTPException(status_code=409, detail=f"当前状态 {a.status} 不可审批")\n'
+        'raise HTTPException(409, f"危急值 {b.critical_status} 不可确认")\n'
+        'raise HTTPException(status_code=409, detail=f"当前状态 {NAMES.get(c.status, c.status)} 不可审批")\n'
+        'raise HTTPException(status_code=502, detail=f"对端返回 {d.status_code}")\n'
+        'raise HTTPException(status_code=409, detail="当前状态不可审批")\n'
+        'x = f"{e.status}"\n'
+    )
+    assert raw_status_in_details([("probe.py", probe)]) == ["probe.py:1: a.status", "probe.py:2: b.critical_status"]
+    # 防空转：扫描面里 HTTPException 的 f-string detail 得有一大把，才说明真在扫
+    total = sum(src.count('detail=f"') for _, src in _app_sources())
+    assert total >= 150, total   # 2026-09-25 实测 170
+
+
 # ================================================================ 文案表对照列注释
 def _column_codes(model, column: str) -> set[str]:
     """模型源码里 `column: Mapped…` 上方紧挨着的注释块列出的码（`code=文案` 形状，`""` 也算一个；注释可跨行）。"""
@@ -157,10 +222,17 @@ def _column_codes(model, column: str) -> set[str]:
 
 
 def _label_tables():
-    from app.models import (Admission, ConsentRecord, EmergencyCase, ExamReport, SpecialDiseaseApp, SpdCenter,
-                            SpdFollowupRecord, SpdFollowupRule, SpdPathTemplate, TcmPreparationBatch,
-                            TrainingEnrollment, TrainingPlan, VisitCredential)
-    from app.routers import consents, credentials, education, emergency, exams, insurance, tcm
+    from app.models import (Admission, AdverseEvent, Appointment, ConsentRecord, Consultation, CorrectionRequest,
+                            DrugShortage, EmergencyCase, EsbMessage, ExamReport, ExamRequest, FollowupTask, FundPool,
+                            HighValueConsumable, HomeVisitOrder, MaterialPurchase, MedicalWaste, OnlineConsult,
+                            PathologySpecimen, Prescription, Referral, SpecialDiseaseApp, SpdCenter,
+                            SpdFollowupRecord, SpdFollowupRule, SpdPathTemplate, SterilizationBatch, SurgeryRequest,
+                            TcmDispenseOrder, TcmPreparationBatch, TrainingEnrollment, TrainingPlan, VisitCredential,
+                            Voucher, WorkflowInstance)
+    from app.routers import (accounting, appointments, consents, consultations, credentials, cssd, education,
+                             emergency, esb, exams, followups, fund, homevisits, insurance, materials, medication,
+                             medwaste, pathology, prescriptions, quality, referrals, surgery, tcm, telemedicine,
+                             workflows)
     from app.spd.routers import followup, workbench
     from app.spd.routers.config import paths
 
@@ -188,6 +260,34 @@ def _label_tables():
         "consents.CONSENT_SCENE_NAMES": (consents.CONSENT_SCENE_NAMES, ConsentRecord, "scene", set()),
         "consents.CONSENT_METHOD_NAMES": (consents.CONSENT_METHOD_NAMES, ConsentRecord, "method", set()),
         "paths.PATH_SCENE_NAMES": (paths.PATH_SCENE_NAMES, SpdPathTemplate, "scene", set()),
+        # P2-74 ①：409 报错文案用的表（esb / pathology / referrals 三张是既有的，本批起报错也用它）
+        "accounting.VOUCHER_STATUS_NAMES": (accounting.VOUCHER_STATUS_NAMES, Voucher, "status", set()),
+        "appointments.APPOINTMENT_STATUS_NAMES":
+            (appointments.APPOINTMENT_STATUS_NAMES, Appointment, "status", set()),
+        "consents.CORRECTION_STATUS_NAMES": (consents.CORRECTION_STATUS_NAMES, CorrectionRequest, "status", set()),
+        "consultations.CONSULTATION_STATUS_NAMES":
+            (consultations.CONSULTATION_STATUS_NAMES, Consultation, "status", set()),
+        "cssd.STERILIZATION_STATUS_NAMES": (cssd.STERILIZATION_STATUS_NAMES, SterilizationBatch, "status", set()),
+        "prescriptions.PRESCRIPTION_STATUS_NAMES":
+            (prescriptions.PRESCRIPTION_STATUS_NAMES, Prescription, "status", set()),
+        "esb.MSG_STATUS": (esb.MSG_STATUS, EsbMessage, "status", set()),
+        "exams.EXAM_REQUEST_STATUS_NAMES": (exams.EXAM_REQUEST_STATUS_NAMES, ExamRequest, "status", set()),
+        "followups.FOLLOWUP_TASK_STATUS_NAMES": (followups.FOLLOWUP_TASK_STATUS_NAMES, FollowupTask, "status", set()),
+        "fund.POOL_STATUS_NAMES": (fund.POOL_STATUS_NAMES, FundPool, "status", set()),
+        "homevisits.VISIT_ORDER_STATUS_NAMES":
+            (homevisits.VISIT_ORDER_STATUS_NAMES, HomeVisitOrder, "status", set()),
+        "materials.PURCHASE_STATUS_NAMES": (materials.PURCHASE_STATUS_NAMES, MaterialPurchase, "status", set()),
+        "materials.CONSUMABLE_STATUS_NAMES":
+            (materials.CONSUMABLE_STATUS_NAMES, HighValueConsumable, "status", set()),
+        "medication.SHORTAGE_STATUS_NAMES": (medication.SHORTAGE_STATUS_NAMES, DrugShortage, "status", set()),
+        "medwaste.WASTE_STATUS_NAMES": (medwaste.WASTE_STATUS_NAMES, MedicalWaste, "status", set()),
+        "pathology.SPECIMEN_STATUS": (pathology.SPECIMEN_STATUS, PathologySpecimen, "status", set()),
+        "quality.ADVERSE_EVENT_STATUS_NAMES": (quality.ADVERSE_EVENT_STATUS_NAMES, AdverseEvent, "status", set()),
+        "referrals.STATUS_LABELS": (referrals.STATUS_LABELS, Referral, "status", set()),
+        "surgery.SURGERY_STATUS_NAMES": (surgery.SURGERY_STATUS_NAMES, SurgeryRequest, "status", set()),
+        "tcm.DISPENSE_ORDER_STATUS_NAMES": (tcm.DISPENSE_ORDER_STATUS_NAMES, TcmDispenseOrder, "status", set()),
+        "telemedicine.CONSULT_STATUS_NAMES": (telemedicine.CONSULT_STATUS_NAMES, OnlineConsult, "status", set()),
+        "workflows.INSTANCE_STATUS_NAMES": (workflows.INSTANCE_STATUS_NAMES, WorkflowInstance, "status", set()),
     }
 
 
@@ -199,6 +299,14 @@ LABEL_TABLE_NAMES = [
     "credentials.STATUS_NAMES",
     "followup.FOLLOWUP_SCENE_NAMES", "followup.ABNORMAL_LEVEL_NAMES", "consents.CONSENT_SCENE_NAMES",
     "consents.CONSENT_METHOD_NAMES", "paths.PATH_SCENE_NAMES",
+    "accounting.VOUCHER_STATUS_NAMES", "appointments.APPOINTMENT_STATUS_NAMES", "consents.CORRECTION_STATUS_NAMES",
+    "consultations.CONSULTATION_STATUS_NAMES", "cssd.STERILIZATION_STATUS_NAMES",
+    "prescriptions.PRESCRIPTION_STATUS_NAMES", "esb.MSG_STATUS", "exams.EXAM_REQUEST_STATUS_NAMES",
+    "followups.FOLLOWUP_TASK_STATUS_NAMES", "fund.POOL_STATUS_NAMES", "homevisits.VISIT_ORDER_STATUS_NAMES",
+    "materials.PURCHASE_STATUS_NAMES", "materials.CONSUMABLE_STATUS_NAMES", "medication.SHORTAGE_STATUS_NAMES",
+    "medwaste.WASTE_STATUS_NAMES", "pathology.SPECIMEN_STATUS", "quality.ADVERSE_EVENT_STATUS_NAMES",
+    "referrals.STATUS_LABELS", "surgery.SURGERY_STATUS_NAMES", "tcm.DISPENSE_ORDER_STATUS_NAMES",
+    "telemedicine.CONSULT_STATUS_NAMES", "workflows.INSTANCE_STATUS_NAMES",
 ]
 
 

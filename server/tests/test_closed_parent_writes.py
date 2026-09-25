@@ -102,7 +102,7 @@ def test_病理申请出了报告就不再收标本(client, admin, world):
     done = request()
     assert client.post(f"/api/exams/{done}/report", json={"conclusion": "慢性炎症"}, headers=admin).status_code == 201
     r = client.post("/api/pathology/specimens", json={"request_id": done, "site": "胃体"}, headers=admin)
-    assert r.status_code == 409 and "reported" in r.json()["detail"], r.text  # 修前 201，之后出报告 409
+    assert r.status_code == 409 and "已报告" in r.json()["detail"], r.text  # 修前 201，之后出报告 409（P2-74 起报错写文案不写码）
 
 
 def test_县外就诊不挂已退回的转诊单(client, admin, world):

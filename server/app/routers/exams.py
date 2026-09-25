@@ -47,6 +47,9 @@ from ..ws import manager
 
 router = APIRouter(prefix="/api/exams", tags=["共享诊断中心"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+EXAM_REQUEST_STATUS_NAMES = {"pending": "待诊断", "diagnosing": "诊断中", "reported": "已报告", "recognized": "互认既往结果"}
+
 # 同一患者同一项目在此天数内已有报告的，提示可互认
 RECOGNITION_WINDOW_DAYS = 30
 
@@ -325,7 +328,7 @@ def claim_request(
     )
     if not claimed:
         db.rollback()
-        raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可领取")
+        raise HTTPException(status_code=409, detail=f"当前状态 {EXAM_REQUEST_STATUS_NAMES.get(request.status, request.status)} 不可领取")
     db.commit()
     db.refresh(request)
     return request
@@ -342,7 +345,7 @@ def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends
     if request is None:
         raise HTTPException(status_code=404, detail="申请单不存在")
     if request.status not in ("pending", "diagnosing"):
-        raise HTTPException(status_code=409, detail=f"当前状态 {request.status} 不可出报告")
+        raise HTTPException(status_code=409, detail=f"当前状态 {EXAM_REQUEST_STATUS_NAMES.get(request.status, request.status)} 不可出报告")
     report = ExamReport(request_id=request_id, **body.model_dump())
     request.status = "reported"
     if report.critical:
@@ -464,7 +467,7 @@ def acknowledge_critical(
         raise HTTPException(status_code=422, detail="非危急值报告，无需确认")
     # M-1 整改：存量危急报告（迁移前 critical_status=''）等同"已通知"，可正常进入闭环
     if report.critical_status not in ("notified", ""):
-        raise HTTPException(status_code=409, detail=f"当前状态 {report.critical_status} 不可确认接收")
+        raise HTTPException(status_code=409, detail=f"当前状态 {CRITICAL_STATUS_NAMES.get(report.critical_status, report.critical_status)} 不可确认接收")
     report.critical_status = "acknowledged"
     db.add(
         CriticalAction(

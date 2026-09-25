@@ -112,7 +112,7 @@ def update_status(
     _assert_receiving_org(user, referral)
     if body.status not in _ALLOWED_TRANSITIONS.get(referral.status, set()):
         raise HTTPException(
-            status_code=409, detail=f"状态不可从 {referral.status} 变更为 {body.status}"
+            status_code=409, detail=f"状态不可从 {STATUS_LABELS.get(referral.status, referral.status)} 变更为 {STATUS_LABELS.get(body.status, body.status)}"
         )
     referral.status = body.status
     db.commit()

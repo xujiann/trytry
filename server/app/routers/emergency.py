@@ -186,7 +186,7 @@ def advance(case_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="急救事件不存在")
     next_status = _FLOW.get(case.status)
     if next_status is None:
-        raise HTTPException(status_code=409, detail=f"状态 {case.status} 已是终态")
+        raise HTTPException(status_code=409, detail=f"状态 {CASE_STATUS_NAMES.get(case.status, case.status)} 已是终态")
     case.status = next_status
     db.commit()
     db.refresh(case)

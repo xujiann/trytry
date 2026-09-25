@@ -28,6 +28,9 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)]
 )
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+VISIT_ORDER_STATUS_NAMES = {"applied": "待派单", "dispatched": "已派单", "completed": "已完成", "cancelled": "已取消"}
+
 
 # ===========================================================================
 # ⑨ 上门服务调度（送医送护上门）
@@ -188,7 +191,7 @@ def dispatch_visit(order_id: int, body: VisitDispatch, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="上门工单不存在")
     assert_obj_org_writable(db, user, order)
     if order.status != "applied":
-        raise HTTPException(status_code=409, detail=f"工单当前状态 {order.status} 不可派单")
+        raise HTTPException(status_code=409, detail=f"工单当前状态 {VISIT_ORDER_STATUS_NAMES.get(order.status, order.status)} 不可派单")
     order.status = "dispatched"
     order.assignee_name = body.assignee_name
     order.dispatched_at = now_naive()
@@ -213,7 +216,7 @@ def complete_visit(order_id: int, body: VisitComplete, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="上门工单不存在")
     assert_obj_org_writable(db, user, order)
     if order.status != "dispatched":
-        raise HTTPException(status_code=409, detail=f"工单当前状态 {order.status} 不可完成")
+        raise HTTPException(status_code=409, detail=f"工单当前状态 {VISIT_ORDER_STATUS_NAMES.get(order.status, order.status)} 不可完成")
     order.status = "completed"
     order.service_note = body.service_note
     order.completed_at = now_naive()

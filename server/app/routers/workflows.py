@@ -54,6 +54,9 @@ from ..models import (
 
 router = APIRouter(prefix="/api/workflows", tags=["流程引擎"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+INSTANCE_STATUS_NAMES = {"running": "流转中", "completed": "已完成", "cancelled": "已终止"}
+
 
 # ============================================================================
 # 流程定义
@@ -346,7 +349,7 @@ def _stale_move_409(db: Session, instance: WorkflowInstance, verb: str) -> HTTPE
     db.rollback()
     db.refresh(instance)
     if instance.status != "running":
-        return HTTPException(status_code=409, detail=f"当前状态 {instance.status} 不可{verb}")
+        return HTTPException(status_code=409, detail=f"当前状态 {INSTANCE_STATUS_NAMES.get(instance.status, instance.status)} 不可{verb}")
     return HTTPException(status_code=409, detail="当前节点刚被其他人推进，请刷新后重试")
 
 
@@ -363,7 +366,7 @@ def advance_instance(
         raise HTTPException(status_code=404, detail="流程实例不存在")
     assert_obj_org_writable(db, user, instance)
     if instance.status != "running":
-        raise HTTPException(status_code=409, detail=f"当前状态 {instance.status} 不可推进")
+        raise HTTPException(status_code=409, detail=f"当前状态 {INSTANCE_STATUS_NAMES.get(instance.status, instance.status)} 不可推进")
     definition = _definition_or_404(db, instance.definition_key)
     current = _node(definition, instance.current_node)
     if current is None:
@@ -409,7 +412,7 @@ def cancel_instance(
         raise HTTPException(status_code=404, detail="流程实例不存在")
     assert_obj_org_writable(db, user, instance)
     if instance.status != "running":
-        raise HTTPException(status_code=409, detail=f"当前状态 {instance.status} 不可终止")
+        raise HTTPException(status_code=409, detail=f"当前状态 {INSTANCE_STATUS_NAMES.get(instance.status, instance.status)} 不可终止")
     from_node = instance.current_node
     # 终止的条件里也带上 current_node：终止撞上一次推进时宁可让终止方拿 409 重来，
     # 也不要在一个自己没读到过的节点上落一条"从这里终止"的留痕——那条留痕会说谎。

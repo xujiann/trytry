@@ -24,6 +24,9 @@ from ..visibility import assert_obj_org_writable, assert_org_writable
 
 router = APIRouter(prefix="/api/tcm", tags=["中医药服务"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+DISPENSE_ORDER_STATUS_NAMES = {"ordered": "已下单", "dispensed": "已调配", "decocted": "已煎煮", "delivering": "配送中", "delivered": "已送达"}
+
 # ---------- ⑬ 中医智能辅诊（规则知识库） ----------
 
 # 王琦九体质全集（平和质 + 8 种偏颇体质）
@@ -269,7 +272,7 @@ def advance_order(order_id: int, db: Session = Depends(get_db)):
     flow = _DISPENSE_FLOW if order.decoct else _NO_DECOCT_FLOW
     next_status = flow.get(order.status)
     if next_status is None:
-        raise HTTPException(status_code=409, detail=f"状态 {order.status} 已是终态")
+        raise HTTPException(status_code=409, detail=f"状态 {DISPENSE_ORDER_STATUS_NAMES.get(order.status, order.status)} 已是终态")
     order.status = next_status
     db.commit()
     db.refresh(order)
@@ -522,7 +525,7 @@ def release_batch(batch_id: int, today: str | None = None, db: Session = Depends
         raise HTTPException(status_code=404, detail="批次不存在")
     assert_obj_org_writable(db, user, batch)
     if batch.status != "produced":
-        raise HTTPException(status_code=409, detail=f"批次当前状态 {batch.status} 不可发放")
+        raise HTTPException(status_code=409, detail=f"批次当前状态 {BATCH_STATUS_NAMES.get(batch.status, batch.status)} 不可发放")
     business_date = resolve_business_date(today).isoformat()
     if batch.expire_date and batch.expire_date < business_date:
         raise HTTPException(status_code=409, detail="批次已过效期，禁止发放")

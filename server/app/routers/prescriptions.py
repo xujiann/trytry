@@ -34,6 +34,9 @@ from ..schemas import (
 
 router = APIRouter(prefix="/api/prescriptions", tags=["集中审方"])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+PRESCRIPTION_STATUS_NAMES = {"auto_passed": "系统审通过", "pending_review": "待药师审", "approved": "药师审通过", "rejected": "退回"}
+
 # 特殊人群年龄界限：儿童 <14 岁，老年 ≥65 岁
 CHILD_AGE_LIMIT = 14
 ELDERLY_AGE_LIMIT = 65
@@ -282,7 +285,7 @@ def review_prescription(prescription_id: int, body: PrescriptionReview, db: Sess
     if not _apply_review(db, prescription_id, "approved" if body.approve else "rejected", body.comment):
         db.rollback()
         db.refresh(prescription)  # 抢输了就按真实状态措辞，别拿锁外读到的旧值
-        raise HTTPException(status_code=409, detail=f"当前状态 {prescription.status} 无需药师审核")
+        raise HTTPException(status_code=409, detail=f"当前状态 {PRESCRIPTION_STATUS_NAMES.get(prescription.status, prescription.status)} 无需药师审核")
     db.commit()
     db.refresh(prescription)
     return prescription

@@ -23,6 +23,9 @@ from ..models import FollowupTask, Organization, Patient, User, utcnow
 
 router = APIRouter(prefix="/api/followups", tags=["随访中心"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+FOLLOWUP_TASK_STATUS_NAMES = {"pending": "待随访", "done": "已完成", "cancelled": "已取消"}
+
 # 出院随访默认间隔
 DISCHARGE_FOLLOWUP_DAYS = 7
 
@@ -235,7 +238,7 @@ def complete_followup(task_id: int, body: CompleteIn, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="随访任务不存在")
     assert_obj_org_writable(db, user, task)
     if task.status != "pending":
-        raise HTTPException(status_code=409, detail=f"当前状态 {task.status} 不可完成")
+        raise HTTPException(status_code=409, detail=f"当前状态 {FOLLOWUP_TASK_STATUS_NAMES.get(task.status, task.status)} 不可完成")
     task.status = "done"
     task.result = body.result
     task.completed_at = utcnow()
@@ -254,7 +257,7 @@ def cancel_followup(task_id: int, db: Session = Depends(get_db), user: User = De
         raise HTTPException(status_code=404, detail="随访任务不存在")
     assert_obj_org_writable(db, user, task)
     if task.status != "pending":
-        raise HTTPException(status_code=409, detail=f"当前状态 {task.status} 不可取消")
+        raise HTTPException(status_code=409, detail=f"当前状态 {FOLLOWUP_TASK_STATUS_NAMES.get(task.status, task.status)} 不可取消")
     task.status = "cancelled"
     db.commit()
     return {"id": task.id, "status": task.status}

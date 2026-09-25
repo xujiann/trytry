@@ -54,6 +54,9 @@ from ..models import (
 
 router = APIRouter(prefix="/api/quality", tags=["质量安全"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+ADVERSE_EVENT_STATUS_NAMES = {"reported": "已上报", "reviewed": "已审核", "rectified": "已整改"}
+
 
 # ---------- 不良事件 ----------
 
@@ -161,7 +164,7 @@ def review_adverse_event(
         raise HTTPException(status_code=404, detail="不良事件不存在")
     assert_obj_org_writable(db, user, event)
     if event.status != "reported":
-        raise HTTPException(status_code=409, detail=f"当前状态 {event.status} 不可审核")
+        raise HTTPException(status_code=409, detail=f"当前状态 {ADVERSE_EVENT_STATUS_NAMES.get(event.status, event.status)} 不可审核")
     event.status = "reviewed"
     event.review_note = body.note
     event.reviewed_by = user.full_name or user.username

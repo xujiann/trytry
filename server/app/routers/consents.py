@@ -51,6 +51,9 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+CORRECTION_STATUS_NAMES = {"pending": "待审核", "approved": "已通过", "rejected": "已拒绝"}
+
 #: 同意采集场景（ConsentRecord.scene / ConsentText.scene 的取值范围）
 CONSENT_SCENES = (
     "archive",              # 建档
@@ -480,7 +483,7 @@ def review_correction(
     # P0-28：全域角色只多一条留痕；被整包授了审核权的自定义角色看不到这个患者就改不了他
     assert_patient_visible(db, user, req.patient_id, resource="correction")
     if req.status != "pending":
-        raise HTTPException(status_code=409, detail=f"该申请已处理（{req.status}），不能重复审核")
+        raise HTTPException(status_code=409, detail=f"该申请已处理（{CORRECTION_STATUS_NAMES.get(req.status, req.status)}），不能重复审核")
     if not body.approve and not body.comment.strip():
         raise HTTPException(status_code=422, detail="拒绝申请必须填写审核意见")
 

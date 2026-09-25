@@ -548,7 +548,7 @@ def process_message(message_id: int, db: Session = Depends(get_db)):
     if message is None:
         raise HTTPException(status_code=404, detail="消息不存在")
     if message.status in {"succeeded", "dead"}:
-        raise HTTPException(status_code=409, detail=f"消息当前状态 {message.status} 不可再消费")
+        raise HTTPException(status_code=409, detail=f"消息当前状态 {MSG_STATUS.get(message.status, message.status)} 不可再消费")
     endpoint = db.get(EsbEndpoint, message.endpoint_id)
     message.status = "processing"
     db.flush()
@@ -743,7 +743,7 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
     if message is None:
         raise HTTPException(status_code=404, detail="消息不存在")
     if message.status in {"succeeded", "dead"}:
-        raise HTTPException(status_code=409, detail=f"消息当前状态 {message.status} 不可再消费")
+        raise HTTPException(status_code=409, detail=f"消息当前状态 {MSG_STATUS.get(message.status, message.status)} 不可再消费")
     endpoint = db.get(EsbEndpoint, message.endpoint_id)
 
     message.status = "processing"

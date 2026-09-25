@@ -37,6 +37,9 @@ from ..models import AccountSubject, Organization, User, Voucher, VoucherEntry, 
 
 router = APIRouter(prefix="/api/accounting", tags=["会计核算"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+VOUCHER_STATUS_NAMES = {"draft": "草稿", "posted": "已过账", "void": "已作废"}
+
 # 借贷平衡的容差：金额用 float 存，两位小数以内的浮点误差不算不平
 BALANCE_TOLERANCE = 0.005
 
@@ -372,7 +375,7 @@ def post_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = De
         raise HTTPException(status_code=404, detail="凭证不存在")
     assert_obj_org_writable(db, user, voucher)
     if voucher.status != "draft":
-        raise HTTPException(status_code=409, detail=f"当前状态 {voucher.status} 不可过账")
+        raise HTTPException(status_code=409, detail=f"当前状态 {VOUCHER_STATUS_NAMES.get(voucher.status, voucher.status)} 不可过账")
     voucher.status = "posted"
     voucher.posted_by = user.id
     voucher.posted_at = utcnow()

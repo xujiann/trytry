@@ -587,7 +587,7 @@ def enroll_plan(plan_id: int, db: Session = Depends(get_db), user: User = Depend
         raise HTTPException(status_code=404, detail="实训计划不存在")
     assert_obj_org_writable(db, user, plan)
     if plan.status != "open":
-        raise HTTPException(status_code=409, detail=f"计划当前状态 {plan.status} 不接受报名")
+        raise HTTPException(status_code=409, detail=f"计划当前状态 {PLAN_STATUS_NAMES.get(plan.status, plan.status)} 不接受报名")
     existing = (
         db.query(TrainingEnrollment)
         .filter(TrainingEnrollment.plan_id == plan_id, TrainingEnrollment.user_id == user.id)

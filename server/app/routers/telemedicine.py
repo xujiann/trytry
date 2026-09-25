@@ -12,6 +12,9 @@ from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/telemedicine", tags=["互联网+诊疗"], dependencies=[Depends(get_current_user)])
 
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
+CONSULT_STATUS_NAMES = {"open": "待回复", "replied": "已回复", "closed": "已结束"}
+
 
 class ConsultCreate(BaseModel):
     patient_id: int
@@ -72,7 +75,7 @@ def reply(consult_id: int, body: ReplyBody, db: Session = Depends(get_db), user:
     if consult is None:
         raise HTTPException(status_code=404, detail="咨询不存在")
     if consult.status != "open":
-        raise HTTPException(status_code=409, detail=f"当前状态 {consult.status} 不可回复")
+        raise HTTPException(status_code=409, detail=f"当前状态 {CONSULT_STATUS_NAMES.get(consult.status, consult.status)} 不可回复")
     if body.prescription_id is not None:
         prescription = db.get(Prescription, body.prescription_id)
         if prescription is None:
@@ -100,7 +103,7 @@ def close(consult_id: int, db: Session = Depends(get_db), user: User = Depends(g
     if consult is None:
         raise HTTPException(status_code=404, detail="咨询不存在")
     if consult.status != "replied":
-        raise HTTPException(status_code=409, detail=f"当前状态 {consult.status} 不可结束")
+        raise HTTPException(status_code=409, detail=f"当前状态 {CONSULT_STATUS_NAMES.get(consult.status, consult.status)} 不可结束")
     consult.status = "closed"
     db.commit()
     db.refresh(consult)
