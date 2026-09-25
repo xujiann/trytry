@@ -358,6 +358,24 @@ async function renderSpdAdmin() {
       <div id="spd-cfg-detail"></div>`)}
     ${panel("评估量表", `
       <p class="desc">发布后生成扫码自评令牌并进入评估下拉；停用即从下拉里消失，历史评估照常可查</p>
+      <details id="spd-scale-new"><summary>新建量表 / 编辑草稿</summary>
+        <form id="spd-scale-form" style="margin-top:8px">
+          <div class="inline">
+            <input name="code" placeholder="量表编码" required style="width:130px">
+            <input name="version" placeholder="版本" value="v1" required style="width:70px">
+            <input name="name" placeholder="量表名称" required>
+            <select name="category">${Object.entries(SPD_SCALE_CATEGORY).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+            <select name="program_code"><option value="">通用（不限病种）</option>${spdProgramOptions(catalog)}</select>
+          </div>
+          <p class="desc">题目（选项写成「文字=分值」，用 / 分隔；没填题干的空行不提交）</p>
+          <div class="scale-items"></div>
+          <button type="button" class="btn secondary scale-add-item">加一题</button>
+          <p class="desc">评分分段（总分落在哪一段，给哪个风险等级与建议）</p>
+          <div class="scale-ranges"></div>
+          <div class="inline"><button type="button" class="btn secondary scale-add-range">加一段</button>
+            <button type="button" class="btn secondary scale-reset">清空（回到新建）</button>
+            <button class="scale-save">保存草稿</button></div>
+        </form></details>
       ${table(["ID", "编码", "名称", "类别", "病种", "版本", "状态", "操作"], scales, (sc) =>
         `<tr><td>${sc.id}</td><td>${esc(sc.code)}</td><td>${esc(sc.name)}</td>
          <td>${esc(SPD_SCALE_CATEGORY[sc.category] || sc.category)}</td><td>${esc(sc.program_code || "—")}</td>
@@ -365,7 +383,11 @@ async function renderSpdAdmin() {
          <td>${sc.status === "published"
            ? `<button class="btn secondary" data-scale-qr="${sc.id}">二维码</button>
               <button class="btn secondary" data-scale-off="${sc.id}">停用</button>`
-           : `<button class="btn secondary" data-scale-pub="${sc.id}">发布</button>`}</td></tr>`)}
+           : sc.status === "draft"
+             ? `<button class="btn secondary" data-scale-edit="${sc.id}">编辑草稿</button>
+                <button class="btn secondary" data-scale-pub="${sc.id}">发布</button>`
+             : `<button class="btn secondary" data-scale-pub="${sc.id}">发布</button>`}
+             <button class="btn secondary" data-scale-copy="${sc.id}">复制为新版本</button></td></tr>`)}
       <p class="msg" id="spd-scale-msg"></p>`)}
     ${panel("服务包", `
       <form class="inline" id="spd-package-form">
@@ -523,11 +545,13 @@ async function renderSpdAdmin() {
     e.preventDefault();
     return postAction("/api/spd/devices", formJson(e.target, ["org_id"]), "#spd-device-msg");
   };
+  const scaleBuilder = spdScaleBuilder($("#spd-scale-form"), "#spd-scale-msg");
   $("#page-body").onclick = async (e) => {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const progEdit = el("data-prog-edit"), progVersions = el("data-prog-versions"), progTargets = el("data-prog-targets");
     const targetEdit = el("data-target-edit");
     const scalePub = el("data-scale-pub"), scaleOff = el("data-scale-off"), scaleQr = el("data-scale-qr");
+    const scaleEdit = el("data-scale-edit"), scaleCopy = el("data-scale-copy");
     const pkgEdit = el("data-pkg-edit"), eduEdit = el("data-edu-edit"), devBind = el("data-dev-bind");
     const dsEdit = el("data-ds-edit"), dsLogs = el("data-ds-logs"), dsSync = el("data-ds-sync");
     if (progEdit) {
@@ -574,6 +598,13 @@ async function renderSpdAdmin() {
         await showTargets(targetEdit.dataset.prog);
         setMsg("#spd-program-msg", "管理目标已更新");
       } catch (err) { setMsg("#spd-program-msg", err.message, false); }
+      return;
+    }
+    if (scaleEdit || scaleCopy) {
+      const id = Number((scaleEdit || scaleCopy).dataset[scaleEdit ? "scaleEdit" : "scaleCopy"]);
+      scaleBuilder.load(scales.find((x) => x.id === id), scaleEdit ? "edit" : "copy");
+      $("#spd-scale-new").open = true;
+      $("#spd-scale-new").scrollIntoView({ block: "nearest" });
       return;
     }
     if (scalePub) return postAction(`/api/spd/scales/${scalePub.dataset.scalePub}/publish`, null, "#spd-scale-msg");
@@ -1607,6 +1638,99 @@ async function renderSpdPatients() {
 
 const SPD_SCALE_CATEGORY = { risk: "风险", stage: "分期", rehab: "康复", screen: "筛查" };
 const SPD_SCALE_STATUS = { draft: ["草稿", "orange"], published: ["已发布", "green"], disabled: ["已停用", ""] };
+
+/* 量表构建器（P2-93：建 / 改量表原先只有接口）。题目逐行：题干、单选 / 多选、选项写成「文字=分值」用 / 分隔；
+ * 评分分段逐行：总分下限、上限（空 = 不封顶）、风险等级、建议。新建、「编辑草稿」（PATCH：编码、版本、病种不可改；
+ * 已发布的量表后端 409，只能复制为新版本）、「复制为新版本」三处共用。题目的 key 载入时原样保留（历史作答按 key 记），
+ * 新加的题取不重复的 q1、q2…… */
+function spdScaleBuilder(form, msgSel) {
+  const itemsBox = form.querySelector(".scale-items"), rangesBox = form.querySelector(".scale-ranges");
+  const button = form.querySelector("button.scale-save");
+  const optionText = (options) => (options || []).map((o) => `${o.label}=${o.score ?? 0}`).join(" / ");
+  const addItem = (it = {}) => {
+    const row = document.createElement("div");
+    row.className = "inline scale-item";
+    if (it.key) row.dataset.key = it.key;
+    row.innerHTML = `<input class="i-title" placeholder="题干" value="${esc(it.title || "")}" style="min-width:240px">
+      <select class="i-type"><option value="single">单选</option><option value="multi">多选</option></select>
+      <input class="i-options" placeholder="选项：是=2 / 否=0" value="${esc(optionText(it.options))}" style="min-width:240px">`;
+    row.querySelector(".i-type").value = it.type === "multi" ? "multi" : "single";
+    itemsBox.appendChild(row);
+  };
+  const addRange = (r = {}) => {
+    const row = document.createElement("div");
+    row.className = "inline scale-range";
+    row.innerHTML = `<input class="r-min" type="number" step="any" placeholder="总分下限" value="${esc(r.min ?? "")}" style="width:100px">
+      <input class="r-max" type="number" step="any" placeholder="上限（空 = 不封顶）" value="${esc(r.max ?? "")}" style="width:150px">
+      <select class="r-risk">${Object.entries(SPD_RISK).map(([k, [name]]) => `<option value="${k}">${esc(name)}</option>`).join("")}</select>
+      <input class="r-advice" placeholder="建议" value="${esc(r.advice || "")}" style="min-width:260px">`;
+    if (r.risk) row.querySelector(".r-risk").value = r.risk;
+    rangesBox.appendChild(row);
+  };
+  const setLocked = (locked) => ["code", "version", "program_code"].forEach((n) => { form[n].disabled = locked; });
+  // scale 为空 = 新建；mode "edit" = 编辑这份草稿；"copy" = 以它为底稿建新版本
+  const load = (scale, mode) => {
+    form.reset();
+    itemsBox.innerHTML = ""; rangesBox.innerHTML = "";
+    delete form.dataset.editId;
+    setLocked(mode === "edit");
+    if (scale) {
+      form.code.value = scale.code; form.name.value = scale.name;
+      form.category.value = scale.category; form.program_code.value = scale.program_code || "";
+      const bumped = /^(.*?)(\d+)$/.exec(scale.version || "");
+      form.version.value = mode === "copy"
+        ? (bumped ? `${bumped[1]}${Number(bumped[2]) + 1}` : `${scale.version}-2`) : scale.version;
+      if (mode === "edit") form.dataset.editId = scale.id;
+    }
+    (scale && scale.items && scale.items.length ? scale.items : [{}, {}]).forEach(addItem);
+    (scale && scale.scoring && (scale.scoring.ranges || []).length ? scale.scoring.ranges : [{}]).forEach(addRange);
+    button.textContent = mode === "edit" ? `保存草稿修改（${scale.code} ${scale.version}）`
+      : mode === "copy" ? "保存为新版本（草稿）" : "保存草稿";
+  };
+  const collect = () => {
+    const rows = [...itemsBox.querySelectorAll(".scale-item")].filter((r) => r.querySelector(".i-title").value.trim());
+    const used = new Set(rows.map((r) => r.dataset.key).filter(Boolean));
+    let n = 0;
+    const freshKey = () => { do { n += 1; } while (used.has(`q${n}`)); used.add(`q${n}`); return `q${n}`; };
+    const items = rows.map((r) => {
+      const title = r.querySelector(".i-title").value.trim();
+      const options = r.querySelector(".i-options").value.split("/").map((x) => x.trim()).filter(Boolean).map((part) => {
+        const at = part.lastIndexOf("=");
+        const label = (at < 0 ? part : part.slice(0, at)).trim(), raw = at < 0 ? "0" : part.slice(at + 1).trim();
+        // Number("两分") 是 NaN，JSON 里成了 null、后端按 0 分收——这里先拦下，说清楚是哪一题
+        if (raw === "" || Number.isNaN(Number(raw))) throw new Error(`「${title}」的选项「${part}」分值要写成数字，如 是=2`);
+        return { label, score: Number(raw) };
+      });
+      if (options.length < 2) throw new Error(`「${title}」至少要有两个选项`);
+      return { key: r.dataset.key || freshKey(), title, type: r.querySelector(".i-type").value, options };
+    });
+    const ranges = [...rangesBox.querySelectorAll(".scale-range")]
+      .filter((r) => r.querySelector(".r-min").value !== "" || r.querySelector(".r-max").value !== "")
+      .map((r) => {
+        const min = r.querySelector(".r-min").value, max = r.querySelector(".r-max").value;
+        return { min: min === "" ? null : Number(min), max: max === "" ? null : Number(max),
+                 risk: r.querySelector(".r-risk").value, advice: r.querySelector(".r-advice").value.trim() };
+      });
+    return { items, scoring: { ranges } };
+  };
+  form.querySelector(".scale-add-item").onclick = () => addItem();
+  form.querySelector(".scale-add-range").onclick = () => addRange();
+  form.querySelector(".scale-reset").onclick = () => load(null);
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    let parts;
+    try { parts = collect(); } catch (err) { return setMsg(msgSel, err.message, false); }
+    const editId = form.dataset.editId;
+    if (editId) {
+      return postAction(`/api/spd/scales/${editId}`,
+        { name: form.name.value, category: form.category.value, ...parts }, msgSel, "PATCH");
+    }
+    const body = formJson(form);
+    return postAction("/api/spd/scales", { ...body, ...parts }, msgSel);
+  };
+  load(null);
+  return { load };
+}
 const SPD_DEVICE_TYPES = { bp: "血压计", glucose: "血糖仪", band: "手环", scale: "体脂秤", poct: "POCT", ecg: "心电" };
 const SPD_TEAM_LEVELS = { county: "县级", township: "乡镇", village: "村级", center: "中心" };
 const SPD_MEMBER_ROLES = {

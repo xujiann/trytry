@@ -1649,6 +1649,74 @@ def test_报告模板能在界面上新建_段落取自注册表(page, base_url,
     expect(page.locator("tr", has_text="E2E_RPT_TPL")).to_contain_text("总体概览、转诊闭环")
 
 
+def _scale(admin_read, code, version):
+    return next(x for x in admin_read("/api/spd/scales?limit=200") if (x["code"], x["version"]) == (code, version))
+
+
+def test_评估量表能在界面上新建_编辑草稿_发布后复制为新版本(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：评估量表原先只有「发布 / 停用」，建量表、改量表的接口都没有入口——新的筛查 / 评估问卷只能靠
+    接口调用方。构建器：题目逐行（选项写成「文字=分值」）、评分分段逐行；「编辑草稿」走 PATCH（编码、版本不可改，题目
+    key 原样保留——历史作答按 key 记）；已发布的不能改题目（后端 409），「复制为新版本」以它为底稿建 v2。"""
+    _login(page, base_url)
+    _open_page(page, "spdadmin", "平台管理端·运行中枢")
+    page.click("#spd-scale-new summary")
+    form = page.locator("#spd-scale-form")
+    form.locator('[name="code"]').fill("E2E_FALL")
+    form.locator('[name="name"]').fill("E2E 跌倒风险量表")
+    form.locator('[name="category"]').select_option("risk")
+    items = form.locator(".scale-item")
+    items.nth(0).locator(".i-title").fill("近一年跌倒过")
+    items.nth(0).locator(".i-options").fill("是=3 / 否=0")
+    items.nth(1).locator(".i-title").fill("行走需要辅助")
+    items.nth(1).locator(".i-options").fill("是=2/否=0")
+    form.locator(".scale-add-item").click()
+    items.nth(2).locator(".i-title").fill("服用镇静安眠药")
+    items.nth(2).locator(".i-options").fill("是=两分 / 否=0")
+    ranges = form.locator(".scale-range")
+    ranges.nth(0).locator(".r-min").fill("0")
+    ranges.nth(0).locator(".r-max").fill("2")
+    ranges.nth(0).locator(".r-risk").select_option("low")
+    ranges.nth(0).locator(".r-advice").fill("常规防跌倒宣教")
+    form.locator(".scale-add-range").click()
+    ranges.nth(1).locator(".r-min").fill("3")
+    ranges.nth(1).locator(".r-risk").select_option("high")
+    ranges.nth(1).locator(".r-advice").fill("转康复评估")
+    form.locator("button.scale-save").click()
+    # 分值写成文字：前端先拦（原样送出去是 NaN → null，后端按 0 分收下）
+    expect(page.locator("#spd-scale-msg")).to_contain_text("分值要写成数字")
+    items.nth(2).locator(".i-options").fill("是=1 / 否=0")
+    _submit(page, "#spd-scale-form button.scale-save")
+    created = _scale(admin_read, "E2E_FALL", "v1")
+    assert created["status"] == "draft" and created["program_code"] == "", created
+    assert [(i["key"], i["title"], i["options"]) for i in created["items"]] == [
+        ("q1", "近一年跌倒过", [{"label": "是", "score": 3}, {"label": "否", "score": 0}]),
+        ("q2", "行走需要辅助", [{"label": "是", "score": 2}, {"label": "否", "score": 0}]),
+        ("q3", "服用镇静安眠药", [{"label": "是", "score": 1}, {"label": "否", "score": 0}])], created["items"]
+    assert created["scoring"] == {"ranges": [
+        {"min": 0, "max": 2, "risk": "low", "advice": "常规防跌倒宣教"},
+        {"min": 3, "max": None, "risk": "high", "advice": "转康复评估"}]}, created["scoring"]
+
+    # 编辑草稿：PATCH，编码与版本锁着，题目 key 原样
+    page.click(f'button[data-scale-edit="{created["id"]}"]')   # 重画后折叠着：点「编辑草稿」自己展开
+    expect(form.locator('[name="code"]')).to_be_disabled()
+    form.locator('[name="name"]').fill("E2E 跌倒风险量表（修订）")
+    form.locator(".scale-item").nth(0).locator(".i-options").fill("是=4 / 否=0")
+    _submit(page, "#spd-scale-form button.scale-save")
+    edited = _scale(admin_read, "E2E_FALL", "v1")
+    assert (edited["id"], edited["name"], edited["status"]) == (created["id"], "E2E 跌倒风险量表（修订）", "draft")
+    assert [i["key"] for i in edited["items"]] == ["q1", "q2", "q3"]
+    assert edited["items"][0]["options"][0] == {"label": "是", "score": 4}
+
+    # 发布后复制为新版本：v2 草稿，题目与分段照抄
+    _redrawn(page, lambda: page.click(f'button[data-scale-pub="{created["id"]}"]'))
+    assert _scale(admin_read, "E2E_FALL", "v1")["status"] == "published"
+    page.click(f'button[data-scale-copy="{created["id"]}"]')
+    expect(form.locator('[name="version"]')).to_have_value("v2")
+    _submit(page, "#spd-scale-form button.scale-save")
+    copied = _scale(admin_read, "E2E_FALL", "v2")
+    assert copied["status"] == "draft" and copied["items"] == edited["items"] and copied["scoring"] == edited["scoring"]
+
+
 def test_慢病病种目录能在界面上新增(page, base_url, admin_read):
     """P2-93（动词级孤儿）：病种目录是分级规则与随访周期的唯一数据源，页面原先只有「编辑」——新增一个慢病病种只能靠接口
     调用方。"""
