@@ -47,7 +47,7 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import (MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES, award_points, judge_measurement,
+from ..service import (MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES, award_points, judge_measurement, measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, spawn_task,
                        unknown_program)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
@@ -384,9 +384,11 @@ def _record_measurement(db: Session, body: MeasurementIn, user_id: int | None) -
     problem = measure_value_problem(body.metric, body.value)  # 生理上不可能的值（P1-101）：批量里一条即整批 422
     if problem:
         raise HTTPException(status_code=422, detail=problem)
-    enrollment = _enrollment_of(db, body.patient_id, body.program_code)
+    # 没写病种的按在管档案推断（P1-138）：原先留空就没有管理目标可比，190 也判「正常」
+    program_code = measure_program_for(db, body.patient_id, body.program_code, body.metric)
+    enrollment = _enrollment_of(db, body.patient_id, program_code)
     stage = enrollment.stage if enrollment else ""
-    level = judge_measurement(db, body.program_code, stage, body.metric, body.value)
+    level = judge_measurement(db, program_code, stage, body.metric, body.value)
     measured_at = now_naive()
     if body.measured_at:
         try:
@@ -396,7 +398,7 @@ def _record_measurement(db: Session, body: MeasurementIn, user_id: int | None) -
         except ValueError:
             raise HTTPException(status_code=422, detail="measured_at 格式须为 ISO 日期时间") from None
     record = SpdMeasurement(
-        patient_id=body.patient_id, program_code=body.program_code, metric=body.metric,
+        patient_id=body.patient_id, program_code=program_code, metric=body.metric,
         value=body.value, unit=body.unit, level=level, source=body.source,
         device_sn=body.device_sn, measured_at=measured_at, operator_id=user_id,
         note=body.note,
@@ -426,7 +428,7 @@ def create_measurement(
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
     record = _record_measurement(db, body, user.id)
-    enrollment = _enrollment_of(db, body.patient_id, body.program_code)
+    enrollment = _enrollment_of(db, body.patient_id, record.program_code)   # 推断出的病种（P1-138）
     if record.level in ("high", "low") and enrollment is not None:
         spawn_task(
             db,

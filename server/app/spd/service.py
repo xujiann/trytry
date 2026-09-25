@@ -233,6 +233,27 @@ def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTa
     )
 
 
+def measure_program_for(db: Session, patient_id: int, program_code: str, metric: str) -> str:
+    """一次监测值挂哪个病种判级（P1-138）：写了病种的照写；没写的，取这位患者**在管档案**里给这个指标配了管理目标的
+    病种（按建档先后取第一个）。都没有才留空——空串没有管理目标可比，一律判「正常」。
+
+    原先没写就是空串：管理端录入表单的病种下拉默认「全部病种」（空）、居民端自报是个「病种编码（可留空）」的文本框，
+    居民不认得 hypertension 这种编码——没人写的时候，高血压在管患者收缩压 190 也判「正常」，异常处置任务一条不派，
+    异常清单里没有它。"""
+    if program_code:
+        return program_code
+    enrolled = (
+        db.query(SpdEnrollment.program_code)
+        .filter(SpdEnrollment.patient_id == patient_id, SpdEnrollment.status == "active")
+        .order_by(SpdEnrollment.id)
+        .all()
+    )
+    for (code,) in enrolled:
+        if target_for(db, code, "", metric) is not None:
+            return code
+    return ""
+
+
 def judge_measurement(db: Session, program_code: str, stage: str, metric: str, value) -> str:
     """按管理目标判定单次监测值的等级。没有目标就是 normal，见 `spd/rules.py::judge_level`。"""
     target = target_for(db, program_code, stage, metric)

@@ -3366,7 +3366,7 @@ async function renderSpdMember() {
           `<option value="${m}"></option>`).join("")}</datalist>
         <input name="value" type="number" step="any" placeholder="数值" required>
         <input name="unit" placeholder="单位" style="width:80px">
-        <select name="program_code">${programOptions}</select>
+        <select name="program_code"><option value="">病种：按在管档案判断</option>${spdProgramOptions(catalog)}</select>
         <input name="note" placeholder="备注">
         <button>录入</button>
       </form><p class="msg" id="spd-meas-msg"></p>

@@ -1257,7 +1257,7 @@ async function renderSpdMeasure(box) {
         <option value="spo2">血氧饱和度(%)</option>
       </select>
       <input id="spd-value" type="number" step="any" placeholder="数值" required>
-      <input id="spd-program" placeholder="病种编码（可留空）">
+      <input id="spd-program" placeholder="病种编码（可留空：按您在管的病种判断）">
       <button type="submit">保存</button>
       <p id="spd-measure-msg" class="msg"></p>
     </form>

@@ -47,7 +47,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
-                       close_followup_record, judge_measurement, measure_value_problem, scale_program_mismatch,
+                       close_followup_record, judge_measurement, measure_program_for, measure_value_problem, scale_program_mismatch,
                        scale_unusable, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
@@ -364,20 +364,22 @@ def add_measurement(
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
+    # 没写病种的按在管档案推断（P1-138）：居民端的病种是个「可留空」的文本框，居民不认得编码，原先一律判「正常」
+    program_code = measure_program_for(db, patient.id, body.program_code, body.metric)
     enrollment = (
         db.query(SpdEnrollment)
         .filter(
             SpdEnrollment.patient_id == patient.id,
-            SpdEnrollment.program_code == body.program_code,
+            SpdEnrollment.program_code == program_code,
         )
         .first()
-        if body.program_code else None
+        if program_code else None
     )
     level = judge_measurement(
-        db, body.program_code, enrollment.stage if enrollment else "", body.metric, body.value
+        db, program_code, enrollment.stage if enrollment else "", body.metric, body.value
     )
     record = SpdMeasurement(
-        patient_id=patient.id, program_code=body.program_code, metric=body.metric,
+        patient_id=patient.id, program_code=program_code, metric=body.metric,
         value=body.value, unit=body.unit, level=level, source=body.source,
         device_sn=body.device_sn, note=body.note,
     )
