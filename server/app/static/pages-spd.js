@@ -252,6 +252,14 @@ function spdQuestionFields(items, prefix) {
   });
 }
 
+/** 同一量表编码只留最新发布的一版（P1-136）：筛查与评估都按编码取**最新发布**的那版评分，下拉里列着旧版，
+ * 选了旧版就是按旧版的题目作答、按新版的题目与分值评分。catalog.scales 只含已发布的。 */
+function spdLatestScales(scales) {
+  const latest = new Map();
+  for (const s of scales || []) if (!latest.has(s.code) || latest.get(s.code).id < s.id) latest.set(s.code, s);
+  return [...latest.values()].sort((a, b) => a.id - b.id);
+}
+
 // 与 spdQuestionFields 配对：没答的题不进 answers（规则按「没有这个字段」处理，不当成答了空串或 0）；
 // 多选拆成列表，数值题能读成数就交数
 function spdCollectAnswers(items, form, prefix) {
@@ -1394,7 +1402,7 @@ async function renderSpdPatients() {
   const syncScreenScales = () => {
     const program = $("#spd-screen-form select[name=program_code]").value;
     $("#spd-screen-form select[name=scale_code]").innerHTML = '<option value="">不使用量表</option>'
-      + catalog.scales.filter((s) => s.category === "screen" && (!s.program_code || s.program_code === program))
+      + spdLatestScales(catalog.scales).filter((s) => s.category === "screen" && (!s.program_code || s.program_code === program))
         .map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
   };
   syncScreenScales();
@@ -1471,9 +1479,21 @@ async function renderSpdPatients() {
        <td>${v.confirmed ? '<span class="tag green">已确认</span>' : '<span class="tag orange">待确认</span>'}</td>
        <td>${v.confirmed ? "—" : `<button class="btn secondary" data-confirm="${v.id}">确认迁入</button>`}</td></tr>`);
   };
-  $("#spd-screen-form").onsubmit = (e) => {
+  $("#spd-screen-form").onsubmit = async (e) => {
     e.preventDefault();
-    return postAction("/api/spd/screenings", formJson(e.target, ["patient_id"]), "#spd-screen-msg");
+    const body = formJson(e.target, ["patient_id"]);
+    // 选了量表就逐题作答（P1-136）：原先只送量表编码、不送作答，量表评分恒 0、风险恒「低危」——「量表评分与病种规则
+    // 双通道判定」里量表这一条从界面上判不出任何人。没答的题不交（按 0 分、不算已答），与执行随访同一套写法
+    if (body.scale_code) {
+      const brief = spdLatestScales(catalog.scales).find((x) => x.code === body.scale_code);
+      let scale;
+      try { scale = await api(`/api/spd/scales/${brief.id}`); }
+      catch (err) { return setMsg("#spd-screen-msg", err.message, false); }
+      const picked = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, spdQuestionFields(scale.items, "q_"));
+      if (!picked) return;
+      body.answers = spdCollectAnswers(scale.items, picked, "q_");
+    }
+    return postAction("/api/spd/screenings", body, "#spd-screen-msg");
   };
   $("#spd-autoscreen-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -3362,7 +3382,7 @@ async function renderSpdMember() {
       <p class="desc">选择患者与已发布量表逐题作答，自动评分、给出风险等级并回写纳管档案</p>
       <form class="inline" id="spd-assess-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
-        <select name="scale_id">${catalog.scales.map((s) =>
+        <select name="scale_id">${spdLatestScales(catalog.scales).map((s) =>
           `<option value="${s.id}">${esc(s.name)}（${esc(s.code)}）</option>`).join("")}</select>
         <button>开展评估</button>
       </form><p class="msg" id="spd-assess-msg"></p>
@@ -3479,29 +3499,14 @@ async function renderSpdMember() {
     e.preventDefault();
     const picked = formJson(e.target, ["patient_id", "scale_id"]);
     const scale = await api(`/api/spd/scales/${picked.scale_id}`);
-    /* 逐题构造模态字段：single→下拉；multi→逗号分隔文本；number→数字。
-     * 选项 value 用 label 本身——score_scale 就是按 label 查分值表的。 */
-    const fields = (scale.items || []).map((item) => {
-      if (item.type === "number") {
-        return { name: item.key, label: item.title, type: "number" };
-      }
-      if (item.type === "multi") {
-        return { name: item.key, label: `${item.title}（多选，逗号分隔）`,
-                 placeholder: (item.options || []).map((o) => o.label).join("/") };
-      }
-      return { name: item.key, label: item.title, type: "select",
-               options: (item.options || []).map((o) => ({ value: o.label, label: o.label })) };
-    });
+    /* 逐题作答与执行随访同一套写法（P1-136）：单选默认「（未答）」、数值题用文本框、没答的题不交。原先单选默认选中
+     * 第一个选项、数值题空着读成 0——没答的题被当成答了「是」（种子量表里分值高的那个），评估结论回写档案风险等级，
+     * 高危还自动派干预与复诊。选项 value 用 label 本身——score_scale 就是按 label 查分值表的。 */
+    const fields = spdQuestionFields(scale.items, "q_");
     if (!fields.length) return setMsg("#spd-assess-msg", "该量表没有题目，先去量表配置补齐", false);
-    const answersRaw = await spdModal(`${scale.name} · 逐题作答`, fields);
+    const answersRaw = await spdModal(`${scale.name} · 逐题作答（没答的题留空）`, fields);
     if (!answersRaw) return;
-    const answers = {};
-    (scale.items || []).forEach((item) => {
-      const v = answersRaw[item.key];
-      answers[item.key] = item.type === "multi"
-        ? String(v || "").split(/[，,]/).map((s) => s.trim()).filter(Boolean)
-        : v;
-    });
+    const answers = spdCollectAnswers(scale.items, answersRaw, "q_");
     try {
       const r = await api("/api/spd/assessments", { method: "POST", body: JSON.stringify({
         patient_id: picked.patient_id, scale_code: scale.code, answers }) });

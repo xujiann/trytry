@@ -1666,7 +1666,9 @@ async function showConsultThread(consultId, consult, send) {
 }
 
 async function renderSpdScreen(box) {
-  const scales = await authApi("/api/portal/spd/scales");
+  // 同一量表编码只留最新发布的一版（P1-136）：自查按编码取最新发布版评分，下拉里留着旧版，
+  // 选了旧版就是按旧版的题目作答、按新版评分。接口按 id 升序给，后来的覆盖先来的
+  const scales = [...new Map((await authApi("/api/portal/spd/scales")).map((s) => [s.code, s])).values()];
   if (!scales.length) {
     box.innerHTML = '<p class="empty">暂无可用的自查问卷</p>';
     return;
@@ -1686,11 +1688,13 @@ async function renderSpdScreen(box) {
       ${kv("状态", esc({ pending: "待受理", accepted: "已受理", rejected: "未通过" }[a.status] || a.status))}
       ${a.handle_note ? kv("处理意见", esc(a.handle_note)) : ""}</div>`).join("")}`;
 
+  // 每题默认「（未答）」、没答的题不交（P1-136，与线上自助随访同一写法）：原先默认选中第一个选项，
+  // 一题没碰就交卷等于每题都答了「是」（种子量表里分值高的那个），结论是高危、还会提示申请专病服务
   const drawItems = () => {
     const scale = scales.find((s) => s.code === $("#spd-scale").value);
     $("#spd-scale-items").innerHTML = (scale.items || []).map((item) => `
       <div class="kv"><span class="k">${esc(item.title)}</span>
-        <select data-q="${esc(item.key)}">${(item.options || []).map((o) =>
+        <select data-q="${esc(item.key)}"><option value="">（未答）</option>${(item.options || []).map((o) =>
           `<option value="${esc(o.label)}">${esc(o.label)}</option>`).join("")}</select></div>`).join("");
   };
   if (scaleTokenFromQr) {
@@ -1709,7 +1713,7 @@ async function renderSpdScreen(box) {
   $("#spd-screen-submit").addEventListener("click", async () => {
     const scale = scales.find((s) => s.code === $("#spd-scale").value);
     const answers = {};
-    document.querySelectorAll("[data-q]").forEach((sel) => { answers[sel.dataset.q] = sel.value; });
+    document.querySelectorAll("[data-q]").forEach((sel) => { if (sel.value) answers[sel.dataset.q] = sel.value; });
     const body = { program_code: scale.program_code, scale_code: scale.code, answers };
     if (viewingPatientId !== null) body.patient_id = viewingPatientId;
     try {

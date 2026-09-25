@@ -1513,6 +1513,65 @@ def test_筛查登记的量表随病种联动_不列别的病种的量表(page, 
     expect(scales.filter(has_text="高血压高危筛查问卷")).to_have_count(0)
 
 
+@pytest.fixture(scope="session")
+def scale136(admin_call):
+    """同一编码两版都发布：v2 比 v1 多两道题——筛查与评估都按编码取**最新发布**的那版评分。"""
+    yes_no = lambda yes: [{"label": "是", "score": yes}, {"label": "否", "score": 0}]   # noqa: E731
+    salt = {"key": "salt", "title": "口味偏咸", "type": "single", "options": yes_no(2)}
+    ranges = {"ranges": [{"min": 0, "max": 2, "risk": "low"}, {"min": 3, "max": None, "risk": "high"}]}
+    versions = {}
+    for version, items in (("v1", [salt]), ("v2", [
+            salt, {"key": "family", "title": "直系亲属有高血压（v2 新增）", "type": "single", "options": yes_no(3)},
+            {"key": "smoke", "title": "吸烟", "type": "single", "options": yes_no(1)}])):
+        scale = admin_call("POST", "/api/spd/scales", {
+            "code": "E2E_SCR136", "version": version, "name": f"E2E高血压自评{version}", "category": "screen",
+            "program_code": "hypertension", "items": items, "scoring": ranges})
+        admin_call("POST", f"/api/spd/scales/{scale['id']}/publish")
+        versions[version] = scale["id"]
+    return versions
+
+
+def test_筛查登记选了量表要逐题作答_同一量表只列最新发布的一版(page, base_url, admin_call, admin_read, scale136):
+    """P1-136：筛查登记的表单原先只送量表编码、不送作答——量表评分恒 0、风险恒「低危」，「量表评分与病种规则双通道判定」
+    里量表这一条从界面上判不出任何人。现在选了量表先逐题作答（默认「（未答）」，没答的题不交）。下拉原先把同一编码
+    已发布的两版都列出来，而后端按编码取最新发布的那版评分——选了旧版就是按旧版的题作答、按新版评分。"""
+    patient = admin_call("POST", "/api/patients", {"name": "E2E筛查作答", "id_card": "320981199306060136"})
+    _login(page, base_url)
+    _open_page(page, "spdpatients", "筛查建档与纳管")
+    form = page.locator("#spd-screen-form")
+    form.locator('[name="patient_id"]').fill(str(patient["id"]))
+    form.locator('[name="program_code"]').select_option("hypertension")
+    expect(form.locator('[name="scale_code"] option[value="E2E_SCR136"]')).to_have_count(1)   # 修前两版各一项
+    form.locator('[name="scale_code"]').select_option("E2E_SCR136")
+    form.locator("button").click()
+    expect(_modal(page)).to_contain_text("直系亲属有高血压（v2 新增）")   # 最新发布的那版的题目
+    expect(_modal(page).locator('[name="q_smoke"]')).to_have_value("")   # 默认「（未答）」
+    _redrawn(page, lambda: _spd_modal(page, {"q_salt": "是", "q_family": "是"}))
+    screening = admin_read(f"/api/spd/screenings?patient_id={patient['id']}")[0]
+    assert screening["answers"] == {"salt": "是", "family": "是"}, screening   # 修前 {}：没答的「吸烟」不交
+    assert (screening["score"], screening["risk_level"], screening["result"]) == (5, "high", "suspect"), screening
+
+
+def test_量表评估的单选默认未答_没答的题不交(page, base_url, seed, admin_call, admin_read, scale136):
+    """P1-136：评估的逐题作答原先单选默认选中第一个选项、数值题空着读成 0——没答的题被当成答了「是」（种子量表里分值高的
+    那个），评估结论回写档案风险等级，高危还自动派干预与复诊。现在与执行随访同一套写法。"""
+    patient = admin_call("POST", "/api/patients", {"name": "E2E评估作答", "id_card": "320981199307070136"})
+    admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    _login(page, base_url)
+    _open_page(page, "spdmember", "服务团队成员端·日常服务")
+    form = page.locator("#spd-assess-form")
+    form.locator('[name="patient_id"]').fill(str(patient["id"]))
+    expect(form.locator(f'[name="scale_id"] option[value="{scale136["v1"]}"]')).to_have_count(0)   # 旧版不列
+    form.locator('[name="scale_id"]').select_option(str(scale136["v2"]))
+    form.locator("button").click()
+    expect(_modal(page).locator('[name="q_family"]')).to_have_value("")   # 修前默认「是」
+    _spd_modal(page, {"q_salt": "否", "q_smoke": "是"})
+    expect(page.locator("#spd-assess-msg")).to_contain_text("评估完成：1 分")   # 修前没答的「家族史」按「是」计，4 分高危
+    assessment = admin_read(f"/api/spd/assessments?patient_id={patient['id']}")[0]
+    assert assessment["answers"] == {"salt": "否", "smoke": "是"}, assessment
+
+
 def test_干预模板与服务包的下拉按病种联动(page, base_url, seed, admin_call):
     """P2-99：干预下发的模板下拉、绑服务包的弹窗原先列全部病种的——高血压患者下发到糖尿病的干预、绑上糖尿病的服务包。
     现在只列这个病种的与通用的（后端对不上的 422）。"""
@@ -3234,6 +3293,8 @@ def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
     page.click('[data-tab="spd"]')
     page.click('[data-spd="screen"]')
     page.wait_for_selector("#spd-scale")
+    # 每题默认「（未答）」（P1-136）：原先默认选中第一个选项，一题没碰就交卷等于每题都答了「是」
+    assert all(sel.input_value() == "" for sel in page.locator("[data-q]").all())
     for sel in page.locator("[data-q]").all():
         sel.select_option("是")
     page.click("#spd-screen-submit")
