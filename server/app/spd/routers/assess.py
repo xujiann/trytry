@@ -868,6 +868,21 @@ def _check_plan_items(db: Session, items: list[dict]) -> None:
     missing = [c for c in codes if c not in known]
     if missing:
         raise HTTPException(status_code=422, detail=f"以下指标不存在：{'、'.join(missing)}")
+    weight_problem = plan_weight_problem(items)
+    if weight_problem:
+        raise HTTPException(status_code=422, detail=weight_problem)
+
+
+def plan_weight_problem(items: list[dict]) -> str:
+    """条目权重不写（按指标库的默认权重计）、或写成不小于 0 的数；没问题返回空串（P2-108）。
+
+    原先照单全收：写成文字的计分时 `float()` 抛错，整张方案、所有考核对象一起 500；写成负数的倒扣分。建 / 改方案时 422；
+    计分时对存量里的坏权重逐指标记错、不 500（与 P2-79 的坏评分规则同一个处理）。显式写 null 的照旧按 0 计（修前就是）。"""
+    for item in items:
+        weight = item.get("weight")
+        if weight is not None and (not _is_number(weight) or weight < 0):
+            return f"考核方案里指标 {item.get('indicator_code')} 的权重必须是不小于 0 的数"
+    return ""
 
 
 # 考核方案层级、周期文案（措辞照抄 SpdAssessPlan.level / period_type 列注释——P2-74）
@@ -1050,6 +1065,10 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
             rule_problem = score_rule_problem(indicator.score_rule or {}, known_type_only=False)
             if rule_problem:
                 detail.append({"indicator_code": code, "error": f"评分规则非法：{rule_problem}"})
+                continue
+            weight_problem = plan_weight_problem([item])   # 修前存进去的坏权重：逐指标记错、不 500（P2-108）
+            if weight_problem:
+                detail.append({"indicator_code": code, "error": f"权重非法：{weight_problem}"})
                 continue
             score, reason = score_of(indicator, value)
             weight = float(item.get("weight", indicator.weight) or 0)
