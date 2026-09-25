@@ -436,10 +436,19 @@ def use_consumable(
         if surgery.patient_id != body.patient_id:
             # 耗材记到别人的手术上，追溯链就断了，这里必须拦
             raise HTTPException(status_code=422, detail="该手术不属于此患者")
-    item.status = "used"
-    item.used_patient_id = body.patient_id
-    item.used_surgery_id = body.surgery_id
-    item.used_at = utcnow()
+    # 状态闸门：判定与翻转同一条 SQL（P2-113，同 `_mark_received`）。原先判 in_stock 在内存里：同一条码并发登记给两位
+    # 患者，两路都判定在库、都 200，库里只留后写的那位——一枚耗材只植入了一个人，追溯链却可能记在另一个人身上，
+    # 按批号召回时找错人
+    used = cast(CursorResult, db.execute(
+        update(HighValueConsumable)
+        .where(HighValueConsumable.id == item.id, HighValueConsumable.status == "in_stock")
+        .values(status="used", used_patient_id=body.patient_id, used_surgery_id=body.surgery_id,
+                used_at=utcnow())
+    ))
+    if not used.rowcount:
+        db.rollback()
+        db.refresh(item)   # 抢输了就按真实状态措辞
+        raise HTTPException(status_code=409, detail=f"当前状态 {CONSUMABLE_STATUS_NAMES.get(item.status, item.status)} 不可使用")
     db.commit()
     db.refresh(item)
     return _consumable_out(db, item)
