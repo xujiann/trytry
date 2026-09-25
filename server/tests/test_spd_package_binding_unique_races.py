@@ -95,15 +95,17 @@ def world(pg_engine):
             patient = Patient(name=f"服务包竞态-{tag}", id_card=f"3309{tag}0011",
                               gender="男", birth_date="1960-01-01",
                               ehc_no=f"PKG-EHC-{tag}")  # 直连建档要自带健康卡号
+            # 通用包（病种留空）：每条用例各建一份病种不同的档案（见 `_new_enrollment`），而绑包要求包是档案
+            # 这个病种的或通用的（P2-99）——包上写死一个病种，每条用例都在病种校验上 422，根本走不到竞态
             package = SpdServicePackage(
                 code=f"pkgrace_{tag}", name=f"竞态服务包-{tag}",
-                program_code=f"pkgrace_dm_{tag}", price=200, period_days=30,
+                program_code="", price=200, period_days=30,
                 items=[{"code": "bp_check", "name": "血压测量", "times": 2, "price": 5}],
             )
             db.add_all([org, patient, package])
             db.commit()
             return {"Session": Session, "org_id": org.id, "patient_id": patient.id,
-                    "package_id": package.id, "program_code": package.program_code,
+                    "package_id": package.id, "program_code": f"pkgrace_dm_{tag}",
                     "tag": tag, "seq": 0}
 
     return _retrying(build, "建场景")
