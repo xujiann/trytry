@@ -19,13 +19,14 @@
 """
 import calendar
 import re
-from typing import Any
+from typing import Any, cast
 
 from secrets import randbelow
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator
-from sqlalchemy import func
+from sqlalchemy import func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1579,8 +1580,16 @@ def verify_redeem(
     )
     if record is None:
         raise HTTPException(status_code=404, detail="核销码无效或已核销")
-    record.status = "verified"
-    record.verified_by = user.id
-    record.verified_at = now_naive()
+    # 状态闸门：判定与翻转同一条 SQL（P2-115）。原先查到待核销就无条件改 verified：同一个码在两个点位同时出示，两路都查到
+    # 这张待核销单、都 200——兑换时只扣了一件库存、一份积分，奖品却发了两份
+    verified = cast(CursorResult, db.execute(
+        update(SpdRedeem)
+        .where(SpdRedeem.id == record.id, SpdRedeem.status == "pending")
+        .values(status="verified", verified_by=user.id, verified_at=now_naive())
+        .execution_options(synchronize_session=False)
+    ))
+    if not verified.rowcount:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="核销码无效或已核销")
     db.commit()
-    return {"id": record.id, "status": record.status}
+    return {"id": record.id, "status": "verified"}
