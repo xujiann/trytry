@@ -1755,8 +1755,11 @@ async function renderSpdPath() {
             : '<span class="tag">已停用</span>'}</td>
          <td><button class="btn secondary" data-tpl-nodes="${t.id}" data-status="${esc(t.status)}">节点</button>
              <button class="btn secondary" data-tpl-node="${t.id}">加节点</button>
-             <button class="btn secondary" data-tpl-pub="${t.id}">发布</button>
-             <button class="btn secondary" data-tpl-copy="${t.id}">复制</button></td></tr>`)}
+             ${t.status === "published"
+               ? `<button class="btn secondary" data-tpl-off="${t.id}">停用</button>`
+               : `<button class="btn secondary" data-tpl-pub="${t.id}">发布</button>`}
+             <button class="btn secondary" data-tpl-copy="${t.id}">复制</button>
+             <button class="btn danger" data-tpl-del="${t.id}" data-name="${esc(t.name)}">删除</button></td></tr>`)}
       <div id="spd-tpl-detail"></div>`)}
     ${panel("启动患者路径", `
       <form class="inline" id="spd-inst-form">
@@ -1915,6 +1918,7 @@ async function renderSpdPath() {
   $("#page-body").onclick = async (e) => {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const node = el("data-tpl-node"), pub = el("data-tpl-pub"), copy = el("data-tpl-copy");
+    const tplOff = el("data-tpl-off"), tplDel = el("data-tpl-del");
     const tplNodes = el("data-tpl-nodes"), nodeEdit = el("data-node-edit"), nodeDel = el("data-node-del");
     const adv = el("data-adv"), instDetail = el("data-inst-detail"), instAdjust = el("data-inst-adjust");
     const nodeCheck = el("data-node-check");
@@ -1941,6 +1945,20 @@ async function renderSpdPath() {
     }
     if (copy) {
       return postAction(`/api/spd/path-templates/${copy.dataset.tplCopy}/copy`, {}, "#spd-tpl-msg");
+    }
+    // 停用：不再给新患者启动，在跑的照走（P2-97 起有人在走的路径节点改不动）；再点「发布」即恢复
+    if (tplOff) {
+      return postAction(`/api/spd/path-templates/${tplOff.dataset.tplOff}/status`, { status: "disabled" }, "#spd-tpl-msg");
+    }
+    // 删除只给没有患者走过的（后端 409 挡住已被引用的，让停用）；原先只有接口能删（P2-93）
+    if (tplDel) {
+      if (!await spdModal(`删除路径「${tplDel.dataset.name}」`, [], {
+        intro: "连同全部节点一并删除，不能恢复。已有患者走过的路径不能删，只能停用。" })) return;
+      try {
+        await api(`/api/spd/path-templates/${tplDel.dataset.tplDel}`, { method: "DELETE" });
+        route();
+      } catch (err) { setMsg("#spd-tpl-msg", err.message, false); }
+      return;
     }
     if (tplNodes) return showNodes(tplNodes.dataset.tplNodes);
     if (nodeEdit) {
@@ -2999,7 +3017,8 @@ async function renderSpdReport() {
          <td>${esc(t.last_run_at ? t.last_run_at.replace("T", " ").slice(0, 16) : "—")}</td>
          <td><button class="btn secondary" data-rpt-run="${t.id}">立即执行</button>
              <button class="btn secondary" data-rpt-toggle="${t.id}" data-s="${t.status === "active" ? "paused" : "active"}">
-               ${t.status === "active" ? "暂停" : "启用"}</button></td></tr>`)}`)}
+               ${t.status === "active" ? "暂停" : "启用"}</button>
+             <button class="btn danger" data-rpt-del="${t.id}" data-name="${esc(t.name)}">删除</button></td></tr>`)}`)}
     ${panel("已生成报告", `
       ${table(["ID", "标题", "周期", "层级", "生成时间", "操作"], instances, (r) =>
         `<tr><td>${r.id}</td><td>${esc(r.title)}</td><td>${esc(r.period_label)}</td>
@@ -3019,6 +3038,17 @@ async function renderSpdReport() {
   $("#page-body").onclick = async (e) => {
     const run = e.target.closest("[data-rpt-run]");
     const toggle = e.target.closest("[data-rpt-toggle]");
+    const del = e.target.closest("[data-rpt-del]");
+    // 删除只给没生成过报告的（后端 409：生成过的改为暂停）；原先只有接口能删（P2-93）
+    if (del) {
+      if (!await spdModal(`删除推送任务「${del.dataset.name}」`, [], {
+        intro: "删除后不能恢复。已生成过报告的任务不能删，不再推送请改为暂停。" })) return;
+      try {
+        await api(`/api/spd/report-tasks/${del.dataset.rptDel}`, { method: "DELETE" });
+        route();
+      } catch (err) { setMsg("#spd-rpttask-msg", err.message, false); }
+      return;
+    }
     const view = e.target.closest("[data-rpt-view]");
     const edit = e.target.closest("[data-rpt-edit]");
     if (edit) {

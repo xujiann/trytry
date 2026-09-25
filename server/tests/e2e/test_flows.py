@@ -1591,6 +1591,41 @@ def test_运行中枢能新建宣教素材与接入数据源(page, base_url, adm
     assert (source["name"], source["source_type"], source["freq_minutes"]) == ("E2E 检验系统", "LIS", 30), source
 
 
+def test_路径模板与推送任务能在界面上删除_用过的删不掉改停用(page, base_url, seed, admin_call, admin_read):
+    """P2-93（动词级孤儿）：删路径模板、删报告推送任务原先只有接口——建错了的草稿在界面上删不掉。后端早就挡着用过的
+    （有患者走过的路径、生成过报告的任务 409）；路径模板的 409 让人「停用」，页面上原先也没有停用按钮。"""
+    hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")
+    draft = admin_call("POST", "/api/spd/path-templates", {"program_id": hyp["id"], "code": "E2E_DEL_TPL",
+                                                          "name": "E2E待删路径"})
+    used = admin_call("POST", "/api/spd/path-templates", {"program_id": hyp["id"], "code": "E2E_USED_TPL",
+                                                         "name": "E2E在用路径"})
+    admin_call("POST", f"/api/spd/path-templates/{used['id']}/nodes", {"key": "n1", "name": "首诊", "seq": 1})
+    admin_call("POST", f"/api/spd/path-templates/{used['id']}/status", {"status": "published"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E在用路径患者", "id_card": "320981199404040499"})
+    enrollment = admin_call("POST", "/api/spd/enrollments", {
+        "patient_id": patient["id"], "program_code": "hypertension", "org_id": seed["org"]["id"]})
+    admin_call("POST", "/api/spd/path-instances", {"enrollment_id": enrollment["id"], "template_id": used["id"]})
+
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.click(f'button[data-tpl-del="{draft["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    assert all(t["id"] != draft["id"] for t in admin_read("/api/spd/path-templates?limit=100"))
+    page.click(f'button[data-tpl-del="{used["id"]}"]')
+    _spd_modal(page, {})
+    expect(page.locator("#spd-tpl-msg")).to_contain_text("只能停用不能删除")
+    _redrawn(page, lambda: page.click(f'button[data-tpl-off="{used["id"]}"]'))
+    assert admin_read(f"/api/spd/path-templates/{used['id']}")["status"] == "disabled"
+
+    template = admin_read("/api/spd/report-templates")[0]
+    task = admin_call("POST", "/api/spd/report-tasks", {"code": "E2E_DEL_RPT", "name": "E2E待删推送",
+                                                        "template_id": template["id"]})
+    _open_page(page, "spdreport", "智能辅助报告端")
+    page.click(f'button[data-rpt-del="{task["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    assert all(t["id"] != task["id"] for t in admin_read("/api/spd/report-tasks"))
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""

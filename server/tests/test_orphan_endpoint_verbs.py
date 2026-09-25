@@ -61,8 +61,6 @@ KNOWN: set[str] = {
     "POST /api/consents/corrections",
     # 删除只有接口（页面有启停，没有删）
     "DELETE /api/dataquality/rules/{rule_id}",
-    "DELETE /api/spd/path-templates/{template_id}",
-    "DELETE /api/spd/report-tasks/{task_id}",
 }
 
 
