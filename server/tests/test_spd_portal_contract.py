@@ -260,7 +260,8 @@ def test_全流程视图的三层嵌套(client, auth):
     assert set(prog["paths"][0]) == {"id", "template_code", "current_node_key",
                                      "progress", "status"}
     assert isinstance(prog["paths"][0]["progress"], int)   # Integer 列，不是百分比 float
-    assert set(prog["referrals"][0]) == {"id", "direction", "status", "created_at"}
+    # status_name：后端给的居民端文案（P2-67 连带），手机页显示它而不是英文状态码
+    assert set(prog["referrals"][0]) == {"id", "direction", "status", "status_name", "created_at"}
 
 
 def test_任务清单与随访与干预与宣教与复诊的键集合(client, auth):
@@ -275,7 +276,8 @@ def test_任务清单与随访与干预与宣教与复诊的键集合(client, au
     assert planned["executed_at"] == ""      # 未执行：空串，不是 null
     interventions = client.get(f"{B}/interventions", headers=auth).json()
     assert set(interventions[0]) == {"id", "goal", "content", "measures", "frequency",
-                                     "next_at", "status", "feedback", "read", "created_at"}
+                                     "next_at", "status", "status_name", "feedback", "read",
+                                     "created_at"}   # status_name：P2-67，与医生端同一套文案
     edu = client.get(f"{B}/edu", headers=auth).json()
     assert set(edu[0]) == {"id", "material_id", "title", "media_type", "content",
                            "media_url", "status", "created_at"}
