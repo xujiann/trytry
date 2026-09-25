@@ -338,7 +338,7 @@ def test_写侧端点的响应形状(client, auth, seeded):
     answered = client.post(f"{B}/followups/{seeded['fu']}/self-answer", headers=auth,
                            json={"answers": {"a": 1}})
     assert answered.status_code == 200
-    assert set(answered.json()) == {"id", "abnormal_level", "action"}
+    assert set(answered.json()) == {"id", "abnormal_level", "abnormal_level_name", "action"}
 
     feedback = client.post(f"{B}/interventions/{seeded['interv']}/feedback", headers=auth,
                            json={"feedback": "已做到", "done": False})

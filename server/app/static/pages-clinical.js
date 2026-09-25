@@ -355,7 +355,7 @@ async function renderConsents() {
     $("#ct-table").innerHTML = table(
       ["时间", "场景", "文本版本", "方式", "凭证", "状态", "操作"], rows, (r) =>
       `<tr><td>${esc((r.created_at || "").replace("T", " ").slice(0, 19))}</td>
-       <td>${esc(r.scene)}</td><td>${esc(r.text_version)}</td><td>${esc(r.method)}</td>
+       <td>${esc(r.scene_name)}</td><td>${esc(r.text_version)}</td><td>${esc(r.method_name)}</td>
        <td>${esc(r.evidence || "—")}</td>
        <td>${r.revoked_at
          ? `<span class="tag">已撤回</span> <span class="desc">${
@@ -369,7 +369,7 @@ async function renderConsents() {
                 includeInactive ? "active_only=false" : ""].filter(Boolean).join("&");
     const rows = await api(`/api/consents/texts${qs ? `?${qs}` : ""}`);
     $("#tx-table").innerHTML = table(["ID", "场景", "版本", "状态", "正文"], rows, (t) =>
-      `<tr><td>${t.id}</td><td>${esc(t.scene)}</td><td><span class="tag">${esc(t.version)}</span></td>
+      `<tr><td>${t.id}</td><td>${esc(t.scene_name)}</td><td><span class="tag">${esc(t.version)}</span></td>
        <td>${statusTag(TEXT_STATUS, t.active ? "on" : "off")}</td>
        <td style="white-space:pre-wrap">${esc(t.content) || "—"}</td></tr>`);
   };

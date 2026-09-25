@@ -46,6 +46,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import REFERRAL_STATUS_LABELS, close_followup_record, judge_measurement, measure_value_problem
+from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
 from ..platform import (
@@ -936,6 +937,8 @@ class SelfFollowupIn(BaseModel):
 class SpdSelfAnswerOut(BaseModel):
     id: int
     abnormal_level: str
+    # 后端给的分级文案（P2-73）：手机页原先弹「系统判定为high异常」
+    abnormal_level_name: str
     # 无问卷或无异常规则命中时为空串
     action: str
 
@@ -980,7 +983,7 @@ def self_answer_followup(
             db.add(
                 SpdTask(
                     program_code=record.program_code, patient_id=patient.id,
-                    task_type="report", title=f"自助随访异常处置：{action or level}",
+                    task_type="report", title=f"自助随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}",
                     org_id=record.org_id, status="pending",
                     priority=3 if level == "high" else 2,
                     due_date=(clock.today() + timedelta(days=1)).isoformat(),
@@ -988,7 +991,9 @@ def self_answer_followup(
                 )
             )
     db.commit()
-    return {"id": record.id, "abnormal_level": record.abnormal_level, "action": action}
+    return {"id": record.id, "abnormal_level": record.abnormal_level,
+            "abnormal_level_name": ABNORMAL_LEVEL_NAMES.get(record.abnormal_level, record.abnormal_level),
+            "action": action}
 
 
 #: 干预任务四个状态的中文——与医生端同一套（`pages-spd.js` 的干预状态、`spd_interventions.status` 列注释）。

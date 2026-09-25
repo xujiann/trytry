@@ -6,6 +6,9 @@
 特病申报队列那一处还是裸插值 `${a.status}`（值只由服务端写，眼下不可利用，但违反 §8「innerHTML 插值
 不得漏转义」）。
 
+同日把字段从状态扩到场景（`scene`）与异常分级（`abnormal_level`）又扫出 11 处（P2-73）：随访各表显示 `inpatient`，
+居民自助随访后手机上弹「系统判定为high异常」，同意书管理页显示 `chronic_enroll` / `self`。
+
 修法：出参补后端给的 `status_name`（与既有 `MAP.get(code, code)` 惯例一致：表外的值原样回显，
 「后端加了新状态、表还没跟上」的现场看得见），页面改显示它；同一文件里已有同一套状态文案表的
 （慢专病复诊、任务）直接复用那张表，不另起一份措辞。
@@ -31,6 +34,7 @@ STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
 #: 零基线（`scripts/dump_gate_status.py` 把它列进闸门现状）。
 #: 2026-09-25 实测（修前 377c0fe）：页面文字里原样的状态码插值 18 处，按设计 3 → 其余 15 处已改显示后端文案
 #: （初版判据漏了带兜底的写法，量出 17；补上后多认出凭证核验页那一处）。
+#: 同日字段扩到场景 / 异常分级（P2-73，修前 27328ed）：场景 8 处 + 异常分级 3 处 → 0，按设计名单不变。
 BASELINE = 0
 
 #: 按设计原样显示的（`(文件, 插值)` → 理由）。**只减不增**；每条只抵一处——同一文件再添一句同样的插值照样红。
@@ -43,7 +47,9 @@ BY_DESIGN = {
         "ESB 流程执行记录的步骤结果快照（`步骤.类型=结果`），给对接工程师排障的技术串，整串已 esc()",
 }
 
-_FIELD = r"([A-Za-z_$][\w$]*)\.(?:[a-z_]*_)?status"
+#: 判的字段：状态（`status` / `*_status`）、场景（`scene`）、异常分级（`abnormal_level`）——后两个是 P2-73 补进来的，
+#: 都是后端的封闭码表、都曾原样显示（随访看板的 inpatient、居民手机上的「系统判定为high异常」）。
+_FIELD = r"([A-Za-z_$][\w$]*)\.(?:(?:[a-z_]*_)?status|scene|abnormal_level)"
 #: 把状态码原样放进页面的写法：`esc(x.status)`（插值或字符串拼接里）、裸插值 `${x.status}`、两者带兜底
 #: （`${x.status || "未知"}` / `esc(x.status ?? "")`——有值时显示的照样是原码）、裸拼接 `+ x.status +`。
 #: `status_name` / `status_code` 不命中（`status` 后面必须紧跟右括号、右花括号、兜底运算符或加号）。
@@ -106,6 +112,7 @@ def test_判据自证_三种写法都认得出_写对的放过(tmp_path):
         "c = `<td>${d.critical_status}</td>`;\n"
         "e = '<span class=\"tag\">' + esc(f.status) + '</span>' + g.status + '';\n"
         "s = `<b>${esc(t.status || \"—\")}</b><b>${u.credential_status ?? \"未知\"}</b>`;\n"
+        "v = `<td>${esc(w.scene)}</td><td>${esc(x.scene_name)}</td>判定为${y.abnormal_level}异常`;\n"
         # 应放过的：后端文案、查表组件、属性值、HTTP 状态码、别的字段、注释
         "h = `<td>${esc(i.status_name)}</td><td>${statusTag(MAP, j.status)}</td>`;\n"
         "k = `<button data-status=\"${esc(l.status)}\">改</button>`;\n"
@@ -117,7 +124,8 @@ def test_判据自证_三种写法都认得出_写对的放过(tmp_path):
     hits = [(snippet, lineno) for _, snippet, lineno in raw_status_displays([probe])]
     assert hits == [("esc(b.status)", 1), ("${d.critical_status}", 2),
                     ("esc(f.status)", 3), ("+ g.status +", 3),
-                    ("esc(t.status ||", 4), ("${u.credential_status ??", 4)], hits
+                    ("esc(t.status ||", 4), ("${u.credential_status ??", 4),
+                    ("esc(w.scene)", 5), ("${y.abnormal_level}", 5)], hits
 
 
 def test_判据自证_同一插值每条豁免只抵一处(tmp_path, monkeypatch):
@@ -137,20 +145,24 @@ def test_判据自证_扫描面覆盖三端():
 
 # ================================================================ 文案表对照列注释
 def _column_codes(model, column: str) -> set[str]:
-    """模型源码里 `column: Mapped…` 上方那行注释列出的状态码（`code=文案` 形状，`""` 也算一个）。"""
+    """模型源码里 `column: Mapped…` 上方紧挨着的注释块列出的码（`code=文案` 形状，`""` 也算一个；注释可跨行）。"""
     lines = inspect.getsource(model).splitlines()
     at = next(i for i, line in enumerate(lines) if re.match(rf"\s+{column}: Mapped", line))
-    comment = lines[at - 1].strip()
-    assert comment.startswith("#"), f"{model.__name__}.{column} 上方没有列出状态码的注释"
-    return {"" if code == '""' else code for code in re.findall(r'(""|[a-z][a-z_]*)=', comment)}
+    block = []
+    while at > 0 and lines[at - 1].strip().startswith("#"):
+        at -= 1
+        block.append(lines[at])
+    assert block, f"{model.__name__}.{column} 上方没有列出取值的注释"
+    return {"" if code == '""' else code for code in re.findall(r'(""|[a-z][a-z_]*)=', "\n".join(block))}
 
 
 def _label_tables():
-    from app.models import (Admission, EmergencyCase, ExamReport, SpecialDiseaseApp, SpdCenter,
-                            SpdFollowupRecord, TcmPreparationBatch, TrainingEnrollment, TrainingPlan,
-                            VisitCredential)
-    from app.routers import credentials, education, emergency, exams, insurance, tcm
+    from app.models import (Admission, ConsentRecord, EmergencyCase, ExamReport, SpecialDiseaseApp, SpdCenter,
+                            SpdFollowupRecord, SpdFollowupRule, SpdPathTemplate, TcmPreparationBatch,
+                            TrainingEnrollment, TrainingPlan, VisitCredential)
+    from app.routers import consents, credentials, education, emergency, exams, insurance, tcm
     from app.spd.routers import followup, workbench
+    from app.spd.routers.config import paths
 
     # (文案表, 模型, 列, 按设计不进表的码)
     return {
@@ -169,6 +181,13 @@ def _label_tables():
         "followup.ADMISSION_STATUS_NAMES": (followup.ADMISSION_STATUS_NAMES, Admission, "status", set()),
         # 既有的表，本批起凭证核验回执也用它
         "credentials.STATUS_NAMES": (credentials.STATUS_NAMES, VisitCredential, "status", set()),
+        # P2-73：场景 / 异常分级 / 同意方式
+        "followup.FOLLOWUP_SCENE_NAMES": (followup.FOLLOWUP_SCENE_NAMES, SpdFollowupRule, "scene", set()),
+        "followup.ABNORMAL_LEVEL_NAMES":
+            (followup.ABNORMAL_LEVEL_NAMES, SpdFollowupRecord, "abnormal_level", set()),
+        "consents.CONSENT_SCENE_NAMES": (consents.CONSENT_SCENE_NAMES, ConsentRecord, "scene", set()),
+        "consents.CONSENT_METHOD_NAMES": (consents.CONSENT_METHOD_NAMES, ConsentRecord, "method", set()),
+        "paths.PATH_SCENE_NAMES": (paths.PATH_SCENE_NAMES, SpdPathTemplate, "scene", set()),
     }
 
 
@@ -178,6 +197,8 @@ LABEL_TABLE_NAMES = [
     "education.ENROLLMENT_STATUS_NAMES", "insurance.SPECIAL_DISEASE_STATUS_NAMES", "exams.CRITICAL_STATUS_NAMES",
     "workbench.CENTER_STATUS_NAMES", "followup.FOLLOWUP_STATUS_NAMES", "followup.ADMISSION_STATUS_NAMES",
     "credentials.STATUS_NAMES",
+    "followup.FOLLOWUP_SCENE_NAMES", "followup.ABNORMAL_LEVEL_NAMES", "consents.CONSENT_SCENE_NAMES",
+    "consents.CONSENT_METHOD_NAMES", "paths.PATH_SCENE_NAMES",
 ]
 
 

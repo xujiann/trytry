@@ -1379,7 +1379,7 @@ async function renderSpdFollowups(box) {
         const r = await authApi(`/api/portal/spd/followups/${btn.dataset.spdSelf}/self-answer`, {
           method: "POST", body: JSON.stringify(body) });
         alert(r.abnormal_level && r.abnormal_level !== "none"
-          ? `已提交。系统判定为${r.abnormal_level}异常，${r.action || "医护将尽快联系您"}`
+          ? `已提交。系统判定为${r.abnormal_level_name}异常，${r.action || "医护将尽快联系您"}`
           : "已提交，感谢配合");
         await loadSpd();
       } catch (err) { alert(err.message); }

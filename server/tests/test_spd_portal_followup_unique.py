@@ -439,7 +439,7 @@ def test_居民自助随访第二次是409且医护再执行同样被挡(client,
         headers=world["ph"],
     )
     assert first.status_code == 200, first.text
-    assert first.json() == {"id": record_id, "abnormal_level": "high",
+    assert first.json() == {"id": record_id, "abnormal_level": "high", "abnormal_level_name": "重度",
                             "action": "立即上转评估"}
     again = client.post(
         f"{P}/followups/{record_id}/self-answer", json={"answers": {"pain": 8}},
@@ -554,3 +554,48 @@ def test_随访办结必须是条件更新且处置任务只在命中后派():
         assert src.index("close_followup_record(") < src.index("SpdTask("), (
             f"{func.__name__} 必须先过闸门再派处置任务"
         )
+
+
+# ================================================================ 文案：没配处置措施时的任务标题（P2-73）
+def test_异常规则没写处置措施_派出的任务标题用分级文案而不是英文码(client, h, world):
+    """问卷异常规则只写了级别、没写 action 时，处置任务标题原先是「随访异常处置：high」——待办列表上
+    给医护看的就是这个英文码。医护执行与居民自助两个入口同一个写法，都改成分级文案。"""
+    questionnaire = client.post(
+        f"{B}/questionnaires",
+        json={"code": "uq_fu_q_noact", "name": "无处置措施问卷", "scene": "inpatient",
+              "items": [{"key": "pain", "title": "疼痛评分", "type": "number"}],
+              "abnormal_rules": [{"when": {"field": "pain", "op": ">=", "value": 7}, "level": "high"}],
+              "track_dept": "内科", "handle_role": "doctor"},
+        headers=h,
+    )
+    assert questionnaire.status_code == 201, questionnaire.text
+    rule = client.post(
+        f"{B}/followup-rules",
+        json={"code": "uq_fu_rule_noact", "name": "无处置措施随访", "scene": "inpatient",
+              "dept": "内科", "points": [0], "questionnaire_code": "uq_fu_q_noact"},
+        headers=h,
+    )
+    assert rule.status_code == 201, rule.text
+
+    def new_record():
+        resp = client.post(
+            f"{B}/followup-plans",
+            json={"patient_id": world["me"]["id"], "rule_id": rule.json()["id"], "org_id": world["org"]["id"]},
+            headers=h,
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["items"][0]["id"]
+
+    before = {t["id"] for t in _report_tasks(client, h, world["me"]["id"])}
+    executed = client.post(f"{B}/followup-records/{new_record()}/execute",
+                           json={"answers": {"pain": 9}}, headers=h)
+    assert executed.status_code == 200, executed.text
+    assert (executed.json()["abnormal_level"], executed.json()["abnormal_level_name"]) == ("high", "重度")
+    answered = client.post(f"{P}/followups/{new_record()}/self-answer",
+                           json={"answers": {"pain": 8}}, headers=world["ph"])
+    assert answered.status_code == 200, answered.text
+    assert answered.json() == {"id": answered.json()["id"], "abnormal_level": "high",
+                               "abnormal_level_name": "重度", "action": ""}
+    titles = sorted(t["title"] for t in _report_tasks(client, h, world["me"]["id"]) if t["id"] not in before)
+    # 修前：["自助随访异常处置：high", "随访异常处置：high"]
+    assert titles == ["自助随访异常处置：重度异常", "随访异常处置：重度异常"]

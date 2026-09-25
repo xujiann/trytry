@@ -1614,7 +1614,7 @@ async function renderSpdPath() {
       </form><p class="msg" id="spd-tpl-msg"></p>
       ${table(["ID", "编码", "名称", "场景", "版本", "节点数", "状态", "操作"], templates, (t) =>
         `<tr><td>${t.id}</td><td>${esc(t.code)}</td><td>${esc(t.name)}</td>
-         <td>${esc(t.scene)}</td><td>${esc(t.version)}</td><td>${t.node_count ?? 0}</td>
+         <td>${esc(t.scene_name)}</td><td>${esc(t.version)}</td><td>${t.node_count ?? 0}</td>
          <td>${t.status === "published" ? '<span class="tag green">已发布</span>'
             : t.status === "draft" ? '<span class="tag orange">草稿</span>'
             : '<span class="tag">已停用</span>'}</td>
@@ -2441,7 +2441,7 @@ async function renderSpdFollowup() {
       <p class="desc">没配关键词的方案不匹配任何人——否则一个空方案会给全院出院患者都排上随访</p>
       ${table(["ID", "编码", "名称", "场景", "科室", "时间点(天)", "问卷", "执行角色", "预置", "状态", "操作"],
         rules, (r) =>
-        `<tr><td>${r.id}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.scene)}</td>
+        `<tr><td>${r.id}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.scene_name)}</td>
          <td>${esc(r.dept || "—")}</td><td>${(r.points || []).join("、")}</td>
          <td>${esc(r.questionnaire_code || "—")}</td><td>${esc(r.executor_role)}</td>
          <td>${r.preset ? "是" : "否"}</td>
@@ -2466,7 +2466,7 @@ async function renderSpdFollowup() {
     ${panel("随访问卷与异常分级", `
       ${table(["ID", "编码", "名称", "场景", "题目数", "异常规则", "跟踪科室", "处置角色", "状态", "操作"],
         questionnaires, (q) =>
-        `<tr><td>${q.id}</td><td>${esc(q.code)}</td><td>${esc(q.name)}</td><td>${esc(q.scene)}</td>
+        `<tr><td>${q.id}</td><td>${esc(q.code)}</td><td>${esc(q.name)}</td><td>${esc(q.scene_name)}</td>
          <td>${(q.items || []).length}</td><td>${(q.abnormal_rules || []).length}</td>
          <td>${esc(q.track_dept || "—")}</td><td>${esc(q.handle_role)}</td>
          <td>${q.active === false ? '<span class="tag">停用</span>' : '<span class="tag green">启用</span>'}</td>
@@ -2544,11 +2544,11 @@ async function renderSpdFollowup() {
     $("#spd-fu-list").innerHTML = table(
       ["ID", "患者", "场景", "计划日期", "执行日期", "渠道", "异常", "状态", "操作"],
       rows, (r) =>
-      `<tr><td>${r.id}</td><td>${esc(r.patient_name)}</td><td>${esc(r.scene)}</td>
+      `<tr><td>${r.id}</td><td>${esc(r.patient_name)}</td><td>${esc(r.scene_name)}</td>
        <td>${esc(r.planned_at)}</td><td>${esc(r.executed_at || "—")}</td>
        <td>${esc(SPD_FU_CHANNELS[r.channel] || r.channel)}</td>
        <td>${r.abnormal_level && r.abnormal_level !== "none"
-          ? `<span class="tag ${r.abnormal_level === "high" ? "red" : "orange"}">${esc(r.abnormal_level)}</span>`
+          ? `<span class="tag ${r.abnormal_level === "high" ? "red" : "orange"}">${esc(r.abnormal_level_name)}</span>`
           : "—"}</td>
        <td><span class="tag ${r.status === "done" ? "green" : r.status === "planned" ? "orange" : ""}">${esc(r.status_name)}</span></td>
        <td><button class="btn secondary" data-fu-ctx="${r.id}">前置资料</button>
@@ -2589,7 +2589,7 @@ async function renderSpdFollowup() {
       $("#spd-cal-box").innerHTML = `
         <p class="desc">${esc(cal.day)}：随访 ${(cal.followups || []).length} · 复诊 ${(cal.revisits || []).length} · 任务 ${(cal.tasks || []).length}</p>
         ${table(["随访ID", "场景", "渠道", "计划日期", "状态"], cal.followups || [], (f) =>
-          `<tr><td>${f.id}</td><td>${esc(f.scene)}</td><td>${esc(SPD_FU_CHANNELS[f.channel] || f.channel)}</td>
+          `<tr><td>${f.id}</td><td>${esc(f.scene_name)}</td><td>${esc(SPD_FU_CHANNELS[f.channel] || f.channel)}</td>
            <td>${esc(f.planned_at)}</td><td>${esc(f.status_name)}</td></tr>`)}
         ${table(["复诊ID", "科室", "项目", "状态"], cal.revisits || [], (v) =>
           `<tr><td>${v.id}</td><td>${esc(v.dept || "—")}</td><td>${esc(v.items || "—")}</td><td>${spdTag(SPD_REVISIT_STATUS, v.status)}</td></tr>`)}
@@ -2652,8 +2652,8 @@ async function renderSpdFollowup() {
              <td>${esc(a.diagnosis_name || "—")}</td><td>${esc(a.doctor_name || "—")}</td><td>${esc(a.status_name)}</td></tr>`)}
           <h4>历史随访</h4>
           ${table(["ID", "场景", "执行日期", "渠道", "异常", "结果"], c.history || [], (h) =>
-            `<tr><td>${h.id}</td><td>${esc(h.scene)}</td><td>${esc(h.executed_at || "—")}</td>
-             <td>${esc(SPD_FU_CHANNELS[h.channel] || h.channel)}</td><td>${esc(h.abnormal_level || "—")}</td><td>${esc(h.result || "—")}</td></tr>`)}`);
+            `<tr><td>${h.id}</td><td>${esc(h.scene_name)}</td><td>${esc(h.executed_at || "—")}</td>
+             <td>${esc(SPD_FU_CHANNELS[h.channel] || h.channel)}</td><td>${esc(h.abnormal_level_name || "—")}</td><td>${esc(h.result || "—")}</td></tr>`)}`);
       } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
       return;
     }

@@ -90,7 +90,7 @@ def auth(client, seeded):
 
 
 B = "/api/spd"
-TEMPLATE_BASE = {"id", "program_id", "code", "name", "scene", "risk_level", "version",
+TEMPLATE_BASE = {"id", "program_id", "code", "name", "scene", "scene_name", "risk_level", "version",
                  "status", "scope", "org_id", "team_id", "description", "copied_from_id",
                  "created_by"}
 NODE_KEYS = {"id", "template_id", "key", "name", "stage", "seq", "dept", "exec_role",

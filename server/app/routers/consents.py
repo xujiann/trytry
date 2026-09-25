@@ -63,6 +63,15 @@ CONSENT_SCENES = (
 )
 SCENE_PATTERN = "^(" + "|".join(CONSENT_SCENES) + ")$"
 
+#: 同意场景 / 方式 → 中文（§13「状态文案取自后端」，P2-73）：措辞照抄 ConsentRecord 列注释。
+#: 同意书管理页原先把 chronic_enroll、cross_org_access、self / proxy 原样显示给窗口人员。
+#: 居民端签署页自带一份场景文案（兼作可签场景的下拉选项），措辞与这里一致。
+CONSENT_SCENE_NAMES = {
+    "archive": "建档", "chronic_enroll": "慢病入组", "followup": "随访", "family_contract": "家医签约",
+    "cross_org_access": "跨机构调阅", "public_health_report": "公卫上报", "family_delegate": "家庭代管授权",
+}
+CONSENT_METHOD_NAMES = {"self": "本人自签", "proxy": "窗口代录"}
+
 #: 更正权白名单：允许线上更正的 patients 字段。**不含 id_card**——身份证号是
 #: 主索引唯一键（EMPI 去重依据）与居民端实名绑定凭据，线上改证件号等同于把
 #: 档案换到另一个人名下，必须线下人工核验证件原件后由管理员走数据订正流程。
@@ -130,8 +139,10 @@ def consent_out(record: ConsentRecord) -> dict:
         "id": record.id,
         "patient_id": record.patient_id,
         "scene": record.scene,
+        "scene_name": CONSENT_SCENE_NAMES.get(record.scene, record.scene),
         "text_version": record.text_version,
         "method": record.method,
+        "method_name": CONSENT_METHOD_NAMES.get(record.method, record.method),
         "operator_user_id": record.operator_user_id,
         "resident_account_id": record.resident_account_id,
         "evidence": record.evidence,
@@ -170,8 +181,10 @@ class ConsentOut(BaseModel):
     id: int
     patient_id: int
     scene: str
+    scene_name: str
     text_version: str
     method: str
+    method_name: str
     operator_user_id: int | None
     resident_account_id: int | None
     evidence: str
@@ -187,6 +200,7 @@ class ConsentOut(BaseModel):
 class ConsentTextOut(BaseModel):
     id: int
     scene: str
+    scene_name: str
     version: str
     content: str
     active: bool
@@ -331,7 +345,11 @@ def list_consent_texts(
         query = query.filter(ConsentText.scene == scene)
     if active_only:
         query = query.filter(ConsentText.active.is_(True))
-    return query.order_by(ConsentText.scene, ConsentText.id).limit(200).all()
+    return [
+        {"id": t.id, "scene": t.scene, "scene_name": CONSENT_SCENE_NAMES.get(t.scene, t.scene),
+         "version": t.version, "content": t.content, "active": t.active}
+        for t in query.order_by(ConsentText.scene, ConsentText.id).limit(200).all()
+    ]
 
 
 # ============================================================================

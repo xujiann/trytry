@@ -51,18 +51,21 @@ def _ts(value):
     return value
 
 
-RULE_KEYS = ["id", "code", "name", "scene", "dept", "program_code", "diagnosis_keywords",
+RULE_KEYS = ["id", "code", "name", "scene", "scene_name", "dept", "program_code", "diagnosis_keywords",
              "surgery_keywords", "order_keywords", "points", "questionnaire_code",
              "executor_role", "allow_depts", "allow_roles", "preset", "active"]
-Q_KEYS = ["id", "code", "name", "scene", "items", "abnormal_rules", "track_dept",
+Q_KEYS = ["id", "code", "name", "scene", "scene_name", "items", "abnormal_rules", "track_dept",
           "handle_role", "preset", "active"]
 RECORD_KEYS = ["id", "patient_id", "patient_name", "program_code", "rule_id",
-               "questionnaire_code", "scene", "org_id", "dept", "planned_at",
+               "questionnaire_code", "scene", "scene_name", "org_id", "dept", "planned_at",
                "executed_at", "channel", "executor_id", "answers", "abnormal_level",
-               "result", "evidence", "status", "status_name", "created_at"]
+               "abnormal_level_name", "result", "evidence", "status", "status_name", "created_at"]
 #: 状态文案取自后端（P2-72）：照列注释逐字钉住，不从被测代码里取——取了就钉不住措辞
 RECORD_STATUS_NAMES = {"planned": "待随访", "done": "已完成", "overdue": "已超期",
                        "removed": "已移除", "unreachable": "失访"}
+#: 场景 / 异常分级文案（P2-73），同样照列注释逐字钉住
+SCENE_NAMES = {"inpatient": "出院随访", "outpatient": "门诊随访", "surgery": "术后随访", "checkup": "体检随访"}
+ABNORMAL_NAMES = {"none": "无异常", "low": "轻度", "mid": "中度", "high": "重度"}
 TEMPLATE_KEYS = ["id", "code", "name", "period", "scope_level", "sections",
                  "variables", "active"]
 RTASK_KEYS = ["id", "template_id", "name", "frequency", "push_time", "subscriber_ids",
@@ -74,13 +77,15 @@ def _record(world, rid, patient_name="", **overrides):
     base = {
         "id": rid, "patient_id": world["patient"]["id"], "patient_name": patient_name,
         "program_code": "", "rule_id": world["rule"]["id"],
-        "questionnaire_code": "ct_fu_q", "scene": "inpatient",
+        "questionnaire_code": "ct_fu_q", "scene": "inpatient", "scene_name": "",
         "org_id": world["org"]["id"], "dept": "内科", "planned_at": "",
         "executed_at": "", "channel": "phone", "executor_id": None, "answers": {},
-        "abnormal_level": "none", "result": "", "evidence": [], "status": "planned",
-        "status_name": "",
+        "abnormal_level": "none", "abnormal_level_name": "", "result": "", "evidence": [],
+        "status": "planned", "status_name": "",
     }
     base.update(overrides)
+    base["scene_name"] = SCENE_NAMES[base["scene"]]
+    base["abnormal_level_name"] = ABNORMAL_NAMES[base["abnormal_level"]]
     base["status_name"] = RECORD_STATUS_NAMES[base["status"]]
     return base
 
@@ -327,7 +332,7 @@ def test_方案新建回执完整精确(client, auth, world):
     assert world["rule_keys"] == RULE_KEYS
     assert created == {
         "id": created["id"], "code": "ct_fu_rule", "name": "契约出院随访",
-        "scene": "inpatient", "dept": "内科", "program_code": "",
+        "scene": "inpatient", "scene_name": "出院随访", "dept": "内科", "program_code": "",
         "diagnosis_keywords": ["冠心病"], "surgery_keywords": [], "order_keywords": [],
         "points": [0, 7], "questionnaire_code": "ct_fu_q", "executor_role": "nurse",
         "allow_depts": [], "allow_roles": [], "preset": False, "active": True,
@@ -347,7 +352,7 @@ def test_问卷新建列表修改(client, auth, world):
     assert world["q_keys"] == Q_KEYS
     assert created == {
         "id": created["id"], "code": "ct_fu_q", "name": "契约出院问卷",
-        "scene": "inpatient",
+        "scene": "inpatient", "scene_name": "出院随访",
         "items": [{"key": "pain", "title": "疼痛评分", "type": "number"}],
         "abnormal_rules": [{"when": {"field": "pain", "op": ">=", "value": 7},
                             "level": "high", "action": "通知主管医师"}],

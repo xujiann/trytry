@@ -70,6 +70,7 @@ class PathTemplateOut(BaseModel):
     code: str
     name: str
     scene: str
+    scene_name: str
     risk_level: str
     version: str
     status: str
@@ -122,10 +123,14 @@ class PathNodeIn(BaseModel):
     note: str = Field(default="", max_length=256)
 
 
+#: `spd_path_templates.scene` → 中文（P2-73）：措辞照抄列注释，与新建路径的场景选项一致；路径模板表原先显示原码。
+PATH_SCENE_NAMES = {"outpatient": "门诊路径", "inpatient": "住院路径", "home": "居家管理", "followup": "随访路径"}
+
+
 def _template_out(t: SpdPathTemplate, nodes: list[SpdPathNode] | None = None) -> dict:
     out = {
         "id": t.id, "program_id": t.program_id, "code": t.code, "name": t.name,
-        "scene": t.scene, "risk_level": t.risk_level, "version": t.version,
+        "scene": t.scene, "scene_name": PATH_SCENE_NAMES.get(t.scene, t.scene), "risk_level": t.risk_level, "version": t.version,
         "status": t.status, "scope": t.scope, "org_id": t.org_id, "team_id": t.team_id,
         "description": t.description, "copied_from_id": t.copied_from_id,
         "created_by": t.created_by,

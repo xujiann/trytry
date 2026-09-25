@@ -65,6 +65,12 @@ FOLLOWUP_ROLES = ("doctor", "public_health", "director", "operator")
 FOLLOWUP_STATUS_NAMES = {
     "planned": "待随访", "done": "已完成", "overdue": "已超期", "removed": "已移除", "unreachable": "失访",
 }
+#: `spd_followup_rules.scene`（记录、问卷的 scene 取同一套码）→ 中文（P2-73）：措辞照抄列注释，与生成随访的场景选项、
+#: 居民端「随访类型」一致。随访看板、方案规则、问卷、健康日历、历史随访原先都把场景码原样显示。
+FOLLOWUP_SCENE_NAMES = {"inpatient": "出院随访", "outpatient": "门诊随访", "surgery": "术后随访", "checkup": "体检随访"}
+#: `spd_followup_records.abnormal_level` → 中文（P2-73）：措辞照抄列注释。看板把 high 原样放进红标签，居民自助作答后
+#: 手机上弹的是「系统判定为high异常」，没配处置措施时派出的任务标题是「随访异常处置：high」。
+ABNORMAL_LEVEL_NAMES = {"none": "无异常", "low": "轻度", "mid": "中度", "high": "重度"}
 #: 平台 `admissions.status` → 中文：措辞与平台住院页一致（该页的文案表还在前端，平台出参尚未带文案）。
 #: 随访前置资料的住院一栏原先把英文状态码原样显示。
 ADMISSION_STATUS_NAMES = {"admitted": "在院", "discharged": "已出院"}
@@ -85,6 +91,7 @@ class FollowupRuleOut(BaseModel):
     code: str
     name: str
     scene: str
+    scene_name: str
     dept: str
     program_code: str
     diagnosis_keywords: list[str]
@@ -105,6 +112,7 @@ class QuestionnaireOut(BaseModel):
     code: str
     name: str
     scene: str
+    scene_name: str
     # 题目与异常分级规则是自定义 JSON（{"key","title","type",...} /
     # {"when","level","action"}），照存照出
     items: list[dict[str, Any]]
@@ -124,6 +132,7 @@ class FollowupRecordOut(BaseModel):
     rule_id: int | None
     questionnaire_code: str
     scene: str
+    scene_name: str
     org_id: int | None
     dept: str
     planned_at: str
@@ -133,6 +142,7 @@ class FollowupRecordOut(BaseModel):
     executor_id: int | None
     answers: dict[str, Any]
     abnormal_level: str
+    abnormal_level_name: str
     result: str
     evidence: list[str]
     status: str
@@ -406,7 +416,8 @@ def _check_points(points: list[int]) -> None:
 
 def _rule_out(r: SpdFollowupRule) -> dict:
     return {
-        "id": r.id, "code": r.code, "name": r.name, "scene": r.scene, "dept": r.dept,
+        "id": r.id, "code": r.code, "name": r.name, "scene": r.scene,
+        "scene_name": FOLLOWUP_SCENE_NAMES.get(r.scene, r.scene), "dept": r.dept,
         "program_code": r.program_code,
         "diagnosis_keywords": r.diagnosis_keywords or [],
         "surgery_keywords": r.surgery_keywords or [],
@@ -510,6 +521,7 @@ def _check_abnormal_rules(rules: list[dict]) -> None:
 def _q_out(q: SpdQuestionnaire) -> dict:
     return {
         "id": q.id, "code": q.code, "name": q.name, "scene": q.scene,
+        "scene_name": FOLLOWUP_SCENE_NAMES.get(q.scene, q.scene),
         "items": q.items or [], "abnormal_rules": q.abnormal_rules or [],
         "track_dept": q.track_dept, "handle_role": q.handle_role,
         "preset": q.preset, "active": q.active,
@@ -591,10 +603,11 @@ def _record_out(r: SpdFollowupRecord, patient_name: str = "") -> dict:
         "id": r.id, "patient_id": r.patient_id, "patient_name": patient_name,
         "program_code": r.program_code, "rule_id": r.rule_id,
         "questionnaire_code": r.questionnaire_code, "scene": r.scene,
-        "org_id": r.org_id, "dept": r.dept, "planned_at": r.planned_at,
+        "scene_name": FOLLOWUP_SCENE_NAMES.get(r.scene, r.scene), "org_id": r.org_id, "dept": r.dept, "planned_at": r.planned_at,
         "executed_at": r.executed_at, "channel": r.channel,
         "executor_id": r.executor_id, "answers": r.answers or {},
-        "abnormal_level": r.abnormal_level, "result": r.result,
+        "abnormal_level": r.abnormal_level,
+        "abnormal_level_name": ABNORMAL_LEVEL_NAMES.get(r.abnormal_level, r.abnormal_level), "result": r.result,
         "evidence": r.evidence or [], "status": r.status,
         "status_name": FOLLOWUP_STATUS_NAMES.get(r.status, r.status),
         "created_at": r.created_at.isoformat(),
@@ -941,7 +954,7 @@ def execute_followup(
                 SpdTask(
                     program_code=record.program_code, patient_id=record.patient_id,
                     enrollment_id=enrollment.id if enrollment else None,
-                    task_type="report", title=f"随访异常处置：{action or level}",
+                    task_type="report", title=f"随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}",
                     org_id=record.org_id, status="pending",
                     priority=3 if level == "high" else 2,
                     due_date=(clock.today() + timedelta(days=1 if level == "high" else 3))
