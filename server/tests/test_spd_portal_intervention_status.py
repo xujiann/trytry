@@ -86,3 +86,24 @@ def test_手机页显示后端状态_已移除的不给反馈按钮():
     body = src[start:src.index("\n}\n", start)]
     assert "p.status_name" in body, "干预方案卡片没显示后端给的状态文案"
     assert 'p.status === "removed"' in body, "已移除的方案仍给「标记已读并反馈」按钮"
+
+
+# ---- 连带：「我的慢专病」历程里的转诊一栏同病——英文状态码原样显示给居民
+def test_历程里的转诊带后端给的状态文案(client, admin, world):
+    from app.database import SessionLocal
+    from app.models import Organization
+    from app.spd.models import SpdReferralCase
+
+    with SessionLocal() as db:
+        org = db.query(Organization).filter(Organization.name == "P267 卫生院").one()
+        db.add(SpdReferralCase(patient_id=world["patient"]["id"], program_code="p267_prog", direction="up",
+                               initiator_org_id=org.id, status="township_reviewed"))
+        db.commit()
+    journey = client.get("/api/portal/spd/journey", headers=world["resident"]).json()
+    program = next(p for p in journey["programs"] if p["program_code"] == "p267_prog")
+    assert program["referrals"][0]["status_name"] == "卫生院已审核，待县级医院接收"   # 修前没有 status_name
+
+
+def test_手机页历程转诊显示后端文案():
+    src = (STATIC / "m" / "m.js").read_text(encoding="utf-8")
+    assert "r.status_name || r.status" in src

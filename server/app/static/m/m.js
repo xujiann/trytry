@@ -1484,7 +1484,7 @@ async function renderSpdJourney(box) {
     ${(p.tasks || []).map((t) => kv(t.title, `${esc(t.due_date || "—")} ${spdTagOf(SPD_TASK_STATUS_TAGS, t.status)}`)).join("") || '<p class="empty">暂无任务</p>'}
     <div class="sec-title">转诊（${(p.referrals || []).length}）</div>
     ${(p.referrals || []).map((r) => kv(r.direction === "up" ? "上转" : "下转",
-      `${esc(r.status)} · ${esc((r.created_at || "").slice(0, 10))}`)).join("") || '<p class="empty">无转诊</p>'}
+      `${esc(r.status_name || r.status)} · ${esc((r.created_at || "").slice(0, 10))}`)).join("") || '<p class="empty">无转诊</p>'}
   </div>`).join("") || '<p class="empty">您当前没有签约的慢专病管理</p>';
 }
 

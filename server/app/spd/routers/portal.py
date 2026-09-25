@@ -45,7 +45,7 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import close_followup_record, judge_measurement, measure_value_problem
+from ..service import REFERRAL_STATUS_LABELS, close_followup_record, judge_measurement, measure_value_problem
 from fastapi import File, Form, UploadFile
 
 from ..platform import (
@@ -672,6 +672,7 @@ class SpdJourneyReferralOut(BaseModel):
     id: int
     direction: str
     status: str
+    status_name: str
     created_at: str
 
 
@@ -746,6 +747,8 @@ def journey(
             ],
             "referrals": [
                 {"id": r.id, "direction": r.direction, "status": r.status,
+                 # 手机页原先把英文状态码原样显示给居民（P2-67 连带）
+                 "status_name": REFERRAL_STATUS_LABELS.get(r.status, r.status),
                  "created_at": r.created_at.isoformat()}
                 for r in referrals
             ],

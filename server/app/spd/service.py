@@ -589,6 +589,8 @@ _STATUS_LABELS = {
     "rejected": "已退回",
     "withdrawn": "已撤回",
 }
+#: 居民端看到的转诊状态文案：聚合列表与「我的慢专病」历程共用这一张（§13「状态文案取自后端」）
+REFERRAL_STATUS_LABELS = _STATUS_LABELS
 
 
 def referral_feed(db: Session, patient_id: int) -> list[dict]:
