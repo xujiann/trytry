@@ -215,7 +215,9 @@ def test_任务新建回执27键与清单详情29键(client, auth, world):
     assert list(body.keys()) == TASK_KEYS  # 新建回执**没有** patient_name/phone
     assert body == {
         "id": body["id"], "program_code": "hypertension",
-        "patient_id": world["patient"]["id"], "enrollment_id": None,
+        # 选了病种、没填档案号：挂这位患者这个病种在管的档案（P1-139 同一族；原先是 None——任务不挂档案，
+        # 随访类任务办结不回写档案、不给村医计分）
+        "patient_id": world["patient"]["id"], "enrollment_id": world["enrollment"]["id"],
         "instance_id": None, "node_key": "", "task_type": "followup",
         "title": "契约手工任务", "org_id": world["org"]["id"], "team_id": None,
         "assignee_id": None, "exec_role": "", "status": "pending", "priority": 2,

@@ -41,6 +41,7 @@ from ..service import (
     TASK_OPEN_STATUSES,
     advance_path,
     award_points,
+    enrollment_for,
     node_enter_allowed,
     spawn_task,
     sweep_overdue,
@@ -623,6 +624,12 @@ def create_task(
         raise HTTPException(status_code=422, detail="纳管档案不是这位患者的")
     if enrollment is not None and body.program_code and body.program_code != enrollment.program_code:
         raise HTTPException(status_code=422, detail="纳管档案的病种与任务不一致")
+    if enrollment is None and body.program_code:
+        # 选了病种、没填档案号的，挂这位患者这个病种在管的档案（P1-139 同一族）：原先病种写上了、档案不挂——随访类任务
+        # 办结不回写档案的随访日期、不给档案上的村医计分，按档案也看不到它。没在管的（已结案的历史档案）不挂
+        _, found = enrollment_for(db, body.patient_id, body.program_code)
+        if found is not None and found.status == "active":
+            enrollment = found
     # 责任人与服务团队原先一眼不看：交给 spawn_task 写库，填错编号开发库存成悬空 id、生产库撞外键 500；
     # 停用的账号 / 团队也不收——任务进了没人办的待办箱（P1-106 / P1-103）
     if body.assignee_id is not None:
