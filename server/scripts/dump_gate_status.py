@@ -84,11 +84,20 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_stats_scope_consistency as statscope
     import test_spd_task_status_sets as taskstatus
     import test_spd_planned_only_queries as plannedonly
+    import test_conditional_write_guard as condguard
     import test_unscopable_patient_reads as unscopable
     import test_vital_sign_bounds as vitalbounds
 
     H = "tests/test_stage15_horizontal.py"
     return [
+        ("横向越权（写侧）", "归属守卫只写在单边分支里的写接口（别的分支按 id 直写，横向越权棘轮看它是守过的；P1-130 就这么漏过；"
+         "判据上线即 0）",
+         len(set(condguard.conditional_guards()) - set(condguard.BY_DESIGN) - set(condguard.AWAITING)),
+         "tests/test_conditional_write_guard.py"),
+        ("横向越权（写侧）", "守卫只在分支里 × 按设计（防御性判空 / 全域配置，逐条写明理由）", len(condguard.BY_DESIGN),
+         "tests/test_conditional_write_guard.py"),
+        ("横向越权（写侧）", "守卫只在分支里 × 已登记待裁定（P1-130 / P1-48）", len(condguard.AWAITING),
+         "tests/test_conditional_write_guard.py"),
         ("横向越权（写侧）", "按 id 写接口机构归属欠账", len(horizontal.NEWLY_VISIBLE_UNGUARDED_WRITES), H),
         ("横向越权（写侧）", "归属隔一跳的无守卫写端点", len(horizontal.ONEHOP_UNGUARDED_WRITES), H),
         ("横向越权（写侧）", "挂在患者上的表（含隔一跳）× 按 id 写无守卫（待裁定）",
