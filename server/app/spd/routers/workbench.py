@@ -606,6 +606,8 @@ class DoctorMobileWorkbenchOut(BaseModel):
 
 
 class CatalogProgramOut(BaseModel):
+    # 病种号：建路径模板按号挂病种。原先不给，页面拿「第几个 + 1」冒充——号一不连续就挂到别的病种上（P2-96）
+    id: int
     code: str
     name: str
     category: str
@@ -1430,7 +1432,7 @@ def catalog(db: Session = Depends(get_db)):
     """
     return {
         "programs": [
-            {"code": p.code, "name": p.name, "category": p.category,
+            {"id": p.id, "code": p.code, "name": p.name, "category": p.category,
              "stages": p.stages or [], "active": p.active}
             for p in db.query(SpdProgram).order_by(SpdProgram.id).limit(100).all()
         ],

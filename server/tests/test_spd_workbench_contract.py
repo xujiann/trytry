@@ -563,7 +563,8 @@ def test_目录聚合与配置接口同源(client, h, wb):
     scales = client.get(f"{B}/scales", params={"status": "published", "limit": 200},
                         headers=h).json()
     assert body == {
-        "programs": [{"code": p["code"], "name": p["name"], "category": p["category"],
+        # 病种带病种号（P2-96）：新建路径模板按号挂病种，原先页面拿「第几个 + 1」冒充
+        "programs": [{"id": p["id"], "code": p["code"], "name": p["name"], "category": p["category"],
                       "stages": p["stages"], "active": p["active"]} for p in programs],
         "teams": [{"id": wb["team"]["id"], "name": "契约团队", "level": "township",
                    "org_id": wb["township"]["id"]}],

@@ -1475,6 +1475,29 @@ def test_随访方案在界面上新建与改诊断关键词_自动匹配据此�
     assert (rule["diagnosis_keywords"], rule["points"]) == (["E2E随访病丙"], [7, 30]), rule
 
 
+def test_新建路径模板按病种号挂病种_病种号不连续也不挂错(page, base_url, admin_read, admin_call):
+    """P2-96：目录接口的病种原先不带病种号，路径模板表单的病种下拉拿「第几个 + 1」冒充。生产库（PostgreSQL）的序列被一次
+    失败的插入吃掉一个号（新建病种编码重复 409），此后新建的病种号就比「第几个 + 1」大：选空档后的第二个病种，模板挂到
+    空档后的第一个病种上。这里把甲的号往后挪一位，造出这个空档。"""
+    import sqlite3
+
+    first = admin_call("POST", "/api/spd/programs", {"code": "e2e_p96a", "name": "E2E病种甲", "category": "specialty"})
+    with sqlite3.connect(E2E_DB) as conn:
+        conn.execute("UPDATE spd_programs SET id = id + 1 WHERE id = ?", (first["id"],))
+    second = admin_call("POST", "/api/spd/programs", {"code": "e2e_p96b", "name": "E2E病种乙", "category": "specialty"})
+    assert second["id"] == first["id"] + 2, (first, second)
+
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    form = page.locator("#spd-tpl-form")
+    form.locator('[name="program_id"]').select_option(label="E2E病种乙")
+    form.locator('[name="code"]').fill("E2E_TPL96")
+    form.locator('[name="name"]').fill("E2E病种乙路径")
+    _submit(page, "#spd-tpl-form button")
+    template = next(t for t in admin_read("/api/spd/path-templates?limit=100") if t["code"] == "E2E_TPL96")
+    assert template["program_id"] == second["id"], (template, first, second)   # 修前挂到甲（first + 1）
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

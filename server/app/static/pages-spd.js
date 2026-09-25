@@ -1683,6 +1683,8 @@ async function renderSpdPath() {
   const [catalog, templates, summary] = await Promise.all([
     spdCatalog(), api("/api/spd/path-templates?limit=30"), api("/api/spd/tasks/summary"),
   ]);
+  // 启动路径的模板下拉带上病种名：模板只能给同病种的纳管档案用（P2-95），原先下拉里看不出哪条是哪个病种的
+  const programName = (id) => (catalog.programs.find((p) => p.id === id) || {}).name || `病种#${id}`;
   $("#page-body").innerHTML = `
     ${spdCards([
       ["待办任务", summary.open_total], ["超期", summary.overdue, summary.overdue > 0],
@@ -1692,7 +1694,7 @@ async function renderSpdPath() {
       <p class="desc">已发布的模板不能直接改节点——要改就复制新版本，避免在跑的患者任务突然变形</p>
       <form class="inline" id="spd-tpl-form">
         <select name="program_id">
-          ${catalog.programs.map((p, i) => `<option value="${i + 1}">${esc(p.name)}</option>`).join("")}
+          ${catalog.programs.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
         </select>
         <input name="code" placeholder="路径编码" required>
         <input name="name" placeholder="路径名称" required>
@@ -1717,7 +1719,7 @@ async function renderSpdPath() {
       <form class="inline" id="spd-inst-form">
         <input name="enrollment_id" type="number" placeholder="纳管档案ID" required>
         <select name="template_id">
-          ${catalog.path_templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}
+          ${catalog.path_templates.map((t) => `<option value="${t.id}">${esc(t.name)}（${esc(programName(t.program_id))}）</option>`).join("")}
         </select>
         <button>启动路径</button>
       </form><p class="msg" id="spd-inst-msg"></p>
