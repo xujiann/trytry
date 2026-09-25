@@ -78,7 +78,8 @@ import warnings
 #: → 98（同日体温单改从最近一次往前翻页，P1-81）
 #: → 97（同日流程待办的角色筛挪进查询，P1-82）
 #: → 92（同日第六批切完 5 个纯分页：住院医嘱 / 执行记录、门诊处置 / 护理、慢专病转诊超时预警）
-BASELINE_SILENT_TRUNCATION = 92
+#: → 91（2026-09-25 传染病报告卡导出去掉上限，P1-113：与死因报告卡同为法定上报口径，P1-50 当时漏了这一份）
+BASELINE_SILENT_TRUNCATION = 91
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),

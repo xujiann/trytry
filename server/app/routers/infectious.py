@@ -228,9 +228,11 @@ def export_case_report_cards_csv(
     query = db.query(InfectiousCase)
     if disease_code:
         query = query.filter(InfectiousCase.disease_code == disease_code)
+    # 不设上限（P1-113）：原先 `.limit(2000)` 按编号正序取，超量时截掉的是**最新**的卡，「只导迟报」又在截断之后
+    # 才筛——新近的迟报一张都进不了清单。与死因报告卡导出（P1-50）同一口径：法定上报的导出不许静默少一截
     cards = [
         _case_card(c, org_names, meta_by_code)
-        for c in query.order_by(InfectiousCase.id).limit(2000).all()
+        for c in query.order_by(InfectiousCase.id).all()
     ]
     if late_only:
         cards = [c for c in cards if c["late"]]
