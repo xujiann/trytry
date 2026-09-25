@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -66,8 +67,41 @@ _TABLE_MODELS = {
         ChronicDiseaseType,
     )
 }
-# 单条规则单次扫描的行数上限（防全表拉爆内存；超出部分下次整改后再扫）
+# 分批扫描的批大小：内存里同一时刻只放这么多行（防全表拉爆内存），整张表照样扫完。
 SCAN_LIMIT = 5000
+
+
+def _scan(query, model):
+    """按主键分批把查询扫完（P1-115）。
+
+    原先每条规则 `query.limit(SCAN_LIMIT)` 一次取完就判：超出的行**永远扫不到**——开发库按插入序取前 5000 行、
+    生产库按堆序取任意 5000 行，`/run` 与 `/summary` 却把这部分里查出的数当全量报出。原注释说「超出部分下次
+    整改后再扫」，可整改只改值不删行，前 5000 行永远是那 5000 行。县域患者、就诊动辄数万条，后面的违规一条都
+    查不出。
+
+    分批按主键往后翻（`id > 上一批最后一个 ORDER BY id LIMIT 批大小`）：内存上限与原先一样，扫描顺序按主键、
+    两库一致，不漏不重。
+    """
+    last_id = 0
+    while True:
+        batch = query.filter(model.id > last_id).order_by(model.id).limit(SCAN_LIMIT).all()
+        if not batch:
+            return
+        yield from batch
+        last_id = batch[-1].id
+
+
+def _fields_query(db: Session, model, *fields: str):
+    """只取主键与判定要读的列：整表扫描不必把每行拼成 ORM 对象（5 万行 0.99s → 0.16s，P1-115）。
+
+    规则配置里的字段名在模型上不是列（配错、留空）时退回整行查询——逐行 `getattr(row, field, None)` 得 None，
+    判定结果与原先一致。
+    """
+    columns = {a.key for a in sa_inspect(model).column_attrs}
+    wanted = [f for f in dict.fromkeys(fields) if f != "id"]
+    if all(f in columns for f in wanted):
+        return db.query(model.id, *(getattr(model, f) for f in wanted))
+    return db.query(model)
 
 
 def _is_blank(value) -> bool:
@@ -102,7 +136,7 @@ def id_card_invalid_reason(value: str) -> str:
 def _check_id_card(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "id_card")
     hits = []
-    for row in db.query(model).limit(SCAN_LIMIT).all():
+    for row in _scan(_fields_query(db, model, field), model):
         reason = id_card_invalid_reason(getattr(row, field, ""))
         if reason:
             hits.append((row.id, reason))
@@ -111,11 +145,10 @@ def _check_id_card(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
 
 def _check_critical_closed_loop(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     """危急值报告未走到处置反馈（critical_status != resolved）。"""
-    rows = (
-        db.query(ExamReport)
-        .filter(ExamReport.critical.is_(True), ExamReport.critical_status != "resolved")
-        .limit(SCAN_LIMIT)
-        .all()
+    rows = _scan(
+        db.query(ExamReport.id, ExamReport.critical_status)
+        .filter(ExamReport.critical.is_(True), ExamReport.critical_status != "resolved"),
+        ExamReport,
     )
     return [
         (r.id, f"危急值闭环状态为 {r.critical_status or '未回填'}，未达处置反馈（resolved）")
@@ -128,7 +161,7 @@ def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, s
     start_field = rule.config.get("start_field", "")
     end_field = rule.config.get("end_field", "")
     hits = []
-    for row in db.query(model).limit(SCAN_LIMIT).all():
+    for row in _scan(_fields_query(db, model, start_field, end_field), model):
         start, end = getattr(row, start_field, None), getattr(row, end_field, None)
         if start is None or end is None:
             continue
@@ -150,7 +183,7 @@ def _check_date_not_future(db: Session, rule: QcRule, model) -> list[tuple[int, 
     field = rule.config.get("field", "")
     today = clock.today().isoformat()
     hits = []
-    for row in db.query(model).limit(SCAN_LIMIT).all():
+    for row in _scan(_fields_query(db, model, field), model):
         value = getattr(row, field, None)
         if isinstance(value, datetime):
             value = value.date().isoformat()
@@ -168,7 +201,7 @@ def _check_chronic_followup_indicator(db: Session, rule: QcRule, model) -> list[
     mapping: dict[str, list[str]] = rule.config.get("disease_indicators", {})
     diseases = row_dict(db.query(ChronicPatient.id, ChronicPatient.disease).all())
     hits = []
-    for row in db.query(FollowUp).limit(SCAN_LIMIT).all():
+    for row in _scan(db.query(FollowUp), FollowUp):
         disease = diseases.get(row.chronic_id, "")
         required = mapping.get(disease)
         if required:
@@ -196,20 +229,20 @@ _LOGIC_CHECKS = {
 # ---------------------------------------------------------------------------
 
 
-def _filtered(db: Session, model, rule: QcRule):
-    query = db.query(model)
+def _filtered(db: Session, model, rule: QcRule, field: str):
+    query = _fields_query(db, model, field)
     for key, value in (rule.config.get("filter") or {}).items():
         column = getattr(model, key, None)
         if column is not None:
             query = query.filter(column == value)
-    return query.limit(SCAN_LIMIT)
+    return _scan(query, model)
 
 
 def _run_required(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     field = rule.config.get("field", "")
     return [
         (row.id, f"{field} 为空")
-        for row in _filtered(db, model, rule).all()
+        for row in _filtered(db, model, rule, field)
         if _is_blank(getattr(row, field, None))
     ]
 
@@ -219,7 +252,7 @@ def _run_range(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     low, high = rule.config.get("min"), rule.config.get("max")
     ex_low, ex_high = rule.config.get("exclusive_min", False), rule.config.get("exclusive_max", False)
     hits = []
-    for row in _filtered(db, model, rule).all():
+    for row in _filtered(db, model, rule, field):
         value = getattr(row, field, None)
         if value is None:
             hits.append((row.id, f"{field} 缺失，无法判定区间"))
@@ -237,7 +270,7 @@ def _run_enum(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
     allowed = set(rule.config.get("values", []))
     return [
         (row.id, f"{field}={getattr(row, field, None)} 不在允许取值 {sorted(allowed)} 内")
-        for row in _filtered(db, model, rule).all()
+        for row in _filtered(db, model, rule, field)
         if getattr(row, field, None) not in allowed
     ]
 
@@ -262,7 +295,7 @@ def _run_cross_ref(db: Session, rule: QcRule, model) -> list[tuple[int, str]]:
         valid = {v for (v,) in db.query(ref_field).all()}
         ref_desc = f"{rule.config['ref_table']} 目录"
     hits = []
-    for row in _filtered(db, model, rule).all():
+    for row in _filtered(db, model, rule, field):
         value = getattr(row, field, None)
         if skip_empty and _is_blank(value):
             continue
