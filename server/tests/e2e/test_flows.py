@@ -1703,6 +1703,28 @@ def test_模拟诊疗病例能在界面上新建_作答按新建的答案评分(
     expect(result.locator(".card .value").first).to_have_text("50")
 
 
+def test_考核指标能在界面上新建_口径与变量提示取自后端(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：考核指标库原先只能改、不能建——各县自己的考核口径只能靠接口调用方。口径下拉与「可用变量」
+    提示取自 `/api/spd/meta`（后端 `INDICATOR_SOURCES` 一份），换口径提示跟着换；按比例计分的目标取指标的目标值（P2-104）。"""
+    _login(page, base_url)
+    _open_page(page, "spdassess", "专病考核与积分")
+    form = page.locator("#spd-ind-form")
+    form.locator('[name="data_source"]').select_option("referral")
+    expect(page.locator("#spd-ind-vars")).to_contain_text("effective（其中有效就诊）")
+    form.locator('[name="code"]').fill("E2E_REF_EFF")
+    form.locator('[name="name"]').fill("E2E 有效上转率")
+    form.locator('[name="object_type"]').select_option("village_doctor")
+    form.locator('[name="formula"]').fill("effective / total * 100")
+    form.locator('[name="weight"]').fill("12.5")
+    form.locator('[name="target_value"]').fill("60")
+    _submit(page, "#spd-ind-form button")
+    created = next(i for i in admin_read("/api/spd/indicators?limit=200") if i["code"] == "E2E_REF_EFF")
+    assert (created["data_source"], created["object_type"], created["formula"], created["weight"],
+            created["target_value"], created["score_rule"]) == (
+        "referral", "village_doctor", "effective / total * 100", 12.5, 60, {"type": "ratio", "full": 100}), created
+    expect(page.locator("tr", has_text="E2E_REF_EFF")).to_contain_text("转诊")   # 口径显示名称，不是 referral
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""

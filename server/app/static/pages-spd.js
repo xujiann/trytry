@@ -2330,13 +2330,20 @@ function spdDefaultPeriod(periodType) {
 async function renderSpdAssess() {
   $("#page-desc").textContent =
     "指标库 → 分级考核方案 → 自动取数计分 → 扣分下钻与得分分析；工作量统计；村医积分规则、商品兑换与核销";
-  const [indicators, plans, scores, goods, accounts, pointRules, redeems, workload] = await Promise.all([
+  const [indicators, plans, scores, goods, accounts, pointRules, redeems, workload, meta] = await Promise.all([
     api("/api/spd/indicators?limit=50"), api("/api/spd/assess-plans"),
     api("/api/spd/scores?limit=30"), api("/api/spd/goods"),
     api("/api/spd/point-accounts?limit=20"),
-    api("/api/spd/point-rules"), api("/api/spd/redeems?limit=50"), api("/api/spd/workload"),
+    api("/api/spd/point-rules"), api("/api/spd/redeems?limit=50"), api("/api/spd/workload"), spdMeta(),
   ]);
   const objectNames = SPD_ASSESS_OBJECTS;
+  // 取数口径与各口径的变量取自 /api/spd/meta（后端 service.INDICATOR_SOURCES 一份），前端不另抄口径表
+  const sources = meta.indicator_sources || [];
+  const sourceNames = Object.fromEntries(sources.map((x) => [x.key, x.name]));
+  const metricHint = (key) => {
+    const src = sources.find((x) => x.key === key);
+    return src ? `可用变量：${src.metrics.map((m) => `${m.key}（${m.name}）`).join("、")}` : "";
+  };
   const onOff = (flag) => (flag ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>');
   const workloadHtml = (w) => `
       <p class="desc">${esc(w.period)} · ${w.object_type === "org" ? "按机构" : "按人员"}；已完成任务按类型拆分，与考核指标共用同一批表，报表与得分对得上</p>
@@ -2347,15 +2354,30 @@ async function renderSpdAssess() {
   $("#page-body").innerHTML = `
     ${panel("考核指标库", `
       <p class="desc">取数口径 + 公式（AST 白名单求值）+ 评分规则三段式，各县只需调权重与目标值</p>
+      <form class="inline" id="spd-ind-form">
+        <input name="code" placeholder="指标编码" required style="width:120px">
+        <input name="name" placeholder="指标名称" required>
+        <select name="object_type">${Object.entries(objectNames).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <select name="data_source">${sources.map((x) => `<option value="${esc(x.key)}">${esc(x.name)}</option>`).join("")}</select>
+        <input name="formula" placeholder="公式，如 done / total * 100" required style="min-width:220px"
+          title="留空的公式按 total 取值，而纳管 / 评估 / 建档 / 上报几个口径没有 total，计分恒为 0——所以这里必填">
+        <input name="weight" type="number" step="any" min="0" placeholder="权重" style="width:80px">
+        <input name="target_value" type="number" step="any" placeholder="目标值" style="width:90px">
+        <select name="score_type"><option value="ratio">按比例：达到目标值得满分，未达按比例</option>
+          <option value="">不配置：按指标值计分（截到 0~100）</option></select>
+        <button>新建指标</button>
+      </form>
+      <p class="desc" id="spd-ind-vars">${esc(metricHint(sources[0]?.key))}</p>
       ${table(["ID", "编码", "名称", "对象", "取数口径", "公式", "权重", "目标值", "版本", "状态", "操作"],
         indicators, (i) =>
         `<tr><td>${i.id}</td><td>${esc(i.code)}</td><td>${esc(i.name)}</td>
          <td>${esc(objectNames[i.object_type] || i.object_type)}</td>
-         <td>${esc(i.data_source)}</td><td><code>${esc(i.formula || "—")}</code></td>
+         <td>${esc(sourceNames[i.data_source] || i.data_source)}</td><td><code>${esc(i.formula || "—")}</code></td>
          <td>${i.weight}</td><td>${i.target_value ?? "—"}</td><td>${esc(i.version)}</td>
          <td>${onOff(i.active)}</td>
          <td><button class="btn secondary" data-ind-edit="${i.id}" data-name="${esc(i.name)}" data-weight="${i.weight}"
-              data-target="${i.target_value ?? ""}" data-formula="${esc(i.formula || "")}" data-active="${i.active ? 1 : 0}">编辑</button>
+              data-target="${i.target_value ?? ""}" data-formula="${esc(i.formula || "")}" data-active="${i.active ? 1 : 0}"
+              data-source="${esc(i.data_source)}">编辑</button>
              <button class="btn secondary" data-ind-usage="${i.id}">使用情况</button></td></tr>`)}
       <p class="msg" id="spd-ind-msg"></p>
       <div id="spd-ind-detail"></div>`)}
@@ -2442,6 +2464,17 @@ async function renderSpdAssess() {
         `<tr><td>${r.id}</td><td>${esc(r.goods_name)}</td><td>${r.points}</td><td>${spdTag(SPD_REDEEM_STATUS, r.status)}</td>
          <td>${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</td>
          <td>${esc((r.verified_at || "").replace("T", " ").slice(0, 16) || "—")}</td></tr>`)}`)}`;
+  // 指标原先只能改、不能建（P2-93 动词级孤儿）：各县自己的考核口径只能靠接口调用方
+  const indForm = $("#spd-ind-form");
+  indForm.data_source.onchange = (e) => { $("#spd-ind-vars").textContent = metricHint(e.target.value); };
+  indForm.onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["weight", "target_value"]);
+    // 按比例计分的目标取指标的目标值（P2-104），规则里不再另写一份
+    body.score_rule = body.score_type === "ratio" ? { type: "ratio", full: 100 } : {};
+    delete body.score_type;
+    return postAction("/api/spd/indicators", body, "#spd-ind-msg");
+  };
   $("#spd-plan-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target);
@@ -2500,7 +2533,8 @@ async function renderSpdAssess() {
         { name: "name", label: "名称", value: indEdit.dataset.name, required: true },
         { name: "weight", label: "权重", type: "number", value: indEdit.dataset.weight },
         { name: "target_value", label: "目标值（留空 = 不设目标）", value: indEdit.dataset.target },
-        { name: "formula", label: "公式（只能引用该取数口径的变量）", value: indEdit.dataset.formula },
+        { name: "formula", label: `公式（${metricHint(indEdit.dataset.source) || "只能引用该取数口径的变量"}）`,
+          value: indEdit.dataset.formula },
         { name: "active", label: "状态", type: "select", value: indEdit.dataset.active,
           options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
       ]);

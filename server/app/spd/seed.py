@@ -297,7 +297,7 @@ SEED_SCALES = [
 
 # ============================================================ 考核指标库
 
-#: 指标的 `data_source` 决定取数口径，实现见 `routers/spd_assess.py::INDICATOR_METRICS`。
+#: 指标的 `data_source` 决定取数口径，实现见 `routers/assess.py::collect_metrics_batch`（口径表 `service.INDICATOR_SOURCES`）。
 SEED_INDICATORS = [
     {"code": "enroll_rate", "name": "纳管率", "object_type": "org", "data_source": "enrollment",
      "formula": "enrolled / target * 100", "weight": 15.0, "target_value": 80.0,

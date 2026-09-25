@@ -743,6 +743,21 @@ MEASUREMENT_SOURCE_NAMES = {"manual": "手工", "device": "设备", "his": "院�
                             "publichealth": "公卫随访同步"}
 MEDIA_TYPE_NAMES = {"text": "图文", "audio": "音频", "video": "视频"}
 
+#: 考核指标的取数口径：码 → (名称, {变量: 含义})。指标公式只能引用这里列的变量（建 / 改指标按它校验公式），
+#: 管理端建指标的口径下拉与变量提示也取自这里（`GET /api/spd/meta` 的 `indicator_sources`，前端不另抄一份）。
+#: 取数实现在 `routers/assess.py::collect_metrics_batch`，两边的变量名由 `tests/test_spd_indicator_sources.py`
+#: 逐口径钉住——那边多产出一个变量这里没列，公式就引用不到；这里列了那边不产出，公式校验过得去、计分时求值失败。
+INDICATOR_SOURCES: dict[str, tuple[str, dict[str, str]]] = {
+    "task": ("慢专病任务", {"total": "期内派发的任务数", "done": "其中已完成", "overdue": "其中超期"}),
+    "enrollment": ("纳管档案", {"enrolled": "在管档案数", "target": "目标人群数", "high_risk": "在管的高危 / 极高危"}),
+    "path": ("标准路径", {"total": "期末前入径数", "completed": "其中已完成", "running": "其中进行中"}),
+    "referral": ("转诊", {"total": "期内转诊单数", "closed": "其中已闭环", "effective": "其中有效就诊"}),
+    "measurement": ("监测", {"total": "期内在管患者的监测次数", "normal": "其中正常", "abnormal": "其中异常"}),
+    "assessment": ("风险评估", {"assessed": "期内评估过的在管患者数", "enrolled": "在管患者数"}),
+    "archive": ("建档", {"archived": "在管且已建档", "enrolled": "在管档案数"}),
+    "case_report": ("异常上报", {"reported": "期内上报数", "handled": "其中已处置"}),
+}
+
 
 def referral_feed(db: Session, patient_id: int) -> list[dict]:
     """把本子系统的转诊单产出成聚合列表的统一形状。

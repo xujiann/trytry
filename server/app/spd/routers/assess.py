@@ -8,8 +8,9 @@
 指标不写死在代码里，而是"取数口径（`data_source`）+ 公式（`formula`）+
 评分规则（`score_rule`）"三段式：
 
-1. `data_source` 决定去哪张表数数——本文件的 `INDICATOR_METRICS` 是唯一的
-   取数实现，每个口径返回一组命名数字（`{"total": 40, "done": 36}`）；
+1. `data_source` 决定去哪张表数数——本文件的 `collect_metrics_batch` 是唯一的
+   取数实现，每个口径返回一组命名数字（`{"total": 40, "done": 36}`；口径与变量表见
+   `service.INDICATOR_SOURCES`）；
 2. `formula` 用这些数字算出指标值，走既有的 `formula.evaluate`（AST 白名单）；
 3. `score_rule` 把指标值折成得分。
 
@@ -37,7 +38,7 @@ from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_roles
 from ...formula import FormulaError, evaluate as eval_formula
 from ..platform import Organization, User
-from ..service import unknown_program, unknown_programs
+from ..service import INDICATOR_SOURCES, unknown_program, unknown_programs
 from ..models import (
     SpdAssessPlan,
     SpdAssessment,
@@ -486,17 +487,9 @@ def indicator_usage(indicator_id: int, db: Session = Depends(get_db)):
 
 
 def _metric_names(data_source: str) -> tuple[str, ...]:
-    """各取数口径产出的变量名——公式只能引用这些名字。"""
-    return {
-        "task": ("total", "done", "overdue"),
-        "enrollment": ("enrolled", "target", "high_risk"),
-        "path": ("total", "completed", "running"),
-        "referral": ("total", "closed", "effective"),
-        "measurement": ("total", "normal", "abnormal"),
-        "assessment": ("assessed", "enrolled"),
-        "archive": ("archived", "enrolled"),
-        "case_report": ("reported", "handled"),
-    }.get(data_source, ("total",))
+    """各取数口径产出的变量名——公式只能引用这些名字（口径表见 `service.INDICATOR_SOURCES`）。"""
+    source = INDICATOR_SOURCES.get(data_source)
+    return tuple(source[1]) if source else ("total",)
 
 
 #: 考核期的三种写法（跑分弹窗与工作量筛选框的占位符都这么写）。形状用 `[0-9]`

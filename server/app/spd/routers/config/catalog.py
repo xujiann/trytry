@@ -24,7 +24,7 @@ from ...models import (
     SpdTarget,
 )
 from ...rules import FIELD_SOURCES, OPERATORS
-from ...service import unknown_code
+from ...service import INDICATOR_SOURCES, unknown_code
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
 
 
@@ -43,6 +43,14 @@ class RiskLevelOptionOut(RuleOptionOut):
     color: str
 
 
+class IndicatorSourceOut(BaseModel):
+    """考核指标的一个取数口径：名称与它产出的变量（公式只能引用这些）。"""
+
+    key: str
+    name: str
+    metrics: list[RuleOptionOut]
+
+
 class RuleMetaOut(BaseModel):
     """规则编辑器的可选项。
 
@@ -56,6 +64,8 @@ class RuleMetaOut(BaseModel):
     risk_levels: list[RiskLevelOptionOut]
     task_types: dict[str, str]
     member_roles: dict[str, str]
+    # 考核指标的取数口径与变量（P2-93：管理端建指标的下拉与公式提示，前端不另抄一份口径表）
+    indicator_sources: list[IndicatorSourceOut]
 
 
 class TargetOut(BaseModel):
@@ -122,7 +132,7 @@ class ProgramVersionOut(BaseModel):
 
 @router.get("/meta", response_model=RuleMetaOut)
 def rule_meta():
-    """规则可用字段与比较符，供管理端渲染规则编辑器。
+    """规则可用字段与比较符，供管理端渲染规则编辑器；考核指标的取数口径与变量，供建指标的下拉与公式提示。
 
     做成接口而不是前端写死：字段表将来会随采集项扩充，
     两处各维护一份的结果一定是前端能选、后端不认。
@@ -145,6 +155,11 @@ def rule_meta():
             "doctor": "医生", "nurse": "护士", "rehab": "康复治疗师",
             "case_manager": "个案管理师", "village_doctor": "村医", "expert": "专家",
         },
+        "indicator_sources": [
+            {"key": key, "name": name,
+             "metrics": [{"key": metric, "name": label} for metric, label in metrics.items()]}
+            for key, (name, metrics) in INDICATOR_SOURCES.items()
+        ],
     }
 
 
