@@ -504,6 +504,10 @@ def _create_case(
     direction: str = "up",
 ) -> SpdReferralCase:
     origin_org_id = user.org_id or (enrollment.org_id if enrollment else None)
+    if origin_org_id is None:
+        # 发起转诊与规则试算自动开单共用这一句（P2-76）：原先只写在发起转诊里，自动开单遇到同一情形
+        # 撞 initiator_org_id 的非空约束，500
+        raise HTTPException(status_code=422, detail="账号未绑定机构且患者未纳管，无法确定发起机构")
     case = SpdReferralCase(
         patient_id=patient_id, program_code=program_code,
         enrollment_id=enrollment.id if enrollment else None,
@@ -552,8 +556,6 @@ def create_referral(
             )
             .first()
         )
-    if user.org_id is None and enrollment is None:
-        raise HTTPException(status_code=422, detail="账号未绑定机构且患者未纳管，无法确定发起机构")
     case = _create_case(
         db, user, patient_id=body.patient_id, program_code=body.program_code,
         enrollment=enrollment, reason=body.reason, target_org_id=body.target_org_id,
