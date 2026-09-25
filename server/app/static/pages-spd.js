@@ -26,6 +26,11 @@ const SPD_TASK_STATUS = {
   submitted: ["待审核", "orange"], done: ["已完成", "green"],
   rejected: ["已退回", "red"], overdue: ["已超期", "red"], cancelled: ["已取消", ""],
 };
+/** 数据源类型（`spd_data_sources.source_type`，接入表单的下拉） */
+const SPD_DS_TYPES = {
+  HIS: "HIS", EMR: "电子病历 EMR", LIS: "检验 LIS", PACS: "影像 PACS",
+  checkup: "体检", publichealth: "公卫随访", device: "设备回传",
+};
 const SPD_TASK_TYPES = {
   path: "路径节点", followup: "随访", intervention: "干预", assess: "评估",
   revisit: "复诊", referral: "转诊", report: "上报", recall: "召回",
@@ -379,6 +384,16 @@ async function renderSpdAdmin() {
          <td><button class="btn secondary" data-pkg-edit="${k.id}" data-name="${esc(k.name)}"
               data-price="${k.price}" data-days="${k.period_days}" data-active="${k.active ? 1 : 0}">编辑</button></td></tr>`)}`)}
     ${panel("宣教素材", `
+      <form class="inline" id="spd-edumat-form">
+        <input name="code" placeholder="编码" required style="width:110px">
+        <input name="title" placeholder="标题" required>
+        <select name="program_code"><option value="">通用（不限病种）</option>${spdProgramOptions(catalog, false, true)}</select>
+        <select name="media_type"><option value="text">图文</option><option value="audio">音频</option><option value="video">视频</option></select>
+        <input name="media_url" placeholder="资料地址（音频 / 视频）">
+        <input name="dept" placeholder="科室" style="width:100px">
+        <input name="content" placeholder="正文（图文）" style="min-width:220px">
+        <button>新建素材</button>
+      </form>
       ${table(["ID", "编码", "标题", "病种", "形式", "科室", "状态", "操作"], materials, (m) =>
         `<tr><td>${m.id}</td><td>${esc(m.code)}</td><td>${esc(m.title)}</td><td>${esc(m.program_code || "—")}</td>
          <td>${esc(m.media_type_name)}</td><td>${esc(m.dept || "—")}</td>
@@ -423,6 +438,16 @@ async function renderSpdAdmin() {
                   ["平均成功率", ds.avg_success_rate + "%"]])}
       <p class="desc">监控接口：${Object.entries(dsm.by_status || {}).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "无状态记录"}；
         陈旧 ${(dsm.stale_over_24h || []).length} 个，平均成功率 ${dsm.avg_success_rate}%</p>
+      <form class="inline" id="spd-ds-form">
+        <input name="code" placeholder="编码" required style="width:110px">
+        <input name="name" placeholder="名称" required>
+        <select name="source_type">${Object.entries(SPD_DS_TYPES).map(([k, v]) =>
+          `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+        <input name="org_id" type="number" placeholder="机构ID（可留空）" style="width:130px">
+        <input name="endpoint" placeholder="接口地址">
+        <input name="freq_minutes" type="number" value="60" placeholder="同步频率(分)" style="width:110px">
+        <button>接入数据源</button>
+      </form>
       ${table(["ID", "编码", "名称", "类型", "频率(分)", "最近同步", "行数", "延迟(ms)", "成功率", "状态", "操作"],
         sources, (src) =>
         `<tr><td>${src.id}</td><td>${esc(src.code)}</td><td>${esc(src.name)}</td><td>${esc(src.source_type)}</td>
@@ -484,6 +509,15 @@ async function renderSpdAdmin() {
   $("#spd-tag-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/tags", formJson(e.target), "#spd-tag-msg");
+  };
+  // 宣教素材与数据源原先只能改不能建（P2-93 动词级孤儿）：建的接口一直在，界面上没有入口
+  $("#spd-edumat-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/edu-materials", formJson(e.target), "#spd-edu-msg");
+  };
+  $("#spd-ds-form").onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/spd/data-sources", formJson(e.target, ["org_id", "freq_minutes"]), "#spd-ds-msg");
   };
   $("#spd-device-form").onsubmit = (e) => {
     e.preventDefault();

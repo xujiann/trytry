@@ -51,8 +51,6 @@ KNOWN: set[str] = {
     "POST /api/outpatient/consent-templates",   # 门诊知情同意模板
     "POST /api/tcm/techniques",                 # 中医适宜技术目录
     "POST /api/tcm-heritage/simulations",       # 模拟诊疗病例（情境化决策）
-    "POST /api/spd/data-sources",               # 慢专病数据源
-    "POST /api/spd/edu-materials",              # 宣教素材
     "POST /api/spd/indicators",                 # 考核指标
     "POST /api/spd/report-templates",           # 报告模板
     "POST /api/spd/scales",                     # 评估量表（页面只有发布 / 停用）

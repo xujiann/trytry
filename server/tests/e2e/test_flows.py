@@ -1566,6 +1566,31 @@ def test_界面上报异常挂上纳管档案_病种取上报任务的(page, bas
     assert (spawned["program_code"], spawned["enrollment_id"]) == ("hypertension", enrollment["id"]), spawned
 
 
+def test_运行中枢能新建宣教素材与接入数据源(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：宣教素材、数据源两块原先只有「编辑」——建的接口一直在，界面上没有入口，新的素材与新接入的
+    院内系统只能靠接口调用方登记。"""
+    _login(page, base_url)
+    _open_page(page, "spdadmin", "平台管理端·运行中枢")
+    edu = page.locator("#spd-edumat-form")
+    edu.locator('[name="code"]').fill("E2E_EDU93")
+    edu.locator('[name="title"]').fill("E2E 限盐小讲堂")
+    edu.locator('[name="program_code"]').select_option("hypertension")
+    edu.locator('[name="content"]').fill("每日食盐不超过 5 克")
+    _submit(page, "#spd-edumat-form button")
+    material = next(m for m in admin_read("/api/spd/edu-materials?limit=100") if m["code"] == "E2E_EDU93")
+    assert (material["title"], material["program_code"], material["media_type"]) == (
+        "E2E 限盐小讲堂", "hypertension", "text"), material
+
+    ds = page.locator("#spd-ds-form")
+    ds.locator('[name="code"]').fill("E2E_DS93")
+    ds.locator('[name="name"]').fill("E2E 检验系统")
+    ds.locator('[name="source_type"]').select_option("LIS")
+    ds.locator('[name="freq_minutes"]').fill("30")
+    _submit(page, "#spd-ds-form button")
+    source = next(s for s in admin_read("/api/spd/data-sources") if s["code"] == "E2E_DS93")
+    assert (source["name"], source["source_type"], source["freq_minutes"]) == ("E2E 检验系统", "LIS", 30), source
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""
