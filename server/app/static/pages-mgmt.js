@@ -266,6 +266,9 @@ async function renderFollowups() {
 
 /* ---------------- 会计核算 ---------------- */
 
+// 科目类别（措辞照抄 AccountSubject.category 列注释；后端 CATEGORY_NAMES 同此）
+const ACC_CATEGORIES = { asset: "资产", liability: "负债", net_asset: "净资产", income: "收入", expense: "费用" };
+
 async function renderAccounting() {
   $("#page-desc").textContent = "会计科目 + 记账凭证（借贷必平强校验）→ 过账锁定 → 试算平衡表；作废而不删除";
   const thisMonth = new Date().toISOString().slice(0, 7);
@@ -288,6 +291,7 @@ async function renderAccounting() {
     loaded = await load(period);
   }
   const [subjects, vouchers, balance, consolidated] = loaded;
+  const canSubject = currentRole() === "admin";   // 建科目仅管理员（后端 require_admin）
   const VS = { draft: ["草稿", "orange"], posted: ["已过账", "green"], void: ["已作废", "red"] };
   const options = subjects.map((s) => `<option value="${esc(s.code)}">${esc(s.code)} ${esc(s.name)}</option>`).join("");
   $("#page-body").innerHTML = `
@@ -343,6 +347,21 @@ async function renderAccounting() {
       ${table(["科目", "名称", "类别", "借方", "贷方"], balance.lines, (l) =>
         `<tr><td>${esc(l.subject_code)}</td><td>${esc(l.subject_name)}</td><td>${esc(l.category_name)}</td>
          <td>${l.debit.toFixed(2)}</td><td>${l.credit.toFixed(2)}</td></tr>`)}`)}
+    ${panel(`会计科目（${subjects.length}）`, `
+      <p class="desc">种子只放一级科目，明细科目各院口径不一，由管理员按需增建；凭证分录只能选这里有的科目。</p>
+      ${canSubject ? `<form class="inline" id="acc-subject-form" style="margin-bottom:8px">
+        <input name="code" placeholder="科目编码" required style="width:110px">
+        <input name="name" placeholder="科目名称" required>
+        <select name="category">${Object.entries(ACC_CATEGORIES).map(([k, v]) =>
+          `<option value="${k}">${v}</option>`).join("")}</select>
+        <select name="direction"><option value="debit">余额在借方（资产 / 费用类）</option>
+          <option value="credit">余额在贷方（负债 / 净资产 / 收入类、累计折旧）</option></select>
+        <button>新增科目</button>
+      </form><p class="msg" id="acc-subject-msg"></p>` : ""}
+      <details><summary>科目表</summary>
+      ${table(["编码", "名称", "类别", "余额方向"], subjects, (s) =>
+        `<tr><td>${esc(s.code)}</td><td>${esc(s.name)}</td><td>${esc(ACC_CATEGORIES[s.category] || s.category)}</td>
+         <td>${s.direction === "credit" ? "贷" : "借"}</td></tr>`)}</details>`)}
     <div class="panel hidden" id="voucher-detail"><h3>凭证明细</h3><div id="voucher-detail-body"></div></div>`;
 
   const addEntryRow = () => {
@@ -378,6 +397,12 @@ async function renderAccounting() {
       await api(`/api/accounting/trial-balance?period=${encodeURIComponent(value)}`);
     } catch (err) { setMsg("#acc-period-msg", err.message, false); return; }
     localStorage.setItem("medplat_acc_period", value); route();
+  };
+  // 科目原先只能在凭证下拉里看、不能建（P2-93 动词级孤儿）：建科目的接口一直在，明细科目只能靠接口调用方
+  const subjectForm = $("#acc-subject-form");
+  if (subjectForm) subjectForm.onsubmit = (e) => {
+    e.preventDefault();
+    return postAction("/api/accounting/subjects", formJson(e.target), "#acc-subject-msg");
   };
   $("#voucher-form").onsubmit = async (e) => {
     e.preventDefault();

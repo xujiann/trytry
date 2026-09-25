@@ -2184,6 +2184,23 @@ def test_会计页存下的期间被拒时回落本月_切换框先验再存(pag
     assert page.evaluate("() => localStorage.getItem('medplat_acc_period')") is None
 
 
+def test_会计科目能在界面上增建_凭证分录即可选用(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：科目原先只在凭证分录的下拉里出现、页面上建不了——种子只放一级科目，docstring 写着
+    「明细科目交由管理员按需增建」，建科目的接口（仅管理员）却没有入口。"""
+    _login(page, base_url)
+    _open_page(page, "accounting", "会计核算")
+    form = page.locator("#acc-subject-form")
+    form.locator('[name="code"]').fill("100299")
+    form.locator('[name="name"]').fill("E2E 银行存款·医保专户")
+    form.locator('[name="category"]').select_option("asset")
+    form.locator('[name="direction"]').select_option("debit")
+    _submit(page, "#acc-subject-form button")
+    created = next(s for s in admin_read("/api/accounting/subjects") if s["code"] == "100299")
+    assert (created["name"], created["category"], created["direction"]) == ("E2E 银行存款·医保专户", "asset", "debit")
+    # 凭证分录的科目下拉即可选用（每行一个下拉，看第一行）
+    expect(page.locator(".e-subject").first.locator('option[value="100299"]')).to_have_count(1)
+
+
 def test_成本页存下的期间被拒时回落本月_切换框先验再存(page, base_url):
     """与会计页同一个坑（P1-62 修了会计页，成本页是 P1-61 收 `CostIn.period` 时查出来的）：
     切换框是自由文本、存进 localStorage 不校验，存下 `2026/09` 之后整页那个 Promise.all 422，

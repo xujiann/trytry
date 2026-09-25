@@ -218,7 +218,8 @@ MIGRATED_PAGES = {
     "renderSurgery": 5,             # 另有一处 class="panel hidden" 的术中记录容器
     "renderWorkflows": 5,           # 另有一处 class="panel hidden" 的流转记录容器
     "renderAnalytics": 5,           # 标题里的期间不再 esc()：组件转义标题
-    "renderAccounting": 5,          # 另有一处 class="panel hidden" 的凭证明细容器
+    "renderAccounting": 6,          # 另有一处 class="panel hidden" 的凭证明细容器
+                                    # P2-93（2026-09-25）：+会计科目面板（科目表 + 管理员增建）
     # 第九批 2026-09-06：第一次迁 core.js（剩余量第二大的文件），外加两页 clinical。
     # 41 个夹具页全量重跑逐字符一致。
     "renderExams": 7,               # 含一处条件渲染的危急值面板

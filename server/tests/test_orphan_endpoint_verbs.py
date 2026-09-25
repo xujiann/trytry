@@ -44,7 +44,6 @@ EXEMPT: dict[str, str] = {
 #: 欠账名单：路径有入口、这个动词还没有的。只许变少，按模块分组。
 KNOWN: set[str] = {
     # 配置项只能改、不能建（需求对照表 7.5「全部可配置」）
-    "POST /api/accounting/subjects",            # 会计科目
     "POST /api/dataquality/rules",              # 数据质控规则
     "POST /api/tcm-heritage/simulations",       # 模拟诊疗病例（情境化决策）
     "POST /api/spd/indicators",                 # 考核指标
