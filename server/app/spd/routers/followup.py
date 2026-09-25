@@ -1185,6 +1185,10 @@ def record_call_result(
     task = db.get(SpdCallTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="呼叫任务不存在")
+    # 结果只回写一次（P2-87）：页面只对待呼叫的任务给「回写结果」，网关每条任务回调一次（呼叫失败后重派是新的一行）。
+    # 已有结果的再写一次，只会把接通的通话、要回听的录音地址与沟通结果事后改掉
+    if task.status != "pending":
+        raise HTTPException(status_code=409, detail="该呼叫任务已回写过结果")
     task.status = body.status
     task.duration_s = body.duration_s
     task.record_url = body.record_url
