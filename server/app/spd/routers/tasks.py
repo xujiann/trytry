@@ -429,6 +429,17 @@ def adjust_path_instance(
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"路径负责人{state}（owner_user_id={data['owner_user_id']}）")
+    if data.get("status") == "running" and instance.status == "paused":
+        # 恢复与推进接口同一套（P1-131）：原先这里只把状态改回去，因条件暂停的路径不判条件、不派任务
+        with serialized_on(db, SpdPathInstance, instance.id):
+            db.refresh(instance)   # 锁外取的状态可能已被别人改掉
+            if instance.status == "paused":
+                _resume_paused(db, instance, enrollment)
+            for key, value in data.items():
+                if key != "status":
+                    setattr(instance, key, value)
+            db.commit()
+        return _instance_out(db, instance)
     for key, value in data.items():
         setattr(instance, key, value)
     if data.get("status") == "cancelled":
@@ -442,6 +453,42 @@ def adjust_path_instance(
             task.review_note = "路径取消"
     db.commit()
     return _instance_out(db, instance)
+
+
+def _resume_paused(db: Session, instance: SpdPathInstance, enrollment: SpdEnrollment | None) -> list:
+    """恢复暂停的实例（推进与改档共用，调用方持实例行的锁）。返回命中的进入条件。
+
+    因进入条件暂停的实例停在一个**还没有任务**的节点上（`advance_path` 推到它、条件不满足就暂停，任务没派）：恢复时重判
+    这个节点的进入条件（不满足 409）并派本节点任务。手工暂停的节点上任务照旧在：只改回执行中，不再重复派。原先只有推进
+    接口会重判、而且一律再派一条；改档接口（管理端「调整 → 执行中（恢复）」，暂停的实例页面上只有这一个入口）只改状态——
+    路径停在没有任务的节点上，再点「推进」就把这个节点整个跳过，进入条件形同虚设（P1-131）。
+    """
+    node = (
+        db.query(SpdPathNode)
+        .filter(SpdPathNode.template_id == instance.template_id, SpdPathNode.key == instance.current_node_key)
+        .first()
+    )
+    if node is None:
+        raise HTTPException(status_code=409, detail="暂停节点已不存在，请调整路径实例")
+    entered = db.query(SpdTask.id).filter(
+        SpdTask.instance_id == instance.id, SpdTask.node_key == node.key).first() is not None
+    matched: list = []
+    if not entered:
+        allowed, matched = node_enter_allowed(db, instance, node)
+        if not allowed:
+            raise HTTPException(status_code=409, detail=f"进入「{node.name}」的条件仍未满足，无法恢复")
+    instance.status = "running"
+    if not entered and enrollment is not None:
+        if node.stage:
+            enrollment.stage = node.stage
+        template = db.get(SpdPathTemplate, instance.template_id)
+        spawn_task(
+            db, patient_id=enrollment.patient_id,
+            title=f"{template.name if template else '路径'}·{node.name}",
+            task_type="path", enrollment=enrollment, instance=instance,
+            node=node, due_days=node.due_days, source="path",
+        )
+    return matched
 
 
 @router.post("/path-instances/{instance_id}/advance", response_model=AdvanceInstanceOut,
@@ -469,35 +516,7 @@ def advance_instance(
     with serialized_on(db, SpdPathInstance, instance.id):
         db.refresh(instance)
         if instance.status == "paused":
-            # 因进入条件暂停的实例：重判当前节点条件，满足即恢复并派任务
-            node = (
-                db.query(SpdPathNode)
-                .filter(
-                    SpdPathNode.template_id == instance.template_id,
-                    SpdPathNode.key == instance.current_node_key,
-                )
-                .first()
-            )
-            if node is None:
-                raise HTTPException(status_code=409, detail="暂停节点已不存在，请调整路径实例")
-            allowed, matched = node_enter_allowed(db, instance, node)
-            if not allowed:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"进入「{node.name}」的条件仍未满足，无法恢复",
-                )
-            enrollment = owner
-            template = db.get(SpdPathTemplate, instance.template_id)
-            instance.status = "running"
-            if node.stage and enrollment is not None:
-                enrollment.stage = node.stage
-            if enrollment is not None:
-                spawn_task(
-                    db, patient_id=enrollment.patient_id,
-                    title=f"{template.name if template else '路径'}·{node.name}",
-                    task_type="path", enrollment=enrollment, instance=instance,
-                    node=node, due_days=node.due_days, source="path",
-                )
+            matched = _resume_paused(db, instance, owner)
             db.commit()
             return {"instance": _instance_out(db, instance), "status": "running",
                     "resumed": True, "matched": matched}
