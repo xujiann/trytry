@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, scope_org_list, scope_patient_list
@@ -301,6 +302,10 @@ def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
     slot = db.get(AppointmentSlot, slot_id)
     if slot is None:
         raise HTTPException(status_code=404, detail="号源不存在")
+    # 日期已过的号源不再接受预约（P2-64）：原先照约不误——居民端「可约号源」按日期正序列出，头几页全是过去的号，
+    # 约上的是一个已经过去的时段。按业务日期比（与寻医列表 `slot_date >= today` 同一口径），两条入口同一句
+    if slot.slot_date < clock.today().isoformat():
+        raise HTTPException(status_code=409, detail="该号源日期已过，不能再预约")
     if slot.employee_id is not None:
         # 医师离职前放出的号源还挂在清单上：登记离职不会回收号源，照样约得上就是约了一个没人坐诊的号
         doctor = db.get(Employee, slot.employee_id)

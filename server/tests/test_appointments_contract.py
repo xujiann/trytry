@@ -69,14 +69,14 @@ def seeded(client, admin):
     s1 = client.post(
         "/api/appointments/slots",
         json={"org_id": org["id"], "resource_type": "outpatient", "resource_name": "呼吸科门诊",
-              "employee_id": wang["id"], "slot_date": "2026-09-07", "slot_time": "08:30",
+              "employee_id": wang["id"], "slot_date": "2099-09-07", "slot_time": "08:30",
               "capacity": 3},
         headers=admin,
     ).json()
     s2 = client.post(
         "/api/appointments/slots",
         json={"org_id": org["id"], "resource_type": "outpatient", "resource_name": "呼吸科门诊",
-              "employee_id": wang["id"], "slot_date": "2026-09-08", "slot_time": "14:00",
+              "employee_id": wang["id"], "slot_date": "2099-09-08", "slot_time": "14:00",
               "capacity": 1},
         headers=admin,
     ).json()
@@ -111,7 +111,7 @@ def test_寻医精确_排序与号源嵌套(client, admin, seeded):
             "org_name": "寻医契约总院",
             "available_slots": 1,  # 约满的 s2 不算余号
             "next_slots": [
-                {"slot_id": seeded["s1"]["id"], "slot_date": "2026-09-07", "slot_time": "08:30",
+                {"slot_id": seeded["s1"]["id"], "slot_date": "2099-09-07", "slot_time": "08:30",
                  "remaining": 3, "resource_name": "呼吸科门诊"},
             ],
             "bookable": True,

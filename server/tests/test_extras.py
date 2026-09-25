@@ -39,7 +39,7 @@ def test_expert_blacklist_survey_triage(client, h, base):
     assert client.post("/api/consultations/experts", json={"name": "张主任", "org_id": base["org"]["id"], "specialty": "心内科"}, headers=h).status_code == 201
     assert len(client.get("/api/consultations/experts?available=true", headers=h).json()) == 1
 
-    slot = client.post("/api/appointments/slots", json={"org_id": base["org"]["id"], "resource_type": "outpatient", "resource_name": "门诊", "slot_date": "2026-09-01", "capacity": 5}, headers=h).json()
+    slot = client.post("/api/appointments/slots", json={"org_id": base["org"]["id"], "resource_type": "outpatient", "resource_name": "门诊", "slot_date": "2099-09-01", "capacity": 5}, headers=h).json()
     client.post("/api/appointments/blacklist", json={"patient_id": base["patient"]["id"], "reason": "多次爽约"}, headers=h)
     assert client.post("/api/appointments", json={"slot_id": slot["id"], "patient_id": base["patient"]["id"]}, headers=h).status_code == 403
     client.delete(f"/api/appointments/blacklist/{base['patient']['id']}", headers=h)

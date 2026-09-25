@@ -96,9 +96,9 @@ def seeded(client):
                               managed_by_org_id=org2.id, next_due="2026-09-01"))
 
         slot = AppointmentSlot(org_id=org.id, resource_type="doctor", resource_name="心内科",
-                               slot_date="2026-09-10", slot_time="09:00", capacity=5, booked=0)
+                               slot_date="2099-09-10", slot_time="09:00", capacity=5, booked=0)
         slot2 = AppointmentSlot(org_id=org.id, resource_type="doctor", resource_name="呼吸科",
-                                slot_date="2026-09-11", slot_time="10:00", capacity=3, booked=0)
+                                slot_date="2099-09-11", slot_time="10:00", capacity=3, booked=0)
         db.add_all([slot, slot2])
         db.flush()
         db.add(Appointment(slot_id=slot2.id, patient_id=me.id, status="booked"))
@@ -280,8 +280,8 @@ def test_号源列表的键集合与余号(client, auth, seeded):
     assert rows and set(rows[0]) == {"id", "org_id", "org_name", "resource_type",
                                      "resource_name", "slot_date", "slot_time", "remaining"}
     filtered = client.get("/api/portal/me/slots", headers=auth,
-                          params={"org_id": seeded["org"], "slot_date": "2026-09-10"}).json()
-    assert [r["slot_date"] for r in filtered] == ["2026-09-10"]
+                          params={"org_id": seeded["org"], "slot_date": "2099-09-10"}).json()
+    assert [r["slot_date"] for r in filtered] == ["2099-09-10"]
 
 
 def test_我的预约与签约与转诊的键集合(client, auth):

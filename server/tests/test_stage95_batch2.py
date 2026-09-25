@@ -239,7 +239,7 @@ def test_两个黑名单域互不影响(client, admin, township, patient):
     slot = client.post(
         "/api/appointments/slots",
         json={"org_id": township["id"], "resource_type": "outpatient",
-              "resource_name": "李医生门诊", "slot_date": "2026-09-01",
+              "resource_name": "李医生门诊", "slot_date": "2099-09-01",
               "slot_time": "09:00", "capacity": 5},
         headers=admin,
     ).json()

@@ -350,7 +350,7 @@ def request_data(client, admin, roles):
     slot = client.post(
         "/api/appointments/slots",
         json={"org_id": org["id"], "resource_type": "outpatient", "resource_name": "全科门诊",
-              "slot_date": "2026-10-01", "slot_time": "09:00-10:00", "capacity": 2},
+              "slot_date": "2099-10-01", "slot_time": "09:00-10:00", "capacity": 2},
         headers=admin,
     ).json()
     client.post(

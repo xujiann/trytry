@@ -31,6 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from .. import clock
 from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present
 from ..database import get_db
@@ -1235,7 +1236,9 @@ def portal_slots(
     补尾键是切分页的**前提**而不是优化：不补就是拿「静默少返回」换「静默重复+漏行」，
     后者更难发现。（SQLite 上按 rowid 稳定返回，这类缺陷本地测不出来。）
     """
-    query = db.query(AppointmentSlot).filter(AppointmentSlot.booked < AppointmentSlot.capacity)
+    # 只列今天及以后的（P2-64）：原先不看日期，按日期正序排，头几页全是已经过去的号，点了照样约得上
+    query = db.query(AppointmentSlot).filter(AppointmentSlot.booked < AppointmentSlot.capacity,
+                                             AppointmentSlot.slot_date >= clock.today().isoformat())
     if org_id is not None:
         query = query.filter(AppointmentSlot.org_id == org_id)
     if slot_date:

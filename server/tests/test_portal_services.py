@@ -218,7 +218,7 @@ def slot(client, admin, org):
     return client.post(
         "/api/appointments/slots",
         json={"org_id": org["id"], "resource_type": "outpatient", "resource_name": "全科门诊",
-              "slot_date": "2026-09-01", "slot_time": f"09:{next(_SLOT_SEQ):02d}",
+              "slot_date": "2099-09-01", "slot_time": f"09:{next(_SLOT_SEQ):02d}",
               "capacity": 2},
         headers=admin,
     ).json()
@@ -228,7 +228,7 @@ def test_portal_slots_only_lists_available(client, me, slot, admin, org):
     full = client.post(
         "/api/appointments/slots",
         json={"org_id": org["id"], "resource_type": "outpatient", "resource_name": "已满门诊",
-              "slot_date": "2026-09-02", "slot_time": "09:00-10:00", "capacity": 1},
+              "slot_date": "2099-09-02", "slot_time": "09:00-10:00", "capacity": 1},
         headers=admin,
     ).json()
     client.post("/api/portal/me/appointments", json={"slot_id": full["id"]}, headers=me["headers"])
@@ -242,7 +242,7 @@ def test_portal_slots_日期筛选写错是422_留空照旧(client, me, slot):
     """P1-58：`slot_date` 按等值匹配。修复前 `2026-9-1` / `2026/09/01` 200 返回空表——
     居民看到"这天没有可约号源"，而号源其实就在那天。业务端孪生 `/api/appointments/slots`
     同批收口（见 test_date_query_params.py）。"""
-    ok = client.get("/api/portal/me/slots", params={"slot_date": "2026-09-01"},
+    ok = client.get("/api/portal/me/slots", params={"slot_date": "2099-09-01"},
                     headers=me["headers"])
     assert ok.status_code == 200 and any(r["id"] == slot["id"] for r in ok.json())
     for bad in ("2026-9-1", "2026/09/01", "2026-02-31"):

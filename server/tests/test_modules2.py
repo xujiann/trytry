@@ -132,7 +132,7 @@ def test_appointment_capacity_and_cancel(client, headers, base_data):
             "org_id": base_data["county"]["id"],
             "resource_type": "exam",
             "resource_name": "CT室上午",
-            "slot_date": "2026-08-20",
+            "slot_date": "2099-08-20",
             "slot_time": "09:00-10:00",
             "capacity": 1,
         },

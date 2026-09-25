@@ -239,7 +239,7 @@ def slot(client, admin, setup):
             "resource_type": "outpatient",
             "resource_name": "P0门诊",
             "slot_time": f"10:{next(_SLOT_SEQ):02d}",
-            "slot_date": "2026-09-10",
+            "slot_date": "2099-09-10",
             "capacity": 2,
         },
         headers=admin,
@@ -272,7 +272,7 @@ def test_slot_conditional_update_prevents_overbook(client, admin, setup, slot):
         headers=setup["operator"],
     )
     assert full.status_code == 409
-    slots = client.get("/api/appointments/slots?slot_date=2026-09-10", headers=admin).json()
+    slots = client.get("/api/appointments/slots?slot_date=2099-09-10", headers=admin).json()
     current = next(s for s in slots if s["id"] == slot["id"])
     assert current["booked"] == 2  # 未超卖
 
@@ -287,7 +287,7 @@ def test_cancel_releases_slot_without_negative(client, admin, setup, slot):
     assert client.post(f"/api/appointments/{appt['id']}/cancel", headers=setup["operator"]).status_code == 200
     # 重复取消被状态机拒绝，不会再次释放号源
     assert client.post(f"/api/appointments/{appt['id']}/cancel", headers=setup["operator"]).status_code == 409
-    slots = client.get("/api/appointments/slots?slot_date=2026-09-10", headers=admin).json()
+    slots = client.get("/api/appointments/slots?slot_date=2099-09-10", headers=admin).json()
     current = next(s for s in slots if s["id"] == slot["id"])
     assert current["booked"] >= 0
 
@@ -303,7 +303,7 @@ def test_fulfilled_appointment_cannot_be_rebooked(client, admin, setup, slot):
     assert client.post(f"/api/appointments/{appt['id']}/fulfill", headers=setup["operator"]).status_code == 200
 
     before = next(
-        s for s in client.get("/api/appointments/slots?slot_date=2026-09-10", headers=admin).json()
+        s for s in client.get("/api/appointments/slots?slot_date=2099-09-10", headers=admin).json()
         if s["id"] == slot["id"]
     )["booked"]
     rebook = client.post(
@@ -316,7 +316,7 @@ def test_fulfilled_appointment_cannot_be_rebooked(client, admin, setup, slot):
     appts = client.get(f"/api/appointments?patient_id={p['id']}", headers=admin).json()
     assert appts[0]["status"] == "fulfilled"
     after = next(
-        s for s in client.get("/api/appointments/slots?slot_date=2026-09-10", headers=admin).json()
+        s for s in client.get("/api/appointments/slots?slot_date=2099-09-10", headers=admin).json()
         if s["id"] == slot["id"]
     )["booked"]
     assert after == before

@@ -68,7 +68,7 @@ def seeded(client):
         # 正是补 id 尾键要防的那种形状。
         for i in range(7):
             db.add(AppointmentSlot(org_id=org.id, resource_type="doctor",
-                                   resource_name=f"并列科室{i}", slot_date="2026-10-01",
+                                   resource_name=f"并列科室{i}", slot_date="2099-10-01",
                                    slot_time="09:00", capacity=5, booked=0))
         # 账单 6 条
         for i in range(6):

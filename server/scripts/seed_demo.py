@@ -163,9 +163,12 @@ if ct_resp.status_code == 201:
     c.post(f"/api/contracts/{ct['id']}/services", json={"service_type": "visit", "note": "上门测血压"})
     c.post(f"/api/contracts/{ct['id']}/services", json={"service_type": "followup", "note": "季度随访"})
 
-# 预约诊疗
+# 预约诊疗：号源放在一周后——日期已过的号源不再约得上（P2-64），写死的演示日期一过，这条预约就静默约空了
+from datetime import date, timedelta
+
 slot = c.post("/api/appointments/slots", json={"org_id": county["id"], "resource_type": "exam",
-                                               "resource_name": "CT室上午", "slot_date": "2026-08-20",
+                                               "resource_name": "CT室上午",
+                                               "slot_date": (date.today() + timedelta(days=7)).isoformat(),
                                                "slot_time": "09:00-10:00", "capacity": 5}).json()
 c.post("/api/appointments", json={"slot_id": slot["id"], "patient_id": patients[0]["id"]})
 

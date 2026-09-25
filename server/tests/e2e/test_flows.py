@@ -1192,7 +1192,7 @@ def test_管理端取消预约先确认(page, base_url, seed, admin_read, admin_
                          {"name": "E2E取消预约患者", "id_card": "320981198811112221", "gender": "男"})
     slot = admin_call("POST", "/api/appointments/slots", {
         "org_id": seed["org"]["id"], "resource_type": "outpatient", "resource_name": "E2E取消预约门诊",
-        "slot_date": "2026-12-01", "slot_time": "09:00", "capacity": 1})
+        "slot_date": "2099-12-01", "slot_time": "09:00", "capacity": 1})
     apt = admin_call("POST", "/api/appointments", {"slot_id": slot["id"], "patient_id": patient["id"]})
 
     def status():
