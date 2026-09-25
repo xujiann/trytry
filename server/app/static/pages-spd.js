@@ -2630,6 +2630,8 @@ async function renderSpdFollowup() {
          <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td>
          <td>${c.status === "pending" ? `<button class="btn secondary" data-call-result="${c.id}">回写结果</button>` : "—"}</td></tr>`)}`)}`;
 
+  // 「执行」「转呼叫」对待随访与已超期的都给（P1-132）：超期扫描（定时任务、工作台、任务汇总进来都扫）一过，过了日期没做的
+  // 随访都成了已超期——原先只对待随访的给，最需要补做的那些在页面上再也执行不了（接口本就收已超期的）
   const drawRecords = async (query) => {
     const qs = new URLSearchParams({ limit: "30", ...(query || {}) }).toString();
     const rows = await api(`/api/spd/followup-records?${qs}`);
@@ -2642,9 +2644,10 @@ async function renderSpdFollowup() {
        <td>${r.abnormal_level && r.abnormal_level !== "none"
           ? `<span class="tag ${r.abnormal_level === "high" ? "red" : "orange"}">${esc(r.abnormal_level_name)}</span>`
           : "—"}</td>
-       <td><span class="tag ${r.status === "done" ? "green" : r.status === "planned" ? "orange" : ""}">${esc(r.status_name)}</span></td>
+       <td><span class="tag ${r.status === "done" ? "green" : r.status === "planned" ? "orange"
+          : r.status === "overdue" ? "red" : ""}">${esc(r.status_name)}</span></td>
        <td><button class="btn secondary" data-fu-ctx="${r.id}">前置资料</button>
-           ${r.status === "planned"
+           ${r.status === "planned" || r.status === "overdue"
           ? `<button class="btn secondary" data-fu-exec="${r.id}">执行</button>
              <button class="btn secondary" data-fu-call="${r.id}" data-pid="${r.patient_id}">转呼叫</button>`
           : ""}

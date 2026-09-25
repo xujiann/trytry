@@ -1387,6 +1387,27 @@ def test_随访问卷在界面上录题目与异常规则_执行随访逐题作�
     assert (record["status"], record["abnormal_level"], record["answers"]) == ("done", "high", {"pain": 9})
 
 
+def test_超期的随访在看板上照样能执行与转呼叫(page, base_url, seed, admin_read, admin_call):
+    """P1-132：随访看板的「执行」「转呼叫」原先只对待随访的给。超期扫描（定时任务、工作台、任务汇总进来都扫一遍）一过，
+    过了日期没做的随访都成了「已超期」——最需要补做的那些在页面上再也执行不了（接口本就收已超期的）。"""
+    rule = admin_call("POST", "/api/spd/followup-rules", {"code": "E2E_R132", "name": "E2E 超期补做", "points": [0]})
+    plan = admin_call("POST", "/api/spd/followup-plans", {
+        "patient_id": seed["patient"]["id"], "rule_id": rule["id"], "base_date": "2001-02-02",
+        "org_id": seed["org"]["id"]})
+    record_id = plan["items"][0]["id"]
+    admin_read("/api/spd/tasks/summary")   # 进任务汇总顺手扫一次超期（与定时任务同一个函数）
+    assert admin_read(f"/api/spd/followup-records/{record_id}/context")["record"]["status"] == "overdue"
+
+    _login(page, base_url)
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    page.click("#spd-fu-filter button")
+    expect(page.locator(f'button[data-fu-call="{record_id}"]')).to_have_count(1)   # 修前 0
+    page.click(f'button[data-fu-exec="{record_id}"]')   # 修前超期的这一行没有「执行」
+    _redrawn(page, lambda: _spd_modal(page, {"result": "补做电话随访，恢复良好"}))
+    record = admin_read(f"/api/spd/followup-records/{record_id}/context")["record"]
+    assert (record["status"], record["result"]) == ("done", "补做电话随访，恢复良好"), record
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)
