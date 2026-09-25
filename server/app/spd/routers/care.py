@@ -1636,6 +1636,9 @@ def close_consult(
     # P0-23：原先连调用方身份都不收，乙院医生按会话号就能关掉甲院患者的咨询（实测 200）。
     # 与同组 reply_consult 同一口径：按会话所属患者判可见性并留痕。
     assert_patient_visible(db, user, consult.patient_id, resource="spd_consult")
+    if consult.status == "closed":
+        # 再关一次原先照样 200，还把 closed_at 挪到这一刻——「什么时候关的」就此改写（P2-75）
+        raise HTTPException(status_code=409, detail="该咨询会话已关闭")
     consult.status = "closed"
     consult.closed_at = now_naive()
     db.commit()

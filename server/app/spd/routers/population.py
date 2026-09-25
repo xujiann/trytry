@@ -1686,6 +1686,9 @@ def unbind_package(
         raise HTTPException(status_code=404, detail="服务包绑定不存在")
     enrollment = db.get(SpdEnrollment, binding.enrollment_id)
     assert_org_writable(db, user, enrollment.org_id if enrollment else None)
+    if binding.status == "unbound":
+        # 再解一次原先照样 200，还把 unbound_at 挪到这一刻——台账上的解绑时间就此改写（P2-75）
+        raise HTTPException(status_code=409, detail="该服务包已解绑")
     binding.status = "unbound"
     binding.unbound_at = now_naive()
     db.commit()

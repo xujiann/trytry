@@ -420,6 +420,15 @@ def test_服务包解绑(client, h, base):
     assert unbound.status_code == 200
     assert unbound.json() == {**base["binding_used"], "status": "unbound"}
     base["binding_used"] = unbound.json()
+    # P2-75：再解一次 409，解绑时间不被挪动（修前 200、unbound_at 改成第二次那一刻）
+    from app.database import SessionLocal
+    from app.spd.models import SpdPackageBinding
+    with SessionLocal() as db:
+        first_unbound_at = db.get(SpdPackageBinding, base["binding"]["id"]).unbound_at
+    again = client.post(f"{B}/package-bindings/{base['binding']['id']}/unbind", headers=h)
+    assert again.status_code == 409 and again.json() == {"detail": "该服务包已解绑"}
+    with SessionLocal() as db:
+        assert db.get(SpdPackageBinding, base["binding"]["id"]).unbound_at == first_unbound_at
 
 
 # ------------------------------------------------- 生命周期

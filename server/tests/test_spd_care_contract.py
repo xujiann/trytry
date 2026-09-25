@@ -569,6 +569,15 @@ def test_在线咨询会话列表消息与闭环(client, h, base, ph):
 
     closed = client.post(f"{B}/consults/{cid}/close", headers=h)
     assert closed.json() == {"id": cid, "status": "closed"}
+    # P2-75：再关一次 409，关闭时间不被挪动（修前 200、closed_at 改成第二次那一刻）
+    from app.database import SessionLocal
+    from app.spd.models import SpdConsult
+    with SessionLocal() as db:
+        first_closed_at = db.get(SpdConsult, cid).closed_at
+    again = client.post(f"{B}/consults/{cid}/close", headers=h)
+    assert again.status_code == 409 and again.json() == {"detail": "该咨询会话已关闭"}
+    with SessionLocal() as db:
+        assert db.get(SpdConsult, cid).closed_at == first_closed_at
     # 接管后列表里的 doctor_id 不再为 null（首次回复即认领）
     after = client.get(f"{B}/consults", params={"status": "closed"}, headers=h).json()
     assert after[0]["doctor_id"] is not None and after[0]["messages"] == 2
