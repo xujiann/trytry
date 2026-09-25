@@ -6,6 +6,7 @@
 """
 import csv
 import io
+import re
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -175,11 +176,28 @@ def _money(value: float) -> str:
     return f"{float(value):.2f}"
 
 
+#: 表格软件把以这些字符开头的单元格当公式算（CSV 注入）
+_FORMULA_LEAD = ("=", "+", "-", "@")
+#: 数字字面量（ASCII 数字，P1-97）：负数结余「-12.50」这类要原样导出，不能被当成公式前缀处理
+_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def _csv_cell(value):
+    """以 = + - @ 开头的非数字文本前置单引号，免得被 Excel / WPS 当公式执行（P2-63）。
+
+    导出里的文本不全是系统生成的——死因诊断、姓名、机构名都是人填的；一格「=HYPERLINK(...)」，管理层打开导出
+    文件就是一个可点的外链。与慢专病前端导出 `pages-spd.js::spdDownloadCsv` 同一条规则：数字原样，只处理文本。
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_LEAD) and not _NUMBER.fullmatch(value):
+        return "'" + value
+    return value
+
+
 def _csv_response(filename: str, header: list[str], rows: list[list]) -> StreamingResponse:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(header)
-    writer.writerows(rows)
+    writer.writerows([[_csv_cell(v) for v in row] for row in rows])
     payload = "\ufeff" + buffer.getvalue()  # BOM：Excel 直接打开不乱码
     return CsvResponse(
         iter([payload]),
