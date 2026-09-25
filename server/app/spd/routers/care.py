@@ -48,7 +48,8 @@ from ..models import (
 )
 from ..rules import score_scale
 from ..service import (MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES, award_points, judge_measurement,
-                       measure_value_problem, scale_unusable, spawn_task, unknown_program)
+                       measure_value_problem, scale_program_mismatch, scale_unusable, spawn_task,
+                       unknown_program)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
@@ -596,6 +597,8 @@ def create_assessment(
     if scale is None:
         raise HTTPException(status_code=404, detail="量表不存在或未发布")
     scale_problem = scale_unusable(scale)   # 修前存进去的坏量表：说清楚、不 500（P2-80）
+    # 写了病种的，量表须是这个病种的或通用的（P2-98）：别的病种的量表评出的风险等级会回写这个病种的档案、高危自动派干预
+    scale_problem = scale_problem or scale_program_mismatch(scale, body.program_code, "评估")
     if scale_problem:
         raise HTTPException(status_code=422, detail=scale_problem)
     graded = score_scale(scale.items or [], body.answers, scale.scoring or {})

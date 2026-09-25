@@ -1256,9 +1256,7 @@ async function renderSpdPatients() {
           <option value="active">主动筛查</option>
           <option value="import">数据比对</option>
         </select>
-        <select name="scale_code"><option value="">不使用量表</option>
-          ${catalog.scales.filter((s) => s.category === "screen")
-            .map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("")}</select>
+        <select name="scale_code"></select>
         <button>登记筛查</button>
       </form>
       <form class="inline" id="spd-autoscreen-form" style="margin-top:10px">
@@ -1327,6 +1325,15 @@ async function renderSpdPatients() {
       <div id="spd-group-list"></div>
       <div id="spd-group-detail"></div>`)}`;
 
+  // 筛查量表随病种联动：只列这个病种的与通用的（量表不挂病种）——别的病种的量表后端 422（P2-98），原先下拉里全列
+  const syncScreenScales = () => {
+    const program = $("#spd-screen-form select[name=program_code]").value;
+    $("#spd-screen-form select[name=scale_code]").innerHTML = '<option value="">不使用量表</option>'
+      + catalog.scales.filter((s) => s.category === "screen" && (!s.program_code || s.program_code === program))
+        .map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
+  };
+  syncScreenScales();
+  $("#spd-screen-form select[name=program_code]").onchange = syncScreenScales;
   const drawScreenings = async () => {
     const rows = await api("/api/spd/screenings?limit=30");
     $("#spd-screen-list").innerHTML = table(

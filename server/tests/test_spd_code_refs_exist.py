@@ -56,8 +56,10 @@ def world(client, admin):
         assert r.status_code == 201, r.text
     r = client.patch(f"{B}/programs/{programs[OFF]}", headers=admin, json={"active": False})
     assert r.status_code == 200, r.text
+    # 通用量表（不挂病种）：下面的用例拿它给三种病种编码各评一次，要测的是病种编码本身；挂在 REAL 上的量表给别的
+    # 病种评估，P2-98 起本身就不收
     scale = client.post(f"{B}/scales", headers=admin, json={
-        "code": "P120_SCALE", "name": "P120 量表", "program_code": REAL,
+        "code": "P120_SCALE", "name": "P120 量表", "program_code": "",
         "items": [{"key": "q1", "type": "single", "options": [{"label": "是", "score": 1}]}]}).json()["id"]
     assert client.post(f"{B}/scales/{scale}/publish", headers=admin).status_code == 200
     crt = client.post(f"{B}/case-report-tasks", headers=admin, json={"code": "P120_CRT", "name": "P120 上报"}).json()["id"]

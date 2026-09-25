@@ -191,6 +191,14 @@ def scale_unusable(scale: SpdScale) -> str:
     return f"量表配置有误（{problem}），暂不能作答，请联系管理员修正" if problem else ""
 
 
+def scale_program_mismatch(scale: SpdScale, program_code: str, what: str) -> str:
+    """量表挂在病种上（空串是通用量表）：拿别的病种的量表给这个病种筛查 / 评估，按那张量表的分数判高危——筛查即进
+    这个病种的疑似目标池，评估即回写这个病种档案的风险等级、高危自动派干预与复诊（P2-98）。对得上返回空串。"""
+    if scale.program_code and program_code and scale.program_code != program_code:
+        return f"{what}量表的病种与{what}病种不一致"
+    return ""
+
+
 def match_program(db: Session, patient_id: int, program: SpdProgram, extra: dict | None = None):
     """对单个病种做纳入/排除判定，返回 `spd/rules.py::screen` 的结果 + 使用的规则版本。"""
     from .rules import screen

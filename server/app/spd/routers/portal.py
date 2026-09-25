@@ -47,8 +47,8 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
-                       close_followup_record, judge_measurement, measure_value_problem, scale_unusable,
-                       unknown_program)
+                       close_followup_record, judge_measurement, measure_value_problem, scale_program_mismatch,
+                       scale_unusable, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -560,6 +560,8 @@ def self_screening(
         if scale is None:
             raise HTTPException(status_code=404, detail="量表不存在或未发布")
         scale_problem = scale_unusable(scale)   # 修前存进去的坏量表：说清楚、不 500（P2-80）
+        # 与筛查登记同一口径（P2-98）：居民端页面按量表带病种，接口调用方可以对不上
+        scale_problem = scale_problem or scale_program_mismatch(scale, body.program_code, "筛查")
         if scale_problem:
             raise HTTPException(status_code=422, detail=scale_problem)
     graded = (
