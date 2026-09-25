@@ -46,7 +46,6 @@ KNOWN: set[str] = {
     # 配置项只能改、不能建（需求对照表 7.5「全部可配置」）
     "POST /api/accounting/subjects",            # 会计科目
     "POST /api/dataquality/rules",              # 数据质控规则
-    "POST /api/drgs/groups",                    # DRG 分组（页面只调权重）
     "POST /api/tcm-heritage/simulations",       # 模拟诊疗病例（情境化决策）
     "POST /api/spd/indicators",                 # 考核指标
     "POST /api/spd/report-templates",           # 报告模板

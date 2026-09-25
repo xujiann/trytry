@@ -88,7 +88,8 @@ ROOT_FIXED_RENDERERS = [
     # 功能完善·drgs（2026-09-16）：事中预警/事前提示两个表单一并登记进来——
     # 这一页原先没有 `await draw()` 形态，本批加了，顺手把它钉住（只进不退）
     ("pages-public.js", "renderDrgs",
-     ['$("#drg-alert-form").onsubmit', '$("#drg-pre-form").onsubmit', '$("#page-body").onclick'],
+     ['$("#drg-alert-form").onsubmit', '$("#drg-pre-form").onsubmit', '$("#page-body").onclick',
+      'groupForm.onsubmit'],
      "\n  await drawAlerts(1.5);"),
     ("pages-public.js", "renderEsb",
      ['$("#esb-msg-filter").onsubmit', '$("#esb-ep-form").onsubmit',

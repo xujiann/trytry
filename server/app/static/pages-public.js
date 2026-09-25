@@ -73,6 +73,7 @@ async function renderEmTimeline() {
 async function renderDrgs() {
   $("#page-desc").textContent = "DRGs 分析：62 组目录（多关键词 + 主手术入组，未匹配落 QY）、机构 CMI、MDC 汇总";
   const [groups, stats] = await Promise.all([api("/api/drgs/groups"), api("/api/drgs/stats")]);
+  const canGroup = currentRole() === "admin";   // 建组与调权同一权限（后端 require_admin）
   const drawAlerts = async (mult) => {
     try {
       const a = await api(`/api/drgs/in-stay-alerts?los_multiplier=${mult}`);
@@ -106,7 +107,18 @@ async function renderDrgs() {
          <td>${m.groups}</td><td>${m.cases}</td><td>${m.cmi}</td><td>${m.avg_cost} 元</td></tr>`)) : ""}
     ${stats.groups.length ? panel("组均费用",
       barChart(stats.groups.map((g) => [`${g.drg_code} ${g.drg_name}`, g.avg_cost]), { unit: " 元" })) : ""}
-    ${panel("分组目录（admin 可调权）", `<p class="msg" id="drg-msg"></p>${
+    ${panel("分组目录（admin 可增补、调权）", `<p class="msg" id="drg-msg"></p>${canGroup ? `
+      <form class="inline" id="drg-group-form" style="margin-bottom:8px">
+        <input name="code" placeholder="分组编码" required style="width:110px">
+        <input name="name" placeholder="分组名称" required>
+        <input name="base_weight" type="number" step="0.0001" min="0.0001" placeholder="基准权重（> 0）" required style="width:130px">
+        <input name="mdc" placeholder="MDC" style="width:70px">
+        <input name="mdc_name" placeholder="MDC 名称" style="width:130px">
+        <input name="keywords" placeholder="主诊断关键词（逗号分隔）" style="min-width:190px">
+        <input name="procedure_keywords" placeholder="主手术关键词（逗号分隔）" style="min-width:190px">
+        <label style="font-size:13px"><input type="checkbox" name="require_procedure" value="true"> 必须命中主手术</label>
+        <button>新增分组</button>
+      </form>` : ""}${
       table(["编码", "MDC", "名称", "基准权重", "主诊断关键词", "主手术关键词", "状态", "操作"], groups, (g) =>
         `<tr><td>${esc(g.code)}</td><td>${esc(g.mdc) || "—"}</td><td>${esc(g.name)}</td><td>${g.base_weight}</td>
          <td>${esc(g.keywords) || "—"}</td>
@@ -127,6 +139,14 @@ async function renderDrgs() {
         <button>预判</button>
       </form>
       <div id="drg-pre"></div>`)}`;
+  // 分组目录原先只能调权、不能增补（P2-93 动词级孤儿）：建组的接口一直在，页面上没有入口
+  const groupForm = $("#drg-group-form");
+  if (groupForm) groupForm.onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target, ["base_weight"]);
+    body.require_procedure = e.target.require_procedure.checked;
+    return postAction("/api/drgs/groups", body, "#drg-msg");
+  };
   $("#drg-alert-form").onsubmit = async (e) => {
     e.preventDefault();
     await drawAlerts(Number(new FormData(e.target).get("los_multiplier")) || 1.5);

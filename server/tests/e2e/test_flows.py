@@ -2101,6 +2101,25 @@ def test_页内表单的数字框收得了小数_以DRG调权为例(page, base_u
     expect(page.locator("tr:has(button[data-drg-weight])", has_text="BR23")).to_contain_text("1.25")
 
 
+def test_DRG分组目录能在界面上增补(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：分组目录原先只能调权——增补分组的接口（仅管理员）一直在，界面上没有入口，
+    县里要加一个本地常见的分组只能靠接口调用方。"""
+    _login(page, base_url)
+    _open_page(page, "drgs", "DRGs分析")
+    form = page.locator("#drg-group-form")
+    form.locator('[name="code"]').fill("E2EZ9")
+    form.locator('[name="name"]').fill("E2E 鼻息肉摘除组")
+    form.locator('[name="base_weight"]').fill("0.85")   # 小数要提交得了（P1-67 同一口径）
+    form.locator('[name="keywords"]').fill("鼻息肉,鼻窦炎")
+    form.locator('[name="procedure_keywords"]').fill("息肉摘除")
+    form.locator('[name="require_procedure"]').check()
+    _submit(page, "#drg-group-form button")
+    created = next(g for g in admin_read("/api/drgs/groups") if g["code"] == "E2EZ9")
+    assert (created["name"], created["base_weight"], created["keywords"], created["require_procedure"]) == (
+        "E2E 鼻息肉摘除组", 0.85, "鼻息肉,鼻窦炎", True), created
+    expect(page.locator("tr:has(button[data-drg-weight])", has_text="E2EZ9")).to_contain_text("必须")
+
+
 #: 经办在入库登记里自由填写的条码：带一个双引号就能越出属性、往页面里塞标签
 XSS_BARCODE = 'XSS"><img src=x onerror="window.__xss=1">'
 
