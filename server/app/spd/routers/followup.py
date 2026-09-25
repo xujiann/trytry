@@ -47,7 +47,7 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
-from ..service import close_followup_record
+from ..service import close_followup_record, unknown_program
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -435,6 +435,9 @@ def _rule_out(r: SpdFollowupRule) -> dict:
              dependencies=[Depends(require_roles("director", "doctor"))])
 def create_followup_rule(body: FollowupRuleIn, db: Session = Depends(get_db)):
     _check_points(body.points)
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     rule = SpdFollowupRule(**body.model_dump())
     db.add(rule)
     try:
@@ -493,6 +496,9 @@ def update_followup_rule(rule_id: int, body: FollowupRulePatch, db: Session = De
     changes = body.model_dump(exclude_unset=True)
     if "points" in changes:
         _check_points(changes["points"])
+    program_problem = unknown_program(db, changes.get("program_code") or "")  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     for key, value in changes.items():
         setattr(rule, key, value)
     db.commit()

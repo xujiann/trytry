@@ -37,6 +37,7 @@ from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_roles
 from ...formula import FormulaError, evaluate as eval_formula
 from ..platform import Organization, User
+from ..service import unknown_program
 from ..models import (
     SpdAssessPlan,
     SpdAssessment,
@@ -949,6 +950,10 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
     plan = db.get(SpdAssessPlan, body.plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="考核方案不存在")
+    # 重跑同一周期会覆盖上次结果：病种编码填错时各指标按它筛出空数据，本期正式分数被改写成零（P1-120）
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     indicators = {
         i.code: i
         for i in db.query(SpdIndicator)

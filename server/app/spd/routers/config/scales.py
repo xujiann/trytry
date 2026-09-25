@@ -22,7 +22,7 @@ from ...models import (
     SpdServicePackage,
     SpdTag,
 )
-from ...service import MEDIA_TYPE_NAMES
+from ...service import MEDIA_TYPE_NAMES, unknown_program
 from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
 
 
@@ -129,6 +129,9 @@ def _check_item_keys(items: list[dict]) -> None:
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_scale(body: ScaleIn, db: Session = Depends(get_db)):
     _check_item_keys(body.items)
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     scale = SpdScale(**body.model_dump(), status="draft")
     db.add(scale)
     try:
@@ -254,6 +257,9 @@ class EduIn(BaseModel):
 @router.post("/edu-materials", response_model=EduMaterialOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor", "public_health"))])
 def create_edu(body: EduIn, db: Session = Depends(get_db)):
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     material = SpdEduMaterial(**body.model_dump())
     db.add(material)
     try:
@@ -312,6 +318,9 @@ def update_edu(material_id: int, body: EduPatch, db: Session = Depends(get_db)):
     material = db.get(SpdEduMaterial, material_id)
     if material is None:
         raise HTTPException(status_code=404, detail="宣教素材不存在")
+    program_problem = unknown_program(db, body.model_dump(exclude_unset=True).get("program_code") or "")  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(material, key, value)
     db.commit()
@@ -344,6 +353,9 @@ def create_package(body: PackageIn, db: Session = Depends(get_db)):
     for item in body.items:
         if not item.get("code") or int(item.get("times", 0)) <= 0:
             raise HTTPException(status_code=422, detail="服务包项目须有编码且次数大于0")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     package = SpdServicePackage(**body.model_dump())
     db.add(package)
     try:

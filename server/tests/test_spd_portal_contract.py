@@ -54,6 +54,8 @@ def seeded(client):
 
         program = S.SpdProgram(code="SCT", name="契约高血压", active=True)
         db.add(program)
+        # 居民申请加入另一个病种：写库前先查病种在不在且在用（P1-120），这个病种得真有
+        db.add(S.SpdProgram(code="SCT-NEW", name="契约新病种", active=True))
         team = S.SpdTeam(name="契约团队", org_id=org.id)
         doctor = User(username="sct_doctor", password_hash="x", full_name="契约医生",   # 开发库开了外键约束（P2-71）
                       role="doctor", org_id=org.id)

@@ -41,7 +41,7 @@ from ..models import (
     SpdReferralStep,
 )
 from ..rules import RuleError, evaluate, validate_conditions
-from ..service import award_points, build_facts, spawn_task
+from ..service import award_points, build_facts, spawn_task, unknown_program
 from ...visibility import GLOBAL_ROLES, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -207,6 +207,9 @@ def create_referral_rule(body: ReferralRuleIn, db: Session = Depends(get_db)):
     # 机构编号填错会撞外键、被翻成「该转诊规则编码已存在」
     if body.target_org_id is not None and db.get(Organization, body.target_org_id) is None:
         raise HTTPException(status_code=404, detail=f"目标机构不存在（target_org_id={body.target_org_id}）")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     rule = SpdReferralRule(**body.model_dump(exclude={"conditions"}), conditions=conditions)
     db.add(rule)
     try:
@@ -285,6 +288,10 @@ def check_referral_rules(
     规则命中即自动开单，在实施期会被投诉——一次批量随访录入能开出几十张单子。
     """
     assert_patient_visible(db, user, body.patient_id, resource="spd_referral")
+    # 病种编码先查在不在（P1-120）：勾了自动开单即按它开转诊单，不只是试算的筛选条件
+    program_problem = unknown_program(db, body.program_code)
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     enrollment = None
     if body.program_code:
         enrollment = (
@@ -532,6 +539,9 @@ def create_referral(
     assert_patient_visible(db, user, body.patient_id, resource="spd_referral")
     if body.target_org_id is not None and db.get(Organization, body.target_org_id) is None:
         raise HTTPException(status_code=404, detail="目标机构不存在")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     enrollment = None
     if body.program_code:
         enrollment = (

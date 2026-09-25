@@ -46,7 +46,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, close_followup_record, judge_measurement,
-                       measure_value_problem)
+                       measure_value_problem, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -357,6 +357,9 @@ def add_measurement(
     problem = measure_value_problem(body.metric, body.value)  # 生理上不可能的值（P1-101）
     if problem:
         raise HTTPException(status_code=422, detail=problem)
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     enrollment = (
         db.query(SpdEnrollment)
         .filter(
@@ -539,6 +542,9 @@ def self_screening(
     在中心端的"待复核"清单里等人看。
     """
     patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
+    program_problem = unknown_program(db, body.program_code, active_only=True)  # 病种编码先查在不在（P1-120）；新纳入不收停用病种，与筛查登记同一口径
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     scale = None
     if body.scale_code:
         scale = (
@@ -594,6 +600,9 @@ def apply_service(
 ):
     """提交专病服务申请（#2）。同一病种已有待受理申请时不重复提交。"""
     patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
+    program_problem = unknown_program(db, body.program_code, active_only=True)  # 病种编码先查在不在（P1-120）；新纳入不收停用病种，与建档同一口径
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     pending = (
         db.query(SpdServiceApply)
         .filter(
@@ -1353,6 +1362,9 @@ def start_consult(
 ):
     """发起或继续专病在线咨询（#18）。同病种已有开放会话时复用，不新开一条。"""
     patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     consult = (
         db.query(SpdConsult)
         .filter(

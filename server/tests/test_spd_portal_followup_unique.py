@@ -95,6 +95,11 @@ def world(client, h):
         headers=h,
     )
     assert rule.status_code == 201, rule.text
+    # 居民端申请加入 / 发起咨询写库前先查病种在不在（P1-120）：用例里用到的病种得真有
+    for code in ("uq_apply", "uq_consult", "uq_consult_b"):
+        program = client.post(f"{B}/programs", json={"code": code, "name": f"唯一性回归病种 {code}",
+                                                     "category": "chronic"}, headers=h)
+        assert program.status_code == 201, program.text
 
     # 居民令牌：短信验证码登录 + 实名绑定（与既有居民端用例同一取法）
     phone = me["phone"] if me.get("phone") else "13900003031"

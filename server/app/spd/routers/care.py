@@ -47,7 +47,8 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import MEASUREMENT_SOURCE_NAMES, award_points, judge_measurement, measure_value_problem, spawn_task
+from ..service import (MEASUREMENT_SOURCE_NAMES, award_points, judge_measurement, measure_value_problem, spawn_task,
+                       unknown_program)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
 
 router = APIRouter(
@@ -420,6 +421,9 @@ def create_measurement(
     让后来加第四种等级的人以为这里有别的讲究。
     """
     assert_patient_visible(db, user, body.patient_id, resource="spd_measurement")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     record = _record_measurement(db, body, user.id)
     enrollment = _enrollment_of(db, body.patient_id, body.program_code)
     if record.level in ("high", "low") and enrollment is not None:
@@ -574,6 +578,9 @@ def create_assessment(
     这一步一定会有人忘记，忘记的结果是高危患者仍按低危频次随访。
     """
     assert_patient_visible(db, user, body.patient_id, resource="spd_assessment")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）；留空取量表自己的病种
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     scale = (
         db.query(SpdScale)
         .filter(SpdScale.code == body.scale_code, SpdScale.status == "published")
@@ -791,6 +798,9 @@ def create_intervention_template(
 ):
     from sqlalchemy.exc import IntegrityError
 
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     template = SpdInterventionTemplate(**body.model_dump())
     db.add(template)
     try:
@@ -864,6 +874,9 @@ def create_interventions(
     # _auto_intervene），手填一个停用模板的编号却照样能按它的内容和周期派出干预与定时任务
     if body.template_id is not None and (template is None or not template.active):
         raise HTTPException(status_code=404, detail="干预模板不存在或已停用")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     content = body.content or (template.content if template else "")
     if not content:
         raise HTTPException(status_code=422, detail="干预内容不能为空")
@@ -1176,6 +1189,9 @@ def create_revisit(
         state = unusable_user(db, body.doctor_user_id)
         if state:
             raise HTTPException(status_code=404, detail=f"复诊医生{state}（doctor_user_id={body.doctor_user_id}）")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     record = SpdRevisit(**body.model_dump(), status="planned")
     db.add(record)
     db.commit()
@@ -1301,6 +1317,9 @@ def create_case_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
         state = unusable_user(db, body.manager_user_id)
         if state:
             raise HTTPException(status_code=404, detail=f"负责人{state}（manager_user_id={body.manager_user_id}）")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     task = SpdCaseReportTask(**body.model_dump())
     db.add(task)
     try:
@@ -1349,6 +1368,9 @@ def update_case_report_task(task_id: int, body: CaseReportTaskPatch, db: Session
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"负责人{state}（manager_user_id={changes['manager_user_id']}）")
+    program_problem = unknown_program(db, changes.get("program_code") or "")  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     for key, value in changes.items():
         setattr(task, key, value)
     db.commit()
@@ -1379,6 +1401,9 @@ def create_case_report(
         task = db.get(SpdCaseReportTask, body.task_id)
         if task is None or not task.active:
             raise HTTPException(status_code=404, detail=f"上报任务不存在或已停用（task_id={body.task_id}）")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     report = SpdCaseReport(
         **body.model_dump(), reporter_id=user.id, org_id=user.org_id, status="pending",
     )
@@ -1505,6 +1530,9 @@ def create_health_prescription(
     assert_patient_visible(db, user, body.patient_id, resource="spd_health_rx")
     if not (body.drug_advice or body.rehab_advice or body.life_advice):
         raise HTTPException(status_code=422, detail="健康处方至少要有一项指导内容")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     record = SpdHealthPrescription(**body.model_dump(), doctor_id=user.id)
     db.add(record)
     db.commit()
@@ -1665,6 +1693,9 @@ def consult_to_followup(
         raise HTTPException(status_code=404, detail="咨询会话不存在")
     # P0-23：原先不看会话属于谁，乙院账号能给甲院患者派随访任务（实测 201）
     assert_patient_visible(db, user, consult.patient_id, resource="spd_consult")
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）；留空沿用会话自己的病种
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     enrollment = _enrollment_of(
         db, consult.patient_id, body.program_code or consult.program_code
     )

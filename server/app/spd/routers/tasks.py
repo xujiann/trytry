@@ -34,7 +34,7 @@ from ..models import (
     SpdTask,
     SpdTeam,
 )
-from ..service import advance_path, award_points, node_enter_allowed, spawn_task, sweep_overdue
+from ..service import advance_path, award_points, node_enter_allowed, spawn_task, sweep_overdue, unknown_program
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -569,6 +569,9 @@ def create_task(
     # 只能以本机构名义建；全域角色（县级中心派任务）照常。
     org_id = body.org_id if body.org_id is not None else user.org_id
     assert_org_writable(db, user, org_id)
+    program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     enrollment = (
         db.get(SpdEnrollment, body.enrollment_id) if body.enrollment_id is not None else None
     )

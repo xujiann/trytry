@@ -106,6 +106,25 @@ def build_facts(db: Session, patient_id: int, extra: dict | None = None) -> dict
     return facts
 
 
+def unknown_program(db: Session, code: str, *, active_only: bool = False) -> str:
+    """请求体里的病种编码写库之前先查它在不在（P1-120）：在返回空串，不在返回报错文案，由路由决定怎么报——
+    与 `platform.unusable_user` 同一写法。
+
+    `program_code` 是字符串软外键（库里没有约束）：填错一个编码照样落库，这条记录就挂到一个不存在的病种上——
+    按病种筛的清单、规则匹配、统计口径从此永远不含它；考核计分还会按这个编码筛出一片空数据，把这一期的
+    正式分数覆盖成零。空串是「不限病种 / 通用」，照收。
+
+    `active_only`：新纳入（居民自查筛查、申请加入）不收停用的病种，与建档 / 筛查同一口径（P1-89）；在管患者
+    的业务记录与各类配置照收停用病种——病种停用不等于在管的人当天就不管了，配置也可能是为重新启用备的。
+    """
+    if not code:
+        return ""
+    program = db.query(SpdProgram).filter(SpdProgram.code == code).first()
+    if active_only:
+        return "专病档案不存在或已停用" if program is None or not program.active else ""
+    return "专病档案不存在" if program is None else ""
+
+
 def match_program(db: Session, patient_id: int, program: SpdProgram, extra: dict | None = None):
     """对单个病种做纳入/排除判定，返回 `spd/rules.py::screen` 的结果 + 使用的规则版本。"""
     from .rules import screen
