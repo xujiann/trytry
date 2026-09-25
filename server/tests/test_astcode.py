@@ -83,12 +83,18 @@ GATES_USING_ASTCODE = {
 _FN_VARS = {"fn", "func"}
 
 #: 明知故犯、且写明了理由的裸调用。**只减不增。**
+#:
+#: 按「文件::所在函数  调用」登记，**不带行号**，每条只抵一处（见 `_minus_exempt`）。
+#: 原先按「文件:行号」登记，同一条豁免两次被挤偏：第十一轮 484 → 501、第二十三轮
+#: 501 → 502，两次都是往分页闸门的基线历史里补了注释，调用本身一字未改，
+#: 「不许退回裸 unparse」与「豁免清单不得腐烂」却同时红。所在函数只在调用真挪走或
+#: 函数改名时才变，那时这条豁免本就该重审。
 RAW_UNPARSE_OK = {
     # 这一处**故意**用裸 unparse：它是那条用例的前提自证——先证明
     # `record_qc_summary` 的 docstring 里确实还留着那句 `.limit(5000)`
     # （否则用例是空转），再证明 `_code(fn)` 把它剥掉了。两句一正一反，
     # 正好是本模块要守的那件事的活样本。
-    "test_list_pagination_ratchet.py:501  ast.unparse(fn)",
+    "test_list_pagination_ratchet.py::test_docstring里的示例不算代码  ast.unparse(fn)",
 }
 
 
@@ -109,9 +115,16 @@ def _binds_astcode(path: pathlib.Path) -> bool:
 
 
 def _raw_unparse_sites(path: pathlib.Path) -> list[str]:
-    """该模块里仍然对「函数节点」裸调 ast.unparse / ast.dump 的位置。"""
+    """该模块里仍然对「函数节点」裸调 ast.unparse / ast.dump 的位置（`文件::所在函数  调用`）。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    owner: dict[int, str] = {}
+    # ast.walk 是广度优先：外层函数先登记、内层后覆盖，所以记下的是最内层那个函数
+    for scope in ast.walk(tree):
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for n in ast.walk(scope):
+                owner[id(n)] = scope.name
     hits = []
-    for n in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for n in ast.walk(tree):
         if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
             continue
         if not (isinstance(n.func.value, ast.Name) and n.func.value.id == "ast"):
@@ -120,8 +133,18 @@ def _raw_unparse_sites(path: pathlib.Path) -> list[str]:
             continue
         arg = n.args[0]
         if isinstance(arg, ast.Name) and arg.id in _FN_VARS:
-            hits.append(f"{path.name}:{n.lineno}  ast.{n.func.attr}({arg.id})")
+            where = owner.get(id(n), "<module>")
+            hits.append(f"{path.name}::{where}  ast.{n.func.attr}({arg.id})")
     return hits
+
+
+def _minus_exempt(sites: list[str], ok: set[str]) -> list[str]:
+    """扣掉豁免——每条豁免只抵一处：同一个函数里再添一句同样的裸调用，照样红。"""
+    rest = list(sites)
+    for entry in ok:
+        if entry in rest:
+            rest.remove(entry)
+    return rest
 
 
 def test_已改用共享剥离的闸门不许退回裸unparse():
@@ -135,7 +158,7 @@ def test_已改用共享剥离的闸门不许退回裸unparse():
             "那样一句 docstring 就能冒充守卫"
         )
         offenders += _raw_unparse_sites(path)
-    offenders = [o for o in offenders if o not in RAW_UNPARSE_OK]
+    offenders = _minus_exempt(offenders, RAW_UNPARSE_OK)
     assert offenders == [], (
         "以下位置对函数节点裸调 ast.unparse/ast.dump（未剥 docstring），"
         "散文里提一句守卫名就能冒充守卫：\n  " + "\n  ".join(offenders)
@@ -149,7 +172,7 @@ def test_裸调用豁免清单不得腐烂():
     for name in sorted(GATES_USING_ASTCODE):
         live += _raw_unparse_sites(TESTS_DIR / name)
     stale = sorted(RAW_UNPARSE_OK - set(live))
-    assert stale == [], f"这些豁免已不存在（行号变了或调用删了），应更新：{stale}"
+    assert stale == [], f"这些豁免已不存在（调用删了、挪了函数或函数改了名），应更新：{stale}"
 
 
 def test_这条规则不是空转():
@@ -166,3 +189,30 @@ def test_这条规则不是空转():
         assert len(hits) == 2, f"判据认不出裸调用，实际命中 {hits}"
     finally:
         os.remove(probe)
+
+
+def test_豁免键不随行号漂移_每条只抵一处():
+    """防回退到行号型豁免：前面补几行注释，键不变；同一函数里多出一句同样的裸调用，扣完仍剩一处。"""
+    probe = TESTS_DIR / "__astcode_probe_key__.py"
+    body = "import ast\ndef scan(fn):\n    return ast.unparse(fn)\n"
+    try:
+        probe.write_text(body, encoding="utf-8")
+        (key,) = _raw_unparse_sites(probe)
+        assert key == "__astcode_probe_key__.py::scan  ast.unparse(fn)"
+
+        probe.write_text("# 补一行基线历史\n# 再补一行\n" + body, encoding="utf-8")
+        assert _raw_unparse_sites(probe) == [key], "键里仍带行号：补一行注释豁免就腐烂"
+
+        probe.write_text(
+            "import ast\ndef scan(fn):\n    a = ast.unparse(fn)\n    return a + ast.unparse(fn)\n",
+            encoding="utf-8",
+        )
+        assert _minus_exempt(_raw_unparse_sites(probe), {key}) == [key], "一条豁免抵掉了两处"
+
+        probe.write_text(
+            "import ast\ndef outer(fn):\n    def inner(fn):\n        return ast.dump(fn)\n    return inner\n",
+            encoding="utf-8",
+        )
+        assert _raw_unparse_sites(probe) == ["__astcode_probe_key__.py::inner  ast.dump(fn)"]
+    finally:
+        probe.unlink(missing_ok=True)
