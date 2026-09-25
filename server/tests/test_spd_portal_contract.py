@@ -23,7 +23,7 @@ from conftest import reset_database
 from app.config import settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import Encounter, Organization, Patient, ResidentAccount
+from app.models import Encounter, Organization, Patient, ResidentAccount, User
 from app.spd import models as S
 
 
@@ -52,13 +52,16 @@ def seeded(client):
                          encounter_type="outpatient", diagnosis_code="I10",
                          diagnosis_name="高血压", summary="血压偏高"))
 
-        db.add(S.SpdProgram(code="SCT", name="契约高血压", active=True))
+        program = S.SpdProgram(code="SCT", name="契约高血压", active=True)
+        db.add(program)
         team = S.SpdTeam(name="契约团队", org_id=org.id)
-        db.add(team)
+        doctor = User(username="sct_doctor", password_hash="x", full_name="契约医生",   # 开发库开了外键约束（P2-71）
+                      role="doctor", org_id=org.id)
+        db.add_all([team, doctor])
         db.flush()
         enr = S.SpdEnrollment(patient_id=me.id, program_code="SCT", status="active",
                               stage="stable", risk_level="mid", team_id=team.id,
-                              doctor_user_id=7, next_followup_at="2026-09-01",
+                              doctor_user_id=doctor.id, next_followup_at="2026-09-01",
                               habits={"smoke": "no"}, risk_factors=["family"],
                               complications=[], tags=["vip"], org_id=org.id)
         db.add(enr)
@@ -75,16 +78,20 @@ def seeded(client):
         db.add(S.SpdMeasurement(patient_id=me.id, program_code="SCT",
                                 metric="glucose_fasting", value=6.5, unit="mmol/L",
                                 level="mid", source="device"))
-        db.add(S.SpdScale(
+        scale = S.SpdScale(
             code="SCT-RISK", name="契约风险自查", program_code="SCT", category="screen",
             status="published", qr_token="SCT-TOKEN",
             items=[{"key": "q1", "type": "single",
                     "options": [{"label": "是", "score": 2}, {"label": "否", "score": 0}]}],
             scoring={"ranges": [{"min": 0, "max": 1, "risk": "low", "advice": "保持"},
-                                {"min": 2, "risk": "high", "advice": "尽快就诊"}]}))
+                                {"min": 2, "risk": "high", "advice": "尽快就诊"}]})
+        # 路径实例挂在真实的模板上（原先是占位 1；开发库开了外键约束，P2-71）
+        template = S.SpdPathTemplate(program_id=program.id, code="TPL", name="契约路径")
+        db.add_all([scale, template])
+        db.flush()
         db.add(S.SpdServiceApply(patient_id=me.id, program_code="SCT", status="pending",
                                  note="想加入", handle_note=""))
-        db.add(S.SpdPathInstance(enrollment_id=enr.id, template_id=1, template_code="TPL",
+        db.add(S.SpdPathInstance(enrollment_id=enr.id, template_id=template.id, template_code="TPL",
                                  current_node_key="n2", progress=50, status="running"))
         task = S.SpdTask(program_code="SCT", patient_id=me.id, task_type="report",
                          title="上报血压", org_id=org.id, status="pending",
@@ -126,10 +133,10 @@ def seeded(client):
         db.add(S.SpdRevisit(patient_id=me.id, program_code="SCT", plan_date="2026-09-10",
                             dept="心内科", items="血压、血脂", status="planned",
                             actual_date=""))
-        db.add(S.SpdAssessment(patient_id=me.id, program_code="SCT", scale_id=1,
+        db.add(S.SpdAssessment(patient_id=me.id, program_code="SCT", scale_id=scale.id,
                                scale_code="SCT-RISK", score=2, risk_level="high",
                                advice="尽快就诊"))
-        consult = S.SpdConsult(patient_id=me.id, program_code="SCT", doctor_id=7,
+        consult = S.SpdConsult(patient_id=me.id, program_code="SCT", doctor_id=doctor.id,
                                status="open")
         db.add(consult)
         db.flush()

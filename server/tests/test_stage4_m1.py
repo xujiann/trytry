@@ -128,24 +128,35 @@ def test_legacy_critical_report_enters_loop(client, admin, setup):
 
 
 def test_migration_backfills_legacy_critical_status(client):
-    """迁移回填语句：critical=True 且状态空串 → notified（SQL 语义验证）。"""
+    """迁移回填语句：critical=True 且状态空串 → notified（SQL 语义验证）。
+
+    存量报告要挂在真实的检查申请上（原先写占位申请号 99901、布尔列插整数 1——只有不开外键、
+    不分布尔类型的开发库收；P2-71）。整段在一个事务里做完即回滚，不给同模块后面的用例留行。
+    """
+    from datetime import datetime
+
     import sqlalchemy as sa
 
-    from app.database import engine
+    from app.database import SessionLocal
+    from app.models import ExamReport, ExamRequest, Organization, Patient, User
 
     exam_reports = sa.table(
         "exam_reports", sa.column("critical", sa.Boolean), sa.column("critical_status", sa.String)
     )
-    with engine.begin() as conn:
-        conn.execute(
-            sa.text(
-                "INSERT INTO exam_reports (request_id, finding, conclusion, critical,"
-                " critical_status, reported_by, reported_at, created_at)"
-                " VALUES (99901, '', '存量危急', 1, '', '旧系统', '2026-01-01 00:00:00',"
-                " '2026-01-01 00:00:00')"
-            )
-        )
-        conn.execute(
+    with SessionLocal() as db:
+        org = Organization(name="回填验证院", org_type="township", level="township")
+        patient = Patient(ehc_no="EHC-M1-BACKFILL", name="回填验证患者", id_card="330102196001011234")
+        db.add_all([org, patient])
+        db.flush()
+        request = ExamRequest(patient_id=patient.id, from_org_id=org.id, center_type="lab", item_code="M1",
+                              item_name="回填验证", created_by=db.query(User.id).filter(User.username == "admin").scalar())
+        db.add(request)
+        db.flush()
+        db.add(ExamReport(request_id=request.id, finding="", conclusion="存量危急", critical=True,
+                            critical_status="", reported_by="旧系统", reported_at=datetime(2026, 1, 1),
+                            created_at=datetime(2026, 1, 1)))
+        db.flush()
+        db.execute(
             exam_reports.update()
             .where(
                 sa.and_(
@@ -158,10 +169,10 @@ def test_migration_backfills_legacy_critical_status(client):
             )
             .values(critical_status="notified")
         )
-        status = conn.execute(
-            sa.text("SELECT critical_status FROM exam_reports WHERE request_id = 99901")
+        status = db.execute(
+            sa.text("SELECT critical_status FROM exam_reports WHERE request_id = :rid"), {"rid": request.id}
         ).scalar()
-        conn.execute(sa.text("DELETE FROM exam_reports WHERE request_id = 99901"))
+        db.rollback()
     assert status == "notified"
 
 

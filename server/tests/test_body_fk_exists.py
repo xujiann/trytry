@@ -3,7 +3,8 @@
 一族写接口把请求体里的外键字段原样写库（构造时 `**body.model_dump()`，或改档时 `setattr`），
 函数里别处再不看它一眼。于是填错一个编号：
 
-- **开发库（SQLite，不开外键约束）**：照写，存成一个悬空 id——列表里那一栏从此是空的或对不上人；
+- **开发库（SQLite）**：当时不开外键约束，照写，存成一个悬空 id——列表里那一栏从此是空的或对不上人
+  （P2-71 起开发库也开了外键约束，与下面的生产库同样撞外键）；
 - **生产库（PostgreSQL，外键约束生效）**：撞外键抛 `IntegrityError`。没接住的直接 **500**；
   接住了的更糟——这些接口的 `except IntegrityError` 本是为唯一约束写的，于是被翻成
   「该患者已纳管此病种」「该中心编码已存在」这类 **409 误报**：用户照着提示去查重，查不出任何重复。
@@ -231,6 +232,19 @@ def test_改路径负责人为不存在的人_404(client, admin, world):
     assert inst.status_code == 201, inst.text
     r = client.patch(f"{B}/path-instances/{inst.json()['id']}", json={"owner_user_id": MISSING}, headers=admin)
     assert r.status_code == 404 and "路径负责人" in r.json()["detail"], (r.status_code, r.text[:200])
+
+
+def test_设备绑定引用不存在的患者_404而不是500(client, admin, world):
+    """P2-71 开发库开外键约束后测出：绑定只看设备归属、不看患者编号，修前开发库存成悬空 id、生产库 500。
+    本文件判据看不见它：写库是 `device.bound_patient_id = body.patient_id` 这种显式赋值（不在构造 / setattr
+    两种形状里），且 `body.patient_id` 在函数里别处用过（判「绑定还是解绑」），按宽判据也算「看过」。"""
+    dev = client.post(f"{B}/devices", json={"sn": "P271-BIND", "device_type": "bp", "org_id": world["org"]},
+                      headers=admin)
+    assert dev.status_code == 201, dev.text
+    r = client.post(f"{B}/devices/{dev.json()['id']}/bind", json={"patient_id": MISSING}, headers=admin)
+    assert r.status_code == 404 and r.json()["detail"] == "患者不存在", (r.status_code, r.text[:200])
+    ok = client.post(f"{B}/devices/{dev.json()['id']}/bind", json={"patient_id": world["patient"]()}, headers=admin)
+    assert ok.status_code == 200 and ok.json()["status"] == "bound", ok.text   # 存在的患者照常绑
 
 
 # ---------------------------------------------------------------- 平台：急救调度、儿童建档

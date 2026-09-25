@@ -53,16 +53,37 @@ def _raw_sql_snippets(source: str):
         yield source[: m.start()].count("\n") + 1, m.group("sql")
 
 
+#: 命中 FORBIDDEN_SQL、却**按方言分流只在那一个库上执行**的手写 SQL——换库不炸。键是（文件名, 规则），
+#: 不用行号（行号型豁免一改代码就失效）；每条写明为什么只会发到那一个库，只减不增。
+DIALECT_GUARDED = {
+    ("database.py", r"\bPRAGMA\b"):
+        "开发 / 测试库 SQLite 的外键约束开关（P2-71）：只挂在 SQLite 引擎的 connect 事件上"
+        "（`build_engine` 按连接串分流），PG / 达梦 / 金仓的引擎不挂这个监听——那些库外键本就生效，"
+        "这条语句根本发不到它们那里；SQLite 没有别的开外键约束的途径（驱动与连接串都不带这个参数）",
+}
+
+
 def test_手写SQL里没有库专有写法():
     offenders = []
     for path, source in _python_sources():
         for line_no, sql in _raw_sql_snippets(source):
             for pattern, why in FORBIDDEN_SQL:
-                if re.search(pattern, sql, re.IGNORECASE):
+                if re.search(pattern, sql, re.IGNORECASE) \
+                        and (os.path.basename(path), pattern) not in DIALECT_GUARDED:
                     offenders.append(
                         f"{os.path.basename(path)}:{line_no} {pattern} —— {why}"
                     )
     assert offenders == [], "以下手写 SQL 换库会炸：\n" + "\n".join(offenders)
+
+
+def test_方言分流豁免条条都还命中():
+    """防腐：豁免对应的写法删掉了，豁免也得跟着删，别留一条空转的后门。"""
+    hit = {(os.path.basename(path), pattern)
+           for path, source in _python_sources()
+           for _line, sql in _raw_sql_snippets(source)
+           for pattern, _why in FORBIDDEN_SQL if re.search(pattern, sql, re.IGNORECASE)}
+    assert set(DIALECT_GUARDED) <= hit, sorted(set(DIALECT_GUARDED) - hit)
+    assert all(reason.strip() for reason in DIALECT_GUARDED.values())
 
 
 def test_手写SQL总量可控():
@@ -93,10 +114,15 @@ def test_手写SQL总量可控():
     这条教义写成 Core 构造（e7c4b19d02fa/b8e3d5f70a91/b9c8d7e6f5a4/f4e3d2c1b0a9 的
     _orphans/_null_rows/_duplicates），本就不计入这个数。
 
-    上限只在"增量是部分索引谓词"时才允许上调，且要像上面几段一样写清是哪几条、
-    为什么不能用 ORM 表达；查询串的增量一律先改写成 ORM。"""
+    41 → 42（2026-09-25，P2-71 开发库开外键约束）：`database.py` 给 SQLite 引擎的每条连接执行
+    `PRAGMA foreign_keys=ON`。与 15 → 17 的咨询锁同一类——**按方言分流的连接级原语**，不是查询：
+    ORM 没有表达、SQLite 也没有别的开关（驱动与连接串都不收这个参数），且只挂在 SQLite 引擎上，
+    换库不受影响（上一条用例里登记在 `DIALECT_GUARDED`）。
+
+    上限只在"增量是部分索引谓词，或按方言分流的连接 / 锁原语"时才允许上调，且要像上面几段一样
+    写清是哪几条、为什么不能用 ORM 表达；查询串的增量一律先改写成 ORM。"""
     total = sum(len(list(_raw_sql_snippets(src))) for _p, src in _python_sources())
-    assert total <= 41, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
+    assert total <= 42, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
 
 
 # 金额列的命名族。`debit`/`credit`/`bonus` 是补进来的——阶段十二第一遍只按

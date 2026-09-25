@@ -492,7 +492,6 @@ def test_第二层_不可空的列显式传null是422而不是500(client, admin,
 @pytest.fixture(scope="module")
 def p195_world(client, admin):
     from app.database import SessionLocal
-    from app.models import User
     from app.spd import models as S
 
     program = client.get(f"{B}/programs", headers=admin).json()[0]
@@ -502,8 +501,12 @@ def p195_world(client, admin):
     template = client.post(f"{B}/path-templates", headers=admin, json={
         "program_id": program["id"], "code": "P195-T", "name": "空值回归路径"})
     assert template.status_code == 201, template.text
+    # 纳管档案要挂在真实存在的机构上（admin 不属任何机构，原先退成占位 1；开发库开了外键约束（P2-71））
+    org = client.post("/api/organizations", headers=admin, json={
+        "name": "P195 空值回归院", "org_type": "township", "level": "township"})
+    assert org.status_code == 201, org.text
     with SessionLocal() as db:
-        org_id = db.query(User).filter(User.username == "admin").one().org_id or 1
+        org_id = org.json()["id"]
         enrollment = S.SpdEnrollment(patient_id=patient, program_code=program["code"], org_id=org_id,
                                      stage="", status="active")
         db.add(enrollment)

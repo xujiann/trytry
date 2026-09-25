@@ -299,7 +299,7 @@ def test_rule_toggle_changes_score_and_permissions(client, admin, base):
 def test_case_summary_rule_triggers_after_discharge(client, admin, base):
     """出院条件触发 MRQC12：历史遗留（无病案首页）出院记录判缺陷，补首页后消除。"""
     from app.database import SessionLocal
-    from app.models import Admission, CaseSummary
+    from app.models import Admission, Bed, CaseSummary, User, Ward
 
     patient, encounter = new_encounter(client, base["doctor"], base, "330281198008089013", "郑出院")
     record = client.post(
@@ -311,13 +311,20 @@ def test_case_summary_rule_triggers_after_discharge(client, admin, base):
     # 模拟历史系统迁入的出院记录（本平台出院前置校验要求首页，故直接构造遗留数据）
     db = SessionLocal()
     try:
+        # 病区、床位、建档人都要真实存在（原先是占位 1；开发库开了外键约束（P2-71））
+        ward = Ward(org_id=base["org"]["id"], name="遗留病区")
+        db.add(ward)
+        db.flush()
+        bed = Bed(ward_id=ward.id, bed_no="遗留-01")
+        db.add(bed)
+        db.flush()
         admission = Admission(
             patient_id=patient["id"],
             org_id=base["org"]["id"],
-            ward_id=1,
-            bed_id=1,
+            ward_id=ward.id,
+            bed_id=bed.id,
             status="discharged",
-            created_by=1,
+            created_by=db.query(User.id).filter(User.username == "admin").scalar(),
         )
         db.add(admission)
         db.commit()

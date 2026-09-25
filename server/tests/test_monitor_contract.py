@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from conftest import reset_database
 
 from app import monitor as monitor_mod
+from app.database import engine
 from app.main import app
 from app.monitor import INSTANCE_ID, metrics
 from app.routers import monitor as monitor_router
@@ -114,9 +115,10 @@ def test_概览精确形状与键序_无redis(client, admin):
         "instance_id": INSTANCE_ID,
         "uptime_seconds": body["uptime_seconds"],
         "environment": "dev",
-        # database 成功分支：connected/latency_ms/dialect，无 error 键
+        # database 成功分支：connected/latency_ms/dialect，无 error 键；方言取测试库引擎的真值，
+        # 换到 PG 上跑全量同样成立（P2-71）
         "database": {"connected": True, "latency_ms": body["database"]["latency_ms"],
-                     "dialect": "sqlite"},
+                     "dialect": engine.dialect.name},
         # redis 未配置分支：configured/connected/note，无 latency_ms/error 键
         "redis": {
             "configured": False,

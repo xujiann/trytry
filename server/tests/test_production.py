@@ -1,13 +1,13 @@
 """M1 生产化基础：统一配置、请求追踪、健康检查数据库探测。"""
-
-
+import os
 
 
 def test_settings_reads_medplat_env():
     """pydantic-settings 兼容既有 MEDPLAT_* 环境变量。"""
     from app.config import settings
 
-    assert settings.database_url == "sqlite:///./test_run.db"
+    # 与 conftest 设进环境的连接串一致——比对环境变量本身而不是抄一份字面量，换到 PG 上跑全量同样成立（P2-71）
+    assert settings.database_url == os.environ["MEDPLAT_DATABASE_URL"]
     assert settings.admin_password  # 有默认值，环境可覆盖
 
 

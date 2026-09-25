@@ -149,7 +149,7 @@ server/app/
 ## 6. 测试约定
 
 - 新功能**必须带测试**；改 Bug **尽量带回归测试**（本仓库已有大量 AST 静态防复发用例，是好范式）。
-- 测试跑在文件型 SQLite（`tests/conftest.py`）。涉及**并发/事务/PG 方言**的改动，请同时补 `tests/test_postgres_real.py` 一类真 PG 用例——注意它默认 skip，CI 目前也不跑，**别把"SQLite 绿了"当成"PG 也对"**。
+- 测试跑在文件型 SQLite（`tests/conftest.py`），**开着外键约束**（`app/database.py` 对 SQLite 连接开 `PRAGMA foreign_keys=ON`，P2-71）——夹具直接落库时先建父行，别写 `patient_id=1` 这类占位 id。涉及**并发/事务/PG 方言**的改动，请同时补 `tests/test_postgres_real.py` 一类真 PG 用例——注意它默认 skip，CI 目前也不跑，**别把"SQLite 绿了"当成"PG 也对"**。
 - 写**唯一约束表**的接口**必须处理 `IntegrityError` 冲突**——有 AST 用例（`test_stage14_concurrency.py`）盯着，包括 `app/spd/routers/`。
 - **不得删测试来凑 CI**。命名：新测试尽量按业务模块命名，别再沿用 `test_stageN_*` / `test_final_gapN` 这类按轮次命名的旧习惯。
 

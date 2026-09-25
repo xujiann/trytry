@@ -15,7 +15,7 @@ from ....clock import now_naive
 from ....database import get_db
 from ....patchtypes import UNSET
 from ....deps import get_current_user, paginate, require_admin, require_roles
-from ...platform import Organization, User
+from ...platform import Organization, Patient, User
 from ...models import (
     SpdDataSource,
     SpdDevice,
@@ -163,6 +163,9 @@ def bind_device(
     if device is None:
         raise HTTPException(status_code=404, detail="设备不存在")
     assert_org_writable(db, user, device.org_id)
+    # 患者编号原先一眼不看：填错了开发库存成悬空 id、生产库撞外键 500（P2-71 开外键约束后测出）
+    if body.patient_id is not None and db.get(Patient, body.patient_id) is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
     device.bound_patient_id = body.patient_id
     device.status = "bound" if body.patient_id else "idle"
     db.commit()

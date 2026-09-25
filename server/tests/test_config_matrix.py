@@ -7,7 +7,8 @@ import sys
 import types
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import IntegrityError
 
 from app.database import build_engine, engine_kwargs
 
@@ -49,6 +50,41 @@ def test_pg_driver_installed():
 
     eng = create_engine("postgresql+psycopg2://u:p@h/db")
     eng.dispose()
+
+
+# ---------- SQLite：外键约束（P2-71） ----------
+
+
+def test_sqlite_engine_enforces_foreign_keys(tmp_path):
+    """开发 / 测试库每条连接都开外键约束，悬空外键当场 IntegrityError——与生产 PG 同一口径。
+    SQLite 默认不查外键：没有这一步，夹具写占位 id、接口把不存在的编号原样写库，开发库上一概照绿。"""
+    eng = build_engine(f"sqlite:///{tmp_path / 'fk.db'}")
+    try:
+        with eng.begin() as conn:
+            assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
+            conn.execute(text("CREATE TABLE parent (id INTEGER PRIMARY KEY)"))
+            conn.execute(text("CREATE TABLE child (id INTEGER PRIMARY KEY, "
+                              "parent_id INTEGER REFERENCES parent(id))"))
+        with pytest.raises(IntegrityError), eng.begin() as conn:
+            conn.execute(text("INSERT INTO child (parent_id) VALUES (999)"))
+    finally:
+        eng.dispose()
+
+
+def test_app_engine_enforces_foreign_keys_only_on_sqlite():
+    """应用与测试共用的那一个引擎：SQLite 上开着外键约束；换成 PG 跑时不挂 PRAGMA（PG 不认它）。"""
+    from app.database import _sqlite_foreign_keys_on, engine
+
+    is_sqlite = engine.dialect.name == "sqlite"
+    assert event.contains(engine, "connect", _sqlite_foreign_keys_on) is is_sqlite
+    if is_sqlite:
+        with engine.connect() as conn:
+            assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
+    pg = build_engine(PG_URL)
+    try:
+        assert not event.contains(pg, "connect", _sqlite_foreign_keys_on)
+    finally:
+        pg.dispose()
 
 
 # ---------- Redis：state_store 后端选择（mock 客户端验证读写调用） ----------

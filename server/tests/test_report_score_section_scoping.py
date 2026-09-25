@@ -15,7 +15,7 @@ from conftest import reset_database
 
 from app.database import SessionLocal
 from app.models import Organization, User
-from app.spd.models import SpdScore, SpdTeam
+from app.spd.models import SpdAssessPlan, SpdScore, SpdTeam
 from app.spd.reporting import _score
 
 SECTION = {"key": "score", "title": "考核排名"}
@@ -27,6 +27,9 @@ def world():
     reset_database()
     with SessionLocal() as db:
         made = {}
+        plan = SpdAssessPlan(code="SCOPE-PLAN", name="排名节考核方案")   # 分数挂在真实的方案上（开发库开了外键约束（P2-71））
+        db.add(plan)
+        db.flush()
         for tag in ("甲", "乙"):
             org = Organization(name=f"{tag}考核院", org_type="lead_hospital", level="county")
             db.add(org)
@@ -37,11 +40,11 @@ def world():
             db.flush()
             for period in ("2026Q1", "2026Q2"):
                 db.add_all([
-                    SpdScore(plan_id=1, period=period, object_type="org",
+                    SpdScore(plan_id=plan.id, period=period, object_type="org",
                              object_id=org.id, object_name=f"{tag}院-{period}", total_score=90),
-                    SpdScore(plan_id=1, period=period, object_type="team",
+                    SpdScore(plan_id=plan.id, period=period, object_type="team",
                              object_id=team.id, object_name=f"{tag}团队-{period}", total_score=80),
-                    SpdScore(plan_id=1, period=period, object_type="doctor",
+                    SpdScore(plan_id=plan.id, period=period, object_type="doctor",
                              object_id=doctor.id, object_name=f"{tag}医师-{period}", total_score=70),
                 ])
             made[tag] = {"org_id": org.id, "team_id": team.id, "doctor_id": doctor.id}

@@ -20,7 +20,7 @@ from conftest import reset_database
 
 from app.database import SessionLocal
 from app.main import app
-from app.models import Organization, User
+from app.models import Organization, Patient, User
 from app.security import hash_password
 from app.spd import models as S
 
@@ -71,7 +71,10 @@ def seeded(client):
         team = S.SpdTeam(name="配置团队", org_id=town.id, active=True)
         db.add(team)
         db.flush()
-        db.add(S.SpdEnrollment(patient_id=1, program_code="CT-HTN", org_id=town.id,
+        patient = Patient(ehc_no="EHC-CFG-001", name="配置在管患者", id_card="330102195001011234")  # 开发库开了外键约束（P2-71）
+        db.add(patient)
+        db.flush()
+        db.add(S.SpdEnrollment(patient_id=patient.id, program_code="CT-HTN", org_id=town.id,
                                status="active"))
         center = S.SpdCenter(code="CT-CTR", name="契约中心", program_code="CT-HTN",
                              lead_org_id=county.id, lead_dept="心内科",

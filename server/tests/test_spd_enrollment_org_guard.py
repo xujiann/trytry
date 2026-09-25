@@ -56,7 +56,16 @@ def world(client):
     patient = client.post("/api/patients",
                           json={"name": "一跳患者", "id_card": "330782199505055566"},
                           headers=admin).json()
-    return {"admin": admin, "a": a, "b": b, "patient": patient,
+    with SessionLocal() as db:   # 服务包目录与路径模板要真实存在（原先是占位 1；开发库开了外键约束（P2-71））
+        program = M.SpdProgram(code="hop_prog", name="一跳病种")
+        package = M.SpdServicePackage(code="HOP-PKG", name="一跳服务包")
+        db.add_all([program, package])
+        db.flush()
+        template = M.SpdPathTemplate(program_id=program.id, code="HOP-T", name="一跳路径")
+        db.add(template)
+        db.commit()
+        catalog = {"package_id": package.id, "template_id": template.id}
+    return {"admin": admin, "a": a, "b": b, "patient": patient, **catalog,
             "doc_a": _login(client, "hop_doc_a"), "doc_b": _login(client, "hop_doc_b"),
             "dir_b": _login(client, "hop_dir_b")}
 
@@ -88,10 +97,10 @@ def _seed(world, *, with_enrollment=True):
         objs = {"intervention": intervention}
         if with_enrollment:
             binding = M.SpdPackageBinding(
-                enrollment_id=eid, package_id=1, status="bound",
+                enrollment_id=eid, package_id=world["package_id"], status="bound",
                 items=[{"code": "bp", "name": "血压", "total": 4, "used": 0, "price": 5}],
             )
-            instance = M.SpdPathInstance(enrollment_id=eid, template_id=1, status="running")
+            instance = M.SpdPathInstance(enrollment_id=eid, template_id=world["template_id"], status="running")
             db.add_all([binding, instance])
             objs.update(binding=binding, instance=instance)
         db.commit()

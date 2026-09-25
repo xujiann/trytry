@@ -15,7 +15,7 @@ from sqlalchemy import event, insert
 
 from app.database import SessionLocal, engine
 from app.models import Organization, Patient
-from app.spd.models import SpdEnrollment, SpdPathInstance
+from app.spd.models import SpdEnrollment, SpdPathInstance, SpdPathTemplate, SpdProgram
 
 BULK = 300
 
@@ -44,11 +44,17 @@ def world(client, admin):
             for pid, org in zip(pids, orgs)])
         eids = [eid for (eid,) in db.query(SpdEnrollment.id).filter(SpdEnrollment.program_code == "ps_prog")
                 .order_by(SpdEnrollment.id)]
-        # 测试库不开外键约束，模板号给个占位即可（与 test_spd_enrollment_org_guard 同一做法）
+        # 路径模板要真实存在（原先是占位 1，靠测试库不开外键约束混过去；开发库开了外键约束（P2-71））
+        program = SpdProgram(code="PS-TPL", name="路径统计模板病种")
+        db.add(program)
+        db.flush()
+        template = SpdPathTemplate(program_id=program.id, code="PS-T", name="路径统计模板")
+        db.add(template)
+        db.flush()
         db.execute(insert(SpdPathInstance), [
-            {"enrollment_id": eids[0], "template_id": 1, "status": "running"},
-            {"enrollment_id": eids[1], "template_id": 1, "status": "completed"},
-            {"enrollment_id": eids[2], "template_id": 1, "status": "running"},
+            {"enrollment_id": eids[0], "template_id": template.id, "status": "running"},
+            {"enrollment_id": eids[1], "template_id": template.id, "status": "completed"},
+            {"enrollment_id": eids[2], "template_id": template.id, "status": "running"},
         ])
         db.commit()
         return {"a": a.id, "b": b.id}

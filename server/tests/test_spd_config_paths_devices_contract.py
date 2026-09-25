@@ -25,7 +25,7 @@ from conftest import reset_database
 
 from app.database import SessionLocal
 from app.main import app
-from app.models import Organization, User
+from app.models import Organization, Patient, User
 from app.security import hash_password
 from app.spd import models as S
 
@@ -68,8 +68,13 @@ def seeded(client):
         db.add(S.SpdPathNode(template_id=pub.id, key="p1", name="已发布节点", seq=1,
                              enter_condition=[], complete_condition=[], due_days=7))
         # 设备：一台挂了机构且已绑定，一台两者皆空（照出可空列）
+        # 两位真实患者：一位预先绑着 PC-SN1，一位给绑定用例用（原先是占位 1 / 5；开发库开了外键约束（P2-71））
+        patient = Patient(ehc_no="EHC-PC-001", name="设备绑定患者", id_card="330102195002021234")
+        other = Patient(ehc_no="EHC-PC-002", name="设备改绑患者", id_card="330102195003031234")
+        db.add_all([patient, other])
+        db.flush()
         db.add(S.SpdDevice(sn="PC-SN1", device_type="bp", model="BP-100", org_id=org.id,
-                           bound_patient_id=1, status="bound"))
+                           bound_patient_id=patient.id, status="bound"))
         dev_free = S.SpdDevice(sn="PC-SN2", device_type="glucose", model="", status="idle")
         db.add(dev_free)
         src = S.SpdDataSource(code="PC-HIS", name="HIS接口", source_type="HIS",
@@ -78,7 +83,7 @@ def seeded(client):
         db.add(src)
         db.commit()
         return {"draft": draft.id, "pub": pub.id, "prog": prog.id, "org": org.id,
-                "node": node.id, "src": src.id, "dev_free": dev_free.id}
+                "node": node.id, "src": src.id, "dev_free": dev_free.id, "other": other.id}
 
 
 @pytest.fixture(scope="module")
@@ -178,8 +183,8 @@ def test_设备的两个可空列在无值时是null(client, auth, seeded):
 
 def test_绑定与解绑走同一形状(client, auth, seeded):
     bound = client.post(f"{B}/devices/{seeded['dev_free']}/bind", headers=auth,
-                        json={"patient_id": 5}).json()
-    assert bound["bound_patient_id"] == 5 and bound["status"] == "bound"
+                        json={"patient_id": seeded["other"]}).json()
+    assert bound["bound_patient_id"] == seeded["other"] and bound["status"] == "bound"
     unbound = client.post(f"{B}/devices/{seeded['dev_free']}/bind", headers=auth,
                           json={}).json()
     assert unbound["bound_patient_id"] is None and unbound["status"] == "idle"
