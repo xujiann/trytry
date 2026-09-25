@@ -59,6 +59,29 @@ def test_锁内必须全是钉版行():
         )
 
 
+def test_锁内版本落在区间声明里():
+    """lock 是 requirements.txt 的一次快照，钉的版本必须落在声明的区间里（P2-77）。
+
+    区间收紧了（如 SQLAlchemy 加 `<2.1`）而锁没跟着再生成，或再生成时绕开了区间——镜像与 CI 装的就是
+    约束明说不支持的版本，而本地按区间装的开发环境是另一套，两边的检查结果不再可比。"""
+    from packaging.requirements import Requirement
+
+    pinned = {}
+    for ln in _req_lines(SERVER / "requirements.lock"):
+        name, _, version = ln.partition("==")
+        pinned[_canon(name.split("[")[0])] = version
+    outside = []
+    for ln in _req_lines(SERVER / "requirements.txt"):
+        req = Requirement(ln.split("#")[0].strip())
+        version = pinned.get(_canon(req.name))
+        if version is not None and not req.specifier.contains(version, prereleases=True):
+            outside.append(f"{req.name}：锁 {version}，声明 {req.specifier}")
+    assert not outside, (
+        "requirements.lock 钉的版本不在 requirements.txt 的区间里：\n  " + "\n  ".join(outside)
+        + "\n按 lock 文件头注释再生成（干净 venv 解析 requirements.txt）。"
+    )
+
+
 def test_镜像与CI必须装锁而不是区间():
     """四个安装点全部走 lock；改回 `-r requirements.txt` 是静默旁路（本地照绿）。"""
     installs = {

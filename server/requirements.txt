@@ -1,6 +1,6 @@
 fastapi>=0.110
 uvicorn>=0.29
-sqlalchemy>=2.0
+sqlalchemy>=2.0,<2.1   # 2.1 改了 Row 的泛型写法，同一份代码 make typecheck 报 81 处；迁到 2.1 的类型写法之前不放开（P2-77）
 pydantic>=2.6
 pydantic-settings>=2.2
 python-multipart>=0.0.9
