@@ -1737,6 +1737,7 @@ async function renderTcmHeritage() {
     api("/api/tcm-heritage/master-cases/stats"),
     api("/api/tcm-heritage/simulations"),
   ]);
+  const canSim = ["doctor", "director", "admin"].includes(currentRole());   // 与建病例接口同一权限
   // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
     ${panel("传承概览", `
@@ -1759,7 +1760,23 @@ async function renderTcmHeritage() {
       <form class="inline" id="mc-search"><input name="keyword" placeholder="搜方药/按语/标题"><button>检索</button></form>
       <div id="mc-list">${renderCaseTable(cases)}</div>`)}
     ${panel("模拟诊疗病例", `
-      ${table(["标题", "类别", "决策点", "满分", "及格分", "状态", "操作"], sims, (s) =>
+      ${canSim ? `<details id="sim-new"><summary>新建模拟病例</summary>
+        <form id="sim-new-form" style="margin-top:8px">
+          <div class="inline">
+            <input name="title" placeholder="病例标题" required style="min-width:240px">
+            <select name="category"><option value="clinical">临床</option>
+              <option value="tcm">中医药适宜技术</option><option value="emergency">急救</option></select>
+            <input name="pass_score" type="number" min="1" max="100" value="60" style="width:90px"
+              title="及格分按百分制：得分 = 答对的分值 ÷ 满分 × 100"> <span class="desc">及格分（百分制）</span></div>
+          <div class="inline"><input name="scenario" placeholder="情境：主诉、现病史、查体……" style="min-width:520px"></div>
+          <div id="sim-points"></div>
+          <div class="inline"><button type="button" class="btn secondary" id="sim-add-point">加一个决策点</button>
+            <button>保存病例</button></div>
+        </form>
+        <p class="desc">每个决策点：问题、选项（用 / 分隔，至少两个）、正确答案（从选项里选）、分值、解析（只给答错的人看）；
+          没填问题的空行不提交。</p>
+        <p class="msg" id="sim-new-msg"></p></details>` : ""}
+      ${table(["标题", "类别", "决策点", "满分", "及格分（百分制）", "状态", "操作"], sims, (s) =>
         `<tr><td>${esc(s.title)}</td><td>${esc(s.category_name)}</td><td>${s.decision_points.length}</td>` +
         `<td>${s.total_score}</td><td>${s.pass_score}</td>` +
         `<td>${s.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>` +
@@ -1769,6 +1786,45 @@ async function renderTcmHeritage() {
         所以这张表不能拿来对答案。停用的病例不摆「作答」：后端直接回 409。</p>
       <div id="sim-box"></div>`)}`;
   $("#mc-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/tcm-heritage/master-cases", formJson(e.target, []), "#mc-msg"); };
+  // 模拟病例原先只能作答、不能新建（P2-93 动词级孤儿）：建病例的接口一直在，新装的平台上这张表一条都没有
+  const simForm = $("#sim-new-form");
+  if (simForm) {
+    const splitOptions = (text) => text.split("/").map((x) => x.trim()).filter(Boolean);
+    const addPointRow = () => {
+      const row = document.createElement("div");
+      row.className = "inline sim-point";
+      row.innerHTML = `<input class="p-question" placeholder="决策点：问题" style="min-width:220px">
+        <input class="p-options" placeholder="选项，用 / 分隔" style="min-width:200px">
+        <select class="p-answer"><option value="">正确答案（先填选项）</option></select>
+        <input class="p-score" type="number" min="1" max="100" value="10" style="width:70px" title="分值">
+        <input class="p-explain" placeholder="解析（答错时给）" style="min-width:200px">`;
+      const options = row.querySelector(".p-options"), answer = row.querySelector(".p-answer");
+      // 正确答案只能从选项里挑：手填的答案差一个字就是「正确答案不在选项里」（后端 422）
+      options.oninput = () => {
+        const keep = answer.value, list = splitOptions(options.value);
+        answer.innerHTML = `<option value="">正确答案</option>` +
+          list.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("");
+        if (list.includes(keep)) answer.value = keep;
+      };
+      $("#sim-points").appendChild(row);
+    };
+    addPointRow(); addPointRow();
+    $("#sim-add-point").onclick = addPointRow;
+    simForm.onsubmit = (e) => {
+      e.preventDefault();
+      const body = formJson(e.target, ["pass_score"]);
+      const rows = [...document.querySelectorAll(".sim-point")].filter((r) => r.querySelector(".p-question").value.trim());
+      body.decision_points = rows.map((r, i) => ({
+        key: `p${i + 1}`,
+        question: r.querySelector(".p-question").value.trim(),
+        options: splitOptions(r.querySelector(".p-options").value),
+        answer: r.querySelector(".p-answer").value,
+        score: Number(r.querySelector(".p-score").value || 10),
+        explain: r.querySelector(".p-explain").value.trim(),
+      }));
+      return postAction("/api/tcm-heritage/simulations", body, "#sim-new-msg");
+    };
+  }
   $("#mc-search").onsubmit = async (e) => {
     e.preventDefault();
     const kw = new FormData(e.target).get("keyword") || "";

@@ -1670,6 +1670,39 @@ def test_中医适宜技术能在界面上入库(page, base_url, admin_read):
     expect(page.locator("#page-body")).to_contain_text("E2E 耳穴压豆")
 
 
+def test_模拟诊疗病例能在界面上新建_作答按新建的答案评分(page, base_url, admin_read):
+    """P2-93（动词级孤儿）：模拟病例原先只能作答、不能新建——建病例的接口（医生 / 管理层）一直在，新装的平台上这张表
+    一条都没有，「模拟诊疗」从界面上无从用起。正确答案从选项里挑（手填差一个字就是后端 422「正确答案不在选项里」）。"""
+    _login(page, base_url)
+    _open_page(page, "tcmheritage", "名老中医传承与模拟诊疗")
+    page.click("#sim-new summary")
+    form = page.locator("#sim-new-form")
+    form.locator('[name="title"]').fill("E2E 胸痛接诊模拟")
+    form.locator('[name="category"]').select_option("emergency")
+    first, second = form.locator(".sim-point").nth(0), form.locator(".sim-point").nth(1)
+    first.locator(".p-question").fill("首选检查？")
+    first.locator(".p-options").fill("心电图 / 腹部B超")
+    first.locator(".p-answer").select_option("心电图")
+    first.locator(".p-explain").fill("胸痛首要排除急性冠脉综合征")
+    second.locator(".p-question").fill("下一步？")
+    second.locator(".p-options").fill("启动胸痛中心流程/门诊随访")
+    second.locator(".p-answer").select_option("启动胸痛中心流程")
+    _submit(page, "#sim-new-form button:has-text('保存病例')")
+    created = next(c for c in admin_read("/api/tcm-heritage/simulations") if c["title"] == "E2E 胸痛接诊模拟")
+    assert created["category"] == "emergency" and created["total_score"] == 20, created
+    assert [p["options"] for p in created["decision_points"]] == [["心电图", "腹部B超"], ["启动胸痛中心流程", "门诊随访"]]
+
+    # 按新建的答案评分：第一题答错（给解析）、第二题答对，10 / 20 → 50 分，未过 60
+    page.locator("tr", has_text="E2E 胸痛接诊模拟").locator("button[data-simdo]").click()
+    page.check('#sim-form input[name="p1"][value="腹部B超"]')
+    page.check('#sim-form input[name="p2"][value="启动胸痛中心流程"]')
+    page.click("#sim-form button:has-text('交卷')")
+    result = page.locator("#sim-result")
+    expect(result).to_contain_text("未通过")
+    expect(result).to_contain_text("胸痛首要排除急性冠脉综合征")
+    expect(result.locator(".card .value").first).to_have_text("50")
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""
