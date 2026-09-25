@@ -2837,3 +2837,44 @@ def test_spd_doctor_mobile_todo_and_referral(page, base_url, spd_seed):
     steps = spd_seed["read"](referral_path)["steps"]
     assert [(x["action"], x["opinion"]) for x in steps if x["action"] in ("pass", "reject")] \
         == [("pass", "同意上转")], steps
+
+
+def test_医生移动端要佐证的任务_传了佐证才办得结(page, base_url, spd_seed, admin_call, admin_read, tmp_path):
+    """P2-84：医生移动端待办卡片原先一律摆着「接收」「办结」、没有上传佐证的入口——要佐证的任务在手机上点办结恒 422
+    「该任务要求上传佐证材料后才能办结」，只能回管理端传。现在按状态给按钮：要佐证的多一个「上传佐证」（与管理端同一走法：
+    传成附件、以草稿写进任务的佐证清单），传了才办得结；已接收的不再摆「接收」。"""
+    task = admin_call("POST", "/api/spd/tasks", {
+        "patient_id": spd_seed["patient"]["id"], "title": "E2E上门测压留照", "task_type": "followup",
+        "org_id": spd_seed["org"]["id"], "due_days": 7, "assignee_id": spd_seed["doctor_id"],
+        "require_evidence": True})
+    page.goto(f"{base_url}/m/doctor")
+    page.fill("#lg-user", "e2e_spd_doc")
+    page.fill("#lg-pass", "passw0rd1")
+    page.click('#login-form button[type="submit"]')
+    expect(page.locator("#workbench")).to_be_visible()
+    page.click('[data-tab="spd"]')
+    card = page.locator("#spd-list .m-card", has_text="E2E上门测压留照")
+    expect(card).to_contain_text("办结前须上传照片或报告")
+    # 上一条用例接收过的随访任务已是「已接收」：不再摆注定 409 的「接收」
+    expect(page.locator("#spd-list .m-card", has_text="E2E随访任务").locator("[data-spd-claim]")).to_have_count(0)
+
+    card.locator("[data-spd-done]").click()   # 没传佐证先办结：后端拒，卡片不动
+    card.locator("form.spd-done-form button[type=submit]").click()
+    expect(page.locator("#spd-msg")).to_contain_text("该任务要求上传佐证材料后才能办结")
+    assert admin_read(f"/api/spd/tasks/{task['id']}")["status"] == "pending"
+
+    photo = tmp_path / "bp.jpg"
+    photo.write_bytes(b"\xff\xd8\xff\xe0e2e-p284-evidence")
+    with page.expect_file_chooser() as chooser:
+        card.locator("[data-spd-evidence]").click()   # 修前卡片上没有这个按钮
+    chooser.value.set_files(str(photo))
+    expect(page.locator("#spd-msg")).to_contain_text("佐证已上传（共 1 份）")
+    expect(card).to_contain_text("已传 1 份")
+    card.locator("[data-spd-done]").click()
+    card.locator("form.spd-done-form textarea[name=note]").fill("血压 132/84，已留照")
+    card.locator("form.spd-done-form button[type=submit]").click()
+    expect(page.locator("#spd-list")).not_to_contain_text("E2E上门测压留照")   # 办结即出了待办
+    detail = admin_read(f"/api/spd/tasks/{task['id']}")
+    assert (detail["status"], detail["result"], len(detail["evidence"])) == (
+        "done", {"note": "血压 132/84，已留照"}, 1), detail
+    assert [e["attachment_id"] for e in detail["evidence_urls"]] == detail["evidence"]   # 管理端审核页看得到这份佐证

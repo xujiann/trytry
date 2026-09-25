@@ -72,6 +72,23 @@ function cardForm(card, className, fieldsHtml, submitLabel, onSubmit) {
   form.querySelector("textarea, input, select").focus();
 }
 
+/* 附件上传（multipart）：绕过 api()——它写死 JSON 的 Content-Type；会话口径与 api() 相同（存量 Header 令牌照带，
+   Cookie 模式的写请求补双提交 CSRF）。 */
+async function uploadAttachment(ownerType, ownerId, file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("owner_type", ownerType);
+  fd.append("owner_id", ownerId);
+  const resp = await fetch("/api/attachments", {
+    method: "POST", credentials: "same-origin",
+    headers: token() ? { Authorization: `Bearer ${token()}` } : { "X-CSRF-Token": csrfToken() },
+    body: fd });
+  const data = await resp.json().catch(() => ({}));
+  if (resp.status === 401) { logout(); throw new Error("登录已失效，请重新登录"); }
+  if (!resp.ok) throw new Error(errorText(data.detail, `上传失败(${resp.status})`));
+  return data;
+}
+
 /* ---------------- 登录 / 登出 ---------------- */
 
 function showWorkbench(show) {
@@ -187,6 +204,17 @@ async function loadSpdList() {
   }
 }
 
+/* 待办卡片的动作按状态给（与管理端 `spdTaskActions` 同一口径）：待接收 / 已超期的能接收，待审核的等审核人在管理端审，
+   其余能办结；要佐证的任务多一个「上传佐证」——原先卡片上一律摆着接收与办结、没有上传入口，要佐证的任务在手机上点办结
+   恒 422，接收点在已接收的任务上恒 409，待审核的点办结则绕过了审核（P2-84）。 */
+function spdTodoOps(t) {
+  const b = (attr, label) => `<button type="button" class="ghost-btn" ${attr}="${t.id}">${label}</button>`;
+  if (t.status === "submitted") return "";
+  return (["pending", "overdue"].includes(t.status) ? b("data-spd-claim", "接收") : "")
+    + (t.require_evidence ? b("data-spd-evidence", "上传佐证") : "")
+    + b("data-spd-done", "办结");
+}
+
 async function loadSpdTodo(box) {
   const rows = await api("/api/spd/tasks?mine=true&open_only=true&limit=30");
   box.innerHTML = rows.map((t) => `<div class="m-card">
@@ -199,11 +227,36 @@ async function loadSpdTodo(box) {
     ${kv("状态", esc({ pending: "待接收", claimed: "已接收", doing: "办理中",
       submitted: "待审核", done: "已完成", rejected: "已退回", overdue: "已超期",
       cancelled: "已取消" }[t.status] || t.status))}
-    <button type="button" class="ghost-btn" data-spd-claim="${t.id}">接收</button>
-    <button type="button" class="ghost-btn" data-spd-done="${t.id}">办结</button>
+    ${t.review_note ? kv("审核意见", esc(t.review_note)) : ""}
+    ${t.require_evidence ? kv("佐证", (t.evidence || []).length
+      ? `已传 ${(t.evidence || []).length} 份` : "办结前须上传照片或报告") : ""}
+    ${spdTodoOps(t)}
   </div>`).join("") || '<p class="empty">暂无待办</p>';
   box.querySelectorAll("[data-spd-claim]").forEach((b) => b.addEventListener("click", async () => {
     await spdPost(`/api/spd/tasks/${b.dataset.spdClaim}/claim`);
+  }));
+  box.querySelectorAll("[data-spd-evidence]").forEach((b) => b.addEventListener("click", () => {
+    // 佐证 = 挂在该任务名下的附件（owner_type=spd_task）。上传后以「保存草稿」把附件编号写进任务的佐证清单
+    // （要带上已有的，后端整体替换）——与管理端「上传佐证」同一走法，办结时后端再核一遍
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,.pdf";
+    input.onchange = async () => {
+      if (!input.files[0]) return;
+      const taskId = b.dataset.spdEvidence;
+      try {
+        const att = await uploadAttachment("spd_task", taskId, input.files[0]);
+        const t = await api(`/api/spd/tasks/${taskId}`);
+        const ids = [...(t.evidence || []).map(Number).filter(Boolean), att.id];
+        await api(`/api/spd/tasks/${taskId}/submit`, { method: "POST",
+          body: JSON.stringify({ result: t.result || {}, evidence: ids, draft: true }) });
+        $("#spd-msg").textContent = `佐证已上传（共 ${ids.length} 份），办结时一并核验`;
+        await loadSpdTab();
+      } catch (err) {
+        $("#spd-msg").textContent = err.message;
+      }
+    };
+    input.click();
   }));
   box.querySelectorAll("[data-spd-done]").forEach((b) => b.addEventListener("click", () => {
     // 办理结果在卡片里用文本域收，不再弹系统输入框：弹窗录不了多行、没有校验提示、
