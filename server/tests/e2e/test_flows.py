@@ -1943,7 +1943,9 @@ def test_人财物页的挂科室_变动_合同_出入库都在页内表单里�
     page.fill("#asset-form input[name=quantity]", "3")
     _submit(page, "#asset-form button")
     page.locator("tr", has_text="E2E打印机").locator("button[data-assetmv]").click()
-    _spd_modal(page, {"movement_type": "issue", "quantity": "2", "note": "门诊领用"})
+    # 等整页重画完再点「记录」：提示行此前就是空的，`to_have_text("")` 当场就过，挡不住随后那次 route()
+    # 把刚打开的出入库记录面板重画成空（CI run 703 实测，本地碰巧绿）
+    _redrawn(page, lambda: _spd_modal(page, {"movement_type": "issue", "quantity": "2", "note": "门诊领用"}))
     expect(page.locator("#hrf-msg")).to_have_text("")
     page.locator("tr", has_text="E2E打印机").locator("button[data-assethist]").click()
     expect(page.locator("#assetmv-list")).to_contain_text("门诊领用")
