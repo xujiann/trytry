@@ -14,10 +14,11 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..concurrency import upsert_unique
+from ..concurrency import serialized_on, upsert_unique
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..visibility import assert_org_visible, scope_org_list
 from ..database import get_db
@@ -116,6 +117,39 @@ class AllocationRuleOut(BaseModel):
     ratio_pct: float
 
 
+class AllocationRatioIn(BaseModel):
+    """改比例：只改比例。来源 / 目标科室填错了就删掉重建——改科室等于换了一条规则。"""
+
+    ratio_pct: float = Field(gt=0, le=100)
+
+
+class AllocationRuleDeletedOut(BaseModel):
+    id: int
+    deleted: bool
+
+
+def _check_ratio_budget(db: Session, from_dept_id: int, ratio_pct: float, exclude_rule_id: int | None = None) -> None:
+    """同一来源科室的分摊比例合计不得超过 100（P1-116）。
+
+    模型 docstring 说的「比例之和应为 100、不强制」指的是**不足** 100（分期建规则的中间态，汇总里单列
+    「未分摊」）；超过 100 从来不是合法状态：汇总按「直接成本 + 转入 − 转出」算，来源科室的总成本成了负数，
+    目标科室合计拿走的比来源科室有的还多（修前实测：后勤 1000 分给内外科各 60%，后勤总成本 −200）。
+    比较前 round 到 6 位：33.3 + 33.3 + 33.4 的浮点和不是精确的 100，不能因此误拦。
+    调用方须在来源科室那一行的 `serialized_on` 临界区里调用——两路并发各建一条 60% 不会都过。
+    """
+    query = db.query(func.coalesce(func.sum(CostAllocationRule.ratio_pct), 0)).filter(
+        CostAllocationRule.from_dept_id == from_dept_id
+    )
+    if exclude_rule_id is not None:
+        query = query.filter(CostAllocationRule.id != exclude_rule_id)
+    used = round(float(query.scalar() or 0), 6)
+    if round(used + ratio_pct, 6) > 100:
+        raise HTTPException(
+            status_code=422,
+            detail=f"该来源科室已分出 {used:g}%，再分 {ratio_pct:g}% 合计超过 100%（最多还能分 {round(100 - used, 6):g}%）",
+        )
+
+
 @router.post(
     "/allocation-rules",
     response_model=AllocationRuleCreateOut,
@@ -136,27 +170,68 @@ def create_allocation_rule(body: AllocationIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="不可向本科室分摊")
     if source.org_id != target.org_id:
         raise HTTPException(status_code=422, detail="不可跨机构分摊成本")
-    rule = CostAllocationRule(org_id=source.org_id, **body.model_dump())
-    db.add(rule)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="该分摊规则已存在") from None
+    with serialized_on(db, Department, source.id):
+        _check_ratio_budget(db, source.id, body.ratio_pct)
+        rule = CostAllocationRule(org_id=source.org_id, **body.model_dump())
+        db.add(rule)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该分摊规则已存在") from None
     db.refresh(rule)
     return {"id": rule.id, "from_dept_id": rule.from_dept_id, "to_dept_id": rule.to_dept_id,
             "ratio_pct": rule.ratio_pct}
+
+
+def _rule_row(rule: CostAllocationRule) -> dict:
+    return {"id": rule.id, "org_id": rule.org_id, "from_dept_id": rule.from_dept_id,
+            "to_dept_id": rule.to_dept_id, "ratio_pct": rule.ratio_pct}
+
+
+@router.patch(
+    "/allocation-rules/{rule_id}",
+    response_model=AllocationRuleOut,
+    dependencies=[Depends(require_roles("director"))],
+)
+def update_allocation_ratio(rule_id: int, body: AllocationRatioIn, db: Session = Depends(get_db)):
+    """改分摊比例（P1-116：原先规则只能建、不能改也不能删，比例填错就永远照错的分）。
+
+    同一道合计校验，不算这条规则自己原来的比例。规则不分期间、汇总按现行规则现算，所以改了比例，
+    任一期的科室成本汇总都按新比例重算——与新增一条规则的效果同一个口径。
+    """
+    rule = db.get(CostAllocationRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="分摊规则不存在")
+    with serialized_on(db, Department, rule.from_dept_id):
+        db.refresh(rule)
+        _check_ratio_budget(db, rule.from_dept_id, body.ratio_pct, exclude_rule_id=rule.id)
+        rule.ratio_pct = body.ratio_pct
+        db.commit()
+    db.refresh(rule)
+    return _rule_row(rule)
+
+
+@router.delete(
+    "/allocation-rules/{rule_id}",
+    response_model=AllocationRuleDeletedOut,
+    dependencies=[Depends(require_roles("director"))],
+)
+def delete_allocation_rule(rule_id: int, db: Session = Depends(get_db)):
+    """删分摊规则（P1-116）：来源 / 目标科室填错了就删掉重建。规则表只存现行口径、不存历史版本，删除即物理删除。"""
+    rule = db.get(CostAllocationRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="分摊规则不存在")
+    db.delete(rule)
+    db.commit()
+    return {"id": rule_id, "deleted": True}
 
 
 @router.get("/allocation-rules", response_model=list[AllocationRuleOut])
 def list_allocation_rules(org_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user),):
     query = db.query(CostAllocationRule)
     query = scope_org_list(db, user, query, CostAllocationRule, org_id)
-    return [
-        {"id": r.id, "org_id": r.org_id, "from_dept_id": r.from_dept_id,
-         "to_dept_id": r.to_dept_id, "ratio_pct": r.ratio_pct}
-        for r in query.order_by(CostAllocationRule.id).all()
-    ]
+    return [_rule_row(r) for r in query.order_by(CostAllocationRule.id).all()]
 
 
 # ---------------------------------------------------------------- 科室成本汇总

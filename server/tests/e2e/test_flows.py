@@ -1839,6 +1839,58 @@ def test_成本页存下的期间被拒时回落本月_切换框先验再存(pag
 
 
 @pytest.fixture(scope="session")
+def cost_rule_seed(base_url, seed):
+    """成本分摊规则改删的前置：后勤 + 内科两个科室，后勤分给内科 60%（P1-116）。"""
+    import json
+    from urllib.request import Request
+
+    def call(path, payload=None, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    org_id = seed["org"]["id"]
+    hq = call("/api/mgmt/departments", {"org_id": org_id, "code": "E2E-CST-HQ", "name": "E2E分摊后勤",
+                                        "category": "admin"}, admin)
+    nk = call("/api/mgmt/departments", {"org_id": org_id, "code": "E2E-CST-NK", "name": "E2E分摊内科"}, admin)
+    rule = call("/api/cost/allocation-rules", {"from_dept_id": hq["id"], "to_dept_id": nk["id"], "ratio_pct": 60},
+                admin)
+    return {"rule": rule, "read": lambda path: call(path, None, admin)}
+
+
+def test_成本分摊规则改比例走页内表单_删除先确认取消即不删(page, base_url, cost_rule_seed):
+    """P1-116：分摊规则原先只能建、不能改也不能删——比例或科室填错就每一期都照错的分。
+    改比例走页内表单；删除先确认，点取消规则还在，确认后才删（按接口核对）。"""
+    rule_id = cost_rule_seed["rule"]["id"]
+
+    def rule():
+        rows = cost_rule_seed["read"]("/api/cost/allocation-rules")
+        return next((r for r in rows if r["id"] == rule_id), None)
+
+    _login(page, base_url)
+    _open_page(page, "cost", "成本核算")
+    page.click(f'button[data-alloc-edit="{rule_id}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"ratio_pct": "45.5"}))
+    assert rule()["ratio_pct"] == 45.5
+
+    page.once("dialog", lambda dialog: dialog.dismiss())
+    page.click(f'button[data-alloc-del="{rule_id}"]')
+    expect(page.locator(f'button[data-alloc-del="{rule_id}"]')).to_be_visible()
+    assert rule() is not None, "点了取消却照样删了规则"
+
+    page.once("dialog", lambda dialog: dialog.accept())
+    _redrawn(page, lambda: page.click(f'button[data-alloc-del="{rule_id}"]'))
+    expect(page.locator(f'button[data-alloc-del="{rule_id}"]')).to_have_count(0)
+    assert rule() is None
+
+
+@pytest.fixture(scope="session")
 def maternal_seed(base_url):
     """妇幼页用例的前置数据：一位孕妇（UI 只驱动建册之后的动作，与本文件约定一致）。"""
     import json

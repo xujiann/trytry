@@ -460,9 +460,13 @@ async function renderCost() {
         <select name="from_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
         →<select name="to_dept_id">${depts.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select>
         <input name="ratio_pct" type="number" step="0.01" placeholder="比例%" required><button>新增规则</button></form>
-      ${table(["来源科室", "目标科室", "比例"], rules, (r) =>
+      ${table(["来源科室", "目标科室", "比例", "操作"], rules, (r) =>
         `<tr><td>${esc(deptName[r.from_dept_id] || r.from_dept_id)}</td>
-         <td>${esc(deptName[r.to_dept_id] || r.to_dept_id)}</td><td>${r.ratio_pct}%</td></tr>`)}`)}
+         <td>${esc(deptName[r.to_dept_id] || r.to_dept_id)}</td><td>${r.ratio_pct}%</td>
+         <td><button class="btn secondary" data-alloc-edit="${r.id}" data-ratio="${esc(r.ratio_pct)}">改比例</button>
+             <button class="btn danger" data-alloc-del="${r.id}">删除</button></td></tr>`)}
+      <p class="desc">同一来源科室的比例合计不能超过 100%；不足 100% 的部分在科室成本里记为「未分摊」。
+        规则不分期间：改比例、删规则后，任一期的科室成本汇总都按现行规则重算。科室填错了就删掉重建。</p>`)}
     ${panel(`${period} 科室成本`, `${
       table(["科室", "类别", "直接成本", "分摊转入", "分摊转出", "总成本", "未分摊"], costs, (c) =>
         `<tr><td>${esc(c.dept_name)}</td><td>${esc(c.dept_category)}</td><td>${c.direct_cost.toFixed(2)}</td>
@@ -486,6 +490,24 @@ async function renderCost() {
     postAction("/api/cost/departments", formJson(e.target, ["dept_id", "amount"]), "#cost-msg"); };
   $("#alloc-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/cost/allocation-rules", formJson(e.target, ["from_dept_id", "to_dept_id", "ratio_pct"]), "#cost-msg"); };
+  // P1-116：规则原先只能建、不能改也不能删——比例或科室填错就每一期都照错的分
+  $("#page-body").onclick = async (e) => {
+    const edit = e.target.closest("[data-alloc-edit]");
+    if (edit) {
+      const form = await spdModal("改分摊比例", [
+        { name: "ratio_pct", label: "比例（%，同一来源科室合计不超过 100）", type: "number",
+          value: edit.dataset.ratio, required: true },
+      ]);
+      if (!form) return;
+      return postAction(`/api/cost/allocation-rules/${edit.dataset.allocEdit}`,
+        { ratio_pct: Number(form.ratio_pct) }, "#cost-msg", "PATCH");
+    }
+    const del = e.target.closest("[data-alloc-del]");
+    if (del) {
+      if (!confirm("删除这条分摊规则？删除后任一期的科室成本汇总都按剩下的规则重算。")) return;
+      return postAction(`/api/cost/allocation-rules/${del.dataset.allocDel}`, null, "#cost-msg", "DELETE");
+    }
+  };
 }
 
 /* ---------------- 物资采购与高值耗材 ---------------- */

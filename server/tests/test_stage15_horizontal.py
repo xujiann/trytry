@@ -488,6 +488,11 @@ BYID_CROSS_ORG_OK = {
     # 更糟，它让闸门不再问这个端点，而问题（如果有）原封不动。
     # 前提（角色仅限全域）由 test_credentials_disease_org_guard.py 钉住：角色一放宽就红。
     "disease_programs.py:update_program",
+    # 成本分摊规则改比例 / 删除（P1-116）：与建规则同挂 require_roles("director")，director 属
+    # GLOBAL_ROLES，机构写守卫对它恒放行（同上一条的理由）；建规则那条在 test_body_id_org_write_guard
+    # 的 GLOBAL_ROLE_ONLY 里。前提（角色仅限全域）由 test_cost_allocation_ratio_budget.py 钉住：角色一放宽就红。
+    "cost.py:update_allocation_ratio",
+    "cost.py:delete_allocation_rule",
 }
 
 

@@ -197,11 +197,13 @@ def _enroll_race(pg_engine, key):
     return _race_on_pg(worker, RACERS)
 
 
-def _warm_pool(pg_engine):
-    """先让 RACERS 条连接同时建好并回到池里，竞争窗口才真的打开。
+def _warm_pool(pg_engine, times=RACERS):
+    """先让 times 条连接同时建好并回到池里，竞争窗口才真的打开。
 
     不热身的话第一路手握唯一一条连接，它提交完了别人才刚连上——测出来的是
     "排队"而不是"并发"。热身本身也走 Barrier：串行热身只会建出一条连接。
+    引擎的 pool_size 要不小于 times，否则多出来的连接一回池就被关掉（见 `pg_engine`）。
+    别的并发档按自己的参赛路数传 times 复用这一份（如 test_cost_allocation_races）。
     """
     from sqlalchemy import text
     from sqlalchemy.orm import sessionmaker
@@ -213,7 +215,7 @@ def _warm_pool(pg_engine):
             db.execute(text("SELECT 1"))
         return "warm"
 
-    _, errors = _race_on_pg(warm, RACERS)
+    _, errors = _race_on_pg(warm, times)
     assert errors == [], f"连接池热身就失败了，PG 侧有问题：{errors}"
 
 

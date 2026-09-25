@@ -42,6 +42,7 @@ MIN_SANE_ENDPOINTS = 800
 SNAPSHOT_ENDPOINTS = {
     "DELETE /api/analytics/formulas/{key}",
     "DELETE /api/appointments/blacklist/{patient_id}",
+    "DELETE /api/cost/allocation-rules/{rule_id}",
     "DELETE /api/dataquality/rules/{rule_id}",
     "DELETE /api/medwaste/locations/{location_id}",
     "DELETE /api/org-groups/{group_id}/members/{org_id}",
@@ -519,6 +520,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/workflows/my-tasks",
     "PATCH /api/billing/charge-items/{item_id}",
     "PATCH /api/chronic/disease-types/{type_id}",
+    "PATCH /api/cost/allocation-rules/{rule_id}",
     "PATCH /api/dataquality/rules/{rule_id}",
     "PATCH /api/disease-programs/{program_id}",
     "PATCH /api/drgs/groups/{group_id}",
