@@ -1842,6 +1842,30 @@ def test_考核指标能在界面上新建_口径与变量提示取自后端(pag
     expect(page.locator("tr", has_text="E2E_REF_EFF")).to_contain_text("转诊")   # 口径显示名称，不是 referral
 
 
+def test_考核方案不写权重的指标按默认权重计_编辑回显不补0(page, base_url, admin_read):
+    """P2-105：方案表单「指标:权重」串里没写权重的指标，原先送 `weight: 0`——计分只在条目**没有** weight 键时才取指标库的
+    默认权重（`item.get("weight", indicator.weight)`），这个指标在方案里就一分不计；编辑弹窗又把没有权重的条目回显成「:0」，
+    原样存一次就归零。权重写成文字的原先成了 null，同样按 0 计。"""
+    _login(page, base_url)
+    _open_page(page, "spdassess", "专病考核与积分")
+    form = page.locator("#spd-plan-form")
+    form.locator('[name="code"]').fill("E2E_PLAN_W")
+    form.locator('[name="name"]').fill("E2E 默认权重方案")
+    form.locator('[name="items"]').fill("followup_rate， path_rate:四十")
+    form.locator("button").click()
+    expect(page.locator("#spd-plan-msg")).to_contain_text("权重要写成数字")
+    form.locator('[name="items"]').fill("followup_rate, path_rate:30")
+    _submit(page, "#spd-plan-form button")
+    expected = [{"indicator_code": "followup_rate"}, {"indicator_code": "path_rate", "weight": 30}]
+    plan = next(p for p in admin_read("/api/spd/assess-plans") if p["code"] == "E2E_PLAN_W")
+    assert plan["items"] == expected, plan["items"]   # 修前 followup_rate 带着 weight 0
+
+    page.click(f'button[data-plan-edit="{plan["id"]}"]')
+    expect(page.locator('form.panel [name="items"]')).to_have_value("followup_rate,path_rate:30")   # 修前回显 followup_rate:0
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    assert next(p for p in admin_read("/api/spd/assess-plans") if p["code"] == "E2E_PLAN_W")["items"] == expected
+
+
 def test_任务中心能手工派发慢专病任务(page, base_url, seed, admin_read):
     """P2-93（动词级孤儿）：建任务的接口 `POST /api/spd/tasks` 一直在，任务中心却只有查、办、批量操作——临时要给某位患者派一件事
     （补测一次血压、电话确认用药），界面上无从下手；孤儿端点棘轮按路径算，清单有页面调就算接上了。"""

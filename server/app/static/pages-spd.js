@@ -2436,11 +2436,23 @@ const SPD_POINT_EVENTS = {
 const SPD_REDEEM_STATUS = { pending: ["待核销", "orange"], verified: ["已核销", "green"], cancelled: ["已取消", ""] };
 
 /** 考核方案的指标串「指标:权重，指标:权重」→ items；新建与编辑共用同一份解析。 */
+/** 「指标:权重」串 → 方案条目。没写权重的**不送 weight**：计分按指标库里的默认权重（`item.get("weight", indicator.weight)`）；
+ * 原先送的是 0，这个指标在方案里就一分不计（P2-105）。权重写成文字的抛错——Number("四十") 是 NaN，JSON 里成了 null，同样按 0 计。 */
 function spdParsePlanItems(text) {
-  return String(text || "").split(/[，,]/).filter(Boolean).map((pair) => {
-    const [code, weight] = pair.split(":").map((s) => (s || "").trim());
-    return { indicator_code: code, weight: Number(weight || 0) };
+  return String(text || "").split(/[，,]/).map((s) => s.trim()).filter(Boolean).map((pair) => {
+    const [code, weight] = pair.split(/[:：]/).map((s) => (s || "").trim());
+    if (weight === undefined || weight === "") return { indicator_code: code };
+    if (Number.isNaN(Number(weight))) throw new Error(`指标 ${code} 的权重要写成数字（收到「${weight}」）`);
+    return { indicator_code: code, weight: Number(weight) };
   });
+}
+
+/** 方案条目 → 「指标:权重」串（编辑弹窗回显用）：没有权重的条目只写指标编码，保存时照旧不送——原先回显成「:0」，存一次就归零。 */
+function spdPlanItemsText(items) {
+  return (items || []).map((it) => {
+    const code = it.indicator_code || it.code || "";
+    return it.weight === undefined || it.weight === null ? code : `${code}:${it.weight}`;
+  }).join(",");
 }
 
 /** 按方案周期类型给「得分分析」一个默认周期：month → 2026-09，quarter → 2026-Q3，year → 2026。 */
@@ -2518,7 +2530,8 @@ async function renderSpdAssess() {
           <option value="org">机构</option><option value="village_doctor">村医</option>
           <option value="doctor">医生</option><option value="team">团队</option>
         </select>
-        <input name="items" placeholder="指标:权重，如 followup_rate:40,path_rate:30" style="min-width:260px">
+        <input name="items" placeholder="指标:权重，如 followup_rate:40,path_rate:30（不写权重 = 用指标库的默认权重）"
+          style="min-width:260px">
         <button>新建方案</button>
       </form><p class="msg" id="spd-plan-msg"></p>
       ${table(["ID", "编码", "名称", "层级", "对象", "周期", "指标数", "状态", "操作"], plans, (p) =>
@@ -2529,7 +2542,7 @@ async function renderSpdAssess() {
          <td><button class="btn secondary" data-run="${p.id}">跑分</button>
              <button class="btn secondary" data-plan-analysis="${p.id}" data-period-type="${esc(p.period_type || "")}">得分分析</button>
              <button class="btn secondary" data-plan-edit="${p.id}" data-name="${esc(p.name)}" data-period-type="${esc(p.period_type || "")}"
-              data-items="${esc((p.items || []).map((it) => `${it.indicator_code || it.code || ""}:${it.weight ?? 0}`).join(","))}"
+              data-items="${esc(spdPlanItemsText(p.items))}"
               data-active="${p.active === false ? 0 : 1}">编辑</button></td></tr>`)}`)}
     ${panel("考核结果", `
       ${table(["排名", "对象", "周期", "综合得分", "操作"], scores, (s) =>
@@ -2602,7 +2615,7 @@ async function renderSpdAssess() {
   $("#spd-plan-form").onsubmit = (e) => {
     e.preventDefault();
     const body = formJson(e.target);
-    body.items = spdParsePlanItems(body.items);
+    try { body.items = spdParsePlanItems(body.items); } catch (err) { return setMsg("#spd-plan-msg", err.message, false); }
     return postAction("/api/spd/assess-plans", body, "#spd-plan-msg");
   };
   $("#spd-workload-form").onsubmit = async (e) => {
@@ -2685,13 +2698,15 @@ async function renderSpdAssess() {
         { name: "name", label: "名称", value: planEdit.dataset.name, required: true },
         { name: "period_type", label: "考核周期", type: "select", value: planEdit.dataset.periodType,
           options: Object.entries(SPD_PERIOD_TYPES).map(([k, v]) => ({ value: k, label: v })) },
-        { name: "items", label: "指标:权重，逗号分隔", value: planEdit.dataset.items },
+        { name: "items", label: "指标:权重，逗号分隔（不写权重 = 用指标库的默认权重）", value: planEdit.dataset.items },
         { name: "active", label: "状态", type: "select", value: planEdit.dataset.active,
           options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
       ]);
       if (!form) return;
       const body = { name: form.name, period_type: form.period_type, active: form.active === "1" };
-      if (form.items) body.items = spdParsePlanItems(form.items);
+      if (form.items) {
+        try { body.items = spdParsePlanItems(form.items); } catch (err) { return setMsg("#spd-plan-msg", err.message, false); }
+      }
       return postAction(`/api/spd/assess-plans/${planEdit.dataset.planEdit}`, body, "#spd-plan-msg", "PATCH");
     }
     if (planAnalysis) {
