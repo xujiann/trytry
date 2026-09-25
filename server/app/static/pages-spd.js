@@ -132,7 +132,8 @@ function spdModal(title, fields, opts = {}) {
 
 /* 规则编辑器：字段与比较符来自 GET /api/spd/meta——前端不自维护字段表，
  * 后端扩了采集项这里自动能选，不会出现"前端能选、后端不认"。
- * 用在四处：病种纳入/排除规则、转诊触发规则、患者分组 auto_rule、问卷异常规则。 */
+ * 用在三处：病种纳入/排除规则、转诊触发规则、患者分组 auto_rule。问卷异常规则不用它——
+ * 那里的字段是问卷自己的题目，见下面的 spdAbnormalRuleEditor（P1-122）。 */
 let SPD_META = null;
 async function spdMeta() {
   if (!SPD_META) SPD_META = await api("/api/spd/meta");
@@ -159,16 +160,105 @@ function spdRuleEditor(el, meta, initial) {
     value: () => [...el.querySelectorAll(".spd-rule-row")].map((row) => {
       const field = row.querySelector(".rule-field").value;
       const op = row.querySelector(".rule-op").value;
-      const raw = row.querySelector(".rule-value").value.trim();
-      let value;
-      if (op === "between") value = raw.split(/[,，]/).map(Number);
-      else if (op === "in" || op === "not_in")
-        value = raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-      else if (op === "exists") value = raw !== "false" && raw !== "否";
-      else value = raw !== "" && !Number.isNaN(Number(raw)) ? Number(raw) : raw;
-      return { field, op, value };
+      return { field, op, value: spdRuleValue(op, row.querySelector(".rule-value").value.trim()) };
     }),
   };
+}
+
+// 规则值框里的文字按比较符换成后端要的类型：介于是 [下限, 上限]、属于 / 不属于是列表、存在是布尔，其余能读成数就是数
+function spdRuleValue(op, raw) {
+  if (op === "between") return raw.split(/[,，]/).map(Number);
+  if (op === "in" || op === "not_in") return raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+  if (op === "exists") return raw !== "false" && raw !== "否";
+  return raw !== "" && !Number.isNaN(Number(raw)) ? Number(raw) : raw;
+}
+
+/* 问卷异常判定规则编辑器（P1-122）：字段取自本问卷自己的题目，不是 /api/spd/meta 的事实字段——执行随访时
+ * 按题目 key 把作答交给规则求值，引用别的字段永远命中不了。产出后端要的形状 `{when: {field, op, value},
+ * level, action}`（原先交的是平铺的条件，后端读不到 when，一条规则都存不进去）。
+ * 题目改了调 setFields：只换各行字段下拉的选项、不重画整块——题目框失焦触发 change 的同一刻用户多半正点着
+ * 「添加」，整块重画会把这次点击吞掉。某行引用的题目删了，保留原值并标「题目已不在」，交给后端报错，不静默丢规则。 */
+function spdAbnormalRuleEditor(el, operators) {
+  const LEVELS = [["low", "轻度"], ["mid", "中度"], ["high", "重度"]];
+  let fields = [];
+  const fieldOptions = (selected) => fields.map((f) =>
+    `<option value="${esc(f.key)}"${f.key === selected ? " selected" : ""}>${esc(f.name)}</option>`).join("")
+    + (selected && !fields.some((f) => f.key === selected)
+      ? `<option value="${esc(selected)}" selected>${esc(selected)}（题目已不在）</option>` : "");
+  const rowHtml = () => `<div class="spd-abn-row" style="display:flex;gap:6px;margin:4px 0;flex-wrap:wrap">
+    <select class="abn-field">${fieldOptions("")}</select>
+    <select class="abn-op">${operators.map((o) => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join("")}</select>
+    <input class="abn-value" style="width:120px" placeholder="值（介于/属于用逗号分隔）">
+    <select class="abn-level">${LEVELS.map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+    <input class="abn-action" style="width:200px" placeholder="处置措施（派出任务的标题）">
+    <button type="button" class="btn secondary abn-del">删</button></div>`;
+  el.innerHTML = `<p class="desc abn-empty">先在上面填题目，再加异常判定规则</p>
+    <div class="spd-abn-rows"></div>
+    <button type="button" class="btn secondary abn-add">+ 添加异常规则</button>`;
+  el.addEventListener("click", (e) => {
+    if (e.target.classList.contains("abn-add") && fields.length)
+      el.querySelector(".spd-abn-rows").insertAdjacentHTML("beforeend", rowHtml());
+    if (e.target.classList.contains("abn-del")) e.target.closest(".spd-abn-row").remove();
+  });
+  const setFields = (next) => {
+    fields = next;
+    el.querySelector(".abn-empty").style.display = fields.length ? "none" : "";
+    el.querySelector(".abn-add").style.display = fields.length ? "" : "none";
+    el.querySelectorAll(".abn-field").forEach((sel) => { sel.innerHTML = fieldOptions(sel.value); });
+  };
+  setFields([]);
+  return {
+    setFields,
+    value: () => [...el.querySelectorAll(".spd-abn-row")].map((row) => {
+      const op = row.querySelector(".abn-op").value;
+      return {
+        when: { field: row.querySelector(".abn-field").value, op,
+                value: spdRuleValue(op, row.querySelector(".abn-value").value.trim()) },
+        level: row.querySelector(".abn-level").value,
+        action: row.querySelector(".abn-action").value.trim(),
+      };
+    }),
+  };
+}
+
+/* 问卷题目的简写（P1-122）：`key:题目:类型:选项1/选项2`，多题用分号隔开；类型 single（默认）/ multi / number，
+ * number 不带选项。产出与种子问卷同一形状 `{key, title, type, options: [{label}]}`；key 缺了、重了由后端报。 */
+function spdParseQuestionItems(text) {
+  return String(text || "").split(/[;；]/).map((s) => s.trim()).filter(Boolean).map((part) => {
+    const [key = "", title = "", type = "", opts = ""] = part.split(/[:：]/).map((s) => s.trim());
+    const item = { key, title: title || key, type: type || "single" };
+    if (item.type !== "number")
+      item.options = opts.split(/[/／]/).map((s) => s.trim()).filter(Boolean).map((label) => ({ label }));
+    return item;
+  });
+}
+
+/* 执行随访时逐题作答（P1-122）：按问卷题目生成 spdModal 的字段，name 带前缀，免得与渠道、结果撞名。
+ * 数值题用文本框——spdModal 的数字框把空值读成 0，「没答」会被当成答了 0 分。 */
+function spdQuestionFields(items, prefix) {
+  return (items || []).map((it) => {
+    const name = prefix + it.key, label = it.title || it.label || it.key;
+    const options = (it.options || []).map((o) => (typeof o === "string" ? o : o.label)).filter(Boolean);
+    if (it.type === "number") return { name, label, placeholder: "填数值，不答留空" };
+    if (it.type === "multi") return { name, label: `${label}（多选，逗号分隔）` };
+    if (options.length) return { name, label, type: "select", value: "",
+      options: [{ value: "", label: "（未答）" }, ...options.map((o) => ({ value: o, label: o }))] };
+    return { name, label };
+  });
+}
+
+// 与 spdQuestionFields 配对：没答的题不进 answers（规则按「没有这个字段」处理，不当成答了空串或 0）；
+// 多选拆成列表，数值题能读成数就交数
+function spdCollectAnswers(items, form, prefix) {
+  const answers = {};
+  for (const it of items || []) {
+    const raw = String(form[prefix + it.key] ?? "").trim();
+    if (!raw) continue;
+    if (it.type === "multi") answers[it.key] = raw.split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
+    else if (it.type === "number" && !Number.isNaN(Number(raw))) answers[it.key] = Number(raw);
+    else answers[it.key] = raw;
+  }
+  return answers;
 }
 
 /* ============================================================
@@ -2480,9 +2570,11 @@ async function renderSpdFollowup() {
           <option value="surgery">术后</option><option value="checkup">体检</option>
         </select>
         <input name="track_dept" placeholder="跟踪科室">
+        <input name="items" placeholder="题目：key:题目:类型:选项1/选项2，分号分隔（类型 single / multi / number）"
+          style="min-width:360px">
         <button>新建问卷</button>
       </form>
-      <p class="desc">异常判定规则（答案命中任一条即标记异常并派处置任务）</p>
+      <p class="desc">异常判定规则（答案命中任一条即标记异常，中、重度派处置任务）；字段取自上面填的题目</p>
       <div id="spd-quest-rules"></div>
       <p class="msg" id="spd-quest-msg"></p>`)}
     ${panel("随访看板", `
@@ -2706,15 +2798,23 @@ async function renderSpdFollowup() {
       }, "#spd-fu-msg");
     }
     if (exec) {
-      const form = await spdModal("执行随访", [
+      // 逐题作答（P1-122）：原先只填渠道与结果、answers 恒为空，问卷的异常分级从界面上永远不触发。
+      // 问卷取这条记录的前置资料——按记录上的问卷编码查，停用的问卷也在（问卷目录只列在用的）
+      let quest = null;
+      try {
+        quest = (await api(`/api/spd/followup-records/${exec.dataset.fuExec}/context`)).questionnaire;
+      } catch (err) { return setMsg("#spd-fu-msg", err.message, false); }
+      const items = quest ? quest.items || [] : [];
+      const form = await spdModal(quest ? `执行随访 · ${quest.name}` : "执行随访", [
         { name: "channel", label: "随访渠道", type: "select", value: "phone",
           options: [{ value: "phone", label: "电话" }, { value: "wechat", label: "微信" },
                     { value: "sms", label: "短信" }, { value: "visit", label: "面访" }] },
+        ...spdQuestionFields(items, "q_"),
         { name: "result", label: "随访结果", type: "textarea" },
       ]);
       if (!form) return;
       return postAction(`/api/spd/followup-records/${exec.dataset.fuExec}/execute`, {
-        channel: form.channel || "phone", result: form.result, answers: {},
+        channel: form.channel || "phone", result: form.result, answers: spdCollectAnswers(items, form, "q_"),
       }, "#spd-fu-msg");
     }
     if (call) {
@@ -2729,11 +2829,16 @@ async function renderSpdFollowup() {
   // P2-31 例外：下面的 onsubmit 闭包依赖 meta 构建的 abnormalEditor，提前挂会把窗口期提交从
   // 「兜底无效」变成「TypeError」，非零行为差；窗口期由 shared.js 的 document 层兜底护住。
   const meta = await spdMeta();
-  const abnormalEditor = spdRuleEditor($("#spd-quest-rules"), meta, []);
+  const abnormalEditor = spdAbnormalRuleEditor($("#spd-quest-rules"), meta.operators);
+  const questItems = $("#spd-quest-form").querySelector('[name="items"]');
+  const syncQuestFields = () => abnormalEditor.setFields(spdParseQuestionItems(questItems.value)
+    .filter((it) => it.key).map((it) => ({ key: it.key, name: it.title || it.key })));
+  questItems.addEventListener("input", syncQuestFields);
+  questItems.addEventListener("change", syncQuestFields);
   $("#spd-quest-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/questionnaires", {
-      ...formJson(e.target), abnormal_rules: abnormalEditor.value(),
+      ...formJson(e.target), items: spdParseQuestionItems(questItems.value), abnormal_rules: abnormalEditor.value(),
     }, "#spd-quest-msg");
   };
 }

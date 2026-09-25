@@ -528,13 +528,32 @@ class QuestionnaireIn(BaseModel):
     handle_role: str = Field(default="doctor", max_length=32)
 
 
-def _check_abnormal_rules(rules: list[dict]) -> None:
-    """建问卷与改问卷同一句：异常分级规则在随访结案时逐条求值，写坏的规则让结案 500（P1-94：改问卷原先不查）。"""
+#: 异常分级规则的级别（`grade_abnormal` 的级别序 none < low < mid < high；none 是「没命中」，不是规则的级别）
+ABNORMAL_RULE_LEVELS = ("low", "mid", "high")
+
+
+def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> None:
+    """建问卷与改问卷同一句：异常分级规则在随访结案时逐条求值，写坏的规则让结案 500（P1-94：改问卷原先不查）。
+
+    P1-122 起连同题目一起查：执行随访按题目 key 把作答交给规则求值，规则引用问卷里没有的题目（`pain` 写成
+    `pian`）、级别写成表外的值，都照收却永远判不出异常——疼痛 9 分记成「无异常」、不派处置任务，没有任何报错。
+    所以题目必须有 key 且不重复，规则的字段必须是本问卷的题目，级别只能是轻 / 中 / 重三档。
+    """
+    keys = [item.get("key") if isinstance(item, dict) else None for item in items]
+    if any(not isinstance(key, str) or not key.strip() for key in keys):
+        raise HTTPException(status_code=422, detail="问卷的每道题都要有 key")
+    if len(keys) != len(set(keys)):
+        raise HTTPException(status_code=422, detail="问卷题目 key 不得重复")
     for rule in rules:
         try:
-            validate_conditions([rule.get("when", {})])
+            (cond,) = validate_conditions([rule.get("when", {})])
         except RuleError as exc:
             raise HTTPException(status_code=422, detail=f"异常分级规则非法：{exc}") from None
+        if cond["field"] not in keys:
+            raise HTTPException(status_code=422, detail=f"异常分级规则引用了问卷里没有的题目：{cond['field']}")
+        if rule.get("level", "low") not in ABNORMAL_RULE_LEVELS:
+            raise HTTPException(status_code=422,
+                                detail="异常分级规则的级别只能是 low（轻度）/ mid（中度）/ high（重度）")
 
 
 def _q_out(q: SpdQuestionnaire) -> dict:
@@ -550,7 +569,7 @@ def _q_out(q: SpdQuestionnaire) -> dict:
 @router.post("/questionnaires", response_model=QuestionnaireOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def create_questionnaire(body: QuestionnaireIn, db: Session = Depends(get_db)):
-    _check_abnormal_rules(body.abnormal_rules)
+    _check_abnormal_rules(body.abnormal_rules, body.items)
     questionnaire = SpdQuestionnaire(**body.model_dump())
     db.add(questionnaire)
     try:
@@ -596,8 +615,12 @@ def update_questionnaire(q_id: int, body: QuestionnairePatch, db: Session = Depe
     if questionnaire is None:
         raise HTTPException(status_code=404, detail="问卷不存在")
     changes = body.model_dump(exclude_unset=True)
-    if "abnormal_rules" in changes:
-        _check_abnormal_rules(changes["abnormal_rules"])
+    # 题目与规则合起来查（P1-122）：只改题目也可能让原有规则引用的题目不复存在；两样都没变不查——
+    # 存量里已经写坏的问卷，改名、停用不该被它挡住
+    items = changes.get("items", questionnaire.items or [])
+    rules = changes.get("abnormal_rules", questionnaire.abnormal_rules or [])
+    if (items, rules) != (questionnaire.items or [], questionnaire.abnormal_rules or []):
+        _check_abnormal_rules(rules, items)
     for key, value in changes.items():
         setattr(questionnaire, key, value)
     db.commit()
