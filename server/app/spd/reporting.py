@@ -112,7 +112,10 @@ def _todo(db, section, org_id, period):
 
 
 def _alert(db, section, org_id, period):
-    rows = _task_query(db, org_id).filter(SpdTask.status == "overdue").limit(20).all()
+    rows = (
+        _task_query(db, org_id).filter(SpdTask.status == "overdue")
+        .order_by(SpdTask.due_date, SpdTask.id).limit(20).all()
+    )
     return {**_head(section, "table"), "columns": ["超期任务", "类型", "截止日期"],
             "rows": [[r.title, r.task_type, r.due_date] for r in rows]}
 

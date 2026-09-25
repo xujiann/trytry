@@ -899,3 +899,24 @@ def test_分组查询在真PG上按分组键排成全序(pg_engine):
         + "\n"
         + result.stderr[-2000:]
     )
+
+
+def test_截断取数在真PG上按编号排序(pg_engine):
+    """把 `test_limit_order.py` 换到 PG 上再跑一遍（P2-69）。
+
+    SQLite 不排序时按插入序吐行——开发、测试一律看着有序；PG 按堆序，UPDATE 过的行挪到末尾：修前资源总览里发布过的
+    那行排到了后面。截断取数带上 ORDER BY 之后两库同一顺序，只有这里测得出 PG 那一半。接法与上几条相同。
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_limit_order.py", "-q"],
+        cwd=SERVER_DIR,
+        env={**os.environ, "MEDPLAT_LIMITORDER_PG_URL": PG_URL},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "截断取数排序用例在真 PG 上没过：\n"
+        + result.stdout[-4000:]
+        + "\n"
+        + result.stderr[-2000:]
+    )

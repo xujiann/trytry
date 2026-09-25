@@ -137,6 +137,7 @@ def spd_edu_push_dispatch(db: Session) -> tuple[int, str]:
         db.query(SpdEduPush)
         # 按字符串比较到点：`T` 写法先换成空格再比——同一天里 `T` 排在空格之后，原先晚到第二天零点（P1-100）
         .filter(SpdEduPush.status == "pending", func.replace(SpdEduPush.send_at, "T", " ") <= cutoff)
+        .order_by(SpdEduPush.id)
         .limit(500)
         .all()
     )

@@ -50,6 +50,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_money_fen_precision as moneyfen
     import test_keyword_search_case as kwcase
     import test_groupby_order as gborder
+    import test_limit_order as limitorder
     import test_body_raw_dict as bodyraw
     import test_date_window_bounds as datewin
     import test_disabled_catalog_refs as disabledrefs
@@ -164,6 +165,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(kwcase.BY_DESIGN), "tests/test_keyword_search_case.py"),
         ("方言一致", "分组查询的 ORDER BY 没把分组键排全（开发库 SQLite 按分组键吐出、PG 按哈希值：DRG 统计分组行生产库乱序；82 → 0）",
          gborder.BASELINE, "tests/test_groupby_order.py"),
+        ("方言一致", "截断取数（LIMIT / OFFSET）不带 ORDER BY（开发库按插入序、PG 按堆序：资源总览里改过的行挪到最后；8 → 0）",
+         limitorder.BASELINE, "tests/test_limit_order.py"),
+        ("方言一致", "按设计不排序的截断（只数条数的探针 / P1-86 同形状待裁定，逐条写明理由）",
+         len(limitorder.BY_DESIGN), "tests/test_limit_order.py"),
         ("数值入参", "天数 / 分钟数入参没有上界就进 timedelta（传个大数即日期溢出、500；5 → 0 已清零）",
          datewin.BASELINE, "tests/test_date_window_bounds.py"),
         ("数值入参", "条数 / 偏移量入参没有上下界就进 .limit() / .offset()（PG 上负数即 500；2 → 0 已清零）",

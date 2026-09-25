@@ -87,7 +87,7 @@ def notify_staff(
         query = query.filter(User.org_id == org_id)
     if roles:
         query = query.filter(User.role.in_(roles))
-    recipients = query.limit(MAX_RECIPIENTS).all()
+    recipients = query.order_by(User.id).limit(MAX_RECIPIENTS).all()
     for user in recipients:
         db.add(
             Notification(

@@ -283,7 +283,7 @@ def resource_catalog(
         return query.filter(column.in_(scope)) if scope is not None else query
 
     if resource_kind in (None, "slot"):
-        rows = in_scope(db.query(AppointmentSlot), AppointmentSlot.org_id).limit(500).all()
+        rows = in_scope(db.query(AppointmentSlot), AppointmentSlot.org_id).order_by(AppointmentSlot.id).limit(500).all()
         items += [
             {"kind": "slot", "kind_name": "号源", "id": s.id, "org_id": s.org_id,
              "name": s.resource_name, "detail": f"{s.slot_date} {s.slot_time}",
@@ -292,7 +292,7 @@ def resource_catalog(
             for s in rows
         ]
     if resource_kind in (None, "exam"):
-        rows = in_scope(db.query(ExamResource), ExamResource.org_id).limit(500).all()
+        rows = in_scope(db.query(ExamResource), ExamResource.org_id).order_by(ExamResource.id).limit(500).all()
         items += [
             {"kind": "exam", "kind_name": "检查资源", "id": r.id, "org_id": r.org_id,
              "name": r.item_name, "detail": f"{r.device} {r.duration_min}分钟",
@@ -300,7 +300,7 @@ def resource_catalog(
             for r in rows
         ]
     if resource_kind in (None, "or_room"):
-        rows = in_scope(db.query(OperatingRoom), OperatingRoom.org_id).limit(500).all()
+        rows = in_scope(db.query(OperatingRoom), OperatingRoom.org_id).order_by(OperatingRoom.id).limit(500).all()
         items += [
             {"kind": "or_room", "kind_name": "手术间", "id": r.id, "org_id": r.org_id,
              "name": r.name, "detail": "", "available": None, "unit": "",
@@ -311,7 +311,7 @@ def resource_catalog(
         # 血库是全县一本账（`blood_stocks` 没有 org_id），故不参与机构范围筛选，
         # 且只在未指定机构/分组时列出——按机构筛还把全县血库列出来会误导人。
         if scope is None:
-            rows = db.query(BloodStock).limit(500).all()
+            rows = db.query(BloodStock).order_by(BloodStock.id).limit(500).all()
             items += [
                 {"kind": "blood", "kind_name": "血制品", "id": r.id, "org_id": None,
                  "name": f"{r.blood_type} {r.component}", "detail": "全县共用血库",
@@ -319,7 +319,7 @@ def resource_catalog(
                 for r in rows
             ]
     if resource_kind in (None, "general"):
-        rows = in_scope(db.query(Resource), Resource.org_id).limit(500).all()
+        rows = in_scope(db.query(Resource), Resource.org_id).order_by(Resource.id).limit(500).all()
         items += [
             {"kind": "general", "kind_name": RESOURCE_TYPES.get(r.resource_type, "通用资源"),
              "id": r.id, "org_id": r.org_id, "name": r.name, "detail": r.location,
