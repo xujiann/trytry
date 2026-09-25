@@ -130,13 +130,30 @@ class SpecialDiseaseCreate(BaseModel):
     reason: str = Field(default="", max_length=512)
 
 
+#: `special_disease_apps.status` → 中文（§13「状态文案取自后端」，P2-72）：措辞照抄列注释。
+#: 特病申报队列原先把英文状态码原样（且未转义）插进页面。
+SPECIAL_DISEASE_STATUS_NAMES = {"applied": "已申报", "approved": "已批准", "rejected": "已驳回"}
+
+
 class SpecialDiseaseOut(SpecialDiseaseCreate):
+    """`_special_disease_out` 的镜像（申报/列表/审核三处同一产地）。"""
+
     id: int
     status: str
+    status_name: str
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     disease_name: str = Field(min_length=1, max_length=128)
 
-    model_config = {"from_attributes": True}
+
+def _special_disease_out(app_: SpecialDiseaseApp) -> dict:
+    return {
+        "patient_id": app_.patient_id,
+        "disease_name": app_.disease_name,
+        "reason": app_.reason,
+        "id": app_.id,
+        "status": app_.status,
+        "status_name": SPECIAL_DISEASE_STATUS_NAMES.get(app_.status, app_.status),
+    }
 
 
 @router.post(
@@ -153,7 +170,7 @@ def apply_special_disease(body: SpecialDiseaseCreate, db: Session = Depends(get_
     # uq_special_disease_app_applied（status='applied'）兜底。这里**不写预检**：
     # 预检与兜底两条路径迟早会给出不同的文案，走单一路径则"顺序重复"与
     # "并发抢输"拿到的 409 天然逐字节相同。批准/驳回后不在索引范围内，可再申报。
-    return insert_or_conflict(db, app_, "该患者同病种已有待审核的特病申报，不可重复申报")
+    return _special_disease_out(insert_or_conflict(db, app_, "该患者同病种已有待审核的特病申报，不可重复申报"))
 
 
 @router.get("/special-diseases", response_model=list[SpecialDiseaseOut])
@@ -161,7 +178,7 @@ def list_special_diseases(status: str | None = None, db: Session = Depends(get_d
     query = db.query(SpecialDiseaseApp)
     if status:
         query = query.filter(SpecialDiseaseApp.status == status)
-    return query.order_by(SpecialDiseaseApp.id.desc()).limit(200).all()
+    return [_special_disease_out(a) for a in query.order_by(SpecialDiseaseApp.id.desc()).limit(200).all()]
 
 
 @router.post(
@@ -184,7 +201,7 @@ def review_special_disease(
     app_.status = "approved" if approve else "rejected"
     db.commit()
     db.refresh(app_)
-    return app_
+    return _special_disease_out(app_)
 
 
 class FundStatsOut(BaseModel):

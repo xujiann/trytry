@@ -400,6 +400,11 @@ class BatchCreate(BaseModel):
     expire_date: OptionalDateStr = ""
 
 
+#: `tcm_preparation_batches.status` → 中文（§13「状态文案取自后端」，P2-72）：措辞照抄列注释。
+#: 制剂批次表与效期预警原先把英文状态码原样显示给药剂科。
+BATCH_STATUS_NAMES = {"produced": "已生产", "released": "已发放", "recalled": "已召回"}
+
+
 class TcmPreparationBatchOut(BaseModel):
     """`_batch_out` 的镜像（新建/列表/预警/发放四处同一产地）。
     `quantity` 是 Integer 列（产量按剂/袋计数），恒 int；
@@ -414,6 +419,7 @@ class TcmPreparationBatchOut(BaseModel):
     produced_date: str
     expire_date: str
     status: str
+    status_name: str
     expired: bool
 
 
@@ -428,6 +434,7 @@ def _batch_out(b: TcmPreparationBatch, today: str) -> dict:
         "produced_date": b.produced_date,
         "expire_date": b.expire_date,
         "status": b.status,
+        "status_name": BATCH_STATUS_NAMES.get(b.status, b.status),
         "expired": bool(b.expire_date and b.expire_date < today),
     }
 

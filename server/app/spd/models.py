@@ -297,6 +297,7 @@ class SpdCenter(Base):
     org_ids: Mapped[list] = mapped_column(JSON, default=list)
     team_ids: Mapped[list] = mapped_column(JSON, default=list)
     version: Mapped[str] = mapped_column(String(16), default="v1")
+    # draft=筹建, running=运行中, paused=暂停, disabled=已停用（改档不收枚举、只限列宽；界面给前三个）
     status: Mapped[str] = mapped_column(String(16), default="running", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

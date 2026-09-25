@@ -68,7 +68,7 @@ def test_特病同患者同病种重复申报409且库里只留一条待批(clie
     first = _apply_special(client, admin, patient["id"], "尿毒症透析")
     assert first.status_code == 201, first.text
     # 回执形状不许因为改写入口而变（治理不得改响应字节）
-    assert list(first.json()) == ["patient_id", "disease_name", "reason", "id", "status"]
+    assert list(first.json()) == ["patient_id", "disease_name", "reason", "id", "status", "status_name"]
     assert first.json()["status"] == "applied"
 
     second = _apply_special(client, admin, patient["id"], "尿毒症透析")

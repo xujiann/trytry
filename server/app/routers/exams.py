@@ -642,14 +642,20 @@ class ReportTemplateOut(BaseModel):
     content: str
 
 
+#: `exam_reports.critical_status` → 中文（§13「状态文案取自后端」，P2-72）：措辞与危急值页、医生移动端一致。
+#: 空串不在表里——非危急报告没有闭环状态，文案也是空串。
+CRITICAL_STATUS_NAMES = {"notified": "已通知", "acknowledged": "已确认", "resolved": "已处置"}
+
+
 class ReportAmendedOut(BaseModel):
-    """报告修订回执。只回受影响的四项，不回整份报告——修订人关心的是
-    "改成什么了、危急值闭环现在什么状态"。"""
+    """报告修订回执。只回受影响的几项，不回整份报告——修订人关心的是
+    "改成什么了、危急值闭环现在什么状态"。修订页原先把闭环状态码原样拼进提示（「闭环状态 notified」）。"""
 
     id: int
     conclusion: str
     critical: bool
     critical_status: str
+    critical_status_name: str
 
 
 class ReportRevisionOut(BaseModel):
@@ -793,6 +799,7 @@ def amend_report(
         "conclusion": report.conclusion,
         "critical": report.critical,
         "critical_status": report.critical_status,
+        "critical_status_name": CRITICAL_STATUS_NAMES.get(report.critical_status, report.critical_status),
     }
 
 

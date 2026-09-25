@@ -39,7 +39,7 @@ FORMULA_KEYS = [
 ]
 BATCH_KEYS = [
     "id", "formula_id", "batch_no", "org_id", "quantity", "unit",
-    "produced_date", "expire_date", "status", "expired",
+    "produced_date", "expire_date", "status", "status_name", "expired",
 ]
 
 # 投产/效期基准一律**现取**，不在模块顶层快照——顶层取值发生在 import 那一刻，
@@ -309,6 +309,7 @@ def test_批次回执精确_显式效期与推算效期(seed):
         "produced_date": _produced_fresh(),
         "expire_date": "2099-12-31",
         "status": "produced",
+        "status_name": "已生产",  # P2-72：状态文案取自后端
         "expired": False,
     }
     # Integer 列：产量 100 不得变 100.0；expired 是 bool，不得变 0/1
@@ -319,14 +320,14 @@ def test_批次回执精确_显式效期与推算效期(seed):
         "id": seed["b2"]["id"], "formula_id": seed["f1"]["id"], "batch_no": "TCCT-B2",
         "org_id": seed["org"]["id"], "quantity": 50, "unit": "剂",
         "produced_date": _produced_fresh(), "expire_date": _expire_fresh(),
-        "status": "produced", "expired": False,
+        "status": "produced", "status_name": "已生产", "expired": False,
     }
     # 投产即已过期的批次：回执上的 expired 按当天现算
     assert seed["b3"]["expire_date"] == _expire_old() and seed["b3"]["expired"] is True
 
 
 def test_批次列表与回执同形_过滤(client, admin, seed):
-    released_b1 = {**seed["b1"], "status": "released"}
+    released_b1 = {**seed["b1"], "status": "released", "status_name": "已发放"}
     rows = client.get(
         f"/api/tcm/preparation-batches?today={business_today().isoformat()}", headers=admin
     ).json()
@@ -358,7 +359,7 @@ def test_效期预警列表精确_按效期升序(client, admin, seed):
 def test_发放回执与批次回执同形(seed):
     body = seed["b1_released"]
     assert list(body.keys()) == BATCH_KEYS
-    assert body == {**seed["b1"], "status": "released"}
+    assert body == {**seed["b1"], "status": "released", "status_name": "已发放"}
 
 
 # ---------------------------------------------------------------- 错误体

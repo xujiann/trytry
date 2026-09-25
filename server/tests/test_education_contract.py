@@ -31,7 +31,7 @@ MATERIAL_KEY_ORDER = [
 ]
 PLAN_KEY_ORDER = [
     "id", "title", "technique_id", "org_id", "plan_date", "capacity",
-    "trainer", "status", "enrolled", "remaining",
+    "trainer", "status", "status_name", "enrolled", "remaining",
 ]
 LIVE_ROW_KEY_ORDER = [
     "id", "title", "speaker", "planned_at", "status", "review_comment", "recording_url",
@@ -405,6 +405,7 @@ def test_实训计划回执精确形状与键序(base, plans):
         "capacity": 2,
         "trainer": "王老师",
         "status": "open",
+        "status_name": "报名中",  # P2-72：状态文案取自后端
         "enrolled": 0,
         "remaining": 2,
     }
@@ -418,6 +419,7 @@ def test_实训计划回执精确形状与键序(base, plans):
         "capacity": 30,
         "trainer": "",
         "status": "open",
+        "status_name": "报名中",
         "enrolled": 0,
         "remaining": 30,
     }
@@ -463,6 +465,7 @@ def test_报名名册精确(client, admin, base, plans):
             "username": "edu_doc",
             "full_name": "郑医生",
             "status": "enrolled",
+            "status_name": "已报名",  # P2-72
         },
         {
             "id": plans["e2"]["id"],
@@ -470,6 +473,7 @@ def test_报名名册精确(client, admin, base, plans):
             "username": "edu_op",
             "full_name": "冯经办",
             "status": "enrolled",
+            "status_name": "已报名",
         },
     ]
 

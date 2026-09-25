@@ -1488,7 +1488,7 @@ async function renderExams() {
         if (form.finding) body.finding = form.finding;
         if (form.critical !== "keep") body.critical = form.critical === "1";
         const r = await api(`/api/exams/reports/${amend}`, { method: "PATCH", body: JSON.stringify(body) });
-        setMsg("#exam-msg", `报告 ${r.id} 已修订${r.critical ? `（仍为危急值，闭环状态 ${r.critical_status}）` : "（非危急值）"}`);
+        setMsg("#exam-msg", `报告 ${r.id} 已修订${r.critical ? `（仍为危急值，闭环状态 ${r.critical_status_name}）` : "（非危急值）"}`);
         route();
         return;
       }

@@ -597,8 +597,7 @@ async function renderSpdHealthCommission() {
         `<tr><td>${esc(x.code)}</td><td>${esc(x.name)}</td>
          <td>${esc(names[x.program_code] || x.program_code)}</td>
          <td>${x.orgs}</td><td>${x.teams}</td>
-         <td>${x.status === "running" ? '<span class="tag green">运行中</span>'
-            : '<span class="tag orange">' + esc(x.status) + "</span>"}</td></tr>`))}
+         <td><span class="tag ${x.status === "running" ? "green" : "orange"}">${esc(x.status_name)}</span></td></tr>`))}
     ${panel("考核结果排名",
       table(["排名", "考核对象", "周期", "综合得分"], wb.scores, (s) =>
         `<tr><td>${s.rank}</td><td>${esc(s.object_name)}</td><td>${esc(s.period)}</td>
@@ -635,7 +634,7 @@ async function renderSpdExpert() {
     ${panel("重点慢专病中心", `
       ${table(["ID", "名称", "病种", "牵头科室", "版本", "状态", "操作"], wb.centers, (c) =>
         `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.program_code)}</td><td>${esc(c.lead_dept)}</td>
-         <td>${esc(c.version)}</td><td>${esc(c.status)}</td>
+         <td>${esc(c.version)}</td><td>${esc(c.status_name)}</td>
          <td><button class="btn secondary" data-center-edit="${c.id}" data-name="${esc(c.name)}"
               data-dept="${esc(c.lead_dept || "")}" data-version="${esc(c.version || "")}" data-status="${esc(c.status || "")}">编辑</button></td></tr>`)}
       <form class="inline" id="spd-center-form" style="margin-top:10px">
@@ -2547,13 +2546,11 @@ async function renderSpdFollowup() {
       rows, (r) =>
       `<tr><td>${r.id}</td><td>${esc(r.patient_name)}</td><td>${esc(r.scene)}</td>
        <td>${esc(r.planned_at)}</td><td>${esc(r.executed_at || "—")}</td>
-       <td>${esc(r.channel)}</td>
+       <td>${esc(SPD_FU_CHANNELS[r.channel] || r.channel)}</td>
        <td>${r.abnormal_level && r.abnormal_level !== "none"
           ? `<span class="tag ${r.abnormal_level === "high" ? "red" : "orange"}">${esc(r.abnormal_level)}</span>`
           : "—"}</td>
-       <td>${r.status === "done" ? '<span class="tag green">已完成</span>'
-          : r.status === "planned" ? '<span class="tag orange">待随访</span>'
-          : '<span class="tag">' + esc(r.status) + "</span>"}</td>
+       <td><span class="tag ${r.status === "done" ? "green" : r.status === "planned" ? "orange" : ""}">${esc(r.status_name)}</span></td>
        <td><button class="btn secondary" data-fu-ctx="${r.id}">前置资料</button>
            ${r.status === "planned"
           ? `<button class="btn secondary" data-fu-exec="${r.id}">执行</button>
@@ -2593,11 +2590,11 @@ async function renderSpdFollowup() {
         <p class="desc">${esc(cal.day)}：随访 ${(cal.followups || []).length} · 复诊 ${(cal.revisits || []).length} · 任务 ${(cal.tasks || []).length}</p>
         ${table(["随访ID", "场景", "渠道", "计划日期", "状态"], cal.followups || [], (f) =>
           `<tr><td>${f.id}</td><td>${esc(f.scene)}</td><td>${esc(SPD_FU_CHANNELS[f.channel] || f.channel)}</td>
-           <td>${esc(f.planned_at)}</td><td>${esc(f.status)}</td></tr>`)}
+           <td>${esc(f.planned_at)}</td><td>${esc(f.status_name)}</td></tr>`)}
         ${table(["复诊ID", "科室", "项目", "状态"], cal.revisits || [], (v) =>
-          `<tr><td>${v.id}</td><td>${esc(v.dept || "—")}</td><td>${esc(v.items || "—")}</td><td>${esc(v.status)}</td></tr>`)}
+          `<tr><td>${v.id}</td><td>${esc(v.dept || "—")}</td><td>${esc(v.items || "—")}</td><td>${spdTag(SPD_REVISIT_STATUS, v.status)}</td></tr>`)}
         ${table(["任务ID", "标题", "类型", "状态"], cal.tasks || [], (t) =>
-          `<tr><td>${t.id}</td><td>${esc(t.title)}</td><td>${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}</td><td>${esc(t.status)}</td></tr>`)}`;
+          `<tr><td>${t.id}</td><td>${esc(t.title)}</td><td>${esc(SPD_TASK_TYPES[t.task_type] || t.task_type)}</td><td>${spdTag(SPD_TASK_STATUS, t.status)}</td></tr>`)}`;
       setMsg("#spd-cal-msg", "");
     } catch (err) { setMsg("#spd-cal-msg", err.message, false); }
   };
@@ -2652,7 +2649,7 @@ async function renderSpdFollowup() {
           <h4>住院</h4>
           ${table(["入院", "出院", "诊断", "医生", "状态"], c.admissions || [], (a) =>
             `<tr><td>${esc((a.admitted_at || "").slice(0, 10))}</td><td>${esc((a.discharged_at || "").slice(0, 10) || "—")}</td>
-             <td>${esc(a.diagnosis_name || "—")}</td><td>${esc(a.doctor_name || "—")}</td><td>${esc(a.status)}</td></tr>`)}
+             <td>${esc(a.diagnosis_name || "—")}</td><td>${esc(a.doctor_name || "—")}</td><td>${esc(a.status_name)}</td></tr>`)}
           <h4>历史随访</h4>
           ${table(["ID", "场景", "执行日期", "渠道", "异常", "结果"], c.history || [], (h) =>
             `<tr><td>${h.id}</td><td>${esc(h.scene)}</td><td>${esc(h.executed_at || "—")}</td>

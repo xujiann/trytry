@@ -17,6 +17,10 @@ router = APIRouter(prefix="/api/emergency", tags=["智慧急救"], dependencies=
 
 _FLOW = {"dispatched": "en_route", "en_route": "arrived", "arrived": "admitted"}
 
+#: `emergency_cases.status` → 中文（§13「状态文案取自后端」，P2-72）。措辞与医生端急救页原先写在前端的那张表逐字一致；
+#: 公卫侧绿道页原先把英文状态码原样显示。
+CASE_STATUS_NAMES = {"dispatched": "已调度", "en_route": "转运中", "arrived": "已到院", "admitted": "已收治"}
+
 # 绿道时间节点固定序列（时效分析口径）
 MILESTONE_SEQUENCE = ["onset", "call", "depart", "arrive_scene", "arrive_hospital", "treatment"]
 MILESTONE_NAMES = {
@@ -41,13 +45,32 @@ class CaseCreate(BaseModel):
 
 
 class CaseOut(CaseCreate):
+    """`_case_out` 的镜像（登记/列表/判定转归/流转四处同一产地）。"""
+
     id: int
     status: str
+    status_name: str
     rescue_outcome: str = ""
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     location: str = Field(min_length=1, max_length=256)
 
     model_config = {"from_attributes": True}
+
+
+def _case_out(case: EmergencyCase) -> dict:
+    return {
+        "caller_phone": case.caller_phone,
+        "location": case.location,
+        "symptom": case.symptom,
+        "ambulance_no": case.ambulance_no,
+        "dest_org_id": case.dest_org_id,
+        "patient_id": case.patient_id,
+        "channel_type": case.channel_type,
+        "id": case.id,
+        "status": case.status,
+        "status_name": CASE_STATUS_NAMES.get(case.status, case.status),
+        "rescue_outcome": case.rescue_outcome,
+    }
 
 
 class RescueOutcomeIn(BaseModel):
@@ -119,7 +142,7 @@ def dispatch(body: CaseCreate, db: Session = Depends(get_db)):
     db.add(case)
     db.commit()
     db.refresh(case)
-    return case
+    return _case_out(case)
 
 
 @router.get("/cases", response_model=list[CaseOut])
@@ -127,7 +150,7 @@ def list_cases(status: str | None = None, db: Session = Depends(get_db)):
     query = db.query(EmergencyCase)
     if status:
         query = query.filter(EmergencyCase.status == status)
-    return query.order_by(EmergencyCase.id.desc()).limit(200).all()
+    return [_case_out(c) for c in query.order_by(EmergencyCase.id.desc()).limit(200).all()]
 
 
 @router.post(
@@ -149,7 +172,7 @@ def set_rescue_outcome(case_id: int, body: RescueOutcomeIn, db: Session = Depend
     case.rescue_outcome = body.rescue_outcome
     db.commit()
     db.refresh(case)
-    return case
+    return _case_out(case)
 
 
 @router.post(
@@ -167,7 +190,7 @@ def advance(case_id: int, db: Session = Depends(get_db)):
     case.status = next_status
     db.commit()
     db.refresh(case)
-    return case
+    return _case_out(case)
 
 
 @router.post(

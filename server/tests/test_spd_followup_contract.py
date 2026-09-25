@@ -59,7 +59,10 @@ Q_KEYS = ["id", "code", "name", "scene", "items", "abnormal_rules", "track_dept"
 RECORD_KEYS = ["id", "patient_id", "patient_name", "program_code", "rule_id",
                "questionnaire_code", "scene", "org_id", "dept", "planned_at",
                "executed_at", "channel", "executor_id", "answers", "abnormal_level",
-               "result", "evidence", "status", "created_at"]
+               "result", "evidence", "status", "status_name", "created_at"]
+#: 状态文案取自后端（P2-72）：照列注释逐字钉住，不从被测代码里取——取了就钉不住措辞
+RECORD_STATUS_NAMES = {"planned": "待随访", "done": "已完成", "overdue": "已超期",
+                       "removed": "已移除", "unreachable": "失访"}
 TEMPLATE_KEYS = ["id", "code", "name", "period", "scope_level", "sections",
                  "variables", "active"]
 RTASK_KEYS = ["id", "template_id", "name", "frequency", "push_time", "subscriber_ids",
@@ -75,8 +78,10 @@ def _record(world, rid, patient_name="", **overrides):
         "org_id": world["org"]["id"], "dept": "内科", "planned_at": "",
         "executed_at": "", "channel": "phone", "executor_id": None, "answers": {},
         "abnormal_level": "none", "result": "", "evidence": [], "status": "planned",
+        "status_name": "",
     }
     base.update(overrides)
+    base["status_name"] = RECORD_STATUS_NAMES[base["status"]]
     return base
 
 
@@ -455,7 +460,7 @@ def test_随访前置资料聚合完整精确(client, auth, world):
         "admissions": [
             {"id": adms[0]["id"], "admitted_at": _ts(adms[0]["admitted_at"]),
              "discharged_at": "", "diagnosis_name": "阑尾炎术后",
-             "doctor_name": "李医生", "status": "admitted"},
+             "doctor_name": "李医生", "status": "admitted", "status_name": "在院"},
         ],
         # 历史随访只收 done，且**不带患者名**（patient_name 为空串）
         "history": [

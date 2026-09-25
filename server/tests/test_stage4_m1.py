@@ -349,6 +349,8 @@ def test_report_amend_keeps_revision_history(client, admin, setup):
     ).json()
     # 危急报告修订 → 闭环状态复位为已通知（须重新确认）
     assert amended["critical_status"] == "notified"
+    # 文案取自后端（P2-72）：修订页原先把 notified 原样拼进提示
+    assert amended["critical_status_name"] == "已通知"
 
     revisions = client.get(f"/api/exams/reports/{report['id']}/revisions", headers=doc).json()
     assert len(revisions) == 1

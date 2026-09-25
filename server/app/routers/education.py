@@ -502,6 +502,12 @@ class PlanCreate(BaseModel):
     trainer: str = Field(default="", max_length=64)
 
 
+#: `training_plans.status` / `training_enrollments.status` → 中文（§13「状态文案取自后端」，P2-72）：措辞照抄列注释。
+#: 实训计划表与报名名单原先把英文状态码原样显示。
+PLAN_STATUS_NAMES = {"open": "报名中", "closed": "已截止", "finished": "已结训"}
+ENROLLMENT_STATUS_NAMES = {"enrolled": "已报名", "cancelled": "已取消"}
+
+
 def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
     return {
         "id": p.id,
@@ -512,6 +518,7 @@ def _plan_out(p: TrainingPlan, enrolled: int = 0) -> dict:
         "capacity": p.capacity,
         "trainer": p.trainer,
         "status": p.status,
+        "status_name": PLAN_STATUS_NAMES.get(p.status, p.status),
         "enrolled": enrolled,
         "remaining": max(p.capacity - enrolled, 0),
     }
@@ -529,6 +536,7 @@ class TrainingPlanOut(BaseModel):
     capacity: int
     trainer: str
     status: str
+    status_name: str
     enrolled: int
     remaining: int
 
@@ -647,6 +655,7 @@ class EnrollmentRowOut(BaseModel):
     username: str
     full_name: str
     status: str
+    status_name: str
 
 
 @router.get("/training-plans/{plan_id}/enrollments", response_model=list[EnrollmentRowOut])
@@ -670,6 +679,7 @@ def list_enrollments(plan_id: int, db: Session = Depends(get_db), user: User = D
             "username": username,
             "full_name": full_name,
             "status": e.status,
+            "status_name": ENROLLMENT_STATUS_NAMES.get(e.status, e.status),
         }
         for e, username, full_name in rows
     ]

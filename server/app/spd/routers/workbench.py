@@ -333,12 +333,19 @@ class LevelSliceOut(BaseModel):
     teams: int
 
 
+#: `spd_centers.status` → 中文（§13「状态文案取自后端」，P2-72）。措辞照抄专家端「编辑专病中心」的选项；
+#: `disabled` 界面不给，既有用例拿它表示停用。改档不收枚举（`CenterPatch.status` 只限列宽），表外的值原样显示。
+#: 卫健委工作台只把 running 译成「运行中」、其余原样显示，专家工作台一个都不译。
+CENTER_STATUS_NAMES = {"draft": "筹建", "running": "运行中", "paused": "暂停", "disabled": "已停用"}
+
+
 class HcCenterOut(BaseModel):
     id: int
     code: str
     name: str
     program_code: str
     status: str
+    status_name: str
     orgs: int
     teams: int
 
@@ -403,6 +410,7 @@ class ExpertCenterOut(BaseModel):
     program_code: str
     lead_dept: str
     status: str
+    status_name: str
     version: str
 
 
@@ -809,7 +817,7 @@ def health_commission_workbench(
     screening_query = _apply_scope(db.query(SpdScreening), SpdScreening.org_id, orgs)
     screened = screening_query.count()
     suspect = screening_query.filter(SpdScreening.result == "suspect").count()
-    centers = db.query(SpdCenter).all()
+    centers = db.query(SpdCenter).order_by(SpdCenter.id).all()   # 同下面专家工作台：按编号排，不随堆序挪位
 
     return {
         "core": {
@@ -843,8 +851,8 @@ def health_commission_workbench(
         "by_level": {level_names[k]: v for k, v in by_level.items()},
         "centers": [
             {"id": c.id, "code": c.code, "name": c.name, "program_code": c.program_code,
-             "status": c.status, "orgs": len(c.org_ids or []),
-             "teams": len(c.team_ids or [])}
+             "status": c.status, "status_name": CENTER_STATUS_NAMES.get(c.status, c.status),
+             "orgs": len(c.org_ids or []), "teams": len(c.team_ids or [])}
             for c in centers
         ],
         "scores": [
@@ -998,8 +1006,10 @@ def expert_workbench(
         "programs": coverage,
         "centers": [
             {"id": c.id, "name": c.name, "program_code": c.program_code,
-             "lead_dept": c.lead_dept, "status": c.status, "version": c.version}
-            for c in db.query(SpdCenter).all()
+             "lead_dept": c.lead_dept, "status": c.status,
+             "status_name": CENTER_STATUS_NAMES.get(c.status, c.status), "version": c.version}
+            # 按编号排：生产库不排序时按堆序吐行，这张表上刚编辑过的中心会挪到最后（P2-69 同形状，只是没截断）
+            for c in db.query(SpdCenter).order_by(SpdCenter.id).all()
         ],
         "enrollment": _enroll_stats(db, orgs, program_code),
         "paths": _path_stats(db, orgs),

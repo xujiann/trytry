@@ -35,7 +35,7 @@ async function renderEmTimeline() {
     ${panel("急救事件", table(["ID", "地点", "主诉", "通道", "状态", "操作"], cases, (c) =>
       `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td>
        <td><span class="tag ${c.channel_type ? "red" : ""}">${esc(CHANNELS[c.channel_type] || c.channel_type)}</span></td>
-       <td>${esc(c.status)}</td>
+       <td>${esc(c.status_name)}</td>
        <td><button class="btn secondary" data-mile="${c.id}">录节点</button>
            <button class="btn" data-timeline="${c.id}">时间轴</button></td></tr>`))}
     <div class="panel hidden" id="gc-tl-panel"><h3>绿道时间轴</h3><div id="gc-tl"></div></div>`;
@@ -801,7 +801,7 @@ async function drawTcmPreparations() {
     ${expiring.length ? panel(`⚠ 制剂效期预警（60天内到期/已过期 ${expiring.length}）`, `${
       table(["批号", "制剂", "效期", "状态"], expiring, (b) =>
         `<tr><td>${esc(b.batch_no)}</td><td>${b.formula_id}</td>
-         <td><span class="tag ${b.expired ? "red" : "orange"}">${esc(b.expire_date)}</span></td><td>${esc(b.status)}</td></tr>`)}`, { accent: "#b26a00" }) : ""}
+         <td><span class="tag ${b.expired ? "red" : "orange"}">${esc(b.expire_date)}</span></td><td>${esc(b.status_name)}</td></tr>`)}`, { accent: "#b26a00" }) : ""}
     ${panel("制剂批次（效期缺省按配方有效期推算；过期批次禁止发放）", `
       <form class="inline" id="tb-form">
         <input name="formula_id" type="number" placeholder="配方ID" required>
@@ -815,7 +815,7 @@ async function drawTcmPreparations() {
       ${table(["ID", "批号", "配方", "数量", "生产日期", "效期", "状态", "操作"], batches, (b) =>
         `<tr><td>${b.id}</td><td>${esc(b.batch_no)}</td><td>${b.formula_id}</td><td>${b.quantity}${esc(b.unit)}</td>
          <td>${esc(b.produced_date)}</td><td><span class="tag ${b.expired ? "red" : ""}">${esc(b.expire_date)}</span></td>
-         <td>${esc(b.status)}</td>
+         <td>${esc(b.status_name)}</td>
          <td>${b.status === "produced" ? `<button class="btn secondary" data-release="${b.id}">发放</button>` : "—"}</td></tr>`)}`)}`);
   holder.querySelector("#tf-form").onsubmit = (e) => {
     e.preventDefault();
@@ -897,7 +897,7 @@ async function drawEduGaps() {
       <p class="msg" id="tplan-msg"></p>
       ${table(["ID", "主题", "日期", "带教", "名额", "已报", "余额", "状态", "操作"], plans, (p) =>
         `<tr><td>${p.id}</td><td>${esc(p.title)}</td><td>${esc(p.plan_date)}</td><td>${esc(p.trainer) || "—"}</td>
-         <td>${p.capacity}</td><td>${p.enrolled}</td><td>${p.remaining}</td><td>${esc(p.status)}</td>
+         <td>${p.capacity}</td><td>${p.enrolled}</td><td>${p.remaining}</td><td>${esc(p.status_name)}</td>
          <td><button class="btn secondary" data-enroll="${p.id}">报名</button>
              <button class="btn secondary" data-unenroll="${p.id}">退报</button>
              <button class="btn secondary" data-assess="${p.id}">录考核</button>
@@ -963,7 +963,7 @@ async function drawEduGaps() {
           table(["用户ID", "账号", "姓名", "报名状态", "成绩", "是否合格"], list, (r) => {
             const s = scores.items.find((i) => i.user_id === r.user_id);
             return `<tr><td>${r.user_id}</td><td>${esc(r.username)}</td><td>${esc(r.full_name) || "—"}</td>
-              <td>${esc(r.status)}</td><td>${s ? s.score : "—"}</td>
+              <td>${esc(r.status_name)}</td><td>${s ? s.score : "—"}</td>
               <td>${s ? (s.passed ? '<span class="tag green">合格</span>' : '<span class="tag red">不合格</span>') : "—"}</td></tr>`;
           });
       }

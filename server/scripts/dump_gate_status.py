@@ -66,6 +66,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_clock as clock
     import test_date_query_params as datequery
     import test_frontend_prompt_guard as promptguard
+    import test_status_text_from_backend as statustext
     import test_datestr_single_source as datestr
     import test_frontend_destructive_confirm_guard as destructive
     import test_frontend_api_calls_resolve as apicalls
@@ -273,6 +274,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_frontend_api_calls_resolve.py"),
         ("功能完善", "前端含 prompt( 的行（录入不靠弹窗）", promptguard.BASELINE,
          "tests/test_frontend_prompt_guard.py"),
+        ("功能完善", "页面文字里原样显示的状态码（状态文案取自后端；17 → 0：改 14、按设计 3）",
+         statustext.BASELINE, "tests/test_status_text_from_backend.py"),
+        ("功能完善", "按设计原样显示的状态码（原生状态对照栏 / HTTP 状态码 / ESB 步骤快照，逐条写明理由）",
+         len(statustext.BY_DESIGN), "tests/test_status_text_from_backend.py"),
         ("功能完善", "免确认的破坏性操作（可逆，逐条写明怎么恢复）", len(destructive.EXEMPT),
          "tests/test_frontend_destructive_confirm_guard.py"),
     ]

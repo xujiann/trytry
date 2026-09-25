@@ -60,6 +60,15 @@ router = APIRouter(
 
 FOLLOWUP_ROLES = ("doctor", "public_health", "director", "operator")
 
+#: `spd_followup_records.status` → 中文（§13「状态文案取自后端」，P2-72）：措辞照抄列注释，与随访看板的状态筛选
+#: 一致。看板原先只译待随访 / 已完成、其余原样显示，健康日历一个都不译。居民端另有一套说法（「未联系上」），不共用。
+FOLLOWUP_STATUS_NAMES = {
+    "planned": "待随访", "done": "已完成", "overdue": "已超期", "removed": "已移除", "unreachable": "失访",
+}
+#: 平台 `admissions.status` → 中文：措辞与平台住院页一致（该页的文案表还在前端，平台出参尚未带文案）。
+#: 随访前置资料的住院一栏原先把英文状态码原样显示。
+ADMISSION_STATUS_NAMES = {"admitted": "在院", "discharged": "已出院"}
+
 
 # ============================================================ 响应契约
 #
@@ -127,6 +136,7 @@ class FollowupRecordOut(BaseModel):
     result: str
     evidence: list[str]
     status: str
+    status_name: str
     created_at: str
 
 
@@ -188,6 +198,7 @@ class ContextAdmissionOut(BaseModel):
     diagnosis_name: str
     doctor_name: str
     status: str
+    status_name: str
 
 
 class FollowupContextOut(BaseModel):
@@ -585,6 +596,7 @@ def _record_out(r: SpdFollowupRecord, patient_name: str = "") -> dict:
         "executor_id": r.executor_id, "answers": r.answers or {},
         "abnormal_level": r.abnormal_level, "result": r.result,
         "evidence": r.evidence or [], "status": r.status,
+        "status_name": FOLLOWUP_STATUS_NAMES.get(r.status, r.status),
         "created_at": r.created_at.isoformat(),
     }
 
@@ -850,7 +862,7 @@ def followup_context(
             {"id": a.id, "admitted_at": a.admitted_at.isoformat(),
              "discharged_at": a.discharged_at.isoformat() if a.discharged_at else "",
              "diagnosis_name": a.diagnosis_name, "doctor_name": a.doctor_name,
-             "status": a.status}
+             "status": a.status, "status_name": ADMISSION_STATUS_NAMES.get(a.status, a.status)}
             for a in admissions
         ],
         "history": [_record_out(h) for h in history],

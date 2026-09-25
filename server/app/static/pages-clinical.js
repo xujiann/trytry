@@ -538,7 +538,8 @@ async function drawAttachments(ownerType, ownerId, containerSel, msgSel) {
 async function renderEmergency() {
   $("#page-desc").textContent = "呼救调度→转运（生命体征回传）→到院→收治，上车即入院；到院后判定抢救转归";
   const cases = await api("/api/emergency/cases");
-  const ES = { dispatched: ["已调度", "orange"], en_route: ["转运中", "orange"], arrived: ["已到院", ""], admitted: ["已收治", "green"] };
+  // 状态文案取自后端 status_name（P2-72，公卫侧绿道页同一份）；这里只管配色
+  const ES_COLOR = { dispatched: "orange", en_route: "orange", admitted: "green" };
   // 空串是**未判定**，与 failed 是两回事：写成 failed 会把抢救成功率算低（后端注释的原话）
   const RESCUE = { success: ["抢救成功", "green"], failed: ["抢救无效", "red"], "": ["未判定", "orange"] };
   // 判定转归后端是 require_roles("doctor")（admin 全通）——这是临床结论，不是调度动作
@@ -559,7 +560,7 @@ async function renderEmergency() {
         canOutcome && arrived ? `<button class="btn" data-outcome="${c.id}">判定转归</button>` : "",
       ].filter(Boolean);
       return `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td><td>${esc(c.ambulance_no)}</td>
-        <td>${statusTag(ES, c.status)}</td>
+        <td><span class="tag ${ES_COLOR[c.status] || ""}">${esc(c.status_name)}</span></td>
         <td>${arrived ? statusTag(RESCUE, c.rescue_outcome || "") : "—"}</td>
         <td>${acts.length ? acts.join(" ") : "—"}</td></tr>`;
     }) + `<p class="desc">抢救转归<b>只对已到院/已收治的病例开放</b>——车还在路上就写"抢救成功"，
@@ -834,7 +835,7 @@ async function renderInsurance() {
       <p class="msg" id="ins-msg"></p>`)}
     ${panel("特病申报队列", table(["ID", "患者", "病种", "状态", "操作"], apps, (a) =>
       `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.disease_name)}</td>
-       <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${a.status}</span></td>
+       <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${esc(a.status_name)}</span></td>
        <td>${a.status === "applied" ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`))}
     ${panel("双通道药品申报（医师/经办申报 → 管理层审核）", `
       <form class="inline" id="dual-form">
