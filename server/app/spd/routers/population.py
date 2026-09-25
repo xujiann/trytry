@@ -1754,24 +1754,29 @@ def add_usage(
         raise HTTPException(status_code=404, detail="服务包绑定不存在")
     enrollment = db.get(SpdEnrollment, binding.enrollment_id)
     assert_org_writable(db, user, enrollment.org_id if enrollment else None)
-    if binding.status != "bound":
-        raise HTTPException(status_code=409, detail="该服务包已解绑，不能扣减")
-    # 深拷贝再改：JSON 列没开 MutableList，就地改内层 dict 时 SQLAlchemy 比对
-    # 新旧值会认为"没变"，UPDATE 不会发出——表现是扣减看着成功、次数永远不减。
-    items = deepcopy(binding.items or [])
-    target = next((i for i in items if i.get("code") == body.item_code), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="服务包中没有该项目")
-    if int(target.get("used", 0)) + body.qty > int(target.get("total", 0)):
-        raise HTTPException(status_code=409, detail="该项目剩余次数不足")
-    target["used"] = int(target.get("used", 0)) + body.qty
-    binding.items = items
-    usage = SpdPackageUsage(
-        binding_id=binding_id, item_code=body.item_code, item_name=target.get("name", ""),
-        qty=body.qty, price=target.get("price", 0), operator_id=user.id, note=body.note,
-    )
-    db.add(usage)
-    db.commit()
+    # 次数记在 JSON 列里整体覆写：两笔并发扣减各读到同一个 used、各写回 used+qty，后写的盖掉先写的——两条扣减流水、
+    # 次数只加了一次，服务包被用超（P2-112）。锁住这条绑定、重读、再判再写（concurrency.serialized_on，同召回联系记录）；
+    # 状态也在锁里重判：并发的解绑先提交，这一笔就不该再扣
+    with serialized_on(db, SpdPackageBinding, binding_id):
+        db.refresh(binding)
+        if binding.status != "bound":
+            raise HTTPException(status_code=409, detail="该服务包已解绑，不能扣减")
+        # 深拷贝再改：JSON 列没开 MutableList，就地改内层 dict 时 SQLAlchemy 比对
+        # 新旧值会认为"没变"，UPDATE 不会发出——表现是扣减看着成功、次数永远不减。
+        items = deepcopy(binding.items or [])
+        target = next((i for i in items if i.get("code") == body.item_code), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="服务包中没有该项目")
+        if int(target.get("used", 0)) + body.qty > int(target.get("total", 0)):
+            raise HTTPException(status_code=409, detail="该项目剩余次数不足")
+        target["used"] = int(target.get("used", 0)) + body.qty
+        binding.items = items
+        usage = SpdPackageUsage(
+            binding_id=binding_id, item_code=body.item_code, item_name=target.get("name", ""),
+            qty=body.qty, price=target.get("price", 0), operator_id=user.id, note=body.note,
+        )
+        db.add(usage)
+        db.commit()
     return {"usage_id": usage.id, "binding": _binding_out(db, binding)}
 
 
