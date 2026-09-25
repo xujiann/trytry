@@ -7,14 +7,14 @@ from typing import Any
 from secrets import token_urlsafe
 
 from fastapi import Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ....database import get_db
 from ....patchtypes import UNSET
 from ....deps import paginate, require_roles
-from ....numtypes import INT4_MAX, INT4_MIN, MONEY_MAX
+from ....numtypes import INT4_MAX, INT4_MIN, MONEY_MAX, MoneyFloat
 from ....texttypes import NON_BLANK
 from ...models import (
     SpdEduMaterial,
@@ -321,7 +321,7 @@ class PackageIn(BaseModel):
     code: str = Field(min_length=1, max_length=32, pattern=NON_BLANK)
     name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     program_code: str = Field(default="", max_length=32)
-    price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    price: MoneyFloat = Field(default=0, ge=0, le=MONEY_MAX)
     period_days: int = Field(default=365, ge=1, le=3650)
     items: list[dict] = Field(default_factory=list)
 
@@ -369,7 +369,7 @@ class PackagePatch(BaseModel):
     """改档与建档同一套约束（P1-94）：原先收裸 dict、照单全收。不传即不改；不可空的列显式传 null 是 422。"""
 
     name: str = Field(default=UNSET, min_length=1, max_length=64, pattern=NON_BLANK)
-    price: FiniteFloat = Field(default=UNSET, ge=0, le=MONEY_MAX)
+    price: MoneyFloat = Field(default=UNSET, ge=0, le=MONEY_MAX)
     period_days: int = Field(default=UNSET, ge=1, le=3650)
     items: list[dict] = Field(default=UNSET)
     active: bool = Field(default=UNSET)

@@ -1,9 +1,9 @@
 """远程会诊中心：申请→受理→出具意见→评价，全过程管理。"""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..numtypes import MONEY_MAX
+from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..concurrency import insert_or_conflict
@@ -125,7 +125,7 @@ def complete(
 
 
 class ConsultationFee(BaseModel):
-    fee: FiniteFloat = Field(ge=0, le=MONEY_MAX)
+    fee: MoneyFloat = Field(ge=0, le=MONEY_MAX)
     fee_note: str = Field(default="", max_length=256)
 
 

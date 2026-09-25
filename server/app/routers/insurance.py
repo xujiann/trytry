@@ -2,12 +2,12 @@
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..numtypes import MONEY_MAX
+from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
 from ..concurrency import insert_or_conflict
@@ -31,9 +31,9 @@ class SettlementCreate(BaseModel):
     patient_id: int
     org_id: int
     settle_type: str = Field(default="local", pattern="^(local|remote)$")
-    total_amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
-    insurance_pay: FiniteFloat = Field(ge=0, le=MONEY_MAX)
-    self_pay: FiniteFloat = Field(ge=0, le=MONEY_MAX)
+    total_amount: MoneyFloat = Field(gt=0, le=MONEY_MAX)
+    insurance_pay: MoneyFloat = Field(ge=0, le=MONEY_MAX)
+    self_pay: MoneyFloat = Field(ge=0, le=MONEY_MAX)
 
 
 class SettlementOut(SettlementCreate):

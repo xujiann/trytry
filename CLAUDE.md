@@ -100,7 +100,7 @@ server/app/
 - **迁移升级用 `alembic upgrade heads`（复数）**——本仓库有两个 head（平台链 + spd 链）。单数 `head` 会报错并漏掉 spd 的 59 张表。
 - 每个迁移**必须实现 `downgrade()`**（当前 94/94 全部实现，保持这个纪录）。
 - 类型约定（照抄现状，别自创）：
-  - **金额**：一律用 `Money`（`= Numeric(14,2, asdecimal=False)`，`models/_base.py:29`）。**禁止用 Float 存金额。**
+  - **金额**：一律用 `Money`（`= Numeric(14,2, asdecimal=False)`，`models/_base.py:29`）。**禁止用 Float 存金额。**入参一律用 `numtypes.MoneyFloat`（多于两位小数 422——生产库 `numeric(14,2)` 会悄悄四舍五入、开发库照存，P2-65；`test_money_fen_precision.py` 派生闸门盯着）。
   - **日期**：`String(10)`（配 `datetypes.DateStr`/`OptionalDateStr` 做入参校验）。**月度期间** `YYYY-MM`：body 字段用 `datetypes.PeriodStr`、查询参数用 `deps.require_month`，别再写月份正则（`tests/test_periodstr_single_source.py` 与 `test_datestr_single_source.py` 分别盯着两种形状）。**时间戳**：`DateTime` + `utcnow()`（naive UTC）。
   - **状态**：裸字符串，不用 Enum；取值范围写在列注释与路由 `pattern` 里。
   - **长文本**：`String(N)`（无 Text 类型），注意 1024 上限。

@@ -47,6 +47,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_spd_report_task_delete as guardeddelete
     import test_body_finite_numbers as bodyfinite
     import test_body_numeric_capacity as bodynumcap
+    import test_money_fen_precision as moneyfen
     import test_body_raw_dict as bodyraw
     import test_date_window_bounds as datewin
     import test_disabled_catalog_refs as disabledrefs
@@ -151,6 +152,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          bodyfinite.BASELINE, "tests/test_body_finite_numbers.py"),
         ("数值入参", "整数 / 金额入参越过列容量写进 Integer / Money 列（PG 上溢出即 500；65 → 0，第三层显式赋值 +1、第四层 +3、可空 Annotated 盲区 +1、第五层转一手再写 +23 → 0）",
          bodynumcap.BASELINE, "tests/test_body_numeric_capacity.py"),
+        ("数值入参", "金额入参收得下三位以上小数写进 Numeric(14,2) 列（开发库照存、PG 静默四舍五入：单价 0.004 存成 0.00；38 → 0 已清零）",
+         moneyfen.BASELINE, "tests/test_money_fen_precision.py"),
+        ("数值入参", "出参字段带 to_fen（修之前存进开发库的三位小数行会让整个响应 500）",
+         moneyfen.OUTPUT_BASELINE, "tests/test_money_fen_precision.py"),
         ("数值入参", "天数 / 分钟数入参没有上界就进 timedelta（传个大数即日期溢出、500；5 → 0 已清零）",
          datewin.BASELINE, "tests/test_date_window_bounds.py"),
         ("数值入参", "条数 / 偏移量入参没有上下界就进 .limit() / .offset()（PG 上负数即 500；2 → 0 已清零）",

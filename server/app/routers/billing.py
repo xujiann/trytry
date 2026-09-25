@@ -34,7 +34,7 @@ from ..config import settings
 from ..datetypes import OptionalDateStr
 from ..concurrency import insert_or_conflict, serialized_on
 from ..egress import egress_url_allowed, verify_signature
-from ..numtypes import INT4_MAX, MONEY_MAX
+from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..payments import HttpGatewayPaymentGateway, to_fen
 from ..visibility import (
@@ -92,7 +92,7 @@ class ChargeItemCreate(BaseModel):
     code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     category: str = Field(default="other", pattern="^(drug|exam|treatment|bed|other)$")
-    price: FiniteFloat = Field(gt=0, le=MONEY_MAX)
+    price: MoneyFloat = Field(gt=0, le=MONEY_MAX)
     active: bool = True
 
 
@@ -101,7 +101,7 @@ class ChargeItemUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128, pattern=NON_BLANK)
     category: str | None = Field(default=None, pattern="^(drug|exam|treatment|bed|other)$")
     # 列容量与建档同口径（P1-93 判据盲区：`FiniteFloat | None` 原先不被判据认作数值）
-    price: FiniteFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
+    price: MoneyFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
     active: bool | None = None
 
 
@@ -190,7 +190,7 @@ def list_charge_items(
 
 class RepriceIn(BaseModel):
     # 列容量（P1-93 判据盲区）：经 `_change_price` 写库，判据看不见 helper 里的写入，原先只有下界
-    new_price: FiniteFloat = Field(gt=0, le=MONEY_MAX)
+    new_price: MoneyFloat = Field(gt=0, le=MONEY_MAX)
     reason: str = Field(default="", max_length=256)
     effective_date: OptionalDateStr = ""
 
@@ -478,7 +478,7 @@ DEPOSIT_TYPES = {"prepay": "预交", "refund": "退费", "offset": "结算冲抵
 
 class DepositCreate(BaseModel):
     admission_id: int
-    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
+    amount: MoneyFloat = Field(gt=0, le=MONEY_MAX)
     method: str = Field(default="cash", pattern="^(cash|card|online)$")
 
 
@@ -751,7 +751,7 @@ class SettlementCreate(BaseModel):
     bill_type: str = Field(pattern="^(outpatient|inpatient)$")
     admission_id: int | None = None
     encounter_id: int | None = None
-    insurance_pay: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    insurance_pay: MoneyFloat = Field(default=0, ge=0, le=MONEY_MAX)
 
 
 class SettlementOut(BaseModel):
@@ -1254,7 +1254,7 @@ class PaymentCreate(BaseModel):
     settlement_id: int
     channel: str = Field(pattern="^(cash|card|insurance|online|gateway)$")
     # 缺省按结算单个人自付金额（医保渠道按医保支付金额）
-    amount: FiniteFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
+    amount: MoneyFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
 
 
 @router.post(
@@ -1479,7 +1479,7 @@ router.dependencies = _authed_dependencies
 
 class RefundIn(BaseModel):
     # 缺省全额退款；部分退款须小于等于剩余可退金额
-    amount: FiniteFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
+    amount: MoneyFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
     reason: str = Field(default="", max_length=256)
 
 

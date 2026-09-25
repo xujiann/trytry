@@ -9,12 +9,12 @@
 - 与 FinanceEntry 并存：后者是业务口径的收支汇总，不被取代。
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..numtypes import MONEY_MAX
+from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import (
     assert_obj_org_writable,
@@ -216,8 +216,8 @@ def list_subjects(category: str | None = None, db: Session = Depends(get_db)):
 class EntryIn(BaseModel):
     subject_code: str = Field(min_length=1, max_length=16, pattern=NON_BLANK)
     summary: str = Field(default="", max_length=256)
-    debit: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
-    credit: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    debit: MoneyFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    credit: MoneyFloat = Field(default=0, ge=0, le=MONEY_MAX)
 
 
 class VoucherIn(BaseModel):

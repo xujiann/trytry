@@ -10,7 +10,7 @@ from datetime import date
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..concurrency import add_amount, ensure_present, insert_if_absent
-from ..numtypes import INT4_MAX, MONEY_MAX
+from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
 from ..database import get_db
@@ -51,7 +51,7 @@ class PurchaseIn(BaseModel):
     spec: str = Field(default="", max_length=64)
     unit: str = Field(default="件", max_length=16)
     quantity: int = Field(default=1, gt=0, le=INT4_MAX)
-    estimated_price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    estimated_price: MoneyFloat = Field(default=0, ge=0, le=MONEY_MAX)
     reason: str = Field(default="", max_length=512)
 
 
@@ -210,7 +210,7 @@ def approve_purchase(
 class ContractIn(BaseModel):
     supplier_id: int
     contract_no: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
-    contract_amount: FiniteFloat = Field(ge=0, le=MONEY_MAX)
+    contract_amount: MoneyFloat = Field(ge=0, le=MONEY_MAX)
 
 
 @router.post(
@@ -336,7 +336,7 @@ class ConsumableIn(BaseModel):
     supplier_id: int | None = None
     batch_no: str = Field(default="", max_length=64)
     expire_date: OptionalDateStr = ""
-    unit_price: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    unit_price: MoneyFloat = Field(default=0, ge=0, le=MONEY_MAX)
 
 
 @router.post(

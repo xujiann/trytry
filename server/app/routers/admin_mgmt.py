@@ -1,13 +1,13 @@
 """综合管理补齐：㉚人力资源、㉛财务、㉜物资、㉞行政公文，及①-④排班/质控。"""
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr, PeriodStr
-from ..numtypes import INT4_MAX, MONEY_MAX
+from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import (
     assert_obj_org_writable,
@@ -227,7 +227,7 @@ class FinanceCreate(BaseModel):
     period: PeriodStr
     category: str = Field(pattern="^(income|expense)$")
     item: str = Field(default="", max_length=128)
-    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
+    amount: MoneyFloat = Field(gt=0, le=MONEY_MAX)
 
 
 class FinanceOut(FinanceCreate):
@@ -842,8 +842,8 @@ def list_staff_contracts(employee_id: int | None = None, db: Session = Depends(g
 class PayrollCreate(BaseModel):
     employee_id: int
     period: PeriodStr
-    base_salary: FiniteFloat = Field(ge=0, le=MONEY_MAX)
-    perf_bonus: FiniteFloat = Field(default=0, ge=0, le=MONEY_MAX)
+    base_salary: MoneyFloat = Field(ge=0, le=MONEY_MAX)
+    perf_bonus: MoneyFloat = Field(default=0, ge=0, le=MONEY_MAX)
     perf_coefficient: float = Field(default=1.0, ge=0, le=2)
 
 
@@ -938,7 +938,7 @@ class BudgetCreate(BaseModel):
     org_id: int
     year: str = Field(pattern=r"^[0-9]{4}$")  # 只认半角：`\d` 认全角「２０２６」（P2-47）
     category: str = Field(pattern="^(income|expense)$")
-    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
+    amount: MoneyFloat = Field(gt=0, le=MONEY_MAX)
 
 
 class BudgetReceiptOut(BaseModel):

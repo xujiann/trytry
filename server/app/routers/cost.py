@@ -13,12 +13,12 @@
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
-from ..numtypes import MONEY_MAX
+from ..numtypes import MONEY_MAX, MoneyFloat
 from ..visibility import assert_org_visible, scope_org_list
 from ..database import get_db
 from ..datetypes import PeriodStr
@@ -56,7 +56,7 @@ class CostIn(BaseModel):
     # 认期间，这些行**永远查不到**——归集"成功"了，钱却不在任何一张报表里（P1-61）
     period: PeriodStr
     cost_type: str = Field(pattern="^(labor|drug|consumable|depreciation|overhead)$")
-    amount: FiniteFloat = Field(ge=0, le=MONEY_MAX)
+    amount: MoneyFloat = Field(ge=0, le=MONEY_MAX)
 
 
 class CostUpsertOut(BaseModel):
