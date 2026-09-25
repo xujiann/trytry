@@ -75,6 +75,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_frontend_api_calls_resolve as apicalls
     import test_filter_ids_not_truncated as truncids
     import test_list_pagination_ratchet as pagination
+    import test_orphan_endpoint_verbs as orphanverbs
     import test_orphan_endpoints as orphan
     import test_periodstr_single_source as periodstr
     import test_query_param_validators as queryvalidators
@@ -312,6 +313,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          "tests/test_orphan_endpoints.py"),
         ("功能完善", "按设计不需要界面的豁免路径", len(orphan.EXEMPT_PATHS),
          "tests/test_orphan_endpoints.py"),
+        ("功能完善", "路径有入口、这个写动词没有的端点（动词级孤儿：配置项只能改不能建、窗口代录、删除；按路径算的棘轮看不见）",
+         len(orphanverbs.KNOWN), "tests/test_orphan_endpoint_verbs.py"),
+        ("功能完善", "按设计没有界面的写动词（机器接口，逐条写明理由）", len(orphanverbs.EXEMPT),
+         "tests/test_orphan_endpoint_verbs.py"),
         ("功能完善", "前端写出来的 `/api` 地址没有路由 / 动词后端不接 / 判不了（反方向）", apicalls.BASELINE,
          "tests/test_frontend_api_calls_resolve.py"),
         ("功能完善", "前端含 prompt( 的行（录入不靠弹窗）", promptguard.BASELINE,

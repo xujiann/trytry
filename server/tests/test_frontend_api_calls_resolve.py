@@ -191,7 +191,8 @@ def _method(callee: str | None, args: list[str]) -> str | None:
 def scan(files: dict[str, str] | None = None) -> dict[str, list[str]]:
     files = _repo_files() if files is None else files
     table = _route_table()
-    out: dict[str, list[str]] = {"total": [], "no_route": [], "wrong_verb": [], "unchecked": [], "verb_checked": []}
+    out: dict[str, list] = {"total": [], "no_route": [], "wrong_verb": [], "unchecked": [], "verb_checked": [],
+                            "calls": []}
     for name, text in files.items():
         for m in re.finditer(r"""([`"'])(?=/api/)""", text):
             raw, end = _literal(text, m.end(), m.group(1))
@@ -212,6 +213,10 @@ def scan(files: dict[str, str] | None = None) -> dict[str, list[str]]:
             if method is None:
                 continue
             out["verb_checked"].append(where)
+            # （动词, 路由）——动词级孤儿棘轮（test_orphan_endpoint_verbs）按它判「这个动词有没有入口」。
+            # `/api/x/summary` 同时对得上 `/api/x/summary` 与 `/api/x/{id}`：静态段多的那条才是它调的
+            fewest = min(r[2].count("{") for r in matches)
+            out["calls"].extend((method, r[2]) for r in matches if r[2].count("{") == fewest)
             allowed = set().union(*(r[0] for r in matches))
             if method not in allowed:
                 out["wrong_verb"].append(f"{where}  前端 {method}，后端只有 {sorted(allowed)}")

@@ -47,6 +47,7 @@ def _count(keys, module: str) -> int:
 def rows() -> list[dict]:
     import test_api_contract_governance as contract
     import test_list_pagination_ratchet as pagination
+    import test_orphan_endpoint_verbs as orphanverbs
     import test_orphan_endpoints as orphan
     import test_stage14_concurrency as concurrency
     import test_stage15_horizontal as horizontal
@@ -74,6 +75,7 @@ def rows() -> list[dict]:
             "endpoints": endpoints[module],
             "paths": len(mine),
             "orphans": sorted(p for p in mine if p in debt),
+            "verb_gaps": sorted(v for v in orphanverbs.KNOWN if v.split(" ", 1)[1] in mine),
             "exempt_module": module in orphan.EXEMPT_MODULES,
             "exempt_paths": sorted(p for p in mine if p in exempt_paths),
             "contract": module in contract.FULLY_GOVERNED,
@@ -92,6 +94,7 @@ def render() -> str:
     data = rows()
     total_paths = sum(r["paths"] for r in data)
     total_debt = sum(len(r["orphans"]) for r in data)
+    total_verb_gaps = sum(len(r["verb_gaps"]) for r in data)
     total_exempt = sum(len(r["exempt_paths"]) for r in data) + sum(
         r["paths"] for r in data if r["exempt_module"]
     )
@@ -115,24 +118,26 @@ def render() -> str:
         f"| 路由模块 | {len(data)} |",
         f"| `/api` 路径（不同路径数） | {total_paths} |",
         f"| 无入口路径（欠账，`KNOWN_ORPHANS`） | {total_debt} |",
+        f"| 路径有入口、写动词没有（欠账，`test_orphan_endpoint_verbs.KNOWN`） | {total_verb_gaps} |",
         f"| 按设计无界面（`EXEMPT_*`，含整模块豁免） | {total_exempt} |",
         f"| 无入口为 0 的模块 | {len(clean)} / {len(judged)}（不含整模块豁免） |",
         "",
         "## 逐模块",
         "",
-        "按「无入口」降序——挑批次从上往下挑；同数按模块名。",
+        "按「无入口」降序、再按「动词缺口」降序——挑批次从上往下挑；同数按模块名。",
+        "「动词缺口」是路径有入口、某个写动词（多是「新建」）没有入口的端点数（登记名单，见下方明细）。",
         "「越权豁免」是逐条写了理由的按设计跨机构/按 id 读的端点数（不是欠账），",
         "「读侧欠账」「待裁读接口」「读改写」是尚未关掉的账。",
         "",
-        "| 模块 | 标签 | 端点 | 路径 | 无入口 | 契约 | 分页 已切/待裁 | 越权豁免 | 读侧欠账 | 待裁读接口 | 读改写 |",
-        "|---|---|---:|---:|---:|:-:|---:|---:|---:|---:|---:|",
+        "| 模块 | 标签 | 端点 | 路径 | 无入口 | 动词缺口 | 契约 | 分页 已切/待裁 | 越权豁免 | 读侧欠账 | 待裁读接口 | 读改写 |",
+        "|---|---|---:|---:|---:|---:|:-:|---:|---:|---:|---:|---:|",
     ]
-    ordered = sorted(data, key=lambda r: (-len(r["orphans"]), r["module"]))
+    ordered = sorted(data, key=lambda r: (-len(r["orphans"]), -len(r["verb_gaps"]), r["module"]))
     for r in ordered:
         orphans = "豁免" if r["exempt_module"] else str(len(r["orphans"]))
         contract = "✅" if r["contract"] else "✗"
         lines.append(
-            f"| `{r['module']}` | {r['tags']} | {r['endpoints']} | {r['paths']} | {orphans} | {contract} "
+            f"| `{r['module']}` | {r['tags']} | {r['endpoints']} | {r['paths']} | {orphans} | {len(r['verb_gaps'])} | {contract} "
             f"| {r['paginated']} / {r['held']} | {r['authz_exempt']} | {r['authz_read_debt']} "
             f"| {r['unscopable']} | {r['rmw']} |"
         )
@@ -149,6 +154,18 @@ def render() -> str:
             continue
         lines.append(f"- **`{r['module']}`**（{len(r['orphans'])}）")
         lines.extend(f"  - `{p}`" for p in r["orphans"])
+    lines += [
+        "",
+        "## 写动词无入口明细（按模块）",
+        "",
+        "路径有入口（清单或详情有页面在调），这个写动词没有——多是配置项只能改不能建。接上一条就把它从",
+        "`tests/test_orphan_endpoint_verbs.py::KNOWN` 里划掉，再重跑本脚本。",
+        "",
+    ]
+    for r in ordered:
+        if r["verb_gaps"]:
+            lines.append(f"- **`{r['module']}`**（{len(r['verb_gaps'])}）")
+            lines.extend(f"  - `{v}`" for v in r["verb_gaps"])
     exempt_lines = []
     for r in sorted(data, key=lambda r: r["module"]):
         if r["exempt_module"]:
