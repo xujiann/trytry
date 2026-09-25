@@ -1368,7 +1368,8 @@ def update_case_report_task(task_id: int, body: CaseReportTaskPatch, db: Session
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"负责人{state}（manager_user_id={changes['manager_user_id']}）")
-    program_problem = unknown_program(db, changes.get("program_code") or "")  # 病种编码先查在不在（P1-120）
+    # 病种编码先查在不在（P1-120）；与现值相同的不再查（P1-121）
+    program_problem = unknown_program(db, changes.get("program_code") or "", already=task.program_code)
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
     for key, value in changes.items():

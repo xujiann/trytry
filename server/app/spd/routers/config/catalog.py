@@ -18,11 +18,13 @@ from ....texttypes import NON_BLANK
 from ....deps import get_current_user, paginate, require_admin, require_roles, keyword_like
 from ...platform import Organization, User
 from ...models import (
+    SpdEduMaterial,
     SpdProgram,
     SpdProgramVersion,
     SpdTarget,
 )
 from ...rules import FIELD_SOURCES, OPERATORS
+from ...service import unknown_code
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
 
 
@@ -361,6 +363,9 @@ def create_target(program_id: int, body: TargetIn, db: Session = Depends(get_db)
         and body.target_low > body.target_high
     ):
         raise HTTPException(status_code=422, detail="目标下限不得大于上限")
+    edu_problem = unknown_code(db, SpdEduMaterial, body.edu_code, "宣教素材")  # 宣教素材编码先查在不在（P1-121）
+    if edu_problem:
+        raise HTTPException(status_code=404, detail=edu_problem)
     target = SpdTarget(program_id=program_id, **body.model_dump())
     db.add(target)
     try:
@@ -394,6 +399,10 @@ def update_target(target_id: int, body: TargetPatch, db: Session = Depends(get_d
             raise HTTPException(status_code=422, detail="量化目标须至少给出上限或下限")
         if low is not None and high is not None and low > high:
             raise HTTPException(status_code=422, detail="目标下限不得大于上限")
+    # 宣教素材编码同建档一句（P1-121）；与现值相同的不再查
+    edu_problem = unknown_code(db, SpdEduMaterial, changes.get("edu_code") or "", "宣教素材", already=target.edu_code)
+    if edu_problem:
+        raise HTTPException(status_code=404, detail=edu_problem)
     for key, value in changes.items():
         setattr(target, key, value)
     db.commit()

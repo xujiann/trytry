@@ -132,7 +132,7 @@ c2d3e4f5a6b7 ─┬─▶ d1a2b3c4e5f6 (全域慢专病) branch_labels=("spd",)
 
 - **`patients` 表无任何外键**（无 org_id），患者归属只能靠 join 其它表推导（visibility 全靠这个）。
 - 38 张平台表 + 12 张 spd 表无外键；`job_runs` 不指向 `scheduled_jobs`、`sms_codes` 不指向 `resident_accounts`、`charge_items`/`suppliers`/`blood_stocks` 不指向 `organizations`。
-- spd 侧 30 处字符串软外键（`program_code`），删除引用目标无报错。（2026-09-25 补记：写入口写库前查病种在不在，P1-120，闸门 `tests/test_spd_program_code_exists.py`；库层仍无约束。）
+- spd 侧 30 处字符串软外键（`program_code`），删除引用目标无报错。（2026-09-25 补记：写入口写库前查病种在不在，P1-120；随访问卷 / 宣教素材 / 触发规则等其余字符串编码同，P1-121；闸门 `tests/test_spd_code_refs_exist.py`；库层仍无约束。）
 - 无 `relationship()`/cascade：删 `spd_programs` 不级联清理 `spd_targets`。
 
 *本文件仅描述现状，未对任何代码进行修改。*

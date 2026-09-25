@@ -55,7 +55,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_date_window_bounds as datewin
     import test_disabled_catalog_refs as disabledrefs
     import test_disabled_user_refs as disabledusers
-    import test_spd_program_code_exists as spdprogram
+    import test_spd_code_refs_exist as coderefs
     import test_query_limit_params as limitparams
     import test_response_constraint_writers as respwriters
     import test_body_str_length as bodystr
@@ -152,10 +152,13 @@ def _rows() -> list[tuple[str, str, str, str]]:
          disabledusers.BASELINE, "tests/test_disabled_user_refs.py"),
         ("引用完整性", "按设计不查在用的账号字段（给已发生的事补录，逐条写明理由）",
          len(disabledusers.BY_DESIGN), "tests/test_disabled_user_refs.py"),
-        ("引用完整性", "慢专病写接口请求体的病种编码（字符串软外键）写库前不查病种在不在（填错即挂到不存在的病种上、考核重跑把本期分数改写成零；25 → 0 已清零）",
-         spdprogram.BASELINE, "tests/test_spd_program_code_exists.py"),
-        ("引用完整性", "按设计不查病种的写接口（病种编码只当筛选条件、不写进任何一行，逐条写明理由）",
-         len(spdprogram.BY_DESIGN), "tests/test_spd_program_code_exists.py"),
+        ("引用完整性", "慢专病写接口请求体里指向目录表的字符串编码写库前不查在不在（病种填错即挂到不存在的病种上、考核重跑把本期分数改写成零；"
+         "问卷填错则随访异常分级整段跳过；病种 25 + 病种列表 8 + 问卷 / 宣教素材 / 触发规则 5 → 0 已清零）",
+         coderefs.BASELINE, "tests/test_spd_code_refs_exist.py"),
+        ("引用完整性", "按设计不查的编码字段（只当筛选条件、不写进任何一行，逐条写明理由）",
+         len(coderefs.BY_DESIGN), "tests/test_spd_code_refs_exist.py"),
+        ("引用完整性", "名字像编码、却不指向目录表的请求体字段（逐条写明理由；新加的编码字段必须判过）",
+         len(coderefs.NOT_REFS), "tests/test_spd_code_refs_exist.py"),
         ("引用完整性", "在已结束的父对象下新建子行却不看父对象状态（离职医师放号 / 已出报告收标本 / 死亡档案绑包…；6 → 0 已清零）",
          closedparent.BASELINE, "tests/test_closed_parent_writes.py"),
         ("引用完整性", "按设计在已结束父对象下挂子行的豁免（事后补录 / 结算先于出院 / 留痕行…，逐条写明理由）",

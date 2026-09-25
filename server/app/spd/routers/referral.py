@@ -41,7 +41,7 @@ from ..models import (
     SpdReferralStep,
 )
 from ..rules import RuleError, evaluate, validate_conditions
-from ..service import award_points, build_facts, spawn_task, unknown_program
+from ..service import award_points, build_facts, spawn_task, unknown_code, unknown_program
 from ...visibility import GLOBAL_ROLES, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -546,6 +546,10 @@ def create_referral(
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
+    # 触发规则编码先查在不在（P1-121）：转诊单上写着「由某规则触发」，那条规则得真有
+    rule_problem = unknown_code(db, SpdReferralRule, body.trigger_rule_code, "转诊规则")
+    if rule_problem:
+        raise HTTPException(status_code=404, detail=rule_problem)
     enrollment = None
     if body.program_code:
         enrollment = (

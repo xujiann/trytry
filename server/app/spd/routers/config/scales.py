@@ -318,7 +318,9 @@ def update_edu(material_id: int, body: EduPatch, db: Session = Depends(get_db)):
     material = db.get(SpdEduMaterial, material_id)
     if material is None:
         raise HTTPException(status_code=404, detail="宣教素材不存在")
-    program_problem = unknown_program(db, body.model_dump(exclude_unset=True).get("program_code") or "")  # 病种编码先查在不在（P1-120）
+    # 病种编码先查在不在（P1-120）；与现值相同的不再查（P1-121）
+    program_problem = unknown_program(db, body.model_dump(exclude_unset=True).get("program_code") or "",
+                                      already=material.program_code)
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
     for key, value in body.model_dump(exclude_unset=True).items():

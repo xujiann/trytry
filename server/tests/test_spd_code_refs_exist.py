@@ -1,4 +1,4 @@
-"""慢专病写接口收下不存在的病种编码（P1-120）。
+"""慢专病写接口收下不存在的字符串编码（P1-120 病种编码；P1-121 随访问卷、宣教素材、触发规则等其余编码）。
 
 `program_code` 是字符串软外键（库里没有约束，见 docs/DATA_MODEL.md）：填错一个编码照样 201 落库，这条记录
 就挂到一个不存在的病种上——按病种筛的清单、规则匹配、统计口径从此永远不含它，配置（量表、宣教、服务包、
@@ -11,8 +11,16 @@
 编码修前是 500，归进补查的一边。居民端的自查筛查与申请加入是「新纳入」，与建档 / 筛查同一口径不收停用的
 病种；其余是在管患者的业务记录或配置，照收停用病种（病种停用不等于在管的人当天就不管了）。
 
-修法集中在 `spd/service.py::unknown_program`（返回问题文案、由路由报 404，与 `unusable_user` 同一写法）。
-文件末尾的闸门把「请求体 program_code 写库前没查过病种」钉成零基线。
+第二层（P1-120 同批）：团队 / 团队成员 / 考核指标 / 考核方案收的是病种编码**列表**（`program_codes`），同一口径
+逐个查，报错点名不存在的那几个。
+
+P1-121：同一形状的其余字符串编码。最重的是随访方案的问卷编码——执行随访时按它查问卷，查不到就整段跳过异常
+分级，疼痛 9 分的高危答案记成「无异常」、不派处置任务。管理目标的宣教素材、手工发起转诊的触发规则同批补查。
+改档时与现值相同的编码不再查（`already=`）：编辑页每次都带上原值，存量里悬空的编码不该挡住改名、停用。
+
+修法集中在 `spd/service.py` 的 `unknown_program` / `unknown_programs` / `unknown_code`（返回问题文案、由路由报
+404，与 `unusable_user` 同一写法）。文件末尾的闸门按字段表把「请求体里指向目录表的编码写库前没查过」钉成零
+基线；请求体里名字像编码的字段都得判过——指向哪张目录表，或写明为什么不是引用。
 """
 import ast
 import pathlib
@@ -83,7 +91,7 @@ def world(client, admin):
     consult = client.post(f"{P}/consults", headers=resident, json={"content": "P120 咨询", "program_code": REAL})
     assert consult.status_code == 201, consult.text
     return {"org": org, "patient": patient, "crt": crt, "edu": edu, "rule": rule, "resident": resident,
-            "consult": consult.json()["consult_id"]}
+            "consult": consult.json()["consult_id"], "program_id": programs[REAL]}
 
 
 #: (用例名, 方法, 路径, 请求体, 居民端?)——路径与请求体都是 (world, 病种编码) 的函数；带唯一编码的配置按
@@ -202,32 +210,171 @@ def test_批量入组只拿病种当筛选条件_按设计(client, admin, world)
     assert good.status_code == 200 and good.json()["added"] == 1, good.text
 
 
-# ================================================================ 闸门：请求体 program_code 写库前须查过病种
+def test_随访方案挂不存在的问卷_404_真实的照收_执行随访照常分级(client, admin, world):
+    """P1-121 最重的一处：执行随访按方案上的问卷编码查问卷，查不到就整段跳过异常分级——修前方案挂着填错的
+    问卷编码时，疼痛 9 分记成「无异常」、不派处置任务。"""
+    r = client.post(f"{B}/questionnaires", headers=admin, json={
+        "code": "P121_Q", "name": "P121 术后问卷", "items": [{"key": "pain", "title": "疼痛评分", "type": "number"}],
+        "abnormal_rules": [{"when": {"field": "pain", "op": ">=", "value": 7}, "level": "high",
+                            "action": "通知主管医师"}]})
+    assert r.status_code == 201, r.text
+    base = {"name": "P121 术后随访", "points": [0], "program_code": REAL}
+    bad = client.post(f"{B}/followup-rules", headers=admin,
+                      json={**base, "code": "P121_FRX", "questionnaire_code": "P121_QX"})
+    assert bad.status_code == 404 and bad.json() == {"detail": "随访问卷不存在：P121_QX"}, bad.text[:300]
+    rule = client.post(f"{B}/followup-rules", headers=admin,
+                       json={**base, "code": "P121_FRQ", "questionnaire_code": "P121_Q"})
+    assert rule.status_code == 201, rule.text
+    r = client.patch(f"{B}/followup-rules/{rule.json()['id']}", headers=admin, json={"questionnaire_code": "P121_QX"})
+    assert r.status_code == 404 and r.json() == {"detail": "随访问卷不存在：P121_QX"}, r.text[:300]
+
+    plan = client.post(f"{B}/followup-plans", headers=admin, json={
+        "patient_id": world["patient"], "rule_id": rule.json()["id"], "base_date": "2001-01-01", "org_id": world["org"]})
+    assert plan.status_code == 201, plan.text
+    record_id = plan.json()["items"][0]["id"]
+    done = client.post(f"{B}/followup-records/{record_id}/execute", headers=admin, json={"answers": {"pain": 9}})
+    assert done.status_code == 200, done.text
+    assert done.json()["abnormal_level"] == "high"   # 方案挂着查不到的问卷时这里是 none，也不派处置任务
+
+
+def test_改档与现值相同的编码不再查_存量悬空不挡改名停用(client, admin, world):
+    """编辑页每次都带上原值：存量里已经悬空的编码（修前落的库，或目录后来删了）不该挡住与它无关的改名、停用；
+    真要换成另一个编码，照查。"""
+    from app.database import SessionLocal
+    from app.spd.models import SpdFollowupRule, SpdTeam
+
+    with SessionLocal() as db:
+        legacy_rule = SpdFollowupRule(code="P121_LEGACY", name="P121 存量方案", questionnaire_code="P121_GONE",
+                                      points=[7])
+        legacy_team = SpdTeam(name="P121 存量团队", org_id=world["org"], program_codes=["P121_GONE"])
+        db.add_all([legacy_rule, legacy_team])
+        db.commit()
+        rule_id, team_id = legacy_rule.id, legacy_team.id
+    r = client.patch(f"{B}/followup-rules/{rule_id}", headers=admin,
+                     json={"name": "P121 存量方案（改名）", "questionnaire_code": "P121_GONE", "active": False})
+    assert r.status_code == 200, r.text
+    r = client.patch(f"{B}/followup-rules/{rule_id}", headers=admin, json={"questionnaire_code": "P121_GONE2"})
+    assert r.status_code == 404 and r.json() == {"detail": "随访问卷不存在：P121_GONE2"}, r.text[:300]
+    r = client.patch(f"{B}/teams/{team_id}", headers=admin, json={"program_codes": ["P121_GONE", REAL]})
+    assert r.status_code == 200, r.text
+    r = client.patch(f"{B}/teams/{team_id}", headers=admin, json={"program_codes": ["P121_GONE", NOPE]})
+    assert r.status_code == 404 and r.json() == {"detail": f"专病档案不存在：{NOPE}"}, r.text[:300]
+
+
+def test_管理目标挂不存在的宣教素材_404_真实的照收(client, admin, world):
+    url = f"{B}/programs/{world['program_id']}/targets"
+    body = {"stage": "P121", "metric": "bp_sys", "target_high": 140}
+    bad = client.post(url, headers=admin, json={**body, "edu_code": "P121_EDUX"})
+    assert bad.status_code == 404 and bad.json() == {"detail": "宣教素材不存在：P121_EDUX"}, bad.text[:300]
+    good = client.post(url, headers=admin, json={**body, "edu_code": "P120_EDU"})
+    assert good.status_code == 201, good.text
+    r = client.patch(f"{B}/targets/{good.json()['id']}", headers=admin, json={"edu_code": "P121_EDUX"})
+    assert r.status_code == 404 and r.json() == {"detail": "宣教素材不存在：P121_EDUX"}, r.text[:300]
+
+
+def test_手工发起转诊引用不存在的触发规则_404_真实的照收(client, admin, world):
+    """转诊单上写着「由某规则触发」，那条规则得真有。"""
+    body = {"patient_id": world["patient"], "program_code": REAL, "reason": "P121 上转"}
+    bad = client.post(f"{B}/referrals", headers=admin, json={**body, "trigger_rule_code": "P121_RRX"})
+    assert bad.status_code == 404 and bad.json() == {"detail": "转诊规则不存在：P121_RRX"}, bad.text[:300]
+    good = client.post(f"{B}/referrals", headers=admin, json={**body, "trigger_rule_code": "P120_ANY"})
+    assert good.status_code == 201, good.text
+
+
+#: 病种列表（`program_codes`）的四处写接口：(用例名, 建档路径, 建档请求体, 改档路径)
+LIST_CASES = [
+    ("团队", lambda lw: f"{B}/teams",
+     lambda lw, codes: {"name": "P121 团队", "org_id": lw["org"], "program_codes": codes},
+     lambda created: f"{B}/teams/{created['id']}"),
+    ("团队成员", lambda lw: f"{B}/teams/{lw['team']}/members",
+     lambda lw, codes: {"user_id": lw["doctor"], "program_codes": codes},
+     lambda created: f"{B}/team-members/{created['id']}"),
+    ("考核指标", lambda lw: f"{B}/indicators",
+     lambda lw, codes: {"code": "P121_IND", "name": "P121 指标", "data_source": "enrollment", "object_type": "org",
+                        "formula": "enrolled", "program_codes": codes},
+     lambda created: f"{B}/indicators/{created['id']}"),
+    ("考核方案", lambda lw: f"{B}/assess-plans",
+     lambda lw, codes: {"code": "P121_PLAN", "name": "P121 考核", "level": "township", "object_type": "org",
+                        "period_type": "month", "items": [{"indicator_code": "P121_IND_BASE", "weight": 100}],
+                        "program_codes": codes},
+     lambda created: f"{B}/assess-plans/{created['id']}"),
+]
+
+
+@pytest.fixture(scope="module")
+def list_world(client, admin, world):
+    """病种列表用例自带的前置：挂成员的团队、考核方案引用的指标、当成员的医生——不靠别的用例先跑。"""
+    team = client.post(f"{B}/teams", headers=admin, json={"name": "P121 成员团队", "org_id": world["org"]})
+    assert team.status_code == 201, team.text
+    r = client.post(f"{B}/indicators", headers=admin, json={
+        "code": "P121_IND_BASE", "name": "P121 方案用指标", "data_source": "enrollment", "object_type": "org",
+        "formula": "enrolled", "score_rule": {"type": "ratio", "full": 100, "target": 1}})
+    assert r.status_code == 201, r.text
+    doctor = client.post("/api/users", headers=admin, json={
+        "username": "p121_doc", "password": "Passw0rd!x", "role": "doctor", "org_id": world["org"]})
+    assert doctor.status_code == 201, doctor.text
+    return {"org": world["org"], "team": team.json()["id"], "doctor": doctor.json()["id"]}
+
+
+@pytest.mark.parametrize("case", LIST_CASES, ids=[c[0] for c in LIST_CASES])
+def test_病种列表有不存在的编码_404_点名_停用的照收(client, admin, list_world, case):
+    _name, path, body, patch_path = case
+    bad = client.post(path(list_world), headers=admin, json=body(list_world, [REAL, NOPE, ""]))
+    assert bad.status_code == 404 and bad.json() == {"detail": f"专病档案不存在：{NOPE}"}, bad.text[:300]
+    good = client.post(path(list_world), headers=admin, json=body(list_world, [REAL, OFF]))
+    assert good.status_code == 201, good.text[:300]   # 停用的病种照收：配置可能是为重新启用备的
+    r = client.patch(patch_path(good.json()), headers=admin, json={"program_codes": [REAL, NOPE]})
+    assert r.status_code == 404 and r.json() == {"detail": f"专病档案不存在：{NOPE}"}, r.text[:300]
+
+
+# ================================================================ 闸门：请求体里指向目录表的编码写库前须查过
 APP_SPD = pathlib.Path(__file__).resolve().parents[1] / "app" / "spd" / "routers"
 BASELINE = 0
 
-#: 请求体带 program_code、却只拿它当筛选条件（不写进任何一行）的写接口——逐条写明理由，只减不增。
+#: 请求体字段 → 「查过」的记号：函数连同两层同模块调用里出现任一即算查过（宽判据，只防「一眼没看」）
+SOFT_FKS = {
+    "program_code": ("unknown_program(", "SpdProgram"),
+    "program_codes": ("unknown_programs(",),
+    "questionnaire_code": ("SpdQuestionnaire",),
+    "edu_code": ("SpdEduMaterial",),
+    "trigger_rule_code": ("SpdReferralRule",),
+    "scale_code": ("SpdScale",),
+    "template_code": ("SpdReportTemplate",),
+}
+
+#: 名字像编码、却不指向任何目录表的请求体字段——逐条写明理由；新加的编码字段不进 SOFT_FKS 就得在这里说清
+NOT_REFS = {
+    "form_code": "表单没有目录表：任务 / 路径节点 / 管理目标上的 form_code 只标明用哪张填报表单，表单结构由各业务"
+                 "前端定义（任务表的 form/result 是宽字典），库里没有可查的表单目录",
+    "item_code": "服务包项目编码指向该服务包绑定自己的 items（JSON 列里的一项），扣减接口逐项比对、查不到即 404"
+                 "「服务包中没有该项目」，不是目录表的软外键",
+    "verify_code": "核销码是被查找的键（凭码找待核销记录），不是引用：查不到本身就是 404「核销码无效或已核销」",
+}
+
+#: 请求体带编码、却只拿它当筛选条件（不写进任何一行）的写接口字段——逐条写明理由，只减不增。
 #: （转诊规则试算原也登记在这里，理由写的是「只试算、不提交」——可勾了自动开单它就按请求体的病种开单，
 #: 理由不成立，已移出、补查）
 BY_DESIGN = {
-    "population.py:add_group_members":
+    "population.py:add_group_members:program_code":
         "按规则批量入组时用病种编码筛在管人群（`SpdEnrollment.program_code == …`），写进组的是患者，不是编码；"
         "填错得到「入组 0 人」",
 }
 
 
-def unchecked_program_codes(sources: dict[str, str] | None = None) -> list[str]:
-    """写接口（post / put / patch）的请求体模型有 `program_code` 字段，函数（连同它调用的同模块函数，两层）里
-    却既没调 `unknown_program(`、也没查过 `SpdProgram` 的位置。宽判据：出现即算查过，只防「一眼没看」。"""
+def _code_fields(cls: ast.ClassDef) -> set[str]:
+    """请求体模型里名字像编码的字段：`*_code` / `*_codes`，自身的主键编码 `code` 除外。"""
+    return {s.target.id for s in cls.body if isinstance(s, ast.AnnAssign) and isinstance(s.target, ast.Name)
+            and s.target.id != "code" and s.target.id.endswith(("_code", "_codes"))}
+
+
+def _write_endpoints(sources: dict[str, str] | None = None):
+    """逐个给出写接口（post / put / patch）：(文件名, 函数名, 函数连同两层同模块调用的源码, 请求体里的编码字段)。"""
     files = {str(p.relative_to(APP_SPD)): p.read_text(encoding="utf-8")
              for p in sorted(APP_SPD.rglob("*.py")) if "__pycache__" not in p.parts}
     files.update(sources or {})
-    found = []
     for name, text in files.items():
         tree = ast.parse(text)
-        body_models = {n.name for n in tree.body if isinstance(n, ast.ClassDef)
-                       and any(isinstance(s, ast.AnnAssign) and isinstance(s.target, ast.Name)
-                               and s.target.id == "program_code" for s in n.body)}
+        body_fields = {n.name: _code_fields(n) for n in tree.body if isinstance(n, ast.ClassDef)}
         funcs = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
         def closure(fn, depth=2, seen=None) -> str:
@@ -245,36 +392,61 @@ def unchecked_program_codes(sources: dict[str, str] | None = None) -> list[str]:
             if not any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
                        and d.func.attr in ("post", "put", "patch") for d in fn.decorator_list):
                 continue
-            if not any(a.annotation is not None and ast.unparse(a.annotation) in body_models for a in fn.args.args):
-                continue
-            src = closure(fn)
-            if "unknown_program(" in src or "SpdProgram" in src:
-                continue
-            found.append(f"{pathlib.PurePath(name).name}:{fn.name}")
+            fields: set[str] = set()
+            for arg in fn.args.args:
+                if arg.annotation is not None:
+                    fields |= body_fields.get(ast.unparse(arg.annotation), set())
+            if fields:
+                yield pathlib.PurePath(name).name, fn.name, closure(fn), fields
+
+
+def unchecked_code_refs(sources: dict[str, str] | None = None) -> list[str]:
+    """`文件:函数:字段`——请求体里指向目录表的编码（SOFT_FKS），函数里却一个「查过」的记号都没有。"""
+    found = []
+    for file, fn, src, fields in _write_endpoints(sources):
+        for field in fields:
+            markers = SOFT_FKS.get(field)
+            if markers is not None and not any(m in src for m in markers):
+                found.append(f"{file}:{fn}:{field}")
     return sorted(found)
 
 
-def test_请求体的病种编码写库之前得先查病种():
-    bad = [f for f in unchecked_program_codes() if f not in BY_DESIGN]
+def test_请求体里的字符串编码写库之前得先查在不在():
+    bad = [f for f in unchecked_code_refs() if f not in BY_DESIGN]
     assert len(bad) <= BASELINE, (
-        "以下写接口收 program_code 却从不看它指向的病种在不在：\n  " + "\n  ".join(bad)
-        + "\n\n写库前 `problem = unknown_program(db, body.program_code)`，有问题报 404；只拿它当筛选条件的登记进 BY_DESIGN。"
+        "以下写接口收指向目录表的编码，却从不看它指向的那一行在不在：\n  " + "\n  ".join(bad)
+        + "\n\n写库前查一次（病种 `unknown_program` / 病种列表 `unknown_programs` / 其余目录 `unknown_code`），"
+          "有问题报 404；只拿它当筛选条件的登记进 BY_DESIGN。"
     )
+
+
+def test_请求体里名字像编码的字段都判过():
+    seen = set().union(*(fields for *_, fields in _write_endpoints()))
+    unjudged = seen - set(SOFT_FKS) - set(NOT_REFS)
+    assert not unjudged, (
+        f"请求体里新出现名字像编码的字段 {sorted(unjudged)}：指向目录表的登记进 SOFT_FKS（写库前查在不在），"
+        "不是引用的写明理由登记进 NOT_REFS。"
+    )
+    assert set(NOT_REFS) <= seen, sorted(set(NOT_REFS) - seen)   # 名单里的字段都还在，不留死条目
+    assert all(reason.strip() for reason in NOT_REFS.values())
 
 
 def test_按设计名单只减不增_且条条都还在():
-    assert set(BY_DESIGN) <= set(unchecked_program_codes()), sorted(set(BY_DESIGN) - set(unchecked_program_codes()))
+    assert set(BY_DESIGN) <= set(unchecked_code_refs()), sorted(set(BY_DESIGN) - set(unchecked_code_refs()))
     assert all(reason.strip() for reason in BY_DESIGN.values())
 
 
-def test_判据自证_没查的点名_查过的与不带病种的不报():
+def test_判据自证_没查的点名_查过的与不带编码的不报():
     snippet = (
-        "class AIn(BaseModel):\n    program_code: str = ''\n"
+        "class AIn(BaseModel):\n    program_code: str = ''\n    questionnaire_code: str = ''\n"
         "class BIn(BaseModel):\n    name: str\n"
         "def _check(db, code):\n    return db.query(SpdProgram).filter(SpdProgram.code == code).first()\n"
         "@router.post('/a')\ndef bare(body: AIn, db=None):\n    db.add(X(**body.model_dump()))\n"
-        "@router.post('/b')\ndef helper_checked(body: AIn, db=None):\n    _check(db, body.program_code)\n"
-        "@router.patch('/c')\ndef service_checked(body: AIn, db=None):\n    problem = unknown_program(db, body.program_code)\n"
-        "@router.post('/d')\ndef no_program(body: BIn, db=None):\n    db.add(X(**body.model_dump()))\n"
+        "@router.post('/b')\ndef all_checked(body: AIn, db=None):\n    _check(db, body.program_code)\n"
+        "    unknown_code(db, SpdQuestionnaire, body.questionnaire_code, '随访问卷')\n"
+        "@router.patch('/c')\ndef half_checked(body: AIn, db=None):\n"
+        "    problem = unknown_program(db, body.program_code)\n"
+        "@router.post('/d')\ndef no_codes(body: BIn, db=None):\n    db.add(X(**body.model_dump()))\n"
     )
-    assert [f for f in unchecked_program_codes({"probe.py": snippet}) if f.startswith("probe.py")] == ["probe.py:bare"]
+    assert [f for f in unchecked_code_refs({"probe.py": snippet}) if f.startswith("probe.py")] == [
+        "probe.py:bare:program_code", "probe.py:bare:questionnaire_code", "probe.py:half_checked:questionnaire_code"]

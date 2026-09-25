@@ -23,6 +23,7 @@ from ...models import (
     SpdTeamMember,
     SpdVillageDoctor,
 )
+from ...service import unknown_programs
 from ....visibility import assert_org_writable
 from ._base import CONFIG_ROLES, SvgResponse, _qr_svg, router
 
@@ -172,6 +173,9 @@ def create_team(
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"团队负责人{state}（leader_user_id={body.leader_user_id}）")
+    program_problem = unknown_programs(db, body.program_codes)  # 病种列表先查在不在（P1-120 第二层）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     team = SpdTeam(**body.model_dump())
     db.add(team)
     db.commit()
@@ -261,6 +265,10 @@ def update_team(
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"团队负责人{state}（leader_user_id={changes['leader_user_id']}）")
+    # 病种列表同建团队一句（P1-120 第二层）；原有的编码不再查
+    program_problem = unknown_programs(db, changes.get("program_codes"), already=team.program_codes)
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     for key, value in changes.items():
         setattr(team, key, value)
     db.commit()
@@ -282,6 +290,9 @@ def add_team_member(
     state = unusable_user(db, body.user_id)  # 停用的账号不进成员名单：进了也永远不接活（P1-106）
     if state:
         raise HTTPException(status_code=404, detail=f"用户{state}")
+    program_problem = unknown_programs(db, body.program_codes)  # 病种列表先查在不在（P1-120 第二层）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     member = SpdTeamMember(team_id=team_id, **body.model_dump())
     db.add(member)
     try:
@@ -325,7 +336,12 @@ def update_team_member(
         raise HTTPException(status_code=404, detail="团队成员不存在")
     team = db.get(SpdTeam, member.team_id)
     assert_org_writable(db, user, team.org_id if team else None)
-    for key, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    # 病种列表同加成员一句（P1-120 第二层）；原有的编码不再查
+    program_problem = unknown_programs(db, changes.get("program_codes"), already=member.program_codes)
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
+    for key, value in changes.items():
         setattr(member, key, value)
     db.commit()
     return {"id": member.id, "member_role": member.member_role, "active": member.active}

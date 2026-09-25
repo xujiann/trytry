@@ -47,7 +47,7 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
-from ..service import close_followup_record, unknown_program
+from ..service import close_followup_record, unknown_code, unknown_program
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -438,6 +438,10 @@ def create_followup_rule(body: FollowupRuleIn, db: Session = Depends(get_db)):
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
+    # 问卷编码先查在不在（P1-121）：执行随访时按它查问卷，查不到就整段跳过异常分级——高危答案记成「无异常」
+    questionnaire_problem = unknown_code(db, SpdQuestionnaire, body.questionnaire_code, "随访问卷")
+    if questionnaire_problem:
+        raise HTTPException(status_code=404, detail=questionnaire_problem)
     rule = SpdFollowupRule(**body.model_dump())
     db.add(rule)
     try:
@@ -496,9 +500,15 @@ def update_followup_rule(rule_id: int, body: FollowupRulePatch, db: Session = De
     changes = body.model_dump(exclude_unset=True)
     if "points" in changes:
         _check_points(changes["points"])
-    program_problem = unknown_program(db, changes.get("program_code") or "")  # 病种编码先查在不在（P1-120）
+    # 病种与问卷编码先查在不在（P1-120 / P1-121）；与现值相同的不再查——编辑页每次都带上原问卷编码，
+    # 存量里悬空的编码不该挡住改名、停用
+    program_problem = unknown_program(db, changes.get("program_code") or "", already=rule.program_code)
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
+    questionnaire_problem = unknown_code(db, SpdQuestionnaire, changes.get("questionnaire_code") or "", "随访问卷",
+                                         already=rule.questionnaire_code)
+    if questionnaire_problem:
+        raise HTTPException(status_code=404, detail=questionnaire_problem)
     for key, value in changes.items():
         setattr(rule, key, value)
     db.commit()

@@ -11,7 +11,7 @@
 5. `close_open_work`  —— 死亡/迁出/排除时终止后续任务（三处生命周期事件共用）
 """
 from datetime import date, timedelta
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import update
 from sqlalchemy.engine import CursorResult
@@ -106,7 +106,7 @@ def build_facts(db: Session, patient_id: int, extra: dict | None = None) -> dict
     return facts
 
 
-def unknown_program(db: Session, code: str, *, active_only: bool = False) -> str:
+def unknown_program(db: Session, code: str, *, active_only: bool = False, already: str = "") -> str:
     """请求体里的病种编码写库之前先查它在不在（P1-120）：在返回空串，不在返回报错文案，由路由决定怎么报——
     与 `platform.unusable_user` 同一写法。
 
@@ -116,13 +116,42 @@ def unknown_program(db: Session, code: str, *, active_only: bool = False) -> str
 
     `active_only`：新纳入（居民自查筛查、申请加入）不收停用的病种，与建档 / 筛查同一口径（P1-89）；在管患者
     的业务记录与各类配置照收停用病种——病种停用不等于在管的人当天就不管了，配置也可能是为重新启用备的。
+
+    `already` 是改档前的值：与它相同即不再查——存量里悬空的编码不挡与它无关的改动（改名、停用），与
+    `update_team` 对负责人的口径一致（P1-121 一并补上）。
     """
-    if not code:
+    if not code or code == already:
         return ""
     program = db.query(SpdProgram).filter(SpdProgram.code == code).first()
     if active_only:
         return "专病档案不存在或已停用" if program is None or not program.active else ""
     return "专病档案不存在" if program is None else ""
+
+
+def unknown_programs(db: Session, codes: list[str] | None, *, already: list[str] | None = None) -> str:
+    """列表形态的病种编码（团队 / 团队成员 / 考核指标 / 考核方案的 `program_codes`）写库之前先查（P1-120 第二层）。
+
+    与 `unknown_program` 同一口径：空串不算编码、停用的病种照收（配置）；`already`（改档前的值）里原有的不再查。
+    返回点名不存在编码的文案，没问题返回空串。"""
+    wanted = [c for c in dict.fromkeys(codes or []) if c and c not in (already or [])]
+    if not wanted:
+        return ""
+    known = {c for (c,) in db.query(SpdProgram.code).filter(SpdProgram.code.in_(wanted)).all()}
+    missing = [c for c in wanted if c not in known]
+    return f"专病档案不存在：{'、'.join(missing)}" if missing else ""
+
+
+def unknown_code(db: Session, model: Any, code: str, what: str, *, already: str = "") -> str:
+    """请求体里指向目录表的字符串编码（随访问卷、宣教素材、转诊规则）写库之前先查在不在（P1-121）。
+
+    目录表的编码列都叫 `code`（唯一）。空串 = 没填，照收；只查存在、不看启用——配置先于启用、历史引用都合法；
+    `already` 同 `unknown_program`。最重的是随访方案的问卷：执行随访时按编码查不到问卷，异常分级整段跳过，
+    高危答案记成「无异常」、不派处置任务。
+    """
+    if not code or code == already:
+        return ""
+    found = db.query(model.id).filter(model.code == code).first()
+    return "" if found is not None else f"{what}不存在：{code}"
 
 
 def match_program(db: Session, patient_id: int, program: SpdProgram, extra: dict | None = None):

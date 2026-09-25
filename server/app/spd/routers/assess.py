@@ -37,7 +37,7 @@ from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_roles
 from ...formula import FormulaError, evaluate as eval_formula
 from ..platform import Organization, User
-from ..service import unknown_program
+from ..service import unknown_program, unknown_programs
 from ..models import (
     SpdAssessPlan,
     SpdAssessment,
@@ -375,6 +375,9 @@ def create_indicator(body: IndicatorIn, db: Session = Depends(get_db)):
             eval_formula(body.formula, dict.fromkeys(_metric_names(body.data_source), 1.0))
         except FormulaError as exc:
             raise HTTPException(status_code=422, detail=f"公式非法：{exc}") from None
+    program_problem = unknown_programs(db, body.program_codes)  # 病种列表先查在不在（P1-120 第二层）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     indicator = SpdIndicator(**body.model_dump())
     db.add(indicator)
     try:
@@ -444,6 +447,10 @@ def update_indicator(indicator_id: int, body: IndicatorPatch, db: Session = Depe
             )
         except FormulaError as exc:
             raise HTTPException(status_code=422, detail=f"公式非法：{exc}") from None
+    # 病种列表同建档一句（P1-120 第二层）；原有的编码不再查
+    program_problem = unknown_programs(db, changes.get("program_codes"), already=indicator.program_codes)
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     for key, value in changes.items():
         setattr(indicator, key, value)
     db.commit()
@@ -840,6 +847,9 @@ def _plan_out(p: SpdAssessPlan) -> dict:
              dependencies=[Depends(require_roles("director"))])
 def create_plan(body: PlanIn, db: Session = Depends(get_db)):
     _check_plan_items(db, body.items)
+    program_problem = unknown_programs(db, body.program_codes)  # 病种列表先查在不在（P1-120 第二层）
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     plan = SpdAssessPlan(**body.model_dump())
     db.add(plan)
     try:
@@ -882,6 +892,10 @@ def update_plan(plan_id: int, body: PlanPatch, db: Session = Depends(get_db)):
     changes = body.model_dump(exclude_unset=True)
     if "items" in changes:
         _check_plan_items(db, changes["items"])
+    # 病种列表同建档一句（P1-120 第二层）；原有的编码不再查
+    program_problem = unknown_programs(db, changes.get("program_codes"), already=plan.program_codes)
+    if program_problem:
+        raise HTTPException(status_code=404, detail=program_problem)
     for key, value in changes.items():
         setattr(plan, key, value)
     db.commit()
