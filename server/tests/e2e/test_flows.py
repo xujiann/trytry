@@ -1350,13 +1350,26 @@ def test_结束慢专病咨询先确认(page, base_url, admin_read, spd_open_con
 def test_随访问卷在界面上录题目与异常规则_执行随访逐题作答判出异常(page, base_url, seed, admin_read, admin_call):
     """P1-122：建问卷的表单原先没有题目框，异常规则编辑器列的是 /api/spd/meta 的事实字段、交上去的是平铺条件
     （后端读 when，一条都存不进）；执行随访只填渠道与结果、answers 恒为空——问卷的异常分级从界面上一次都触发
-    不了。现在题目在表单里录，规则字段取自题目，执行随访逐题作答。"""
+    不了。现在题目在表单里录，规则字段取自题目，执行随访逐题作答。
+
+    规则区要等 `/api/spd/meta` 回来才建，这里扣住它、先填题目：加载慢时先填了题目，规则区建好得认上（第四十轮全量端到端
+    在慢机器上撞到——题目的 input 事件早于监听挂上，「添加异常规则」一直藏着）。"""
+    held = []
+    page.route("**/api/spd/meta", lambda route: held.append(route))
     _login(page, base_url)
     _open_page(page, "spdfollowup", "智能随访服务端")
     form = page.locator("#spd-quest-form")
     form.locator('[name="code"]').fill("E2E_Q122")
     form.locator('[name="name"]').fill("E2E 术后问卷")
     form.locator('[name="items"]').fill("pain:疼痛评分:number；mood:情绪:single:好/差")
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(50)
+    assert held, "随访页没去取 /api/spd/meta"
+    for route in held:
+        route.continue_()
+    page.unroute("**/api/spd/meta")
     rules = page.locator("#spd-quest-rules")
     # 题目框此刻还有焦点：点「添加」先让它失焦、触发 change——规则区不能在这一刻重画，否则这次点击被吞
     rules.locator("button.abn-add").click()

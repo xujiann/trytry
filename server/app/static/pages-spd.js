@@ -2838,6 +2838,9 @@ async function renderSpdFollowup() {
     .filter((it) => it.key).map((it) => ({ key: it.key, name: it.title || it.key })));
   questItems.addEventListener("input", syncQuestFields);
   questItems.addEventListener("change", syncQuestFields);
+  // 规则区等元数据回来才建：加载期间就填了的题目，input / change 早已错过——建好先认一遍，否则「添加异常规则」
+  // 一直藏着，要把题目删了重填才出来（第四十轮端到端在慢机器上撞到）
+  syncQuestFields();
   $("#spd-quest-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/questionnaires", {
