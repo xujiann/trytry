@@ -8,6 +8,7 @@
 三个旁支。所有动作接口都只在这条链上移动一格，没有"直接置为任意状态"的口子——
 有那个口子，前端一定会用它来绕过审核。
 """
+import contextlib
 from datetime import timedelta
 from typing import Any, cast
 
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ... import clock
 from ...clock import now_naive
-from ...concurrency import add_amount
+from ...concurrency import add_amount, serialized_on
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
@@ -447,55 +448,61 @@ def advance_instance(
     # 实例本身不带机构，归属看它服务的纳管档案——别家机构不能替人推进路径
     owner = db.get(SpdEnrollment, instance.enrollment_id)
     assert_org_writable(db, user, owner.org_id if owner else None)
-    if instance.status == "paused":
-        # 因进入条件暂停的实例：重判当前节点条件，满足即恢复并派任务
-        node = (
-            db.query(SpdPathNode)
+    # P1-118：判定（状态、当前节点还有没有未完成任务）与推进（改实例、派下一节点任务）读的是任务行、写的是实例
+    # 行与新任务，并发下两路同时点「推进」都数到 0、都从同一节点推进，下一节点的任务派出好几份（真 PG 实测
+    # 八路八份）；暂停恢复同理会派两份。整段圈进实例这一行的临界区，锁到手先刷新——锁外取的状态可能已被
+    # 上一个赢家改掉。commit 在块内：PG 上行锁随提交释放。
+    with serialized_on(db, SpdPathInstance, instance.id):
+        db.refresh(instance)
+        if instance.status == "paused":
+            # 因进入条件暂停的实例：重判当前节点条件，满足即恢复并派任务
+            node = (
+                db.query(SpdPathNode)
+                .filter(
+                    SpdPathNode.template_id == instance.template_id,
+                    SpdPathNode.key == instance.current_node_key,
+                )
+                .first()
+            )
+            if node is None:
+                raise HTTPException(status_code=409, detail="暂停节点已不存在，请调整路径实例")
+            allowed, matched = node_enter_allowed(db, instance, node)
+            if not allowed:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"进入「{node.name}」的条件仍未满足，无法恢复",
+                )
+            enrollment = owner
+            template = db.get(SpdPathTemplate, instance.template_id)
+            instance.status = "running"
+            if node.stage and enrollment is not None:
+                enrollment.stage = node.stage
+            if enrollment is not None:
+                spawn_task(
+                    db, patient_id=enrollment.patient_id,
+                    title=f"{template.name if template else '路径'}·{node.name}",
+                    task_type="path", enrollment=enrollment, instance=instance,
+                    node=node, due_days=node.due_days, source="path",
+                )
+            db.commit()
+            return {"instance": _instance_out(db, instance), "status": "running",
+                    "resumed": True, "matched": matched}
+        if instance.status != "running":
+            raise HTTPException(status_code=409, detail="路径不在执行中")
+        open_tasks = (
+            db.query(SpdTask)
             .filter(
-                SpdPathNode.template_id == instance.template_id,
-                SpdPathNode.key == instance.current_node_key,
+                SpdTask.instance_id == instance_id,
+                SpdTask.node_key == instance.current_node_key,
+                SpdTask.status.in_(OPEN_STATUSES),
             )
-            .first()
+            .count()
         )
-        if node is None:
-            raise HTTPException(status_code=409, detail="暂停节点已不存在，请调整路径实例")
-        allowed, matched = node_enter_allowed(db, instance, node)
-        if not allowed:
-            raise HTTPException(
-                status_code=409,
-                detail=f"进入「{node.name}」的条件仍未满足，无法恢复",
-            )
-        enrollment = owner
-        template = db.get(SpdPathTemplate, instance.template_id)
-        instance.status = "running"
-        if node.stage and enrollment is not None:
-            enrollment.stage = node.stage
-        if enrollment is not None:
-            spawn_task(
-                db, patient_id=enrollment.patient_id,
-                title=f"{template.name if template else '路径'}·{node.name}",
-                task_type="path", enrollment=enrollment, instance=instance,
-                node=node, due_days=node.due_days, source="path",
-            )
+        if open_tasks:
+            raise HTTPException(status_code=409, detail="当前节点仍有未完成任务，不能推进")
+        result = advance_path(db, instance)
         db.commit()
-        return {"instance": _instance_out(db, instance), "status": "running",
-                "resumed": True, "matched": matched}
-    if instance.status != "running":
-        raise HTTPException(status_code=409, detail="路径不在执行中")
-    open_tasks = (
-        db.query(SpdTask)
-        .filter(
-            SpdTask.instance_id == instance_id,
-            SpdTask.node_key == instance.current_node_key,
-            SpdTask.status.in_(OPEN_STATUSES),
-        )
-        .count()
-    )
-    if open_tasks:
-        raise HTTPException(status_code=409, detail="当前节点仍有未完成任务，不能推进")
-    result = advance_path(db, instance)
-    db.commit()
-    return {"instance": _instance_out(db, instance), **result}
+        return {"instance": _instance_out(db, instance), **result}
 
 
 @router.get("/path-nodes/{node_id}/enter-check", response_model=NodeEnterCheckOut)
@@ -962,55 +969,64 @@ def _finish_task(db: Session, task: SpdTask, user: User) -> dict:
     只有一次能把 status 翻成 done——输家 409 且其待写字段随 rollback 丢弃，
     计分与路径推进因此天然只发生一次，不再依赖调用方 Python 侧的预检。
     """
-    won = cast(CursorResult, db.execute(
-        update(SpdTask)
-        .where(SpdTask.id == task.id, SpdTask.status.notin_(("done", "cancelled")))
-        .values(
-            status="done",
-            finished_at=now_naive(),
-            assignee_id=func.coalesce(SpdTask.assignee_id, user.id),
-        )
-    )).rowcount
-    if not won:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="该任务已结束")
-    # 会话是 autoflush=False 的：先 flush 把调用方挂起的 result/evidence/审核
-    # 字段落库，再 refresh 取回 done/finished_at/assignee 的落库值——下面数
-    # "还有几条没办完"与出参序列化才不会拿着旧内存值。
-    db.flush()
-    db.refresh(task)
+    # P1-118：办完这条要不要推进路径，看的是同节点兄弟任务（别的行）。同节点最后两条任务同时办结，两路各自
+    # 看见对方那条还没办完（对方的「办结」还没提交），谁都不推进——路径停在原节点，没有任何报错（真 PG 实测）。
+    # 挂在路径上的任务整段圈进实例这一行的临界区：后拿到锁的那一路读得到先办完的那条，由它推进。
+    # 锁在第一次写库**之前**拿（与手工推进同序）：开发库上 serialized_on 是进程内锁，先写后拿锁会与
+    # SQLite 的库级写锁交叉等待。
+    with (serialized_on(db, SpdPathInstance, task.instance_id) if task.instance_id is not None
+          else contextlib.nullcontext()):
+        won = cast(CursorResult, db.execute(
+            update(SpdTask)
+            .where(SpdTask.id == task.id, SpdTask.status.notin_(("done", "cancelled")))
+            .values(
+                status="done",
+                finished_at=now_naive(),
+                assignee_id=func.coalesce(SpdTask.assignee_id, user.id),
+            )
+        )).rowcount
+        if not won:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该任务已结束")
+        # 会话是 autoflush=False 的：先 flush 把调用方挂起的 result/evidence/审核
+        # 字段落库，再 refresh 取回 done/finished_at/assignee 的落库值——下面数
+        # "还有几条没办完"与出参序列化才不会拿着旧内存值。
+        db.flush()
+        db.refresh(task)
 
-    advanced = None
-    if task.instance_id is not None:
-        instance = db.get(SpdPathInstance, task.instance_id)
-        if instance is not None and instance.status == "running":
-            siblings = (
-                db.query(SpdTask)
-                .filter(
-                    SpdTask.instance_id == instance.id,
-                    SpdTask.node_key == task.node_key,
-                    SpdTask.id != task.id,
-                    SpdTask.status.in_(OPEN_STATUSES),
+        advanced = None
+        if task.instance_id is not None:
+            instance = db.get(SpdPathInstance, task.instance_id)
+            if instance is not None:
+                db.refresh(instance)   # 锁外若已取过这一行，身份映射里是旧的状态 / 当前节点
+            if instance is not None and instance.status == "running":
+                siblings = (
+                    db.query(SpdTask)
+                    .filter(
+                        SpdTask.instance_id == instance.id,
+                        SpdTask.node_key == task.node_key,
+                        SpdTask.id != task.id,
+                        SpdTask.status.in_(OPEN_STATUSES),
+                    )
+                    .count()
                 )
-                .count()
-            )
-            if siblings == 0 and task.node_key == instance.current_node_key:
-                advanced = advance_path(db, instance)
+                if siblings == 0 and task.node_key == instance.current_node_key:
+                    advanced = advance_path(db, instance)
 
-    if task.task_type == "followup" and task.enrollment_id is not None:
-        enrollment = db.get(SpdEnrollment, task.enrollment_id)
-        if enrollment is not None:
-            enrollment.last_followup_at = clock.today().isoformat()
-            interval = _followup_interval(db, enrollment)
-            enrollment.next_followup_at = (
-                clock.today() + timedelta(days=interval)
-            ).isoformat()
-            award_points(
-                db, enrollment.village_doctor_id, "followup",
-                ref_type="task", ref_id=task.id, note="随访完成",
-                org_id=enrollment.org_id,
-            )
-    db.commit()
+        if task.task_type == "followup" and task.enrollment_id is not None:
+            enrollment = db.get(SpdEnrollment, task.enrollment_id)
+            if enrollment is not None:
+                enrollment.last_followup_at = clock.today().isoformat()
+                interval = _followup_interval(db, enrollment)
+                enrollment.next_followup_at = (
+                    clock.today() + timedelta(days=interval)
+                ).isoformat()
+                award_points(
+                    db, enrollment.village_doctor_id, "followup",
+                    ref_type="task", ref_id=task.id, note="随访完成",
+                    org_id=enrollment.org_id,
+                )
+        db.commit()
     out = _task_out(task)
     if advanced:
         out["advanced"] = advanced

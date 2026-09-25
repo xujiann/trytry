@@ -65,12 +65,8 @@ ACCEPTED = {
     ),
 }
 
-# 已扫出、下一提交就修的（只减不增，修一条划一条）。
-KNOWN_UNFIXED = {
-    "spd/routers/tasks.py:advance_instance": (
-        "手工推进路径：两路同时数到「当前节点没有未完成任务」，都从同一节点推进，下一节点的任务派两份（P1-118）。"
-    ),
-}
+# 已扫出、还没修的（只减不增，修一条划一条）。P1-118 的手工推进路径已修（2026-09-25），现为空。
+KNOWN_UNFIXED: dict[str, str] = {}
 
 REGISTERED = {**PENDING_REVIEW, **ACCEPTED, **KNOWN_UNFIXED}
 
@@ -224,13 +220,14 @@ def test_登记名单不得腐烂():
     assert not set(PENDING_REVIEW) & set(ACCEPTED) and not set(KNOWN_UNFIXED) & (set(PENDING_REVIEW) | set(ACCEPTED))
 
 
-def test_修过的三处被判据看见且判为已圈住():
-    """覆盖面自证：判据在真实代码上认得出这三处是「先查别的行再写」，且判它们已圈进临界区。
+def test_修过的四处被判据看见且判为已圈住():
+    """覆盖面自证：判据在真实代码上认得出这四处是「先查别的行再写」，且判它们已圈进临界区。
 
     认不出来（重构成判据看不见的写法）闸门就成了摆设——这条先红。"""
     for rel, names in {
         "routers/surgery.py": {"schedule_surgery"},
         "routers/cost.py": {"create_allocation_rule", "update_allocation_ratio"},
+        "spd/routers/tasks.py": {"advance_instance"},
     }.items():
         source = (APP_DIR / rel).read_text(encoding="utf-8")
         tree = ast.parse(source)
