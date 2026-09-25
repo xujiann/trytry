@@ -421,6 +421,9 @@ def adjust_path_instance(
     assert_org_writable(db, user, enrollment.org_id if enrollment else None)
     if instance.status == "completed":
         raise HTTPException(status_code=409, detail="已完成的路径不可调整")
+    # 已取消的同是终态（P2-88）：原先再取消一次把结束时间挪到这一刻，改回执行中 / 暂停则「复活」一条任务全被取消了的路径
+    if instance.status == "cancelled":
+        raise HTTPException(status_code=409, detail="已取消的路径不可调整")
     data = body.model_dump(exclude_unset=True)
     # 改负责人先查存在（P1-90）：不查的话开发库存成悬空 id，生产库撞外键直接 500；停用的账号也不收，
     # 与现值相同的不再查（P1-106）

@@ -108,3 +108,17 @@ def test_手工暂停再恢复_不重复派任务(client, admin, world):
     resp = client.post(f"{B}/path-instances/{instance}/advance", headers=admin)
     assert resp.status_code == 200 and resp.json()["status"] == "running", resp.text
     assert _tasks_on(instance, "n1") == 1   # 修前 2
+
+
+def test_已取消的路径不可再调整_结束时间不动(client, admin, world):
+    """P2-88：改档接口只挡已完成的实例。已取消的再「取消」一次 200、结束时间挪到这一刻；改回执行中 / 暂停则把一条任务全被
+    取消了的路径「复活」，停在没有未结束任务的节点上（页面对已取消的不给「调整」，写得进去的是接口调用方）。"""
+    _, instance, _ = _instance_at_n1(client, admin, world)
+    cancelled = client.patch(f"{B}/path-instances/{instance}", headers=admin, json={"status": "cancelled"})
+    assert cancelled.status_code == 200, cancelled.text
+    finished_at = cancelled.json()["finished_at"]
+    for status in ("cancelled", "running", "paused"):
+        resp = client.patch(f"{B}/path-instances/{instance}", headers=admin, json={"status": status})
+        assert resp.status_code == 409 and resp.json() == {"detail": "已取消的路径不可调整"}, (status, resp.text)  # 修前 200
+    detail = client.get(f"{B}/path-instances/{instance}", headers=admin).json()
+    assert (detail["status"], detail["finished_at"]) == ("cancelled", finished_at)
