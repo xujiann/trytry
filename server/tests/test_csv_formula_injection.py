@@ -22,6 +22,8 @@ from app.routers.reports import _csv_cell
     ('=HYPERLINK("http://x","点此核对")', '\'=HYPERLINK("http://x","点此核对")'),
     ("+86 138 0000 0000", "'+86 138 0000 0000"),
     ("@SUM(A1:A2)", "'@SUM(A1:A2)"),
+    ("\t=HYPERLINK(\"http://x\")", "'\t=HYPERLINK(\"http://x\")"),   # 制表符开头（P2-116）：有的表格软件先吃掉空白再求值
+    ("\r=1+1", "'\r=1+1"),
     ("-", "'-"),
     ("-12.50", "-12.50"),          # 负数照原样：结余列不许变成文本
     ("+3", "+3"),
@@ -50,3 +52,18 @@ def test_死因报告卡导出_公式开头的死因诊断不再原样写进单�
     rows = list(csv.reader(io.StringIO(r.text.lstrip("﻿"))))
     body = [row for row in rows[1:] if row[0] == "P263-1"]
     assert body and body[0][6] == '\'=HYPERLINK("http://x","点此核对")', body   # 修前原样以 = 开头
+
+
+def test_前端导出与服务端同一张公式前缀表():
+    """两边原先各写一份（服务端 `_FORMULA_LEAD`、前端 `spdDownloadCsv` 的正则字符类），「同一条规则」只靠注释说；
+    P2-116 给两边补制表符与回车时对着比了一遍，这里钉住：一边加了、另一边没加即红。"""
+    import pathlib
+    import re
+
+    from app.routers.reports import _FORMULA_LEAD
+
+    js = (pathlib.Path(__file__).resolve().parents[1] / "app" / "static" / "pages-spd.js").read_text(encoding="utf-8")
+    m = re.search(r"if \(/\^\[([^\]]+)\]/\.test\(s\) && Number\.isNaN", js)
+    assert m, "spdDownloadCsv 的公式前缀判定换了写法，这条比对要跟着改"
+    decoded = m.group(1).replace("\\-", "-").encode().decode("unicode_escape")   # 字符类里的 \- 是字面的减号
+    assert set(decoded) == set(_FORMULA_LEAD), (decoded, _FORMULA_LEAD)

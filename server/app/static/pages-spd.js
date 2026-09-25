@@ -1846,12 +1846,12 @@ function spdInstanceDetailHtml(inst, nodeIds) {
 
 /** 导出端点（GET /api/spd/tasks-export）只回 columns+rows，CSV 在前端拼（后端 docstring 的
     约定：平台的导出都走这个形状，不多养一份编码/换行/BOM 处理）。单元格含逗号/引号/换行
-    时加引号并把引号翻倍；开头放 BOM 让 Excel 认出 UTF-8；以 = + - @ 开头的非数字文本前置
-    单引号，免得被表格软件当公式执行。 */
+    时加引号并把引号翻倍；开头放 BOM 让 Excel 认出 UTF-8；以 = + - @（及制表符、回车，P2-116）开头的非数字
+    文本前置单引号，免得被表格软件当公式执行。字符类与服务端 `reports._FORMULA_LEAD` 逐字一致（有用例对着比）。 */
 function spdDownloadCsv(filename, columns, rows) {
   const cell = (v) => {
     let s = v == null ? "" : String(v);
-    if (/^[=+\-@]/.test(s) && Number.isNaN(Number(s))) s = "'" + s;
+    if (/^[=+\-@\t\r]/.test(s) && Number.isNaN(Number(s))) s = "'" + s;
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const text = [columns, ...rows].map((r) => r.map(cell).join(",")).join("\r\n");
