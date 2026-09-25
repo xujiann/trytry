@@ -106,3 +106,11 @@ def test_近几天两次就诊_同一次扫描只排一份(client, admin, world)
     again = client.post(f"{B}/followup-plans/auto-match", headers=admin, json={
         "scene": "outpatient", "org_id": world["org"], "days": 7})
     assert again.status_code == 200 and again.json()["created"] == 0, again.text
+
+
+def test_全域账号不指定机构_422说清楚_不再恒扫0条(client, admin, world):
+    """P2-92：住院与就诊记录都必挂机构。全域账号（没有本机构）在随访页点自动匹配，原先按「机构为空」去扫，恒 0 条、
+    不报原因——页面上的表单又没有机构可填，平台管理员从界面上永远匹配不到人。表单补了机构一栏，接口对没指定机构的说清楚。"""
+    resp = client.post(f"{B}/followup-plans/auto-match", headers=admin, json={"scene": "outpatient", "days": 7})
+    assert resp.status_code == 422, resp.text   # 修前 200：scanned 0
+    assert resp.json() == {"detail": "请指定按哪家机构的出院 / 就诊记录匹配（本账号没有所属机构）"}

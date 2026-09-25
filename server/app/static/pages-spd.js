@@ -2515,11 +2515,14 @@ const SPD_REPORT_SCOPES = { center: "专病中心", dept: "科室团队", grassr
 async function renderSpdFollowup() {
   $("#page-desc").textContent =
     "通用随访能力：方案规则与问卷、多时间点任务生成、多渠道执行、呼叫录音、抽查质控";
-  const [rules, questionnaires, stats, calls, qcSamples] = await Promise.all([
+  const [rules, questionnaires, stats, calls, qcSamples, catalog] = await Promise.all([
     api("/api/spd/followup-rules"), api("/api/spd/questionnaires"),
     api("/api/spd/followup-stats"), api("/api/spd/call-tasks?limit=20"),
-    api("/api/spd/qc-samples?limit=50"),
+    api("/api/spd/qc-samples?limit=50"), spdCatalog(),
   ]);
+  // 关键词与时间点都是逗号分隔录入；关键词不按空格拆——诊断名里带空格的（「冠状动脉 粥样硬化」）拆开会各自命中一大片
+  const keywordList = (text) => String(text || "").split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean);
+  const pointList = (text) => String(text || "").split(/[，,\s]+/).filter(Boolean).map(Number);
   $("#page-body").innerHTML = `
     ${spdCards([
       ["随访任务", stats.total], ["已完成", stats.done],
@@ -2527,19 +2530,36 @@ async function renderSpdFollowup() {
       ["超期", stats.overdue, stats.overdue > 0],
       ["异常随访", stats.abnormal, stats.abnormal > 0],
     ])}
-    ${panel("随访方案（诊断/手术/医嘱关键词命中）", `
-      <p class="desc">没配关键词的方案不匹配任何人——否则一个空方案会给全院出院患者都排上随访</p>
-      ${table(["ID", "编码", "名称", "场景", "科室", "时间点(天)", "问卷", "执行角色", "预置", "状态", "操作"],
+    ${panel("随访方案（按诊断关键词命中）", `
+      <p class="desc">出院即派生随访与「按患者特征自动匹配」都按诊断关键词命中；没配关键词的方案不匹配任何人——否则一个空方案会给全院出院患者都排上随访</p>
+      ${table(["ID", "编码", "名称", "场景", "诊断关键词", "科室", "时间点(天)", "问卷", "执行角色", "预置", "状态", "操作"],
         rules, (r) =>
         `<tr><td>${r.id}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.scene_name)}</td>
+         <td>${esc((r.diagnosis_keywords || []).join("、") || "—")}</td>
          <td>${esc(r.dept || "—")}</td><td>${(r.points || []).join("、")}</td>
          <td>${esc(r.questionnaire_code || "—")}</td><td>${esc(r.executor_role)}</td>
          <td>${r.preset ? "是" : "否"}</td>
          <td>${r.active === false ? '<span class="tag">停用</span>' : '<span class="tag green">启用</span>'}</td>
          <td><button class="btn secondary" data-rule-edit="${r.id}" data-name="${esc(r.name)}" data-dept="${esc(r.dept || "")}"
               data-points="${(r.points || []).join(",")}" data-quest="${esc(r.questionnaire_code || "")}"
+              data-keywords="${esc((r.diagnosis_keywords || []).join("，"))}"
               data-role="${esc(r.executor_role || "")}" data-active="${r.active === false ? 0 : 1}">编辑</button></td></tr>`)}
-      <form class="inline" id="spd-fuplan-form" style="margin-top:10px">
+      <form class="inline" id="spd-furule-form" style="margin-top:10px">
+        <input name="code" placeholder="方案编码" required style="width:110px">
+        <input name="name" placeholder="方案名称" required>
+        <select name="scene">
+          <option value="inpatient">出院随访</option><option value="outpatient">门诊随访</option>
+          <option value="surgery">术后随访</option><option value="checkup">体检随访</option>
+        </select>
+        <select name="program_code"><option value="">不挂病种</option>${spdProgramOptions(catalog, false, true)}</select>
+        <input name="diagnosis_keywords" placeholder="诊断关键词，逗号分隔（如 心力衰竭,I50）" style="min-width:220px">
+        <input name="points" placeholder="时间点（天），如 7,30,90" required>
+        <select name="questionnaire_code"><option value="">不绑问卷</option>${questionnaires.map((q) =>
+          `<option value="${esc(q.code)}">${esc(q.name)}</option>`).join("")}</select>
+        <input name="dept" placeholder="科室（可留空）" style="width:110px">
+        <button>新建方案</button>
+      </form>
+      <form class="inline" id="spd-fuplan-form" style="margin-top:8px">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <select name="rule_id">${rules.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("")}</select>
         <input name="base_date" placeholder="基准日 YYYY-MM-DD（出院/手术日）">
@@ -2551,6 +2571,7 @@ async function renderSpdFollowup() {
           <option value="surgery">术后随访</option><option value="checkup">体检随访</option>
         </select>
         <input name="days" type="number" value="7" placeholder="回溯天数">
+        <input name="org_id" type="number" placeholder="机构ID（留空 = 本机构）" style="width:150px">
         <button class="secondary">按患者特征自动匹配</button>
       </form><p class="msg" id="spd-fu-msg"></p>`)}
     ${panel("随访问卷与异常分级", `
@@ -2654,6 +2675,14 @@ async function renderSpdFollowup() {
            ${r.status !== "done" ? `<button class="btn secondary" data-fu-adjust="${r.id}" data-status="${esc(r.status)}"
              data-planned="${esc(r.planned_at || "")}" data-channel="${esc(r.channel || "")}">调整</button>` : ""}</td></tr>`);
   };
+  $("#spd-furule-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = formJson(e.target);
+    body.diagnosis_keywords = keywordList(body.diagnosis_keywords);
+    body.points = pointList(body.points);
+    if (body.points.some((n) => !Number.isInteger(n) || n < 0)) return setMsg("#spd-fu-msg", "时间点须是非负整数", false);
+    return postAction("/api/spd/followup-rules", body, "#spd-fu-msg");
+  };
   $("#spd-fuplan-form").onsubmit = (e) => {
     e.preventDefault();
     return postAction("/api/spd/followup-plans",
@@ -2663,8 +2692,11 @@ async function renderSpdFollowup() {
     e.preventDefault();
     try {
       const r = await api("/api/spd/followup-plans/auto-match", { method: "POST",
-        body: JSON.stringify(formJson(e.target, ["days"])) });
-      alert(`扫描 ${r.scanned} 人，匹配 ${r.matched} 人，生成随访任务 ${r.created} 条`);
+        body: JSON.stringify(formJson(e.target, ["days", "org_id"])) });
+      // 该场景没有配了诊断关键词的方案时，后端只回一句原因、没有扫描数——原先照样弹「扫描 undefined 人」，原因被吞掉
+      if (r.note) return setMsg("#spd-fu-msg", `${r.note}：先在上面新建方案或「编辑」给方案配上诊断关键词`, false);
+      // 扫的是出院 / 就诊记录，一位患者可以有几条——不是「人」
+      alert(`扫描出院 / 就诊记录 ${r.scanned} 条，命中方案 ${r.matched} 条，生成随访任务 ${r.created} 条`);
       route();
     } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
   };
@@ -2701,6 +2733,8 @@ async function renderSpdFollowup() {
     if (ruleEdit) {
       const form = await spdModal("编辑随访方案（时间点留空不改）", [
         { name: "name", label: "名称", value: ruleEdit.dataset.name, required: true },
+        { name: "diagnosis_keywords", label: "诊断关键词（逗号分隔；清空即不再自动匹配任何人）",
+          value: ruleEdit.dataset.keywords },
         { name: "dept", label: "科室", value: ruleEdit.dataset.dept },
         { name: "points", label: "时间点（天，逗号分隔，如 7,30,90）", value: ruleEdit.dataset.points },
         { name: "questionnaire_code", label: "问卷编码", value: ruleEdit.dataset.quest },
@@ -2710,9 +2744,10 @@ async function renderSpdFollowup() {
       ]);
       if (!form) return;
       const body = { name: form.name, dept: form.dept || "", questionnaire_code: form.questionnaire_code || "",
+        diagnosis_keywords: keywordList(form.diagnosis_keywords),
         executor_role: form.executor_role || "nurse", active: form.active === "1" };
       if (form.points) {
-        body.points = form.points.split(/[，,\s]+/).filter(Boolean).map(Number);
+        body.points = pointList(form.points);
         if (body.points.some((n) => !Number.isInteger(n) || n < 0)) return setMsg("#spd-fu-msg", "时间点须是非负整数", false);
       }
       return postAction(`/api/spd/followup-rules/${ruleEdit.dataset.ruleEdit}`, body, "#spd-fu-msg", "PATCH");

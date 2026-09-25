@@ -132,7 +132,8 @@ ROOT_FIXED_RENDERERS = [
       '$("#spd-life-form").onsubmit', '$("#page-body").onclick'],
      "await Promise.all([drawScreenings(), drawEnrollments(), drawLifecycle()]);"),
     ("pages-spd.js", "renderSpdFollowup",
-     ['$("#spd-fuplan-form").onsubmit', '$("#spd-fumatch-form").onsubmit',
+     ['$("#spd-furule-form").onsubmit',   # P2-92：新建随访方案
+      '$("#spd-fuplan-form").onsubmit', '$("#spd-fumatch-form").onsubmit',
       '$("#spd-fu-filter").onsubmit', '$("#spd-qc-form").onsubmit',
       '$("#spd-cal-form").onsubmit',   # 功能完善·spd/followup（2026-09-15）：健康日历查询表单
       '$("#page-body").onclick'],

@@ -1421,6 +1421,60 @@ def test_超期的随访在看板上照样能执行与转呼叫(page, base_url, 
     assert (record["status"], record["result"]) == ("done", "补做电话随访，恢复良好"), record
 
 
+def test_随访方案在界面上新建与改诊断关键词_自动匹配据此排随访(page, base_url, seed, admin_read, admin_call):
+    """P2-92：随访方案面板原先没有新建入口、编辑不给诊断关键词，三套预置方案又都没配关键词——出院即派生随访与「按患者
+    特征自动匹配」从界面上一个人都匹配不到；没有可用方案时回执照样弹「扫描 undefined 人」，原因被吞掉。"""
+    from datetime import date, datetime, timedelta, timezone
+
+    _login(page, base_url)
+    _open_page(page, "spdfollowup", "智能随访服务端")
+    match = page.locator("#spd-fumatch-form")
+    match.locator('[name="scene"]').select_option("checkup")   # 体检场景没有配了关键词的方案
+    match.locator('[name="org_id"]').fill(str(seed["org"]["id"]))
+    match.locator("button").click()
+    expect(page.locator("#spd-fu-msg")).to_contain_text("没有配置了诊断关键词的可用方案")   # 修前弹「扫描 undefined 人」
+
+    form = page.locator("#spd-furule-form")
+    form.locator('[name="code"]').fill("E2E_R092")
+    form.locator('[name="name"]').fill("E2E 门诊关键词随访")
+    form.locator('[name="scene"]').select_option("outpatient")
+    form.locator('[name="diagnosis_keywords"]').fill("E2E随访病甲，E2E随访病乙")
+    form.locator('[name="points"]').fill("7,30")
+    _submit(page, "#spd-furule-form button")
+    rule = next(r for r in admin_read("/api/spd/followup-rules") if r["code"] == "E2E_R092")
+    assert (rule["scene"], rule["diagnosis_keywords"], rule["points"]) == (
+        "outpatient", ["E2E随访病甲", "E2E随访病乙"], [7, 30]), rule
+    expect(page.locator(f'button[data-rule-edit="{rule["id"]}"]').locator("xpath=ancestor::tr")).to_contain_text(
+        "E2E随访病甲、E2E随访病乙")
+
+    admin_call("POST", "/api/encounters", {"patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"],
+                                           "encounter_type": "outpatient", "diagnosis_name": "E2E随访病乙（复诊）"})
+    match = page.locator("#spd-fumatch-form")
+    match.locator('[name="scene"]').select_option("outpatient")
+    match.locator('[name="org_id"]').fill(str(seed["org"]["id"]))
+    seen = []
+
+    def on_dialog(dialog):
+        seen.append(dialog.message)
+        dialog.accept()
+
+    page.once("dialog", on_dialog)
+    _submit(page, "#spd-fumatch-form button")
+    assert seen and "生成随访任务 2 条" in seen[0], seen
+    planned = sorted(r["planned_at"] for r in admin_read(f"/api/spd/followup-records?patient_id={seed['patient']['id']}")
+                     if r["rule_id"] == rule["id"])
+    base = date.fromisoformat(planned[0]) - timedelta(days=7)
+    today = datetime.now(timezone.utc).date()
+    assert base in (today, today - timedelta(days=1)) and planned == [
+        (base + timedelta(days=7)).isoformat(), (base + timedelta(days=30)).isoformat()], planned
+
+    page.click(f'button[data-rule-edit="{rule["id"]}"]')
+    expect(_modal(page).locator('[name="diagnosis_keywords"]')).to_have_value("E2E随访病甲，E2E随访病乙")
+    _redrawn(page, lambda: _spd_modal(page, {"diagnosis_keywords": "E2E随访病丙"}))
+    rule = next(r for r in admin_read("/api/spd/followup-rules") if r["code"] == "E2E_R092")
+    assert (rule["diagnosis_keywords"], rule["points"]) == (["E2E随访病丙"], [7, 30]), rule
+
+
 def test_clinical_documents_flow(page, base_url, seed):
     """住院临床文书（T2.1/T2.2）：写首次病程 → 记护理 → 录体征 → 完整性自查转为完整。"""
     _login(page, base_url)

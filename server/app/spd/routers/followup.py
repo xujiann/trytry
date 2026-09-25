@@ -719,6 +719,9 @@ def auto_match_plans(
     取的是最近建档的已出院记录（两年前出院的也在内），随访日期加在出院日上，排出来就是一批早已超期的随访（P1-134）。
     """
     org_id = body.org_id if body.org_id is not None else user.org_id
+    if org_id is None:
+        # 住院与就诊记录都必挂机构：全域账号（没有本机构）不指定机构，原先按「机构为空」去扫，恒 0 条、不报任何原因（P2-92）
+        raise HTTPException(status_code=422, detail="请指定按哪家机构的出院 / 就诊记录匹配（本账号没有所属机构）")
     # P0-35：给了 org_id 就照单全收——乙院能以甲院名义按甲院的出院 / 门诊患者批量生成随访。
     assert_org_writable(db, user, org_id)
     rules = (
