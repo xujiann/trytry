@@ -443,7 +443,7 @@ def test_生命周期召回迁出确认与事件列表(client, h, base):
         headers=h,
     ).json()
 
-    zero_closed = {"tasks": 0, "instances": 0, "interventions": 0, "revisits": 0}
+    zero_closed = {"tasks": 0, "instances": 0, "interventions": 0, "revisits": 0, "followups": 0}   # 随访一项：P1-129
     recalled = client.post(f"{B}/enrollments/{e2['id']}/lifecycle",
                            json={"event": "recall", "reason": "失访三月"}, headers=h)
     assert recalled.status_code == 200, recalled.text

@@ -225,7 +225,7 @@ class EnrollmentDetailOut(EnrollmentOut):
 class LifecycleResultOut(BaseModel):
     """生命周期回执。resume 分支只有 enrollment+closed 两个键，event_id 与
     pending_confirm **整个不出现**——条件键，靠 exclude_unset 钉住。
-    `closed` 是 `close_open_work` 的四项计数，resume 分支是空 `{}`，故宽字典。"""
+    `closed` 是 `close_open_work` 的五项计数（随访一项是 P1-129 加的），resume 分支是空 `{}`，故宽字典。"""
 
     enrollment: EnrollmentOut
     event_id: int | None = None

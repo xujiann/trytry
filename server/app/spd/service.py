@@ -546,12 +546,15 @@ def award_points(
 
 
 def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict:
-    """终止一名患者在该病种下的全部未完成任务、路径、干预与复诊。
+    """终止一名患者在该病种下的全部未完成任务、路径、干预、复诊与随访。
 
     死亡 / 迁出 / 排除三处生命周期事件共用。**不删除记录**，只置为取消并写明理由：
     删掉等于把"这个人曾经被管过"一并抹掉，考核与追溯都会对不上。
+
+    随访记录原先不在其中（P1-129）：死者名下计划好的随访照旧到期、被扫成超期，排在随访清单与超期数里。
+    只收本机构（或没挂机构）的——迁入确认时目标机构自己的随访不能被原档案的结案带走；已完成、失访的是留痕，不动。
     """
-    stats = {"tasks": 0, "instances": 0, "interventions": 0, "revisits": 0}
+    stats = {"tasks": 0, "instances": 0, "interventions": 0, "revisits": 0, "followups": 0}
     tasks = (
         db.query(SpdTask)
         .filter(
@@ -602,6 +605,20 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
         revisit.status = "removed"
         revisit.log = (revisit.log or []) + [{"at": clock.today().isoformat(), "note": reason}]
         stats["revisits"] += 1
+
+    followups = (
+        db.query(SpdFollowupRecord)
+        .filter(
+            SpdFollowupRecord.patient_id == enrollment.patient_id,
+            SpdFollowupRecord.program_code == enrollment.program_code,
+            or_(SpdFollowupRecord.org_id == enrollment.org_id, SpdFollowupRecord.org_id.is_(None)),
+            SpdFollowupRecord.status.in_(FOLLOWUP_OPEN_STATUSES),
+        )
+        .all()
+    )
+    for record in followups:
+        record.status = "removed"   # 与手工「移除」同一个状态，错移了可以手工恢复
+        stats["followups"] += 1
     return stats
 
 
