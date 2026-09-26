@@ -1153,17 +1153,15 @@ def clinical_indicators(
 
     # ---- 手术质量（数据源：手术申请标记 + 术中记录）----
     complication_cases = sum(1 for r in all_surgeries if r.complications.strip())
-    unplanned = (
-        db.query(SurgeryRequest)
-        .filter(SurgeryRequest.unplanned_return.is_(True), SurgeryRequest.status == "completed")
+    # 分子与分母同一批术中记录、按术中记录的时间归月（P2-201）：原先分子按申请建单时间、分母按术中记录时间——
+    # 8 月 30 日提的重返申请 9 月 1 日做，8 月「1 / 0」、9 月「0 / 1」，这一台从它自己的月份里消失；
+    # 8 月提了 3 台、只做了 2 台记录时算出 150%
+    unplanned_count = (
+        surgeries.filter(SurgeryRequest.unplanned_return.is_(True), SurgeryRequest.status == "completed")
+        .with_entities(func.count(SurgeryRecord.id))
+        .scalar()
+        or 0
     )
-    if scope is not None:
-        unplanned = unplanned.filter(SurgeryRequest.org_id.in_(scope))
-    if start_dt is not None:
-        unplanned = unplanned.filter(
-            SurgeryRequest.created_at >= start_dt, SurgeryRequest.created_at < end_dt
-        )
-    unplanned_count = unplanned.count()
 
     return {
         "period": period or "全期",
