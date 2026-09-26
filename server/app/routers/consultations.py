@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, move_row
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles
 from ..models import ConsultExpert, Consultation, Organization, Patient, User
@@ -70,6 +70,21 @@ def _get(db: Session, consultation_id: int, user: User) -> Consultation:
     return consultation
 
 
+def _move(db: Session, consultation: Consultation, expect: str, action: str, **values) -> Consultation:
+    """会诊单走一步：「状态还是 expect」压进同一条 UPDATE，抢输的一路按库里此刻的状态 409（P2-345）。
+
+    原先受理 / 拒绝 / 出具意见都是「内存里判状态 → 赋值 → commit」，UPDATE 只有 `WHERE id = ?`：两位专家同时出具意见都 200，
+    先写的意见被后写的整段盖掉；同时受理，受理专家记成后写的那位；拒绝与受理交错，已受理的单子被改成已拒绝。
+    """
+    if not move_row(db, Consultation, consultation.id, Consultation.status == expect, **values):
+        db.rollback()
+        db.refresh(consultation)
+        raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可{action}")
+    db.commit()
+    db.refresh(consultation)
+    return consultation
+
+
 @router.post(
     "/{consultation_id}/accept",
     response_model=ConsultationOut,
@@ -84,11 +99,7 @@ def accept(
     consultation = _get(db, consultation_id, user)
     if consultation.status != "applied":
         raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可受理")
-    consultation.status = "accepted"
-    consultation.expert_name = body.expert_name
-    db.commit()
-    db.refresh(consultation)
-    return consultation
+    return _move(db, consultation, "applied", "受理", status="accepted", expert_name=body.expert_name)
 
 
 @router.post(
@@ -100,10 +111,7 @@ def decline(consultation_id: int, db: Session = Depends(get_db), user: User = De
     consultation = _get(db, consultation_id, user)
     if consultation.status != "applied":
         raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可拒绝")
-    consultation.status = "declined"
-    db.commit()
-    db.refresh(consultation)
-    return consultation
+    return _move(db, consultation, "applied", "拒绝", status="declined")
 
 
 @router.post(
@@ -120,11 +128,7 @@ def complete(
     consultation = _get(db, consultation_id, user)
     if consultation.status != "accepted":
         raise HTTPException(status_code=409, detail=f"当前状态 {CONSULTATION_STATUS_NAMES.get(consultation.status, consultation.status)} 不可出具意见")
-    consultation.status = "completed"
-    consultation.opinion = body.opinion
-    db.commit()
-    db.refresh(consultation)
-    return consultation
+    return _move(db, consultation, "accepted", "出具意见", status="completed", opinion=body.opinion)
 
 
 class ConsultationFee(BaseModel):
