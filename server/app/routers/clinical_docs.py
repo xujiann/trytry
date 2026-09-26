@@ -236,11 +236,17 @@ def list_progress_notes(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """病程记录：每页按书写先后升序；从最近一条往前翻页（P2-362，与体温单 P1-81 同一口径）。
+
+    `offset=0` 是最近 `limit` 条。原先升序取前 100 条，一次住院记满 100 条之后截掉的恰好是最新的那一端：新写的病程
+    提示「已记录」，桌面端与医生移动端的病程列表里却一直看不到。不超过一页时与原先逐字节相同。
+    """
     _admission_or_404(db, admission_id, user, resource="progress_note")
     query = db.query(ProgressNote).filter(ProgressNote.admission_id == admission_id)
     if note_type:
         query = query.filter(ProgressNote.note_type == note_type)
-    return [_note_out(n) for n in paginate(query.order_by(ProgressNote.id), response, offset, limit)]
+    newest_first = paginate(query.order_by(ProgressNote.id.desc()), response, offset, limit)
+    return [_note_out(n) for n in reversed(newest_first)]
 
 
 @router.get("/admissions/{admission_id}/document-completeness",
