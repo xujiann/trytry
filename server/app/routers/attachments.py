@@ -392,13 +392,21 @@ def list_attachments(
     assert_owner_visible(
         db, user, spec, owner_id, resource=_resource(owner_type, "list"), missing_ok=True
     )
-    return [
+    rows = [
         _out(a)
         for a in db.query(Attachment)
         .filter(Attachment.owner_type == owner_type, Attachment.owner_id == owner_id)
         .order_by(Attachment.id)
         .all()
     ]
+    # 匿名上报的不良事件不出上传人（P2-401）：事件本身「匿名上报不落报告人」，挂在它上面的佐证却带着上传人编号——
+    # 同院同事、管理层一列附件就知道是谁报的（编号在别的清单上对得上姓名）。只在清单上隐去，附件行与审计照旧留着
+    if owner_type == "adverse_event":
+        event = db.get(AdverseEvent, owner_id)
+        if event is not None and event.anonymous:
+            for row in rows:
+                row["uploaded_by"] = None
+    return rows
 
 
 @router.get("/{attachment_id}", response_class=AttachmentContentResponse)
