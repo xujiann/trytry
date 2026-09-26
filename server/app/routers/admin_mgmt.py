@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, exists, func
 from sqlalchemy.orm import Session, aliased
 
-from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
+from ..concurrency import add_amount, insert_or_conflict, serialized_on, take_amount, upsert_unique
 from ..database import get_db
 from ..datetypes import DateStr, OptionalDateStr, PeriodStr
 from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
@@ -415,12 +415,27 @@ def transfer_asset(
 def scrap_asset(
     asset_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
+    """整件报废：剩余数量记一笔报废出库、数量清零、状态置已报废（P2-232）。
+
+    原先只把状态改成「已报废」——数量原样留着、出入库流水里没有这一笔。同一件事走「出入库登记 → 报废出库」
+    是记流水、扣数量、扣到 0 才置已报废，两条路落出两种账：流水上看这批物资从没出过库，台账上却是报废了还剩
+    10 台。已报废的再报废 409（与调拨、出入库对已报废物资同一句），不再重复记账。
+    """
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="物资不存在")
     assert_obj_org_writable(db, user, asset)
-    asset.status = "scrapped"
-    db.commit()
+    # 读剩余数量 → 记流水 → 清零是读-改-写：与并发的领用出库抢同一行，锁住再读（领用走的是条件 UPDATE）
+    with serialized_on(db, Asset, asset_id):
+        db.refresh(asset)
+        if asset.status == "scrapped":
+            raise HTTPException(status_code=409, detail="物资已报废")
+        if asset.quantity > 0:
+            db.add(AssetMovement(asset_id=asset_id, movement_type="scrap", quantity=asset.quantity,
+                                 note="整件报废", created_by=user.id))
+        asset.quantity = 0
+        asset.status = "scrapped"
+        db.commit()
     db.refresh(asset)
     return asset
 

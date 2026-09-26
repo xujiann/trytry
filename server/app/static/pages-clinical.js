@@ -2400,7 +2400,7 @@ async function renderHrFinance() {
       }
       if (d.assetscrap) {
         // 报废没有反向端点：确认框里说清楚，而不是点完才发现回不去
-        if (!confirm("报废不可撤销（后端没有反向端点），此后这件物资不能再调拨或出入库。确认报废？")) return;
+        if (!confirm("报废不可撤销（后端没有反向端点）：剩余数量记一笔报废出库、数量清零，此后这件物资不能再调拨或出入库。确认报废？")) return;
         await api(`/api/mgmt/assets/${d.assetscrap}/scrap`, { method: "POST" });
         route();
       }
