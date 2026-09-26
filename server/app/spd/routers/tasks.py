@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ... import clock
 from ...clock import now_naive
-from ...concurrency import add_amount, serialized_on
+from ...concurrency import add_amount, move_row, serialized_on
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
@@ -471,10 +471,20 @@ def adjust_path_instance(
                     setattr(instance, key, value)
             db.commit()
         return _instance_out(db, instance)
+    status = data.pop("status", None)
     for key, value in data.items():
         setattr(instance, key, value)
-    if data.get("status") == "cancelled":
-        instance.finished_at = now_naive()
+    if status is not None:
+        # 条件翻转（P2-343）：上面的终态预检是锁外读的，读到「未结束」之后别人刚办完最后一个节点、把实例走成已完成
+        # （办结在实例锁里改），原先这里照旧写成暂停 / 取消——走完的路径显示为已取消，还能「恢复」
+        moved = move_row(db, SpdPathInstance, instance.id, SpdPathInstance.status.in_(PATH_OPEN_STATUSES), status=status,
+                         **({"finished_at": now_naive()} if status == "cancelled" else {}))
+        if not moved:
+            db.rollback()
+            db.refresh(instance)
+            raise HTTPException(status_code=409, detail="已完成的路径不可调整" if instance.status == "completed"
+                                else "已取消的路径不可调整")
+    if status == "cancelled":
         db.flush()   # 先落实例、再逐条翻任务：与办结（锁实例、再翻任务）同一个加锁顺序，PG 上不互等
         for task in (
             db.query(SpdTask)
@@ -485,6 +495,7 @@ def adjust_path_instance(
             # 条件翻转（P2-114）：读到「未结束」之后别人刚办结的，别改成取消
             move_task(db, task.id, "cancelled", review_note="路径取消")
     db.commit()
+    db.refresh(instance)   # 状态走的是 Core UPDATE，会话里那份对象没跟着变
     return _instance_out(db, instance)
 
 
