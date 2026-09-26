@@ -439,12 +439,14 @@ async function loadTodos() {
   const box = $("#todo-list");
   try {
     // 站内消息与待办并到同一屏：医生查房时不会为了看消息切第二个页签。
-    const [data, notices] = await Promise.all([
-      api("/api/todos"), api("/api/notifications?unread_only=true&limit=20")]);
+    // 角标取未读总数（P2-374）：原先是这一页的条数，积压过 20 条也只显示 20
+    const [data, notices, unread] = await Promise.all([
+      api("/api/todos"), api("/api/notifications?unread_only=true&limit=20"), api("/api/notifications/unread-count")]);
     $("#who").innerHTML = `<span>${esc(sessionStorage.getItem(USER_KEY) || "")}</span>
       <span class="role">${esc(ROLE_NAMES[data.role] || data.role)} · 待办 ${data.total}</span>`;
     const noticeBlock = notices.length ? `<div class="todo-group">
-      <div class="head"><span>未读消息</span><span class="badge warn">${notices.length}</span></div>
+      <div class="head"><span>未读消息</span><span class="badge warn">${unread.unread}</span></div>
+      ${unread.unread > notices.length ? `<p class="hint">仅显示最近 ${notices.length} 条</p>` : ""}
       ${notices.map((n) => `<div class="m-card notice">
         ${kv("标题", esc(n.title))}${kv("内容", esc(n.body || "—"))}
         ${kv("时间", esc(n.created_at.slice(0, 16).replace("T", " ")))}
@@ -659,7 +661,14 @@ async function loadChronic() {
 function renderMetricInputs() {
   const opt = $("#fu-chronic").selectedOptions[0];
   const type = diseaseTypes.find((t) => t.code === (opt ? opt.dataset.disease : ""));
-  const metrics = ((type || {}).level_rules || {}).metrics || [];
+  // 同一指标挂了几条分级规则的只画一个框（P2-374）：种子糖尿病的空腹血糖挂着「偏高」与「低血糖」两条（P2-119），原先画两个框，
+  // 两个框填的是同一个键，提交时后一个静默盖掉前一个——填了「空腹血糖」、没填「低血糖」那格，这次随访就没有血糖
+  const seen = new Set();
+  const metrics = (((type || {}).level_rules || {}).metrics || []).filter((m) => {
+    if (seen.has(m.key)) return false;
+    seen.add(m.key);
+    return true;
+  });
   $("#fu-metrics").innerHTML = metrics.length
     ? `<div class="metric-row">${metrics.map((m) => `
         <label>${esc(m.name)}${m.unit ? `（${esc(m.unit)}）` : ""}
@@ -703,11 +712,21 @@ $("#pt-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   setMsg("#pt-msg", "", true);
   try {
-    const data = await api(`/api/archive/${encodeURIComponent($("#pt-ehc").value.trim())}`);
+    // 病种显示名称（P2-374）：与慢病随访页同一取法（病种目录按编码查），目录取不到就退回编码，不拖垮速查
+    const [data, types] = await Promise.all([
+      api(`/api/archive/${encodeURIComponent($("#pt-ehc").value.trim())}`),
+      api("/api/chronic/disease-types").catch(() => [])]);
+    const byCode = Object.fromEntries(types.map((t) => [t.code, t]));
     const p = data.patient || {};
     const chronic = (data.chronic_diseases || []).map((c) => card(
-      kv("病种", esc(c.disease)) + kv("分级", `${c.level} 级`) + kv("下次随访", esc(c.next_due || "待安排"))
+      kv("病种", esc((byCode[c.disease] || {}).name || c.disease)) + kv("分级", `${c.level} 级`) +
+      kv("下次随访", esc(c.next_due || "待安排"))
     )).join("");
+    // 截断要说出来（P2-374）：每段只显示最近 20 条，后端每段也最多给 section_limit 条（has_more 标着）——原先都不说
+    const more = data.has_more || {};
+    const cut = (rows, key) => (rows.length > 20 || more[key]
+      ? `<p class="hint">仅显示最近 20 条（共 ${more[key] ? `${data.section_limit} 条以上` : `${rows.length} 条`}），完整记录请到电脑端查询</p>`
+      : "");
     const encounters = (data.encounters || []).slice(0, 20).map((en) => card(
       kv("诊断", esc(en.diagnosis_name || "—")) +
       kv("类型", esc(en.encounter_type === "inpatient" ? "住院" : "门诊")) +
@@ -720,8 +739,8 @@ $("#pt-form").addEventListener("submit", async (e) => {
     $("#pt-result").innerHTML = `
       <div class="m-card">${kv("姓名", esc(p.name))}${kv("健康卡号", esc(p.ehc_no))}${kv("性别", esc(p.gender || "—"))}</div>
       <div class="sec-title">慢病在管</div>${chronic || '<p class="empty">无</p>'}
-      <div class="sec-title">就诊记录</div>${encounters || '<p class="empty">无</p>'}
-      <div class="sec-title">检查检验报告</div>${reports || '<p class="empty">无</p>'}`;
+      <div class="sec-title">就诊记录</div>${encounters || '<p class="empty">无</p>'}${cut(data.encounters || [], "encounters")}
+      <div class="sec-title">检查检验报告</div>${reports || '<p class="empty">无</p>'}${cut(data.exam_reports || [], "exam_reports")}`;
   } catch (err) {
     $("#pt-result").innerHTML = "";
     setMsg("#pt-msg", err.message, false);
