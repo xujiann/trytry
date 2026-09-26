@@ -1172,6 +1172,7 @@ async function renderPatients() {
         <input name="name" placeholder="姓名" required>
         <input name="id_card" placeholder="身份证号" required minlength="15">
         <select name="gender"><option>未知</option><option>男</option><option>女</option></select>
+        <label style="font-size:13px">出生日期 <input name="birth_date" type="date"></label>
         <input name="phone" placeholder="电话">
         <button>建档</button>
       </form><p class="msg" id="patient-msg"></p>`)}
@@ -1267,8 +1268,11 @@ async function renderPatients() {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
+      // 出生日期要送（P1-153）：审方的儿童 / 老年规则、未满 14 周岁须监护人都按它现算年龄——原先表单没有这一格，
+      // 网页建档的人年龄一律「不知道」，78 岁的老人开华法林照样系统审通过
       const p = await api("/api/patients", { method: "POST", body: JSON.stringify({
-        name: f.get("name"), id_card: f.get("id_card"), gender: f.get("gender"), phone: f.get("phone") }) });
+        name: f.get("name"), id_card: f.get("id_card"), gender: f.get("gender"), phone: f.get("phone"),
+        ...(f.get("birth_date") ? { birth_date: f.get("birth_date") } : {}) }) });
       setMsg("#patient-msg", `建档成功，电子健康卡号：${p.ehc_no}`);
       await draw();
     } catch (err) { setMsg("#patient-msg", err.message, false); }

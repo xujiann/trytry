@@ -61,6 +61,8 @@ def _patient_groups(db: Session, patient: Patient) -> set[str]:
     「在册」= 未结案：孕期（registered）与已分娩、产后访视还没结案（delivered，产褥期 / 哺乳期）都算孕产妇。
     原先只认孕期（P2-120）：刚分娩的产妇开他汀、利伐沙班照样系统审通过，而这两味的说明书哺乳期同样禁用
     （ACEI / ARB 哺乳期也要权衡）——规则把它们挂在孕产妇上，要的就是药师看一眼。
+    性别只排除明确登记为「男」的（P1-153）：网页建档的性别缺省「未知」，孕产妇建册又不要求性别是女——原先要求
+    性别等于「女」，在册孕妇的档案性别没改过就永远不算孕产妇，致畸药照样系统审通过。在册的孕产档案本身就是证据。
     """
     groups: set[str] = set()
     age = _age_of(patient.birth_date)
@@ -69,7 +71,7 @@ def _patient_groups(db: Session, patient: Patient) -> set[str]:
             groups.add("child")
         if age >= ELDERLY_AGE_LIMIT:
             groups.add("elderly")
-    if patient.gender == "女":
+    if patient.gender != "男":
         maternal = (
             db.query(MaternalRecord)
             .filter(MaternalRecord.patient_id == patient.id, MaternalRecord.status != "closed")
