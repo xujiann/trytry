@@ -1226,11 +1226,24 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
         "Encounter", [(e.id, fhir_encounter_resource(e, ehc_no)) for e, ehc_no in encounters]
     )
 
+    # 修订史先取、「已按新增导出过」的界先记下（P2-168）：原先两样都在本批新增导完之后才读——水位已推进过本批，
+    # 先修订、后首次导出的报告同一批里按新增导一次（内容已是修订后的）、又按修订导一次 amended。
+    # 先取修订史还顾住了另一头：本批新增导出的报告，内容一定含这里取到的每一条修订（修订与改报告同一次提交）；
+    # 取完修订史之后才进来的修订，下一批照常按修订再导
+    revisions = (
+        db.query(ReportRevision.id, ReportRevision.report_id)
+        .filter(ReportRevision.id > _wm_get(db, FHIR_EXPORT_WM_KEYS["DiagnosticReportAmended"]))
+        .order_by(ReportRevision.id)
+        .limit(FHIR_EXPORT_BATCH_LIMIT)
+        .all()
+    )
+    exported_upto = _wm_get(db, FHIR_EXPORT_WM_KEYS["DiagnosticReport"])
+
     reports = (
         db.query(ExamReport, ExamRequest.id, Patient.ehc_no)
         .join(ExamRequest, ExamRequest.id == ExamReport.request_id)
         .join(Patient, Patient.id == ExamRequest.patient_id)
-        .filter(ExamReport.id > _wm_get(db, FHIR_EXPORT_WM_KEYS["DiagnosticReport"]))
+        .filter(ExamReport.id > exported_upto)
         .order_by(ExamReport.id)
         .limit(FHIR_EXPORT_BATCH_LIMIT)
         .all()
@@ -1246,15 +1259,8 @@ def run_fhir_batch_export(db: Session) -> tuple[int, str]:
     # 修订过的报告再导一次（P2-102）：修订是原地改结论（修订前的记进修订史），主键水位看不见它——省平台留着的一直是
     # 修订前的结论与危急值标记。按修订史自己的水位取；只导已经按新增导出过的报告（还没导的，到时导出的就是修订后的），
     # 一份报告这一批里修订几次只导一次当前版本；修订史水位推到这一批的最后一条（跳过的也算看过）。
-    revisions = (
-        db.query(ReportRevision.id, ReportRevision.report_id)
-        .filter(ReportRevision.id > _wm_get(db, FHIR_EXPORT_WM_KEYS["DiagnosticReportAmended"]))
-        .order_by(ReportRevision.id)
-        .limit(FHIR_EXPORT_BATCH_LIMIT)
-        .all()
-    )
+    # 修订史与「导出过」的界都在上面、本批新增导出之前取（P2-168）
     if revisions:
-        exported_upto = _wm_get(db, FHIR_EXPORT_WM_KEYS["DiagnosticReport"])
         last_revision = {report_id: revision_id for revision_id, report_id in revisions}
         amended = (
             db.query(ExamReport, ExamRequest.id, Patient.ehc_no)

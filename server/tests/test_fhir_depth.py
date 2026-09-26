@@ -241,3 +241,28 @@ def test_修订过的报告再导一次_状态为amended_结论是修订后的(c
     assert (resource["status"], resource["conclusion"]) == ("amended", "右肺上叶磨玻璃结节较前增大，建议 3 个月复查")
     # 幂等：修订史的水位推进了，再跑不重复导
     assert _run_export()[0] == 0
+
+
+def test_导出前就修订过的新报告只按新增导一次_不再按修订重导(client, admin, org, patient):
+    """P2-168：修订再导「只导已经按新增导出过的报告（还没导的，到时导出的就是修订后的）」——判「导出过」用的却是
+    这一批导完新增之后的水位：先修订、后首次导出的报告，同一批里按新增导一次、又按修订导一次 amended，
+    省平台收到一份从没见过修订前版本的「修订」。"""
+    request = client.post("/api/exams", headers=admin, json={
+        "patient_id": patient["id"], "from_org_id": org["id"], "center_type": "imaging",
+        "item_code": "CT02", "item_name": "头颅CT"}).json()
+    created = client.post("/api/integration/fhir/DiagnosticReport", headers=admin, json={
+        "resourceType": "DiagnosticReport", "status": "final", "conclusion": "未见明显异常",
+        "basedOn": [{"reference": f"ServiceRequest/{request['id']}"}]})
+    assert created.status_code == 201, created.text
+    revised = client.patch(f"/api/exams/reports/{created.json()['report_id']}", headers=admin, json={
+        "conclusion": "左侧基底节区腔隙性梗死", "reason": "复核修订"})
+    assert revised.status_code == 200, revised.text
+    before = len(_manifest_entries())
+    affected, summary = _run_export()
+    entries = _manifest_entries()[before:]
+    # 修前 2 条：新增一条、amended 又一条
+    assert [(e["resource_type"], e.get("kind", "")) for e in entries] == [("DiagnosticReport", "")], summary
+    resource = json.loads((FHIR_OUT / entries[0]["file"]).read_text(encoding="utf-8").splitlines()[0])
+    # 新增导出的就是修订后的版本
+    assert (resource["status"], resource["conclusion"]) == ("final", "左侧基底节区腔隙性梗死")
+    assert affected == 1
