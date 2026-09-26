@@ -847,8 +847,11 @@ def print_discharge_summary(
         .first()
     )
     discharged = admission.discharged_at.strftime("%Y-%m-%d %H:%M") if admission.discharged_at else "—"
+    # 住院天数 = 出入院日期差、当日入当日出计 1 天（P2-204）：与居民端「我的住院」、成本核算、运行效率、DRG 同一口径
+    # （portal.py 自己写着「免得同一次住院在三个地方显示三个天数」）。原先是时刻差整天数 + 1——9/1 10:00 入、
+    # 9/5 11:00 出印 5 天、别处都是 4 天，而出院小结是医疗文书
     days = (
-        (admission.discharged_at - admission.admitted_at).days + 1
+        max((admission.discharged_at.date() - admission.admitted_at.date()).days, 1)
         if admission.discharged_at
         else "—"
     )
