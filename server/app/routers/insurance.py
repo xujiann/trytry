@@ -1,9 +1,11 @@
 """⑲医保业务协同：转诊证明、本地/异地结算记录、特殊病种申报、基金监测。"""
 import secrets
+from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -309,7 +311,8 @@ def apply_dual_channel(
 def review_dual_channel(
     app_id: int,
     approve: bool,
-    comment: str = "",
+    # 意见是查询参数、落进 512 字的列（P2-312，同直播审核）：原先不设上限，长了真 PG 上撞列宽即 500
+    comment: str = Query(default="", max_length=512),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -319,10 +322,18 @@ def review_dual_channel(
     assert_patient_visible(db, user, app_.patient_id, resource="dual_channel")  # P0-29，同上
     if app_.status != "pending":
         raise HTTPException(status_code=409, detail="该申报已处理")
-    app_.status = "approved" if approve else "rejected"
-    app_.review_comment = comment
-    app_.reviewed_by = user.id
+    # 上面那道预检是锁外读的（P2-312）：审核与「还待处理」压进同一条 UPDATE，两人同时审只成一路、结论不被后到的改掉
+    reviewed = cast(CursorResult, db.execute(
+        update(DualChannelApp)
+        .where(DualChannelApp.id == app_.id, DualChannelApp.status == "pending")
+        .values(status="approved" if approve else "rejected", review_comment=comment, reviewed_by=user.id)
+        .execution_options(synchronize_session=False)
+    ))
+    if not reviewed.rowcount:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该申报已处理")
     db.commit()
+    db.refresh(app_)
     return {"id": app_.id, "status": app_.status}
 
 

@@ -1,7 +1,10 @@
 """⑳远程医学教育（含㉑适宜技术培训考核）：课程、学习/考核记录。"""
-from fastapi import APIRouter, Depends, HTTPException
+from typing import cast
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from ..clock import now_naive
 from ..concurrency import (
@@ -226,15 +229,30 @@ def request_live(
     response_model=LiveStatusOut,
     dependencies=[Depends(require_roles("director"))],  # 直播审核=管理层
 )
-def review_live(session_id: int, approve: bool, comment: str = "", db: Session = Depends(get_db)):
+def review_live(
+    session_id: int, approve: bool,
+    # 意见是查询参数、落进 256 字的列（P2-312）：原先不设上限，长了真 PG 上撞列宽即 500，开发库照存
+    comment: str = Query(default="", max_length=256),
+    db: Session = Depends(get_db),
+):
     session = db.get(LiveSession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="直播申请不存在")
     if session.status != "pending":
         raise HTTPException(status_code=409, detail="该申请已审核")
-    session.status = "approved" if approve else "rejected"
-    session.review_comment = comment
+    # 上面那道预检是锁外读的（P2-312）：两位主任同时审，一个批准、一个驳回，后提交的把先提交的结论改掉。
+    # 审核与「还待审」压进同一条 UPDATE，后到的一路与顺序请求同一句 409
+    reviewed = cast(CursorResult, db.execute(
+        update(LiveSession)
+        .where(LiveSession.id == session.id, LiveSession.status == "pending")
+        .values(status="approved" if approve else "rejected", review_comment=comment)
+        .execution_options(synchronize_session=False)
+    ))
+    if not reviewed.rowcount:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该申请已审核")
     db.commit()
+    db.refresh(session)
     return {"id": session.id, "status": session.status}
 
 
