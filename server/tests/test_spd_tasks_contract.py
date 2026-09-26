@@ -423,7 +423,9 @@ def test_待办汇总与清单对得上(client, auth, world):
         "by_status": by_status, "open_by_type": open_by_type,
         "open_total": sum(1 for r in rows if r["status"] in open_statuses),
         "overdue": by_status.get("overdue", 0),
-        "escalated": sum(1 for r in rows if r["escalated"]),
+        # 已升级只数未结束的（P2-247）：这里原先照抄了被测代码的旧口径——升级过的任务办完了、取消了照样算，
+        # 任务中心那一格只增不减、永远标红；工作台与医生移动端的升级提醒一直只数未结束的
+        "escalated": sum(1 for r in rows if r["escalated"] and r["status"] in open_statuses),
         "due_today": sum(1 for r in rows
                          if r["due_date"] == date.today().isoformat()
                          and r["status"] in open_statuses),
