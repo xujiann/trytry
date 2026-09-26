@@ -47,7 +47,8 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
-                       close_followup_record, judge_measurement, measure_program_for, measure_value_problem, move_task,
+                       close_followup_record, enrollment_for, judge_measurement, measure_program_for, measure_value_problem,
+                       move_task,
                        scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
@@ -366,15 +367,9 @@ def add_measurement(
         raise HTTPException(status_code=404, detail=program_problem)
     # 没写病种的按在管档案推断（P1-138）：居民端的病种是个「可留空」的文本框，居民不认得编码，原先一律判「正常」
     program_code = measure_program_for(db, patient.id, body.program_code, body.metric)
-    enrollment = (
-        db.query(SpdEnrollment)
-        .filter(
-            SpdEnrollment.patient_id == patient.id,
-            SpdEnrollment.program_code == program_code,
-        )
-        .first()
-        if program_code else None
-    )
+    # 判级取哪份档案的阶段，与管理端录入同一句：在管的优先（P2-227）。原先随手取第一份——迁出 / 排除后重新建档的，
+    # 取到的是老档案停在那一天的阶段，同一个值居民自报与医生录入判出两个等级
+    enrollment = enrollment_for(db, patient.id, program_code)[1] if program_code else None
     level = judge_measurement(
         db, program_code, enrollment.stage if enrollment else "", body.metric, body.value
     )
