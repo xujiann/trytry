@@ -5,6 +5,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -115,11 +116,13 @@ def search_entries(
         query = query.filter(KnowledgeEntry.category == category)
     if q:
         query = query.filter(keyword_like(KnowledgeEntry.title, q))
+    # 过期的在库里就滤掉，再取最新 200 条（P2-176）：原先先取最新 200 条、再在内存里滤——最新那批里过期的一多
+    # （成批导入的旧政策文件），更早录入、仍在有效期内的条目整个检索不到
+    if not include_expired:
+        query = query.filter(or_(KnowledgeEntry.expire_date == "", KnowledgeEntry.expire_date >= current))
     results = []
     for e in query.order_by(KnowledgeEntry.id.desc()).limit(200).all():
         expired = bool(e.expire_date) and e.expire_date < current
-        if expired and not include_expired:
-            continue
         results.append(
             {
                 "id": e.id,
