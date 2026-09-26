@@ -739,6 +739,8 @@ async function renderRules() {
          <td>${esc(e.domain)}</td><td>${esc(e.key)}</td><td>${esc(e.name)}</td>
          <td><code>${esc(e.detail)}</code></td>
          <td>${e.active ? "启用" : "停用"}</td></tr>`)}
+      ${catalog.entries.length < catalog.total ? `<p class="desc">共 ${catalog.total} 条，表中列出 ${catalog.entries.length} 条：
+        用药规则只列按药品编码排的前 500 条，上面的分来源计数是全量。</p>` : ""}
       <p class="desc">目录已统一，执行路径尚未统一——engine 列如实标出，不含糊其辞。</p>`)}
     ${panel("新增统一规则（admin）", `
       <form class="inline" id="rule-form"><input name="key" placeholder="编码" required>

@@ -264,6 +264,10 @@ class CatalogOut(BaseModel):
     entries: list[CatalogEntryOut]
 
 
+#: 目录表里用药规则最多列几条（按药品编码排）：用药规则成百上千，其余几路都是几十条的量级
+CATALOG_RX_LIMIT = 500
+
+
 @router.get("/catalog", response_model=CatalogOut)
 def rule_catalog(db: Session = Depends(get_db)):
     """全平台规则总目录。
@@ -284,6 +288,7 @@ def rule_catalog(db: Session = Depends(get_db)):
         }
         for r in db.query(RuleDefinition).order_by(RuleDefinition.key).all()
     ]
+    rx_rules = db.query(DrugRule).filter(DrugRule.active.is_(True))
     entries += [
         {
             "source": "prescription",
@@ -294,11 +299,7 @@ def rule_catalog(db: Session = Depends(get_db)):
             "detail": f"最大日剂量 {r.max_daily_dose}{r.dose_unit}",
             "active": True,
         }
-        for r in db.query(DrugRule)
-        .filter(DrugRule.active.is_(True))
-        .order_by(DrugRule.drug_code)
-        .limit(500)
-        .all()
+        for r in rx_rules.order_by(DrugRule.drug_code).limit(CATALOG_RX_LIMIT).all()
     ]
     entries += [
         {
@@ -340,4 +341,8 @@ def rule_catalog(db: Session = Depends(get_db)):
     for entry in entries:
         source = str(entry["source"])
         by_source[source] = by_source.get(source, 0) + 1
-    return {"total": len(entries), "by_source": by_source, "entries": entries}
+    # 用药规则表里只列前 CATALOG_RX_LIMIT 条，计数按全量（P2-230）：原先先截断再数，导入了 1500 条用药规则的库，
+    # 目录上写「prescription 500」、总数少一千条，管理员照着它核对规则是否导全，只会以为少导了
+    if "prescription" in by_source:
+        by_source["prescription"] = rx_rules.count()
+    return {"total": sum(by_source.values()), "by_source": by_source, "entries": entries}
