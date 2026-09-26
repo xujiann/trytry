@@ -550,6 +550,11 @@ def process_message(message_id: int, db: Session = Depends(get_db)):
     if message.status in {"succeeded", "dead"}:
         raise HTTPException(status_code=409, detail=f"消息当前状态 {MSG_STATUS.get(message.status, message.status)} 不可再消费")
     endpoint = db.get(EsbEndpoint, message.endpoint_id)
+    # 停用的出站接入方不手工投递（P2-180）：定时消费只取「出站且启用」的、编排的路由步骤拒停用目标，手工消费原先
+    # 什么都不看——省平台维护期间停用了端点，经办逐条点「消费/重试」就逐条真投、失败三次进死信，恢复启用后一条
+    # 也不再投。拦在改状态之前：消息原样留在队里，启用后照常消费。入站积压停用后能不能手工消化待裁定，此处不拦
+    if endpoint is not None and endpoint.direction == "outbound" and not endpoint.active:
+        raise HTTPException(status_code=409, detail="出站接入方已停用，不投递——启用后再消费")
     message.status = "processing"
     db.flush()
     try:
@@ -595,6 +600,10 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
     delivered = failed = 0
     for message in rows:
         endpoint = db.get(EsbEndpoint, message.endpoint_id)
+        # 逐条复查启用状态（P2-180）：上面只在取批次时看了一眼，一批最多 50 条、每条最长等 10 秒，中途停用的端点
+        # 原先照样把这一批投完。每条之后都提交（会话里的对象随之过期），这里取到的是库里的最新状态
+        if endpoint is None or not endpoint.active:
+            continue
         message.status = "processing"
         db.flush()
         try:

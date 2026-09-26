@@ -460,12 +460,16 @@ async function renderEsb() {
     if (f.get("status")) params.set("status", f.get("status"));
     if (f.get("endpoint_id")) params.set("endpoint_id", f.get("endpoint_id"));
     const messages = await api(`/api/esb/messages?${params}`);
+    // 停用的出站接入方不给「消费/重试」（P2-180：后端 409，消息留在队里，启用后再消费）
+    const stoppedOutbound = new Set(endpoints.filter((ep) => ep.direction === "outbound" && !ep.active).map((ep) => ep.code));
     $("#esb-messages").innerHTML = table(["ID", "接入方", "消息类型", "状态", "重试", "最后错误", "操作"], messages, (m) => {
-      const retryable = m.status === "queued" || m.status === "failed";
+      const retryable = (m.status === "queued" || m.status === "failed") && !stoppedOutbound.has(m.endpoint_code);
       return `<tr><td>${m.id}</td><td><span class="tag">${esc(m.endpoint_code)}</span></td><td>${esc(m.msg_type)}</td>
         <td>${statusTag(ESB_MSG_STATUS, m.status)}</td><td>${m.retry_count}/${m.max_retries}</td>
         <td style="max-width:280px;font-size:12px;color:#b23c3c">${esc(m.last_error)}</td>
-        <td>${retryable ? `<button class="btn secondary" data-esbproc="${m.id}">消费/重试</button>` : "—"}
+        <td>${retryable ? `<button class="btn secondary" data-esbproc="${m.id}">消费/重试</button>`
+          : stoppedOutbound.has(m.endpoint_code) && m.status !== "succeeded" && m.status !== "dead"
+            ? '<span class="tag">接入方已停用</span>' : "—"}
           <button class="btn secondary" data-esbpayload="${m.id}">查看载荷</button></td></tr>`;
     });
   };
