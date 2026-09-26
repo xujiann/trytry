@@ -1157,15 +1157,18 @@ def team_workbench(
     orgs = _scope(db, user, None, stats=False)
     team_ids = _my_team_ids(db, user)
 
-    mine_query = db.query(SpdEnrollment).filter(SpdEnrollment.status == "active")
+    # 「我的」档案范围（按角色 + 病种），不带状态；在管的是其中 active 的那部分。「召回中」原先写成在管查询上再加
+    # `status == 'recalled'`（P2-130）——active 且 recalled，恒 0；召回的患者又不在「在管」里，页面上哪儿都看不见
+    scope_query = db.query(SpdEnrollment)
     if role == "case_manager":
-        mine_query = mine_query.filter(SpdEnrollment.manager_user_id == user.id)
+        scope_query = scope_query.filter(SpdEnrollment.manager_user_id == user.id)
     elif role == "member":
-        mine_query = mine_query.filter(SpdEnrollment.doctor_user_id == user.id)
+        scope_query = scope_query.filter(SpdEnrollment.doctor_user_id == user.id)
     else:
-        mine_query = mine_query.filter(SpdEnrollment.team_id.in_(team_ids or [0]))
+        scope_query = scope_query.filter(SpdEnrollment.team_id.in_(team_ids or [0]))
     if program_code:
-        mine_query = mine_query.filter(SpdEnrollment.program_code == program_code)
+        scope_query = scope_query.filter(SpdEnrollment.program_code == program_code)
+    mine_query = scope_query.filter(SpdEnrollment.status == "active")
 
     month_start = clock.today().replace(day=1).isoformat()
     # P1-51（同形状）：原先先 `mine_query.limit(5000)` 物化患者号，待评估 / 待入径 / 到期随访 / 到期复诊 /
@@ -1236,7 +1239,7 @@ def team_workbench(
                 SpdReferralCase.patient_id.in_(my_patients),
                 SpdReferralCase.status.notin_(["closed", "rejected", "withdrawn"]),
             ).count(),
-            "recall": mine_query.filter(SpdEnrollment.status == "recalled").count(),
+            "recall": scope_query.filter(SpdEnrollment.status == "recalled").count(),
             "dead": db.query(SpdEnrollment).filter(
                 SpdEnrollment.patient_id.in_(my_patients),
                 SpdEnrollment.status == "dead",
