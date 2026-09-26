@@ -429,6 +429,21 @@ def _treatment_out(t: TreatmentRecord) -> dict:
     }
 
 
+def _outpatient_encounter(db: Session, encounter_id: int, user: User) -> Encounter:
+    """取要记门急诊文书的就诊：不存在 404，不是本机构的 403，住院就诊 422（P2-264）。
+
+    护理记录表写着「挂载点二选一：`admission_id` 是住院护理，`encounter_id` 是门急诊护理」；原先按就诊号记处置与护理
+    不看就诊类型——入院登记时建的那条住院就诊照收，记下的护理不在住院护理单上（住院按住院记录号取），也绕开了住院
+    那一侧的出院后不再收文书等守卫。归属先于类型判：先 403，免得拿类型探别家的就诊。"""
+    encounter = db.get(Encounter, encounter_id)
+    if encounter is None:
+        raise HTTPException(status_code=404, detail="就诊记录不存在")
+    assert_obj_org_writable(db, user, encounter)
+    if encounter.encounter_type == "inpatient":
+        raise HTTPException(status_code=422, detail="这是住院就诊，处置与护理请在住院文书里按住院记录登记")
+    return encounter
+
+
 @router.post(
     "/encounters/{encounter_id}/treatments",
     response_model=TreatmentRecordOut,
@@ -441,10 +456,7 @@ def create_treatment(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    encounter = db.get(Encounter, encounter_id)
-    if encounter is None:
-        raise HTTPException(status_code=404, detail="就诊记录不存在")
-    assert_obj_org_writable(db, user, encounter)
+    encounter = _outpatient_encounter(db, encounter_id, user)
     record = TreatmentRecord(
         encounter_id=encounter_id,
         patient_id=encounter.patient_id,
@@ -534,10 +546,7 @@ def create_outpatient_nursing(
     user: User = Depends(get_current_user),
 ):
     """门急诊护理记录：输液观察、留观、清创换药。"""
-    encounter = db.get(Encounter, encounter_id)
-    if encounter is None:
-        raise HTTPException(status_code=404, detail="就诊记录不存在")
-    assert_obj_org_writable(db, user, encounter)
+    _outpatient_encounter(db, encounter_id, user)
     record = NursingRecord(
         encounter_id=encounter_id,
         nursing_level=body.nursing_level,
