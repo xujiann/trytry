@@ -20,15 +20,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..datetypes import TimeStr
-from ..deps import get_current_user, require_date, require_roles, resolve_business_date, resolve_org_scope, keyword_like
+from ..deps import get_current_user, require_date, require_roles, resolve_business_date, resolve_org_scope, keyword_like, row_dict
 from ..models import (
     AppointmentSlot,
     BloodStock,
@@ -278,12 +280,25 @@ def resource_catalog(
     """
     scope = resolve_org_scope(db, group_id, org_id)
     items: list[dict] = []
+    by_kind: dict[str, dict] = {}
 
     def in_scope(query, column):
         return query.filter(column.in_(scope)) if scope is not None else query
 
+    def tally(kind: str, query, usable) -> None:
+        """这一类的全量「共几个 / 几个可用」（P2-164）：清单每类最多列 500 行，计数原先跟着截断——
+        全县的号源一过 500 个，卡片上的「可用 / 总数」就封顶在 500 以内。"""
+        total, n_usable = query.with_entities(func.count(), func.count(case((usable, 1)))).one()
+        if total:
+            by_kind[kind] = {"total": total, "usable": n_usable}
+
     if resource_kind in (None, "slot"):
-        rows = in_scope(db.query(AppointmentSlot), AppointmentSlot.org_id).order_by(AppointmentSlot.id).limit(500).all()
+        # 号源只算今天及以后的、按日期时间取最近的（P2-164）：原先不看日期、按编号升序取最早建的 500 个——
+        # 开诊几周后清单里全是过了期的号源，过期而没约满的还标「可用」，今后的号源反倒一个不列
+        slot_q = in_scope(db.query(AppointmentSlot), AppointmentSlot.org_id).filter(
+            AppointmentSlot.slot_date >= clock.today().isoformat())
+        tally("slot", slot_q, AppointmentSlot.capacity > AppointmentSlot.booked)
+        rows = slot_q.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time, AppointmentSlot.id).limit(500).all()
         items += [
             {"kind": "slot", "kind_name": "号源", "id": s.id, "org_id": s.org_id,
              "name": s.resource_name, "detail": f"{s.slot_date} {s.slot_time}",
@@ -292,7 +307,9 @@ def resource_catalog(
             for s in rows
         ]
     if resource_kind in (None, "exam"):
-        rows = in_scope(db.query(ExamResource), ExamResource.org_id).order_by(ExamResource.id).limit(500).all()
+        exam_q = in_scope(db.query(ExamResource), ExamResource.org_id)
+        tally("exam", exam_q, ExamResource.active.is_(True))
+        rows = exam_q.order_by(ExamResource.id).limit(500).all()
         items += [
             {"kind": "exam", "kind_name": "检查资源", "id": r.id, "org_id": r.org_id,
              "name": r.item_name, "detail": f"{r.device} {r.duration_min}分钟",
@@ -300,7 +317,9 @@ def resource_catalog(
             for r in rows
         ]
     if resource_kind in (None, "or_room"):
-        rows = in_scope(db.query(OperatingRoom), OperatingRoom.org_id).order_by(OperatingRoom.id).limit(500).all()
+        room_q = in_scope(db.query(OperatingRoom), OperatingRoom.org_id)
+        tally("or_room", room_q, OperatingRoom.active.is_(True))
+        rows = room_q.order_by(OperatingRoom.id).limit(500).all()
         items += [
             {"kind": "or_room", "kind_name": "手术间", "id": r.id, "org_id": r.org_id,
              "name": r.name, "detail": "", "available": None, "unit": "",
@@ -311,6 +330,7 @@ def resource_catalog(
         # 血库是全县一本账（`blood_stocks` 没有 org_id），故不参与机构范围筛选，
         # 且只在未指定机构/分组时列出——按机构筛还把全县血库列出来会误导人。
         if scope is None:
+            tally("blood", db.query(BloodStock), BloodStock.quantity_ml > 0)
             rows = db.query(BloodStock).order_by(BloodStock.id).limit(500).all()
             items += [
                 {"kind": "blood", "kind_name": "血制品", "id": r.id, "org_id": None,
@@ -319,7 +339,9 @@ def resource_catalog(
                 for r in rows
             ]
     if resource_kind in (None, "general"):
-        rows = in_scope(db.query(Resource), Resource.org_id).order_by(Resource.id).limit(500).all()
+        general_q = in_scope(db.query(Resource), Resource.org_id)
+        tally("general", general_q, Resource.status == "published")
+        rows = general_q.order_by(Resource.id).limit(500).all()
         items += [
             {"kind": "general", "kind_name": RESOURCE_TYPES.get(r.resource_type, "通用资源"),
              "id": r.id, "org_id": r.org_id, "name": r.name, "detail": r.location,
@@ -327,18 +349,14 @@ def resource_catalog(
              "usable": r.status == "published"}
             for r in rows
         ]
-    by_kind: dict[str, dict] = {}
-    for item in items:
-        entry = by_kind.setdefault(item["kind"], {"total": 0, "usable": 0})
-        entry["total"] += 1
-        if item["usable"]:
-            entry["usable"] += 1
     return {
-        "total": len(items),
+        # total 与 by_kind 覆盖全部命中项，items 每类最多 500 行（与统一申请单同一口径，T6.7）
+        "total": sum(entry["total"] for entry in by_kind.values()),
         "by_kind": by_kind,
         "items": items,
         "caliber": "available 按各类资源自己的规则算，不强行统一成一个数——"
-                   "号源看余量、检查资源与手术间看启停、血制品看库存、通用资源看发布状态",
+                   "号源看余量、检查资源与手术间看启停、血制品看库存、通用资源看发布状态；"
+                   "号源只算今天及以后的",
     }
 
 
@@ -404,31 +422,28 @@ def match_slots(
         query = query.filter(AppointmentSlot.org_id.in_(scope))
     if keyword:
         query = query.filter(keyword_like(AppointmentSlot.resource_name, keyword))
-    slots = query.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time).limit(500).all()
-    org_names = {
-        o.id: o.name
-        for o in db.query(Organization).filter(
-            Organization.id.in_({s.org_id for s in slots})
-        ).all()
-    } if slots else {}
+    # 每家机构的最早可约日与余量合计在库里按机构聚合（P2-163）：原先先按日期时间取最早的 500 个号源再按机构汇总——
+    # 窗口里有余量的号源一过 500 个（全县两周常见），日期靠后的机构整个不在候选里，在的机构余量也只数到第 500 个为止
+    per_org = (query.with_entities(AppointmentSlot.org_id, func.min(AppointmentSlot.slot_date),
+                                   func.sum(AppointmentSlot.capacity - AppointmentSlot.booked))
+               .group_by(AppointmentSlot.org_id).order_by(AppointmentSlot.org_id).all())
+    org_names = row_dict(db.query(Organization.id, Organization.name).filter(
+        Organization.id.in_([org for org, _, _ in per_org])).all()) if per_org else {}
 
-    by_org: dict[int, dict] = {}
-    for s in slots:
-        entry = by_org.setdefault(
-            s.org_id,
-            {"org_id": s.org_id, "org_name": org_names.get(s.org_id, ""),
-             "earliest": s.slot_date, "remaining_total": 0, "slots": []},
-        )
-        entry["remaining_total"] += s.capacity - s.booked
-        if len(entry["slots"]) < 5:
-            entry["slots"].append({
-                "slot_id": s.id, "resource_name": s.resource_name,
-                "slot_date": s.slot_date, "slot_time": s.slot_time,
-                "remaining": s.capacity - s.booked,
-            })
+    candidates = []
+    for org, earliest, remaining in per_org:
+        first = (query.filter(AppointmentSlot.org_id == org)
+                 .order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time, AppointmentSlot.id).limit(5).all())
+        candidates.append({
+            "org_id": org, "org_name": org_names.get(org, ""), "earliest": earliest,
+            "remaining_total": int(remaining or 0),
+            "slots": [{"slot_id": s.id, "resource_name": s.resource_name,
+                       "slot_date": s.slot_date, "slot_time": s.slot_time,
+                       "remaining": s.capacity - s.booked} for s in first],
+        })
     return {
         "window": {"start": start.isoformat(), "end": end},
-        "candidates": sorted(by_org.values(), key=lambda x: (x["earliest"], -x["remaining_total"])),
+        "candidates": sorted(candidates, key=lambda x: (x["earliest"], -x["remaining_total"], x["org_id"])),
         "caliber": "按最早可用日期排序；不自动选——最早与最近常不是同一家，"
                    "选哪个是患者的事",
     }
