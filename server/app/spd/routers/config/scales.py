@@ -236,12 +236,19 @@ def scale_qr(scale_id: int, request: Request, db: Session = Depends(get_db)):
     编码的是**页面地址**（`/m/#scale=<token>`）而不是 API 地址——扫码的人
     要看到的是问卷，不是一段 JSON。令牌失效（量表停用）时页面自然回落到
     量表列表，码不用重印。
+
+    只给筛查类量表出码（P2-366）：居民端自查页只列筛查量表、答卷只记筛查——风险评估 / 分期 / 康复量表的码
+    扫进去找不到那张问卷，原先悄悄预选了列表里第一个筛查问卷，居民以为答的是扫的那张，答卷记成另一个病种的筛查。
+    居民扫码自评（`SpdAssessment.channel = self`）要不要做另行待裁定。
     """
     scale = db.get(SpdScale, scale_id)
     if scale is None:
         raise HTTPException(status_code=404, detail="量表不存在")
     if scale.status != "published" or not scale.qr_token:
         raise HTTPException(status_code=409, detail="量表未发布，先发布生成令牌")
+    if scale.category != "screen":
+        raise HTTPException(status_code=422, detail="只有筛查类量表能出居民自查二维码：居民端只做筛查自查，"
+                                                    "其他类别的量表请由医护人员在评估中录入")
     url = f"{str(request.base_url).rstrip('/')}/m/#scale={scale.qr_token}"
     return SvgResponse(content=_qr_svg(url))
 

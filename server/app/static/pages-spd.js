@@ -389,7 +389,8 @@ async function renderSpdAdmin() {
          <td>${esc(SPD_SCALE_CATEGORY[sc.category] || sc.category)}</td><td>${esc(sc.program_code || "—")}</td>
          <td>${esc(sc.version)}</td><td>${spdTag(SPD_SCALE_STATUS, sc.status)}</td>
          <td>${sc.status === "published"
-           ? `<button class="btn secondary" data-scale-qr="${sc.id}">二维码</button>
+           ? `${sc.category === "screen"   // 只有筛查量表出居民自查码（P2-366：别的类别扫进去找不到那张问卷）
+                ? `<button class="btn secondary" data-scale-qr="${sc.id}">二维码</button>` : ""}
               <button class="btn secondary" data-scale-off="${sc.id}">停用</button>`
            : sc.status === "draft"
              ? `<button class="btn secondary" data-scale-edit="${sc.id}">编辑草稿</button>

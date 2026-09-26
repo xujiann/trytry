@@ -1685,6 +1685,7 @@ async function renderSpdScreen(box) {
   box.innerHTML = `
     <div class="m-card">
       <p class="hint">完成高危自查后可申请专病管理服务，由基层医生复核后纳入管理</p>
+      <p id="spd-scale-notice" class="msg"></p>
       <select id="spd-scale">${scales.map((s) =>
         `<option value="${esc(s.code)}" data-program="${esc(s.program_code)}">${esc(s.name)}</option>`).join("")}</select>
       <div id="spd-scale-items"></div>
@@ -1710,11 +1711,17 @@ async function renderSpdScreen(box) {
           `<option value="${esc(o.label)}">${esc(o.label)}</option>`).join("")}</select>`}</div>`).join("");
   };
   if (scaleTokenFromQr) {
-    // 扫码进来的：按令牌预选对应量表；令牌失效就静默回落到列表首项
+    // 扫码进来的：按令牌预选对应量表。认不出来就明说、再回落到列表（P2-366）——原先静默回落到列表首项：
+    // 风险评估这类非筛查量表的码扫进来，悄悄预选了第一个筛查问卷，居民以为答的是扫的那张，答卷记成另一个病种的筛查。
+    // 码失效照旧不打断自查流程，只是不再不声不响
     try {
       const byToken = await api(`/api/portal/spd/scales/by-token/${scaleTokenFromQr}`);
       if (scales.some((s) => s.code === byToken.code)) $("#spd-scale").value = byToken.code;
-    } catch (err) { /* 码失效不打断自查流程 */ }
+      else $("#spd-scale-notice").textContent =
+        `「${byToken.name}」不能在手机上自查，请由医护人员评估；下面是可以自查的问卷，请先选好再作答`;
+    } catch (err) {
+      $("#spd-scale-notice").textContent = "二维码已失效（问卷可能已停用或换了新版本），请在下面选择要自查的问卷";
+    }
     scaleTokenFromQr = "";
   }
   drawItems();
