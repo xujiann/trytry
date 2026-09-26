@@ -121,14 +121,22 @@ def check_pii_index_health(db: Session) -> list[str]:
         ).scalar_one()
         if missing:
             problems.append(f"{table}.{plain_col}：{missing} 行密文但检索索引为空")
-        rows = db.execute(
-            text(
-                f"SELECT id, {plain_col} AS plain, {idx_col} AS idx FROM {table} "  # noqa: S608
-                f"WHERE {idx_col} IS NOT NULL AND {plain_col} IS NOT NULL AND {plain_col} != '' "
-                f"ORDER BY id DESC LIMIT :limit"
-            ),
-            {"limit": PII_INDEX_SAMPLE_SIZE},
-        ).fetchall()
+        # 两头各抽一半（P2-268）：原先只抽最新的 200 行——可上面第 2 类破损（跑迁移的 shell 没导密钥）坏的是迁移回填的
+        # **老行**，上线后新建的行由应用按真密钥算、都是好的；新行一多过 200，老行就再也抽不到，这条自检恰好对它要找的
+        # 那种破损失明。最老的一半盯迁移回填，最新的一半盯应用当前的密钥
+        half = max(PII_INDEX_SAMPLE_SIZE // 2, 1)
+        sampled = {}
+        for order in ("ASC", "DESC"):
+            for row in db.execute(
+                text(
+                    f"SELECT id, {plain_col} AS plain, {idx_col} AS idx FROM {table} "  # noqa: S608
+                    f"WHERE {idx_col} IS NOT NULL AND {plain_col} IS NOT NULL AND {plain_col} != '' "
+                    f"ORDER BY id {order} LIMIT :limit"
+                ),
+                {"limit": half},
+            ).fetchall():
+                sampled[row.id] = row
+        rows = list(sampled.values())
         mismatched = 0
         for row in rows:
             try:

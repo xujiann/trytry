@@ -323,6 +323,24 @@ def test_自检_索引算错时抽样解密能发现(client, admin, enabled):
         assert jobs.check_pii_index_health(db) == []
 
 
+def test_自检_抽样两头都抽_老行算错也看得见(client, admin, enabled, monkeypatch):
+    """P2-268：路径B坏的是迁移回填的老行，上线后新建的行都是好的；原先只抽最新的 N 行，新行一多过 N，老行就再也抽不到。"""
+    monkeypatch.setattr(jobs, "PII_INDEX_SAMPLE_SIZE", 4)
+    for i in range(5):   # 比抽样数多的新行：老行挤出「最新 N 行」
+        client.post("/api/patients", json={"name": f"新建{i}", "id_card": f"33078219910404{i:04d}"}, headers=admin)
+    _run()
+    oldest = _raw("SELECT min(id) FROM patients WHERE id_card_idx IS NOT NULL AND id_card != ''")[0][0]
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE patients SET id_card_idx = :x WHERE id = :i"),
+                     {"x": pii_index("330782199104040000", "some-other-secret-entirely"), "i": oldest})
+    with SessionLocal() as db:
+        problems = jobs.check_pii_index_health(db)
+    assert any("patients.id_card" in p and "索引与重算值不符" in p for p in problems), problems   # 修前 []
+    _run(rebuild=True)
+    with SessionLocal() as db:
+        assert jobs.check_pii_index_health(db) == []
+
+
 def test_自检_轮换宽限期内旧钥索引不误报(client, admin, enabled, monkeypatch):
     """宽限期内旧钥索引是**正常状态**（pii_filter 已双口径检索），不该天天告警。"""
     id_card = "330782199103030033"
