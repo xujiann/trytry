@@ -702,10 +702,15 @@ async function loadService() {
   }
 }
 
+/** 号源清单每次最多给这么多（与后端 `/me/slots` 默认 limit 一致）：拿满了就提示按机构 / 日期筛 */
+const SLOT_PAGE = 200;
+
 async function renderAppointments(box) {
-  const [mine, slots] = await Promise.all([
+  // 可约号源按机构 / 日期筛（P2-376）：原先不带参数，只拿到全县最早的 200 个号——机构一多，后面几天的号、
+  // 某家医院的门诊在手机上看不到、约不上；清单接口早就能按机构 / 日期筛，页面没有入口
+  const [mine, orgs] = await Promise.all([
     authApi("/api/portal/me/appointments"),
-    authApi("/api/portal/me/slots"),
+    authApi("/api/portal/me/slot-orgs"),
   ]);
   const list = mine.map((a) => `<div class="m-card">
     ${kv("就诊人", esc(a.patient_name))}
@@ -715,33 +720,16 @@ async function renderAppointments(box) {
     ${kv("状态", `<span class="tag ${a.status === "booked" ? "green" : ""}">${esc(APPT_STATUS[a.status] || a.status)}</span>`)}
     ${a.status === "booked" ? `<button class="cancel-appt" data-id="${a.id}">取消预约</button>` : ""}
   </div>`).join("");
-  const available = slots.map((s) => `<div class="m-card">
-    ${kv("机构", esc(s.org_name))}
-    ${kv("资源", esc(s.resource_name))}
-    ${kv("时间", `${esc(s.slot_date)} ${esc(s.slot_time)}`)}
-    ${kv("余号", String(s.remaining))}
-    <button class="book-slot" data-id="${s.id}">为${viewingPatientId === null ? "本人" : "该成员"}预约</button>
-  </div>`).join("");
   box.innerHTML = `
     <div class="sec-title">我的预约（${mine.length}）</div>
     ${list || '<p class="empty">暂无预约</p>'}
-    <div class="sec-title">可约号源（${slots.length}）</div>
-    ${available || '<p class="empty">暂无可约号源</p>'}`;
-  box.querySelectorAll(".book-slot").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      try {
-        await authApi("/api/portal/me/appointments", {
-          method: "POST",
-          body: JSON.stringify({ slot_id: Number(btn.dataset.id), patient_id: viewingPatientId }),
-        });
-        await loadService();
-      } catch (err) {
-        btn.disabled = false;
-        alert(err.message);
-      }
-    });
-  });
+    <div class="sec-title">可约号源</div>
+    <div class="m-card">
+      <select id="slot-org"><option value="">全部机构</option>${orgs.map((o) =>
+        `<option value="${o.org_id}">${esc(o.org_name)}（${o.available} 个号）</option>`).join("")}</select>
+      <input type="date" id="slot-date" aria-label="就诊日期">
+    </div>
+    <div id="slot-list"><p class="empty">加载中…</p></div>`;
   box.querySelectorAll(".cancel-appt").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!confirm("确认取消该预约？")) return;
@@ -753,6 +741,48 @@ async function renderAppointments(box) {
       }
     });
   });
+  const drawSlots = async () => {
+    const qs = new URLSearchParams();
+    if ($("#slot-org").value) qs.set("org_id", $("#slot-org").value);
+    if ($("#slot-date").value) qs.set("slot_date", $("#slot-date").value);
+    const query = qs.toString();
+    const slots = await authApi(`/api/portal/me/slots${query ? `?${query}` : ""}`);
+    const holder = $("#slot-list");
+    if (!holder) return;   // 期间切走了页签
+    holder.innerHTML = slots.map((s) => `<div class="m-card">
+      ${kv("机构", esc(s.org_name))}
+      ${kv("资源", esc(s.resource_name))}
+      ${kv("时间", `${esc(s.slot_date)} ${esc(s.slot_time)}`)}
+      ${kv("余号", String(s.remaining))}
+      <button class="book-slot" data-id="${s.id}">为${viewingPatientId === null ? "本人" : "该成员"}预约</button>
+    </div>`).join("") || '<p class="empty">暂无可约号源</p>';
+    if (slots.length >= SLOT_PAGE) {
+      holder.insertAdjacentHTML("beforeend",
+        `<p class="hint">只显示最早的 ${SLOT_PAGE} 个号，请按机构或日期筛选</p>`);
+    }
+    holder.querySelectorAll(".book-slot").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await authApi("/api/portal/me/appointments", {
+            method: "POST",
+            body: JSON.stringify({ slot_id: Number(btn.dataset.id), patient_id: viewingPatientId }),
+          });
+          await loadService();
+        } catch (err) {
+          btn.disabled = false;
+          alert(err.message);
+        }
+      });
+    });
+  };
+  const redraw = () => drawSlots().catch((err) => {
+    const holder = $("#slot-list");
+    if (holder) holder.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+  });
+  $("#slot-org").addEventListener("change", redraw);
+  $("#slot-date").addEventListener("change", redraw);
+  await drawSlots();
 }
 
 async function renderContracts(box) {

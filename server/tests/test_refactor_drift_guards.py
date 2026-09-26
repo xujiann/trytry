@@ -309,6 +309,7 @@ SNAPSHOT_ENDPOINTS = {
     "GET /api/portal/me/notifications/unread-count",
     "GET /api/portal/me/referrals",
     "GET /api/portal/me/referrals/all",
+    "GET /api/portal/me/slot-orgs",   # P2-376 新增：可约号源按机构筛的下拉
     "GET /api/portal/me/slots",
     "GET /api/portal/me/surgeries",
     "GET /api/portal/my-archive",

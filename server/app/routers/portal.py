@@ -27,6 +27,7 @@ from typing import Callable, Iterable
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1277,6 +1278,36 @@ def portal_slots(
         }
         for s in rows
     ]
+
+
+class PortalSlotOrgOut(BaseModel):
+    org_id: int
+    org_name: str
+    available: int   # 今天及以后还有余号的号源数
+
+
+@router.get("/me/slot-orgs", response_model=list[PortalSlotOrgOut])
+def portal_slot_orgs(
+    response: Response,
+    offset: int = 0,
+    limit: int = 200,
+    account: ResidentAccount = Depends(current_resident),
+    db: Session = Depends(get_db),
+):
+    """有可约号源的机构（P2-376）：「可约号源」按机构筛的下拉取它，口径与号源清单一致（今天及以后、还有余号的）。
+
+    号源清单只给最早的 200 个（全县各机构按日期、时段排）：机构一多，后面几天的号、某家医院的门诊在手机上根本
+    看不到、约不上。清单接口早就能按机构 / 日期筛，页面一直没有入口；机构下拉又没有现成的居民端来源。
+    """
+    query = (
+        db.query(AppointmentSlot.org_id, func.count(AppointmentSlot.id))
+        .filter(AppointmentSlot.booked < AppointmentSlot.capacity,
+                AppointmentSlot.slot_date >= clock.today().isoformat())
+        .group_by(AppointmentSlot.org_id)
+    )
+    rows = paginate(query.order_by(AppointmentSlot.org_id), response, offset, limit)
+    names = {o.id: o.name for o in db.query(Organization).filter(Organization.id.in_([r[0] for r in rows] or [0]))}
+    return [{"org_id": org_id, "org_name": names.get(org_id, ""), "available": count} for org_id, count in rows]
 
 
 class PortalBookIn(BaseModel):
