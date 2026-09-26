@@ -284,9 +284,14 @@ class PrescriptionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+#: 药师审方意见的上限（P2-229）：意见追加在系统审方意见之后，两段同写 `prescriptions.review_comment`(1024)
+REVIEW_COMMENT_MAX = 256
+
+
 class PrescriptionReview(BaseModel):
     approve: bool
-    comment: str = ""
+    # 有上限（P2-229）：原先无上限，意见接在系统审方意见后面写进同一列，生产库超长即 500
+    comment: str = Field(default="", max_length=REVIEW_COMMENT_MAX)
 
 
 class StockUpsert(BaseModel):

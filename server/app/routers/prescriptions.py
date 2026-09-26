@@ -31,6 +31,7 @@ from ..schemas import (
     DrugRuleOut,
     PrescriptionCreate,
     PrescriptionOut,
+    REVIEW_COMMENT_MAX,
     PrescriptionReview,
 )
 
@@ -253,7 +254,7 @@ def create_prescription(
         org_id=body.org_id,
         diagnosis_name=body.diagnosis_name,
         status="pending_review" if violations else "auto_passed",
-        review_comment="；".join(violations),
+        review_comment=_system_review_comment(violations),
         created_by=user.id,
     )
     db.add(prescription)
@@ -292,6 +293,12 @@ def review_prescription(prescription_id: int, body: PrescriptionReview, db: Sess
     prescription = db.get(Prescription, prescription_id)
     if prescription is None:
         raise HTTPException(status_code=404, detail="处方不存在")
+    # 修前建的处方，系统审方意见可能已占满大半列（P2-229）：意见装不下就说清还能写几个字，别让生产库 500。
+    # 待审处方的系统意见只在建方时写一次，这里读到的就是审核那条 UPDATE 要接在后面的那一段
+    existing = prescription.review_comment or ""
+    room = REVIEW_COLUMN_MAX - len(existing) - (1 if existing else 0) - len(REVIEWER_PREFIX)
+    if body.comment and len(body.comment) > room:
+        raise HTTPException(status_code=422, detail=f"药师意见最多还能写 {max(room, 0)} 字（这张处方的系统审方意见已占 {len(existing)} 字）")
     if not _apply_review(db, prescription_id, "approved" if body.approve else "rejected", body.comment):
         db.rollback()
         db.refresh(prescription)  # 抢输了就按真实状态措辞，别拿锁外读到的旧值
@@ -299,6 +306,27 @@ def review_prescription(prescription_id: int, body: PrescriptionReview, db: Sess
     db.commit()
     db.refresh(prescription)
     return prescription
+
+
+#: `prescriptions.review_comment` 的列长（模型 `String(1024)`，用例钉着两边同一个数）：系统审方意见与药师意见拼在这一列里（P2-229）
+REVIEW_COLUMN_MAX = 1024
+#: 药师意见接在系统意见后面的前缀（分隔符「；」另算）
+REVIEWER_PREFIX = "药师意见："
+#: 系统审方意见的上限：给药师意见留足位置——`系统意见；药师意见：<至多 REVIEW_COMMENT_MAX 字>` 装得进这一列
+SYSTEM_REVIEW_MAX = REVIEW_COLUMN_MAX - len("；" + REVIEWER_PREFIX) - REVIEW_COMMENT_MAX
+
+
+def _system_review_comment(violations: list[str]) -> str:
+    """系统审方意见：逐条用「；」连起来；超出上限的截断并注明共几条（P2-229）。
+
+    原先整串照写：命中的禁忌 / 相互作用 / 特殊人群一多（每条都带着药名，禁忌诊断还带着整段诊断名），拼出来超过
+    列长 1024，生产库建处方即 500——医生连方都开不出去。审方看的是「为什么转人工」，列出前面的并注明总数不误判断，
+    明细随时能按处方明细与用药规则重算。上限还给药师意见留了位置（`SYSTEM_REVIEW_MAX`）。"""
+    text = "；".join(violations)
+    if len(text) <= SYSTEM_REVIEW_MAX:
+        return text
+    marker = f"……（共 {len(violations)} 条，余下从略）"
+    return text[: SYSTEM_REVIEW_MAX - len(marker)] + marker
 
 
 def _apply_review(db: Session, prescription_id: int, status: str, comment: str) -> bool:
@@ -312,7 +340,7 @@ def _apply_review(db: Session, prescription_id: int, status: str, comment: str) 
     """
     values: dict[str, Any] = {"status": status}
     if comment:
-        values["review_comment"] = appended_text(Prescription.review_comment, f"药师意见：{comment}")
+        values["review_comment"] = appended_text(Prescription.review_comment, f"{REVIEWER_PREFIX}{comment}")
     reviewed = cast(CursorResult, db.execute(
         update(Prescription)
         .where(Prescription.id == prescription_id, Prescription.status == "pending_review")

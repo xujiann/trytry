@@ -832,3 +832,55 @@ def test_第五层_体检总结超长_422_恰好到上限照常收(client, admin
     assert r.status_code == 422 and "summary" in r.text, (r.status_code, r.text[:200])
     r = client.post("/api/checkups", headers=admin, json={**body, "summary": "满" * 1024})
     assert r.status_code == 201, (r.status_code, r.text[:200])
+
+
+# ================================================================ P2-229：审方意见（系统意见与药师意见拼在同一列）
+# 系统审方意见（命中的禁忌 / 相互作用 / 特殊人群逐条拼起来）与药师意见接在同一列 `prescriptions.review_comment`(1024)。
+# 原先两段都不设限：禁忌诊断每条都带着药名与整段诊断名，命中三四条就超过列长，生产库建处方即 500；药师意见无上限，
+# 审方即 500。这两段的值都不是原样取自入参（拼接 / SQL 追加），上面的判据量不到，逐条钉在这里。
+def test_审方意见_系统意见超长截断注明_药师意见有上限_两段合起来装得进列(client, admin, world):
+    from app.models import Prescription
+    from app.routers.prescriptions import REVIEW_COLUMN_MAX, SYSTEM_REVIEW_MAX
+    from app.schemas import REVIEW_COMMENT_MAX
+
+    assert Prescription.__table__.c.review_comment.type.length == REVIEW_COLUMN_MAX
+    codes = [f"P2229-{i}" for i in range(4)]
+    for code in codes:
+        r = client.post("/api/prescriptions/rules", headers=admin, json={
+            "drug_code": code, "max_daily_dose": 100, "contraindicated_diagnoses": "P2229禁忌"})
+        assert r.status_code == 201, r.text
+    rx = client.post("/api/prescriptions", headers=admin, json={
+        "patient_id": world["patient"], "org_id": world["county"],
+        "diagnosis_name": "P2229禁忌" + "长" * (256 - len("P2229禁忌")),
+        "items": [{"drug_code": code, "drug_name": "药" * 128, "daily_dose": 1} for code in codes]})
+    assert rx.status_code == 201, (rx.status_code, rx.text[:200])   # 修前生产库 500：四条禁忌拼出来一千六百多字
+    assert rx.json()["status"] == "pending_review"
+    system = rx.json()["review_comment"]
+    assert len(system) == SYSTEM_REVIEW_MAX and system.endswith("……（共 4 条，余下从略）"), len(system)
+
+    url = f"/api/prescriptions/{rx.json()['id']}/review"
+    r = client.post(url, headers=admin, json={"approve": False, "comment": "长" * (REVIEW_COMMENT_MAX + 1)})
+    assert r.status_code == 422 and "comment" in r.text, (r.status_code, r.text[:200])
+    r = client.post(url, headers=admin, json={"approve": False, "comment": "满" * REVIEW_COMMENT_MAX})
+    assert r.status_code == 200, (r.status_code, r.text[:200])
+    # 系统意见 + 「；药师意见：」+ 满额意见，恰好装满这一列
+    assert r.json()["review_comment"] == f"{system}；药师意见：{'满' * REVIEW_COMMENT_MAX}"
+    assert len(r.json()["review_comment"]) == REVIEW_COLUMN_MAX
+
+
+def test_审方意见_修前存下的长系统意见_药师意见装不下就说清还能写几个字(client, admin, world):
+    from app.database import SessionLocal
+    from app.models import Prescription, User
+
+    with SessionLocal() as db:
+        creator = db.query(User).filter_by(username="admin").one().id
+        rx = Prescription(patient_id=world["patient"], org_id=world["county"], status="pending_review",
+                          review_comment="旧" * 1000, created_by=creator)
+        db.add(rx)
+        db.commit()
+        url = f"/api/prescriptions/{rx.id}/review"
+    r = client.post(url, headers=admin, json={"approve": True, "comment": "意" * 19})
+    assert r.status_code == 422, (r.status_code, r.text[:200])   # 修前生产库 500
+    assert r.json() == {"detail": "药师意见最多还能写 18 字（这张处方的系统审方意见已占 1000 字）"}
+    r = client.post(url, headers=admin, json={"approve": True, "comment": "意" * 18})
+    assert r.status_code == 200 and len(r.json()["review_comment"]) == 1024, (r.status_code, r.text[:200])
