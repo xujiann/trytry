@@ -840,8 +840,10 @@ $("#round-vital").addEventListener("submit", async (e) => {
 async function loadSurgery() {
   let schedules = [], requests = [];
   try {
+    // 按状态取已排班的（P2-361）：原先取申请清单默认的最新 100 条再挑已排班——择期手术提前两周申请的，
+    // 到手术日早已排在 100 条之外，术中记录填不了
     [schedules, requests] = await Promise.all([
-      api("/api/surgery/schedules"), api("/api/surgery/requests")]);
+      api("/api/surgery/schedules"), api("/api/surgery/requests?status=scheduled")]);
   } catch (err) {
     $("#surgery-schedule").innerHTML = `<p class="empty">${esc(err.message)}</p>`;
     return;
