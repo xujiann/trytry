@@ -1693,12 +1693,16 @@ async function renderSpdScreen(box) {
 
   // 每题默认「（未答）」、没答的题不交（P1-136，与线上自助随访同一写法）：原先默认选中第一个选项，
   // 一题没碰就交卷等于每题都答了「是」（种子量表里分值高的那个），结论是高危、还会提示申请专病服务
+  // 多选题画成复选框、按数组交（P2-363）：原先每题都画成单选下拉，多选题最多答一项——4 项各 1 分的症状题最多得 1 分，
+  // 风险被低估、「申请专病服务」的提示出不来；计分按数组累加（score_scale），医护端与线上自助随访早就是复选框
   const drawItems = () => {
     const scale = scales.find((s) => s.code === $("#spd-scale").value);
     $("#spd-scale-items").innerHTML = (scale.items || []).map((item) => `
-      <div class="kv"><span class="k">${esc(item.title)}</span>
-        <select data-q="${esc(item.key)}"><option value="">（未答）</option>${(item.options || []).map((o) =>
-          `<option value="${esc(o.label)}">${esc(o.label)}</option>`).join("")}</select></div>`).join("");
+      <div class="kv"><span class="k">${esc(item.title)}</span>${item.type === "multi"
+        ? (item.options || []).map((o) => `<label><input type="checkbox" data-q="${esc(item.key)}"
+            value="${esc(o.label)}"> ${esc(o.label)}</label>`).join(" ")
+        : `<select data-q="${esc(item.key)}"><option value="">（未答）</option>${(item.options || []).map((o) =>
+          `<option value="${esc(o.label)}">${esc(o.label)}</option>`).join("")}</select>`}</div>`).join("");
   };
   if (scaleTokenFromQr) {
     // 扫码进来的：按令牌预选对应量表；令牌失效就静默回落到列表首项
@@ -1716,7 +1720,12 @@ async function renderSpdScreen(box) {
   $("#spd-screen-submit").addEventListener("click", async () => {
     const scale = scales.find((s) => s.code === $("#spd-scale").value);
     const answers = {};
-    document.querySelectorAll("[data-q]").forEach((sel) => { if (sel.value) answers[sel.dataset.q] = sel.value; });
+    // 只取量表区的控件（线上自助随访的逐题作答也用 data-q）；多选题勾了几项交几项，一项没勾不交
+    $("#spd-scale-items").querySelectorAll("[data-q]").forEach((el) => {
+      if (el.type === "checkbox") {
+        if (el.checked) (answers[el.dataset.q] = answers[el.dataset.q] || []).push(el.value);
+      } else if (el.value) answers[el.dataset.q] = el.value;
+    });
     const body = { program_code: scale.program_code, scale_code: scale.code, answers };
     if (viewingPatientId !== null) body.patient_id = viewingPatientId;
     try {
