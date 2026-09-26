@@ -14,9 +14,12 @@
 3. **AEFI 关联到剂次**而不只是患者：同一人打过多种疫苗，不落到剂次上
    就归不了因。
 """
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, FiniteFloat
-from sqlalchemy import func
+from sqlalchemy import func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -475,8 +478,17 @@ def handle_exceedance(record_id: int, body: ColdChainHandle, db: Session = Depen
     assert_obj_org_writable(db, user, record)
     if not record.exceeded:
         raise HTTPException(status_code=422, detail="该记录未超温，无需处置")
-    record.handled = True
-    record.handle_note = body.handle_note
+    # 处置只登记一次（P2-308）：原先已处置的照收、处置说明整段换成后一次的——先到的那条「已转移至备用冰箱、报废 3 支」
+    # 被一句「已处理」盖掉，追溯时查不回当时做了什么。判定与写入压进同一条 UPDATE，两人同时处置也只成一路
+    handled = cast(CursorResult, db.execute(
+        update(ColdChainRecord)
+        .where(ColdChainRecord.id == record.id, ColdChainRecord.handled.is_(False))
+        .values(handled=True, handle_note=body.handle_note)
+        .execution_options(synchronize_session=False)
+    ))
+    if not handled.rowcount:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该超温记录已处置，处置说明不能改写")
     db.commit()
     db.refresh(record)
     return _cold_out(record)
