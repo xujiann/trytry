@@ -189,8 +189,9 @@ MIGRATED_PAGES = {
                                     # 功能完善·drgs（2026-09-16）：+事中预警、+事前提示两个面板
     "renderCost": 5,                # 标题里的期间不再 esc()：组件转义标题
     # 第六批 2026-09-02：慢专病运行中枢 / 症候群病原监测 / 通用资源 / 医保
-    "renderSpdAdmin": 14,           # 功能完善·spd/config（2026-09-15）：+量表/服务包/宣教素材/标签/设备/机构树
-                                    # 六个维护面板，+点「管理目标」「版本」「同步日志」后写进 #spd-cfg-detail 的面板
+    "renderSpdAdmin": 15,           # 功能完善·spd/config（2026-09-15）：+量表/服务包/宣教素材/标签/设备/机构树
+                                    # 六个维护面板，+点「管理目标」「版本」「同步日志」后写进 #spd-cfg-detail 的面板；
+                                    # P2-173（2026-09-26）：+点「改规则」后写进 #spd-cfg-detail 的规则编辑面板
     "renderSurveillance": 4,
     "renderResources": 4,
     "renderInsurance": 4,
