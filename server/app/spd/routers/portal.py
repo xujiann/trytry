@@ -1414,14 +1414,9 @@ def start_consult(
         .first()
     )
     if consult is None:
-        enrollment = (
-            db.query(SpdEnrollment)
-            .filter(
-                SpdEnrollment.patient_id == patient.id,
-                SpdEnrollment.program_code == body.program_code,
-            )
-            .first()
-        )
+        # 会话派给这个病种档案的主管医生，在管的那份优先（P2-299）：原先按「患者 + 病种」不排序取第一条，结案后重新
+        # 纳管的患者取到的是早先那份已结案档案——咨询派给了当年的医生。与其余挂档案的业务同一个取法
+        enrollment = enrollment_for(db, patient.id, body.program_code)[1] if body.program_code else None
         consult = SpdConsult(
             patient_id=patient.id, program_code=body.program_code,
             doctor_id=enrollment.doctor_user_id if enrollment else None, status="open",
