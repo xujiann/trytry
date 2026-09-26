@@ -17,8 +17,9 @@
   判据是列类型）。
 - **计数恒 int**：times/rx_count/patient_count/low_stock_orgs/open_shortages/
   total 全是 COUNT 或 `+= 1` 累加，声明成 float 即改字节。
-- `supply-risk` 的 `open_shortages` 口径是 `status != "delivered"`——已取药/
-  未取药/已取消的登记**也计入**（当前实现如此，契约照抄现状不改行为）；
+- `supply-risk` 的 `open_shortages` 数的是**还缺着**的登记（已登记 / 采购中）。
+  原先口径是 `status != "delivered"`，已取药 / 未取药 / 已取消的登记也计入——本网当时照抄了现状；
+  P2-127 修掉之后，下面「三行各有来历」那条的期望随之改写（见那条的注释）。
   仅缺药登记出现的药品 `drug_name` 是空串（不回填库存表的名字）。
 """
 import pytest
@@ -63,8 +64,9 @@ def seed(client, admin):
     """一次种完全部场景，测试只做断言。
 
     缺药登记终态铺满五种状态（collected/no_show/cancelled/purchasing/registered），
-    药品编码的分布刻意让 supply-risk 三行各有来历：CT-INS 库存告警+登记（高风险）、
-    CT-AML 仅登记×2（中风险，drug_name 空串）、CT-GAP 仅登记×2（中风险）。
+    药品编码的分布刻意让 supply-risk 各行有来历：CT-INS 库存告警 + 一条已取药的登记（P2-127 之后只剩库存告警，
+    中风险）、CT-AML 两条登记都已结案（未取药 / 已取消，P2-127 之后不再是供应风险）、CT-GAP 两条还缺着（中风险，
+    drug_name 空串）。
     处方混铺整数剂量（5/10 → 读回 float）与小数剂量（1.5）。
     """
     data: dict = {}
@@ -271,21 +273,21 @@ def test_供应风险精确_空库分支(seed):
     assert seed["risk_empty"] == {"total": 0, "risks": []}
 
 
-def test_供应风险精确_三行各有来历(client, seed):
+def test_供应风险精确_各行各有来历(client, seed):
     body = client.get("/api/medication/supply-risk", headers=seed["operator"]).json()
     assert list(body.keys()) == RISK_KEYS
-    assert [list(r.keys()) for r in body["risks"]] == [RISK_ROW_KEYS] * 3
+    assert [list(r.keys()) for r in body["risks"]] == [RISK_ROW_KEYS] * 2
+    # P2-127 前这里是三行：CT-INS 因一条已取药的登记算「高风险」，CT-AML 只凭两条已结案（未取药 / 已取消）的登记
+    # 也列成中风险——原口径 status != delivered 把终态都数成了缺药。
     assert body == {
-        "total": 3,
+        "total": 2,
         "risks": [
-            # 库存告警 + 未结案登记（collected 也算 open：口径是 status != delivered）
-            {"drug_code": "CT-INS", "drug_name": "胰岛素(契约)",
-             "low_stock_orgs": 1, "open_shortages": 1, "risk_level": "high"},
-            # 仅登记出现的药品：drug_name 是空串（不回填库存名），中风险，按编码排序
-            {"drug_code": "CT-AML", "drug_name": "",
-             "low_stock_orgs": 0, "open_shortages": 2, "risk_level": "medium"},
+            # 仅登记出现的药品：drug_name 是空串（不回填库存名），中风险；同为中风险按编码排序
             {"drug_code": "CT-GAP", "drug_name": "",
              "low_stock_orgs": 0, "open_shortages": 2, "risk_level": "medium"},
+            # 库存告警、登记已取药：只剩库存告警，中风险
+            {"drug_code": "CT-INS", "drug_name": "胰岛素(契约)",
+             "low_stock_orgs": 1, "open_shortages": 0, "risk_level": "medium"},
         ],
     }
     assert type(body["total"]) is int

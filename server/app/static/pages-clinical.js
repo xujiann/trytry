@@ -754,7 +754,7 @@ async function renderMedication() {
   // 供应风险面板的红色左边框走 `accent`；"有风险才渲染"这个条件仍留在调用点。
   $("#page-body").innerHTML = `
     ${risk.total ? panel(`⚠ 药品供应风险评估（${risk.total}）`,
-      table(["药品编码", "药品", "库存告警机构数", "未结案缺药登记", "风险等级"], risk.risks, (r) =>
+      table(["药品编码", "药品", "库存告警机构数", "待到货的缺药登记", "风险等级"], risk.risks, (r) =>
         `<tr><td>${esc(r.drug_code)}</td><td>${esc(r.drug_name) || "—"}</td><td>${r.low_stock_orgs}</td><td>${r.open_shortages}</td>
          <td><span class="tag ${r.risk_level === "high" ? "red" : "orange"}">${r.risk_level === "high" ? "高" : "中"}</span></td></tr>`),
       { accent: "#c62828" }) : ""}`;

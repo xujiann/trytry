@@ -35,6 +35,8 @@ _SHORTAGE_FLOW = {"registered": "purchasing", "purchasing": "delivered"}
 # 末态：collected 与 no_show 都"结束了"，但一个是药拿走了，一个是药白调了。
 # 混成一个 closed，缺药登记的履约率就永远算不出来。
 _SHORTAGE_CLOSED = {"collected", "no_show", "cancelled"}
+# 还缺着的：药还在路上（已登记 / 采购中）。已配送的药已经到了，结案的三态更不是供应风险（P2-127）
+_SHORTAGE_SHORT = tuple(_SHORTAGE_FLOW)
 
 
 class ShortageCreate(BaseModel):
@@ -283,7 +285,7 @@ def usage_stats(db: Session = Depends(get_db)):
 
 class SupplyRiskItemOut(BaseModel):
     """供应风险行：仅缺药登记出现的药品 `drug_name` 是空串（不回填库存名，照抄
-    现状）；`open_shortages` 的口径是 `status != "delivered"`（终态登记也计入）。"""
+    现状）；`open_shortages` 数的是还缺着的登记（已登记 / 采购中，P2-127）。"""
 
     drug_code: str
     drug_name: str
@@ -299,7 +301,11 @@ class SupplyRiskOut(BaseModel):
 
 @router.get("/supply-risk", response_model=SupplyRiskOut)
 def supply_risk(db: Session = Depends(get_db)):
-    """⑯药品供应风险评估：库存低于阈值 + 未结案缺药登记数 → 分级风险。"""
+    """⑯药品供应风险评估：库存低于阈值 + 还缺着的缺药登记数 → 分级风险。
+
+    「还缺着」= 已登记 / 采购中。原先按 `status != 已配送` 数（P2-127）：流转后来加了取药 / 未取药 / 取消三个终态，
+    这三态全被算成缺药——已经取走药的登记让胰岛素照旧挂「高风险」，只剩结案登记的药品也凭空列成中风险。
+    """
     low_stocks = (
         db.query(DrugStock)
         .filter(DrugStock.threshold > 0, DrugStock.quantity < DrugStock.threshold)
@@ -307,7 +313,7 @@ def supply_risk(db: Session = Depends(get_db)):
     )
     open_shortage_rows = (
         db.query(DrugShortage.drug_code, func.count(DrugShortage.id))
-        .filter(DrugShortage.status != "delivered")
+        .filter(DrugShortage.status.in_(_SHORTAGE_SHORT))
         .group_by(DrugShortage.drug_code)
         .order_by(DrugShortage.drug_code)
         .all()
