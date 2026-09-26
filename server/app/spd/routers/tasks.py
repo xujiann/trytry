@@ -39,7 +39,7 @@ from ..models import (
 from ..service import (
     PATH_OPEN_STATUSES,
     TASK_CLAIMABLE_STATUSES,
-    TASK_CLOSED_STATUSES,
+    TASK_COMPLETABLE_STATUSES,
     TASK_OPEN_STATUSES,
     advance_path,
     award_points,
@@ -990,6 +990,10 @@ def _move_or_conflict(db: Session, task: SpdTask, to_status: str, *, expect: tup
         raise HTTPException(status_code=409, detail=detail)
 
 
+#: 待审核的任务点「办结」的回话（P2-244）
+AWAITING_REVIEW = "该任务已提交、待审核，须由审核人审核（通过即办结）"
+
+
 class ReviewTaskIn(BaseModel):
     approved: bool = True
     note: str = Field(default="", max_length=256)
@@ -1024,10 +1028,14 @@ def complete_task(
     task_id: int, body: SubmitIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """直接办结（不走审核的任务类型）。表单与佐证要求同 submit。"""
+    """直接办结（不走审核的任务类型）。表单与佐证要求同 submit。
+
+    已提交待审核的不收（P2-244）：那一条只能由审核人审——通过即办结、退回即回到办理人手里。"""
     task = _load_task(db, task_id, user)
     if task.status in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail="该任务已结束")
+    if task.status == "submitted":
+        raise HTTPException(status_code=409, detail=AWAITING_REVIEW)
     if body.result:
         task.result = body.result
     if body.evidence:
@@ -1054,10 +1062,11 @@ def _finish_task(db: Session, task: SpdTask, user: User, expect: str | None = No
     # SQLite 的库级写锁交叉等待。
     with (serialized_on(db, SpdPathInstance, task.instance_id) if task.instance_id is not None
           else contextlib.nullcontext()):
+        # 直接办结（expect=None）不从「待审核」翻（P2-244）：锁外读到办理中、这时办理人刚提交审核的，同样不绕过审核
         won = cast(CursorResult, db.execute(
             update(SpdTask)
             .where(SpdTask.id == task.id,
-                   SpdTask.status == expect if expect else SpdTask.status.notin_(TASK_CLOSED_STATUSES))
+                   SpdTask.status == expect if expect else SpdTask.status.in_(TASK_COMPLETABLE_STATUSES))
             .values(
                 status="done",
                 finished_at=now_naive(),
@@ -1066,7 +1075,11 @@ def _finish_task(db: Session, task: SpdTask, user: User, expect: str | None = No
         )).rowcount
         if not won:
             db.rollback()
-            raise HTTPException(status_code=409, detail="该任务已结束" if expect is None else "只有待审核的任务可以审核")
+            if expect is not None:
+                raise HTTPException(status_code=409, detail="只有待审核的任务可以审核")
+            current = db.get(SpdTask, task.id)
+            raise HTTPException(status_code=409, detail=AWAITING_REVIEW if current is not None
+                                and current.status == "submitted" else "该任务已结束")
         # 会话是 autoflush=False 的：先 flush 把调用方挂起的 result/evidence/审核
         # 字段落库，再 refresh 取回 done/finished_at/assignee 的落库值——下面数
         # "还有几条没办完"与出参序列化才不会拿着旧内存值。

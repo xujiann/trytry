@@ -301,6 +301,9 @@ TASK_IN_HAND_STATUSES = ("pending", "claimed", "doing", "rejected")
 #: 能「接收」（claim）的：待接收与已超期。单条与批量同一口径——批量原先按「未结束」放行，自己提交在等审核的任务
 #: 批量一勾就被接收回「已接收」、拉出审核队列（P2-83）
 TASK_CLAIMABLE_STATUSES = ("pending", "overdue")
+#: 能「直接办结」（complete）的：未结束的除了待审核——提交了等审核的任务只能由审核人审（通过即办结、退回即重办），
+#: 原先办结接口按「未结束」放行，待审核的点一下办结就绕过了审核（P2-244；两端界面早就不给待审核的摆办结，接口没挡）
+TASK_COMPLETABLE_STATUSES = tuple(s for s in TASK_OPEN_STATUSES if s != "submitted")
 
 
 def move_task(db: Session, task_id: int, to_status: Any, *, expect: tuple[str, ...] | str = TASK_OPEN_STATUSES,

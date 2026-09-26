@@ -15,7 +15,8 @@ import ast
 import pathlib
 
 SPD = pathlib.Path(__file__).resolve().parents[1] / "app" / "spd"
-SHARED = {"TASK_OPEN_STATUSES", "TASK_CLOSED_STATUSES", "TASK_IN_HAND_STATUSES", "TASK_CLAIMABLE_STATUSES"}
+SHARED = {"TASK_OPEN_STATUSES", "TASK_CLOSED_STATUSES", "TASK_IN_HAND_STATUSES", "TASK_CLAIMABLE_STATUSES",
+          "TASK_COMPLETABLE_STATUSES"}
 #: 任务状态的条件翻转帮手（P2-114）：`expect=` 参数与 `.in_()` 同一条规矩
 MOVERS = {"move_task", "_move_or_conflict"}
 
@@ -66,8 +67,8 @@ def handwritten_status_sets(sources: dict[str, str] | None = None) -> list[str]:
 
 def test_状态集合对照列注释_每个状态都归了类():
     from app.spd.models import SpdTask
-    from app.spd.service import (TASK_CLAIMABLE_STATUSES, TASK_CLOSED_STATUSES, TASK_IN_HAND_STATUSES,
-                                 TASK_OPEN_STATUSES)
+    from app.spd.service import (TASK_CLAIMABLE_STATUSES, TASK_CLOSED_STATUSES, TASK_COMPLETABLE_STATUSES,
+                                 TASK_IN_HAND_STATUSES, TASK_OPEN_STATUSES)
     from test_status_text_from_backend import _column_codes
 
     codes = _column_codes(SpdTask, "status")
@@ -78,6 +79,8 @@ def test_状态集合对照列注释_每个状态都归了类():
     assert not set(TASK_OPEN_STATUSES) & set(TASK_CLOSED_STATUSES)
     assert "rejected" in TASK_OPEN_STATUSES and "rejected" in TASK_IN_HAND_STATUSES   # 退回即回到办理人手里
     assert set(TASK_CLAIMABLE_STATUSES) == {"pending", "overdue"}   # 单条与批量接收同一前置状态（P2-83）
+    # 直接办结收未结束的、唯独不收待审核的——那条只能审（P2-244）
+    assert set(TASK_COMPLETABLE_STATUSES) == set(TASK_OPEN_STATUSES) - {"submitted"}
     # 在办理人手里的：未结束里去掉等审核的与已超期的（超期扫描扫它们，报告的超期另列一表）
     assert set(TASK_IN_HAND_STATUSES) == set(TASK_OPEN_STATUSES) - {"submitted", "overdue"}
 
