@@ -67,13 +67,14 @@ def issue_cert(
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="签发机构不存在")
-    if body.cert_type == "death":
-        if body.patient_id is None:
-            raise HTTPException(status_code=422, detail="死亡医学证明须关联患者档案")
-        if db.get(Patient, body.patient_id) is None:
-            raise HTTPException(status_code=404, detail="患者不存在")
-        if not body.detail.strip():   # 一串空格不算填了（P2-309）
-            raise HTTPException(status_code=422, detail="死亡医学证明须填写死因诊断")
+    if body.cert_type == "death" and body.patient_id is None:
+        raise HTTPException(status_code=422, detail="死亡医学证明须关联患者档案")
+    # 出生证明 / 缺陷登记的患者可空，填了同样要查（P2-396）：原先只有死亡那一支查——填错的编号撞外键，被下面
+    # 取号重试当成「编号撞了」连试 12 次，回「编号分配连续冲突，请稍后重试」，怎么重试都是这一句
+    if body.patient_id is not None and db.get(Patient, body.patient_id) is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
+    if body.cert_type == "death" and not body.detail.strip():   # 一串空格不算填了（P2-309）
+        raise HTTPException(status_code=422, detail="死亡医学证明须填写死因诊断")
     if body.cert_type == "defect" and not body.detail.strip():
         raise HTTPException(status_code=422, detail="出生缺陷儿登记须填写缺陷诊断")
     if body.child_id is not None and db.get(ChildRecord, body.child_id) is None:
