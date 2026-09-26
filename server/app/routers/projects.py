@@ -103,21 +103,27 @@ def _milestone(db: Session, milestone_id: int, user: User) -> ProjectMilestone:
     return milestone
 
 
-def _milestone_out(m: ProjectMilestone, today: str) -> dict:
+#: 已结束的项目状态：项目本身不再算逾期、不再加里程碑，挂着的里程碑也不再算逾期
+_CLOSED_STATUSES = ("done", "suspended")
+
+
+def _milestone_out(m: ProjectMilestone, today: str, closed: bool = False) -> dict:
     return {
         "id": m.id,
         "name": m.name,
         "due_date": m.due_date,
         "done": m.done,
         "done_date": m.done_date,
-        # 逾期现算：已完成的不算逾期，无到期日的也不算
-        "overdue": (not m.done) and bool(m.due_date) and m.due_date < today,
+        # 逾期现算：已完成的不算逾期，无到期日的也不算；项目已完成 / 已中止的也不算（P2-175）——
+        # P1-104 只拦了「给结了项的项目新加里程碑」，结项前就挂着、没勾完成的里程碑照样算逾期，
+        # 结了项的项目照旧挂着「逾期里程碑 N」
+        "overdue": (not closed) and (not m.done) and bool(m.due_date) and m.due_date < today,
         "note": m.note,
     }
 
 
 def _project_out(p: AdminProject, today: str, milestones: list[ProjectMilestone]) -> dict:
-    ms = [_milestone_out(m, today) for m in milestones]
+    ms = [_milestone_out(m, today, closed=p.status in _CLOSED_STATUSES) for m in milestones]
     return {
         "id": p.id,
         "org_id": p.org_id,
@@ -136,7 +142,7 @@ def _project_out(p: AdminProject, today: str, milestones: list[ProjectMilestone]
         "milestone_done": len([m for m in ms if m["done"]]),
         "milestone_total": len(ms),
         "milestone_overdue": len([m for m in ms if m["overdue"]]),
-        "overdue": p.status not in ("done", "suspended") and bool(p.due_date) and p.due_date < today,
+        "overdue": p.status not in _CLOSED_STATUSES and bool(p.due_date) and p.due_date < today,
     }
 
 
@@ -288,7 +294,7 @@ def add_milestone(
     project = _project(db, project_id, user)
     # 已完成 / 已中止的项目不再加里程碑：项目本身的逾期判断早把这两态排除在外，新加的里程碑却照样
     # 按到期日算逾期，一个结了项的项目挂着「逾期里程碑 1」
-    if project.status in ("done", "suspended"):
+    if project.status in _CLOSED_STATUSES:
         raise HTTPException(status_code=409, detail="项目已完成或已中止，不能再加里程碑")
     milestone = ProjectMilestone(project_id=project_id, **body.model_dump())
     db.add(milestone)
@@ -331,7 +337,8 @@ def reopen_milestone(
     milestone.done_date = ""
     db.commit()
     db.refresh(milestone)
-    return _milestone_out(milestone, resolve_business_date(None).isoformat())
+    closed = _project_readonly(db, milestone.project_id).status in _CLOSED_STATUSES
+    return _milestone_out(milestone, resolve_business_date(None).isoformat(), closed=closed)
 
 
 class ProjectStatusBucketOut(BaseModel):
