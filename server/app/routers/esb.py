@@ -17,17 +17,19 @@
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import threading
 from datetime import timedelta
 
 import httpx
+from httpx import URL, InvalidURL  # 直接取名：出站用例会把模块里的 httpx 换成假投递，地址校验与异常类得用真的
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..concurrency import add_amount, insert_or_conflict
+from ..concurrency import add_amount, ensure_present, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, row_dict
 from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, User, utcnow
@@ -38,6 +40,7 @@ from .integration import parse_fhir_patient, parse_hl7v2_patient
 from .patients import create_patient_idempotent
 
 router = APIRouter(prefix="/api/esb", tags=["集成平台"])
+logger = logging.getLogger("medplat.esb")
 
 SYSTEM_TYPES = {
     "his": "医院信息系统",
@@ -72,6 +75,20 @@ OUTBOUND_BATCH_SIZE = 50
 # ---------------------------------------------------------------------------
 
 
+def _check_endpoint_url(value: str | None) -> str | None:
+    """投递地址存之前先认得出来（P1-176）：原先只限长度，`http://[::1/x` 这种存得进去，投递时 httpx 抛 `InvalidURL`——
+    它不是 `httpx.HTTPError`，逃出重试 / 死信，手工消费 500、定时出站一轮一轮地失败。留空即「仅登记不投递」照旧。"""
+    if not value:
+        return value
+    try:
+        url = URL(value)
+    except (InvalidURL, TypeError, ValueError) as exc:
+        raise ValueError("投递地址不是合法的 URL") from exc
+    if url.scheme not in ("http", "https") or not url.host:
+        raise ValueError("投递地址须为 http:// 或 https:// 开头、带主机名的地址")
+    return value
+
+
 class EndpointCreate(BaseModel):
     code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
@@ -83,6 +100,11 @@ class EndpointCreate(BaseModel):
     secret: str | None = Field(default=None, max_length=128)
     active: bool = True
 
+    @field_validator("endpoint_url")
+    @classmethod
+    def _endpoint_url(cls, value: str | None) -> str | None:
+        return _check_endpoint_url(value)
+
 
 class EndpointUpdate(BaseModel):
     # 改档与建档同口径（P1-98）：原先改名为空串照收
@@ -91,6 +113,11 @@ class EndpointUpdate(BaseModel):
     rate_limit_per_min: int | None = Field(default=None, ge=1, le=100000)
     endpoint_url: str | None = Field(default=None, max_length=512)
     secret: str | None = Field(default=None, max_length=128)
+
+    @field_validator("endpoint_url")
+    @classmethod
+    def _endpoint_url(cls, value: str | None) -> str | None:
+        return _check_endpoint_url(value)
 
 
 def _endpoint_out(e: EsbEndpoint) -> dict:
@@ -404,7 +431,7 @@ def _deliver(endpoint: EsbEndpoint, msg_type: str, body: dict) -> str:
             headers=headers,
             timeout=DELIVERY_TIMEOUT_SECONDS,
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, InvalidURL) as exc:   # InvalidURL 不是 HTTPError 的子类（P1-176，存量的坏地址）
         raise ValueError(f"投递失败（网络异常）：{exc!r}") from exc
     if not 200 <= resp.status_code < 300:
         raise ValueError(f"投递失败：目标端返回 HTTP {resp.status_code}")
@@ -420,7 +447,21 @@ def _outbound_body(message: EsbMessage) -> dict:
 
 
 def _apply_transform(payload: dict, config: dict) -> dict:
-    """transform 步骤：复用 integration.py 入站解析（HL7 v2 / FHIR Patient）。"""
+    """transform 步骤：复用 integration.py 入站解析（HL7 v2 / FHIR Patient）。
+
+    解析失败一律以 ValueError 抛出（P1-176）：`_run_step` 的约定是「失败以 ValueError/HTTPException 抛出」，三条消费
+    路径只接这两类、据此计失败走重试 / 死信。可解析函数碰上形状不对的报文（FHIR 的 `given` 写成字符串、`name` 写成
+    对象、证件号写成数字……）抛的是 TypeError / KeyError——手工消费 500、消息原样待处理，定时出站那一轮整个中断，排在
+    它后面的所有出站消息一条也投不出去。直连入站接口（`integration._run_inbound`）早就把这类异常收成 422。"""
+    try:
+        return _parse_payload(payload, config)
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 报文形状千奇百怪，解析里抛什么都算这条报文解析失败
+        raise ValueError(f"报文解析失败（{type(exc).__name__}：{exc}）") from exc
+
+
+def _parse_payload(payload: dict, config: dict) -> dict:
     fmt = config.get("format", "")
     if fmt not in TRANSFORM_FORMATS:
         raise ValueError(f"未知转换格式 {fmt or '(空)'}")
@@ -540,6 +581,21 @@ def _process_message(db: Session, message: EsbMessage, endpoint: EsbEndpoint | N
     return f"透传消息已处理（{len(message.payload)} 个字段）"
 
 
+def _unexpected(db: Session, message_id: int, exc: Exception) -> tuple[EsbMessage, EsbEndpoint | None, str]:
+    """消费中的意外错误照样记成这条消息的一次失败、走重试 / 死信（P1-176）。
+
+    三条消费路径原先只接 ValueError / HTTPException，别的异常一路 500：手工消费的消息原样待处理、重试计数与错误说明
+    都是空的；编排里建档那一步已经提交的，消息卡在「处理中」，页面不给消费 / 重试；定时出站那一轮整个中断，排在它
+    后面的所有出站消息一条也投不出去——「每条各自 commit：一条投挂不拖累同批其余消息」只对预料到的失败成立。
+    先回滚：库报的错（真 PG 上超长的姓名、日期撞列宽）让会话处于失败状态，不回滚什么也写不进去；回滚后按编号重取消息与
+    端点。错误全文进日志，消息上记类名与说明（`last_error` 是给页面上的人看的）。"""
+    db.rollback()
+    logger.exception("ESB 消息 %s 消费时出现未预期错误", message_id)
+    message = ensure_present(db.get(EsbMessage, message_id), "消息")
+    endpoint = db.get(EsbEndpoint, message.endpoint_id)
+    return message, endpoint, f"未预期错误（{type(exc).__name__}：{exc}）"[:1024]
+
+
 @router.post(
     "/messages/{message_id}/process",
     response_model=MessageProcessOut,
@@ -571,6 +627,12 @@ def process_message(message_id: int, db: Session = Depends(get_db), user: User =
         _log_exchange(db, endpoint, message, False, str(error))
         db.commit()
         return {**_receipt(message, endpoint, user), "detail": str(error)}
+    except Exception as exc:  # noqa: BLE001 - 意外错误同样记失败走重试 / 死信，见 _unexpected
+        message, endpoint, unexpected = _unexpected(db, message_id, exc)
+        _record_failure(db, message, unexpected)
+        _log_exchange(db, endpoint, message, False, unexpected)
+        db.commit()
+        return {**_receipt(message, endpoint, user), "detail": unexpected}
     _record_success(message)
     _log_exchange(db, endpoint, message, True, "")
     db.commit()
@@ -618,6 +680,7 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
         # 原先照样把这一批投完。每条之后都提交（会话里的对象随之过期），这里取到的是库里的最新状态
         if endpoint is None or not endpoint.active:
             continue
+        message_id = message.id
         message.status = "processing"
         db.flush()
         try:
@@ -626,6 +689,11 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
             error = exc.detail if isinstance(exc, HTTPException) else str(exc)
             _record_failure(db, message, str(error))
             _log_exchange(db, endpoint, message, False, str(error))
+            failed += 1
+        except Exception as exc:  # noqa: BLE001 - 一条的意外错误不拖垮这一轮，见 _unexpected
+            message, endpoint, unexpected = _unexpected(db, message_id, exc)
+            _record_failure(db, message, unexpected)
+            _log_exchange(db, endpoint, message, False, unexpected)
             failed += 1
         else:
             _record_success(message)
@@ -664,6 +732,15 @@ def _validate_steps(steps: list) -> None:
             )
         if step.get("config") is not None and not isinstance(step["config"], dict):
             raise HTTPException(status_code=422, detail=f"第 {idx} 步 config 须为对象")
+        # 配置项的形状也在存的时候查（P1-176）：原先 `{"required": 5}` 照收，跑起来 TypeError——建档那一步已经提交，
+        # 消息卡在「处理中」，页面上消费 / 重试按钮都不给
+        config = step.get("config") or {}
+        required = config.get("required", [])
+        if not isinstance(required, list) or not all(isinstance(f, str) for f in required):
+            raise HTTPException(status_code=422, detail=f"第 {idx} 步 required 须为字段名数组")
+        for key in ("format", "source_field", "target_endpoint", "entity"):
+            if key in config and not isinstance(config[key], str):
+                raise HTTPException(status_code=422, detail=f"第 {idx} 步 {key} 须为字符串")
 
 
 def _flow_out(f: EsbFlow) -> dict:
@@ -780,6 +857,12 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
             detail = _run_step(db, step, context)
         except (ValueError, HTTPException) as exc:
             error = str(exc.detail if isinstance(exc, HTTPException) else exc)
+            step_results.append(
+                {"step": idx, "type": step_type, "status": "failed", "detail": error}
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 - 意外错误同样记这一步失败、消息走重试 / 死信，见 _unexpected
+            message, endpoint, error = _unexpected(db, message_id, exc)
             step_results.append(
                 {"step": idx, "type": step_type, "status": "failed", "detail": error}
             )
