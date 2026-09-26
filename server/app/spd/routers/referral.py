@@ -898,7 +898,10 @@ def referral_alerts(
 
     「未推进」从最近一次推进（最后一条环节轨迹）起算，不是从建单起算（P2-140）。
     """
-    cutoff = now_naive() - timedelta(hours=max(min(hours, 720), 1))
+    # 阈值收在 1～720 小时；回执与页面标题「超过 N 小时未推进」写的是实际采用的阈值（P2-333）：原先按收紧后的值筛、
+    # 回显原参数——带 hours=10000 筛的是 720 小时，标题却说「超过 10000 小时」
+    threshold = max(min(hours, 720), 1)
+    cutoff = now_naive() - timedelta(hours=threshold)
     last_moved = referral_last_moved_at()
     query = db.query(SpdReferralCase).filter(
         SpdReferralCase.status.notin_(_TERMINAL),
@@ -919,7 +922,7 @@ def referral_alerts(
     # 其余的往后翻（P2-8 第六批）。`count` 与 `X-Total-Count` 是同一次计数。
     rows = paginate(query.order_by(last_moved, SpdReferralCase.id), response, offset, limit)
     return {
-        "threshold_hours": hours,
+        "threshold_hours": threshold,
         "count": int(response.headers["X-Total-Count"]),
         "items": [_case_out(db, r) for r in rows],
     }
