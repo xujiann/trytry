@@ -1264,9 +1264,15 @@ def batch_tasks(
             if task.status in ("done", "cancelled"):
                 skipped.append({"id": task.id, "reason": "任务已结束"})
                 continue
+            # 与单条转派同一个状态闸门（P2-347）：判「未结束」、待接收的转成已接收、写责任人，同一条 SQL。原先内存里判过就
+            # 往对象上赋值——载入整批之后别人刚办结的任务照样被改了责任人（计分记在原责任人名下，任务却显示归新人），
+            # 待接收的也一直是待接收：同一个文件里单条分配与批量分配是两种结果
+            values: dict[str, Any] = {"assignee_id": body.assignee_id}
             if task.assignee_id is not None and task.assignee_id != body.assignee_id:
-                task.transferred_from = task.assignee_id
-            task.assignee_id = body.assignee_id
+                values["transferred_from"] = task.assignee_id
+            if not move_task(db, task.id, case((SpdTask.status == "pending", "claimed"), else_=SpdTask.status), **values):
+                skipped.append({"id": task.id, "reason": "任务已结束"})
+                continue
         done += 1
     db.commit()
     return {"processed": done, "skipped": skipped}
