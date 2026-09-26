@@ -34,8 +34,9 @@ CALIBER = (
     "履约率分母只含已判定取药与否的登记（collected + no_show），"
     "在途与已取消不计；无可判定登记时返回 null 而非 0"
 )
-PROFILE_KEYS = ["patient_id", "distinct_drugs", "polypharmacy_warning", "drugs"]
-PROFILE_DRUG_KEYS = ["drug_code", "drug_name", "times", "max_daily_dose"]
+# P2-144 加了 in_use_drugs 与每行的 in_use（只增不改：多重用药预警改按「同时在用」判，要把在用的数给出来）
+PROFILE_KEYS = ["patient_id", "distinct_drugs", "in_use_drugs", "polypharmacy_warning", "drugs"]
+PROFILE_DRUG_KEYS = ["drug_code", "drug_name", "times", "max_daily_dose", "in_use"]
 USAGE_KEYS = ["drug_code", "drug_name", "rx_count", "patient_count"]
 RISK_KEYS = ["total", "risks"]
 RISK_ROW_KEYS = ["drug_code", "drug_name", "low_stock_orgs", "open_shortages", "risk_level"]
@@ -221,12 +222,13 @@ def test_用药画像精确_键序与Float剂量(client, admin, seed):
     assert body == {
         "patient_id": seed["p1"]["id"],
         "distinct_drugs": 2,
+        "in_use_drugs": 2,   # 处方都是刚开的，还在服药期内
         "polypharmacy_warning": False,
         "drugs": [
             {"drug_code": "CT-AML", "drug_name": "氨氯地平(契约)",
-             "times": 2, "max_daily_dose": 10.0},
+             "times": 2, "max_daily_dose": 10.0, "in_use": True},
             {"drug_code": "CT-MET", "drug_name": "二甲双胍(契约)",
-             "times": 1, "max_daily_dose": 1.5},
+             "times": 1, "max_daily_dose": 1.5, "in_use": True},
         ],
     }
     # Float 列：整数入参 5/10 读回就是 float，10 必须以 10.0 出参（与 Money 相反）
@@ -239,9 +241,10 @@ def test_用药画像精确_多重用药预警分支(client, admin, seed):
     assert body == {
         "patient_id": seed["p2"]["id"],
         "distinct_drugs": 5,
+        "in_use_drugs": 5,
         "polypharmacy_warning": True,
         "drugs": [
-            {"drug_code": f"CT-D{i}", "drug_name": f"契约药{i}", "times": 1, "max_daily_dose": 1.0}
+            {"drug_code": f"CT-D{i}", "drug_name": f"契约药{i}", "times": 1, "max_daily_dose": 1.0, "in_use": True}
             for i in range(1, 6)
         ],
     }

@@ -200,18 +200,23 @@ def shortage_stats(db: Session = Depends(get_db)):
 
 
 class MedicationProfileDrugOut(BaseModel):
-    """在用药品行：`max_daily_dose` 来自 Float 列（整数剂量 5/10 读回 5.0/10.0，
-    `max(0.0, …)` 也不改型），恒 float——与 Money 列相反，判据是列类型。"""
+    """用药画像的药品行：`max_daily_dose` 来自 Float 列（整数剂量 5/10 读回 5.0/10.0，
+    `max(0.0, …)` 也不改型），恒 float——与 Money 列相反，判据是列类型。
+
+    `in_use`：有一张开这味药的处方，按它的用药天数算，今天还在服药期内（P2-144）。"""
 
     drug_code: str
     drug_name: str
     times: int
     max_daily_dose: float
+    in_use: bool
 
 
 class MedicationProfileOut(BaseModel):
     patient_id: int
     distinct_drugs: int
+    #: 其中在用的品种数——多重用药预警按它判（P2-144）
+    in_use_drugs: int
     polypharmacy_warning: bool
     drugs: list[MedicationProfileDrugOut]
 
@@ -222,12 +227,17 @@ def medication_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """居民用药画像：在用药品清单（通过审方的处方）+ 多重用药预警。"""
+    """居民用药画像：历次通过审方的处方里的药品（标出在用的）+ 多重用药预警。
+
+    预警按**同时在用**的品种数判（`POLYPHARMACY_THRESHOLD` 的本义）：一味药只要有一张处方按用药天数算、
+    今天还在服药期内，就算在用。原先数的是历次处方里的全部品种——十年里断续吃过五种短程药的居民，
+    今天一种没吃也挂着「多重用药风险」（P2-144）。
+    """
     assert_patient_visible(db, user, patient_id, resource="medication")
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     rows = (
-        db.query(PrescriptionItem, Prescription.status)
+        db.query(PrescriptionItem, Prescription.created_at)
         .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
         .filter(
             Prescription.patient_id == patient_id,
@@ -235,18 +245,25 @@ def medication_profile(
         )
         .all()
     )
+    now = now_naive()
     drugs: dict[str, dict] = {}
-    for item, _status in rows:
+    for item, prescribed_at in rows:
         entry = drugs.setdefault(
-            item.drug_code, {"drug_code": item.drug_code, "drug_name": item.drug_name, "times": 0, "max_daily_dose": 0.0}
+            item.drug_code, {"drug_code": item.drug_code, "drug_name": item.drug_name, "times": 0,
+                             "max_daily_dose": 0.0, "in_use": False}
         )
         entry["times"] += 1
         entry["max_daily_dose"] = max(entry["max_daily_dose"], item.daily_dose)
+        # 用秒数比而不是 prescribed_at + timedelta(days=…)：用药天数上限是 INT4_MAX，timedelta 装不下
+        if (now - prescribed_at).total_seconds() < item.days * 86400:
+            entry["in_use"] = True
     drug_list = sorted(drugs.values(), key=lambda d: d["times"], reverse=True)
+    in_use = sum(1 for d in drug_list if d["in_use"])
     return {
         "patient_id": patient_id,
         "distinct_drugs": len(drug_list),
-        "polypharmacy_warning": len(drug_list) >= POLYPHARMACY_THRESHOLD,
+        "in_use_drugs": in_use,
+        "polypharmacy_warning": in_use >= POLYPHARMACY_THRESHOLD,
         "drugs": drug_list,
     }
 

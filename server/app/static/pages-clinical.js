@@ -805,7 +805,9 @@ async function renderMedication() {
   $("#prof-form").onsubmit = async (e) => {
     e.preventDefault();
     const profile = await api(`/api/medication/profile/${new FormData(e.target).get("patient_id")}`);
-    $("#prof-result").innerHTML = `${profile.polypharmacy_warning ? '<p class="msg err">⚠ 多重用药风险</p>' : ""}<pre class="json">${esc(JSON.stringify(profile, null, 2))}</pre>`;
+    // 预警按同时在用的品种数判（P2-144），把那个数写出来——只写「多重用药风险」，看的人得自己去 JSON 里数
+    $("#prof-result").innerHTML = `${profile.polypharmacy_warning
+      ? `<p class="msg err">⚠ 多重用药风险：同时在用 ${profile.in_use_drugs} 种</p>` : ""}<pre class="json">${esc(JSON.stringify(profile, null, 2))}</pre>`;
   };
   $("#page-body").onclick = async (e) => {
     const { adv, close } = e.target.dataset;
