@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from ..concurrency import add_amount, insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, row_dict
-from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, utcnow
+from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, User, utcnow
 from ..security import hash_password, verify_password
 from ..state_store import SlidingWindowRateLimiter
 from ..texttypes import NON_BLANK
@@ -313,7 +313,10 @@ def enqueue_message(
     return _message_out(message, endpoint.code)
 
 
-@router.get("/messages", response_model=list[MessageOut], dependencies=[Depends(get_current_user)])
+# 只给管理员（P0-49）：载荷是接入方投进来的原始报文（HL7 PID 段、FHIR Patient……），证件号、手机号都是明文——原先登录
+# 即可，村医一页 500 条翻得到全县过总线的患者身份信息，而同一个人在 /api/patients 上对非管理员是掩码的（§4 出口脱敏）。
+# 唯一的调用方是只对管理员开放的集成平台页（app.js 的 esb 页 roles: ["admin"]），接口与它同口径
+@router.get("/messages", response_model=list[MessageOut], dependencies=[Depends(require_admin)])
 def list_messages(
     response: Response,
     status: str | None = None,
@@ -542,8 +545,11 @@ def _process_message(db: Session, message: EsbMessage, endpoint: EsbEndpoint | N
     response_model=MessageProcessOut,
     dependencies=[Depends(require_roles("operator"))],  # 消费/重试=经办（admin 全通）
 )
-def process_message(message_id: int, db: Session = Depends(get_db)):
-    """消费一条消息：成功转 succeeded；失败重试计数 +1，达上限转死信。"""
+def process_message(message_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """消费一条消息：成功转 succeeded；失败重试计数 +1，达上限转死信。
+
+    回执里的载荷只回给管理员（P0-49）：经办点「消费 / 重试」要的是结果，不是报文里的证件号与手机号——键照旧在，
+    值为空对象（与消息清单只给管理员同一个理由）。"""
     message = db.get(EsbMessage, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="消息不存在")
@@ -564,11 +570,19 @@ def process_message(message_id: int, db: Session = Depends(get_db)):
         _record_failure(db, message, str(error))
         _log_exchange(db, endpoint, message, False, str(error))
         db.commit()
-        return {**_message_out(message, endpoint.code if endpoint else ""), "detail": str(error)}
+        return {**_receipt(message, endpoint, user), "detail": str(error)}
     _record_success(message)
     _log_exchange(db, endpoint, message, True, "")
     db.commit()
-    return {**_message_out(message, endpoint.code if endpoint else ""), "detail": detail}
+    return {**_receipt(message, endpoint, user), "detail": detail}
+
+
+def _receipt(message: EsbMessage, endpoint: EsbEndpoint | None, user: User) -> dict:
+    """消费回执的消息部分：非管理员不回显载荷（P0-49，见 `process_message`）。"""
+    out = _message_out(message, endpoint.code if endpoint else "")
+    if user.role != "admin":
+        out["payload"] = {}
+    return out
 
 
 def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE) -> tuple[int, str]:
@@ -814,7 +828,8 @@ class FlowRunOut(BaseModel):
     created_at: str
 
 
-@router.get("/flow-runs", response_model=list[FlowRunOut], dependencies=[Depends(get_current_user)])
+# 同上只给管理员（P0-49）：逐步结果里有建档那一步落下的健康卡号，唯一的调用方同样是管理员才看得到的集成平台页
+@router.get("/flow-runs", response_model=list[FlowRunOut], dependencies=[Depends(require_admin)])
 def list_flow_runs(
     response: Response,
     flow_id: int | None = None,
