@@ -11,10 +11,16 @@
 openid 且该类目配置了模板 id（SystemParam，key = ``wechat_template_<类目>``）
 时顺带推一条模板消息。旁路是尽力而为：失败只 log，绝不影响站内信落库，
 更不反过来拖垮业务事务。
+
+**模板消息等业务事务提交之后才发**（P2-348）。站内信「不 commit、随事务走」，模板消息原先却在投递函数里当场
+外呼：业务事务随后回滚（手术排程撞约束 409、报告重复出具 409……），患者手机上已经收到那条指向不存在记录的消息——
+正是上面那段要防的；外呼还发生在业务事务的行锁里（单次最多几秒、逐个收件人），SQLite 下连进程级的行锁一起占着。
+现在投递函数只把要发的消息登记在会话上，最外层事务提交后再发，回滚或关会话即丢弃。
 """
 import logging
 
-from sqlalchemy.orm import Session
+from sqlalchemy import event
+from sqlalchemy.orm import Session, SessionTransaction
 
 from .models import Notification, ResidentAccount, ResidentFamilyMember, SystemParam, User
 from .wechat import get_wechat_provider
@@ -33,13 +39,17 @@ BODY_MAX = 1024
 WECHAT_TEMPLATE_PARAM_PREFIX = "wechat_template_"
 
 
+#: 会话上登记的、等业务事务提交后再发的模板消息：[(账户 id, openid, 模板 id, 数据, 类目), ...]
+_PENDING_WECHAT = "medplat_pending_wechat"
+
+
 def _wechat_template_bypass(
     db: Session, account_ids: list[int], *, category: str, title: str, body: str
 ) -> None:
     """微信模板消息旁路：未配置模板/未绑 openid 即整体跳过，是缺省状态。
 
-    任何异常都吞掉只 log——触达通道抖动不该让"出报告/办出院"失败；
-    站内信在此之前已 db.add()，本函数不碰事务。
+    这里只查模板与 openid、把要发的消息登记在会话上（`_PENDING_WECHAT`），外呼等最外层事务提交之后（P2-348）。
+    任何异常都吞掉只 log——触达通道抖动不该让"出报告/办出院"失败；站内信在此之前已 db.add()，本函数不碰事务。
     """
     if not account_ids:
         return
@@ -51,22 +61,45 @@ def _wechat_template_bypass(
         )
         if param is None or not param.value:
             return
-        provider = get_wechat_provider()
-        send = getattr(provider, "send_template_message", None)
-        if send is None:  # 测试注入的旧桩件可能没实现该方法
-            return
         accounts = (
             db.query(ResidentAccount)
             .filter(ResidentAccount.id.in_(account_ids), ResidentAccount.wechat_openid.isnot(None))
             .all()
         )
-        for account in accounts:
-            if not send(account.wechat_openid, param.value, {"title": title, "body": body}, ""):
+        db.info.setdefault(_PENDING_WECHAT, []).extend(
+            (account.id, account.wechat_openid, param.value, {"title": title, "body": body}, category)
+            for account in accounts
+        )
+    except Exception:
+        logger.exception("[NOTIFY-WECHAT] 模板消息旁路异常，忽略（站内信不受影响）")
+
+
+@event.listens_for(Session, "after_commit")
+def _send_pending_wechat(session: Session) -> None:
+    """最外层事务提交后发出登记的模板消息。保存点释放也会触发本事件——那时外层事务还可能回滚，不发。"""
+    if session.in_nested_transaction():
+        return
+    pending = session.info.pop(_PENDING_WECHAT, None)
+    if not pending:
+        return
+    try:
+        send = getattr(get_wechat_provider(), "send_template_message", None)
+        if send is None:  # 测试注入的旧桩件可能没实现该方法
+            return
+        for account_id, openid, template_id, data, category in pending:
+            if not send(openid, template_id, data, ""):
                 logger.warning(
-                    "[NOTIFY-WECHAT] 模板消息发送失败 account=%s category=%s", account.id, category
+                    "[NOTIFY-WECHAT] 模板消息发送失败 account=%s category=%s", account_id, category
                 )
     except Exception:
         logger.exception("[NOTIFY-WECHAT] 模板消息旁路异常，忽略（站内信不受影响）")
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _drop_pending_wechat(session: Session, transaction: SessionTransaction) -> None:
+    """最外层事务结束（回滚、关会话；提交的已在上面发完取走）：没发出去的一律丢弃，不留给下一段事务。"""
+    if transaction.parent is None:
+        session.info.pop(_PENDING_WECHAT, None)
 
 
 def notify_staff(

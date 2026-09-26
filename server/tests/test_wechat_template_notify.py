@@ -4,6 +4,7 @@
   接口（httpx 打桩，验证缓存命中与 40001 强刷重试）；
 - 接线层：notify_patient 在「账户绑定 openid + 系统参数配置了该类目模板」时
   旁路发送，缺任一条件即静默跳过；发送失败/桩件抛异常都不影响站内信落库。
+- 时机（P2-348）：模板消息等业务事务提交之后才发，回滚 / 关会话即丢弃，保存点释放不算提交。
 """
 import httpx
 import pytest
@@ -158,6 +159,7 @@ def test_未配置模板参数时不外呼(db):
     provider = CaptureProvider()
     set_wechat_provider(provider)
     notify_patient(db, patient.id, category="exam_report", title="t", body="b")
+    db.commit()
     assert provider.sent == []
 
 
@@ -166,6 +168,7 @@ def test_类目不匹配的模板不误发(db):
     provider = CaptureProvider()
     set_wechat_provider(provider)
     notify_patient(db, patient.id, category="exam_report", title="t", body="b")
+    db.commit()
     assert provider.sent == []
 
 
@@ -174,6 +177,7 @@ def test_发送失败与桩件异常都不阻断站内信(db, caplog):
     set_wechat_provider(CaptureProvider(ok=False))
     with caplog.at_level("WARNING", logger="medplat.notify"):
         assert notify_patient(db, patient.id, category="exam_report", title="t", body="b") == 1
+        db.commit()   # 模板消息在业务事务提交之后才发（P2-348）
     assert "模板消息发送失败" in caplog.text
 
     set_wechat_provider(CaptureProvider(explode=True))
@@ -196,3 +200,58 @@ def test_旧桩件缺方法时静默跳过(db):
 
     set_wechat_provider(LegacyStub())
     assert notify_patient(db, patient.id, category="exam_report", title="t", body="b") == 1
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# 发送时机（P2-348）：等业务事务提交之后
+# ---------------------------------------------------------------------------
+
+
+def test_提交之前不外呼_提交之后才发(db):
+    """原先在投递函数里当场外呼：还没提交（随后可能回滚）的业务，患者手机上已经收到了。"""
+    patient = _seed(db)
+    provider = CaptureProvider()
+    set_wechat_provider(provider)
+    notify_patient(db, patient.id, category="exam_report", title="报告已出", body="请查看")
+    assert provider.sent == []          # 修前此刻已发出
+    db.commit()
+    assert [m["openid"] for m in provider.sent] == ["oBIND01"]
+
+
+def test_业务事务回滚_模板消息不发(db):
+    """手术排程撞约束 409、报告重复出具 409：站内信随事务回滚，模板消息也不该发出去。"""
+    patient = _seed(db)
+    provider = CaptureProvider()
+    set_wechat_provider(provider)
+    notify_patient(db, patient.id, category="exam_report", title="手术已安排", body="3 号手术间")
+    db.rollback()
+    db.commit()                          # 回滚之后再提交一段空事务：丢掉的不能被下一次提交带出去
+    assert provider.sent == []          # 修前已发出
+    assert db.query(Notification).count() == 0
+
+
+def test_保存点释放不算提交(db):
+    patient = _seed(db)
+    provider = CaptureProvider()
+    set_wechat_provider(provider)
+    notify_patient(db, patient.id, category="exam_report", title="t", body="b")
+    with db.begin_nested():
+        db.add(SystemParam(key="p2348_probe", value="1", description="保存点里的写入"))
+    assert provider.sent == []          # 外层事务还可能回滚
+    db.commit()
+    assert len(provider.sent) == 1
+
+
+def test_关会话不提交_模板消息丢弃(db):
+    from app.database import SessionLocal
+
+    patient = _seed(db)
+    provider = CaptureProvider()
+    set_wechat_provider(provider)
+    other = SessionLocal()
+    notify_patient(other, patient.id, category="exam_report", title="t", body="b")
+    other.close()                        # 请求中途出错、会话没提交就关了
+    other.commit()                       # 同一个会话对象再用来提交一段：关掉之前登记的不能被带出去
+    other.close()
+    assert provider.sent == []
