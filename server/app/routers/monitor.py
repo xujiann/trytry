@@ -244,10 +244,14 @@ def nodes():
     monitor_heartbeat()
     instances = known_instances()
     if instances is None:
+        # 配了 Redis 却读不到心跳（连不上、超时）与没配是两回事（P2-355）：原先一律说「未配置……单实例可忽略」，
+        # 而同一页的概览明明报着「已配置、未连通」——多实例部署正是在这时最需要知道集群里有几台
+        note = ("未配置 Redis，无法发现同集群其他实例；单实例部署可忽略此项" if _redis_client() is None
+                else "已配置 Redis 但读取实例心跳失败，无法发现同集群其他实例：请检查 Redis 连接")
         return {
             "scope": "unknown",
             "instance_id": INSTANCE_ID,
             "instances": None,
-            "note": "未配置 Redis，无法发现同集群其他实例；单实例部署可忽略此项",
+            "note": note,
         }
     return {"scope": "集群（Redis 心跳，90 秒内有心跳视为存活）", "instances": instances}
