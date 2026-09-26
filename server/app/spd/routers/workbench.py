@@ -48,8 +48,8 @@ from ..models import (
     SpdTeamMember,
     SpdVillageDoctor,
 )
-from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_OPEN_STATUSES, followup_overdue,
-                       referral_last_moved_at, sweep_overdue)
+from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_CLAIMABLE_STATUSES, TASK_OPEN_STATUSES,
+                       followup_overdue, referral_last_moved_at, sweep_overdue)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -1035,6 +1035,19 @@ def expert_workbench(
 # ============================================================ 全程管理中心端
 
 
+def _unassigned_tasks(db: Session, orgs: list[int] | None, program_code: str = "") -> int:
+    """「无人认领」：没有责任人、能被接收的任务——待接收的与已超期的（P2-245）。
+
+    原先只数 `pending`：同一个请求里先跑的超期扫描把过了截止日的待接收任务翻成「超期」，没人接的超期任务恰是最该
+    有人去接的，却从这一格里消失了（接收接口照收它们，`TASK_CLAIMABLE_STATUSES`）。病种筛选与同一栏的
+    「我的待办」「全部待办」同口径——原先这一格不看病种。"""
+    query = _apply_scope(db.query(SpdTask), SpdTask.org_id, orgs).filter(
+        SpdTask.assignee_id.is_(None), SpdTask.status.in_(TASK_CLAIMABLE_STATUSES))
+    if program_code:
+        query = query.filter(SpdTask.program_code == program_code)
+    return query.count()
+
+
 @router.get("/workbench/center", response_model=CenterWorkbenchOut)
 def center_workbench(
     program_code: str = "",
@@ -1057,9 +1070,7 @@ def center_workbench(
             "mine": _task_stats(db, orgs, assignee_id=user.id, program_code=program_code,
                                 today=business_day),
             "all": _task_stats(db, orgs, program_code=program_code, today=business_day),
-            "unassigned": _apply_scope(db.query(SpdTask), SpdTask.org_id, orgs).filter(
-                SpdTask.assignee_id.is_(None), SpdTask.status == "pending"
-            ).count(),
+            "unassigned": _unassigned_tasks(db, orgs, program_code),
             "swept": swept,
         },
         "pool": {
