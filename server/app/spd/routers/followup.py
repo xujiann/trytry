@@ -1692,12 +1692,16 @@ def list_report_instances(
     query = db.query(SpdReportInstance)
     if template_code:
         query = query.filter(SpdReportInstance.template_code == template_code)
-    rows = paginate(query.order_by(SpdReportInstance.id.desc()), response, offset, limit)
     if mine:
-        rows = [
-            r for r in rows
-            if not (r.subscriber_ids or []) or user.id in (r.subscriber_ids or [])
+        # 「我的」= 没有订阅人（全员可见）或订阅了我。先挑出编号、再交回库里分页（P2-295）：原先先分页、再在这一页里挑，
+        # 总数是没筛的、页里少几条，订阅我的报告排在第一页之后就整个看不见。订阅人是 JSON 列表，两个库的「数组包含」
+        # 写法不同，与团队清单按病种筛（P2-177）同一个做法
+        mine_ids = [
+            rid for rid, subscribers in query.with_entities(SpdReportInstance.id, SpdReportInstance.subscriber_ids).all()
+            if not (subscribers or []) or user.id in (subscribers or [])
         ]
+        query = query.filter(SpdReportInstance.id.in_(mine_ids or [0]))
+    rows = paginate(query.order_by(SpdReportInstance.id.desc()), response, offset, limit)
     return [
         {"id": r.id, "title": r.title, "template_code": r.template_code,
          "period_label": r.period_label, "scope_level": r.scope_level,
