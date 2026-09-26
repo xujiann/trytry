@@ -2192,6 +2192,30 @@ def test_surgery_full_flow(page, base_url, seed):
     expect(page.locator("#surg-detail-body")).to_contain_text("治愈")
 
 
+def test_提手术申请时勾得上非计划重返手术室(page, base_url, admin_call, admin_read):
+    """P2-172：手册写「非计划重返手术室：提手术申请时如实勾选」，申请表单上原先没有这一项——
+    接口收 `unplanned_return`，页面从不送，质量指标「非计划重返手术室率」恒为 0。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E重返县医院", "org_type": "lead_hospital", "level": "county"})
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": "E2E重返外科"})
+    bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "R1"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E重返患者", "id_card": "320981198505051721"})
+    adm = admin_call("POST", "/api/inpatient/admissions", {
+        "patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "胆囊结石"})
+
+    _login(page, base_url)
+    _open_page(page, "surgery", "手术麻醉")
+    form = page.locator("#surg-form")
+    form.locator("input[name=admission_id]").fill(str(adm["id"]))
+    form.locator("input[name=surgery_name]").fill("E2E胆漏再探查术")
+    form.locator("input[name=unplanned_return]").check()
+    _submit(page, "#surg-form button")
+    expect(page.locator("#page-body")).to_contain_text("非计划重返")
+
+    rows = admin_read(f"/api/surgery/requests?admission_id={adm['id']}")
+    assert [(r["surgery_name"], r["unplanned_return"]) for r in rows] == [("E2E胆漏再探查术", True)]   # 修前无处可勾
+
+
 @pytest.fixture(scope="session")
 def admin_read(base_url):
     """以 admin 身份按接口读回（核对"点了取消确实没动"用）。"""

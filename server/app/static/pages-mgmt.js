@@ -134,7 +134,10 @@ async function renderSurgery() {
           <option value="III">III类切口</option><option value="IV">IV类切口</option></select>
         <select name="anesthesia_type">${Object.entries(ANESTHESIA).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <select name="urgency">${Object.entries(URGENCY).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
-        <input name="planned_date" placeholder="拟手术日 YYYY-MM-DD"><button>提出申请</button></form>`)}
+        <input name="planned_date" placeholder="拟手术日 YYYY-MM-DD">
+        <label style="font-size:13px"><input type="checkbox" name="unplanned_return">
+          非计划重返手术室（本次住院因并发症等再次手术；分期手术、计划内二次探查不勾）</label>
+        <button>提出申请</button></form>`)}
     ${panel(`手术申请（${requests.length}）`,
       table(["ID", "住院", "术式", "切口", "麻醉", "急缓", "状态", "操作"], requests, (r) => {
         let ops = "—";
@@ -143,7 +146,8 @@ async function renderSurgery() {
         else if (r.status === "approved") ops = `<button class="btn secondary" data-schedule="${r.id}">排班</button>`;
         else if (r.status === "scheduled") ops = `<button class="btn secondary" data-record="${r.id}">术中记录</button>`;
         else if (r.status === "completed") ops = `<button class="btn" data-view="${r.id}">查看记录</button>`;
-        return `<tr><td>${r.id}</td><td>${r.admission_id}</td><td>${esc(r.surgery_name)}</td>
+        return `<tr><td>${r.id}</td><td>${r.admission_id}</td><td>${esc(r.surgery_name)}${
+          r.unplanned_return ? ' <span class="tag red">非计划重返</span>' : ""}</td>
           <td>${esc(r.incision_level)}</td><td>${esc(ANESTHESIA[r.anesthesia_type] || "")}</td>
           <td>${esc(URGENCY[r.urgency] || "")}</td><td>${statusTag(SURGERY_STATUS, r.status)}</td><td>${ops}</td></tr>`;
       }))}
@@ -157,7 +161,11 @@ async function renderSurgery() {
   $("#room-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/surgery/rooms", formJson(e.target, ["org_id"]), "#surg-msg"); };
   $("#surg-form").onsubmit = (e) => { e.preventDefault();
-    postAction("/api/surgery/requests", formJson(e.target, ["admission_id"]), "#surg-msg"); };
+    const body = formJson(e.target, ["admission_id"]);
+    // 非计划重返手术室由医师显式勾选（P2-172）：原先表单里没有这一项——手册叫人「提手术申请时如实勾选」，
+    // 页面上却无处可勾，质量指标「非计划重返手术室率」恒为 0
+    body.unplanned_return = e.target.unplanned_return.checked;
+    postAction("/api/surgery/requests", body, "#surg-msg"); };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {

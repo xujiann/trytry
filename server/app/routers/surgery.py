@@ -77,6 +77,8 @@ class SurgeryRequestOut(BaseModel):
     urgency: str
     planned_date: str
     status: str
+    #: 非计划重返手术室（P2-172 起出参带上：申请清单上要看得见勾没勾）
+    unplanned_return: bool
 
 
 class SurgeryStatusOut(BaseModel):
@@ -217,6 +219,7 @@ def _request_out(r: SurgeryRequest) -> dict:
         "urgency": r.urgency,
         "planned_date": r.planned_date,
         "status": r.status,
+        "unplanned_return": r.unplanned_return,
     }
 
 
