@@ -1,9 +1,10 @@
 """块4：细目补齐——中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务。"""
 import io
+from datetime import date
 
 import pytest
 
-from conftest import login
+from conftest import freeze_business_date, login
 
 
 @pytest.fixture(scope="module")
@@ -101,10 +102,12 @@ def test_tcm_formula_and_batch_expiry(client, admin, env):
     assert client.post(
         f"/api/tcm/preparation-batches/{expired['id']}/release", headers=pharmacist
     ).status_code == 409
-    released = client.post(
-        f"/api/tcm/preparation-batches/{batch.json()['id']}/release?today=2026-06-01",
-        headers=pharmacist,
-    )
+    # 拨日子用冻结业务日期：放行的效期管控不再跟 `?today=` 往回拨（P2-286）；不冻的话 10-31 之后这一条会过期
+    with freeze_business_date(date(2026, 6, 1)):
+        released = client.post(
+            f"/api/tcm/preparation-batches/{batch.json()['id']}/release",
+            headers=pharmacist,
+        )
     assert released.status_code == 200 and released.json()["status"] == "released"
     # 越权与不存在
     assert client.post(

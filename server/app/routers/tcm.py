@@ -549,7 +549,9 @@ def release_batch(batch_id: int, today: str | None = None, db: Session = Depends
     assert_obj_org_writable(db, user, batch)
     if batch.status != "produced":
         raise HTTPException(status_code=409, detail=f"批次当前状态 {BATCH_STATUS_NAMES.get(batch.status, batch.status)} 不可发放")
-    business_date = resolve_business_date(today).isoformat()
+    # 效期管控按真实业务日期判（P2-286）：`today` 覆盖按接口对接规范「仅限测试与管理排查用途」，原先放行也按它判——
+    # 带一个早于效期的日期，过期批次照样放出去。覆盖只许把日子往后拨（判得更严），不许往回拨
+    business_date = max(resolve_business_date(today), clock.today()).isoformat()
     if batch.expire_date and batch.expire_date < business_date:
         raise HTTPException(status_code=409, detail="批次已过效期，禁止发放")
     batch.status = "released"
