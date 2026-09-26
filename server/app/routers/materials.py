@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import clock
-from ..concurrency import add_amount, insert_if_absent
+from ..concurrency import add_amount, insert_if_absent, move_row
 from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
@@ -205,8 +205,13 @@ def approve_purchase(
         raise HTTPException(status_code=409, detail=f"当前状态 {PURCHASE_STATUS_NAMES.get(purchase.status, purchase.status)} 不可审批")
     if purchase.requested_by == user.id:
         raise HTTPException(status_code=403, detail="不得审批本人提出的采购申请")
-    purchase.status = "approved" if body.approved else "cancelled"
-    purchase.approved_by = user.id
+    # 审批与「还待审批」压进同一条 UPDATE（P2-403）：上面那道预检是锁外读的——两位主任一个批准、一个驳回，后提交的把
+    # 先提交的结论改掉，两路都 200（真 PG 上同一个形状）；与验收（_mark_received）、双通道审核（P2-312）同一个写法
+    if not move_row(db, MaterialPurchase, purchase.id, MaterialPurchase.status == "requested",
+                    status="approved" if body.approved else "cancelled", approved_by=user.id):
+        db.rollback()
+        db.refresh(purchase)  # 抢输了就按真实状态措辞
+        raise HTTPException(status_code=409, detail=f"当前状态 {PURCHASE_STATUS_NAMES.get(purchase.status, purchase.status)} 不可审批")
     db.commit()
     return {"id": purchase.id, "status": purchase.status}
 
@@ -231,10 +236,13 @@ def sign_contract(purchase_id: int, body: ContractIn, db: Session = Depends(get_
     supplier = db.get(Supplier, body.supplier_id)
     if supplier is None or not supplier.active:
         raise HTTPException(status_code=404, detail="供应商不存在或已停用")
-    purchase.supplier_id = body.supplier_id
-    purchase.contract_no = body.contract_no
-    purchase.contract_amount = body.contract_amount
-    purchase.status = "contracted"
+    # 签合同与「还是已审批」同一条 UPDATE（P2-403，同上）：原先两路同时签，后提交的供应商、合同号、金额把先签的整份盖掉
+    if not move_row(db, MaterialPurchase, purchase.id, MaterialPurchase.status == "approved",
+                    supplier_id=body.supplier_id, contract_no=body.contract_no,
+                    contract_amount=body.contract_amount, status="contracted"):
+        db.rollback()
+        db.refresh(purchase)
+        raise HTTPException(status_code=409, detail=f"当前状态 {PURCHASE_STATUS_NAMES.get(purchase.status, purchase.status)} 不可签合同")
     db.commit()
     return {"id": purchase.id, "status": purchase.status, "contract_no": purchase.contract_no}
 

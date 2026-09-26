@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, move_row
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_roles
 from ..models import (
@@ -207,8 +207,12 @@ def review_special_disease(
     # 权限点的自定义角色照样自报自批。存量申报没记申报人（迁移 d8f2a6c4b1e3 不回填），比不出的照原样放行
     if app_.created_by is not None and app_.created_by == user.id:
         raise HTTPException(status_code=403, detail="不得审核本人提出的特病申报")
-    app_.status = "approved" if approve else "rejected"
-    app_.reviewed_by = user.id
+    # 审核与「还待审核」压进同一条 UPDATE（P2-403）：上面那道预检是锁外读的——一个批准、一个驳回同时到，后提交的把先提交
+    # 的结论改掉、两路都 200；双通道审核（P2-312）早就这么写
+    if not move_row(db, SpecialDiseaseApp, app_.id, SpecialDiseaseApp.status == "applied",
+                    status="approved" if approve else "rejected", reviewed_by=user.id):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该申报已处理")
     db.commit()
     db.refresh(app_)
     return _special_disease_out(app_)
