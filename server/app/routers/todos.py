@@ -15,14 +15,14 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import DrugStock, ExamReport, ExamRequest, Prescription, User
+from ..models import DrugStock, ExamReport, ExamRequest, Organization, Prescription, User
 from ..visibility import visible_org_ids
 
 router = APIRouter(prefix="/api/todos", tags=["待办中心"])
 
 
 class TodoSectionOut(BaseModel):
-    """待办分节。`list` 的行形随 `type` 换（审方 3 键/待诊断 4 键/缺药 4 键/
+    """待办分节。`list` 的行形随 `type` 换（审方 3 键/待诊断 4 键/缺药 5 键/
     危急值 4 键/待确认 3 键）——真多态而非条件键：逐字段并模会把五种行的键互相
     注入 null，且待确认行（id/request_id/conclusion）是危急值行的真子集，smart
     union 会静默吞掉 critical_status。照 metrics/drilldown 的先例用宽字典透传，
@@ -77,12 +77,16 @@ def _pending_exams(db: Session) -> dict:
 def _stock_alerts(db: Session) -> dict:
     query = db.query(DrugStock).filter(DrugStock.quantity < DrugStock.threshold)
     rows = query.order_by(DrugStock.org_id).limit(PREVIEW).all()
+    # 带上机构名称（P2-371）：缺药是哪家的，医生移动端的待办卡片原先只能打出「机构 3」
+    names = {oid: name for oid, name in db.query(Organization.id, Organization.name)
+             .filter(Organization.id.in_({s.org_id for s in rows}))} if rows else {}
     return {
         "type": "stock_shortage",
         "title": "缺药预警",
         "count": query.count(),
         "list": [
-            {"org_id": s.org_id, "drug_name": s.drug_name, "quantity": s.quantity, "threshold": s.threshold}
+            {"org_id": s.org_id, "org_name": names.get(s.org_id, ""), "drug_name": s.drug_name,
+             "quantity": s.quantity, "threshold": s.threshold}
             for s in rows
         ],
     }

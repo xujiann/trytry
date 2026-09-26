@@ -449,8 +449,8 @@ async function loadTodos() {
     box.innerHTML = noticeBlock + data.items.map((item) => {
       const rows = item.list.slice(0, 20).map((row) => card(
         Object.entries(row)
-          .filter(([k]) => k !== "id")
-          .map(([k, v]) => kv(FIELD_NAMES[k] || k, esc(v)))
+          .filter(([k]) => k !== "id" && k !== "org_id")   // 机构显示名称（org_name），不显示编号
+          .map(([k, v]) => kv(FIELD_NAMES[k] || k, esc(TODO_VALUES[k] ? TODO_VALUES[k](v) : v)))
           .join("") || kv("编号", esc(row.id))
       )).join("");
       return `<div class="todo-group">
@@ -483,7 +483,14 @@ function bindNoticeRead(box) {
 const FIELD_NAMES = {
   diagnosis_name: "诊断", review_comment: "审方意见", center_type: "中心", item_name: "项目",
   status: "状态", conclusion: "结论", critical_status: "危急值状态", request_id: "申请单",
-  drug_name: "药品", quantity: "库存", threshold: "阈值", org_id: "机构",
+  drug_name: "药品", quantity: "库存", threshold: "阈值", org_name: "机构",
+};
+/** 待办行里的取值按键翻译（P2-371）：原先原样打印——「中心 imaging」「状态 pending」「危急值状态 notified」。
+ *  取值表用本文件现成的（检查申请页、危急值页同一套）；带「状态」的只有待诊断申请行 */
+const TODO_VALUES = {
+  center_type: (v) => CENTER_NAMES[v] || v,
+  status: (v) => (EXAM_STATUS[v] || [v])[0],
+  critical_status: (v) => (CRITICAL_TAGS[v] || [v])[0],
 };
 
 /* ---------------- 危急值确认与处置 ---------------- */

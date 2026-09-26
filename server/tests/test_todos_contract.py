@@ -143,6 +143,7 @@ def test_管理员四节精确_五种行形各归其位(client, world):
                 "count": 1,
                 "list": [{
                     "org_id": world["org"]["id"],
+                    "org_name": "待办契约医院",   # P2-371 加：医生移动端显示机构名称而不是编号
                     "drug_name": "待办缺货药",
                     "quantity": 3,
                     "threshold": 9,
