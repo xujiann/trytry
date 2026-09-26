@@ -81,8 +81,8 @@ MIN_BED_DAYS_FOR_INTENSITY = 100
 # BillDetail / PrescriptionItem 拉进内存逐行算——统计月报把三年历史搬一遍。
 # 聚合下推后，日期算术必须在数据库里做，而 SQLite（开发/测试）与
 # PostgreSQL（生产）没有共同的日期差函数，只能各写一句、收在这几个助手里。
-# 语义对齐 Python 侧原实现：日期级用 `date() 差`，时刻级用 `timedelta.days`
-# （对正值即向下取整），特征化测试锁住两种方言下的取值一致。
+# 语义对齐 Python 侧原实现：日期级用 `date() 差`，特征化测试锁住两种方言下的取值一致。
+# （原先另有一个时刻级助手 `timedelta.days` 只给抗菌药物强度的床日用，P1-151 与平均住院日统一成日期级后删掉。）
 
 
 def _is_sqlite(db: Session) -> bool:
@@ -106,20 +106,6 @@ def _py_date_day(db: Session, d: date):
         # 儒略日 = 公历序数 + 1721424.5（午夜）
         return d.toordinal() + 1721424.5
     return (d - date(1970, 1, 1)).days
-
-
-def _sql_stay_days(db: Session, later, earlier):
-    """两个**时间戳**相隔的整天数，对齐 Python `(later - earlier).days` 的正值域。
-
-    SQLite 取 Unix 秒差再整除（避免儒略日小数在整天边界上的浮点抖动）；
-    PostgreSQL 取 interval 的 epoch 秒差后向下取整。
-    """
-    if _is_sqlite(db):
-        return (
-            sa.cast(func.strftime("%s", later), sa.Integer)
-            - sa.cast(func.strftime("%s", earlier), sa.Integer)
-        ) / 86400
-    return sa.cast(func.floor(sa.extract("epoch", later - earlier) / 86400.0), sa.Integer)
 
 
 def _at_least_one_day(expr):
@@ -913,9 +899,11 @@ def drug_use(
         ddd_sum[oid] = float(ddds or 0)
         uncovered[oid] = int(uncov or 0)
 
-    # 分母：收治人天 = 期内出院者占用总床日（时刻级天数差，1 天下限）
+    # 分母：收治人天 = 期内出院者占用总床日，按日期差算、当日入出院计 1 天——与本文件的平均住院日（同一个
+    # 「出院者占用总床日」）、成本核算、DRG 同一口径，也就是国家口径的「出院人数 × 平均住院日」（P1-151）。
+    # 原先用时刻级天数差（整 24 小时向下取整）：下午入院、上午出院的住院每例少算一天，强度被系统性抬高
     bed_days: dict[int, int] = dict.fromkeys(org_ids, 0)
-    stay_days = _sql_stay_days(db, Admission.discharged_at, Admission.admitted_at)
+    stay_days = _sql_date_day(db, Admission.discharged_at) - _sql_date_day(db, Admission.admitted_at)
     for oid, day_sum in (
         db.query(Admission.org_id, func.sum(_at_least_one_day(stay_days)))
         .filter(

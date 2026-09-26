@@ -95,7 +95,8 @@ def world(client):
             db.flush()
             return row
 
-        # 期前入院、期内出院：占用重叠 5/1→5/5=4 天；住院日(日期级)=15；床日(时刻级)=14
+        # 期前入院、期内出院：占用重叠 5/1→5/5=4 天；住院日与收治人天都按日期级 = 15
+        # （P1-151 前收治人天按时刻级截成 14：4/20 10:00 → 5/5 09:00 差 14 天 23 小时）
         adm1 = adm(a.id, beds[0], datetime(2026, 4, 20, 10, 0), datetime(2026, 5, 5, 9, 0))
         # 期内入院、仍在院：占用 5/10→6/1=22 天，不计出院
         adm(a.id, beds[1], datetime(2026, 5, 10, 8, 0), None)
@@ -236,15 +237,16 @@ def _drug_row(org_id, org_name, **kw):
 
 
 def expected_drug_use(world):
-    # 甲：病案首页 1000/300；门诊 50.5/30.5；DDDs 6.0；床日 14（14天23小时截断）；
-    #     强度 6.0*100/14=42.86；未覆盖 1；样本不足标记 True。
+    # 甲：病案首页 1000/300；门诊 50.5/30.5；DDDs 6.0；收治人天 15（日期级，与平均住院日同一口径）；
+    #     强度 6.0*100/15=40.0；未覆盖 1；样本不足标记 True。
+    #     P1-151 前收治人天按时刻级截成 14、强度 42.86——同一份数据平均住院日 15、收治人天 14，强度虚高 7%。
     # 乙：病案首页 500/100；门诊 10/10；DDDs 2.0；床日 1（当日入出院下限）；强度 200。
     # 丙：无数据全零行。
     a = _drug_row(
         world["a"], "特征化甲县医院", inpatient_total=1000.0, inpatient_drug=300.0,
         inpatient_drug_ratio_pct=30.0, outpatient_total=50.5, outpatient_drug=30.5,
         outpatient_drug_ratio_pct=round(30.5 / 50.5 * 100, 2), antibiotic_ddds=6.0,
-        bed_days=14, antibiotic_intensity=round(6.0 * 100 / 14, 2),
+        bed_days=15, antibiotic_intensity=round(6.0 * 100 / 15, 2),
         ddd_uncovered_items=1, intensity_unstable=True,
     )
     b = _drug_row(
