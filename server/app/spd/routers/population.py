@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ... import clock
 from ...clock import now_naive
-from ...concurrency import ensure_present, insert_if_absent, serialized_on
+from ...concurrency import ensure_present, insert_if_absent, move_row, serialized_on
 from ...config import settings
 from ...database import get_db
 from ...patchtypes import UNSET
@@ -1221,17 +1221,24 @@ def _active_elsewhere_detail(db: Session, enrollment: SpdEnrollment) -> str:
 
 
 def _reactivate(db: Session, enrollment: SpdEnrollment) -> None:
-    """把档案恢复在管；已有另一份在管档案就 409（预检 + 并发下撞索引兜底，两处同一句）。**不 commit**。"""
+    """把档案恢复在管；已有另一份在管档案就 409（预检 + 并发下撞索引兜底，两处同一句）。**不 commit**。
+
+    条件翻转（P2-344）：调用方判「没登记死亡」是锁外读的，读到之后别人刚登记死亡并提交，原先这里照旧改回在管——
+    死亡是终态（P1-111）就这样被并发绕过。「不是死亡」压进同一条 UPDATE，抢输了 409。
+    """
     detail = _active_elsewhere_detail(db, enrollment)
     if detail:
         raise HTTPException(status_code=409, detail=detail)
-    enrollment.status = "active"
     try:
-        db.flush()
+        moved = move_row(db, SpdEnrollment, enrollment.id, SpdEnrollment.status != "dead", status="active")
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail=_active_elsewhere_detail(db, enrollment)
                             or "该患者此病种已有在管档案，不能再把这份档案恢复在管") from None
+    if not moved:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已登记死亡的档案不可恢复管理")
+    db.refresh(enrollment)   # 状态走的是 Core UPDATE，会话里那份对象没跟着变
 
 
 @router.post("/enrollments/{enrollment_id}/lifecycle", response_model=LifecycleResultOut,
@@ -1287,7 +1294,13 @@ def lifecycle_event(
 
     closed = {}
     if not cross_org:
-        enrollment.status = _EVENT_STATUS[body.event]
+        # 条件翻转（P2-344）：上面「已登记死亡」的预检是锁外读的，读到之后别人刚登记死亡并提交，原先这里照旧改成
+        # 排除 / 召回 / 迁出——死亡被盖掉，再「恢复」就把死者恢复成在管
+        if not move_row(db, SpdEnrollment, enrollment.id, SpdEnrollment.status != "dead",
+                        status=_EVENT_STATUS[body.event]):
+            db.rollback()
+            raise HTTPException(status_code=409, detail="已登记死亡的档案不可再登记生命周期事件")
+        db.refresh(enrollment)
         closed = close_open_work(db, enrollment, f"{body.event}:{body.reason}"[:250])
         if body.event == "death":
             # 召回随死亡收尾（P2-260）：原先结案收尾不管召回记录——死者名下的召回照旧「待联系」，还能登记「已重新纳管」
