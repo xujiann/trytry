@@ -1558,6 +1558,14 @@ def _check_valid_window(valid_from: str, valid_to: str) -> None:
         raise HTTPException(status_code=422, detail="有效期止不得早于有效期起")
 
 
+def _check_not_expired(valid_to: str) -> None:
+    """以「启用」落库的任务，有效期止不得早于今天（P2-297）：调度按 `今天 > 止` 跳过，过了期的任务照样显示「启用中」、
+    一份报告也不出——与有效期倒置、停用模板同一种「照样收下、之后天天被跳过」。止于今天的当天照跑。"""
+    if valid_to and valid_to < clock.today().isoformat():
+        raise HTTPException(status_code=422,
+                            detail=f"有效期止（{valid_to}）已过，启用后一份报告也不会出；不再推送请改为暂停")
+
+
 @router.post("/report-tasks", response_model=ReportTaskOut, status_code=201,
              dependencies=[Depends(require_roles("director"))])
 def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
@@ -1568,6 +1576,7 @@ def create_report_task(body: ReportTaskIn, db: Session = Depends(get_db)):
     if template is None or not template.active:
         raise HTTPException(status_code=404, detail="报告模板不存在或已停用")
     _check_valid_window(body.valid_from, body.valid_to)
+    _check_not_expired(body.valid_to)
     _check_report_refs(db, body.subscriber_ids, body.org_ids)
     task = SpdReportTask(**body.model_dump())
     db.add(task)
@@ -1610,6 +1619,15 @@ def update_report_task(task_id: int, body: ReportTaskPatch, db: Session = Depend
     # 起止与建档同一句，与存量合并后再比；只在这次改了起止时查——存量里已倒置的任务，暂停 / 删除它不该被拦
     if {"valid_from", "valid_to"} & changes.keys():
         _check_valid_window(changes.get("valid_from", task.valid_from), changes.get("valid_to", task.valid_to))
+    # 改回启用、或启用中改有效期止，与建档同两句（P2-297）：模板停用了、有效期过了，改回「启用」照样 200、之后天天被跳过。
+    # 只在这次动了状态或止期时查——启用中的任务改推送时点、改订阅人，不该被后来停掉的模板拦住（暂停 / 删除更不拦）
+    reactivating = changes.get("status") == "active" and task.status != "active"
+    if reactivating:
+        template = db.get(SpdReportTemplate, task.template_id)
+        if template is None or not template.active:
+            raise HTTPException(status_code=404, detail="报告模板不存在或已停用")
+    if changes.get("status", task.status) == "active" and (reactivating or "valid_to" in changes):
+        _check_not_expired(changes.get("valid_to", task.valid_to))
     _check_report_refs(db, changes.get("subscriber_ids", []), changes.get("org_ids", []),
                        old_subscribers=task.subscriber_ids, old_orgs=task.org_ids)
     for key, value in changes.items():
