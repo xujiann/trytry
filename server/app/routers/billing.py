@@ -1562,11 +1562,21 @@ async def payment_callback(request: Request, db: Session = Depends(get_db)):
     if order.status != "pending":
         return _settled_callback_result(order, result_status, trade_no)
     if result_status != "paid":
-        order.status = "failed"
-        order.fail_reason = str(payload.get("message", "通道回调支付失败"))[:256]
-        order.callback_at = utcnow()
+        # 失败回调也是条件翻转（P2-242）：上面那句状态检查读的是锁外的旧快照，原先这里无条件写 failed——「失败」与
+        # 「成功」两个回调同时到，成功那一路在锁里入账提交之后，这一路照样把单子改回 failed，两路都 200：钱收了，
+        # 单子却是失败、额度释放，收银还能再收一遍（先后到达时第二路是 409）。只从 pending 翻，翻不到按真实状态回。
+        failed = cast(CursorResult, db.execute(
+            update(PaymentOrder)
+            .where(PaymentOrder.id == order.id, PaymentOrder.status == "pending")
+            .values(status="failed", fail_reason=str(payload.get("message", "通道回调支付失败"))[:256],
+                    callback_at=utcnow())
+        ))
+        if not failed.rowcount:
+            db.rollback()
+            db.refresh(order)
+            return _settled_callback_result(order, result_status, trade_no)
         db.commit()
-        return {"ok": True, "order_id": order.id, "status": order.status, "idempotent": False}
+        return {"ok": True, "order_id": order.id, "status": "failed", "idempotent": False}
     # 入账前复核**结算单**层面的未付余额，而不只是"回调金额==本单金额"。
     # 只核对本单金额挡不住"同一张账单开了多张单"这类超收：三张 100 元的
     # gateway 单各自金额都对，回调三次就收进 300（实测）。这里按已到账口径
