@@ -571,13 +571,17 @@ async function renderEmergency() {
     const { adv, vital, outcome } = e.target.dataset;
     if (adv) return postAction(`/api/emergency/cases/${adv}/advance`, null, "#em-msg");
     if (vital) {
+      // 心率用文本框、自己解析（P2-249，与逐题作答的数值题同一个理由）：spdModal 的数字框把空值读成 0，原先再
+      // `|| null`——心跳骤停记的 0 与「未测」混成同一个 null。后端写着「0 照收——抢救现场心跳骤停，记 0 是真实的」
       const picked = await spdModal("回传生命体征", [
-        { name: "heart_rate", label: "心率（次/分，留空表示未测）", type: "number" },
+        { name: "heart_rate", label: "心率（次/分，留空表示未测；心跳骤停填 0）" },
         { name: "note", label: "备注", type: "text" },
       ]);
       if (!picked) return;
+      const heartRate = picked.heart_rate === "" ? null : Number(picked.heart_rate);
+      if (Number.isNaN(heartRate)) return setMsg("#em-msg", "心率须填数字（未测留空）", false);
       return postAction(`/api/emergency/cases/${vital}/vitals`,
-        { heart_rate: picked.heart_rate || null, note: picked.note }, "#em-msg");
+        { heart_rate: heartRate, note: picked.note }, "#em-msg");
     }
     if (outcome) {
       const picked = await spdModal("判定抢救转归", [

@@ -738,6 +738,37 @@ def test_绿道节点在页内表单里录_节点下拉_取消即不录(page, ba
     assert list(recorded()) == ["call"] and recorded()["call"].startswith("2026-09-20"), recorded()
 
 
+def test_急救回传体征_心跳骤停记0_留空才是未测(page, base_url, seed, green_channel_seed):
+    """P2-249：「回传体征」的心率原先是数字框再 `|| null`——spdModal 的数字框把空值读成 0，页面再把 0 改成 null，
+    心跳骤停记的 0 与「未测」混成同一个 null（后端写着 0 照收，抢救现场心跳骤停记 0 是真实的）。改成文本框自己解析：
+    0 记 0、留空记未测、填错了页内提示且不落库。按接口读回核对。"""
+    import json
+    from urllib.request import Request
+
+    doctor = json.loads(urlopen(Request(f"{base_url}/api/auth/login", data=json.dumps(
+        {"username": "e2e_doctor", "password": "passw0rd1"}).encode(),
+        headers={"Content-Type": "application/json"}), timeout=10).read())["access_token"]
+    cid = json.loads(urlopen(Request(f"{base_url}/api/emergency/cases", data=json.dumps(
+        {"location": "E2E体征事发地", "symptom": "意识丧失", "dest_org_id": seed["org"]["id"]}).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {doctor}"}), timeout=10).read())["id"]
+
+    def heart_rates():
+        return [v["heart_rate"] for v in green_channel_seed["read"](f"/api/emergency/cases/{cid}/vitals")]
+
+    _login(page, base_url)
+    _open_page(page, "emergency", "智慧急救")
+    page.click(f'button[data-vital="{cid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"heart_rate": "0", "note": "心跳骤停"}))
+    assert heart_rates() == [0], heart_rates()   # 修前 [None]：心跳骤停记成未测
+    page.click(f'button[data-vital="{cid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"heart_rate": "", "note": "未测"}))
+    assert heart_rates() == [0, None], heart_rates()
+    page.click(f'button[data-vital="{cid}"]')
+    _spd_modal(page, {"heart_rate": "八十", "note": "填错"})
+    expect(page.locator("#em-msg")).to_contain_text("心率须填数字")
+    assert heart_rates() == [0, None], heart_rates()
+
+
 @pytest.fixture(scope="session")
 def home_visit_seed(base_url, seed):
     """上门服务的前置：两张待派单的上门工单（一张走派单→完成、一张用来取消）。"""
