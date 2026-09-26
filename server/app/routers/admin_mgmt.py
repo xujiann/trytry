@@ -928,9 +928,12 @@ def list_payroll(period: str | None = None, employee_id: int | None = None, db: 
         q = q.filter(PayrollRecord.period == require_month(period))  # P1-62
     if employee_id is not None:
         q = q.filter(PayrollRecord.employee_id == employee_id)
+    # 合计按筛选条件在库里求和（P1-149）：原先加的是下面截到 500 行的那一页，全县一个月发薪超过 500 人，
+    # 「合计发放」就少算了第 501 人起的全部——而这一行是页面上唯一的合计
+    total_amount = q.with_entities(func.sum(PayrollRecord.total)).scalar()
     records = q.order_by(PayrollRecord.id.desc()).limit(500).all()
     return {
-        "total_amount": round(sum(r.total for r in records), 2),
+        "total_amount": round(total_amount or 0, 2),
         "records": [
             {
                 "id": r.id,
