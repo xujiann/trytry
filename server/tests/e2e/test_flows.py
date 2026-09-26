@@ -2132,6 +2132,31 @@ def test_clinical_documents_flow(page, base_url, seed):
     expect(page.locator("#page-body")).to_contain_text("文书完整")
 
 
+def test_体温单缺测的不画成0_在那儿断开(page, base_url, admin_read, admin_call):
+    """P2-158：体温单曲线原先用 `v.temperature || 0`——一次只测了血压的记录把体温、脉搏两条曲线都拽到 0，
+    与接口注释、用户手册「未测项留空不要填 0（填 0 会污染体温单趋势曲线）」相反。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E体温单县医院", "org_type": "lead_hospital", "level": "county"})
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": "E2E体温单病区"})
+    bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "E2E-T1"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E发热患者", "id_card": "320981198505055158", "gender": "男"})
+    adm = admin_call("POST", "/api/inpatient/admissions",
+                     {"patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "肺炎"})
+    for body in ({"measured_at": "2026-09-20 08:00", "temperature": 38.6, "pulse": 96},
+                 {"measured_at": "2026-09-20 10:00", "sbp": 150, "dbp": 90},   # 只测了血压
+                 {"measured_at": "2026-09-20 14:00", "temperature": 39.1, "pulse": 102}):
+        admin_call("POST", f"/api/inpatient/admissions/{adm['id']}/vitals", body)
+
+    _login(page, base_url)
+    _open_page(page, "clinicaldocs", "住院临床文书")
+    page.select_option("#doc-pick select[name=admission_id]", str(adm["id"]))
+    _submit(page, "#doc-pick button")
+    chart = page.locator("#page-body svg").first
+    # 体温曲线（#c0392b）：两个测量点、在缺测处断成两段；修前是一条三个点的折线，中间那个点画在 0 上
+    expect(chart.locator('circle[fill="#c0392b"]')).to_have_count(2)
+    expect(chart.locator('polyline[stroke="#c0392b"]')).to_have_count(2)
+
+
 def test_surgery_full_flow(page, base_url, seed):
     """手术麻醉（T2.3）：申请 → 审批 → 排班 → 术中记录，状态逐级推进。
 

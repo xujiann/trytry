@@ -273,15 +273,25 @@ function barChart(items, { color = "#0b6e6e", unit = "" } = {}) {
 
 function lineChart(months, series, colors) {
   const w = 640, h = 200, padL = 36, padB = 24, padT = 10;
-  const all = Object.values(series).flat();
+  // 缺测（null / undefined）不画点、在那儿断开折线（P2-158）：原先调用方只能拿 0 顶上，一次只测了血压的记录把体温、
+  // 脉搏两条曲线都拽到底，纵轴也跟着压扁
+  const missing = (v) => v === null || v === undefined;
+  const all = Object.values(series).flat().filter((v) => !missing(v));
   const max = Math.max(...all, 1);
   const x = (i) => padL + (i * (w - padL - 10)) / Math.max(months.length - 1, 1);
   const y = (v) => padT + (h - padT - padB) * (1 - v / max);
   let svg = "";
   Object.entries(series).forEach(([name, values], si) => {
-    const points = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
-    svg += `<polyline points="${points}" fill="none" stroke="${colors[si % colors.length]}" stroke-width="2"/>`;
-    values.forEach((v, i) => { svg += `<circle cx="${x(i)}" cy="${y(v)}" r="2.5" fill="${colors[si % colors.length]}"/>`; });
+    const color = colors[si % colors.length];
+    const segments = [[]];
+    values.forEach((v, i) => {
+      if (missing(v)) { if (segments[segments.length - 1].length) segments.push([]); return; }
+      segments[segments.length - 1].push(`${x(i)},${y(v)}`);
+    });
+    segments.filter((seg) => seg.length).forEach((seg) => {
+      svg += `<polyline points="${seg.join(" ")}" fill="none" stroke="${color}" stroke-width="2"/>`;
+    });
+    values.forEach((v, i) => { if (!missing(v)) svg += `<circle cx="${x(i)}" cy="${y(v)}" r="2.5" fill="${color}"/>`; });
   });
   // 月份标签来自后端、格式固定（YYYY-MM），今天不含特殊字符——但图表组件是
   // 三套前端共用的渲染出口，"这个入参恰好安全"不是组件该依赖的前提。

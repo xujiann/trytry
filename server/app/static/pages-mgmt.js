@@ -72,7 +72,8 @@ async function renderClinicalDocs() {
         <input name="sbp" type="number" placeholder="收缩压"><input name="dbp" type="number" placeholder="舒张压">
         <button>录入</button></form>
       ${vitals.length ? lineChart(vitals.map((v) => v.measured_at.slice(5, 10)),
-        { "体温": vitals.map((v) => v.temperature || 0), "脉搏": vitals.map((v) => v.pulse || 0) },
+        // 未测的给 null、不给 0（P2-158）：接口的注释与用户手册都说「未测项留空不要填 0，填 0 会污染体温单趋势曲线」
+        { "体温": vitals.map((v) => v.temperature ?? null), "脉搏": vitals.map((v) => v.pulse ?? null) },
         ["#c0392b", "#0b6e6e"]) : ""}
       ${table(["测量时刻", "体温", "脉搏", "呼吸", "血压", "记录人"], vitals, (v) =>
         `<tr><td>${esc(v.measured_at)}</td><td>${v.temperature ?? "—"}</td><td>${v.pulse ?? "—"}</td>
