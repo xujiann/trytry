@@ -1148,6 +1148,19 @@ def _gateway(channel: str) -> PaymentGateway:
     return _GATEWAYS.get(channel, MOCK_GATEWAY)
 
 
+def _needs_real_gateway(channel: str) -> bool:
+    """这个渠道此刻没有真通道、却又绝不能落回 Mock（P1-165）：`gateway` 渠道一律如此；`online` 在生产环境如此。
+
+    Mock 的 pay / refund 直接回成功、流水号本地编，查流水就是把本地单照抄一遍——落回它，收款会把单标成已支付、
+    退款会把单标成已退款、对账会一笔不差地「对平」，而现实中一分钱都没动。下单、退款、对账三处同一句：原先只有
+    下单挡了，网关没注册上（出网校验不过、启动时 DNS 解析失败）的时候，给网关单退款 200「已退款」、患者一分没拿到，
+    当日对账拿本地镜像比本地单，绿灯「差异 0 笔」。`cash` / `card` / `insurance` 是窗口当面收退 / 基金结算，本来就没有
+    网关，它们走 Mock 正是真实语义。"""
+    if channel == "gateway":
+        return "gateway" not in _GATEWAYS
+    return settings.is_production and channel == "online" and "online" not in _GATEWAYS
+
+
 def register_http_gateway() -> bool:
     """I2：`MEDPLAT_PAYMENT_GATEWAY_URL` 非空时注册 HTTP 网关为 channel="gateway"。
 
@@ -1388,11 +1401,11 @@ def create_payment(
         raise HTTPException(status_code=404, detail="结算单不存在")
     # 收款收进结算单所属机构的账。实测未修前：乙院 operator 能对甲院的结算单收款（201）。
     assert_obj_org_writable(db, user, settlement)
-    if body.channel == "gateway" and "gateway" not in _GATEWAYS:
+    if body.channel == "gateway" and _needs_real_gateway("gateway"):
         # 未配置/未过出网校验时绝不能悄悄落回 Mock：Mock 会把单标成已支付，
         # 而现实中一分钱都没收到。
         raise HTTPException(status_code=503, detail="支付网关未配置或未通过出网校验，gateway 渠道不可用")
-    if settings.is_production and body.channel == "online" and "online" not in _GATEWAYS:
+    if body.channel == "online" and _needs_real_gateway("online"):
         # 同一条理由，`online` 上原先漏了。`_gateway()` 对任何未注册的渠道一律
         # 回落 `MOCK_GATEWAY`，而 Mock 的 `pay()` 直接返回 success、流水号本地编——
         # 于是生产上"线上支付"会把单据标成已付，而一分钱都没出账。
@@ -1629,6 +1642,13 @@ def refund_payment(
         raise HTTPException(
             status_code=409, detail=f"当前状态 {PAYMENT_STATUS.get(order.status, order.status)} 不可退款"
         )
+    if _needs_real_gateway(order.channel):
+        # 与下单同一句（P1-165）：通道没注册上时落回 Mock，退款 200「已退款」、患者一分钱没拿到，这张单还能再收一遍
+        raise HTTPException(
+            status_code=503,
+            detail=f"{PAYMENT_CHANNELS.get(order.channel, order.channel)}的真实通道当前不可用（未配置或未通过出网校验），"
+                   "暂不能退款——落回模拟通道会把单据标成已退款而实际一分钱没退",
+        )
     refundable = round(order.amount - order.refunded_amount, 2)
     amount = round(body.amount if body.amount is not None else refundable, 2)
     # 先占额、再调通道。老写法是"读 refunded_amount → 判可退 → 回写"的读-改-写，
@@ -1745,11 +1765,18 @@ def run_reconciliation(
     """
     date = require_date(date, field="date")
 
+    day_orders = _orders_of_day(db, date)
+    if _needs_real_gateway("gateway") and any(o.channel == "gateway" for o in day_orders):
+        # 当日有网关单、网关却没注册上：拿 Mock 的本地镜像比本地单只会一笔不差地「对平」（P1-165）
+        raise HTTPException(
+            status_code=503,
+            detail="当日有支付网关的单据，但支付网关当前不可用（未配置或未通过出网校验），拉不到通道流水，暂不能对账",
+        )
     gateway = _gateway("gateway")
     # 本地侧只取走这条通道收的支付单（P2-147）。现金、银行卡、医保是窗口当面收讫 / 基金结算，本来就没有网关，
     # 注册了 HTTP 网关后拉回来的是网关的流水——原先把当日全部本地单都拿去比，每一笔现金都成了「本地有通道无」，
     # 真正要查的网关差异淹在里面。Mock 下各渠道共用同一个通道对象，照旧全比。
-    local_orders = [o for o in _orders_of_day(db, date) if _gateway(o.channel) is gateway]
+    local_orders = [o for o in day_orders if _gateway(o.channel) is gateway]
     # 通道流水：注册了 HTTP 网关时拉真通道流水（GET /transactions?date=），
     # 否则仍为 Mock 本地镜像；Mock 实现下各渠道共用同一份日流水。
     try:
