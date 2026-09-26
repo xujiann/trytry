@@ -874,53 +874,63 @@ async function renderMedication() {
 
 async function renderInsurance() {
   $("#page-desc").textContent = "结算记录、转诊证明、特殊病种申报、双通道药品申报、基金监测";
+  // 表单与按钮按接口的角色守卫给（P1-175）：原先一个 Promise.all 连管理层才看得到的基金监测一起取，经办、医师一进来
+  // 整页只剩一句「需要以下角色之一：管理层」——结算录入、转诊证明、特病 / 双通道申报这些给他们用的表单一张也看不到；
+  // 管理层进得来，点哪张表单都是 403
+  const role = currentRole();
+  const can = (...roles) => role === "admin" || roles.includes(role);
+  const canSettle = can("operator"), canApply = can("operator", "doctor"), canReview = can("director");
   const [fund, settlements, apps, dualApps] = await Promise.all([
-    api("/api/insurance/fund-stats"), api("/api/insurance/settlements"),
+    canReview ? api("/api/insurance/fund-stats") : Promise.resolve(null), api("/api/insurance/settlements"),
     api("/api/insurance/special-diseases"), api("/api/insurance/dual-channel")]);
-  const canReviewDual = ["director", "admin"].includes(currentRole());
   $("#page-body").innerHTML = `
-    <div class="cards">
+    ${fund ? `<div class="cards">
       <div class="card"><div class="label">医保基金支出总额</div><div class="value">${fund.insurance_pay_total}</div></div>
       <div class="card"><div class="label">县域内结算占比</div><div class="value">${fund.local_ratio_pct}%</div></div>
-      <div class="card"><div class="label">基层支出占比</div><div class="value">${fund.grassroots_ratio_pct}%</div></div></div>
+      <div class="card"><div class="label">基层支出占比</div><div class="value">${fund.grassroots_ratio_pct}%</div></div></div>` : ""}
     ${panel("结算登记", `
-      <form class="inline" id="ins-form">
+      ${canSettle ? `<form class="inline" id="ins-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="org_id" type="number" placeholder="机构ID" required>
         <select name="settle_type"><option value="local">本地</option><option value="remote">异地</option></select>
         <input name="total_amount" type="number" step="any" placeholder="总额" required><input name="insurance_pay" type="number" step="any" placeholder="医保支付" required>
         <input name="self_pay" type="number" step="any" placeholder="自付" required><button>登记</button>
-      </form>
+      </form>` : ""}
       <h3 style="margin-top:12px">转诊证明 / 特病申报</h3>
-      <form class="inline" id="cert-form"><input name="referral_id" type="number" placeholder="转诊记录ID" required><button>签发证明</button></form>
-      <form class="inline" id="spec-form"><input name="patient_id" type="number" placeholder="患者ID" required><input name="disease_name" placeholder="病种" required><button>特病申报</button></form>
+      ${canSettle ? `<form class="inline" id="cert-form"><input name="referral_id" type="number" placeholder="转诊记录ID" required><button>签发证明</button></form>` : ""}
+      ${canApply ? `<form class="inline" id="spec-form"><input name="patient_id" type="number" placeholder="患者ID" required><input name="disease_name" placeholder="病种" required><button>特病申报</button></form>` : ""}
+      ${canSettle || canApply ? "" : `<p class="muted">结算登记与转诊证明由经办办理，特病申报由经办或医师提出；管理层在下面的队列里审核。</p>`}
       <p class="msg" id="ins-msg"></p>`)}
     ${panel("特病申报队列", table(["ID", "患者", "病种", "状态", "操作"], apps, (a) =>
       `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.disease_name)}</td>
        <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${esc(a.status_name)}</span></td>
-       <td>${a.status === "applied" ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`))}
+       <td>${a.status === "applied" && canReview ? `<button class="btn secondary" data-ok="${a.id}">批准</button><button class="btn danger" data-no="${a.id}">驳回</button>` : "—"}</td></tr>`))}
     ${panel("双通道药品申报（医师/经办申报 → 管理层审核）", `
-      <form class="inline" id="dual-form">
+      ${canApply ? `<form class="inline" id="dual-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="drug_name" placeholder="药品名称" required>
         <input name="reason" placeholder="申报理由" style="min-width:180px">
-        <button>申报</button></form>
+        <button>申报</button></form>` : ""}
       ${table(["ID", "患者", "药品", "理由", "状态", "审核意见", "操作"], dualApps, (a) =>
         `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.drug_name)}</td><td>${esc(a.reason) || "—"}</td>
          <td><span class="tag ${a.status === "approved" ? "green" : a.status === "rejected" ? "red" : "orange"}">${a.status === "approved" ? "已批准" : a.status === "rejected" ? "已驳回" : "待审核"}</span></td>
          <td>${esc(a.review_comment) || "—"}</td>
-         <td>${a.status === "pending" && canReviewDual
+         <td>${a.status === "pending" && canReview
            ? `<button class="btn secondary" data-dualok="${a.id}">批准</button><button class="btn danger" data-dualno="${a.id}">驳回</button>` : "—"}</td></tr>`)}`)}
     ${panel("结算记录", table(["ID", "患者", "机构", "类型", "总额", "医保付", "自付"], settlements, (s) =>
       `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${s.org_id}</td><td>${s.settle_type === "local" ? "本地" : "异地"}</td>
        <td>${s.total_amount}</td><td>${s.insurance_pay}</td><td>${s.self_pay}</td></tr>`))}`;
-  $("#ins-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/settlements", formJson(e.target, ["patient_id", "org_id", "total_amount", "insurance_pay", "self_pay"]), "#ins-msg"); };
-  $("#cert-form").onsubmit = async (e) => {
-    e.preventDefault();
-    try { const c = await api(`/api/insurance/referral-certs/${new FormData(e.target).get("referral_id")}`, { method: "POST" }); setMsg("#ins-msg", `证明号：${c.cert_no}`); }
-    catch (err) { setMsg("#ins-msg", err.message, false); }
-  };
-  $("#spec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/special-diseases", formJson(e.target, ["patient_id"]), "#ins-msg"); };
-  $("#dual-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/dual-channel", formJson(e.target, ["patient_id"]), "#ins-msg"); };
+  if (canSettle) {
+    $("#ins-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/settlements", formJson(e.target, ["patient_id", "org_id", "total_amount", "insurance_pay", "self_pay"]), "#ins-msg"); };
+    $("#cert-form").onsubmit = async (e) => {
+      e.preventDefault();
+      try { const c = await api(`/api/insurance/referral-certs/${new FormData(e.target).get("referral_id")}`, { method: "POST" }); setMsg("#ins-msg", `证明号：${c.cert_no}`); }
+      catch (err) { setMsg("#ins-msg", err.message, false); }
+    };
+  }
+  if (canApply) {
+    $("#spec-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/special-diseases", formJson(e.target, ["patient_id"]), "#ins-msg"); };
+    $("#dual-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/insurance/dual-channel", formJson(e.target, ["patient_id"]), "#ins-msg"); };
+  }
   $("#page-body").onclick = async (e) => {
     const { ok, no, dualok, dualno } = e.target.dataset;
     if (ok) postAction(`/api/insurance/special-diseases/${ok}/review?approve=true`, null, "#ins-msg");

@@ -537,6 +537,19 @@ def test_双通道申报审核在页内表单里填_取消即不审(page, base_u
         assert (row["status"], row["review_comment"]) == (status, comment), row
 
 
+def test_医保协同页经办医师也打得开_表单按角色给(page, base_url, seed):
+    """P1-175：页面一个 Promise.all 连管理层才看得到的基金监测一起取，医师、经办一进来整页只剩「需要以下角色之一：
+    管理层」——特病 / 双通道申报这些给他们用的表单一张也看不到。改后基金监测只给管理层取，表单与审核按钮按接口的
+    角色守卫给。"""
+    _login(page, base_url, "e2e_doctor", "passw0rd1")
+    _open_page(page, "insurance", "医保协同")
+    expect(page.locator("#page-body")).not_to_contain_text("需要以下角色之一")   # 修前：整页就这一句
+    expect(page.locator("#spec-form")).to_be_visible()
+    expect(page.locator("#dual-form")).to_be_visible()
+    expect(page.locator("#ins-form")).to_have_count(0)   # 结算登记只给经办
+    expect(page.locator("#page-body .cards")).to_have_count(0)   # 基金监测只给管理层
+
+
 @pytest.fixture(scope="session")
 def ph_event_seed(base_url, seed):
     """公卫事件处置的前置：一起进行中的突发公卫事件。"""
