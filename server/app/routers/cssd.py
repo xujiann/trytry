@@ -137,7 +137,7 @@ class CostStatsOut(BaseModel):
     total_cost: int | float          # 同 BatchCost.total_cost，空集时是 int 0
     total_quantity: int
     overall_unit_cost: float
-    #: 键是成本类型码（labor/material/energy/depreciation），随字典增删而变，故用 dict
+    #: 键是成本类型码（labor/material/energy/equipment/other，见 COST_TYPES），随字典增删而变，故用 dict
     by_cost_type: dict[str, CostTypeAmount]
 
 
@@ -187,24 +187,32 @@ def list_cost_items(batch_id: int | None = None, db: Session = Depends(get_db)):
 
 @router.get("/cost-stats", response_model=CostStatsOut)
 def cost_stats(batch_id: int | None = None, db: Session = Depends(get_db)):
-    """成本统计：按批次汇总总成本与单件成本，并给出成本构成与整体单件成本。"""
+    """成本统计：按批次汇总总成本与单件成本，并给出成本构成与整体单件成本。
+
+    逐批明细列最近 200 批；成本合计、灭菌件数、整体单件成本与成本构成按**全部**批次在库里汇总（P2-170）——
+    原先都只算在这 200 批上，批次一多，卡片上的合计只剩最近一段、整体单件成本也跟着变成近期的。
+    """
     batch_query = db.query(SterilizationBatch)
+    cost_query = db.query(CssdCostItem.cost_type, func.sum(CssdCostItem.amount))
     if batch_id is not None:
         batch_query = batch_query.filter(SterilizationBatch.id == batch_id)
+        cost_query = cost_query.filter(CssdCostItem.batch_id == batch_id)
     batches = batch_query.order_by(SterilizationBatch.id.desc()).limit(200).all()
     ids = [b.id for b in batches]
     totals: dict[int, float] = {}
-    by_type: dict[str, float] = {}
     if ids:
-        for bid, ctype, amount in (
-            db.query(CssdCostItem.batch_id, CssdCostItem.cost_type, func.sum(CssdCostItem.amount))
+        for bid, amount in (
+            db.query(CssdCostItem.batch_id, func.sum(CssdCostItem.amount))
             .filter(CssdCostItem.batch_id.in_(ids))
-            .group_by(CssdCostItem.batch_id, CssdCostItem.cost_type)
-            .order_by(CssdCostItem.batch_id, CssdCostItem.cost_type)
+            .group_by(CssdCostItem.batch_id)
+            .order_by(CssdCostItem.batch_id)
             .all()
         ):
-            totals[bid] = round(totals.get(bid, 0) + float(amount), 2)
-            by_type[ctype] = round(by_type.get(ctype, 0) + float(amount), 2)
+            totals[bid] = round(float(amount), 2)
+    by_type: dict[str, float] = {
+        ctype: round(float(amount), 2)
+        for ctype, amount in cost_query.group_by(CssdCostItem.cost_type).order_by(CssdCostItem.cost_type).all()
+    }
     rows: list[dict[str, Any]] = [
         {
             "batch_id": b.id,
@@ -216,8 +224,9 @@ def cost_stats(batch_id: int | None = None, db: Session = Depends(get_db)):
         }
         for b in batches
     ]
-    total_cost = round(sum(r["total_cost"] for r in rows), 2)
-    total_quantity = sum(r["quantity"] for r in rows)
+    # 空集时 sum 是 int 0，照旧原样透出（见 CostStatsOut.total_cost）
+    total_cost = round(sum(by_type.values()), 2)
+    total_quantity = int(batch_query.with_entities(func.coalesce(func.sum(SterilizationBatch.quantity), 0)).scalar() or 0)
     return {
         "batches": rows,
         "total_cost": total_cost,
