@@ -23,6 +23,7 @@ from ..database import get_db
 from ..datetypes import OptionalDateTimeStr
 from ..texttypes import NON_BLANK
 from ..deps import get_current_user, paginate, require_roles
+from ..clock import now_local
 from ..models import Organization, QcLot, QcMeasurement, User, utcnow
 from ..visibility import assert_obj_org_writable, assert_org_visible, assert_org_writable, scope_org_list
 
@@ -225,7 +226,10 @@ def create_measurement(
     measurement = QcMeasurement(
         lot_id=lot.id,
         value=body.value,
-        measured_at=body.measured_at or utcnow().strftime("%Y-%m-%d %H:%M"),
+        # 留空按录入时刻，取本地时刻（P2-171）：页面上手填的是本地时间（datetime-local），这里原先取 UTC，
+        # 东八区早上 7 点半留空录的点记成前一天 23:30，同一张清单里手填的与留空的差着 8 小时。
+        # 与门急诊文书的记录时间缺省同一个取法（clock.now_local：给人看的时间字符串默认值）
+        measured_at=body.measured_at or now_local().strftime("%Y-%m-%d %H:%M"),
         operator=body.operator or (user.full_name or user.username),
         warning=warning,
         out_of_control=out_of_control,
