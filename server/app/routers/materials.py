@@ -455,11 +455,23 @@ def use_consumable(
 
 
 @router.get("/consumables/trace/{barcode}", response_model=ConsumableTraceOut)
-def trace_consumable(barcode: str, db: Session = Depends(get_db)):
-    """按条码正向追溯：这枚耗材从哪来、用在谁身上、哪台手术。"""
+def trace_consumable(
+    barcode: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """按条码正向追溯：这枚耗材从哪来、用在谁身上、哪台手术。
+
+    看得见哪些与同文件的清单（反向追溯）同一句（P0-46）：本机构的照看；别家的，用在了某位患者身上就按那位患者的
+    可见性判并留痕（清单按患者反查的那一支），没用过的不给看（清单按批号反查「同样只限本机构」那一支）。原先连调用方
+    都不收：任一登录账号在追溯框里填别家的条码，就读到这枚支架植入了谁、哪台手术。
+    """
     item = db.query(HighValueConsumable).filter(HighValueConsumable.barcode == barcode).first()
     if item is None:
         raise HTTPException(status_code=404, detail="耗材条码不存在")
+    orgs = visible_org_ids(db, user)
+    if orgs is not None and item.org_id not in orgs:
+        if item.used_patient_id is None:
+            raise HTTPException(status_code=403, detail="无权查看该机构的数据")
+        assert_patient_visible(db, user, item.used_patient_id, resource="consumable")
     supplier = db.get(Supplier, item.supplier_id) if item.supplier_id else None
     out = _consumable_out(db, item)
     out["supplier_name"] = supplier.name if supplier else ""

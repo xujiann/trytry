@@ -67,6 +67,7 @@ IDENTITY_FIELDS = {
 #: 给某个端点补上身份依赖与归属收口之后，把它从这里删掉。
 #: 2026-09-24：P0-22 补上 `outpatient_docs:list_treatments`（同文件按患者查处置史早就守着），36 → 35。
 #: 2026-09-26：P0-44 补上 `spd/tasks.py:get_path_instance`（同文件纳管档案详情早就按患者可见性守着），35 → 34。
+#: 2026-09-26：P0-46 补上 `materials.py:trace_consumable`（同文件反向追溯早就按患者可见性 / 本机构守着），34 → 33。
 #:
 #: ⚠️ 其中三个吐的是**联系方式与证件号**，不只是 patient_id——
 #: `spd/followup.py:list_call_tasks`（phone）、
@@ -90,7 +91,6 @@ UNSCOPABLE_PATIENT_READS = {
     "followups.py:overdue_followups",
     "insurance.py:list_dual_channel",
     "insurance.py:list_special_diseases",
-    "materials.py:trace_consumable",
     "maternal.py:list_children",
     "maternal.py:list_high_risk_children",
     "maternal.py:list_records",

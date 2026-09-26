@@ -745,8 +745,9 @@ BYID_PRIMARY_WITHOUT_ORG: dict[str, str] = {}
 #: 与同文件纳管档案详情同一句。
 #: ✅ 再减 1（2026-09-26，P0-45）：`disease_programs.py:get_enrollment` 按入组患者判可见性并留痕，
 #: 与同文件清单带 `patient_id` 时同一句（`scope_patient_list`）。
+#: ✅ 再减 1（2026-09-26，P0-46）：`materials.py:trace_consumable` 与同文件清单（反向追溯）同一句——本机构的照看，
+#: 别家的按植入患者的可见性判并留痕、没用过的不给看。
 NEWLY_VISIBLE_UNGUARDED_READS = {
-    "materials.py:trace_consumable",
     "spd/tasks.py:list_path_instances",
 }
 
