@@ -12,8 +12,13 @@
 其余一律拒绝——属性访问（`().__class__`）、下标、函数定义、推导式、
 lambda、任何未白名单的调用。除零返回 0 而不是抛异常：绩效公式里分母为零
 是常态（某机构本期没有业务量），报错会让整张报表出不来。
+
+对外只抛 `FormulaError`（P2-339）：参数个数不对、这组取值下算不出有限实数（溢出、
+负数开非整数次方、round 非数）一律转成它——原先这些 Python 异常原样漏出去，调用方只兜
+`FormulaError`，录入校验、出报表、规则试算、基金分配直接 500。
 """
 import ast
+import math
 import operator
 from typing import Any, Callable
 
@@ -35,13 +40,38 @@ _UNARY_OPS: dict[type[ast.unaryop], Callable[[Any], Any]] = {
 _FUNCTIONS: dict[str, Callable[..., Any]] = {
     "min": min, "max": max, "round": round, "abs": abs,
 }
+# 各白名单函数接受的参数个数（下限, 上限；None 为不设上限）——`max(x)`、`abs(x, y)` 原先漏成 TypeError，
+# `round(x, 1, 99)` 则被悄悄截成两个参数
+_ARITY: dict[str, tuple[int, int | None]] = {
+    "min": (2, None), "max": (2, None), "round": (1, 2), "abs": (1, 1),
+}
 
 
 class FormulaError(ValueError):
     """表达式非法或引用了未知变量。"""
 
 
-def _eval_node(node: ast.AST, variables: dict[str, float]) -> float:
+def _math_failure(message: str, lenient: bool) -> float:
+    """这组取值下算不出有限实数：求值时报错；录入校验（`lenient`）记成 nan 接着往下查。"""
+    if lenient:
+        return math.nan
+    raise FormulaError(message)
+
+
+def _apply(func: Callable[..., Any], args: tuple[float, ...], lenient: bool) -> float:
+    """算一步。溢出、负数开非整数次方（Python 给复数）、round 非数一律转成 FormulaError。"""
+    try:
+        result = func(*args)
+    except OverflowError:
+        return _math_failure("计算结果超出数值范围", lenient)
+    except (ArithmeticError, ValueError):
+        return _math_failure("计算结果不是有效数值", lenient)
+    if isinstance(result, complex):
+        return _math_failure("负数不能开非整数次方", lenient)
+    return float(result)
+
+
+def _eval_node(node: ast.AST, variables: dict[str, float], lenient: bool = False) -> float:
     if isinstance(node, ast.Constant):
         if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
             raise FormulaError("表达式只允许数字常量")
@@ -59,55 +89,82 @@ def _eval_node(node: ast.AST, variables: dict[str, float]) -> float:
             return float(value)
         except ValueError:
             raise FormulaError(f"变量 {node.id} 的值不是数值：{value!r}") from None
+        except OverflowError:
+            # 客户端传来几百位的整数，float() 抛 OverflowError（P2-339）
+            raise FormulaError(f"变量 {node.id} 的值超出数值范围") from None
 
     if isinstance(node, ast.BinOp):
         op_type = type(node.op)
         if op_type not in _BIN_OPS:
             raise FormulaError("不支持的运算符")
-        left = _eval_node(node.left, variables)
-        right = _eval_node(node.right, variables)
+        left = _eval_node(node.left, variables, lenient)
+        right = _eval_node(node.right, variables, lenient)
         if op_type in (ast.Div, ast.Mod) and right == 0:
             # 分母为零在绩效公式里是常态（本期无业务量），返回 0 而不是让整张报表出不来
             return 0.0
-        if op_type is ast.Pow and abs(right) > MAX_POWER_EXPONENT:
-            raise FormulaError(f"幂指数不得超过 {MAX_POWER_EXPONENT}")
-        return float(_BIN_OPS[op_type](left, right))
+        if op_type is ast.Pow:
+            if abs(right) > MAX_POWER_EXPONENT:
+                raise FormulaError(f"幂指数不得超过 {MAX_POWER_EXPONENT}")
+            if left == 0 and right < 0:
+                # 0 的负数次方就是除以零，与上面同一口径（原先 ZeroDivisionError 漏成 500，P2-339）
+                return 0.0
+        return _apply(_BIN_OPS[op_type], (left, right), lenient)
 
     if isinstance(node, ast.UnaryOp):
         unary_type = type(node.op)
         if unary_type not in _UNARY_OPS:
             raise FormulaError("不支持的一元运算符")
-        return float(_UNARY_OPS[unary_type](_eval_node(node.operand, variables)))
+        return float(_UNARY_OPS[unary_type](_eval_node(node.operand, variables, lenient)))
 
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name) or node.func.id not in _FUNCTIONS:
             raise FormulaError("只允许调用 min / max / round / abs")
         if node.keywords:
             raise FormulaError("函数调用不支持关键字参数")
-        args = [_eval_node(a, variables) for a in node.args]
+        name = node.func.id
+        args = [_eval_node(a, variables, lenient) for a in node.args]
         if not args:
             raise FormulaError("函数调用至少需要一个参数")
-        if node.func.id == "round" and len(args) > 1:
+        low, high = _ARITY[name]
+        if len(args) < low:
+            raise FormulaError(f"{name} 至少需要 {low} 个参数")
+        if high is not None and len(args) > high:
+            raise FormulaError(f"{name} 最多接受 {high} 个参数")
+        if name == "round" and len(args) > 1:
             # round 的第二参数必须是整数；求值器把一切都转成 float，这里转回去
+            if not math.isfinite(args[1]):
+                return _math_failure("round 的小数位数不是有效数值", lenient)
             if args[1] != int(args[1]):
                 raise FormulaError("round 的小数位数必须是整数")
             args = [args[0], int(args[1])]
-        return float(_FUNCTIONS[node.func.id](*args))
+        return _apply(_FUNCTIONS[name], tuple(args), lenient)
 
     raise FormulaError(f"表达式包含不允许的语法：{type(node).__name__}")
 
 
-def evaluate(expression: str, variables: dict[str, float]) -> float:
-    """求值；表达式非法或引用未知变量时抛 FormulaError。"""
+def _parse(expression: str) -> ast.expr:
     if not expression or len(expression) > MAX_EXPRESSION_LENGTH:
         raise FormulaError(f"表达式长度须在 1~{MAX_EXPRESSION_LENGTH} 之间")
     try:
-        tree = ast.parse(expression, mode="eval")
+        return ast.parse(expression, mode="eval").body
     except SyntaxError as exc:
         raise FormulaError(f"表达式语法错误：{exc.msg}") from None
-    return round(_eval_node(tree.body, variables), 4)
+
+
+def evaluate(expression: str, variables: dict[str, float]) -> float:
+    """求值；表达式非法、引用未知变量或这组取值下算不出有限实数时抛 FormulaError。"""
+    value = _eval_node(_parse(expression), variables)
+    if not math.isfinite(value):
+        # `a * 1e308 * 10` 这类不抛异常、直接得 inf / nan：原样返回，序列化成 JSON 时 500
+        raise FormulaError("计算结果超出数值范围")
+    return round(value, 4)
 
 
 def validate(expression: str, known_variables: set[str]) -> None:
-    """录入时校验：语法合法且只引用已知变量。用哑值代入，不触发实际计算。"""
-    evaluate(expression, {name: 1.0 for name in known_variables})
+    """录入时校验：语法合法、只引用已知变量、函数参数个数对。
+
+    用哑值 1 代入走一遍。哑值下算不出（`(a - 2 * b) ** 0.5` 在 a=b=1 时开负数的平方根）不算表达式写错——
+    换组真实取值就算得出，出报表时逐项报错；与「哑值除零不误报」同一个道理。算不出的那一步记成 nan
+    接着往下走，后面的部分照样查语法、变量与参数个数。
+    """
+    _eval_node(_parse(expression), {name: 1.0 for name in known_variables}, lenient=True)

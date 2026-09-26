@@ -49,7 +49,11 @@ def _coerce(name: str, value):
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
-        return float(value)
+        try:
+            return float(value)
+        except OverflowError:
+            # 几百位的整数 float() 不下（P2-339）
+            raise RuleError(f"变量 {name} 的值超出数值范围") from None
     raise RuleError(f"变量 {name} 的值类型不受支持：{type(value).__name__}")
 
 
@@ -113,9 +117,10 @@ def evaluate_condition(expression: str, variables: dict) -> bool:
         return _eval_condition(tree.body, variables)
     except FormulaError as exc:
         raise RuleError(str(exc)) from None
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, ArithmeticError) as exc:
         # 兜底：变量来自不可信输入，此函数对外只承诺抛 RuleError。
-        # 上面已逐类收敛，这一层保证契约不被将来新增的分支破坏。
+        # 上面已逐类收敛，这一层保证契约不被将来新增的分支破坏
+        # （原先漏了 ArithmeticError：`daily_dose ** -1` 遇 0 剂量 ZeroDivisionError 直接 500，P2-339）。
         raise RuleError(f"条件求值失败：{exc}") from None
 
 
