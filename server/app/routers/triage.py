@@ -49,6 +49,10 @@ _TRIAGE_KB = [
 def triage_suggest(symptoms: list[str]):
     """智能导诊：症状匹配推荐科室，急症症状提示急诊。
 
+    命中任一急症症状就提示急诊，急症科室排在最前（同类再按命中症状数）。原先只按命中数排、只看排第一的那个科室
+    （P2-128）：「咳嗽、发热、胸痛」呼吸内科命中两个排第一，胸痛所在的心血管内科排第二，急诊提示没有；急症科室
+    排到第四连推荐里都看不见。页面横幅写的是「首选建议命中急症症状」，急症排前之后这句照旧成立。
+
     没有 `db` 形参是**有意的**：知识库是模块级常量，此前签名里挂着
     `Depends(get_db)` 却一次都没用——每次调用白白从连接池借还一条连接，
     高峰期还占着 `db_pool_timeout` 的名额。日后知识库落表（见模块 docstring）
@@ -60,8 +64,8 @@ def triage_suggest(symptoms: list[str]):
         for kb, dept, urgent in _TRIAGE_KB
         if kb & given
     ]
-    ranked = sorted(candidates, key=lambda r: len(r["matched"]), reverse=True)
+    ranked = sorted(candidates, key=lambda r: (r["urgent"], len(r["matched"])), reverse=True)
     return {
         "recommendations": ranked[:3] or [{"department": "全科门诊", "matched": [], "urgent": False}],
-        "emergency_hint": any(r["urgent"] for r in ranked[:1]),
+        "emergency_hint": any(r["urgent"] for r in ranked),
     }
