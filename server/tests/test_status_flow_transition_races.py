@@ -4,9 +4,13 @@
     python -m pytest tests/test_status_flow_transition_races.py -q
 
 同伴 test_status_flow_transition.py 在 SQLite 上用确定时序钉逻辑（读到之后、写入之前插进另一路的提交）；这里钉 PG 的
-READ COMMITTED 下真并发的不变量：八路同时对同一行走同一步（或走互斥的两步），**恰一路成功、其余 409**，库里的结果与
-成功那一路一致。修前八路都读到同一个旧状态、各自写回——全都 200，库里只剩最后提交的那份（发给了哪家、结论是什么、
-标本是拒收还是核收，看谁最后提交），先提交的几路拿到的回执全是假的。
+READ COMMITTED 下真并发的不变量：**每一路成功都真的把行往前推了一步**——成功几路，行就走了几步，其余 409。修前八路都读到
+同一个旧状态、各自写回同一个下一态：八路全 200，行只走了一步，库里只剩最后提交的那份（发给了哪家、结论是什么、标本是
+拒收还是核收，看谁最后提交），先提交的几路拿到的回执全是假的。
+
+**不断言「恰一路成功」**（第六十七轮真 PG 实测纠正）：Barrier 之下多数路同时读到起点，但总有路在别人提交之后才读到行，
+它接着合法地走下一步（顺序请求本来就能连点几步：已调配 → 已煎煮；已配送之后再取消）。只能走一步的（响应申领、核收 /
+拒收）才恰一路成功。
 
 条件 UPDATE 在 PG 上为什么成立：`UPDATE … WHERE id = ? AND status = ?` 撞上别的事务已改未提交的行会等它提交，再按新版本
 重判 WHERE——判定与写入在同一条语句里，窗口是关上的。
@@ -104,13 +108,15 @@ def _make(pg_engine, world, row):
 
 
 def _race(pg_engine, step):
-    """八路同时走 `step(i, db)`：返回 (成功的几路的返回值, 被拒的几路的 (状态码, 文案))。"""
+    """八路同时走 `step(i, db)`：返回 (成功的几路的 (i, 返回值), 被拒的几路的 (状态码, 文案))。
+
+    这里只断言「不漏异常、被拒的一律 409」；成功几路由各用例按自己的流转表断言（见模块说明）。"""
     Session = sessionmaker(bind=pg_engine)
 
     def worker(i):
         with Session() as db:
             try:
-                return ("ok", step(i, db))
+                return ("ok", (i, step(i, db)))
             except HTTPException as exc:
                 return ("rejected", (exc.status_code, exc.detail))
 
@@ -119,9 +125,14 @@ def _race(pg_engine, step):
     assert not errors, f"异常不该漏给调用方：{errors}"
     ok = [r[1] for r in results if r[0] == "ok"]
     rejected = [r[1] for r in results if r[0] == "rejected"]
-    assert len(ok) == 1, f"应恰一路走到，实际 {results}"   # 修前：八路全都 200
-    assert rejected and all(code == 409 for code, _ in rejected), rejected
-    return ok[0], rejected
+    assert ok, f"一路都没走到：{results}"
+    assert all(code == 409 for code, _ in rejected), rejected
+    return ok, rejected
+
+
+def _steps_match(flow, start, final, ok):
+    """成功几路，行就从起点往后走了几步。修前八路都读到起点、各写一遍下一态：八路 200，行只走了一步。"""
+    assert flow.index(final) - flow.index(start) == len(ok), f"起点 {start}、终点 {final}，成功 {len(ok)} 路：{ok}"
 
 
 def _get(pg_engine, model, row_id):
@@ -131,14 +142,16 @@ def _get(pg_engine, model, row_id):
         return row
 
 
-def test_八路同时发放同一批次_恰一路发出_接收机构是它选的(pg_engine, world):
+def test_八路同时发放同一批次_成功几路就走几步_接收机构是发出那一路选的(pg_engine, world):
     batch = _make(pg_engine, world, SterilizationBatch(
         batch_no=f"PG2317-{world['tag']}", center_org_id=world["orgs"][0], item_name="器械包", quantity=5,
         status="sterile"))
-    winner, _ = _race(pg_engine, lambda i, db: cssd.advance(
-        batch, dispatched_to_org_id=world["orgs"][i % 2], db=db, user=ADMIN).dispatched_to_org_id)
+    ok, _ = _race(pg_engine, lambda i, db: cssd.advance(
+        batch, dispatched_to_org_id=world["orgs"][i % 2], db=db, user=ADMIN).status)
     row = _get(pg_engine, SterilizationBatch, batch)
-    assert (row.status, row.dispatched_to_org_id) == ("dispatched", winner)
+    _steps_match(["sterile", "dispatched", "recycled"], "sterile", row.status, ok)   # 修前：八路 200、只发出一次
+    # 发出只有一路（其后的至多是「回收」，不改去向）：库里的接收机构是某一路成功者选的
+    assert row.dispatched_to_org_id in {world["orgs"][i % 2] for i, _ in ok}
 
 
 def test_八路同时响应同一申领_恰一路_批次是它选的(pg_engine, world):
@@ -146,33 +159,39 @@ def test_八路同时响应同一申领_恰一路_批次是它选的(pg_engine, 
         batch_no=f"PG2317-{world['tag']}-{i}", center_org_id=world["orgs"][0], item_name="器械包", quantity=5,
         status="sterile")) for i in range(2)]
     req = _make(pg_engine, world, CssdRequest(org_id=world["orgs"][1], item_name="换药包", quantity=2))
-    winner, rejected = _race(pg_engine, lambda i, db: cssd.fulfill_cssd_request(
+    ok, rejected = _race(pg_engine, lambda i, db: cssd.fulfill_cssd_request(
         req, batch_id=batches[i % 2], db=db, user=ADMIN)["batch_id"])
+    # 响应申领只有一步：恰一路成功，库里的批次是它选的
+    assert len(ok) == 1, ok   # 修前：八路 200，批次是最后提交的那一路的
     assert {detail for _, detail in rejected} == {"申领已处理"}
     row = _get(pg_engine, CssdRequest, req)
-    assert (row.status, row.batch_id) == ("fulfilled", winner)
+    assert (row.status, row.batch_id) == ("fulfilled", ok[0][1])
 
 
 @pytest.mark.parametrize("case", ["emergency", "sample", "tcm"])
-def test_八路同时推进同一行_只走一步(pg_engine, world, case):
+def test_八路同时推进同一行_成功几路就走几步(pg_engine, world, case):
+    """修前八路都读到起点、各写一遍下一态：八路 200，行只走了一步。"""
     if case == "emergency":
         row_id = _make(pg_engine, world, EmergencyCase(location=f"PG2317 路口 {world['tag']}"))
-        _race(pg_engine, lambda i, db: emergency.advance(row_id, db=db))
-        assert _get(pg_engine, EmergencyCase, row_id).status == "en_route"   # 修前八路各写一遍 en_route，全都 200
+        ok, _ = _race(pg_engine, lambda i, db: emergency.advance(row_id, db=db))
+        _steps_match(["dispatched", "en_route", "arrived", "admitted"], "dispatched",
+                     _get(pg_engine, EmergencyCase, row_id).status, ok)
     elif case == "sample":
         row_id = _make(pg_engine, world, ExamRequest(
             patient_id=world["patient"], from_org_id=world["orgs"][0], center_type="lab", item_code="PG2317",
             item_name="血常规", created_by=world["user"], sample_status="collected"))
-        _race(pg_engine, lambda i, db: exams.advance_sample(row_id, db=db))
-        assert _get(pg_engine, ExamRequest, row_id).sample_status == "in_transit"
+        ok, _ = _race(pg_engine, lambda i, db: exams.advance_sample(row_id, db=db))
+        _steps_match(["collected", "in_transit", "received"], "collected",
+                     _get(pg_engine, ExamRequest, row_id).sample_status, ok)
     else:
         row_id = _make(pg_engine, world, TcmDispenseOrder(
             patient_id=world["patient"], from_org_id=world["orgs"][0], herbs="黄芪30g", doses=7, decoct=True))
-        _race(pg_engine, lambda i, db: tcm.advance_order(row_id, db=db))
-        assert _get(pg_engine, TcmDispenseOrder, row_id).status == "dispensed"
+        ok, _ = _race(pg_engine, lambda i, db: tcm.advance_order(row_id, db=db))
+        _steps_match(["ordered", "dispensed", "decocted", "delivering", "delivered"], "ordered",
+                     _get(pg_engine, TcmDispenseOrder, row_id).status, ok)
 
 
-def test_缺药登记推进与取消同时到_只成一路_状态对得上(pg_engine, world):
+def test_缺药登记推进与取消同时到_只出合法的先后_状态对得上(pg_engine, world):
     shortage = _make(pg_engine, world, DrugShortage(
         org_id=world["orgs"][0], drug_code=f"PG{world['tag']}", drug_name="胰岛素", quantity=3, status="purchasing"))
 
@@ -182,8 +201,11 @@ def test_缺药登记推进与取消同时到_只成一路_状态对得上(pg_en
                                               user=ADMIN).status
         return medication.advance_shortage(shortage, db=db, user=ADMIN).status
 
-    winner, _ = _race(pg_engine, step)
-    assert _get(pg_engine, DrugShortage, shortage).status == winner   # 修前：取消与推进都 200，已取消的被翻回已配送
+    ok, _ = _race(pg_engine, step)
+    # 合法的只有三种：只取消了；只配送了；先配送、后取消（取消可以在任何阶段发生）。已取消之后不能再推进
+    outcomes = sorted(v for _, v in ok)
+    assert outcomes in (["cancelled"], ["delivered"], ["cancelled", "delivered"]), ok   # 修前：推进与取消各成好几路
+    assert _get(pg_engine, DrugShortage, shortage).status == ("cancelled" if "cancelled" in outcomes else "delivered")
 
 
 def test_标本核收与拒收同时到_只成一路_状态对得上(pg_engine, world):
@@ -197,7 +219,10 @@ def test_标本核收与拒收同时到_只成一路_状态对得上(pg_engine, 
             return pathology.reject_specimen(specimen, pathology.SpecimenReject(reject_reason="标本量不足"), db=db)["status"]
         return pathology.receive_specimen(specimen, pathology.SpecimenReceive(received_by=f"核收员{i}"), db=db)["status"]
 
-    winner, _ = _race(pg_engine, step)
+    ok, _ = _race(pg_engine, step)
+    # 核收与拒收都只收「待核收」：恰一路成功
+    assert len(ok) == 1, ok   # 修前：核收与拒收都 200，拒收原因挂在已核收的标本上
+    winner = ok[0][1]
     row = _get(pg_engine, PathologySpecimen, specimen)
-    assert row.status == winner   # 修前：核收与拒收都 200，拒收原因挂在已核收的标本上
+    assert row.status == winner
     assert (row.reject_reason != "") == (winner == "rejected") and (row.received_by != "") == (winner == "received")
