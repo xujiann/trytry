@@ -248,13 +248,24 @@ def create_measurement(
 def list_measurements(lot_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     lot = _get_lot(db, lot_id)
     assert_org_visible(db, user, lot.org_id)
-    return (
+    return _latest_measurements(db, lot.id)
+
+
+def _latest_measurements(db: Session, lot_id: int, limit: int = 500) -> list[QcMeasurement]:
+    """最近 `limit` 个测定点，按录入先后排（P2-157）。
+
+    原先按编号升序取前 500 个——截掉的恰好是最新那一端：一个批号用满 500 个点（一天两次约八个月，质控品一个批号常用
+    半年到两年），第 501 个点起新录的、包括刚判出的失控点都不上页面，失控处理的按钮（按这份数据画）也就没有了，
+    而每次录入都在提示「尚有 N 个失控点未处理」。与体温单（P1-81）同一个「截断截错了端」。
+    """
+    rows = (
         db.query(QcMeasurement)
-        .filter(QcMeasurement.lot_id == lot.id)
-        .order_by(QcMeasurement.id)
-        .limit(500)
+        .filter(QcMeasurement.lot_id == lot_id)
+        .order_by(QcMeasurement.id.desc())
+        .limit(limit)
         .all()
     )
+    return rows[::-1]
 
 
 # ---------- 失控处理 ----------
@@ -340,13 +351,7 @@ def levey_jennings(lot_id: int, db: Session = Depends(get_db), user: User = Depe
     """
     lot = _get_lot(db, lot_id)
     assert_org_visible(db, user, lot.org_id)
-    rows = (
-        db.query(QcMeasurement)
-        .filter(QcMeasurement.lot_id == lot.id)
-        .order_by(QcMeasurement.id)
-        .limit(500)
-        .all()
-    )
+    rows = _latest_measurements(db, lot.id)
     return {
         "lot_id": lot.id,
         "item_code": lot.item_code,
