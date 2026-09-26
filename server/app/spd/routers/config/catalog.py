@@ -281,6 +281,11 @@ def update_program(
     if program is None:
         raise HTTPException(status_code=404, detail="专病档案不存在")
     data = body.model_dump(exclude_unset=True, exclude={"note"})
+    # 病种启停是平台级开关，须平台管理员（P1-169）：包说明写「真正的平台级开关（病种启停、数据源接入）仍然要 admin」，
+    # 建病种即 `require_admin`；改档却对主任、医师开放、`active` 不另判——任一机构的医师一句 PATCH 就把全县这个病种停了
+    # （筛查登记、目标池扫描、建档一律 404，就诊触发的自动识别跳过它）。只拦真的改了启停的，其余字段照旧按 CONFIG_ROLES
+    if "active" in data and data["active"] != program.active and user.role != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限：病种启停是平台级开关")
     # 与 create_program 同一句（P1-90）：改牵头机构同样先查存在，否则生产库撞外键 500
     if data.get("lead_org_id") is not None and db.get(Organization, data["lead_org_id"]) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
