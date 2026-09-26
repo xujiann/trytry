@@ -3,6 +3,7 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -93,7 +94,22 @@ def find_doctors(
             keyword_like(Employee.name, keyword) | keyword_like(Employee.title, keyword)
             | keyword_like(Employee.position, keyword)
         )
-    employees = query.order_by(Employee.id).limit(200).all()
+    # 有余号的先排、再取前 200 位（P2-178）：原先按编号取前 200 位、再在这 200 位里把有号的排前——全县职工过 200 位
+    # （不带关键字、不限机构时必然），编号靠后的医师有号也不在清单里，编号靠前、没号的倒占着位置。
+    # 余号数与下面逐位算的 available_slots 同一个口径：今天及以后、没约满的号源
+    open_slots = (
+        db.query(AppointmentSlot.employee_id.label("employee_id"), func.count(AppointmentSlot.id).label("n"))
+        .filter(AppointmentSlot.employee_id.isnot(None), AppointmentSlot.slot_date >= today,
+                AppointmentSlot.booked < AppointmentSlot.capacity)
+        .group_by(AppointmentSlot.employee_id)
+        .subquery()
+    )
+    employees = (
+        query.outerjoin(open_slots, open_slots.c.employee_id == Employee.id)
+        .order_by(func.coalesce(open_slots.c.n, 0).desc(), Employee.id)
+        .limit(200)
+        .all()
+    )
     if not employees:
         return []
     slots = (
