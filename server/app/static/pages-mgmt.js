@@ -1129,12 +1129,14 @@ async function renderClinicalIndicators() {
 /* ---------------- 运行监控（浙#47 / #46） ---------------- */
 
 async function renderMonitor() {
-  $("#page-desc").textContent =
-    "调用统计是本实例进程内的数据，进程重启即清零；审计统计才是跨实例可追溯的";
+  $("#page-desc").textContent = "运行环境、接口调用统计、集群节点与写操作审计";
   const [ov, stats, nodes, audit] = await Promise.all([
     api("/api/monitor/overview"), api("/api/monitor/api-stats"),
     api("/api/monitor/nodes"), api("/api/audit/stats?days=30"),
   ]);
+  // 调用统计的口径取自后端（P2-356）：原先写死「本实例进程内、重启即清零」，配了 Redis 之后计数是集群口径、跨重启累计，
+  // 同一页的面板标题（stats.scope）说的却是集群——一页自相矛盾
+  $("#page-desc").textContent = `调用统计口径：${stats.scope}；审计统计是落库的写操作留痕，跨实例可追溯`;
   const dot = (ok) => `<span class="tag ${ok ? "green" : "red"}">${ok ? "正常" : "异常"}</span>`;
   // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 标题里的 `stats.scope` / `audit.scope` 原本手写了 `esc()`，迁移后**必须去掉**——

@@ -670,7 +670,7 @@ async def request_log_middleware(request, call_next):
         raise
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     response.headers["X-Request-ID"] = request_id
-    # 监控计数：进程内，随进程启停清零（见 app/monitor.py 的取舍说明）
+    # 监控计数：进程内计数；配了 Redis 时同时累加进集群 hash、跨实例跨重启（见 app/monitor.py 的取舍说明）
     monitor_metrics.record(request.method, request.url.path, response.status_code, duration_ms)
     _log_access(request, request_id, response.status_code, duration_ms)
     return response
