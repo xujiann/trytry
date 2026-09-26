@@ -1277,7 +1277,12 @@ async function renderPatients() {
       await draw();
     } catch (err) { setMsg("#patient-msg", err.message, false); }
   };
-  $("#patient-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("keyword")); };
+  $("#patient-search").onsubmit = async (e) => {
+    e.preventDefault();
+    // 查询失败要说出来（P2-378）：原先 draw() 抛错没人接，列表还是上一次的结果
+    try { await draw(new FormData(e.target).get("keyword")); }
+    catch (err) { setMsg("#patient-msg", err.message, false); }
+  };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();
 }

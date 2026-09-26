@@ -271,8 +271,15 @@ async function renderAudit() {
         <button>查询</button>
       </form>
       <div id="login-table"></div>`)}`;
-  $("#audit-search").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("username")); };
-  $("#login-search").onsubmit = async (e) => { e.preventDefault(); await drawLogins(formJson(e.target)); };
+  // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+  $("#audit-search").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await draw(new FormData(e.target).get("username")); } catch (err) { setMsg("#audit-msg", err.message, false); }
+  };
+  $("#login-search").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawLogins(formJson(e.target)); } catch (err) { setMsg("#audit-msg", err.message, false); }
+  };
   $("#audit-verify").onclick = async () => {
     try {
       const v = await api("/api/audit/verify?limit=5000");
@@ -337,7 +344,10 @@ async function renderAccessLogs() {
       <div id="al-table"></div>`)}
     ${panel("调阅构成", `<div id="al-stats"></div>`)}`;
   $("#al-search").onsubmit = async (e) => {
-    e.preventDefault(); await draw(formJson(e.target));
+    e.preventDefault();
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    try { await draw(formJson(e.target)); }
+    catch (err) { $("#al-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();
@@ -400,11 +410,17 @@ async function renderConsents() {
       <p class="desc">默认只列<b>生效版本</b>。同意记录里的「文本版本」指向的就是这里的某一版——
         停用旧版不会改动已登记的同意（那条记录仍指着它签署当时的版本），所以历史举证不受影响。</p>
       <div id="tx-table"></div>`)}`;
-  $("#ct-search").onsubmit = async (e) => { e.preventDefault(); await drawConsents(new FormData(e.target).get("patient_id")); };
+  // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+  $("#ct-search").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await drawConsents(new FormData(e.target).get("patient_id")); }
+    catch (err) { $("#ct-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
+  };
   $("#tx-filter").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    await drawTexts((f.get("scene") || "").trim(), !!f.get("inactive"));
+    try { await drawTexts((f.get("scene") || "").trim(), !!f.get("inactive")); }
+    catch (err) { $("#tx-table").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   $("#ct-table").onclick = async (e) => {
     const { printConsent, revokeConsent } = e.target.dataset;
@@ -687,7 +703,15 @@ async function renderTcm() {
   $("#tcm-diag").onsubmit = async (e) => {
     e.preventDefault();
     const symptoms = new FormData(e.target).get("symptoms").split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-    const result = await api("/api/tcm/assist-diagnosis", { method: "POST", body: JSON.stringify({ symptoms }) });
+    // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
+    $("#tcm-diag-result").innerHTML = "";
+    let result;
+    try {
+      result = await api("/api/tcm/assist-diagnosis", { method: "POST", body: JSON.stringify({ symptoms }) });
+    } catch (err) {
+      $("#tcm-diag-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
     // 原先整块 JSON 甩在页面上：匹配了哪几个症状、推荐什么方，得让人自己从括号里读
     $("#tcm-diag-result").innerHTML =
       table(["证型", "命中症状", "命中数", "推荐方剂", "适宜技术"], result.recommendations, (r) =>
@@ -1276,7 +1300,16 @@ async function renderVaccination() {
   $("#vac-check").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    const r = await api(`/api/vaccination/pre-check?patient_id=${f.get("patient_id")}&vaccine_code=${encodeURIComponent(f.get("vaccine_code"))}`);
+    // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着——
+    // 这里挂着的是上一位的「可以接种，本次为第 N 剂」，换了患者号查失败，看的人会当成这一位可以打
+    $("#vac-check-result").innerHTML = "";
+    let r;
+    try {
+      r = await api(`/api/vaccination/pre-check?patient_id=${f.get("patient_id")}&vaccine_code=${encodeURIComponent(f.get("vaccine_code"))}`);
+    } catch (err) {
+      $("#vac-check-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
     $("#vac-check-result").innerHTML = r.allowed
       ? `<p class="msg ok">可以接种，本次为第 ${r.next_dose_no} 剂</p>`
       : `<p class="msg err">禁止接种：${esc(r.contraindications.join("；"))}</p>`;
@@ -1315,7 +1348,15 @@ async function renderVaccination() {
   };
   $("#vac-hist").onsubmit = async (e) => {
     e.preventDefault();
-    const records = await api(`/api/vaccination/records?patient_id=${new FormData(e.target).get("patient_id")}`);
+    // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
+    $("#vac-hist-result").innerHTML = "";
+    let records;
+    try {
+      records = await api(`/api/vaccination/records?patient_id=${new FormData(e.target).get("patient_id")}`);
+    } catch (err) {
+      $("#vac-hist-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
     $("#vac-hist-result").innerHTML = table(["疫苗", "剂次", "日期", "机构", "操作"], records, (r) =>
       `<tr><td>${esc(r.vaccine_name)}</td><td>第${r.dose_no}剂</td><td>${esc(r.vaccinated_date)}</td><td>${r.org_id}</td>
        <td><button class="btn secondary" data-print-vac="${r.id}">打印接种证明</button></td></tr>`);
@@ -1469,7 +1510,9 @@ async function renderVaccineSupply() {
         { handle_note: picked.handle_note }, "#cc-msg");
     }
     if (d.recipients) {
-      const r = await api(`/api/vaccine-supply/batches/${d.recipients}/recipients`);
+      let r;   // 查失败要说出来（P2-378）：原先 api() 抛错没人接，点了没反应
+      try { r = await api(`/api/vaccine-supply/batches/${d.recipients}/recipients`); }
+      catch (err) { return setMsg("#vb-msg", err.message, false); }
       alert(`批号 ${r.batch_no}（${r.vaccine_name}）共 ${r.total} 名受种者\n` +
             r.recipients.slice(0, 20).map((x) => `${x.patient_name}(#${x.patient_id}) 第${x.dose_no}剂 ${x.vaccinated_date}`).join("\n"));
     }
@@ -1757,11 +1800,13 @@ async function renderProjects() {
       if (!picked) return;
       // 两条路径分开写而不是拼查询串：地址本身要让孤儿闸门按字面看得见
       const date = (picked.done_date || "").trim();
-      if (date) {
-        await api(`/api/projects/milestones/${d.msdone}/done?done_date=${encodeURIComponent(date)}`, { method: "POST" });
-      } else {
-        await api(`/api/projects/milestones/${d.msdone}/done`, { method: "POST" });
-      }
+      try {   // 登记失败要说出来（P2-378）：原先 api() 抛错没人接（日期写错 422、已完成 409），点了没反应
+        if (date) {
+          await api(`/api/projects/milestones/${d.msdone}/done?done_date=${encodeURIComponent(date)}`, { method: "POST" });
+        } else {
+          await api(`/api/projects/milestones/${d.msdone}/done`, { method: "POST" });
+        }
+      } catch (err) { return setMsg("#pj-msg", err.message, false); }
       return route();
     }
     if (d.msreopen) {
@@ -1871,8 +1916,14 @@ async function renderTcmHeritage() {
   $("#mc-search").onsubmit = async (e) => {
     e.preventDefault();
     const kw = new FormData(e.target).get("keyword") || "";
-    const rows = await api(`/api/tcm-heritage/master-cases?include_draft=true&keyword=${encodeURIComponent(kw)}`);
-    $("#mc-list").innerHTML = renderCaseTable(rows);
+    // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
+    $("#mc-list").innerHTML = "";
+    try {
+      const rows = await api(`/api/tcm-heritage/master-cases?include_draft=true&keyword=${encodeURIComponent(kw)}`);
+      $("#mc-list").innerHTML = renderCaseTable(rows);
+    } catch (err) {
+      $("#mc-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+    }
   };
   $("#mc-list").onclick = (e) => {
     const d = e.target.dataset;
@@ -1997,7 +2048,15 @@ async function renderResources() {
     e.preventDefault();
     const f = new FormData(e.target);
     const qs = new URLSearchParams([...f.entries()].filter(([, v]) => v)).toString();
-    const r = await api(`/api/resources/match/or-rooms?${qs}`);
+    // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
+    $("#or-result").innerHTML = "";
+    let r;
+    try {
+      r = await api(`/api/resources/match/or-rooms?${qs}`);
+    } catch (err) {
+      $("#or-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
     $("#or-result").innerHTML = table(["手术间", "该窗口", "冲突时段", "空档"], r.rooms, (x) =>
       `<tr><td>${esc(x.room_name)}</td>` +
       `<td>${x.available ? '<span class="tag ok">可用</span>' : '<span class="tag danger">有冲突</span>'}</td>` +
@@ -2207,7 +2266,15 @@ async function renderPublicHealth() {
   $("#mon-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/publichealth/monitors", formJson(e.target, ["org_id", "value", "threshold"]), "#ph-msg"); };
   $("#rem-form").onsubmit = async (e) => {
     e.preventDefault();
-    const r = await api(`/api/publichealth/reminders/${new FormData(e.target).get("patient_id")}`);
+    // 先清空、查不到把原因写出来（P2-378，与 P2-358 同一写法）：原先 api() 抛错没人接，上一次的结果照旧挂着
+    $("#rem-result").innerHTML = "";
+    let r;
+    try {
+      r = await api(`/api/publichealth/reminders/${new FormData(e.target).get("patient_id")}`);
+    } catch (err) {
+      $("#rem-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
     $("#rem-result").innerHTML = r.reminders.length
       ? `<ul style="margin:8px 0 0 18px;font-size:13px">${r.reminders.map((x) => `<li>${esc(x.detail)}</li>`).join("")}</ul>`
       : '<p class="msg ok">无待办提醒</p>';

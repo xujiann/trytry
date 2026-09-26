@@ -149,7 +149,9 @@ async function renderDrgs() {
   };
   $("#drg-alert-form").onsubmit = async (e) => {
     e.preventDefault();
-    await drawAlerts(Number(new FormData(e.target).get("los_multiplier")) || 1.5);
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    try { await drawAlerts(Number(new FormData(e.target).get("los_multiplier")) || 1.5); }
+    catch (err) { setMsg("#drg-msg", err.message, false); }
   };
   $("#drg-pre-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -370,7 +372,12 @@ async function renderCerts() {
         （打印件里有「总检结论」与总检医师署名）。</p>`)}
     <div class="panel hidden" id="chk-detail"><h3>体检分项结果</h3><div id="chk-detail-body"></div></div>`;
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
-  $("#cert-filter").onsubmit = async (e) => { e.preventDefault(); await draw(new FormData(e.target).get("cert_type")); };
+  $("#cert-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    // 查询失败要说出来（P2-378）：原先 draw() 抛错没人接，列表还是上一次的结果
+    try { await draw(new FormData(e.target).get("cert_type")); }
+    catch (err) { setMsg("#cert-msg", err.message, false); }
+  };
   $("#chk-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/checkups", formJson(e.target, ["patient_id", "org_id"]), "#cert-msg"); };
   const showItems = async (id, review) => {
     const items = await api(`/api/checkups/${id}/items`);
@@ -809,7 +816,8 @@ async function renderKnowledge() {
     if (f.get("q")) params.set("q", f.get("q"));
     if (f.get("include_expired")) params.set("include_expired", "true");
     const qs = params.toString();
-    await draw(qs ? `?${qs}` : "");
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    try { await draw(qs ? `?${qs}` : ""); } catch (err) { setMsg("#kb-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;

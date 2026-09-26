@@ -411,7 +411,13 @@ async function renderFamily() {
     chip.addEventListener("click", async (e) => {
       if (e.target.classList.contains("x")) {
         if (!confirm("解除该成员的代管关系？")) return;
-        await authApi(`/api/portal/me/family/${e.target.dataset.member}`, { method: "DELETE" });
+        // 解除失败要说出来（P2-378）：原先 authApi() 抛错没人接，点了「×」没反应、代管关系照旧
+        try {
+          await authApi(`/api/portal/me/family/${e.target.dataset.member}`, { method: "DELETE" });
+        } catch (err) {
+          setMsg("#family-msg", err.message, false);
+          return;
+        }
         await renderFamily();
         await loadArchive();
         return;

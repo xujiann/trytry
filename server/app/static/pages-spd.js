@@ -1550,7 +1550,8 @@ async function renderSpdPatients() {
   };
   $("#spd-enroll-filter").onsubmit = async (e) => {
     e.preventDefault();
-    await drawEnrollments(formJson(e.target));
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    try { await drawEnrollments(formJson(e.target)); } catch (err) { setMsg("#spd-enroll-msg", err.message, false); }
   };
   $("#spd-life-form").onsubmit = (e) => {
     e.preventDefault();
@@ -2075,7 +2076,8 @@ async function renderSpdPath() {
   };
   $("#spd-task-filter").onsubmit = async (e) => {
     e.preventDefault();
-    await drawTasks(formJson(e.target));
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    try { await drawTasks(formJson(e.target)); } catch (err) { setMsg("#spd-task-msg", err.message, false); }
   };
   // 路径节点任务由路径派生，这里不给「路径节点」类型；挂档案时后端核对档案是这位患者、这个病种的（P2-89）
   $("#spd-task-form").onsubmit = (e) => {
@@ -2713,7 +2715,9 @@ async function renderSpdAssess() {
         { plan_id: Number(run.dataset.run), period: form.period }, "#spd-plan-msg");
     }
     if (score) {
-      const d = await api(`/api/spd/scores/${score.dataset.score}`);
+      let d;   // 查失败要说出来（P2-378）：原先 api() 抛错没人接，点了没反应
+      try { d = await api(`/api/spd/scores/${score.dataset.score}`); }
+      catch (err) { return setMsg("#spd-plan-msg", err.message, false); }
       $("#spd-score-detail").innerHTML = `<div class="panel" style="border-left:4px solid #0b6e6e">
         <h3>${esc(d.object_name)} · ${esc(d.period)} 得分明细（${d.total_score} 分）</h3>
         ${table(["指标", "原始数据", "指标值", "权重", "得分", "扣分", "扣分依据"],
@@ -3021,7 +3025,8 @@ async function renderSpdFollowup() {
   };
   $("#spd-fu-filter").onsubmit = async (e) => {
     e.preventDefault();
-    await drawRecords(formJson(e.target));
+    // 查询失败要说出来（P2-378）：原先 draw 抛错没人接，列表还是上一次的结果
+    try { await drawRecords(formJson(e.target)); } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
   };
   $("#spd-qc-form").onsubmit = (e) => {
     e.preventDefault();
@@ -3537,8 +3542,13 @@ async function renderSpdMember() {
     if (!body.patient_id || !body.metric) {
       return setMsg("#spd-meas-msg", "看趋势需要同时填患者ID与指标", false);
     }
-    const t = await api(`/api/spd/measurements/trend?patient_id=${body.patient_id}`
-      + `&metric=${encodeURIComponent(body.metric)}`);
+    // 先清空、查不到把原因写出来（P2-378）：原先 api() 抛错没人接，上一位患者的趋势照旧挂着
+    $("#spd-meas-result").innerHTML = "";
+    let t;
+    try {
+      t = await api(`/api/spd/measurements/trend?patient_id=${body.patient_id}`
+        + `&metric=${encodeURIComponent(body.metric)}`);
+    } catch (err) { return setMsg("#spd-meas-msg", err.message, false); }
     $("#spd-meas-result").innerHTML = `
       ${barChart(t.points.map((p) => [p.label, p.avg]), { unit: t.latest?.unit || "" })}
       ${table(["时段", "均值", "最低", "最高", "次数"], t.points, (p) =>
@@ -3548,7 +3558,9 @@ async function renderSpdMember() {
   $("#spd-assess-form").onsubmit = async (e) => {
     e.preventDefault();
     const picked = formJson(e.target, ["patient_id", "scale_id"]);
-    const scale = await api(`/api/spd/scales/${picked.scale_id}`);
+    let scale;   // 量表取不到要说出来（P2-378）：原先 api() 抛错没人接，点了没反应
+    try { scale = await api(`/api/spd/scales/${picked.scale_id}`); }
+    catch (err) { return setMsg("#spd-assess-msg", err.message, false); }
     /* 逐题作答与执行随访同一套写法（P1-136）：单选默认「（未答）」、数值题用文本框、没答的题不交。原先单选默认选中
      * 第一个选项、数值题空着读成 0——没答的题被当成答了「是」（种子量表里分值高的那个），评估结论回写档案风险等级，
      * 高危还自动派干预与复诊。选项 value 用 label 本身——score_scale 就是按 label 查分值表的。 */
@@ -3711,8 +3723,10 @@ async function renderSpdManager() {
     const status = e.target.status.value;
     if (status) params.set("status", status);
     if (e.target.overdue.checked) params.set("overdue", "true");
-    $("#spd-revisit-list").innerHTML = spdRevisitTable(
-      await api(`/api/spd/revisits?${params}`));
+    // 查询失败要说出来（P2-378）：原先 api() 抛错没人接，列表还是上一次的结果
+    try {
+      $("#spd-revisit-list").innerHTML = spdRevisitTable(await api(`/api/spd/revisits?${params}`));
+    } catch (err) { $("#spd-revisit-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; }
   };
   $("#spd-rx-form").onsubmit = (e) => {
     e.preventDefault();
@@ -3723,7 +3737,11 @@ async function renderSpdManager() {
     e.preventDefault();
     const pid = Number(e.target.patient_id.value);
     if (!pid) return;
-    const rows = await api(`/api/spd/health-prescriptions?patient_id=${pid}`);
+    // 先清空、查不到把原因写出来（P2-378）：原先 api() 抛错没人接，上一位患者的健康处方照旧挂着
+    $("#spd-rx-list").innerHTML = "";
+    let rows;
+    try { rows = await api(`/api/spd/health-prescriptions?patient_id=${pid}`); }
+    catch (err) { $("#spd-rx-list").innerHTML = `<p class="msg err">${esc(err.message)}</p>`; return; }
     $("#spd-rx-list").innerHTML = table(
       ["时间", "病种", "用药", "康复", "生活", "目标说明"], rows, (r) =>
       `<tr><td>${esc(r.created_at.slice(0, 10))}</td><td>${esc(r.program_code || "—")}</td>
