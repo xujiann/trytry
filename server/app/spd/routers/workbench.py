@@ -49,7 +49,7 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_CLAIMABLE_STATUSES, TASK_OPEN_STATUSES,
-                       followup_overdue, referral_last_moved_at, sweep_overdue_on_read)
+                       followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -151,9 +151,7 @@ def _followup_stats(db: Session, orgs: list[int] | None, today: date | None = No
         "completion_rate": round(done / total * 100, 1) if total else 0.0,
         # 已标超期的 + 扫描间隙里过了日期的（P1-128：原先只数后者，进过一次工作台就恒为 0）
         "overdue": query.filter(followup_overdue(today.isoformat())).count(),
-        "abnormal": query.filter(
-            SpdFollowupRecord.abnormal_level.in_(["mid", "high"])
-        ).count(),
+        "abnormal": query.filter(followup_abnormal()).count(),
     }
 
 

@@ -47,8 +47,8 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, as_validated, grade_abnormal
-from ..service import (adjust_followup_record, close_followup_record, followup_overdue, settle_call_task,
-                       spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
+from ..service import (adjust_followup_record, close_followup_record, followup_abnormal, followup_overdue,
+                       settle_call_task, spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -240,6 +240,8 @@ class FollowupBoardStatsOut(BaseModel):
     done: int
     completion_rate: float
     overdue: int
+    # 判出中度 / 重度异常的随访数（P2-292）：页面「异常随访」卡片原先读它却拿不到，恒显示 0
+    abnormal: int
     # 状态/分级/渠道 → 数量：键是状态机取值，随扩充而变，宽键映射
     by_status: dict[str, int]
     by_abnormal: dict[str, int]
@@ -1115,6 +1117,7 @@ def followup_stats(
         "done": done,
         "completion_rate": round(done / total * 100, 1) if total else 0.0,
         "overdue": overdue,
+        "abnormal": query.filter(followup_abnormal()).count(),   # 与工作台同一个判定（P2-292）
         "by_status": by_status,
         "by_abnormal": by_abnormal,
         "by_channel": row_dict(

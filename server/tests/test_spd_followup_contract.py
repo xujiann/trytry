@@ -490,10 +490,11 @@ def test_自动匹配两条分支键集不同(client, auth, world):
 
 def test_随访统计完整精确(client, auth, world):
     body = client.get(f"{B}/followup-stats", params={"dept": "内科"}, headers=auth).json()
-    assert list(body.keys()) == ["total", "done", "completion_rate", "overdue",
+    # abnormal 是 P2-292 补的（页面「异常随访」卡片原先读它却拿不到）：新增键，其余字节不变
+    assert list(body.keys()) == ["total", "done", "completion_rate", "overdue", "abnormal",
                                  "by_status", "by_abnormal", "by_channel", "by_executor"]
     assert body == {
-        "total": 4, "done": 1, "completion_rate": 25.0, "overdue": 1,
+        "total": 4, "done": 1, "completion_rate": 25.0, "overdue": 1, "abnormal": 1,
         "by_status": {"done": 1, "planned": 2, "unreachable": 1},
         "by_abnormal": {"high": 1},
         "by_channel": {"phone": 1},

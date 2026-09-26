@@ -351,6 +351,19 @@ def followup_overdue(today: str):
     )
 
 
+#: 「异常随访」的两档：答卷判出中度 / 重度——也就是会派处置任务的那两档（轻度只记不派）
+FOLLOWUP_ABNORMAL_LEVELS = ("mid", "high")
+
+
+def followup_abnormal():
+    """「异常随访」的判定：答卷判出中度 / 重度（各处计数共用，P2-292）。
+
+    医生移动端工作台原先自己写 `abnormal_level IN ('mid', 'high')`；随访看板的「异常随访」卡片读的 `abnormal`
+    接口根本不给，恒显示 0。两处都走这一个判定。
+    """
+    return SpdFollowupRecord.abnormal_level.in_(FOLLOWUP_ABNORMAL_LEVELS)
+
+
 def referral_last_moved_at():
     """转诊单最近一次推进的时刻：最后一条环节轨迹的时间（发起也写一条）；没有轨迹的存量单退回建单时间。
 
@@ -479,7 +492,7 @@ def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: 
     挂哪份档案：写了病种的按 `enrollment_for`（在管的优先）；随访记录没写病种的不挂（与原先医护那份一致）。
     到期：重度次日、中度三天。**不 commit**。
     """
-    if level not in ("mid", "high"):
+    if level not in FOLLOWUP_ABNORMAL_LEVELS:
         return None
     enrollment = enrollment_for(db, record.patient_id, record.program_code)[1] if record.program_code else None
     task = SpdTask(
