@@ -518,6 +518,8 @@ def create_roster(body: RosterCreate, db: Session = Depends(get_db)):
 
 @router.get("/rosters", response_model=list[RosterOut])
 def list_rosters(center_type: str | None = None, duty_date: str | None = None, db: Session = Depends(get_db)):
+    """共享中心排班。不指定日期时给**今天及以后**的排班（P2-208，与手术排班表 P2-155 同一处理）：原先按日期升序取前
+    200 条，排班一多只剩最早那 200 条历史，今天谁值班、往后怎么排在协同办公页上都看不到。查某一天的照旧等值查。"""
     query = db.query(DutyRoster)
     if center_type:
         query = query.filter(DutyRoster.center_type == center_type)
@@ -525,6 +527,8 @@ def list_rosters(center_type: str | None = None, duty_date: str | None = None, d
         # 等值匹配：`2026-9-1` 会让"这天没人值班"，不报错（P1-58）
         duty_date = require_date(duty_date, field="duty_date")
         query = query.filter(DutyRoster.duty_date == duty_date)
+    else:
+        query = query.filter(DutyRoster.duty_date >= resolve_business_date(None).isoformat())
     return query.order_by(DutyRoster.duty_date, DutyRoster.id).limit(200).all()
 
 

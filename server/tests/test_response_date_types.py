@@ -133,7 +133,8 @@ def legacy(client, admin):
                           json={"name": "出参日期回归患者", "id_card": "330281199012124514"},
                           headers=admin).json()
     rows = {
-        "roster": DutyRoster(center_type="出参回归中心", duty_date="2026-02-31", doctor_name="值班甲"),
+        # 坏日期放在将来的年份：排班表不带日期时只给今天及以后（P2-208），放在过去就读不到了——要钉的是「坏值原样读出」
+        "roster": DutyRoster(center_type="出参回归中心", duty_date="2099-02-31", doctor_name="值班甲"),
         "exam": PhysicalExam(patient_id=patient["id"], org_id=org["id"], exam_date="2026/09/24"),
         "child": ChildRecord(name="出参回归儿童", birth_date="20260924"),
         "vaccination": VaccinationRecord(patient_id=patient["id"], vaccine_code="HepB",
@@ -153,7 +154,7 @@ def legacy(client, admin):
 
 #: (读接口, 查询参数里要填的 id, 日期字段, 插进去的坏值)
 LIST_CASES = [
-    ("/api/mgmt/rosters", {"center_type": "出参回归中心"}, "duty_date", "2026-02-31"),
+    ("/api/mgmt/rosters", {"center_type": "出参回归中心"}, "duty_date", "2099-02-31"),
     ("/api/checkups", {"patient_id": "patient_id"}, "exam_date", "2026/09/24"),
     ("/api/maternal/children", {}, "birth_date", "20260924"),
     ("/api/vaccination/records", {"patient_id": "patient_id"}, "vaccinated_date", "2026-02-30"),
