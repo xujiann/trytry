@@ -31,7 +31,7 @@ SPECIMEN_KEYS = [
     "block_count", "slide_count", "note",
 ]
 STATS_KEYS = [
-    "total", "by_status", "rejected", "reject_rate_pct", "cold_ischemia",
+    "total", "by_status", "rejected", "reject_rate_pct", "rejected_by_reason", "cold_ischemia",
     "reject_reason_options", "caliber",
 ]
 COLD_KEYS = ["measured", "unmeasured", "avg_minutes", "over_60min"]
@@ -68,6 +68,8 @@ def test_标本质控统计_零态精确(client, admin):
         "by_status": {},
         "rejected": 0,
         "reject_rate_pct": None,
+        # 按拒收原因分解（P2-271）：标准项恒在、按固定顺序，没有的记 0
+        "rejected_by_reason": {reason: 0 for reason in REJECT_REASONS},
         "cold_ischemia": {"measured": 0, "unmeasured": 0, "avg_minutes": None, "over_60min": 0},
         "reject_reason_options": REJECT_REASONS,
         "caliber": CALIBER,
@@ -236,6 +238,7 @@ def test_标本质控统计精确_比率恒float(client, admin, seed):
         },
         "rejected": 1,
         "reject_rate_pct": 25.0,
+        "rejected_by_reason": {**{reason: 0 for reason in REJECT_REASONS}, "未加固定液": 1},
         # 只有 s1 填全且未倒序：均值只算它，s2/s3/s4 单列 unmeasured
         "cold_ischemia": {"measured": 1, "unmeasured": 3, "avg_minutes": 20.0, "over_60min": 0},
         "reject_reason_options": REJECT_REASONS,

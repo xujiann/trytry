@@ -127,6 +127,8 @@ class SpecimenStatsOut(BaseModel):
     by_status: dict[str, SpecimenStatusBucketOut]
     rejected: int
     reject_rate_pct: float | None
+    #: 按拒收原因分解（P2-271）：标准项按固定顺序、没有的记 0；修之前录进的自由文本原因排在后面
+    rejected_by_reason: dict[str, int]
     cold_ischemia: SpecimenColdIschemiaOut
     reject_reason_options: list[str]
     caliber: str
@@ -317,6 +319,12 @@ def specimen_stats(db: Session = Depends(get_db)):
     total = sum(by_status.values())
     rejected = by_status.get("rejected", 0)
     rows = db.query(PathologySpecimen).all()
+    # 拒收原因收成闭集就是为了按原因分解统计（`reject_specimen` 的注释：拒收率要按原因看才有管理价值）——原先统计里
+    # 只有一个总数（P2-271）
+    by_reason = {reason: 0 for reason in REJECT_REASONS}
+    for s in rows:
+        if s.status == "rejected":
+            by_reason[s.reject_reason] = by_reason.get(s.reject_reason, 0) + 1
     # 按秒判、按秒平均（P2-133）：原先先截成整分钟再比 `> 60`，离体到固定 60 分 50 秒记 60、不算超时；均值也偏低
     seconds = [x for x in (_cold_ischemia_seconds(s) for s in rows) if x is not None]
     return {
@@ -326,6 +334,7 @@ def specimen_stats(db: Session = Depends(get_db)):
         },
         "rejected": rejected,
         "reject_rate_pct": round(rejected * 100 / total, 2) if total else None,
+        "rejected_by_reason": by_reason,
         "cold_ischemia": {
             "measured": len(seconds),
             # 时间没填全的单列，不拿当前时间凑数

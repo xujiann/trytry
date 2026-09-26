@@ -1615,6 +1615,8 @@ async function renderPathology() {
           `<div class="card"><div class="label">${esc(label)}</div>` +
           `<div class="value${warn ? " warn" : ""}">${esc(value)}</div></div>`).join("")}
     </div>
+    ${stats.rejected ? `<p class="desc">拒收原因：${Object.entries(stats.rejected_by_reason || {})
+      .map(([reason, n]) => `${esc(reason)} ${n}`).join(" · ")}</p>` : ""}
     ${panel("标本送检登记", `
       <form class="inline" id="sp-form">
         <input name="request_id" type="number" placeholder="病理申请单ID" required>
