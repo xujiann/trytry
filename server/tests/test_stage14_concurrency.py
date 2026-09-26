@@ -419,12 +419,11 @@ def test_物资全部出库后清单仍打得开(client, admin, org):
 # 真追加修掉之后谁再往这个函数里塞一条新的读-改-写，规则照样报绿。条数**只许变小**，
 # 且必须与实际相等：多了由 `test_不得再用读改写累加计数` 判红，少了由
 # `test_读改写欠账清单不得腐烂` 逼着把条数调低（为 0 则删条目）。
+#: ✅ 2026-09-26（P2-289）：`spd/followup.py:record_call_result` 的两条幂等回填随回写改成带状态条件的一条 UPDATE，
+#: 回填改为 SQL 里的 `coalesce(列, 新值)`，划掉。
 KNOWN_READ_MODIFY_WRITE: dict[str, tuple[int, str]] = {
     # —— 幂等/取极值形状：同为读-改-写，但重复执行结果一致，丢更新后果有限（登记，暂不修）——
     "portal.py:bind_wechat": (1, "nickname = nickname or 新值，幂等回填"),
-    "spd/followup.py:record_call_result": (
-        2, "started_at / operator_id = 旧值 or 新值，幂等回填（同函数的两条真追加已进 serialized_on 临界区）",
-    ),
     "spd/portal.py:feedback_intervention": (1, "read_at = read_at or now，幂等回填"),
     "spd/portal.py:read_education": (1, "read_at = read_at or now，幂等回填"),
     "spd/tasks.py:submit_task": (1, "assignee_id = assignee_id or 当前用户，幂等回填"),

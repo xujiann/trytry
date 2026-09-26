@@ -47,8 +47,8 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
-from ..service import (adjust_followup_record, close_followup_record, followup_overdue, spawn_followup_abnormal_task,
-                       unknown_code, unknown_ids, unknown_program)
+from ..service import (adjust_followup_record, close_followup_record, followup_overdue, settle_call_task,
+                       spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -1186,17 +1186,20 @@ def record_call_result(
     # 已有结果的再写一次，只会把接通的通话、要回听的录音地址与沟通结果事后改掉
     if task.status != "pending":
         raise HTTPException(status_code=409, detail="该呼叫任务已回写过结果")
-    task.status = body.status
-    task.duration_s = body.duration_s
-    task.record_url = body.record_url
-    task.result = body.result
-    task.started_at = task.started_at or now_naive()
-    task.operator_id = task.operator_id or user.id
     record = None
     if body.status == "connected" and task.ref_type == "followup" and task.ref_id:
         record = db.get(SpdFollowupRecord, task.ref_id)
         if record is not None:
             assert_org_writable(db, user, record.org_id)
+    # 上面那道预检是锁外读的（P2-289）：重发的回调、回调与坐席手工回写同时到，两路都读到待呼叫——翻转压进一条
+    # `WHERE status = 'pending'` 的 UPDATE，后到的一路 409、不再往随访记录上追加
+    if not settle_call_task(
+        db, task.id, status=body.status, duration_s=body.duration_s, record_url=body.record_url, result=body.result,
+        started_at=func.coalesce(SpdCallTask.started_at, now_naive()),
+        operator_id=func.coalesce(SpdCallTask.operator_id, user.id),
+    ):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该呼叫任务已回写过结果")
     if record is not None and record.status in ("planned", "overdue"):
         # 结果串与证据列表都是"读旧值 + 本次 → 整体写回"：同一条随访记录挂着的两个
         # 呼叫任务同时回写，后写的把先写的结果与录音地址盖掉。锁住随访记录这一行、
@@ -1211,6 +1214,7 @@ def record_call_result(
             db.commit()
     else:
         db.commit()
+    db.refresh(task)
     return {"id": task.id, "status": task.status, "duration_s": task.duration_s}
 
 

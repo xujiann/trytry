@@ -419,14 +419,15 @@ def test_八处修法不得被拆掉_静态钉():
 
 
 def test_八处不得再回到欠账清单():
-    """清零的八处不许再登记回 KNOWN_READ_MODIFY_WRITE；`record_call_result` 只剩两条幂等回填。"""
+    """清零的八处不许再登记回 KNOWN_READ_MODIFY_WRITE；`record_call_result` 剩下的两条幂等回填也已清零
+    （P2-289：回写改成带状态条件的一条 UPDATE，回填改为 SQL 里的 `coalesce`），同样不许再回来。"""
     cleared = {
         "billing.py:refund_payment", "maternal.py:add_visit", "maternal.py:add_screening",
         "maternal.py:create_screening", "prescriptions.py:review_prescription",
         "spd/care.py:update_revisit", "spd/population.py:update_recall",
+        "spd/followup.py:record_call_result",
     }
     assert not cleared & set(KNOWN_READ_MODIFY_WRITE), cleared & set(KNOWN_READ_MODIFY_WRITE)
-    assert KNOWN_READ_MODIFY_WRITE["spd/followup.py:record_call_result"][0] <= 2
 
 
 def test_本档的今天确实被冻住了():

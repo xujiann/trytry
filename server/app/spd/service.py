@@ -22,6 +22,7 @@ from ..clock import now_naive
 from ..concurrency import add_amount
 from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of
 from .models import (
+    SpdCallTask,
     SpdEnrollment,
     SpdFollowupRecord,
     SpdIntervention,
@@ -445,6 +446,16 @@ def close_followup_record(
         .values(status=new_status)
     ))
     return bool(closed.rowcount)
+
+
+def settle_call_task(db: Session, task_id: int, **values: Any) -> bool:
+    """呼叫任务回写结果：只从「待呼叫」翻，结果各列与状态同一条 UPDATE，返回是否翻到（P2-289）。
+
+    「结果只回写一次」（P2-87）原先只是锁外预检：网关超时重发回调、或网关回调与坐席手工回写同时到，两路都读到待呼叫、都 200，
+    接通时两路先后往关联的随访记录各追加一遍沟通结果与录音地址；一路接通、一路未接通时任务停在后提交的那路，随访记录里却
+    已写进接通结果。**不 commit**。
+    """
+    return _move_row(db, SpdCallTask, task_id, "pending", **values)
 
 
 def adjust_followup_record(db: Session, record_id: int, **values: Any) -> bool:
