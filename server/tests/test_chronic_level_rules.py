@@ -77,3 +77,21 @@ def test_预置病种的分级规则都过得了同一道校验():
 
     assert SEED_CHRONIC_DISEASE_TYPES
     assert [t["code"] for t in SEED_CHRONIC_DISEASE_TYPES if level_rules_problem(t["level_rules"])] == []
+
+
+@pytest.mark.parametrize(("glucose", "level"), [(2.8, 3), (3.9, 3), (5.6, 1), (8.0, 2), (12.0, 3)],
+                         ids=["低血糖", "恰为3.9", "正常", "偏高", "高"])
+def test_糖尿病低血糖也判高危_建议转诊(client, admin, glucose, level):
+    """P2-119：预置的 2 型糖尿病分级规则原先只按「越高越危」——空腹血糖 2.8 判成 1 级「控制良好」、不建议转诊，
+    而国家基本公卫规范把血糖 ≤3.9 mmol/L 与 ≥16.7 并列为紧急转诊指征。"""
+    org = client.post("/api/organizations", headers=admin, json={
+        "name": f"P2119 慢病院{glucose}", "org_type": "township", "level": "township"}).json()["id"]
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": f"P2119 糖尿病{glucose}", "id_card": f"33010619700202{int(glucose * 10):04d}"}).json()["id"]
+    chronic = client.post(C, headers=admin, json={"patient_id": patient, "disease": "diabetes",
+                                                  "managed_by_org_id": org})
+    assert chronic.status_code == 201, chronic.text
+    resp = client.post(f"{C}/{chronic.json()['id']}/followups", headers=admin, json={"glucose": glucose})
+    assert resp.status_code in (200, 201), resp.text[:300]
+    assert resp.json()["level"] == level   # 修前 2.8 / 3.9 判 1
+    assert resp.json()["refer_up_suggested"] is (level == 3)

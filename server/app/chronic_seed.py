@@ -41,6 +41,10 @@ SEED_CHRONIC_DISEASE_TYPES: list[dict] = [
             "require_all": True,
             "metrics": [
                 {"key": "glucose", "name": "空腹血糖", "unit": "mmol/L", "direction": "high", "level3": 10.0, "level2": 7.0},
+                # 低血糖（P2-119）：国家基本公卫 2 型糖尿病健康管理规范把「血糖 ≤3.9 mmol/L」与「≥16.7」并列为紧急转诊指征；
+                # 原先只按「越高越危」定级，空腹血糖 2.8 判成 1 级「控制良好」、不建议转诊。同一指标再挂一条 low 方向的，
+                # 取两条里更高的一档。种子只增不改：已部署的库里这条规则不会被补上，要在病种目录里手工加（见 TECH_DEBT P2-119）
+                {"key": "glucose", "name": "空腹血糖（低血糖）", "unit": "mmol/L", "direction": "low", "level3": 3.9},
             ],
         },
         "guidance": "控制总能量摄入、主食粗细搭配、规律三餐、餐后适量运动、监测血糖、遵医嘱用药",
