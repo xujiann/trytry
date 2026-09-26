@@ -759,6 +759,14 @@ def batch_dispense_trace(batch_id: int, db: Session = Depends(get_db)):
         .all()
     )
     stock = _stock_of(db, batch.org_id, batch.drug_code)
+    # 「仍在外面」在库里对全部发药行求和（P2-197）：原先加的是上面截到 1000 行的清单，一个 2 万片的批次发出
+    # 1400 行时少报 5600 片、不带任何截断提示——召回时要追回的正是这个数（疫苗那一侧早按「实际接种了多少人次」求）
+    total_dispensed = (
+        db.query(func.coalesce(func.sum(DispenseItem.quantity), 0))
+        .join(DispenseRecord, DispenseItem.dispense_id == DispenseRecord.id)
+        .filter(DispenseItem.batch_id == batch_id, DispenseRecord.status == "dispensed")
+        .scalar()
+    )
     return {
         "batch_id": batch.id,
         "org_id": batch.org_id,
@@ -768,7 +776,7 @@ def batch_dispense_trace(batch_id: int, db: Session = Depends(get_db)):
         "expire_date": batch.expire_date,
         "status": batch.status,
         # 冲销的不计入"仍在外面"的量——但行保留在下面清单里（status 标 reversed）
-        "total_dispensed": sum(i.quantity for i, r, _, _ in rows if r.status == "dispensed"),
+        "total_dispensed": int(total_dispensed or 0),
         "dispenses": [
             {
                 "dispense_id": r.id,
