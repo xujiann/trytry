@@ -3,6 +3,7 @@
 每办一次入院会同时建一条 `encounter_type="inpatient"` 的就诊记录。运营月报的门急诊人次（P2-153）与成本核算的门诊人次
 早已把它排除，驾驶舱「基层诊疗人次占比」（监测指标 7）的分子分母、运行效率的「医师日均担负」、自定义绩效公式的
 「期间诊疗人次」却照数——县医院 3000 门诊 + 500 入院、乡镇 2000 门诊：基层占比印 36.36% 而不是 40%。
+上报报表的监测指标 3 是同一个指标，P2-199 修驾驶舱时没顺到它（P2-407）。
 """
 from datetime import datetime
 
@@ -50,3 +51,8 @@ def test_运行效率与公式变量的诊疗人次不含住院类(client, admin
         assert build_variable_index(db, "2026-07")[world["county"]]["encounters"] == 3.0  # 修前 4.0
     finally:
         db.close()
+
+
+def test_上报监测指标的基层占比与驾驶舱同一条口径(client, admin, world):
+    by_name = {i["name"]: i for i in client.get("/api/reports/monitoring", headers=admin).json()["indicators"]}
+    assert by_name["县域内基层诊疗人次占比"]["value"] == 40.0   # 修前 33.33：分母 6 把住院类也数了（P2-407）

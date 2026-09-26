@@ -96,11 +96,15 @@ def _monitoring_indicators(db: Session) -> list[dict]:
     """监测指标体系 14 项当期值（平台内可自动计算口径）。"""
     org_total = db.query(func.count(Organization.id)).scalar() or 0
     patient_total = db.query(func.count(Patient.id)).scalar() or 0
-    encounter_total = db.query(func.count(Encounter.id)).scalar() or 0
+    # 诊疗人次不含住院类就诊记录（P2-407）：办入院会同时建一条 encounter_type="inpatient" 的就诊记录，驾驶舱的
+    # 同一个指标（P2-199）与本文件的月报门急诊人次（P2-153）早已排除，这里照数就把住院算了两遍——同一个库、
+    # 同一个指标，驾驶舱印 40%、上报印 33.33%
+    outpatient = Encounter.encounter_type != "inpatient"
+    encounter_total = db.query(func.count(Encounter.id)).filter(outpatient).scalar() or 0
     grassroots_encounters = (
         db.query(func.count(Encounter.id))
         .join(Organization, Encounter.org_id == Organization.id)
-        .filter(Organization.level.in_(["township", "village"]))
+        .filter(Organization.level.in_(["township", "village"]), outpatient)
         .scalar()
         or 0
     )
