@@ -156,6 +156,25 @@ def _release_bed(db: Session, bed_id: int) -> None:
     )
 
 
+def spawn_discharge_followup(db: Session, admission: Admission) -> None:
+    """T2.4：出院即派生出院随访任务，交给统一随访中心跟踪。**不 commit**。
+
+    平台出院与 HIS 的 ADT^A03 出院镜像共用这一处（P2-160）：A03 的说明写明两路唯一的差异是门禁（病案首页、费用
+    结清），原先 A03 却一条出院随访都不派——以 HIS 为出院来源的机构，每一例出院都悄悄漏出统一随访中心。
+    """
+    from .followups import DISCHARGE_FOLLOWUP_DAYS, create_task
+
+    create_task(
+        db,
+        patient_id=admission.patient_id,
+        org_id=admission.org_id,
+        category="discharge",
+        source_id=admission.id,
+        title=f"出院随访：{admission.diagnosis_name or '住院治疗'}",
+        due_days=DISCHARGE_FOLLOWUP_DAYS,
+    )
+
+
 def _mark_discharged(db: Session, admission_id: int, now: datetime) -> bool:
     """出院状态迁移与出院时间压在**同一条带状态条件的 UPDATE** 里，返回本次是否由这一路迁移。
 
@@ -539,19 +558,9 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: 
         synchronize_session=False,
     )
     _release_bed(db, admission.bed_id)
-    # T2.4：出院即派生出院随访任务，交给统一随访中心跟踪
-    from .followups import DISCHARGE_FOLLOWUP_DAYS, create_task
-
-    create_task(
-        db,
-        patient_id=admission.patient_id,
-        org_id=admission.org_id,
-        category="discharge",
-        source_id=admission.id,
-        title=f"出院随访：{admission.diagnosis_name or '住院治疗'}",
-        due_days=DISCHARGE_FOLLOWUP_DAYS,
-    )
+    spawn_discharge_followup(db, admission)
     from ..notify import notify_patient
+    from .followups import DISCHARGE_FOLLOWUP_DAYS
 
     notify_patient(
         db,

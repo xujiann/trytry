@@ -57,7 +57,8 @@ from ..texttypes import NON_BLANK
 from .chronic import _evaluate_level
 from .encounters import create_encounter
 from .exams import submit_report
-from .inpatient import AdmissionCreate, _mark_discharged, _release_bed, create_admission
+from .inpatient import (AdmissionCreate, _mark_discharged, _release_bed, create_admission,
+                        spawn_discharge_followup)
 from .patients import create_patient_idempotent, id_card_match
 
 router = APIRouter(
@@ -690,6 +691,9 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
         synchronize_session=False,
     )
     _release_bed(db, admission.bed_id)
+    # 出院随访与平台出院同一处派（P2-160）；给患者发的「出院随访安排」通知没跟着发：那段话把人指向平台上的住院
+    # 费用清单，而 HIS 为出院来源的机构，费用多半在 HIS 里——发不发、怎么措辞要另定
+    spawn_discharge_followup(db, admission)
     events.publish(db, events.ADMISSION_DISCHARGED, {
         "admission_id": admission.id,
         "patient_id": admission.patient_id,
