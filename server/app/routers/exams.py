@@ -4,13 +4,13 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, update
+from sqlalchemy import and_, case, func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, move_row
 from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import (
@@ -448,7 +448,18 @@ def advance_sample(request_id: int, db: Session = Depends(get_db)):
     next_status = _SAMPLE_FLOW.get(request.sample_status)
     if next_status is None:
         raise HTTPException(status_code=409, detail="样本已核收")
-    request.sample_status = next_status
+    # 走一步压进带状态条件的 UPDATE（P2-317）：原先锁外读改写，采样点与转运同时点，后提交的照自己读到的旧状态写——
+    # 「中心核收」被退回「转运中」；出报告与推样本交错时，已出报告的单子样本还在往前走
+    moved = move_row(db, ExamRequest, request.id,
+                     and_(ExamRequest.sample_status == request.sample_status,
+                          ExamRequest.status.in_(("pending", "diagnosing"))),
+                     sample_status=next_status)
+    if not moved:
+        db.rollback()
+        db.refresh(request)
+        if request.status not in ("pending", "diagnosing"):
+            raise HTTPException(status_code=409, detail="申请单已出报告或已互认")
+        raise HTTPException(status_code=409, detail="样本物流刚被他人推进，请刷新后再操作")
     db.commit()
     db.refresh(request)
     return request

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from .. import clock
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, move_row
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_roles, resolve_business_date, keyword_like
 from ..models import (
@@ -282,7 +282,14 @@ def advance_order(order_id: int, db: Session = Depends(get_db)):
     next_status = flow.get(order.status)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {DISPENSE_ORDER_STATUS_NAMES.get(order.status, order.status)} 已是终态")
-    order.status = next_status
+    # 走一步压进带状态条件的 UPDATE（P2-317）：原先锁外读改写，煎药房与配送同时点，后提交的照自己读到的旧状态写——
+    # 「已送达」被退回「配送中」
+    if not move_row(db, TcmDispenseOrder, order.id, TcmDispenseOrder.status == order.status, status=next_status):
+        db.rollback()
+        db.refresh(order)
+        raise HTTPException(
+            status_code=409,
+            detail=f"订单状态已变为 {DISPENSE_ORDER_STATUS_NAMES.get(order.status, order.status)}，请刷新后再操作")
     db.commit()
     db.refresh(order)
     return order

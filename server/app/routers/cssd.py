@@ -1,7 +1,7 @@
 """消毒供应中心：复用器械批次灭菌→发放→回收全流程追溯。"""
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, move_row
 from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_org_list
@@ -71,13 +71,21 @@ def advance(
     next_status = _FLOW.get(batch.status)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {STERILIZATION_STATUS_NAMES.get(batch.status, batch.status)} 已是终态")
+    values: dict[str, Any] = {"status": next_status}
     if next_status == "dispatched":
         if dispatched_to_org_id is None:
             raise HTTPException(status_code=422, detail="发放需指定接收机构")
         if db.get(Organization, dispatched_to_org_id) is None:
             raise HTTPException(status_code=404, detail="接收机构不存在")
-        batch.dispatched_to_org_id = dispatched_to_org_id
-    batch.status = next_status
+        values["dispatched_to_org_id"] = dispatched_to_org_id
+    # 走一步压进带状态条件的 UPDATE（P2-317）：原先锁外读改写，两人同时推同一批次，后提交的照自己读到的旧状态写——
+    # 推进被退回一步，两人各发一次时接收机构只剩后写的那家、先写的那位看到的回执却是发给了自己选的
+    if not move_row(db, SterilizationBatch, batch.id, SterilizationBatch.status == batch.status, **values):
+        db.rollback()
+        db.refresh(batch)
+        raise HTTPException(
+            status_code=409,
+            detail=f"批次状态已变为 {STERILIZATION_STATUS_NAMES.get(batch.status, batch.status)}，请刷新后再操作")
     db.commit()
     db.refresh(batch)
     return batch
@@ -330,7 +338,9 @@ def fulfill_cssd_request(request_id: int, batch_id: int, db: Session = Depends(g
     batch = db.get(SterilizationBatch, batch_id)
     if batch is None or batch.status not in ("sterile", "dispatched"):
         raise HTTPException(status_code=409, detail="批次不存在或未完成灭菌")
-    r.status = "fulfilled"
-    r.batch_id = batch_id
+    # 同上（P2-317）：两人同时响应同一申领、各选一个批次，原先都 200，库里只剩后写的那个批次
+    if not move_row(db, CssdRequest, r.id, CssdRequest.status == "requested", status="fulfilled", batch_id=batch_id):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="申领已处理")
     db.commit()
     return {"id": r.id, "status": "fulfilled", "batch_id": batch_id}

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..concurrency import move_row
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible
@@ -121,10 +122,25 @@ def advance_shortage(shortage_id: int, db: Session = Depends(get_db), user: User
     next_status = _SHORTAGE_FLOW.get(shortage.status)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)} 已是终态")
-    shortage.status = next_status
+    # 走一步压进带状态条件的 UPDATE（P2-317）：原先锁外读改写，推进与结案交错时，后提交的推进照自己读到的旧状态写——
+    # 已取消的登记被翻回「已配送」（结案时间与原因还挂在上面），又能再判一次取药与否
+    if not _move_shortage(db, shortage, status=next_status):
+        raise HTTPException(
+            status_code=409,
+            detail=f"登记状态已变为 {SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)}，请刷新后再操作")
     db.commit()
     db.refresh(shortage)
     return shortage
+
+
+def _move_shortage(db: Session, shortage: DrugShortage, **values: Any) -> bool:
+    """缺药登记走一步：状态还是判过的那个才写（`concurrency.move_row`）；抢输了回滚并把对象刷成库里此刻的样子，
+    调用方按它报 409。"""
+    if move_row(db, DrugShortage, shortage.id, DrugShortage.status == shortage.status, **values):
+        return True
+    db.rollback()
+    db.refresh(shortage)
+    return False
 
 
 @router.post(
@@ -146,9 +162,11 @@ def close_shortage(shortage_id: int, body: ShortageClose, db: Session = Depends(
         raise HTTPException(status_code=409, detail=f"该登记已结案（{SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)}）")
     if body.result in ("collected", "no_show") and shortage.status != "delivered":
         raise HTTPException(status_code=409, detail="药品尚未配送到位，不可判定取药与否")
-    shortage.status = body.result
-    shortage.close_reason = body.reason
-    shortage.closed_at = now_naive()
+    # 同上（P2-317）：两人同时结案（一个判已取药、一个判未取药），原先都 200，库里只剩后写的那个结论
+    if not _move_shortage(db, shortage, status=body.result, close_reason=body.reason, closed_at=now_naive()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"登记状态已变为 {SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)}，请刷新后再操作")
     db.commit()
     db.refresh(shortage)
     return shortage

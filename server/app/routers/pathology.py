@@ -12,13 +12,14 @@
 拒收并说明理由——不拒收，后面做出来的片子是废的，而报告已经发出去了。
 """
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_with_retry
+from ..concurrency import insert_with_retry, move_row
 from ..database import get_db
 from ..datetypes import OptionalDateTimeSecStr
 from ..deps import get_current_user, require_roles, row_dict
@@ -250,11 +251,22 @@ def receive_specimen(specimen_id: int, body: SpecimenReceive, db: Session = Depe
     specimen = _specimen(db, specimen_id)
     if specimen.status != "pending":
         raise HTTPException(status_code=409, detail=f"当前状态 {SPECIMEN_STATUS.get(specimen.status, specimen.status)} 不可核收")
-    specimen.status = "received"
-    specimen.received_by = body.received_by
+    if not _move_specimen(db, specimen, status="received", received_by=body.received_by):
+        raise HTTPException(status_code=409, detail=f"当前状态 {SPECIMEN_STATUS.get(specimen.status, specimen.status)} 不可核收")
     db.commit()
     db.refresh(specimen)
     return _out(specimen)
+
+
+def _move_specimen(db: Session, specimen: PathologySpecimen, **values: Any) -> bool:
+    """标本走一步：状态还是判过的那个才写（P2-317，`concurrency.move_row`）。原先核收 / 拒收 / 推进都是锁外读改写：
+    核收与拒收交错，后提交的照自己读到的「待核收」写——已拒收的标本被改成已核收（拒收原因还挂着，拒收率跟着变），
+    或正在取材的标本被标成拒收；推进交错时已阅片的被退回制片。抢输了回滚并把对象刷成库里此刻的样子，调用方按它报 409。"""
+    if move_row(db, PathologySpecimen, specimen.id, PathologySpecimen.status == specimen.status, **values):
+        return True
+    db.rollback()
+    db.refresh(specimen)
+    return False
 
 
 @router.post(
@@ -274,8 +286,10 @@ def reject_specimen(specimen_id: int, body: SpecimenReject, db: Session = Depend
         raise HTTPException(
             status_code=422, detail="拒收原因须为标准项之一：" + "、".join(REJECT_REASONS)
         )
-    specimen.status = "rejected"
-    specimen.reject_reason = body.reject_reason
+    if not _move_specimen(db, specimen, status="rejected", reject_reason=body.reject_reason):
+        raise HTTPException(
+            status_code=409, detail=f"当前状态 {SPECIMEN_STATUS.get(specimen.status, specimen.status)} 不可拒收（拒收只能发生在核收环节）"
+        )
     db.commit()
     db.refresh(specimen)
     return _out(specimen)
@@ -297,11 +311,14 @@ def advance_specimen(specimen_id: int, body: SpecimenAdvance, db: Session = Depe
             status_code=409,
             detail="待核收的标本请先核收" if specimen.status == "pending" else "该标本已阅片",
         )
-    specimen.status = next_status
+    values: dict[str, Any] = {"status": next_status}
     if next_status == "embedded" and body.block_count:
-        specimen.block_count = body.block_count
+        values["block_count"] = body.block_count
     if next_status == "slided" and body.slide_count:
-        specimen.slide_count = body.slide_count
+        values["slide_count"] = body.slide_count
+    if not _move_specimen(db, specimen, **values):
+        raise HTTPException(
+            status_code=409, detail=f"标本状态已变为 {SPECIMEN_STATUS.get(specimen.status, specimen.status)}，请刷新后再操作")
     db.commit()
     db.refresh(specimen)
     return _out(specimen)

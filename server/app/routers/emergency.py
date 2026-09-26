@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, FiniteFloat, field_validator
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, move_row
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, Patient, User
@@ -187,7 +187,13 @@ def advance(case_id: int, db: Session = Depends(get_db)):
     next_status = _FLOW.get(case.status)
     if next_status is None:
         raise HTTPException(status_code=409, detail=f"状态 {CASE_STATUS_NAMES.get(case.status, case.status)} 已是终态")
-    case.status = next_status
+    # 走一步压进带状态条件的 UPDATE（P2-317）：原先锁外读改写，调度台与车组同时推，后提交的照自己读到的旧状态写——
+    # 「已收治」被退回「已到院」，已转由院内记录的事件车载体征又能往回传
+    if not move_row(db, EmergencyCase, case.id, EmergencyCase.status == case.status, status=next_status):
+        db.rollback()
+        db.refresh(case)
+        raise HTTPException(
+            status_code=409, detail=f"事件状态已变为 {CASE_STATUS_NAMES.get(case.status, case.status)}，请刷新后再操作")
     db.commit()
     db.refresh(case)
     return _case_out(case)

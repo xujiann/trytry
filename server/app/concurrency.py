@@ -229,6 +229,29 @@ def claim_quota(db: Session, model, obj_id: int, used_col: str, limit_col: str, 
     return bool(claimed.rowcount)
 
 
+def move_row(db: Session, model, row_id: int, expect: ColumnElement[bool], **values: Any) -> bool:
+    """状态机走一步：`UPDATE model SET … WHERE id = :id AND <expect>`，返回这一路是否改到。
+
+    替代「读 status → 判 / 查表得下一态 → 赋值 → commit」。那一写的 UPDATE 只有 `WHERE id = ?`：两路交错时，
+    后提交的一路照自己读到的旧状态写，把先提交那一路走到的状态盖回去——推进被退回一步、已结案的被翻回在途、
+    已拒收的标本被改成已核收、两人各发一次的接收机构只剩后写的那家（P2-317）。把「状态还是我判过的那个」
+    （`expect`，通常是 `Model.status == 读到的值`）压进同一条 UPDATE，抢输的一路改到 0 行。
+
+    与 `take_amount` / `claim_quota` 同一个道理：**判定与写入必须在同一条 SQL 里**。
+    `synchronize_session=False`：抢输的一路手上那份对象不能被同步成新值——调用方回滚、`db.refresh` 之后按库里此刻的
+    状态报 409。改到了的，调用方随后仍要 `db.commit()`，要读回新值请 `db.refresh(obj)`（这条 UPDATE 走 Core）。
+    平台侧早先有三份同形的本地版本（`exams._move_critical` / `medwaste._move_waste` / `workflows._move_instance`），
+    慢专病侧是 `spd.service._move_row`（子系统边界不许平台反向引用它）；新写的状态迁移用这一份。
+    """
+    moved = cast(CursorResult, db.execute(
+        update(model)
+        .where(model.id == row_id, expect)
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    ))
+    return bool(moved.rowcount)
+
+
 def appended_text(column, text: str, sep: str = "；") -> ColumnElement[Any]:
     """"在 column 末尾追加 text"的 SQL 表达式：空/NULL 时不带分隔符，否则 `col || sep || text`。
 
