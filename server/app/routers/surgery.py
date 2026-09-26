@@ -400,7 +400,11 @@ def schedule_surgery(
 def list_schedules(
     scheduled_date: str | None = None, room_id: int | None = None, db: Session = Depends(get_db)
 ):
-    """手术排班表：按手术间与时段排序，就是手术室墙上那张表。"""
+    """手术排班表：按手术间与时段排序，就是手术室墙上那张表。
+
+    不指定日期时给**今天及以后**的排班（P2-155）：原先按日期升序取前 300 条，排班一多（一天十来台，不到一个月），
+    桌面与移动端的「手术排班」只剩最早那 300 条历史，明天的手术哪儿都看不见。查某一天的照旧按日期等值查。
+    """
     query = db.query(SurgerySchedule, SurgeryRequest, OperatingRoom).join(
         SurgeryRequest, SurgerySchedule.request_id == SurgeryRequest.id
     ).join(OperatingRoom, SurgerySchedule.room_id == OperatingRoom.id)
@@ -408,6 +412,8 @@ def list_schedules(
         # 等值匹配：`2026-9-1` 会让"这天没有手术排班"，不报错（P1-58）
         scheduled_date = require_date(scheduled_date, field="scheduled_date")
         query = query.filter(SurgerySchedule.scheduled_date == scheduled_date)
+    else:
+        query = query.filter(SurgerySchedule.scheduled_date >= clock.today().isoformat())
     if room_id is not None:
         query = query.filter(SurgerySchedule.room_id == room_id)
     rows = query.order_by(
