@@ -127,6 +127,7 @@ RESOURCE_NAMES = {
     "spd_profile": "慢专病360档案",
     "spd_journey": "慢专病全流程视图",
     "spd_enrollment": "慢专病纳管档案",
+    "spd_path": "慢专病临床路径",
     "spd_screening": "慢专病筛查",
     "spd_assessment": "慢专病评估",
     "spd_measurement": "慢专病监测指标",

@@ -59,7 +59,6 @@ ELSEWHERE = {
     "disease_programs.py:get_enrollment": "test_stage15_horizontal.NEWLY_VISIBLE_UNGUARDED_READS",
     "disease_programs.py:program_stats": "test_unscopable_patient_reads.UNSCOPABLE_PATIENT_READS",
     "pharmacy.py:batch_dispense_trace": "test_list_pagination_ratchet.HELD_PENDING_SCOPE_DECISION",
-    "spd/tasks.py:get_path_instance": "test_stage15_horizontal.NEWLY_VISIBLE_UNGUARDED_READS",
 }
 
 AWAITING = {
@@ -108,7 +107,6 @@ BLINDSPOT_ELSEWHERE = {
     "patients.py:get_patient": "test_stage15_horizontal.UNGUARDED",
     "spd/population.py:list_group_members": "test_unscopable_patient_reads.UNSCOPABLE_PATIENT_READS",
     "spd/population.py:list_usages": "test_unscopable_patient_reads.ONEHOP_UNSCOPABLE_READS",
-    "spd/tasks.py:check_node_enter": "test_unscopable_patient_reads.ONEHOP_UNSCOPABLE_READS",
 }
 
 _FUND = ("医保基金池的账（池子清单、预付、分期到账、清算、逐机构分配）整个模块的读接口都不收口；"

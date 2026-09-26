@@ -369,12 +369,29 @@ def list_path_instances(
     return [_instance_out(db, i) for i in rows]
 
 
+def _assert_instance_visible(db: Session, user: User, instance: SpdPathInstance) -> None:
+    """读路径实例按它服务的患者判可见性并留痕，与纳管档案详情（`GET /enrollments/{id}`）同一句。
+
+    实例本身不带机构、也不带患者，归属隔一跳在纳管档案上——写侧（推进、调整）早按这一跳判机构。原先两条读接口
+    （执行明细、节点进入条件校验）按 id 直取、不留痕：任一登录账号按实例号翻得到别家患者的姓名、病种、走到哪一步，
+    还能拿节点的进入条件逐条试出患者的指标落在哪一档。清单只列本机构纳管的实例，本机构纳管本身就是一条服务关系，
+    所以从清单点进来的一律看得到。
+    """
+    enrollment = db.get(SpdEnrollment, instance.enrollment_id)
+    if enrollment is None:
+        raise HTTPException(status_code=404, detail="路径实例不存在")
+    assert_patient_visible(db, user, enrollment.patient_id, resource="spd_path")
+
+
 @router.get("/path-instances/{instance_id}", response_model=PathInstanceDetailOut)
-def get_path_instance(instance_id: int, db: Session = Depends(get_db)):
+def get_path_instance(
+    instance_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """路径执行明细：节点清单 + 每个节点的任务状态与责任人。"""
     instance = db.get(SpdPathInstance, instance_id)
     if instance is None:
         raise HTTPException(status_code=404, detail="路径实例不存在")
+    _assert_instance_visible(db, user, instance)
     nodes = (
         db.query(SpdPathNode)
         .filter(SpdPathNode.template_id == instance.template_id)
@@ -559,12 +576,15 @@ def advance_instance(
 
 
 @router.get("/path-nodes/{node_id}/enter-check", response_model=NodeEnterCheckOut)
-def check_node_enter(node_id: int, instance_id: int, db: Session = Depends(get_db)):
+def check_node_enter(
+    node_id: int, instance_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     """校验患者是否满足节点进入条件，供前端在办理前给出提示。"""
     node = db.get(SpdPathNode, node_id)
     instance = db.get(SpdPathInstance, instance_id)
     if node is None or instance is None:
         raise HTTPException(status_code=404, detail="节点或路径实例不存在")
+    _assert_instance_visible(db, user, instance)
     allowed, matched = node_enter_allowed(db, instance, node)
     return {"allowed": allowed, "matched": matched, "conditions": node.enter_condition or []}
 

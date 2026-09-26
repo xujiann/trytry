@@ -741,10 +741,11 @@ NEWLY_VISIBLE_UNGUARDED_WRITES: set[str] = set()
 BYID_PRIMARY_WITHOUT_ORG: dict[str, str] = {}
 
 #: 同上，读侧。
+#: ✅ 减 1（2026-09-26，P0-44）：`spd/tasks.py:get_path_instance` 按实例所属纳管档案的患者判可见性并留痕，
+#: 与同文件纳管档案详情同一句。
 NEWLY_VISIBLE_UNGUARDED_READS = {
     "disease_programs.py:get_enrollment",
     "materials.py:trace_consumable",
-    "spd/tasks.py:get_path_instance",
     "spd/tasks.py:list_path_instances",
 }
 
