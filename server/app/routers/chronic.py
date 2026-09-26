@@ -388,14 +388,15 @@ _RISK_METRICS = {"hypertension": "sbp", "diabetes": "glucose"}
 _LEVEL_BASE = {1: 20, 2: 50, 3: 80}
 
 
-def _risk_metric(db: Session, disease: str) -> str:
-    """风险趋势指标：取病种目录第一个分级指标，目录缺失时回落到兜底表。"""
+def _risk_metric(db: Session, disease: str) -> tuple[str, str]:
+    """风险趋势指标与它的方向（high=越高越危 / low=越低越危）：取病种目录第一个分级指标，目录缺失时回落到兜底表
+    （兜底的血压、血糖都是越高越危）。"""
     disease_type = get_disease_type(db, disease)
     rules = (disease_type.level_rules if disease_type else None) or {}
     metrics = [] if level_rules_problem(rules) else rules.get("metrics") or []   # 规则写坏了同目录缺失，回落兜底表（P1-125）
     if metrics and metrics[0].get("key"):
-        return str(metrics[0]["key"])
-    return _RISK_METRICS.get(disease, "")
+        return str(metrics[0]["key"]), "low" if metrics[0].get("direction") == "low" else "high"
+    return _RISK_METRICS.get(disease, ""), "high"
 
 
 class ChronicRiskOut(BaseModel):
@@ -427,8 +428,12 @@ def risk_score(
     """简单风险评分：最近3次随访关键指标趋势 + 当前分级加权。
 
     score = 分级基础分（1级20 / 2级50 / 3级80）
-            + 趋势修正（上升 +15，下降 -10，平稳 0）
+            + 趋势修正（变差 +15，好转 -10，平稳 0）
     风险档位：≥70 高危，≥40 中危，其余低危。
+
+    「变差」按指标方向认：越高越危的（血压、血糖、CAT 评分）上升是变差，越低越危的（精神障碍的用药依从性评分）
+    下降是变差。原先一律「上升 +15」（P2-126）：依从性从 3 分升到 9 分评分加 15，从 9 分跌到 2 分反倒减 10。
+    `trend` 照旧说的是数值的走向（上升 / 下降）。
     """
     chronic = db.get(ChronicPatient, chronic_id)
     if chronic is None:
@@ -436,7 +441,7 @@ def risk_score(
     # 慢病档案按 id 直取同样是患者维度数据：可见性判定 + 留痕
     assert_patient_visible(db, user, chronic.patient_id, resource="chronic")
 
-    metric = _risk_metric(db, chronic.disease)
+    metric, direction = _risk_metric(db, chronic.disease)
     recent = (
         db.query(FollowUp)
         .filter(FollowUp.chronic_id == chronic_id)
@@ -457,11 +462,13 @@ def risk_score(
     adjust = 0
     if len(values) >= 2:
         if values[-1] > values[0]:
-            trend, adjust = "rising", 15
+            trend = "rising"
         elif values[-1] < values[0]:
-            trend, adjust = "falling", -10
+            trend = "falling"
         else:
-            trend, adjust = "stable", 0
+            trend = "stable"
+        worse, better = ("falling", "rising") if direction == "low" else ("rising", "falling")
+        adjust = 15 if trend == worse else -10 if trend == better else 0
 
     score = max(0, min(100, _LEVEL_BASE.get(chronic.level, 20) + adjust))
     risk_level = "high" if score >= 70 else "medium" if score >= 40 else "low"

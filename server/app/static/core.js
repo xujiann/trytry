@@ -2042,7 +2042,7 @@ async function renderChronic() {
             <div class="card"><span class="k">风险档</span><b>${statusTag(RISK_LEVEL, r.risk_level)}</b></div>
           </div>
           ${r.refer_up_suggested ? '<p class="msg err">评分达高危档，建议上转</p>' : ""}
-          <p class="desc">评分 = 分级基础分（1级20 / 2级50 / 3级80）+ 趋势修正（上升 +15，下降 −10，平稳 0）；
+          <p class="desc">评分 = 分级基础分（1级20 / 2级50 / 3级80）+ 趋势修正（变差 +15，好转 −10，平稳 0；越高越危的指标上升算变差，越低越危的——如用药依从性评分——下降算变差）；
             ≥70 高危、≥40 中危。<b>最近三次不足两次时趋势记「数据不足」、不作修正</b>——
             一次随访推不出趋势。</p>`;
       }
