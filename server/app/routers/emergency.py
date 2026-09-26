@@ -252,6 +252,12 @@ class CaseTimelineOut(BaseModel):
     recorded_count: int
 
 
+def _wall_clock(moment: datetime) -> datetime:
+    """节点时间统一成本地钟点再比（P2-263）：校验收 ISO 写法，带时区偏移的（`…T08:05+08:00`）与不带的（`… 08:00`，
+    页面上手填的本地时间）都收；原先两种直接比较，Python 抛 TypeError，记节点整个 500。带偏移的换算到本地时区。"""
+    return moment.astimezone().replace(tzinfo=None) if moment.tzinfo is not None else moment
+
+
 @router.post(
     "/cases/{case_id}/milestones",
     response_model=MilestoneOut,
@@ -278,12 +284,12 @@ def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(
         )
     # L-12 整改：节点时间须与固定序列单调一致（不得"先救治后发病"），时效计算方可靠
     new_index = MILESTONE_SEQUENCE.index(body.milestone)
-    new_time = datetime.fromisoformat(body.occurred_at)
+    new_time = _wall_clock(datetime.fromisoformat(body.occurred_at))
     for other in (
         db.query(EmergencyMilestone).filter(EmergencyMilestone.case_id == case_id).all()
     ):
         try:
-            other_time = datetime.fromisoformat(other.occurred_at)
+            other_time = _wall_clock(datetime.fromisoformat(other.occurred_at))
         except ValueError:  # pragma: no cover - 兼容历史脏数据
             continue
         other_index = MILESTONE_SEQUENCE.index(other.milestone)
