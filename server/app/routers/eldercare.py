@@ -179,7 +179,9 @@ def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
                     "assessed_date": a.assessed_date,
                 }
             )
-        if a.assessed_date and a.assessed_date <= reassess_before:
+        # 与「最近一次评估」同一个日期口径：没填评估日期的按录入那天算（P2-212）。原先只看 assessed_date，
+        # 日期那一格是选填的，没填日期的老人永远不出复评提醒
+        if _assessed_on(a) <= reassess_before:
             alerts.append(
                 {
                     "patient_id": a.patient_id,
