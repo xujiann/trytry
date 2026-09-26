@@ -690,8 +690,9 @@ def collect_metrics_batch(
             out[oid] = {
                 "enrolled": float(enrolled),
                 "target": float(targets[oid] or enrolled),
+                # 变量字典写的是「在管的高危 / 极高危」：去世、迁出、排除的高危档案不算（P2-139）
                 "high_risk": float(
-                    sum(1 for e in buckets[oid] if e.risk_level in ("high", "very_high"))
+                    sum(1 for e in buckets[oid] if e.status == "active" and e.risk_level in ("high", "very_high"))
                 ),
             }
         return out
@@ -720,9 +721,11 @@ def collect_metrics_batch(
             )
             .distinct().all()
         }
+        # 分子分母同一个单位：变量字典写的是「在管患者数」，按人去重——同时管两个病种的患者
+        # 原先在分母里算两次，评估过了完成率也只有一半（P2-139）
         return {
             oid: {
-                "enrolled": float(sum(1 for e in buckets[oid] if e.status == "active")),
+                "enrolled": float(len(patients[oid])),
                 "assessed": float(len(patients[oid] & assessed)),
             }
             for oid in ids
