@@ -183,17 +183,21 @@ def test_本院operator走完整条资金链(client, money):
                       json={"admission_id": adm["id"], "amount": 5000, "method": "cash"})
     assert dep.status_code == 201, dep.text
 
+    # 退到只剩 100：结算时押金冲抵 100、还要补缴 200，收款这一步才有钱可收。原先退 1000 剩 4000，自付 300 被押金
+    # 全额冲抵，下面的收款照默认额又收了一遍 300——那正是 P1-142 修掉的「一笔自付收两次」
     ref = client.post("/api/billing/deposits/refund", headers=money["op_a"],
-                      json={"admission_id": adm["id"], "amount": 1000, "method": "cash"})
+                      json={"admission_id": adm["id"], "amount": 4900, "method": "cash"})
     assert ref.status_code == 201, ref.text
 
     st = client.post("/api/billing/settlements", headers=money["op_a"],
                      json={"bill_type": "inpatient", "admission_id": adm["id"]})
     assert st.status_code == 201, st.text
+    assert (st.json()["deposit_offset"], st.json()["payable_after_offset"]) == (100, 200)
 
     pay = client.post("/api/billing/payments", headers=money["op_a"],
                       json={"settlement_id": st.json()["id"], "channel": "cash"})
     assert pay.status_code == 201, pay.text
+    assert pay.json()["amount"] == 200
 
 
 def test_全域角色跨机构照旧放行_这是设计不是洞(client, money):

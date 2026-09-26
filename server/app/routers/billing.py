@@ -1251,6 +1251,22 @@ def _expire_stale_pending(db: Session, settlement_id: int) -> None:
     )
 
 
+def _deposit_offset_of(db: Session, settlement: Settlement) -> float:
+    """出院结算时押金冲抵掉的那部分个人自付（冲抵只在住院结算时发生，一次住院一张结算单）。
+
+    收款的默认额与「收超了没有」都要把它算进去（P1-142）：冲抵是押金流水里的一行，不是支付单，原先两处都只看支付单——
+    押金 5000、自付 1000 全额冲抵、应补缴 0，收银员照默认额再收 1000 照样 paid，一笔自付收了两遍。
+    """
+    if settlement.bill_type != "inpatient" or settlement.admission_id is None:
+        return 0.0
+    total = (
+        db.query(func.coalesce(func.sum(Deposit.amount), 0.0))
+        .filter(Deposit.admission_id == settlement.admission_id, Deposit.deposit_type == "offset")
+        .scalar()
+    )
+    return round(total or 0.0, 2)
+
+
 def _collected_amount(db: Session, settlement_id: int, *, include_pending: bool) -> float:
     """结算单已占用的收款额。
 
@@ -1283,7 +1299,7 @@ def _collected_amount(db: Session, settlement_id: int, *, include_pending: bool)
 class PaymentCreate(BaseModel):
     settlement_id: int
     channel: str = Field(pattern="^(cash|card|insurance|online|gateway)$")
-    # 缺省按结算单个人自付金额（医保渠道按医保支付金额）
+    # 缺省按结算单个人自付金额扣掉押金冲抵后的应补缴额（医保渠道按医保支付金额，P1-142）
     amount: MoneyFloat | None = Field(default=None, gt=0, le=MONEY_MAX)
 
 
@@ -1323,25 +1339,29 @@ def create_payment(
             detail="线上支付渠道未配置真实网关，拒绝受理——"
                    "否则会把单据标成已支付而实际未收到款",
         )
+    offset = _deposit_offset_of(db, settlement)
+    # 个人自付的默认额是冲抵之后还要补缴的那部分（结算回执里的 payable_after_offset），不是整笔自付（P1-142）
     default_amount = (
-        settlement.insurance_pay if body.channel == "insurance" else settlement.self_pay
+        settlement.insurance_pay if body.channel == "insurance" else round(settlement.self_pay - offset, 2)
     )
     amount = round(body.amount if body.amount is not None else default_amount, 2)
     if amount <= 0:
-        raise HTTPException(status_code=422, detail="支付金额须大于 0")
+        fully_offset = body.amount is None and body.channel != "insurance" and offset > 0
+        raise HTTPException(status_code=422, detail="押金已冲抵全部个人自付，无需再收" if fully_offset else "支付金额须大于 0")
     # "算已付额 → 判超额 → 落单"三步之间原先没有闸门，通道 RTT 就是竞态窗口：
     # 实测 1000 元结算单五路并发各缴 1000，五张单全部 paid，收进 5000。
     # 判定与落单一起圈进结算单这一行的临界区，并在里头提交。
     with serialized_on(db, Settlement, settlement.id):
         _expire_stale_pending(db, settlement.id)
         paid_already = _collected_amount(db, settlement.id, include_pending=True)
-        if paid_already + amount > round(settlement.total_amount, 2) + 1e-6:
+        if paid_already + offset + amount > round(settlement.total_amount, 2) + 1e-6:
             # 先收事务再抛：作废写入还挂在未提交的事务里，SQLite 的库级写锁
             # 要等依赖清理才放，下一个请求会撞 "database is locked"
             db.rollback()
+            covered = f"已付 {paid_already}" + (f"，押金冲抵 {offset}" if offset else "")
             raise HTTPException(
                 status_code=422,
-                detail=f"支付金额超出结算单未付余额（总额 {settlement.total_amount}，已付 {paid_already}）",
+                detail=f"支付金额超出结算单未付余额（总额 {settlement.total_amount}，{covered}）",
             )
         order = PaymentOrder(
             settlement_id=settlement.id, channel=body.channel, amount=amount, created_by=user.id
@@ -1484,6 +1504,8 @@ async def payment_callback(request: Request, db: Session = Depends(get_db)):
             return _settled_callback_result(order, result_status, trade_no)
         settlement = db.get(Settlement, order.settlement_id)
         settled = _collected_amount(db, order.settlement_id, include_pending=False)
+        if settlement is not None:
+            settled = round(settled + _deposit_offset_of(db, settlement), 2)   # 押金冲抵同样算已收（P1-142）
         if settlement is not None and settled + round(order.amount, 2) > round(
             settlement.total_amount, 2
         ) + 1e-6:

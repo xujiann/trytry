@@ -204,7 +204,8 @@ def seed(client, admin):
         headers=admin,
     ).json()
 
-    # 支付：门诊单现金收讫（15，整数）→ 部分退款 5.5 → 再退 3；住院单银行卡收 175.5
+    # 支付：门诊单现金收讫（15，整数）→ 部分退款 5.5 → 再退 3；住院单银行卡收冲抵后应补缴的 75.5
+    # （P1-142 前收的是整笔自付 175.5——押金冲抵掉的 100 又收了一遍，本网当时照抄了现状）
     resp = client.post(
         "/api/billing/payments",
         json={"settlement_id": data["settle_out"]["id"], "channel": "cash"},
@@ -442,7 +443,7 @@ def test_同步渠道支付回执_14键封口无支付参数(seed):
     }
     assert body["trade_no"].startswith("MOCK") and isinstance(body["paid_at"], str)
     assert type(body["amount"]) is int and type(body["refunded_amount"]) is int
-    assert seed["pay2"]["amount"] == 175.5 and isinstance(seed["pay2"]["amount"], float)
+    assert seed["pay2"]["amount"] == 75.5 and isinstance(seed["pay2"]["amount"], float)
 
 
 def test_退款回执_支付单14键加两个尾键(seed):
@@ -571,10 +572,10 @@ def test_日终对账_三类差异精确形状(client, admin, seed):
         "id": batch["id"],
         "date": utc_today_str(),
         "total_orders": 2,          # pay1/pay2；pending 的网关单不进对账口径
-        "total_amount": 182,        # 175.5 + (15-8.5)=6.5 → 182.0 落库读回 int
+        "total_amount": 82,         # 75.5 + (15-8.5)=6.5 → 82.0 落库读回 int
         "matched": 0,
         "unmatched": 3,
-        "diff_amount": 222.5,       # 175.5 + 1.5 + 45.5
+        "diff_amount": 122.5,       # 75.5 + 1.5 + 45.5
         "created_at": batch["created_at"],
         "diffs": [
             {
@@ -593,9 +594,9 @@ def test_日终对账_三类差异精确形状(client, admin, seed):
                 "trade_no": seed["pay2"]["trade_no"],
                 "diff_type": "missing_remote",
                 "diff_type_name": "本地有通道无",
-                "local_amount": 175.5,
+                "local_amount": 75.5,
                 "remote_amount": 0,
-                "detail": f"本地支付单 {seed['pay2']['id']} 金额 175.5 在通道流水中不存在",
+                "detail": f"本地支付单 {seed['pay2']['id']} 金额 75.5 在通道流水中不存在",
             },
             {
                 "id": batch["diffs"][2]["id"],

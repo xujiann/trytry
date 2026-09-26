@@ -2762,7 +2762,7 @@ async function renderBilling() {
       <form class="inline" id="pay-form">
         <input name="settlement_id" type="number" placeholder="结算单ID" required>
         <select name="channel">${Object.entries(PAY_CHANNELS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
-        <input name="amount" type="number" step="any" placeholder="金额(元，空=自付额)">
+        <input name="amount" type="number" step="any" placeholder="金额(元，空=押金冲抵后应补缴的自付额)">
         <button>发起支付</button></form>
       <p class="msg" id="pay-msg"></p>
       <p style="font-size:12.5px;color:#8a939e">渠道对接经 PaymentGateway 协议实现，演示环境使用内置 Mock 通道；仅已支付单可退款且不超可退余额</p>
