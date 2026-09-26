@@ -1304,8 +1304,9 @@ def portal_slot_orgs(
         .filter(AppointmentSlot.booked < AppointmentSlot.capacity,
                 AppointmentSlot.slot_date >= clock.today().isoformat())
         .group_by(AppointmentSlot.org_id)
+        .order_by(AppointmentSlot.org_id)
     )
-    rows = paginate(query.order_by(AppointmentSlot.org_id), response, offset, limit)
+    rows = paginate(query, response, offset, limit)
     names = {o.id: o.name for o in db.query(Organization).filter(Organization.id.in_([r[0] for r in rows] or [0]))}
     return [{"org_id": org_id, "org_name": names.get(org_id, ""), "available": count} for org_id, count in rows]
 
