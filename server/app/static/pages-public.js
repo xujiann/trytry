@@ -192,7 +192,12 @@ const BLOOD_REQ_STATUS = { pending: ["待审批", "orange"], approved: ["已审�
 
 async function renderBlood() {
   $("#page-desc").textContent = "血库台账（经办登记）→ 用血申请（医师）→ 审批（管理层）→ 发血（经办，库存不足拦截）";
-  const [stocks, requests] = await Promise.all([api("/api/blood/stocks"), api("/api/blood/requests")]);
+  // 待审批、待发血的单独取一遍、排在最前（P2-408，同审方 P1-148）：申请队列只回最新 200 条，挤出窗口的那张
+  // 页面上就再没有「批准 / 驳回」「发血」可点
+  const [stocks, recent, pending, approved] = await Promise.all([api("/api/blood/stocks"), api("/api/blood/requests"),
+    api("/api/blood/requests?status=pending"), api("/api/blood/requests?status=approved")]);
+  const actionableIds = new Set([...pending, ...approved].map((r) => r.id));
+  const requests = [...pending, ...approved, ...recent.filter((r) => !actionableIds.has(r.id))];
   const role = currentRole();
   const typeOpts = ["A", "B", "AB", "O"].map((t) => `<option>${t}</option>`).join("");
   const compOpts = Object.entries(BLOOD_COMPONENTS).map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
@@ -1148,7 +1153,12 @@ const VISIT_SERVICES = { nursing: "上门护理", doctor: "上门诊疗", rehab:
 const VISIT_STATUS = { applied: ["待派单", "orange"], dispatched: ["已派单", ""], completed: ["已完成", "green"], cancelled: ["已取消", "red"] };
 
 async function drawHomeVisits() {
-  const [orders, stats] = await Promise.all([api("/api/homevisits"), api("/api/homevisits/stats")]);
+  // 待派单、待完成的单独取一遍、排在最前（P2-408，同审方 P1-148）：工单清单只回最新 100 条，挤出窗口的申请
+  // 页面上就再没有「派单 / 取消」「完成」可点
+  const [recent, applied, dispatched, stats] = await Promise.all([api("/api/homevisits"),
+    api("/api/homevisits?status=applied"), api("/api/homevisits?status=dispatched"), api("/api/homevisits/stats")]);
+  const actionableIds = new Set([...applied, ...dispatched].map((o) => o.id));
+  const orders = [...applied, ...dispatched, ...recent.filter((o) => !actionableIds.has(o.id))];
   const holder = appendSection(`
     ${panel("⑨ 送医送护上门（申请 → 派单 → 完成；自动关联履约中家医签约）", `
       <div class="cards">

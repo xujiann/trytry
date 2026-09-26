@@ -619,7 +619,12 @@ async function renderEmergency() {
 
 async function renderTelemedicine() {
   $("#page-desc").textContent = "在线咨询、复诊续方（续方须关联已过审处方）";
-  const consults = await api("/api/telemedicine/consults");
+  // 待回复、待结束的单独取一遍、排在最前（P2-408，同审方 P1-148）：清单只回最新 200 条，压着没回的咨询一被后来的
+  // 挤出这个窗口，页面上就再没有一行给「回复 / 结束」
+  const [recent, open, replied] = await Promise.all([api("/api/telemedicine/consults"),
+    api("/api/telemedicine/consults?status=open"), api("/api/telemedicine/consults?status=replied")]);
+  const actionableIds = new Set([...open, ...replied].map((c) => c.id));
+  const consults = [...open, ...replied, ...recent.filter((c) => !actionableIds.has(c.id))];
   const TS = { open: ["待回复", "orange"], replied: ["已回复", "green"], closed: ["已结束", ""] };
   $("#page-body").innerHTML = `
     ${panel("发起咨询", `
