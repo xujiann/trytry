@@ -62,7 +62,8 @@ SERVICE_ROLES = ("doctor", "public_health", "director")
 
 
 def _enrollment_of(db: Session, patient_id: int, program_code: str) -> SpdEnrollment | None:
-    """取该患者该病种的档案，**在管的优先**（迁移后同病种可能有历史档案）。"""
+    """取该患者该病种的档案，**在管的优先**（迁移后同病种可能有历史档案）。只拿来读（监测值判级取阶段）；
+    往档案上挂新的工作用下面的 `_managed_enrollment_of`。"""
     if not program_code:
         return None
     query = db.query(SpdEnrollment).filter(
@@ -73,6 +74,18 @@ def _enrollment_of(db: Session, patient_id: int, program_code: str) -> SpdEnroll
         query.filter(SpdEnrollment.status == "active").first()
         or query.order_by(SpdEnrollment.id.desc()).first()
     )
+
+
+def _managed_enrollment_of(db: Session, patient_id: int, program_code: str) -> SpdEnrollment | None:
+    """该患者该病种**在管**的档案，没有就是 None。派任务、回写风险分层、高危自动干预、记积分只挂这一份（P2-226）。
+
+    原先直接用 `_enrollment_of`，没有在管的就退到最近一份历史档案：已登记死亡 / 排除 / 迁出 / 召回的患者，异常监测值
+    照派处置任务给原主管医生（三天后超期）、评估照改这份档案的风险分层、评出高危照开干预与复诊、个案上报照给原村医记分。
+    这些档案结案时 `close_open_work` 已经收过尾，之后挂上去的工作再没人收——正是 P1-129 修掉的「死者名下的随访照旧
+    超期」换了个入口。与兄弟规则同一句：改档 / 绑服务包 / 启动路径对非在管档案一律 409，手工建任务选了病种也只挂
+    在管的（`tasks.create_task`）。没有在管档案的患者走「没入组」那条路：记录照存，不派生档案上的工作。"""
+    enrollment = _enrollment_of(db, patient_id, program_code)
+    return enrollment if enrollment is not None and enrollment.status == "active" else None
 
 
 # ============================================================ 响应契约
@@ -428,7 +441,7 @@ def create_measurement(
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
     record = _record_measurement(db, body, user.id)
-    enrollment = _enrollment_of(db, body.patient_id, record.program_code)   # 推断出的病种（P1-138）
+    enrollment = _managed_enrollment_of(db, body.patient_id, record.program_code)   # 推断出的病种（P1-138）
     if record.level in ("high", "low") and enrollment is not None:
         spawn_task(
             db,
@@ -611,7 +624,7 @@ def create_assessment(
         advice=graded["advice"], channel=body.channel, operator_id=user.id,
     )
     db.add(record)
-    enrollment = _enrollment_of(db, body.patient_id, record.program_code)
+    enrollment = _managed_enrollment_of(db, body.patient_id, record.program_code)
     if enrollment is not None and graded["risk_level"] in ("low", "mid", "high", "very_high"):
         enrollment.risk_level = graded["risk_level"]
         if graded["risk_level"] in ("high", "very_high"):
@@ -909,6 +922,8 @@ def create_interventions(
     for patient_id in dict.fromkeys(body.patient_ids):
         assert_patient_visible(db, user, patient_id, resource="spd_intervention")
         program_code, enrollment = enrollment_for(db, patient_id, base_program)
+        if enrollment is not None and enrollment.status != "active":
+            enrollment = None   # 已结案的历史档案不挂（P2-226，与 `_managed_enrollment_of` 同一句）
         record = SpdIntervention(
             patient_id=patient_id,
             enrollment_id=enrollment.id if enrollment else None,
@@ -1440,7 +1455,7 @@ def create_case_report(
     )
     db.add(report)
     db.flush()
-    enrollment = _enrollment_of(db, body.patient_id, program_code)
+    enrollment = _managed_enrollment_of(db, body.patient_id, program_code)
     spawn_task(
         db, patient_id=body.patient_id,
         title=f"异常上报处置：{body.content[:40] or body.report_type}",
@@ -1733,7 +1748,7 @@ def consult_to_followup(
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）；留空沿用会话自己的病种
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
-    enrollment = _enrollment_of(
+    enrollment = _managed_enrollment_of(
         db, consult.patient_id, body.program_code or consult.program_code
     )
     task = spawn_task(
