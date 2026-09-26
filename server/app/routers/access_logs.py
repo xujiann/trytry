@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_date, require_roles
+from ..deps import get_current_user, paginate, require_date, require_roles, through_day
 from ..models import AccessLog, Organization, Patient, User
 from .portal import current_resident_patient
 
@@ -272,7 +272,7 @@ def list_access_logs(
         query = query.filter(AccessLog.created_at >= f"{start} 00:00:00")
     if end:
         end = require_date(end, field="end")
-        query = query.filter(AccessLog.created_at <= f"{end} 23:59:59")
+        query = query.filter(through_day(AccessLog.created_at, end))
 
     rows = paginate(query.order_by(AccessLog.id.desc()), response, offset, limit)
     result = _decorate(db, rows)

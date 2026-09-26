@@ -27,6 +27,7 @@ from ...deps import (
     require_roles,
     resolve_business_date,
     row_dict,
+    through_day,
 )
 from ..platform import Patient, User, id_card_variants, pii_filter, unusable_user
 from ..models import (
@@ -1515,7 +1516,7 @@ def list_case_reports(
         query = query.filter(SpdCaseReport.created_at >= f"{date_from} 00:00:00")
     if date_to:
         date_to = require_date(date_to, field="date_to")
-        query = query.filter(SpdCaseReport.created_at <= f"{date_to} 23:59:59")
+        query = query.filter(through_day(SpdCaseReport.created_at, date_to))
     rows = paginate(query.order_by(SpdCaseReport.id.desc()), response, offset, limit)
     names = {
         p.id: p.name

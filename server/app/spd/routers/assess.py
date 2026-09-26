@@ -37,7 +37,7 @@ from ...concurrency import add_amount, ensure_present, insert_if_absent, take_am
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
-from ...deps import get_current_user, paginate, require_roles
+from ...deps import get_current_user, paginate, require_roles, through_day
 from ...formula import FormulaError, evaluate as eval_formula
 from ..platform import Organization, User
 from ..service import INDICATOR_SOURCES, unknown_program, unknown_programs
@@ -628,7 +628,7 @@ def collect_metrics_batch(
             SpdTask,
             db.query(SpdTask).filter(
                 SpdTask.created_at >= f"{start} 00:00:00",
-                SpdTask.created_at <= f"{end} 23:59:59",
+                through_day(SpdTask.created_at, end),
             ),
             {"total": func.count(SpdTask.id),
              "done": _count_if(SpdTask.status == "done"),
@@ -639,7 +639,7 @@ def collect_metrics_batch(
             SpdReferralCase,
             db.query(SpdReferralCase).filter(
                 SpdReferralCase.created_at >= f"{start} 00:00:00",
-                SpdReferralCase.created_at <= f"{end} 23:59:59",
+                through_day(SpdReferralCase.created_at, end),
             ),
             {"total": func.count(SpdReferralCase.id),
              "closed": _count_if(SpdReferralCase.status == "closed"),
@@ -650,7 +650,7 @@ def collect_metrics_batch(
             SpdCaseReport,
             db.query(SpdCaseReport).filter(
                 SpdCaseReport.created_at >= f"{start} 00:00:00",
-                SpdCaseReport.created_at <= f"{end} 23:59:59",
+                through_day(SpdCaseReport.created_at, end),
             ),
             {"reported": func.count(SpdCaseReport.id),
              "handled": _count_if(SpdCaseReport.status.in_(["done", "closed"]))},
@@ -663,7 +663,7 @@ def collect_metrics_batch(
     enroll_col = _object_column(SpdEnrollment, object_type)
     enroll_query = prog(SpdEnrollment, db.query(SpdEnrollment))
     if source in ("enrollment", "archive", "assessment"):
-        enroll_query = enroll_query.filter(SpdEnrollment.created_at <= f"{end} 23:59:59")
+        enroll_query = enroll_query.filter(through_day(SpdEnrollment.created_at, end))
     if enroll_col is not None:
         enroll_query = enroll_query.filter(enroll_col.in_(ids))
     buckets: dict[int, list[SpdEnrollment]] = {oid: [] for oid in ids}
@@ -723,7 +723,7 @@ def collect_metrics_batch(
             .filter(
                 SpdAssessment.patient_id.in_(union or [0]),
                 SpdAssessment.created_at >= f"{start} 00:00:00",
-                SpdAssessment.created_at <= f"{end} 23:59:59",
+                through_day(SpdAssessment.created_at, end),
             )
             .distinct().all()
         }
@@ -745,7 +745,7 @@ def collect_metrics_batch(
             db.query(SpdPathInstance.enrollment_id, SpdPathInstance.status)
             .filter(
                 SpdPathInstance.enrollment_id.in_(list(enroll_owner) or [0]),
-                SpdPathInstance.started_at <= f"{end} 23:59:59",
+                through_day(SpdPathInstance.started_at, end),
             )
             .all()
         )
@@ -767,7 +767,7 @@ def collect_metrics_batch(
         .filter(
             SpdMeasurement.patient_id.in_(union or [0]),
             SpdMeasurement.measured_at >= f"{start} 00:00:00",
-            SpdMeasurement.measured_at <= f"{end} 23:59:59",
+            through_day(SpdMeasurement.measured_at, end),
         )
         .all()
     )
@@ -1259,7 +1259,7 @@ def workload(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"period：{exc}") from None
     task_query = db.query(SpdTask).filter(
-        SpdTask.created_at >= f"{start} 00:00:00", SpdTask.created_at <= f"{end} 23:59:59"
+        SpdTask.created_at >= f"{start} 00:00:00", through_day(SpdTask.created_at, end)
     )
     orgs = visible_org_ids(db, user)
     if orgs is not None:

@@ -30,6 +30,7 @@ from ...deps import (
     require_roles,
     resolve_business_date,
     row_dict,
+    through_day,
     keyword_like,
 )
 from ..platform import Admission, Encounter, Organization, Patient, User, unusable_user
@@ -1278,7 +1279,7 @@ def list_call_tasks(
         query = query.filter(SpdCallTask.created_at >= f"{date_from} 00:00:00")
     if date_to:
         date_to = require_date(date_to, field="date_to")
-        query = query.filter(SpdCallTask.created_at <= f"{date_to} 23:59:59")
+        query = query.filter(through_day(SpdCallTask.created_at, date_to))
     rows = paginate(query.order_by(SpdCallTask.id.desc()), response, offset, limit)
     names = {
         p.id: p.name

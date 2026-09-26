@@ -32,7 +32,7 @@ from ...clock import now_naive
 from ...database import get_db
 from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
-from ...deps import get_current_user, paginate, require_date, require_roles, row_dict
+from ...deps import get_current_user, paginate, require_date, require_roles, row_dict, through_day
 from ..platform import Organization, Patient, User, org_level
 from ..models import (
     SpdEnrollment,
@@ -857,7 +857,7 @@ def closure_rate(
         query = query.filter(SpdReferralCase.created_at >= f"{date_from} 00:00:00")
     if date_to:
         date_to = require_date(date_to, field="date_to")
-        query = query.filter(SpdReferralCase.created_at <= f"{date_to} 23:59:59")
+        query = query.filter(through_day(SpdReferralCase.created_at, date_to))
 
     by_status = row_dict(
         query.with_entities(SpdReferralCase.status, func.count(SpdReferralCase.id))

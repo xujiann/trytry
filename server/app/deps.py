@@ -6,7 +6,7 @@ from typing import Iterable, TypeVar
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func
+from sqlalchemy import func, true
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
@@ -333,6 +333,21 @@ def require_date(value: str, *, field: str = "date") -> str:
         return datetypes.check_date(value)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"{field}：{exc}") from None
+
+
+def through_day(column, day: str):
+    """时间戳列「截至 `day`（含这一整天）」的条件，左闭右开：`column < 次日 00:00:00`（P2-335）。
+
+    原先各处写 `column <= f"{day} 23:59:59"`：`DateTime` 列带微秒（`utcnow()`），23:59:59.5 的记录大于「23:59:59」，
+    被截在区间外——考核取数、稽核筛查、呼叫任务 / 个案上报 / 转诊清单按日期筛，最后一秒入库的记录前后两段都不算。
+    与 `period_bounds` 的左闭右开同一个口径。`day` 须已校验过（`require_date` / `DateStr`）；9999-12-31 没有次日，
+    不设上界（任何时刻都不晚于那一天）。
+    """
+    try:
+        after = date.fromisoformat(day) + timedelta(days=1)
+    except OverflowError:
+        return true()
+    return column < f"{after.isoformat()} 00:00:00"
 
 
 def month_bounds(period: str) -> tuple[date, date]:
