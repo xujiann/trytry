@@ -1377,7 +1377,7 @@ async function renderVaccineSupply() {
         <label style="font-size:13px">未来
           <input name="days" type="number" min="1" max="365" value="30" style="width:80px"> 天内到期</label>
         <button>查询</button></form>
-      <p class="desc">上面那张卡片只给得出「30天内到期 N 支」，具体是哪几个批号在这里看。
+      <p class="desc">上面那张卡片只给得出「30天内到期 N 个批次」（数的是批次、不是支数），具体是哪几个批号在这里看。
         <b>已过期的也一并列出并标注</b>——不是催人用掉，是提示尽快按报废流程处理，
         别让它躺在冰箱里被误用（后端 docstring 的原话）。
         <b>只列还有余量的批次</b>：发完的批次不删行，只累加已用量，列出来没有意义。</p>
