@@ -15,7 +15,7 @@
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
@@ -391,7 +391,17 @@ def store(
 
 
 class WasteHandoverIn(WasteHandover):
+    """员工号与姓名二选一（P2-305）：交接弹窗写的是「转运人员工ID（优先，姓名由档案带出）/ 转运人姓名（没有员工档案时填）」，
+    可姓名继承的是必填——只填员工号的那条主路一律 422。填了员工号的姓名由档案带出、可留空；没填员工号的姓名仍须非空白。"""
+
+    handler_name: str = Field(default="", max_length=64)
     handler_employee_id: int | None = None
+
+    @model_validator(mode="after")
+    def _employee_or_name(self) -> "WasteHandoverIn":
+        if self.handler_employee_id is None and not self.handler_name.strip():
+            raise ValueError("请填转运人员工ID或转运人姓名")
+        return self
 
 
 @router.post(
