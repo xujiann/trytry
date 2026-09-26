@@ -22,6 +22,7 @@
 | 诊疗数据 | `Encounter` / `Admission` | 纳入规则取诊断、随访方案取出院信息 |
 | 居民端 | `ResidentAccount` / `current_resident` / `accessible_patient` | 患者移动端身份与"能看谁的档案" |
 | 消息 | `Notification` / `broadcast` / `notify_resident` / `send_sms` | 定向投递、实时广播、居民触达、短信通道 |
+| 告警 | `send_alert`（经 `broadcast` 用） | 广播无人在线时转发运维告警 webhook，与平台 `jobs._alert` 同一句（P2-273） |
 | 附件 | `Attachment` / `store_attachment` / `register_attachment_owner` | 任务佐证材料走平台附件服务（白名单/限额/去重同一份） |
 | 公卫数据 | `FollowUp`（慢病随访） | publichealth 采集器的数据源 |
 | 列类型 | `Money` / `utcnow` | 与平台其余表同一套金额与时间口径 |
@@ -74,6 +75,7 @@ from ..routers.portal import register_enrollment_source as _register_enrollment_
 from ..routers.portal import register_referral_source as _register_referral_source
 from ..sms import get_sms_provider as _get_sms_provider
 from ..ws import manager as _ws_manager
+from ..alerting import send_alert as _send_alert
 
 def patient_of(db: Session, patient_id: int) -> Patient | None:
     return db.get(Patient, patient_id)
@@ -148,13 +150,17 @@ def notify_user(
 
 
 def broadcast(kind: str, title: str, count: int) -> None:
-    """把扫描结果推给在线的管理端；无人在线时是空操作。
+    """把扫描结果推给在线的管理端；确定无人收到时转发运维告警 webhook 摘要兜底。
 
     与平台 `jobs.py::_alert` 同一形状——同一件事在两处长得一样，
-    看日志的人不必分辨"这条是哪个模块推的"。
+    看日志的人不必分辨"这条是哪个模块推的"。兜底原先只在平台那一份里（P2-273）：夜间 / 节假日无人在线时，
+    慢专病的任务超期与数据源同步结果广播即丢，平台的同类预警却会转发 webhook（未配置 webhook 时仍是空操作）。
     """
-    if count:
-        _ws_manager.broadcast({"type": kind, "title": title, "count": count})
+    if not count:
+        return
+    delivered = _ws_manager.broadcast({"type": kind, "title": title, "count": count})
+    if not delivered:
+        _send_alert(f"unattended:{kind}", f"{title}：{count} 条（无在线管理端，广播未送达）")
 
 
 def send_sms(phone: str, content: str) -> bool:

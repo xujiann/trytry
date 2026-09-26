@@ -43,6 +43,7 @@ PLATFORM_ALLOWLIST = {
     "sms",           # 仅 platform.py 可用（宣教外发走平台短信通道）
     "notify",        # 仅 platform.py 可用（居民站内触达）
     "wechat",        # 仅 platform.py 可用（宣教走公众号模板消息，与站内信同一套模板配置）
+    "alerting",      # 仅 platform.py 可用（扫描广播无人在线时转发运维告警 webhook，与平台 jobs._alert 同一句，P2-273）
     "models",        # 仅 platform.py 可用，见下面单独一条
     "routers",       # 仅 platform.py 可用（居民端令牌依赖）
     "spd",           # 子系统内部
