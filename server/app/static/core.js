@@ -1769,7 +1769,7 @@ async function renderPharmacy() {
         <input name="drug_code" placeholder="药品编码" required>
         <input name="drug_name" placeholder="药品名称" required>
         <input name="quantity" type="number" placeholder="数量" required min="0">
-        <input name="threshold" type="number" placeholder="预警阈值" value="0" min="0">
+        <input name="threshold" type="number" placeholder="预警阈值（留空不改）" min="0">
         <button>入库</button>
       </form>
       <h3 style="margin-top:14px">按批次入库（批号效期台账）</h3>
@@ -1836,9 +1836,11 @@ async function renderPharmacy() {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
-      await api("/api/pharmacy/stocks", { method: "POST", body: JSON.stringify({
-        org_id: Number(f.get("org_id")), drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
-        quantity: Number(f.get("quantity")), threshold: Number(f.get("threshold")) }) });
+      const body = { org_id: Number(f.get("org_id")), drug_code: f.get("drug_code"), drug_name: f.get("drug_name"),
+        quantity: Number(f.get("quantity")) };
+      // 阈值留空 = 不改（P1-146）：原先预填 0 且照送，补一次货就把配好的缺药预警阈值抹成 0
+      if (f.get("threshold") !== "") body.threshold = Number(f.get("threshold"));
+      await api("/api/pharmacy/stocks", { method: "POST", body: JSON.stringify(body) });
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };

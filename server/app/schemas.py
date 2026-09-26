@@ -279,11 +279,14 @@ class StockUpsert(BaseModel):
     drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
     drug_name: str = Field(min_length=1, max_length=128, pattern=NON_BLANK)
     quantity: int = Field(ge=0, le=INT4_MAX)
-    threshold: int = Field(default=0, ge=0, le=INT4_MAX)
+    # 缺药预警阈值：不传 = 不改（新建的库存记 0）。原先缺省 0 且每次入库照写，页面又预填 0——补一次货就把配好的
+    # 阈值抹成 0，缺药预警、待办、调拨广播全部静默失效（P1-146）
+    threshold: int | None = Field(default=None, ge=0, le=INT4_MAX)
 
 
 class StockOut(StockUpsert):
     id: int
+    threshold: int
     # 出参不带「不能只填空格」（P1-109）：修之前存进去的纯空白行要原样读出来，而不是让整个清单 500
     drug_code: str = Field(min_length=1, max_length=64)
     drug_name: str = Field(min_length=1, max_length=128)

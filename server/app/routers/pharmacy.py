@@ -133,10 +133,12 @@ def _consume_batches(db: Session, org_id: int, drug_code: str, amount: int, toda
 
 @router.post("/stocks", response_model=StockOut, dependencies=[Depends(require_admin)])
 def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
-    """入库/建档：已有库存记录则累加数量并更新阈值，同事务落兜底批次。
+    """入库/建档：已有库存记录则累加数量、传了阈值才改阈值，同事务落兜底批次。
 
     这条路径没有批号字段，入库量落到 `未标批号` 批次上——只加汇总不落批次，
     加进去的 50 片就是发不出去的幽灵库存（实测汇总 150 / 批次和 100）。
+    阈值不传 = 不改：补货是这条路径最常见的用法，原先每次都把阈值照写成请求里的值（缺省 0），
+    补一次货配好的缺药预警就静默关掉了（P1-146）。
     """
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
@@ -149,7 +151,7 @@ def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
         # 累加语义用不了 upsert_unique（那是覆盖）。先试插一行零库存，
         # 谁插上都行，撞了说明别人刚建好，取回来照样走累加——
         # 直接 db.add 则两个入库请求都建行、撞唯一约束，两批药都没入成。
-        insert_if_absent(db, DrugStock(**{**body.model_dump(), "quantity": 0}))
+        insert_if_absent(db, DrugStock(**{**body.model_dump(), "quantity": 0, "threshold": body.threshold or 0}))
         stock = (
             db.query(DrugStock)
             .filter(DrugStock.org_id == body.org_id, DrugStock.drug_code == body.drug_code)
@@ -158,7 +160,8 @@ def upsert_stock(body: StockUpsert, db: Session = Depends(get_db)):
     stock = ensure_present(stock, "药品库存")
     add_amount(db, DrugStock, stock.id, "quantity", body.quantity)
     _receive_unspecified(db, body.org_id, body.drug_code, body.quantity)
-    stock.threshold = body.threshold
+    if body.threshold is not None:
+        stock.threshold = body.threshold
     stock.drug_name = body.drug_name
     db.commit()
     db.refresh(stock)
