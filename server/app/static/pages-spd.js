@@ -483,9 +483,8 @@ async function renderSpdAdmin() {
         `<tr><td>${src.id}</td><td>${esc(src.code)}</td><td>${esc(src.name)}</td><td>${esc(src.source_type)}</td>
          <td>${src.freq_minutes}</td><td>${esc(src.last_sync_at ? src.last_sync_at.replace("T", " ").slice(0, 16) : "—")}</td>
          <td>${src.last_rows}</td><td>${src.last_latency_ms}</td><td>${src.success_rate}%</td>
-         <td>${src.status === "running" ? '<span class="tag green">正常</span>'
-            : src.status === "delayed" ? '<span class="tag orange">延迟</span>'
-            : '<span class="tag red">异常</span>'}</td>
+         <td><span class="tag ${!src.active || src.status === "stopped" ? ""
+            : src.status === "running" ? "green" : src.status === "delayed" ? "orange" : "red"}">${esc(src.status_name)}</span></td>
          <td><button class="btn secondary" data-ds-edit="${src.id}" data-name="${esc(src.name)}"
               data-freq="${src.freq_minutes}" data-active="${src.active === false ? 0 : 1}">编辑</button>
              <button class="btn secondary" data-ds-logs="${src.id}">同步日志</button>

@@ -193,7 +193,8 @@ def test_绑定与解绑走同一形状(client, auth, seeded):
 
 SOURCE_KEYS = {"id", "code", "name", "source_type", "org_id", "endpoint", "freq_minutes",
                "scope", "active", "status", "last_sync_at", "last_rows",
-               "last_latency_ms", "success_rate"}
+               "last_latency_ms", "success_rate",
+               "status_name"}   # P2-174 只增：状态文案取自后端
 
 
 def test_数据源成功率是float且同步登记连带回快照(client, auth, seeded):

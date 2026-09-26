@@ -61,6 +61,8 @@ class DataSourceOut(BaseModel):
     last_latency_ms: int
     # Float 列 + round(..., 2)：100 分也是 100.0，声明 float 即原样
     success_rate: float
+    #: 状态文案（§13 取自后端，P2-174）：停用的一律「停用」，不看最近一次同步留下的状态
+    status_name: str
 
 
 class SyncRecordedOut(BaseModel):
@@ -188,6 +190,10 @@ class DataSourceIn(BaseModel):
     scope: str = Field(default="", max_length=256)
 
 
+#: `spd_data_sources.status` → 中文，措辞照抄列注释
+DATA_SOURCE_STATUS_NAMES = {"running": "正常", "delayed": "延迟", "failed": "异常", "stopped": "停用"}
+
+
 def _source_out(s: SpdDataSource) -> dict:
     return {
         "id": s.id, "code": s.code, "name": s.name, "source_type": s.source_type,
@@ -196,6 +202,9 @@ def _source_out(s: SpdDataSource) -> dict:
         "last_sync_at": s.last_sync_at.isoformat() if s.last_sync_at else "",
         "last_rows": s.last_rows, "last_latency_ms": s.last_latency_ms,
         "success_rate": round(s.success_rate, 2),
+        # 页面原先只看 status：停用（active=false）的数据源照旧显示最近一次同步留下的「正常」，
+        # status=stopped 的又落进「其余一律异常」那一档（P2-174）
+        "status_name": "停用" if not s.active else DATA_SOURCE_STATUS_NAMES.get(s.status, s.status),
     }
 
 
