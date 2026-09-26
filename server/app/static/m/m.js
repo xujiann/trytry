@@ -811,7 +811,9 @@ async function renderInpatient(box) {
       } catch (err) { alert(err.message); }
     });
   });
-  box.querySelectorAll(".bill-detail").forEach((btn) => {
+  // 只挂在带 data-adm 的「查看费用清单」上（P2-209）：两颗按钮共用 bill-detail 这个样式类，原先按类挂监听，
+  // 点「押金余额」还会顺带请求 admissions/undefined/bill，弹一个「admission_id：Input should be a valid integer」
+  box.querySelectorAll(".bill-detail[data-adm]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       try {
         const bill = await authApi(`/api/portal/me/admissions/${btn.dataset.adm}/bill`);
