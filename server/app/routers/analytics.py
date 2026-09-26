@@ -498,10 +498,14 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
         discharged_count[oid] = count
         discharged_days[oid] = day_sum
 
+    # 诊疗人次不含住院类就诊记录（P2-199）：办入院会同时建一条 encounter_type="inpatient" 的就诊，
+    # 数进来医师日均担负就把住院算了两遍（与运营月报 P2-153、成本核算同一条口径）
     visits: dict[int, int] = {}
     for oid, count in (
         db.query(Encounter.org_id, func.count(Encounter.id))
-        .filter(Encounter.created_at >= start_dt, Encounter.created_at < end_dt)
+        .filter(
+            Encounter.created_at >= start_dt, Encounter.created_at < end_dt, Encounter.encounter_type != "inpatient"
+        )
         .group_by(Encounter.org_id)
         .order_by(Encounter.org_id)
         .all()
@@ -568,7 +572,8 @@ def build_variable_index(db: Session, period: str) -> dict[int, dict[str, float]
         model.created_at >= start_dt,
         model.created_at < end_dt,
     )
-    encounters = grouped(Encounter, Encounter.org_id, *in_period(Encounter))
+    # 「期间诊疗人次」不含住院类就诊记录（P2-199，口径同运行效率的诊疗人次）
+    encounters = grouped(Encounter, Encounter.org_id, Encounter.encounter_type != "inpatient", *in_period(Encounter))
     referrals_up = grouped(
         Referral, Referral.from_org_id, Referral.direction == "up", *in_period(Referral)
     )

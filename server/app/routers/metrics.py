@@ -219,12 +219,17 @@ def q_referrals_completed(db: Session):
     return db.query(Referral).filter(Referral.status == "completed")
 
 
+#: 诊疗人次不含住院（P2-199）：办入院会同时建一条 encounter_type="inpatient" 的就诊记录，数进诊疗人次就把住院算了两遍。
+#: 与运营月报的门急诊人次（P2-153）、成本核算的门诊人次同一条口径
+OUTPATIENT_ENCOUNTER = Encounter.encounter_type != "inpatient"
+
+
 def q_grassroots_encounters(db: Session):
-    """基层（乡级/村级）机构诊疗人次。"""
+    """基层（乡级/村级）机构诊疗人次（不含住院类就诊记录）。"""
     return (
         db.query(Encounter)
         .join(Organization, Encounter.org_id == Organization.id)
-        .filter(Organization.level.in_(["township", "village"]))
+        .filter(Organization.level.in_(["township", "village"]), OUTPATIENT_ENCOUNTER)
     )
 
 
@@ -584,7 +589,7 @@ def overview(db: Session = Depends(get_db)):
     patient_total = db.query(func.count(Patient.id)).scalar() or 0
 
     # 促分工：县域内基层医疗卫生机构诊疗人次占比（监测指标7）
-    encounter_total = db.query(func.count(Encounter.id)).scalar() or 0
+    encounter_total = db.query(func.count(Encounter.id)).filter(OUTPATIENT_ENCOUNTER).scalar() or 0
     grassroots_encounters = metric_count(db, "grassroots_encounters")
 
     # 同质化：远程诊断服务量（监测指标5），互认情况
