@@ -164,10 +164,13 @@ def _special_disease_out(app_: SpecialDiseaseApp) -> dict:
     status_code=201,
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 特病申报
 )
-def apply_special_disease(body: SpecialDiseaseCreate, db: Session = Depends(get_db)):
+def apply_special_disease(
+    body: SpecialDiseaseCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    app_ = SpecialDiseaseApp(**body.model_dump())
+    # 记下申报人（P2-399）：审核要比它——原先表上连这一列都没有，「杜绝自报自批」无从比起
+    app_ = SpecialDiseaseApp(created_by=user.id, **body.model_dump())
     # 同患者同病种同时只能挂一条待批申报，由部分唯一索引
     # uq_special_disease_app_applied（status='applied'）兜底。这里**不写预检**：
     # 预检与兜底两条路径迟早会给出不同的文案，走单一路径则"顺序重复"与
@@ -200,7 +203,12 @@ def review_special_disease(
     assert_patient_visible(db, user, app_.patient_id, resource="special_disease")
     if app_.status != "applied":
         raise HTTPException(status_code=409, detail="该申报已处理")
+    # 申报人不得自审（P2-399，同双通道 P2-398）：角色守卫只分得开「经办 / 医师报、管理层审」，管理员与复制了两类
+    # 权限点的自定义角色照样自报自批。存量申报没记申报人（迁移 d8f2a6c4b1e3 不回填），比不出的照原样放行
+    if app_.created_by is not None and app_.created_by == user.id:
+        raise HTTPException(status_code=403, detail="不得审核本人提出的特病申报")
     app_.status = "approved" if approve else "rejected"
+    app_.reviewed_by = user.id
     db.commit()
     db.refresh(app_)
     return _special_disease_out(app_)

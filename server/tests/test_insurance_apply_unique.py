@@ -83,7 +83,16 @@ def test_特病同患者同病种重复申报409且库里只留一条待批(clie
     assert mine[0]["id"] == first.json()["id"]
 
 
-def test_特病驳回后可以重新申报(client, admin):
+@pytest.fixture(scope="module")
+def reviewer(client, admin):
+    """审核人另起一个管理层账号：申报人不得自审（双通道 P2-398、特病 P2-399）——申报用 admin，审核就不能再是 admin。"""
+    created = client.post("/api/users", headers=admin, json={
+        "username": "dual_unique_dir", "password": "passw0rd1", "role": "director", "full_name": "审核人"})
+    assert created.status_code == 201, created.text
+    return login(client, "dual_unique_dir", "passw0rd1")
+
+
+def test_特病驳回后可以重新申报(client, admin, reviewer):
     """部分索引只锁 applied 一态：驳回之后这个键就该重新可用。
 
     写成全量唯一这条会红——而"驳回后重新申报"是特病认定最正常不过的流程。
@@ -94,7 +103,7 @@ def test_特病驳回后可以重新申报(client, admin):
 
     reviewed = client.post(
         f"/api/insurance/special-diseases/{first.json()['id']}/review?approve=false",
-        headers=admin,
+        headers=reviewer,
     )
     assert reviewed.status_code == 200 and reviewed.json()["status"] == "rejected"
 
@@ -103,14 +112,14 @@ def test_特病驳回后可以重新申报(client, admin):
     assert again.json()["id"] != first.json()["id"]
 
 
-def test_特病批准后仍可再次申报(client, admin):
+def test_特病批准后仍可再次申报(client, admin, reviewer):
     """待遇期满后的再认定：批准的那条留作历史，新的一条照常受理。"""
     patient = _patient(client, admin, "特病唯一丙", "330281199001010013")
     first = _apply_special(client, admin, patient["id"], "重性精神病")
     assert first.status_code == 201, first.text
     assert client.post(
         f"/api/insurance/special-diseases/{first.json()['id']}/review?approve=true",
-        headers=admin,
+        headers=reviewer,
     ).json()["status"] == "approved"
 
     again = _apply_special(client, admin, patient["id"], "重性精神病")
@@ -150,15 +159,6 @@ def test_双通道同患者同药品重复申报409且库里只留一条待审(c
     mine = [r for r in listed if r["patient_id"] == patient["id"]]
     assert len(mine) == 1, f"同患者同药品应只剩一条待审核，实际 {mine}"
     assert mine[0]["id"] == first.json()["id"]
-
-
-@pytest.fixture(scope="module")
-def reviewer(client, admin):
-    """审核人另起一个管理层账号：申报人不得自审（P2-398）——申报用 admin，审核就不能再是 admin。"""
-    created = client.post("/api/users", headers=admin, json={
-        "username": "dual_unique_dir", "password": "passw0rd1", "role": "director", "full_name": "审核人"})
-    assert created.status_code == 201, created.text
-    return login(client, "dual_unique_dir", "passw0rd1")
 
 
 def test_双通道驳回后可以重新申报(client, admin, reviewer):

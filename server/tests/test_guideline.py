@@ -81,7 +81,10 @@ def test_19_insurance(client, h, base):
     assert client.post(f"/api/insurance/referral-certs/{ref['id']}", headers=h).json()["cert_no"] == cert["cert_no"]
 
     app_ = client.post("/api/insurance/special-diseases", json={"patient_id": base["patient"]["id"], "disease_name": "尿毒症透析"}, headers=h).json()
-    assert client.post(f"/api/insurance/special-diseases/{app_['id']}/review?approve=true", headers=h).json()["status"] == "approved"
+    # 申报人不得自审（P2-399）：申报用的是 admin，审核另请一位管理层
+    client.post("/api/users", json={"username": "g19_dir", "password": "passw0rd1", "role": "director"}, headers=h)
+    reviewer = login(client, "g19_dir", "passw0rd1")
+    assert client.post(f"/api/insurance/special-diseases/{app_['id']}/review?approve=true", headers=reviewer).json()["status"] == "approved"
 
 
 def test_20_21_education_and_techniques(client, h):

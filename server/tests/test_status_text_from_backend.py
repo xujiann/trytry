@@ -33,6 +33,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import login
 from test_frontend_escape_guard import _strip_comments  # 同一份注释剥离：块注释换等量换行，行号不错位
 
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
@@ -505,8 +506,10 @@ def test_特病申报带状态文案_审核后随之而变(client, admin):
     assert applied.status_code == 201, applied.text
     applied = applied.json()
     assert applied["status_name"] == "已申报"   # 修前：页面显示 applied（且是裸插值）
+    # 申报人不得自审（P2-399）：申报用的是 admin，审核另请一位管理层
+    client.post("/api/users", headers=admin, json={"username": "p272_dir", "password": "passw0rd1", "role": "director"})
     reviewed = client.post(f"/api/insurance/special-diseases/{applied['id']}/review",
-                           params={"approve": "true"}, headers=admin)
+                           params={"approve": "true"}, headers=login(client, "p272_dir", "passw0rd1"))
     assert reviewed.status_code == 200, reviewed.text
     assert (reviewed.json()["status"], reviewed.json()["status_name"]) == ("approved", "已批准")
     row = next(a for a in client.get("/api/insurance/special-diseases", headers=admin).json()

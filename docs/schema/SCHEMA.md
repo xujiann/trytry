@@ -3622,6 +3622,8 @@
 - `disease_name` · VARCHAR(128) · NOT NULL
 - `status` · VARCHAR(16) · NOT NULL
 - `reason` · VARCHAR(512) · NOT NULL
+- `created_by` · INTEGER · → users.id
+- `reviewed_by` · INTEGER · → users.id
 - `created_at` · DATETIME · NOT NULL
 - _index_ ix_special_disease_apps_patient_id(patient_id)
 - _index_ uq_special_disease_app_applied(patient_id, disease_name) UNIQUE

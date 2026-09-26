@@ -103,6 +103,9 @@ class SpecialDiseaseApp(Base):
     # applied=已申报, approved=已批准, rejected=已驳回
     status: Mapped[str] = mapped_column(String(16), default="applied")
     reason: Mapped[str] = mapped_column(String(512), default="")
+    # 申报人 / 审核人（P2-399，迁移 d8f2a6c4b1e3）：审核要比申报人（不得自审，同双通道）。可空——存量申报原先没记、不回填
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
