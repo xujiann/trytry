@@ -16,6 +16,7 @@ from ..models import (
     TcmTechnique,
     User,
 )
+import calendar
 from datetime import date, timedelta
 from ..datetypes import DateStr, OptionalDateStr
 from ..numtypes import INT4_MAX
@@ -434,6 +435,21 @@ class TcmPreparationBatchOut(BaseModel):
     expired: bool
 
 
+def _shelf_life_end(produced: date, months: int) -> date:
+    """「有效期至」：起算日对应 N 个月后那一天的前一天（P2-165）。
+
+    《药品说明书和标签管理规定》第二十三条：有效期标注到日的，「应当为起算日期对应年月日的前一天」——
+    5 月 1 日生产、有效期 6 个月，有效期至 10 月 31 日。原先按 30 天一个月折算（6 个月 = 180 天，
+    有效期至 10 月 28 日），月数越长差得越多：24 个月早 10 天，120 个月早近两个月，批次提前判过期、提前预警。
+    对应日不存在的（1 月 31 日起算 1 个月）取那个月的最后一天再往前一天，宁早勿晚。
+    """
+    total = produced.month - 1 + months
+    year, month = produced.year + total // 12, total % 12 + 1
+    if year > 9999:
+        raise HTTPException(status_code=422, detail="按配方有效期推出的效期超出可表示的年份，请手工填写效期")
+    return date(year, month, min(produced.day, calendar.monthrange(year, month)[1])) - timedelta(days=1)
+
+
 def _batch_out(b: TcmPreparationBatch, today: str) -> dict:
     return {
         "id": b.id,
@@ -470,8 +486,7 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db), user: User = 
         raise HTTPException(status_code=409, detail="批号已存在")
     expire_date = body.expire_date
     if not expire_date:
-        produced = date.fromisoformat(body.produced_date)
-        expire_date = (produced + timedelta(days=30 * formula.shelf_life_months)).isoformat()
+        expire_date = _shelf_life_end(date.fromisoformat(body.produced_date), formula.shelf_life_months).isoformat()
     if expire_date <= body.produced_date:
         raise HTTPException(status_code=422, detail="效期须晚于生产日期")
     batch = insert_or_conflict(db, TcmPreparationBatch(

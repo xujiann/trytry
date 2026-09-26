@@ -1,6 +1,5 @@
 """块4：细目补齐——中药制剂/消毒成本/课件与实训/产前筛查/绩效整改/上门服务。"""
 import io
-from datetime import date, timedelta
 
 import pytest
 
@@ -64,7 +63,7 @@ def test_tcm_formula_and_batch_expiry(client, admin, env):
         json={"code": "ZJ001", "name": "重复编码"},
         headers=pharmacist,
     ).status_code == 409
-    # 效期缺省按配方有效期推算（6 个月 ≈ 180 天）
+    # 效期缺省按配方有效期推算：起算日对应 6 个月后那天的前一天（P2-165；原先按 180 天折算成 10-28）
     batch = client.post(
         "/api/tcm/preparation-batches",
         json={
@@ -77,7 +76,7 @@ def test_tcm_formula_and_batch_expiry(client, admin, env):
         headers=pharmacist,
     )
     assert batch.status_code == 201, batch.text
-    assert batch.json()["expire_date"] == (date(2026, 5, 1) + timedelta(days=180)).isoformat()
+    assert batch.json()["expire_date"] == "2026-10-31"
     # 已过期批次
     expired = client.post(
         "/api/tcm/preparation-batches",

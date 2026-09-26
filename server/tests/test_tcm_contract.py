@@ -48,12 +48,14 @@ BATCH_KEYS = [
 
 
 def _produced_fresh() -> str:
-    """在产批次：10 天前投产，配方效期 6 个月（180 天）→ 效期在约 170 天后。"""
+    """在产批次：10 天前投产，配方效期 6 个月 → 效期在约 170 天后。"""
     return (business_today() - timedelta(days=10)).isoformat()
 
 
 def _expire_fresh() -> str:
-    return (business_today() - timedelta(days=10) + timedelta(days=180)).isoformat()
+    """配方 6 个月：起算日对应 6 个月后那天的前一天（P2-165；原先按 180 天折算成 2026-12-02）。"""
+    assert _produced_fresh() == "2026-06-05"   # 冻结的业务日 6 月 15 号往前 10 天
+    return "2026-12-04"
 
 
 def _produced_old() -> str:
@@ -62,7 +64,8 @@ def _produced_old() -> str:
 
 
 def _expire_old() -> str:
-    return (business_today() - timedelta(days=400) + timedelta(days=180)).isoformat()
+    assert _produced_old() == "2025-05-11"
+    return "2025-11-10"   # 原先按 180 天折算成 2025-11-07
 
 
 #: 把这一档的"今天"钉死——判据与被判对象走同一个入口（P1-53 收敛后的
@@ -96,7 +99,7 @@ def seed(client, admin):
     """一次种完全部场景，测试只做断言。
 
     配方：F1 全字段颗粒剂（效期 6 个月）、F2 全默认（汤剂/12 个月）。
-    批次挂在 F1 上：B1 显式效期 2099-12-31、B2 效期留空按配方推算（+180 天）、
+    批次挂在 F1 上：B1 显式效期 2099-12-31、B2 效期留空按配方推算（6 个月，对应日的前一天）、
     B3 四百天前投产（已过期）。B1 之后发放成功，B3 发放被效期拦住。
     """
     data: dict = {}
@@ -318,7 +321,7 @@ def test_批次回执精确_显式效期与推算效期(seed):
     # Integer 列：产量 100 不得变 100.0；expired 是 bool，不得变 0/1
     assert type(body["quantity"]) is int
     assert body["expired"] is False
-    # 效期留空 → 按配方 6 个月（180 天）推算；单位默认"剂"
+    # 效期留空 → 按配方 6 个月推算（对应日的前一天）；单位默认"剂"
     assert seed["b2"] == {
         "id": seed["b2"]["id"], "formula_id": seed["f1"]["id"], "batch_no": "TCCT-B2",
         "org_id": seed["org"]["id"], "quantity": 50, "unit": "剂",
