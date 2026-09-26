@@ -12,6 +12,8 @@
 **与 `/api/mgmt/qc`（QcRecord）法域不同**：那是①-④共享中心的运行质量台账
 （人工登记合格/不合格），本模块是检验科室内质控的数值体系，互不替代。
 """
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
@@ -30,7 +32,18 @@ router = APIRouter(prefix="/api/labqc", tags=["检验室内质控"], dependencie
 # ---------- Westgard 基础四规则（数值判定，非用户公式） ----------
 
 
-def _westgard(z: float, prev_z: float | None) -> tuple[bool, bool, list[str]]:
+def _z_score(value: float, target: float, sd: float) -> Decimal:
+    """z 分数按**录入的十进制数**算（P2-156）。
+
+    二进制浮点里 (4.2 − 4.0) / 0.1 = 2.0000000000000018、(1.3 − 1.0) / 0.1 = 3.0000000000000004：压在 ±2SD / ±3SD
+    线上的测定值被判成超线——1-2s 警告，连着两次成了 2-2s 失控，4.2 之后 3.8 成了 R-4s，1.3 成了 1-3s，与下面写明的
+    「z 恰为 ±2.0/±3.0 不触发」相反；靶值或 SD 带小数的批号都中招。`str(float)` 给的是能原样读回的最短写法，就是
+    录入的那串数字，按它做十进制运算，压线的值恰好压线。
+    """
+    return (Decimal(str(value)) - Decimal(str(target))) / Decimal(str(sd))
+
+
+def _westgard(z: Decimal, prev_z: Decimal | None) -> tuple[bool, bool, list[str]]:
     """按 z 分数判定当前点：返回 (warning, out_of_control, 命中规则列表)。
 
     - 1-2s：|z| > 2 —— 警告（不算失控，是"启动其他规则检查"的信号）；
@@ -206,8 +219,8 @@ def create_measurement(
         .order_by(QcMeasurement.id.desc())
         .first()
     )
-    z = (body.value - lot.target_value) / lot.sd
-    prev_z = (prev.value - lot.target_value) / lot.sd if prev is not None else None
+    z = _z_score(body.value, lot.target_value, lot.sd)
+    prev_z = _z_score(prev.value, lot.target_value, lot.sd) if prev is not None else None
     warning, out_of_control, violated = _westgard(z, prev_z)
     measurement = QcMeasurement(
         lot_id=lot.id,
