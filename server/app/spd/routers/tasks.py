@@ -302,25 +302,31 @@ def start_path_instance(
     template = db.get(SpdPathTemplate, body.template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
-    # 暂停的也算在途（P1-128）：原先只看执行中的，暂停着的时候能再启动一条，恢复后两条并行、各派一份任务
-    running = (
-        db.query(SpdPathInstance)
-        .filter(
-            SpdPathInstance.enrollment_id == body.enrollment_id,
-            SpdPathInstance.template_id == body.template_id,
-            SpdPathInstance.status.in_(PATH_OPEN_STATUSES),
+    # 「同一档案同一模板只一条在途」的判定与建实例圈进档案这一行的临界区（P2-269）：原先查完没有在途的
+    # 再建——两个人同时点启动（或双击），两路都查不到、各建一条，两份并行任务正是 docstring 要防的
+    with serialized_on(db, SpdEnrollment, enrollment.id):
+        # 暂停的也算在途（P1-128）：原先只看执行中的，暂停着的时候能再启动一条，恢复后两条并行、各派一份任务
+        running = (
+            db.query(SpdPathInstance)
+            .filter(
+                SpdPathInstance.enrollment_id == body.enrollment_id,
+                SpdPathInstance.template_id == body.template_id,
+                SpdPathInstance.status.in_(PATH_OPEN_STATUSES),
+            )
+            .first()
         )
-        .first()
-    )
-    if running is not None:
-        raise HTTPException(status_code=409, detail="该路径已在执行中" if running.status == "running"
-                            else "该路径有一条暂停中的实例，请恢复或取消后再启动")
-    try:
-        # 覆盖随实例一起建（P2-258）：原先启动完才写，首节点任务已经按模板时限派出去了
-        instance = start_path(db, enrollment, template, user.id, overrides=body.overrides)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    db.commit()
+        if running is not None:
+            detail = ("该路径已在执行中" if running.status == "running"
+                      else "该路径有一条暂停中的实例，请恢复或取消后再启动")
+            db.rollback()   # 放掉行锁再回话
+            raise HTTPException(status_code=409, detail=detail)
+        try:
+            # 覆盖随实例一起建（P2-258）：原先启动完才写，首节点任务已经按模板时限派出去了
+            instance = start_path(db, enrollment, template, user.id, overrides=body.overrides)
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        db.commit()
     return _instance_out(db, instance)
 
 
