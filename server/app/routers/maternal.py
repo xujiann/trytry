@@ -50,8 +50,9 @@ def _mark_high_risk(db: Session, model, obj_id: int, col: str, factor: str) -> b
 
 class MaternalCreate(BaseModel):
     patient_id: int
-    lmp: str = Field(default="", max_length=10)
-    edc: str = Field(default="", max_length=10)
+    # 末次月经 / 预产期是日期（P2-231）：原先裸 str 只卡长度，「2026/1/5」「26-1-5」照存，日期闸门按字段名认 date 认不出它俩
+    lmp: OptionalDateStr = ""
+    edc: OptionalDateStr = ""
     gravidity: int = Field(default=1, ge=1, le=INT4_MAX)
     parity: int = Field(default=0, ge=0, le=INT4_MAX)
     high_risk: bool = False
@@ -61,6 +62,9 @@ class MaternalCreate(BaseModel):
 class MaternalOut(MaternalCreate):
     id: int
     status: str
+    # 出参不带入参的日历校验（P1-63）：库里的存量坏日期要原样读出来，而不是让响应 500
+    lmp: str
+    edc: str
 
     model_config = {"from_attributes": True}
 

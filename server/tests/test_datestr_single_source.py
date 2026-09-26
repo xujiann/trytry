@@ -148,8 +148,9 @@ def test_真源本身仍在做日历校验():
 #: 新增一个裸 `str` 的请求体日期字段即红。
 KNOWN_BARE_BODY_DATE_FIELDS: set[str] = set()
 
-#: 词元 `date` 之外还认 `due`（P2-55）：「下次随访日」叫 next_due，原先整个不在视野里，裸 str 照收「2026/10/1」
-_DATE_TOKEN = re.compile(r"(^|_)(date|due)($|_)")
+#: 词元 `date` 之外还认 `due`（P2-55）：「下次随访日」叫 next_due，原先整个不在视野里，裸 str 照收「2026/10/1」。
+#: 还认 `lmp` / `edc`（P2-231）：末次月经、预产期按产科惯例用缩写命名，孕产妇建册的这两个日期原先同样不在视野里
+_DATE_TOKEN = re.compile(r"(^|_)(date|due|lmp|edc)($|_)")
 _ROUTE_DIRS = (APP_DIR / "routers", APP_DIR / "spd" / "routers")
 _HTTP_VERBS = ("get", "post", "put", "patch", "delete")
 
