@@ -779,15 +779,29 @@ def amend_report(
     if body.critical is not None:
         report.critical = body.critical
     if report.critical:
-        # 修订后（仍/新）为危急值：闭环状态复位，须重新确认接收
+        # 修订后（仍/新）为危急值：闭环状态复位，须重新确认接收。复位成「已通知」就得真的通知一遍（P2-129）：
+        # 原先只改状态、不发消息也不广播——一份改判为危急值的报告读着「已通知」，申请机构的医师什么都没收到，
+        # 只能碰巧翻到未确认清单才发现。通知口径与出具时同一套（申请机构医师 + 定向广播）。
         report.critical_status = "notified"
         db.add(
             CriticalAction(
                 report_id=report.id,
-                action=f"报告修订，危急值闭环状态复位为已通知：{report.conclusion}",
+                action=f"报告修订，危急值闭环状态复位为已通知，已重新通知申请机构"
+                       f"(org={req.from_org_id if req is not None else '未知'})：{report.conclusion}",
                 actor=actor,
             )
         )
+        if req is not None:
+            notify_staff(
+                db,
+                category="critical_value",
+                title=f"危急值（报告修订）：{req.item_name}",
+                body=report.conclusion,
+                org_id=req.from_org_id,
+                roles=("doctor",),
+                link_type="exam_report",
+                link_id=report.id,
+            )
     elif was_critical:
         # 修订解除危急标记：闭环状态清空并留痕
         report.critical_status = ""
@@ -797,6 +811,18 @@ def amend_report(
             )
         )
     db.commit()
+    if report.critical and req is not None:
+        manager.broadcast(
+            {
+                "type": "critical_report",
+                "org_id": req.from_org_id,
+                "request_id": req.id,
+                "patient_id": req.patient_id,
+                "item_name": req.item_name,
+                "conclusion": report.conclusion,
+            },
+            target_org_id=req.from_org_id,
+        )
     return {
         "id": report.id,
         "conclusion": report.conclusion,
