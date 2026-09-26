@@ -142,8 +142,12 @@ def _workload(db, section, org_id, period):
 
 
 def _followup_trend(db, section, org_id, period):
-    since = clock.today() - timedelta(days=30)
-    query = db.query(SpdFollowupRecord).filter(SpdFollowupRecord.planned_at >= since.isoformat())
+    # 近 30 天、到今天为止（P2-293）：随访计划一次排出多个时间点，原先不设上界——排在未来的随访全是「未完成」，
+    # 未来的月份以 0% 进图，本月的完成率也被还没到日子的那些拉低
+    today = clock.today()
+    since = today - timedelta(days=30)
+    query = db.query(SpdFollowupRecord).filter(SpdFollowupRecord.planned_at >= since.isoformat(),
+                                               SpdFollowupRecord.planned_at <= today.isoformat())
     if org_id is not None:
         query = query.filter(SpdFollowupRecord.org_id == org_id)
     buckets: dict[str, dict] = {}
