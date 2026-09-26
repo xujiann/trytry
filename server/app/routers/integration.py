@@ -806,7 +806,7 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
         if id_card:
             # 核的是**申请单患者本人**的证件号（两种写法都认，P1-114）。原先是「平台上另有一位持这个证件号的患者才拒收」：
             # 证件号不属于平台上任何人（院内自建档、没进平台的患者）的结果照样写进申请单患者名下——别人的检验结果、
-            # 连同危急值闭环一起落到这位患者身上（P2-154）
+            # 连同危急值闭环一起落到这位患者身上（P1-143）
             owns = (
                 db.query(Patient.id)
                 .filter(Patient.id == request.patient_id, id_card_match(id_card))
