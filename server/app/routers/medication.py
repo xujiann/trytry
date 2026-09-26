@@ -269,12 +269,17 @@ def medication_profile(
     )
     now = now_naive()
     drugs: dict[str, dict] = {}
+    # 「次」按处方数（P2-354）：同一张处方里同一味药可以有两行（审方后补开、分次用法），原先每行记一次
+    prescriptions: dict[str, set[int]] = {}
     for item, prescribed_at in rows:
         entry = drugs.setdefault(
             item.drug_code, {"drug_code": item.drug_code, "drug_name": item.drug_name, "times": 0,
                              "max_daily_dose": 0.0, "in_use": False}
         )
-        entry["times"] += 1
+        seen = prescriptions.setdefault(item.drug_code, set())
+        if item.prescription_id not in seen:
+            seen.add(item.prescription_id)
+            entry["times"] += 1
         entry["max_daily_dose"] = max(entry["max_daily_dose"], item.daily_dose)
         # 用秒数比而不是 prescribed_at + timedelta(days=…)：用药天数上限是 INT4_MAX，timedelta 装不下
         if (now - prescribed_at).total_seconds() < item.days * 86400:
@@ -301,18 +306,23 @@ class DrugUsageStatOut(BaseModel):
 
 @router.get("/usage-stats", response_model=list[DrugUsageStatOut])
 def usage_stats(db: Session = Depends(get_db)):
-    """全县用药地图：品种使用排名，支撑药品需求预测与供应保障。"""
+    """全县用药地图：品种使用排名，支撑药品需求预测与供应保障。
+
+    按药品编码归并、「方」数按处方数（P2-354）：原先按（编码, 药名）分组、数处方明细行——药名是每行自由填的，同一味药
+    换个写法就拆成两行排名；同一张处方里这味药有两行就记成两张方。药名取同编码里按字典序最小的那个写法（稳定、可复现）。
+    """
+    rx_count = func.count(func.distinct(PrescriptionItem.prescription_id))
     rows = (
         db.query(
             PrescriptionItem.drug_code,
-            PrescriptionItem.drug_name,
-            func.count(PrescriptionItem.id).label("rx_count"),
+            func.min(PrescriptionItem.drug_name).label("drug_name"),
+            rx_count.label("rx_count"),
             func.count(func.distinct(Prescription.patient_id)).label("patient_count"),
         )
         .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
         .filter(Prescription.status.in_(["auto_passed", "approved"]))
-        .group_by(PrescriptionItem.drug_code, PrescriptionItem.drug_name)
-        .order_by(func.count(PrescriptionItem.id).desc(), PrescriptionItem.drug_code, PrescriptionItem.drug_name)
+        .group_by(PrescriptionItem.drug_code)
+        .order_by(rx_count.desc(), PrescriptionItem.drug_code)
         .limit(50)
         .all()
     )
