@@ -471,6 +471,20 @@ def settle_call_task(db: Session, task_id: int, **values: Any) -> bool:
     return _move_row(db, SpdCallTask, task_id, "pending", **values)
 
 
+#: 干预方案（`spd_interventions.status`）还能被居民标记完成的：没被移除的都算（已完成的再点一次照旧是已完成）
+INTERVENTION_FINISHABLE_STATUSES = ("planned", "doing", "done")
+
+
+def mark_intervention_done(db: Session, intervention_id: int) -> bool:
+    """居民把干预方案标记为已完成：翻转与「没被移除」压进同一条 UPDATE，返回是否翻到（P2-302）。
+
+    `portal.feedback_intervention` 原先是「预检不是已移除 → 赋值 → commit」：居民点「已完成」的同时医生移除了这条方案
+    （或档案结束时 `close_open_work` 一并收掉），removed 被写回 done、重新算进完成数——预检旁边那句注释写的正是
+    「不能再把它翻成已完成」。**不 commit**。
+    """
+    return _move_row(db, SpdIntervention, intervention_id, INTERVENTION_FINISHABLE_STATUSES, status="done")
+
+
 def adjust_followup_record(db: Session, record_id: int, **values: Any) -> bool:
     """手工调整随访记录（移除 / 恢复 / 改期 / 改执行人）：改的列与「还没完成」的判定压进同一条 UPDATE，返回是否改到（P2-287）。
 

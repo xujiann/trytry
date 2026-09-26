@@ -47,8 +47,8 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
-                       close_followup_record, enrollment_for, judge_measurement, measure_program_for, measure_value_problem,
-                       move_task,
+                       close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
+                       measure_program_for, measure_value_problem, move_task,
                        scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
@@ -1125,9 +1125,12 @@ def feedback_intervention(
     record.read_at = record.read_at or now_naive()
     if body.feedback:
         record.feedback = body.feedback
-    if body.done:
-        record.status = "done"
+    # 上面那道预检是锁外读的（P2-302）：翻成已完成与「没被移除」压进同一条 UPDATE，与顺序请求同一句 409
+    if body.done and not mark_intervention_done(db, record.id):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该干预方案已被医生移除，不能再标记完成")
     db.commit()
+    db.refresh(record)
     return {"id": record.id, "status": record.status, "read": True}
 
 
