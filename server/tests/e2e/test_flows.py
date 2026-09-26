@@ -1017,6 +1017,26 @@ def test_流程画布加节点在页内表单里填_角色从字典里选(page, 
     expect(page.locator("#wfc-json")).to_contain_text('"role": "doctor"')
 
 
+def test_账号管理的角色下拉不默认落在平台管理员(page, base_url, admin_call):
+    """P1-174：「开通账号」的角色下拉原先默认第一项「平台管理员」，不碰它直接开通，建出来的就是不挂机构的管理员；
+    「调角色」弹窗不预选现有角色，点开看一眼再点确定，经办就成了管理员（变更记录里一条「经办→平台管理员」）。
+    改后开通要先选角色，弹窗预选现有角色——原样确定是空操作。"""
+    admin_call("POST", "/api/users", {"username": "e2e_role_op", "password": "passw0rd1", "role": "operator",
+                                      "full_name": "E2E经办"})
+    _login(page, base_url)
+    _open_page(page, "users", "用户管理")
+    form = page.locator("#user-form")
+    expect(form.locator('[name="role"]')).to_have_value("")
+    form.locator('[name="username"]').fill("e2e_role_new")
+    form.locator('[name="password"]').fill("passw0rd1")
+    assert form.evaluate("f => f.checkValidity()") is False   # 修前 True：一点「开通」就建出一个管理员
+    page.locator("tr", has_text="e2e_role_op").locator("[data-chrole]").click()
+    expect(_modal(page).locator('[name="role"]')).to_have_value("operator")   # 修前 admin
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    users = {u["username"]: u["role"] for u in admin_call("GET", "/api/users")}
+    assert users["e2e_role_op"] == "operator" and "e2e_role_new" not in users
+
+
 def test_定时任务改间隔在页内表单里填_取消即不改(page, base_url, admin_read, admin_call):
     """P2-38：「改间隔」原先弹窗输分钟；换成数字框（可带小数，折成整秒），取消即不改。"""
     job = admin_read("/api/jobs")[0]

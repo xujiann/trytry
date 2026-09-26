@@ -134,7 +134,7 @@ async function renderUsers() {
         <input name="username" placeholder="用户名（≥3位）" required minlength="3">
         <input name="password" type="password" placeholder="初始密码（≥6位）" required minlength="6">
         <input name="full_name" placeholder="姓名">
-        <select name="role">${Object.entries(roles).map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</select>
+        <select name="role" required><option value="">选择角色</option>${Object.entries(roles).map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</select>
         <select name="org_id"><option value="">不挂机构</option>${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
         <button>开通</button>
       </form><p class="msg" id="user-msg"></p>`)}
@@ -149,7 +149,7 @@ async function renderUsers() {
        <td><span class="tag">${esc(roles[u.role] || u.role)}</span></td>
        <td>${u.org_id ? esc(orgNames[u.org_id] || u.org_id) : "—"}</td>
        <td>${u.status === "disabled" ? '<span class="tag red">已停用</span>' : '<span class="tag green">在用</span>'}</td>
-       <td><button class="btn secondary" data-chrole="${u.id}">调角色</button>
+       <td><button class="btn secondary" data-chrole="${u.id}" data-role="${esc(u.role)}">调角色</button>
            <button class="btn secondary" data-ustatus="${u.id}" data-to="${u.status === "disabled" ? "active" : "disabled"}">${u.status === "disabled" ? "启用" : "停用"}</button>
            <button class="btn secondary" data-resetpw="${u.id}" data-name="${esc(u.username)}">重置口令</button>
            <button class="btn secondary" data-resettotp="${u.id}" data-name="${esc(u.username)}">重置动态口令</button></td></tr>`))}
@@ -168,6 +168,7 @@ async function renderUsers() {
       ${table(["键", "值", "说明", "更新时间"], params, (p) =>
         `<tr><td><span class="tag">${esc(p.key)}</span></td><td>${esc(p.value)}</td><td>${esc(p.description) || "—"}</td>
          <td>${esc(p.updated_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`)}`;
+  // 角色不给默认（P1-174）：原先下拉默认第一项「平台管理员」，不碰它直接开通，建出来的就是不挂机构的管理员（后端缺省是经办）
   $("#user-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -193,10 +194,14 @@ async function renderUsers() {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const chrole = el("data-chrole"), ustatus = el("data-ustatus"), resetPw = el("data-resetpw"), resetTotp = el("data-resettotp");
     if (chrole) {
-      // 原先是系统输入框输序号（P2-38 存量弹窗录入），改成下拉；角色字典同表格一致
+      // 原先是系统输入框输序号（P2-38 存量弹窗录入），改成下拉；角色字典同表格一致。
+      // 预选现有角色（P1-174）：原先不给 value，下拉落在第一项「平台管理员」——点开看一眼再点确定，经办就成了管理员。
+      // 字典里没有的角色（自定义角色）也摆进去，否则照样落回第一项
+      const current = chrole.dataset.role;
+      const options = Object.entries(roles).map(([k, v]) => ({ value: k, label: v }));
+      if (!Object.keys(roles).includes(current)) options.unshift({ value: current, label: current });
       const form = await spdModal("调整角色（变更即吊销旧令牌）", [
-        { name: "role", label: "新角色", type: "select",
-          options: Object.entries(roles).map(([k, v]) => ({ value: k, label: v })) },
+        { name: "role", label: "新角色", type: "select", value: current, options },
       ]);
       if (!form || !form.role) return;
       try {
