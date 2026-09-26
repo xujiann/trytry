@@ -51,8 +51,8 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import RuleError, evaluate, is_suspect_risk, score_scale, validate_conditions
-from ..service import (MEASUREMENT_SOURCE_NAMES, award_points, build_facts, close_open_work, match_program,
-                       package_items_ok, scale_program_mismatch, scale_unusable)
+from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, award_points, build_facts, close_open_work,
+                       match_program, package_items_ok, scale_program_mismatch, scale_unusable)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
@@ -1909,8 +1909,15 @@ def patient_profile(
             db.query(SpdTask)
             .filter(SpdTask.enrollment_id == enrollment.id)
             .order_by(SpdTask.id.desc())
-            .limit(20)
+            .limit(10)
             .all()
+        )
+        # 「待办」与工作台、日报同一口径（`service.TASK_OPEN_STATUSES`，含待审核与退回）且数全部任务。
+        # 原先在最近 20 条里按手写的四个状态数：漏了待审核 / 退回，更早的待办一被新任务挤出前 20 条就不算了（P2-138）
+        open_tasks = (
+            db.query(SpdTask)
+            .filter(SpdTask.enrollment_id == enrollment.id, SpdTask.status.in_(TASK_OPEN_STATUSES))
+            .count()
         )
         programs.append({
             "enrollment": _enroll_out(enrollment),
@@ -1926,13 +1933,11 @@ def patient_profile(
                 .filter(SpdPackageBinding.enrollment_id == enrollment.id)
                 .all()
             ],
-            "open_tasks": sum(
-                1 for t in tasks if t.status in ("pending", "claimed", "doing", "overdue")
-            ),
+            "open_tasks": open_tasks,
             "recent_tasks": [
                 {"id": t.id, "title": t.title, "task_type": t.task_type,
                  "status": t.status, "due_date": t.due_date}
-                for t in tasks[:10]
+                for t in tasks
             ],
         })
 
