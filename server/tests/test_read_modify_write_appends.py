@@ -412,7 +412,10 @@ def test_八处修法不得被拆掉_静态钉():
 
     billing = (APP / "routers" / "billing.py").read_text(encoding="utf-8")
     assert "def _serialized_on" not in billing, "闸门已上提为 concurrency.serialized_on，别再复制一份私有的"
-    assert billing.count("with serialized_on(db, ") == 4
+    # 五处：退押金、结算认领、收款、支付回调入账（本档清零时的四处），加 P1-141 的住院计费——计费与结算
+    # 圈在同一把住院登记行锁里，「已结算不再计费」的判定与写入才不被并发的结算插进来。数是精确的：少一处是修法被拆，
+    # 多一处要在这里写明是谁、为什么
+    assert billing.count("with serialized_on(db, ") == 5
 
 
 def test_八处不得再回到欠账清单():
