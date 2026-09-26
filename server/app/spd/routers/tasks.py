@@ -929,9 +929,13 @@ def escalate_task(
     task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需升级")
-    task.escalated = True
-    task.priority = max(task.priority, 2)
+    # 置紧急用带条件的 UPDATE、只往上抬（P2-194）：原先读出优先级在内存里 max 再写回——另一路刚把它调到更高，
+    # 这里写回的旧值 max 会把它压回 2（读改写欠账清单里登记着的那一条）
+    db.query(SpdTask).filter(SpdTask.id == task.id).update({SpdTask.escalated: True}, synchronize_session=False)
+    db.query(SpdTask).filter(SpdTask.id == task.id, SpdTask.priority < 2).update(
+        {SpdTask.priority: 2}, synchronize_session=False)
     db.commit()
+    db.refresh(task)
     return _task_out(task)
 
 

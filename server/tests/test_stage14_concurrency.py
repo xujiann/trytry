@@ -427,7 +427,6 @@ KNOWN_READ_MODIFY_WRITE: dict[str, tuple[int, str]] = {
     ),
     "spd/portal.py:feedback_intervention": (1, "read_at = read_at or now，幂等回填"),
     "spd/portal.py:read_education": (1, "read_at = read_at or now，幂等回填"),
-    "spd/tasks.py:escalate_task": (1, "priority = max(priority, 2)，取极值"),
     "spd/tasks.py:submit_task": (1, "assignee_id = assignee_id or 当前用户，幂等回填"),
     "spd/config/catalog.py:update_program": (1, "version = _bump_version(version)，配置版本号自增（低频、单写者）"),
 }
