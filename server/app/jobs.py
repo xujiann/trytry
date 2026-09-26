@@ -49,6 +49,8 @@ logger = logging.getLogger("medplat.jobs")
 
 # 与 medwaste 路由同源的滞留天数上限
 from .routers.medwaste import overdue_condition as medwaste_overdue_condition
+# 与合同到期提醒接口同源的口径（P2-207：已续签、离职的不算）
+from .routers.admin_mgmt import contract_expiring_condition
 
 # 合同/制剂的提前提醒窗口
 CONTRACT_NOTICE_DAYS = 60
@@ -209,11 +211,7 @@ def medwaste_overdue_scan(db: Session) -> tuple[int, str]:
 def contract_expiry_scan(db: Session) -> tuple[int, str]:
     """口径与 GET /api/mgmt/staff-contracts/expiring 一致（默认 60 天窗口）。"""
     deadline = (clock.today() + timedelta(days=CONTRACT_NOTICE_DAYS)).isoformat()
-    count = (
-        db.query(StaffContract)
-        .filter(StaffContract.status == "active", StaffContract.end_date <= deadline)
-        .count()
-    )
+    count = db.query(StaffContract).filter(contract_expiring_condition(deadline)).count()
     _alert("contract_expiring", "聘用合同临期", count)
     return count, f"{CONTRACT_NOTICE_DAYS} 天内到期合同 {count} 份"
 

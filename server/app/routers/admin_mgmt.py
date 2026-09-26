@@ -1,8 +1,8 @@
 """综合管理补齐：㉚人力资源、㉛财务、㉜物资、㉞行政公文，及①-④排班/质控。"""
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, func
+from sqlalchemy.orm import Session, aliased
 
 from ..concurrency import add_amount, insert_or_conflict, take_amount, upsert_unique
 from ..database import get_db
@@ -809,12 +809,29 @@ def create_staff_contract(
     return {"id": contract.id, "contract_no": contract.contract_no, "status": contract.status}
 
 
+def contract_expiring_condition(deadline: str):
+    """合同到期提醒的口径（接口与每日扫描 `jobs.contract_expiry_scan` 共用，P2-207）。
+
+    履行中、止期在提醒窗口内，且**还没续签、人还在**。原先只看状态与止期上界，而合同状态从来没有代码去改
+    （不写 expired / terminated）：续签了的旧合同、离职的人的合同永远挂在提醒里，每到期一份就多一条，
+    人事页「60 天内到期合同」只增不减，每日扫描天天告警。已续签 = 同一员工另有止期更晚的合同；
+    到期了还没续签的照旧留在提醒里——那正是要人去办的。
+    """
+    later = aliased(StaffContract)
+    return and_(
+        StaffContract.status == "active",
+        StaffContract.end_date <= deadline,
+        ~exists().where(later.employee_id == StaffContract.employee_id, later.end_date > StaffContract.end_date),
+        ~exists().where(Employee.id == StaffContract.employee_id, Employee.status == "left"),
+    )
+
+
 @router.get("/staff-contracts/expiring", response_model=list[ContractExpiringRowOut])
 def expiring_contracts(
     days: int = Query(default=60, ge=0, le=3650),  # 加天数的上界（P1-96）：原先无界，传个大数 date + timedelta 溢出，整个请求 500
     today: str | None = None, db: Session = Depends(get_db),
 ):
-    """合同到期提醒：end_date 距今 ≤days 的履行中合同（续签管理）。"""
+    """合同到期提醒：end_date 距今 ≤days 的履行中合同（续签管理；已续签的、离职的人的不算，见 `contract_expiring_condition`）。"""
     from datetime import timedelta
 
     current = resolve_business_date(today)
@@ -827,8 +844,8 @@ def expiring_contracts(
             "end_date": c.end_date,
         }
         for c in db.query(StaffContract)
-        .filter(StaffContract.status == "active", StaffContract.end_date <= deadline)
-        .order_by(StaffContract.end_date)
+        .filter(contract_expiring_condition(deadline))
+        .order_by(StaffContract.end_date, StaffContract.id)
         .all()
     ]
 
