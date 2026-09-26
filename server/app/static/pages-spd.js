@@ -2827,7 +2827,8 @@ async function renderSpdFollowup() {
   $("#page-desc").textContent =
     "通用随访能力：方案规则与问卷、多时间点任务生成、多渠道执行、呼叫录音、抽查质控";
   const [rules, questionnaires, stats, calls, qcSamples, catalog] = await Promise.all([
-    api("/api/spd/followup-rules"), api("/api/spd/questionnaires"),
+    // 问卷连停用的一起取（P2-294）：管理表要能把停用的再启用；新建方案的下拉只列启用的
+    api("/api/spd/followup-rules"), api("/api/spd/questionnaires?include_inactive=true"),
     api("/api/spd/followup-stats"), api("/api/spd/call-tasks?limit=20"),
     api("/api/spd/qc-samples?limit=50"), spdCatalog(),
   ]);
@@ -2865,7 +2866,7 @@ async function renderSpdFollowup() {
         <select name="program_code"><option value="">不挂病种</option>${spdProgramOptions(catalog, false, true)}</select>
         <input name="diagnosis_keywords" placeholder="诊断关键词，逗号分隔（如 心力衰竭,I50）" style="min-width:220px">
         <input name="points" placeholder="时间点（天），如 7,30,90" required>
-        <select name="questionnaire_code"><option value="">不绑问卷</option>${questionnaires.map((q) =>
+        <select name="questionnaire_code"><option value="">不绑问卷</option>${questionnaires.filter((q) => q.active !== false).map((q) =>
           `<option value="${esc(q.code)}">${esc(q.name)}</option>`).join("")}</select>
         <input name="dept" placeholder="科室（可留空）" style="width:110px">
         <button>新建方案</button>

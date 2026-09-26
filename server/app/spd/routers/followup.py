@@ -593,11 +593,16 @@ def create_questionnaire(body: QuestionnaireIn, db: Session = Depends(get_db)):
 def list_questionnaires(
     response: Response,
     scene: str | None = None,
+    include_inactive: bool = False,
     offset: int = 0,
     limit: int = 200,
     db: Session = Depends(get_db),
 ):
-    query = db.query(SpdQuestionnaire).filter(SpdQuestionnaire.active.is_(True))
+    """问卷目录。缺省只列启用的（选问卷的下拉用）；`include_inactive` 连停用的一起列（P2-294）——随访页的问卷管理表
+    原先也只拿得到启用的，停用的从表里消失，表上的「停用」标签与编辑里的「启用」永远用不上，停了就启不回来。"""
+    query = db.query(SpdQuestionnaire)
+    if not include_inactive:
+        query = query.filter(SpdQuestionnaire.active.is_(True))
     if scene:
         query = query.filter(SpdQuestionnaire.scene == scene)
     return [
