@@ -127,6 +127,19 @@ def _as_number(value) -> float | None:
         return None
 
 
+def _same(actual, expected) -> bool:
+    """`==` / `!=` / `in` / `not_in` 共用的等值口径（P2-342）：两边都读得成数就按数比，否则按去掉首尾空白的文本比。
+
+    原先 `==` 比 `str()`、`in` 比 Python 的 `in`，两种口径各算各的：监测值是 float，`bp_sys == 140` 遇 140.0 不命中；
+    规则编辑器把「属于」的值存成文本列表、「等于」的值能读成数就存成数，`age in ["60", "65"]` 遇 60 岁不命中，
+    问卷 `pain in ["8", "9", "10"]` 遇作答 8 判「无异常」、不派处置任务。
+    """
+    left, right = _as_number(actual), _as_number(expected)
+    if left is not None and right is not None:
+        return left == right
+    return str(actual).strip() == str(expected).strip()
+
+
 def _match_one(cond: dict, facts: dict) -> bool:
     field, op = cond.get("field"), cond.get("op")
     expected: Any = cond.get("value")  # between 时是二元序列，其余是标量
@@ -159,20 +172,21 @@ def _match_one(cond: dict, facts: dict) -> bool:
             "<=": left <= right,
         }[op]
 
-    if op in ("in", "not_in"):
-        pool = expected if isinstance(expected, (list, tuple, set)) else [expected]
+    if op in ("in", "not_in", "==", "!="):
+        # 等于 / 不等于就是只有一个值的属于 / 不属于：左值是列表（诊断、多选题作答）时任一元素相等即算——原先 `==`
+        # 比的是整个列表的 `str()`，多选作答 ["无"] 配 `症状 != "无"` 恒命中，误判异常、派出处置任务（P2-342）
+        if op in ("in", "not_in"):
+            pool = expected if isinstance(expected, (list, tuple, set)) else [expected]
+        else:
+            pool = [expected]
         values = actual if isinstance(actual, (list, tuple, set)) else [actual]
-        hit = any(v in pool for v in values)
-        return hit if op == "in" else not hit
+        hit = any(_same(v, p) for v in values for p in pool)
+        return hit if op in ("in", "==") else not hit
 
     if op == "contains":
         haystack = actual if isinstance(actual, (list, tuple, set)) else [actual]
         return any(str(expected) in str(v) for v in haystack)
 
-    if op == "==":
-        return str(actual) == str(expected)
-    if op == "!=":
-        return str(actual) != str(expected)
     return False
 
 

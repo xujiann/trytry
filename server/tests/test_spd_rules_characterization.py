@@ -101,9 +101,8 @@ class TestMatchOperators:
         assert evaluate([cond], {"surgery": ["阑尾切除术"]})[0] is False
 
     def test_相等比较用字符串语义_现状怪癖(self):
-        # ⚠ 现状怪癖：== / != 走 str(actual) == str(expected)，不是类型化相等。
-        # 于是整数 50 与整数 50 相等（意料之中），"50"（字符串）与 50 也相等（意料之外）。
-        # 重构成类型化相等会改变此行为——因此在这里钉死现状。
+        # == / != 不是类型化相等："50"（字符串）与 50 相等。P2-342 起与 in / not_in 共用一个等值口径：
+        # 两边都读得成数就按数比（140.0 == 140），否则按去首尾空白的文本比——这里钉的三条照旧成立。
         assert evaluate([{"field": "age", "op": "==", "value": 50}], {"age": 50})[0] is True
         assert evaluate([{"field": "age", "op": "==", "value": 50}], {"age": "50"})[0] is True
         assert evaluate([{"field": "age", "op": "!=", "value": 50}], {"age": 51})[0] is True
