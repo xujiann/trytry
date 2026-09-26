@@ -1277,6 +1277,28 @@ def test_上一胎结案后再孕_从页面上建出新册且孕产次录得进�
     expect(row).to_contain_text("孕期管理")
 
 
+def test_医废收集从页面上登记带上产生点(page, base_url, admin_read, admin_call):
+    """P2-143：模型注释「产生点必填」，收集登记表单原先只有机构 ID、类别、重量、日期四格，从不送产生点——
+    页面上收的每一袋医废，扫码追溯到的「收集」一环来源都是空的。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E医废卫生院", "org_type": "township", "level": "township"})
+    source = admin_call("POST", "/api/medwaste/locations",
+                        {"org_id": org["id"], "name": "E2E外科病区", "location_type": "source"})
+
+    _login(page, base_url)
+    _open_page(page, "medwaste", "医废追溯")
+    page.select_option('#waste-form select[name="source_location_id"]', str(source["id"]))
+    page.select_option('#waste-form select[name="waste_type"]', "sharp")
+    page.fill('#waste-form input[name="weight_kg"]', "1.5")
+    page.fill('#waste-form input[name="collected_date"]', "2026-09-20")
+    _submit(page, "#waste-form button")
+
+    (waste,) = [w for w in admin_read(f"/api/medwaste?org_id={org['id']}") if w["org_id"] == org["id"]]
+    assert (waste["source_location_id"], waste["waste_type"], waste["weight_kg"]) == (source["id"], "sharp", 1.5)
+    timeline = admin_read(f"/api/medwaste/trace/{waste['trace_code']}")["timeline"]
+    assert timeline[0] == {"step": "收集", "at": "2026-09-20", "location": "E2E外科病区"}
+
+
 def test_停用考核公式先确认(page, base_url, admin_read, admin_call):
     """P2-43：「停用」考核公式原先点一下就停用，停用的公式页面上没有启用入口。"""
     key = "e2e_p243_formula"

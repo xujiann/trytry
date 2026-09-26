@@ -950,15 +950,20 @@ async function renderMedwaste() {
   // 暂存间按机构分组：入暂存只能选本机构的暂存间（后端 422 拦跨机构）
   const storageOf = (orgId) => locations.filter((l) =>
     l.active && l.location_type === "storage" && l.org_id === orgId);
+  // 产生点必填（模型注释「产生点必填」）：收集登记原先不送产生点，页面上收的每一袋医废追溯到的来源都是空的。
+  // 机构取所选产生点的机构——后端本就要求点位属于该机构，再手输一遍只会多一种填错的方式
+  const sources = locations.filter((l) => l.active && l.location_type === "source");
   $("#page-body").innerHTML = `
     ${panel("收集登记", `
       <form class="inline" id="waste-form">
-        <input name="org_id" type="number" placeholder="机构ID" required>
+        <select name="source_location_id" required><option value="">产生点（科室 / 病区）</option>${sources.map((l) =>
+          `<option value="${l.id}">${esc(l.name)}（机构${l.org_id}）</option>`).join("")}</select>
         <select name="waste_type">${Object.entries(WT).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
         <input name="weight_kg" type="number" step="any" placeholder="重量(kg)" required>
         <input name="collected_date" placeholder="收集日期 YYYY-MM-DD" required>
         <button>登记</button>
-      </form><p class="msg" id="waste-msg"></p>`)}
+      </form><p class="msg" id="waste-msg"></p>
+      ${sources.length ? "" : '<p class="desc">还没有在用的产生点：先在下方「点位台账」建一个产生点再登记收集</p>'}`)}
     ${alerts.length ? panel(`⚠ 滞留预警（${alerts.length}）`, `<p class="desc">收集超过2天仍未交接</p>`) : ""}
     ${panel("", `
       <form class="inline" id="trace-form">
@@ -997,9 +1002,11 @@ async function renderMedwaste() {
   $("#waste-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
+    const source = sources.find((l) => l.id === Number(f.get("source_location_id")));
+    if (!source) return setMsg("#waste-msg", "请选择产生点", false);
     try {
       await api("/api/medwaste", { method: "POST", body: JSON.stringify({
-        org_id: Number(f.get("org_id")), waste_type: f.get("waste_type"),
+        org_id: source.org_id, source_location_id: source.id, waste_type: f.get("waste_type"),
         weight_kg: Number(f.get("weight_kg")), collected_date: f.get("collected_date") }) });
       route();
     } catch (err) { setMsg("#waste-msg", err.message, false); }
