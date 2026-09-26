@@ -120,6 +120,12 @@ class SpecimenStatsOut(BaseModel):
 
 
 def _cold_ischemia_minutes(specimen: PathologySpecimen) -> int | None:
+    """冷缺血整分钟数（向下取整，逐条回显用）；判「超 60 分钟」与算均值用 `_cold_ischemia_seconds`。"""
+    seconds = _cold_ischemia_seconds(specimen)
+    return None if seconds is None else int(seconds // 60)
+
+
+def _cold_ischemia_seconds(specimen: PathologySpecimen) -> float | None:
     """冷缺血时间（离体到固定），病理质控的核心指标。
 
     任一时间未填即返回 None——**不拿当前时间凑数**。填不全就是没采集到，
@@ -134,7 +140,7 @@ def _cold_ischemia_minutes(specimen: PathologySpecimen) -> int | None:
         fixed = datetime.fromisoformat(specimen.fixed_at)
     except ValueError:
         return None
-    delta = int((fixed - excised).total_seconds() // 60)
+    delta = (fixed - excised).total_seconds()
     return delta if delta >= 0 else None
 
 
@@ -288,7 +294,8 @@ def specimen_stats(db: Session = Depends(get_db)):
     total = sum(by_status.values())
     rejected = by_status.get("rejected", 0)
     rows = db.query(PathologySpecimen).all()
-    minutes = [m for m in (_cold_ischemia_minutes(s) for s in rows) if m is not None]
+    # 按秒判、按秒平均（P2-133）：原先先截成整分钟再比 `> 60`，离体到固定 60 分 50 秒记 60、不算超时；均值也偏低
+    seconds = [x for x in (_cold_ischemia_seconds(s) for s in rows) if x is not None]
     return {
         "total": total,
         "by_status": {
@@ -297,11 +304,11 @@ def specimen_stats(db: Session = Depends(get_db)):
         "rejected": rejected,
         "reject_rate_pct": round(rejected * 100 / total, 2) if total else None,
         "cold_ischemia": {
-            "measured": len(minutes),
+            "measured": len(seconds),
             # 时间没填全的单列，不拿当前时间凑数
-            "unmeasured": total - len(minutes),
-            "avg_minutes": round(sum(minutes) / len(minutes), 1) if minutes else None,
-            "over_60min": len([m for m in minutes if m > 60]),
+            "unmeasured": total - len(seconds),
+            "avg_minutes": round(sum(seconds) / 60 / len(seconds), 1) if seconds else None,
+            "over_60min": len([x for x in seconds if x > 3600]),
         },
         "reject_reason_options": REJECT_REASONS,
         "caliber": "冷缺血时间＝离体到固定；离体或固定时间未填的不参与均值，"
