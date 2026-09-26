@@ -271,7 +271,11 @@ def create_consent(
         if encounter.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="告知书的患者与关联的就诊不是同一人")
 
-    title, content, version = body.title, body.content, ""
+    # 纯空白的标题 / 正文当没给（P2-248）：两个字段可选（用模板时不给），挡不了空白的只能在这里判——原先「   」
+    # 过了下面「须自带标题与正文」那一句，存进一张空白告知书让患者签；用模板时空白标题还顶掉了模板的标题
+    title = body.title if body.title.strip() else ""
+    content = body.content if body.content.strip() else ""
+    version = ""
     if body.template_id is not None:
         template = db.get(ConsentTemplate, body.template_id)
         if template is None:
