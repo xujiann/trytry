@@ -54,13 +54,16 @@ def spd_report_push(db: Session) -> tuple[int, str]:
     不靠"现在是不是正好那一分钟"。
     """
 
-    from ..clock import now_naive
+    from ..clock import now_local, now_naive
     from .models import SpdReportInstance, SpdReportTask, SpdReportTemplate
     from .platform import Organization, User, notify_user
     from .reporting import compose_section, default_period_label
 
     now = now_naive()
     today = clock.today().isoformat()
+    # 推送时点（「08:00」）是人填的本地钟点，与本地时刻比（P2-215）；原先与 UTC 比，东八区要到下午 4 点才过「08:00」。
+    # 落库的 last_run_at 仍记 UTC（DateTime 列一律 naive UTC）
+    local_hhmm = now_local().strftime("%H:%M")
     generated = 0
     tasks = (
         db.query(SpdReportTask)
@@ -74,7 +77,7 @@ def spd_report_push(db: Session) -> tuple[int, str]:
         if task.valid_to and today > task.valid_to:
             continue
         push_time = task.push_time or "08:00"
-        if now.strftime("%H:%M") < push_time:
+        if local_hhmm < push_time:
             continue  # 今天还没到推送时点
         template = db.get(SpdReportTemplate, task.template_id)
         if template is None or not template.active:
@@ -135,11 +138,13 @@ def spd_edu_push_dispatch(db: Session) -> tuple[int, str]:
     与立即推送共用 `dispatch_edu_push`——同一个动作只有一份实现，
     失败置 failed 并可回溯，不静默置 sent。
     """
-    from ..clock import now_naive
+    from ..clock import now_local
     from .models import SpdEduMaterial, SpdEduPush
     from .routers.care import dispatch_edu_push
 
-    cutoff = now_naive().strftime("%Y-%m-%d %H:%M:%S")
+    # 到点与否按本地时刻比（P2-215）：`send_at` 是页面上 datetime-local 手填的本地时间，原先拿 UTC 去比，
+    # 东八区约好晚上 8 点推的宣教，要到次日凌晨 4 点才发出去
+    cutoff = now_local().strftime("%Y-%m-%d %H:%M:%S")
     due = (
         db.query(SpdEduPush)
         # 按字符串比较到点：`T` 写法先换成空格再比——同一天里 `T` 排在空格之后，原先晚到第二天零点（P1-100）

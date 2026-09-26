@@ -1035,7 +1035,9 @@ def push_education(
     for patient_id in patient_ids:
         push = SpdEduPush(
             material_id=body.material_id, patient_id=patient_id, channel=body.channel,
-            send_at=body.send_at or now_naive().strftime("%Y-%m-%d %H:%M:%S"),
+            # 发送时点是给人看的本地时间：定时推送由页面上的 datetime-local 手填（本地），立即推送缺省也记本地时刻
+            # （P2-215，`clock.now_local` 就是给「记录时间默认值」用的）——原先记 UTC，10 点推的在清单上印「02:00」
+            send_at=body.send_at or clock.now_local().strftime("%Y-%m-%d %H:%M:%S"),
             frequency=body.frequency, status="pending", operator_id=user.id,
         )
         db.add(push)

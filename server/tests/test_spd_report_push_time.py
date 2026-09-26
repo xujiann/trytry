@@ -48,6 +48,8 @@ def test_合法时点到点即推(client, admin, template, monkeypatch):
     task = client.post(f"{B}/report-tasks", headers=admin,
                        json={"template_id": template, "name": "八点推送", "push_time": "08:00"})
     assert task.status_code == 201, task.text
+    # 推送时点按本地钟点比（P2-215），拨 now_local；last_run_at 仍取 now_naive（UTC 落库），一并拨
+    monkeypatch.setattr(clock, "now_local", lambda: datetime.combine(clock.today(), time(9, 0)))
     monkeypatch.setattr(clock, "now_naive", lambda: datetime.combine(clock.today(), time(9, 0)))
     with SessionLocal() as db:
         spd_report_push(db)

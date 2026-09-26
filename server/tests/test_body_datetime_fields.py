@@ -100,6 +100,8 @@ def _push_status(patient_id):
 
 
 def _dispatch_at(monkeypatch, moment: str):
+    # 派发按本地时刻比 send_at（手填的本地时间，P2-215），拨的是 now_local；now_naive 一并拨，免得别处取 UTC 时对不上
+    monkeypatch.setattr(clock, "now_local", lambda: datetime.fromisoformat(moment))
     monkeypatch.setattr(clock, "now_naive", lambda: datetime.fromisoformat(moment))
     db = SessionLocal()
     try:
