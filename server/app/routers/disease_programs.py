@@ -19,7 +19,7 @@ from .. import clock
 from ..concurrency import insert_or_conflict
 from ..datetypes import OptionalDateStr
 from ..texttypes import NON_BLANK
-from ..visibility import assert_org_writable, scope_patient_list
+from ..visibility import assert_org_writable, assert_patient_visible, scope_patient_list
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, resolve_org_scope
 from ..models import (
@@ -359,8 +359,18 @@ def exit_enrollment(
 
 
 @router.get("/enrollments/{enrollment_id}", response_model=DiseaseEnrollmentOut)
-def get_enrollment(enrollment_id: int, db: Session = Depends(get_db)):
-    return _enrollment_out(_enrollment(db, enrollment_id), db)
+def get_enrollment(
+    enrollment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """入组明细（病种、在管 / 出组、疗效、每个节点的执行记录）。
+
+    按患者可见性判并留痕，与同文件清单带 `patient_id` 时同一句（`scope_patient_list`）。原先按入组号直取、连调用方都
+    不收：一家与患者毫无关系的机构按号就翻得到别家患者进了哪个专病、疗效如何、每一步谁做的（P0-45）。本机构入组本身
+    就是一条服务关系，从清单点进来的一律看得到。
+    """
+    enrollment = _enrollment(db, enrollment_id)
+    assert_patient_visible(db, user, enrollment.patient_id, resource="disease_program")
+    return _enrollment_out(enrollment, db)
 
 
 @router.get("/{program_id}/stats", response_model=ProgramStatsOut)

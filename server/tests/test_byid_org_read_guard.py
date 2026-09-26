@@ -56,7 +56,6 @@ BY_DESIGN = {
 
 #: 真正要守的是患者数据，已在别的欠账名单里：`文件:函数` → `模块.名单`。
 ELSEWHERE = {
-    "disease_programs.py:get_enrollment": "test_stage15_horizontal.NEWLY_VISIBLE_UNGUARDED_READS",
     "disease_programs.py:program_stats": "test_unscopable_patient_reads.UNSCOPABLE_PATIENT_READS",
     "pharmacy.py:batch_dispense_trace": "test_list_pagination_ratchet.HELD_PENDING_SCOPE_DECISION",
 }
