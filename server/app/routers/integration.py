@@ -804,13 +804,15 @@ def _do_hl7v2_oru(body: Hl7Message, db: Session, event: str, source_system: str)
     if pid is not None:
         id_card = _hl7_field(pid, 3).split("^")[0].strip()
         if id_card:
-            patient = (
-                db.query(Patient)
-                .filter(id_card_match(id_card))   # 证件号两种写法都认（P1-114）
-                .order_by(Patient.id)
+            # 核的是**申请单患者本人**的证件号（两种写法都认，P1-114）。原先是「平台上另有一位持这个证件号的患者才拒收」：
+            # 证件号不属于平台上任何人（院内自建档、没进平台的患者）的结果照样写进申请单患者名下——别人的检验结果、
+            # 连同危急值闭环一起落到这位患者身上（P2-154）
+            owns = (
+                db.query(Patient.id)
+                .filter(Patient.id == request.patient_id, id_card_match(id_card))
                 .first()
             )
-            if patient is not None and patient.id != request.patient_id:
+            if owns is None:
                 raise HTTPException(status_code=422, detail="PID 患者与申请单患者不一致，结果拒收")
 
     lines: list[str] = []
