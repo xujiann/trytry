@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..concurrency import serialized_on, upsert_unique
 from ..numtypes import MONEY_MAX, MoneyFloat
-from ..visibility import assert_org_visible, scope_org_list
+from ..visibility import assert_org_visible, scope_org_list, scope_stats_orgs
 from ..database import get_db
 from ..datetypes import PeriodStr
 from ..deps import get_current_user, month_bounds, require_roles
@@ -277,6 +277,13 @@ def department_cost_summary(
     query = db.query(DepartmentCost).filter(DepartmentCost.period == period)
     if org_id is not None:
         query = query.filter(DepartmentCost.org_id == org_id)
+    else:
+        # 不带机构号收进统计可见范围（P1-172，与试算平衡表 P1-155 同一处境）：`assert_org_visible` 对 None
+        # 直接放行，原先不带机构号就出全县各院的科室成本——一家与谁都不挨着的卫生院医生照样读到县医院的
+        # 科室直接成本、成本构成与分摊
+        scope = scope_stats_orgs(db, user, None)
+        if scope is not None:
+            query = query.filter(DepartmentCost.org_id.in_(scope))
     costs = query.all()
 
     depts = {d.id: d for d in db.query(Department).all()}
