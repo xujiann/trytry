@@ -1241,9 +1241,13 @@ async function renderVaccination() {
       <div id="vac-check-result"></div>`)}
     ${panel("接种登记 / 禁忌登记", `
       <form class="inline" id="vac-form">
+        <select name="batch_id" id="vac-batch"><option value="">疫苗批次（选了就查效期 / 封存 / 库存并扣减一支）</option></select>
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="vaccine_code" placeholder="疫苗编码" required>
         <input name="vaccine_name" placeholder="疫苗名称" required><input name="dose_no" type="number" value="1" min="1" style="min-width:60px">
-        <input name="vaccinated_date" placeholder="接种日期"><input name="org_id" type="number" placeholder="接种机构ID" required><button>登记接种</button></form>
+        <input name="vaccinated_date" placeholder="接种日期"><input name="org_id" type="number" placeholder="接种机构ID" required>
+        <input name="site" placeholder="接种部位"><input name="vaccinator" placeholder="接种人"><button>登记接种</button></form>
+      <p class="desc">新接种一律建议选批次：出了问题按批号召回、查受种者时，没挂批次的这一针查不出来。
+        下拉只列可用的批次（未过期、未封存、尚有余量），选了自动带出疫苗编码、名称与接种机构。</p>
       <form class="inline" id="contra-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="vaccine_code" placeholder="疫苗编码" required>
         <input name="reason" placeholder="禁忌原因" required>
@@ -1264,7 +1268,18 @@ async function renderVaccination() {
       ? `<p class="msg ok">可以接种，本次为第 ${r.next_dose_no} 剂</p>`
       : `<p class="msg err">禁止接种：${esc(r.contraindications.join("；"))}</p>`;
   };
-  $("#vac-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/records", formJson(e.target, ["patient_id", "dose_no", "org_id"]), "#vac-msg"); };
+  // 批次要送（P1-154）：原先表单没有批次，接种登记的「批次三查」（过期 / 封存 / 库存）从界面上一次都不执行——
+  // 封存的批次照样打、库存不扣，这一针也挂不到批号上，按批号召回与 AEFI 追踪都查不到这个孩子
+  $("#vac-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/records", formJson(e.target, ["patient_id", "dose_no", "org_id", "batch_id"]), "#vac-msg"); };
+  let usableBatches = [];
+  $("#vac-batch").onchange = (e) => {
+    const b = usableBatches.find((x) => String(x.id) === e.target.value);
+    if (!b) return;
+    const form = $("#vac-form");
+    form.vaccine_code.value = b.vaccine_code;
+    form.vaccine_name.value = b.vaccine_name;
+    form.org_id.value = b.org_id;
+  };
   $("#contra-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/vaccination/contraindications", formJson(e.target, ["patient_id"]), "#vac-msg"); };
   const drawContras = async (pid) => {
     const rows = await api(`/api/vaccination/contraindications?patient_id=${pid}`);
@@ -1297,6 +1312,11 @@ async function renderVaccination() {
     try { await openPrintPage(`/api/print/vaccinations/${id}`); }
     catch (err) { setMsg("#vac-msg", err.message, false); }
   };
+  // 取数放最后：监听已与 innerHTML 同一同步块挂好（P2-31 根修的写法）
+  usableBatches = await api("/api/vaccine-supply/batches?usable_only=true").catch(() => []);
+  $("#vac-batch").innerHTML = `<option value="">疫苗批次（选了就查效期 / 封存 / 库存并扣减一支）</option>` +
+    usableBatches.map((b) => `<option value="${b.id}">${esc(b.vaccine_name)} · 批号 ${esc(b.batch_no)} · 机构 ${b.org_id}` +
+      ` · 余 ${b.remaining} 支 · 效期 ${esc(b.expire_date)}</option>`).join("");
 }
 
 

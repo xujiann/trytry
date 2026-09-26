@@ -3776,3 +3776,46 @@ def test_药房批次台账按批号查到那一批_召回回执报召回前的�
     page.click(f'button[data-recall="{target}"]')
     _spd_modal(page, {"reason": "E2E 厂家召回"})
     expect(page.locator("#batch-msg")).to_contain_text("退出可用汇总 7 → 0")
+
+
+@pytest.fixture(scope="module")
+def vaccine_seed(base_url, seed):
+    """一个可用的疫苗批次：接种登记从下拉里选它（P1-154）。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    return post("/api/vaccine-supply/batches", {
+        "vaccine_code": "E2E-HEPB", "vaccine_name": "E2E乙肝疫苗", "batch_no": "E2E-HB-2409",
+        "expire_date": "2029-12-31", "org_id": seed["org"]["id"], "quantity": 10}, token)
+
+
+def test_接种登记从下拉选批次_带出疫苗与机构_登记即扣一支(page, base_url, seed, vaccine_seed, admin_read):
+    """P1-154：接种登记表单原先没有批次，「批次三查」（过期 / 封存 / 库存）从界面上一次都不执行，
+    这一针也挂不到批号上。现在从可用批次里选，选了带出疫苗编码、名称与接种机构。"""
+    _login(page, base_url)
+    _open_page(page, "vaccination", "疫苗接种")
+    form = page.locator("#vac-form")
+    form.locator("#vac-batch").select_option(str(vaccine_seed["id"]))
+    expect(form.locator('[name="vaccine_code"]')).to_have_value("E2E-HEPB")
+    expect(form.locator('[name="vaccine_name"]')).to_have_value("E2E乙肝疫苗")
+    expect(form.locator('[name="org_id"]')).to_have_value(str(seed["org"]["id"]))
+    form.locator('[name="patient_id"]').fill(str(seed["patient"]["id"]))
+    form.locator('[name="site"]').fill("左上臂三角肌")
+    form.locator('[name="vaccinator"]').fill("E2E接种员")
+    _redrawn(page, lambda: form.locator("button").click())
+    records = admin_read(f"/api/vaccination/records?patient_id={seed['patient']['id']}")
+    mine = [r for r in records if r["vaccine_code"] == "E2E-HEPB"]
+    assert [(r["batch_no"], r["site"], r["vaccinator"]) for r in mine] == [("E2E-HB-2409", "左上臂三角肌", "E2E接种员")]
+    batch = next(b for b in admin_read("/api/vaccine-supply/batches?vaccine_code=E2E-HEPB") if b["id"] == vaccine_seed["id"])
+    assert (batch["used_quantity"], batch["remaining"]) == (1, 9)            # 修前库存不扣
