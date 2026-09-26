@@ -149,6 +149,121 @@ def test_判据自证_扫描面覆盖三端():
     assert total >= 300, total
 
 
+# ================================================================ 计数字典的键原样上页（P2-316）
+#: 零基线。2026-09-26 实测（修前 b5aa971）：遍历响应里的计数字典、把键原样印上页面的 13 处——改 3（慢专病数据源监控
+#: 「running 3，failed 1」、统一申请单计数卡「exam 4」、统一资源视图计数卡「or_room 1/2」），按设计 10。
+#: 上面那道闸门只认 `x.status` 这种属性插值，`Object.entries(x.by_status).map(([k, v]) => esc(k))` 它看不见。
+KEY_BASELINE = 0
+
+#: 按设计原样显示键的（`(文件, 字典)` → 理由）。**只减不增**；每条只抵一处。
+KEY_BY_DESIGN = {
+    ("core.js", "m.chronic_management.by_level"): "慢病管理分级：键是级别数字（1 / 2 / 3），页面拼成「1 级」",
+    ("pages-clinical.js", "stats.by_care_level"): "老年失能等级：后端已用中文等级名作键（`eldercare` 出参注释）",
+    ("pages-clinical.js", "stats.rejected_by_reason"):
+        "病理拒收原因：键是登记时选的中文原因原文（后端 `REJECT_REASONS` 的选项）",
+    ("pages-mgmt.js", "s.by_incision"): "手术切口等级：键是 I / II / III / IV，页面拼成「II类」——临床通行写法",
+    ("pages-mgmt.js", "catalog.by_source"):
+        "全平台规则总目录：键是规则引擎的模块标识，与同表「来源」「执行引擎」两列同一套标识——"
+        "给实施核对规则散在哪几套引擎里（CLAUDE.md §5），不是业务码",
+    ("pages-mgmt.js", "stats.by_status_class"): "运行监控：键是 HTTP 状态类（2xx / 4xx / 5xx），不是业务状态",
+    ("pages-spd.js", "wb.by_level"): "县乡村三级服务能力：后端已按层级译成中文名作键（`workbench` 的 `level_names`）",
+    ("pages-spd.js", "r.facts"):
+        "转诊规则试算的事实快照：键是规则字段编码，与同一面板「命中条件」列的条件原文同一套编码，给配规则的人对照",
+    ("pages-spd.js", "a.distribution"): "考核得分分布：键是分数段（如 90-100），不是码",
+    ("pages-spd.js", "region.age_distribution"): "年龄结构：键是年龄段（0-17 / 18-44 / … / 未知），不是码",
+}
+
+#: 遍历**响应里的**字典：点号取属性（`x.by_status` / `x.y.by_level`，可带 `|| {}` 兜底）——前端自己的文案表
+#: 与局部变量是裸标识符，不在此列
+_ENTRIES = re.compile(
+    r"(barChart\(\s*)?Object\.entries\(\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*(?:\|\|\s*\{\s*\})?\s*\)")
+#: 紧跟着的回调把键解构出来：`([k, v]) =>`（`.map(` 里的，或 `table(…, Object.entries(x), ([k, v]) => …)` 的）
+_KEY_CALLBACK = re.compile(r"\s*(?:\)?\s*\.map\(|,)\s*\(\[\s*([A-Za-z_$][\w$]*)\s*(?:,\s*[A-Za-z_$][\w$]*\s*)?\]\)\s*=>")
+#: 回调体取到 `.join(` / 下一个 `Object.entries(` / 400 字为止（够盖住一行卡片或一行表格）
+_BODY_END = re.compile(r"\.join\(|Object\.entries\(")
+
+
+def raw_key_displays(files=None) -> list[tuple[str, str, int]]:
+    """`(文件, 字典, 行号)`：遍历响应里的字典、把键原样放进页面文字的位置。
+
+    原样 = 回调体里 `esc(k)` 或 `${k}`（属性值里的不算）；`esc(NAMES[k] || k)`、`statusTag(MAP, k)`、
+    `esc(x.status_names[k])` 这类查了表的放过。直接把 `Object.entries(x.y)` 喂给 `barChart` 的，键就是图上的标签，同样算。
+    """
+    found = []
+    for path in files if files is not None else sorted(STATIC.rglob("*.js")):
+        label = path.relative_to(STATIC).as_posix() if path.is_relative_to(STATIC) else path.name
+        text = _strip_comments(path.read_text(encoding="utf-8"))
+        for m in _ENTRIES.finditer(text):
+            lineno = text.count("\n", 0, m.start()) + 1
+            if m.group(1):
+                found.append((label, m.group(2), lineno))
+                continue
+            cb = _KEY_CALLBACK.match(text, m.end())
+            if not cb:
+                continue
+            rest = text[cb.end():cb.end() + 400]
+            end = _BODY_END.search(rest)
+            body = ATTR_VALUE.sub('""', rest[:end.start()] if end else rest)
+            key = re.escape(cb.group(1))
+            if re.search(rf"esc\(\s*{key}\s*\)|\$\{{\s*{key}\s*\}}", body):
+                found.append((label, m.group(2), lineno))
+    return found
+
+
+def _keys_minus_by_design(found):
+    budget = Counter(KEY_BY_DESIGN.keys())
+    rest = []
+    for label, owner, lineno in found:
+        if budget[(label, owner)] > 0:
+            budget[(label, owner)] -= 1
+        else:
+            rest.append(f"{label}:{lineno}: Object.entries({owner})")
+    return rest
+
+
+def test_计数字典的键不原样上页():
+    bad = _keys_minus_by_design(raw_key_displays())
+    assert len(bad) <= KEY_BASELINE, (
+        "这些地方把响应里计数字典的键（后端的码）原样显示给用户（§13 第 7 项：状态文案取自后端）：\n  " + "\n  ".join(bad)
+        + "\n\n值是对象的，每项补 `name`；值是件数的，出参另给一张同键的中文名表（如 `status_names`），页面显示它。"
+        "键本来就是中文 / 数字 / 技术标识的，进 KEY_BY_DESIGN 写明理由。"
+    )
+
+
+def test_计数字典按设计名单只减不增():
+    present = Counter((label, owner) for label, owner, _ in raw_key_displays())
+    stale = sorted(f"{label}: {owner}" for label, owner in KEY_BY_DESIGN if present[(label, owner)] == 0)
+    assert stale == [], "这些已经改掉或挪走了，请从 KEY_BY_DESIGN 划掉：\n  " + "\n  ".join(stale)
+
+
+def test_判据自证_计数字典的键(tmp_path):
+    probe = tmp_path / "probe.js"
+    probe.write_text(
+        # 应命中的：卡片、表格回调、|| {} 兜底、直接喂给图
+        "a = `${Object.entries(dsm.by_status || {}).map(([k, v]) => `${esc(k)} ${v}`).join(\"，\")}`;\n"
+        "b = table([\"层级\"], Object.entries(wb.by_level), ([level, v]) => `<tr><td>${esc(level)}</td></tr>`);\n"
+        "c = `${Object.entries(s.by_incision).map(([k, v]) => `${k}类:${v}`).join(\" \")}`;\n"
+        "d = barChart(Object.entries(stats.by_care_level), { unit: \" 人\" });\n"
+        # 应放过的：查了表、后端给的名字、属性值、前端自己的表、局部变量、注释
+        "e = `${Object.entries(x.by_status).map(([k, v]) => `${esc(x.status_names[k])} ${v}`).join(\"\")}`;\n"
+        "f = `${Object.entries(y.by_anesthesia).map(([k, v]) => `${esc(ANESTHESIA[k] || k)}:${v}`).join(\" \")}`;\n"
+        "g = `${Object.entries(z.by_status).map(([code, n]) => `<td>${statusTag(CS, code)}</td>`).join(\"\")}`;\n"
+        "h = `${Object.entries(SPD_DS_TYPES).map(([k, v]) => `<option value=\"${k}\">${esc(v)}</option>`).join(\"\")}`;\n"
+        "i = `${Object.entries(q.by_type).map(([k, v]) => `<b data-k=\"${k}\">${v}</b>`).join(\"\")}`;\n"
+        "j = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join(\"&\");\n"
+        "// k = `${Object.entries(r.by_status).map(([k, v]) => esc(k)).join(\"\")}`;\n",
+        encoding="utf-8",
+    )
+    hits = [(owner, lineno) for _, owner, lineno in raw_key_displays([probe])]
+    assert hits == [("dsm.by_status", 1), ("wb.by_level", 2), ("s.by_incision", 3), ("stats.by_care_level", 4)], hits
+
+
+def test_判据自证_计数字典扫描面():
+    """防空转：认不出任何「遍历响应字典」时闸门会空转成绿——三端源码里这种遍历得扫得到一把。"""
+    total = sum(len(_ENTRIES.findall(_strip_comments(p.read_text(encoding="utf-8")))) for p in STATIC.rglob("*.js"))
+    assert total >= 20, total   # 2026-09-26 实测 26
+
+
 # ================================================================ 报错文案不直接拼状态码（P2-74 ①）
 APP = STATIC.parent
 
@@ -230,8 +345,8 @@ def _label_tables():
                             TcmDispenseOrder, TcmPreparationBatch, TrainingEnrollment, TrainingPlan, VisitCredential,
                             Voucher, WorkflowInstance)
     from app.models import AccountSubject, ChargeItem, Course, Department, OfficialDoc, Organization, SimulationCase
-    from app.models import (Encounter, SpdAssessPlan, SpdEduMaterial, SpdGroup, SpdMeasurement, SpdPathNode,
-                            SpdScreening, SpdTag, SpdTeam)
+    from app.models import (Encounter, SpdAssessPlan, SpdDataSource, SpdEduMaterial, SpdGroup, SpdMeasurement,
+                            SpdPathNode, SpdScreening, SpdTag, SpdTeam)
     from app.spd import service
     from app.spd.routers import assess, population
     from app.routers import (accounting, admin_mgmt, appointments, billing, consents, consultations, credentials, cssd,
@@ -239,7 +354,7 @@ def _label_tables():
                              medication, medwaste, organizations, pathology, prescriptions, quality, referrals,
                              surgery, tcm, tcm_heritage, telemedicine, workflows)
     from app.spd.routers import followup, workbench
-    from app.spd.routers.config import paths, scales
+    from app.spd.routers.config import devices, paths, scales
 
     # (文案表, 模型, 列, 按设计不进表的码)
     return {
@@ -315,6 +430,8 @@ def _label_tables():
         "assess.ASSESS_LEVEL_NAMES": (assess.ASSESS_LEVEL_NAMES, SpdAssessPlan, "level", set()),
         "assess.PERIOD_TYPE_NAMES": (assess.PERIOD_TYPE_NAMES, SpdAssessPlan, "period_type", set()),
         "followup.ENCOUNTER_TYPE_NAMES": (followup.ENCOUNTER_TYPE_NAMES, Encounter, "encounter_type", set()),
+        # P2-316：数据源监控的计数也用它（P2-174 起数据源清单已在用）
+        "devices.DATA_SOURCE_STATUS_NAMES": (devices.DATA_SOURCE_STATUS_NAMES, SpdDataSource, "status", set()),
     }
 
 
@@ -340,7 +457,7 @@ LABEL_TABLE_NAMES = [
     "service.MEASUREMENT_SOURCE_NAMES", "service.MEDIA_TYPE_NAMES", "scales.TAG_CATEGORY_NAMES",
     "population.SCREENING_SOURCE_NAMES", "population.GROUP_SCOPE_NAMES", "workbench.TEAM_LEVEL_NAMES",
     "paths.NODE_SERVICE_TYPE_NAMES", "assess.ASSESS_LEVEL_NAMES", "assess.PERIOD_TYPE_NAMES",
-    "followup.ENCOUNTER_TYPE_NAMES",
+    "followup.ENCOUNTER_TYPE_NAMES", "devices.DATA_SOURCE_STATUS_NAMES",
 ]
 
 
@@ -422,3 +539,41 @@ def test_课程_公文_更正申请带类别文案(client, admin):
     assert req.json()["request_type_name"] == "档案注销"
     pending = client.get("/api/consents/corrections", headers=admin, params={"status": "pending"}).json()
     assert [r["request_type_name"] for r in pending if r["id"] == req.json()["id"]] == ["档案注销"]
+
+
+def test_计数字典带中文名_数据源监控_统一申请单_统一资源视图(client, admin):
+    """P2-316：三处计数字典的键原先原样上页——「running 3，stopped 1」「exam 1」「general 0/1」。"""
+    from app.database import SessionLocal
+    from app.models import Consultation, ExamRequest, User
+
+    for code, status in (("P2316_A", None), ("P2316_B", "stopped")):
+        created = client.post("/api/spd/data-sources", headers=admin,
+                              json={"code": code, "name": f"P2316 {code}", "source_type": "HIS"})
+        assert created.status_code == 201, created.text
+        if status:
+            patched = client.patch(f"/api/spd/data-sources/{created.json()['id']}", headers=admin, json={"status": status})
+            assert patched.status_code == 200, patched.text
+    monitor = client.get("/api/spd/data-sources-monitor", headers=admin).json()
+    assert set(monitor["status_names"]) == set(monitor["by_status"])   # 修前没有 status_names
+    assert (monitor["status_names"]["running"], monitor["status_names"]["stopped"]) == ("正常", "停用")
+
+    org = client.post("/api/organizations", headers=admin, json={
+        "name": "P2316 卫生院", "org_type": "township", "level": "township"}).json()["id"]
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "P2316 患者", "id_card": "330106196606062316"}).json()["id"]
+    with SessionLocal() as db:
+        operator = db.query(User).filter(User.username == "admin").one().id
+        db.add_all([ExamRequest(patient_id=patient, from_org_id=org, center_type="lab", item_code="P2316",
+                                item_name="血常规", status="pending", created_by=operator),
+                    Consultation(patient_id=patient, from_org_id=org, to_org_id=org, question="P2316 会诊",
+                                 created_by=operator)])
+        db.commit()
+    unified = client.get(f"/api/service-requests?patient_id={patient}", headers=admin).json()
+    assert unified["by_type"] == {"exam": 1, "consultation": 1}
+    assert unified["type_names"] == {"exam": "检查申请", "consultation": "会诊申请"}   # 修前没有 type_names
+
+    resource = client.post("/api/resources", headers=admin, json={
+        "org_id": org, "resource_type": "meeting_room", "code": "P2316_R", "name": "P2316 会议室"})
+    assert resource.status_code == 201, resource.text
+    catalog = client.get(f"/api/resources/catalog?org_id={org}", headers=admin).json()
+    assert catalog["by_kind"] == {"general": {"total": 1, "usable": 0, "name": "通用资源"}}   # 修前没有 name

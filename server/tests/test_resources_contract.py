@@ -210,13 +210,14 @@ def test_统一视图五类精确形状与键序(client, admin, org, seeded_reso
         assert list(item.keys()) == CATALOG_ITEM_KEY_ORDER
     assert body == {
         "total": 6,
-        # 键序 = 五类固定的聚合顺序（slot → exam → or_room → blood → general）
+        # 键序 = 五类固定的聚合顺序（slot → exam → or_room → blood → general）；
+        # name 是 P2-316 补的中文名（页面计数卡原先把键原样印成「or_room 1/1」）
         "by_kind": {
-            "slot": {"total": 1, "usable": 1},
-            "exam": {"total": 1, "usable": 1},
-            "or_room": {"total": 1, "usable": 1},
-            "blood": {"total": 1, "usable": 1},
-            "general": {"total": 2, "usable": 1},
+            "slot": {"total": 1, "usable": 1, "name": "号源"},
+            "exam": {"total": 1, "usable": 1, "name": "检查资源"},
+            "or_room": {"total": 1, "usable": 1, "name": "手术间"},
+            "blood": {"total": 1, "usable": 1, "name": "血制品"},
+            "general": {"total": 2, "usable": 1, "name": "通用资源"},
         },
         "items": [
             {"kind": "slot", "kind_name": "号源", "id": domain_resources["slot"]["id"],

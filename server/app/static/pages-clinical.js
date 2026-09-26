@@ -1937,8 +1937,8 @@ async function renderResources() {
   ]);
   $("#page-body").innerHTML = `
     <div class="cards">
-      ${Object.entries(catalog.by_kind).map(([k, v]) =>
-        `<div class="card"><div class="label">${esc(k)}</div>` +
+      ${Object.values(catalog.by_kind).map((v) =>
+        `<div class="card"><div class="label">${esc(v.name)}</div>` +
         `<div class="value">${v.usable}/${v.total}</div></div>`).join("")}
     </div>
     ${panel("通用资源登记", `

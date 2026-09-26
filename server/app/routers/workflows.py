@@ -183,6 +183,9 @@ class UnifiedRequestsOut(BaseModel):
     truncated: bool
     by_status: dict[str, int]
     by_type: dict[str, int]
+    #: `by_type` 同一组键的中文名（P2-316：页面原先把单据类型码原样印在计数卡上，「exam 4」；
+    #: `by_type` 的值是件数、塞不进名字，另给一张同键的表，措辞与明细行的 `request_type_name` 同一份）
+    type_names: dict[str, str]
     items: list[UnifiedRequestOut]
 
 
@@ -703,5 +706,6 @@ def unified_requests(
         "truncated": total > len(items),
         "by_status": dict(sorted(by_status.items(), key=lambda kv: (_UNIFIED_ORDER.get(kv[0], len(_UNIFIED_ORDER)), kv[0]))),
         "by_type": {kind: by_type[kind] for kind in STATUS_MAP if kind in by_type},
+        "type_names": {kind: TYPE_NAMES[kind] for kind in STATUS_MAP if kind in by_type},
         "items": items,
     }

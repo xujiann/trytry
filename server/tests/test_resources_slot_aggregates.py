@@ -45,7 +45,7 @@ def test_撮合的余量与候选机构不封顶在500个号源(client, admin, w
 def test_资源视图的号源只算今天及以后_计数不封顶(client, admin, world):
     body = client.get("/api/resources/catalog", headers=admin,
                       params={"org_id": world["busy"], "resource_kind": "slot"}).json()
-    assert body["by_kind"] == {"slot": {"total": 501, "usable": 501}}   # 修前 {total: 500, usable: 500}
+    assert body["by_kind"] == {"slot": {"total": 501, "usable": 501, "name": "号源"}}   # 修前 {total: 500, usable: 500}
     assert body["total"] == 501
     slots = body["items"]
     assert len(slots) == 500

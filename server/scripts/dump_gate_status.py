@@ -331,6 +331,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(statustext.BY_DESIGN), "tests/test_status_text_from_backend.py"),
         ("功能完善", "报错文案（HTTPException detail）里直接拼的状态码（48 → 0 已清零）", statustext.DETAIL_BASELINE,
          "tests/test_status_text_from_backend.py"),
+        ("功能完善", "页面上原样显示的计数字典键（响应里 by_status / by_type 这类字典的码；13 → 0：改 3、按设计 10）",
+         statustext.KEY_BASELINE, "tests/test_status_text_from_backend.py"),
+        ("功能完善", "按设计原样显示键的计数字典（键本就是中文 / 数字 / 分数段 / 技术标识，逐条写明理由）",
+         len(statustext.KEY_BY_DESIGN), "tests/test_status_text_from_backend.py"),
         ("功能完善", "免确认的破坏性操作（可逆，逐条写明怎么恢复）", len(destructive.EXEMPT),
          "tests/test_frontend_destructive_confirm_guard.py"),
     ]

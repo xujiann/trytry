@@ -466,7 +466,7 @@ async function renderSpdAdmin() {
       ${spdCards([["数据源", ds.total], ["异常", ds.failed, ds.failed > 0],
                   ["延迟", ds.delayed, ds.delayed > 0], ["24h未同步", ds.stale_over_24h, ds.stale_over_24h > 0],
                   ["平均成功率", ds.avg_success_rate + "%"]])}
-      <p class="desc">监控接口：${Object.entries(dsm.by_status || {}).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "无状态记录"}；
+      <p class="desc">监控接口：${Object.entries(dsm.by_status || {}).map(([k, v]) => `${esc(dsm.status_names[k])} ${v}`).join("，") || "无状态记录"}；
         陈旧 ${(dsm.stale_over_24h || []).length} 个，平均成功率 ${dsm.avg_success_rate}%</p>
       <form class="inline" id="spd-ds-form">
         <input name="code" placeholder="编码" required style="width:110px">

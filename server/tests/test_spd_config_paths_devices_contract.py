@@ -224,9 +224,11 @@ def test_数据源成功率是float且同步登记连带回快照(client, auth, 
 
 def test_接入总览的动态状态字典(client, auth):
     body = client.get(f"{B}/data-sources-monitor", headers=auth).json()
-    assert set(body) == {"total", "by_status", "stale_over_24h", "avg_success_rate"}
+    assert set(body) == {"total", "by_status", "status_names", "stale_over_24h", "avg_success_rate"}
     # by_status 只出现**实际存在**的状态，没有 failed 时不该硬塞 "failed": 0
     assert all(isinstance(v, int) for v in body["by_status"].values())
+    # status_names 与 by_status 同一组键（P2-316：页面照它显示，不再印英文码）
+    assert set(body["status_names"]) == set(body["by_status"])
     assert sum(body["by_status"].values()) == body["total"]
     assert isinstance(body["avg_success_rate"], float)
     assert all(set(s) == SOURCE_KEYS for s in body["stale_over_24h"])

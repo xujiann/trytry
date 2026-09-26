@@ -899,7 +899,7 @@ async function renderServiceRequests() {
   // 一行错误，连那个筛选框都没了，而 pid 存在 localStorage 里不会自己消失，
   // 于是这一页对这个用户每次进来都是同一行错误，连清空筛选都做不到。
   // 失败退化成"筛选那一段报错 + 空聚合"，页面本身照常渲染。
-  let data = { by_status: {}, by_type: {}, total: 0, items: [] };
+  let data = { by_status: {}, by_type: {}, type_names: {}, total: 0, items: [] };
   let pidError = "";
   try { data = await api(`/api/service-requests${pid ? `?patient_id=${pid}` : ""}`); }
   catch (err) { pidError = err.message; }
@@ -913,7 +913,7 @@ async function renderServiceRequests() {
         ${Object.entries(data.by_status).map(([k, v]) =>
           `<div class="card"><span class="k">${esc((UNIFIED_STATUS[k] || [k])[0])}</span><b>${v}</b></div>`).join("")}
         ${Object.entries(data.by_type).map(([k, v]) =>
-          `<div class="card"><span class="k">${esc(k)}</span><b>${v}</b></div>`).join("")}
+          `<div class="card"><span class="k">${esc(data.type_names[k])}</span><b>${v}</b></div>`).join("")}
       </div>
       <p class="desc">刻意不建第六张单据表：五类单据各有必要的领域字段与状态机，这里做的是聚合视图。</p>`)
     // total 是全部命中项，清单只列最新的 returned 条（P2-162）——截断了就明说，别让人拿清单行数当总数

@@ -84,10 +84,12 @@ class SyncLogOut(BaseModel):
 class DataSourceMonitorOut(BaseModel):
     """接入总览。`by_status` 的键是数据源状态（running/delayed/failed…），
     只出现在**实际存在**的状态上，故是 dict 而非固定字段——没有 failed 的时候
-    不该硬塞一个 `"failed": 0`。"""
+    不该硬塞一个 `"failed": 0`。`status_names` 是同一组键的中文名（P2-316：页面原先把键原样印成
+    「running 3，failed 1」；`by_status` 的值是件数、塞不进名字，另给一张同键的表）。"""
 
     total: int
     by_status: dict[str, int]
+    status_names: dict[str, str]
     stale_over_24h: list[DataSourceOut]
     avg_success_rate: float
 
@@ -336,6 +338,7 @@ def data_source_monitor(db: Session = Depends(get_db)):
     return {
         "total": len(sources),
         "by_status": summary,
+        "status_names": {code: DATA_SOURCE_STATUS_NAMES.get(code, code) for code in summary},
         "stale_over_24h": stale,
         "avg_success_rate": round(
             sum(s.success_rate for s in sources) / len(sources), 2

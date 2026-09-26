@@ -253,6 +253,8 @@ class CatalogItemOut(BaseModel):
 class CatalogKindStatOut(BaseModel):
     total: int
     usable: int
+    #: 这一类的中文名（P2-316：页面原先把键原样印在计数卡上，「slot 3/5」「or_room 1/2」）
+    name: str
 
 
 class ResourceCatalogOut(BaseModel):
@@ -260,6 +262,10 @@ class ResourceCatalogOut(BaseModel):
     by_kind: dict[str, CatalogKindStatOut]
     items: list[CatalogItemOut]
     caliber: str
+
+
+#: 统一视图的五类资源 → 中文名（计数卡与明细行共用；通用资源的明细行按登记类型细分，见下）
+CATALOG_KIND_NAMES = {"slot": "号源", "exam": "检查资源", "or_room": "手术间", "blood": "血制品", "general": "通用资源"}
 
 
 @router.get("/catalog", response_model=ResourceCatalogOut)
@@ -290,7 +296,7 @@ def resource_catalog(
         全县的号源一过 500 个，卡片上的「可用 / 总数」就封顶在 500 以内。"""
         total, n_usable = query.with_entities(func.count(), func.count(case((usable, 1)))).one()
         if total:
-            by_kind[kind] = {"total": total, "usable": n_usable}
+            by_kind[kind] = {"total": total, "usable": n_usable, "name": CATALOG_KIND_NAMES[kind]}
 
     if resource_kind in (None, "slot"):
         # 号源只算今天及以后的、按日期时间取最近的（P2-164）：原先不看日期、按编号升序取最早建的 500 个——
@@ -300,7 +306,7 @@ def resource_catalog(
         tally("slot", slot_q, AppointmentSlot.capacity > AppointmentSlot.booked)
         rows = slot_q.order_by(AppointmentSlot.slot_date, AppointmentSlot.slot_time, AppointmentSlot.id).limit(500).all()
         items += [
-            {"kind": "slot", "kind_name": "号源", "id": s.id, "org_id": s.org_id,
+            {"kind": "slot", "kind_name": CATALOG_KIND_NAMES["slot"], "id": s.id, "org_id": s.org_id,
              "name": s.resource_name, "detail": f"{s.slot_date} {s.slot_time}",
              "available": s.capacity - s.booked, "unit": "个",
              "usable": s.capacity > s.booked}
@@ -311,7 +317,7 @@ def resource_catalog(
         tally("exam", exam_q, ExamResource.active.is_(True))
         rows = exam_q.order_by(ExamResource.id).limit(500).all()
         items += [
-            {"kind": "exam", "kind_name": "检查资源", "id": r.id, "org_id": r.org_id,
+            {"kind": "exam", "kind_name": CATALOG_KIND_NAMES["exam"], "id": r.id, "org_id": r.org_id,
              "name": r.item_name, "detail": f"{r.device} {r.duration_min}分钟",
              "available": None, "unit": "", "usable": r.active}
             for r in rows
@@ -321,7 +327,7 @@ def resource_catalog(
         tally("or_room", room_q, OperatingRoom.active.is_(True))
         rows = room_q.order_by(OperatingRoom.id).limit(500).all()
         items += [
-            {"kind": "or_room", "kind_name": "手术间", "id": r.id, "org_id": r.org_id,
+            {"kind": "or_room", "kind_name": CATALOG_KIND_NAMES["or_room"], "id": r.id, "org_id": r.org_id,
              "name": r.name, "detail": "", "available": None, "unit": "",
              "usable": r.active}
             for r in rows
@@ -333,7 +339,7 @@ def resource_catalog(
             tally("blood", db.query(BloodStock), BloodStock.quantity_ml > 0)
             rows = db.query(BloodStock).order_by(BloodStock.id).limit(500).all()
             items += [
-                {"kind": "blood", "kind_name": "血制品", "id": r.id, "org_id": None,
+                {"kind": "blood", "kind_name": CATALOG_KIND_NAMES["blood"], "id": r.id, "org_id": None,
                  "name": f"{r.blood_type} {r.component}", "detail": "全县共用血库",
                  "available": r.quantity_ml, "unit": "ml", "usable": r.quantity_ml > 0}
                 for r in rows
@@ -343,7 +349,7 @@ def resource_catalog(
         tally("general", general_q, Resource.status == "published")
         rows = general_q.order_by(Resource.id).limit(500).all()
         items += [
-            {"kind": "general", "kind_name": RESOURCE_TYPES.get(r.resource_type, "通用资源"),
+            {"kind": "general", "kind_name": RESOURCE_TYPES.get(r.resource_type, CATALOG_KIND_NAMES["general"]),
              "id": r.id, "org_id": r.org_id, "name": r.name, "detail": r.location,
              "available": r.capacity, "unit": r.unit,
              "usable": r.status == "published"}
