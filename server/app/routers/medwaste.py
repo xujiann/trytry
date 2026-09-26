@@ -16,7 +16,10 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import and_, func
+from typing import Any, cast
+
+from sqlalchemy import and_, func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
@@ -352,6 +355,23 @@ def list_wastes(
     ]
 
 
+def _move_waste(db: Session, waste_id: int, expect: tuple[str, ...], **values: Any) -> bool:
+    """医废走一步（入暂存 / 交接）：判定与写入压进同一条带状态条件的 UPDATE，返回这一路是否走到（P2-307）。
+
+    原先两步都是「读 status → 判 → 赋值 → commit」，UPDATE 只有 `WHERE id = ?`：入暂存与交接交错时（暂存间与转运
+    同时扫这一包），交接先提交、入暂存后提交，「已交接」被改回「已暂存」——转运车上的一包又记回暂存间里，滞留预警
+    跟着报它超时未交接；两人同时交接，后写的把先写的经手人盖掉。`synchronize_session=False`：抢输的一路手上那份对象
+    不能被同步成新值，409 的措辞要按库里此刻的状态说。
+    """
+    moved = cast(CursorResult, db.execute(
+        update(MedicalWaste)
+        .where(MedicalWaste.id == waste_id, MedicalWaste.status.in_(expect))
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    ))
+    return bool(moved.rowcount)
+
+
 class WasteStore(BaseModel):
     storage_location_id: int
 
@@ -382,9 +402,11 @@ def store(
         raise HTTPException(status_code=422, detail="该点位不是暂存间")
     if not loc.active:
         raise HTTPException(status_code=422, detail="该暂存间已停用")  # 同上（P2-49）
-    waste.status = "stored"
-    waste.storage_location_id = loc.id
-    waste.stored_at = now_naive()
+    # 上面那道状态预检是锁外读的（P2-307）：只从「已收集」走到「已暂存」，与顺序请求同一句 409
+    if not _move_waste(db, waste.id, ("collected",), status="stored", storage_location_id=loc.id, stored_at=now_naive()):
+        db.rollback()
+        db.refresh(waste)
+        raise HTTPException(status_code=409, detail=f"当前状态 {WASTE_STATUS_NAMES.get(waste.status, waste.status)} 不可入暂存")
     db.commit()
     db.refresh(waste)
     return _waste_out(waste)
@@ -422,6 +444,7 @@ def handover(
     assert_obj_org_writable(db, user, waste)
     if waste.status == "handed_over":
         raise HTTPException(status_code=409, detail="该批医废已交接")
+    handler: dict[str, Any] = {"handler_name": body.handler_name}
     if body.handler_employee_id is not None:
         employee = db.get(Employee, body.handler_employee_id)
         if employee is None:
@@ -430,12 +453,11 @@ def handover(
         # 追溯链上的经手人是一个已不在岗、找不到的人
         if employee.status == "left":
             raise HTTPException(status_code=409, detail="该员工已离职，不能登记为转运人员")
-        waste.handler_employee_id = employee.id
-        waste.handler_name = employee.name
-    else:
-        waste.handler_name = body.handler_name
-    waste.status = "handed_over"
-    waste.handed_over_at = now_naive()
+        handler = {"handler_employee_id": employee.id, "handler_name": employee.name}
+    # 上面那道「已交接」预检是锁外读的（P2-307）：交接与「还没交接」压进同一条 UPDATE，与顺序请求同一句 409
+    if not _move_waste(db, waste.id, ("collected", "stored"), status="handed_over", handed_over_at=now_naive(), **handler):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该批医废已交接")
     db.commit()
     db.refresh(waste)
     return _waste_out(waste)
