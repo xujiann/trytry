@@ -611,6 +611,21 @@ def _screening_out(s: PrenatalScreening) -> dict:
     }
 
 
+def _pregnancy_ended_on(db: Session, record_id: int) -> tuple[str, str] | None:
+    """这一胎结束的日子与依据（P2-233）：登记了分娩的取分娩日期；没登记分娩的（外院分娩、只有产后访视）取最早一次
+    产后访视的日期（没填访视日期的按录入那天）；都没有返回 None——还在孕期，或结束的日子无从知道。"""
+    delivered = db.query(DeliveryRecord.delivery_date).filter(DeliveryRecord.record_id == record_id).scalar()
+    if delivered:
+        return delivered, "分娩日期"
+    visits = (
+        db.query(MaternalVisit.visit_date, MaternalVisit.created_at)
+        .filter(MaternalVisit.record_id == record_id, MaternalVisit.visit_type == "postpartum")
+        .all()
+    )
+    dates = [v.visit_date or v.created_at.date().isoformat() for v in visits]
+    return (min(dates), "产后访视日期") if dates else None
+
+
 @router.post(
     "/screenings",
     response_model=PrenatalScreeningOut,
@@ -624,10 +639,14 @@ def create_screening(
     record = db.get(MaternalRecord, body.record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
-    # 已结案的不收产前筛查（P2-211），与访视、分娩登记同一道口子：一孕一册之后同一位妇女名下有上一胎结案的旧档案，
-    # 按旧档案号录进来的高风险结果把上一胎标成高危，这一胎的档案仍是「正常」
-    if record.status == "closed":
-        raise HTTPException(status_code=409, detail="档案已结案，不可登记产前筛查（请按本次妊娠的档案登记）")
+    # 产前筛查只能是这一胎结束之前的事（P2-233）：日期晚于分娩（没登记分娩的按最早一次产后访视）的，不可能是这一胎
+    # 的产前筛查——一孕一册之后同一位妇女名下有上一胎的旧档案，按旧档案号录进来的本次妊娠的高风险结果把上一胎标成
+    # 高危、这一胎仍是「正常」。不按「已结案」一刀切（P2-211 原先那样挡）：结案之后才补录的、这一胎孕期里做的筛查
+    # 照收，结论是这次孕期的事实（`test_closed_parent_writes.py` 的 BY_DESIGN 写着这条）
+    ended = _pregnancy_ended_on(db, record.id)
+    if ended is not None and body.screen_date > ended[0]:
+        raise HTTPException(status_code=409, detail=f"筛查日期 {body.screen_date} 晚于这一胎的{ended[1]} {ended[0]}，"
+                                                    "不是这一胎的产前筛查：本次妊娠请先建册，按新档案登记")
     screening = PrenatalScreening(created_by=user.id, **body.model_dump())
     screening.flagged_high_risk = body.result in HIGH_RISK_RESULTS
     if screening.flagged_high_risk:
