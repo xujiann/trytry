@@ -508,6 +508,9 @@ def list_bill_details(
 # 原则：判定与扣减在同一条语句里），并发退费不会把余额退成负数。
 
 DEPOSIT_TYPES = {"prepay": "预交", "refund": "退费", "offset": "结算冲抵"}
+#: 押金收退方式（`deposits.method`）：收退只收 cash / card / online（入参 pattern），结算冲抵的流水记 settle。
+#: 出参带中文名（P2-375）：居民端原先把 cash / card / online 原样显示，管理端的前端表又缺 settle
+DEPOSIT_METHODS = {"cash": "现金", "card": "刷卡", "online": "线上", "settle": "结算冲抵"}
 
 
 class DepositCreate(BaseModel):
@@ -531,6 +534,7 @@ class DepositOut(BaseModel):
     deposit_type: str
     deposit_type_name: str
     method: str
+    method_name: str
     operator: str
     balance: float
     created_at: str
@@ -617,6 +621,7 @@ def _deposit_out(d: Deposit, balance: float) -> dict:
         "deposit_type": d.deposit_type,
         "deposit_type_name": DEPOSIT_TYPES.get(d.deposit_type, d.deposit_type),
         "method": d.method,
+        "method_name": DEPOSIT_METHODS.get(d.method, d.method),
         "operator": d.operator,
         "balance": balance,
         "created_at": d.created_at.isoformat(),

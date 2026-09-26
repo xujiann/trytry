@@ -102,7 +102,7 @@ from .appointments import book_slot, release_appointment
 from .auth import record_login_event
 # 余额复用 billing 的流水现算口径（预交-退费-冲抵）——居民端另算一套
 # 只会造出第二个数字，对账时没人说得清哪个是对的（P1-24b）。
-from .billing import CHARGE_CATEGORY_NAMES, DEPOSIT_TYPES, deposit_balance, self_pay_outstanding
+from .billing import CHARGE_CATEGORY_NAMES, DEPOSIT_METHODS, DEPOSIT_TYPES, deposit_balance, self_pay_outstanding
 from .consents import (
     SCENE_PATTERN,
     ConsentOut,
@@ -2057,6 +2057,7 @@ class PortalDepositItemOut(BaseModel):
     deposit_type: str
     deposit_type_name: str
     method: str
+    method_name: str   # P2-375：居民端原先把 cash / card / online 原样显示
     date: str
 
 
@@ -2109,6 +2110,7 @@ def portal_my_deposits(
                 "deposit_type": d.deposit_type,
                 "deposit_type_name": DEPOSIT_TYPES.get(d.deposit_type, d.deposit_type),
                 "method": d.method,
+                "method_name": DEPOSIT_METHODS.get(d.method, d.method),
                 "date": d.created_at.date().isoformat(),
             }
             for d in rows

@@ -807,7 +807,7 @@ async function renderInpatient(box) {
           <div class="m-card">${kv("当前余额", `<b>¥${Number(d.balance).toFixed(2)}</b>`)}</div>
           ${d.items.length ? d.items.map((i) => `<div class="m-card">
             ${kv(i.deposit_type_name || i.deposit_type, `¥${Number(i.amount).toFixed(2)}`)}
-            ${kv("方式", esc(i.method || "—"))}
+            ${kv("方式", esc(i.method_name || i.method || "—"))}
             ${kv("日期", esc(i.date))}
           </div>`).join("") : '<p class="empty">暂无押金流水</p>'}`;
         $("#adm-bill").scrollIntoView({ behavior: "smooth", block: "start" });

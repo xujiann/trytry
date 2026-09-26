@@ -2721,8 +2721,6 @@ const PAY_CHANNELS = { cash: "现金", card: "银行卡", insurance: "医保基�
 const PAY_STATUS = { pending: ["待支付", "orange"], paid: ["已支付", "green"], refunded: ["已退款", ""], failed: ["支付失败", "red"] };
 const RECON_DIFF = { missing_local: "通道有本地无", missing_remote: "本地有通道无", amount_mismatch: "金额不一致" };
 
-const DEPOSIT_METHODS = { cash: "现金", card: "刷卡", online: "线上" };
-
 /** 催缴预警表：首屏与按阈值重查共用一份，免得两处各写一遍表头。 */
 function depositAlertTable(rows) {
   return table(["住院单", "患者", "机构", "押金余额", "未结费用", "缺口"], rows, (a) =>
@@ -2839,7 +2837,7 @@ async function renderBilling() {
         <div class="label">预交 ${balance.prepaid} · 退费 ${balance.refunded} · 结算冲抵 ${balance.offset}</div></div></div>
       ${table(["ID", "类型", "金额", "方式", "经办人", "当时余额", "时间"], rows, (d) =>
         `<tr><td>${d.id}</td><td>${esc(d.deposit_type_name)}</td><td>${d.amount}</td>
-         <td>${esc(DEPOSIT_METHODS[d.method] || d.method)}</td><td>${esc(d.operator) || "—"}</td><td>${d.balance}</td>
+         <td>${esc(d.method_name)}</td><td>${esc(d.operator) || "—"}</td><td>${d.balance}</td>
          <td>${esc(d.created_at.slice(0, 16).replace("T", " "))}</td></tr>`)}`;
   };
   $("#dep-form").onsubmit = (e) => {
