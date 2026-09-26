@@ -641,6 +641,9 @@ def review_referral(
     if nxt is None:
         raise HTTPException(status_code=409, detail="当前状态不需要审核")
     _assert_review_authority(db, user, case)
+    # 审核时改的目标机构先查在不在（P2-301），与发起转诊同一句：原先照写，外键在真 PG 上撞约束即 500
+    if body.action == "pass" and body.target_org_id is not None and db.get(Organization, body.target_org_id) is None:
+        raise HTTPException(status_code=404, detail="目标机构不存在")
     next_status, step_name, level = nxt
     # 期望态必须是刚读到的**精确**状态：环节名、下一态、层级都由它派生，
     # 写成 in_(_NEXT) 会在抢输时匹配到另一个可审态，把错误的环节名写进轨迹。
