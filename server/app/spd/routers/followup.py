@@ -972,40 +972,45 @@ def execute_followup(
     assert_org_writable(db, user, record.org_id)
     if record.status in ("done", "removed"):
         raise HTTPException(status_code=409, detail="该随访已结束")
-    record.channel = body.channel
-    record.executor_id = user.id
-    record.executed_at = clock.today().isoformat()
-    record.result = body.result
-    if body.evidence:
-        record.evidence = body.evidence
-    # 上面那道预检是 check-then-act：两名随访人员（或医护与居民自助）同时执行同一条
-    # 随访，都读到 planned 就都办结、都派一条处置任务。终态跃迁改成条件 UPDATE——
-    # 判定与写在同一条 SQL 里，抢输的一路 rowcount 为 0，拿到与预检完全一致的 409；
-    # 处置任务只在跃迁命中之后才派（`spd_tasks` 上没有指向随访记录的列，
-    # "一次执行只派一条任务"只能守在父行的状态上，见 service.close_followup_record）。
-    if not close_followup_record(
-        db, record.id, "unreachable" if body.unreachable else "done",
-        allowed_from=("planned", "overdue", "unreachable"),
-    ):
-        db.rollback()  # 先退掉本请求的写事务，再抛——否则后续审计落库会撞写锁
-        raise HTTPException(status_code=409, detail="该随访已结束")
-    if body.unreachable:
-        db.commit()
-        return _record_out(record)
+    # 结果与证据是追加、不是整段覆盖（P2-291）：接通的呼叫回写早把沟通结果与录音地址追加在这条记录上（「回写通话
+    # 结果」写明「接通结果会同步写回随访记录」），执行时整段覆盖——界面上随访结果留空也照样覆盖——就把它们抹掉了。
+    # 与呼叫回写同一个临界区（锁这一行、重读、再追加）：先到的回写这里重读得到，后到的回写锁到手时看到已办结、不再追加
+    with serialized_on(db, SpdFollowupRecord, record.id):
+        db.refresh(record)
+        record.channel = body.channel
+        record.executor_id = user.id
+        record.executed_at = clock.today().isoformat()
+        record.result = (record.result + " " + body.result).strip()[:512]
+        if body.evidence:
+            record.evidence = (record.evidence or []) + body.evidence
+        # 上面那道预检是 check-then-act：两名随访人员（或医护与居民自助）同时执行同一条
+        # 随访，都读到 planned 就都办结、都派一条处置任务。终态跃迁改成条件 UPDATE——
+        # 判定与写在同一条 SQL 里，抢输的一路 rowcount 为 0，拿到与预检完全一致的 409；
+        # 处置任务只在跃迁命中之后才派（`spd_tasks` 上没有指向随访记录的列，
+        # "一次执行只派一条任务"只能守在父行的状态上，见 service.close_followup_record）。
+        if not close_followup_record(
+            db, record.id, "unreachable" if body.unreachable else "done",
+            allowed_from=("planned", "overdue", "unreachable"),
+        ):
+            db.rollback()  # 先退掉本请求的写事务，再抛——否则后续审计落库会撞写锁
+            raise HTTPException(status_code=409, detail="该随访已结束")
+        if body.unreachable:
+            db.commit()
+            return _record_out(record)
 
-    record.answers = body.answers
-    questionnaire = (
-        db.query(SpdQuestionnaire)
-        .filter(SpdQuestionnaire.code == record.questionnaire_code)
-        .first()
-    )
-    action = ""
-    if questionnaire is not None:
-        level, action = grade_abnormal(questionnaire.abnormal_rules or [], body.answers)
-        record.abnormal_level = level
-        spawn_followup_abnormal_task(
-            db, record, level, f"随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}")
-    db.commit()
+        record.answers = body.answers
+        questionnaire = (
+            db.query(SpdQuestionnaire)
+            .filter(SpdQuestionnaire.code == record.questionnaire_code)
+            .first()
+        )
+        action = ""
+        if questionnaire is not None:
+            level, action = grade_abnormal(questionnaire.abnormal_rules or [], body.answers)
+            record.abnormal_level = level
+            spawn_followup_abnormal_task(
+                db, record, level, f"随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}")
+        db.commit()
     out = _record_out(record)
     out["action"] = action
     return out
@@ -1197,20 +1202,25 @@ def record_call_result(
         record = db.get(SpdFollowupRecord, task.ref_id)
         if record is not None:
             assert_org_writable(db, user, record.org_id)
-    # 上面那道预检是锁外读的（P2-289）：重发的回调、回调与坐席手工回写同时到，两路都读到待呼叫——翻转压进一条
-    # `WHERE status = 'pending'` 的 UPDATE，后到的一路 409、不再往随访记录上追加
-    if not settle_call_task(
-        db, task.id, status=body.status, duration_s=body.duration_s, record_url=body.record_url, result=body.result,
-        started_at=func.coalesce(SpdCallTask.started_at, now_naive()),
-        operator_id=func.coalesce(SpdCallTask.operator_id, user.id),
-    ):
-        db.rollback()
-        raise HTTPException(status_code=409, detail="该呼叫任务已回写过结果")
+    def settle() -> None:
+        # 上面那道预检是锁外读的（P2-289）：重发的回调、回调与坐席手工回写同时到，两路都读到待呼叫——翻转压进一条
+        # `WHERE status = 'pending'` 的 UPDATE，后到的一路 409、不再往随访记录上追加
+        if not settle_call_task(
+            db, task.id, status=body.status, duration_s=body.duration_s, record_url=body.record_url,
+            result=body.result, started_at=func.coalesce(SpdCallTask.started_at, now_naive()),
+            operator_id=func.coalesce(SpdCallTask.operator_id, user.id),
+        ):
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该呼叫任务已回写过结果")
+
     if record is not None and record.status in ("planned", "overdue"):
         # 结果串与证据列表都是"读旧值 + 本次 → 整体写回"：同一条随访记录挂着的两个
         # 呼叫任务同时回写，后写的把先写的结果与录音地址盖掉。锁住随访记录这一行、
         # 重读、再追加（concurrency.serialized_on）；锁到手后若已被别人办结就不再往上写。
+        # 先进临界区、再翻呼叫任务（P2-291）：执行随访也在这一行的临界区里写，两处都先锁随访记录、后写库，
+        # 取锁顺序一致（SQLite 上反过来是库写锁与进程内锁交叉等待，等满超时一路 500）
         with serialized_on(db, SpdFollowupRecord, record.id):
+            settle()
             db.refresh(record)
             if record.status in ("planned", "overdue"):
                 record.result = (record.result + " " + body.result).strip()[:500]
@@ -1219,6 +1229,7 @@ def record_call_result(
                 )
             db.commit()
     else:
+        settle()
         db.commit()
     db.refresh(task)
     return {"id": task.id, "status": task.status, "duration_s": task.duration_s}

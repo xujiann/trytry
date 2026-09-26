@@ -1,4 +1,4 @@
-"""真 PostgreSQL 上的并发证明：慢专病居民端 + 智能随访端的五条不变式（P1-30）。
+"""真 PostgreSQL 上的并发证明：慢专病居民端 + 智能随访端的五条不变式（P1-30），外加随访结果串的不丢更新（P2-291）。
 
 默认跳过（`MEDPLAT_PG_TEST_URL` 未设时），开启方式与 `test_postgres_real.py` 一致：
 
@@ -573,3 +573,103 @@ def test_并发办结随访_恰一路办到且只派一条处置任务(session_f
             SpdTask.patient_id == patient_id, SpdTask.source == "followup"
         ).count()
     assert tasks == 1, f"一次执行只许派一条处置任务，实际 {tasks} 条"
+
+
+# ================================================================ 随访结果：呼叫回写与执行同一个临界区
+
+
+def _followup_with_call_task(session_factory, patient_id: int, tag: str) -> tuple[int, int]:
+    from app.spd.models import SpdCallTask, SpdFollowupRecord
+
+    def seed():
+        with session_factory() as db:
+            record = SpdFollowupRecord(patient_id=patient_id, program_code=f"pg_{tag}",
+                                       planned_at="2026-09-01", status="planned")
+            db.add(record)
+            db.flush()
+            task = SpdCallTask(patient_id=patient_id, phone="13900000000", ref_type="followup",
+                               ref_id=record.id, status="pending")
+            db.add(task)
+            db.commit()
+            return record.id, task.id
+
+    return _retry_on_lock(seed)
+
+
+def _call_back_body(url: str):
+    from app.spd.routers import followup
+
+    return followup.CallResultIn(status="connected", duration_s=60, record_url=url, result="通话结果")
+
+
+#: 全域角色、记录不挂机构：直调路由函数时不查归属；经办人 / 执行人留空
+def _pg_admin(tag: str):
+    from app.models import User
+
+    return User(username=f"pg-{tag}", role="admin", org_id=None)
+
+
+@pytest.mark.timeout(600)
+def test_执行随访读到记录之后回写先提交_执行照样接在通话结果之后(session_factory, tag, monkeypatch):
+    """`followup.execute_followup` 临界区里重读的 PG 直测（P2-291）：确定时序，不靠线程碰运气。
+
+    执行这一路锁外读到记录（结果还空）之后、进临界区之前，一条接通的呼叫回写在另一个事务里走完并提交。
+    临界区里 `SELECT … FOR UPDATE` + 重读拿到的是回写提交后的值，本次结果接在通话结果之后；修前整段覆盖成「执行结果」。
+    """
+    from app.spd.models import SpdCallTask, SpdFollowupRecord
+    from app.spd.routers import followup
+
+    patient_id = _make_patient(session_factory, tag, 7)
+    record_id, task_id = _followup_with_call_task(session_factory, patient_id, tag)
+    user, url = _pg_admin(tag), f"https://rec/{tag}-a.mp3"
+    real, fired = followup.assert_org_writable, []
+
+    def racing(db, who, org_id):
+        real(db, who, org_id)
+        if not fired:   # 只插这一次：回写自己也会调到这里
+            fired.append(True)
+            with session_factory() as other:
+                assert followup.record_call_result(task_id, _call_back_body(url), other, who)["status"] == "connected"
+
+    monkeypatch.setattr(followup, "assert_org_writable", racing)
+    with session_factory() as db:
+        out = followup.execute_followup(record_id, followup.ExecuteIn(result="执行结果"), db, user)
+    monkeypatch.undo()
+    assert fired and out["status"] == "done"
+    with session_factory() as db:
+        record, task = db.get(SpdFollowupRecord, record_id), db.get(SpdCallTask, task_id)
+        assert (record.status, record.result, record.evidence) == ("done", "通话结果 执行结果", [url])   # 修前「执行结果」
+        assert task.status == "connected"
+
+
+@pytest.mark.timeout(600)
+def test_呼叫回写与执行随访真并发_不报错_结果只有两种合法样子(session_factory, tag):
+    """同一条随访记录上两处同时写（P2-291）：两处都先锁随访记录、后写库，取锁顺序一致。
+
+    谁先谁后都合法：回写先到，执行把本次结果接在通话结果之后；执行先到，回写锁到手时看到已办结，只回写呼叫任务本身。
+    不走 `_race_with_retry`：它把 deadlock 当作可重试的撞锁，这里要证的恰是不死锁、不报错。
+    """
+    from app.spd.models import SpdFollowupRecord
+    from app.spd.routers import followup
+
+    patient_id = _make_patient(session_factory, tag, 8)
+    user, url = _pg_admin(tag), f"https://rec/{tag}-b.mp3"
+    for _ in range(6):
+        record_id, task_id = _followup_with_call_task(session_factory, patient_id, tag)
+
+        def worker(i, record_id=record_id, task_id=task_id):
+            with session_factory() as db:
+                if i == 0:
+                    return followup.record_call_result(task_id, _call_back_body(url), db, user)["status"]
+                return followup.execute_followup(record_id, followup.ExecuteIn(result="执行结果"), db, user)["status"]
+
+        results, errors = _race(worker, 2)
+        assert not errors, f"两处并发不该报错（含死锁）：{errors}"
+        assert sorted(results) == ["connected", "done"], results
+        with session_factory() as db:
+            record = db.get(SpdFollowupRecord, record_id)
+            assert record is not None and record.status == "done"
+            if record.evidence:   # 回写先到：已追加在记录上
+                assert (record.result, record.evidence) == ("通话结果 执行结果", [url]), record.result
+            else:   # 执行先到：回写只落呼叫任务本身
+                assert record.result == "执行结果", record.result
