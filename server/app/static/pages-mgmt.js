@@ -905,7 +905,8 @@ async function renderServiceRequests() {
           `<div class="card"><span class="k">${esc(k)}</span><b>${v}</b></div>`).join("")}
       </div>
       <p class="desc">刻意不建第六张单据表：五类单据各有必要的领域字段与状态机，这里做的是聚合视图。</p>`)
-    + panel(`在办事项（${data.total}）`,
+    // total 是全部命中项，清单只列最新的 returned 条（P2-162）——截断了就明说，别让人拿清单行数当总数
+    + panel(`在办事项（${data.total}${data.truncated ? `，列出最新 ${data.returned} 条` : ""}）`,
       table(["类型", "单号", "患者", "机构", "事项", "统一状态", "原生状态", "时间"], data.items, (i) => {
         // `text` 在 UNIFIED_STATUS 里查不到时会**回落成后端原始状态码**，
         // 那是服务端数据，必须转义——迁移这一页时才看出来它一直是裸插值。

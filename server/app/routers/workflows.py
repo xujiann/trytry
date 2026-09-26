@@ -19,7 +19,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, or_, update
+from sqlalchemy import and_, func, or_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -546,7 +546,9 @@ service_router = APIRouter(
 # done 已完成 / cancelled 已取消）。映射写在一处，避免每个前端各译一遍。
 STATUS_MAP = {
     "appointment": {"booked": "pending", "fulfilled": "done", "cancelled": "cancelled"},
-    "exam": {"pending": "pending", "diagnosing": "processing", "reported": "done",
+    # recognized=互认既往结果：不再另做、直接认上级已出的报告——这张单已经办完了（P2-162：原先漏了这一项，
+    # 原码 recognized 进了「按状态」计数、按「已完成」筛也筛不到它）
+    "exam": {"pending": "pending", "diagnosing": "processing", "reported": "done", "recognized": "done",
              "cancelled": "cancelled"},
     "consultation": {"applied": "pending", "accepted": "processing", "completed": "done",
                      "declined": "cancelled"},
@@ -555,6 +557,9 @@ STATUS_MAP = {
     "surgery": {"requested": "pending", "approved": "processing", "scheduled": "processing",
                 "completed": "done", "cancelled": "cancelled"},
 }
+
+# 「按状态」计数的排列：先统一口径的四档，映射表外透出的原码排在后面
+_UNIFIED_ORDER = {"pending": 0, "processing": 1, "done": 2, "cancelled": 3}
 
 TYPE_NAMES = {
     "appointment": "预约",
@@ -612,56 +617,76 @@ def unified_requests(
             return query.filter(model.patient_id.in_(visible))
         return query
 
+    # 按类型 / 统一状态筛、数总数都在库里做（P2-162）：原先五类各取最新 limit 条、再在内存里筛，
+    # total 与「按状态 / 按类型」都算在截断后的样本上——某一类超过 limit 条，total 就封顶在 limit，
+    # 落在最新 limit 条之外的「待处理」按状态筛也看不见。现在逐类在库里筛、GROUP BY 全量数；
+    # 清单仍是五类合起来最新的 limit 条（每类取最新 limit 条再合并截断，与全量合并后取前 limit 条等价）
     items: list[dict] = []
+    by_status: dict[str, int] = {}
+    by_type: dict[str, int] = {}
 
-    appt_q = db.query(Appointment, AppointmentSlot).join(
+    def narrowed(kind: str, query, model):
+        """这一类单据按患者范围与统一状态筛好的查询；全量计数顺带记进 by_status / by_type。
+        不在要的类型里、或这一类没有哪个原生状态映射到所筛的统一状态时返回 None。"""
+        if request_type and kind != request_type:
+            return None
+        query = scoped(query, model)
+        if status:
+            mapping = STATUS_MAP[kind]
+            raws = [raw for raw, unified in mapping.items() if unified == status]
+            if status not in mapping:   # 映射表外的原生状态照原码透出（见 _unified），按原码也得筛得到
+                raws.append(status)
+            if not raws:
+                return None
+            query = query.filter(model.status.in_(raws))
+        counted = (query.with_entities(model.status, func.count(model.id))
+                   .group_by(model.status).order_by(model.status).all())
+        for raw, n in counted:
+            unified = STATUS_MAP[kind].get(raw, raw)
+            by_status[unified] = by_status.get(unified, 0) + n
+            by_type[kind] = by_type.get(kind, 0) + n
+        return query.order_by(model.created_at.desc(), model.id.desc()).limit(limit)
+
+    appt_q = narrowed("appointment", db.query(Appointment, AppointmentSlot).join(
         AppointmentSlot, Appointment.slot_id == AppointmentSlot.id
-    )
-    appt_q = scoped(appt_q, Appointment)
-    for appt, slot in appt_q.order_by(Appointment.id.desc()).limit(limit).all():
+    ), Appointment)
+    for appt, slot in appt_q.all() if appt_q is not None else []:
         items.append(
             _unified("appointment", appt.id, appt.patient_id, slot.org_id,
                      f"{slot.resource_name} {slot.slot_date} {slot.slot_time}",
                      appt.status, appt.created_at)
         )
 
-    exam_q = db.query(ExamRequest)
-    exam_q = scoped(exam_q, ExamRequest)
-    for exam in exam_q.order_by(ExamRequest.id.desc()).limit(limit).all():
+    exam_q = narrowed("exam", db.query(ExamRequest), ExamRequest)
+    for exam in exam_q.all() if exam_q is not None else []:
         items.append(
             _unified("exam", exam.id, exam.patient_id, exam.from_org_id,
                      exam.item_name, exam.status, exam.created_at)
         )
 
-    cons_q = db.query(Consultation)
-    cons_q = scoped(cons_q, Consultation)
-    for cons in cons_q.order_by(Consultation.id.desc()).limit(limit).all():
+    cons_q = narrowed("consultation", db.query(Consultation), Consultation)
+    for cons in cons_q.all() if cons_q is not None else []:
         items.append(
             _unified("consultation", cons.id, cons.patient_id, cons.from_org_id,
                      cons.question[:64], cons.status, cons.created_at)
         )
 
-    blood_q = db.query(TransfusionRequest)
-    blood_q = scoped(blood_q, TransfusionRequest)
-    for req in blood_q.order_by(TransfusionRequest.id.desc()).limit(limit).all():
+    blood_q = narrowed("blood", db.query(TransfusionRequest), TransfusionRequest)
+    for req in blood_q.all() if blood_q is not None else []:
         items.append(
             _unified("blood", req.id, req.patient_id, req.org_id,
                      f"{req.blood_type} {req.component} {req.quantity_ml}ml", req.status, req.created_at)
         )
 
-    surg_q = db.query(SurgeryRequest)
-    surg_q = scoped(surg_q, SurgeryRequest)
-    for surgery in surg_q.order_by(SurgeryRequest.id.desc()).limit(limit).all():
+    surg_q = narrowed("surgery", db.query(SurgeryRequest), SurgeryRequest)
+    for surgery in surg_q.all() if surg_q is not None else []:
         items.append(
             _unified("surgery", surgery.id, surgery.patient_id, surgery.org_id,
                      surgery.surgery_name, surgery.status, surgery.created_at)
         )
 
-    if request_type:
-        items = [i for i in items if i["request_type"] == request_type]
-    if status:
-        items = [i for i in items if i["status"] == status]
     items.sort(key=lambda x: x["created_at"], reverse=True)
+    items = items[:limit]
 
     patient_names = row_dict(db.query(Patient.id, Patient.name).all())
     org_names = row_dict(db.query(Organization.id, Organization.name).all())
@@ -669,18 +694,14 @@ def unified_requests(
         item["patient_name"] = patient_names.get(item["patient_id"], "")
         item["org_name"] = org_names.get(item["org_id"], "")
 
-    by_status: dict[str, int] = {}
-    by_type: dict[str, int] = {}
-    for item in items:
-        by_status[item["status"]] = by_status.get(item["status"], 0) + 1
-        by_type[item["request_type"]] = by_type.get(item["request_type"], 0) + 1
     # T6.7：total/统计口径覆盖全部命中项，items 只返回前 limit 条；
     # truncated 明确告知被截断，避免调用方拿 items 的长度当总数用。
+    total = sum(by_type.values())
     return {
-        "total": len(items),
-        "returned": min(len(items), limit),
-        "truncated": len(items) > limit,
-        "by_status": by_status,
-        "by_type": by_type,
-        "items": items[:limit],
+        "total": total,
+        "returned": len(items),
+        "truncated": total > len(items),
+        "by_status": dict(sorted(by_status.items(), key=lambda kv: (_UNIFIED_ORDER.get(kv[0], len(_UNIFIED_ORDER)), kv[0]))),
+        "by_type": {kind: by_type[kind] for kind in STATUS_MAP if kind in by_type},
+        "items": items,
     }
