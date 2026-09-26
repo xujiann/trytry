@@ -144,8 +144,17 @@ def seed(client, admin):
         json={"reject_reason": "未加固定液"}, headers=data["operator"],
     ).json()
     data["s3"] = submit({"request_id": rid, "site": "只记离体", "excised_at": "2026-08-12T10:00:00"})
-    data["s4"] = submit({"request_id": rid, "site": "倒序时间", "excised_at": "2026-08-12T11:00:00",
-                         "fixed_at": "2026-08-12T10:00:00"})
+    # 倒序时间 P2-270 起登记即 422；这里直接落一行，代表修之前录进去的存量（仍不拿来凑均值）
+    from app.database import SessionLocal
+    from app.models import PathologySpecimen
+    from app.routers.pathology import _out
+
+    with SessionLocal() as db:
+        legacy = PathologySpecimen(request_id=rid, specimen_no="PS-LEGACY-S4", site="倒序时间",
+                                   excised_at="2026-08-12T11:00:00", fixed_at="2026-08-12T10:00:00")
+        db.add(legacy)
+        db.commit()
+        data["s4"] = _out(legacy)
     return data
 
 

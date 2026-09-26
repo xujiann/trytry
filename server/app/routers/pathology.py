@@ -11,8 +11,10 @@
 **拒收是核心业务而非异常分支**。标本量不足、未加固定液、标识不清都要当场
 拒收并说明理由——不拒收，后面做出来的片子是废的，而报告已经发出去了。
 """
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -51,6 +53,17 @@ class SpecimenIn(BaseModel):
     fixed_at: OptionalDateTimeSecStr = ""
     fixative: str = Field(default="", max_length=64)
     note: str = Field(default="", max_length=512)
+
+    @model_validator(mode="after")
+    def _minute_precision_and_order(self) -> "SpecimenIn":
+        """冷缺血按分钟算（P2-270）：时间形状收「只填日期」，原先按零点算——离体只填日期、固定填到分钟，凭空算出几百分钟、
+        记成超 60 分钟；固定早于离体（录反了）不报错，悄悄记成「未采集」。两处都在登记时说清楚。"""
+        for label, value in (("离体时间", self.excised_at), ("固定时间", self.fixed_at)):
+            if value and not _has_clock(value):
+                raise ValueError(f"{label}须填到分钟（冷缺血时间按分钟算）")
+        if self.excised_at and self.fixed_at and _parse(self.fixed_at) < _parse(self.excised_at):
+            raise ValueError("固定时间早于离体时间，请核对（冷缺血时间＝固定 − 离体）")
+        return self
 
 
 class SpecimenReceive(BaseModel):
@@ -125,19 +138,29 @@ def _cold_ischemia_minutes(specimen: PathologySpecimen) -> int | None:
     return None if seconds is None else int(seconds // 60)
 
 
+def _has_clock(value: str) -> bool:
+    """时间戳带没带钟点（`YYYY-MM-DD` 之后还有 ` HH:MM` / `THH:MM`）。"""
+    return len(value.strip()) > 10
+
+
+def _parse(value: str) -> datetime:
+    return datetime.fromisoformat(value.strip())
+
+
 def _cold_ischemia_seconds(specimen: PathologySpecimen) -> float | None:
     """冷缺血时间（离体到固定），病理质控的核心指标。
 
     任一时间未填即返回 None——**不拿当前时间凑数**。填不全就是没采集到，
     单列报出比编一个数字诚实（与 DDD 未维护、职称等级未填同一条原则）。
+    只填了日期的同样算没填全（P2-270）：原先按零点算，凭空算出几百分钟。
     """
     if not specimen.excised_at or not specimen.fixed_at:
         return None
-    from datetime import datetime
-
+    if not _has_clock(specimen.excised_at) or not _has_clock(specimen.fixed_at):
+        return None
     try:
-        excised = datetime.fromisoformat(specimen.excised_at)
-        fixed = datetime.fromisoformat(specimen.fixed_at)
+        excised = _parse(specimen.excised_at)
+        fixed = _parse(specimen.fixed_at)
     except ValueError:
         return None
     delta = (fixed - excised).total_seconds()
