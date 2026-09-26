@@ -480,12 +480,14 @@ def _efficiency_rows(db: Session, period: str, scope: list[int] | None) -> list[
     overlap_start = sa.case((admitted_day > start_day, admitted_day), else_=start_day)
     overlap_end = sa.case((discharged_day < end_day, discharged_day), else_=end_day)
     overlap = overlap_end - overlap_start
+    # 1 床日的下限只给当日入出院（P2-135）：原先交集为 0 也记 1 天——月初那天出院的，上月的住院在本月凭空多 1 床日
+    same_day = admitted_day == discharged_day
     occupied_days: dict[int, int] = row_dict(
-        db.query(Admission.org_id, func.sum(_at_least_one_day(overlap)))
+        db.query(Admission.org_id, func.sum(sa.case((same_day, 1), else_=sa.cast(overlap, sa.Integer))))
         .filter(
             Admission.admitted_at < end_dt,
             sa.or_(Admission.discharged_at.is_(None), Admission.discharged_at >= start_dt),
-            overlap >= 0,
+            sa.or_(overlap > 0, same_day),
         )
         .group_by(Admission.org_id)
         .order_by(Admission.org_id)

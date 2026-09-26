@@ -340,7 +340,8 @@ def department_cost_summary(
 def _occupied_bed_days(db: Session, org_id: int, start: date, end: date) -> int:
     """期间内实际占用床日：逐住院记录取 [入院, 出院) 与期间的交集天数。
 
-    在院未出院的按期间末计。当日入当日出计 1 床日（不是 0）——住了一天就是一天。
+    在院未出院的按期间末计。当日入当日出计 1 床日（不是 0）——住了一天就是一天，记在那一天所在的期间。
+    1 床日的下限**只给当日入出院**（P2-135）：原先交集为空也记 1 天——8 月 20 日入、9 月 1 日出，9 月凭空多出 1 床日。
     """
     admissions = (
         db.query(Admission)
@@ -351,11 +352,10 @@ def _occupied_bed_days(db: Session, org_id: int, start: date, end: date) -> int:
     for adm in admissions:
         admitted = adm.admitted_at.date()
         discharged = adm.discharged_at.date() if adm.discharged_at else end
-        overlap_start = max(admitted, start)
-        overlap_end = min(discharged, end)
-        if overlap_end < overlap_start:
+        if admitted == discharged:
+            total += 1 if start <= admitted < end else 0
             continue
-        total += max((overlap_end - overlap_start).days, 1)
+        total += max((min(discharged, end) - max(admitted, start)).days, 0)
     return total
 
 
