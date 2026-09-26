@@ -16,9 +16,9 @@ from ..models import (
     PhEventAction,
     PublicHealthEvent,
     User,
-    VaccineContraindication,
 )
 from .chronic import guidance_for
+from .vaccination import _effective_contraindications
 
 router = APIRouter(prefix="/api/publichealth", tags=["公卫协同"], dependencies=[Depends(get_current_user)])
 
@@ -171,7 +171,8 @@ def clinic_reminders(
         guidance = guidance_for(db, c.disease)
         if guidance:
             reminders.append({"type": "lifestyle_guidance", "detail": guidance})
-    for v in db.query(VaccineContraindication).filter(VaccineContraindication.patient_id == patient_id).all():
+    # 只提示生效中的禁忌（P2-132）：原先已解除、已过期的也一条不落地提示，同一时刻接种台放行这支疫苗
+    for v in _effective_contraindications(db, patient_id, None, cutoff):
         reminders.append({"type": "vaccine_contraindication", "detail": f"疫苗 {v.vaccine_code} 禁忌：{v.reason}"})
     active_events = db.query(PublicHealthEvent).filter(PublicHealthEvent.status == "active").count()
     if active_events:

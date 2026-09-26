@@ -27,22 +27,21 @@ router = APIRouter(prefix="/api/vaccination", tags=["疫苗接种"], dependencie
 
 
 def _effective_contraindications(
-    db: Session, patient_id: int, vaccine_code: str, today: str
+    db: Session, patient_id: int, vaccine_code: str | None, today: str
 ) -> list[VaccineContraindication]:
-    """当前真正生效的禁忌。
+    """当前真正生效的禁忌（`vaccine_code=None` 取这位受种者全部疫苗的）。
 
     过期不改状态、按日期现算：定时任务改状态会让"某条禁忌何时失效"取决于
     任务跑没跑，而这条判定直接决定能不能给人打针，不能依赖调度。
+    诊间提醒（`publichealth.clinic_reminders`）也按这一条判，别另写一份（P2-132）。
     """
-    rows = (
-        db.query(VaccineContraindication)
-        .filter(
-            VaccineContraindication.patient_id == patient_id,
-            VaccineContraindication.vaccine_code == vaccine_code,
-            VaccineContraindication.status == "active",
-        )
-        .all()
+    query = db.query(VaccineContraindication).filter(
+        VaccineContraindication.patient_id == patient_id,
+        VaccineContraindication.status == "active",
     )
+    if vaccine_code is not None:
+        query = query.filter(VaccineContraindication.vaccine_code == vaccine_code)
+    rows = query.order_by(VaccineContraindication.id).all()
     return [c for c in rows if not c.valid_until or c.valid_until >= today]
 
 
