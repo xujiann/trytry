@@ -294,3 +294,54 @@ def test_下载clean与pending照常放行(client, setup, monkeypatch):
         db.commit()
     resp = client.get(f"/api/attachments/{a['id']}", headers=setup["op"])
     assert resp.status_code == 200 and resp.content == content
+
+
+# ---------------------------------------------------------------------------
+# 同一份内容：隔离按内容、不按行（P2-395）。存储按 sha256 只存一份，同样的字节挂在几行上就从几行下得到
+# ---------------------------------------------------------------------------
+
+
+def _quarantine(attachment_id: int) -> None:
+    with SessionLocal() as db:
+        row = db.get(Attachment, attachment_id)
+        row.scan_status, row.scan_detail = "infected", FAKE_SIGNATURE
+        db.commit()
+
+
+def test_同内容的另一行被隔离_这一行也下不到(client, setup, monkeypatch):
+    monkeypatch.setattr(settings, "clamd_address", "127.0.0.1:1")
+    content = b"%PDF-1.4 same bytes, two rows"
+    first = _upload(client, setup["op"], setup["event"]["id"], "first.pdf", content)
+    second = _upload(client, setup["op"], setup["event"]["id"], "second.pdf", content)
+    _quarantine(second["id"])   # 后传的那行扫出了毒（先传的那行扫的时候特征库还没收录）
+    resp = client.get(f"/api/attachments/{first['id']}", headers=setup["op"])
+    assert resp.status_code == 410, resp.status_code   # 修前 200：同一个文件换一行照样下得到
+    assert FAKE_SIGNATURE in resp.json()["detail"]
+
+
+def test_已隔离的内容再传一遍_新的这一行当场隔离(client, setup, monkeypatch):
+    monkeypatch.setattr(settings, "clamd_address", "127.0.0.1:1")
+    content = b"%PDF-1.4 quarantined then uploaded again"
+    _quarantine(_upload(client, setup["op"], setup["event"]["id"], "bad.pdf", content)["id"])
+    again = _upload(client, setup["op"], setup["event"]["id"], "renamed.pdf", content)
+    assert _scan_status(again["id"]) == ("infected", FAKE_SIGNATURE)   # 修前 pending：扫到之前一直下得到
+    assert client.get(f"/api/attachments/{again['id']}", headers=setup["op"]).status_code == 410
+
+
+def test_补扫检出之后_同内容的其余行一并隔离(client, setup, clamd, monkeypatch):
+    content = b"%PDF-1.4 spread " + VIRUS_MARKER
+    monkeypatch.setattr(settings, "clamd_address", "")
+    skipped = _upload(client, setup["op"], setup["event"]["id"], "before-clamd.pdf", content)   # 那会儿还没配扫描器
+    scanned_clean = _upload(client, setup["op"], setup["event"]["id"], "old-signatures.pdf", content)
+    with SessionLocal() as db:
+        db.get(Attachment, scanned_clean["id"]).scan_status = "clean"   # 早先扫过、特征库那会儿还没收录
+        db.commit()
+    monkeypatch.setattr(settings, "clamd_address", clamd.address)
+    fresh = _upload(client, setup["op"], setup["event"]["id"], "fresh.pdf", content)
+    monkeypatch.setattr(avscan, "send_alert", lambda kind, msg: None)
+    with SessionLocal() as db:
+        _, summary = attachment_av_scan(db)
+    assert _scan_status(fresh["id"]) == ("infected", FAKE_SIGNATURE)
+    # 修前：这两行留在 skipped / clean，补扫只看 pending，永远轮不到
+    assert _scan_status(skipped["id"]) == _scan_status(scanned_clean["id"]) == ("infected", FAKE_SIGNATURE)
+    assert "同内容另隔离" in summary, summary   # 件数含本模块前面用例留下的同内容行，只认这句在

@@ -133,7 +133,11 @@ def attachment_av_scan(db: Session) -> tuple[int, str]:
       pending 留着下轮重试，绝不把探测失败写成扫描结论；
     - 检出病毒：置 infected + 记 scan_detail（签名名），外发告警
       （下载已被拦截，但需要有人去处置源头）；
-    - 存储中文件缺失：置 unavailable 并记因，不让它永远堵在 pending 队头。
+    - 存储中文件缺失：置 unavailable 并记因，不让它永远堵在 pending 队头；
+    - 同一份内容一并隔离（P2-395）：存储按 sha256 只存一份，被隔离的字节挂在别的行上照样下得到——
+      每轮扫完把与 infected 行同 sha256 的其余行（早先扫成 clean 的、未配置时标的 skipped、还没轮到的
+      pending）一并置 infected，签名名取最早被隔离的那行。下载那头另按内容判（``quarantined_copy``），
+      这里是让登记与事实一致、不再为同一份字节反复扫。
     """
     if not settings.clamd_address.strip():
         return 0, "未配置 clamd_address，跳过（新上传附件标 skipped）"
@@ -171,5 +175,28 @@ def attachment_av_scan(db: Session) -> tuple[int, str]:
                 f"附件检出病毒：id={attachment.id} 文件={attachment.filename} "
                 f"签名={detail}（下载已拦截，请处置源头）",
             )
+    db.flush()  # 会话 autoflush 关着：本轮刚判出的 infected 先落下去，下面按内容扩散才看得见
+    spread = _quarantine_same_content(db)
     db.commit()
-    return scanned, f"补扫 {scanned} 件，检出 {infected} 件{aborted}"
+    tail = f"，同内容另隔离 {spread} 件" if spread else ""
+    return scanned, f"补扫 {scanned} 件，检出 {infected} 件{tail}{aborted}"
+
+
+def _quarantine_same_content(db: Session) -> int:
+    """把与 infected 行同 sha256、自己还不是 infected 的行一并置 infected，返回置了几行（P2-395）。**不 commit**。"""
+    first_detail: dict[str, str] = {}
+    for sha256, detail in (
+        db.query(Attachment.sha256, Attachment.scan_detail)
+        .filter(Attachment.scan_status == "infected")
+        .order_by(Attachment.id)
+    ):
+        first_detail.setdefault(sha256, detail)
+    spread = 0
+    for sha256, detail in first_detail.items():
+        spread += (
+            db.query(Attachment)
+            .filter(Attachment.sha256 == sha256, Attachment.scan_status != "infected")
+            .update({Attachment.scan_status: "infected", Attachment.scan_detail: detail},
+                    synchronize_session=False)
+        )
+    return spread

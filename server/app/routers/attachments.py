@@ -234,6 +234,20 @@ def assert_owner_visible(
     assert_patient_visible(db, user, patient_id, resource=resource)
 
 
+def quarantined_copy(db: Session, sha256: str) -> Attachment | None:
+    """这份内容有没有被病毒扫描隔离：看同一 sha256 的**任意一行**，返回最早被隔离的那行（没有即 None）（P2-395）。
+
+    存储按内容寻址（`save` 同 sha256 只存一份），同样的字节挂在几行上就从几行下得到。只看本行的扫描结论，被隔离的
+    内容换一行照样下得到：先传的那行扫的时候特征库还没收录它（clean）、扫描器那会儿还没配（skipped）、新传的还没
+    扫到（pending）——而「只拦已确证 infected」说的是这份文件，不是这一行登记。"""
+    return (
+        db.query(Attachment)
+        .filter(Attachment.sha256 == sha256, Attachment.scan_status == "infected")
+        .order_by(Attachment.id)
+        .first()
+    )
+
+
 def store_upload(
     db: Session,
     *,
@@ -274,6 +288,8 @@ def store_upload(
         )
     sha256 = hashlib.sha256(data).hexdigest()
     get_storage().save(sha256, data)  # 内容寻址、幂等：同 sha256 已存在则跳过
+    # 这份内容早被隔离过的，新的这一行当场随之隔离（P2-395）：字节只存一份，它与被隔离的那行下得到的是同一个文件
+    known = quarantined_copy(db, sha256)
     attachment = Attachment(
         filename=filename or "unnamed",
         content_type=normalized,
@@ -285,7 +301,8 @@ def store_upload(
         # 病毒扫描旁路（P1-22）：上传不同步扫（clamd 慢/挂不能拦业务），落库即
         # pending，由 avscan.attachment_av_scan 异步补扫。未配置 clamd 时明示
         # skipped——"未配置=没扫"如实记录，不冒充已扫（clean）。
-        scan_status="pending" if settings.clamd_address.strip() else "skipped",
+        scan_status="infected" if known else "pending" if settings.clamd_address.strip() else "skipped",
+        scan_detail=known.scan_detail if known else "",
     )
     db.add(attachment)
     return attachment
@@ -404,9 +421,11 @@ def download_attachment(
     # 隔离、不再提供。pending/unavailable/skipped 一律放行——旁路定位是可用性
     # 优先：扫描器慢/挂/未配置都不该让业务下载不了文件，代价是"已上传未扫完"
     # 窗口内可能放行带毒文件（取舍与协议见 app/avscan.py docstring）。
-    if attachment.scan_status == "infected":
+    # 「已确证」看的是这份内容、不只是这一行（P2-395）：同一 sha256 的任意一行被隔离，这一行下到的就是那个文件
+    infected = attachment if attachment.scan_status == "infected" else quarantined_copy(db, attachment.sha256)
+    if infected is not None:
         raise HTTPException(
-            status_code=410, detail=f"附件已被病毒扫描隔离（{attachment.scan_detail}），禁止下载"
+            status_code=410, detail=f"附件已被病毒扫描隔离（{infected.scan_detail}），禁止下载"
         )
     storage = get_storage()
     if not storage.exists(attachment.sha256):
