@@ -322,6 +322,10 @@ def review_dual_channel(
     assert_patient_visible(db, user, app_.patient_id, resource="dual_channel")  # P0-29，同上
     if app_.status != "pending":
         raise HTTPException(status_code=409, detail="该申报已处理")
+    # 申报人不得自审（P2-398）：物资采购与手术审批的注释都写着「与双通道申报同一口径」，可这里一直没比申报人——
+    # 管理员自己报、自己批，200。与那两处同一个位置、同一种回话
+    if app_.created_by == user.id:
+        raise HTTPException(status_code=403, detail="不得审核本人提出的双通道申报")
     # 上面那道预检是锁外读的（P2-312）：审核与「还待处理」压进同一条 UPDATE，两人同时审只成一路、结论不被后到的改掉
     reviewed = cast(CursorResult, db.execute(
         update(DualChannelApp)

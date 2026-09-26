@@ -25,6 +25,8 @@ import pytest
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 
+from conftest import login
+
 from app.database import SessionLocal, engine
 from app.models import Base, DualChannelApp, SpecialDiseaseApp
 
@@ -150,14 +152,23 @@ def test_双通道同患者同药品重复申报409且库里只留一条待审(c
     assert mine[0]["id"] == first.json()["id"]
 
 
-def test_双通道驳回后可以重新申报(client, admin):
+@pytest.fixture(scope="module")
+def reviewer(client, admin):
+    """审核人另起一个管理层账号：申报人不得自审（P2-398）——申报用 admin，审核就不能再是 admin。"""
+    created = client.post("/api/users", headers=admin, json={
+        "username": "dual_unique_dir", "password": "passw0rd1", "role": "director", "full_name": "审核人"})
+    assert created.status_code == 201, created.text
+    return login(client, "dual_unique_dir", "passw0rd1")
+
+
+def test_双通道驳回后可以重新申报(client, admin, reviewer):
     patient = _patient(client, admin, "双通道唯一乙", "330281199001010022")
     first = _apply_dual(client, admin, patient["id"], "诺西那生钠")
     assert first.status_code == 201, first.text
 
     reviewed = client.post(
         f"/api/insurance/dual-channel/{first.json()['id']}/review?approve=false&comment=资料不全",
-        headers=admin,
+        headers=reviewer,
     )
     assert reviewed.status_code == 200 and reviewed.json()["status"] == "rejected"
 
@@ -166,13 +177,13 @@ def test_双通道驳回后可以重新申报(client, admin):
     assert again.json()["id"] != first.json()["id"]
 
 
-def test_双通道通过后仍可再次申报(client, admin):
+def test_双通道通过后仍可再次申报(client, admin, reviewer):
     patient = _patient(client, admin, "双通道唯一丙", "330281199001010023")
     first = _apply_dual(client, admin, patient["id"], "利妥昔单抗")
     assert first.status_code == 201, first.text
     assert client.post(
         f"/api/insurance/dual-channel/{first.json()['id']}/review?approve=true&comment=符合条件",
-        headers=admin,
+        headers=reviewer,
     ).json()["status"] == "approved"
 
     again = _apply_dual(client, admin, patient["id"], "利妥昔单抗")
