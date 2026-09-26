@@ -346,6 +346,11 @@ def update_team_member(
     program_problem = unknown_programs(db, changes.get("program_codes"), already=member.program_codes)
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
+    # 恢复在岗与加成员同一道（P2-313）：账号停用了的人不再回到成员名单里——回来了也永远不接活（P1-106）
+    if changes.get("active") is True and not member.active:
+        state = unusable_user(db, member.user_id)
+        if state:
+            raise HTTPException(status_code=409, detail=f"成员账号{state}，不能恢复在岗")
     for key, value in changes.items():
         setattr(member, key, value)
     db.commit()

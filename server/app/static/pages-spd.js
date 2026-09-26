@@ -1225,7 +1225,9 @@ async function renderSpdTeam() {
            <td>${esc((m.program_codes || []).join("、") || "—")}</td><td>${esc(m.patient_scope || "—")}</td>
            <td>${m.can_followup ? "✓" : "—"}</td><td>${m.can_referral ? "✓" : "—"}</td><td>${m.can_audit ? "✓" : "—"}</td><td>${m.can_assess ? "✓" : "—"}</td>
            <td>${m.active === false ? '<span class="tag">停用</span>' : '<span class="tag green">在岗</span>'}</td>
-           <td><button class="btn secondary" data-tm-edit="${m.id}" data-team="${teamId}" data-role="${esc(m.member_role)}">改角色</button>
+           <td><button class="btn secondary" data-tm-edit="${m.id}" data-team="${teamId}" data-role="${esc(m.member_role)}"
+                data-scope="${esc(m.patient_scope || "team")}" data-referral="${m.can_referral ? 1 : 0}"
+                data-audit="${m.can_audit ? 1 : 0}" data-assess="${m.can_assess ? 1 : 0}" data-active="${m.active === false ? 0 : 1}">改角色</button>
                <button class="btn danger" data-tm-del="${m.id}" data-team="${teamId}">移出</button></td></tr>`)}`);
       $("#spd-tm-form").onsubmit = async (e) => {
         e.preventDefault();
@@ -1293,12 +1295,14 @@ async function renderSpdTeam() {
       const form = await spdModal("调整成员角色与权限", [
         { name: "member_role", label: "角色", type: "select", value: tmEdit.dataset.role,
           options: Object.entries(SPD_MEMBER_ROLES).map(([k, v]) => ({ value: k, label: v })) },
-        { name: "patient_scope", label: "患者范围", type: "select", value: "team",
+        // 其余各栏按这位成员现在的值预填（P2-313）：原先是常量（本团队 / 否 / 在岗），只想改个角色、点保存，
+        // 就把他的权限位清空、把停用的人悄悄恢复在岗
+        { name: "patient_scope", label: "患者范围", type: "select", value: tmEdit.dataset.scope,
           options: [{ value: "self", label: "本人" }, { value: "team", label: "本团队" }, { value: "org", label: "本机构" }, { value: "region", label: "全域" }] },
-        { name: "can_referral", label: "可发起转诊", type: "select", value: "0", options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
-        { name: "can_audit", label: "可审核", type: "select", value: "0", options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
-        { name: "can_assess", label: "可评估", type: "select", value: "0", options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
-        { name: "active", label: "状态", type: "select", value: "1", options: [{ value: "1", label: "在岗" }, { value: "0", label: "停用" }] },
+        { name: "can_referral", label: "可发起转诊", type: "select", value: tmEdit.dataset.referral, options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
+        { name: "can_audit", label: "可审核", type: "select", value: tmEdit.dataset.audit, options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
+        { name: "can_assess", label: "可评估", type: "select", value: tmEdit.dataset.assess, options: [{ value: "1", label: "是" }, { value: "0", label: "否" }] },
+        { name: "active", label: "状态", type: "select", value: tmEdit.dataset.active, options: [{ value: "1", label: "在岗" }, { value: "0", label: "停用" }] },
       ]);
       if (!form) return;
       try {
