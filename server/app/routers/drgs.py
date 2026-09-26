@@ -317,6 +317,9 @@ def drg_stats(db: Session = Depends(get_db)):
             CaseSummary.drg_code,
             func.count(CaseSummary.id).label("cases"),
             func.coalesce(func.avg(CaseSummary.total_cost), 0.0).label("avg_cost"),
+            # 病例入组时的权重快照（P2-181）：MDC 的 CMI 原先拿目录现价乘例数，机构 CMI 与病案首页打印的却是快照——
+            # 管理员一调权，同一页上两个 CMI 就对不上；调权只作用于此后入组的病例，与首页上的权重同一个口径
+            func.coalesce(func.sum(CaseSummary.drg_weight), 0.0).label("weight_sum"),
         )
         .filter(CaseSummary.drg_code != "")
         .group_by(CaseSummary.drg_code)
@@ -343,7 +346,7 @@ def drg_stats(db: Session = Depends(get_db)):
         )
         entry["cases"] += r.cases
         entry["groups"] += 1
-        entry["weight_sum"] += (group.base_weight if group else 0.0) * r.cases
+        entry["weight_sum"] += float(r.weight_sum or 0.0)
         entry["cost_sum"] += (r.avg_cost or 0.0) * r.cases
 
     return {
