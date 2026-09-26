@@ -114,6 +114,9 @@ def create_device(
     body: DeviceIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     assert_org_writable(db, user, body.org_id)
+    # 机构得在（P2-169）：写权限守卫对全域角色直接放行、不查机构在不在——填错的编号撞外键，被翻成「序列号已登记」
+    if body.org_id is not None and db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
     device = SpdDevice(**body.model_dump())
     db.add(device)
     try:

@@ -298,6 +298,9 @@ class ExpertCreate(BaseModel):
              dependencies=[Depends(require_admin)])
 def create_expert(body: ExpertCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     assert_org_writable(db, user, body.org_id)
+    # 机构得在（P2-169）：写权限守卫对全域角色直接放行、不查机构在不在——填错的编号撞外键，被翻成「专家已存在」
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
     if db.query(ConsultExpert).filter(ConsultExpert.name == body.name).first():
         raise HTTPException(status_code=409, detail="专家已存在")
     e = insert_or_conflict(db, ConsultExpert(**body.model_dump()), "专家已存在")

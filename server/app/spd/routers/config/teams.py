@@ -396,6 +396,9 @@ def create_village_doctor(
     body: VillageDoctorIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     assert_org_writable(db, user, body.org_id)
+    # 机构得在（P2-169）：写权限守卫对全域角色直接放行、不查机构在不在——填错的编号撞外键，被翻成「已建村医档案」
+    if db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
     state = unusable_user(db, body.user_id)  # 停用的账号不开通村医（P1-106）
     if state:
         raise HTTPException(status_code=404, detail=f"用户{state}")
@@ -424,6 +427,9 @@ def batch_village_doctors(
     created, skipped = [], []
     for item in body.items:
         assert_org_writable(db, user, item.org_id)
+        if db.get(Organization, item.org_id) is None:   # 与单条开通同一句（P2-169）：原先撞外键记成「并发写入冲突」
+            skipped.append({"user_id": item.user_id, "reason": "机构不存在"})
+            continue
         state = unusable_user(db, item.user_id)  # 与单条开通同一句（P1-106）
         if state:
             skipped.append({"user_id": item.user_id, "reason": f"用户{state}"})

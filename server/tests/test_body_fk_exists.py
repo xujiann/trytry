@@ -334,6 +334,10 @@ def unchecked_body_fks(sources: dict[str, str] | None = None) -> list[str]:
             if not params:
                 continue
             src, checked = ast.unparse(fn), checked_names(fn)
+            # 机构写权限守卫里的 `body.org_id` 不算「看过」（P2-169）：它只管「能不能以这家机构的名义写」，全域角色
+            # 直接放行、不查机构在不在——填错的编号照样撞外键，被翻成「序列号已登记」「专家已存在」这类 409 误报
+            guarded = " ".join(ast.unparse(c) for c in ast.walk(fn) if isinstance(c, ast.Call)
+                               and isinstance(c.func, ast.Name) and c.func.id == "assert_org_writable")
             fed: set[tuple[str, str, str]] = set()   # (请求体参数, 字段, 写库处)
             for node in ast.walk(fn):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in fk_by_model:
@@ -359,7 +363,7 @@ def unchecked_body_fks(sources: dict[str, str] | None = None) -> list[str]:
                                 fed.add((bp, f, ""))
             for bp, f, ctor in sorted(fed):
                 ref = f"{bp}.{f}"
-                if src.count(ref) - ctor.count(ref) > 0 or f in checked:
+                if src.count(ref) - ctor.count(ref) - guarded.count(ref) > 0 or f in checked:
                     continue
                 found.append(f"{name}:{fn.name}:{f}")
     return sorted(set(found))
@@ -391,3 +395,18 @@ def test_判据自证_修复前的两种形状当场点名_查过的不报():
     )
     got = [v for v in unchecked_body_fks({"自证.py": snippet}) if v.startswith("自证.py")]
     assert got == ["自证.py:create_a:patient_id", "自证.py:create_a:team_id", "自证.py:patch_a:team_id"]
+
+
+def test_判据自证_只过了机构写权限守卫的机构编号也算没看过():
+    """P2-169：`assert_org_writable` 对全域角色直接放行、不查机构在不在，过了它不等于查过存在。"""
+    snippet = (
+        "class DeviceIn(BaseModel):\n    org_id: int | None = None\n"
+        "@router.post('/d')\ndef create_d(body: DeviceIn, db=None, user=None):\n"
+        "    assert_org_writable(db, user, body.org_id)\n    db.add(SpdDevice(**body.model_dump()))\n"
+        "@router.post('/e')\ndef create_e(body: DeviceIn, db=None, user=None):\n"
+        "    assert_org_writable(db, user, body.org_id)\n"
+        "    if body.org_id is not None and db.get(Organization, body.org_id) is None:\n        raise X\n"
+        "    db.add(SpdDevice(**body.model_dump()))\n"
+    )
+    got = [v for v in unchecked_body_fks({"自证2.py": snippet}) if v.startswith("自证2.py")]
+    assert got == ["自证2.py:create_d:org_id"]
