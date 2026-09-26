@@ -97,6 +97,8 @@ class SchedulerStatusOut(BaseModel):
     jobs_enabled: int
     overdue_jobs: list[str]
     recent_failures: list[SchedulerFailureOut]
+    #: 库里登记着、代码里已没有实现的任务（调度器不会跑它们，P2-267）；没有就不出这个键，原有回执逐字节不变
+    unregistered_jobs: list[str] = []
 
 
 class MonitorOverviewOut(BaseModel):
@@ -112,14 +114,19 @@ class MonitorOverviewOut(BaseModel):
 @router.get("/overview", response_model=MonitorOverviewOut, response_model_exclude_unset=True)
 def overview(db: Session = Depends(get_db)):
     """运行环境概览：版本、实例、启动时长、依赖连通性、调度器状态。"""
+    from ..scheduler import REGISTRY
+
     monitor_heartbeat()
     now = now_naive()
     jobs = db.query(ScheduledJob).all()
+    # 「到点未跑」只数代码里有实现的（P2-267，与调度器 `due_jobs` 同一句）：改名 / 下线的任务在库里留着一行，调度器不跑它，
+    # next_run_at 永远停在过去——原先它永远挂在这里，把「调度线程是不是死了」这个信号淹掉。另列在 unregistered_jobs 里
     overdue = [
         j.name
         for j in jobs
-        if j.enabled and j.next_run_at is not None and j.next_run_at < now
+        if j.name in REGISTRY and j.enabled and j.next_run_at is not None and j.next_run_at < now
     ]
+    unregistered = sorted(j.name for j in jobs if j.name not in REGISTRY)
     recent_failures = (
         db.query(JobRun)
         .filter(JobRun.status != "succeeded")
@@ -145,6 +152,7 @@ def overview(db: Session = Depends(get_db)):
                  "status": r.status, "message": r.message}
                 for r in recent_failures
             ],
+            **({"unregistered_jobs": unregistered} if unregistered else {}),
         },
     }
 
