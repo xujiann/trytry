@@ -120,7 +120,9 @@ def notify_staff(
     否则每条危急值都惊动全院管理层。
     """
     title, body = title[:TITLE_MAX], body[:BODY_MAX]   # 拼出来的标题超列宽截断，不让业务事务 500（P1-164）
-    query = db.query(User)
+    # 只投在用的账号（P2-349）：停用的登录不了，消息投给它们等于没投——原先连它们一起按编号取前 200 个，
+    # 一家机构停用的老账号多了，新来的在用医师收不到危急值
+    query = db.query(User).filter(User.status == "active")
     if org_id is not None:
         query = query.filter(User.org_id == org_id)
     if roles:
