@@ -311,7 +311,9 @@ def check_referral_rules(
             SpdReferralRule.program_code.in_([program_code, ""])
         )
     hits: list[dict[str, Any]] = []
-    for rule in query.all():
+    # 按规则编号排（P2-304），与规则清单同一个次序：命中几条时「命中即开单」取第一条的名称、目标机构与规则编码，
+    # 原先不排序、取到哪条是库说了算——同一个患者两次试算能开出去向不同的上转单
+    for rule in query.order_by(SpdReferralRule.id).all():
         hit, matched = evaluate(rule.conditions or [], facts, mode="any")
         if hit:
             hits.append({"rule": _rule_out(rule), "matched": matched})
