@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import clock
+from ..concurrency import move_row
 from ..numtypes import INT4_MAX, INT4_MIN
 from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
@@ -226,6 +227,20 @@ def overdue_followups(today: str | None = None, db: Session = Depends(get_db)):
     return [_out(t, names, orgs) for t in rows]
 
 
+def _move_pending(db: Session, task: FollowupTask, action: str, **values) -> None:
+    """待随访的任务走一步（完成 / 取消），「还是待随访」压进同一条 UPDATE，抢输的一路按库里此刻的状态 409（P2-346）。
+
+    原先两处都是「内存里判待随访 → 赋值 → commit」，UPDATE 只有 `WHERE id = ?`：完成与取消交错，已完成的随访被改成已取消
+    （随访结果还挂在上面，完成率里却少了这一条）；两人同时完成都 200，先记的随访结果被后记的盖掉。
+    """
+    if not move_row(db, FollowupTask, task.id, FollowupTask.status == "pending", **values):
+        db.rollback()
+        db.refresh(task)
+        raise HTTPException(status_code=409, detail=f"当前状态 {FOLLOWUP_TASK_STATUS_NAMES.get(task.status, task.status)} 不可{action}")
+    db.commit()
+    db.refresh(task)
+
+
 class CompleteIn(BaseModel):
     result: str = Field(min_length=1, max_length=1024, pattern=NON_BLANK)
 
@@ -242,10 +257,7 @@ def complete_followup(task_id: int, body: CompleteIn, db: Session = Depends(get_
     assert_obj_org_writable(db, user, task)
     if task.status != "pending":
         raise HTTPException(status_code=409, detail=f"当前状态 {FOLLOWUP_TASK_STATUS_NAMES.get(task.status, task.status)} 不可完成")
-    task.status = "done"
-    task.result = body.result
-    task.completed_at = utcnow()
-    db.commit()
+    _move_pending(db, task, "完成", status="done", result=body.result, completed_at=utcnow())
     return {"id": task.id, "status": task.status}
 
 
@@ -261,8 +273,7 @@ def cancel_followup(task_id: int, db: Session = Depends(get_db), user: User = De
     assert_obj_org_writable(db, user, task)
     if task.status != "pending":
         raise HTTPException(status_code=409, detail=f"当前状态 {FOLLOWUP_TASK_STATUS_NAMES.get(task.status, task.status)} 不可取消")
-    task.status = "cancelled"
-    db.commit()
+    _move_pending(db, task, "取消", status="cancelled")
     return {"id": task.id, "status": task.status}
 
 
