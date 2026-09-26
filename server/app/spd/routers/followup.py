@@ -46,7 +46,7 @@ from ..models import (
     SpdTask,
 )
 from ..reporting import compose_section, default_period_label
-from ..rules import RuleError, grade_abnormal, validate_conditions
+from ..rules import RuleError, as_validated, grade_abnormal
 from ..service import (adjust_followup_record, close_followup_record, followup_overdue, settle_call_task,
                        spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN
@@ -533,21 +533,25 @@ class QuestionnaireIn(BaseModel):
 ABNORMAL_RULE_LEVELS = ("low", "mid", "high")
 
 
-def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> None:
+def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> list[dict]:
     """建问卷与改问卷同一句：异常分级规则在随访结案时逐条求值，写坏的规则让结案 500（P1-94：改问卷原先不查）。
 
     P1-122 起连同题目一起查：执行随访按题目 key 把作答交给规则求值，规则引用问卷里没有的题目（`pain` 写成
     `pian`）、级别写成表外的值，都照收却永远判不出异常——疼痛 9 分记成「无异常」、不派处置任务，没有任何报错。
     所以题目必须有 key 且不重复，规则的字段必须是本问卷的题目，级别只能是轻 / 中 / 重三档。
+
+    返回**要存的规则**（P2-290）：字段 / 比较符按去掉两端空格后的值查、原先却存原样，「pain 」过了校验、结案时
+    按原样比，永远不命中——查的是哪个就存哪个。
     """
     keys = [item.get("key") if isinstance(item, dict) else None for item in items]
     if any(not isinstance(key, str) or not key.strip() for key in keys):
         raise HTTPException(status_code=422, detail="问卷的每道题都要有 key")
     if len(keys) != len(set(keys)):
         raise HTTPException(status_code=422, detail="问卷题目 key 不得重复")
+    checked = []
     for rule in rules:
         try:
-            (cond,) = validate_conditions([rule.get("when", {})])
+            (cond,) = as_validated([rule.get("when", {})])
         except RuleError as exc:
             raise HTTPException(status_code=422, detail=f"异常分级规则非法：{exc}") from None
         if cond["field"] not in keys:
@@ -555,6 +559,8 @@ def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> None:
         if rule.get("level", "low") not in ABNORMAL_RULE_LEVELS:
             raise HTTPException(status_code=422,
                                 detail="异常分级规则的级别只能是 low（轻度）/ mid（中度）/ high（重度）")
+        checked.append({**rule, "when": cond})
+    return checked
 
 
 def _q_out(q: SpdQuestionnaire) -> dict:
@@ -570,8 +576,8 @@ def _q_out(q: SpdQuestionnaire) -> dict:
 @router.post("/questionnaires", response_model=QuestionnaireOut, status_code=201,
              dependencies=[Depends(require_roles("director", "doctor"))])
 def create_questionnaire(body: QuestionnaireIn, db: Session = Depends(get_db)):
-    _check_abnormal_rules(body.abnormal_rules, body.items)
-    questionnaire = SpdQuestionnaire(**body.model_dump())
+    questionnaire = SpdQuestionnaire(**{**body.model_dump(),
+                                        "abnormal_rules": _check_abnormal_rules(body.abnormal_rules, body.items)})
     db.add(questionnaire)
     try:
         db.commit()
@@ -621,7 +627,7 @@ def update_questionnaire(q_id: int, body: QuestionnairePatch, db: Session = Depe
     items = changes.get("items", questionnaire.items or [])
     rules = changes.get("abnormal_rules", questionnaire.abnormal_rules or [])
     if (items, rules) != (questionnaire.items or [], questionnaire.abnormal_rules or []):
-        _check_abnormal_rules(rules, items)
+        changes["abnormal_rules"] = _check_abnormal_rules(rules, items)   # 查的是哪个就存哪个（P2-290）
     for key, value in changes.items():
         setattr(questionnaire, key, value)
     db.commit()

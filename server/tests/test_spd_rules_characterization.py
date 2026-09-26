@@ -21,6 +21,7 @@ import pytest
 
 from app.spd.rules import (
     RuleError,
+    as_validated,
     evaluate,
     grade_abnormal,
     judge_level,
@@ -278,3 +279,20 @@ class TestValidateConditions:
     def test_between_value_必须两元素(self):
         with pytest.raises(RuleError):
             validate_conditions([{"field": "bmi", "op": "between", "value": [24]}])
+
+
+class TestAsValidated:
+    """只查不改写的调用方存「查过的样子」（P2-290）：只换 field / op，其余键原样。"""
+
+    def test_干净的条件原样返回_不多出规范化键(self):
+        raw = [{"field": "age", "op": ">=", "value": 60}]
+        assert as_validated(raw) == raw
+
+    def test_字段与比较符去掉两端空格_其余键不动(self):
+        out = as_validated([{"field": " pain ", "op": " >=", "value": 7, "note": "  留着  "}])
+        assert out == [{"field": "pain", "op": ">=", "value": 7, "note": "  留着  "}]
+        assert evaluate(out, {"pain": 9})[0] is True   # 原样的「 pain 」「 >=」永远不命中
+
+    def test_写坏的照样报错(self):
+        with pytest.raises(RuleError):
+            as_validated([{"field": "age", "op": "≈", "value": 1}])

@@ -109,6 +109,17 @@ def validate_conditions(conditions: list[dict]) -> list[dict]:
     return normalized
 
 
+def as_validated(conditions: list[dict]) -> list[dict]:
+    """校验一组条件，返回**求值时真正会比的样子**：field / op 换成去掉两端空格后的值，其余键原样（P2-290）。
+
+    `validate_conditions` 按去掉空格后的 field / op 判合法，求值（`_match_one`）却按存进去的原样比——只查不改写的
+    调用方（问卷异常规则、分组自动规则）把「pain 」「 >=」照原样存下，规则过了校验、永远不命中。与存整条规范化结果
+    （多出 value / label 键）不同，这里只动这两个键：干净的输入存进去的字节不变。
+    """
+    checked = validate_conditions(conditions)
+    return [{**raw, "field": cond["field"], "op": cond["op"]} for raw, cond in zip(conditions or [], checked)]
+
+
 def _as_number(value) -> float | None:
     try:
         return float(value)

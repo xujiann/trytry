@@ -51,7 +51,7 @@ from ..models import (
     SpdTask,
     SpdTeam,
 )
-from ..rules import RuleError, evaluate, is_suspect_risk, score_scale, validate_conditions
+from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
 from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, award_points, build_facts, close_open_work,
                        match_program, package_items_ok, scale_program_mismatch, scale_unusable)
 
@@ -1511,12 +1511,13 @@ def create_group(
 ):
     # 自动分组规则写库前查结构（P1-123），与病种纳入 / 转诊触发规则同一道：原先照单全收，写坏的规则
     # （介于只填一个数、比较符写错……）按规则批量入组时 500，而分组没有改档接口，存进去就改不了。
-    # 只查不改写：存的仍是请求里的原样，出参字节不变
+    # 存的是查过的样子（P2-290）：字段 / 比较符按去掉两端空格后的值查，原先存原样，「age 」过了校验、按规则入组
+    # 永远一个不中；只换这两个键，干净的输入存进去的字节不变
     try:
-        validate_conditions(body.auto_rule)
+        auto_rule = as_validated(body.auto_rule)
     except RuleError as exc:
         raise HTTPException(status_code=422, detail=f"自动分组规则非法：{exc}") from None
-    group = SpdGroup(**body.model_dump(), owner_user_id=user.id, org_id=user.org_id)
+    group = SpdGroup(**{**body.model_dump(), "auto_rule": auto_rule}, owner_user_id=user.id, org_id=user.org_id)
     db.add(group)
     db.commit()
     return {"id": group.id, "name": group.name, "scope": group.scope,
@@ -1583,8 +1584,8 @@ def add_group_members(
     if body.use_auto_rule:
         if not group.auto_rule:
             raise HTTPException(status_code=422, detail="该分组未配置自动分组规则")
-        try:   # 修前存进去的坏规则：说清楚，不 500（P1-123）
-            validate_conditions(group.auto_rule)
+        try:   # 修前存进去的坏规则：说清楚，不 500（P1-123）；按查过的样子求值，修前存下的「age 」也照样命中（P2-290）
+            auto_rule = as_validated(group.auto_rule)
         except RuleError as exc:
             raise HTTPException(status_code=422,
                                 detail=f"该分组的自动分组规则写坏了（{exc}），无法按规则入组，请新建分组重写规则") from None
@@ -1599,7 +1600,7 @@ def add_group_members(
                 db, enrollment.patient_id,
                 {"risk_level": enrollment.risk_level, "stage": enrollment.stage},
             )
-            hit, _ = evaluate(group.auto_rule, facts, mode="all")
+            hit, _ = evaluate(auto_rule, facts, mode="all")
             if hit:
                 patient_ids.append(enrollment.patient_id)
 

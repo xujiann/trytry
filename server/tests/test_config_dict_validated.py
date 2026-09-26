@@ -52,7 +52,8 @@ CONFIG = {
     "spd/routers/followup.py:QuestionnaireIn.abnormal_rules": ("_check_abnormal_rules(",),
     "spd/routers/followup.py:QuestionnairePatch.items": ("_check_abnormal_rules(",),
     "spd/routers/followup.py:QuestionnairePatch.abnormal_rules": ("_check_abnormal_rules(",),
-    "spd/routers/population.py:GroupIn.auto_rule": ("validate_conditions(",),
+    # 校验并返回查过的样子（P2-290）：内部即 validate_conditions
+    "spd/routers/population.py:GroupIn.auto_rule": ("as_validated(",),
     "spd/routers/referral.py:ReferralRuleIn.conditions": ("validate_conditions(",),
     "spd/routers/referral.py:ReferralRulePatch.conditions": ("validate_conditions(",),
 }
