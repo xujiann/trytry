@@ -49,7 +49,7 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_OPEN_STATUSES, followup_overdue,
-                       sweep_overdue)
+                       referral_last_moved_at, sweep_overdue)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -1370,8 +1370,9 @@ def doctor_mobile_workbench(
             "mine": db.query(SpdReferralCase).filter(
                 SpdReferralCase.initiator_id == user.id
             ).count(),
+            # 与转诊页的超时预警同一口径：48 小时没推进过（从最近一次推进起算，不是从建单起算——P2-140）
             "overdue": referral_query.filter(
-                SpdReferralCase.created_at < now_naive() - timedelta(hours=48)
+                referral_last_moved_at() < now_naive() - timedelta(hours=48)
             ).count(),
         },
         "patients": {

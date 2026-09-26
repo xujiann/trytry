@@ -13,7 +13,7 @@
 from datetime import date, timedelta
 from typing import Any, cast
 
-from sqlalchemy import and_, or_, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -34,6 +34,7 @@ from .models import (
     SpdPointRule,
     SpdProgram,
     SpdReferralCase,
+    SpdReferralStep,
     SpdRevisit,
     SpdScale,
     SpdTarget,
@@ -341,6 +342,21 @@ def followup_overdue(today: str):
         and_(SpdFollowupRecord.status == "planned", SpdFollowupRecord.planned_at != "",
              SpdFollowupRecord.planned_at < today),
     )
+
+
+def referral_last_moved_at():
+    """转诊单最近一次推进的时刻：最后一条环节轨迹的时间（发起也写一条）；没有轨迹的存量单退回建单时间。
+
+    「超过 N 小时未推进」按它判，转诊页的超时预警与医生移动端工作台共用（P2-140）——原先两处都按建单时间判：
+    三天前发起、一小时前刚被卫生院审核通过的单子照报超时，而真正卡在一个环节上的单子排序也不按卡了多久。
+    """
+    last_step = (
+        select(func.max(SpdReferralStep.created_at))
+        .where(SpdReferralStep.case_id == SpdReferralCase.id)
+        .correlate(SpdReferralCase)
+        .scalar_subquery()
+    )
+    return func.coalesce(last_step, SpdReferralCase.created_at)
 
 
 def spawn_task(

@@ -41,7 +41,8 @@ from ..models import (
     SpdReferralStep,
 )
 from ..rules import RuleError, evaluate, validate_conditions
-from ..service import award_points, build_facts, enrollment_for, spawn_task, unknown_code, unknown_program
+from ..service import (award_points, build_facts, enrollment_for, referral_last_moved_at, spawn_task, unknown_code,
+                       unknown_program)
 from ...visibility import GLOBAL_ROLES, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -888,11 +889,15 @@ def referral_alerts(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """转诊审核超时预警（医生移动端 #19）：超过 N 小时未推进的在途单。"""
+    """转诊审核超时预警（医生移动端 #19）：超过 N 小时未推进的在途单。
+
+    「未推进」从最近一次推进（最后一条环节轨迹）起算，不是从建单起算（P2-140）。
+    """
     cutoff = now_naive() - timedelta(hours=max(min(hours, 720), 1))
+    last_moved = referral_last_moved_at()
     query = db.query(SpdReferralCase).filter(
         SpdReferralCase.status.notin_(_TERMINAL),
-        SpdReferralCase.created_at < cutoff,
+        last_moved < cutoff,
     )
     orgs = visible_org_ids(db, user)
     if orgs is not None:
@@ -904,10 +909,10 @@ def referral_alerts(
     # 原实现是 `len(rows)`，而 rows 被 `.limit(200)` 截断——积压 500 单时
     # 预警页显示「超时 200 单」，**与真的只有 200 单长得一模一样**，
     # 而这正是拿来判断"积压有多严重"的那个数。
-    # 列表按 `created_at` **升序**分页（id 作尾键保全序），第一页留下的正是
+    # 列表按最近一次推进的时刻**升序**分页（id 作尾键保全序），第一页留下的正是
     # 最久未推进的那些（与临期预警那两处相反，那边升序 + 只有上界才砍错了端）；
     # 其余的往后翻（P2-8 第六批）。`count` 与 `X-Total-Count` 是同一次计数。
-    rows = paginate(query.order_by(SpdReferralCase.created_at, SpdReferralCase.id), response, offset, limit)
+    rows = paginate(query.order_by(last_moved, SpdReferralCase.id), response, offset, limit)
     return {
         "threshold_hours": hours,
         "count": int(response.headers["X-Total-Count"]),
