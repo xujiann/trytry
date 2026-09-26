@@ -254,7 +254,13 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
     def month_of(dt) -> str:
         return dt.strftime("%Y-%m") if dt else ""
 
-    encounters = db.query(Encounter.org_id, Encounter.created_at).all()
+    # 门急诊人次不含住院：办入院会同时建一条 encounter_type="inpatient" 的就诊记录，原先一并数进「门急诊人次」，
+    # 与右边一列「住院人次」重复计了同一批入院（P2-153）。口径与成本核算的门诊人次同一条（cost.py）
+    encounters = (
+        db.query(Encounter.org_id, Encounter.created_at)
+        .filter(Encounter.encounter_type != "inpatient")
+        .all()
+    )
     admissions = db.query(Admission.org_id, Admission.admitted_at).all()
     finance_query = db.query(
         FinanceEntry.org_id, FinanceEntry.category, func.coalesce(func.sum(FinanceEntry.amount), 0.0)
