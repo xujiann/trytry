@@ -82,10 +82,11 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
         raise HTTPException(status_code=404, detail="受种者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="接种机构不存在")
+    # 接种日期留空按今天：查禁忌、查批次效期用的是这个日期，落库的也得是这个日期（P2-196）——原先查按今天、
+    # 存的却是空串：AEFI 发生率按期间数接种剂次时这一针不在任何期间里，接种证明的日期印成「—」
+    vaccinated_date = body.vaccinated_date or clock.today().isoformat()
     # 接种禁忌硬拦截：只拦生效中的，已解除与已过期的不再拦
-    forbidden = _effective_contraindications(
-        db, body.patient_id, body.vaccine_code, body.vaccinated_date or clock.today().isoformat()
-    )
+    forbidden = _effective_contraindications(db, body.patient_id, body.vaccine_code, vaccinated_date)
     if forbidden:
         raise HTTPException(status_code=409, detail=f"存在接种禁忌：{forbidden[0].reason}")
     # 批次三查：过期、封存、库存不足各自给出明确原因，不合并成一句
@@ -102,8 +103,7 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
             raise HTTPException(status_code=422, detail="该疫苗批次不属于接种机构")
         if batch.vaccine_code != body.vaccine_code:
             raise HTTPException(status_code=422, detail="批次与所填疫苗编码不一致")
-        today = body.vaccinated_date or clock.today().isoformat()
-        if batch.expire_date < today:
+        if batch.expire_date < vaccinated_date:
             raise HTTPException(status_code=409, detail=f"该批次已于 {batch.expire_date} 过期")
         if batch.status == "frozen":
             raise HTTPException(status_code=409, detail=f"该批次已封存：{batch.frozen_reason}")
@@ -116,7 +116,7 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
             raise HTTPException(status_code=409, detail="该批次库存已用完")
         batch_no = batch.batch_no
 
-    record = VaccinationRecord(batch_no=batch_no, **body.model_dump())
+    record = VaccinationRecord(batch_no=batch_no, **{**body.model_dump(), "vaccinated_date": vaccinated_date})
     db.add(record)
     # 扣库存与写记录同一个事务提交（D-1 的教训）
     db.commit()
