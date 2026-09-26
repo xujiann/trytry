@@ -34,9 +34,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Callable
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
@@ -69,6 +70,23 @@ def collect_encounter_probe(db: Session, source: SpdDataSource) -> int:
     return query.count()
 
 
+def lookback_since(db: Session, source: SpdDataSource) -> datetime:
+    """采集的回溯窗口起点：上一次**成功**同步的开始时刻再往前放一个周期，且至少 `freq_minutes × 4`（P2-254）。
+
+    原先只取 `freq_minutes × 4`，说是「比同步周期宽一倍以上，一次漏跑补得回来」——可同步周期不是 `freq_minutes`：
+    定时任务按 5 分钟唤醒（`spd_data_source_sync`），1 分钟一次的源实际 5 分钟才跑一回，4 分钟的窗口每轮漏掉
+    头 1 分钟里录的随访（约 20%）；定时任务停过、实例重启、某一轮采集失败，窗口移过去就再也补不回来。从上一次成功
+    同步算起，漏跑、失败都补得回来；幂等键（`source_ref`）保证补跑不重复。从没成功过的新源照旧只看 `× 4`。"""
+    period = timedelta(minutes=max(source.freq_minutes, 1))
+    floor = now_naive() - period * 4
+    last_ok = (
+        db.query(func.max(SpdSyncLog.started_at))
+        .filter(SpdSyncLog.source_id == source.id, SpdSyncLog.success.is_(True))
+        .scalar()
+    )
+    return floor if last_ok is None else min(floor, last_ok - period)
+
+
 #: 公卫随访 → 慢专病指标：（指标, 随访上的列, 单位, 判等级用的病种）
 _PUBLICHEALTH_METRICS = (
     ("bp_sys", "sbp", "mmHg", "hypertension"),
@@ -90,14 +108,14 @@ def collect_publichealth(db: Session, source: SpdDataSource) -> int:
     - 病种编码按数值指标推断（血压→hypertension、血糖→diabetes）：等级判定
       需要病种上下文，公卫随访没带病种时按指标语义取最常见的目标口径。
 
-    回溯窗口取 `freq_minutes × 4`：比同步周期宽一倍以上，一次漏跑补得回来，
+    回溯窗口从上一次**成功**同步算起（`lookback_since`，至少 `freq_minutes × 4`）：漏跑、失败都补得回来，
     幂等键保证补跑不重复。
 
     窗口按 id 翻页**取完**（每页 `PUBLICHEALTH_PAGE` 条）。原先只取窗口里最早的一页：窗口里多于一页时，
     每一轮取到的都是同一批最早的——头一轮落库、之后全被判重跳过——其余的一轮都轮不到，窗口移过去就永远
     出了窗口，同步日志照写成功（P2-94）。判重只查这一页的来源键；原先每轮把全部监测值的来源键读进内存。
     """
-    since = now_naive() - timedelta(minutes=max(source.freq_minutes, 1) * 4)
+    since = lookback_since(db, source)
     written, after_id = 0, 0
     while True:
         rows = iter_recent_chronic_followups(db, since, limit=PUBLICHEALTH_PAGE, after_id=after_id)
