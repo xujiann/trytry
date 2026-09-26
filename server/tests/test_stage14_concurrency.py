@@ -421,7 +421,6 @@ def test_物资全部出库后清单仍打得开(client, admin, org):
 # `test_读改写欠账清单不得腐烂` 逼着把条数调低（为 0 则删条目）。
 KNOWN_READ_MODIFY_WRITE: dict[str, tuple[int, str]] = {
     # —— 幂等/取极值形状：同为读-改-写，但重复执行结果一致，丢更新后果有限（登记，暂不修）——
-    "education.py:submit_exam": (1, "score = max(score, 新分)，取极值"),
     "portal.py:bind_wechat": (1, "nickname = nickname or 新值，幂等回填"),
     "spd/followup.py:record_call_result": (
         2, "started_at / operator_id = 旧值 or 新值，幂等回填（同函数的两条真追加已进 serialized_on 临界区）",

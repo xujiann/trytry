@@ -116,9 +116,14 @@ def submit_exam(course_id: int, body: ExamSubmit, db: Session = Depends(get_db),
             .first()
         )
     record = ensure_present(record, "培训记录")
-    record.score = max(record.score, body.score)
-    record.passed = record.score >= PASS_SCORE
+    # 取最高分用一条带条件的 UPDATE（P2-193）：原先读出旧分、在内存里 max 再写回——同一人两次交卷并发时，
+    # 两边都读到旧分，后写的那次若是较低分就把较高分盖掉（读改写欠账清单里登记着的那一条）
+    db.query(TrainingRecord).filter(
+        TrainingRecord.id == record.id, TrainingRecord.score < body.score
+    ).update({TrainingRecord.score: body.score, TrainingRecord.passed: body.score >= PASS_SCORE},
+             synchronize_session=False)
     db.commit()
+    db.refresh(record)
     return {"course_id": course_id, "score": record.score, "passed": record.passed}
 
 
