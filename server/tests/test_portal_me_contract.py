@@ -231,8 +231,8 @@ def test_登录态档案的形状(client, auth):
     assert set(body) == ARCHIVE_KEYS
     assert set(body["encounters"][0]) == {"diagnosis_name", "encounter_type", "summary"}
     assert set(body["exam_reports"][0]) == {"conclusion", "critical"}
-    assert set(body["chronic_care"][0]) == {"disease", "level", "next_followup_due",
-                                            "guidance_points"}
+    assert set(body["chronic_care"][0]) == {"disease", "disease_name", "level", "next_followup_due",
+                                            "guidance_points"}   # disease_name 于 P2-210 加入
     assert isinstance(body["chronic_care"][0]["level"], int)
 
 

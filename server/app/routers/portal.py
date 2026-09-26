@@ -783,6 +783,9 @@ class ArchiveExamReportOut(BaseModel):
 
 class ArchiveChronicOut(BaseModel):
     disease: str
+    #: 病种名取自病种目录（P2-210）：居民端原先自带一张三个病种的对照表，目录里另外五个种子病种（冠心病、脑卒中……）
+    #: 在「我的档案」里印成英文编码；目录里查不到的回落编码本身
+    disease_name: str
     level: int
     next_followup_due: str
     guidance_points: str
@@ -816,6 +819,12 @@ def _build_archive(db: Session, patient: Patient) -> dict:
         .all()
     )
     chronic = db.query(ChronicPatient).filter(ChronicPatient.patient_id == patient.id).all()
+    disease_names = {
+        t.code: t.name
+        for t in db.query(ChronicDiseaseType)
+        .filter(ChronicDiseaseType.code.in_([c.disease for c in chronic] or [""]))
+        .all()
+    }
 
     return {
         "name": patient.name,
@@ -828,6 +837,7 @@ def _build_archive(db: Session, patient: Patient) -> dict:
         "chronic_care": [
             {
                 "disease": c.disease,
+                "disease_name": disease_names.get(c.disease, c.disease),
                 "level": c.level,
                 "next_followup_due": c.next_due,
                 "guidance_points": guidance_for(db, c.disease),

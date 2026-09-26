@@ -391,7 +391,8 @@ def test_留痕是副作用响应体逐键与改前一致_档案(client, me, see
         ],
         "exam_reports": [{"conclusion": "未见明显异常", "critical": False}],
         "chronic_care": [
-            {"disease": "hypertension", "level": 1, "next_followup_due": "2026-09-01",
+            # disease_name 取自病种目录（P2-210）
+            {"disease": "hypertension", "disease_name": "高血压", "level": 1, "next_followup_due": "2026-09-01",
              "guidance_points": guidance}
         ],
     }

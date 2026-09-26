@@ -93,7 +93,8 @@ def test_特征化_平台档案的chronic_care段形状不变(client, resident):
     assert archive.status_code == 200, archive.text
     care = archive.json()["chronic_care"]
     assert len(care) == 1
-    assert set(care[0]) == {"disease", "level", "next_followup_due", "guidance_points"}
+    # disease_name 于 P2-210 加入（病种名取自目录，居民端不再自带三个病种的对照表）；其余键不变
+    assert set(care[0]) == {"disease", "disease_name", "level", "next_followup_due", "guidance_points"}
     assert care[0]["disease"] == "hypertension"
     assert care[0]["level"] == 2          # 平台原始码，无标签
 

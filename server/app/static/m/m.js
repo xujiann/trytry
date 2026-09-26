@@ -281,7 +281,6 @@ $("#btn-logout").addEventListener("click", async () => {
 
 /* ---------------- 我的档案 ---------------- */
 
-const CHRONIC_NAMES = { hypertension: "高血压", diabetes: "2型糖尿病", copd: "慢阻肺" };
 const LEVEL_TAGS = { 1: ["控制良好", "green"], 2: ["需干预", "orange"], 3: ["高危", "red"] };
 
 function kv(k, v) {
@@ -476,7 +475,7 @@ async function loadArchive() {
     const chronic = data.chronic_care.map((c) => {
       const [label, color] = LEVEL_TAGS[c.level] || ["未分级", ""];
       return `<div class="m-card">
-        ${kv("病种", esc(CHRONIC_NAMES[c.disease] || c.disease))}
+        ${kv("病种", esc(c.disease_name || c.disease))}
         ${kv("分级", `<span class="tag ${color}">${esc(label)}</span>`)}
         ${kv("下次随访", esc(c.next_followup_due || "待安排"))}
         ${c.guidance_points ? kv("指导要点", esc(c.guidance_points)) : ""}
@@ -524,9 +523,9 @@ const CONSENT_SCENE_NAMES = {
   archive: "建档", chronic_enroll: "慢病入组", followup: "随访", family_contract: "家医签约",
   cross_org_access: "跨机构调阅", public_health_report: "公卫上报", family_delegate: "家庭代管授权",
 };
-const CONSENT_METHOD_NAMES = { self: "本人自签", proxy: "窗口代提" };
 const CORRECT_FIELD_NAMES = { name: "姓名", gender: "性别", birth_date: "出生日期", phone: "联系电话" };
-const CORRECTION_STATUS = { pending: ["待审核", "orange"], approved: ["已通过", "green"], rejected: ["已驳回", "red"] };
+// 措辞照模型列注释（pending=待审核, approved=已通过, rejected=已拒绝），原先写「已驳回」与管理端对不上（P2-210）
+const CORRECTION_STATUS = { pending: ["待审核", "orange"], approved: ["已通过", "green"], rejected: ["已拒绝", "red"] };
 
 /* 知情同意与个人信息权利（个保法更正权 / 删除权，ADR-0010）：
  * 同意记录按被查看人（本人或代管成员）取；更正/注销申请按账户归集。 */
@@ -561,7 +560,7 @@ async function loadArchiveExtra(query) {
     ${consents === null ? '<p class="empty">同意记录暂时无法加载</p>' : consents.map((c) => `<div class="m-card">
       ${kv("场景", esc(CONSENT_SCENE_NAMES[c.scene] || c.scene))}
       ${kv("文本版本", esc(c.text_version || "—"))}
-      ${kv("方式", esc(CONSENT_METHOD_NAMES[c.method] || c.method))}
+      ${kv("方式", esc(c.method_name || c.method))}
       ${c.guardian_name ? kv("监护人", `${esc(c.guardian_name)}（${esc(c.guardian_relation || "监护人")}）`) : ""}
       ${kv("状态", c.revoked_at ? `<span class="tag">已撤回 ${esc(c.revoked_at.slice(0, 10))}</span>` : '<span class="tag green">有效</span>')}
     </div>`).join("") || '<p class="empty">尚无同意记录</p>'}
@@ -772,8 +771,9 @@ const SURGERY_STATUS_TEXT = {
   scheduled: ["已排期", "green"], completed: ["已完成", ""], cancelled: ["已取消", ""],
 };
 const URGENCY_TEXT = { elective: "择期", urgent: "限期", emergency: "急诊" };
-const CATEGORY_TEXT = { bed: "床位费", drug: "药费", exam: "检查费", treat: "治疗费",
-  material: "材料费", other: "其他" };
+// 键是收费目录的类别编码（billing.CHARGE_CATEGORY_NAMES）：原先写成 treat / material，后端从来是 treatment，
+// 治疗处置费在费用清单上印成英文「treatment」（P2-210）
+const CATEGORY_TEXT = { bed: "床位费", drug: "药费", exam: "检查检验费", treatment: "治疗处置费", other: "其他" };
 
 async function renderInpatient(box) {
   const rows = await authApi(`/api/portal/me/admissions${svcQuery()}`);
@@ -1013,7 +1013,8 @@ $("#price-search").addEventListener("input", (e) => {
 
 /* ---------------- 站内消息 ---------------- */
 
-const NOTIFY_LABELS = { exam_report: "检查报告", surgery: "手术安排", followup: "随访提醒" };
+// 慢专病宣教推送（spd_edu）也投居民站内信，原先缺这一类，印成「spd_edu · …」（P2-210）
+const NOTIFY_LABELS = { exam_report: "检查报告", surgery: "手术安排", followup: "随访提醒", spd_edu: "健康宣教" };
 
 $("#btn-notify-login").addEventListener("click", () => {
   switchTab("archive");
