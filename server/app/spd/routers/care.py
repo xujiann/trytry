@@ -1529,8 +1529,14 @@ def handle_case_report(
     if report is None:
         raise HTTPException(status_code=404, detail="上报记录不存在")
     assert_org_writable(db, user, report.org_id)
+    if report.status in ("done", "closed"):
+        # 已完成 / 已关闭的上报不再改处置结果（P2-213）：原先再发一次照样 200，处置人、处置时间被改写成后来的人与时刻，
+        # 与本文件「结束咨询」（P2-75）、慢专病入组申请「该申请已处理」同一条规矩
+        raise HTTPException(status_code=409, detail="该上报已处置完毕，不能再改处置结果")
     report.status = body.status
-    report.handle_note = body.handle_note
+    if body.handle_note.strip():
+        # 空备注不覆盖已写的（P2-213）：「开始处置」时写了「已联系家属嘱急诊」，「处置完成」时备注留空，原先就被抹成空串
+        report.handle_note = body.handle_note
     report.handled_by = user.id
     if body.status in ("done", "closed"):
         report.handled_at = now_naive()
