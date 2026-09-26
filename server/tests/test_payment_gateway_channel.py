@@ -75,7 +75,7 @@ def base(client, admin):
 _counter = {"n": 0}
 
 
-def new_settlement(client, base, admin, quantity=1):
+def new_settlement(client, base, admin, quantity=1, insurance_pay=0):
     _counter["n"] += 1
     seq = _counter["n"]
     patient = client.post(
@@ -100,7 +100,7 @@ def new_settlement(client, base, admin, quantity=1):
     )
     resp = client.post(
         "/api/billing/settlements",
-        json={"bill_type": "outpatient", "encounter_id": encounter["id"], "insurance_pay": 0},
+        json={"bill_type": "outpatient", "encounter_id": encounter["id"], "insurance_pay": insurance_pay},
         headers=base["operator"],
     )
     assert resp.status_code == 201, resp.text
@@ -462,7 +462,9 @@ def test_生产环境窗口类渠道照常受理(client, admin, base, monkeypatc
 
     没有这条，"生产不许落 Mock" 很容易被写成一刀切，把只收现金的县整个挡住。
     """
-    settlement = new_settlement(client, base, admin)
+    # 医保渠道收的是基金那一份，额度按医保支付算（P1-163）：给它一份医保支付，不然 10 元照样超出额度（被 422 挡住），
+    # 遮住这里真正要验的东西（守卫有没有误伤）
+    settlement = new_settlement(client, base, admin, insurance_pay=50 if channel == "insurance" else 0)
     monkeypatch.setattr(settings, "env", "prod")
     resp = client.post(
         "/api/billing/payments",

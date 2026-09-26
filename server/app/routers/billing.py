@@ -1281,8 +1281,8 @@ def _deposit_offset_of(db: Session, settlement: Settlement) -> float:
     return round(total or 0.0, 2)
 
 
-def _collected_amount(db: Session, settlement_id: int, *, include_pending: bool) -> float:
-    """结算单已占用的收款额。
+def _collected_amount(db: Session, settlement_id: int, *, include_pending: bool, insurance: bool | None = None) -> float:
+    """结算单已占用的收款额。`insurance=True` 只数医保渠道、`False` 只数其余渠道、`None` 全数（P1-163）。
 
     两处口径差别都是缺陷修出来的：
 
@@ -1295,19 +1295,29 @@ def _collected_amount(db: Session, settlement_id: int, *, include_pending: bool)
       其它还没到账的 pending 不该抢这个额度。
     """
     statuses = ["paid", "refunded"] + (["pending"] if include_pending else [])
-    total = (
-        db.query(
-            func.coalesce(
-                func.sum(PaymentOrder.amount - PaymentOrder.refunded_amount), 0.0
-            )
-        )
-        .filter(
-            PaymentOrder.settlement_id == settlement_id,
-            PaymentOrder.status.in_(statuses),
-        )
-        .scalar()
+    query = db.query(
+        func.coalesce(func.sum(PaymentOrder.amount - PaymentOrder.refunded_amount), 0.0)
+    ).filter(
+        PaymentOrder.settlement_id == settlement_id,
+        PaymentOrder.status.in_(statuses),
     )
-    return round(total or 0.0, 2)
+    if insurance is not None:
+        query = query.filter(
+            PaymentOrder.channel == "insurance" if insurance else PaymentOrder.channel != "insurance"
+        )
+    return round(query.scalar() or 0.0, 2)
+
+
+def _channel_cap(settlement: Settlement, offset: float, insurance: bool) -> tuple[float, str, float]:
+    """一类渠道在这张结算单上最多能收多少（P1-163）：医保渠道收基金那一份（医保支付），其余渠道收个人自付、
+    扣掉押金冲抵。返回（上限，这一份的名称，这一份的金额）。
+
+    原先「收超了没有」拿全部渠道的已收额去比结算总额：总额里有基金那一份，个人自付渠道就多出一截「额度」——
+    总额 1000（医保 600、自付 400），收费按两次默认额，两张 400 的现金单都 paid，自付收了两遍（第三次才被挡）。
+    居民端「已支付」（`self_pay_outstanding`）早就这样分开算，说明里写的就是与收款「同一套算术」。"""
+    if insurance:
+        return round(settlement.insurance_pay, 2), "医保支付", settlement.insurance_pay
+    return round(settlement.self_pay - offset, 2), "个人自付", settlement.self_pay
 
 
 def self_pay_outstanding(db: Session, settlements: list[Settlement]) -> dict[int, float]:
@@ -1408,15 +1418,18 @@ def create_payment(
     # 判定与落单一起圈进结算单这一行的临界区，并在里头提交。
     with serialized_on(db, Settlement, settlement.id):
         _expire_stale_pending(db, settlement.id)
-        paid_already = _collected_amount(db, settlement.id, include_pending=True)
-        if paid_already + offset + amount > round(settlement.total_amount, 2) + 1e-6:
+        # 医保渠道与个人自付渠道的额度各算各的（P1-163）：原先拿全部渠道的已收额比结算总额，基金那一份成了自付的额度
+        is_insurance = body.channel == "insurance"
+        paid_already = _collected_amount(db, settlement.id, include_pending=True, insurance=is_insurance)
+        cap, part_name, part_amount = _channel_cap(settlement, offset, is_insurance)
+        if paid_already + amount > cap + 1e-6:
             # 先收事务再抛：作废写入还挂在未提交的事务里，SQLite 的库级写锁
             # 要等依赖清理才放，下一个请求会撞 "database is locked"
             db.rollback()
-            covered = f"已付 {paid_already}" + (f"，押金冲抵 {offset}" if offset else "")
+            covered = f"已付 {paid_already}" + (f"，押金冲抵 {offset}" if offset and not is_insurance else "")
             raise HTTPException(
                 status_code=422,
-                detail=f"支付金额超出结算单未付余额（总额 {settlement.total_amount}，{covered}）",
+                detail=f"支付金额超出结算单未付余额（总额 {settlement.total_amount}，{part_name} {part_amount}，{covered}）",
             )
         order = PaymentOrder(
             settlement_id=settlement.id, channel=body.channel, amount=amount, created_by=user.id
@@ -1558,21 +1571,22 @@ async def payment_callback(request: Request, db: Session = Depends(get_db)):
             db.rollback()
             return _settled_callback_result(order, result_status, trade_no)
         settlement = db.get(Settlement, order.settlement_id)
-        settled = _collected_amount(db, order.settlement_id, include_pending=False)
+        # 与下单同一套额度（P1-163）：医保渠道比医保支付，其余渠道比个人自付扣掉押金冲抵（P1-142）
+        is_insurance = order.channel == "insurance"
+        settled = _collected_amount(db, order.settlement_id, include_pending=False, insurance=is_insurance)
         if settlement is not None:
-            settled = round(settled + _deposit_offset_of(db, settlement), 2)   # 押金冲抵同样算已收（P1-142）
-        if settlement is not None and settled + round(order.amount, 2) > round(
-            settlement.total_amount, 2
-        ) + 1e-6:
-            logger.error(
-                "[PAY-CALLBACK] 结算单 %s 已收 %s / 总额 %s，支付单 %s 的 %s 元回调超出未付余额，拒绝入账",
-                settlement.id, settled, settlement.total_amount, order.id, order.amount,
-            )
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail=f"该结算单已收足（总额 {settlement.total_amount}，已收 {settled}），回调超出未付余额，拒绝入账",
-            )
+            cap, part_name, part_amount = _channel_cap(settlement, _deposit_offset_of(db, settlement), is_insurance)
+            if settled + round(order.amount, 2) > cap + 1e-6:
+                logger.error(
+                    "[PAY-CALLBACK] 结算单 %s 的%s已收 %s / 可收 %s，支付单 %s 的 %s 元回调超出未付余额，拒绝入账",
+                    settlement.id, part_name, settled, cap, order.id, order.amount,
+                )
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"该结算单已收足（总额 {settlement.total_amount}，{part_name} {part_amount}，已收 {settled}），"
+                           "回调超出未付余额，拒绝入账",
+                )
         order.status = "paid"
         order.trade_no = trade_no or order.trade_no
         order.paid_at = utcnow()
