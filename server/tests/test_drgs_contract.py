@@ -61,7 +61,8 @@ PRECHECK_CALIBER = (
 ALERTS_CALIBER = (
     "基线取本院已出院且已入组病例的住院日（由入出院时刻现算）；"
     "同组历史少于 5 例不预警，单列在 "
-    "insufficient_baseline；尚未填病案首页的在院病例计入 ungrouped_in_stay"
+    "insufficient_baseline；尚未填病案首页的在院病例计入 ungrouped_in_stay；"
+    "兜底组 QY 不算入组，既不建基线也不预警，在院的同样计入 ungrouped_in_stay"   # P2-166
 )
 
 # 事中预警的固定基准日：所有入出院时刻回填到它附近，today 也传它，跑哪天都一样

@@ -455,11 +455,14 @@ def in_stay_alerts(
     end = resolve_business_date(today)
 
     # 历史基线：已出院且已入组的病例，住院日由入出院时刻现算
-    # （平台没有存 los_days，存一份就会与两个时刻不一致）
+    # （平台没有存 los_days，存一份就会与两个时刻不一致）。
+    # 「已入组」指正式分组，兜底组 QY 除外（P2-166）：它收的是哪组都没匹配上的病例，「同组均值」在它身上
+    # 没有意义——与 /stats 从 CMI 分母剔除兜底组同一口径。原先 QY 也建基线、在院的 QY 病例拿它预警
     history = (
         db.query(CaseSummary, Admission)
         .join(Admission, CaseSummary.admission_id == Admission.id)
-        .filter(CaseSummary.drg_code != "", Admission.discharged_at.isnot(None))
+        .filter(CaseSummary.drg_code != "", CaseSummary.drg_code != FALLBACK_CODE,
+                Admission.discharged_at.isnot(None))
         .all()
     )
     baseline: dict[str, list[int]] = {}
@@ -485,8 +488,8 @@ def in_stay_alerts(
     alerts, insufficient, ungrouped = [], [], 0
     for adm, summary in rows:
         drg_code = summary.drg_code if summary else ""
-        if not drg_code:
-            # 尚未填病案首页的在院病例：事中无从比对，计数报出
+        if not drg_code or drg_code == FALLBACK_CODE:
+            # 尚未填病案首页、或落入兜底组（未正式入组）的在院病例：没有同组均值可比，计数报出
             ungrouped += 1
             continue
         stayed = (end - adm.admitted_at.date()).days
@@ -518,5 +521,6 @@ def in_stay_alerts(
         "ungrouped_in_stay": ungrouped,
         "caliber": f"基线取本院已出院且已入组病例的住院日（由入出院时刻现算）；"
                    f"同组历史少于 {MIN_BASELINE_CASES} 例不预警，单列在 "
-                   f"insufficient_baseline；尚未填病案首页的在院病例计入 ungrouped_in_stay",
+                   f"insufficient_baseline；尚未填病案首页的在院病例计入 ungrouped_in_stay；"
+                   f"兜底组 {FALLBACK_CODE} 不算入组，既不建基线也不预警，在院的同样计入 ungrouped_in_stay",
     }
