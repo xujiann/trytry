@@ -34,7 +34,6 @@ from ...deps import (
 from ..platform import Admission, Encounter, Organization, Patient, User, unusable_user
 from ..models import (
     SpdCallTask,
-    SpdEnrollment,
     SpdFollowupRecord,
     SpdFollowupRule,
     SpdQcSample,
@@ -47,7 +46,8 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
-from ..service import close_followup_record, followup_overdue, unknown_code, unknown_ids, unknown_program
+from ..service import (close_followup_record, followup_overdue, spawn_followup_abnormal_task, unknown_code,
+                       unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -954,7 +954,7 @@ def execute_followup(
     record_id: int, body: ExecuteIn, db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """执行随访：填问卷 → 自动异常分级 → 重度异常自动派处置任务。
+    """执行随访：填问卷 → 自动异常分级 → 中度 / 重度异常自动派处置任务（与居民自助作答同一个派单帮手）。
 
     失访（`unreachable`）单独一个状态而不是"完成但没答案"：随访完成率的分母
     应该含失访、分子不含，两者混在一起会把完成率算高。
@@ -996,28 +996,8 @@ def execute_followup(
     if questionnaire is not None:
         level, action = grade_abnormal(questionnaire.abnormal_rules or [], body.answers)
         record.abnormal_level = level
-        if level in ("mid", "high"):
-            enrollment = (
-                db.query(SpdEnrollment)
-                .filter(
-                    SpdEnrollment.patient_id == record.patient_id,
-                    SpdEnrollment.program_code == record.program_code,
-                )
-                .first()
-                if record.program_code else None
-            )
-            db.add(
-                SpdTask(
-                    program_code=record.program_code, patient_id=record.patient_id,
-                    enrollment_id=enrollment.id if enrollment else None,
-                    task_type="report", title=f"随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}",
-                    org_id=record.org_id, status="pending",
-                    priority=3 if level == "high" else 2,
-                    due_date=(clock.today() + timedelta(days=1 if level == "high" else 3))
-                    .isoformat(),
-                    source="followup",
-                )
-            )
+        spawn_followup_abnormal_task(
+            db, record, level, f"随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}")
     db.commit()
     out = _record_out(record)
     out["action"] = action

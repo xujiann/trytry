@@ -542,10 +542,16 @@ def test_四个写入点必须仍走并发助手():
 
 
 def test_随访办结必须是条件更新且处置任务只在命中后派():
-    """判定与写在同一条 UPDATE 里，`db.add(SpdTask(...))` 必须排在闸门之后。"""
+    """判定与写在同一条 UPDATE 里，派处置任务必须排在闸门之后。
+
+    两条通道的派单自 P2-131 起共用 `service.spawn_followup_abnormal_task`（原先各写一份，居民那份不挂档案、
+    中度也次日到期）：钉住两处都走它、都排在闸门之后、谁也不再自己 `SpdTask(...)`。
+    """
     helper_src = pyinspect.getsource(spd_service.close_followup_record)
     assert "update(SpdFollowupRecord)" in helper_src and ".rowcount" in helper_src
+    assert "SpdTask(" in pyinspect.getsource(spd_service.spawn_followup_abnormal_task)
 
+    dispatch = "spawn_followup_abnormal_task("
     for func, allowed in (
         (followup_mod.execute_followup, 'allowed_from=("planned", "overdue", "unreachable")'),
         (portal_mod.self_answer_followup, 'allowed_from=("planned", "overdue")'),
@@ -556,7 +562,10 @@ def test_随访办结必须是条件更新且处置任务只在命中后派():
         assert not re.search(r'record\.status\s*=\s*"(done|unreachable)"', src), (
             f"{func.__name__} 回潮成 Python 侧改状态——判定与写又被拆成两步"
         )
-        assert src.index("close_followup_record(") < src.index("SpdTask("), (
+        assert dispatch in src and "SpdTask(" not in src, (
+            f"{func.__name__} 又自己派处置任务了——两条通道各写一份就会走样（P2-131）"
+        )
+        assert src.index("close_followup_record(") < src.index(dispatch), (
             f"{func.__name__} 必须先过闸门再派处置任务"
         )
 

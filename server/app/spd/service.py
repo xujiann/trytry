@@ -425,6 +425,31 @@ def close_followup_record(
     return bool(closed.rowcount)
 
 
+def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: str, title: str) -> SpdTask | None:
+    """随访答卷命中中度 / 重度异常时派一条处置任务；医护执行与居民自助作答共用这一处（P2-131）。
+
+    原先两条通道各写一份：居民那份不挂纳管档案、重度中度一律次日到期，而它的说明写着「异常分级与派单逻辑与医护
+    执行时完全一致」。不挂档案的任务，结案收尾（`close_open_work` 按档案找任务）取消不到——患者登记死亡后它照旧
+    到期、超期；档案的 360 画像、居民端的就医旅程也都按档案看任务，看不见它。
+
+    挂哪份档案：写了病种的按 `enrollment_for`（在管的优先）；随访记录没写病种的不挂（与原先医护那份一致）。
+    到期：重度次日、中度三天。**不 commit**。
+    """
+    if level not in ("mid", "high"):
+        return None
+    enrollment = enrollment_for(db, record.patient_id, record.program_code)[1] if record.program_code else None
+    task = SpdTask(
+        program_code=record.program_code, patient_id=record.patient_id,
+        enrollment_id=enrollment.id if enrollment else None,
+        task_type="report", title=title, org_id=record.org_id, status="pending",
+        priority=3 if level == "high" else 2,
+        due_date=(clock.today() + timedelta(days=1 if level == "high" else 3)).isoformat(),
+        source="followup",
+    )
+    db.add(task)
+    return task
+
+
 def start_path(
     db: Session, enrollment: SpdEnrollment, template: SpdPathTemplate, owner_user_id: int | None
 ) -> SpdPathInstance:

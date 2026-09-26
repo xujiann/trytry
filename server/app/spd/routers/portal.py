@@ -48,7 +48,7 @@ from ..models import (
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
                        close_followup_record, judge_measurement, measure_program_for, measure_value_problem, move_task,
-                       scale_program_mismatch, scale_unusable, unknown_program)
+                       scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
 from .followup import ABNORMAL_LEVEL_NAMES
 from fastapi import File, Form, UploadFile
 
@@ -1042,17 +1042,8 @@ def self_answer_followup(
     if questionnaire is not None:
         level, action = grade_abnormal(questionnaire.abnormal_rules or [], body.answers)
         record.abnormal_level = level
-        if level in ("mid", "high"):
-            db.add(
-                SpdTask(
-                    program_code=record.program_code, patient_id=patient.id,
-                    task_type="report", title=f"自助随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}",
-                    org_id=record.org_id, status="pending",
-                    priority=3 if level == "high" else 2,
-                    due_date=(clock.today() + timedelta(days=1)).isoformat(),
-                    source="followup",
-                )
-            )
+        spawn_followup_abnormal_task(
+            db, record, level, f"自助随访异常处置：{action or ABNORMAL_LEVEL_NAMES.get(level, level) + '异常'}")
     db.commit()
     return {"id": record.id, "abnormal_level": record.abnormal_level,
             "abnormal_level_name": ABNORMAL_LEVEL_NAMES.get(record.abnormal_level, record.abnormal_level),
