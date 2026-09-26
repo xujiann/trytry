@@ -1226,8 +1226,8 @@ async function renderPatients() {
     const auths = await api(`/api/patients/${pid}/authorizations`);
     $("#auth-table").innerHTML = table(["ID", "被授权机构", "范围", "有效期至", "状态", "操作"], auths, (a) =>
       `<tr><td>${a.id}</td><td>${a.grantee_org_id}</td><td>${SCOPES[a.scope] || esc(a.scope)}</td><td>${esc(a.expire_date)}</td>
-       <td><span class="tag ${a.status === "active" ? "green" : "red"}">${a.status === "active" ? "有效" : "已撤销"}</span></td>
-       <td>${a.status === "active" ? `<button class="btn danger" data-revoke="${a.id}" data-pid="${pid}">撤销</button>` : "—"}</td></tr>`);
+       <td><span class="tag ${a.effective ? "green" : "red"}">${esc(a.status_name)}</span></td>
+       <td>${a.effective ? `<button class="btn danger" data-revoke="${a.id}" data-pid="${pid}">撤销</button>` : "—"}</td></tr>`);
   };
   $("#auth-grant-form").onsubmit = async (e) => {
     e.preventDefault();

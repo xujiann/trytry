@@ -163,6 +163,11 @@ class AuthorizationOut(BaseModel):
     scope: str
     expire_date: str
     status: str
+    #: 此刻是否还算数（P2-214）：`status` 只记「撤没撤」，过了有效期的仍是 active——页面原先只看 status，
+    #: 过期的授权照印「有效」、还摆着「撤销」，而调阅判定早已不认它。判定取自 `active_authorization_grants`（唯一一份）
+    effective: bool
+    #: 有效 / 已过期 / 已撤销（状态文案取自后端，§13）
+    status_name: str
 
 
 class AuthorizationCheckOut(BaseModel):
@@ -235,6 +240,18 @@ def list_authorizations(
     log_patient_access(db, user, patient_id, "authorization", "consent_admin")
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
+    rows = (
+        db.query(ArchiveAuthorization)
+        .filter(ArchiveAuthorization.patient_id == patient_id)
+        .order_by(ArchiveAuthorization.id.desc())
+        .all()
+    )
+    # 此刻还算数的：与调阅判定用同一份有效期口径（不在这里再写一遍「空 = 不设到期日」）
+    effective_ids = {
+        g.id
+        for org_id in sorted({a.grantee_org_id for a in rows})
+        for g in active_authorization_grants(db, patient_id, org_id)
+    }
     return [
         {
             "id": a.id,
@@ -242,11 +259,10 @@ def list_authorizations(
             "scope": a.scope,
             "expire_date": a.expire_date,
             "status": a.status,
+            "effective": a.id in effective_ids,
+            "status_name": "有效" if a.id in effective_ids else ("已过期" if a.status == "active" else "已撤销"),
         }
-        for a in db.query(ArchiveAuthorization)
-        .filter(ArchiveAuthorization.patient_id == patient_id)
-        .order_by(ArchiveAuthorization.id.desc())
-        .all()
+        for a in rows
     ]
 
 

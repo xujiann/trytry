@@ -19,6 +19,8 @@
   （resource=authorization, basis=consent_admin，"可问责而非可阻断"，404 之前
   也留痕）在此逐条钉住——治理不许动 visibility/AccessLog 一行。
 """
+from datetime import date
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -30,7 +32,7 @@ from app.models import AccessLog
 
 PATIENT_KEYS = ["name", "id_card", "gender", "birth_date", "phone", "id", "ehc_no"]
 GRANT_RECEIPT_KEYS = ["id", "patient_id", "scope", "status"]
-AUTH_ROW_KEYS = ["id", "grantee_org_id", "scope", "expire_date", "status"]
+AUTH_ROW_KEYS = ["id", "grantee_org_id", "scope", "expire_date", "status", "effective", "status_name"]  # 末两键 P2-214 加
 CHECK_KEYS = ["patient_id", "org_id", "scope", "allowed"]
 
 
@@ -163,6 +165,12 @@ def test_授权回执精确形状与键序(base, grants):
     }
 
 
+def _in_effect(expire_date: str) -> dict:
+    """未撤销的授权此刻算不算数按今天现算（P2-214）：钉死 True 的话，过了 2026-12-31 这条用例自己就过期了。"""
+    live = date.today().isoformat() <= expire_date
+    return {"effective": live, "status_name": "有效" if live else "已过期"}
+
+
 def test_授权清单精确_id倒序且留痕(client, admin, base, grants):
     pid = base["patient"]["id"]
     before = len(_auth_access_rows(pid))
@@ -170,9 +178,9 @@ def test_授权清单精确_id倒序且留痕(client, admin, base, grants):
     assert [list(r.keys()) for r in rows] == [AUTH_ROW_KEYS] * 2
     assert rows == [
         {"id": grants["g2"]["id"], "grantee_org_id": base["township"]["id"], "scope": "all",
-         "expire_date": "2027-06-30", "status": "active"},
+         "expire_date": "2027-06-30", "status": "active", **_in_effect("2027-06-30")},
         {"id": grants["g1"]["id"], "grantee_org_id": base["township"]["id"], "scope": "encounter",
-         "expire_date": "2026-12-31", "status": "active"},
+         "expire_date": "2026-12-31", "status": "active", **_in_effect("2026-12-31")},
     ]
     # 可问责而非可阻断：这一眼本身就要留痕（admin 也不豁免）
     after = _auth_access_rows(pid)
