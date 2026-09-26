@@ -45,6 +45,7 @@ from ..service import (
     award_points,
     enrollment_for,
     move_task,
+    node_due_days,
     node_enter_allowed,
     spawn_task,
     sweep_overdue,
@@ -315,10 +316,10 @@ def start_path_instance(
         raise HTTPException(status_code=409, detail="该路径已在执行中" if running.status == "running"
                             else "该路径有一条暂停中的实例，请恢复或取消后再启动")
     try:
-        instance = start_path(db, enrollment, template, user.id)
+        # 覆盖随实例一起建（P2-258）：原先启动完才写，首节点任务已经按模板时限派出去了
+        instance = start_path(db, enrollment, template, user.id, overrides=body.overrides)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    instance.overrides = body.overrides
     db.commit()
     return _instance_out(db, instance)
 
@@ -499,7 +500,7 @@ def _resume_paused(db: Session, instance: SpdPathInstance, enrollment: SpdEnroll
             db, patient_id=enrollment.patient_id,
             title=f"{template.name if template else '路径'}·{node.name}",
             task_type="path", enrollment=enrollment, instance=instance,
-            node=node, due_days=node.due_days, source="path",
+            node=node, due_days=node_due_days(instance, node), source="path",
         )
     return matched
 

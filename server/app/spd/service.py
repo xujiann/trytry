@@ -469,8 +469,21 @@ def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: 
     return task
 
 
+def node_due_days(instance: SpdPathInstance, node: SpdPathNode) -> int:
+    """节点任务的时限（天）：实例的个性化覆盖优先（`overrides[节点键]["due_days"]`），没覆盖按模板（P2-258）。
+
+    实例表的列注释写着「个性化覆盖：{"node_key": {"due_days": 3}}，为空表示完全按模板」，启动与调整接口也照收——原先
+    派任务一律取模板的时限，覆盖存了不用。覆盖写得不成形（不是字典、不是非负整数）的按模板，不因为它派不出任务。"""
+    override = (instance.overrides or {}).get(node.key) if isinstance(instance.overrides, dict) else None
+    days = override.get("due_days") if isinstance(override, dict) else None
+    if isinstance(days, int) and not isinstance(days, bool) and days >= 0:
+        return days
+    return node.due_days
+
+
 def start_path(
-    db: Session, enrollment: SpdEnrollment, template: SpdPathTemplate, owner_user_id: int | None
+    db: Session, enrollment: SpdEnrollment, template: SpdPathTemplate, owner_user_id: int | None,
+    overrides: dict | None = None,
 ) -> SpdPathInstance:
     """按模板为患者启动路径实例，并生成首节点任务。
 
@@ -499,6 +512,7 @@ def start_path(
         current_stage=first.stage,
         status="running",
         owner_user_id=owner_user_id,
+        overrides=overrides or {},
     )
     db.add(instance)
     db.flush()
@@ -510,7 +524,7 @@ def start_path(
         enrollment=enrollment,
         instance=instance,
         node=first,
-        due_days=first.due_days,
+        due_days=node_due_days(instance, first),
         source="path",
     )
     return instance
@@ -591,7 +605,7 @@ def advance_path(db: Session, instance: SpdPathInstance) -> dict:
         enrollment=enrollment,
         instance=instance,
         node=nxt,
-        due_days=nxt.due_days,
+        due_days=node_due_days(instance, nxt),
         source="path",
     )
     return {"status": instance.status, "current_node_key": nxt.key, "next_node": nxt.name}
