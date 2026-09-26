@@ -3899,3 +3899,20 @@ def test_前端取今天按本地日历_东八区早上8点前不取成昨天(br
         assert page.evaluate("new Date().toISOString().slice(0, 10)") == "2026-09-30"   # 修前的写法同一时刻取到昨天
     finally:
         context.close()
+
+
+def test_体检没总检的排在最前_总检后这一行改标已总检(page, base_url, seed, admin_call, admin_read):
+    """P2-409：体检清单只回最新 200 条、行上看不出总检了没有——挤出窗口的那次体检原先就再没有一行给「总检」。
+    现在没总检的单独取一遍排在最前，「总检」列标着状态；总检完只改这一行的标记，下方回显结论（不整页重画）。"""
+    chk = admin_call("POST", "/api/checkups", {"patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"],
+                                               "exam_date": "2026-09-01", "summary": "E2E总检用例"})
+    _login(page, base_url)
+    _open_page(page, "certs", "证明与体检")
+    state = page.locator(f'td[data-chkstate="{chk["id"]}"]')
+    expect(state).to_contain_text("待总检")
+    page.click(f'button[data-chkreview="{chk["id"]}"]')
+    _spd_modal(page, {"final_conclusion": "E2E总检：未见明显异常"})
+    expect(state).to_contain_text("已总检")
+    expect(page.locator("#chk-detail-body")).to_contain_text("总检结论已保存")
+    rows = admin_read(f"/api/checkups?patient_id={seed['patient']['id']}&reviewed=true")
+    assert [r["reviewed"] for r in rows if r["id"] == chk["id"]] == [True]

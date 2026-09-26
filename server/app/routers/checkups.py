@@ -64,6 +64,13 @@ class CheckupOut(CheckupBase):
     model_config = {"from_attributes": True}
 
 
+class CheckupListOut(CheckupOut):
+    """清单行：比登记回执多一个「总检了没有」（P2-409）。登记回执的键集合有特征化用例钉着
+    （`test_checkup_items_review`），只加在清单上；结论全文仍只在总检回执与打印件里。"""
+
+    reviewed: bool
+
+
 class AbnormalCheckupOut(BaseModel):
     """异常清单行的响应契约。字段与原手拼 dict 一一对应，保持响应向后兼容。"""
     id: int
@@ -97,11 +104,12 @@ def create_checkup(body: CheckupCreate, db: Session = Depends(get_db), user: Use
     return exam
 
 
-@router.get("", response_model=list[CheckupOut])
+@router.get("", response_model=list[CheckupListOut])
 def list_checkups(
     response: Response,
     patient_id: int | None = None,
     has_abnormal: bool | None = None,
+    reviewed: bool | None = None,
     offset: int = 0,
     limit: int = 200,
     db: Session = Depends(get_db),
@@ -111,7 +119,16 @@ def list_checkups(
     query = scope_patient_list(db, user, query, PhysicalExam, patient_id, "checkup")
     if has_abnormal is not None:
         query = query.filter(PhysicalExam.has_abnormal.is_(has_abnormal))
-    return paginate(query.order_by(PhysicalExam.id.desc()), response, offset, limit)
+    # 按「总检了没有」筛（P2-409）：页面要把没总检的单独取一遍、排在最前——清单只回最新 200 条，挤出窗口的
+    # 那次体检原先就再没有一行给「总检」。总检接口要求结论非空，「两列均空 = 尚未总检」（模型注释），按结论判
+    if reviewed is not None:
+        query = query.filter(
+            (PhysicalExam.final_conclusion != "") if reviewed else (PhysicalExam.final_conclusion == "")
+        )
+    return [
+        {**CheckupOut.model_validate(e).model_dump(), "reviewed": bool(e.final_conclusion)}
+        for e in paginate(query.order_by(PhysicalExam.id.desc()), response, offset, limit)
+    ]
 
 
 @router.get("/abnormal", response_model=list[AbnormalCheckupOut])

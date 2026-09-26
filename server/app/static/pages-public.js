@@ -304,13 +304,20 @@ async function renderProcure() {
 const CERT_TYPES = { birth: "出生医学证明", death: "死亡医学证明", defect: "出生缺陷儿登记" };
 // abnormal 是 bool，没有后端文案可取；映成状态码再走 statusTag，与本页其余状态列同写法
 const CHK_ITEM = { ok: ["正常", "green"], bad: ["异常", "red"] };
+// 清单行的 reviewed 同样是 bool（P2-409），同一个写法
+const CHK_REVIEW = { todo: ["待总检", "orange"], done: ["已总检", "green"] };
 
 async function renderCerts() {
   $("#page-desc").textContent = "出生/死亡医学证明签发与出生缺陷登记（限医师/公卫）；成人健康体检记录与异常清单";
-  const [stats, checkups, abnormal] = await Promise.all([
-    api("/api/certs/stats"), api("/api/checkups"), api("/api/checkups/abnormal")]);
   // 总检后端是 require_roles("doctor")（admin 全通）；公卫岗只录入，摆了只会点出 403
   const canReview = ["doctor", "admin"].includes(currentRole());
+  // 没总检的单独取一遍、排在最前（P2-409，同审方 P1-148）：清单只回最新 200 条，挤出窗口的那次体检原先就再没有
+  // 一行给「总检」。只给能总检的人取——公卫岗只录入，排序照旧
+  const [stats, recent, unreviewed, abnormal] = await Promise.all([
+    api("/api/certs/stats"), api("/api/checkups"), canReview ? api("/api/checkups?reviewed=false") : [],
+    api("/api/checkups/abnormal")]);
+  const unreviewedIds = new Set(unreviewed.map((c) => c.id));
+  const checkups = [...unreviewed, ...recent.filter((c) => !unreviewedIds.has(c.id))];
   // 死因报告卡与导出后端是 require_roles("director")——法定上报口径，与总检不是同一把钥匙
   const canDeathCard = ["director", "admin"].includes(currentRole());
   const draw = async (certType = "") => {
@@ -365,15 +372,15 @@ async function renderCerts() {
     ${abnormal.length ? panel(`⚠ 体检异常清单（${abnormal.length}，供慢病筛查建档衔接）`,
       table(["体检ID", "患者", "日期", "异常项"], abnormal, (a) =>
         `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_items)}</span></td></tr>`)) : ""}
-    ${panel("体检记录", table(["ID", "患者", "套餐", "日期", "结论", "异常", "操作"], checkups, (c) =>
+    ${panel("体检记录", table(["ID", "患者", "套餐", "日期", "结论", "异常", "总检", "操作"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
        <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td>
+       <td data-chkstate="${c.id}">${statusTag(CHK_REVIEW, c.reviewed ? "done" : "todo")}</td>
        <td><button class="btn" data-chkitems="${c.id}">分项结果</button>
            ${canReview ? `<button class="btn secondary" data-chkreview="${c.id}">总检</button>` : ""}
            <button class="btn secondary" data-printchk="${c.id}">打印报告</button></td></tr>`)
-      + `<p class="desc">总检限医师（公卫岗只录入），重复总检按覆盖处理（复核改结论）。
-        <b>行上看不到"这次总检了没有"</b>——体检列表与分项接口的出参都不含 final_conclusion，
-        后端也没有单条详情端点；写完在下方回显一次，之后要看结论走同一行的<b>「打印报告」</b>
+      + `<p class="desc">总检限医师（公卫岗只录入），重复总检按覆盖处理（复核改结论）；没总检的排在最前。
+        「总检」列只标总检了没有，结论全文不在清单里：写完在下方回显一次，之后要看结论走同一行的<b>「打印报告」</b>
         （打印件里有「总检结论」与总检医师署名）。</p>`)}
     <div class="panel hidden" id="chk-detail"><h3>体检分项结果</h3><div id="chk-detail-body"></div></div>`;
   $("#cert-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/certs", formJson(e.target, ["org_id", "patient_id"]), "#cert-msg"); };
@@ -437,8 +444,10 @@ async function renderCerts() {
         ]);
         if (!picked || !picked.final_conclusion) return;
         const r = await api(`/api/checkups/${chkreview}/review`, { method: "POST", body: JSON.stringify(picked) });
-        // 不走 route()：列表的出参里没有总检字段，整页重画什么都不会变；
-        // 把回执连同分项一起摆进详情容器，人才看得见自己刚写的结论落成了什么
+        // 不走 route()：清单里没有结论全文，整页重画只会把下面这段回执冲掉；只把这一行的「总检」列改成已总检，
+        // 回执连同分项摆进详情容器，人才看得见自己刚写的结论落成了什么
+        const state = $(`[data-chkstate="${chkreview}"]`);
+        if (state) state.innerHTML = statusTag(CHK_REVIEW, "done");
         return await showItems(chkreview, r);
       }
       if (!printcert && !printchk) return;
