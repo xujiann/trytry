@@ -635,6 +635,7 @@ def vaccination_stats(
     today = resolve_business_date(None).isoformat()
     batch_q = scoped(db.query(VaccineBatch), VaccineBatch.org_id)
     batches = batch_q.all()
+    in_stock = [b for b in batches if b.quantity - b.used_quantity > 0]
     cold_q = scoped(
         db.query(func.count(ColdChainRecord.id)).filter(ColdChainRecord.exceeded.is_(True)),
         ColdChainRecord.org_id,
@@ -666,11 +667,14 @@ def vaccination_stats(
         },
         "batches": {
             "total": len(batches),
-            "expired": len([b for b in batches if b.expire_date < today]),
+            # 过期与临期只数**还有余量**的批次，与临期清单（`/expiring`）同一口径（P2-148）：发完的批次不删行、
+            # 只累加 used_quantity，原先连它们一起数——早就发完的旧批次年年累加进「过期批次」，
+            # 刚发完最后一支、下月到期的批次也挂着「30天内到期」，卡片上的数与点开的清单对不上
+            "expired": len([b for b in in_stock if b.expire_date < today]),
             "frozen": len([b for b in batches if b.status == "frozen"]),
             # 30 天内到期的，提前给出来——过期了才发现就只能报废
             "expiring_soon": len(
-                [b for b in batches if today <= b.expire_date <= _plus_days(today, 30)]
+                [b for b in in_stock if today <= b.expire_date <= _plus_days(today, 30)]
             ),
         },
         "cold_chain": {
