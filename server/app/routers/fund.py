@@ -380,6 +380,10 @@ def close_period(pool_id: int, body: PeriodIn, db: Session = Depends(get_db)):
     pool = _pool(db, pool_id)
     if pool.status != "active":
         raise HTTPException(status_code=409, detail=f"基金池状态为 {POOL_STATUS_NAMES.get(pool.status, pool.status)}，不可再预结")
+    # 预结月份得在池子的年度里（P2-167）：年终清算缺省取「各期预结之和」，原先 2026 年度的池子收得下
+    # 2025-12、2027-03——别的年度的医保支付被归集进来、算进这一年的发生额，结余跟着错
+    if not body.period.startswith(f"{pool.year}-"):
+        raise HTTPException(status_code=422, detail=f"预结月份须在基金池年度 {pool.year} 年内")
     amount = (
         body.actual_amount
         if body.actual_amount is not None

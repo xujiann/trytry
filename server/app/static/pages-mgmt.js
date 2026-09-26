@@ -1772,7 +1772,7 @@ async function renderFund() {
 
     ${panel("月度预结（账面对冲，不产生资金流）", `
       <form class="inline" id="fd-period">
-        <input name="period" placeholder="YYYY-MM" required style="min-width:100px">
+        <input name="period" placeholder="${(pools.find((p) => p.id === picked) || {}).year || "YYYY"}-MM（本池年度内）" required style="min-width:150px">
         <input name="actual_amount" type="number" step="any" placeholder="发生额(留空=按结算单归集)">
         <button>预结</button>
       </form>
