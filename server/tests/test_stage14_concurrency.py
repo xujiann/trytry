@@ -839,11 +839,16 @@ GUARDED_BY_PARENT_UPDATE: dict[str, str] = {
     "charge_price_changes": "调价历史一次跃迁一行：唯一性长在收费项的**价格本身**上（10→12→10 的往返调价里 old_price 会合法重复，静态部分唯一索引表达不了），由 `billing._change_price` 的 `UPDATE charge_items SET price=新价 WHERE id=:id AND price=:旧价` 守住——rowcount 0 即抢输，拿 409，历史行只在命中后追加",
     "asset_movements": "采购验收那条入库流水一张单只该有一条：表上没有任何列能表明\"这是采购单 X 的验收\"（手工出入库同表、note 自由文本），闸门在父单 `materials._mark_received` 的 `UPDATE material_purchases … WHERE status='contracted'`——加库存与写流水都只在 rowcount 命中后发生（姊妹路径 pharmacy.receive_purchase 同形）",
     "spd_referral_steps": "转诊轨迹每格只走一次：不变式长在转诊单 `spd_referral_cases` 的状态跃迁上，由 `referral._advance_case` 的 `UPDATE … WHERE id=:id AND status=期望态` 守住；轨迹行与派生的任务/积分同事务，抢输者一次 rollback 全退",
-    "spd_tasks": "随访办结派出的\"异常处置\"任务只该派一次：表上没有指向随访记录的列（现有列组不成键），闸门在 `spd/service.close_followup_record` 的 `UPDATE spd_followup_records SET status=终态 WHERE id=:id AND status IN 允许态`——医护端与居民端两个入口共用它，任务只在命中后派",
     "workflow_transitions": "一个流程实例离开某个节点只该有一条流转行：唯一性长在实例行上，由 `workflows._move_instance` 的 `UPDATE workflow_instances … WHERE status='running' AND current_node=读到的节点` 守住。**刻意不建 (instance_id, from_node) 唯一索引**——节点定义不拒环（a→b→a 合法），环形流程的第二圈会撞索引，单子从此既推不动也终止不了；条件 UPDATE 认的是\"当前位置\"而非历史，对环同样成立",
     "spd_interventions": "高危自动干预/自动复诊只该派一次：表级唯一被证伪（手工路径按同一模板批量、按周期反复开具是设计功能，`update_intervention` 还允许 removed→planned 恢复），而自动路径 `care._auto_intervene` 的「查在途 → 判 → 插」一条 SQL 压不进去（判的是有没有在途行，写的是 INSERT，INSERT 不给既有行加锁）。故整段圈进以纳管档案行为界的临界区（`concurrency.serialized_on(db, SpdEnrollment, …)`，commit 在块内且是块内最后一句）：抢输者重查时看到赢家提交后的行而跳过插入，与顺序发生的第二次评估表现一致——不 409，仍 201，只是不再多写一条。这一格守的是父行**行锁**而非条件 UPDATE，是本清单里唯一的那一种",
     "spd_point_records": "积分流水多行是台账本义（同一账户反复签到/兑换）。带业务事件的入账走 `service.award_points` 的 (rule_code, ref_type, ref_id) 幂等判定；assess.py 的两处不带 ref_id——签到\"一天一笔\"由 spd_signins 的唯一约束守、兑换扣分由 take_amount 的条件 UPDATE 守，都在事件键之外（回归见 tests/test_spd_point_record_ledger.py）",
 }
+# **`spd_tasks` 于 2026-09-26 从清单移出**（P2-131，不是为了让规则变绿）：随访办结派出的"异常处置"任务
+# 原先由医护端 `followup.execute_followup` 与居民端 `portal.self_answer_followup` 各自 `db.add(SpdTask(...))`，
+# 两份实现已口径分叉（居民端不挂纳管档案、中度也次日到期）。现两处共用 `service.spawn_followup_abnormal_task`，
+# 路由里不再有 spd_tasks 的写入点，这份只扫路由的清单就管不到它了。原条目守的不变式"先过 `close_followup_record`
+# 的条件 UPDATE 闸门、命中后才派单"没有丢：由 `tests/test_spd_portal_followup_unique.py` 的静态钉接手——
+# 两个入口都得在闸门之后调共用派单函数，且函数体里不许再出现 `SpdTask(`。
 
 
 def _model_bindings(func: ast.FunctionDef, model_names: set[str]) -> dict[str, str]:
