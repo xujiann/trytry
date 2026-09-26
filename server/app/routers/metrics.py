@@ -159,7 +159,7 @@ class OverviewOut(BaseModel):
 
 # 未闭环危急值口径（M-5 整改）：notified/acknowledged 与存量空串，resolved 不计入
 OPEN_CRITICAL_STATUSES = ["notified", "acknowledged", ""]
-# 传染病"近期"窗口：近 7 日
+# 传染病"近期"窗口：近 7 日，含今天共 7 个日历日——与传染病多点预警、症候群多点预警的窗口同一口径（P2-195）
 INFECTIOUS_WINDOW_DAYS = 7
 
 
@@ -195,9 +195,16 @@ def q_medwaste_overdue(db: Session):
 
 
 def q_infectious_recent(db: Session):
-    """近 7 日发病的传染病个案报告。"""
-    window_start = (clock.today() - timedelta(days=INFECTIOUS_WINDOW_DAYS)).isoformat()
-    return db.query(InfectiousCase).filter(InfectiousCase.onset_date >= window_start)
+    """近 7 日发病的传染病个案报告：发病日期落在今天及此前 6 天（含今天共 7 个日历日）。
+
+    原先从今天往前减 7 天、两头都含，实际 8 天，且发病日期填成将来的也算进「近 7 日」（P2-195）；
+    传染病多点预警的「7 天窗口」已是含今天共 7 天（P2-159），同名窗口不该差一天。
+    """
+    today = clock.today()
+    window_start = (today - timedelta(days=INFECTIOUS_WINDOW_DAYS - 1)).isoformat()
+    return db.query(InfectiousCase).filter(
+        InfectiousCase.onset_date >= window_start, InfectiousCase.onset_date <= today.isoformat()
+    )
 
 
 def q_referrals_up(db: Session):
