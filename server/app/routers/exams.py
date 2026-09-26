@@ -135,9 +135,18 @@ def update_recognition_item(
     return item
 
 
-def _find_recognizable(db: Session, patient_id: int, item_code: str) -> ExamRequest | None:
+def _find_recognizable(
+    db: Session, patient_id: int, item_code: str, *,
+    center_type: str | None = None, requester: Organization | None = None,
+) -> ExamRequest | None:
+    """30 天窗口内能被这张新申请互认的最近一份同项目报告。
+
+    与建单侧（`create_request` 的 `accept_recognition_of` 分支）同一套判定：中心类型一致、目录的互认范围把
+    **报告的申请机构**也算进去。原先预检只取最近一份同项目报告：它若是别的中心类型、或出自县域外机构，
+    页面照样弹「可互认」，医生选了互认，建单再 422——而更早一份本可互认的报告被它挡住了（P2-145）。
+    """
     since = now_naive() - timedelta(days=RECOGNITION_WINDOW_DAYS)
-    return (
+    query = (
         db.query(ExamRequest)
         .join(ExamReport, ExamReport.request_id == ExamRequest.id)
         .filter(
@@ -146,9 +155,15 @@ def _find_recognizable(db: Session, patient_id: int, item_code: str) -> ExamRequ
             ExamRequest.status == "reported",
             ExamReport.reported_at >= since.replace(tzinfo=None),
         )
-        .order_by(ExamRequest.id.desc())
-        .first()
     )
+    if center_type:
+        query = query.filter(ExamRequest.center_type == center_type)
+    # 同一患者同一项目 30 天内的报告屈指可数；上限只是防御
+    for candidate in query.order_by(ExamRequest.id.desc()).limit(50):
+        source_org = db.get(Organization, candidate.from_org_id)
+        if _directory_blocked_reason(db, item_code, center_type, (requester, source_org)) is None:
+            return candidate
+    return None
 
 
 class RecognitionCheckOut(BaseModel):
@@ -217,7 +232,7 @@ def recognition_check(
     blocked = _directory_blocked_reason(db, item_code, center_type, (org,))
     if blocked is not None:
         return {"recognizable": False, "reason": blocked}
-    existing = _find_recognizable(db, patient_id, item_code)
+    existing = _find_recognizable(db, patient_id, item_code, center_type=center_type, requester=org)
     if existing is None:
         return {"recognizable": False}
     return {

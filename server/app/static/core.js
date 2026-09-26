@@ -1422,7 +1422,9 @@ async function renderExams() {
     const f = new FormData(e.target);
     const patientId = Number(f.get("patient_id")), itemCode = f.get("item_code");
     try {
-      const check = await api(`/api/exams/recognition-check?patient_id=${patientId}&item_code=${encodeURIComponent(itemCode)}`);
+      // 中心类型与申请机构一并送去预检（P2-145）：建单侧按它们判能不能互认，预检不带，就会弹出一份建单时 422 的「可互认」
+      const check = await api(`/api/exams/recognition-check?patient_id=${patientId}&item_code=${encodeURIComponent(itemCode)}`
+        + `&center_type=${encodeURIComponent(f.get("center_type"))}&from_org_id=${Number(f.get("from_org_id"))}`);
       let extra = {};
       if (check.recognizable) {
         // P2-38：原先是 confirm「确定=互认」——取消就是"不互认"，接着弹理由框，理由框再点取消
