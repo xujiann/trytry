@@ -20,16 +20,17 @@ import json
 import logging
 import secrets
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import NoReturn
 
 import httpx
 from httpx import URL, InvalidURL  # 直接取名：出站用例会把模块里的 httpx 换成假投递，地址校验与异常类得用真的
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import case, func
+from sqlalchemy import ColumnElement, case, func
 from sqlalchemy.orm import Session
 
-from ..concurrency import add_amount, ensure_present, insert_or_conflict
+from ..concurrency import add_amount, ensure_present, insert_or_conflict, move_row
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, row_dict
 from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, User, utcnow
@@ -545,6 +546,41 @@ def _run_step(db: Session, step: dict, context: dict) -> str:
     raise ValueError(f"未知落库实体 {entity}")
 
 
+def _claim(db: Session, message: EsbMessage, expect: ColumnElement[bool]) -> bool:
+    """抢占这条消息：转「处理中」与判定压进同一条 UPDATE，返回这一路是否抢到（P2-405）。
+
+    模块开头写着「多实例部署时消费端以 status=processing 抢占，避免重复消费」，三条消费路径原先却是锁外读了状态、再
+    无条件写「处理中」：经办点「消费 / 重试」的同时定时出站正投着这一条、两位经办同时点、编排执行与手工消费撞在一起，
+    几路都读到「待处理」、都往下走——同一条消息投两次，入站建档走两遍。调度器的任务锁只挡得住两轮定时出站互相重叠。
+    抢占不单独提交：行锁持有到这一路消费结束，后到的一路等它提交、再按新状态重判（改到 0 行即抢输），出站投递中途
+    崩溃的随事务回滚到抢之前。入站建档那一步会中途提交（`create_patient_idempotent`），之后别处读到的是「处理中」；
+    手工消费不拒「处理中」——崩溃后卡在这一态的消息只有这条出路，要不要改成「处理中超过时限才可重领」待裁定。"""
+    return move_row(db, EsbMessage, message.id, expect, status="processing")
+
+
+def _as_read(message: EsbMessage) -> ColumnElement[bool]:
+    """手工消费 / 编排执行的抢占条件：状态与重试次数还是刚才读到、判过的那样。
+
+    只比状态不够：别处在这中间重试失败一次，状态仍是「失败待重试」，这一路照样会再投一次——次数一并比上。"""
+    return (EsbMessage.status == message.status) & (EsbMessage.retry_count == message.retry_count)
+
+
+def _due(now: datetime) -> ColumnElement[bool]:
+    """定时出站可投的消息：待处理的，或到了下次重试时间的失败消息。选批次与逐条抢占用同一个条件——批次是锁外
+    选的，逐条提交之后会话里的对象会按库里的最新状态重读，那时它可能已被别处投完，不能按重读到的状态比。"""
+    return (EsbMessage.status == "queued") | ((EsbMessage.status == "failed") & (EsbMessage.next_retry_at <= now))
+
+
+def _claim_lost(db: Session, message: EsbMessage) -> NoReturn:
+    """手工一路抢输：回滚、按库里此刻的状态报 409。"""
+    db.rollback()
+    db.refresh(message)
+    raise HTTPException(
+        status_code=409,
+        detail=f"这条消息刚被别处消费（当前状态 {MSG_STATUS.get(message.status, message.status)}），刷新后再看",
+    )
+
+
 def _process_message(db: Session, message: EsbMessage, endpoint: EsbEndpoint | None = None) -> str:
     """默认消费逻辑（未指定编排流程时）：按端点方向分流。
 
@@ -617,8 +653,8 @@ def process_message(message_id: int, db: Session = Depends(get_db), user: User =
     # 也不再投。拦在改状态之前：消息原样留在队里，启用后照常消费。入站积压停用后能不能手工消化待裁定，此处不拦
     if endpoint is not None and endpoint.direction == "outbound" and not endpoint.active:
         raise HTTPException(status_code=409, detail="出站接入方已停用，不投递——启用后再消费")
-    message.status = "processing"
-    db.flush()
+    if not _claim(db, message, _as_read(message)):
+        _claim_lost(db, message)
     try:
         detail = _process_message(db, message, endpoint)
     except (ValueError, HTTPException) as exc:
@@ -666,8 +702,7 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
         .filter(
             EsbEndpoint.direction == "outbound",
             EsbEndpoint.active.is_(True),
-            (EsbMessage.status == "queued")
-            | ((EsbMessage.status == "failed") & (EsbMessage.next_retry_at <= now)),
+            _due(now),
         )
         .order_by(EsbMessage.id)
         .limit(batch_size)
@@ -681,8 +716,8 @@ def consume_pending_outbound(db: Session, batch_size: int = OUTBOUND_BATCH_SIZE)
         if endpoint is None or not endpoint.active:
             continue
         message_id = message.id
-        message.status = "processing"
-        db.flush()
+        if not _claim(db, message, _due(now)):
+            continue   # 选出之后被别处消费了（手工消费 / 编排执行），这一轮不再投（P2-405）
         try:
             _process_message(db, message, endpoint)
         except (ValueError, HTTPException) as exc:
@@ -846,8 +881,8 @@ def run_flow(code: str, message_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail=f"消息当前状态 {MSG_STATUS.get(message.status, message.status)} 不可再消费")
     endpoint = db.get(EsbEndpoint, message.endpoint_id)
 
-    message.status = "processing"
-    db.flush()
+    if not _claim(db, message, _as_read(message)):
+        _claim_lost(db, message)
     context: dict = {"payload": message.payload or {}, "msg_type": message.msg_type}
     step_results: list[dict] = []
     error = ""
