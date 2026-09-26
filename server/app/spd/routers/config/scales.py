@@ -198,6 +198,10 @@ def update_scale(scale_id: int, body: ScalePatch, db: Session = Depends(get_db))
     changes = body.model_dump(exclude_unset=True)
     if scale.status == "published" and ("items" in changes or "scoring" in changes):
         raise HTTPException(status_code=409, detail="已发布量表不可改题目或评分，请新建版本")
+    # 发布过的（令牌只在首次发布时生成、从不清空）停用之后照样不许改（P2-151）：原先「停用 → 改题 → 再发布」绕过上一句，
+    # 同一版本号、同一张二维码背后换了题目与评分，按原题算分的历次评估与现在的量表对不上
+    if scale.qr_token and ("items" in changes or "scoring" in changes):
+        raise HTTPException(status_code=409, detail="该量表发布过（现已停用），不可改题目或评分，请新建版本")
     if "items" in changes:
         _check_item_keys(changes["items"])
     if "items" in changes or "scoring" in changes:   # 题目与评分合起来查（P2-80）
