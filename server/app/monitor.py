@@ -14,6 +14,7 @@
 响应里始终带上 `scope` 字段说明口径。监控数据最怕的不是不准，
 是**看起来像全局的其实只是一台**——那会让人在扩容后误判流量掉了一半。
 """
+import asyncio
 import logging
 import os
 import threading
@@ -297,6 +298,22 @@ def heartbeat() -> None:
         )
     except Exception:  # pragma: no cover - Redis 抖动不该影响业务请求
         pass
+
+
+#: 实例续心跳的间隔：TTL 的三分之一，漏一两拍（Redis 抖动、事件循环一时忙）也不至于被判成已下线
+HEARTBEAT_INTERVAL = HEARTBEAT_TTL // 3
+
+
+async def heartbeat_loop() -> None:
+    """每个实例按固定间隔续心跳，由 lifespan 与调度循环一起启动（P2-256）。
+
+    原先心跳只在有人打开监控概览 / 节点页时顺手续一下：多实例在负载均衡后面，节点页那个请求只落在一个实例上，
+    其余实例的心跳 90 秒后过期——「集群节点」里只剩刚好接了监控请求的那一个，别的实例好好地在跑却显示成已下线
+    （说明文字写着「90 秒内有心跳视为存活」，前提是心跳真的按周期在续）。不挂在调度 tick 上：一轮任务跑上几分钟，
+    心跳就会跟着断。"""
+    while True:
+        await asyncio.to_thread(heartbeat)
+        await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 
 def known_instances() -> list[dict] | None:

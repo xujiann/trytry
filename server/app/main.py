@@ -384,12 +384,18 @@ async def lifespan(_: FastAPI):
     # 后台调度循环随应用启停；测试用 TestClient 也会走到这里，
     # 但首个 tick 在 30 秒后，单测早已结束，不会产生干扰。
     scheduler_task = asyncio.create_task(scheduler_loop())
+    # 实例心跳按周期续（P2-256）：原先只在有人打开监控页时续，节点页里只剩接了那个请求的实例。
+    # 没配 Redis 时每拍直接返回，不连任何东西
+    from .monitor import heartbeat_loop
+
+    heartbeat_task = asyncio.create_task(heartbeat_loop())
     try:
         yield
     finally:
-        scheduler_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await scheduler_task
+        for task in (heartbeat_task, scheduler_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(
