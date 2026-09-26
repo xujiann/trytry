@@ -29,6 +29,8 @@ router = APIRouter(prefix="/api/monitor", tags=["运行监控"], dependencies=[D
 
 
 def _probe_database(db: Session) -> dict:
+    """概览里的库探活。只能报「连得上、延迟多少」：库不通时走不到这里——鉴权要读用户表、概览要读调度表，整个请求先失败了。
+    告警判库不通请用 `/api/health`（库不通 503，无需鉴权），运维手册同一句（P2-357）。"""
     start = time.perf_counter()
     try:
         db.execute(text("SELECT 1"))
