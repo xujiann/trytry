@@ -565,11 +565,12 @@ def evaluate_record(db: Session, record: MedicalRecord) -> dict:
         .order_by(RecordQcRule.code)
         .all()
     )
-    defects, deducted = [], 0
+    defects, deducted, checked = [], 0, 0
     for rule in rules:
         condition = (rule.config or {}).get("condition")
         if condition and not conditions.get(condition, False):
             continue  # 条件未触发：本次不参与评分（不计分母也不扣分）
+        checked += 1
         message = _check_record_rule(rule, fields.get(rule.check_field, ""))
         if message:
             deducted += rule.deduct_points
@@ -591,7 +592,8 @@ def evaluate_record(db: Session, record: MedicalRecord) -> dict:
         "score": score,
         "grade": record_grade(score),
         "deducted": deducted,
-        "rules_checked": len(rules),
+        # 参与了这次评分的规则数（P2-203）：原先是全部启用规则数，条件没触发、上面跳过的也算进「参与规则 N 条」
+        "rules_checked": checked,
         "defects": defects,
     }
 

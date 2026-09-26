@@ -273,7 +273,8 @@ def test_rule_toggle_changes_score_and_permissions(client, admin, base):
         f"/api/quality/records?encounter_id={encounter['id']}", headers=admin
     ).json()[0]["id"]
     after = client.get(f"/api/quality/records/{record_id}/qc", headers=base["doctor"]).json()
-    assert after["score"] == 100 and after["rules_checked"] == 11
+    # 11 条启用规则里两条带触发条件（危急值 / 出院）本病历不触发、不参与评分（P2-203）
+    assert after["score"] == 100 and after["rules_checked"] == 9
     client.patch(f"/api/quality/record-qc-rules/{rule['id']}", json={"active": True}, headers=admin)
     # 非管理员不可改规则；非医师不可写病历
     assert client.patch(

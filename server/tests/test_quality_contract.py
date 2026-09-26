@@ -451,6 +451,10 @@ def records(client, base):
     return {"full": full, "flawed": flawed}
 
 
+# `rules_checked` 是**参与了这次评分**的规则数（P2-203）：12 条启用规则里「危急值须有处置记录」「出院须有病案首页」
+# 两条带触发条件，本网的门诊病历两条都不触发、不参与评分——原先照数全部启用规则，回执印「参与规则 12 条」
+
+
 def test_病历_提交回执精确形状与键序(base, records):
     body = records["full"]
     assert list(body.keys()) == ["created", "record", "qc"]
@@ -469,7 +473,7 @@ def test_病历_提交回执精确形状与键序(base, records):
             "created_at": body["record"]["created_at"],
             "updated_at": body["record"]["updated_at"],
         },
-        "qc": {"score": 100, "grade": "甲", "deducted": 0, "rules_checked": 12, "defects": []},
+        "qc": {"score": 100, "grade": "甲", "deducted": 0, "rules_checked": 10, "defects": []},
     }
 
 
@@ -494,7 +498,7 @@ def test_病历_缺陷清单精确形状与键序(base, records):
             "created_at": body["record"]["created_at"],
             "updated_at": body["record"]["updated_at"],
         },
-        "qc": {"score": 43, "grade": "丙", "deducted": 57, "rules_checked": 12,
+        "qc": {"score": 43, "grade": "丙", "deducted": 57, "rules_checked": 10,
                "defects": EXPECTED_DEFECTS},
     }
 
@@ -517,7 +521,7 @@ def test_病历_列表详情与复评精确(client, admin, base, records):
         "score": 43,
         "grade": "丙",
         "deducted": 57,
-        "rules_checked": 12,
+        "rules_checked": 10,
         "defects": EXPECTED_DEFECTS,
     }
 
