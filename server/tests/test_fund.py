@@ -281,6 +281,20 @@ def test_超支不自动扣减且拒绝分配(client, director):
                       headers=director).json() == []
 
 
+def test_收支相抵不可分配_但不说成超支(client, director):
+    """P2-261：结余恰为 0 时原先报「本池超支 0 元」、再报超支处置方式——清算结果上 is_overrun 是 false。"""
+    pool = _pool(client, director, 2046, total=100000.0)
+    client.post(f"/api/fund/pools/{pool['id']}/periods",
+                json={"period": "2046-06", "actual_amount": 100000}, headers=director)
+    s = client.post(f"/api/fund/pools/{pool['id']}/settle",
+                    json={"overrun_action": "carry"}, headers=director).json()
+    assert s["balance"] == 0 and s["is_overrun"] is False, s
+    resp = client.post(f"/api/fund/pools/{pool['id']}/distribute",
+                       json={"formula_expr": "score"}, headers=director)
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "本池收支相抵、结余为 0，无结余可分配"   # 修前「本池超支 0 元…挂账结转」
+
+
 def test_未清算不可分配(client, director):
     pool = _pool(client, director, 2038)
     resp = client.post(f"/api/fund/pools/{pool['id']}/distribute",

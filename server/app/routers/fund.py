@@ -519,7 +519,11 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     settlement = db.query(FundSettlement).filter(FundSettlement.pool_id == pool_id).first()
     if settlement is None:
         raise HTTPException(status_code=409, detail="请先完成年终清算")
-    if settlement.balance <= 0:
+    if settlement.balance == 0:
+        # 收支相抵不是超支（P2-261）：清算结果 `is_overrun` 按「结余 < 0」判，这里原先一并报「本池超支 0 元」、
+        # 再报一句超支处置方式——没有超支可处置
+        raise HTTPException(status_code=409, detail="本池收支相抵、结余为 0，无结余可分配")
+    if settlement.balance < 0:
         raise HTTPException(
             status_code=409,
             detail=f"本池超支 {abs(settlement.balance)} 元，无结余可分配；"
