@@ -28,7 +28,7 @@ from ..models import (
 )
 from ..numtypes import INT4_MAX
 from ..texttypes import NON_BLANK
-from ..visibility import assert_obj_org_writable, assert_patient_visible
+from ..visibility import assert_obj_org_writable, assert_org_visible, assert_patient_visible, scope_org_list
 
 router = APIRouter(prefix="/api/inpatient", tags=["住院临床文书"], dependencies=[Depends(get_current_user)])
 
@@ -505,9 +505,19 @@ def list_handovers(
     offset: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    query = db.query(ShiftHandover)
+    """交接班清单：只列本机构病区的（全域角色不限），与新建同一口径（P0-48）。
+
+    交接班是病区的班内交接，正文是自由文本、常写着「几床谁病危、注意什么」。原先清单连调用方都不收：任一登录账号
+    翻得到全县各病区的交接班；同文件其余读接口都按住院患者的可见性判，新建交接班按病区所属机构判。点名别家的病区 403，
+    不悄悄返回空（与 `scope_org_list` 带机构参数时同一句）。
+    """
+    query = scope_org_list(db, user, db.query(ShiftHandover).join(Ward, Ward.id == ShiftHandover.ward_id), Ward, None)
     if ward_id is not None:
+        ward = db.get(Ward, ward_id)
+        if ward is not None:
+            assert_org_visible(db, user, ward.org_id)
         query = query.filter(ShiftHandover.ward_id == ward_id)
     if handover_date:
         # 等值匹配：`2026-9-1` 会让"这天没有交接记录"，不报错（P1-58）
