@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -74,10 +75,22 @@ class ElderlyAssessment(Base):
 
 
 class MaternalRecord(Base):
-    """㉔妇幼保健：孕产妇建册与高危管理。"""
+    """㉔妇幼保健：孕产妇建册与高危管理。一孕一册：同一位妇女同一时刻只有一本在册（未结案）的档案。"""
 
     __tablename__ = "maternal_records"
-    __table_args__ = (UniqueConstraint("patient_id", name="uq_maternal_patient"),)
+    __table_args__ = (
+        # 唯一性只约束「在册」这一态（P1-140）。原先是 patient_id 全量唯一：一位妇女一生只能建一本，
+        # 上一胎结案后再孕，建册拿回的是那本已结案的旧档案，这一胎的产检、分娩无处可记。
+        # 结案的历次档案可以有多本；未结案的同一时刻只能一本——并发建册撞它，抢输的一路拿回既有那本，
+        # 与原先全量唯一时同一道闸门。部分索引的先例见 admissions 的 uq_admission_patient_admitted。
+        Index(
+            "uq_maternal_patient_open",
+            "patient_id",
+            unique=True,
+            sqlite_where=text("status <> 'closed'"),
+            postgresql_where=text("status <> 'closed'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)

@@ -1252,6 +1252,31 @@ def test_孕产妇保健结案先确认(page, base_url, admin_read, admin_call):
                   lambda: status() == "delivered", lambda: status() == "closed")
 
 
+def test_上一胎结案后再孕_从页面上建出新册且孕产次录得进去(page, base_url, admin_read, admin_call):
+    """P1-140：原先一位妇女一生只能建一本，结案后再孕建册拿回的是那本已结案的旧档案；建册表单也没有孕次 / 产次两格，
+    每本都是 G1P0。"""
+    patient = admin_call("POST", "/api/patients",
+                         {"name": "E2E再孕孕妇", "id_card": "320981199203032240", "gender": "女"})
+    first = admin_call("POST", "/api/maternal/records", {"patient_id": patient["id"]})
+    admin_call("POST", f"/api/maternal/records/{first['id']}/visits", {"visit_type": "postpartum"})
+    admin_call("POST", f"/api/maternal/records/{first['id']}/close")
+
+    _login(page, base_url)
+    _open_page(page, "maternal", "妇幼保健")
+    page.fill("#mat-form input[name=patient_id]", str(patient["id"]))
+    page.fill("#mat-form input[name=edc]", "2027-03-08")
+    page.fill("#mat-form input[name=gravidity]", "2")
+    page.fill("#mat-form input[name=parity]", "1")
+    _submit(page, "#mat-form button")
+
+    mine = [r for r in admin_read("/api/maternal/records") if r["patient_id"] == patient["id"]]
+    assert sorted((r["status"], r["gravidity"], r["parity"]) for r in mine) == [("closed", 1, 0), ("registered", 2, 1)]
+    (fresh,) = [r for r in mine if r["status"] == "registered"]
+    row = page.locator("#page-body tr", has=page.locator(f'button[data-visit="{fresh["id"]}"]'))
+    expect(row).to_contain_text("G2P1")
+    expect(row).to_contain_text("孕期管理")
+
+
 def test_停用考核公式先确认(page, base_url, admin_read, admin_call):
     """P2-43：「停用」考核公式原先点一下就停用，停用的公式页面上没有启用入口。"""
     key = "e2e_p243_formula"

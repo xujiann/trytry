@@ -1526,9 +1526,9 @@
 - `risk_factors` · VARCHAR(512) · NOT NULL
 - `status` · VARCHAR(16) · NOT NULL · index
 - `created_at` · DATETIME · NOT NULL
-- _unique_ (patient_id) uq_maternal_patient
 - _index_ ix_maternal_records_patient_id(patient_id)
 - _index_ ix_maternal_records_status(status)
+- _index_ uq_maternal_patient_open(patient_id) UNIQUE
 
 ## maternal_visits
 

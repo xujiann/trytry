@@ -74,10 +74,12 @@ class MaternalOut(MaternalCreate):
 def register(body: MaternalCreate, db: Session = Depends(get_db)):
     if db.get(Patient, body.patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
-    existing = db.query(MaternalRecord).filter(MaternalRecord.patient_id == body.patient_id).first()
-    if existing:
+    # 一孕一册（P1-140）：只认在册（未结案）的那本。原先查到这位妇女的任何一本就原样返回——
+    # 上一胎结案后再孕，拿回的是那本已结案的旧档案，这一胎建不了册。
+    existing = _registering_record(db, body.patient_id)
+    if existing is not None:
         return existing
-    # 建册幂等：并发下两个请求都查不到就都去插，撞 patient_id 唯一约束时
+    # 建册幂等：并发下两个请求都查不到就都去插，撞「在册唯一」时
     # 返回既有那本，不是 500——一个孕产妇两本册子，产检记录会分叉。
     record = MaternalRecord(**body.model_dump())
     if not insert_if_absent(db, record):
@@ -85,13 +87,31 @@ def register(body: MaternalCreate, db: Session = Depends(get_db)):
         # 一路握着 SQLite 的写锁走完请求，审计中间件那一笔就写不进去
         # （实测 database is locked）。
         db.rollback()
-        return (
-            db.query(MaternalRecord)
-            .filter(MaternalRecord.patient_id == body.patient_id)
-            .first()
-        )
+        winner = _registering_record(db, body.patient_id)
+        if winner is None:   # 撞上的那本转眼已结案：极窄，按冲突报，重提一次即建新册
+            raise HTTPException(status_code=409, detail="建册冲突，请重试")
+        return winner
     db.commit()
     db.refresh(record)
+    return record
+
+
+def _registering_record(db: Session, patient_id: int) -> MaternalRecord | None:
+    """这位妇女在册（未结案）的那本档案：孕期的原样返回（建册幂等）；已分娩未结案的 409。
+
+    已分娩还没结案时又来建册，多半是再孕、上一胎漏了结案。把那本旧档案当成这一胎返回，新一胎的产检就记到
+    上一胎名下；替人把它结案同样不行（产后访视做没做完，得由人确认）。报清楚、让人先结案。
+    """
+    record = (
+        db.query(MaternalRecord)
+        .filter(MaternalRecord.patient_id == patient_id, MaternalRecord.status != "closed")
+        .first()
+    )
+    if record is not None and record.status != "registered":
+        raise HTTPException(
+            status_code=409,
+            detail="该孕产妇上一孕次已分娩、档案尚未结案，请先完成产后访视并结案，再为本次妊娠建册",
+        )
     return record
 
 

@@ -1098,7 +1098,8 @@ async function renderMaternal() {
     ${panel("孕产妇建册 / 儿童建档", `
       <form class="inline" id="mat-form">
         <input name="patient_id" type="number" placeholder="患者ID" required><input name="lmp" placeholder="末次月经 YYYY-MM-DD">
-        <input name="edc" placeholder="预产期 YYYY-MM-DD"><button>建册</button></form>
+        <input name="edc" placeholder="预产期 YYYY-MM-DD">
+        <input name="gravidity" type="number" min="1" placeholder="孕次（空=1）"><input name="parity" type="number" min="0" placeholder="产次（空=0）"><button>建册</button></form>
       <form class="inline" id="child-form">
         <input name="name" placeholder="儿童姓名" required><select name="gender"><option>未知</option><option>男</option><option>女</option></select>
         <input name="birth_date" placeholder="出生日期 YYYY-MM-DD" required><input name="guardian_patient_id" type="number" placeholder="监护人患者ID"><button>建档</button></form>
@@ -1133,7 +1134,8 @@ async function renderMaternal() {
       ${table(["ID", "患者", "类型", "日期", "结果", "指导"], womenHealth, (w) =>
         `<tr><td>${w.id}</td><td>${w.patient_id}</td><td><span class="tag">${WH_TYPES[w.record_type] || esc(w.record_type)}</span></td>
          <td>${esc(w.exam_date) || "—"}</td><td>${esc(w.result) || "—"}</td><td>${esc(w.advice) || "—"}</td></tr>`)}`)}`;
-  $("#mat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/records", formJson(e.target, ["patient_id"]), "#mat-msg"); };
+  // 一孕一册（P1-140）：上一胎结案后再孕建的是新册，孕次 / 产次要录得进去（原先表单没有这两格，每本都是 G1P0）
+  $("#mat-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/records", formJson(e.target, ["patient_id", "gravidity", "parity"]), "#mat-msg"); };
   $("#child-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/children", formJson(e.target, ["guardian_patient_id"]), "#mat-msg"); };
   $("#wh-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/maternal/women-health", formJson(e.target, ["patient_id"]), "#mat-msg"); };
   $("#page-body").onclick = async (e) => {
