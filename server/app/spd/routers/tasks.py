@@ -48,7 +48,7 @@ from ..service import (
     node_due_days,
     node_enter_allowed,
     spawn_task,
-    sweep_overdue,
+    sweep_overdue_on_read,
     unknown_program,
 )
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -762,11 +762,11 @@ def task_summary(
 ):
     """待办统计：按类型与状态汇总，供各端工作台顶部的数字卡片使用。
 
-    进这个接口时顺手扫一次超期（`sweep_overdue`）——工作台是各端的第一屏，
+    进这个接口时顺手扫一次超期（`sweep_overdue_on_read`，截止日不跟 `?today=` 往后拨，P0-47）——工作台是各端的第一屏，
     在这里刷新可以保证"没开定时任务的环境也能看到真实的超期数"。
     """
     business_day = resolve_business_date(today)
-    swept = sweep_overdue(db, business_day)
+    swept = sweep_overdue_on_read(db, business_day)
     db.commit()
 
     query = db.query(SpdTask)

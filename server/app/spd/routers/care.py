@@ -1259,9 +1259,9 @@ def list_revisits(
     """
     business_day = resolve_business_date(today)
     if overdue:
-        from ..service import sweep_overdue
+        from ..service import sweep_overdue_on_read
 
-        sweep_overdue(db, business_day)
+        sweep_overdue_on_read(db, business_day)
         db.commit()
     # P0-24：原先只在带 patient_id 时判可见性，不带就列出全域全部复诊计划（带患者姓名）。
     # 与 P0-23 的咨询清单同一口径：只见本机构服务过的患者的计划，全域角色不过滤。

@@ -1369,8 +1369,14 @@ def test_overdue_sweep_marks_tasks(client, h, base):
               "task_type": "followup", "due_days": 0},
         headers=h,
     ).json()
-    tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    summary = client.get(f"/api/spd/tasks/summary?today={tomorrow}", headers=h).json()
+    # 让它真的「昨天就该办」：改库里的到期日，不用 `?today=` 往后拨——查询接口的日期覆盖不再驱动写库的扫描（P0-47）
+    from app.database import SessionLocal
+    from app.spd.models import SpdTask
+
+    with SessionLocal() as db:
+        db.get(SpdTask, task["id"]).due_date = (date.today() - timedelta(days=1)).isoformat()
+        db.commit()
+    summary = client.get("/api/spd/tasks/summary", headers=h).json()
     assert summary["swept"]["overdue"] >= 1
     refreshed = client.get(f"/api/spd/tasks/{task['id']}", headers=h).json()
     assert refreshed["status"] == "overdue"

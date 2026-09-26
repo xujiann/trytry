@@ -49,7 +49,7 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_CLAIMABLE_STATUSES, TASK_OPEN_STATUSES,
-                       followup_overdue, referral_last_moved_at, sweep_overdue)
+                       followup_overdue, referral_last_moved_at, sweep_overdue_on_read)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -673,7 +673,7 @@ def admin_workbench(
     慢病与专病两条业务线的并行运行情况、配置项的完备程度。
     """
     business_day = resolve_business_date(today)
-    swept = sweep_overdue(db, business_day)
+    swept = sweep_overdue_on_read(db, business_day)
     db.commit()
     orgs = _scope(db, user, None)
 
@@ -1060,7 +1060,7 @@ def center_workbench(
     调度视角：统一待办入口 + 目标池待分发 + 在途转诊 + 超期升级 + 死亡/迁出待确认。
     """
     business_day = resolve_business_date(today)
-    swept = sweep_overdue(db, business_day)
+    swept = sweep_overdue_on_read(db, business_day)
     db.commit()
     orgs = _scope(db, user, None, stats=False)
     month_start = clock.today().replace(day=1).isoformat()

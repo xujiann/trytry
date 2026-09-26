@@ -834,9 +834,9 @@ def list_followup_records(
     """
     business_day = resolve_business_date(today)
     if overdue:
-        from ..service import sweep_overdue
+        from ..service import sweep_overdue_on_read
 
-        sweep_overdue(db, business_day)
+        sweep_overdue_on_read(db, business_day)
         db.commit()
     query = db.query(SpdFollowupRecord)
     if patient_id is not None:

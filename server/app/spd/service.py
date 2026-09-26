@@ -774,6 +774,17 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
     return stats
 
 
+def sweep_overdue_on_read(db: Session, business_day: date) -> dict:
+    """查询接口进门顺手刷新超期（待办统计、各端工作台、`overdue=true` 的随访与复诊看板）走这一个入口。
+
+    查询按 `?today=` 覆盖算，**写库不跟它往后拨**（P0-47）：覆盖按接口对接规范「仅限测试与管理排查用途」，可扫描不分
+    机构、结果是永久的（置超期、按节点配置升级并通知，考核按状态取数）——原先任一登录账号带个未来日期查一次，全县在办
+    的任务、复诊、随访当场全成了超期。截止日取覆盖日期与真实今天里早的那个：往回看的覆盖照用，早于今天的截止日扫得到
+    的，今天也一定扫得到。定时任务与服务层直接调 `sweep_overdue`，不经这里。
+    """
+    return sweep_overdue(db, min(business_day, clock.today()))
+
+
 def sweep_overdue(db: Session, today: date | None = None) -> dict:
     """三类超期一次扫：任务、复诊、随访。到期未办的置为 overdue。
 
