@@ -23,7 +23,7 @@ from ..numtypes import MONEY_MAX, MoneyFloat
 from ..visibility import assert_org_visible, scope_org_list, scope_stats_orgs
 from ..database import get_db
 from ..datetypes import PeriodStr
-from ..deps import get_current_user, month_bounds, require_roles
+from ..deps import get_current_user, month_bounds, require_month, require_roles
 from ..models import (
     Admission,
     CostAllocationRule,
@@ -272,8 +272,11 @@ def department_cost_summary(
     一轮足够；多级迭代要处理互相分摊的收敛问题，收益不抵复杂度。
     未配满 100% 的来源科室，未分摊部分留在原科室，并在返回里标出来。
     """
+    # 期间走严格的 `require_month`（P2-340）：下面按 `period ==` 比字符串，而入库的期间是规范的 `YYYY-MM`
+    # （`CostIn.period` 是 PeriodStr）。原先只过宽松的 `month_bounds`，`2026-9` 照收、得一张 200 的空表——
+    # 看起来像「这个月没归集成本」，成本页切换框又把它存进本地、下次进来还是空的
+    period = require_month(period)
     assert_org_visible(db, user, org_id)
-    month_bounds(period)
     query = db.query(DepartmentCost).filter(DepartmentCost.period == period)
     if org_id is not None:
         query = query.filter(DepartmentCost.org_id == org_id)
@@ -397,6 +400,9 @@ def unit_cost(
     再按人次与床日的相对权重拆——县域机构没有分科成本中心时这是可落地的近似，
     精确拆分需要收费明细带科室，属后续 T4 依赖项。
     """
+    # 同上（P2-340）：原先 `2026-9` 按日期区间照数 9 月的门诊人次与床日，成本却按字符串一分没取到，
+    # 诊次成本、床日成本都是 0.00
+    period = require_month(period)
     assert_org_visible(db, user, org_id)
     start, end = month_bounds(period)
     if db.get(Organization, org_id) is None:
