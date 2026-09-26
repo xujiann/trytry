@@ -333,6 +333,9 @@ def _move_row(db: Session, model: Any, row_id: int, expect: tuple[str, ...] | st
 #: 日期的 planned 置为 overdue，只认 planned 的查询一扫就漏掉它们——工作台的超期随访恒为 0、到期数只剩今天的、结案不收
 #: 逾期复诊（P1-128）
 FOLLOWUP_OPEN_STATUSES = ("planned", "overdue")
+#: 手工调整（移除 / 恢复 / 改期 / 改执行人）收哪些随访记录：除「已完成」外都收——与 `update_followup_record` 的预检互为补集
+#: （状态取值是封闭的五个，见 `close_followup_record`）
+FOLLOWUP_ADJUSTABLE_STATUSES = ("planned", "overdue", "removed", "unreachable")
 REVISIT_OPEN_STATUSES = ("planned", "overdue")
 #: 路径实例（`spd_path_instances.status`）的「未结束」：执行中与暂停（暂停的能恢复）
 PATH_OPEN_STATUSES = ("running", "paused")
@@ -442,6 +445,17 @@ def close_followup_record(
         .values(status=new_status)
     ))
     return bool(closed.rowcount)
+
+
+def adjust_followup_record(db: Session, record_id: int, **values: Any) -> bool:
+    """手工调整随访记录（移除 / 恢复 / 改期 / 改执行人）：改的列与「还没完成」的判定压进同一条 UPDATE，返回是否改到（P2-287）。
+
+    原先「读 → 判不是已完成 → 逐字段赋值 → commit」，flush 出来的 UPDATE 只有 `WHERE id = ?`：护士点「移除」的同时医生执行了
+    这条随访（`close_followup_record` 的条件翻转 planned → done 已提交、处置任务已派），护士这边随后提交，done 被改成 removed——
+    办完的随访从完成数、工作量、质控抽样池里消失，处置任务挂在一条「已移除」的随访上；失访补录执行（→ done）与「恢复为待随访」
+    交错时，done 被改回 planned，能再执行一次、再派一条处置任务。与 `close_open_work` 同一个 `_move_row`。**不 commit**。
+    """
+    return _move_row(db, SpdFollowupRecord, record_id, FOLLOWUP_ADJUSTABLE_STATUSES, **values)
 
 
 def spawn_followup_abnormal_task(db: Session, record: SpdFollowupRecord, level: str, title: str) -> SpdTask | None:

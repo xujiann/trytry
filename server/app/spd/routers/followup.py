@@ -47,8 +47,8 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, grade_abnormal, validate_conditions
-from ..service import (close_followup_record, followup_overdue, spawn_followup_abnormal_task, unknown_code,
-                       unknown_ids, unknown_program)
+from ..service import (adjust_followup_record, close_followup_record, followup_overdue, spawn_followup_abnormal_task,
+                       unknown_code, unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -1035,9 +1035,12 @@ def update_followup_record(
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"随访执行人{state}（executor_id={changes['executor_id']}）")
-    for key, value in changes.items():
-        setattr(record, key, value)
+    # 改的列与「还没完成」同一条条件 UPDATE（P2-287）：上面那道预检是锁外读的，这期间别人刚执行完的随访不能被改回去
+    if changes and not adjust_followup_record(db, record_id, **changes):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已完成的随访不可修改")
     db.commit()
+    db.refresh(record)
     return _record_out(record)
 
 
