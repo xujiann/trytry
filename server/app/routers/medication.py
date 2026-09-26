@@ -121,7 +121,10 @@ def advance_shortage(shortage_id: int, db: Session = Depends(get_db), user: User
     assert_obj_org_writable(db, user, shortage)
     next_status = _SHORTAGE_FLOW.get(shortage.status)
     if next_status is None:
-        raise HTTPException(status_code=409, detail=f"状态 {SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)} 已是终态")
+        # 已配送不是终态（还要结案），原先同报「已是终态」、页面却照样给它摆着结案按钮（P2-353）
+        detail = ("已配送的登记不能再推进，请结案" if shortage.status == "delivered"
+                  else f"状态 {SHORTAGE_STATUS_NAMES.get(shortage.status, shortage.status)} 已是终态")
+        raise HTTPException(status_code=409, detail=detail)
     # 走一步压进带状态条件的 UPDATE（P2-317）：原先锁外读改写，推进与结案交错时，后提交的推进照自己读到的旧状态写——
     # 已取消的登记被翻回「已配送」（结案时间与原因还挂在上面），又能再判一次取药与否
     if not _move_shortage(db, shortage, status=next_status):
@@ -205,8 +208,9 @@ def shortage_stats(db: Session = Depends(get_db)):
     settled = collected + no_show
     return {
         "by_status": by_status,
-        "in_transit": by_status.get("registered", 0) + by_status.get("purchasing", 0)
-        + by_status.get("delivered", 0),
+        # 在途只算药还在路上的（已登记 / 采购中，与缺药预警同一个 `_SHORTAGE_SHORT`）：已配送的药已经到了。原先把已配送也加进来，
+        # 与本函数说明「在途……药还没到」相反，页面卡片「在途」多数一截（P2-353）
+        "in_transit": sum(by_status.get(status, 0) for status in _SHORTAGE_SHORT),
         "collected": collected,
         "no_show": no_show,
         "fulfillment_rate_pct": (
