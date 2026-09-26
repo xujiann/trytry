@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -451,14 +451,23 @@ def advance_sample(request_id: int, db: Session = Depends(get_db)):
     return request
 
 
+#: 危急值清单一页的行数：没处置完的排在最前，之后是最近已处置的
+CRITICAL_LIST_LIMIT = 100
+
+
 @router.get("/critical", response_model=list[ExamReportOut])
 def list_critical_reports(db: Session = Depends(get_db)):
-    """危急值清单：需立即通知申请机构处置。"""
+    """危急值清单：需立即通知申请机构处置。
+
+    没处置完的（待确认 / 已确认待反馈）排在最前，之后才是已处置的（P1-166）。这张清单是「确认接收」「处置反馈」两个
+    按钮唯一的所在（管理端危急值页、医生移动端危急值页都取它）；原先按报告号倒序取最新 100 条、各种状态混排——
+    全县一天几十条危急值，前天已确认、还没反馈的那条被新出的挤出窗口，超时未确认催办那张表又不收已确认的，
+    「处置反馈」再也点不到，这条危急值永远闭不了环（与 P1-148 审方队列同一个形状）。"""
     return (
         db.query(ExamReport)
         .filter(ExamReport.critical.is_(True))
-        .order_by(ExamReport.id.desc())
-        .limit(100)
+        .order_by(case((ExamReport.critical_status == "resolved", 1), else_=0), ExamReport.id.desc())
+        .limit(CRITICAL_LIST_LIMIT)
         .all()
     )
 
