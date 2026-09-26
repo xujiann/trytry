@@ -48,7 +48,7 @@ from .ws import manager
 logger = logging.getLogger("medplat.jobs")
 
 # 与 medwaste 路由同源的滞留天数上限
-from .routers.medwaste import STORAGE_LIMIT_DAYS
+from .routers.medwaste import overdue_condition as medwaste_overdue_condition
 
 # 合同/制剂的提前提醒窗口
 CONTRACT_NOTICE_DAYS = 60
@@ -200,12 +200,7 @@ def chronic_overdue_scan(db: Session) -> tuple[int, str]:
 @register("medwaste_overdue_scan", "医废滞留扫描", 3600)
 def medwaste_overdue_scan(db: Session) -> tuple[int, str]:
     """滞留预警：口径与 GET /api/medwaste/alerts 一致。"""
-    cutoff = (clock.today() - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
-    count = (
-        db.query(MedicalWaste)
-        .filter(MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= cutoff)
-        .count()
-    )
+    count = db.query(MedicalWaste).filter(medwaste_overdue_condition(clock.today())).count()
     _alert("medwaste_overdue", "医废滞留超期", count)
     return count, f"医废滞留 {count} 批"
 

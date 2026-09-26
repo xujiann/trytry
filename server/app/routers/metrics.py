@@ -29,6 +29,7 @@ from ..models import (
     Prescription,
     Referral,
 )
+from .medwaste import overdue_condition as medwaste_overdue_condition
 
 router = APIRouter(prefix="/api/metrics", tags=["决策驾驶舱"], dependencies=[Depends(get_current_user)])
 
@@ -158,8 +159,6 @@ class OverviewOut(BaseModel):
 
 # 未闭环危急值口径（M-5 整改）：notified/acknowledged 与存量空串，resolved 不计入
 OPEN_CRITICAL_STATUSES = ["notified", "acknowledged", ""]
-# 医废滞留判定：收集后超过 2 天仍未交接
-MEDWASTE_OVERDUE_DAYS = 2
 # 传染病"近期"窗口：近 7 日
 INFECTIOUS_WINDOW_DAYS = 7
 
@@ -191,11 +190,8 @@ def q_chronic_overdue(db: Session):
 
 
 def q_medwaste_overdue(db: Session):
-    """超期未交接的医疗废物批次。"""
-    cutoff = (clock.today() - timedelta(days=MEDWASTE_OVERDUE_DAYS)).isoformat()
-    return db.query(MedicalWaste).filter(
-        MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= cutoff
-    )
+    """超期未交接的医疗废物批次（口径与医废滞留预警同一条，见 `medwaste.overdue_condition`）。"""
+    return db.query(MedicalWaste).filter(medwaste_overdue_condition(clock.today()))
 
 
 def q_infectious_recent(db: Session):

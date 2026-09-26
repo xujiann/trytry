@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
@@ -41,6 +41,16 @@ WASTE_STATUS_NAMES = {"collected": "已收集", "stored": "已暂存", "handed_o
 
 # 收集后超过该天数未交接即预警（《医疗废物管理条例》暂存不得超过2天）
 STORAGE_LIMIT_DAYS = 2
+
+
+def overdue_condition(today: date):
+    """滞留判定：收集后**超过** `STORAGE_LIMIT_DAYS` 天仍未交接。预警清单、滞留扫描任务、驾驶舱指标三处共用这一条。
+
+    原先三处各写 `collected_date <= 今天 − 2`（P2-134）：收集满 2 天当天就报滞留——预警回执自己算出的
+    `overdue_days` 是 0，页面却挂着「滞留」标签，与「收集超过 2 天仍未交接」的说法差一天。
+    """
+    cutoff = (today - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
+    return and_(MedicalWaste.status != "handed_over", MedicalWaste.collected_date < cutoff)
 
 WASTE_TYPES = {
     "infectious": "感染性",
@@ -510,11 +520,9 @@ def overdue_alerts(
     与医废清单同一口径收到本机构（P0-39 续）：交接只能本机构做，别家的包看得见也办不了。
     """
     end = resolve_business_date(today)
-    cutoff = (end - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
-    query = db.query(MedicalWaste).filter(
-        MedicalWaste.status != "handed_over", MedicalWaste.collected_date <= cutoff
-    )
+    query = db.query(MedicalWaste).filter(overdue_condition(end))
     rows = scope_org_list(db, user, query, MedicalWaste, None).order_by(MedicalWaste.collected_date).all()
+    # 限期：收集日期早于它（不含）的即超期
     overdue_from = (end - timedelta(days=STORAGE_LIMIT_DAYS)).isoformat()
     return [
         {
