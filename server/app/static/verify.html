@@ -71,7 +71,9 @@ td.k { color: #888; width: 84px; white-space: nowrap; }
       + '<tr><td class="k">单据类型</td><td>' + esc(r.doc_label) + '</td></tr>'
       + '<tr><td class="k">单据编号</td><td>' + esc(r.doc_no) + '</td></tr>'
       + '<tr><td class="k">签发机构</td><td>' + esc(r.org_name) + '</td></tr>'
-      + '<tr><td class="k">签发日期</td><td>' + esc(r.issued_date) + '</td></tr>'
+      // 令牌里签的是**打印**那天（ADR-0015：验的是这一张打印件），不是文书自己的签发日期——原先标「签发日期」，
+      // 1 月签发的死亡证明 9 月补打，扫出来「签发日期 9 月」，与纸面对不上；纸面页脚印的正是「打印时间」（P2-206）
+      + '<tr><td class="k">打印日期</td><td>' + esc(r.issued_date) + '</td></tr>'
       + (r.status ? '<tr><td class="k">当前状态</td><td>' + esc(r.status) + '</td></tr>' : '')
       + '</table>'
     : "";
