@@ -1479,8 +1479,10 @@ async function renderSpdPlans(box) {
 
 /* ---- 复诊 / 宣教 / 评估 / 历程 / 档案（患者移动端 #3 #14，此前只有接口没有页签）---- */
 
+// 键取 `spd_revisits.status` 的真实取值（P2-364）：原先写成 missed / cancelled，后端从不写这两个——超期扫描写的是 overdue、
+// 结案收尾写的是 removed，居民看到的是灰色的英文 overdue / removed（管理端的同一张表一直是对的）
 const SPD_REVISIT_STATUS = {
-  planned: ["待复诊", "orange"], done: ["已复诊", "green"], missed: ["已逾期", "red"], cancelled: ["已取消", ""],
+  planned: ["待复诊", "orange"], done: ["已复诊", "green"], overdue: ["已逾期", "red"], removed: ["已取消", ""],
 };
 const SPD_ENROLL_STATUS_TAGS = {
   active: ["在管", "green"], excluded: ["已排除", ""], migrated: ["已迁出", ""], dead: ["已死亡", ""], recalled: ["召回中", "orange"],
