@@ -3,10 +3,11 @@
 由原 `config.py`（1549 行）按业务分节拆出，见 ADR-0008。
 路由对象与跨节工具在 `._base`，本模块只放本域的端点。
 """
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import String
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -363,12 +364,21 @@ def copy_path_template(
     if src is None:
         raise HTTPException(status_code=404, detail="路径模板不存在")
     assert_org_writable(db, user, src.org_id)
+    # 派生的名称与版本号不能超列宽（P2-314）：界面上的「复制」什么都不传，全靠派生——原名 61 字以上加「(副本)」、
+    # 自定义版本号 14 字以上加「-r2」，真 PG 上撞列宽即 500。名称是给人看的默认值，截原名让出后缀；版本号参与
+    # 「编码 + 版本」唯一约束，截了会撞别的版本，推不出来就请人指定。传了一串空格的按没传（原先照存成空白）
+    name_width = cast(String, SpdPathTemplate.__table__.c.name.type).length or 64
+    version_width = cast(String, SpdPathTemplate.__table__.c.version.type).length or 16
+    version = body.version.strip() or _bump_version(src.version)
+    if len(version) > version_width:
+        raise HTTPException(status_code=422,
+                            detail=f"由原版本号推出的新版本号超过 {version_width} 字（{version}），请指定新版本号")
     copy = SpdPathTemplate(
         program_id=src.program_id,
-        code=body.code or src.code,
-        name=body.name or f"{src.name}(副本)",
+        code=body.code.strip() or src.code,
+        name=body.name.strip() or f"{src.name[:name_width - len('(副本)')]}(副本)",
         scene=src.scene, risk_level=src.risk_level,
-        version=body.version or _bump_version(src.version),
+        version=version,
         status="draft", copied_from_id=src.id, scope=src.scope, org_id=src.org_id,
         team_id=src.team_id, description=src.description, created_by=user.username,
     )
