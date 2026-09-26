@@ -61,7 +61,6 @@ from ..models import (
     Notification,
     Organization,
     Patient,
-    PaymentOrder,
     OperatingRoom,
     Referral,
     ResidentAccount,
@@ -103,7 +102,7 @@ from .appointments import book_slot, release_appointment
 from .auth import record_login_event
 # 余额复用 billing 的流水现算口径（预交-退费-冲抵）——居民端另算一套
 # 只会造出第二个数字，对账时没人说得清哪个是对的（P1-24b）。
-from .billing import CHARGE_CATEGORY_NAMES, DEPOSIT_TYPES, deposit_balance
+from .billing import CHARGE_CATEGORY_NAMES, DEPOSIT_TYPES, deposit_balance, self_pay_outstanding
 from .consents import (
     SCENE_PATTERN,
     ConsentOut,
@@ -1472,7 +1471,12 @@ def portal_my_bills(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """我的账单：结算单与对应支付单状态。"""
+    """我的账单：结算单，及个人自付是否已结清（`paid`）。
+
+    `paid` 按收费处同一套算术判（`billing.self_pay_outstanding`，P1-152）：自付 − 押金冲抵 − 非医保渠道已到账的净额
+    ≤ 0。原先是「这张结算单有任何一张已支付的支付单」——押金全额冲抵、收费处拒收的单永远「待支付」，
+    医保那一份入了账、自付分文未收的单却成了「已支付」。
+    """
     patient = accessible_patient(db, account, patient_id, resource="bill")
     settlements = paginate(
         db.query(Settlement)
@@ -1483,15 +1487,7 @@ def portal_my_bills(
         limit,
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
-    paid_ids = {
-        o.settlement_id
-        for o in db.query(PaymentOrder)
-        .filter(
-            PaymentOrder.settlement_id.in_([s.id for s in settlements] or [0]),
-            PaymentOrder.status == "paid",
-        )
-        .all()
-    }
+    outstanding = self_pay_outstanding(db, settlements)
     return [
         {
             "id": s.id,
@@ -1500,7 +1496,7 @@ def portal_my_bills(
             "total_amount": s.total_amount,
             "insurance_pay": s.insurance_pay,
             "self_pay": s.self_pay,
-            "paid": s.id in paid_ids,
+            "paid": outstanding[s.id] <= 0,
             "date": s.created_at.date().isoformat(),
         }
         for s in settlements

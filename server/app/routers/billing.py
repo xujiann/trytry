@@ -44,7 +44,7 @@ from ..visibility import (
     scope_patient_list,
 )
 from ..database import get_db
-from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
+from ..deps import get_current_user, paginate, require_admin, require_date, require_roles, row_dict
 from ..models import (
     Admission,
     BillDetail,
@@ -1308,6 +1308,47 @@ def _collected_amount(db: Session, settlement_id: int, *, include_pending: bool)
         .scalar()
     )
     return round(total or 0.0, 2)
+
+
+def self_pay_outstanding(db: Session, settlements: list[Settlement]) -> dict[int, float]:
+    """每张结算单的个人自付还欠多少（≤ 0 即已结清）：自付 − 押金冲抵 − 非医保渠道已到账的净额。
+
+    居民端账单的「已支付 / 待支付」按它判（P1-152），与收款的默认额、「收超了没有」同一套算术
+    （`_deposit_offset_of` / `_collected_amount`）：押金冲抵是押金流水里的一行、不是支付单——全额冲抵的自付
+    收款会拒收（「无需再收」），居民端却照旧印「待支付」；医保渠道的单收的是基金那一份，它到账了，
+    居民的自付未必到账。按净额（退了款的不算收到）、只算已到账的（pending 还没收到钱）。
+    """
+    if not settlements:
+        return {}
+    ids = [s.id for s in settlements]
+    collected = row_dict(
+        db.query(
+            PaymentOrder.settlement_id,
+            func.coalesce(func.sum(PaymentOrder.amount - PaymentOrder.refunded_amount), 0.0),
+        )
+        .filter(
+            PaymentOrder.settlement_id.in_(ids),
+            PaymentOrder.status.in_(["paid", "refunded"]),
+            PaymentOrder.channel != "insurance",
+        )
+        .group_by(PaymentOrder.settlement_id)
+        .order_by(PaymentOrder.settlement_id)
+        .all()
+    )
+    admission_ids = [s.admission_id for s in settlements if s.bill_type == "inpatient" and s.admission_id is not None]
+    offsets = row_dict(
+        db.query(Deposit.admission_id, func.coalesce(func.sum(Deposit.amount), 0.0))
+        .filter(Deposit.admission_id.in_(admission_ids or [0]), Deposit.deposit_type == "offset")
+        .group_by(Deposit.admission_id)
+        .order_by(Deposit.admission_id)
+        .all()
+    )
+    out: dict[int, float] = {}
+    for s in settlements:
+        admission_id = s.admission_id if s.bill_type == "inpatient" else None
+        offset = offsets.get(admission_id, 0.0) if admission_id is not None else 0.0
+        out[s.id] = round(s.self_pay - (offset or 0.0) - (collected.get(s.id) or 0.0), 2)
+    return out
 
 
 class PaymentCreate(BaseModel):
