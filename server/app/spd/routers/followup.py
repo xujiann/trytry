@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,6 +24,8 @@ from ...database import get_db
 from ...patchtypes import UNSET
 from ...datetypes import OptionalDateStr
 from ...deps import (
+    BUSINESS_DATE_MAX,
+    BUSINESS_DATE_MIN,
     get_current_user,
     paginate,
     require_date,
@@ -654,6 +656,15 @@ class GeneratePlanIn(BaseModel):
     dept: str = Field(default="", max_length=64)
     executor_id: int | None = None
     channel: str = Field(default="phone", pattern="^(phone|wechat|sms|self|visit)$")
+
+    @field_validator("base_date")
+    @classmethod
+    def _base_date_in_range(cls, value: str) -> str:
+        """基准日要能加上方案的时间点（最多 3650 天）：贴着 9999 年的一加就越界，原先整个请求 500（P2-410）。
+        与查询参数的业务日期同一个范围（`deps.BUSINESS_DATE_MIN` ~ `BUSINESS_DATE_MAX`）。"""
+        if value and not BUSINESS_DATE_MIN.isoformat() <= value <= BUSINESS_DATE_MAX.isoformat():
+            raise ValueError(f"base_date 须在 {BUSINESS_DATE_MIN} ~ {BUSINESS_DATE_MAX} 之间")
+        return value
 
 
 def _record_out(r: SpdFollowupRecord, patient_name: str = "") -> dict:

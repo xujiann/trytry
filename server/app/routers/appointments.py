@@ -241,10 +241,12 @@ def batch_create_slots(body: SlotBatchCreate, db: Session = Depends(get_db)):
     skip = set(body.skip_dates)
     days: list[str] = []
     cursor = start
-    while cursor <= end:
+    while True:
         day = cursor.isoformat()
         if day not in skip and not (body.skip_weekends and cursor.weekday() >= 5):
             days.append(day)
+        if cursor == end:   # 先判再加（P2-410）：区间止于 9999-12-31 时再加一天就越界，原先整个请求 500
+            break
         cursor += timedelta(days=1)
     total = len(days) * len(body.templates)
     if total > MAX_BATCH_SLOTS:

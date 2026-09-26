@@ -206,14 +206,24 @@ def keyword_like(column, keyword: str):
     return func.lower(column).like(f"%{keyword.lower()}%")
 
 
+#: OFFSET 的上限（P2-410）：SQLite 与 PostgreSQL 的整数都是 64 位，再大驱动就抛 OverflowError（PG 报「bigint out of
+#: range」），整个请求 500。钳到上限，越过总数照旧回空页
+MAX_OFFSET = 2**63 - 1
+
+
+def clamp_offset(offset: int) -> int:
+    """分页偏移钳到 [0, MAX_OFFSET]：负数按 0（与原先一样），天文数字按上限（P2-410）。"""
+    return min(max(offset, 0), MAX_OFFSET)
+
+
 def paginate(query, response: Response, offset: int = 0, limit: int = 100, max_limit: int = 500):
     """L-3（上轮 L4）分页整改：统一 offset/limit 分页，总数经 X-Total-Count 响应头返回。
 
     - 缺省行为与既有接口兼容（offset=0 时等价于原先的 .limit(N)）；
-    - limit 超过 max_limit 时按 max_limit 截断，防一次拉全表。
+    - limit 超过 max_limit 时按 max_limit 截断，防一次拉全表；offset 钳到 64 位上限（P2-410）。
     """
     response.headers["X-Total-Count"] = str(query.count())
-    return query.offset(max(offset, 0)).limit(min(max(limit, 1), max_limit)).all()
+    return query.offset(clamp_offset(offset)).limit(min(max(limit, 1), max_limit)).all()
 
 
 def resolve_org_scope(
@@ -373,6 +383,12 @@ def month_bounds(period: str) -> tuple[date, date]:
     return start, end
 
 
+#: 业务日期（`?today=` 与起止日期类查询参数）的取值范围（P2-410）：预警 / 到期类接口拿它加减天数（`days` 上限
+#: 3650，P1-96），贴着公元 1 年、9999 年的日期一加减就越出 `date` 的表示范围，整个请求 500。平台上没有早于 1900 年、
+#: 晚于 2999 年的业务日期
+BUSINESS_DATE_MIN, BUSINESS_DATE_MAX = date(1900, 1, 1), date(2999, 12, 31)
+
+
 def resolve_business_date(today: str | None, *, field: str = "today") -> date:
     """L-2（上轮 L3）整改：预警/超期类接口统一由服务端注入当前日期为默认。
 
@@ -392,9 +408,14 @@ def resolve_business_date(today: str | None, *, field: str = "today") -> date:
     if today is None:
         return clock.today()
     try:
-        return date.fromisoformat(datetypes.check_date(today))
+        parsed = date.fromisoformat(datetypes.check_date(today))
     except ValueError:
         raise HTTPException(status_code=422, detail=f"{field} 参数须为 YYYY-MM-DD 格式") from None
+    if not BUSINESS_DATE_MIN <= parsed <= BUSINESS_DATE_MAX:
+        raise HTTPException(
+            status_code=422, detail=f"{field} 参数须在 {BUSINESS_DATE_MIN} ~ {BUSINESS_DATE_MAX} 之间"
+        )
+    return parsed
 
 
 def token_issued_before_baseline(claims: dict, user: User) -> bool:

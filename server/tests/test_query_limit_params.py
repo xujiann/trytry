@@ -9,7 +9,9 @@
 （审计链全量校验照旧能传大数），0 照旧合法。
 
 判据（AST，平台与慢专病两边的路由）：端点的 int 参数进 `.limit(…)` / `.offset(…)` 之前，`Query(...)`
-里上下界都得有，或经 `min()` / `max()` 钳过（`paginate` 与 `offset(max(offset, 0))` 的写法）。
+里上下界都得有，或经 `min()` / `max()` / `deps.clamp_offset()` 钳过（`paginate` 与驾驶舱下钻的写法）。
+`clamp_offset` 本身就是 `min(max(offset, 0), MAX_OFFSET)`：原先下钻手写的 `offset(max(offset, 0))` 只有下界，
+这条判据照放行，天文数字的偏移照样 500（P2-410）——下界挡负数、上界挡 bigint 越界，两头都要。
 """
 import ast
 import pathlib
@@ -34,8 +36,12 @@ def _router_sources():
                 yield str(p.relative_to(APP_DIR)), p.read_text(encoding="utf-8")
 
 
+#: 认得的钳法：`min` / `max`，与 `deps.clamp_offset`（它本身就是两头都钳的 min/max，P2-410）
+_CLAMPS = ("min", "max", "clamp_offset")
+
+
 def _clamps(node) -> bool:
-    return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("min", "max")
+    return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _CLAMPS
                for n in ast.walk(node))
 
 
@@ -105,6 +111,10 @@ def clamped(offset: int = 0, limit: int = 50):
 @router.get("/e")
 def plus_one(limit: int = 20):
     return q.limit(limit + 1).all()
+
+@router.get("/f")
+def helper_clamped(offset: int = 0):
+    return q.offset(clamp_offset(offset)).all()
 
 def helper(limit: int):
     return q.limit(limit).all()

@@ -88,9 +88,15 @@ class MilestoneCreate(BaseModel):
     def _check_time_format(cls, value: str) -> str:
         """L-12 整改：绿道节点时间须为 ISO 格式（如 2026-08-10 14:02），保证时效可计算。"""
         try:
-            datetime.fromisoformat(value)
+            moment = datetime.fromisoformat(value)
         except ValueError:
             raise ValueError("occurred_at 须为 ISO 格式时间，如 2026-08-10 14:02") from None
+        # 带时区偏移的要换算成本地钟点才能与别的节点比（`_wall_clock`）；贴着公元 1 年、9999 年的一换算就越界，
+        # 原先记节点整个 500（P2-410）
+        try:
+            _wall_clock(moment)
+        except OverflowError:
+            raise ValueError("occurred_at 超出可换算的时间范围") from None
         return value
 
 

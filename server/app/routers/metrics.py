@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..database import get_db
-from ..deps import get_current_user, row_dict
+from ..deps import clamp_offset, get_current_user, row_dict
 from ..models import (
     ChronicPatient,
     DrugStock,
@@ -553,7 +553,7 @@ def drilldown(
     total = query.count()
     limit = min(max(limit, 1), 500)
     entity = query.column_descriptions[0]["entity"]
-    rows = query.order_by(entity.id.desc()).offset(max(offset, 0)).limit(limit).all()
+    rows = query.order_by(entity.id.desc()).offset(clamp_offset(offset)).limit(limit).all()
     items = [meta["row"](obj) for obj in rows]
     response.headers["X-Total-Count"] = str(total)
     return {
