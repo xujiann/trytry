@@ -749,27 +749,41 @@ def deposit_alerts(
     调大阈值可提前预警（如 gap < 500 就该催缴）。按 gap 从小到大排序——
     预警页要按紧要程度排，最缺钱的排最前。
     """
-    q = db.query(Admission).filter(Admission.status == "admitted")
+    # 余额与未结费用下推成关联子查询，先筛「gap < 阈值」、按 gap 排好序再分页（P2-137）。原先先按住院号分页、
+    # 再在这一页里筛、在这一页里排：`X-Total-Count` 数的是全部在院患者，最缺钱的那位只要不在第一页（在院超过
+    # 500 人），预警页上就没有他——页面只取第一页。口径与 `deposit_balance` / `unsettled_amount` 同一套。
+    balance_sq = (
+        select(func.coalesce(func.sum(
+            case((Deposit.deposit_type == "prepay", Deposit.amount), else_=-Deposit.amount)), 0.0))
+        .where(Deposit.admission_id == Admission.id)
+        .correlate(Admission)
+        .scalar_subquery()
+    )
+    unsettled_sq = (
+        select(func.coalesce(func.sum(BillDetail.amount), 0.0))
+        .where(BillDetail.admission_id == Admission.id, BillDetail.settlement_id.is_(None))
+        .correlate(Admission)
+        .scalar_subquery()
+    )
+    gap_expr = func.round(balance_sq - unsettled_sq, 2)
+    q = db.query(Admission).filter(Admission.status == "admitted", gap_expr < threshold)
     q = scope_patient_list(db, user, q, Admission, None, "billing")
     alerts = []
-    for admission in paginate(q.order_by(Admission.id), response, offset, limit):
+    for admission in paginate(q.order_by(gap_expr, Admission.id), response, offset, limit):
         balance = deposit_balance(db, admission.id)
         unsettled = unsettled_amount(db, admission.id)
-        gap = round(balance - unsettled, 2)
-        if gap < threshold:
-            patient = db.get(Patient, admission.patient_id)
-            alerts.append(
-                {
-                    "admission_id": admission.id,
-                    "patient_id": admission.patient_id,
-                    "patient_name": patient.name if patient else "",
-                    "org_id": admission.org_id,
-                    "balance": balance,
-                    "unsettled": unsettled,
-                    "gap": gap,
-                }
-            )
-    alerts.sort(key=lambda a: a["gap"])
+        patient = db.get(Patient, admission.patient_id)
+        alerts.append(
+            {
+                "admission_id": admission.id,
+                "patient_id": admission.patient_id,
+                "patient_name": patient.name if patient else "",
+                "org_id": admission.org_id,
+                "balance": balance,
+                "unsettled": unsettled,
+                "gap": round(balance - unsettled, 2),
+            }
+        )
     return alerts
 
 
