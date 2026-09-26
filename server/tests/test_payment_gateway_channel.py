@@ -386,6 +386,33 @@ def test_网关流水拉取失败时对账中止(client, admin, base, monkeypatc
     assert [b["id"] for b in after] == [b["id"] for b in before]  # 旧批次原样保留
 
 
+def test_对账只比走网关收的单_现金单不算通道缺失(client, admin, base, monkeypatch):
+    """P2-147：注册了 HTTP 网关后对账拉的是网关的流水，本地侧却是当日全部支付单——现金、银行卡、医保本来就不走网关，
+    每一笔都成了「本地有通道无」，真正的网关差异淹在里面。"""
+    _pay_via_callback(client, base, admin, monkeypatch, "GWSCOPE01")
+    settlement = new_settlement(client, base, admin)
+    cash = client.post(
+        "/api/billing/payments",
+        json={"settlement_id": settlement["id"], "channel": "cash", "amount": 10},
+        headers=base["operator"],
+    ).json()
+    assert cash["status"] == "paid" and cash["trade_no"]   # 窗口类渠道也有本地编的流水号
+    # 网关流水如实只含走网关收的单
+    local = client.get("/api/billing/payments", headers=base["operator"]).json()
+    transactions = [
+        {"trade_no": o["trade_no"], "amount_fen": int(round((o["amount"] - o["refunded_amount"]) * 100))}
+        for o in local
+        if o["channel"] == "gateway" and o["status"] in ("paid", "refunded") and o["trade_no"]
+    ]
+    monkeypatch.setattr(httpx, "get", lambda url, params=None, headers=None, timeout=None, **kw:
+                        DummyResp({"transactions": transactions}))
+    batch = client.post(
+        f"/api/billing/reconciliation/run?date={utc_today_str()}", headers=base["operator"]
+    ).json()
+    assert cash["id"] not in {d["order_id"] for d in batch["diffs"]}   # 修前：本地有通道无
+    assert batch["diffs"] == [] and batch["total_orders"] == len(transactions)
+
+
 def test_网关流水单位兼容元与分():
     gw = HttpGatewayPaymentGateway(GATEWAY_URL, GATEWAY_KEY)
 

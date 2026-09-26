@@ -1690,11 +1690,15 @@ def run_reconciliation(
     """
     date = require_date(date, field="date")
 
-    local_orders = _orders_of_day(db, date)
+    gateway = _gateway("gateway")
+    # 本地侧只取走这条通道收的支付单（P2-147）。现金、银行卡、医保是窗口当面收讫 / 基金结算，本来就没有网关，
+    # 注册了 HTTP 网关后拉回来的是网关的流水——原先把当日全部本地单都拿去比，每一笔现金都成了「本地有通道无」，
+    # 真正要查的网关差异淹在里面。Mock 下各渠道共用同一个通道对象，照旧全比。
+    local_orders = [o for o in _orders_of_day(db, date) if _gateway(o.channel) is gateway]
     # 通道流水：注册了 HTTP 网关时拉真通道流水（GET /transactions?date=），
     # 否则仍为 Mock 本地镜像；Mock 实现下各渠道共用同一份日流水。
     try:
-        remote_rows = _gateway("gateway").query_transactions(db, date)
+        remote_rows = gateway.query_transactions(db, date)
     except RuntimeError as exc:
         # 拉不到流水必须中止：空流水会把当日全部本地单误判成"通道缺失"
         raise HTTPException(status_code=502, detail=str(exc)) from None
