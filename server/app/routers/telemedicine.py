@@ -1,8 +1,11 @@
 """⑨互联网+诊疗：在线咨询、复诊续方（医师回复，续方联动集中审方）。"""
+from typing import NoReturn
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..concurrency import move_row
 from ..visibility import assert_org_writable
 from ..database import get_db
 from ..deps import get_current_user, require_roles
@@ -69,6 +72,15 @@ def list_consults(status: str | None = None, db: Session = Depends(get_db)):
     return query.order_by(OnlineConsult.id.desc()).limit(200).all()
 
 
+def _conflict(db: Session, consult: OnlineConsult, action: str) -> NoReturn:
+    """条件翻转抢输：回滚、按库里此刻的状态报与顺序请求同一句 409（P2-404）。"""
+    db.rollback()
+    db.refresh(consult)
+    raise HTTPException(
+        status_code=409, detail=f"当前状态 {CONSULT_STATUS_NAMES.get(consult.status, consult.status)} {action}"
+    )
+
+
 @router.post("/consults/{consult_id}/reply", response_model=ConsultOut, dependencies=[Depends(require_roles("doctor"))])
 def reply(consult_id: int, body: ReplyBody, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     consult = db.get(OnlineConsult, consult_id)
@@ -84,10 +96,13 @@ def reply(consult_id: int, body: ReplyBody, db: Session = Depends(get_db), user:
             raise HTTPException(status_code=422, detail="处方与咨询患者不一致")
         if prescription.status not in ("auto_passed", "approved"):
             raise HTTPException(status_code=409, detail="处方未通过审方，不可用于续方")
-        consult.prescription_id = body.prescription_id
-    consult.reply = body.reply
-    consult.doctor_name = body.doctor_name
-    consult.status = "replied"
+    # 回复与「还待回复」压进同一条 UPDATE（P2-404）：上面的预检是锁外读的——两位医生同时回复，先回的答复被后回的整段
+    # 盖掉、两路都 200；已回复并结束的咨询被迟到的回复翻回「已回复」
+    values: dict = {"reply": body.reply, "doctor_name": body.doctor_name, "status": "replied"}
+    if body.prescription_id is not None:
+        values["prescription_id"] = body.prescription_id
+    if not move_row(db, OnlineConsult, consult.id, OnlineConsult.status == "open", **values):
+        _conflict(db, consult, "不可回复")
     db.commit()
     db.refresh(consult)
     return consult
@@ -104,7 +119,8 @@ def close(consult_id: int, db: Session = Depends(get_db), user: User = Depends(g
         raise HTTPException(status_code=404, detail="咨询不存在")
     if consult.status != "replied":
         raise HTTPException(status_code=409, detail=f"当前状态 {CONSULT_STATUS_NAMES.get(consult.status, consult.status)} 不可结束")
-    consult.status = "closed"
+    if not move_row(db, OnlineConsult, consult.id, OnlineConsult.status == "replied", status="closed"):
+        _conflict(db, consult, "不可结束")
     db.commit()
     db.refresh(consult)
     return consult

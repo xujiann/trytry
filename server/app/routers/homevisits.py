@@ -4,12 +4,15 @@ ADR-0006：原先住在 `gapfill.py` 这个倾倒场里，按前缀搬回自己�
 """
 
 
+from typing import NoReturn
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..concurrency import move_row
 from ..visibility import assert_obj_org_writable, assert_org_writable, scope_patient_list
 from ..database import get_db
 from ..datetypes import OptionalDateStr
@@ -175,6 +178,16 @@ def list_visits(
     ]
 
 
+def _conflict(db: Session, order: HomeVisitOrder, action: str) -> NoReturn:
+    """条件翻转抢输：回滚、按库里此刻的状态报与顺序请求同一句 409（P2-404）。"""
+    db.rollback()
+    db.refresh(order)
+    raise HTTPException(
+        status_code=409,
+        detail=f"工单当前状态 {VISIT_ORDER_STATUS_NAMES.get(order.status, order.status)} {action}",
+    )
+
+
 class VisitDispatch(BaseModel):
     assignee_name: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
 
@@ -192,9 +205,12 @@ def dispatch_visit(order_id: int, body: VisitDispatch, db: Session = Depends(get
     assert_obj_org_writable(db, user, order)
     if order.status != "applied":
         raise HTTPException(status_code=409, detail=f"工单当前状态 {VISIT_ORDER_STATUS_NAMES.get(order.status, order.status)} 不可派单")
-    order.status = "dispatched"
-    order.assignee_name = body.assignee_name
-    order.dispatched_at = now_naive()
+    # 派单、完成、取消三处的状态判定都与写入压进同一条 UPDATE（P2-404）：上面的预检是锁外读的——派单的同时别人取消了，
+    # 已取消的工单又被派出去、带上执行人；完成与取消交错，工单成了「已取消」却挂着服务记录与完成时间
+    # （顺序做是 409「已完成工单不可取消」）。与 P2-317 那六个模块同一个写法
+    if not move_row(db, HomeVisitOrder, order.id, HomeVisitOrder.status == "applied",
+                    status="dispatched", assignee_name=body.assignee_name, dispatched_at=now_naive()):
+        _conflict(db, order, "不可派单")
     db.commit()
     db.refresh(order)
     return _visit_out(order)
@@ -217,9 +233,9 @@ def complete_visit(order_id: int, body: VisitComplete, db: Session = Depends(get
     assert_obj_org_writable(db, user, order)
     if order.status != "dispatched":
         raise HTTPException(status_code=409, detail=f"工单当前状态 {VISIT_ORDER_STATUS_NAMES.get(order.status, order.status)} 不可完成")
-    order.status = "completed"
-    order.service_note = body.service_note
-    order.completed_at = now_naive()
+    if not move_row(db, HomeVisitOrder, order.id, HomeVisitOrder.status == "dispatched",
+                    status="completed", service_note=body.service_note, completed_at=now_naive()):
+        _conflict(db, order, "不可完成")
     db.commit()
     db.refresh(order)
     return _visit_out(order)
@@ -237,7 +253,9 @@ def cancel_visit(order_id: int, db: Session = Depends(get_db), user: User = Depe
     assert_obj_org_writable(db, user, order)
     if order.status == "completed":
         raise HTTPException(status_code=409, detail="已完成工单不可取消")
-    order.status = "cancelled"
+    if not move_row(db, HomeVisitOrder, order.id, HomeVisitOrder.status != "completed", status="cancelled"):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已完成工单不可取消")
     db.commit()
     db.refresh(order)
     return _visit_out(order)
