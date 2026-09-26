@@ -426,6 +426,13 @@ def trial_balance(
     )
     if org_id is not None:
         query = query.filter(Voucher.org_id == org_id)
+    else:
+        # 不带机构号收进统计可见范围（P1-155），与合并报表同一口径（P0-37 A 案）：`assert_org_visible` 对 None
+        # 直接放行，原先不带机构号就把全县各院的已过账凭证加在一起——一家与谁都不挨着的卫生院医生照样读到
+        # 县医院的试算平衡表，而同一个人的凭证清单只给看本机构、别家的凭证明细 403
+        scope = scope_stats_orgs(db, user, None)
+        if scope is not None:
+            query = query.filter(Voucher.org_id.in_(scope))
     rows = query.group_by(VoucherEntry.subject_code).order_by(VoucherEntry.subject_code).all()
     subjects = {
         s.code: s for s in db.query(AccountSubject).all()
