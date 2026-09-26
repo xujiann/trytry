@@ -265,21 +265,32 @@ def test_高危儿标记回执与清单精确(client, admin, children):
 
 @pytest.fixture(scope="module")
 def prenatal(client, admin, base, record_flow):
-    """依赖 record_flow：统计零分支已在建档前单独钉过，这里开始造数。"""
+    """依赖 record_flow：统计零分支已在建档前单独钉过，这里开始造数。
+
+    record_flow 已把 base 那本档案结了案，而已结案的档案不再收产前筛查（P2-211）——筛查挂在这位孕妇本次妊娠新建的
+    档案上（一孕一册：上一本结案后即可再建）。回执 / 列表 / 统计的钉子与原先逐字相同，只是 record_id 换成新档案。
+    """
+    current = client.post(
+        "/api/maternal/records",
+        json={"patient_id": base["patient"]["id"], "lmp": "2027-01-10", "edc": "2027-10-17"},
+        headers=admin,
+    )
+    assert current.status_code == 201, current.text
+    record_id = current.json()["id"]
     low = client.post(
         "/api/maternal/screenings",
-        json={"record_id": base["record"]["id"], "screen_type": "down", "screen_date": "2026-04-15",
+        json={"record_id": record_id, "screen_type": "down", "screen_date": "2026-04-15",
               "gest_week": 16, "result": "low_risk", "indicator": "1/1200"},
         headers=admin,
     )
     assert low.status_code == 201, low.text
     high = client.post(
         "/api/maternal/screenings",
-        json={"record_id": base["record"]["id"], "screen_type": "nipt", "screen_date": "2026-05-06",
+        json={"record_id": record_id, "screen_type": "nipt", "screen_date": "2026-05-06",
               "result": "high_risk", "conclusion": "建议产前诊断"},
         headers=admin,
     ).json()
-    return {"low": low.json(), "high": high}
+    return {"low": low.json(), "high": high, "record_id": record_id}
 
 
 def test_产前筛查回执精确形状与键序(base, prenatal):
@@ -287,7 +298,7 @@ def test_产前筛查回执精确形状与键序(base, prenatal):
     assert list(body.keys()) == PRENATAL_SCREENING_KEYS
     assert body == {
         "id": body["id"],
-        "record_id": base["record"]["id"],
+        "record_id": prenatal["record_id"],
         "screen_type": "down",
         "screen_type_name": "唐氏血清学筛查",
         "screen_date": "2026-04-15",
@@ -300,7 +311,7 @@ def test_产前筛查回执精确形状与键序(base, prenatal):
     # gest_week 是**值可空**的恒在键（未填为 null，不是键消失）；高风险联动标记
     assert prenatal["high"] == {
         "id": prenatal["high"]["id"],
-        "record_id": base["record"]["id"],
+        "record_id": prenatal["record_id"],
         "screen_type": "nipt",
         "screen_type_name": "无创产前基因检测",
         "screen_date": "2026-05-06",

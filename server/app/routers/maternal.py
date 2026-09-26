@@ -188,6 +188,15 @@ def close_record(record_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
     if record.status != "delivered":
         raise HTTPException(status_code=409, detail="须完成产后访视（分娩后）方可结案")
+    # 「已分娩」不等于「做过产后访视」（P2-211）：分娩登记也把档案推到 delivered，原先分娩当天就能结案、一次产后访视都
+    # 没有——结案之后产后访视反被 409「档案已结案」挡在外面，产妇还从审方的孕产妇人群里提前掉出去（P2-120）
+    if (
+        db.query(MaternalVisit.id)
+        .filter(MaternalVisit.record_id == record.id, MaternalVisit.visit_type == "postpartum")
+        .first()
+        is None
+    ):
+        raise HTTPException(status_code=409, detail="须完成产后访视方可结案：本档案还没有产后访视记录")
     record.status = "closed"
     db.commit()
     return {"id": record_id, "status": "closed"}
@@ -611,6 +620,10 @@ def create_screening(
     record = db.get(MaternalRecord, body.record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
+    # 已结案的不收产前筛查（P2-211），与访视、分娩登记同一道口子：一孕一册之后同一位妇女名下有上一胎结案的旧档案，
+    # 按旧档案号录进来的高风险结果把上一胎标成高危，这一胎的档案仍是「正常」
+    if record.status == "closed":
+        raise HTTPException(status_code=409, detail="档案已结案，不可登记产前筛查（请按本次妊娠的档案登记）")
     screening = PrenatalScreening(created_by=user.id, **body.model_dump())
     screening.flagged_high_risk = body.result in HIGH_RISK_RESULTS
     if screening.flagged_high_risk:
