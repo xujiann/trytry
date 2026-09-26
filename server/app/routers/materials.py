@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import clock
-from ..concurrency import add_amount, ensure_present, insert_if_absent
+from ..concurrency import add_amount, insert_if_absent
 from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_obj_org_writable, assert_org_writable, assert_patient_visible, scope_org_list, visible_org_ids
@@ -266,6 +266,27 @@ def _mark_received(db: Session, purchase_id: int, received_quantity: int, note: 
     return bool(received.rowcount)
 
 
+#: 验收建台账时编码被占用最多往后试几个后缀（MP000123、MP000123-2 …）
+RECEIPT_CODE_TRIES = 20
+
+
+def _receipt_asset(db: Session, purchase: MaterialPurchase) -> Asset:
+    """验收入账建的那件物资：挂在采购单的机构名下，编码 MP+六位单号，被占用就带后缀另建一件（P2-397）。**不 commit**。
+
+    原先按编码找、找到哪件记哪件：建档（`/api/mgmt/assets`）不限编码，别家机构手工建一件 MP000001，本院 1 号采购单
+    验收的 10 件就记到了别家账上——回执里是别家的物资号、数量加在别家、「采购验收」流水挂在别家，本院台账一件没有；
+    已报废的同编码物资也照样被加量。而这个编码只有验收这一处会生成，一张单又只验收得了一次（`_mark_received`），
+    库里已有的同编码物资**一定不是这张单建的**——所以不找、只新建：撞上唯一编码就换下一个后缀。"""
+    base = f"MP{purchase.id:06d}"
+    for n in range(1, RECEIPT_CODE_TRIES + 1):
+        asset = Asset(org_id=purchase.org_id, code=base if n == 1 else f"{base}-{n}",
+                      name=purchase.item_name, category="office", quantity=0)
+        if insert_if_absent(db, asset):
+            return asset
+    db.rollback()
+    raise HTTPException(status_code=409, detail=f"物资编码 {base} 及其后缀都已被占用，请先清理同编码的物资再验收")
+
+
 @router.post(
     "/purchases/{purchase_id}/receive", response_model=PurchaseReceivedOut,
     dependencies=[Depends(require_roles("operator", "director"))]
@@ -295,21 +316,7 @@ def receive_purchase(
         db.refresh(purchase)  # 抢输了就按真实状态措辞，别拿锁外读到的旧值
         raise HTTPException(status_code=409, detail=f"当前状态 {PURCHASE_STATUS_NAMES.get(purchase.status, purchase.status)} 不可验收")
 
-    code = f"MP{purchase.id:06d}"
-    asset = db.query(Asset).filter(Asset.code == code).first()
-    if asset is None:
-        insert_if_absent(
-            db,
-            Asset(
-                org_id=purchase.org_id,
-                code=code,
-                name=purchase.item_name,
-                category="office",
-                quantity=0,
-            ),
-        )
-        asset = db.query(Asset).filter(Asset.code == code).first()
-    asset = ensure_present(asset, "资产")
+    asset = _receipt_asset(db, purchase)
     add_amount(db, Asset, asset.id, "quantity", body.received_quantity)
     db.add(
         AssetMovement(
