@@ -14,7 +14,7 @@ from sqlalchemy import case, func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, serialized_on
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import (
@@ -550,6 +550,13 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: 
         db.rollback()
         raise HTTPException(status_code=409, detail="该患者已出院")
     db.refresh(admission)  # 行锁已到手：bed_id 以库内为准（中途有转床提交时拿到的是新床）
+    # 行锁到手后再判一次费用结清（P2-274）：上面那次在锁外，判完到置出院之间，计费可能刚在同一行的锁里提交了一笔——
+    # 带着未结清的费用出了院。此后的计费要等这把锁，锁放开时读到的已是「出院」
+    try:
+        _assert_billing_settled(db, admission)
+    except HTTPException:
+        db.rollback()
+        raise
     # 停止全部执行中医嘱
     db.query(InpatientOrder).filter(
         InpatientOrder.admission_id == admission_id, InpatientOrder.status == "active"
@@ -644,29 +651,38 @@ def create_order(
     # 实测未修前：乙院 doctor 能给甲院的住院病人开一条长期医嘱（201）。
     # 跨机构的临床协同有专门的入口（远程会诊 / 会诊申请），不是直接写别家的医嘱单。
     assert_obj_org_writable(db, user, admission)
-    # 长期医嘱按"一条一直执行"开立，同一次住院里内容一模一样的在执行长期医嘱只该有一条：
-    # 两条就是两行医嘱单、两笔执行登记，最后要主管医师回头人工仲裁停掉一条。
-    # 临时医嘱按次开立（同内容多条合法）、停用后重开也合法，故只查 long+active。
-    if body.order_type == "long":
-        duplicate = (
-            db.query(InpatientOrder.id)
-            .filter(
-                InpatientOrder.admission_id == body.admission_id,
-                InpatientOrder.order_type == "long",
-                InpatientOrder.status == "active",
-                InpatientOrder.content == body.content,
+    # 「在院」在住院登记这一行的临界区里、刷新之后再判一次（P2-274）：出院在同一行上做条件 UPDATE 并停掉全部在执行
+    # 医嘱，原先只在锁外判——与出院并发时读到的还是「在院」，新医嘱在出院停完医嘱之后才落库，以「执行中」挂在已出院的
+    # 住院上，照样能登记执行。
+    with serialized_on(db, Admission, admission.id):
+        db.refresh(admission)
+        if admission.status != "admitted":
+            db.rollback()
+            raise HTTPException(status_code=409, detail="患者已出院，不可开立医嘱")
+        # 长期医嘱按"一条一直执行"开立，同一次住院里内容一模一样的在执行长期医嘱只该有一条：
+        # 两条就是两行医嘱单、两笔执行登记，最后要主管医师回头人工仲裁停掉一条。
+        # 临时医嘱按次开立（同内容多条合法）、停用后重开也合法，故只查 long+active。
+        if body.order_type == "long":
+            duplicate = (
+                db.query(InpatientOrder.id)
+                .filter(
+                    InpatientOrder.admission_id == body.admission_id,
+                    InpatientOrder.order_type == "long",
+                    InpatientOrder.status == "active",
+                    InpatientOrder.content == body.content,
+                )
+                .first()
             )
-            .first()
+            if duplicate:
+                db.rollback()
+                raise HTTPException(status_code=409, detail=_DUPLICATE_LONG_ORDER_DETAIL)
+        order = InpatientOrder(
+            **body.model_dump(), created_by_name=user.full_name or user.username
         )
-        if duplicate:
-            raise HTTPException(status_code=409, detail=_DUPLICATE_LONG_ORDER_DETAIL)
-    order = InpatientOrder(
-        **body.model_dump(), created_by_name=user.full_name or user.username
-    )
-    # 上面那句查重是 check-then-act：并发下（含双击）两路都查不到就都开立。
-    # uq_inpatient_order_active_long（部分唯一索引）是兜底，抢输者拿到的
-    # 409 文案与顺序重复完全一致——对调用方来说两种情形没有区别。
-    insert_or_conflict(db, order, _DUPLICATE_LONG_ORDER_DETAIL)
+        # 上面那句查重是 check-then-act：并发下（含双击）两路都查不到就都开立。
+        # uq_inpatient_order_active_long（部分唯一索引）是兜底，抢输者拿到的
+        # 409 文案与顺序重复完全一致——对调用方来说两种情形没有区别。
+        insert_or_conflict(db, order, _DUPLICATE_LONG_ORDER_DETAIL)
     return _order_out(order)
 
 

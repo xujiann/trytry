@@ -455,6 +455,12 @@ def create_bill_detail(
     # 费用，结算后方可出院」挡住，再结算又撞「一次住院一张结算单」（uq_settlement_inpatient_admission）409——
     # 这位患者永远出不了院。判定与写入圈在结算同一把住院登记行锁里，结算与计费并发时不会漏进一笔。
     with serialized_on(db, Admission, body.admission_id):
+        # 「在院」在锁里再判一次（P2-274）：零费用的住院不结算也能出院（`_assert_billing_settled` 只拦未结清的），
+        # 原先锁外判完「在院」、锁里只查结算单——与这种出院并发时，一笔费用记进已出院的住院
+        # 直接查这一列而不是 `db.get`：会话里那份住院登记是锁外读的，身份映射会把旧对象原样还回来
+        if db.query(Admission.status).filter(Admission.id == body.admission_id).scalar() != "admitted":
+            db.rollback()
+            raise HTTPException(status_code=409, detail="患者已出院，不可继续计费")
         if _inpatient_settlement_id(db, body.admission_id) is not None:
             raise HTTPException(status_code=409, detail="该次住院已办理结算，不可再计费")
         db.add(detail)
