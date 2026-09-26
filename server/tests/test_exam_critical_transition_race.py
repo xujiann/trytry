@@ -2,8 +2,8 @@
 
 `acknowledge_critical` / `resolve_critical` 原先「读 critical_status → 判 → 赋值 → 记一条处置轨迹 → commit」。两位
 医生同时点「确认接收」（或双击），两路都读到「已通知」、都 200，轨迹里两条「确认接收」；处置反馈同理——两句反馈都记下，
-闭环记成两次。平台其余状态迁移早已改成带状态条件的 UPDATE（P2-109 起），这两步的列叫 `critical_status` 而不是 `status`，
-按 `.status` 认形状的扫描一直没看见它们。
+闭环记成两次。平台里带计数 / 库存副作用的那一批状态迁移自 P2-109 起陆续改成了带状态条件的 UPDATE，这两步的列叫
+`critical_status` 而不是 `status`，按 `.status` 认形状的排查一直没看见它们。
 
 修法：`_move_critical`——判定与写入压进同一条 `WHERE critical_status IN (前态)` 的 UPDATE，后到的一路 409、与顺序请求
 同一句，轨迹恰好一条。这里把「一路读到前态之后、写入之前，另一路先提交了」钉成确定的时序：在两处都先调、恰在读取之后的
