@@ -197,9 +197,14 @@ def list_teams(
         query = query.filter(SpdTeam.org_id == org_id)
     if level:
         query = query.filter(SpdTeam.level == level)
-    rows = paginate(query.order_by(SpdTeam.id), response, offset, limit)
     if program_code:
-        rows = [t for t in rows if program_code in (t.program_codes or [])]
+        # 按病种筛在分页之前（P2-177）：原先先分页、再在这一页里挑——总数（X-Total-Count）是没筛的，这一页少几条、
+        # 管这个病种的团队排在第二页以后就整个看不见。`program_codes` 是 JSON 列表，两个库的「数组包含」写法不同，
+        # 于是先取出 (id, 病种列表) 在内存里挑出编号，再交回库里分页（团队是配置数据，行数有限）
+        matched = [tid for tid, codes in query.with_entities(SpdTeam.id, SpdTeam.program_codes).all()
+                   if program_code in (codes or [])]
+        query = query.filter(SpdTeam.id.in_(matched))
+    rows = paginate(query.order_by(SpdTeam.id), response, offset, limit)
     counts: dict[int, int] = {}
     if rows:
         ids = [t.id for t in rows]
