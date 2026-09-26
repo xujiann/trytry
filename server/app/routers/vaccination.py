@@ -111,8 +111,14 @@ def vaccinate(body: RecordCreate, db: Session = Depends(get_db), user: User = De
         # 并发下每个请求都读到同一个 used_quantity、都判定还有货，
         # 最后只有一次加法生效——**实测库存 1 支打出 4 针，台账与实际对不上**，
         # 而疫苗是按批号强监管的品类。做法与预约原子占号一致。
-        if not claim_quota(db, VaccineBatch, batch.id, "used_quantity", "quantity"):
+        # 封存也压进这条 UPDATE（P2-235）：上面那句封存判断是锁外读的，读完到占额之间被封存（超温、召回），
+        # 原先照样扣一支、照样登记接种
+        if not claim_quota(db, VaccineBatch, batch.id, "used_quantity", "quantity",
+                           where=(VaccineBatch.status != "frozen",)):
             db.rollback()
+            db.refresh(batch)
+            if batch.status == "frozen":
+                raise HTTPException(status_code=409, detail=f"该批次已封存：{batch.frozen_reason}")
             raise HTTPException(status_code=409, detail="该批次库存已用完")
         batch_no = batch.batch_no
 

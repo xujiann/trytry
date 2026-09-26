@@ -207,21 +207,23 @@ def take_amount(db: Session, model, obj_id: int, col: str, amount) -> bool:
     return bool(result.rowcount)
 
 
-def claim_quota(db: Session, model, obj_id: int, used_col: str, limit_col: str, step: int = 1) -> bool:
-    """原子占额：`UPDATE ... SET used = used + step WHERE used + step <= limit`。
+def claim_quota(db: Session, model, obj_id: int, used_col: str, limit_col: str, step: int = 1, *,
+                where: tuple[ColumnElement[bool], ...] = ()) -> bool:
+    """原子占额：`UPDATE ... SET used = used + step WHERE used + step <= limit [AND where…]`。
 
     这是平台早就在用的做法（`appointments.book_slot` 的原子占号），
     只是没抽出来，于是疫苗批次那里又用回了"先读再判再加"——
     并发下每个请求都读到同一个 used，各自判定还有货，最后只有一次加法生效。
 
     返回是否占到。**判定与扣减必须在同一条 SQL 里**，中间隔了一次 Python 判断，
-    这个函数就没有意义了。
+    这个函数就没有意义了。占额之外还有别的前提（批次没封存）的，放进 `where`
+    与余量同一条 UPDATE 判——锁外先读一眼状态再占额，中间被人封存了照样占到（P2-235）。
     """
     used = getattr(model, used_col)
     limit = getattr(model, limit_col)
     claimed = cast(CursorResult, db.execute(
         update(model)
-        .where(model.id == obj_id, used + step <= limit)
+        .where(model.id == obj_id, used + step <= limit, *where)
         .values(**{used_col: used + step})
     ))
     return bool(claimed.rowcount)
