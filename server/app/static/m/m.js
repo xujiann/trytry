@@ -652,10 +652,13 @@ const APPT_STATUS = { booked: "待就诊", fulfilled: "已就诊", cancelled: "�
 const PACKAGES = { basic: "基础包", standard: "标准包", premium: "个性包" };
 const SERVICE_TYPES = { visit: "上门服务", consult: "健康咨询", followup: "随访", referral: "转诊协助" };
 
-document.querySelectorAll(".seg-btn").forEach((btn) => {
+// 只认在线服务的分段（带 data-svc 的，P2-365）：慢专病页签的分段也用 .seg-btn 这个样式——原先两边一起绑，
+// 点一下慢专病的「监测」就把 activeService 置成 undefined、清掉服务页的高亮，还白拉一遍转诊清单（又多一条本人调阅留痕）；
+// 反过来点服务分段也清掉慢专病那边的高亮
+document.querySelectorAll(".seg-btn[data-svc]").forEach((btn) => {
   btn.addEventListener("click", () => {
     activeService = btn.dataset.svc;
-    document.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    document.querySelectorAll(".seg-btn[data-svc]").forEach((b) => b.classList.toggle("active", b === btn));
     loadService();
   });
 });
