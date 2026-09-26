@@ -151,6 +151,9 @@ KNOWN_BARE_BODY_DATE_FIELDS: set[str] = set()
 #: 词元 `date` 之外还认 `due`（P2-55）：「下次随访日」叫 next_due，原先整个不在视野里，裸 str 照收「2026/10/1」。
 #: 还认 `lmp` / `edc`（P2-231）：末次月经、预产期按产科惯例用缩写命名，孕产妇建册的这两个日期原先同样不在视野里
 _DATE_TOKEN = re.compile(r"(^|_)(date|due|lmp|edc)($|_)")
+#: 名字认不出、限长却恰是日期宽度（10）的裸 str 也算（P2-334）：考核指标的 `effective_from` 就是这样漏网的——名字里没有
+#: date，照收「2026/09/01」「2026-02-31」。日期时间宽度（19）归下面的时间戳判据管（那边按名字认 `_at` / `_time`）
+_DATE_WIDTH = re.compile(r"max_length=10\b")
 _ROUTE_DIRS = (APP_DIR / "routers", APP_DIR / "spd" / "routers")
 _HTTP_VERBS = ("get", "post", "put", "patch", "delete")
 
@@ -225,7 +228,8 @@ def _bare_body_date_fields() -> set[str]:
                 if (
                     isinstance(stmt, ast.AnnAssign)
                     and isinstance(stmt.target, ast.Name)
-                    and _DATE_TOKEN.search(stmt.target.id)
+                    and (_DATE_TOKEN.search(stmt.target.id)
+                         or (stmt.value is not None and _DATE_WIDTH.search(ast.unparse(stmt.value))))
                     and ast.unparse(stmt.annotation) in ("str", "str | None", "Optional[str]")
                 ):
                     out.add(f"{path.relative_to(APP_DIR).as_posix()}::{name}.{stmt.target.id}")
@@ -246,6 +250,9 @@ def test_请求体日期字段判据自证():
     assert not _DATE_TOKEN.search("last_update") and not _DATE_TOKEN.search("candidate_ids")
     assert _DATE_TOKEN.search("date") and _DATE_TOKEN.search("visit_date")
     assert _DATE_TOKEN.search("next_due") and not _DATE_TOKEN.search("overdue_count")
+    # 宽度判据（P2-334）：限长恰为 10 的认，别的宽度不认
+    assert _DATE_WIDTH.search("Field(default='', max_length=10)")
+    assert not any(_DATE_WIDTH.search(f"Field(max_length={n})") for n in (100, 16, 19, 1024))
 
 
 def test_不得新增裸str的请求体日期字段():

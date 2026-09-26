@@ -53,6 +53,9 @@ CASES = [
     ("/api/chronic", {"patient_id": 999999, "disease": "hypertension", "managed_by_org_id": 999999},
      "next_due", True),
     ("/api/chronic/999999/followups", {}, "next_due", True),
+    # 考核指标的生效日期（P2-334）：名字里没有 date，棘轮原先按词元认不出它；合法日期真建一条指标（留空那次撞编码 409）
+    ("/api/spd/indicators", {"code": "DATE-REG-IND", "name": "日期回归指标"}, "effective_from", True),
+    ("PATCH /api/spd/indicators/999999", {}, "effective_from", True),
     # 没有父级 id 可填：合法日期就真建一份档案（同证件号幂等，留空那次返回同一份）
     ("/api/patients", {"name": "出生日期回归", "id_card": "330281199001011234"}, "birth_date", True),
 ]

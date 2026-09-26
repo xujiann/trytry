@@ -31,6 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ... import clock, datetypes
+from ...datetypes import OptionalDateStr
 from ...clock import now_naive
 from ...concurrency import add_amount, ensure_present, insert_if_absent, take_amount
 from ...database import get_db
@@ -353,7 +354,9 @@ class IndicatorIn(BaseModel):
     target_value: FiniteFloat | None = None
     abnormal_rule: str = Field(default="", max_length=256)
     version: str = Field(default="v1", max_length=16)
-    effective_from: str = Field(default="", max_length=10)
+    # 日期走真源（P2-334）：原先裸 str 限长 10，「2026/09/01」「2026-02-31」「abcdefghij」都照收——字段名里没有 date，
+    # 请求体日期字段的棘轮（P1-61）看不见它
+    effective_from: OptionalDateStr = ""
     effective_scope: str = Field(default="region", max_length=64)
 
 
@@ -435,7 +438,7 @@ class IndicatorPatch(BaseModel):
     weight: float = Field(default=UNSET, ge=0, le=1000)
     target_value: FiniteFloat | None = None
     abnormal_rule: str = Field(default=UNSET, max_length=256)
-    effective_from: str = Field(default=UNSET, max_length=10)
+    effective_from: OptionalDateStr = Field(default=UNSET)
     effective_scope: str = Field(default=UNSET, max_length=64)
     active: bool = Field(default=UNSET)
 
