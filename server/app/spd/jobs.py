@@ -162,8 +162,11 @@ def spd_edu_push_dispatch(db: Session) -> tuple[int, str]:
     }
     for push in due:
         material = materials.get(push.material_id)
-        if material is None:
+        # 素材停用了就不再发（P2-252）：立即推送对停用的素材 404「宣教素材不存在或已停用」，定时派发原先不看——约好的
+        # 推送照样把停用（内容过时、有误而撤下）的素材发到患者手机上。如实置失败并写明原因，推送清单上看得见
+        if material is None or not material.active:
             push.status = "failed"
+            push.fail_reason = "宣教素材不存在" if material is None else "宣教素材已停用，未发送"
             failed += 1
             continue
         if dispatch_edu_push(db, push, material):
