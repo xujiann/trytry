@@ -2957,13 +2957,15 @@ async function renderSpdFollowup() {
          <td>${esc(s.note || "—")}</td>
          <td>${s.result ? "—" : `<button class="btn secondary" data-qc-judge="${s.id}">判定</button>`}</td></tr>`)}`)}
     ${panel("呼叫任务与录音", `
-      ${table(["ID", "患者", "号码", "来源", "状态", "时长(秒)", "录音", "创建时间", "操作"], calls, (c) =>
+      ${table(["ID", "患者", "号码", "来源", "状态", "结果", "时长(秒)", "录音", "创建时间", "操作"], calls, (c) =>
         `<tr><td>${c.id}</td><td>${esc(c.patient_name)}</td><td>${esc(c.phone || "—")}</td>
          <td>${esc(c.ref_type)}</td>
          <td>${c.status === "connected" ? '<span class="tag green">已接通</span>'
             : c.status === "failed" ? '<span class="tag red">未接通</span>'
             : c.status === "cancelled" ? '<span class="tag">已取消</span>'
             : '<span class="tag orange">待呼叫</span>'}</td>
+         <td>${c.status === "pending" && c.result   // 待呼叫的结果列只有派发没受理的原因（P2-367）：原先不显示，看着与普通待呼叫一样
+            ? `<span class="tag red">派发未受理</span> ${esc(c.result)}` : esc(c.result || "—")}</td>
          <td>${c.duration_s}</td><td>${c.record_url ? "有" : "—"}</td>
          <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td>
          <td>${c.status === "pending" ? `<button class="btn secondary" data-call-result="${c.id}">回写结果</button>` : "—"}</td></tr>`)}`)}`;
@@ -3173,10 +3175,18 @@ async function renderSpdFollowup() {
       }, "#spd-fu-msg");
     }
     if (call) {
-      return postAction("/api/spd/call-tasks", {
-        patient_id: Number(call.dataset.pid), ref_type: "followup",
-        ref_id: Number(call.dataset.fuCall),
-      }, "#spd-fu-msg");
+      // 不走 postAction：派发没受理（呼叫中心网关不通 / 未配置）要说出来（P2-367）——原先回执整个丢掉、整页重画，
+      // 这条任务看着与普通待呼叫一样，网关永远不会拨、也没人知道要人工外呼
+      try {
+        const r = await api("/api/spd/call-tasks", { method: "POST", body: JSON.stringify({
+          patient_id: Number(call.dataset.pid), ref_type: "followup", ref_id: Number(call.dataset.fuCall) }) });
+        await route();
+        setMsg("#spd-fu-msg", r.dispatch.accepted
+          ? `已转呼叫（任务 #${r.id}）：${r.dispatch.note}`
+          : `呼叫任务 #${r.id} 已建，但呼叫中心未受理：${r.dispatch.note}——请人工外呼后在「呼叫任务与录音」回写结果`,
+          r.dispatch.accepted);
+      } catch (err) { setMsg("#spd-fu-msg", err.message, false); }
+      return;
     }
   };
   // 取数放最后：以上监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 renderSpdPath）

@@ -49,7 +49,8 @@ from ..models import (
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, as_validated, grade_abnormal
 from ..service import (adjust_followup_record, close_followup_record, followup_abnormal, followup_overdue,
-                       settle_call_task, spawn_followup_abnormal_task, unknown_code, unknown_ids, unknown_program)
+                       note_call_dispatch_failure, settle_call_task, spawn_followup_abnormal_task, unknown_code,
+                       unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -1183,13 +1184,15 @@ def create_call_task(
     )
     # 经呼叫通道派发（manual=等人工外呼，http=推给呼叫中心）。
     # 派发失败不报错：任务留在 pending、结果里记原因——通道抖一下
-    # 不该让"发起随访"这个动作失败。
+    # 不该让"发起随访"这个动作失败。原因只在仍待呼叫时记（P2-367）：网关超时之后其实已受理、
+    # 回调先一步回写了结果的，不能把沟通结果盖成「呼叫网关异常」
     from ..callcenter import get_call_provider
 
     accepted, note = get_call_provider().dispatch(task.id, phone, body.ref_type)
     if not accepted:
-        task.result = note
+        note_call_dispatch_failure(db, task.id, note)
         db.commit()
+        db.refresh(task)
     return {"id": task.id, "phone": task.phone, "status": task.status,
             "dispatch": {"accepted": accepted, "note": note}}
 

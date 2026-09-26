@@ -484,6 +484,15 @@ def settle_call_task(db: Session, task_id: int, **values: Any) -> bool:
     return _move_row(db, SpdCallTask, task_id, "pending", **values)
 
 
+def note_call_dispatch_failure(db: Session, task_id: int, note: str) -> bool:
+    """呼叫任务派发没受理：把原因记进结果列，只在仍待呼叫时写，返回是否写到（P2-367）。
+
+    原先无条件写 `result`：网关超时（5 秒）之后其实已受理、回调先一步把结果回写好了的，沟通结果被盖成「呼叫网关异常」——
+    与回写结果「只从待呼叫翻」（`settle_call_task`，P2-289）同一口径。**不 commit**。
+    """
+    return _move_row(db, SpdCallTask, task_id, "pending", result=note)
+
+
 #: 干预方案（`spd_interventions.status`）还能被居民标记完成的：没被移除的都算（已完成的再点一次照旧是已完成）
 INTERVENTION_FINISHABLE_STATUSES = ("planned", "doing", "done")
 
