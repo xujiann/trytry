@@ -213,7 +213,7 @@ def void(
     user: User = Depends(get_current_user),
 ):
     """作废：挂失、损坏、盗用嫌疑。作废后该凭据立即不可用于核验。"""
-    if not body.reason:
+    if not body.reason.strip():   # 一串空格不算填了（P2-309）
         raise HTTPException(status_code=422, detail="作废须填写原因")
     return _close(db, credential_id, "void", body.reason, user)
 

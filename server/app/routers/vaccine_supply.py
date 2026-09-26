@@ -553,7 +553,7 @@ def report_aefi(
             raise HTTPException(status_code=422, detail="接种记录不属于该患者")
         data["vaccine_code"] = record.vaccine_code
         batch_no = record.batch_no
-    elif not body.vaccine_code:
+    elif not body.vaccine_code.strip():   # 一串空格不算填了（P2-309）
         raise HTTPException(status_code=422, detail="未关联接种记录时须填写疫苗编码")
     report = AefiReport(batch_no=batch_no, reported_by=user.id, **data)
     db.add(report)

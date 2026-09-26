@@ -571,7 +571,7 @@ def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db
     if body.measures:
         task.measures = body.measures
     if body.complete:
-        if not body.completion_note:
+        if not body.completion_note.strip():   # 一串空格不算填了（P2-309）
             raise HTTPException(status_code=422, detail="提交完成须填写整改结果说明")
         task.status = "completed"
         task.completion_note = body.completion_note

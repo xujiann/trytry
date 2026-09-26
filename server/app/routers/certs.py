@@ -72,9 +72,9 @@ def issue_cert(
             raise HTTPException(status_code=422, detail="死亡医学证明须关联患者档案")
         if db.get(Patient, body.patient_id) is None:
             raise HTTPException(status_code=404, detail="患者不存在")
-        if not body.detail:
+        if not body.detail.strip():   # 一串空格不算填了（P2-309）
             raise HTTPException(status_code=422, detail="死亡医学证明须填写死因诊断")
-    if body.cert_type == "defect" and not body.detail:
+    if body.cert_type == "defect" and not body.detail.strip():
         raise HTTPException(status_code=422, detail="出生缺陷儿登记须填写缺陷诊断")
     if body.child_id is not None and db.get(ChildRecord, body.child_id) is None:
         raise HTTPException(status_code=404, detail="儿童档案不存在")
