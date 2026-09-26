@@ -561,7 +561,7 @@ async function loadArchiveExtra(query) {
       ${kv("场景", esc(CONSENT_SCENE_NAMES[c.scene] || c.scene))}
       ${kv("文本版本", esc(c.text_version || "—"))}
       ${kv("方式", esc(c.method_name || c.method))}
-      ${c.guardian_name ? kv("监护人", `${esc(c.guardian_name)}（${esc(c.guardian_relation || "监护人")}）`) : ""}
+      ${c.guardian_name ? kv("监护人", `${esc(c.guardian_name)}（${esc(c.guardian_relation_name || "监护人")}）`) : ""}
       ${kv("状态", c.revoked_at ? `<span class="tag">已撤回 ${esc(c.revoked_at.slice(0, 10))}</span>` : '<span class="tag green">有效</span>')}
     </div>`).join("") || '<p class="empty">尚无同意记录</p>'}
     <details class="m-card fold"><summary>签署一项知情同意</summary>

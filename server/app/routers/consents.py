@@ -74,6 +74,9 @@ CONSENT_SCENE_NAMES = {
     "cross_org_access": "跨机构调阅", "public_health_report": "公卫上报", "family_delegate": "家庭代管授权",
 }
 CONSENT_METHOD_NAMES = {"self": "本人自签", "proxy": "窗口代录"}
+#: 监护关系的编码 → 中文（P2-238）：居民端签署表单的下拉送的是 parent / guardian；接口也收自由文本（「母亲」），
+#: 不在表里的原样读出。打印件与居民端都取这一份，别另抄
+GUARDIAN_RELATION_NAMES = {"parent": "父母", "guardian": "其他监护人"}
 
 #: 更正权白名单：允许线上更正的 patients 字段。**不含 id_card**——身份证号是
 #: 主索引唯一键（EMPI 去重依据）与居民端实名绑定凭据，线上改证件号等同于把
@@ -152,6 +155,7 @@ def consent_out(record: ConsentRecord) -> dict:
         "guardian_name": record.guardian_name,
         "guardian_id_card": mask_id_card(record.guardian_id_card),
         "guardian_relation": record.guardian_relation,
+        "guardian_relation_name": GUARDIAN_RELATION_NAMES.get(record.guardian_relation, record.guardian_relation),
         "revoked_at": record.revoked_at.isoformat() if record.revoked_at else "",
         "created_at": record.created_at.isoformat(),
     }
@@ -195,6 +199,8 @@ class ConsentOut(BaseModel):
     #: 出口脱敏后的监护人证件号（保留前4后4）
     guardian_id_card: str
     guardian_relation: str
+    #: 监护关系的中文（P2-238，只加字段）：居民端送的编码 parent / guardian 译成「父母 / 其他监护人」，自由文本原样
+    guardian_relation_name: str
     #: 空串 = 未撤回；否则为撤回时刻 ISO 时间戳
     revoked_at: str
     created_at: str

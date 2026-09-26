@@ -108,6 +108,7 @@ REFERRAL_DIRECTION_NAMES = {"up": "上转", "down": "下转"}
 # 居民端另有一套措辞（待接收/已接收/已完成，见 portal._PLATFORM_REFERRAL_STATUS），
 # 那是刻意的对外分叉、不是第三份拷贝，收敛与否属另案（ROADMAP）。
 from .referrals import STATUS_LABELS as REFERRAL_STATUS_NAMES  # noqa: E402
+from .consents import GUARDIAN_RELATION_NAMES  # noqa: E402  监护关系编码的中文，与居民端同一份（P2-238）
 CONSENT_SCENE_NAMES = {
     "archive": "居民健康建档",
     "chronic_enroll": "慢病入组管理",
@@ -708,7 +709,8 @@ def print_consent(
     )
     guardian = (
         f'<tr><td class="k">监护人</td><td>{_esc(record.guardian_name)}</td>'
-        f'<td class="k">与患者关系</td><td>{_esc(record.guardian_relation) or "—"}</td></tr>'
+        f'<td class="k">与患者关系</td>'
+        f'<td>{_esc(GUARDIAN_RELATION_NAMES.get(record.guardian_relation, record.guardian_relation)) or "—"}</td></tr>'
         if record.guardian_name
         else ""
     )
