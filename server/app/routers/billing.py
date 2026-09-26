@@ -447,9 +447,27 @@ def create_bill_detail(
         amount=round(item.price * body.quantity, 2),
         created_by=user.id,
     )
-    db.add(detail)
-    db.commit()
+    if body.admission_id is None:
+        db.add(detail)
+        db.commit()
+        return _bill_detail_out(detail)
+    # 已办结算的住院不再收费用（P1-141）。原先只挡「已出院」：结算之后、出院之前再记一笔，出院被「存在未结清住院
+    # 费用，结算后方可出院」挡住，再结算又撞「一次住院一张结算单」（uq_settlement_inpatient_admission）409——
+    # 这位患者永远出不了院。判定与写入圈在结算同一把住院登记行锁里，结算与计费并发时不会漏进一笔。
+    with serialized_on(db, Admission, body.admission_id):
+        if _inpatient_settlement_id(db, body.admission_id) is not None:
+            raise HTTPException(status_code=409, detail="该次住院已办理结算，不可再计费")
+        db.add(detail)
+        db.commit()
     return _bill_detail_out(detail)
+
+
+def _inpatient_settlement_id(db: Session, admission_id: int) -> int | None:
+    # `.first()` 而不是 `.scalar()`：唯一索引若因存量重复没建成（e5b7c9d1f3a4 的不阻塞路径），可能有两张
+    row = db.query(Settlement.id).filter(
+        Settlement.bill_type == "inpatient", Settlement.admission_id == admission_id
+    ).first()
+    return row[0] if row else None
 
 
 @router.get("/details", response_model=list[BillDetailOut])
