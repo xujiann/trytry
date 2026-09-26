@@ -61,8 +61,9 @@ class SpdProgram(Base):
                          {"field": "bp_sys",    "op": ">=", "value": 140}]
 
     字段名取自 `rules.FIELD_SOURCES`，求值在 `app/spd/rules.py`，**不用 eval**。
-    分开存 include/exclude 是因为两者语义不同：命中任一 include 且不命中任何
-    exclude 才算目标人群——合并成一张表就要再加一列区分，读起来反而绕。
+    分开存 include/exclude 是因为两者语义不同：include **逐条都满足**且不命中任何
+    exclude 才算目标人群（`rules.screen`：纳入按全部满足、排除按任一命中；管理端规则编辑器也写「全部满足」。
+    P2-377 订正：这里原先写「命中任一 include」）——合并成一张表就要再加一列区分，读起来反而绕。
     """
 
     __tablename__ = "spd_programs"
@@ -1323,7 +1324,8 @@ class SpdQuestionnaire(Base):
     name: Mapped[str] = mapped_column(String(64))
     scene: Mapped[str] = mapped_column(String(16), default="inpatient")
     items: Mapped[list] = mapped_column(JSON, default=list)
-    # [{"when":{"key":"pain","op":">=","value":7},"level":"high","action":"通知主管医师"}]
+    # [{"when":{"field":"pain","op":">=","value":7},"level":"high","action":"通知主管医师"}]
+    # 条件用 `field` 指题目 key（P2-377 订正：原先示例写成 `key`，照着写 422）；级别只收 low / mid / high
     abnormal_rules: Mapped[list] = mapped_column(JSON, default=list)
     track_dept: Mapped[str] = mapped_column(String(64), default="")
     handle_role: Mapped[str] = mapped_column(String(32), default="doctor")

@@ -2,7 +2,7 @@
 
 任务**注册在子系统内**、只用平台的调度基础设施（`scheduler.register`），
 依赖方向因此仍是单向的：平台的 `app/jobs.py` 不知道慢专病的存在，
-子系统关掉时这两个任务连注册都不会发生。
+子系统关掉时这些任务（数据源同步、超期扫描、报告推送、宣教定时派发）连注册都不会发生。
 
 与平台既有任务同一约定：`def job(db) -> (处理对象数, 结果摘要)`，
 查询口径复用业务侧的实现，不在这里另写一套判定。
@@ -32,17 +32,22 @@ def spd_data_source_sync(db: Session) -> tuple[int, str]:
 
 @register("spd_task_overdue_scan", "慢专病任务超期扫描", 3600)
 def spd_task_overdue_scan(db: Session) -> tuple[int, str]:
-    """任务超期与升级扫描。
+    """任务超期与升级扫描；同一趟也把过了日期的复诊、随访标成超期。
 
     与各端工作台进页面时的刷新是**同一个** `sweep_overdue`，两处都要有：
     只靠定时任务，演示环境没开调度就永远看不到超期；只靠进页面刷新，
     没人进页面的机构就永远不超期。
+
+    处理数与摘要把复诊、随访也算上（P2-377）：原先只报任务，这一趟标了超期的复诊、随访在调度日志里查不到。
+    推送频道（`spd_task_overdue`）仍只报任务数——它是任务超期的提醒。
     """
     from .service import sweep_overdue
 
     result = sweep_overdue(db)
     broadcast("spd_task_overdue", "慢专病任务超期", result["overdue"])
-    return result["overdue"], f"超期 {result['overdue']} 条，其中升级 {result['escalated']} 条"
+    total = result["overdue"] + result["revisits"] + result["followups"]
+    return total, (f"任务超期 {result['overdue']} 条（其中升级 {result['escalated']} 条），"
+                   f"复诊超期 {result['revisits']} 条，随访超期 {result['followups']} 条")
 
 
 @register("spd_report_push", "慢专病报告推送", 300)
