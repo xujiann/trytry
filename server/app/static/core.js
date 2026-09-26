@@ -1585,11 +1585,16 @@ const RULE_STATUS = { on: ["生效中", "green"], off: ["已停用", "red"] };
 
 async function renderRx() {
   $("#page-desc").textContent = "“系统+药师”双重审方，每方必审；事后处方点评（药师）与合理率监管";
-  const [prescriptions, rules, cstats, creviews] = await Promise.all([
+  const [recent, pending, rules, cstats, creviews] = await Promise.all([
+    // 待药师审的单独取一遍、排在队列最前（P1-148）：只取「最新 200 张」的话，压着没审的处方一被后开的方挤出
+    // 这个窗口，就再没有一行给「通过 / 退回」——铃铛还在数它，发药只认审过的，这张方就卡死了
+    api("/api/prescriptions"), api("/api/prescriptions?status=pending_review"),
     // 带上 include_inactive：不带的话停用的规则整行看不见，于是"这条规则怎么不生效了"
     // 在界面上无从查起，重新启用更无从谈起（后端 _active_rule 把停用一律当"未维护"）
-    api("/api/prescriptions"), api("/api/prescriptions/rules?include_inactive=true"),
+    api("/api/prescriptions/rules?include_inactive=true"),
     api("/api/prescriptions/comment-stats"), api("/api/prescriptions/comment-reviews")]);
+  const pendingIds = new Set(pending.map((p) => p.id));
+  const prescriptions = [...pending, ...recent.filter((p) => !pendingIds.has(p.id))];
   const canComment = ["pharmacist", "admin"].includes(currentRole());
   // 规则的增删停启后端都是 require_admin：不是 admin 就别摆按钮，摆了只会点出 403
   const canRule = currentRole() === "admin";
@@ -1634,7 +1639,7 @@ async function renderRx() {
            : `<button class="btn secondary" data-ruleon="${esc(r.drug_code)}">启用</button>`}</td>` : ""}</tr>`)}
       <p class="desc">停用不删行：规则改过什么、什么时候不再生效，处方点评复核时要回溯得到。
         <b>停用期间该药按"规则未维护"处理</b>——不是按上限 0 拦截，是根本不参与审方。</p>`)}
-    ${panel("处方队列", table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
+    ${panel(`处方队列（待药师审 ${pending.length} 张排在最前，其后是最近开的处方）`, table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
       let actions = p.status === "pending_review"
         ? `<button class="btn secondary" data-approve="1" data-id="${p.id}">通过</button>
            <button class="btn danger" data-approve="0" data-id="${p.id}">退回</button>` : "";
@@ -1749,15 +1754,27 @@ async function renderRx() {
 async function renderPharmacy() {
   $("#page-desc").textContent =
     "库存管理、批号效期、西药发药、县乡村余缺调拨、缺药预警、批次召回与按批号反查、采购建议";
-  const [stocks, alerts, expiring, dispenses, batches, suggestions] = await Promise.all([
+  const [stocks, alerts, expiring, dispenses, batchRows, suggestions] = await Promise.all([
     api("/api/pharmacy/stocks"), api("/api/pharmacy/alerts"),
     api("/api/pharmacy/batches/expiring"), api("/api/dispense"),
     api("/api/pharmacy/batches?limit=200"), api("/api/pharmacy/purchase-suggestions"),
   ]);
+  // 台账默认只列前 200 个批次（按机构、药品、效期排）；召回与反查总是冲着某一个药、某一个批号去的，
+  // 按编码 / 批号查一遍就能找到那一批——原先第 201 个起的批次在页面上召不回、也查不出发给了谁（P1-148）
+  let batches = batchRows;
   const alertIds = new Set(alerts.map((a) => a.id));
   // 取值真源是 models/pharmacy.py:DrugBatch.status——只有这两个值，
   // 且它只表达"人决定召回"，过没过期是按效期现算的另一回事（见该列的注释）
   const BATCH_STATUS = { normal: ["正常", "green"], recalled: ["已召回", "red"] };
+  const batchTable = (rows) =>
+    table(["ID", "机构", "药品", "批号", "效期", "总量/已用", "可用", "不可发", "状态", "操作"], rows, (b) =>
+      `<tr><td>${b.id}</td><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td>
+       <td>${esc(b.batch_no)}</td><td>${esc(b.expire_date)}</td><td>${b.quantity} / ${b.used_quantity}</td>
+       <td>${b.available}</td><td>${b.blocked_quantity}</td>
+       <td>${statusTag(BATCH_STATUS, b.status)}${b.recall_reason
+         ? `<br><span class="desc">${esc(b.recall_reason)}</span>` : ""}</td>
+       <td>${b.status === "normal" ? `<button class="btn danger" data-recall="${b.id}">召回</button>` : ""}
+           <button class="btn" data-trace="${b.id}">发给了谁</button></td></tr>`);
   const DISPENSE_STATUS = { dispensed: ["已发药", "green"], reversed: ["已冲销", "red"] };
   // 第二个面板的外壳**迁不了** `panel()`：它的标题里嵌着一个 `<span>`（缺药预警条数），
   // 而组件会把标题整段 `esc()` 掉，迁过去那个 span 会变成一段转义文本显示出来。
@@ -1816,15 +1833,14 @@ async function renderPharmacy() {
          <td>${d.status === "reversed" ? '<span class="tag red">已冲销</span>' : '<span class="tag green">已发药</span>'}</td>
          <td>${d.items.map((i) => `${esc(i.drug_name)} ${esc(i.batch_no)}×${i.quantity}`).join("，")}</td></tr>`)}</div>
     ${panel("批次台账（召回后不得再发药、不得再入库，余量同事务退出可用汇总）",
-      table(["ID", "机构", "药品", "批号", "效期", "总量/已用", "可用", "不可发", "状态", "操作"], batches, (b) =>
-        `<tr><td>${b.id}</td><td>${b.org_id}</td><td>${esc(b.drug_name)}（${esc(b.drug_code)}）</td>
-         <td>${esc(b.batch_no)}</td><td>${esc(b.expire_date)}</td><td>${b.quantity} / ${b.used_quantity}</td>
-         <td>${b.available}</td><td>${b.blocked_quantity}</td>
-         <td>${statusTag(BATCH_STATUS, b.status)}${b.recall_reason
-           ? `<br><span class="desc">${esc(b.recall_reason)}</span>` : ""}</td>
-         <td>${b.status === "normal" ? `<button class="btn danger" data-recall="${b.id}">召回</button>` : ""}
-             <button class="btn" data-trace="${b.id}">发给了谁</button></td></tr>`)
-      + `<p class="desc">「发给了谁」是召回时唯一有用的那个查询：按批号反查这一批的发药去向，
+      `<form class="inline" id="batch-filter">
+         <input name="drug_code" placeholder="按药品编码查">
+         <input name="batch_no" placeholder="按批号查">
+         <button class="btn secondary">查询</button>
+       </form>
+       <div id="batch-ledger">${batchTable(batches)}</div>`
+      + `<p class="desc">默认只列前 200 个批次（按机构、药品、效期排）；要召回或反查某一批，按药品编码或批号查。
+         「发给了谁」是召回时唯一有用的那个查询：按批号反查这一批的发药去向，
          含已冲销的行（冲销的不计入"仍在外面"的量，但行还在）。</p>
          <p class="msg" id="batch-msg"></p>`)}
     <div class="panel hidden" id="trace-panel"><h3>按批号反查发药去向</h3><div id="trace-body"></div></div>
@@ -1882,6 +1898,20 @@ async function renderPharmacy() {
       route();
     } catch (err) { setMsg("#pharm-msg", err.message, false); }
   };
+  $("#batch-filter").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const q = new URLSearchParams({ limit: "200" });
+    ["drug_code", "batch_no"].forEach((k) => {
+      const v = String(f.get(k) || "").trim();
+      if (v) q.set(k, v);
+    });
+    try {
+      batches = await api(`/api/pharmacy/batches?${q.toString()}`);
+      $("#batch-ledger").innerHTML = batchTable(batches);
+      setMsg("#batch-msg", "");
+    } catch (err) { setMsg("#batch-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
     const { recall, trace } = e.target.dataset;
     try {
@@ -1894,8 +1924,9 @@ async function renderPharmacy() {
         const done = await api(`/api/pharmacy/batches/${recall}/recall`, {
           method: "POST", body: JSON.stringify({ reason: picked.reason }),
         });
-        // 报出退出可用汇总的量：召回最要紧的后果是"账面上少了多少"，不是"状态翻了"
-        setMsg("#batch-msg", `已召回，退出可用汇总 ${done.available} → 0，不可发余量 ${done.blocked_quantity}`, true);
+        // 报出退出可用汇总的量：召回最要紧的后果是"账面上少了多少"，不是"状态翻了"。
+        // 召回之后 available 已是 0，原先照印 done.available 永远是「0 → 0」；取召回前台账那一行的可发余量
+        setMsg("#batch-msg", `已召回，退出可用汇总 ${batch ? batch.available : "—"} → 0，不可发余量 ${done.blocked_quantity}`, true);
       }
       if (trace) {
         const t = await api(`/api/pharmacy/batches/${trace}/dispenses`);

@@ -3738,3 +3738,41 @@ def test_医生移动端要佐证的任务_传了佐证才办得结(page, base_u
     assert (detail["status"], detail["result"], len(detail["evidence"])) == (
         "done", {"note": "血压 132/84，已留照"}, 1), detail
     assert [e["attachment_id"] for e in detail["evidence_urls"]] == detail["evidence"]   # 管理端审核页看得到这份佐证
+
+
+@pytest.fixture(scope="module")
+def batch_seed(base_url, seed):
+    """同一个药两个批号入库：台账按批号查只剩那一批（P1-148）。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token=None):
+        req = Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    token = post("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    return [post("/api/pharmacy/batches", {
+        "org_id": seed["org"]["id"], "drug_code": "E2E-P1148", "drug_name": "E2E召回药", "batch_no": batch_no,
+        "expire_date": "2029-03-31", "quantity": qty}, token) for batch_no, qty in (("E2E-BT-1", 5), ("E2E-BT-2", 7))]
+
+
+def test_药房批次台账按批号查到那一批_召回回执报召回前的余量(page, base_url, batch_seed):
+    """P1-148：台账默认只列前 200 个批次，第 201 个起召不回、也查不出发给了谁；加了按药品编码 / 批号查。
+    顺带：召回回执原先印 done.available（召回之后恒 0），永远是「退出可用汇总 0 → 0」。"""
+    _login(page, base_url)
+    _open_page(page, "pharmacy", "中心药房")
+    page.fill('#batch-filter input[name="batch_no"]', "E2E-BT-2")
+    page.click("#batch-filter button")
+    ledger = page.locator("#batch-ledger")
+    expect(ledger).not_to_contain_text("E2E-BT-1")
+    expect(ledger).to_contain_text("E2E-BT-2")
+    target = batch_seed[1]["id"]
+    page.click(f'button[data-recall="{target}"]')
+    _spd_modal(page, {"reason": "E2E 厂家召回"})
+    expect(page.locator("#batch-msg")).to_contain_text("退出可用汇总 7 → 0")
