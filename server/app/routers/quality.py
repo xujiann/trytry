@@ -1059,9 +1059,9 @@ class ClinicalIndicatorRow(BaseModel):
     numerator: int
     denominator: int
     rate_pct: float
-    #: **条件键**：只有"术前术后诊断符合率"带未采集台次（其余指标没有这个概念）。
+    #: **条件键**：只有两条诊断符合率（入出院、术前术后）带未采集数（其余指标没有这个概念；入出院那条 P2-202 起才有）。
     #: 端点带 `response_model_exclude_unset=True`——声明成带默认值的普通字段会给
-    #: 其余六行注入 `"uncollected": null`，改字节（docs/接口标准与治理.md 陷阱二）。
+    #: 其余五行注入 `"uncollected": null`，改字节（docs/接口标准与治理.md 陷阱二）。
     uncollected: int | None = None
     caliber: str
 
@@ -1109,9 +1109,14 @@ def clinical_indicators(
             CaseSummary.created_at >= start_dt, CaseSummary.created_at < end_dt
         )
     rows = summaries.all()
+    # 入院、出院两项诊断都填了才纳入分母（P2-202）：入院诊断是选填的，没填的是「未采集」、不是「不符合」——
+    # 与下面术前术后诊断符合率同一条规矩。原先拿空串去比出院诊断，一律算不符合，符合率被系统性算低
+    admit_rows = [
+        (cs, adm) for cs, adm in rows if (adm.diagnosis_name or "").strip() and (cs.discharge_diagnosis or "").strip()
+    ]
     admit_match = sum(
         1
-        for cs, adm in rows
+        for cs, adm in admit_rows
         if _normalize_diagnosis(adm.diagnosis_name) == _normalize_diagnosis(cs.discharge_diagnosis)
     )
     cured = sum(1 for cs, _ in rows if cs.outcome in CURED_OUTCOMES)
@@ -1173,9 +1178,10 @@ def clinical_indicators(
                 "name": "入出院诊断符合率",
                 "dimension": "诊断准确",
                 "numerator": admit_match,
-                "denominator": len(rows),
-                "rate_pct": _rate(admit_match, len(rows)),
-                "caliber": "出院诊断与入院诊断一致的出院人次 ÷ 出院人次（诊断名归一化比对）",
+                "denominator": len(admit_rows),
+                "rate_pct": _rate(admit_match, len(admit_rows)),
+                "uncollected": len(rows) - len(admit_rows),
+                "caliber": "出院诊断与入院诊断一致的出院人次 ÷ 两项诊断都填了的出院人次（诊断名归一化比对，缺一项计未采集）",
             },
             {
                 "key": "preop_postop_match",

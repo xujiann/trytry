@@ -141,7 +141,7 @@ import app.spd.routers as spd_routers
 #   与 `negative` 之后，照读起来顺眼的顺序排就是改字节。
 #   见 test_service_extras_split_contract.py。）
 # → 418（quality 20 + dataquality 6 + rules 6，共 32。三处建模判断：
-#   clinical-indicators 的 uncollected 是条件键（仅术前术后诊断符合率行有）
+#   clinical-indicators 的 uncollected 是条件键（仅两条诊断符合率行有，入出院那条 P2-202 起）
 #   → exclude_unset；qc-summary 分组行 key 按机构=int 按医师=str；
 #   /rules/domains 的 sample 三型并存（float|str|bool，bool 不得变 0/1）。
 #   见 test_quality_contract.py / test_dataquality_contract.py /

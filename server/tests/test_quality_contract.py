@@ -9,10 +9,10 @@
   分支（有数据 / 兜底字面量 `0.0`）都是浮点，不存在 Money 那种 int/float 并存。
 - `qc-summary` 分组行的 `key` 是 `int | str`：按机构分组是 org_id（int）、
   按医师分组是姓名（str），同一个形状两处复用。
-- `clinical-indicators` 的 `uncollected` 是**条件键**：只有"术前术后诊断符合率"
-  这一行有它（未采集数只对这条指标有意义）。逐字段声明默认值会给其余六行注入
-  `"uncollected": null`——改字节，故端点用 `response_model_exclude_unset=True`，
-  这里把"有它的行在、没它的行整个键不在"两个方向都钉死。
+- `clinical-indicators` 的 `uncollected` 是**条件键**：只有两条诊断符合率（入出院、术前术后）
+  有它（未采集数只对诊断比对有意义；入出院那条 P2-202 起才有——原先入院诊断没填按不符合算）。
+  逐字段声明默认值会给其余五行注入 `"uncollected": null`——改字节，故端点用
+  `response_model_exclude_unset=True`，这里把"有它的行在、没它的行整个键不在"两个方向都钉死。
 - 病历缺陷项（`defects[]`）是固定形状（`evaluate_record` 唯一产地），四个端点
   （提交回执/复评/详情/列表外的 qc 快照）共用同一个模型，此处钉住其全部字段与键序。
 """
@@ -631,8 +631,8 @@ def test_规则库_调整回执精确(client, admin):
 INDICATOR_ROW_KEY_ORDER = [
     "key", "name", "dimension", "numerator", "denominator", "rate_pct", "caliber",
 ]
-#: 术前术后符合率这一行**多一个** `uncollected` 键（在 rate_pct 与 caliber 之间）
-PREOP_ROW_KEY_ORDER = [
+#: 两条诊断符合率（入出院、术前术后）**多一个** `uncollected` 键（在 rate_pct 与 caliber 之间）
+DIAGNOSIS_ROW_KEY_ORDER = [
     "key", "name", "dimension", "numerator", "denominator", "rate_pct", "uncollected", "caliber",
 ]
 
@@ -647,7 +647,8 @@ def _zero_indicators() -> list[dict]:
             "numerator": 0,
             "denominator": 0,
             "rate_pct": 0.0,
-            "caliber": "出院诊断与入院诊断一致的出院人次 ÷ 出院人次（诊断名归一化比对）",
+            "uncollected": 0,
+            "caliber": "出院诊断与入院诊断一致的出院人次 ÷ 两项诊断都填了的出院人次（诊断名归一化比对，缺一项计未采集）",
         },
         {
             "key": "preop_postop_match",
@@ -713,17 +714,18 @@ def test_临床指标_全期精确形状与键序(client, admin, base):
     resp = client.get("/api/quality/clinical-indicators", headers=admin)
     body = resp.json()
     assert list(body.keys()) == ["period", "org_id", "group_id", "indicators"]
-    assert list(body["indicators"][0].keys()) == INDICATOR_ROW_KEY_ORDER
-    assert list(body["indicators"][1].keys()) == PREOP_ROW_KEY_ORDER
+    assert list(body["indicators"][0].keys()) == DIAGNOSIS_ROW_KEY_ORDER   # P2-202 起入出院那条也带未采集
+    assert list(body["indicators"][1].keys()) == DIAGNOSIS_ROW_KEY_ORDER
+    assert list(body["indicators"][2].keys()) == INDICATOR_ROW_KEY_ORDER
     assert body == {
         "period": "全期",
         "org_id": None,
         "group_id": None,
         "indicators": _zero_indicators(),
     }
-    # 条件键 uncollected 只在术前术后那一行出现——其余行注入 null 即改字节
+    # 条件键 uncollected 只在两条诊断符合率上出现——其余行注入 null 即改字节
     for row in body["indicators"]:
-        assert ("uncollected" in row) == (row["key"] == "preop_postop_match")
+        assert ("uncollected" in row) == (row["key"] in ("admit_discharge_match", "preop_postop_match"))
 
 
 def test_临床指标_期间与机构过滤精确(client, admin, base):
