@@ -564,6 +564,10 @@ def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db
     assert_obj_org_writable(db, user, task)
     if task.status == "verified":
         raise HTTPException(status_code=409, detail="任务已确认关闭")
+    # 已提交完成、待确认的不再登记进展（P2-192）：原先不带 complete 的一次调用就把它改回「整改中」——悄悄退出
+    # 管理层的待确认队列，完成时间还留着；页面上待确认的只给「确认关闭 / 退回」，退回走 verify（记下退回人与理由）
+    if task.status == "completed":
+        raise HTTPException(status_code=409, detail="已提交完成、待确认——确认不通过退回后再登记进展")
     if body.measures:
         task.measures = body.measures
     if body.complete:
