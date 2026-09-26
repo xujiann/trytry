@@ -13,6 +13,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -418,15 +419,29 @@ def list_attempts(case_id: int, user_id: int | None = None, db: Session = Depend
     if user_id is not None:
         query = query.filter(SimulationAttempt.user_id == user_id)
     rows = query.order_by(SimulationAttempt.id.desc()).limit(500).all()
-    best: dict[int, int] = {}
-    for r in rows:
-        best[r.user_id] = max(best.get(r.user_id, 0), r.score)
+    # 每人最高分与「第几次作答」按这个病例的**全部**作答算，不按取回的这 500 条算（P2-149）：原先一个人最好的那次
+    # 早于最近 500 条，他在「最高分」里就降了分或整个消失（考核取的正是它），作答序号也从窗口起点重新数起。
+    # 取回的是 id 最大的 500 条，窗口外的恰好是 id 小于其中最小者的那些，一条分组查询补上各人窗口外的次数。
+    best = (
+        query.with_entities(SimulationAttempt.user_id, func.max(SimulationAttempt.score))
+        .group_by(SimulationAttempt.user_id)
+        .order_by(func.max(SimulationAttempt.id).desc())   # 最近作答的人排前，与原先一致
+        .all()
+    )
+    earlier: dict[int, int] = {
+        uid: count
+        for uid, count in query.filter(SimulationAttempt.id < rows[-1].id)
+        .with_entities(SimulationAttempt.user_id, func.count(SimulationAttempt.id))
+        .group_by(SimulationAttempt.user_id)
+        .all()
+    } if rows else {}
     return {
         "attempts": [
             {"id": r.id, "user_id": r.user_id, "score": r.score, "passed": r.passed,
-             "attempt_no": len([x for x in rows if x.user_id == r.user_id and x.id <= r.id])}
+             "attempt_no": earlier.get(r.user_id, 0)
+             + len([x for x in rows if x.user_id == r.user_id and x.id <= r.id])}
             for r in rows
         ],
-        "best_by_user": [{"user_id": uid, "best_score": s} for uid, s in best.items()],
+        "best_by_user": [{"user_id": uid, "best_score": s} for uid, s in best],
         "caliber": "考核取每人最高分；全部作答留痕，重复作答次数本身是教学反馈",
     }
