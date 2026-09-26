@@ -57,6 +57,7 @@ from ..models import (
     PrintTemplate,
     ProgressNote,
     Referral,
+    ReportRevision,
     Settlement,
     User,
     VaccinationRecord,
@@ -280,10 +281,25 @@ def print_exam_report(
         if report.critical
         else ""
     )
+    # 修订过的报告写明「已修订 N 次、以本版为准」与最后一次修订的人、时间、原因（P1-150）。修订改的是所见 / 结论 /
+    # 危急值，报告医师与报告时间仍是首次出具的——原先只印这两项，改判后的结论署着原报告医师的名字与原来的时间，
+    # 前后两次打印同一个单据编号、结论相反，纸面上看不出哪张是修订版
+    revisions = db.query(ReportRevision).filter(ReportRevision.report_id == report.id)
+    revision_count = revisions.count()
+    last = revisions.order_by(ReportRevision.id.desc()).first()
+    revision_html = ""
+    if last is not None:
+        reason = f"，原因：{_esc(last.reason)}" if last.reason else ""
+        revision_html = (
+            f'<p><span class="critical">本报告已修订 {revision_count} 次，以本版为准</span>'
+            f' 最后一次修订：{_esc(last.revised_by) or "—"}，{_esc(last.created_at.strftime("%Y-%m-%d %H:%M"))}'
+            f"{reason}</p>"
+        )
     body = f"""
   <div class="section"><h3>检查所见</h3><div class="body">{_esc(report.finding) or "—"}</div></div>
   <div class="section"><h3>诊断结论</h3><div class="body">{_esc(report.conclusion) or "—"}</div></div>
   {critical_html}
+  {revision_html}
   <div class="sign"><span>报告医师：{_esc(report.reported_by) or "—"}</span>
     <span>报告时间：{_esc(report.reported_at.strftime("%Y-%m-%d %H:%M"))}</span></div>"""
     return _render(
