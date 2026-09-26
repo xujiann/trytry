@@ -1249,7 +1249,7 @@ async function renderSpdMeasure(box) {
   const list = rows.map((r) => `<div class="m-card">
     ${kv("项目", esc(r.metric))}
     ${kv("数值", `${esc(r.value)}${esc(r.unit)} ${spdTagOf(SPD_LEVEL_TAGS, r.level)}`)}
-    ${kv("来源", r.source === "device" ? "设备采集" : "手工记录")}
+    ${kv("来源", esc(r.source_name || r.source))}
     ${kv("时间", esc(r.measured_at.replace("T", " ").slice(0, 16)))}</div>`).join("")
     || '<p class="empty">还没有记录，先添加一条吧</p>';
   box.innerHTML = `
@@ -1530,7 +1530,7 @@ async function renderSpdEdu(box) {
 async function renderSpdAssessments(box) {
   const rows = await authApi(`/api/portal/spd/assessments${spdQuery()}`);
   box.innerHTML = rows.map((a) => `<div class="m-card">
-    ${kv("量表", esc(a.scale_code))}
+    ${kv("量表", esc(a.scale_name || a.scale_code))}
     ${kv("得分", esc(String(a.score ?? "—")))}
     ${kv("风险", spdTagOf(SPD_RISK_TAGS, a.risk_level))}
     ${a.advice ? kv("建议", esc(a.advice)) : ""}
@@ -1546,8 +1546,8 @@ async function renderSpdJourney(box) {
     ${kv("风险", spdTagOf(SPD_RISK_TAGS, p.risk_level))}
     ${kv("状态", spdTagOf(SPD_ENROLL_STATUS_TAGS, p.status))}
     <div class="sec-title">管理路径（${(p.paths || []).length}）</div>
-    ${(p.paths || []).map((i) => kv(i.template_code,
-      `${esc(i.current_node_key || "—")} · ${i.progress}% ${spdTagOf(SPD_INST_STATUS_TAGS, i.status)}`)).join("") || '<p class="empty">尚未启动路径</p>'}
+    ${(p.paths || []).map((i) => kv(i.template_name || i.template_code,
+      `${esc(i.current_node_name || i.current_node_key || "—")} · ${i.progress}% ${spdTagOf(SPD_INST_STATUS_TAGS, i.status)}`)).join("") || '<p class="empty">尚未启动路径</p>'}
     <div class="sec-title">任务（${(p.tasks || []).length}）</div>
     ${(p.tasks || []).map((t) => kv(t.title, `${esc(t.due_date || "—")} ${spdTagOf(SPD_TASK_STATUS_TAGS, t.status)}`)).join("") || '<p class="empty">暂无任务</p>'}
     <div class="sec-title">转诊（${(p.referrals || []).length}）</div>
@@ -1621,7 +1621,7 @@ async function renderSpdConsults(box) {
       <p id="spd-consult-msg" class="msg"></p>
     </div>
     ${consults.length ? consults.map((c) => `<div class="m-card">
-      ${kv("病种", esc(c.program_code || "一般咨询"))}
+      ${kv("病种", esc(c.program_name || c.program_code || "一般咨询"))}
       ${kv("状态", spdTagOf(SPD_CONSULT_STATUS_TAGS, c.status))}
       ${kv("发起时间", esc(c.created_at.slice(0, 16)))}
       <button class="consult-open" data-consult="${c.id}">查看对话</button>
@@ -1693,7 +1693,7 @@ async function renderSpdScreen(box) {
       <p id="spd-screen-msg" class="msg"></p>
     </div>
     ${applies.map((a) => `<div class="m-card">
-      ${kv("申请病种", esc(a.program_code))}
+      ${kv("申请病种", esc(a.program_name || a.program_code))}
       ${kv("状态", esc({ pending: "待受理", accepted: "已受理", rejected: "未通过" }[a.status] || a.status))}
       ${a.handle_note ? kv("处理意见", esc(a.handle_note)) : ""}</div>`).join("")}`;
 
@@ -1744,7 +1744,7 @@ async function renderSpdScreen(box) {
       const r = await authApi("/api/portal/spd/screenings", {
         method: "POST", body: JSON.stringify(body) });
       $("#spd-screen-msg").textContent =
-        `风险等级：${{ low: "低危", mid: "中危", high: "高危" }[r.risk_level] || r.risk_level}。${r.advice}`;
+        `风险等级：${(SPD_RISK_TAGS[r.risk_level] || [r.risk_level])[0]}。${r.advice}`;   // 含「极高危」（P2-372）
       if (r.can_apply && confirm("检测到中高风险，是否申请专病管理服务？")) {
         const applyBody = { program_code: scale.program_code, screening_id: r.id };
         if (viewingPatientId !== null) applyBody.patient_id = viewingPatientId;

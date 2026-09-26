@@ -33,6 +33,8 @@ from ..models import (
     SpdMeasurement,
     SpdPackageBinding,
     SpdPathInstance,
+    SpdPathNode,
+    SpdPathTemplate,
     SpdProgram,
     SpdQuestionnaire,
     SpdReferralCase,
@@ -46,11 +48,12 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import is_suspect_risk, score_scale
-from ..service import (FOLLOWUP_OPEN_STATUSES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
+from ..service import (FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, REFERRAL_STATUS_LABELS,
+                       TASK_OPEN_STATUSES,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
                        scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
-from .followup import ABNORMAL_LEVEL_NAMES
+from .followup import ABNORMAL_LEVEL_NAMES, FOLLOWUP_SCENE_NAMES
 from fastapi import File, Form, UploadFile
 
 from ..platform import (
@@ -80,6 +83,15 @@ def _program_names(db: Session, codes: list[str]) -> dict[str, str]:
     return {
         p.code: p.name
         for p in db.query(SpdProgram).filter(SpdProgram.code.in_(codes or [""])).all()
+    }
+
+
+def _scale_names(db: Session, codes: list[str]) -> dict[str, str]:
+    """量表编码 → 名称；同一编码有几版的取最新一版的名称（按 id 升序、后来的覆盖先来的）。"""
+    return {
+        code: name
+        for code, name in db.query(SpdScale.code, SpdScale.name)
+        .filter(SpdScale.code.in_(codes or [""])).order_by(SpdScale.id)
     }
 
 
@@ -311,8 +323,9 @@ def archive(
          "title": e.diagnosis_name or "就诊", "detail": e.summary or ""}
         for e in encounters
     ] + [
+        # 场景取中文名（P2-372）：原先拼的是场景码，居民看到「inpatient随访」
         {"kind": "followup", "at": f.executed_at or f.planned_at,
-         "title": f"{f.scene}随访", "detail": f.result or ""}
+         "title": FOLLOWUP_SCENE_NAMES.get(f.scene, f"{f.scene}随访"), "detail": f.result or ""}
         for f in followups
     ]
     timeline.sort(key=lambda item: item["at"], reverse=True)
@@ -392,6 +405,8 @@ class SpdMeasurementOut(BaseModel):
     unit: str
     level: str
     source: str
+    # 来源中文名（P2-372）：居民端原先只认 device，公卫随访同步、院内系统、POCT 的都显示成「手工记录」
+    source_name: str
     measured_at: str
 
 
@@ -424,7 +439,8 @@ def list_measurements(
     )
     return [
         {"id": r.id, "metric": r.metric, "value": r.value, "unit": r.unit,
-         "level": r.level, "source": r.source, "measured_at": r.measured_at.isoformat()}
+         "level": r.level, "source": r.source, "source_name": MEASUREMENT_SOURCE_NAMES.get(r.source, r.source),
+         "measured_at": r.measured_at.isoformat()}
         for r in rows
     ]
 
@@ -634,6 +650,7 @@ def apply_service(
 class SpdServiceApplyOut(BaseModel):
     id: int
     program_code: str
+    program_name: str   # P2-372：居民端原先把病种编码原样显示
     status: str
     note: str
     handle_note: str
@@ -658,9 +675,10 @@ def my_applies(
         offset,
         limit,
     )
+    names = _program_names(db, [r.program_code for r in rows])
     return [
-        {"id": r.id, "program_code": r.program_code, "status": r.status,
-         "note": r.note, "handle_note": r.handle_note,
+        {"id": r.id, "program_code": r.program_code, "program_name": names.get(r.program_code, ""),
+         "status": r.status, "note": r.note, "handle_note": r.handle_note,
          "created_at": r.created_at.isoformat()}
         for r in rows
     ]
@@ -672,7 +690,9 @@ def my_applies(
 class SpdJourneyPathOut(BaseModel):
     id: int
     template_code: str
+    template_name: str       # P2-372：居民端原先把路径模板编码与节点 key 原样显示
     current_node_key: str
+    current_node_name: str
     progress: int
     status: str
 
@@ -729,6 +749,11 @@ def journey(
             .filter(SpdPathInstance.enrollment_id == enrollment.id)
             .all()
         )
+        template_ids = [i.template_id for i in instances] or [0]
+        template_names = {tid: name for tid, name in db.query(SpdPathTemplate.id, SpdPathTemplate.name)
+                          .filter(SpdPathTemplate.id.in_(template_ids))}
+        node_names = {(tid, key): name for tid, key, name in db.query(
+            SpdPathNode.template_id, SpdPathNode.key, SpdPathNode.name).filter(SpdPathNode.template_id.in_(template_ids))}
         tasks = (
             db.query(SpdTask)
             .filter(SpdTask.enrollment_id == enrollment.id)
@@ -753,8 +778,10 @@ def journey(
             "status": enrollment.status,
             "paths": [
                 {"id": i.id, "template_code": i.template_code,
-                 "current_node_key": i.current_node_key, "progress": i.progress,
-                 "status": i.status}
+                 "template_name": template_names.get(i.template_id, ""),
+                 "current_node_key": i.current_node_key,
+                 "current_node_name": node_names.get((i.template_id, i.current_node_key), ""),
+                 "progress": i.progress, "status": i.status}
                 for i in instances
             ],
             "tasks": [
@@ -1255,6 +1282,7 @@ def my_revisits(
 class SpdAssessmentOut(BaseModel):
     id: int
     scale_code: str
+    scale_name: str   # P2-372：居民端原先把量表编码原样显示
     # Float 列：整数分读回来是 2.0
     score: float
     risk_level: str
@@ -1280,8 +1308,9 @@ def my_assessments(
         offset,
         limit,
     )
+    names = _scale_names(db, [r.scale_code for r in rows])
     return [
-        {"id": r.id, "scale_code": r.scale_code, "score": r.score,
+        {"id": r.id, "scale_code": r.scale_code, "scale_name": names.get(r.scale_code, ""), "score": r.score,
          "risk_level": r.risk_level, "advice": r.advice,
          "created_at": r.created_at.isoformat()}
         for r in rows
@@ -1458,6 +1487,7 @@ def start_consult(
 class SpdConsultOut(BaseModel):
     id: int
     program_code: str
+    program_name: str   # P2-372：居民端原先把病种编码原样显示（一般咨询为空串）
     # 未纳管（查不到 enrollment）时无主管医生，为 null
     doctor_id: int | None
     status: str
@@ -1482,9 +1512,10 @@ def my_consults(
         offset,
         limit,
     )
+    names = _program_names(db, [r.program_code for r in rows])
     return [
-        {"id": r.id, "program_code": r.program_code, "doctor_id": r.doctor_id,
-         "status": r.status, "created_at": r.created_at.isoformat()}
+        {"id": r.id, "program_code": r.program_code, "program_name": names.get(r.program_code, ""),
+         "doctor_id": r.doctor_id, "status": r.status, "created_at": r.created_at.isoformat()}
         for r in rows
     ]
 

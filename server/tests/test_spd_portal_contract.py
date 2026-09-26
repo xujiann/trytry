@@ -266,8 +266,8 @@ def test_全流程视图的三层嵌套(client, auth):
     prog = body["programs"][0]
     assert set(prog) == {"program_code", "program_name", "stage", "risk_level", "status",
                          "paths", "tasks", "referrals"}
-    assert set(prog["paths"][0]) == {"id", "template_code", "current_node_key",
-                                     "progress", "status"}
+    assert set(prog["paths"][0]) == {"id", "template_code", "template_name", "current_node_key",
+                                     "current_node_name", "progress", "status"}   # 两个名称 P2-372 加
     assert isinstance(prog["paths"][0]["progress"], int)   # Integer 列，不是百分比 float
     # status_name：后端给的居民端文案（P2-67 连带），手机页显示它而不是英文状态码
     assert set(prog["referrals"][0]) == {"id", "direction", "status", "status_name", "created_at"}
@@ -322,7 +322,8 @@ def test_咨询会话与消息的键集合(client, auth, seeded):
     assert started.status_code == 201
     assert set(started.json()) == {"consult_id", "status"}
     rows = client.get(f"{B}/consults", headers=auth).json()
-    assert set(rows[0]) == {"id", "program_code", "doctor_id", "status", "created_at"}
+    assert set(rows[0]) == {"id", "program_code", "program_name", "doctor_id", "status",
+                            "created_at"}   # program_name P2-372 加
     msgs = client.get(f"{B}/consults/{seeded['consult']}/messages", headers=auth).json()
     assert set(msgs[0]) == {"id", "sender", "content", "created_at"}
 
@@ -339,8 +340,8 @@ def test_写侧端点的响应形状(client, auth, seeded):
                           json={"program_code": "SCT-NEW", "note": "另一个病种"})
     assert applied.status_code == 201 and set(applied.json()) == {"id", "status"}
     applies = client.get(f"{B}/service-applies", headers=auth).json()
-    assert set(applies[0]) == {"id", "program_code", "status", "note", "handle_note",
-                               "created_at"}
+    assert set(applies[0]) == {"id", "program_code", "program_name", "status", "note", "handle_note",
+                               "created_at"}   # program_name P2-372 加
 
     submitted = client.post(f"{B}/tasks/{seeded['task']}/submit", headers=auth,
                             json={"result": {"bp": 130}})
