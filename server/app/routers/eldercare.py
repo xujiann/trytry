@@ -23,6 +23,24 @@ def grade_adl(score: int) -> str:
     return "重度失能"
 
 
+def _latest_by_patient(rows: list[ElderlyAssessment]) -> dict[int, ElderlyAssessment]:
+    """每位老人最近一次评估：按评估日期取最晚的（没填日期的按录入那天），同一天取后录的。
+
+    原先按编号取最后录的那条（P2-125）：补录一张更早的纸质评估表，它就成了「最新一次」——失能清单、重度失能提醒、
+    统计都按那张旧表算，年度复评提醒也按它的日期报「已超一年」。键的先后照 rows 里各人第一次出现的顺序（与原先一致）。
+    """
+    latest: dict[int, ElderlyAssessment] = {}
+    for row in rows:
+        current = latest.get(row.patient_id)
+        if current is None or _assessed_on(row) >= _assessed_on(current):
+            latest[row.patient_id] = row
+    return latest
+
+
+def _assessed_on(row: ElderlyAssessment) -> str:
+    return row.assessed_date or row.created_at.date().isoformat()
+
+
 class AssessmentCreate(BaseModel):
     patient_id: int
     adl_score: int = Field(ge=0, le=100)
@@ -132,9 +150,7 @@ class EldercareStatsOut(BaseModel):
 @router.get("/disabled", response_model=list[DisabledElderOut])
 def disabled_elderly(db: Session = Depends(get_db)):
     """失能老人清单（每人取最新一次评估），供上门服务与家庭病床对接。"""
-    latest: dict[int, ElderlyAssessment] = {}
-    for a in db.query(ElderlyAssessment).order_by(ElderlyAssessment.id).all():
-        latest[a.patient_id] = a
+    latest = _latest_by_patient(db.query(ElderlyAssessment).order_by(ElderlyAssessment.id).all())
     return [
         {"patient_id": a.patient_id, "care_level": a.care_level, "adl_score": a.adl_score}
         for a in latest.values()
@@ -151,9 +167,7 @@ def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
 
     current = resolve_business_date(today)
     reassess_before = (current - timedelta(days=365)).isoformat()
-    latest: dict[int, ElderlyAssessment] = {}
-    for a in db.query(ElderlyAssessment).order_by(ElderlyAssessment.id).all():
-        latest[a.patient_id] = a
+    latest = _latest_by_patient(db.query(ElderlyAssessment).order_by(ElderlyAssessment.id).all())
     alerts = []
     for a in latest.values():
         if a.care_level == "重度失能":
@@ -189,12 +203,10 @@ def eldercare_stats(db: Session = Depends(get_db)):
     """
     rows = (
         db.query(ElderlyAssessment)
-        .order_by(ElderlyAssessment.patient_id, ElderlyAssessment.id.desc())
+        .order_by(ElderlyAssessment.patient_id, ElderlyAssessment.id)
         .all()
     )
-    latest: dict[int, ElderlyAssessment] = {}
-    for r in rows:
-        latest.setdefault(r.patient_id, r)
+    latest = _latest_by_patient(rows)
 
     by_level: dict[str, int] = {}
     cognitive_scores, tcm_done = [], 0
