@@ -425,7 +425,7 @@ def list_attempts(case_id: int, user_id: int | None = None, db: Session = Depend
     best = (
         query.with_entities(SimulationAttempt.user_id, func.max(SimulationAttempt.score))
         .group_by(SimulationAttempt.user_id)
-        .order_by(func.max(SimulationAttempt.id).desc())   # 最近作答的人排前，与原先一致
+        .order_by(func.max(SimulationAttempt.id).desc(), SimulationAttempt.user_id)   # 最近作答的人排前，与原先一致
         .all()
     )
     earlier: dict[int, int] = {
@@ -433,6 +433,7 @@ def list_attempts(case_id: int, user_id: int | None = None, db: Session = Depend
         for uid, count in query.filter(SimulationAttempt.id < rows[-1].id)
         .with_entities(SimulationAttempt.user_id, func.count(SimulationAttempt.id))
         .group_by(SimulationAttempt.user_id)
+        .order_by(SimulationAttempt.user_id)
         .all()
     } if rows else {}
     return {
