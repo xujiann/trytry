@@ -226,3 +226,20 @@ def test_押金余额不足预警_按缺口排序且阈值参数化(client, admi
     wide_ids = [a["admission_id"] for a in wide]
     assert poor["id"] in wide_ids and rich["id"] in wide_ids, "调大阈值应把将不足的也提前报出来"
     assert wide_ids.index(poor["id"]) < wide_ids.index(rich["id"]), "预警按缺口从小到大排序"
+
+
+def test_退费金额多于两位小数_422且余额不动(client, admin, ward):
+    """P2-250：退费入参原先是 FiniteFloat，三位小数照收——开发库照存、生产库 numeric(14,2) 悄悄四舍五入，同一笔退费
+    两边记的不是同一个数。预交早是 MoneyFloat；退费经原生 SQL 帮手写库，按写库形状派生的金额闸门看不见它。"""
+    admission = _admit(client, admin, ward)
+    client.post("/api/billing/deposits", headers=admin,
+                json={"admission_id": admission["id"], "amount": 500, "method": "cash"})
+    resp = client.post("/api/billing/deposits/refund", headers=admin,
+                       json={"admission_id": admission["id"], "amount": 12.345})
+    assert resp.status_code == 422, resp.text   # 修前 201，开发库余额 487.655
+    err = resp.json()["detail"][0]
+    assert err["loc"][-1] == "amount" and "最多保留两位小数" in err["msg"], err
+    assert _balance(client, admin, admission["id"])["balance"] == 500.0
+    ok = client.post("/api/billing/deposits/refund", headers=admin,
+                     json={"admission_id": admission["id"], "amount": 12.34})
+    assert ok.status_code == 201 and ok.json()["balance"] == 487.66

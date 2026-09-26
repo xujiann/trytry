@@ -17,6 +17,7 @@
 字符串那一族共用 `test_body_str_length.body_column_writes`）；②出参不许带它（修之前存进开发库的三位小数行
 要照样读得出来）；③修过的端点的回归。
 """
+import re
 import typing
 
 import pytest
@@ -112,6 +113,62 @@ def test_判据自证_可空与不可空两种写法都认得出():
     assert _carries_fen(Probe.model_fields["plain"])
     assert _carries_fen(Probe.model_fields["optional"])
     assert not _carries_fen(Probe.model_fields["bare"])
+
+
+# ================================================================ 按名字补一道：写库形状看不见的金额入参
+#: 上面那道按写库形状派生，入参经**原生 SQL 帮手**写库它看不见：押金退费把 `body.amount` 交给
+#: `_atomic_deposit_deduct`（`INSERT … SELECT … WHERE 余额充足`），`DepositRefundIn.amount` 于是一直是
+#: `FiniteFloat`，三位小数照收（P2-250）。按名字再扫一遍请求模型：名字像金额的浮点字段必须带 `to_fen`。
+MONEY_NAME = re.compile(
+    r"(^|_)(amount|price|fee|cost|balance|pay|payment|refund|deposit|salary|budget|expense|income)(_|$)")
+#: 名字像金额、其实不是金额的请求字段：`模块:模型.字段` → 理由（只减不增）
+NOT_MONEY: dict[str, str] = {}
+#: 零基线（`scripts/dump_gate_status.py` 列进闸门现状）。2026-09-26 实测 1 处（押金退费）→ 0，同批修掉。
+NAMED_BASELINE = 0
+
+
+def _is_float(field) -> bool:
+    ann = field.annotation
+    for a in (ann, *typing.get_args(ann)):
+        base = typing.get_args(a)[0] if typing.get_origin(a) is typing.Annotated else a
+        if base is float:
+            return True
+    return False
+
+
+def money_named_float_inputs(models: typing.Iterable[type] | None = None) -> list[str]:
+    """请求模型里名字像金额、类型是浮点、却不带 `to_fen` 的字段（按声明它的类记名）。"""
+    models = blanktext.request_models() if models is None else models
+    return sorted({blanktext._owner_key(cls, f) for cls in models for f, info in cls.model_fields.items()
+                   if MONEY_NAME.search(f) and _is_float(info) and not _carries_fen(info)} - set(NOT_MONEY))
+
+
+def test_名字像金额的浮点入参一律带to_fen():
+    bad = money_named_float_inputs()
+    assert len(bad) <= NAMED_BASELINE, (
+        "这些请求字段名字像金额、却收得下三位以上小数（写库走的是写库形状闸门看不见的路，比如原生 SQL 帮手）：\n  "
+        + "\n  ".join(bad)
+        + "\n\n注解换成 `MoneyFloat`；确实不是金额的登记进 NOT_MONEY 并写明理由（只减不增）。"
+    )
+
+
+def test_按名字那道的判据自证():
+    from pydantic import FiniteFloat
+
+    from app.numtypes import MoneyFloat
+
+    class Probe(BaseModel):
+        amount: float = 0
+        unit_price: FiniteFloat | None = None
+        insurance_pay: MoneyFloat = 0
+        refund_amount: MoneyFloat | None = None
+        prepay_ratio_pct: float = 0      # 比例不是金额：名字里的 pay 不在词边界上
+        amount_fen: int = 0              # 整数分：不是浮点
+        dose: float = 0
+
+    assert money_named_float_inputs([Probe]) == [f"{Probe.__module__.removeprefix('app.')}:{Probe.__qualname__}.{f}"
+                                                 for f in ("amount", "unit_price")]
+    assert len(blanktext.request_models()) > 300   # 防空转：请求模型真被收集到了
 
 
 # ================================================================ 取整规则本身

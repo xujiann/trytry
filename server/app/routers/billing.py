@@ -24,7 +24,7 @@ from datetime import timedelta
 from typing import Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 from sqlalchemy import case, func, insert, literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError, InvalidRequestError
@@ -512,7 +512,9 @@ class DepositCreate(BaseModel):
 
 class DepositRefundIn(BaseModel):
     admission_id: int
-    amount: FiniteFloat = Field(gt=0, le=MONEY_MAX)
+    # 精确到分，与预交同口径（P2-250）：原先 FiniteFloat，三位小数照收——退费经原生 SQL 帮手写库，按写库形状派生的
+    # 金额闸门看不见它
+    amount: MoneyFloat = Field(gt=0, le=MONEY_MAX)
     method: str = Field(default="cash", pattern="^(cash|card|online)$")
 
 
