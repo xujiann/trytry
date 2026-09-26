@@ -2965,6 +2965,30 @@ def consent_seed(base_url, seed):
     return [post("/api/outpatient/consents", {**common, "title": f"E2E告知书{i}"}, token) for i in (1, 2)]
 
 
+def test_载入就诊后开的告知书挂到这次就诊上_完整度数得到(page, base_url, admin_read, admin_call):
+    """P2-161：就诊文书完整度的「告知书 / 待签署」按挂在本次就诊上的告知书数，页面开告知书的表单原先从不挂——
+    两格恒为 0。载入就诊后，表单带出这次就诊的患者、默认勾上「关联本次就诊」。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E告知书县医院", "org_type": "lead_hospital", "level": "county"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E输液患者", "id_card": "320981199001016161"})
+    encounter = admin_call("POST", "/api/encounters",
+                           {"patient_id": patient["id"], "org_id": org["id"], "diagnosis_name": "急性胃肠炎"})
+
+    _login(page, base_url)
+    _open_page(page, "outpatientdocs", "门急诊文书")
+    page.fill("#od-pick input[name=encounter_id]", str(encounter["id"]))
+    _submit(page, "#od-pick button")
+    form = page.locator("#od-consent")
+    expect(form.locator("input[name=patient_id]")).to_have_value(str(patient["id"]))
+    form.locator("input[name=org_id]").fill(str(org["id"]))
+    form.locator("input[name=title]").fill("静脉输液知情告知")
+    form.locator("input[name=content]").fill("输液可能出现静脉炎、过敏反应")
+    _submit(page, "#od-consent button")
+
+    done = admin_read(f"/api/outpatient/encounters/{encounter['id']}/completeness")
+    assert (done["consents_total"], done["consents_pending"]) == (1, 1), done   # 修前 (0, 0)
+
+
 def test_门诊告知书的签署与拒签都在页内表单里录入_关系可选(page, base_url, consent_seed):
     """P2-38 / P1-70：签署原先要手打关系代码（self/spouse/…，打错就 422），拒签则把关系
     **写死成"本人"**——家属或委托人代为拒签的，证据上记成了患者本人拒签。现在两处都从

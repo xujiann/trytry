@@ -261,6 +261,14 @@ def create_consent(
         raise HTTPException(status_code=404, detail="患者不存在")
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="机构不存在")
+    # 挂到某次就诊上的（就诊文书完整度按它数告知书，P2-161）：就诊得在、得是这位患者的——不然别人的告知书
+    # 进了这次就诊的「待签署」。编号 0 照旧当「不挂」（存量调用方有这么传的）
+    if body.related_type == "encounter" and body.related_id:
+        encounter = db.get(Encounter, body.related_id)
+        if encounter is None:
+            raise HTTPException(status_code=404, detail="关联的就诊记录不存在")
+        if encounter.patient_id != body.patient_id:
+            raise HTTPException(status_code=422, detail="告知书的患者与关联的就诊不是同一人")
 
     title, content, version = body.title, body.content, ""
     if body.template_id is not None:

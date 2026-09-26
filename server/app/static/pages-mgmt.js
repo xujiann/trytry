@@ -1427,8 +1427,11 @@ async function renderOutpatientDocs() {
 
     ${panel("开具知情告知书", `
       <form class="inline" id="od-consent">
-        <input name="patient_id" type="number" placeholder="患者ID" required>
+        <input name="patient_id" type="number" placeholder="患者ID" required
+          value="${scoped.completeness ? scoped.completeness.patient_id : ""}">
         <input name="org_id" type="number" placeholder="机构ID" required>
+        ${scoped.completeness ? `<label style="font-size:13px"><input type="checkbox" name="link_encounter" checked>
+          关联本次就诊 #${encounterId}</label>` : ""}
         <select name="consent_type">${Object.entries(CONSENT_TYPES).map(([v, t]) =>
           `<option value="${v}">${t}</option>`).join("")}</select>
         <select name="template_id"><option value="">不用模板（自带正文）</option>
@@ -1492,6 +1495,13 @@ async function renderOutpatientDocs() {
     // 空字符串的 template_id 要去掉，否则后端按"选了模板"处理
     if (!body.template_id) delete body.template_id;
     else body.template_id = Number(body.template_id);
+    // 载入了某次就诊时默认挂到这次就诊上（P2-161）：就诊文书完整度按「挂在本次就诊上的告知书」数，原先这张表单从不挂，
+    // 那两格「告知书 / 待签署」恒为 0——注释里说「真正该追的是待签」的那一项从来追不到
+    delete body.link_encounter;
+    if (e.target.link_encounter && e.target.link_encounter.checked) {
+      body.related_type = "encounter";
+      body.related_id = Number(encounterId);
+    }
     postAction("/api/outpatient/consents", body, "#od-cmsg");
   };
   // 告知书模板原先只能改不能建（P2-93 动词级孤儿）：新的告知书类型、新版本只能靠接口调用方登记
