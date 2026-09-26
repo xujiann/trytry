@@ -34,8 +34,10 @@ from sqlalchemy.orm import sessionmaker
 from test_disease_enrollment_unique_races import _warm_pool  # 连接池热身，理由见 test_cost_allocation_races
 from test_postgres_real import _race_on_pg  # Barrier 真并发的既有夹具，不另造一份
 
-from app.models import DrugBatch, DrugStock, Organization, User
-from app.routers import pharmacy
+from app.models import (DispenseItem, DispenseRecord, DrugBatch, DrugStock, Organization, Patient, Prescription,
+                        PrescriptionItem, User)
+from app.routers import dispense, pharmacy
+from app.routers.dispense import DispenseCreate, ReverseIn, dispense_prescription, reverse_dispense
 from app.routers.pharmacy import BatchRecallIn, BatchReceiveIn, recall_batch, receive_batch
 
 PG_URL = os.environ.get("MEDPLAT_PG_TEST_URL", "")
@@ -89,6 +91,13 @@ def world(pg_engine):
     yield ids
 
     with Session() as db:  # 共用库：自己造的行自己收拾（先子后父）
+        records = [r.id for r in db.query(DispenseRecord).filter_by(org_id=ids["org"])]
+        db.query(DispenseItem).filter(DispenseItem.dispense_id.in_(records or [0])).delete(synchronize_session=False)
+        db.query(DispenseRecord).filter_by(org_id=ids["org"]).delete()
+        rxs = [r.id for r in db.query(Prescription).filter_by(org_id=ids["org"])]
+        db.query(PrescriptionItem).filter(PrescriptionItem.prescription_id.in_(rxs or [0])).delete(synchronize_session=False)
+        db.query(Prescription).filter_by(org_id=ids["org"]).delete()
+        db.query(Patient).filter(Patient.ehc_no.like(f"PG-RC-{ids['tag']}%")).delete(synchronize_session=False)
         db.query(DrugBatch).filter_by(org_id=ids["org"]).delete()
         db.query(DrugStock).filter_by(org_id=ids["org"]).delete()
         db.query(User).filter_by(id=ids["admin"]).delete()
@@ -170,3 +179,41 @@ def test_七路入库与一路召回并发_召回的批次上不留可发余量_
         assert batch.quantity - batch.used_quantity - batch.blocked_quantity == 0, (results, batch.quantity,
                                                                                     batch.blocked_quantity)
         assert stock.quantity == 0, results   # 修前：汇总跟着涨，缺药预警与采购建议当有货
+
+
+def test_冲销读到正常之后批次被召回_退回的量不回可用汇总(pg_engine, world, monkeypatch):
+    """P2-402：退药冲销取批次是锁外读的；读到「正常」之后另一个连接召回并提交（召回已把余量整笔转进不可发），修前这一笔
+    再按「正常」加回可用汇总，召回的批次上又长出可发余量。修后回补批次已用拿到行锁之后重读批次、按召回之后的状态定去向。"""
+    Session = _sessions(pg_engine)
+    drug = f"PGRV{uuid.uuid4().hex[:6]}"
+    batch_id = _first_lot(Session, world, drug)   # 10 片
+    with Session() as db:
+        patient = Patient(name="冲销并发患者", id_card=f"3320{uuid.uuid4().int % 10**14:014d}",
+                          ehc_no=f"PG-RC-{world['tag']}-{drug}")
+        db.add(patient)
+        db.flush()
+        rx = Prescription(patient_id=patient.id, org_id=world["org"], diagnosis_name="上呼吸道感染",
+                          status="auto_passed", created_by=world["admin"])
+        db.add(rx)
+        db.flush()
+        db.add(PrescriptionItem(prescription_id=rx.id, drug_code=drug, drug_name=f"{drug} 片", daily_dose=6, days=1))
+        db.commit()
+        dispense_id = dispense_prescription(DispenseCreate(prescription_id=rx.id), db=db,
+                                            user=db.get(User, world["admin"]))["id"]
+    real, fired = dispense.ensure_present, []
+
+    def recalled_meanwhile(obj, *args, **kwargs):
+        result = real(obj, *args, **kwargs)
+        if isinstance(result, DrugBatch) and result.id == batch_id and not fired:
+            fired.append(True)   # 冲销那一路已读到「正常」、还没回补：另一个连接当场召回并提交
+            with Session() as other:
+                recall_batch(batch_id, BatchRecallIn(reason="并发取证"), db=other, user=other.get(User, world["admin"]))
+        return result
+
+    monkeypatch.setattr(dispense, "ensure_present", recalled_meanwhile)
+    with Session() as db:
+        reverse_dispense(dispense_id, ReverseIn(reason="退药"), db=db, user=db.get(User, world["admin"]))
+    monkeypatch.undo()
+    assert fired
+    # 修前 ("recalled", 6, 6)：退回的 6 片进了可用汇总，召回的批次上又有 6 片「可发」
+    assert _batch_and_stock(Session, world, drug, batch_id) == ("recalled", 0, 0)

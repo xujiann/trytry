@@ -347,6 +347,10 @@ def reverse_dispense(
             raise HTTPException(
                 status_code=409, detail=f"批次 {item.batch_id} 台账不符，无法冲销，请先盘点"
             )
+        # 回补去向按行锁到手之后的批次状态判（P2-402）：上面取批次是锁外读的，读到「正常」之后别人刚召回并提交——召回已把
+        # 余量整笔转进不可发——这里再按旧状态把这笔加回可用汇总，召回的批次上就又长出可发余量：一片也发不出，汇总却当有货，
+        # 正是上面第 2 条要防的。take_amount 已拿到这一行的锁，重读一次就是召回之后的状态（同 recall_batch 抢到闸门后重读）
+        db.refresh(batch)
         if batch.status == "normal" and batch.expire_date >= today:
             stock = ensure_present(
                 db.query(DrugStock)
