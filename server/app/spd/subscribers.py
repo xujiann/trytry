@@ -31,7 +31,7 @@ from .. import events
 from ..concurrency import insert_if_absent
 from ..config import settings
 from .models import SpdCandidate, SpdFollowupRecord, SpdFollowupRule, SpdProgram, SpdScreening
-from .service import match_program
+from .service import actively_enrolled, match_program
 
 logger = logging.getLogger("medplat.spd.subscribers")
 
@@ -117,8 +117,8 @@ def on_encounter_created(db: Session, payload: dict) -> None:
             )
             .first()
         )
-        if already is not None:
-            continue  # 幂等：已在池中（含已纳管）的不重复识别
+        if already is not None or actively_enrolled(db, patient_id, program.code):
+            continue  # 幂等：已在池中（含已纳管——直接建档的在池里没有行，按在管档案认，P2-359）的不重复识别
         matched = match_program(db, patient_id, program)
         if matched["result"] != "suspect":
             continue

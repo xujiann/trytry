@@ -235,6 +235,19 @@ def target_for(db: Session, program_code: str, stage: str, metric: str) -> SpdTa
     )
 
 
+def actively_enrolled(db: Session, patient_id: int, program_code: str) -> bool:
+    """这位患者这个病种有没有在管档案。目标池说的「已在池中（含已纳管）」要把它算上（P2-359）：直接走签约建档纳管的
+    患者（没经过目标池）在池里没有行，原先就诊事件识别、批量自动识别、登记筛查照样把他按疑似插进池里——在管的人又成了
+    疑似，认领、签约一路 409。"""
+    return (
+        db.query(SpdEnrollment.id)
+        .filter(SpdEnrollment.patient_id == patient_id, SpdEnrollment.program_code == program_code,
+                SpdEnrollment.status == "active")
+        .first()
+        is not None
+    )
+
+
 def enrollment_for(db: Session, patient_id: int, program_code: str) -> tuple[str, SpdEnrollment | None]:
     """一条业务记录挂哪份纳管档案（P1-139）：写了病种的，取这个病种的档案（在管的优先）；没写的，患者只在管一个病种
     的挂这份、病种取它的；在管几个病种的不替人猜，返回 ("", None)。

@@ -52,8 +52,8 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
-from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, award_points, build_facts, close_open_work,
-                       match_program, package_items_ok, scale_program_mismatch, scale_unusable)
+from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
+                       close_open_work, match_program, package_items_ok, scale_program_mismatch, scale_unusable)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
@@ -543,6 +543,9 @@ def _upsert_candidate(
             existing.matched_rules = matched
             existing.screening_id = screening.id
         return existing
+    if actively_enrolled(db, screening.patient_id, screening.program_code):
+        # 直接建档纳管的在管患者池里没有行（P2-359）：记成已纳管，不按疑似插——筛查记录照留
+        status = "enrolled"
     candidate = SpdCandidate(
         patient_id=screening.patient_id, program_code=screening.program_code,
         status=status, source=source, screening_id=screening.id, org_id=org_id,
@@ -1026,6 +1029,13 @@ def create_enrollment(
     )
     if candidate is not None:
         candidate.status = "enrolled"
+    else:
+        # 没经过目标池、直接签约建档的，也在池里记一行「已纳管」（P2-359）：「已在池中（含已纳管）的不重复识别」
+        # 认的是池里的行，原先这类患者此后每次就诊、每轮自动识别都被按疑似插回池里
+        insert_if_absent(db, SpdCandidate(
+            patient_id=body.patient_id, program_code=body.program_code, status="enrolled", source="enrollment",
+            org_id=org_id, reason="直接签约建档",
+        ))
 
     if body.package_id is not None:
         _bind_package(db, enrollment, body.package_id)
