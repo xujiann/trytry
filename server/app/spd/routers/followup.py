@@ -740,9 +740,10 @@ def auto_match_plans(
         raise HTTPException(status_code=422, detail="请指定按哪家机构的出院 / 就诊记录匹配（本账号没有所属机构）")
     # P0-35：给了 org_id 就照单全收——乙院能以甲院名义按甲院的出院 / 门诊患者批量生成随访。
     assert_org_writable(db, user, org_id)
-    rules = (
+    rules = (   # 按方案编号排、取命中的第一套，与出院即派生同一个次序（P2-369）：不排序就是库说了算
         db.query(SpdFollowupRule)
         .filter(SpdFollowupRule.scene == body.scene, SpdFollowupRule.active.is_(True))
+        .order_by(SpdFollowupRule.id)
         .all()
     )
     rules = [r for r in rules if (r.diagnosis_keywords or [])]

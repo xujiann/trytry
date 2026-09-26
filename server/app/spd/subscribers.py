@@ -48,9 +48,12 @@ def on_admission_discharged(db: Session, payload: dict) -> None:
     if not patient_id:
         return
     text = payload.get("diagnosis_name") or ""
+    # 按方案编号排（P2-369）：两套方案的关键词都命中时只派生取到的第一套——不排序就是库说了算（PG 上改一下方案，
+    # 次序就变），同一类出院患者今天排甲方案、明天排乙方案。与规则试算（P2-304）同一个毛病
     rules = (
         db.query(SpdFollowupRule)
         .filter(SpdFollowupRule.scene == "inpatient", SpdFollowupRule.active.is_(True))
+        .order_by(SpdFollowupRule.id)
         .all()
     )
     rule = next(
