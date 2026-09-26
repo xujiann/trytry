@@ -99,6 +99,10 @@ def spd_report_push(db: Session) -> tuple[int, str]:
                 .filter(
                     SpdReportInstance.task_id == task.id,
                     SpdReportInstance.period_label == label,
+                    # 判重连机构一起判（P2-255）：「立即执行」（`POST /report-instances`）按本人机构出一份、期间标签不带
+                    # 机构后缀，原先只比标签——没绑机构的全域任务，谁在本机构点一下立即执行，当期的全域报告就被当成
+                    # 「已出过」，定时推送不再生成、订阅人也收不到
+                    SpdReportInstance.org_id.is_(None) if org_id is None else SpdReportInstance.org_id == org_id,
                 )
                 .first()
             )
