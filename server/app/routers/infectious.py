@@ -113,24 +113,36 @@ def multi_point_alerts(
     L-2：默认取服务端当前日期；today 覆盖参数仅限测试/管理排查用途（YYYY-MM-DD）。
     """
     end = resolve_business_date(today)
-    start = (end - timedelta(days=window_days)).isoformat()
+    # 「7 天窗口」含今天共 7 个日历日，与症候群多点预警（`surveillance.multi_point_alerts`）同一口径：原先从 end − 7 起算、
+    # 两头都含，实际 8 天（P2-159）；0 与 1 都只看今天
+    start = (end - timedelta(days=max(window_days - 1, 0))).isoformat()
+    # 「同病种」按病种编码认（P2-159）：名称是报告时手填的自由文本，原先按（编码, 名称）分组——同是 J11，甲院写「流行性感冒」、
+    # 乙院写「流感」，两家各 3 例被拆成两组、都不到阈值 5，跨机构的聚集一条预警都不出
     rows = (
         db.query(
             InfectiousCase.disease_code,
-            InfectiousCase.disease_name,
+            func.max(InfectiousCase.disease_name).label("disease_name"),
             func.count(InfectiousCase.id).label("case_count"),
             func.count(func.distinct(InfectiousCase.org_id)).label("org_count"),
         )
         .filter(InfectiousCase.onset_date >= start, InfectiousCase.onset_date <= end.isoformat())
-        .group_by(InfectiousCase.disease_code, InfectiousCase.disease_name)
+        .group_by(InfectiousCase.disease_code)
         .having(func.count(InfectiousCase.id) >= threshold)
-        .order_by(InfectiousCase.disease_code, InfectiousCase.disease_name)
+        .order_by(InfectiousCase.disease_code)
         .all()
     )
+    # 目录里有这个病种的显示目录名，没有的显示报告里的一个写法
+    catalog_names = {
+        code: name
+        for code, name in db.query(InfectiousDisease.code, InfectiousDisease.name)
+        .filter(InfectiousDisease.code.in_([r.disease_code for r in rows] or [""]))
+        .order_by(InfectiousDisease.code)
+        .all()
+    }
     return [
         {
             "disease_code": r.disease_code,
-            "disease_name": r.disease_name,
+            "disease_name": catalog_names.get(r.disease_code) or r.disease_name,
             "case_count": r.case_count,
             "org_count": r.org_count,
             "window_days": window_days,
