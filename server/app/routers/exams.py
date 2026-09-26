@@ -1,9 +1,11 @@
 """共享诊断中心（影像/心电/检验/病理）：基层检查、上级诊断、结果互认、危急值管理。"""
 from datetime import datetime, timedelta
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func
+from sqlalchemy import case, func, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -493,7 +495,10 @@ def acknowledge_critical(
     # M-1 整改：存量危急报告（迁移前 critical_status=''）等同"已通知"，可正常进入闭环
     if report.critical_status not in ("notified", ""):
         raise HTTPException(status_code=409, detail=f"当前状态 {CRITICAL_STATUS_NAMES.get(report.critical_status, report.critical_status)} 不可确认接收")
-    report.critical_status = "acknowledged"
+    if not _move_critical(db, report.id, ("notified", ""), "acknowledged"):
+        db.rollback()
+        db.refresh(report)
+        raise HTTPException(status_code=409, detail=f"当前状态 {CRITICAL_STATUS_NAMES.get(report.critical_status, report.critical_status)} 不可确认接收")
     db.add(
         CriticalAction(
             report_id=report.id,
@@ -524,7 +529,9 @@ def resolve_critical(
         raise HTTPException(status_code=422, detail="非危急值报告，无需处置反馈")
     if report.critical_status != "acknowledged":
         raise HTTPException(status_code=409, detail="须先确认接收后方可处置反馈")
-    report.critical_status = "resolved"
+    if not _move_critical(db, report.id, ("acknowledged",), "resolved"):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="须先确认接收后方可处置反馈")
     db.add(
         CriticalAction(
             report_id=report.id,
@@ -535,6 +542,24 @@ def resolve_critical(
     db.commit()
     db.refresh(report)
     return report
+
+
+def _move_critical(db: Session, report_id: int, expect: tuple[str, ...], to: str) -> bool:
+    """危急值闭环的一步：判定与写入压进**同一条带状态条件的 UPDATE**，返回这一路是否迁到（P2-285）。
+
+    原先是「读 critical_status → 判 → 赋值 → 记一条处置轨迹 → commit」：两位医生同时点「确认接收」（或双击），
+    两路都读到「已通知」、都 200，轨迹里记下两条「确认接收」；处置反馈同理——两路各写一句反馈，闭环记成两次，
+    最后留下的反馈以后提交的为准。`WHERE critical_status IN (读到的前态)` 让后到的那一路 rowcount 为 0，与顺序请求
+    一样拿 409，轨迹恰好一条。`synchronize_session=False`：抢输的一路手上那份对象不能被同步成新值，409 的措辞要按
+    库里此刻的样子说。
+    """
+    moved = cast(CursorResult, db.execute(
+        update(ExamReport)
+        .where(ExamReport.id == report_id, ExamReport.critical_status.in_(expect))
+        .values(critical_status=to)
+        .execution_options(synchronize_session=False)
+    ))
+    return bool(moved.rowcount)
 
 
 def _report_visible_or_404(db: Session, report_id: int, user: User, resource: str) -> ExamReport:
