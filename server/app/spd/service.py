@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from .. import clock
 from ..clock import now_naive
-from ..concurrency import add_amount
+from ..concurrency import add_amount, ensure_present, insert_if_absent
 from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of
 from .models import (
     SpdCallTask,
@@ -682,6 +682,22 @@ def node_enter_allowed(db: Session, instance: SpdPathInstance, node: SpdPathNode
     return evaluate(node.enter_condition, facts, mode="all")
 
 
+def point_account_for(db: Session, user_id: int, org_id: int | None) -> SpdPointAccount:
+    """取这位用户的积分账户，没有就建（P2-336）。
+
+    原先入账（`award_points`）与签到各写一份「查不到就 `add` + `flush`」：同一个人头一回同时来两笔（两条随访一起办结、
+    签到与办结撞在一起），两路都查不到、都去建，后建的撞 `user_id` 唯一约束抛 `IntegrityError`——签到是 500，
+    入账那一路更糟：它是转诊到院、随访办结这些业务动作的一部分，整个动作跟着 500 回滚。建账户改走 `insert_if_absent`
+    （撞了就退回这一行、用对方建好的那个）。**不 commit**。
+    """
+    account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user_id).first()
+    if account is None:
+        insert_if_absent(db, SpdPointAccount(user_id=user_id, org_id=org_id, balance=0, earned=0, used=0))
+        account = ensure_present(
+            db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user_id).first(), "积分账户")
+    return account
+
+
 def award_points(
     db: Session,
     user_id: int | None,
@@ -706,11 +722,7 @@ def award_points(
     )
     if rule is None:
         return None
-    account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user_id).first()
-    if account is None:
-        account = SpdPointAccount(user_id=user_id, org_id=org_id, balance=0, earned=0, used=0)
-        db.add(account)
-        db.flush()
+    account = point_account_for(db, user_id, org_id)
     if rule.daily_limit:
         today = clock.today().isoformat()
         earned_today = sum(

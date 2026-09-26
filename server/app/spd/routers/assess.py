@@ -40,7 +40,7 @@ from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_roles, through_day
 from ...formula import FormulaError, evaluate as eval_formula
 from ..platform import Organization, User
-from ..service import INDICATOR_SOURCES, unknown_program, unknown_programs
+from ..service import INDICATOR_SOURCES, point_account_for, unknown_program, unknown_programs
 from ..models import (
     SpdAssessPlan,
     SpdAssessment,
@@ -1424,11 +1424,7 @@ def signin(db: Session = Depends(get_db), user: User = Depends(get_current_user)
     )
     if rule is None:
         raise HTTPException(status_code=404, detail="未配置签到积分规则")
-    account = db.query(SpdPointAccount).filter(SpdPointAccount.user_id == user.id).first()
-    if account is None:
-        account = SpdPointAccount(user_id=user.id, org_id=user.org_id)
-        db.add(account)
-        db.flush()
+    account = point_account_for(db, user.id, user.org_id)   # 头一回签到与入账撞在一起不再 500（P2-336）
     today = clock.today().isoformat()
     db.add(SpdSignin(account_id=account.id, day=today, points=rule.points))
     # 原子累加而不是 `account.balance += n`：读-改-写在并发下丢更新，

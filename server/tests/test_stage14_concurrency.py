@@ -1128,7 +1128,12 @@ def test_退报名释放名额(client, admin):
 #   * 事情也真的变好了：13 条（部分）唯一索引下沉到库（迁移 b9c8d7e6f5a4 / f4e3d2c1b0a9），
 #     原本"业务上唯一、库上无约束"的表进了 _tables_with_unique_constraint()。
 # 因此 131/284（46.1%）与旧的 59/226（26.1%）**不可直接相比**；此后仍只许变好。
-BASELINE_COVERED_WRITE_SITES = 131
+# 2026-09-26（P2-336）131 → 130，**写入点挪出了路由、不是闸门放水**：积分账户「查不到就建」原先在
+# `assess.signin`（路由）与 `service.award_points` 各写一份 `db.add(SpdPointAccount(...))`，头一回并发即撞
+# `user_id` 唯一约束 500。两处合成 `service.point_account_for`（`insert_if_absent`），路由这一侧少了一处
+# 「库上有唯一约束」的写入点；它在 service 里，这条只扫路由的度量看不见——与上面 spd_tasks 移出清单（P2-131）
+# 同一个处境。不变式由 `tests/test_spd_point_account_first_race.py` 接手（确定时序的并发回归 + 「只此一处构造」的静态钉）。
+BASELINE_COVERED_WRITE_SITES = 130
 # 2026-09-03（P1-30）1 → 0：最后一个未识别写入点（billing.run_reconciliation 的
 # `for d in diffs: db.add(d)`）由 _model_bindings 认出了"容器只装同一种模型"的形状。
 BASELINE_UNRESOLVED_WRITE_SITES = 0
