@@ -470,6 +470,9 @@ def update_resource(resource_id: int, body: ResourceUpdate, db: Session = Depend
     if resource is None:
         raise HTTPException(status_code=404, detail="资源不存在")
     assert_obj_org_writable(db, user, resource)
+    # 与建档同一条（P2-136）：原先改档不看类型，给应急队伍填个过去的效期，队伍就进了「已过期」的报废桶与短缺清单
+    if resource.resource_type == "team" and body.expire_date:
+        raise HTTPException(status_code=422, detail="应急队伍无效期，请勿填写")
     for field, value in body.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(resource, field, value)
