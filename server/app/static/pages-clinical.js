@@ -808,10 +808,19 @@ async function renderMedication() {
   $("#short-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/medication/shortages", formJson(e.target, ["org_id", "quantity"]), "#short-msg"); };
   $("#prof-form").onsubmit = async (e) => {
     e.preventDefault();
-    const profile = await api(`/api/medication/profile/${new FormData(e.target).get("patient_id")}`);
+    // 先清掉上一位的结果、查不到就把原因写出来（P2-358）：原先 api() 抛错没人接，患者号输错（404）或无权查看（403）时
+    // 页面一声不吭，上一位患者的画像与「多重用药风险」照旧挂着——那一行又不写是谁
+    $("#prof-result").innerHTML = "";
+    let profile;
+    try {
+      profile = await api(`/api/medication/profile/${new FormData(e.target).get("patient_id")}`);
+    } catch (err) {
+      $("#prof-result").innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+      return;
+    }
     // 预警按同时在用的品种数判（P2-144），把那个数写出来——只写「多重用药风险」，看的人得自己去 JSON 里数
     $("#prof-result").innerHTML = `${profile.polypharmacy_warning
-      ? `<p class="msg err">⚠ 多重用药风险：同时在用 ${profile.in_use_drugs} 种</p>` : ""}<pre class="json">${esc(JSON.stringify(profile, null, 2))}</pre>`;
+      ? `<p class="msg err">⚠ 患者 ${esc(String(profile.patient_id))} 多重用药风险：同时在用 ${profile.in_use_drugs} 种</p>` : ""}<pre class="json">${esc(JSON.stringify(profile, null, 2))}</pre>`;
   };
   $("#page-body").onclick = async (e) => {
     const { adv, close } = e.target.dataset;
