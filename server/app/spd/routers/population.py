@@ -1289,6 +1289,11 @@ def lifecycle_event(
     if not cross_org:
         enrollment.status = _EVENT_STATUS[body.event]
         closed = close_open_work(db, enrollment, f"{body.event}:{body.reason}"[:250])
+        if body.event == "death":
+            # 召回随死亡收尾（P2-260）：原先结案收尾不管召回记录——死者名下的召回照旧「待联系」，还能登记「已重新纳管」
+            ended = _end_open_recalls(db, enrollment.id, "患者已登记死亡，召回终止")
+            if ended:
+                closed["recalls"] = ended
         if body.event == "recall":
             db.add(
                 SpdRecall(
@@ -1413,6 +1418,20 @@ def list_lifecycle_events(
     return out
 
 
+#: 召回的「未结束」：待联系、已联系
+RECALL_OPEN_STATUSES = ("pending", "contacted")
+
+
+def _end_open_recalls(db: Session, enrollment_id: int, result: str) -> int:
+    """把这份档案未结束的召回置为召回失败并写明原因，返回条数（条件 UPDATE：并发里刚结束的不动）。"""
+    return cast(CursorResult, db.execute(
+        update(SpdRecall)
+        .where(SpdRecall.enrollment_id == enrollment_id, SpdRecall.status.in_(RECALL_OPEN_STATUSES))
+        .values(status="failed", result=result, closed_at=now_naive())
+        .execution_options(synchronize_session=False)
+    )).rowcount
+
+
 class RecallUpdate(BaseModel):
     status: str = Field(pattern="^(pending|contacted|returned|failed)$")
     contact_note: str = Field(default="", max_length=256)
@@ -1437,6 +1456,12 @@ def update_recall(
     # 锁住召回记录这一行、重读、再追加（concurrency.serialized_on）。
     with serialized_on(db, SpdRecall, recall_id):
         db.refresh(recall)
+        if enrollment is not None:
+            db.refresh(enrollment)
+            # 死者的召回已随死亡收尾（P2-260）：原先照样能改回待联系、登记「已重新纳管」
+            if enrollment.status == "dead":
+                db.rollback()
+                raise HTTPException(status_code=409, detail="患者已登记死亡，召回已终止")
         recall.status = body.status
         recall.result = body.result or recall.result
         if body.contact_note:
