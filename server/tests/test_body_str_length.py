@@ -884,3 +884,79 @@ def test_审方意见_修前存下的长系统意见_药师意见装不下就说
     assert r.json() == {"detail": "药师意见最多还能写 18 字（这张处方的系统审方意见已占 1000 字）"}
     r = client.post(url, headers=admin, json={"approve": True, "comment": "意" * 18})
     assert r.status_code == 200 and len(r.json()["review_comment"]) == 1024, (r.status_code, r.text[:200])
+
+
+# ================================================================ P1-164：拼出来的标题超列宽（出院随访、术后随访、站内信）
+# 「出院随访：<入院诊断>」「术后随访：<手术名>」「手术已安排：<手术名>」这种标题是拼出来的：诊断与手术名本身就收 256 字，
+# 拼完超过随访任务 / 站内信标题的列宽 128——生产库上出院 / 术中记录 / 排班整个事务 500。出院那一路患者就再也出不了院
+# （诊断没有改的入口）。值不是原样取自入参，上面的判据量不到，逐条钉在这里。
+def test_入院诊断很长_照常出院_出院随访标题截断(client, admin, world):
+    from app.database import SessionLocal
+    from app.models import FollowupTask
+    from app.routers.followups import FOLLOWUP_TITLE_MAX
+
+    assert FollowupTask.__table__.c.title.type.length == FOLLOWUP_TITLE_MAX
+    bed = client.post("/api/inpatient/beds", headers=admin, json={"ward_id": world["ward"], "bed_no": "P1164-01"})
+    assert bed.status_code == 201, bed.text
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "P1164 患者", "id_card": "330191198001011164", "gender": "男", "birth_date": "1980-01-01"}).json()["id"]
+    adm = client.post("/api/inpatient/admissions", headers=admin, json={
+        "patient_id": patient, "ward_id": world["ward"], "bed_id": bed.json()["id"], "diagnosis_name": "诊" * 256})
+    assert adm.status_code == 201, adm.text
+    aid = adm.json()["id"]
+    assert client.post(f"/api/inpatient/admissions/{aid}/case-summary", headers=admin,
+                       json={"discharge_diagnosis": "诊" * 256}).status_code == 201
+    out = client.post(f"/api/inpatient/admissions/{aid}/discharge", headers=admin)
+    assert out.status_code == 200, (out.status_code, out.text[:200])   # 修前生产库 500：患者出不了院
+    with SessionLocal() as db:
+        (task,) = db.query(FollowupTask).filter_by(category="discharge", source_id=aid).all()
+        assert task.title == ("出院随访：" + "诊" * 256)[:FOLLOWUP_TITLE_MAX]
+
+
+def test_站内信标题正文超列宽截断(client, admin):
+    from app.database import SessionLocal
+    from app.models import Notification
+    from app.notify import BODY_MAX, TITLE_MAX, notify_staff
+
+    assert (Notification.__table__.c.title.type.length, Notification.__table__.c.body.type.length) == (TITLE_MAX, BODY_MAX)
+    with SessionLocal() as db:
+        sent = notify_staff(db, category="p1164", title="手术已安排：" + "术" * 256, body="正" * 2000, roles=("admin",))
+        assert sent >= 1
+        db.flush()   # 修前生产库在这里 StringDataRightTruncation
+        rows = db.query(Notification).filter_by(category="p1164").all()
+        assert rows and {(len(r.title), len(r.body)) for r in rows} == {(TITLE_MAX, BODY_MAX)}
+        db.rollback()
+
+
+def test_手术名很长_术中记录照收_术后随访标题截断(client, admin, world):
+    from app.database import SessionLocal
+    from app.models import FollowupTask
+    from app.routers.followups import FOLLOWUP_TITLE_MAX
+    from conftest import login
+
+    client.post("/api/users", headers=admin, json={"username": "p1164_dir", "password": "pw123456",
+                                                     "full_name": "P1164 主任", "role": "director",
+                                                     "org_id": world["county"]})
+    director = login(client, "p1164_dir", "pw123456")
+    bed = client.post("/api/inpatient/beds", headers=admin, json={"ward_id": world["ward"], "bed_no": "P1164-02"})
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "P1164 手术患者", "id_card": "330191198001021164", "gender": "女", "birth_date": "1980-01-02"}).json()["id"]
+    adm = client.post("/api/inpatient/admissions", headers=admin, json={
+        "patient_id": patient, "ward_id": world["ward"], "bed_id": bed.json()["id"], "diagnosis_name": "胆囊结石"})
+    assert adm.status_code == 201, adm.text
+    room = client.post("/api/surgery/rooms", headers=admin, json={"org_id": world["county"], "name": "P1164 手术间"})
+    req = client.post("/api/surgery/requests", headers=admin, json={
+        "admission_id": adm.json()["id"], "surgery_name": "术" * 256})
+    assert req.status_code == 201, req.text
+    rid = req.json()["id"]
+    assert client.post(f"/api/surgery/requests/{rid}/approve", headers=director,
+                       json={"approved": True}).status_code == 200
+    sched = client.post(f"/api/surgery/requests/{rid}/schedule", headers=admin, json={
+        "room_id": room.json()["id"], "scheduled_date": "2031-06-01", "start_time": "09:00", "end_time": "11:00"})
+    assert sched.status_code == 201, sched.text
+    rec = client.post(f"/api/surgery/requests/{rid}/record", headers=admin, json={
+        "actual_surgery_name": "术" * 256, "start_at": "2031-06-01 09:10", "end_at": "2031-06-01 10:20"})
+    assert rec.status_code == 201, (rec.status_code, rec.text[:200])   # 修前生产库 500
+    with SessionLocal() as db:
+        (task,) = db.query(FollowupTask).filter_by(category="surgery", source_id=rid).all()
+        assert task.title == ("术后随访：" + "术" * 256)[:FOLLOWUP_TITLE_MAX]

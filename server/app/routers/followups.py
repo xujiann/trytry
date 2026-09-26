@@ -28,6 +28,9 @@ FOLLOWUP_TASK_STATUS_NAMES = {"pending": "待随访", "done": "已完成", "canc
 
 # 出院随访默认间隔
 DISCHARGE_FOLLOWUP_DAYS = 7
+#: 随访任务标题的列宽（`followup_tasks.title` String(128)，用例钉着）：派生的标题是「出院随访：<入院诊断>」「术后随访：<手术名>」，
+#: 诊断与手术名都收 256 字，拼完超列宽——生产库上出院 / 术中记录整个事务 500，患者出不了院（P1-164）
+FOLLOWUP_TITLE_MAX = 128
 
 CATEGORY_TITLES = {
     "chronic": "慢病随访",
@@ -67,7 +70,7 @@ def create_task(
         org_id=org_id,
         category=category,
         source_id=source_id,
-        title=title,
+        title=title[:FOLLOWUP_TITLE_MAX],
         due_date=(clock.today() + timedelta(days=due_days)).isoformat(),
     )
     db.add(task)

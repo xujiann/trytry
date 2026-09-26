@@ -23,6 +23,10 @@ logger = logging.getLogger("medplat.notify")
 
 # 单次投递的收件人上限：一家机构的同角色人数再多也不该无限展开
 MAX_RECIPIENTS = 200
+#: 站内信标题 / 正文的列宽（`notifications.title` String(128) / `body` String(1024)，用例钉着两边同一个数）。
+#: 标题多是「手术已安排：<手术名>」这种拼出来的，手术名本身就收 256 字——拼完超列宽，生产库整个业务事务 500（P1-164）
+TITLE_MAX = 128
+BODY_MAX = 1024
 
 #: 模板消息的系统参数前缀：wechat_template_exam_report / wechat_template_followup …
 #: 参数经管理端 /api/mgmt/params 维护（与 I1 的 FHIR 水位同一张表），不进 config。
@@ -82,6 +86,7 @@ def notify_staff(
     admin/director 是否收到由调用方通过 roles 显式决定，这里不做隐式扩散——
     否则每条危急值都惊动全院管理层。
     """
+    title, body = title[:TITLE_MAX], body[:BODY_MAX]   # 拼出来的标题超列宽截断，不让业务事务 500（P1-164）
     query = db.query(User)
     if org_id is not None:
         query = query.filter(User.org_id == org_id)
@@ -117,6 +122,7 @@ def notify_patient(
     本人绑定的账户与**代管该档案的家属账户**都会收到——儿童与失能老人的
     消息本来就该发给代管人，只发给"本人账户"等于发进黑洞。
     """
+    title, body = title[:TITLE_MAX], body[:BODY_MAX]   # 拼出来的标题超列宽截断，不让业务事务 500（P1-164）
     account_ids = {
         a.id
         for a in db.query(ResidentAccount)

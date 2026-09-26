@@ -24,6 +24,7 @@ from ..texttypes import NON_BLANK
 from ..datetypes import DateStr, OptionalDateStr, OptionalDateTimeStr, TimeStr
 from ..deps import get_current_user, paginate, require_admin, require_date, require_roles
 from ..notify import notify_patient
+from .followups import FOLLOWUP_TITLE_MAX
 from ..models import (
     Admission,
     FollowupTask,
@@ -498,7 +499,7 @@ def create_record(
             org_id=request.org_id,
             category="surgery",
             source_id=request.id,
-            title=f"术后随访：{body.actual_surgery_name}",
+            title=f"术后随访：{body.actual_surgery_name}"[:FOLLOWUP_TITLE_MAX],   # 超列宽截断（P1-164）
             due_date=(clock.today() + timedelta(days=SURGERY_FOLLOWUP_DAYS)).isoformat(),
         )
     )

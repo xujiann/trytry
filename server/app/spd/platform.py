@@ -49,6 +49,7 @@ from ..models import (
     utcnow,
 )
 from ..notify import notify_patient as _notify_patient
+from ..notify import BODY_MAX as _NOTIFY_BODY_MAX, TITLE_MAX as _NOTIFY_TITLE_MAX
 # PII 加密态等值检索（P1-25）：开态下证件号密文列 contains 恒空，spd 的证件号
 # 筛选必须与平台 patients.py 走同一条索引列等值路径。只再导出 pii_filter 这一个
 # 名字——加解密原语（encrypt/decrypt）不在依赖面里，子系统不该碰密文本身。
@@ -136,11 +137,11 @@ def notify_user(
 
     平台的 `notify.notify_staff` 是按机构 + 角色群发的，发不到具体某个人；
     任务催办要发给任务的责任人，所以这里直接落 `Notification`。
-    与 `notify.py` 同一契约：只 `add` 不 `commit`，提交时机由业务事务决定。
+    与 `notify.py` 同一契约：只 `add` 不 `commit`，提交时机由业务事务决定；标题 / 正文超列宽同样截断（P1-164）。
     """
     db.add(
         Notification(
-            user_id=user_id, category=category, title=title, body=body,
+            user_id=user_id, category=category, title=title[:_NOTIFY_TITLE_MAX], body=body[:_NOTIFY_BODY_MAX],
             link_type=link_type, link_id=link_id,
         )
     )
