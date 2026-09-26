@@ -770,7 +770,9 @@ def task_summary(
         "open_by_type": by_type,
         "open_total": sum(by_status.get(s, 0) for s in OPEN_STATUSES),
         "overdue": by_status.get("overdue", 0),
-        "escalated": query.filter(SpdTask.escalated.is_(True)).count(),
+        # 未结束的里头升级过的（P2-247）：原先把办结 / 取消了的也数进来，这一格只增不减、永远标红；中心端工作台的
+        # 「已升级」（`workbench._task_stats`）与医生移动工作台的升级提醒一直只数未结束的
+        "escalated": query.filter(SpdTask.escalated.is_(True), SpdTask.status.in_(OPEN_STATUSES)).count(),
         "due_today": query.filter(
             SpdTask.due_date == today_str, SpdTask.status.in_(OPEN_STATUSES)
         ).count(),
