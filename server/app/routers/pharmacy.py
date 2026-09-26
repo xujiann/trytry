@@ -28,6 +28,7 @@ from ..concurrency import (
     ensure_present,
     insert_if_absent,
     insert_or_conflict,
+    move_row,
     take_amount,
 )
 from ..numtypes import INT4_MAX
@@ -74,6 +75,16 @@ UNSPECIFIED_BATCH_NO = "未标批号"
 UNSPECIFIED_EXPIRE_DATE = "9999-12-31"
 
 
+def _add_to_normal_batch(db: Session, batch_id: int, quantity: int) -> bool:
+    """往批次上加量，「批次还没召回」与累加同一条 UPDATE，返回是否加上（P2-350）。
+
+    三处入库（按批次入库、调入、兜底批次）原先是「内存里判没召回 → `add_amount` 无条件累加」：读到「正常」之后别人刚召回
+    并提交，这一笔照样加进已召回的批次、连同汇总——一片也发不出（发药只取正常批次），缺药预警与采购建议却当有货，
+    正是「召回后不得再入库」（`recall_batch`、P1-147）要防的幽灵库存。与 `claim_quota` 同一个道理：判定与写入同一条 SQL。
+    """
+    return move_row(db, DrugBatch, batch_id, DrugBatch.status == "normal", quantity=DrugBatch.quantity + quantity)
+
+
 def _receive_unspecified(db: Session, org_id: int, drug_code: str, quantity: int) -> None:
     """把没有批号可报的入库量落到兜底批次上（只动批次侧，汇总由调用方加）。
 
@@ -99,7 +110,7 @@ def _receive_unspecified(db: Session, org_id: int, drug_code: str, quantity: int
     batch = ensure_present(
         _batch_of(db, org_id, drug_code, UNSPECIFIED_BATCH_NO), "药品批次"
     )
-    if batch.status != "normal":
+    if batch.status != "normal" or not _add_to_normal_batch(db, batch.id, quantity):
         # 「召回后不得再入库」（`recall_batch`），按批次入库与调入早就这样拦（P1-147）。兜底批次召回了还照旧累加，
         # 汇总长出来的量一片也发不出（发药只取正常批次），缺药预警与采购建议却把它当有货——又一处幽灵库存
         db.rollback()
@@ -107,7 +118,6 @@ def _receive_unspecified(db: Session, org_id: int, drug_code: str, quantity: int
             status_code=409,
             detail=f"该药的「{UNSPECIFIED_BATCH_NO}」兜底批次已召回，不得再入库：请按批次入库，报批号与效期",
         )
-    add_amount(db, DrugBatch, batch.id, "quantity", quantity)
 
 
 def _consume_batches(db: Session, org_id: int, drug_code: str, amount: int, today: str) -> int:
@@ -302,12 +312,11 @@ def transfer_stock(
                 detail=f"调入机构批号 {batch.batch_no} 已按效期 {target.expire_date} 登记，"
                 f"与调出批次 {batch.expire_date} 不一致",
             )
-        if target.status != "normal":
+        if target.status != "normal" or not _add_to_normal_batch(db, target.id, take):
             db.rollback()
             raise HTTPException(
                 status_code=409, detail=f"调入机构批号 {batch.batch_no} 已召回，不得调入"
             )
-        add_amount(db, DrugBatch, target.id, "quantity", take)
     db.add(StockTransfer(**body.model_dump(), created_by=user.id))
     try:
         db.commit()
@@ -579,10 +588,9 @@ def receive_batch(
             status_code=422,
             detail=f"该批号已按效期 {batch.expire_date} 登记，与本次 {body.expire_date} 不一致",
         )
-    if batch.status != "normal":
+    if batch.status != "normal" or not _add_to_normal_batch(db, batch.id, body.quantity):
         db.rollback()
         raise HTTPException(status_code=409, detail="该批次已召回，不得再入库")
-    add_amount(db, DrugBatch, batch.id, "quantity", body.quantity)
     add_amount(db, DrugStock, stock.id, "quantity", body.quantity)
     stock.drug_name = body.drug_name
     db.commit()
