@@ -15,6 +15,7 @@
 import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -421,7 +422,17 @@ def download_attachment(
     return StreamingResponse(
         storage.open(attachment.sha256),
         media_type=attachment.content_type,
-        headers={
-            "content-disposition": f'attachment; filename="{attachment.filename}"',
-        },
+        headers={"content-disposition": _content_disposition(attachment.filename)},
     )
+
+
+def _content_disposition(filename: str) -> str:
+    """下载头，与 `FileResponse` 同一套写法（P2-237）：文件名不是纯 ASCII 的用 RFC 5987 的 `filename*=utf-8''…`。
+
+    原先对象存储这一支直接把文件名塞进 `filename="…"`：响应头按 latin-1 编码，「检查报告.pdf」这种中文文件名
+    编不进去，下载即 500——本地存储那一支走 FileResponse，早就这样处理了，上面那句「口径与 FileResponse 一致」
+    只对英文文件名成立。"""
+    quoted = quote(filename)
+    if quoted != filename:
+        return f"attachment; filename*=utf-8''{quoted}"
+    return f'attachment; filename="{filename}"'
