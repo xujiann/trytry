@@ -125,5 +125,14 @@ def evaluate_condition(expression: str, variables: dict) -> bool:
 
 
 def validate_condition(expression: str, known_variables: dict) -> None:
-    """录入时校验：用各变量的样例值代入试算一次。"""
+    """录入时校验：用各变量的样例值代入试算一次，再把表达式里引用的变量逐个对一遍（P2-352）。
+
+    光试算不够：链式比较一环为假就不再往下算——`65 <= age < max_agee` 在样例 age=40 时第一环就是假，写错的 `max_agee`
+    从没被求值，录入照收；上线后每一次真求值（age ≥ 65）都记一条「未知变量」错误，规则形同虚设。
+    """
     evaluate_condition(expression, known_variables)
+    tree = ast.parse(expression, mode="eval")
+    functions = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and id(node) not in functions and node.id not in known_variables:
+            raise RuleError(f"未知变量：{node.id}")
