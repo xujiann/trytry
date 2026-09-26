@@ -208,11 +208,12 @@ def run_source(db: Session, source: SpdDataSource) -> SpdSyncLog:
     source.last_sync_at = started
     source.last_rows = rows
     source.last_latency_ms = latency_ms
-    source.status = (
-        "failed" if not success
-        else "delayed" if latency_ms > source.freq_minutes * 60 * 1000
-        else "running"
-    )
+    if source.status != "stopped":   # 手工停的不被一次同步结果翻回「正常 / 异常」（P2-315）
+        source.status = (
+            "failed" if not success
+            else "delayed" if latency_ms > source.freq_minutes * 60 * 1000
+            else "running"
+        )
     return log
 
 
@@ -223,7 +224,9 @@ def run_due_sources(db: Session) -> tuple[int, str]:
     HIS 可能要 5 分钟一次，体检系统一天一次就够，混在一个周期里必然有一头不合适。
     """
     now = now_naive()
-    sources = db.query(SpdDataSource).filter(SpdDataSource.active.is_(True)).all()
+    # 状态为「停用」（stopped，改档可设）的也不跑（P2-315）：原先只看 active，手工停掉的数据源到点照跑，
+    # 跑完又把状态翻回「正常 / 异常」——停用这一档设了等于没设
+    sources = db.query(SpdDataSource).filter(SpdDataSource.active.is_(True), SpdDataSource.status != "stopped").all()
     due = [
         s for s in sources
         if s.last_sync_at is None

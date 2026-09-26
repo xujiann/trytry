@@ -298,7 +298,9 @@ def record_sync(
     source.last_sync_at = log.started_at
     source.last_rows = body.rows
     source.last_latency_ms = body.latency_ms
-    if not body.success:
+    if source.status == "stopped":
+        pass   # 手工停的不被一次同步结果翻回「正常 / 异常」（P2-315，与定时采集 collectors.run_source 同一口径）
+    elif not body.success:
         source.status = "failed"
     elif body.latency_ms > source.freq_minutes * 60 * 1000:
         source.status = "delayed"
