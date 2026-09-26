@@ -355,12 +355,21 @@ def claim_request(
     status_code=201,
     dependencies=[Depends(require_roles("doctor"))],
 )
-def submit_report(request_id: int, body: ExamReportCreate, db: Session = Depends(get_db)):
+def submit_report(
+    request_id: int, body: ExamReportCreate, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     request = db.get(ExamRequest, request_id)
     if request is None:
         raise HTTPException(status_code=404, detail="申请单不存在")
     if request.status not in ("pending", "diagnosing"):
         raise HTTPException(status_code=409, detail=f"当前状态 {EXAM_REQUEST_STATUS_NAMES.get(request.status, request.status)} 不可出报告")
+    if request.status == "pending":
+        # 没领取、直接出报告的，与领取同一句记下领取人与中心机构（P2-257）：「中心与该患者的服务关系」靠
+        # `claimed_org_id` 成立（见模型列注释），原先这条路不记——中心医师写完报告打不开自己写的那份（打印、挂影像附件
+        # 403），正是当初加这一列要堵的洞。医生移动端待领取的卡片上就摆着「出报告」
+        request.claimed_by = user.full_name or user.username
+        request.claimed_org_id = user.org_id
     report = ExamReport(request_id=request_id, **body.model_dump())
     request.status = "reported"
     if report.critical:
