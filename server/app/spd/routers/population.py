@@ -840,11 +840,21 @@ def claim_candidate(
     assert_org_writable(db, user, candidate.org_id)
     if candidate.assigned_user_id not in (None, user.id):
         raise HTTPException(status_code=409, detail="该患者已被其他人员认领")
-    candidate.assigned_user_id = user.id
-    candidate.claimed_at = now_naive()
-    if candidate.status == "suspect":
-        candidate.status = "target"
+    # 判定与写同一条 UPDATE（P2-253）：原先读出「没人认领」再在内存里改——两个成员同时点认领，两路都读到没人、都 200，
+    # 后提交的那位静默顶掉先认领的（与分发的 P2-251 同一个窗口）
+    won = cast(CursorResult, db.execute(
+        update(SpdCandidate)
+        .where(SpdCandidate.id == candidate.id,
+               or_(SpdCandidate.assigned_user_id.is_(None), SpdCandidate.assigned_user_id == user.id))
+        .values(assigned_user_id=user.id, claimed_at=now_naive(),
+                status=case((SpdCandidate.status == "suspect", "target"), else_=SpdCandidate.status))
+        .execution_options(synchronize_session=False)
+    )).rowcount
+    if not won:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该患者已被其他人员认领")
     db.commit()
+    db.refresh(candidate)
     return _candidate_out(candidate)
 
 
