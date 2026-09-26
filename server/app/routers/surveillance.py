@@ -15,7 +15,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from ..concurrency import upsert_unique
@@ -452,13 +452,17 @@ def list_resources(
         query = query.filter(EmergencyResource.org_id.in_(scope))
     if resource_type:
         query = query.filter(EmergencyResource.resource_type == resource_type)
-    rows = [
+    if shortage_only:
+        # 「只看缺口与过期」挪到截断之前（P2-310）：原先先取最新的 500 条再在里面挑——资源多的县，早登记的储备缺口、
+        # 过期药械排在 500 条之外，勾了「只看缺口」反而一条都看不到。判据与 `_resource_out` 的两个派生字段逐字对应
+        query = query.filter(or_(
+            and_(EmergencyResource.min_quantity != 0, EmergencyResource.quantity < EmergencyResource.min_quantity),
+            and_(EmergencyResource.expire_date != "", EmergencyResource.expire_date < today_str),
+        ))
+    return [
         _resource_out(r, today_str)
         for r in query.order_by(EmergencyResource.id.desc()).limit(500).all()
     ]
-    if shortage_only:
-        return [r for r in rows if r["below_min"] or r["expired"]]
-    return rows
 
 
 @router.patch(
