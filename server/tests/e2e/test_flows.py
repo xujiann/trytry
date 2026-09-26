@@ -2417,7 +2417,8 @@ def surgery_mobile_seed(base_url, seed):
     admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
     doctor = call("/api/auth/login", {"username": "e2e_doctor", "password": "passw0rd1"})["access_token"]
     req = call("/api/surgery/requests",
-               {"admission_id": seed["admission"]["id"], "surgery_name": "E2E移动端疝修补术"}, doctor)
+               {"admission_id": seed["admission"]["id"], "surgery_name": "E2E移动端疝修补术",
+                "incision_level": "I", "anesthesia_type": "spinal"}, doctor)
     call(f"/api/surgery/requests/{req['id']}/approve", {"approved": True}, admin)
     call(f"/api/surgery/requests/{req['id']}/schedule",
          {"room_id": seed["room"]["id"], "scheduled_date": "2026-09-02",
@@ -2452,6 +2453,8 @@ def test_医生移动端术中记录在卡片内表单里填_转归可选(page, 
     request_id = surgery_mobile_seed["request"]["id"]
     record = surgery_mobile_seed["read"](f"/api/surgery/requests/{request_id}/record")
     assert record["outcome"] == "未愈" and record["postop_diagnosis"] == "腹股沟斜疝", record
+    # P2-179：麻醉方式与切口等级原先不送、恒记成全麻 II 类；现在缺省带出申请时填的（椎管内、I 类）
+    assert (record["anesthesia_type"], record["incision_level"]) == ("spinal", "I"), record
 
 
 @pytest.fixture(scope="session")

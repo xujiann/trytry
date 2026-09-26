@@ -725,6 +725,8 @@ showWorkbench(isAuthed());
 
 const NOTE_TYPE_NAMES = { first: "首次病程", daily: "日常病程", ward_round: "上级查房",
   rescue: "抢救记录", consultation: "会诊记录", discharge: "出院记录" };
+// 麻醉方式措辞与管理端 pages-mgmt.js 的 ANESTHESIA 一致
+const ANESTHESIA_NAMES = { general: "全麻", spinal: "椎管内", local: "局麻", nerve_block: "神经阻滞" };
 const SURGERY_STATUS_NAMES = { requested: ["待审批", "orange"], approved: ["已审批", ""],
   scheduled: ["已排班", "green"], completed: ["已完成", ""], cancelled: ["已取消", "red"] };
 
@@ -860,7 +862,8 @@ async function loadSurgery() {
           return card(
             `${kv("术式", esc(r.surgery_name))}${kv("住院号", String(r.admission_id))}
              ${kv("状态", statusTag(SURGERY_STATUS_NAMES, r.status))}`,
-            `<button class="op" data-record="${r.id}" data-name="${esc(r.surgery_name)}">填写术中记录</button>`);
+            `<button class="op" data-record="${r.id}" data-name="${esc(r.surgery_name)}"
+              data-anesthesia="${esc(r.anesthesia_type)}" data-incision="${esc(r.incision_level)}">填写术中记录</button>`);
         }).join("")
       : '<p class="empty">没有待填写的术中记录</p>');
 }
@@ -877,6 +880,10 @@ $("#tab-surgery").addEventListener("click", (e) => {
   form.innerHTML = `<input name="actual_surgery_name" placeholder="实际术式" required
       value="${esc(e.target.dataset.name || "")}">
     <input name="anesthetist_name" placeholder="麻醉医师">
+    <select name="anesthesia_type">${Object.entries(ANESTHESIA_NAMES).map(([k, v]) =>
+      `<option value="${k}"${k === e.target.dataset.anesthesia ? " selected" : ""}>${v}</option>`).join("")}</select>
+    <select name="incision_level">${["I", "II", "III", "IV"].map((x) =>
+      `<option value="${x}"${x === e.target.dataset.incision ? " selected" : ""}>${x} 类切口</option>`).join("")}</select>
     <textarea name="findings" rows="2" placeholder="术中所见"></textarea>
     <input name="blood_loss_ml" inputmode="numeric" placeholder="出血量 ml（可空）">
     <select name="outcome">${["治愈", "好转", "未愈", "死亡"].map((x) =>
@@ -895,6 +902,10 @@ $("#tab-surgery").addEventListener("click", (e) => {
         body: JSON.stringify({
           actual_surgery_name: f.actual_surgery_name.value.trim(),
           anesthetist_name: f.anesthetist_name.value.trim(),
+          // 麻醉方式与切口等级原先不送（P2-179），后端缺省全麻、II 类——移动端记的每一台都记成全麻 II 类切口，
+          // 手术量统计的切口 / 麻醉构成跟着失真。现在缺省带出申请时填的，可改
+          anesthesia_type: f.anesthesia_type.value,
+          incision_level: f.incision_level.value,
           findings: f.findings.value.trim(),
           // 留空记 0；写错的原样交给后端报人话，别让 Number() 把它悄悄变成 NaN → null
           blood_loss_ml: blood === "" ? 0 : (Number.isNaN(Number(blood)) ? blood : Number(blood)),

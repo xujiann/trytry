@@ -193,9 +193,10 @@ async function renderSurgery() {
         const v = await spdModal("术中记录", [
           { name: "actual_surgery_name", label: "实际术式", value: req ? req.surgery_name : "", required: true },
           { name: "anesthetist_name", label: "麻醉医师" },
-          { name: "anesthesia_type", label: "麻醉方式", type: "select",
+          // 麻醉方式与切口等级缺省带出申请时填的（P2-179）：原先麻醉恒缺省第一项、切口恒 II 类
+          { name: "anesthesia_type", label: "麻醉方式", type: "select", value: req ? req.anesthesia_type : "general",
             options: Object.entries(ANESTHESIA).map(([value, label]) => ({ value, label })) },
-          { name: "incision_level", label: "切口等级", type: "select", value: "II",
+          { name: "incision_level", label: "切口等级", type: "select", value: req ? req.incision_level : "II",
             options: ["I", "II", "III", "IV"].map((x) => ({ value: x, label: `${x} 类` })) },
           { name: "blood_loss_ml", label: "出血量（ml）", type: "number" },
           { name: "findings", label: "术中所见", type: "textarea" },
