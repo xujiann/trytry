@@ -158,8 +158,9 @@ def _find_recognizable(
     )
     if center_type:
         query = query.filter(ExamRequest.center_type == center_type)
-    # 同一患者同一项目 30 天内的报告屈指可数；上限只是防御
-    for candidate in query.order_by(ExamRequest.id.desc()).limit(50):
+    # 同一患者同一项目 30 天内的报告屈指可数；上限只是防御。「最近一份」按出报告的时间（P2-272）：原先按申请单号，
+    # 早开单、晚出报告的那份（出报告慢的项目、补做的）排在后面，弹出来的互认对象是更早的一份结论
+    for candidate in query.order_by(ExamReport.reported_at.desc(), ExamRequest.id.desc()).limit(50):
         source_org = db.get(Organization, candidate.from_org_id)
         if _directory_blocked_reason(db, item_code, center_type, (requester, source_org)) is None:
             return candidate
