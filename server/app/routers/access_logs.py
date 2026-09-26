@@ -22,8 +22,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_date, require_roles, through_day
-from ..models import AccessLog, Organization, Patient, User
-from .portal import current_resident_patient
+from ..models import AccessLog, Organization, Patient, ResidentAccount, User
+from .portal import current_resident, current_resident_patient
 
 router = APIRouter(prefix="/api/access-logs", tags=["敏感读留痕"])
 
@@ -316,6 +316,7 @@ def my_access_logs(
     limit: int = 100,
     db: Session = Depends(get_db),
     patient: Patient = Depends(current_resident_patient),
+    account: ResidentAccount = Depends(current_resident),
 ):
     """患者视角（居民端）：谁、哪家机构、什么时候看过我的档案。
 
@@ -324,10 +325,14 @@ def my_access_logs(
 
     只返回**本人**的记录（按绑定的 patient_id 过滤，绕不开）；不显示调阅人
     的机构内部账号名细节之外的东西，够回答"谁看过我"即可。
+
+    不列这个账号自己的调阅（P2-360）：居民端每读一次自己的档案都留一条「本人调阅」，打开一次「我的档案」就是三条——
+    手机页只取最近 50 条，十几次之后窗口里全是自己，别家医生真正的调阅被挤出去，「还没有人调阅过您的档案」也永远出不来。
+    代管家属账号的调阅照列（那是别人看了我），落库的留痕本身不动。
     """
     query = (
         db.query(AccessLog)
-        .filter(AccessLog.patient_id == patient.id)
+        .filter(AccessLog.patient_id == patient.id, AccessLog.username != f"resident:{account.id}")
         .order_by(AccessLog.id.desc())
     )
     rows = paginate(query, response, offset, limit)
