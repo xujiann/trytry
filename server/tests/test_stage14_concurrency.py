@@ -473,37 +473,41 @@ def _read_modify_writes_in(func: ast.FunctionDef) -> list[ast.stmt]:
     一条只看得见一种写法的规则，给出的是虚假的安全感（第 17 章例三）。
     """
     local_names = ("self", "totals", "acc")
+
+    def orm_column(target: ast.expr) -> bool:
+        # 只管 ORM 列上的读-改-写；本地变量/累加器（sum += x）不在此列
+        return isinstance(target, ast.Attribute) and not (
+            isinstance(target.value, ast.Name) and target.value.id in local_names)
+
     guarded = _serialized_nodes(func)
     found: list[ast.stmt] = []
     for node in ast.walk(func):
         if id(node) in guarded:
             continue
-        target = None
         if isinstance(node, ast.AugAssign):
-            if not isinstance(node.target, ast.Attribute):
-                continue
-            if not isinstance(node.op, (ast.Add, ast.Sub)):
-                continue
-            target = node.target
-        elif isinstance(node, ast.Assign):
-            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Attribute):
-                continue
-            target = node.targets[0]
-            src = ast.unparse(target)
+            if orm_column(node.target) and isinstance(node.op, (ast.Add, ast.Sub)):
+                found.append(node)
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
             # 右值里必须出现同一个属性，才叫"读了旧值再写回去"；
             # 纯赋新值（obj.col = body.x）不是读-改-写，不报。
-            if not any(
-                isinstance(sub, ast.Attribute) and ast.unparse(sub) == src
-                for sub in ast.walk(node.value)
-            ):
-                continue
-        else:
-            continue
-        # 只管 ORM 列上的读-改-写；本地变量/累加器（sum += x）不在此列
-        if isinstance(target.value, ast.Name) and target.value.id in local_names:
-            continue
-        found.append(node)
+            if any(orm_column(target) and any(
+                    isinstance(sub, ast.Attribute) and ast.unparse(sub) == ast.unparse(target)
+                    for sub in ast.walk(value))
+                   for target, value in _assigned_pairs(node)):
+                found.append(node)
     return found
+
+
+def _assigned_pairs(node: ast.Assign) -> list[tuple[ast.expr, ast.expr]]:
+    """赋值语句的（目标, 右值）对。元组赋值逐个对上右值（`a.x, a.y = True, max(a.y, 2)`），右值不是等长元组的
+    （解包一个调用结果）每个目标都对整个右值——原先只认单个属性目标，元组赋值这一形状整个看不见（P2-246：
+    慢专病批量升级正是这么写的读-改-写，单条升级 P2-194 已修，批量版躲在这个盲区里）。"""
+    target = node.targets[0]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        if isinstance(node.value, (ast.Tuple, ast.List)) and len(node.value.elts) == len(target.elts):
+            return list(zip(target.elts, node.value.elts))
+        return [(elt, node.value) for elt in target.elts]
+    return [(target, node.value)]
 
 
 def _read_modify_write_offenders() -> list[str]:
@@ -573,7 +577,7 @@ def test_读改写欠账清单不得腐烂():
 
 
 def test_读改写规则自证_临界区豁免只认refresh之后():
-    """规则自己的行为用一段合成代码钉住，五种形状各得其所——规则改坏了这里先红。"""
+    """规则自己的行为用一段合成代码钉住，六种形状各得其所——规则改坏了这里先红。"""
     source = textwrap.dedent(
         '''
         def plain(db, obj, body):
@@ -598,6 +602,11 @@ def test_读改写规则自证_临界区豁免只认refresh之后():
 
         def fresh_value(db, obj, body):
             obj.note = body.note
+
+        def tuple_assign(db, obj, body):
+            obj.escalated, obj.priority = True, max(obj.priority, 2)
+            obj.a, obj.b = body.a, body.b
+            obj.x, obj.y = split(obj.x)
         '''
     )
     flagged = {
@@ -611,6 +620,10 @@ def test_读改写规则自证_临界区豁免只认refresh之后():
         "locked_before_refresh": ["obj.log = (obj.log or []) + [body.entry]"],  # 锁内但 refresh 前：报
         "other_with": ["obj.count += 1"],                        # 别的 with 不是临界区：报
         "fresh_value": [],                                       # 纯赋新值：不报
+        "tuple_assign": [                                        # 元组赋值逐个对上右值（P2-246）
+            "obj.escalated, obj.priority = (True, max(obj.priority, 2))",
+            "obj.x, obj.y = split(obj.x)",                        # 解包调用结果：每个目标对整个右值
+        ],
     }
 
 

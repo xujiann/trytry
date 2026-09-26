@@ -929,14 +929,20 @@ def escalate_task(
     task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需升级")
-    # 置紧急用带条件的 UPDATE、只往上抬（P2-194）：原先读出优先级在内存里 max 再写回——另一路刚把它调到更高，
-    # 这里写回的旧值 max 会把它压回 2（读改写欠账清单里登记着的那一条）
-    db.query(SpdTask).filter(SpdTask.id == task.id).update({SpdTask.escalated: True}, synchronize_session=False)
-    db.query(SpdTask).filter(SpdTask.id == task.id, SpdTask.priority < 2).update(
-        {SpdTask.priority: 2}, synchronize_session=False)
+    _mark_escalated(db, task.id)
     db.commit()
     db.refresh(task)
     return _task_out(task)
+
+
+def _mark_escalated(db: Session, task_id: int) -> None:
+    """标记升级并把优先级抬到「紧急」——只往上抬，两条带条件的 UPDATE（P2-194）。
+
+    原先读出优先级在内存里 max 再写回：另一路刚把它调到更高，这里写回的旧值 max 会把它压回 2。单条与批量升级共用
+    这一处（P2-246：批量版原先还是 `task.escalated, task.priority = True, max(task.priority, 2)`）。"""
+    db.query(SpdTask).filter(SpdTask.id == task_id).update({SpdTask.escalated: True}, synchronize_session=False)
+    db.query(SpdTask).filter(SpdTask.id == task_id, SpdTask.priority < 2).update(
+        {SpdTask.priority: 2}, synchronize_session=False)
 
 
 class SubmitIn(BaseModel):
@@ -1206,7 +1212,7 @@ def batch_tasks(
         elif body.action == "urge":
             add_amount(db, SpdTask, task.id, "urged_count", 1)
         elif body.action == "escalate":
-            task.escalated, task.priority = True, max(task.priority, 2)
+            _mark_escalated(db, task.id)
         elif body.action == "cancel":
             # 条件翻转（P2-114）：载入整批之后别人刚办结的，别改成取消
             if not move_task(db, task.id, "cancelled", review_note=body.note or "批量取消", finished_at=now_naive()):
