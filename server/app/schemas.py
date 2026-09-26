@@ -1,7 +1,9 @@
-from pydantic import BaseModel, Field, FiniteFloat
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, Field, FiniteFloat
 from .datetypes import DateStr, OptionalDateStr
 from .numtypes import INT4_MAX
-from .texttypes import NON_BLANK
+from .texttypes import NON_BLANK, split_list
 
 
 class LoginRequest(BaseModel):
@@ -195,6 +197,19 @@ class CriticalResolveBody(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
+#: 审方规则「特殊人群」的取值是闭集（P2-198）：审方按这三个键匹配患者所属人群（`prescriptions._patient_groups`），
+#: 写成别的——包括页面上印给人看的中文名「孕产妇」「老年人」——规则照样存得进去，却一个患者都命中不了，不报错
+SPECIAL_GROUP_NAMES = {"pregnant": "孕产妇", "child": "儿童", "elderly": "老年人"}
+
+
+def _check_special_groups(value: str) -> str:
+    unknown = [g for g in split_list(value) if g not in SPECIAL_GROUP_NAMES]
+    if unknown:
+        allowed = "、".join(f"{key}（{name}）" for key, name in SPECIAL_GROUP_NAMES.items())
+        raise ValueError(f"特殊人群只认 {allowed}，不认：{'、'.join(unknown)}")
+    return value
+
+
 class DrugRuleCreate(BaseModel):
     # 药品编码必填（P1-110）：原先空串照收，建出一条只管「没有编码的药」的规则
     drug_code: str = Field(min_length=1, max_length=64, pattern=NON_BLANK)
@@ -205,8 +220,8 @@ class DrugRuleCreate(BaseModel):
     interactions: str = Field(default="", max_length=512)
     # 禁忌诊断关键词，逗号分隔（如 "消化性溃疡,出血"）
     contraindicated_diagnoses: str = Field(default="", max_length=512)
-    # 特殊人群，逗号分隔，取值 pregnant/child/elderly
-    special_groups: str = Field(default="", max_length=64)
+    # 特殊人群，逗号分隔，取值 pregnant/child/elderly（闭集，P2-198）
+    special_groups: Annotated[str, AfterValidator(_check_special_groups)] = Field(default="", max_length=64)
     # 肝肾功能提示（不拦截，随处方返回供剂量调整参考）
     renal_hepatic_note: str = Field(default="", max_length=512)
     # 处方点评要点（事后点评规则化依据）
@@ -224,6 +239,8 @@ class DrugRuleOut(DrugRuleCreate):
     # 出参不要求有限值（P1-92）：PG 的浮点/金额列存得下 NaN，存量坏值要读成 null，而不是让整个响应 500
     max_daily_dose: float
     ddd: float = 0
+    # 出参不带闭集校验（P2-198）：修之前存进去的「孕产妇」这类取值要原样读出来（好让人看见、改掉），而不是让整个清单 500
+    special_groups: str = ""
     # 停用标记：停用的规则不参与审方与点评，但保留在库里可回溯
     active: bool = True
 

@@ -26,6 +26,7 @@ from ..models import (
 from ..texttypes import split_list
 from ..visibility import assert_org_writable
 from ..schemas import (
+    SPECIAL_GROUP_NAMES,
     DrugRuleCreate,
     DrugRuleOut,
     PrescriptionCreate,
@@ -42,7 +43,7 @@ PRESCRIPTION_STATUS_NAMES = {"auto_passed": "系统审通过", "pending_review":
 CHILD_AGE_LIMIT = 14
 ELDERLY_AGE_LIMIT = 65
 
-GROUP_NAMES = {"pregnant": "孕产妇", "child": "儿童", "elderly": "老年人"}
+GROUP_NAMES = SPECIAL_GROUP_NAMES
 
 
 def _age_of(birth_date: str, today: date | None = None) -> int | None:
