@@ -152,8 +152,12 @@ document.querySelectorAll("[data-dspd]").forEach((btn) => {
   });
 });
 
+/** 本人（工作台出参的 user）：「我的患者」按它筛 */
+let spdMe = null;
+
 async function loadSpdTab() {
   const wb = await api("/api/spd/workbench/doctor-mobile");
+  spdMe = wb.user;
   const roleText = (wb.user.member_roles || []).map((r) => ({
     doctor: "医生", nurse: "护士", rehab: "康复治疗师", case_manager: "个案管理师",
     village_doctor: "村医", expert: "专家",
@@ -168,7 +172,8 @@ async function loadSpdTab() {
     ${kv("待复核转诊", wb.referrals.pending_review)}
     ${kv("待接收转诊", wb.referrals.pending_accept)}
     ${kv("待承接下转", wb.referrals.pending_receive)}
-    ${kv("在管患者", wb.patients.mine)}
+    ${wb.user.is_village_doctor   // 与「我的患者」同一口径（P2-373）：村医看签约居民，其余看本人是责任医生的
+      ? kv("签约居民", wb.patients.village) : kv("在管患者", wb.patients.mine)}
     ${kv("积分余额", wb.points.balance)}
   </div>`;
   await loadSpdList();
@@ -321,7 +326,11 @@ async function loadSpdReferral(box) {
 }
 
 async function loadSpdPatients(box) {
-  const rows = await api("/api/spd/enrollments?limit=30");
+  // 只列本人名下的（P2-373）：原先不带筛选，列的是可见机构最新 30 份在管档案——多半是别的医生的患者。
+  // 村医按签约村医筛，其余按责任医生筛，与上方「签约居民 / 在管患者」计数同一口径
+  const me = spdMe || (await api("/api/spd/workbench/doctor-mobile")).user;
+  const mine = me.is_village_doctor ? `village_doctor_id=${me.id}` : `doctor_user_id=${me.id}`;
+  const rows = await api(`/api/spd/enrollments?limit=30&${mine}`);
   box.innerHTML = rows.map((e) => `<div class="m-card">
     ${kv("患者", esc(e.patient_name || e.patient_id))}
     ${kv("病种", esc(e.program_code))}
