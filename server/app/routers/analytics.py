@@ -361,11 +361,16 @@ def patient_flow(start: str | None = None, end: str | None = None, db: Session =
     # 就诊表按年增长，月报把历史全量搬一遍。改为按机构层级 GROUP BY 一次取回
     # 计数/转诊计数/金额（COUNT(referral_id) 只数非 NULL，语义即"关联了转诊单"），
     # 总量在 ≤3 行的分组结果上相加，明细行不再离库。
+    # 挂上之后被退回的转诊单不算有序转诊（P2-200）：登记时已拒绝挂退回的单（`create_outbound_visit`：「被退回的转诊单
+    # 没有转成，患者是自行外出」），可挂的时候还是待审、之后才被退回的，原先一直算数——县外就诊没有改挂 / 解挂的入口，
+    # 只能在算的时候判（统计是现算的，之后被退回自然就掉出去）
+    live_referral = sa.and_(OutboundVisit.referral_id.isnot(None), Referral.status != "rejected")
     grouped = (
-        outside_q.with_entities(
+        outside_q.outerjoin(Referral, Referral.id == OutboundVisit.referral_id)
+        .with_entities(
             OutboundVisit.external_org_level,
             func.count(OutboundVisit.id),
-            func.count(OutboundVisit.referral_id),
+            func.count(sa.case((live_referral, 1))),
             func.coalesce(func.sum(OutboundVisit.total_amount), 0.0),
         )
         .group_by(OutboundVisit.external_org_level)
