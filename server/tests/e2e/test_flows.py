@@ -1697,6 +1697,31 @@ def test_运行中枢能新建宣教素材与接入数据源(page, base_url, adm
     assert (source["name"], source["source_type"], source["freq_minutes"]) == ("E2E 检验系统", "LIS", 30), source
 
 
+def test_运行中枢改已有病种的纳入规则_保存即升一版(page, base_url, admin_call, admin_read):
+    """P2-173：接口「改规则即升版本并留快照」，页面原先没有入口——编辑对话框叫人「用下方编辑器新建版本」，
+    下方那两个编辑器挂在「新建病种」表单上：同编码提交 409，换个编码就多出一个病种。"""
+    prog = admin_call("POST", "/api/spd/programs", {"code": "E2E_P2173", "name": "E2E 规则升版病种", "category": "chronic"})
+    _login(page, base_url)
+    _open_page(page, "spdadmin", "平台管理端·运行中枢")
+    page.click(f'button[data-prog-rules="{prog["id"]}"]')
+    include = page.locator("#spd-edit-include")
+    include.locator("button.rule-add").click()
+    row = include.locator(".spd-rule-row").first
+    row.locator("select.rule-field").select_option("age")
+    row.locator("select.rule-op").select_option(">=")
+    row.locator("input.rule-value").fill("35")
+    page.locator('#spd-rules-form input[name="note"]').fill("纳入年龄下限 35 岁")
+    _submit(page, "#spd-rules-form button")
+
+    saved = admin_read(f"/api/spd/programs/{prog['id']}")
+    assert (saved["version"], saved["include_rules"]) == (
+        "v2", [{"field": "age", "op": ">=", "value": 35, "label": ""}]), saved
+    history = admin_read(f"/api/spd/programs/{prog['id']}/versions")
+    assert [(v["version"], v["note"]) for v in history] == [("v1", "纳入年龄下限 35 岁")]   # 修前页面无处可改
+    assert not [p for p in admin_read("/api/spd/programs?limit=100") if p["name"] == "E2E 规则升版病种"
+                and p["id"] != prog["id"]]   # 没有多出第二个病种
+
+
 def test_路径页刚发布的模板_同一页启动路径的下拉里就有(page, base_url, admin_call, admin_read):
     """P2-107：目录（病种 / 团队 / 已发布的量表 / 中心 / 已发布的路径模板）原先首次访问慢专病页面时拉一次、存进全局变量，
     只有运行中枢强制重取——页面之间跳转不重载浏览器，路径页上发布了模板，同一页「启动患者路径」的下拉里没有，

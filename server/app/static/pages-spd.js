@@ -360,6 +360,7 @@ async function renderSpdAdmin() {
             ? '<span class="tag red">未配置</span>' : '<span class="tag green">已配置</span>'}</td>
          <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
          <td><button class="btn secondary" data-prog-edit="${p.id}" data-name="${esc(p.name)}" data-dept="${esc(p.lead_dept || "")}">编辑</button>
+             <button class="btn secondary" data-prog-rules="${p.id}">改规则</button>
              <button class="btn secondary" data-prog-versions="${p.id}">版本</button>
              <button class="btn secondary" data-prog-targets="${p.id}">管理目标</button></td></tr>`)}
       <div id="spd-cfg-detail"></div>`)}
@@ -556,13 +557,14 @@ async function renderSpdAdmin() {
   $("#page-body").onclick = async (e) => {
     const el = (attr) => e.target.closest(`[${attr}]`);
     const progEdit = el("data-prog-edit"), progVersions = el("data-prog-versions"), progTargets = el("data-prog-targets");
+    const progRules = el("data-prog-rules");
     const targetEdit = el("data-target-edit");
     const scalePub = el("data-scale-pub"), scaleOff = el("data-scale-off"), scaleQr = el("data-scale-qr");
     const scaleEdit = el("data-scale-edit"), scaleCopy = el("data-scale-copy");
     const pkgEdit = el("data-pkg-edit"), eduEdit = el("data-edu-edit"), devBind = el("data-dev-bind");
     const dsEdit = el("data-ds-edit"), dsLogs = el("data-ds-logs"), dsSync = el("data-ds-sync");
     if (progEdit) {
-      const form = await spdModal("编辑病种（规则请用下方编辑器新建版本）", [
+      const form = await spdModal("编辑病种（纳入 / 排除规则用该行的「改规则」，保存即升一版）", [
         { name: "name", label: "名称", value: progEdit.dataset.name, required: true },
         { name: "lead_dept", label: "牵头科室", value: progEdit.dataset.dept },
         { name: "description", label: "说明", type: "textarea" },
@@ -573,6 +575,31 @@ async function renderSpdAdmin() {
       body.lead_dept = form.lead_dept || "";
       if (form.description) body.description = form.description;
       return postAction(`/api/spd/programs/${progEdit.dataset.progEdit}`, body, "#spd-program-msg", "PATCH");
+    }
+    // 改已有病种的纳入 / 排除规则（P2-173）：接口「改规则即升版本并留快照」，页面原先没有入口——编辑对话框叫人
+    // 「用下方编辑器新建版本」，下方那两个编辑器挂在「新建病种」表单上：同编码提交 409，换个编码就多出一个病种
+    if (progRules) {
+      const prog = programs.find((x) => x.id === Number(progRules.dataset.progRules));
+      if (!prog) return;
+      const ruleMeta = await spdMeta();
+      $("#spd-cfg-detail").innerHTML = panel(
+        `改纳入 / 排除规则 · ${prog.name}（当前 ${prog.version || "—"}，保存即升一版并留快照）`, `
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+          <div style="flex:1;min-width:280px"><p class="desc">纳入规则（全部满足才入目标池）</p><div id="spd-edit-include"></div></div>
+          <div style="flex:1;min-width:280px"><p class="desc">排除规则（任一满足即排除，优先于纳入）</p><div id="spd-edit-exclude"></div></div>
+        </div>
+        <form class="inline" id="spd-rules-form"><input name="note" placeholder="改动说明（记进版本历史）" style="min-width:260px">
+          <button>保存为新版本</button></form>`);
+      const includeEdit = spdRuleEditor($("#spd-edit-include"), ruleMeta, prog.include_rules || []);
+      const excludeEdit = spdRuleEditor($("#spd-edit-exclude"), ruleMeta, prog.exclude_rules || []);
+      $("#spd-rules-form").onsubmit = (ev) => {
+        ev.preventDefault();
+        return postAction(`/api/spd/programs/${prog.id}`, {
+          include_rules: includeEdit.value(), exclude_rules: excludeEdit.value(),
+          note: new FormData(ev.target).get("note") || "",
+        }, "#spd-program-msg", "PATCH");
+      };
+      return;
     }
     if (progVersions) {
       try {
