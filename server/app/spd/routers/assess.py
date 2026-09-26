@@ -408,12 +408,15 @@ def list_indicators(
         query = query.filter(SpdIndicator.object_type == object_type)
     if active is not None:
         query = query.filter(SpdIndicator.active.is_(active))
-    rows = paginate(query.order_by(SpdIndicator.id), response, offset, limit)
     if program_code:
-        rows = [
-            i for i in rows
-            if not (i.program_codes or []) or program_code in (i.program_codes or [])
+        # 按病种筛挪到分页之前（P2-300）：原先先分页、再在这一页里挑「不限病种或含这个病种」的——总数是没筛的、页里
+        # 少几条，管这个病种的指标排在第一页之后就整个看不见。病种列表是 JSON 列，与团队清单按病种筛（P2-177）同一个做法
+        matched = [
+            iid for iid, codes in query.with_entities(SpdIndicator.id, SpdIndicator.program_codes).all()
+            if not (codes or []) or program_code in (codes or [])
         ]
+        query = query.filter(SpdIndicator.id.in_(matched or [0]))
+    rows = paginate(query.order_by(SpdIndicator.id), response, offset, limit)
     return [_indicator_out(i) for i in rows]
 
 
