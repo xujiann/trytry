@@ -516,6 +516,10 @@ def start_path(
     )
     db.add(instance)
     db.flush()
+    # 进首节点与推进、恢复同一句：节点带阶段就同步到纳管档案（P2-259）。原先只有推进与恢复写，启动不写——实例上是
+    # 「治疗期」，档案还是原来的阶段，按阶段取的管理目标、随访周期、测量值分级都拿错了阶段
+    if first.stage:
+        enrollment.stage = first.stage
     spawn_task(
         db,
         patient_id=enrollment.patient_id,
