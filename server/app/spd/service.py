@@ -79,11 +79,15 @@ def _age_of(birth_date: str) -> int | None:
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
 
-def build_facts(db: Session, patient_id: int, extra: dict | None = None) -> dict:
+def build_facts(db: Session, patient_id: int, extra: dict | None = None, *, answers: dict | None = None) -> dict:
     """汇集一名患者的事实字典，供纳入/排除/转诊规则求值。
 
     诊断取自 `platform.diagnosis_codes`（全部历史就诊 + ICD 父目，理由见那里）；
     指标取最近一次值——那才是"现在控制得怎么样"。
+
+    `extra` 由调用方给定、盖在事实上（档案的风险等级 / 阶段、试算时手填的事实）；`answers` 是问卷答案，**只补库里
+    推不出来的**（P2-368）：原先筛查登记把答案当 `extra` 整个盖上去——种子「糖尿病高危筛查问卷」有一题键名就叫 `age`
+    （「年龄≥45岁」），76 岁的患者年龄成了「是」，按年龄写的纳入规则全不命中；题目键名叫 `diagnosis` 的还会把诊断整个换掉。
     """
     facts: dict = {}
     patient = patient_of(db, patient_id)
@@ -104,6 +108,8 @@ def build_facts(db: Session, patient_id: int, extra: dict | None = None) -> dict
         )
         if latest is not None:
             facts[metric] = latest.value
+    if answers:
+        facts.update({k: v for k, v in answers.items() if v is not None and k not in facts})
     if extra:
         facts.update({k: v for k, v in extra.items() if v is not None})
     return facts
@@ -201,11 +207,13 @@ def scale_program_mismatch(scale: SpdScale, program_code: str, what: str) -> str
     return ""
 
 
-def match_program(db: Session, patient_id: int, program: SpdProgram, extra: dict | None = None):
-    """对单个病种做纳入/排除判定，返回 `spd/rules.py::screen` 的结果 + 使用的规则版本。"""
+def match_program(
+    db: Session, patient_id: int, program: SpdProgram, extra: dict | None = None, *, answers: dict | None = None,
+):
+    """对单个病种做纳入/排除判定，返回 `spd/rules.py::screen` 的结果 + 使用的规则版本。`answers` 见 `build_facts`。"""
     from .rules import screen
 
-    facts = build_facts(db, patient_id, extra)
+    facts = build_facts(db, patient_id, extra, answers=answers)
     result = screen(program.include_rules or [], program.exclude_rules or [], facts)
     result["program_code"] = program.code
     result["rule_version"] = program.version

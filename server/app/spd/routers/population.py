@@ -489,7 +489,10 @@ def create_screening(
         graded = score_scale(scale.items or [], body.answers, scale.scoring or {})
         score, risk, advice = graded["score"], graded["risk_level"] or "low", graded["advice"]
 
-    matched = match_program(db, body.patient_id, program, extra=body.answers)
+    # 问卷答案只补库里推不出来的事实，量表得分记成事实 `score`（P2-368）：原先答案整个盖在事实上（题目键名叫 age 的，
+    # 年龄成了「是」），规则字段表列着的「量表得分」又从来没人填——按得分写的纳入规则永远不命中
+    matched = match_program(db, body.patient_id, program,
+                            extra={"score": score} if body.scale_code else None, answers=body.answers)
     if matched["result"] == "excluded":
         result = "excluded"
     elif matched["result"] == "suspect" or is_suspect_risk(risk):
