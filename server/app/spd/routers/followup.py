@@ -7,6 +7,7 @@
 不挂在 `SpdEnrollment` 上——一个刚做完阑尾切除的患者不该为了被随访而先被
 "纳管"成慢病患者。它们只认患者与场景。
 """
+import zlib
 from datetime import date, timedelta
 from typing import Any
 
@@ -1261,14 +1262,29 @@ class QcPlanIn(BaseModel):
     batch: str = Field(default="", max_length=32)
 
 
+#: 抽样散列的乘法常数（⌊2^32/φ⌋）：相邻的 id 散到 [0, 2^32) 上极匀，按比例抽出的条数与「比例 × 池子」只差一两条
+_QC_HASH = 2654435769
+
+
+def _qc_picked(record_id: int, batch: str, ratio: float) -> bool:
+    """这条随访在这个批次里抽不抽：只看（批次, 随访 id），与这次取到的池子里还有谁无关（P2-141）。
+
+    同一批次重跑，池子里多出几条新办结的随访，原有的随访抽不抽不变、新来的照比例抽；换一个批次换一批人。
+    """
+    seed = zlib.crc32(batch.encode("utf-8"))
+    return ((record_id + seed) * _QC_HASH) % 2**32 < ratio * 2**32
+
+
 @router.post("/qc-samples/plan", response_model=QcPlanOut, dependencies=[Depends(require_roles("director", "doctor"))])
 def plan_qc(
     body: QcPlanIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """按比例或数量制定抽查计划（智能随访端 #11）。
 
-    抽样按 id 取模而不是随机：同一批次重复调用要抽到同一批人，
-    否则质控员刷新一次页面，待抽查清单就换了一批。
+    按比例抽样按（批次, 随访 id）散列而不是随机：同一批次重复调用要抽到同一批人，
+    否则质控员刷新一次页面，待抽查清单就换了一批。原先按「这次取到的清单里排第几」取模：
+    清单按 id 倒序，两次点击之间每办结一条随访，位置整体后移，同一批次就换一批人、越抽越多；
+    步长又取 `int(1 / 比例)`，比例 0.6 抽 100%、0.4 抽 50%（P2-141）。
     """
     query = db.query(SpdFollowupRecord).filter(SpdFollowupRecord.status == "done")
     orgs = visible_org_ids(db, user)
@@ -1277,12 +1293,11 @@ def plan_qc(
     if body.dept:
         query = query.filter(SpdFollowupRecord.dept == body.dept)
     rows = query.order_by(SpdFollowupRecord.id.desc()).limit(2000).all()
+    batch = body.batch or f"QC{clock.today().strftime('%Y%m%d')}"
     if body.count:
         picked = rows[: body.count]
     else:
-        step = max(int(1 / body.ratio), 1)
-        picked = [r for index, r in enumerate(rows) if index % step == 0]
-    batch = body.batch or f"QC{clock.today().strftime('%Y%m%d')}"
+        picked = [r for r in rows if _qc_picked(r.id, batch, body.ratio)]
     existing = {
         rid
         for (rid,) in db.query(SpdQcSample.record_id).filter(SpdQcSample.batch == batch).all()
