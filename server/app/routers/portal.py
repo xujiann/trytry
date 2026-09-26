@@ -1299,16 +1299,17 @@ def portal_slot_orgs(
     号源清单只给最早的 200 个（全县各机构按日期、时段排）：机构一多，后面几天的号、某家医院的门诊在手机上根本
     看不到、约不上。清单接口早就能按机构 / 日期筛，页面一直没有入口；机构下拉又没有现成的居民端来源。
     """
+    # 从机构这头分组：按名称排（下拉按名称找），机构号兜底成全序——翻页（paginate）要求末位键唯一
     query = (
-        db.query(AppointmentSlot.org_id, func.count(AppointmentSlot.id))
+        db.query(Organization.id, Organization.name, func.count(AppointmentSlot.id))
+        .join(AppointmentSlot, AppointmentSlot.org_id == Organization.id)
         .filter(AppointmentSlot.booked < AppointmentSlot.capacity,
                 AppointmentSlot.slot_date >= clock.today().isoformat())
-        .group_by(AppointmentSlot.org_id)
-        .order_by(AppointmentSlot.org_id)
+        .group_by(Organization.id, Organization.name)
+        .order_by(Organization.name, Organization.id)
     )
     rows = paginate(query, response, offset, limit)
-    names = {o.id: o.name for o in db.query(Organization).filter(Organization.id.in_([r[0] for r in rows] or [0]))}
-    return [{"org_id": org_id, "org_name": names.get(org_id, ""), "available": count} for org_id, count in rows]
+    return [{"org_id": org_id, "org_name": name, "available": count} for org_id, name, count in rows]
 
 
 class PortalBookIn(BaseModel):
