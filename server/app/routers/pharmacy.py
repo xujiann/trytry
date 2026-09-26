@@ -99,6 +99,14 @@ def _receive_unspecified(db: Session, org_id: int, drug_code: str, quantity: int
     batch = ensure_present(
         _batch_of(db, org_id, drug_code, UNSPECIFIED_BATCH_NO), "药品批次"
     )
+    if batch.status != "normal":
+        # 「召回后不得再入库」（`recall_batch`），按批次入库与调入早就这样拦（P1-147）。兜底批次召回了还照旧累加，
+        # 汇总长出来的量一片也发不出（发药只取正常批次），缺药预警与采购建议却把它当有货——又一处幽灵库存
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"该药的「{UNSPECIFIED_BATCH_NO}」兜底批次已召回，不得再入库：请按批次入库，报批号与效期",
+        )
     add_amount(db, DrugBatch, batch.id, "quantity", quantity)
 
 
