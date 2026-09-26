@@ -426,6 +426,10 @@ def handover(
         employee = db.get(Employee, body.handler_employee_id)
         if employee is None:
             raise HTTPException(status_code=404, detail="转运人员不存在")
+        # 离职的人不再登记为转运人（P2-306），与派驻、签在期合同同一口径（P1-102）：按人统计的转运工作量把他算进在干活的人里，
+        # 追溯链上的经手人是一个已不在岗、找不到的人
+        if employee.status == "left":
+            raise HTTPException(status_code=409, detail="该员工已离职，不能登记为转运人员")
         waste.handler_employee_id = employee.id
         waste.handler_name = employee.name
     else:

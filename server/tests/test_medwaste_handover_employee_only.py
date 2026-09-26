@@ -40,3 +40,15 @@ def test_只填姓名照旧_两样都没有或姓名全是空格422(client, admi
     for body in ({"handler_name": ""}, {"handler_name": "   "}, {}):
         got = client.post(f"{B}/{_waste(client, admin, world)}/handover", headers=admin, json=body)
         assert got.status_code == 422, (body, got.text)
+
+
+def test_已离职的员工不能登记为转运人员(client, admin, world):
+    """P2-306：与派驻、签在期合同同一口径（P1-102）——离职的人不再算进按人统计的转运工作量、不再当追溯链上的经手人。"""
+    left = client.post("/api/mgmt/employees", headers=admin, json={"org_id": world["org"], "name": "P2306 已离职转运员"})
+    assert left.status_code == 201, left.text
+    changed = client.post(f"/api/mgmt/employees/{left.json()['id']}/changes", headers=admin,
+                          json={"change_type": "leave", "effective_date": "2026-09-01"})
+    assert changed.status_code == 201, changed.text
+    got = client.post(f"{B}/{_waste(client, admin, world)}/handover", headers=admin,
+                      json={"handler_employee_id": left.json()["id"]})
+    assert got.status_code == 409 and got.json()["detail"] == "该员工已离职，不能登记为转运人员", got.text   # 修前 200
