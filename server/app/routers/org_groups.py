@@ -121,7 +121,9 @@ def update_group(group_id: int, body: GroupUpdate, db: Session = Depends(get_db)
         if db.get(Organization, changes["lead_org_id"]) is None:
             raise HTTPException(status_code=404, detail="牵头机构不存在")
     for field, value in changes.items():
-        if value is not None:
+        # 不可空的列（名称 / 备注 / 启用）传 null 照旧不改；可空的牵头机构传 null 即清空（`patchtypes` 的三种输入，P2-351）——
+        # 原先一律跳过 null，牵头机构设上就再也清不掉
+        if value is not None or field == "lead_org_id":
             setattr(group, field, value)
     try:
         db.commit()
