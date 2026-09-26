@@ -284,7 +284,7 @@ async function renderAudit() {
     } catch (err) { setMsg("#audit-msg", err.message, false); }
   };
   $("#audit-export").onclick = () =>
-    downloadCsv("/api/audit/export", `audit-${new Date().toISOString().slice(0, 10)}.ndjson`, "#audit-msg");
+    downloadCsv("/api/audit/export", `audit-${localToday()}.ndjson`, "#audit-msg");
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）
   await draw();
   await drawLogins();
@@ -2718,7 +2718,7 @@ function depositAlertTable(rows) {
 
 async function renderBilling() {
   $("#page-desc").textContent = "收费目录 → 计费明细 → 结算（医保分担）→ 统一支付（多渠道/退款）→ 日终对账差异核查";
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localToday();
   const [items, settlements, stats, payments, batches, depAlerts] = await Promise.all([
     api("/api/billing/charge-items"), api("/api/billing/settlements"), api("/api/billing/stats"),
     api("/api/billing/payments"), api("/api/billing/reconciliation"),

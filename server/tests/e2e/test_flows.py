@@ -3819,3 +3819,19 @@ def test_接种登记从下拉选批次_带出疫苗与机构_登记即扣一支
     assert [(r["batch_no"], r["site"], r["vaccinator"]) for r in mine] == [("E2E-HB-2409", "左上臂三角肌", "E2E接种员")]
     batch = next(b for b in admin_read("/api/vaccine-supply/batches?vaccine_code=E2E-HEPB") if b["id"] == vaccine_seed["id"])
     assert (batch["used_quantity"], batch["remaining"]) == (1, 9)            # 修前库存不扣
+
+
+def test_前端取今天按本地日历_东八区早上8点前不取成昨天(browser, base_url):
+    """P2-228：前端取「今天 / 本月」原先拿 `toISOString()` 截（UTC）——东八区早上 8 点前截到的是昨天，每月 1 日截出
+    上个月；复诊「完成」写进库的实际日期、对账日、报表月份的默认值都跟着错。真浏览器里把时区拨到东八区、时钟拨到
+    10-01 07:30（UTC 还在 09-30），shared.js 的 `localToday()` 得 10-01。"""
+    context = browser.new_context(timezone_id="Asia/Shanghai")
+    try:
+        page = context.new_page()
+        page.clock.install(time="2026-09-30T23:30:00Z")
+        page.goto(base_url)
+        assert page.evaluate("localToday()") == "2026-10-01"
+        assert page.evaluate("localToday().slice(0, 7)") == "2026-10"
+        assert page.evaluate("new Date().toISOString().slice(0, 10)") == "2026-09-30"   # 修前的写法同一时刻取到昨天
+    finally:
+        context.close()

@@ -2253,7 +2253,7 @@ async function renderSpdPath() {
       const qs = new URLSearchParams({ limit: "2000", ...filters }).toString();
       try {
         const d = await api(`/api/spd/tasks-export?${qs}`);
-        spdDownloadCsv(`spd_tasks_${new Date().toISOString().slice(0, 10)}.csv`, d.columns, d.rows);
+        spdDownloadCsv(`spd_tasks_${localToday()}.csv`, d.columns, d.rows);
         setMsg("#spd-task-msg", `已导出 ${d.total} 条（上限 2000，多于此请按状态/类型分次导）`);
       } catch (err) { setMsg("#spd-task-msg", err.message, false); }
       return;
@@ -2693,7 +2693,7 @@ async function renderSpdAssess() {
     if (run) {
       const form = await spdModal("跑一次考核计分", [
         { name: "period", label: "考核周期（如 2026-08 / 2026-Q3 / 2026）",
-          value: new Date().toISOString().slice(0, 7), required: true },
+          value: localToday().slice(0, 7), required: true },
       ]);
       if (!form || !form.period) return;
       return postAction("/api/spd/scores/run",
@@ -3730,7 +3730,7 @@ async function renderSpdManager() {
     if (revisit) {
       const action = revisit.dataset.s;
       const body = { status: action };
-      if (action === "done") body.actual_date = new Date().toISOString().slice(0, 10);
+      if (action === "done") body.actual_date = localToday();
       if (action === "__remind") {
         delete body.status;
         body.remind_status = "contacted";

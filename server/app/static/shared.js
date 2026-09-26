@@ -25,6 +25,18 @@
 const $ = (sel) => document.querySelector(sel);
 
 /**
+ * 本地日历的「今天」`YYYY-MM-DD`（P2-228）；本月取 `localToday().slice(0, 7)`。
+ *
+ * 别拿 `new Date().toISOString()` 截日期：那是 **UTC** 的时间——东八区早上 8 点前截到的是昨天，每月 1 日
+ * 早上 8 点前截出的月份是上个月。录进库里的日期（复诊的实际日期）与表单、报表的默认日期 / 月份都按本地日历，
+ * 与后端 `clock.today()` 同一句。`tests/test_frontend_local_date.py` 盯着。
+ */
+function localToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/**
  * HTML 转义。**所有插进 innerHTML 的用户数据都必须先过这里**（CLAUDE.md §8）。
  *
  * `?? ""` 让 null/undefined 变成空串而不是字面量 "null"；单引号也要转义，

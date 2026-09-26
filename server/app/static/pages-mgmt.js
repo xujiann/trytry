@@ -283,7 +283,7 @@ const ACC_CATEGORIES = { asset: "资产", liability: "负债", net_asset: "净�
 
 async function renderAccounting() {
   $("#page-desc").textContent = "会计科目 + 记账凭证（借贷必平强校验）→ 过账锁定 → 试算平衡表；作废而不删除";
-  const thisMonth = new Date().toISOString().slice(0, 7);
+  const thisMonth = localToday().slice(0, 7);
   const load = (p) => Promise.all([
     api("/api/accounting/subjects"),
     api(`/api/accounting/vouchers?period=${encodeURIComponent(p)}`),
@@ -450,7 +450,7 @@ async function renderAccounting() {
 
 async function renderCost() {
   $("#page-desc").textContent = "科室直接成本归集 → 分摊（行政/医技→临床）→ 诊次成本与床日成本（分母为实际占用床日）";
-  const thisMonth = new Date().toISOString().slice(0, 7);
+  const thisMonth = localToday().slice(0, 7);
   const orgId = Number(localStorage.getItem("medplat_cost_org") || 0);
   const load = (p) => Promise.all([
     api("/api/mgmt/departments"), api(`/api/cost/departments?period=${encodeURIComponent(p)}`),
@@ -653,7 +653,7 @@ async function renderMaterials() {
 
 async function renderAnalytics() {
   $("#page-desc").textContent = "县域就诊率与就医流向 / 运行效率 / 自定义绩效公式与综合报告";
-  const period = localStorage.getItem("medplat_ana_period") || new Date().toISOString().slice(0, 7);
+  const period = localStorage.getItem("medplat_ana_period") || localToday().slice(0, 7);
   const [flow, eff, formulas, vars] = await Promise.all([
     api("/api/analytics/patient-flow"), api(`/api/analytics/efficiency?period=${period}`),
     api("/api/analytics/formulas"), api("/api/analytics/formula-variables")]);
@@ -1088,7 +1088,7 @@ async function renderNotifications() {
 async function renderClinicalIndicators() {
   $("#page-desc").textContent =
     "分子分母与口径随指标一起给出——只看一个百分比既没法核对，也看不出样本量小到不该看";
-  const period = new Date().toISOString().slice(0, 7);
+  const period = localToday().slice(0, 7);
   const [quality, drug] = await Promise.all([
     api("/api/quality/clinical-indicators"),
     api(`/api/analytics/drug-use?period=${period}`),
