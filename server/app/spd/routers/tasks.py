@@ -31,6 +31,8 @@ from ..models import (
     SpdPathInstance,
     SpdPathNode,
     SpdPathTemplate,
+    SpdProgram,
+    SpdTarget,
     SpdTask,
     SpdTeam,
 )
@@ -1107,13 +1109,25 @@ def _finish_task(db: Session, task: SpdTask, user: User, expect: str | None = No
 
 
 def _followup_interval(db: Session, enrollment: SpdEnrollment) -> int:
-    """随访周期取该病种当前阶段的管理目标配置，没配就按 90 天。"""
-    from ..service import target_for
+    """随访周期取该病种当前阶段的管理目标配置（本阶段 → 不分阶段），没配就按 90 天。
 
-    for metric in ("bp_sys", "glucose_fasting", "spo2", "egfr", "ldl", "bmi"):
-        target = target_for(db, enrollment.program_code, enrollment.stage, metric)
-        if target is not None:
-            return target.followup_interval_days
+    不走 `target_for` 的第三级回落（该病种任一阶段）：那一级是给判测量值用的——配了目标就该用上；随访周期却是
+    按阶段定的（治疗期一月一次、稳定期一季一次），拿别的阶段的周期就排错了下次随访。原先还按指标逐个走完三级回落：
+    排在前面的指标只配在别的阶段，也会压过本阶段配了的、排在后面的指标（P2-150）。
+    """
+    program = db.query(SpdProgram).filter(SpdProgram.code == enrollment.program_code).first()
+    if program is None:
+        return 90
+    for stage in dict.fromkeys((enrollment.stage or "", "")):
+        for metric in ("bp_sys", "glucose_fasting", "spo2", "egfr", "ldl", "bmi"):
+            target = (
+                db.query(SpdTarget)
+                .filter(SpdTarget.program_id == program.id, SpdTarget.stage == stage,
+                        SpdTarget.metric == metric, SpdTarget.active.is_(True))
+                .first()
+            )
+            if target is not None:
+                return target.followup_interval_days
     return 90
 
 
