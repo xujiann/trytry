@@ -2525,9 +2525,14 @@ async function renderRecognition() {
 
 async function renderInpatient() {
   $("#page-desc").textContent = "入院登记（床位原子占用）→ 转科/转床 → 医嘱 → 病案首页 → 出院（费用结清校验）";
-  const [wards, beds, admissions, stats] = await Promise.all([
+  const [wards, beds, recent, inHospital, stats] = await Promise.all([
     api("/api/inpatient/wards"), api("/api/inpatient/beds"),
-    api("/api/inpatient/admissions"), api("/api/inpatient/stats")]);
+    api("/api/inpatient/admissions"), api("/api/inpatient/admissions?status=admitted&limit=500"),
+    api("/api/inpatient/stats")]);
+  // 在院的一个不落，其余照旧给最近 200 条（P2-154）：转床、开医嘱、病案首页、出院的按钮都挂在在院那几行上，原先只看
+  // 最新 200 条住院，住得久的患者被新入院的挤出去，页面上没有一个按钮能给他办出院
+  const shown = new Set(inHospital.map((a) => a.id));
+  const admissions = [...inHospital, ...recent.filter((a) => !shown.has(a.id))].sort((x, y) => y.id - x.id);
   const AS = { admitted: ["在院", "orange"], discharged: ["已出院", "green"] };
   const wardName = Object.fromEntries(wards.map((w) => [w.id, w.name]));
   $("#page-body").innerHTML = `

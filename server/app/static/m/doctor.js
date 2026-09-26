@@ -735,7 +735,9 @@ async function loadRound() {
   const picker = $("#round-adm");
   let admissions = [];
   try {
-    admissions = (await api("/api/inpatient/admissions")).filter((a) => a.status === "admitted");
+    // 只取在院的（P2-154）：原先取「最新 200 条住院」再筛在院，住得久的患者被新入院的挤出去，查房选不到他
+    admissions = (await api("/api/inpatient/admissions?status=admitted&limit=500"))
+      .filter((a) => a.status === "admitted");
   } catch (err) {
     $("#round-status").innerHTML = `<p class="empty">${esc(err.message)}</p>`;
     return;

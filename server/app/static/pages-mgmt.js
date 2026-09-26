@@ -19,7 +19,9 @@ const UNIFIED_STATUS = { pending: ["待处理", "orange"], processing: ["处理�
 
 async function renderClinicalDocs() {
   $("#page-desc").textContent = "病程记录 / 护理记录 / 体温单 / 交接班；出院前可做文书完整性自查";
-  const admissions = await api("/api/inpatient/admissions");
+  // 只取在院的（P2-154）：原先不带条件取「最新 200 条住院」再在页面上挑在院的——住得久的患者被新入院的挤出前 200 条，
+  // 从这张选择框里消失，病程、护理、体温单都写不了；最新 200 条碰巧都出院了，页面就说「暂无在院患者」
+  const admissions = await api("/api/inpatient/admissions?status=admitted&limit=500");
   const inHospital = admissions.filter((a) => a.status === "admitted");
   // 存量选择必须落在**这张在院列表里**：出院之后 `inHospital` 不再包含它，
   // 而下面的 <select> 只列在院记录——于是没有一个 option 带 selected，浏览器
