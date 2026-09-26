@@ -1155,6 +1155,15 @@ def create_call_task(
 ):
     """把随访 / 复诊 / 宣教 / 异常处置转为呼叫任务（智能随访端 #10）。"""
     assert_patient_visible(db, user, body.patient_id, resource="spd_call")
+    # 挂的随访记录得是这位患者的（P2-296）：接通的回写按 ref_id 把沟通结果与录音地址追加进那条随访记录——患者甲的
+    # 呼叫任务挂上患者乙的随访，甲的通话内容就进了乙的档案。只查会被回写的随访一类（与 `vaccine_supply` 关联接种
+    # 记录同一口径：不存在 404、不是这位患者的 422）；复诊 / 宣教等只作引用、不回写
+    if body.ref_type == "followup" and body.ref_id is not None:
+        record = db.get(SpdFollowupRecord, body.ref_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="随访记录不存在")
+        if record.patient_id != body.patient_id:
+            raise HTTPException(status_code=422, detail="随访记录不属于该患者")
     phone = body.phone
     if not phone:
         patient = db.get(Patient, body.patient_id)
