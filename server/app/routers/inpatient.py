@@ -271,18 +271,29 @@ def create_admission(
         raise HTTPException(status_code=409, detail="该患者已在院，不可重复入院登记")
     _occupy_bed(db, body.bed_id, body.ward_id)
     # 住院就诊记录入档（Encounter inpatient 类型），进入 360 视图。
-    # 先挂起、与 admission 同一次 commit 落库：抢输的那一路整体回滚，
+    # 与 admission 同一次 commit 落库：抢输的那一路整体回滚，
     # 不会留下"有就诊记录没有住院记录"的半截档案，占的床也一并退回。
-    db.add(
-        Encounter(
-            patient_id=body.patient_id,
-            org_id=ward.org_id,
-            doctor_name=body.doctor_name,
-            encounter_type="inpatient",
-            diagnosis_name=body.diagnosis_name,
-            summary="住院入院登记",
-        )
+    encounter = Encounter(
+        patient_id=body.patient_id,
+        org_id=ward.org_id,
+        doctor_name=body.doctor_name,
+        encounter_type="inpatient",
+        diagnosis_name=body.diagnosis_name,
+        summary="住院入院登记",
     )
+    db.add(encounter)
+    db.flush()
+    # 与门急诊登记同一个事件（P2-370）：事件清单写的是「门急诊/住院就诊登记」，FHIR 入站的住院就诊（走 create_encounter）
+    # 也发，入院登记（含 HL7 A01，同走这里）却不发——开了就诊识别的县，住院患者按病种规则识别不到。订阅者只 add、不 commit，
+    # 与住院记录同一次提交，抢输回滚时一并退掉
+    events.publish(db, events.ENCOUNTER_CREATED, {
+        "encounter_id": encounter.id,
+        "patient_id": encounter.patient_id,
+        "org_id": encounter.org_id,
+        "encounter_type": encounter.encounter_type,
+        "diagnosis_code": "",
+        "diagnosis_name": encounter.diagnosis_name or "",
+    })
     admission = Admission(**body.model_dump(), org_id=ward.org_id, created_by=user.id)
     # 上面那句"已在院"判定是 check-then-act：并发下两路都查不到在院记录都会建单。
     # uq_admission_patient_admitted（部分唯一索引）是兜底，抢输者拿到的
