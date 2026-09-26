@@ -149,12 +149,14 @@ def test_并发特病申报_恰一条待批其余全是同一句409(pg_engine, a
 
     def worker(i):
         with Session() as db:
+            user = db.get(User, actors["user_id"])   # 申报记申报人（P2-399），与双通道同一个写法
             try:
                 receipt = apply_special_disease(
                     SpecialDiseaseCreate(
                         patient_id=pid, disease_name=disease, reason=f"并发{i}"
                     ),
                     db=db,
+                    user=user,
                 )
             except HTTPException as exc:
                 return ("409", exc.status_code, exc.detail)
@@ -208,12 +210,14 @@ def test_并发特病申报_不同病种互不阻塞(pg_engine, actors):
 
     def worker(i):
         with Session() as db:
+            user = db.get(User, actors["user_id"])
             try:
                 receipt = apply_special_disease(
                     SpecialDiseaseCreate(
                         patient_id=pid, disease_name=f"并发病种-{i}", reason="互不阻塞"
                     ),
                     db=db,
+                    user=user,
                 )
             except HTTPException as exc:
                 return ("409", exc.status_code, exc.detail)
