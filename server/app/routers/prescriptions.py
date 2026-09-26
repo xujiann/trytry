@@ -56,7 +56,12 @@ def _age_of(birth_date: str, today: date | None = None) -> int | None:
 
 
 def _patient_groups(db: Session, patient: Patient) -> set[str]:
-    """推断患者所属特殊人群：儿童/老年按 birth_date，孕产妇按在册孕产记录+性别。"""
+    """推断患者所属特殊人群：儿童/老年按 birth_date，孕产妇按在册孕产记录+性别。
+
+    「在册」= 未结案：孕期（registered）与已分娩、产后访视还没结案（delivered，产褥期 / 哺乳期）都算孕产妇。
+    原先只认孕期（P2-120）：刚分娩的产妇开他汀、利伐沙班照样系统审通过，而这两味的说明书哺乳期同样禁用
+    （ACEI / ARB 哺乳期也要权衡）——规则把它们挂在孕产妇上，要的就是药师看一眼。
+    """
     groups: set[str] = set()
     age = _age_of(patient.birth_date)
     if age is not None:
@@ -67,7 +72,7 @@ def _patient_groups(db: Session, patient: Patient) -> set[str]:
     if patient.gender == "女":
         maternal = (
             db.query(MaternalRecord)
-            .filter(MaternalRecord.patient_id == patient.id, MaternalRecord.status == "registered")
+            .filter(MaternalRecord.patient_id == patient.id, MaternalRecord.status != "closed")
             .first()
         )
         if maternal is not None:
