@@ -634,7 +634,10 @@ def print_checkup_report(
         f'<td class="k">体检日期</td><td>{_esc(exam.exam_date) or "—"}</td></tr>'
         f'<tr><td class="k">体检套餐</td><td colspan="3">{_esc(exam.package_name)}</td></tr>'
     )
-    abnormal_tag = '<span class="critical">异常 ↑</span>'
+    # 分项的 `abnormal` 只是个布尔、不带方向（P2-205）：原先一律印「异常 ↑」，血红蛋白 95（参考 115–150）偏低也印成偏高
+    abnormal_tag = '<span class="critical">异常</span>'
+    # 汇总的异常项串是选填的；分项里标了异常而汇总没写时，列出标了异常的分项，别在上面标着异常、这里印「无」
+    abnormal_text = exam.abnormal_items or "、".join(it.item_name for it in items if it.abnormal) or "无"
     rows = "".join(
         f"<tr><td>{i}</td><td>{_esc(it.item_name)}</td><td>{_esc(it.result_value)}</td>"
         f"<td>{_esc(it.unit) or '—'}</td><td>{_esc(it.ref_range) or '—'}</td>"
@@ -652,7 +655,7 @@ def print_checkup_report(
     <table class="items"><thead><tr><th>序号</th><th>项目</th><th>结果</th><th>单位</th>
       <th>参考范围</th><th>提示</th></tr></thead><tbody>{rows}</tbody></table></div>
   <div class="section"><h3>汇总小结</h3><div class="body">{_esc(exam.summary) or "—"}</div></div>
-  <div class="section"><h3>异常项提示</h3><div class="body">{_esc(exam.abnormal_items) or "无"}</div></div>
+  <div class="section"><h3>异常项提示</h3><div class="body">{_esc(abnormal_text)}</div></div>
   {review}"""
     return _render(
         doc_type="checkup_report",
