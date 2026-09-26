@@ -5,8 +5,9 @@
 
 知情告知这块有两个刻意的设计，值得在这里重复一遍：
 
-1. **签署时冻结正文**。模板会随法规修订，但患者签的是签署当时那份措辞。
-   所以签署实例把 body 整段拷进 content，不留模板外键。
+1. **开具时冻结正文**。模板会随法规修订，但患者签的是开具（生成待签）当时那份措辞——
+   开具时就把 body 整段拷进 content，不留模板外键；此后改模板，已开具的（含还没签的）一个字不变。
+   （原先这里与手册都写「签署时冻结」，与实现不符，P2-183 订正；待签期间模板改版 / 停用了还能不能签，见待裁定）
 2. **拒签是一等状态**，不是"没签"。患者有权拒绝，而机构恰恰需要证明
    "告知过、对方拒绝了"——把拒签折叠进 pending，最需要证据的情况反而没了记录。
 """
@@ -188,7 +189,7 @@ def list_templates(
 @router.patch("/consent-templates/{template_id}", response_model=ConsentTemplateOut,
               dependencies=[Depends(require_admin)])
 def update_template(template_id: int, body: TemplateUpdate, db: Session = Depends(get_db)):
-    """改模板只影响**之后**签署的告知书，已签的不受影响（正文已冻结快照）。"""
+    """改模板只影响**之后**开具的告知书，已开具的（含待签的）不受影响（正文在开具时已冻结快照）。"""
     template = db.get(ConsentTemplate, template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="模板不存在")

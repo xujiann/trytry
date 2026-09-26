@@ -66,8 +66,9 @@ def template(client, admin):
 # ---------------- 知情告知书 ----------------
 
 
-def test_签署时冻结正文_模板改了不影响已签(client, admin, doctor, org, patient, template):
-    """患者签的是签署当时那份措辞，模板后续修订不得回溯改变已签文书。"""
+def test_开具时冻结正文_模板改了不影响已开具的(client, admin, doctor, org, patient, template):
+    """患者签的是开具当时那份措辞，模板后续修订不得回溯改变已开具的文书——含还没签的（P2-183：原名「签署时冻结」，
+    与这条用例实际钉住的开具时冻结不符，随文案一并订正）。"""
     consent = client.post(
         "/api/outpatient/consents",
         json={"patient_id": patient["id"], "org_id": org["id"], "consent_type": "treatment",

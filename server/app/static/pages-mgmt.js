@@ -108,7 +108,7 @@ async function renderClinicalDocs() {
 /* ---------------- 手术麻醉 ---------------- */
 
 async function renderSurgery() {
-  $("#page-desc").textContent = "申请 → 审批（申请人不得自批）→ 手术间排班（区间重叠拦截）→ 术中记录；病案首页手术栏自动取术式";
+  $("#page-desc").textContent = "申请 → 审批（申请人不得自批）→ 手术间排班（区间重叠拦截）→ 术中记录；填病案首页时手术栏留空即取已完成的术式（先记术中记录、再填首页）";
   const [requests, rooms, schedules, stats] = await Promise.all([
     api("/api/surgery/requests"), api("/api/surgery/rooms"),
     api("/api/surgery/schedules"), api("/api/surgery/stats")]);
@@ -1358,7 +1358,7 @@ const CONSENT_RELATIONS = { self: "本人", spouse: "配偶", parent: "父母", 
 
 async function renderOutpatientDocs() {
   $("#page-desc").textContent =
-    "知情告知书签署时冻结正文——模板日后修订不会改动已签的那一份；拒签是独立状态，不是「没签」";
+    "知情告知书开具时冻结正文——模板日后修订不会改动已开具的（含待签的）；拒签是独立状态，不是「没签」";
   const encounterId = Number(localStorage.getItem("medplat_od_encounter") || 0);
   const [templates, consents] = await Promise.all([
     // 取全部（不带 active）：停用的模板也要能看到并改回现行版，否则"停错了"就再也捞不回来。
@@ -1461,7 +1461,7 @@ async function renderOutpatientDocs() {
          <td>${c.status === "pending"
            ? `<button data-csign="${c.id}">签署</button><button data-crefuse="${c.id}">拒签</button>` : ""}</td></tr>`)}
     `)}
-    ${panel("告知书模板（改模板只影响此后签署的，已签的正文是冻结快照）", `
+    ${panel("告知书模板（改模板只影响此后开具的，已开具的正文是冻结快照）", `
       ${canTemplate ? `<form class="inline" id="od-tpl-form" style="margin-bottom:8px">
         <select name="consent_type">${Object.entries(CONSENT_TYPES).map(([k, v]) =>
           `<option value="${k}">${esc(v)}</option>`).join("")}</select>
@@ -1478,7 +1478,7 @@ async function renderOutpatientDocs() {
          <td style="white-space:pre-wrap">${esc(t.body) || "—"}</td>
          ${canTemplate ? `<td><button class="btn secondary" data-tpledit="${t.id}">编辑</button></td>` : ""}</tr>`)}
       <p class="desc">停用的模板<b>不能再用来开具</b>（后端 409「请选用现行版本」），
-        但已经签过的那些一个字都不会变——签署时正文就冻结成了快照。
+        但已经开具的那些（含还没签的）一个字都不会变——开具时正文就冻结成了快照。
         所以改模板是"从此往后"，不是"追溯修订"。开具处的下拉只列启用中的（当前 ${
           activeTemplates.length} 个）。</p>
       <p class="msg" id="od-tmsg"></p>`)}

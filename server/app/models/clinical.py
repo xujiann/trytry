@@ -439,9 +439,9 @@ class ShiftHandover(Base):
 class ConsentTemplate(Base):
     """知情告知书模板（浙江省指南 #3）。
 
-    模板与签署实例分开：模板会改（法规更新、律师意见），而**已签署的告知书
-    必须冻结在签署时的措辞上**——患者签的是当时那份文本，不是今天这份。
-    所以签署时把正文整段拷进 `InformedConsent.content`，不留外键引用。
+    模板与告知书实例分开：模板会改（法规更新、律师意见），而**告知书
+    必须冻结在开具时的措辞上**——患者签的是开具当时那份文本，不是今天这份。
+    所以开具（生成待签）时就把正文整段拷进 `InformedConsent.content`，不留外键引用（P2-183 订正原「签署时」的说法）。
     存储上确实重复，但这是知情同意这件事的本质要求。
     """
 
@@ -476,7 +476,7 @@ class InformedConsent(Base):
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
     consent_type: Mapped[str] = mapped_column(String(16), index=True)
     title: Mapped[str] = mapped_column(String(128))
-    # 签署时的正文快照（见 ConsentTemplate 的说明，刻意不做外键引用）
+    # 开具时的正文快照（见 ConsentTemplate 的说明，刻意不做外键引用）
     content: Mapped[str] = mapped_column(String(8192), default="")
     template_version: Mapped[str] = mapped_column(String(16), default="")
     # 关联业务对象：surgery_request / transfusion_request / exam_request / encounter
