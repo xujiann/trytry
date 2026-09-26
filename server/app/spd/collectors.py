@@ -174,11 +174,19 @@ def run_source(db: Session, source: SpdDataSource) -> SpdSyncLog:
     if collector is None:
         success, message = False, f"未注册 {source.source_type} 采集器"
     else:
+        # 每个源的采集圈在自己的保存点里（P2-265）：原先只接住了异常——采集器里撞了库（约束、方言、连接），会话随之
+        # 作废，下面写同步日志那一下就抛 PendingRollbackError，整轮同步连同别的源已采的一起回滚、谁也不留日志，
+        # 与这里「一个数据源挂掉不该拖垮整轮同步」的本意相反。退回保存点只丢这个源的半截写入
+        savepoint = db.begin_nested()
         try:
             rows = collector(db, source)
+            db.flush()   # 采集器挂起的写入在保存点里落，出错也在这一层退
         except Exception as exc:  # noqa: BLE001 - 一个数据源挂掉不该拖垮整轮同步
-            success, message = False, str(exc)[:200]
+            savepoint.rollback()
+            rows, success, message = 0, False, str(exc)[:200]
             logger.exception("数据源采集失败：%s", source.code)
+        else:
+            savepoint.commit()   # 释放保存点（不释放会一层层压在外层事务上，见 concurrency.insert_if_absent）
 
     latency_ms = int((now_naive() - started).total_seconds() * 1000)
     log = SpdSyncLog(
