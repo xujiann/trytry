@@ -5,6 +5,7 @@
 归档任务异常（jobs.access_log_archive / audit_archive）、预警广播无人在线
 兜底（jobs._alert）。
 """
+import httpx
 import pytest
 
 from conftest import reset_database
@@ -31,6 +32,7 @@ def webhook(monkeypatch):
 
     def fake_post(url, json=None, timeout=None):
         calls.append({"url": url, "json": json, "timeout": timeout})
+        return httpx.Response(200)   # 真的 httpx.post 总回一个响应（P2-266 起要看它的状态码）
 
     monkeypatch.setattr(settings, "alert_webhook_url", "http://alert.example/hook")
     monkeypatch.setattr(alerting.httpx, "post", fake_post)
@@ -75,6 +77,14 @@ def test_disabled_means_zero_outcalls(monkeypatch):
     monkeypatch.setattr(alerting.httpx, "post", lambda *a, **k: calls.append(1))
     assert send_alert("k1", "关闭态") is False
     assert calls == []
+
+
+@pytest.mark.parametrize("status", [400, 404, 500, 503])
+def test_webhook回4xx或5xx算没发出去(monkeypatch, status):
+    """P2-266：对端回了错误码就是没收下；原先只认网络异常，webhook 回 500 也返回「已发出」。"""
+    monkeypatch.setattr(settings, "alert_webhook_url", "http://alert.example/hook")
+    monkeypatch.setattr(alerting.httpx, "post", lambda *a, **k: httpx.Response(status))
+    assert send_alert("k_status", "对端拒收") is False
 
 
 def test_post_failure_does_not_raise(monkeypatch):

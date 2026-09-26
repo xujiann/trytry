@@ -573,11 +573,16 @@ def _post_anchor(record: dict) -> str:
     if not egress_url_allowed(url, "MEDPLAT_AUDIT_ANCHOR_WEBHOOK_URL"):
         return "；webhook 未过出网校验，未外发"
     try:
-        httpx.post(url, json=record, timeout=ANCHOR_WEBHOOK_TIMEOUT_SECONDS)
+        resp = httpx.post(url, json=record, timeout=ANCHOR_WEBHOOK_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 - 外发是旁路，失败不打断任务，下轮锚点会再发
         logger.error("[AUDIT] 锚点 webhook 外发失败（本地锚点已写入），本条存证缺异机副本",
                      exc_info=True)
         return "；webhook 外发失败（见日志）"
+    if not resp.is_success:
+        # 对端回 4xx / 5xx 就是没收下（P2-266）：原先只认网络异常，存证端回 500 也记「已外发异机存证」——异机副本
+        # 缺了一条，任务结果里却说有
+        logger.error("[AUDIT] 锚点 webhook 拒收（HTTP %s，本地锚点已写入），本条存证缺异机副本", resp.status_code)
+        return f"；webhook 外发被拒（HTTP {resp.status_code}，见日志）"
     return "；已外发异机存证"
 
 

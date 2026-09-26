@@ -59,9 +59,13 @@ def send_alert(kind: str, message: str) -> bool:
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
     try:
-        httpx.post(url, json=payload, timeout=WEBHOOK_TIMEOUT_SECONDS)
+        resp = httpx.post(url, json=payload, timeout=WEBHOOK_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 - 告警外呼失败绝不打断调用方
         logger.error("告警 webhook 外呼失败（kind=%s），本条告警丢失", kind, exc_info=True)
+        return False
+    if not resp.is_success:
+        # 对端回了 4xx / 5xx 就是没收下（P2-266）：原先只认网络异常，webhook 回 500 也返回「已发出」
+        logger.error("告警 webhook 拒收（kind=%s，HTTP %s），本条告警丢失", kind, resp.status_code)
         return False
     return True
 

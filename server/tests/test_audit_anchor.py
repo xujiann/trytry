@@ -11,6 +11,7 @@
 """
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -119,7 +120,8 @@ def test_配置webhook时外发锚点记录(archive_dir, monkeypatch):
     calls = []
     monkeypatch.setattr(settings, "audit_anchor_webhook_url", "https://anchor.example/hook")
     monkeypatch.setattr(jobs, "egress_url_allowed", lambda url, label: True)
-    monkeypatch.setattr(jobs.httpx, "post", lambda url, json, timeout: calls.append((url, json, timeout)))
+    monkeypatch.setattr(jobs.httpx, "post",
+                        lambda url, json, timeout: calls.append((url, json, timeout)) or httpx.Response(200))
     with SessionLocal() as db:
         _, message = jobs.audit_anchor(db)
     assert "已外发" in message
@@ -144,6 +146,18 @@ def test_webhook外发失败仅log_本地锚点已落盘(archive_dir, monkeypatc
         affected, message = jobs.audit_anchor(db)
     assert affected == 1 and "外发失败" in message
     assert len(_anchor_lines(archive_dir)) == 1, "外发失败不影响本地锚点落盘"
+
+
+def test_webhook回错误码_算外发被拒_不说已外发(archive_dir, monkeypatch):
+    """P2-266：存证端回 500 原先照记「已外发异机存证」——异机副本缺了一条，任务结果里却说有。"""
+    _seed_chain(2)
+    monkeypatch.setattr(settings, "audit_anchor_webhook_url", "https://anchor.example/hook")
+    monkeypatch.setattr(jobs, "egress_url_allowed", lambda url, label: True)
+    monkeypatch.setattr(jobs.httpx, "post", lambda url, json, timeout: httpx.Response(500))
+    with SessionLocal() as db:
+        affected, message = jobs.audit_anchor(db)
+    assert affected == 1 and "外发被拒（HTTP 500" in message and "已外发" not in message
+    assert len(_anchor_lines(archive_dir)) == 1, "外发被拒不影响本地锚点落盘"
 
 
 def test_未配置webhook零外呼(archive_dir, monkeypatch):
