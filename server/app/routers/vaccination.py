@@ -42,7 +42,13 @@ def _effective_contraindications(
     if vaccine_code is not None:
         query = query.filter(VaccineContraindication.vaccine_code == vaccine_code)
     rows = query.order_by(VaccineContraindication.id).all()
-    return [c for c in rows if not c.valid_until or c.valid_until >= today]
+    return [c for c in rows if not _contra_expired(c, today)]
+
+
+def _contra_expired(c: VaccineContraindication, today: str) -> bool:
+    """这条禁忌是否已过有效期。只有**暂时禁忌**有有效期（列注释：「暂时禁忌的有效期末日」）；长期禁忌（过敏史等）
+    须人工解除，带着日期也不按日期失效（P2-236）——原先录入时给长期禁忌顺手填了日期，到那天禁忌就悄悄不拦了。"""
+    return c.contra_type == "temporary" and bool(c.valid_until) and c.valid_until < today
 
 
 class RecordCreate(BaseModel):
@@ -159,7 +165,7 @@ class ContraLift(BaseModel):
 
 
 def _contra_out(c: VaccineContraindication, today: str) -> dict:
-    expired = bool(c.valid_until) and c.valid_until < today
+    expired = _contra_expired(c, today)
     return {
         "id": c.id,
         "patient_id": c.patient_id,
@@ -224,6 +230,12 @@ def add_contraindication(body: ContraCreate, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=422,
             detail="暂时禁忌须给出有效期末日，否则与长期禁忌无异",
+        )
+    # 长期禁忌没有有效期（P2-236）：页面上「有效期末日」一栏两种禁忌共用，给长期禁忌填了日期，原先到那天就不拦了
+    if body.contra_type == "permanent" and body.valid_until is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="长期禁忌没有有效期、须人工解除：有效期末日只给暂时禁忌填",
         )
     data = body.model_dump()
     data["valid_until"] = body.valid_until.isoformat() if body.valid_until else ""
