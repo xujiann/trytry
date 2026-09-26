@@ -257,6 +257,10 @@ def _function_writes(fn, items: dict, aliases: dict, fetched: dict, ctx: dict, d
                 overrides.setdefault(target.value.id, {})[target.slice.value] = _sources(value, items, aliases)
                 if id(node) in top_level:
                     replaced.setdefault(target.value.id, set()).add(target.slice.value)
+    # 第六层：函数里赋给名字的字典字面量（`values: dict = {"reply": body.reply, …}`），给 `move_row(…, **values)` 用
+    literals = {t.id: node.value for node in ast.walk(fn)
+                if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Dict)
+                for t in (node.targets if isinstance(node, ast.Assign) else [node.target]) if isinstance(t, ast.Name)}
     writes = []
 
     def put(srcs, model, column):
@@ -339,6 +343,18 @@ def _function_writes(fn, items: dict, aliases: dict, fetched: dict, ctx: dict, d
                         v = v.right
                     if kw.arg:
                         put(_sources(v, items, aliases), model, kw.arg)
+        # 第六层：条件翻转 `move_row(db, Model, id, 条件, 列=值, **values)`——关键字实参都写进这张表
+        if name == "move_row" and len(node.args) >= 2 and isinstance(node.args[1], ast.Name) \
+                and node.args[1].id in models:
+            for kw in node.keywords:
+                if kw.arg:
+                    put(_sources(kw.value, items, aliases), node.args[1].id, kw.arg)
+                elif isinstance(kw.value, ast.Name) and kw.value.id in literals:
+                    for k, val in zip(literals[kw.value.id].keys, literals[kw.value.id].values):
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                            put(_sources(val, items, aliases), node.args[1].id, k.value)
+                    for key, srcs in overrides.get(kw.value.id, {}).items():
+                        put(srcs, node.args[1].id, key)
         # 第五层：同模块 helper 往下看一层——把实参的来源（入参字段 / 请求体本身 / 取出来的行）带进形参
         if depth == 0 and name in helpers and isinstance(node.func, ast.Name):
             helper = helpers[name]
@@ -377,6 +393,9 @@ def body_column_writes(modules=None) -> list[tuple]:
     同模块取行 helper（返回注解是 ORM 模型）取出来的对象；局部变量转手（`amount = round(body.amount, 2)`、
     `payload = body.model_dump()` 之后 `Model(**payload)`，`payload["k"] = …` 的覆盖照算）；推导式里的列表子项；
     以及把入参字段 / 请求体 / 取出来的行传给同模块 helper，在 helper 里写库（往下看一层）。
+    第六层是条件翻转 `move_row(db, Model, id, 条件, 列=值, …)`（P2-317 起状态迁移的写法）：关键字实参与
+    `**values`（同函数里的字典字面量，连同 `values["k"] = …` 的补写）都会写进这张表——P2-403 / P2-404 把签合同的
+    金额、派单的执行人、咨询的答复改成这么写之后，金额与长度两族一度看不见它们（金额族覆盖面自证 37 → 36）。
     数值、可空、出参约束三族（`test_body_numeric_capacity.py`、`test_body_raw_dict.py` 第二层、
     `test_response_constraint_writers.py`）共用这一份。
     """
@@ -646,6 +665,47 @@ def via_update(i: int, body: FiveIn, db=None):
         "自证:FiveIn.f_values→Encounter.doctor_name(64)",
         "自证:LineIn.note→Encounter.summary(1024)",
         "自证:PayloadIn.summary→Encounter.summary(1024)",
+    ]
+
+
+def test_判据自证_第六层_条件翻转move_row都点名():
+    """`move_row(db, M, id, 条件, 列=值)` 的关键字实参、`**values`（字典字面量，连同包在分支里的 `values["k"] = …`
+    补写）都要点名；带 max_length 的不报。P2-403 / P2-404 把签合同、派单、咨询答复改成这么写之后，金额族的覆盖面
+    自证一度 37 → 36。"""
+    import types
+
+    from pydantic import Field
+
+    snippet = '''
+class SixIn(BaseModel):
+    f_kw: str = ""
+    f_dict: str = ""
+    f_extra: str = ""
+    f_bounded: str = Field(default="", max_length=64)
+
+@router.post("/kw/{i}")
+def via_kw(i: int, body: SixIn, db=None):
+    move_row(db, Encounter, i, Encounter.status == "open", summary=body.f_kw, doctor_name=body.f_bounded)
+
+@router.post("/dict/{i}")
+def via_dict(i: int, body: SixIn, db=None):
+    values: dict = {"summary": body.f_dict}
+    if body.f_extra:
+        values["doctor_name"] = body.f_extra
+    move_row(db, Encounter, i, Encounter.status == "open", **values)
+'''
+
+    class _Router:
+        def __getattr__(self, _name):
+            return lambda *a, **k: (lambda fn: fn)
+
+    mod = types.ModuleType("自证")
+    mod.__dict__.update({"BaseModel": BaseModel, "Field": Field, "router": _Router(), "Encounter": object})
+    exec(compile(snippet, "自证", "exec"), mod.__dict__)
+    assert unbounded_body_strings([("自证", mod, snippet)]) == [
+        "自证:SixIn.f_dict→Encounter.summary(1024)",
+        "自证:SixIn.f_extra→Encounter.doctor_name(64)",
+        "自证:SixIn.f_kw→Encounter.summary(1024)",
     ]
 
 
