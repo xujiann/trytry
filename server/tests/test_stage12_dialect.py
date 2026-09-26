@@ -119,10 +119,15 @@ def test_手写SQL总量可控():
     ORM 没有表达、SQLite 也没有别的开关（驱动与连接串都不收这个参数），且只挂在 SQLite 引擎上，
     换库不受影响（上一条用例里登记在 `DIALECT_GUARDED`）。
 
+    42 → 44（2026-09-26，P1-140 孕产妇一孕一册）：`maternal_records` 的 patient_id 全量唯一换成**部分唯一索引**
+    `uq_maternal_patient_open`（`status <> 'closed'`，同一位妇女同一时刻只有一本在册档案），模型里 `sqlite_where` 与
+    `postgresql_where` 各写一次谓词，故 1 条 = 2 处。与 17 → 25、25 → 41 同一类声明：全量唯一让结案后再孕建不了册，
+    不唯一又放回并发建册的两本册子，只能由部分索引把「在册」这一态钉进库里。
+
     上限只在"增量是部分索引谓词，或按方言分流的连接 / 锁原语"时才允许上调，且要像上面几段一样
     写清是哪几条、为什么不能用 ORM 表达；查询串的增量一律先改写成 ORM。"""
     total = sum(len(list(_raw_sql_snippets(src))) for _p, src in _python_sources())
-    assert total <= 42, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
+    assert total <= 44, f"手写 SQL 已达 {total} 处，超出可控范围，请优先用 ORM 表达"
 
 
 # 金额列的命名族。`debit`/`credit`/`bonus` 是补进来的——阶段十二第一遍只按
