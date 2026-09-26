@@ -163,7 +163,9 @@ def _check_datetime_order(db: Session, rule: QcRule, model) -> list[tuple[int, s
     hits = []
     for row in _scan(_fields_query(db, model, start_field, end_field), model):
         start, end = getattr(row, start_field, None), getattr(row, end_field, None)
-        if start is None or end is None:
+        # 空串也是「没填」（P2-234）：日期多是 String(10)、缺省空串而不是 NULL，原先只认 None，空的结束日期
+        # 按字符串比 `"" < "2026-…"` 恒真——每一条「进行中」的都被判成「结束早于开始」
+        if start is None or end is None or _is_blank(start) or _is_blank(end):
             continue
         if isinstance(start, str) or isinstance(end, str):
             if str(end) < str(start):
