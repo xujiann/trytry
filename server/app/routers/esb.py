@@ -554,7 +554,7 @@ def _claim(db: Session, message: EsbMessage, expect: ColumnElement[bool]) -> boo
     几路都读到「待处理」、都往下走——同一条消息投两次，入站建档走两遍。调度器的任务锁只挡得住两轮定时出站互相重叠。
     抢占不单独提交：行锁持有到这一路消费结束，后到的一路等它提交、再按新状态重判（改到 0 行即抢输），出站投递中途
     崩溃的随事务回滚到抢之前。入站建档那一步会中途提交（`create_patient_idempotent`），之后别处读到的是「处理中」；
-    手工消费不拒「处理中」——崩溃后卡在这一态的消息只有这条出路，要不要改成「处理中超过时限才可重领」待裁定。"""
+    手工消费不拒「处理中」——崩溃后卡在这一态的消息只有这条出路，要不要改成「处理中超过时限才可重领」待裁定（P2-406）。"""
     return move_row(db, EsbMessage, message.id, expect, status="processing")
 
 
