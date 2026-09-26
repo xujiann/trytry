@@ -24,12 +24,14 @@
 
 通道故障不抛给调用方（pay/refund 返回失败结果），唯 query_transactions
 例外：对账拉不到流水时**必须**失败——返回空列表会把当日全部本地单误判成
-"通道缺失"，一份错误的对账单比没有对账单更糟。
+"通道缺失"，一份错误的对账单比没有对账单更糟。应答里没有流水表、流水行缺
+流水号或金额，同样算拉不到（P2-243）。
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -137,15 +139,31 @@ class HttpGatewayPaymentGateway:
             data = resp.json()
         except ValueError as exc:
             raise RuntimeError("支付网关流水应答非 JSON，对账中止") from exc
-        rows = data.get("transactions", []) if isinstance(data, dict) else data
+        # 应答得是一张流水表（P2-243）：原先 `data.get("transactions", [])`——网关回 200 `{"code":"SIGN_ERROR"}` 这种没有
+        # 流水表的应答，当成「当日一笔流水都没有」，对账先删掉当日那张好的对账单、再写一张全是「本地有通道无」的；
+        # `{"transactions": null}` 直接 500；没有金额的行按 0 元比。拿不到可信的流水就中止，与上面几种失败同一句。
+        rows = data.get("transactions") if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            logger.error("[PAY-HTTP] 流水应答没有 transactions 列表 body=%s", resp.text[:200])
+            raise RuntimeError("支付网关流水应答缺少流水列表（transactions），对账中止")
         out: list[dict] = []
         for row in rows:
-            out.append(
-                {
-                    "trade_no": str(row.get("trade_no", "")),
-                    "amount": round(int(row["amount_fen"]) / 100.0, 2)
-                    if "amount_fen" in row
-                    else round(float(row.get("amount", 0.0)), 2),
-                }
-            )
+            parsed = _transaction_row(row)
+            if parsed is None:
+                logger.error("[PAY-HTTP] 流水行缺流水号或金额 row=%s", str(row)[:200])
+                raise RuntimeError("支付网关流水里有缺流水号或金额的行，对账中止")
+            out.append(parsed)
         return out
+
+
+def _transaction_row(row: object) -> dict | None:
+    """一行通道流水 → ``{"trade_no", "amount"}``（元）；缺流水号、缺金额或金额不是有限数的返回 None（P2-243）。"""
+    if not isinstance(row, dict) or not row.get("trade_no"):
+        return None
+    try:
+        amount = int(row["amount_fen"]) / 100.0 if "amount_fen" in row else float(row["amount"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(amount):
+        return None
+    return {"trade_no": str(row["trade_no"]), "amount": round(amount, 2)}
