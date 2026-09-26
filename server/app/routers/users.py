@@ -550,6 +550,9 @@ def change_user_role(
     # 角色变更即吊销既有令牌，避免旧角色令牌继续放行
     target.token_valid_from = utcnow()
     db.commit()
+    # 推了基线就放名额（P2-400，同改密 / 重置口令 / 停用三处，理由见 SessionRegistry.clear_user）：原先这里漏了——
+    # 并发上限为 1 时被调了角色的人旧令牌 401、登出 401、重新登录 409「活跃会话已达上限」，要等满令牌寿命才进得来
+    active_sessions.clear_user(target.username)
     db.refresh(target)
     return target
 

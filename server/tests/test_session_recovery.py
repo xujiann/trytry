@@ -108,6 +108,20 @@ def test_并发上限为1时_停用再启用后用户可登录(client, admin, mo
     assert _login(client, "sr_status", "Passw0rd1").status_code == 200
 
 
+def test_并发上限为1时_调角色后用户可立即重新登录(client, admin, monkeypatch):
+    """P2-400：调角色同样推令牌基线，原先却不放名额——旧令牌 401、登出 401、重新登录 409，要等满令牌寿命。"""
+    monkeypatch.setattr(settings, "session_max_concurrent", 1)
+    user = _make_user(client, admin, "sr_role", role="operator")
+
+    _login(client, "sr_role", "Passw0rd1")
+    assert _login(client, "sr_role", "Passw0rd1").status_code == 409
+
+    assert client.patch(
+        f"/api/users/{user['id']}/role", json={"role": "doctor"}, headers=admin
+    ).status_code == 200
+    assert _login(client, "sr_role", "Passw0rd1").status_code == 200   # 修前 409
+
+
 def test_clear_user只清目标账号_不误伤他人名额(monkeypatch):
     """SessionRegistry.clear_user 的定点断言：别把整张表清了。"""
     from app.state_store import SessionRegistry
