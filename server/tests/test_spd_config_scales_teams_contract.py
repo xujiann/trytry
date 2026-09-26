@@ -54,7 +54,8 @@ def seeded(client):
                    full_name="张医生", role="doctor", org_id=org.id)
         db.add_all([admin, doc])
         db.flush()
-        draft = S.SpdScale(code="ST-D", name="草稿量表", category="risk",
+        # 筛查类：居民自查码只给筛查量表出（P2-366），非筛查类发布后出码 422 由 test_spd_scale_qr_screen_only 盯着
+        draft = S.SpdScale(code="ST-D", name="草稿量表", category="screen",
                            program_code="HTN", version="v1", status="draft",
                            items=[{"key": "q1", "type": "single",
                                    "options": [{"label": "是", "score": 1}]}],
