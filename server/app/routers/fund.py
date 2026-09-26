@@ -547,6 +547,7 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
 
     org_count = len(scorecards)
     weights = []
+    clamped = 0
     for rank, card in enumerate(scorecards, start=1):
         try:
             weight = evaluate(
@@ -555,7 +556,9 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
             )
         except FormulaError as exc:
             raise HTTPException(status_code=422, detail=f"分配公式求值失败：{exc}") from None
-        # 负权重没有意义（分负数的钱），按 0 处理并在返回里说明
+        # 负权重没有意义（分负数的钱），按 0 处理并在返回里说明（P2-191：原先只按 0 处理、从不说明——
+        # 明细里那几家份额为 0，看的人不知道是公式算出了负数，还当是分数为 0）
+        clamped += weight < 0
         weights.append((card, rank, max(weight, 0.0)))
     weight_sum = sum(w for _, _, w in weights)
     if weight_sum <= 0:
@@ -616,6 +619,8 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     settlement.score_basis = (
         f"volume_cap={body.volume_cap},include_auto_passed={body.include_auto_passed},"
         f"at={utcnow().strftime('%Y-%m-%d %H:%M')}"
+        # 只写家数：列宽 128，逐家列出会在生产库上超长报错；是哪几家看明细里份额为 0 的
+        + (f"；公式算出负权重、按 0 计 {clamped} 家" if clamped else "")
     )
     # 删除 + n 条插入 + 结算单两个字段必须**同一次提交**：整套快照要么全落库、
     # 要么全不落。所以这里不能逐行 insert_or_conflict（它每行各自 commit，

@@ -351,3 +351,25 @@ def test_结余无法整除时分配额仍分毫等于结余(client, admin, dire
         rows = client.get(f"/api/fund/pools/{pid}/distributions", headers=director).json()
         got = round(sum(r["amount"] for r in rows), 2)
         assert got == round(balance, 2), f"结余 {balance} 分出 {got}，差 {round(balance-got,2)}"
+
+
+def test_公式算出负权重按0计并在快照参数里说明(client, director, business):
+    """P2-191：分配说明写「负权重按 0 处理并在返回里说明」，原先只按 0 处理、从不说明——明细里那几家份额为 0，
+    看的人不知道是公式算出了负数。另建一个同年度的职工池，不动上面那个池的分配快照。"""
+    year = _scored_pool_year()
+    pool = client.post("/api/fund/pools", json={"year": year, "insurance_type": "employee",
+                                                "total_amount": 500000.0}, headers=director).json()
+    client.post(f"/api/fund/pools/{pool['id']}/periods",
+                json={"period": f"{year}-06", "actual_amount": 400000}, headers=director)
+    client.post(f"/api/fund/pools/{pool['id']}/settle", json={}, headers=director)
+    scores = sorted({c["score"] for c in client.get(f"/api/performance/orgs?period={year}",
+                                                   headers=director).json()["scorecards"]})
+    assert len(scores) >= 2, "夹具没造出有差异的得分，前提变了"
+    threshold = (scores[0] + scores[-1]) / 2
+    below = sum(1 for c in client.get(f"/api/performance/orgs?period={year}",
+                                      headers=director).json()["scorecards"] if c["score"] < threshold)
+    resp = client.post(f"/api/fund/pools/{pool['id']}/distribute",
+                       json={"formula_expr": f"score - {threshold}"}, headers=director)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["score_basis"].endswith(f"；公式算出负权重、按 0 计 {below} 家")   # 修前没有这一句
+
