@@ -1109,8 +1109,20 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
         results.append(record)
 
     results.sort(key=lambda r: r.total_score, reverse=True)
-    for index, record in enumerate(results, start=1):
+    # 名次按本方案本期的全部分数排（P2-298）：带 object_ids 的局部重跑原先只在这几个对象里排、写回——重跑的那个
+    # 记成第 1，没重跑的第 1 名还是第 1，同一期出两个第 1；方案层级下已不在考核范围里的旧分数行同理。
+    # 并列总分按对象编号排，与重跑了哪几个无关
+    db.flush()
+    everyone = (
+        db.query(SpdScore)
+        .filter(SpdScore.plan_id == plan.id, SpdScore.period == body.period,
+                SpdScore.object_type == plan.object_type)
+        .all()
+    )
+    everyone.sort(key=lambda r: (-(r.total_score or 0), r.object_id))
+    for index, record in enumerate(everyone, start=1):
         record.rank = index
+    results.sort(key=lambda r: r.rank)
     db.commit()
     return {
         "plan": _plan_out(plan), "period": body.period, "scored": len(results),
