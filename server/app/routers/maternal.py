@@ -155,6 +155,10 @@ def add_visit(record_id: int, body: VisitCreate, db: Session = Depends(get_db)):
     record = db.get(MaternalRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="孕产妇档案不存在")
+    # 已结案的不再收访视（P2-124），与分娩登记同一道口子：一孕一册之后同一位妇女名下有上一胎结案的旧档案，
+    # 按旧档案号记的产检会挂到上一胎名下（页面上结案的档案本就没有访视按钮）
+    if record.status == "closed":
+        raise HTTPException(status_code=409, detail="档案已结案，不可记录访视")
     if body.visit_type == "postpartum" and record.status == "registered":
         record.status = "delivered"
     visit = MaternalVisit(record_id=record_id, **body.model_dump())

@@ -96,6 +96,29 @@ def test_已分娩未结案又来建册_409说清楚先结案_不把旧档案当
     assert fresh.status_code == 201 and fresh.json()["id"] != record["id"], fresh.text
 
 
+def test_已结案的档案不再收访视_产检不会挂到上一胎名下(client, admin):
+    """P2-124：分娩登记早就拦结案的档案，访视没拦——一孕一册之后，按上一胎的旧档案号记的产检会挂到上一胎名下。"""
+    from app.database import SessionLocal
+    from app.models import MaternalVisit
+
+    patient = _woman(client, admin, "一孕一册结案不收访视")
+    record = _register(client, admin, patient).json()
+    _deliver_and_close(client, admin, record["id"])
+    with SessionLocal() as db:
+        before = db.query(MaternalVisit).filter_by(record_id=record["id"]).count()
+
+    for visit_type in ("prenatal", "postpartum"):
+        resp = client.post(f"/api/maternal/records/{record['id']}/visits", headers=admin,
+                           json={"visit_type": visit_type, "gest_week": 20 if visit_type == "prenatal" else None,
+                                 "bp": "150/95"})
+        assert resp.status_code == 409, resp.text   # 修前 201，还把结案的档案标成高危
+        assert resp.json()["detail"] == "档案已结案，不可记录访视"
+    with SessionLocal() as db:
+        assert db.query(MaternalVisit).filter_by(record_id=record["id"]).count() == before
+    (row,) = [r for r in client.get("/api/maternal/records", headers=admin).json() if r["id"] == record["id"]]
+    assert (row["status"], row["high_risk"]) == ("closed", False)
+
+
 # ================================================================ 防拆卸
 
 
