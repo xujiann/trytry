@@ -11,11 +11,12 @@
 """
 from copy import deepcopy
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -153,6 +154,8 @@ class CandidateOut(BaseModel):
 class DistributeOut(BaseModel):
     distributed: int
     not_found: int
+    #: 已被团队成员认领、这次没动的目标池记录编号（P2-251）；没有跳过的不出这个键，原有回执逐字节不变
+    skipped_claimed: list[int] = []
 
 
 class EnrollmentOut(BaseModel):
@@ -765,7 +768,7 @@ class DistributeIn(BaseModel):
     org_id: int | None = None
 
 
-@router.post("/candidates/distribute", response_model=DistributeOut,
+@router.post("/candidates/distribute", response_model=DistributeOut, response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
 def distribute_candidates(
     body: DistributeIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -796,17 +799,32 @@ def distribute_candidates(
         state = unusable_user(db, body.assigned_user_id)
         if state:
             raise HTTPException(status_code=404, detail=f"指派人{state}")
-    for candidate in rows:
-        if body.team_id is not None:
-            candidate.team_id = body.team_id
-        if body.assigned_user_id is not None:
-            candidate.assigned_user_id = body.assigned_user_id
-        if body.org_id is not None:
-            candidate.org_id = body.org_id
-        if candidate.status == "suspect":
-            candidate.status = "target"
+    # 已被认领的不动（P2-251）：分发页写着「已被认领的患者不会被覆盖」，原先照样把团队、责任人、机构改掉——团队成员刚
+    # 认领的患者被静默改给别人，认领时间还留着。判定压进 UPDATE（`claimed_at IS NULL`）：载入整批之后才被认领的同样不覆盖
+    values: dict[str, Any] = {"status": case((SpdCandidate.status == "suspect", "target"), else_=SpdCandidate.status)}
+    if body.team_id is not None:
+        values["team_id"] = body.team_id
+    if body.assigned_user_id is not None:
+        values["assigned_user_id"] = body.assigned_user_id
+    if body.org_id is not None:
+        values["org_id"] = body.org_id
+    distributed, claimed = 0, []
+    for candidate in sorted(rows, key=lambda c: c.id):
+        moved = db.execute(
+            update(SpdCandidate)
+            .where(SpdCandidate.id == candidate.id, SpdCandidate.claimed_at.is_(None))
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if cast(CursorResult, moved).rowcount:
+            distributed += 1
+        else:
+            claimed.append(candidate.id)
     db.commit()
-    return {"distributed": len(rows), "not_found": len(body.candidate_ids) - len(rows)}
+    out: dict[str, Any] = {"distributed": distributed, "not_found": len(body.candidate_ids) - len(rows)}
+    if claimed:
+        out["skipped_claimed"] = claimed
+    return out
 
 
 @router.post("/candidates/{candidate_id}/claim", response_model=CandidateOut,

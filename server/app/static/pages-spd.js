@@ -1052,12 +1052,20 @@ async function renderSpdCenter() {
          <td>${t.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
          <td><button class="btn secondary" data-crt="${t.id}" data-active="${t.active ? 0 : 1}">
            ${t.active ? "停用" : "启用"}</button></td></tr>`)}`)}`;
-  $("#spd-dist-form").onsubmit = (e) => {
+  $("#spd-dist-form").onsubmit = async (e) => {
     e.preventDefault();
     const body = formJson(e.target, ["team_id", "assigned_user_id"]);
     body.candidate_ids = String(body.candidate_ids || "").split(/[，,\s]+/)
       .filter(Boolean).map(Number);
-    return postAction("/api/spd/candidates/distribute", body, "#spd-dist-msg");
+    // 回执说清分了几条、哪些已被认领没动（P2-251）：原先整页重画、什么也不说，已被认领的也被静默改掉
+    try {
+      const r = await api("/api/spd/candidates/distribute", { method: "POST", body: JSON.stringify(body) });
+      await route();
+      const skipped = r.skipped_claimed || [];
+      setMsg("#spd-dist-msg", `已分发 ${r.distributed} 条`
+        + (skipped.length ? `；${skipped.length} 条已被认领、未改动（#${skipped.join("、#")}）` : "")
+        + (r.not_found ? `；${r.not_found} 个编号不存在` : ""));
+    } catch (err) { setMsg("#spd-dist-msg", err.message, false); }
   };
   $("#spd-crt-form").onsubmit = (e) => {
     e.preventDefault();
