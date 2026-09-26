@@ -32,6 +32,7 @@ from starlette.concurrency import run_in_threadpool
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .monitor import metrics as monitor_metrics
+from .monitor import register_routes as monitor_register_routes
 from .models import User
 from .routers import (
     access_logs,
@@ -918,3 +919,7 @@ def mobile_doctor():
 def print_verify_page():
     """打印件扫码验真页（ADR-0015）：公开页面，令牌在 URL `#` 片段里由页内 JS 读取。"""
     return FileResponse(_STATIC_DIR / "verify.html")
+
+
+# 监控按模块计数只认路由表里的模块（P2-341）——必须放在挂完全部路由之后
+monitor_register_routes(app.routes)

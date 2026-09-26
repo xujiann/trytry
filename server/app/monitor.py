@@ -60,7 +60,7 @@ class ApiMetrics:
         self.errors: deque = deque(maxlen=SAMPLE_SIZE)
 
     def record(self, method: str, path: str, status: int, duration_ms: float) -> None:
-        module = _module_of(path)
+        module = _bucket(path)
         _record_cluster(module, status, duration_ms)
         with self._lock:
             self.total += 1
@@ -115,6 +115,53 @@ def _module_of(path: str) -> str:
     if parts[1] in ("mgmt", "portal") and len(parts) > 2:
         return f"{parts[1]}/{parts[2]}"
     return parts[1]
+
+
+#: 路由表里没有的模块并成这一格（P2-341）
+UNMATCHED = "(未匹配路由)"
+#: 静态资源挂载点（见 main.py 的 `app.mount("/static", ...)`）：文件名不各占一格
+STATIC_PREFIX = "/static"
+#: 路由表里的全部模块，main.py 挂完全部路由后由 `register_routes` 登记。
+#: 空集合即尚未登记（只 import 本模块、直接调 `record` 的单测）：按原样切路径
+_known_modules: frozenset[str] = frozenset()
+
+
+def register_routes(routes) -> None:
+    """登记路由表里的全部模块（main.py 挂完全部路由后调一次，P2-341）。
+
+    FastAPI 的 `include_router` 不把子路由摊平进 `app.routes`，而是包一层带 `original_router` 的对象——
+    与 `routers/rbac.py::_iter_api_routes` 同一个走法（那一个只要接口路由，这里连 `/docs`、`/` 这类固定路由一起要）。
+    """
+    global _known_modules
+    found: set[str] = set()
+    stack = list(routes)
+    while stack:
+        route = stack.pop()
+        nested = getattr(route, "original_router", None)
+        if nested is not None:
+            stack.extend(nested.routes)
+        elif isinstance(getattr(route, "path", None), str):
+            found.add(_module_of(route.path))
+    _known_modules = frozenset(found)
+
+
+def _bucket(path: str) -> str:
+    """计数用的模块格：只认路由表里有的模块（P2-341）。
+
+    原先直接拿 `_module_of(path)` 当键：客户端送什么路径就开什么格——`/api` 下第二段随便写、`/api` 外整条路径原样，
+    没匹配到任何路由的请求（含未登录的 404）照样各开一格。600 个 `/api/zz{i}` 与 `/nope-{i}` 就是 600 个新键：进程内
+    计数器只增不减，配了 Redis 还落进跨重启的 hash、每次打开监控台 HGETALL 全量读回，top_modules 被垃圾路径占满。
+
+    - 路由表里有的模块照旧（`/api/organizations/999999` 这种模块对、路径错的 404 仍归 organizations）；
+    - 静态资源并成一格 `/static`（原先每个文件一格，不存在的文件名也各开一格）；
+    - 其余并成一格 `UNMATCHED`。
+    """
+    if path == STATIC_PREFIX or path.startswith(STATIC_PREFIX + "/"):
+        return STATIC_PREFIX
+    module = _module_of(path)
+    if not _known_modules or module in _known_modules:
+        return module
+    return UNMATCHED
 
 
 def _now() -> str:
