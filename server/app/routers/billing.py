@@ -548,20 +548,19 @@ class DepositAlertOut(BaseModel):
     gap: float
 
 
-def deposit_balance(db: Session, admission_id: int) -> float:
-    """押金余额 = 预交 - 退费 - 结算冲抵（流水现算）。"""
-    total = (
-        db.query(
-            func.coalesce(
-                func.sum(
-                    case((Deposit.deposit_type == "prepay", Deposit.amount), else_=-Deposit.amount)
-                ),
-                0.0,
-            )
+def deposit_balance(db: Session, admission_id: int, up_to_id: int | None = None) -> float:
+    """押金余额 = 预交 - 退费 - 结算冲抵（流水现算）。给了 `up_to_id` 即记到这一笔为止的余额（台账的「当时余额」）。"""
+    query = db.query(
+        func.coalesce(
+            func.sum(
+                case((Deposit.deposit_type == "prepay", Deposit.amount), else_=-Deposit.amount)
+            ),
+            0.0,
         )
-        .filter(Deposit.admission_id == admission_id)
-        .scalar()
-    )
+    ).filter(Deposit.admission_id == admission_id)
+    if up_to_id is not None:
+        query = query.filter(Deposit.id <= up_to_id)
+    total = query.scalar()
     return round(total or 0.0, 2)
 
 
@@ -702,14 +701,22 @@ def list_deposits(
         raise HTTPException(status_code=404, detail="住院记录不存在")
     # 押金流水挂在住院记录上，等同患者维度数据：按可见性判定并留痕
     assert_patient_visible(db, user, admission.patient_id, resource="deposit")
-    balance = deposit_balance(db, admission_id)
     rows = paginate(
         db.query(Deposit)
         .filter(Deposit.admission_id == admission_id)
         .order_by(Deposit.id.desc()),
         response, offset, limit,
     )
-    return [_deposit_out(d, balance) for d in rows]
+    # 每行的余额是**记这一笔之后**的余额（P2-262）：页面列名「当时余额」，预交 / 退费接口回执里的 balance 也是这笔之后的
+    # 余额；原先每行都印当前余额，翻看历史流水看不出每一笔之后还剩多少。本页第一行（最新）之后的余额按编号现算一次，
+    # 往下逐笔倒推——之后新记的流水不影响本页
+    out = []
+    if rows:
+        running = deposit_balance(db, admission_id, up_to_id=rows[0].id)
+        for d in rows:
+            out.append(_deposit_out(d, running))
+            running = round(running - (d.amount if d.deposit_type == "prepay" else -d.amount), 2)
+    return out
 
 
 @router.get("/deposits/balance", response_model=DepositBalanceOut)

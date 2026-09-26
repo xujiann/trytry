@@ -243,3 +243,20 @@ def test_退费金额多于两位小数_422且余额不动(client, admin, ward):
     ok = client.post("/api/billing/deposits/refund", headers=admin,
                      json={"admission_id": admission["id"], "amount": 12.34})
     assert ok.status_code == 201 and ok.json()["balance"] == 487.66
+
+
+def test_台账每行印的是记这一笔之后的余额_翻页照样对(client, admin, ward):
+    """P2-262：押金台账的列名是「当时余额」，预交 / 退费回执里的 balance 也是这一笔之后的余额；列表原先每行都印当前余额。"""
+    admission = _admit(client, admin, ward)
+    for path, amount in (("/api/billing/deposits", 500), ("/api/billing/deposits/refund", 120),
+                         ("/api/billing/deposits", 300), ("/api/billing/deposits/refund", 80.5)):
+        body = {"admission_id": admission["id"], "amount": amount}
+        if path.endswith("/deposits"):
+            body["method"] = "cash"
+        assert client.post(path, headers=admin, json=body).status_code == 201
+    rows = client.get("/api/billing/deposits", params={"admission_id": admission["id"]}, headers=admin).json()
+    assert [(r["deposit_type"], r["balance"]) for r in rows] == [
+        ("refund", 599.5), ("prepay", 680.0), ("refund", 380.0), ("prepay", 500.0)]   # 修前四行都是 599.5
+    second_page = client.get("/api/billing/deposits", headers=admin,
+                             params={"admission_id": admission["id"], "offset": 2, "limit": 2}).json()
+    assert [r["balance"] for r in second_page] == [380.0, 500.0]
