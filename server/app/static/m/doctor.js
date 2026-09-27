@@ -636,8 +636,10 @@ let diseaseTypes = [];
 
 async function loadChronic() {
   try {
+    // 病种目录取全部（含已停用的）（P2-458）：停用是「不再新增」，「已建的档案不受影响、仍按原规则随访」（慢病页原话）——原先只取启用中的，
+    // 停用病种的档案一选上就画不出指标框、提示「该病种未配置分级指标」，医生只能登一条没有指标的随访
     const [types, list] = await Promise.all([
-      api("/api/chronic/disease-types?active=true"), api("/api/chronic?limit=100"),
+      api("/api/chronic/disease-types"), api("/api/chronic?limit=100"),
     ]);
     diseaseTypes = types;
     const byCode = Object.fromEntries(types.map((t) => [t.code, t]));
