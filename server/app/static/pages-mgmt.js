@@ -1723,10 +1723,13 @@ async function renderOrgGroups() {
     const orgId = new FormData(e.target).get("org_id");
     try {
       const rows = await api(`/api/org-groups/of-org/${encodeURIComponent(orgId)}`);
+      // of-org 的行按设计不带成员数（见后端 OrgGroupOut），成员数从本页已取的分组列表按 id 对上；
+      // 列表只取前 200 个分组，对不上的显示「—」，不显示 undefined
+      const memberCount = Object.fromEntries(groups.map((x) => [x.id, x.member_count]));
       $("#og-oforg-result").innerHTML = rows.length
         ? table(["名称", "类型", "牵头机构", "成员数", "状态"], rows, (g) =>
             `<tr><td><b>${esc(g.name)}</b></td><td>${esc(g.group_type_name)}</td>
-             <td>${esc(orgName[g.lead_org_id] || "—")}</td><td>${g.member_count}</td>
+             <td>${esc(orgName[g.lead_org_id] || "—")}</td><td>${esc(memberCount[g.id] ?? "—")}</td>
              <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td></tr>`)
         : `<p class="empty">这家机构不在任何分组里——转诊、调拨与按分组的统计口径都不会把它算进去。</p>`;
       setMsg("#og-oforg-msg", "", true);
