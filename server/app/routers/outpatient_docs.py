@@ -271,6 +271,10 @@ def create_consent(
             raise HTTPException(status_code=404, detail="关联的就诊记录不存在")
         if encounter.patient_id != body.patient_id:
             raise HTTPException(status_code=422, detail="告知书的患者与关联的就诊不是同一人")
+        # 就诊还得是开告知书这家机构的（P2-452）：原先只查了是同一个人，乙院医生开一份告知书挂到甲院的就诊上照收——
+        # 甲院这次就诊的完整度多出一份「待签署」，甲院既列不出（清单按本机构收口）也签不了（归属校验 403），永远清不掉
+        if encounter.org_id != body.org_id:
+            raise HTTPException(status_code=422, detail="告知书的开具机构与关联的就诊机构不是同一家")
 
     # 纯空白的标题 / 正文当没给（P2-248）：两个字段可选（用模板时不给），挡不了空白的只能在这里判——原先「   」
     # 过了下面「须自带标题与正文」那一句，存进一张空白告知书让患者签；用模板时空白标题还顶掉了模板的标题
