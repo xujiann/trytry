@@ -28,6 +28,15 @@
 记下来是因为：变异验证第一次没红，不是规则失效，是**我的变异造了一个规则本就
 不该管的形状**——把这种"没红"当成"规则不好使"去放宽判据，才是真会出事的那步。
 
+**第二处盲区（2026-09-27 实测，P2-619，补了一半）**：把数字提成模块常量——
+`.limit(CRITICAL_LIST_LIMIT)`，常量在文件顶上 `= 100`——截断得与 `.limit(100)`
+一模一样，可正则只认字面量，端点就从计数里消失了。危急值清单（P1-166）、规则总目录
+（P2-230）就是这么「还掉」的；质控的 L-J 图与测定清单（P2-157）则是上限挪进了同模块
+的帮手函数。计数 91 → 87、基线没动，棘轮白白松了 4 格——谁再新加 4 个截断端点也不会红。
+现在认**模块顶层赋成整数字面量的名字**；帮手函数里的上限（`labqc._latest_measurements`、
+`todos` 的五个预览、`encounters._section` 等 11 处）仍看不见——那一类多是写明了的
+「最近 N 条」预览口径，跨函数追要调用图，误报会比真报多，按上面「判据窄一点」的取舍不追。
+
 **判据会误报，误报率是量出来的：26 个里 3 个。** 第二批逐个人工核对 portal 两个
 模块的 26 处，发现 3 处的 `.limit(N)` 其实在**嵌套子查询**上——那是刻意的业务上限，
 不是分页缺陷，**照着这条规则去"迁"反而会改错语义**：
@@ -79,7 +88,10 @@ import warnings
 #: → 97（同日流程待办的角色筛挪进查询，P1-82）
 #: → 92（同日第六批切完 5 个纯分页：住院医嘱 / 执行记录、门诊处置 / 护理、慢专病转诊超时预警）
 #: → 91（2026-09-25 传染病报告卡导出去掉上限，P1-113：与死因报告卡同为法定上报口径，P1-50 当时漏了这一份）
-BASELINE_SILENT_TRUNCATION = 91
+#: → 90（2026-09-27 P2-619：判据认出提成模块常量的上限——实测一度掉到 87，其中 4 格是盲区不是修好：危急值清单、
+#:   规则总目录回到计数里，审计日志归档导出也被认出来（它是批读游标、读完全量，记进下方误报名单，照样计数）；
+#:   L-J 图与测定清单的上限在帮手函数里，仍看不见。87 + 3 = 90，基线收紧到实测值，不留空档）
+BASELINE_SILENT_TRUNCATION = 90
 
 ROUTER_DIRS = (
     (os.path.join(os.path.dirname(__file__), "..", "app", "routers"), ""),
@@ -125,23 +137,52 @@ def _code(fn: ast.FunctionDef) -> str:
     return astcode.code(fn)
 
 
+def _int_constants(tree: ast.Module) -> set[str]:
+    """模块顶层赋成整数字面量的名字（`CRITICAL_LIST_LIMIT = 100` 这类，P2-619）。"""
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if isinstance(value, ast.Constant) and type(value.value) is int:
+            names |= {t.id for t in targets if isinstance(t, ast.Name)}
+    return names
+
+
+def _hard_limit(body: str, constants: set[str]) -> bool:
+    """`.limit(数字)`，或 `.limit(模块常量)`——两者截断得一模一样（P2-619：原先只认前者）。"""
+    if re.search(r"\.limit\(\d+\)", body):
+        return True
+    return any(name in constants for name in re.findall(r"\.limit\(([A-Za-z_]\w*)\)", body))
+
+
+def truncating_in(name: str, tree: ast.Module) -> set[str]:
+    """一个路由文件里「硬编码上限、没用 `paginate`、也没有翻页参数」的 GET 端点。"""
+    constants = _int_constants(tree)
+    found = set()
+    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
+        if ".get(" not in decs:
+            continue
+        body = _code(fn)
+        if "paginate(" in body:
+            continue
+        if not _hard_limit(body, constants):
+            continue
+        if {"offset", "page", "cursor"} & {a.arg for a in fn.args.args}:
+            continue
+        found.add(f"{name}:{fn.name}")
+    return found
+
+
 def silently_truncating_endpoints() -> set[str]:
-    """GET 端点里「硬编码 `.limit(数字)`、没用 `paginate`、也没有翻页参数」的。"""
+    """GET 端点里「硬编码 `.limit(数字或模块常量)`、没用 `paginate`、也没有翻页参数」的。"""
     found = set()
     for name, path in _router_files():
-        tree = ast.parse(open(path, encoding="utf-8").read())
-        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-            decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
-            if ".get(" not in decs:
-                continue
-            body = _code(fn)
-            if "paginate(" in body:
-                continue
-            if not re.search(r"\.limit\(\d+\)", body):
-                continue
-            if {"offset", "page", "cursor"} & {a.arg for a in fn.args.args}:
-                continue
-            found.add(f"{name}:{fn.name}")
+        found |= truncating_in(name, ast.parse(open(path, encoding="utf-8").read()))
     return found
 
 
@@ -434,6 +475,8 @@ NESTED_CAP_FALSE_POSITIVES = {
     # 第六批人工核出的同类：卫健工作台是一屏指标，`.limit(20)` 在「考核结果排名」那一栏上，
     # 是前 20 名的展示上限，不是列表分页（排名全表另有 `/api/spd/scores` 分页可翻）
     "spd/workbench.py:health_commission_workbench",
+    # P2-619 认出模块常量后多出的一条：审计日志归档导出按 id 游标每批 `AUDIT_EXPORT_BATCH` 条读完全量，不截断
+    "users.py:export_audit_logs",
 }
 
 
@@ -506,3 +549,26 @@ def test_docstring里的示例不算代码():
     assert "record_qc_summary" not in {
         e.split(":")[1] for e in silently_truncating_endpoints()
     }
+
+
+def test_上限提成模块常量也认得出():
+    """自证（P2-619）：`.limit(CRITICAL_LIST_LIMIT)`（文件顶上 `= 100`）与 `.limit(100)` 截断得一模一样。
+
+    正则只认字面量时，把数字提成常量端点就从计数里消失——危急值清单、规则总目录就是这么「还掉」的，
+    计数 91 → 87、基线没动，棘轮白白松了几格。拿真实的两处钉住，再拿最小样本钉住两个方向：
+    模块常量要认，调用方传进来的 `limit` 参数不认（那是调用方能自己调的，本就不算）。
+    """
+    found = silently_truncating_endpoints()
+    assert {"exams.py:list_critical_reports", "rules.py:rule_catalog"} <= found, (
+        "上限提成模块常量的两处真实端点没被认出来——判据退回只认字面量了"
+    )
+    sample = ast.parse(
+        "PAGE_CAP = 50\n"
+        "@router.get('/a')\n"
+        "def by_constant(db):\n"
+        "    return db.query(X).limit(PAGE_CAP).all()\n"
+        "@router.get('/b')\n"
+        "def by_argument(db, limit: int = 50):\n"
+        "    return db.query(X).limit(limit).all()\n"
+    )
+    assert truncating_in("sample.py", sample) == {"sample.py:by_constant"}
