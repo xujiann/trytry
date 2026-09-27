@@ -3488,6 +3488,15 @@ async function renderSpdMember() {
       ${barChart(spdPairs(assessStats.by_risk,
         Object.fromEntries(Object.entries(SPD_RISK).map(([k, v]) => [k, v[0]]))),
         { unit: " 人次" })}
+      <form class="inline" id="spd-assess-query" style="margin-top:8px">
+        <input name="patient_id" type="number" placeholder="患者ID（可空）">
+        <select name="scale_code"><option value="">全部量表</option>${spdLatestScales(catalog.scales).map((s) =>
+          `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("")}</select>
+        <select name="risk_level"><option value="">全部风险等级</option>${Object.entries(SPD_RISK).map(([k, v]) =>
+          `<option value="${k}">${esc(v[0])}</option>`).join("")}</select>
+        <select name="program_code">${programOptions}</select>
+        <button class="secondary">查评估记录</button>
+      </form><p class="msg" id="spd-assess-qmsg"></p>
       <div id="spd-assess-list"></div>`)}
     ${panel("干预模板与批量干预（成员端 #15 / 专家端 #9）", `
       <form class="inline" id="spd-intvtpl-form">
@@ -3620,6 +3629,27 @@ async function renderSpdMember() {
       setMsg("#spd-assess-msg",
         `评估完成：${r.score} 分，风险等级 ${SPD_RISK[r.risk_level]?.[0] || r.risk_level || "未分级"}。${r.advice || ""}`);
     } catch (err) { setMsg("#spd-assess-msg", err.message, false); }
+  };
+  /* 评估记录（成员端 #8「查看评估对象、记录与统计结果」，P2-563）：原先这一块只有统计卡片，列表容器画了却从不填——
+   * 评了谁、哪次评的、得几分，页面上一条也看不到。按患者 / 量表 / 风险等级 / 病种筛，截到上限时明说 */
+  const SPD_ASSESS_LIMIT = 50;
+  $("#spd-assess-query").onsubmit = async (e) => {
+    e.preventDefault();
+    const params = new URLSearchParams({ ...formJson(e.target), limit: SPD_ASSESS_LIMIT });
+    $("#spd-assess-list").innerHTML = "";
+    let rows;
+    try { rows = await api(`/api/spd/assessments?${params}`); }
+    catch (err) { return setMsg("#spd-assess-qmsg", err.message, false); }
+    setMsg("#spd-assess-qmsg", "");
+    const nameOf = (list, code) => (list.find((x) => x.code === code) || {}).name || code || "—";
+    $("#spd-assess-list").innerHTML = `<p class="desc">共 ${rows.length} 条${rows.length >= SPD_ASSESS_LIMIT
+      ? `——<b>已截到 ${SPD_ASSESS_LIMIT} 条</b>，请按患者、量表或风险等级收窄` : ""}。</p>`
+      + table(["时间", "患者", "量表", "病种", "得分", "风险等级", "建议"], rows, (a) =>
+        `<tr><td>${esc(a.created_at.replace("T", " ").slice(0, 16))}</td>
+         <td>${esc(a.patient_name || a.patient_id)}</td>
+         <td>${esc(nameOf(catalog.scales, a.scale_code))}${a.scale_version ? ` v${esc(a.scale_version)}` : ""}</td>
+         <td>${esc(nameOf(catalog.programs, a.program_code))}</td><td>${esc(a.score)}</td>
+         <td>${spdTag(SPD_RISK, a.risk_level)}</td><td>${esc((a.advice || "—").slice(0, 40))}</td></tr>`);
   };
   $("#spd-intvtpl-form").onsubmit = (e) => {
     e.preventDefault();
