@@ -475,11 +475,14 @@ def in_stay_alerts(
                 Admission.discharged_at.isnot(None))
         .all()
     )
+    # 住院日当日入当日出计 1 天（P2-533）：与病案打印、居民端「我的住院」、运行效率同一口径（printing.py 写明含 DRG）。
+    # 原先基线与在院天数都是裸日期差：一组历史全是当日入出院的，均值 0、永不预警；掺几例当日的，均值被拉低一截，
+    # 住 2 天的病人就被报成超均值 2.5 倍
     baseline: dict[str, list[int]] = {}
     for summary, adm in history:
         days = (adm.discharged_at.date() - adm.admitted_at.date()).days
         if days >= 0:
-            baseline.setdefault(summary.drg_code, []).append(days)
+            baseline.setdefault(summary.drg_code, []).append(max(days, 1))
 
     query = (
         db.query(Admission, CaseSummary)
@@ -502,7 +505,7 @@ def in_stay_alerts(
             # 尚未填病案首页、或落入兜底组（未正式入组）的在院病例：没有同组均值可比，计数报出
             ungrouped += 1
             continue
-        stayed = (end - adm.admitted_at.date()).days
+        stayed = max((end - adm.admitted_at.date()).days, 1)
         samples = baseline.get(drg_code, [])
         if len(samples) < MIN_BASELINE_CASES:
             insufficient.append({
@@ -529,7 +532,7 @@ def in_stay_alerts(
         # 样本不足与尚未入组的都单列，不混进"无预警"
         "insufficient_baseline": insufficient,
         "ungrouped_in_stay": ungrouped,
-        "caliber": f"基线取本院已出院且已入组病例的住院日（由入出院时刻现算）；"
+        "caliber": f"基线取本院已出院且已入组病例的住院日（由入出院时刻现算，当日入出院计 1 天，在院天数同）；"
                    f"同组历史少于 {MIN_BASELINE_CASES} 例不预警，单列在 "
                    f"insufficient_baseline；尚未填病案首页的在院病例计入 ungrouped_in_stay；"
                    f"兜底组 {FALLBACK_CODE} 不算入组，既不建基线也不预警，在院的同样计入 ungrouped_in_stay",

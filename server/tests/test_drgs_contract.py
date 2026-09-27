@@ -59,7 +59,7 @@ PRECHECK_CALIBER = (
     "会让人照着组去写诊断；未命中不落兜底组，那在事前没有信息量"
 )
 ALERTS_CALIBER = (
-    "基线取本院已出院且已入组病例的住院日（由入出院时刻现算）；"
+    "基线取本院已出院且已入组病例的住院日（由入出院时刻现算，当日入出院计 1 天，在院天数同）；"   # P2-533
     "同组历史少于 5 例不预警，单列在 "
     "insufficient_baseline；尚未填病案首页的在院病例计入 ungrouped_in_stay；"
     "兜底组 QY 不算入组，既不建基线也不预警，在院的同样计入 ungrouped_in_stay"   # P2-166
@@ -183,7 +183,7 @@ def seed(client, admin):
     data["patients"] = patients
 
     # 入出院时刻回填到固定基准日（HTTP 种不出跨天住院；today 同传 REF_DAY）：
-    # 基线 5 例 LOS=10 天；QY 例当日出院 LOS=0；在院 ES31 到基准日已住 20 天；
+    # 基线 5 例 LOS=10 天；QY 例当日入出院（兜底组不进基线）；在院 ES31 到基准日已住 20 天；
     # BR23/未入组在基准日当天入院。
     with SessionLocal() as db:
         for aid in discharged_ids:
@@ -336,10 +336,11 @@ def test_事中预警精确_三条分支各钉一遍(client, admin, seed):
             "baseline_cases": 5,
             "over_ratio": 2.0,
         }],
-        # BR23 同组出院史 0 例：不预警但单列；未填首页的计数报出
+        # BR23 同组出院史 0 例：不预警但单列；未填首页的计数报出。
+        # 基准日当天入院的在院天数计 1 天（P2-533：当日入当日出计 1 天，与居民端在院天数同一口径；原先钉 0）
         "insufficient_baseline": [{
             "admission_id": seed["rare"]["id"], "drg_code": "BR23",
-            "history_cases": 0, "stayed_days": 0,
+            "history_cases": 0, "stayed_days": 1,
         }],
         "ungrouped_in_stay": 1,
         "caliber": ALERTS_CALIBER,
@@ -359,7 +360,7 @@ def test_事中预警_调高倍数后无预警但样本不足仍单列(client, a
     assert body["alerts"] == []
     assert body["insufficient_baseline"] == [{
         "admission_id": seed["rare"]["id"], "drg_code": "BR23",
-        "history_cases": 0, "stayed_days": 0,
+        "history_cases": 0, "stayed_days": 1,   # P2-533：当天入院计 1 天
     }]
     assert body["ungrouped_in_stay"] == 1
 
