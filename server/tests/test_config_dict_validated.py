@@ -229,7 +229,7 @@ def test_判据自证_没挡的点名_跨模块挡了的不报():
     )
     functions: dict[str, list[ast.AST]] = {}
     for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             functions.setdefault(node.name, []).append(node)
     global CONFIG
     saved = CONFIG
