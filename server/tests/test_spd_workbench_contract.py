@@ -521,7 +521,9 @@ def test_医生移动端工作台_乡镇医生(client, wb):
         "calendar": {"today": today,
                      "followups": sum(1 for p in wb["fu_points"] if p == 0),
                      "revisits": 0, "tasks": 1},
-        "referrals": {"pending_review": 1, "pending_accept": 0, "pending_receive": 0,
+        # 夹具那张转诊单当前机构是本卫生院、待审核——推得动它的是上级县医院，本院医生点审核是 403（P2-532：
+        # 原先按「发起或当前机构是本机构」数成 1）
+        "referrals": {"pending_review": 0, "pending_accept": 0, "pending_receive": 0,
                       "mine": 0, "overdue": 0},
         "patients": {"mine": 1, "village": 0, "org": 2},
         "alerts": {"escalated_tasks": 0, "case_reports": 0, "high_risk_screenings": 1},

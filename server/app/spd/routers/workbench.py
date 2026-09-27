@@ -14,7 +14,7 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import exists, func, select
+from sqlalchemy import ColumnElement, exists, false, func, select, true
 from sqlalchemy.orm import Session, aliased
 
 from ... import clock
@@ -53,7 +53,7 @@ from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_CLAIM
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
-from ...visibility import stats_org_ids, visible_org_ids
+from ...visibility import GLOBAL_ROLES, stats_org_ids, visible_org_ids
 
 router = APIRouter(
     prefix="/api/spd",
@@ -1340,6 +1340,20 @@ def doctor_mobile_workbench(
             SpdReferralCase.initiator_org_id.in_(orgs or [0])
             | SpdReferralCase.current_org_id.in_(orgs or [0])
         )
+    # 三项转诊待办按「该谁办」数（P2-532）：审核 / 接收只有本单当前机构的**直接上级**推得动（`referral._assert_review_authority`），
+    # 承接下转只有当前持有机构办得了（`_assert_holds_case`）。原先与超时督办共用「发起或当前机构是本机构」——卫生院的待审核
+    # 恒为 0（村卫生室交上来的单子当前机构还是村卫生室），自己审过、等县里接收的倒记成「待接收」，点进去 403；县里的待接收同样恒为 0
+    action_query = db.query(SpdReferralCase)
+    review_scope: ColumnElement[bool]
+    hold_scope: ColumnElement[bool]
+    if user.role in GLOBAL_ROLES:
+        review_scope, hold_scope = true(), true()
+    elif user.org_id is None:
+        review_scope, hold_scope = false(), false()
+    else:
+        review_scope = SpdReferralCase.current_org_id.in_(
+            select(Organization.id).where(Organization.parent_id == user.org_id))
+        hold_scope = SpdReferralCase.current_org_id == user.org_id
 
     out: dict[str, Any] = {
         "user": {
@@ -1371,14 +1385,14 @@ def doctor_mobile_workbench(
             ).count(),
         },
         "referrals": {
-            "pending_review": referral_query.filter(
-                SpdReferralCase.status.in_(["submitted", "station_reviewed"])
+            "pending_review": action_query.filter(
+                review_scope, SpdReferralCase.status.in_(["submitted", "station_reviewed"])
             ).count(),
-            "pending_accept": referral_query.filter(
-                SpdReferralCase.status == "township_reviewed"
+            "pending_accept": action_query.filter(
+                review_scope, SpdReferralCase.status == "township_reviewed"
             ).count(),
-            "pending_receive": referral_query.filter(
-                SpdReferralCase.status == "down_referred"
+            "pending_receive": action_query.filter(
+                hold_scope, SpdReferralCase.status == "down_referred"
             ).count(),
             "mine": db.query(SpdReferralCase).filter(
                 SpdReferralCase.initiator_id == user.id
