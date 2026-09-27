@@ -1741,6 +1741,19 @@ def test_管理目标的上限能改成0(page, base_url, admin_read, admin_call)
     assert (row["target_high"], row["metric_name"]) == (0, "吸烟"), row   # 修前 5.0
 
 
+def test_基金池的预付比例能改成0(page, base_url, admin_read, admin_call):
+    """P2-590：编辑基金池原先 `if (picked2.prepay_ratio_pct)`——预付比例改成 0（不预付）不送，照样保存成功、仍按原比例
+    算计划预付额。"""
+    pool = admin_call("POST", "/api/fund/pools", {
+        "year": 2098, "insurance_type": "employee", "total_amount": 1000000, "prepay_ratio_pct": 30, "note": "E2E P2590"})
+    _login(page, base_url)
+    _open_page(page, "fund", "医保基金总额付费")
+    page.click(f'button[data-fdedit="{pool["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"prepay_ratio_pct": "0"}))
+    (row,) = [p for p in admin_read("/api/fund/pools") if p["id"] == pool["id"]]
+    assert (row["prepay_ratio_pct"], row["total_amount"]) == (0, 1000000), row   # 修前 30.0
+
+
 def test_编辑专病中心只改名_已停用的状态不被悄悄改成筹建(page, base_url, admin_read, admin_call):
     """P2-421：编辑框的状态下拉原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
     只改个名字保存，状态被悄悄改掉。修后选项取自后端的状态文案表（专家工作台下发的 `center_status_names`）。"""

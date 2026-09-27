@@ -1990,10 +1990,12 @@ async function renderFund() {
     }
     if (fdedit) {
       const pool = pools.find((x) => x.id === Number(fdedit));
+      // 金额与比例用 text（P2-590，口径同应急资源编辑）：spdModal 的 number 字段把空串折成 0，原先
+      // `if (picked2.prepay_ratio_pct)` 又把 0 当留空——预付比例改成 0（不预付）不送，照样保存成功、仍按原比例预付
       const picked2 = await spdModal(`编辑基金池 ${fdedit}（${pool ? pool.year : ""} 年度）`, [
-        { name: "total_amount", label: "筹资总额（元，留空不改）", type: "number",
+        { name: "total_amount", label: "筹资总额（元，留空不改）", type: "text",
           value: pool ? pool.total_amount : "" },
-        { name: "prepay_ratio_pct", label: "预付比例 %（0-100，留空不改）", type: "number",
+        { name: "prepay_ratio_pct", label: "预付比例 %（0-100，0 = 不预付，留空不改）", type: "text",
           value: pool ? pool.prepay_ratio_pct : "" },
         { name: "status", label: "状态（settled 由清算置，这里改不了）", type: "select",
           value: pool ? pool.status : "active",
@@ -2003,8 +2005,11 @@ async function renderFund() {
       if (!picked2) return;
       // 后端 exclude_unset + `if value is not None`：留空的键不送
       const body = { status: picked2.status };
-      if (picked2.total_amount) body.total_amount = picked2.total_amount;
-      if (picked2.prepay_ratio_pct) body.prepay_ratio_pct = picked2.prepay_ratio_pct;
+      for (const [k, label] of [["total_amount", "筹资总额"], ["prepay_ratio_pct", "预付比例"]]) {
+        if (picked2[k] === "") continue;
+        if (!Number.isFinite(Number(picked2[k]))) return setMsg("#fd-msg", `${label}要填数值`, false);
+        body[k] = Number(picked2[k]);
+      }
       if (picked2.note) body.note = picked2.note;
       try {
         await api(`/api/fund/pools/${fdedit}`, { method: "PATCH", body: JSON.stringify(body) });
