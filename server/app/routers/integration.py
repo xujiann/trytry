@@ -945,7 +945,9 @@ def fhir_diagnostic_report(
       映射表 critical→flag 的入站承载（FHIR R4 DiagnosticReport 无标准危急值字段，
       以命名扩展承载，出站导出用同一 URL 对称回写）；
     - 申请单不存在 404 拒收（口径同 ORU：规范§四"引用的资源不存在→先行创建"）；
-      已出报告 409。
+      已出报告 409；
+    - subject（可选）= `Patient/{ehc_no}`（与 Observation / Encounter 入站、DiagnosticReport 出站同口径）：
+      给了就须是申请单患者本人，不一致 422 拒收（P1-195，与 ORU 的 PID 核验 P1-143 同一道防串单）。
     """
     return _run_inbound(
         "fhir_diagnostic_report",
@@ -972,6 +974,18 @@ def _do_fhir_diagnostic_report(resource: dict, db: Session, source_system: str):
             status_code=404,
             detail=f"申请单 {request_id} 不存在，报告拒收（对接规范§四：请先创建检查申请）",
         )
+    # subject 一致性核验（可选，口径同 ORU 的 PID 段）：原先 subject 写的是谁都不看，别人的报告——连同危急值闭环——
+    # 照样落到申请单患者名下；同一类报告走 ORU 早就按 PID 核本人（P1-143）
+    subject = resource.get("subject")
+    subject_ref = str(subject.get("reference") or "").strip() if isinstance(subject, dict) else ""
+    if (subject is not None and not isinstance(subject, dict)) or (
+        subject_ref and not subject_ref.startswith("Patient/")
+    ):
+        raise HTTPException(status_code=422, detail="subject.reference 必须为 Patient/{ehc_no}")
+    if subject_ref:
+        owner = db.get(Patient, request.patient_id)
+        if owner is None or not owner.ehc_no or subject_ref.split("/", 1)[1] != owner.ehc_no:
+            raise HTTPException(status_code=422, detail="subject 患者与申请单患者不一致，报告拒收")
     conclusion = str(resource.get("conclusion") or "").strip()
     if not conclusion:
         raise HTTPException(status_code=422, detail="conclusion 缺失")
