@@ -28,6 +28,7 @@
 "按 id 直取、不校验归属、无留痕"。现在一律先过 `assert_patient_visible`
 （校验 + 写 AccessLog）；医学证明未关联患者时退到签发机构的可见性。
 """
+from datetime import datetime
 from html import escape
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -35,7 +36,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..clock import now_local
+from ..clock import now_local, to_local
 from ..concurrency import upsert_unique
 from ..database import get_db
 from ..deps import get_current_user, require_admin
@@ -167,6 +168,16 @@ def _esc(value) -> str:
     return escape(str(value if value is not None else ""))
 
 
+def _shown_at(moment: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """正文里的时刻：落库的 naive UTC 换成本地时间再印（P2-535）。
+
+    页脚「打印时间」取 `now_local()`（本地）；正文的开方 / 签发 / 报告 / 入出院时间原先直接 strftime 落库值——
+    东八区部署下同一张纸上开方时间比打印时间早 8 小时，凌晨开的方印成前一天。与临床文书 `_shown_time`（P2-455）
+    同一个换法。住院天数仍按出入院的落库日期差算（与居民端、运行效率、DRG 同一口径，日界归属见 P1-105）。
+    """
+    return to_local(moment).strftime(fmt)
+
+
 def _template(db: Session, doc_type: str) -> PrintTemplate | None:
     return db.query(PrintTemplate).filter(PrintTemplate.doc_type == doc_type).first()
 
@@ -294,7 +305,7 @@ def print_exam_report(
         reason = f"，原因：{_esc(last.reason)}" if last.reason else ""
         revision_html = (
             f'<p><span class="critical">本报告已修订 {revision_count} 次，以本版为准</span>'
-            f' 最后一次修订：{_esc(last.revised_by) or "—"}，{_esc(last.created_at.strftime("%Y-%m-%d %H:%M"))}'
+            f' 最后一次修订：{_esc(last.revised_by) or "—"}，{_esc(_shown_at(last.created_at))}'
             f"{reason}</p>"
         )
     body = f"""
@@ -303,7 +314,7 @@ def print_exam_report(
   {critical_html}
   {revision_html}
   <div class="sign"><span>报告医师：{_esc(report.reported_by) or "—"}</span>
-    <span>报告时间：{_esc(report.reported_at.strftime("%Y-%m-%d %H:%M"))}</span></div>"""
+    <span>报告时间：{_esc(_shown_at(report.reported_at))}</span></div>"""
     return _render(
         doc_type="exam_report",
         doc_id=report.id,
@@ -339,7 +350,7 @@ def print_prescription(
     )
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">开方机构</td><td>{_esc(org_name)}</td>'
-        f'<td class="k">开方时间</td><td>{_esc(rx.created_at.strftime("%Y-%m-%d %H:%M"))}</td></tr>'
+        f'<td class="k">开方时间</td><td>{_esc(_shown_at(rx.created_at))}</td></tr>'
         f'<tr><td class="k">临床诊断</td><td colspan="3">{_esc(rx.diagnosis_name) or "—"}</td></tr>'
     )
     rows = "".join(
@@ -391,7 +402,7 @@ def print_exam_request(
     }
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">申请机构</td><td>{_esc(org_name)}</td>'
-        f'<td class="k">申请时间</td><td>{_esc(request.created_at.strftime("%Y-%m-%d %H:%M"))}</td></tr>'
+        f'<td class="k">申请时间</td><td>{_esc(_shown_at(request.created_at))}</td></tr>'
         f'<tr><td class="k">检查类别</td><td>{_esc(CENTER_NAMES.get(request.center_type, request.center_type))}</td>'
         f'<td class="k">当前状态</td><td>{_esc(EXAM_STATUS_NAMES.get(request.status, request.status))}</td></tr>'
     )
@@ -444,7 +455,7 @@ def print_cert(cert_id: int, request: Request, db: Session = Depends(get_db), us
     body = f"""
   <div class="section"><h3>诊断/说明</h3><div class="body">{_esc(cert.detail) or "—"}</div></div>
   <div class="sign"><span>签发人：{_esc(_user_name(db, cert.created_by)) or "—"}</span>
-    <span>签发时间：{_esc(cert.created_at.strftime("%Y-%m-%d %H:%M"))}</span>
+    <span>签发时间：{_esc(_shown_at(cert.created_at))}</span>
     <span>签发机构（章）：____________</span></div>"""
     return _render(
         doc_type="cert",
@@ -487,14 +498,14 @@ def print_inpatient_bill(
     total = round(sum(d.amount for d in details), 2)
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">住院机构</td><td>{_esc(org_name)}</td>'
-        f'<td class="k">入院时间</td><td>{_esc(admission.admitted_at.strftime("%Y-%m-%d %H:%M"))}</td></tr>'
+        f'<td class="k">入院时间</td><td>{_esc(_shown_at(admission.admitted_at))}</td></tr>'
         f'<tr><td class="k">入院诊断</td><td>{_esc(admission.diagnosis_name) or "—"}</td>'
         f'<td class="k">主管医师</td><td>{_esc(admission.doctor_name) or "—"}</td></tr>'
     )
     rows = "".join(
         f"<tr><td>{i}</td><td>{_esc(d.item_code)}</td><td>{_esc(d.item_name)}</td>"
         f"<td>{d.unit_price:.2f}</td><td>{d.quantity}</td><td>{d.amount:.2f}</td>"
-        f"<td>{_esc(d.created_at.strftime('%Y-%m-%d'))}</td></tr>"
+        f"<td>{_esc(_shown_at(d.created_at, '%Y-%m-%d'))}</td></tr>"
         for i, d in enumerate(details, start=1)
     ) or '<tr><td colspan="7">本次住院暂无费用明细</td></tr>'
     body = f"""
@@ -537,7 +548,7 @@ def print_settlement(
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">结算机构</td><td>{_esc(org_name)}</td>'
         f'<td class="k">结算类别</td><td>{_esc(bill_type)}结算</td></tr>'
-        f'<tr><td class="k">结算时间</td><td>{_esc(settlement.created_at.strftime("%Y-%m-%d %H:%M"))}</td>'
+        f'<tr><td class="k">结算时间</td><td>{_esc(_shown_at(settlement.created_at))}</td>'
         f'<td class="k">明细笔数</td><td>{detail_count}</td></tr>'
     )
     body = f"""
@@ -577,13 +588,13 @@ def print_case_summary(
     patient = db.get(Patient, admission.patient_id)
     org_name = _org_name(db, admission.org_id)
     discharged = (
-        admission.discharged_at.strftime("%Y-%m-%d %H:%M") if admission.discharged_at else "—"
+        _shown_at(admission.discharged_at) if admission.discharged_at else "—"
     )
     drg = f"{summary.drg_code}（权重 {summary.drg_weight}）" if summary.drg_code else "未入组"
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">住院机构</td><td>{_esc(org_name)}</td>'
         f'<td class="k">主管医师</td><td>{_esc(admission.doctor_name) or "—"}</td></tr>'
-        f'<tr><td class="k">入院时间</td><td>{_esc(admission.admitted_at.strftime("%Y-%m-%d %H:%M"))}</td>'
+        f'<tr><td class="k">入院时间</td><td>{_esc(_shown_at(admission.admitted_at))}</td>'
         f'<td class="k">出院时间</td><td>{_esc(discharged)}</td></tr>'
         f'<tr><td class="k">入院诊断</td><td>{_esc(admission.diagnosis_name) or "—"}</td>'
         f'<td class="k">DRG 分组</td><td>{_esc(drg)}</td></tr>'
@@ -597,7 +608,7 @@ def print_case_summary(
       <td>{_esc(summary.outcome)}</td></tr></tbody></table></div>
   <div class="section"><h3>备注</h3><div class="body">{_esc(summary.note) or "—"}</div></div>
   <div class="sign"><span>填写医师：{_esc(summary.created_by_name) or "—"}</span>
-    <span>填写时间：{_esc(summary.created_at.strftime("%Y-%m-%d %H:%M"))}</span></div>"""
+    <span>填写时间：{_esc(_shown_at(summary.created_at))}</span></div>"""
     return _render(
         doc_type="case_summary",
         doc_id=admission.id,
@@ -717,14 +728,14 @@ def print_consent(
         else ""
     )
     revoked = (
-        f'<p><span class="critical">该同意已于 {record.revoked_at.strftime("%Y-%m-%d %H:%M")} 撤回</span></p>'
+        f'<p><span class="critical">该同意已于 {_shown_at(record.revoked_at)} 撤回</span></p>'
         if record.revoked_at
         else ""
     )
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">同意场景</td><td>{_esc(scene_name)}</td>'
         f'<td class="k">采集方式</td><td>{_esc(CONSENT_METHOD_NAMES.get(record.method, record.method))}</td></tr>'
-        f'<tr><td class="k">签署时间</td><td>{_esc(record.created_at.strftime("%Y-%m-%d %H:%M"))}</td>'
+        f'<tr><td class="k">签署时间</td><td>{_esc(_shown_at(record.created_at))}</td>'
         f'<td class="k">佐证材料</td><td>{_esc(record.evidence) or "—"}</td></tr>'
         f"{guardian}"
     )
@@ -774,7 +785,7 @@ def print_vaccine_cert(
     </table></div>
   <p>兹证明上述受种者已在本单位完成该剂次预防接种，特此证明。</p>
   <div class="sign"><span>接种单位（章）：____________</span>
-    <span>登记时间：{_esc(record.created_at.strftime("%Y-%m-%d %H:%M"))}</span></div>"""
+    <span>登记时间：{_esc(_shown_at(record.created_at))}</span></div>"""
     return _render(
         doc_type="vaccine_cert",
         doc_id=record.id,
@@ -810,7 +821,7 @@ def print_referral(
         f'<td class="k">转入机构</td><td>{_esc(to_org)}</td></tr>'
         f'<tr><td class="k">转诊方向</td><td>{_esc(direction)}</td>'
         f'<td class="k">当前状态</td><td>{_esc(status)}</td></tr>'
-        f'<tr><td class="k">申请时间</td><td colspan="3">{_esc(referral.created_at.strftime("%Y-%m-%d %H:%M"))}</td></tr>'
+        f'<tr><td class="k">申请时间</td><td colspan="3">{_esc(_shown_at(referral.created_at))}</td></tr>'
     )
     body = f"""
   <div class="section"><h3>转诊事由</h3><div class="body">{_esc(referral.reason) or "—"}</div></div>
@@ -853,7 +864,7 @@ def print_discharge_summary(
         .order_by(ProgressNote.id.desc())
         .first()
     )
-    discharged = admission.discharged_at.strftime("%Y-%m-%d %H:%M") if admission.discharged_at else "—"
+    discharged = _shown_at(admission.discharged_at) if admission.discharged_at else "—"
     # 住院天数 = 出入院日期差、当日入当日出计 1 天（P2-204）：与居民端「我的住院」、成本核算、运行效率、DRG 同一口径
     # （portal.py 自己写着「免得同一次住院在三个地方显示三个天数」）。原先是时刻差整天数 + 1——9/1 10:00 入、
     # 9/5 11:00 出印 5 天、别处都是 4 天，而出院小结是医疗文书
@@ -865,7 +876,7 @@ def print_discharge_summary(
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">住院机构</td><td>{_esc(org_name)}</td>'
         f'<td class="k">主管医师</td><td>{_esc(admission.doctor_name) or "—"}</td></tr>'
-        f'<tr><td class="k">入院时间</td><td>{_esc(admission.admitted_at.strftime("%Y-%m-%d %H:%M"))}</td>'
+        f'<tr><td class="k">入院时间</td><td>{_esc(_shown_at(admission.admitted_at))}</td>'
         f'<td class="k">出院时间</td><td>{_esc(discharged)}</td></tr>'
         f'<tr><td class="k">住院天数</td><td>{_esc(days)} 天</td>'
         f'<td class="k">转归</td><td>{_esc(summary.outcome if summary else "") or "—"}</td></tr>'

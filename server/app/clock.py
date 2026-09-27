@@ -30,7 +30,7 @@ aware 值按会话时区转换后再丢掉时区——同一张表的两列一�
 from datetime import date, datetime, time, timedelta, timezone
 
 __all__ = [
-    "now_naive", "now_aware", "now_local", "to_aware", "today", "today_str", "local_day_utc_range",
+    "now_naive", "now_aware", "now_local", "to_aware", "to_local", "today", "today_str", "local_day_utc_range",
 ]
 
 
@@ -58,6 +58,14 @@ def to_aware(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def to_local(value: datetime) -> datetime:
+    """把库里读出的 naive UTC 值换成本地时刻（naive）。与 `now_local()` 一样**只用于给人看的字符串**（打印件正文、
+    供人工誊录的导出），不要落库或拿去比较（P2-535）。已带时区的按它自己的时区换。
+    """
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone().replace(tzinfo=None)
 
 
 def today() -> date:
