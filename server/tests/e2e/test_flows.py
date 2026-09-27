@@ -2400,6 +2400,15 @@ def test_模拟诊疗病例能在界面上新建_作答按新建的答案评分(
     expect(result).to_contain_text("胸痛首要排除急性冠脉综合征")
     expect(result.locator(".card .value").first).to_have_text("50")
 
+    # 本人的历次作答（P2-479）：交卷后写着「练几次、进步多少都查得到」，原先页面上哪儿都查不到
+    history = page.locator("#sim-history")
+    expect(history).to_contain_text("我的作答记录（1 次，最高 50 分）")
+    page.check('#sim-form input[name="p1"][value="心电图"]')
+    page.click("#sim-form button:has-text('交卷')")
+    expect(history).to_contain_text("我的作答记录（2 次，最高 100 分）")
+    expect(history.locator("tbody tr").first.locator(".tag")).to_have_text("通过")   # 新的在前：第 2 次满分
+    expect(history.locator("tbody tr").nth(1).locator(".tag")).to_have_text("未通过")
+
 
 def test_考核指标能在界面上新建_口径与变量提示取自后端(page, base_url, admin_read):
     """P2-93（动词级孤儿）：考核指标库原先只能改、不能建——各县自己的考核口径只能靠接口调用方。口径下拉与「可用变量」

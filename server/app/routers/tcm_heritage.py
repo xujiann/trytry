@@ -154,6 +154,8 @@ class AttemptOut(BaseModel):
     passed: bool
     # 第几次作答：重复作答次数本身是教学反馈，不该被"只留最高分"抹掉
     attempt_no: int
+    # 交卷时刻（isoformat，naive UTC；P2-479）：页面按次列出「哪天练的、得了几分」
+    created_at: str = ""
 
 
 class BestScoreOut(BaseModel):
@@ -412,10 +414,22 @@ def submit_simulation(
 
 
 @router.get("/simulations/{case_id}/attempts", response_model=AttemptListOut)
-def list_attempts(case_id: int, user_id: int | None = None, db: Session = Depends(get_db)):
+def list_attempts(
+    case_id: int,
+    user_id: int | None = None,
+    mine: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """作答记录。取最高分参与考核，但全部留痕——"第几次才做对"本身
-    就是教学反馈（与培训考核"重考取高分"一致）。"""
+    就是教学反馈（与培训考核"重考取高分"一致）。
+
+    `mine=true` 只取当前账号自己的（P2-479）：模拟诊疗页交卷后写着「练几次、进步多少都查得到」，页面据此列出
+    本人在这个病例上的历次作答；前端不知道自己的用户编号，也不该为此去翻别人的成绩。给了 `mine` 就不看 `user_id`。
+    """
     query = db.query(SimulationAttempt).filter(SimulationAttempt.case_id == case_id)
+    if mine:
+        user_id = user.id
     if user_id is not None:
         query = query.filter(SimulationAttempt.user_id == user_id)
     rows = query.order_by(SimulationAttempt.id.desc()).limit(500).all()
@@ -440,7 +454,8 @@ def list_attempts(case_id: int, user_id: int | None = None, db: Session = Depend
         "attempts": [
             {"id": r.id, "user_id": r.user_id, "score": r.score, "passed": r.passed,
              "attempt_no": earlier.get(r.user_id, 0)
-             + len([x for x in rows if x.user_id == r.user_id and x.id <= r.id])}
+             + len([x for x in rows if x.user_id == r.user_id and x.id <= r.id]),
+             "created_at": r.created_at.isoformat() if r.created_at else ""}
             for r in rows
         ],
         "best_by_user": [{"user_id": uid, "best_score": s} for uid, s in best],

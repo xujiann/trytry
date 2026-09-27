@@ -2005,6 +2005,23 @@ async function renderTcmHeritage() {
     if (d.publish) return postAction(`/api/tcm-heritage/master-cases/${d.publish}/publish`, {}, "#mc-msg");
     if (d.unpublish) return postAction(`/api/tcm-heritage/master-cases/${d.unpublish}/unpublish`, {}, "#mc-msg");
   };
+  // 本人在这个病例上的历次作答（P2-479）：交卷后写着「练几次、进步多少都查得到」，原先页面上哪儿都查不到
+  const drawSimHistory = async (sim) => {
+    const box = $("#sim-history");
+    if (!box) return;
+    try {
+      const r = await api(`/api/tcm-heritage/simulations/${sim.id}/attempts?mine=true`);
+      const best = r.attempts.length ? Math.max(...r.attempts.map((a) => a.score)) : null;
+      box.innerHTML = `<h3 style="margin-top:14px">我的作答记录（${r.attempts.length} 次${
+        best === null ? "" : `，最高 ${best} 分`}）</h3>
+        ${table(["第几次", "交卷时间", "得分", "结果"], r.attempts, (a) =>
+          `<tr><td>${esc(a.attempt_no)}</td><td>${esc((a.created_at || "").replace("T", " ").slice(0, 16))}</td>
+           <td>${esc(a.score)}</td><td>${a.passed ? '<span class="tag green">通过</span>' : '<span class="tag red">未通过</span>'}</td></tr>`)}
+        <p class="desc">${esc(r.caliber)}</p>`;
+    } catch (err) {
+      box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+    }
+  };
   const drawSim = (sim) => {
     $("#sim-box").innerHTML = `<h3 style="margin-top:14px">${esc(sim.title)}</h3>
       <p class="desc">${esc(sim.scenario)}</p>
@@ -2016,7 +2033,8 @@ async function renderTcmHeritage() {
         </div>`).join("")}
         <div class="inline"><button>交卷</button>
           <button type="button" class="btn secondary" data-simclose="1">关闭</button></div></form>
-      <p class="msg" id="sim-msg"></p><div id="sim-result"></div>`;
+      <p class="msg" id="sim-msg"></p><div id="sim-result"></div><div id="sim-history"></div>`;
+    drawSimHistory(sim);
     $("#sim-form").onsubmit = async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
@@ -2040,8 +2058,9 @@ async function renderTcmHeritage() {
              <td>${esc(d.answer)}</td><td style="font-size:12px">${esc(d.explain) || "—"}</td></tr>`)}
           <p class="desc"><b>只有答错的才给解析</b>（后端的原话：答对的人不需要，堆一屏解析反而没人看），
             所以解析列的「—」意味着这题答对了，不是"没写解析"。
-            每次交卷都会留一条尝试记录，分数不覆盖——练几次、进步多少都查得到。</p>`;
+            每次交卷都会留一条尝试记录，分数不覆盖——练几次、进步多少都查得到（见下方「我的作答记录」）。</p>`;
         setMsg("#sim-msg", "", true);
+        drawSimHistory(sim);
       } catch (err) { setMsg("#sim-msg", err.message, false); }
     };
   };
