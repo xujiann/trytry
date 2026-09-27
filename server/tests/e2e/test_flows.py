@@ -1394,6 +1394,19 @@ def test_停用规则先确认(page, base_url, admin_read, admin_call):
                   lambda: active() is True, lambda: active() is False)
 
 
+def test_撤销完成失败要说出来_不再一声不吭(page, base_url, seed, admin_call):
+    """P2-423：「撤销完成」原先 `await api(...)` 不接错误——没有权限（接口只收管理层 / 经办）点下去 403，页面一声不吭。
+    同一处理函数里「完成」那个分支早就接住了（P2-378），逐处判的闸门之前只看第一处 await，这一处就漏在后面。"""
+    project = admin_call("POST", "/api/projects", {"org_id": seed["org"]["id"], "name": "E2E撤销完成失败"})
+    milestone = admin_call("POST", f"/api/projects/{project['id']}/milestones", {"name": "E2E已完成的里程碑"})
+    admin_call("POST", f"/api/projects/milestones/{milestone['id']}/done")
+    _login(page, base_url, "e2e_doctor", "passw0rd1")   # 医师看得到项目页，撤销不了
+    _open_page(page, "projects", "项目管理")
+    with _answers(page, [""]):   # 原生 confirm：点确定
+        page.click(f'button[data-msreopen="{milestone["id"]}"]')
+    expect(page.locator("#pj-msg")).to_contain_text("需要以下角色之一")   # 修前什么也不说
+
+
 def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
     """P2-43：「删除」路径节点原先点一下就删，节点的时限、角色与表单配置一并没了。"""
     hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")

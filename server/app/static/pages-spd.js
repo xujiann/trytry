@@ -3356,7 +3356,16 @@ async function renderSpdReport() {
     if (toggle) return postAction(`/api/spd/report-tasks/${toggle.dataset.rptToggle}`,
       { status: toggle.dataset.s }, "#spd-rpttask-msg", "PATCH");
     if (view) {
-      const d = await api(`/api/spd/report-instances/${view.dataset.rptView}`);
+      // 先清空、查不到把原因写出来（P2-423，同 P2-378）：原先 api() 抛错没人接，框里还挂着上一份报告
+      const box = $("#spd-rpt-view");
+      box.innerHTML = "";
+      let d;
+      try {
+        d = await api(`/api/spd/report-instances/${view.dataset.rptView}`);
+      } catch (err) {
+        box.innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
+        return;
+      }
       const sections = (d.content.sections || []).map((s) => {
         if (s.type === "table") {
           return `<h4>${esc(s.title)}</h4>${table(s.columns || [], s.rows || [],
@@ -3368,7 +3377,7 @@ async function renderSpdReport() {
         }
         return `<h4>${esc(s.title)}</h4><p>${esc(s.text || s.note || "")}</p>`;
       }).join("");
-      $("#spd-rpt-view").innerHTML =
+      box.innerHTML =
         `<div class="panel" style="border-left:4px solid #0b6e6e"><h3>${esc(d.title)}</h3>${sections}</div>`;
     }
   };

@@ -1835,7 +1835,9 @@ async function renderProjects() {
     }
     if (d.msreopen) {
       if (!confirm("撤销完成会把完成日一并清掉，确认？")) return;
-      await api(`/api/projects/milestones/${d.msreopen}/reopen`, { method: "POST" });
+      try {   // 撤销失败同样要说出来（P2-423）：原先 api() 抛错没人接（别人刚撤销过 409、无权 403），点了没反应
+        await api(`/api/projects/milestones/${d.msreopen}/reopen`, { method: "POST" });
+      } catch (err) { return setMsg("#pj-msg", err.message, false); }
       return route();
     }
   };
