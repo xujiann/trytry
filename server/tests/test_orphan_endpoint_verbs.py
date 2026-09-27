@@ -141,7 +141,6 @@ READ_EXEMPT: dict[str, str] = {}
 #: 读动词欠账：路径有入口（同一路径的写动词有调用）、这个 GET 没有。只许变少。
 READ_KNOWN: set[str] = {
     # 临床与护理
-    "GET /api/inpatient/admissions/{admission_id}/case-summary",
     "GET /api/maternal/records/{record_id}/delivery",                   # 不收调用方（P1-69），随 P1-49 裁定后再接
     "GET /api/quality/record-qc",                                       # 不收口（P1-49 名单），随裁定后再接
     # 公卫、慢病、家医

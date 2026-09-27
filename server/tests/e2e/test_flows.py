@@ -3771,6 +3771,16 @@ def test_住院页的转床_开医嘱_病案首页都在页内表单里录入(pa
         "async (id) => await api(`/api/inpatient/admissions/${id}/case-summary`)", adm_id)
     assert (summary["outcome"], summary["total_cost"], summary["note"]) == ("死亡", 8888.5, "E2E抢救无效"), summary
 
+    # 填过的再点「病案首页」给只读的首页（P2-617）：原先照样弹填写表单，填完点确定 409「病案首页已填写」
+    page.click(f'button[data-summary="{adm_id}"]')
+    modal = _modal(page)
+    expect(modal).to_contain_text("已填写")
+    expect(modal).to_contain_text("E2E慢性心力衰竭")
+    expect(modal).to_contain_text("转归：死亡")
+    expect(modal.locator("input, textarea, select")).to_have_count(0)
+    modal.locator("button[data-cancel]").click()
+    expect(modal).to_have_count(0)
+
 
 @pytest.fixture(scope="session")
 def consent_seed(base_url, seed):

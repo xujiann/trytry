@@ -2871,6 +2871,18 @@ async function renderInpatient() {
         route();
       }
       if (d.summary) {
+        // 先看填没填（P2-617）：一次住院只填一张首页，填过的原先照样弹填写表单、填完点确定才 409「病案首页已填写」，
+        // 填好的内容在页面上也看不到（只能打印）。先按接口取，取到了给只读的首页，404「未填写」才弹填写表单
+        let filled = null;
+        try { filled = await api(`/api/inpatient/admissions/${d.summary}/case-summary`); }
+        catch (err) { if (err.status !== 404) throw err; }
+        if (filled) {
+          return spdModal(`病案首页（住院 ${d.summary}，已填写）`, [], { intro: [
+            `出院诊断：${filled.discharge_diagnosis}`, `手术：${filled.operation || "—"}`,
+            `总费用：${filled.total_cost} 元（其中药费 ${filled.drug_cost} 元）`, `转归：${filled.outcome}`,
+            `DRG：${filled.drg_code || "未入组"}`, `备注：${filled.note || "—"}`, `填写人：${filled.created_by_name}`,
+          ].join("\n") });
+        }
         // 出院诊断不预填入院诊断：入出院诊断符合率比的就是这两个，照抄过来它就只剩 100%
         const v = await spdModal(`病案首页（住院 ${d.summary}）`, [
           { name: "discharge_diagnosis", label: "出院诊断", required: true },
