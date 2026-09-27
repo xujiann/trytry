@@ -8,6 +8,7 @@
 膳食运动指导要点依据国卫办基层函〔2025〕121号要求嵌入系统，
 在接诊和随访时同步返回。
 """
+import math
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -79,6 +80,10 @@ def level_rules_problem(rules: dict) -> str:
             value = metric.get(level)
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
                 return f"指标 {key} 的 {level} 阈值必须是数"
+            # NaN / Infinity（标准库 json.loads 照收的记号）也是「数」，但和谁比都不成立：阈值写成 NaN，220/130 的
+            # 血压定成 1 级、不转诊——正是本函数要挡的「悄悄定错级」（P2-465）；PG 的 JSON 列还存不进去，直接 500
+            if isinstance(value, float) and not math.isfinite(value):
+                return f"指标 {key} 的 {level} 阈值必须是有限的数（不能是 NaN / Infinity）"
     if not isinstance(rules.get("require_all", True), bool):
         return "require_all 只能是 true / false"
     return ""
