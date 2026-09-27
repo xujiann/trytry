@@ -410,11 +410,15 @@ def test_专病专家端工作台(client, h, wb):
                        "by_program": {"wbp_a": 2}, "by_status": {"active": 2}},
         "paths": ZERO_PATHS,
         "referrals": REFERRALS,
-        "assessments": {"total": 1, "by_risk": {"low": 1}},
+        # 评估按病种筛（P2-552）：夹具那次评估用的是高血压筛查量表（病种 hypertension），不在 wbp_a 里；原先钉 1——
+        # 评估人次不看病种，与同一页按病种的在管数、路径摆在一起
+        "assessments": {"total": 0, "by_risk": {}},
         "org_coverage": 2,
         # 编辑框的状态下拉照它给选项（P2-421）
         "center_status_names": {"draft": "筹建", "running": "运行中", "paused": "暂停", "disabled": "已停用"},
     }
+    unfiltered = client.get(f"{B}/workbench/expert", headers=h).json()
+    assert unfiltered["assessments"] == {"total": 1, "by_risk": {"low": 1}}
 
 
 # ------------------------------------------------- 全程管理中心端

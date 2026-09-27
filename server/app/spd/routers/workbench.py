@@ -988,6 +988,17 @@ def expert_workbench(
     programs = db.query(SpdProgram).filter(SpdProgram.active.is_(True)).all()
     if program_code:
         programs = [p for p in programs if p.code == program_code]
+    # 评估人次与风险分布与本页其余数字同一个范围、同一个病种（P2-552）：原先全县全病种，与按范围的在管数、路径、转诊
+    # 摆在一起。`spd_assessments` 没有机构列，按范围内在管档案的患者归属
+    assessments = db.query(SpdAssessment)
+    if orgs is not None:
+        in_scope = select(SpdEnrollment.patient_id).where(
+            SpdEnrollment.org_id.in_(orgs or [0]), SpdEnrollment.status == "active")
+        if program_code:
+            in_scope = in_scope.where(SpdEnrollment.program_code == program_code)
+        assessments = assessments.filter(SpdAssessment.patient_id.in_(in_scope))
+    if program_code:
+        assessments = assessments.filter(SpdAssessment.program_code == program_code)
 
     coverage = []
     for program in programs:
@@ -1027,9 +1038,9 @@ def expert_workbench(
         "paths": _path_stats(db, orgs),
         "referrals": _referral_stats(db, orgs),
         "assessments": {
-            "total": db.query(SpdAssessment).count(),
+            "total": assessments.count(),
             "by_risk": row_dict(
-                db.query(SpdAssessment.risk_level, func.count(SpdAssessment.id))
+                assessments.with_entities(SpdAssessment.risk_level, func.count(SpdAssessment.id))
                 .group_by(SpdAssessment.risk_level)
                 .order_by(SpdAssessment.risk_level).all()
             ),
