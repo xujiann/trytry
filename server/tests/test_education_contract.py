@@ -519,6 +519,7 @@ def test_考核榜单精确_空分支兜底(client, admin, base, plans):
                 "passed": True,
                 "comment": "复核提高",
                 "assessor": "洪主任",
+                "enrolled": True,   # P2-625 加字段：还在报名、计入榜单
             },
             {
                 "id": plans["a2"]["id"],
@@ -527,6 +528,7 @@ def test_考核榜单精确_空分支兜底(client, admin, base, plans):
                 "passed": False,
                 "comment": "",
                 "assessor": "洪主任",
+                "enrolled": True,
             },
         ],
     }

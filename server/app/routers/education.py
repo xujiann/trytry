@@ -3,7 +3,7 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, update
+from sqlalchemy import and_, func, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from ..clock import now_naive
@@ -812,6 +812,8 @@ class AssessmentItemOut(BaseModel):
     passed: bool
     comment: str
     assessor: str
+    #: 学员此刻还在报名（P2-625）：退了报名的成绩照样列出、不计入人数与合格率
+    enrolled: bool
 
 
 class AssessmentBoardOut(BaseModel):
@@ -828,17 +830,23 @@ def list_assessments(plan_id: int, db: Session = Depends(get_db), user: User = D
     if plan is not None:  # 查不到计划照旧回空榜（既有行为，不借机改成 404）
         # P0-38：逐人成绩是人事考核数据，按主办机构判——与录入同一口径
         assert_org_visible(db, user, plan.org_id)
+    # 人数、合格数、合格率只算还在报名的（P2-625）：考过之后退报名是既有业务（不及格的退出本期、下期再报），名额随之
+    # 放给下一位；原先榜单按全部考核行算，退了的照算——容量 2 的计划榜上 3 人，合格率里混着「已取消」。
+    # 报名按（计划, 学员）唯一，外连不会多出行
     rows = (
-        db.query(TrainingAssessment)
+        db.query(TrainingAssessment, TrainingEnrollment.status)
+        .outerjoin(TrainingEnrollment, and_(TrainingEnrollment.plan_id == TrainingAssessment.plan_id,
+                                            TrainingEnrollment.user_id == TrainingAssessment.user_id))
         .filter(TrainingAssessment.plan_id == plan_id)
         .order_by(TrainingAssessment.score.desc())
         .all()
     )
-    passed = sum(1 for r in rows if r.passed)
+    counted = [r for r, status in rows if status == "enrolled"]
+    passed = sum(1 for r in counted if r.passed)
     return {
-        "total": len(rows),
+        "total": len(counted),
         "passed": passed,
-        "pass_rate_pct": round(passed * 100.0 / len(rows), 2) if rows else 0.0,
+        "pass_rate_pct": round(passed * 100.0 / len(counted), 2) if counted else 0.0,
         "items": [
             {
                 "id": r.id,
@@ -847,8 +855,9 @@ def list_assessments(plan_id: int, db: Session = Depends(get_db), user: User = D
                 "passed": r.passed,
                 "comment": r.comment,
                 "assessor": r.assessor,
+                "enrolled": status == "enrolled",
             }
-            for r in rows
+            for r, status in rows
         ],
     }
 

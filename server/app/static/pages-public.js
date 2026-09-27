@@ -1086,12 +1086,14 @@ async function drawEduGaps() {
           api(`/api/education/training-plans/${roster}/enrollments`),
           api(`/api/education/training-plans/${roster}/assessments`)]);
         holder.querySelector("#tp-roster").innerHTML =
-          `<h4>计划 ${esc(roster)} 报名名单（合格率 ${scores.pass_rate_pct}%）</h4>` +
+          // 合格率只算还在报名的（P2-625）：退了报名的成绩照列，标「不计入」
+          `<h4>计划 ${esc(roster)} 报名名单（合格率 ${scores.pass_rate_pct}%，按在报名的 ${scores.total} 人算）</h4>` +
           table(["用户ID", "账号", "姓名", "报名状态", "成绩", "是否合格"], list, (r) => {
             const s = scores.items.find((i) => i.user_id === r.user_id);
             return `<tr><td>${r.user_id}</td><td>${esc(r.username)}</td><td>${esc(r.full_name) || "—"}</td>
               <td>${esc(r.status_name)}</td><td>${s ? s.score : "—"}</td>
-              <td>${s ? (s.passed ? '<span class="tag green">合格</span>' : '<span class="tag red">不合格</span>') : "—"}</td></tr>`;
+              <td>${s ? (s.passed ? '<span class="tag green">合格</span>' : '<span class="tag red">不合格</span>') : "—"}${
+                s && !s.enrolled ? ' <span class="desc">不计入</span>' : ""}</td></tr>`;
           });
       }
     } catch (err) { setMsg("#tplan-msg", err.message, false); }
