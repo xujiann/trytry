@@ -1120,16 +1120,41 @@ def create_asset_movement(
     assert_obj_org_writable(db, user, asset)
     if asset.status == "scrapped":
         raise HTTPException(status_code=409, detail="已报废物资不可再出入库")
-    # 判定与增减都放进同一条 UPDATE。原先"先判够不够、再 += / -="是读-改-写，
-    # 并发下两个出库都判定够、各自算出同一个新值，最后只剩一笔——账实不符。
-    if body.movement_type in ("inbound", "return"):
-        add_amount(db, Asset, asset_id, "quantity", body.quantity)
-    elif not take_amount(db, Asset, asset_id, "quantity", body.quantity):
-        db.rollback()
-        raise HTTPException(status_code=409, detail="出库数量超过现存量")
-    movement = AssetMovement(asset_id=asset_id, created_by=user.id, **body.model_dump())
-    db.add(movement)
-    db.commit()
+    if body.movement_type == "return":
+        # 归还不超过已领未还（P2-627）：原先与入库同一个分支、只加不查——领用 2 件归还 5 件照样 201，从没领用过的物资
+        # 也能「归还」，台账凭空多出实物不存在的件数，流水上还记成归还、查不到来源。已领未还读的是流水合计，压不进一条
+        # UPDATE，判在物资这一行的锁里（两笔归还交错也不会一起还超）
+        with serialized_on(db, Asset, asset_id):
+            moved = {
+                kind: int(total)
+                for kind, total in db.query(
+                    AssetMovement.movement_type, func.coalesce(func.sum(AssetMovement.quantity), 0))
+                .filter(AssetMovement.asset_id == asset_id, AssetMovement.movement_type.in_(("issue", "return")))
+                .group_by(AssetMovement.movement_type)
+                .order_by(AssetMovement.movement_type)
+                .all()
+            }
+            outstanding = moved.get("issue", 0) - moved.get("return", 0)
+            if body.quantity > outstanding:
+                db.rollback()
+                raise HTTPException(status_code=409, detail=(
+                    f"归还数量超过已领未还的量（{max(outstanding, 0)}）；"
+                    "上线前借出、系统里没有领用记录的请走「入库」并在备注里写明来源"))
+            add_amount(db, Asset, asset_id, "quantity", body.quantity)
+            movement = AssetMovement(asset_id=asset_id, created_by=user.id, **body.model_dump())
+            db.add(movement)
+            db.commit()
+    else:
+        # 判定与增减都放进同一条 UPDATE。原先"先判够不够、再 += / -="是读-改-写，
+        # 并发下两个出库都判定够、各自算出同一个新值，最后只剩一笔——账实不符。
+        if body.movement_type == "inbound":
+            add_amount(db, Asset, asset_id, "quantity", body.quantity)
+        elif not take_amount(db, Asset, asset_id, "quantity", body.quantity):
+            db.rollback()
+            raise HTTPException(status_code=409, detail="出库数量超过现存量")
+        movement = AssetMovement(asset_id=asset_id, created_by=user.id, **body.model_dump())
+        db.add(movement)
+        db.commit()
     db.refresh(asset)  # 上面走的是 Core UPDATE，会话里的 asset 还是旧值
     if body.movement_type == "scrap" and asset.quantity == 0:
         asset.status = "scrapped"
