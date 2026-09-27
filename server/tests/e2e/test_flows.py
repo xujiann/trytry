@@ -1451,6 +1451,37 @@ def test_集成平台按接入方筛出的老消息_查看载荷就在当前页�
     assert seen and "E2E老消息载荷" in seen[0], seen   # 修前：「载荷不在当前页，请先按条件筛选」
 
 
+def _p2429_user(admin_call, seed, username, role):
+    try:
+        admin_call("POST", "/api/users", {"username": username, "password": "passw0rd1", "role": role,
+                                          "full_name": username, "org_id": seed["org"]["id"]})
+    except Exception:  # noqa: BLE001 - 同一会话里第二次建同名账号是 409，账号已在
+        pass
+
+
+def test_问诊的回复按钮只给医师(page, base_url, seed, admin_call):
+    """P2-429：互联网诊疗的「回复」接口只收医师，经办打开页面原先照样摆着「回复」，点下去一次 403。"""
+    _p2429_user(admin_call, seed, "e2e_p2429_op", "operator")
+    consult = admin_call("POST", "/api/telemedicine/consults", {
+        "patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"], "question": "E2E续方咨询P2429"})
+    _login(page, base_url, "e2e_p2429_op", "passw0rd1")
+    _open_page(page, "telemedicine", "互联网+诊疗")
+    expect(page.locator("tr", has_text="E2E续方咨询P2429")).to_contain_text("待医师回复")
+    expect(page.locator(f'button[data-reply="{consult["id"]}"]')).to_have_count(0)
+
+
+def test_上门服务的派单与取消不给公卫人员(page, base_url, seed, admin_call):
+    """P2-429：上门服务的「派单」「取消」只收经办 / 医师，公卫人员原先也看得到，点下去一次 403。"""
+    _p2429_user(admin_call, seed, "e2e_p2429_ph", "public_health")
+    visit = admin_call("POST", "/api/homevisits", {
+        "patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"], "service_type": "nursing",
+        "demand": "E2E待派单的上门"})
+    _login(page, base_url, "e2e_p2429_ph", "passw0rd1")
+    _open_page(page, "contracts", "家医签约")   # 上门服务调度挂在家医签约页下方
+    expect(page.locator("tr", has_text="E2E待派单的上门")).to_be_visible()
+    expect(page.locator(f'button[data-hvdis="{visit["id"]}"], button[data-hvcancel="{visit["id"]}"]')).to_have_count(0)
+
+
 def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
     """P2-43：「删除」路径节点原先点一下就删，节点的时限、角色与表单配置一并没了。"""
     hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")

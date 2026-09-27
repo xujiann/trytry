@@ -630,6 +630,11 @@ async function renderTelemedicine() {
   const actionableIds = new Set([...open, ...replied].map((c) => c.id));
   const consults = [...open, ...replied, ...recent.filter((c) => !actionableIds.has(c.id))];
   const TS = { open: ["待回复", "orange"], replied: ["已回复", "green"], closed: ["已结束", ""] };
+  // 按钮只给接口收的角色（P2-429）：回复限医师（require_roles("doctor")），结束限经办 / 医师；管理员两样都放行。
+  // 原先谁打开都摆着，点下去一次 403
+  const role = currentRole();
+  const canReply = ["doctor", "admin"].includes(role);
+  const canClose = ["operator", "doctor", "admin"].includes(role);
   $("#page-body").innerHTML = `
     ${panel("发起咨询", `
       <form class="inline" id="tm-form">
@@ -641,8 +646,8 @@ async function renderTelemedicine() {
       return `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.consult_type === "repeat_rx" ? "续方" : "咨询"}</td>
         <td>${esc(c.question)}</td><td>${esc(c.reply) || "—"}</td><td>${c.prescription_id ?? "—"}</td>
         <td>${statusTag(TS, c.status)}</td>
-        <td>${c.status === "open" ? `<button class="btn secondary" data-reply="${c.id}">回复</button>`
-          : c.status === "replied" ? `<button class="btn secondary" data-close="${c.id}">结束</button>` : "—"}</td></tr>`;
+        <td>${c.status === "open" ? (canReply ? `<button class="btn secondary" data-reply="${c.id}">回复</button>` : "待医师回复")
+          : c.status === "replied" && canClose ? `<button class="btn secondary" data-close="${c.id}">结束</button>` : "—"}</td></tr>`;
     }))}`;
   $("#tm-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/telemedicine/consults", formJson(e.target, ["patient_id", "org_id"]), "#tm-msg"); };
   // P2-38：回复三连问换成页内表单。医师姓名原先留空就记成"医师"——这条回复是谁答的，

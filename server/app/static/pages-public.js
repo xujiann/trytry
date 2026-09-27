@@ -1172,6 +1172,11 @@ async function drawHomeVisits() {
     api("/api/homevisits?status=applied"), api("/api/homevisits?status=dispatched"), api("/api/homevisits/stats")]);
   const actionableIds = new Set([...applied, ...dispatched].map((o) => o.id));
   const orders = [...applied, ...dispatched, ...recent.filter((o) => !actionableIds.has(o.id))];
+  // 按钮只给接口收的角色（P2-429）：派单 / 取消限经办 / 医师，完成另收公卫；管理员都放行。原先公卫人员也看得到
+  // 「派单」「取消」，点下去一次 403
+  const role = currentRole();
+  const canDispatch = ["operator", "doctor", "admin"].includes(role);
+  const canComplete = ["operator", "doctor", "public_health", "admin"].includes(role);
   const holder = appendSection(`
     ${panel("⑨ 送医送护上门（申请 → 派单 → 完成；自动关联履约中家医签约）", `
       <div class="cards">
@@ -1187,10 +1192,10 @@ async function drawHomeVisits() {
         <button>提交申请</button></form>
       <p class="msg" id="hv-msg"></p>
       ${table(["ID", "患者", "签约", "服务", "需求", "状态", "上门人员", "操作"], orders, (o) => {
-        const actions = o.status === "applied"
+        const actions = o.status === "applied" && canDispatch
           ? `<button class="btn secondary" data-hvdis="${o.id}">派单</button>
              <button class="btn danger" data-hvcancel="${o.id}">取消</button>`
-          : o.status === "dispatched"
+          : o.status === "dispatched" && canComplete
           ? `<button class="btn secondary" data-hvdone="${o.id}">完成</button>` : "—";
         return `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${o.contract_id ?? "—"}</td>
           <td>${esc(o.service_type_name)}</td><td>${esc(o.demand) || "—"}</td>
