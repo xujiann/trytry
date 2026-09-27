@@ -1134,7 +1134,10 @@ def test_退报名释放名额(client, admin):
 # `user_id` 唯一约束 500。两处合成 `service.point_account_for`（`insert_if_absent`），路由这一侧少了一处
 # 「库上有唯一约束」的写入点；它在 service 里，这条只扫路由的度量看不见——与上面 spd_tasks 移出清单（P2-131）
 # 同一个处境。不变式由 `tests/test_spd_point_account_first_race.py` 接手（确定时序的并发回归 + 「只此一处构造」的静态钉）。
-BASELINE_COVERED_WRITE_SITES = 130
+# 2026-09-27（P2-620）130 → 131，补记：P2-359（f502c87）直接签约建档时补一行目标池，走 `insert_if_absent`（库上唯一），
+# 覆盖当时就升到 131——可升了只打一行「[提示] 请上调」，`-q` 下看不见，基线一直挂在 130，下限白白松了一格
+# （谁再拆掉一处覆盖也不会红）。现在四个数都两头钉：升了 / 降了没跟着调基线，当场红（见下方断言）。
+BASELINE_COVERED_WRITE_SITES = 131
 # 2026-09-03（P1-30）1 → 0：最后一个未识别写入点（billing.run_reconciliation 的
 # `for d in diffs: db.add(d)`）由 _model_bindings 认出了"容器只装同一种模型"的形状。
 BASELINE_UNRESOLVED_WRITE_SITES = 0
@@ -1325,10 +1328,18 @@ def test_防复发闸门自证覆盖面():
     assert stats["undecided"] <= BASELINE_UNDECIDED_WRITE_SITES, (
         f"待决写入点从 {BASELINE_UNDECIDED_WRITE_SITES} 涨到 {stats['undecided']}：待决清单只减不增。"
     )
-    if stats["covered"] > BASELINE_COVERED_WRITE_SITES:
-        print(f"[提示] 覆盖已升到 {stats['covered']}，请把 BASELINE_COVERED_WRITE_SITES 上调。")
-    if unaudited < BASELINE_UNAUDITED_WRITE_SITES or stats["undecided"] < BASELINE_UNDECIDED_WRITE_SITES:
-        print("[提示] 未审计/待决数已下降，请把对应 BASELINE_* 下调，让棘轮咬住新位置。")
+    # 反方向也钉住（P2-620）：原先这里只 print 一行「[提示] 请上调 / 下调」，`-q` 下看不见——P2-359 让覆盖升到 131、
+    # 基线挂在 130 一直没人调，下限白白松了一格。数字变好了就得把基线跟上，让棘轮咬住新位置
+    assert stats["covered"] <= BASELINE_COVERED_WRITE_SITES, (
+        f"覆盖已升到 {stats['covered']}，请把 BASELINE_COVERED_WRITE_SITES 上调并写上是哪一批。"
+    )
+    assert unaudited >= BASELINE_UNAUDITED_WRITE_SITES and stats["undecided"] >= BASELINE_UNDECIDED_WRITE_SITES, (
+        f"未审计 {unaudited} / 待决 {stats['undecided']} 已低于基线 {BASELINE_UNAUDITED_WRITE_SITES} / "
+        f"{BASELINE_UNDECIDED_WRITE_SITES}，请把对应 BASELINE_* 下调并写上是哪一批。"
+    )
+    assert len(stats["unresolved"]) >= BASELINE_UNRESOLVED_WRITE_SITES, (
+        f"形状识别不了的写入点已低于基线 {BASELINE_UNRESOLVED_WRITE_SITES}，请把基线下调。"
+    )
 
 
 def test_已审计清单不得腐烂():
