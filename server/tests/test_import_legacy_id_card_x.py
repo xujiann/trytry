@@ -15,8 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from import_legacy import run_import  # noqa: E402
 
+from app.chronic_seed import SEED_CHRONIC_DISEASE_TYPES
 from app.database import SessionLocal
-from app.models import ChronicPatient, Encounter, Organization, Patient
+from app.models import ChronicDiseaseType, ChronicPatient, Encounter, Organization, Patient
 
 UPPER = "11010519491231197X"
 LOWER = UPPER[:-1] + "x"
@@ -27,6 +28,7 @@ def world():
     reset_database()
     with SessionLocal() as db:
         db.add(Organization(name="P1197 卫生院", org_type="township", level="township"))
+        db.add_all(ChronicDiseaseType(**seed) for seed in SEED_CHRONIC_DISEASE_TYPES)   # 慢病档案导入按目录校验病种
         db.commit()
 
 

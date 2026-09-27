@@ -13,8 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from import_legacy import run_import  # noqa: E402
 
+from app.chronic_seed import SEED_CHRONIC_DISEASE_TYPES
 from app.database import SessionLocal
-from app.models import ChronicPatient, Employee, Encounter, Organization, Patient
+from app.models import ChronicDiseaseType, ChronicPatient, Employee, Encounter, Organization, Patient
 
 SAMPLES = Path(__file__).resolve().parent.parent / "scripts" / "samples"
 
@@ -22,6 +23,10 @@ SAMPLES = Path(__file__).resolve().parent.parent / "scripts" / "samples"
 @pytest.fixture(scope="module", autouse=True)
 def fresh_db():
     reset_database()
+    # 慢病病种目录：平台启动时种子化，慢病档案导入按它校验病种（P2-584）；这里不经 app 启动，照同一份种子铺上
+    with SessionLocal() as db:
+        db.add_all(ChronicDiseaseType(**seed) for seed in SEED_CHRONIC_DISEASE_TYPES)
+        db.commit()
     yield
 
 

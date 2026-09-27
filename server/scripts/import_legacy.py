@@ -8,8 +8,9 @@
 - patients：患者（EMPI 按身份证号幂等，自动生成电子健康卡号）
     列：name, id_card, gender(可空), birth_date(可空 YYYY-MM-DD), phone(可空)
 - chronic：慢病档案（患者身份证号 + 病种 幂等）
-    列：id_card, disease(hypertension|diabetes|copd|obesity|hyperlipidemia),
-        level(1-3 可空默认1), managed_by_org(机构名), next_due(可空 YYYY-MM-DD)
+    列：id_card, disease(慢病病种目录里启用的编码，如 hypertension / diabetes，与平台建档同一个真源),
+        level(1-3 可空默认1), managed_by_org(机构名),
+        next_due(可空 YYYY-MM-DD；留空按病种随访周期建议首次随访，与平台建档同口径)
 - employees：员工（机构名 + 姓名 幂等）
     列：org_name, name, title(可空), position(可空)
 - encounters：就诊记录（患者+机构+就诊日期+诊断编码 幂等）
@@ -71,6 +72,7 @@ from app.numtypes import INT4_MAX  # noqa: E402
 from app.models import (  # noqa: E402
     Admission,
     Bed,
+    ChronicDiseaseType,
     ChronicPatient,
     Employee,
     Encounter,
@@ -82,6 +84,7 @@ from app.models import (  # noqa: E402
     User,
     Ward,
 )
+from app.routers.chronic import _suggest_next_due  # noqa: E402
 from app.routers.patients import id_card_variants  # noqa: E402
 from app.schemas import OrganizationCreate  # noqa: E402
 
@@ -97,7 +100,6 @@ def _field_len(model, field: str) -> tuple[int, int]:
 ORG_TYPES = {"lead_hospital", "township", "village", "public_health"}
 ORG_NAME_LEN = _field_len(OrganizationCreate, "name")
 ORG_LEVELS = {"city", "county", "township", "village"}
-DISEASES = {"hypertension", "diabetes", "copd", "obesity", "hyperlipidemia"}
 ENCOUNTER_TYPES = {"outpatient", "inpatient"}
 RX_STATUSES = {"approved", "auto_passed"}
 BILL_TYPES = {"outpatient", "inpatient"}
@@ -372,8 +374,13 @@ def import_patients(db, rows, report: ImportReport, ctx: ImportContext) -> None:
 
 
 def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
+    """慢病档案。病种与平台建档同一个真源：慢病病种目录里启用的编码；到期日留空按病种随访周期建议（P2-584）——
+    原先按一份手抄的五个病种校验（收了目录里没有的肥胖、高血脂，拒了目录里有的冠心病、脑卒中、严重精神障碍、
+    肿瘤、结核），到期日留空就空着，导进来的人从此不进任何到期清单。"""
     patients = _patients_by_id_card(db)
     orgs = _orgs_by_name(db)
+    diseases = {code for (code,) in db.query(ChronicDiseaseType.code).filter(ChronicDiseaseType.active.is_(True))}
+    suggested_due: dict[str, str] = {}
     existing = {
         (pid, disease)
         for pid, disease in db.query(ChronicPatient.patient_id, ChronicPatient.disease).all()
@@ -382,8 +389,8 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         if not _require(row, line_no, report, "id_card", "disease", "managed_by_org"):
             continue
         disease = row["disease"].strip()
-        if disease not in DISEASES:
-            report.error(line_no, f"disease 非法: {disease}（须为 {'/'.join(sorted(DISEASES))}）", row)
+        if disease not in diseases:
+            report.error(line_no, f"disease 不在慢病病种目录内（或已停用）: {disease}", row)
             continue
         patient_id = _find_by_id_card(patients, row["id_card"].strip())
         if patient_id is None:
@@ -404,6 +411,10 @@ def import_chronic(db, rows, report: ImportReport, ctx: ImportContext) -> None:
         if (patient_id, disease) in existing:
             report.skipped += 1
             continue
+        if not next_due:
+            if disease not in suggested_due:
+                suggested_due[disease] = _suggest_next_due(db, disease)
+            next_due = suggested_due[disease]
         db.add(
             ChronicPatient(
                 patient_id=patient_id,
