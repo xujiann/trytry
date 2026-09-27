@@ -48,7 +48,8 @@ from ..models import (
     SpdScale,
 )
 from ..rules import score_scale
-from ..service import (MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES, award_points, enrollment_for, judge_measurement, measure_program_for,
+from ..service import (ENROLL_STATUS_LABELS, ENROLLMENT_ENDED_STATUSES, MEASUREMENT_SOURCE_NAMES, REVISIT_OPEN_STATUSES,
+                       award_points, enrollment_for, judge_measurement, measure_program_for,
                        measure_value_problem, scale_program_mismatch, scale_unusable, spawn_task,
                        unknown_program)
 from ...visibility import assert_org_writable, assert_patient_visible, scope_patient_list, visible_org_ids
@@ -1005,11 +1006,25 @@ def update_intervention(
         raise HTTPException(status_code=404, detail="干预记录不存在")
     enrollment = db.get(SpdEnrollment, record.enrollment_id) if record.enrollment_id else None
     assert_org_writable(db, user, enrollment.org_id if enrollment else None)
-    for key, value in body.model_dump(exclude_unset=True).items():
-        if key == "feedback" and not value:
-            continue
-        setattr(record, key, value)
-    db.commit()
+    changes = body.model_dump(exclude_unset=True)
+    # 状态按状态机走（P2-593）：原先任意状态改任意状态——办结了的再「办结」「移除」，移除的一律能「恢复」，连患者已
+    # 登记死亡、档案收尾时一并移除的也恢复回计划中（档案的「恢复管理」对死亡是 409）。反馈照旧随时可记。
+    # 判在锁里、以重读的状态为准（与下面 `update_revisit` 同一写法）：居民在手机上点「已完成」（`mark_intervention_done`）
+    # 与这里「移除」同时到，锁外读的旧状态放行之后照样把刚办结的盖成已移除
+    with serialized_on(db, SpdIntervention, intervention_id):
+        db.refresh(record)
+        if "status" in changes:
+            if record.status == "done":
+                raise HTTPException(status_code=409, detail="干预已办结，不能再改状态")
+            if (record.status == "removed" and changes["status"] != "removed"
+                    and enrollment is not None and enrollment.status in ENROLLMENT_ENDED_STATUSES):
+                raise HTTPException(status_code=409, detail=(
+                    f"患者已不在管（{ENROLL_STATUS_LABELS[enrollment.status]}），干预不能恢复"))
+        for key, value in changes.items():
+            if key == "feedback" and not value:
+                continue
+            setattr(record, key, value)
+        db.commit()
     return _intervention_out(record)
 
 
@@ -1296,6 +1311,23 @@ def list_revisits(
     return [_revisit_out(r, names.get(r.patient_id, "")) for r in rows]
 
 
+def _management_ended(db: Session, patient_id: int, program_code: str) -> str:
+    """这位患者这个病种的档案是不是都结束了（死亡 / 迁出 / 排除 / 结案）：是的返回状态的中文（有死亡的报死亡，否则报
+    最近一份的），还有在管 / 召回中的、从没建过档的返回空串。
+
+    没写病种的复诊不判：结案收尾（`close_open_work`）只收同病种的，它们不会被收尾移除；死亡该不该连带别的病种是
+    P1-112 / P2-507 待裁定的事。
+    """
+    if not program_code:
+        return ""
+    statuses = [status for (status,) in db.query(SpdEnrollment.status).filter(
+        SpdEnrollment.patient_id == patient_id, SpdEnrollment.program_code == program_code,
+    ).order_by(SpdEnrollment.id.desc())]
+    if not statuses or any(status not in ENROLLMENT_ENDED_STATUSES for status in statuses):
+        return ""
+    return ENROLL_STATUS_LABELS["dead" if "dead" in statuses else statuses[0]]
+
+
 class RevisitUpdate(BaseModel):
     # 不可空的列可以不传、不能传 null（P1-95，写法见 app/patchtypes.py）：原先显式 null 照写进 NOT NULL 列，500
     status: str = Field(default=UNSET, pattern="^(planned|done|overdue|removed)$")
@@ -1327,6 +1359,15 @@ def update_revisit(
     # 可移植的原子追加，锁住这一行、重读、再追加（concurrency.serialized_on）。
     with serialized_on(db, SpdRevisit, revisit_id):
         db.refresh(record)
+        # 状态按状态机走（P2-593，判在锁里、以重读的状态为准）：原先已复诊的还能再「已复诊」（实际复诊日被改成今天）、
+        # 「移除」，移除的一律能「恢复」——患者已登记死亡、档案收尾时一并移除的复诊恢复回已排期，随后超期
+        if "status" in data:
+            if record.status == "done":
+                raise HTTPException(status_code=409, detail="已复诊的计划不能再改状态")
+            ended = (_management_ended(db, record.patient_id, record.program_code)
+                     if record.status == "removed" and data["status"] != "removed" else "")
+            if ended:
+                raise HTTPException(status_code=409, detail=f"患者已不在管（{ended}），复诊计划不能恢复")
         for key, value in data.items():
             setattr(record, key, value)
         record.log = (record.log or []) + [{

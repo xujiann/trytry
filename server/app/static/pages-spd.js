@@ -3580,6 +3580,7 @@ async function renderSpdMember() {
          <td>${spdTag(SPD_INTV_STATUS, i.status)}</td><td>${esc(i.feedback || "—")}</td>
          <td>${i.status === "removed"
            ? `<button class="btn secondary" data-intv="${i.id}" data-s="planned">恢复</button>`
+           : i.status === "done" ? "—"   // 已办结是终态（P2-593）
            : `<button class="btn secondary" data-intv="${i.id}" data-s="done">办结</button>
               <button class="btn secondary" data-intv="${i.id}" data-s="removed">移除</button>`}
          </td></tr>`)}`)}
@@ -3918,6 +3919,7 @@ function spdRevisitTable(rows) {
      <td>${spdTag(SPD_REMIND_STATUS, r.remind_status)}</td>
      <td>${r.status === "removed"
        ? `<button class="btn secondary" data-revisit="${r.id}" data-s="planned">恢复</button>`
+       : r.status === "done" ? "—"   // 已复诊是终态（P2-593）：原先照样给「已复诊」「移除」，再点一次实际复诊日被改成今天
        : `<button class="btn secondary" data-revisit="${r.id}" data-s="done">已复诊</button>
           <button class="btn secondary" data-revisit="${r.id}" data-s="__remind">已联系</button>
           <button class="btn secondary" data-revisit="${r.id}" data-s="removed">移除</button>`}

@@ -1161,8 +1161,10 @@ ENROLL_STATUS_LABELS = {
     "dead": "已死亡", "lost": "脱管", "recalled": "召回中", "completed": "已结案",
 }
 
+#: 档案已结束、患者不在这份档案下管了：死亡、迁出、排除、结案。召回中 / 脱管不算——人还挂在本机构、正在找回来
+ENROLLMENT_ENDED_STATUSES = ("dead", "migrated", "excluded", "completed")
 #: 迁出登记之后、确认之前原档案成了这些状态的，这次迁出不再生效：死亡（P1-111），已迁出 / 已排除 / 已结案（P2-527）
-MIGRATION_VOID_STATUSES = ("dead", "migrated", "excluded", "completed")
+MIGRATION_VOID_STATUSES = ENROLLMENT_ENDED_STATUSES
 
 
 def migration_void_reason(enrollment_status: str) -> str:
