@@ -726,15 +726,29 @@ async function renderMaterials() {
 
 async function renderAnalytics() {
   $("#page-desc").textContent = "县域就诊率与就医流向 / 运行效率 / 自定义绩效公式与综合报告";
-  const period = localStorage.getItem("medplat_ana_period") || localToday().slice(0, 7);
-  const [flow, eff, formulas, vars] = await Promise.all([
-    api("/api/analytics/patient-flow"), api(`/api/analytics/efficiency?period=${period}`),
+  const thisMonth = localToday().slice(0, 7);
+  const load = (p) => Promise.all([
+    api("/api/analytics/patient-flow"), api(`/api/analytics/efficiency?period=${encodeURIComponent(p)}`),
     api("/api/analytics/formulas"), api("/api/analytics/formula-variables")]);
+  let period = localStorage.getItem("medplat_ana_period") || thisMonth;
+  let loaded;
+  try {
+    loaded = await load(period);
+  } catch (err) {
+    // 与会计 / 成本页同一个坑（P1-62，本页 P2-586）：切换框是自由文本，存下 `2026` / `2026/09` 之后整页那个
+    // Promise.all 422，切换框又画在它之后——每次进来都只剩一行报错、连改正入口都没有。只对 422 回落本月并清掉坏值
+    if (err.status !== 422 || period === thisMonth) throw err;
+    localStorage.removeItem("medplat_ana_period");
+    period = thisMonth;
+    loaded = await load(period);
+  }
+  const [flow, eff, formulas, vars] = loaded;
   const report = currentRole() === "admin" || currentRole() === "director"
-    ? await api(`/api/analytics/performance-report?period=${period}`).catch(() => null) : null;
+    ? await api(`/api/analytics/performance-report?period=${encodeURIComponent(period)}`).catch(() => null) : null;
   $("#page-body").innerHTML = `
     ${panel("期间", `
-      <form class="inline" id="ana-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>`)}
+      <form class="inline" id="ana-period"><input name="period" value="${esc(period)}" placeholder="YYYY-MM"><button>切换</button></form>
+      <p class="msg" id="ana-period-msg"></p>`)}
     ${panel("就医流向", `
       <div class="cards">
         <div class="card"><span class="k">县域就诊率</span><b>${flow.county_visit_rate_pct}%</b></div>
@@ -780,8 +794,15 @@ async function renderAnalytics() {
         `<tr><td>${idx + 1}</td><td>${esc(o.org_name)}</td><td>${esc(o.level_name)}</td>
          ${o.items.map((i) => `<td>${i.value === null ? `<span class="tag red" title="${esc(i.error || "")}">错误</span>` : i.value}</td>`).join("")}
          <td><b>${o.weighted_score}</b></td></tr>`)}`) : ""}`;
-  $("#ana-period").onsubmit = (e) => { e.preventDefault();
-    localStorage.setItem("medplat_ana_period", new FormData(e.target).get("period")); route(); };
+  $("#ana-period").onsubmit = async (e) => {
+    e.preventDefault();
+    const value = String(new FormData(e.target).get("period") || "").trim();
+    // 先让后端判这个期间合不合法，合法才记住（与会计 / 成本页同一句）：校验只有后端一份，坏值不进 localStorage
+    try {
+      await api(`/api/analytics/efficiency?period=${encodeURIComponent(value)}`);
+    } catch (err) { setMsg("#ana-period-msg", err.message, false); return; }
+    localStorage.setItem("medplat_ana_period", value); route();
+  };
   $("#ob-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/analytics/outbound-visits",
       formJson(e.target, ["patient_id", "total_amount", "insurance_pay", "referral_id"]), "#ana-msg"); };

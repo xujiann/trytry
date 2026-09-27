@@ -3232,6 +3232,22 @@ def test_成本页存下的期间被拒时回落本月_切换框先验再存(pag
     assert page.evaluate("() => localStorage.getItem('medplat_cost_period')") is None
 
 
+def test_决策指标页存下的期间被拒时回落本月_切换框先验再存(page, base_url):
+    """与会计 / 成本页同一个坑（P1-62），本页漏了（P2-586）：存下 `2026`（绩效考核页的「周期 YYYY 或 YYYY-MM」
+    收它）之后整页只剩一行报错、切换框画不出来——每次进来都是这样，只能清站点数据。"""
+    _login(page, base_url)
+    page.evaluate("() => localStorage.setItem('medplat_ana_period', '2026')")
+    _open_page(page, "analytics", "决策指标扩展")
+    this_month = page.evaluate("() => localToday().slice(0, 7)")
+    expect(page.locator('#ana-period input[name="period"]')).to_have_value(this_month)
+    assert page.evaluate("() => localStorage.getItem('medplat_ana_period')") is None
+
+    page.fill('#ana-period input[name="period"]', "2026/09")
+    page.click("#ana-period button")
+    expect(page.locator("#ana-period-msg")).to_contain_text("period")
+    assert page.evaluate("() => localStorage.getItem('medplat_ana_period')") is None
+
+
 @pytest.fixture(scope="session")
 def cost_rule_seed(base_url, seed):
     """成本分摊规则改删的前置：后勤 + 内科两个科室，后勤分给内科 60%（P1-116）。
