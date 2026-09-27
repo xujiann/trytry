@@ -827,7 +827,9 @@ async function refreshRoundDetail() {
           `${kv("时刻", esc(v.measured_at))}
            ${kv("体温", v.temperature != null ? `${v.temperature} ℃` : "—")}
            ${kv("脉搏/呼吸", `${v.pulse ?? "—"} / ${v.respiration ?? "—"}`)}
-           ${kv("血压", v.sbp != null || v.dbp != null ? `${v.sbp ?? "—"}/${v.dbp ?? "—"}` : "—")}`)).join("")
+           ${kv("血压", v.sbp != null || v.dbp != null ? `${v.sbp ?? "—"}/${v.dbp ?? "—"}` : "—")}
+           ${kv("出入量", v.intake_ml != null || v.output_ml != null ? `${v.intake_ml ?? "—"} / ${v.output_ml ?? "—"} ml` : "—")}
+           ${kv("体重", v.weight_kg != null ? `${v.weight_kg} kg` : "—")}`)).join("")
       : '<p class="empty">尚无体征记录</p>');
 }
 
@@ -858,15 +860,18 @@ $("#round-vital").addEventListener("submit", async (e) => {
   // 未测项留空 → 不进 body，落库为 null；填 0 会污染趋势曲线
   // 日期时间控件送 `T` 分隔，换成空格再送：与桌面端、服务端默认的写法一致（P1-100）
   const body = { measured_at: $("#rv-at").value.trim().replace("T", " ") };
+  // 出入量、体重（P2-473）：接口与体温单模型一直有这三项，查房这里原先录不进、也看不见
   for (const [field, sel] of [["temperature", "#rv-temp"], ["pulse", "#rv-pulse"],
-                              ["respiration", "#rv-resp"], ["sbp", "#rv-sbp"], ["dbp", "#rv-dbp"]]) {
+                              ["respiration", "#rv-resp"], ["sbp", "#rv-sbp"], ["dbp", "#rv-dbp"],
+                              ["intake_ml", "#rv-in"], ["output_ml", "#rv-out"], ["weight_kg", "#rv-weight"]]) {
     const raw = $(sel).value.trim();
     if (raw !== "") body[field] = Number(raw);
   }
   try {
     await api(`/api/inpatient/admissions/${roundAdmissionId}/vitals`, {
       method: "POST", body: JSON.stringify(body) });
-    ["#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp"].forEach((s) => { $(s).value = ""; });
+    ["#rv-temp", "#rv-pulse", "#rv-resp", "#rv-sbp", "#rv-dbp", "#rv-in", "#rv-out", "#rv-weight"]
+      .forEach((s) => { $(s).value = ""; });
     setMsg("#round-msg", "体征已录入", true);
     await refreshRoundDetail();
   } catch (err) { setMsg("#round-msg", err.message, false); }

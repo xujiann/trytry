@@ -70,14 +70,17 @@ async function renderClinicalDocs() {
         <input name="temperature" type="number" step="0.1" placeholder="体温℃">
         <input name="pulse" type="number" placeholder="脉搏"><input name="respiration" type="number" placeholder="呼吸">
         <input name="sbp" type="number" placeholder="收缩压"><input name="dbp" type="number" placeholder="舒张压">
+        <input name="intake_ml" type="number" min="0" placeholder="入量 ml"><input name="output_ml" type="number" min="0" placeholder="出量 ml">
+        <input name="weight_kg" type="number" step="0.1" min="0" placeholder="体重 kg">
         <button>录入</button></form>
       ${vitals.length ? lineChart(vitals.map((v) => v.measured_at.slice(5, 10)),
         // 未测的给 null、不给 0（P2-158）：接口的注释与用户手册都说「未测项留空不要填 0，填 0 会污染体温单趋势曲线」
         { "体温": vitals.map((v) => v.temperature ?? null), "脉搏": vitals.map((v) => v.pulse ?? null) },
         ["#c0392b", "#0b6e6e"]) : ""}
-      ${table(["测量时刻", "体温", "脉搏", "呼吸", "血压", "记录人"], vitals, (v) =>
+      ${table(["测量时刻", "体温", "脉搏", "呼吸", "血压", "入量 ml", "出量 ml", "体重 kg", "记录人"], vitals, (v) =>
         `<tr><td>${esc(v.measured_at)}</td><td>${v.temperature ?? "—"}</td><td>${v.pulse ?? "—"}</td>
-         <td>${v.respiration ?? "—"}</td><td>${v.sbp ?? "—"}/${v.dbp ?? "—"}</td><td>${esc(v.recorder)}</td></tr>`)}`)}
+         <td>${v.respiration ?? "—"}</td><td>${v.sbp ?? "—"}/${v.dbp ?? "—"}</td>
+         <td>${v.intake_ml ?? "—"}</td><td>${v.output_ml ?? "—"}</td><td>${v.weight_kg ?? "—"}</td><td>${esc(v.recorder)}</td></tr>`)}`)}
     ${panel("交接班", `
       <form class="inline" id="handover-form">
         <input name="ward_id" type="number" placeholder="病区ID" required>
@@ -100,7 +103,9 @@ async function renderClinicalDocs() {
     postAction(`/api/inpatient/admissions/${current}/nursing-records`, formJson(e.target), "#doc-msg"); };
   $("#vital-form").onsubmit = (e) => { e.preventDefault();
     postAction(`/api/inpatient/admissions/${current}/vitals`,
-      formJson(e.target, ["temperature", "pulse", "respiration", "sbp", "dbp"]), "#doc-msg"); };
+      // 出入量、体重（P2-473）：接口与体温单模型一直有这三项，页面原先录不进、也看不见
+      formJson(e.target, ["temperature", "pulse", "respiration", "sbp", "dbp", "intake_ml", "output_ml", "weight_kg"]),
+      "#doc-msg"); };
   $("#handover-form").onsubmit = (e) => { e.preventDefault();
     postAction("/api/inpatient/handovers", formJson(e.target, ["ward_id", "critical_count"]), "#doc-msg"); };
 }

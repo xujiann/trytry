@@ -2444,9 +2444,14 @@ def test_clinical_documents_flow(page, base_url, seed):
     page.fill("#vital-form input[name=measured_at]", "2026-08-12T08:00")
     page.fill("#vital-form input[name=temperature]", "37.4")
     page.fill("#vital-form input[name=pulse]", "86")
+    page.fill("#vital-form input[name=intake_ml]", "1800")   # P2-473：出入量、体重原先录不进也看不见
+    page.fill("#vital-form input[name=weight_kg]", "61.5")
     _submit(page, "#vital-form button")
 
     expect(page.locator("#page-body")).to_contain_text("文书完整")
+    row = page.locator("tr", has_text="2026-08-12")
+    expect(row.first).to_contain_text("1800")
+    expect(row.first).to_contain_text("61.5")
 
 
 def test_体温单缺测的不画成0_在那儿断开(page, base_url, admin_read, admin_call):
