@@ -1072,6 +1072,27 @@ def test_定时任务改间隔在页内表单里填_取消即不改(page, base_u
         admin_call("PATCH", f"/api/jobs/{name}", {"interval_seconds": before})  # 共享调度配置复原
 
 
+def test_定时任务执行历史按任务与结果筛_重画后选中项还在(page, base_url, admin_read):
+    """P2-467：执行历史只看最新 50 条、不能筛——日跑任务的失败记录半小时就滚出这一页。补「任务」「结果」两个筛选，
+    选中项只留在内存里（不进存储），整页重画之后下拉框仍是选中的那一项。"""
+    name = admin_read("/api/jobs")[0]["name"]
+    _login(page, base_url)
+    _open_page(page, "jobs", "定时任务")
+    status = page.locator('#job-run-filter select[name="status"]')
+    _redrawn(page, lambda: status.select_option("failed"))
+    expect(page.locator('#job-run-filter select[name="status"]')).to_have_value("failed")
+    history = page.locator(".panel", has_text="执行历史")
+    expect(history.locator("td .tag.green")).to_have_count(0)   # 只看失败：一行「成功」都不该有
+    job = page.locator('#job-run-filter select[name="job_name"]')
+    _redrawn(page, lambda: job.select_option(name))
+    expect(page.locator('#job-run-filter select[name="job_name"]')).to_have_value(name)
+    expect(page.locator('#job-run-filter select[name="status"]')).to_have_value("failed")   # 两个筛选叠加
+    shown = {c.strip() for c in history.locator("td code").all_inner_texts()}
+    assert shown <= {name}, shown
+    _redrawn(page, lambda: page.locator('#job-run-filter select[name="status"]').select_option(""))
+    _redrawn(page, lambda: page.locator('#job-run-filter select[name="job_name"]').select_option(""))
+
+
 def test_就诊凭据作废在页内表单里填_写明后果(page, base_url, seed, admin_read):
     """P2-38：「作废」原先弹窗要原因；换成表单，上方写明作废不能恢复，取消即不作废。"""
     import json

@@ -6,10 +6,13 @@
 T6.7 整改：整个模块收敛到管理层。任务摘要里带着各类超期数量（慢病随访、
 医废滞留、合同临期），这属于运营管理信息，没有理由对医师、药师开放。
 """
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..clock import now_naive
 from ..database import get_db
 from ..numtypes import INT4_MAX
 from ..deps import paginate, require_admin, require_roles
@@ -71,12 +74,21 @@ class JobUpdateOut(BaseModel):
 
 @router.patch("/{name}", response_model=JobUpdateOut, dependencies=[Depends(require_admin)])
 def update_job(name: str, body: JobUpdate, db: Session = Depends(get_db)):
-    """调整调度参数（限管理员）。间隔下限 60 秒，防止误配成高频空转。"""
+    """调整调度参数（限管理员）。间隔下限 60 秒，防止误配成高频空转。
+
+    改间隔同时重排下次到期（P2-467）：`next_run_at` 是上次执行时按旧间隔算好落库的，原先只改间隔不动它——日跑的任务
+    改成每小时，照旧要等到明天这个点才跑下一次，而运维手册「超过间隔 3 倍未执行即告警」按新间隔算，3 小时后就误报。
+    取「原定到期」与「上次执行 + 新间隔」中早的那个：改短了按新间隔提前（已过点的下一轮调度就跑），改长了不把
+    已经排好的这一次往后推。
+    """
     job = db.query(ScheduledJob).filter(ScheduledJob.name == name).first()
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     if body.interval_seconds is not None:
         job.interval_seconds = body.interval_seconds
+        if job.next_run_at is not None:   # 从未排过的本就立即到期，不动
+            rescheduled = (job.last_run_at or now_naive()) + timedelta(seconds=body.interval_seconds)
+            job.next_run_at = min(job.next_run_at, rescheduled)
     if body.enabled is not None:
         job.enabled = body.enabled
     db.commit()

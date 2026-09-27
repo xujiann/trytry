@@ -951,9 +951,15 @@ async function renderServiceRequests() {
 
 /* ---------------- 定时任务 ---------------- */
 
+/* 执行历史的筛选（P2-467）：默认任务每小时跑百余次（60 秒、300 秒的各一批），只看最新 50 条的话，日跑任务的失败记录
+   半小时就滚出这一页——接口早就收 job_name / status，页面没给入口。筛选只留在内存里、不进存储：任务名指向的任务会改名下线，
+   存下来的旧名字下次进来就成了「下拉框显示全部任务、查的却是那个旧任务」（见 pickedId 的说明）。 */
+const JOB_RUN_FILTER = { job_name: "", status: "" };
+
 async function renderJobs() {
   $("#page-desc").textContent = "任务注册表与执行留痕；多实例下靠 Redis 抢锁保证只跑一次";
-  const [jobs, runs] = await Promise.all([api("/api/jobs"), api("/api/jobs/runs")]);
+  const runQuery = new URLSearchParams(Object.entries(JOB_RUN_FILTER).filter(([, v]) => v));
+  const [jobs, runs] = await Promise.all([api("/api/jobs"), api(`/api/jobs/runs${runQuery.toString() ? `?${runQuery}` : ""}`)]);
   // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML =
     panel(`任务清单（${jobs.length}）`,
@@ -971,12 +977,18 @@ async function renderJobs() {
              ${j.implemented ? "" : '<span class="tag red">无实现</span>'}</td></tr>`)
       + '<p class="msg" id="job-msg"></p>')
     + panel(`执行历史（最近 ${runs.length} 条）`,
-      table(["时间", "任务", "触发", "结果", "处理数", "耗时", "摘要"], runs, (r) =>
+      `<form class="inline" id="job-run-filter">
+        <select name="job_name"><option value="">全部任务</option>${jobs.map((j) =>
+          `<option value="${esc(j.name)}"${j.name === JOB_RUN_FILTER.job_name ? " selected" : ""}>${esc(j.title)}</option>`).join("")}</select>
+        <select name="status"><option value="">全部结果</option>${[["failed", "只看失败"], ["succeeded", "只看成功"]].map(([v, t]) =>
+          `<option value="${v}"${v === JOB_RUN_FILTER.status ? " selected" : ""}>${t}</option>`).join("")}</select></form>`
+      + table(["时间", "任务", "触发", "结果", "处理数", "耗时", "摘要"], runs, (r) =>
         `<tr><td>${esc(r.created_at.slice(0, 19).replace("T", " "))}</td><td><code>${esc(r.job_name)}</code></td>
          <td>${r.trigger === "manual" ? "人工" : "计划"}</td>
          <td><span class="tag ${r.status === "succeeded" ? "green" : "red"}">${
            r.status === "succeeded" ? "成功" : "失败"}</span></td>
          <td>${r.affected}</td><td>${r.duration_ms} ms</td><td>${esc(r.message)}</td></tr>`));
+  $("#job-run-filter").onchange = (e) => { JOB_RUN_FILTER[e.target.name] = e.target.value; route(); };
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
