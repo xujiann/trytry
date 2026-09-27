@@ -213,6 +213,8 @@ class AdmissionCreate(BaseModel):
     bed_id: int
     doctor_name: str = Field(default="", max_length=64)
     diagnosis_name: str = Field(default="", max_length=256)
+    # 入院诊断的 ICD 编码（P2-632）：住院表不存它，记在入院那条住院就诊上（与门急诊登记 `EncounterCreate` 同一列同一宽度）
+    diagnosis_code: str = Field(default="", max_length=64)
 
 
 class AdmissionOut(BaseModel):
@@ -278,6 +280,7 @@ def create_admission(
         org_id=ward.org_id,
         doctor_name=body.doctor_name,
         encounter_type="inpatient",
+        diagnosis_code=body.diagnosis_code,
         diagnosis_name=body.diagnosis_name,
         summary="住院入院登记",
     )
@@ -291,10 +294,10 @@ def create_admission(
         "patient_id": encounter.patient_id,
         "org_id": encounter.org_id,
         "encounter_type": encounter.encounter_type,
-        "diagnosis_code": "",
+        "diagnosis_code": encounter.diagnosis_code or "",
         "diagnosis_name": encounter.diagnosis_name or "",
     })
-    admission = Admission(**body.model_dump(), org_id=ward.org_id, created_by=user.id)
+    admission = Admission(**body.model_dump(exclude={"diagnosis_code"}), org_id=ward.org_id, created_by=user.id)
     # 上面那句"已在院"判定是 check-then-act：并发下两路都查不到在院记录都会建单。
     # uq_admission_patient_admitted（部分唯一索引）是兜底，抢输者拿到的
     # 409 文案与顺序请求完全一致——对调用方来说两种情形没有区别。

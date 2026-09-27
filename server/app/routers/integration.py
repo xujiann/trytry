@@ -689,7 +689,7 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
         patient, created = _upsert_patient(db, data)
         ward_name, bed_no = _parse_pv1_location(body.message)
         doctor_name = _parse_pv1_doctor(body.message)
-        diagnosis_name = _parse_dg1(body.message)
+        diagnosis_code, diagnosis_name = _parse_dg1(body.message)
         wards = db.query(Ward).filter(Ward.name == ward_name).all()
         if not wards:
             raise HTTPException(status_code=404, detail=f"病区 {ward_name} 不存在")
@@ -711,6 +711,7 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
                 bed_id=bed.id,
                 doctor_name=doctor_name,
                 diagnosis_name=diagnosis_name,
+                diagnosis_code=diagnosis_code,
             ),
             db,
             user,
@@ -801,14 +802,18 @@ def _parse_pv1_doctor(message: str) -> str:
     return (name or parts[0].strip())[:64]
 
 
-def _parse_dg1(message: str) -> str:
-    """DG1-3 诊断 `编码^名称`（名称缺失回落 DG1-4 描述，再回落编码）。可缺省。"""
+def _parse_dg1(message: str) -> tuple[str, str]:
+    """DG1-3 诊断 `编码^名称` → (编码, 名称)（名称缺失回落 DG1-4 描述，再回落编码）。可缺省。
+
+    编码原先解析出来就丢了（P2-632）：住院就诊上没有 ICD 编码，按诊断编码匹配的慢专病识别、诊断编码必填 / 字典校验的
+    数据质控、FHIR 出站的 reasonCode 都认不出这次住院——同一件事走 FHIR Encounter 入站是带编码的。"""
     dg1 = next((s for s in _hl7_segments(message) if s.startswith("DG1|")), None)
     if dg1 is None:
-        return ""
+        return "", ""
     parts = _hl7_field(dg1, 3).split("^")
+    code = parts[0].strip()
     name = parts[1].strip() if len(parts) > 1 else ""
-    return (name or _hl7_field(dg1, 4).strip() or parts[0].strip())[:256]
+    return code[:64], (name or _hl7_field(dg1, 4).strip() or code)[:256]
 
 
 class OruInboundOut(BaseModel):
