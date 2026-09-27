@@ -1215,6 +1215,26 @@ def test_绩效指标改名在页内表单里填_带出原名_取消即不改(pa
         admin_call("PATCH", f"/api/performance/indicators/{key}", {"name": before})  # 复原共享配置
 
 
+def test_绩效考核页按周期与口径计分_写错回到缺省(page, base_url, admin_read):
+    """P2-474：接口收 period / group_id / volume_cap / include_auto_passed，页面原先一个都不给——永远是当年、全县、
+    默认口径。补四个参数；写错（如 13 月）说清楚、回到缺省口径，不把整页掀掉。"""
+    year = admin_read("/api/performance/orgs")["period"]
+    _login(page, base_url)
+    _open_page(page, "performance", "绩效考核")
+    form = page.locator("#perf-filter")
+    form.locator('[name="period"]').fill(f"{year}-01")
+    form.locator('[name="volume_cap"]').fill("1")
+    _redrawn(page, lambda: form.locator("button").click())
+    expect(page.locator("#page-desc")).to_contain_text(f"当前评分周期：{year}-01")
+    expect(page.locator('#perf-filter [name="volume_cap"]')).to_have_value("1")   # 重画之后参数还在
+    # 13 月：浏览器的 pattern 放行（形状对），后端 422——页面说清楚并回到缺省口径
+    page.locator('#perf-filter [name="period"]').fill(f"{year}-13")
+    _redrawn(page, lambda: page.locator("#perf-filter button").click())
+    expect(page.locator("#perf-filter-msg")).to_contain_text("已回到缺省口径")
+    expect(page.locator("#page-desc")).to_contain_text(f"当前评分周期：{year}")
+    expect(page.locator('#perf-filter [name="volume_cap"]')).to_have_value("")
+
+
 def test_集成平台对消息执行编排在页内表单里填消息号(page, base_url, admin_call):
     """P2-38：「对消息执行」原先弹窗输消息 ID；换成数字框，取消即不执行；消息号不存在由后端报人话。"""
     admin_call("POST", "/api/esb/flows", {"code": "e2e_flow_run", "name": "E2E编排",

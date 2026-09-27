@@ -821,10 +821,26 @@ async function downloadCsv(path, filename, msgSel) {
   } catch (err) { setMsg(msgSel, err.message, false); }
 }
 
+/* 绩效考核的计分参数（P2-474）：接口早就收 period / group_id / volume_cap / include_auto_passed，页面一个都不给——
+   永远是当年、全县、默认口径。1 月 1 日一过，基金分配冻结用的上一年排名（fund 按 `period=pool.year` 取）在页面上
+   就看不到了；用户手册写「量类封顶次数与处方合格口径可按考核要求调整参数」，界面上没有这一格。
+   参数只留在内存里、不进存储（与定时任务页的筛选同一个理由）。 */
+const PERF_FILTER = { period: "", group_id: "", volume_cap: "", include_auto_passed: "" };
+
 async function renderPerformance() {
   $("#page-desc").textContent = "按机构自动汇算：转诊结案、共享诊断、慢病随访、处方合格、家医履约；监测指标上报导出";
-  const [data, monitoring] = await Promise.all([
-    api("/api/performance/orgs"), api("/api/reports/monitoring").catch(() => null)]);
+  const perfQuery = new URLSearchParams(Object.entries(PERF_FILTER).filter(([, v]) => v !== ""));
+  const [scored, monitoring, groups] = await Promise.all([
+    api(`/api/performance/orgs${perfQuery.toString() ? `?${perfQuery}` : ""}`).catch((err) => ({ error: err.message })),
+    api("/api/reports/monitoring").catch(() => null), api("/api/org-groups").catch(() => [])]);
+  // 参数写错（如 2026-13）：说清楚、回到缺省口径重算，不把整页掀掉——参数留在内存里，掀掉就一直是这一行错
+  let data = scored;
+  let filterError = "";
+  if (data.error) {
+    filterError = data.error;
+    Object.keys(PERF_FILTER).forEach((k) => { PERF_FILTER[k] = ""; });
+    data = await api("/api/performance/orgs");
+  }
   // 口径变更后分数只统计考核周期内的业务量，页面必须说清是哪一期
   $("#page-desc").textContent =
     `${$("#page-desc").textContent}｜当前评分周期：${data.period}`;
@@ -839,9 +855,20 @@ async function renderPerformance() {
         `<tr><td>${i.no}</td><td>${esc(i.name)}</td><td style="font-size:12.5px;color:#5b6773">${esc(i.caliber)}</td>
          <td><b>${esc(i.value)}</b> ${esc(i.unit)}</td><td><span class="tag">${esc(i.source)}</span></td></tr>`) : ""}`)}
     ${panel("机构评分排名", `
+      <form class="inline" id="perf-filter">
+        <input name="period" placeholder="周期 YYYY 或 YYYY-MM（默认当年）" value="${esc(PERF_FILTER.period)}"
+          pattern="\\d{4}(-\\d{2})?">
+        <select name="group_id"><option value="">全部机构</option>${groups.map((g) =>
+          `<option value="${g.id}"${String(g.id) === PERF_FILTER.group_id ? " selected" : ""}>${esc(g.name)}</option>`).join("")}</select>
+        <input name="volume_cap" type="number" min="1" placeholder="量类封顶次数（默认 5）" value="${esc(PERF_FILTER.volume_cap)}">
+        <select name="include_auto_passed"><option value="">处方合格：系统自动通过计入（默认）</option>
+          <option value="false"${PERF_FILTER.include_auto_passed === "false" ? " selected" : ""}>处方合格：只计药师人工审核通过</option></select>
+        <button>按此口径计分</button></form>
+      <p class="msg" id="perf-filter-msg"></p>
       <p class="desc">本页是<b>考核口径</b>：指标与权重来自指标目录，分数只统计
         当前评分周期（${esc(data.period)}）内的业务量。「决策分析」页的
-        「期末综合绩效报告」走的是自定义公式，<b>两者不可比</b>。</p>
+        「期末综合绩效报告」走的是自定义公式，<b>两者不可比</b>。${PERF_FILTER.group_id
+          ? "选了分组时，<b>排名是分组内的排名</b>。" : ""}</p>
       ${data.scorecards.length ? barChart(data.scorecards.map((c) => [c.org_name, c.score]), { unit: " 分" }) : "暂无数据"}`)}
     ${panel("", table(["排名", "机构", "层级", "总分", "转诊结案", "共享诊断(申请/出报告)", "慢病随访", "处方合格(可审)", "家医履约"],
       data.scorecards, (c, i) => {
@@ -854,6 +881,13 @@ async function renderPerformance() {
           <td>${d.rx_pass.passed}/${d.rx_pass.total}<span style="color:#8a939e">（可审 ${d.rx_pass.rule_covered}）</span></td>
           <td>${d.contract_services}</td></tr>`;
       }))}`;
+  $("#perf-filter").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    Object.keys(PERF_FILTER).forEach((k) => { PERF_FILTER[k] = String(f.get(k) ?? "").trim(); });
+    route();
+  };
+  if (filterError) setMsg("#perf-filter-msg", `${filterError}（已回到缺省口径）`, false);
   $("#exp-monitor").onclick = () => downloadCsv("/api/reports/monitoring/export", "monitoring_indicators.csv", "#rpt-msg");
   $("#exp-ops").onclick = () => downloadCsv("/api/reports/operations/export", "operations_report_all.csv", "#rpt-msg");
   $("#exp-ops-period").onclick = async () => {
