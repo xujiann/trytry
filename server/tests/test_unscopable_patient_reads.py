@@ -299,7 +299,8 @@ def test_两份清单不重叠且都不为空():
 
 #: 【欠账，只减不增】无调用方身份 × 只触达一跳 / 两跳患者维度表（2026-09-24 量出 24 个；
 #: 同日 P0-20 修掉术中记录 → 23，P0-21 修掉报告修订史与危急值轨迹 → 21，P0-22 修掉门诊护理 → 20，
-#: P0-36 修掉按病历号读就诊病历 → 19；2026-09-26 P0-44 修掉慢专病节点进入条件校验 → 18）
+#: P0-36 修掉按病历号读就诊病历 → 19；2026-09-26 P0-44 修掉慢专病节点进入条件校验 → 18；
+#: 2026-09-27 P2-599 路径模板清单带 `in_use` → 19，按本用例报错里的第二条路登记，理由写在条目上）
 ONEHOP_UNSCOPABLE_READS = {
     "billing.py:list_payments",
     "billing.py:list_reconciliation",
@@ -318,6 +319,9 @@ ONEHOP_UNSCOPABLE_READS = {
     "resources.py:match_operating_rooms",
     "spd/population.py:list_recalls",
     "spd/population.py:list_usages",
+    # 按设计不出个体（P2-599）：清单每行只多一个布尔 `in_use`——这条路径有没有被任何实例引用，与删模板 / 改节点那两处 409
+    # 同一个判据（`_in_use`），页面据此不画点了必 409 的按钮。不出患者、不出计数；看得见模板的都该看得见它能不能删
+    "spd/config/paths.py:list_path_templates",
     "surgery.py:list_schedules",
 }
 
