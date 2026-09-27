@@ -39,6 +39,7 @@ from ..models import (
     utcnow,
 )
 from ..visibility import assert_org_writable, scope_org_list
+from ..ws import manager
 from ..texttypes import NON_BLANK
 from .prescriptions import PRESCRIPTION_STATUS_NAMES
 
@@ -153,6 +154,31 @@ def batch_available(batch: DrugBatch) -> int:
     return batch.quantity - batch.used_quantity - batch.blocked_quantity
 
 
+def broadcast_shortage(stock: DrugStock) -> None:
+    """缺药预警定向广播：只推给缺药机构的在线用户与 admin / director（M-2）。调拨、发药、召回三处共用（P2-504）。"""
+    manager.broadcast(
+        {
+            "type": "stock_shortage",
+            "org_id": stock.org_id,
+            "drug_code": stock.drug_code,
+            "drug_name": stock.drug_name,
+            "quantity": stock.quantity,
+            "threshold": stock.threshold,
+        },
+        target_org_id=stock.org_id,
+    )
+
+
+def broadcast_if_crossed(stock: DrugStock, taken: int) -> None:
+    """这一笔扣减把库存从阈值上扣到阈值下，才广播缺药预警（P2-504）。调用前先 `db.refresh(stock)` 拿提交后的量。
+
+    只认「跨过阈值」这一下：发药一天几十张方，库存已经低于阈值之后每发一张都推一遍，等于把预警刷成噪音。
+    阈值 0（没配预警）永不触发。
+    """
+    if stock.quantity < stock.threshold <= stock.quantity + taken:
+        broadcast_shortage(stock)
+
+
 def _fefo_batches(db: Session, org_id: int, drug_code: str, today: str) -> list[DrugBatch]:
     """可发批次，按 FEFO 排序：未过期、未召回、仍有余量，先到效期先出。
 
@@ -217,6 +243,7 @@ def dispense_prescription(
         raise HTTPException(status_code=409, detail="该处方已发药，不可重复发药") from None
 
     today = resolve_business_date(None).isoformat()
+    taken_stocks: list[tuple[DrugStock, int]] = []   # 每个品种扣了汇总多少：提交后判要不要发缺药预警
     for rx_item in rx_items:
         need = _required_quantity(rx_item.daily_dose, rx_item.days)
         taken_total = 0
@@ -264,11 +291,17 @@ def dispense_prescription(
             raise HTTPException(
                 status_code=409, detail=f"药品 {rx_item.drug_code} 汇总库存不足，台账不符请先盘点"
             )
+        taken_stocks.append((stock, taken_total))
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="该处方已发药，不可重复发药") from None
+    # 发药把库存扣到阈值以下，同样秒级推缺药预警（P2-504）：原先只有调拨推，库存最常见的下降途径——发药——从不推，
+    # 「WebSocket 缺药预警秒级广播」要等有人打开缺药清单才看得到
+    for stock, taken in taken_stocks:
+        db.refresh(stock)
+        broadcast_if_crossed(stock, taken)
     db.refresh(record)
     return _dispense_out(db, record)
 

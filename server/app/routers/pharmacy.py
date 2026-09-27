@@ -61,8 +61,7 @@ from ..models import (
     User,
 )
 from ..schemas import StockOut, StockUpsert, TransferCreate
-from ..ws import manager
-from .dispense import _claim_batch, _fefo_batches, batch_available
+from .dispense import _claim_batch, _fefo_batches, batch_available, broadcast_if_crossed, broadcast_shortage
 
 router = APIRouter(prefix="/api/pharmacy", tags=["中心药房"])
 
@@ -327,18 +326,8 @@ def transfer_stock(
     db.refresh(source)
     db.refresh(dest)
     if source.quantity < source.threshold:
-        # M-2 整改：缺药预警定向广播——仅缺药机构在线用户与 admin/director 收到
-        manager.broadcast(
-            {
-                "type": "stock_shortage",
-                "org_id": source.org_id,
-                "drug_code": source.drug_code,
-                "drug_name": source.drug_name,
-                "quantity": source.quantity,
-                "threshold": source.threshold,
-            },
-            target_org_id=source.org_id,
-        )
+        # M-2 整改：缺药预警定向广播——仅缺药机构在线用户与 admin/director 收到（与发药、召回同一个帮手，P2-504）
+        broadcast_shortage(source)
     return dest
 
 
@@ -743,6 +732,8 @@ def recall_batch(
     db.commit()
     db.refresh(batch)
     named = _stock_of(db, batch.org_id, batch.drug_code)
+    if named is not None and available > 0:
+        broadcast_if_crossed(named, available)   # 召回把可用余量扣到阈值以下，同样推缺药预警（P2-504）
     return _batch_out(batch, named.drug_name if named else "")
 
 
