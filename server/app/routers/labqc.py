@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_or_conflict
+from ..concurrency import insert_or_conflict, move_row
 from ..database import get_db
 from ..datetypes import OptionalDateTimeStr
 from ..texttypes import NON_BLANK
@@ -301,11 +301,13 @@ def handle_measurement(
         raise HTTPException(status_code=422, detail="该测定点未失控，无需处理登记")
     if measurement.handled:
         raise HTTPException(status_code=409, detail="该失控点已处理，勿重复登记")
-    measurement.handled = True
-    measurement.handle_reason = body.reason
-    measurement.corrective_action = body.corrective_action
-    measurement.handled_by = user.full_name or user.username
-    measurement.handled_at = utcnow()
+    # 判定与写入压进同一条 UPDATE（P2-450）：原先判「已处理」、赋值、commit，UPDATE 只有 `WHERE id = ?`——两位技师
+    # 对同一个失控点各点一次，两路都 200，先登记的原因、纠正措施与处理人被后到的整段盖掉（按顺序点第二下是 409）
+    if not move_row(db, QcMeasurement, measurement.id, QcMeasurement.handled.is_(False),
+                    handled=True, handle_reason=body.reason, corrective_action=body.corrective_action,
+                    handled_by=user.full_name or user.username, handled_at=utcnow()):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="该失控点已处理，勿重复登记")
     db.commit()
     db.refresh(measurement)
     return measurement
