@@ -1725,6 +1725,22 @@ def test_路径节点时限能填0天_编辑能把顺序与时限改成0(page, b
     assert (nodes()["p2588a"]["seq"], nodes()["p2588a"]["due_days"]) == (0, 0)   # 修前 (3, 7)
 
 
+def test_管理目标的上限能改成0(page, base_url, admin_read, admin_call):
+    """P2-589：编辑管理目标原先 `if (form.target_high)`——吸烟目标从「每日 ≤5 支」收紧到 0（戒烟）不送、照样提示
+    「管理目标已更新」，之后每天 3 支仍判「正常」。"""
+    program = admin_call("POST", "/api/spd/programs", {"code": "e2e_p2589", "name": "E2E控烟", "category": "chronic"})
+    target = admin_call("POST", f"/api/spd/programs/{program['id']}/targets",
+                        {"metric": "smoke", "metric_name": "吸烟", "target_high": 5, "unit": "支/日"})
+    _login(page, base_url)
+    _open_page(page, "spdadmin", "平台管理端·运行中枢")
+    page.click(f'button[data-prog-targets="{program["id"]}"]')
+    page.click(f'button[data-target-edit="{target["id"]}"]')
+    _spd_modal(page, {"target_high": "0"})
+    expect(page.locator("#spd-program-msg")).to_contain_text("管理目标已更新")
+    (row,) = [t for t in admin_read(f"/api/spd/programs/{program['id']}/targets") if t["id"] == target["id"]]
+    assert (row["target_high"], row["metric_name"]) == (0, "吸烟"), row   # 修前 5.0
+
+
 def test_编辑专病中心只改名_已停用的状态不被悄悄改成筹建(page, base_url, admin_read, admin_call):
     """P2-421：编辑框的状态下拉原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
     只改个名字保存，状态被悄悄改掉。修后选项取自后端的状态文案表（专家工作台下发的 `center_status_names`）。"""

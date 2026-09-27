@@ -620,18 +620,23 @@ async function renderSpdAdmin() {
     }
     if (progTargets) return showTargets(progTargets.dataset.progTargets);
     if (targetEdit) {
+      // 上下限用 text（P2-589，口径同路径节点 P2-588）：spdModal 把空串折成 0，原先 `if (form.target_high)` 又把 0 当
+      // 留空——吸烟目标从「每日 ≤5 支」收紧到 0（戒烟）不送、照样提示「管理目标已更新」，之后每天 3 支仍判「正常」
       const form = await spdModal("编辑管理目标（留空的项不改）", [
         { name: "metric_name", label: "指标名称", value: targetEdit.dataset.name },
-        { name: "target_low", label: "下限", type: "number" },
-        { name: "target_high", label: "上限", type: "number" },
+        { name: "target_low", label: "下限（数值，0 照改）", type: "text" },
+        { name: "target_high", label: "上限（数值，0 照改）", type: "text" },
         { name: "unit", label: "单位", value: targetEdit.dataset.unit },
         { name: "qualitative", label: "定性目标描述" },
       ]);
       if (!form) return;
       const body = {};
       if (form.metric_name) body.metric_name = form.metric_name;
-      if (form.target_low) body.target_low = form.target_low;
-      if (form.target_high) body.target_high = form.target_high;
+      for (const [k, label] of [["target_low", "下限"], ["target_high", "上限"]]) {
+        if (form[k] === "") continue;
+        if (!Number.isFinite(Number(form[k]))) return setMsg("#spd-program-msg", `${label}要填数值`, false);
+        body[k] = Number(form[k]);
+      }
       if (form.unit) body.unit = form.unit;
       if (form.qualitative) body.qualitative = form.qualitative;
       try {
