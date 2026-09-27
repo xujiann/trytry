@@ -43,7 +43,7 @@ from ..models import (
     User,
     utcnow,
 )
-from ..numtypes import MONEY_MAX, MoneyFloat
+from ..numtypes import MONEY_MAX, MoneyFloat, split_fen
 from .performance import org_scorecards
 
 router = APIRouter(
@@ -597,20 +597,12 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     # 实测 100 元 3 户均分分出 99.99，凭空少一分。分配的是医共体真金白银的
     # 结余，账对不上就是事故。
     #
-    # 用最大余数法（Hamilton）在**分**上分配：先给每户向下取整到分，
+    # 用最大余数法（Hamilton）在**分**上分配（`numtypes.split_fen`）：先给每户向下取整到分，
     # 剩下的零头一分一分地按小数余数从大到小补给各户，合计恰好等于结余。
-    total_cents = round(settlement.balance * 100)
-    raw = [(settlement.balance * (w / weight_sum)) * 100 for _, _, w in weights]
-    floors = [int(x) for x in raw]  # 向下取整到分（金额非负，int() 即 floor）
-    remainder = total_cents - sum(floors)  # 待补的零头分数，∈ [0, 户数)
-    # 小数余数大的优先补一分；同余数按原顺序稳定，可复现
-    order = sorted(range(len(weights)), key=lambda i: raw[i] - floors[i], reverse=True)
-    cents = floors[:]
-    for i in order[: max(remainder, 0)]:
-        cents[i] += 1
+    amounts = split_fen(settlement.balance, [w for _, _, w in weights])
 
     rows = []
-    for (card, rank, weight), amount_cents in zip(weights, cents):
+    for (card, rank, weight), amount in zip(weights, amounts):
         share = weight / weight_sum
         row = FundDistribution(
             settlement_id=settlement.id,
@@ -621,7 +613,7 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
             score_detail={**card["detail"], "weights": scored["weights"], "period": scored["period"]},
             weight=round(weight, 6),
             share_pct=round(share * 100, 4),
-            amount=amount_cents / 100,
+            amount=amount,
         )
         db.add(row)
         rows.append((card, rank, row))

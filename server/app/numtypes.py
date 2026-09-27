@@ -14,6 +14,7 @@
 只是列容量与列精度，不是业务上限——业务上合理的范围（一次领药最多几盒）另议，别拿这两个数冒充。
 """
 import math
+from collections.abc import Sequence
 from typing import Annotated, Any
 
 from pydantic import AfterValidator, FiniteFloat
@@ -40,6 +41,27 @@ def to_fen(value: float) -> float:
 
 
 MoneyFloat = Annotated[FiniteFloat, AfterValidator(to_fen)]
+
+
+def split_fen(total: float, weights: Sequence[float]) -> list[float]:
+    """按权重把一笔金额分到分，各份合计分毫等于 `total`（最大余数法 / Hamilton）。
+
+    逐份各自 `round(total * w / Σw, 2)` 会各丢 / 各多一分，合计对不上总额——实测 100 元 3 户均分分出 99.99。
+    先给每份向下取整到分，剩下的零头一分一分地按小数余数从大到小补给各份；同余数按原顺序稳定，可复现。
+    每份都是按比例的精确值向下或向上取整到分，不会出负数。金额与权重须非负、权重之和须大于 0（调用方先判）。
+    原是医保基金结余分配（`fund.py`）里的一段，成本分摊（`cost.py`）同一个问题，抽到这里共用。
+    """
+    weight_sum = sum(weights)
+    total_cents = round(total * 100)
+    raw = [(total * (w / weight_sum)) * 100 for w in weights]
+    floors = [int(x) for x in raw]  # 向下取整到分（金额非负，int() 即 floor）
+    remainder = total_cents - sum(floors)  # 待补的零头分数，∈ [0, 份数)
+    # 小数余数大的优先补一分；同余数按原顺序稳定，可复现
+    order = sorted(range(len(weights)), key=lambda i: raw[i] - floors[i], reverse=True)
+    cents = floors[:]
+    for i in order[: max(remainder, 0)]:
+        cents[i] += 1
+    return [c / 100 for c in cents]
 
 
 def non_finite_path(value: Any, root: str) -> str:
