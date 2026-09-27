@@ -13,6 +13,7 @@ from ..visibility import assert_obj_org_writable, assert_org_writable, assert_pa
 from ..database import get_db
 from ..deps import get_current_user, require_roles, row_dict
 from ..clock import now_naive
+from .dispense import prescription_not_reversed
 from ..models import (
     DrugShortage,
     DrugStock,
@@ -264,6 +265,8 @@ def medication_profile(
         .filter(
             Prescription.patient_id == patient_id,
             Prescription.status.in_(["auto_passed", "approved"]),
+            # 退药冲销的没有用上（P2-624）：原先照算次数、照算「在用」，只退不重开的也挂着这味药
+            prescription_not_reversed(),
         )
         .all()
     )
@@ -320,7 +323,7 @@ def usage_stats(db: Session = Depends(get_db)):
             func.count(func.distinct(Prescription.patient_id)).label("patient_count"),
         )
         .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
-        .filter(Prescription.status.in_(["auto_passed", "approved"]))
+        .filter(Prescription.status.in_(["auto_passed", "approved"]), prescription_not_reversed())   # P2-624
         .group_by(PrescriptionItem.drug_code)
         .order_by(rx_count.desc(), PrescriptionItem.drug_code)
         .limit(50)

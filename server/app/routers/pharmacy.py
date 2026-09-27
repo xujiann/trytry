@@ -62,7 +62,7 @@ from ..models import (
 )
 from ..schemas import StockOut, StockUpsert, TransferCreate
 from .dispense import (_claim_batch, _fefo_batches, _required_quantity, batch_available, broadcast_if_crossed,
-                       broadcast_shortage)
+                       broadcast_shortage, prescription_not_reversed)
 
 router = APIRouter(prefix="/api/pharmacy", tags=["中心药房"])
 
@@ -364,6 +364,7 @@ def purchase_suggestions(db: Session = Depends(get_db)):
         .filter(
             Prescription.created_at >= since.replace(tzinfo=None),
             Prescription.status != "rejected",
+            prescription_not_reversed(),   # 退药冲销的药回了库房，不算用量（P2-624）
         )
         .order_by(PrescriptionItem.drug_code, PrescriptionItem.id)
         .all()

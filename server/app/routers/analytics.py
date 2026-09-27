@@ -34,6 +34,7 @@ from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import scope_stats_orgs
 from ..formula import FormulaError, evaluate, validate
+from .dispense import prescription_not_reversed
 from .organizations import ORG_LEVEL_NAMES
 from ..models import (
     Admission,
@@ -907,6 +908,8 @@ def drug_use(
             # 药师退回的处方没有用上（P2-60）：退回后医生多半重开一张，两张都算，同一疗程的 DDDs 翻倍，
             # 使用强度——写进考核的那个数——虚高。待审的照算：统计是现算的，之后被退回自然就掉出去
             Prescription.status != "rejected",
+            # 退药冲销的同理（P2-624）：药回了库房，重开一张就是同一疗程算两遍
+            prescription_not_reversed(),
         )
         .group_by(Prescription.org_id)
         .order_by(Prescription.org_id)

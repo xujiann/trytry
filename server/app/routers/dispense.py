@@ -20,7 +20,7 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import update
+from sqlalchemy import ColumnElement, exists, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -47,6 +47,17 @@ router = APIRouter(prefix="/api/dispense", tags=["西药发药"], dependencies=[
 
 #: 可发药的处方状态：系统审通过 / 药师审通过（见 prescriptions.py 状态机）
 DISPENSABLE_STATUSES = ("auto_passed", "approved")
+
+
+def prescription_not_reversed() -> ColumnElement[bool]:
+    """处方没有被退药冲销——统计「用了多少药」的口径（P2-624）。
+
+    退药冲销只把发药记录置 reversed、药回库房，处方表不动（它的状态是审方结论）；冲销后的处方不能再发，确需再发的
+    开新处方（见 `reverse_dispense`）。按处方状态筛的用量统计因此把退掉的那张照算、重开的那张再算一遍——抗菌药物使用
+    强度、采购建议、用药画像、用药地图都接这一句，与批号追溯排除冲销（`pharmacy.batch_dispense_trace`）同一个口径。
+    没发过药的处方照算（开了还没取，与药师待审的照算同理：统计现算，之后退掉自然就掉出去）。
+    """
+    return ~exists().where(DispenseRecord.prescription_id == Prescription.id, DispenseRecord.status == "reversed")
 
 
 class DispenseCreate(BaseModel):
