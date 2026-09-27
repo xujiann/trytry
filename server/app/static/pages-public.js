@@ -953,12 +953,26 @@ async function drawCssdCosts() {
       <p class="msg" id="cost-msg"></p>
       <p style="font-size:13px">成本构成：${Object.entries(stats.by_cost_type).map(([k, v]) =>
         `<span class="tag" style="margin-right:6px">${esc(v.name)} ${v.amount}</span>`).join("") || "暂无"}</p>
-      ${table(["批次", "批号", "物品", "件数", "总成本", "单件成本"], stats.batches, (b) =>
+      ${table(["批次", "批号", "物品", "件数", "总成本", "单件成本", "明细"], stats.batches, (b) =>
         `<tr><td>${b.batch_id}</td><td>${esc(b.batch_no)}</td><td>${esc(b.item_name)}</td><td>${b.quantity}</td>
-         <td>${b.total_cost}</td><td><span class="tag">${b.unit_cost}</span></td></tr>`)}`)}`);
+         <td>${b.total_cost}</td><td><span class="tag">${b.unit_cost}</span></td>
+         <td><button class="btn secondary" data-costitems="${esc(b.batch_id)}">成本项</button></td></tr>`)}
+      <div id="cost-items"></div>`)}`);
   holder.querySelector("#cost-form").onsubmit = (e) => {
     e.preventDefault();
     postAction("/api/cssd/cost-items", formJson(e.target, ["batch_id", "amount"]), "#cost-msg");
+  };
+  // 逐条成本项（P2-495）：原先只看得到按批次的合计与构成，登记的每一项（金额、备注）录进去就没处核对，录错一笔只能从
+  // 单件成本的异常上倒推
+  holder.onclick = async (e) => {
+    const batchId = e.target.dataset.costitems;
+    if (!batchId) return;
+    try {
+      const rows = await api(`/api/cssd/cost-items?batch_id=${encodeURIComponent(batchId)}`);
+      holder.querySelector("#cost-items").innerHTML = `<h3 style="margin-top:12px">批次 ${esc(batchId)} 的成本项（${rows.length} 项）</h3>
+        ${table(["ID", "类型", "金额", "备注"], rows, (i) =>
+          `<tr><td>${i.id}</td><td>${esc(i.cost_type_name)}</td><td>${esc(i.amount)}</td><td>${esc(i.note) || "—"}</td></tr>`)}`;
+    } catch (err) { setMsg("#cost-msg", err.message, false); }
   };
 }
 

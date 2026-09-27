@@ -2250,6 +2250,22 @@ def test_数据质控规则能在界面上新增_配置写坏由后端说清楚(
     expect(page.locator("tr:has(button[data-qctoggle])", has_text="E2EQC1")).to_contain_text("必填项")
 
 
+def test_消毒供应成本项按批次看得见(page, base_url, admin_call):
+    """P2-495：成本核算原先只看得到按批次的合计与构成，逐条登记的成本项录进去就没处核对。"""
+    org = admin_call("POST", "/api/organizations", {"name": "E2E供应中心", "org_type": "lead_hospital", "level": "county"})
+    batch = admin_call("POST", "/api/cssd/batches", {"batch_no": "E2E-CSSD-1", "center_org_id": org["id"],
+                                                      "item_name": "E2E换药包", "quantity": 10})
+    admin_call("POST", "/api/cssd/cost-items", {"batch_id": batch["id"], "cost_type": "labor", "amount": 40,
+                                                 "note": "E2E 两人打包"})
+
+    _login(page, base_url)
+    _open_page(page, "cssd", "消毒供应")
+    page.click(f'button[data-costitems="{batch["id"]}"]')   # 修前批次表没有这一格
+    items = page.locator("#cost-items")
+    expect(items).to_contain_text("成本项（1 项）")
+    expect(items.locator("tr", has_text="E2E 两人打包")).to_contain_text("人工")
+
+
 def test_计费明细能按住院单查_未结清的看得见(page, base_url, admin_call):
     """P2-493：「计费与结算」原先只能计、不能查——结算前看不到这次住院挂着哪些未结清的明细，计错了也无从发现。"""
     org = admin_call("POST", "/api/organizations", {"name": "E2E计费县医院", "org_type": "lead_hospital", "level": "county"})
