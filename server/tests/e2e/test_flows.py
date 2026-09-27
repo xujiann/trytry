@@ -1482,6 +1482,32 @@ def test_上门服务的派单与取消不给公卫人员(page, base_url, seed, 
     expect(page.locator(f'button[data-hvdis="{visit["id"]}"], button[data-hvcancel="{visit["id"]}"]')).to_have_count(0)
 
 
+def test_课件附件上传后看得到也下得了(page, base_url, admin_call, tmp_path):
+    """P2-431：课件附件传得上去，页面上却只给个数——看不到是哪些文件，也下不回来。修后上传完就列出来，课件清单里
+    「N 个 · 查看」点开同一份清单，每个文件能下载（鉴权下载，同检查报告附件）。"""
+    course = admin_call("POST", "/api/education/courses", {"title": "E2E课件附件课程"})
+    material = admin_call("POST", f"/api/education/courses/{course['id']}/materials",
+                          {"title": "E2E带附件的课件", "material_type": "doc"})
+    pdf = tmp_path / "e2e_p2431.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")
+    _login(page, base_url)
+    _open_page(page, "education", "远程医学教育")
+    form = page.locator("#cm-att")
+    form.locator('input[name="material_id"]').fill(str(material["id"]))
+    form.locator('input[type="file"]').set_input_files(str(pdf))
+    form.locator("button").click()
+    listing = page.locator("#cm-att-list")
+    expect(listing).to_contain_text("e2e_p2431.pdf")   # 修前：上传成功之后什么也不列
+    with page.expect_download() as info:
+        listing.locator("button[data-attdl]").first.click()
+    assert info.value.suggested_filename == "e2e_p2431.pdf"
+    query = page.locator("#cm-query")
+    query.locator('input[name="course_id"]').fill(str(course["id"]))
+    query.locator("button").click()
+    page.click(f'button[data-cmatt="{material["id"]}"]')   # 修前这一格只是个数字
+    expect(listing).to_contain_text("e2e_p2431.pdf")
+
+
 def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
     """P2-43：「删除」路径节点原先点一下就删，节点的时限、角色与表单配置一并没了。"""
     hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")

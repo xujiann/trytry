@@ -973,7 +973,7 @@ async function drawEduGaps() {
       <form class="inline" id="cm-att"><input name="material_id" type="number" placeholder="课件ID" required>
         <input type="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" required>
         <button>上传附件</button></form>
-      <p class="msg" id="cm-msg"></p><div id="cm-list"></div>
+      <p class="msg" id="cm-msg"></p><div id="cm-list"></div><div id="cm-att-list"></div>
       <h4 style="margin-top:10px">点播排行</h4>
       ${table(["课件ID", "标题", "类型", "点播量"], mstats.top, (m) =>
         `<tr><td>${m.id}</td><td>${esc(m.title)}</td><td>${esc(m.material_type_name)}</td>
@@ -999,7 +999,9 @@ async function drawEduGaps() {
   const drawMaterials = async (courseId) => {
     const list = await api(`/api/education/courses/${courseId}/materials`);
     holder.querySelector("#cm-list").innerHTML = table(["ID", "标题", "类型", "附件", "点播", "操作"], list, (m) =>
-      `<tr><td>${m.id}</td><td>${esc(m.title)}</td><td>${esc(m.material_type_name)}</td><td>${m.attachments}</td>
+      // 附件原先只给个数、看不到也下不了（P2-431）：上传了课件附件，页面上再没有入口取回来
+      `<tr><td>${m.id}</td><td>${esc(m.title)}</td><td>${esc(m.material_type_name)}</td>
+       <td>${m.attachments ? `<button class="btn secondary" data-cmatt="${m.id}">${m.attachments} 个 · 查看</button>` : "0"}</td>
        <td>${m.play_count}</td><td><button class="btn secondary" data-play="${m.id}">点播</button></td></tr>`);
   };
   holder.querySelector("#cm-form").onsubmit = (e) => {
@@ -1019,6 +1021,7 @@ async function drawEduGaps() {
     try {
       await uploadAttachment("course_material", materialId, e.target.querySelector("input[type=file]"));
       setMsg("#cm-msg", "课件附件已上传");
+      await drawAttachments("course_material", materialId, "#cm-att-list", "#cm-msg");
     } catch (err) { setMsg("#cm-msg", err.message, false); }
   };
   holder.querySelector("#tp-plan-form").onsubmit = (e) => {
@@ -1026,8 +1029,9 @@ async function drawEduGaps() {
     postAction("/api/education/training-plans", formJson(e.target, ["org_id", "technique_id", "capacity"]), "#tplan-msg");
   };
   holder.onclick = async (e) => {
-    const { play, enroll, unenroll, assess, roster } = e.target.dataset;
+    const { play, enroll, unenroll, assess, roster, cmatt } = e.target.dataset;
     try {
+      if (cmatt) return await drawAttachments("course_material", cmatt, "#cm-att-list", "#cm-msg");
       if (play) { await api(`/api/education/materials/${play}/play`, { method: "POST" }); return route(); }
       if (enroll) { await api(`/api/education/training-plans/${enroll}/enroll`, { method: "POST" }); return route(); }
       if (unenroll) { await api(`/api/education/training-plans/${unenroll}/cancel-enroll`, { method: "POST" }); return route(); }
