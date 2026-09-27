@@ -60,8 +60,10 @@ DEFAULT_INDICATORS: dict[str, dict[str, Any]] = {
     "referral": {"name": "转诊结案率", "weight": 20},
     # 改名（2026-08-22）：原名"远程诊断服务量"名不副实——它按 `from_org_id`（申请方）
     # 计，衡量的是平台使用而非诊断工作量；且真正出报告的中心一分不得。
-    # 现在两侧都计（申请 + 出报告），名字改成能涵盖两侧的"协同量"。
-    # 存量库的指标名由迁移 b5d9f3a71c2e 就地改，且只改**没被现场改过**的那些。
+    # 当时改成两侧都计（申请 + 出报告），名字随之改成能涵盖两侧的"协同量"。
+    # 2026-08-27 计分回退为只计申请方、待卫健批复（见 `org_scores` docstring），名字没有改回：
+    # 中心侧的量照常聚合展示，「协同量」仍能涵盖两侧的参与（P2-472 订正本注释）。
+    # 存量库的指标名迁移 b5d9f3a71c2e **只报告、不替人改**，由现场在「绩效指标调权」页「改名」。
     "remote_exam": {"name": "共享诊断协同量", "weight": 20},
     "chronic": {"name": "慢病随访覆盖", "weight": 25},
     "rx": {"name": "处方合格率", "weight": 20},
@@ -87,7 +89,9 @@ def _normalized_weights(db: Session) -> dict[str, float]:
 
 class IndicatorPatch(BaseModel):
     weight: FiniteFloat | None = Field(default=None, ge=0)
-    name: str | None = Field(default=None, max_length=64)   # 列长（P1-91 第四层：按指标键查出来再改，原先判据看不见）
+    # 列长（P1-91 第四层：按指标键查出来再改，原先判据看不见）；给了就不能是空白（P2-472：页面补了「改名」，
+    # 一串空格存进去，报表标题与考核明细里这一维就没有名字）
+    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=NON_BLANK)
     active: bool | None = None
 
 

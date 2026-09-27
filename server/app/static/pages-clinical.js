@@ -3389,7 +3389,7 @@ async function renderQuality() {
 }
 
 async function renderPerfIndicators() {
-  $("#page-desc").textContent = "绩效指标目录：权重调节与启停（调整后按比例归一化计分）";
+  $("#page-desc").textContent = "绩效指标目录：权重调节、启停与改名（调整后按比例归一化计分）";
   const indicators = await api("/api/performance/indicators");
   $("#page-body").innerHTML = `
     ${panel("", `<p class="msg" id="pi-msg"></p>${
@@ -3397,7 +3397,8 @@ async function renderPerfIndicators() {
         `<tr><td>${esc(i.name)}</td><td>${esc(i.key)}</td><td>${i.weight}</td>
          <td><span class="tag ${i.active ? "green" : "red"}">${i.active ? "启用" : "停用"}</span></td>
          <td><button class="btn secondary" data-weight="${esc(i.key)}">调权重</button>
-             <button class="btn" data-toggle-ind="${esc(i.key)}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button></td></tr>`)}`)}`;
+             <button class="btn" data-toggle-ind="${esc(i.key)}" data-active="${i.active}">${i.active ? "停用" : "启用"}</button>
+             <button class="btn" data-rename-ind="${esc(i.key)}" data-name="${esc(i.name)}">改名</button></td></tr>`)}`)}`;
   $("#page-body").onclick = async (e) => {
     const d = e.target.dataset;
     try {
@@ -3412,6 +3413,15 @@ async function renderPerfIndicators() {
       if (d.toggleInd) {
         await api(`/api/performance/indicators/${d.toggleInd}`, { method: "PATCH",
           body: JSON.stringify({ active: d.active !== "true" }) });
+        route();
+      }
+      if (d.renameInd) {
+        // 改名（P2-472）：接口一直收 name，页面只给调权重与启停——指标名写进各县的考核文件与报表标题，
+        // 迁移 b5d9f3a71c2e 只报告不替人改、让现场「在指标目录里改」，界面上却没有这一格
+        const form = await spdModal(`改名：${d.renameInd}`, [
+          { name: "name", label: "指标名称（报表与考核明细里显示的名字）", value: d.name, required: true }]);
+        if (!form) return;
+        await api(`/api/performance/indicators/${d.renameInd}`, { method: "PATCH", body: JSON.stringify({ name: form.name }) });
         route();
       }
     } catch (err) { setMsg("#pi-msg", err.message, false); }

@@ -1191,6 +1191,30 @@ def test_绩效指标调权重在页内表单里填_取消即不改(page, base_u
         admin_call("PATCH", f"/api/performance/indicators/{key}", {"weight": before})  # 复原共享配置
 
 
+def test_绩效指标改名在页内表单里填_带出原名_取消即不改(page, base_url, admin_read, admin_call):
+    """P2-472：接口一直收 name，页面只给调权重与启停；迁移 b5d9f3a71c2e 让现场「在指标目录里改名」却无处可改。"""
+    ind = admin_read("/api/performance/indicators")[0]
+    key, before = ind["key"], ind["name"]
+
+    def name():
+        (row,) = [i for i in admin_read("/api/performance/indicators") if i["key"] == key]
+        return row["name"]
+
+    _login(page, base_url)
+    _open_page(page, "perfind", "绩效指标调权")
+    page.click(f'button[data-rename-ind="{key}"]')
+    expect(_modal(page).locator('[name="name"]')).to_have_value(before)   # 带出原名，改一两个字不用重敲
+    _cancel_modal(page)
+    assert name() == before
+    page.click(f'button[data-rename-ind="{key}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"name": "E2E协同量"}))
+    try:
+        assert name() == "E2E协同量"
+        expect(page.locator("#page-body")).to_contain_text("E2E协同量")
+    finally:
+        admin_call("PATCH", f"/api/performance/indicators/{key}", {"name": before})  # 复原共享配置
+
+
 def test_集成平台对消息执行编排在页内表单里填消息号(page, base_url, admin_call):
     """P2-38：「对消息执行」原先弹窗输消息 ID；换成数字框，取消即不执行；消息号不存在由后端报人话。"""
     admin_call("POST", "/api/esb/flows", {"code": "e2e_flow_run", "name": "E2E编排",
