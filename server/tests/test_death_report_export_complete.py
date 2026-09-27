@@ -62,7 +62,8 @@ def test_特征化_逐列内容与留痕(client, admin, small):
     body = rows[1:]
     assert [r[0] for r in body] == ["DR-S-1", "DR-S-2"]
     assert body[0][1] == "死因导出患者" and body[0][5] == "2031-01-05" and body[0][6] == "急性心肌梗死"
-    assert body[0][7] == "死因导出卫生院" and body[0][8] == "admin"
+    # 签发人写姓名、没填姓名的退回账号（P2-566，与死亡证明打印件同一句）：admin 的姓名是种子里的「平台管理员」
+    assert body[0][7] == "死因导出卫生院" and body[0][8] == "平台管理员"
     assert body[1][1] == "无档案死者" and body[1][6] == "脑出血"
     assert _logs(small["patient_id"]) == before + 1, "挂了患者的卡每导出一次落一条调阅留痕"
 
