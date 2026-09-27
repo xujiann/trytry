@@ -2970,7 +2970,13 @@ async function renderBilling() {
         <select name="bill_type"><option value="inpatient">住院结算</option><option value="outpatient">门诊结算</option></select>
         <input name="admission_id" type="number" placeholder="住院单ID"><input name="encounter_id" type="number" placeholder="就诊ID">
         <input name="insurance_pay" type="number" step="any" placeholder="医保支付(元)" value="0"><button>结算</button></form>
-      <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p>`)
+      <p style="font-size:12.5px;color:#8a939e">住院费用未结清不可出院；结算自动汇总未结清明细并联动医保结算记录</p>
+      <h3 style="margin-top:12px">计费明细查询</h3>
+      <form class="inline" id="bd-query"><input name="patient_id" type="number" placeholder="患者ID">
+        <input name="admission_id" type="number" placeholder="住院单ID"><input name="encounter_id" type="number" placeholder="就诊ID">
+        <select name="settled"><option value="false">未结清</option><option value="true">已结算</option><option value="">全部</option></select>
+        <button>查明细</button></form>
+      <div id="bd-list"></div>`)
     + panel("结算单", table(["ID", "患者", "类型", "总额", "医保", "自付", "时间", "操作"], settlements, (s) =>
       `<tr><td>${s.id}</td><td>${s.patient_id}</td><td>${esc(BT[s.bill_type] || s.bill_type)}</td><td>${s.total_amount}</td>
        <td>${s.insurance_pay}</td><td>${s.self_pay}</td><td>${esc(s.created_at.slice(0, 16).replace("T", " "))}</td>
@@ -3070,6 +3076,26 @@ async function renderBilling() {
   };
   $("#ci-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/charge-items", formJson(e.target, ["price"]), "#bill-msg"); };
   $("#bd-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/details", formJson(e.target, ["patient_id", "admission_id", "encounter_id", "quantity"]), "#bill-msg"); };
+  // 计费明细查询（P2-493）：原先只能计、不能查——结算前看不到这次住院 / 就诊挂着哪些未结清的明细，计错了也无从发现
+  $("#bd-query").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const query = new URLSearchParams([...f.entries()].filter(([, v]) => v !== ""));
+    if (!["patient_id", "admission_id", "encounter_id"].some((k) => query.has(k))) {
+      return setMsg("#bill-msg", "查明细请填患者ID、住院单ID 或就诊ID 之一", false);
+    }
+    try {
+      const rows = await api(`/api/billing/details?${query}`);
+      const total = rows.reduce((sum, d) => sum + Number(d.amount || 0), 0);
+      $("#bd-list").innerHTML = `<p class="desc">共 ${rows.length} 条，合计 ${esc(total.toFixed(2))} 元${
+        rows.length >= 500 ? "——<b>已截到 500 条</b>，请按住院单 / 就诊收窄" : ""}</p>
+        ${table(["ID", "患者", "住院 / 就诊", "项目", "单价", "数量", "金额", "结算"], rows, (d) =>
+          `<tr><td>${d.id}</td><td>${esc(d.patient_id)}</td>
+           <td>${d.admission_id ? `住院 ${esc(d.admission_id)}` : `就诊 ${esc(d.encounter_id ?? "—")}`}</td>
+           <td>${esc(d.item_name)}（${esc(d.item_code)}）</td><td>${esc(d.unit_price)}</td><td>${esc(d.quantity)}</td>
+           <td>${esc(d.amount)}</td><td>${d.settled ? `已结算（结算单 ${esc(d.settlement_id)}）` : '<span class="tag orange">未结清</span>'}</td></tr>`)}`;
+    } catch (err) { setMsg("#bill-msg", err.message, false); }
+  };
   $("#settle-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/billing/settlements", formJson(e.target, ["admission_id", "encounter_id", "insurance_pay"]), "#bill-msg"); };
   $("#pay-form").onsubmit = async (e) => {
     e.preventDefault();

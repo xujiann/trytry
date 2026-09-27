@@ -144,15 +144,14 @@ READ_EXEMPT: dict[str, str] = {}
 READ_KNOWN: set[str] = {
     # 临床与护理
     "GET /api/inpatient/admissions/{admission_id}/case-summary",
-    "GET /api/maternal/records/{record_id}/delivery",
-    "GET /api/quality/record-qc",
+    "GET /api/maternal/records/{record_id}/delivery",                   # 不收调用方（P1-69），随 P1-49 裁定后再接
+    "GET /api/quality/record-qc",                                       # 不收口（P1-49 名单），随裁定后再接
     # 公卫、慢病、家医
     "GET /api/contracts/{contract_id}/services",
     "GET /api/analytics/outbound-visits",
     # 教学、运营、打印
-    "GET /api/billing/details",
     "GET /api/cssd/cost-items",
-    "GET /api/mgmt/staff-contracts",
+    "GET /api/mgmt/staff-contracts",                                    # 不收口（P1-49 名单），随裁定后再接
     "GET /api/projects/{project_id}",
     # 慢专病
     "GET /api/spd/assessments",
@@ -194,7 +193,7 @@ def test_读动词登记的仍然没有入口_接上了就划掉():
     assert not sorted(set(READ_EXEMPT) - found), "豁免的 GET 已有前端入口或端点已不存在，划掉"
     assert not READ_KNOWN & set(READ_EXEMPT), "既豁免又欠账"
     assert all(why.strip() for why in READ_EXEMPT.values())
-    assert len(READ_KNOWN) <= 11, "读动词欠账只许变少（19 → 11：P2-476 ~ P2-479 接上四条；P2-490 两条打印本就有入口、三元写法让解析推不出；P2-491 急救途中体征；P2-492 质控失控处理记录）"
+    assert len(READ_KNOWN) <= 10, "读动词欠账只许变少（19 → 10：P2-476 ~ P2-479 接上四条；P2-490 两条打印本就有入口、三元写法让解析推不出；P2-491 急救途中体征；P2-492 质控失控处理记录；P2-493 计费明细）"
 
 
 def test_判据自证_只写不读的点名_读过的放过():

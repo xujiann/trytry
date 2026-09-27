@@ -2243,6 +2243,32 @@ def test_数据质控规则能在界面上新增_配置写坏由后端说清楚(
     expect(page.locator("tr:has(button[data-qctoggle])", has_text="E2EQC1")).to_contain_text("必填项")
 
 
+def test_计费明细能按住院单查_未结清的看得见(page, base_url, admin_call):
+    """P2-493：「计费与结算」原先只能计、不能查——结算前看不到这次住院挂着哪些未结清的明细，计错了也无从发现。"""
+    org = admin_call("POST", "/api/organizations", {"name": "E2E计费县医院", "org_type": "lead_hospital", "level": "county"})
+    ward = admin_call("POST", "/api/inpatient/wards", {"org_id": org["id"], "name": "E2E计费病区"})
+    bed = admin_call("POST", "/api/inpatient/beds", {"ward_id": ward["id"], "bed_no": "E2E-B1"})
+    patient = admin_call("POST", "/api/patients", {"name": "E2E计费患者", "id_card": "33010619650505247X", "gender": "男"})
+    adm = admin_call("POST", "/api/inpatient/admissions",
+                     {"patient_id": patient["id"], "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "肺炎"})
+    admin_call("POST", "/api/billing/charge-items", {"code": "E2E-BD-1", "name": "E2E雾化吸入", "category": "treatment",
+                                                     "price": 12.5})
+    for qty in (2, 1):
+        admin_call("POST", "/api/billing/details", {"patient_id": patient["id"], "admission_id": adm["id"],
+                                                    "item_code": "E2E-BD-1", "quantity": qty})
+
+    _login(page, base_url)
+    _open_page(page, "billing", "费用结算")
+    form = page.locator("#bd-query")
+    form.locator("button").click()
+    expect(page.locator("#bill-msg")).to_contain_text("查明细请填患者ID、住院单ID 或就诊ID 之一")
+    form.locator('[name="admission_id"]').fill(str(adm["id"]))
+    form.locator("button").click()   # 缺省只看未结清
+    listing = page.locator("#bd-list")
+    expect(listing).to_contain_text("共 2 条，合计 37.50 元")   # 修前页面上没有明细
+    expect(listing.locator("tr", has_text="E2E雾化吸入").first).to_contain_text("未结清")
+
+
 def test_会诊计费不填金额提交不了_明确填0照常计费(page, base_url, seed, admin_call, admin_read):
     """会诊计费的费用框原先能留空：spdModal 的数字框把空值读成 0，这单照样标成「已计费」、计 0 元——弹窗标签自己写着
     「0 与未计费是两回事」（本院内部会诊常计 0 元，由 `fee_settled` 区分，不拿 0 当哨兵）。现在必填，要计 0 元就明确填 0。"""
