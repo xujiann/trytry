@@ -137,7 +137,9 @@ def overview(db: Session = Depends(get_db)):
         .all()
     )
     return {
-        "scope": "本实例（调用统计与启动时长为进程内数据）",
+        # 口径说这一份里的东西（P2-469）：原先写「调用统计与启动时长为进程内数据」，这里根本不带调用统计（在 api-stats），
+        # 而调度器状态读的是库、全集群一份
+        "scope": "本实例（启动时长为进程内数据；调度器状态取自数据库，全集群一份）",
         "instance_id": INSTANCE_ID,
         "uptime_seconds": int(time.time() - STARTED_AT),
         "environment": settings.environment,

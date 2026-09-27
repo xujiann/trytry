@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MGMT = (ROOT / "server" / "app" / "static" / "pages-mgmt.js").read_text(encoding="utf-8")
 RUNBOOK = (ROOT / "docs" / "运维手册.md").read_text(encoding="utf-8")
+MANUAL = (ROOT / "docs" / "用户手册.md").read_text(encoding="utf-8")
 
 
 def _render_monitor() -> str:
@@ -25,3 +26,16 @@ def test_页面副标题的口径取自后端_不再写死进程内():
 def test_运维手册写明两种口径():
     assert 'counter_scope: "cluster"' in RUNBOOK
     assert "未配置 Redis" in RUNBOOK and "跨实例、跨重启累计" in RUNBOOK
+
+
+def test_用户手册也写明两种口径():
+    """P2-469（P2-356 余项）：用户手册的运行监控一行原先仍写死「调用统计是本实例进程内数据，重启即清零」。"""
+    line = next(row for row in MANUAL.splitlines() if row.startswith("| 运行监控 |"))
+    assert "调用统计是本实例进程内数据，重启即清零" not in line
+    assert "未配置 Redis" in line and "集群口径" in line and "跨实例、跨重启累计" in line
+
+
+def test_概览的口径不提它不带的调用统计(client, admin):
+    """`/api/monitor/overview` 不带调用统计（那在 api-stats），原先的口径文案却写「调用统计……为进程内数据」。"""
+    scope = client.get("/api/monitor/overview", headers=admin).json()["scope"]
+    assert "调用统计" not in scope and "调度器状态取自数据库" in scope

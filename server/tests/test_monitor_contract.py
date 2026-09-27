@@ -111,7 +111,8 @@ def test_概览精确形状与键序_无redis(client, admin):
     assert type(body["uptime_seconds"]) is int and body["uptime_seconds"] >= 0
     assert isinstance(body["database"]["latency_ms"], float)
     assert body == {
-        "scope": "本实例（调用统计与启动时长为进程内数据）",
+        # P2-469 订正口径文案（这一份不带调用统计；调度器状态取自数据库）——有意改的字节，不是漂移
+        "scope": "本实例（启动时长为进程内数据；调度器状态取自数据库，全集群一份）",
         "instance_id": INSTANCE_ID,
         "uptime_seconds": body["uptime_seconds"],
         "environment": "dev",
