@@ -710,9 +710,11 @@ def advance_path(db: Session, instance: SpdPathInstance) -> dict:
     allowed, _matched = node_enter_allowed(db, instance, nxt)
     if not allowed:
         instance.status = "paused"
-        if enrollment.doctor_user_id is not None:
+        # 通知主管医生与路径负责人（P2-503）：原先只通知主管医生——档案没配主管医生时一条都不发，正是上面说的「停在那里
+        # 且没人知道为什么」；启动路径、在路径页调整它的负责人也不知道。两人是同一个的只发一条
+        for recipient in dict.fromkeys(uid for uid in (enrollment.doctor_user_id, instance.owner_user_id) if uid):
             notify_user(
-                db, enrollment.doctor_user_id, category="spd_path",
+                db, recipient, category="spd_path",
                 title="专病路径已暂停",
                 body=f"患者路径进入「{nxt.name}」的条件未满足，已暂停；"
                      "条件满足后可在路径页手工推进恢复",
