@@ -1243,11 +1243,15 @@ async function drawHomeVisits() {
         <button>提交申请</button></form>
       <p class="msg" id="hv-msg"></p>
       ${table(["ID", "患者", "签约", "服务", "需求", "状态", "上门人员", "操作"], orders, (o) => {
+        // 已派单的也能取消（P2-595）：接口只挡已完成的，页面原先只给「完成」——派出去才知道去不成（住院了、搬走了）的
+        // 工单就一直挂在待完成里
+        const cancel = canDispatch ? `<button class="btn danger" data-hvcancel="${o.id}">取消</button>` : "";
         const actions = o.status === "applied" && canDispatch
           ? `<button class="btn secondary" data-hvdis="${o.id}">派单</button>
-             <button class="btn danger" data-hvcancel="${o.id}">取消</button>`
+             ${cancel}`
           : o.status === "dispatched" && canComplete
-          ? `<button class="btn secondary" data-hvdone="${o.id}">完成</button>` : "—";
+          ? `<button class="btn secondary" data-hvdone="${o.id}">完成</button>
+             ${cancel}` : "—";
         return `<tr><td>${o.id}</td><td>${o.patient_id}</td><td>${o.contract_id ?? "—"}</td>
           <td>${esc(o.service_type_name)}</td><td>${esc(o.demand) || "—"}</td>
           <td>${statusTag(VISIT_STATUS, o.status)}</td><td>${esc(o.assignee_name) || "—"}</td><td>${actions}</td></tr>`;

@@ -1620,6 +1620,35 @@ def test_上门服务的派单与取消不给公卫人员(page, base_url, seed, 
     expect(page.locator(f'button[data-hvdis="{visit["id"]}"], button[data-hvcancel="{visit["id"]}"]')).to_have_count(0)
 
 
+def _dispatched_visit(admin_call, seed, demand):
+    visit = admin_call("POST", "/api/homevisits", {
+        "patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"], "service_type": "nursing", "demand": demand})
+    admin_call("POST", f"/api/homevisits/{visit['id']}/dispatch", {"assignee_name": "E2E护士王"})
+    return visit
+
+
+def test_已派单的上门工单能从页面上取消(page, base_url, seed, admin_call, admin_read):
+    """P2-595：取消接口只挡已完成的工单，页面原先只给待派单的画「取消」——派出去才知道去不成的工单一直挂在待完成里。"""
+    visit = _dispatched_visit(admin_call, seed, "E2E派出后去不成的上门")
+    _login(page, base_url)
+    _open_page(page, "contracts", "家医签约")
+    expect(page.locator(f'button[data-hvdone="{visit["id"]}"]')).to_have_count(1)
+    page.click(f'button[data-hvcancel="{visit["id"]}"]')   # 修前已派单的行上没有这个按钮
+    _redrawn(page, lambda: _spd_modal(page, {}))
+    (row,) = [o for o in admin_read("/api/homevisits?limit=500") if o["id"] == visit["id"]]
+    assert row["status"] == "cancelled"
+
+
+def test_已派单的上门工单公卫人员只见完成(page, base_url, seed, admin_call):
+    """P2-595 / P2-429：已派单的行加了「取消」，取消仍只给经办 / 医师——公卫人员只见「完成」。"""
+    _p2429_user(admin_call, seed, "e2e_p2429_ph", "public_health")
+    visit = _dispatched_visit(admin_call, seed, "E2E公卫只见完成的上门")
+    _login(page, base_url, "e2e_p2429_ph", "passw0rd1")
+    _open_page(page, "contracts", "家医签约")
+    expect(page.locator(f'button[data-hvdone="{visit["id"]}"]')).to_have_count(1)
+    expect(page.locator(f'button[data-hvcancel="{visit["id"]}"]')).to_have_count(0)
+
+
 def test_课件附件上传后看得到也下得了(page, base_url, admin_call, tmp_path):
     """P2-431：课件附件传得上去，页面上却只给个数——看不到是哪些文件，也下不回来。修后上传完就列出来，课件清单里
     「N 个 · 查看」点开同一份清单，每个文件能下载（鉴权下载，同检查报告附件）。"""
