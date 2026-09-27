@@ -111,6 +111,14 @@ def _summary(db, section, org_id, period):
     }
 
 
+def _say_truncated(out: dict, total: int, template: str) -> dict:
+    """表格段落截断了要说（P2-645）：「总体概览」写着待办 45 条，下面的表只列 20 行、一个字不提，读的人以为全在这了。
+    没截断的不写。`template` 里用 `{total}` / `{shown}`。"""
+    if total > len(out["rows"]):
+        out["note"] = template.format(total=total, shown=len(out["rows"]))
+    return out
+
+
 def _task_type_name(code: str) -> str:
     """任务类型印中文名，与页面同一份（P2-644）；认不出的原样印编码，别印成空白。"""
     return TASK_TYPE_NAMES.get(code, code)
@@ -120,24 +128,22 @@ def _todo(db, section, org_id, period):
     # 超期的另列一表（「超期预警」）：扫描间隙里已过截止日的也归那边（P2-549），同一条任务不在两张表里各出现一次。
     # 取数与「总体概览」的待办数同一个范围（`TASK_OPEN_STATUSES`，与工作台同口径）减去超期的（P2-602）：原先只取在手的，
     # 待审核的概览里算进「待办任务 N 条」、两张表都不列；列进来的标题后面注明「待审核」
-    rows = (
-        _task_query(db, org_id).filter(SpdTask.status.in_(TASK_OPEN_STATUSES),
-                                       ~task_overdue(clock.today().isoformat()))
-        .order_by(SpdTask.due_date).limit(20).all()
-    )
-    return {**_head(section, "table"), "columns": ["任务", "类型", "截止", "优先级"],
-            "rows": [[f"{r.title}（待审核）" if r.status == "submitted" else r.title,
-                      _task_type_name(r.task_type), r.due_date,
-                      TASK_PRIORITY_NAMES.get(r.priority, str(r.priority))] for r in rows]}
+    query = _task_query(db, org_id).filter(SpdTask.status.in_(TASK_OPEN_STATUSES),
+                                           ~task_overdue(clock.today().isoformat()))
+    rows = query.order_by(SpdTask.due_date, SpdTask.id).limit(20).all()
+    out = {**_head(section, "table"), "columns": ["任务", "类型", "截止", "优先级"],
+           "rows": [[f"{r.title}（待审核）" if r.status == "submitted" else r.title,
+                     _task_type_name(r.task_type), r.due_date,
+                     TASK_PRIORITY_NAMES.get(r.priority, str(r.priority))] for r in rows]}
+    return _say_truncated(out, query.count(), "共 {total} 条待办，列截止最早的 {shown} 条")
 
 
 def _alert(db, section, org_id, period):
-    rows = (
-        _task_query(db, org_id).filter(task_overdue(clock.today().isoformat()))
-        .order_by(SpdTask.due_date, SpdTask.id).limit(20).all()
-    )
-    return {**_head(section, "table"), "columns": ["超期任务", "类型", "截止日期"],
-            "rows": [[r.title, _task_type_name(r.task_type), r.due_date] for r in rows]}
+    query = _task_query(db, org_id).filter(task_overdue(clock.today().isoformat()))
+    rows = query.order_by(SpdTask.due_date, SpdTask.id).limit(20).all()
+    out = {**_head(section, "table"), "columns": ["超期任务", "类型", "截止日期"],
+           "rows": [[r.title, _task_type_name(r.task_type), r.due_date] for r in rows]}
+    return _say_truncated(out, query.count(), "共 {total} 条超期，列截止最早的 {shown} 条")
 
 
 def _workload(db, section, org_id, period):
@@ -308,8 +314,9 @@ def _points(db, section, org_id, period):
     rows = query.order_by(SpdPointAccount.balance.desc(), SpdPointAccount.id).limit(10).all()
     names = {u.id: u.full_name or u.username
              for u in db.query(User).filter(User.id.in_([r.user_id for r in rows] or [0]))}
-    return {**_head(section, "table"), "columns": ["用户ID", "姓名", "余额", "累计获得", "累计兑换"],
-            "rows": [[r.user_id, names.get(r.user_id, ""), r.balance, r.earned, r.used] for r in rows]}
+    out = {**_head(section, "table"), "columns": ["用户ID", "姓名", "余额", "累计获得", "累计兑换"],
+           "rows": [[r.user_id, names.get(r.user_id, ""), r.balance, r.earned, r.used] for r in rows]}
+    return _say_truncated(out, query.count(), "共 {total} 个积分账户，列余额前 {shown} 名")
 
 
 def _indicator(db, section, org_id, period):
