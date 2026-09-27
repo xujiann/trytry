@@ -38,3 +38,22 @@ def test_趋势只到今天为止_未来的随访不进图(org):
         out = compose_section(db, {"key": "trend", "title": "运行趋势"}, org, "monthly")
     assert out["series"] == [{"label": "2026-09", "total": 2, "done": 1, "rate": 50.0}]
     # 修前：[2026-09 共 3 条完成 1 条 33.3%，2026-11 共 1 条 0%]
+
+
+def test_近30天连首带尾是30个日历日(client, admin):
+    """两端都含的「近 30 天」是今天往前数 29 天（P2-546）：原先减 30，第 31 天前的那一天也进了图。"""
+    from app.spd.models import SpdFollowupRecord
+    from app.spd.reporting import compose_section
+
+    org_id = client.post("/api/organizations", headers=admin, json={
+        "name": "P2546 卫生院", "org_type": "township", "level": "township"}).json()["id"]
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "P2546 患者", "id_card": "330127197309092546"}).json()["id"]
+    with SessionLocal() as db:
+        for planned_at in ("2026-08-27", "2026-08-28"):   # 今天 09-26 往前数第 30 天、第 29 天
+            db.add(SpdFollowupRecord(patient_id=patient, org_id=org_id, planned_at=planned_at, status="done"))
+        db.commit()
+    with freeze_business_date(date(2026, 9, 26)), SessionLocal() as db:
+        out = compose_section(db, {"key": "trend", "title": "运行趋势"}, org_id, "monthly")
+    assert out["series"] == [{"label": "2026-08", "total": 1, "done": 1, "rate": 100.0}]   # 修前 total 2
+

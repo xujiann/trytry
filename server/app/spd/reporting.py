@@ -144,7 +144,9 @@ def _followup_trend(db, section, org_id, period):
     # 近 30 天、到今天为止（P2-293）：随访计划一次排出多个时间点，原先不设上界——排在未来的随访全是「未完成」，
     # 未来的月份以 0% 进图，本月的完成率也被还没到日子的那些拉低
     today = clock.today()
-    since = today - timedelta(days=30)
+    # 两端都含，「近 30 天」是今天往前数 29 天（P2-546）：原先减 30、连首带尾 31 个日历日——与症候群监测、资源排班的
+    # `end - (days - 1)` 不是一把尺子
+    since = today - timedelta(days=29)
     query = db.query(SpdFollowupRecord).filter(SpdFollowupRecord.planned_at >= since.isoformat(),
                                                SpdFollowupRecord.planned_at <= today.isoformat())
     if org_id is not None:
