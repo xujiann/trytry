@@ -22,8 +22,11 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
@@ -61,10 +64,52 @@ from .inpatient import (AdmissionCreate, _mark_discharged, _release_bed, create_
                         spawn_discharge_followup)
 from .patients import create_patient_idempotent, id_card_match
 
+#: 入站端点 → 交换日志的消息类型：请求在进处理函数之前就被拒时用它落日志（P2-521）。ADT / ORU 在处理函数里按事件细分，
+#: 这里记基础类型
+_INBOUND_TYPES = {
+    "/api/integration/hl7v2/patient": "hl7v2_patient",
+    "/api/integration/fhir/Patient": "fhir_patient",
+    "/api/integration/fhir/Observation": "fhir_observation",
+    "/api/integration/hl7v2/adt": "hl7v2_adt",
+    "/api/integration/hl7v2/oru": "hl7v2_oru",
+    "/api/integration/fhir/DiagnosticReport": "fhir_diagnostic_report",
+    "/api/integration/fhir/Encounter": "fhir_encounter",
+}
+
+
+class _InboundRoute(APIRoute):
+    """入站端点在进处理函数之前被拒（请求体校验 422、未登录 401、角色 403）同样落交换日志（P2-521）。
+
+    `_log_exchange` 写着「失败也留痕」、ORU 写着「全部入站落 ExchangeLog」，原先只有进了处理函数的（`_run_inbound`）才记：
+    空消息、缺字段、FHIR 资源不是对象、令牌过期、账号角色不对，接口方收到的全是失败，监控页却只数得到那几条解析失败的，
+    失败率看着比真实的低。处理函数里已经记过的异常带着标记（`_run_inbound`），这里不重记。
+    """
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        message_type = _INBOUND_TYPES.get(self.path) if "POST" in self.methods else None
+        if message_type is None:
+            return handler
+
+        async def logged(request: Request):
+            try:
+                return await handler(request)
+            except (RequestValidationError, HTTPException) as exc:
+                if not getattr(exc, "exchange_logged", False):
+                    detail = (f"422: 请求体校验失败 {exc.errors()!r}" if isinstance(exc, RequestValidationError)
+                              else f"{exc.status_code}: {exc.detail}")
+                    await run_in_threadpool(_log_exchange, message_type, False, detail,
+                                            request.headers.get("x-source-system", ""))
+                raise
+
+        return logged
+
+
 router = APIRouter(
     prefix="/api/integration",
     tags=["对接适配层"],
     dependencies=[Depends(require_roles("operator"))],
+    route_class=_InboundRoute,
 )
 
 _GENDER_HL7 = {"M": "男", "F": "女"}
@@ -105,10 +150,13 @@ def _run_inbound(message_type: str, source_system: str, fn):
         result = fn()
     except HTTPException as exc:
         _log_exchange(message_type, False, f"{exc.status_code}: {exc.detail}", source_system)
+        exc.exchange_logged = True   # type: ignore[attr-defined]  # 路由那一层（_InboundRoute）不再重记
         raise
     except Exception as exc:  # noqa: BLE001 - 解析异常统一捕获落日志
         _log_exchange(message_type, False, f"解析异常: {exc!r}", source_system)
-        raise HTTPException(status_code=422, detail="消息解析失败，已记录交换日志") from exc
+        failed = HTTPException(status_code=422, detail="消息解析失败，已记录交换日志")
+        failed.exchange_logged = True   # type: ignore[attr-defined]
+        raise failed from exc
     _log_exchange(message_type, True, "", source_system)
     return result
 
