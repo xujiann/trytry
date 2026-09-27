@@ -245,8 +245,37 @@ def test_任务批量补扫_置位与告警(client, setup, clamd, monkeypatch):
     assert scanned >= 2 and "检出 1" in summary
     assert _scan_status(clean["id"]) == ("clean", "")
     assert _scan_status(bad["id"]) == ("infected", FAKE_SIGNATURE)
-    assert len(alerts) == 1 and alerts[0][0] == "attachment_infected"
-    assert FAKE_SIGNATURE in alerts[0][1]
+    # 告警类别带上本轮第一件的编号（P2-500：不同轮次的检出互不冷却）
+    assert len(alerts) == 1 and alerts[0][0] == f"attachment_infected:{bad['id']}"
+    assert FAKE_SIGNATURE in alerts[0][1] and f"id={bad['id']}" in alerts[0][1]
+
+
+def test_前后两轮的检出各报各的_同一轮只发一条(client, setup, clamd, monkeypatch):
+    """P2-500：原先逐件发、共用一个告警类别，冷却期（默认 10 分钟）内第二件起一概被吞。"""
+    from app import alerting
+
+    monkeypatch.setattr(settings, "clamd_address", clamd.address)
+    monkeypatch.setattr(settings, "alert_webhook_url", "http://alert.example/hook")
+    sent: list[dict] = []
+
+    class _Accepted:
+        is_success = True
+        status_code = 200
+
+    monkeypatch.setattr(alerting.httpx, "post", lambda url, json, timeout: sent.append(json) or _Accepted())
+    alerting.reset_cooldowns()
+    first = _upload(client, setup["op"], setup["event"]["id"], "virus-a.pdf", b"%PDF-1.4 a " + VIRUS_MARKER)
+    second = _upload(client, setup["op"], setup["event"]["id"], "virus-b.pdf", b"%PDF-1.4 b " + VIRUS_MARKER)
+    with SessionLocal() as db:
+        attachment_av_scan(db)
+    assert len(sent) == 1, sent   # 同一轮两件，一条告警
+    assert f"id={first['id']}" in sent[0]["message"] and f"id={second['id']}" in sent[0]["message"]  # 修前只有第一件
+    third = _upload(client, setup["op"], setup["event"]["id"], "virus-c.pdf", b"%PDF-1.4 c " + VIRUS_MARKER)
+    with SessionLocal() as db:
+        attachment_av_scan(db)
+    assert len(sent) == 2 and f"id={third['id']}" in sent[1]["message"], sent   # 修前冷却期内被吞
+    assert sent[1]["kind"] == f"attachment_infected:{third['id']}"
+    alerting.reset_cooldowns()
 
 
 def test_任务clamd不可用_本轮跳过不改状态(client, setup, dead_port, monkeypatch):

@@ -47,6 +47,8 @@ CONNECT_TIMEOUT_SECONDS = 5.0
 RESPONSE_TIMEOUT_SECONDS = 60.0
 #: 补扫任务每轮最多处理的附件数：上传高峰积压时分多轮消化，单轮不长期占库连接。
 SCAN_BATCH_SIZE = 50
+#: 一条检出告警里逐件列出的上限：再多的只报件数（一轮最多 `SCAN_BATCH_SIZE` 件）
+ALERT_LIST_MAX = 20
 
 
 def _connect() -> socket.socket:
@@ -132,7 +134,7 @@ def attachment_av_scan(db: Session) -> tuple[int, str]:
     - clamd 不可用（PING 失败或扫描中途失联）：本轮跳过/中止，**不改附件状态**——
       pending 留着下轮重试，绝不把探测失败写成扫描结论；
     - 检出病毒：置 infected + 记 scan_detail（签名名），外发告警
-      （下载已被拦截，但需要有人去处置源头）；
+      （下载已被拦截，但需要有人去处置源头；每轮一条，逐件列出本轮检出的，见 P2-500）；
     - 存储中文件缺失：置 unavailable 并记因，不让它永远堵在 pending 队头；
     - 同一份内容一并隔离（P2-395）：存储按 sha256 只存一份，被隔离的字节挂在别的行上照样下得到——
       每轮扫完把与 infected 行同 sha256 的其余行（早先扫成 clean 的、未配置时标的 skipped、还没轮到的
@@ -153,6 +155,7 @@ def attachment_av_scan(db: Session) -> tuple[int, str]:
     )
     scanned = infected = 0
     aborted = ""
+    found: list[tuple[int, str]] = []   # 本轮检出的 (附件编号, 告警里的一句)
     for attachment in pending:
         if not storage.exists(attachment.sha256):
             attachment.scan_status = "unavailable"
@@ -170,14 +173,18 @@ def attachment_av_scan(db: Session) -> tuple[int, str]:
         scanned += 1
         if status == "infected":
             infected += 1
-            send_alert(
-                "attachment_infected",
-                f"附件检出病毒：id={attachment.id} 文件={attachment.filename} "
-                f"签名={detail}（下载已拦截，请处置源头）",
-            )
+            found.append((attachment.id, f"id={attachment.id} 文件={attachment.filename} 签名={detail}"))
     db.flush()  # 会话 autoflush 关着：本轮刚判出的 infected 先落下去，下面按内容扩散才看得见
     spread = _quarantine_same_content(db)
     db.commit()
+    if found:
+        # 一轮一条、列出本轮检出的每一件（P2-500）：原先逐件发、共用一个告警类别，冷却期（默认 10 分钟）内第二件起一概
+        # 被吞——两个感染文件前后脚上传，告警只点得出第一个，第二个的来源没人去处置。类别带上本轮第一件的编号：每件附件
+        # 只会被判出一次，不同轮次的检出互不冷却；同一轮检出再多也只发一条，不轰炸
+        listed = "；".join(line for _, line in found[:ALERT_LIST_MAX])
+        more = f"；另有 {len(found) - ALERT_LIST_MAX} 件，见附件扫描状态" if len(found) > ALERT_LIST_MAX else ""
+        send_alert(f"attachment_infected:{found[0][0]}",
+                   f"附件检出病毒 {len(found)} 件（下载已拦截，请处置源头）：{listed}{more}")
     tail = f"，同内容另隔离 {spread} 件" if spread else ""
     return scanned, f"补扫 {scanned} 件，检出 {infected} 件{tail}{aborted}"
 
