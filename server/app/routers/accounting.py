@@ -94,6 +94,10 @@ class VoucherOut(BaseModel):
     total_credit: int | float
     status: str
     entries: list[VoucherEntryOut] | None = None
+    # 作废留痕（P2-522）：只有已作废凭证的详情才带（条件键，同 entries）；存量作废的作废人、时间为 null
+    voided_by_name: str | None = None
+    voided_at: str | None = None
+    void_reason: str | None = None
 
 
 class VoucherStatusOut(BaseModel):
@@ -288,6 +292,13 @@ def _voucher_out(v: Voucher, entries: list[VoucherEntry] | None = None) -> dict:
     return out
 
 
+def _void_trail(db: Session, v: Voucher) -> dict:
+    """已作废凭证详情里的作废留痕（P2-522）。"""
+    voider = db.get(User, v.voided_by) if v.voided_by else None
+    return {"voided_by_name": (voider.full_name or voider.username) if voider else None,
+            "voided_at": v.voided_at.isoformat() if v.voided_at else None, "void_reason": v.void_reason}
+
+
 @router.post("/vouchers", response_model=VoucherOut, response_model_exclude_unset=True,
              status_code=201, dependencies=[Depends(require_roles("director"))])
 def create_voucher(
@@ -364,7 +375,10 @@ def get_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = Dep
         raise HTTPException(status_code=404, detail="凭证不存在")
     assert_org_visible(db, user, voucher.org_id)  # P0-38：凭证清单只给看本机构，明细同一口径
     entries = db.query(VoucherEntry).filter(VoucherEntry.voucher_id == voucher_id).all()
-    return _voucher_out(voucher, entries)
+    out = _voucher_out(voucher, entries)
+    if voucher.status == "void":
+        out.update(_void_trail(db, voucher))
+    return out
 
 
 @router.post("/vouchers/{voucher_id}/post", response_model=VoucherStatusOut,
@@ -384,18 +398,37 @@ def post_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = De
     return {"id": voucher.id, "status": voucher.status}
 
 
+class VoucherVoidIn(BaseModel):
+    # 作废原因（P2-522）：页面必填；接口不强制——原先不带请求体的调用方照旧能作废，原因记空串
+    reason: str = Field(default="", max_length=256)
+
+
 @router.post("/vouchers/{voucher_id}/void", response_model=VoucherStatusOut,
              dependencies=[Depends(require_roles("director"))])
-def void_voucher(voucher_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """作废：已过账凭证的更正手段。不提供删除——账错了也要看得见。"""
+def void_voucher(
+    voucher_id: int, body: VoucherVoidIn | None = None,
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    """作废：已过账凭证的更正手段。不提供删除——账错了也要看得见。
+
+    作废人、时间、原因一并落在凭证上（P2-522）：原先只翻状态，谁作废的、为什么都不留。翻状态与写留痕同一条
+    带条件的 UPDATE：两个人同时作废，后到的 409，留痕不被后到的那一路改掉。
+    """
     voucher = db.get(Voucher, voucher_id)
     if voucher is None:
         raise HTTPException(status_code=404, detail="凭证不存在")
     assert_obj_org_writable(db, user, voucher)
-    if voucher.status == "void":
+    voided = (
+        db.query(Voucher)
+        .filter(Voucher.id == voucher.id, Voucher.status != "void")
+        .update({Voucher.status: "void", Voucher.voided_by: user.id, Voucher.voided_at: utcnow(),
+                 Voucher.void_reason: (body.reason.strip() if body else "")}, synchronize_session=False)
+    )
+    if not voided:
+        db.rollback()
         raise HTTPException(status_code=409, detail="凭证已作废")
-    voucher.status = "void"
     db.commit()
+    db.refresh(voucher)
     return {"id": voucher.id, "status": voucher.status}
 
 

@@ -302,6 +302,10 @@ class Voucher(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     posted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 作废留痕（P2-522）：作废是已过账凭证唯一的更正手段，谁、何时、为什么都要留（迁移 c7e9a1b3d5f8；存量不回填）
+    voided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    void_reason: Mapped[str] = mapped_column(String(256), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     entries: Mapped[list["VoucherEntry"]] = relationship(back_populates="voucher")

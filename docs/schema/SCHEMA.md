@@ -4093,6 +4093,9 @@
 - `created_by` · INTEGER · NOT NULL · → users.id
 - `posted_by` · INTEGER · → users.id
 - `posted_at` · DATETIME
+- `voided_by` · INTEGER · → users.id
+- `voided_at` · DATETIME
+- `void_reason` · VARCHAR(256) · NOT NULL
 - `created_at` · DATETIME · NOT NULL · index
 - _unique_ (org_id, voucher_no) uq_voucher_org_no
 - _index_ ix_vouchers_created_at(created_at)

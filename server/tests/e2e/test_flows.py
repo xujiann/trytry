@@ -3155,6 +3155,43 @@ def test_会计页存下的期间被拒时回落本月_切换框先验再存(pag
     assert page.evaluate("() => localStorage.getItem('medplat_acc_period')") is None
 
 
+def test_凭证作废在页内表单里填原因_明细看得到作废留痕(page, base_url, seed, admin_read):
+    """P2-522：作废原先 `confirm()` 一下就翻状态，谁作废的、为什么都不留；换成页内表单写明原因，取消即不作废，
+    明细里看得到作废人、时间与原因。"""
+    import json
+    from datetime import datetime, timezone
+    from urllib.request import Request
+
+    def call(path, payload, token=""):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode(),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    admin = call("/api/auth/login", {"username": "admin", "password": "admin123"})["access_token"]
+    today = datetime.now(timezone.utc).date().isoformat()   # 会计页默认看本月（与页面同样取 UTC 的年月）
+    voucher = call("/api/accounting/vouchers", {
+        "org_id": seed["org"]["id"], "voucher_no": "E2E-P2522", "voucher_date": today, "summary": "E2E 作废留痕",
+        "entries": [{"subject_code": "1001", "debit": 50}, {"subject_code": "4004", "credit": 50}]}, admin)
+    call(f"/api/accounting/vouchers/{voucher['id']}/post", {}, admin)
+
+    def status():
+        return admin_read(f"/api/accounting/vouchers/{voucher['id']}")
+
+    _login(page, base_url)
+    _open_page(page, "accounting", "会计核算")
+    page.click(f'button[data-void="{voucher["id"]}"]')
+    expect(_modal(page)).to_contain_text("不能恢复")
+    _cancel_modal(page)
+    assert status()["status"] == "posted", "点了取消却照样作废了"
+    page.click(f'button[data-void="{voucher["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"reason": "E2E 科目记错"}))
+    trail = status()
+    assert (trail["status"], trail["void_reason"]) == ("void", "E2E 科目记错"), trail
+    page.click(f'button[data-detail="{voucher["id"]}"]')
+    expect(page.locator("#voucher-detail-body")).to_contain_text("E2E 科目记错")
+
+
 def test_会计科目能在界面上增建_凭证分录即可选用(page, base_url, admin_read):
     """P2-93（动词级孤儿）：科目原先只在凭证分录的下拉里出现、页面上建不了——种子只放一级科目，docstring 写着
     「明细科目交由管理员按需增建」，建科目的接口（仅管理员）却没有入口。"""

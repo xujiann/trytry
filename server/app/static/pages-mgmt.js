@@ -482,12 +482,21 @@ async function renderAccounting() {
     const d = e.target.dataset;
     try {
       if (d.post) await api(`/api/accounting/vouchers/${d.post}/post`, { method: "POST" });
-      else if (d.void) { if (!confirm("作废该凭证？")) return;
-        await api(`/api/accounting/vouchers/${d.void}/void`, { method: "POST" }); }
+      else if (d.void) {
+        // 作废要写明原因（P2-522）：原先 confirm() 一下就作废，谁作废的、为什么都不留
+        const form = await spdModal("作废凭证", [
+          { name: "reason", label: "作废原因", required: true, placeholder: "如：科目记错，已另开更正凭证" },
+        ], { intro: "作废后该凭证不再计入试算平衡与报表，不能恢复；作废人、时间与原因留在凭证上可查。" });
+        if (!form) return;
+        await api(`/api/accounting/vouchers/${d.void}/void`, { method: "POST", body: JSON.stringify({ reason: form.reason }) });
+      }
       else if (d.detail) {
         const v = await api(`/api/accounting/vouchers/${d.detail}`);
         $("#voucher-detail").classList.remove("hidden");
-        $("#voucher-detail-body").innerHTML = table(["科目", "摘要", "借方", "贷方"], v.entries, (x) =>
+        const trail = v.status === "void"
+          ? `<p class="desc">已作废：${esc(v.voided_by_name || "—")} ${esc((v.voided_at || "").replace("T", " ").slice(0, 16))}，原因：${esc(v.void_reason || "（未写明）")}</p>`
+          : "";
+        $("#voucher-detail-body").innerHTML = trail + table(["科目", "摘要", "借方", "贷方"], v.entries, (x) =>
           `<tr><td>${esc(x.subject_code)}</td><td>${esc(x.summary)}</td>
            <td>${x.debit.toFixed(2)}</td><td>${x.credit.toFixed(2)}</td></tr>`);
         return;
