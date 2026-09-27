@@ -49,7 +49,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
-                       REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES, referral_ends,
+                       REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES, actively_enrolled, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
                        scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
@@ -607,7 +607,8 @@ def self_screening(
     return {
         "id": record.id, "score": record.score, "risk_level": record.risk_level,
         "result": record.result, "advice": record.advice,
-        "can_apply": is_suspect_risk(record.risk_level),
+        # 已在管这个病种的不提示申请（P2-559）：受理只是把人放进目标池，在管的人受理了什么也不发生，居民却看到「已受理」
+        "can_apply": is_suspect_risk(record.risk_level) and not actively_enrolled(db, patient.id, body.program_code),
     }
 
 
@@ -629,11 +630,14 @@ def apply_service(
     account: ResidentAccount = Depends(current_resident),
     db: Session = Depends(get_db),
 ):
-    """提交专病服务申请（#2）。同一病种已有待受理申请时不重复提交。"""
+    """提交专病服务申请（#2）。同一病种已有待受理申请时不重复提交；已在管这个病种的不收（P2-559）。"""
     patient = _patient(db, account, body.patient_id, resource=None)  # 写走 AuditLog
     program_problem = unknown_program(db, body.program_code, active_only=True)  # 病种编码先查在不在（P1-120）；新纳入不收停用病种，与建档同一口径
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
+    # 申请是给「未纳管居民」的（模型注释）：在管的人申请了，医护受理也只是把人放进目标池——已纳管的什么都不发生
+    if actively_enrolled(db, patient.id, body.program_code):
+        raise HTTPException(status_code=409, detail="该病种已在专病管理中，无需申请")
     pending = (
         db.query(SpdServiceApply)
         .filter(

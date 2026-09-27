@@ -200,7 +200,8 @@ def test_自查落库分支的键与顺序(client, auth):
                        json={"program_code": "SCT", "scale_code": "SCT-RISK",
                              "answers": {"q1": "是"}}).json()
     assert list(body) == ["id", "score", "risk_level", "result", "advice", "can_apply"]
-    assert body["result"] == "suspect" and body["can_apply"] is True
+    # 本人在管 SCT：疑似照判，但不再提示申请（P2-559，在管的人申请了受理也什么都不发生）
+    assert body["result"] == "suspect" and body["can_apply"] is False
     assert "draft" not in body and "answered" not in body
 
 

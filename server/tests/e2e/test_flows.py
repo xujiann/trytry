@@ -4124,6 +4124,9 @@ def test_spd_resident_selfscreen_apply_measure(page, base_url, spd_seed):
     page.click('[data-tab="spd"]')
     page.click('[data-spd="screen"]')
     page.wait_for_selector("#spd-scale")
+    # 答糖尿病问卷（P2-559）：上面管理端用例已把这位居民按高血压签约纳管，在管病种的自查不再提示申请——
+    # 「顺手申请服务」这条链路要走一个没在管的病种
+    page.select_option("#spd-scale", "scr_diabetes")
     # 每题默认「（未答）」（P1-136）：原先默认选中第一个选项，一题没碰就交卷等于每题都答了「是」
     assert all(sel.input_value() == "" for sel in page.locator("[data-q]").all())
     for sel in page.locator("[data-q]").all():
