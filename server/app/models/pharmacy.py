@@ -63,7 +63,7 @@ class Prescription(Base):
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     diagnosis_name: Mapped[str] = mapped_column(String(256), default="")
-    # auto_passed=系统审通过, pending_review=待药师审, approved=药师审通过, rejected=退回
+    # auto_passed=系统审通过, pending_review=待药师审, approved=药师审通过, rejected=已退回
     status: Mapped[str] = mapped_column(String(16), default="auto_passed", index=True)
     review_comment: Mapped[str] = mapped_column(String(1024), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))

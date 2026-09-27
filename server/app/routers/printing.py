@@ -91,24 +91,17 @@ _DOC_TYPE_PATTERN = "^(" + "|".join(DOC_TYPES) + ")$"
 
 CENTER_NAMES = {"imaging": "影像", "ecg": "心电", "lab": "检验", "pathology": "病理"}
 CERT_TYPE_NAMES = {"birth": "出生医学证明", "death": "死亡医学证明", "defect": "出生缺陷儿登记"}
-RX_STATUS_NAMES = {
-    "auto_passed": "系统审通过",
-    "pending_review": "待药师审核",
-    "approved": "药师审核通过",
-    "rejected": "已退回",
-}
-EXAM_STATUS_NAMES = {
-    "pending": "待诊断",
-    "diagnosing": "诊断中",
-    "reported": "已报告",
-    "recognized": "结果互认",
-}
 BILL_TYPE_NAMES = {"outpatient": "门诊", "inpatient": "住院"}
 REFERRAL_DIRECTION_NAMES = {"up": "上转", "down": "下转"}
 # 转诊状态文案与业务端逐字相同，不再抄一份：打印件与列表页读起来必须是同一句话。
 # 居民端另有一套措辞（待接收/已接收/已完成，见 portal._PLATFORM_REFERRAL_STATUS），
 # 那是刻意的对外分叉、不是第三份拷贝，收敛与否属另案（ROADMAP）。
 from .referrals import STATUS_LABELS as REFERRAL_STATUS_NAMES  # noqa: E402
+# 处方、检查检验申请单（含样本物流）的状态同理，用业务端那几张表（P2-575）：原先这里各抄一份，同一张处方
+# 列表页写「待药师审」「已退回」，处方笺印「待药师审核」，报错又说「退回」；申请单列表页「已互认」「未采样」，
+# 打印件「结果互认」「—」，报错「互认既往结果」
+from .exams import EXAM_REQUEST_STATUS_NAMES, EXAM_SAMPLE_STATUS_NAMES  # noqa: E402
+from .prescriptions import PRESCRIPTION_STATUS_NAMES  # noqa: E402
 from .consents import GUARDIAN_RELATION_NAMES  # noqa: E402  监护关系编码的中文，与居民端同一份（P2-238）
 from .checkups import abnormal_text as checkup_abnormal_text  # noqa: E402  异常项提示与体检清单同一口径（P2-422）
 CONSENT_SCENE_NAMES = {
@@ -363,7 +356,7 @@ def print_prescription(
   <div class="section"><h3>R<sub>p</sub>（药品明细）</h3>
     <table class="items"><thead><tr><th>序号</th><th>药品名称</th><th>药品编码</th>
       <th>日剂量</th><th>用药天数</th></tr></thead><tbody>{rows}</tbody></table></div>
-  <div class="section"><h3>审核意见（{_esc(RX_STATUS_NAMES.get(rx.status, rx.status))}）</h3>
+  <div class="section"><h3>审核意见（{_esc(PRESCRIPTION_STATUS_NAMES.get(rx.status, rx.status))}）</h3>
     <div class="body">{review}</div></div>
   <div class="sign"><span>开方医师：{_esc(_user_name(db, rx.created_by)) or "—"}</span>
     <span>审核药师签名：____________</span><span>发药/核对：____________</span></div>"""
@@ -394,23 +387,23 @@ def print_exam_request(
     assert_patient_visible(db, user, request.patient_id, resource="print:exam_request")
     patient = db.get(Patient, request.patient_id)
     org_name = _org_name(db, request.from_org_id)
-    sample_names = {
-        "": "—",
-        "collected": "已采样",
-        "in_transit": "转运中",
-        "received": "中心已核收",
-    }
+    # 样本物流只有检验类有：别的中心这一栏是「—」，检验类还没采样的写「未采样」——与申请单列表页同一句（P2-575）
+    sample = (
+        EXAM_SAMPLE_STATUS_NAMES.get(request.sample_status, request.sample_status)
+        if request.center_type == "lab"
+        else "—"
+    )
     meta = _patient_rows(patient, user) + (
         f'<tr><td class="k">申请机构</td><td>{_esc(org_name)}</td>'
         f'<td class="k">申请时间</td><td>{_esc(_shown_at(request.created_at))}</td></tr>'
         f'<tr><td class="k">检查类别</td><td>{_esc(CENTER_NAMES.get(request.center_type, request.center_type))}</td>'
-        f'<td class="k">当前状态</td><td>{_esc(EXAM_STATUS_NAMES.get(request.status, request.status))}</td></tr>'
+        f'<td class="k">当前状态</td><td>{_esc(EXAM_REQUEST_STATUS_NAMES.get(request.status, request.status))}</td></tr>'
     )
     body = f"""
   <div class="section"><h3>申请项目</h3>
     <table class="items"><thead><tr><th>项目编码</th><th>项目名称</th><th>样本状态</th></tr></thead>
     <tbody><tr><td>{_esc(request.item_code)}</td><td>{_esc(request.item_name)}</td>
-      <td>{_esc(sample_names.get(request.sample_status, request.sample_status))}</td></tr></tbody></table></div>
+      <td>{_esc(sample)}</td></tr></tbody></table></div>
   <div class="section"><h3>临床资料与检查目的</h3><div class="body">{_esc(request.clinical_info) or "—"}</div></div>
   <div class="sign"><span>申请医师：{_esc(_user_name(db, request.created_by)) or "—"}</span>
     <span>接收/执行签名：____________</span></div>"""

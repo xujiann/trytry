@@ -37,8 +37,9 @@ from ..schemas import (
 
 router = APIRouter(prefix="/api/prescriptions", tags=["集中审方"])
 
-# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
-PRESCRIPTION_STATUS_NAMES = {"auto_passed": "系统审通过", "pending_review": "待药师审", "approved": "药师审通过", "rejected": "退回"}
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）。处方笺打印件也用这一张，
+# 与处方列表页（core.js RX_STATUS）逐字相同（P2-575，test_exam_rx_status_one_voice 盯着）
+PRESCRIPTION_STATUS_NAMES = {"auto_passed": "系统审通过", "pending_review": "待药师审", "approved": "药师审通过", "rejected": "已退回"}
 
 # 特殊人群年龄界限：儿童 <14 岁，老年 ≥65 岁
 CHILD_AGE_LIMIT = 14

@@ -394,6 +394,9 @@ def _label_tables():
             (prescriptions.PRESCRIPTION_STATUS_NAMES, Prescription, "status", set()),
         "esb.MSG_STATUS": (esb.MSG_STATUS, EsbMessage, "status", set()),
         "exams.EXAM_REQUEST_STATUS_NAMES": (exams.EXAM_REQUEST_STATUS_NAMES, ExamRequest, "status", set()),
+        # P2-575：检验样本物流（申请单打印件与列表页同一张；空串「未采样」也是一个码）
+        "exams.EXAM_SAMPLE_STATUS_NAMES":
+            (exams.EXAM_SAMPLE_STATUS_NAMES, ExamRequest, "sample_status", set()),
         "followups.FOLLOWUP_TASK_STATUS_NAMES": (followups.FOLLOWUP_TASK_STATUS_NAMES, FollowupTask, "status", set()),
         "fund.POOL_STATUS_NAMES": (fund.POOL_STATUS_NAMES, FundPool, "status", set()),
         "homevisits.VISIT_ORDER_STATUS_NAMES":
@@ -468,7 +471,7 @@ LABEL_TABLE_NAMES = [
     "paths.NODE_SERVICE_TYPE_NAMES", "assess.ASSESS_LEVEL_NAMES", "assess.PERIOD_TYPE_NAMES",
     "followup.ENCOUNTER_TYPE_NAMES", "devices.DATA_SOURCE_STATUS_NAMES",
     "users.LOGIN_FAIL_REASON_NAMES", "clinical_docs.SHIFT_NAMES", "service.ENROLL_STATUS_LABELS",
-    "service.PACKAGE_BINDING_STATUS_NAMES",
+    "service.PACKAGE_BINDING_STATUS_NAMES", "exams.EXAM_SAMPLE_STATUS_NAMES",
 ]
 
 

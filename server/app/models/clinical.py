@@ -54,13 +54,13 @@ class ExamRequest(Base):
     item_code: Mapped[str] = mapped_column(String(64), index=True)
     item_name: Mapped[str] = mapped_column(String(128))
     clinical_info: Mapped[str] = mapped_column(String(512), default="")
-    # pending=待诊断, diagnosing=诊断中, reported=已报告, recognized=互认既往结果
+    # pending=待诊断, diagnosing=诊断中, reported=已报告, recognized=已互认（互认既往结果，不再另做）
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     recognized_from_id: Mapped[int | None] = mapped_column(
         ForeignKey("exam_requests.id"), nullable=True
     )
     recognition_declined_reason: Mapped[str] = mapped_column(String(256), default="")
-    # 检验样本物流（仅 lab）："" / collected=已采样 / in_transit=转运中 / received=中心核收
+    # 检验样本物流（仅 lab）：""=未采样 / collected=已采样 / in_transit=转运中 / received=已核收
     sample_status: Mapped[str] = mapped_column(String(16), default="")
     # L-6 整改：诊断领取人（原子领取时记录，避免并发双领与责任不清）
     claimed_by: Mapped[str] = mapped_column(String(64), default="")

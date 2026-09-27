@@ -49,8 +49,11 @@ from ..ws import manager
 
 router = APIRouter(prefix="/api/exams", tags=["共享诊断中心"], dependencies=[Depends(get_current_user)])
 
-# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）
-EXAM_REQUEST_STATUS_NAMES = {"pending": "待诊断", "diagnosing": "诊断中", "reported": "已报告", "recognized": "互认既往结果"}
+# 状态文案（措辞照抄模型列注释；报错文案用它，别把英文码直接拼给窗口人员看——P2-74）。申请单打印件也用这两张，
+# 与申请单列表页（core.js EXAM_STATUS / SAMPLE_STATUS）逐字相同（P2-575，test_exam_rx_status_one_voice 盯着）
+EXAM_REQUEST_STATUS_NAMES = {"pending": "待诊断", "diagnosing": "诊断中", "reported": "已报告", "recognized": "已互认"}
+#: 检验样本物流（仅检验类有；别的中心这一栏是「—」）
+EXAM_SAMPLE_STATUS_NAMES = {"": "未采样", "collected": "已采样", "in_transit": "转运中", "received": "已核收"}
 
 # 同一患者同一项目在此天数内已有报告的，提示可互认
 RECOGNITION_WINDOW_DAYS = 30
