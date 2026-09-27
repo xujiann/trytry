@@ -117,6 +117,8 @@ function readCookie(name) {
  * 必填文本只填了空格（P1-109，后端 `texttypes.NON_BLANK`）pydantic 的原话是
  * "String should match pattern '\S'"，必填文本留空（`min_length=1`，P1-110）的原话是
  * "String should have at least 1 character"——按错误类型与约束认出来换成人话。
+ * 写超了长度（`max_length`）原先照样是英文 "String should have at most 512 characters"，批量选多了是
+ * "List should have at most 500 items after validation, not 501"（P2-606）——同样按类型换成「最多 N 个字 / 项」。
  */
 function errorText(detail, fallback) {
   if (Array.isArray(detail)) {
@@ -125,7 +127,10 @@ function errorText(detail, fallback) {
       const ctx = (e && e.ctx) || {};
       const blank = e && e.type === "string_pattern_mismatch" && ctx.pattern === "\\S";
       const empty = e && e.type === "string_too_short" && ctx.min_length === 1;
+      const tooLong = e && e.type === "string_too_long" && ctx.max_length != null;
+      const tooMany = e && e.type === "too_long" && ctx.max_length != null;
       const msg = blank ? "不能只填空格" : empty ? "不能为空"
+        : tooLong ? `最多 ${ctx.max_length} 个字，超出了` : tooMany ? `最多 ${ctx.max_length} 项，超出了`
         : String((e && e.msg) || "").replace(/^Value error, /, "");
       const field = Array.isArray(e && e.loc)
         ? e.loc.filter((x) => !origins.includes(x)).join(".") : "";
