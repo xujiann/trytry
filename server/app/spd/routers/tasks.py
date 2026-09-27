@@ -1302,8 +1302,8 @@ def export_tasks(
 ):
     """任务导出：返回行数据 + 表头，前端拼 CSV。
 
-    不在服务端生成文件：平台既有的导出（绩效、考核）都走这个形状，
-    多一种导出方式就多一份要维护的编码/换行/BOM 处理。
+    不在服务端生成文件：多一种导出方式就多一份要维护的编码/换行/BOM 处理。行里的病种、类型、状态、优先级是编码，
+    前端拼 CSV 时按任务中心清单同一套文案换成中文（P2-567）——导出的与屏幕上的读起来是同一句话。
 
     「只看我的」与清单同一个判据（承办人是自己，P2-526）：原先导出不收这个参数、页面发请求前还把它删掉，
     勾着「只看我的」导出来的却是全部可见机构的任务。截断看得见：`matched` 是同一筛选下命中的总数。
@@ -1330,9 +1330,10 @@ def export_tasks(
         "columns": ["任务ID", "患者", "病种", "任务类型", "标题", "状态", "优先级",
                     "截止日期", "责任人ID", "催办次数", "创建时间"],
         "rows": [
+            # 创建时间写本地时刻（P2-567）：原先写落库的 naive UTC，东八区早上 8 点前建的任务导出来是前一天的夜里
             [r.id, briefs.get(r.patient_id, ""), r.program_code, r.task_type, r.title,
              r.status, r.priority, r.due_date, r.assignee_id or "", r.urged_count,
-             r.created_at.strftime("%Y-%m-%d %H:%M")]
+             clock.to_local(r.created_at).strftime("%Y-%m-%d %H:%M")]
             for r in rows
         ],
         "total": len(rows),

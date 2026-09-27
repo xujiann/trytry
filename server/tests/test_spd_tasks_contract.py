@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from conftest import reset_database
 
+from app import clock
 from app.main import app
 
 
@@ -445,7 +446,8 @@ def test_导出行是int与str混型单元格(client, auth, world):
          r["status"], r["priority"], r["due_date"],
          r["assignee_id"] if r["assignee_id"] is not None else "",
          r["urged_count"],
-         datetime.fromisoformat(r["created_at"]).strftime("%Y-%m-%d %H:%M")]
+         # 创建时间写本地时刻（P2-567）；清单的 created_at 是落库的 naive UTC
+         clock.to_local(datetime.fromisoformat(r["created_at"])).strftime("%Y-%m-%d %H:%M")]
         for r in sorted(rows, key=lambda r: r["id"], reverse=True)
     ]
     assert body == {

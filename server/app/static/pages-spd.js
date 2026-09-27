@@ -2297,7 +2297,11 @@ async function renderSpdPath() {
       const qs = new URLSearchParams({ limit: "2000", ...filters }).toString();
       try {
         const d = await api(`/api/spd/tasks-export?${qs}`);
-        spdDownloadCsv(`spd_tasks_${localToday()}.csv`, d.columns, d.rows);
+        // 病种、类型、状态、优先级换成与上面清单同一套文案（P2-567）：原先 CSV 里是 hypertension / followup / pending / 2
+        const programOf = (code) => (catalog.programs.find((p) => p.code === code) || {}).name || code;
+        const rows = d.rows.map((r) => [r[0], r[1], programOf(r[2]), SPD_TASK_TYPES[r[3]] || r[3], r[4],
+          (SPD_TASK_STATUS[r[5]] || [r[5]])[0], spdPriorityLabel(r[6]), ...r.slice(7)]);
+        spdDownloadCsv(`spd_tasks_${localToday()}.csv`, d.columns, rows);
         // 截断明说：matched 是同一筛选下命中的总数，total 是实际导出的行数
         setMsg("#spd-task-msg", d.matched > d.total
           ? `共 ${d.matched} 条，只导出了前 ${d.total} 条（上限 2000）：请按状态 / 类型分次导`
