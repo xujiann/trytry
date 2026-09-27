@@ -48,6 +48,7 @@ from ..models import (
     SpdTeamMember,
     SpdVillageDoctor,
 )
+from ..reporting import latest_plan_period_scores, score_in_orgs
 from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_CLAIMABLE_STATUSES, TASK_OPEN_STATUSES,
                        followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read,
                        task_overdue)
@@ -862,10 +863,14 @@ def health_commission_workbench(
              "orgs": len(c.org_ids or []), "teams": len(c.team_ids or [])}
             for c in centers
         ],
+        # 考核排名按工作台的机构范围、只出最近算的那一次考核（一方案一周期，P2-551）：原先不筛机构、不分方案与周期，
+        # 取全县所有分数按名次排——各方案、各周期的第 1 名排在一起，别家机构的也在内
         "scores": [
             {"object_name": s.object_name, "period": s.period,
              "total_score": s.total_score, "rank": s.rank}
-            for s in db.query(SpdScore).order_by(SpdScore.rank).limit(20).all()
+            for s in latest_plan_period_scores(
+                db.query(SpdScore) if orgs is None else db.query(SpdScore).filter(score_in_orgs(orgs))
+            ).order_by(SpdScore.rank, SpdScore.id).limit(20).all()
         ],
     }
 

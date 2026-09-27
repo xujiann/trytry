@@ -17,9 +17,9 @@ P1-3 之前段落渲染是路由文件里的一串 if——模板可以随便建
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Callable
+from typing import Any, Callable
 
-from sqlalchemy import func
+from sqlalchemy import ColumnElement, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -178,23 +178,35 @@ def _followup_trend(db, section, org_id, period):
 #: 考核对象类型 → 中文（取值见 `SpdIndicator.object_type` / 考核方案的对象类型）；指标段落拒收非机构指标时用
 _OBJECT_TYPE_NAMES = {"org": "机构", "team": "团队", "doctor": "医师", "village_doctor": "村医"}
 
-_SCORE_OBJECT_ORG = {
+_SCORE_OBJECT_ORG: dict[str, Callable[[list[int]], Any]] = {   # 给出 `object_id` 的取值范围：机构编号表或子查询
     # 考核对象就是机构本身：object_id 即 org_id
-    "org": lambda db, org_id: [org_id],
-    "team": lambda db, org_id: [
-        t.id for t in db.query(SpdTeam.id).filter(SpdTeam.org_id == org_id)
-    ],
-    "village_doctor": lambda db, org_id: [
-        v.user_id for v in db.query(SpdVillageDoctor.user_id).filter(
-            SpdVillageDoctor.user_id.in_(
-                db.query(User.id).filter(User.org_id == org_id)
-            )
-        )
-    ],
-    "doctor": lambda db, org_id: [
-        u.id for u in db.query(User.id).filter(User.org_id == org_id)
-    ],
+    "org": lambda org_ids: list(org_ids),
+    "team": lambda org_ids: select(SpdTeam.id).where(SpdTeam.org_id.in_(org_ids)),
+    "village_doctor": lambda org_ids: select(SpdVillageDoctor.user_id).where(
+        SpdVillageDoctor.user_id.in_(select(User.id).where(User.org_id.in_(org_ids)))
+    ),
+    "doctor": lambda org_ids: select(User.id).where(User.org_id.in_(org_ids)),
 }
+
+
+def score_in_orgs(org_ids: list[int]) -> ColumnElement[bool]:
+    """考核分里「考核对象属于这些机构」的条件：按 object_type 分派（见 `_SCORE_OBJECT_ORG`）。
+
+    报告的考核排名段落与卫健工作台的考核排名共用（P2-551）；机构名下没有任何考核对象时条件恒不成立——出空表，
+    不退回全域数据。
+    """
+    return or_(*(
+        (SpdScore.object_type == object_type) & SpdScore.object_id.in_(resolve(org_ids))
+        for object_type, resolve in _SCORE_OBJECT_ORG.items()
+    ))
+
+
+def latest_plan_period_scores(query):
+    """一方案一周期：范围内最近算出的那一次考核（方案 + 周期）。不同方案、不同周期的名次放在一张表里没有意义。"""
+    latest = query.order_by(SpdScore.id.desc()).with_entities(SpdScore.plan_id, SpdScore.period).first()
+    if latest is None:
+        return query.filter(false())
+    return query.filter(SpdScore.plan_id == latest[0], SpdScore.period == latest[1])
 
 
 def _score(db, section, org_id, period):
@@ -210,21 +222,8 @@ def _score(db, section, org_id, period):
     """
     query = db.query(SpdScore)
     if org_id is not None:
-        clauses = []
-        for object_type, resolve in _SCORE_OBJECT_ORG.items():
-            ids = resolve(db, org_id)
-            if ids:
-                clauses.append(
-                    (SpdScore.object_type == object_type) & SpdScore.object_id.in_(ids)
-                )
-        if not clauses:
-            # 该机构名下没有任何可考核对象——返回空表，而不是退回全域数据
-            return {**_head(section, "table"), "columns": ["对象", "周期", "得分", "排名"],
-                    "rows": []}
-        condition = clauses[0]
-        for extra in clauses[1:]:
-            condition = condition | extra
-        query = query.filter(condition)
+        # 该机构名下没有任何可考核对象时条件恒不成立——出空表，而不是退回全域数据
+        query = query.filter(score_in_orgs([org_id]))
     # 周期（P2-103）：真正的调用方（定时推送、手工生成）传进来的是模板的频率关键字，不是考核周期值——原先拿它去和
     # 分数的周期（2026Q1 / 2026-08）等值比，推送出去的每一份报告这一段都是空的。段落写明了周期的按段落的；传进来的
     # 就是周期值的照用；频率关键字则取范围内最近算出的一期——只出一期，不混周期
@@ -234,6 +233,10 @@ def _score(db, section, org_id, period):
         period_value = latest[0] if latest else ""
     if period_value:
         query = query.filter(SpdScore.period == period_value)
+    # 同一周期可能有几套方案各算一遍：只出最近算的那一套（P2-551），两套方案的名次混在一张表里没有意义
+    latest_plan = query.order_by(SpdScore.id.desc()).with_entities(SpdScore.plan_id).first()
+    if latest_plan is not None:
+        query = query.filter(SpdScore.plan_id == latest_plan[0])
     rows = query.order_by(SpdScore.id.desc()).limit(20).all()
     return {**_head(section, "table"), "columns": ["对象", "周期", "得分", "排名"],
             "rows": [[r.object_name, r.period, r.total_score, r.rank] for r in rows]}
