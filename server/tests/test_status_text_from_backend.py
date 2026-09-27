@@ -348,12 +348,13 @@ def _label_tables():
     from app.models import AccountSubject, ChargeItem, Course, Department, OfficialDoc, Organization, SimulationCase
     from app.models import (Encounter, SpdAssessPlan, SpdDataSource, SpdEduMaterial, SpdGroup, SpdMeasurement,
                             SpdPathNode, SpdScreening, SpdTag, SpdTeam)
+    from app.models import LoginLog
     from app.spd import service
     from app.spd.routers import assess, population
     from app.routers import (accounting, admin_mgmt, appointments, billing, consents, consultations, credentials, cssd,
                              education, emergency, esb, exams, followups, fund, homevisits, insurance, materials,
                              medication, medwaste, organizations, pathology, prescriptions, quality, referrals,
-                             surgery, tcm, tcm_heritage, telemedicine, workflows)
+                             surgery, tcm, tcm_heritage, telemedicine, users, workflows)
     from app.spd.routers import followup, workbench
     from app.spd.routers.config import devices, paths, scales
 
@@ -433,6 +434,8 @@ def _label_tables():
         "followup.ENCOUNTER_TYPE_NAMES": (followup.ENCOUNTER_TYPE_NAMES, Encounter, "encounter_type", set()),
         # P2-316：数据源监控的计数也用它（P2-174 起数据源清单已在用）
         "devices.DATA_SOURCE_STATUS_NAMES": (devices.DATA_SOURCE_STATUS_NAMES, SpdDataSource, "status", set()),
+        # P2-427：登录留痕的失败原因（居民端短信验码失败的 `code_<状态码>` 是现拼的，不进表，见 `login_fail_reason_name`）
+        "users.LOGIN_FAIL_REASON_NAMES": (users.LOGIN_FAIL_REASON_NAMES, LoginLog, "fail_reason", set()),
     }
 
 
@@ -459,6 +462,7 @@ LABEL_TABLE_NAMES = [
     "population.SCREENING_SOURCE_NAMES", "population.GROUP_SCOPE_NAMES", "workbench.TEAM_LEVEL_NAMES",
     "paths.NODE_SERVICE_TYPE_NAMES", "assess.ASSESS_LEVEL_NAMES", "assess.PERIOD_TYPE_NAMES",
     "followup.ENCOUNTER_TYPE_NAMES", "devices.DATA_SOURCE_STATUS_NAMES",
+    "users.LOGIN_FAIL_REASON_NAMES",
 ]
 
 

@@ -257,7 +257,7 @@ async function renderAudit() {
       `<tr><td>${esc((l.created_at || "").replace("T", " ").slice(0, 19))}</td><td>${esc(l.username)}</td>
        <td>${l.user_id ?? "—"}</td><td>${esc(l.ip)}</td><td>${esc(LOGIN_CHANNEL_NAMES[l.channel] || l.channel)}</td>
        <td><span class="tag ${l.success ? "green" : "red"}">${l.success ? "成功" : "失败"}</span></td>
-       <td>${esc(l.fail_reason || "—")}</td></tr>`);
+       <td>${esc(l.fail_reason_name || "—")}</td></tr>`);   // 文案取自后端（P2-427）：原先原样显示 bad_credentials / code_401
   };
   $("#page-body").innerHTML = `
     ${panel("", `

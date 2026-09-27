@@ -674,6 +674,28 @@ def admin_reset_totp(
     return TotpResetOut(reset=True)
 
 
+#: `login_logs.fail_reason` → 中文（§13「状态文案取自后端」，P2-427）：登录留痕页原先把 bad_credentials / code_401 原样显示。
+#: 措辞照抄各处拒绝登录时回给用户的那句话；表外的值原样回显。
+LOGIN_FAIL_REASON_NAMES = {
+    "bad_credentials": "用户名或密码错误",
+    "locked": "账号锁定中",
+    "lock_triggered": "连续失败触发锁定",
+    "ip_throttled": "来源失败过频被限流",
+    "disabled": "账号已停用",
+    "totp_required": "未提供动态口令",
+    "totp_invalid": "动态口令错误",
+    "concurrent_limit": "活跃会话已达上限",
+    "oauth_failed": "微信授权失败",
+}
+
+
+def login_fail_reason_name(code: str) -> str:
+    """失败原因的中文；居民端短信验码失败记的是 `code_<HTTP 状态码>`，按状态码说明。"""
+    if code.startswith("code_") and code[5:].isdigit():
+        return f"短信验证码校验未通过（{code[5:]}）"
+    return LOGIN_FAIL_REASON_NAMES.get(code, code)
+
+
 class LoginLogOut(BaseModel):
     id: int
     username: str
@@ -683,6 +705,7 @@ class LoginLogOut(BaseModel):
     fail_reason: str
     channel: str
     created_at: datetime
+    fail_reason_name: str   # 后加的（P2-427），放在末尾不动原有键序
 
     model_config = {"from_attributes": True}
 
@@ -710,7 +733,12 @@ def list_login_logs(
         query = query.filter(LoginLog.success.is_(success))
     if channel:
         query = query.filter(LoginLog.channel == channel)
-    return paginate(query.order_by(LoginLog.id.desc()), response, offset, limit)
+    return [
+        {"id": r.id, "username": r.username, "user_id": r.user_id, "ip": r.ip, "success": r.success,
+         "fail_reason": r.fail_reason, "channel": r.channel, "created_at": r.created_at,
+         "fail_reason_name": login_fail_reason_name(r.fail_reason)}
+        for r in paginate(query.order_by(LoginLog.id.desc()), response, offset, limit)
+    ]
 
 
 class RoleChangeOut(BaseModel):

@@ -122,8 +122,10 @@ class LoginLog(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     ip: Mapped[str] = mapped_column(String(64), default="")
     success: Mapped[bool] = mapped_column(Boolean, index=True)
-    # 失败原因代号：bad_credentials/locked/lock_triggered/ip_throttled/disabled/
-    # totp_required/totp_invalid/concurrent_limit；成功时为空
+    # 失败原因代号（成功时为空）：bad_credentials=用户名或密码错误, locked=账号锁定中, lock_triggered=连续失败触发锁定,
+    # ip_throttled=来源失败过频被限流, disabled=账号已停用, totp_required=未提供动态口令, totp_invalid=动态口令错误,
+    # concurrent_limit=活跃会话已达上限, oauth_failed=微信授权失败（居民端）；居民端短信验码失败另记
+    # `code_<HTTP 状态码>`（按状态码现拼，见 portal 短信登录）
     fail_reason: Mapped[str] = mapped_column(String(32), default="")
     # 登录通道：password=员工口令, sms=居民短信, wechat=居民微信
     channel: Mapped[str] = mapped_column(String(16), default="password")
