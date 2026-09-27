@@ -1950,10 +1950,13 @@ def add_usage(
         # 深拷贝再改：JSON 列没开 MutableList，就地改内层 dict 时 SQLAlchemy 比对
         # 新旧值会认为"没变"，UPDATE 不会发出——表现是扣减看着成功、次数永远不减。
         items = deepcopy(binding.items or [])
-        target = next((i for i in items if i.get("code") == body.item_code), None)
-        if target is None:
+        same = [i for i in items if i.get("code") == body.item_code]
+        if not same:
             raise HTTPException(status_code=404, detail="服务包中没有该项目")
-        if int(target.get("used", 0)) + body.qty > int(target.get("total", 0)):
+        # 存量里同一编码可能有多条（P2-631 之前建的包照收重复编码）：原先只认第一条，扣满之后「剩余次数不足」，
+        # 显示的剩余里却还算着后面几条。扣在第一条还够扣的那条上
+        target = next((i for i in same if int(i.get("used", 0)) + body.qty <= int(i.get("total", 0))), None)
+        if target is None:
             raise HTTPException(status_code=409, detail="该项目剩余次数不足")
         target["used"] = int(target.get("used", 0)) + body.qty
         binding.items = items

@@ -374,9 +374,17 @@ def _package_out(p: SpdServicePackage) -> dict:
 
 def _check_package_items(items: list[dict]) -> None:
     """建 / 改服务包同一句（P2-82）：原先改服务包不查项目，次数写成文字存得进去、之后每次绑定都 500；
-    建服务包时同样的文字次数在这一句里 `int()` 抛错，也是 500。报错文案沿用原文一字不改。"""
+    建服务包时同样的文字次数在这一句里 `int()` 抛错，也是 500。报错文案沿用原文一字不改。
+
+    项目编码不许重复（P2-631）：扣减按编码找项目，原先同一编码两条（BP 2 次、BP 3 次）照收——剩余次数按各条相加显示 5，
+    扣减却只认第一条，扣满 2 次之后「剩余次数不足」，另外 3 次永远用不上。"""
     if not package_items_ok(items):
         raise HTTPException(status_code=422, detail="服务包项目须有编码且次数大于0")
+    codes = [str(item["code"]) for item in items]
+    repeated = sorted({code for code in codes if codes.count(code) > 1})
+    if repeated:
+        raise HTTPException(status_code=422,
+                            detail=f"服务包项目编码重复：{'、'.join(repeated)}（同一项目请合成一条、次数相加）")
 
 
 @router.post("/service-packages", response_model=ServicePackageOut, status_code=201,
