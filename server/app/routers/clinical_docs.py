@@ -333,6 +333,10 @@ def create_nursing_record(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # 空记录不算记了（P2-468）：原先 `{}` 照样 201、内容为空，文书完整性检查只数行数，一条空记录就消掉「缺护理记录」。
+    # 门诊护理记录同一张表早就要求内容非空；住院这边执行医嘱产生的记录可以只关联医嘱
+    if not body.content.strip() and body.inpatient_order_id is None:
+        raise HTTPException(status_code=422, detail="护理记录要写内容（执行医嘱产生的可只关联所执行的医嘱）")
     admission = _admission_or_404(db, admission_id, user, resource="nursing_record")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再书写护理记录")
@@ -411,6 +415,10 @@ class VitalIn(BaseModel):
     recorder: str = Field(default="", max_length=64)   # 列长（P1-91 第四层：`recorder=body.recorder or …`）
 
 
+#: 测量值：除测量时刻与记录人以外的字段，一次记录至少有一项（P2-468）
+VITAL_VALUES = tuple(name for name in VitalIn.model_fields if name not in ("measured_at", "recorder"))
+
+
 @router.post(
     "/admissions/{admission_id}/vitals",
     response_model=VitalCreatedOut,
@@ -423,6 +431,10 @@ def create_vital(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # 一项都没测不算一次测量（P2-468）：「一次测量未必测全」说的是可以只测几项，原先一项都不填也 201、各值全空，
+    # 体温单上多一个空点，文书完整性检查只数行数，一条空记录就消掉「缺体征记录」
+    if all(getattr(body, name) is None for name in VITAL_VALUES):
+        raise HTTPException(status_code=422, detail="一次体征记录至少要有一项测量值")
     admission = _admission_or_404(db, admission_id, user, resource="vital_sign")
     if admission.status != "admitted":
         raise HTTPException(status_code=409, detail="患者已出院，不可再记录体征")

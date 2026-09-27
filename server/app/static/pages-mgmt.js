@@ -60,7 +60,7 @@ async function renderClinicalDocs() {
       <form class="inline" id="nursing-form">
         <select name="nursing_level">${Object.entries(NURSING_LEVELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <input name="nurse_name" placeholder="护士">
-        <input name="content" placeholder="护理内容" style="min-width:280px"><button>记录</button></form>
+        <input name="content" placeholder="护理内容" required style="min-width:280px"><button>记录</button></form>
       ${table(["时间", "级别", "护士", "内容"], nursing, (r) =>
         `<tr><td>${esc(r.recorded_at)}</td><td>${esc(NURSING_LEVELS[r.nursing_level] || r.nursing_level)}</td>
          <td>${esc(r.nurse_name)}</td><td>${esc(r.content)}</td></tr>`)}`)}
