@@ -690,9 +690,10 @@ LOGIN_FAIL_REASON_NAMES = {
 
 
 def login_fail_reason_name(code: str) -> str:
-    """失败原因的中文；居民端短信验码失败记的是 `code_<HTTP 状态码>`，按状态码说明。"""
-    if code.startswith("code_") and code[5:].isdigit():
-        return f"短信验证码校验未通过（{code[5:]}）"
+    """失败原因的中文；居民端短信验码失败记的是 `code_<HTTP 状态码>`，按状态码说明（只认 ASCII 数字，P1-97）。"""
+    status = code[5:]
+    if code.startswith("code_") and status.isascii() and status.isdigit():
+        return f"短信验证码校验未通过（{status}）"
     return LOGIN_FAIL_REASON_NAMES.get(code, code)
 
 

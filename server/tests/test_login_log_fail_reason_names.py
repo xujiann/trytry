@@ -30,4 +30,5 @@ def test_成功的那条是空串_表外与现拼的代号():
     assert login_fail_reason_name("") == ""
     assert login_fail_reason_name("code_401") == "短信验证码校验未通过（401）"
     assert login_fail_reason_name("some_future_code") == "some_future_code"   # 表外原样回显，看得见
+    assert login_fail_reason_name("code_４０１") == "code_４０１"   # 全角不是状态码，原样回显（P1-97 闸门同时盯着）
     assert all(text.strip() for text in LOGIN_FAIL_REASON_NAMES.values())
