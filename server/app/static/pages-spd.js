@@ -2152,16 +2152,19 @@ async function renderSpdPath() {
     const submit = el("data-task-submit"), review = el("data-task-review"), evidence = el("data-task-evidence");
     const exportBtn = el("data-task-export"), attdl = el("data-attdl");
     if (node) {
+      // 时限用 text 不用 number（P2-588，口径同应急资源编辑）：spdModal 的 number 字段把空串折成 0，原先
+      // `|| 7` 又把 0 改回 7——「当天完成」（0 天）的节点建不出来，派出去的任务晚一周才超期、升级
       const form = await spdModal("添加路径节点", [
         { name: "key", label: "节点 key（英文，如 assess）", required: true },
         { name: "name", label: "节点名称" },
         { name: "stage", label: "所属阶段（可留空）" },
-        { name: "due_days", label: "时限（天）", type: "number", value: 7 },
+        { name: "due_days", label: "时限（天；0 = 当天完成，留空按 7 天）", type: "text", value: "7" },
       ]);
       if (!form || !form.key) return;
+      if (form.due_days && !/^\d+$/.test(form.due_days)) return setMsg("#spd-tpl-msg", "时限要填非负整数（天）", false);
       return postAction(`/api/spd/path-templates/${node.dataset.tplNode}/nodes`, {
         key: form.key, name: form.name || form.key,
-        stage: form.stage, due_days: form.due_days || 7,
+        stage: form.stage, due_days: form.due_days === "" ? 7 : Number(form.due_days),
       }, "#spd-tpl-msg");
     }
     if (pub) {
@@ -2187,19 +2190,27 @@ async function renderSpdPath() {
     }
     if (tplNodes) return showNodes(tplNodes.dataset.tplNodes);
     if (nodeEdit) {
+      // 顺序与时限用 text（P2-588）：原先 `if (form.seq)` / `if (form.due_days)` 把 0 当成留空——改成 0 不送、
+      // 照样提示「节点已更新」，顺序回不到 0（界面建的节点顺序都是 0）、时限改不成「当天」
       const form = await spdModal("编辑路径节点（留空的项不改）", [
         { name: "name", label: "节点名称", value: nodeEdit.dataset.name },
         { name: "stage", label: "所属阶段", value: nodeEdit.dataset.stage },
-        { name: "seq", label: "顺序", type: "number", value: nodeEdit.dataset.seq },
-        { name: "due_days", label: "时限（天）", type: "number", value: nodeEdit.dataset.days },
+        { name: "seq", label: "顺序（整数）", type: "text", value: nodeEdit.dataset.seq },
+        { name: "due_days", label: "时限（天；0 = 当天完成）", type: "text", value: nodeEdit.dataset.days },
         { name: "exec_role", label: "执行角色（doctor/nurse/village_doctor…，留空不改）" },
       ]);
       if (!form) return;
       const body = {};
       if (form.name) body.name = form.name;
       body.stage = form.stage || "";
-      if (form.seq) body.seq = form.seq;
-      if (form.due_days) body.due_days = form.due_days;
+      if (form.seq !== "") {
+        if (!/^-?\d+$/.test(form.seq)) return setMsg("#spd-tpl-msg", "顺序要填整数", false);
+        body.seq = Number(form.seq);
+      }
+      if (form.due_days !== "") {
+        if (!/^\d+$/.test(form.due_days)) return setMsg("#spd-tpl-msg", "时限要填非负整数（天）", false);
+        body.due_days = Number(form.due_days);
+      }
       if (form.exec_role) body.exec_role = form.exec_role;
       try {
         await api(`/api/spd/path-nodes/${nodeEdit.dataset.nodeEdit}`, { method: "PATCH", body: JSON.stringify(body) });

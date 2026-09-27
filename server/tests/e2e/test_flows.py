@@ -1700,6 +1700,31 @@ def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
     assert node_ids() == []
 
 
+def test_路径节点时限能填0天_编辑能把顺序与时限改成0(page, base_url, admin_read, admin_call):
+    """P2-588：spdModal 的 number 字段把空串折成 0，添加节点又 `|| 7`、编辑节点 `if (form.due_days)`——「当天完成」
+    的节点建不出来、改不过去（改成 0 不送，照样提示「节点已更新」），顺序也回不到 0。"""
+    hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")
+    tpl = admin_call("POST", "/api/spd/path-templates",
+                     {"program_id": hyp["id"], "code": "e2e_p2588_path", "name": "E2E当天完成"})
+    node = admin_call("POST", f"/api/spd/path-templates/{tpl['id']}/nodes",
+                      {"key": "p2588a", "name": "E2E节点A", "seq": 3, "due_days": 7})
+
+    def nodes():
+        return {n["key"]: n for n in admin_read(f"/api/spd/path-templates/{tpl['id']}")["nodes"]}
+
+    _login(page, base_url)
+    _open_page(page, "spdpath", "标准路径与任务中心")
+    page.click(f'button[data-tpl-node="{tpl["id"]}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"key": "p2588b", "due_days": "0"}))
+    assert nodes()["p2588b"]["due_days"] == 0   # 修前 7
+
+    page.click(f'button[data-tpl-nodes="{tpl["id"]}"]')
+    page.click(f'button[data-node-edit="{node["id"]}"]')
+    _spd_modal(page, {"seq": "0", "due_days": "0"})
+    expect(page.locator("#spd-tpl-msg")).to_contain_text("节点已更新")
+    assert (nodes()["p2588a"]["seq"], nodes()["p2588a"]["due_days"]) == (0, 0)   # 修前 (3, 7)
+
+
 def test_编辑专病中心只改名_已停用的状态不被悄悄改成筹建(page, base_url, admin_read, admin_call):
     """P2-421：编辑框的状态下拉原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
     只改个名字保存，状态被悄悄改掉。修后选项取自后端的状态文案表（专家工作台下发的 `center_status_names`）。"""
