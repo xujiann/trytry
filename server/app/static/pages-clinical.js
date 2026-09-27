@@ -1854,7 +1854,9 @@ async function renderProjects() {
         `<td>${p.milestone_done}/${p.milestone_total}` +
         `${p.milestone_overdue ? ' <span class="tag warn">' + p.milestone_overdue + " 逾期</span>" : ""}</td>` +
         `<td><button class="btn sm" data-progress="${p.id}">报进度</button>` +
-        `<button class="btn sm" data-ms="${p.id}">加里程碑</button></td></tr>`)}
+        // 已完成 / 已中止的项目接口不收新里程碑（409），不给按钮（P2-597）；要加先把状态改回来
+        (p.status === "done" || p.status === "suspended" ? "" : `<button class="btn sm" data-ms="${p.id}">加里程碑</button>`) +
+        `</td></tr>`)}
     `)}
     ${panel("里程碑（全部项目）", `
       ${table(["项目", "里程碑", "到期日", "状态", "完成日", "操作"],
