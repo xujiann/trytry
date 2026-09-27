@@ -584,6 +584,17 @@ def note_call_dispatch_failure(db: Session, task_id: int, note: str) -> bool:
 INTERVENTION_FINISHABLE_STATUSES = ("planned", "doing", "done")
 
 
+def mark_task_escalated(db: Session, task_id: int) -> None:
+    """标记升级并把优先级抬到「紧急」——只往上抬，两条带条件的 UPDATE（P2-194）。**不 commit**。
+
+    原先读出优先级在内存里 max 再写回：另一路刚把它调到更高，这里写回的旧值 max 会把它压回 2。单条、批量升级（P2-246：
+    批量版原先还是 `task.escalated, task.priority = True, max(task.priority, 2)`）与超期扫描的节点超时升级（P2-608）共用
+    这一处。"""
+    db.query(SpdTask).filter(SpdTask.id == task_id).update({SpdTask.escalated: True}, synchronize_session=False)
+    db.query(SpdTask).filter(SpdTask.id == task_id, SpdTask.priority < 2).update(
+        {SpdTask.priority: 2}, synchronize_session=False)
+
+
 def mark_intervention_done(db: Session, intervention_id: int) -> bool:
     """居民把干预方案标记为已完成：翻转与「没被移除」压进同一条 UPDATE，返回是否翻到（P2-302）。
 
@@ -1022,8 +1033,9 @@ def sweep_overdue(db: Session, today: date | None = None) -> dict:
                     .first()
                 )
         if node is not None and node.timeout_action == "escalate":
-            task.escalated = True
-            task.priority = max(task.priority, 2)
+            # 只往上抬、两条带条件的 UPDATE（P2-608，与手工升级同一处 `mark_task_escalated`）：原先在载入整批时读到的对象上
+            # `max(priority, 2)` 再随提交写回——扫描期间别人刚把它调成「特急」，这里写回的 2 把它压了回去
+            mark_task_escalated(db, task.id)
             escalated += 1
 
     # 复诊：plan_date 已过且仍是 planned → overdue，并写日志（谁标的、何时标的）

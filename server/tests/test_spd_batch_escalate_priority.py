@@ -4,7 +4,7 @@
 action=escalate）还是 `task.escalated, task.priority = True, max(task.priority, 2)`——用的是整批载入时读到的旧优先级。
 读改写闸门只认单个属性的赋值，元组赋值这一形状整个看不见，批量版就躲在这个盲区里。
 
-修法：单条与批量共用 `_mark_escalated`；闸门认元组赋值（自证见 `test_stage14_concurrency.py`）。
+修法：单条与批量共用 `_mark_escalated`（现为 `service.mark_task_escalated`，超期扫描的节点超时升级也走它，P2-608）；闸门认元组赋值（自证见 `test_stage14_concurrency.py`）。
 这里用「批量那一路载入整批之后、写库之前，另一路先把优先级调到特急并提交」把并发窗口钉成确定的时序。
 """
 import pytest
