@@ -49,7 +49,8 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_CLAIMABLE_STATUSES, TASK_OPEN_STATUSES,
-                       followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read)
+                       followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read,
+                       task_overdue)
 
 # 团队层级文案（措辞照抄 SpdTeam.level 列注释；工作台「所属团队」显示它——P2-74）
 TEAM_LEVEL_NAMES = {"county": "县级团队", "township": "乡镇团队", "village": "村级团队", "center": "专病中心团队"}
@@ -127,7 +128,8 @@ def _task_stats(
     open_query = query.filter(SpdTask.status.in_(OPEN_STATUSES))
     return {
         "open": open_query.count(),
-        "overdue": query.filter(SpdTask.status == "overdue").count(),
+        # 已标超期的 + 扫描间隙里过了截止日的（P2-549）：多数工作台进门不扫，只数状态恒为上一次扫描的结果
+        "overdue": query.filter(task_overdue(today.isoformat())).count(),
         "due_today": open_query.filter(SpdTask.due_date == today.isoformat()).count(),
         "escalated": query.filter(
             SpdTask.escalated.is_(True), SpdTask.status.in_(OPEN_STATUSES)
@@ -688,7 +690,7 @@ def admin_workbench(
         "alerts": {
             "overdue_tasks": _apply_scope(
                 db.query(SpdTask), SpdTask.org_id, orgs
-            ).filter(SpdTask.status == "overdue").count(),
+            ).filter(task_overdue(business_day.isoformat())).count(),
             # 本端点进来先扫描：只数「planned 且已过期」恒为 0（P1-128）
             "overdue_followups": _apply_scope(
                 db.query(SpdFollowupRecord), SpdFollowupRecord.org_id, orgs

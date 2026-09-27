@@ -376,6 +376,19 @@ def followup_overdue(today: str):
     )
 
 
+def task_overdue(today: str):
+    """「超期任务」的判定：已标超期的 + 扫描间隙里还在手、截止日已过的（P2-549，与 `followup_overdue` 同一个形状）。
+
+    超期靠 `sweep_overdue` 落状态；只有部分入口进门先扫（中心工作台、任务清单），卫健 / 团队 / 医生移动端工作台、报告、
+    考核取数只数 `status == 'overdue'`——调度没跑或两次扫描之间，同一批过期任务在这些地方是 0、在中心工作台是 N。
+    在手的范围与扫描同一份（`TASK_IN_HAND_STATUSES`），扫完之后两种数法结果一样。
+    """
+    return or_(
+        SpdTask.status == "overdue",
+        and_(SpdTask.status.in_(TASK_IN_HAND_STATUSES), SpdTask.due_date != "", SpdTask.due_date < today),
+    )
+
+
 #: 「异常随访」的两档：答卷判出中度 / 重度——也就是会派处置任务的那两档（轻度只记不派）
 FOLLOWUP_ABNORMAL_LEVELS = ("mid", "high")
 

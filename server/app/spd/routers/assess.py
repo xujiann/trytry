@@ -42,7 +42,7 @@ from ...deps import get_current_user, paginate, require_roles, through_day
 from ...formula import FormulaError, evaluate as eval_formula
 from ...numtypes import non_finite_path
 from ..platform import Organization, User
-from ..service import INDICATOR_SOURCES, point_account_for, unknown_program, unknown_programs
+from ..service import INDICATOR_SOURCES, point_account_for, task_overdue, unknown_program, unknown_programs
 from ..models import (
     SpdAssessPlan,
     SpdAssessment,
@@ -658,7 +658,8 @@ def collect_metrics_batch(
             ),
             {"total": func.count(SpdTask.id),
              "done": _count_if(SpdTask.status == "done"),
-             "overdue": _count_if(SpdTask.status == "overdue")},
+             # 与工作台同一个判定（P2-549）：只数状态，调度没跑时期内过期的任务一条都不算超期
+             "overdue": _count_if(task_overdue(clock.today().isoformat()))},
         )
     if source == "referral":
         return grouped(

@@ -36,7 +36,7 @@ from .models import (
     SpdVillageDoctor,
 )
 from .platform import User
-from .service import TASK_IN_HAND_STATUSES, TASK_OPEN_STATUSES
+from .service import TASK_IN_HAND_STATUSES, TASK_OPEN_STATUSES, task_overdue
 
 SectionRenderer = Callable[[Session, dict, "int | None", str], dict]
 
@@ -102,7 +102,7 @@ def _summary(db, section, org_id, period):
         enroll_query = enroll_query.filter(SpdEnrollment.org_id == org_id)
     task_query = _task_query(db, org_id)
     open_tasks = task_query.filter(SpdTask.status.in_(TASK_OPEN_STATUSES)).count()
-    overdue = task_query.filter(SpdTask.status == "overdue").count()
+    overdue = task_query.filter(task_overdue(clock.today().isoformat())).count()   # 含扫描间隙里过期的（P2-549）
     enrolled = enroll_query.count()
     return {
         **_head(section, "text"),
@@ -112,8 +112,10 @@ def _summary(db, section, org_id, period):
 
 
 def _todo(db, section, org_id, period):
+    # 超期的另列一表（「超期预警」）：扫描间隙里已过截止日的也归那边（P2-549），同一条任务不在两张表里各出现一次
     rows = (
-        _task_query(db, org_id).filter(SpdTask.status.in_(TASK_IN_HAND_STATUSES))
+        _task_query(db, org_id).filter(SpdTask.status.in_(TASK_IN_HAND_STATUSES),
+                                       ~task_overdue(clock.today().isoformat()))
         .order_by(SpdTask.due_date).limit(20).all()
     )
     return {**_head(section, "table"), "columns": ["任务", "类型", "截止", "优先级"],
@@ -122,7 +124,7 @@ def _todo(db, section, org_id, period):
 
 def _alert(db, section, org_id, period):
     rows = (
-        _task_query(db, org_id).filter(SpdTask.status == "overdue")
+        _task_query(db, org_id).filter(task_overdue(clock.today().isoformat()))
         .order_by(SpdTask.due_date, SpdTask.id).limit(20).all()
     )
     return {**_head(section, "table"), "columns": ["超期任务", "类型", "截止日期"],
