@@ -520,7 +520,7 @@ def test_生命周期召回迁出确认与事件列表(client, h, base):
     events = client.get(f"{B}/lifecycle-events", headers=h).json()
     keys = ["id", "enrollment_id", "event", "reason", "detail", "target_org_id",
             "confirmed", "occurred_at", "program_code", "patient_id", "patient_name",
-            "created_at"]
+            "created_at", "void_reason"]   # void_reason：P2-592 新加的键，确认过的一律空串
     assert [list(r) for r in events] == [keys] * 5
 
     def _event(row, enrollment_id, event, reason, target):
@@ -528,7 +528,7 @@ def test_生命周期召回迁出确认与事件列表(client, h, base):
                 "reason": reason, "detail": "", "target_org_id": target,
                 "confirmed": True, "occurred_at": business_today_str(), "program_code": "ctp_dm",
                 "patient_id": p_life, "patient_name": "契约人群二",
-                "created_at": _iso(row["created_at"])}
+                "created_at": _iso(row["created_at"]), "void_reason": ""}
 
     assert events == [
         _event(events[0], e3["id"], "resume", "重新纳管", None),

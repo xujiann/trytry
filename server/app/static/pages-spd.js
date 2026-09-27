@@ -1554,8 +1554,9 @@ async function renderSpdPatients() {
       `<tr><td>${v.id}</td><td>${v.enrollment_id}</td><td>${esc(v.patient_name || "")}</td>
        <td>${esc({ exclude: "排除", migrate: "迁出", death: "死亡", recall: "召回", resume: "恢复" }[v.event] || v.event)}</td>
        <td>${esc(v.reason || "—")}</td><td>${esc(v.occurred_at || "—")}</td>
-       <td>${v.confirmed ? '<span class="tag green">已确认</span>' : '<span class="tag orange">待确认</span>'}</td>
-       <td>${v.confirmed ? "—" : `<button class="btn secondary" data-confirm="${v.id}">确认迁入</button>`}</td></tr>`);
+       <td>${v.confirmed ? '<span class="tag green">已确认</span>' : v.void_reason ? "—" : '<span class="tag orange">待确认</span>'}</td>
+       <td>${v.confirmed ? "—" : v.void_reason ? esc(v.void_reason)
+         : `<button class="btn secondary" data-confirm="${v.id}">确认迁入</button>`}</td></tr>`);
   };
   $("#spd-screen-form").onsubmit = async (e) => {
     e.preventDefault();

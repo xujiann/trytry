@@ -49,7 +49,8 @@ from ..models import (
     SpdVillageDoctor,
 )
 from ..reporting import latest_plan_period_scores, score_in_orgs
-from ..service import (FOLLOWUP_OPEN_STATUSES, REVISIT_OPEN_STATUSES, TASK_CLAIMABLE_STATUSES, TASK_OPEN_STATUSES,
+from ..service import (FOLLOWUP_OPEN_STATUSES, MIGRATION_VOID_STATUSES, REVISIT_OPEN_STATUSES,
+                       TASK_CLAIMABLE_STATUSES, TASK_OPEN_STATUSES,
                        followup_abnormal, followup_overdue, referral_last_moved_at, sweep_overdue_on_read,
                        task_overdue)
 
@@ -704,13 +705,14 @@ def admin_workbench(
             "pending_applies": db.query(SpdServiceApply).filter(
                 SpdServiceApply.status == "pending"
             ).count(),
-            # 迁出待确认期间患者离世的，目标机构已确认不了（P1-111），不算进待办
+            # 迁出待确认期间患者离世的（P1-111）、原档案已迁出 / 排除 / 结案的（P2-527），目标机构都确认不了，不算进待办
+            # ——判据与确认接口同一句（`MIGRATION_VOID_STATUSES`，P2-592；原先只除了死亡）
             "pending_migrations": db.query(SpdLifecycleEvent).join(
                 SpdEnrollment, SpdEnrollment.id == SpdLifecycleEvent.enrollment_id
             ).filter(
                 SpdLifecycleEvent.event == "migrate",
                 SpdLifecycleEvent.confirmed.is_(False),
-                SpdEnrollment.status != "dead",
+                SpdEnrollment.status.notin_(MIGRATION_VOID_STATUSES),
             ).count(),
             "swept": swept,
         },
@@ -1136,13 +1138,13 @@ def center_workbench(
             ).filter(SpdEnrollment.status == "excluded").count(),
             # 「待确认迁入」只数迁到本范围的（P2-61）：确认由迁入机构做（`confirm_migration` 判
             # `target_org_id`），原先数的是全县，乡镇看到的待办一条都不归自己确认。
-            # 迁出待确认期间患者离世的确认不了了（P1-111），同样不算
+            # 确认不了的（患者离世 P1-111、原档案已迁出 / 排除 / 结案 P2-527）同样不算，与确认接口同一句（P2-592）
             "pending_migrations": _apply_scope(
                 db.query(SpdLifecycleEvent), SpdLifecycleEvent.target_org_id, orgs
             ).join(SpdEnrollment, SpdEnrollment.id == SpdLifecycleEvent.enrollment_id).filter(
                 SpdLifecycleEvent.event == "migrate",
                 SpdLifecycleEvent.confirmed.is_(False),
-                SpdEnrollment.status != "dead",
+                SpdEnrollment.status.notin_(MIGRATION_VOID_STATUSES),
             ).count(),
             "recalling": _apply_scope(
                 db.query(SpdEnrollment), SpdEnrollment.org_id, orgs

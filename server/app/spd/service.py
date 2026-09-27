@@ -1161,6 +1161,23 @@ ENROLL_STATUS_LABELS = {
     "dead": "已死亡", "lost": "脱管", "recalled": "召回中", "completed": "已结案",
 }
 
+#: 迁出登记之后、确认之前原档案成了这些状态的，这次迁出不再生效：死亡（P1-111），已迁出 / 已排除 / 已结案（P2-527）
+MIGRATION_VOID_STATUSES = ("dead", "migrated", "excluded", "completed")
+
+
+def migration_void_reason(enrollment_status: str) -> str:
+    """这次迁出还能不能确认：能确认返回空串，不能返回原因。
+
+    确认迁入的 409 文案、生命周期清单的「不再生效」、工作台「待确认迁入」的计数同一句（P2-592）——原先只有确认接口
+    认它，计数照数、清单照画「确认迁入」，点下去才 409。
+    """
+    if enrollment_status == "dead":
+        return "该患者已登记死亡，这次迁出不再生效"
+    if enrollment_status in MIGRATION_VOID_STATUSES:
+        return f"原档案{ENROLL_STATUS_LABELS.get(enrollment_status, enrollment_status)}，这次迁出不再生效"
+    return ""
+
+
 #: 服务包绑定（`spd_package_bindings.status`）的中文：居民端首页的服务包照它显示（P2-557）
 PACKAGE_BINDING_STATUS_NAMES = {"bound": "绑定中", "unbound": "已解绑"}
 

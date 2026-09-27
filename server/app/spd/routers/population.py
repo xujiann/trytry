@@ -52,15 +52,14 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
-from ..service import (ENROLL_STATUS_LABELS, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled,
-                       award_points, build_facts, close_open_work, match_program, package_items_ok,
+from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
+                       close_open_work, match_program, migration_void_reason, package_items_ok,
                        scale_program_mismatch, scale_unusable)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
 GROUP_SCOPE_NAMES = {"personal": "本人分组", "dept": "科室分组", "team": "团队分组"}
 #: 迁入确认时原档案处于这些状态，这次迁出即不再生效（P2-527；死亡另有一句 P1-111 的文案）
-_MIGRATION_VOID_STATUSES = ("migrated", "excluded", "completed")
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -260,6 +259,8 @@ class LifecycleEventOut(BaseModel):
     patient_id: int | None
     patient_name: str
     created_at: str
+    # 未确认的迁出已不再生效时是原因（原档案已死亡 / 迁出 / 排除 / 结案，确认会 409），否则空串（P2-592）
+    void_reason: str = ""
 
 
 class RecallProgressOut(BaseModel):
@@ -1385,15 +1386,14 @@ def confirm_migration(
     if enrollment is None:
         raise HTTPException(status_code=404, detail="纳管档案不存在")
     # 迁出登记之后、确认之前患者离世：迁出不再生效（P1-111）。原先照样确认——原档案从「死亡」改成「已迁出」，
-    # 目标机构给已故患者新建一份在管档案，之后的随访、宣教照常派给他（实测 200）
-    if enrollment.status == "dead":
-        raise HTTPException(status_code=409, detail="该患者已登记死亡，这次迁出不再生效")
+    # 目标机构给已故患者新建一份在管档案，之后的随访、宣教照常派给他（实测 200）。
     # 原档案已迁出 / 已排除 / 已结案的，这次迁出同样不再生效（P2-527）：原先只挡死亡——同一档案先后登记迁往乙、丙两家，
     # 乙家确认之后丙家再确认照样 200，回执里的「迁入档案」是乙家那份、丙家什么也没有；迁出登记之后档案被排除、患者又在
-    # 别家重新纳管，迟到的确认把已排除的档案改成「已迁出」，还把别家那份记成从这里迁过去的
-    if enrollment.status in _MIGRATION_VOID_STATUSES:
-        state = ENROLL_STATUS_LABELS.get(enrollment.status, enrollment.status)
-        raise HTTPException(status_code=409, detail=f"原档案{state}，这次迁出不再生效")
+    # 别家重新纳管，迟到的确认把已排除的档案改成「已迁出」，还把别家那份记成从这里迁过去的。
+    # 判据与生命周期清单、工作台计数同一句（`service.migration_void_reason`，P2-592）
+    void = migration_void_reason(enrollment.status)
+    if void:
+        raise HTTPException(status_code=409, detail=void)
     event.confirmed = True
     event.confirmed_by = user.id
     enrollment.status = "migrated"
@@ -1479,6 +1479,10 @@ def list_lifecycle_events(
             "patient_id": enrollment.patient_id if enrollment else None,
             "patient_name": (brief or {}).get("name", ""),
             "created_at": row.created_at.isoformat(),
+            "void_reason": (
+                (migration_void_reason(enrollment.status) if enrollment else "纳管档案不存在")
+                if row.event == "migrate" and not row.confirmed else ""
+            ),
         })
     return out
 
