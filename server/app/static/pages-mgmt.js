@@ -1143,6 +1143,15 @@ async function renderMonitor() {
   // 同一页的面板标题（stats.scope）说的却是集群——一页自相矛盾
   $("#page-desc").textContent = `调用统计口径：${stats.scope}；审计统计是落库的写操作留痕，跨实例可追溯`;
   const dot = (ok) => `<span class="tag ${ok ? "green" : "red"}">${ok ? "正常" : "异常"}</span>`;
+  // 审计按日趋势补齐零值日（P2-417）：后端只回有写操作的日子，没写操作的那天整天不在列表里，折线把前后两天挨着画、
+  // 看不出停摆。按统计窗口逐日补 0；后端按 UTC 日分桶，这里也按 UTC 拼日期（不是「今天」，不走 localToday）
+  const utcDay = (ms) => {
+    const d = new Date(ms);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  };
+  const auditByDay = Object.fromEntries(audit.daily.map((d) => [d.date, d]));
+  const auditDaily = Array.from({ length: audit.days + 1 }, (_, i) => utcDay(Date.now() - (audit.days - i) * 86400000))
+    .map((day) => auditByDay[day] || { date: day, ok: 0, failed: 0 });
   // ADR-0009 第二步：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 标题里的 `stats.scope` / `audit.scope` 原本手写了 `esc()`，迁移后**必须去掉**——
   // `panel()` 自己转义 title，留着就是转义两遍（`&` 会变成 `&amp;amp;`），那是改字节。
@@ -1194,8 +1203,8 @@ async function renderMonitor() {
         <div class="card"><span class="k">失败率</span><b>${audit.failed_ratio_pct}%</b></div>
       </div>
       ${audit.daily.length
-        ? lineChart(audit.daily.map((d) => d.date.slice(5)),
-            [audit.daily.map((d) => d.ok), audit.daily.map((d) => d.failed)],
+        ? lineChart(auditDaily.map((d) => d.date.slice(5)),
+            [auditDaily.map((d) => d.ok), auditDaily.map((d) => d.failed)],
             ["#0b6e6e", "#c0392b"])
         : '<p class="desc">暂无审计数据</p>'}
       <div class="two-col">
