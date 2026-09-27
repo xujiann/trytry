@@ -29,6 +29,7 @@ from ..deps import (
     row_dict,
 )
 from ..clock import now_naive
+from ..concurrency import move_row
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_writable,
@@ -551,6 +552,17 @@ class TaskProgress(BaseModel):
     complete: bool = False
 
 
+def _progress_blocked(task: ImprovementTask) -> str | None:
+    """登记进展被当前状态挡住时的那句话；没挡住返回 None。顺序调用与并发抢输的一路共用（P2-463）。"""
+    if task.status == "verified":
+        return "任务已确认关闭"
+    # 已提交完成、待确认的不再登记进展（P2-192）：原先不带 complete 的一次调用就把它改回「整改中」——悄悄退出
+    # 管理层的待确认队列，完成时间还留着；页面上待确认的只给「确认关闭 / 退回」，退回走 verify（记下退回人与理由）
+    if task.status == "completed":
+        return "已提交完成、待确认——确认不通过退回后再登记进展"
+    return None
+
+
 @improvement_router.post(
     "/improvements/{task_id}/progress",
     response_model=ImprovementTaskOut,
@@ -562,22 +574,22 @@ def progress_task(task_id: int, body: TaskProgress, db: Session = Depends(get_db
     if task is None:
         raise HTTPException(status_code=404, detail="整改任务不存在")
     assert_obj_org_writable(db, user, task)
-    if task.status == "verified":
-        raise HTTPException(status_code=409, detail="任务已确认关闭")
-    # 已提交完成、待确认的不再登记进展（P2-192）：原先不带 complete 的一次调用就把它改回「整改中」——悄悄退出
-    # 管理层的待确认队列，完成时间还留着；页面上待确认的只给「确认关闭 / 退回」，退回走 verify（记下退回人与理由）
-    if task.status == "completed":
-        raise HTTPException(status_code=409, detail="已提交完成、待确认——确认不通过退回后再登记进展")
-    if body.measures:
-        task.measures = body.measures
+    blocked = _progress_blocked(task)
+    if blocked:
+        raise HTTPException(status_code=409, detail=blocked)
+    values: dict[str, Any] = {"measures": body.measures} if body.measures else {}
     if body.complete:
         if not body.completion_note.strip():   # 一串空格不算填了（P2-309）
             raise HTTPException(status_code=422, detail="提交完成须填写整改结果说明")
-        task.status = "completed"
-        task.completion_note = body.completion_note
-        task.completed_at = now_naive()
+        values.update(status="completed", completion_note=body.completion_note, completed_at=now_naive())
     else:
-        task.status = "in_progress"
+        values["status"] = "in_progress"
+    # 判定与写入压进同一条 UPDATE（P2-463）：原先判状态、赋值、commit，UPDATE 只有 `WHERE id = ?`——「提交完成」与
+    # 另一路「登记进展」交错，后写的照旧把刚提交的改回整改中（P2-192 挡住的那一步从并发绕回来）
+    if not move_row(db, ImprovementTask, task.id, ImprovementTask.status.in_(("open", "in_progress")), **values):
+        db.rollback()
+        db.refresh(task)
+        raise HTTPException(status_code=409, detail=_progress_blocked(task) or "整改任务状态已变化，请刷新后重试")
     db.commit()
     db.refresh(task)
     return _task_out(task, clock.today().isoformat())
@@ -605,14 +617,17 @@ def verify_task(
     assert_obj_org_writable(db, user, task)
     if task.status != "completed":
         raise HTTPException(status_code=409, detail="仅已提交完成的任务可确认")
-    task.verify_comment = body.comment
-    task.verified_by = user.full_name or user.username
-    if body.approve:
-        task.status = "verified"
-        task.verified_at = now_naive()
-    else:
-        task.status = "in_progress"
-        task.completed_at = None
+    values: dict[str, Any] = (
+        {"status": "verified", "verified_at": now_naive()} if body.approve
+        else {"status": "in_progress", "completed_at": None}
+    )
+    # 判定与写入压进同一条 UPDATE（P2-463）：原先判「待确认」、赋值、commit，UPDATE 只有 `WHERE id = ?`——两位管理者
+    # 一个点「确认关闭」一个点「退回」，两路都 200，库里拼出两边各一半：整改中却带着确认时间，或已关闭却没有完成时间，
+    # 确认意见与确认人记成后写的那位（按顺序点第二下是 409）
+    if not move_row(db, ImprovementTask, task.id, ImprovementTask.status == "completed",
+                    verify_comment=body.comment, verified_by=user.full_name or user.username, **values):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="仅已提交完成的任务可确认")
     db.commit()
     db.refresh(task)
     return _task_out(task, clock.today().isoformat())
