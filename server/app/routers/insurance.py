@@ -25,6 +25,7 @@ from ..models import (
     SpecialDiseaseApp,
     User,
 )
+from .referrals import STATUS_LABELS as REFERRAL_STATUS_LABELS
 
 router = APIRouter(prefix="/api/insurance", tags=["医保协同"], dependencies=[Depends(get_current_user)])
 
@@ -106,7 +107,9 @@ def issue_referral_cert(
     # 转出、转入两方本身就有转诊关系，照常能签；"到底该哪一方签"另在待裁定清单里。
     assert_patient_visible(db, user, referral.patient_id, resource="referral_cert")
     if referral.status not in ("accepted", "completed"):
-        raise HTTPException(status_code=409, detail="转诊尚未接诊，不可签发证明")
+        # 状态文案取自转诊模块（P2-413）：原先一律「尚未接诊」，被退回的转诊也这么说，经办以为再等等就能签
+        state = "尚未接诊" if referral.status == "pending" else REFERRAL_STATUS_LABELS.get(referral.status, referral.status)
+        raise HTTPException(status_code=409, detail=f"转诊{state}，不可签发证明")
     existing = db.query(ReferralCert).filter(ReferralCert.referral_id == referral_id).first()
     if existing:
         return {"cert_no": existing.cert_no, "referral_id": referral_id}
