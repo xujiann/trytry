@@ -202,7 +202,9 @@ function homePage() {
 
 const CENTER_NAMES = { imaging: "影像", ecg: "心电", lab: "检验", pathology: "病理" };
 const ORG_TYPES = { lead_hospital: "牵头医院", township: "乡镇卫生院", village: "村卫生室", public_health: "公卫机构" };
-const LEVELS = { county: "县级", township: "乡级", village: "村级" };
+// 与后端 organizations.ORG_LEVEL_NAMES 同一份（P2-428，test_org_level_names_frontend 盯着）：原先缺「市级」，市级合作医院
+// 在机构列表、考核排名、机构树体检（乡镇的上级可以是市级）里显示成 city。县级排第一：建机构表单的默认选项不变
+const LEVELS = { county: "县级", township: "乡级", village: "村级", city: "市级" };
 // 慢病病种：启动为兜底值，进入慢病页时从 /api/chronic/disease-types 目录刷新（块1）
 let DISEASES = { hypertension: "高血压", diabetes: "2型糖尿病", copd: "慢阻肺" };
 const RX_STATUS = { auto_passed: ["系统审通过", "green"], pending_review: ["待药师审", "orange"], approved: ["药师审通过", "green"], rejected: ["已退回", "red"] };
