@@ -1173,10 +1173,12 @@ def edu_stats(program_code: str | None = None, db: Session = Depends(get_db)):
             .all()
         ]
         query = query.filter(SpdEduPush.material_id.in_(ids or [0]))
+    delivered = SpdEduPush.status.in_(("sent", "read"))
     covered, times, sent, read = query.with_entities(
-        func.count(sa.distinct(SpdEduPush.patient_id)),
+        # 覆盖人数只数真发出去的（P2-553）：手册写「宣教覆盖率考核以真发出去的为分母」，原先发送失败、定时还没发的也算覆盖
+        func.count(sa.distinct(sa.case((delivered, SpdEduPush.patient_id)))),
         func.count(SpdEduPush.id),
-        func.count(sa.case((SpdEduPush.status.in_(("sent", "read")), 1))),
+        func.count(sa.case((delivered, 1))),
         func.count(sa.case((SpdEduPush.status == "read", 1))),
     ).one()
     return {

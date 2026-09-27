@@ -384,8 +384,9 @@ def test_宣教推送即时与定时(client, h, base):
 def test_宣教成效统计(client, h, base):
     stats = client.get(f"{B}/edu-pushes/stats",
                        params={"program_code": "ctc_htn"}, headers=h).json()
+    # 覆盖人数只数真发出去的（P2-553，原先钉 2）：p2 那条没手机号发送失败、p1 的定时推送还没发，真送达的只有 p1
     assert stats == {
-        "covered_patients": 2, "push_times": 3, "sent": 1, "read": 0,
+        "covered_patients": 1, "push_times": 3, "sent": 1, "read": 0,
         "read_rate": 0.0, "by_channel": {"sms": 3},
     }
     assert isinstance(stats["read_rate"], float)
