@@ -183,9 +183,12 @@ def spd_edu_push_dispatch(db: Session) -> tuple[int, str]:
             push.status = "failed"
             push.fail_reason = "宣教素材不存在" if material is None else "宣教素材已停用，未发送"
             failed += 1
-            continue
-        if dispatch_edu_push(db, push, material):
+        elif dispatch_edu_push(db, push, material):
             sent += 1
         else:
             failed += 1
+        # 发一条提交一条（P2-641）：原先一轮最多 500 条短信 / 微信都在同一个事务里发、由调度器最后一次提交——中途中断
+        # （进程被杀、库连接断）整轮回滚成「待发送」，已经送到患者手机上的，下一轮再发一遍；短信通道单条最长等 5 秒，
+        # 这个事务还能挂着锁半小时以上。逐条提交之后，中断只可能重发正在发的那一条（与 ESB 出站逐条提交同一个做法）
+        db.commit()
     return len(due), f"派发 {sent} 条，失败 {failed} 条" if due else "没有到点的推送"

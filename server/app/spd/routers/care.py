@@ -1081,6 +1081,9 @@ def push_education(
             ok = dispatch_edu_push(db, push, material)
             sent += 1 if ok else 0
             failed += 0 if ok else 1
+            # 发一条提交一条（P2-641）：原先一次最多 1000 位患者的短信在同一个事务里发完才提交——中途出错整批回滚，
+            # 已经送到的短信库里一条不剩、清单上看不到，再点一次就再发一遍
+            db.commit()
     db.commit()
     return {"pushed": created, "sent": sent, "failed": failed, "material": material.title}
 
