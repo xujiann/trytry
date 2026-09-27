@@ -34,7 +34,7 @@ from .. import clock, events
 from ..clock import now_aware, now_naive, to_aware
 from ..concurrency import upsert_unique
 from ..config import settings
-from ..visibility import log_patient_access
+from ..visibility import assert_obj_org_writable, log_patient_access
 from ..database import SessionLocal, get_db
 from ..deps import get_current_user, require_roles
 from ..models import (
@@ -607,7 +607,7 @@ def hl7v2_adt(
     - **A03**：出院镜像同步——停止执行中医嘱、释放床位、置 discharged 并发布
       出院领域事件。平台侧发起的出院有"病案首页已填写、费用已结清"门禁；
       HIS 推送的 A03 是既成事实的镜像，不设门禁（质量门禁由 HIS 端与病案
-      补录流程承担），差异特此写明；
+      补录流程承担），差异特此写明；只能出本机构的住院（全域账号不限），与平台出院同一道机构门（P1-196）；
     - **A08**：按 PID-3 定位患者，非空字段（姓名/性别/出生日期/电话）覆盖更新；
       档案不存在按对接规范§四口径 404 拒收（应先以 A04 建档）。
 
@@ -726,6 +726,10 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
     )
     if admission is None:
         raise HTTPException(status_code=409, detail="该患者无在院记录，A03 出院拒收")
+    # 哪家机构的住院，只能由那家（或全域账号）的对接账号推出院（P1-196）：A01 入院经 create_admission 判病区所属机构，
+    # 平台出院判住院记录所属机构；A03 原先都不看——任一机构的对接账号按证件号就能让别家在院的患者出院、释放床位、
+    # 停掉执行中的医嘱、派出院随访。只读判定，不影响下面「第一条写语句」的约定
+    assert_obj_org_writable(db, user, admission)
     # 上面那句"有没有在院记录"是快路径；闸门是 `_mark_discharged` 那条带状态条件的
     # UPDATE，且必须是本次事务的第一条写语句。A03 与平台端点是**同一行的两个出院入口**，
     # 谁抢输都拿与顺序重复完全一致的 409（`_run_inbound` 照旧把它写进交换日志）。
