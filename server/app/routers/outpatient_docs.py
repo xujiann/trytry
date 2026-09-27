@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_local
+from ..concurrency import move_row
 from ..datetypes import OptionalDateTimeStr
 from ..numtypes import INT4_MAX, INT4_MIN
 from ..texttypes import NON_BLANK
@@ -341,11 +342,8 @@ def sign_consent(
 ):
     """记录患方签署。已有结论的不可改写——告知书是证据，不是可编辑的表单。"""
     consent = _pending(db, consent_id, user)
-    consent.status = "signed"
-    consent.signer_name = body.signer_name
-    consent.signer_relation = body.signer_relation
-    consent.signed_at = utcnow()
-    db.commit()
+    _conclude(db, consent, status="signed", signer_name=body.signer_name,
+              signer_relation=body.signer_relation, signed_at=utcnow())
     return _consent_out(consent)
 
 
@@ -359,12 +357,8 @@ def refuse_consent(
 ):
     """记录拒绝签署。这是一等状态，机构据此证明"告知过、对方拒绝了"。"""
     consent = _pending(db, consent_id, user)
-    consent.status = "refused"
-    consent.signer_name = body.signer_name
-    consent.signer_relation = body.signer_relation
-    consent.refuse_reason = body.refuse_reason
-    consent.signed_at = utcnow()
-    db.commit()
+    _conclude(db, consent, status="refused", signer_name=body.signer_name,
+              signer_relation=body.signer_relation, refuse_reason=body.refuse_reason, signed_at=utcnow())
     return _consent_out(consent)
 
 
@@ -396,11 +390,31 @@ def _pending(db: Session, consent_id: int, user: User) -> InformedConsent:
         raise HTTPException(status_code=404, detail="告知书不存在")
     assert_obj_org_writable(db, user, consent)
     if consent.status != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail=f"该告知书已{CONSENT_STATUS_NAMES.get(consent.status, consent.status)}，不可重复处理",
-        )
+        raise _already_concluded(consent)
     return consent
+
+
+def _conclude(db: Session, consent: InformedConsent, **values) -> None:
+    """待签署 → 已签署 / 拒绝签署：判定与写入压进同一条 UPDATE（P2-449）。
+
+    原先 `_pending` 判完状态、赋值、commit，UPDATE 只有 `WHERE id = ?`：张三刚签完，另一台电脑上照旧页面点「拒签」
+    照样 200——告知书成了李四拒签，签署时间也被改写（按顺序点同一下是 409）。告知书是证据性文书，「已有结论的
+    不可改写」必须在写入那一刻成立。抢输的一路按库里此刻的结论 409，与顺序调用同一句。
+    """
+    if not move_row(db, InformedConsent, consent.id, InformedConsent.status == "pending", **values):
+        db.rollback()
+        db.refresh(consent)
+        raise _already_concluded(consent)
+    db.commit()
+    db.refresh(consent)
+
+
+def _already_concluded(consent: InformedConsent) -> HTTPException:
+    # 状态文案自带「已」（已签署），原先拼成「该告知书已已签署」
+    return HTTPException(
+        status_code=409,
+        detail=f"该告知书当前为「{CONSENT_STATUS_NAMES.get(consent.status, consent.status)}」，不可重复处理",
+    )
 
 
 # ============================================================ 治疗处置记录
