@@ -3798,7 +3798,7 @@ async function renderSpdManager() {
          <td>${esc(c.program_code || "—")}</td><td>${c.messages}</td>
          <td>${esc(c.created_at.slice(0, 16))}</td>
          <td>${spdTag(SPD_CONSULT_STATUS, c.status)}</td>
-         <td><button class="btn secondary" data-consult="${c.id}">打开会话</button>
+         <td><button class="btn secondary" data-consult="${c.id}" data-closed="${c.status === "open" ? 0 : 1}">打开会话</button>
           ${c.status === "open"
             ? `<button class="btn secondary" data-consult-close="${c.id}">结束</button>` : ""}
           <button class="btn secondary" data-consult-fu="${c.id}">转随访</button></td></tr>`)}
@@ -3877,7 +3877,7 @@ async function renderSpdManager() {
     const close = e.target.closest("[data-consult-close]");
     const followup = e.target.closest("[data-consult-fu]");
     const revisit = e.target.closest("[data-revisit]");
-    if (open) return spdShowConsultThread(Number(open.dataset.consult));
+    if (open) return spdShowConsultThread(Number(open.dataset.consult), open.dataset.closed === "1");
     if (close) {
       // P2-43：原先点一下就结束；结束后医生端不能再回复这次会话
       if (!await spdModal("结束咨询", [], {
@@ -3926,7 +3926,7 @@ function spdRevisitTable(rows) {
      </td></tr>`);
 }
 
-async function spdShowConsultThread(consultId) {
+async function spdShowConsultThread(consultId, closed = false) {
   const messages = await api(`/api/spd/consults/${consultId}/messages`);
   $("#spd-consult-thread").innerHTML = `
     <div class="panel" style="border-left:4px solid #0b6e6e">
@@ -3937,10 +3937,13 @@ async function spdShowConsultThread(consultId) {
         ${esc(m.content)}
         <small style="color:#8a939e">${esc(m.created_at.slice(0, 16))}</small></p>`).join("")
         || '<p class="desc">暂无消息</p>'}
-      <form class="inline" id="spd-consult-reply">
+      ${closed   // 已结束的会话不给回复框（P2-596）：回复接口 409「该会话已结束」，原先照样摆着，写完一段点下去才报错
+        ? '<p class="desc">会话已结束，不能再回复；居民再发消息会开启新会话。</p>'
+        : `<form class="inline" id="spd-consult-reply">
         <input name="content" placeholder="回复内容" required style="min-width:300px">
         <button>回复</button>
-      </form></div>`;
+      </form>`}</div>`;
+  if (closed) return;
   $("#spd-consult-reply").onsubmit = async (e) => {
     e.preventDefault();
     const content = e.target.content.value.trim();

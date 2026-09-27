@@ -1862,6 +1862,37 @@ def test_结束慢专病咨询先确认(page, base_url, admin_read, spd_open_con
                   lambda: status() == "open", lambda: status() == "closed")
 
 
+def test_已结束的慢专病咨询打开会话不给回复框(page, base_url, admin_call):
+    """P2-596：回复接口对已结束的会话 409「该会话已结束」，打开会话原先照样摆着回复框，写完一段点下去才报错。"""
+    import json
+    from urllib.request import Request
+
+    def post(path, payload, token):
+        req = Request(f"{base_url}{path}", data=json.dumps(payload).encode(),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    name, id_card = "E2E已结束咨询患者", "320981198507072235"
+    admin_call("POST", "/api/patients", {"name": name, "id_card": id_card, "gender": "男"})
+    login = Request(f"{base_url}/api/portal/auth/wechat/login", headers={"Content-Type": "application/json"},
+                    data=json.dumps({"code": "mock-e2e-p2596", "state": ""}).encode())
+    with urlopen(login, timeout=10) as resp:
+        resident = json.loads(resp.read())["access_token"]
+    post("/api/portal/auth/realname", {"name": name, "id_card": id_card}, resident)
+    cid = post("/api/portal/spd/consults", {"content": "E2E结束后再看", "program_code": "diabetes"},
+               resident)["consult_id"]
+    admin_call("POST", f"/api/spd/consults/{cid}/close")
+
+    _login(page, base_url)
+    _open_page(page, "spdmanager", "个案管理师端·专属衔接")
+    page.click(f'button[data-consult="{cid}"]')
+    thread = page.locator("#spd-consult-thread")
+    expect(thread).to_contain_text("E2E结束后再看")
+    expect(thread).to_contain_text("会话已结束，不能再回复")
+    expect(page.locator("#spd-consult-reply")).to_have_count(0)   # 修前照样摆着回复框
+
+
 def test_随访问卷在界面上录题目与异常规则_执行随访逐题作答判出异常(page, base_url, seed, admin_read, admin_call):
     """P1-122：建问卷的表单原先没有题目框，异常规则编辑器列的是 /api/spd/meta 的事实字段、交上去的是平铺条件
     （后端读 when，一条都存不进）；执行随访只填渠道与结果、answers 恒为空——问卷的异常分级从界面上一次都触发
