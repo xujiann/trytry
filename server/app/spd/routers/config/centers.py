@@ -87,6 +87,19 @@ def _center_out(c: SpdCenter) -> dict:
     }
 
 
+def _check_member_ids(db: Session, org_ids: list[int] | None, team_ids: list[int] | None) -> None:
+    """覆盖机构 / 团队先查存在（P2-433）：两列是 JSON 编号清单、没有外键，填错的编号原样存进去，卫健委工作台的
+    「覆盖机构数 / 团队数」按清单长度算，照样算进去。与牵头机构、负责人同一口径（P1-90）。"""
+    for ids, model, label, field in ((org_ids, Organization, "覆盖机构", "org_ids"),
+                                     (team_ids, SpdTeam, "团队", "team_ids")):
+        if not ids:
+            continue
+        found = {row_id for (row_id,) in db.query(model.id).filter(model.id.in_(set(ids)))}
+        missing = sorted(set(ids) - found)
+        if missing:
+            raise HTTPException(status_code=404, detail=f"{label}不存在（{field} 中的 {missing}）")
+
+
 @router.post("/centers", response_model=CenterOut, status_code=201,
              dependencies=[Depends(require_roles(*CONFIG_ROLES))])
 def create_center(body: CenterIn, db: Session = Depends(get_db)):
@@ -100,6 +113,7 @@ def create_center(body: CenterIn, db: Session = Depends(get_db)):
         state = unusable_user(db, body.leader_user_id)  # 停用的账号也不收（P1-106）
         if state:
             raise HTTPException(status_code=404, detail=f"负责人{state}（leader_user_id={body.leader_user_id}）")
+    _check_member_ids(db, body.org_ids, body.team_ids)
     center = SpdCenter(**body.model_dump())
     db.add(center)
     try:
@@ -148,6 +162,7 @@ def update_center(center_id: int, body: CenterPatch, db: Session = Depends(get_d
         if state:
             raise HTTPException(status_code=404,
                                 detail=f"负责人{state}（leader_user_id={changes['leader_user_id']}）")
+    _check_member_ids(db, changes.get("org_ids"), changes.get("team_ids"))
     for key, value in changes.items():
         setattr(center, key, value)
     db.commit()

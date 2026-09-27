@@ -1536,6 +1536,31 @@ def test_会诊与转诊的佐证材料在页面上传得上看得到(page, base
         assert info.value.suggested_filename == "e2e_p2432.pdf"
 
 
+def test_专病中心的牵头机构覆盖机构团队在页面上录得进改得了(page, base_url, seed, admin_call, admin_read):
+    """P2-433：中心的牵头机构 / 覆盖机构 / 团队三项页面上原先没有录入框——卫健委工作台按两张清单数覆盖机构与团队，
+    页面上建的中心恒为 0。修后建中心的表单与编辑框都能录，编辑框按库里的现值预填。"""
+    org = seed["org"]["id"]
+    team = admin_call("POST", "/api/spd/teams", {"name": "E2E中心团队", "org_id": org, "level": "county"})
+    _login(page, base_url)
+    _open_page(page, "spdexpert", "专病专家端·临床指导")
+    form = page.locator("#spd-center-form")
+    form.locator('input[name="code"]').fill("E2E_C433")
+    form.locator('input[name="name"]').fill("E2E覆盖中心")
+    form.locator('input[name="program_code"]').fill("hypertension")
+    form.locator('input[name="lead_org_id"]').fill(str(org))   # 修前：没有这三个框
+    form.locator('input[name="org_ids"]').fill(str(org))
+    form.locator('input[name="team_ids"]').fill(str(team["id"]))
+    _submit(page, "#spd-center-form button")
+    (center,) = [c for c in admin_read("/api/spd/centers") if c["code"] == "E2E_C433"]
+    assert (center["lead_org_id"], center["org_ids"], center["team_ids"]) == (org, [org], [team["id"]]), center
+
+    page.click(f'button[data-center-edit="{center["id"]}"]')
+    expect(_modal(page).locator('[name="team_ids"]')).to_have_value(str(team["id"]))   # 按现值预填
+    _redrawn(page, lambda: _spd_modal(page, {"team_ids": ""}))
+    (after,) = [c for c in admin_read("/api/spd/centers") if c["id"] == center["id"]]
+    assert (after["lead_org_id"], after["org_ids"], after["team_ids"]) == (org, [org], []), after
+
+
 def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
     """P2-43：「删除」路径节点原先点一下就删，节点的时限、角色与表单配置一并没了。"""
     hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")

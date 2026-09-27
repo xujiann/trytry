@@ -831,15 +831,22 @@ async function renderSpdExpert() {
         <input name="name" placeholder="中心名称" required>
         <input name="program_code" placeholder="病种编码" required>
         <input name="lead_dept" placeholder="牵头科室">
+        <input name="lead_org_id" type="number" placeholder="牵头机构ID（可空）">
+        <input name="org_ids" placeholder="覆盖机构ID，逗号分隔（可空）">
+        <input name="team_ids" placeholder="团队ID，逗号分隔（可空）">
         <button>新建分中心</button>
       </form><p class="msg" id="spd-center-msg"></p>`)}
     ${panel("风险评估结果分布", `
       ${barChart(spdPairs(wb.assessments.by_risk,
         { low: "低危", mid: "中危", high: "高危", very_high: "极高危" }),
         { color: "#8d4bab", unit: " 人次" })}`)}`;
+  // 牵头机构 / 覆盖机构 / 团队原先没有录入框（P2-433）：卫健委工作台按这两张清单数覆盖机构与团队，页面上建的中心恒为 0
+  const idList = (v) => String(v || "").split(/[，,\s]+/).filter(Boolean).map(Number);
   $("#spd-center-form").onsubmit = (e) => {
     e.preventDefault();
-    return postAction("/api/spd/centers", formJson(e.target), "#spd-center-msg");
+    const f = formJson(e.target, ["lead_org_id"]);
+    return postAction("/api/spd/centers",
+      { ...f, org_ids: idList(f.org_ids), team_ids: idList(f.team_ids) }, "#spd-center-msg");
   };
   $("#page-body").onclick = async (e) => {
     const btn = e.target.closest("[data-center-edit]");
@@ -849,6 +856,10 @@ async function renderSpdExpert() {
     const current = btn.dataset.status || "running";
     const statuses = { ...(wb.center_status_names || {}) };
     if (!Object.keys(statuses).includes(current)) statuses[current] = current;
+    // 牵头机构 / 覆盖机构 / 团队按库里的现值预填（工作台的中心行不带这三列）；清空即清空（P2-433）
+    let full = {};
+    try { full = (await api("/api/spd/centers")).find((c) => String(c.id) === btn.dataset.centerEdit) || {}; }
+    catch (err) { return setMsg("#spd-center-msg", err.message, false); }
     const form = await spdModal("编辑专病中心", [
       { name: "name", label: "名称", value: btn.dataset.name, required: true },
       { name: "lead_dept", label: "牵头科室", value: btn.dataset.dept },
@@ -856,9 +867,19 @@ async function renderSpdExpert() {
       { name: "status", label: "状态", type: "select", value: current,
         options: Object.entries(statuses).map(([value, label]) => ({ value, label })) },
       { name: "leader_user_id", label: "负责人用户ID（留空不改）", type: "number" },
+      // 现值没取到（清单只回前 200 个中心）就不给这三项：空着提交会把库里的清单清掉
+      ...(full.id ? [
+        { name: "lead_org_id", label: "牵头机构ID（清空即不设）", value: full.lead_org_id ?? "" },
+        { name: "org_ids", label: "覆盖机构ID，逗号分隔", value: (full.org_ids || []).join(",") },
+        { name: "team_ids", label: "团队ID，逗号分隔", value: (full.team_ids || []).join(",") },
+      ] : []),
     ]);
     if (!form) return;
     const body = { name: form.name, lead_dept: form.lead_dept || "", version: form.version || "", status: form.status };
+    if (full.id) {
+      Object.assign(body, { lead_org_id: form.lead_org_id ? Number(form.lead_org_id) : null,
+        org_ids: idList(form.org_ids), team_ids: idList(form.team_ids) });
+    }
     if (form.leader_user_id) body.leader_user_id = form.leader_user_id;
     return postAction(`/api/spd/centers/${btn.dataset.centerEdit}`, body, "#spd-center-msg", "PATCH");
   };
