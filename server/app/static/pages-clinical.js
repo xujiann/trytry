@@ -532,7 +532,11 @@ async function downloadAttachment(id, filename) {
     credentials: "same-origin",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  if (!resp.ok) throw new Error(`下载失败(${resp.status})`);
+  if (!resp.ok) {
+    // 失败时后端回的是 JSON detail（被病毒扫描隔离的 410、文件缺失的 404）：照 api() 的口径报人话，别只给状态码（P2-420）
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(errorText(data.detail, `下载失败(${resp.status})`));
+  }
   const url = URL.createObjectURL(await resp.blob());
   const a = document.createElement("a");
   a.href = url;

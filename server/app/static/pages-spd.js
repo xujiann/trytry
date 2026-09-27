@@ -1806,7 +1806,10 @@ async function spdOpenSvg(path) {
       credentials: "same-origin",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    if (!resp.ok) throw new Error(`获取二维码失败(${resp.status})`);
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));   // 同 downloadAttachment：报后端的原话（P2-420）
+      throw new Error(errorText(data.detail, `获取二维码失败(${resp.status})`));
+    }
     win.location = URL.createObjectURL(await resp.blob());
   } catch (err) { win.close(); throw err; }
 }

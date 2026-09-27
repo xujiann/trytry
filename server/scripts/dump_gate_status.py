@@ -72,6 +72,7 @@ def _rows() -> list[tuple[str, str, str, str]]:
     import test_status_text_from_backend as statustext
     import test_datestr_single_source as datestr
     import test_frontend_destructive_confirm_guard as destructive
+    import test_frontend_fetch_error_detail as fetcherr
     import test_frontend_api_calls_resolve as apicalls
     import test_filter_ids_not_truncated as truncids
     import test_list_pagination_ratchet as pagination
@@ -337,6 +338,10 @@ def _rows() -> list[tuple[str, str, str, str]]:
          len(statustext.KEY_BY_DESIGN), "tests/test_status_text_from_backend.py"),
         ("功能完善", "免确认的破坏性操作（可逆，逐条写明怎么恢复）", len(destructive.EXEMPT),
          "tests/test_frontend_destructive_confirm_guard.py"),
+        ("功能完善", "绕过 api() 直接 fetch 的失败分支只给状态码、不报后端 detail（2 → 0 已清零）", fetcherr.BASELINE,
+         "tests/test_frontend_fetch_error_detail.py"),
+        ("功能完善", "直接 fetch 的失败分支按设计不报后端原话（逐条写明理由）", len(fetcherr.EXEMPT),
+         "tests/test_frontend_fetch_error_detail.py"),
     ]
 
 
