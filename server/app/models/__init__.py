@@ -42,3 +42,23 @@ from .consent import *  # noqa: F403
 # `Money` 与 `utcnow`，此刻它们已经定义完毕。
 # ============================================================================
 from ..spd.models import *  # noqa: E402,F401,F403
+
+from typing import TYPE_CHECKING  # noqa: E402
+
+if not TYPE_CHECKING:  # 只在运行期生效：给 mypy 看见的话，任何写错的 `from app.models import X` 都会被当成 Any 放过
+
+    def __getattr__(name: str):
+        """子系统模型的回落：上面那句星号导入若执行时 `app.spd.models` 还只初始化到一半，就补上它漏掉的名字。
+
+        先 import `app.spd.models`、后 import 本包的进程里，本包是被子系统模型自己那句 `from ..models import Money, utcnow`
+        拉起来的——此刻子系统模型刚执行到那一行，星号导入拿到的是半个模块，本包上一个 `Spd*` 都没有。应用自己总是先
+        import 本包，碰不上；测试碰得上：单跑几个文件时，先被收集的那个若先 import 了 `app.spd.models`，之后所有
+        `app.models.SpdProgram` / `from app.models import SpdEnrollment` 一律 AttributeError / ImportError，报在与肇事文件
+        毫不相干的用例上。属性缺失时才走到这里，那时子系统模型早已初始化完。
+        """
+        from ..spd import models as spd_models
+
+        try:
+            return getattr(spd_models, name)
+        except AttributeError:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
