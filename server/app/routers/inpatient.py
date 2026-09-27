@@ -25,7 +25,7 @@ from ..visibility import (
     scope_patient_list,
     scope_stats_orgs,
 )
-from .. import events
+from .. import clock, events
 from ..database import get_db
 from ..deps import (
     get_current_user,
@@ -597,7 +597,9 @@ def discharge_admission(admission_id: int, db: Session = Depends(get_db), user: 
         "patient_id": admission.patient_id,
         "org_id": admission.org_id,
         "diagnosis_name": admission.diagnosis_name or "",
-        "discharged_on": now.date().isoformat(),
+        # 出院日是本地业务日（P2-545）：`now` 是 naive UTC，东八区 0–8 点出院的 `.date()` 是前一天——慢专病据此派生的
+        # 出院随访比平台自己的出院随访任务（按 `clock.today()` 起算）早一天
+        "discharged_on": clock.today().isoformat(),
     })
     db.commit()
     db.refresh(admission)

@@ -30,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from .. import events
+from .. import clock, events
 from ..clock import now_aware, now_naive, to_aware
 from ..concurrency import upsert_unique
 from ..config import settings
@@ -749,7 +749,7 @@ def _do_hl7v2_adt(body: Hl7Message, db: Session, user: User, event: str):
         "patient_id": admission.patient_id,
         "org_id": admission.org_id,
         "diagnosis_name": admission.diagnosis_name or "",
-        "discharged_on": now.date().isoformat(),
+        "discharged_on": clock.today().isoformat(),   # 本地业务日，与平台出院同一口径（P2-545）
     })
     db.commit()
     return _adt_out(

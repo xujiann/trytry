@@ -781,7 +781,8 @@ def auto_match_plans(
         candidates = [
             (
                 a.patient_id,
-                (a.discharged_at or a.admitted_at).date().isoformat(),
+                # 随访日期从本地的出院日 / 就诊日起算（P2-545）：落库时刻是 naive UTC，`.date()` 在东八区 0–8 点差一天
+                clock.to_local(a.discharged_at or a.admitted_at).date().isoformat(),
                 a.diagnosis_name or "",
             )
             for a in rows
@@ -795,7 +796,7 @@ def auto_match_plans(
             .all()
         )
         candidates = [
-            (e.patient_id, e.created_at.date().isoformat(),
+            (e.patient_id, clock.to_local(e.created_at).date().isoformat(),
              f"{e.diagnosis_name or ''}{e.diagnosis_code or ''}")
             for e in encounters
         ]
