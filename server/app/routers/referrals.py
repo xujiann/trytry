@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ..concurrency import move_row
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import Organization, Patient, Referral, User
@@ -110,11 +111,22 @@ def update_status(
         raise HTTPException(status_code=404, detail="转诊记录不存在")
     # 先校验归属再校验状态机：否则 403 与 409 的先后顺序会泄露"这张单现在什么状态"
     _assert_receiving_org(user, referral)
-    if body.status not in _ALLOWED_TRANSITIONS.get(referral.status, set()):
-        raise HTTPException(
-            status_code=409, detail=f"状态不可从 {STATUS_LABELS.get(referral.status, referral.status)} 变更为 {STATUS_LABELS.get(body.status, body.status)}"
-        )
-    referral.status = body.status
+    expect = referral.status
+    if body.status not in _ALLOWED_TRANSITIONS.get(expect, set()):
+        raise _transition_conflict(referral, body.status)
+    # 判定与写入压进同一条 UPDATE（P2-448）：原先内存里判状态、赋值、commit，UPDATE 只有 `WHERE id = ?`——
+    # 同事刚把单子接诊并结案，这边照页面上的「待接诊」点退回，已结案的单子被改成已退回（结案率的分子少一个）
+    if not move_row(db, Referral, referral.id, Referral.status == expect, status=body.status):
+        db.rollback()
+        db.refresh(referral)
+        raise _transition_conflict(referral, body.status)
     db.commit()
     db.refresh(referral)
     return _with_label(referral)
+
+
+def _transition_conflict(referral: Referral, target: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail=f"状态不可从 {STATUS_LABELS.get(referral.status, referral.status)} 变更为 {STATUS_LABELS.get(target, target)}",
+    )
