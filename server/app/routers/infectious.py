@@ -1,5 +1,5 @@
 """传染病病例报告与多点触发监测预警。"""
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -190,7 +190,12 @@ class CaseReportCardOut(BaseModel):
 def _timeliness(
     case: InfectiousCase, meta: tuple[str, str, int] | None
 ) -> tuple[int | None, int | None, bool | None]:
-    """(法定时限小时, 迟报天数, 是否迟报)；口径与 late_reports 一致，判不了返回 None。"""
+    """(法定时限小时, 迟报天数, 是否迟报)；迟报清单与报告卡导出共用这一处，判不了返回 None。
+
+    报告日取 `reported_at` 的**本地**日期（P2-528）：`reported_at` 落库是 naive UTC，发病日期是临床按当地日历填的——
+    原先直接 `.date()` 取 UTC 日期，东八区 0–8 点报的卡报告日算成前一天、迟报天数少 1：甲类（2 小时）次日早上
+    7 点半报的判「及时」，乙类第三天早上报的同样漏判。
+    """
     if meta is None:
         return None, None, None
     _, _, report_hours = meta
@@ -198,7 +203,8 @@ def _timeliness(
         onset = date.fromisoformat(case.onset_date)
     except ValueError:
         return report_hours, None, None
-    days_late = (case.reported_at.date() - onset).days
+    reported_on = case.reported_at.replace(tzinfo=timezone.utc).astimezone().date()
+    days_late = (reported_on - onset).days
     return report_hours, days_late, days_late * 24 > report_hours
 
 
@@ -299,33 +305,29 @@ def case_report_card(case_id: int, db: Session = Depends(get_db)):
 def late_reports(db: Session = Depends(get_db)):
     """迟报清单：reported_at 与 onset_date 间隔超过目录报告时限的病例（粗略按天折算）。
 
-    判定口径：报告日与发病日相差天数 × 24 小时 > report_hours 即视为迟报，
-    即甲类（2h）跨日报告即迟报，乙/丙类（24h）相隔≥2天迟报。
+    判定口径：报告日（本地日期）与发病日相差天数 × 24 小时 > report_hours 即视为迟报，
+    即甲类（2h）跨日报告即迟报，乙/丙类（24h）相隔≥2天迟报。判定与报告卡导出共用 `_timeliness`（P2-528：原先
+    两处各写一遍，都拿 UTC 日期算报告日）。
     """
     hours_by_code = {d.code: (d.name, d.category, d.report_hours) for d in db.query(InfectiousDisease).all()}
     rows = []
     for case in db.query(InfectiousCase).order_by(InfectiousCase.id).all():
         meta = hours_by_code.get(case.disease_code)
-        if meta is None:
-            continue  # 目录外病种无法定时限，不判迟报
-        _, category, report_hours = meta
-        try:
-            onset = date.fromisoformat(case.onset_date)
-        except ValueError:
+        report_hours, days_late, late = _timeliness(case, meta)   # 目录外病种、发病日期坏了的都判不了，不进清单
+        if meta is None or not late:
             continue
-        days_late = (case.reported_at.date() - onset).days
-        if days_late * 24 > report_hours:
-            rows.append(
-                {
-                    "case_id": case.id,
-                    "org_id": case.org_id,
-                    "disease_code": case.disease_code,
-                    "disease_name": case.disease_name,
-                    "category": category,
-                    "report_hours": report_hours,
-                    "onset_date": case.onset_date,
-                    "reported_at": case.reported_at.isoformat(),
-                    "days_late": days_late,
-                }
-            )
+        _, category, _ = meta
+        rows.append(
+            {
+                "case_id": case.id,
+                "org_id": case.org_id,
+                "disease_code": case.disease_code,
+                "disease_name": case.disease_name,
+                "category": category,
+                "report_hours": report_hours,
+                "onset_date": case.onset_date,
+                "reported_at": case.reported_at.isoformat(),
+                "days_late": days_late,
+            }
+        )
     return rows
