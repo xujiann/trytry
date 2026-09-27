@@ -944,6 +944,17 @@ def urge_task(
     task = _load_task(db, task_id, user)
     if task.status not in OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="该任务已结束，无需催办")
+    _urge(db, task)
+    db.commit()
+    return _task_out(task)
+
+
+def _urge(db: Session, task: SpdTask) -> None:
+    """催办一条：计数 +1、给责任人发站内消息。**不 commit**。单条与批量共用（P2-496）。
+
+    批量催办原先只加计数、不发消息：中心端一次勾几十条点「催办」，回执说全部处理了，责任人手上却没有任何动静——
+    同一个动作，单条催得到人、批量催不到。
+    """
     # 催办计数走原子 UPDATE：两个人同时点催办，读-改-写只会记成一次
     add_amount(db, SpdTask, task.id, "urged_count", 1)
     db.flush()
@@ -954,8 +965,6 @@ def urge_task(
             body=f"任务「{task.title}」已被催办（第{task.urged_count}次），请尽快处理",
             link_type="spd_task", link_id=task.id,
         )
-    db.commit()
-    return _task_out(task)
 
 
 @router.post("/tasks/{task_id}/escalate", response_model=TaskOut,
@@ -1250,7 +1259,7 @@ def batch_tasks(
                                 else "不处于可接收状态"})
                 continue
         elif body.action == "urge":
-            add_amount(db, SpdTask, task.id, "urged_count", 1)
+            _urge(db, task)   # 与单条同一个帮手：计数之外也要催到人（P2-496）
         elif body.action == "escalate":
             _mark_escalated(db, task.id)
         elif body.action == "cancel":
