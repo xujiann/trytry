@@ -874,9 +874,11 @@ function appendSection(html) {
 const DOSAGE_FORMS = { pill: "丸剂", powder: "散剂", paste: "膏剂", granule: "颗粒剂", decoction: "合剂/汤剂" };
 
 async function drawTcmPreparations() {
-  const [formulas, batches, expiring] = await Promise.all([
-    api("/api/tcm/formulas"), api("/api/tcm/preparation-batches"),
+  // 待发放的批次单独取一遍、排在最前（P2-457，同 P2-456）：清单只回最新 200 批，挤出窗口的就没有「发放」
+  const [formulas, recentBatches, produced, expiring] = await Promise.all([
+    api("/api/tcm/formulas"), api("/api/tcm/preparation-batches"), api("/api/tcm/preparation-batches?status=produced"),
     api("/api/tcm/preparation-batches/expiring?days=60")]);
+  const batches = actionableFirst(recentBatches, produced);
   const holder = appendSection(`
     ${panel("⑭ 中药制剂配方（药师/中医师维护）", `
       <form class="inline" id="tf-form">

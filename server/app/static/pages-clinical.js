@@ -710,8 +710,11 @@ async function renderTelemedicine() {
 
 async function renderTcm() {
   $("#page-desc").textContent = "智能辅诊（辨证推荐）、共享中药房追溯、适宜技术库";
-  const [orders, techniques, spec] = await Promise.all([
-    api("/api/tcm/dispense-orders"), api("/api/tcm/techniques"), api("/api/tcm/constitution/spec")]);
+  // 还没送达的代煎单单独取一遍、排在最前（P2-457，同 P2-456）：清单只回最新 200 张，挤出窗口的就没有一行能「流转」
+  const [recent, techniques, spec, ...open] = await Promise.all([
+    api("/api/tcm/dispense-orders"), api("/api/tcm/techniques"), api("/api/tcm/constitution/spec"),
+    ...["ordered", "dispensed", "decocted", "delivering"].map((st) => api(`/api/tcm/dispense-orders?status=${st}`))]);
+  const orders = actionableFirst(recent, ...open);
   const DS = { ordered: "已下单", dispensed: "已调配", decocted: "已煎煮", delivering: "配送中", delivered: "已送达" };
   // 平和质不收分：后端判定时 `k != "balanced"`——它是"八种偏颇都不够格"的结论，不是一个维度
   const BIASED = spec.constitutions.filter((c) => c.key !== "balanced");
@@ -2307,7 +2310,10 @@ async function renderRbac() {
 
 async function renderPublicHealth() {
   $("#page-desc").textContent = "应急事件指挥（I-IV级）、诊间医防提醒、五域卫生监测";
-  const [events, monitors] = await Promise.all([api("/api/publichealth/events"), api("/api/publichealth/monitors")]);
+  // 处置中的事件单独取一遍、排在最前（P2-457，同 P2-456）：清单只回最新 100 起，挤出窗口的就没有「处置记录 / 结案」
+  const [recent, active, monitors] = await Promise.all([api("/api/publichealth/events"),
+    api("/api/publichealth/events?status=active"), api("/api/publichealth/monitors")]);
+  const events = actionableFirst(recent, active);
   const DM = { nutrition: "营养", environment: "环境", occupational: "职业", radiation: "放射", school: "学校" };
   $("#page-body").innerHTML = `
     ${panel("事件立案", `
