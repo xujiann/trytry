@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, FiniteFloat, field_validator
 from sqlalchemy.orm import Session
 
-from ..concurrency import insert_or_conflict, move_row
+from ..concurrency import insert_or_conflict, move_row, serialized_on
 from ..database import get_db
 from ..deps import get_current_user, require_roles
 from ..models import EmergencyCase, EmergencyMilestone, EmergencyVital, Organization, Patient, User
@@ -277,49 +277,58 @@ def _wall_clock(moment: datetime) -> datetime:
     dependencies=[Depends(require_roles("operator", "doctor"))],  # H2: 急救绿道记录
 )
 def record_milestone(case_id: int, body: MilestoneCreate, db: Session = Depends(get_db)):
-    """记录绿道时间节点（每个节点每例仅记录一次）。"""
+    """记录绿道时间节点（每个节点每例仅记录一次）。
+
+    时序判定读的是本例**别的**节点、写的是一条 INSERT——INSERT 不给任何既有行加锁，唯一约束
+    `(case_id, milestone)` 也只挡同一节点记两次：两人同时补记「发病 10:00」与「开始救治 09:00」，各读到对方
+    还没记、都判「不矛盾」，库里成了「先救治后发病」，时效分析算出负数（P2-419）。故判定与写入（含提交）
+    圈在这例急救事件那一行的临界区里（`serialized_on`，PG 上 `SELECT … FOR UPDATE`），同 `surgery.schedule_surgery`；
+    不同急救事件之间互不阻塞。
+    """
     case = db.get(EmergencyCase, case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="急救事件不存在")
-    existing = (
-        db.query(EmergencyMilestone)
-        .filter(
-            EmergencyMilestone.case_id == case_id,
-            EmergencyMilestone.milestone == body.milestone,
-        )
-        .first()
-    )
-    if existing is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"节点「{MILESTONE_NAMES[body.milestone]}」已记录（{existing.occurred_at}）",
-        )
     # L-12 整改：节点时间须与固定序列单调一致（不得"先救治后发病"），时效计算方可靠
     new_index = MILESTONE_SEQUENCE.index(body.milestone)
     new_time = _wall_clock(datetime.fromisoformat(body.occurred_at))
-    for other in (
-        db.query(EmergencyMilestone).filter(EmergencyMilestone.case_id == case_id).all()
-    ):
-        try:
-            other_time = _wall_clock(datetime.fromisoformat(other.occurred_at))
-        except ValueError:  # pragma: no cover - 兼容历史脏数据
-            continue
-        other_index = MILESTONE_SEQUENCE.index(other.milestone)
-        if (other_index < new_index and other_time > new_time) or (
-            other_index > new_index and other_time < new_time
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"节点「{MILESTONE_NAMES[body.milestone]}」时间与已记录节点"
-                    f"「{MILESTONE_NAMES[other.milestone]}」（{other.occurred_at}）时序矛盾"
-                ),
+    with serialized_on(db, EmergencyCase, case_id):
+        existing = (
+            db.query(EmergencyMilestone)
+            .filter(
+                EmergencyMilestone.case_id == case_id,
+                EmergencyMilestone.milestone == body.milestone,
             )
-    return insert_or_conflict(
-        db,
-        EmergencyMilestone(case_id=case_id, **body.model_dump()),
-        f"节点「{MILESTONE_NAMES[body.milestone]}」已记录",
-    )
+            .first()
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"节点「{MILESTONE_NAMES[body.milestone]}」已记录（{existing.occurred_at}）",
+            )
+        for other in (
+            db.query(EmergencyMilestone).filter(EmergencyMilestone.case_id == case_id).all()
+        ):
+            try:
+                other_time = _wall_clock(datetime.fromisoformat(other.occurred_at))
+            except ValueError:  # pragma: no cover - 兼容历史脏数据
+                continue
+            other_index = MILESTONE_SEQUENCE.index(other.milestone)
+            if (other_index < new_index and other_time > new_time) or (
+                other_index > new_index and other_time < new_time
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"节点「{MILESTONE_NAMES[body.milestone]}」时间与已记录节点"
+                        f"「{MILESTONE_NAMES[other.milestone]}」（{other.occurred_at}）时序矛盾"
+                    ),
+                )
+        # commit 必须在临界区里（`insert_or_conflict` 自己提交）：PG 上行锁随提交释放，提前出块就把窗口放回去了
+        return insert_or_conflict(
+            db,
+            EmergencyMilestone(case_id=case_id, **body.model_dump()),
+            f"节点「{MILESTONE_NAMES[body.milestone]}」已记录",
+        )
 
 
 @router.get("/cases/{case_id}/timeline", response_model=CaseTimelineOut)

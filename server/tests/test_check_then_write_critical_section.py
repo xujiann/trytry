@@ -20,6 +20,9 @@
 1. **判定点**：`if` 分支里 `raise`，条件（顺着函数内的赋值一路追名字）落到一次**读**取数上，且取数带
    「不等比较的过滤」（`Model.col < x` 一类，区间 / 上下限）或聚合（`func.sum/count/max/min`、`.count()`）。
    取数链里有 `.update(` / `.delete(` 的是条件写（`UPDATE … WHERE booked < capacity`），本身原子，不算；
+   **逐行比对**也算判定点（P2-419）：`for` 遍历一次读取数的结果，循环体里 `if` 分支 `raise`、条件是不等比较且
+   一侧取自循环变量（含循环体里由它算出的名字）——等于把区间判定从 SQL 搬进了 Python（绿道节点「不得先救治
+   后发病」逐个比已记节点的时间，两人同时补记互相矛盾的两个节点，都判不矛盾）；
 2. **判定帮手**：自己含判定点、自己不写库的函数（如 `cost._check_ratio_budget`）；别处调它即视同判定点；
 3. 函数在判定点之后写库（`add` / `add_all` / `insert_or_conflict` / `.update(` / `.values(` / `.delete(` /
    `commit`），则判定点**与其后至少一处写**必须在同一个 `with serialized_on(...)` 块里。
@@ -111,15 +114,21 @@ def _is_model_column(node: ast.AST) -> bool:
     return isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id[:1].isupper()
 
 
+def _is_read(expr: ast.AST) -> bool:
+    """一次取数；取数链带 update/delete 的是条件写，不算。"""
+    calls = [n for n in ast.walk(expr) if isinstance(n, ast.Call)]
+    attrs = {c.func.attr for c in calls if isinstance(c.func, ast.Attribute)}
+    is_read = bool(attrs & READ_CALLS) or any(isinstance(c.func, ast.Name) and c.func.id == "select" for c in calls)
+    return is_read and not attrs & {"update", "delete"}
+
+
 def _read_query_kinds(exprs) -> set[str]:
     """取数里的判定种类；取数链带 update/delete（条件写）的整条不算。"""
     kinds: set[str] = set()
     for expr in exprs:
-        calls = [n for n in ast.walk(expr) if isinstance(n, ast.Call)]
-        attrs = {c.func.attr for c in calls if isinstance(c.func, ast.Attribute)}
-        is_read = bool(attrs & READ_CALLS) or any(isinstance(c.func, ast.Name) and c.func.id == "select" for c in calls)
-        if not is_read or attrs & {"update", "delete"}:
+        if not _is_read(expr):
             continue
+        calls = [n for n in ast.walk(expr) if isinstance(n, ast.Call)]
         for call in calls:
             if not isinstance(call.func, ast.Attribute):
                 continue
@@ -141,12 +150,43 @@ def _raises(stmts) -> bool:
     return any(isinstance(n, ast.Raise) for stmt in stmts for n in ast.walk(stmt))
 
 
+def _names(node: ast.AST) -> set[str]:
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def _row_compare_sites(func, bindings) -> list[ast.AST]:
+    """逐行比对的判定点：`for row in <读取数>:` 的循环体里 `if <不等比较，一侧取自 row>: raise`（P2-419）。"""
+    out: list[ast.AST] = []
+    for loop in ast.walk(func):
+        if not isinstance(loop, ast.For) or not any(_is_read(e) for e in _closure(loop.iter, bindings)):
+            continue
+        derived = _names(loop.target)
+        grew = True
+        while grew:   # 循环体里由循环变量算出的名字（`at = parse(row.occurred_at)`）
+            grew = False
+            for node in ast.walk(loop):
+                if isinstance(node, ast.Assign) and _names(node.value) & derived:
+                    new = set().union(*(_names(t) for t in node.targets)) - derived
+                    if new:
+                        derived |= new
+                        grew = True
+        out.extend(
+            node for node in ast.walk(loop)
+            if isinstance(node, ast.If) and _raises(node.body) and any(
+                isinstance(cmp, ast.Compare) and any(isinstance(op, INEQ) for op in cmp.ops)
+                and any(_names(side) & derived for side in [cmp.left, *cmp.comparators])
+                for cmp in ast.walk(node.test)
+            )
+        )
+    return out
+
+
 def _guard_sites(func) -> list[ast.AST]:
     bindings = _bindings(func)
     return [
         node for node in ast.walk(func)
         if isinstance(node, ast.If) and _raises(node.body) and _read_query_kinds(_closure(node.test, bindings))
-    ]
+    ] + _row_compare_sites(func, bindings)
 
 
 def _writes(func) -> list[ast.Call]:
@@ -220,14 +260,15 @@ def test_登记名单不得腐烂():
     assert not set(PENDING_REVIEW) & set(ACCEPTED) and not set(KNOWN_UNFIXED) & (set(PENDING_REVIEW) | set(ACCEPTED))
 
 
-def test_修过的四处被判据看见且判为已圈住():
-    """覆盖面自证：判据在真实代码上认得出这四处是「先查别的行再写」，且判它们已圈进临界区。
+def test_修过的各处被判据看见且判为已圈住():
+    """覆盖面自证：判据在真实代码上认得出这几处是「先查别的行再写」，且判它们已圈进临界区。
 
     认不出来（重构成判据看不见的写法）闸门就成了摆设——这条先红。"""
     for rel, names in {
         "routers/surgery.py": {"schedule_surgery"},
         "routers/cost.py": {"create_allocation_rule", "update_allocation_ratio"},
         "spd/routers/tasks.py": {"advance_instance"},
+        "routers/emergency.py": {"record_milestone"},   # 逐行比对（P2-419）
     }.items():
         source = (APP_DIR / rel).read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -319,6 +360,40 @@ def test_判据自证():
             db.commit()
     """
     assert _probe(atomic_claim) == {}
+
+    # 逐行比对（P2-419 的原形）：取出本例已记的节点，在 Python 里逐个比时间；比的名字由循环变量算出
+    row_compare_unguarded = """
+        def record(db, case_id, body):
+            for other in db.query(Node).filter(Node.case_id == case_id).all():
+                at = parse(other.at)
+                if at > body.at:
+                    raise HTTPException(422, "时序矛盾")
+            db.add(Node(case_id=case_id, **body))
+            db.commit()
+    """
+    assert "probe.py:record" in _probe(row_compare_unguarded)
+
+    row_compare_guarded = """
+        def record(db, case_id, body):
+            with serialized_on(db, Case, case_id):
+                for other in db.query(Node).filter(Node.case_id == case_id).all():
+                    if parse(other.at) > body.at:
+                        raise HTTPException(422, "时序矛盾")
+                db.add(Node(case_id=case_id, **body))
+                db.commit()
+    """
+    assert _probe(row_compare_guarded) == {}
+
+    # 遍历的是入参而不是取数：不算
+    body_loop = """
+        def create(db, body):
+            for item in body.items:
+                if item.qty < 0:
+                    raise HTTPException(422, "数量为负")
+            db.add(Order(**body))
+            db.commit()
+    """
+    assert _probe(body_loop) == {}
 
     # 等值查重不在本闸门范围（唯一约束 + insert_or_conflict 那条闸门管）
     equality_only = """
