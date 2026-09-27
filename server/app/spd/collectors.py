@@ -218,10 +218,17 @@ def run_source(db: Session, source: SpdDataSource) -> SpdSyncLog:
 
 
 def run_due_sources(db: Session) -> tuple[int, str]:
-    """跑一遍到期的数据源，供定时任务调用。返回 (处理数, 摘要)。
+    """跑一遍到期的数据源。返回 (处理数, 摘要)；要单独拿失败个数的用 `run_due_sources_counted`。"""
+    count, _failed, summary = run_due_sources_counted(db)
+    return count, summary
+
+
+def run_due_sources_counted(db: Session) -> tuple[int, int, str]:
+    """跑一遍到期的数据源，供定时任务调用。返回 (处理数, 失败数, 摘要)。
 
     "到期"按各源自己的 `freq_minutes` 判定，而不是所有源一起跑：
     HIS 可能要 5 分钟一次，体检系统一天一次就够，混在一个周期里必然有一头不合适。
+    失败数单独给出：定时任务只把失败的转成提醒（P2-506）。
     """
     now = now_naive()
     # 状态为「停用」（stopped，改档可设）的也不跑（P2-315）：原先只看 active，手工停掉的数据源到点照跑，
@@ -238,7 +245,7 @@ def run_due_sources(db: Session) -> tuple[int, str]:
         if not log.success:
             failed += 1
     summary = f"到期数据源 {len(due)} 个，失败 {failed} 个" if due else "没有到期的数据源"
-    return len(due), summary
+    return len(due), failed, summary
 
 
 def unregistered_types(db: Session) -> list[str]:

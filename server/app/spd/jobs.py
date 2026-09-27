@@ -22,11 +22,14 @@ def spd_data_source_sync(db: Session) -> tuple[int, str]:
     所有源用同一个周期是不合适的：HIS 可能要 5 分钟一次，体检系统一天一次就够。
     调度按最小粒度（5 分钟）唤醒，到期与否由 `run_due_sources` 逐源判定。
     """
-    from .collectors import run_due_sources
+    from .collectors import run_due_sources_counted
 
-    count, summary = run_due_sources(db)
-    if count:
-        broadcast("spd_sync", "慢专病数据源同步", count)
+    count, failed, summary = run_due_sources_counted(db)
+    # 只推失败的（P2-506）：原先把「这一轮跑了几个源」当提醒推——内置页面不开 WebSocket，没配 Redis 时广播恒不达，
+    # 于是每 5 分钟一条「慢专病数据源同步：N 条（无在线管理端，广播未送达）」运维告警（冷却 10 分钟，一天约 144 条），
+    # 全部成功与有源失败一字不差，真出了故障反倒淹没在里面。全部成功不推
+    if failed:
+        broadcast("spd_sync_failed", "慢专病数据源同步失败", failed)
     return count, summary
 
 
