@@ -41,8 +41,8 @@ from ..models import (
     SpdReferralStep,
 )
 from ..rules import RuleError, evaluate, validate_conditions
-from ..service import (award_points, build_facts, enrollment_for, referral_last_moved_at, spawn_task, unknown_code,
-                       unknown_program)
+from ..service import (REFERRAL_ACCEPT_STEP, REFERRAL_DOWN_STEP, award_points, build_facts, enrollment_for,
+                       referral_last_moved_at, spawn_task, unknown_code, unknown_program)
 from ...visibility import GLOBAL_ROLES, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -59,7 +59,7 @@ SERVICE_ROLES = ("doctor", "public_health", "director")
 _NEXT = {
     "submitted": ("township_reviewed", "卫生院审核", "township"),
     "station_reviewed": ("township_reviewed", "卫生院审核", "township"),  # 存量兼容
-    "township_reviewed": ("accepted", "县级医院接收", "county"),
+    "township_reviewed": ("accepted", REFERRAL_ACCEPT_STEP, "county"),
 }
 
 #: 已进入终态的单子不接受任何推进动作
@@ -756,7 +756,7 @@ def down_referral(
     ):
         db.rollback()
         raise HTTPException(status_code=409, detail="只有已接收/已到院的患者可下转")
-    _add_step(db, case, "下转", "down", user, body.opinion)
+    _add_step(db, case, REFERRAL_DOWN_STEP, "down", user, body.opinion)
     enrollment = db.get(SpdEnrollment, case.enrollment_id) if case.enrollment_id else None
     spawn_task(
         db, patient_id=case.patient_id, title="下转承接与随访",

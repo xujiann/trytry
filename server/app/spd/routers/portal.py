@@ -49,7 +49,7 @@ from ..models import (
 )
 from ..rules import is_suspect_risk, score_scale
 from ..service import (FOLLOWUP_OPEN_STATUSES, MEASUREMENT_SOURCE_NAMES, MEDIA_TYPE_NAMES, PACKAGE_BINDING_STATUS_NAMES,
-                       REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES,
+                       REFERRAL_STATUS_LABELS, TASK_OPEN_STATUSES, referral_ends,
                        close_followup_record, enrollment_for, judge_measurement, mark_intervention_done,
                        measure_program_for, measure_value_problem, move_task,
                        scale_program_mismatch, scale_unusable, spawn_followup_abnormal_task, unknown_program)
@@ -59,6 +59,7 @@ from fastapi import File, Form, UploadFile
 from ..platform import (
     accessible_patient,
     current_resident,
+    org_names,
     store_attachment,
     valid_task_evidence,
 )
@@ -1393,6 +1394,10 @@ class SpdReferralDetailOut(BaseModel):
     trigger_evidence: dict[str, Any]
     materials: list[Any]
     steps: list[SpdReferralStepOut]
+    # 两端机构（P2-558，需求对照表居民端 #17「进入详情查询转诊机构」）：转出、上转去的、下转去的（没下转为空串）
+    from_org: str
+    to_org: str
+    down_to_org: str
 
 
 @router.get("/referrals/{case_id}", response_model=SpdReferralDetailOut)
@@ -1412,6 +1417,8 @@ def my_referral_detail(
         .order_by(SpdReferralStep.id)
         .all()
     )
+    up_to, down_to = referral_ends(db, [case])[case.id]
+    names = org_names(db, {case.initiator_org_id, up_to, down_to} - {None})
     return {
         "id": case.id, "direction": case.direction, "status": case.status,
         "current_level": case.current_level, "reason": case.reason,
@@ -1422,6 +1429,9 @@ def my_referral_detail(
              "created_at": s.created_at.isoformat()}
             for s in steps
         ],
+        "from_org": names.get(case.initiator_org_id, ""),
+        "to_org": names.get(up_to, "") if up_to else "",
+        "down_to_org": names.get(down_to, "") if down_to else "",
     }
 
 

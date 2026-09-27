@@ -310,7 +310,8 @@ def test_转诊列表与详情的键集合不同(client, auth, seeded):
     assert rows[0]["trigger_evidence"] == {"bp": 180}
     detail = client.get(f"{B}/referrals/{seeded['case']}", headers=auth).json()
     assert set(detail) == {"id", "direction", "status", "current_level", "reason",
-                           "trigger_evidence", "materials", "steps"}
+                           "trigger_evidence", "materials", "steps",
+                           "from_org", "to_org", "down_to_org"}   # 两端机构 P2-558 加
     assert "created_at" not in detail
     assert detail["materials"] == ["报告1"]
     assert set(detail["steps"][0]) == {"step", "action", "opinion", "created_at"}

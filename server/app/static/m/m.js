@@ -943,9 +943,14 @@ function bindReferralDetails(box) {
       // try 覆盖范围内。不接住的话 404/403/断网只会是一个"点了没反应"的死按钮。
       try {
         const d = await authApi(btn.dataset.refDetail);
-        alert((d.steps || []).map((s) =>
+        // 两端机构（慢专病转诊详情才有）：转出 → 转入，下转过的再写下转去哪家
+        const orgs = d.from_org !== undefined
+          ? [`转出：${d.from_org || "—"}　转入：${d.to_org || "—"}`, d.down_to_org ? `下转至：${d.down_to_org}` : ""]
+            .filter(Boolean).join("\n") + "\n"
+          : "";
+        alert(orgs + ((d.steps || []).map((s) =>
           `${s.created_at.slice(0, 16).replace("T", " ")} ${s.step}${s.opinion ? "：" + s.opinion : ""}`
-        ).join("\n") || "暂无环节记录");
+        ).join("\n") || "暂无环节记录"));
       } catch (err) {
         alert(`查看失败：${err.message}`);
       }

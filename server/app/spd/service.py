@@ -402,6 +402,39 @@ def followup_abnormal():
     return SpdFollowupRecord.abnormal_level.in_(FOLLOWUP_ABNORMAL_LEVELS)
 
 
+#: 县级医院接收那一格的环节名（`referral._NEXT` 照它写）：下转之后，上转去的是哪家从这一步的机构取回（P2-558）
+REFERRAL_ACCEPT_STEP = "县级医院接收"
+REFERRAL_DOWN_STEP = "下转"
+
+
+def referral_ends(db: Session, cases: list[SpdReferralCase]) -> dict[int, tuple[int | None, int | None]]:
+    """每张转诊单的（上转目的机构, 下转目标机构）（P2-558）。
+
+    下转时 `target_org_id` / `current_org_id` 都改写成下转目标——上转去的是哪家县医院只剩轨迹里有：县级医院接收那一步的
+    机构；没有（全域账号代接收不带机构）就退到下转那一步的机构（下转由当时的持有机构办）。没下转过的，目标就是 `target_org_id`。
+    """
+    accept_org: dict[int, int] = {}
+    down_actor_org: dict[int, int] = {}
+    downed: set[int] = set()
+    for case_id, step, action, org_id in (
+        db.query(SpdReferralStep.case_id, SpdReferralStep.step, SpdReferralStep.action, SpdReferralStep.org_id)
+        .filter(SpdReferralStep.case_id.in_([c.id for c in cases] or [0]),
+                SpdReferralStep.step.in_((REFERRAL_ACCEPT_STEP, REFERRAL_DOWN_STEP)))
+        .order_by(SpdReferralStep.id)
+    ):
+        if step == REFERRAL_ACCEPT_STEP and action == "pass" and org_id is not None:
+            accept_org[case_id] = org_id
+        elif step == REFERRAL_DOWN_STEP:
+            downed.add(case_id)
+            if org_id is not None:
+                down_actor_org[case_id] = org_id
+    return {
+        c.id: ((accept_org.get(c.id) or down_actor_org.get(c.id)), c.target_org_id) if c.id in downed
+        else (c.target_org_id, None)
+        for c in cases
+    }
+
+
 def referral_last_moved_at():
     """转诊单最近一次推进的时刻：最后一条环节轨迹的时间（发起也写一条）；没有轨迹的存量单退回建单时间。
 
@@ -1094,8 +1127,10 @@ def referral_feed(db: Session, patient_id: int) -> list[dict]:
         .limit(REFERRAL_FEED_LIMIT)
         .all()
     )
+    # 「转入」是上转去的那家（P2-558）：下转改写了 target_org_id，原先卡片上的转入机构跟着变成下转目标
+    ends = referral_ends(db, rows)
     # 只取这几条单子用到的机构名，不整表拉 organizations
-    names = _org_names(db, {r.initiator_org_id for r in rows} | {r.target_org_id for r in rows})
+    names = _org_names(db, {r.initiator_org_id for r in rows} | {ends[r.id][0] for r in rows})
     return [
         referral_feed_item(
             source="spd",
@@ -1106,7 +1141,7 @@ def referral_feed(db: Session, patient_id: int) -> list[dict]:
             reason=r.reason,
             from_org=names.get(r.initiator_org_id, ""),
             # 目标机构可能尚未确定（逐级审核中），此时留空而不是编一个
-            to_org=names.get(r.target_org_id, "") if r.target_org_id else "",
+            to_org=names.get(ends[r.id][0], "") if ends[r.id][0] else "",
             created_at=r.created_at.isoformat(),
             # 必须带上 patient_id：一个居民账号可以代管家属，详情端点按这个参数
             # 决定看谁的档案，不带就会拿默认患者去查，代管家属的单子直接 404。
