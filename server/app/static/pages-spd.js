@@ -1984,12 +1984,13 @@ async function renderSpdPath() {
             : t.status === "draft" ? '<span class="tag orange">草稿</span>'
             : '<span class="tag">已停用</span>'}</td>
          <td><button class="btn secondary" data-tpl-nodes="${t.id}" data-status="${esc(t.status)}">节点</button>
-             <button class="btn secondary" data-tpl-node="${t.id}">加节点</button>
+             ${t.status !== "published" && !t.in_use   // 已发布的、有患者走过的，改节点 409（P2-599）：复制新版本再改
+               ? `<button class="btn secondary" data-tpl-node="${t.id}">加节点</button>` : ""}
              ${t.status === "published"
                ? `<button class="btn secondary" data-tpl-off="${t.id}">停用</button>`
                : `<button class="btn secondary" data-tpl-pub="${t.id}">发布</button>`}
              <button class="btn secondary" data-tpl-copy="${t.id}">复制</button>
-             <button class="btn danger" data-tpl-del="${t.id}" data-name="${esc(t.name)}">删除</button></td></tr>`)}
+             ${t.in_use ? "" : `<button class="btn danger" data-tpl-del="${t.id}" data-name="${esc(t.name)}">删除</button>`}</td></tr>`)}
       <div id="spd-tpl-detail"></div>`)}
     ${panel("启动患者路径", `
       <form class="inline" id="spd-inst-form">
@@ -2074,8 +2075,10 @@ async function renderSpdPath() {
     const box = $("#spd-tpl-detail");
     try {
       const tpl = await api(`/api/spd/path-templates/${templateId}`);
-      const editable = tpl.status !== "published";   // 已发布的后端 409：复制新版本再改
-      box.innerHTML = panel(`节点 · ${tpl.name}（${tpl.status === "published" ? "已发布，只读；要改请复制新版本" : "可编辑"}）`,
+      // 已发布的、有患者走过的后端 409（P2-599：原先只看已发布）：复制新版本再改
+      const editable = tpl.status !== "published" && !tpl.in_use;
+      box.innerHTML = panel(`节点 · ${tpl.name}（${tpl.status === "published" ? "已发布，只读；要改请复制新版本"
+        : tpl.in_use ? "已有患者走过这条路径，只读；要改请复制新版本" : "可编辑"}）`,
         table(["ID", "序", "key", "名称", "阶段", "执行角色", "服务类型", "时限(天)", "操作"], tpl.nodes || [], (n) =>
           `<tr><td>${n.id}</td><td>${n.seq}</td><td>${esc(n.key)}</td><td>${esc(n.name)}</td><td>${esc(n.stage || "—")}</td>
            <td>${esc(n.exec_role || "—")}</td><td>${esc(n.service_type_name || "—")}</td><td>${n.due_days}</td>

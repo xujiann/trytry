@@ -58,9 +58,11 @@ class PathNodeOut(BaseModel):
 class PathTemplateOut(BaseModel):
     """路径模板。`_template_out` 会出**三种形状**，靠两个条件键区分：
 
-    - 列表：基础字段 + `node_count`（另算的计数，不带节点明细）；
-    - 详情/新建：基础字段 + `nodes` + `node_count`；
+    - 列表：基础字段 + `in_use` + `node_count`（另算的计数，不带节点明细）；
+    - 详情：基础字段 + `in_use` + `nodes` + `node_count`；新建：基础字段 + `nodes` + `node_count`；
     - 复制/改状态：只有基础字段。
+
+    `in_use`（P2-599）：有没有患者走过或正在走这条路径——节点增改删与删模板都按它 409，页面据此只读。
 
     声明成带默认值的可选字段会给复制/改状态的响应注入 `"nodes": null`，
     故带 `response_model_exclude_unset=True`。字段顺序也照 handler 排：
@@ -84,6 +86,7 @@ class PathTemplateOut(BaseModel):
     description: str
     copied_from_id: int | None
     created_by: str
+    in_use: bool | None = None
     nodes: list[PathNodeOut] | None = None
     node_count: int | None = None
 
@@ -130,7 +133,7 @@ class PathNodeIn(BaseModel):
 PATH_SCENE_NAMES = {"outpatient": "门诊路径", "inpatient": "住院路径", "home": "居家管理", "followup": "随访路径"}
 
 
-def _template_out(t: SpdPathTemplate, nodes: list[SpdPathNode] | None = None) -> dict:
+def _template_out(t: SpdPathTemplate, nodes: list[SpdPathNode] | None = None, in_use: bool | None = None) -> dict:
     out = {
         "id": t.id, "program_id": t.program_id, "code": t.code, "name": t.name,
         "scene": t.scene, "scene_name": PATH_SCENE_NAMES.get(t.scene, t.scene), "risk_level": t.risk_level, "version": t.version,
@@ -138,6 +141,8 @@ def _template_out(t: SpdPathTemplate, nodes: list[SpdPathNode] | None = None) ->
         "description": t.description, "copied_from_id": t.copied_from_id,
         "created_by": t.created_by,
     }
+    if in_use is not None:
+        out["in_use"] = in_use
     if nodes is not None:
         out["nodes"] = [_node_out(n) for n in nodes]
         out["node_count"] = len(nodes)
@@ -206,11 +211,14 @@ def list_path_templates(
         query = query.filter(keyword_like(SpdPathTemplate.name, keyword))
     rows = paginate(query.order_by(SpdPathTemplate.id.desc()), response, offset, limit)
     counts: dict[int, int] = {}
+    used: set[int] = set()
     if rows:
         ids = [t.id for t in rows]
         for node in db.query(SpdPathNode).filter(SpdPathNode.template_id.in_(ids)).all():
             counts[node.template_id] = counts.get(node.template_id, 0) + 1
-    return [{**_template_out(t), "node_count": counts.get(t.id, 0)} for t in rows]
+        used = {tid for (tid,) in db.query(SpdPathInstance.template_id)
+                .filter(SpdPathInstance.template_id.in_(ids)).distinct()}
+    return [{**_template_out(t, in_use=t.id in used), "node_count": counts.get(t.id, 0)} for t in rows]
 
 
 @router.get("/path-templates/{template_id}", response_model=PathTemplateOut,
@@ -225,7 +233,12 @@ def get_path_template(template_id: int, db: Session = Depends(get_db)):
         .order_by(SpdPathNode.seq, SpdPathNode.id)
         .all()
     )
-    return _template_out(template, nodes)
+    return _template_out(template, nodes, in_use=_in_use(db, template_id))
+
+
+def _in_use(db: Session, template_id: int) -> bool:
+    """有没有患者走过或正在走这条路径（任一实例引用）。节点增改删与删模板同一个判据，清单与详情的 `in_use` 也取它。"""
+    return db.query(SpdPathInstance.id).filter(SpdPathInstance.template_id == template_id).first() is not None
 
 
 def _refuse_if_in_use(db: Session, template: SpdPathTemplate | None) -> None:
@@ -240,12 +253,7 @@ def _refuse_if_in_use(db: Session, template: SpdPathTemplate | None) -> None:
     """
     if template is None:
         return
-    in_use = (
-        db.query(SpdPathInstance.id)
-        .filter(SpdPathInstance.template_id == template.id)
-        .first()
-    )
-    if in_use is not None:
+    if _in_use(db, template.id):
         raise HTTPException(status_code=409, detail="已有患者走过或正在走这条路径，不可直接改节点，请复制新版本后修改")
 
 

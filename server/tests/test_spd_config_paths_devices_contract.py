@@ -108,16 +108,16 @@ NODE_KEYS = {"id", "template_id", "key", "name", "stage", "seq", "dept", "exec_r
 def test_路径模板列表只带node_count不带nodes(client, auth, seeded):
     rows = {t["code"]: t for t in client.get(f"{B}/path-templates", headers=auth).json()}
     row = rows["PC-D"]
-    assert set(row) == TEMPLATE_BASE | {"node_count"}
-    assert "nodes" not in row and row["node_count"] == 2
+    assert set(row) == TEMPLATE_BASE | {"in_use", "node_count"}   # in_use：P2-599
+    assert "nodes" not in row and row["node_count"] == 2 and row["in_use"] is False
     # node_count 排在最后：`{**_template_out(t), "node_count": ...}`
     assert list(row)[-1] == "node_count"
 
 
 def test_路径模板详情带nodes且nodes排在node_count之前(client, auth, seeded):
     body = client.get(f"{B}/path-templates/{seeded['draft']}", headers=auth).json()
-    assert set(body) == TEMPLATE_BASE | {"nodes", "node_count"}
-    assert list(body)[-2:] == ["nodes", "node_count"]
+    assert set(body) == TEMPLATE_BASE | {"in_use", "nodes", "node_count"}   # in_use：P2-599
+    assert list(body)[-3:] == ["in_use", "nodes", "node_count"] and body["in_use"] is False
     assert body["node_count"] == len(body["nodes"]) == 2
     assert set(body["nodes"][0]) == NODE_KEYS
     assert body["nodes"][0]["key"] == "n1"          # 按 seq 排序

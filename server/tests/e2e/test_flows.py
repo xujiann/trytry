@@ -2294,9 +2294,9 @@ def test_路径模板与推送任务能在界面上删除_用过的删不掉改�
     page.click(f'button[data-tpl-del="{draft["id"]}"]')
     _redrawn(page, lambda: _spd_modal(page, {}))
     assert all(t["id"] != draft["id"] for t in admin_read("/api/spd/path-templates?limit=100"))
-    page.click(f'button[data-tpl-del="{used["id"]}"]')
-    _spd_modal(page, {})
-    expect(page.locator("#spd-tpl-msg")).to_contain_text("只能停用不能删除")
+    # 有患者走过的不给「删除」「加节点」（P2-599：原先照样给，点下去 409「只能停用不能删除」——接口一侧见
+    # tests/test_spd_path_template_in_use.py），「停用」照给
+    expect(page.locator(f'button[data-tpl-del="{used["id"]}"], button[data-tpl-node="{used["id"]}"]')).to_have_count(0)
     _redrawn(page, lambda: page.click(f'button[data-tpl-off="{used["id"]}"]'))
     assert admin_read(f"/api/spd/path-templates/{used['id']}")["status"] == "disabled"
 
