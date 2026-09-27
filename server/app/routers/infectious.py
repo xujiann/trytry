@@ -258,20 +258,21 @@ def export_case_report_cards_csv(
     # 不设上限（P1-113）：原先 `.limit(2000)` 按编号正序取，超量时截掉的是**最新**的卡，「只导迟报」又在截断之后
     # 才筛——新近的迟报一张都进不了清单。与死因报告卡导出（P1-50）同一口径：法定上报的导出不许静默少一截
     cards = [
-        _case_card(c, org_names, meta_by_code)
-        for c in query.order_by(InfectiousCase.id).all()
+        (case, _case_card(case, org_names, meta_by_code))
+        for case in query.order_by(InfectiousCase.id).all()
     ]
     if late_only:
-        cards = [c for c in cards if c["late"]]
+        cards = [(case, c) for case, c in cards if c["late"]]
     rows = [
         [
+            # 报告时间写带偏移的本地时间（P2-536）：手工网报照着誊录，原先写落库的 naive UTC，差 8 小时
             c["case_id"], c["org_name"], c["disease_code"], c["disease_name"],
-            c["category_name"], c["onset_date"], c["reported_at"],
+            c["category_name"], c["onset_date"], clock.local_iso(case.reported_at),
             c["report_hours"] if c["report_hours"] is not None else "",
             c["days_late"] if c["days_late"] is not None else "",
             "迟报" if c["late"] else ("" if c["late"] is None else "及时"),
         ]
-        for c in cards
+        for case, c in cards
     ]
     return _csv_response(
         "infectious_report_cards.csv",

@@ -165,7 +165,8 @@ def test_HL7建档回执精确_ACK与脱敏患者(seed):
     }
     # ACK 应答：MSA|AA|原消息控制ID（时间戳 14 位为随机项，只钉形状）
     assert re.fullmatch(
-        r"MSH\|\^~\\&\|MEDPLAT\|COUNTY\|\|\|\d{14}\|\|ACK\|CTRLCT01\|P\|2\.4\rMSA\|AA\|CTRLCT01",
+        # MSH-7 带时区偏移（P2-536：不带偏移按发送方本地时间解读，而这里取的是 UTC）
+        r"MSH\|\^~\\&\|MEDPLAT\|COUNTY\|\|\|\d{14}\+0000\|\|ACK\|CTRLCT01\|P\|2\.4\rMSA\|AA\|CTRLCT01",
         body["ack"],
     ), body["ack"]
     assert isinstance(body["patient"]["ehc_no"], str) and body["patient"]["ehc_no"]

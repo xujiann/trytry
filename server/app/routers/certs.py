@@ -228,7 +228,9 @@ def export_death_report_cards_csv(
             [
                 card["cert_no"], card["name"], card["gender"], card["id_card"],
                 card["birth_date"], card["death_date"], card["cause_of_death"],
-                card["org_name"], card["issued_by"], card["issued_at"],
+                # 签发时间写带偏移的本地时间（P2-536）：这份是拿去手工网报 / 前置机对接的，原先写落库的 naive UTC，
+                # 誊录的人当成北京时间，差 8 小时
+                card["org_name"], card["issued_by"], clock.local_iso(cert.created_at),
             ]
         )
     return _csv_response(

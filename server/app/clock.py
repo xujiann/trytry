@@ -28,9 +28,11 @@ aware 值按会话时区转换后再丢掉时区——同一张表的两列一�
 **一句声称守卫存在的注释，比没有注释更让人放心，也更少有人回头核。**
 """
 from datetime import date, datetime, time, timedelta, timezone
+from typing import overload
 
 __all__ = [
-    "now_naive", "now_aware", "now_local", "to_aware", "to_local", "today", "today_str", "local_day_utc_range",
+    "now_naive", "now_aware", "now_local", "to_aware", "to_local", "local_iso", "today", "today_str",
+    "local_day_utc_range",
 ]
 
 
@@ -51,6 +53,10 @@ def now_local() -> datetime:
     return datetime.now()
 
 
+@overload
+def to_aware(value: datetime) -> datetime: ...
+@overload
+def to_aware(value: None) -> None: ...
 def to_aware(value: datetime | None) -> datetime | None:
     """把库里读出的 naive UTC 值标上时区。已带时区的原样返回。"""
     if value is None:
@@ -66,6 +72,13 @@ def to_local(value: datetime) -> datetime:
     """
     aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
     return aware.astimezone().replace(tzinfo=None)
+
+
+def local_iso(value: datetime) -> str:
+    """落库时刻换成**带偏移**的本地 ISO 字符串（到秒），给离开平台的导出用（P2-536）：人照着誊录看得懂是几点，
+    程序解析也不会把它错当成接收方的本地时间——不带偏移的时刻，读的一方只能猜。
+    """
+    return to_aware(value).astimezone().isoformat(timespec="seconds")
 
 
 def today() -> date:

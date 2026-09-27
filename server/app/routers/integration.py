@@ -31,7 +31,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from .. import events
-from ..clock import now_aware, now_naive
+from ..clock import now_aware, now_naive, to_aware
 from ..concurrency import upsert_unique
 from ..config import settings
 from ..visibility import log_patient_access
@@ -249,7 +249,9 @@ def _do_hl7v2_patient(body: Hl7Message, db: Session, user: User):
 def _build_ack(control_id: str, code: str = "AA") -> str:
     """构造 HL7 v2 ACK 应答消息：AA=接收成功（浙#21 消息传输确认回执）。"""
 
-    ts = now_aware().strftime("%Y%m%d%H%M%S")
+    # MSH-7 带上时区偏移（P2-536）：HL7 v2 的时间戳不带偏移时按**发送方本地时间**解读，而这里取的是 UTC——
+    # 接收方在东八区就把应答时间读早 8 小时
+    ts = now_aware().strftime("%Y%m%d%H%M%S%z")
     return f"MSH|^~\\&|MEDPLAT|COUNTY|||{ts}||ACK|{control_id}|P|2.4\rMSA|{code}|{control_id}"
 
 
@@ -1153,7 +1155,8 @@ def fhir_encounter_resource(e: Encounter, ehc_no: str) -> dict:
         },
         "subject": {"reference": f"Patient/{ehc_no}"},
         "serviceProvider": {"reference": f"Organization/{e.org_id}"},
-        "period": {"start": e.created_at.isoformat()},
+        # FHIR 的 dateTime 带到时分就必须带时区（instant 同）；落库是 naive UTC，出口标上（P2-536）
+        "period": {"start": to_aware(e.created_at).isoformat()},
     }
     if e.doctor_name:
         resource["participant"] = [{"individual": {"display": e.doctor_name}}]
@@ -1187,7 +1190,7 @@ def fhir_diagnostic_report_resource(
         "status": status,
         "basedOn": [{"reference": f"ServiceRequest/{request_id}"}],
         "subject": {"reference": f"Patient/{ehc_no}"},
-        "issued": report.reported_at.isoformat(),
+        "issued": to_aware(report.reported_at).isoformat(),
         "conclusion": report.conclusion,
         "presentedForm": (
             [
