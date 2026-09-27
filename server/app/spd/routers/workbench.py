@@ -145,9 +145,11 @@ def _task_stats(
     }
 
 
-def _followup_stats(db: Session, orgs: list[int] | None, today: date | None = None) -> dict:
+def _followup_stats(db: Session, orgs: list[int] | None, today: date | None = None, program_code: str = "") -> dict:
     today = today or clock.today()
     query = _apply_scope(db.query(SpdFollowupRecord), SpdFollowupRecord.org_id, orgs)
+    if program_code:   # 与同页的在管数、任务同一个病种（P2-648）
+        query = query.filter(SpdFollowupRecord.program_code == program_code)
     total = query.count()
     done = query.filter(SpdFollowupRecord.status == "done").count()
     return {
@@ -159,13 +161,15 @@ def _followup_stats(db: Session, orgs: list[int] | None, today: date | None = No
     }
 
 
-def _referral_stats(db: Session, orgs: list[int] | None) -> dict:
+def _referral_stats(db: Session, orgs: list[int] | None, program_code: str = "") -> dict:
     query = db.query(SpdReferralCase)
     if orgs is not None:
         query = query.filter(
             SpdReferralCase.initiator_org_id.in_(orgs or [0])
             | SpdReferralCase.current_org_id.in_(orgs or [0])
         )
+    if program_code:   # P2-648
+        query = query.filter(SpdReferralCase.program_code == program_code)
     by_status = row_dict(
         query.with_entities(SpdReferralCase.status, func.count(SpdReferralCase.id))
         .group_by(SpdReferralCase.status)
@@ -186,10 +190,12 @@ def _referral_stats(db: Session, orgs: list[int] | None) -> dict:
     }
 
 
-def _path_stats(db: Session, orgs: list[int] | None) -> dict:
+def _path_stats(db: Session, orgs: list[int] | None, program_code: str = "") -> dict:
     # 子查询而不是先把统计范围内的纳管整行读进内存再拼 IN（P2-44）：全域视角就是整张纳管表，
     # 县域纳管量上来之后四个工作台每刷一次都要读十几万行、拼十几万个参数。范围条件一字不改。
     scoped = _apply_scope(db.query(SpdEnrollment.id), SpdEnrollment.org_id, orgs)
+    if program_code:   # 路径实例经纳管档案归病种（P2-648）
+        scoped = scoped.filter(SpdEnrollment.program_code == program_code)
     query = db.query(SpdPathInstance).filter(
         SpdPathInstance.enrollment_id.in_(select(scoped.subquery().c.id))
     )
@@ -858,9 +864,9 @@ def health_commission_workbench(
         },
         "enrollment": enroll,
         "tasks": tasks,
-        "followups": _followup_stats(db, orgs, business_day),
-        "referrals": _referral_stats(db, orgs),
-        "paths": _path_stats(db, orgs),
+        "followups": _followup_stats(db, orgs, business_day, program_code),
+        "referrals": _referral_stats(db, orgs, program_code),
+        "paths": _path_stats(db, orgs, program_code),
         "by_level": {level_names[k]: v for k, v in by_level.items()},
         "centers": [
             {"id": c.id, "code": c.code, "name": c.name, "program_code": c.program_code,
@@ -964,9 +970,9 @@ def region_stats(
         ),
         "age_distribution": age_buckets,
         "gender_distribution": gender,
-        "referrals": _referral_stats(db, orgs),
-        "paths": _path_stats(db, orgs),
-        "followups": _followup_stats(db, orgs),
+        "referrals": _referral_stats(db, orgs, program_code),
+        "paths": _path_stats(db, orgs, program_code),
+        "followups": _followup_stats(db, orgs, program_code=program_code),
         "measurements": {
             "total": measure_query.count(),
             "normal": measure_query.filter(SpdMeasurement.level == "normal").count(),
@@ -1050,8 +1056,8 @@ def expert_workbench(
             for c in db.query(SpdCenter).order_by(SpdCenter.id).all()
         ],
         "enrollment": _enroll_stats(db, orgs, program_code),
-        "paths": _path_stats(db, orgs),
-        "referrals": _referral_stats(db, orgs),
+        "paths": _path_stats(db, orgs, program_code),
+        "referrals": _referral_stats(db, orgs, program_code),
         "assessments": {
             "total": assessments.count(),
             "by_risk": row_dict(
@@ -1104,6 +1110,11 @@ def center_workbench(
     orgs = _scope(db, user, None, stats=False)
     month_start = clock.today().replace(day=1).isoformat()
 
+    def scoped(model, org_column):
+        """本范围、所选病种（P2-648）：原先 program_code 只管待办与在管数，目标池、本月、转诊、生命周期、上报仍是全病种。"""
+        query = _apply_scope(db.query(model), org_column, orgs)
+        return query.filter(model.program_code == program_code) if program_code else query
+
     return {
         "todo": {
             "mine": _task_stats(db, orgs, assignee_id=user.id, program_code=program_code,
@@ -1113,49 +1124,32 @@ def center_workbench(
             "swept": swept,
         },
         "pool": {
-            "suspect": _apply_scope(
-                db.query(SpdCandidate), SpdCandidate.org_id, orgs
-            ).filter(SpdCandidate.status == "suspect").count(),
-            "target": _apply_scope(
-                db.query(SpdCandidate), SpdCandidate.org_id, orgs
-            ).filter(SpdCandidate.status == "target").count(),
+            "suspect": scoped(SpdCandidate, SpdCandidate.org_id).filter(SpdCandidate.status == "suspect").count(),
+            "target": scoped(SpdCandidate, SpdCandidate.org_id).filter(SpdCandidate.status == "target").count(),
             # 待分发 = 还没有团队、也还没有责任人的目标人群（P2-601）：原先只看团队——团队成员认领的（认领只记责任人、
             # 不记团队）照数，而分发一律跳过已认领的（P2-251），这几条永远「待分发」、分发不下去
-            "unassigned": _apply_scope(
-                db.query(SpdCandidate), SpdCandidate.org_id, orgs
-            ).filter(
+            "unassigned": scoped(SpdCandidate, SpdCandidate.org_id).filter(
                 SpdCandidate.status == "target", SpdCandidate.team_id.is_(None),
                 SpdCandidate.assigned_user_id.is_(None),
             ).count(),
-            "excluded": _apply_scope(
-                db.query(SpdCandidate), SpdCandidate.org_id, orgs
-            ).filter(SpdCandidate.status == "excluded").count(),
-            "pending_review": _apply_scope(
-                db.query(SpdScreening), SpdScreening.org_id, orgs
-            ).filter(
+            "excluded": scoped(SpdCandidate, SpdCandidate.org_id).filter(SpdCandidate.status == "excluded").count(),
+            "pending_review": scoped(SpdScreening, SpdScreening.org_id).filter(
                 SpdScreening.result == "suspect", SpdScreening.reviewed.is_(False)
             ).count(),
         },
         "enrollment": _enroll_stats(db, orgs, program_code),
         "monthly": {
-            "new_enrollments": _apply_scope(
-                db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
-            ).filter(SpdEnrollment.created_at >= f"{month_start} 00:00:00").count(),
-            "done_tasks": _apply_scope(db.query(SpdTask), SpdTask.org_id, orgs).filter(
+            "new_enrollments": scoped(SpdEnrollment, SpdEnrollment.org_id).filter(
+                SpdEnrollment.created_at >= f"{month_start} 00:00:00").count(),
+            "done_tasks": scoped(SpdTask, SpdTask.org_id).filter(
                 SpdTask.status == "done", SpdTask.finished_at >= f"{month_start} 00:00:00"
             ).count(),
         },
-        "referrals": _referral_stats(db, orgs),
+        "referrals": _referral_stats(db, orgs, program_code),
         "lifecycle": {
-            "dead": _apply_scope(
-                db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
-            ).filter(SpdEnrollment.status == "dead").count(),
-            "migrated": _apply_scope(
-                db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
-            ).filter(SpdEnrollment.status == "migrated").count(),
-            "excluded": _apply_scope(
-                db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
-            ).filter(SpdEnrollment.status == "excluded").count(),
+            "dead": scoped(SpdEnrollment, SpdEnrollment.org_id).filter(SpdEnrollment.status == "dead").count(),
+            "migrated": scoped(SpdEnrollment, SpdEnrollment.org_id).filter(SpdEnrollment.status == "migrated").count(),
+            "excluded": scoped(SpdEnrollment, SpdEnrollment.org_id).filter(SpdEnrollment.status == "excluded").count(),
             # 「待确认迁入」只数迁到本范围的（P2-61）：确认由迁入机构做（`confirm_migration` 判
             # `target_org_id`），原先数的是全县，乡镇看到的待办一条都不归自己确认。
             # 确认不了的（患者离世 P1-111、原档案已迁出 / 排除 / 结案 P2-527）同样不算，与确认接口同一句（P2-592）
@@ -1165,15 +1159,12 @@ def center_workbench(
                 SpdLifecycleEvent.event == "migrate",
                 SpdLifecycleEvent.confirmed.is_(False),
                 SpdEnrollment.status.notin_(MIGRATION_VOID_STATUSES),
+                *([SpdEnrollment.program_code == program_code] if program_code else []),
             ).count(),
-            "recalling": _apply_scope(
-                db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
-            ).filter(SpdEnrollment.status == "recalled").count(),
+            "recalling": scoped(SpdEnrollment, SpdEnrollment.org_id).filter(SpdEnrollment.status == "recalled").count(),
         },
         "case_reports": {
-            "pending": _apply_scope(
-                db.query(SpdCaseReport), SpdCaseReport.org_id, orgs
-            ).filter(SpdCaseReport.status == "pending").count(),
+            "pending": scoped(SpdCaseReport, SpdCaseReport.org_id).filter(SpdCaseReport.status == "pending").count(),
         },
         "teams": db.query(SpdTeam).filter(SpdTeam.active.is_(True)).count(),
     }
