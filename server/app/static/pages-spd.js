@@ -405,7 +405,7 @@ async function renderSpdAdmin() {
         <select name="program_code">${spdProgramOptions(catalog)}</select>
         <input name="price" type="number" step="any" placeholder="价格(元)" style="width:100px">
         <input name="period_days" type="number" placeholder="有效期(天)" style="width:110px">
-        <input name="items" placeholder="项目：编码:名称:次数，分号分隔" style="min-width:240px">
+        <input name="items" placeholder="项目：编码:名称:次数（次数缺省 1），分号分隔" style="min-width:280px">
         <button>新建服务包</button>
       </form><p class="msg" id="spd-package-msg"></p>
       ${table(["ID", "编码", "名称", "病种", "价格", "有效期(天)", "项目数", "状态", "操作"], packages, (k) =>
@@ -529,11 +529,18 @@ async function renderSpdAdmin() {
   $("#spd-package-form").onsubmit = (e) => {
     e.preventDefault();
     const f = formJson(e.target, ["price", "period_days"]);
-    // "编码:名称:次数;…" → items；后端 _bind_package 读的是 code/name/times
-    f.items = String(f.items || "").split(/[;；]/).map((x) => x.trim()).filter(Boolean).map((x) => {
-      const [code, name, times] = x.split(/[:：]/);
-      return { code: (code || "").trim(), name: (name || code || "").trim(), times: Number(times) || 1 };
-    });
+    // "编码:名称:次数;…" → items；后端 _bind_package 读的是 code/name/times。次数写了就得是正整数（P2-587）：原先
+    // `Number(times) || 1` 把「12次」、0、用逗号连着写的下一项统统静默改成 1 次——建出来的包少次数、少项目，
+    // 第二次扣减就「剩余次数不足」，编辑框又没有项目栏，改不回来。只有留空才按 1 次
+    const items = [];
+    for (const [i, x] of String(f.items || "").split(/[;；]/).map((v) => v.trim()).filter(Boolean).entries()) {
+      const parts = x.split(/[:：]/).map((v) => v.trim());
+      if (parts.length > 3) return setMsg("#spd-package-msg", `第 ${i + 1} 个项目「${x}」多于三段：多个项目之间用分号分隔`, false);
+      const [code, name, times] = parts;
+      if (times && !/^[1-9][0-9]*$/.test(times)) return setMsg("#spd-package-msg", `第 ${i + 1} 个项目「${x}」的次数须为正整数`, false);
+      items.push({ code, name: name || code, times: times ? Number(times) : 1 });
+    }
+    f.items = items;
     return postAction("/api/spd/service-packages", f, "#spd-package-msg");
   };
   $("#spd-tag-form").onsubmit = (e) => {

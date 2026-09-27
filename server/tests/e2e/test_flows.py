@@ -2057,6 +2057,28 @@ def test_运行中枢能新建宣教素材与接入数据源(page, base_url, adm
     assert (source["name"], source["source_type"], source["freq_minutes"]) == ("E2E 检验系统", "LIS", 30), source
 
 
+def test_运行中枢建服务包_次数写错当场报出_不再静默改成1次(page, base_url, admin_read):
+    """P2-587：项目「编码:名称:次数」原先 `Number(times) || 1`——「12次」、0、用逗号连着写的下一项都静默变成 1 次，
+    建出来的包第二次扣减就「剩余次数不足」，编辑框又没有项目栏改不回来。"""
+    _login(page, base_url)
+    _open_page(page, "spdadmin", "平台管理端·运行中枢")
+    form = page.locator("#spd-package-form")
+    form.locator('[name="code"]').fill("E2E_PKG587")
+    form.locator('[name="name"]').fill("E2E 高血压包")
+    form.locator('[name="items"]').fill("BP:血压测量:12次")
+    form.locator("button").click()
+    expect(page.locator("#spd-package-msg")).to_contain_text("次数须为正整数")
+    form.locator('[name="items"]').fill("BP:血压测量:12，GLU:血糖检测:4")
+    form.locator("button").click()
+    expect(page.locator("#spd-package-msg")).to_contain_text("多于三段")
+    assert not any(k["code"] == "E2E_PKG587" for k in admin_read("/api/spd/service-packages")), "报错了却照样建了"
+
+    form.locator('[name="items"]').fill("BP:血压测量:12；GLU:血糖检测")
+    _submit(page, "#spd-package-form button")
+    package = next(k for k in admin_read("/api/spd/service-packages") if k["code"] == "E2E_PKG587")
+    assert [(i["code"], i["name"], i["times"]) for i in package["items"]] == [("BP", "血压测量", 12), ("GLU", "血糖检测", 1)]
+
+
 def test_运行中枢改已有病种的纳入规则_保存即升一版(page, base_url, admin_call, admin_read):
     """P2-173：接口「改规则即升版本并留快照」，页面原先没有入口——编辑对话框叫人「用下方编辑器新建版本」，
     下方那两个编辑器挂在「新建病种」表单上：同编码提交 409，换个编码就多出一个病种。"""
