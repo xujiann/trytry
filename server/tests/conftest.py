@@ -3,8 +3,10 @@ from datetime import date, datetime, timezone
 import faulthandler
 import os
 import signal
+import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
@@ -259,6 +261,53 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "e2e" in item.keywords:
             item.add_marker(skip_e2e)
+
+
+# ---------- 块6：集成档开跑前，把共用的 PG 测试库推到 heads（P2-581） ----------
+#
+# 真 PG 用例的夹具各自「缺表 / 缺索引才跑一次 `alembic upgrade heads`」。CI 每次起一个全新的库，第一条夹具就把它
+# 推到 heads；本机按 CLAUDE.md 一行起的开发库（`scripts/dev_services.sh`，数据目录常驻）却留着上一轮的结构。
+# 新迁移只给**已有的**表加列时，那些表都在，谁都不升级，于是字母序靠前、又碰到新列的用例整条红在「列不存在」上，
+# 直到后面某条清空 schema 重建的用例才把库带到新 heads（第九十二轮实测：P2-577 给处方明细加列后，资金分配与
+# 药房召回三条并发用例本机红、CI 绿）。整档开跑前统一推一次：幂等，库已在 heads 时只是一次版本比对。
+
+
+def _pg_url_to_upgrade(items) -> str:
+    """这一档里有真 PG 用例、又给了库地址，才返回库地址；否则空串（单元档、e2e 档不碰任何库）。"""
+    url = os.environ.get("MEDPLAT_PG_TEST_URL", "")
+    if url and any(item.get_closest_marker("integration") is not None for item in items):
+        return url
+    return ""
+
+
+def _upgrade_pg_to_heads(url: str, run=subprocess.run, attempts: int = 3, wait: float = 2.0) -> None:
+    """`alembic upgrade heads` 推到两条链的 heads；失败重试（共用库上别的会话可能正持着锁），仍败就整档报错。
+
+    报错只带 alembic 的错误输出，不带库地址（地址里可能有口令）。
+    """
+    server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    last = ""
+    for i in range(attempts):
+        result = run(
+            [sys.executable, "-m", "alembic", "upgrade", "heads"],
+            cwd=server_dir,
+            env={**os.environ, "MEDPLAT_DATABASE_URL": url},
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return
+        last = (result.stderr or "")[-2000:]
+        if i < attempts - 1:
+            time.sleep(wait)
+    raise RuntimeError(f"集成档开跑前把 PG 测试库推到 heads 失败（重试 {attempts} 次）：\n{last}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pg_test_db_at_heads(request):
+    url = _pg_url_to_upgrade(request.session.items)
+    if url:
+        _upgrade_pg_to_heads(url)
 
 
 # ---------- 用例超时看门狗：会阻塞的回归测试不是回归测试 ----------
