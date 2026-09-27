@@ -2669,6 +2669,24 @@ def test_followup_center_flow(page, base_url, seed, admin_read):
     assert status() == "done"
 
 
+def test_慢病在管名单能看随访记录(page, base_url, seed, admin_call):
+    """P2-478：慢病随访原先只能录、不能看——上次量的血压多少、给过什么指导，页面上查不到。"""
+    patient = admin_call("POST", "/api/patients", {"name": "E2E随访史患者", "id_card": "320981197006062477", "gender": "女"})
+    chronic = admin_call("POST", "/api/chronic", {"patient_id": patient["id"], "disease": "hypertension",
+                                                  "managed_by_org_id": seed["org"]["id"]})
+    for body in ({"sbp": 176, "dbp": 102, "guidance": "E2E 限盐、加服氨氯地平"},
+                 {"sbp": 138, "dbp": 86, "metrics": {"adherence_score": 4}}):
+        admin_call("POST", f"/api/chronic/{chronic['id']}/followups", body)
+
+    _login(page, base_url)
+    _open_page(page, "chronic", "慢病管理")
+    page.click(f'button[data-fuhist="{chronic["id"]}"]')   # 修前名单上只有「风险评分」
+    history = page.locator("#fu-history")
+    expect(history).to_contain_text("随访记录（2 次）")
+    expect(history.locator("tr", has_text="176/102")).to_contain_text("E2E 限盐、加服氨氯地平")
+    expect(history.locator("tr", has_text="138/86")).to_contain_text("用药依从性")   # 指标按病种目录的名字显示
+
+
 @pytest.fixture(scope="session")
 def chronic_seed(seed, admin_call):
     """慢病随访两端表单的前置：E2E 患者的一份高血压档案。"""

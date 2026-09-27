@@ -369,6 +369,13 @@ class FollowUpOut(FollowUpCreate):
     model_config = {"from_attributes": True}
 
 
+class FollowUpHistoryOut(FollowUpOut):
+    """随访史清单行（P2-478）：比新建回执里的 `followup` 多一个随访时刻——清单要按次看「哪天量的」，回执的键序由
+    `test_chronic_contract.FOLLOWUP_KEYS` 钉着、不动。"""
+
+    created_at: str = ""   # handler 里 isoformat 过的随访时刻（naive UTC），与各清单的 created_at 同一写法
+
+
 class InfectiousCaseCreate(BaseModel):
     org_id: int
     # 病种必填（P1-110）：原先编码与名称为空串照收，一例不知道是什么病的法定传染病报告照样进多点预警的分组

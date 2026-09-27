@@ -27,7 +27,7 @@ from ..deps import (
 from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient, User
 from ..numtypes import non_finite_path
 from ..visibility import assert_org_writable, assert_patient_visible
-from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
+from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpHistoryOut, FollowUpOut
 from ..texttypes import NON_BLANK
 
 router = APIRouter(prefix="/api/chronic", tags=["慢病管理"], dependencies=[Depends(get_current_user)])
@@ -494,16 +494,19 @@ def risk_score(
     }
 
 
-@router.get("/{chronic_id}/followups", response_model=list[FollowUpOut])
+@router.get("/{chronic_id}/followups", response_model=list[FollowUpHistoryOut])
 def list_followups(
     chronic_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """随访史，新的在前。每行多带随访时刻（P2-478）：慢病页按次列出「哪天量的、给过什么指导」。"""
     chronic = db.get(ChronicPatient, chronic_id)
     if chronic is None:
         raise HTTPException(status_code=404, detail="慢病档案不存在")
     assert_patient_visible(db, user, chronic.patient_id, resource="chronic")
-    return (
-        db.query(FollowUp).filter(FollowUp.chronic_id == chronic_id).order_by(FollowUp.id.desc()).all()
-    )
+    rows = db.query(FollowUp).filter(FollowUp.chronic_id == chronic_id).order_by(FollowUp.id.desc()).all()
+    return [
+        {**FollowUpOut.model_validate(f).model_dump(), "created_at": f.created_at.isoformat() if f.created_at else ""}
+        for f in rows
+    ]

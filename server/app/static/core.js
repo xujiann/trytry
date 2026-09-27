@@ -2036,6 +2036,8 @@ async function renderChronic() {
     api("/api/chronic"), api("/api/chronic/overdue"), api("/api/chronic/disease-types"),
   ]);
   DISEASES = Object.fromEntries(types.map((t) => [t.code, t.name]));
+  // 指标名取自病种目录的分级规则（随访史里的「其他指标」按名字显示，目录里没有的键原样显示）
+  const metricNames = Object.fromEntries(types.flatMap((t) => ((t.level_rules || {}).metrics || []).map((m) => [m.key, m.name])));
   const activeTypes = types.filter((t) => t.active);
   const canType = currentRole() === "admin";
   const overdueIds = new Set(overdue.map((c) => c.id));
@@ -2087,8 +2089,9 @@ async function renderChronic() {
          <td><span class="tag ${c.level === 3 ? "red" : c.level === 2 ? "orange" : "green"}">${c.level} 级</span></td>
          <td>${esc(c.next_due) || "—"}</td>
          <td>${overdueIds.has(c.id) ? '<span class="tag red">超期</span>' : '<span class="tag green">正常</span>'}</td>
-         <td><button class="btn" data-risk="${c.id}">风险评分</button></td></tr>`)}
-      <div id="risk-box"></div></div>`;
+         <td><button class="btn" data-risk="${c.id}">风险评分</button>
+           <button class="btn secondary" data-fuhist="${c.id}">随访记录</button></td></tr>`)}
+      <div id="risk-box"></div><div id="fu-history"></div></div>`;
   $("#chronic-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -2129,8 +2132,22 @@ async function renderChronic() {
     } catch (err) { setMsg("#chronic-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { typeedit, risk } = e.target.dataset;
+    const { typeedit, risk, fuhist } = e.target.dataset;
     try {
+      if (fuhist) {
+        // 随访史（P2-478）：原先只能录、不能看——上次量的血压多少、给过什么指导，页面上查不到
+        const rows = await api(`/api/chronic/${fuhist}/followups`);
+        const c = chronicList.find((x) => x.id === Number(fuhist)) || {};
+        $("#fu-history").innerHTML = `
+          <h3 style="margin-top:14px">档案 ${esc(fuhist)}（患者 ${esc(c.patient_id ?? "—")}，${
+            esc(DISEASES[c.disease] || c.disease || "—")}）的随访记录（${rows.length} 次）</h3>
+          ${table(["随访时间", "血压", "血糖", "其他指标", "指导", "下次随访"], rows, (f) =>
+            `<tr><td>${esc((f.created_at || "").replace("T", " ").slice(0, 16))}</td>
+             <td>${esc(f.sbp ?? "—")}/${esc(f.dbp ?? "—")}</td><td>${esc(f.glucose ?? "—")}</td>
+             <td>${Object.entries(f.metrics || {}).map(([k, v]) => `${esc(metricNames[k] || k)} ${esc(v)}`).join("，") || "—"}</td>
+             <td>${esc(f.guidance) || "—"}</td><td>${esc(f.next_due) || "—"}</td></tr>`)}`;
+        return;
+      }
       if (typeedit) {
         const t = types.find((x) => x.id === Number(typeedit));
         const picked = await spdModal(`编辑病种 ${t ? t.code : typeedit}`, [
