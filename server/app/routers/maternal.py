@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
+from .. import clock
 from ..datetypes import DateStr, OptionalDateStr
 from ..concurrency import append_text, appended_text, insert_if_absent, insert_or_conflict
 from ..numtypes import INT4_MAX
@@ -639,7 +640,9 @@ def _pregnancy_ended_on(db: Session, record_id: int) -> tuple[str, str] | None:
         .filter(MaternalVisit.record_id == record_id, MaternalVisit.visit_type == "postpartum")
         .all()
     )
-    dates = [v.visit_date or v.created_at.date().isoformat() for v in visits]
+    # 录入那天取本地日期（第十五批 S2-6）：落库时刻是 naive UTC，原先直接 `.date()`，东八区 0–8 点录的产后访视算成前一天，
+    # 产后访视当天的筛查被当成「晚于这一胎结束」409
+    dates = [v.visit_date or clock.to_local(v.created_at).date().isoformat() for v in visits]
     return (min(dates), "产后访视日期") if dates else None
 
 

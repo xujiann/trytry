@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..visibility import scope_patient_list
 from ..database import get_db
 from ..datetypes import OptionalDateStr
@@ -38,7 +39,9 @@ def _latest_by_patient(rows: list[ElderlyAssessment]) -> dict[int, ElderlyAssess
 
 
 def _assessed_on(row: ElderlyAssessment) -> str:
-    return row.assessed_date or row.created_at.date().isoformat()
+    """评估日期；没填的按录入那天——录入时刻换成本地日期再取（第十五批 S2-6）：落库是 naive UTC，原先直接 `.date()`，
+    东八区 0–8 点录的算成前一天，年度复评提醒提前一天报「已超一年」。"""
+    return row.assessed_date or clock.to_local(row.created_at).date().isoformat()
 
 
 class AssessmentCreate(BaseModel):
