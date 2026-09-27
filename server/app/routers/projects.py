@@ -268,6 +268,11 @@ def update_project(
     """
     project = _project(db, project_id, user)
     data = body.model_dump(exclude_unset=True)
+    # 改计划完成日同样不得早于开始日（P2-415）：建项目时查着，改的时候原先不查——改完「开始」晚于「完成」，
+    # 立项当天就算逾期
+    due = data.get("due_date")
+    if due and project.start_date and due < project.start_date:
+        raise HTTPException(status_code=422, detail="计划完成日期不得早于开始日期")
     # 与存量合并后再判（P2-58）：原先只在本次请求带 status=done 时才查，已结项的项目单独把进度改成 60
     # 照收——正是上面说的「已完成但进度 60%」。只在状态或进度这次真要改时才判，改负责人不受存量脏数据牵连
     changing = {k for k, v in data.items() if v is not None} & {"status", "progress_pct"}
