@@ -155,7 +155,8 @@ def test_death_card_fields_masked_and_logged(client, director, org, death_cert):
     assert body["name"] == "亡故者" and body["death_date"] == "2026-08-15"
     assert body["cause_of_death"] == "冠心病急性心肌梗死"
     assert body["birth_date"] == "1940-01-01"
-    assert body["org_name"] == "报卡县医院" and body["issued_by"] == "admin"
+    # 签发人写姓名（种子管理员的姓名），与死亡证明打印件同一句（P2-566）；原先写登录名 admin
+    assert body["org_name"] == "报卡县医院" and body["issued_by"] == "平台管理员"
     # H1：非 admin 一律掩码，明文身份证号不得出现
     assert body["id_card"] == "3302**********3216"
     assert body["phone"] == "138******99"

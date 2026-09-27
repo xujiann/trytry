@@ -216,13 +216,14 @@ def export_death_report_cards_csv(
         .all()
     )
     org_names = {o.id: o.name for o in db.query(Organization).all()}
-    usernames = {u.id: u.username for u in db.query(User).all()}
+    # 签发人写姓名（没填姓名的退回账号），与死亡证明打印件同一句（P2-566）：原先写登录名，照着网报誊录进去的是账号
+    issuer_names = {u.id: u.full_name or u.username for u in db.query(User).all()}
     rows = []
     for cert, patient in pairs:
         if cert.patient_id:
             log_patient_access(db, user, cert.patient_id, "death_report_card", "export")
         card = _death_card(
-            cert, patient, org_names.get(cert.org_id, ""), usernames.get(cert.created_by, ""), user
+            cert, patient, org_names.get(cert.org_id, ""), issuer_names.get(cert.created_by, ""), user
         )
         rows.append(
             [
@@ -265,8 +266,8 @@ def death_report_card(
         log_patient_access(db, user, cert.patient_id, "death_report_card", "export")
     org = db.get(Organization, cert.org_id)
     issuer = db.get(User, cert.created_by)
-    return _death_card(
-        cert, patient, org.name if org else "", issuer.username if issuer else "", user
+    return _death_card(   # 签发人写姓名，与打印件同一句（P2-566）
+        cert, patient, org.name if org else "", (issuer.full_name or issuer.username) if issuer else "", user
     )
 
 
