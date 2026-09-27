@@ -729,6 +729,13 @@ def test_家医签约的履约与解约都在页内表单里_取消即不动(pag
     _redrawn(page, lambda: _spd_modal(page, {}))
     assert status() == "terminated"
 
+    # P2-494：履约记录原先只能记、不能看；解约之后照样查得到
+    expect(page.locator(f'button[data-svc="{cid}"]')).to_have_count(0)
+    page.click(f'button[data-svclist="{cid}"]')
+    services = page.locator("#ct-services")
+    expect(services).to_contain_text("履约记录（1 次）")
+    expect(services.locator("tr", has_text="上门测血压，嘱低盐饮食")).to_contain_text("上门服务")
+
 
 @pytest.fixture(scope="session")
 def green_channel_seed(base_url, seed):

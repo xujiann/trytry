@@ -582,9 +582,9 @@ async function renderContracts() {
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${c.org_id}</td><td>${esc(c.doctor_name)}</td>
        <td><span class="tag">${esc(PKG[c.package] || c.package)}</span></td>
        <td><span class="tag ${c.status === "active" ? "green" : "red"}">${c.status === "active" ? "履约中" : "已解约"}</span></td>
-       <td>${c.status === "active"
-         ? `<button class="btn secondary" data-svc="${c.id}">记录履约</button>
-            <button class="btn danger" data-term="${c.id}">解约</button>` : "—"}</td></tr>`))}`;
+       <td><button class="btn secondary" data-svclist="${c.id}">履约记录</button>${c.status === "active"
+         ? ` <button class="btn secondary" data-svc="${c.id}">记录履约</button>
+            <button class="btn danger" data-term="${c.id}">解约</button>` : ""}</td></tr>`) + '<div id="ct-services"></div>')}`;
   $("#ct-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -595,9 +595,18 @@ async function renderContracts() {
       route();
     } catch (err) { setMsg("#ct-msg", err.message, false); }
   };
+  // 履约记录（P2-494）：页面写着「履约记录」，原先只能记、不能看——这一户做过几次上门、几次随访，解约之后更是无从查起
+  const drawServices = async (contractId) => {
+    const rows = await api(`/api/contracts/${contractId}/services`);
+    $("#ct-services").innerHTML = `<h3 style="margin-top:12px">签约 ${esc(contractId)} 的履约记录（${rows.length} 次）</h3>
+      ${table(["时间", "类型", "备注"], rows, (r) =>
+        `<tr><td>${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</td>
+         <td>${esc(SVC[r.service_type] || r.service_type)}</td><td>${esc(r.note) || "—"}</td></tr>`)}`;
+  };
   $("#page-body").onclick = async (e) => {
-    const { svc, term } = e.target.dataset;
+    const { svc, svclist, term } = e.target.dataset;
     try {
+      if (svclist) return await drawServices(svclist);
       if (svc) {
         // P2-38：原先两连问——履约类型要手打英文代码（打错被后端 422 拒回），备注框点取消照样记。
         // 合成一个表单：类型从下拉里选，取消就是不记。
@@ -609,6 +618,7 @@ async function renderContracts() {
         if (!form) return;
         await api(`/api/contracts/${svc}/services`, { method: "POST", body: JSON.stringify(form) });
         setMsg("#ct-msg", "履约已记录", true);
+        await drawServices(svc);   // 刚记的那条就在眼前
       }
       if (term) {
         // 解约原先点一下就生效、没有任何确认：一次误点就把一户的家医签约解掉了，页面上也没有恢复入口。
