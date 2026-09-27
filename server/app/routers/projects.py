@@ -221,6 +221,13 @@ def list_projects(
         query = query.filter(AdminProject.org_id.in_(scope))
     if status:
         query = query.filter(AdminProject.status == status)
+    # 「只看逾期」在库里筛、再截前 200 条（P2-414）：原先先截最新 200 条再在内存里挑逾期的，逾期最久的老项目恰恰
+    # 排在 200 条之外，勾了「只看逾期」反倒看不见它们。条件与 `_project_out` 的 overdue 同一句
+    if overdue_only:
+        query = query.filter(
+            AdminProject.status.notin_(_CLOSED_STATUSES), AdminProject.due_date != "",
+            AdminProject.due_date < today_str,
+        )
     projects = query.order_by(AdminProject.id.desc()).limit(200).all()
     # 一次取回全部里程碑按 project_id 分组，不在循环里逐条查（P0-1 的教训）
     by_project: dict[int, list[ProjectMilestone]] = {}
@@ -231,8 +238,7 @@ def list_projects(
             .all()
         ):
             by_project.setdefault(m.project_id, []).append(m)
-    rows = [_project_out(p, today_str, by_project.get(p.id, [])) for p in projects]
-    return [r for r in rows if r["overdue"]] if overdue_only else rows
+    return [_project_out(p, today_str, by_project.get(p.id, [])) for p in projects]
 
 
 @router.get("/{project_id}", response_model=AdminProjectOut)
