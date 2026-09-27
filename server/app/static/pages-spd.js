@@ -2713,16 +2713,17 @@ async function renderSpdAssess() {
         `<tr><td>${a.user_id}</td><td>${esc(a.user_name)}</td><td>${a.balance}</td>
          <td>${a.earned}</td><td>${a.used}</td></tr>`)}`)}
     ${panel("村医积分规则", `
-      <p class="desc">签约 / 上转 / 下转承接 / 随访 / 异常上报按事件自动入账；「每日签到」规则给医生移动端的签到按钮用；每日上限 0 = 不限</p>
+      <p class="desc">签约 / 上转 / 下转承接 / 随访 / 异常上报按事件自动入账；「每日签到」规则给医生移动端的签到按钮用；
+        每日上限按当天该规则已入账的<b>分值</b>封顶、不是次数（P2-604），0 = 不限——上限小于单次积分时一次也记不上</p>
       <form class="inline" id="spd-prule-form">
         <input name="code" placeholder="规则编码" required>
         <input name="name" placeholder="规则名称" required>
         <select name="event">${Object.entries(SPD_POINT_EVENTS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
         <input name="points" type="number" placeholder="积分" style="width:90px">
-        <input name="daily_limit" type="number" placeholder="每日上限" style="width:110px">
+        <input name="daily_limit" type="number" placeholder="每日上限(分)" style="width:110px">
         <button>新建规则</button>
       </form><p class="msg" id="spd-prule-msg"></p>
-      ${table(["ID", "编码", "名称", "事件", "积分", "每日上限", "状态", "操作"], pointRules, (r) =>
+      ${table(["ID", "编码", "名称", "事件", "积分", "每日上限(分)", "状态", "操作"], pointRules, (r) =>
         `<tr><td>${r.id}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(SPD_POINT_EVENTS[r.event] || r.event)}</td>
          <td>${r.points}</td><td>${r.daily_limit || "不限"}</td><td>${onOff(r.active)}</td>
          <td><button class="btn secondary" data-prule-edit="${r.id}" data-name="${esc(r.name)}" data-points="${r.points}"
@@ -2885,7 +2886,8 @@ async function renderSpdAssess() {
       const form = await spdModal("编辑积分规则", [
         { name: "name", label: "名称", value: pruleEdit.dataset.name, required: true },
         { name: "points", label: "积分", type: "number", value: pruleEdit.dataset.points },
-        { name: "daily_limit", label: "每日上限（0 = 不限）", type: "number", value: pruleEdit.dataset.limit },
+        { name: "daily_limit", label: "每日上限（分，按当天已入账分值封顶、不是次数；0 = 不限）", type: "number",
+          value: pruleEdit.dataset.limit },
         { name: "active", label: "状态", type: "select", value: pruleEdit.dataset.active,
           options: [{ value: "1", label: "启用" }, { value: "0", label: "停用" }] },
       ]);
