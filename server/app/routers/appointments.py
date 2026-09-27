@@ -333,6 +333,10 @@ def book_slot(db: Session, slot_id: int, patient_id: int) -> Appointment:
         doctor = db.get(Employee, slot.employee_id)
         if doctor is not None and doctor.status == "left":
             raise HTTPException(status_code=409, detail="该医师已离职，此号源不再接受预约")
+        # 调往别院同理（P2-497）：登记调动只改医师的机构，旧机构放出的号还挂着——约上的是一个医师已经不在那家坐诊的号，
+        # 寻医清单还把它算在医师**新**机构名下。放号时就判「医师不属于该机构」（单条与批量），这里是同一句的约号那一半
+        if doctor is not None and doctor.org_id != slot.org_id:
+            raise HTTPException(status_code=409, detail="该医师已调离放号机构，此号源不再接受预约")
     if db.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="患者不存在")
     banned = (
