@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, FiniteFloat
 from sqlalchemy.orm import Session
 
+from ..concurrency import serialized_on
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..database import get_db
 from ..datetypes import OptionalDateStr
@@ -90,15 +91,23 @@ class EventActionOut(BaseModel):
     dependencies=[Depends(require_roles("public_health", "doctor"))],  # H2/L5: 事件处置
 )
 def add_action(event_id: int, body: ActionCreate, db: Session = Depends(get_db)):
-    """处置动作留痕：应急值守、流调、资源调度等指挥记录。"""
+    """处置动作留痕：应急值守、流调、资源调度等指挥记录。
+
+    「处置中」在这起事件那一行的临界区里、刷新之后再判（P2-464）：结案也在同一个临界区里改状态。原先锁外判了
+    「处置中」就插——判完、插入之前结案先提交，这条处置动作照样落库，已结案的事件上多出一条结案之后的处置记录
+    （按顺序在结案之后记是 409）。INSERT 不给事件那一行加锁，判定与写入压不进一条 SQL，故用 `serialized_on`。
+    """
     event = db.get(PublicHealthEvent, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="事件不存在")
-    if event.status != "active":
-        raise HTTPException(status_code=409, detail="事件已结案")
-    action = PhEventAction(event_id=event_id, **body.model_dump())
-    db.add(action)
-    db.commit()
+    with serialized_on(db, PublicHealthEvent, event.id):
+        db.refresh(event)
+        if event.status != "active":
+            db.rollback()
+            raise HTTPException(status_code=409, detail="事件已结案")
+        action = PhEventAction(event_id=event_id, **body.model_dump())
+        db.add(action)
+        db.commit()
     return {"id": action.id}
 
 
@@ -121,10 +130,14 @@ def close_event(event_id: int, db: Session = Depends(get_db)):
     event = db.get(PublicHealthEvent, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="事件不存在")
-    if event.status != "active":
-        raise HTTPException(status_code=409, detail="事件已结案")
-    event.status = "closed"
-    db.commit()
+    # 与记处置动作同一个临界区（P2-464）：结案要么排在一条处置动作整个提交之后，要么让它随后判到「已结案」
+    with serialized_on(db, PublicHealthEvent, event.id):
+        db.refresh(event)
+        if event.status != "active":
+            db.rollback()
+            raise HTTPException(status_code=409, detail="事件已结案")
+        event.status = "closed"
+        db.commit()
     db.refresh(event)
     return event
 

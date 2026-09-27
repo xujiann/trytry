@@ -778,7 +778,7 @@ AUDITED_MULTI_ROW_TABLES: dict[str, str] = {
     "outbound_visits": "县外就诊登记是按次记录：同一患者多次外出就诊、同日同院门诊两次都合法（test_analytics 同患者两条即 outside_visits=2），表上没有医保结算号之类的外部键可判\"同一笔\"；双击重复登记属请求级幂等问题，与 bill_details 同形，不是表级自然键",
     "pathogen_monitors": "病原监测是按次上报的送检计数流水：同机构同病原同日可多批送检（标本类型还是自由文本），而且该资源只有 POST 与 GET、没有 PATCH，同日重报事实上就是修正路径；预警 multi_point_alerts 按行独立判定“送检≥10 且阳性率≥10%”而不跨行求和，重复行不会产生需要事后仲裁的汇总失真",
     "payment_orders": "模型注释明写\"一次结算可分多笔渠道支付\"，同一 settlement 多张单（现金+医保拆付、失败后重付、部分退款后换渠道）都是设计本意（test_payment_reconciliation 断言 2 张、失败后重试 paid），trade_no 由通道事后回填且默认空串，不能当键——所以没有\"两行同键\"的自然键",
-    "ph_event_actions": "处置动作留痕（docstring 明写'处置动作留痕：应急值守、流调、资源调度等指挥记录'），同事件多条动作是设计本意，契约测试对同一事件连记两条并按 id 正序回读。唯一的前置检查是事件是否 active，那是状态门禁不是唯一性——与 close_event 之间的竞态（结案瞬间追加一条动作）属 ph_events 状态机问题，不是本表…",
+    "ph_event_actions": "处置动作留痕（docstring 明写'处置动作留痕：应急值守、流调、资源调度等指挥记录'），同事件多条动作是设计本意，契约测试对同一事件连记两条并按 id 正序回读。唯一的前置检查是事件是否 active，那是状态门禁不是唯一性——与 close_event 之间的竞态（结案瞬间追加一条动作）属 ph_events 状态机问题，不是本表的唯一性问题——P2-464 已把记动作与结案圈进事件那一行的临界区（serialized_on）",
     "ph_events": "突发公卫事件无业务自然键（无事件编号，title/disease_name 可重复——同一病种在不同学校可同时立多起 active 事件），路由不查重、顺序请求同样允许同名事件，诊间提醒只数 active 事件总数不关心重复",
     "physical_exams": "体检记录是患者的体检史，同一患者多次体检天然多行；tests/test_error_branches.py:274-290、test_final_gap1.py:216-247、test_checkups_characterization.py:43-53 都对同一患者连建多条并断言 ≥2 / ==2，360 档案（encounters.…",
     "prenatal_screenings": "同一册子多项筛查（唐筛/无创/超声/产前诊断）与同一类型不同孕周复查（早孕 NT 与中孕结构超声都是 ultrasound）都是常规流程；代码注释明说'同一本册子的几项筛查常常同一天出结果、同时录入'，测试断言同一 record 两条并入统计",
