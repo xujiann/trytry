@@ -1740,10 +1740,12 @@ def _bind_package(db: Session, enrollment: SpdEnrollment, package_id: int) -> Sp
     ]
     period_end = ""
     if enrollment.service_start:
+        # 「有效期至」是最后能用的那一天：N 天的包从起始日算，到第 N 天为止（P2-547）。原先起始 + N，居民端写的「有效期至」
+        # 多出一天——平台「有效期至」都是这个口径（中药批次 P2-165：N 个月后那一天的前一天）
         try:
             period_end = (
                 date.fromisoformat(enrollment.service_start)
-                + timedelta(days=package.period_days)
+                + timedelta(days=package.period_days - 1)
             ).isoformat()
         except ValueError:
             period_end = ""

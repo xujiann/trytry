@@ -318,7 +318,7 @@ def test_签约建档与在管列表(client, h, base):
 
 def test_服务包绑定与扣减(client, h, base):
     eid, pkg = base["enroll"]["id"], base["package"]
-    period_end = (business_today() + timedelta(days=30)).isoformat()
+    period_end = (business_today() + timedelta(days=29)).isoformat()   # 30 天的包到第 30 天为止（P2-547，原先钉 +30）
     bound = client.post(f"{B}/enrollments/{eid}/packages",
                         json={"package_id": pkg["id"]}, headers=h)
     assert bound.status_code == 201, bound.text
