@@ -1054,10 +1054,21 @@ const NOTIFY_CATEGORIES = {
   exam_report: "检查报告",
   surgery: "手术安排",
   followup: "随访提醒",
+  spd_task: "慢专病任务",
+  spd_path: "专病路径",
+  spd_report: "智能报告",
 };
 
 /* 消息落到对应业务页面即可，不做深链定位——列表页自己带筛选，
-   再造一套 URL 深链只会多一份要同步维护的约定。 */
+   再造一套 URL 深链只会多一份要同步维护的约定。
+   先按分类找（P2-460）：危急值关联的是检查报告，原先按关联对象落到共享诊断中心，那里只有打印 / 修订，
+   「确认接收 / 处置反馈」只在危急值操作台；慢专病的催办、路径暂停、报告生成原先没有映射、分类也原样显示代号。 */
+const NOTIFY_CATEGORY_PAGE = {
+  critical_value: "critical",
+  spd_task: "spdpath",
+  spd_path: "spdpath",
+  spd_report: "spdreport",
+};
 const NOTIFY_LINK_PAGE = {
   exam_report: "exams",
   surgery: "surgery",
@@ -1086,8 +1097,8 @@ async function renderNotifications() {
          <td><b>${esc(n.title)}</b></td><td>${esc(n.body || "—")}</td>
          <td><span class="tag ${n.read ? "green" : "orange"}">${n.read ? "已读" : "未读"}</span></td>
          <td>${n.read ? "" : `<button data-ntread="${n.id}">标记已读</button>`}
-             ${NOTIFY_LINK_PAGE[n.link_type]
-               ? `<button data-ntgo="${NOTIFY_LINK_PAGE[n.link_type]}">前往处理</button>` : ""}</td></tr>`)}
+             ${NOTIFY_CATEGORY_PAGE[n.category] || NOTIFY_LINK_PAGE[n.link_type]
+               ? `<button data-ntgo="${NOTIFY_CATEGORY_PAGE[n.category] || NOTIFY_LINK_PAGE[n.link_type]}">前往处理</button>` : ""}</td></tr>`)}
     `);
   $("#nt-toggle").onclick = () => { notifyUnreadOnly = !notifyUnreadOnly; route(); };
   $("#nt-readall").onclick = async () => {
