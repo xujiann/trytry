@@ -7,17 +7,25 @@ from datetime import date, timedelta
 
 import pytest
 
+from app.database import SessionLocal
+from app.models import InfectiousCase
+
 
 @pytest.fixture(scope="module")
 def seeded(client, admin):
     org = client.post("/api/organizations", headers=admin, json={
         "name": "P2195 县疾控", "org_type": "lead_hospital", "level": "county"}).json()["id"]
     today = date.today()
-    for offset in (0, 6, 7, -1):   # 今天、第 7 天（在窗口里）、第 8 天、明天（都不在）
+    for offset in (0, 6, 7):   # 今天、第 7 天（在窗口里）、第 8 天（不在）
         resp = client.post("/api/infectious/cases", headers=admin, json={
             "org_id": org, "disease_code": "J11", "disease_name": "流行性感冒",
             "onset_date": (today - timedelta(days=offset)).isoformat()})
         assert resp.status_code in (200, 201), resp.text
+    # 明天发病的（也不在窗口里）：写接口已拒收发病日期晚于今天的报卡（P2-454），存量里仍可能有——直接落库造一条
+    with SessionLocal() as db:
+        db.add(InfectiousCase(org_id=org, disease_code="J11", disease_name="流行性感冒",
+                              onset_date=(today + timedelta(days=1)).isoformat()))
+        db.commit()
     return today
 
 

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..database import get_db
 from ..deps import get_current_user, require_roles, resolve_business_date
 from ..models import InfectiousCase, InfectiousDisease, Organization, User
@@ -80,6 +81,11 @@ def report_case(
     assert_org_writable(db, user, body.org_id)
     if db.get(Organization, body.org_id) is None:
         raise HTTPException(status_code=404, detail="报告机构不存在")
+    # 发病日期不得晚于今天（P2-454）：平台自己的质控规则 QC015（「传染病报告发病日期不得晚于当日」，严重级）事后才点名，
+    # 写入时却照收——2099 年发病的鼠疫报卡 201、迟报天数算成 -26394、永不进迟报清单；一张把月份敲错成下个月的手足口病
+    # 报卡落在预警窗口之外，同病种凑够 5 例的多点触发预警就少一例、整条不出
+    if body.onset_date > clock.today().isoformat():
+        raise HTTPException(status_code=422, detail=f"发病日期（{body.onset_date}）不得晚于今天")
     case = InfectiousCase(**body.model_dump())
     # 目录内病种自动回填甲/乙/丙分类
     disease = (

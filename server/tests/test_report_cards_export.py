@@ -3,6 +3,7 @@ import pytest
 
 from conftest import login
 
+from app import clock
 from app.database import SessionLocal
 from app.models import AccessLog
 
@@ -51,7 +52,7 @@ def cases(client, admin, org):
     ontime = client.post(
         "/api/infectious/cases",
         json={"org_id": org["id"], "disease_code": "J11", "disease_name": "流行性感冒",
-              "onset_date": "2100-01-01"},  # 报告日早于发病日 → 不迟报
+              "onset_date": clock.today().isoformat()},  # 当天发病当天报 → 不迟报（发病日期不得晚于今天，P2-454）
         headers=admin,
     ).json()
     unknown = client.post(

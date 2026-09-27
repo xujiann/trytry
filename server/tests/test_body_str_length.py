@@ -747,7 +747,7 @@ def _cases(w):
                             "direction": "up"}, "reason", 512, True),
         ("/api/inpatient/admissions", {"patient_id": w["patient"], "ward_id": w["ward"], "bed_id": w["bed"]},
          "diagnosis_name", 256, False),
-        ("/api/infectious/cases", {"org_id": w["county"], "disease_code": "A09", "onset_date": "2031-01-01"},
+        ("/api/infectious/cases", {"org_id": w["county"], "disease_code": "A09", "onset_date": "2026-01-01"},
          "disease_name", 128, True),
         ("/api/vaccination/records", {"patient_id": w["patient"], "vaccine_code": "V01", "org_id": w["county"]},
          "vaccine_name", 128, True),
