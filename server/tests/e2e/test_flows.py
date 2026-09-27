@@ -807,6 +807,18 @@ def test_急救回传体征_心跳骤停记0_留空才是未测(page, base_url, 
     expect(page.locator("#em-msg")).to_contain_text("心率须填数字")
     assert heart_rates() == [0, None], heart_rates()
 
+    # P2-491：血压、血氧原先录不进（弹窗只有心率），途中体征也没有一个页面看得见（接口写着「院内可实时调阅」）
+    page.click(f'button[data-vital="{cid}"]')
+    _redrawn(page, lambda: _spd_modal(page, {"heart_rate": "112", "sbp": "86", "dbp": "52", "spo2": "90",
+                                             "note": "E2E 转运中血压下降"}))
+    vitals = page.locator("#em-vitals")
+    expect(vitals).to_contain_text("途中体征（3 次）")   # 记完就展开这一起
+    expect(vitals.locator("tr", has_text="E2E 转运中血压下降")).to_contain_text("86/52")
+    expect(vitals.locator("tr", has_text="心跳骤停").locator("td").nth(1)).to_have_text("0")   # 0 照原样，不是「—」
+    page.locator("#em-vitals").evaluate("el => el.innerHTML = ''")
+    page.click(f'button[data-vitals="{cid}"]')
+    expect(vitals.locator("tr", has_text="未测").locator("td").nth(1)).to_have_text("—")
+
 
 @pytest.fixture(scope="session")
 def home_visit_seed(base_url, seed):

@@ -619,6 +619,8 @@ async function renderEmergency() {
       const acts = [
         c.status !== "admitted" ? `<button class="btn secondary" data-adv="${c.id}">流转</button>
           <button class="btn secondary" data-vital="${c.id}">回传体征</button>` : "",
+        // 途中体征收治之后照样看得见（P2-491）：接口注释写着「院内可实时调阅，实现院前院内无缝对接」
+        `<button class="btn secondary" data-vitals="${c.id}">途中体征</button>`,
         canOutcome && arrived ? `<button class="btn" data-outcome="${c.id}">判定转归</button>` : "",
       ].filter(Boolean);
       return `<tr><td>${c.id}</td><td>${esc(c.location)}</td><td>${esc(c.symptom)}</td><td>${esc(c.ambulance_no)}</td>
@@ -627,23 +629,44 @@ async function renderEmergency() {
         <td>${acts.length ? acts.join(" ") : "—"}</td></tr>`;
     }) + `<p class="desc">抢救转归<b>只对已到院/已收治的病例开放</b>——车还在路上就写"抢救成功"，
       这个指标就没有可信度了（后端对未到院的直接 409）。<b>未判定与抢救无效是两回事</b>：
-      留空表示还没下结论，误填「无效」会把抢救成功率算低。判定后可更正。</p>`)}`;
+      留空表示还没下结论，误填「无效」会把抢救成功率算低。判定后可更正。</p><div id="em-vitals"></div>`)}`;
   $("#em-form").onsubmit = (e) => { e.preventDefault(); postAction("/api/emergency/cases", formJson(e.target, ["dest_org_id", "patient_id"]), "#em-msg"); };
+  const drawVitals = async (caseId) => {
+    try {
+      const rows = await api(`/api/emergency/cases/${caseId}/vitals`);
+      $("#em-vitals").innerHTML = `<h3 style="margin-top:12px">事件 ${esc(caseId)} 的途中体征（${rows.length} 次）</h3>
+        ${table(["回传时刻", "心率", "血压", "血氧 %", "备注"], rows, (v) =>
+          `<tr><td>${esc((v.created_at || "").replace("T", " ").slice(0, 16))}</td><td>${esc(v.heart_rate ?? "—")}</td>
+           <td>${esc(v.sbp ?? "—")}/${esc(v.dbp ?? "—")}</td><td>${esc(v.spo2 ?? "—")}</td><td>${esc(v.note) || "—"}</td></tr>`)}`;
+    } catch (err) { setMsg("#em-msg", err.message, false); }
+  };
   $("#page-body").onclick = async (e) => {
-    const { adv, vital, outcome } = e.target.dataset;
+    const { adv, vital, vitals, outcome } = e.target.dataset;
     if (adv) return postAction(`/api/emergency/cases/${adv}/advance`, null, "#em-msg");
+    if (vitals) return drawVitals(vitals);
     if (vital) {
-      // 心率用文本框、自己解析（P2-249，与逐题作答的数值题同一个理由）：spdModal 的数字框把空值读成 0，原先再
-      // `|| null`——心跳骤停记的 0 与「未测」混成同一个 null。后端写着「0 照收——抢救现场心跳骤停，记 0 是真实的」
+      // 各项用文本框、自己解析（P2-249，与逐题作答的数值题同一个理由）：spdModal 的数字框把空值读成 0，原先再
+      // `|| null`——心跳骤停记的 0 与「未测」混成同一个 null。后端写着「0 照收——抢救现场心跳骤停，记 0 是真实的」。
+      // 血压、血氧（P2-491）：接口一直收，弹窗原先只有心率
+      const FIELDS = { heart_rate: "心率", sbp: "收缩压", dbp: "舒张压", spo2: "血氧" };
       const picked = await spdModal("回传生命体征", [
         { name: "heart_rate", label: "心率（次/分，留空表示未测；心跳骤停填 0）" },
+        { name: "sbp", label: "收缩压（mmHg，留空表示未测；测不出填 0）" },
+        { name: "dbp", label: "舒张压（mmHg，留空表示未测）" },
+        { name: "spo2", label: "血氧饱和度（%，留空表示未测）" },
         { name: "note", label: "备注", type: "text" },
       ]);
       if (!picked) return;
-      const heartRate = picked.heart_rate === "" ? null : Number(picked.heart_rate);
-      if (Number.isNaN(heartRate)) return setMsg("#em-msg", "心率须填数字（未测留空）", false);
-      return postAction(`/api/emergency/cases/${vital}/vitals`,
-        { heart_rate: heartRate, note: picked.note }, "#em-msg");
+      const body = { note: picked.note };
+      for (const [key, label] of Object.entries(FIELDS)) {
+        body[key] = picked[key] === "" ? null : Number(picked[key]);
+        if (Number.isNaN(body[key])) return setMsg("#em-msg", `${label}须填数字（未测留空）`, false);
+      }
+      try {
+        await api(`/api/emergency/cases/${vital}/vitals`, { method: "POST", body: JSON.stringify(body) });
+      } catch (err) { return setMsg("#em-msg", err.message, false); }
+      await route();
+      return drawVitals(vital);   // 刚回传的这一次就在眼前
     }
     if (outcome) {
       const picked = await spdModal("判定抢救转归", [

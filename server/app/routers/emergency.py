@@ -127,8 +127,15 @@ class VitalOut(VitalCreate):
     sbp: float | None = None
     dbp: float | None = None
     spo2: float | None = None
+    # 回传时刻（isoformat，naive UTC；P2-491）：急救页按次列出途中体征，看得出是几点测的
+    created_at: str = ""
 
     model_config = {"from_attributes": True}
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _iso(cls, value: object) -> object:
+        return value.isoformat() if isinstance(value, datetime) else (value or "")
 
 
 @router.post(
