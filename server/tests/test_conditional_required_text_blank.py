@@ -4,7 +4,8 @@
 - AEFI 上报未关联接种记录时「须填写疫苗编码」：存进一串空格，按疫苗统计归不了类；
 - 死亡医学证明「须填写死因诊断」、出生缺陷登记「须填写缺陷诊断」：证明上的诊断是空白；
 - 就诊凭据作废「须填写原因」：作废留痕的原因是空白；
-- 绩效整改提交完成「须填写整改结果说明」：待确认队列里的说明是空白。
+- 绩效整改提交完成「须填写整改结果说明」：待确认队列里的说明是空白；
+- 专病中途退出「须填写原因」（P2-418，第七批扫描补读到）：出组留痕的退出原因是空白。
 与 `texttypes.NON_BLANK`（必填文本不收纯空白，P1-109）同一个口径，只是这几处按情况必填、没法写在字段声明上。
 
 修法：判 `strip()` 之后的。
@@ -50,3 +51,24 @@ def test_整改提交完成说明全是空格422(client, admin, world):
     got = client.post(f"/api/performance/improvements/{task.json()['id']}/progress", headers=admin,
                       json={"complete": True, "completion_note": "   "})
     assert got.status_code == 422 and got.json()["detail"] == "提交完成须填写整改结果说明", got.text   # 修前 200
+
+
+def test_专病中途退出原因全是空格422(client, admin, world):
+    from app.database import SessionLocal
+    from app.models import DiseaseEnrollment, DiseaseProgram
+
+    with SessionLocal() as db:
+        program = DiseaseProgram(code="p2418_prog", name="P2418 专病", org_id=world["org"],
+                                 path_nodes=[{"key": "n1", "name": "首诊"}], active=True)
+        db.add(program)
+        db.flush()
+        enrollment = DiseaseEnrollment(program_id=program.id, patient_id=world["patient"], org_id=world["org"],
+                                       status="enrolled")
+        db.add(enrollment)
+        db.commit()
+        enrollment_id = enrollment.id
+    got = client.post(f"/api/disease-programs/enrollments/{enrollment_id}/exit", headers=admin,
+                      json={"status": "exited", "exit_reason": "   "})
+    assert got.status_code == 422 and got.json()["detail"] == "中途退出须填写原因", got.text   # 修前 200
+    assert client.post(f"/api/disease-programs/enrollments/{enrollment_id}/exit", headers=admin,
+                       json={"status": "exited", "exit_reason": "转院"}).status_code == 200

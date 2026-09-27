@@ -347,7 +347,8 @@ def exit_enrollment(
     assert_org_writable(db, user, enrollment.org_id)
     if enrollment.status != "enrolled":
         raise HTTPException(status_code=409, detail="该病例已出组")
-    if body.status == "exited" and not body.exit_reason:
+    # 判 strip 之后的（P2-418，同 P2-309）：一串空格原先当成填了，出组留痕的退出原因是空白
+    if body.status == "exited" and not body.exit_reason.strip():
         raise HTTPException(status_code=422, detail="中途退出须填写原因")
     enrollment.status = body.status
     enrollment.outcome = body.outcome
