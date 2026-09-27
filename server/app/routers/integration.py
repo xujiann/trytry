@@ -161,6 +161,23 @@ def _run_inbound(message_type: str, source_system: str, fn):
     return result
 
 
+#: FHIR 资源的作废态（P2-626）：来源系统录错撤回（entered-in-error）或取消（cancelled）——不是新数据
+_VOIDED_FHIR_STATUSES = ("entered-in-error", "cancelled")
+
+
+def _refuse_voided(resource: dict) -> None:
+    """作废态的 Observation / Encounter / DiagnosticReport 拒收（P2-626）。
+
+    三处入站原先都不读 `status`：录错之后发来的撤回照样当新数据再记一遍——随访多一次、慢病分级按错值升上去、就诊人次
+    多一条（还触发慢专病就诊识别）、检查报告照样出具连同危急值闭环。撤回既往数据属人工更正，不在入站里自动冲销；
+    这里只保证作废态不被当成正向数据落库，交换日志照记失败原因。没带 status 的照旧收（FHIR 必填，但上游常省略）。
+    """
+    status = str(resource.get("status") or "").strip().lower()
+    if status in _VOIDED_FHIR_STATUSES:
+        raise HTTPException(
+            status_code=422, detail=f"资源状态为 {status}（已作废 / 已取消），不入站；撤回既往数据请走人工更正")
+
+
 def _upsert_patient(db: Session, data: dict) -> tuple[Patient, bool]:
     """按身份证号幂等建档：已存在返回既有档案（并发冲突由唯一约束兜底，M6）。"""
     return create_patient_idempotent(db, data)
@@ -351,6 +368,7 @@ def fhir_observation(
 def _do_fhir_observation(resource: dict, db: Session):
     if resource.get("resourceType") != "Observation":
         raise HTTPException(status_code=422, detail="resourceType 必须为 Observation")
+    _refuse_voided(resource)
 
     reference = (resource.get("subject") or {}).get("reference", "")
     if not reference.startswith("Patient/"):
@@ -963,6 +981,7 @@ def fhir_diagnostic_report(
 def _do_fhir_diagnostic_report(resource: dict, db: Session, source_system: str):
     if resource.get("resourceType") != "DiagnosticReport":
         raise HTTPException(status_code=422, detail="resourceType 必须为 DiagnosticReport")
+    _refuse_voided(resource)
     based = resource.get("basedOn") or []
     reference = (based[0] or {}).get("reference", "") if based else ""
     if not reference.startswith("ServiceRequest/"):
@@ -1057,6 +1076,7 @@ def fhir_encounter(
 def _do_fhir_encounter(resource: dict, db: Session, user: User):
     if resource.get("resourceType") != "Encounter":
         raise HTTPException(status_code=422, detail="resourceType 必须为 Encounter")
+    _refuse_voided(resource)
     reference = (resource.get("subject") or {}).get("reference", "")
     if not reference.startswith("Patient/"):
         raise HTTPException(status_code=422, detail="subject.reference 必须为 Patient/{ehc_no}")
