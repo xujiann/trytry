@@ -1360,14 +1360,21 @@ def plan_qc(
         query = query.filter(SpdFollowupRecord.dept == body.dept)
     rows = query.order_by(SpdFollowupRecord.id.desc()).limit(2000).all()
     batch = body.batch or f"QC{clock.today().strftime('%Y%m%d')}"
-    if body.count:
-        picked = rows[: body.count]
-    else:
-        picked = [r for r in rows if _qc_picked(r.id, batch, body.ratio)]
     existing = {
         rid
         for (rid,) in db.query(SpdQcSample.record_id).filter(SpdQcSample.batch == batch).all()
     }
+    if body.count:
+        # 按数量抽，同一批次重跑只补到这个数（P2-640）：原先取池子最新的 count 条——两次点击之间每办结一条随访，最新的
+        # 几条就换了人，前一次抽的留着、这次又抽进来，count=3 的批次点两次成了 5 条。已抽的只数同一取数范围（本科室、
+        # 可见机构）里的：默认批次名按天，别的科室同一天用同一个批次名抽，互不占数
+        in_scope = query.filter(SpdFollowupRecord.id.in_(
+            db.query(SpdQcSample.record_id).filter(SpdQcSample.batch == batch))).count()
+        picked = [r for r in rows if r.id not in existing][: max(body.count - in_scope, 0)]
+        planned = in_scope + len(picked)
+    else:
+        picked = [r for r in rows if _qc_picked(r.id, batch, body.ratio)]
+        planned = len(picked)
     created = 0
     # 上面的 existing 是快路径（重跑一次批次一条 SAVEPOINT 都不用开）；真正兜住并发的是
     # 唯一索引 uq_spd_qc_sample_record_batch——两个质控员同时点"生成抽查计划"，旧写法两路
@@ -1385,7 +1392,7 @@ def plan_qc(
         ):
             created += 1
     db.commit()
-    return {"batch": batch, "pool": len(rows), "planned": len(picked), "created": created}
+    return {"batch": batch, "pool": len(rows), "planned": planned, "created": created}
 
 
 class QcResultIn(BaseModel):
