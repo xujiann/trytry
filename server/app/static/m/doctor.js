@@ -165,7 +165,7 @@ async function loadSpdTab() {
   $("#spd-wb").innerHTML = `<div class="m-card">
     ${kv("当前身份", esc(roleText))}
     ${wb.user.is_village_doctor ? kv("辖区", esc(`${wb.user.township} ${wb.user.village}`)) : ""}
-    ${kv("我的待办", `${wb.todo.open} 条（今日到期 ${wb.calendar.tasks}）`)}
+    ${kv("我的待办", `${wb.todo.open} 条（今日到期 ${wb.todo.due_today}）`)}
     ${kv("超期任务", wb.todo.overdue)}
     ${kv("今日随访", wb.calendar.followups)}
     ${kv("今日复诊", wb.calendar.revisits)}
