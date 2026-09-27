@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..concurrency import serialized_on, upsert_unique
-from ..numtypes import MONEY_MAX, MoneyFloat
+from ..numtypes import MONEY_MAX, MoneyFloat, split_fen
 from ..visibility import assert_org_visible, scope_org_list, scope_stats_orgs
 from ..database import get_db
 from ..datetypes import PeriodStr
@@ -309,16 +309,21 @@ def department_cost_summary(
     unallocated: dict[int, float] = {}
     for dept_id, buckets in direct.items():
         total = sum(buckets.values())
-        source_rules = by_source.get(dept_id, [])
+        source_rules = sorted(by_source.get(dept_id, []), key=lambda r: r.id)
         if not source_rules or total <= 0:
             continue
         ratio_sum = sum(r.ratio_pct for r in source_rules)
-        for rule in source_rules:
-            amount = round(total * rule.ratio_pct / 100, 2)
+        # 分出 + 未分摊 = 直接成本，分毫不差（P2-629）：原先逐条 round(total × 比例, 2)，比例合计 100% 的科室剩
+        # ±0.01（1000.01 对半分，两边各 500.0，来源科室凭空留 0.01），分出与未分摊加起来也与直接成本差一分。
+        # 未分摊当作最后一份一起按最大余数法分到分；比例合计超 100 的存量（P1-116 之前建的）照旧按各自比例分，
+        # 来源科室成负数正好把错配暴露出来，分的总额是 total × 比例合计
+        spread = total if ratio_sum <= 100 else total * ratio_sum / 100
+        amounts = split_fen(spread, [r.ratio_pct for r in source_rules] + [max(100 - ratio_sum, 0)])
+        for rule, amount in zip(source_rules, amounts):
             allocated_in[rule.to_dept_id] = allocated_in.get(rule.to_dept_id, 0) + amount
             allocated_out[dept_id] = allocated_out.get(dept_id, 0) + amount
         if ratio_sum < 100:
-            unallocated[dept_id] = round(total * (100 - ratio_sum) / 100, 2)
+            unallocated[dept_id] = amounts[-1]
 
     result = []
     for dept_id in set(direct) | set(allocated_in):
