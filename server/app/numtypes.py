@@ -14,7 +14,7 @@
 只是列容量与列精度，不是业务上限——业务上合理的范围（一次领药最多几盒）另议，别拿这两个数冒充。
 """
 import math
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import AfterValidator, FiniteFloat
 
@@ -40,3 +40,26 @@ def to_fen(value: float) -> float:
 
 
 MoneyFloat = Annotated[FiniteFloat, AfterValidator(to_fen)]
+
+
+def non_finite_path(value: Any, root: str) -> str:
+    """配置里第一个非有限的数（NaN / Infinity / -Infinity）在哪儿，如 `level_rules.metrics[0].level3`；没有返回空串（P2-466）。
+
+    宽字典配置（分级规则、评分规则、质控规则、筛查条件、量表、服务包……）pydantic 不查里面，P1-92 的 `FiniteFloat`
+    管不到；标准库 `json.loads` 又照收 `NaN` / `Infinity` 记号。它们也是 float，却和谁比都不成立——阈值永不触发、
+    条件永不命中；算进分数里整张考核方案的出参编码失败（500）；`int(inf)` 抛 OverflowError（500）；PG 的 JSON 列
+    干脆存不进去（500）。每个配置校验都先过这一道（`tests/test_config_dict_validated.py` 盯着）。
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return root
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found = non_finite_path(item, f"{root}.{key}")
+            if found:
+                return found
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found = non_finite_path(item, f"{root}[{index}]")
+            if found:
+                return found
+    return ""

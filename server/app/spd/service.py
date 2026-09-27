@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from .. import clock
 from ..clock import now_naive
 from ..concurrency import add_amount, ensure_present, insert_if_absent
+from ..numtypes import non_finite_path
 from .platform import diagnosis_codes, diagnosis_names, notify_user, patient_of
 from .models import (
     SpdCallTask,
@@ -180,7 +181,10 @@ def package_items_ok(items: list | None) -> bool:
     """服务包的项目都有编码、次数读得成正整数（P2-82）。
 
     绑定服务包时按 `int(times)` 折成可用次数：次数写成文字，绑定即 `ValueError`、500。建服务包原先在校验这一句
-    里就 `int()` 抛错（500），改服务包干脆不查。读得成整数的照旧算数（"3"、2.5）。"""
+    里就 `int()` 抛错（500），改服务包干脆不查。读得成整数的照旧算数（"3"、2.5）。
+    次数写成 Infinity：`int(inf)` 抛的是 OverflowError，不在下面接住的两种里，建服务包即 500（P2-466）。"""
+    if non_finite_path(items, "items"):
+        return False
     for item in items or []:
         if not isinstance(item, dict) or not item.get("code"):
             return False

@@ -53,7 +53,7 @@ from ..rules import RuleError, as_validated, grade_abnormal
 from ..service import (adjust_followup_record, close_followup_record, followup_abnormal, followup_overdue,
                        note_call_dispatch_failure, settle_call_task, spawn_followup_abnormal_task, unknown_code,
                        unknown_ids, unknown_program)
-from ...numtypes import INT4_MAX, INT4_MIN
+from ...numtypes import INT4_MAX, INT4_MIN, non_finite_path
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
@@ -549,6 +549,9 @@ def _check_abnormal_rules(rules: list[dict], items: list[dict]) -> list[dict]:
     返回**要存的规则**（P2-290）：字段 / 比较符按去掉两端空格后的值查、原先却存原样，「pain 」过了校验、结案时
     按原样比，永远不命中——查的是哪个就存哪个。
     """
+    bad = non_finite_path(items, "items") or non_finite_path(rules, "abnormal_rules")   # P2-466
+    if bad:
+        raise HTTPException(status_code=422, detail=f"{bad} 不能是 NaN / Infinity")
     keys = [item.get("key") if isinstance(item, dict) else None for item in items]
     if any(not isinstance(key, str) or not key.strip() for key in keys):
         raise HTTPException(status_code=422, detail="问卷的每道题都要有 key")

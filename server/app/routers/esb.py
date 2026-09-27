@@ -34,6 +34,7 @@ from ..concurrency import add_amount, ensure_present, insert_or_conflict, move_r
 from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles, row_dict
 from ..models import EsbEndpoint, EsbFlow, EsbFlowRun, EsbMessage, ExchangeLog, User, utcnow
+from ..numtypes import non_finite_path
 from ..security import hash_password, verify_password
 from ..state_store import SlidingWindowRateLimiter
 from ..texttypes import NON_BLANK
@@ -771,6 +772,9 @@ class FlowUpdate(BaseModel):
 
 
 def _validate_steps(steps: list) -> None:
+    bad = non_finite_path(steps, "steps")   # PG 的 JSON 列存不进 NaN / Infinity，建流程即 500（P2-466）
+    if bad:
+        raise HTTPException(status_code=422, detail=f"{bad} 不能是 NaN / Infinity")
     for idx, step in enumerate(steps, start=1):
         if not isinstance(step, dict) or step.get("type") not in STEP_TYPES:
             raise HTTPException(

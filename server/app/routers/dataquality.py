@@ -17,6 +17,7 @@ from .. import clock
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..deps import get_current_user, require_admin, row_dict
+from ..numtypes import non_finite_path
 from ..models import (
     Admission,
     ChronicDiseaseType,
@@ -353,6 +354,9 @@ def rule_config_problem(target_table: str, rule_type: str, config: dict) -> str:
     config = config or {}
     if not isinstance(config, dict):
         return "配置要写成对象"
+    bad = non_finite_path(config, "config")   # 区间的界写成 NaN：和谁比都不成立，这条规则一条也判不出（P2-466）
+    if bad:
+        return f"{bad} 不能是 NaN / Infinity"
     row_filter = config.get("filter")
     if row_filter is not None:
         if not isinstance(row_filter, dict):

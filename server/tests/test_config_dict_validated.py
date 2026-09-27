@@ -167,3 +167,74 @@ def test_判据自证_没查的点名_查过的与数据字段不报():
             "probe.py:RuleIn.rules @ bare"]
     finally:
         CONFIG, DATA = saved
+
+
+# ---------------------------------------------------------------------------
+# 配置里的数不收 NaN / Infinity（P2-466，由 P2-465 慢病分级规则一处引出）
+#
+# 宽字典 pydantic 不查里面，P1-92 的 `FiniteFloat` 管不到；标准库 `json.loads` 又照收 `NaN` / `Infinity` 记号。
+# 2026-09-27 实测：分级阈值 / 质控区间 / 筛查条件写成 NaN，存进去之后永不触发、永不命中；考核的满分 / 权重写成
+# Infinity，整张方案一计分出参编码失败（500）；服务包次数写成 Infinity，`int(inf)` 抛 OverflowError（500）；
+# PG 的 JSON 列干脆存不进去（500）。每个配置校验（`CONFIG` 里登记的记号）都得走到 `numtypes.non_finite_path`——
+# 跨模块按函数名找定义、往下跟三层调用（`_conditions` → `validate_conditions` 这类）。
+
+def _app_functions() -> dict[str, list[ast.AST]]:
+    found: dict[str, list[ast.AST]] = {}
+    for path in sorted(APP.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                found.setdefault(node.name, []).append(node)
+    return found
+
+
+def _reaches(name: str, functions: dict[str, list[ast.AST]], target: str, depth: int = 3,
+             seen: set[str] | None = None) -> bool:
+    seen = set() if seen is None else seen
+    seen.add(name)
+    for fn in functions.get(name, []):
+        if target in ast.unparse(fn):
+            return True
+        if not depth:
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call):
+                callee = node.func.id if isinstance(node.func, ast.Name) else (
+                    node.func.attr if isinstance(node.func, ast.Attribute) else "")
+                if callee and callee not in seen and _reaches(callee, functions, target, depth - 1, seen):
+                    return True
+    return False
+
+
+def unguarded_validators(functions: dict[str, list[ast.AST]] | None = None) -> list[str]:
+    functions = _app_functions() if functions is None else functions
+    markers = sorted({marker.rstrip("(") for markers in CONFIG.values() for marker in markers})
+    return [m for m in markers if not _reaches(m, functions, "non_finite_path(")]
+
+
+def test_配置校验都挡住非有限的数():
+    bad = unguarded_validators()
+    assert not bad, (
+        f"以下配置校验走不到 numtypes.non_finite_path：{bad}——配置里写成 NaN / Infinity 的数照样落库，"
+        "之后比较永不成立、计分出参 500、PG 直接存不进（P2-466）。在校验开头调一次。"
+    )
+
+
+def test_判据自证_没挡的点名_跨模块挡了的不报():
+    source = (
+        "def bare_problem(rules):\n    return '' if isinstance(rules, dict) else 'x'\n"
+        "def wrapped(rules):\n    return inner_check(rules)\n"
+        "def inner_check(rules):\n    return non_finite_path(rules, 'rules')\n"
+    )
+    functions: dict[str, list[ast.AST]] = {}
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef):
+            functions.setdefault(node.name, []).append(node)
+    global CONFIG
+    saved = CONFIG
+    CONFIG = {"probe.py:A.rules": ("bare_problem(",), "probe.py:B.rules": ("wrapped(",)}
+    try:
+        assert unguarded_validators(functions) == ["bare_problem"]
+    finally:
+        CONFIG = saved

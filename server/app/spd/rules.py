@@ -33,6 +33,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..numtypes import non_finite_path
+
 #: 规则可引用的字段及其中文名，供管理端下拉与文档生成使用。
 FIELD_SOURCES: dict[str, str] = {
     "age": "年龄",
@@ -100,6 +102,10 @@ def validate_conditions(conditions: list[dict]) -> list[dict]:
             value = raw.get("value")
             if not isinstance(value, list) or len(value) != 2:
                 raise RuleError("between 的 value 必须是 [下限, 上限]")
+        # 比较值写成 NaN / Infinity：和谁比都不成立，这条条件永远不命中，也没有任何报错（P2-466）
+        bad = non_finite_path(raw.get("value"), f"条件 {field} 的 value")
+        if bad:
+            raise RuleError(f"{bad} 不能是 NaN / Infinity")
         normalized.append(
             {
                 "field": field,
@@ -249,6 +255,9 @@ def scale_problem(items: list, scoring: dict) -> str:
     选项或评分分段不是列表，建量表 201、发布 200，谁来作答都 500——居民扫码自查也一样；题目没写 key 的，作答
     永远计不进分。分值只要能读成数就行（`score_scale` 本就按 `float()` 读，写成 "3" 的照常计分）。
     """
+    bad = non_finite_path(items, "items") or non_finite_path(scoring, "scoring")   # P2-466
+    if bad:
+        return f"{bad} 不能是 NaN / Infinity"
     for item in items or []:
         key = item.get("key") if isinstance(item, dict) else None
         if not isinstance(key, str) or not key.strip():

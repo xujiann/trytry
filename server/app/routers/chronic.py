@@ -25,6 +25,7 @@ from ..deps import (
     resolve_business_date,
 )
 from ..models import ChronicDiseaseType, ChronicPatient, FollowUp, Organization, Patient, User
+from ..numtypes import non_finite_path
 from ..visibility import assert_org_writable, assert_patient_visible
 from ..schemas import ChronicCreate, ChronicOut, FollowUpCreate, FollowUpOut
 from ..texttypes import NON_BLANK
@@ -86,6 +87,9 @@ def level_rules_problem(rules: dict) -> str:
                 return f"指标 {key} 的 {level} 阈值必须是有限的数（不能是 NaN / Infinity）"
     if not isinstance(rules.get("require_all", True), bool):
         return "require_all 只能是 true / false"
+    bad = non_finite_path(rules, "level_rules")   # 阈值之外原样透传的键同理（P2-466）
+    if bad:
+        return f"{bad} 不能是 NaN / Infinity"
     return ""
 
 

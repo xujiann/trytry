@@ -18,6 +18,7 @@
 数字对不上时无从对账；而这三段里唯一可自由填写的公式是受限表达式。
 """
 import calendar
+import math
 import re
 from typing import Any, cast
 
@@ -39,6 +40,7 @@ from ...patchtypes import UNSET
 from ...texttypes import NON_BLANK
 from ...deps import get_current_user, paginate, require_roles, through_day
 from ...formula import FormulaError, evaluate as eval_formula
+from ...numtypes import non_finite_path
 from ..platform import Organization, User
 from ..service import INDICATOR_SOURCES, point_account_for, unknown_program, unknown_programs
 from ..models import (
@@ -785,7 +787,11 @@ SCORE_RULE_TYPES = ("ratio", "step")
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """int，或有限的 float；布尔不算，NaN / Infinity 也不算（P2-466）：满分、分档、权重写成它们，算进分数里
+    整张方案的出参编码失败（500）。计分时对存量里的坏规则、坏权重同样逐指标记错。"""
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
 
 
 def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
@@ -797,6 +803,9 @@ def score_rule_problem(rule: dict, *, known_type_only: bool = True) -> str:
     """
     if not rule:
         return ""
+    bad = non_finite_path(rule, "score_rule")   # P2-466
+    if bad:
+        return f"{bad} 不能是 NaN / Infinity"
     kind = rule.get("type", "")
     if kind not in SCORE_RULE_TYPES:
         return f"评分规则类型只能是 ratio（按比例）/ step（分档），收到 {kind!r}" if known_type_only else ""
@@ -869,6 +878,9 @@ def _check_plan_items(db: Session, items: list[dict]) -> None:
     编码缺失或不是字符串的条目先挡掉——原先拼「以下指标不存在」时 `'、'.join` 撞上 None / 整数，422 成了 500。"""
     if not items:
         raise HTTPException(status_code=422, detail="考核方案至少要有一个指标")
+    bad = non_finite_path(items, "items")   # P2-466
+    if bad:
+        raise HTTPException(status_code=422, detail=f"考核方案的 {bad} 不能是 NaN / Infinity")
     codes: list[Any] = [i.get("indicator_code") for i in items]
     if not all(isinstance(c, str) and c for c in codes):
         raise HTTPException(status_code=422, detail="考核方案的每一项都要给出指标编码 indicator_code")
