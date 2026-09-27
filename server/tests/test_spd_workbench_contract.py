@@ -352,6 +352,7 @@ def test_卫健管理端工作台(client, h, wb):
         "referrals": REFERRALS,
         "paths": ZERO_PATHS,
         "by_level": {
+            "市级": {"orgs": 0, "enrolled": 0, "teams": 0},   # P2-603：层级取平台文案，市级原先整行缺
             "县级": {"orgs": 1, "enrolled": 0, "teams": 0},
             "乡级": {"orgs": 1, "enrolled": 2, "teams": 1},
             "村级": {"orgs": 1, "enrolled": 1, "teams": 0},
@@ -398,7 +399,7 @@ def test_专病专家端工作台(client, h, wb):
     assert list(body) == ["programs", "centers", "enrollment", "paths", "referrals",
                           "assessments", "org_coverage", "center_status_names"]
     assert body == {
-        "programs": [{"program_code": "wbp_a", "program_name": "契约甲病",
+        "programs": [{"program_code": "wbp_a", "program_name": "契约甲病", "active": True,   # active：P2-603
                       "category": "chronic", "version": "v1",
                       "has_include_rules": True, "stages": 1, "path_templates": 1,
                       "published_paths": 1, "scales": 0, "enrolled": 2}],

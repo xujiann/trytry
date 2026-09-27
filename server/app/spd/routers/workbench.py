@@ -14,14 +14,14 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, exists, false, func, select, true
+from sqlalchemy import ColumnElement, exists, false, func, or_, select, true
 from sqlalchemy.orm import Session, aliased
 
 from ... import clock
 from ...clock import now_naive
 from ...database import get_db
 from ...deps import get_current_user, require_roles, resolve_business_date, row_dict
-from ..platform import Organization, Patient, User
+from ..platform import ORG_LEVEL_NAMES, Organization, Patient, User
 from ..models import (
     SpdAssessment,
     SpdCandidate,
@@ -401,6 +401,8 @@ class RegionStatsOut(BaseModel):
 class ProgramCoverageOut(BaseModel):
     program_code: str
     program_name: str
+    # 已停用但还有在管患者的病种也列出来（P2-603），据此标「已停用」
+    active: bool
     category: str
     version: str
     has_include_rules: bool
@@ -795,7 +797,8 @@ def health_commission_workbench(
     tasks = _task_stats(db, orgs, program_code=program_code, today=business_day)
 
     org_rows = db.query(Organization).all()
-    level_names = {"county": "县级", "township": "乡级", "village": "村级"}
+    # 层级取平台机构层级文案（P2-603）：原先手抄县 / 乡 / 村三级，市级协作医院的机构、在管患者、团队哪一行都不进
+    level_names = ORG_LEVEL_NAMES
     by_level: dict[str, dict] = {
         key: {"orgs": 0, "enrolled": 0, "teams": 0} for key in level_names
     }
@@ -987,7 +990,17 @@ def expert_workbench(
     分中心运行状态、年龄分层与签约纳管的大盘。
     """
     orgs = _scope(db, user, None)
-    programs = db.query(SpdProgram).filter(SpdProgram.active.is_(True)).all()
+    # 已停用但范围内还有在管患者的病种一并列出（P2-603）：原先只列启用的，停用病种的在管患者算进了「在管患者」，
+    # 这张表里哪一行都没有，各行「在管」加起来对不上
+    still_managed = (
+        _apply_scope(db.query(SpdEnrollment.program_code), SpdEnrollment.org_id, orgs)
+        .filter(SpdEnrollment.status == "active").distinct()
+    )
+    programs = (
+        db.query(SpdProgram)
+        .filter(or_(SpdProgram.active.is_(True), SpdProgram.code.in_(still_managed)))
+        .order_by(SpdProgram.id).all()
+    )
     if program_code:
         programs = [p for p in programs if p.code == program_code]
     # 评估人次与风险分布与本页其余数字同一个范围、同一个病种（P2-552）：原先全县全病种，与按范围的在管数、路径、转诊
@@ -1010,7 +1023,7 @@ def expert_workbench(
             .all()
         )
         coverage.append({
-            "program_code": program.code, "program_name": program.name,
+            "program_code": program.code, "program_name": program.name, "active": program.active,
             "category": program.category, "version": program.version,
             "has_include_rules": bool(program.include_rules),
             "stages": len(program.stages or []),
@@ -1047,8 +1060,12 @@ def expert_workbench(
                 .order_by(SpdAssessment.risk_level).all()
             ),
         },
+        # 覆盖机构 = 有在管患者的机构，与同一排「在管患者」同一个范围（P2-603：原先已结案、迁出、死亡的档案所在机构照数）
         "org_coverage": _apply_scope(
             db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
+        ).filter(
+            SpdEnrollment.status == "active",
+            *([SpdEnrollment.program_code == program_code] if program_code else []),
         ).with_entities(SpdEnrollment.org_id).distinct().count(),
         "center_status_names": dict(CENTER_STATUS_NAMES),
     }

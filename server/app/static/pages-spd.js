@@ -815,17 +815,18 @@ async function renderSpdExpert() {
   const wb = await api("/api/spd/workbench/expert");
   $("#page-body").innerHTML = `
     ${spdCards([
-      ["管理病种", wb.programs.length], ["在管患者", wb.enrollment.enrolled],
+      ["管理病种", wb.programs.filter((p) => p.active).length], ["在管患者", wb.enrollment.enrolled],
       ["覆盖机构", wb.org_coverage], ["路径实例", wb.paths.total],
       ["路径完成率", wb.paths.completion_rate + "%"],
       ["评估人次", wb.assessments.total],
       ["转诊闭环率", wb.referrals.closure_rate + "%"],
     ])}
     ${panel("病种标准落地情况", `
-      <p class="desc">纳入规则、管理阶段、路径模板、量表——任一缺失都会让基层"没有可执行的规则"</p>
+      <p class="desc">纳入规则、管理阶段、路径模板、量表——任一缺失都会让基层"没有可执行的规则"；
+        已停用的病种还有在管患者的也列出来（P2-603），各行「在管」加起来就是上面的在管患者</p>
       ${table(["病种", "口径", "版本", "纳入规则", "阶段", "路径模板", "已发布", "量表", "在管"],
         wb.programs, (p) =>
-        `<tr><td>${esc(p.program_name)}</td>
+        `<tr><td>${esc(p.program_name)}${p.active ? "" : ' <span class="tag">已停用</span>'}</td>
          <td>${p.category === "chronic" ? "慢病" : "专病"}</td><td>${esc(p.version)}</td>
          <td>${p.has_include_rules ? '<span class="tag green">已配</span>' : '<span class="tag red">缺</span>'}</td>
          <td>${p.stages}</td><td>${p.path_templates}</td>
