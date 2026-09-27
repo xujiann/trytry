@@ -1808,6 +1808,21 @@ def test_基金池的预付比例能改成0(page, base_url, admin_read, admin_ca
     assert (row["prepay_ratio_pct"], row["total_amount"]) == (0, 1000000), row   # 修前 30.0
 
 
+def test_已归档的基金池写明状态_不给预付预结清算表单(page, base_url, admin_call):
+    """P2-598：清单原先把已归档的池子写成「已关闭」（后端说「已归档」）；打开它，预付、预结、清算三张表单照样摆着，
+    填完点下去才 409。"""
+    pool = admin_call("POST", "/api/fund/pools", {
+        "year": 2096, "insurance_type": "employee", "total_amount": 800000, "prepay_ratio_pct": 50, "note": "E2E P2598"})
+    admin_call("PATCH", f"/api/fund/pools/{pool['id']}", {"status": "closed"})
+    _login(page, base_url)
+    _open_page(page, "fund", "医保基金总额付费")
+    expect(page.locator("tr", has=page.locator(f'button[data-fdpick="{pool["id"]}"]'))).to_contain_text("已归档")
+    page.click(f'button[data-fdpick="{pool["id"]}"]')
+    expect(page.locator("#page-body")).to_contain_text("基金池已归档，不能再预付")
+    for form in ("#fd-prepay", "#fd-period", "#fd-settle"):
+        expect(page.locator(form)).to_have_count(0)
+
+
 def test_编辑专病中心只改名_已停用的状态不被悄悄改成筹建(page, base_url, admin_read, admin_call):
     """P2-421：编辑框的状态下拉原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
     只改个名字保存，状态被悄悄改掉。修后选项取自后端的状态文案表（专家工作台下发的 `center_status_names`）。"""

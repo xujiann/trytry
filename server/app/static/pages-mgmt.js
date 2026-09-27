@@ -1851,8 +1851,9 @@ async function renderOrgGroups() {
 
 const INSURANCE_TYPES = { resident: "城乡居民", employee: "城镇职工" };
 
-// 取值真源是 fund.py：active/closed 由 PoolUpdate 的 pattern 限定，settled 由清算置
-const POOL_STATUS = { active: ["在用", "green"], closed: ["已关闭", ""], settled: ["已清算", "green"] };
+// 取值真源是 fund.py：active/closed 由 PoolUpdate 的 pattern 限定，settled 由清算置。文案取后端的 status_name（P2-598：
+// 原先这里自带「在用 / 已关闭」，与模型列注释、409 报错的「执行中 / 已归档」两套说法），这里只管颜色
+const POOL_STATUS_TAG = { active: "green", closed: "", settled: "green" };
 
 async function renderFund() {
   $("#page-desc").textContent =
@@ -1874,6 +1875,12 @@ async function renderFund() {
     detail = { prepay, periods, settlement };
   }
   const thisYear = new Date().getFullYear();
+  // 只有执行中的池子收预付 / 预结 / 清算（其余 409「基金池状态为 已归档，不可再预付」）：P2-598 之前三张表单照样摆着，
+  // 填完点下去才报错。已归档的能在上方「编辑」改回执行中，已清算的不能
+  const pickedPool = pools.find((p) => p.id === picked);
+  const poolOpen = !pickedPool || pickedPool.status === "active";
+  const notOpen = (what) => `<p class="desc">基金池${esc(pickedPool ? pickedPool.status_name : "")}，不能再${what}${
+    pickedPool && pickedPool.status === "closed" ? "；要继续先在上方「编辑」把状态改回执行中" : ""}。</p>`;
   $("#page-body").innerHTML = `
     ${panel("基金池", `
       <form class="inline" id="fd-pool">
@@ -1893,7 +1900,7 @@ async function renderFund() {
          <td>${p.total_amount}</td><td>${p.prepaid_amount}</td><td>${p.accrued_expense}</td>
          <td>${p.book_balance < 0
            ? `<span class="tag red">${p.book_balance}</span>` : p.book_balance}</td>
-         <td>${statusTag(POOL_STATUS, p.status)}</td>
+         <td><span class="tag ${POOL_STATUS_TAG[p.status] ?? ""}">${esc(p.status_name)}</span></td>
          <td><button data-fdpick="${p.id}">打开</button>
              ${p.status === "settled"
                ? `<button class="btn secondary" data-fddist="${p.id}">分配结果</button>`
@@ -1906,22 +1913,22 @@ async function renderFund() {
 
     ${picked ? `
     ${panel("预付批次（真实资金流）", `
-      <form class="inline" id="fd-prepay">
+      ${poolOpen ? `<form class="inline" id="fd-prepay">
         <input name="batch_no" placeholder="批次号">
         <input name="amount" type="number" step="any" placeholder="金额(元)" required>
         <input name="paid_date" type="date"><button>登记预付</button>
-      </form>
+      </form>` : notOpen("预付")}
       ${table(["批次", "金额", "拨付日期", "备注"], detail.prepay, (r) =>
         `<tr><td>${esc(r.batch_no || "—")}</td><td>${r.amount}</td>
          <td>${esc(r.paid_date || "—")}</td><td>${esc(r.note || "—")}</td></tr>`)}
     `)}
 
     ${panel("月度预结（账面对冲，不产生资金流）", `
-      <form class="inline" id="fd-period">
-        <input name="period" placeholder="${(pools.find((p) => p.id === picked) || {}).year || "YYYY"}-MM（本池年度内）" required style="min-width:150px">
+      ${poolOpen ? `<form class="inline" id="fd-period">
+        <input name="period" placeholder="${(pickedPool || {}).year || "YYYY"}-MM（本池年度内）" required style="min-width:150px">
         <input name="actual_amount" type="number" step="any" placeholder="发生额(留空=按结算单归集)">
         <button>预结</button>
-      </form>
+      </form>` : notOpen("预结")}
       ${table(["期间", "发生额", "来源", "备注"], detail.periods, (r) =>
         `<tr><td>${esc(r.period)}</td><td>${r.actual_amount}</td>
          <td>${r.source === "auto" ? "系统归集" : "人工核定"}</td>
@@ -1929,7 +1936,7 @@ async function renderFund() {
     `)}
 
     ${panel("年终清算与结余分配", `
-      ${detail.settlement ? renderSettlement(detail.settlement, vars) : `
+      ${detail.settlement ? renderSettlement(detail.settlement, vars) : !poolOpen ? notOpen("清算") : `
         <form class="inline" id="fd-settle">
           <input name="total_expense" type="number" step="any" placeholder="全年发生额(留空=各期之和)">
           <select name="overrun_action"><option value="none">超支不处理（仅记录）</option>
@@ -1947,7 +1954,7 @@ async function renderFund() {
     else body.org_group_id = Number(body.org_group_id);
     postAction("/api/fund/pools", body, "#fd-msg");
   };
-  if (picked) {
+  if (picked && poolOpen) {
     $("#fd-prepay").onsubmit = (e) => { e.preventDefault();
       postAction(`/api/fund/pools/${picked}/prepayments`, formJson(e.target, ["amount"]), "#fd-msg"); };
     $("#fd-period").onsubmit = (e) => {
@@ -1997,9 +2004,9 @@ async function renderFund() {
           value: pool ? pool.total_amount : "" },
         { name: "prepay_ratio_pct", label: "预付比例 %（0-100，0 = 不预付，留空不改）", type: "text",
           value: pool ? pool.prepay_ratio_pct : "" },
-        { name: "status", label: "状态（settled 由清算置，这里改不了）", type: "select",
+        { name: "status", label: "状态（「已清算」由清算置，这里改不了）", type: "select",
           value: pool ? pool.status : "active",
-          options: [{ value: "active", label: "在用" }, { value: "closed", label: "已关闭" }] },
+          options: [{ value: "active", label: "执行中" }, { value: "closed", label: "已归档" }] },   // 同后端 POOL_STATUS_NAMES
         { name: "note", label: "备注（留空不改）", type: "text", value: pool ? pool.note : "" },
       ]);
       if (!picked2) return;

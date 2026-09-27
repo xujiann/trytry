@@ -110,6 +110,8 @@ def _pool_out(pool: FundPool, db: Session) -> dict:
         # 账面结余：筹资 − 已归集发生额。这不是清算结果，清算另有单据。
         "book_balance": round(pool.total_amount - float(accrued), 2),
         "status": pool.status,
+        # 状态文案取自后端（P2-598）：页面原先自带一份「在用 / 已关闭」，与这里、与 409 报错的「执行中 / 已归档」两套说法
+        "status_name": POOL_STATUS_NAMES.get(pool.status, pool.status),
         "note": pool.note,
     }
 
@@ -138,6 +140,7 @@ class FundPoolOut(BaseModel):
     # 账面结余 = 筹资 − 已归集发生额。**这不是清算结果**，清算另有单据
     book_balance: int | float
     status: str
+    status_name: str
     note: str
 
 
