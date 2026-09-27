@@ -14,7 +14,7 @@
 `未标批号`；有批号的一律走 `POST /batches`。
 """
 from datetime import date, timedelta
-from typing import cast
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, update
@@ -61,7 +61,8 @@ from ..models import (
     User,
 )
 from ..schemas import StockOut, StockUpsert, TransferCreate
-from .dispense import _claim_batch, _fefo_batches, batch_available, broadcast_if_crossed, broadcast_shortage
+from .dispense import (_claim_batch, _fefo_batches, _required_quantity, batch_available, broadcast_if_crossed,
+                       broadcast_shortage)
 
 router = APIRouter(prefix="/api/pharmacy", tags=["中心药房"])
 
@@ -351,24 +352,27 @@ class PurchaseSuggestionOut(BaseModel):
 def purchase_suggestions(db: Session = Depends(get_db)):
     """采购建议：近30天处方用药量与全网当前库存差值为正的品种清单。
 
-    用药量按处方明细 日剂量×天数 汇总（退回处方不计入）。
+    用药量按处方明细逐条折成应发量再汇总（退回处方不计入）：每条明细与发药同一个算法（`_required_quantity`：
+    日剂量×天数向上取整、至少 1，P2-554）。原先汇总的是没取整的 日剂量×天数，而发药从库存里扣的是取整后的量——
+    `_required_quantity` 的 docstring 写着「与采购建议同口径」，实际不是。单位（日剂量是毫克、库存是片）另见 P2-152。
     """
     since = now_naive() - timedelta(days=30)
-    usage_rows = (
-        db.query(
-            PrescriptionItem.drug_code,
-            func.max(PrescriptionItem.drug_name).label("drug_name"),
-            func.sum(PrescriptionItem.daily_dose * PrescriptionItem.days).label("usage"),
-        )
+    item_rows = (
+        db.query(PrescriptionItem.drug_code, PrescriptionItem.drug_name,
+                 PrescriptionItem.daily_dose, PrescriptionItem.days)
         .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
         .filter(
             Prescription.created_at >= since.replace(tzinfo=None),
             Prescription.status != "rejected",
         )
-        .group_by(PrescriptionItem.drug_code)
-        .order_by(PrescriptionItem.drug_code)
+        .order_by(PrescriptionItem.drug_code, PrescriptionItem.id)
         .all()
     )
+    usage_by_code: dict[str, int] = {}
+    name_by_code: dict[str, str] = {}
+    for code, name, daily_dose, days in item_rows:
+        usage_by_code[code] = usage_by_code.get(code, 0) + _required_quantity(daily_dose, days)
+        name_by_code[code] = max(name_by_code.get(code, ""), name or "")   # 与原先 max(drug_name) 同一个取法
     stock_rows = (
         db.query(DrugStock.drug_code, func.sum(DrugStock.quantity).label("quantity"))
         .group_by(DrugStock.drug_code)
@@ -377,19 +381,19 @@ def purchase_suggestions(db: Session = Depends(get_db)):
     )
     stock_by_code = {r.drug_code: int(r.quantity or 0) for r in stock_rows}
 
-    suggestions = []
-    for row in usage_rows:
-        usage = float(row.usage or 0)
-        current = stock_by_code.get(row.drug_code, 0)
+    suggestions: list[dict[str, Any]] = []
+    for code in sorted(usage_by_code):
+        usage = usage_by_code[code]
+        current = stock_by_code.get(code, 0)
         gap = usage - current
         if gap > 0:
             suggestions.append(
                 {
-                    "drug_code": row.drug_code,
-                    "drug_name": row.drug_name,
-                    "usage_30d": usage,
+                    "drug_code": code,
+                    "drug_name": name_by_code[code],
+                    "usage_30d": float(usage),
                     "current_stock": current,
-                    "suggested_quantity": int(gap + 0.999),  # 缺口向上取整
+                    "suggested_quantity": gap,   # 用量已是逐条取整的件数，缺口本身是整数
                 }
             )
     suggestions.sort(key=lambda s: s["suggested_quantity"], reverse=True)

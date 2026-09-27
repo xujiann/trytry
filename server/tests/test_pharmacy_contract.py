@@ -60,7 +60,7 @@ def seed(client, admin):
 
     采购链：药品单（50 片，验收自动入库）→ 盘点 45（亏 5）→ 再盘 47（盈 2）；
     物资单（7 件，验收不入药房库存）；另留一张待审批单与一张驳回单给过滤用。
-    采购建议：PHCT-MET 用量 30.5×3=91.5（float）对库存 45；
+    采购建议：PHCT-MET 用量 30.5×3=91.5、与发药同样向上取整为 92（P2-554）对库存 45；
     PHCT-INTZ 用量 10×3=30.0（整数值的 float）对零库存。
     """
     data: dict = {}
@@ -275,8 +275,9 @@ def test_采购建议精确_usage恒float_数量恒int(client, admin, seed):
     rows = client.get("/api/pharmacy/purchase-suggestions", headers=admin).json()
     assert [list(r.keys()) for r in rows] == [SUGGESTION_KEYS] * 2  # 建议量倒序
     assert rows == [
-        {"drug_code": "PHCT-MET", "drug_name": "契约二甲双胍", "usage_30d": 91.5,
-         "current_stock": 47, "suggested_quantity": 45},  # int(91.5-47+0.999)
+        # 用量与发药同一个算法、逐条向上取整（P2-554）：30.5×3=91.5 → 92（原先钉 91.5）；缺口 92−47=45
+        {"drug_code": "PHCT-MET", "drug_name": "契约二甲双胍", "usage_30d": 92.0,
+         "current_stock": 47, "suggested_quantity": 45},
         {"drug_code": "PHCT-INTZ", "drug_name": "契约整数用量药", "usage_30d": 30.0,
          "current_stock": 0, "suggested_quantity": 30},
     ]
