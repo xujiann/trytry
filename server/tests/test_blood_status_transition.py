@@ -28,11 +28,16 @@ def world(client, admin):
     stock = client.post("/api/blood/stocks", headers=admin, json={
         "blood_type": "AB", "component": "plasma", "quantity_ml": 1000})
     assert stock.status_code == 200, stock.text
-    return {"org": org, "patients": patients}
+    # 申请由本院医师提、审批由管理员来：申请人不得自批（P2-505）
+    assert client.post("/api/users", headers=admin, json={
+        "username": "p2110_doc", "password": "passw0rd1", "full_name": "P2110 医师", "role": "doctor",
+        "org_id": org}).status_code in (200, 201)
+    token = client.post("/api/auth/login", json={"username": "p2110_doc", "password": "passw0rd1"}).json()
+    return {"org": org, "patients": patients, "doctor": {"Authorization": f"Bearer {token['access_token']}"}}
 
 
 def _new_request(client, admin, world, patient_index, quantity_ml=200, approve=True):
-    created = client.post("/api/blood/requests", headers=admin, json={
+    created = client.post("/api/blood/requests", headers=world["doctor"], json={
         "patient_id": world["patients"][patient_index], "org_id": world["org"],
         "blood_type": "AB", "component": "plasma", "quantity_ml": quantity_ml})
     assert created.status_code == 201, created.text

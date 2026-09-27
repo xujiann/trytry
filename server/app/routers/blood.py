@@ -139,6 +139,11 @@ def review_transfusion(
     assert_obj_org_writable(db, user, request)
     if request.status != "pending":
         raise HTTPException(status_code=409, detail="该申请已处理")
+    # 申请人不得自批（P2-505）：路由上写着「申请/审批分离」，却只靠角色把医师与管理层分开——既能申请又能审批的账号
+    # （平台管理员，或被授了两个权限点的自定义角色）自己申请、自己批，200。与手术审批、双通道 / 特病申报（P2-398 /
+    # P2-399）同一句
+    if request.requested_by == user.id:
+        raise HTTPException(status_code=403, detail="不得审批本人提出的用血申请")
     # 状态闸门：判定与翻转同一条 SQL（P2-110）。原先判 pending 在内存里：审批与驳回同时到，两路都成功、后提交的盖掉
     # 先提交的——审批人看到「已审批」，库里却是「已驳回」；锁外读到 pending 的那一路甚至能把已经发了血的申请改成驳回
     reviewed = (
