@@ -24,6 +24,7 @@
 
 - `EXEMPT`：按设计没有界面的（对机器不对人），写明理由，只许变少。
 - `KNOWN`：该有入口还没有的，只许变少；接上一条就划掉一条（不划掉也红，与孤儿棘轮同一个双向钉法）。
+- `READ_EXEMPT` / `READ_KNOWN`：同一把尺子量读动词（GET）——记得进、看不见的（P2-475，见文件末尾）。
 """
 from __future__ import annotations
 
@@ -122,3 +123,97 @@ def test_分母与调用点都没有空转():
     calls = resolve.scan()["calls"]
     writes_called = {c for c in calls if c[0] in WRITE_METHODS}
     assert len(writes_called) >= 300, f"只认出 {len(writes_called)} 个写接口有入口，调用点解析可能失灵"
+
+
+# ---------------------------------------------------------------------------
+# 读动词（GET）同一个盲区（P2-475，第八批扫描 V1-3 / V2-5）
+#
+# 上面只数写动词（`WRITE_METHODS`）。可读动词一样会「路径有入口、这个动词没有」：同一路径的 POST 有页面在调，路径就算
+# 接上了——交接班记得进、没有一个页面看得见（接班的人无从读起）；公卫事件的处置记录、慢病的随访史、模拟诊疗的作答记录
+# 同理，页面上自己都写着「练几次、进步多少都查得到」。2026-09-27 按同一把尺子量出 19 条。
+#
+# 有的也许只是详情接口（清单已经给了同样的数据），**核实之后**挪进 `READ_EXEMPT` 并写明理由；没核实之前一律按欠账记，
+# 只许变少，接上一条划掉一条。
+
+READ_METHODS = ("GET",)
+
+#: 按设计不需要界面的读动词。只许变少；新增须写明**为什么这份数据不需要在页面上看到**。
+READ_EXEMPT: dict[str, str] = {}
+
+#: 读动词欠账：路径有入口（同一路径的写动词有调用）、这个 GET 没有。只许变少。
+READ_KNOWN: set[str] = {
+    # 临床与护理
+    "GET /api/inpatient/handovers",                                     # 交接班只记得进，接班的人看不到
+    "GET /api/inpatient/admissions/{admission_id}/case-summary",
+    "GET /api/emergency/cases/{case_id}/vitals",
+    "GET /api/maternal/records/{record_id}/delivery",
+    "GET /api/labqc/lots/{lot_id}/measurements",                        # 扫描时注：L-J 视图已展示同一批测定，待核实
+    "GET /api/quality/record-qc",
+    # 公卫、慢病、家医
+    "GET /api/publichealth/events/{event_id}/actions",                  # 事件处置记录：记了之后页面上不见踪影
+    "GET /api/chronic/{chronic_id}/followups",                          # 随访史
+    "GET /api/contracts/{contract_id}/services",
+    "GET /api/analytics/outbound-visits",
+    # 教学、运营、打印
+    "GET /api/tcm-heritage/simulations/{case_id}/attempts",             # 作答记录与最高分
+    "GET /api/billing/details",
+    "GET /api/cssd/cost-items",
+    "GET /api/mgmt/staff-contracts",
+    "GET /api/projects/{project_id}",
+    "GET /api/print/certs/{cert_id}",
+    "GET /api/print/checkups/{checkup_id}",
+    # 慢专病
+    "GET /api/spd/assessments",
+    "GET /api/spd/programs/{program_id}",
+}
+
+
+def _read_endpoints() -> set[tuple[str, str]]:
+    return {
+        (method, route.path)
+        for _module, route in contract._iter_endpoints()
+        if route.path.startswith("/api/")
+        for method in (route.methods or ())
+        if method in READ_METHODS
+    }
+
+
+def read_orphans(files: dict[str, str] | None = None) -> set[str]:
+    """`GET 路径`——路径有前端入口（别的动词在调）、这个 GET 没有的。判据与 `verb_orphans` 同一把尺子。"""
+    corpus = None if files is None else "\n".join(files.values())
+    wired = set(orphan.endpoint_paths()) - orphan.orphan_paths(corpus)
+    called = set(resolve.scan(files)["calls"])
+    return {f"{method} {path}" for method, path in _read_endpoints()
+            if path in wired and (method, path) not in called}
+
+
+def test_没有新的读动词孤儿():
+    fresh = sorted(read_orphans() - READ_KNOWN - set(READ_EXEMPT))
+    assert not fresh, (
+        "以下 GET 在前端没有入口（同一路径的写动词有），且不在读动词欠账名单里——记得进、看不见；要么带读界面来，"
+        "要么按设计不需要界面就进 READ_EXEMPT 并写明理由：\n  " + "\n  ".join(fresh)
+    )
+
+
+def test_读动词登记的仍然没有入口_接上了就划掉():
+    found = read_orphans()
+    wired = sorted(READ_KNOWN - found)
+    assert not wired, "这些 GET 已经有前端入口了（或端点已不存在）——从 READ_KNOWN 里划掉：\n  " + "\n  ".join(wired)
+    assert not sorted(set(READ_EXEMPT) - found), "豁免的 GET 已有前端入口或端点已不存在，划掉"
+    assert not READ_KNOWN & set(READ_EXEMPT), "既豁免又欠账"
+    assert all(why.strip() for why in READ_EXEMPT.values())
+    assert len(READ_KNOWN) <= 19, "读动词欠账只许变少"
+
+
+def test_判据自证_只写不读的点名_读过的放过():
+    """交接班修之前就长这样：页面只 POST 交接班，GET 清单一个调用都没有。"""
+    src = "\n".join([
+        'postAction("/api/inpatient/handovers", body, "#m");',
+        'await api("/api/publichealth/events");',
+        'return postAction(`/api/publichealth/events/${id}/actions`, body, "#m");',
+        'await api(`/api/publichealth/events/${id}/actions`);',
+    ])
+    found = read_orphans({"自证.js": src})
+    assert "GET /api/inpatient/handovers" in found                        # 只写不读
+    assert "GET /api/publichealth/events/{event_id}/actions" not in found   # 读过
+    assert not any(v.endswith(" /api/spd/tasks") for v in found)          # 路径一条调用都没有的不在分母里
