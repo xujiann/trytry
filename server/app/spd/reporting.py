@@ -36,7 +36,7 @@ from .models import (
     SpdVillageDoctor,
 )
 from .platform import User
-from .service import TASK_OPEN_STATUSES, task_overdue
+from .service import TASK_OPEN_STATUSES, TASK_PRIORITY_NAMES, TASK_TYPE_NAMES, task_overdue
 
 SectionRenderer = Callable[[Session, dict, "int | None", str], dict]
 
@@ -111,6 +111,11 @@ def _summary(db, section, org_id, period):
     }
 
 
+def _task_type_name(code: str) -> str:
+    """任务类型印中文名，与页面同一份（P2-644）；认不出的原样印编码，别印成空白。"""
+    return TASK_TYPE_NAMES.get(code, code)
+
+
 def _todo(db, section, org_id, period):
     # 超期的另列一表（「超期预警」）：扫描间隙里已过截止日的也归那边（P2-549），同一条任务不在两张表里各出现一次。
     # 取数与「总体概览」的待办数同一个范围（`TASK_OPEN_STATUSES`，与工作台同口径）减去超期的（P2-602）：原先只取在手的，
@@ -122,7 +127,8 @@ def _todo(db, section, org_id, period):
     )
     return {**_head(section, "table"), "columns": ["任务", "类型", "截止", "优先级"],
             "rows": [[f"{r.title}（待审核）" if r.status == "submitted" else r.title,
-                      r.task_type, r.due_date, r.priority] for r in rows]}
+                      _task_type_name(r.task_type), r.due_date,
+                      TASK_PRIORITY_NAMES.get(r.priority, str(r.priority))] for r in rows]}
 
 
 def _alert(db, section, org_id, period):
@@ -131,7 +137,7 @@ def _alert(db, section, org_id, period):
         .order_by(SpdTask.due_date, SpdTask.id).limit(20).all()
     )
     return {**_head(section, "table"), "columns": ["超期任务", "类型", "截止日期"],
-            "rows": [[r.title, r.task_type, r.due_date] for r in rows]}
+            "rows": [[r.title, _task_type_name(r.task_type), r.due_date] for r in rows]}
 
 
 def _workload(db, section, org_id, period):
@@ -142,7 +148,7 @@ def _workload(db, section, org_id, period):
         .order_by(SpdTask.task_type).all()
     )
     return {**_head(section, "table"), "columns": ["任务类型", "完成数"],
-            "rows": [[t, c] for t, c in rows]}
+            "rows": [[_task_type_name(t), c] for t, c in rows]}
 
 
 def _followup_trend(db, section, org_id, period):
@@ -297,9 +303,13 @@ def _points(db, section, org_id, period):
     query = db.query(SpdPointAccount)
     if org_id is not None:
         query = query.filter(SpdPointAccount.org_id == org_id)
-    rows = query.order_by(SpdPointAccount.balance.desc()).limit(10).all()
-    return {**_head(section, "table"), "columns": ["用户ID", "余额", "累计获得", "累计兑换"],
-            "rows": [[r.user_id, r.balance, r.earned, r.used] for r in rows]}
+    # 与页面「村医积分账户」同一张表（P2-644）：多印一列姓名（原先只有用户ID，打印出来认不出是谁）；余额并列按账户 id
+    # 收尾——新账户余额全是 0，不补尾键同一份报告两次生成列的是不同的人
+    rows = query.order_by(SpdPointAccount.balance.desc(), SpdPointAccount.id).limit(10).all()
+    names = {u.id: u.full_name or u.username
+             for u in db.query(User).filter(User.id.in_([r.user_id for r in rows] or [0]))}
+    return {**_head(section, "table"), "columns": ["用户ID", "姓名", "余额", "累计获得", "累计兑换"],
+            "rows": [[r.user_id, names.get(r.user_id, ""), r.balance, r.earned, r.used] for r in rows]}
 
 
 def _indicator(db, section, org_id, period):

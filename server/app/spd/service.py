@@ -315,6 +315,15 @@ def judge_measurement(db: Session, program_code: str, stage: str, metric: str, v
     return judge_level(value, target.target_low, target.target_high)
 
 
+#: 任务类型（`spd_tasks.task_type`）与优先级（`spd_tasks.priority`）的中文名：规则元数据接口给界面、报告段落印表格
+#: 都取这一份（P2-644）——报告原先直接印 followup / 1，同一张表在页面上是「随访」「普通」。
+TASK_TYPE_NAMES = {
+    "path": "路径节点", "followup": "随访", "intervention": "干预",
+    "assess": "评估", "revisit": "复诊", "referral": "转诊",
+    "report": "上报", "recall": "召回", "edu": "宣教", "screen": "筛查复核",
+}
+TASK_PRIORITY_NAMES = {1: "普通", 2: "紧急", 3: "特急"}
+
 #: 慢专病任务（`spd_tasks.status`）的「已结束」：办结与取消。
 TASK_CLOSED_STATUSES = ("done", "cancelled")
 #: 「未结束」：除了办结与取消都算，**含退回（rejected）**——审核退回即回到办理人手里重办，提交 / 办结接口

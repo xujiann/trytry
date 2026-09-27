@@ -25,7 +25,7 @@ from ...models import (
 )
 from ...reporting import section_options
 from ...rules import FIELD_SOURCES, OPERATORS
-from ...service import INDICATOR_SOURCES, MEASURE_FIELDS, unknown_code
+from ...service import INDICATOR_SOURCES, MEASURE_FIELDS, TASK_TYPE_NAMES, unknown_code
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
 
 
@@ -153,11 +153,7 @@ def rule_meta():
             {"key": "high", "name": "高危", "color": "#e06c25"},
             {"key": "very_high", "name": "极高危", "color": "#d9363e"},
         ],
-        "task_types": {
-            "path": "路径节点", "followup": "随访", "intervention": "干预",
-            "assess": "评估", "revisit": "复诊", "referral": "转诊",
-            "report": "上报", "recall": "召回", "edu": "宣教", "screen": "筛查复核",
-        },
+        "task_types": TASK_TYPE_NAMES,
         "member_roles": {
             "doctor": "医生", "nurse": "护士", "rehab": "康复治疗师",
             "case_manager": "个案管理师", "village_doctor": "村医", "expert": "专家",
