@@ -803,6 +803,10 @@ def distribute_candidates(
         if team is None or not team.active:
             raise HTTPException(status_code=404, detail="团队不存在或已停用")
     assert_org_writable(db, user, body.org_id)
+    # 全域角色过守卫不查存在（P2-411 同口径）：改挂的机构编号经 values 字典转手写进 UPDATE，填错一位原先撞外键 500
+    # （P2-582）
+    if body.org_id is not None and db.get(Organization, body.org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
     rows = db.query(SpdCandidate).filter(SpdCandidate.id.in_(body.candidate_ids)).all()
     for candidate in rows:
         assert_org_writable(db, user, candidate.org_id)

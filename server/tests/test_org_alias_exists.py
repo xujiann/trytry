@@ -14,6 +14,7 @@ import pytest
 from app.database import SessionLocal
 from app.models import DispenseRecord, Prescription, PrescriptionItem, User
 from app.spd.models import (
+    SpdCandidate,
     SpdEnrollment,
     SpdFollowupRecord,
     SpdFollowupRule,
@@ -95,3 +96,16 @@ def test_生成报告填了不存在的机构_404(client, admin, world):
     _expect_404(client.post("/api/spd/report-instances", headers=admin, json={
         "template_code": world["template"], "org_id": MISSING, "period_label": "P2411"}))
     assert _count(SpdReportInstance, org_id=MISSING) == 0
+
+
+def test_目标池分发改挂到不存在的机构_404而不是500(client, admin, world):
+    """P2-582：改挂的机构编号经 `values` 字典转手写进 UPDATE，同一个形状。"""
+    with SessionLocal() as db:
+        candidate = SpdCandidate(patient_id=world["patient"], program_code="p2411_prog")
+        db.add(candidate)
+        db.commit()
+        cid = candidate.id
+    _expect_404(client.post("/api/spd/candidates/distribute", headers=admin, json={
+        "candidate_ids": [cid], "org_id": MISSING}))   # 修前撞外键 500
+    with SessionLocal() as db:
+        assert db.get(SpdCandidate, cid).org_id is None and db.get(SpdCandidate, cid).status == "suspect"
