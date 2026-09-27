@@ -137,6 +137,15 @@ function panel(title, body, { accent = "" } = {}) {
   return `<div class="panel"${style}>${head}${body}</div>`;
 }
 
+/** 待办排在最前：按状态单独取回的几张清单（都是这一页有按钮要办的）在前，再接最新一页里其余的，按 id 去重（P2-456）。
+ *  清单接口只回最新一页，压着没办的那条一被后来的挤出窗口，页面上就再没有一行能办——审方待审（P1-148）、咨询 / 用血 /
+ *  上门（P2-408）当年逐页写了同一段，这里收成一个。 */
+function actionableFirst(recent, ...actionable) {
+  const first = actionable.flat();
+  const ids = new Set(first.map((r) => r.id));
+  return [...first, ...recent.filter((r) => !ids.has(r.id))];
+}
+
 function setMsg(id, text, ok = true) {
   const el = $(id);
   if (el) { el.textContent = text; el.className = `msg ${ok ? "ok" : "err"}`; }
@@ -423,9 +432,12 @@ const EXPERT_STATUS = { on: ["可排班", "green"], off: ["暂停排班", "red"]
 
 async function renderConsultations() {
   $("#page-desc").textContent = "申请 → 受理 → 出具意见 → 评价 → 计费；专家库与运行统计";
-  const [consultations, experts, stats] = await Promise.all([
-    api("/api/consultations"), api("/api/consultations/experts"), api("/api/consultations/stats"),
+  // 待受理、待出具意见的单独取一遍、排在最前（P2-456，同 P2-408）：清单只回最新 200 条，挤出窗口的申请就没有一行能受理 / 出意见
+  const [recent, applied, accepted, experts, stats] = await Promise.all([
+    api("/api/consultations"), api("/api/consultations?status=applied"), api("/api/consultations?status=accepted"),
+    api("/api/consultations/experts"), api("/api/consultations/stats"),
   ]);
+  const consultations = actionableFirst(recent, applied, accepted);
   const CS = { applied: ["已申请", "orange"], accepted: ["已受理", ""], completed: ["已完成", "green"], declined: ["已拒绝", "red"] };
   // 专家建档后端是 require_admin，不是 admin 就别摆那个表单
   const canExpert = currentRole() === "admin";
@@ -1547,7 +1559,10 @@ async function renderExams() {
 
 async function renderReferrals() {
   $("#page-desc").textContent = "医共体内上转/下转：申请 → 接诊 → 结案";
-  const referrals = await api("/api/referrals");
+  // 待接诊、待结案的单独取一遍、排在最前（P2-456，同 P2-408）：清单只回最新 200 条，挤出窗口的转诊单就没有一行能接诊 / 结案
+  const [recent, pending, accepted] = await Promise.all([
+    api("/api/referrals"), api("/api/referrals?status=pending"), api("/api/referrals?status=accepted")]);
+  const referrals = actionableFirst(recent, pending, accepted);
   // 转诊佐证材料（P2-432）：同会诊，后端早就收、页面上原先没有入口；上传限医师 / 经办
   const canAttach = ["doctor", "operator", "admin"].includes(currentRole());
   $("#page-body").innerHTML = `

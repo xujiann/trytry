@@ -1715,9 +1715,13 @@ async function renderSurveillance() {
 
 async function renderPathology() {
   $("#page-desc").textContent = "病理标本核收（含拒收）、取材制片阅片流转、冷缺血时间质控";
-  const [specimens, stats] = await Promise.all([
+  // 还要流转的（待核收 / 已核收 / 已取材 / 已制片）单独取一遍、排在最前（P2-456，同 P2-408）：清单只回最新 500 个标本，
+  // 挤出窗口的就没有一行能核收 / 拒收 / 推进
+  const [recent, stats, ...open] = await Promise.all([
     api("/api/pathology/specimens"), api("/api/pathology/specimen-stats"),
+    ...["pending", "received", "embedded", "slided"].map((st) => api(`/api/pathology/specimens?status=${st}`)),
   ]);
+  const specimens = actionableFirst(recent, ...open);
   const ci = stats.cold_ischemia;
   $("#page-body").innerHTML = `
     <div class="cards">

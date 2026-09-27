@@ -1391,12 +1391,16 @@ async function renderOutpatientDocs() {
   $("#page-desc").textContent =
     "知情告知书开具时冻结正文——模板日后修订不会改动已开具的（含待签的）；拒签是独立状态，不是「没签」";
   const encounterId = Number(localStorage.getItem("medplat_od_encounter") || 0);
-  const [templates, consents] = await Promise.all([
+  const [templates, recentConsents, pendingConsents] = await Promise.all([
     // 取全部（不带 active）：停用的模板也要能看到并改回现行版，否则"停错了"就再也捞不回来。
     // 开具那个下拉仍只列启用中的——后端对停用模板直接 409（"请选用现行版本"）。
     api("/api/outpatient/consent-templates"),
     api("/api/outpatient/consents?limit=50"),
+    // 待签署的单独取一遍、排在最前（P2-456，同 P2-408）：清单只取最新 50 份，挤出去的待签告知书就没有「签署 / 拒签」，
+    // 而那次就诊的完整度还数着它「待签署」
+    api("/api/outpatient/consents?status=pending&limit=500"),
   ]);
+  const consents = actionableFirst(recentConsents, pendingConsents);
   const activeTemplates = templates.filter((t) => t.active);
   const canTemplate = currentRole() === "admin";
   let scoped = { treatments: [], nursing: [], completeness: null };
