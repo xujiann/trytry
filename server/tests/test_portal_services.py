@@ -553,6 +553,17 @@ def test_portal_my_surgeries_shows_schedule_not_operative_notes(client, me, inpa
         assert leaked not in row
 
 
+def test_portal_my_surgeries_completed_shows_actual_procedure(client, admin, me, inpatient_setup):
+    """做完的手术按术中记录的实际术式与术者（P2-556，第十一批「居民端 vs 医护端」扫描 Y2-3）：原先仍是申请时的。"""
+    sid = inpatient_setup["surgery"]["id"]
+    recorded = client.post(f"/api/surgery/requests/{sid}/record", headers=admin, json={
+        "actual_surgery_name": "腹腔镜中转开腹阑尾切除术", "surgeon_name": "实际术者", "findings": "阑尾化脓"})
+    assert recorded.status_code == 201, recorded.text
+    row = next(r for r in client.get("/api/portal/me/surgeries", headers=me["headers"]).json() if r["id"] == sid)
+    assert (row["status"], row["surgery_name"], row["surgeon_name"]) == ("completed", "腹腔镜中转开腹阑尾切除术", "实际术者")
+    assert "findings" not in row
+
+
 def test_portal_inpatient_endpoints_respect_family_scope(client, admin, me, child):
     """代管成员的住院与手术可查，未代管的他人 403。"""
     assert client.get(

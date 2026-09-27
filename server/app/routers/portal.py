@@ -69,6 +69,7 @@ from ..models import (
     SatisfactionSurvey,
     Settlement,
     SmsCode,
+    SurgeryRecord,
     SurgeryRequest,
     SurgerySchedule,
     Ward,
@@ -2207,14 +2208,22 @@ def portal_my_surgeries(
         .filter(SurgerySchedule.request_id.in_([r.id for r in rows] or [0]))
         .all()
     }
+    # 做完的手术按术中记录的实际术式与术者（P2-556）：医护端、给居民的「已完成」消息都写实际的（如中转开腹），居民端
+    # 「我的手术」原先还是申请时的术式与术者。只取这两项，术中所见、出血量等照旧不给
+    records = {
+        rec.request_id: rec
+        for rec in db.query(SurgeryRecord)
+        .filter(SurgeryRecord.request_id.in_([r.id for r in rows] or [0]))
+        .all()
+    }
     rooms = {r.id: r.name for r in db.query(OperatingRoom).all()}
     org_names = {o.id: o.name for o in db.query(Organization).all()}
     return [
         {
             "id": r.id,
-            "surgery_name": r.surgery_name,
+            "surgery_name": records[r.id].actual_surgery_name if r.id in records else r.surgery_name,
             "org_name": org_names.get(r.org_id, ""),
-            "surgeon_name": r.surgeon_name,
+            "surgeon_name": (records[r.id].surgeon_name if r.id in records else "") or r.surgeon_name,
             "urgency": r.urgency,
             "status": r.status,
             "planned_date": r.planned_date,
