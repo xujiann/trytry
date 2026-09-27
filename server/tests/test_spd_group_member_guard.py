@@ -109,7 +109,7 @@ def _patient_ids_endpoints() -> list[tuple[str, str, bool]]:
         if not models:
             continue
         for func in ast.walk(tree):
-            if not isinstance(func, ast.FunctionDef):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             annotated = {ast.unparse(arg.annotation) for arg in func.args.args if arg.annotation is not None}
             if not annotated & models:
