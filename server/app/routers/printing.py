@@ -581,10 +581,12 @@ def print_case_summary(
 ):
     """病案首页打印版：现有最小数据集（出院诊断/手术/费用/转归/DRG）。"""
     admission = _get_admission(db, admission_id)
+    # 先判可见性、再说业务状态，与镜像的明细（`inpatient._admission_visible_or_404`）同序（P2-565）：原先先回「未填写」，
+    # 别院医生按住院号挨个调就读得出每一次住院首页填没填，还不留调阅痕迹
+    assert_patient_visible(db, user, admission.patient_id, resource="print:case_summary")
     summary = db.query(CaseSummary).filter(CaseSummary.admission_id == admission.id).first()
     if summary is None:
         raise HTTPException(status_code=404, detail="病案首页未填写")
-    assert_patient_visible(db, user, admission.patient_id, resource="print:case_summary")
     patient = db.get(Patient, admission.patient_id)
     org_name = _org_name(db, admission.org_id)
     discharged = (
@@ -852,9 +854,9 @@ def print_discharge_summary(
     诊疗经过取出院病程记录（ProgressNote note_type="discharge"），未书写留"—"。
     """
     admission = _get_admission(db, admission_id)
+    assert_patient_visible(db, user, admission.patient_id, resource="print:discharge")   # 先于状态判断（P2-565）
     if admission.status != "discharged":
         raise HTTPException(status_code=409, detail="患者尚未出院，不可打印出院小结")
-    assert_patient_visible(db, user, admission.patient_id, resource="print:discharge")
     patient = db.get(Patient, admission.patient_id)
     org_name = _org_name(db, admission.org_id)
     summary = db.query(CaseSummary).filter(CaseSummary.admission_id == admission.id).first()
