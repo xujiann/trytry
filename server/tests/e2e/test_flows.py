@@ -2858,6 +2858,20 @@ def test_DRG分组目录能在界面上增补(page, base_url, admin_read):
     expect(page.locator("tr:has(button[data-drg-weight])", has_text="E2EZ9")).to_contain_text("必须")
 
 
+def test_DRG页对医生照样打得开_事前提示够得着_不摆调权(page, base_url, seed):
+    """P2-459：机构 CMI 等统计只给管理层，原先与分组目录放在同一个 Promise.all 里——医生打开 DRGs 分析页，统计一个 403
+    整页报错，同页给一线的事中预警（在院病例住院日超标）、事前提示（按拟诊断预判入组）都够不着；管理员才能点的「调权」
+    又对所有人摆着。修后统计取不到就在原位说为什么，其余照常；调权只给管理员。"""
+    _login(page, base_url, "e2e_doctor", "passw0rd1")
+    _open_page(page, "drgs", "DRGs分析")
+    expect(page.locator("#page-body")).to_contain_text("需要以下角色之一：管理层")   # 修前整页只剩一句错误
+    expect(page.locator("#drg-alert-form")).to_be_visible()
+    expect(page.locator("button[data-drg-weight]")).to_have_count(0)
+    page.fill('#drg-pre-form [name="diagnosis"]', "社区获得性肺炎")
+    page.click("#drg-pre-form button")
+    expect(page.locator("#drg-pre")).to_contain_text("ES31")
+
+
 #: 经办在入库登记里自由填写的条码：带一个双引号就能越出属性、往页面里塞标签
 XSS_BARCODE = 'XSS"><img src=x onerror="window.__xss=1">'
 

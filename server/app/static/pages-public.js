@@ -72,7 +72,10 @@ async function renderEmTimeline() {
 
 async function renderDrgs() {
   $("#page-desc").textContent = "DRGs 分析：62 组目录（多关键词 + 主手术入组，未匹配落 QY）、机构 CMI、MDC 汇总";
-  const [groups, stats] = await Promise.all([api("/api/drgs/groups"), api("/api/drgs/stats")]);
+  // 机构 CMI 等统计只给管理层（后端 require_roles("director")），原先与目录放在同一个 Promise.all 里：医生 / 经办打开这页，
+  // 统计一个 403 整页报错，同页给一线的事中预警、事前提示也跟着够不着（P2-459）。统计取不到就在原位说为什么，其余照常
+  const [groups, stats] = await Promise.all([api("/api/drgs/groups"),
+    api("/api/drgs/stats").catch((err) => ({ orgs: [], mdcs: [], groups: [], error: err.message }))]);
   const canGroup = currentRole() === "admin";   // 建组与调权同一权限（后端 require_admin）
   const drawAlerts = async (mult) => {
     try {
@@ -95,6 +98,7 @@ async function renderDrgs() {
   // ADR-0009 第五批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   // 三个统计面板"有数据才渲染"，条件仍留在调用点。
   $("#page-body").innerHTML = `
+    ${stats.error ? panel("机构 CMI 与组均费用", `<p class="msg">${esc(stats.error)}</p>`) : ""}
     ${stats.orgs.length ? panel("机构 CMI 对比（病例组合指数 = Σ权重 / 正式入组例数，QY 兜底组不计入）",
       table(["机构", "出院病例", "正式入组", "入组率", "QY兜底", "兜底率", "CMI", "均次费用"], stats.orgs, (o) =>
         `<tr><td>${esc(o.org_name)}</td><td>${o.cases}</td><td>${o.grouped}</td>
@@ -124,7 +128,7 @@ async function renderDrgs() {
          <td>${esc(g.keywords) || "—"}</td>
          <td>${esc(g.procedure_keywords) || "—"}${g.require_procedure ? ' <span class="tag orange">必须</span>' : ""}</td>
          <td><span class="tag ${g.active ? "green" : "red"}">${g.active ? "启用" : "停用"}</span></td>
-         <td><button class="btn secondary" data-drg-weight="${g.id}">调权</button></td></tr>`)}`)}
+         <td>${canGroup ? `<button class="btn secondary" data-drg-weight="${g.id}">调权</button>` : "—"}</td></tr>`)}`)}
     ${panel("事中预警：在院病例住院日已明显超出同组均值", `
       <form class="inline" id="drg-alert-form">
         <input name="los_multiplier" type="number" step="0.1" min="1" max="5" value="1.5" style="min-width:120px"
