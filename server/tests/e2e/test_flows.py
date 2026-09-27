@@ -1823,6 +1823,18 @@ def test_已归档的基金池写明状态_不给预付预结清算表单(page, 
         expect(page.locator(form)).to_have_count(0)
 
 
+def test_统一支付的金额占位按渠道写明留空时收哪一份(page, base_url):
+    """P2-605：金额留空时医保渠道记本单的统筹支付额、其余渠道记冲抵后的自付额，占位原先一律写后者。"""
+    _login(page, base_url)
+    _open_page(page, "billing", "费用结算")
+    amount = page.locator('#pay-form input[name="amount"]')
+    expect(amount).to_have_attribute("placeholder", "金额(元，空=押金冲抵后应补缴的自付额)")
+    page.locator('#pay-form select[name="channel"]').select_option("insurance")
+    expect(amount).to_have_attribute("placeholder", "金额(元，空=本单医保统筹支付额)")   # 修前不变
+    page.locator('#pay-form select[name="channel"]').select_option("cash")
+    expect(amount).to_have_attribute("placeholder", "金额(元，空=押金冲抵后应补缴的自付额)")
+
+
 def test_编辑专病中心只改名_已停用的状态不被悄悄改成筹建(page, base_url, admin_read, admin_call):
     """P2-421：编辑框的状态下拉原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
     只改个名字保存，状态被悄悄改掉。修后选项取自后端的状态文案表（专家工作台下发的 `center_status_names`）。"""

@@ -3113,6 +3113,15 @@ async function renderBilling() {
       route();
     } catch (err) { setMsg("#pay-msg", err.message, false); }
   };
+  // 金额留空的默认额按渠道取（P2-605，同 billing.create_payment 的 default_amount）：医保渠道记本单的统筹支付额，其余渠道
+  // 记押金冲抵后应补缴的自付额。占位原先一律写后者——选了医保留空，收进的是统筹那一份
+  const payChannel = $("#pay-form").elements.channel;
+  const payHint = () => {
+    $("#pay-form").elements.amount.placeholder = payChannel.value === "insurance"
+      ? "金额(元，空=本单医保统筹支付额)" : "金额(元，空=押金冲抵后应补缴的自付额)";
+  };
+  payChannel.onchange = payHint;
+  payHint();
   $("#recon-form").onsubmit = async (e) => {
     e.preventDefault();
     const date = new FormData(e.target).get("date");
