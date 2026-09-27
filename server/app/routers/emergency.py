@@ -127,15 +127,15 @@ class VitalOut(VitalCreate):
     sbp: float | None = None
     dbp: float | None = None
     spo2: float | None = None
-    # 回传时刻（isoformat，naive UTC；P2-491）：急救页按次列出途中体征，看得出是几点测的
+    # 回传时刻（isoformat，naive UTC；P2-491）：急救页按次列出途中体征，看得出是几点测的。由 `_vital_out` 转好再给——
+    # 出参模型不挂校验器（`test_response_constraint_writers`：库里一行过不了校验，整个响应 500）
     created_at: str = ""
 
-    model_config = {"from_attributes": True}
 
-    @field_validator("created_at", mode="before")
-    @classmethod
-    def _iso(cls, value: object) -> object:
-        return value.isoformat() if isinstance(value, datetime) else (value or "")
+def _vital_out(vital: EmergencyVital) -> dict:
+    return {"id": vital.id, "case_id": vital.case_id, "heart_rate": vital.heart_rate, "sbp": vital.sbp,
+            "dbp": vital.dbp, "spo2": vital.spo2, "note": vital.note,
+            "created_at": vital.created_at.isoformat() if vital.created_at else ""}
 
 
 @router.post(
@@ -229,7 +229,7 @@ def report_vitals(case_id: int, body: VitalCreate, db: Session = Depends(get_db)
     db.add(vital)
     db.commit()
     db.refresh(vital)
-    return vital
+    return _vital_out(vital)
 
 
 @router.get("/cases/{case_id}/vitals", response_model=list[VitalOut])
@@ -244,7 +244,8 @@ def list_vitals(
     # 院前事件可能尚未关联患者（现场无法确认身份）；一旦关联即按患者维度守
     if case.patient_id is not None:
         assert_patient_visible(db, user, case.patient_id, resource="emergency")
-    return db.query(EmergencyVital).filter(EmergencyVital.case_id == case_id).order_by(EmergencyVital.id).all()
+    return [_vital_out(v) for v in
+            db.query(EmergencyVital).filter(EmergencyVital.case_id == case_id).order_by(EmergencyVital.id).all()]
 
 
 # ---------- 急救绿道时间节点 ----------

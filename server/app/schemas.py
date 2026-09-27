@@ -1,7 +1,6 @@
-from datetime import datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, Field, FiniteFloat, field_validator
+from pydantic import AfterValidator, BaseModel, Field, FiniteFloat
 from .datetypes import DateStr, OptionalDateStr
 from .numtypes import INT4_MAX
 from .texttypes import NON_BLANK, split_list
@@ -465,15 +464,9 @@ class ContractServiceCreate(BaseModel):
 class ContractServiceOut(ContractServiceCreate):
     id: int
     contract_id: int
-    # 履约时刻（isoformat，naive UTC；P2-494）：签约页按次列出「哪天做了什么」
+    # 履约时刻（isoformat，naive UTC；P2-494）：签约页按次列出「哪天做了什么」。由 `contracts._service_out` 转好再给——
+    # 出参模型不挂校验器（`test_response_constraint_writers`：库里一行过不了校验，整个响应 500）
     created_at: str = ""
-
-    model_config = {"from_attributes": True}
-
-    @field_validator("created_at", mode="before")
-    @classmethod
-    def _iso(cls, value: object) -> object:
-        return value.isoformat() if isinstance(value, datetime) else (value or "")
 
 
 class SlotCreate(BaseModel):

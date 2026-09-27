@@ -103,7 +103,13 @@ def record_service(contract_id: int, body: ContractServiceCreate, db: Session = 
     db.add(service)
     db.commit()
     db.refresh(service)
-    return service
+    return _service_out(service)
+
+
+def _service_out(service: ContractService) -> dict:
+    return {"service_type": service.service_type, "note": service.note, "id": service.id,
+            "contract_id": service.contract_id,
+            "created_at": service.created_at.isoformat() if service.created_at else ""}
 
 
 @router.get("/{contract_id}/services", response_model=list[ContractServiceOut])
@@ -117,9 +123,10 @@ def list_services(
         raise HTTPException(status_code=404, detail="签约协议不存在")
     # 服务记录挂在签约协议上，按协议患者做可见性判定 + 留痕
     assert_patient_visible(db, user, contract.patient_id, resource="contract")
-    return (
-        db.query(ContractService)
+    return [
+        _service_out(s)
+        for s in db.query(ContractService)
         .filter(ContractService.contract_id == contract_id)
         .order_by(ContractService.id.desc())
         .all()
-    )
+    ]
