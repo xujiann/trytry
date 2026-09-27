@@ -698,6 +698,8 @@ def generate_followup_plan(
     # 乙院医生接诊过的患者，就能把随访派进甲院的随访队列（实测 201）。与下面的自动匹配同一口径。
     org_id = body.org_id if body.org_id is not None else user.org_id
     assert_org_writable(db, user, org_id)
+    if org_id is not None and db.get(Organization, org_id) is None:   # 全域角色过守卫不查存在（P2-411）
+        raise HTTPException(status_code=404, detail="机构不存在")
     rule = db.get(SpdFollowupRule, body.rule_id)
     if rule is None or not rule.active:
         raise HTTPException(status_code=404, detail="随访方案不存在或已停用")
@@ -751,6 +753,8 @@ def auto_match_plans(
         raise HTTPException(status_code=422, detail="请指定按哪家机构的出院 / 就诊记录匹配（本账号没有所属机构）")
     # P0-35：给了 org_id 就照单全收——乙院能以甲院名义按甲院的出院 / 门诊患者批量生成随访。
     assert_org_writable(db, user, org_id)
+    if org_id is not None and db.get(Organization, org_id) is None:   # 全域角色过守卫不查存在（P2-411）
+        raise HTTPException(status_code=404, detail="机构不存在")
     rules = (   # 按方案编号排、取命中的第一套，与出院即派生同一个次序（P2-369）：不排序就是库说了算
         db.query(SpdFollowupRule)
         .filter(SpdFollowupRule.scene == body.scene, SpdFollowupRule.active.is_(True))
@@ -1698,6 +1702,8 @@ def generate_report(
 
     org_id = body.org_id if body.org_id is not None else user.org_id
     assert_org_writable(db, user, org_id)  # P0-35：报告实例挂在这家机构名下，只能以本机构名义生成
+    if org_id is not None and db.get(Organization, org_id) is None:   # 全域角色过守卫不查存在（P2-411）
+        raise HTTPException(status_code=404, detail="机构不存在")
     period_label = body.period_label or default_period_label(template.period)
     content = {
         "period_label": period_label,

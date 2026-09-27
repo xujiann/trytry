@@ -465,6 +465,8 @@ def create_screening(
     assert_patient_visible(db, user, body.patient_id, resource="spd_screening")
     org_id = body.org_id if body.org_id is not None else user.org_id
     assert_org_writable(db, user, org_id)
+    if org_id is not None and db.get(Organization, org_id) is None:   # 全域角色过守卫不查存在（P2-411）
+        raise HTTPException(status_code=404, detail="机构不存在")
     program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
     # 与下面 create_enrollment 同一口径（P1-89）：停用的病种不收新筛查——筛出来的疑似
     # 建不了档（建档拒停用病种），就诊登记触发的自动识别也只看启用的病种
@@ -670,6 +672,8 @@ def auto_screen(
         raise HTTPException(status_code=422, detail="该病种未配置纳入规则，无法自动识别")
     org_id = body.org_id if body.org_id is not None else user.org_id
     assert_org_writable(db, user, org_id)
+    if org_id is not None and db.get(Organization, org_id) is None:   # 全域角色过守卫不查存在（P2-411）
+        raise HTTPException(status_code=404, detail="机构不存在")
 
     from ..platform import Encounter
 
@@ -999,6 +1003,8 @@ def create_enrollment(
     if org_id is None:
         raise HTTPException(status_code=422, detail="纳管机构不能为空")
     assert_org_writable(db, user, org_id)
+    if org_id is not None and db.get(Organization, org_id) is None:   # 全域角色过守卫不查存在（P2-411）
+        raise HTTPException(status_code=404, detail="机构不存在")
     program = db.query(SpdProgram).filter(SpdProgram.code == body.program_code).first()
     if program is None or not program.active:
         raise HTTPException(status_code=404, detail="专病档案不存在或已停用")

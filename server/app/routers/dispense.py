@@ -33,6 +33,7 @@ from ..models import (
     DispenseRecord,
     DrugBatch,
     DrugStock,
+    Organization,
     Prescription,
     User,
     utcnow,
@@ -197,6 +198,10 @@ def dispense_prescription(
         )
     org_id = body.org_id if body.org_id is not None else prescription.org_id
     assert_org_writable(db, user, org_id)
+    # 全域角色过守卫不查机构在不在（P2-411，同 P2-169）：填错一位撞外键，原先被下面为唯一约束写的 except 翻成
+    # 「该处方已发药」
+    if db.get(Organization, org_id) is None:
+        raise HTTPException(status_code=404, detail="机构不存在")
     rx_items = list(prescription.items)
     if not rx_items:
         raise HTTPException(status_code=422, detail="处方无用药明细，无法发药")
