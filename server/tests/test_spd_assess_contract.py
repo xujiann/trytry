@@ -273,6 +273,8 @@ def test_下钻明细完整精确(client, auth, world):
             "value": 50.0, "raw_score": 50.0, "weight": 100.0, "score": 50.0,
             "deduction": 50.0, "reason": "未达目标值100.0（实际50.0）",
             "target_value": 100.0,
+            # 用的是哪一版、哪条公式（P2-519 起记下，追加在末尾）
+            "indicator_id": world["indicator"]["id"], "version": "v1", "formula": "done / total * 100",
         }],
         "created_at": _ts(detail["created_at"]),
     }

@@ -1047,15 +1047,24 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
-    indicators = {
-        i.code: i
-        for i in db.query(SpdIndicator)
+    # 同一编码有多个启用版本时，取本期已经生效的最新一版（P2-519）：原先不排序、按编码塞进字典，后返回的那一版覆盖
+    # 前面的——取哪一版看数据库返回顺序（PG 不保证），生效日期一概不看，下个月才生效的新口径照样拿来算这个月
+    _period_start, period_end = _period_range(body.period)
+    indicators: dict[str, SpdIndicator] = {}
+    not_yet: set[str] = set()   # 有启用的版本，但都还没到生效日期
+    for candidate in (
+        db.query(SpdIndicator)
         .filter(
             SpdIndicator.code.in_([i.get("indicator_code") for i in plan.items or []]),
             SpdIndicator.active.is_(True),
         )
+        .order_by(SpdIndicator.code, SpdIndicator.effective_from, SpdIndicator.id)
         .all()
-    }
+    ):
+        if candidate.effective_from and candidate.effective_from > period_end:
+            not_yet.add(candidate.code)
+            continue
+        indicators[candidate.code] = candidate   # 按（生效日期, 编号）升序，后到的覆盖：最新生效的那一版
     objects = _objects_of(db, plan, body.object_ids)
     # 每个指标一次批量取数（P2-1）：查询数只随指标数增长，不随对象数增长
     all_ids = [object_id for object_id, _ in objects]
@@ -1072,7 +1081,8 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
             code = item.get("indicator_code")
             indicator = indicators.get(code)
             if indicator is None:
-                detail.append({"indicator_code": code, "error": "指标不存在或已停用"})
+                detail.append({"indicator_code": code,
+                               "error": "指标在本期尚未生效" if code in not_yet else "指标不存在或已停用"})
                 continue
             metrics = metrics_by_code[code][object_id]
             try:
@@ -1102,6 +1112,9 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
                 "weight": weight, "score": weighted,
                 "deduction": round(weight - weighted, 2), "reason": reason,
                 "target_value": indicator.target_value,
+                # 用的是哪一版、哪条公式（P2-519）：docstring 说历史留痕靠 detail，原先不记版本与公式——指标原地改过口径、
+                # 或同编码并存几版时，这期分数是按哪条公式算出来的无从查起
+                "indicator_id": indicator.id, "version": indicator.version, "formula": indicator.formula,
             })
         # 先查后插在并发重跑时会双双插入并撞唯一约束（plan+period+object），
         # 用 SAVEPOINT 版的"不在就插"把冲突圈在单行内，冲突时退回来更新既有行。
