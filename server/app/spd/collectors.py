@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session
 from ..clock import now_naive
 from .models import SpdDataSource, SpdMeasurement, SpdSyncLog
 from .platform import Encounter, iter_recent_chronic_followups
-from .service import judge_measurement
+from .service import enrollment_for, judge_measurement
 
 logger = logging.getLogger("medplat.spd.collectors")
 
@@ -129,6 +129,9 @@ def collect_publichealth(db: Session, source: SpdDataSource) -> int:
         existing = {
             ref for (ref,) in db.query(SpdMeasurement.source_ref).filter(SpdMeasurement.source_ref.in_(refs)).all()
         }
+        # 判级取哪份档案的阶段，与管理端录入、居民自报同一句（P2-585）：原先一律按「不分阶段」的目标判——稳定期
+        # 收紧过的目标对采集进来的值不起作用，同一个 135 医生录「偏高」、公卫随访同步过来「正常」
+        stages: dict[tuple[int, str], str] = {}
         for followup, patient_id in rows:
             for metric, attr, unit, program in _PUBLICHEALTH_METRICS:
                 value = getattr(followup, attr)
@@ -137,7 +140,10 @@ def collect_publichealth(db: Session, source: SpdDataSource) -> int:
                 ref = f"chronic_fu:{followup.id}:{metric}"
                 if ref in existing:
                     continue
-                level = judge_measurement(db, program, "", metric, value)
+                if (patient_id, program) not in stages:
+                    enrollment = enrollment_for(db, patient_id, program)[1]
+                    stages[(patient_id, program)] = enrollment.stage if enrollment else ""
+                level = judge_measurement(db, program, stages[(patient_id, program)], metric, value)
                 db.add(
                     SpdMeasurement(
                         patient_id=patient_id, program_code=program, metric=metric,
