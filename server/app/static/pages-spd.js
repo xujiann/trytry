@@ -1495,8 +1495,8 @@ async function renderSpdPatients() {
        <td>${s.result === "suspect" ? '<span class="tag orange">疑似</span>'
           : s.result === "excluded" ? '<span class="tag">排除</span>'
           : '<span class="tag green">未见异常</span>'}</td>
-       <td>${s.reviewed ? esc(s.review_result) : '<span class="tag orange">待复核</span>'}</td>
-       <td>${s.reviewed ? "—" :
+       <td>${s.reviewed ? esc(s.review_result) : s.result === "suspect" ? '<span class="tag orange">待复核</span>' : "—"}</td>
+       <td>${s.reviewed || s.result !== "suspect" ? "—" :
           `<button class="btn secondary" data-review="${s.id}" data-r="confirmed">确认</button>
            <button class="btn secondary" data-review="${s.id}" data-r="excluded">排除</button>`}</td></tr>`);
   };

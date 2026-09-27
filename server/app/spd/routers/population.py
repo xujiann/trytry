@@ -625,11 +625,17 @@ def review_screening(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """高风险复核：确认则留在目标池，排除则移出，待定保持原状。"""
+    """高风险复核：确认则留在目标池，排除则移出，待定保持原状。
+
+    只复核「疑似」的（P2-591）：工作台的「待复核」只数疑似，清单原先却给每条未复核的筛查都画了确认 / 排除——对命中排除
+    规则的一条点「确认」，排除规则挡在门外的人（比如未成年）被改回目标人群；未见异常的根本没有候选，确认了只是记一笔。
+    """
     screening = db.get(SpdScreening, screening_id)
     if screening is None:
         raise HTTPException(status_code=404, detail="筛查记录不存在")
     assert_org_writable(db, user, screening.org_id)
+    if screening.result != "suspect":
+        raise HTTPException(status_code=409, detail="只有结论为「疑似」的筛查需要复核")
     screening.reviewed = True
     screening.review_result = body.review_result
     screening.review_note = body.review_note
