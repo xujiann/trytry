@@ -36,7 +36,7 @@ from ..concurrency import insert_or_conflict, serialized_on
 from ..egress import egress_url_allowed, verify_signature
 from ..numtypes import INT4_MAX, MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
-from ..payments import HttpGatewayPaymentGateway, to_fen
+from ..payments import HttpGatewayPaymentGateway, yuan_to_fen
 from ..visibility import (
     assert_obj_org_writable,
     assert_org_writable,
@@ -1584,7 +1584,7 @@ async def payment_callback(request: Request, db: Session = Depends(get_db)):
     order = db.get(PaymentOrder, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="支付单不存在")
-    if amount_fen != to_fen(order.amount):
+    if amount_fen != yuan_to_fen(order.amount):
         raise HTTPException(status_code=422, detail="回调金额与支付单不一致，拒绝入账")
     if order.status != "pending":
         return _settled_callback_result(order, result_status, trade_no)

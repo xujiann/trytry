@@ -46,8 +46,12 @@ CALLBACK_PATH = "/api/billing/payments/callback"
 _TIMEOUT_SECONDS = 5.0
 
 
-def to_fen(amount: float) -> int:
-    """元 → 分（金额过网关一律整数分，见模块文档）。"""
+def yuan_to_fen(amount: float) -> int:
+    """元 → 整数分（金额过网关一律整数分，见模块文档）。
+
+    别与 `numtypes.to_fen` 混：那个是「金额精确到分」的入参校验，进出都是元（float）；这个把元换成整数分。原先两个
+    同名、量纲不同，从错的模块导入，网关收到的金额差一百倍也不报错。
+    """
     return int(round(amount * 100))
 
 
@@ -87,7 +91,7 @@ class HttpGatewayPaymentGateway:
             "/pay",
             {
                 "order_id": order_id,
-                "amount_fen": to_fen(amount),
+                "amount_fen": yuan_to_fen(amount),
                 "channel": channel,
                 "notify_url": CALLBACK_PATH,
             },
@@ -111,7 +115,7 @@ class HttpGatewayPaymentGateway:
 
     def refund(self, trade_no: str, amount: float) -> dict:
         """网关退款（同步应答，差错由日终对账兜底）。"""
-        data = self._post("/refund", {"trade_no": trade_no, "amount_fen": to_fen(amount)})
+        data = self._post("/refund", {"trade_no": trade_no, "amount_fen": yuan_to_fen(amount)})
         if data is None:
             return {"success": False, "refund_no": "", "message": "支付网关不可达或应答异常"}
         return {
