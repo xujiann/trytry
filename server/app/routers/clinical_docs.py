@@ -7,11 +7,14 @@
 角色约定沿用 deps.py 矩阵：病程记录限医师（诊疗性质），护理记录与体温单
 放开给医师与经办（护士在本平台的角色映射为 operator），交接班同护理。
 """
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..clock import now_local
 from ..concurrency import insert_or_conflict
 from ..database import get_db
 from ..datetypes import DateStr, DateTimeStr, OptionalDateTimeStr
@@ -203,7 +206,7 @@ def create_progress_note(
         note_type=body.note_type,
         content=body.content,
         doctor_name=body.doctor_name or user.full_name,
-        recorded_at=body.recorded_at,
+        recorded_at=body.recorded_at or _now_recorded(),
         created_by=user.id,
     )
     # 上面那句"首次病程已存在"是 check-then-act：并发双击会写出两份法定文书。
@@ -213,6 +216,21 @@ def create_progress_note(
     return _note_out(note)
 
 
+def _now_recorded() -> str:
+    """病程 / 护理记录没填记录时间时的缺省：此刻的本地时间（P2-455）。
+
+    与门急诊护理（`outpatient_docs`）、室内质控测定（P2-171）同一个取法——`clock.now_local` 留给的正是「记录时间默认值」
+    这种给人看的字符串。原先住院这边不落缺省、读出时拿 `created_at`（naive UTC）现拼：同一张护理记录表，门诊写进去的
+    是 10:21，住院这边显示 02:21（东八区部署），页面上紧挨着的两条差 8 小时。
+    """
+    return now_local().strftime("%Y-%m-%d %H:%M")
+
+
+def _shown_time(recorded_at: str, created_at: datetime) -> str:
+    """记录时间：填了的原样；没填的（修前落库的存量）拿落库时刻换成本地时间再显示——落库时刻是 naive UTC。"""
+    return recorded_at or created_at.replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
 def _note_out(n: ProgressNote) -> dict:
     return {
         "id": n.id,
@@ -220,7 +238,7 @@ def _note_out(n: ProgressNote) -> dict:
         "note_type": n.note_type,
         "content": n.content,
         "doctor_name": n.doctor_name,
-        "recorded_at": n.recorded_at or n.created_at.strftime("%Y-%m-%d %H:%M"),
+        "recorded_at": _shown_time(n.recorded_at, n.created_at),
         "created_at": n.created_at.isoformat(),
     }
 
@@ -329,7 +347,7 @@ def create_nursing_record(
         nursing_level=body.nursing_level,
         content=body.content,
         nurse_name=body.nurse_name or user.full_name,
-        recorded_at=body.recorded_at,
+        recorded_at=body.recorded_at or _now_recorded(),
         created_by=user.id,
     )
     db.add(record)
@@ -342,7 +360,7 @@ def create_nursing_record(
         "nursing_level": record.nursing_level,
         "content": record.content,
         "nurse_name": record.nurse_name,
-        "recorded_at": record.recorded_at or record.created_at.strftime("%Y-%m-%d %H:%M"),
+        "recorded_at": _shown_time(record.recorded_at, record.created_at),
     }
 
 
@@ -368,7 +386,7 @@ def list_nursing_records(
             "nursing_level": r.nursing_level,
             "content": r.content,
             "nurse_name": r.nurse_name,
-            "recorded_at": r.recorded_at or r.created_at.strftime("%Y-%m-%d %H:%M"),
+            "recorded_at": _shown_time(r.recorded_at, r.created_at),
         }
         for r in reversed(newest_first)
     ]
