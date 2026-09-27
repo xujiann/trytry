@@ -475,12 +475,15 @@ async function renderEsb() {
   $("#page-desc").textContent = "轻量服务总线：接入方注册与限流、消息队列重试与死信、编排流程逐步执行、成功率与积压监控";
   const [stats, endpoints, flows] = await Promise.all([
     api("/api/esb/stats"), api("/api/esb/endpoints"), api("/api/esb/flows")]);
+  // 消息表当前这一页（「查看载荷」就在这一页里找，P2-424）
+  let shownMessages = [];
   const drawMessages = async () => {
     const f = new FormData($("#esb-msg-filter"));
     const params = new URLSearchParams({ limit: "50" });
     if (f.get("status")) params.set("status", f.get("status"));
     if (f.get("endpoint_id")) params.set("endpoint_id", f.get("endpoint_id"));
     const messages = await api(`/api/esb/messages?${params}`);
+    shownMessages = messages;
     // 停用的出站接入方不给「消费/重试」（P2-180：后端 409，消息留在队里，启用后再消费）
     const stoppedOutbound = new Set(endpoints.filter((ep) => ep.direction === "outbound" && !ep.active).map((ep) => ep.code));
     $("#esb-messages").innerHTML = table(["ID", "接入方", "消息类型", "状态", "重试", "最后错误", "操作"], messages, (m) => {
@@ -622,9 +625,10 @@ async function renderEsb() {
         setMsg("#esb-msg", `消息 ${esbproc} → ${ESB_MSG_STATUS[res.status][0]}：${res.detail || res.last_error}`, res.status === "succeeded");
         await drawMessages();
       } else if (esbpayload) {
-        const rows = await api(`/api/esb/messages?limit=50`);
-        const msg = rows.find((m) => String(m.id) === esbpayload);
-        alert(msg ? JSON.stringify(msg.payload, null, 2) : "载荷不在当前页，请先按条件筛选");
+        // 就在消息表当前这一页里找（P2-424）：原先另取「最新 50 条」、不带筛选条件——按状态 / 接入方筛出来的老消息，
+        // 点「查看载荷」反倒说「不在当前页，请先按条件筛选」，而它明明就在眼前这一页
+        const msg = shownMessages.find((m) => String(m.id) === esbpayload);
+        alert(msg ? JSON.stringify(msg.payload, null, 2) : "这条消息已不在当前列表，请重新查询后再看");
       } else if (esbtoggle) {
         await api(`/api/esb/endpoints/${esbtoggle}`, { method: "PATCH", body: JSON.stringify({ active: active !== "1" }) });
         route();

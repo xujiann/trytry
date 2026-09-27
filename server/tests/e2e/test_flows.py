@@ -1407,6 +1407,50 @@ def test_撤销完成失败要说出来_不再一声不吭(page, base_url, seed,
     expect(page.locator("#pj-msg")).to_contain_text("需要以下角色之一")   # 修前什么也不说
 
 
+def test_集成平台按接入方筛出的老消息_查看载荷就在当前页里找(page, base_url, admin_call):
+    """P2-424：「查看载荷」原先另取「最新 50 条」、不带筛选条件——按接入方筛出来的老消息，点下去反倒说
+    「载荷不在当前页，请先按条件筛选」。修后就在消息表当前这一页里找。"""
+    import json
+    from urllib.request import Request
+
+    def endpoint(code):
+        return admin_call("POST", "/api/esb/endpoints", {"code": code, "name": code, "system_type": "his",
+                                                          "rate_limit_per_min": 1000})
+
+    def enqueue(ep, payload):
+        req = Request(f"{base_url}/api/esb/messages", method="POST",
+                      data=json.dumps({"msg_type": "E2E_P2424", "payload": payload}).encode(),
+                      headers={"Content-Type": "application/json", "X-Esb-Endpoint": ep["code"],
+                               "X-Esb-Token": ep["auth_token"]})
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    old_ep, busy_ep = endpoint("e2e_p2424_old"), endpoint("e2e_p2424_busy")
+    old = enqueue(old_ep, {"marker": "E2E老消息载荷"})
+    for i in range(50):   # 后来的 50 条把它挤出「最新 50 条」
+        enqueue(busy_ep, {"seq": i})
+
+    _login(page, base_url)
+    _open_page(page, "esb", "集成平台")
+    page.select_option('#esb-msg-filter select[name="endpoint_id"]', str(old_ep["id"]))
+    page.click("#esb-msg-filter button")
+    shown = page.locator(f'button[data-esbpayload="{old["id"]}"]')
+    expect(shown).to_be_visible()
+    seen = []
+
+    def on_dialog(dialog):
+        seen.append(dialog.message)
+        dialog.accept()
+
+    page.once("dialog", on_dialog)
+    shown.click()
+    for _ in range(50):   # 弹窗在点击的同步处理里就弹出；稳妥起见最多再等 5 秒
+        if seen:
+            break
+        page.wait_for_timeout(100)
+    assert seen and "E2E老消息载荷" in seen[0], seen   # 修前：「载荷不在当前页，请先按条件筛选」
+
+
 def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
     """P2-43：「删除」路径节点原先点一下就删，节点的时限、角色与表单配置一并没了。"""
     hyp = next(p for p in admin_read("/api/spd/programs") if p["code"] == "hypertension")
