@@ -34,6 +34,7 @@ import ast
 import importlib
 import os
 import pathlib
+import re
 import sys
 
 import astcode
@@ -387,3 +388,96 @@ def test_隔跳患者读接口只减不增():
     )
     stale = sorted(ONEHOP_UNSCOPABLE_READS - hits)
     assert stale == [], f"这些登记项已不再命中（补了收口、改名或删除），应从名单删掉：{stale}"
+
+
+# ---------------------------------------------------------------------------
+# 第三层：读挪进了**同模块帮手函数**的（P2-621）
+#
+# 上面两层都只看端点函数体里的 `db.query(模型` / `db.get(模型,`。同一句查询挪进同文件的帮手函数（`_in_use(db, id)`、
+# `build_variable_index(db, period)`），端点体里就只剩一个函数调用，两层都看不见——2026-09-27 实测：路径模板清单为
+# `in_use` 批量查实例表被第二层拦下（P2-599 订正），同一个判据的详情端点经 `_in_use` 读同一张表，照样绿。
+# 今天命中的两条都是按设计的聚合 / 布尔；登记的意义在于**下一条**：把病历读挪进帮手的无身份端点当场红，
+# 而不是等哪天有人碰巧看见。跟两层（帮手再调帮手），只认同一文件里的顶层函数——跨模块的 service 属另一件事。
+
+#: 【按设计，逐条写明理由；两头钉：新命中即红，失效即删】无调用方身份 × 只经同模块帮手读患者维度表（直接 / 隔跳）
+HELPER_PATIENT_READS_BY_DESIGN = {
+    "analytics.py:performance_report": "期末综合绩效：逐机构公式取值与排名（主任角色），帮手按机构聚合就诊 / 住院 / 慢病档案计数，不出个体",
+    "spd/config/paths.py:get_path_template": "路径模板详情只多一个布尔 in_use（有没有被任何实例引用），与删模板 / 改节点的 409 同一判据，不出患者、不出计数",
+}
+
+
+def _touched(body: str, models_: set[str]) -> list[str]:
+    """函数体里 `db.query(模型` / `db.get(模型,` 读到的患者维度模型（模型名按整词认：`Patient` 不吃进 `PatientTag`）。"""
+    return sorted(m for m in models_ if re.search(rf"db\.(?:query|get)\(\s*{m}\b", body))
+
+
+def _helper_reads_in(name: str, tree: ast.Module, models_: set[str]) -> dict[str, list[str]]:
+    """一个路由文件里：端点体自己不碰患者维度表、同模块帮手（跟两层）碰了的无身份 GET → [帮手:模型, …]。"""
+    helpers = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    hits: dict[str, list[str]] = {}
+    for fn in helpers.values():
+        decs = " ".join(ast.unparse(d) for d in fn.decorator_list)
+        if ".get(" not in decs or _binds_identity(fn) or _touched(astcode.code(fn), models_):
+            continue    # 不是无身份 GET，或端点体里就读了（前两层的地盘）
+        seen: set[str] = set()
+        frontier = [fn]
+        for _depth in range(2):
+            calls = {c.func.id for f in frontier for c in ast.walk(f)
+                     if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+            fresh = sorted((calls & set(helpers)) - seen - {fn.name})
+            seen |= set(fresh)
+            frontier = [helpers[h] for h in fresh]
+        via = [f"{h}:{m}" for h in sorted(seen) for m in _touched(astcode.code(helpers[h]), models_)]
+        if via:
+            hits[f"{name}:{fn.name}"] = via
+    return hits
+
+
+def _scan_via_helpers() -> dict[str, list[str]]:
+    direct, one, two = _hop_models()
+    hits: dict[str, list[str]] = {}
+    for name, path in _router_files():
+        if name in ("portal.py", "spd/portal.py"):   # 居民端另一套鉴权，与前两层同一理由
+            continue
+        hits.update(_helper_reads_in(name, ast.parse(open(path, encoding="utf-8").read()), direct | one | two))
+    return hits
+
+
+def test_经帮手读患者表的无身份端点只许登记过的():
+    hits = _scan_via_helpers()
+    print(f"\n[无身份 × 经同模块帮手读患者维度表] {len(hits)} 个（按设计登记 {len(HELPER_PATIENT_READS_BY_DESIGN)}）")
+    new = {ep: via for ep, via in sorted(hits.items()) if ep not in HELPER_PATIENT_READS_BY_DESIGN}
+    assert not new, (
+        "以下 GET 端点没有调用方身份依赖，端点体里看不出读了什么，经同模块帮手读了患者维度表：\n  "
+        + "\n  ".join(f"{ep} ← {', '.join(via)}" for ep, via in new.items())
+        + "\n病历 / 个体数据请补 `user: User = Depends(get_current_user)` 并接 visibility；"
+        "按设计只出聚合 / 布尔的，登记进 HELPER_PATIENT_READS_BY_DESIGN 并写明理由。"
+    )
+    stale = sorted(set(HELPER_PATIENT_READS_BY_DESIGN) - set(hits))
+    assert stale == [], f"这些登记项已不再命中（补了身份、改名或删除），应从名单删掉：{stale}"
+    blank = sorted(ep for ep, why in HELPER_PATIENT_READS_BY_DESIGN.items() if len(why.strip()) < 12)
+    assert blank == [], f"按设计的登记必须写明理由：{blank}"
+
+
+def test_判据自证_读挪进帮手也认得出():
+    """自证：同一句查询挪进同模块帮手（再挪一层）也认得出；收了身份的不算；模型名按整词认。"""
+    sample = ast.parse(
+        "def _inner(db):\n"
+        "    return db.query(Admission).all()\n"
+        "def _outer(db):\n"
+        "    return _inner(db)\n"
+        "@router.get('/a')\n"
+        "def hidden(db: Session = Depends(get_db)):\n"
+        "    return _outer(db)\n"
+        "@router.get('/b')\n"
+        "def scoped(db: Session = Depends(get_db), user: User = Depends(get_current_user)):\n"
+        "    return _outer(db)\n"
+        "@router.get('/c')\n"
+        "def in_body(db: Session = Depends(get_db)):\n"
+        "    return db.query(Admission.id).all()\n"
+        "@router.get('/d')\n"
+        "def prefix_only(db: Session = Depends(get_db)):\n"
+        "    return db.query(AdmissionNote).all()\n"
+    )
+    assert _helper_reads_in("sample.py", sample, {"Admission"}) == {"sample.py:hidden": ["_inner:Admission"]}
+    assert set(_scan_via_helpers()) == set(HELPER_PATIENT_READS_BY_DESIGN)   # 真实仓库：恰好是登记的两条
