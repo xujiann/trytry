@@ -27,7 +27,6 @@ from .models import (
     SpdCandidate,
     SpdEnrollment,
     SpdFollowupRecord,
-    SpdIndicator,
     SpdPointAccount,
     SpdReferralCase,
     SpdScore,
@@ -172,6 +171,9 @@ def _followup_trend(db, section, org_id, period):
 #: 口径取"**恰好属于该机构**"而不是"该机构及其下级"——与本模块其余段落一致
 #: （`_screening` 等都是 `X.org_id == org_id`）。报表段落之间口径必须一样，
 #: 否则同一份报告里两段数字对不上，比少一段更难查。
+#: 考核对象类型 → 中文（取值见 `SpdIndicator.object_type` / 考核方案的对象类型）；指标段落拒收非机构指标时用
+_OBJECT_TYPE_NAMES = {"org": "机构", "team": "团队", "doctor": "医师", "village_doctor": "村医"}
+
 _SCORE_OBJECT_ORG = {
     # 考核对象就是机构本身：object_id 即 org_id
     "org": lambda db, org_id: [org_id],
@@ -290,26 +292,36 @@ def _indicator(db, section, org_id, period):
     段落配置：`{"key": "indicator", "indicator_code": "...", "title": "..."}`。
     对象按段落所属报告的机构（org_id 为空则全域视角不支持——考核口径是按对象算的，
     没有对象就没有数）。
+
+    「同源」两处原先没做到（P2-529）：版本取编号最大的那一版、不看生效日期——下个月才生效的新口径（连同它的名称与
+    公式）印进本月报告，与本期正式考核分对不上；按团队 / 医师 / 村医计分的指标也按机构汇总出一个数，那是任何一份
+    考核分里都没有的数。现在版本与计分共用 `effective_versions`，本期没生效的写明「尚未生效」；不按机构计分的指标
+    写明不能引用、不出数。
     """
     from ..formula import FormulaError, evaluate as eval_formula
-    from .routers.assess import collect_metrics
+    from .routers.assess import collect_metrics, effective_versions
 
     code = section.get("indicator_code", "")
-    indicator = (
-        db.query(SpdIndicator)
-        .filter(SpdIndicator.code == code, SpdIndicator.active.is_(True))
-        .order_by(SpdIndicator.id.desc())
-        .first()
-    )
-    if indicator is None:
-        return {**_head(section, "text"), "note": f"指标 {code} 不存在或已停用"}
-    if org_id is None:
-        return {**_head(section, "text"),
-                "note": "指标段落需要报告绑定机构（考核口径按对象取数）"}
     # 这里的 period 是模板的频率关键字（daily/weekly/monthly），考核取数要的是
     # 具体周期值（2026-08 / 2026-Q3 / 2026）；段落可用 "period" 显式指定，
     # 否则按当月取——日报/周报看的也是本月累计口径
     period_value = section.get("period") or clock.today().strftime("%Y-%m")
+    try:
+        chosen, not_yet = effective_versions(db, [code], period_value)
+    except ValueError as exc:
+        return {**_head(section, "text"), "note": f"段落的考核周期写错了：{exc}"}
+    indicator = chosen.get(code)
+    if indicator is None:
+        return {**_head(section, "text"),
+                "note": f"指标 {code} 在本期（{period_value}）尚未生效" if code in not_yet
+                else f"指标 {code} 不存在或已停用"}
+    if org_id is None:
+        return {**_head(section, "text"),
+                "note": "指标段落需要报告绑定机构（考核口径按对象取数）"}
+    if indicator.object_type != "org":
+        return {**_head(section, "text"),
+                "note": f"指标 {code} 按{_OBJECT_TYPE_NAMES.get(indicator.object_type, indicator.object_type)}"
+                        "计分，报告按机构出、不能引用：按机构汇总出来的数没有对应的考核分"}
     metrics = collect_metrics(db, indicator, "org", org_id, period_value)
     try:
         value = (
@@ -323,7 +335,7 @@ def _indicator(db, section, org_id, period):
         "text": f"{indicator.name}：{round(value, 2)}"
                 + (f"（目标 {indicator.target_value}）" if indicator.target_value else ""),
         "metrics": metrics, "value": round(value, 2),
-        "indicator_code": indicator.code,
+        "indicator_code": indicator.code, "version": indicator.version,
     }
 
 

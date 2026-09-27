@@ -542,6 +542,30 @@ def _period_range(period: str) -> tuple[str, str]:
     return f"{year}-{month}-01", f"{year}-{month}-{last:02d}"
 
 
+def effective_versions(db: Session, codes: list, period: str) -> tuple[dict[str, SpdIndicator], set[str]]:
+    """每个指标编码取本期（`period` 的期末之前）已经生效的最新一版；返回 (编码 → 那一版, 有启用版本但都还没生效的编码)。
+
+    同一编码有多个启用版本时按（生效日期, 编号）升序、后到的覆盖（P2-519）：原先不排序、按编码塞进字典，取哪一版看
+    数据库返回顺序，下个月才生效的新口径照样拿来算这个月。计分（`run_scoring`）与报告的指标段落共用这一处（P2-529）：
+    原先报告段落自己取编号最大的那一版、不看生效日期，印出来的是还没生效的新口径算出的数、不是考核分。
+    `period` 非法抛 ValueError（与 `_period_range` 同一句）。
+    """
+    _period_start, period_end = _period_range(period)
+    chosen: dict[str, SpdIndicator] = {}
+    not_yet: set[str] = set()   # 有启用的版本，但都还没到生效日期
+    for candidate in (
+        db.query(SpdIndicator)
+        .filter(SpdIndicator.code.in_(codes), SpdIndicator.active.is_(True))
+        .order_by(SpdIndicator.code, SpdIndicator.effective_from, SpdIndicator.id)
+        .all()
+    ):
+        if candidate.effective_from and candidate.effective_from > period_end:
+            not_yet.add(candidate.code)
+            continue
+        chosen[candidate.code] = candidate
+    return chosen, not_yet
+
+
 def _object_column(model, object_type: str):
     """"考核对象"在模型上的归属列；模型没有对应列时返回 None（不过滤）。
 
@@ -1047,24 +1071,7 @@ def run_scoring(body: RunScoreIn, db: Session = Depends(get_db)):
     program_problem = unknown_program(db, body.program_code)  # 病种编码先查在不在（P1-120）
     if program_problem:
         raise HTTPException(status_code=404, detail=program_problem)
-    # 同一编码有多个启用版本时，取本期已经生效的最新一版（P2-519）：原先不排序、按编码塞进字典，后返回的那一版覆盖
-    # 前面的——取哪一版看数据库返回顺序（PG 不保证），生效日期一概不看，下个月才生效的新口径照样拿来算这个月
-    _period_start, period_end = _period_range(body.period)
-    indicators: dict[str, SpdIndicator] = {}
-    not_yet: set[str] = set()   # 有启用的版本，但都还没到生效日期
-    for candidate in (
-        db.query(SpdIndicator)
-        .filter(
-            SpdIndicator.code.in_([i.get("indicator_code") for i in plan.items or []]),
-            SpdIndicator.active.is_(True),
-        )
-        .order_by(SpdIndicator.code, SpdIndicator.effective_from, SpdIndicator.id)
-        .all()
-    ):
-        if candidate.effective_from and candidate.effective_from > period_end:
-            not_yet.add(candidate.code)
-            continue
-        indicators[candidate.code] = candidate   # 按（生效日期, 编号）升序，后到的覆盖：最新生效的那一版
+    indicators, not_yet = effective_versions(db, [i.get("indicator_code") for i in plan.items or []], body.period)
     objects = _objects_of(db, plan, body.object_ids)
     # 每个指标一次批量取数（P2-1）：查询数只随指标数增长，不随对象数增长
     all_ids = [object_id for object_id, _ in objects]
