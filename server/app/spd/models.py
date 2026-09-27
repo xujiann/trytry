@@ -1385,7 +1385,8 @@ class SpdCallTask(Base):
     phone: Mapped[str] = mapped_column(String(20), default="", index=True)
     ref_type: Mapped[str] = mapped_column(String(24), default="followup")
     ref_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # pending=待呼叫, connected=已接通, failed=未接通, cancelled=已取消
+    # pending=待呼叫, connected=已接通, failed=未接通, cancelled=已取消,
+    # withdrawn=已撤回（随访已结束、撤出待呼叫队列；真实打出去的通话仍可回写一次，P2-498）
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

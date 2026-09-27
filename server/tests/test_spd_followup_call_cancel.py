@@ -4,8 +4,9 @@
 一并收走之后，`close_followup_record` / `adjust_followup_record` / `close_open_work` 都不动呼叫任务——坐席队列里照旧
 「待呼叫」，照单打过去，打给的是已经随访过的人，甚至是死者家属。
 
-修法：三处收尾连带把**待人工外呼**的取消（结果写明缘由）；已接通 / 未接通的是通话留痕不动；失访不收（还能补录）；
-接了呼叫中心网关的不收——已派发的呼叫撤不回，置成取消只会让网关回调 409、丢掉真实发生过的通话记录。
+修法：三处收尾连带把待呼叫的撤出队列（「已撤回」，结果写明缘由）；已接通 / 未接通的是通话留痕不动；失访不收（还能补录）。
+撤回不是取消：那一刻坐席可能正在通话、网关可能已经拨出，真实打出去的电话照样回写一次（起初置成「已取消」，
+随访并发真 PG 档当场红：回写 409、通话记录丢掉）。
 """
 import pytest
 
@@ -67,7 +68,7 @@ def test_门诊当面做完_外呼取消_失访的不收(client, admin, world):
     resp = client.post(f"{B}/followup-records/{done}/execute", headers=admin,
                        json={"answers": {}, "channel": "visit", "result": "门诊当面随访"})
     assert resp.status_code == 200, resp.text
-    assert _call_state(done_call) == ("cancelled", "随访已办结，呼叫取消")   # 修前 pending
+    assert _call_state(done_call) == ("withdrawn", "随访已办结，撤出待呼叫")   # 修前 pending
     resp = client.post(f"{B}/followup-records/{lost}/execute", headers=admin,
                        json={"answers": {}, "channel": "phone", "unreachable": True})
     assert resp.status_code == 200, resp.text
@@ -83,14 +84,18 @@ def test_手工移除_外呼取消_已接通的留痕不动(client, admin, world
     waiting = _call(client, admin, world, record)
     resp = client.patch(f"{B}/followup-records/{record}", headers=admin, json={"status": "removed"})
     assert resp.status_code == 200, resp.text
-    assert _call_state(waiting) == ("cancelled", "随访已移除，呼叫取消")   # 修前 pending
+    assert _call_state(waiting) == ("withdrawn", "随访已移除，撤出待呼叫")   # 修前 pending
     assert _call_state(connected) == ("connected", "约了下周复诊")
-    # 已取消的外呼不再接受回写（与「结果只回写一次」同一句）
-    late = client.post(f"{B}/call-tasks/{waiting}/result", headers=admin, json={"status": "connected"})
-    assert late.status_code == 409, late.text
+    # 撤回不是取消：撤出队列那一刻正在打的那通，照样回写一次（原先置成已取消，回写 409、通话记录丢掉）
+    late = client.post(f"{B}/call-tasks/{waiting}/result", headers=admin,
+                       json={"status": "connected", "duration_s": 45, "result": "家属接听，已知晓"})
+    assert late.status_code == 200, late.text
+    assert _call_state(waiting) == ("connected", "家属接听，已知晓")
+    assert client.post(f"{B}/call-tasks/{waiting}/result", headers=admin,
+                       json={"status": "failed"}).status_code == 409   # 结果仍只回写一次
 
 
-def test_接了呼叫中心网关的_已派发的不收(client, admin, world):
+def test_接了呼叫中心网关的_已派发的撤出队列_回调照样回写(client, admin, world):
     from app.spd.callcenter import set_call_provider
 
     class Gateway:
@@ -106,10 +111,11 @@ def test_接了呼叫中心网关的_已派发的不收(client, admin, world):
         resp = client.post(f"{B}/followup-records/{record}/execute", headers=admin,
                            json={"answers": {}, "channel": "visit"})
         assert resp.status_code == 200, resp.text
-        assert _call_state(in_flight)[0] == "pending"   # 网关照打，结果照旧由回调回写
+        assert _call_state(in_flight)[0] == "withdrawn"   # 撤出待呼叫；网关撤不回，照打
         callback = client.post(f"{B}/call-tasks/{in_flight}/result", headers=admin,
                                json={"status": "connected", "duration_s": 12, "record_url": "https://rec.example/1"})
-        assert callback.status_code == 200, callback.text
+        assert callback.status_code == 200, callback.text   # 真实发生过的通话照样记下
+        assert _call_state(in_flight)[0] == "connected"
     finally:
         set_call_provider(None)
 
@@ -121,4 +127,4 @@ def test_死亡结案_随访一并移除_外呼一并取消(client, admin, world
                        json={"event": "death", "reason": "病故"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["closed"]["followups"] >= 1, resp.text
-    assert _call_state(waiting) == ("cancelled", "随访随档案结束移除（death:病故），呼叫取消")   # 修前 pending
+    assert _call_state(waiting) == ("withdrawn", "随访随档案结束移除（death:病故），撤出待呼叫")   # 修前 pending

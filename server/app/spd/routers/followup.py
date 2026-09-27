@@ -50,9 +50,9 @@ from ..models import (
 )
 from ..reporting import compose_section, default_period_label
 from ..rules import RuleError, as_validated, grade_abnormal
-from ..service import (adjust_followup_record, close_followup_record, followup_abnormal, followup_overdue,
-                       note_call_dispatch_failure, settle_call_task, spawn_followup_abnormal_task, unknown_code,
-                       unknown_ids, unknown_program)
+from ..service import (CALL_SETTLEABLE_STATUSES, adjust_followup_record, close_followup_record, followup_abnormal,
+                       followup_overdue, note_call_dispatch_failure, settle_call_task, spawn_followup_abnormal_task,
+                       unknown_code, unknown_ids, unknown_program)
 from ...numtypes import INT4_MAX, INT4_MIN, non_finite_path
 from ...texttypes import NON_BLANK
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
@@ -1233,9 +1233,10 @@ def record_call_result(
     task = db.get(SpdCallTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="呼叫任务不存在")
-    # 结果只回写一次（P2-87）：页面只对待呼叫的任务给「回写结果」，网关每条任务回调一次（呼叫失败后重派是新的一行）。
-    # 已有结果的再写一次，只会把接通的通话、要回听的录音地址与沟通结果事后改掉
-    if task.status != "pending":
+    # 结果只回写一次（P2-87）：页面只对待呼叫（与已撤回）的任务给「回写结果」，网关每条任务回调一次（呼叫失败后重派是
+    # 新的一行）。已有结果的再写一次，只会把接通的通话、要回听的录音地址与沟通结果事后改掉。随访结束时撤出队列的
+    # （已撤回，P2-498）照收一次：那一刻坐席可能正在通话、网关可能已经拨出
+    if task.status not in CALL_SETTLEABLE_STATUSES:
         raise HTTPException(status_code=409, detail="该呼叫任务已回写过结果")
     record = None
     if body.status == "connected" and task.ref_type == "followup" and task.ref_id:

@@ -484,33 +484,34 @@ def close_followup_record(
         .values(status=new_status)
     ))
     if closed.rowcount and new_status == "done":   # 失访不收：失访的还能补录，外呼可以接着打
-        cancel_followup_calls(db, [record_id], "随访已办结，呼叫取消")
+        withdraw_followup_calls(db, [record_id], "随访已办结，撤出待呼叫")
     return bool(closed.rowcount)
 
 
-def cancel_followup_calls(db: Session, record_ids: list[int], note: str) -> int:
-    """随访记录结束（办结 / 移除 / 档案结束一并移除）后，挂在它上面的**待人工外呼**一并取消，返回取消了几条（P2-498）。
+#: 呼叫任务（`spd_call_tasks.status`）还能回写结果的：待呼叫，以及随访结束时撤出队列的（P2-498）
+CALL_SETTLEABLE_STATUSES = ("pending", "withdrawn")
 
-    原先不动：随访在门诊当面做完、被手工移除、患者死亡结案一并收走之后，人工外呼队列里挂着它的呼叫任务照旧「待呼叫」——
-    坐席照单打过去，打给的是已经随访过的人，甚至是死者家属。只翻待呼叫的（与回写结果 `settle_call_task` 同一个条件）：
-    已接通 / 未接通 / 已取消的是通话留痕，不动。
 
-    只在人工外呼通道下取消：接了呼叫中心网关的，已派发的呼叫撤不回（网关没有撤销接口），网关照打、结果照旧由回调回写——
-    这时把它置成取消，只会让回调 409、把真实发生过的通话与录音地址丢掉。移除后又恢复的随访不连带恢复外呼（要打再发起）。
-    **不 commit**。
+def withdraw_followup_calls(db: Session, record_ids: list[int], note: str) -> int:
+    """随访记录结束（办结 / 移除 / 档案结束一并移除）后，挂在它上面的待呼叫撤出队列（`withdrawn`），返回撤了几条（P2-498）。
+
+    原先不动：随访在门诊当面做完、被手工移除、患者死亡结案一并收走之后，外呼队列里挂着它的呼叫任务照旧「待呼叫」——
+    坐席照单打过去，打给的是已经随访过的人，甚至是死者家属。只翻待呼叫的：已接通 / 未接通 / 已取消的是通话留痕，不动。
+
+    撤回不是取消：这一刻坐席可能正在通话，接了呼叫中心网关的也撤不回已派发的呼叫（网关没有撤销接口）——真实打出去的
+    电话照旧能回写一次结果（`settle_call_task` 从待呼叫或已撤回翻）。原先置成「已取消」，这一路回写就 409、通话记录与
+    录音地址丢掉（随访并发真 PG 档实测）。移除后又恢复的随访不连带恢复外呼（要打再发起）。**不 commit**。
     """
-    from .callcenter import get_call_provider
-
-    if not record_ids or get_call_provider().name != "manual":
+    if not record_ids:
         return 0
-    cancelled = db.execute(
+    withdrawn = db.execute(
         update(SpdCallTask)
         .where(SpdCallTask.ref_type == "followup", SpdCallTask.ref_id.in_(record_ids),
                SpdCallTask.status == "pending")
-        .values(status="cancelled", result=note)
+        .values(status="withdrawn", result=note)
         .execution_options(synchronize_session=False)
     )
-    return cast(CursorResult, cancelled).rowcount
+    return cast(CursorResult, withdrawn).rowcount
 
 
 def settle_call_task(db: Session, task_id: int, **values: Any) -> bool:
@@ -520,7 +521,8 @@ def settle_call_task(db: Session, task_id: int, **values: Any) -> bool:
     接通时两路先后往关联的随访记录各追加一遍沟通结果与录音地址；一路接通、一路未接通时任务停在后提交的那路，随访记录里却
     已写进接通结果。**不 commit**。
     """
-    return _move_row(db, SpdCallTask, task_id, "pending", **values)
+    # 已撤回的也收（P2-498）：随访结束时撤出队列的那一刻，坐席可能正在通话、网关可能已经拨出
+    return _move_row(db, SpdCallTask, task_id, CALL_SETTLEABLE_STATUSES, **values)
 
 
 def note_call_dispatch_failure(db: Session, task_id: int, note: str) -> bool:
@@ -556,7 +558,7 @@ def adjust_followup_record(db: Session, record_id: int, **values: Any) -> bool:
     """
     moved = _move_row(db, SpdFollowupRecord, record_id, FOLLOWUP_ADJUSTABLE_STATUSES, **values)
     if moved and values.get("status") == "removed":
-        cancel_followup_calls(db, [record_id], "随访已移除，呼叫取消")
+        withdraw_followup_calls(db, [record_id], "随访已移除，撤出待呼叫")
     return moved
 
 
@@ -909,8 +911,8 @@ def close_open_work(db: Session, enrollment: SpdEnrollment, reason: str) -> dict
         if _move_row(db, SpdFollowupRecord, record.id, FOLLOWUP_OPEN_STATUSES, status="removed"):
             stats["followups"] += 1
             removed.append(record.id)
-    # 挂在这些随访上的待人工外呼一并取消（P2-498）：原先死者名下的外呼照旧排在坐席队列里
-    cancel_followup_calls(db, removed, f"随访随档案结束移除（{reason}），呼叫取消"[:512])
+    # 挂在这些随访上的待呼叫一并撤出队列（P2-498）：原先死者名下的外呼照旧排在坐席队列里
+    withdraw_followup_calls(db, removed, f"随访随档案结束移除（{reason}），撤出待呼叫"[:512])
     return stats
 
 

@@ -2996,12 +2996,14 @@ async function renderSpdFollowup() {
          <td>${c.status === "connected" ? '<span class="tag green">已接通</span>'
             : c.status === "failed" ? '<span class="tag red">未接通</span>'
             : c.status === "cancelled" ? '<span class="tag">已取消</span>'
+            : c.status === "withdrawn" ? '<span class="tag">已撤回</span>'
             : '<span class="tag orange">待呼叫</span>'}</td>
          <td>${c.status === "pending" && c.result   // 待呼叫的结果列只有派发没受理的原因（P2-367）：原先不显示，看着与普通待呼叫一样
             ? `<span class="tag red">派发未受理</span> ${esc(c.result)}` : esc(c.result || "—")}</td>
          <td>${c.duration_s}</td><td>${c.record_url ? "有" : "—"}</td>
          <td>${esc(c.created_at.replace("T", " ").slice(0, 16))}</td>
-         <td>${c.status === "pending" ? `<button class="btn secondary" data-call-result="${c.id}">回写结果</button>` : "—"}</td></tr>`)}`)}`;
+         <td>${c.status === "pending" || c.status === "withdrawn"   // 已撤回的：撤出队列时正在打的那通照样能回写（P2-498）
+           ? `<button class="btn secondary" data-call-result="${c.id}">回写结果</button>` : "—"}</td></tr>`)}`)}`;
 
   // 「执行」「转呼叫」对待随访与已超期的都给（P1-132）：超期扫描（定时任务、工作台、任务汇总进来都扫）一过，过了日期没做的
   // 随访都成了已超期——原先只对待随访的给，最需要补做的那些在页面上再也执行不了（接口本就收已超期的）
