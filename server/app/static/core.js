@@ -1702,7 +1702,7 @@ async function renderRx() {
           <textarea name="payload" rows="5" style="width:100%;font-family:monospace"
             placeholder='[{"drug_code":"AMOX","max_daily_dose":3000,"dose_unit":"mg","interactions":"","contraindicated_diagnoses":"","special_groups":"","renal_hepatic_note":"","review_points":"","antibiotic":true,"ddd":1500}]'></textarea>
           <p class="desc">一个 JSON 数组，每项一条规则；只有 drug_code 与 max_daily_dose 必填，其余留空走默认。
-            <b>同 drug_code 的既有规则会被整条覆盖</b>（不是合并字段），回执报出新建与更新各几条。</p>
+            <b>同 drug_code 的既有规则会被整条覆盖</b>（不是合并字段），回执报出新建与更新各几条；覆盖前的值记在该规则的「改动记录」里。</p>
           <button class="btn">导入</button>
         </form></details>` : ""}
       ${table(["药品编码", "日剂量上限", "相互作用", "禁忌诊断", "特殊人群", "肝肾功能提示", "抗菌/DDD", "状态"]
@@ -1711,12 +1711,15 @@ async function renderRx() {
          <td>${esc(r.interactions) || "—"}</td><td>${esc(r.contraindicated_diagnoses) || "—"}</td>
          <td>${esc(r.special_groups) || "—"}</td><td>${esc(r.renal_hepatic_note) || "—"}</td>
          <td>${r.antibiotic ? `抗菌药物 / ${r.ddd ? `DDD ${r.ddd}` : '<span class="tag orange">DDD 未维护</span>'}` : "—"}</td>
-         <td>${statusTag(RULE_STATUS, r.active ? "on" : "off")}</td>
+         <td>${statusTag(RULE_STATUS, r.active ? "on" : "off")}
+           <button class="btn secondary" data-rulelog="${esc(r.drug_code)}">改动记录</button></td>
          ${canRule ? `<td>${r.active
            ? `<button class="btn danger" data-ruleoff="${esc(r.drug_code)}">停用</button>`
            : `<button class="btn secondary" data-ruleon="${esc(r.drug_code)}">启用</button>`}</td>` : ""}</tr>`)}
-      <p class="desc">停用不删行：规则改过什么、什么时候不再生效，处方点评复核时要回溯得到。
-        <b>停用期间该药按"规则未维护"处理</b>——不是按上限 0 拦截，是根本不参与审方。</p>`)}
+      <p class="desc">停用不删行：规则改过什么、什么时候不再生效，处方点评复核时要回溯得到——每条规则的「改动记录」列出
+        新建、导入覆盖、停用、恢复各改了哪几项、谁改的、何时改的。
+        <b>停用期间该药按"规则未维护"处理</b>——不是按上限 0 拦截，是根本不参与审方；已开的处方仍按开方时那一版判读。</p>
+      <p class="msg" id="rulelog-msg"></p><div id="rulelog-box"></div>`)}
     ${panel(`处方队列（待药师审 ${pending.length} 张排在最前，其后是最近开的处方）`, table(["ID", "患者", "诊断", "状态", "审方意见", "操作"], prescriptions, (p) => {
       let actions = p.status === "pending_review"
         ? `<button class="btn secondary" data-approve="1" data-id="${p.id}">通过</button>
@@ -1780,7 +1783,20 @@ async function renderRx() {
     } catch (err) { setMsg("#rx-msg", err.message, false); }
   };
   $("#page-body").onclick = async (e) => {
-    const { approve, id, rxcomment, printrx, ruleoff, ruleon } = e.target.dataset;
+    const { approve, id, rxcomment, printrx, ruleoff, ruleon, rulelog } = e.target.dataset;
+    if (rulelog) {
+      // 规则改动记录（P2-578）：改了哪几项、改前改后、谁、何时——文案与字段名取自后端
+      try {
+        const rows = await api(`/api/prescriptions/rules/${encodeURIComponent(rulelog)}/changes`);
+        $("#rulelog-box").innerHTML = `<p class="desc">${esc(rulelog)} 的改动记录（最新在前；本功能上线前的改动无从得知）</p>`
+          + table(["时间", "动作", "改动人", "改了什么"], rows, (c) =>
+            `<tr><td>${esc(c.at.replace("T", " ").slice(0, 19))}</td><td>${esc(c.action_name)}</td>
+             <td>${esc(c.changed_by) || "—"}</td>
+             <td>${c.changes.map((x) => `${esc(x.label)}：${esc(x.before)} → ${esc(x.after)}`).join("<br>") || "—"}</td></tr>`);
+        setMsg("#rulelog-msg", "");
+      } catch (err) { $("#rulelog-box").innerHTML = ""; setMsg("#rulelog-msg", err.message, false); }
+      return;
+    }
     if (ruleoff || ruleon) {
       // 两条路径分开写而不是拼动作：孤儿闸门按字面匹配，拼出来的地址它看不见
       try {

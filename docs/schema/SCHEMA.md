@@ -1,7 +1,7 @@
 # SCHEMA（自动生成，勿手改）
 
 > 由 `server/scripts/dump_schema.py` 从 ORM 元数据生成。改了模型请重跑该脚本。
-> 表总数：**259**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
+> 表总数：**260**。类型/关系/迁移的解读见 `docs/DATA_MODEL.md`。
 
 ## access_logs
 
@@ -764,6 +764,18 @@
 - _index_ ix_drug_batches_expire_date(expire_date)
 - _index_ ix_drug_batches_org_id(org_id)
 - _index_ ix_drug_batches_status(status)
+
+## drug_rule_changes
+
+- `id` · INTEGER · PK · NOT NULL
+- `drug_code` · VARCHAR(64) · NOT NULL · index
+- `action` · VARCHAR(16) · NOT NULL
+- `before` · JSON
+- `after` · JSON · NOT NULL
+- `changed_by` · INTEGER · → users.id
+- `created_at` · DATETIME · NOT NULL · index
+- _index_ ix_drug_rule_changes_created_at(created_at)
+- _index_ ix_drug_rule_changes_drug_code(drug_code)
 
 ## drug_rules
 

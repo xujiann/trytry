@@ -740,6 +740,7 @@ AUDITED_MULTI_ROW_TABLES: dict[str, str] = {
     "deposits": "住院押金流水，模型注释明写\"只增不改的台账\"，余额由流水现算：一次住院分多次预交、多次退费、结算冲抵各自一行都合法（test_billing_deposits 断言\"流水只增不改：两笔都在\"）。db.add 写入点是 prepay，纯追加无自然键",
     "disease_path_records": "路径节点执行记录是“某次入组走到哪一步、谁做的、结果如何”的执行日志，模型与端点都没有“每节点只记一次”的声明；完成度用 set(node_key) 去重（_completion 与 program_stats 都是），同一节点重复执行（疗效复评做两次、补做）多条并存对完成度无影响，records 列表按 id 如实列出",
     "dispense_items": "发药明细「按批次一行一扣」，一张发药单下多行（多批次、同一药跨批）是 FEFO 设计本意，表本身没有自然键；真正要防的「同一处方发两次」落在父表 dispense_records.prescription_id 唯一约束上，且每一行明细只在 _claim_batch 条件 UPDATE 抢到批次余量之后才 add",
+    "drug_rule_changes": "审方规则改动记录（P2-578）：只增不改的流水，同一药品编码每次新建、导入覆盖、停用、恢复各追加一行改动前后——同一 drug_code 多行是设计本意，与报告修订史 report_revisions 同形",
     "drug_shortages": "缺药登记是按次需求单：同机构同药品多次报缺、同患者多次登记都是正常业务（契约测试对同 org+drug_code 连登 s2/s3 两条均 201 并计入统计；黑名单口径'两次登记未取药'也预设一人多条登记），supply-risk 按未结案登记条数计风险本就是多行语义，表带 quantity 列——与 bill_details 反例同类…",
     "duty_rosters": "[业务视角复核] duty_rosters 不应登记为\"逻辑唯一\"，提议键 (center_type, duty_date, shift, doctor_name) 下存在两行合法并存的业务场景，加唯一索引会拒掉合法排班",
     "elderly_assessments": "老年评估按次追加，所有读侧都取「每人最新一次」（失能清单/预警/统计三处都是 latest[patient_id]=a），同一人同一 assessed_date 评三次被测试明确当成合法（assessment_records==3、assessed_people==1）",

@@ -339,7 +339,7 @@ def _column_codes(model, column: str) -> set[str]:
 
 def _label_tables():
     from app.models import (Admission, AdverseEvent, Appointment, ConsentRecord, Consultation, CorrectionRequest,
-                            DrugShortage, EmergencyCase, EsbMessage, ExamReport, ExamRequest, FollowupTask, FundPool,
+                            DrugRuleChange, DrugShortage, EmergencyCase, EsbMessage, ExamReport, ExamRequest, FollowupTask, FundPool,
                             HighValueConsumable, HomeVisitOrder, MaterialPurchase, MedicalWaste, OnlineConsult,
                             PathologySpecimen, Prescription, Referral, SpecialDiseaseApp, SpdCenter,
                             SpdFollowupRecord, SpdFollowupRule, SpdPathTemplate, SterilizationBatch, SurgeryRequest,
@@ -397,6 +397,9 @@ def _label_tables():
         # P2-575：检验样本物流（申请单打印件与列表页同一张；空串「未采样」也是一个码）
         "exams.EXAM_SAMPLE_STATUS_NAMES":
             (exams.EXAM_SAMPLE_STATUS_NAMES, ExamRequest, "sample_status", set()),
+        # P2-578：审方规则改动记录的动作
+        "prescriptions.RULE_CHANGE_ACTION_NAMES":
+            (prescriptions.RULE_CHANGE_ACTION_NAMES, DrugRuleChange, "action", set()),
         "followups.FOLLOWUP_TASK_STATUS_NAMES": (followups.FOLLOWUP_TASK_STATUS_NAMES, FollowupTask, "status", set()),
         "fund.POOL_STATUS_NAMES": (fund.POOL_STATUS_NAMES, FundPool, "status", set()),
         "homevisits.VISIT_ORDER_STATUS_NAMES":
@@ -472,6 +475,7 @@ LABEL_TABLE_NAMES = [
     "followup.ENCOUNTER_TYPE_NAMES", "devices.DATA_SOURCE_STATUS_NAMES",
     "users.LOGIN_FAIL_REASON_NAMES", "clinical_docs.SHIFT_NAMES", "service.ENROLL_STATUS_LABELS",
     "service.PACKAGE_BINDING_STATUS_NAMES", "exams.EXAM_SAMPLE_STATUS_NAMES",
+    "prescriptions.RULE_CHANGE_ACTION_NAMES",
 ]
 
 

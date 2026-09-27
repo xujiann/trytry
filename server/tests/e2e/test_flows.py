@@ -3747,6 +3747,24 @@ def test_集中审方的审方与点评都在页内表单里录入_取消即放�
     assert [(r["grade"], r["issues"]) for r in mine] == [("unreasonable", "E2E重复用药")], mine
 
 
+def test_审方规则的改动记录在规则表上查得到(page, base_url):
+    """P2-578：规则按 drug_code 整条覆盖，覆盖之后旧值原先无处可查。规则表每行的「改动记录」列出新建、导入覆盖、
+    停用、恢复各改了哪几项、谁、何时——文案取自后端。"""
+    _login(page, base_url)
+    page.evaluate("""async () => {
+      await api('/api/prescriptions/rules', { method: 'POST', body: JSON.stringify(
+        { drug_code: 'E2E-RULELOG', max_daily_dose: 2, dose_unit: 'g' }) });
+      await api('/api/prescriptions/rules/import', { method: 'POST', body: JSON.stringify(
+        [{ drug_code: 'E2E-RULELOG', max_daily_dose: 3, dose_unit: 'g' }]) });
+    }""")
+    _open_page(page, "rx", "集中审方")
+    page.click('button[data-rulelog="E2E-RULELOG"]')
+    box = page.locator("#rulelog-box")
+    expect(box).to_contain_text("E2E-RULELOG 的改动记录")
+    expect(box.locator("tr", has_text="导入")).to_contain_text("日剂量上限：2.0 → 3.0")
+    expect(box.locator("tr", has_text="新建")).to_contain_text("平台管理员")
+
+
 @pytest.fixture(scope="session")
 def consult_seed(base_url, seed):
     """一条待回复的续方咨询，以及同一患者一张已自动通过审方的处方（续方要关联它）。"""

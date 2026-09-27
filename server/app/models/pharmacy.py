@@ -7,6 +7,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Float,
@@ -51,6 +52,26 @@ class DrugRule(Base):
     # 而通用规则引擎 `/api/rules/{key}` 是有停用的。停用不删行——规则改过什么、
     # 什么时候不再生效，是处方点评复核时要回溯的。
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class DrugRuleChange(Base):
+    """审方规则改动记录（P2-578）：新建、导入（新建或整条覆盖）、停用、恢复各记一条，存改动前后的整条规则。只增不改。
+
+    规则按 drug_code 整条覆盖、停用不删行，审方页写着「规则改过什么、什么时候不再生效，处方点评复核时要回溯得到」；
+    原先导入覆盖之后旧值就没了——审计日志只记方法、路径与状态码，记不下改了什么。
+    """
+
+    __tablename__ = "drug_rule_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    drug_code: Mapped[str] = mapped_column(String(64), index=True)
+    # create=新建, import=导入, deactivate=停用, reactivate=恢复（文案表 prescriptions.RULE_CHANGE_ACTION_NAMES）
+    action: Mapped[str] = mapped_column(String(16))
+    # 改动前后的整条规则（DrugRuleCreate 的字段加 active）；新建的改动前为空
+    before: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after: Mapped[dict] = mapped_column(JSON)
+    changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

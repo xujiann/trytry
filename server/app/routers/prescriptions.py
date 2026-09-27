@@ -15,6 +15,7 @@ from ..database import get_db
 from ..deps import get_current_user, paginate, require_admin, require_roles
 from ..models import (
     DrugRule,
+    DrugRuleChange,
     MaternalRecord,
     Organization,
     Patient,
@@ -102,12 +103,38 @@ def _rule_snapshot(rule: DrugRule | None) -> dict:
             "rule_antibiotic": rule.antibiotic, "rule_ddd": rule.ddd}
 
 
+#: 规则改动记录的动作（P2-578；措辞照抄模型列注释）
+RULE_CHANGE_ACTION_NAMES = {"create": "新建", "import": "导入", "deactivate": "停用", "reactivate": "恢复"}
+#: 改动记录里逐项列出的字段与中文名（DrugRuleCreate 的字段加生效标记）
+RULE_FIELD_NAMES = {
+    "drug_code": "药品编码", "max_daily_dose": "日剂量上限", "dose_unit": "剂量单位", "note": "备注",
+    "interactions": "相互作用", "contraindicated_diagnoses": "禁忌诊断", "special_groups": "特殊人群",
+    "renal_hepatic_note": "肝肾功能提示", "review_points": "点评要点", "antibiotic": "抗菌药物", "ddd": "DDD",
+    "active": "生效",
+}
+
+
+def _rule_state(rule: DrugRule) -> dict:
+    """整条规则此刻的值：改动记录的前后快照。"""
+    return {field: getattr(rule, field) for field in RULE_FIELD_NAMES}
+
+
+def _log_rule_change(db: Session, action: str, before: dict | None, rule: DrugRule, user: User) -> None:
+    """记一条规则改动（P2-578）。前后一模一样的不记：导入同样的值、恢复本就生效的，都不算改过。"""
+    after = _rule_state(rule)
+    if before == after:
+        return
+    db.add(DrugRuleChange(drug_code=rule.drug_code, action=action, before=before, after=after,
+                          changed_by=user.id))
+
+
 @router.post("/rules", response_model=DrugRuleOut, status_code=201, dependencies=[Depends(require_admin)])
-def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db)):
+def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if db.query(DrugRule).filter(DrugRule.drug_code == body.drug_code).first():
         raise HTTPException(status_code=409, detail="该药品规则已存在")
-    rule = insert_or_conflict(db, DrugRule(**body.model_dump()), "该药品规则已存在")
-    return rule
+    rule = DrugRule(**body.model_dump(), active=True)
+    _log_rule_change(db, "create", None, rule, user)   # 与规则同一次提交：撞了唯一约束一并回滚
+    return insert_or_conflict(db, rule, "该药品规则已存在")
 
 
 class RuleImportOut(BaseModel):
@@ -123,23 +150,27 @@ class RuleActiveOut(BaseModel):
 
 
 @router.post("/rules/import", response_model=RuleImportOut, dependencies=[Depends(require_admin)])
-def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db)):
-    """审方规则批量导入：drug_code 已存在则整条更新，不存在则新建。"""
+def import_rules(body: list[DrugRuleCreate], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """审方规则批量导入：drug_code 已存在则整条更新，不存在则新建。每条新建与覆盖都记改动前后（P2-578）。"""
     imported, updated = 0, 0
     for entry in body:
         rule = db.query(DrugRule).filter(DrugRule.drug_code == entry.drug_code).first()
         # 先试插；撞了说明有人并发导入了同一个 drug_code，取回来按更新处理。
         # 反过来"查不到就插"是 check-then-act，而这里一次 commit 提交整批，
         # 一条撞车整批回滚——导入方看到的是 500 与一条都没进。
-        if rule is None and insert_if_absent(db, DrugRule(**entry.model_dump())):
+        fresh = DrugRule(**entry.model_dump(), active=True)
+        if rule is None and insert_if_absent(db, fresh):
+            _log_rule_change(db, "import", None, fresh, user)
             imported += 1
             continue
         if rule is None:
             rule = db.query(DrugRule).filter(DrugRule.drug_code == entry.drug_code).first()
             if rule is None:  # pragma: no cover - 撞了约束却查不到，说明约束定义有误
                 continue
+        before = _rule_state(rule)
         for field, value in entry.model_dump().items():
             setattr(rule, field, value)
+        _log_rule_change(db, "import", before, rule, user)
         updated += 1
     db.commit()
     return {"imported": imported, "updated": updated}
@@ -156,19 +187,21 @@ def list_rules(include_inactive: bool = False, db: Session = Depends(get_db)):
 @router.delete(
     "/rules/{drug_code}", response_model=RuleActiveOut, dependencies=[Depends(require_admin)]
 )
-def deactivate_rule(drug_code: str, db: Session = Depends(get_db)):
+def deactivate_rule(drug_code: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """停用规则（不删行）。
 
     原先这里只有 POST 与 import，录错一条规则只能靠 import 覆盖同 drug_code
     的行，删不掉也停不掉——而通用规则引擎 `/api/rules/{key}` 一直是有停用的。
-    不删行：规则改过什么、什么时候不再生效，处方点评复核时要回溯得到。
+    不删行：规则改过什么、什么时候不再生效，处方点评复核时要回溯得到（何时停用、谁停的记进改动记录，P2-578）。
     """
     rule = db.query(DrugRule).filter(DrugRule.drug_code == drug_code).first()
     if rule is None:
         raise HTTPException(status_code=404, detail="规则不存在")
     if not rule.active:
         raise HTTPException(status_code=409, detail="该规则已停用")
+    before = _rule_state(rule)
     rule.active = False
+    _log_rule_change(db, "deactivate", before, rule, user)
     db.commit()
     return {"drug_code": drug_code, "active": False}
 
@@ -178,13 +211,79 @@ def deactivate_rule(drug_code: str, db: Session = Depends(get_db)):
     response_model=RuleActiveOut,
     dependencies=[Depends(require_admin)],
 )
-def reactivate_rule(drug_code: str, db: Session = Depends(get_db)):
+def reactivate_rule(drug_code: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rule = db.query(DrugRule).filter(DrugRule.drug_code == drug_code).first()
     if rule is None:
         raise HTTPException(status_code=404, detail="规则不存在")
+    before = _rule_state(rule)
     rule.active = True
+    _log_rule_change(db, "reactivate", before, rule, user)
     db.commit()
     return {"drug_code": drug_code, "active": True}
+
+
+class RuleFieldChangeOut(BaseModel):
+    """改动记录里的一项：字段中文名与改前 / 改后的显示值（新建的改前为「—」）。"""
+
+    field: str
+    label: str
+    before: str
+    after: str
+
+
+class DrugRuleChangeOut(BaseModel):
+    id: int
+    drug_code: str
+    action: str
+    action_name: str
+    #: 改了哪几项（新建列全部字段）
+    changes: list[RuleFieldChangeOut]
+    #: 改动人姓名（没填姓名的退回账号；账号已删的为空串）
+    changed_by: str
+    #: 改动时刻：带偏移的本地时间（给人看的，页面取前 19 位）
+    at: str
+
+
+def _shown(value: Any) -> str:
+    if value is None or value == "":
+        return "—"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    return str(value)
+
+
+@router.get("/rules/{drug_code}/changes", response_model=list[DrugRuleChangeOut],
+            dependencies=[Depends(get_current_user)])
+def list_rule_changes(drug_code: str, response: Response, offset: int = 0, limit: int = 200,
+                      db: Session = Depends(get_db)):
+    """一条审方规则的改动记录（P2-578），最新的在前：每次新建、导入覆盖、停用、恢复改了哪几项、改前改后、谁、何时。
+
+    与规则清单同一个可见范围（登录即可看）。改动记录从本表上线起才有：上线前的改动无从得知。
+    """
+    if db.query(DrugRule.id).filter(DrugRule.drug_code == drug_code).first() is None:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    rows = paginate(
+        db.query(DrugRuleChange).filter(DrugRuleChange.drug_code == drug_code).order_by(DrugRuleChange.id.desc()),
+        response, offset, limit,
+    )
+    user_ids = {r.changed_by for r in rows if r.changed_by is not None}
+    names = {u.id: u.full_name or u.username for u in db.query(User).filter(User.id.in_(user_ids))} if user_ids else {}
+    out = []
+    for r in rows:
+        before = r.before or {}
+        changes = [
+            {"field": field, "label": label, "before": _shown(before.get(field)) if r.before is not None else "—",
+             "after": _shown(r.after.get(field))}
+            for field, label in RULE_FIELD_NAMES.items()
+            if r.before is None or before.get(field) != r.after.get(field)
+        ]
+        out.append({
+            "id": r.id, "drug_code": r.drug_code, "action": r.action,
+            "action_name": RULE_CHANGE_ACTION_NAMES.get(r.action, r.action), "changes": changes,
+            "changed_by": names.get(r.changed_by, "") if r.changed_by is not None else "",
+            "at": clock.local_iso(r.created_at),
+        })
+    return out
 
 
 @router.post(
