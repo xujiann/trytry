@@ -36,7 +36,7 @@ from .models import (
     SpdVillageDoctor,
 )
 from .platform import User
-from .service import TASK_IN_HAND_STATUSES, TASK_OPEN_STATUSES, task_overdue
+from .service import TASK_OPEN_STATUSES, task_overdue
 
 SectionRenderer = Callable[[Session, dict, "int | None", str], dict]
 
@@ -112,14 +112,17 @@ def _summary(db, section, org_id, period):
 
 
 def _todo(db, section, org_id, period):
-    # 超期的另列一表（「超期预警」）：扫描间隙里已过截止日的也归那边（P2-549），同一条任务不在两张表里各出现一次
+    # 超期的另列一表（「超期预警」）：扫描间隙里已过截止日的也归那边（P2-549），同一条任务不在两张表里各出现一次。
+    # 取数与「总体概览」的待办数同一个范围（`TASK_OPEN_STATUSES`，与工作台同口径）减去超期的（P2-602）：原先只取在手的，
+    # 待审核的概览里算进「待办任务 N 条」、两张表都不列；列进来的标题后面注明「待审核」
     rows = (
-        _task_query(db, org_id).filter(SpdTask.status.in_(TASK_IN_HAND_STATUSES),
+        _task_query(db, org_id).filter(SpdTask.status.in_(TASK_OPEN_STATUSES),
                                        ~task_overdue(clock.today().isoformat()))
         .order_by(SpdTask.due_date).limit(20).all()
     )
     return {**_head(section, "table"), "columns": ["任务", "类型", "截止", "优先级"],
-            "rows": [[r.title, r.task_type, r.due_date, r.priority] for r in rows]}
+            "rows": [[f"{r.title}（待审核）" if r.status == "submitted" else r.title,
+                      r.task_type, r.due_date, r.priority] for r in rows]}
 
 
 def _alert(db, section, org_id, period):
