@@ -10,8 +10,10 @@
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
+from ..concurrency import move_row
 from ..numtypes import MONEY_MAX, MoneyFloat
 from ..texttypes import NON_BLANK
 from ..visibility import assert_org_writable
@@ -284,6 +286,17 @@ def update_project(
             detail="结项须同时把进度报到 100%；确实做不完请用「中止」而非「完成」" if "status" in changing
             else "项目已完成，进度须为 100%；要改进度请先把状态改回「进行中」",
         )
+    # 上面按锁外读到的另一列判的（P2-416）：两人同时一个只改状态结项、一个只把进度改成 60，两路都 200，库里成了
+    # 「已完成但进度 60%」。只改其中一列时，先发一条带条件、值不变的 UPDATE 占住这一行——判过的那一列还是读到的那个
+    # 才占得住（行锁到提交），占不住就是刚被别人改了
+    guard = []
+    if "status" in changing and "progress_pct" not in changing:
+        guard.append(AdminProject.progress_pct == project.progress_pct)
+    if "progress_pct" in changing and "status" not in changing:
+        guard.append(AdminProject.status == project.status)
+    if guard and not move_row(db, AdminProject, project.id, and_(*guard), status=AdminProject.status):
+        db.rollback()
+        raise HTTPException(status_code=409, detail="项目的状态或进度刚被别人改过，请刷新后再改")
     for field, value in data.items():
         if value is not None:
             setattr(project, field, value)
