@@ -346,8 +346,8 @@ def _label_tables():
                             TcmDispenseOrder, TcmPreparationBatch, TrainingEnrollment, TrainingPlan, VisitCredential,
                             Voucher, WorkflowInstance)
     from app.models import AccountSubject, ChargeItem, Course, Department, OfficialDoc, Organization, SimulationCase
-    from app.models import (Encounter, SpdAssessPlan, SpdDataSource, SpdEduMaterial, SpdGroup, SpdMeasurement,
-                            SpdPathNode, SpdScreening, SpdTag, SpdTeam)
+    from app.models import (Encounter, SpdAssessPlan, SpdDataSource, SpdEduMaterial, SpdEnrollment, SpdGroup,
+                            SpdMeasurement, SpdPathNode, SpdScreening, SpdTag, SpdTeam)
     from app.models import LoginLog, ShiftHandover
     from app.spd import service
     from app.spd.routers import assess, population
@@ -423,6 +423,8 @@ def _label_tables():
             (consents.CORRECTION_TYPE_NAMES, CorrectionRequest, "request_type", set()),
         # P2-74 ② 慢专病侧（纳管网络树的机构层级沿用上面的 organizations.ORG_LEVEL_NAMES）
         "service.MEASUREMENT_SOURCE_NAMES": (service.MEASUREMENT_SOURCE_NAMES, SpdMeasurement, "source", set()),
+        # P2-527：迁入确认的 409 文案也用这张表（原先是 service 里的私有表）
+        "service.ENROLL_STATUS_LABELS": (service.ENROLL_STATUS_LABELS, SpdEnrollment, "status", set()),
         "service.MEDIA_TYPE_NAMES": (service.MEDIA_TYPE_NAMES, SpdEduMaterial, "media_type", set()),
         "scales.TAG_CATEGORY_NAMES": (scales.TAG_CATEGORY_NAMES, SpdTag, "category", set()),
         "population.SCREENING_SOURCE_NAMES": (population.SCREENING_SOURCE_NAMES, SpdScreening, "source", set()),
@@ -464,7 +466,7 @@ LABEL_TABLE_NAMES = [
     "population.SCREENING_SOURCE_NAMES", "population.GROUP_SCOPE_NAMES", "workbench.TEAM_LEVEL_NAMES",
     "paths.NODE_SERVICE_TYPE_NAMES", "assess.ASSESS_LEVEL_NAMES", "assess.PERIOD_TYPE_NAMES",
     "followup.ENCOUNTER_TYPE_NAMES", "devices.DATA_SOURCE_STATUS_NAMES",
-    "users.LOGIN_FAIL_REASON_NAMES", "clinical_docs.SHIFT_NAMES",
+    "users.LOGIN_FAIL_REASON_NAMES", "clinical_docs.SHIFT_NAMES", "service.ENROLL_STATUS_LABELS",
 ]
 
 

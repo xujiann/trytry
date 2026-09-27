@@ -52,12 +52,15 @@ from ..models import (
     SpdTeam,
 )
 from ..rules import RuleError, as_validated, evaluate, is_suspect_risk, score_scale
-from ..service import (MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled, award_points, build_facts,
-                       close_open_work, match_program, package_items_ok, scale_program_mismatch, scale_unusable)
+from ..service import (ENROLL_STATUS_LABELS, MEASUREMENT_SOURCE_NAMES, TASK_OPEN_STATUSES, actively_enrolled,
+                       award_points, build_facts, close_open_work, match_program, package_items_ok,
+                       scale_program_mismatch, scale_unusable)
 
 # 筛查来源、分组范围文案（措辞照抄 SpdScreening.source / SpdGroup.scope 列注释——P2-74）
 SCREENING_SOURCE_NAMES = {"opportunistic": "机会性", "active": "主动筛查", "self": "居民自查", "import": "数据比对"}
 GROUP_SCOPE_NAMES = {"personal": "本人分组", "dept": "科室分组", "team": "团队分组"}
+#: 迁入确认时原档案处于这些状态，这次迁出即不再生效（P2-527；死亡另有一句 P1-111 的文案）
+_MIGRATION_VOID_STATUSES = ("migrated", "excluded", "completed")
 from ...visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 
 router = APIRouter(
@@ -1372,6 +1375,12 @@ def confirm_migration(
     # 目标机构给已故患者新建一份在管档案，之后的随访、宣教照常派给他（实测 200）
     if enrollment.status == "dead":
         raise HTTPException(status_code=409, detail="该患者已登记死亡，这次迁出不再生效")
+    # 原档案已迁出 / 已排除 / 已结案的，这次迁出同样不再生效（P2-527）：原先只挡死亡——同一档案先后登记迁往乙、丙两家，
+    # 乙家确认之后丙家再确认照样 200，回执里的「迁入档案」是乙家那份、丙家什么也没有；迁出登记之后档案被排除、患者又在
+    # 别家重新纳管，迟到的确认把已排除的档案改成「已迁出」，还把别家那份记成从这里迁过去的
+    if enrollment.status in _MIGRATION_VOID_STATUSES:
+        state = ENROLL_STATUS_LABELS.get(enrollment.status, enrollment.status)
+        raise HTTPException(status_code=409, detail=f"原档案{state}，这次迁出不再生效")
     event.confirmed = True
     event.confirmed_by = user.id
     enrollment.status = "migrated"
@@ -1393,7 +1402,7 @@ def confirm_migration(
     if not insert_if_absent(db, incoming):
         # 目标机构已有同病种在管档案（比如患者早已在那边建档）：
         # 不重复建，只把关系接上
-        incoming = ensure_present(
+        existing = (
             db.query(SpdEnrollment)
             .filter(
                 SpdEnrollment.patient_id == enrollment.patient_id,
@@ -1401,10 +1410,19 @@ def confirm_migration(
                 SpdEnrollment.status == "active",
                 SpdEnrollment.id != enrollment.id,
             )
-            .first(),
-            "在管档案",
+            .first()
         )
-        if incoming is not None and incoming.migrated_from_id is None:
+        # 只接**目标机构**的那份（P2-527）：原先取到哪家算哪家——同病种在管档案全县只许一份（部分唯一索引），撞上的
+        # 若是第三家的，就把第三家的档案当成迁入档案回给目标机构、还记成从这里迁过去的
+        if existing is not None and existing.org_id != event.target_org_id:
+            db.rollback()
+            other = db.get(Organization, existing.org_id)
+            raise HTTPException(
+                status_code=409,
+                detail=f"该患者同病种已在「{other.name if other else existing.org_id}」在管，这次迁出不再生效",
+            )
+        incoming = ensure_present(existing, "在管档案")
+        if incoming.migrated_from_id is None:
             incoming.migrated_from_id = enrollment.id
     db.commit()
     return {

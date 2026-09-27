@@ -1104,8 +1104,8 @@ def referral_feed(db: Session, patient_id: int) -> list[dict]:
 # 居民端入组读侧聚合的 spd 源（ADR-0003 方案 B）
 # ---------------------------------------------------------------------------
 
-#: `spd_enrollments.status` → 中文。取值见该列的注释。
-_ENROLL_STATUS_LABELS = {
+#: `spd_enrollments.status` → 中文。取值见该列的注释（迁入确认的 409 文案也用它，P2-527）。
+ENROLL_STATUS_LABELS = {
     "active": "在管", "excluded": "已排除", "migrated": "已迁出",
     "dead": "已死亡", "lost": "脱管", "recalled": "召回中", "completed": "已结案",
 }
@@ -1139,7 +1139,7 @@ def enrollment_feed(db: Session, patient_id: int) -> list[dict]:
             program_code=r.program_code,
             program_name=names.get(r.program_code, r.program_code),
             status=r.status,
-            status_label=_ENROLL_STATUS_LABELS.get(r.status, r.status),
+            status_label=ENROLL_STATUS_LABELS.get(r.status, r.status),
             level_code=r.risk_level,
             level_label=_RISK_LABELS.get(r.risk_level, r.risk_level),
             stage=r.stage,
