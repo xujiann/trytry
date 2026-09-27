@@ -210,10 +210,14 @@ class OrgScorecardsOut(BaseModel):
     scorecards: list[OrgScorecard]
 
 
+#: 量类维度的缺省封顶次数（L-1）：绩效页、运营月报导出、基金池的计分口径都以它为缺省，只写这一处
+DEFAULT_VOLUME_CAP = 5
+
+
 @router.get("/orgs", response_model=OrgScorecardsOut)
 def org_scorecards(
     period: str | None = None,
-    volume_cap: int = 5,
+    volume_cap: int = DEFAULT_VOLUME_CAP,
     include_auto_passed: bool = True,
     org_id: int | None = None,
     group_id: int | None = None,

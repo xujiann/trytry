@@ -44,7 +44,7 @@ from ..models import (
     utcnow,
 )
 from ..numtypes import MONEY_MAX, MoneyFloat, split_fen
-from .performance import org_scorecards
+from .performance import DEFAULT_VOLUME_CAP, org_scorecards
 
 router = APIRouter(
     prefix="/api/fund",
@@ -441,7 +441,7 @@ class DistributeIn(BaseModel):
 
     formula_expr: str = Field(default="score", max_length=256)
     # 绩效计分口径参数，与 /api/performance/orgs 一致，记进快照便于复现
-    volume_cap: int = Field(default=5, ge=1)
+    volume_cap: int = Field(default=DEFAULT_VOLUME_CAP, ge=1)
     include_auto_passed: bool = True
 
 

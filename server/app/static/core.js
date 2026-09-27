@@ -899,13 +899,18 @@ async function renderPerformance() {
   };
   if (filterError) setMsg("#perf-filter-msg", `${filterError}（已回到缺省口径）`, false);
   $("#exp-monitor").onclick = () => downloadCsv("/api/reports/monitoring/export", "monitoring_indicators.csv", "#rpt-msg");
-  $("#exp-ops").onclick = () => downloadCsv("/api/reports/operations/export", "operations_report_all.csv", "#rpt-msg");
+  // 运营月报的绩效分列与上面的排名同一口径（P2-647）：调过的两项计分参数一并带上，导出表头写明；原先恒按缺省口径，
+  // 同一家机构页面上的分与导出的对不上。参数写错时上面已回到缺省（PERF_FILTER 清空），这里跟着是缺省
+  const scoreQuery = new URLSearchParams(Object.entries(PERF_FILTER)
+    .filter(([k, v]) => ["volume_cap", "include_auto_passed"].includes(k) && v !== "")).toString();
+  $("#exp-ops").onclick = () => downloadCsv(`/api/reports/operations/export${scoreQuery ? `?${scoreQuery}` : ""}`,
+    "operations_report_all.csv", "#rpt-msg");
   $("#exp-ops-period").onclick = async () => {
     // P2-38：弹窗换成页内表单；月份的形状与日历由后端 require_month 判，写错报人话（downloadCsv 取 detail）
     const form = await spdModal("按月导出运营报表", [
       { name: "period", label: "导出月份", required: true, placeholder: "YYYY-MM，如 2026-07" }]);
     if (!form) return;
-    downloadCsv(`/api/reports/operations/export?period=${encodeURIComponent(form.period)}`,
+    downloadCsv(`/api/reports/operations/export?period=${encodeURIComponent(form.period)}${scoreQuery ? `&${scoreQuery}` : ""}`,
       `operations_report_${form.period}.csv`, "#rpt-msg");
   };
   await drawImprovementTasks();  // 块4㉟ 绩效自评改进

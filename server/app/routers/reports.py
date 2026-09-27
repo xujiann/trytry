@@ -32,7 +32,7 @@ from ..models import (
     Referral,
     Settlement,
 )
-from .performance import org_scorecards
+from .performance import DEFAULT_VOLUME_CAP, org_scorecards
 
 router = APIRouter(
     prefix="/api/reports",
@@ -234,14 +234,32 @@ def export_monitoring_csv(db: Session = Depends(get_db)):
     )
 
 
+def _score_caliber(period: str, volume_cap: int, include_auto_passed: bool) -> str:
+    """绩效评分列表头里的口径说明：缺省口径只写周期（与原先一字不差），调过的参数逐项写明。"""
+    parts = [period]
+    if volume_cap != DEFAULT_VOLUME_CAP:
+        parts.append(f"量类封顶{volume_cap}次")
+    if not include_auto_passed:
+        parts.append("处方合格只计药师人工审核通过")
+    return "，".join(parts)
+
+
 @router.get("/operations/export", response_class=CsvResponse)
-def export_operations_csv(period: str | None = None, db: Session = Depends(get_db)):
+def export_operations_csv(
+    period: str | None = None,
+    volume_cap: int = DEFAULT_VOLUME_CAP,
+    include_auto_passed: bool = True,
+    db: Session = Depends(get_db),
+):
     """运营月报 CSV：各机构 就诊/住院/收入/支出/结余/绩效分。
 
     period=YYYY-MM 时就诊/住院按发生月份、收支按记账期间过滤；缺省为累计口径。
 
     **例外：绩效分列没有"累计"**——绩效评分自 2026-08 起是周期口径
     （见 docs/统计口径对照表.md 第 3 条），缺省即当年。表头已注明分数所属周期。
+
+    `volume_cap` / `include_auto_passed` 与绩效页「机构评分排名」同名同义（P2-647）：页面按调过的口径计分，导出原先
+    恒按缺省口径，同一家机构页面上的分与导出的对不上。不是缺省口径时表头写明，缺省时表头与原先一字不差。
     """
     if period is not None:
         period = require_month(period)  # 形状 + 日历：`2026-13` 不能变成一张全空的月报
@@ -250,7 +268,8 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
     # "本月就诊 30 人次、绩效分却是全年累计"这种一行里两个口径的报表。
     # （绩效评分自 2026-08 起是周期口径，`period=None` 即当年，
     #  故"累计"导出的分数列实为当年——CSV 表头已注明。）
-    scorecard_payload = org_scorecards(period=period, db=db)
+    scorecard_payload = org_scorecards(period=period, volume_cap=volume_cap,
+                                       include_auto_passed=include_auto_passed, db=db)
     score_period = scorecard_payload["period"]
     scores = {c["org_id"]: c["score"] for c in scorecard_payload["scorecards"]}
     level_names = {"county": "县级", "township": "乡级", "village": "村级", "city": "市级"}
@@ -314,6 +333,6 @@ def export_operations_csv(period: str | None = None, db: Session = Depends(get_d
         # 绩效评分列注明所属周期：它是周期口径，与同一行"累计"的其它列不同源，
         # 表头不标清楚，拿去做二次加工的人会当成同一口径。
         ["机构ID", "机构名称", "层级", "门急诊人次", "住院人次", "收入(元)", "支出(元)",
-         "结余(元)", f"绩效评分({score_period})"],
+         "结余(元)", f"绩效评分({_score_caliber(score_period, volume_cap, include_auto_passed)})"],
         rows,
     )
