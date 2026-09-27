@@ -336,8 +336,10 @@ def _do_fhir_patient(resource: dict, db: Session, user: User):
     return {"created": created, "patient": desensitize(patient, user).model_dump()}
 
 
-# LOINC 编码 → 随访指标字段
-_LOINC_FIELDS = {"8480-6": "sbp", "8462-4": "dbp", "2339-0": "glucose"}
+# LOINC 编码 → 随访指标字段。血糖三个编码：2339-0 是质量浓度（mg/dL），15074-8 / 14749-6 是摩尔浓度（mmol/L）
+_LOINC_FIELDS = {"8480-6": "sbp", "8462-4": "dbp", "2339-0": "glucose", "15074-8": "glucose", "14749-6": "glucose"}
+#: 血糖单位（UCUM，`valueQuantity.code`，没有再看 `unit`）→ 折成 mmol/L 的除数（P2-639）
+_GLUCOSE_UNIT_DIVISOR = {"mmol/l": 1.0, "mg/dl": 18.0}
 # 指标 → 慢病病种（用于定位随访归属档案）
 _FIELD_DISEASE = {"sbp": "hypertension", "dbp": "hypertension", "glucose": "diabetes"}
 
@@ -356,13 +358,37 @@ class FhirObservationInboundOut(BaseModel):
 def fhir_observation(
     resource: dict, db: Session = Depends(get_db), x_source_system: str = Header(default="")
 ):
-    """FHIR R4 Observation 入站：血压（LOINC 8480-6/8462-4）或血糖（2339-0）→ 慢病随访。
+    """FHIR R4 Observation 入站：血压（LOINC 8480-6/8462-4）或血糖（2339-0 / 15074-8 / 14749-6）→ 慢病随访。
+
+    血糖按 `valueQuantity` 的单位折成 mmol/L：mg/dL ÷18，不带单位按 mmol/L，别的单位 422（P2-639）。
 
     subject.reference 形如 Patient/{ehc_no}；component 或 valueQuantity 提供数值。
     """
     return _run_inbound(
         "fhir_observation", x_source_system, lambda: _do_fhir_observation(resource, db)
     )
+
+
+def _quantity_value(field: str, quantity: dict) -> float | None:
+    """观测值折成随访字段的单位；没给数值返回 None。
+
+    血糖一律折成 mmol/L（P2-639）：分级阈值按 mmol/L 配（`chronic_seed`：≥10.0 三级、≥7.0 二级），入站原先不读单位——
+    按 LOINC 2339-0（质量浓度）上送的 99 mg/dL（约 5.5 mmol/L，正常）当 99 mmol/L 判成三级高危、建议上转，再经采集器
+    进慢专病监测。mg/dL 按 ÷18 折算；认不出的单位 422（不猜）；不带单位的照旧按 mmol/L 收——对接规范一直这么收，
+    已经接上的系统不断。血压不看单位（mmHg 以外的写法在县域对接里没见过）。
+    """
+    value = quantity.get("value")
+    if value is None:
+        return None
+    if field != "glucose":
+        return float(value)
+    unit = str(quantity.get("code") or quantity.get("unit") or "").strip()
+    if not unit:
+        return float(value)
+    divisor = _GLUCOSE_UNIT_DIVISOR.get(unit.lower())
+    if divisor is None:
+        raise HTTPException(status_code=422, detail=f"血糖单位 {unit} 无法识别：请按 mmol/L 或 mg/dL 上送")
+    return round(float(value) / divisor, 2)
 
 
 def _do_fhir_observation(resource: dict, db: Session):
@@ -387,13 +413,14 @@ def _do_fhir_observation(resource: dict, db: Session):
     values: dict[str, float] = {}
     for comp in resource.get("component", []):
         field_name = _LOINC_FIELDS.get(loinc_code(comp.get("code")))
-        quantity = (comp.get("valueQuantity") or {}).get("value")
+        quantity = _quantity_value(field_name, comp.get("valueQuantity") or {}) if field_name else None
         if field_name and quantity is not None:
-            values[field_name] = float(quantity)
+            values[field_name] = quantity
     top_field = _LOINC_FIELDS.get(loinc_code(resource.get("code")))
-    top_value = (resource.get("valueQuantity") or {}).get("value")
-    if top_field and top_value is not None and top_field not in values:
-        values[top_field] = float(top_value)
+    if top_field and top_field not in values:
+        top_value = _quantity_value(top_field, resource.get("valueQuantity") or {})
+        if top_value is not None:
+            values[top_field] = top_value
 
     if not values:
         raise HTTPException(status_code=422, detail="未识别到支持的观测指标（血压/血糖 LOINC）")
