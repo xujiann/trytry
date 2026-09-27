@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, exists, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from ..concurrency import add_amount, insert_or_conflict, serialized_on, take_amount, upsert_unique
@@ -362,7 +363,20 @@ def create_asset(body: AssetCreate, db: Session = Depends(get_db), user: User = 
         raise HTTPException(status_code=404, detail="机构不存在")
     if db.query(Asset).filter(Asset.code == body.code).first():
         raise HTTPException(status_code=409, detail="物资编码已存在")
-    asset = insert_or_conflict(db, Asset(**body.model_dump()), "物资编码已存在")
+    asset = Asset(**body.model_dump())
+    db.add(asset)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="物资编码已存在") from None
+    # 建档数量记一笔入库流水（P2-628）：原先只写台账、不记流水，入库 + 归还 − 领用 − 报废合不上现存量——整件报废
+    # 之后流水上是「领 3、报废 7」，从没进过库的 10 件凭空出了库。采购验收生成台账时本就同一事务记入库（materials.py），
+    # 两个入口一个口径；与台账同一事务提交，不会只落一半
+    db.add(AssetMovement(asset_id=asset.id, movement_type="inbound", quantity=asset.quantity, note="建档入库",
+                         created_by=user.id))
+    db.commit()
+    db.refresh(asset)
     return asset
 
 

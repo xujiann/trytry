@@ -526,12 +526,15 @@ def test_出入库回执精确(movements):
 
 def test_出入库流水清单精确(client, admin, movements):
     rows = client.get(f"/api/mgmt/assets/{movements['asset']['id']}/movements", headers=admin).json()
-    assert [list(r.keys()) for r in rows] == [MOVEMENT_ROW_KEYS] * 2
+    assert [list(r.keys()) for r in rows] == [MOVEMENT_ROW_KEYS] * 3
     assert rows == [
+        # 建档的 10 件记一笔入库（P2-628）：此前只写台账，流水合计与现存量合不上
+        {"id": rows[0]["id"], "movement_type": "inbound", "quantity": 10,
+         "note": "建档入库", "at": rows[0]["at"]},
         {"id": movements["m1"]["id"], "movement_type": "inbound", "quantity": 5,
-         "note": "采购入库", "at": rows[0]["at"]},
+         "note": "采购入库", "at": rows[1]["at"]},
         {"id": movements["m2"]["id"], "movement_type": "issue", "quantity": 3,
-         "note": "", "at": rows[1]["at"]},
+         "note": "", "at": rows[2]["at"]},
     ]  # id 正序
     assert all(isinstance(r["at"], str) for r in rows)
 

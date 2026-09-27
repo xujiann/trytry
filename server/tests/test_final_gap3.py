@@ -260,7 +260,7 @@ def test_asset_movements(client, setup):
         == 409
     )
     history = client.get(f"/api/mgmt/assets/{aid}/movements", headers=op).json()
-    assert len(history) == 3
+    assert len(history) == 4   # 建档入库（P2-628）+ 领用 + 归还 + 报废
 
 
 def test_system_params(client, admin, setup):

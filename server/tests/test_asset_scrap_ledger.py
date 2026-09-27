@@ -33,9 +33,10 @@ def test_整件报废记一笔报废出库_数量清零_流水与台账对得上
     assert scrapped.status_code == 200, scrapped.text
     assert (scrapped.json()["status"], scrapped.json()["quantity"]) == ("scrapped", 0)   # 修前 ("scrapped", 7)
     moves = client.get(f"{M}/{asset}/movements", headers=admin).json()
-    # 修前流水只有领用那一笔：剩下的 7 台在流水上从没出过库
+    # 修前流水只有领用那一笔：剩下的 7 台在流水上从没出过库。建档的 10 台自 P2-628 起也记一笔入库——
+    # 入 10 − 领 3 − 报废 7 = 0，流水与台账这才两头都对得上
     assert [(m["movement_type"], m["quantity"], m["note"]) for m in moves] == [
-        ("issue", 3, ""), ("scrap", 7, "整件报废")]
+        ("inbound", 10, "建档入库"), ("issue", 3, ""), ("scrap", 7, "整件报废")]
 
 
 def test_已报废的再报废_409_不重复记账(client, admin, org):
@@ -43,7 +44,9 @@ def test_已报废的再报废_409_不重复记账(client, admin, org):
     assert client.post(f"{M}/{asset}/scrap", headers=admin).status_code == 200
     again = client.post(f"{M}/{asset}/scrap", headers=admin)
     assert again.status_code == 409 and again.json() == {"detail": "物资已报废"}, again.text   # 修前 200
-    assert len(client.get(f"{M}/{asset}/movements", headers=admin).json()) == 1
+    # 建档入库一笔（P2-628）+ 报废一笔，再报废不再多记
+    assert [m["movement_type"] for m in client.get(f"{M}/{asset}/movements", headers=admin).json()] == [
+        "inbound", "scrap"]
 
 
 def test_数量已经领完的整件报废_只改状态不记零数量的流水(client, admin, org):
@@ -52,4 +55,5 @@ def test_数量已经领完的整件报废_只改状态不记零数量的流水(
                        json={"movement_type": "issue", "quantity": 1}).status_code == 201
     scrapped = client.post(f"{M}/{asset}/scrap", headers=admin)
     assert scrapped.status_code == 200 and scrapped.json()["status"] == "scrapped", scrapped.text
-    assert [m["movement_type"] for m in client.get(f"{M}/{asset}/movements", headers=admin).json()] == ["issue"]
+    assert [m["movement_type"] for m in client.get(f"{M}/{asset}/movements", headers=admin).json()] == [
+        "inbound", "issue"]   # 建档入库一笔（P2-628）
