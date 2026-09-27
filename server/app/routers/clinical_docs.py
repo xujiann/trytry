@@ -353,8 +353,14 @@ def list_nursing_records(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """护理记录：每页按记录先后升序；从最近一条往前翻页（P2-451，与病程记录 P2-362、体温单 P1-81 同一口径）。
+
+    `offset=0` 是最近 `limit` 条。原先升序取前 100 条，一次住院记满 100 条之后截掉的恰好是最新的那一端：新记的护理
+    提示成功，住院文书页「护理记录」里却一直看不到。不超过一页时与原先逐字节相同。
+    """
     _admission_or_404(db, admission_id, user, resource="nursing_record")
     query = db.query(NursingRecord).filter(NursingRecord.admission_id == admission_id)
+    newest_first = paginate(query.order_by(NursingRecord.id.desc()), response, offset, limit)
     return [
         {
             "id": r.id,
@@ -364,7 +370,7 @@ def list_nursing_records(
             "nurse_name": r.nurse_name,
             "recorded_at": r.recorded_at or r.created_at.strftime("%Y-%m-%d %H:%M"),
         }
-        for r in paginate(query.order_by(NursingRecord.id), response, offset, limit)
+        for r in reversed(newest_first)
     ]
 
 
