@@ -2334,6 +2334,30 @@ async function renderSpdPath() {
 
 const SPD_HANDLE_LEVELS = { village: "村医处置", station: "服务站处置", township: "卫生院处置", county: "县级处置" };
 
+/* 转诊单每行给哪些动作，与后端各动作的状态守卫逐一对上（P2-580）：原先通过 / 退回 / 到院 / 下转 / 随访接收五个按钮
+ * 每行都画，清单又含已结束的单子（open_only=false）——已闭环 / 已退回 / 已撤回的单子五个点下去全是 409。
+ * 审核链见 referral._NEXT；到院只收已接收；下转收已接收 / 已到院；随访接收只收已下转；撤回只收还没进上级审核的。
+ * 医生移动端 spdReferralOps 同一口径（P2-101），它没有下转这一步。 */
+const SPD_REF_OPS = {
+  review: ["submitted", "station_reviewed", "township_reviewed"],
+  arrive: ["accepted"],
+  down: ["accepted", "arrived"],
+  recv: ["down_referred"],
+  withdraw: ["submitted", "station_reviewed"],
+};
+function spdReferralRowOps(c) {
+  const on = (op) => SPD_REF_OPS[op].includes(c.status);
+  return [
+    `<button class="btn secondary" data-ref-detail="${c.id}">全轨迹</button>`,
+    on("review") ? `<button class="btn secondary" data-ref-pass="${c.id}">通过</button>
+      <button class="btn secondary" data-ref-reject="${c.id}">退回</button>` : "",
+    on("arrive") ? `<button class="btn secondary" data-ref-arrive="${c.id}">到院</button>` : "",
+    on("down") ? `<button class="btn secondary" data-ref-down="${c.id}">下转</button>` : "",
+    on("recv") ? `<button class="btn secondary" data-ref-recv="${c.id}">随访接收</button>` : "",
+    on("withdraw") ? `<button class="btn danger" data-ref-withdraw="${c.id}">撤回</button>` : "",
+  ].filter(Boolean).join("\n      ");
+}
+
 async function renderSpdReferral() {
   $("#page-desc").textContent =
     "村医 → 乡镇卫生院 → 区市县医院三级转诊：分级审核、到院有效判定、下转随访接收闭环";
@@ -2371,14 +2395,7 @@ async function renderSpdReferral() {
          <td>${esc({ village: "村医", station: "服务站", township: "卫生院", county: "县级" }[c.current_level] || c.current_level)}</td>
          <td>${spdTag(SPD_REF_STATUS, c.status)}</td>
          <td>${c.effective_visit ? '<span class="tag green">是</span>' : "—"}</td>
-         <td><button class="btn secondary" data-ref-detail="${c.id}">全轨迹</button>
-             <button class="btn secondary" data-ref-pass="${c.id}">通过</button>
-             <button class="btn secondary" data-ref-reject="${c.id}">退回</button>
-             <button class="btn secondary" data-ref-arrive="${c.id}">到院</button>
-             <button class="btn secondary" data-ref-down="${c.id}">下转</button>
-             <button class="btn secondary" data-ref-recv="${c.id}">随访接收</button>
-             ${["submitted", "station_reviewed"].includes(c.status)
-               ? `<button class="btn danger" data-ref-withdraw="${c.id}">撤回</button>` : ""}</td></tr>`)}
+         <td>${spdReferralRowOps(c)}</td></tr>`)}
       <div id="spd-ref-detail"></div>`)}
     ${panel("转诊触发规则", `
       <p class="desc">命中规则默认只提示不自动开单——批量随访录入时自动开单会瞬间产生几十张单子</p>
