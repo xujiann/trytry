@@ -3932,3 +3932,16 @@ def test_体检没总检的排在最前_总检后这一行改标已总检(page, 
     expect(page.locator("#chk-detail-body")).to_contain_text("总检结论已保存")
     rows = admin_read(f"/api/checkups?patient_id={seed['patient']['id']}&reviewed=true")
     assert [r["reviewed"] for r in rows if r["id"] == chk["id"]] == [True]
+
+
+def test_体检只按分项标了异常_清单上列出异常分项而不是空标签(page, base_url, seed, admin_call):
+    """P2-422：异常口径是「汇总异常串非空或任一分项异常」，清单显示的却是录入的汇总串——录了分项、没另写汇总的
+    体检，清单上是一个空的红标签，看不出哪项异常。修后显示后端给的 `abnormal_text`（与打印件同一口径）。"""
+    chk = admin_call("POST", "/api/checkups", {
+        "patient_id": seed["patient"]["id"], "org_id": seed["org"]["id"], "exam_date": "2026-09-02",
+        "items": [{"item_code": "HB", "item_name": "E2E血红蛋白", "result_value": "95", "abnormal": True},
+                  {"item_code": "GLU", "item_name": "E2E空腹血糖", "result_value": "5.1", "abnormal": False}]})
+    _login(page, base_url)
+    _open_page(page, "certs", "证明与体检")
+    row = page.locator(f'tr:has(td[data-chkstate="{chk["id"]}"])')
+    expect(row.locator(".tag.red")).to_have_text("E2E血红蛋白")   # 修前是空的红标签

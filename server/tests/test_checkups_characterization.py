@@ -9,6 +9,7 @@
 关键断言：`/abnormal` 每个元素的键**恰好**是 {id, patient_id, exam_date,
 abnormal_items} 四个，不多不少。response_model 若少声明一个字段会把它从响应里
 删掉、若混进模型的额外字段会多出来——两种都会让下面的断言变红。
+（P2-422 起多一个 `abnormal_text`：只按分项标了异常的体检也要看得出哪项异常，只加键、原有四个的值不变。）
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ import pytest
 from conftest import login
 
 
-EXPECTED_KEYS = {"id", "patient_id", "exam_date", "abnormal_items"}
+EXPECTED_KEYS = {"id", "patient_id", "exam_date", "abnormal_items", "abnormal_text"}
 
 
 @pytest.fixture(scope="module")
@@ -56,7 +57,7 @@ def ctx(client):
     return {"ph": ph, "patient": patient, "org": org, "abnormal_id": ab["id"]}
 
 
-def test_abnormal_列表键恰好为四个(ctx, client):
+def test_abnormal_列表键恰好为约定的五个(ctx, client):
     rows = client.get("/api/checkups/abnormal", headers=ctx["ph"]).json()
     assert isinstance(rows, list) and rows, "至少应有一条异常记录"
     for row in rows:

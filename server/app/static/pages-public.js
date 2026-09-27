@@ -371,10 +371,10 @@ async function renderCerts() {
         <button>登记</button></form>`)}
     ${abnormal.length ? panel(`⚠ 体检异常清单（${abnormal.length}，供慢病筛查建档衔接）`,
       table(["体检ID", "患者", "日期", "异常项"], abnormal, (a) =>
-        `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_items)}</span></td></tr>`)) : ""}
+        `<tr><td>${a.id}</td><td>${a.patient_id}</td><td>${esc(a.exam_date)}</td><td><span class="tag red">${esc(a.abnormal_text)}</span></td></tr>`)) : ""}
     ${panel("体检记录", table(["ID", "患者", "套餐", "日期", "结论", "异常", "总检", "操作"], checkups, (c) =>
       `<tr><td>${c.id}</td><td>${c.patient_id}</td><td>${esc(c.package_name)}</td><td>${esc(c.exam_date)}</td>
-       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_items)}</span>` : '<span class="tag green">正常</span>'}</td>
+       <td>${esc(c.summary) || "—"}</td><td>${c.has_abnormal ? `<span class="tag red">${esc(c.abnormal_text)}</span>` : '<span class="tag green">正常</span>'}</td>
        <td data-chkstate="${c.id}">${statusTag(CHK_REVIEW, c.reviewed ? "done" : "todo")}</td>
        <td><button class="btn" data-chkitems="${c.id}">分项结果</button>
            ${canReview ? `<button class="btn secondary" data-chkreview="${c.id}">总检</button>` : ""}

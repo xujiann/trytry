@@ -109,6 +109,7 @@ REFERRAL_DIRECTION_NAMES = {"up": "上转", "down": "下转"}
 # 那是刻意的对外分叉、不是第三份拷贝，收敛与否属另案（ROADMAP）。
 from .referrals import STATUS_LABELS as REFERRAL_STATUS_NAMES  # noqa: E402
 from .consents import GUARDIAN_RELATION_NAMES  # noqa: E402  监护关系编码的中文，与居民端同一份（P2-238）
+from .checkups import abnormal_text as checkup_abnormal_text  # noqa: E402  异常项提示与体检清单同一口径（P2-422）
 CONSENT_SCENE_NAMES = {
     "archive": "居民健康建档",
     "chronic_enroll": "慢病入组管理",
@@ -638,7 +639,8 @@ def print_checkup_report(
     # 分项的 `abnormal` 只是个布尔、不带方向（P2-205）：原先一律印「异常 ↑」，血红蛋白 95（参考 115–150）偏低也印成偏高
     abnormal_tag = '<span class="critical">异常</span>'
     # 汇总的异常项串是选填的；分项里标了异常而汇总没写时，列出标了异常的分项，别在上面标着异常、这里印「无」
-    abnormal_text = exam.abnormal_items or "、".join(it.item_name for it in items if it.abnormal) or "无"
+    # （与体检清单 / 异常清单同一个帮手，P2-422）
+    abnormal_text = checkup_abnormal_text(exam.abnormal_items, [it.item_name for it in items if it.abnormal]) or "无"
     rows = "".join(
         f"<tr><td>{i}</td><td>{_esc(it.item_name)}</td><td>{_esc(it.result_value)}</td>"
         f"<td>{_esc(it.unit) or '—'}</td><td>{_esc(it.ref_range) or '—'}</td>"

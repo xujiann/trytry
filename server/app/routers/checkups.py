@@ -66,17 +66,45 @@ class CheckupOut(CheckupBase):
 
 class CheckupListOut(CheckupOut):
     """清单行：比登记回执多一个「总检了没有」（P2-409）。登记回执的键集合有特征化用例钉着
-    （`test_checkup_items_review`），只加在清单上；结论全文仍只在总检回执与打印件里。"""
+    （`test_checkup_items_review`），只加在清单上；结论全文仍只在总检回执与打印件里。
+    `abnormal_text` 见 `abnormal_text()`（P2-422）。"""
 
     reviewed: bool
+    abnormal_text: str
 
 
 class AbnormalCheckupOut(BaseModel):
-    """异常清单行的响应契约。字段与原手拼 dict 一一对应，保持响应向后兼容。"""
+    """异常清单行的响应契约。字段与原手拼 dict 一一对应，保持响应向后兼容；`abnormal_text` 是后加的（P2-422）。"""
     id: int
     patient_id: int
     exam_date: str
     abnormal_items: str
+    abnormal_text: str
+
+
+def abnormal_text(summary: str, abnormal_item_names: list[str]) -> str:
+    """给人看的「异常项」：汇总的异常项串是选填的，没写时列出标了异常的分项（与打印件同一口径，P2-205）。
+
+    异常口径本就是「汇总异常串非空 **或** 任一分项异常」（`create_checkup`）——只按分项标了异常的体检，原先在
+    异常清单与体检清单上是一个空的红标签，看不出哪项异常（P2-422）。`abnormal_items` 仍原样回显录入的汇总串。
+    """
+    return summary or "、".join(abnormal_item_names)
+
+
+def _abnormal_item_names(db: Session, exam_ids: list[int]) -> dict[int, list[str]]:
+    """一页体检各自标了异常的分项名（按录入顺序），一条 SQL 取回。"""
+    names: dict[int, list[str]] = {}
+    if not exam_ids:
+        return names
+    rows = (
+        db.query(CheckupItem.checkup_id, CheckupItem.item_name)
+        .filter(CheckupItem.checkup_id.in_(exam_ids), CheckupItem.abnormal.is_(True))
+        .order_by(CheckupItem.id)
+        .all()
+    )
+    for checkup_id, item_name in rows:
+        names.setdefault(checkup_id, []).append(item_name)
+    return names
 
 
 @router.post(
@@ -125,27 +153,35 @@ def list_checkups(
         query = query.filter(
             (PhysicalExam.final_conclusion != "") if reviewed else (PhysicalExam.final_conclusion == "")
         )
+    exams = paginate(query.order_by(PhysicalExam.id.desc()), response, offset, limit)
+    names = _abnormal_item_names(db, [e.id for e in exams])
     return [
-        {**CheckupOut.model_validate(e).model_dump(), "reviewed": bool(e.final_conclusion)}
-        for e in paginate(query.order_by(PhysicalExam.id.desc()), response, offset, limit)
+        {**CheckupOut.model_validate(e).model_dump(), "reviewed": bool(e.final_conclusion),
+         "abnormal_text": abnormal_text(e.abnormal_items, names.get(e.id, []))}
+        for e in exams
     ]
 
 
 @router.get("/abnormal", response_model=list[AbnormalCheckupOut])
 def abnormal_checkups(db: Session = Depends(get_db)):
     """异常项清单：供慢病筛查建档与随访干预衔接（医防协同）。"""
+    exams = (
+        db.query(PhysicalExam)
+        .filter(PhysicalExam.has_abnormal.is_(True))
+        .order_by(PhysicalExam.id.desc())
+        .limit(200)
+        .all()
+    )
+    names = _abnormal_item_names(db, [e.id for e in exams])
     return [
         {
             "id": e.id,
             "patient_id": e.patient_id,
             "exam_date": e.exam_date,
             "abnormal_items": e.abnormal_items,
+            "abnormal_text": abnormal_text(e.abnormal_items, names.get(e.id, [])),
         }
-        for e in db.query(PhysicalExam)
-        .filter(PhysicalExam.has_abnormal.is_(True))
-        .order_by(PhysicalExam.id.desc())
-        .limit(200)
-        .all()
+        for e in exams
     ]
 
 
