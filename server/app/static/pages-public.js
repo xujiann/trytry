@@ -1110,9 +1110,26 @@ async function drawPrenatalScreenings() {
 /* ㉟ 绩效自评改进（挂绩效考核页） */
 const TASK_STATUS = { open: ["待整改", "orange"], in_progress: ["整改中", ""], completed: ["已完成待确认", "orange"], verified: ["已确认关闭", "green"] };
 
+/** 措施 / 结果一格按状态取（P2-462）：整改中的显示当前措施，被退回过的带上退回人与理由，已关闭的带上确认人与意见。
+ *  原先一律 `completion_note || measures`——退回后那条被驳回的整改结果说明还挂在整改中的任务上，
+ *  退回理由（接口里一直有 verify_comment / verified_by）页面上哪儿也看不到。 */
+function improvementNote(t) {
+  const submitted = t.status === "completed" || t.status === "verified";
+  const note = esc(submitted ? (t.completion_note || t.measures) : t.measures) || "—";
+  if (!t.verified_by) return note;
+  const [label, color] = t.status === "verified" ? ["确认关闭", "green"]
+    : t.status === "completed" ? ["上次退回", "orange"] : ["已退回", "red"];
+  return `${note}<br><span class="tag ${color}">${label}</span> ${esc(t.verified_by)}${
+    t.verify_comment ? `：${esc(t.verify_comment)}` : ""}`;
+}
+
 async function drawImprovementTasks() {
-  const [tasks, stats] = await Promise.all([
-    api("/api/performance/improvements"), api("/api/performance/improvement-stats")]);
+  // 待确认、待整改、整改中的单独取一遍、排在最前（P2-462，同 P2-456）：清单只回最新 100 条，挤出窗口的那条就没有
+  // 「确认关闭 / 退回」「登记进展 / 提交完成」可点
+  const [recent, stats, ...open] = await Promise.all([
+    api("/api/performance/improvements"), api("/api/performance/improvement-stats"),
+    ...["completed", "open", "in_progress"].map((st) => api(`/api/performance/improvements?status=${st}`))]);
+  const tasks = actionableFirst(recent, ...open);
   const holder = appendSection(`
     ${panel("㉟ 绩效自评改进（问题 → 责任人 → 期限 → 完成确认）", `
       <div class="cards">
@@ -1137,7 +1154,7 @@ async function drawImprovementTasks() {
         return `<tr><td>${t.id}</td><td>${t.org_id}</td><td>${esc(t.problem)}</td><td>${esc(t.owner_name)}</td>
           <td>${t.overdue ? `<span class="tag red">${esc(t.due_date)} 超期</span>` : esc(t.due_date)}</td>
           <td>${statusTag(TASK_STATUS, t.status)}</td>
-          <td>${esc(t.completion_note || t.measures) || "—"}</td><td>${actions}</td></tr>`;
+          <td>${improvementNote(t)}</td><td>${actions}</td></tr>`;
       })}`)}`);
   holder.querySelector("#imp-form").onsubmit = (e) => {
     e.preventDefault();

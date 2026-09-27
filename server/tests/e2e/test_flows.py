@@ -3423,6 +3423,12 @@ def test_绩效改进任务的进展_完成_退回都在页内表单里录入_�
     _redrawn(page, lambda: _spd_modal(page, {"comment": "E2E抽查样本不足，补充后再报"}))
     after = task()
     assert (after["status"], after["measures"]) == ("in_progress", "E2E已组织专项培训"), after
+    # P2-462：退回理由与退回人显示在这一行上；被驳回的整改结果说明不再挂在整改中的任务上
+    row = page.locator(f'tr:has(button[data-impprog="{tid}"])')
+    expect(row).to_contain_text("已退回")
+    expect(row).to_contain_text("E2E抽查样本不足，补充后再报")
+    expect(row).to_contain_text("E2E已组织专项培训")
+    expect(row).not_to_contain_text("E2E整改完成，抽查复核达标")
 
 
 @pytest.fixture(scope="session")
