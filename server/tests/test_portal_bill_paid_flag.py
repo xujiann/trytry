@@ -84,3 +84,30 @@ def test_只收了医保那一份_自付未收是待支付_收了自付才是已
         "settlement_id": settle["id"], "channel": "cash"})
     assert cash.status_code == 201 and cash.json()["amount"] == 400, cash.text
     assert _paid(client, resident, settle["id"]) is True
+
+
+def test_押金冲抵一半_住院页与账单页同一个结论_账单写明还欠多少(client, admin, world):
+    """P2-555（第十一批「居民端 vs 医护端」扫描 Y2-2）：「我的住院」原先只看明细有没有都进了结算单——押金冲抵一半、
+    自付没付清，住院页写「已结清」，账单页同一张单写「待支付」。修后住院页与账单同一套算术，账单另给待付金额。"""
+    phone = "13700015555"   # 另一位居民：上面那位还在院，一人同时只能有一次在院
+    patient = client.post("/api/patients", headers=admin, json={
+        "name": "P2555 居民", "id_card": "330106197909092555", "phone": phone}).json()["id"]
+    ward = client.post("/api/inpatient/wards", headers=admin, json={"org_id": world["org"], "name": "P2555 病区"}).json()
+    bed = client.post("/api/inpatient/beds", headers=admin, json={"ward_id": ward["id"], "bed_no": "1"}).json()
+    adm = client.post("/api/inpatient/admissions", headers=admin, json={
+        "patient_id": patient, "ward_id": ward["id"], "bed_id": bed["id"], "diagnosis_name": "肺炎"}).json()
+    assert client.post("/api/billing/deposits", headers=admin, json={"admission_id": adm["id"], "amount": 500}).status_code == 201
+    client.post("/api/billing/details", headers=admin, json={
+        "patient_id": patient, "admission_id": adm["id"], "item_code": "P1152-BED"})
+    settle = client.post("/api/billing/settlements", headers=admin, json={
+        "bill_type": "inpatient", "admission_id": adm["id"], "insurance_pay": 2000}).json()
+    assert (settle["self_pay"], settle["deposit_offset"]) == (1000, 500)
+    resident = _resident_login(client, phone)
+    bill = next(r for r in client.get("/api/portal/me/bills", headers=resident).json() if r["id"] == settle["id"])
+    assert (bill["paid"], bill["outstanding"]) == (False, 500.0)
+    stay = next(r for r in client.get("/api/portal/me/admissions", headers=resident).json() if r["id"] == adm["id"])
+    assert stay["settled"] is False   # 修前 True：住院页「已结清」、账单页「待支付」
+    cash = client.post("/api/billing/payments", headers=world["op"], json={"settlement_id": settle["id"], "channel": "cash"})
+    assert cash.status_code == 201, cash.text
+    stay = next(r for r in client.get("/api/portal/me/admissions", headers=resident).json() if r["id"] == adm["id"])
+    assert stay["settled"] is True

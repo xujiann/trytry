@@ -510,6 +510,12 @@ def test_portal_bill_reflects_settlement(client, admin, me, inpatient_setup):
     assert bill["settlements"][0]["self_pay"] == bill["total_amount"] - 200
     assert all(i["settled"] for i in bill["items"])
 
+    # 结了算、自付还没付：与「我的账单」的「待支付」同一个结论（P2-555；原先这里就钉「已结清」）
+    rows = client.get("/api/portal/me/admissions", headers=me["headers"]).json()
+    assert next(r for r in rows if r["id"] == adm_id)["settled"] is False
+    paid = client.post("/api/billing/payments", headers=admin,
+                       json={"settlement_id": bill["settlements"][0]["id"], "channel": "cash"})
+    assert paid.status_code == 201, paid.text
     rows = client.get("/api/portal/me/admissions", headers=me["headers"]).json()
     assert next(r for r in rows if r["id"] == adm_id)["settled"] is True
 

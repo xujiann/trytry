@@ -1502,6 +1502,8 @@ class PortalBillOut(BaseModel):
     insurance_pay: int | float
     self_pay: int | float
     paid: bool
+    #: 个人自付还欠多少（已结清为 0，P2-555）：与 `paid` 同一套算术，「待支付」的单子写明还要付多少
+    outstanding: float
     date: str
 
 
@@ -1540,6 +1542,7 @@ def portal_my_bills(
             "insurance_pay": s.insurance_pay,
             "self_pay": s.self_pay,
             "paid": outstanding[s.id] <= 0,
+            "outstanding": max(outstanding[s.id], 0.0),
             "date": s.created_at.date().isoformat(),
         }
         for s in settlements
@@ -1944,6 +1947,15 @@ def portal_my_admissions(
         .distinct()
         .all()
     }
+    # 结了算、自付没付清的也不算结清（P2-555）：与「我的账单」的「待支付」同一套算术（`self_pay_outstanding`）。原先只看
+    # 明细有没有都进了结算单——押金冲抵一半，住院页写「已结清」、账单页同一张单写「待支付」
+    inpatient_settlements = (
+        db.query(Settlement)
+        .filter(Settlement.bill_type == "inpatient", Settlement.admission_id.in_([a.id for a in rows] or [0]))
+        .all()
+    )
+    owing = self_pay_outstanding(db, inpatient_settlements)
+    unsettled |= {s.admission_id for s in inpatient_settlements if owing[s.id] > 0}
     result = []
     for a in rows:
         end = (a.discharged_at or utcnow()).date()

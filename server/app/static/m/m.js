@@ -908,6 +908,7 @@ async function renderBills(box) {
     ${kv("医保支付", `¥${b.insurance_pay.toFixed(2)}`)}
     ${kv("个人自付", `<b>¥${b.self_pay.toFixed(2)}</b>`)}
     ${kv("支付状态", `<span class="tag ${b.paid ? "green" : "orange"}">${b.paid ? "已支付" : "待支付"}</span>`)}
+    ${b.paid ? "" : kv("待付金额", `<b>¥${b.outstanding.toFixed(2)}</b>`)}
     ${kv("日期", esc(b.date))}
   </div>`).join("") : '<p class="empty">暂无账单</p>';
 }

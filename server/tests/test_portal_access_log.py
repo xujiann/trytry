@@ -414,6 +414,6 @@ def test_留痕是副作用响应体逐键与改前一致_账单(client, me, org
     assert body == [
         {"id": sid, "org_name": "留痕县医院", "bill_type": "outpatient",
          "total_amount": 200, "insurance_pay": 120, "self_pay": 80,
-         "paid": False, "date": expected_date}
+         "paid": False, "outstanding": 80.0, "date": expected_date}   # 待付金额（P2-555，新增字段）
     ]
     assert isinstance(body[0]["total_amount"], int)  # 200 不是 200.0
