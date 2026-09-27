@@ -261,6 +261,25 @@ def test_分配依据是冻结快照_事后调权不影响已分结果(client, a
     )
 
 
+def test_分配快照带着当时的指标权重_事后调权仍查得到(client, admin, director, settled):
+    """P2-568（第十一批「落库快照 vs 现查配置」扫描 Y3-2）：模型注释写「记录参数，便于复现」，快照里却只有原始计数——
+    权重一调，按快照参数重跑绩效也复现不出已分的钱，平台上也查不到当时的权重。"""
+    pool_id = settled["pool"]["id"]
+    year = str(settled["pool"]["year"])
+    client.post(f"/api/fund/pools/{pool_id}/distribute", json={"formula_expr": "score"}, headers=director)
+    live = client.get("/api/performance/orgs", params={"period": year}, headers=admin).json()["weights"]
+    rows = client.get(f"/api/fund/pools/{pool_id}/distributions", headers=director).json()
+    assert all(r["score_detail"]["weights"] == live and r["score_detail"]["period"] == year for r in rows)   # 修前没有这两个键
+
+    indicators = client.get("/api/performance/indicators", headers=admin).json()
+    client.patch(f"/api/performance/indicators/{indicators[-1]['key']}",
+                 json={"weight": indicators[-1]["weight"] + 30}, headers=admin)
+    moved = client.get("/api/performance/orgs", params={"period": year}, headers=admin).json()["weights"]
+    assert moved != live
+    after = client.get(f"/api/fund/pools/{pool_id}/distributions", headers=director).json()
+    assert all(r["score_detail"]["weights"] == live for r in after), "调权回溯改写了分配快照里的权重"
+
+
 def test_超支不自动扣减且拒绝分配(client, director):
     """没有结余可分时该做的是处置超支，而不是分一笔不存在的钱。"""
     pool = _pool(client, director, 2037, total=100000.0)

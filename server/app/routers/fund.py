@@ -539,13 +539,14 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
     # `period` 必须显式传 `pool.year`：绩效评分自 2026-08 起是**周期口径**，
     # 缺省算当年。而基金池结算通常发生在次年年初——不传就会拿"次年至今"的
     # 近乎空白的分数去分上一年度的钱，轻则份额全错，重则所有权重为 0 直接 422。
-    scorecards = org_scorecards(
+    scored = org_scorecards(
         period=str(pool.year),
         volume_cap=body.volume_cap,
         include_auto_passed=body.include_auto_passed,
         group_id=pool.org_group_id,
         db=db,
-    )["scorecards"]
+    )
+    scorecards = scored["scorecards"]
     if not scorecards:
         raise HTTPException(status_code=409, detail="范围内没有可参与分配的机构")
 
@@ -612,7 +613,9 @@ def distribute(pool_id: int, body: DistributeIn, db: Session = Depends(get_db)):
             settlement_id=settlement.id,
             org_id=card["org_id"],
             score=card["score"],
-            score_detail=card["detail"],
+            # 当时的归一化指标权重与考核期一并冻结（P2-568）：原先快照里只有原始计数，权重一调，已分的钱按
+            # 快照参数重跑也复现不出来、平台上也查不到当时的权重（模型注释写的是「记录参数，便于复现」）
+            score_detail={**card["detail"], "weights": scored["weights"], "period": scored["period"]},
             weight=round(weight, 6),
             share_pct=round(share * 100, 4),
             amount=amount_cents / 100,
