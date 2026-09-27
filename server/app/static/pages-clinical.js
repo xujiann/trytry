@@ -1240,8 +1240,10 @@ async function renderMaternal() {
        <td>${r.high_risk ? `<span class="tag red">高危</span> ${esc(r.risk_factors)}` : '<span class="tag green">正常</span>'}</td>
        <td><span class="tag">${esc(MS[r.status] || r.status)}</span></td>
        <td>${r.status !== "closed" ? `<button class="btn secondary" data-visit="${r.id}">记录访视</button>
-         ${r.status === "registered" ? `<button class="btn secondary" data-delivery="${r.id}">分娩登记</button>` : ""}
-         ${r.status === "delivered" ? `<button class="btn secondary" data-close="${r.id}">结案</button>` : ""}` : "—"}</td></tr>`))}
+         ${!r.has_delivery   // 看有没有分娩记录、不看状态：产后访视先录也会把档案推到「已分娩」（P2-594）
+           ? `<button class="btn secondary" data-delivery="${r.id}">分娩登记</button>` : ""}
+         ${r.status === "delivered" && r.has_postpartum   // 没有产后访视的结案接口 409（P2-211）
+           ? `<button class="btn secondary" data-close="${r.id}">结案</button>` : ""}` : "—"}</td></tr>`))}
     ${highRisk.length ? panel(`⚠ 高危儿专案清单（${highRisk.length}）`,
       table(["ID", "姓名", "出生日期", "高危原因"], highRisk, (c) =>
         `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.birth_date)}</td><td><span class="tag red">${esc(c.risk_note)}</span></td></tr>`),

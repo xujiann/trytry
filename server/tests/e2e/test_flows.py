@@ -1429,6 +1429,31 @@ def test_孕产妇保健结案先确认(page, base_url, admin_read, admin_call):
                   lambda: status() == "delivered", lambda: status() == "closed")
 
 
+def test_产后访视先录的分娩记录照样能从页面上补登_没访视的不给结案(page, base_url, admin_read, admin_call):
+    """P2-594：产后访视先录（分娩在别处、记录后补）把档案推到「已分娩」，「分娩登记」按钮原先随之消失，分娩记录从此
+    录不进来；分娩登记了、还没做产后访视的，「结案」按钮原先已经亮着，点下去 409。"""
+    org = admin_call("POST", "/api/organizations",
+                     {"name": "E2E补登分娩医院", "org_type": "lead_hospital", "level": "county"})
+    late = admin_call("POST", "/api/maternal/records", {"patient_id": admin_call("POST", "/api/patients", {
+        "name": "E2E补登孕妇", "id_card": "320981199203032259", "gender": "女"})["id"]})
+    admin_call("POST", f"/api/maternal/records/{late['id']}/visits", {"visit_type": "postpartum"})
+    fresh = admin_call("POST", "/api/maternal/records", {"patient_id": admin_call("POST", "/api/patients", {
+        "name": "E2E待访孕妇", "id_card": "320981199203032267", "gender": "女"})["id"]})
+    admin_call("POST", f"/api/maternal/records/{fresh['id']}/delivery",
+               {"org_id": org["id"], "delivery_date": "2026-09-20"})
+
+    _login(page, base_url)
+    _open_page(page, "maternal", "妇幼保健")
+    expect(page.locator(f'button[data-visit="{fresh["id"]}"]')).to_have_count(1)
+    expect(page.locator(f'button[data-close="{fresh["id"]}"]')).to_have_count(0)   # 修前亮着、点下去 409
+    page.click(f'button[data-delivery="{late["id"]}"]')   # 修前没有这个按钮
+    _spd_modal(page, {"org_id": str(org["id"]), "delivery_date": "2026-09-18"})
+    expect(page.locator(f'button[data-delivery="{late["id"]}"]')).to_have_count(0)
+    detail = admin_read(f"/api/maternal/records/{late['id']}/delivery")
+    assert (detail["org_id"], detail["delivery_date"]) == (org["id"], "2026-09-18")
+    expect(page.locator(f'button[data-close="{late["id"]}"]')).to_have_count(1)   # 有产后访视，结案照给
+
+
 def test_上一胎结案后再孕_从页面上建出新册且孕产次录得进去(page, base_url, admin_read, admin_call):
     """P1-140：原先一位妇女一生只能建一本，结案后再孕建册拿回的是那本已结案的旧档案；建册表单也没有孕次 / 产次两格，
     每本都是 G1P0。"""

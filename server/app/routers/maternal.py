@@ -119,12 +119,29 @@ def _registering_record(db: Session, patient_id: int) -> MaternalRecord | None:
     return record
 
 
-@router.get("/records", response_model=list[MaternalOut])
+class MaternalRowOut(MaternalOut):
+    """档案清单一行：多带两件事实，页面按它们给「分娩登记」「结案」（P2-594）。
+
+    原先页面只看状态——产后访视先录（分娩在别处、记录后补）就把档案推到「已分娩」，「分娩登记」按钮随之消失，
+    分娩记录从此录不进来（接口其实收）；分娩登记了、产后访视还没做，「结案」按钮已经亮着，点下去 409（P2-211）。
+    """
+
+    has_delivery: bool = False     # 已有分娩记录（一档一分娩，`uq_delivery_record`）
+    has_postpartum: bool = False   # 已有产后访视（结案的前提）
+
+
+@router.get("/records", response_model=list[MaternalRowOut])
 def list_records(high_risk: bool | None = None, db: Session = Depends(get_db)):
     query = db.query(MaternalRecord)
     if high_risk is not None:
         query = query.filter(MaternalRecord.high_risk.is_(high_risk))
-    return query.order_by(MaternalRecord.high_risk.desc(), MaternalRecord.id.desc()).limit(200).all()
+    rows = query.order_by(MaternalRecord.high_risk.desc(), MaternalRecord.id.desc()).limit(200).all()
+    ids = [r.id for r in rows] or [0]
+    delivered = {rid for (rid,) in db.query(DeliveryRecord.record_id).filter(DeliveryRecord.record_id.in_(ids))}
+    postpartum = {rid for (rid,) in db.query(MaternalVisit.record_id).filter(
+        MaternalVisit.record_id.in_(ids), MaternalVisit.visit_type == "postpartum").distinct()}
+    return [{**MaternalOut.model_validate(r).model_dump(),
+             "has_delivery": r.id in delivered, "has_postpartum": r.id in postpartum} for r in rows]
 
 
 class VisitCreate(BaseModel):
