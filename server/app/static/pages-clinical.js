@@ -75,7 +75,9 @@ async function renderInfectious() {
         <div class="card"><span class="k">法定时限</span><b>${
           c.report_hours === null ? "—" : `${c.report_hours} 小时`}</b></div>
         <div class="card"><span class="k">及时性</span><b>${statusTag(CASE_TIMELY, timely)}${
-          c.days_late ? `（迟 ${c.days_late} 天）` : ""}</b></div></div>
+          // days_late 是「发病到报告隔了几天」（与迟报清单同口径），不是超出时限几天（P2-470）：原先写「迟 N 天」，
+          // 限 24 小时的肺结核昨天发病、今天报告，卡上是「及时（迟 1 天）」
+          c.days_late ? `（发病后 ${c.days_late} 天报告）` : ""}</b></div></div>
       <p class="desc">这是<b>平台留存的法定字段集</b>——病例登记本身不含患者个体标识
         （只记报告机构 / 病种 / 发病日期），卡片按此字段集导出，不虚构未存储的字段。</p>`;
     } catch (err) { setMsg("#exp-msg", err.message, false); }
