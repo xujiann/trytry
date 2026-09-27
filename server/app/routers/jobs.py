@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..clock import now_naive
+from ..concurrency import serialized_on
 from ..database import get_db
 from ..numtypes import INT4_MAX
 from ..deps import paginate, require_admin, require_roles
@@ -80,18 +81,25 @@ def update_job(name: str, body: JobUpdate, db: Session = Depends(get_db)):
     改成每小时，照旧要等到明天这个点才跑下一次，而运维手册「超过间隔 3 倍未执行即告警」按新间隔算，3 小时后就误报。
     取「原定到期」与「上次执行 + 新间隔」中早的那个：改短了按新间隔提前（已过点的下一轮调度就跑），改长了不把
     已经排好的这一次往后推。
+
+    重排是读-改-写，圈进这一行的临界区、锁到手后重读再算：调度器恰好把这个任务跑完时，按锁外读到的旧值重排，
+    会把它刚推到明天的下次到期拽回过去，下一轮调度就再跑一遍。PG 上是行锁——调度器收尾的那条 UPDATE 要么已经
+    提交（重读读得到）、要么排在后面等（它按自己读到的间隔落下次到期，与 P2-467 之前一样，新间隔晚一轮生效）；
+    SQLite 只在开发库用，进程内锁不拦调度线程，重读到提交之间的窗口仍在。
     """
     job = db.query(ScheduledJob).filter(ScheduledJob.name == name).first()
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if body.interval_seconds is not None:
-        job.interval_seconds = body.interval_seconds
-        if job.next_run_at is not None:   # 从未排过的本就立即到期，不动
-            rescheduled = (job.last_run_at or now_naive()) + timedelta(seconds=body.interval_seconds)
-            job.next_run_at = min(job.next_run_at, rescheduled)
-    if body.enabled is not None:
-        job.enabled = body.enabled
-    db.commit()
+    with serialized_on(db, ScheduledJob, job.id):
+        db.refresh(job)
+        if body.interval_seconds is not None:
+            job.interval_seconds = body.interval_seconds
+            if job.next_run_at is not None:   # 从未排过的本就立即到期，不动
+                rescheduled = (job.last_run_at or now_naive()) + timedelta(seconds=body.interval_seconds)
+                job.next_run_at = min(job.next_run_at, rescheduled)
+        if body.enabled is not None:
+            job.enabled = body.enabled
+        db.commit()
     return {"name": job.name, "interval_seconds": job.interval_seconds, "enabled": job.enabled}
 
 
