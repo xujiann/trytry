@@ -454,8 +454,9 @@ async function renderCerts() {
         if (state) state.innerHTML = statusTag(CHK_REVIEW, "done");
         return await showItems(chkreview, r);
       }
-      if (!printcert && !printchk) return;
-      await openPrintPage(printcert ? `/api/print/certs/${printcert}` : `/api/print/checkups/${printchk}`);
+      // 两条打印各写一处字面量地址（P2-490）：写成一个三元，调用点解析推不出地址，读动词棘轮把两个打印接口都记成没有入口
+      if (printcert) return await openPrintPage(`/api/print/certs/${printcert}`);
+      if (printchk) return await openPrintPage(`/api/print/checkups/${printchk}`);
     } catch (err) { setMsg("#cert-msg", err.message, false); }
   };
   // 取数放最后：监听已与 innerHTML 同一同步块挂好，窗口为零（P2-31 根修，样板见 pages-spd.js renderSpdPath）

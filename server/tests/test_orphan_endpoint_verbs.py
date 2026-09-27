@@ -156,8 +156,6 @@ READ_KNOWN: set[str] = {
     "GET /api/cssd/cost-items",
     "GET /api/mgmt/staff-contracts",
     "GET /api/projects/{project_id}",
-    "GET /api/print/certs/{cert_id}",
-    "GET /api/print/checkups/{checkup_id}",
     # 慢专病
     "GET /api/spd/assessments",
     "GET /api/spd/programs/{program_id}",
@@ -198,7 +196,7 @@ def test_读动词登记的仍然没有入口_接上了就划掉():
     assert not sorted(set(READ_EXEMPT) - found), "豁免的 GET 已有前端入口或端点已不存在，划掉"
     assert not READ_KNOWN & set(READ_EXEMPT), "既豁免又欠账"
     assert all(why.strip() for why in READ_EXEMPT.values())
-    assert len(READ_KNOWN) <= 15, "读动词欠账只许变少（19 → 15：P2-476 交接班、P2-477 公卫事件处置记录、P2-478 慢病随访史、P2-479 模拟诊疗作答记录接上）"
+    assert len(READ_KNOWN) <= 13, "读动词欠账只许变少（19 → 13：P2-476 ~ P2-479 接上四条；P2-490 两条打印本就有入口、三元写法让解析推不出）"
 
 
 def test_判据自证_只写不读的点名_读过的放过():
