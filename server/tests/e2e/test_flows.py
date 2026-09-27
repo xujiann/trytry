@@ -666,6 +666,9 @@ def test_室内质控失控处理在页内表单里填_取消即放弃(page, bas
     page.click(f'button[data-handle="{mid}"]')
     _spd_modal(page, {"reason": "质控品复溶后放置过久", "corrective_action": "更换质控品复测在控"})
     expect(page.locator("#lot-detail")).to_contain_text("已处理")
+    # P2-492：原因、纠正措施、处理人原先只进了库，L-J 表上只剩一个「已处理」
+    handled = page.locator("#lot-detail tr", has_text="已处理")
+    expect(handled).to_contain_text("原因：质控品复溶后放置过久；纠正措施：更换质控品复测在控")
     row = point()
     assert (row["handled"], row["handle_reason"], row["corrective_action"]) == (
         True, "质控品复溶后放置过久", "更换质控品复测在控"), row

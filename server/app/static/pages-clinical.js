@@ -3178,7 +3178,11 @@ async function renderLabQc() {
         <button class="btn" data-toggle="${l.id}" data-active="${l.active}">${l.active ? "停用" : "启用"}</button></td></tr>`))}
     <div class="panel hidden" id="lot-detail"></div>`;
   const drawLot = async (lotId) => {
-    const lj = await api(`/api/labqc/lots/${lotId}/levey-jennings`);
+    // 失控处理的原因、纠正措施、处理人与操作者取自测定值清单（P2-492）：L-J 数据只带「是否已处理」，处理登记写进去
+    // 之后页面上只剩一个「已处理」——纠正措施的记录是失控处理的全部意义，原先却没有一处看得见。两份同一个 500 点窗口
+    const [lj, measurements] = await Promise.all([
+      api(`/api/labqc/lots/${lotId}/levey-jennings`), api(`/api/labqc/lots/${lotId}/measurements`)]);
+    const detail = Object.fromEntries(measurements.map((m) => [m.id, m]));
     const panel = $("#lot-detail");
     panel.classList.remove("hidden");
     panel.innerHTML = `
@@ -3191,12 +3195,16 @@ async function renderLabQc() {
         <input name="operator" placeholder="操作者（可空）">
         <button>录入测定值</button></form>
       <p class="msg" id="meas-msg"></p>
-      ${table(["ID", "测得值", "z", "测定时间", "判定", "处理", "操作"], lj.points, (p) =>
-        `<tr><td>${p.id}</td><td>${p.value}</td><td>${p.z}</td><td>${esc(p.measured_at)}</td>
+      ${table(["ID", "测得值", "z", "测定时间", "操作者", "判定", "处理", "操作"], lj.points, (p) => {
+        const m = detail[p.id] || {};
+        const handledNote = m.handled
+          ? `<div style="font-size:12px">原因：${esc(m.handle_reason)}；纠正措施：${esc(m.corrective_action)}（${esc(m.handled_by)}）</div>` : "";
+        return `<tr><td>${p.id}</td><td>${p.value}</td><td>${p.z}</td><td>${esc(p.measured_at)}</td><td>${esc(m.operator) || "—"}</td>
          <td>${p.out_of_control ? `<span class="tag red">失控 ${esc(p.violated_rules)}</span>`
             : p.warning ? '<span class="tag orange">1-2s 警告</span>' : '<span class="tag green">在控</span>'}</td>
-         <td>${p.out_of_control ? (p.handled ? '<span class="tag green">已处理</span>' : '<span class="tag orange">未处理</span>') : "—"}</td>
-         <td>${p.out_of_control && !p.handled ? `<button class="btn secondary" data-handle="${p.id}">失控处理</button>` : "—"}</td></tr>`)}`;
+         <td>${p.out_of_control ? (p.handled ? `<span class="tag green">已处理</span>${handledNote}` : '<span class="tag orange">未处理</span>') : "—"}</td>
+         <td>${p.out_of_control && !p.handled ? `<button class="btn secondary" data-handle="${p.id}">失控处理</button>` : "—"}</td></tr>`;
+      })}`;
     $("#meas-form").onsubmit = async (e) => {
       e.preventDefault();
       const body = formJson(e.target, ["value"]);
