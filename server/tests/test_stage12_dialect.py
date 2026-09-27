@@ -197,6 +197,8 @@ FLOAT_NOT_MONEY: dict[str, str] = {
     "drug_rules.max_daily_dose": "单日最大剂量",
     "drug_rules.ddd": "限定日剂量（DDD）",
     "prescription_items.daily_dose": "处方日剂量",
+    "prescription_items.rule_max_daily_dose": "开方时审方规则的单日最大剂量快照（同 drug_rules.max_daily_dose，P2-577）",
+    "prescription_items.rule_ddd": "开方时审方规则的限定日剂量快照（同 drug_rules.ddd，P2-577）",
     # —— 权重/系数/比例/得分：无量纲，与 NOT_MONEY 同源 ——
     "drg_groups.base_weight": "DRG 权重，无量纲",
     "case_summaries.drg_weight": "病案 DRG 权重",
