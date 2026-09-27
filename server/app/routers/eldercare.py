@@ -161,12 +161,14 @@ def disabled_elderly(db: Session = Depends(get_db)):
 @router.get("/alerts", response_model=EldercareAlertsOut)
 def eldercare_alerts(today: str | None = None, db: Session = Depends(get_db)):
     """㉓老年健康预警/智能提醒：重度失能专案提示 + 年度评估到期复评提醒。"""
-    from datetime import timedelta
-
     from ..deps import resolve_business_date
 
     current = resolve_business_date(today)
-    reassess_before = (current - timedelta(days=365)).isoformat()
+    # 「满一年」按周年日比（P2-548）：原先减 365 天，跨过 2 月 29 日的那一年提前一天报「已超一年」
+    try:
+        reassess_before = current.replace(year=current.year - 1).isoformat()
+    except ValueError:   # 今天是 2 月 29 日，去年没有这一天
+        reassess_before = current.replace(year=current.year - 1, day=28).isoformat()
     latest = _latest_by_patient(db.query(ElderlyAssessment).order_by(ElderlyAssessment.id).all())
     alerts = []
     for a in latest.values():
