@@ -94,6 +94,14 @@ def _active_rule(db: Session, drug_code: str) -> DrugRule | None:
     )
 
 
+def _rule_snapshot(rule: DrugRule | None) -> dict:
+    """开方那一刻系统审用的规则参数，记在处方明细上（P2-577）。没有生效规则的不记（全空），判读时照旧按现行规则。"""
+    if rule is None:
+        return {}
+    return {"rule_max_daily_dose": rule.max_daily_dose, "rule_dose_unit": rule.dose_unit,
+            "rule_antibiotic": rule.antibiotic, "rule_ddd": rule.ddd}
+
+
 @router.post("/rules", response_model=DrugRuleOut, status_code=201, dependencies=[Depends(require_admin)])
 def create_rule(body: DrugRuleCreate, db: Session = Depends(get_db)):
     if db.query(DrugRule).filter(DrugRule.drug_code == body.drug_code).first():
@@ -211,8 +219,10 @@ def create_prescription(
     patient_groups = _patient_groups(db, patient)
     names_by_code = {item.drug_code: item.drug_name for item in body.items}
     seen_pairs: set[frozenset[str]] = set()
+    # 审方用的这一版规则，同一版随明细落库（P2-577）：之后规则再改，这张方怎么审的、按什么单位开的都回溯得到
+    rules = {code: _active_rule(db, code) for code in dict.fromkeys(codes)}
     for item in body.items:
-        rule = _active_rule(db, item.drug_code)
+        rule = rules[item.drug_code]
         if rule is None:
             continue
         if item.daily_dose > rule.max_daily_dose:
@@ -261,7 +271,8 @@ def create_prescription(
     db.add(prescription)
     db.flush()
     for item in body.items:
-        db.add(PrescriptionItem(prescription_id=prescription.id, **item.model_dump()))
+        db.add(PrescriptionItem(prescription_id=prescription.id, **item.model_dump(),
+                                **_rule_snapshot(rules[item.drug_code])))
     db.commit()
     db.refresh(prescription)
     # 非持久化字段：审方提示只随本次响应返回、不入库（`PrescriptionOut.advisories`）。
@@ -399,6 +410,10 @@ def prescription_review_points(prescription_id: int, db: Session = Depends(get_d
     - renal_hepatic_note：肝肾功能剂量调整提示
     - dose_exceeded：本方日剂量是否已超规则上限（系统审拦截项复核）
     - no_rule：规则库中无该药规则，提示补充维护
+
+    上限、单位、超没超按**开方那一刻**审方用的那一版判读（明细上的快照，P2-577）：规则之后纠正单位、收紧上限、停用，
+    都不改写这张方当时怎么审的；点评要点与肝肾提示是给点评人看的文字，取规则行现在的写法（停用了行也还在）。
+    没有快照的（开方时该药没有生效规则，或是快照列上线前开的）照旧按现行生效规则。
     """
     rx = db.get(Prescription, prescription_id)
     if rx is None:
@@ -406,20 +421,26 @@ def prescription_review_points(prescription_id: int, db: Session = Depends(get_d
     items = db.query(PrescriptionItem).filter(PrescriptionItem.prescription_id == rx.id).all()
     points, uncovered = [], 0
     for item in items:
-        rule = _active_rule(db, item.drug_code)
-        if rule is None:
+        max_dose: float | None
+        if item.rule_max_daily_dose is not None:
+            text_rule = db.query(DrugRule).filter(DrugRule.drug_code == item.drug_code).first()
+            max_dose, unit = item.rule_max_daily_dose, item.rule_dose_unit
+        else:
+            text_rule = _active_rule(db, item.drug_code)
+            max_dose, unit = (text_rule.max_daily_dose, text_rule.dose_unit) if text_rule else (None, "")
+        if max_dose is None:
             uncovered += 1
         points.append(
             {
                 "drug_code": item.drug_code,
                 "drug_name": item.drug_name,
                 "daily_dose": item.daily_dose,
-                "max_daily_dose": rule.max_daily_dose if rule else None,
-                "dose_unit": rule.dose_unit if rule else "",
-                "dose_exceeded": bool(rule and item.daily_dose > rule.max_daily_dose),
-                "review_points": rule.review_points if rule else "",
-                "renal_hepatic_note": rule.renal_hepatic_note if rule else "",
-                "no_rule": rule is None,
+                "max_daily_dose": max_dose,
+                "dose_unit": unit,
+                "dose_exceeded": max_dose is not None and item.daily_dose > max_dose,
+                "review_points": text_rule.review_points if text_rule else "",
+                "renal_hepatic_note": text_rule.renal_hepatic_note if text_rule else "",
+                "no_rule": max_dose is None,
             }
         )
     return {

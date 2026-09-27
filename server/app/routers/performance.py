@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, FiniteFloat
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from .. import clock
@@ -344,11 +344,13 @@ def org_scorecards(
     )
     # 规则可审张数：join 到 prescription_items 再 join 生效规则，按处方去重。
     # 第 9 条分组聚合，仍与机构数无关（`test_查询条数不随机构数增长` 盯着）。
+    # 开方时有生效规则的，按明细上的快照算可审（P2-577）：规则之后停用，不把当时审过的方改成「不可审」；没有快照的
+    # （开方时没有规则，或快照列上线前开的）照旧看现行生效规则
     rx_rule_covered_by = by_org(
         db.query(Prescription.org_id, func.count(func.distinct(Prescription.id)))
         .join(PrescriptionItem, PrescriptionItem.prescription_id == Prescription.id)
-        .join(DrugRule, DrugRule.drug_code == PrescriptionItem.drug_code)
-        .filter(DrugRule.active.is_(True),
+        .outerjoin(DrugRule, and_(DrugRule.drug_code == PrescriptionItem.drug_code, DrugRule.active.is_(True)))
+        .filter(or_(PrescriptionItem.rule_max_daily_dose.isnot(None), DrugRule.id.isnot(None)),
                 Prescription.created_at >= window[0], Prescription.created_at < window[1]),
         Prescription.org_id,
     )

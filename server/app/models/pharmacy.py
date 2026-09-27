@@ -81,6 +81,13 @@ class PrescriptionItem(Base):
     drug_name: Mapped[str] = mapped_column(String(128))
     daily_dose: Mapped[float] = mapped_column(Float)
     days: Mapped[int] = mapped_column(Integer, default=1)
+    # 开方那一刻系统审用的规则参数（快照，P2-577）：点评要点、抗菌药物使用强度、规则覆盖统计按它判读这一行——规则之后
+    # 纠正单位、收紧上限、停用，都不回头改写历史处方的判读（日剂量是按当时那一版的单位开的）。
+    # `rule_max_daily_dose` 为空 = 没有快照：开方时该药没有生效规则，或是快照列上线前开的——仍按现行生效规则判读（修前口径）
+    rule_max_daily_dose: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rule_dose_unit: Mapped[str] = mapped_column(String(16), default="")
+    rule_antibiotic: Mapped[bool] = mapped_column(Boolean, default=False)
+    rule_ddd: Mapped[float] = mapped_column(Float, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     prescription: Mapped[Prescription] = relationship(back_populates="items")

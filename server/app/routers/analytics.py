@@ -864,6 +864,11 @@ def drug_use(
     # ---- 抗菌药物使用强度 ----
     # 同样从"整月 PrescriptionItem 全行进内存"改为库内聚合：抗菌药目录直接
     # JOIN 进来（drug_code 唯一），DDD>0 求 DDDs、DDD=0 计未覆盖数一次算完。
+    # 抗菌与否、DDD 按开方那一刻审方用的那一版（明细上的快照，P2-577）：日剂量是按那一版的单位开的，规则之后纠正单位、
+    # 改 DDD、停用，都不回头改写历史月份的强度——原先停用即从 DDDs 与未覆盖数里双双消失。没有快照的（开方时没有生效
+    # 规则，或快照列上线前开的）照旧按现行生效规则。
+    snapped = PrescriptionItem.rule_max_daily_dose.isnot(None)
+    item_ddd = sa.case((snapped, PrescriptionItem.rule_ddd), else_=func.coalesce(DrugRule.ddd, 0))
     ddd_sum: dict[int, float] = dict.fromkeys(org_ids, 0.0)
     uncovered: dict[int, int] = dict.fromkeys(org_ids, 0)
     item_rows = (
@@ -872,20 +877,20 @@ def drug_use(
             func.sum(
                 sa.case(
                     (
-                        DrugRule.ddd > 0,
+                        item_ddd > 0,
                         func.coalesce(PrescriptionItem.daily_dose, 0)
                         * func.coalesce(PrescriptionItem.days, 0)
-                        / DrugRule.ddd,
+                        / item_ddd,
                     ),
                     else_=0.0,
                 )
             ),
             # 目录未维护 DDD（ddd<=0）的抗菌药条目：计为未覆盖
-            func.sum(sa.case((DrugRule.ddd <= 0, 1), else_=0)),
+            func.sum(sa.case((item_ddd <= 0, 1), else_=0)),
         )
         .select_from(PrescriptionItem)
         .join(Prescription, PrescriptionItem.prescription_id == Prescription.id)
-        .join(
+        .outerjoin(
             DrugRule,
             sa.and_(
                 DrugRule.drug_code == PrescriptionItem.drug_code,
@@ -894,6 +899,10 @@ def drug_use(
             ),
         )
         .filter(
+            sa.or_(
+                sa.and_(snapped, PrescriptionItem.rule_antibiotic.is_(True)),
+                sa.and_(PrescriptionItem.rule_max_daily_dose.is_(None), DrugRule.id.isnot(None)),
+            ),
             Prescription.created_at >= start_dt, Prescription.created_at < end_dt,
             # 药师退回的处方没有用上（P2-60）：退回后医生多半重开一张，两张都算，同一疗程的 DDDs 翻倍，
             # 使用强度——写进考核的那个数——虚高。待审的照算：统计是现算的，之后被退回自然就掉出去

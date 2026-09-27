@@ -1969,6 +1969,10 @@
 - `drug_name` · VARCHAR(128) · NOT NULL
 - `daily_dose` · FLOAT · NOT NULL
 - `days` · INTEGER · NOT NULL
+- `rule_max_daily_dose` · FLOAT
+- `rule_dose_unit` · VARCHAR(16) · NOT NULL
+- `rule_antibiotic` · BOOLEAN · NOT NULL
+- `rule_ddd` · FLOAT · NOT NULL
 - `created_at` · DATETIME · NOT NULL · index
 - _index_ ix_prescription_items_created_at(created_at)
 - _index_ ix_prescription_items_prescription_id(prescription_id)
