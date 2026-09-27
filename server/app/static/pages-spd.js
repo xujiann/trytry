@@ -3500,16 +3500,15 @@ const SPD_REPORT_STATUS = {
 const SPD_INTV_CATEGORY = { diet: "饮食", exercise: "运动", drug: "用药", psych: "心理", other: "其他" };
 const SPD_EDU_CHANNEL = { sms: "短信", wechat: "公众号", app: "居民端" };
 const SPD_REPORT_TYPE = { review: "复核", referral: "转诊", followup: "随访", dispose: "处置" };
-/* 常用监测指标的输入提示。**不是白名单**——后端收任意 metric 字符串并按
- * spd_targets 判级，这里只做 datalist 提示，别把它升级成 select 限死。 */
-const SPD_METRIC_HINTS = ["bp_sys", "bp_dia", "glucose_fasting", "glucose_post",
-  "hba1c", "bmi", "spo2", "heart_rate", "weight", "uric_acid"];
 
+/* 监测录入的指标提示取自 GET /api/spd/meta 的 measure_fields（后端 service.MEASURE_FIELDS 一份，P2-643）：原先前端
+ * 自抄一份，把餐后血糖、尿酸的编码抄错了，照提示录进去的值规则与事实字典永远读不到。
+ * **不是白名单**——后端收任意 metric 字符串并按 spd_targets 判级，这里只做 datalist 提示，别把它升级成 select 限死。 */
 async function renderSpdMember() {
   $("#page-desc").textContent =
     "基层服务执行：监测录入与趋势、量表评估与统计、干预模板与批量干预、宣教推送、异常上报";
   const [catalog, templates, materials, interventions, assessStats, eduStats, pushes,
-         reportTasks, reports] = await Promise.all([
+         reportTasks, reports, meta] = await Promise.all([
     spdCatalog(),
     api("/api/spd/intervention-templates"),
     api("/api/spd/edu-materials?limit=100"),
@@ -3519,6 +3518,7 @@ async function renderSpdMember() {
     api("/api/spd/edu-pushes?limit=20"),
     api("/api/spd/case-report-tasks?active=true"),
     api("/api/spd/case-reports?limit=30"),
+    spdMeta(),
   ]);
   const programOptions = spdProgramOptions(catalog, true);
   $("#page-body").innerHTML = `
@@ -3527,8 +3527,8 @@ async function renderSpdMember() {
       <form class="inline" id="spd-meas-form">
         <input name="patient_id" type="number" placeholder="患者ID" required>
         <input name="metric" list="spd-metric-hints" placeholder="指标（如 bp_sys）" required>
-        <datalist id="spd-metric-hints">${SPD_METRIC_HINTS.map((m) =>
-          `<option value="${m}"></option>`).join("")}</datalist>
+        <datalist id="spd-metric-hints">${meta.measure_fields.map((m) =>
+          `<option value="${esc(m.key)}">${esc(m.name)}</option>`).join("")}</datalist>
         <input name="value" type="number" step="any" placeholder="数值" required>
         <input name="unit" placeholder="单位" style="width:80px">
         <select name="program_code"><option value="">病种：按在管档案判断</option>${spdProgramOptions(catalog)}</select>

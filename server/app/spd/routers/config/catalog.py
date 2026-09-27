@@ -25,7 +25,7 @@ from ...models import (
 )
 from ...reporting import section_options
 from ...rules import FIELD_SOURCES, OPERATORS
-from ...service import INDICATOR_SOURCES, unknown_code
+from ...service import INDICATOR_SOURCES, MEASURE_FIELDS, unknown_code
 from ._base import CONFIG_ROLES, _bump_version, _conditions, router
 
 
@@ -69,6 +69,9 @@ class RuleMetaOut(BaseModel):
     indicator_sources: list[IndicatorSourceOut]
     # 报告模板可选的段落（P2-93：管理端建模板的段落勾选，取自段落注册表）
     report_sections: list[RuleOptionOut]
+    # 监测指标目录（P2-643：成员端「监测数据录入」的指标提示取这一份，取自 service.MEASURE_FIELDS——前端原先自抄
+    # 一份，把餐后血糖、尿酸抄成 glucose_post / uric_acid，照提示录进去的值规则与事实字典永远读不到）
+    measure_fields: list[RuleOptionOut]
 
 
 class TargetOut(BaseModel):
@@ -165,6 +168,7 @@ def rule_meta():
             for key, (name, metrics) in INDICATOR_SOURCES.items()
         ],
         "report_sections": section_options(),
+        "measure_fields": [{"key": m, "name": FIELD_SOURCES.get(m, m)} for m in MEASURE_FIELDS],
     }
 
 

@@ -164,7 +164,8 @@ def test_规则元数据的四组选项(client, auth):
     body = client.get(f"{B}/meta", headers=auth).json()
     assert set(body) == {"fields", "operators", "risk_levels", "task_types",
                          "member_roles", "indicator_sources",   # 取数口径：P2-93 建指标的下拉与公式提示
-                         "report_sections"}                     # 报告段落：P2-93 建报告模板的段落勾选
+                         "report_sections",                     # 报告段落：P2-93 建报告模板的段落勾选
+                         "measure_fields"}                      # 监测指标目录：P2-643 监测录入的指标提示
     assert all(set(f) == {"key", "name"} for f in body["fields"])
     assert all(set(f) == {"key", "name"} for f in body["operators"])
     # 风险等级多一个 color（前端拿它上色），故是 RuleOptionOut 的子类
@@ -174,6 +175,7 @@ def test_规则元数据的四组选项(client, auth):
     assert all(set(x) == {"key", "name", "metrics"} for x in body["indicator_sources"])
     assert all(set(m) == {"key", "name"} for x in body["indicator_sources"] for m in x["metrics"])
     assert all(set(x) == {"key", "name"} for x in body["report_sections"])
+    assert all(set(x) == {"key", "name"} for x in body["measure_fields"])
 
 
 def test_专病中心的键集合与id数组(client, auth, seeded):
