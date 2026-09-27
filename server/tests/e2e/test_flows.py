@@ -2270,6 +2270,32 @@ def test_运行中枢改已有病种的纳入规则_保存即升一版(page, bas
                 and p["id"] != prog["id"]]   # 没有多出第二个病种
 
 
+def test_运行中枢编辑与改规则_按点击这一刻的病种预填(page, base_url, admin_call, admin_read):
+    """P2-618：「编辑」的说明框原先恒空（看不到原来写的什么、空着不送也清不掉），名称 / 科室与「改规则」的编辑器
+    用的是进页面时那份列表——其间别人改过的，这里一保存就改回去。现在点的时候先按接口取这个病种。"""
+    prog = admin_call("POST", "/api/spd/programs", {"code": "E2E_P2618", "name": "E2E 预填病种", "category": "chronic",
+                                                   "description": "E2E 原说明"})
+    _login(page, base_url)
+    _open_page(page, "spdadmin", "平台管理端·运行中枢")
+    # 进页面之后，别人改了名、改了纳入规则（升到 v2）
+    admin_call("PATCH", f"/api/spd/programs/{prog['id']}", {
+        "name": "E2E 预填病种（改名）", "include_rules": [{"field": "age", "op": ">=", "value": 60}], "note": "别人改的"})
+
+    page.click(f'button[data-prog-rules="{prog["id"]}"]')
+    expect(page.locator("#spd-edit-include .spd-rule-row")).to_have_count(1)   # 修前 0：摆的是进页面时的空规则
+    expect(page.locator("#spd-edit-include input.rule-value")).to_have_value("60")
+    expect(page.locator("#spd-cfg-detail")).to_contain_text("当前 v2")
+
+    page.click(f'button[data-prog-edit="{prog["id"]}"]')
+    modal = _modal(page)
+    expect(modal.locator('[name="name"]')).to_have_value("E2E 预填病种（改名）")   # 修前：进页面时的旧名
+    expect(modal.locator('[name="description"]')).to_have_value("E2E 原说明")   # 修前：恒空
+    _redrawn(page, lambda: _spd_modal(page, {"description": ""}))
+    saved = admin_read(f"/api/spd/programs/{prog['id']}")
+    assert (saved["name"], saved["description"], saved["include_rules"][0]["value"]) == (
+        "E2E 预填病种（改名）", "", 60), saved   # 修前：名字被改回旧名、说明清不掉
+
+
 def test_路径页刚发布的模板_同一页启动路径的下拉里就有(page, base_url, admin_call, admin_read):
     """P2-107：目录（病种 / 团队 / 已发布的量表 / 中心 / 已发布的路径模板）原先首次访问慢专病页面时拉一次、存进全局变量，
     只有运行中枢强制重取——页面之间跳转不重载浏览器，路径页上发布了模板，同一页「启动患者路径」的下拉里没有，

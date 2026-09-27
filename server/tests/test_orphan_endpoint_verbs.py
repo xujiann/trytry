@@ -148,8 +148,6 @@ READ_KNOWN: set[str] = {
     # 教学、运营、打印
     "GET /api/mgmt/staff-contracts",                                    # 不收口（P1-49 名单），随裁定后再接
     "GET /api/projects/{project_id}",                                   # 读侧收口待裁定（P0-37），随裁定后再接
-    # 慢专病
-    "GET /api/spd/programs/{program_id}",
 }
 
 

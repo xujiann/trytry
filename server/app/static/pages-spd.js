@@ -359,7 +359,7 @@ async function renderSpdAdmin() {
          <td>${(cfg.programs_without_rules || []).includes(p.code)
             ? '<span class="tag red">未配置</span>' : '<span class="tag green">已配置</span>'}</td>
          <td>${p.active ? '<span class="tag green">启用</span>' : '<span class="tag">停用</span>'}</td>
-         <td><button class="btn secondary" data-prog-edit="${p.id}" data-name="${esc(p.name)}" data-dept="${esc(p.lead_dept || "")}">编辑</button>
+         <td><button class="btn secondary" data-prog-edit="${p.id}">编辑</button>
              <button class="btn secondary" data-prog-rules="${p.id}">改规则</button>
              <button class="btn secondary" data-prog-versions="${p.id}">版本</button>
              <button class="btn secondary" data-prog-targets="${p.id}">管理目标</button></td></tr>`)}
@@ -571,23 +571,29 @@ async function renderSpdAdmin() {
     const pkgEdit = el("data-pkg-edit"), eduEdit = el("data-edu-edit"), devBind = el("data-dev-bind");
     const dsEdit = el("data-ds-edit"), dsLogs = el("data-ds-logs"), dsSync = el("data-ds-sync");
     if (progEdit) {
+      // 表单按点击这一刻的病种预填（P2-618）：说明原先不预填——框恒空，看不到原来写的什么，改一个字要整段重敲，
+      // 空着又不送、清不掉；名称 / 科室取的是进页面时那份，其间别人改过的，这里一保存就改回去
+      let cur;
+      try { cur = await api(`/api/spd/programs/${progEdit.dataset.progEdit}`); }
+      catch (err) { return setMsg("#spd-program-msg", err.message, false); }
       const form = await spdModal("编辑病种（纳入 / 排除规则用该行的「改规则」，保存即升一版）", [
-        { name: "name", label: "名称", value: progEdit.dataset.name, required: true },
-        { name: "lead_dept", label: "牵头科室", value: progEdit.dataset.dept },
-        { name: "description", label: "说明", type: "textarea" },
+        { name: "name", label: "名称", value: cur.name, required: true },
+        { name: "lead_dept", label: "牵头科室", value: cur.lead_dept },
+        { name: "description", label: "说明", type: "textarea", value: cur.description },
       ]);
       if (!form) return;
-      const body = {};
+      const body = { lead_dept: form.lead_dept || "", description: form.description || "" };
       if (form.name) body.name = form.name;
-      body.lead_dept = form.lead_dept || "";
-      if (form.description) body.description = form.description;
-      return postAction(`/api/spd/programs/${progEdit.dataset.progEdit}`, body, "#spd-program-msg", "PATCH");
+      return postAction(`/api/spd/programs/${cur.id}`, body, "#spd-program-msg", "PATCH");
     }
     // 改已有病种的纳入 / 排除规则（P2-173）：接口「改规则即升版本并留快照」，页面原先没有入口——编辑对话框叫人
     // 「用下方编辑器新建版本」，下方那两个编辑器挂在「新建病种」表单上：同编码提交 409，换个编码就多出一个病种
     if (progRules) {
-      const prog = programs.find((x) => x.id === Number(progRules.dataset.progRules));
-      if (!prog) return;
+      // 规则同样取点击这一刻的（P2-618）：原先摆的是进页面时那份列表——其间别人改过规则、升了版，这里编辑器里还是
+      // 旧规则，在旧规则上加一条一保存，别人那一版的改动就从现行规则里没了（只剩在版本快照里）
+      let prog;
+      try { prog = await api(`/api/spd/programs/${progRules.dataset.progRules}`); }
+      catch (err) { return setMsg("#spd-program-msg", err.message, false); }
       const ruleMeta = await spdMeta();
       $("#spd-cfg-detail").innerHTML = panel(
         `改纳入 / 排除规则 · ${prog.name}（当前 ${prog.version || "—"}，保存即升一版并留快照）`, `
