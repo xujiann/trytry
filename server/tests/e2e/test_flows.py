@@ -3076,6 +3076,54 @@ def test_物资页的签合同_验收_使用登记都在页内表单里录入(pa
     expect(page.locator("tr", has_text="E2E冠脉支架")).to_contain_text("E2E患者")
 
 
+def test_物资采购申请能在页面上驳回_先确认_取消即不动(page, base_url, materials_seed, admin_call, admin_read):
+    """P2-425：审批接口收 approved=false 早就置「已取消」，页面却只给「审批」——不该买的申请只能一直挂在「待审批」。
+    驳回作废后不能恢复，先确认；点取消即不动。"""
+    import json
+    from urllib.request import Request
+
+    op_token = admin_call("POST", "/api/auth/login", {"username": "e2e_mat_op", "password": "passw0rd1"})["access_token"]
+    req = Request(f"{base_url}/api/materials/purchases", method="POST",
+                  data=json.dumps({"org_id": materials_seed["purchase"]["org_id"], "item_name": "E2E不该买的仪器",
+                                   "quantity": 1, "estimated_price": 9.9}).encode(),
+                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {op_token}"})
+    with urlopen(req, timeout=10) as resp:
+        pid = json.loads(resp.read())["id"]
+
+    def status():
+        (row,) = [p for p in admin_read("/api/materials/purchases") if p["id"] == pid]
+        return row["status"]
+
+    _login(page, base_url)
+    _open_page(page, "materials", "物资采购与耗材")
+    reject = page.locator(f'button[data-reject="{pid}"]')
+    reject.click()
+    expect(_modal(page)).to_contain_text("不能恢复")
+    _cancel_modal(page)
+    assert status() == "requested", "点了取消却照样驳回了"
+    _redrawn(page, lambda: (reject.click(), _spd_modal(page, {})))
+    assert status() == "cancelled"
+    expect(page.locator("tr", has_text="E2E不该买的仪器")).to_contain_text("已取消")
+
+
+def test_物资采购的审批按钮只给管理层(page, base_url, materials_seed, admin_call):
+    """P2-425：审批接口只收管理层（管理员放行），经办原先也看得到「审批」，点下去一次 403。"""
+    import json
+    from urllib.request import Request
+
+    op_token = admin_call("POST", "/api/auth/login", {"username": "e2e_mat_op", "password": "passw0rd1"})["access_token"]
+    req = Request(f"{base_url}/api/materials/purchases", method="POST",
+                  data=json.dumps({"org_id": materials_seed["purchase"]["org_id"], "item_name": "E2E待审批的纱布",
+                                   "quantity": 2, "estimated_price": 3.5}).encode(),
+                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {op_token}"})
+    with urlopen(req, timeout=10) as resp:
+        pid = json.loads(resp.read())["id"]
+    _login(page, base_url, "e2e_mat_op", "passw0rd1")
+    _open_page(page, "materials", "物资采购与耗材")
+    expect(page.locator("tr", has_text="E2E待审批的纱布")).to_contain_text("待管理层审批")
+    expect(page.locator(f'button[data-approve="{pid}"], button[data-reject="{pid}"]')).to_have_count(0)
+
+
 @pytest.fixture(scope="session")
 def inpatient_seed(base_url, seed):
     """住院页用例的前置数据：一个病区两张床、一位住在第一张床上的患者（第二张空着，供转床）。"""

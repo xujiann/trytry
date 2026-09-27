@@ -558,6 +558,8 @@ async function renderMaterials() {
   $("#page-desc").textContent = "非药品物资：申请 → 审批 → 合同 → 验收（自动入库流水）；高值耗材一物一码正反向追溯";
   const [purchases, consumables] = await Promise.all([
     api("/api/materials/purchases"), api("/api/materials/consumables")]);
+  // 审批（批准 / 驳回）限管理层（后端 require_roles("director")，管理员放行）：别的角色摆出按钮只会点出一次 403
+  const canApprove = ["director", "admin"].includes(currentRole());
   // ADR-0009 第三批：面板外壳改用 `panel()`（定义见 core.js），迁一页、人工过一页。
   $("#page-body").innerHTML = `
     ${panel("提出采购申请", `
@@ -571,7 +573,10 @@ async function renderMaterials() {
     ${panel(`采购流程（${purchases.length}）`,
       table(["ID", "物资", "规格", "数量", "状态", "合同", "已验收", "操作"], purchases, (p) => {
         let ops = "—";
-        if (p.status === "requested") ops = `<button class="btn secondary" data-approve="${p.id}">审批</button>`;
+        // 驳回原先没有入口（P2-425）：接口收 approved=false 早就置「已取消」，页面只给「审批」，不该买的申请只能一直挂着
+        if (p.status === "requested") ops = canApprove
+          ? `<button class="btn secondary" data-approve="${p.id}">审批</button>
+             <button class="btn danger" data-reject="${p.id}">驳回</button>` : "待管理层审批";
         else if (p.status === "approved") ops = `<button class="btn secondary" data-contract="${p.id}">签合同</button>`;
         else if (p.status === "contracted") ops = `<button class="btn secondary" data-receive="${p.id}">验收</button>`;
         return `<tr><td>${p.id}</td><td>${esc(p.item_name)}</td><td>${esc(p.spec)}</td><td>${p.quantity}${esc(p.unit)}</td>
@@ -616,6 +621,14 @@ async function renderMaterials() {
     try {
       if (d.approve) await api(`/api/materials/purchases/${d.approve}/approve`,
         { method: "POST", body: JSON.stringify({ approved: true }) });
+      else if (d.reject) {
+        const p = purchases.find((x) => x.id === Number(d.reject));
+        const ok = await spdModal(`驳回采购申请：${p ? `${p.item_name}（${p.quantity}${p.unit}）` : d.reject}`, [],
+          { intro: "驳回后这条申请即作废（已取消），不能恢复；要买得重新提出申请。" });
+        if (!ok) return;
+        await api(`/api/materials/purchases/${d.reject}/approve`,
+          { method: "POST", body: JSON.stringify({ approved: false }) });
+      }
       else if (d.contract) {
         const p = purchases.find((x) => x.id === Number(d.contract));
         const suppliers = (await api("/api/pharmacy/suppliers")).filter((s) => s.active);
