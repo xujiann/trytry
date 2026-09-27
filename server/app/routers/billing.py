@@ -1455,6 +1455,13 @@ def create_payment(
         is_insurance = body.channel == "insurance"
         paid_already = _collected_amount(db, settlement.id, include_pending=True, insurance=is_insurance)
         cap, part_name, part_amount = _channel_cap(settlement, offset, is_insurance)
+        if body.amount is None and paid_already > 0:
+            # 留空收的是这一份还没收的（P2-630）：原先默认额恒取整笔，先收了一部分（分两种渠道付）或退过一部分之后
+            # 留空再收，整笔加已收必超、422，只能手算差额再填。与居民端「待支付」（`self_pay_outstanding`）同一个数；
+            # 已收清的照旧落到下面那句「超出未付余额」
+            remaining = round(cap - paid_already, 2)
+            if remaining > 0:
+                amount = remaining
         if paid_already + amount > cap + 1e-6:
             # 先收事务再抛：作废写入还挂在未提交的事务里，SQLite 的库级写锁
             # 要等依赖清理才放，下一个请求会撞 "database is locked"
