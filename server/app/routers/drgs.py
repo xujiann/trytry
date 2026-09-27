@@ -291,9 +291,14 @@ def drg_stats(db: Session = Depends(get_db)):
 
     口径（块3）：grouped 仅统计正式分组，QY 兜底组计入 fallback 并从 CMI 分母剔除，
     fallback_pct 反映病案首页填写质量（兜底率越高说明主诊断/主手术填写越不规范）。
+
+    **只算已出院的病例**（P2-453）：页面列名是「出院病例」，模块口径是「出院病例入组」，事中预警的历史基线也只取已出院
+    的——可病案首页出院前就得填（不填不让出院），在院患者早有分组与费用，原先照样进例数、入组率、CMI 与均次费用：
+    两例都还在院、一例没出院，机构行照样报 2 例、CMI 0.95、均次 5500。在院的费用还没结完，是事中预警的对象。
     """
     # 正式入组判定：非空且非兜底组
     formal = (CaseSummary.drg_code != "") & (CaseSummary.drg_code != FALLBACK_CODE)
+    discharged = Admission.discharged_at.isnot(None)
     org_rows = (
         db.query(
             Admission.org_id,
@@ -308,6 +313,7 @@ def drg_stats(db: Session = Depends(get_db)):
         )
         .join(CaseSummary, CaseSummary.admission_id == Admission.id)
         .join(Organization, Organization.id == Admission.org_id)
+        .filter(discharged)
         .group_by(Admission.org_id, Organization.name)
         .order_by(Admission.org_id, Organization.name)
         .all()
@@ -321,7 +327,8 @@ def drg_stats(db: Session = Depends(get_db)):
             # 管理员一调权，同一页上两个 CMI 就对不上；调权只作用于此后入组的病例，与首页上的权重同一个口径
             func.coalesce(func.sum(CaseSummary.drg_weight), 0.0).label("weight_sum"),
         )
-        .filter(CaseSummary.drg_code != "")
+        .join(Admission, Admission.id == CaseSummary.admission_id)
+        .filter(CaseSummary.drg_code != "", discharged)
         .group_by(CaseSummary.drg_code)
         .order_by(CaseSummary.drg_code)
         .all()

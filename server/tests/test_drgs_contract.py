@@ -283,36 +283,33 @@ def test_DRG统计精确_三段键序与浮点口径(client, seed):
     body = resp.json()
     assert list(body.keys()) == ["orgs", "groups", "mdcs"]
     assert [list(r.keys()) for r in body["orgs"]] == [ORG_STAT_KEYS]
-    assert [list(r.keys()) for r in body["groups"]] == [GROUP_STAT_KEYS] * 3
-    assert [list(r.keys()) for r in body["mdcs"]] == [MDC_STAT_KEYS] * 3
+    assert [list(r.keys()) for r in body["groups"]] == [GROUP_STAT_KEYS] * 2
+    assert [list(r.keys()) for r in body["mdcs"]] == [MDC_STAT_KEYS] * 2
     assert body == {
-        # 8 例有首页（5 出院 ES31 + QY + 在院 ES31/BR23），未填首页的不进分母
+        # 只算已出院的 6 例（5 出院 ES31 + QY）：在院的 ES31 / BR23 首页已填、已入组，但还在院、费用未结，
+        # 不是「出院病例」（P2-453；原先 8 例、CMI 1.007、均次 6250，把在院的也算了进去）；未填首页的不进分母
         "orgs": [{
             "org_id": seed["org"]["id"], "org_name": "契约DRG医院",
-            "cases": 8, "grouped": 7, "fallback": 1,
-            "grouped_pct": 87.5, "fallback_pct": 12.5,
-            # CMI = (0.95×6 + 1.35) / 7，QY 兜底组不进分子分母
-            "cmi": 1.007, "avg_cost": 6250.0,
+            "cases": 6, "grouped": 5, "fallback": 1,
+            "grouped_pct": 83.33, "fallback_pct": 16.67,
+            # CMI = 0.95×5 / 5，QY 兜底组不进分子分母
+            "cmi": 0.95, "avg_cost": 5500.0,
         }],
         "groups": [
-            {"drg_code": "BR23", "drg_name": "脑血管疾病", "mdc": "MDCB",
-             "fallback": False, "cases": 1, "avg_cost": 9000.0},
             {"drg_code": "ES31", "drg_name": "呼吸系统感染（肺炎）", "mdc": "MDCE",
-             "fallback": False, "cases": 6, "avg_cost": 6333.33},
+             "fallback": False, "cases": 5, "avg_cost": 6000.0},
             {"drg_code": "QY", "drg_name": "未入组（歧义组，需病案首页复核）", "mdc": "QY",
              "fallback": True, "cases": 1, "avg_cost": 3000.0},
         ],
         "mdcs": [
-            {"mdc": "MDCB", "mdc_name": "神经系统疾病及功能障碍", "groups": 1, "cases": 1,
-             "cmi": 1.35, "avg_cost": 9000.0, "fallback": False},
-            {"mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍", "groups": 1, "cases": 6,
-             "cmi": 0.95, "avg_cost": 6333.33, "fallback": False},
+            {"mdc": "MDCE", "mdc_name": "呼吸系统疾病及功能障碍", "groups": 1, "cases": 5,
+             "cmi": 0.95, "avg_cost": 6000.0, "fallback": False},
             {"mdc": "QY", "mdc_name": "未入组/歧义", "groups": 1, "cases": 1,
              "cmi": 0.5, "avg_cost": 3000.0, "fallback": True},
         ],
     }
     org_row = body["orgs"][0]
-    # SQL AVG 恒 REAL：整数均值也是 9000.0；比率/CMI 是真除法——都恒 float
+    # SQL AVG 恒 REAL：整数均值也是 5500.0；比率/CMI 是真除法——都恒 float
     assert isinstance(org_row["avg_cost"], float) and isinstance(org_row["cmi"], float)
     assert isinstance(body["groups"][0]["avg_cost"], float)
     assert type(org_row["cases"]) is int and type(org_row["grouped"]) is int

@@ -21,6 +21,8 @@ def seeded(client, admin):
         summary = client.post(f"/api/inpatient/admissions/{adm}/case-summary", headers=admin, json={
             "discharge_diagnosis": "社区获得性肺炎", "total_cost": 6000, "outcome": "好转"})
         assert summary.status_code == 201, summary.text
+        # DRG 统计只算已出院的病例（P2-453）
+        assert client.post(f"/api/inpatient/admissions/{adm}/discharge", headers=admin).status_code == 200
     return {"org": org, "code": summary.json()["drg_code"], "weight": summary.json()["drg_weight"]}
 
 

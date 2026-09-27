@@ -152,6 +152,9 @@ def drg_world(client, admin):
         summary = client.post(f"/api/inpatient/admissions/{adm.json()['id']}/case-summary", headers=admin,
                               json={"discharge_diagnosis": diagnosis, "total_cost": 5000 + i, "outcome": "好转"})
         assert summary.status_code in (200, 201), summary.text
+        # DRG 统计只算已出院的病例（P2-453）
+        discharged = client.post(f"/api/inpatient/admissions/{adm.json()['id']}/discharge", headers=admin)
+        assert discharged.status_code == 200, discharged.text
     return org
 
 
