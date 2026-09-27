@@ -17,6 +17,7 @@ from .. import clock
 from ..database import get_db
 from ..deps import clamp_offset, get_current_user, row_dict
 from ..models import (
+    ChronicDiseaseType,
     ChronicPatient,
     DrugStock,
     Encounter,
@@ -29,7 +30,14 @@ from ..models import (
     Prescription,
     Referral,
 )
+from .encounters import ENCOUNTER_TYPE_NAMES
+from .exams import CRITICAL_STATUS_NAMES, EXAM_REQUEST_STATUS_NAMES
+from .infectious import INFECTIOUS_CATEGORY_NAMES
+from .medwaste import WASTE_STATUS_NAMES, WASTE_TYPES
 from .medwaste import overdue_condition as medwaste_overdue_condition
+from .prescriptions import PRESCRIPTION_STATUS_NAMES
+from .printing import CENTER_NAMES, REFERRAL_DIRECTION_NAMES
+from .referrals import STATUS_LABELS as REFERRAL_STATUS_NAMES
 
 router = APIRouter(prefix="/api/metrics", tags=["决策驾驶舱"], dependencies=[Depends(get_current_user)])
 
@@ -252,7 +260,15 @@ def q_rejected_prescriptions(db: Session):
 
 # ---------------------------------------------------------------------------
 # 明细行渲染（含跳转所需的业务 id 与关键字段）
+#
+# 编码类字段另给 `*_name`（P2-646，§13「状态文案取自后端」），`fields` 指向它：原先明细表把 rejected / up / imaging /
+# sharp / hypertension 原样印出来，同样的数据在各业务页上是中文。编码本身照旧留在行里（不改既有键的值），只是不再上表；
+# 文案表都用业务端那几张（与打印件同一份），表外的值原样回显。
 # ---------------------------------------------------------------------------
+
+
+def _name(names: dict, code) -> str:
+    return names.get(code, code)
 
 
 def _row_critical(r: ExamReport) -> dict:
@@ -261,6 +277,8 @@ def _row_critical(r: ExamReport) -> dict:
         "request_id": r.request_id,
         "conclusion": r.conclusion,
         "critical_status": r.critical_status or "pending",
+        # 存量空串：危急值页叫「待回填」（pages-clinical.js 的 CRIT_STATUS），这里原先编了个 pending
+        "critical_status_name": _name(CRITICAL_STATUS_NAMES, r.critical_status) if r.critical_status else "待回填",
         "reported_by": r.reported_by,
         "reported_at": r.reported_at.isoformat(),
     }
@@ -277,11 +295,18 @@ def _row_stock(s: DrugStock) -> dict:
     }
 
 
-def _row_chronic(c: ChronicPatient) -> dict:
+def _chronic_disease_names(db: Session) -> dict:
+    """病种名称取慢病病种目录（库里配的，可增）。"""
+    return {code: name for code, name in db.query(ChronicDiseaseType.code, ChronicDiseaseType.name)
+            .order_by(ChronicDiseaseType.code).all()}
+
+
+def _row_chronic(c: ChronicPatient, names: dict | None = None) -> dict:
     return {
         "id": c.id,
         "patient_id": c.patient_id,
         "disease": c.disease,
+        "disease_name": _name(names or {}, c.disease),
         "level": c.level,
         "next_due": c.next_due,
         "managed_by_org_id": c.managed_by_org_id,
@@ -293,8 +318,10 @@ def _row_medwaste(w: MedicalWaste) -> dict:
         "id": w.id,
         "org_id": w.org_id,
         "waste_type": w.waste_type,
+        "waste_type_name": _name(WASTE_TYPES, w.waste_type),
         "weight_kg": w.weight_kg,
         "status": w.status,
+        "status_name": _name(WASTE_STATUS_NAMES, w.status),
         "collected_date": w.collected_date,
     }
 
@@ -306,6 +333,7 @@ def _row_infectious(c: InfectiousCase) -> dict:
         "disease_code": c.disease_code,
         "disease_name": c.disease_name,
         "category": c.category,
+        "category_name": INFECTIOUS_CATEGORY_NAMES.get(c.category, "目录外"),   # 与报告卡导出同一句
         "onset_date": c.onset_date,
     }
 
@@ -317,7 +345,9 @@ def _row_referral(r: Referral) -> dict:
         "from_org_id": r.from_org_id,
         "to_org_id": r.to_org_id,
         "direction": r.direction,
+        "direction_name": _name(REFERRAL_DIRECTION_NAMES, r.direction),
         "status": r.status,
+        "status_name": _name(REFERRAL_STATUS_NAMES, r.status),
         "reason": r.reason,
     }
 
@@ -328,6 +358,7 @@ def _row_encounter(e: Encounter) -> dict:
         "patient_id": e.patient_id,
         "org_id": e.org_id,
         "encounter_type": e.encounter_type,
+        "encounter_type_name": _name(ENCOUNTER_TYPE_NAMES, e.encounter_type),
         "diagnosis_name": e.diagnosis_name,
         "created_at": e.created_at.isoformat(),
     }
@@ -339,8 +370,10 @@ def _row_exam_request(r: ExamRequest) -> dict:
         "patient_id": r.patient_id,
         "from_org_id": r.from_org_id,
         "center_type": r.center_type,
+        "center_type_name": _name(CENTER_NAMES, r.center_type),
         "item_name": r.item_name,
         "status": r.status,
+        "status_name": _name(EXAM_REQUEST_STATUS_NAMES, r.status),
     }
 
 
@@ -351,11 +384,12 @@ def _row_prescription(p: Prescription) -> dict:
         "org_id": p.org_id,
         "diagnosis_name": p.diagnosis_name,
         "status": p.status,
+        "status_name": _name(PRESCRIPTION_STATUS_NAMES, p.status),
         "review_comment": p.review_comment,
     }
 
 
-# metric → (中文名, 查询构造函数, 明细行渲染, 前端跳转页 hash, 明细列表头)
+# metric → (中文名, 查询构造函数, 明细行渲染, 前端跳转页 hash, 明细列表头)；`names` 可选：行渲染要的库里名称表，一次取好
 METRIC_QUERIES: dict[str, dict] = {
     "critical_values": {
         "label": "未闭环危急值",
@@ -363,7 +397,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_critical,
         "page": "critical",
         "columns": ["报告ID", "申请单", "结论", "闭环状态", "报告医师", "报告时间"],
-        "fields": ["id", "request_id", "conclusion", "critical_status", "reported_by", "reported_at"],
+        "fields": ["id", "request_id", "conclusion", "critical_status_name", "reported_by", "reported_at"],
     },
     "stock_alerts": {
         "label": "缺药预警",
@@ -377,9 +411,10 @@ METRIC_QUERIES: dict[str, dict] = {
         "label": "慢病随访超期",
         "query": q_chronic_overdue,
         "row": _row_chronic,
+        "names": _chronic_disease_names,
         "page": "chronic",
         "columns": ["档案ID", "患者", "病种", "分级", "应随访日", "管理机构"],
-        "fields": ["id", "patient_id", "disease", "level", "next_due", "managed_by_org_id"],
+        "fields": ["id", "patient_id", "disease_name", "level", "next_due", "managed_by_org_id"],
     },
     "medwaste_overdue": {
         "label": "医废滞留",
@@ -387,7 +422,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_medwaste,
         "page": "medwaste",
         "columns": ["批次ID", "机构", "类别", "重量(kg)", "状态", "收集日期"],
-        "fields": ["id", "org_id", "waste_type", "weight_kg", "status", "collected_date"],
+        "fields": ["id", "org_id", "waste_type_name", "weight_kg", "status_name", "collected_date"],
     },
     "infectious_recent": {
         "label": "近7日传染病报告",
@@ -395,7 +430,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_infectious,
         "page": "infectious",
         "columns": ["个案ID", "机构", "病种编码", "病种", "分类", "发病日期"],
-        "fields": ["id", "org_id", "disease_code", "disease_name", "category", "onset_date"],
+        "fields": ["id", "org_id", "disease_code", "disease_name", "category_name", "onset_date"],
     },
     "referrals_up": {
         "label": "上转",
@@ -403,7 +438,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_referral,
         "page": "referrals",
         "columns": ["转诊ID", "患者", "转出机构", "转入机构", "方向", "状态", "原因"],
-        "fields": ["id", "patient_id", "from_org_id", "to_org_id", "direction", "status", "reason"],
+        "fields": ["id", "patient_id", "from_org_id", "to_org_id", "direction_name", "status_name", "reason"],
     },
     "referrals_down": {
         "label": "下转",
@@ -411,7 +446,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_referral,
         "page": "referrals",
         "columns": ["转诊ID", "患者", "转出机构", "转入机构", "方向", "状态", "原因"],
-        "fields": ["id", "patient_id", "from_org_id", "to_org_id", "direction", "status", "reason"],
+        "fields": ["id", "patient_id", "from_org_id", "to_org_id", "direction_name", "status_name", "reason"],
     },
     "referrals_completed": {
         "label": "转诊结案",
@@ -419,7 +454,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_referral,
         "page": "referrals",
         "columns": ["转诊ID", "患者", "转出机构", "转入机构", "方向", "状态", "原因"],
-        "fields": ["id", "patient_id", "from_org_id", "to_org_id", "direction", "status", "reason"],
+        "fields": ["id", "patient_id", "from_org_id", "to_org_id", "direction_name", "status_name", "reason"],
     },
     "grassroots_encounters": {
         "label": "基层诊疗人次",
@@ -427,7 +462,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_encounter,
         "page": "archive",
         "columns": ["就诊ID", "患者", "机构", "就诊类型", "诊断", "就诊时间"],
-        "fields": ["id", "patient_id", "org_id", "encounter_type", "diagnosis_name", "created_at"],
+        "fields": ["id", "patient_id", "org_id", "encounter_type_name", "diagnosis_name", "created_at"],
     },
     "reported_exams": {
         "label": "远程诊断已报告",
@@ -435,7 +470,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_exam_request,
         "page": "exams",
         "columns": ["申请ID", "患者", "申请机构", "中心", "项目", "状态"],
-        "fields": ["id", "patient_id", "from_org_id", "center_type", "item_name", "status"],
+        "fields": ["id", "patient_id", "from_org_id", "center_type_name", "item_name", "status_name"],
     },
     "recognized_exams": {
         "label": "结果互认",
@@ -443,7 +478,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_exam_request,
         "page": "recognition",
         "columns": ["申请ID", "患者", "申请机构", "中心", "项目", "状态"],
-        "fields": ["id", "patient_id", "from_org_id", "center_type", "item_name", "status"],
+        "fields": ["id", "patient_id", "from_org_id", "center_type_name", "item_name", "status_name"],
     },
     "pending_reviews": {
         "label": "待药师审核处方",
@@ -451,7 +486,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_prescription,
         "page": "rx",
         "columns": ["处方ID", "患者", "机构", "诊断", "状态", "审方意见"],
-        "fields": ["id", "patient_id", "org_id", "diagnosis_name", "status", "review_comment"],
+        "fields": ["id", "patient_id", "org_id", "diagnosis_name", "status_name", "review_comment"],
     },
     "rejected_prescriptions": {
         "label": "退回处方",
@@ -459,7 +494,7 @@ METRIC_QUERIES: dict[str, dict] = {
         "row": _row_prescription,
         "page": "rx",
         "columns": ["处方ID", "患者", "机构", "诊断", "状态", "审方意见"],
-        "fields": ["id", "patient_id", "org_id", "diagnosis_name", "status", "review_comment"],
+        "fields": ["id", "patient_id", "org_id", "diagnosis_name", "status_name", "review_comment"],
     },
 }
 
@@ -559,7 +594,9 @@ def drilldown(
     limit = min(max(limit, 1), 500)
     entity = query.column_descriptions[0]["entity"]
     rows = query.order_by(entity.id.desc()).offset(clamp_offset(offset)).limit(limit).all()
-    items = [meta["row"](obj) for obj in rows]
+    # 名称要查库的（慢病病种目录）由 `names` 一次取好，行渲染只查表
+    names = meta["names"](db) if "names" in meta else None
+    items = [meta["row"](obj) if names is None else meta["row"](obj, names) for obj in rows]
     response.headers["X-Total-Count"] = str(total)
     return {
         "metric": metric,

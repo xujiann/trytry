@@ -60,6 +60,7 @@ from ..pii import pii_filter
 # 不在子系统里另写一份「怎么算同一个号」。
 from ..routers.patients import id_card_variants
 from ..routers.organizations import ORG_LEVEL_NAMES  # 机构层级文案（纳管网络树显示，P2-74）
+from ..routers.encounters import ENCOUNTER_TYPE_NAMES  # 就诊类型文案：平台驾驶舱与慢专病随访前置资料同一份（P2-646）
 # 二维码 SVG：实现在平台侧 qrsvg（ADR-0015 打印件验真也要用），spd 经这里取。
 # 方向由此变顺：原实现长在 spd 内部时，平台侧想复用只能违反单向依赖。
 from ..qrsvg import qr_svg

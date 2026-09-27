@@ -21,6 +21,9 @@ from ..models import (
 from ..visibility import assert_org_writable, assert_patient_visible, visible_org_ids
 from ..schemas import EncounterCreate, EncounterOut
 
+#: `encounters.encounter_type` → 中文（§13「状态文案取自后端」）：驾驶舱下钻明细原先把 outpatient 原样印出来（P2-646）
+ENCOUNTER_TYPE_NAMES = {"outpatient": "门诊", "inpatient": "住院"}
+
 router = APIRouter(prefix="/api", tags=["就诊与健康档案"], dependencies=[Depends(get_current_user)])
 
 

@@ -182,13 +182,18 @@ def test_drilldown_行的键集合必须与fields一致(client, admin, seeded):
 
     但它不是无契约：同一响应里的 `fields` 就是这批行的字段清单，前端按它渲染。
     这条把"自描述"钉死——行里多一个键或少一个键，前端表格就会错位。
+
+    编码类字段上表的是后端给的 `*_name`（P2-646），编码本身照旧留在行里（不改既有键）、不上表：行键 = 上表的字段 +
+    这些文案背后的编码，一个不多一个不少。
     """
     checked = 0
     for metric in _all_metrics(client, admin):
         body = _get(client, admin, f"/api/metrics/drilldown?metric={metric}")
+        shown = set(body["fields"])
         for row in body["items"]:
-            assert set(row) == set(body["fields"]), (
-                f"{metric} 的行键集合与 fields 对不上：{sorted(set(row) ^ set(body['fields']))}"
+            behind = {f.removesuffix("_name") for f in shown if f.endswith("_name")} & set(row)
+            assert set(row) == shown | behind, (
+                f"{metric} 的行键集合与 fields 对不上：{sorted(set(row) ^ (shown | behind))}"
             )
             checked += 1
     assert checked >= 8, f"只校到 {checked} 行，八类指标没都造出数据，本用例失去区分力"

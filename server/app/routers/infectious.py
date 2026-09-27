@@ -161,7 +161,8 @@ def multi_point_alerts(
 
 # ---------- 工程包 I1：法定上报导出（传染病报告卡） ----------
 
-_CATEGORY_NAMES = {"A": "甲类", "B": "乙类", "C": "丙类"}
+#: 传染病分类的中文（报告卡导出与驾驶舱下钻同一份，P2-646）；目录外的病种没有分类
+INFECTIOUS_CATEGORY_NAMES = {"A": "甲类", "B": "乙类", "C": "丙类"}
 
 
 class CaseReportCardOut(BaseModel):
@@ -218,7 +219,7 @@ def _case_card(case: InfectiousCase, org_names: dict, meta_by_code: dict) -> dic
         "disease_code": case.disease_code,
         "disease_name": case.disease_name,
         "category": case.category,
-        "category_name": _CATEGORY_NAMES.get(case.category, "目录外"),
+        "category_name": INFECTIOUS_CATEGORY_NAMES.get(case.category, "目录外"),
         "onset_date": case.onset_date,
         "reported_at": case.reported_at.isoformat(),
         "report_hours": report_hours,
