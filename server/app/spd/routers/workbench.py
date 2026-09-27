@@ -1102,10 +1102,13 @@ def center_workbench(
             "target": _apply_scope(
                 db.query(SpdCandidate), SpdCandidate.org_id, orgs
             ).filter(SpdCandidate.status == "target").count(),
+            # 待分发 = 还没有团队、也还没有责任人的目标人群（P2-601）：原先只看团队——团队成员认领的（认领只记责任人、
+            # 不记团队）照数，而分发一律跳过已认领的（P2-251），这几条永远「待分发」、分发不下去
             "unassigned": _apply_scope(
                 db.query(SpdCandidate), SpdCandidate.org_id, orgs
             ).filter(
-                SpdCandidate.status == "target", SpdCandidate.team_id.is_(None)
+                SpdCandidate.status == "target", SpdCandidate.team_id.is_(None),
+                SpdCandidate.assigned_user_id.is_(None),
             ).count(),
             "excluded": _apply_scope(
                 db.query(SpdCandidate), SpdCandidate.org_id, orgs
