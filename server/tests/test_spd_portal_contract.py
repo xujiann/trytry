@@ -233,7 +233,9 @@ def test_首页的键集合与动态指标字典(client, auth):
     assert pkg["progress"] == 25.0 and isinstance(pkg["progress"], float)
     prog = body["programs"][0]
     assert set(prog) == {"program_code", "program_name", "stage", "risk_level",
-                         "team_id", "team_name", "doctor_user_id", "next_followup_at"}
+                         "team_id", "team_name", "doctor_user_id", "doctor_name",   # doctor_name P2-560 加
+                         "next_followup_at"}
+    assert prog["doctor_name"] == "契约医生"
 
 
 def test_档案的四个JSON列原样透出且时间轴两种来源同形(client, auth):

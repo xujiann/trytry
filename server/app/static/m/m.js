@@ -1268,6 +1268,7 @@ async function renderSpdHome(box) {
     ${kv("当前阶段", esc(p.stage || "—"))}
     ${kv("风险等级", spdTagOf(SPD_RISK_TAGS, p.risk_level))}
     ${kv("签约团队", esc(p.team_name || "—"))}
+    ${kv("主管医生", esc(p.doctor_name || "—"))}
     ${kv("下次随访", esc(p.next_followup_at || "—"))}</div>`).join("");
   const packages = home.packages.map((p) => `<div class="m-card">
     ${kv("服务包", esc(p.name))}

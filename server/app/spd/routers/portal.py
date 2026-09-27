@@ -20,7 +20,7 @@ from ...database import get_db
 from ...deps import paginate
 from ...numtypes import INT4_MAX, INT4_MIN
 from ...texttypes import NON_BLANK
-from ..platform import Encounter, Patient, ResidentAccount
+from ..platform import Encounter, Patient, ResidentAccount, User
 from ..models import (
     SpdAssessment,
     SpdConsult,
@@ -115,6 +115,8 @@ class SpdHomeProgramOut(BaseModel):
     team_id: int | None
     team_name: str
     doctor_user_id: int | None
+    # 主管医生的姓名（P2-560，需求对照表居民端 #1「签约团队、主管医生」）：只取姓名，没填姓名的给空串——不拿登录账号顶替
+    doctor_name: str
     next_followup_at: str
 
 
@@ -183,6 +185,12 @@ def home(
             SpdTeam.id.in_([e.team_id for e in enrollments if e.team_id] or [0])
         )
     }
+    doctors: dict[int | None, str] = {
+        u.id: u.full_name
+        for u in db.query(User).filter(
+            User.id.in_([e.doctor_user_id for e in enrollments if e.doctor_user_id] or [0])
+        )
+    }
     latest: dict[str, dict] = {}
     for metric in ("bp_sys", "bp_dia", "glucose_fasting", "bmi", "spo2"):
         row = (
@@ -231,7 +239,7 @@ def home(
             {"program_code": e.program_code, "program_name": names.get(e.program_code, ""),
              "stage": e.stage, "risk_level": e.risk_level,
              "team_id": e.team_id, "team_name": teams.get(e.team_id, ""),
-             "doctor_user_id": e.doctor_user_id,
+             "doctor_user_id": e.doctor_user_id, "doctor_name": doctors.get(e.doctor_user_id, ""),
              "next_followup_at": e.next_followup_at}
             for e in enrollments
         ],
