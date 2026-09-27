@@ -334,9 +334,11 @@ class LevelSliceOut(BaseModel):
     teams: int
 
 
-#: `spd_centers.status` → 中文（§13「状态文案取自后端」，P2-72）。措辞照抄专家端「编辑专病中心」的选项；
-#: `disabled` 界面不给，既有用例拿它表示停用。改档不收枚举（`CenterPatch.status` 只限列宽），表外的值原样显示。
+#: `spd_centers.status` → 中文（§13「状态文案取自后端」，P2-72）。措辞照抄专家端「编辑专病中心」原先的选项；
+#: `disabled` 既有用例拿它表示停用。改档不收枚举（`CenterPatch.status` 只限列宽），表外的值原样显示。
 #: 卫健委工作台只把 running 译成「运行中」、其余原样显示，专家工作台一个都不译。
+#: 专家工作台连表一起下发（`center_status_names`），编辑框的状态下拉照它给选项（P2-421）：原先前端写死前三项，
+#: 已停用的中心一打开编辑框就落在「筹建」，改个名字保存，状态被悄悄改掉。
 CENTER_STATUS_NAMES = {"draft": "筹建", "running": "运行中", "paused": "暂停", "disabled": "已停用"}
 
 
@@ -428,6 +430,7 @@ class ExpertWorkbenchOut(BaseModel):
     referrals: ReferralStatsOut
     assessments: AssessmentOverviewOut
     org_coverage: int
+    center_status_names: dict[str, str]
 
 
 class CenterTodoOut(BaseModel):
@@ -1027,6 +1030,7 @@ def expert_workbench(
         "org_coverage": _apply_scope(
             db.query(SpdEnrollment), SpdEnrollment.org_id, orgs
         ).with_entities(SpdEnrollment.org_id).distinct().count(),
+        "center_status_names": dict(CENTER_STATUS_NAMES),
     }
 
 

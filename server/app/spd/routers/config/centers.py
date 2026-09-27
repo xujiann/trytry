@@ -127,8 +127,8 @@ class CenterPatch(BaseModel):
     leader_user_id: int | None = None
     org_ids: list[int] = Field(default=UNSET)
     team_ids: list[int] = Field(default=UNSET)
-    # 建中心不收 status，没有建档一侧的枚举可照抄；界面给 draft / running / paused，既有用例拿 disabled
-    # 表示停用——这里只限列宽 String(16)，不替业务定枚举
+    # 建中心不收 status，没有建档一侧的枚举可照抄；界面的选项取自专家工作台下发的状态文案表（筹建 / 运行中 /
+    # 暂停 / 已停用，P2-421）——这里只限列宽 String(16)，不替业务定枚举
     status: str = Field(default=UNSET, max_length=16)
     version: str = Field(default=UNSET, max_length=16)
 

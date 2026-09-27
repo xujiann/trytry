@@ -844,12 +844,17 @@ async function renderSpdExpert() {
   $("#page-body").onclick = async (e) => {
     const btn = e.target.closest("[data-center-edit]");
     if (!btn) return;
+    // 状态选项取自后端的文案表（P2-421）：原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
+    // 改个名字保存，状态被悄悄改掉。表外的值原样给出、默认选中——不动它就不改它
+    const current = btn.dataset.status || "running";
+    const statuses = { ...(wb.center_status_names || {}) };
+    if (!Object.keys(statuses).includes(current)) statuses[current] = current;
     const form = await spdModal("编辑专病中心", [
       { name: "name", label: "名称", value: btn.dataset.name, required: true },
       { name: "lead_dept", label: "牵头科室", value: btn.dataset.dept },
       { name: "version", label: "版本", value: btn.dataset.version },
-      { name: "status", label: "状态", type: "select", value: btn.dataset.status || "running",
-        options: [{ value: "draft", label: "筹建" }, { value: "running", label: "运行中" }, { value: "paused", label: "暂停" }] },
+      { name: "status", label: "状态", type: "select", value: current,
+        options: Object.entries(statuses).map(([value, label]) => ({ value, label })) },
       { name: "leader_user_id", label: "负责人用户ID（留空不改）", type: "number" },
     ]);
     if (!form) return;

@@ -396,7 +396,7 @@ def test_专病专家端工作台(client, h, wb):
     body = client.get(f"{B}/workbench/expert", params={"program_code": "wbp_a"},
                       headers=h).json()
     assert list(body) == ["programs", "centers", "enrollment", "paths", "referrals",
-                          "assessments", "org_coverage"]
+                          "assessments", "org_coverage", "center_status_names"]
     assert body == {
         "programs": [{"program_code": "wbp_a", "program_name": "契约甲病",
                       "category": "chronic", "version": "v1",
@@ -412,6 +412,8 @@ def test_专病专家端工作台(client, h, wb):
         "referrals": REFERRALS,
         "assessments": {"total": 1, "by_risk": {"low": 1}},
         "org_coverage": 2,
+        # 编辑框的状态下拉照它给选项（P2-421）
+        "center_status_names": {"draft": "筹建", "running": "运行中", "paused": "暂停", "disabled": "已停用"},
     }
 
 

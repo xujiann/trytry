@@ -1420,6 +1420,22 @@ def test_删除路径节点先确认(page, base_url, admin_read, admin_call):
     assert node_ids() == []
 
 
+def test_编辑专病中心只改名_已停用的状态不被悄悄改成筹建(page, base_url, admin_read, admin_call):
+    """P2-421：编辑框的状态下拉原先写死筹建 / 运行中 / 暂停三项，已停用的中心一打开就落在第一项「筹建」，
+    只改个名字保存，状态被悄悄改掉。修后选项取自后端的状态文案表（专家工作台下发的 `center_status_names`）。"""
+    center = admin_call("POST", "/api/spd/centers",
+                        {"code": "E2E_C421", "name": "E2E停用中心", "program_code": "hypertension"})
+    admin_call("PATCH", f"/api/spd/centers/{center['id']}", {"status": "disabled"})
+
+    _login(page, base_url)
+    _open_page(page, "spdexpert", "专病专家端·临床指导")
+    page.click(f'button[data-center-edit="{center["id"]}"]')
+    expect(_modal(page).locator('[name="status"]')).to_have_value("disabled")   # 修前 draft
+    _redrawn(page, lambda: _spd_modal(page, {"name": "E2E停用中心改名"}))
+    (row,) = [c for c in admin_read("/api/spd/centers") if c["id"] == center["id"]]
+    assert (row["name"], row["status"]) == ("E2E停用中心改名", "disabled"), row
+
+
 @pytest.fixture(scope="session")
 def spd_open_consult(base_url, admin_call):
     """一条还开着的慢专病在线咨询。会话只能由居民端发起，造数也走居民端：开户 → 实名 → 发消息。"""
