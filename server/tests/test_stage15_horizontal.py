@@ -1385,6 +1385,8 @@ PATIENT_OWNED_BY_DESIGN = {
     "notifications.py:mark_read":
         "个体级判定，比机构级更严：只有收件人本人能标已读（`notification.user_id != user.id` 即 404，"
         "不暴露消息存在）。是 404 不是 403，登记不进领域守卫表；前提由 test_挂在患者上的豁免_消息只认收件人 钉住。",
+    "appointments.py:remove_blacklist":
+        "角色门是 require_admin：admin 属全域角色，判可见性是一句永不触发的守卫（与新建那条 add_blacklist 同一理由）。",
 }
 
 _PATIENT_WRITE_GUARDS = {
@@ -1426,6 +1428,9 @@ def _patient_owned_models() -> set[str]:
 def _byid_patient_owned_write_endpoints(sources=None) -> set[str]:
     """按 id 直取「挂在患者上的表」的写接口里，没有任何归属守卫的。
 
+    取行认两种写法：`db.get(M, id)`，与按路径参数拼条件的 `db.query(M)`——后一种是 P1-194 逼出来的：
+    移出分组成员按（分组号, 患者号）查行再删，连调用方都不收，只认 `db.get` 时它不在分母里。
+
     `sources`：[(显示名, 源码)]，缺省扫全部路由文件（自证用例会塞进改过的源码）。
     """
     owned = _patient_owned_models()
@@ -1443,7 +1448,7 @@ def _byid_patient_owned_write_endpoints(sources=None) -> set[str]:
             body = _with_local_helpers(tree, fn)
             if not _is_write_endpoint(decs, body):
                 continue
-            if not any(f"db.get({m}," in body for m in owned):
+            if not any(f"db.get({m}," in body or f"db.query({m})" in body for m in owned):
                 continue
             if any(g in body for g in _PATIENT_WRITE_GUARDS) or _has_domain_guard(name, tree, fn):
                 continue
@@ -1485,6 +1490,22 @@ def test_挂在患者上的写接口判据自证_隔一跳():
     reverted = text[:start] + text[start:end].replace(fixed, "    report = db.get(ExamReport, report_id)\n", 1) + text[end:]
     assert "exams.py:acknowledge_critical" in _byid_patient_owned_write_endpoints([("exams.py", reverted)])
     assert "exams.py:acknowledge_critical" not in _byid_patient_owned_write_endpoints([("exams.py", text)])
+
+
+def test_挂在患者上的写接口判据自证_按条件查行():
+    """把 P1-194 的守卫从 `remove_group_member` 里拿掉，`db.query(M)` 取行那一半必须当场点名它。"""
+    assert "SpdGroupMember" in _patient_owned_models()
+    path = dict(_router_files())["spd/population.py"]
+    text = open(path, encoding="utf-8").read()
+    guard = "    assert_org_writable(db, user, group.org_id)\n"
+    start = text.index("def remove_group_member(")
+    end = text.index("\n# ====", start)
+    assert guard in text[start:end], "remove_group_member 里找不到 P1-194 的守卫行，自证前提变了"
+    reverted = text[:start] + text[start:end].replace(guard, "", 1) + text[end:]
+    assert "spd/population.py:remove_group_member" in _byid_patient_owned_write_endpoints(
+        [("spd/population.py", reverted)])
+    assert "spd/population.py:remove_group_member" not in _byid_patient_owned_write_endpoints(
+        [("spd/population.py", text)])
 
 
 def test_挂在患者上的写接口判据自证():

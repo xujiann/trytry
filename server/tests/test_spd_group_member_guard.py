@@ -3,6 +3,8 @@
 P0-50：批量加成员原先只看分组所属机构能不能写，手工给的患者号一个不判——任一机构的医生按号就能把与本机构毫无关系的
 患者拉进自己的分组，成员清单随即回出姓名、健康卡号、电话，不留调阅痕迹；同子系统的批量干预、宣教推送（P0-34）逐个判
 可见性并留痕。不存在的患者号原先静默跳过、回执照样 200。
+
+P1-194：移出成员连调用方都不收——任一机构的医生按分组号就能把别家分组里的成员逐个移走。
 """
 import ast
 from pathlib import Path
@@ -27,6 +29,10 @@ def world(client, admin):
         "username": "p0050_doc_b", "password": "pass123456", "role": "doctor", "org_id": orgs["乙"]})
     assert created.status_code == 201, created.text
     doc_b = login(client, "p0050_doc_b", "pass123456")
+    created = client.post("/api/users", headers=admin, json={
+        "username": "p0050_doc_a", "password": "pass123456", "role": "doctor", "org_id": orgs["甲"]})
+    assert created.status_code == 201, created.text
+    doc_a = login(client, "p0050_doc_a", "pass123456")
     patients = {}
     for tag, org in (("甲", orgs["甲"]), ("乙", orgs["乙"])):
         pid = client.post("/api/patients", headers=admin, json={
@@ -38,7 +44,7 @@ def world(client, admin):
         patients[tag] = pid
     group = client.post("/api/spd/groups", headers=doc_b, json={"name": "P0050 乙院分组", "scope": "dept"})
     assert group.status_code == 201, group.text
-    return {"doc_b": doc_b, "patients": patients, "group": group.json()["id"]}
+    return {"doc_a": doc_a, "doc_b": doc_b, "patients": patients, "group": group.json()["id"]}
 
 
 def _members(client, headers, group_id):
@@ -69,6 +75,24 @@ def test_不存在的患者号404(client, world):
     resp = client.post(f"/api/spd/groups/{world['group']}/members", headers=world["doc_b"],
                        json={"patient_ids": [99999999]})
     assert resp.status_code == 404 and "99999999" in resp.json()["detail"], resp.text   # 修前 200 {"added": 0}
+
+
+def test_别院医生移不走本院分组的成员(client, admin, world):
+    mine = world["patients"]["乙"]
+    added = client.post(f"/api/spd/groups/{world['group']}/members", headers=world["doc_b"],
+                        json={"patient_ids": [mine]})
+    assert added.status_code == 200, added.text
+    path = f"/api/spd/groups/{world['group']}/members/{mine}"
+    resp = client.delete(path, headers=world["doc_a"])
+    assert resp.status_code == 403, resp.text   # 修前 204
+    assert mine in _members(client, admin, world["group"])
+    assert client.delete(path, headers=world["doc_b"]).status_code == 204   # 本院照常移出
+    assert mine not in _members(client, admin, world["group"])
+
+
+def test_移出不存在分组的成员404(client, world):
+    resp = client.delete(f"/api/spd/groups/99999999/members/{world['patients']['乙']}", headers=world["doc_b"])
+    assert resp.status_code == 404 and resp.json()["detail"] == "分组不存在", resp.text
 
 
 def _patient_ids_endpoints() -> list[tuple[str, str, bool]]:

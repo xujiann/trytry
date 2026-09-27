@@ -1716,7 +1716,15 @@ def list_group_members(
 
 @router.delete("/groups/{group_id}/members/{patient_id}", status_code=204,
                dependencies=[Depends(require_roles(*SERVICE_ROLES))])
-def remove_group_member(group_id: int, patient_id: int, db: Session = Depends(get_db)):
+def remove_group_member(
+    group_id: int, patient_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """移出分组成员。与加成员同一道门：分组所属机构能不能写（P1-194）——原先连调用方都不收，
+    任一机构的医生按分组号就能把别家分组里的成员逐个移走。"""
+    group = db.get(SpdGroup, group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="分组不存在")
+    assert_org_writable(db, user, group.org_id)
     member = (
         db.query(SpdGroupMember)
         .filter(SpdGroupMember.group_id == group_id, SpdGroupMember.patient_id == patient_id)
