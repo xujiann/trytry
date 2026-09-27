@@ -1260,6 +1260,13 @@ def _reactivate(db: Session, enrollment: SpdEnrollment) -> None:
     db.refresh(enrollment)   # 状态走的是 Core UPDATE，会话里那份对象没跟着变
 
 
+def _log_resume(db: Session, enrollment_id: int, *, reason: str, detail: str, operator_id: int,
+                occurred_at: str) -> None:
+    """记一条「恢复在管」生命周期事件：生命周期「恢复」与召回成功自动恢复（P2-501）共用这一处。**不 commit**。"""
+    db.add(SpdLifecycleEvent(enrollment_id=enrollment_id, event="resume", reason=reason, detail=detail[:512],
+                             operator_id=operator_id, occurred_at=occurred_at))
+
+
 @router.post("/enrollments/{enrollment_id}/lifecycle", response_model=LifecycleResultOut,
              response_model_exclude_unset=True,
              dependencies=[Depends(require_roles(*SERVICE_ROLES))])
@@ -1284,13 +1291,8 @@ def lifecycle_event(
         if enrollment.status == "dead":
             raise HTTPException(status_code=409, detail="已登记死亡的档案不可恢复管理")
         _reactivate(db, enrollment)
-        db.add(
-            SpdLifecycleEvent(
-                enrollment_id=enrollment_id, event="resume", reason=body.reason,
-                detail=body.detail, operator_id=user.id,
-                occurred_at=body.occurred_at or clock.today().isoformat(),
-            )
-        )
+        _log_resume(db, enrollment_id, reason=body.reason, detail=body.detail, operator_id=user.id,
+                    occurred_at=body.occurred_at or clock.today().isoformat())
         db.commit()
         return {"enrollment": _enroll_out(enrollment), "closed": {}}
 
@@ -1478,7 +1480,7 @@ def update_recall(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """召回过程留痕。召回成功（returned）自动把档案恢复为在管。"""
+    """召回过程留痕。召回成功（returned）自动把档案恢复为在管，并记一条「恢复」生命周期事件；已结束的召回不再改。"""
     recall = db.get(SpdRecall, recall_id)
     if recall is None:
         raise HTTPException(status_code=404, detail="召回记录不存在")
@@ -1494,6 +1496,11 @@ def update_recall(
             if enrollment.status == "dead":
                 db.rollback()
                 raise HTTPException(status_code=409, detail="患者已登记死亡，召回已终止")
+        # 已结束的召回不再改（P2-501）：页面对「已召回 / 召回失败」早就不给「登记进度」，接口还收——已召回的改成「召回失败」，
+        # 「已重新纳管」的结论被盖掉、档案却还在管。锁内重读之后判：两路同时登记，后到的一路看到的是先到的那路的结论
+        if recall.status in ("returned", "failed"):
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该召回已结束，不能再登记进度；要再召回请重新发起")
         recall.status = body.status
         recall.result = body.result or recall.result
         if body.contact_note:
@@ -1505,6 +1512,10 @@ def update_recall(
         if body.status == "returned":
             if enrollment is not None and enrollment.status == "recalled":
                 _reactivate(db, enrollment)
+                # 恢复在管同样逐条留痕（P2-501）：生命周期事件「排除 / 迁出 / 死亡 / 召回 / 恢复，逐条留痕」，走生命周期「恢复」
+                # 的记一条，召回成功自动恢复的原先一条不记——生命周期记录里只看得到被召回、看不到什么时候、谁把它恢复的
+                _log_resume(db, enrollment.id, reason="召回成功", detail=recall.result, operator_id=user.id,
+                            occurred_at=clock.today().isoformat())
         db.commit()
     return {"id": recall.id, "status": recall.status, "result": recall.result}
 

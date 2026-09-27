@@ -521,7 +521,7 @@ def test_生命周期召回迁出确认与事件列表(client, h, base):
     keys = ["id", "enrollment_id", "event", "reason", "detail", "target_org_id",
             "confirmed", "occurred_at", "program_code", "patient_id", "patient_name",
             "created_at"]
-    assert [list(r) for r in events] == [keys] * 4
+    assert [list(r) for r in events] == [keys] * 5
 
     def _event(row, enrollment_id, event, reason, target):
         return {"id": row["id"], "enrollment_id": enrollment_id, "event": event,
@@ -534,7 +534,9 @@ def test_生命周期召回迁出确认与事件列表(client, h, base):
         _event(events[0], e3["id"], "resume", "重新纳管", None),
         _event(events[1], e3["id"], "exclude", "误纳", None),
         _event(events[2], e2["id"], "migrate", "搬迁", org2),
-        _event(events[3], e2["id"], "recall", "失访三月", None),
+        # 召回登记「已召回」自动恢复在管，同样记一条恢复（P2-501；原先一条不记）
+        {**_event(events[3], e2["id"], "resume", "召回成功", None), "detail": "已回访"},
+        _event(events[4], e2["id"], "recall", "失访三月", None),
     ]
     assert client.get(f"{B}/lifecycle-events", params={"event": "migrate"},
                       headers=h).json() == [events[2]]
