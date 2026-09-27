@@ -145,10 +145,10 @@ READ_KNOWN: set[str] = {
     "GET /api/maternal/records/{record_id}/delivery",                   # 不收调用方（P1-69），随 P1-49 裁定后再接
     "GET /api/quality/record-qc",                                       # 不收口（P1-49 名单），随裁定后再接
     # 公卫、慢病、家医
-    "GET /api/analytics/outbound-visits",
+    "GET /api/analytics/outbound-visits",                               # 不收口（P1-49 名单），随裁定后再接
     # 教学、运营、打印
     "GET /api/mgmt/staff-contracts",                                    # 不收口（P1-49 名单），随裁定后再接
-    "GET /api/projects/{project_id}",
+    "GET /api/projects/{project_id}",                                   # 读侧收口待裁定（P0-37），随裁定后再接
     # 慢专病
     "GET /api/spd/programs/{program_id}",
 }
